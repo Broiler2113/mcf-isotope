@@ -7,3 +7,4 @@ export_presets.cfg
 
 # macOS
 .DS_Store
+._*
