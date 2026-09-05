@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="UnitStats" format=3]
+
+[ext_resource type="Script" path="res://src/sim/UnitStats.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "heavy_infantry"
+display_name = "Heavy Infantry"
+rate_of_fire = 3
+armor_threshold = 3
+cost = 108
+notes = "Штурм баз и групп (см. §5)."

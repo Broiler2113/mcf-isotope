@@ -1,0 +1,66 @@
+MCF TACTICS -- TEXTURE REPLACEMENT
+
+Drop an image in this folder named after any entry below and it replaces
+that sprite everywhere in the game. Delete the file to get the original back.
+
+Supported image formats: png, jpg, jpeg, webp, bmp, tga, svg.
+PNG is preferred -- it wins if two files share the same name.
+Images are stretched to the tile, so square art looks best.
+
+Two folders are scanned: res://textures (shipped) and user://textures (yours).
+Yours wins. Changes are picked up when a battle or the map editor opens.
+
+-- Floors (the tile itself) --
+  floor.png
+  floor_space.png
+  floor_wall.png
+  floor_cover.png
+  fire.png
+
+-- Terrain features (one per object on a tile) --
+  drone_station.png
+  sandbags.png
+  hedgehog.png
+  dirt_pile.png
+  trench.png
+  wall.png
+  glass.png
+  bru.png
+  corpse_wall.png
+  airlock.png
+  rsp.png
+  dot.png
+  wood_wall.png
+  sandbag_wall.png
+  hedgehog_sandbags.png
+
+-- Soldiers (add _p1 / _p2 / _neutral for a side-specific look) --
+  anti_tank.png
+  assault.png
+  civilian.png
+  commander.png
+  drone.png
+  drone_operator.png
+  engineer.png
+  flamethrower.png
+  heavy_infantry.png
+  light_infantry.png
+  machinegunner.png
+  marksman.png
+  miner.png
+  shield_bearer.png
+  sniper.png
+
+-- Vehicles (stretched over the whole footprint) --
+  tank.png
+  shuttle.png
+  tank_wreck.png
+  shuttle_wreck.png
+
+-- Misc --
+  corpse.png
+
+Soldiers also accept a side suffix: light_infantry_p1.png,
+light_infantry_p2.png, light_infantry_neutral.png. A plain
+light_infantry.png is used for any side that has no suffixed file.
+

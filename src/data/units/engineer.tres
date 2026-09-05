@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="UnitStats" format=3]
+
+[ext_resource type="Script" path="res://src/sim/UnitStats.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "engineer"
+display_name = "Engineer"
+cost = 51
+special_ability_id = "engineer"
+notes = "Базовые характеристики. Возведение/ремонт укреплений — на M3 (фортификации)."

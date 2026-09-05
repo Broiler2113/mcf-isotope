@@ -1,0 +1,97 @@
+=====================================================================
+ HOW TO REPLACE INTERFACE (UI) TEXTURES
+=====================================================================
+
+The ENTIRE game interface - every menu, button, panel, tab, text box,
+slider and progress bar - is skinned from the PNG files in THIS folder
+(marble_race/interface_textures/). Swap a file for your own art and
+that part of the interface changes. No code editing required.
+
+The shipped look is a "2003 Steam" gunmetal theme. Replace the pieces
+below to reskin the whole game however you like.
+
+---------------------------------------------------------------------
+1. THE PIECES  (one PNG = one interface part)
+---------------------------------------------------------------------
+Each file controls exactly one kind of widget:
+
+   panel.png            Raised content panels (the boxes menus sit in)
+   panel_sunken.png     Inset / sunken areas (lists, scrolling regions)
+   header.png           Dark title / header bars
+   button_normal.png    A button, resting
+   button_hover.png     A button while the mouse is over it
+   button_pressed.png   A button while it is being clicked
+   button_disabled.png  A button that is greyed-out / not clickable
+   tab_active.png       The selected tab
+   tab_inactive.png     An unselected tab
+   field.png            Text-entry boxes (LineEdit / TextEdit background)
+   progress_bg.png      Empty part of a progress bar
+   progress_fill.png    Filled part of a progress bar
+   slider_track.png     The rail a slider handle runs along
+   slider_grabber.png   The slider handle itself
+   selection.png        Highlight behind selected text / list rows
+
+Keep the EXACT file names above - the game looks each one up by name.
+If a file is missing, the game falls back to a plain coloured box for
+that piece, so you can delete one to "blank" it and nothing crashes.
+
+---------------------------------------------------------------------
+2. HOW THESE STRETCH  (9-slice - important!)
+---------------------------------------------------------------------
+These are NOT stretched like a photo. The game uses "9-slice"
+scaling: it keeps the 4 corners crisp and only stretches the middle.
+Each shipped PNG is 32 x 32 with a 6-pixel border reserved for the
+corner/edge detail (the bevel).
+
+So when you draw your own:
+   - Put your border / bevel / rounded corner in the OUTER 6 pixels.
+   - Keep the CENTER a flat, tileable fill - it gets stretched to fit
+     buttons and panels of any size.
+   - A 32 x 32 image is the native size. Bigger squares (64, 128) work
+     and look sharper; just keep the same 6px-border proportion, or
+     edit the margin in scripts/UiTheme.gd (const SLICE).
+
+Format: PNG, RGBA (transparency allowed).
+
+---------------------------------------------------------------------
+3. THE FONT
+---------------------------------------------------------------------
+The 2003-Steam text uses Tahoma if your computer has it, otherwise it
+falls back to Verdana / DejaVu Sans / Arial automatically. To force a
+different font, drop a .ttf/.otf named  ui_font.ttf  into this folder;
+the game loads it in preference to the system font. (Delete it to go
+back to the Tahoma fallback chain.)
+
+---------------------------------------------------------------------
+4. SEEING YOUR CHANGES
+---------------------------------------------------------------------
+   1. Overwrite the PNG(s) in this folder (same file names).
+   2. Open the project in the Godot editor once - it notices the
+      changed PNG and re-imports it automatically (this refreshes the
+      little "<name>.png.import" file next to each image). You never
+      edit the .import files yourself.
+   3. Launch / relaunch the game - your art is on the interface.
+
+Shortcut: if you just run the game from source (F5 / Play) and skip the
+re-import, the game will still read your new PNG straight off disk as a
+fallback, so it shows up anyway. That raw fallback does NOT survive an
+exported build, though - for a real .exe/.pck build you must let the
+editor re-import (step 2) so the texture is packed in.
+
+---------------------------------------------------------------------
+5. REGENERATING THE DEFAULTS
+---------------------------------------------------------------------
+To get the original 2003-Steam chrome back, regenerate every file:
+
+   Godot --headless --path . res://scenes/MainMenu.tscn -- gen-ui-tex
+
+That rewrites all the PNGs above from scripts/tools/gen_interface_textures.gd
+(where the palette lives, if you want to tweak the colours in code).
+
+---------------------------------------------------------------------
+QUICK CHECKLIST
+---------------------------------------------------------------------
+[ ] PNG, named exactly like the list in section 1
+[ ] Border/bevel in the outer ~6px, flat tileable center
+[ ] Dropped into marble_race/interface_textures/ (overwrite)
+[ ] Relaunched the game

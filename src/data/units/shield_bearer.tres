@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="UnitStats" format=3]
+
+[ext_resource type="Script" path="res://src/sim/UnitStats.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "shield_bearer"
+display_name = "Shield Bearer"
+fire_range = 1.0
+target_defense_penalty = 2
+armor_threshold = 2
+speed = 4
+cost = 70
+special_ability_id = "shield_bearer"
+notes = "Ближний бой (дальность 1), −2 к защите цели. Не гибнет в эпицентре осколочной (§3.6). Толчок щитом — не в таблице, не реализуется."

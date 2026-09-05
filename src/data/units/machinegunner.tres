@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="UnitStats" format=3]
+
+[ext_resource type="Script" path="res://src/sim/UnitStats.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "machinegunner"
+display_name = "Machinegunner"
+fire_range = 6.0
+rate_of_fire = 4
+armor_threshold = 3
+cost = 56
+default_item_id = "frag_grenade"
+notes = "Стартовый предмет — осколочная граната (реализуется на M2)."

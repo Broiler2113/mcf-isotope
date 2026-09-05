@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="UnitStats" format=3]
+
+[ext_resource type="Script" path="res://src/sim/UnitStats.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "sniper"
+display_name = "Sniper"
+fire_range = 30.0
+target_defense_penalty = 2
+cost = 135
+special_ability_id = "sniper"
+notes = "−2 к защите цели; автопопадание ≤12 кл. без укреплений между стрелком и целью (§5)."
