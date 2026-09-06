@@ -27,19 +27,24 @@ const RES_MANIFEST_FILE := "res://textures/all_textures.txt"
 ## Полный перечень заменяемых спрайтов, сгруппированный для читаемости файла-справки.
 ## Имена совпадают с идентификаторами из MCF/VehicleDB и файлами src/data/units/*.tres,
 ## поэтому «что вижу в игре — то и называю» работает без таблицы соответствий.
+##
+## Два исключения — ЛДФ и ДПМГ (item 43). Объекты переименованы, а их id на диске
+## остались прежними ради читаемости старых карт, так что здесь единственное место,
+## где имя файла и id расходятся. Разводит их ALIASES ниже: игрок кладёт ldf.png,
+## как и подписано в игре, а код по-прежнему спрашивает "bru".
 const MANIFEST := [
 	["Floors (the tile itself)", [
 		"floor", "floor_space", "floor_wall", "floor_cover", "fire",
 	]],
 	["Terrain features (one per object on a tile)", [
 		"drone_station", "sandbags", "hedgehog", "dirt_pile", "trench",
-		"wall", "glass", "bru", "corpse_wall", "airlock",
-		"rsp", "dot", "wood_wall", "sandbag_wall", "hedgehog_sandbags",
+		"wall", "glass", "ldf", "corpse_wall", "airlock",
+		"dpmg", "dot", "wood_wall", "sandbag_wall", "hedgehog_sandbags", "mine",
 	]],
 	["Soldiers (add _p1 / _p2 / _neutral for a side-specific look)", [
 		"anti_tank", "assault", "civilian", "commander", "drone",
 		"drone_operator", "engineer", "flamethrower", "heavy_infantry",
-		"light_infantry", "machinegunner", "marksman", "miner",
+		"light_infantry", "machinegunner", "marksman", "miner", "sapper",
 		"shield_bearer", "sniper",
 	]],
 	["Vehicles (stretched over the whole footprint)", [
@@ -87,14 +92,21 @@ static func _scan_override_dir(dir_path: String) -> void:
 		fname = d.get_next()
 	d.list_dir_end()
 
+## id объекта → имя файла-замены. Нужен ровно для переименованных объектов.
+const ALIASES := {
+	"bru": "ldf",
+	"rsp": "dpmg",
+}
+
 static func has_override(name: String) -> bool:
 	ensure_overrides()
-	return _overrides.has(name.to_lower())
+	return _overrides.has(ALIASES.get(name, name).to_lower())
 
 ## Имя с учётом стороны: сначала ищем «boec_p1», потом общее «boec» (#55).
 ## Пустая строка — картинки нет ни в каком виде, рисуем вектор как раньше.
 static func resolve(name: String, suffix: String = "") -> String:
 	ensure_overrides()
+	name = ALIASES.get(name, name)
 	if suffix != "" and _overrides.has((name + suffix).to_lower()):
 		return name + suffix
 	if _overrides.has(name.to_lower()):
@@ -113,6 +125,7 @@ static func draw_texture_override_rect(ci: CanvasItem, name: String, rect: Rect2
 		rot_deg := 0.0, tint := Color.WHITE) -> bool:
 	if not _overrides_loaded:
 		reload_overrides()
+	name = ALIASES.get(name, name)
 	# Функция стоит в поклеточном цикле _draw(): до трёх вызовов на клетку, тысячи на
 	# кадр. Поэтому сначала два дешёвых выхода — «замен вообще нет» и «имя уже в нижнем
 	# регистре» (а так его пишут все вызывающие: это литералы и id из MCF). to_lower()

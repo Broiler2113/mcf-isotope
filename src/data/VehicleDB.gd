@@ -26,7 +26,7 @@ const VEHICLES := {
 		"crew_capacity": 3,
 		"speed": 16,
 		"has_facing": true,
-		"cost": 300,
+		"cost": 500,
 		"weapons": {
 			"main_gun": {
 				"range": 30, "blast_radius": 2, "ap_cost": 1,
@@ -41,7 +41,7 @@ const VEHICLES := {
 		"crew_capacity": 4,
 		"speed": 30,
 		"has_facing": false,
-		"cost": 120,
+		"cost": 125,
 		"weapons": {},
 		# Едущий тратит 2 ОД (только водитель), пассажиры без штрафа.
 		"driver_move_ap": 2,

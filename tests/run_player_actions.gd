@@ -36,10 +36,11 @@ func _initialize() -> void:
 	_dig_with_chosen_dirt()
 	_group_move()
 	_undo_redo()
+	_mines()
 	_end_turn_authority()
 
 	if fails.is_empty():
-		print("player actions: dig, group move, undo/redo and authority all agree")
+		print("player actions: dig, group move, undo/redo, mines and authority all agree")
 		quit(0)
 		return
 	printerr("player actions: %d failure(s)" % fails.size())
@@ -163,6 +164,55 @@ func _undo_redo() -> void:
 	var foreign := r_host.resolve(UndoIntent.new(MCF.Owner.PLAYER_2))
 	ck(not foreign.ok and foreign.reason == "Not your turn",
 			"an undo from the side that is not acting is refused (got '%s')" % foreign.reason)
+
+## Item 45: мины ездят по проводу двумя новыми намерениями, а срабатывают внутри
+## обычного движения — то есть в месте, которое обе стороны обязаны пройти
+## одинаково. Сапёра на постоянной карте нет (он бы сдвинул весь след партии),
+## поэтому он создаётся здесь — одинаково на обеих сторонах, значит и id совпадут.
+func _mines() -> void:
+	var stats: UnitStats = load("res://src/data/units/sapper.tres")
+	var at := Vector2i(9, 4)
+	var sap_h := host.spawn_unit(stats, at, MCF.Owner.PLAYER_1)
+	var sap_c := client.spawn_unit(stats, at, MCF.Owner.PLAYER_1)
+	ck(sap_h.id == sap_c.id, "the same spawn gets the same id on both sides")
+	var mine_at := Vector2i(10, 4)
+	var laid := _apply(PlaceMineIntent.new(sap_h.id, mine_at))
+	ck(laid.ok, "mine refused: %s" % laid.reason)
+	ck(host.grid.cell(mine_at).feature_id == MCF.FEATURE_MINE, "host has the mine")
+	ck(client.grid.cell(mine_at).feature_id == MCF.FEATURE_MINE, "client has the mine")
+	var swept := _apply(RevealMinesIntent.new(sap_h.id))
+	ck(swept.ok, "sweep refused: %s" % swept.reason)
+	# Подрыв: враг идёт через заминированную клетку. Обе доски обязаны прийти к
+	# одному итогу — и по трупу, и по исчезнувшей мине.
+	_apply(EndTurnIntent.new())
+	var victim := _enemy_near(mine_at)
+	if victim == null:
+		fails.append("no enemy unit available to walk onto the mine")
+		return
+	victim.coord = Vector2i(13, 4)
+	client.get_unit(victim.id).coord = Vector2i(13, 4)
+	_place(host, victim.id, Vector2i(13, 4))
+	_place(client, victim.id, Vector2i(13, 4))
+	var walk := _apply(MoveIntent.new(victim.id, Vector2i(9, 5)))
+	ck(walk.ok, "the walk onto the minefield was legal: %s" % walk.reason)
+	ck(not host.get_unit(victim.id).is_alive(), "the mine killed him on the host")
+	ck(not client.get_unit(victim.id).is_alive(), "and on the client")
+	ck(host.grid.cell(mine_at).feature_id != MCF.FEATURE_MINE, "the mine is spent")
+
+## Переставить юнита на клетку в обход резолвера — только для подготовки сценария.
+func _place(st: GameState, id: int, to: Vector2i) -> void:
+	var u := st.get_unit(id)
+	for c in st.grid._cells:
+		if c.occupant == u:
+			c.occupant = null
+	u.coord = to
+	st.grid.cell(to).occupant = u
+
+func _enemy_near(coord: Vector2i) -> UnitInstance:
+	for u in host.all_units():
+		if u.owner == MCF.Owner.PLAYER_2 and u.is_alive() and not u.is_drone:
+			return u
+	return null
 
 ## AUDIT §2.4: завершение хода — единственный авторитетный переход без проверки
 ## прав, и клиент мог закончить ЧУЖОЙ ход, заодно проиграв слот мирных и продвинув

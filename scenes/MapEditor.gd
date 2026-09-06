@@ -28,7 +28,7 @@ const TERRAIN_BRUSHES := [
 	{"id": MCF.FEATURE_SANDBAGS, "label": "Sandbags"},
 	{"id": MCF.FEATURE_HEDGEHOG, "label": "Hedgehog"},
 	{"id": MCF.FEATURE_TRENCH, "label": "Trench"},
-	{"id": MCF.FEATURE_BRU, "label": "BRU"},
+	{"id": MCF.FEATURE_LDF, "label": "LDF"},
 	{"id": MCF.FEATURE_AIRLOCK, "label": "Airlock"},
 	{"id": MCF.FEATURE_DOT, "label": "Pillbox"},
 	{"id": MCF.FEATURE_DOT_OPEN, "label": "Pillbox (Embrasures)"},
@@ -338,7 +338,7 @@ func _spawn_suffix(owner_id: int) -> String:
 func _feature_tag(fid: String) -> String:
 	return {
 		MCF.FEATURE_WALL: "##", MCF.FEATURE_GLASS: "▢", MCF.FEATURE_SANDBAGS: "SB",
-		MCF.FEATURE_HEDGEHOG: "hdg", MCF.FEATURE_TRENCH: "tr", MCF.FEATURE_BRU: "BRU",
+		MCF.FEATURE_HEDGEHOG: "hdg", MCF.FEATURE_TRENCH: "tr", MCF.FEATURE_LDF: "LDF",
 		MCF.FEATURE_AIRLOCK: "AL", MCF.FEATURE_DRONE_STATION: "ST",
 		MCF.FEATURE_WOOD_WALL: "WD",
 		MCF.FEATURE_DOT: "PBX", MCF.FEATURE_DOT_OPEN: "PBX+",

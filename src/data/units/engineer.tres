@@ -6,6 +6,6 @@
 script = ExtResource("1")
 id = "engineer"
 display_name = "Engineer"
-cost = 51
+cost = 60
 special_ability_id = "engineer"
 notes = "Базовые характеристики. Возведение/ремонт укреплений — на M3 (фортификации)."

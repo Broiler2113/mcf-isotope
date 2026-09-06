@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="UnitStats" format=3]
+
+[ext_resource type="Script" path="res://src/sim/UnitStats.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "sapper"
+display_name = "Sapper"
+armor_threshold = 4
+speed = 6
+action_points = 2
+cost = 57
+special_ability_id = "sapper"
+notes = "Ставит до 5 мин за действие (недоставленные доносит позже), либо за действие подсвечивает все вражеские мины в 15 клетках по линии видимости на один ход. Дальность стрельбы в источнике не задана — оставлена базовая (12)."

@@ -7,6 +7,6 @@ script = ExtResource("1")
 id = "anti_tank"
 display_name = "Anti-Tank"
 fire_range = 18.0
-cost = 81
+cost = 80
 special_ability_id = "anti_tank"
 notes = "Выстрел — взрыв: авто-уничтожение всех юнитов в радиусе 1 кл. независимо от броска (§3.14). Разрушение тайлов — на M3."

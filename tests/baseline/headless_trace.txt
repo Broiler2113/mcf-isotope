@@ -367,20 +367,20 @@ initiative Neutral → Player A → Player B
     log: — Player B ended their turn. Player B to move (round 7) —
 actions 105
 --- digest ---
-U 0 (21, 2) 0/99 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 1 (10, 19) 1/99 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 3 (21, 11) 1/99 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 4 (20, 5) 0/108 st1 ap0 mc1 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 7 (13, 16) 1/56 st0 ap2 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 9 (15, 17) 1/135 st0 ap2 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 11 (30, 14) 1/81 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 12 (19, 16) 0/51 st1 ap0 mc1 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 13 (18, 20) 1/51 st0 ap2 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 14 (16, 19) 0/50 st1 ap0 mc1 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 15 (12, 21) 1/50 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 16 (4, 13) 26/20 st1 ap0 mc0 cap-1 cor2 veh-1 drg(-9999, -9999) civ1
-U 17 (7, 14) 26/20 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ1
-U 19 (30, 13) 26/20 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ1
+U 0 (21, 2) 0/45 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
+U 1 (10, 19) 1/45 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
+U 3 (21, 11) 1/45 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
+U 4 (20, 5) 0/60 st1 ap0 mc1 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
+U 7 (13, 16) 1/65 st0 ap2 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
+U 9 (15, 17) 1/60 st0 ap2 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
+U 11 (30, 14) 1/80 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
+U 12 (19, 16) 0/60 st1 ap0 mc1 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
+U 13 (18, 20) 1/60 st0 ap2 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
+U 14 (16, 19) 0/100 st1 ap0 mc1 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
+U 15 (12, 21) 1/100 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
+U 16 (4, 13) 26/30 st1 ap0 mc0 cap-1 cor2 veh-1 drg(-9999, -9999) civ1
+U 17 (7, 14) 26/30 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ1
+U 19 (30, 13) 26/30 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ1
 C 17,0 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
 C 17,1 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
 C 17,2 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0

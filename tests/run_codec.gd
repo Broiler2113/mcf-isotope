@@ -40,7 +40,7 @@ func _samples() -> Array:
 		BuildIntent.new(7, Vector2i(8, 9), MCF.FEATURE_SANDBAGS),
 		BreakIntent.new(7, Vector2i(1, 2)),
 		DragIntent.new(7, Vector2i(4, 5), Vector2i(4, 6)),
-		RSPFireIntent.new(7, Vector2i(10, 10), 12, 5),
+		DPMGFireIntent.new(7, Vector2i(10, 10), 12, 5),
 		DigIntent.new(7, Vector2i(15, 16), Vector2i(15, 17), Vector2i(14, 16)),
 		BuildWallIntent.new(7, cells),
 		PickUpCorpseIntent.new(7, Vector2i(2, 3)),
@@ -51,6 +51,8 @@ func _samples() -> Array:
 		VehicleMoveIntent.new(1000, Vector2i(-1, 0), 4),
 		VehicleCannonIntent.new(1000, Vector2i(20, 20)),
 		WeldAirlockIntent.new(7, Vector2i(7, 7)),
+		PlaceMineIntent.new(7, Vector2i(12, 3)),
+		RevealMinesIntent.new(7),
 		# Копка БЕЗ выбранных куч: sentinel обязан пережить провод нетронутым,
 		# иначе автоматический выбор превратится в выбор игрока (и наоборот).
 		DigIntent.new(7, Vector2i(15, 16)),

@@ -19,11 +19,13 @@ const T_DRONE_DET := "drone_det"
 const T_BUILD := "build"
 const T_BREAK := "break"
 const T_DRAG := "drag"
-const T_RSP := "rsp"
+const T_DPMG := "rsp"
 const T_DIG := "dig"
 const T_UNDO := "undo"
 const T_REDO := "redo"
 const T_GROUP_MOVE := "gmove"
+const T_MINE := "mine"
+const T_SWEEP := "sweep"
 const T_BUILD_WALL := "build_wall"
 const T_CORPSE_UP := "corpse_up"
 const T_CORPSE_DOWN := "corpse_down"
@@ -37,6 +39,11 @@ const T_WELD := "weld"
 static func encode(intent: Intent) -> Dictionary:
 	if intent is EndTurnIntent:
 		return {"t": T_END, "q": intent.requester}
+	if intent is PlaceMineIntent:
+		return {"t": T_MINE, "a": intent.actor_id,
+			"x": intent.target.x, "y": intent.target.y}
+	if intent is RevealMinesIntent:
+		return {"t": T_SWEEP, "a": intent.actor_id}
 	if intent is UndoIntent:
 		return {"t": T_UNDO, "q": intent.requester}
 	if intent is RedoIntent:
@@ -85,9 +92,9 @@ static func encode(intent: Intent) -> Dictionary:
 		return {"t": T_DRAG, "a": intent.actor_id,
 			"ox": intent.object_coord.x, "oy": intent.object_coord.y,
 			"x": intent.dest_coord.x, "y": intent.dest_coord.y}
-	if intent is RSPFireIntent:
-		return {"t": T_RSP, "a": intent.actor_id,
-			"x": intent.rsp_coord.x, "y": intent.rsp_coord.y,
+	if intent is DPMGFireIntent:
+		return {"t": T_DPMG, "a": intent.actor_id,
+			"x": intent.dpmg_coord.x, "y": intent.dpmg_coord.y,
 			"tid": intent.target_id, "s": intent.shots}
 	if intent is DigIntent:
 		# Обе кучи вынутой земли ОБЯЗАНЫ ехать по проводу (AUDIT §2.2). Игрок
@@ -130,6 +137,8 @@ static func decode(d: Dictionary) -> Intent:
 	var coord := Vector2i(int(d.get("x", 0)), int(d.get("y", 0)))
 	match t:
 		T_END: return EndTurnIntent.new(int(d.get("q", -1)))
+		T_MINE: return PlaceMineIntent.new(a, coord)
+		T_SWEEP: return RevealMinesIntent.new(a)
 		T_UNDO: return UndoIntent.new(int(d.get("q", -1)))
 		T_REDO: return RedoIntent.new(int(d.get("q", -1)))
 		T_GROUP_MOVE:
@@ -155,7 +164,7 @@ static func decode(d: Dictionary) -> Intent:
 		T_BUILD: return BuildIntent.new(a, coord, str(d.get("f", "")))
 		T_BREAK: return BreakIntent.new(a, coord)
 		T_DRAG: return DragIntent.new(a, Vector2i(int(d.get("ox", 0)), int(d.get("oy", 0))), coord)
-		T_RSP: return RSPFireIntent.new(a, coord, int(d.get("tid", -1)), int(d.get("s", -1)))
+		T_DPMG: return DPMGFireIntent.new(a, coord, int(d.get("tid", -1)), int(d.get("s", -1)))
 		T_DIG: return DigIntent.new(a, coord,
 			Vector2i(int(d.get("ax", -999)), int(d.get("ay", -999))),
 			Vector2i(int(d.get("bx", -999)), int(d.get("by", -999))))

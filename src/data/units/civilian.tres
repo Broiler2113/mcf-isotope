@@ -10,6 +10,6 @@ fire_range = 12.0
 rate_of_fire = 1
 armor_threshold = 5
 speed = 9
-cost = 20
+cost = 30
 special_ability_id = "civilian"
 notes = "Нейтральный на карте — НПС под CivilianAI; купленный за очки — обычный боец своей стороны."

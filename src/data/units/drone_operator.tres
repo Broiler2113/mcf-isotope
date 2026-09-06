@@ -6,7 +6,7 @@
 script = ExtResource("1")
 id = "drone_operator"
 display_name = "Drone Operator"
-cost = 51
+cost = 70
 special_ability_id = "drone_operator"
 default_item_id = "drone_station"
 notes = "Стартовый предмет — станция дронов (§3.12): ставится рядом, запускает дрон (полёт 30 кл., взрыв при столкновении/подрыве, броня 5+)."

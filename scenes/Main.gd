@@ -20,12 +20,13 @@ const FEATURE_TAGS := {
 	MCF.FEATURE_DRONE_STATION: "ST", MCF.FEATURE_SANDBAGS: "SB",
 	MCF.FEATURE_HEDGEHOG: "hdg", MCF.FEATURE_TRENCH: "tr",
 	MCF.FEATURE_WALL: "##", MCF.FEATURE_GLASS: "▢",
-	MCF.FEATURE_BRU: "BRU",
+	MCF.FEATURE_LDF: "LDF",
 	MCF.FEATURE_CORPSE_WALL: "††", MCF.FEATURE_AIRLOCK: "AL",
-	MCF.FEATURE_DIRT_PILE: "drt", MCF.FEATURE_RSP: "MG",
+	MCF.FEATURE_DIRT_PILE: "drt", MCF.FEATURE_DPMG: "MG",
 	MCF.FEATURE_DOT: "PBX", MCF.FEATURE_WOOD_WALL: "WD",
 	MCF.FEATURE_SANDBAG_WALL: "SB", MCF.FEATURE_HEDGEHOG_SANDBAGS: "hSB",
 	MCF.FEATURE_DOT_OPEN: "PBX+",
+	MCF.FEATURE_MINE: "!",
 }
 
 ## Хелпер оформления окон в стиле «2003 Steam» (preload, без class_name).
@@ -33,15 +34,15 @@ const SteamChrome = preload("res://src/ui/SteamChrome.gd")
 
 ## GRAB — единая «рука» (#50): и захват бойца, и волочение трупа/мешков/ежа/кучи земли.
 ## Отдельного режима DRAG больше нет — кнопка одна, цели показываются вместе.
-enum Mode {NONE, MENU, MOVE, SHOOT, GRAB, ITEM, PUSH, DRONE_FLY, BUILD, BUILD_WALL, BREAK, RSP_FIRE, DIG, CARRY_DROP,
-	CORPSE_DROP, WELD, MOVE_HELD,
+enum Mode {NONE, MENU, MOVE, SHOOT, GRAB, ITEM, PUSH, DRONE_FLY, BUILD, BUILD_WALL, BREAK, DPMG_FIRE, DIG, CARRY_DROP,
+	CORPSE_DROP, WELD, MOVE_HELD, MINE,
 	GROUP_MENU, GROUP_MOVE,
 	VEH_MENU, VEH_MOVE, VEH_TURN, VEH_CANNON, VEH_DISEMBARK}
 
 ## Режимы, чей предпросмотр читает клетку под курсором. Каждому движению мыши нужен
 ## свой кадр (#97), иначе картинка обновляется только когда камера что-то дёрнет —
 ## именно так пропадал круг взрыва у пушки, пока режим не был в этом списке.
-const HOVER_PREVIEW_MODES := [Mode.MOVE, Mode.ITEM, Mode.SHOOT, Mode.DIG, Mode.CORPSE_DROP,
+const HOVER_PREVIEW_MODES := [Mode.MOVE, Mode.ITEM, Mode.SHOOT, Mode.DIG, Mode.MINE, Mode.CORPSE_DROP,
 		Mode.WELD, Mode.MOVE_HELD, Mode.VEH_TURN, Mode.VEH_CANNON]
 
 ## Цвета «своя/чужая» для перспективной раскраски дуэли (#93). Цвета КОНКРЕТНЫХ
@@ -59,8 +60,8 @@ const MENU_ANCHOR := Vector2(16, 16)
 ## Запас по высоте под шапку окна и нижнее поле при обрезке прокрутки.
 const MENU_CHROME_H := 70.0
 
-## БРУ — чёрные блоки (#85), в отличие от серых бетонных построек.
-const BRU_COLOR := Color(0.05, 0.05, 0.07)
+## ЛДФ — чёрные блоки (#85), в отличие от серых бетонных построек.
+const LDF_COLOR := Color(0.05, 0.05, 0.07)
 
 var state: GameState
 var resolver: GameActionResolver
@@ -75,7 +76,7 @@ var reach_budget: int = 0
 var target_ids: Array = []
 var item_cells: Array = []
 var build_feature: String = ""
-## Рисование БРУ-стены (§3.7): цепочка выбранных клеток и флаг «тянем» мышью.
+## Рисование ЛДФ-стены (§3.7): цепочка выбранных клеток и флаг «тянем» мышью.
 var _wall_cells: Array[Vector2i] = []
 var _wall_drawing: bool = false
 ## Юниты, чья смерть уже применена, но ещё анимируется бросок защиты (#46): рисуем
@@ -103,7 +104,7 @@ var move_dest: Vector2i = Vector2i(-1, -1)  # выбранная цель пер
 ## Копка окопа (§3.7): выбранная клетка окопа и первая куча земли; sentinel -1 = не выбрано.
 var dig_trench: Vector2i = Vector2i(-1, -1)
 var dig_dirt_a: Vector2i = Vector2i(-1, -1)
-## Клетка РСП, из которого сейчас целимся (§3.7).
+## Клетка ДПМГ, из которого сейчас целимся (§3.7).
 var rsp_active: Vector2i = Vector2i(-1, -1)
 ## RTS-выделение группы (#18): id выбранных юнитов и состояние рамки выделения ЛКМ.
 ## Рамка задаётся экранными точками; протяжка > BOX_DRAG_THRESHOLD включает режим рамки.
@@ -417,7 +418,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if _animating:
 		return
-	# Рисование БРУ-стены: тянем цепочку клеток левой кнопкой; Backspace — отмена
+	# Рисование ЛДФ-стены: тянем цепочку клеток левой кнопкой; Backspace — отмена
 	# последней/выход, Enter — подтвердить, когда набрано 6 клеток (§3.7).
 	if mode == Mode.BUILD_WALL:
 		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
@@ -604,9 +605,9 @@ func _handle_click(coord: Vector2i) -> void:
 				_select(occupant)
 				return
 			_back_to_menu()
-		Mode.RSP_FIRE:
+		Mode.DPMG_FIRE:
 			if occupant != null and target_ids.has(occupant.id):
-				_submit(RSPFireIntent.new(selected_id, rsp_active, occupant.id, -1))
+				_submit(DPMGFireIntent.new(selected_id, rsp_active, occupant.id, -1))
 				return
 			if _is_own_active(occupant):
 				_select(occupant)
@@ -638,6 +639,16 @@ func _handle_click(coord: Vector2i) -> void:
 					_submit(DigIntent.new(selected_id, dig_trench, dig_dirt_a, coord))
 					return
 				_enter_dig()
+		Mode.MINE:
+			# Мины ставятся по одной, и режим НЕ закрывается: за одно действие их
+			# кладут до пяти, и выходить в меню после каждой было бы мучением.
+			if item_cells.has(coord):
+				_submit(PlaceMineIntent.new(selected_id, coord))
+				return
+			if _is_own_active(occupant):
+				_select(occupant)
+				return
+			_back_to_menu()
 		Mode.GROUP_MENU:
 			# Меню группы открыто: клик по полю снимает выделение (или берёт другой юнит).
 			if occupant != null and _is_own_active(occupant):
@@ -751,14 +762,14 @@ func _back_to_menu() -> void:
 		_deselect()
 
 ## Контекстная отмена по Esc (#54). Приоритет: закрыть диалог → отменить рисование
-## БРУ → выйти из под-режима действия в меню (unchoose) → снять выделение → выход.
+## ЛДФ → выйти из под-режима действия в меню (unchoose) → снять выделение → выход.
 func _escape_pressed() -> void:
 	if _quit_dialog.visible:
 		_quit_dialog.hide()
 		return
 	if _animating:
 		return
-	# Отмена незакоммиченного рисования БРУ-стены.
+	# Отмена незакоммиченного рисования ЛДФ-стены.
 	if mode == Mode.BUILD_WALL:
 		_wall_cells = []
 		_refresh_undo_btn()
@@ -1321,7 +1332,7 @@ func _enter_build(feature_id: String) -> void:
 	_menu.hide()
 	queue_redraw()
 
-# --- Рисование БРУ-стены (§3.7, БРУ 1×6) ---
+# --- Рисование ЛДФ-стены (§3.7, ЛДФ 1×6) ---
 func _enter_build_wall() -> void:
 	var u := _selected_unit()
 	if u == null or u.remaining_ap <= 0:
@@ -1329,7 +1340,7 @@ func _enter_build_wall() -> void:
 	mode = Mode.BUILD_WALL
 	reach = null
 	target_ids = []
-	build_feature = MCF.FEATURE_BRU
+	build_feature = MCF.FEATURE_LDF
 	_wall_cells = []
 	_wall_drawing = false
 	# Пул допустимых клеток — весь свободный пол (буду фильтровать по соединению).
@@ -1342,7 +1353,7 @@ func _enter_build_wall() -> void:
 ## уже поставленному (#80) — стена собирается одной связной цепью, без разрывов и
 ## диагональных «мостиков». Это зеркало проверки резолвера bru_cells_connected().
 ## ВАЖНО: клетки проверяем по самой сетке, а не по item_cells (кольцо у инженера) —
-## иначе БРУ можно было ставить лишь вокруг инженера.
+## иначе ЛДФ можно было ставить лишь вокруг инженера.
 func _wall_valid_next(coord: Vector2i) -> bool:
 	var u := _selected_unit()
 	if u == null:
@@ -1359,7 +1370,7 @@ func _wall_valid_next(coord: Vector2i) -> bool:
 	return false
 
 func _wall_try_add(coord: Vector2i) -> void:
-	if _wall_cells.size() >= MCF.BRU_WALL_LENGTH:
+	if _wall_cells.size() >= MCF.LDF_WALL_LENGTH:
 		return
 	if not _wall_valid_next(coord):
 		queue_redraw()
@@ -1367,7 +1378,7 @@ func _wall_try_add(coord: Vector2i) -> void:
 	_wall_cells.append(coord)
 	_refresh_undo_btn()
 	queue_redraw()
-	if _wall_cells.size() >= MCF.BRU_WALL_LENGTH:
+	if _wall_cells.size() >= MCF.LDF_WALL_LENGTH:
 		_wall_commit()
 
 func _wall_undo() -> void:
@@ -1379,7 +1390,7 @@ func _wall_undo() -> void:
 	queue_redraw()
 
 func _wall_commit() -> void:
-	if _wall_cells.size() != MCF.BRU_WALL_LENGTH:
+	if _wall_cells.size() != MCF.LDF_WALL_LENGTH:
 		return
 	_submit(BuildWallIntent.new(selected_id, _wall_cells.duplicate()))
 
@@ -1426,15 +1437,28 @@ func _enter_weld() -> void:
 	_menu.hide()
 	queue_redraw()
 
-func _enter_rsp_fire(rsp_coord: Vector2i) -> void:
+func _enter_rsp_fire(dpmg_coord: Vector2i) -> void:
 	var u := _selected_unit()
 	if u == null or u.remaining_ap <= 0:
 		return
-	mode = Mode.RSP_FIRE
-	rsp_active = rsp_coord
+	mode = Mode.DPMG_FIRE
+	rsp_active = dpmg_coord
 	reach = null
 	item_cells = []
-	target_ids = resolver.rsp_targets(u, rsp_coord)
+	target_ids = resolver.rsp_targets(u, dpmg_coord)
+	_menu.hide()
+	queue_redraw()
+
+## Режим установки мин (item 45). Как и копка, живёт на кредите: первая мина тратит
+## ОД, остальные бесплатны, пока кредит не кончился.
+func _enter_mine() -> void:
+	var u := _selected_unit()
+	if u == null or (u.remaining_ap <= 0 and u.mine_credits <= 0):
+		return
+	mode = Mode.MINE
+	reach = null
+	target_ids = []
+	item_cells = resolver.mine_cells(u)
 	_menu.hide()
 	queue_redraw()
 
@@ -1566,6 +1590,10 @@ func _after_action() -> void:
 	var u := _selected_unit()
 	# Копка окопов подряд (#16): пока есть кредит/ОД и куда копать — остаёмся в режиме
 	# DIG, не отвлекая игрока меню. Иначе — обычная цепочка действий через меню.
+	if mode == Mode.MINE and _is_own_active(u) and (u.remaining_ap > 0 or u.mine_credits > 0) \
+			and not resolver.mine_cells(u).is_empty():
+		_enter_mine()
+		return
 	if mode == Mode.DIG and _is_own_active(u) and (u.remaining_ap > 0 or u.dig_credits > 0) \
 			and not resolver.diggable_cells(u).is_empty():
 		_enter_dig()
@@ -1974,6 +2002,14 @@ func _zoom_at(screen_pos: Vector2, factor: float) -> void:
 	queue_redraw()
 
 # --- Рендер ---
+## Чьими глазами смотрит этот экран. В сетевой партии — ВСЕГДА своя сторона: чужой
+## ход не должен ничего показывать сверх того, что видит игрок. В хот-сите за одним
+## экраном перспектива одна на всех и принадлежит тому, чей сейчас ход.
+func _viewing_side() -> int:
+	if state == null:
+		return MCF.Owner.PLAYER_1
+	return my_owner if networked else state.active_player()
+
 func _draw() -> void:
 	if state == null:
 		return
@@ -1985,6 +2021,7 @@ func _draw() -> void:
 	# А вот САМА заливка тумана при выключенном тумане не нужна ни на одной клетке:
 	# флаг гасит 2500 лишних обращений к словарю за кадр.
 	var fog_on: bool = resolver.fog_enabled
+	var viewer := _viewing_side()
 	var visible := resolver.team_visible_coords(state.active_player())
 	# Локальные копии полей и констант: тело цикла выполняется до 2500 раз за кадр,
 	# и каждое обращение к свойству узла/автозагрузки там заметно.
@@ -2049,8 +2086,8 @@ func _draw() -> void:
 				draw_circle(c, CELL * 0.18, Color(1.0, 0.9, 0.25, 0.85))
 				draw_arc(c, CELL * 0.18, 0.0, TAU, 16, Color(0.4, 0.35, 0.05, 0.9), 1.5)
 
-	if mode == Mode.SHOOT or mode == Mode.RSP_FIRE:
-		if mode == Mode.RSP_FIRE and rsp_active != Vector2i(-1, -1):
+	if mode == Mode.SHOOT or mode == Mode.DPMG_FIRE:
+		if mode == Mode.DPMG_FIRE and rsp_active != Vector2i(-1, -1):
 			draw_rect(Rect2(_cell_origin(rsp_active), Vector2(CELL, CELL)), Color(1, 0.5, 0.2, 0.30))
 		# Клетки пола под спецудар (противотанкист — взрыв, огнемётчик — струя).
 		for coord in item_cells:
@@ -2136,7 +2173,7 @@ func _draw() -> void:
 		# Пока не выложено ни одного звена — подсвечиваем кольцо клеток у инженера
 		# (единственная обязательная привязка). Дальше звенья ставятся куда угодно,
 		# поэтому весь пол не красим — вместо этого показываем предпросмотр под курсором.
-		if _wall_cells.size() < MCF.BRU_WALL_LENGTH:
+		if _wall_cells.size() < MCF.LDF_WALL_LENGTH:
 			var hov := _pos_to_cell(get_global_mouse_position())
 			if _wall_cells.is_empty():
 				for coord in item_cells:
@@ -2152,6 +2189,13 @@ func _draw() -> void:
 	if mode == Mode.BREAK:
 		for coord in item_cells:
 			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(0.9, 0.3, 0.2, 0.30))
+
+	if mode == Mode.MINE:
+		var mhov := _pos_to_cell(get_global_mouse_position())
+		for coord in item_cells:
+			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(0.85, 0.35, 0.15, 0.28))
+		if item_cells.has(mhov):
+			draw_rect(Rect2(_cell_origin(mhov), Vector2(CELL, CELL)), Color(0.95, 0.45, 0.2, 0.5))
 
 	if mode == Mode.DIG:
 		var dhov := _pos_to_cell(get_global_mouse_position())
@@ -2248,14 +2292,19 @@ func _draw() -> void:
 			var fcell := grid.cell_fast(x, y)
 			if fcell.feature_id == "":
 				continue
+			# Мина видна только тому, кто её поставил, — и тому, чей сапёр её нашёл
+			# (item 45). Иначе смысла в минном поле не было бы вовсе.
+			if fcell.feature_id == MCF.FEATURE_MINE \
+					and not resolver.mine_visible_to(viewer, Vector2i(x, y)):
+				continue
 			var o := Vector2(ORIGIN.x + x * CELL, foy)
 			# Имя картинки совпадает с id объекта (sandbags.png, trench.png...) (#55).
 			if Sprites.draw_texture_override(self, fcell.feature_id, o, float(CELL)):
 				continue
 			var tag: String = FEATURE_TAGS.get(fcell.feature_id, "?")
-			# БРУ — чёрный монолит (#85): заливка, а не контур, чтобы отличался от бетона.
-			if fcell.feature_id == MCF.FEATURE_BRU:
-				draw_rect(Rect2(o + Vector2(3, 3), Vector2(CELL - 6, CELL - 6)), BRU_COLOR)
+			# ЛДФ — чёрный монолит (#85): заливка, а не контур, чтобы отличался от бетона.
+			if fcell.feature_id == MCF.FEATURE_LDF:
+				draw_rect(Rect2(o + Vector2(3, 3), Vector2(CELL - 6, CELL - 6)), LDF_COLOR)
 				draw_rect(Rect2(o + Vector2(3, 3), Vector2(CELL - 6, CELL - 6)),
 					Color(0.35, 0.35, 0.4), false, 1.0)
 				draw_string(font, o + Vector2(6, CELL - 15), tag,
@@ -2417,8 +2466,8 @@ func _draw() -> void:
 			draw_arc(center, CELL * 0.5, 0, TAU, 32, Color(1, 0.6, 0.1), 2.0)
 		for i in _draw_ap(unit):
 			draw_circle(_cell_origin(at) + Vector2(6 + i * 8, CELL - 6), 3, Color(1, 1, 0.4))
-		# Инженер израсходовал единственную БРУ-стену (#40): пиксельный «!» рядом.
-		if unit.bru_wall_used:
+		# Инженер израсходовал единственную ЛДФ-стену (#40): пиксельный «!» рядом.
+		if unit.ldf_wall_used:
 			_draw_pixel_bang(_cell_origin(at) + Vector2(CELL - 12, 4))
 		# Юнит тащит на себе труп-щит (#6) — без метки это видно только в подсказке (#71).
 		if unit.carried_corpses > 0:
@@ -2945,19 +2994,19 @@ func _open_menu(unit: UnitInstance) -> void:
 		if unit.remaining_ap > 0 and unit.stats.special_ability_id == MCF.ABILITY_ENGINEER:
 			for feat in [MCF.FEATURE_SANDBAGS, MCF.FEATURE_WALL, MCF.FEATURE_DOT,
 					MCF.FEATURE_DOT_OPEN, MCF.FEATURE_GLASS, MCF.FEATURE_AIRLOCK,
-					MCF.FEATURE_BRU, MCF.FEATURE_RSP, MCF.FEATURE_HEDGEHOG]:
+					MCF.FEATURE_LDF, MCF.FEATURE_DPMG, MCF.FEATURE_HEDGEHOG]:
 				var cost: int = GameActionResolver.ENGINEER_BUILDABLE[feat]
 				if unit.remaining_ap < cost:
 					continue
 				if resolver.buildable_cells(unit, feat).is_empty():
 					continue
-				# БРУ — одна на всю игру (#40): скрываем кнопку, если уже израсходована.
-				if feat == MCF.FEATURE_BRU and unit.bru_wall_used:
+				# ЛДФ — одна на всю игру (#40): скрываем кнопку, если уже израсходована.
+				if feat == MCF.FEATURE_LDF and unit.ldf_wall_used:
 					continue
 				var bb := Button.new()
-				if feat == MCF.FEATURE_BRU:
-					# БРУ — цепочка из 6 клеток, «рисуется» вручную (§3.7).
-					bb.text = "Build: BRU wall (%d tiles, %d AP)" % [MCF.BRU_WALL_LENGTH, cost]
+				if feat == MCF.FEATURE_LDF:
+					# ЛДФ — цепочка из 6 клеток, «рисуется» вручную (§3.7).
+					bb.text = "Build: LDF wall (%d tiles, %d AP)" % [MCF.LDF_WALL_LENGTH, cost]
 					bb.pressed.connect(_enter_build_wall)
 				else:
 					bb.text = "Build: %s (%d AP)" % [MCF.FEATURE_NAMES[feat], cost]
@@ -2993,21 +3042,36 @@ func _open_menu(unit: UnitInstance) -> void:
 			drop_btn.pressed.connect(_enter_corpse_drop)
 			vb.add_child(drop_btn)
 
-		# РСП (§3.7): стрельба из своего пулемёта рядом.
+		# ДПМГ (§3.7): стрельба из своего пулемёта рядом.
 		if unit.remaining_ap > 0:
 			var own_rsp := resolver.rsp_cells(unit, true)
 			if not own_rsp.is_empty():
 				var rsp_btn := Button.new()
-				rsp_btn.text = "Fire RSP"
+				rsp_btn.text = "Fire DPMG"
 				rsp_btn.pressed.connect(_enter_rsp_fire.bind(own_rsp[0]))
 				vb.add_child(rsp_btn)
-			# Отобрать вражеский РСП (по правилу захвата).
+			# Отобрать вражеский ДПМГ (по правилу захвата).
 			var foe_rsp := resolver.rsp_cells(unit, false)
 			if not foe_rsp.is_empty():
 				var seize_btn := Button.new()
-				seize_btn.text = "Seize RSP"
-				seize_btn.pressed.connect(_submit.bind(RSPFireIntent.new(unit.id, foe_rsp[0], -1, -1)))
+				seize_btn.text = "Seize DPMG"
+				seize_btn.pressed.connect(_submit.bind(DPMGFireIntent.new(unit.id, foe_rsp[0], -1, -1)))
 				vb.add_child(seize_btn)
+
+		# Сапёр (item 45): мины и их поиск.
+		if unit.stats.special_ability_id == MCF.ABILITY_SAPPER:
+			if (unit.remaining_ap > 0 or unit.mine_credits > 0) \
+					and not resolver.mine_cells(unit).is_empty():
+				var mine_btn := Button.new()
+				mine_btn.text = "Lay Mine" if unit.mine_credits <= 0 \
+					else "Lay Mine (%d left)" % unit.mine_credits
+				mine_btn.pressed.connect(_enter_mine)
+				vb.add_child(mine_btn)
+			if unit.remaining_ap > 0:
+				var sweep_btn := Button.new()
+				sweep_btn.text = "Sweep for Mines (%d tiles)" % MCF.MINE_REVEAL_RADIUS
+				sweep_btn.pressed.connect(_submit.bind(RevealMinesIntent.new(unit.id)))
+				vb.add_child(sweep_btn)
 
 		# Копка окопа (§3.7): пехота 3 окопа / инженер 6 за 1 ОД.
 		if (unit.remaining_ap > 0 or unit.dig_credits > 0) and not resolver.diggable_cells(unit).is_empty():
@@ -3144,12 +3208,12 @@ func _on_end_turn_pressed() -> void:
 	_deselect()
 	_submit(EndTurnIntent.new(state.active_player()))
 
-## Откат (#47). Отменяет даже мельчайшие шаги: если сейчас рисуется БРУ-стена —
+## Откат (#47). Отменяет даже мельчайшие шаги: если сейчас рисуется ЛДФ-стена —
 ## снимает последнюю выложенную клетку; иначе восстанавливает состояние из стека.
 func _on_undo_pressed() -> void:
 	if _animating or not _my_turn():
 		return
-	# Незакоммиченное рисование БРУ-стены: убираем последнюю клетку (как Backspace).
+	# Незакоммиченное рисование ЛДФ-стены: убираем последнюю клетку (как Backspace).
 	if not _wall_cells.is_empty():
 		_wall_undo()
 		return

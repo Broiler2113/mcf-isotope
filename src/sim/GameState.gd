@@ -23,6 +23,12 @@ var _next_vehicle_id: int = Vehicle.ID_BASE
 ## выстрел слышен всем, а не только тем, кто его видел.
 var combat_started: bool = false
 
+## Подсвеченные сапёром чужие мины (item 45): владелец → {клетка: до какого раунда}.
+## Хранится ПО ВЛАДЕЛЬЦАМ, а не одним флагом на клетке: подсветить одну и ту же мину
+## могут двое, и у каждого свой срок. Ни в какие пакеты не едет — это знание стороны
+## о поле, а не само поле.
+var revealed_mines: Dictionary = {}
+
 func _init(width: int, height: int, dice_seed: int = -1) -> void:
 	grid = Grid.new(width, height)
 	dice = DiceService.new(dice_seed)
@@ -107,7 +113,8 @@ func snapshot() -> Dictionary:
 				"civilian_active": u.civilian_active,
 			"carried_this_round": u.carried_this_round,
 			"aboard_vehicle_id": u.aboard_vehicle_id, "dig_credits": u.dig_credits,
-			"bru_wall_used": u.bru_wall_used, "move_credit": u.move_credit,
+			"ldf_wall_used": u.ldf_wall_used, "move_credit": u.move_credit,
+			"mine_credits": u.mine_credits,
 			"carried_corpses": u.carried_corpses, "dragging": u.dragging,
 			"action_state": ast,
 		})
@@ -139,6 +146,7 @@ func snapshot() -> Dictionary:
 		"round_order": turns.round_order.duplicate(),
 		"turn_eliminated": turns.eliminated.duplicate(),
 		"roster": roster.snapshot(),
+		"revealed_mines": _snapshot_revealed_mines(),
 		"next_id": _next_id, "next_vehicle_id": _next_vehicle_id,
 		"combat_started": combat_started,
 	}
@@ -162,8 +170,9 @@ func restore(snap: Dictionary) -> void:
 		u.carried_this_round = rec["carried_this_round"]
 		u.aboard_vehicle_id = rec["aboard_vehicle_id"]
 		u.dig_credits = rec["dig_credits"]
-		u.bru_wall_used = rec["bru_wall_used"]
+		u.ldf_wall_used = rec["ldf_wall_used"]
 		u.move_credit = rec["move_credit"]
+		u.mine_credits = rec.get("mine_credits", 0)
 		u.carried_corpses = rec["carried_corpses"]
 		u.dragging = rec["dragging"]
 		var ast: Dictionary = rec["action_state"]
@@ -220,6 +229,23 @@ func restore(snap: Dictionary) -> void:
 		turns.eliminated = (snap["turn_eliminated"] as Dictionary).duplicate()
 	if snap.has("roster"):
 		roster.restore(snap["roster"])
+	if snap.has("revealed_mines"):
+		revealed_mines = _restore_revealed_mines(snap["revealed_mines"])
 	_next_id = snap["next_id"]
 	_next_vehicle_id = snap["next_vehicle_id"]
 	combat_started = snap.get("combat_started", combat_started)
+
+## Подсветка мин — вложенные словари, поэтому duplicate() их бы не отвязал: копия
+## первого уровня продолжила бы делить внутренние словари со снимком, и откат вернул
+## бы ровно то, что откатывает.
+func _snapshot_revealed_mines() -> Dictionary:
+	var out := {}
+	for owner: int in revealed_mines:
+		out[owner] = (revealed_mines[owner] as Dictionary).duplicate()
+	return out
+
+func _restore_revealed_mines(snap: Dictionary) -> Dictionary:
+	var out := {}
+	for owner: int in snap:
+		out[owner] = (snap[owner] as Dictionary).duplicate()
+	return out

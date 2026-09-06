@@ -25,14 +25,15 @@ Yours wins. Changes are picked up when a battle or the map editor opens.
   trench.png
   wall.png
   glass.png
-  bru.png
+  ldf.png
   corpse_wall.png
   airlock.png
-  rsp.png
+  dpmg.png
   dot.png
   wood_wall.png
   sandbag_wall.png
   hedgehog_sandbags.png
+  mine.png
 
 -- Soldiers (add _p1 / _p2 / _neutral for a side-specific look) --
   anti_tank.png
@@ -48,6 +49,7 @@ Yours wins. Changes are picked up when a battle or the map editor opens.
   machinegunner.png
   marksman.png
   miner.png
+  sapper.png
   shield_bearer.png
   sniper.png
 

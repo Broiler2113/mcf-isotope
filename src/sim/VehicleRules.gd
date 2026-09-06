@@ -11,7 +11,7 @@ extends RefCounted
 ##   стена (бетон) ............ 3  (таранится → в пол)
 ##   стена из трупов .......... 3  (трупы разлетаются по ходу движения)
 ##   юнит (пехота) ............ 4  (давится)
-##   БРУ ...................... 6  (таранится)
+##   ЛДФ ...................... 6  (таранится)
 ##   щитоносец ................ 8  (машина ОСТАНАВЛИВАЕТСЯ и получает 1 урон)
 ## Поворот (для танка) стоит 2 очка скорости за шаг (учитывается отдельно).
 ## Полностью блокируют: ДОТ, другой корпус, край поля.
@@ -22,7 +22,7 @@ const COST_AIRLOCK := 1
 const COST_WALL := 3
 const COST_CORPSE_WALL := 3
 const COST_UNIT := 4
-const COST_BRU := 6
+const COST_LDF := 6
 const COST_SHIELD := 8
 const TURN_COST := 1
 
@@ -53,8 +53,8 @@ static func cell_entry(state: GameState, cell: Vector2i, self_id: int) -> Dictio
 	# ДОТ (армированный бетон) — непроходим для техники.
 	if c.feature_id == MCF.FEATURE_DOT:
 		return blocked.call("pillbox blocks vehicles")
-	if c.feature_id == MCF.FEATURE_BRU:
-		return ok.call(COST_BRU, {"ram": true})
+	if c.feature_id == MCF.FEATURE_LDF:
+		return ok.call(COST_LDF, {"ram": true})
 	if c.feature_id == MCF.FEATURE_GLASS:
 		return ok.call(COST_GLASS, {"ram": true})
 	if c.feature_id == MCF.FEATURE_CORPSE_WALL:

@@ -1237,7 +1237,7 @@ func _vehicle_best_target(state: GameState, r: GameActionResolver, veh: Vehicle,
 			continue
 		if not r.is_visible_to_team(owner, e):
 			continue
-		# Не предлагаем выстрел сквозь стену/БРУ/кучу земли или чужую спину (#58, #70):
+		# Не предлагаем выстрел сквозь стену/ЛДФ/кучу земли или чужую спину (#58, #70):
 		# резолвер такой приказ отклонит, и ИИ застрянет, повторяя его.
 		if r.los_blocked(port, e.coord):
 			continue

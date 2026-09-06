@@ -27,7 +27,7 @@ const PURCHASABLE_VEHICLES := ["tank", "shuttle"]
 const PURCHASABLE := [
 	"light_infantry", "heavy_infantry", "assault", "machinegunner",
 	"sniper", "marksman", "anti_tank", "flamethrower",
-	"commander", "engineer", "miner", "drone_operator", "shield_bearer",
+	"commander", "engineer", "miner", "sapper", "drone_operator", "shield_bearer",
 	"civilian",
 ]
 
@@ -461,9 +461,9 @@ func _draw() -> void:
 const FEATURE_TAGS := {
 	MCF.FEATURE_DRONE_STATION: "ST", MCF.FEATURE_SANDBAGS: "SB",
 	MCF.FEATURE_HEDGEHOG: "hdg", MCF.FEATURE_TRENCH: "tr",
-	MCF.FEATURE_WALL: "##", MCF.FEATURE_GLASS: "▢", MCF.FEATURE_BRU: "BRU",
+	MCF.FEATURE_WALL: "##", MCF.FEATURE_GLASS: "▢", MCF.FEATURE_LDF: "LDF",
 	MCF.FEATURE_CORPSE_WALL: "††", MCF.FEATURE_AIRLOCK: "AL",
-	MCF.FEATURE_DIRT_PILE: "drt", MCF.FEATURE_RSP: "MG",
+	MCF.FEATURE_DIRT_PILE: "drt", MCF.FEATURE_DPMG: "MG",
 	MCF.FEATURE_DOT: "PBX", MCF.FEATURE_WOOD_WALL: "WD",
 	MCF.FEATURE_SANDBAG_WALL: "SB", MCF.FEATURE_HEDGEHOG_SANDBAGS: "hSB",
 	MCF.FEATURE_DOT_OPEN: "PBX+",
@@ -475,7 +475,7 @@ func _draw_feature(coord: Vector2i, fid: String, height: float, font: Font) -> v
 	if Sprites.draw_texture_override(self, fid, o, float(CELL)):
 		return
 	var tag: String = FEATURE_TAGS.get(fid, "?")
-	if fid == MCF.FEATURE_BRU:
+	if fid == MCF.FEATURE_LDF:
 		draw_rect(Rect2(o + Vector2(3, 3), Vector2(CELL - 6, CELL - 6)), Color(0.06, 0.06, 0.07))
 		draw_rect(Rect2(o + Vector2(3, 3), Vector2(CELL - 6, CELL - 6)),
 			Color(0.35, 0.35, 0.4), false, 1.0)

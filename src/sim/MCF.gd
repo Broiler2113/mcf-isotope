@@ -23,13 +23,13 @@ const ITEM_FRAG := "frag_grenade"
 const ITEM_EXTINGUISHER := "fire_extinguisher_grenade"
 
 const ITEM_DRONE_STATION := "drone_station"
-const ITEM_BRU := "bru"  # стартовый предмет инженера (§3.7)
+const ITEM_LDF := "bru"  # стартовый предмет инженера (§3.7)
 
 const ITEM_NAMES := {
 	ITEM_FRAG: "Frag Grenade",
 	ITEM_EXTINGUISHER: "Fire Extinguisher Grenade",
 	ITEM_DRONE_STATION: "Drone Station",
-	ITEM_BRU: "BRU",
+	ITEM_LDF: "LDF",
 }
 
 # --- Спецспособности (id в UnitStats.special_ability_id) ---
@@ -42,6 +42,7 @@ const ABILITY_SNIPER := "sniper"
 const ABILITY_DRONE_OPERATOR := "drone_operator"
 const ABILITY_ENGINEER := "engineer"
 const ABILITY_MINER := "miner"
+const ABILITY_SAPPER := "sapper"
 const ABILITY_CIVILIAN := "civilian"
 
 # --- Туман войны (§3.9, наше дополнение) ---
@@ -62,7 +63,7 @@ const DRONE_STATS_ID := "drone"
 #   • Стена из трупов — нужна укладка 5 трупов на одну клетку, но модель клетки
 #     держит одного occupant; поле corpse_count заведено, но стек не образуется.
 #   • Окоп (копка из 2 куч земли 0.5 м) — нет источника «куч земли».
-#   • РСП (стационарный пулемёт) — это стреляющая сущность; проще как неподвижный
+#   • ДПМГ (стационарный пулемёт) — это стреляющая сущность; проще как неподвижный
 #     UnitInstance, отложено. ДОТ автор пометил «в разработке».
 # Мешки/ёж/окоп как ДАННЫЕ КАРТЫ работают через cover_height (система укрытий §3.7).
 const FEATURE_DRONE_STATION := "drone_station"
@@ -72,15 +73,22 @@ const FEATURE_DIRT_PILE := "dirt_pile"     # куча земли, 0.5 м (§3.4/
 const FEATURE_TRENCH := "trench"           # окоп, авто-укрытие выс. 1
 const FEATURE_WALL := "wall"               # стена, 2 м
 const FEATURE_GLASS := "glass"             # стекло, 2 м (простреливается лазером как стена)
-const FEATURE_BRU := "bru"                 # БРУ — стена 1×6
-const BRU_WALL_LENGTH := 6                 # БРУ строится цепочкой из 6 клеток (§3.7)
+## ЛДФ (бывш. ЛДФ, item 43). Идентификатор НА ДИСКЕ намеренно остался "bru":
+## по нему записаны все существующие карты, и переименование строки сделало бы их
+## нечитаемыми ради одной только косметики. Переехали имя константы и подпись.
+const FEATURE_LDF := "bru"                 # ЛДФ — стена 1×6
+const LDF_WALL_LENGTH := 6                 # ЛДФ строится цепочкой из 6 клеток (§3.7)
 const FEATURE_CORPSE_WALL := "corpse_wall" # стена из 5 трупов, 2 м
 const FEATURE_AIRLOCK := "airlock"         # шлюз (§3.11): закрыт=стена, открыт при юните рядом
-const FEATURE_RSP := "rsp"                 # РСП — стационарный пулемёт (§3.7), укрытие 1 м
+## ДПМГ (бывш. ДПМГ, item 43). Идентификатор на диске так же остался "rsp".
+const FEATURE_DPMG := "rsp"                 # ДПМГ — стационарный пулемёт (§3.7), укрытие 1 м
 const FEATURE_DOT := "dot"                 # ДОТ — армированная бетонная стена, 2 м (§3.7)
 ## ДОТ с амбразурами: та же бетонная коробка, но сквозь неё стреляет любой боец,
 ## стоящий вплотную (кроме противотанкиста — его заряд в амбразуру не пролезает).
 const FEATURE_DOT_OPEN := "dot_open"
+## Мина (item 45). Укрытия не даёт и проходу не мешает — на неё именно НАСТУПАЮТ.
+## Спрятана: чужой видит её, только пока сапёр её подсветил (см. GameState.revealed_mines).
+const FEATURE_MINE := "mine"
 const FEATURE_WOOD_WALL := "wood_wall"     # деревянная стена, 2 м, горючая — сгорает в огне (#53)
 ## Мешки, сложенные в два яруса — глухая стена 2 м.
 const FEATURE_SANDBAG_WALL := "sandbag_wall"
@@ -97,12 +105,13 @@ const FEATURE_HEIGHT := {
 	FEATURE_TRENCH: 0.0,
 	FEATURE_WALL: 2.0,
 	FEATURE_GLASS: 2.0,
-	FEATURE_BRU: 2.0,
+	FEATURE_LDF: 2.0,
 	FEATURE_CORPSE_WALL: 2.0,
 	FEATURE_AIRLOCK: 2.0,
-	FEATURE_RSP: 1.0,
+	FEATURE_DPMG: 1.0,
 	FEATURE_DOT: 2.0,
 	FEATURE_DOT_OPEN: 2.0,
+	FEATURE_MINE: 0.0,
 	FEATURE_WOOD_WALL: 2.0,
 	FEATURE_SANDBAG_WALL: 2.0,
 	FEATURE_HEDGEHOG_SANDBAGS: 2.0,
@@ -116,21 +125,33 @@ const FEATURE_NAMES := {
 	FEATURE_TRENCH: "Trench",
 	FEATURE_WALL: "Wall",
 	FEATURE_GLASS: "Glass",
-	FEATURE_BRU: "BRU",
+	FEATURE_LDF: "LDF",
 	FEATURE_CORPSE_WALL: "Corpse Wall",
 	FEATURE_AIRLOCK: "Airlock",
-	FEATURE_RSP: "RSP (Machine Gun)",
+	FEATURE_DPMG: "DPMG (Machine Gun)",
 	FEATURE_DOT: "Pillbox (Concrete)",
 	FEATURE_DOT_OPEN: "Pillbox (Embrasures)",
+	FEATURE_MINE: "Mine",
 	FEATURE_WOOD_WALL: "Wooden Wall",
 	FEATURE_SANDBAG_WALL: "Sandbag Wall",
 	FEATURE_HEDGEHOG_SANDBAGS: "Hedgehog on Sandbags",
 }
 
-# --- РСП: стационарный пулемёт (§3.7) ---
+# --- ДПМГ: стационарный пулемёт (§3.7) ---
 # Ставится за 1 действие (инженер), стреляет из соседней клетки любым юнитом.
-const RSP_RANGE := 12
-const RSP_RATE_OF_FIRE := 8
+const DPMG_RANGE := 12
+const DPMG_RATE_OF_FIRE := 8
+
+# --- Сапёр и мины (item 45) ---
+## За одно действие сапёр ставит до пяти мин.
+const MINES_PER_ACTION := 5
+## Подсветка чужих мин: радиус по Чебышёву, в пределах линии видимости, на 1 ход.
+const MINE_REVEAL_RADIUS := 15
+const MINE_REVEAL_TURNS := 1
+## Урон мины технике по единой шкале (#89) — как у противотанкиста и дрона.
+## В источнике эффект мины не описан вовсе; принято: пехоту убивает наповал на
+## своей клетке, технике снимает единицу прочности. См. GAME_SPEC §7.9.
+const MINE_VEHICLE_DAMAGE := 1
 
 # --- Космос / невесомость (§3.11) ---
 # После выстрела (кроме противотанкиста) в невесомости: стрелка отбрасывает на 1 клетку,
@@ -150,7 +171,7 @@ const TRENCH_DEPTH := 2.0
 # приземляясь в следующую клетку по той же прямой.
 const HEDGEHOG_JUMP_COST := 2
 # Стоимость постройки/слома укреплений в ОД (инженер строит, шахтёр ломает).
-const BUILD_COST_DEFAULT := 1   # стена/стекло/БРУ — 1 действие
+const BUILD_COST_DEFAULT := 1   # стена/стекло/ЛДФ — 1 действие
 const BUILD_COST_HEDGEHOG := 2  # противотанковый ёж — 2 действия
 const BUILD_COST_DOT := 2       # ДОТ (армированный бетон) — 2 действия (§3.7)
 # Единая шкала урона MCF (#89): 1 прочность = 10 потенциала лазера = 1 взрыв дрона =
@@ -234,7 +255,7 @@ const LASER_COST := {
 	FEATURE_AIRLOCK: 1,
 	FEATURE_WALL: 2,
 	FEATURE_CORPSE_WALL: 3,   # трупы разлетаются вдоль траектории луча
-	FEATURE_BRU: 4,
+	FEATURE_LDF: 4,
 	FEATURE_SANDBAG_WALL: 2,
 	FEATURE_HEDGEHOG_SANDBAGS: 2,
 	# Укрытие в один метр луч срезает за единицу (#99): раньше низкий мешок стоил столько
@@ -242,7 +263,7 @@ const LASER_COST := {
 	FEATURE_SANDBAGS: 1,
 	FEATURE_HEDGEHOG: 1,
 	FEATURE_DIRT_PILE: 1,
-	FEATURE_RSP: 1,
+	FEATURE_DPMG: 1,
 	FEATURE_DRONE_STATION: 1,
 	# ДОТ — 2 прочности по единой шкале: 20 потенциала за всю коробку, 10 за трещину.
 	FEATURE_DOT: DOT_DURABILITY * POTENTIAL_PER_DURABILITY,
