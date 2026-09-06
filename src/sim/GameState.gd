@@ -8,6 +8,9 @@ var grid: Grid
 var dice: DiceService
 var turns: TurnManager
 var log: CombatLog
+## Кто играет: стороны, команды, цвета, выбитость (см. Roster). До сборки лобби
+## это дуэль на двоих — то, чем игра была всегда.
+var roster: Roster
 
 var units: Dictionary = {}  # id -> UnitInstance
 var _next_id: int = 0
@@ -25,6 +28,7 @@ func _init(width: int, height: int, dice_seed: int = -1) -> void:
 	dice = DiceService.new(dice_seed)
 	turns = TurnManager.new()
 	log = CombatLog.new()
+	roster = Roster.default_duel()
 
 ## occupy=false — юнит появляется НАД клеткой, не занимая её (дрон, §3.12: он висит в
 ## воздухе, под ним спокойно стоит боец). Раньше это делалось так: дрона клали жильцом
@@ -132,6 +136,9 @@ func snapshot() -> Dictionary:
 	return {
 		"units": us, "vehicles": vs, "cells": cs,
 		"active_index": turns.active_index, "round_number": turns.round_number,
+		"round_order": turns.round_order.duplicate(),
+		"turn_eliminated": turns.eliminated.duplicate(),
+		"roster": roster.snapshot(),
 		"next_id": _next_id, "next_vehicle_id": _next_vehicle_id,
 		"combat_started": combat_started,
 	}
@@ -204,6 +211,15 @@ func restore(snap: Dictionary) -> void:
 		c.airlock_welded = rec["airlock_welded"]
 	turns.active_index = snap["active_index"]
 	turns.round_number = snap["round_number"]
+	# Порядок инициативы теперь ИЗМЕНЯЕМ по ходу боя: группы нейтралов встают в
+	# очередь по мере активации (§15). Значит откат обязан возвращать и его —
+	# иначе Undo оставил бы в очереди группу, которой на доске уже нет.
+	if snap.has("round_order"):
+		turns.round_order = (snap["round_order"] as Array[int]).duplicate()
+	if snap.has("turn_eliminated"):
+		turns.eliminated = (snap["turn_eliminated"] as Dictionary).duplicate()
+	if snap.has("roster"):
+		roster.restore(snap["roster"])
 	_next_id = snap["next_id"]
 	_next_vehicle_id = snap["next_vehicle_id"]
 	combat_started = snap.get("combat_started", combat_started)

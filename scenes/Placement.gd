@@ -31,16 +31,18 @@ const PURCHASABLE := [
 	"civilian",
 ]
 
-const OWNER_COLORS := {
-	MCF.Owner.PLAYER_1: Color(0.3, 0.55, 1.0),
-	MCF.Owner.PLAYER_2: Color(1.0, 0.4, 0.35),
-	MCF.Owner.NEUTRAL: Color(0.7, 0.7, 0.7),
-}
+## Перспективные цвета дуэли (#93); цвета конкретных игроков живут в ростере.
+const OWN_COLOR := Color(0.3, 0.55, 1.0)
+const FOE_COLOR := Color(1.0, 0.4, 0.35)
+const NEUTRAL_COLOR := Color(0.7, 0.7, 0.7)
 
 var map: MapData
 var budget: int = 300
-var spent: Dictionary = {MCF.Owner.PLAYER_1: 0, MCF.Owner.PLAYER_2: 0}
+## Потрачено очков по сторонам: side -> сумма. Заполняется по составу партии.
+var spent: Dictionary = {}
 var active_side: int = MCF.Owner.PLAYER_1
+## Состав партии: кто вообще расставляется и в каком порядке (хот-сит идёт по нему).
+var roster: Roster
 var brush_unit: String = ""
 ## Расставленные игроками юниты: [{"stats_id", "owner", "coord"}].
 var placed: Array = []
@@ -83,6 +85,10 @@ var _shared_seed: int = -1
 
 func _ready() -> void:
 	budget = GameConfig.budget
+	roster = GameConfig.active_roster()
+	for side in _sides():
+		spent[side] = 0
+	active_side = _sides()[0]
 	map = _load_or_blank_map()
 	_map_zones = _map_defines_zones()
 	# Сохранить нейтральные спавны карты (мирные), сбросить игровые.
@@ -225,20 +231,36 @@ func _footprint_placeable(id: String, coord: Vector2i, side: int) -> bool:
 ## сама по себе зоной высадки не считается: жилой квартал — не плацдарм.
 func _map_defines_zones() -> bool:
 	for z in map.zone_owner:
-		if z == MCF.Owner.PLAYER_1 or z == MCF.Owner.PLAYER_2:
+		if MCF.is_player(z):
 			return true
 	return false
+
+## Стороны партии в порядке расстановки.
+func _sides() -> Array[int]:
+	var ids := roster.player_ids()
+	return ids if not ids.is_empty() else [MCF.Owner.PLAYER_1, MCF.Owner.PLAYER_2]
 
 ## Карта со своей разметкой играется по ней; иначе — старое правило половинок:
 ## P1 слева, P2 справа. Нейтральные клетки не подходят никому, поэтому мирные
 ## кварталы остаются недоступны обоим игрокам.
+## Карта со своей разметкой играется по ней; иначе поле делится на вертикальные
+## полосы по числу сторон. На двоих это ровно прежнее правило половинок (P1 слева,
+## P2 справа) — просто записанное так, чтобы работать и на троих, и на шестерых.
 func _in_zone(coord: Vector2i, side: int) -> bool:
 	if _map_zones:
 		return map.get_zone(coord) == side
-	var half := map.width / 2
-	if side == MCF.Owner.PLAYER_1:
-		return coord.x < half
-	return coord.x >= map.width - half
+	var sides := _sides()
+	var n := sides.size()
+	var slot := sides.find(side)
+	if slot < 0:
+		return false
+	if n == 2:
+		var half := map.width / 2
+		return coord.x < half if slot == 0 else coord.x >= map.width - half
+	var band := maxi(1, map.width / n)
+	var lo := slot * band
+	var hi := map.width if slot == n - 1 else lo + band
+	return coord.x >= lo and coord.x < hi
 
 func _cell_placeable(coord: Vector2i) -> bool:
 	if not map.in_bounds(coord):
@@ -599,25 +621,34 @@ func _refresh_labels() -> void:
 	_budget_label.text = "Points spent: %d   (units: %d)" % [spent[active_side], count]
 	if networked():
 		_flow_btn.text = "Waiting..." if _my_ready else "Ready"
-	elif active_side == MCF.Owner.PLAYER_1:
-		_flow_btn.text = "Next: Player 2  >"
 	else:
-		_flow_btn.text = "Start Battle"
+		var sides := _sides()
+		var at := sides.find(active_side)
+		if at >= 0 and at < sides.size() - 1:
+			_flow_btn.text = "Next: %s  >" % _side_label(sides[at + 1])
+		else:
+			_flow_btn.text = "Start Battle"
 
 ## Подпись стороны: в сетевой партии игрок видит себя как «Player A/B (you)» (#93).
 func _side_label(side: int) -> String:
-	if not networked():
-		return "Player 1" if side == MCF.Owner.PLAYER_1 else "Player 2"
-	var base := "Player A (host)" if side == MCF.Owner.PLAYER_1 else "Player B"
-	return base + " (you)" if side == _my_side else base
+	var base := roster.name_of(side)
+	if networked():
+		if side == MCF.Owner.PLAYER_1:
+			base += " (host)"
+		if side == _my_side:
+			base += " (you)"
+	return base
 
 ## Свои — синие, чужие — красные, у обеих сторон одинаково (#93). В горячем стуле
 ## цвет остаётся привязан к номеру игрока.
 func _side_color(side: int) -> Color:
-	if networked() and side != MCF.Owner.NEUTRAL:
-		return OWNER_COLORS[MCF.Owner.PLAYER_1] if side == _my_side \
-				else OWNER_COLORS[MCF.Owner.PLAYER_2]
-	return OWNER_COLORS.get(side, Color(0.7, 0.7, 0.7))
+	if MCF.is_neutral(side):
+		return NEUTRAL_COLOR
+	# Перспектива работает, только пока противник ОДИН: на троих она слила бы двух
+	# разных соперников в один цвет.
+	if networked() and _sides().size() == 2:
+		return OWN_COLOR if side == _my_side else FOE_COLOR
+	return roster.color_of(side)
 
 func _side_unit_count(side: int) -> int:
 	var n := 0
@@ -626,12 +657,15 @@ func _side_unit_count(side: int) -> int:
 			n += 1
 	return n
 
+## Хот-сит: стороны расставляются по очереди, последняя запускает бой.
 func _on_flow() -> void:
-	if active_side == MCF.Owner.PLAYER_1:
-		if _side_unit_count(MCF.Owner.PLAYER_1) == 0:
-			_status.text = "Deploy at least one unit for Player 1."
-			return
-		active_side = MCF.Owner.PLAYER_2
+	if _side_unit_count(active_side) == 0:
+		_status.text = "Deploy at least one unit for %s." % _side_label(active_side)
+		return
+	var sides := _sides()
+	var at := sides.find(active_side)
+	if at >= 0 and at < sides.size() - 1:
+		active_side = sides[at + 1]
 		brush_unit = ""
 		for c in _palette.get_children():
 			if c is Button:
@@ -639,10 +673,6 @@ func _on_flow() -> void:
 		_status.text = ""
 		_refresh_labels()
 		queue_redraw()
-		return
-	# Player 2 -> старт боя.
-	if _side_unit_count(MCF.Owner.PLAYER_2) == 0:
-		_status.text = "Deploy at least one unit for Player 2."
 		return
 	_start_battle()
 

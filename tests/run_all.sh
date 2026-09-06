@@ -9,7 +9,7 @@ EXTRA=""
 [ "${1:-}" = "--update" ] && EXTRA="-- --update"
 
 fail=0
-for script in tests/run_headless.gd tests/run_lockstep.gd; do
+for script in tests/check_scripts.gd tests/run_headless.gd tests/run_lockstep.gd; do
   echo "=== $script ==="
   # shellcheck disable=SC2086
   "$GODOT" --headless --script "res://$script" $EXTRA

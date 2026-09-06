@@ -129,8 +129,14 @@ func apply_to_grid(grid: Grid) -> void:
 				c.cover_height = cover_height[i]
 
 ## Построить готовый GameState: сетка + рельеф + заспавненные по карте юниты.
-func build_state(dice_seed: int = -1) -> GameState:
+## roster — состав партии из лобби; null означает «выведи стороны из самой карты»
+## (демо-ростер, редакторская проба, старое сохранение).
+func build_state(dice_seed: int = -1, roster: Roster = null) -> GameState:
 	var st := GameState.new(width, height, dice_seed)
+	if roster != null:
+		st.roster = roster
+	else:
+		st.roster = Roster.for_sides(_spawn_sides())
 	apply_to_grid(st.grid)
 	for s in spawns:
 		var sid: String = s["stats_id"]
@@ -145,8 +151,19 @@ func build_state(dice_seed: int = -1) -> GameState:
 		st.spawn_unit(stats, s["coord"], s["owner"])
 	_fill_neutral_zone(st)
 	# Инициатива бросается один раз — когда все юниты уже на карте (#53).
-	st.turns.begin_match(st.all_units(), st.dice)
+	st.turns.begin_match(st.all_units(), st.dice, st.roster.player_ids())
 	return st
+
+## Номера игроков, за которых на карте кто-то стоит.
+func _spawn_sides() -> Array:
+	var seen := {}
+	for s in spawns:
+		var o := int(s["owner"])
+		if MCF.is_player(o):
+			seen[o] = true
+	var out: Array = seen.keys()
+	out.sort()
+	return out
 
 ## Нейтральная зона — это не место расстановки, а квартал (#99): каждая её клетка,
 ## на которой можно стоять, заселяется мирным жителем. Пустая зона на карте значит
@@ -177,13 +194,22 @@ static func blank_arena(w: int = 24, h: int = 18) -> MapData:
 
 # --- Сериализация (JSON) ---
 
+## Версия 1 писала нейтралов числом 2 — тем самым, каким тогда было
+## MCF.Owner.NEUTRAL. С переходом на 26 игроков двойка стала законным номером
+## ТРЕТЬЕГО ИГРОКА, поэтому старые файлы надо переводить при чтении, иначе жители
+## города молча превратились бы в чужую армию. Версия 2 пишет нейтралов уже новым
+## значением.
+const MAP_VERSION := 2
+const LEGACY_NEUTRAL := 2
+
+
 func to_dict() -> Dictionary:
 	var spawn_out: Array = []
 	for s in spawns:
 		var co: Vector2i = s["coord"]
 		spawn_out.append({"stats_id": s["stats_id"], "owner": s["owner"], "x": co.x, "y": co.y})
 	return {
-		"version": 1,
+		"version": MAP_VERSION,
 		"width": width,
 		"height": height,
 		"floor_type": Array(floor_type),
@@ -196,6 +222,7 @@ func to_dict() -> Dictionary:
 
 static func from_dict(d: Dictionary) -> MapData:
 	var m := MapData.new(int(d.get("width", 16)), int(d.get("height", 12)))
+	var version := int(d.get("version", 1))
 	var n := m.width * m.height
 	var ft: Array = d.get("floor_type", [])
 	var ch: Array = d.get("cover_height", [])
@@ -213,14 +240,21 @@ static func from_dict(d: Dictionary) -> MapData:
 	var zo: Array = d.get("zone_owner", [])
 	for i in n:
 		if i < zo.size():
-			m.zone_owner[i] = int(zo[i])
+			m.zone_owner[i] = _migrate_owner(int(zo[i]), version)
 	for s in d.get("spawns", []):
 		m.spawns.append({
 			"stats_id": str(s.get("stats_id", "")),
-			"owner": int(s.get("owner", 0)),
+			"owner": _migrate_owner(int(s.get("owner", 0)), version),
 			"coord": Vector2i(int(s.get("x", 0)), int(s.get("y", 0))),
 		})
 	return m
+
+## Перевод номера стороны из формата карты в текущий. Трогает только версию 1 и
+## только двойку: −1 («не зона») и номера игроков 0/1 в обоих форматах совпадают.
+static func _migrate_owner(owner: int, version: int) -> int:
+	if version < 2 and owner == LEGACY_NEUTRAL:
+		return MCF.Owner.NEUTRAL
+	return owner
 
 func save_to(path: String) -> bool:
 	DirAccess.make_dir_recursive_absolute(MAPS_DIR)

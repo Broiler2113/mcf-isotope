@@ -8,11 +8,14 @@ extends Node2D
 const CELL := 40
 const ORIGIN := Vector2(40, 40)
 
-const OWNER_COLORS := {
-	MCF.Owner.PLAYER_1: Color(0.3, 0.55, 1.0),
-	MCF.Owner.PLAYER_2: Color(1.0, 0.4, 0.35),
-	MCF.Owner.NEUTRAL: Color(0.7, 0.7, 0.7),
-}
+## Цвет стороны в редакторе — тот же, что и в бою: палитра ростера. Редактор не
+## знает состава партии, поэтому берёт цвет прямо по номеру игрока.
+static func owner_color(owner_id: int) -> Color:
+	if MCF.is_neutral(owner_id):
+		return Roster.NEUTRAL_COLOR
+	if MCF.is_player(owner_id):
+		return Roster.PALETTE[owner_id % Roster.PALETTE.size()]
+	return Color.WHITE
 
 # Кисти рельефа/объектов. Спавн-кисти обрабатываются отдельно (owner + unit).
 const TERRAIN_BRUSHES := [
@@ -39,6 +42,9 @@ var map: MapData
 var brush: String = MCF.FEATURE_WALL
 ## Владелец кисти зоны развёртывания (#52); -1 = стирать зону.
 var zone_brush_owner: int = MCF.Owner.PLAYER_1
+## Псевдо-владелец кисти: «тот игрок, что выбран в списке сторон».
+const ZONE_SELECTED_PLAYER := -2
+var _zone_player_opt: OptionButton
 
 var tool: int = Tool.PAINT
 ## Начало/текущая клетка перетаскивания для линии/прямоугольника (-1 = нет).
@@ -290,7 +296,7 @@ func _draw() -> void:
 			# Зона развёртывания (#52): полупрозрачная заливка цветом стороны.
 			var zo := map.get_zone(coord)
 			if zo != -1:
-				var zc: Color = OWNER_COLORS.get(zo, Color.WHITE)
+				var zc: Color = owner_color(zo)
 				zc.a = 0.22
 				draw_rect(rect, zc)
 			draw_rect(rect, Color(0.25, 0.27, 0.32), false, 1.0)
@@ -307,7 +313,7 @@ func _draw() -> void:
 		if spawn_key != "":
 			Sprites.draw_texture_override(self, spawn_key, _cell_origin(s["coord"]), cs)
 			continue
-		draw_circle(center, cs * 0.3, OWNER_COLORS.get(s["owner"], Color.WHITE))
+		draw_circle(center, cs * 0.3, owner_color(s["owner"]))
 		draw_string(font, center + Vector2(-9, 5), _initials(s["stats_id"]),
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color.WHITE)
 	# Превью линии/прямоугольника при перетаскивании.
@@ -323,10 +329,10 @@ func _draw() -> void:
 
 ## Суффикс стороны для картинок-замен — тот же, что и в бою (#55).
 func _spawn_suffix(owner_id: int) -> String:
-	match owner_id:
-		MCF.Owner.PLAYER_1: return "_p1"
-		MCF.Owner.PLAYER_2: return "_p2"
-		MCF.Owner.NEUTRAL: return "_neutral"
+	if MCF.is_neutral(owner_id):
+		return "_neutral"
+	if MCF.is_player(owner_id):
+		return "_p%d" % (owner_id + 1)
 	return ""
 
 func _feature_tag(fid: String) -> String:
@@ -398,7 +404,15 @@ func _build_ui() -> void:
 	vbox.add_child(zone_lbl)
 	var zone_row := HBoxContainer.new()
 	vbox.add_child(zone_row)
-	for pair in [[MCF.Owner.PLAYER_1, "Zone P1"], [MCF.Owner.PLAYER_2, "Zone P2"],
+	# Игроков теперь до 26, кнопкой на каждого панель не застроишь: сторона
+	# выбирается списком, а кисть у неё одна.
+	_zone_player_opt = OptionButton.new()
+	for i in MCF.MAX_PLAYERS:
+		_zone_player_opt.add_item(MCF.owner_name(i), i)
+	_zone_player_opt.select(0)
+	_zone_player_opt.item_selected.connect(_on_zone_player_selected)
+	zone_row.add_child(_zone_player_opt)
+	for pair in [[ZONE_SELECTED_PLAYER, "Zone Player"],
 			[MCF.Owner.NEUTRAL, "Zone Neut."], [-1, "No Zone"]]:
 		var zb := Button.new()
 		zb.text = pair[1]
@@ -480,10 +494,25 @@ func _set_brush(id: String, label: String) -> void:
 	brush = id
 	_status.text = "Brush: %s" % label
 
+## ZONE_SELECTED_PLAYER означает «того игрока, что выбран в списке» — иначе кисть
+## пришлось бы переназначать после каждой смены стороны в выпадающем списке.
 func _set_zone_brush(owner: int, label: String) -> void:
 	brush = "zone"
-	zone_brush_owner = owner
-	_status.text = "Brush: %s" % label
+	zone_brush_owner = _selected_zone_player() if owner == ZONE_SELECTED_PLAYER else owner
+	_status.text = "Brush: %s" % (
+			"Zone %s" % MCF.owner_name(zone_brush_owner)
+			if owner == ZONE_SELECTED_PLAYER else label)
+
+func _selected_zone_player() -> int:
+	if _zone_player_opt == null:
+		return MCF.Owner.PLAYER_1
+	return _zone_player_opt.get_selected_id()
+
+## Смена стороны в списке сразу переводит на неё активную кисть зоны — иначе
+## выбор в списке ничего бы не делал до следующего нажатия кнопки.
+func _on_zone_player_selected(_index: int) -> void:
+	if brush == "zone" and MCF.is_player(zone_brush_owner):
+		_set_zone_brush(ZONE_SELECTED_PLAYER, "")
 
 func _on_save() -> void:
 	var fname := _name_edit.text.strip_edges()

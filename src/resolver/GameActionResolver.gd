@@ -14,6 +14,14 @@ var fog_enabled: bool = true
 ## сюда свой owner, чтобы целиться в скрытых. На отображение тумана игрока НЕ влияет
 ## (team_visible_coords не смотрит на этот флаг) — только на легальность прицела ИИ.
 var omniscient_side: int = -1
+## Дружественный огонь (#100, §6.9). Исторически он ВСЕГДА был включён: оружие не
+## разбирает форму, и по своим стрелять можно. Настройка лобби (§7 «Лобби») даёт
+## его выключить — и тогда ни прицелиться в союзника, ни поймать чужую пулю спиной
+## союзник уже не может. По умолчанию true, то есть поведение прежнее.
+##
+## В партии без команд флаг не меняет ничего, кроме запрета стрелять в СВОИХ же
+## юнитов: «союзник» без команд — это только ты сам.
+var friendly_fire_enabled: bool = true
 
 func _init(p_state: GameState) -> void:
 	state = p_state
@@ -257,7 +265,8 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 	var redirect_line := ""
 	if shooter.stats.special_ability_id != MCF.ABILITY_MARKSMAN \
 			and shooter.stats.special_ability_id != MCF.ABILITY_FLAMETHROWER:
-		var intercepted := first_unit_on_line(shooter.coord, target.coord)
+		var intercepted := first_unit_on_line(shooter.coord, target.coord,
+				shooter if not friendly_fire_enabled else null)
 		if intercepted != null:
 			redirect_line = "%s fires through %s — the shot hits them instead!" % [
 				shooter.stats.display_name, intercepted.stats.display_name]
@@ -1835,8 +1844,9 @@ func team_sees(owner: int, coord: Vector2i) -> bool:
 		return false
 	if not fog_enabled:
 		return true  # туман выключен — видно всё поле (см. team_visible_coords)
+	var sides := _vision_sides(owner)
 	for u in state.all_units():
-		if u.owner != owner or not u.is_alive():
+		if not u.is_alive() or not sides.has(u.owner):
 			continue
 		var ux: int = u.coord.x
 		var uy: int = u.coord.y
@@ -1855,7 +1865,8 @@ func is_visible_to_team(owner: int, target: UnitInstance) -> bool:
 	# Всеведущая сторона (ИИ, #43) видит любого юнита сквозь туман.
 	if owner == omniscient_side:
 		return true
-	if target.owner == owner:
+	# Свои и союзники по команде видны всегда — они на связи, а не в тумане.
+	if state.roster.are_allies(owner, target.owner):
 		return true
 	return team_sees(owner, target.coord)
 
@@ -2012,6 +2023,30 @@ var _vis_epoch: Dictionary = {}    # owner -> UnitInstance.vision_epoch на м�
 var _vis_vv: Dictionary = {}       # owner -> GridCell.vision_version на момент сборки
 var _vis_grid: int = 0
 var _vis_fog: bool = true
+## Чьи глаза вливаются в обзор стороны: она сама плюс союзники по команде (§9
+## «Туман войны», слияние обзора). Кешируется, потому что спрашивается в горячем
+## цикле team_sees() — на КАЖДЫЙ выстрел по каждой возможной цели.
+##
+## Состав команд по ходу боя не меняется (его задаёт лобби до начала партии), так
+## что кеш держится за экземпляр ростера и сбрасывается только вместе с ним.
+var _ally_sets: Dictionary = {}
+var _ally_roster: int = 0
+
+## Множество сторон, чей обзор считается обзором этой. Без команд — она одна, и
+## всё слияние обзора спит, ничего не стоя.
+func _vision_sides(owner: int) -> Dictionary:
+	var rid := state.roster.get_instance_id()
+	if _ally_roster != rid:
+		_ally_sets.clear()
+		_ally_roster = rid
+	var cached: Variant = _ally_sets.get(owner)
+	if cached != null:
+		return cached
+	var out := {owner: true}
+	for side in state.roster.vision_sharers(owner):
+		out[side] = true
+	_ally_sets[owner] = out
+	return out
 
 ## Множество клеток, видимых команде (для тумана в UI).
 func team_visible_coords(owner: int) -> Dictionary:
@@ -2048,8 +2083,9 @@ func team_visible_coords(owner: int) -> Dictionary:
 	var seen: Dictionary = _vis_seen.get(owner, {})
 	var gw := state.grid.width
 	var live: Dictionary = {}
+	var sides := _vision_sides(owner)
 	for u in state.all_units():
-		if u.owner != owner or not u.is_alive():
+		if not u.is_alive() or not sides.has(u.owner):
 			continue
 		live[u.id] = true
 		var fresh := _seen_from(u.coord, sight_of(u))
@@ -3340,7 +3376,12 @@ func los_blocked(from_coord: Vector2i, to_coord: Vector2i, allow_embrasure: bool
 ## Первый живой боец, стоящий НА ЛИНИИ между стрелком и целью (концы не считаются).
 ## Именно в него уходит выстрел, если стрелок бьёт сквозь чужую спину (#100).
 ## null = линия чистая, и пуля дойдёт до заявленной цели.
-func first_unit_on_line(from_coord: Vector2i, to_coord: Vector2i) -> UnitInstance:
+## skip_allies_of != null — пропускать союзников этого стрелка: при выключенном
+## дружественном огне пуля проходит над своими, а не находит их спиной. Иначе
+## «огонь по своим отключён» означало бы лишь запрет ПРИЦЕЛИТЬСЯ в союзника, а
+## убивать его случайно всё так же было бы можно.
+func first_unit_on_line(from_coord: Vector2i, to_coord: Vector2i,
+		skip_allies_of: UnitInstance = null) -> UnitInstance:
 	# Шаги по линии вместо Combat.line_cells(): массив-посредник здесь не нужен, а
 	# функция стоит на пути КАЖДОГО выстрела. Проверка «конец линии» из старого цикла
 	# не переносится: line_cells() концы и так не отдавала, она была холостой.
@@ -3361,11 +3402,20 @@ func first_unit_on_line(from_coord: Vector2i, to_coord: Vector2i) -> UnitInstanc
 			continue
 		# Боец на дне окопа сидит ниже линии огня — пуля проходит над ним (§3.7).
 		if cell.occupant != null and cell.occupant.is_alive() \
-				and not trench_protected(from_coord, cell.occupant):
+				and not trench_protected(from_coord, cell.occupant) \
+				and not (skip_allies_of != null
+						and is_ally_of(skip_allies_of, cell.occupant)):
 			return cell.occupant
 		x += sx
 		y += sy
 	return null
+
+## Свой ли это боец для стрелка — сам или союзник по команде. Единственная точка,
+## через которую правила спрашивают «в него вообще можно целиться».
+func is_ally_of(a: UnitInstance, b: UnitInstance) -> bool:
+	if a == null or b == null:
+		return false
+	return state.roster.are_allies(a.owner, b.owner)
 
 ## "" = стрелять можно; иначе причина отказа.
 func can_shoot(shooter: UnitInstance, target: UnitInstance) -> String:
@@ -3374,6 +3424,9 @@ func can_shoot(shooter: UnitInstance, target: UnitInstance) -> String:
 	if target.id == shooter.id:
 		return "Can't shoot yourself"
 	# Дружественный огонь (#100): по своим стрелять МОЖНО — оружие не разбирает форму.
+	# Выключенный в лобби, он запрещает и прицел в союзника (§7 «Лобби»).
+	if not friendly_fire_enabled and is_ally_of(shooter, target):
+		return "Friendly fire is off"
 	# Свой всегда виден, поэтому проверку тумана войны он проходит сам собой.
 	# Туман войны (§3.9): скрытого противника нельзя выбрать целью.
 	if not is_visible_to_team(shooter.owner, target):

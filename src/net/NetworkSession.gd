@@ -25,6 +25,9 @@ var _is_host: bool = false
 ## хоста (порядок инициативы) просто терялся бы.
 var _inbox: Array[Dictionary] = []
 var _listening: bool = false
+## Подключённые гости в порядке подключения (только у хоста). По этому порядку
+## лобби раздаёт слоты, поэтому список именно упорядоченный, а не множество.
+var peers: Array[int] = []
 
 func start_host(port: int = DEFAULT_PORT) -> int:
 	if not is_inside_tree():
@@ -32,7 +35,10 @@ func start_host(port: int = DEFAULT_PORT) -> int:
 		push_error("NetworkSession: add the node to the tree before hosting")
 		return ERR_UNCONFIGURED
 	_peer = ENetMultiplayerPeer.new()
-	var err := _peer.create_server(port, 1)  # ровно один клиент (P2P 1-на-1)
+	# Партия рассчитана на 26 игроков (§7 «Лобби»), значит хост принимает 25 гостей.
+	# Раньше здесь стояла жёсткая единица — «ровно один клиент», — и третий игрок
+	# упирался не в правила, а в транспорт.
+	var err := _peer.create_server(port, MCF.MAX_PLAYERS - 1)
 	if err != OK:
 		return err
 	_is_host = true
@@ -94,7 +100,9 @@ func _relay(msg: Dictionary) -> void:
 		_inbox.append(msg)
 
 # --- События соединения ---
-func _on_peer_connected(_id: int) -> void:
+func _on_peer_connected(id: int) -> void:
+	if not peers.has(id):
+		peers.append(id)
 	peer_ready.emit(true)  # хост: клиент подключился
 
 func _on_connected_to_server() -> void:
@@ -104,5 +112,6 @@ func _on_connection_failed() -> void:
 	close()
 	disconnected.emit()
 
-func _on_peer_disconnected(_id: int = 0) -> void:
+func _on_peer_disconnected(id: int = 0) -> void:
+	peers.erase(id)
 	disconnected.emit()

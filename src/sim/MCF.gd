@@ -265,7 +265,73 @@ const SHIELD_PUSH_DEFENSE_PENALTY := 2
 const SNIPER_AUTOHIT_RANGE := 12
 
 # --- Стороны ---
-enum Owner {PLAYER_1 = 0, PLAYER_2 = 1, NEUTRAL = 2}
+## Игроки занимают СПЛОШНОЙ диапазон 0..MAX_PLAYERS-1: owner — это просто номер
+## игрока, а не член перечисления из трёх значений. PLAYER_1/PLAYER_2 оставлены
+## как имена для нулевого и первого — так читается код, писавшийся под дуэль, и
+## так же читается хот-сит на двоих, который никуда не делся.
+##
+## Нейтралы стоят ЗА диапазоном игроков, а не внутри него (раньше NEUTRAL == 2,
+## то есть на месте третьего игрока). Значение −1 на эту роль не годится: им уже
+## занята «клетка вне зоны развёртывания» в MapData.zone_owner.
+const MAX_PLAYERS := 26
+const MAX_TEAMS := 13
+enum Owner {PLAYER_1 = 0, PLAYER_2 = 1, NEUTRAL = 26}
+
+## Группы активированных нейтралов (§15 «Нейтралы») получают собственные слоты
+## инициативы. Их номера начинаются отсюда, чтобы не столкнуться ни с игроками
+## (0..25), ни с общим нейтральным слотом (26).
+const NEUTRAL_GROUP_BASE := 100
+## Больше ста групп не бывает: нумерация римская и кончается на C (100).
+const MAX_NEUTRAL_GROUPS := 100
+
+## Игроки зовутся латинскими буквами по порядку слотов: A, B, C, ... Z.
+const PLAYER_LETTERS := "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+## Команды зовутся латинизированными греческими буквами со своим символом.
+## Список намеренно берёт только 13 букв из 24 — ровно столько, сколько команд.
+## Порядок значим, менять нельзя: по нему команда получает имя от своего номера.
+const TEAM_NAMES := [
+	["Alpha", "Α"], ["Beta", "Β"], ["Gamma", "Γ"], ["Delta", "Δ"],
+	["Epsilon", "Ε"], ["Zeta", "Ζ"], ["Theta", "Θ"], ["Iota", "Ι"],
+	["Lambda", "Λ"], ["Omicron", "Ο"], ["Tau", "Τ"], ["Omega", "Ω"],
+	["Psi", "Ψ"],
+]
+
+## Владелец — играющий человек/ИИ (а не нейтрал и не пустое место)?
+static func is_player(owner: int) -> bool:
+	return owner >= 0 and owner < MAX_PLAYERS
+
+## Владелец — нейтральная сторона? Общий слот и любая активированная группа.
+static func is_neutral(owner: int) -> bool:
+	return owner == Owner.NEUTRAL or owner >= NEUTRAL_GROUP_BASE
+
+## Номер группы нейтралов (1..100) по её слоту, или 0, если это не группа.
+static func neutral_group_index(owner: int) -> int:
+	return owner - NEUTRAL_GROUP_BASE + 1 if owner >= NEUTRAL_GROUP_BASE else 0
+
+## Слот группы нейтралов по её номеру (1 → первая группа).
+static func neutral_group_slot(index: int) -> int:
+	return NEUTRAL_GROUP_BASE + index - 1
+
+## Римская запись 1..100 — номер группы нейтралов на бейдже и в списке инициативы.
+static func roman(n: int) -> String:
+	if n <= 0 or n > MAX_NEUTRAL_GROUPS:
+		return str(n)
+	const VALUES := [100, 90, 50, 40, 10, 9, 5, 4, 1]
+	const SIGNS := ["C", "XC", "L", "XL", "X", "IX", "V", "IV", "I"]
+	var out := ""
+	var left := n
+	for i in VALUES.size():
+		while left >= VALUES[i]:
+			out += SIGNS[i]
+			left -= VALUES[i]
+	return out
+
+## Имя команды с её греческим символом: «Omega Ω».
+static func team_name(team: int) -> String:
+	if team < 0 or team >= TEAM_NAMES.size():
+		return "No Team"
+	return "%s %s" % [TEAM_NAMES[team][0], TEAM_NAMES[team][1]]
 
 # --- Состояние юнита ---
 enum Status {ALIVE, CORPSE, HELD}
@@ -280,8 +346,11 @@ static func feature_durability(feature_id: String) -> int:
 		return DOT_DURABILITY
 	return 0
 
+## Имя стороны для журнала и HUD. Игрок — по своей букве, группа нейтралов —
+## по своему римскому номеру, общий нейтральный слот — просто «Neutral».
 static func owner_name(owner: int) -> String:
-	match owner:
-		Owner.PLAYER_1: return "Player 1"
-		Owner.PLAYER_2: return "Player 2"
-		_: return "Neutral"
+	if is_player(owner):
+		return "Player %s" % PLAYER_LETTERS[owner]
+	if owner >= NEUTRAL_GROUP_BASE:
+		return "Neutral %s" % roman(neutral_group_index(owner))
+	return "Neutral"

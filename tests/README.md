@@ -7,6 +7,11 @@ bash tests/run_all.sh            # verify
 bash tests/run_all.sh --update   # re-baseline after a deliberate rule change
 ```
 
+**`check_scripts.gd`** loads every `.gd` in the project and fails on any that will
+not parse. It exists because `godot --check-only --script X.gd` cannot see the
+`Ui` autoload, so every scene script "fails" under it for no reason; here the
+project is actually running, so autoloads and global classes are present.
+
 **`run_headless.gd`** plays a fixed-seed AI-vs-AI match on the fixed map in
 `TestSupport.gd` and writes a full trace — every intent, every log line, every
 dice event, every death, plus a final board digest — then diffs it against

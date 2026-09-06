@@ -44,11 +44,12 @@ enum Mode {NONE, MENU, MOVE, SHOOT, GRAB, ITEM, PUSH, DRONE_FLY, BUILD, BUILD_WA
 const HOVER_PREVIEW_MODES := [Mode.MOVE, Mode.ITEM, Mode.SHOOT, Mode.DIG, Mode.CORPSE_DROP,
 		Mode.WELD, Mode.MOVE_HELD, Mode.VEH_TURN, Mode.VEH_CANNON]
 
-const OWNER_COLORS := {
-	MCF.Owner.PLAYER_1: Color(0.3, 0.55, 1.0),
-	MCF.Owner.PLAYER_2: Color(1.0, 0.4, 0.35),
-	MCF.Owner.NEUTRAL: Color(0.7, 0.7, 0.7),
-}
+## Цвета «своя/чужая» для перспективной раскраски дуэли (#93). Цвета КОНКРЕТНЫХ
+## игроков берутся из ростера (Roster.PALETTE) — их до 26, в словарь на два они
+## больше не помещаются.
+const OWN_COLOR := Color(0.3, 0.55, 1.0)
+const FOE_COLOR := Color(1.0, 0.4, 0.35)
+const NEUTRAL_COLOR := Color(0.7, 0.7, 0.7)
 
 ## Труп на земле (#59): красный круг, прозрачность 50%.
 const CORPSE_COLOR := Color(0.8, 0.1, 0.1, 0.5)
@@ -196,6 +197,7 @@ func _ready() -> void:
 	# со следующей партии, перезапускать игру не нужно.
 	Sprites.reload_overrides()
 	_build_state()
+	_sync_roster_from_config()
 	_build_controllers()
 	_build_ui()
 	Ui.theme_canvas_layers()  # HUD lives on a CanvasLayer; pull in the Steam skin.
@@ -228,9 +230,11 @@ func _process(delta: float) -> void:
 
 func _build_state() -> void:
 	if MapHandoff.pending != null:
-		state = MapHandoff.pending.build_state(MapHandoff.take_seed())
+		state = MapHandoff.pending.build_state(MapHandoff.take_seed(),
+				GameConfig.active_roster())
 		resolver = GameActionResolver.new(state)
 		resolver.fog_enabled = GameConfig.fog_enabled
+		resolver.friendly_fire_enabled = GameConfig.friendly_fire
 		MapHandoff.pending = null
 		resolver.update_airlocks()
 		state.log.line_added.connect(_on_log_line)
@@ -238,6 +242,7 @@ func _build_state() -> void:
 	state = GameState.new(GRID_W, GRID_H)
 	resolver = GameActionResolver.new(state)
 	resolver.fog_enabled = GameConfig.fog_enabled
+	resolver.friendly_fire_enabled = GameConfig.friendly_fire
 
 	# Демо-ростер: показываем спецстрелков. Слева P1, справа P2 (зеркально).
 	# Смещения от края к центру для каждой стороны.
@@ -272,7 +277,8 @@ func _build_state() -> void:
 	state.spawn_vehicle("shuttle", Vector2i(GRID_W - 8, 8), MCF.Owner.PLAYER_2)
 
 	# Инициатива бросается один раз — когда все юниты уже на карте (#53).
-	state.turns.begin_match(state.all_units(), state.dice)
+	state.roster = GameConfig.active_roster()
+	state.turns.begin_match(state.all_units(), state.dice, state.roster.player_ids())
 
 	state.log.line_added.connect(_on_log_line)
 
@@ -309,17 +315,30 @@ func _play_civilian_result(res: ActionResult) -> void:
 	state.log.publish_result(res)
 	_refresh_status()
 
+## Перенести выбор экрана подготовки (кто машина, какая сложность) в ростер.
+## Ростер, пришедший из лобби, уже всё это знает — тогда эта синхронизация просто
+## подтверждает то же самое; она нужна для хот-сита и демо-ростера, где лобби нет.
+func _sync_roster_from_config() -> void:
+	var flags := [p1_is_ai, p2_is_ai]
+	for side in state.roster.player_ids():
+		var slot := state.roster.slot(side)
+		if slot == null:
+			continue
+		if side < flags.size():
+			slot.kind = Roster.SlotKind.AI if flags[side] else Roster.SlotKind.HUMAN
+		slot.ai_difficulty = ai_difficulty
+
 func _build_controllers() -> void:
-	# Обе стороны переключаются человек/ИИ (§2.1, #103). Раньше первый игрок был жёстко
+	# Любая сторона переключается человек/ИИ (§2.1, #103). Раньше первый игрок был жёстко
 	# прошит локальным человеком, и посмотреть бой ИИ против ИИ было нельзя вообще.
-	_make_side(MCF.Owner.PLAYER_1)
-	_make_side(MCF.Owner.PLAYER_2)
+	# Список сторон берётся из ростера: их может быть и две, и двадцать шесть.
+	for side in state.roster.player_ids():
+		_make_side(side)
 
-func _make_p2() -> void:
-	_make_side(MCF.Owner.PLAYER_2)
-
+## Кто ведёт сторону — решает РОСТЕР, а не пара флагов. Флаги p1_is_ai/p2_is_ai
+## остались как удобство хот-сита на двоих (кнопки в HUD) и пишут в тот же ростер.
 func _side_is_ai(side: int) -> bool:
-	return p1_is_ai if side == MCF.Owner.PLAYER_1 else p2_is_ai
+	return state.roster.is_ai(side)
 
 func _make_side(side: int) -> void:
 	var old: PlayerController = controllers.get(side)
@@ -327,7 +346,8 @@ func _make_side(side: int) -> void:
 		old.intent_ready.disconnect(_on_intent_ready)
 	var c: PlayerController
 	if _side_is_ai(side):
-		c = AIController.new(side, ai_difficulty)
+		var slot := state.roster.slot(side)
+		c = AIController.new(side, slot.ai_difficulty if slot != null else ai_difficulty)
 	else:
 		c = LocalHumanController.new(side)
 	c.intent_ready.connect(_on_intent_ready)
@@ -345,17 +365,21 @@ func _make_side(side: int) -> void:
 func _refresh_omniscience() -> void:
 	if resolver == null:
 		return
-	if p1_is_ai and p2_is_ai:
+	var sides := state.roster.player_ids()
+	var ai_sides: Array[int] = []
+	for side in sides:
+		if _side_is_ai(side):
+			ai_sides.append(side)
+	if not sides.is_empty() and ai_sides.size() == sides.size():
+		# За столом не осталось человека — прятать не от кого, зритель смотрит бой целиком.
 		resolver.fog_enabled = false
 		resolver.omniscient_side = -1
-	else:
-		resolver.fog_enabled = GameConfig.fog_enabled
-		if p2_is_ai:
-			resolver.omniscient_side = MCF.Owner.PLAYER_2
-		elif p1_is_ai:
-			resolver.omniscient_side = MCF.Owner.PLAYER_1
-		else:
-			resolver.omniscient_side = -1
+		return
+	resolver.fog_enabled = GameConfig.fog_enabled
+	# Всеведущей может быть только ОДНА сторона: поле в резолвере одно. Когда машин
+	# несколько, общий резолвер не отдаётся никому — каждый ИИ и так ставит себя
+	# всеведущим в СВОЙ резолвер на время решения (AIController._decide).
+	resolver.omniscient_side = ai_sides[0] if ai_sides.size() == 1 else -1
 
 # --- Ввод по сетке ---
 func _unhandled_input(event: InputEvent) -> void:
@@ -1669,8 +1693,9 @@ func _setup_network_controllers() -> void:
 	var mine := LocalHumanController.new(my_owner)
 	mine.intent_ready.connect(_on_intent_ready)
 	controllers[my_owner] = mine
-	var remote: int = MCF.Owner.PLAYER_2 if my_owner == MCF.Owner.PLAYER_1 else MCF.Owner.PLAYER_1
-	controllers[remote] = NetworkController.new(remote)
+	# Удалённых сторон теперь может быть больше одной: каждой — свой контроллер.
+	for remote in net.remote_owners():
+		controllers[remote] = NetworkController.new(remote)
 
 const DEFENSE_PROMPT := "You are under attack — click Roll to defend"
 const RESIST_PROMPT := "You are grabbed — click Roll to resist"
@@ -2530,10 +2555,12 @@ func _draw_pixel_bang(top_left: Vector2) -> void:
 
 ## Суффикс стороны для картинок-замен (#55): light_infantry_p1.png и т.п.
 func _owner_suffix(owner_id: int) -> String:
-	match owner_id:
-		MCF.Owner.PLAYER_1: return "_p1"
-		MCF.Owner.PLAYER_2: return "_p2"
-		MCF.Owner.NEUTRAL: return "_neutral"
+	if MCF.is_neutral(owner_id):
+		return "_neutral"
+	# _p1/_p2 — исторические имена из манифеста замен, менять их нельзя: у людей
+	# уже лежат такие файлы. Дальше нумерация просто продолжается: _p3 ... _p26.
+	if MCF.is_player(owner_id):
+		return "_p%d" % (owner_id + 1)
 	return ""
 
 ## Поворот картинки техники под её фронт. Картинка рисуется «носом вверх»,
@@ -2851,10 +2878,14 @@ func _anchor_menu(panel: Control) -> void:
 ## СВОЯ армия всегда синяя, чужая — красная, кем бы ты ни был — Player A или B;
 ## в hotseat перспективы нет, поэтому остаётся жёсткая раскладка P1/P2.
 func _side_color(side: int) -> Color:
-	if networked and side != MCF.Owner.NEUTRAL:
-		return OWNER_COLORS[MCF.Owner.PLAYER_1] if side == my_owner \
-				else OWNER_COLORS[MCF.Owner.PLAYER_2]
-	return OWNER_COLORS.get(side, Color(0.6, 0.6, 0.6))
+	if MCF.is_neutral(side):
+		return NEUTRAL_COLOR
+	# Перспектива «своё синее, чужое красное» работает, только пока чужая сторона
+	# ОДНА. За столом на троих она бы слила двух разных противников в один цвет и
+	# скрыла, кто кому враг, — поэтому там каждый носит свой цвет из ростера.
+	if networked and state.roster.player_ids().size() == 2:
+		return OWN_COLOR if side == my_owner else FOE_COLOR
+	return state.roster.color_of(side)
 
 func _open_menu(unit: UnitInstance) -> void:
 	_picker.hide()
@@ -3078,6 +3109,7 @@ func _toggle_p2_ai() -> void:
 	if _animating or networked:
 		return
 	p2_is_ai = not p2_is_ai
+	_set_side_ai(MCF.Owner.PLAYER_2, p2_is_ai)
 	_deselect()
 	_make_side(MCF.Owner.PLAYER_2)
 	_refresh_ai_buttons()
@@ -3089,16 +3121,28 @@ func _toggle_p1_ai() -> void:
 	if _animating or networked:
 		return
 	p1_is_ai = not p1_is_ai
+	_set_side_ai(MCF.Owner.PLAYER_1, p1_is_ai)
 	_deselect()
 	_make_side(MCF.Owner.PLAYER_1)
 	_refresh_ai_buttons()
 	queue_redraw()
 	_kick_if_ai()
 
+## Записать «эта сторона — машина» в ростер. Кнопки хот-сита на двоих остаются
+## кнопками на двоих, но единственным источником правды стал ростер.
+func _set_side_ai(side: int, value: bool) -> void:
+	var slot := state.roster.slot(side)
+	if slot != null:
+		slot.kind = Roster.SlotKind.AI if value else Roster.SlotKind.HUMAN
+
 func _cycle_difficulty() -> void:
 	if networked:
 		return
 	ai_difficulty = (ai_difficulty + 1) % 3
+	for side in state.roster.player_ids():
+		var slot := state.roster.slot(side)
+		if slot != null:
+			slot.ai_difficulty = ai_difficulty
 	if p1_is_ai:
 		_make_side(MCF.Owner.PLAYER_1)
 	if p2_is_ai:
@@ -3185,10 +3229,14 @@ func _refresh_undo_btn() -> void:
 ## Имя стороны на экране. В сетевой партии стороны зовутся Player A (хост) и
 ## Player B (присоединившийся), а своя помечается «(you)» (#93).
 func _side_label(side: int) -> String:
-	if not networked or side == MCF.Owner.NEUTRAL:
+	if MCF.is_neutral(side):
 		return MCF.owner_name(side)
-	var base := "Player A" if side == MCF.Owner.PLAYER_1 else "Player B"
-	return base + " (you)" if side == my_owner else base
+	var base := state.roster.name_of(side)
+	if state.turns.is_eliminated(side):
+		base += " (out)"
+	if networked and side == my_owner:
+		base += " (you)"
+	return base
 
 func _order_labels() -> String:
 	if not networked:

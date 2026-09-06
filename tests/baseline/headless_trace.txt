@@ -1,5 +1,5 @@
 map 34x26 seed 20260906
-initiative Neutral → Player 1 → Player 2
+initiative Neutral → Player A → Player B
 [r1 s1 p0] MoveIntent(a=0 dx=-999 dy=-999 t=move x=12 y=11)
     ok=true
     log: Light Infantry: move → (12, 11) [AP: 1]
@@ -42,7 +42,7 @@ initiative Neutral → Player 1 → Player 2
     log: Machinegunner: move → (14, 4) [AP: 0]
 [r1 s1 p0] EndTurnIntent(t=end)
     ok=true
-    log: — Player 1 ended their turn. Player 2 to move (round 1) —
+    log: — Player A ended their turn. Player B to move (round 1) —
 [r1 s2 p1] MoveIntent(a=3 dx=-999 dy=-999 t=move x=21 y=11)
     ok=true
     log: Light Infantry: move → (21, 11) [AP: 1]
@@ -63,12 +63,12 @@ initiative Neutral → Player 1 → Player 2
     ok=true
     log: Engineer → Civilian: 1 shots, 1 hits (need 1+)
     log: Civilian killed!
-    dice: {armor:5,def_mods:[],def_owner:2,hit_mods:[],killed:true,kind:attack,need:1,shooter:Engineer,shots:[{armor:5,def_roll:2,hit:true,hit_roll:2,need:1,parried:false}],target:Civilian}
+    dice: {armor:5,def_mods:[],def_owner:26,hit_mods:[],killed:true,kind:attack,need:1,shooter:Engineer,shots:[{armor:5,def_roll:2,hit:true,hit_roll:2,need:1,parried:false}],target:Civilian}
     deaths: [18]
 [r1 s2 p1] ShootIntent(a=13 cx=-999 cy=-999 s=-1 t=shoot tid=19)
     ok=true
     log: Engineer → Civilian: 1 shots, 1 hits (need 2+)
-    dice: {armor:5,def_mods:[],def_owner:2,hit_mods:[],killed:false,kind:attack,need:2,shooter:Engineer,shots:[{armor:5,def_roll:6,hit:true,hit_roll:3,need:2,parried:true}],target:Civilian}
+    dice: {armor:5,def_mods:[],def_owner:26,hit_mods:[],killed:false,kind:attack,need:2,shooter:Engineer,shots:[{armor:5,def_roll:6,hit:true,hit_roll:3,need:2,parried:true}],target:Civilian}
 [r1 s2 p1] ShootIntent(a=9 cx=-999 cy=-999 s=-1 t=shoot tid=2)
     ok=true
     log: Sniper → Light Infantry: 1 shots, 1 hits (need 2+)
@@ -79,7 +79,7 @@ initiative Neutral → Player 1 → Player 2
     ok=true
     log: Sniper → Civilian: 1 shots, 1 hits (need 1+)
     log: Civilian killed!
-    dice: {armor:7,def_mods:[{delta:2,label:Shooter penetration}],def_owner:2,hit_mods:[{delta:0,label:Sniper auto-hit}],killed:true,kind:attack,need:1,shooter:Sniper,shots:[{armor:7,def_roll:2,hit:true,hit_roll:3,need:1,parried:false}],target:Civilian}
+    dice: {armor:7,def_mods:[{delta:2,label:Shooter penetration}],def_owner:26,hit_mods:[{delta:0,label:Sniper auto-hit}],killed:true,kind:attack,need:1,shooter:Sniper,shots:[{armor:7,def_roll:2,hit:true,hit_roll:3,need:1,parried:false}],target:Civilian}
     deaths: [19]
 [r1 s2 p1] MoveIntent(a=5 dx=-999 dy=-999 t=move x=24 y=3)
     ok=true
@@ -101,7 +101,7 @@ initiative Neutral → Player 1 → Player 2
     log: Flamethrower: move → (18, 17) [AP: 0]
 [r1 s2 p1] EndTurnIntent(t=end)
     ok=true
-    log: — Player 2 ended their turn. Player 1 to move (round 2) —
+    log: — Player B ended their turn. Player A to move (round 2) —
     log: — Civilians take their turn (1 active) —
     log: Civilian picks up a corpse — carrying 1 (+1 defence) [AP: 1]
     log: Civilian picks up a corpse — carrying 2 (+2 defence) [AP: 0]
@@ -152,7 +152,7 @@ initiative Neutral → Player 1 → Player 2
     log: Flamethrower: move → (11, 20) [AP: 0]
 [r2 s1 p0] EndTurnIntent(t=end)
     ok=true
-    log: — Player 1 ended their turn. Player 2 to move (round 2) —
+    log: — Player A ended their turn. Player B to move (round 2) —
 [r2 s2 p1] ShootIntent(a=1 cx=-999 cy=-999 s=2 t=shoot tid=4)
     ok=true
     log: Light Infantry → Heavy Infantry: 2 shots, 2 hits (need 1+)
@@ -208,7 +208,7 @@ initiative Neutral → Player 1 → Player 2
     log: Flamethrower: move → (12, 21) [AP: 0]
 [r2 s2 p1] EndTurnIntent(t=end)
     ok=true
-    log: — Player 2 ended their turn. Player 1 to move (round 3) —
+    log: — Player B ended their turn. Player A to move (round 3) —
 [r3 s1 p0] ShootIntent(a=14 cx=-999 cy=-999 s=-1 t=shoot tid=15)
     ok=true
     log: Flamethrower: flame jet
@@ -233,7 +233,7 @@ initiative Neutral → Player 1 → Player 2
     log: Flamethrower: move → (11, 20) [AP: 0]
 [r3 s1 p0] EndTurnIntent(t=end)
     ok=true
-    log: — Player 1 ended their turn. Player 2 to move (round 3) —
+    log: — Player A ended their turn. Player B to move (round 3) —
 [r3 s2 p1] DropCorpseIntent(a=1 t=corpse_down x=21 y=2)
     ok=true
     log: Light Infantry drops a corpse (2/5) at (21, 2)
@@ -272,7 +272,7 @@ initiative Neutral → Player 1 → Player 2
     log: Engineer: move → (18, 19) [AP: 0]
 [r3 s2 p1] EndTurnIntent(t=end)
     ok=true
-    log: — Player 2 ended their turn. Player 1 to move (round 4) —
+    log: — Player B ended their turn. Player A to move (round 4) —
 [r4 s1 p0] ShootIntent(a=14 cx=-999 cy=-999 s=-1 t=shoot tid=1)
     ok=true
     log: Flamethrower: flame jet
@@ -285,7 +285,7 @@ initiative Neutral → Player 1 → Player 2
     log: Flamethrower: move → (16, 19) [AP: 0]
 [r4 s1 p0] EndTurnIntent(t=end)
     ok=true
-    log: — Player 1 ended their turn. Player 2 to move (round 4) —
+    log: — Player A ended their turn. Player B to move (round 4) —
 [r4 s2 p1] MoveIntent(a=7 dx=-999 dy=-999 t=move x=13 y=16)
     ok=true
     log: Machinegunner: move → (13, 16) [AP: 1]
@@ -313,7 +313,7 @@ initiative Neutral → Player 1 → Player 2
     deaths: [14]
 [r4 s2 p1] EndTurnIntent(t=end)
     ok=true
-    log: — Player 2 ended their turn. Player 2 to move (round 5) —
+    log: — Player B ended their turn. Player B to move (round 5) —
 [r5 s2 p1] MoveIntent(a=9 dx=-999 dy=-999 t=move x=16 y=18)
     ok=true
     log: Sniper: move → (16, 18) [AP: 1]
@@ -334,7 +334,7 @@ initiative Neutral → Player 1 → Player 2
     log: Machinegunner: move → (13, 16) [AP: 1]
 [r5 s2 p1] EndTurnIntent(t=end)
     ok=true
-    log: — Player 2 ended their turn. Player 2 to move (round 6) —
+    log: — Player B ended their turn. Player B to move (round 6) —
 [r6 s2 p1] MoveIntent(a=9 dx=-999 dy=-999 t=move x=15 y=17)
     ok=true
     log: Sniper: move → (15, 17) [AP: 1]
@@ -364,7 +364,7 @@ initiative Neutral → Player 1 → Player 2
     log: Engineer: move → (18, 20) [AP: 1]
 [r6 s2 p1] EndTurnIntent(t=end)
     ok=true
-    log: — Player 2 ended their turn. Player 2 to move (round 7) —
+    log: — Player B ended their turn. Player B to move (round 7) —
 actions 105
 --- digest ---
 U 0 (21, 2) 0/99 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
@@ -378,9 +378,9 @@ U 12 (19, 16) 0/51 st1 ap0 mc1 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
 U 13 (18, 20) 1/51 st0 ap2 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
 U 14 (16, 19) 0/50 st1 ap0 mc1 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
 U 15 (12, 21) 1/50 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 16 (4, 13) 2/20 st1 ap0 mc0 cap-1 cor2 veh-1 drg(-9999, -9999) civ1
-U 17 (7, 14) 2/20 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ1
-U 19 (30, 13) 2/20 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ1
+U 16 (4, 13) 26/20 st1 ap0 mc0 cap-1 cor2 veh-1 drg(-9999, -9999) civ1
+U 17 (7, 14) 26/20 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ1
+U 19 (30, 13) 26/20 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ1
 C 17,0 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
 C 17,1 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
 C 17,2 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
@@ -572,4 +572,4 @@ C 17,24 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
 C 15,25 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
 C 16,25 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
 C 17,25 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-T round7 slot2 order[2, 0, 1]
+T round7 slot2 order[26, 0, 1]
