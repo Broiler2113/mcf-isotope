@@ -21,6 +21,9 @@ const T_BREAK := "break"
 const T_DRAG := "drag"
 const T_RSP := "rsp"
 const T_DIG := "dig"
+const T_UNDO := "undo"
+const T_REDO := "redo"
+const T_GROUP_MOVE := "gmove"
 const T_BUILD_WALL := "build_wall"
 const T_CORPSE_UP := "corpse_up"
 const T_CORPSE_DOWN := "corpse_down"
@@ -33,7 +36,21 @@ const T_WELD := "weld"
 
 static func encode(intent: Intent) -> Dictionary:
 	if intent is EndTurnIntent:
-		return {"t": T_END}
+		return {"t": T_END, "q": intent.requester}
+	if intent is UndoIntent:
+		return {"t": T_UNDO, "q": intent.requester}
+	if intent is RedoIntent:
+		return {"t": T_REDO, "q": intent.requester}
+	if intent is GroupMoveIntent:
+		# Пары «юнит → клетка» плоским списком: распределение считается ОДИН раз,
+		# у отдавшего приказ, и едет готовым (item 34).
+		var flat: Array = []
+		for i in intent.unit_ids.size():
+			var t: Vector2i = intent.targets[i]
+			flat.append(intent.unit_ids[i])
+			flat.append(t.x)
+			flat.append(t.y)
+		return {"t": T_GROUP_MOVE, "a": intent.actor_id, "g": flat}
 	if intent is MoveIntent:
 		# carry_drop обязателен в пакете (#100): без него клиент клал бы пленника
 		# на авто-клетку, а хост — на выбранную игроком, и состояния разошлись бы.
@@ -73,7 +90,15 @@ static func encode(intent: Intent) -> Dictionary:
 			"x": intent.rsp_coord.x, "y": intent.rsp_coord.y,
 			"tid": intent.target_id, "s": intent.shots}
 	if intent is DigIntent:
-		return {"t": T_DIG, "a": intent.actor_id, "x": intent.target.x, "y": intent.target.y}
+		# Обе кучи вынутой земли ОБЯЗАНЫ ехать по проводу (AUDIT §2.2). Игрок
+		# выбирает их третьим кликом, а в пакет они не попадали — клиент видел
+		# sentinel и раскладывал землю АВТОМАТИЧЕСКИ, по своему порядку клеток.
+		# Кучи меняют и стоимость прохода, и линию огня, так что доски расходились
+		# и больше не сходились. Это ровно та ошибка, что #100 уже чинил для
+		# MoveIntent.carry_drop, — на одно намерение дальше.
+		return {"t": T_DIG, "a": intent.actor_id, "x": intent.target.x, "y": intent.target.y,
+			"ax": intent.dirt_a.x, "ay": intent.dirt_a.y,
+			"bx": intent.dirt_b.x, "by": intent.dirt_b.y}
 	if intent is BuildWallIntent:
 		var pts: Array = []
 		for c: Vector2i in intent.cells:
@@ -104,7 +129,17 @@ static func decode(d: Dictionary) -> Intent:
 	var a: int = int(d.get("a", -1))
 	var coord := Vector2i(int(d.get("x", 0)), int(d.get("y", 0)))
 	match t:
-		T_END: return EndTurnIntent.new()
+		T_END: return EndTurnIntent.new(int(d.get("q", -1)))
+		T_UNDO: return UndoIntent.new(int(d.get("q", -1)))
+		T_REDO: return RedoIntent.new(int(d.get("q", -1)))
+		T_GROUP_MOVE:
+			var flat: Array = d.get("g", [])
+			var ids: Array[int] = []
+			var dests: Array[Vector2i] = []
+			for i in range(0, flat.size() - 2, 3):
+				ids.append(int(flat[i]))
+				dests.append(Vector2i(int(flat[i + 1]), int(flat[i + 2])))
+			return GroupMoveIntent.new(ids, dests)
 		T_MOVE: return MoveIntent.new(a, coord,
 			Vector2i(int(d.get("dx", -999)), int(d.get("dy", -999))))
 		T_SHOOT: return ShootIntent.new(a, int(d.get("tid", -1)), int(d.get("s", -1)),
@@ -121,7 +156,9 @@ static func decode(d: Dictionary) -> Intent:
 		T_BREAK: return BreakIntent.new(a, coord)
 		T_DRAG: return DragIntent.new(a, Vector2i(int(d.get("ox", 0)), int(d.get("oy", 0))), coord)
 		T_RSP: return RSPFireIntent.new(a, coord, int(d.get("tid", -1)), int(d.get("s", -1)))
-		T_DIG: return DigIntent.new(a, coord)
+		T_DIG: return DigIntent.new(a, coord,
+			Vector2i(int(d.get("ax", -999)), int(d.get("ay", -999))),
+			Vector2i(int(d.get("bx", -999)), int(d.get("by", -999))))
 		T_BUILD_WALL:
 			var pts: Array = d.get("c", [])
 			var cells: Array[Vector2i] = []

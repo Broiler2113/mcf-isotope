@@ -41,6 +41,19 @@ became permanent and invisible. `DiceService.scripted_remaining()` and
 `fallback_rolls` exist for this and are diagnostics only — they change no
 behaviour.
 
+**`run_codec.gd`** builds one of every `Intent` subclass with distinctive values,
+round-trips it through `IntentCodec`, and compares *every* script property. It
+also fails if a subclass on disk has no sample, so a new intent cannot be added
+without noticing the codec. This exact class of bug has now shipped twice —
+`MoveIntent.carry_drop` (#100) and `DigIntent.dirt_a/dirt_b` (`AUDIT.md` §2.2) —
+and neither compiles wrong nor shows up in an AI match, because the AI never
+chooses the field by hand.
+
+**`run_player_actions.gd`** lockstep-checks the things a *player* does and an AI
+never does: digging with hand-picked dirt cells, a group move order, undo/redo,
+and refusing an end-turn or undo from a side that is not acting. Same
+host/client protocol as `run_lockstep.gd`, with per-action board comparison.
+
 ## Scope
 
 Neither run is evidence that the game *plays* correctly. They are evidence that

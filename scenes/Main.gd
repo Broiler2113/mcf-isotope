@@ -92,13 +92,10 @@ var _walk_cells: Dictionary = {}
 ## именно противник заплатил. На симуляцию словарь не влияет — только на кадр.
 var _ap_display: Dictionary = {}
 const AP_DOT_DELAY := 0.18
-## Стек снимков состояния для отката (#47). Каждый успешный ход локального игрока
-## кладёт снимок; кнопка Undo снимает последний. Очищается на границе хода/ИИ.
-var _undo_stack: Array[Dictionary] = []
+## Сами стеки отката переехали в резолвер (item 28): в сетевой партии они обязаны
+## быть ОДИНАКОВЫМИ у всех пиров, а всё, что живёт в боевом экране, у каждого своё.
+## Здесь остались только кнопки.
 var _undo_btn: Button
-## Обратный стек для Redo (#38): туда уходит снимок, снятый кнопкой Undo. Любое новое
-## действие делает откатанную ветку недостижимой, поэтому стек чистится.
-var _redo_stack: Array[Dictionary] = []
 var _redo_btn: Button
 ## Перетаскивание (§3.4): выбранный объект-клетка на первом шаге, -1 = ещё не выбран.
 var drag_object: Vector2i = Vector2i(-1, -1)
@@ -1139,7 +1136,7 @@ func _adjacent8(a: Vector2i, b: Vector2i) -> bool:
 ## Рамкой можно выделять только в «нейтральных» режимах локальной игры (не во время
 ## прицеливания и не по сети — там пошаговый ввод идёт через контроллеры).
 func _box_selectable() -> bool:
-	if networked or state == null:
+	if state == null:
 		return false
 	# Рамка включается только тумблером «Multi-Select» (#21).
 	if _multi_btn == null or not _multi_btn.button_pressed:
@@ -1227,29 +1224,31 @@ func _enter_group_move() -> void:
 ## клетку, ближайшую (Чебышёв) к цели. Резолвится последовательно, поэтому юниты не
 ## наступают друг на друга. После приказа выделение снимается (#19).
 func _group_move_to(dest: Vector2i) -> void:
-	if networked or not state.grid.in_bounds(dest):
+	if not state.grid.in_bounds(dest):
 		return
-	var pre_snap := state.snapshot()
-	var moved := false
+	# Распределение считается ЗДЕСЬ и целиком, а по проводу едет готовый список
+	# (item 34). Раньше приказ применялся прямо на месте, минуя namерения, — потому
+	# в сети групповое выделение и было выключено: у каждого пира вышло бы своё.
+	#
+	# Тот же `taken`, что и в предпросмотре (§18.3): игрок получает ровно те клетки,
+	# жёлтые кружки которых он видел под курсором.
+	var ids: Array[int] = []
+	var dests: Array[Vector2i] = []
+	var taken: Dictionary = {}
 	for id in _group_ids.duplicate():
 		var u := state.get_unit(id)
 		if u == null or not u.is_alive() or u.remaining_ap <= 0:
 			continue
-		var target := _best_group_cell(u, dest)
+		var target := _best_group_cell(u, dest, taken)
+		taken[target] = true
 		if target == u.coord:
 			continue
-		var res := resolver.resolve(MoveIntent.new(id, target))
-		if res.ok:
-			state.log.publish_result(res)
-			moved = true
-	if moved:
-		_redo_stack.clear()
-		_undo_stack.append(pre_snap)
-		for c in controllers.values():
-			c.notify_state_changed(state)
-		_refresh_status()
+		ids.append(id)
+		dests.append(target)
 	_set_group([])
 	queue_redraw()
+	if not ids.is_empty():
+		_submit(GroupMoveIntent.new(ids, dests))
 
 ## Объединение достижимых клеток всей выделенной группы — зелёная подсветка (#88).
 func _group_reach_cells() -> Array[Vector2i]:
@@ -1473,41 +1472,14 @@ func _submit(intent: Intent) -> void:
 	var ctrl: LocalHumanController = controllers[state.active_player()]
 	ctrl.submit(intent)
 
-## Идентификатор ХОДА: раунд + слот инициативы (#94). Откат живёт только внутри
-## одного хода, а сменой активной стороны его не поймать — если вторая сторона
-## выбита, её слот пропускается, круг замыкается обратно на нас, и active_player()
-## остаётся ТЕМ ЖЕ. По владельцу такой переход неотличим от продолжения хода, и
-## Undo уезжал в прошлый раунд — уже после того, как всем восстановили ОД.
-func _turn_key() -> Vector2i:
-	return Vector2i(state.turns.round_number, state.turns.active_index)
-
-## Действие, которое нельзя откатить (#81). Любой выстрел — открытая карта: кубики
-## уже брошены и результат известен, откат превратился бы в переброс. Лазер марксманна
-## кубиков не бросает, но тоже необратим — он уже снёс стену и убил всех на линии.
-func _is_irreversible(intent: Intent, result: ActionResult) -> bool:
-	if not result.dice_events.is_empty():
-		return true
-	return intent is ShootIntent or intent is RSPFireIntent \
-			or intent is DroneDetonateIntent or intent is VehicleCannonIntent
-
 func _on_intent_ready(intent: Intent) -> void:
 	if networked:
 		net.submit_local(intent)
 		return
 	_menu.hide()
 	_picker.hide()
-	var turn_before := _turn_key()
-	var actor_before := state.active_player()
-	# Снимок ДО применения — для отката (#47). Кладём в стек только при успехе.
-	#
-	# Снимаем его лишь тогда, когда откат вообще возможен, — то есть ходит подконтрольная
-	# игроку сторона. Ровно это условие ниже и решает, попадёт ли снимок в стек, а на ходу
-	# ИИ и мирных он гарантированно выбрасывался (#94). Стоит же он недёшево: копия всех
-	# юнитов и всех клеток поля, в бою на 200 бойцов — около 3 мс. Умножить на полторы
-	# сотни действий вражеского хода, и полсекунды уходило на снимки, которые никто
-	# никогда не откроет.
-	var undoable := _can_control(actor_before)
-	var pre_snap: Dictionary = state.snapshot() if undoable else {}
+	# Снимки для отката берёт РЕЗОЛВЕР (item 28) — он один делает это одинаково у
+	# всех пиров. Здесь остаётся только показ.
 	# Смерть показываем только ПОСЛЕ анимации броска защиты (#46): снимок живых
 	# до применения, чтобы отрисовать погибших ещё живыми, пока крутится кубик.
 	var alive_before := {}
@@ -1540,21 +1512,11 @@ func _on_intent_ready(intent: Intent) -> void:
 		_back_to_menu()
 		return
 	_ai_denied_streak = 0
-	# Действие удалось — кладём снимок для Undo. Конец хода закрывает откат: чистим
-	# стек, чтобы не «отменять» уже сыгранный ход (#94).
-	# Новое действие обрывает откатанную ветку — повторять больше нечего (#38).
-	#
-	# Всё, что бросало кубики (стрельба, ПТУР, подрыв дрона, РСП), откату НЕ подлежит
-	# (#81): иначе игрок переигрывал бы неудачный бросок. Раньше такой Undo молча
-	# откатывал ПРЕДЫДУЩЕЕ действие — стек чистим целиком.
-	#
-	# Ходы ИИ и мирных в стек не пишем вовсе (#94): откатывать чужой ход игрок не
-	# вправе, а лежащий снимок только и ждал, чтобы Undo увёл партию к чужому бойцу.
-	_redo_stack.clear()
-	if _turn_key() != turn_before or _is_irreversible(intent, result):
-		_undo_stack.clear()
-	elif undoable:
-		_undo_stack.append(pre_snap)
+	# Откат и повтор переставляют всю доску разом: выделение и подсветка после них
+	# указывают в пустоту, а контроллеры держат устаревшую картину.
+	if intent is UndoIntent or intent is RedoIntent:
+		_resync_after_restore()
+		return
 	if not result.dice_events.is_empty():
 		# Кто погиб в этом действии — рисуем живым до конца броска.
 		_pending_death_ids.clear()
@@ -3180,7 +3142,7 @@ func _on_end_turn_pressed() -> void:
 	if _animating:
 		return
 	_deselect()
-	_submit(EndTurnIntent.new())
+	_submit(EndTurnIntent.new(state.active_player()))
 
 ## Откат (#47). Отменяет даже мельчайшие шаги: если сейчас рисуется БРУ-стена —
 ## снимает последнюю выложенную клетку; иначе восстанавливает состояние из стека.
@@ -3191,22 +3153,18 @@ func _on_undo_pressed() -> void:
 	if not _wall_cells.is_empty():
 		_wall_undo()
 		return
-	if _undo_stack.is_empty():
+	if not resolver.can_undo():
 		return
-	# Текущее состояние уходит в Redo, чтобы откат можно было вернуть (#38).
-	_redo_stack.append(state.snapshot())
-	_apply_snapshot(_undo_stack.pop_back())
+	_submit(UndoIntent.new(state.active_player()))
 
 ## Повтор отменённого действия (#38): зеркало Undo.
 func _on_redo_pressed() -> void:
-	if _animating or _redo_stack.is_empty() or not _my_turn():
+	if _animating or not _my_turn() or not resolver.can_redo():
 		return
-	_undo_stack.append(state.snapshot())
-	_apply_snapshot(_redo_stack.pop_back())
+	_submit(RedoIntent.new(state.active_player()))
 
-func _apply_snapshot(snap: Dictionary) -> void:
-	state.restore(snap)
-	resolver.update_airlocks()
+## Доска переставлена откатом/повтором внутри резолвера — привести к ней экран.
+func _resync_after_restore() -> void:
 	_deselect()
 	for c in controllers.values():
 		c.notify_state_changed(state)
@@ -3222,9 +3180,9 @@ func _refresh_undo_btn() -> void:
 	if _undo_btn == null:
 		return
 	var mine := _my_turn()
-	_undo_btn.disabled = not mine or (_undo_stack.is_empty() and _wall_cells.is_empty())
+	_undo_btn.disabled = not mine or (not resolver.can_undo() and _wall_cells.is_empty())
 	if _redo_btn != null:
-		_redo_btn.disabled = not mine or _redo_stack.is_empty()
+		_redo_btn.disabled = not mine or not resolver.can_redo()
 
 ## Имя стороны на экране. В сетевой партии стороны зовутся Player A (хост) и
 ## Player B (присоединившийся), а своя помечается «(you)» (#93).

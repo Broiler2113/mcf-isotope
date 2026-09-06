@@ -34,7 +34,94 @@ const DIG_TRENCHES_ENGINEER := 6
 ## обычный юнит с бронёй 5+.
 const GLASS_ARMOR := 5
 
+# --- Откат (§18.2, item 28) --------------------------------------------------
+## Стек отката живёт ЗДЕСЬ, а не в боевом экране, и это главное в исправлении
+## сетевого Undo. Пока он лежал в Main.gd, сетевая партия не клала в него ничего
+## вовсе (_on_intent_ready уходил в сеть раньше), а если бы клала — стеки у пиров
+## были бы разные, и откат развёл бы доски. В резолвере оба пира прогоняют ОДНИ И
+## ТЕ ЖЕ намерения, поэтому и снимки складываются одинаковые.
+var _undo_stack: Array = []
+var _redo_stack: Array = []
+## Глубина resolve(): слот мирных резолвит намерения ВНУТРИ чужого resolve()
+## (см. play_civilian_slots), и снимок для них брать не надо — откатывают ход
+## игрока целиком, а не отдельный шаг жителя.
+var _resolve_depth: int = 0
+
+func can_undo() -> bool:
+	return not _undo_stack.is_empty()
+
+func can_redo() -> bool:
+	return not _redo_stack.is_empty()
+
+## Идентификатор ХОДА: раунд + слот инициативы (#94). Откат живёт только внутри
+## одного хода, а сменой активной стороны его не поймать — если вторая сторона
+## выбита, её слот пропускается, круг замыкается обратно на нас, и active_player()
+## остаётся ТЕМ ЖЕ. По владельцу такой переход неотличим от продолжения хода, и
+## Undo уезжал в прошлый раунд — уже после того, как всем восстановили ОД.
+func _turn_key() -> Vector2i:
+	return Vector2i(state.turns.round_number, state.turns.active_index)
+
+## Действие, которое нельзя откатить (#81). Любой выстрел — открытая карта: кубики
+## уже брошены и результат известен, откат превратился бы в переброс. Лазер марксманна
+## кубиков не бросает, но тоже необратим — он уже снёс стену и убил всех на линии.
+func _is_irreversible(intent: Intent, result: ActionResult) -> bool:
+	if not result.dice_events.is_empty():
+		return true
+	return intent is ShootIntent or intent is RSPFireIntent \
+			or intent is DroneDetonateIntent or intent is VehicleCannonIntent
+
+## Пишем ли снимок за эту сторону. Ходы ИИ и мирных в стек не идут (#94): чужой ход
+## откатывать не вправе никто, а снимок стоит копии всей доски (§27.12).
+##
+## Условие СПЕЦИАЛЬНО выведено из ростера, а не из «могу ли я этим управлять»:
+## второе у каждого пира своё, и стеки разъехались бы по построению.
+func _undoable_side(side: int) -> bool:
+	return MCF.is_player(side) and not state.roster.is_ai(side)
+
 func resolve(intent: Intent) -> ActionResult:
+	if intent == null:
+		return ActionResult.fail("No intent")
+	if intent is UndoIntent:
+		return _resolve_undo(intent)
+	if intent is RedoIntent:
+		return _resolve_redo(intent)
+	_resolve_depth += 1
+	var top := _resolve_depth == 1
+	var turn_before := _turn_key()
+	var undoable := top and _undoable_side(state.active_player())
+	var pre_snap: Dictionary = state.snapshot() if undoable else {}
+	var result := _dispatch(intent)
+	_resolve_depth -= 1
+	if top and result.ok:
+		# Новое действие обрывает откатанную ветку — повторять больше нечего (#38).
+		_redo_stack.clear()
+		if _turn_key() != turn_before or _is_irreversible(intent, result):
+			_undo_stack.clear()
+		elif undoable:
+			_undo_stack.append(pre_snap)
+	return result
+
+func _resolve_undo(intent: UndoIntent) -> ActionResult:
+	if intent.requester >= 0 and intent.requester != state.active_player():
+		return ActionResult.fail("Not your turn")
+	if _undo_stack.is_empty():
+		return ActionResult.fail("Nothing to undo")
+	_redo_stack.append(state.snapshot())
+	state.restore(_undo_stack.pop_back())
+	update_airlocks()
+	return ActionResult.success(["— undo —"])
+
+func _resolve_redo(intent: RedoIntent) -> ActionResult:
+	if intent.requester >= 0 and intent.requester != state.active_player():
+		return ActionResult.fail("Not your turn")
+	if _redo_stack.is_empty():
+		return ActionResult.fail("Nothing to redo")
+	_undo_stack.append(state.snapshot())
+	state.restore(_redo_stack.pop_back())
+	update_airlocks()
+	return ActionResult.success(["— redo —"])
+
+func _dispatch(intent: Intent) -> ActionResult:
 	update_airlocks()  # состояние шлюзов зависит от текущих позиций (§3.11)
 	# Любое НЕ-копательное действие завершает начатую серию окопов (§3.7).
 	# ИСКЛЮЧЕНИЕ (#65): ДВИЖЕНИЕ серию не рвёт. Окоп роют линией — шаг вдоль траншеи
@@ -58,7 +145,7 @@ func resolve(intent: Intent) -> ActionResult:
 			or intent is VehicleCannonIntent:
 		state.combat_started = true
 	if intent is EndTurnIntent:
-		return _resolve_end_turn()
+		return _resolve_end_turn(intent)
 	elif intent is MoveIntent:
 		return _resolve_move(intent)
 	elif intent is ShootIntent:
@@ -107,7 +194,37 @@ func resolve(intent: Intent) -> ActionResult:
 		return _resolve_vehicle_move(intent)
 	elif intent is VehicleCannonIntent:
 		return _resolve_vehicle_cannon(intent)
+	elif intent is GroupMoveIntent:
+		return _resolve_group_move(intent)
 	return ActionResult.fail("Unknown intent: %s" % intent)
+
+## Групповой приказ движения (item 34): готовый список «кому куда», посчитанный на
+## машине отдавшего приказ. Резолвер его НЕ пересчитывает — иначе распределение у
+## пиров снова разошлось бы, а игрок увидел бы не то, что показал предпросмотр.
+##
+## Отдельные движения применяются по очереди, и неудача одного не отменяет
+## остальных: юнит, чью клетку успел занять сосед, просто остаётся на месте — ровно
+## то же, что делал прежний локальный вариант приказа.
+func _resolve_group_move(intent: GroupMoveIntent) -> ActionResult:
+	if intent.unit_ids.size() != intent.targets.size():
+		return ActionResult.fail("Malformed group order")
+	if intent.unit_ids.is_empty():
+		return ActionResult.fail("Nobody selected")
+	var out := ActionResult.success()
+	var moved := false
+	for i in intent.unit_ids.size():
+		var u := state.get_unit(intent.unit_ids[i])
+		if u == null or not u.is_alive() or u.coord == intent.targets[i]:
+			continue
+		var one := _dispatch(MoveIntent.new(u.id, intent.targets[i]))
+		if one.ok:
+			moved = true
+			out.log_lines.append_array(one.log_lines)
+			out.dice_events.append_array(one.dice_events)
+			out.deaths.append_array(one.deaths)
+	if not moved:
+		return ActionResult.fail("Nobody could move")
+	return out
 
 # --- Движение (§3.1, §3.2) ---
 func _resolve_move(intent: MoveIntent) -> ActionResult:
@@ -3294,7 +3411,14 @@ func play_civilian_slots() -> ActionResult:
 			break
 	return out
 
-func _resolve_end_turn() -> ActionResult:
+func _resolve_end_turn(intent: EndTurnIntent = null) -> ActionResult:
+	# Единственный авторитетный переход состояния без проверки прав (AUDIT §2.4):
+	# actor_id здесь −1, поэтому _validate_actor не срабатывает, и клиент мог
+	# завершить чужой ход. Заполненный requester сверяем; пустой — старый вызов
+	# (ИИ, мирные, внутренние), их и раньше никто не проверял.
+	if intent != null and intent.requester >= 0 \
+			and intent.requester != state.active_player():
+		return ActionResult.fail("Not your turn")
 	var prev := state.active_player()
 	state.turns.end_turn(state.all_units())
 	var civ := play_civilian_slots()

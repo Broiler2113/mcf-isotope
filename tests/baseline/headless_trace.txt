@@ -40,7 +40,7 @@ initiative Neutral → Player A → Player B
 [r1 s1 p0] MoveIntent(a=6 dx=-999 dy=-999 t=move x=14 y=4)
     ok=true
     log: Machinegunner: move → (14, 4) [AP: 0]
-[r1 s1 p0] EndTurnIntent(t=end)
+[r1 s1 p0] EndTurnIntent(q=-1 t=end)
     ok=true
     log: — Player A ended their turn. Player B to move (round 1) —
 [r1 s2 p1] MoveIntent(a=3 dx=-999 dy=-999 t=move x=21 y=11)
@@ -99,7 +99,7 @@ initiative Neutral → Player A → Player B
 [r1 s2 p1] MoveIntent(a=15 dx=-999 dy=-999 t=move x=18 y=17)
     ok=true
     log: Flamethrower: move → (18, 17) [AP: 0]
-[r1 s2 p1] EndTurnIntent(t=end)
+[r1 s2 p1] EndTurnIntent(q=-1 t=end)
     ok=true
     log: — Player B ended their turn. Player A to move (round 2) —
     log: — Civilians take their turn (1 active) —
@@ -150,7 +150,7 @@ initiative Neutral → Player A → Player B
 [r2 s1 p0] MoveIntent(a=14 dx=-999 dy=-999 t=move x=11 y=20)
     ok=true
     log: Flamethrower: move → (11, 20) [AP: 0]
-[r2 s1 p0] EndTurnIntent(t=end)
+[r2 s1 p0] EndTurnIntent(q=-1 t=end)
     ok=true
     log: — Player A ended their turn. Player B to move (round 2) —
 [r2 s2 p1] ShootIntent(a=1 cx=-999 cy=-999 s=2 t=shoot tid=4)
@@ -206,7 +206,7 @@ initiative Neutral → Player A → Player B
 [r2 s2 p1] MoveIntent(a=15 dx=-999 dy=-999 t=move x=12 y=21)
     ok=true
     log: Flamethrower: move → (12, 21) [AP: 0]
-[r2 s2 p1] EndTurnIntent(t=end)
+[r2 s2 p1] EndTurnIntent(q=-1 t=end)
     ok=true
     log: — Player B ended their turn. Player A to move (round 3) —
 [r3 s1 p0] ShootIntent(a=14 cx=-999 cy=-999 s=-1 t=shoot tid=15)
@@ -231,7 +231,7 @@ initiative Neutral → Player A → Player B
 [r3 s1 p0] MoveIntent(a=14 dx=-999 dy=-999 t=move x=11 y=20)
     ok=true
     log: Flamethrower: move → (11, 20) [AP: 0]
-[r3 s1 p0] EndTurnIntent(t=end)
+[r3 s1 p0] EndTurnIntent(q=-1 t=end)
     ok=true
     log: — Player A ended their turn. Player B to move (round 3) —
 [r3 s2 p1] DropCorpseIntent(a=1 t=corpse_down x=21 y=2)
@@ -270,7 +270,7 @@ initiative Neutral → Player A → Player B
 [r3 s2 p1] MoveIntent(a=13 dx=-999 dy=-999 t=move x=18 y=19)
     ok=true
     log: Engineer: move → (18, 19) [AP: 0]
-[r3 s2 p1] EndTurnIntent(t=end)
+[r3 s2 p1] EndTurnIntent(q=-1 t=end)
     ok=true
     log: — Player B ended their turn. Player A to move (round 4) —
 [r4 s1 p0] ShootIntent(a=14 cx=-999 cy=-999 s=-1 t=shoot tid=1)
@@ -283,7 +283,7 @@ initiative Neutral → Player A → Player B
 [r4 s1 p0] MoveIntent(a=14 dx=-999 dy=-999 t=move x=16 y=19)
     ok=true
     log: Flamethrower: move → (16, 19) [AP: 0]
-[r4 s1 p0] EndTurnIntent(t=end)
+[r4 s1 p0] EndTurnIntent(q=-1 t=end)
     ok=true
     log: — Player A ended their turn. Player B to move (round 4) —
 [r4 s2 p1] MoveIntent(a=7 dx=-999 dy=-999 t=move x=13 y=16)
@@ -311,7 +311,7 @@ initiative Neutral → Player A → Player B
     log: Flamethrower killed!
     dice: {armor:5,def_mods:[{delta:2,label:Shooter penetration}],def_owner:0,hit_mods:[{delta:0,label:Sniper auto-hit}],killed:true,kind:attack,need:1,shooter:Sniper,shots:[{armor:5,def_roll:1,hit:true,hit_roll:4,need:1,parried:false}],target:Flamethrower}
     deaths: [14]
-[r4 s2 p1] EndTurnIntent(t=end)
+[r4 s2 p1] EndTurnIntent(q=-1 t=end)
     ok=true
     log: — Player B ended their turn. Player B to move (round 5) —
 [r5 s2 p1] MoveIntent(a=9 dx=-999 dy=-999 t=move x=16 y=18)
@@ -332,7 +332,7 @@ initiative Neutral → Player A → Player B
 [r5 s2 p1] MoveIntent(a=7 dx=-999 dy=-999 t=move x=13 y=16)
     ok=true
     log: Machinegunner: move → (13, 16) [AP: 1]
-[r5 s2 p1] EndTurnIntent(t=end)
+[r5 s2 p1] EndTurnIntent(q=-1 t=end)
     ok=true
     log: — Player B ended their turn. Player B to move (round 6) —
 [r6 s2 p1] MoveIntent(a=9 dx=-999 dy=-999 t=move x=15 y=17)
@@ -362,7 +362,7 @@ initiative Neutral → Player A → Player B
 [r6 s2 p1] MoveIntent(a=13 dx=-999 dy=-999 t=move x=18 y=20)
     ok=true
     log: Engineer: move → (18, 20) [AP: 1]
-[r6 s2 p1] EndTurnIntent(t=end)
+[r6 s2 p1] EndTurnIntent(q=-1 t=end)
     ok=true
     log: — Player B ended their turn. Player B to move (round 7) —
 actions 105
