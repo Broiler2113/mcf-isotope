@@ -549,6 +549,37 @@ func _build_ui() -> void:
 
 	vbox.add_child(HSeparator.new())
 
+	# Инициатива видна уже на расстановке (item 44): показываем порядок сторон с их
+	# цветами и командами. Точная позиция нейтральных групп бросается в бою (§15) — здесь
+	# лишь оговорка, что нейтралы вклиниваются в очередь при активации.
+	var init_title := Label.new()
+	init_title.text = "Initiative"
+	init_title.add_theme_font_size_override("font_size", 13)
+	vbox.add_child(init_title)
+	for sid: int in roster.player_ids():
+		var irow := HBoxContainer.new()
+		irow.add_theme_constant_override("separation", 6)
+		var sw := ColorRect.new()
+		sw.custom_minimum_size = Vector2(12, 12)
+		sw.color = _side_color(sid)
+		irow.add_child(sw)
+		var nm := roster.name_of(sid)
+		if roster.has_teams() and roster.team_of(sid) >= 0:
+			nm += " · %s" % MCF.team_name(roster.team_of(sid))
+		var il := Label.new()
+		il.text = nm
+		il.add_theme_font_size_override("font_size", 12)
+		irow.add_child(il)
+		vbox.add_child(irow)
+	if GameConfig.civilians_enabled:
+		var neut := Label.new()
+		neut.text = "+ Neutrals join initiative when activated"
+		neut.add_theme_font_size_override("font_size", 11)
+		neut.modulate = Color(0.75, 0.78, 0.85)
+		vbox.add_child(neut)
+
+	vbox.add_child(HSeparator.new())
+
 	var hint := Label.new()
 	hint.text = "Pick a unit or vehicle, then click — or hold and drag — to deploy across your zone. Click a deployed unit to refund. WASD / drag to pan, wheel to zoom."
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART

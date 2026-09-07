@@ -16,6 +16,15 @@ Yours wins. Changes are picked up when a battle or the map editor opens.
   floor_wall.png
   floor_cover.png
   fire.png
+  floor_grass.png
+  floor_destroyed.png
+  floor_epicenter.png
+
+-- Combat decoration (cosmetic only, never affects the rules) --
+  glass_shard.png
+  shell_casing.png
+  blood_pool.png
+  blood_splatter.png
 
 -- Terrain features (one per object on a tile) --
   drone_station.png

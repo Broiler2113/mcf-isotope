@@ -3263,6 +3263,21 @@ func operator_needs_station(u: UnitInstance) -> bool:
 		return false
 	return deployed_station_of(u) == Vector2i(-1, -1)
 
+## Единый признак «не хватает обязательного снаряжения» (item 18): по нему рисуется общий
+## восклицательный знак над юнитом. Сводит вместе четыре случая — инженер истратил свою ЛДФ,
+## оператор дронов без развёрнутой станции, огнемётчик без огнетушащей гранаты и пулемётчик
+## без фраг-гранаты. Последние два опознаём по стартовому предмету стороны (default_item_id):
+## юнит родился с ним, а сейчас в руках его нет.
+func unit_missing_equipment(u: UnitInstance) -> bool:
+	if u == null or not u.is_alive():
+		return false
+	if u.ldf_wall_used or operator_needs_station(u):
+		return true
+	var need: String = u.stats.default_item_id
+	if need == MCF.ITEM_EXTINGUISHER or need == MCF.ITEM_FRAG:
+		return u.held_item_id != need
+	return false
+
 ## "" = станцию можно свернуть обратно в предмет (item 16); иначе причина отказа.
 func can_pick_up_station(operator: UnitInstance, coord: Vector2i) -> String:
 	if operator == null or not operator.is_alive():

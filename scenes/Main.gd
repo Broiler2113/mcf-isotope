@@ -37,7 +37,18 @@ const SteamChrome = preload("res://src/ui/SteamChrome.gd")
 enum Mode {NONE, MENU, MOVE, SHOOT, GRAB, ITEM, PUSH, DRONE_FLY, BUILD, BUILD_WALL, BREAK, DPMG_FIRE, DIG, CARRY_DROP,
 	CORPSE_DROP, WELD, MOVE_HELD, MINE,
 	GROUP_MENU, GROUP_MOVE,
-	VEH_MENU, VEH_MOVE, VEH_TURN, VEH_CANNON, VEH_DISEMBARK}
+	VEH_MENU, VEH_MOVE, VEH_TURN, VEH_CANNON, VEH_DISEMBARK,
+	DRAW}
+
+## Аннотации на поле (item 51). Каждый штрих — список клеток, автор и область видимости.
+enum DrawScope {SELF, TEAM}
+var _strokes: Array = []            # [{author:int, scope:int, cells:Array[Vector2i]}]
+var _cur_stroke: Array[Vector2i] = []
+var _stroke_drawing: bool = false
+var _draw_scope_team: bool = false  # рисовать «для команды», иначе только себе
+var _hide_others_draw: bool = false # скрыть чужие рисунки целиком (item 51 — фильтр)
+const K_CHAT := "chat"
+const K_DRAW := "draw"
 
 ## Режимы, чей предпросмотр читает клетку под курсором. Каждому движению мыши нужен
 ## свой кадр (#97), иначе картинка обновляется только когда камера что-то дёрнет —
@@ -192,6 +203,16 @@ const HUD_MIN_SIZE := Vector2(230, 170)
 const HUD_START_SIZE := Vector2(330, 430)
 var _status_label: Label
 var _info_label: Label
+## Живой свод армий и место игрока в очереди (item 20). Полный разбор инициативы
+## открывается кнопкой в отдельном центральном оверлее (item 49).
+var _init_label: RichTextLabel
+var _init_overlay: Control
+var _init_overlay_body: VBoxContainer
+## Чат, докнутый в правый-нижний угол (item 50): тело сворачивается кнопкой заголовка.
+var _chat_panel: PanelContainer
+var _chat_body: VBoxContainer
+var _chat_log: RichTextLabel
+var _chat_input: LineEdit
 var _log_label: RichTextLabel
 var _menu: PanelContainer
 var _picker: PanelContainer
@@ -253,6 +274,7 @@ func _process(delta: float) -> void:
 	if Input.is_key_pressed(KEY_A): dir.x += 1
 	if Input.is_key_pressed(KEY_D): dir.x -= 1
 	if dir != Vector2.ZERO:
+		_kill_pan_tween()  # ручная панорама важнее плавного доводки камеры (item 52)
 		pan += dir.normalized() * PAN_SPEED * delta
 		queue_redraw()
 	# Полёт осколков и гильз (#21): пока что-то летит — перерисовываем, потом слой
@@ -477,6 +499,22 @@ func _unhandled_input(event: InputEvent) -> void:
 			if event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
 				_wall_commit()
 				return
+	# Рисование аннотаций (item 51): тянем штрих левой кнопкой; отпускание фиксирует его
+	# и, в сетевой партии, рассылает. Симуляции это не касается — чистый клиентский слой.
+	if mode == Mode.DRAW:
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed:
+				_stroke_drawing = true
+				_cur_stroke = []
+				_stroke_add(_pos_to_cell(get_global_mouse_position()))
+			else:
+				_stroke_drawing = false
+				_stroke_commit()
+			return
+		if event is InputEventMouseMotion:
+			if _stroke_drawing:
+				_stroke_add(_pos_to_cell(get_global_mouse_position()))
+			return
 	if HOVER_PREVIEW_MODES.has(mode) and event is InputEventMouseMotion:
 		queue_redraw()  # обновляем предпросмотр радиуса/струи/окопа под курсором
 		return
@@ -829,6 +867,13 @@ func _escape_pressed() -> void:
 		_quit_dialog.hide()
 		return
 	if _animating:
+		return
+	# Выход из режима рисования аннотаций (item 51): бросаем незавершённый штрих.
+	if mode == Mode.DRAW:
+		_stroke_drawing = false
+		_cur_stroke = []
+		mode = Mode.NONE
+		queue_redraw()
 		return
 	# Отмена незакоммиченного рисования ЛДФ-стены.
 	if mode == Mode.BUILD_WALL:
@@ -1753,6 +1798,15 @@ func _on_initiative_synced() -> void:
 	queue_redraw()
 
 func _on_net_message(msg: Dictionary) -> void:
+	# Несимуляционные сообщения (item 50/51) обрабатываем здесь и НЕ передаём в netcode:
+	# они никогда не касаются резолвера и лок-степа.
+	match msg.get("k", ""):
+		K_CHAT:
+			_chat_append(str(msg.get("who", "?")), str(msg.get("text", "")))
+			return
+		K_DRAW:
+			_on_remote_stroke(msg)
+			return
 	if net != null:
 		net.receive(msg)
 
@@ -2050,6 +2104,20 @@ func _flame_jet_preview(from_coord: Vector2i, toward: Vector2i) -> Array:
 
 ## Подвести камеру к клетке, если она вне экрана (#103). Масштаб не трогаем: игрок сам
 ## выбрал, насколько близко смотрит, и менять это за него — потерять его точку обзора.
+## Длительность плавной доводки камеры к активному юниту (item 52). Зум не трогаем
+## (§18.4) — двигаем только панораму.
+const ENSURE_VISIBLE_TWEEN := 0.22
+var _pan_tween: Tween = null
+
+func _kill_pan_tween() -> void:
+	if _pan_tween != null and _pan_tween.is_valid():
+		_pan_tween.kill()
+	_pan_tween = null
+
+func _set_pan(v: Vector2) -> void:
+	pan = v
+	queue_redraw()
+
 func _ensure_visible(coord: Vector2i) -> void:
 	var view := get_viewport_rect().size
 	var centre := _cell_origin(coord) + Vector2(CELL, CELL) * 0.5
@@ -2057,8 +2125,13 @@ func _ensure_visible(coord: Vector2i) -> void:
 	var margin: float = minf(CELL * zoom * 2.0, minf(view.x, view.y) * 0.25)
 	if p.x >= margin and p.y >= margin and p.x <= view.x - margin and p.y <= view.y - margin:
 		return
-	pan = view * 0.5 - zoom * centre
-	queue_redraw()
+	# item 52: раньше камера прыгала (pan = ...). Теперь доводим панораму плавно тем же
+	# твином, гася предыдущий, чтобы серия шагов ИИ/нейтралов не дёргала кадр рывками.
+	var target := view * 0.5 - zoom * centre
+	_kill_pan_tween()
+	_pan_tween = create_tween()
+	_pan_tween.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	_pan_tween.tween_method(_set_pan, pan, target, ENSURE_VISIBLE_TWEEN)
 
 ## Возврат камеры к исходному виду (#74). На большой карте (город 50×50) легко
 ## укатиться за край и потерять из виду собственные войска — кнопка сбрасывает
@@ -2622,10 +2695,9 @@ func _draw() -> void:
 			draw_arc(center, CELL * 0.5, 0, TAU, 32, Color(1, 0.6, 0.1), 2.0)
 		for i in _draw_ap(unit):
 			draw_circle(_cell_origin(at) + Vector2(6 + i * 8, CELL - 6), 3, Color(1, 1, 0.4))
-		# Снаряжения не хватает — пиксельный «!» рядом. Пока таких случаев два:
-		# инженер израсходовал единственную ЛДФ-стену (#40) и оператор дронов остался
-		# без развёрнутой станции (item 16). Общая система значков — за HUD-милстоуном.
-		if unit.ldf_wall_used or resolver.operator_needs_station(unit):
+		# Снаряжения не хватает — общий пиксельный «!» (item 18): инженер без ЛДФ,
+		# оператор без станции, огнемётчик без огнетушителя, пулемётчик без фраги.
+		if resolver.unit_missing_equipment(unit):
 			_draw_pixel_bang(_cell_origin(at) + Vector2(CELL - 12, 4))
 		# Юнит тащит на себе труп-щит (#6) — без метки это видно только в подсказке (#71).
 		if unit.carried_corpses > 0:
@@ -2643,6 +2715,9 @@ func _draw() -> void:
 		var brect := Rect2(_cell_origin(Vector2i(bx0, by0)), Vector2(bw * CELL, bh * CELL))
 		draw_rect(brect, Color(0.3, 0.9, 0.4, 0.12))
 		draw_rect(brect, Color(0.4, 1.0, 0.5, 0.8), false, 2.0)
+
+	# Аннотации игроков поверх поля (item 51).
+	_draw_annotations()
 
 ## Труп на земле (#59): красный круг на половинной прозрачности — того же размера,
 ## что и живой боец, но полупрозрачный, поэтому тело сразу отличимо от бойца и не
@@ -2852,6 +2927,11 @@ func _reposition_hud_grip() -> void:
 	if _hud_grip == null or _hud_window == null:
 		return
 	_hud_grip.position = _hud_window.position + _hud_window.size - _hud_grip.size
+	# Чат приколот к правому-нижнему углу экрана (item 50).
+	if _chat_panel != null:
+		var vp := get_viewport_rect().size
+		_chat_panel.position = Vector2(vp.x - _chat_panel.size.x - 12.0,
+				vp.y - _chat_panel.size.y - 12.0)
 
 # --- UI ---
 func _build_ui() -> void:
@@ -2956,6 +3036,39 @@ func _build_ui() -> void:
 	_multi_btn.toggled.connect(_on_multi_toggled)
 	vbox.add_child(_multi_btn)
 
+	# Возврат в лобби (item 20): в сетевой партии — к экрану лобби, в локальной — в меню.
+	vbox.add_child(_compact_button("Return to Lobby", _to_lobby))
+
+	# Живой статус армий и место игрока в очереди (item 20). Полный разбор — по кнопке.
+	vbox.add_child(_hsep())
+	vbox.add_child(_compact_button("Initiative ▸", _toggle_initiative_overlay))
+	_init_label = RichTextLabel.new()
+	_init_label.bbcode_enabled = true
+	_init_label.fit_content = true
+	_init_label.custom_minimum_size = Vector2(0, 90)
+	_init_label.add_theme_font_size_override("normal_font_size", 11)
+	_init_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_child(_init_label)
+
+	# Инструмент рисования (item 51): режим рисунка + область видимости + фильтр чужих.
+	vbox.add_child(_hsep())
+	vbox.add_child(_button_row([
+		_compact_button("Draw", _enter_draw),
+		_compact_button("Clear Mine", _clear_my_drawings)]))
+	var team_draw := CheckBox.new()
+	team_draw.text = "Share with team"
+	team_draw.add_theme_font_size_override("font_size", 12)
+	team_draw.toggled.connect(func(on: bool) -> void: _draw_scope_team = on)
+	vbox.add_child(team_draw)
+	var hide_draw := CheckBox.new()
+	hide_draw.text = "Hide others' drawings"
+	hide_draw.add_theme_font_size_override("font_size", 12)
+	hide_draw.toggled.connect(func(on: bool) -> void:
+		_hide_others_draw = on
+		queue_redraw())
+	vbox.add_child(hide_draw)
+	vbox.add_child(_compact_button("Chat ▾", _toggle_chat))
+
 	# Строка сети появляется, только когда партия действительно сетевая.
 	_net_status = Label.new()
 	_net_status.add_theme_font_size_override("font_size", 11)
@@ -2989,6 +3102,46 @@ func _build_ui() -> void:
 	_ui_layer.add_child(_dice)
 
 	_build_quit_dialog()
+	_build_initiative_overlay()
+	_build_chat_panel()
+
+## Чат в правом-нижнем углу (item 50): рамка SteamChrome с заголовком-переключателем,
+## прокручиваемым журналом и строкой ввода. Позиция подгоняется в _reposition_hud_grip.
+func _build_chat_panel() -> void:
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(280, 0)
+	SteamChrome.apply_panel(panel)
+	_ui_layer.add_child(panel)
+	_chat_panel = panel
+	var frame := VBoxContainer.new()
+	frame.add_theme_constant_override("separation", 0)
+	panel.add_child(frame)
+	var toggle := Button.new()
+	toggle.text = "▾"
+	toggle.pressed.connect(_toggle_chat)
+	frame.add_child(SteamChrome.header_bar("Chat", toggle))
+	_chat_body = VBoxContainer.new()
+	_chat_body.add_theme_constant_override("separation", 4)
+	_chat_body.visible = false
+	frame.add_child(SteamChrome.pad(_chat_body, 8, 8))
+	_chat_log = RichTextLabel.new()
+	_chat_log.bbcode_enabled = true
+	_chat_log.custom_minimum_size = Vector2(260, 120)
+	_chat_log.add_theme_font_size_override("normal_font_size", 11)
+	_chat_log.scroll_following = true
+	_chat_body.add_child(_chat_log)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	_chat_body.add_child(row)
+	_chat_input = LineEdit.new()
+	_chat_input.placeholder_text = "Message…"
+	_chat_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_chat_input.text_submitted.connect(func(_t: String) -> void: _chat_send())
+	row.add_child(_chat_input)
+	var send := Button.new()
+	send.text = "Send"
+	send.pressed.connect(_chat_send)
+	row.add_child(send)
 
 ## Модальное окно «выход в меню» в общем стиле (#51): затемнитель на весь экран
 ## и центрированная рамка SteamChrome с заголовком, текстом и кнопками.
@@ -3041,6 +3194,256 @@ func _build_quit_dialog() -> void:
 	row.add_child(ok)
 	_quit_dialog = overlay
 	_ui_layer.add_child(_quit_dialog)
+
+## Полный разбор инициативы по центру экрана (item 49): затемнитель + рамка со всеми
+## слотами по порядку, цветами сторон, группировкой по командам, группами нейтралов и
+## живым счётом каждого. Тело перезаполняется при каждом открытии из _refresh_initiative.
+func _build_initiative_overlay() -> void:
+	var overlay := Control.new()
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.hide()
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.55)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	dim.gui_input.connect(func(e: InputEvent) -> void:
+		if e is InputEventMouseButton and e.pressed:
+			_init_overlay.hide())
+	overlay.add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.add_child(center)
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(420, 0)
+	SteamChrome.apply_panel(panel)
+	center.add_child(panel)
+	var frame := VBoxContainer.new()
+	frame.add_theme_constant_override("separation", 0)
+	panel.add_child(frame)
+	var close := Button.new()
+	close.text = "✕"
+	close.pressed.connect(func() -> void: _init_overlay.hide())
+	frame.add_child(SteamChrome.header_bar("Initiative", close))
+	_init_overlay_body = VBoxContainer.new()
+	_init_overlay_body.add_theme_constant_override("separation", 6)
+	frame.add_child(SteamChrome.pad(_init_overlay_body, 16, 14))
+	_init_overlay = overlay
+	_ui_layer.add_child(_init_overlay)
+
+func _toggle_initiative_overlay() -> void:
+	if _init_overlay == null:
+		return
+	if _init_overlay.visible:
+		_init_overlay.hide()
+	else:
+		_refresh_initiative_overlay()
+		_init_overlay.show()
+
+## Возврат в лобби (item 20). В сетевой партии — на экран лобби (если он есть), иначе
+## та же дорога, что и в главное меню.
+func _to_lobby() -> void:
+	_to_menu()
+
+## Свод «живых/мёртвых» по каждому владельцу-слоту (item 20). owner -> {alive, dead}.
+func _army_counts() -> Dictionary:
+	var out: Dictionary = {}
+	for u: UnitInstance in state.all_units():
+		var rec: Dictionary = out.get(u.owner, {"alive": 0, "dead": 0})
+		if u.is_alive():
+			rec["alive"] += 1
+		else:
+			rec["dead"] += 1
+		out[u.owner] = rec
+	return out
+
+func _count_str(counts: Dictionary, owner: int) -> String:
+	var rec: Dictionary = counts.get(owner, {"alive": 0, "dead": 0})
+	return "%d alive / %d dead" % [rec["alive"], rec["dead"]]
+
+## Компактная сводка для боковой панели (item 20): текущий ход и команда, номер раунда,
+## кто ходит непосредственно до и после ПРОСМАТРИВАЮЩЕГО игрока.
+func _refresh_initiative() -> void:
+	if _init_label == null or state == null:
+		return
+	var me := _viewing_side()
+	var tm := state.turns
+	var lines: Array[String] = []
+	var cur := "[b]Turn:[/b] %s" % _side_label(tm.active_player())
+	if state.roster != null and state.roster.has_teams():
+		var t := state.roster.team_of(tm.active_player())
+		if t >= 0:
+			cur += "  (%s)" % MCF.team_name(t)
+	lines.append(cur)
+	lines.append("[b]Round:[/b] %d" % tm.round_number)
+	var prev := tm.neighbor_slot(me, -1)
+	var nxt := tm.neighbor_slot(me, 1)
+	if prev >= 0:
+		lines.append("Before you: %s" % _side_label(prev))
+	if nxt >= 0:
+		lines.append("After you: %s" % _side_label(nxt))
+	# Живой счёт по каждому слоту очереди (item 20) — компактно, полный разбор в оверлее.
+	var counts := _army_counts()
+	for slot: int in tm.round_order:
+		var rec: Dictionary = counts.get(slot, {"alive": 0, "dead": 0})
+		lines.append("%s: %d/%d" % [_side_label(slot), rec["alive"],
+				rec["alive"] + rec["dead"]])
+	_init_label.text = "\n".join(lines)
+
+## Полный разбор инициативы для оверлея (item 49): каждый слот по порядку со своим цветом,
+## живым счётом и пометкой активного/выбитого; игроки сгруппированы по командам, если те есть.
+func _refresh_initiative_overlay() -> void:
+	if _init_overlay_body == null or state == null:
+		return
+	for c in _init_overlay_body.get_children():
+		c.queue_free()
+	var counts := _army_counts()
+	var tm := state.turns
+	for slot: int in tm.round_order:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		var swatch := ColorRect.new()
+		swatch.custom_minimum_size = Vector2(14, 14)
+		swatch.color = _side_color(slot)
+		row.add_child(swatch)
+		var name_txt := _side_label(slot)
+		if state.roster != null and state.roster.has_teams() and MCF.is_player(slot):
+			var t := state.roster.team_of(slot)
+			if t >= 0:
+				name_txt += " · %s" % MCF.team_name(t)
+		var lbl := Label.new()
+		lbl.text = "%s — %s" % [name_txt, _count_str(counts, slot)]
+		if slot == tm.active_player():
+			lbl.text = "▶ " + lbl.text
+			lbl.add_theme_color_override("font_color", Ui.accent_color())
+		if tm.is_eliminated(slot):
+			lbl.text += "  (eliminated)"
+			lbl.modulate = Color(1, 1, 1, 0.45)
+		row.add_child(lbl)
+		_init_overlay_body.add_child(row)
+
+# --- Аннотации на поле (item 51) ---
+
+## Чей это рисунок: в сетевой партии — мой слот, в локальной — активная сторона.
+func _draw_author() -> int:
+	return my_owner if networked else _viewing_side()
+
+func _enter_draw() -> void:
+	_deselect()
+	mode = Mode.DRAW
+	queue_redraw()
+
+func _stroke_add(cell: Vector2i) -> void:
+	if not state.grid.in_bounds(cell):
+		return
+	if _cur_stroke.is_empty() or _cur_stroke[-1] != cell:
+		_cur_stroke.append(cell)
+		queue_redraw()
+
+func _stroke_commit() -> void:
+	if _cur_stroke.is_empty():
+		return
+	var rec := {
+		"author": _draw_author(),
+		"scope": DrawScope.TEAM if _draw_scope_team else DrawScope.SELF,
+		"cells": _cur_stroke.duplicate(),
+	}
+	_strokes.append(rec)
+	_cur_stroke = []
+	if networked and session != null:
+		var flat: Array = []
+		for c: Vector2i in rec["cells"]:
+			flat.append(c.x)
+			flat.append(c.y)
+		session.send({"k": K_DRAW, "a": rec["author"], "s": rec["scope"], "c": flat})
+	queue_redraw()
+
+## Пришедший чужой штрих (item 51): область видимости уважаем — «для себя» до нас не
+## доходит вовсе (автор его и не шлёт), «для команды» видно только союзникам.
+func _on_remote_stroke(msg: Dictionary) -> void:
+	var flat: Array = msg.get("c", [])
+	var cells: Array[Vector2i] = []
+	var i := 0
+	while i + 1 < flat.size():
+		cells.append(Vector2i(int(flat[i]), int(flat[i + 1])))
+		i += 2
+	if cells.is_empty():
+		return
+	_strokes.append({"author": int(msg.get("a", -1)),
+			"scope": int(msg.get("s", DrawScope.TEAM)), "cells": cells})
+	queue_redraw()
+
+## Видит ли просматривающий игрок этот штрих (item 51): свои — всегда; «для команды» —
+## союзникам; и общий фильтр «скрыть чужие» прячет всё не своё.
+func _stroke_visible_to_viewer(rec: Dictionary) -> bool:
+	var viewer := _viewing_side()
+	var author: int = rec["author"]
+	if author == viewer:
+		return true
+	if _hide_others_draw:
+		return false
+	if int(rec["scope"]) == DrawScope.TEAM and state.roster != null \
+			and state.roster.are_allies(author, viewer):
+		return true
+	return false
+
+func _clear_my_drawings() -> void:
+	var me := _draw_author()
+	var kept: Array = []
+	for rec: Dictionary in _strokes:
+		if rec["author"] != me:
+			kept.append(rec)
+	_strokes = kept
+	queue_redraw()
+
+## Нарисовать все видимые штрихи как ломаные по центрам клеток (item 51).
+func _draw_annotations() -> void:
+	var all := _strokes.duplicate()
+	if not _cur_stroke.is_empty():
+		all.append({"author": _draw_author(),
+				"scope": DrawScope.TEAM if _draw_scope_team else DrawScope.SELF,
+				"cells": _cur_stroke})
+	for rec: Dictionary in all:
+		if not _stroke_visible_to_viewer(rec):
+			continue
+		var cells: Array = rec["cells"]
+		if cells.size() < 1:
+			continue
+		var col := _side_color(int(rec["author"]))
+		var pts := PackedVector2Array()
+		for c in cells:
+			pts.append(_cell_origin(c) + Vector2(CELL, CELL) * 0.5)
+		if pts.size() == 1:
+			draw_circle(pts[0], CELL * 0.15, col)
+		else:
+			draw_polyline(pts, col, 3.0)
+
+# --- Чат (item 50) ---
+
+func _toggle_chat() -> void:
+	if _chat_body == null:
+		return
+	_chat_body.visible = not _chat_body.visible
+
+func _chat_append(who: String, text: String) -> void:
+	if _chat_log == null:
+		return
+	_chat_log.append_text("[b]%s:[/b] %s\n" % [who, text])
+	if _chat_body != null and not _chat_body.visible:
+		_chat_body.visible = true
+
+func _chat_send() -> void:
+	if _chat_input == null:
+		return
+	var text := _chat_input.text.strip_edges()
+	if text == "":
+		return
+	_chat_input.text = ""
+	var who := _side_label(_draw_author())
+	_chat_append(who, text)
+	if networked and session != null:
+		session.send({"k": K_CHAT, "who": who, "text": text})
 
 ## Первая горящая клетка на маршруте до dst, которая убьёт этого бойца (#1);
 ## NOWHERE — пути через огонь нет либо боец огнеупорен (#2).
@@ -3225,28 +3628,24 @@ func _open_menu(unit: UnitInstance) -> void:
 			release_btn.pressed.connect(_submit.bind(ReleaseIntent.new(unit.id)))
 			vb.add_child(release_btn)
 	else:
-		if unit.remaining_ap > 0 or unit.move_credit > 0:
-			var move_btn := Button.new()
-			# Накопленный остаток движения тратится первым, в любой момент хода (#32).
-			move_btn.text = "Move (%d left)" % unit.move_credit if unit.move_credit > 0 else "Move"
-			move_btn.pressed.connect(_enter_move)
-			vb.add_child(move_btn)
+		# Движение — универсальное действие: кнопка есть всегда, гаснет без ОД и кредита
+		# движения (item 27). Накопленный остаток тратится первым, в любой момент хода (#32).
+		var move_text := "Move (%d left)" % unit.move_credit if unit.move_credit > 0 else "Move"
+		_act_btn(vb, move_text, _enter_move, unit.remaining_ap > 0 or unit.move_credit > 0)
 
-		if _valid_pending_shoot(unit) or unit.remaining_ap >= _shoot_ap_cost(unit):
-			var shoot_btn := Button.new()
-			if _valid_pending_shoot(unit):
-				shoot_btn.text = "Finish Burst"
-			elif unit.stats.special_ability_id == MCF.ABILITY_MARKSMAN:
-				shoot_btn.text = "Laser (2 AP)"
-			elif unit.stats.special_ability_id == MCF.ABILITY_MINER \
-					or unit.stats.special_ability_id == MCF.ABILITY_SHIELD_BEARER:
-				shoot_btn.text = "Hit"  # ближний бой (§3.14)
-			elif unit.stats.special_ability_id == MCF.ABILITY_FLAMETHROWER:
-				shoot_btn.text = "Flame"
-			else:
-				shoot_btn.text = "Shoot"
-			shoot_btn.pressed.connect(_enter_shoot)
-			vb.add_child(shoot_btn)
+		# Стрельба — тоже всегда присутствует; гаснет, когда не хватает ОД на выстрел.
+		var shoot_text := "Shoot"
+		if _valid_pending_shoot(unit):
+			shoot_text = "Finish Burst"
+		elif unit.stats.special_ability_id == MCF.ABILITY_MARKSMAN:
+			shoot_text = "Laser (2 AP)"
+		elif unit.stats.special_ability_id == MCF.ABILITY_MINER \
+				or unit.stats.special_ability_id == MCF.ABILITY_SHIELD_BEARER:
+			shoot_text = "Hit"  # ближний бой (§3.14)
+		elif unit.stats.special_ability_id == MCF.ABILITY_FLAMETHROWER:
+			shoot_text = "Flame"
+		_act_btn(vb, shoot_text, _enter_shoot,
+				_valid_pending_shoot(unit) or unit.remaining_ap >= _shoot_ap_cost(unit))
 
 		# Переложить пленника на другую соседнюю клетку — бесплатно (#100). Кнопка
 		# появляется, только пока кого-то держим, и ОД не требует: носильщик просто
@@ -3258,41 +3657,31 @@ func _open_menu(unit: UnitInstance) -> void:
 			vb.add_child(shift_btn)
 
 		# Одна кнопка на всё, что можно взять руками (#50): боец, труп, мешки, ёж, куча земли.
-		if unit.remaining_ap > 0 and (not resolver.capturable_target_ids(unit).is_empty()
+		if not resolver.capturable_target_ids(unit).is_empty() \
 				or not resolver.draggable_cells(unit).is_empty() \
-				or not resolver.corpse_pickup_cells(unit).is_empty()):
-			var grab_btn := Button.new()
-			grab_btn.text = "Grab"
-			grab_btn.pressed.connect(_enter_grab)
-			vb.add_child(grab_btn)
+				or not resolver.corpse_pickup_cells(unit).is_empty():
+			_act_btn(vb, "Grab", _enter_grab, unit.remaining_ap > 0)
 
-		if unit.remaining_ap > 0 and not resolver.pushable_target_ids(unit).is_empty():
-			var push_btn := Button.new()
-			push_btn.text = "Shield Push"
-			push_btn.pressed.connect(_enter_push)
-			vb.add_child(push_btn)
+		if not resolver.pushable_target_ids(unit).is_empty():
+			_act_btn(vb, "Shield Push", _enter_push, unit.remaining_ap > 0)
 
-		if unit.remaining_ap > 0 and resolver.can_use_item(unit) == "":
-			var item_btn := Button.new()
-			item_btn.text = MCF.ITEM_NAMES.get(unit.held_item_id, "Item")
-			item_btn.pressed.connect(_enter_item)
-			vb.add_child(item_btn)
+		if unit.held_item_id != "" and MCF.ITEM_NAMES.has(unit.held_item_id):
+			_act_btn(vb, MCF.ITEM_NAMES.get(unit.held_item_id, "Item"), _enter_item,
+					unit.remaining_ap > 0 and resolver.can_use_item(unit) == "")
 
 		# Оператор дронов: запуск дрона со стоящей рядом станции (§3.12).
 		var stations := resolver.stations_near(unit)
-		if unit.remaining_ap > 0 and unit.stats.special_ability_id == MCF.ABILITY_DRONE_OPERATOR \
+		if unit.stats.special_ability_id == MCF.ABILITY_DRONE_OPERATOR \
 				and not stations.is_empty() \
 				and resolver.active_drone_of(unit) == null:
-			var drone_btn := Button.new()
 			if stations.size() > 1:
 				# Станций рядом несколько — выбирает игрок, а не порядок обхода (item 17).
-				drone_btn.text = "Launch Drone (%d stations)…" % stations.size()
-				drone_btn.pressed.connect(_open_station_picker.bind(stations))
+				_act_btn(vb, "Launch Drone (%d stations)…" % stations.size(),
+						_open_station_picker.bind(stations), unit.remaining_ap > 0)
 			else:
-				drone_btn.text = "Launch Drone"
-				drone_btn.pressed.connect(_submit.bind(
-						SpawnDroneIntent.new(unit.id, stations[0])))
-			vb.add_child(drone_btn)
+				_act_btn(vb, "Launch Drone",
+						_submit.bind(SpawnDroneIntent.new(unit.id, stations[0])),
+						unit.remaining_ap > 0)
 
 		# Свернуть свою станцию обратно в предмет (item 16).
 		var foldable := resolver.station_pickup_cells(unit)
@@ -3303,28 +3692,26 @@ func _open_menu(unit: UnitInstance) -> void:
 					PickUpStationIntent.new(unit.id, foldable[0])))
 			vb.add_child(fold_btn)
 
-		# Инженер: постройка укреплений (§3.7).
-		if unit.remaining_ap > 0 and unit.stats.special_ability_id == MCF.ABILITY_ENGINEER:
+		# Инженер: постройка укреплений (§3.7). Кнопка остаётся на месте весь ход (item 27) —
+		# гаснет, когда не хватает ОД, а не исчезает; появляется, только если строить есть где.
+		if unit.stats.special_ability_id == MCF.ABILITY_ENGINEER:
 			for feat in [MCF.FEATURE_SANDBAGS, MCF.FEATURE_WALL, MCF.FEATURE_DOT,
 					MCF.FEATURE_DOT_OPEN, MCF.FEATURE_GLASS, MCF.FEATURE_AIRLOCK,
 					MCF.FEATURE_LDF, MCF.FEATURE_DPMG, MCF.FEATURE_HEDGEHOG]:
 				var cost: int = GameActionResolver.ENGINEER_BUILDABLE[feat]
-				if unit.remaining_ap < cost:
-					continue
 				if resolver.buildable_cells(unit, feat).is_empty():
 					continue
 				# ЛДФ — одна на всю игру (#40): скрываем кнопку, если уже израсходована.
 				if feat == MCF.FEATURE_LDF and unit.ldf_wall_used:
 					continue
-				var bb := Button.new()
+				var can_afford := unit.remaining_ap >= cost
 				if feat == MCF.FEATURE_LDF:
 					# ЛДФ — цепочка из 6 клеток, «рисуется» вручную (§3.7).
-					bb.text = "Build: LDF wall (%d tiles, %d AP)" % [MCF.LDF_WALL_LENGTH, cost]
-					bb.pressed.connect(_enter_build_wall)
+					_act_btn(vb, "Build: LDF wall (%d tiles, %d AP)" % [MCF.LDF_WALL_LENGTH, cost],
+							_enter_build_wall, can_afford, "Needs %d AP" % cost)
 				else:
-					bb.text = "Build: %s (%d AP)" % [MCF.FEATURE_NAMES[feat], cost]
-					bb.pressed.connect(_enter_build.bind(feat))
-				vb.add_child(bb)
+					_act_btn(vb, "Build: %s (%d AP)" % [MCF.FEATURE_NAMES[feat], cost],
+							_enter_build.bind(feat), can_afford, "Needs %d AP" % cost)
 
 		# Инженер: заварить соседний шлюз (#99).
 		if not resolver.weldable_cells(unit).is_empty():
@@ -3334,11 +3721,8 @@ func _open_menu(unit: UnitInstance) -> void:
 			vb.add_child(weld_btn)
 
 		# Инженер/шахтёр: слом укреплений (§3.7).
-		if unit.remaining_ap > 0 and not resolver.breakable_cells(unit).is_empty():
-			var brk := Button.new()
-			brk.text = "Demolish Fortification"
-			brk.pressed.connect(_enter_break)
-			vb.add_child(brk)
+		if not resolver.breakable_cells(unit).is_empty():
+			_act_btn(vb, "Demolish Fortification", _enter_break, unit.remaining_ap > 0)
 
 		# Отдельной кнопки «подобрать труп» больше нет (#7): тело поднимается из режима
 		# «рука» кликом по клетке, как и всё остальное, что можно взять.
@@ -3351,53 +3735,40 @@ func _open_menu(unit: UnitInstance) -> void:
 			vb.add_child(drop_btn)
 
 		# ДПМГ (§3.7): стрельба из своего пулемёта рядом.
-		if unit.remaining_ap > 0:
-			var own_rsp := resolver.rsp_cells(unit, true)
-			if not own_rsp.is_empty():
-				var rsp_btn := Button.new()
-				rsp_btn.text = "Fire DPMG"
-				rsp_btn.pressed.connect(_enter_rsp_fire.bind(own_rsp[0]))
-				vb.add_child(rsp_btn)
-			# Отобрать вражеский ДПМГ (по правилу захвата).
-			var foe_rsp := resolver.rsp_cells(unit, false)
-			if not foe_rsp.is_empty():
-				var seize_btn := Button.new()
-				seize_btn.text = "Seize DPMG"
-				seize_btn.pressed.connect(_submit.bind(DPMGFireIntent.new(unit.id, foe_rsp[0], -1, -1)))
-				vb.add_child(seize_btn)
+		var own_rsp := resolver.rsp_cells(unit, true)
+		if not own_rsp.is_empty():
+			_act_btn(vb, "Fire DPMG", _enter_rsp_fire.bind(own_rsp[0]), unit.remaining_ap > 0)
+		# Отобрать вражеский ДПМГ (по правилу захвата).
+		var foe_rsp := resolver.rsp_cells(unit, false)
+		if not foe_rsp.is_empty():
+			_act_btn(vb, "Seize DPMG",
+					_submit.bind(DPMGFireIntent.new(unit.id, foe_rsp[0], -1, -1)),
+					unit.remaining_ap > 0)
 
 		# Сапёр (item 45): мины и их поиск.
 		if unit.stats.special_ability_id == MCF.ABILITY_SAPPER:
-			if (unit.remaining_ap > 0 or unit.mine_credits > 0) \
-					and not resolver.mine_cells(unit).is_empty():
-				var mine_btn := Button.new()
-				mine_btn.text = "Lay Mine" if unit.mine_credits <= 0 \
+			if not resolver.mine_cells(unit).is_empty():
+				var mine_text := "Lay Mine" if unit.mine_credits <= 0 \
 					else "Lay Mine (%d left)" % unit.mine_credits
-				mine_btn.pressed.connect(_enter_mine)
-				vb.add_child(mine_btn)
-			if unit.remaining_ap > 0:
-				var sweep_btn := Button.new()
-				sweep_btn.text = "Sweep for Mines (%d tiles)" % MCF.MINE_REVEAL_RADIUS
-				sweep_btn.pressed.connect(_submit.bind(RevealMinesIntent.new(unit.id)))
-				vb.add_child(sweep_btn)
+				_act_btn(vb, mine_text, _enter_mine,
+						unit.remaining_ap > 0 or unit.mine_credits > 0)
+			_act_btn(vb, "Sweep for Mines (%d tiles)" % MCF.MINE_REVEAL_RADIUS,
+					_submit.bind(RevealMinesIntent.new(unit.id)), unit.remaining_ap > 0)
 
 		# Копка окопа (§3.7): пехота 3 окопа / инженер 6 за 1 ОД.
-		if (unit.remaining_ap > 0 or unit.dig_credits > 0) and not resolver.diggable_cells(unit).is_empty():
-			var dig_btn := Button.new()
-			dig_btn.text = "Dig Trench" if unit.dig_credits <= 0 \
+		if not resolver.diggable_cells(unit).is_empty():
+			var dig_text := "Dig Trench" if unit.dig_credits <= 0 \
 				else "Dig Trench (%d free)" % unit.dig_credits
-			dig_btn.pressed.connect(_enter_dig)
-			vb.add_child(dig_btn)
+			_act_btn(vb, dig_text, _enter_dig,
+					unit.remaining_ap > 0 or unit.dig_credits > 0)
 
 		# Посадка в стоящую рядом технику (свою или вражескую).
-		if unit.remaining_ap > 0:
-			for veh: Vehicle in resolver.boardable_vehicles(unit):
-				var vname: String = VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)
-				var seat_btn := Button.new()
-				seat_btn.text = "Board %s" % vname if veh.owner == unit.owner \
-					else "Storm %s" % vname
-				seat_btn.pressed.connect(_submit.bind(VehicleBoardIntent.new(unit.id, veh.id)))
-				vb.add_child(seat_btn)
+		for veh: Vehicle in resolver.boardable_vehicles(unit):
+			var vname: String = VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)
+			var seat_text := "Board %s" % vname if veh.owner == unit.owner \
+				else "Storm %s" % vname
+			_act_btn(vb, seat_text,
+					_submit.bind(VehicleBoardIntent.new(unit.id, veh.id)), unit.remaining_ap > 0)
 
 	# Выдохшемуся юниту меню не нужно (#97): когда ОД кончились и ни одного действия не
 	# набралось, панель с одной кнопкой Cancel только загораживает поле. Выделение при
@@ -3413,6 +3784,21 @@ func _open_menu(unit: UnitInstance) -> void:
 
 	_anchor_menu(_menu)
 	_menu.show()
+
+## Кнопка действия с СТАБИЛЬНОЙ формой меню (item 27). Раньше каждая кнопка сама
+## пряталась, как только кончались ОД, и меню на втором действии осыпалось до пары
+## строк, а то и скрывалось целиком. Теперь недоступное сейчас действие остаётся
+## кнопкой, но выключенной, с подсказкой-причиной — набор пунктов не «мигает» весь ход.
+func _act_btn(vb: VBoxContainer, text: String, cb: Callable,
+		enabled: bool, reason := "No action points left") -> void:
+	var b := Button.new()
+	b.text = text
+	b.disabled = not enabled
+	if enabled:
+		b.pressed.connect(cb)
+	else:
+		b.tooltip_text = reason
+	vb.add_child(b)
 
 func _has_action_button(vb: VBoxContainer) -> bool:
 	for c in vb.get_children():
@@ -3604,6 +3990,9 @@ func _refresh_status() -> void:
 			_side_label(state.active_player()), state.turns.round_number,
 			_order_labels()
 		]
+	_refresh_initiative()
+	if _init_overlay != null and _init_overlay.visible:
+		_refresh_initiative_overlay()
 	_refresh_undo_btn()
 
 func _refresh_info() -> void:

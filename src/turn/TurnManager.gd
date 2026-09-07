@@ -107,6 +107,22 @@ func order_names() -> String:
 		parts.append(MCF.owner_name(side))
 	return " → ".join(parts)
 
+## Слот, играющий по кругу в сторону dir (+1 после, −1 до) от данного, пропуская
+## выбитые (item 20). −1, если очередь пуста или в ней один слот.
+func neighbor_slot(slot: int, dir: int) -> int:
+	var idx := round_order.find(slot)
+	var n := round_order.size()
+	if idx < 0 or n <= 1:
+		return -1
+	var i := idx
+	for _k in n:
+		i = (i + dir + n) % n
+		if i == idx:
+			return -1
+		if not is_eliminated(round_order[i]):
+			return round_order[i]
+	return -1
+
 ## Передать ход следующему ИГРАЮЩЕМУ слоту (пустые слоты пропускаются).
 ## Возвращает true, если круг замкнулся и начался НОВЫЙ раунд — тогда же
 ## восстанавливаются ОД.
