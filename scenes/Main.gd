@@ -2875,6 +2875,11 @@ func _draw() -> void:
 			draw_string(font, org + Vector2(8, vsize.y - 8),
 				"DUR %d  CREW %d" % [veh.durability, veh.living_crew_count()],
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.9, 0.9, 0.6))
+			# Жёлтые точки ОД машины (item 3): та же метка, что у пехоты, — по одной точке
+			# на очко действия, в правом-верхнем углу следа, чтобы не спорить с подписью.
+			var vap: int = maxi(0, veh.ap)
+			for i in vap:
+				draw_circle(org + Vector2(vsize.x - 8 - i * 8, 8), 3, Color(1, 1, 0.4))
 
 	var _drones_pending: Array = []
 	for unit in state.all_units():

@@ -544,7 +544,11 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 	var fired := 0
 	# Стёкла между стрелком и целью (#29). Каждая пуля пробивает КАЖДОЕ отдельным
 	# броском — оттого из очереди в четыре пули сквозь одно стекло проходят обычно две.
-	var panes := _glass_on_line(shooter.coord, target.coord)
+	var glass_cells := _glass_cells_on_line(shooter.coord, target.coord)
+	var panes := glass_cells.size()
+	# Стекло, сквозь которое прошла хоть одна пуля, разбивается (item 4). Копим здесь,
+	# бьём после очереди — чтобы порядок бросков на пробитие не сбился на полпути.
+	var shattered: Dictionary = {}
 	var stopped_by_glass := 0
 	if panes > 0:
 		hit_mods.append({"label": "Glass on the line", "delta": 0})
@@ -558,12 +562,14 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 		# не долетает, и бросать за неё «попал/не попал» не за что.
 		var glass_rolls: Array = []
 		var pierced := true
-		for _pane in panes:
+		for pane_i in panes:
 			var g_roll := state.dice.roll_d6()
 			glass_rolls.append(g_roll)
 			if g_roll < MCF.GLASS_PIERCE_NEED:
 				pierced = false
 				break
+			# Пуля прошла сквозь это стекло — значит оно пробито и осыплется (item 4).
+			shattered[glass_cells[pane_i]] = true
 		if not pierced:
 			stopped_by_glass += 1
 			shot_details.append({
@@ -603,6 +609,14 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 	# только живых, и переставь её местами, труп в космосе начал бы улетать.
 	var result := ActionResult.new()
 	result.ok = true
+	# Осыпаем пробитые стёкла (item 4): пуля прошла — рама больше не держит. Осколки
+	# летят прочь от стрелка. Снос — повод активации нейтралов вокруг клетки (§3.1a).
+	for gc: Vector2i in shattered:
+		var gcell := state.grid.cell(gc)
+		if gcell != null and gcell.feature_id == MCF.FEATURE_GLASS:
+			gcell.clear_feature()
+			notify_cell_changed(gc)
+			_fx(result, {"fx": "shards", "at": gc, "from": shooter.coord})
 	if killed:
 		_kill(target, result, shooter.coord)  # труп остаётся на клетке, но не перекрывает ЛОС
 
@@ -4350,6 +4364,27 @@ func _glass_on_line(from_coord: Vector2i, to_coord: Vector2i) -> int:
 		x += sx
 		y += sy
 	return panes
+
+## Координаты стёкол НА ЛИНИИ (концы не считая), по порядку от стрелка к цели.
+## Нужны, чтобы пробитое стекло можно было РАЗБИТЬ на месте (item 4), а не только
+## сосчитать. Порядок совпадает с порядком бросков на пробитие в _resolve_shoot.
+func _glass_cells_on_line(from_coord: Vector2i, to_coord: Vector2i) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	var dx := to_coord.x - from_coord.x
+	var dy := to_coord.y - from_coord.y
+	if (dx == 0 and dy == 0) or (dx != 0 and dy != 0 and absi(dx) != absi(dy)):
+		return out
+	var sx := signi(dx)
+	var sy := signi(dy)
+	var grid := state.grid
+	var x := from_coord.x + sx
+	var y := from_coord.y + sy
+	while x != to_coord.x or y != to_coord.y:
+		if grid.cell_fast(x, y).feature_id == MCF.FEATURE_GLASS:
+			out.append(Vector2i(x, y))
+		x += sx
+		y += sy
+	return out
 
 ## Первый живой боец, стоящий НА ЛИНИИ между стрелком и целью (концы не считаются).
 ## Именно в него уходит выстрел, если стрелок бьёт сквозь чужую спину (#100).
