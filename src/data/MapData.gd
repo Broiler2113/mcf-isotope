@@ -89,9 +89,11 @@ func clear_spawn_at(coord: Vector2i) -> void:
 			kept.append(s)
 	spawns = kept
 
-func set_spawn(coord: Vector2i, stats_id: String, owner: int) -> void:
+func set_spawn(coord: Vector2i, stats_id: String, owner: int,
+		facing: Vector2i = Vector2i.ZERO) -> void:
 	clear_spawn_at(coord)
-	spawns.append({"stats_id": stats_id, "owner": owner, "coord": coord})
+	# facing (item 21) значим только для техники с фронтом; для пехоты — ZERO и игнор.
+	spawns.append({"stats_id": stats_id, "owner": owner, "coord": coord, "facing": facing})
 
 ## Зона развёртывания клетки (§3.3): владелец или -1, если клетка не в зоне.
 func get_zone(coord: Vector2i) -> int:
@@ -146,7 +148,11 @@ func build_state(dice_seed: int = -1, roster: Roster = null) -> GameState:
 			continue
 		# Техника (§техника): id из VehicleDB — ставим машину, а не пехотинца (#10).
 		if VehicleDB.is_vehicle(sid):
-			st.spawn_vehicle(sid, s["coord"], s["owner"])
+			var veh := st.spawn_vehicle(sid, s["coord"], s["owner"])
+			# Фронт, заданный на закупке (item 21), — если у машины он вообще есть.
+			var face: Vector2i = s.get("facing", Vector2i.ZERO)
+			if veh != null and face != Vector2i.ZERO and veh.facing != Vector2i.ZERO:
+				veh.facing = face
 			continue
 		var path := "res://src/data/units/%s.tres" % sid
 		if not ResourceLoader.exists(path):

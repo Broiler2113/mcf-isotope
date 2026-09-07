@@ -70,6 +70,15 @@ var _palette_buttons: Dictionary = {}
 var _flow_btn: Button
 var _stamp_btn: Button
 
+## Инструменты кисти на фазе закупки (item 12): точка/линия/прямоугольник/круг/заливка
+## зоны. Форма ставит выбранного юнита в каждую свою клетку — в пределах зоны, бюджета
+## и проходимости. Точка — прежнее поведение (клик + перетаскивание).
+enum PTool { POINT, LINE, RECT, CIRCLE, FILL }
+var _ptool: int = PTool.POINT
+var _shape_start: Vector2i = Vector2i(-9999, -9999)
+var _shape_cur: Vector2i = Vector2i(-9999, -9999)
+var _tool_buttons: Dictionary = {}
+
 # --- Сетевая расстановка (#93) ---
 ## Экран работает и в сетевой партии: каждый игрок набирает ТОЛЬКО свою армию и
 ## ставит её ТОЛЬКО в своей зоне. По «Ready» стороны обмениваются ростерами и,
@@ -157,8 +166,16 @@ func _encode_roster() -> Array:
 	var out: Array = []
 	for p in placed:
 		var c: Vector2i = p["coord"]
-		out.append({"id": p["stats_id"], "o": int(p["owner"]), "x": c.x, "y": c.y})
+		var f := _placed_facing_or_zero(p)
+		out.append({"id": p["stats_id"], "o": int(p["owner"]), "x": c.x, "y": c.y,
+			"fx": f.x, "fy": f.y})
 	return out
+
+## Фронт только для техники (item 21); для пехоты — ноль, чтобы в файл/сеть не ехало лишнее.
+func _placed_facing_or_zero(rec: Dictionary) -> Vector2i:
+	if VehicleDB.is_vehicle(rec["stats_id"]):
+		return _placed_facing(rec)
+	return Vector2i.ZERO
 
 func _on_net_ready() -> void:
 	if _my_ready:
@@ -301,7 +318,34 @@ func _process(delta: float) -> void:
 		pan += dir.normalized() * PAN_SPEED * delta
 		queue_redraw()
 
+## Восемь направлений фронта — для бесплатного поворота танка на закупке (item 21).
+const FACING8 := [Vector2i(1,0), Vector2i(1,1), Vector2i(0,1), Vector2i(-1,1),
+	Vector2i(-1,0), Vector2i(-1,-1), Vector2i(0,-1), Vector2i(1,-1)]
+
+## Направление фронта поставленной машины (item 21); по умолчанию — «в глубину поля»
+## от своей стороны. Пехоте фронт не нужен и не хранится.
+func _placed_facing(rec: Dictionary) -> Vector2i:
+	if rec.has("facing"):
+		return rec["facing"]
+	return Vector2i(1, 0) if int(rec["owner"]) == _sides()[0] else Vector2i(-1, 0)
+
 func _unhandled_input(event: InputEvent) -> void:
+	# Поворот танка под курсором на месте, бесплатно (item 21): клавиша R / Q / E.
+	if event is InputEventKey and event.pressed and not event.echo \
+			and event.keycode in [KEY_R, KEY_Q, KEY_E]:
+		var cur := _pos_to_cell(get_global_mouse_position())
+		var vi := _placed_at(cur)
+		if vi != -1 and VehicleDB.is_vehicle(placed[vi]["stats_id"]) \
+				and bool(VehicleDB.get_vehicle(placed[vi]["stats_id"]).get("has_facing", false)):
+			var cur_face := _placed_facing(placed[vi])
+			var idx := FACING8.find(cur_face)
+			if idx == -1:
+				idx = 0
+			var step := -1 if event.keycode == KEY_Q else 1
+			placed[vi]["facing"] = FACING8[(idx + step + FACING8.size()) % FACING8.size()]
+			_status.text = "Rotated the %s (free)." % _display_name(placed[vi]["stats_id"])
+			queue_redraw()
+		return
 	# Ввод над палитрой принадлежит панели — не панорамируем/зумим/ставим под ней.
 	if event is InputEventMouseButton and _pointer_over_panel(event.position):
 		return
@@ -326,6 +370,25 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventPanGesture:
 		pan -= event.delta * 24.0
 		queue_redraw()
+		return
+	# Инструменты-формы (item 12): линия/прямоугольник/круг тянутся от нажатия к
+	# отпусканию, заливка ставит всю зону одним кликом. Точка — прежнее перетаскивание.
+	if _ptool != PTool.POINT:
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed:
+				if _ptool == PTool.FILL:
+					_place_many(_zone_cells(active_side))
+				else:
+					_shape_start = _pos_to_cell(get_global_mouse_position())
+					_shape_cur = _shape_start
+			elif _shape_start != Vector2i(-9999, -9999):
+				_place_many(_shape_cells(_shape_start, _shape_cur))
+				_shape_start = Vector2i(-9999, -9999)
+			return
+		if event is InputEventMouseMotion and _shape_start != Vector2i(-9999, -9999):
+			_shape_cur = _pos_to_cell(get_global_mouse_position())
+			queue_redraw()
+			return
 		return
 	# Расстановка перетаскиванием (#11): зажать ЛКМ и вести мышью — красим клетки.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
@@ -400,6 +463,99 @@ func _paint_at(coord: Vector2i) -> void:
 
 func _paid_by(rec: Dictionary) -> int:
 	return int(rec.get("paid_by", rec["owner"]))
+
+func _select_tool(t: int) -> void:
+	_ptool = t
+	_shape_start = Vector2i(-9999, -9999)
+	for k: int in _tool_buttons:
+		(_tool_buttons[k] as Button).button_pressed = k == t
+	queue_redraw()
+
+# --- Инструменты-формы (item 12) ---
+## Клетки выбранной формы между a и b.
+func _shape_cells(a: Vector2i, b: Vector2i) -> Array:
+	match _ptool:
+		PTool.LINE: return _line_cells(a, b)
+		PTool.RECT: return _rect_fill_cells(a, b)
+		PTool.CIRCLE: return _disk_cells(a, b)
+	return []
+
+func _line_cells(a: Vector2i, b: Vector2i) -> Array:
+	var cells: Array = []
+	var dx := absi(b.x - a.x)
+	var dy := -absi(b.y - a.y)
+	var sx := 1 if a.x < b.x else -1
+	var sy := 1 if a.y < b.y else -1
+	var err := dx + dy
+	var x := a.x
+	var y := a.y
+	while true:
+		cells.append(Vector2i(x, y))
+		if x == b.x and y == b.y:
+			break
+		var e2 := 2 * err
+		if e2 >= dy:
+			err += dy
+			x += sx
+		if e2 <= dx:
+			err += dx
+			y += sy
+	return cells
+
+## Сплошной прямоугольник (не рамка) — на закупке важнее заполнить блок бойцами.
+func _rect_fill_cells(a: Vector2i, b: Vector2i) -> Array:
+	var cells: Array = []
+	for y in range(mini(a.y, b.y), maxi(a.y, b.y) + 1):
+		for x in range(mini(a.x, b.x), maxi(a.x, b.x) + 1):
+			cells.append(Vector2i(x, y))
+	return cells
+
+## Сплошной круг с центром a и радиусом до b.
+func _disk_cells(a: Vector2i, b: Vector2i) -> Array:
+	var cells: Array = []
+	var r := int(round(Vector2(b - a).length()))
+	for dy in range(-r, r + 1):
+		for dx in range(-r, r + 1):
+			if dx * dx + dy * dy <= r * r:
+				cells.append(a + Vector2i(dx, dy))
+	return cells
+
+## Все клетки зоны развёртывания стороны — для заливки.
+func _zone_cells(side: int) -> Array:
+	var cells: Array = []
+	for y in map.height:
+		for x in map.width:
+			var c := Vector2i(x, y)
+			if _in_zone(c, side):
+				cells.append(c)
+	return cells
+
+## Поставить выбранного юнита во все указанные клетки, где это возможно (зона, бюджет,
+## проходимость, свободно). Одна операция — один пересчёт меток.
+func _place_many(cells: Array) -> void:
+	if _mirror_locked():
+		_status.text = "Mirrored placement: use “Stamp Formation”."
+		return
+	if brush_unit == "":
+		_status.text = "Pick a unit from the palette first."
+		return
+	var cost := _cost(brush_unit)
+	var eb := _effective_budget(active_side)
+	var added := 0
+	for coord: Vector2i in cells:
+		if _placed_at(coord) != -1:
+			continue
+		if not _footprint_placeable(brush_unit, coord, active_side):
+			continue
+		if eb > 0 and spent[active_side] + cost > eb:
+			break
+		placed.append({"stats_id": brush_unit, "owner": active_side,
+				"coord": coord, "paid_by": active_side})
+		spent[active_side] += cost
+		added += 1
+	_status.text = "Deployed %d %s." % [added, _display_name(brush_unit)]
+	_refresh_labels()
+	queue_redraw()
 
 func _click_cell(coord: Vector2i) -> void:
 	# Клик по своему расставленному юниту — снять и вернуть очки.
@@ -491,6 +647,22 @@ func _draw() -> void:
 	# Расставленные юниты.
 	for p in placed:
 		_draw_token(p["coord"], int(p["owner"]), p["stats_id"], font)
+		# Стрелка фронта танка (item 21): показывает, куда он смотрит, — крутится клавишей R.
+		if VehicleDB.is_vehicle(p["stats_id"]) \
+				and bool(VehicleDB.get_vehicle(p["stats_id"]).get("has_facing", false)):
+			var vc := _cell_origin(p["coord"]) + Vector2(CELL, CELL) * 0.5
+			var fdir := Vector2(_placed_facing(p)).normalized()
+			draw_line(vc, vc + fdir * (CELL * 0.55), Color.WHITE, 3.0)
+			var perp := Vector2(-fdir.y, fdir.x) * (CELL * 0.14)
+			var tip := vc + fdir * (CELL * 0.55)
+			draw_colored_polygon(PackedVector2Array([
+				tip, tip - fdir * (CELL * 0.2) + perp, tip - fdir * (CELL * 0.2) - perp]), Color.WHITE)
+	# Предпросмотр формы-инструмента (item 12): куда ляжет линия/прямоугольник/круг.
+	if _ptool != PTool.POINT and _shape_start != Vector2i(-9999, -9999):
+		for sc: Vector2i in _shape_cells(_shape_start, _shape_cur):
+			var col := Color(0.35, 0.85, 0.5, 0.35) if _footprint_placeable(brush_unit, sc, active_side) \
+				else Color(0.9, 0.3, 0.2, 0.25)
+			draw_rect(Rect2(_cell_origin(sc), Vector2(CELL, CELL)), col)
 
 ## Ярлыки объектов — те же, что в бою (Main._draw): игрок должен видеть одну и ту же
 ## карту до и после старта, иначе расстановка превращается в угадайку.
@@ -617,7 +789,7 @@ func _build_ui() -> void:
 	vbox.add_child(HSeparator.new())
 
 	var hint := Label.new()
-	hint.text = "Pick a unit or vehicle, then click — or hold and drag — to deploy across your zone. Click a deployed unit to refund. WASD / drag to pan, wheel to zoom."
+	hint.text = "Pick a unit, then click/drag (Point) or drag a Line/Rect/Circle, or Full to fill your zone. Click a deployed unit to refund. Hover a tank and press R (Q/E) to rotate it for free. WASD / drag to pan, wheel to zoom."
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.custom_minimum_size = Vector2(290, 0)
 	hint.modulate = Color(0.75, 0.78, 0.85)
@@ -641,6 +813,27 @@ func _build_ui() -> void:
 		if not VehicleDB.is_vehicle(vid):
 			continue
 		_add_palette_button(vid, "%s  -  %d pts" % [_display_name(vid), _cost(vid)])
+
+	vbox.add_child(HSeparator.new())
+
+	# Инструменты-формы (item 12): точка/линия/прямоугольник/круг/заливка зоны.
+	var tools_lbl := Label.new()
+	tools_lbl.text = "Brush"
+	tools_lbl.add_theme_font_size_override("font_size", 13)
+	vbox.add_child(tools_lbl)
+	var tools_row := HBoxContainer.new()
+	tools_row.add_theme_constant_override("separation", 4)
+	vbox.add_child(tools_row)
+	for pair in [[PTool.POINT, "Point"], [PTool.LINE, "Line"], [PTool.RECT, "Rect"],
+			[PTool.CIRCLE, "Circle"], [PTool.FILL, "Full"]]:
+		var tb := Button.new()
+		tb.text = String(pair[1])
+		tb.toggle_mode = true
+		tb.button_pressed = _ptool == int(pair[0])
+		var pt: int = int(pair[0])
+		tb.pressed.connect(func() -> void: _select_tool(pt))
+		tools_row.add_child(tb)
+		_tool_buttons[pt] = tb
 
 	vbox.add_child(HSeparator.new())
 
@@ -760,10 +953,11 @@ func _start_battle() -> void:
 	# Собираем спавны: расставленные игроками + сохранённые мирные.
 	map.spawns = []
 	for p in placed:
-		map.set_spawn(p["coord"], p["stats_id"], int(p["owner"]))
+		map.set_spawn(p["coord"], p["stats_id"], int(p["owner"]), _placed_facing_or_zero(p))
 	# Армия соперника приходит по сети — обе стороны собирают ОДИН И ТОТ ЖЕ ростер (#93).
 	for e in _remote_roster:
-		map.set_spawn(Vector2i(int(e["x"]), int(e["y"])), str(e["id"]), int(e["o"]))
+		map.set_spawn(Vector2i(int(e["x"]), int(e["y"])), str(e["id"]), int(e["o"]),
+			Vector2i(int(e.get("fx", 0)), int(e.get("fy", 0))))
 	for s in preserved_neutral:
 		map.set_spawn(s["coord"], s["stats_id"], MCF.Owner.NEUTRAL)
 	if networked():
