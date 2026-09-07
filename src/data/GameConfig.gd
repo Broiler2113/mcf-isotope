@@ -16,7 +16,17 @@ static var ai_difficulty: int = 1
 const DEFAULT_BUDGET := 300
 static var map_path: String = ""
 static var civilians_enabled: bool = true
-static var fog_enabled: bool = false
+## Режим тумана (item 46): MCF.Fog.OFF / STANDARD / REALISTIC. Прежний булев
+## fog_enabled остался отдельным свойством ниже — им пользуются сохранённые настройки
+## и старый экран подготовки, и он просто читает/пишет этот режим.
+static var fog_mode: int = MCF.Fog.OFF
+
+static var fog_enabled: bool:
+	get:
+		return fog_mode != MCF.Fog.OFF
+	set(v):
+		# Включение «галочкой» даёт СТАНДАРТНЫЙ туман: реалистичный выбирают явно.
+		fog_mode = MCF.Fog.STANDARD if v else MCF.Fog.OFF
 static var budget: int = DEFAULT_BUDGET
 ## Свободная расстановка (point-buy + ручной деплой) вместо демо-ростера.
 static var free_placement: bool = true

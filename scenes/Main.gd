@@ -50,6 +50,9 @@ const SCORCH_EPICENTER := Color(0.03, 0.02, 0.02, 0.72)
 ## Поворот трупа в позе смерти (#21.4). Отрицательный — против часовой стрелки:
 ## у Godot ось Y смотрит вниз, и «влево» на экране это минус.
 const CORPSE_LIE_DEG := -90.0
+## Глухая заливка неизвестной клетки (item 46) — темнее пелены разведанного и
+## непрозрачная: под ней не должно просвечивать вообще ничего.
+const UNKNOWN_COL := Color(0.02, 0.02, 0.03, 1.0)
 
 ## «Нигде» — маркер отсутствия клетки (тот же, что и в резолвере).
 const NOWHERE := Vector2i(-9999, -9999)
@@ -254,7 +257,7 @@ func _build_state() -> void:
 		state = MapHandoff.pending.build_state(MapHandoff.take_seed(),
 				GameConfig.active_roster())
 		resolver = GameActionResolver.new(state)
-		resolver.fog_enabled = GameConfig.fog_enabled
+		resolver.fog_mode = GameConfig.fog_mode
 		resolver.friendly_fire_enabled = GameConfig.friendly_fire
 		MapHandoff.pending = null
 		resolver.update_airlocks()
@@ -262,7 +265,7 @@ func _build_state() -> void:
 		return
 	state = GameState.new(GRID_W, GRID_H)
 	resolver = GameActionResolver.new(state)
-	resolver.fog_enabled = GameConfig.fog_enabled
+	resolver.fog_mode = GameConfig.fog_mode
 	resolver.friendly_fire_enabled = GameConfig.friendly_fire
 
 	# Демо-ростер: показываем спецстрелков. Слева P1, справа P2 (зеркально).
@@ -393,10 +396,10 @@ func _refresh_omniscience() -> void:
 			ai_sides.append(side)
 	if not sides.is_empty() and ai_sides.size() == sides.size():
 		# За столом не осталось человека — прятать не от кого, зритель смотрит бой целиком.
-		resolver.fog_enabled = false
+		resolver.fog_mode = MCF.Fog.OFF
 		resolver.omniscient_side = -1
 		return
-	resolver.fog_enabled = GameConfig.fog_enabled
+	resolver.fog_mode = GameConfig.fog_mode
 	# Всеведущей может быть только ОДНА сторона: поле в резолвере одно. Когда машин
 	# несколько, общий резолвер не отдаётся никому — каждый ИИ и так ставит себя
 	# всеведущим в СВОЙ резолвер на время решения (AIController._decide).
@@ -972,7 +975,7 @@ func _veh_enter_cannon() -> void:
 	# Подсветку считает сам резолвер (#58, #62, #70): амбразуры со всех трёх клеток
 	# борта, дальность и перекрытие линии огня. Дублировать правила здесь нельзя —
 	# именно так подсветка когда-то и разошлась с тем, что выстрел реально может.
-	var vis := resolver.team_visible_coords(state.active_player())
+	var vis := resolver.team_visible_coords(_viewing_side())
 	item_cells = resolver.cannon_target_cells(veh, vis)
 	mode = Mode.VEH_CANNON
 	veh_move_targets = {}
@@ -2086,6 +2089,13 @@ func _zoom_at(screen_pos: Vector2, factor: float) -> void:
 ## Чьими глазами смотрит этот экран. В сетевой партии — ВСЕГДА своя сторона: чужой
 ## ход не должен ничего показывать сверх того, что видит игрок. В хот-сите за одним
 ## экраном перспектива одна на всех и принадлежит тому, чей сейчас ход.
+## Чей туман рисуется на ЭТОМ экране (item 46). В сетевой партии — всегда свой, и
+## только свой: раньше доска бралась по state.active_player(), поэтому на ходу
+## соперника клиент честно перерисовывал ЕГО обзор и показывал игроку всё, что видит
+## противник. Ровно это и есть утечка чужого поля зрения из задания.
+##
+## В горячем кресле (два человека за одним экраном, ИИ) активный игрок и зритель —
+## одно и то же лицо, и поведение не меняется.
 func _viewing_side() -> int:
 	if state == null:
 		return MCF.Owner.PLAYER_1
@@ -2103,7 +2113,11 @@ func _draw() -> void:
 	# флаг гасит 2500 лишних обращений к словарю за кадр.
 	var fog_on: bool = resolver.fog_enabled
 	var viewer := _viewing_side()
-	var visible := resolver.team_visible_coords(state.active_player())
+	var visible := resolver.team_visible_coords(viewer)
+	# Разведанное, но не просматриваемое сейчас (item 46): в СТАНДАРТНОМ тумане там
+	# по-прежнему виден рельеф, в РЕАЛИСТИЧНОМ — ничего.
+	var remembered: Dictionary = resolver.explored.get(viewer, {}) \
+			if resolver.fog_mode == MCF.Fog.STANDARD else {}
 	# Локальные копии полей и констант: тело цикла выполняется до 2500 раз за кадр,
 	# и каждое обращение к свойству узла/автозагрузки там заметно.
 	var grid := state.grid
@@ -2120,6 +2134,16 @@ func _draw() -> void:
 			var cell := grid.cell_fast(x, y)
 			var origin := Vector2(ORIGIN.x + x * CELL, oy)
 			var rect := Rect2(origin, csize)
+			# Совсем НЕИЗВЕСТНАЯ клетка (item 46): ни в обзоре, ни в памяти разведки.
+			# В СТАНДАРТНОМ тумане память есть, и такой остаётся неразведанная даль;
+			# в РЕАЛИСТИЧНОМ памяти нет вовсе, и так выглядит всё вне обзора.
+			# Рисуем глухую заливку и уходим — рельеф под ней игрок знать не должен.
+			if fog_on:
+				var here := Vector2i(x, y)
+				if not visible.has(here) and not remembered.has(here):
+					draw_rect(rect, UNKNOWN_COL)
+					draw_rect(rect, grid_col, false, 1.0)
+					continue
 			var is_wall := cell.cover_height >= MCF.WALL_HEIGHT
 			# Пол: сначала картинка-замена, и только если её нет — заливка цветом (#55).
 			var floor_name := "floor"
@@ -2167,6 +2191,9 @@ func _draw() -> void:
 				draw_string(font, origin + label_off, HEIGHT_LABELS.get(h, "%.1fm" % h),
 					HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.9, 0.78, 0.5))
 			draw_rect(rect, grid_col, false, 1.0)
+			# Разведанное, но сейчас не просматриваемое — под серой пеленой (item 46).
+			# Рельеф сквозь неё виден, а живых на такой клетке не рисуют вовсе: их
+			# отсеивают проходы по юнитам и трупам ниже, по тому же множеству visible.
 			if fog_on and not visible.has(Vector2i(x, y)):
 				draw_rect(rect, fog_col)
 
@@ -2436,7 +2463,7 @@ func _draw() -> void:
 			continue
 		if unit.status != MCF.Status.CORPSE or _pending_death_ids.has(unit.id):
 			continue
-		if unit.owner != state.active_player() and not visible.has(unit.coord):
+		if unit.owner != viewer and not visible.has(unit.coord):
 			continue
 		# Раздавленный гусеницами труп вычищается из клетки (occupant = null), но сам
 		# UnitInstance остаётся в списке — без этой проверки он всплывал бы призраком.
@@ -2517,7 +2544,7 @@ func _draw() -> void:
 		var at := _draw_cell(unit)
 		var center := _cell_origin(at) + Vector2(CELL, CELL) * 0.5
 		# Туман войны (§3.9): чужой юнит виден, только если его клетку видит команда.
-		if unit.owner != state.active_player() and not visible.has(at):
+		if unit.owner != viewer and not visible.has(at):
 			continue
 		# Смерть в текущем действии показываем лишь ПОСЛЕ анимации броска (#46):
 		# пока крутится кубик, погибший рисуется как живой юнит.

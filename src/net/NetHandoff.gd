@@ -38,14 +38,16 @@ static func discard() -> void:
 static func encode_setup(map: MapData) -> Dictionary:
 	return {
 		"k": K_SETUP, "m": map.to_dict(), "b": GameConfig.budget,
-		"c": GameConfig.civilians_enabled, "f": GameConfig.fog_enabled,
+		"c": GameConfig.civilians_enabled, "f": GameConfig.fog_mode,
 	}
 
 ## Клиент принимает условия хоста целиком: он ничего не выбирает сам (#99).
 static func apply_setup(msg: Dictionary) -> void:
 	GameConfig.budget = int(msg.get("b", GameConfig.DEFAULT_BUDGET))
 	GameConfig.civilians_enabled = bool(msg.get("c", true))
-	GameConfig.fog_enabled = bool(msg.get("f", false))
+	# Режим тумана (item 46) едет числом. Старый хост слал сюда bool — int(false)
+	# даёт 0, то есть OFF, а int(true) — 1, STANDARD: ровно прежний смысл.
+	GameConfig.fog_mode = int(msg.get("f", MCF.Fog.OFF))
 	GameConfig.free_placement = true
 	GameConfig.p2_is_ai = false
 	GameConfig.map_path = ""

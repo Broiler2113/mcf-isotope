@@ -14,7 +14,7 @@ var _ai_check: CheckBox
 var _ai_p1_check: CheckBox
 var _diff_opt: OptionButton
 var _civ_check: CheckBox
-var _fog_check: CheckBox
+var _fog_opt: OptionButton
 var _budget_spin: SpinBox
 var _place_opt: OptionButton
 var _place_note: Label
@@ -89,11 +89,15 @@ func _ready() -> void:
 	_civ_check.button_pressed = GameConfig.civilians_enabled
 	vbox.add_child(_civ_check)
 
-	# Туман войны
-	_fog_check = CheckBox.new()
-	_fog_check.text = "Fog of war"
-	_fog_check.button_pressed = GameConfig.fog_enabled
-	vbox.add_child(_fog_check)
+	# Туман войны (item 46): три режима вместо прежней галочки.
+	#   Off       — видно всё поле.
+	#   Standard  — разведанный рельеф остаётся виден, чужие бойцы прячутся.
+	#   Realistic — вне обзора не видно ничего.
+	_fog_opt = OptionButton.new()
+	for n in ["Off", "Standard", "Realistic"]:
+		_fog_opt.add_item(n)
+	_fog_opt.select(clampi(GameConfig.fog_mode, 0, 2))
+	vbox.add_child(_row("Fog of war", _fog_opt))
 
 	# Бюджет: верхний предел снят — можно ставить сколько угодно (фактически без лимита).
 	_budget_spin = SpinBox.new()
@@ -198,7 +202,7 @@ func _on_start() -> void:
 	GameConfig.p2_is_ai = _ai_check.button_pressed
 	GameConfig.ai_difficulty = _diff_opt.selected
 	GameConfig.civilians_enabled = _civ_check.button_pressed
-	GameConfig.fog_enabled = _fog_check.button_pressed
+	GameConfig.fog_mode = _fog_opt.selected
 	GameConfig.budget = int(_budget_spin.value)
 	GameConfig.map_path = _map_paths[_map_opt.selected]
 	GameConfig.free_placement = _place_opt.selected == 1

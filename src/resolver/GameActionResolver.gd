@@ -9,7 +9,15 @@ extends RefCounted
 var state: GameState
 ## Туман войны включён по умолчанию; экран Setup может его отключить (§3.9, isotope §12b).
 ## При выключенном тумане is_visible_to_team всегда истинно (видно всю карту).
-var fog_enabled: bool = true
+## Режим тумана (item 46). fog_enabled остаётся как «туман вообще есть»: по нему
+## устроены все быстрые выходы, и переписывать их на сравнение с OFF незачем.
+var fog_mode: int = MCF.Fog.STANDARD
+
+var fog_enabled: bool:
+	get:
+		return fog_mode != MCF.Fog.OFF
+	set(v):
+		fog_mode = MCF.Fog.STANDARD if v else MCF.Fog.OFF
 ## Сторона, которая «знает» позиции всех юнитов, игнорируя туман (#43): ИИ ставит
 ## сюда свой owner, чтобы целиться в скрытых. На отображение тумана игрока НЕ влияет
 ## (team_visible_coords не смотрит на этот флаг) — только на легальность прицела ИИ.
@@ -2229,9 +2237,13 @@ func _ortho4(coord: Vector2i) -> Array[Vector2i]:
 # --- Туман войны (§3.9) ---
 
 ## Радиус обзора юнита (свой параметр или значение по умолчанию).
+## Радиус обзора юнита. По item 46 обзор НИЧЕМ не ограничен по дальности — он идёт,
+## пока луч не упрётся в стену, — поэтому по умолчанию отдаётся окно во всю карту.
+## Явно прописанный в статах sight_range при этом уважается: если однажды понадобится
+## близорукий юнит, менять здесь ничего не придётся.
 func sight_of(unit: UnitInstance) -> int:
 	var s: int = unit.stats.sight_range
-	return s if s > 0 else MCF.DEFAULT_SIGHT_RANGE
+	return s if s > 0 else MCF.SIGHT_UNLIMITED
 
 ## Есть ли стена на луче между a и b (концы исключены).
 ## Брезенхэм шагает здесь ЖЕ. Раньше луч строился вспомогательной _ray_cells(), которая
@@ -2298,31 +2310,19 @@ func _vision_blocked(a: Vector2i, b: Vector2i) -> bool:
 ## — та же самая арифметика луча, что развёрнута внутри _seen_from(). Множество же
 ## команды — просто объединение этих обзоров, то есть «хоть один боец».
 ## Клетки вне поля не видит никто: их отбрасывает окно обхода в _seen_from().
+## Один вопрос — один ответ: множество строит team_visible_coords(), а это просто
+## взгляд в него. Здесь ЖИЛА вторая, самостоятельная реализация того же обхода — и
+## именно она разошлась с первой на item 46: обзор техники добавили в множество, а
+## быстрый путь по-прежнему перебирал только пеших, и танк в проёме «не видел».
+## Считать одно и то же дважды нельзя; вопрос производительности закрыт кешем внутри
+## team_visible_coords, который на прогретом состоянии стоит три сравнения целых.
 func team_sees(owner: int, coord: Vector2i) -> bool:
-	if _vis_epoch.get(owner) == UnitInstance.vision_epoch \
-			and _vis_vv.get(owner) == GridCell.vision_version \
-			and _vis_fog == fog_enabled and _vis_grid == state.grid.get_instance_id():
-		return (_vis_set[owner] as Dictionary).has(coord)
 	var grid := state.grid
-	var cx := coord.x
-	var cy := coord.y
-	if cx < 0 or cy < 0 or cx >= grid.width or cy >= grid.height:
+	if coord.x < 0 or coord.y < 0 or coord.x >= grid.width or coord.y >= grid.height:
 		return false
 	if not fog_enabled:
 		return true  # туман выключен — видно всё поле (см. team_visible_coords)
-	var sides := _vision_sides(owner)
-	for u in state.all_units():
-		if not u.is_alive() or not sides.has(u.owner):
-			continue
-		var ux: int = u.coord.x
-		var uy: int = u.coord.y
-		var r: int = sight_of(u)
-		# Сидящий в машине вынесен за карту (§техника) — сюда не пройдёт по дальности.
-		if absi(cx - ux) > r or absi(cy - uy) > r:
-			continue
-		if not _vision_blocked(u.coord, coord):
-			return true
-	return false
+	return team_visible_coords(owner).has(coord)
 
 ## Видит ли команда владельца этого юнита. Свои — всегда видны.
 func is_visible_to_team(owner: int, target: UnitInstance) -> bool:
@@ -2396,14 +2396,19 @@ func _seen_from(coord: Vector2i, r: int) -> PackedInt32Array:
 			_catch_up_seen(_seen_version)
 		_seen_version = GridCell.vision_version
 		_seen_grid = gid
+	var grid := state.grid
+	var gw := grid.width
+	var gh := grid.height
+	# Неограниченный обзор (item 46) приходит сюда радиусом в тысячу клеток. Окно
+	# обхода урезаем до размеров карты СРАЗУ: дальше её края смотреть некуда, а
+	# перебирать четыре миллиона несуществующих клеток ради этого — нет. Обрезка
+	# идёт до ключа кеша, поэтому все «безграничные» бойцы делят одну запись.
+	r = mini(r, maxi(gw, gh))
 	var key := Vector3i(coord.x, coord.y, r)
 	var hit: Variant = _seen_cache.get(key)
 	if hit != null:
 		return hit
 	var out := PackedInt32Array()
-	var grid := state.grid
-	var gw := grid.width
-	var gh := grid.height
 	var ux := coord.x
 	var uy := coord.y
 	# while вместо `for dy in range(...)`: range() строит массив на каждый вызов.
@@ -2574,7 +2579,36 @@ func team_visible_coords(owner: int) -> Dictionary:
 			if n2 == 0:
 				out[Vector2i(i % gw, i / gw)] = true
 		seen[u.id] = fresh
-	# Выбывшие — погиб, сел в машину, попал в плен: снимаем их прежний вклад.
+	# Техника тоже смотрит (item 46): обзор стороны — объединение ВСЕХ её глаз, а не
+	# только пеших. Экипаж внутри вынесен за карту и своего обзора не даёт, так что
+	# без этого прохода танк ехал бы вслепую. Ключ отрицательный, чтобы не столкнуться
+	# с id юнитов в тех же словарях: у машин своя нумерация с нуля.
+	for veh: Vehicle in state.all_vehicles():
+		if veh.wrecked or not sides.has(veh.owner):
+			continue
+		var vkey := -1 - veh.id
+		live[vkey] = true
+		# Смотрит машина из своего центра — одной записи хватает на весь корпус:
+		# соседние клетки следа видят практически то же самое.
+		var vfresh := _seen_from(veh.origin, MCF.SIGHT_UNLIMITED)
+		var vwas: Variant = seen.get(vkey)
+		if vwas != null:
+			if vwas == vfresh:
+				continue
+			for i: int in vwas:
+				var n: int = int(counts[i]) - 1
+				if n <= 0:
+					counts.erase(i)
+					out.erase(Vector2i(i % gw, i / gw))
+				else:
+					counts[i] = n
+		for i: int in vfresh:
+			var n2: int = int(counts.get(i, 0))
+			counts[i] = n2 + 1
+			if n2 == 0:
+				out[Vector2i(i % gw, i / gw)] = true
+		seen[vkey] = vfresh
+	# Выбывшие — погиб, сел в машину, попал в плен, машину сожгли: снимаем их вклад.
 	var gone: Array = []
 	for uid: int in seen:
 		if not live.has(uid):
@@ -2593,7 +2627,43 @@ func team_visible_coords(owner: int) -> Dictionary:
 	_vis_seen[owner] = seen
 	_vis_epoch[owner] = UnitInstance.vision_epoch
 	_vis_vv[owner] = GridCell.vision_version
+	_remember_explored(owner, out)
 	return out
+
+## Память разведки (item 46, режим STANDARD): owner -> {Vector2i: true}, всё, что
+## сторона когда-либо видела.
+##
+## Живёт В РЕЗОЛВЕРЕ, а не в GameState, и это осознанно. Память копится ровно тогда,
+## когда кто-то СПРАШИВАЕТ обзор стороны, а спрашивают его хост и клиент про разные
+## стороны — каждый про свою. Лежи она в состоянии, партия бы тихо разъезжалась:
+## поле, которое ни один слепок не сверяет и ни один тест не ловит. Это ровно тот
+## класс поломки, который чинил M2, и заводить его заново нельзя.
+##
+## Как поле показа она к тому же и не нужна в состоянии: каждый клиент рисует свою
+## сторону и накапливает ровно свою память.
+var explored: Dictionary = {}
+
+## В REALISTIC режиме память не нужна вовсе — там вне обзора не видно ничего, — но
+## копим её всегда: переключить режим посреди партии дешевле, чем восстанавливать
+## историю задним числом, а стоит она один проход по свежевидимым клеткам.
+func _remember_explored(owner: int, visible: Dictionary) -> void:
+	if not fog_enabled:
+		return
+	var memory: Dictionary = explored.get(owner, {})
+	for c: Vector2i in visible:
+		memory[c] = true
+	explored[owner] = memory
+
+## Известна ли стороне эта клетка: видна сейчас ИЛИ разведана раньше (item 46).
+## В REALISTIC режиме память не учитывается — там вопрос только «видно сейчас».
+func team_knows(owner: int, coord: Vector2i) -> bool:
+	if not fog_enabled:
+		return true
+	if team_visible_coords(owner).has(coord):
+		return true
+	if fog_mode != MCF.Fog.STANDARD:
+		return false
+	return (explored.get(owner, {}) as Dictionary).has(coord)
 
 # --- Мирные жители (§3.10) ---
 
