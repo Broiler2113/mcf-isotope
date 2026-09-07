@@ -6,11 +6,19 @@ extends Control
 ##     сессией через NetHandoff. На боковой панели боя сетевых кнопок больше нет.
 
 const SETUP_SCENE := "res://scenes/Setup.tscn"
+const LOBBY_SCENE := "res://scenes/Lobby.tscn"
 const EDITOR_SCENE := "res://scenes/MapEditor.tscn"
 const PLACEMENT_SCENE := "res://scenes/Placement.tscn"
+const MAIN_SCENE := "res://scenes/Main.tscn"
 
 var _saves_list: ItemList
 var _map_names: PackedStringArray
+
+# --- Сохранения и повторы (M12) ---
+var _game_list: ItemList
+var _game_names: PackedStringArray
+var _replay_list: ItemList
+var _replay_names: PackedStringArray
 
 # --- Мультиплеер ---
 var _mp_ip: LineEdit
@@ -19,15 +27,20 @@ var _mp_host_btn: Button
 var _mp_join_btn: Button
 var _mp_cancel_btn: Button
 var _session: NetworkSession = null
+## Автопоиск LAN (item 38): узел-обозреватель и список найденных серверов.
+var _lan: LanDiscovery = null
+var _lan_list: ItemList
+var _lan_servers: Array = []
 
 func _ready() -> void:
 	# Уходя в меню, старую сессию не тащим — начинаем с чистого листа.
 	NetHandoff.discard()
+	# И недоигранный файл тоже: в меню приходят, чтобы начать заново (M12).
+	SaveHandoff.discard()
 
-	var bg := ColorRect.new()
-	bg.color = Color(0.08, 0.09, 0.11)
-	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	add_child(bg)
+	# Параллакс-звёзды вместо плоской заливки (M13, item 35). Фон живёт своей жизнью
+	# и ввод не перехватывает — меню поверх него работает как работало.
+	add_child(Starfield.new())
 
 	var center := CenterContainer.new()
 	center.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -46,11 +59,25 @@ func _ready() -> void:
 	vbox.add_theme_constant_override("separation", 12)
 	margin.add_child(vbox)
 
+	# Заголовок с эмблемой (item 35): logo.png лежит в комплекте, но до сих пор нигде
+	# не показывался. Если файла нет — остаётся только надпись, как и было.
+	var title_row := HBoxContainer.new()
+	title_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	title_row.add_theme_constant_override("separation", 12)
+	vbox.add_child(title_row)
+	var logo := _logo_texture()
+	if logo != null:
+		var badge := TextureRect.new()
+		badge.texture = logo
+		badge.custom_minimum_size = Vector2(56, 56)
+		badge.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		badge.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		title_row.add_child(badge)
 	var title := Label.new()
 	title.text = "MCF Tactics"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 44)
-	vbox.add_child(title)
+	title_row.add_child(title)
 
 	var subtitle := Label.new()
 	subtitle.text = "Turn-based tactics"
@@ -68,8 +95,16 @@ func _ready() -> void:
 	vbox.add_child(tabs)
 	tabs.add_child(_build_single_tab())
 	tabs.add_child(_build_multi_tab())
+	tabs.add_child(_build_files_tab())
 
 	vbox.add_child(HSeparator.new())
+	# Экран настроек (item 24) ждёт исходников: порт наугад дал бы меню, которое
+	# выглядит настройками, но ничего не настраивает. Кнопка стоит на своём месте
+	# погашенной — так видно, что место занято, а не забыто.
+	var settings := _menu_button("Settings", func() -> void: pass)
+	settings.disabled = true
+	settings.tooltip_text = "Not built yet — waiting on the original settings screen."
+	vbox.add_child(settings)
 	vbox.add_child(_menu_button("Quit", _quit))
 
 # --- Вкладка одиночной игры ---
@@ -92,6 +127,83 @@ func _build_single_tab() -> Control:
 	page.add_child(_saves_list)
 	_refresh_saves()
 	return page
+
+# --- Вкладка сохранений и повторов (M12, items 42 и 53) ---
+## Сохранённая партия продолжается прямо отсюда — ролями она распоряжается сама, как
+## их записали. Переназначить их (кто из сидящих за столом ведёт какую армию) можно в
+## лобби: там для этого есть тот же список файлов.
+func _build_files_tab() -> Control:
+	var page := VBoxContainer.new()
+	page.name = "Load / Replay"
+	page.add_theme_constant_override("separation", 8)
+
+	var hint := Label.new()
+	hint.text = "Continue a saved match, or watch a recorded one. To hand a saved army to a different player, open the save in the multiplayer lobby instead."
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.add_theme_font_size_override("font_size", 12)
+	hint.modulate = Color(0.72, 0.74, 0.8)
+	page.add_child(hint)
+
+	var games_label := Label.new()
+	games_label.text = "Saved games"
+	page.add_child(games_label)
+	_game_list = ItemList.new()
+	_game_list.custom_minimum_size = Vector2(0, 110)
+	_game_list.item_activated.connect(_on_game_activated)
+	page.add_child(_game_list)
+
+	var replays_label := Label.new()
+	replays_label.text = "Replays"
+	page.add_child(replays_label)
+	_replay_list = ItemList.new()
+	_replay_list.custom_minimum_size = Vector2(0, 110)
+	_replay_list.item_activated.connect(_on_replay_activated)
+	page.add_child(_replay_list)
+
+	_refresh_files()
+	return page
+
+## Наполнить оба списка. Каждый файл читается ради подписи — они маленькие и сжатые,
+## а список без «карта, раунд, когда» бесполезен: имена в нём различаются только временем.
+func _refresh_files() -> void:
+	_game_names = ReplayFile.saves()
+	_fill_file_list(_game_list, _game_names, ReplayFile.SAVE_DIR,
+			"(no saved games yet — save one from a match)")
+	_replay_names = ReplayFile.replays()
+	_fill_file_list(_replay_list, _replay_names, ReplayFile.REPLAY_DIR,
+			"(no replays yet — they are written when you leave a match)")
+
+func _fill_file_list(list: ItemList, names: PackedStringArray, dir: String,
+		empty_text: String) -> void:
+	list.clear()
+	if names.is_empty():
+		list.add_item(empty_text)
+		list.set_item_disabled(0, true)
+		return
+	for name in names:
+		var data := ReplayFile.read(ReplayFile.path_for(dir, name))
+		var note := ReplayFile.describe(data)
+		list.add_item(name.get_basename() if note == "" else "%s  —  %s" % [name.get_basename(), note])
+
+func _on_game_activated(idx: int) -> void:
+	if idx < 0 or idx >= _game_names.size():
+		return
+	var data := ReplayFile.read(ReplayFile.path_for(ReplayFile.SAVE_DIR, _game_names[idx]))
+	if data.is_empty():
+		return
+	SaveHandoff.pending_save = data
+	MapHandoff.pending = null
+	get_tree().change_scene_to_file(MAIN_SCENE)
+
+func _on_replay_activated(idx: int) -> void:
+	if idx < 0 or idx >= _replay_names.size():
+		return
+	var data := ReplayFile.read(ReplayFile.path_for(ReplayFile.REPLAY_DIR, _replay_names[idx]))
+	if data.is_empty():
+		return
+	SaveHandoff.pending_replay = data
+	MapHandoff.pending = null
+	get_tree().change_scene_to_file(MAIN_SCENE)
 
 # --- Вкладка мультиплеера ---
 func _build_multi_tab() -> Control:
@@ -116,6 +228,21 @@ func _build_multi_tab() -> Control:
 	_mp_join_btn = _menu_button("Join Game", _join_game)
 	page.add_child(_mp_join_btn)
 
+	# Автопоиск серверов в локальной сети (item 38). Хост объявляет о себе, а этот
+	# список наполняется найденными хостами; клик по строке подключается напрямую.
+	var lan_lbl := Label.new()
+	lan_lbl.text = "LAN games:"
+	lan_lbl.add_theme_font_size_override("font_size", 12)
+	page.add_child(lan_lbl)
+	_lan_list = ItemList.new()
+	_lan_list.custom_minimum_size = Vector2(0, 90)
+	_lan_list.item_activated.connect(_on_lan_pick)
+	page.add_child(_lan_list)
+	_lan = LanDiscovery.new()
+	get_tree().root.add_child.call_deferred(_lan)
+	_lan.servers_changed.connect(_on_lan_servers)
+	_lan.start_listening.call_deferred()
+
 	_mp_cancel_btn = _menu_button("Cancel", _cancel_net)
 	_mp_cancel_btn.hide()
 	page.add_child(_mp_cancel_btn)
@@ -134,6 +261,11 @@ func _host_game() -> void:
 	var err := _session.start_host(NetworkSession.DEFAULT_PORT)
 	if err == OK:
 		_set_waiting("Hosting on port %d — waiting for a player..." % NetworkSession.DEFAULT_PORT)
+		# Объявляем партию в локальной сети (item 38), чтобы клиенты нашли её без IP.
+		if _lan != null:
+			_lan.start_advertising({
+				"name": "MCF Tactics", "players": 1,
+				"port": NetworkSession.DEFAULT_PORT})
 	else:
 		_fail_net("Could not host (error %d). Is the port already in use?" % err)
 
@@ -149,6 +281,32 @@ func _join_game() -> void:
 		_set_waiting("Connecting to %s..." % ip)
 	else:
 		_fail_net("Could not connect (error %d)." % err)
+
+## Обозреватель LAN живёт под /root — снимаем его при уходе из меню, чтобы не копить
+## сироты и не держать порт открытым в бою.
+func _exit_tree() -> void:
+	if _lan != null:
+		_lan.stop()
+		_lan.queue_free()
+		_lan = null
+
+## Найденные в сети серверы обновились (item 38) — перерисовываем список.
+func _on_lan_servers(servers: Array) -> void:
+	_lan_servers = servers
+	if _lan_list == null:
+		return
+	_lan_list.clear()
+	for info: Dictionary in servers:
+		_lan_list.add_item("%s @ %s (%d)" % [
+			str(info.get("name", "Game")), str(info.get("ip", "?")),
+			int(info.get("players", 0))])
+
+## Клик по найденному серверу — подключаемся к его IP напрямую (item 38).
+func _on_lan_pick(index: int) -> void:
+	if index < 0 or index >= _lan_servers.size() or _session != null:
+		return
+	_mp_ip.text = str((_lan_servers[index] as Dictionary).get("ip", "127.0.0.1"))
+	_join_game()
 
 ## Сессия живёт под /root с постоянным именем — так её путь одинаков у обеих
 ## сторон (RPC ходит по пути) и переживает смену сцены на бой.
@@ -195,29 +353,13 @@ func _on_peer_ready(is_host: bool) -> void:
 	GameConfig.p2_is_ai = false
 	GameConfig.free_placement = true
 	MapHandoff.pending = null
-	if is_host:
-		_mp_status.text = "Player joined — setting up the match..."
-		NetHandoff.session = _session
-		_session = null  # узел уходит дальше, из меню его больше не трогаем
-		get_tree().change_scene_to_file(SETUP_SCENE)
-		return
-	_mp_status.text = "Connected — waiting for the host to set up the match..."
-	_session.message.connect(_on_net_message)
-	_session.attach()
-
-## Клиент: пришли условия матча — принимаем их и уходим на закупку (#99).
-func _on_net_message(msg: Dictionary) -> void:
-	if _session == null or str(msg.get("k", "")) != NetHandoff.K_SETUP:
-		return
-	NetHandoff.apply_setup(msg)
-	# Пока меняются сцены, входящие копятся в буфере сессии — Placement заберёт их
-	# своим attach().
-	_session.detach()
-	_session.message.disconnect(_on_net_message)
-	_session.disconnected.disconnect(_on_net_lost)
+	# И хост, и подключившийся гость попадают в ОБЩЕЕ лобби (item 4/61). Гость видит его
+	# только для чтения — из управления ему доступен лишь выбор своего цвета, — а условия
+	# матча (K_SETUP) он ждёт уже внутри лобби и по ним уходит на закупку.
 	NetHandoff.session = _session
-	_session = null
-	get_tree().change_scene_to_file(PLACEMENT_SCENE)
+	NetHandoff.is_host = is_host
+	_session = null  # узел уходит дальше, из меню его больше не трогаем
+	get_tree().change_scene_to_file(LOBBY_SCENE)
 
 # --- Общее ---
 func _menu_button(text: String, handler: Callable) -> Button:
@@ -227,6 +369,15 @@ func _menu_button(text: String, handler: Callable) -> Button:
 	btn.add_theme_font_size_override("font_size", 18)
 	btn.pressed.connect(handler)
 	return btn
+
+## Эмблема из комплекта. Грузится как обычный файл, а не как ресурс, — той же
+## дорогой, что и остальные заменяемые картинки интерфейса (#55): подменил png —
+## видно со следующего запуска.
+func _logo_texture() -> Texture2D:
+	const PATH := "res://interface_textures/logo.png"
+	if not ResourceLoader.exists(PATH):
+		return null
+	return load(PATH) as Texture2D
 
 func _refresh_saves() -> void:
 	_saves_list.clear()
@@ -239,6 +390,7 @@ func _refresh_saves() -> void:
 		_saves_list.add_item(name.get_basename())
 
 func _new_game() -> void:
+	SaveHandoff.discard()
 	GameConfig.map_path = ""
 	get_tree().change_scene_to_file(SETUP_SCENE)
 

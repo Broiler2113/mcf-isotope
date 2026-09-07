@@ -13,7 +13,8 @@ const SteamChrome = preload("res://src/ui/SteamChrome.gd")
 
 const SPIN_STEPS := 16       # кол-во прокруток грани (больше = медленнее)
 const SPIN_DELAY := 0.07     # пауза между прокрутками, сек
-const LAND_PAUSE := 1.1      # пауза показа финального результата, сек
+const LAND_PAUSE := 1.9      # пауза показа финального результата, сек (item 33: продлена,
+                             # прежние 1.1 c не успевали прочесть; станет настройкой в item 24)
 
 var _row: HBoxContainer
 var _prompt: Label

@@ -59,13 +59,30 @@ static var _cache: Dictionary = {}
 static var _cache_version: int = -1
 static var _cache_grid: int = 0
 
-static func reachable(grid: Grid, start: Vector2i, budget: int) -> Reachability:
+## Разлив для КОНКРЕТНОГО бойца: сам решает, обходить ли огонь (#1). Щитоносец и
+## огнемётчик огня не боятся, и для них он — обычный пол (#2).
+static func reachable_for(grid: Grid, unit: UnitInstance, budget: int) -> Reachability:
+	var avoid := not MCF.ability_is_fireproof(unit.stats.special_ability_id)
+	return reachable(grid, unit.coord, budget, avoid)
+
+## avoid_fire — маршрут ОБХОДИТ горящие клетки (#1): в них можно войти, но нельзя
+## ИЗ них выйти, поэтому они остаются в разливе как тупики. Это та же схема
+## «достижимо, но терминально», что уже используется для дрона на стене: игрок
+## по-прежнему может осознанно послать бойца в огонь (Main спросит подтверждение),
+## но автоматический маршрут сквозь пламя не проложится.
+static func reachable(grid: Grid, start: Vector2i, budget: int,
+		avoid_fire: bool = false) -> Reachability:
 	var gid := grid.get_instance_id()
 	if _cache_version != GridCell.walk_version or _cache_grid != gid:
 		_cache.clear()
 		_cache_version = GridCell.walk_version
 		_cache_grid = gid
-	var key := Vector3i(start.x, start.y, budget)
+	# Пока на карте не горит ни одной клетки, обходить нечего — и оба флага дают
+	# ОДИН И ТОТ ЖЕ разлив. Сводим их к одному ключу, чтобы в самом частом случае
+	# (огня нет вообще) кеш не хранил две одинаковые копии каждого разлива.
+	if GridCell.burning == 0:
+		avoid_fire = false
+	var key := Vector4i(start.x, start.y, budget, 1 if avoid_fire else 0)
 	var hit: Variant = _cache.get(key)
 	if hit != null:
 		return hit
@@ -148,7 +165,12 @@ static func reachable(grid: Grid, start: Vector2i, budget: int) -> Reachability:
 		var current_cost: int = best_c
 		var cx := current.x
 		var cy := current.y
-		var from_h: float = grid.cell_fast(cx, cy).cover_height
+		var from_cell: GridCell = cells[cy * gw + cx]
+		# Горящая клетка — тупик: дойти можно, уйти дальше нельзя. Стартовая клетка
+		# исключение: боец, УЖЕ стоящий в огне (или огнеупорный), из неё выходит.
+		if avoid_fire and from_cell.on_fire and current != start:
+			continue
+		var from_h: float = from_cell.cover_height
 		# Соседи перебираются прямо по константной таблице смещений: grid.neighbors()
 		# возвращал бы новый массив на каждую клетку фронта. Порядок Grid.N8 совпадает
 		# со старым обходом dy∈[-1,0,1] × dx∈[-1,0,1], и менять его нельзя (см. выше).

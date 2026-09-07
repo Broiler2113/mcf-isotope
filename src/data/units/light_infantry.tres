@@ -8,5 +8,5 @@ id = "light_infantry"
 display_name = "Light Infantry"
 rate_of_fire = 2
 speed = 9
-cost = 99
+cost = 45
 notes = "Универсальный/быстрый (см. §5)."

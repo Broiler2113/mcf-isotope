@@ -1559,10 +1559,14 @@ quit dialog. Actions can be **unchosen** as well as undone.
 
 ```
 MainMenu → Setup → Placement → Main (battle)
-        ↘ Multiplayer tab → (host) Setup → Placement → Main (battle)
-                          ↘ (client) waits for the host's announcement → Placement → Main
+        ↘ Multiplayer tab → Lobby → Placement → Main (battle)
+                                  ↘ loaded .mcfs → Main (battle, no deployment)
+        ↘ Load / Replay tab → .mcfs → Main (battle)  |  .mcfr → Main (replay viewer)
         ↘ MapEditor → "Main Menu" ↩ / "Play" → Main (battle)
 ```
+
+- **Load / Replay** — saved games and recorded matches (§20.1). A replay opens the battle
+  screen in viewer mode; a save resumes the match with the roles it was saved with.
 
 - **Setup** — map, civilians on/off, fog on/off, budget, AI opponent, placement mode.
   **Free placement is the default** (#91); "Default squads" is the opt-in. The **host of
@@ -1611,6 +1615,55 @@ MainMenu → Setup → Placement → Main (battle)
 and `zone_owner`. Maps serialise to disk and load in Setup. New maps start as **all
 space** — the designer paints floor in.
 
+### 20.1 Saved games and replays (items 42, 53)
+
+Two file formats, one shared core. `StateCodec` turns a `GameState` into JSON-safe data
+and back; `ReplayFile` puts it on disk as gzip-compressed JSON.
+
+| File | Where | Holds |
+|---|---|---|
+| `.mcfs` — saved game | `user://saves` | one board snapshot + the rules of the match + the cosmetic decals |
+| `.mcfr` — replay | `user://replays` | the starting snapshot, the opening civilian slot's dice, then every intent with its own dice, plus a full keyframe every 5 rounds |
+
+**Why a replay is only intents and dice.** The whole architecture pays off here:
+`GameActionResolver.resolve()` is the only mutation point and `DiceService` is the only
+RNG, so *intent + its dice log* completely describes one board-to-board transition. That
+is the same fact the lockstep contract rests on (§22.1) — a replay is simply the other
+end of that wire being a file. Recording therefore costs exactly one hook in `resolve()`,
+and it is skipped in network play, where the host is already recording the dice.
+
+**Why `StateCodec` does not reuse `GameState.snapshot()` directly.** The undo snapshot
+holds live object references (`rec["obj"]` *is* the `UnitInstance`) and native
+`Vector2i`s: it is built for rewinding inside one process. `StateCodec` writes plain
+JSON types, but *restores* through the very same `GameState.restore()`, so what counts as
+"the state of a match" is defined in exactly one place. Cells are stored sparsely — only
+those that differ from an empty cell.
+
+The dice generator is saved as **seed + how many rolls it has made**, and reloading
+replays those rolls to walk it back to the same position. Its internal 64-bit state
+cannot survive JSON intact, and a loaded match that rolled a different stream than the
+saved one would be a different game.
+
+**Watching a replay** re-enters the battle screen with **no controllers at all** — that
+is what makes it safe: there is nobody to submit an intent. Stepping forward resolves the
+next recorded intent; stepping *back*, or any seek, rebuilds the board from the nearest
+keyframe and fast-forwards, because the resolver is not reversible. Play/pause and
+1×/2×/4×/8× sit on a bar at the bottom of the screen.
+
+**Loading a save with role reassignment (item 42).** A `.mcfs` opens in the lobby, which
+lists each saved army by unit count and lets the host rebind every slot — Player, AI, or
+closed, with its colour and team. This is a **one-dictionary edit**: the roster is
+separate from unit ownership (§3.2), so handing Player B's army to someone else never
+touches a single `owner` field. Deployment is skipped — the armies are already on the
+board. A networked host ships the whole save to the client (`K_LOAD`), for the same
+reason it ships the map: the client does not have that file.
+
+**Regression cover.** `tests/run_codec.gd` sweeps every script variable of every unit,
+vehicle and cell through the file and back, and separately asserts that a snapshot does
+not keep a live reference into the running match. That second check is not theoretical:
+`Array(typed_array)` returns *the same array*, so the start-of-match keyframe kept
+mutating with the game and replays began from the wrong board.
+
 ---
 
 ## 21. Texture Replacement & Theme
@@ -1620,6 +1673,15 @@ space** — the designer paints floor in.
 - **Theme:** `UiTheme` (autoload `Ui`) applies the "2003 Steam" gunmetal skin to the root
   window. In-game surfaces are framed by `SteamChrome` — panel body, dark-green title
   bar, accent pip. The dice roller, deployment screen, and quit popup all use it.
+- **Main-menu background (item 35):** `Starfield` replaces the flat `ColorRect` with a
+  gradient sky and three star layers drifting at 5 / 13 / 28 px per second — the *speed
+  difference* is the whole parallax. Each layer is one 512-px tile tiled across the
+  screen with only its position animated, so a frame costs three sprites no matter how
+  many stars there are, and the layers are laid out from a fixed seed so the menu looks
+  the same every launch. The bundled `logo.png` finally appears, beside the title.
+- **Settings (item 24) is a disabled button.** The original settings screen was never
+  supplied; a guessed port would look like settings without setting anything. The slot
+  is held visibly rather than silently dropped.
 - All UI strings are **English**; all code comments are **Russian**.
 
 ---
@@ -1777,7 +1839,8 @@ These are deliberate choices that look like bugs if you don't know the reasoning
 ## 24. Known Gaps & Deliberate Non-Features
 
 - **No automated victory conditions.** The match runs until the players stop.
-- **No mid-battle save/load.** Undo snapshots are in-memory only.
+- **Replays are not recorded in network play** — the host's dice log already occupies
+  that channel (§20.1). Save a game instead.
 - **AI does not** throw grenades, build, dig, pilot drones, or ram with vehicles. It
   *does* demolish obstacles in its path with a miner or engineer (#90).
 - **Tank-cannon AI ignores the blast-shield rule.**

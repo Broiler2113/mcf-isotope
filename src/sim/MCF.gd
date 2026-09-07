@@ -23,13 +23,13 @@ const ITEM_FRAG := "frag_grenade"
 const ITEM_EXTINGUISHER := "fire_extinguisher_grenade"
 
 const ITEM_DRONE_STATION := "drone_station"
-const ITEM_BRU := "bru"  # стартовый предмет инженера (§3.7)
+const ITEM_LDF := "bru"  # стартовый предмет инженера (§3.7)
 
 const ITEM_NAMES := {
 	ITEM_FRAG: "Frag Grenade",
 	ITEM_EXTINGUISHER: "Fire Extinguisher Grenade",
 	ITEM_DRONE_STATION: "Drone Station",
-	ITEM_BRU: "BRU",
+	ITEM_LDF: "LDF",
 }
 
 # --- Спецспособности (id в UnitStats.special_ability_id) ---
@@ -42,6 +42,7 @@ const ABILITY_SNIPER := "sniper"
 const ABILITY_DRONE_OPERATOR := "drone_operator"
 const ABILITY_ENGINEER := "engineer"
 const ABILITY_MINER := "miner"
+const ABILITY_SAPPER := "sapper"
 const ABILITY_CIVILIAN := "civilian"
 
 # --- Туман войны (§3.9, наше дополнение) ---
@@ -49,7 +50,21 @@ const ABILITY_CIVILIAN := "civilian"
 # ПЛОЩАДНОЙ в радиусе обзора; стены (высота 2) перекрывают обзор по лучу, живые юниты —
 # нет. Видимость общая на команду. Скрытые вражеские юниты не отображаются и не могут
 # быть выбраны целью, пока не войдут в зону видимости.
+## Радиус обзора по умолчанию. С item 46 обзор бойца НЕ ОГРАНИЧЕН расстоянием —
+## он идёт, пока не упрётся в стену, — и это значение осталось лишь как потолок
+## окна обхода: дальше края карты смотреть всё равно некуда.
 const DEFAULT_SIGHT_RANGE := 12
+## Обзор «до стены» (item 46). Ставится вместо радиуса, когда дальность не ограничена:
+## любая карта проекта заведомо меньше, поэтому окно накрывает её целиком.
+const SIGHT_UNLIMITED := 1024
+
+## Режимы тумана войны (item 46, выбираются в лобби).
+##   OFF        — тумана нет, видно всё поле.
+##   STANDARD   — рельеф и постройки видны там, где команда уже побывала («память
+##                разведки»), но чужие бойцы, техника и нейтралы прячутся, как только
+##                выходят из текущего обзора. Невидимое затянуто серой пеленой.
+##   REALISTIC  — вне текущего обзора не видно НИЧЕГО, включая рельеф.
+enum Fog {OFF, STANDARD, REALISTIC}
 
 # --- Дроны (§3.12) ---
 # Полёт 30 клеток = 1 действие; дрон не удаляется от станции дальше 30 клеток.
@@ -62,7 +77,7 @@ const DRONE_STATS_ID := "drone"
 #   • Стена из трупов — нужна укладка 5 трупов на одну клетку, но модель клетки
 #     держит одного occupant; поле corpse_count заведено, но стек не образуется.
 #   • Окоп (копка из 2 куч земли 0.5 м) — нет источника «куч земли».
-#   • РСП (стационарный пулемёт) — это стреляющая сущность; проще как неподвижный
+#   • ДПМГ (стационарный пулемёт) — это стреляющая сущность; проще как неподвижный
 #     UnitInstance, отложено. ДОТ автор пометил «в разработке».
 # Мешки/ёж/окоп как ДАННЫЕ КАРТЫ работают через cover_height (система укрытий §3.7).
 const FEATURE_DRONE_STATION := "drone_station"
@@ -72,15 +87,22 @@ const FEATURE_DIRT_PILE := "dirt_pile"     # куча земли, 0.5 м (§3.4/
 const FEATURE_TRENCH := "trench"           # окоп, авто-укрытие выс. 1
 const FEATURE_WALL := "wall"               # стена, 2 м
 const FEATURE_GLASS := "glass"             # стекло, 2 м (простреливается лазером как стена)
-const FEATURE_BRU := "bru"                 # БРУ — стена 1×6
-const BRU_WALL_LENGTH := 6                 # БРУ строится цепочкой из 6 клеток (§3.7)
+## ЛДФ (бывш. ЛДФ, item 43). Идентификатор НА ДИСКЕ намеренно остался "bru":
+## по нему записаны все существующие карты, и переименование строки сделало бы их
+## нечитаемыми ради одной только косметики. Переехали имя константы и подпись.
+const FEATURE_LDF := "bru"                 # ЛДФ — стена 1×6
+const LDF_WALL_LENGTH := 6                 # ЛДФ строится цепочкой из 6 клеток (§3.7)
 const FEATURE_CORPSE_WALL := "corpse_wall" # стена из 5 трупов, 2 м
 const FEATURE_AIRLOCK := "airlock"         # шлюз (§3.11): закрыт=стена, открыт при юните рядом
-const FEATURE_RSP := "rsp"                 # РСП — стационарный пулемёт (§3.7), укрытие 1 м
+## ДПМГ (бывш. ДПМГ, item 43). Идентификатор на диске так же остался "rsp".
+const FEATURE_DPMG := "rsp"                 # ДПМГ — стационарный пулемёт (§3.7), укрытие 1 м
 const FEATURE_DOT := "dot"                 # ДОТ — армированная бетонная стена, 2 м (§3.7)
 ## ДОТ с амбразурами: та же бетонная коробка, но сквозь неё стреляет любой боец,
 ## стоящий вплотную (кроме противотанкиста — его заряд в амбразуру не пролезает).
 const FEATURE_DOT_OPEN := "dot_open"
+## Мина (item 45). Укрытия не даёт и проходу не мешает — на неё именно НАСТУПАЮТ.
+## Спрятана: чужой видит её, только пока сапёр её подсветил (см. GameState.revealed_mines).
+const FEATURE_MINE := "mine"
 const FEATURE_WOOD_WALL := "wood_wall"     # деревянная стена, 2 м, горючая — сгорает в огне (#53)
 ## Мешки, сложенные в два яруса — глухая стена 2 м.
 const FEATURE_SANDBAG_WALL := "sandbag_wall"
@@ -97,12 +119,13 @@ const FEATURE_HEIGHT := {
 	FEATURE_TRENCH: 0.0,
 	FEATURE_WALL: 2.0,
 	FEATURE_GLASS: 2.0,
-	FEATURE_BRU: 2.0,
+	FEATURE_LDF: 2.0,
 	FEATURE_CORPSE_WALL: 2.0,
 	FEATURE_AIRLOCK: 2.0,
-	FEATURE_RSP: 1.0,
+	FEATURE_DPMG: 1.0,
 	FEATURE_DOT: 2.0,
 	FEATURE_DOT_OPEN: 2.0,
+	FEATURE_MINE: 0.0,
 	FEATURE_WOOD_WALL: 2.0,
 	FEATURE_SANDBAG_WALL: 2.0,
 	FEATURE_HEDGEHOG_SANDBAGS: 2.0,
@@ -116,21 +139,33 @@ const FEATURE_NAMES := {
 	FEATURE_TRENCH: "Trench",
 	FEATURE_WALL: "Wall",
 	FEATURE_GLASS: "Glass",
-	FEATURE_BRU: "BRU",
+	FEATURE_LDF: "LDF",
 	FEATURE_CORPSE_WALL: "Corpse Wall",
 	FEATURE_AIRLOCK: "Airlock",
-	FEATURE_RSP: "RSP (Machine Gun)",
+	FEATURE_DPMG: "DPMG (Machine Gun)",
 	FEATURE_DOT: "Pillbox (Concrete)",
 	FEATURE_DOT_OPEN: "Pillbox (Embrasures)",
+	FEATURE_MINE: "Mine",
 	FEATURE_WOOD_WALL: "Wooden Wall",
 	FEATURE_SANDBAG_WALL: "Sandbag Wall",
 	FEATURE_HEDGEHOG_SANDBAGS: "Hedgehog on Sandbags",
 }
 
-# --- РСП: стационарный пулемёт (§3.7) ---
+# --- ДПМГ: стационарный пулемёт (§3.7) ---
 # Ставится за 1 действие (инженер), стреляет из соседней клетки любым юнитом.
-const RSP_RANGE := 12
-const RSP_RATE_OF_FIRE := 8
+const DPMG_RANGE := 12
+const DPMG_RATE_OF_FIRE := 8
+
+# --- Сапёр и мины (item 45) ---
+## За одно действие сапёр ставит до пяти мин.
+const MINES_PER_ACTION := 5
+## Подсветка чужих мин: радиус по Чебышёву, в пределах линии видимости, на 1 ход.
+const MINE_REVEAL_RADIUS := 15
+const MINE_REVEAL_TURNS := 1
+## Урон мины технике по единой шкале (#89) — как у противотанкиста и дрона.
+## В источнике эффект мины не описан вовсе; принято: пехоту убивает наповал на
+## своей клетке, технике снимает единицу прочности. См. GAME_SPEC §7.9.
+const MINE_VEHICLE_DAMAGE := 1
 
 # --- Космос / невесомость (§3.11) ---
 # После выстрела (кроме противотанкиста) в невесомости: стрелка отбрасывает на 1 клетку,
@@ -150,7 +185,7 @@ const TRENCH_DEPTH := 2.0
 # приземляясь в следующую клетку по той же прямой.
 const HEDGEHOG_JUMP_COST := 2
 # Стоимость постройки/слома укреплений в ОД (инженер строит, шахтёр ломает).
-const BUILD_COST_DEFAULT := 1   # стена/стекло/БРУ — 1 действие
+const BUILD_COST_DEFAULT := 1   # стена/стекло/ЛДФ — 1 действие
 const BUILD_COST_HEDGEHOG := 2  # противотанковый ёж — 2 действия
 const BUILD_COST_DOT := 2       # ДОТ (армированный бетон) — 2 действия (§3.7)
 # Единая шкала урона MCF (#89): 1 прочность = 10 потенциала лазера = 1 взрыв дрона =
@@ -166,16 +201,57 @@ const DIRT_MAX_LEVEL := 2
 const BREAK_COST := 1           # шахтёр ломает за 1 действие
 # Корпусная стена: 5 трупов на клетке образуют стену (§3.7).
 const CORPSE_WALL_COUNT := 5
+## Сколько тел боец может нести в руках (#9). Третий труп поднять нельзя — ни
+## кнопкой, ни подсветкой, ни намерением по сети.
+const CORPSE_CARRY_MAX := 2
 # Как далеко разлетаются тела рухнувшей от взрыва трупной стены (#98), по Чебышёву.
 const CORPSE_SCATTER_RADIUS := 3
 
-# --- Огонь (§3.8) ---
-const FIRE_SPREAD_FLAMMABLE := 3  # дерево/трава: загорается на 3+
-const FIRE_SPREAD_OTHER := 4      # прочий пол: 4+
+# --- Огонь (§3.8, таблица розжига #14/#31) ---
 const FIRE_SHOOT_PENALTY := 1     # стрельба через горящую клетку: −1 к попаданию (кроме снайпера)
-# Тип пола: 0 = обычный (4+), 1 = горючий (дерево/трава, 3+).
+# Тип пола: 0 = обычный, 1 = горючий (дерево), 2 = трава (#14 — новый подтип пола).
 const FLOOR_NORMAL := 0
 const FLOOR_FLAMMABLE := 1
+const FLOOR_GRASS := 2
+
+## Порог d6 для розжига от СОСЕДНЕЙ горящей клетки: клетка загорается на «need и выше»,
+## то есть шанс равен (7 − need)/6. Таблица взята из #14 один в один:
+##   пол 3/6, трава 5/6, стена 2/6, дерев. стена 3/6, стекло 2/6, укрытия 3/6,
+##   окоп 3/6 (как пол), куча в 2 м 2/6 (как стена), ЛДФ и ДОТ не горят никогда.
+## Прямой выстрел огнемёта таблице НЕ подчиняется — он поджигает всегда (#31).
+const FIRE_NEED_FLOOR := 4        # обычный пол — 3/6
+const FIRE_NEED_GRASS := 2        # трава — 5/6
+const FIRE_NEED_WALL := 5         # стена и её скины — 2/6
+const FIRE_NEED_WOOD := 4         # деревянная стена — 3/6
+const FIRE_NEED_GLASS := 5        # стекло — 2/6
+const FIRE_NEED_COVER := 4        # мешки, ёж, ДПМГ, куча 1 м — 3/6
+const FIRE_NEED_TALL_DIRT := 5    # куча в 2 м считается стеной — 2/6
+const FIRE_NEVER := 99            # заведомо недостижимо шестигранником
+
+## Пороги по объекту на клетке. Всё, чего здесь нет, считается укрытием (3/6) —
+## объекты-укрытия однотипны, и новый скин мешков не должен требовать правки таблицы.
+const FIRE_NEED_BY_FEATURE := {
+	FEATURE_WALL: FIRE_NEED_WALL,
+	FEATURE_CORPSE_WALL: FIRE_NEED_WALL,
+	FEATURE_WOOD_WALL: FIRE_NEED_WOOD,
+	FEATURE_GLASS: FIRE_NEED_GLASS,
+	FEATURE_AIRLOCK: FIRE_NEED_WALL,
+	FEATURE_TRENCH: FIRE_NEED_FLOOR,
+	FEATURE_LDF: FIRE_NEVER,
+	FEATURE_DOT: FIRE_NEVER,
+	FEATURE_DOT_OPEN: FIRE_NEVER,
+}
+
+## Пожаротушительная граната (#19): квадрат 5×5 — радиус 2 по Чебышёву от эпицентра.
+const EXTINGUISHER_RADIUS := 2
+## Сколько раундов после броска в зону не может ВПОЛЗТИ огонь. Прямой выстрел
+## огнемёта запрет игнорирует — тушитель глушит только пассивный разлив.
+const EXTINGUISHER_SUPPRESS_TURNS := 3
+
+## Невосприимчивые к огню способности (#1, #2): щитоносец и огнемётчик. Они не гибнут
+## на горящей клетке, и их маршрут огонь не обходит — для них это обычный пол.
+static func ability_is_fireproof(ability_id: String) -> bool:
+	return ability_id == ABILITY_SHIELD_BEARER or ability_id == ABILITY_FLAMETHROWER
 
 # --- Спецстрельба (см. §3.13, §3.14) ---
 # Противотанкист: радиус авто-поражения взрывом (Чебышёв).
@@ -187,7 +263,15 @@ const ANTI_TANK_VEHICLE_DAMAGE := 1
 const DRONE_EXPLOSION_DAMAGE := 1
 # Танковая пушка (#63): взрыв — «ромб» радиуса 2 по манхэттенской метрике (13 клеток).
 # Углы срезаны: по диагонали снаряд достаёт только на одну клетку.
+## Дальность танковой пушки (#22). Значение по умолчанию для оружия без своей
+## записи в VehicleDB — держим ЗДЕСЬ, чтобы «24» не разъехалось между резолвером,
+## ИИ и базой техники, как разъезжалось прежнее «30».
+const CANNON_RANGE := 24
 const CANNON_BLAST_RADIUS := 2
+## Пробитие стекла пулей (#29): каждая пуля, которой стекло попалось НА ПУТИ, бросает
+## свой кубик и проходит на 4+ (3/6). Бросок именно ПОБУЛЬНЫЙ, а не один на очередь:
+## из четырёх пуль сквозь стекло проходят обычно две — это и есть пример из задания.
+const GLASS_PIERCE_NEED := 4
 
 # --- Формы взрывов (#63, #64) ---
 ## Квадрат Чебышёва: все клетки, отстоящие не более чем на radius по обеим осям.
@@ -234,7 +318,7 @@ const LASER_COST := {
 	FEATURE_AIRLOCK: 1,
 	FEATURE_WALL: 2,
 	FEATURE_CORPSE_WALL: 3,   # трупы разлетаются вдоль траектории луча
-	FEATURE_BRU: 4,
+	FEATURE_LDF: 4,
 	FEATURE_SANDBAG_WALL: 2,
 	FEATURE_HEDGEHOG_SANDBAGS: 2,
 	# Укрытие в один метр луч срезает за единицу (#99): раньше низкий мешок стоил столько
@@ -242,7 +326,7 @@ const LASER_COST := {
 	FEATURE_SANDBAGS: 1,
 	FEATURE_HEDGEHOG: 1,
 	FEATURE_DIRT_PILE: 1,
-	FEATURE_RSP: 1,
+	FEATURE_DPMG: 1,
 	FEATURE_DRONE_STATION: 1,
 	# ДОТ — 2 прочности по единой шкале: 20 потенциала за всю коробку, 10 за трещину.
 	FEATURE_DOT: DOT_DURABILITY * POTENTIAL_PER_DURABILITY,
@@ -265,7 +349,73 @@ const SHIELD_PUSH_DEFENSE_PENALTY := 2
 const SNIPER_AUTOHIT_RANGE := 12
 
 # --- Стороны ---
-enum Owner {PLAYER_1 = 0, PLAYER_2 = 1, NEUTRAL = 2}
+## Игроки занимают СПЛОШНОЙ диапазон 0..MAX_PLAYERS-1: owner — это просто номер
+## игрока, а не член перечисления из трёх значений. PLAYER_1/PLAYER_2 оставлены
+## как имена для нулевого и первого — так читается код, писавшийся под дуэль, и
+## так же читается хот-сит на двоих, который никуда не делся.
+##
+## Нейтралы стоят ЗА диапазоном игроков, а не внутри него (раньше NEUTRAL == 2,
+## то есть на месте третьего игрока). Значение −1 на эту роль не годится: им уже
+## занята «клетка вне зоны развёртывания» в MapData.zone_owner.
+const MAX_PLAYERS := 26
+const MAX_TEAMS := 13
+enum Owner {PLAYER_1 = 0, PLAYER_2 = 1, NEUTRAL = 26}
+
+## Группы активированных нейтралов (§15 «Нейтралы») получают собственные слоты
+## инициативы. Их номера начинаются отсюда, чтобы не столкнуться ни с игроками
+## (0..25), ни с общим нейтральным слотом (26).
+const NEUTRAL_GROUP_BASE := 100
+## Больше ста групп не бывает: нумерация римская и кончается на C (100).
+const MAX_NEUTRAL_GROUPS := 100
+
+## Игроки зовутся латинскими буквами по порядку слотов: A, B, C, ... Z.
+const PLAYER_LETTERS := "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+## Команды зовутся латинизированными греческими буквами со своим символом.
+## Список намеренно берёт только 13 букв из 24 — ровно столько, сколько команд.
+## Порядок значим, менять нельзя: по нему команда получает имя от своего номера.
+const TEAM_NAMES := [
+	["Alpha", "Α"], ["Beta", "Β"], ["Gamma", "Γ"], ["Delta", "Δ"],
+	["Epsilon", "Ε"], ["Zeta", "Ζ"], ["Theta", "Θ"], ["Iota", "Ι"],
+	["Lambda", "Λ"], ["Omicron", "Ο"], ["Tau", "Τ"], ["Omega", "Ω"],
+	["Psi", "Ψ"],
+]
+
+## Владелец — играющий человек/ИИ (а не нейтрал и не пустое место)?
+static func is_player(owner: int) -> bool:
+	return owner >= 0 and owner < MAX_PLAYERS
+
+## Владелец — нейтральная сторона? Общий слот и любая активированная группа.
+static func is_neutral(owner: int) -> bool:
+	return owner == Owner.NEUTRAL or owner >= NEUTRAL_GROUP_BASE
+
+## Номер группы нейтралов (1..100) по её слоту, или 0, если это не группа.
+static func neutral_group_index(owner: int) -> int:
+	return owner - NEUTRAL_GROUP_BASE + 1 if owner >= NEUTRAL_GROUP_BASE else 0
+
+## Слот группы нейтралов по её номеру (1 → первая группа).
+static func neutral_group_slot(index: int) -> int:
+	return NEUTRAL_GROUP_BASE + index - 1
+
+## Римская запись 1..100 — номер группы нейтралов на бейдже и в списке инициативы.
+static func roman(n: int) -> String:
+	if n <= 0 or n > MAX_NEUTRAL_GROUPS:
+		return str(n)
+	const VALUES := [100, 90, 50, 40, 10, 9, 5, 4, 1]
+	const SIGNS := ["C", "XC", "L", "XL", "X", "IX", "V", "IV", "I"]
+	var out := ""
+	var left := n
+	for i in VALUES.size():
+		while left >= VALUES[i]:
+			out += SIGNS[i]
+			left -= VALUES[i]
+	return out
+
+## Имя команды с её греческим символом: «Omega Ω».
+static func team_name(team: int) -> String:
+	if team < 0 or team >= TEAM_NAMES.size():
+		return "No Team"
+	return "%s %s" % [TEAM_NAMES[team][0], TEAM_NAMES[team][1]]
 
 # --- Состояние юнита ---
 enum Status {ALIVE, CORPSE, HELD}
@@ -280,8 +430,11 @@ static func feature_durability(feature_id: String) -> int:
 		return DOT_DURABILITY
 	return 0
 
+## Имя стороны для журнала и HUD. Игрок — по своей букве, группа нейтралов —
+## по своему римскому номеру, общий нейтральный слот — просто «Neutral».
 static func owner_name(owner: int) -> String:
-	match owner:
-		Owner.PLAYER_1: return "Player 1"
-		Owner.PLAYER_2: return "Player 2"
-		_: return "Neutral"
+	if is_player(owner):
+		return "Player %s" % PLAYER_LETTERS[owner]
+	if owner >= NEUTRAL_GROUP_BASE:
+		return "Neutral %s" % roman(neutral_group_index(owner))
+	return "Neutral"

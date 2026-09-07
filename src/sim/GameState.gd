@@ -8,6 +8,9 @@ var grid: Grid
 var dice: DiceService
 var turns: TurnManager
 var log: CombatLog
+## Кто играет: стороны, команды, цвета, выбитость (см. Roster). До сборки лобби
+## это дуэль на двоих — то, чем игра была всегда.
+var roster: Roster
 
 var units: Dictionary = {}  # id -> UnitInstance
 var _next_id: int = 0
@@ -20,11 +23,18 @@ var _next_vehicle_id: int = Vehicle.ID_BASE
 ## выстрел слышен всем, а не только тем, кто его видел.
 var combat_started: bool = false
 
+## Подсвеченные сапёром чужие мины (item 45): владелец → {клетка: до какого раунда}.
+## Хранится ПО ВЛАДЕЛЬЦАМ, а не одним флагом на клетке: подсветить одну и ту же мину
+## могут двое, и у каждого свой срок. Ни в какие пакеты не едет — это знание стороны
+## о поле, а не само поле.
+var revealed_mines: Dictionary = {}
+
 func _init(width: int, height: int, dice_seed: int = -1) -> void:
 	grid = Grid.new(width, height)
 	dice = DiceService.new(dice_seed)
 	turns = TurnManager.new()
 	log = CombatLog.new()
+	roster = Roster.default_duel()
 
 ## occupy=false — юнит появляется НАД клеткой, не занимая её (дрон, §3.12: он висит в
 ## воздухе, под ним спокойно стоит боец). Раньше это делалось так: дрона клали жильцом
@@ -101,9 +111,11 @@ func snapshot() -> Dictionary:
 			"is_drone": u.is_drone, "home_station": u.home_station,
 			"operator_id": u.operator_id, "wall_entry_from": u.wall_entry_from,
 				"civilian_active": u.civilian_active,
+			"neutral_group": u.neutral_group,
 			"carried_this_round": u.carried_this_round,
 			"aboard_vehicle_id": u.aboard_vehicle_id, "dig_credits": u.dig_credits,
-			"bru_wall_used": u.bru_wall_used, "move_credit": u.move_credit,
+			"ldf_wall_used": u.ldf_wall_used, "move_credit": u.move_credit,
+			"mine_credits": u.mine_credits,
 			"carried_corpses": u.carried_corpses, "dragging": u.dragging,
 			"action_state": ast,
 		})
@@ -123,15 +135,21 @@ func snapshot() -> Dictionary:
 		cs.append({
 			"floor_type": c.floor_type, "cover_height": c.cover_height,
 			"on_fire": c.on_fire, "fire_owner": c.fire_owner, "is_space": c.is_space,
+			"fire_suppressed_until": c.fire_suppressed_until,
 			"occupant_id": c.occupant.id if c.occupant != null else -1,
 			"vehicle_id": c.vehicle_id, "feature_id": c.feature_id,
 			"feature_owner": c.feature_owner, "feature_durability": c.feature_durability,
+			"station_operator_id": c.station_operator_id,
 			"corpse_count": c.corpse_count, "dirt_level": c.dirt_level,
 			"airlock_welded": c.airlock_welded,
 		})
 	return {
 		"units": us, "vehicles": vs, "cells": cs,
 		"active_index": turns.active_index, "round_number": turns.round_number,
+		"round_order": turns.round_order.duplicate(),
+		"turn_eliminated": turns.eliminated.duplicate(),
+		"roster": roster.snapshot(),
+		"revealed_mines": _snapshot_revealed_mines(),
 		"next_id": _next_id, "next_vehicle_id": _next_vehicle_id,
 		"combat_started": combat_started,
 	}
@@ -152,11 +170,13 @@ func restore(snap: Dictionary) -> void:
 		u.operator_id = rec["operator_id"]
 		u.wall_entry_from = rec["wall_entry_from"]
 		u.civilian_active = rec["civilian_active"]
+		u.neutral_group = rec.get("neutral_group", 0)
 		u.carried_this_round = rec["carried_this_round"]
 		u.aboard_vehicle_id = rec["aboard_vehicle_id"]
 		u.dig_credits = rec["dig_credits"]
-		u.bru_wall_used = rec["bru_wall_used"]
+		u.ldf_wall_used = rec["ldf_wall_used"]
 		u.move_credit = rec["move_credit"]
+		u.mine_credits = rec.get("mine_credits", 0)
 		u.carried_corpses = rec["carried_corpses"]
 		u.dragging = rec["dragging"]
 		var ast: Dictionary = rec["action_state"]
@@ -192,11 +212,13 @@ func restore(snap: Dictionary) -> void:
 		c.cover_height = rec["cover_height"]
 		c.on_fire = rec["on_fire"]
 		c.fire_owner = rec["fire_owner"]
+		c.fire_suppressed_until = int(rec.get("fire_suppressed_until", 0))
 		c.is_space = rec["is_space"]
 		var oid: int = rec["occupant_id"]
 		c.occupant = units.get(oid, null) if oid != -1 else null
 		c.vehicle_id = rec["vehicle_id"]
 		c.feature_id = rec["feature_id"]
+		c.station_operator_id = int(rec.get("station_operator_id", -1))
 		c.feature_owner = rec["feature_owner"]
 		c.feature_durability = rec["feature_durability"]
 		c.corpse_count = rec["corpse_count"]
@@ -204,6 +226,32 @@ func restore(snap: Dictionary) -> void:
 		c.airlock_welded = rec["airlock_welded"]
 	turns.active_index = snap["active_index"]
 	turns.round_number = snap["round_number"]
+	# Порядок инициативы теперь ИЗМЕНЯЕМ по ходу боя: группы нейтралов встают в
+	# очередь по мере активации (§15). Значит откат обязан возвращать и его —
+	# иначе Undo оставил бы в очереди группу, которой на доске уже нет.
+	if snap.has("round_order"):
+		turns.round_order = (snap["round_order"] as Array[int]).duplicate()
+	if snap.has("turn_eliminated"):
+		turns.eliminated = (snap["turn_eliminated"] as Dictionary).duplicate()
+	if snap.has("roster"):
+		roster.restore(snap["roster"])
+	if snap.has("revealed_mines"):
+		revealed_mines = _restore_revealed_mines(snap["revealed_mines"])
 	_next_id = snap["next_id"]
 	_next_vehicle_id = snap["next_vehicle_id"]
 	combat_started = snap.get("combat_started", combat_started)
+
+## Подсветка мин — вложенные словари, поэтому duplicate() их бы не отвязал: копия
+## первого уровня продолжила бы делить внутренние словари со снимком, и откат вернул
+## бы ровно то, что откатывает.
+func _snapshot_revealed_mines() -> Dictionary:
+	var out := {}
+	for owner: int in revealed_mines:
+		out[owner] = (revealed_mines[owner] as Dictionary).duplicate()
+	return out
+
+func _restore_revealed_mines(snap: Dictionary) -> Dictionary:
+	var out := {}
+	for owner: int in snap:
+		out[owner] = (snap[owner] as Dictionary).duplicate()
+	return out

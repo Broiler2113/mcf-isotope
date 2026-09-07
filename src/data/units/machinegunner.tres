@@ -9,6 +9,6 @@ display_name = "Machinegunner"
 fire_range = 6.0
 rate_of_fire = 4
 armor_threshold = 3
-cost = 56
+cost = 65
 default_item_id = "frag_grenade"
 notes = "Стартовый предмет — осколочная граната (реализуется на M2)."

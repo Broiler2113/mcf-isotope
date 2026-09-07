@@ -30,15 +30,29 @@ var my_owner: int
 ## этот результат через обычную анимацию кубиков.
 var opening_civilians: ActionResult = ActionResult.success()
 
-func _init(p_state: GameState, p_resolver: GameActionResolver, p_is_host: bool) -> void:
+## p_my_owner — сторона, за которую играет ЭТА машина. −1 означает старую дуэльную
+## раскладку «хост — первый, гость — второй»; лобби на N игроков передаёт номер явно.
+func _init(p_state: GameState, p_resolver: GameActionResolver, p_is_host: bool,
+		p_my_owner: int = -1) -> void:
 	state = p_state
 	resolver = p_resolver
 	is_host = p_is_host
-	my_owner = MCF.Owner.PLAYER_1 if is_host else MCF.Owner.PLAYER_2
+	if MCF.is_player(p_my_owner):
+		my_owner = p_my_owner
+	else:
+		my_owner = MCF.Owner.PLAYER_1 if is_host else MCF.Owner.PLAYER_2
 
-## Владелец удалённой стороны (ею управляет NetworkController).
-func remote_owner() -> int:
-	return MCF.Owner.PLAYER_2 if is_host else MCF.Owner.PLAYER_1
+## Стороны, которыми управляют НЕ на этой машине — им нужен NetworkController.
+## Раньше такая сторона была ровно одна; теперь их столько, сколько игроков минус я.
+func remote_owners() -> Array[int]:
+	var out: Array[int] = []
+	for side in state.roster.player_ids():
+		if side != my_owner:
+			out.append(side)
+	if out.is_empty():
+		out.append(MCF.Owner.PLAYER_2 if my_owner == MCF.Owner.PLAYER_1
+				else MCF.Owner.PLAYER_1)
+	return out
 
 ## Локальный игрок подал намерение (через свой LocalHumanController).
 func submit_local(intent: Intent) -> void:
@@ -48,17 +62,31 @@ func submit_local(intent: Intent) -> void:
 		outgoing.emit({"k": K_INTENT, "i": IntentCodec.encode(intent)})
 
 ## Пришло сообщение от второй стороны.
+## Сообщение приходит из сети, то есть от чужой машины: считать его правильным
+## нельзя. Раньше msg["i"] индексировался напрямую, и пакет без этого ключа ронял
+## пир целиком (AUDIT §2.5); нераспознанное намерение декодируется в null и точно
+## так же роняло резолвер.
 func receive(msg: Dictionary) -> void:
 	match msg.get("k", ""):
 		K_INTENT:
 			if is_host:
-				_host_resolve_and_send(IntentCodec.decode(msg["i"]))
+				var it := _decode(msg)
+				if it != null:
+					_host_resolve_and_send(it)
 		K_ACTION:
 			if not is_host:
-				_client_apply(IntentCodec.decode(msg["i"]), msg.get("r", []))
+				var it := _decode(msg)
+				if it != null:
+					_client_apply(it, msg.get("r", []))
 		K_INIT:
 			if not is_host:
 				_client_adopt_initiative(msg)
+
+func _decode(msg: Dictionary) -> Intent:
+	var raw: Variant = msg.get("i")
+	if not (raw is Dictionary):
+		return null
+	return IntentCodec.decode(raw)
 
 ## Хост: разослать порядок инициативы (#53) и сразу отыграть стартовый слот мирных.
 ## Бросок инициативы делается локально у каждой стороны из СВОИХ кубиков, поэтому у

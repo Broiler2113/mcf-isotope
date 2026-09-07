@@ -8,6 +8,6 @@ id = "sniper"
 display_name = "Sniper"
 fire_range = 30.0
 target_defense_penalty = 2
-cost = 135
+cost = 60
 special_ability_id = "sniper"
 notes = "−2 к защите цели; автопопадание ≤12 кл. без укреплений между стрелком и целью (§5)."

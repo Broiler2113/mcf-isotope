@@ -15,7 +15,7 @@ extends RefCounted
 ##   weapons       — список орудий (см. ниже; у челнока пусто).
 ##
 ## Орудия танка:
-##   main_gun  — пушка: дальность 30, взрыв-ромб радиуса 2 (#63), 1 ОД,
+##   main_gun  — пушка: дальность 24 (#22), взрыв-ромб радиуса 2 (#63), 1 ОД,
 ##               2 прочности технике; не чаще 2×/ход.
 ## Вторичного лазера у танка больше нет (#63) — единственное орудие — пушка.
 const VEHICLES := {
@@ -26,10 +26,10 @@ const VEHICLES := {
 		"crew_capacity": 3,
 		"speed": 16,
 		"has_facing": true,
-		"cost": 300,
+		"cost": 500,
 		"weapons": {
 			"main_gun": {
-				"range": 30, "blast_radius": 2, "ap_cost": 1,
+				"range": 24, "blast_radius": 2, "ap_cost": 1,
 				"vehicle_damage": 2, "max_per_turn": 2,
 			},
 		},
@@ -41,7 +41,7 @@ const VEHICLES := {
 		"crew_capacity": 4,
 		"speed": 30,
 		"has_facing": false,
-		"cost": 120,
+		"cost": 125,
 		"weapons": {},
 		# Едущий тратит 2 ОД (только водитель), пассажиры без штрафа.
 		"driver_move_ap": 2,

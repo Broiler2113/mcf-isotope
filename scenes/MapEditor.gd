@@ -8,24 +8,28 @@ extends Node2D
 const CELL := 40
 const ORIGIN := Vector2(40, 40)
 
-const OWNER_COLORS := {
-	MCF.Owner.PLAYER_1: Color(0.3, 0.55, 1.0),
-	MCF.Owner.PLAYER_2: Color(1.0, 0.4, 0.35),
-	MCF.Owner.NEUTRAL: Color(0.7, 0.7, 0.7),
-}
+## Цвет стороны в редакторе — тот же, что и в бою: палитра ростера. Редактор не
+## знает состава партии, поэтому берёт цвет прямо по номеру игрока.
+static func owner_color(owner_id: int) -> Color:
+	if MCF.is_neutral(owner_id):
+		return Roster.NEUTRAL_COLOR
+	if MCF.is_player(owner_id):
+		return Roster.PALETTE[owner_id % Roster.PALETTE.size()]
+	return Color.WHITE
 
 # Кисти рельефа/объектов. Спавн-кисти обрабатываются отдельно (owner + unit).
 const TERRAIN_BRUSHES := [
 	{"id": "erase", "label": "Erase"},
 	{"id": "space", "label": "Space"},
 	{"id": "floor", "label": "Floor"},
+	{"id": "grass", "label": "Grass Floor"},
 	{"id": MCF.FEATURE_WALL, "label": "Wall"},
 	{"id": MCF.FEATURE_WOOD_WALL, "label": "Wooden Wall"},
 	{"id": MCF.FEATURE_GLASS, "label": "Glass"},
 	{"id": MCF.FEATURE_SANDBAGS, "label": "Sandbags"},
 	{"id": MCF.FEATURE_HEDGEHOG, "label": "Hedgehog"},
 	{"id": MCF.FEATURE_TRENCH, "label": "Trench"},
-	{"id": MCF.FEATURE_BRU, "label": "BRU"},
+	{"id": MCF.FEATURE_LDF, "label": "LDF"},
 	{"id": MCF.FEATURE_AIRLOCK, "label": "Airlock"},
 	{"id": MCF.FEATURE_DOT, "label": "Pillbox"},
 	{"id": MCF.FEATURE_DOT_OPEN, "label": "Pillbox (Embrasures)"},
@@ -39,6 +43,18 @@ var map: MapData
 var brush: String = MCF.FEATURE_WALL
 ## Владелец кисти зоны развёртывания (#52); -1 = стирать зону.
 var zone_brush_owner: int = MCF.Owner.PLAYER_1
+## Псевдо-владелец кисти: «тот игрок, что выбран в списке сторон».
+const ZONE_SELECTED_PLAYER := -2
+var _zone_player_opt: OptionButton
+## Выбранный в списке тип нейтрального юнита для кисти «spawn_neutral» (item 5).
+var _neutral_unit_opt: OptionButton
+## Типы юнитов, которых можно поставить нейтралом прямо на карту (item 5): любая
+## существующая пехота. Порядок фиксирован — по нему список и id.
+const NEUTRAL_UNIT_IDS := [
+	"civilian", "light_infantry", "heavy_infantry", "assault", "machinegunner",
+	"sniper", "marksman", "anti_tank", "flamethrower", "shield_bearer",
+	"engineer", "miner", "sapper", "commander", "drone_operator",
+]
 
 var tool: int = Tool.PAINT
 ## Начало/текущая клетка перетаскивания для линии/прямоугольника (-1 = нет).
@@ -167,9 +183,21 @@ func _apply_brush(coord: Vector2i) -> void:
 		"floor":
 			# Обычный твёрдый пол (снимает космос).
 			map.set_cell(coord, MCF.FLOOR_NORMAL, map.get_cover(coord), false, map.get_feature(coord))
+		"grass":
+			# Травяной пол (#14): такой же пол, только загорается почти наверняка (5/6).
+			map.set_cell(coord, MCF.FLOOR_GRASS, map.get_cover(coord), false, map.get_feature(coord))
 		"zone":
 			# Кисть зоны развёртывания (#52): красим владельца региона, не трогая рельеф.
 			map.set_zone(coord, zone_brush_owner)
+		"spawn_neutral":
+			# Нейтральный юнит (item 5): ставим на пол выбранный тип с owner == NEUTRAL.
+			# Один спавн на клетку — сперва снимаем прежний, если он тут был.
+			var uid: String = str(NEUTRAL_UNIT_IDS[_neutral_unit_opt.get_selected_id()]) \
+					if _neutral_unit_opt != null else "civilian"
+			map.set_cell(coord, MCF.FLOOR_NORMAL if map.get_space(coord) else map.get_floor(coord),
+					map.get_cover(coord), false, map.get_feature(coord))
+			map.clear_spawn_at(coord)
+			map.set_spawn(coord, uid, MCF.Owner.NEUTRAL)
 		_:
 			# Кисть-объект: под укрытием подразумевается пол, поэтому снимаем космос.
 			var h: float = MCF.FEATURE_HEIGHT.get(brush, 0.0)
@@ -283,14 +311,17 @@ func _draw() -> void:
 				if ch >= MCF.WALL_HEIGHT:
 					base = Color(0.35, 0.3, 0.25)
 				draw_rect(rect, base)
-			if map.get_floor(coord) == MCF.FLOOR_FLAMMABLE:
-				draw_rect(rect, Color(0.4, 0.5, 0.15, 0.25))
+			match map.get_floor(coord):
+				MCF.FLOOR_FLAMMABLE:
+					draw_rect(rect, Color(0.4, 0.5, 0.15, 0.25))
+				MCF.FLOOR_GRASS:
+					draw_rect(rect, Color(0.32, 0.55, 0.18, 0.35))
 			if ch > 0.0 and ch < MCF.WALL_HEIGHT:
 				draw_rect(rect, Color(0.5, 0.45, 0.2, 0.12 + 0.12 * ch))
 			# Зона развёртывания (#52): полупрозрачная заливка цветом стороны.
 			var zo := map.get_zone(coord)
 			if zo != -1:
-				var zc: Color = OWNER_COLORS.get(zo, Color.WHITE)
+				var zc: Color = owner_color(zo)
 				zc.a = 0.22
 				draw_rect(rect, zc)
 			draw_rect(rect, Color(0.25, 0.27, 0.32), false, 1.0)
@@ -307,7 +338,7 @@ func _draw() -> void:
 		if spawn_key != "":
 			Sprites.draw_texture_override(self, spawn_key, _cell_origin(s["coord"]), cs)
 			continue
-		draw_circle(center, cs * 0.3, OWNER_COLORS.get(s["owner"], Color.WHITE))
+		draw_circle(center, cs * 0.3, owner_color(s["owner"]))
 		draw_string(font, center + Vector2(-9, 5), _initials(s["stats_id"]),
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color.WHITE)
 	# Превью линии/прямоугольника при перетаскивании.
@@ -323,16 +354,16 @@ func _draw() -> void:
 
 ## Суффикс стороны для картинок-замен — тот же, что и в бою (#55).
 func _spawn_suffix(owner_id: int) -> String:
-	match owner_id:
-		MCF.Owner.PLAYER_1: return "_p1"
-		MCF.Owner.PLAYER_2: return "_p2"
-		MCF.Owner.NEUTRAL: return "_neutral"
+	if MCF.is_neutral(owner_id):
+		return "_neutral"
+	if MCF.is_player(owner_id):
+		return "_p%d" % (owner_id + 1)
 	return ""
 
 func _feature_tag(fid: String) -> String:
 	return {
 		MCF.FEATURE_WALL: "##", MCF.FEATURE_GLASS: "▢", MCF.FEATURE_SANDBAGS: "SB",
-		MCF.FEATURE_HEDGEHOG: "hdg", MCF.FEATURE_TRENCH: "tr", MCF.FEATURE_BRU: "BRU",
+		MCF.FEATURE_HEDGEHOG: "hdg", MCF.FEATURE_TRENCH: "tr", MCF.FEATURE_LDF: "LDF",
 		MCF.FEATURE_AIRLOCK: "AL", MCF.FEATURE_DRONE_STATION: "ST",
 		MCF.FEATURE_WOOD_WALL: "WD",
 		MCF.FEATURE_DOT: "PBX", MCF.FEATURE_DOT_OPEN: "PBX+",
@@ -398,12 +429,41 @@ func _build_ui() -> void:
 	vbox.add_child(zone_lbl)
 	var zone_row := HBoxContainer.new()
 	vbox.add_child(zone_row)
-	for pair in [[MCF.Owner.PLAYER_1, "Zone P1"], [MCF.Owner.PLAYER_2, "Zone P2"],
-			[MCF.Owner.NEUTRAL, "Zone Neut."], [-1, "No Zone"]]:
+	# Игроков теперь до 26, кнопкой на каждого панель не застроишь: сторона
+	# выбирается списком, а кисть у неё одна.
+	_zone_player_opt = OptionButton.new()
+	for i in MCF.MAX_PLAYERS:
+		_zone_player_opt.add_item(MCF.owner_name(i), i)
+	_zone_player_opt.select(0)
+	_zone_player_opt.item_selected.connect(_on_zone_player_selected)
+	zone_row.add_child(_zone_player_opt)
+	# «Zone Neut.» убрана (item 5): нейтралов теперь ставят поштучно, как юнитов, а не
+	# заливают зоной. Осталась только зона РАЗВЁРТЫВАНИЯ игроков.
+	for pair in [[ZONE_SELECTED_PLAYER, "Zone Player"], [-1, "No Zone"]]:
 		var zb := Button.new()
 		zb.text = pair[1]
 		zb.pressed.connect(_set_zone_brush.bind(pair[0], pair[1]))
 		zone_row.add_child(zb)
+
+	vbox.add_child(HSeparator.new())
+
+	# Нейтральные юниты (item 5): выбрать тип и ставить его на карту как нейтрала. Юнит
+	# уходит в map.spawns с owner == NEUTRAL и на старте боя попадает под нейтральный ИИ.
+	var nu_lbl := Label.new()
+	nu_lbl.text = "Neutral Unit:"
+	nu_lbl.add_theme_font_size_override("font_size", 13)
+	vbox.add_child(nu_lbl)
+	var nu_row := HBoxContainer.new()
+	vbox.add_child(nu_row)
+	_neutral_unit_opt = OptionButton.new()
+	for i in NEUTRAL_UNIT_IDS.size():
+		_neutral_unit_opt.add_item(str(NEUTRAL_UNIT_IDS[i]), i)
+	_neutral_unit_opt.select(0)
+	nu_row.add_child(_neutral_unit_opt)
+	var place_btn := Button.new()
+	place_btn.text = "Place Neutral"
+	place_btn.pressed.connect(_set_brush.bind("spawn_neutral", "Neutral Unit"))
+	nu_row.add_child(place_btn)
 
 	vbox.add_child(HSeparator.new())
 
@@ -480,10 +540,25 @@ func _set_brush(id: String, label: String) -> void:
 	brush = id
 	_status.text = "Brush: %s" % label
 
+## ZONE_SELECTED_PLAYER означает «того игрока, что выбран в списке» — иначе кисть
+## пришлось бы переназначать после каждой смены стороны в выпадающем списке.
 func _set_zone_brush(owner: int, label: String) -> void:
 	brush = "zone"
-	zone_brush_owner = owner
-	_status.text = "Brush: %s" % label
+	zone_brush_owner = _selected_zone_player() if owner == ZONE_SELECTED_PLAYER else owner
+	_status.text = "Brush: %s" % (
+			"Zone %s" % MCF.owner_name(zone_brush_owner)
+			if owner == ZONE_SELECTED_PLAYER else label)
+
+func _selected_zone_player() -> int:
+	if _zone_player_opt == null:
+		return MCF.Owner.PLAYER_1
+	return _zone_player_opt.get_selected_id()
+
+## Смена стороны в списке сразу переводит на неё активную кисть зоны — иначе
+## выбор в списке ничего бы не делал до следующего нажатия кнопки.
+func _on_zone_player_selected(_index: int) -> void:
+	if brush == "zone" and MCF.is_player(zone_brush_owner):
+		_set_zone_brush(ZONE_SELECTED_PLAYER, "")
 
 func _on_save() -> void:
 	var fname := _name_edit.text.strip_edges()

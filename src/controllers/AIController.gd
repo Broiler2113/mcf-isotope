@@ -204,12 +204,13 @@ func _forced_action(state: GameState, r: GameActionResolver, row: Dictionary) ->
 	#    именно оно и оставляло бойца стоять столбом.
 	if u.remaining_ap > 0 or u.move_credit > 0:
 		var enemy := _nearest_enemy(state, u.coord, false, r)
-		var reach := Movement.reachable(state.grid, u.coord, _move_budget(u))
+		var reach := Movement.reachable_for(state.grid, u, _move_budget(u))
+		var dodge := _avoids_fire(u)
 		var best: Dictionary = {}
 		for coord: Vector2i in reach.cost:
 			if coord == u.coord or state.grid.blocks_walk(coord):
 				continue
-			if _fire_near(state, coord):
+			if dodge and _fire_near(state, coord):
 				continue
 			var score := SCORE_MOVE_BASE + _cover_bonus(state, coord)
 			if enemy != null:
@@ -314,6 +315,11 @@ func _candidates(state: GameState, r: GameActionResolver, u: UnitInstance) -> Ar
 			out.append(d)
 		return out
 
+	# Нейтрал (§3/§4 «Нейтралы») живёт по своему строгому порядку: сперва ВЫЖИВАНИЕ,
+	# и лишь когда оно закрыто/недоступно/снято численным перевесом — УРОН.
+	if MCF.is_neutral(owner):
+		return _neutral_candidates(state, r, u)
+
 	var shoot := _best_shoot(state, r, u)
 	if not shoot.is_empty():
 		out.append(shoot)
@@ -356,6 +362,156 @@ func _candidates(state: GameState, r: GameActionResolver, u: UnitInstance) -> Ar
 		if not mv.is_empty():
 			out.append(mv)
 	return out
+
+# --- Нейтралы: строгий порядок «выживание → урон» (§4 «Нейтралы») ---
+
+## Ход нейтрала (§4). Приоритет 1 (выживание) всегда выше приоритета 2 (урон): пока
+## выживание даёт осмысленное действие, урон даже не рассматривается. Численный перевес
+## 1.75× (§4.2) снимает выживание целиком — тогда нейтрал сразу идёт бить.
+func _neutral_candidates(state: GameState, r: GameActionResolver, u: UnitInstance) -> Array:
+	var out: Array = []
+	var surv := _neutral_survival(state, r, u)
+	if not surv.is_empty():
+		out.append(surv)
+		return out  # выживание закрывает ход — урон рассматриваем, только когда оно исчерпано
+	# Приоритет 2 (§4.3): бьём как армия, но цель — самая дорогая (вес цены в _unit_value).
+	var shoot := _best_shoot(state, r, u)
+	if not shoot.is_empty():
+		out.append(shoot)
+	var veh_shot := _best_vehicle_shot(state, r, u)
+	if not veh_shot.is_empty():
+		out.append(veh_shot)
+	var drop := _best_corpse_drop(state, r, u)
+	if not drop.is_empty():
+		out.append(drop)
+	if u.remaining_ap > 0 or u.move_credit > 0:
+		var mv := _best_move(state, r, u)
+		if not mv.is_empty():
+			out.append(mv)
+	return out
+
+## Приоритет 1 (§4.1). Первое применимое действие в строгом порядке:
+##   • труп в руках «успокаивает» — выживание на этот ход закрыто (§4.1c);
+##   • (в) соседний труп берём при ПЕРВОЙ возможности, вне очереди с (а)/(б);
+##   • (а) сойти со створа стрелка;
+##   • (б) иначе — к ближайшему укрытию (любой cover_height > 0, куски < 2 м тоже);
+##   • (г) иначе — отступить прямо от угрозы.
+## Пусто — выживание нечем удовлетворить (или уже удовлетворено): пора за урон (§4.3).
+func _neutral_survival(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
+	# §4.2: численный перевес 1.75× снимает ВСЁ выживание — нейтрал сразу идёт за урон.
+	if _neutral_outnumbers(state, r, u):
+		return {}
+	if u.carried_corpses > 0:
+		return {}
+	for n: Vector2i in state.grid.neighbors(u.coord):
+		if r.has_corpse(n):
+			return {"score": SCORE_CORPSE_BASE, "intent": PickUpCorpseIntent.new(u.id, n)}
+	if u.remaining_ap <= 0 and u.move_credit <= 0:
+		return {}
+	var soldiers := _neutral_soldiers(state)
+	if soldiers.is_empty():
+		return {}
+	var reach := Movement.reachable_for(state.grid, u, _move_budget(u))
+	if _on_any_lane(r, soldiers, u.coord):
+		var off := _neutral_off_lane(r, soldiers, reach, u)
+		if not off.is_empty():
+			return off
+	var cover := _neutral_to_cover(state, reach, u)
+	if not cover.is_empty():
+		return cover
+	return _neutral_retreat(soldiers, reach, u)
+
+## Солдаты-угрозы для нейтрала — только живые бойцы ИГРОКОВ (§4.1). Дрон и другой
+## нейтрал сюда не идут: створ строят люди, а своих нейтралы не боятся.
+func _neutral_soldiers(state: GameState) -> Array:
+	var out: Array = []
+	for o: UnitInstance in state.all_units():
+		if CivilianAI.is_soldier(o):
+			out.append(o)
+	return out
+
+## Стоит ли клетка coord на чьём-то створе (§4.1a): луч солдата признаётся
+## Combat.is_on_firing_line, и линия до клетки не перекрыта стеной/корпусом. Юниты
+## сквозь себя створ не рвут (ignore_units), иначе «безопасная» клетка зависела бы от
+## того, кто где стоит в эту секунду.
+func _on_any_lane(r: GameActionResolver, soldiers: Array, coord: Vector2i) -> bool:
+	for s: UnitInstance in soldiers:
+		if Combat.is_on_firing_line(s.coord, coord) \
+				and not r.los_blocked(s.coord, coord, true, true):
+			return true
+	return false
+
+## Ближайшая (наименьшая трата скорости) достижимая клетка ВНЕ всех створов (§4.1a).
+func _neutral_off_lane(r: GameActionResolver, soldiers: Array,
+		reach: Movement.Reachability, u: UnitInstance) -> Dictionary:
+	var best: Dictionary = {}
+	var best_cost := 1 << 30
+	for c: Vector2i in reach.cost:
+		if c == u.coord or _on_any_lane(r, soldiers, c):
+			continue
+		var cost: int = reach.cost[c]
+		if cost < best_cost:
+			best_cost = cost
+			best = {"score": SCORE_MOVE_BASE + 24.0, "intent": MoveIntent.new(u.id, c)}
+	return best
+
+## Ближайшее достижимое укрытие (§4.1b): любая клетка с cover_height > 0, куда встать.
+func _neutral_to_cover(state: GameState, reach: Movement.Reachability,
+		u: UnitInstance) -> Dictionary:
+	var best: Dictionary = {}
+	var best_cost := 1 << 30
+	for c: Vector2i in reach.cost:
+		if c == u.coord:
+			continue
+		var cell := state.grid.cell(c)
+		if cell == null or cell.cover_height <= 0.0:
+			continue
+		var cost: int = reach.cost[c]
+		if cost < best_cost:
+			best_cost = cost
+			best = {"score": SCORE_MOVE_BASE + 16.0, "intent": MoveIntent.new(u.id, c)}
+	return best
+
+## Отступление прямо от угрозы (§4.1d): достижимая клетка дальше всего от ближайшего
+## солдата. Ничего не даёт (уже некуда отходить) — пусто, и нейтрал берётся за урон.
+func _neutral_retreat(soldiers: Array, reach: Movement.Reachability,
+		u: UnitInstance) -> Dictionary:
+	var here := _nearest_soldier_dist(soldiers, u.coord)
+	var best: Dictionary = {}
+	var best_gain := 0
+	for c: Vector2i in reach.cost:
+		if c == u.coord:
+			continue
+		var gain := _nearest_soldier_dist(soldiers, c) - here
+		if gain > best_gain:
+			best_gain = gain
+			best = {"score": SCORE_MOVE_BASE + 8.0, "intent": MoveIntent.new(u.id, c)}
+	return best
+
+func _nearest_soldier_dist(soldiers: Array, coord: Vector2i) -> int:
+	var best := 1 << 30
+	for s: UnitInstance in soldiers:
+		best = mini(best, Combat.distance(coord, s.coord))
+	return best
+
+## §4.2: выживание снимается ТОЛЬКО когда видимых нейтралов ≥ 1.75× видимых солдат.
+## «Видимых этому нейтралу» — по чистой линии взгляда (стену считаем, тела — нет). Сам
+## нейтрал в свой счёт входит.
+func _neutral_outnumbers(state: GameState, r: GameActionResolver, u: UnitInstance) -> bool:
+	var neutrals := 0
+	var soldiers := 0
+	for o: UnitInstance in state.all_units():
+		if not o.is_alive():
+			continue
+		if o.id != u.id and r.los_blocked(u.coord, o.coord, true, true):
+			continue
+		if CivilianAI.is_npc(o):
+			neutrals += 1
+		elif CivilianAI.is_soldier(o):
+			soldiers += 1
+	if soldiers == 0:
+		return neutrals > 0
+	return float(neutrals) >= 1.75 * float(soldiers)
 
 ## Запас клеток, который боец может пройти ПРЯМО СЕЙЧАС (§3.2, #103). Недоеденный
 ## кредит прошлого движения тратится ПЕРВЫМ и без ОД — точно так же считает резолвер
@@ -492,6 +648,11 @@ func _unit_value(u: UnitInstance) -> float:
 	match u.stats.special_ability_id:
 		MCF.ABILITY_SNIPER, MCF.ABILITY_MARKSMAN, MCF.ABILITY_ANTI_TANK:
 			v += 3.0
+	# Нейтрал при прочих равных бьёт по самому ДОРОГОМУ (§4.3). Цена цели весит у него
+	# заметно сильнее, чем у обычной армии, — поэтому разрыв ценностей между дорогой и
+	# дешёвой целью у нейтрала шире, и выбор смещается к дорогой явнее.
+	if MCF.is_neutral(owner):
+		v += float(u.stats.cost) * 0.1
 	return v
 
 ## Сколько врагов ещё живо — по этому числу инвалидируется геополе (#52), поэтому
@@ -768,10 +929,11 @@ func _move_to_vehicle(state: GameState, u: UnitInstance) -> Dictionary:
 	if not field.has(u.coord):
 		return {}
 	var start: int = field.at(u.coord)
-	var reach := Movement.reachable(state.grid, u.coord, _move_budget(u))
+	var reach := Movement.reachable_for(state.grid, u, _move_budget(u))
+	var dodge := _avoids_fire(u)
 	var best: Dictionary = {}
 	for coord: Vector2i in reach.cost:
-		if _fire_near(state, coord):
+		if dodge and _fire_near(state, coord):
 			continue  # от огня держимся на клетку (#48)
 		var gain := float(start - int(field.at(coord)))
 		if gain <= 0.0:
@@ -884,15 +1046,20 @@ func _plan_move(state: GameState, u: UnitInstance) -> Dictionary:
 	if u.remaining_ap <= 0 and u.move_credit <= 0:
 		return {}
 	var budget: int = _move_budget(u)
-	var reach := Movement.reachable(state.grid, u.coord, budget)
-	if reach.can_reach(dest) and not state.grid.blocks_walk(dest):
+	var reach := Movement.reachable_for(state.grid, u, budget)
+	var dodge := _avoids_fire(u)
+	# Клетка назначения из плана штаба может за это время загореться (#1): в разливе
+	# она осталась, но входить в неё — гарантированная смерть. Тогда план не
+	# исполняется целиком, а доигрывается шагом «в сторону цели» ниже.
+	if reach.can_reach(dest) and not state.grid.blocks_walk(dest) \
+			and not (dodge and _fire_near(state, dest)):
 		return {"score": SCORE_MOVE_BASE + SCORE_PLAN_BONUS,
 			"intent": MoveIntent.new(u.id, dest)}
 	# Не дотягиваемся — шагаем в сторону назначения, но только если это правда ближе.
 	var here := Combat.distance(u.coord, dest)
 	var best: Dictionary = {}
 	for coord: Vector2i in reach.cost:
-		if _fire_near(state, coord):
+		if dodge and _fire_near(state, coord):
 			continue
 		var gain := float(here - Combat.distance(coord, dest))
 		if gain <= 0.0:
@@ -921,7 +1088,7 @@ func _best_move(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dic
 	var straight := _nearest_enemy(state, u.coord, false, r)
 	if not use_geo and straight == null:
 		return {}
-	var reach := Movement.reachable(state.grid, u.coord, _move_budget(u))
+	var reach := Movement.reachable_for(state.grid, u, _move_budget(u))
 	var start_geo: int = field.at(u.coord)
 	# Лучшее держим в простых переменных, а не в Dictionary (#106): разлив — под сотню
 	# клеток на бойца, и прежний код на каждое улучшение строил и словарь, и MoveIntent,
@@ -936,8 +1103,9 @@ func _best_move(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dic
 	var have_best := false
 	var best_score := 0.0
 	var best_coord := Vector2i.ZERO
+	var dodge := _avoids_fire(u)
 	for coord: Vector2i in cost:
-		if _fire_near(state, coord):
+		if dodge and _fire_near(state, coord):
 			continue  # держим дистанцию минимум в 1 клетку от огня (#48)
 		var score: float
 		if use_geo:
@@ -1097,9 +1265,10 @@ func _enemy_distance_field(state: GameState, only_visible: bool, r: GameActionRe
 ## Стоя вплотную к пламени, ИИ первым делом отходит на безопасную клетку (#48):
 ## сближение с врагом такой ход обычно не даёт, поэтому он идёт отдельным кандидатом.
 func _flee_fire(state: GameState, u: UnitInstance) -> Dictionary:
-	if not _fire_near(state, u.coord):
+	# Огнеупорному (#2) бежать не от чего — он в пламени и стоит, и воюет.
+	if not _avoids_fire(u) or not _fire_near(state, u.coord):
 		return {}
-	var reach := Movement.reachable(state.grid, u.coord, _move_budget(u))
+	var reach := Movement.reachable_for(state.grid, u, _move_budget(u))
 	var best: Dictionary = {}
 	for coord: Vector2i in reach.cost:
 		if coord == u.coord or _fire_near(state, coord):
@@ -1116,6 +1285,12 @@ func _flee_fire(state: GameState, u: UnitInstance) -> Dictionary:
 ## grid.neighbors() строит на каждый вызов новый массив из восьми Vector2i (#106). Обход
 ## развёрнут по окну 3×3 напрямую: набор проверяемых клеток тот же (восемь соседей в
 ## границах поля), а «горит ли хоть одна» от порядка обхода не зависит.
+## Держится ли этот боец подальше от пламени (#48). Огнеупорные (#2) — нет: для них
+## огонь обычная местность, и ИИ, водящий огнемётчика в обход собственного пожара,
+## просто не даёт им работать.
+func _avoids_fire(u: UnitInstance) -> bool:
+	return not MCF.ability_is_fireproof(u.stats.special_ability_id)
+
 func _fire_near(state: GameState, coord: Vector2i) -> bool:
 	if GridCell.burning == 0:
 		return false  # на карте не горит ничего — соседей можно не смотреть
@@ -1145,9 +1320,13 @@ func _cover_bonus(state: GameState, coord: Vector2i) -> float:
 
 # --- Дрон (§3.12) ---
 func _drone_action(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
-	if not r.operator_controls(u) or u.remaining_ap <= 0:
+	# Недолётанный остаток — такой же повод действовать, как целое ОД (#13): без
+	# него дрон, истративший своё единственное действие на короткий подлёт, замирал
+	# бы до конца хода с половиной дальности в запасе.
+	if not r.operator_controls(u) or (u.remaining_ap <= 0 and u.move_credit <= 0):
 		return {}
-	# Подрыв, если рядом враг (радиус взрыва 1 по Чебышёву).
+	# Подрыв, если рядом враг (радиус взрыва 1 по Чебышёву). Он бесплатен (item 26),
+	# поэтому доступен и выдохшемуся дрону.
 	for e: UnitInstance in _enemies_of(state):
 		if Combat.distance(u.coord, e.coord) <= MCF.ANTI_TANK_BLAST_RADIUS:
 			return {"score": SCORE_SHOOT_BASE + _unit_value(e), "intent": DroneDetonateIntent.new(u.id)}
@@ -1178,7 +1357,7 @@ func _vehicle_candidates(state: GameState, r: GameActionResolver, veh: Vehicle) 
 	var gun: Dictionary = weapons.get("main_gun", {})
 	if not gun.is_empty() and veh.cannon_shots_this_round < int(gun.get("max_per_turn", 2)) \
 			and veh.ap >= int(gun.get("ap_cost", 1)):
-		var target := _vehicle_best_target(state, r, veh, int(gun.get("range", 30)))
+		var target := _vehicle_best_target(state, r, veh, int(gun.get("range", MCF.CANNON_RANGE)))
 		if target != null and not _ally_near(state, target.coord, MCF.CANNON_BLAST_RADIUS):
 			out.append({"score": SCORE_SHOOT_BASE + _unit_value(target) + 6.0,
 				"intent": VehicleCannonIntent.new(veh.id, target.coord)})
@@ -1237,7 +1416,7 @@ func _vehicle_best_target(state: GameState, r: GameActionResolver, veh: Vehicle,
 			continue
 		if not r.is_visible_to_team(owner, e):
 			continue
-		# Не предлагаем выстрел сквозь стену/БРУ/кучу земли или чужую спину (#58, #70):
+		# Не предлагаем выстрел сквозь стену/ЛДФ/кучу земли или чужую спину (#58, #70):
 		# резолвер такой приказ отклонит, и ИИ застрянет, повторяя его.
 		if r.los_blocked(port, e.coord):
 			continue

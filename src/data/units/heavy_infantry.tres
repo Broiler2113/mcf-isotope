@@ -8,5 +8,5 @@ id = "heavy_infantry"
 display_name = "Heavy Infantry"
 rate_of_fire = 3
 armor_threshold = 3
-cost = 108
+cost = 60
 notes = "Штурм баз и групп (см. §5)."

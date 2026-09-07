@@ -8,6 +8,6 @@ id = "marksman"
 display_name = "Marksman"
 fire_range = inf
 speed = 4
-cost = 90
+cost = 70
 special_ability_id = "marksman"
 notes = "Бесконечная дальность (лазер): число попадания всегда 1 (автопопадание) на прямой линии огня без перекрытий. Цель парирует бронёй как обычно."

@@ -18,7 +18,7 @@ extends RefCounted
 signal active_player_changed(owner: int)
 signal round_started(round_number: int)
 
-## Фиксированный на всю партию порядок инициативы (см. begin_match).
+## Порядок инициативы (см. begin_match).
 ## До броска — просто два игрока, чтобы состояние было валидным ещё до расстановки.
 var round_order: Array[int] = [MCF.Owner.PLAYER_1, MCF.Owner.PLAYER_2]
 ## Позиция в round_order (историческое имя — индекс активного слота).
@@ -26,6 +26,10 @@ var active_index: int = 0
 var round_number: int = 1
 ## Бросок инициативы одноразовый: повторный begin_match ничего не меняет.
 var initiative_rolled: bool = false
+## Выбитые слоты: slot -> true. Слот НЕ вычёркивается из round_order — он
+## остаётся на своём месте и пропускается (§15.4). Иначе из очереди пропадает
+## история партии: по ней не прочесть, кто вообще играл и в каком порядке.
+var eliminated: Dictionary = {}
 
 func active_player() -> int:
 	return round_order[active_index]
@@ -33,17 +37,68 @@ func active_player() -> int:
 ## Бросок инициативы на всю партию — вызывается ОДИН раз, уже после расстановки
 ## юнитов (иначе не видно, есть ли на карте мирные). Бросок идёт через DiceService,
 ## поэтому при заданном зерне порядок воспроизводим и одинаков у хоста и клиента.
-func begin_match(all_units: Array, dice: DiceService) -> void:
+## sides — стороны, участвующие в партии, в порядке их номеров (обычно
+## Roster.player_ids()). Пустой список означает «выведи из юнитов на доске» —
+## так работают старые вызовы и демо-ростер.
+func begin_match(all_units: Array, dice: DiceService, sides: Array = []) -> void:
 	if initiative_rolled:
 		return
 	initiative_rolled = true
-	round_order = [MCF.Owner.PLAYER_1, MCF.Owner.PLAYER_2]
+	round_order = _player_slots(all_units, sides)
 	if _has_living(all_units, MCF.Owner.NEUTRAL):
 		# d6 % 3 даёт равновероятные 0/1/2 — позиция слота мирных в порядке.
+		# Бросок сохранён ровно таким, каким был на двоих: при двух игроках это
+		# те же три расклада, что и раньше, и партия на двоих не сдвинулась.
 		var slot := (dice.roll_d6() if dice != null else 1) % 3
-		round_order.insert(slot, MCF.Owner.NEUTRAL)
+		round_order.insert(mini(slot, round_order.size()), MCF.Owner.NEUTRAL)
 	active_index = _open_round(all_units)
 	active_player_changed.emit(active_player())
+
+## Слоты игроков для начального порядка. Игроки идут строго по номерам: игрок A
+## всегда раньше игрока B — это правило дуэли, и оно просто распространилось на
+## всех остальных, а не заменилось жеребьёвкой.
+func _player_slots(all_units: Array, sides: Array) -> Array[int]:
+	var out: Array[int] = []
+	if not sides.is_empty():
+		for s in sides:
+			if MCF.is_player(int(s)):
+				out.append(int(s))
+		out.sort()
+		if not out.is_empty():
+			return out
+	# Вывод из доски: все игроки, у кого на карте есть хоть один юнит.
+	var seen := {}
+	for u in all_units:
+		if MCF.is_player(u.owner):
+			seen[u.owner] = true
+	var ids: Array = seen.keys()
+	ids.sort()
+	for id in ids:
+		out.append(int(id))
+	if out.is_empty():
+		out = [MCF.Owner.PLAYER_1, MCF.Owner.PLAYER_2]
+	return out
+
+## Вставить новый слот (группу активированных нейтралов, §15.2) в текущий порядок.
+## index — позиция в очереди; она приходит снаружи, потому что тянуть жребий имеет
+## право только тот, кто ведёт запись бросков.
+##
+## Активный слот не должен «съехать» под ногами: вставка ПЕРЕД ним сдвигает
+## active_index, иначе ход посреди действия перескочил бы на соседа.
+func insert_slot(slot_id: int, index: int) -> void:
+	if slot_id in round_order:
+		return
+	var at := clampi(index, 0, round_order.size())
+	round_order.insert(at, slot_id)
+	if at <= active_index:
+		active_index += 1
+
+## Пометить сторону выбитой. Слот остаётся в очереди — серым и пропускаемым.
+func mark_eliminated(slot_id: int) -> void:
+	eliminated[slot_id] = true
+
+func is_eliminated(slot_id: int) -> bool:
+	return eliminated.get(slot_id, false)
 
 ## Человекочитаемый порядок инициативы — для HUD и журнала боя.
 func order_names() -> String:
@@ -51,6 +106,22 @@ func order_names() -> String:
 	for side in round_order:
 		parts.append(MCF.owner_name(side))
 	return " → ".join(parts)
+
+## Слот, играющий по кругу в сторону dir (+1 после, −1 до) от данного, пропуская
+## выбитые (item 20). −1, если очередь пуста или в ней один слот.
+func neighbor_slot(slot: int, dir: int) -> int:
+	var idx := round_order.find(slot)
+	var n := round_order.size()
+	if idx < 0 or n <= 1:
+		return -1
+	var i := idx
+	for _k in n:
+		i = (i + dir + n) % n
+		if i == idx:
+			return -1
+		if not is_eliminated(round_order[i]):
+			return round_order[i]
+	return -1
 
 ## Передать ход следующему ИГРАЮЩЕМУ слоту (пустые слоты пропускаются).
 ## Возвращает true, если круг замкнулся и начался НОВЫЙ раунд — тогда же
@@ -87,7 +158,11 @@ func _next_playable_from(start: int, all_units: Array) -> int:
 	return i
 
 ## Есть ли у стороны хоть один живой юнит — по этому и пропускается слот.
+## Явно выбитая сторона не играет, даже если на доске остался её юнит: выбытием
+## распоряжается тот, кто его объявил (например, сдача или потеря командира).
 func _has_living(all_units: Array, side: int) -> bool:
+	if eliminated.get(side, false):
+		return false
 	for u in all_units:
 		if u.owner == side and u.is_alive():
 			return true
