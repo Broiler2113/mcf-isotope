@@ -1385,6 +1385,10 @@ func _resolve_pickup_corpse(intent: PickUpCorpseIntent) -> ActionResult:
 		return ActionResult.fail(err)
 	if unit.remaining_ap <= 0:
 		return ActionResult.fail("Unit has no AP left")
+	# Щитоносец корпуса не поднимает (item 17): его руки заняты щитом. Труп-щит —
+	# защита для остальных бойцов, но не для того, кто и так укрыт своей плитой.
+	if _is_shield(unit):
+		return ActionResult.fail("A shield-bearer can't carry corpses")
 	if unit.carried_corpses >= MCF.CORPSE_CARRY_MAX:
 		return ActionResult.fail("Hands full — %d bodies is the limit" % MCF.CORPSE_CARRY_MAX)
 	if Combat.distance(unit.coord, intent.from) > 1:
@@ -1519,7 +1523,10 @@ func cover_effect_from(from_coord: Vector2i, target: UnitInstance) -> Dictionary
 ## разрыва: луч прямой, на повороте окопа он воткнётся в грунт.
 func trench_protected(from_coord: Vector2i, target: UnitInstance,
 		flat_beam: bool = false) -> bool:
-	var target_in_trench := state.grid.cell(target.coord).feature_id == MCF.FEATURE_TRENCH
+	var tcell := state.grid.cell(target.coord)
+	if tcell == null:
+		return false  # цель вне поля (в машине и т. п.) — окоп её не касается (#23)
+	var target_in_trench := tcell.feature_id == MCF.FEATURE_TRENCH
 	if not flat_beam:
 		# Пуля летит по дуге: сверху в яму её направить можно, но только вплотную.
 		return target_in_trench and Combat.distance(from_coord, target.coord) > 1
@@ -3771,7 +3778,8 @@ func draggable_cells(actor: UnitInstance) -> Array:
 func corpse_pickup_cells(actor: UnitInstance) -> Array:
 	var out: Array = []
 	if actor == null or actor.remaining_ap <= 0 \
-			or actor.carried_corpses >= MCF.CORPSE_CARRY_MAX:
+			or actor.carried_corpses >= MCF.CORPSE_CARRY_MAX \
+			or _is_shield(actor):  # щитоносец трупы не носит (item 17)
 		return out
 	if has_corpse(actor.coord):
 		out.append(actor.coord)
@@ -4383,6 +4391,13 @@ func can_shoot(shooter: UnitInstance, target: UnitInstance) -> String:
 		return "No target"
 	if target.id == shooter.id:
 		return "Can't shoot yourself"
+	# Боец В МАШИНЕ целью быть не может (#23): его координата — OFFBOARD (-9999,-9999),
+	# и она вне поля. is_on_firing_line() отвечает на неё «да» (по диагонали от почти
+	# любой клетки), после чего trench_protected() дёргает cell(OFFBOARD).feature_id на
+	# null — отсюда «feature_id on Nil» при нажатии «Стрельба», а los_blocked() за ним
+	# уходит шагать десять тысяч клеток к краю мира. Отсекаем такие цели сразу.
+	if target.aboard_vehicle_id != -1 or not state.grid.in_bounds(target.coord):
+		return "Target unavailable"
 	# Дружественный огонь (#100): по своим стрелять МОЖНО — оружие не разбирает форму.
 	# Выключенный в лобби, он запрещает и прицел в союзника (§7 «Лобби»).
 	if not friendly_fire_enabled and is_ally_of(shooter, target):
@@ -4438,6 +4453,9 @@ func shootable_target_ids(shooter: UnitInstance) -> Array:
 	for u in state.all_units():
 		if u.id == sid or not u.is_alive():
 			continue
+		# Бойцы в машине (coord = OFFBOARD) на поле не стоят — целями не считаются (#23).
+		if u.aboard_vehicle_id != -1 or not state.grid.in_bounds(u.coord):
+			continue
 		if not Combat.is_on_firing_line(from, u.coord):
 			continue
 		if can_shoot(shooter, u) == "":
@@ -4456,6 +4474,8 @@ func hostile_target_ids(shooter: UnitInstance) -> Array:
 	var sid: int = shooter.id
 	for u in state.all_units():
 		if u.owner == sowner or u.id == sid or not u.is_alive():
+			continue
+		if u.aboard_vehicle_id != -1 or not state.grid.in_bounds(u.coord):
 			continue
 		if not Combat.is_on_firing_line(from, u.coord):
 			continue

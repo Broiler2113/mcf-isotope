@@ -2143,6 +2143,11 @@ func _dice_steps(ev: Dictionary) -> Array:
 			var hit_faces: Array = []
 			var pen_faces: Array = []
 			for det in ev["shots"]:
+				# Пуля, застрявшая в стекле, до броска на попадание не дошла (#29):
+				# её hit_roll — служебный 0, и рисовать его кубиком нельзя (item 2:
+				# «нельзя выкинуть 0»). Факт застревания уже виден в журнале.
+				if det.get("stopped_by_glass", false):
+					continue
 				hit_faces.append(
 					{"value": det["hit_roll"], "good": det["hit"], "tag": "Hit %d+" % det["need"]})
 				if det["hit"]:

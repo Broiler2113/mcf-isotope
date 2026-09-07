@@ -59,20 +59,13 @@ func _ready() -> void:
 	vbox.add_theme_constant_override("separation", 12)
 	margin.add_child(vbox)
 
-	# Заголовок с эмблемой (item 35): logo.png лежит в комплекте, но до сих пор нигде
-	# не показывался. Если файла нет — остаётся только надпись, как и было.
+	# Заголовок без эмблемы (item 1): logo.png — это логотип Crazy Ball Runner 2D,
+	# оставшийся от донора интерфейса; на главном меню MCF ему не место. Оставляем
+	# только надпись.
 	var title_row := HBoxContainer.new()
 	title_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	title_row.add_theme_constant_override("separation", 12)
 	vbox.add_child(title_row)
-	var logo := _logo_texture()
-	if logo != null:
-		var badge := TextureRect.new()
-		badge.texture = logo
-		badge.custom_minimum_size = Vector2(56, 56)
-		badge.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		badge.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		title_row.add_child(badge)
 	var title := Label.new()
 	title.text = "MCF Tactics"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -369,15 +362,6 @@ func _menu_button(text: String, handler: Callable) -> Button:
 	btn.add_theme_font_size_override("font_size", 18)
 	btn.pressed.connect(handler)
 	return btn
-
-## Эмблема из комплекта. Грузится как обычный файл, а не как ресурс, — той же
-## дорогой, что и остальные заменяемые картинки интерфейса (#55): подменил png —
-## видно со следующего запуска.
-func _logo_texture() -> Texture2D:
-	const PATH := "res://interface_textures/logo.png"
-	if not ResourceLoader.exists(PATH):
-		return null
-	return load(PATH) as Texture2D
 
 func _refresh_saves() -> void:
 	_saves_list.clear()

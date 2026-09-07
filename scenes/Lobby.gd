@@ -222,7 +222,14 @@ func _build_config(parent: VBoxContainer) -> void:
 	if _is_client:
 		for c in [_max_spin, _place_opt, _fog_opt, _army_opt, _mode_opt,
 				_ff_check, _live_check, _events_check, _events_mand, _events_interval]:
-			(c as Control).disabled = true if c is Button else false
+			# У кнопок (в т. ч. OptionButton/CheckBox — все наследники BaseButton) есть
+			# .disabled; у SpinBox её нет, он глохнет через .editable. Присваивать
+			# .disabled всем подряд нельзя (item 18): на SpinBox это роняло клиента с
+			# «Invalid assignment of property 'disabled' … on SpinBox» при входе в лобби.
+			if c is BaseButton:
+				(c as BaseButton).disabled = true
+			elif c is SpinBox:
+				(c as SpinBox).editable = false
 			(c as Control).mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 func _opt(items: Array, selected: int) -> OptionButton:
