@@ -247,6 +247,9 @@ var _replay_bar: PanelContainer = null
 var _replay_label: Label = null
 var _replay_play_btn: Button = null
 var _replay_speed_btn: Button = null
+## Таймлайн перемотки записи (item 7) и флаг «обновляем программно, не сейкаем».
+var _replay_slider: HSlider = null
+var _replay_slider_syncing: bool = false
 var _save_btn: Button = null
 ## Пауза между действиями при автопроигрывании — делится на выбранную скорость.
 const REPLAY_STEP_DELAY := 0.5
@@ -646,6 +649,12 @@ func _refresh_replay_bar() -> void:
 	_replay_label.text = replay.position_text()
 	_replay_play_btn.text = "❚❚" if _replay_playing else "▶"
 	_replay_speed_btn.text = "%dx" % int(_replay_speed)
+	# Таймлайн (item 7) отражает позицию, не вызывая seek: обновляем под флагом.
+	if _replay_slider != null:
+		_replay_slider_syncing = true
+		_replay_slider.max_value = maxi(1, replay.step_count())
+		_replay_slider.value = clampi(replay.index, 0, replay.step_count())
+		_replay_slider_syncing = false
 
 ## Перенести выбор экрана подготовки (кто машина, какая сложность) в ростер.
 ## Ростер, пришедший из лобби, уже всё это знает — тогда эта синхронизация просто
@@ -3505,9 +3514,27 @@ func _build_replay_bar() -> void:
 	_replay_label.custom_minimum_size = Vector2(180, 0)
 	_replay_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(_replay_label)
+	# Таймлайн (item 7): тянешь ползунок — прыгаешь в любую точку записи, минуя всё
+	# между. Перемотка идёт через seek(), тем же путём, что и кнопки шага.
+	var slider_wrap := HBoxContainer.new()
+	frame.add_child(SteamChrome.pad(slider_wrap, 12, 4))
+	_replay_slider = HSlider.new()
+	_replay_slider.min_value = 0
+	_replay_slider.step = 1
+	_replay_slider.custom_minimum_size = Vector2(360, 18)
+	_replay_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_replay_slider.value_changed.connect(_on_replay_slider)
+	slider_wrap.add_child(_replay_slider)
 	_replay_bar = panel
 	_ui_layer.add_child(_replay_bar)
 	_refresh_replay_bar()
+
+## Игрок потянул таймлайн (item 7). Программные обновления ползунка идут с поднятым
+## флагом, чтобы не спутать их с ручной перемоткой и не зациклить seek.
+func _on_replay_slider(value: float) -> void:
+	if _replay_slider_syncing or replay == null:
+		return
+	_replay_seek(int(round(value)))
 
 func _replay_btn(text: String, handler: Callable) -> Button:
 	var b := Button.new()
