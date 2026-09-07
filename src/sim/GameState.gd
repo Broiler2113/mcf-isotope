@@ -111,6 +111,7 @@ func snapshot() -> Dictionary:
 			"is_drone": u.is_drone, "home_station": u.home_station,
 			"operator_id": u.operator_id, "wall_entry_from": u.wall_entry_from,
 				"civilian_active": u.civilian_active,
+			"neutral_group": u.neutral_group,
 			"carried_this_round": u.carried_this_round,
 			"aboard_vehicle_id": u.aboard_vehicle_id, "dig_credits": u.dig_credits,
 			"ldf_wall_used": u.ldf_wall_used, "move_credit": u.move_credit,
@@ -169,6 +170,7 @@ func restore(snap: Dictionary) -> void:
 		u.operator_id = rec["operator_id"]
 		u.wall_entry_from = rec["wall_entry_from"]
 		u.civilian_active = rec["civilian_active"]
+		u.neutral_group = rec.get("neutral_group", 0)
 		u.carried_this_round = rec["carried_this_round"]
 		u.aboard_vehicle_id = rec["aboard_vehicle_id"]
 		u.dig_credits = rec["dig_credits"]

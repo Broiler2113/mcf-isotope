@@ -315,6 +315,11 @@ func _candidates(state: GameState, r: GameActionResolver, u: UnitInstance) -> Ar
 			out.append(d)
 		return out
 
+	# Нейтрал (§3/§4 «Нейтралы») живёт по своему строгому порядку: сперва ВЫЖИВАНИЕ,
+	# и лишь когда оно закрыто/недоступно/снято численным перевесом — УРОН.
+	if MCF.is_neutral(owner):
+		return _neutral_candidates(state, r, u)
+
 	var shoot := _best_shoot(state, r, u)
 	if not shoot.is_empty():
 		out.append(shoot)
@@ -357,6 +362,156 @@ func _candidates(state: GameState, r: GameActionResolver, u: UnitInstance) -> Ar
 		if not mv.is_empty():
 			out.append(mv)
 	return out
+
+# --- Нейтралы: строгий порядок «выживание → урон» (§4 «Нейтралы») ---
+
+## Ход нейтрала (§4). Приоритет 1 (выживание) всегда выше приоритета 2 (урон): пока
+## выживание даёт осмысленное действие, урон даже не рассматривается. Численный перевес
+## 1.75× (§4.2) снимает выживание целиком — тогда нейтрал сразу идёт бить.
+func _neutral_candidates(state: GameState, r: GameActionResolver, u: UnitInstance) -> Array:
+	var out: Array = []
+	var surv := _neutral_survival(state, r, u)
+	if not surv.is_empty():
+		out.append(surv)
+		return out  # выживание закрывает ход — урон рассматриваем, только когда оно исчерпано
+	# Приоритет 2 (§4.3): бьём как армия, но цель — самая дорогая (вес цены в _unit_value).
+	var shoot := _best_shoot(state, r, u)
+	if not shoot.is_empty():
+		out.append(shoot)
+	var veh_shot := _best_vehicle_shot(state, r, u)
+	if not veh_shot.is_empty():
+		out.append(veh_shot)
+	var drop := _best_corpse_drop(state, r, u)
+	if not drop.is_empty():
+		out.append(drop)
+	if u.remaining_ap > 0 or u.move_credit > 0:
+		var mv := _best_move(state, r, u)
+		if not mv.is_empty():
+			out.append(mv)
+	return out
+
+## Приоритет 1 (§4.1). Первое применимое действие в строгом порядке:
+##   • труп в руках «успокаивает» — выживание на этот ход закрыто (§4.1c);
+##   • (в) соседний труп берём при ПЕРВОЙ возможности, вне очереди с (а)/(б);
+##   • (а) сойти со створа стрелка;
+##   • (б) иначе — к ближайшему укрытию (любой cover_height > 0, куски < 2 м тоже);
+##   • (г) иначе — отступить прямо от угрозы.
+## Пусто — выживание нечем удовлетворить (или уже удовлетворено): пора за урон (§4.3).
+func _neutral_survival(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
+	# §4.2: численный перевес 1.75× снимает ВСЁ выживание — нейтрал сразу идёт за урон.
+	if _neutral_outnumbers(state, r, u):
+		return {}
+	if u.carried_corpses > 0:
+		return {}
+	for n: Vector2i in state.grid.neighbors(u.coord):
+		if r.has_corpse(n):
+			return {"score": SCORE_CORPSE_BASE, "intent": PickUpCorpseIntent.new(u.id, n)}
+	if u.remaining_ap <= 0 and u.move_credit <= 0:
+		return {}
+	var soldiers := _neutral_soldiers(state)
+	if soldiers.is_empty():
+		return {}
+	var reach := Movement.reachable_for(state.grid, u, _move_budget(u))
+	if _on_any_lane(r, soldiers, u.coord):
+		var off := _neutral_off_lane(r, soldiers, reach, u)
+		if not off.is_empty():
+			return off
+	var cover := _neutral_to_cover(state, reach, u)
+	if not cover.is_empty():
+		return cover
+	return _neutral_retreat(soldiers, reach, u)
+
+## Солдаты-угрозы для нейтрала — только живые бойцы ИГРОКОВ (§4.1). Дрон и другой
+## нейтрал сюда не идут: створ строят люди, а своих нейтралы не боятся.
+func _neutral_soldiers(state: GameState) -> Array:
+	var out: Array = []
+	for o: UnitInstance in state.all_units():
+		if CivilianAI.is_soldier(o):
+			out.append(o)
+	return out
+
+## Стоит ли клетка coord на чьём-то створе (§4.1a): луч солдата признаётся
+## Combat.is_on_firing_line, и линия до клетки не перекрыта стеной/корпусом. Юниты
+## сквозь себя створ не рвут (ignore_units), иначе «безопасная» клетка зависела бы от
+## того, кто где стоит в эту секунду.
+func _on_any_lane(r: GameActionResolver, soldiers: Array, coord: Vector2i) -> bool:
+	for s: UnitInstance in soldiers:
+		if Combat.is_on_firing_line(s.coord, coord) \
+				and not r.los_blocked(s.coord, coord, true, true):
+			return true
+	return false
+
+## Ближайшая (наименьшая трата скорости) достижимая клетка ВНЕ всех створов (§4.1a).
+func _neutral_off_lane(r: GameActionResolver, soldiers: Array,
+		reach: Movement.Reachability, u: UnitInstance) -> Dictionary:
+	var best: Dictionary = {}
+	var best_cost := 1 << 30
+	for c: Vector2i in reach.cost:
+		if c == u.coord or _on_any_lane(r, soldiers, c):
+			continue
+		var cost: int = reach.cost[c]
+		if cost < best_cost:
+			best_cost = cost
+			best = {"score": SCORE_MOVE_BASE + 24.0, "intent": MoveIntent.new(u.id, c)}
+	return best
+
+## Ближайшее достижимое укрытие (§4.1b): любая клетка с cover_height > 0, куда встать.
+func _neutral_to_cover(state: GameState, reach: Movement.Reachability,
+		u: UnitInstance) -> Dictionary:
+	var best: Dictionary = {}
+	var best_cost := 1 << 30
+	for c: Vector2i in reach.cost:
+		if c == u.coord:
+			continue
+		var cell := state.grid.cell(c)
+		if cell == null or cell.cover_height <= 0.0:
+			continue
+		var cost: int = reach.cost[c]
+		if cost < best_cost:
+			best_cost = cost
+			best = {"score": SCORE_MOVE_BASE + 16.0, "intent": MoveIntent.new(u.id, c)}
+	return best
+
+## Отступление прямо от угрозы (§4.1d): достижимая клетка дальше всего от ближайшего
+## солдата. Ничего не даёт (уже некуда отходить) — пусто, и нейтрал берётся за урон.
+func _neutral_retreat(soldiers: Array, reach: Movement.Reachability,
+		u: UnitInstance) -> Dictionary:
+	var here := _nearest_soldier_dist(soldiers, u.coord)
+	var best: Dictionary = {}
+	var best_gain := 0
+	for c: Vector2i in reach.cost:
+		if c == u.coord:
+			continue
+		var gain := _nearest_soldier_dist(soldiers, c) - here
+		if gain > best_gain:
+			best_gain = gain
+			best = {"score": SCORE_MOVE_BASE + 8.0, "intent": MoveIntent.new(u.id, c)}
+	return best
+
+func _nearest_soldier_dist(soldiers: Array, coord: Vector2i) -> int:
+	var best := 1 << 30
+	for s: UnitInstance in soldiers:
+		best = mini(best, Combat.distance(coord, s.coord))
+	return best
+
+## §4.2: выживание снимается ТОЛЬКО когда видимых нейтралов ≥ 1.75× видимых солдат.
+## «Видимых этому нейтралу» — по чистой линии взгляда (стену считаем, тела — нет). Сам
+## нейтрал в свой счёт входит.
+func _neutral_outnumbers(state: GameState, r: GameActionResolver, u: UnitInstance) -> bool:
+	var neutrals := 0
+	var soldiers := 0
+	for o: UnitInstance in state.all_units():
+		if not o.is_alive():
+			continue
+		if o.id != u.id and r.los_blocked(u.coord, o.coord, true, true):
+			continue
+		if CivilianAI.is_npc(o):
+			neutrals += 1
+		elif CivilianAI.is_soldier(o):
+			soldiers += 1
+	if soldiers == 0:
+		return neutrals > 0
+	return float(neutrals) >= 1.75 * float(soldiers)
 
 ## Запас клеток, который боец может пройти ПРЯМО СЕЙЧАС (§3.2, #103). Недоеденный
 ## кредит прошлого движения тратится ПЕРВЫМ и без ОД — точно так же считает резолвер
@@ -493,6 +648,11 @@ func _unit_value(u: UnitInstance) -> float:
 	match u.stats.special_ability_id:
 		MCF.ABILITY_SNIPER, MCF.ABILITY_MARKSMAN, MCF.ABILITY_ANTI_TANK:
 			v += 3.0
+	# Нейтрал при прочих равных бьёт по самому ДОРОГОМУ (§4.3). Цена цели весит у него
+	# заметно сильнее, чем у обычной армии, — поэтому разрыв ценностей между дорогой и
+	# дешёвой целью у нейтрала шире, и выбор смещается к дорогой явнее.
+	if MCF.is_neutral(owner):
+		v += float(u.stats.cost) * 0.1
 	return v
 
 ## Сколько врагов ещё живо — по этому числу инвалидируется геополе (#52), поэтому

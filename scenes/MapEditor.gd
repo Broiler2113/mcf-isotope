@@ -46,6 +46,15 @@ var zone_brush_owner: int = MCF.Owner.PLAYER_1
 ## Псевдо-владелец кисти: «тот игрок, что выбран в списке сторон».
 const ZONE_SELECTED_PLAYER := -2
 var _zone_player_opt: OptionButton
+## Выбранный в списке тип нейтрального юнита для кисти «spawn_neutral» (item 5).
+var _neutral_unit_opt: OptionButton
+## Типы юнитов, которых можно поставить нейтралом прямо на карту (item 5): любая
+## существующая пехота. Порядок фиксирован — по нему список и id.
+const NEUTRAL_UNIT_IDS := [
+	"civilian", "light_infantry", "heavy_infantry", "assault", "machinegunner",
+	"sniper", "marksman", "anti_tank", "flamethrower", "shield_bearer",
+	"engineer", "miner", "sapper", "commander", "drone_operator",
+]
 
 var tool: int = Tool.PAINT
 ## Начало/текущая клетка перетаскивания для линии/прямоугольника (-1 = нет).
@@ -180,6 +189,15 @@ func _apply_brush(coord: Vector2i) -> void:
 		"zone":
 			# Кисть зоны развёртывания (#52): красим владельца региона, не трогая рельеф.
 			map.set_zone(coord, zone_brush_owner)
+		"spawn_neutral":
+			# Нейтральный юнит (item 5): ставим на пол выбранный тип с owner == NEUTRAL.
+			# Один спавн на клетку — сперва снимаем прежний, если он тут был.
+			var uid: String = str(NEUTRAL_UNIT_IDS[_neutral_unit_opt.get_selected_id()]) \
+					if _neutral_unit_opt != null else "civilian"
+			map.set_cell(coord, MCF.FLOOR_NORMAL if map.get_space(coord) else map.get_floor(coord),
+					map.get_cover(coord), false, map.get_feature(coord))
+			map.clear_spawn_at(coord)
+			map.set_spawn(coord, uid, MCF.Owner.NEUTRAL)
 		_:
 			# Кисть-объект: под укрытием подразумевается пол, поэтому снимаем космос.
 			var h: float = MCF.FEATURE_HEIGHT.get(brush, 0.0)
@@ -419,12 +437,33 @@ func _build_ui() -> void:
 	_zone_player_opt.select(0)
 	_zone_player_opt.item_selected.connect(_on_zone_player_selected)
 	zone_row.add_child(_zone_player_opt)
-	for pair in [[ZONE_SELECTED_PLAYER, "Zone Player"],
-			[MCF.Owner.NEUTRAL, "Zone Neut."], [-1, "No Zone"]]:
+	# «Zone Neut.» убрана (item 5): нейтралов теперь ставят поштучно, как юнитов, а не
+	# заливают зоной. Осталась только зона РАЗВЁРТЫВАНИЯ игроков.
+	for pair in [[ZONE_SELECTED_PLAYER, "Zone Player"], [-1, "No Zone"]]:
 		var zb := Button.new()
 		zb.text = pair[1]
 		zb.pressed.connect(_set_zone_brush.bind(pair[0], pair[1]))
 		zone_row.add_child(zb)
+
+	vbox.add_child(HSeparator.new())
+
+	# Нейтральные юниты (item 5): выбрать тип и ставить его на карту как нейтрала. Юнит
+	# уходит в map.spawns с owner == NEUTRAL и на старте боя попадает под нейтральный ИИ.
+	var nu_lbl := Label.new()
+	nu_lbl.text = "Neutral Unit:"
+	nu_lbl.add_theme_font_size_override("font_size", 13)
+	vbox.add_child(nu_lbl)
+	var nu_row := HBoxContainer.new()
+	vbox.add_child(nu_row)
+	_neutral_unit_opt = OptionButton.new()
+	for i in NEUTRAL_UNIT_IDS.size():
+		_neutral_unit_opt.add_item(str(NEUTRAL_UNIT_IDS[i]), i)
+	_neutral_unit_opt.select(0)
+	nu_row.add_child(_neutral_unit_opt)
+	var place_btn := Button.new()
+	place_btn.text = "Place Neutral"
+	place_btn.pressed.connect(_set_brush.bind("spawn_neutral", "Neutral Unit"))
+	nu_row.add_child(place_btn)
 
 	vbox.add_child(HSeparator.new())
 

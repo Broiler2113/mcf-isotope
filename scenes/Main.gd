@@ -144,6 +144,14 @@ const AI_STEP_DELAY := 0.12
 ## Пауза между клетками пешего перехода (#96) — по ней видно, КУДА идёт житель.
 const WALK_STEP_DELAY := 0.07
 
+## Item 32: ход нейтралов раньше тянулся так же медленно, как ход игрока. Их слот
+## отыгрывается с ускоренным шагом — заметно быстрее базовой скорости. (Когда появится
+## меню настроек из item 24, эти значения станут настраиваемыми; пока — быстрые дефолты.)
+const NEUTRAL_WALK_STEP_DELAY := 0.028
+const NEUTRAL_AP_DOT_DELAY := 0.07
+## Идёт отыгрыш нейтрального слота — берём ускоренные паузы выше.
+var _fast_playback: bool = false
+
 ## Предохранитель от зависшего хода ИИ (#60): столько подряд отклонённых намерений
 ## терпим, прежде чем сдать ход за него принудительно.
 const AI_MAX_DENIED := 12
@@ -333,7 +341,9 @@ func _play_civilian_result(res: ActionResult) -> void:
 		for id: int in res.deaths:
 			_pending_death_ids[id] = true
 		queue_redraw()
+		_fast_playback = true  # item 32: нейтральный слот идёт ускоренно
 		await _play_dice(res.dice_events)
+		_fast_playback = false
 		_pending_death_ids.clear()
 		queue_redraw()
 	state.log.publish_result(res)
@@ -1775,8 +1785,17 @@ func _play_dice(events: Array) -> void:
 	for ev in events:
 		if ev.get("kind", "") == "ap" and not _ap_display.has(int(ev["unit"])):
 			_ap_display[int(ev["unit"])] = int(ev["from"])
+	# Item 23: hold идёт первым и СНИМАЕТ всех будущих ходоков в их стартовые клетки,
+	# чтобы во время анимации никто не «стоял уже в конце». Состояние менять не надо —
+	# только рисуемую позицию (_walk_cells), поэтому рассинхрона тут быть не может.
+	for ev in events:
+		if ev.get("kind", "") == "hold":
+			for id in ev["units"]:
+				_walk_cells[int(id)] = ev["units"][id]
 	queue_redraw()  # (состояние уже применено; кадр обновится после анимации)
 	for ev in events:
+		if ev.get("kind", "") == "hold":
+			continue
 		if ev.get("kind", "") == "focus":
 			# Слот мирных отыгрывается сам и где угодно на карте (#103): если очередной
 			# житель за краем экрана, подводим к нему камеру — иначе игрок смотрит на
@@ -1789,7 +1808,8 @@ func _play_dice(events: Array) -> void:
 		if ev.get("kind", "") == "ap":
 			_ap_display[int(ev["unit"])] = int(ev["left"])
 			queue_redraw()
-			await get_tree().create_timer(AP_DOT_DELAY).timeout
+			await get_tree().create_timer(
+					NEUTRAL_AP_DOT_DELAY if _fast_playback else AP_DOT_DELAY).timeout
 			continue
 		for step in _dice_steps(ev):
 			# Ручной бросок ждёт нажатия только у защитника-человека; мирные (NEUTRAL)
@@ -1808,8 +1828,9 @@ func _play_walk(ev: Dictionary) -> void:
 	var id := int(ev["unit"])
 	_walk_cells[id] = ev["from"]
 	queue_redraw()
+	var step_delay := NEUTRAL_WALK_STEP_DELAY if _fast_playback else WALK_STEP_DELAY
 	for cell: Vector2i in ev["path"]:
-		await get_tree().create_timer(WALK_STEP_DELAY).timeout
+		await get_tree().create_timer(step_delay).timeout
 		_walk_cells[id] = cell
 		queue_redraw()
 	_walk_cells.erase(id)
@@ -2586,8 +2607,12 @@ func _draw() -> void:
 		if unit.id == selected_id:
 			draw_arc(center, CELL * 0.42, 0, TAU, 32, Color(1, 0.9, 0.2), 3.0)
 		# Вскрытый мирный житель охотится — красное кольцо тревоги (§3.10, #56).
-		if unit.owner == MCF.Owner.NEUTRAL and unit.civilian_active:
+		if CivilianAI.is_npc(unit) and unit.civilian_active:
 			draw_arc(center, CELL * 0.45, 0, TAU, 22, Color(0.85, 0.15, 0.15, 0.95), 2.0)
+		# Бейдж активационной группы (item 15): чёрный квадратик с римской цифрой в
+		# правом-нижнем углу — по нему видно, что инициатива изменилась.
+		if unit.neutral_group > 0:
+			_draw_group_badge(_cell_origin(at), unit.neutral_group, font)
 		# Кольцо принадлежности к RTS-группе (#18).
 		if _group_ids.has(unit.id):
 			draw_arc(center, CELL * 0.46, 0, TAU, 32, Color(0.4, 1.0, 0.5), 2.5)
@@ -2734,6 +2759,16 @@ func _draw_corpse_marker(at: Vector2, count: int, font: Font) -> void:
 	if count > 1:
 		draw_string(font, at + Vector2(7, 4), str(count),
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1, 0.9, 0.9))
+
+## Бейдж активационной группы нейтралов (item 15): маленький чёрный квадрат с римской
+## цифрой в правом-нижнем углу клетки юнита.
+func _draw_group_badge(cell_origin: Vector2, group: int, font: Font) -> void:
+	var sz := CELL * 0.34
+	var pos := cell_origin + Vector2(CELL - sz - 2.0, CELL - sz - 2.0)
+	draw_rect(Rect2(pos, Vector2(sz, sz)), Color(0.05, 0.05, 0.05, 0.92))
+	draw_rect(Rect2(pos, Vector2(sz, sz)), Color(0.9, 0.9, 0.9, 0.75), false, 1.0)
+	draw_string(font, pos + Vector2(2.0, sz - 3.0), MCF.roman(group),
+		HORIZONTAL_ALIGNMENT_CENTER, sz - 3.0, 11, Color(1, 1, 1))
 
 func _draw_pixel_bang(top_left: Vector2) -> void:
 	# Пиксель-арт восклицательного знака: столбик + точка. p = размер «пикселя».

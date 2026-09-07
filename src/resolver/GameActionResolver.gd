@@ -99,6 +99,12 @@ func resolve(intent: Intent) -> ActionResult:
 	var undoable := top and _undoable_side(state.active_player())
 	var pre_snap: Dictionary = state.snapshot() if undoable else {}
 	var result := _dispatch(intent)
+	# Действие могло вскрыть квартал (§3 «Нейтралы»): соседняя клетка сменила состояние
+	# или в чей-то обзор вошёл солдат. Каскад и сбор группы идут ВНУТРИ resolve(), пока
+	# открыт поток записи кубиков, — иначе жребий места в очереди рассинхронил бы стороны.
+	# Только на верхнем уровне: под-resolve хода жителей (depth>1) кварталов не будит.
+	if top and result.ok:
+		_wake_and_group(result)
 	_resolve_depth -= 1
 	if top and result.ok:
 		# Новое действие обрывает откатанную ветку — повторять больше нечего (#38).
@@ -721,6 +727,8 @@ func _blast(center: Vector2i, res: ActionResult = null, cells: Array[Vector2i] =
 
 	# Взрыв сносит укрепления в зоне: стены, стекло, шлюзы, ЛДФ, деревянные и
 	# трупные стены, станции дронов и ДПМГ (§3.6/§3.7/§3.12). ДОТ устойчив (#17).
+	# Сам взрыв — повод активации нейтралов вокруг эпицентра (§3.1a).
+	notify_cell_changed(center)
 	for c: Vector2i in area:
 		_blast_destroy_terrain(c, res, center)
 	# Побитый пол по ВСЕЙ зоне, эпицентр — отдельной текстурой (#21.1).
@@ -777,6 +785,7 @@ func _blast_destroy_terrain(c: Vector2i, res: ActionResult = null,
 			_fx(res, {"fx": "shards", "at": c,
 				"from": from_coord if from_coord != NOWHERE else c})
 		cell.clear_feature()
+		notify_cell_changed(c)  # снесённое укрепление будит соседей квартала (§3.1a)
 		# Стену из трупов взрыв не стирает, а вскрывает (#98): пять тел вылетают из неё
 		# и падают порознь вокруг. Разлёт идёт ПОСЛЕ clear_feature — иначе одно из тел
 		# могло бы лечь на клетку, которую та же зачистка тут же и опустошит.
@@ -861,6 +870,8 @@ func _flame_walk(origin: Vector2i, dir: Vector2i, count: int, killed_names: Arra
 func _ignite(cell: GridCell, owner: int) -> void:
 	cell.on_fire = true
 	cell.fire_owner = owner
+	# Появление огня — повод активации соседних нейтралов (§3.1a).
+	notify_cell_changed(cell.coord)
 
 ## Сбить пламя с клетки. Любая работа по клетке — стройка, окоп, поставленный на неё
 ## объект — тушит огонь: землю перекапывают, а укрепление придавливает очаг (#82).
@@ -1693,6 +1704,7 @@ func _resolve_build(intent: BuildIntent) -> ActionResult:
 	actor.remaining_ap -= cost
 	var placed: String = stacked if stacked != "" else intent.feature_id
 	cell.set_feature(placed, actor.owner)
+	notify_cell_changed(intent.target)  # застроенная клетка будит соседей (§3.1a)
 	_extinguish_cell(cell)  # стройка на горящей клетке гасит огонь (#82)
 	return ActionResult.success(["%s builds: %s at (%d, %d) [AP: %d]" % [
 		actor.stats.display_name, MCF.FEATURE_NAMES.get(placed, placed),
@@ -1782,6 +1794,7 @@ func _resolve_build_wall(intent: BuildWallIntent) -> ActionResult:
 	for c: Vector2i in intent.cells:
 		var bru_cell := state.grid.cell(c)
 		bru_cell.set_feature(MCF.FEATURE_LDF, actor.owner)
+		notify_cell_changed(c)  # секция стены будит соседей (§3.1a)
 		_extinguish_cell(bru_cell)  # секция придавливает очаг (#82)
 	return ActionResult.success(["%s raises a %d-tile LDF wall [AP: %d]" % [
 		actor.stats.display_name, MCF.LDF_WALL_LENGTH, actor.remaining_ap]])
@@ -1889,6 +1902,7 @@ func _resolve_dig(intent: DigIntent) -> ActionResult:
 	actor.dig_credits -= 1
 
 	cell.set_feature(MCF.FEATURE_TRENCH, actor.owner)
+	notify_cell_changed(intent.target)  # свежий окоп будит соседей (§3.1a)
 	# Копка снимает горящий верхний слой — окоп гасит огонь на своей клетке, а
 	# вынутая земля засыпает очаги там, куда её сложили (#82).
 	_extinguish_cell(cell)
@@ -2678,18 +2692,143 @@ func _living_soldiers() -> Array:
 			out.append(u)
 	return out
 
-## Вскрытие жителя (§3.10, #56): защёлкивается, если где-то начался бой ЛИБО житель
-## сам видит солдата по чистой линии огня. Обратно уже не снимается.
+## Кандидаты на пробуждение (§3 «Нейтралы»): id спящих нейтралов, к которым подобрался
+## повод активации — соседняя клетка сменила состояние или в поле зрения вошёл солдат.
+## Копятся между действиями и разбираются каскадом в _wake_and_group на верхнем уровне
+## resolve(); пустой список — обычное состояние, обходится в один if.
+var _activation_frontier: Array[int] = []
+
+## Видит ли нейтрал солдата (§3.1b). «Видит» = по ЧИСТОЙ прямой линии взгляда: клетки
+## коллинеарны (Combat.is_on_firing_line) и между ними нет стены/корпуса; стекло не
+## преграда (item 29). Косой, не по лучу, взгляд «видимостью» не считается — иначе, раз
+## los_blocked для непрямой линии отвечает «не перекрыто», нейтрал будил бы всех подряд
+## через все стены. Это тот же примитив зрения, что был и раньше, только строже описан.
+func _civ_sees_soldier(civ: UnitInstance) -> bool:
+	for s: UnitInstance in _living_soldiers():
+		if Combat.is_on_firing_line(civ.coord, s.coord) \
+				and not los_blocked(civ.coord, s.coord, true, false, true):
+			return true
+	return false
+
+## Вскрытие жителя (§3, item 3): пробуждается, если сам видит солдата (см. _civ_sees_soldier).
+## Общий бой БОЛЬШЕ не будит всех разом — повод строго локальный: соседняя клетка сменила
+## состояние (notify_cell_changed) ЛИБО солдат вошёл в обзор (здесь). Обратно вскрытие не
+## снимается. Ещё не сгруппированного заносим во фронт — _wake_and_group соберёт группу.
 func _update_breached(civ: UnitInstance) -> void:
 	if civ.civilian_active:
 		return
-	if state.combat_started:
+	if _civ_sees_soldier(civ):
 		civ.civilian_active = true
+		if civ.neutral_group == 0 and not _activation_frontier.has(civ.id):
+			_activation_frontier.append(civ.id)
+
+## Повод активации (§3.1a): соседняя клетка сменила состояние — разрушена, застроена,
+## открылся шлюз, взрыв или огонь. Спящие НЕ сгруппированные нейтралы вокруг встают во
+## фронт пробуждения; его разбирает _wake_and_group на верхнем уровне resolve(). Зовётся
+## из путей записи резолвера (_ignite, снос рельефа взрывом, стройка, окоп, открытие шлюза).
+func notify_cell_changed(coord: Vector2i) -> void:
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			if dx == 0 and dy == 0:
+				continue
+			var c := Vector2i(coord.x + dx, coord.y + dy)
+			if not state.grid.in_bounds(c):
+				continue
+			var u := state.grid.cell(c).occupant
+			if u != null and _is_civilian(u) and u.is_alive() and u.neutral_group == 0 \
+					and not _activation_frontier.has(u.id):
+				_activation_frontier.append(u.id)
+
+## Разлить пробуждение по СОСЕДСТВУ от одного семени (§3.2): волна идёт через спящих ещё
+## не сгруппированных нейтралов, пока связный кластер не замкнётся. Будит их (civilian_active)
+## и возвращает ровно этот кластер. «Уже в группе» (neutral_group != 0) — граница волны.
+func _flood_component(seed_id: int) -> Array:
+	var woke: Array = []
+	var seen: Dictionary = {}
+	var stack: Array[int] = [seed_id]
+	while not stack.is_empty():
+		var id: int = stack.pop_back()
+		if seen.has(id):
+			continue
+		seen[id] = true
+		var u := state.get_unit(id)
+		if u == null or not _is_civilian(u) or not u.is_alive() or u.neutral_group != 0:
+			continue
+		u.civilian_active = true
+		woke.append(u)
+		for n: Vector2i in state.grid.neighbors(u.coord):
+			var nb := state.grid.cell(n).occupant
+			if nb != null and _is_civilian(nb) and nb.is_alive() \
+					and nb.neutral_group == 0 and not seen.has(nb.id):
+				stack.append(nb.id)
+	return woke
+
+## Каскад пробуждения (§3.2): разбирает весь фронт, будит достижимые кластеры и
+## возвращает всех поднятых на ноги в этот заход (пустой — никого нового). Группировкой
+## НЕ занимается — это отдельный шаг (_wake_and_group). Оставлен как самостоятельная
+## операция для сценарных проверок пробуждения.
+func _cascade_activation() -> Array:
+	var woke: Array = []
+	var frontier: Array[int] = _activation_frontier.duplicate()
+	_activation_frontier.clear()
+	while not frontier.is_empty():
+		var id: int = frontier.pop_back()
+		var u := state.get_unit(id)
+		if u == null or not _is_civilian(u) or not u.is_alive() \
+				or u.neutral_group != 0 or u.civilian_active:
+			continue
+		woke.append_array(_flood_component(id))
+	return woke
+
+## Номер следующей активационной группы (§15): по счёту уже созданных нейтральных
+## слотов в очереди инициативы, +1. Считается от состояния, а не из отдельного счётчика,
+## поэтому переживает пересоздание резолвера и откат хода.
+func _next_group_number() -> int:
+	var n := 0
+	for slot: int in state.turns.round_order:
+		if slot >= MCF.NEUTRAL_GROUP_BASE:
+			n += 1
+	return n + 1
+
+## Собрать активационные группы (§15). Каждый СВЯЗНЫЙ кластер из фронта становится одной
+## группой: получает римский номер по порядку, каждый его боец — этот номер и владелец-слот
+## группы, а сам слот встаёт в СЛУЧАЙНОЕ место очереди инициативы. Жребий берётся из общего
+## потока d6 (_rand_index) — иначе хост и клиент врезали бы группу в разные места. Разные
+## кварталы — разные группы, потому и разливаем каждый кластер по своему семени.
+func _wake_and_group(res: ActionResult) -> void:
+	_seed_sight_activation()
+	while not _activation_frontier.is_empty():
+		var seed_id: int = _activation_frontier.pop_back()
+		var su := state.get_unit(seed_id)
+		if su == null or not _is_civilian(su) or not su.is_alive() or su.neutral_group != 0:
+			continue
+		var woke := _flood_component(seed_id)
+		if woke.is_empty():
+			continue
+		var num := _next_group_number()
+		var slot := MCF.neutral_group_slot(num)
+		for u: UnitInstance in woke:
+			u.neutral_group = num
+			u.owner = slot
+		var idx := _rand_index(state.turns.round_order.size() + 1)
+		state.turns.insert_slot(slot, idx)
+		res.log("— Neutral group %s joins the fight (%d unit%s) —" % [
+			MCF.roman(num), woke.size(), "" if woke.size() == 1 else "s"])
+		# Свежевскрытый кластер мог открыть обзор ещё одному кварталу — проверяем снова.
+		_seed_sight_activation()
+
+## Засеять фронт теми спящими НЕ сгруппированными нейтралами, кто видит солдата (§3.1b).
+## Дорого только когда на карте есть и спящие нейтралы, и солдаты, — иначе выходит сразу.
+func _seed_sight_activation() -> void:
+	if _living_soldiers().is_empty():
 		return
-	for s: UnitInstance in _living_soldiers():
-		if not los_blocked(civ.coord, s.coord):
-			civ.civilian_active = true
-			return
+	for u in state.all_units():
+		if not _is_civilian(u) or not u.is_alive() or u.neutral_group != 0:
+			continue
+		if _activation_frontier.has(u.id):
+			continue
+		if _civ_sees_soldier(u):
+			_activation_frontier.append(u.id)
 
 ## Штаб мирного квартала (#103). Ровно тот же класс, что водит армию ИИ, только с
 ## нейтральным владельцем: см. большой комментарий в AIController. Хранится на резолвере,
@@ -2719,12 +2858,13 @@ const CIVILIAN_ACTION_CAP := 600
 ## Единственное, что остаётся местным, — «оформление» для UI: события «walk» и «ap»,
 ## по которым Main рисует проход по клеткам и гаснущие точки ОД. Резолвер обычных
 ## приказов их не выдаёт: за живого игрока и за ИИ шаги рисует сам Main.
-func advance_civilians() -> ActionResult:
+func advance_civilians(owner: int = MCF.Owner.NEUTRAL) -> ActionResult:
 	var res := ActionResult.success()
-	# Сперва вскрытие и запас ОД — план должен строиться уже по реальным бюджетам.
+	# Слот принадлежит КОНКРЕТНОМУ владельцу-нейтралу: общему слоту (§до сбора групп) или
+	# слоту активационной группы (§15). Ведём только его бойцов, чужих групп не трогаем.
 	var awake := 0
 	for u in state.all_units():
-		if not _is_civilian(u) or not u.is_alive() or u.is_held():
+		if u.owner != owner or not _is_civilian(u) or not u.is_alive() or u.is_held():
 			continue
 		_update_breached(u)
 		if not u.civilian_active:
@@ -2737,8 +2877,15 @@ func advance_civilians() -> ActionResult:
 	if awake == 0:
 		return res
 
-	if _civ_brain == null:
-		_civ_brain = AIController.new(MCF.Owner.NEUTRAL, AIController.Difficulty.NORMAL)
+	# Мозг заводится ПОД ВЛАДЕЛЬЦА слота: для группы её слот и есть owner, иначе
+	# _enemies_of посчитал бы своих же за врагов. Кэш держит один мозг на слот.
+	if _civ_brain == null or _civ_brain.owner != owner:
+		_civ_brain = AIController.new(owner, AIController.Difficulty.NORMAL)
+	# Item 23: живой, «в порядке очереди» отыгрыш вместо «телепорт + перемотка». В res
+	# первым уходит событие hold — оно ПРИКАЛЫВАЕТ каждого будущего ходока к ИСХОДНОЙ
+	# клетке, чтобы Main не показал их сразу в конечных позициях, пока идёт анимация.
+	# Заполняем его по ходу (кто реально пошёл), а вставляем в начало в самом конце.
+	var moved_from: Dictionary = {}
 	var acted: Dictionary = {}
 	var guard := 0
 	while guard < CIVILIAN_ACTION_CAP:
@@ -2767,6 +2914,11 @@ func advance_civilians() -> ActionResult:
 		# подводит камеру к активному жителю, как к любому другому ходящему юниту (#96).
 		res.dice_events.append({"kind": "focus", "unit": actor.id, "coord": from})
 		if not route.is_empty():
+			# Пришпиливаем ходока к ИСХОДНОЙ клетке (item 23): первое движение бойца
+			# запоминает, откуда он стартовал в этом слоте, — hold-событие вернёт его туда
+			# перед анимацией, чтобы не было «телепорта в конец, потом перемотки».
+			if not moved_from.has(actor.id):
+				moved_from[actor.id] = from
 			res.dice_events.append({
 				"kind": "walk", "unit": actor.id, "from": from, "path": route,
 			})
@@ -2774,6 +2926,10 @@ func advance_civilians() -> ActionResult:
 		res.dice_events.append_array(sub.dice_events)
 		res.log_lines.append_array(sub.log_lines)
 		res.deaths.append_array(sub.deaths)
+	# hold идёт ПЕРВЫМ во всём слоте (item 23): Main по нему снимает всех ходоков в их
+	# стартовые клетки разом, а уже потом проигрывает шаги и выстрелы по порядку.
+	if not moved_from.is_empty():
+		res.dice_events.push_front({"kind": "hold", "units": moved_from})
 	if not acted.is_empty():
 		res.log_lines.push_front("— Civilians take their turn (%d active) —" % acted.size())
 	return res
@@ -2870,7 +3026,12 @@ func update_airlocks() -> void:
 					break
 				x += 1
 			y += 1
+		var was_closed := cell.cover_height >= MCF.WALL_HEIGHT
 		cell.cover_height = 0.0 if open else MCF.WALL_HEIGHT
+		# Открывшийся шлюз — повод активации соседних нейтралов (§3.1a): именно так в
+		# примере из задания игрок «вскрывает комнату», подойдя к её двери.
+		if open and was_closed:
+			notify_cell_changed(cell.coord)
 
 ## Отдача/отбрасывание после выстрела в невесомости (§3.11). Только для юнитов,
 ## стоящих в клетке-космосе, и только если позади свободно на всю дистанцию.
@@ -3978,9 +4139,11 @@ func capturable_target_ids(actor: UnitInstance) -> Array:
 ## его на месте — на этот случай выходим по неизменившемуся индексу.
 func play_civilian_slots() -> ActionResult:
 	var out := ActionResult.success()
-	while state.active_player() == MCF.Owner.NEUTRAL:
+	# Играем ЛЮБОЙ нейтральный слот: общий (§до сбора групп) и слот каждой группы (§15) —
+	# у нейтральной стороны контроллера нет, её ход всегда проводит резолвер.
+	while MCF.is_neutral(state.active_player()):
 		var slot := state.turns.active_index
-		var res := advance_civilians()
+		var res := advance_civilians(state.active_player())
 		out.log_lines.append_array(res.log_lines)
 		out.dice_events.append_array(res.dice_events)
 		out.deaths.append_array(res.deaths)

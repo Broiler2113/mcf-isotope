@@ -140,6 +140,10 @@ func build_state(dice_seed: int = -1, roster: Roster = null) -> GameState:
 	apply_to_grid(st.grid)
 	for s in spawns:
 		var sid: String = s["stats_id"]
+		# Нейтралов (item 5) выключает общий тумблер мирных — как раньше выключалась
+		# заливка нейтральной зоны: пустая карта без «жителей», если так задано.
+		if MCF.is_neutral(int(s["owner"])) and not GameConfig.civilians_enabled:
+			continue
 		# Техника (§техника): id из VehicleDB — ставим машину, а не пехотинца (#10).
 		if VehicleDB.is_vehicle(sid):
 			st.spawn_vehicle(sid, s["coord"], s["owner"])
@@ -149,7 +153,6 @@ func build_state(dice_seed: int = -1, roster: Roster = null) -> GameState:
 			continue
 		var stats: UnitStats = load(path)
 		st.spawn_unit(stats, s["coord"], s["owner"])
-	_fill_neutral_zone(st)
 	# Инициатива бросается один раз — когда все юниты уже на карте (#53).
 	st.turns.begin_match(st.all_units(), st.dice, st.roster.player_ids())
 	return st
@@ -165,23 +168,24 @@ func _spawn_sides() -> Array:
 	out.sort()
 	return out
 
-## Нейтральная зона — это не место расстановки, а квартал (#99): каждая её клетка,
-## на которой можно стоять, заселяется мирным жителем. Пустая зона на карте значит
-## «здесь живут люди», и рисовать их по одному спавну больше не нужно.
-func _fill_neutral_zone(st: GameState) -> void:
-	if not GameConfig.civilians_enabled:
-		return
-	var path := "res://src/data/units/civilian.tres"
-	if not ResourceLoader.exists(path):
-		return
-	var stats: UnitStats = load(path)
+## Миграция item 5: «нейтральная зона» больше не заселяется на лету. Каждая стоячая
+## клетка бывшей нейтральной зоны РАЗ переводится в явный спавн мирного при загрузке
+## карты, а сама зона гасится. Так нейтралы едут в файле как обычные юниты (owner ==
+## NEUTRAL) — редактор видит и правит их поштучно, а заливки зоны больше нет.
+func _materialize_neutral_zones() -> void:
 	for coord: Vector2i in zone_cells(MCF.Owner.NEUTRAL):
-		if not st.grid.in_bounds(coord):
+		set_zone(coord, -1)
+		# На стену/космос/объект жителя не сажаем — как и старая заливка.
+		if get_space(coord) or get_feature(coord) != "" or get_cover(coord) > 0.0:
 			continue
-		var c := st.grid.cell(coord)
-		if c.is_space or c.vehicle_id != -1 or c.has_feature() or not c.is_empty():
-			continue
-		st.spawn_unit(stats, coord, MCF.Owner.NEUTRAL)
+		var taken := false
+		for s in spawns:
+			if s["coord"] == coord:
+				taken = true
+				break
+		if not taken:
+			spawns.append({"stats_id": "civilian",
+					"owner": MCF.Owner.NEUTRAL, "coord": coord})
 
 ## Пустая твёрдая арена — поле «без карты» (#99). Вынесена сюда, потому что в сетевой
 ## партии её строит хост и шлёт клиенту: размеры и пол обязаны совпасть до клетки.
@@ -247,6 +251,8 @@ static func from_dict(d: Dictionary) -> MapData:
 			"owner": _migrate_owner(int(s.get("owner", 0)), version),
 			"coord": Vector2i(int(s.get("x", 0)), int(s.get("y", 0))),
 		})
+	# item 5: старые карты с «нейтральной зоной» переводим в явные спавны мирных.
+	m._materialize_neutral_zones()
 	return m
 
 ## Перевод номера стороны из формата карты в текущий. Трогает только версию 1 и

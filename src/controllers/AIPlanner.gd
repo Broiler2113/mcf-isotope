@@ -426,6 +426,10 @@ func _unit_value(u: UnitInstance) -> float:
 	match u.stats.special_ability_id:
 		MCF.ABILITY_SNIPER, MCF.ABILITY_MARKSMAN, MCF.ABILITY_ANTI_TANK:
 			v += 3.0
+	# Нейтрал бьёт по самому ДОРОГОМУ (§4.3): цена цели весит сильнее, чем у армии.
+	# Дубль правила из AIController._unit_value — обе оценки обязаны совпадать.
+	if MCF.is_neutral(owner):
+		v += float(u.stats.cost) * 0.1
 	return v
 
 # --- Порядок активаций ---
