@@ -101,6 +101,8 @@ var reach: Movement.Reachability = null
 var reach_budget: int = 0
 var target_ids: Array = []
 var item_cells: Array = []
+## Соседние вражеские машины, по которым шахтёр может ударить в режиме «Hit» (item 15).
+var _melee_veh_ids: Array = []
 var build_feature: String = ""
 ## Рисование ЛДФ-стены (§3.7): цепочка выбранных клеток и флаг «тянем» мышью.
 var _wall_cells: Array[Vector2i] = []
@@ -847,6 +849,12 @@ func _handle_click(coord: Vector2i) -> void:
 			if occupant != null and target_ids.has(occupant.id):
 				_begin_shoot(occupant)
 				return
+			# Шахтёр (item 15): клик по соседней вражеской машине — удар ломом по корпусу.
+			if not _melee_veh_ids.is_empty():
+				var mvid := state.grid.vehicle_at(coord)
+				if _melee_veh_ids.has(mvid):
+					_submit(VehicleMeleeIntent.new(selected_id, mvid))
+					return
 			# Марксманн: клик по ЛЮБОЙ клетке задаёт направление, луч уходит вперёд (#49).
 			# Отказ (мало ОД, клик по себе) отдаём резолверу — он объяснит причину в журнале.
 			if _is_marksman(_selected_unit()) and coord != _selected_unit().coord:
@@ -1334,6 +1342,7 @@ func _enter_shoot() -> void:
 	mode = Mode.SHOOT
 	reach = null
 	item_cells = []
+	_melee_veh_ids = []
 	# Устаревшую привязку burst'а сбрасываем, чтобы можно было начать новую стрельбу (#45).
 	if _pending_shoot(u) and not _valid_pending_shoot(u):
 		u.action_state = null
@@ -1347,6 +1356,9 @@ func _enter_shoot() -> void:
 		# Огнемётчик может пустить струю по пустой клетке пола (в её направлении).
 		elif u.stats.special_ability_id == MCF.ABILITY_FLAMETHROWER:
 			item_cells = resolver.flammable_cells(u)
+		# Шахтёр может ломом бить по соседней вражеской машине (item 15).
+		elif u.stats.special_ability_id == MCF.ABILITY_MINER:
+			_melee_veh_ids = resolver.meleeable_vehicle_ids(u)
 	else:
 		target_ids = []
 	_menu.hide()
@@ -2542,6 +2554,13 @@ func _draw() -> void:
 		# Клетки пола под спецудар (противотанкист — взрыв, огнемётчик — струя).
 		for coord in item_cells:
 			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(0.9, 0.5, 0.1, 0.16))
+		# Соседние вражеские машины под удар шахтёра (item 15) — обводим их след.
+		for mvid in _melee_veh_ids:
+			var mveh: Vehicle = state.get_vehicle(mvid)
+			if mveh != null:
+				for fc: Vector2i in mveh.footprint():
+					draw_rect(Rect2(_cell_origin(fc), Vector2(CELL, CELL)),
+						Color(0.95, 0.55, 0.15, 0.28))
 		var shov := _pos_to_cell(get_global_mouse_position())
 		var su := _selected_unit()
 		# Марксманн (#49): под курсором рисуем сам луч — куда он долетит и кого заденет.
@@ -2857,6 +2876,7 @@ func _draw() -> void:
 				"DUR %d  CREW %d" % [veh.durability, veh.living_crew_count()],
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.9, 0.9, 0.6))
 
+	var _drones_pending: Array = []
 	for unit in state.all_units():
 		# Экипаж внутри машины на поле не рисуется (§техника).
 		if unit.aboard_vehicle_id != -1:
@@ -2874,27 +2894,10 @@ func _draw() -> void:
 		if unit.status == MCF.Status.CORPSE and not _pending_death_ids.has(unit.id):
 			continue
 		if unit.is_drone:
-			# Дрон висит над клеткой (#13): рисуем со сдвигом в верхний-правый угол,
-			# чтобы был виден наземный юнит/труп под ним.
-			var dc := _cell_origin(at) + Vector2(CELL * 0.72, CELL * 0.28)
-			# Тень под дроном по центру клетки — подсказка, что он парит.
-			draw_circle(center, CELL * 0.1, Color(0, 0, 0, 0.25))
-			var s := CELL * 0.2
-			var drone_key := Sprites.resolve("drone", _owner_suffix(unit.owner))
-			if drone_key != "":
-				# Картинка дрона меньше клетки — он висит в углу над наземным юнитом.
-				var dsz := Vector2(CELL, CELL) * 0.5
-				Sprites.draw_texture_override_rect(self, drone_key, Rect2(dc - dsz * 0.5, dsz))
-			else:
-				var pts := PackedVector2Array([
-					dc + Vector2(0, -s), dc + Vector2(s, 0),
-					dc + Vector2(0, s), dc + Vector2(-s, 0)])
-				draw_colored_polygon(pts, _side_color(unit.owner))
-				draw_polyline(pts + PackedVector2Array([pts[0]]), Color(0.3, 0.9, 0.9), 2.0)
-			if unit.id == selected_id:
-				draw_arc(dc, CELL * 0.3, 0, TAU, 24, Color(1, 0.9, 0.2), 3.0)
-			for i in _draw_ap(unit):
-				draw_circle(_cell_origin(at) + Vector2(6 + i * 8, CELL - 6), 3, Color(1, 1, 0.4))
+			# Дроны рисуем ПОСЛЕ всех наземных юнитов и машин (item 14): собираем их
+			# здесь, а сам разлёт — отдельным проходом ниже, чтобы дрон гарантированно
+			# был поверх корпуса, над которым висит.
+			_drones_pending.append({"unit": unit, "at": at})
 			continue
 		# Боец: картинка по id типа (можно отдельную на сторону — light_infantry_p1),
 		# иначе прежний кружок владельца с инициалами (#55).
@@ -2932,6 +2935,10 @@ func _draw() -> void:
 			_draw_corpse_marker(_cell_origin(at) + Vector2(9, 9),
 				unit.carried_corpses, font)
 
+	# Дроны — верхний слой (item 14): рисуются поверх машин и наземных юнитов.
+	for d: Dictionary in _drones_pending:
+		_draw_drone(d["unit"], d["at"])
+
 	# Рамка выделения (#18): сетка-выровненный зелёный прямоугольник поверх поля.
 	if _box_dragging:
 		var ba := _pos_to_cell(_box_start_screen)
@@ -2946,6 +2953,31 @@ func _draw() -> void:
 
 	# Аннотации игроков поверх поля (item 51).
 	_draw_annotations()
+
+## Отрисовка одного дрона (item 14): вынесена из общего прохода, чтобы дрон рисовался
+## верхним слоем — поверх корпусов машин, над которыми он висит.
+func _draw_drone(unit: UnitInstance, at: Vector2i) -> void:
+	var center := _cell_origin(at) + Vector2(CELL, CELL) * 0.5
+	# Дрон висит над клеткой (#13): рисуем со сдвигом в верхний-правый угол,
+	# чтобы был виден наземный юнит/труп под ним.
+	var dc := _cell_origin(at) + Vector2(CELL * 0.72, CELL * 0.28)
+	# Тень под дроном по центру клетки — подсказка, что он парит.
+	draw_circle(center, CELL * 0.1, Color(0, 0, 0, 0.25))
+	var s := CELL * 0.2
+	var drone_key := Sprites.resolve("drone", _owner_suffix(unit.owner))
+	if drone_key != "":
+		var dsz := Vector2(CELL, CELL) * 0.5
+		Sprites.draw_texture_override_rect(self, drone_key, Rect2(dc - dsz * 0.5, dsz))
+	else:
+		var pts := PackedVector2Array([
+			dc + Vector2(0, -s), dc + Vector2(s, 0),
+			dc + Vector2(0, s), dc + Vector2(-s, 0)])
+		draw_colored_polygon(pts, _side_color(unit.owner))
+		draw_polyline(pts + PackedVector2Array([pts[0]]), Color(0.3, 0.9, 0.9), 2.0)
+	if unit.id == selected_id:
+		draw_arc(dc, CELL * 0.3, 0, TAU, 24, Color(1, 0.9, 0.2), 3.0)
+	for i in _draw_ap(unit):
+		draw_circle(_cell_origin(at) + Vector2(6 + i * 8, CELL - 6), 3, Color(1, 1, 0.4))
 
 ## Труп на земле (#59): красный круг на половинной прозрачности — того же размера,
 ## что и живой боец, но полупрозрачный, поэтому тело сразу отличимо от бойца и не
@@ -3011,11 +3043,16 @@ func _draw_fx_props(visible: Dictionary) -> void:
 const FX_LOOK := {
 	"shard": [0.16, Color(0.72, 0.88, 0.95, 0.85)],
 	"casing": [0.11, Color(0.85, 0.72, 0.28, 0.9)],
+	# Гильза противотанкиста (item 24): оранжевая и вдвое крупнее пистолетной (0.11 → 0.22).
+	"shell_casing": [0.22, Color(1.0, 0.55, 0.1, 0.95)],
 	"blood_drop": [0.10, Color(0.55, 0.06, 0.06, 0.85)],
 	"blood_pool": [0.42, Color(0.42, 0.04, 0.04, 0.55)],
 }
 const FX_TEXTURE := {
 	"shard": "glass_shard", "casing": "shell_casing",
+	# Отдельное имя картинки, чтобы крупная оранжевая гильза при желании подменялась
+	# своим png; без него сработает запасной оранжевый четырёхугольник из FX_LOOK.
+	"shell_casing": "shell_casing_big",
 	"blood_drop": "blood_splatter", "blood_pool": "blood_pool",
 }
 
@@ -3867,11 +3904,10 @@ func _anchor_menu(panel: Control) -> void:
 func _side_color(side: int) -> Color:
 	if MCF.is_neutral(side):
 		return NEUTRAL_COLOR
-	# Перспектива «своё синее, чужое красное» работает, только пока чужая сторона
-	# ОДНА. За столом на троих она бы слила двух разных противников в один цвет и
-	# скрыла, кто кому враг, — поэтому там каждый носит свой цвет из ростера.
-	if networked and state.roster.player_ids().size() == 2:
-		return OWN_COLOR if side == my_owner else FOE_COLOR
+	# Каждая сторона носит СВОЙ цвет из ростера — всегда (item 16). Прежняя перспектива
+	# «своё синее, чужое красное» в сетевой игре на двоих перекрашивала стороны под
+	# зрителя и путала, чей это на самом деле цвет (особенно после захвата чужого танка);
+	# теперь цвет юнита/машины один и тот же на всех экранах.
 	return state.roster.color_of(side)
 
 func _open_menu(unit: UnitInstance) -> void:

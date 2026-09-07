@@ -36,6 +36,7 @@ const T_VEH_OUT := "veh_out"
 const T_VEH_TURN := "veh_turn"
 const T_VEH_MOVE := "veh_move"
 const T_VEH_CANNON := "veh_cannon"
+const T_VEH_MELEE := "veh_melee"
 const T_WELD := "weld"
 
 static func encode(intent: Intent) -> Dictionary:
@@ -139,6 +140,8 @@ static func encode(intent: Intent) -> Dictionary:
 			"s": intent.steps}
 	if intent is VehicleCannonIntent:
 		return {"t": T_VEH_CANNON, "a": intent.actor_id, "x": intent.target.x, "y": intent.target.y}
+	if intent is VehicleMeleeIntent:
+		return {"t": T_VEH_MELEE, "a": intent.actor_id, "v": intent.vehicle_id}
 	return {}
 
 static func decode(d: Dictionary) -> Intent:
@@ -195,4 +198,5 @@ static func decode(d: Dictionary) -> Intent:
 		T_VEH_TURN: return VehicleTurnIntent.new(a, coord)
 		T_VEH_MOVE: return VehicleMoveIntent.new(a, coord, int(d.get("s", 1)))
 		T_VEH_CANNON: return VehicleCannonIntent.new(a, coord)
+		T_VEH_MELEE: return VehicleMeleeIntent.new(a, int(d.get("v", -1)))
 	return null

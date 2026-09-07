@@ -292,6 +292,12 @@ func _draw() -> void:
 		return
 	var font := ThemeDB.fallback_font
 	var cs := _cell_size()
+	# Размер шрифта на плитках привязан к масштабу клетки, а не фиксирован (item 25):
+	# при отдалении камеры клетка мельчает, а прежний постоянный кегль оставался тем же
+	# и потому «рос» относительно плитки, накрывая соседей. Теперь текст ужимается
+	# вместе с клеткой (с нижним порогом, чтобы не пропасть совсем).
+	var tag_fs := clampi(int(round(cs * 0.30)), 5, 22)
+	var init_fs := clampi(int(round(cs * 0.36)), 6, 26)
 	for y in map.height:
 		for x in map.width:
 			var coord := Vector2i(x, y)
@@ -329,8 +335,8 @@ func _draw() -> void:
 			if fid != "":
 				var o := _cell_origin(coord)
 				if not Sprites.draw_texture_override(self, fid, o, cs):
-					draw_string(font, o + Vector2(4, cs - 6), _feature_tag(fid),
-						HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.8, 0.8, 0.9))
+					draw_string(font, o + Vector2(cs * 0.12, cs - cs * 0.18), _feature_tag(fid),
+						HORIZONTAL_ALIGNMENT_LEFT, -1, tag_fs, Color(0.8, 0.8, 0.9))
 	# Точки спавна.
 	for s in map.spawns:
 		var center := _cell_origin(s["coord"]) + Vector2(cs, cs) * 0.5
@@ -339,8 +345,8 @@ func _draw() -> void:
 			Sprites.draw_texture_override(self, spawn_key, _cell_origin(s["coord"]), cs)
 			continue
 		draw_circle(center, cs * 0.3, owner_color(s["owner"]))
-		draw_string(font, center + Vector2(-9, 5), _initials(s["stats_id"]),
-			HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color.WHITE)
+		draw_string(font, center + Vector2(-init_fs * 0.6, init_fs * 0.35), _initials(s["stats_id"]),
+			HORIZONTAL_ALIGNMENT_LEFT, -1, init_fs, Color.WHITE)
 	# Превью линии/прямоугольника при перетаскивании.
 	if _drag_start != Vector2i(-1, -1) and _drag_cur != Vector2i(-1, -1):
 		var preview: Array = []

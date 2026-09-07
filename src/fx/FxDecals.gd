@@ -106,9 +106,15 @@ func _casings(ev: Dictionary) -> void:
 	var toward: Vector2i = ev.get("toward", at)
 	# Гильза вылетает назад — то есть против направления стрельбы.
 	var back := _away(at, toward)
+	# Гильза противотанкиста (item 24): та же система, но частица «shell_casing» —
+	# оранжевая и вдвое крупнее (цвет/размер задаёт отрисовка по виду частицы), и летит
+	# чуть дальше обычной. Отдельный вид, чтобы не путать с пистолетной гильзой.
+	var shell: bool = bool(ev.get("shell", false))
+	var kind := "shell_casing" if shell else "casing"
+	var r_max: float = CASING_RANGE_MAX * (1.6 if shell else 1.0)
 	for i in int(ev.get("count", 0)):
-		var rng := _rng_for("casing", at, i)
-		_launch("casing", at, back, rng, CASING_RANGE_MIN, CASING_RANGE_MAX, CASING_FLIGHT_SEC)
+		var rng := _rng_for(kind, at, i)
+		_launch(kind, at, back, rng, CASING_RANGE_MIN, r_max, CASING_FLIGHT_SEC)
 
 ## 21.4 — лужа под трупом плюс веер брызг против направления убившего выстрела.
 func _blood(ev: Dictionary) -> void:

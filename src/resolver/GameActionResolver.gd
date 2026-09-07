@@ -240,6 +240,8 @@ func _dispatch(intent: Intent) -> ActionResult:
 		return _resolve_vehicle_move(intent)
 	elif intent is VehicleCannonIntent:
 		return _resolve_vehicle_cannon(intent)
+	elif intent is VehicleMeleeIntent:
+		return _resolve_vehicle_melee(intent)
 	elif intent is GroupMoveIntent:
 		return _resolve_group_move(intent)
 	elif intent is PlaceMineIntent:
@@ -662,6 +664,10 @@ func _resolve_anti_tank(shooter: UnitInstance, center: Vector2i) -> ActionResult
 
 	var result := ActionResult.new()
 	result.ok = true
+	# Крупная оранжевая гильза за спину стрелка (item 24) — та же система, что у пуль,
+	# но вид «shell_casing». Направление — на цель (частица летит от неё, назад).
+	_fx(result, {"fx": "casings", "at": shooter.coord, "toward": center,
+		"count": 1, "shell": true})
 	# Выстрел ПОД СЕБЯ (#11): заряд кладётся в собственную клетку, и мазать тут
 	# нечем — бросок не делается вовсе. Кубик здесь не просто лишний: любой
 	# холостой бросок сдвигает поток случайности и разводит хост с клиентом.
@@ -3200,7 +3206,11 @@ func _drone_explode(drone: UnitInstance, center: Vector2i, why: String) -> Actio
 	# Дрон, влетевший прямо в ДОТ, весь свой заряд оставляет в бетоне.
 	if _pillbox_absorbs(center, MCF.DRONE_EXPLOSION_DAMAGE, result):
 		return result
-	var killed := _blast(center, result)
+	var area := MCF.blast_square(center, MCF.ANTI_TANK_BLAST_RADIUS)
+	var killed := _blast(center, result, area)
+	# Дрон, подорвавшийся над техникой, снимает с неё 1 прочность (item 14): раньше
+	# взрыв дрона выкашивал пехоту вокруг машины, а сам корпус не трогал вовсе.
+	_damage_vehicles_in_area(area, MCF.DRONE_EXPLOSION_DAMAGE, -1, result, "drone")
 	if killed.is_empty():
 		result.log("… nobody destroyed")
 	else:
@@ -4612,6 +4622,58 @@ func _adjacent_to_vehicle(coord: Vector2i, veh: Vehicle) -> bool:
 			return true
 	return false
 
+func _is_miner(u: UnitInstance) -> bool:
+	return u != null and u.stats.special_ability_id == MCF.ABILITY_MINER
+
+## Шахтёр бьёт ломом по соседней вражеской машине (item 15): один бросок d6, на
+## MINER_VEHICLE_HIT_NEED корпус теряет MINER_VEHICLE_DAMAGE прочности. Стоит 1 ОД
+## независимо от исхода — замах уже сделан. Своих машин шахтёр не портит.
+func _resolve_vehicle_melee(intent: VehicleMeleeIntent) -> ActionResult:
+	var unit := state.get_unit(intent.actor_id)
+	var err := _validate_actor(unit)
+	if err != "":
+		return ActionResult.fail(err)
+	if not _is_miner(unit):
+		return ActionResult.fail("Only a miner can pry at a hull")
+	if unit.remaining_ap <= 0:
+		return ActionResult.fail("Unit has no AP left")
+	var veh := state.get_vehicle(intent.vehicle_id)
+	if veh == null or not veh.alive():
+		return ActionResult.fail("No such vehicle")
+	if veh.owner == unit.owner:
+		return ActionResult.fail("That's your own vehicle")
+	if not _adjacent_to_vehicle(unit.coord, veh):
+		return ActionResult.fail("Must stand next to the vehicle")
+	unit.remaining_ap -= 1
+	var res := ActionResult.new()
+	res.ok = true
+	var veh_name: String = VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)
+	var roll := state.dice.roll_d6()
+	var hit := roll >= MCF.MINER_VEHICLE_HIT_NEED
+	res.dice_events.append({
+		"kind": "check", "actor": "%s pries the hull" % unit.stats.display_name,
+		"roll": roll, "need": MCF.MINER_VEHICLE_HIT_NEED, "ok": hit,
+	})
+	if hit:
+		res.log("%s wrenches the %s (roll %d, need %d+)!" % [
+			unit.stats.display_name, veh_name, roll, MCF.MINER_VEHICLE_HIT_NEED])
+		_apply_vehicle_damage(veh, MCF.MINER_VEHICLE_DAMAGE, "miner", res)
+	else:
+		res.log("%s strikes the %s but the hull holds (roll %d, need %d+)." % [
+			unit.stats.display_name, veh_name, roll, MCF.MINER_VEHICLE_HIT_NEED])
+	return res
+
+## Соседние вражеские машины, по которым шахтёр может ударить (для подсветки в UI).
+## Возвращает id машин. Пусто для не-шахтёра или без ОД.
+func meleeable_vehicle_ids(actor: UnitInstance) -> Array:
+	var out: Array = []
+	if not _is_miner(actor) or actor.remaining_ap <= 0:
+		return out
+	for veh: Vehicle in state.all_vehicles():
+		if veh.alive() and veh.owner != actor.owner and _adjacent_to_vehicle(actor.coord, veh):
+			out.append(veh.id)
+	return out
+
 # --- Посадка экипажа/пассажира ---
 func _resolve_vehicle_board(intent: VehicleBoardIntent) -> ActionResult:
 	var unit := state.get_unit(intent.actor_id)
@@ -4972,10 +5034,11 @@ func _apply_vehicle_damage(veh: Vehicle, amount: int, source: String, res: Actio
 	var name: String = VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)
 	veh.durability -= amount
 	res.log("%s takes %d damage (durability %d)." % [name, amount, maxi(0, veh.durability)])
-	# Танк: за каждую единицу урона случайный живой член экипажа проверяет броню.
+	# Танк: ОДИН случайный член экипажа проверяет броню за ПОПАДАНИЕ, а не за каждую
+	# снятую единицу прочности (item 16). Раньше выстрел пушки на 2 урона заставлял
+	# катить дважды и выкашивал экипаж вдвое быстрее задуманного.
 	if veh.type_id == "tank":
-		for _i in amount:
-			_tank_crew_hit(veh, res)
+		_tank_crew_hit(veh, res)
 	if veh.durability <= 0:
 		_destroy_vehicle(veh, res)
 
@@ -4991,13 +5054,24 @@ func _tank_crew_hit(veh: Vehicle, res: ActionResult) -> void:
 	if crew == null:
 		veh.occupants.remove_at(idx)
 		return
+	# Экипаж в броне держится увереннее пехоты: +1 к защите (item 16) — порог выживания
+	# на единицу ниже собственной брони, но не мягче 1+.
+	var need: int = maxi(1, crew.stats.armor_threshold - MCF.TANK_CREW_DEFENSE_BONUS)
 	var roll := state.dice.roll_d6()
-	if roll < crew.stats.armor_threshold:
+	var survived := roll >= need
+	res.dice_events.append({
+		"kind": "check", "actor": "%s (crew)" % crew.stats.display_name,
+		"roll": roll, "need": need, "ok": survived,
+	})
+	if not survived:
 		_kill(crew)
 		veh.occupants.remove_at(idx)
 		veh.corpse_slots.append(crew.stats.display_name)
-		res.log("%s (crew) is killed (roll %d, armor %d+)." % [
-			crew.stats.display_name, roll, crew.stats.armor_threshold])
+		res.log("%s (crew) is killed (roll %d, need %d+ with +1 armour)." % [
+			crew.stats.display_name, roll, need])
+	else:
+		res.log("%s (crew) shrugs off the hit (roll %d, need %d+)." % [
+			crew.stats.display_name, roll, need])
 	veh.ap = mini(veh.ap, _vehicle_crew_ap(veh))
 
 ## Уничтожение машины: экипаж гибнет, бросок d6 на взрыв; танк остаётся обломком.

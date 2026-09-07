@@ -52,6 +52,7 @@ func _samples() -> Array:
 		VehicleTurnIntent.new(1000, Vector2i(1, -1)),
 		VehicleMoveIntent.new(1000, Vector2i(-1, 0), 4),
 		VehicleCannonIntent.new(1000, Vector2i(20, 20)),
+		VehicleMeleeIntent.new(7, 3000000),
 		WeldAirlockIntent.new(7, Vector2i(7, 7)),
 		PlaceMineIntent.new(7, Vector2i(12, 3)),
 		RevealMinesIntent.new(7),
