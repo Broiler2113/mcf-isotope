@@ -26,6 +26,7 @@ const T_REDO := "redo"
 const T_GROUP_MOVE := "gmove"
 const T_MINE := "mine"
 const T_SWEEP := "sweep"
+const T_DISARM := "disarm"
 const T_BUILD_WALL := "build_wall"
 const T_CORPSE_UP := "corpse_up"
 const T_CANCEL_SHOT := "cancel_shot"
@@ -44,9 +45,13 @@ static func encode(intent: Intent) -> Dictionary:
 		return {"t": T_END, "q": intent.requester}
 	if intent is PlaceMineIntent:
 		return {"t": T_MINE, "a": intent.actor_id,
-			"x": intent.target.x, "y": intent.target.y}
+			"x": intent.target.x, "y": intent.target.y,
+			"av": 1 if intent.anti_vehicle else 0}
 	if intent is RevealMinesIntent:
 		return {"t": T_SWEEP, "a": intent.actor_id}
+	if intent is DisarmMineIntent:
+		return {"t": T_DISARM, "a": intent.actor_id,
+			"x": intent.target.x, "y": intent.target.y}
 	if intent is UndoIntent:
 		return {"t": T_UNDO, "q": intent.requester}
 	if intent is RedoIntent:
@@ -150,8 +155,9 @@ static func decode(d: Dictionary) -> Intent:
 	var coord := Vector2i(int(d.get("x", 0)), int(d.get("y", 0)))
 	match t:
 		T_END: return EndTurnIntent.new(int(d.get("q", -1)))
-		T_MINE: return PlaceMineIntent.new(a, coord)
+		T_MINE: return PlaceMineIntent.new(a, coord, int(d.get("av", 0)) == 1)
 		T_SWEEP: return RevealMinesIntent.new(a)
+		T_DISARM: return DisarmMineIntent.new(a, coord)
 		T_UNDO: return UndoIntent.new(int(d.get("q", -1)))
 		T_REDO: return RedoIntent.new(int(d.get("q", -1)))
 		T_GROUP_MOVE:

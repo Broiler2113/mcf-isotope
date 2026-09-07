@@ -27,6 +27,7 @@ const FEATURE_TAGS := {
 	MCF.FEATURE_SANDBAG_WALL: "SB", MCF.FEATURE_HEDGEHOG_SANDBAGS: "hSB",
 	MCF.FEATURE_DOT_OPEN: "PBX+",
 	MCF.FEATURE_MINE: "!",
+	MCF.FEATURE_AV_MINE: "AV",
 }
 
 ## Хелпер оформления окон в стиле «2003 Steam» (preload, без class_name).
@@ -35,7 +36,7 @@ const SteamChrome = preload("res://src/ui/SteamChrome.gd")
 ## GRAB — единая «рука» (#50): и захват бойца, и волочение трупа/мешков/ежа/кучи земли.
 ## Отдельного режима DRAG больше нет — кнопка одна, цели показываются вместе.
 enum Mode {NONE, MENU, MOVE, SHOOT, GRAB, ITEM, PUSH, DRONE_FLY, BUILD, BUILD_WALL, BREAK, DPMG_FIRE, DIG, CARRY_DROP,
-	CORPSE_DROP, WELD, MOVE_HELD, MINE,
+	CORPSE_DROP, WELD, MOVE_HELD, MINE, DISARM,
 	GROUP_MENU, GROUP_MOVE,
 	VEH_MENU, VEH_MOVE, VEH_TURN, VEH_CANNON, VEH_DISEMBARK,
 	DRAW}
@@ -68,8 +69,8 @@ const UNKNOWN_COL := Color(0.02, 0.02, 0.03, 1.0)
 ## «Нигде» — маркер отсутствия клетки (тот же, что и в резолвере).
 const NOWHERE := Vector2i(-9999, -9999)
 
-const HOVER_PREVIEW_MODES := [Mode.MOVE, Mode.ITEM, Mode.SHOOT, Mode.DIG, Mode.MINE, Mode.CORPSE_DROP,
-		Mode.WELD, Mode.MOVE_HELD, Mode.VEH_TURN, Mode.VEH_CANNON]
+const HOVER_PREVIEW_MODES := [Mode.MOVE, Mode.ITEM, Mode.SHOOT, Mode.DIG, Mode.MINE, Mode.DISARM,
+		Mode.CORPSE_DROP, Mode.WELD, Mode.MOVE_HELD, Mode.VEH_TURN, Mode.VEH_CANNON]
 
 ## Цвета «своя/чужая» для перспективной раскраски дуэли (#93). Цвета КОНКРЕТНЫХ
 ## игроков берутся из ростера (Roster.PALETTE) — их до 26, в словарь на два они
@@ -103,6 +104,8 @@ var target_ids: Array = []
 var item_cells: Array = []
 ## Соседние вражеские машины, по которым шахтёр может ударить в режиме «Hit» (item 15).
 var _melee_veh_ids: Array = []
+## Режим установки мин кладёт противотанковую мину, а не противопехотную (item 13).
+var _mine_av: bool = false
 var build_feature: String = ""
 ## Рисование ЛДФ-стены (§3.7): цепочка выбранных клеток и флаг «тянем» мышью.
 var _wall_cells: Array[Vector2i] = []
@@ -971,7 +974,16 @@ func _handle_click(coord: Vector2i) -> void:
 			# Мины ставятся по одной, и режим НЕ закрывается: за одно действие их
 			# кладут до пяти, и выходить в меню после каждой было бы мучением.
 			if item_cells.has(coord):
-				_submit(PlaceMineIntent.new(selected_id, coord))
+				_submit(PlaceMineIntent.new(selected_id, coord, _mine_av))
+				return
+			if _is_own_active(occupant):
+				_select(occupant)
+				return
+			_back_to_menu()
+		Mode.DISARM:
+			# Клик по подсвеченной чужой мине рядом — обезвредить её (item 13).
+			if item_cells.has(coord):
+				_submit(DisarmMineIntent.new(selected_id, coord))
 				return
 			if _is_own_active(occupant):
 				_select(occupant)
@@ -1811,14 +1823,29 @@ func _enter_rsp_fire(dpmg_coord: Vector2i) -> void:
 
 ## Режим установки мин (item 45). Как и копка, живёт на кредите: первая мина тратит
 ## ОД, остальные бесплатны, пока кредит не кончился.
-func _enter_mine() -> void:
+## av — класть противотанковые мины (item 13). Режим общий, отличается только тем,
+## какую мину кладёт клик.
+func _enter_mine(av: bool = false) -> void:
 	var u := _selected_unit()
 	if u == null or (u.remaining_ap <= 0 and u.mine_credits <= 0):
 		return
 	mode = Mode.MINE
+	_mine_av = av
 	reach = null
 	target_ids = []
 	item_cells = resolver.mine_cells(u)
+	_menu.hide()
+	queue_redraw()
+
+## Обезвреживание подсвеченных чужих мин рядом (item 13).
+func _enter_disarm() -> void:
+	var u := _selected_unit()
+	if u == null or u.remaining_ap <= 0:
+		return
+	mode = Mode.DISARM
+	reach = null
+	target_ids = []
+	item_cells = resolver.disarmable_mine_cells(u)
 	_menu.hide()
 	queue_redraw()
 
@@ -2661,10 +2688,17 @@ func _draw() -> void:
 
 	if mode == Mode.MINE:
 		var mhov := _pos_to_cell(get_global_mouse_position())
+		# Противотанковые мины подсвечиваем синевой, противопехотные — оранжевым (item 13).
+		var lay_col := Color(0.3, 0.55, 0.9, 0.28) if _mine_av else Color(0.85, 0.35, 0.15, 0.28)
+		var lay_hi := Color(0.4, 0.65, 1.0, 0.5) if _mine_av else Color(0.95, 0.45, 0.2, 0.5)
 		for coord in item_cells:
-			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(0.85, 0.35, 0.15, 0.28))
+			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), lay_col)
 		if item_cells.has(mhov):
-			draw_rect(Rect2(_cell_origin(mhov), Vector2(CELL, CELL)), Color(0.95, 0.45, 0.2, 0.5))
+			draw_rect(Rect2(_cell_origin(mhov), Vector2(CELL, CELL)), lay_hi)
+
+	if mode == Mode.DISARM:
+		for coord in item_cells:
+			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(0.3, 0.85, 0.5, 0.35))
 
 	if mode == Mode.DIG:
 		var dhov := _pos_to_cell(get_global_mouse_position())
@@ -2763,7 +2797,7 @@ func _draw() -> void:
 				continue
 			# Мина видна только тому, кто её поставил, — и тому, чей сапёр её нашёл
 			# (item 45). Иначе смысла в минном поле не было бы вовсе.
-			if fcell.feature_id == MCF.FEATURE_MINE \
+			if (fcell.feature_id == MCF.FEATURE_MINE or fcell.feature_id == MCF.FEATURE_AV_MINE) \
 					and not resolver.mine_visible_to(viewer, Vector2i(x, y)):
 				continue
 			var o := Vector2(ORIGIN.x + x * CELL, foy)
@@ -4068,10 +4102,16 @@ func _open_menu(unit: UnitInstance) -> void:
 			if not resolver.mine_cells(unit).is_empty():
 				var mine_text := "Lay Mine" if unit.mine_credits <= 0 \
 					else "Lay Mine (%d left)" % unit.mine_credits
-				_act_btn(vb, mine_text, _enter_mine,
+				_act_btn(vb, mine_text, _enter_mine.bind(false),
+						unit.remaining_ap > 0 or unit.mine_credits > 0)
+				# Противотанковая мина (item 13) — тот же кредит на серию, другая мина.
+				_act_btn(vb, "Lay Anti-Vehicle Mine", _enter_mine.bind(true),
 						unit.remaining_ap > 0 or unit.mine_credits > 0)
 			_act_btn(vb, "Sweep for Mines (%d tiles)" % MCF.MINE_REVEAL_RADIUS,
 					_submit.bind(RevealMinesIntent.new(unit.id)), unit.remaining_ap > 0)
+			# Обезвредить подсвеченную чужую мину рядом (item 13).
+			if not resolver.disarmable_mine_cells(unit).is_empty():
+				_act_btn(vb, "Disarm Mine", _enter_disarm, unit.remaining_ap > 0)
 
 		# Копка окопа (§3.7): пехота 3 окопа / инженер 6 за 1 ОД.
 		if not resolver.diggable_cells(unit).is_empty():

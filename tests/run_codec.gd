@@ -55,7 +55,9 @@ func _samples() -> Array:
 		VehicleMeleeIntent.new(7, 3000000),
 		WeldAirlockIntent.new(7, Vector2i(7, 7)),
 		PlaceMineIntent.new(7, Vector2i(12, 3)),
+		PlaceMineIntent.new(7, Vector2i(12, 4), true),
 		RevealMinesIntent.new(7),
+		DisarmMineIntent.new(7, Vector2i(12, 3)),
 		# Копка БЕЗ выбранных куч: sentinel обязан пережить провод нетронутым,
 		# иначе автоматический выбор превратится в выбор игрока (и наоборот).
 		DigIntent.new(7, Vector2i(15, 16)),
