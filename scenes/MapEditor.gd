@@ -7,6 +7,8 @@ extends Node2D
 
 const CELL := 40
 const ORIGIN := Vector2(40, 40)
+## Оформление панелей в общем стиле интерфейса (item 11).
+const SteamChrome = preload("res://src/ui/SteamChrome.gd")
 
 ## Цвет стороны в редакторе — тот же, что и в бою: палитра ростера. Редактор не
 ## знает состава партии, поэтому берёт цвет прямо по номеру игрока.
@@ -379,32 +381,50 @@ func _initials(sid: String) -> String:
 	return sid.substr(0, 2).to_upper()
 
 # --- UI ---
+## Панель, прижатая к краю экрана (item 11): редактор больше не одна широкая колонка
+## справа, а два узких столбца по бокам, между которыми видно карту.
+func _edge_panel(to_left: bool) -> VBoxContainer:
+	var panel := PanelContainer.new()
+	SteamChrome.apply_panel(panel)
+	if to_left:
+		panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+		panel.offset_left = 12
+	else:
+		panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+		panel.offset_right = -12
+	panel.offset_top = 12
+	panel.custom_minimum_size = Vector2(250, 0)
+	_ui.add_child(panel)
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.custom_minimum_size = Vector2(250, 0)
+	panel.add_child(scroll)
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 6)
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(vbox)
+	return vbox
+
 func _build_ui() -> void:
 	_ui = CanvasLayer.new()
 	add_child(_ui)
 
-	var panel := PanelContainer.new()
-	panel.position = Vector2(700, 20)
-	panel.custom_minimum_size = Vector2(540, 680)
-	_ui.add_child(panel)
-
-	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 6)
-	panel.add_child(vbox)
+	# ЛЕВАЯ колонка — рисование: инструменты и кисти рельефа/объектов (item 11).
+	var vbox := _edge_panel(true)
 
 	var title := Label.new()
 	title.text = "Map Editor"
-	title.add_theme_font_size_override("font_size", 22)
+	title.add_theme_font_size_override("font_size", 20)
 	vbox.add_child(title)
 
 	_status = Label.new()
-	_status.add_theme_font_size_override("font_size", 14)
+	_status.add_theme_font_size_override("font_size", 13)
 	_status.text = "Brush: Wall"
 	vbox.add_child(_status)
 
 	# Инструменты: кисть / линия / прямоугольник / заливка.
 	_tool_status = Label.new()
-	_tool_status.add_theme_font_size_override("font_size", 13)
+	_tool_status.add_theme_font_size_override("font_size", 12)
 	_tool_status.text = "Tool: Paint"
 	vbox.add_child(_tool_status)
 	var tool_row := HBoxContainer.new()
@@ -415,26 +435,33 @@ func _build_ui() -> void:
 		tb.pressed.connect(_set_tool.bind(pair[0], pair[1]))
 		tool_row.add_child(tb)
 
+	vbox.add_child(HSeparator.new())
+	var brush_lbl := Label.new()
+	brush_lbl.text = "Terrain & Objects:"
+	brush_lbl.add_theme_font_size_override("font_size", 13)
+	vbox.add_child(brush_lbl)
 	# Кисти рельефа/объектов — в сетке кнопок.
 	var grid := GridContainer.new()
-	grid.columns = 3
+	grid.columns = 2
 	vbox.add_child(grid)
 	for b in TERRAIN_BRUSHES:
 		var btn := Button.new()
 		btn.text = b["label"]
 		btn.pressed.connect(_set_brush.bind(b["id"], b["label"]))
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		grid.add_child(btn)
 
-	vbox.add_child(HSeparator.new())
+	# ПРАВАЯ колонка — обустройство и файлы: зоны, нейтралы, размер, сохранение (item 11).
+	var rbox := _edge_panel(false)
 
 	# Зоны развёртывания (§3.3, #52): рисуем регионы, где каждая сторона расставляет
 	# отряд в пре-игре. Заменяет попиксельную расстановку конкретных юнитов.
 	var zone_lbl := Label.new()
 	zone_lbl.text = "Deployment Zones:"
 	zone_lbl.add_theme_font_size_override("font_size", 13)
-	vbox.add_child(zone_lbl)
+	rbox.add_child(zone_lbl)
 	var zone_row := HBoxContainer.new()
-	vbox.add_child(zone_row)
+	rbox.add_child(zone_row)
 	# Игроков теперь до 26, кнопкой на каждого панель не застроишь: сторона
 	# выбирается списком, а кисть у неё одна.
 	_zone_player_opt = OptionButton.new()
@@ -451,16 +478,16 @@ func _build_ui() -> void:
 		zb.pressed.connect(_set_zone_brush.bind(pair[0], pair[1]))
 		zone_row.add_child(zb)
 
-	vbox.add_child(HSeparator.new())
+	rbox.add_child(HSeparator.new())
 
 	# Нейтральные юниты (item 5): выбрать тип и ставить его на карту как нейтрала. Юнит
 	# уходит в map.spawns с owner == NEUTRAL и на старте боя попадает под нейтральный ИИ.
 	var nu_lbl := Label.new()
 	nu_lbl.text = "Neutral Unit:"
 	nu_lbl.add_theme_font_size_override("font_size", 13)
-	vbox.add_child(nu_lbl)
+	rbox.add_child(nu_lbl)
 	var nu_row := HBoxContainer.new()
-	vbox.add_child(nu_row)
+	rbox.add_child(nu_row)
 	_neutral_unit_opt = OptionButton.new()
 	for i in NEUTRAL_UNIT_IDS.size():
 		_neutral_unit_opt.add_item(str(NEUTRAL_UNIT_IDS[i]), i)
@@ -471,11 +498,11 @@ func _build_ui() -> void:
 	place_btn.pressed.connect(_set_brush.bind("spawn_neutral", "Neutral Unit"))
 	nu_row.add_child(place_btn)
 
-	vbox.add_child(HSeparator.new())
+	rbox.add_child(HSeparator.new())
 
 	# Размер карты (можно делать большие поля).
 	var size_row := HBoxContainer.new()
-	vbox.add_child(size_row)
+	rbox.add_child(size_row)
 	var w_lbl := Label.new()
 	w_lbl.text = "W:"
 	size_row.add_child(w_lbl)
@@ -497,16 +524,16 @@ func _build_ui() -> void:
 	resize_btn.pressed.connect(_on_resize)
 	size_row.add_child(resize_btn)
 
-	vbox.add_child(HSeparator.new())
+	rbox.add_child(HSeparator.new())
 
 	# Сохранение/загрузка.
 	_name_edit = LineEdit.new()
 	_name_edit.placeholder_text = "map name"
 	_name_edit.text = "map1"
-	vbox.add_child(_name_edit)
+	rbox.add_child(_name_edit)
 
 	var io_row := HBoxContainer.new()
-	vbox.add_child(io_row)
+	rbox.add_child(io_row)
 	var save_btn := Button.new()
 	save_btn.text = "Save"
 	save_btn.pressed.connect(_on_save)
@@ -517,9 +544,9 @@ func _build_ui() -> void:
 	io_row.add_child(clear_btn)
 
 	_maps_option = OptionButton.new()
-	vbox.add_child(_maps_option)
+	rbox.add_child(_maps_option)
 	var load_row := HBoxContainer.new()
-	vbox.add_child(load_row)
+	rbox.add_child(load_row)
 	var load_btn := Button.new()
 	load_btn.text = "Load"
 	load_btn.pressed.connect(_on_load)
@@ -529,11 +556,11 @@ func _build_ui() -> void:
 	play_btn.pressed.connect(_on_play)
 	load_row.add_child(play_btn)
 
-	vbox.add_child(HSeparator.new())
+	rbox.add_child(HSeparator.new())
 	var menu_btn := Button.new()
 	menu_btn.text = "Main Menu"
 	menu_btn.pressed.connect(_on_main_menu)
-	vbox.add_child(menu_btn)
+	rbox.add_child(menu_btn)
 
 func _set_tool(t: int, label: String) -> void:
 	tool = t
