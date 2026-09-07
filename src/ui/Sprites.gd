@@ -35,6 +35,12 @@ const RES_MANIFEST_FILE := "res://textures/all_textures.txt"
 const MANIFEST := [
 	["Floors (the tile itself)", [
 		"floor", "floor_space", "floor_wall", "floor_cover", "fire",
+		# Трава (item 14) и следы разрушений (item 21): floor_epicenter — та же
+		# побитая плита, но выгоревшая, для самой клетки взрыва.
+		"floor_grass", "floor_destroyed", "floor_epicenter",
+	]],
+	["Combat decoration (cosmetic only, never affects the rules)", [
+		"glass_shard", "shell_casing", "blood_pool", "blood_splatter",
 	]],
 	["Terrain features (one per object on a tile)", [
 		"drone_station", "sandbags", "hedgehog", "dirt_pile", "trench",

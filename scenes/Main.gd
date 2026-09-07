@@ -44,6 +44,12 @@ enum Mode {NONE, MENU, MOVE, SHOOT, GRAB, ITEM, PUSH, DRONE_FLY, BUILD, BUILD_WA
 ## именно так пропадал круг взрыва у пушки, пока режим не был в этом списке.
 ## Налёт травяного пола (#14) — им же красит клетку редактор карт.
 const GRASS_TINT := Color(0.32, 0.55, 0.18, 0.35)
+## Копоть на побитом полу (#21.1), когда картинки-замены нет.
+const SCORCH_RUBBLE := Color(0.08, 0.07, 0.06, 0.45)
+const SCORCH_EPICENTER := Color(0.03, 0.02, 0.02, 0.72)
+## Поворот трупа в позе смерти (#21.4). Отрицательный — против часовой стрелки:
+## у Godot ось Y смотрит вниз, и «влево» на экране это минус.
+const CORPSE_LIE_DEG := -90.0
 
 ## «Нигде» — маркер отсутствия клетки (тот же, что и в резолвере).
 const NOWHERE := Vector2i(-9999, -9999)
@@ -182,6 +188,13 @@ var _dice: DiceRoller
 ## Кастомное модальное окно «выйти в меню» в общем стиле интерфейса (#51), а не
 ## системный ConfirmationDialog. Полноэкранный затемнитель + рамка SteamChrome.
 var _quit_dialog: Control
+## Клетки с телом, которое можно взять в руки прямо сейчас (#7). Подмножество
+## item_cells: обе подсвечиваются одинаково, но клик по ним делает разное.
+var _corpse_cells: Array = []
+## Косметика боя (#21). Правил не касается: слой читает описания из ActionResult.fx
+## и рисует их поверх доски. Пустой слой не стоит ничего — все проходы по нему
+## начинаются с проверки на пустоту.
+var _fx := FxDecals.new()
 var _p1_btn: Button
 var _p2_btn: Button
 var _diff_btn: Button
@@ -230,6 +243,10 @@ func _process(delta: float) -> void:
 	if Input.is_key_pressed(KEY_D): dir.x -= 1
 	if dir != Vector2.ZERO:
 		pan += dir.normalized() * PAN_SPEED * delta
+		queue_redraw()
+	# Полёт осколков и гильз (#21): пока что-то летит — перерисовываем, потом слой
+	# засыпает и кадры снова ничего не стоят.
+	if _fx.advance(delta):
 		queue_redraw()
 
 func _build_state() -> void:
@@ -572,10 +589,15 @@ func _handle_click(coord: Vector2i) -> void:
 				return
 			_back_to_menu()
 		Mode.GRAB:
-			# Единая «рука» (#50): шаг 1 — боец ИЛИ объект; для объекта шаг 2 — куда тащить.
+			# Единая «рука» (#50): шаг 1 — боец, ТЕЛО или объект; для объекта шаг 2 —
+			# куда тащить. Тело берётся в руки сразу, без второго клика (#7): у него
+			# нет «куда», оно едет на самом бойце.
 			if drag_object == Vector2i(-1, -1):
 				if occupant != null and target_ids.has(occupant.id):
 					_submit(CaptureIntent.new(selected_id, occupant.id))
+					return
+				if _corpse_cells.has(coord):
+					_submit(PickUpCorpseIntent.new(selected_id, coord))
 					return
 				if item_cells.has(coord):
 					drag_object = coord
@@ -1067,7 +1089,11 @@ func _enter_grab() -> void:
 	reach = null
 	drag_object = Vector2i(-1, -1)
 	target_ids = resolver.capturable_target_ids(u)
+	# Тела и объекты подсвечиваются вместе — рука одна (#50), — но обрабатываются
+	# по-разному: тело поднимается в руки одним кликом (#7), объект волочится за два.
+	_corpse_cells = resolver.corpse_pickup_cells(u)
 	item_cells = resolver.draggable_cells(u)
+	item_cells.append_array(_corpse_cells)
 	_menu.hide()
 	queue_redraw()
 
@@ -1600,6 +1626,11 @@ func _on_intent_ready(intent: Intent) -> void:
 		await _play_dice(result.dice_events)
 		_pending_death_ids.clear()
 		queue_redraw()
+	# Косметика (#21) добавляется ПОСЛЕ анимации броска — вместе с показом смерти,
+	# иначе лужа крови проявлялась бы раньше, чем кубик решил судьбу цели.
+	if not result.fx.is_empty():
+		_fx.apply(result.fx)
+		queue_redraw()
 	state.log.publish_result(result)
 	for c in controllers.values():
 		c.notify_state_changed(state)
@@ -2082,6 +2113,7 @@ func _draw() -> void:
 	var grid_col := Color(0.25, 0.27, 0.32)
 	var fog_col := Color(0.02, 0.02, 0.04, 0.55)
 	var label_off := Vector2(6, CELL - 4)
+	var fx_damage: Dictionary = _fx.floor_damage
 	for y in gh:
 		var oy: float = ORIGIN.y + y * CELL
 		for x in gw:
@@ -2091,10 +2123,19 @@ func _draw() -> void:
 			var is_wall := cell.cover_height >= MCF.WALL_HEIGHT
 			# Пол: сначала картинка-замена, и только если её нет — заливка цветом (#55).
 			var floor_name := "floor"
+			# Побитый взрывом пол (#21.1). Проверка идёт ПОСЛЕ пустого слоя: пока
+			# ничего не рушили, словарь пуст и в цикл по 2400 клеткам не заходят.
+			var damage: int = 0
+			if not fx_damage.is_empty():
+				damage = int(fx_damage.get(Vector2i(x, y), 0))
 			if cell.is_space:
 				floor_name = "floor_space"
 			elif is_wall:
 				floor_name = "floor_wall"
+			elif damage == FxDecals.DAMAGE_EPICENTER:
+				floor_name = "floor_epicenter"   # выгоревшая клетка эпицентра
+			elif damage == FxDecals.DAMAGE_RUBBLE:
+				floor_name = "floor_destroyed"
 			elif cell.floor_type == MCF.FLOOR_GRASS:
 				floor_name = "floor_grass"   # трава (#14) — своя картинка-замена
 			if not Sprites.draw_texture_override_rect(self, floor_name, rect):
@@ -2108,6 +2149,10 @@ func _draw() -> void:
 				# «сюда огонь придёт почти наверняка» читалось прямо на доске (#14).
 				if not is_wall and not cell.is_space and cell.floor_type == MCF.FLOOR_GRASS:
 					draw_rect(rect, GRASS_TINT)
+				# Побитый пол без картинки-замены: тёмная копоть, у эпицентра гуще.
+				if damage != 0 and not cell.is_space:
+					draw_rect(rect, SCORCH_EPICENTER if damage == FxDecals.DAMAGE_EPICENTER
+							else SCORCH_RUBBLE)
 			var h: float = cell.cover_height
 			# Низкое укрытие: тон тем ярче, чем выше (§3.7).
 			if h > 0.0 and not is_wall:
@@ -2380,6 +2425,9 @@ func _draw() -> void:
 	# а не тело лежит поверх брони. Смерти, ещё не показанные из-за анимации броска
 	# (#46), рисуются как живые в общем проходе ниже.
 	#
+	# Косметика поверх пола, но ПОД телами и бойцами (#21): лужи, осколки, гильзы.
+	_draw_fx_props(visible)
+
 	# Труп существует в ДВУХ видах: погибший на месте боец — это occupant клетки со
 	# статусом CORPSE, а положенный из рук (#6) — безымянная куча cell.corpse_count.
 	# Кучи не рисовались вовсе: тело давало +1 к защите, но на карте его не было.
@@ -2586,10 +2634,63 @@ func _draw_laser_preview(shooter: UnitInstance, aim: Vector2i) -> void:
 	draw_string(font, end_org + Vector2(CELL * 0.5, CELL - 4), "%d left" % left,
 			HORIZONTAL_ALIGNMENT_CENTER, -1, 11, Color(0.8, 0.95, 1.0))
 
+## Косметические частицы (#21): осевшие и ещё летящие. Ни одна из них не влияет на
+## правила — это чистая декорация, и она же первой отваливается под туманом войны:
+## того, чего команда не видит, ей и знать незачем.
+##
+## Картинки-замены имеют приоритет (glass_shard.png и т. п.); без них рисуются
+## векторные примитивы, как и всё остальное в этой игре.
+func _draw_fx_props(visible: Dictionary) -> void:
+	if _fx.props.is_empty() and _fx.flying.is_empty():
+		return
+	var fog_on: bool = resolver.fog_enabled
+	for prop: Dictionary in _fx.props:
+		_draw_fx_one(prop["kind"], prop["pos"], prop["rot"], prop["scale"], visible, fog_on)
+	for f: Dictionary in _fx.flying:
+		_draw_fx_one(f["kind"], FxDecals.flight_pos(f), FxDecals.flight_rot(f),
+				f["scale"], visible, fog_on)
+
+## Размер частицы в долях клетки и запасной цвет, когда картинки-замены нет.
+const FX_LOOK := {
+	"shard": [0.16, Color(0.72, 0.88, 0.95, 0.85)],
+	"casing": [0.11, Color(0.85, 0.72, 0.28, 0.9)],
+	"blood_drop": [0.10, Color(0.55, 0.06, 0.06, 0.85)],
+	"blood_pool": [0.42, Color(0.42, 0.04, 0.04, 0.55)],
+}
+const FX_TEXTURE := {
+	"shard": "glass_shard", "casing": "shell_casing",
+	"blood_drop": "blood_splatter", "blood_pool": "blood_pool",
+}
+
+func _draw_fx_one(kind: String, cell_pos: Vector2, rot: float, scale: float,
+		visible: Dictionary, fog_on: bool) -> void:
+	if fog_on and not visible.has(Vector2i(floori(cell_pos.x), floori(cell_pos.y))):
+		return
+	var look: Array = FX_LOOK.get(kind, [0.12, Color(0.8, 0.8, 0.8, 0.8)])
+	var half: float = float(look[0]) * CELL * float(scale) * 0.5
+	var center := ORIGIN + cell_pos * CELL
+	var rect := Rect2(center - Vector2(half, half), Vector2(half, half) * 2.0)
+	if Sprites.draw_texture_override_rect(self, FX_TEXTURE.get(kind, kind), rect,
+			rad_to_deg(rot)):
+		return
+	if kind == "blood_pool":
+		# Лужа — овал, а не прямоугольник: рисуем окружностью со сплющиванием.
+		draw_set_transform(pan + center * zoom, rot, Vector2(zoom, zoom * 0.62))
+		draw_circle(Vector2.ZERO, half, look[1])
+		draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
+		return
+	# Осколок/гильза/капля — вытянутый четырёхугольник, повёрнутый на свой угол.
+	var a := Vector2(half, half * 0.45).rotated(rot)
+	var b := Vector2(-half, half * 0.45).rotated(rot)
+	draw_colored_polygon(PackedVector2Array([
+		center + a, center + b, center - a, center - b]), look[1])
+
+## count > 1 — куча тел; поворот на 90° влево (#21.4) кладёт бойца набок.
 func _draw_corpse(coord: Vector2i, count: int) -> void:
 	var org := _cell_origin(coord)
 	var center := org + Vector2(CELL, CELL) * 0.5
-	if not Sprites.draw_texture_override(self, "corpse", org, float(CELL)):
+	# Поза смерти (#21.4): тело развёрнуто на 90° ПРОТИВ часовой стрелки.
+	if not Sprites.draw_texture_override(self, "corpse", org, float(CELL), CORPSE_LIE_DEG):
 		draw_circle(center, CELL * 0.34, CORPSE_COLOR)
 	if count > 1:
 		draw_string(ThemeDB.fallback_font, center + Vector2(CELL * 0.16, CELL * 0.3),
@@ -3094,7 +3195,8 @@ func _open_menu(unit: UnitInstance) -> void:
 
 		# Одна кнопка на всё, что можно взять руками (#50): боец, труп, мешки, ёж, куча земли.
 		if unit.remaining_ap > 0 and (not resolver.capturable_target_ids(unit).is_empty()
-				or not resolver.draggable_cells(unit).is_empty()):
+				or not resolver.draggable_cells(unit).is_empty() \
+				or not resolver.corpse_pickup_cells(unit).is_empty()):
 			var grab_btn := Button.new()
 			grab_btn.text = "Grab"
 			grab_btn.pressed.connect(_enter_grab)
@@ -3158,18 +3260,13 @@ func _open_menu(unit: UnitInstance) -> void:
 			brk.pressed.connect(_enter_break)
 			vb.add_child(brk)
 
-		# Подобрать труп как переносной щит (+1 к защите) (#6).
-		if unit.remaining_ap > 0:
-			var corpse_cell := resolver.corpse_pickup_cell(unit)
-			if corpse_cell != Vector2i(-999, -999):
-				var pick_btn := Button.new()
-				pick_btn.text = "Pick Up Corpse (+1 def)"
-				pick_btn.pressed.connect(_submit.bind(PickUpCorpseIntent.new(unit.id, corpse_cell)))
-				vb.add_child(pick_btn)
-		# Положить несомый труп на выбранную клетку — свою или соседнюю (#6, #72).
-		if unit.carried_corpses > 0:
+		# Отдельной кнопки «подобрать труп» больше нет (#7): тело поднимается из режима
+		# «рука» кликом по клетке, как и всё остальное, что можно взять.
+		# Положить несомый труп на СОСЕДНЮЮ клетку (#6, #72); под себя нельзя (#10).
+		if unit.carried_corpses > 0 and not resolver.corpse_drop_cells(unit).is_empty():
 			var drop_btn := Button.new()
-			drop_btn.text = "Drop Corpse (carrying %d)" % unit.carried_corpses
+			drop_btn.text = "Drop Corpse (carrying %d/%d)" % [
+					unit.carried_corpses, MCF.CORPSE_CARRY_MAX]
 			drop_btn.pressed.connect(_enter_corpse_drop)
 			vb.add_child(drop_btn)
 
@@ -3360,6 +3457,10 @@ func _on_redo_pressed() -> void:
 
 ## Доска переставлена откатом/повтором внутри резолвера — привести к ней экран.
 func _resync_after_restore() -> void:
+	# Откат переставляет доску назад во времени — вместе с ней снимается и косметика
+	# отменённых действий (#21/#28). Восстанавливать её по шагам незачем: она ни на
+	# что не влияет, а расходиться с доской не должна.
+	_fx.clear()
 	_deselect()
 	for c in controllers.values():
 		c.notify_state_changed(state)

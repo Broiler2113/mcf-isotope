@@ -313,10 +313,12 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 			state.grid.move_occupant(unit.coord, fire)
 			update_airlocks()
 		unit.move_credit = 0
-		unit.kill()
-		lines.append("%s burned to death at (%d, %d)!" % [
+		var burn_res := ActionResult.success(lines)
+		# Кровь льётся с той стороны, откуда боец пришёл в огонь (#21.4).
+		_kill(unit, burn_res, origin)
+		burn_res.log("%s burned to death at (%d, %d)!" % [
 			unit.stats.display_name, fire.x, fire.y])
-		return ActionResult.success(lines)
+		return burn_res
 
 	if carried != null:
 		# Игрок может выбрать клетку для пленника (свободная, рядом с целью); иначе —
@@ -550,14 +552,21 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 	shooter.action_state.remaining_shots -= fired
 	if killed or shooter.action_state.remaining_shots <= 0:
 		shooter.action_state = null
+	# Отчёт собирается ДО смерти: _kill складывает в него описание крови (#21.4), а
+	# сама смерть обязана случиться РАНЬШЕ невесомости — _apply_zero_g отбрасывает
+	# только живых, и переставь её местами, труп в космосе начал бы улетать.
+	var result := ActionResult.new()
+	result.ok = true
 	if killed:
-		target.kill()  # труп остаётся на клетке (блокирует движение, но не ЛОС)
+		_kill(target, result, shooter.coord)  # труп остаётся на клетке, но не перекрывает ЛОС
 
 	# Невесомость (§3.11): отдача стрелка и отбрасывание цели (кроме противотанкиста).
 	_apply_zero_g(shooter, target)
 
-	var result := ActionResult.new()
-	result.ok = true
+	# Гильза на каждый ушедший выстрел (#21.3), вылетают за спину стрелка.
+	if fired > 0:
+		_fx(result, {"fx": "casings", "at": shooter.coord,
+			"toward": target.coord, "count": fired})
 	if shield_immune:
 		def_mods.append({"label": "Shield blocks (immune)", "delta": 0})
 	result.dice_events.append({
@@ -697,13 +706,15 @@ func _blast(center: Vector2i, res: ActionResult = null, cells: Array[Vector2i] =
 			continue
 		if _protected_by(u, protectors):
 			continue
-		u.kill()
+		_kill(u, res, center)
 		killed_names.append(u.stats.display_name)
 
 	# Взрыв сносит укрепления в зоне: стены, стекло, шлюзы, ЛДФ, деревянные и
 	# трупные стены, станции дронов и ДПМГ (§3.6/§3.7/§3.12). ДОТ устойчив (#17).
 	for c: Vector2i in area:
-		_blast_destroy_terrain(c, res)
+		_blast_destroy_terrain(c, res, center)
+	# Побитый пол по ВСЕЙ зоне, эпицентр — отдельной текстурой (#21.1).
+	_fx(res, {"fx": "debris", "at": center, "cells": area})
 	return killed_names
 
 ## Прямое попадание в прочное укрепление (ДОТ, §3.7): бетонная коробка принимает удар
@@ -730,7 +741,9 @@ func _pillbox_absorbs(center: Vector2i, damage: int, res: ActionResult) -> bool:
 ## Взрыв рушит укрепления клетки: стены/стекло/шлюзы/ЛДФ/деревянные/трупные стены,
 ## станции дронов и ДПМГ. Прочные укрепления (ДОТ) осколками не берутся (#17, §3.7):
 ## им нужно прямое попадание, которое обрабатывает _pillbox_absorbs.
-func _blast_destroy_terrain(c: Vector2i, res: ActionResult = null) -> void:
+## from_coord — откуда пришёл удар: осколки стекла (#21.2) летят ПРОТИВ него.
+func _blast_destroy_terrain(c: Vector2i, res: ActionResult = null,
+		from_coord: Vector2i = NOWHERE) -> void:
 	if not state.grid.in_bounds(c):
 		return
 	var cell := state.grid.cell(c)
@@ -750,6 +763,9 @@ func _blast_destroy_terrain(c: Vector2i, res: ActionResult = null) -> void:
 		MCF.FEATURE_MINE,
 	]
 	if fid in destructible:
+		if fid == MCF.FEATURE_GLASS:
+			_fx(res, {"fx": "shards", "at": c,
+				"from": from_coord if from_coord != NOWHERE else c})
 		cell.clear_feature()
 		# Стену из трупов взрыв не стирает, а вскрывает (#98): пять тел вылетают из неё
 		# и падают порознь вокруг. Разлёт идёт ПОСЛЕ clear_feature — иначе одно из тел
@@ -786,7 +802,7 @@ func _resolve_flame(shooter: UnitInstance, target_coord: Vector2i) -> ActionResu
 			_flame_splash(last, step, remaining, killed_names, shooter.owner)
 			break
 		if occ != null and occ.is_alive():
-			occ.kill()
+			_kill(occ)
 			killed_names.append(occ.stats.display_name)
 		_ignite(cell, shooter.owner)  # поджог пола (§3.8)
 		last = cur
@@ -826,7 +842,7 @@ func _flame_walk(origin: Vector2i, dir: Vector2i, count: int, killed_names: Arra
 		if cell.is_wall() or (occ != null and occ.is_alive() and _is_shield(occ)):
 			return
 		if occ != null and occ.is_alive():
-			occ.kill()
+			_kill(occ)
 			killed_names.append(occ.stats.display_name)
 		_ignite(cell, owner)
 		cur += dir
@@ -877,7 +893,7 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i) -> ActionResult:
 			"shield", "unit":
 				var occ: UnitInstance = cell.occupant
 				if destroyed and occ != null and occ.is_alive():
-					occ.kill()
+					_kill(occ)
 					killed_names.append(occ.stats.display_name)
 			"feature":
 				var was: String = cell.feature_id
@@ -1145,7 +1161,7 @@ func _resolve_assault(shooter: UnitInstance, target: UnitInstance) -> ActionResu
 		result.log("%s ⇒ %s: %d hits (need %d+, defense %d+)" % [
 			shooter.stats.display_name, t.stats.display_name, hits, need, parry_need])
 		if t_killed:
-			t.kill()
+			_kill(t)
 			any_kill = true
 			result.log("%s killed!" % t.stats.display_name)
 		else:
@@ -1178,7 +1194,7 @@ func _resolve_push(intent: PushIntent) -> ActionResult:
 	var survived := roll >= need
 	var pushed := false
 	if not survived:
-		target.kill()
+		_kill(target)
 	else:
 		var back := target.coord + step
 		if state.grid.in_bounds(back) and not state.grid.cell(back).is_wall() \
@@ -1320,6 +1336,8 @@ func _resolve_pickup_corpse(intent: PickUpCorpseIntent) -> ActionResult:
 		return ActionResult.fail(err)
 	if unit.remaining_ap <= 0:
 		return ActionResult.fail("Unit has no AP left")
+	if unit.carried_corpses >= MCF.CORPSE_CARRY_MAX:
+		return ActionResult.fail("Hands full — %d bodies is the limit" % MCF.CORPSE_CARRY_MAX)
 	if Combat.distance(unit.coord, intent.from) > 1:
 		return ActionResult.fail("Corpse is out of reach")
 	if not has_corpse(intent.from):
@@ -1347,6 +1365,10 @@ func _resolve_drop_corpse(intent: DropCorpseIntent) -> ActionResult:
 		return ActionResult.fail(err)
 	if unit.carried_corpses <= 0:
 		return ActionResult.fail("No corpse to drop")
+	# Под себя тело не кладут (#10): своя клетка занята самим бойцом, и труп под
+	# ногами лишь мешал бы — и ему, и разбору кучи.
+	if intent.to == unit.coord:
+		return ActionResult.fail("Can't drop a body under yourself")
 	if Combat.distance(unit.coord, intent.to) > 1:
 		return ActionResult.fail("Too far to place")
 	var cell := state.grid.cell(intent.to)
@@ -1363,6 +1385,43 @@ func _resolve_drop_corpse(intent: DropCorpseIntent) -> ActionResult:
 	return ActionResult.success(["%s drops a corpse (%d/%d) at (%d, %d)" % [
 		unit.stats.display_name, corpses_at(intent.to), MCF.CORPSE_WALL_COUNT,
 		intent.to.x, intent.to.y]])
+
+## Положить описание косметического эффекта (#21). Единственная точка, откуда они
+## берутся: если res == null (внутренний вызов без отчёта), эффект просто пропадает —
+## показывать его всё равно некому.
+func _fx(res: ActionResult, ev: Dictionary) -> void:
+	if res != null:
+		res.fx.append(ev)
+
+## Единственная точка смерти в резолвере (#8). Всё, что боец нёс в руках, обязано
+## оказаться на доске: погибший с телом на руках оставляет на своей клетке ДВА трупа —
+## своё и принесённое. Раньше груз просто исчезал вместе с носильщиком.
+##
+## Класть некуда только в двух случаях: боец не на карте (сидит в машине, coord =
+## OFFBOARD) или на клетке уже собралась стена из пяти тел. Тогда груз пропадает —
+## как и раньше, но теперь это редкий край, а не общее правило.
+## from_coord — откуда прилетел убивший удар: брызги (#21.4) летят ПРОТИВ него.
+## NOWHERE (значение по умолчанию) = источник неизвестен, тогда веер расходится кругом.
+func _kill(u: UnitInstance, res: ActionResult = null, from_coord: Vector2i = NOWHERE) -> void:
+	if u == null or not u.is_alive():
+		return
+	if state.grid.in_bounds(u.coord):
+		_fx(res, {"fx": "blood", "at": u.coord,
+			"from": from_coord if from_coord != NOWHERE else u.coord})
+	var load: int = u.carried_corpses
+	u.carried_corpses = 0
+	u.kill()
+	if load <= 0:
+		return
+	var cell := state.grid.cell(u.coord) if state.grid.in_bounds(u.coord) else null
+	if cell == null:
+		return
+	for _i in load:
+		# Сам погибший уже лежит на этой клетке как occupant-труп и в corpses_at
+		# посчитан, поэтому под стену остаётся ровно то, что до пяти не добрано.
+		if corpses_at(u.coord) >= MCF.CORPSE_WALL_COUNT:
+			return
+		_add_corpse_to_cell(u.coord)
 
 ## +1 к защите цели за каждый несомый ею труп (#6).
 func _corpse_shield_bonus(target: UnitInstance) -> int:
@@ -1481,8 +1540,8 @@ func corpse_drop_cells(unit: UnitInstance) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
 	if unit == null or unit.carried_corpses <= 0:
 		return out
-	var candidates: Array = [unit.coord]
-	candidates.append_array(state.grid.neighbors(unit.coord))
+	# Своей клетки в списке нет (#10) — ровно как и в _resolve_drop_corpse.
+	var candidates: Array = state.grid.neighbors(unit.coord)
 	for c: Vector2i in candidates:
 		var cell := state.grid.cell(c)
 		if cell == null or cell.is_wall() or cell.is_space:
@@ -2122,7 +2181,7 @@ func advance_fire(owner: int = -1) -> void:
 		# Юнит, оказавшийся на загоревшейся клетке, сгорает мгновенно (§6.5).
 		# Щитоносец (#50) и огнемётчик (#2) невосприимчивы к огню.
 		if cell.occupant != null and cell.occupant.is_alive() and not is_fireproof(cell.occupant):
-			cell.occupant.kill()
+			_kill(cell.occupant)
 
 ## Постройки, которые огонь уничтожает вместе с клеткой (#53, #83). ЛДФ здесь нет
 ## намеренно: несгораемая секция вообще не загорается (_fire_blocked).
@@ -3183,7 +3242,7 @@ func _resolve_move_held(intent: MoveHeldIntent) -> ActionResult:
 		actor.stats.display_name, carried.stats.display_name, intent.to.x, intent.to.y])
 	# Переставленный на горящую клетку пленник сгорает — как и любой, кто туда попал.
 	if state.grid.cell(intent.to).on_fire and not is_fireproof(carried):
-		carried.kill()
+		_kill(carried)
 		res.log("%s burned to death!" % carried.stats.display_name)
 		res.deaths.append(carried.id)
 	return res
@@ -3298,12 +3357,29 @@ func _resolve_drag(intent: DragIntent) -> ActionResult:
 	return ActionResult.fail("Nothing here to drag")
 
 ## Соседние клетки с перетаскиваемым объектом (труп/мешки/ёж/куча земли) — для UI.
+## Трупов здесь БОЛЬШЕ НЕТ (#7): в режиме «рука» тело теперь ПОДНИМАЮТ, а не волокут
+## по земле — см. corpse_pickup_cells(). Само намерение DragIntent труп по-прежнему
+## переносит (сеть и старые записи остаются валидными), просто UI его не предлагает.
 func draggable_cells(actor: UnitInstance) -> Array:
 	var out: Array = []
 	for n in state.grid.neighbors(actor.coord):
 		var cell := state.grid.cell(n)
-		var is_corpse := cell.occupant != null and cell.occupant.status == MCF.Status.CORPSE
-		if is_corpse or DRAGGABLE_FEATURES.has(cell.feature_id):
+		if DRAGGABLE_FEATURES.has(cell.feature_id):
+			out.append(n)
+	return out
+
+## Клетки с телом, которое боец может взять В РУКИ из режима «рука» (#7): своя и восемь
+## соседних. Пусто, если руки уже полны (#9) или нет ОД — подсветка обязана совпадать
+## с тем, что примет _resolve_pickup_corpse, иначе клик «не работает».
+func corpse_pickup_cells(actor: UnitInstance) -> Array:
+	var out: Array = []
+	if actor == null or actor.remaining_ap <= 0 \
+			or actor.carried_corpses >= MCF.CORPSE_CARRY_MAX:
+		return out
+	if has_corpse(actor.coord):
+		out.append(actor.coord)
+	for n in state.grid.neighbors(actor.coord):
+		if has_corpse(n):
 			out.append(n)
 	return out
 
@@ -3428,7 +3504,7 @@ func _resolve_dpmg(intent: DPMGFireIntent) -> ActionResult:
 			break
 
 	if killed:
-		target.kill()
+		_kill(target)
 
 	var result := ActionResult.new()
 	result.ok = true
@@ -3545,6 +3621,10 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 	var details: Array = []
 	var killed_names: Array = []
 	var broken_glass: Array = []
+	# Отчёт нужен уже здесь: _kill складывает в него кровь (#21.4), а строки журнала
+	# дописываются ниже, как и раньше.
+	var result := ActionResult.new()
+	result.ok = true
 	for u in state.all_units():
 		if not u.is_alive():
 			continue
@@ -3568,7 +3648,7 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 				if r < need_roll:
 					det["survived"] = false
 		if not det["survived"]:
-			u.kill()
+			_kill(u, result, center)
 			killed_names.append(u.stats.display_name)
 		details.append(det)
 
@@ -3591,12 +3671,14 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 			if gr < GLASS_ARMOR + 1:
 				gdet["survived"] = false
 		if not gdet["survived"]:
+			_fx(result, {"fx": "shards", "at": gc, "from": center})
 			gcell.clear_feature()
 			broken_glass.append(gc)
 		details.append(gdet)
 
-	var result := ActionResult.new()
-	result.ok = true
+	# Осколочная не рушит укрепления, поэтому щебень кладём только там, где реально
+	# что-то разлетелось: под самим взрывом и под лопнувшими стёклами (#21.1).
+	_fx(result, {"fx": "debris", "at": center, "cells": [center] + broken_glass})
 	result.dice_events.append({
 		"kind": "grenade", "item": MCF.ITEM_FRAG,
 		"thrower": thrower.stats.display_name, "center": center, "targets": details,
@@ -4247,7 +4329,7 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 	for cc in plan["crush_cells"]:
 		var occ: UnitInstance = state.grid.cell(cc).occupant
 		if occ != null and occ.is_alive():
-			occ.kill()
+			_kill(occ)
 			crushed.append(occ)
 			res.deaths.append(occ.id)
 			res.log("%s crushed under the %s!" % [occ.stats.display_name,
@@ -4460,7 +4542,7 @@ func _tank_crew_hit(veh: Vehicle, res: ActionResult) -> void:
 		return
 	var roll := state.dice.roll_d6()
 	if roll < crew.stats.armor_threshold:
-		crew.kill()
+		_kill(crew)
 		veh.occupants.remove_at(idx)
 		veh.corpse_slots.append(crew.stats.display_name)
 		res.log("%s (crew) is killed (roll %d, armor %d+)." % [
@@ -4476,7 +4558,7 @@ func _destroy_vehicle(veh: Vehicle, res: ActionResult) -> void:
 	for uid in veh.occupants:
 		var crew := state.get_unit(uid)
 		if crew != null:
-			crew.kill()
+			_kill(crew)
 	veh.occupants.clear()
 	veh.durability = 0
 	var roll := state.dice.roll_d6()
@@ -4506,7 +4588,7 @@ func _destroy_vehicle(veh: Vehicle, res: ActionResult) -> void:
 				continue
 			var occ: UnitInstance = state.grid.cell(bc).occupant
 			if occ != null and occ.is_alive():
-				occ.kill()
+				_kill(occ)
 				res.log("%s caught in the explosion!" % occ.stats.display_name)
 		_damage_vehicles_in_area(area, 2, veh.id, res, "explosion")
 	# Танк остаётся корпусом-обломком (укрытие/блок линии); челнок исчезает.
