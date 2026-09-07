@@ -38,10 +38,9 @@ func _ready() -> void:
 	# И недоигранный файл тоже: в меню приходят, чтобы начать заново (M12).
 	SaveHandoff.discard()
 
-	var bg := ColorRect.new()
-	bg.color = Color(0.08, 0.09, 0.11)
-	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	add_child(bg)
+	# Параллакс-звёзды вместо плоской заливки (M13, item 35). Фон живёт своей жизнью
+	# и ввод не перехватывает — меню поверх него работает как работало.
+	add_child(Starfield.new())
 
 	var center := CenterContainer.new()
 	center.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -60,11 +59,25 @@ func _ready() -> void:
 	vbox.add_theme_constant_override("separation", 12)
 	margin.add_child(vbox)
 
+	# Заголовок с эмблемой (item 35): logo.png лежит в комплекте, но до сих пор нигде
+	# не показывался. Если файла нет — остаётся только надпись, как и было.
+	var title_row := HBoxContainer.new()
+	title_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	title_row.add_theme_constant_override("separation", 12)
+	vbox.add_child(title_row)
+	var logo := _logo_texture()
+	if logo != null:
+		var badge := TextureRect.new()
+		badge.texture = logo
+		badge.custom_minimum_size = Vector2(56, 56)
+		badge.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		badge.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		title_row.add_child(badge)
 	var title := Label.new()
 	title.text = "MCF Tactics"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 44)
-	vbox.add_child(title)
+	title_row.add_child(title)
 
 	var subtitle := Label.new()
 	subtitle.text = "Turn-based tactics"
@@ -85,6 +98,13 @@ func _ready() -> void:
 	tabs.add_child(_build_files_tab())
 
 	vbox.add_child(HSeparator.new())
+	# Экран настроек (item 24) ждёт исходников: порт наугад дал бы меню, которое
+	# выглядит настройками, но ничего не настраивает. Кнопка стоит на своём месте
+	# погашенной — так видно, что место занято, а не забыто.
+	var settings := _menu_button("Settings", func() -> void: pass)
+	settings.disabled = true
+	settings.tooltip_text = "Not built yet — waiting on the original settings screen."
+	vbox.add_child(settings)
 	vbox.add_child(_menu_button("Quit", _quit))
 
 # --- Вкладка одиночной игры ---
@@ -349,6 +369,15 @@ func _menu_button(text: String, handler: Callable) -> Button:
 	btn.add_theme_font_size_override("font_size", 18)
 	btn.pressed.connect(handler)
 	return btn
+
+## Эмблема из комплекта. Грузится как обычный файл, а не как ресурс, — той же
+## дорогой, что и остальные заменяемые картинки интерфейса (#55): подменил png —
+## видно со следующего запуска.
+func _logo_texture() -> Texture2D:
+	const PATH := "res://interface_textures/logo.png"
+	if not ResourceLoader.exists(PATH):
+		return null
+	return load(PATH) as Texture2D
 
 func _refresh_saves() -> void:
 	_saves_list.clear()

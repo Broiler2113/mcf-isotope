@@ -1673,6 +1673,15 @@ mutating with the game and replays began from the wrong board.
 - **Theme:** `UiTheme` (autoload `Ui`) applies the "2003 Steam" gunmetal skin to the root
   window. In-game surfaces are framed by `SteamChrome` — panel body, dark-green title
   bar, accent pip. The dice roller, deployment screen, and quit popup all use it.
+- **Main-menu background (item 35):** `Starfield` replaces the flat `ColorRect` with a
+  gradient sky and three star layers drifting at 5 / 13 / 28 px per second — the *speed
+  difference* is the whole parallax. Each layer is one 512-px tile tiled across the
+  screen with only its position animated, so a frame costs three sprites no matter how
+  many stars there are, and the layers are laid out from a fixed seed so the menu looks
+  the same every launch. The bundled `logo.png` finally appears, beside the title.
+- **Settings (item 24) is a disabled button.** The original settings screen was never
+  supplied; a guessed port would look like settings without setting anything. The slot
+  is held visibly rather than silently dropped.
 - All UI strings are **English**; all code comments are **Russian**.
 
 ---
