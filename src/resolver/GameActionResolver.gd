@@ -260,7 +260,7 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 	if burdened:
 		budget = mini(budget, carry_budget)
 
-	var reach := Movement.reachable(state.grid, unit.coord, budget)
+	var reach := Movement.reachable_for(state.grid, unit, budget)
 	if not reach.can_reach(intent.target):
 		return ActionResult.fail("Target out of reach (speed %d)" % budget)
 
@@ -285,7 +285,7 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 	# Наступил на чужую мину где-то по дороге (item 45). Проверяется ВЕСЬ маршрут,
 	# а не только конечная клетка: мину ставят на пути, а не в точке назначения.
 	var mine := _mine_on_path(unit, path)
-	if mine != Vector2i(-9999, -9999):
+	if mine != NOWHERE:
 		# Боец остаётся ТАМ, где наступил. Это не косметика: взрыв бьёт по клетке
 		# мины, и не вернув его туда, мы подорвали бы пустую землю, а сам он дошёл
 		# бы до цели невредимым.
@@ -301,11 +301,19 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 		_detonate_mine(mine, unit, mine_res)
 		return mine_res
 
-	# Зашёл на горящую клетку — мгновенная смерть без спасброска (isotope §6.5).
-	# Щитоносец невосприимчив к огню (#50) — проходит сквозь пламя невредимым.
-	if state.grid.cell(intent.target).on_fire and not _is_shield(unit):
+	# Пересёк горящую клетку — мгновенная смерть без спасброска (isotope §6.5, #1).
+	# Проверяется ВЕСЬ маршрут, а не только цель: сгореть можно и на полпути.
+	# Щитоносец и огнемётчик огня не боятся (#2, #50).
+	var fire := _fire_on_path(unit, path)
+	if fire != NOWHERE:
+		# Как и с миной: боец остаётся ТАМ, где сгорел, а не доходит до цели.
+		if unit.coord != fire:
+			state.grid.move_occupant(unit.coord, fire)
+			update_airlocks()
+		unit.move_credit = 0
 		unit.kill()
-		lines.append("%s burned to death!" % unit.stats.display_name)
+		lines.append("%s burned to death at (%d, %d)!" % [
+			unit.stats.display_name, fire.x, fire.y])
 		return ActionResult.success(lines)
 
 	if carried != null:
@@ -1139,6 +1147,11 @@ func _step_toward(from_coord: Vector2i, to_coord: Vector2i) -> Vector2i:
 func _is_shield(u: UnitInstance) -> bool:
 	return u != null and u.stats.special_ability_id == MCF.ABILITY_SHIELD_BEARER
 
+## Не гибнет в огне и не обходит его при поиске пути (#1, #2): щитоносец и огнемётчик.
+## Публичная — тем же вопросом задаётся Main, когда решает, рисовать ли крест-предупреждение.
+func is_fireproof(u: UnitInstance) -> bool:
+	return u != null and MCF.ability_is_fireproof(u.stats.special_ability_id)
+
 func _protected_by(u: UnitInstance, protectors: Array) -> bool:
 	for sb in protectors:
 		if u.owner == sb.owner and Combat.distance(u.coord, sb.coord) <= MCF.ANTI_TANK_BLAST_RADIUS:
@@ -1900,6 +1913,20 @@ func mine_visible_to(owner: int, coord: Vector2i) -> bool:
 	var seen: Dictionary = state.revealed_mines.get(owner, {})
 	return int(seen.get(coord, -1)) >= state.turns.round_number
 
+## «Нигде» — маркер отсутствия клетки в результате поиска по маршруту.
+const NOWHERE := Vector2i(-9999, -9999)
+
+## Первая горящая клетка на пройденном маршруте (#1). Огнеупорные бойцы (#2) сквозь
+## пламя проходят невредимыми, и для них ответ всегда NOWHERE.
+func _fire_on_path(unit: UnitInstance, path: Array) -> Vector2i:
+	if is_fireproof(unit):
+		return NOWHERE
+	for step: Vector2i in path:
+		var cell := state.grid.cell(step)
+		if cell != null and cell.on_fire:
+			return step
+	return NOWHERE
+
 ## Первая чужая мина на пройденном маршруте. Мина срабатывает под ногой, а не в
 ## точке назначения: минное поле на то и поле, что его пересекают.
 ## path приходит из Reachability.path_to(), а он отдаёт только ВОЙДЕННЫЕ клетки —
@@ -1912,7 +1939,7 @@ func _mine_on_path(unit: UnitInstance, path: Array) -> Vector2i:
 		if state.roster.are_allies(unit.owner, cell.feature_owner):
 			continue  # на свои мины не наступают: их обходят, зная, где они
 		return step
-	return Vector2i(-9999, -9999)
+	return NOWHERE
 
 func _dirt_spots(trench: Vector2i, digger: Vector2i) -> Array:
 	var out: Array = []
@@ -2002,10 +2029,14 @@ func advance_fire(owner: int = -1) -> void:
 				var ncell := state.grid.cell(n)
 				if ncell.on_fire or _fire_blocked(ncell):
 					continue
-				# Деревянная стена (#53) горюча — розжиг как у горючего пола.
-				var flammable := ncell.floor_type == MCF.FLOOR_FLAMMABLE \
-						or ncell.feature_id == MCF.FEATURE_WOOD_WALL
-				var need: int = MCF.FIRE_SPREAD_FLAMMABLE if flammable else MCF.FIRE_SPREAD_OTHER
+				# Клетка под пожаротушительной гранатой (#19): пассивный разлив в неё
+				# не идёт. Бросок при этом НЕ делается — иначе заглушённая клетка
+				# съедала бы кубики и сдвигала весь дальнейший поток случайности.
+				if state.turns.round_number < ncell.fire_suppressed_until:
+					continue
+				var need := fire_need(ncell)
+				if need > 6:
+					continue  # не горит никогда — кубик не бросаем
 				if state.dice.roll_d6() >= need:
 					ignite[n] = src.fire_owner
 	for c: Vector2i in ignite:
@@ -2017,8 +2048,8 @@ func advance_fire(owner: int = -1) -> void:
 		if BURNS_AWAY.has(cell.feature_id):
 			cell.clear_feature()
 		# Юнит, оказавшийся на загоревшейся клетке, сгорает мгновенно (§6.5).
-		# Щитоносец невосприимчив к огню (#50).
-		if cell.occupant != null and cell.occupant.is_alive() and not _is_shield(cell.occupant):
+		# Щитоносец (#50) и огнемётчик (#2) невосприимчивы к огню.
+		if cell.occupant != null and cell.occupant.is_alive() and not is_fireproof(cell.occupant):
 			cell.occupant.kill()
 
 ## Постройки, которые огонь уничтожает вместе с клеткой (#53, #83). ЛДФ здесь нет
@@ -2026,6 +2057,27 @@ func advance_fire(owner: int = -1) -> void:
 const BURNS_AWAY := [
 	MCF.FEATURE_WOOD_WALL, MCF.FEATURE_WALL, MCF.FEATURE_GLASS, MCF.FEATURE_AIRLOCK,
 ]
+
+## Порог d6, с которого клетка загорается от СОСЕДНЕГО пламени (#14/#31). Шанс
+## равен (7 − need)/6; значение больше шести означает «не горит никогда».
+## Публичная: тем же вызовом UI подписывает клетку в инспекторе, чтобы подсказка
+## не могла разойтись с настоящей таблицей.
+##
+## Порядок проверок важен. Куча в 2 м спрашивается ПЕРВОЙ, до объекта на клетке:
+## сама куча и есть объект (add_dirt ставит FEATURE_DIRT_PILE), и по таблице #14
+## она в полный рост горит как стена (2/6), а не как укрытие (3/6) — метровая.
+func fire_need(cell: GridCell) -> int:
+	if cell.is_tall_dirt():
+		return MCF.FIRE_NEED_TALL_DIRT
+	if cell.feature_id != "":
+		# Всё, чего в таблице нет, — рядовое укрытие: мешки, ёж, ДПМГ, куча 1 м.
+		return int(MCF.FIRE_NEED_BY_FEATURE.get(cell.feature_id, MCF.FIRE_NEED_COVER))
+	match cell.floor_type:
+		MCF.FLOOR_GRASS:
+			return MCF.FIRE_NEED_GRASS
+		MCF.FLOOR_FLAMMABLE:
+			return MCF.FIRE_NEED_WOOD
+	return MCF.FIRE_NEED_FLOOR
 
 ## Огонь не может войти/пройти сквозь: пустоту (космос), несгораемую ЛДФ (#84), ДОТ (§6.5).
 func _fire_blocked(cell: GridCell) -> bool:
@@ -2527,7 +2579,7 @@ func _civilian_route(actor: UnitInstance, intent: Intent) -> Array[Vector2i]:
 	var budget: int = actor.move_credit if actor.move_credit > 0 else actor.stats.speed
 	if budget <= 0:
 		return empty
-	var reach := Movement.reachable(state.grid, actor.coord, budget)
+	var reach := Movement.reachable_for(state.grid, actor, budget)
 	var dest: Vector2i = (intent as MoveIntent).target
 	if not reach.can_reach(dest):
 		return empty
@@ -3052,7 +3104,7 @@ func _resolve_move_held(intent: MoveHeldIntent) -> ActionResult:
 	res.log("%s shifts %s → (%d, %d)" % [
 		actor.stats.display_name, carried.stats.display_name, intent.to.x, intent.to.y])
 	# Переставленный на горящую клетку пленник сгорает — как и любой, кто туда попал.
-	if state.grid.cell(intent.to).on_fire and not _is_shield(carried):
+	if state.grid.cell(intent.to).on_fire and not is_fireproof(carried):
 		carried.kill()
 		res.log("%s burned to death!" % carried.stats.display_name)
 		res.deaths.append(carried.id)
@@ -3488,31 +3540,39 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 ## разойтись с настоящим взрывом.
 func blast_cells_for_item(item_id: String, center: Vector2i) -> Array[Vector2i]:
 	match item_id:
-		MCF.ITEM_FRAG, MCF.ITEM_EXTINGUISHER:
+		MCF.ITEM_FRAG:
 			return MCF.blast_x(center)
+		MCF.ITEM_EXTINGUISHER:
+			# Пожаротушительная (#19) кроет ПОЛНЫЙ квадрат 5×5, а не «косой крест»
+			# осколочной: она не поражает, а гасит, и дырам в зоне взяться неоткуда.
+			return MCF.blast_square(center, MCF.EXTINGUISHER_RADIUS)
 	return MCF.blast_square(center, 1)
 
-## Пожаротушительная граната (§3.6): гасит огонь по тому же «косому кресту», что и
-## осколочная (#64). Система огня появится в M3, поэтому сейчас эффект применяется
-## почти вхолостую (но предмет и ОД тратятся).
+## Пожаротушительная граната (§3.6, переработана в #19): гасит ВЕСЬ огонь в квадрате
+## 5×5 вокруг точки падения и на 3 раунда запирает эту зону — пассивный разлив в неё
+## не идёт. Запрет односторонний: прямой выстрел огнемёта поджигает клетку зоны как
+## ни в чём не бывало (см. _flame_line), тушитель глушит только самораспространение.
 func _extinguish(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 	var cleared := 0
+	var until := state.turns.round_number + MCF.EXTINGUISHER_SUPPRESS_TURNS
 	for c: Vector2i in blast_cells_for_item(MCF.ITEM_EXTINGUISHER, center):
 		if not state.grid.in_bounds(c):
 			continue
 		var cell := state.grid.cell(c)
-		if cell.on_fire:
-			cell.on_fire = false
-			cell.fire_owner = -1
+		if _extinguish_cell(cell):
 			cleared += 1
+		# Продлеваем, а не перезаписываем: два тушителя подряд не должны укоротить
+		# уже поставленный запрет.
+		cell.fire_suppressed_until = maxi(cell.fire_suppressed_until, until)
 	var result := ActionResult.new()
 	result.ok = true
 	result.dice_events.append({
 		"kind": "grenade", "item": MCF.ITEM_EXTINGUISHER,
 		"thrower": thrower.stats.display_name, "center": center, "targets": [],
 	})
-	result.log("%s uses a fire extinguisher at (%d, %d) [fires put out: %d]" % [
-		thrower.stats.display_name, center.x, center.y, cleared])
+	result.log("%s uses a fire extinguisher at (%d, %d) [fires put out: %d, sealed for %d rounds]" % [
+		thrower.stats.display_name, center.x, center.y, cleared,
+		MCF.EXTINGUISHER_SUPPRESS_TURNS])
 	return result
 
 ## "" = можно применить предмет; иначе причина отказа.

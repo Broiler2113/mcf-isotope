@@ -42,6 +42,12 @@ enum Mode {NONE, MENU, MOVE, SHOOT, GRAB, ITEM, PUSH, DRONE_FLY, BUILD, BUILD_WA
 ## Режимы, чей предпросмотр читает клетку под курсором. Каждому движению мыши нужен
 ## свой кадр (#97), иначе картинка обновляется только когда камера что-то дёрнет —
 ## именно так пропадал круг взрыва у пушки, пока режим не был в этом списке.
+## Налёт травяного пола (#14) — им же красит клетку редактор карт.
+const GRASS_TINT := Color(0.32, 0.55, 0.18, 0.35)
+
+## «Нигде» — маркер отсутствия клетки (тот же, что и в резолвере).
+const NOWHERE := Vector2i(-9999, -9999)
+
 const HOVER_PREVIEW_MODES := [Mode.MOVE, Mode.ITEM, Mode.SHOOT, Mode.DIG, Mode.MINE, Mode.CORPSE_DROP,
 		Mode.WELD, Mode.MOVE_HELD, Mode.VEH_TURN, Mode.VEH_CANNON]
 
@@ -499,6 +505,18 @@ func _handle_click(coord: Vector2i) -> void:
 					item_cells = resolver.carry_drop_cells(coord)
 					mode = Mode.CARRY_DROP
 					queue_redraw()
+					return
+				# Огонь на маршруте убивает наповал (#1). Маршрут его уже обходит, так
+				# что попасть сюда можно только приказом ИДТИ ПРЯМО В ПЛАМЯ — и такой
+				# приказ игрок подтверждает вслух, а не отдаёт промахом мыши.
+				var burn := _lethal_fire_step(_selected_unit(), coord)
+				if burn != NOWHERE:
+					var id := selected_id
+					_confirm_dialog("Move Into Fire",
+						"%s will burn to death at (%d, %d). Give the order anyway?"
+							% [_selected_unit().stats.display_name, burn.x, burn.y],
+						"Move Anyway",
+						func() -> void: _submit(MoveIntent.new(id, coord)))
 					return
 				_submit(MoveIntent.new(selected_id, coord))
 				return
@@ -977,7 +995,7 @@ func _enter_move() -> void:
 		budget = u.stats.speed
 	if burdened:
 		budget = mini(budget, carry_budget)
-	reach = Movement.reachable(state.grid, u.coord, budget)
+	reach = Movement.reachable_for(state.grid, u, budget)
 	reach_budget = budget
 	target_ids = []
 	_menu.hide()
@@ -1269,7 +1287,7 @@ func _group_reach_cells() -> Array[Vector2i]:
 		var u := state.get_unit(id)
 		if u == null or not u.is_alive() or u.remaining_ap <= 0:
 			continue
-		for c: Vector2i in Movement.reachable(state.grid, u.coord, u.stats.speed).cost:
+		for c: Vector2i in Movement.reachable_for(state.grid, u, u.stats.speed).cost:
 			if not seen.has(c):
 				seen[c] = true
 				out.append(c)
@@ -1293,7 +1311,7 @@ func _group_move_preview(dest: Vector2i) -> Array[Vector2i]:
 ## `taken` — клетки, уже разобранные другими юнитами группы (только для предпросмотра;
 ## в реальном ходе их занятость видна прямо на сетке).
 func _best_group_cell(u: UnitInstance, dest: Vector2i, taken: Dictionary = {}) -> Vector2i:
-	var reach_r := Movement.reachable(state.grid, u.coord, u.stats.speed)
+	var reach_r := Movement.reachable_for(state.grid, u, u.stats.speed)
 	var best := u.coord
 	var best_d := Combat.distance(u.coord, dest)
 	var best_cost := 0
@@ -1889,11 +1907,18 @@ func _draw_move_preview() -> void:
 			on_path[p] = true
 	var labels: bool = zoom >= MOVE_LABEL_MIN_ZOOM
 	var budget_txt := "/%d" % reach_budget
+	# Горящие клетки разлива помечаются чёрным крестом (#1): дойти до них можно, но
+	# это смерть. Огнеупорному бойцу (#2) огонь не вредит — ему крестов не рисуем.
+	var mark_fire: bool = GridCell.burning > 0 and not resolver.is_fireproof(_selected_unit())
 	for coord: Vector2i in reach.cost:
 		var origin := _cell_origin(coord)
 		var lit: bool = on_path.has(coord)
 		draw_rect(Rect2(origin, cvec),
 			Color(0.45, 1.0, 0.55, 0.42) if lit else Color(0.3, 0.8, 0.4, 0.28))
+		if mark_fire and state.grid.cell(coord).on_fire:
+			# Наведённая клетка — крест в полную силу, остальные приглушены, иначе
+			# пожар в полкарты забивает собой всю подсветку хода.
+			_draw_black_cross(origin, float(CELL), 0.95 if lit else 0.5)
 		if not labels:
 			continue
 		var spent: int = reach.cost[coord]
@@ -2045,6 +2070,8 @@ func _draw() -> void:
 				floor_name = "floor_space"
 			elif is_wall:
 				floor_name = "floor_wall"
+			elif cell.floor_type == MCF.FLOOR_GRASS:
+				floor_name = "floor_grass"   # трава (#14) — своя картинка-замена
 			if not Sprites.draw_texture_override_rect(self, floor_name, rect):
 				var base_col := Color(0.14, 0.15, 0.18)
 				if cell.is_space:
@@ -2052,6 +2079,10 @@ func _draw() -> void:
 				if is_wall:
 					base_col = Color(0.35, 0.3, 0.25)
 				draw_rect(rect, base_col)
+				# Трава без картинки-замены: зелёный налёт поверх обычного пола, чтобы
+				# «сюда огонь придёт почти наверняка» читалось прямо на доске (#14).
+				if not is_wall and not cell.is_space and cell.floor_type == MCF.FLOOR_GRASS:
+					draw_rect(rect, GRASS_TINT)
 			var h: float = cell.cover_height
 			# Низкое укрытие: тон тем ярче, чем выше (§3.7).
 			if h > 0.0 and not is_wall:
@@ -2820,6 +2851,81 @@ func _build_quit_dialog() -> void:
 	row.add_child(ok)
 	_quit_dialog = overlay
 	_ui_layer.add_child(_quit_dialog)
+
+## Первая горящая клетка на маршруте до dst, которая убьёт этого бойца (#1);
+## NOWHERE — пути через огонь нет либо боец огнеупорен (#2).
+## Считается по ТОМУ ЖЕ разливу, что подсвечен на экране, поэтому предупреждение
+## не может разойтись с тем, что произойдёт на самом деле.
+func _lethal_fire_step(u: UnitInstance, dst: Vector2i) -> Vector2i:
+	if u == null or reach == null or resolver.is_fireproof(u):
+		return NOWHERE
+	if not reach.can_reach(dst):
+		return NOWHERE
+	for step: Vector2i in reach.path_to(dst):
+		if state.grid.cell(step).on_fire:
+			return step
+	return NOWHERE
+
+## Модальное подтверждение в общем стиле (#51/#1): затемнитель + рамка SteamChrome.
+## Окно одноразовое — снимается вместе с ответом, чтобы не копить сироты в слое UI.
+func _confirm_dialog(title: String, message: String, ok_text: String,
+		on_ok: Callable) -> void:
+	var overlay := Control.new()
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.55)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.add_child(center)
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(380, 0)
+	SteamChrome.apply_panel(panel)
+	center.add_child(panel)
+	var frame := VBoxContainer.new()
+	frame.add_theme_constant_override("separation", 0)
+	panel.add_child(frame)
+	frame.add_child(SteamChrome.header_bar(title))
+	var body := VBoxContainer.new()
+	body.add_theme_constant_override("separation", 14)
+	frame.add_child(SteamChrome.pad(body, 16, 14))
+	var msg := Label.new()
+	msg.text = message
+	msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	msg.custom_minimum_size = Vector2(340, 0)
+	body.add_child(msg)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_END
+	row.add_theme_constant_override("separation", 8)
+	body.add_child(row)
+	var cancel := Button.new()
+	cancel.text = "Cancel"
+	cancel.custom_minimum_size = Vector2(110, 34)
+	cancel.pressed.connect(func() -> void: overlay.queue_free())
+	row.add_child(cancel)
+	var ok := Button.new()
+	ok.text = ok_text
+	ok.custom_minimum_size = Vector2(130, 34)
+	ok.pressed.connect(func() -> void:
+		overlay.queue_free()
+		on_ok.call())
+	row.add_child(ok)
+	_ui_layer.add_child(overlay)
+
+## Чёрный крест «здесь смерть» (#1) — предупреждение на горящей клетке в разливе.
+func _draw_black_cross(origin: Vector2, size: float, alpha: float = 0.95) -> void:
+	var m := size * 0.22
+	var a := origin + Vector2(m, m)
+	var b := origin + Vector2(size - m, size - m)
+	var c := origin + Vector2(size - m, m)
+	var d := origin + Vector2(m, size - m)
+	var w := maxf(2.0, size * 0.11)
+	draw_line(a, b, Color(0, 0, 0, alpha), w)
+	draw_line(c, d, Color(0, 0, 0, alpha), w)
 
 func _hsep() -> HSeparator:
 	return HSeparator.new()

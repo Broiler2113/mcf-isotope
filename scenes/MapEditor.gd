@@ -22,6 +22,7 @@ const TERRAIN_BRUSHES := [
 	{"id": "erase", "label": "Erase"},
 	{"id": "space", "label": "Space"},
 	{"id": "floor", "label": "Floor"},
+	{"id": "grass", "label": "Grass Floor"},
 	{"id": MCF.FEATURE_WALL, "label": "Wall"},
 	{"id": MCF.FEATURE_WOOD_WALL, "label": "Wooden Wall"},
 	{"id": MCF.FEATURE_GLASS, "label": "Glass"},
@@ -173,6 +174,9 @@ func _apply_brush(coord: Vector2i) -> void:
 		"floor":
 			# Обычный твёрдый пол (снимает космос).
 			map.set_cell(coord, MCF.FLOOR_NORMAL, map.get_cover(coord), false, map.get_feature(coord))
+		"grass":
+			# Травяной пол (#14): такой же пол, только загорается почти наверняка (5/6).
+			map.set_cell(coord, MCF.FLOOR_GRASS, map.get_cover(coord), false, map.get_feature(coord))
 		"zone":
 			# Кисть зоны развёртывания (#52): красим владельца региона, не трогая рельеф.
 			map.set_zone(coord, zone_brush_owner)
@@ -289,8 +293,11 @@ func _draw() -> void:
 				if ch >= MCF.WALL_HEIGHT:
 					base = Color(0.35, 0.3, 0.25)
 				draw_rect(rect, base)
-			if map.get_floor(coord) == MCF.FLOOR_FLAMMABLE:
-				draw_rect(rect, Color(0.4, 0.5, 0.15, 0.25))
+			match map.get_floor(coord):
+				MCF.FLOOR_FLAMMABLE:
+					draw_rect(rect, Color(0.4, 0.5, 0.15, 0.25))
+				MCF.FLOOR_GRASS:
+					draw_rect(rect, Color(0.32, 0.55, 0.18, 0.35))
 			if ch > 0.0 and ch < MCF.WALL_HEIGHT:
 				draw_rect(rect, Color(0.5, 0.45, 0.2, 0.12 + 0.12 * ch))
 			# Зона развёртывания (#52): полупрозрачная заливка цветом стороны.

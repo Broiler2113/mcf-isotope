@@ -204,12 +204,13 @@ func _forced_action(state: GameState, r: GameActionResolver, row: Dictionary) ->
 	#    именно оно и оставляло бойца стоять столбом.
 	if u.remaining_ap > 0 or u.move_credit > 0:
 		var enemy := _nearest_enemy(state, u.coord, false, r)
-		var reach := Movement.reachable(state.grid, u.coord, _move_budget(u))
+		var reach := Movement.reachable_for(state.grid, u, _move_budget(u))
+		var dodge := _avoids_fire(u)
 		var best: Dictionary = {}
 		for coord: Vector2i in reach.cost:
 			if coord == u.coord or state.grid.blocks_walk(coord):
 				continue
-			if _fire_near(state, coord):
+			if dodge and _fire_near(state, coord):
 				continue
 			var score := SCORE_MOVE_BASE + _cover_bonus(state, coord)
 			if enemy != null:
@@ -768,10 +769,11 @@ func _move_to_vehicle(state: GameState, u: UnitInstance) -> Dictionary:
 	if not field.has(u.coord):
 		return {}
 	var start: int = field.at(u.coord)
-	var reach := Movement.reachable(state.grid, u.coord, _move_budget(u))
+	var reach := Movement.reachable_for(state.grid, u, _move_budget(u))
+	var dodge := _avoids_fire(u)
 	var best: Dictionary = {}
 	for coord: Vector2i in reach.cost:
-		if _fire_near(state, coord):
+		if dodge and _fire_near(state, coord):
 			continue  # от огня держимся на клетку (#48)
 		var gain := float(start - int(field.at(coord)))
 		if gain <= 0.0:
@@ -884,15 +886,20 @@ func _plan_move(state: GameState, u: UnitInstance) -> Dictionary:
 	if u.remaining_ap <= 0 and u.move_credit <= 0:
 		return {}
 	var budget: int = _move_budget(u)
-	var reach := Movement.reachable(state.grid, u.coord, budget)
-	if reach.can_reach(dest) and not state.grid.blocks_walk(dest):
+	var reach := Movement.reachable_for(state.grid, u, budget)
+	var dodge := _avoids_fire(u)
+	# Клетка назначения из плана штаба может за это время загореться (#1): в разливе
+	# она осталась, но входить в неё — гарантированная смерть. Тогда план не
+	# исполняется целиком, а доигрывается шагом «в сторону цели» ниже.
+	if reach.can_reach(dest) and not state.grid.blocks_walk(dest) \
+			and not (dodge and _fire_near(state, dest)):
 		return {"score": SCORE_MOVE_BASE + SCORE_PLAN_BONUS,
 			"intent": MoveIntent.new(u.id, dest)}
 	# Не дотягиваемся — шагаем в сторону назначения, но только если это правда ближе.
 	var here := Combat.distance(u.coord, dest)
 	var best: Dictionary = {}
 	for coord: Vector2i in reach.cost:
-		if _fire_near(state, coord):
+		if dodge and _fire_near(state, coord):
 			continue
 		var gain := float(here - Combat.distance(coord, dest))
 		if gain <= 0.0:
@@ -921,7 +928,7 @@ func _best_move(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dic
 	var straight := _nearest_enemy(state, u.coord, false, r)
 	if not use_geo and straight == null:
 		return {}
-	var reach := Movement.reachable(state.grid, u.coord, _move_budget(u))
+	var reach := Movement.reachable_for(state.grid, u, _move_budget(u))
 	var start_geo: int = field.at(u.coord)
 	# Лучшее держим в простых переменных, а не в Dictionary (#106): разлив — под сотню
 	# клеток на бойца, и прежний код на каждое улучшение строил и словарь, и MoveIntent,
@@ -936,8 +943,9 @@ func _best_move(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dic
 	var have_best := false
 	var best_score := 0.0
 	var best_coord := Vector2i.ZERO
+	var dodge := _avoids_fire(u)
 	for coord: Vector2i in cost:
-		if _fire_near(state, coord):
+		if dodge and _fire_near(state, coord):
 			continue  # держим дистанцию минимум в 1 клетку от огня (#48)
 		var score: float
 		if use_geo:
@@ -1097,9 +1105,10 @@ func _enemy_distance_field(state: GameState, only_visible: bool, r: GameActionRe
 ## Стоя вплотную к пламени, ИИ первым делом отходит на безопасную клетку (#48):
 ## сближение с врагом такой ход обычно не даёт, поэтому он идёт отдельным кандидатом.
 func _flee_fire(state: GameState, u: UnitInstance) -> Dictionary:
-	if not _fire_near(state, u.coord):
+	# Огнеупорному (#2) бежать не от чего — он в пламени и стоит, и воюет.
+	if not _avoids_fire(u) or not _fire_near(state, u.coord):
 		return {}
-	var reach := Movement.reachable(state.grid, u.coord, _move_budget(u))
+	var reach := Movement.reachable_for(state.grid, u, _move_budget(u))
 	var best: Dictionary = {}
 	for coord: Vector2i in reach.cost:
 		if coord == u.coord or _fire_near(state, coord):
@@ -1116,6 +1125,12 @@ func _flee_fire(state: GameState, u: UnitInstance) -> Dictionary:
 ## grid.neighbors() строит на каждый вызов новый массив из восьми Vector2i (#106). Обход
 ## развёрнут по окну 3×3 напрямую: набор проверяемых клеток тот же (восемь соседей в
 ## границах поля), а «горит ли хоть одна» от порядка обхода не зависит.
+## Держится ли этот боец подальше от пламени (#48). Огнеупорные (#2) — нет: для них
+## огонь обычная местность, и ИИ, водящий огнемётчика в обход собственного пожара,
+## просто не даёт им работать.
+func _avoids_fire(u: UnitInstance) -> bool:
+	return not MCF.ability_is_fireproof(u.stats.special_ability_id)
+
 func _fire_near(state: GameState, coord: Vector2i) -> bool:
 	if GridCell.burning == 0:
 		return false  # на карте не горит ничего — соседей можно не смотреть

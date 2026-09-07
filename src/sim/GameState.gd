@@ -134,6 +134,7 @@ func snapshot() -> Dictionary:
 		cs.append({
 			"floor_type": c.floor_type, "cover_height": c.cover_height,
 			"on_fire": c.on_fire, "fire_owner": c.fire_owner, "is_space": c.is_space,
+			"fire_suppressed_until": c.fire_suppressed_until,
 			"occupant_id": c.occupant.id if c.occupant != null else -1,
 			"vehicle_id": c.vehicle_id, "feature_id": c.feature_id,
 			"feature_owner": c.feature_owner, "feature_durability": c.feature_durability,
@@ -208,6 +209,7 @@ func restore(snap: Dictionary) -> void:
 		c.cover_height = rec["cover_height"]
 		c.on_fire = rec["on_fire"]
 		c.fire_owner = rec["fire_owner"]
+		c.fire_suppressed_until = int(rec.get("fire_suppressed_until", 0))
 		c.is_space = rec["is_space"]
 		var oid: int = rec["occupant_id"]
 		c.occupant = units.get(oid, null) if oid != -1 else null

@@ -190,13 +190,51 @@ const CORPSE_WALL_COUNT := 5
 # Как далеко разлетаются тела рухнувшей от взрыва трупной стены (#98), по Чебышёву.
 const CORPSE_SCATTER_RADIUS := 3
 
-# --- Огонь (§3.8) ---
-const FIRE_SPREAD_FLAMMABLE := 3  # дерево/трава: загорается на 3+
-const FIRE_SPREAD_OTHER := 4      # прочий пол: 4+
+# --- Огонь (§3.8, таблица розжига #14/#31) ---
 const FIRE_SHOOT_PENALTY := 1     # стрельба через горящую клетку: −1 к попаданию (кроме снайпера)
-# Тип пола: 0 = обычный (4+), 1 = горючий (дерево/трава, 3+).
+# Тип пола: 0 = обычный, 1 = горючий (дерево), 2 = трава (#14 — новый подтип пола).
 const FLOOR_NORMAL := 0
 const FLOOR_FLAMMABLE := 1
+const FLOOR_GRASS := 2
+
+## Порог d6 для розжига от СОСЕДНЕЙ горящей клетки: клетка загорается на «need и выше»,
+## то есть шанс равен (7 − need)/6. Таблица взята из #14 один в один:
+##   пол 3/6, трава 5/6, стена 2/6, дерев. стена 3/6, стекло 2/6, укрытия 3/6,
+##   окоп 3/6 (как пол), куча в 2 м 2/6 (как стена), ЛДФ и ДОТ не горят никогда.
+## Прямой выстрел огнемёта таблице НЕ подчиняется — он поджигает всегда (#31).
+const FIRE_NEED_FLOOR := 4        # обычный пол — 3/6
+const FIRE_NEED_GRASS := 2        # трава — 5/6
+const FIRE_NEED_WALL := 5         # стена и её скины — 2/6
+const FIRE_NEED_WOOD := 4         # деревянная стена — 3/6
+const FIRE_NEED_GLASS := 5        # стекло — 2/6
+const FIRE_NEED_COVER := 4        # мешки, ёж, ДПМГ, куча 1 м — 3/6
+const FIRE_NEED_TALL_DIRT := 5    # куча в 2 м считается стеной — 2/6
+const FIRE_NEVER := 99            # заведомо недостижимо шестигранником
+
+## Пороги по объекту на клетке. Всё, чего здесь нет, считается укрытием (3/6) —
+## объекты-укрытия однотипны, и новый скин мешков не должен требовать правки таблицы.
+const FIRE_NEED_BY_FEATURE := {
+	FEATURE_WALL: FIRE_NEED_WALL,
+	FEATURE_CORPSE_WALL: FIRE_NEED_WALL,
+	FEATURE_WOOD_WALL: FIRE_NEED_WOOD,
+	FEATURE_GLASS: FIRE_NEED_GLASS,
+	FEATURE_AIRLOCK: FIRE_NEED_WALL,
+	FEATURE_TRENCH: FIRE_NEED_FLOOR,
+	FEATURE_LDF: FIRE_NEVER,
+	FEATURE_DOT: FIRE_NEVER,
+	FEATURE_DOT_OPEN: FIRE_NEVER,
+}
+
+## Пожаротушительная граната (#19): квадрат 5×5 — радиус 2 по Чебышёву от эпицентра.
+const EXTINGUISHER_RADIUS := 2
+## Сколько раундов после броска в зону не может ВПОЛЗТИ огонь. Прямой выстрел
+## огнемёта запрет игнорирует — тушитель глушит только пассивный разлив.
+const EXTINGUISHER_SUPPRESS_TURNS := 3
+
+## Невосприимчивые к огню способности (#1, #2): щитоносец и огнемётчик. Они не гибнут
+## на горящей клетке, и их маршрут огонь не обходит — для них это обычный пол.
+static func ability_is_fireproof(ability_id: String) -> bool:
+	return ability_id == ABILITY_SHIELD_BEARER or ability_id == ABILITY_FLAMETHROWER
 
 # --- Спецстрельба (см. §3.13, §3.14) ---
 # Противотанкист: радиус авто-поражения взрывом (Чебышёв).
