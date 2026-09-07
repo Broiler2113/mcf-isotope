@@ -9,9 +9,16 @@ const SETUP_SCENE := "res://scenes/Setup.tscn"
 const LOBBY_SCENE := "res://scenes/Lobby.tscn"
 const EDITOR_SCENE := "res://scenes/MapEditor.tscn"
 const PLACEMENT_SCENE := "res://scenes/Placement.tscn"
+const MAIN_SCENE := "res://scenes/Main.tscn"
 
 var _saves_list: ItemList
 var _map_names: PackedStringArray
+
+# --- Сохранения и повторы (M12) ---
+var _game_list: ItemList
+var _game_names: PackedStringArray
+var _replay_list: ItemList
+var _replay_names: PackedStringArray
 
 # --- Мультиплеер ---
 var _mp_ip: LineEdit
@@ -28,6 +35,8 @@ var _lan_servers: Array = []
 func _ready() -> void:
 	# Уходя в меню, старую сессию не тащим — начинаем с чистого листа.
 	NetHandoff.discard()
+	# И недоигранный файл тоже: в меню приходят, чтобы начать заново (M12).
+	SaveHandoff.discard()
 
 	var bg := ColorRect.new()
 	bg.color = Color(0.08, 0.09, 0.11)
@@ -73,6 +82,7 @@ func _ready() -> void:
 	vbox.add_child(tabs)
 	tabs.add_child(_build_single_tab())
 	tabs.add_child(_build_multi_tab())
+	tabs.add_child(_build_files_tab())
 
 	vbox.add_child(HSeparator.new())
 	vbox.add_child(_menu_button("Quit", _quit))
@@ -97,6 +107,83 @@ func _build_single_tab() -> Control:
 	page.add_child(_saves_list)
 	_refresh_saves()
 	return page
+
+# --- Вкладка сохранений и повторов (M12, items 42 и 53) ---
+## Сохранённая партия продолжается прямо отсюда — ролями она распоряжается сама, как
+## их записали. Переназначить их (кто из сидящих за столом ведёт какую армию) можно в
+## лобби: там для этого есть тот же список файлов.
+func _build_files_tab() -> Control:
+	var page := VBoxContainer.new()
+	page.name = "Load / Replay"
+	page.add_theme_constant_override("separation", 8)
+
+	var hint := Label.new()
+	hint.text = "Continue a saved match, or watch a recorded one. To hand a saved army to a different player, open the save in the multiplayer lobby instead."
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.add_theme_font_size_override("font_size", 12)
+	hint.modulate = Color(0.72, 0.74, 0.8)
+	page.add_child(hint)
+
+	var games_label := Label.new()
+	games_label.text = "Saved games"
+	page.add_child(games_label)
+	_game_list = ItemList.new()
+	_game_list.custom_minimum_size = Vector2(0, 110)
+	_game_list.item_activated.connect(_on_game_activated)
+	page.add_child(_game_list)
+
+	var replays_label := Label.new()
+	replays_label.text = "Replays"
+	page.add_child(replays_label)
+	_replay_list = ItemList.new()
+	_replay_list.custom_minimum_size = Vector2(0, 110)
+	_replay_list.item_activated.connect(_on_replay_activated)
+	page.add_child(_replay_list)
+
+	_refresh_files()
+	return page
+
+## Наполнить оба списка. Каждый файл читается ради подписи — они маленькие и сжатые,
+## а список без «карта, раунд, когда» бесполезен: имена в нём различаются только временем.
+func _refresh_files() -> void:
+	_game_names = ReplayFile.saves()
+	_fill_file_list(_game_list, _game_names, ReplayFile.SAVE_DIR,
+			"(no saved games yet — save one from a match)")
+	_replay_names = ReplayFile.replays()
+	_fill_file_list(_replay_list, _replay_names, ReplayFile.REPLAY_DIR,
+			"(no replays yet — they are written when you leave a match)")
+
+func _fill_file_list(list: ItemList, names: PackedStringArray, dir: String,
+		empty_text: String) -> void:
+	list.clear()
+	if names.is_empty():
+		list.add_item(empty_text)
+		list.set_item_disabled(0, true)
+		return
+	for name in names:
+		var data := ReplayFile.read(ReplayFile.path_for(dir, name))
+		var note := ReplayFile.describe(data)
+		list.add_item(name.get_basename() if note == "" else "%s  —  %s" % [name.get_basename(), note])
+
+func _on_game_activated(idx: int) -> void:
+	if idx < 0 or idx >= _game_names.size():
+		return
+	var data := ReplayFile.read(ReplayFile.path_for(ReplayFile.SAVE_DIR, _game_names[idx]))
+	if data.is_empty():
+		return
+	SaveHandoff.pending_save = data
+	MapHandoff.pending = null
+	get_tree().change_scene_to_file(MAIN_SCENE)
+
+func _on_replay_activated(idx: int) -> void:
+	if idx < 0 or idx >= _replay_names.size():
+		return
+	var data := ReplayFile.read(ReplayFile.path_for(ReplayFile.REPLAY_DIR, _replay_names[idx]))
+	if data.is_empty():
+		return
+	SaveHandoff.pending_replay = data
+	MapHandoff.pending = null
+	get_tree().change_scene_to_file(MAIN_SCENE)
 
 # --- Вкладка мультиплеера ---
 func _build_multi_tab() -> Control:
@@ -274,6 +361,7 @@ func _refresh_saves() -> void:
 		_saves_list.add_item(name.get_basename())
 
 func _new_game() -> void:
+	SaveHandoff.discard()
 	GameConfig.map_path = ""
 	get_tree().change_scene_to_file(SETUP_SCENE)
 

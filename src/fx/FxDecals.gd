@@ -186,3 +186,31 @@ func _trim() -> void:
 	var over := props.size() - PROPS_CAP
 	if over > 0:
 		props = props.slice(over)
+
+# --- Сохранение косметики (M12, item 42) ---
+## Осевшая косметика — часть того, КАК выглядит бой, поэтому сохранение везёт её с
+## собой: перезагруженный час боя не должен выглядеть свежевымытым. Летящее не
+## сохраняется: полёт длится доли секунды и к моменту записи файла уже приземлился бы.
+func to_dict() -> Dictionary:
+	var damage: Array = []
+	var keys: Array = floor_damage.keys()
+	keys.sort()
+	for c: Vector2i in keys:
+		damage.append([c.x, c.y, int(floor_damage[c])])
+	var settled: Array = []
+	for p: Dictionary in props:
+		var pos: Vector2 = p["pos"]
+		settled.append([str(p["kind"]), pos.x, pos.y, float(p["rot"]), float(p["scale"])])
+	return {"damage": damage, "props": settled}
+
+func from_dict(d: Dictionary) -> void:
+	clear()
+	for entry in d.get("damage", []):
+		if entry is Array and (entry as Array).size() >= 3:
+			floor_damage[Vector2i(int(entry[0]), int(entry[1]))] = int(entry[2])
+	for entry in d.get("props", []):
+		if entry is Array and (entry as Array).size() >= 5:
+			props.append({"kind": str(entry[0]),
+					"pos": Vector2(float(entry[1]), float(entry[2])),
+					"rot": float(entry[3]), "scale": float(entry[4])})
+	_trim()

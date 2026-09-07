@@ -68,8 +68,9 @@ func _initialize() -> void:
 		covered[cls] = true
 		_round_trip(intent, cls)
 	_check_coverage(covered)
+	_check_state_codec()
 	if fails.is_empty():
-		print("codec: every intent field survives the wire")
+		print("codec: every intent field survives the wire, every state field the file")
 		quit(0)
 		return
 	printerr("codec: %d failure(s)" % fails.size())
@@ -116,3 +117,210 @@ func _check_coverage(covered: Dictionary) -> void:
 func _class_of(o: Object) -> String:
 	var sc: Script = o.get_script()
 	return sc.resource_path.get_file().get_basename() if sc != null else "?"
+
+# --- Состояние партии на диск и обратно (M12) --------------------------------
+##
+## Та же болезнь, что и у намерений, только дороже: поле есть в UnitInstance или
+## GridCell, в StateCodec его нет — и сохранённая партия продолжается с чуть-чуть
+## другой доски. Поймать это игрой почти невозможно (потеряется мелочь вроде
+## «мина уже подсвечена»), поэтому проверка тоже сплошная и рефлексивная.
+##
+## Вторая проверка здесь — на ЖИВУЮ ССЫЛКУ в снимке. Массивы в Godot ссылочные, и
+## encode(), положивший в словарь сам массив партии вместо копии, даёт файл, который
+## продолжает меняться вместе с боем: стартовый кадр повтора уезжал на диск с
+## порядком инициативы, сложившимся к концу партии.
+
+const TS = preload("res://tests/TestSupport.gd")
+
+## Поля-объекты сверяются отдельно: str() от объекта — это его адрес в памяти,
+## он различается у любых двух копий.
+const OBJECT_FIELDS := ["stats", "action_state", "occupant"]
+
+func _check_state_codec() -> void:
+	var state := TS.build_state()
+	var resolver := GameActionResolver.new(state)
+	_play_a_while(state, resolver)
+	_touch_every_field(state)
+
+	var wire := StateCodec.encode(state)
+	var frozen := JSON.stringify(wire)
+	var back := StateCodec.decode(JSON.parse_string(frozen))
+	if back == null:
+		fails.append("StateCodec.decode() refused its own output")
+		return
+	if TS.digest(back) != TS.digest(state):
+		fails.append("StateCodec: the board changed on its way through the file")
+	_compare_units(state, back)
+	_compare_vehicles(state, back)
+	_compare_cells(state, back)
+	if str(state.revealed_mines) != str(back.revealed_mines):
+		fails.append("StateCodec: revealed mines did not survive the file")
+	if state.roster.to_dict() != back.roster.to_dict():
+		fails.append("StateCodec: the roster did not survive the file")
+
+	# Снимок обязан быть мёртвым: партия идёт дальше, а он — нет.
+	state.turns.round_order.append(MCF.neutral_group_slot(9))
+	state.turns.round_number += 1
+	for v: Vehicle in state.all_vehicles():
+		v.occupants.append(999)
+		v.seats.append(999)
+		v.corpse_slots.append("ghost")
+	if JSON.stringify(wire) != frozen:
+		fails.append("StateCodec.encode() kept a live reference into the match: "
+				+ "the snapshot changed by itself while the game went on")
+
+## Тронуть КАЖДОЕ изменяемое поле, какое бывает у юнита, машины и клетки. Без этого
+## проверка сверяет в основном нули: сапёра в тестовом ростере нет, окопов за два
+## раунда никто не выроет, — и поле, забытое в кодеке, совпало бы «по умолчанию».
+## Значения намеренно нелепые: реальная партия таких не даст, поэтому подмена видна.
+func _touch_every_field(state: GameState) -> void:
+	var ids: Array = state.units.keys()
+	ids.sort()
+	for i in mini(4, ids.size()):
+		var u: UnitInstance = state.units[ids[i]]
+		u.remaining_ap = 1 + i
+		u.held_item_id = MCF.ITEM_FRAG
+		u.captor_id = int(ids[(i + 1) % ids.size()])
+		u.is_drone = i == 0
+		u.home_station = Vector2i(2 + i, 3)
+		u.operator_id = int(ids[0])
+		u.wall_entry_from = Vector2i(4, 5 + i)
+		u.civilian_active = true
+		u.neutral_group = 7 + i
+		u.carried_this_round = true
+		u.aboard_vehicle_id = Vehicle.ID_BASE
+		u.dig_credits = 2 + i
+		u.ldf_wall_used = true
+		u.move_credit = 3 + i
+		u.mine_credits = 4 + i
+		u.carried_corpses = 1 + i
+		u.dragging = Vector2i(6, 7 + i)
+		var act := ActionState.new()
+		act.target_id = int(ids[(i + 2) % ids.size()])
+		act.remaining_shots = 2 + i
+		u.action_state = act
+	for v: Vehicle in state.all_vehicles():
+		v.durability -= 1
+		v.facing = Vector2i(-1, 1)
+		v.ap = 3
+		v.wrecked = true
+		v.cannon_shots_this_round = 1
+		v.move_credit = 2
+		v.ensure_seats()
+		v.corpse_slots.append("light_infantry")
+	var touched := 0
+	for y in state.grid.height:
+		for x in state.grid.width:
+			var c := state.grid.cell(Vector2i(x, y))
+			if c.occupant != null or c.vehicle_id != -1 or touched >= 6:
+				continue
+			touched += 1
+			c.floor_type = MCF.FLOOR_FLAMMABLE
+			c.cover_height = 0.5 * float(1 + touched % 3)
+			c.on_fire = true
+			c.fire_owner = MCF.Owner.PLAYER_2
+			c.fire_suppressed_until = 9 + touched
+			c.is_space = true
+			c.feature_id = MCF.FEATURE_SANDBAGS
+			c.feature_owner = MCF.Owner.PLAYER_1
+			c.feature_durability = 2
+			c.station_operator_id = int(ids[0])
+			c.corpse_count = touched
+			c.dirt_level = 1 + touched % 4
+			c.airlock_welded = true
+	# Подсветка мин — вложенные словари с ключами-клетками: их формат ломается легче всего.
+	state.revealed_mines = {
+		MCF.Owner.PLAYER_1: {Vector2i(3, 4): 7, Vector2i(5, 6): 9},
+		MCF.Owner.PLAYER_2: {Vector2i(3, 4): 8},
+	}
+	state.combat_started = true
+	state.roster.set_eliminated(MCF.Owner.PLAYER_2, true)
+	state.turns.mark_eliminated(MCF.Owner.PLAYER_2)
+
+## Немного погонять партию, чтобы в состоянии появилось что терять: ходы, огонь,
+## трупы, разбуженные нейтралы и сдвинутый порядок инициативы.
+func _play_a_while(state: GameState, resolver: GameActionResolver) -> void:
+	var brains := {}
+	for side in [MCF.Owner.PLAYER_1, MCF.Owner.PLAYER_2]:
+		var ai := AIController.new(side, AIController.Difficulty.NORMAL)
+		ai.intent_ready.connect(_on_ai_intent)
+		brains[side] = ai
+	var stop := state.turns.round_number + 2
+	var guard := 0
+	while state.turns.round_number < stop and guard < 2000:
+		guard += 1
+		var ai: AIController = brains.get(state.active_player(), null)
+		if ai == null:
+			resolver.resolve(EndTurnIntent.new())
+			continue
+		_ai_intent = null
+		ai.begin_turn(state)
+		if _ai_intent == null:
+			resolver.resolve(EndTurnIntent.new())
+			continue
+		if not resolver.resolve(_ai_intent).ok:
+			ai.notify_intent_denied(state)
+
+var _ai_intent: Intent = null
+
+func _on_ai_intent(intent: Intent) -> void:
+	if _ai_intent == null:
+		_ai_intent = intent
+
+func _compare_units(a: GameState, b: GameState) -> void:
+	if a.units.size() != b.units.size():
+		fails.append("StateCodec: %d units went in, %d came out"
+				% [a.units.size(), b.units.size()])
+		return
+	for id: int in a.units:
+		var want: UnitInstance = a.units[id]
+		var got: UnitInstance = b.units.get(id, null)
+		if got == null:
+			fails.append("StateCodec: unit %d is missing after the round trip" % id)
+			continue
+		_compare_fields("UnitInstance[%d]" % id, want, got)
+		var want_stats := want.stats.id if want.stats != null else ""
+		var got_stats := got.stats.id if got.stats != null else ""
+		if want_stats != got_stats:
+			fails.append("StateCodec: unit %d changed stats: %s -> %s"
+					% [id, want_stats, got_stats])
+		if (want.action_state == null) != (got.action_state == null):
+			fails.append("StateCodec: unit %d lost its split action" % id)
+		elif want.action_state != null \
+				and (want.action_state.target_id != got.action_state.target_id
+				or want.action_state.remaining_shots != got.action_state.remaining_shots):
+			fails.append("StateCodec: unit %d split action did not survive" % id)
+
+func _compare_vehicles(a: GameState, b: GameState) -> void:
+	for id: int in a.vehicles:
+		var got: Vehicle = b.vehicles.get(id, null)
+		if got == null:
+			fails.append("StateCodec: vehicle %d is missing after the round trip" % id)
+			continue
+		_compare_fields("Vehicle[%d]" % id, a.vehicles[id], got)
+
+func _compare_cells(a: GameState, b: GameState) -> void:
+	for y in a.grid.height:
+		for x in a.grid.width:
+			var coord := Vector2i(x, y)
+			var want := a.grid.cell(coord)
+			var got := b.grid.cell(coord)
+			_compare_fields("GridCell%s" % str(coord), want, got)
+			var want_id: int = want.occupant.id if want.occupant != null else -1
+			var got_id: int = got.occupant.id if got.occupant != null else -1
+			if want_id != got_id:
+				fails.append("StateCodec: cell %s holds %d instead of %d"
+						% [str(coord), got_id, want_id])
+
+## Сверить ВСЕ объявленные в скрипте поля объекта. Именно сплошной перебор, а не
+## список: новое поле нельзя добавить и забыть про сохранение.
+func _compare_fields(label: String, want: Object, got: Object) -> void:
+	for prop in want.get_property_list():
+		if int(prop["usage"]) & PROPERTY_USAGE_SCRIPT_VARIABLE == 0:
+			continue
+		var name: String = prop["name"]
+		if name in OBJECT_FIELDS:
+			continue
+		if str(want.get(name)) != str(got.get(name)):
+			fails.append("%s.%s did not survive the file: was %s, became %s"
+					% [label, name, str(want.get(name)), str(got.get(name))])

@@ -230,6 +230,23 @@ var _fx := FxDecals.new()
 var _p1_btn: Button
 var _p2_btn: Button
 var _diff_btn: Button
+# --- Запись, сохранение и повтор матча (M12, items 42 и 53) ---
+## Регистратор пишет партию по ходу дела; повтор, наоборот, её проигрывает. Оба сразу
+## не бывают: смотреть запись и одновременно писать новую нечего.
+var recorder: ReplayRecorder = null
+var replay: ReplayPlayer = null
+var _loaded_from_save: bool = false
+var _replay_playing: bool = false
+var _replay_speed: float = 1.0
+var _replay_bar: PanelContainer = null
+var _replay_label: Label = null
+var _replay_play_btn: Button = null
+var _replay_speed_btn: Button = null
+var _save_btn: Button = null
+## Пауза между действиями при автопроигрывании — делится на выбранную скорость.
+const REPLAY_STEP_DELAY := 0.5
+const REPLAY_SPEEDS := [1.0, 2.0, 4.0, 8.0]
+
 var networked: bool = false
 var my_owner: int = MCF.Owner.PLAYER_1
 var session: NetworkSession = null
@@ -246,8 +263,12 @@ func _ready() -> void:
 	# со следующей партии, перезапускать игру не нужно.
 	Sprites.reload_overrides()
 	_build_state()
-	_sync_roster_from_config()
-	_build_controllers()
+	# У записи нет игроков: смотреть — не играть, поэтому контроллеров не заводим
+	# вовсе. Ровно это и делает просмотр безопасным: подать намерение некому.
+	if replay == null:
+		if not _loaded_from_save:
+			_sync_roster_from_config()
+		_build_controllers()
 	_build_ui()
 	Ui.theme_canvas_layers()  # HUD lives on a CanvasLayer; pull in the Steam skin.
 	# Связь налажена во вкладке Multiplayer главного меню (#54) — подхватываем её.
@@ -255,7 +276,9 @@ func _ready() -> void:
 	# его броски клиенту (#93), иначе каждая сторона сыграла бы его по-своему.
 	_adopt_network()
 	# После UI — иначе первые строки боя (порядок инициативы) уйдут в никуда.
-	if not networked:
+	if replay != null:
+		_open_replay()
+	elif not networked:
 		_open_match()
 	_refresh_status()
 	set_process(true)
@@ -283,6 +306,10 @@ func _process(delta: float) -> void:
 		queue_redraw()
 
 func _build_state() -> void:
+	# Загруженная партия и запись матча (M12) приезжают сюда из меню уже готовой
+	# доской: ни карту раскладывать, ни ростер собирать больше не нужно.
+	if _adopt_replay() or _adopt_save():
+		return
 	if MapHandoff.pending != null:
 		state = MapHandoff.pending.build_state(MapHandoff.take_seed(),
 				GameConfig.active_roster())
@@ -340,8 +367,12 @@ func _build_state() -> void:
 ## первым в нём стоит слот мирных, сразу отыгрываем его — контроллера у
 ## нейтральной стороны нет, её ход проводит сам резолвер.
 func _open_match() -> void:
+	_begin_recording()
 	state.log.add("— Initiative this match: %s —" % state.turns.order_names())
-	await _play_civilian_result(resolver.play_civilian_slots())
+	# Открывающий слот мирных играется ВНЕ потока намерений, но кубики бросает —
+	# поэтому под запись он уходит через сам регистратор (см. ReplayRecorder).
+	await _play_civilian_result(recorder.capture_opening() if recorder != null
+			else resolver.play_civilian_slots())
 	# Ходящий первым может оказаться машиной (#103): до этого ИИ запускался только ПОСЛЕ
 	# чужого действия, и партия «ИИ против ИИ» просто стояла на месте, пока человек не
 	# нажмёт что-нибудь — а нажимать ему нечем, своих юнитов у него нет.
@@ -370,6 +401,188 @@ func _play_civilian_result(res: ActionResult) -> void:
 		queue_redraw()
 	state.log.publish_result(res)
 	_refresh_status()
+
+# --- Запись матча (item 53) --------------------------------------------------
+## Пишем только НЕсетевую партию: в сетевой журнал бросков уже ведёт хост (NetGame),
+## и второй писатель отобрал бы у него броски действия. Запись стоит один хук в
+## резолвере и ничего не меняет в правилах — при выключенной записи её просто нет.
+func _begin_recording() -> void:
+	if replay != null or networked or recorder != null:
+		return
+	recorder = ReplayRecorder.new()
+	recorder.begin(state, resolver, _match_meta())
+	resolver.replay_recorder = recorder
+
+## Подпись матча для списков в меню: карта, раунд, время.
+func _match_meta() -> Dictionary:
+	var map_name := GameConfig.map_path.get_file().get_basename()
+	if map_name == "":
+		map_name = "arena"
+	var t := Time.get_datetime_string_from_system(false, true)
+	return {"map": map_name, "saved_at": t, "round": state.turns.round_number}
+
+## Дописать запись на диск. Зовётся на выходе из боя: до этого момента неизвестно,
+## где партия кончилась, а держать файл открытым весь бой незачем.
+func _flush_replay() -> void:
+	if recorder == null:
+		return
+	if resolver != null:
+		resolver.replay_recorder = null
+	var path := recorder.save(str(_match_meta().get("map", "match")))
+	if path != "":
+		print("replay saved: ", path)
+	recorder = null
+
+## Сохранить партию (item 42). Косметика едет вместе с доской — иначе перезагруженный
+## час боя выглядел бы свежевымытым.
+func _save_game() -> void:
+	if replay != null or state == null:
+		return
+	var meta := _match_meta()
+	var data := ReplayFile.build_save(state, resolver, meta, _fx.to_dict())
+	var name := ReplayFile.stamped(str(meta.get("map", "match")), ReplayFile.SAVE_EXT)
+	var path := ReplayFile.path_for(ReplayFile.SAVE_DIR, name)
+	if ReplayFile.write(path, data):
+		state.log.add("— Game saved as %s —" % name)
+	else:
+		state.log.add("[denied] Could not write the save file.")
+
+# --- Загрузка сохранённой партии и повтора (M12) ------------------------------
+
+## Продолжить сохранённую партию. Ростер приезжает из файла — в нём уже учтено
+## переназначение ролей, сделанное в лобби (item 42).
+func _adopt_save() -> bool:
+	var data := SaveHandoff.take_save()
+	if data.is_empty():
+		return false
+	var loaded := StateCodec.decode(data.get("state", {}))
+	if loaded == null:
+		push_warning("save file is newer than this build — starting a normal match")
+		return false
+	state = loaded
+	resolver = GameActionResolver.new(state)
+	StateCodec.apply_rules(resolver, data.get("rules", {}))
+	resolver.update_airlocks()
+	if data.has("fx"):
+		_fx.from_dict(data["fx"])
+	# Настройки партии обязаны совпасть с сохранёнными: экраны и HUD читают их из
+	# GameConfig, и разъехавшийся туман показал бы игроку не ту доску.
+	GameConfig.roster = state.roster
+	GameConfig.fog_mode = resolver.fog_mode
+	GameConfig.friendly_fire = resolver.friendly_fire_enabled
+	_loaded_from_save = true
+	state.log.line_added.connect(_on_log_line)
+	return true
+
+func _adopt_replay() -> bool:
+	var data := SaveHandoff.take_replay()
+	if data.is_empty():
+		return false
+	replay = ReplayPlayer.new(data)
+	replay.seek(0)
+	_take_replay_state()
+	return true
+
+## Забрать доску у проигрывателя. Перемотка НАЗАД пересобирает состояние с нуля, то
+## есть подменяет и GameState, и резолвер — значит всё, что на них подписано, надо
+## перевесить, а накопленную косметику сбросить: она относилась к прежней доске.
+func _take_replay_state() -> void:
+	if state != null and state.log.line_added.is_connected(_on_log_line):
+		state.log.line_added.disconnect(_on_log_line)
+	state = replay.state
+	resolver = replay.resolver
+	# Зритель смотрит бой целиком: прятать от него нечего, стороны в записи не его.
+	# Снятый туман не может сделать записанное действие незаконным — он только
+	# разрешает больше, — поэтому воспроизведение от этого не съедет.
+	resolver.fog_mode = MCF.Fog.OFF
+	state.log.line_added.connect(_on_log_line)
+	_fx.clear()
+	selected_id = -1
+	selected_vehicle_id = -1
+	mode = Mode.NONE
+
+## Открыть просмотр записи: те же вступительные строки, что и у живой партии.
+func _open_replay() -> void:
+	state.log.add("— Replay: %s —" % ReplayFile.describe(replay.data))
+	state.log.add("— Initiative this match: %s —" % state.turns.order_names())
+	if replay.opening_result != null:
+		await _play_civilian_result(replay.opening_result)
+	_refresh_replay_bar()
+	_refresh_status()
+
+## Показать результат действия так же, как его показывает живая партия: кубики,
+## отложенные смерти, косметика, журнал. Отдельная функция, потому что у повтора нет
+## ни контроллеров, ни сети — а показ должен быть тот же самый.
+func _show_result(result: ActionResult) -> void:
+	if result == null:
+		return
+	if not result.ok:
+		state.log.add("[denied] " + result.reason)
+		return
+	if not result.dice_events.is_empty():
+		_pending_death_ids.clear()
+		for id: int in result.deaths:
+			_pending_death_ids[id] = true
+		queue_redraw()
+		await _play_dice(result.dice_events)
+		_pending_death_ids.clear()
+	if not result.fx.is_empty():
+		_fx.apply(result.fx)
+	state.log.publish_result(result)
+	_refresh_status()
+	queue_redraw()
+
+func _replay_step() -> void:
+	if replay == null or _animating or not replay.has_next():
+		return
+	await _show_result(replay.play_next())
+	_refresh_replay_bar()
+
+## Шаг назад и любая перемотка — это пересборка доски из ближайшего ключевого кадра
+## (см. ReplayPlayer.seek). Показывать промежуточные броски при этом нельзя: их сотни,
+## и перемотка превратилась бы в ещё один просмотр.
+func _replay_seek(target: int) -> void:
+	if replay == null or _animating:
+		return
+	_replay_playing = false
+	replay.seek(target)
+	_take_replay_state()
+	_refresh_replay_bar()
+	_refresh_status()
+	queue_redraw()
+
+func _replay_toggle() -> void:
+	if replay == null:
+		return
+	_replay_playing = not _replay_playing
+	_refresh_replay_bar()
+	if _replay_playing:
+		_replay_loop()
+
+func _replay_loop() -> void:
+	while _replay_playing and replay != null and replay.has_next() and is_inside_tree():
+		if _animating:
+			await get_tree().process_frame
+			continue
+		await _show_result(replay.play_next())
+		_refresh_replay_bar()
+		if not _replay_playing:
+			break
+		await get_tree().create_timer(REPLAY_STEP_DELAY / _replay_speed).timeout
+	_replay_playing = false
+	_refresh_replay_bar()
+
+func _replay_cycle_speed() -> void:
+	var i := REPLAY_SPEEDS.find(_replay_speed)
+	_replay_speed = REPLAY_SPEEDS[(i + 1) % REPLAY_SPEEDS.size()]
+	_refresh_replay_bar()
+
+func _refresh_replay_bar() -> void:
+	if _replay_bar == null or replay == null:
+		return
+	_replay_label.text = replay.position_text()
+	_replay_play_btn.text = "❚❚" if _replay_playing else "▶"
+	_replay_speed_btn.text = "%dx" % int(_replay_speed)
 
 ## Перенести выбор экрана подготовки (кто машина, какая сложность) в ростер.
 ## Ростер, пришедший из лобби, уже всё это знает — тогда эта синхронизация просто
@@ -553,6 +766,14 @@ func _unhandled_input(event: InputEvent) -> void:
 func _handle_click(coord: Vector2i) -> void:
 	if not state.grid.in_bounds(coord):
 		_deselect()
+		return
+	# В повторе клик только РАССМАТРИВАЕТ юнита: меню действий не открывается, потому
+	# что действовать в записанной партии нельзя — она уже сыграна.
+	if replay != null:
+		var seen := _unit_at(coord)
+		selected_id = seen.id if seen != null else -1
+		_refresh_info()
+		queue_redraw()
 		return
 	var occupant: UnitInstance = _unit_at(coord)
 	# Прицеливание: из стопки «дрон над юнитом» берём того, кто реально доступен как
@@ -1618,6 +1839,8 @@ func _begin_shoot(target: UnitInstance) -> void:
 
 # --- Поток намерений (с анимацией кубиков) ---
 func _submit(intent: Intent) -> void:
+	if replay != null:
+		return   # запись только смотрят: подавать за неё намерения некому
 	if networked and state.active_player() != my_owner:
 		return
 	var ctrl: LocalHumanController = controllers[state.active_player()]
@@ -2932,6 +3155,11 @@ func _reposition_hud_grip() -> void:
 		var vp := get_viewport_rect().size
 		_chat_panel.position = Vector2(vp.x - _chat_panel.size.x - 12.0,
 				vp.y - _chat_panel.size.y - 12.0)
+	# Полоса повтора (M12) — по центру внизу, как у любого проигрывателя.
+	if _replay_bar != null:
+		var screen := get_viewport_rect().size
+		_replay_bar.position = Vector2((screen.x - _replay_bar.size.x) * 0.5,
+				screen.y - _replay_bar.size.y - 14.0)
 
 # --- UI ---
 func _build_ui() -> void:
@@ -3026,6 +3254,11 @@ func _build_ui() -> void:
 	# войска — кнопка возвращает вид к исходной точке.
 	vbox.add_child(_compact_button("Return to Map", _recenter_camera))
 
+	# Сохранение партии (item 42) — рядом с выходом: обе кнопки про «закончить сейчас».
+	_save_btn = _compact_button("Save Game", _save_game)
+	_save_btn.disabled = replay != null
+	vbox.add_child(_save_btn)
+
 	var menu_btn := _compact_button("Main Menu", _to_menu)
 	var editor_btn := _compact_button("Editor", _open_editor)
 	vbox.add_child(_button_row([menu_btn, editor_btn]))
@@ -3104,6 +3337,45 @@ func _build_ui() -> void:
 	_build_quit_dialog()
 	_build_initiative_overlay()
 	_build_chat_panel()
+	if replay != null:
+		_build_replay_bar()
+
+## Полоса управления повтором (item 53) внизу экрана: в начало, шаг назад,
+## пуск/пауза, шаг вперёд, скорость, в конец. Строится только в режиме просмотра —
+## в живой партии её нет вовсе.
+func _build_replay_bar() -> void:
+	var panel := PanelContainer.new()
+	SteamChrome.apply_panel(panel)
+	var frame := VBoxContainer.new()
+	frame.add_theme_constant_override("separation", 0)
+	panel.add_child(frame)
+	frame.add_child(SteamChrome.header_bar("Replay"))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	frame.add_child(SteamChrome.pad(row, 12, 8))
+	row.add_child(_replay_btn("|◀", func() -> void: _replay_seek(0)))
+	row.add_child(_replay_btn("◀", func() -> void: _replay_seek(replay.index - 1)))
+	_replay_play_btn = _replay_btn("▶", _replay_toggle)
+	row.add_child(_replay_play_btn)
+	row.add_child(_replay_btn("▶|", _replay_step))
+	_replay_speed_btn = _replay_btn("1x", _replay_cycle_speed)
+	row.add_child(_replay_speed_btn)
+	row.add_child(_replay_btn("▶▶|", func() -> void: _replay_seek(replay.step_count())))
+	_replay_label = Label.new()
+	_replay_label.add_theme_font_size_override("font_size", 12)
+	_replay_label.custom_minimum_size = Vector2(180, 0)
+	_replay_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(_replay_label)
+	_replay_bar = panel
+	_ui_layer.add_child(_replay_bar)
+	_refresh_replay_bar()
+
+func _replay_btn(text: String, handler: Callable) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.custom_minimum_size = Vector2(46, 30)
+	b.pressed.connect(handler)
+	return b
 
 ## Чат в правом-нижнем углу (item 50): рамка SteamChrome с заголовком-переключателем,
 ## прокручиваемым журналом и строкой ввода. Позиция подгоняется в _reposition_hud_grip.
@@ -3867,6 +4139,8 @@ func _toggle_p1_ai() -> void:
 ## Записать «эта сторона — машина» в ростер. Кнопки хот-сита на двоих остаются
 ## кнопками на двоих, но единственным источником правды стал ростер.
 func _set_side_ai(side: int, value: bool) -> void:
+	if replay != null:
+		return
 	var slot := state.roster.slot(side)
 	if slot != null:
 		slot.kind = Roster.SlotKind.AI if value else Roster.SlotKind.HUMAN
@@ -3902,6 +4176,9 @@ func _open_editor() -> void:
 	get_tree().change_scene_to_file("res://scenes/MapEditor.tscn")
 
 func _to_menu() -> void:
+	# Запись матча дописывается на выходе — до этого момента неизвестно, чем он кончился.
+	_replay_playing = false
+	_flush_replay()
 	# Сессия висит под /root (#54), поэтому её надо закрыть руками: смена сцены
 	# сама её не заберёт, а живой ENet-пир помешал бы завести новую партию.
 	if session != null:

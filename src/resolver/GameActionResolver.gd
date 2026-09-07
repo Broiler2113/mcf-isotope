@@ -36,6 +36,15 @@ var friendly_fire_enabled: bool = true
 ## Живёт на резолвере, входит в снимок состояния (отсчёт до события переживает откат).
 var random_events: RandomEvents = null
 
+## Регистратор повтора матча (M12, item 53). Пока он подключён, resolve() записывает
+## броски КАЖДОГО верхнеуровневого действия и отдаёт их ему вместе с намерением —
+## этого достаточно, чтобы сыграть партию заново (см. ReplayRecorder).
+##
+## Тип намеренно нежёсткий (RefCounted, а не ReplayRecorder): резолвер — слой правил,
+## и знать про запись ему незачем, он лишь зовёт on_resolved. null — записи нет, и
+## тогда ни одной лишней строчки не выполняется.
+var replay_recorder: RefCounted = null
+
 func _init(p_state: GameState) -> void:
 	state = p_state
 	random_events = RandomEvents.from_config()
@@ -104,6 +113,12 @@ func resolve(intent: Intent) -> ActionResult:
 	var turn_before := _turn_key()
 	var undoable := top and _undoable_side(state.active_player())
 	var pre_snap: Dictionary = state.snapshot() if undoable else {}
+	# Запись повтора (M12). Пишем ровно то же, что хост шлёт клиенту, — и тем же
+	# способом. Условие record_enabled здесь не формальность: в сетевой партии журнал
+	# уже ведёт NetGame, и второй begin_record отобрал бы у него броски действия.
+	var recording := top and replay_recorder != null and not state.dice.record_enabled
+	if recording:
+		state.dice.begin_record()
 	var result := _dispatch(intent)
 	# Действие могло вскрыть квартал (§3 «Нейтралы»): соседняя клетка сменила состояние
 	# или в чей-то обзор вошёл солдат. Каскад и сбор группы идут ВНУТРИ resolve(), пока
@@ -111,6 +126,13 @@ func resolve(intent: Intent) -> ActionResult:
 	# Только на верхнем уровне: под-resolve хода жителей (depth>1) кварталов не будит.
 	if top and result.ok:
 		_wake_and_group(result)
+	# Броски забираем ПОСЛЕ пробуждения кварталов: жребий места в очереди — такой же
+	# бросок этого действия, и без него повтор поставил бы группу в другое место.
+	if recording:
+		var rolls := state.dice.take_log()
+		state.dice.record_enabled = false
+		if result.ok:
+			replay_recorder.on_resolved(intent, rolls)
 	_resolve_depth -= 1
 	if top and result.ok:
 		# Новое действие обрывает откатанную ветку — повторять больше нечего (#38).

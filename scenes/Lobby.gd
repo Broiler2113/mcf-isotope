@@ -10,6 +10,7 @@ extends Control
 
 const PLACEMENT_SCENE := "res://scenes/Placement.tscn"
 const MENU_SCENE := "res://scenes/MainMenu.tscn"
+const MAIN_SCENE := "res://scenes/Main.tscn"
 const SteamChrome = preload("res://src/ui/SteamChrome.gd")
 
 const GAME_MODES := ["domination"]
@@ -37,6 +38,15 @@ var _status: Label
 
 var _map_paths: Array[String] = []
 
+# --- Загруженная партия (M12, item 42) ---
+## Содержимое `.mcfs`, если хост открыл сохранение. Пусто — обычный матч с закупкой.
+var _save: Dictionary = {}
+var _save_names: PackedStringArray
+var _save_opt: OptionButton
+## Сколько живых юнитов в сохранении у каждой стороны — по ним хост и понимает,
+## какую армию кому отдаёт.
+var _save_armies: Dictionary = {}
+
 func _ready() -> void:
 	_is_client = NetHandoff.session != null and not NetHandoff.is_host
 	roster = _seed_roster()
@@ -52,6 +62,13 @@ func _ready() -> void:
 		_status.text = "Connected — waiting for the host to start the match…"
 
 func _on_client_message(msg: Dictionary) -> void:
+	# Хост открыл сохранение (M12): доска приезжает целиком, и закупка пропускается.
+	if str(msg.get("k", "")) == NetHandoff.K_LOAD:
+		NetHandoff.apply_load(msg)
+		NetHandoff.session.detach()
+		NetHandoff.session.message.disconnect(_on_client_message)
+		get_tree().change_scene_to_file(MAIN_SCENE)
+		return
 	if str(msg.get("k", "")) != NetHandoff.K_SETUP:
 		return
 	NetHandoff.apply_setup(msg)
@@ -111,6 +128,8 @@ func _build_ui() -> void:
 
 	_build_config(left)
 	_build_map(left)
+	if not _is_client:
+		_build_load(left)
 	_build_slots(right)
 	_build_personal(right)
 
@@ -240,6 +259,74 @@ func _build_map(parent: VBoxContainer) -> void:
 	_map_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	box.add_child(_map_preview)
 
+## Открыть сохранённую партию прямо в лобби (item 42). Смысл именно здесь, а не в
+## меню: доска и армии в файле уже есть, а вот КТО их ведёт — вопрос сегодняшнего
+## стола. Ростер в лобби правится как обычно, и на старте он просто подменяет
+## сохранённый; ни одного владельца юнита при этом переписывать не нужно.
+func _build_load(parent: VBoxContainer) -> void:
+	var box := _titled(parent, "Saved Game")
+	_save_names = ReplayFile.saves()
+	_save_opt = OptionButton.new()
+	if _save_names.is_empty():
+		_save_opt.add_item("(no saved games)")
+		_save_opt.disabled = true
+	else:
+		for name in _save_names:
+			_save_opt.add_item(name.get_basename())
+	_row(box, "File:", _save_opt)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	box.add_child(row)
+	var load_btn := Button.new()
+	load_btn.text = "Load"
+	load_btn.pressed.connect(_on_load_save)
+	load_btn.disabled = _save_names.is_empty()
+	row.add_child(load_btn)
+	var clear_btn := Button.new()
+	clear_btn.text = "Clear"
+	clear_btn.pressed.connect(_on_clear_save)
+	row.add_child(clear_btn)
+	var note := Label.new()
+	note.text = "Loading a save skips deployment: the armies are already on the board. Assign each of them to a player or an AI in the slot list."
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.add_theme_font_size_override("font_size", 11)
+	note.modulate = Color(0.75, 0.78, 0.85)
+	box.add_child(note)
+
+func _on_load_save() -> void:
+	if _save_opt == null or _save_names.is_empty():
+		return
+	var name := _save_names[clampi(_save_opt.selected, 0, _save_names.size() - 1)]
+	var data := ReplayFile.read(ReplayFile.path_for(ReplayFile.SAVE_DIR, name))
+	if data.is_empty():
+		_status.text = "Could not read %s." % name
+		return
+	var saved: Dictionary = data.get("state", {})
+	_save = data
+	_save_armies = _count_armies(saved)
+	# Ростер файла становится основой: слоты, цвета и команды в нём уже те, что были в
+	# бою. Хост дальше правит их как обычно — это и есть переназначение ролей.
+	roster = Roster.from_dict(saved.get("roster", {}))
+	_refresh_slots()
+	_status.text = "Loaded %s — %d armies on the board." % [name, _save_armies.size()]
+
+func _on_clear_save() -> void:
+	_save = {}
+	_save_armies = {}
+	_status.text = "Saved game cleared — the match will start from deployment."
+
+## Живые юниты по сторонам прямо из файла: разбирать его в GameState ради счётчика
+## незачем, а показать «Player B: 11 units» надо до старта.
+func _count_armies(saved: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	for raw in saved.get("units", []):
+		var rec: Dictionary = raw
+		if int(rec.get("status", 0)) == MCF.Status.CORPSE:
+			continue
+		var owner := int(rec.get("owner", -1))
+		out[owner] = int(out.get(owner, 0)) + 1
+	return out
+
 func _build_slots(parent: VBoxContainer) -> void:
 	_titled(parent, "Team Slots & Players")
 	_slots_box = VBoxContainer.new()
@@ -313,6 +400,14 @@ func _slot_row(s: Roster.Slot) -> Control:
 	team.value_changed.connect(_on_slot_team.bind(s.id))
 	team.editable = not _is_client
 	row.add_child(team)
+
+	# Из загруженного файла: какая армия достанется этому слоту (item 42).
+	if _save_armies.has(s.id):
+		var army := Label.new()
+		army.text = "%d units" % int(_save_armies[s.id])
+		army.add_theme_font_size_override("font_size", 11)
+		army.modulate = Color(0.75, 0.85, 0.75)
+		row.add_child(army)
 	return row
 
 func _kind_index(s: Roster.Slot) -> int:
@@ -436,6 +531,20 @@ func _commit_config() -> void:
 	GameConfig.map_path = _map_paths[_map_opt.selected]
 	GameConfig.roster = roster
 
+## Старт с загруженной партии: ростер лобби подменяет сохранённый прямо в словаре
+## файла — ровно та «правка одного словаря», ради которой ростер и отделён от
+## владельцев юнитов. Расстановка пропускается: армии уже на доске.
+func _start_loaded() -> void:
+	_commit_config()
+	var saved: Dictionary = _save.get("state", {})
+	saved["roster"] = roster.to_dict()
+	_save["state"] = saved
+	if NetHandoff.session != null and NetHandoff.is_host:
+		NetHandoff.session.send(NetHandoff.encode_load(_save))
+	SaveHandoff.pending_save = _save
+	MapHandoff.pending = null
+	get_tree().change_scene_to_file(MAIN_SCENE)
+
 func _on_start() -> void:
 	if roster.has_duplicate_colors():
 		_status.text = "Two players share a colour — fix that first."
@@ -446,6 +555,9 @@ func _on_start() -> void:
 			playing += 1
 	if playing < 2:
 		_status.text = "Need at least two playing slots (Player or AI)."
+		return
+	if not _save.is_empty():
+		_start_loaded()
 		return
 	_commit_config()
 	# Сетевой хост объявляет карту клиентам тем же путём, что и старый Setup.

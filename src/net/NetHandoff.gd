@@ -14,6 +14,10 @@ static var is_host: bool = false
 
 ## Объявление матча: хост → клиент (#99).
 const K_SETUP := "setup"
+## Загруженная хостом партия: хост → клиент (M12, item 42). Едет ЦЕЛИКОМ, ровно по той
+## же причине, что и карта, — у клиента этого файла нет и быть не может. Расстановка
+## при этом пропускается: армии уже стоят на доске, их только раздают игрокам.
+const K_LOAD := "load"
 
 ## Карта, объявленная хостом (#99). Едет по сети ЦЕЛИКОМ, а не именем файла: карта
 ## хоста может быть нарисована в его редакторе, и у клиента такого файла попросту нет.
@@ -52,6 +56,21 @@ static func apply_setup(msg: Dictionary) -> void:
 	GameConfig.p2_is_ai = false
 	GameConfig.map_path = ""
 	lobby_map = MapData.from_dict(msg.get("m", {}))
+
+## Собрать объявление загруженной партии (M12). Ростер в save уже переписан лобби:
+## переназначение ролей — это правка ростера, а не переписывание владельцев юнитов.
+static func encode_load(save: Dictionary) -> Dictionary:
+	return {"k": K_LOAD, "s": save}
+
+static func apply_load(msg: Dictionary) -> void:
+	var save: Variant = msg.get("s")
+	if not (save is Dictionary):
+		return
+	SaveHandoff.pending_save = save
+	GameConfig.free_placement = true
+	GameConfig.p2_is_ai = false
+	GameConfig.map_path = ""
+	lobby_map = null
 
 static func take_lobby_map() -> MapData:
 	var m := lobby_map

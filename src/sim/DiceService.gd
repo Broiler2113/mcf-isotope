@@ -20,6 +20,11 @@ var _scripted_mode: bool = false
 ## Сколько раз бросок ушёл во внутренний RNG, хотя сторона работает по сценарию.
 ## Строго > 0 — это уже расхождение.
 var fallback_rolls: int = 0
+## Сколько бросков взято из СОБСТВЕННОГО генератора (M12). Присланные по сценарию
+## броски сюда не идут — они не двигают внутренний RNG. По этой паре «зерно + счётчик»
+## сохранение возвращает генератор ровно туда, где его застали: само внутреннее
+## состояние RNG — 64-битное число, а через JSON такое едет с потерей точности.
+var own_rolls: int = 0
 
 func _init(seed_value: int = -1) -> void:
 	if seed_value >= 0:
@@ -35,6 +40,7 @@ func roll_d6() -> int:
 		if _scripted_mode:
 			fallback_rolls += 1
 		v = _rng.randi_range(1, 6)
+		own_rolls += 1
 	if record_enabled:
 		_log.append(v)
 	return v
@@ -69,3 +75,19 @@ func take_log() -> Array[int]:
 	var out := _log.duplicate()
 	_log.clear()
 	return out
+
+# --- Сохранение позиции генератора (M12) ---
+
+## Зерно, с которого генератор стартовал. Вместе с own_rolls полностью описывает,
+## где он сейчас находится.
+func current_seed() -> int:
+	return int(_rng.seed)
+
+## Вернуть генератор в точку «зерно + столько-то сделанных бросков». Броски
+## прокручиваются вхолостую тем же вызовом, что и в игре, — иначе поток разошёлся бы.
+func restore_position(seed_value: int, count: int) -> void:
+	_rng.seed = seed_value
+	own_rolls = 0
+	for _i in count:
+		_rng.randi_range(1, 6)
+		own_rolls += 1
