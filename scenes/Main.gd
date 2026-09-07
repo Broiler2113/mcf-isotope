@@ -443,14 +443,72 @@ func _flush_replay() -> void:
 func _save_game() -> void:
 	if replay != null or state == null:
 		return
+	# Спрашиваем имя сохранения (item 19): игрок сам называет партию, а не получает
+	# файл с одной лишь меткой времени. Пустое поле откатывается на метку времени.
+	_prompt_save_name()
+
+## Модальное окошко ввода имени сохранения (item 19).
+func _prompt_save_name() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 80
+	add_child(layer)
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.5)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	layer.add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	layer.add_child(center)
+	var panel := PanelContainer.new()
+	SteamChrome.apply_panel(panel)
+	center.add_child(panel)
+	var frame := VBoxContainer.new()
+	frame.add_theme_constant_override("separation", 0)
+	panel.add_child(frame)
+	frame.add_child(SteamChrome.header_bar("Save Game"))
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 10)
+	frame.add_child(SteamChrome.pad(box, 16, 12))
+	var lbl := Label.new()
+	lbl.text = "Name this save:"
+	box.add_child(lbl)
+	var edit := LineEdit.new()
+	edit.custom_minimum_size = Vector2(280, 0)
+	edit.text = str(_match_meta().get("map", "match"))
+	box.add_child(edit)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_END
+	row.add_theme_constant_override("separation", 8)
+	box.add_child(row)
+	var cancel := Button.new()
+	cancel.text = "Cancel"
+	row.add_child(cancel)
+	var ok := Button.new()
+	ok.text = "Save"
+	row.add_child(ok)
+	Ui.theme_canvas_layers()
+	var close := func() -> void: layer.queue_free()
+	cancel.pressed.connect(close)
+	var commit := func() -> void:
+		_do_save_game(edit.text)
+		layer.queue_free()
+	ok.pressed.connect(commit)
+	edit.text_submitted.connect(func(_t: String) -> void: commit.call())
+	edit.grab_focus()
+	edit.select_all()
+
+func _do_save_game(chosen_name: String) -> void:
+	if replay != null or state == null:
+		return
 	var meta := _match_meta()
 	var data := ReplayFile.build_save(state, resolver, meta, _fx.to_dict())
-	var name := ReplayFile.stamped(str(meta.get("map", "match")), ReplayFile.SAVE_EXT)
+	var name := ReplayFile.named(chosen_name, ReplayFile.SAVE_EXT)
 	var path := ReplayFile.path_for(ReplayFile.SAVE_DIR, name)
 	if ReplayFile.write(path, data):
 		state.log.add("— Game saved as %s —" % name)
 	else:
 		state.log.add("[denied] Could not write the save file.")
+	_refresh_status()
 
 # --- Загрузка сохранённой партии и повтора (M12) ------------------------------
 
