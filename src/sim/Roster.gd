@@ -55,6 +55,13 @@ class Slot extends RefCounted:
 	func is_playing() -> bool:
 		return kind == SlotKind.HUMAN or kind == SlotKind.AI
 
+	## Индекс цвета слота в PALETTE (для списков лобби). −1 нет: подбираем ближайший.
+	func color_index() -> int:
+		for i in Roster.PALETTE.size():
+			if Roster.PALETTE[i].is_equal_approx(color):
+				return i
+		return id % Roster.PALETTE.size()
+
 var slots: Array = []
 ## Бюджет очков на команду; индекс = номер команды. Пусто — команд нет.
 var team_budgets: Array = []

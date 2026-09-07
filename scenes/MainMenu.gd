@@ -6,6 +6,7 @@ extends Control
 ##     сессией через NetHandoff. На боковой панели боя сетевых кнопок больше нет.
 
 const SETUP_SCENE := "res://scenes/Setup.tscn"
+const LOBBY_SCENE := "res://scenes/Lobby.tscn"
 const EDITOR_SCENE := "res://scenes/MapEditor.tscn"
 const PLACEMENT_SCENE := "res://scenes/Placement.tscn"
 
@@ -19,6 +20,10 @@ var _mp_host_btn: Button
 var _mp_join_btn: Button
 var _mp_cancel_btn: Button
 var _session: NetworkSession = null
+## Автопоиск LAN (item 38): узел-обозреватель и список найденных серверов.
+var _lan: LanDiscovery = null
+var _lan_list: ItemList
+var _lan_servers: Array = []
 
 func _ready() -> void:
 	# Уходя в меню, старую сессию не тащим — начинаем с чистого листа.
@@ -116,6 +121,21 @@ func _build_multi_tab() -> Control:
 	_mp_join_btn = _menu_button("Join Game", _join_game)
 	page.add_child(_mp_join_btn)
 
+	# Автопоиск серверов в локальной сети (item 38). Хост объявляет о себе, а этот
+	# список наполняется найденными хостами; клик по строке подключается напрямую.
+	var lan_lbl := Label.new()
+	lan_lbl.text = "LAN games:"
+	lan_lbl.add_theme_font_size_override("font_size", 12)
+	page.add_child(lan_lbl)
+	_lan_list = ItemList.new()
+	_lan_list.custom_minimum_size = Vector2(0, 90)
+	_lan_list.item_activated.connect(_on_lan_pick)
+	page.add_child(_lan_list)
+	_lan = LanDiscovery.new()
+	get_tree().root.add_child.call_deferred(_lan)
+	_lan.servers_changed.connect(_on_lan_servers)
+	_lan.start_listening.call_deferred()
+
 	_mp_cancel_btn = _menu_button("Cancel", _cancel_net)
 	_mp_cancel_btn.hide()
 	page.add_child(_mp_cancel_btn)
@@ -134,6 +154,11 @@ func _host_game() -> void:
 	var err := _session.start_host(NetworkSession.DEFAULT_PORT)
 	if err == OK:
 		_set_waiting("Hosting on port %d — waiting for a player..." % NetworkSession.DEFAULT_PORT)
+		# Объявляем партию в локальной сети (item 38), чтобы клиенты нашли её без IP.
+		if _lan != null:
+			_lan.start_advertising({
+				"name": "MCF Tactics", "players": 1,
+				"port": NetworkSession.DEFAULT_PORT})
 	else:
 		_fail_net("Could not host (error %d). Is the port already in use?" % err)
 
@@ -149,6 +174,32 @@ func _join_game() -> void:
 		_set_waiting("Connecting to %s..." % ip)
 	else:
 		_fail_net("Could not connect (error %d)." % err)
+
+## Обозреватель LAN живёт под /root — снимаем его при уходе из меню, чтобы не копить
+## сироты и не держать порт открытым в бою.
+func _exit_tree() -> void:
+	if _lan != null:
+		_lan.stop()
+		_lan.queue_free()
+		_lan = null
+
+## Найденные в сети серверы обновились (item 38) — перерисовываем список.
+func _on_lan_servers(servers: Array) -> void:
+	_lan_servers = servers
+	if _lan_list == null:
+		return
+	_lan_list.clear()
+	for info: Dictionary in servers:
+		_lan_list.add_item("%s @ %s (%d)" % [
+			str(info.get("name", "Game")), str(info.get("ip", "?")),
+			int(info.get("players", 0))])
+
+## Клик по найденному серверу — подключаемся к его IP напрямую (item 38).
+func _on_lan_pick(index: int) -> void:
+	if index < 0 or index >= _lan_servers.size() or _session != null:
+		return
+	_mp_ip.text = str((_lan_servers[index] as Dictionary).get("ip", "127.0.0.1"))
+	_join_game()
 
 ## Сессия живёт под /root с постоянным именем — так её путь одинаков у обеих
 ## сторон (RPC ходит по пути) и переживает смену сцены на бой.
@@ -195,29 +246,13 @@ func _on_peer_ready(is_host: bool) -> void:
 	GameConfig.p2_is_ai = false
 	GameConfig.free_placement = true
 	MapHandoff.pending = null
-	if is_host:
-		_mp_status.text = "Player joined — setting up the match..."
-		NetHandoff.session = _session
-		_session = null  # узел уходит дальше, из меню его больше не трогаем
-		get_tree().change_scene_to_file(SETUP_SCENE)
-		return
-	_mp_status.text = "Connected — waiting for the host to set up the match..."
-	_session.message.connect(_on_net_message)
-	_session.attach()
-
-## Клиент: пришли условия матча — принимаем их и уходим на закупку (#99).
-func _on_net_message(msg: Dictionary) -> void:
-	if _session == null or str(msg.get("k", "")) != NetHandoff.K_SETUP:
-		return
-	NetHandoff.apply_setup(msg)
-	# Пока меняются сцены, входящие копятся в буфере сессии — Placement заберёт их
-	# своим attach().
-	_session.detach()
-	_session.message.disconnect(_on_net_message)
-	_session.disconnected.disconnect(_on_net_lost)
+	# И хост, и подключившийся гость попадают в ОБЩЕЕ лобби (item 4/61). Гость видит его
+	# только для чтения — из управления ему доступен лишь выбор своего цвета, — а условия
+	# матча (K_SETUP) он ждёт уже внутри лобби и по ним уходит на закупку.
 	NetHandoff.session = _session
-	_session = null
-	get_tree().change_scene_to_file(PLACEMENT_SCENE)
+	NetHandoff.is_host = is_host
+	_session = null  # узел уходит дальше, из меню его больше не трогаем
+	get_tree().change_scene_to_file(LOBBY_SCENE)
 
 # --- Общее ---
 func _menu_button(text: String, handler: Callable) -> Button:

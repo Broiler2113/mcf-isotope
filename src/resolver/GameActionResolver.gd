@@ -31,8 +31,14 @@ var omniscient_side: int = -1
 ## юнитов: «союзник» без команд — это только ты сам.
 var friendly_fire_enabled: bool = true
 
+## Случайные события (§1.5 лобби, item 61). null или выключенные — событий нет и
+## ни одного лишнего кубика не бросается, поэтому старые партии идут прежним потоком.
+## Живёт на резолвере, входит в снимок состояния (отсчёт до события переживает откат).
+var random_events: RandomEvents = null
+
 func _init(p_state: GameState) -> void:
 	state = p_state
+	random_events = RandomEvents.from_config()
 
 ## Сколько окопов роется за 1 ОД: обычная пехота — 3, инженер — 6 (§3.7).
 const DIG_TRENCHES_NORMAL := 3
@@ -4200,7 +4206,32 @@ func _resolve_end_turn(intent: EndTurnIntent = null) -> ActionResult:
 	# покажет только после кубика защиты — как и в любом другом обмене выстрелами (#96).
 	out.dice_events = civ.dice_events
 	out.deaths = civ.deaths
+	# Случайное событие на новый ход (item 61). Выключено по умолчанию — тогда ни одного
+	# кубика не бросается и поток случайности старых партий цел.
+	_maybe_random_event(out)
 	return out
+
+## Разыграть случайное событие на очередном ходу, если оно «созрело» (§1.5, item 61).
+## Всё — «случится ли», «какое», «куда бьёт» — берётся из DiceService, чтобы хост и
+## клиент разыграли одно и то же. Пока эффекты условны (заглушки).
+func _maybe_random_event(res: ActionResult) -> void:
+	if random_events == null or not random_events._due():
+		return
+	var id := random_events._pick(state.dice)
+	if id == "":
+		return
+	res.log("⚠ Random event — %s" % RandomEvents.event_name(id))
+	match id:
+		RandomEvents.MORTAR:
+			# Единственная заглушка с реальным эффектом: взрыв в клетке, выбранной кубиком.
+			var center := Vector2i(_rand_index(state.grid.width), _rand_index(state.grid.height))
+			var killed := _blast(center, res)
+			var tail := "" if killed.is_empty() else " — " + ", ".join(killed) + " killed"
+			res.log("Mortar shell lands at (%d, %d)%s" % [center.x, center.y, tail])
+		RandomEvents.TREMOR:
+			res.log("The ground shakes underfoot. (placeholder — effect pending spec)")
+		RandomEvents.GAS:
+			res.log("A gas cloud drifts across the battlefield. (placeholder — effect pending spec)")
 
 # --- Запросы легальности (для подсветки целей в UI) ---
 ## allow_embrasure=false — стрелок не может работать через амбразуру ДОТа: заряд

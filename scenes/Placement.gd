@@ -68,6 +68,7 @@ var _status: Label
 var _palette: VBoxContainer
 var _palette_buttons: Dictionary = {}
 var _flow_btn: Button
+var _stamp_btn: Button
 
 # --- Сетевая расстановка (#93) ---
 ## Экран работает и в сетевой партии: каждый игрок набирает ТОЛЬКО свою армию и
@@ -197,6 +198,11 @@ func _stats(id: String) -> UnitStats:
 	var s: UnitStats = load(path) if ResourceLoader.exists(path) else null
 	_stats_cache[id] = s
 	return s
+
+## Действующий бюджет стороны (item 40): 0 = безлимит. «Свободная расстановка» снимает
+## лимит либо со всех, либо с одного выбранного хостом игрока (GameConfig.unlimited_for).
+func _effective_budget(side: int) -> int:
+	return 0 if GameConfig.unlimited_for(side) else budget
 
 func _cost(id: String) -> int:
 	if VehicleDB.is_vehicle(id):
@@ -352,13 +358,39 @@ func _zoom_at(screen_pos: Vector2, factor: float) -> void:
 
 ## Красим клетку при перетаскивании — только СТАВИМ (не возвращаем), чтобы протяжка
 ## по своим юнитам их не снимала (#11).
+## Зеркальная расстановка (item 39): не-хост не расставляет свободно — только «штампует»
+## формацию хоста. В этот момент кисть и перетаскивание для него заблокированы.
+func _mirror_locked() -> bool:
+	return GameConfig.placement_mode == GameConfig.Placement.MIRRORED \
+			and not _sides().is_empty() and active_side != _sides()[0]
+
+## Отштамповать формацию хоста (первой стороны) в зону текущей стороны, отразив её через
+## центр карты (item 39). Копии бесплатны — это отражение уже оплаченного отряда хоста.
+func _stamp_formation() -> void:
+	var host: int = _sides()[0]
+	var added := 0
+	for p in placed.duplicate():
+		if int(p["owner"]) != host:
+			continue
+		var src: Vector2i = p["coord"]
+		var dst := Vector2i(map.width - 1 - src.x, map.height - 1 - src.y)
+		if _placed_at(dst) != -1 or not _footprint_placeable(p["stats_id"], dst, active_side):
+			continue
+		placed.append({"stats_id": p["stats_id"], "owner": active_side,
+				"coord": dst, "paid_by": active_side})
+		added += 1
+	_status.text = "Stamped %d units from the host's formation." % added
+	_refresh_labels()
+	queue_redraw()
+
 func _paint_at(coord: Vector2i) -> void:
-	if brush_unit == "" or _placed_at(coord) != -1:
+	if _mirror_locked() or brush_unit == "" or _placed_at(coord) != -1:
 		return
 	if not _footprint_placeable(brush_unit, coord, active_side):
 		return
 	var c := _cost(brush_unit)
-	if budget > 0 and spent[active_side] + c > budget:
+	var eb := _effective_budget(active_side)
+	if eb > 0 and spent[active_side] + c > eb:
 		return
 	placed.append({"stats_id": brush_unit, "owner": active_side,
 			"coord": coord, "paid_by": active_side})
@@ -382,6 +414,9 @@ func _click_cell(coord: Vector2i) -> void:
 			_status.text = "That unit belongs to the other side."
 		return
 	# Иначе — поставить выбранного юнита/технику.
+	if _mirror_locked():
+		_status.text = "Mirrored placement: use “Stamp Formation”, not free deployment."
+		return
 	if brush_unit == "":
 		_status.text = "Pick a unit from the palette first."
 		return
@@ -390,8 +425,9 @@ func _click_cell(coord: Vector2i) -> void:
 		return
 	var c := _cost(brush_unit)
 	# Бюджет <= 0 — безлимит (§Setup «0 = unlimited»); иначе соблюдаем заданный предел.
-	if budget > 0 and spent[active_side] + c > budget:
-		_status.text = "Not enough points (need %d, have %d)." % [c, budget - spent[active_side]]
+	var eb := _effective_budget(active_side)
+	if eb > 0 and spent[active_side] + c > eb:
+		_status.text = "Not enough points (need %d, have %d)." % [c, eb - spent[active_side]]
 		return
 	placed.append({"stats_id": brush_unit, "owner": active_side,
 			"coord": coord, "paid_by": active_side})
@@ -608,6 +644,13 @@ func _build_ui() -> void:
 
 	vbox.add_child(HSeparator.new())
 
+	# Кнопка штампа формации хоста для зеркального режима (item 39).
+	_stamp_btn = Button.new()
+	_stamp_btn.text = "Stamp Formation"
+	_stamp_btn.pressed.connect(_stamp_formation)
+	_stamp_btn.visible = false
+	vbox.add_child(_stamp_btn)
+
 	_flow_btn = Button.new()
 	_flow_btn.custom_minimum_size = Vector2(0, 42)
 	_flow_btn.pressed.connect(_on_net_ready if networked() else _on_flow)
@@ -649,7 +692,13 @@ func _refresh_labels() -> void:
 	for p in placed:
 		if _paid_by(p) == active_side:
 			count += 1
-	_budget_label.text = "Points spent: %d   (units: %d)" % [spent[active_side], count]
+	var eb := _effective_budget(active_side)
+	if eb > 0:
+		_budget_label.text = "Points: %d / %d   (units: %d)" % [spent[active_side], eb, count]
+	else:
+		_budget_label.text = "Points spent: %d   (unlimited — units: %d)" % [spent[active_side], count]
+	if _stamp_btn != null:
+		_stamp_btn.visible = _mirror_locked()
 	if networked():
 		_flow_btn.text = "Waiting..." if _my_ready else "Ready"
 	else:
