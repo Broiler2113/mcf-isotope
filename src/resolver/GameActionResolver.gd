@@ -164,6 +164,8 @@ func _dispatch(intent: Intent) -> ActionResult:
 		return _resolve_push(intent)
 	elif intent is SpawnDroneIntent:
 		return _resolve_spawn_drone(intent)
+	elif intent is PickUpStationIntent:
+		return _resolve_pickup_station(intent)
 	elif intent is DroneMoveIntent:
 		return _resolve_drone_move(intent)
 	elif intent is DroneDetonateIntent:
@@ -2832,9 +2834,15 @@ func _resolve_spawn_drone(intent: SpawnDroneIntent) -> ActionResult:
 		return ActionResult.fail(err)
 	if operator.stats.special_ability_id != MCF.ABILITY_DRONE_OPERATOR:
 		return ActionResult.fail("Only an operator can launch a drone")
-	var station := station_near(operator)
-	if station == Vector2i(-1, -1):
+	var options := stations_near(operator)
+	if options.is_empty():
 		return ActionResult.fail("No drone station nearby")
+	# Игрок называет станцию (item 17); без указания берём первую, как раньше.
+	var station: Vector2i = options[0]
+	if intent.station != SpawnDroneIntent.NOWHERE:
+		if not options.has(intent.station):
+			return ActionResult.fail("That station is not within reach")
+		station = intent.station
 	if active_drone_of(operator) != null:
 		return ActionResult.fail("Drone is already airborne")
 	# Дрон всегда поднимается прямо над своей станцией (#22); если там уже висит
@@ -2860,19 +2868,28 @@ func _resolve_drone_move(intent: DroneMoveIntent) -> ActionResult:
 	# взлетел, без единой клетки полёта в запасе.
 	var descending := state.grid.cell(drone.coord).is_wall() \
 			and intent.target == drone.wall_entry_from
-	if drone.remaining_ap <= 0 and not descending:
+	# Недолётанный остаток прошлого подлёта тратится ПЕРВЫМ и нового ОД не стоит (#13).
+	var use_credit := drone.move_credit > 0
+	var budget: int = drone.move_credit if use_credit else MCF.DRONE_FLIGHT_RANGE
+	if drone.remaining_ap <= 0 and not descending and not use_credit:
 		return ActionResult.fail("Drone has no AP left")
 
 	var reach := _drone_reach(drone)
 	# Свободная клетка в пределах полёта.
 	if reach.has(intent.target):
-		if not descending:
+		if not descending and not use_credit:
 			drone.remaining_ap -= 1
+		# Остаток дальности сохраняется до конца хода — им дрон долетит потом (#13).
+		drone.move_credit = maxi(0, budget - int(reach[intent.target]))
 		if state.grid.cell(intent.target).on_fire:
 			# Залетел в огонь — взрыв (§3.8/§3.12).
 			return _drone_explode(drone, intent.target, "flew into fire")
 		# Заход на стену запоминаем ДО переезда (#96): уйти с неё можно только назад.
 		var entry := Vector2i(-1, -1)
+		if state.grid.cell(intent.target).is_wall() or descending:
+			# Над стеной у дрона свой единственный ход — вернуться назад (#96), и
+			# обычный остаток дальности там не работает.
+			drone.move_credit = 0
 		if state.grid.cell(intent.target).is_wall():
 			entry = _drone_entry_cell(drone, intent.target, reach)
 		# Дрон не занимает слот клетки — просто переносим его координату (#13).
@@ -2886,9 +2903,11 @@ func _resolve_drone_move(intent: DroneMoveIntent) -> ActionResult:
 	# Столкновение: цель занята/стена — дрон таранит и взрывается (§3.12).
 	var pre := _approach_cell(drone, intent.target, reach)
 	if pre != Vector2i(-1, -1):
-		if drone.remaining_ap <= 0:
+		if drone.remaining_ap <= 0 and not use_credit:
 			return ActionResult.fail("Drone has no AP left")
-		drone.remaining_ap -= 1
+		if not use_credit:
+			drone.remaining_ap -= 1
+		drone.move_credit = 0  # таран — конец подлёта в любом случае
 		if pre != drone.coord:
 			drone.coord = pre
 		return _drone_explode(drone, intent.target, "crashed into an obstacle")
@@ -2956,11 +2975,109 @@ func _launch_drone_at(station: Vector2i, pilot: UnitInstance) -> UnitInstance:
 
 ## Клетка со станцией дронов, стоящей рядом с оператором (или (-1,-1)).
 func station_near(operator: UnitInstance) -> Vector2i:
+	var all := stations_near(operator)
+	return all[0] if not all.is_empty() else Vector2i(-1, -1)
+
+## ВСЕ свои станции вплотную к оператору (item 17). Их может быть несколько, и с
+## какой поднимать дрон — решает игрок, а не порядок обхода соседей.
+func stations_near(operator: UnitInstance) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	if operator == null:
+		return out
 	for n in state.grid.neighbors(operator.coord):
 		var cell := state.grid.cell(n)
 		if cell.feature_id == MCF.FEATURE_DRONE_STATION and cell.feature_owner == operator.owner:
-			return n
-	return Vector2i(-1, -1)
+			out.append(n)
+	return out
+
+## Где стоит станция, развёрнутая ИМЕННО ЭТИМ оператором (item 16); (-1,-1) — нет такой.
+## Оператор помечает свою станцию при установке, поэтому «одна станция на оператора»
+## считается по метке, а не по владельцу-стороне: у команды их может быть много.
+func deployed_station_of(operator: UnitInstance) -> Vector2i:
+	if operator == null:
+		return Vector2i(-1, -1)
+	return _station_index().get(operator.id, Vector2i(-1, -1))
+
+## «Оператор -> его станция», пересобираемое только при смене расстановки объектов.
+##
+## Кеш здесь не роскошь: operator_needs_station() зовёт _draw() на КАЖДОГО юнита
+## каждый кадр, а честный ответ требует прохода по всей карте. С привязкой к
+## GridCell.feature_version проход случается ровно тогда, когда что-то построили,
+## сломали или свернули, — то есть считаные разы за партию.
+##
+## Источник правды — метка на самой клетке, а не поле у оператора. Станцию может
+## снести взрывом, и тогда она исчезает вместе с меткой сама; поле у оператора
+## пришлось бы чистить из каждого места, где рушится рельеф.
+var _station_index_cache: Dictionary = {}
+var _station_index_version: int = -1
+
+func _station_index() -> Dictionary:
+	if _station_index_version == GridCell.feature_version:
+		return _station_index_cache
+	_station_index_version = GridCell.feature_version
+	_station_index_cache = {}
+	for y in state.grid.height:
+		for x in state.grid.width:
+			var cell := state.grid.cell_fast(x, y)
+			if cell.feature_id == MCF.FEATURE_DRONE_STATION \
+					and cell.station_operator_id != -1:
+				_station_index_cache[cell.station_operator_id] = Vector2i(x, y)
+	return _station_index_cache
+
+## Оператору не из чего поднимать дрон — над ним висит предупреждение (item 16).
+## Тот же смысл, что у «инженер израсходовал свою ЛДФ»: нужного снаряжения нет.
+func operator_needs_station(u: UnitInstance) -> bool:
+	if u == null or not u.is_alive() \
+			or u.stats.special_ability_id != MCF.ABILITY_DRONE_OPERATOR:
+		return false
+	return deployed_station_of(u) == Vector2i(-1, -1)
+
+## "" = станцию можно свернуть обратно в предмет (item 16); иначе причина отказа.
+func can_pick_up_station(operator: UnitInstance, coord: Vector2i) -> String:
+	if operator == null or not operator.is_alive():
+		return "Unit unavailable"
+	if operator.remaining_ap <= 0:
+		return "Unit has no AP left"
+	if operator.held_item_id != "":
+		return "Hands are full"
+	if not state.grid.in_bounds(coord):
+		return "Out of bounds"
+	if Combat.distance(operator.coord, coord) != 1:
+		return "The station must be right next to you"
+	var cell := state.grid.cell(coord)
+	if cell.feature_id != MCF.FEATURE_DRONE_STATION:
+		return "No station there"
+	if cell.station_operator_id != operator.id:
+		return "That station is not yours"
+	if active_drone_of(operator) != null:
+		return "Land the drone first"
+	return ""
+
+## Свои станции рядом, которые можно свернуть прямо сейчас — для подсветки в UI.
+func station_pickup_cells(operator: UnitInstance) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	if operator == null:
+		return out
+	for n in state.grid.neighbors(operator.coord):
+		if can_pick_up_station(operator, n) == "":
+			out.append(n)
+	return out
+
+func _resolve_pickup_station(intent: PickUpStationIntent) -> ActionResult:
+	var operator := state.get_unit(intent.actor_id)
+	var err := _validate_actor(operator)
+	if err != "":
+		return ActionResult.fail(err)
+	var reason := can_pick_up_station(operator, intent.coord)
+	if reason != "":
+		return ActionResult.fail(reason)
+	var cell := state.grid.cell(intent.coord)
+	cell.station_operator_id = -1
+	cell.clear_feature()
+	operator.remaining_ap -= 1
+	operator.held_item_id = MCF.ITEM_DRONE_STATION
+	return ActionResult.success(["%s folds the drone station at (%d, %d) back up [AP: %d]" % [
+		operator.stats.display_name, intent.coord.x, intent.coord.y, operator.remaining_ap]])
 
 ## Живой дрон этого оператора (или null).
 func active_drone_of(operator: UnitInstance) -> UnitInstance:
@@ -3016,8 +3133,14 @@ const DRONE_DIRS_8 := [
 ## есть ровно один путь, тем же курсом (см. wall_entry_from), иначе дрон переползал бы
 ## стену по клеткам и оказывался на другой стороне — а сквозь стены он не летает.
 ## Возвращает { клетка : стоимость пути }.
+## Куда дрон может долететь ПРЯМО СЕЙЧАС. Бюджет — недолётанный остаток прошлого
+## подлёта, если он есть (#13): дрон доканчивает начатое движение так же, как пехота
+## доходит остаток своего (#44), и второго действия за это не платит.
+##
+## Привязь к станции считается ОТДЕЛЬНО и всегда по полной дальности: она не «запас
+## хода», а радиус связи, и укоротить её остатком бюджета было бы неверно.
 func _drone_reach(drone: UnitInstance) -> Dictionary:
-	var budget := MCF.DRONE_FLIGHT_RANGE
+	var budget: int = drone.move_credit if drone.move_credit > 0 else MCF.DRONE_FLIGHT_RANGE
 	if state.grid.cell(drone.coord).is_wall():
 		return _drone_wall_exit(drone)
 	var dist := {drone.coord: 0}
@@ -3046,7 +3169,7 @@ func _drone_reach(drone: UnitInstance) -> Dictionary:
 			var nd: int = int(dist[cur]) + step_cost
 			if nd > budget:
 				continue
-			if Combat.distance(nxt, drone.home_station) > budget:
+			if Combat.distance(nxt, drone.home_station) > MCF.DRONE_FLIGHT_RANGE:
 				continue
 			var cell := state.grid.cell(nxt)
 			# Дрон перелетает трупы и юнитов и садится на них (#13): мешают лишь
@@ -3539,11 +3662,18 @@ func _resolve_use_item(intent: UseItemIntent) -> ActionResult:
 			return ActionResult.fail("The station is placed in an adjacent cell")
 		if not state.grid.cell(intent.target).is_empty():
 			return ActionResult.fail("Cell is occupied")
+		# Одна развёрнутая станция на оператора (item 16): вторую не поставить, пока
+		# первая стоит. Свернуть её обратно можно — PickUpStationIntent.
+		var already := deployed_station_of(actor)
+		if already != Vector2i(-1, -1):
+			return ActionResult.fail("Your station is already deployed at (%d, %d)" % [
+				already.x, already.y])
 		actor.remaining_ap -= 1
 		actor.held_item_id = ""
 		var scell := state.grid.cell(intent.target)
 		scell.feature_id = MCF.FEATURE_DRONE_STATION
 		scell.feature_owner = actor.owner
+		scell.station_operator_id = actor.id
 		var res := ActionResult.success(["%s deploys a drone station at (%d, %d)" % [
 			actor.stats.display_name, intent.target.x, intent.target.y]])
 		# Станция разворачивается вместе с дроном — он сразу поднимается над ней (#77).

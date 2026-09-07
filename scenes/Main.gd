@@ -2570,8 +2570,10 @@ func _draw() -> void:
 			draw_arc(center, CELL * 0.5, 0, TAU, 32, Color(1, 0.6, 0.1), 2.0)
 		for i in _draw_ap(unit):
 			draw_circle(_cell_origin(at) + Vector2(6 + i * 8, CELL - 6), 3, Color(1, 1, 0.4))
-		# Инженер израсходовал единственную ЛДФ-стену (#40): пиксельный «!» рядом.
-		if unit.ldf_wall_used:
+		# Снаряжения не хватает — пиксельный «!» рядом. Пока таких случаев два:
+		# инженер израсходовал единственную ЛДФ-стену (#40) и оператор дронов остался
+		# без развёрнутой станции (item 16). Общая система значков — за HUD-милстоуном.
+		if unit.ldf_wall_used or resolver.operator_needs_station(unit):
 			_draw_pixel_bang(_cell_origin(at) + Vector2(CELL - 12, 4))
 		# Юнит тащит на себе труп-щит (#6) — без метки это видно только в подсказке (#71).
 		if unit.carried_corpses > 0:
@@ -3215,13 +3217,29 @@ func _open_menu(unit: UnitInstance) -> void:
 			vb.add_child(item_btn)
 
 		# Оператор дронов: запуск дрона со стоящей рядом станции (§3.12).
+		var stations := resolver.stations_near(unit)
 		if unit.remaining_ap > 0 and unit.stats.special_ability_id == MCF.ABILITY_DRONE_OPERATOR \
-				and resolver.station_near(unit) != Vector2i(-1, -1) \
+				and not stations.is_empty() \
 				and resolver.active_drone_of(unit) == null:
 			var drone_btn := Button.new()
-			drone_btn.text = "Launch Drone"
-			drone_btn.pressed.connect(_submit.bind(SpawnDroneIntent.new(unit.id)))
+			if stations.size() > 1:
+				# Станций рядом несколько — выбирает игрок, а не порядок обхода (item 17).
+				drone_btn.text = "Launch Drone (%d stations)…" % stations.size()
+				drone_btn.pressed.connect(_open_station_picker.bind(stations))
+			else:
+				drone_btn.text = "Launch Drone"
+				drone_btn.pressed.connect(_submit.bind(
+						SpawnDroneIntent.new(unit.id, stations[0])))
 			vb.add_child(drone_btn)
+
+		# Свернуть свою станцию обратно в предмет (item 16).
+		var foldable := resolver.station_pickup_cells(unit)
+		if not foldable.is_empty():
+			var fold_btn := Button.new()
+			fold_btn.text = "Pack Up Drone Station"
+			fold_btn.pressed.connect(_submit.bind(
+					PickUpStationIntent.new(unit.id, foldable[0])))
+			vb.add_child(fold_btn)
 
 		# Инженер: постройка укреплений (§3.7).
 		if unit.remaining_ap > 0 and unit.stats.special_ability_id == MCF.ABILITY_ENGINEER:
@@ -3356,6 +3374,22 @@ func _open_picker(target: UnitInstance, available: int) -> void:
 	all_btn.text = "All (%d)" % available
 	all_btn.pressed.connect(_submit.bind(ShootIntent.new(selected_id, target.id, -1)))
 	vb.add_child(all_btn)
+	_anchor_menu(_picker)
+	_picker.show()
+
+## Выбор станции для запуска дрона (item 17). Клеток немного (максимум восемь
+## соседей), поэтому список — просто кнопки с координатами; подсветка на доске
+## показывает те же клетки, что и кнопки.
+func _open_station_picker(stations: Array) -> void:
+	_menu.hide()
+	for c in _picker.get_children():
+		c.queue_free()
+	var vb := _scroll_menu(_picker, "Launch From Which Station?")
+	for st: Vector2i in stations:
+		var b := Button.new()
+		b.text = "Station at (%d, %d)" % [st.x, st.y]
+		b.pressed.connect(_submit.bind(SpawnDroneIntent.new(selected_id, st)))
+		vb.add_child(b)
 	_anchor_menu(_picker)
 	_picker.show()
 

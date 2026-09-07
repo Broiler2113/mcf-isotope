@@ -145,6 +145,10 @@ var feature_id: String = "":
 		walk_version += 1
 		feature_version += 1
 var feature_owner: int = -1
+## Оператор, развернувший станцию дронов (item 16); -1 = станции нет или её поставил
+## не оператор (старые карты, редактор). Владельца-стороны для правила «одна станция
+## на оператора» не хватает: у команды операторов много, а станция у каждого одна.
+var station_operator_id: int = -1
 ## Остаток прочности укрепления в единой шкале урона (§3.7): 0 = прочности нет,
 ## объект сносится любым попаданием. У ДОТа 2 — первое попадание оставляет трещину.
 var feature_durability: int = 0
@@ -230,6 +234,7 @@ func accepts_dirt() -> bool:
 func clear_feature() -> void:
 	feature_id = ""
 	feature_owner = -1
+	station_operator_id = -1
 	feature_durability = 0
 	cover_height = 0.0
 	dirt_level = 0

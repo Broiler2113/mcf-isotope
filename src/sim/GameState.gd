@@ -138,6 +138,7 @@ func snapshot() -> Dictionary:
 			"occupant_id": c.occupant.id if c.occupant != null else -1,
 			"vehicle_id": c.vehicle_id, "feature_id": c.feature_id,
 			"feature_owner": c.feature_owner, "feature_durability": c.feature_durability,
+			"station_operator_id": c.station_operator_id,
 			"corpse_count": c.corpse_count, "dirt_level": c.dirt_level,
 			"airlock_welded": c.airlock_welded,
 		})
@@ -215,6 +216,7 @@ func restore(snap: Dictionary) -> void:
 		c.occupant = units.get(oid, null) if oid != -1 else null
 		c.vehicle_id = rec["vehicle_id"]
 		c.feature_id = rec["feature_id"]
+		c.station_operator_id = int(rec.get("station_operator_id", -1))
 		c.feature_owner = rec["feature_owner"]
 		c.feature_durability = rec["feature_durability"]
 		c.corpse_count = rec["corpse_count"]

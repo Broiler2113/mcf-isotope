@@ -29,6 +29,7 @@ const T_SWEEP := "sweep"
 const T_BUILD_WALL := "build_wall"
 const T_CORPSE_UP := "corpse_up"
 const T_CANCEL_SHOT := "cancel_shot"
+const T_STATION_UP := "station_up"
 const T_CORPSE_DOWN := "corpse_down"
 const T_VEH_BOARD := "veh_board"
 const T_VEH_OUT := "veh_out"
@@ -75,6 +76,9 @@ static func encode(intent: Intent) -> Dictionary:
 		return {"t": T_RELEASE, "a": intent.actor_id}
 	if intent is CancelShotIntent:
 		return {"t": T_CANCEL_SHOT, "a": intent.actor_id}
+	if intent is PickUpStationIntent:
+		return {"t": T_STATION_UP, "a": intent.actor_id,
+			"x": intent.coord.x, "y": intent.coord.y}
 	if intent is MoveHeldIntent:
 		return {"t": T_MOVE_HELD, "a": intent.actor_id, "x": intent.to.x, "y": intent.to.y}
 	if intent is UseItemIntent:
@@ -82,7 +86,10 @@ static func encode(intent: Intent) -> Dictionary:
 	if intent is PushIntent:
 		return {"t": T_PUSH, "a": intent.actor_id, "tid": intent.target_id}
 	if intent is SpawnDroneIntent:
-		return {"t": T_SPAWN_DRONE, "a": intent.actor_id}
+		# Клетка станции (item 17) едет вместе с намерением: у оператора их может
+		# быть несколько, и выбор игрока обязан доехать до хоста без подмены.
+		return {"t": T_SPAWN_DRONE, "a": intent.actor_id,
+			"x": intent.station.x, "y": intent.station.y}
 	if intent is DroneMoveIntent:
 		return {"t": T_DRONE_MOVE, "a": intent.actor_id, "x": intent.target.x, "y": intent.target.y}
 	if intent is DroneDetonateIntent:
@@ -159,10 +166,12 @@ static func decode(d: Dictionary) -> Intent:
 		T_CAPTURE: return CaptureIntent.new(a, int(d.get("tid", -1)))
 		T_RELEASE: return ReleaseIntent.new(a)
 		T_CANCEL_SHOT: return CancelShotIntent.new(a)
+		T_STATION_UP: return PickUpStationIntent.new(a, coord)
 		T_MOVE_HELD: return MoveHeldIntent.new(a, coord)
 		T_ITEM: return UseItemIntent.new(a, coord)
 		T_PUSH: return PushIntent.new(a, int(d.get("tid", -1)))
-		T_SPAWN_DRONE: return SpawnDroneIntent.new(a)
+		T_SPAWN_DRONE: return SpawnDroneIntent.new(a,
+			Vector2i(int(d.get("x", -999)), int(d.get("y", -999))))
 		T_DRONE_MOVE: return DroneMoveIntent.new(a, coord)
 		T_DRONE_DET: return DroneDetonateIntent.new(a)
 		T_BUILD: return BuildIntent.new(a, coord, str(d.get("f", "")))

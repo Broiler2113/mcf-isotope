@@ -1160,9 +1160,13 @@ func _cover_bonus(state: GameState, coord: Vector2i) -> float:
 
 # --- Дрон (§3.12) ---
 func _drone_action(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
-	if not r.operator_controls(u) or u.remaining_ap <= 0:
+	# Недолётанный остаток — такой же повод действовать, как целое ОД (#13): без
+	# него дрон, истративший своё единственное действие на короткий подлёт, замирал
+	# бы до конца хода с половиной дальности в запасе.
+	if not r.operator_controls(u) or (u.remaining_ap <= 0 and u.move_credit <= 0):
 		return {}
-	# Подрыв, если рядом враг (радиус взрыва 1 по Чебышёву).
+	# Подрыв, если рядом враг (радиус взрыва 1 по Чебышёву). Он бесплатен (item 26),
+	# поэтому доступен и выдохшемуся дрону.
 	for e: UnitInstance in _enemies_of(state):
 		if Combat.distance(u.coord, e.coord) <= MCF.ANTI_TANK_BLAST_RADIUS:
 			return {"score": SCORE_SHOOT_BASE + _unit_value(e), "intent": DroneDetonateIntent.new(u.id)}
