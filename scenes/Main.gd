@@ -547,6 +547,14 @@ func _handle_click(coord: Vector2i) -> void:
 				return
 			_back_to_menu()
 		Mode.SHOOT:
+			# Клик МИМО траектории начатой очереди снимает её (#12). Раньше такой клик
+			# либо молча уходил в никуда, либо (по #5) переводил остаток очереди на
+			# новую цель — в том числе стоящую совсем в другой стороне. Перенос по #5
+			# остаётся, но только вдоль ТОГО ЖЕ луча: остаток очереди летит туда, куда
+			# уже направлено оружие, а не разворачивается на месте.
+			if _shot_off_trajectory(coord):
+				_submit(CancelShotIntent.new(selected_id))
+				return
 			if occupant != null and target_ids.has(occupant.id):
 				_begin_shoot(occupant)
 				return
@@ -965,6 +973,23 @@ func _veh_enter_disembark(unit_id: int) -> void:
 
 func _pending_shoot(u: UnitInstance) -> bool:
 	return u.action_state != null and u.action_state.is_pending()
+
+## Лежит ли клик ВНЕ траектории начатой очереди (#12). Траектория — луч от стрелка
+## через клетку текущей цели: любая клетка на нём (хоть ближе цели, хоть дальше)
+## считается «по стволу». Без начатой очереди траектории нет, и отменять нечего.
+func _shot_off_trajectory(coord: Vector2i) -> bool:
+	var u := _selected_unit()
+	if u == null or not _pending_shoot(u) or coord == u.coord:
+		return false
+	var t := state.get_unit(u.action_state.target_id)
+	if t == null or t.coord == u.coord:
+		return false
+	var aim := t.coord - u.coord
+	var click := coord - u.coord
+	# Один и тот же луч = совпадающие направления единичного шага. Для восьми
+	# направлений сетки этого достаточно: знаки задают луч однозначно.
+	return Vector2i(signi(click.x), signi(click.y)) != Vector2i(signi(aim.x), signi(aim.y)) \
+			or not Combat.is_on_firing_line(u.coord, coord)
 
 ## Есть ли НЕЗАВЕРШЁННАЯ стрельба, цель которой ещё МОЖНО достреливать (#45).
 ## Устаревшая привязка (цель мертва/скрыта/сошла с линии) не должна блокировать

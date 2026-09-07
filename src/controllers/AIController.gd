@@ -1193,7 +1193,7 @@ func _vehicle_candidates(state: GameState, r: GameActionResolver, veh: Vehicle) 
 	var gun: Dictionary = weapons.get("main_gun", {})
 	if not gun.is_empty() and veh.cannon_shots_this_round < int(gun.get("max_per_turn", 2)) \
 			and veh.ap >= int(gun.get("ap_cost", 1)):
-		var target := _vehicle_best_target(state, r, veh, int(gun.get("range", 30)))
+		var target := _vehicle_best_target(state, r, veh, int(gun.get("range", MCF.CANNON_RANGE)))
 		if target != null and not _ally_near(state, target.coord, MCF.CANNON_BLAST_RADIUS):
 			out.append({"score": SCORE_SHOOT_BASE + _unit_value(target) + 6.0,
 				"intent": VehicleCannonIntent.new(veh.id, target.coord)})

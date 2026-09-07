@@ -31,6 +31,7 @@ func _samples() -> Array:
 		ShootIntent.new(7, 12, 3, Vector2i(19, 21)),
 		CaptureIntent.new(7, 12),
 		ReleaseIntent.new(7),
+		CancelShotIntent.new(7),
 		MoveHeldIntent.new(7, Vector2i(6, 5)),
 		UseItemIntent.new(7, Vector2i(14, 2)),
 		PushIntent.new(7, 12),

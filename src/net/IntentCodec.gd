@@ -28,6 +28,7 @@ const T_MINE := "mine"
 const T_SWEEP := "sweep"
 const T_BUILD_WALL := "build_wall"
 const T_CORPSE_UP := "corpse_up"
+const T_CANCEL_SHOT := "cancel_shot"
 const T_CORPSE_DOWN := "corpse_down"
 const T_VEH_BOARD := "veh_board"
 const T_VEH_OUT := "veh_out"
@@ -72,6 +73,8 @@ static func encode(intent: Intent) -> Dictionary:
 		return {"t": T_CAPTURE, "a": intent.actor_id, "tid": intent.target_id}
 	if intent is ReleaseIntent:
 		return {"t": T_RELEASE, "a": intent.actor_id}
+	if intent is CancelShotIntent:
+		return {"t": T_CANCEL_SHOT, "a": intent.actor_id}
 	if intent is MoveHeldIntent:
 		return {"t": T_MOVE_HELD, "a": intent.actor_id, "x": intent.to.x, "y": intent.to.y}
 	if intent is UseItemIntent:
@@ -155,6 +158,7 @@ static func decode(d: Dictionary) -> Intent:
 			Vector2i(int(d.get("cx", -999)), int(d.get("cy", -999))))
 		T_CAPTURE: return CaptureIntent.new(a, int(d.get("tid", -1)))
 		T_RELEASE: return ReleaseIntent.new(a)
+		T_CANCEL_SHOT: return CancelShotIntent.new(a)
 		T_MOVE_HELD: return MoveHeldIntent.new(a, coord)
 		T_ITEM: return UseItemIntent.new(a, coord)
 		T_PUSH: return PushIntent.new(a, int(d.get("tid", -1)))

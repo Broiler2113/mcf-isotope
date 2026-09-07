@@ -154,6 +154,8 @@ func _dispatch(intent: Intent) -> ActionResult:
 		return _resolve_capture(intent)
 	elif intent is ReleaseIntent:
 		return _resolve_release(intent)
+	elif intent is CancelShotIntent:
+		return _resolve_cancel_shot(intent)
 	elif intent is MoveHeldIntent:
 		return _resolve_move_held(intent)
 	elif intent is UseItemIntent:
@@ -492,18 +494,50 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 	var hits := 0
 	var killed := false
 	var fired := 0
+	# Стёкла между стрелком и целью (#29). Каждая пуля пробивает КАЖДОЕ отдельным
+	# броском — оттого из очереди в четыре пули сквозь одно стекло проходят обычно две.
+	var panes := _glass_on_line(shooter.coord, target.coord)
+	var stopped_by_glass := 0
+	if panes > 0:
+		hit_mods.append({"label": "Glass on the line", "delta": 0})
 	# Очередь отстреливается ЦЕЛИКОМ: ровно один кубик на каждую заказанную пулю (#96).
 	# Пули уходят разом, поэтому смерть цели на первой из них очередь НЕ обрывает.
 	# Раньше обрывала — а вместе с ней обнулялся и action_state, так что остаток
 	# оплаченной одним ОД очереди пропадал, и вместо четырёх бросков игрок видел один.
 	for _i in want:
 		fired += 1
+		# Стекло проверяется ДО броска на попадание: застрявшая в нём пуля до цели
+		# не долетает, и бросать за неё «попал/не попал» не за что.
+		var glass_rolls: Array = []
+		var pierced := true
+		for _pane in panes:
+			var g_roll := state.dice.roll_d6()
+			glass_rolls.append(g_roll)
+			if g_roll < MCF.GLASS_PIERCE_NEED:
+				pierced = false
+				break
+		if not pierced:
+			stopped_by_glass += 1
+			shot_details.append({
+				"hit_roll": 0, "need": need, "hit": false,
+				"def_roll": 0, "armor": parry_need, "parried": true,
+				"glass_rolls": glass_rolls, "glass_need": MCF.GLASS_PIERCE_NEED,
+				"stopped_by_glass": true,
+			})
+			continue
 		var hit_roll := state.dice.roll_d6()
 		var is_hit := hit_roll >= need
 		var det := {
 			"hit_roll": hit_roll, "need": need, "hit": is_hit,
 			"def_roll": 0, "armor": parry_need, "parried": true,
 		}
+		# Поля стекла кладутся ТОЛЬКО когда стекло на линии есть. Иначе они попали бы
+		# в каждый выстрел каждой партии — и в след регрессии, и в раскладку кубика в
+		# UI, — притом что рассказывать им было бы не о чем.
+		if panes > 0:
+			det["glass_rolls"] = glass_rolls
+			det["glass_need"] = MCF.GLASS_PIERCE_NEED
+			det["stopped_by_glass"] = false
 		if is_hit:
 			hits += 1
 			var def_roll := state.dice.roll_d6()  # цель парирует броском на защиту (§3.5)
@@ -538,12 +572,32 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 		shooter.stats.display_name, target.stats.display_name, fired, hits, need
 	]
 	result.log(summary)
+	if stopped_by_glass > 0:
+		result.log("… %d of %d stopped by the glass (need %d+ to pierce)" % [
+			stopped_by_glass, fired, MCF.GLASS_PIERCE_NEED])
 	if killed:
 		result.log("%s killed!" % target.stats.display_name)
 		result.deaths.append(target.id)
 	if shooter.action_state != null:
 		result.log("… shots remaining in burst: %d" % shooter.action_state.remaining_shots)
 	return result
+
+## Снять незавершённую очередь (#12): игрок ткнул мимо траектории — значит стрелять
+## этой очередью он передумал. ОД не возвращается (действие уже оплачено), пули просто
+## пропадают. Идёт через резолвер, а не правкой action_state из UI: иначе у клиента
+## очередь осталась бы висеть и следующий выстрел разошёлся бы с хостом.
+func _resolve_cancel_shot(intent: CancelShotIntent) -> ActionResult:
+	var unit := state.get_unit(intent.actor_id)
+	if unit == null or not unit.is_alive():
+		return ActionResult.fail("Unit not found")
+	if unit.owner != state.active_player():
+		return ActionResult.fail("It's the other player's turn")
+	if unit.action_state == null or not unit.action_state.is_pending():
+		return ActionResult.fail("No burst to cancel")
+	var left: int = unit.action_state.remaining_shots
+	unit.action_state = null
+	return ActionResult.success(["%s holds fire — %d shot(s) in the burst dropped." % [
+		unit.stats.display_name, left]])
 
 # --- Противотанкист (§3.14): выстрел-взрыв, авто-поражение в радиусе 1 ---
 ## center — клетка эпицентра (координата цели ИЛИ пустой клетки пола, §3.14).
@@ -553,34 +607,32 @@ func _resolve_anti_tank(shooter: UnitInstance, center: Vector2i) -> ActionResult
 	shooter.remaining_ap -= 1
 	shooter.action_state = null
 
-	# Бросок на попадание (#7): промах НЕ отменяет взрыв — заряд ложится ближе,
-	# на дистанции, пропорциональной броску: landing = dist · roll / need вдоль
-	# линии огня (18 кл., нужно 6, выпало 5 → взрыв на 15-й клетке).
-	var dist := Combat.distance(shooter.coord, center)
-	var need := Combat.hit_number(dist, shooter.stats.fire_range)
-	var roll := state.dice.roll_d6()
-	var on_target := roll >= need
-	var landing := center
-	if not on_target:
-		var land_index: int = clampi(int(dist * roll / float(need)), 0, dist)
-		if land_index <= 0:
-			landing = shooter.coord
-		else:
-			var path := _throw_path(shooter.coord, center)
-			landing = path[land_index - 1]
-
 	var result := ActionResult.new()
 	result.ok = true
-	result.dice_events.push_front({
-		"kind": "check", "actor": shooter.stats.display_name,
-		"roll": roll, "need": need, "ok": on_target,
-	})
-	if on_target:
-		result.log("%s: roll %d (need %d+) — direct hit at (%d, %d)!" % [
-			shooter.stats.display_name, roll, need, landing.x, landing.y])
+	# Выстрел ПОД СЕБЯ (#11): заряд кладётся в собственную клетку, и мазать тут
+	# нечем — бросок не делается вовсе. Кубик здесь не просто лишний: любой
+	# холостой бросок сдвигает поток случайности и разводит хост с клиентом.
+	var landing := center
+	if center == shooter.coord:
+		result.log("%s fires at their own feet — the charge lands at (%d, %d)." % [
+			shooter.stats.display_name, center.x, center.y])
 	else:
-		result.log("%s: roll %d (need %d+) — missed, charge fell short at (%d, %d)." % [
-			shooter.stats.display_name, roll, need, landing.x, landing.y])
+		# Бросок на попадание (#7): промах НЕ отменяет взрыв — заряд ложится ближе.
+		var dist := Combat.distance(shooter.coord, center)
+		var need := Combat.hit_number(dist, shooter.stats.fire_range)
+		var roll := state.dice.roll_d6()
+		var on_target := roll >= need
+		landing = _shortfall_landing(shooter.coord, center, roll, need)
+		result.dice_events.push_front({
+			"kind": "check", "actor": shooter.stats.display_name,
+			"roll": roll, "need": need, "ok": on_target,
+		})
+		if on_target:
+			result.log("%s: roll %d (need %d+) — direct hit at (%d, %d)!" % [
+				shooter.stats.display_name, roll, need, landing.x, landing.y])
+		else:
+			result.log("%s: roll %d (need %d+) — missed, charge fell short at (%d, %d)." % [
+				shooter.stats.display_name, roll, need, landing.x, landing.y])
 	# Прямое попадание в ДОТ: бетон забирает весь удар, осколочного поля нет.
 	if _pillbox_absorbs(landing, MCF.ANTI_TANK_VEHICLE_DAMAGE, result):
 		return result
@@ -596,6 +648,22 @@ func _resolve_anti_tank(shooter: UnitInstance, center: Vector2i) -> ActionResult
 		for n in killed_names:
 			result.log("%s destroyed!" % n)
 	return result
+
+## Куда на самом деле лёг заряд (#7, #22). Попадание — точно в цель; промах кладёт
+## его НЕ ДОЛЕТЕВ, на дистанции, пропорциональной броску: landing = dist · roll / need
+## вдоль линии огня (18 кл., нужно 6, выпало 5 → взрыв на 15-й клетке).
+##
+## Общая для противотанкиста и танковой пушки — этого требует #22 («тот же механизм
+## разрешения попадания, что у противотанкиста»). У пушки была своя формула недолёта
+## (dist − (need − roll)), и на дальних дистанциях она давала совсем другую точку.
+func _shortfall_landing(from_coord: Vector2i, target: Vector2i, roll: int, need: int) -> Vector2i:
+	if roll >= need or need <= 0:
+		return target
+	var dist := Combat.distance(from_coord, target)
+	var land_index: int = clampi(int(dist * roll / float(need)), 0, dist)
+	if land_index <= 0:
+		return from_coord
+	return _throw_path(from_coord, target)[land_index - 1]
 
 ## Взрыв: авто-уничтожение всех живых в зоне поражения, кроме щитоносцев вне
 ## эпицентра (они прикрывают союзников рядом). Возвращает имена погибших (§3.14).
@@ -623,6 +691,10 @@ func _blast(center: Vector2i, res: ActionResult = null, cells: Array[Vector2i] =
 			continue
 		if _is_shield(u) and u.coord != center:
 			continue  # щитоносец гибнет только при прямом попадании
+		# Окоп укрывает от взрыва по СОСЕДНЕЙ клетке (#30): осколки идут поверх
+		# канавы. Прямое попадание в саму канаву по-прежнему убивает.
+		if u.coord != center and state.grid.cell(u.coord).feature_id == MCF.FEATURE_TRENCH:
+			continue
 		if _protected_by(u, protectors):
 			continue
 		u.kill()
@@ -2128,7 +2200,13 @@ func _vision_blocked(a: Vector2i, b: Vector2i) -> bool:
 		if cx == bx and cy == by:
 			break
 		var cell := grid.cell_fast(cx, cy)
-		if cell.cover_height >= MCF.WALL_HEIGHT or cell.vehicle_id != -1:
+		# Стекло прозрачно (#29). Без этого пункт 29 недостижим в принципе: сквозь
+		# стекло разрешено СТРЕЛЯТЬ, но цель за ним оставалась в тумане, а невидимую
+		# цель нельзя выбрать (can_shoot → "Target not visible"). Строковое сравнение
+		# стоит здесь дёшево: до него доходят только клетки, уже опознанные как стена.
+		if cell.vehicle_id != -1:
+			return true
+		if cell.cover_height >= MCF.WALL_HEIGHT and cell.feature_id != MCF.FEATURE_GLASS:
 			return true
 	return false
 
@@ -3675,8 +3753,12 @@ func _resolve_end_turn(intent: EndTurnIntent = null) -> ActionResult:
 ## los_blocked зовётся десятками тысяч раз за один расчёт плана ИИ — на этих
 ## аллокациях уходило больше времени, чем на саму проверку. Правила ниже те же
 ## и в том же порядке.
+## glass_passable — стекло на линии НЕ отменяет выстрел (#29): пуля пробует его
+## пробить, и это решается побульно уже при разрешении очереди (_glass_on_line).
+## Флаг только для ПУЛЬ: заряд противотанкиста, снаряд пушки и обзор стекло по-прежнему
+## считают стеной, поэтому по умолчанию он выключен.
 func los_blocked(from_coord: Vector2i, to_coord: Vector2i, allow_embrasure: bool = true,
-		ignore_units: bool = false) -> bool:
+		ignore_units: bool = false, glass_passable: bool = false) -> bool:
 	var dx := to_coord.x - from_coord.x
 	var dy := to_coord.y - from_coord.y
 	if dx == 0 and dy == 0:
@@ -3702,6 +3784,8 @@ func los_blocked(from_coord: Vector2i, to_coord: Vector2i, allow_embrasure: bool
 			if d <= 1 and (fid == MCF.FEATURE_HEDGEHOG_SANDBAGS \
 					or (allow_embrasure and fid == MCF.FEATURE_DOT_OPEN)):
 				pass
+			elif glass_passable and fid == MCF.FEATURE_GLASS:
+				pass  # стекло пуле не преграда, а испытание (#29)
 			else:
 				return true
 		# Корпус машины перекрывает линию огня (§техника).
@@ -3714,6 +3798,27 @@ func los_blocked(from_coord: Vector2i, to_coord: Vector2i, allow_embrasure: bool
 		y += sy
 		d += 1
 	return false
+
+## Сколько стёкол стоит НА ЛИНИИ между стрелком и целью, концы не считая (#29).
+## Каждое из них каждая пуля пробивает отдельным броском. Ноль — обычный выстрел,
+## и тогда лишних кубиков не бросается вовсе: поток случайности старых партий цел.
+func _glass_on_line(from_coord: Vector2i, to_coord: Vector2i) -> int:
+	var dx := to_coord.x - from_coord.x
+	var dy := to_coord.y - from_coord.y
+	if (dx == 0 and dy == 0) or (dx != 0 and dy != 0 and absi(dx) != absi(dy)):
+		return 0
+	var sx := signi(dx)
+	var sy := signi(dy)
+	var grid := state.grid
+	var x := from_coord.x + sx
+	var y := from_coord.y + sy
+	var panes := 0
+	while x != to_coord.x or y != to_coord.y:
+		if grid.cell_fast(x, y).feature_id == MCF.FEATURE_GLASS:
+			panes += 1
+		x += sx
+		y += sy
+	return panes
 
 ## Первый живой боец, стоящий НА ЛИНИИ между стрелком и целью (концы не считаются).
 ## Именно в него уходит выстрел, если стрелок бьёт сквозь чужую спину (#100).
@@ -3795,7 +3900,10 @@ func can_shoot(shooter: UnitInstance, target: UnitInstance) -> String:
 
 	# Люди на линии выстрел не запрещают (#100): пуля просто достанется первому из них,
 	# см. first_unit_on_line(). Стена и корпус машины по-прежнему отменяют стрельбу.
-	if los_blocked(shooter.coord, target.coord, not _is_anti_tank(shooter), true):
+	# Стекло — отдельный случай (#29): по цели ЗА стеклом стрелять можно, каждая пуля
+	# пробует его пробить сама. Заряд противотанкиста в это исключение не входит.
+	if los_blocked(shooter.coord, target.coord, not _is_anti_tank(shooter), true,
+			not _is_anti_tank(shooter)):
 		return "Firing line is blocked"
 	if Combat.hit_number(dist, shooter.stats.fire_range) >= 7:
 		return "Too far"
@@ -3851,6 +3959,11 @@ func can_blast_cell(shooter: UnitInstance, cell: Vector2i) -> String:
 	var c := state.grid.cell(cell)
 	if c.is_space:
 		return "Can't hit space — no floor"
+	# Выстрел под себя (#11): собственная клетка — законная цель. Проверять линию огня
+	# и дистанцию до самого себя нечего, и is_on_firing_line на нулевом векторе всё
+	# равно отвечает «нет», поэтому этот случай обязан отстреливаться первым.
+	if cell == shooter.coord:
+		return ""
 	if c.occupant != null and c.occupant.is_alive():
 		return ""  # клетка занята живым — обычная стрельба это уже покрывает, но допускаем
 	if not Combat.is_on_firing_line(shooter.coord, cell):
@@ -3868,6 +3981,9 @@ func blastable_cells(shooter: UnitInstance) -> Array:
 	if shooter.stats.special_ability_id != MCF.ABILITY_ANTI_TANK:
 		return out
 	var reach := shooter.stats.fire_range
+	# Собственная клетка — первой в списке (#11): она и есть «ударить под себя»,
+	# и UI подсвечивает её наравне с остальными.
+	out.append(shooter.coord)
 	for dy in range(-int(reach), int(reach) + 1):
 		for dx in range(-int(reach), int(reach) + 1):
 			var c := Vector2i(shooter.coord.x + dx, shooter.coord.y + dy)
@@ -4188,7 +4304,7 @@ func _resolve_vehicle_cannon(intent: VehicleCannonIntent) -> ActionResult:
 	if port == Vector2i(-1, -1):
 		return ActionResult.fail("Cannon fires only horizontally or vertically")
 	var dist := Combat.distance(port, intent.target)
-	if dist > int(gun.get("range", 30)):
+	if dist > int(gun.get("range", MCF.CANNON_RANGE)):
 		return ActionResult.fail("Target out of cannon range")
 	# Раньше пушка проверяла только чужие корпуса — и потому била сквозь стены, ЛДФ,
 	# двухметровые кучи земли (#70) и сквозь живых бойцов (#58). Теперь линия огня
@@ -4202,15 +4318,12 @@ func _resolve_vehicle_cannon(intent: VehicleCannonIntent) -> ActionResult:
 	res.ok = true
 	# Бросок на точность (#56): при промахе снаряд ложится с недолётом, но всё равно
 	# взрывается на месте (как граната/противотанкист).
-	var need := Combat.hit_number(dist, float(int(gun.get("range", 30))))
+	var need := Combat.hit_number(dist, float(int(gun.get("range", MCF.CANNON_RANGE))))
 	var roll := state.dice.roll_d6()
 	var on_target := roll >= need
-	var landing := intent.target
-	if not on_target:
-		var shortfall: int = need - roll
-		var land_index: int = clampi(dist - shortfall, 0, dist)
-		var path := _throw_path(port, intent.target)
-		landing = port if land_index <= 0 else path[land_index - 1]
+	# Недолёт считается ТОЙ ЖЕ формулой, что у противотанкиста (#22): своя, прежняя
+	# (dist − (need − roll)) на дальних дистанциях уводила снаряд совсем в другое место.
+	var landing := _shortfall_landing(port, intent.target, roll, need)
 	res.dice_events.push_front({
 		"kind": "check", "actor": spec.get("name", veh.type_id),
 		"roll": roll, "need": need, "ok": on_target,
@@ -4277,7 +4390,7 @@ func cannon_target_cells(veh: Vehicle, limit_to: Dictionary = {}) -> Array[Vecto
 		"weapons", {}).get("main_gun", {})
 	if gun.is_empty():
 		return out
-	var rng := int(gun.get("range", 30))
+	var rng := int(gun.get("range", MCF.CANNON_RANGE))
 	var own := {}
 	for fc: Vector2i in veh.footprint():
 		own[fc] = true
