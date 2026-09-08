@@ -83,6 +83,8 @@ func apply(events: Array) -> void:
 				_casings(ev)
 			"blood":
 				_blood(ev)
+			"laser":
+				_laser(ev)
 
 ## 21.1 — пол под разрушенным объектом меняет текстуру, эпицентр сильнее прочих.
 func _debris(ev: Dictionary) -> void:
@@ -118,6 +120,29 @@ func _casings(ev: Dictionary) -> void:
 	for i in int(ev.get("count", 0)):
 		var rng := _rng_for(kind, at, i)
 		_launch(kind, at, back, rng, CASING_RANGE_MIN, r_max, CASING_FLIGHT_SEC)
+
+## След лазера на полу (item 10): осевшая метка «laser_mark» в каждой клетке от стрелка
+## до точки остановки. Детерминированно, DiceService не трогаем — как и вся косметика.
+func _laser(ev: Dictionary) -> void:
+	var from_arr: Array = ev.get("from", [])
+	var to_arr: Array = ev.get("to", [])
+	if from_arr.size() < 2 or to_arr.size() < 2:
+		return
+	var a := Vector2i(int(from_arr[0]), int(from_arr[1]))
+	var b := Vector2i(int(to_arr[0]), int(to_arr[1]))
+	var d := b - a
+	var steps := maxi(absi(d.x), absi(d.y))
+	if steps <= 0:
+		return
+	var sx := signi(d.x)
+	var sy := signi(d.y)
+	var cur := a
+	# Начинаем со следующей за стрелком клетки — под самим марксманом отметку не ставим.
+	for _i in steps:
+		cur += Vector2i(sx, sy)
+		props.append({"kind": "laser_mark", "pos": Vector2(cur) + Vector2(0.5, 0.5),
+				"rot": 0.0, "scale": 1.0})
+	_trim()
 
 ## 21.4 — лужа под трупом плюс веер брызг против направления убившего выстрела.
 func _blood(ev: Dictionary) -> void:

@@ -984,11 +984,14 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i) -> ActionResult:
 	result.ok = true
 	var potential := MCF.MARKSMAN_POTENTIAL
 	var killed_names: Array = []
+	# Докуда дотянулся луч — для следа на полу (item 10). Обновляется на каждой клетке.
+	var beam_last := shooter.coord
 	# Трассу считает тот же код, что рисует предпросмотр (laser_path), — подсветка
 	# и настоящий выстрел не могут разойтись.
 	for rec: Dictionary in _laser_trace(shooter.coord, step):
 		potential -= int(rec["cost"])
 		var c: Vector2i = rec["coord"]
+		beam_last = c
 		var cell := state.grid.cell(c)
 		var destroyed: bool = bool(rec["destroyed"])
 		match String(rec["kind"]):
@@ -1024,6 +1027,9 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i) -> ActionResult:
 					cell.cover_height = 0.0
 					result.log("Beam blows the wall at (%d, %d) apart" % [c.x, c.y])
 
+	# След луча на полу от стрелка до точки остановки (item 10) — чистая косметика.
+	_fx(result, {"fx": "laser", "from": [shooter.coord.x, shooter.coord.y],
+		"to": [beam_last.x, beam_last.y]})
 	result.log_lines.push_front("%s: laser shot %s (potential left %d)" % [
 		shooter.stats.display_name, _dir_name(step), maxi(0, potential)])
 	if killed_names.is_empty():

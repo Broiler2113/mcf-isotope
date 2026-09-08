@@ -245,6 +245,14 @@ var _chat_input: LineEdit
 var _log_label: RichTextLabel
 ## Журнал боя вынесен из правого меню в свою панель (item 6), внизу слева.
 var _log_panel: PanelContainer
+## Кнопка-стрелка сворачивания чата (item 11) и флаги «панель передвинута вручную»
+## (item 8): пока не тронута — держим её в углу автоматически, после перетаскивания — нет.
+var _chat_toggle_btn: Button
+var _chat_moved: bool = false
+var _log_moved: bool = false
+## Состояние перетаскивания панелей (item 8).
+var _panel_drag: Control = null
+var _panel_drag_off: Vector2 = Vector2.ZERO
 var _menu: PanelContainer
 var _picker: PanelContainer
 var _dice: DiceRoller
@@ -300,8 +308,11 @@ func _ready() -> void:
 	# У записи нет игроков: смотреть — не играть, поэтому контроллеров не заводим
 	# вовсе. Ровно это и делает просмотр безопасным: подать намерение некому.
 	if replay == null:
-		if not _loaded_from_save:
-			_sync_roster_from_config()
+		# Раньше здесь _sync_roster_from_config() перезаписывал вид слотов из флагов
+		# p1_is_ai/p2_is_ai — а лобби эти флаги не трогает (item 12). Из-за этого слот,
+		# выбранный в лобби как AI, снова становился HUMAN, и ИИ никем не управлял.
+		# Ростер (и из лобби, и из демо-пути через default_duel) уже несёт верный вид
+		# слотов, поэтому синхронизация не нужна и только мешала.
 		_build_controllers()
 	_build_ui()
 	Ui.theme_canvas_layers()  # HUD lives on a CanvasLayer; pull in the Steam skin.
@@ -588,7 +599,11 @@ func _take_replay_state() -> void:
 	# разрешает больше, — поэтому воспроизведение от этого не съедет.
 	resolver.fog_mode = MCF.Fog.OFF
 	state.log.line_added.connect(_on_log_line)
+	# Косметику пересобираем из фаст-форварда перемотки (item 9): после прыжка по
+	# таймлайну кровь, гильзы и разрушенный пол остаются на доске, а не пропадают.
 	_fx.clear()
+	if replay != null:
+		_fx.apply(replay.seek_fx)
 	selected_id = -1
 	selected_vehicle_id = -1
 	mode = Mode.NONE
@@ -3259,6 +3274,8 @@ const FX_LOOK := {
 	"shell_casing": [0.22, Color(1.0, 0.55, 0.1, 0.95)],
 	"blood_drop": [0.10, Color(0.55, 0.06, 0.06, 0.85)],
 	"blood_pool": [0.42, Color(0.42, 0.04, 0.04, 0.55)],
+	# След лазера марксмана на полу (item 10): тонкая тёмно-красная отметина.
+	"laser_mark": [0.30, Color(0.9, 0.15, 0.15, 0.5)],
 }
 const FX_TEXTURE := {
 	"shard": "glass_shard", "casing": "shell_casing",
@@ -3393,12 +3410,13 @@ func _reposition_hud_grip() -> void:
 	var vp := get_viewport_rect().size
 	_hud_grip.position = Vector2(vp.x - _hud_width - _hud_grip.custom_minimum_size.x, 0)
 	_hud_grip.size = Vector2(_hud_grip.custom_minimum_size.x, vp.y)
-	# Чат приколот к правому-нижнему углу, но левее правого меню, чтобы не налезал.
-	if _chat_panel != null:
+	# Чат приколот к правому-нижнему углу, но левее правого меню — пока игрок его не
+	# перетащил сам (item 8): после ручного переноса автопозиционирование отключается.
+	if _chat_panel != null and not _chat_moved:
 		_chat_panel.position = Vector2(vp.x - _hud_width - _chat_panel.size.x - 20.0,
 				vp.y - _chat_panel.size.y - 12.0)
-	# Журнал боя — в левом-нижнем углу (item 6: убран из правого меню в свою панель).
-	if _log_panel != null:
+	# Журнал боя — в левом-нижнем углу (item 6), тоже до первого ручного переноса (item 8).
+	if _log_panel != null and not _log_moved:
 		_log_panel.position = Vector2(12.0, vp.y - _log_panel.size.y - 12.0)
 	# Полоса повтора (M12) — по центру внизу, как у любого проигрывателя.
 	if _replay_bar != null:
@@ -3574,7 +3592,9 @@ func _build_log_panel() -> void:
 	var frame := VBoxContainer.new()
 	frame.add_theme_constant_override("separation", 0)
 	panel.add_child(frame)
-	frame.add_child(SteamChrome.header_bar("Combat Log"))
+	var log_header := SteamChrome.header_bar("Combat Log")
+	_make_panel_draggable(panel, log_header, func() -> void: _log_moved = true)  # item 8
+	frame.add_child(log_header)
 	_log_label = RichTextLabel.new()
 	_log_label.custom_minimum_size = Vector2(360, 130)
 	_log_label.add_theme_font_size_override("normal_font_size", 11)
@@ -3617,6 +3637,7 @@ func _build_replay_bar() -> void:
 	_replay_slider.custom_minimum_size = Vector2(360, 18)
 	_replay_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_replay_slider.value_changed.connect(_on_replay_slider)
+	_style_brush_slider(_replay_slider)  # чёрная дорожка под ползунком (item 7)
 	slider_wrap.add_child(_replay_slider)
 	_replay_bar = panel
 	_ui_layer.add_child(_replay_bar)
@@ -3650,7 +3671,10 @@ func _build_chat_panel() -> void:
 	var toggle := Button.new()
 	toggle.text = "▾"
 	toggle.pressed.connect(_toggle_chat)
-	frame.add_child(SteamChrome.header_bar("Chat", toggle))
+	_chat_toggle_btn = toggle
+	var chat_header := SteamChrome.header_bar("Chat", toggle)
+	_make_panel_draggable(panel, chat_header, func() -> void: _chat_moved = true)  # item 8
+	frame.add_child(chat_header)
 	_chat_body = VBoxContainer.new()
 	_chat_body.add_theme_constant_override("separation", 4)
 	# Сворачиваем ОБЁРТКУ-отступ, а не сам _chat_body (item 15): прятать только внутренний
@@ -4005,7 +4029,29 @@ func _draw_annotations() -> void:
 func _toggle_chat() -> void:
 	if _chat_body_wrap == null:
 		return
+	# Стрелка вниз (▾) сворачивает в маленький прямоугольник — как в начале матча (item 11).
 	_chat_body_wrap.visible = not _chat_body_wrap.visible
+	if _chat_toggle_btn != null:
+		_chat_toggle_btn.text = "▾" if _chat_body_wrap.visible else "▸"
+
+## Сделать панель перетаскиваемой за её шапку (item 8). on_move помечает панель как
+## сдвинутую вручную, чтобы _reposition_hud_grip перестал возвращать её в угол.
+func _make_panel_draggable(panel: Control, header: Control, on_move: Callable) -> void:
+	header.mouse_filter = Control.MOUSE_FILTER_STOP
+	header.gui_input.connect(func(e: InputEvent) -> void:
+		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
+			if e.pressed:
+				_panel_drag = panel
+				_panel_drag_off = panel.global_position - e.global_position
+				on_move.call()
+			elif _panel_drag == panel:
+				_panel_drag = null
+		elif e is InputEventMouseMotion and _panel_drag == panel:
+			var vp := get_viewport_rect().size
+			var p: Vector2 = e.global_position + _panel_drag_off
+			p.x = clampf(p.x, 0.0, maxf(0.0, vp.x - panel.size.x))
+			p.y = clampf(p.y, 0.0, maxf(0.0, vp.y - panel.size.y))
+			panel.position = p)
 
 func _chat_append(who: String, text: String) -> void:
 	if _chat_log == null:

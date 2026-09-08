@@ -219,7 +219,20 @@ func _stats(id: String) -> UnitStats:
 ## Действующий бюджет стороны (item 40): 0 = безлимит. «Свободная расстановка» снимает
 ## лимит либо со всех, либо с одного выбранного хостом игрока (GameConfig.unlimited_for).
 func _effective_budget(side: int) -> int:
-	return 0 if GameConfig.unlimited_for(side) else budget
+	if GameConfig.unlimited_for(side):
+		return 0
+	# Личный бюджет игрока из ростера (item 1); 0 = безлимит; иначе общий бюджет партии.
+	if roster != null and roster.slot(side) != null and roster.slot(side).budget > 0:
+		return roster.slot(side).budget
+	return budget
+
+## Разрешён ли юнит активной стороне к покупке (item 2): сперва личное ограничение
+## слота, затем общее (GameConfig), иначе можно.
+func _unit_allowed_for_active(id: String) -> bool:
+	if roster != null and roster.slot(active_side) != null \
+			and not roster.slot(active_side).allowed_units.is_empty():
+		return roster.slot(active_side).unit_allowed(id)
+	return GameConfig.unit_allowed(id)
 
 func _cost(id: String) -> int:
 	if VehicleDB.is_vehicle(id):
@@ -803,23 +816,7 @@ func _build_ui() -> void:
 	_palette = VBoxContainer.new()
 	_palette.add_theme_constant_override("separation", 3)
 	vbox.add_child(_palette)
-	for id in PURCHASABLE:
-		if not GameConfig.unit_allowed(id):  # ограничение состава хостом (item 12)
-			continue
-		var s := _stats(id)
-		if s == null:
-			continue
-		_add_palette_button(id, "%s  -  %d pts" % [s.display_name, s.cost])
-
-	# Раздел техники (#10).
-	var mach_lbl := Label.new()
-	mach_lbl.text = "— Machinery —"
-	mach_lbl.modulate = Color(0.75, 0.78, 0.85)
-	_palette.add_child(mach_lbl)
-	for vid in PURCHASABLE_VEHICLES:
-		if not VehicleDB.is_vehicle(vid) or not GameConfig.unit_allowed(vid):
-			continue
-		_add_palette_button(vid, "%s  -  %d pts" % [_display_name(vid), _cost(vid)])
+	_populate_palette()
 
 	vbox.add_child(HSeparator.new())
 
@@ -870,6 +867,28 @@ func _build_ui() -> void:
 
 	# UI живёт на CanvasLayer — подтянуть общий скин Steam (#59).
 	Ui.theme_canvas_layers()
+
+## Наполнить палитру для АКТИВНОЙ стороны (item 2): у каждого игрока может быть свой
+## разрешённый состав, поэтому при передаче хода следующему список пересобирается.
+func _populate_palette() -> void:
+	_palette_buttons = {}
+	for c in _palette.get_children():
+		c.queue_free()
+	for id in PURCHASABLE:
+		if not _unit_allowed_for_active(id):
+			continue
+		var s := _stats(id)
+		if s == null:
+			continue
+		_add_palette_button(id, "%s  -  %d pts" % [s.display_name, s.cost])
+	var mach_lbl := Label.new()
+	mach_lbl.text = "— Machinery —"
+	mach_lbl.modulate = Color(0.75, 0.78, 0.85)
+	_palette.add_child(mach_lbl)
+	for vid in PURCHASABLE_VEHICLES:
+		if not VehicleDB.is_vehicle(vid) or not _unit_allowed_for_active(vid):
+			continue
+		_add_palette_button(vid, "%s  -  %d pts" % [_display_name(vid), _cost(vid)])
 
 func _add_palette_button(id: String, label: String) -> void:
 	var btn := Button.new()
@@ -947,9 +966,7 @@ func _on_flow() -> void:
 	if at >= 0 and at < sides.size() - 1:
 		active_side = sides[at + 1]
 		brush_unit = ""
-		for c in _palette.get_children():
-			if c is Button:
-				c.button_pressed = false
+		_populate_palette()  # у нового игрока может быть свой разрешённый состав (item 2)
 		_status.text = ""
 		_refresh_labels()
 		queue_redraw()
