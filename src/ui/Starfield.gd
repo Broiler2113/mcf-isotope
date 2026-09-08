@@ -105,11 +105,12 @@ func _star_tile(rng: RandomNumberGenerator, count: int, size: int,
 				img.set_pixel((x + dx) % TILE, (y + dy) % TILE, col)
 	return ImageTexture.create_from_image(img)
 
-## Небо за звёздами: сверху чуть синее, снизу почти чёрное.
+## Небо за звёздами: чистый чёрный (item 1). Прежний сине-серый градиент читался как
+## «серый фон» — заказчик просит именно чёрный, звёзды поверх него и так видны.
 func _sky_gradient() -> GradientTexture2D:
 	var gradient := Gradient.new()
-	gradient.set_color(0, Color(0.055, 0.065, 0.105))
-	gradient.set_color(1, Color(0.015, 0.018, 0.032))
+	gradient.set_color(0, Color(0, 0, 0))
+	gradient.set_color(1, Color(0, 0, 0))
 	var tex := GradientTexture2D.new()
 	tex.gradient = gradient
 	tex.fill_from = Vector2(0.0, 0.0)

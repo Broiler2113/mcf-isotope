@@ -101,6 +101,19 @@ static func stamped(label: String, ext: String) -> String:
 		clean = "match"
 	return "%s_%s.%s" % [stamp, clean, ext]
 
+## Имя файла из введённого игроком названия (item 19): «Rostov stand.mcfs». Санитизируем
+## под безопасные символы; пусто — откатываемся на метку времени, чтобы файл всё же
+## получил имя. Расширение добавляем, если игрок его не написал.
+static func named(user_name: String, ext: String) -> String:
+	var safe := user_name.strip_edges().replace(" ", "-")
+	var clean := ""
+	for i in safe.length():
+		if NAME_CHARS.contains(safe[i]):
+			clean += safe[i]
+	if clean == "":
+		return stamped("match", ext)
+	return "%s.%s" % [clean, ext]
+
 ## Человекочитаемая подпись файла для списков меню.
 static func describe(data: Dictionary) -> String:
 	var meta: Dictionary = data.get("meta", {})

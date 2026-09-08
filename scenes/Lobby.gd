@@ -47,8 +47,17 @@ var _save_opt: OptionButton
 ## какую армию кому отдаёт.
 var _save_armies: Dictionary = {}
 
+## Роль лобби: гость (подключился к хосту), сетевой хост, либо одиночка (без сессии).
+var _is_host_net: bool = false
+var _is_solo: bool = false
+## Маяк локальной сети хоста (item 10): пока хост сидит в лобби, он продолжает
+## объявлять партию — иначе клиенты перестали бы его находить.
+var _lan_adv: LanDiscovery = null
+
 func _ready() -> void:
 	_is_client = NetHandoff.session != null and not NetHandoff.is_host
+	_is_host_net = NetHandoff.session != null and NetHandoff.is_host
+	_is_solo = NetHandoff.session == null
 	roster = _seed_roster()
 	_build_ui()
 	_refresh_slots()
@@ -60,6 +69,36 @@ func _ready() -> void:
 		NetHandoff.session.disconnected.connect(_on_client_lost)
 		NetHandoff.session.attach()
 		_status.text = "Connected — waiting for the host to start the match…"
+	# Сетевой хост открыл лобби сразу (item 10): ждём подключения, продолжая объявлять
+	# партию в LAN. Когда гость подключится — обновим статус.
+	if _is_host_net:
+		NetHandoff.session.peer_ready.connect(_on_host_peer_joined)
+		NetHandoff.session.disconnected.connect(_on_host_peer_left)
+		_status.text = "Hosting — waiting for a player to join. You can also add AI slots and start now."
+		_lan_adv = LanDiscovery.new()
+		get_tree().root.add_child.call_deferred(_lan_adv)
+		_lan_adv.start_advertising.call_deferred({
+			"name": "MCF Tactics", "players": 1, "port": NetworkSession.DEFAULT_PORT})
+
+func _on_host_peer_joined(_is_host: bool) -> void:
+	if _status != null:
+		_status.text = "A player joined — set their slot to Player, then Start Match."
+	# Свободный слот отдаём подключившемуся человеку, чтобы «playing >= 2» выполнилось.
+	for s: Roster.Slot in roster.slots:
+		if s.kind == Roster.SlotKind.OPEN:
+			s.kind = Roster.SlotKind.HUMAN
+			break
+	_refresh_slots()
+
+func _on_host_peer_left() -> void:
+	if _status != null:
+		_status.text = "The other player disconnected. Waiting for a new one…"
+
+func _exit_tree() -> void:
+	if _lan_adv != null:
+		_lan_adv.stop()
+		_lan_adv.queue_free()
+		_lan_adv = null
 
 func _on_client_message(msg: Dictionary) -> void:
 	# Хост открыл сохранение (M12): доска приезжает целиком, и закупка пропускается.
@@ -86,8 +125,13 @@ func _on_client_lost() -> void:
 ## Начальный ростер: дуэль из двух слотов (хост-человек + открытый), как минимум для игры.
 func _seed_roster() -> Roster:
 	var r := Roster.new()
-	r.add_slot(Roster.SlotKind.HUMAN)   # слот 0 — хост
-	r.add_slot(Roster.SlotKind.OPEN)    # слот 1
+	r.add_slot(Roster.SlotKind.HUMAN)   # слот 0 — этот игрок (хост/одиночка)
+	# В одиночке второй слот — ИИ (item 20): партия готова к старту сразу, без соперника-
+	# человека. В сетевой игре он ОТКРЫТ и ждёт гостя.
+	if _is_solo:
+		r.add_slot(Roster.SlotKind.AI)
+	else:
+		r.add_slot(Roster.SlotKind.OPEN)
 	return r
 
 # --- UI ----------------------------------------------------------------------
@@ -104,7 +148,8 @@ func _build_ui() -> void:
 	var outer := VBoxContainer.new()
 	outer.add_theme_constant_override("separation", 0)
 	root.add_child(outer)
-	outer.add_child(SteamChrome.header_bar("Multiplayer Lobby"))
+	# Одно окно и для одиночки, и для сети (item 20) — заголовок под роль.
+	outer.add_child(SteamChrome.header_bar("New Game" if _is_solo else "Multiplayer Lobby"))
 
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -222,7 +267,14 @@ func _build_config(parent: VBoxContainer) -> void:
 	if _is_client:
 		for c in [_max_spin, _place_opt, _fog_opt, _army_opt, _mode_opt,
 				_ff_check, _live_check, _events_check, _events_mand, _events_interval]:
-			(c as Control).disabled = true if c is Button else false
+			# У кнопок (в т. ч. OptionButton/CheckBox — все наследники BaseButton) есть
+			# .disabled; у SpinBox её нет, он глохнет через .editable. Присваивать
+			# .disabled всем подряд нельзя (item 18): на SpinBox это роняло клиента с
+			# «Invalid assignment of property 'disabled' … on SpinBox» при входе в лобби.
+			if c is BaseButton:
+				(c as BaseButton).disabled = true
+			elif c is SpinBox:
+				(c as SpinBox).editable = false
 			(c as Control).mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 func _opt(items: Array, selected: int) -> OptionButton:
@@ -517,6 +569,8 @@ func _cell_color(map: MapData, coord: Vector2i) -> Color:
 
 # --- Старт / выход -----------------------------------------------------------
 func _commit_config() -> void:
+	# Лобби — единственный путь создания партии (item 20): расстановка всегда свободная.
+	GameConfig.free_placement = true
 	GameConfig.placement_mode = _place_opt.selected
 	GameConfig.fog_mode = _fog_opt.selected
 	GameConfig.army_select_mode = _army_opt.selected

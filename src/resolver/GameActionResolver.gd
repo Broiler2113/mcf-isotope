@@ -240,12 +240,16 @@ func _dispatch(intent: Intent) -> ActionResult:
 		return _resolve_vehicle_move(intent)
 	elif intent is VehicleCannonIntent:
 		return _resolve_vehicle_cannon(intent)
+	elif intent is VehicleMeleeIntent:
+		return _resolve_vehicle_melee(intent)
 	elif intent is GroupMoveIntent:
 		return _resolve_group_move(intent)
 	elif intent is PlaceMineIntent:
 		return _resolve_place_mine(intent)
 	elif intent is RevealMinesIntent:
 		return _resolve_reveal_mines(intent)
+	elif intent is DisarmMineIntent:
+		return _resolve_disarm_mine(intent)
 	return ActionResult.fail("Unknown intent: %s" % intent)
 
 ## Групповой приказ движения (item 34): готовый список «кому куда», посчитанный на
@@ -542,7 +546,11 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 	var fired := 0
 	# Стёкла между стрелком и целью (#29). Каждая пуля пробивает КАЖДОЕ отдельным
 	# броском — оттого из очереди в четыре пули сквозь одно стекло проходят обычно две.
-	var panes := _glass_on_line(shooter.coord, target.coord)
+	var glass_cells := _glass_cells_on_line(shooter.coord, target.coord)
+	var panes := glass_cells.size()
+	# Стекло, сквозь которое прошла хоть одна пуля, разбивается (item 4). Копим здесь,
+	# бьём после очереди — чтобы порядок бросков на пробитие не сбился на полпути.
+	var shattered: Dictionary = {}
 	var stopped_by_glass := 0
 	if panes > 0:
 		hit_mods.append({"label": "Glass on the line", "delta": 0})
@@ -556,12 +564,14 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 		# не долетает, и бросать за неё «попал/не попал» не за что.
 		var glass_rolls: Array = []
 		var pierced := true
-		for _pane in panes:
+		for pane_i in panes:
 			var g_roll := state.dice.roll_d6()
 			glass_rolls.append(g_roll)
 			if g_roll < MCF.GLASS_PIERCE_NEED:
 				pierced = false
 				break
+			# Пуля прошла сквозь это стекло — значит оно пробито и осыплется (item 4).
+			shattered[glass_cells[pane_i]] = true
 		if not pierced:
 			stopped_by_glass += 1
 			shot_details.append({
@@ -601,6 +611,14 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 	# только живых, и переставь её местами, труп в космосе начал бы улетать.
 	var result := ActionResult.new()
 	result.ok = true
+	# Осыпаем пробитые стёкла (item 4): пуля прошла — рама больше не держит. Осколки
+	# летят прочь от стрелка. Снос — повод активации нейтралов вокруг клетки (§3.1a).
+	for gc: Vector2i in shattered:
+		var gcell := state.grid.cell(gc)
+		if gcell != null and gcell.feature_id == MCF.FEATURE_GLASS:
+			gcell.clear_feature()
+			notify_cell_changed(gc)
+			_fx(result, {"fx": "shards", "at": gc, "from": shooter.coord})
 	if killed:
 		_kill(target, result, shooter.coord)  # труп остаётся на клетке, но не перекрывает ЛОС
 
@@ -662,6 +680,10 @@ func _resolve_anti_tank(shooter: UnitInstance, center: Vector2i) -> ActionResult
 
 	var result := ActionResult.new()
 	result.ok = true
+	# Крупная оранжевая гильза за спину стрелка (item 24) — та же система, что у пуль,
+	# но вид «shell_casing». Направление — на цель (частица летит от неё, назад).
+	_fx(result, {"fx": "casings", "at": shooter.coord, "toward": center,
+		"count": 1, "shell": true})
 	# Выстрел ПОД СЕБЯ (#11): заряд кладётся в собственную клетку, и мазать тут
 	# нечем — бросок не делается вовсе. Кубик здесь не просто лишний: любой
 	# холостой бросок сдвигает поток случайности и разводит хост с клиентом.
@@ -686,6 +708,9 @@ func _resolve_anti_tank(shooter: UnitInstance, center: Vector2i) -> ActionResult
 		else:
 			result.log("%s: roll %d (need %d+) — missed, charge fell short at (%d, %d)." % [
 				shooter.stats.display_name, roll, need, landing.x, landing.y])
+	# Снимок «до взрыва» для показа во время броска (item 22).
+	var at_area := MCF.blast_square(landing, MCF.ANTI_TANK_BLAST_RADIUS)
+	_capture_visual_hold(result, at_area)
 	# Прямое попадание в ДОТ: бетон забирает весь удар, осколочного поля нет.
 	if _pillbox_absorbs(landing, MCF.ANTI_TANK_VEHICLE_DAMAGE, result):
 		return result
@@ -718,12 +743,42 @@ func _shortfall_landing(from_coord: Vector2i, target: Vector2i, roll: int, need:
 		return from_coord
 	return _throw_path(from_coord, target)[land_index - 1]
 
+## Снять «визуальный слепок» зоны ДО взрыва (item 22): прежние объекты клеток и прежняя
+## прочность/целость техники в области. UI показывает их, пока крутится кубик выстрела,
+## и разрушение не опережает бросок. Чисто косметика — на состояние не влияет.
+func _capture_visual_hold(res: ActionResult, area: Array) -> void:
+	if res == null:
+		return
+	var cells: Dictionary = res.visual_hold.get("cells", {})
+	for c: Vector2i in area:
+		var cell := state.grid.cell(c)
+		if cell == null or cells.has(c):
+			continue
+		cells[c] = {
+			"feature_id": cell.feature_id, "feature_durability": cell.feature_durability,
+			"cover_height": cell.cover_height, "corpse_count": cell.corpse_count,
+		}
+	res.visual_hold["cells"] = cells
+	var vehs: Dictionary = res.visual_hold.get("vehicles", {})
+	var in_area := {}
+	for c: Vector2i in area:
+		in_area[c] = true
+	for veh: Vehicle in state.all_vehicles():
+		if vehs.has(veh.id):
+			continue
+		for fc in veh.footprint():
+			if in_area.has(fc):
+				vehs[veh.id] = {"durability": veh.durability, "wrecked": veh.wrecked}
+				break
+	res.visual_hold["vehicles"] = vehs
+
 ## Взрыв: авто-уничтожение всех живых в зоне поражения, кроме щитоносцев вне
 ## эпицентра (они прикрывают союзников рядом). Возвращает имена погибших (§3.14).
 ## Общий для противотанкиста и дрона (§3.12). Также сносит станции дронов в зоне.
 ## cells — форма взрыва; пусто = квадрат 3×3 (радиус 1 по Чебышёву), как у
 ## противотанкиста. Танковая пушка передаёт свой ромб радиуса 2 (#63).
-func _blast(center: Vector2i, res: ActionResult = null, cells: Array[Vector2i] = []) -> Array:
+func _blast(center: Vector2i, res: ActionResult = null, cells: Array[Vector2i] = [],
+		epicenter_debris: bool = true) -> Array:
 	var area: Array[Vector2i] = cells
 	if area.is_empty():
 		area = MCF.blast_square(center, MCF.ANTI_TANK_BLAST_RADIUS)
@@ -759,8 +814,10 @@ func _blast(center: Vector2i, res: ActionResult = null, cells: Array[Vector2i] =
 	notify_cell_changed(center)
 	for c: Vector2i in area:
 		_blast_destroy_terrain(c, res, center)
-	# Побитый пол по ВСЕЙ зоне, эпицентр — отдельной текстурой (#21.1).
-	_fx(res, {"fx": "debris", "at": center, "cells": area})
+	# Побитый пол по ВСЕЙ зоне, эпицентр — отдельной текстурой (#21.1). Мина просит
+	# ОБЫЧНЫЙ щебень без эпицентра (item 13): передаёт at=NOWHERE, и ни одна клетка не
+	# совпадёт с «эпицентром», значит вся зона осядет рядовым разрушением.
+	_fx(res, {"fx": "debris", "at": center if epicenter_debris else NOWHERE, "cells": area})
 	return killed_names
 
 ## Прямое попадание в прочное укрепление (ДОТ, §3.7): бетонная коробка принимает удар
@@ -805,8 +862,9 @@ func _blast_destroy_terrain(c: Vector2i, res: ActionResult = null,
 		# который валил каменную стену рядом, и поле оставалось «в клетку».
 		MCF.FEATURE_HEDGEHOG, MCF.FEATURE_DIRT_PILE,
 		# Взрыв подрывает и мины в зоне (item 45) — иначе после обстрела минное поле
-		# оставалось бы нетронутым посреди голой земли.
-		MCF.FEATURE_MINE,
+		# оставалось бы нетронутым посреди голой земли. Противотанковую тоже сносит
+		# взрывом (item 13), хотя огонь её не берёт.
+		MCF.FEATURE_MINE, MCF.FEATURE_AV_MINE,
 	]
 	if fid in destructible:
 		if fid == MCF.FEATURE_GLASS:
@@ -1385,6 +1443,10 @@ func _resolve_pickup_corpse(intent: PickUpCorpseIntent) -> ActionResult:
 		return ActionResult.fail(err)
 	if unit.remaining_ap <= 0:
 		return ActionResult.fail("Unit has no AP left")
+	# Щитоносец корпуса не поднимает (item 17): его руки заняты щитом. Труп-щит —
+	# защита для остальных бойцов, но не для того, кто и так укрыт своей плитой.
+	if _is_shield(unit):
+		return ActionResult.fail("A shield-bearer can't carry corpses")
 	if unit.carried_corpses >= MCF.CORPSE_CARRY_MAX:
 		return ActionResult.fail("Hands full — %d bodies is the limit" % MCF.CORPSE_CARRY_MAX)
 	if Combat.distance(unit.coord, intent.from) > 1:
@@ -1519,7 +1581,10 @@ func cover_effect_from(from_coord: Vector2i, target: UnitInstance) -> Dictionary
 ## разрыва: луч прямой, на повороте окопа он воткнётся в грунт.
 func trench_protected(from_coord: Vector2i, target: UnitInstance,
 		flat_beam: bool = false) -> bool:
-	var target_in_trench := state.grid.cell(target.coord).feature_id == MCF.FEATURE_TRENCH
+	var tcell := state.grid.cell(target.coord)
+	if tcell == null:
+		return false  # цель вне поля (в машине и т. п.) — окоп её не касается (#23)
+	var target_in_trench := tcell.feature_id == MCF.FEATURE_TRENCH
 	if not flat_beam:
 		# Пуля летит по дуге: сверху в яму её направить можно, но только вплотную.
 		return target_in_trench and Combat.distance(from_coord, target.coord) > 1
@@ -1996,6 +2061,23 @@ func mine_cells(actor: UnitInstance) -> Array[Vector2i]:
 func _is_sapper(u: UnitInstance) -> bool:
 	return u != null and u.stats.special_ability_id == MCF.ABILITY_SAPPER
 
+## Клетки с чужой ПОДСВЕЧЕННОЙ миной рядом с сапёром — их он может обезвредить (item 13).
+func disarmable_mine_cells(actor: UnitInstance) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	if actor == null or not _is_sapper(actor) or actor.aboard_vehicle_id != -1:
+		return out
+	for c in [actor.coord] + state.grid.neighbors(actor.coord):
+		var cell := state.grid.cell(c)
+		if cell == null:
+			continue
+		if cell.feature_id != MCF.FEATURE_MINE and cell.feature_id != MCF.FEATURE_AV_MINE:
+			continue
+		if state.roster.are_allies(actor.owner, cell.feature_owner):
+			continue
+		if mine_visible_to(actor.owner, c):
+			out.append(c)
+	return out
+
 func _can_mine_cell(coord: Vector2i) -> bool:
 	if not state.grid.in_bounds(coord):
 		return false
@@ -2023,11 +2105,43 @@ func _resolve_place_mine(intent: PlaceMineIntent) -> ActionResult:
 		actor.mine_credits = MCF.MINES_PER_ACTION
 		spent_ap = true
 	actor.mine_credits -= 1
-	state.grid.cell(intent.target).set_feature(MCF.FEATURE_MINE, actor.owner)
+	var mine_feature: String = MCF.FEATURE_AV_MINE if intent.anti_vehicle else MCF.FEATURE_MINE
+	state.grid.cell(intent.target).set_feature(mine_feature, actor.owner)
+	var kind_word := "an anti-vehicle mine" if intent.anti_vehicle else "a mine"
 	var tail := "[AP: %d, %d mine(s) left to lay]" % [actor.remaining_ap, actor.mine_credits]
-	return ActionResult.success(["%s laid a mine at (%d, %d) %s" % [
-		actor.stats.display_name, intent.target.x, intent.target.y,
-		tail if not spent_ap else tail]])
+	return ActionResult.success(["%s laid %s at (%d, %d) %s" % [
+		actor.stats.display_name, kind_word, intent.target.x, intent.target.y, tail]])
+
+## Сапёр обезвреживает подсвеченную его стороной чужую мину на соседней клетке (item 13).
+func _resolve_disarm_mine(intent: DisarmMineIntent) -> ActionResult:
+	var actor := state.get_unit(intent.actor_id)
+	var err := _validate_actor(actor)
+	if err != "":
+		return ActionResult.fail(err)
+	if not _is_sapper(actor):
+		return ActionResult.fail("Only a sapper can disarm mines")
+	if actor.remaining_ap <= 0:
+		return ActionResult.fail("No AP left")
+	if Combat.distance(actor.coord, intent.target) > 1:
+		return ActionResult.fail("Must be next to the mine")
+	var cell := state.grid.cell(intent.target)
+	if cell == null or (cell.feature_id != MCF.FEATURE_MINE and cell.feature_id != MCF.FEATURE_AV_MINE):
+		return ActionResult.fail("No mine there")
+	if state.roster.are_allies(actor.owner, cell.feature_owner):
+		return ActionResult.fail("That's a friendly mine")
+	# Обезвредить можно лишь то, что уже нашли зачисткой: слепой сапёр чужого поля не видит.
+	if not mine_visible_to(actor.owner, intent.target):
+		return ActionResult.fail("Sweep for it first — you can't see that mine")
+	actor.remaining_ap -= 1
+	var was_av := cell.feature_id == MCF.FEATURE_AV_MINE
+	cell.clear_feature()
+	# Знание о снятой мине больше не нужно — чистим отметку, чтобы подсветка не висела.
+	var seen: Dictionary = state.revealed_mines.get(actor.owner, {})
+	seen.erase(intent.target)
+	notify_cell_changed(intent.target)
+	return ActionResult.success(["%s disarms %s at (%d, %d) [AP: %d]" % [
+		actor.stats.display_name, "an anti-vehicle mine" if was_av else "a mine",
+		intent.target.x, intent.target.y, actor.remaining_ap]])
 
 ## Подсветить чужие мины вокруг (item 45). Знание кладётся ПЕРСОНАЛЬНО той стороне,
 ## что его добыла: подсветка — не свойство мины, а то, что о ней узнали.
@@ -2051,7 +2165,7 @@ func _resolve_reveal_mines(intent: RevealMinesIntent) -> ActionResult:
 			if not state.grid.in_bounds(c):
 				continue
 			var cell := state.grid.cell(c)
-			if cell.feature_id != MCF.FEATURE_MINE:
+			if cell.feature_id != MCF.FEATURE_MINE and cell.feature_id != MCF.FEATURE_AV_MINE:
 				continue
 			if state.roster.are_allies(actor.owner, cell.feature_owner):
 				continue  # свои мины сапёр и так знает
@@ -2078,10 +2192,13 @@ func _detonate_mine(coord: Vector2i, victim: UnitInstance, res: ActionResult) ->
 	# Через общий _blast: щитоносец, прикрытие союзником и снос объектов на клетке
 	# должны работать здесь ровно так же, как у противотанкиста, а не «почти так же».
 	var area: Array[Vector2i] = [coord]
-	var killed := _blast(coord, res, area)
+	# Клетка мины оседает ОБЫЧНЫМ разрушенным полом, а не выжженным эпицентром (item 13).
+	var killed := _blast(coord, res, area, false)
 	_damage_vehicles_in_area(area, MCF.MINE_VEHICLE_DAMAGE, -1, res, "mine")
 	if killed.is_empty():
-		res.log("… %s walked away from it." % victim.stats.display_name)
+		# victim == null — подрыв не под ногами (огонь дошёл): некому «уйти».
+		if victim != null:
+			res.log("… %s walked away from it." % victim.stats.display_name)
 	else:
 		for n in killed:
 			res.log("%s killed by the mine!" % n)
@@ -2089,7 +2206,7 @@ func _detonate_mine(coord: Vector2i, victim: UnitInstance, res: ActionResult) ->
 ## Видит ли сторона эту мину. Своя мина видна всегда; чужая — пока держится подсветка.
 func mine_visible_to(owner: int, coord: Vector2i) -> bool:
 	var cell := state.grid.cell(coord)
-	if cell == null or cell.feature_id != MCF.FEATURE_MINE:
+	if cell == null or (cell.feature_id != MCF.FEATURE_MINE and cell.feature_id != MCF.FEATURE_AV_MINE):
 		return false
 	if state.roster.are_allies(owner, cell.feature_owner):
 		return true
@@ -2117,10 +2234,12 @@ func _fire_on_path(unit: UnitInstance, path: Array) -> Vector2i:
 func _mine_on_path(unit: UnitInstance, path: Array) -> Vector2i:
 	for step: Vector2i in path:
 		var cell := state.grid.cell(step)
+		# Обычная противопехотная мина рвётся под ЛЮБЫМ пехотинцем — своим или чужим
+		# (item 13). Раньше на свои мины не наступали; теперь наступивший гибнет, чей бы
+		# ни была мина, поэтому владельцу приходится обходить своё же поле. Противотанковая
+		# мина (FEATURE_AV_MINE) пехоту не трогает — под ней сюда просто не попадёт.
 		if cell == null or cell.feature_id != MCF.FEATURE_MINE:
 			continue
-		if state.roster.are_allies(unit.owner, cell.feature_owner):
-			continue  # на свои мины не наступают: их обходят, зная, где они
 		return step
 	return NOWHERE
 
@@ -2195,7 +2314,7 @@ func breakable_cells(actor: UnitInstance) -> Array:
 ## Применяется одномоментно (без цепной реакции за тик). Юнит на загоревшейся клетке
 ## гибнет мгновенно (как от пробития, без спасброска).
 ## Расползается только огонь, зажжённый стороной owner (#45); owner = -1 — весь огонь.
-func advance_fire(owner: int = -1) -> void:
+func advance_fire(owner: int = -1, res: ActionResult = null) -> void:
 	var ignite: Dictionary = {}
 	for y in state.grid.height:
 		for x in state.grid.width:
@@ -2230,6 +2349,10 @@ func advance_fire(owner: int = -1) -> void:
 		# каркас стены ведёт, стекло лопается, шлюз заклинивает и выгорает.
 		if BURNS_AWAY.has(cell.feature_id):
 			cell.clear_feature()
+		# Огонь подрывает обычную мину, до которой дополз (item 13). Противотанковую —
+		# НЕТ: её взрыватель реагирует лишь на вес гусеницы, не на пламя.
+		elif cell.feature_id == MCF.FEATURE_MINE and res != null:
+			_detonate_mine(c, null, res)
 		# Юнит, оказавшийся на загоревшейся клетке, сгорает мгновенно (§6.5).
 		# Щитоносец (#50) и огнемётчик (#2) невосприимчивы к огню.
 		if cell.occupant != null and cell.occupant.is_alive() and not is_fireproof(cell.occupant):
@@ -3193,7 +3316,11 @@ func _drone_explode(drone: UnitInstance, center: Vector2i, why: String) -> Actio
 	# Дрон, влетевший прямо в ДОТ, весь свой заряд оставляет в бетоне.
 	if _pillbox_absorbs(center, MCF.DRONE_EXPLOSION_DAMAGE, result):
 		return result
-	var killed := _blast(center, result)
+	var area := MCF.blast_square(center, MCF.ANTI_TANK_BLAST_RADIUS)
+	var killed := _blast(center, result, area)
+	# Дрон, подорвавшийся над техникой, снимает с неё 1 прочность (item 14): раньше
+	# взрыв дрона выкашивал пехоту вокруг машины, а сам корпус не трогал вовсе.
+	_damage_vehicles_in_area(area, MCF.DRONE_EXPLOSION_DAMAGE, -1, result, "drone")
 	if killed.is_empty():
 		result.log("… nobody destroyed")
 	else:
@@ -3771,7 +3898,8 @@ func draggable_cells(actor: UnitInstance) -> Array:
 func corpse_pickup_cells(actor: UnitInstance) -> Array:
 	var out: Array = []
 	if actor == null or actor.remaining_ap <= 0 \
-			or actor.carried_corpses >= MCF.CORPSE_CARRY_MAX:
+			or actor.carried_corpses >= MCF.CORPSE_CARRY_MAX \
+			or _is_shield(actor):  # щитоносец трупы не носит (item 17)
 		return out
 	if has_corpse(actor.coord):
 		out.append(actor.coord)
@@ -4206,8 +4334,11 @@ func _resolve_end_turn(intent: EndTurnIntent = null) -> ActionResult:
 	var prev := state.active_player()
 	state.turns.end_turn(state.all_units())
 	var civ := play_civilian_slots()
-	# Огонь ползёт в начале хода той стороны, которая его устроила (#45).
-	advance_fire(state.active_player())
+	# Огонь ползёт в начале хода той стороны, которая его устроила (#45). Дошедшее до
+	# обычной мины пламя её подрывает (item 13) — смерти и косметику копим в fire_res.
+	var fire_res := ActionResult.new()
+	fire_res.ok = true
+	advance_fire(state.active_player(), fire_res)
 	# Серия копки не переносится между ходами (§3.7).
 	for u in state.all_units():
 		u.dig_credits = 0
@@ -4223,11 +4354,15 @@ func _resolve_end_turn(intent: EndTurnIntent = null) -> ActionResult:
 		]
 	]
 	lines.append_array(civ.log_lines)
+	lines.append_array(fire_res.log_lines)
 	var out := ActionResult.success(lines)
 	# Броски жителей едут вместе с передачей хода: UI отыграет их анимацией, а смерти
 	# покажет только после кубика защиты — как и в любом другом обмене выстрелами (#96).
 	out.dice_events = civ.dice_events
 	out.deaths = civ.deaths
+	# Погибшие и косметика от подорвавшихся в огне мин — тоже частью передачи хода.
+	out.deaths.append_array(fire_res.deaths)
+	out.fx.append_array(fire_res.fx)
 	# Случайное событие на новый ход (item 61). Выключено по умолчанию — тогда ни одного
 	# кубика не бросается и поток случайности старых партий цел.
 	_maybe_random_event(out)
@@ -4333,6 +4468,27 @@ func _glass_on_line(from_coord: Vector2i, to_coord: Vector2i) -> int:
 		y += sy
 	return panes
 
+## Координаты стёкол НА ЛИНИИ (концы не считая), по порядку от стрелка к цели.
+## Нужны, чтобы пробитое стекло можно было РАЗБИТЬ на месте (item 4), а не только
+## сосчитать. Порядок совпадает с порядком бросков на пробитие в _resolve_shoot.
+func _glass_cells_on_line(from_coord: Vector2i, to_coord: Vector2i) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	var dx := to_coord.x - from_coord.x
+	var dy := to_coord.y - from_coord.y
+	if (dx == 0 and dy == 0) or (dx != 0 and dy != 0 and absi(dx) != absi(dy)):
+		return out
+	var sx := signi(dx)
+	var sy := signi(dy)
+	var grid := state.grid
+	var x := from_coord.x + sx
+	var y := from_coord.y + sy
+	while x != to_coord.x or y != to_coord.y:
+		if grid.cell_fast(x, y).feature_id == MCF.FEATURE_GLASS:
+			out.append(Vector2i(x, y))
+		x += sx
+		y += sy
+	return out
+
 ## Первый живой боец, стоящий НА ЛИНИИ между стрелком и целью (концы не считаются).
 ## Именно в него уходит выстрел, если стрелок бьёт сквозь чужую спину (#100).
 ## null = линия чистая, и пуля дойдёт до заявленной цели.
@@ -4383,6 +4539,13 @@ func can_shoot(shooter: UnitInstance, target: UnitInstance) -> String:
 		return "No target"
 	if target.id == shooter.id:
 		return "Can't shoot yourself"
+	# Боец В МАШИНЕ целью быть не может (#23): его координата — OFFBOARD (-9999,-9999),
+	# и она вне поля. is_on_firing_line() отвечает на неё «да» (по диагонали от почти
+	# любой клетки), после чего trench_protected() дёргает cell(OFFBOARD).feature_id на
+	# null — отсюда «feature_id on Nil» при нажатии «Стрельба», а los_blocked() за ним
+	# уходит шагать десять тысяч клеток к краю мира. Отсекаем такие цели сразу.
+	if target.aboard_vehicle_id != -1 or not state.grid.in_bounds(target.coord):
+		return "Target unavailable"
 	# Дружественный огонь (#100): по своим стрелять МОЖНО — оружие не разбирает форму.
 	# Выключенный в лобби, он запрещает и прицел в союзника (§7 «Лобби»).
 	if not friendly_fire_enabled and is_ally_of(shooter, target):
@@ -4438,6 +4601,9 @@ func shootable_target_ids(shooter: UnitInstance) -> Array:
 	for u in state.all_units():
 		if u.id == sid or not u.is_alive():
 			continue
+		# Бойцы в машине (coord = OFFBOARD) на поле не стоят — целями не считаются (#23).
+		if u.aboard_vehicle_id != -1 or not state.grid.in_bounds(u.coord):
+			continue
 		if not Combat.is_on_firing_line(from, u.coord):
 			continue
 		if can_shoot(shooter, u) == "":
@@ -4456,6 +4622,8 @@ func hostile_target_ids(shooter: UnitInstance) -> Array:
 	var sid: int = shooter.id
 	for u in state.all_units():
 		if u.owner == sowner or u.id == sid or not u.is_alive():
+			continue
+		if u.aboard_vehicle_id != -1 or not state.grid.in_bounds(u.coord):
 			continue
 		if not Combat.is_on_firing_line(from, u.coord):
 			continue
@@ -4591,6 +4759,58 @@ func _adjacent_to_vehicle(coord: Vector2i, veh: Vehicle) -> bool:
 		if Combat.distance(coord, fc) == 1:
 			return true
 	return false
+
+func _is_miner(u: UnitInstance) -> bool:
+	return u != null and u.stats.special_ability_id == MCF.ABILITY_MINER
+
+## Шахтёр бьёт ломом по соседней вражеской машине (item 15): один бросок d6, на
+## MINER_VEHICLE_HIT_NEED корпус теряет MINER_VEHICLE_DAMAGE прочности. Стоит 1 ОД
+## независимо от исхода — замах уже сделан. Своих машин шахтёр не портит.
+func _resolve_vehicle_melee(intent: VehicleMeleeIntent) -> ActionResult:
+	var unit := state.get_unit(intent.actor_id)
+	var err := _validate_actor(unit)
+	if err != "":
+		return ActionResult.fail(err)
+	if not _is_miner(unit):
+		return ActionResult.fail("Only a miner can pry at a hull")
+	if unit.remaining_ap <= 0:
+		return ActionResult.fail("Unit has no AP left")
+	var veh := state.get_vehicle(intent.vehicle_id)
+	if veh == null or not veh.alive():
+		return ActionResult.fail("No such vehicle")
+	if veh.owner == unit.owner:
+		return ActionResult.fail("That's your own vehicle")
+	if not _adjacent_to_vehicle(unit.coord, veh):
+		return ActionResult.fail("Must stand next to the vehicle")
+	unit.remaining_ap -= 1
+	var res := ActionResult.new()
+	res.ok = true
+	var veh_name: String = VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)
+	var roll := state.dice.roll_d6()
+	var hit := roll >= MCF.MINER_VEHICLE_HIT_NEED
+	res.dice_events.append({
+		"kind": "check", "actor": "%s pries the hull" % unit.stats.display_name,
+		"roll": roll, "need": MCF.MINER_VEHICLE_HIT_NEED, "ok": hit,
+	})
+	if hit:
+		res.log("%s wrenches the %s (roll %d, need %d+)!" % [
+			unit.stats.display_name, veh_name, roll, MCF.MINER_VEHICLE_HIT_NEED])
+		_apply_vehicle_damage(veh, MCF.MINER_VEHICLE_DAMAGE, "miner", res)
+	else:
+		res.log("%s strikes the %s but the hull holds (roll %d, need %d+)." % [
+			unit.stats.display_name, veh_name, roll, MCF.MINER_VEHICLE_HIT_NEED])
+	return res
+
+## Соседние вражеские машины, по которым шахтёр может ударить (для подсветки в UI).
+## Возвращает id машин. Пусто для не-шахтёра или без ОД.
+func meleeable_vehicle_ids(actor: UnitInstance) -> Array:
+	var out: Array = []
+	if not _is_miner(actor) or actor.remaining_ap <= 0:
+		return out
+	for veh: Vehicle in state.all_vehicles():
+		if veh.alive() and veh.owner != actor.owner and _adjacent_to_vehicle(actor.coord, veh):
+			out.append(veh.id)
+	return out
 
 # --- Посадка экипажа/пассажира ---
 func _resolve_vehicle_board(intent: VehicleBoardIntent) -> ActionResult:
@@ -4765,6 +4985,30 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 			res.deaths.append(occ.id)
 			res.log("%s crushed under the %s!" % [occ.stats.display_name,
 				VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)])
+	# Наезд на мину (item 13): и противопехотная, и противотанковая рвутся под
+	# гусеницей и снимают с машины 1 прочность. Считаем ДО общей зачистки следа —
+	# иначе clear_feature() ниже стёр бы мину молча, без взрыва. Сканируем клетки,
+	# по которым машина прошла, и конечный след, куда она встала.
+	var driven: Dictionary = {}
+	for cc in (plan["crush_cells"] + plan["scatter_cells"] + plan["ram_cells"]):
+		driven[cc] = true
+	for fc in veh.footprint_from(veh.origin + dir * int(plan["steps"])):
+		driven[fc] = true
+	for mc: Vector2i in driven:
+		var mcell := state.grid.cell(mc)
+		if mcell == null:
+			continue
+		if mcell.feature_id != MCF.FEATURE_MINE and mcell.feature_id != MCF.FEATURE_AV_MINE:
+			continue
+		var av := mcell.feature_id == MCF.FEATURE_AV_MINE
+		var dmg: int = MCF.AV_MINE_VEHICLE_DAMAGE if av else MCF.MINE_VEHICLE_DAMAGE
+		mcell.clear_feature()
+		notify_cell_changed(mc)
+		_fx(res, {"fx": "debris", "at": NOWHERE, "cells": [mc]})
+		res.log("The %s rolls over %s at (%d, %d)!" % [
+			VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id),
+			"an anti-vehicle mine" if av else "a mine", mc.x, mc.y])
+		_apply_vehicle_damage(veh, dmg, "mine", res)
 	# Всё под гусеницами сносится в пол (трупы, укрытия, тараненные стены).
 	for cell_coord in (plan["crush_cells"] + plan["scatter_cells"] + plan["ram_cells"]):
 		var c := state.grid.cell(cell_coord)
@@ -4847,6 +5091,11 @@ func _resolve_vehicle_cannon(intent: VehicleCannonIntent) -> ActionResult:
 	else:
 		res.log("%s fires — shot falls short, shell lands at (%d, %d)! (roll %d, need %d+)" % [
 			spec.get("name", veh.type_id), landing.x, landing.y, roll, need])
+	# Снимок «до взрыва» для показа во время броска (item 22): разрушения и снятая
+	# прочность появятся только ПОСЛЕ того, как кубик докрутится.
+	var pre_area := cannon_blast_cells(veh, landing)
+	pre_area.append(landing)
+	_capture_visual_hold(res, pre_area)
 	# Прямое попадание в ДОТ: бетон принимает снаряд целиком (2 прочности = 1 выстрел
 	# танка), осколочного поля вокруг не возникает.
 	if _pillbox_absorbs(landing, int(gun.get("vehicle_damage", 2)), res):
@@ -4952,10 +5201,11 @@ func _apply_vehicle_damage(veh: Vehicle, amount: int, source: String, res: Actio
 	var name: String = VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)
 	veh.durability -= amount
 	res.log("%s takes %d damage (durability %d)." % [name, amount, maxi(0, veh.durability)])
-	# Танк: за каждую единицу урона случайный живой член экипажа проверяет броню.
+	# Танк: ОДИН случайный член экипажа проверяет броню за ПОПАДАНИЕ, а не за каждую
+	# снятую единицу прочности (item 16). Раньше выстрел пушки на 2 урона заставлял
+	# катить дважды и выкашивал экипаж вдвое быстрее задуманного.
 	if veh.type_id == "tank":
-		for _i in amount:
-			_tank_crew_hit(veh, res)
+		_tank_crew_hit(veh, res)
 	if veh.durability <= 0:
 		_destroy_vehicle(veh, res)
 
@@ -4971,13 +5221,24 @@ func _tank_crew_hit(veh: Vehicle, res: ActionResult) -> void:
 	if crew == null:
 		veh.occupants.remove_at(idx)
 		return
+	# Экипаж в броне держится увереннее пехоты: +1 к защите (item 16) — порог выживания
+	# на единицу ниже собственной брони, но не мягче 1+.
+	var need: int = maxi(1, crew.stats.armor_threshold - MCF.TANK_CREW_DEFENSE_BONUS)
 	var roll := state.dice.roll_d6()
-	if roll < crew.stats.armor_threshold:
+	var survived := roll >= need
+	res.dice_events.append({
+		"kind": "check", "actor": "%s (crew)" % crew.stats.display_name,
+		"roll": roll, "need": need, "ok": survived,
+	})
+	if not survived:
 		_kill(crew)
 		veh.occupants.remove_at(idx)
 		veh.corpse_slots.append(crew.stats.display_name)
-		res.log("%s (crew) is killed (roll %d, armor %d+)." % [
-			crew.stats.display_name, roll, crew.stats.armor_threshold])
+		res.log("%s (crew) is killed (roll %d, need %d+ with +1 armour)." % [
+			crew.stats.display_name, roll, need])
+	else:
+		res.log("%s (crew) shrugs off the hit (roll %d, need %d+)." % [
+			crew.stats.display_name, roll, need])
 	veh.ap = mini(veh.ap, _vehicle_crew_ap(veh))
 
 ## Уничтожение машины: экипаж гибнет, бросок d6 на взрыв; танк остаётся обломком.

@@ -59,20 +59,13 @@ func _ready() -> void:
 	vbox.add_theme_constant_override("separation", 12)
 	margin.add_child(vbox)
 
-	# Заголовок с эмблемой (item 35): logo.png лежит в комплекте, но до сих пор нигде
-	# не показывался. Если файла нет — остаётся только надпись, как и было.
+	# Заголовок без эмблемы (item 1): logo.png — это логотип Crazy Ball Runner 2D,
+	# оставшийся от донора интерфейса; на главном меню MCF ему не место. Оставляем
+	# только надпись.
 	var title_row := HBoxContainer.new()
 	title_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	title_row.add_theme_constant_override("separation", 12)
 	vbox.add_child(title_row)
-	var logo := _logo_texture()
-	if logo != null:
-		var badge := TextureRect.new()
-		badge.texture = logo
-		badge.custom_minimum_size = Vector2(56, 56)
-		badge.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		badge.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		title_row.add_child(badge)
 	var title := Label.new()
 	title.text = "MCF Tactics"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -260,12 +253,10 @@ func _host_game() -> void:
 	_start_session()
 	var err := _session.start_host(NetworkSession.DEFAULT_PORT)
 	if err == OK:
-		_set_waiting("Hosting on port %d — waiting for a player..." % NetworkSession.DEFAULT_PORT)
-		# Объявляем партию в локальной сети (item 38), чтобы клиенты нашли её без IP.
-		if _lan != null:
-			_lan.start_advertising({
-				"name": "MCF Tactics", "players": 1,
-				"port": NetworkSession.DEFAULT_PORT})
+		# item 10: хост открывает лобби СРАЗУ, не дожидаясь подключения. Объявление в
+		# локальной сети (item 38) продолжит уже само лобби — иначе, уйдя с меню, мы бы
+		# сняли маяк и клиенты перестали бы нас находить.
+		_go_lobby(true)
 	else:
 		_fail_net("Could not host (error %d). Is the port already in use?" % err)
 
@@ -348,14 +339,17 @@ func _on_net_lost() -> void:
 ## Клиент условий не выбирает — он ждёт объявления хоста прямо здесь и по нему уезжает
 ## на закупку. Дальше как раньше (#93): каждый набирает и ставит ТОЛЬКО свою армию в
 ## своей зоне, стороны обмениваются ростерами и строят ОДИНАКОВОЕ начальное состояние.
+## Гость подключился — уезжает в общее лобби (item 10 сдвинул сюда только КЛИЕНТА: хост
+## открывает лобби сразу при нажатии «Host», не дожидаясь подключения).
 func _on_peer_ready(is_host: bool) -> void:
-	NetHandoff.is_host = is_host
+	_go_lobby(is_host)
+
+## Передать сессию в лобби и уйти туда. Общий путь для хоста (сразу), гостя (по связи)
+## и одиночки (session == null).
+func _go_lobby(is_host: bool) -> void:
 	GameConfig.p2_is_ai = false
 	GameConfig.free_placement = true
 	MapHandoff.pending = null
-	# И хост, и подключившийся гость попадают в ОБЩЕЕ лобби (item 4/61). Гость видит его
-	# только для чтения — из управления ему доступен лишь выбор своего цвета, — а условия
-	# матча (K_SETUP) он ждёт уже внутри лобби и по ним уходит на закупку.
 	NetHandoff.session = _session
 	NetHandoff.is_host = is_host
 	_session = null  # узел уходит дальше, из меню его больше не трогаем
@@ -370,15 +364,6 @@ func _menu_button(text: String, handler: Callable) -> Button:
 	btn.pressed.connect(handler)
 	return btn
 
-## Эмблема из комплекта. Грузится как обычный файл, а не как ресурс, — той же
-## дорогой, что и остальные заменяемые картинки интерфейса (#55): подменил png —
-## видно со следующего запуска.
-func _logo_texture() -> Texture2D:
-	const PATH := "res://interface_textures/logo.png"
-	if not ResourceLoader.exists(PATH):
-		return null
-	return load(PATH) as Texture2D
-
 func _refresh_saves() -> void:
 	_saves_list.clear()
 	_map_names = MapData.list_maps()
@@ -389,10 +374,16 @@ func _refresh_saves() -> void:
 	for name in _map_names:
 		_saves_list.add_item(name.get_basename())
 
+## Одиночная игра теперь открывает ТО ЖЕ лобби, что и мультиплеер (item 20): единый
+## экран создания партии, где противники — слоты-ИИ. Отдельного «Match Setup» и опции
+## «Default squads» больше нет — расстановка всегда свободная.
 func _new_game() -> void:
 	SaveHandoff.discard()
+	NetHandoff.discard()  # одиночка — без сессии
 	GameConfig.map_path = ""
-	get_tree().change_scene_to_file(SETUP_SCENE)
+	GameConfig.p2_is_ai = false
+	GameConfig.free_placement = true
+	get_tree().change_scene_to_file(LOBBY_SCENE)
 
 func _on_map_activated(idx: int) -> void:
 	if idx < 0 or idx >= _map_names.size():

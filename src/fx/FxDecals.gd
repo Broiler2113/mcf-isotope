@@ -25,9 +25,10 @@ const DAMAGE_NONE := 0
 const DAMAGE_RUBBLE := 1     # пол в зоне взрыва
 const DAMAGE_EPICENTER := 2  # клетка эпицентра — выгоревшая, сильнее побитая
 
-## Сколько осколков даёт одно разбитое стекло (#21.2) — случайно 2..5.
+## Сколько осколков даёт одно разбитое стекло (#21.2). Урезано (item 5: «гипероптимизация
+## осколков») — 2..3 вместо 2..5: на бою в тысячу бойцов косметика иначе плодит тысячи точек.
 const SHARDS_MIN := 2
-const SHARDS_MAX := 5
+const SHARDS_MAX := 3
 ## Полёт осколка/гильзы: доли клетки в секунду и длительность. «Небольшая скорость»
 ## из задания — осколок пролетает меньше клетки.
 const SHARD_FLIGHT_SEC := 0.45
@@ -36,15 +37,17 @@ const SHARD_RANGE_MAX := 0.85
 const CASING_FLIGHT_SEC := 0.35
 const CASING_RANGE_MIN := 0.15
 const CASING_RANGE_MAX := 0.45
-## Брызги крови: капли летят против направления убившего выстрела.
-const SPLATTER_MIN := 3
-const SPLATTER_MAX := 6
+## Брызги крови: капли летят против направления убившего выстрела. Урезано (item 5:
+## «гипероптимизация крови») — 2..4 вместо 3..6: на 500×500 капли доминировали в кадре.
+const SPLATTER_MIN := 2
+const SPLATTER_MAX := 4
 const SPLATTER_RANGE := 0.7
 
 ## Потолок осевших частиц. Косметика не должна расти бесконечно: длинный бой на
 ## большой карте иначе набирает десятки тысяч точек, и отрисовка начинает стоить
-## дороже самой игры. Старые вытесняются, как в кольцевом буфере.
-const PROPS_CAP := 1500
+## дороже самой игры. Старые вытесняются, как в кольцевом буфере. Урезан втрое
+## (item 5): на бою в тысячу бойцов 1500 осевших точек заметно роняли кадр.
+const PROPS_CAP := 500
 
 ## Vector2i -> DAMAGE_*: побитый пол. Эпицентр не понижается до щебня повторным
 ## взрывом рядом — только повышается.
@@ -106,9 +109,15 @@ func _casings(ev: Dictionary) -> void:
 	var toward: Vector2i = ev.get("toward", at)
 	# Гильза вылетает назад — то есть против направления стрельбы.
 	var back := _away(at, toward)
+	# Гильза противотанкиста (item 24): та же система, но частица «shell_casing» —
+	# оранжевая и вдвое крупнее (цвет/размер задаёт отрисовка по виду частицы), и летит
+	# чуть дальше обычной. Отдельный вид, чтобы не путать с пистолетной гильзой.
+	var shell: bool = bool(ev.get("shell", false))
+	var kind := "shell_casing" if shell else "casing"
+	var r_max: float = CASING_RANGE_MAX * (1.6 if shell else 1.0)
 	for i in int(ev.get("count", 0)):
-		var rng := _rng_for("casing", at, i)
-		_launch("casing", at, back, rng, CASING_RANGE_MIN, CASING_RANGE_MAX, CASING_FLIGHT_SEC)
+		var rng := _rng_for(kind, at, i)
+		_launch(kind, at, back, rng, CASING_RANGE_MIN, r_max, CASING_FLIGHT_SEC)
 
 ## 21.4 — лужа под трупом плюс веер брызг против направления убившего выстрела.
 func _blood(ev: Dictionary) -> void:

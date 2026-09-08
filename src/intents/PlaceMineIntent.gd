@@ -9,7 +9,10 @@ extends Intent
 ## требует, чтобы прерванный сапёр мог «доставить» оставшиеся мины позже.
 
 var target: Vector2i
+## true — противотанковая мина (item 13): бьёт только по технике, пехоту пропускает.
+var anti_vehicle: bool = false
 
-func _init(p_actor_id: int, p_target: Vector2i) -> void:
+func _init(p_actor_id: int, p_target: Vector2i, p_anti_vehicle: bool = false) -> void:
 	super(p_actor_id)
 	target = p_target
+	anti_vehicle = p_anti_vehicle

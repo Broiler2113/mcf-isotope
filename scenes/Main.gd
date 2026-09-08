@@ -27,6 +27,7 @@ const FEATURE_TAGS := {
 	MCF.FEATURE_SANDBAG_WALL: "SB", MCF.FEATURE_HEDGEHOG_SANDBAGS: "hSB",
 	MCF.FEATURE_DOT_OPEN: "PBX+",
 	MCF.FEATURE_MINE: "!",
+	MCF.FEATURE_AV_MINE: "AV",
 }
 
 ## Хелпер оформления окон в стиле «2003 Steam» (preload, без class_name).
@@ -35,10 +36,10 @@ const SteamChrome = preload("res://src/ui/SteamChrome.gd")
 ## GRAB — единая «рука» (#50): и захват бойца, и волочение трупа/мешков/ежа/кучи земли.
 ## Отдельного режима DRAG больше нет — кнопка одна, цели показываются вместе.
 enum Mode {NONE, MENU, MOVE, SHOOT, GRAB, ITEM, PUSH, DRONE_FLY, BUILD, BUILD_WALL, BREAK, DPMG_FIRE, DIG, CARRY_DROP,
-	CORPSE_DROP, WELD, MOVE_HELD, MINE,
+	CORPSE_DROP, WELD, MOVE_HELD, MINE, DISARM,
 	GROUP_MENU, GROUP_MOVE,
 	VEH_MENU, VEH_MOVE, VEH_TURN, VEH_CANNON, VEH_DISEMBARK,
-	DRAW}
+	DRAW, ERASE}
 
 ## Аннотации на поле (item 51). Каждый штрих — список клеток, автор и область видимости.
 enum DrawScope {SELF, TEAM}
@@ -68,8 +69,8 @@ const UNKNOWN_COL := Color(0.02, 0.02, 0.03, 1.0)
 ## «Нигде» — маркер отсутствия клетки (тот же, что и в резолвере).
 const NOWHERE := Vector2i(-9999, -9999)
 
-const HOVER_PREVIEW_MODES := [Mode.MOVE, Mode.ITEM, Mode.SHOOT, Mode.DIG, Mode.MINE, Mode.CORPSE_DROP,
-		Mode.WELD, Mode.MOVE_HELD, Mode.VEH_TURN, Mode.VEH_CANNON]
+const HOVER_PREVIEW_MODES := [Mode.MOVE, Mode.ITEM, Mode.SHOOT, Mode.DIG, Mode.MINE, Mode.DISARM,
+		Mode.CORPSE_DROP, Mode.WELD, Mode.MOVE_HELD, Mode.VEH_TURN, Mode.VEH_CANNON]
 
 ## Цвета «своя/чужая» для перспективной раскраски дуэли (#93). Цвета КОНКРЕТНЫХ
 ## игроков берутся из ростера (Roster.PALETTE) — их до 26, в словарь на два они
@@ -101,6 +102,10 @@ var reach: Movement.Reachability = null
 var reach_budget: int = 0
 var target_ids: Array = []
 var item_cells: Array = []
+## Соседние вражеские машины, по которым шахтёр может ударить в режиме «Hit» (item 15).
+var _melee_veh_ids: Array = []
+## Режим установки мин кладёт противотанковую мину, а не противопехотную (item 13).
+var _mine_av: bool = false
 var build_feature: String = ""
 ## Рисование ЛДФ-стены (§3.7): цепочка выбранных клеток и флаг «тянем» мышью.
 var _wall_cells: Array[Vector2i] = []
@@ -108,6 +113,17 @@ var _wall_drawing: bool = false
 ## Юниты, чья смерть уже применена, но ещё анимируется бросок защиты (#46): рисуем
 ## их живыми, пока крутится кубик, чтобы не «спойлерить» исход.
 var _pending_death_ids: Dictionary = {}
+## «Визуальный слепок» зоны взрыва ДО разрушения (item 22): пока крутится кубик выстрела,
+## клетки и техника рисуются по этим старым значениям, чтобы исход не опережал бросок.
+## {"cells": {Vector2i: {...}}, "vehicles": {vid: {...}}}. Пусто — рисуем как есть.
+var _hold_visual: Dictionary = {}
+## Видимый на экране диапазон клеток (item 5) — отсечение трупов и косметики за краем.
+var _cull_x0: int = 0
+var _cull_x1: int = 0
+var _cull_y0: int = 0
+var _cull_y1: int = 0
+func _cell_on_screen(x: int, y: int) -> bool:
+	return x >= _cull_x0 and x <= _cull_x1 and y >= _cull_y0 and y <= _cull_y1
 ## Проигрываемый пеший переход: id юнита → клетка, на которой он сейчас РИСУЕТСЯ (#96).
 ## Мирные ходят вне потока намерений, и без этого весь их марш применялся одним кадром —
 ## житель возникал вплотную к отряду. Состояние уже переехало; словарь влияет только на
@@ -201,7 +217,18 @@ const HUD_MIN_SIZE := Vector2(230, 170)
 ## Стартовый размер боковой панели (#54). Панель заметно уже и ниже прежней
 ## (540×680): она закрывала половину поля, а сеть с неё уехала в главное меню.
 const HUD_START_SIZE := Vector2(330, 430)
+## Ширина правого меню (item 6): панель приклеена к правому краю, тянется только по
+## горизонтали в этих пределах.
+var _hud_width: float = 250.0
+const HUD_WIDTH_MIN := 180.0
+const HUD_WIDTH_MAX := 460.0
+## Толщина кисти рисования (пиксели линии) и радиус ластика (в клетках), item 6.
+var _draw_brush: int = 3
+var _erase_brush: int = 1
 var _status_label: Label
+var _turn_neighbors_label: Label
+var _draw_btn: Button
+var _erase_btn: Button
 var _info_label: Label
 ## Живой свод армий и место игрока в очереди (item 20). Полный разбор инициативы
 ## открывается кнопкой в отдельном центральном оверлее (item 49).
@@ -214,6 +241,8 @@ var _chat_body: VBoxContainer
 var _chat_log: RichTextLabel
 var _chat_input: LineEdit
 var _log_label: RichTextLabel
+## Журнал боя вынесен из правого меню в свою панель (item 6), внизу слева.
+var _log_panel: PanelContainer
 var _menu: PanelContainer
 var _picker: PanelContainer
 var _dice: DiceRoller
@@ -242,6 +271,9 @@ var _replay_bar: PanelContainer = null
 var _replay_label: Label = null
 var _replay_play_btn: Button = null
 var _replay_speed_btn: Button = null
+## Таймлайн перемотки записи (item 7) и флаг «обновляем программно, не сейкаем».
+var _replay_slider: HSlider = null
+var _replay_slider_syncing: bool = false
 var _save_btn: Button = null
 ## Пауза между действиями при автопроигрывании — делится на выбранную скорость.
 const REPLAY_STEP_DELAY := 0.5
@@ -438,14 +470,72 @@ func _flush_replay() -> void:
 func _save_game() -> void:
 	if replay != null or state == null:
 		return
+	# Спрашиваем имя сохранения (item 19): игрок сам называет партию, а не получает
+	# файл с одной лишь меткой времени. Пустое поле откатывается на метку времени.
+	_prompt_save_name()
+
+## Модальное окошко ввода имени сохранения (item 19).
+func _prompt_save_name() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 80
+	add_child(layer)
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.5)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	layer.add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	layer.add_child(center)
+	var panel := PanelContainer.new()
+	SteamChrome.apply_panel(panel)
+	center.add_child(panel)
+	var frame := VBoxContainer.new()
+	frame.add_theme_constant_override("separation", 0)
+	panel.add_child(frame)
+	frame.add_child(SteamChrome.header_bar("Save Game"))
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 10)
+	frame.add_child(SteamChrome.pad(box, 16, 12))
+	var lbl := Label.new()
+	lbl.text = "Name this save:"
+	box.add_child(lbl)
+	var edit := LineEdit.new()
+	edit.custom_minimum_size = Vector2(280, 0)
+	edit.text = str(_match_meta().get("map", "match"))
+	box.add_child(edit)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_END
+	row.add_theme_constant_override("separation", 8)
+	box.add_child(row)
+	var cancel := Button.new()
+	cancel.text = "Cancel"
+	row.add_child(cancel)
+	var ok := Button.new()
+	ok.text = "Save"
+	row.add_child(ok)
+	Ui.theme_canvas_layers()
+	var close := func() -> void: layer.queue_free()
+	cancel.pressed.connect(close)
+	var commit := func() -> void:
+		_do_save_game(edit.text)
+		layer.queue_free()
+	ok.pressed.connect(commit)
+	edit.text_submitted.connect(func(_t: String) -> void: commit.call())
+	edit.grab_focus()
+	edit.select_all()
+
+func _do_save_game(chosen_name: String) -> void:
+	if replay != null or state == null:
+		return
 	var meta := _match_meta()
 	var data := ReplayFile.build_save(state, resolver, meta, _fx.to_dict())
-	var name := ReplayFile.stamped(str(meta.get("map", "match")), ReplayFile.SAVE_EXT)
+	var name := ReplayFile.named(chosen_name, ReplayFile.SAVE_EXT)
 	var path := ReplayFile.path_for(ReplayFile.SAVE_DIR, name)
 	if ReplayFile.write(path, data):
 		state.log.add("— Game saved as %s —" % name)
 	else:
 		state.log.add("[denied] Could not write the save file.")
+	_refresh_status()
 
 # --- Загрузка сохранённой партии и повтора (M12) ------------------------------
 
@@ -523,9 +613,11 @@ func _show_result(result: ActionResult) -> void:
 		_pending_death_ids.clear()
 		for id: int in result.deaths:
 			_pending_death_ids[id] = true
+		_hold_visual = result.visual_hold  # item 22
 		queue_redraw()
 		await _play_dice(result.dice_events)
 		_pending_death_ids.clear()
+		_hold_visual = {}
 	if not result.fx.is_empty():
 		_fx.apply(result.fx)
 	state.log.publish_result(result)
@@ -583,6 +675,12 @@ func _refresh_replay_bar() -> void:
 	_replay_label.text = replay.position_text()
 	_replay_play_btn.text = "❚❚" if _replay_playing else "▶"
 	_replay_speed_btn.text = "%dx" % int(_replay_speed)
+	# Таймлайн (item 7) отражает позицию, не вызывая seek: обновляем под флагом.
+	if _replay_slider != null:
+		_replay_slider_syncing = true
+		_replay_slider.max_value = maxi(1, replay.step_count())
+		_replay_slider.value = clampi(replay.index, 0, replay.step_count())
+		_replay_slider_syncing = false
 
 ## Перенести выбор экрана подготовки (кто машина, какая сложность) в ростер.
 ## Ростер, пришедший из лобби, уже всё это знает — тогда эта синхронизация просто
@@ -658,6 +756,18 @@ func _unhandled_input(event: InputEvent) -> void:
 		_escape_pressed()
 		get_viewport().set_input_as_handled()
 		return
+	# Tab — показать/скрыть оверлей инициативы (item 6).
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_TAB:
+		_toggle_initiative_overlay()
+		get_viewport().set_input_as_handled()
+		return
+	# Ctrl+S — сохранить партию (item 6/19): кнопки Save в правом меню больше нет.
+	if event is InputEventKey and event.pressed and not event.echo \
+			and event.keycode == KEY_S and event.ctrl_pressed:
+		if replay == null:
+			_save_game()
+		get_viewport().set_input_as_handled()
+		return
 	# Ввод над всплывающим меню принадлежит меню (#8): не панорамируем, не зумим
 	# и не кликаем по полю под ним. Прокрутку колесом уже получил сам ScrollContainer;
 	# всё, что «просочилось» сюда (например, докрутка на границе), просто гасим, чтобы
@@ -727,6 +837,18 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event is InputEventMouseMotion:
 			if _stroke_drawing:
 				_stroke_add(_pos_to_cell(get_global_mouse_position()))
+			return
+	# Ластик (item 6): тем же жестом стираем СВОИ штрихи в радиусе кисти под курсором.
+	if mode == Mode.ERASE:
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed:
+				_stroke_drawing = true
+				_erase_at(_pos_to_cell(get_global_mouse_position()))
+			else:
+				_stroke_drawing = false
+			return
+		if event is InputEventMouseMotion and _stroke_drawing:
+			_erase_at(_pos_to_cell(get_global_mouse_position()))
 			return
 	if HOVER_PREVIEW_MODES.has(mode) and event is InputEventMouseMotion:
 		queue_redraw()  # обновляем предпросмотр радиуса/струи/окопа под курсором
@@ -847,6 +969,12 @@ func _handle_click(coord: Vector2i) -> void:
 			if occupant != null and target_ids.has(occupant.id):
 				_begin_shoot(occupant)
 				return
+			# Шахтёр (item 15): клик по соседней вражеской машине — удар ломом по корпусу.
+			if not _melee_veh_ids.is_empty():
+				var mvid := state.grid.vehicle_at(coord)
+				if _melee_veh_ids.has(mvid):
+					_submit(VehicleMeleeIntent.new(selected_id, mvid))
+					return
 			# Марксманн: клик по ЛЮБОЙ клетке задаёт направление, луч уходит вперёд (#49).
 			# Отказ (мало ОД, клик по себе) отдаём резолверу — он объяснит причину в журнале.
 			if _is_marksman(_selected_unit()) and coord != _selected_unit().coord:
@@ -963,7 +1091,16 @@ func _handle_click(coord: Vector2i) -> void:
 			# Мины ставятся по одной, и режим НЕ закрывается: за одно действие их
 			# кладут до пяти, и выходить в меню после каждой было бы мучением.
 			if item_cells.has(coord):
-				_submit(PlaceMineIntent.new(selected_id, coord))
+				_submit(PlaceMineIntent.new(selected_id, coord, _mine_av))
+				return
+			if _is_own_active(occupant):
+				_select(occupant)
+				return
+			_back_to_menu()
+		Mode.DISARM:
+			# Клик по подсвеченной чужой мине рядом — обезвредить её (item 13).
+			if item_cells.has(coord):
+				_submit(DisarmMineIntent.new(selected_id, coord))
 				return
 			if _is_own_active(occupant):
 				_select(occupant)
@@ -1334,6 +1471,7 @@ func _enter_shoot() -> void:
 	mode = Mode.SHOOT
 	reach = null
 	item_cells = []
+	_melee_veh_ids = []
 	# Устаревшую привязку burst'а сбрасываем, чтобы можно было начать новую стрельбу (#45).
 	if _pending_shoot(u) and not _valid_pending_shoot(u):
 		u.action_state = null
@@ -1347,6 +1485,9 @@ func _enter_shoot() -> void:
 		# Огнемётчик может пустить струю по пустой клетке пола (в её направлении).
 		elif u.stats.special_ability_id == MCF.ABILITY_FLAMETHROWER:
 			item_cells = resolver.flammable_cells(u)
+		# Шахтёр может ломом бить по соседней вражеской машине (item 15).
+		elif u.stats.special_ability_id == MCF.ABILITY_MINER:
+			_melee_veh_ids = resolver.meleeable_vehicle_ids(u)
 	else:
 		target_ids = []
 	_menu.hide()
@@ -1799,14 +1940,29 @@ func _enter_rsp_fire(dpmg_coord: Vector2i) -> void:
 
 ## Режим установки мин (item 45). Как и копка, живёт на кредите: первая мина тратит
 ## ОД, остальные бесплатны, пока кредит не кончился.
-func _enter_mine() -> void:
+## av — класть противотанковые мины (item 13). Режим общий, отличается только тем,
+## какую мину кладёт клик.
+func _enter_mine(av: bool = false) -> void:
 	var u := _selected_unit()
 	if u == null or (u.remaining_ap <= 0 and u.mine_credits <= 0):
 		return
 	mode = Mode.MINE
+	_mine_av = av
 	reach = null
 	target_ids = []
 	item_cells = resolver.mine_cells(u)
+	_menu.hide()
+	queue_redraw()
+
+## Обезвреживание подсвеченных чужих мин рядом (item 13).
+func _enter_disarm() -> void:
+	var u := _selected_unit()
+	if u == null or u.remaining_ap <= 0:
+		return
+	mode = Mode.DISARM
+	reach = null
+	target_ids = []
+	item_cells = resolver.disarmable_mine_cells(u)
 	_menu.hide()
 	queue_redraw()
 
@@ -1903,9 +2059,11 @@ func _on_intent_ready(intent: Intent) -> void:
 				"kind": "ap", "unit": ap_actor.id,
 				"from": ap_before, "left": ap_actor.remaining_ap,
 			})
+		_hold_visual = result.visual_hold  # item 22: держим «до взрыва», пока крутится кубик
 		queue_redraw()
 		await _play_dice(result.dice_events)
 		_pending_death_ids.clear()
+		_hold_visual = {}
 		queue_redraw()
 	# Косметика (#21) добавляется ПОСЛЕ анимации броска — вместе с показом смерти,
 	# иначе лужа крови проявлялась бы раньше, чем кубик решил судьбу цели.
@@ -2143,6 +2301,11 @@ func _dice_steps(ev: Dictionary) -> Array:
 			var hit_faces: Array = []
 			var pen_faces: Array = []
 			for det in ev["shots"]:
+				# Пуля, застрявшая в стекле, до броска на попадание не дошла (#29):
+				# её hit_roll — служебный 0, и рисовать его кубиком нельзя (item 2:
+				# «нельзя выкинуть 0»). Факт застревания уже виден в журнале.
+				if det.get("stopped_by_glass", false):
+					continue
 				hit_faces.append(
 					{"value": det["hit_roll"], "good": det["hit"], "tag": "Hit %d+" % det["need"]})
 				if det["hit"]:
@@ -2445,9 +2608,22 @@ func _draw() -> void:
 	var fog_col := Color(0.02, 0.02, 0.04, 0.55)
 	var label_off := Vector2(6, CELL - 4)
 	var fx_damage: Dictionary = _fx.floor_damage
-	for y in gh:
+	# Отсечение по вьюпорту (item 5): на большой карте (город 50×50, бой 500×500) или
+	# крупном зуме рисуем ТОЛЬКО клетки, попадающие на экран, а не всю сетку целиком —
+	# это снимает основную нагрузку кадра. Границы с запасом в клетку.
+	var _vp := get_viewport_rect().size
+	var _tl := _pos_to_cell(Vector2.ZERO)
+	var _br := _pos_to_cell(_vp)
+	var vx0 := clampi(_tl.x - 1, 0, gw - 1)
+	var vx1 := clampi(_br.x + 1, 0, gw - 1)
+	var vy0 := clampi(_tl.y - 1, 0, gh - 1)
+	var vy1 := clampi(_br.y + 1, 0, gh - 1)
+	# Тот же диапазон членами — для функций отрисовки трупов и косметики (item 5).
+	_cull_x0 = _tl.x - 1; _cull_x1 = _br.x + 1
+	_cull_y0 = _tl.y - 1; _cull_y1 = _br.y + 1
+	for y in range(vy0, vy1 + 1):
 		var oy: float = ORIGIN.y + y * CELL
-		for x in gw:
+		for x in range(vx0, vx1 + 1):
 			var cell := grid.cell_fast(x, y)
 			var origin := Vector2(ORIGIN.x + x * CELL, oy)
 			var rect := Rect2(origin, csize)
@@ -2537,6 +2713,13 @@ func _draw() -> void:
 		# Клетки пола под спецудар (противотанкист — взрыв, огнемётчик — струя).
 		for coord in item_cells:
 			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(0.9, 0.5, 0.1, 0.16))
+		# Соседние вражеские машины под удар шахтёра (item 15) — обводим их след.
+		for mvid in _melee_veh_ids:
+			var mveh: Vehicle = state.get_vehicle(mvid)
+			if mveh != null:
+				for fc: Vector2i in mveh.footprint():
+					draw_rect(Rect2(_cell_origin(fc), Vector2(CELL, CELL)),
+						Color(0.95, 0.55, 0.15, 0.28))
 		var shov := _pos_to_cell(get_global_mouse_position())
 		var su := _selected_unit()
 		# Марксманн (#49): под курсором рисуем сам луч — куда он долетит и кого заденет.
@@ -2637,10 +2820,17 @@ func _draw() -> void:
 
 	if mode == Mode.MINE:
 		var mhov := _pos_to_cell(get_global_mouse_position())
+		# Противотанковые мины подсвечиваем синевой, противопехотные — оранжевым (item 13).
+		var lay_col := Color(0.3, 0.55, 0.9, 0.28) if _mine_av else Color(0.85, 0.35, 0.15, 0.28)
+		var lay_hi := Color(0.4, 0.65, 1.0, 0.5) if _mine_av else Color(0.95, 0.45, 0.2, 0.5)
 		for coord in item_cells:
-			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(0.85, 0.35, 0.15, 0.28))
+			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), lay_col)
 		if item_cells.has(mhov):
-			draw_rect(Rect2(_cell_origin(mhov), Vector2(CELL, CELL)), Color(0.95, 0.45, 0.2, 0.5))
+			draw_rect(Rect2(_cell_origin(mhov), Vector2(CELL, CELL)), lay_hi)
+
+	if mode == Mode.DISARM:
+		for coord in item_cells:
+			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(0.3, 0.85, 0.5, 0.35))
 
 	if mode == Mode.DIG:
 		var dhov := _pos_to_cell(get_global_mouse_position())
@@ -2730,25 +2920,35 @@ func _draw() -> void:
 		for coord in item_cells:
 			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(0.4, 0.7, 1.0, 0.28))
 
-	# Статические объекты на клетках (станции дронов и т. п.).
-	for y in gh:
+	# Статические объекты на клетках (станции дронов и т. п.) — тоже только на экране (item 5).
+	for y in range(vy0, vy1 + 1):
 		var foy: float = ORIGIN.y + y * CELL
-		for x in gw:
+		for x in range(vx0, vx1 + 1):
 			var fcell := grid.cell_fast(x, y)
-			if fcell.feature_id == "":
+			# item 22: пока крутится кубик выстрела, клетка рисуется по «слепку до взрыва» —
+			# снесённое укрепление ещё стоит, потрескавшееся ещё целое.
+			var _fid := fcell.feature_id
+			var _fdur := fcell.feature_durability
+			if not _hold_visual.is_empty():
+				var _hc: Dictionary = _hold_visual.get("cells", {})
+				var _hkey := Vector2i(x, y)
+				if _hc.has(_hkey):
+					_fid = _hc[_hkey]["feature_id"]
+					_fdur = _hc[_hkey]["feature_durability"]
+			if _fid == "":
 				continue
 			# Мина видна только тому, кто её поставил, — и тому, чей сапёр её нашёл
 			# (item 45). Иначе смысла в минном поле не было бы вовсе.
-			if fcell.feature_id == MCF.FEATURE_MINE \
+			if (_fid == MCF.FEATURE_MINE or _fid == MCF.FEATURE_AV_MINE) \
 					and not resolver.mine_visible_to(viewer, Vector2i(x, y)):
 				continue
 			var o := Vector2(ORIGIN.x + x * CELL, foy)
 			# Имя картинки совпадает с id объекта (sandbags.png, trench.png...) (#55).
-			if Sprites.draw_texture_override(self, fcell.feature_id, o, float(CELL)):
+			if Sprites.draw_texture_override(self, _fid, o, float(CELL)):
 				continue
-			var tag: String = FEATURE_TAGS.get(fcell.feature_id, "?")
+			var tag: String = FEATURE_TAGS.get(_fid, "?")
 			# ЛДФ — чёрный монолит (#85): заливка, а не контур, чтобы отличался от бетона.
-			if fcell.feature_id == MCF.FEATURE_LDF:
+			if _fid == MCF.FEATURE_LDF:
 				draw_rect(Rect2(o + Vector2(3, 3), Vector2(CELL - 6, CELL - 6)), LDF_COLOR)
 				draw_rect(Rect2(o + Vector2(3, 3), Vector2(CELL - 6, CELL - 6)),
 					Color(0.35, 0.35, 0.4), false, 1.0)
@@ -2761,7 +2961,7 @@ func _draw() -> void:
 			draw_string(font, o + Vector2(6, CELL - 15), tag,
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.75, 0.75, 0.85))
 			# Треснувший ДОТ (потеряна прочность) — красная риска в углу (#89).
-			if fcell.feature_durability > 0 and fcell.feature_durability < MCF.feature_durability(fcell.feature_id):
+			if _fdur > 0 and _fdur < MCF.feature_durability(_fid):
 				draw_line(o + Vector2(CELL - 12, 8), o + Vector2(CELL - 6, 16),
 					Color(0.9, 0.25, 0.2), 2.0)
 
@@ -2791,10 +2991,13 @@ func _draw() -> void:
 		# счётчик врал: сверху «x2», а под ним ещё один невидимый труп-occupant.
 		if state.grid.cell(unit.coord).corpse_count > 0:
 			continue
+		if not _cell_on_screen(unit.coord.x, unit.coord.y):
+			continue
 		_draw_corpse(unit.coord, 1)
 
-	for cy in state.grid.height:
-		for cx in state.grid.width:
+	# Кучи трупов — только в видимом окне (item 5), а не по всей сетке.
+	for cy in range(vy0, vy1 + 1):
+		for cx in range(vx0, vx1 + 1):
 			var pile_coord := Vector2i(cx, cy)
 			var pile_cell := state.grid.cell(pile_coord)
 			if pile_cell == null or pile_cell.corpse_count <= 0:
@@ -2820,17 +3023,26 @@ func _draw() -> void:
 				break
 		if not vseen:
 			continue
+		# item 22: во время броска выстрела показываем ПРЕЖНЮЮ прочность/целость машины —
+		# снятие прочности и превращение в обломок не должны опережать кубик.
+		var disp_wrecked := veh.wrecked
+		var disp_dur := veh.durability
+		if not _hold_visual.is_empty():
+			var _hv: Dictionary = _hold_visual.get("vehicles", {})
+			if _hv.has(veh.id):
+				disp_wrecked = _hv[veh.id]["wrecked"]
+				disp_dur = _hv[veh.id]["durability"]
 		var org := _cell_origin(veh.origin)
 		var vsize := Vector2(veh.size.x * CELL, veh.size.y * CELL)
 		var hull := Rect2(org + Vector2(3, 3), vsize - Vector2(6, 6))
 		var hull_col: Color = _side_color(veh.owner)
-		if veh.wrecked:
+		if disp_wrecked:
 			hull_col = Color(0.3, 0.3, 0.32)
 		var vcenter := org + vsize * 0.5
 		# Картинка машины растягивается на весь след и поворачивается по фронту (#55).
-		var veh_name := (veh.type_id + "_wreck") if veh.wrecked else veh.type_id
+		var veh_name := (veh.type_id + "_wreck") if disp_wrecked else veh.type_id
 		var veh_key := Sprites.resolve(veh_name)
-		if veh_key == "" and veh.wrecked:
+		if veh_key == "" and disp_wrecked:
 			veh_key = Sprites.resolve(veh.type_id)
 		if veh_key != "":
 			Sprites.draw_texture_override_rect(self, veh_key, Rect2(org, vsize),
@@ -2839,19 +3051,25 @@ func _draw() -> void:
 			draw_rect(hull, hull_col.darkened(0.35))
 			draw_rect(hull, hull_col, false, 3.0)
 			# Направление (стрелка фронта) — у танка.
-			if veh.facing != Vector2i.ZERO and not veh.wrecked:
+			if veh.facing != Vector2i.ZERO and not disp_wrecked:
 				var dir := Vector2(veh.facing.x, veh.facing.y).normalized()
 				draw_line(vcenter, vcenter + dir * (CELL * 0.6), Color.WHITE, 3.0)
 		var label: String = VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)
-		if veh.wrecked:
+		if disp_wrecked:
 			label = "WRECK"
 		draw_string(font, org + Vector2(8, 18), "%s" % label,
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color.WHITE)
-		if not veh.wrecked:
+		if not disp_wrecked:
 			draw_string(font, org + Vector2(8, vsize.y - 8),
-				"DUR %d  CREW %d" % [veh.durability, veh.living_crew_count()],
+				"DUR %d  CREW %d" % [disp_dur, veh.living_crew_count()],
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.9, 0.9, 0.6))
+			# Жёлтые точки ОД машины (item 3): та же метка, что у пехоты, — по одной точке
+			# на очко действия, в правом-верхнем углу следа, чтобы не спорить с подписью.
+			var vap: int = maxi(0, veh.ap)
+			for i in vap:
+				draw_circle(org + Vector2(vsize.x - 8 - i * 8, 8), 3, Color(1, 1, 0.4))
 
+	var _drones_pending: Array = []
 	for unit in state.all_units():
 		# Экипаж внутри машины на поле не рисуется (§техника).
 		if unit.aboard_vehicle_id != -1:
@@ -2859,6 +3077,10 @@ func _draw() -> void:
 		# Во время проигрывания шагов житель рисуется на промежуточной клетке (#96),
 		# а не там, где он уже стоит по состоянию.
 		var at := _draw_cell(unit)
+		# Отсечение по вьюпорту (item 5): бойца за краем экрана не рисуем — на 500×500 это
+		# главный выигрыш, ведь армия почти всегда шире окна.
+		if at.x < vx0 or at.x > vx1 or at.y < vy0 or at.y > vy1:
+			continue
 		var center := _cell_origin(at) + Vector2(CELL, CELL) * 0.5
 		# Туман войны (§3.9): чужой юнит виден, только если его клетку видит команда.
 		if unit.owner != viewer and not visible.has(at):
@@ -2869,27 +3091,10 @@ func _draw() -> void:
 		if unit.status == MCF.Status.CORPSE and not _pending_death_ids.has(unit.id):
 			continue
 		if unit.is_drone:
-			# Дрон висит над клеткой (#13): рисуем со сдвигом в верхний-правый угол,
-			# чтобы был виден наземный юнит/труп под ним.
-			var dc := _cell_origin(at) + Vector2(CELL * 0.72, CELL * 0.28)
-			# Тень под дроном по центру клетки — подсказка, что он парит.
-			draw_circle(center, CELL * 0.1, Color(0, 0, 0, 0.25))
-			var s := CELL * 0.2
-			var drone_key := Sprites.resolve("drone", _owner_suffix(unit.owner))
-			if drone_key != "":
-				# Картинка дрона меньше клетки — он висит в углу над наземным юнитом.
-				var dsz := Vector2(CELL, CELL) * 0.5
-				Sprites.draw_texture_override_rect(self, drone_key, Rect2(dc - dsz * 0.5, dsz))
-			else:
-				var pts := PackedVector2Array([
-					dc + Vector2(0, -s), dc + Vector2(s, 0),
-					dc + Vector2(0, s), dc + Vector2(-s, 0)])
-				draw_colored_polygon(pts, _side_color(unit.owner))
-				draw_polyline(pts + PackedVector2Array([pts[0]]), Color(0.3, 0.9, 0.9), 2.0)
-			if unit.id == selected_id:
-				draw_arc(dc, CELL * 0.3, 0, TAU, 24, Color(1, 0.9, 0.2), 3.0)
-			for i in _draw_ap(unit):
-				draw_circle(_cell_origin(at) + Vector2(6 + i * 8, CELL - 6), 3, Color(1, 1, 0.4))
+			# Дроны рисуем ПОСЛЕ всех наземных юнитов и машин (item 14): собираем их
+			# здесь, а сам разлёт — отдельным проходом ниже, чтобы дрон гарантированно
+			# был поверх корпуса, над которым висит.
+			_drones_pending.append({"unit": unit, "at": at})
 			continue
 		# Боец: картинка по id типа (можно отдельную на сторону — light_infantry_p1),
 		# иначе прежний кружок владельца с инициалами (#55).
@@ -2927,6 +3132,10 @@ func _draw() -> void:
 			_draw_corpse_marker(_cell_origin(at) + Vector2(9, 9),
 				unit.carried_corpses, font)
 
+	# Дроны — верхний слой (item 14): рисуются поверх машин и наземных юнитов.
+	for d: Dictionary in _drones_pending:
+		_draw_drone(d["unit"], d["at"])
+
 	# Рамка выделения (#18): сетка-выровненный зелёный прямоугольник поверх поля.
 	if _box_dragging:
 		var ba := _pos_to_cell(_box_start_screen)
@@ -2941,6 +3150,31 @@ func _draw() -> void:
 
 	# Аннотации игроков поверх поля (item 51).
 	_draw_annotations()
+
+## Отрисовка одного дрона (item 14): вынесена из общего прохода, чтобы дрон рисовался
+## верхним слоем — поверх корпусов машин, над которыми он висит.
+func _draw_drone(unit: UnitInstance, at: Vector2i) -> void:
+	var center := _cell_origin(at) + Vector2(CELL, CELL) * 0.5
+	# Дрон висит над клеткой (#13): рисуем со сдвигом в верхний-правый угол,
+	# чтобы был виден наземный юнит/труп под ним.
+	var dc := _cell_origin(at) + Vector2(CELL * 0.72, CELL * 0.28)
+	# Тень под дроном по центру клетки — подсказка, что он парит.
+	draw_circle(center, CELL * 0.1, Color(0, 0, 0, 0.25))
+	var s := CELL * 0.2
+	var drone_key := Sprites.resolve("drone", _owner_suffix(unit.owner))
+	if drone_key != "":
+		var dsz := Vector2(CELL, CELL) * 0.5
+		Sprites.draw_texture_override_rect(self, drone_key, Rect2(dc - dsz * 0.5, dsz))
+	else:
+		var pts := PackedVector2Array([
+			dc + Vector2(0, -s), dc + Vector2(s, 0),
+			dc + Vector2(0, s), dc + Vector2(-s, 0)])
+		draw_colored_polygon(pts, _side_color(unit.owner))
+		draw_polyline(pts + PackedVector2Array([pts[0]]), Color(0.3, 0.9, 0.9), 2.0)
+	if unit.id == selected_id:
+		draw_arc(dc, CELL * 0.3, 0, TAU, 24, Color(1, 0.9, 0.2), 3.0)
+	for i in _draw_ap(unit):
+		draw_circle(_cell_origin(at) + Vector2(6 + i * 8, CELL - 6), 3, Color(1, 1, 0.4))
 
 ## Труп на земле (#59): красный круг на половинной прозрачности — того же размера,
 ## что и живой боец, но полупрозрачный, поэтому тело сразу отличимо от бойца и не
@@ -3006,16 +3240,24 @@ func _draw_fx_props(visible: Dictionary) -> void:
 const FX_LOOK := {
 	"shard": [0.16, Color(0.72, 0.88, 0.95, 0.85)],
 	"casing": [0.11, Color(0.85, 0.72, 0.28, 0.9)],
+	# Гильза противотанкиста (item 24): оранжевая и вдвое крупнее пистолетной (0.11 → 0.22).
+	"shell_casing": [0.22, Color(1.0, 0.55, 0.1, 0.95)],
 	"blood_drop": [0.10, Color(0.55, 0.06, 0.06, 0.85)],
 	"blood_pool": [0.42, Color(0.42, 0.04, 0.04, 0.55)],
 }
 const FX_TEXTURE := {
 	"shard": "glass_shard", "casing": "shell_casing",
+	# Отдельное имя картинки, чтобы крупная оранжевая гильза при желании подменялась
+	# своим png; без него сработает запасной оранжевый четырёхугольник из FX_LOOK.
+	"shell_casing": "shell_casing_big",
 	"blood_drop": "blood_splatter", "blood_pool": "blood_pool",
 }
 
 func _draw_fx_one(kind: String, cell_pos: Vector2, rot: float, scale: float,
 		visible: Dictionary, fog_on: bool) -> void:
+	# Частицы за краем экрана не рисуем (item 5): на большой карте их накапливаются сотни.
+	if not _cell_on_screen(floori(cell_pos.x), floori(cell_pos.y)):
+		return
 	if fog_on and not visible.has(Vector2i(floori(cell_pos.x), floori(cell_pos.y))):
 		return
 	var look: Array = FX_LOOK.get(kind, [0.12, Color(0.8, 0.8, 0.8, 0.8)])
@@ -3111,183 +3353,152 @@ func _initials(name_ru: String) -> String:
 		return (parts[0].substr(0, 1) + parts[1].substr(0, 1)).to_upper()
 	return name_ru.substr(0, 2).to_upper()
 
-# --- Движимое/масштабируемое окно HUD ---
-func _on_hud_header_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
-		if event.pressed:
-			_hud_dragging = true
-			_hud_drag_offset = _hud_window.position - event.global_position
-		else:
-			_hud_dragging = false
-	elif event is InputEventMouseMotion and _hud_dragging:
-		var vp := get_viewport_rect().size
-		var new_pos: Vector2 = event.global_position + _hud_drag_offset
-		new_pos.x = clampf(new_pos.x, 0.0, maxf(0.0, vp.x - _hud_window.size.x))
-		new_pos.y = clampf(new_pos.y, 0.0, maxf(0.0, vp.y - _hud_window.size.y))
-		_hud_window.position = new_pos
-		_reposition_hud_grip()
-
+# --- Правое меню боя: только горизонтальный размер, окно неподвижно (item 6) ---
+## Тянем ЛЕВЫЙ край панели: влево — шире, вправо — уже. Панель остаётся приклеенной к
+## правому краю экрана (offset_right = 0), меняется лишь offset_left = -ширина.
 func _on_hud_grip_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			_hud_resizing = true
 			_hud_resize_start = event.global_position
-			_hud_resize_origin = _hud_window.size
+			_hud_resize_origin = Vector2(_hud_width, 0)
 		else:
 			_hud_resizing = false
 	elif event is InputEventMouseMotion and _hud_resizing:
-		var delta: Vector2 = event.global_position - _hud_resize_start
-		var new_size: Vector2 = _hud_resize_origin + delta
-		new_size.x = maxf(HUD_MIN_SIZE.x, new_size.x)
-		new_size.y = maxf(HUD_MIN_SIZE.y, new_size.y)
-		var vp := get_viewport_rect().size
-		new_size.x = minf(new_size.x, vp.x - _hud_window.position.x)
-		new_size.y = minf(new_size.y, vp.y - _hud_window.position.y)
-		_hud_window.size = new_size
+		var dx: float = event.global_position.x - _hud_resize_start.x
+		_hud_width = clampf(_hud_resize_origin.x - dx, HUD_WIDTH_MIN, HUD_WIDTH_MAX)
+		if _hud_window != null:
+			_hud_window.offset_left = -_hud_width
 		_reposition_hud_grip()
 
 func _reposition_hud_grip() -> void:
 	if _hud_grip == null or _hud_window == null:
 		return
-	_hud_grip.position = _hud_window.position + _hud_window.size - _hud_grip.size
-	# Чат приколот к правому-нижнему углу экрана (item 50).
+	# Грип — тонкая полоса на левом крае панели, во всю её высоту.
+	var vp := get_viewport_rect().size
+	_hud_grip.position = Vector2(vp.x - _hud_width - _hud_grip.custom_minimum_size.x, 0)
+	_hud_grip.size = Vector2(_hud_grip.custom_minimum_size.x, vp.y)
+	# Чат приколот к правому-нижнему углу, но левее правого меню, чтобы не налезал.
 	if _chat_panel != null:
-		var vp := get_viewport_rect().size
-		_chat_panel.position = Vector2(vp.x - _chat_panel.size.x - 12.0,
+		_chat_panel.position = Vector2(vp.x - _hud_width - _chat_panel.size.x - 20.0,
 				vp.y - _chat_panel.size.y - 12.0)
+	# Журнал боя — в левом-нижнем углу (item 6: убран из правого меню в свою панель).
+	if _log_panel != null:
+		_log_panel.position = Vector2(12.0, vp.y - _log_panel.size.y - 12.0)
 	# Полоса повтора (M12) — по центру внизу, как у любого проигрывателя.
 	if _replay_bar != null:
-		var screen := get_viewport_rect().size
-		_replay_bar.position = Vector2((screen.x - _replay_bar.size.x) * 0.5,
-				screen.y - _replay_bar.size.y - 14.0)
+		_replay_bar.position = Vector2((vp.x - _replay_bar.size.x) * 0.5,
+				vp.y - _replay_bar.size.y - 14.0)
 
 # --- UI ---
 func _build_ui() -> void:
 	_ui_layer = CanvasLayer.new()
 	add_child(_ui_layer)
 
-	# --- Движимое/масштабируемое окно HUD в стиле Steam ------------------
+	# --- Правое меню боя (item 6): приклеено к правому краю, не двигается, тянется
+	# ТОЛЬКО по горизонтали. Содержит строго заданный набор: ход/раунд, конец хода,
+	# отмена/повтор, возврат в меню, мульти-выбор, рисование/стирание с размерами кистей,
+	# «показывать команде» и «скрыть чужие рисунки» — и ничего больше.
 	var panel := PanelContainer.new()
-	panel.position = Vector2(700, 20)
-	panel.size = HUD_START_SIZE
-	panel.custom_minimum_size = HUD_MIN_SIZE
 	SteamChrome.apply_panel(panel)
+	panel.anchor_left = 1.0
+	panel.anchor_right = 1.0
+	panel.anchor_top = 0.0
+	panel.anchor_bottom = 1.0
+	panel.offset_left = -_hud_width
+	panel.offset_right = 0.0
+	panel.offset_top = 0.0
+	panel.offset_bottom = 0.0
 	_ui_layer.add_child(panel)
 	_hud_window = panel
 
-	# Угловой «грип» для изменения размера — отдельный оверлей поверх окна,
-	# который _process держит в правом-нижнем углу окна.
+	# Ручка ширины — узкая вертикальная полоса на ЛЕВОМ крае панели. Тянешь влево/вправо —
+	# меняешь только ширину; окно с места не сдвигается.
 	_hud_grip = Control.new()
-	_hud_grip.custom_minimum_size = Vector2(18, 18)
-	_hud_grip.size = Vector2(18, 18)
+	_hud_grip.custom_minimum_size = Vector2(8, 0)
 	_hud_grip.mouse_filter = Control.MOUSE_FILTER_STOP
-	_hud_grip.mouse_default_cursor_shape = Control.CURSOR_FDIAGSIZE
+	_hud_grip.mouse_default_cursor_shape = Control.CURSOR_HSIZE
 	_hud_grip.gui_input.connect(_on_hud_grip_input)
 	_ui_layer.add_child(_hud_grip)
-	# Видимый маркер грипа (маленький акцентный уголок).
 	var grip_mark := ColorRect.new()
 	grip_mark.color = Ui.accent_color()
 	grip_mark.set_anchors_preset(Control.PRESET_FULL_RECT)
 	grip_mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hud_grip.add_child(grip_mark)
 
-	# Внешняя раскладка окна: заголовок-ручка + прокручиваемое тело.
 	var frame := VBoxContainer.new()
 	frame.add_theme_constant_override("separation", 0)
-	frame.set_anchors_preset(Control.PRESET_FULL_RECT)
 	panel.add_child(frame)
-
-	# Полоса заголовка = ручка перетаскивания окна.
-	var header := SteamChrome.header_bar("MCF Tactics")
-	header.mouse_filter = Control.MOUSE_FILTER_STOP
-	header.gui_input.connect(_on_hud_header_input)
-	frame.add_child(header)
-
-	# Тело окна прокручивается, чтобы содержимое влезало при уменьшении.
+	frame.add_child(SteamChrome.header_bar("MCF Tactics"))
 	var body := ScrollContainer.new()
 	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	body.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	frame.add_child(body)
-
-	# Компактная раскладка (#54): служебные кнопки — парами в ряд, шрифты мельче,
-	# журнал ниже. Сетевого блока здесь больше нет — он во вкладке главного меню.
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 5)
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	body.add_child(SteamChrome.pad(vbox, 8, 6))
 
+	# Текущий ход + номер раунда, и отдельной строкой — кто ходит до и после игрока.
 	_status_label = Label.new()
-	_status_label.add_theme_font_size_override("font_size", 12)
+	_status_label.add_theme_font_size_override("font_size", 13)
 	_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(_status_label)
+	_turn_neighbors_label = Label.new()
+	_turn_neighbors_label.add_theme_font_size_override("font_size", 11)
+	_turn_neighbors_label.modulate = Color(0.78, 0.81, 0.88)
+	_turn_neighbors_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vbox.add_child(_turn_neighbors_label)
 
-	_info_label = Label.new()
-	_info_label.add_theme_font_size_override("font_size", 11)
-	_info_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_info_label.custom_minimum_size = Vector2(0, 30)
-	vbox.add_child(_info_label)
-
-	var btn := Button.new()
-	btn.text = "End Turn"
-	btn.custom_minimum_size = Vector2(0, 30)
-	vbox.add_child(btn)
-	btn.pressed.connect(_on_end_turn_pressed)
-
+	vbox.add_child(_hsep())
+	var end_btn := Button.new()
+	end_btn.text = "End Turn"
+	end_btn.custom_minimum_size = Vector2(0, 32)
+	end_btn.pressed.connect(_on_end_turn_pressed)
+	vbox.add_child(end_btn)
 	_undo_btn = _compact_button("Undo", _on_undo_pressed)
 	_undo_btn.disabled = true
 	_redo_btn = _compact_button("Redo", _on_redo_pressed)
 	_redo_btn.disabled = true
 	vbox.add_child(_button_row([_undo_btn, _redo_btn]))
+	# «Возврат в меню» — единая кнопка: в сети уводит из партии, в одиночке — в главное меню.
+	vbox.add_child(_compact_button("Return to Menu", _to_lobby))
 
-	# Эти две подписи длинные, поэтому каждая занимает свою строку: в паре они не
-	# помещались по ширине и обрезались до пары букв.
-	_p1_btn = _compact_button("", _toggle_p1_ai)
-	_p2_btn = _compact_button("", _toggle_p2_ai)
-	_diff_btn = _compact_button("", _cycle_difficulty)
-	vbox.add_child(_p1_btn)
-	vbox.add_child(_p2_btn)
-	vbox.add_child(_diff_btn)
-	_refresh_ai_buttons()
-
-	# Камеру легко увести за край большой карты (город 50×50) и потерять свои
-	# войска — кнопка возвращает вид к исходной точке.
-	vbox.add_child(_compact_button("Return to Map", _recenter_camera))
-
-	# Сохранение партии (item 42) — рядом с выходом: обе кнопки про «закончить сейчас».
-	_save_btn = _compact_button("Save Game", _save_game)
-	_save_btn.disabled = replay != null
-	vbox.add_child(_save_btn)
-
-	var menu_btn := _compact_button("Main Menu", _to_menu)
-	var editor_btn := _compact_button("Editor", _open_editor)
-	vbox.add_child(_button_row([menu_btn, editor_btn]))
-
+	vbox.add_child(_hsep())
 	_multi_btn = CheckBox.new()
 	_multi_btn.text = "Multi-Select"
 	_multi_btn.add_theme_font_size_override("font_size", 12)
 	_multi_btn.toggled.connect(_on_multi_toggled)
 	vbox.add_child(_multi_btn)
 
-	# Возврат в лобби (item 20): в сетевой партии — к экрану лобби, в локальной — в меню.
-	vbox.add_child(_compact_button("Return to Lobby", _to_lobby))
-
-	# Живой статус армий и место игрока в очереди (item 20). Полный разбор — по кнопке.
 	vbox.add_child(_hsep())
-	vbox.add_child(_compact_button("Initiative ▸", _toggle_initiative_overlay))
-	_init_label = RichTextLabel.new()
-	_init_label.bbcode_enabled = true
-	_init_label.fit_content = true
-	_init_label.custom_minimum_size = Vector2(0, 90)
-	_init_label.add_theme_font_size_override("normal_font_size", 11)
-	_init_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	vbox.add_child(_init_label)
-
-	# Инструмент рисования (item 51): режим рисунка + область видимости + фильтр чужих.
-	vbox.add_child(_hsep())
-	vbox.add_child(_button_row([
-		_compact_button("Draw", _enter_draw),
-		_compact_button("Clear Mine", _clear_my_drawings)]))
+	# Рисование и стирание (item 6/51) с размерами кистей.
+	_draw_btn = _compact_button("Draw", _enter_draw)
+	_erase_btn = _compact_button("Erase", _enter_erase)
+	vbox.add_child(_button_row([_draw_btn, _erase_btn]))
+	var draw_lbl := Label.new()
+	draw_lbl.text = "Draw brush"
+	draw_lbl.add_theme_font_size_override("font_size", 11)
+	vbox.add_child(draw_lbl)
+	var draw_slider := HSlider.new()
+	draw_slider.min_value = 1
+	draw_slider.max_value = 12
+	draw_slider.step = 1
+	draw_slider.value = _draw_brush
+	draw_slider.value_changed.connect(func(v: float) -> void: _draw_brush = int(v))
+	vbox.add_child(draw_slider)
+	var erase_lbl := Label.new()
+	erase_lbl.text = "Erase brush"
+	erase_lbl.add_theme_font_size_override("font_size", 11)
+	vbox.add_child(erase_lbl)
+	var erase_slider := HSlider.new()
+	erase_slider.min_value = 0
+	erase_slider.max_value = 8
+	erase_slider.step = 1
+	erase_slider.value = _erase_brush
+	erase_slider.value_changed.connect(func(v: float) -> void: _erase_brush = int(v))
+	vbox.add_child(erase_slider)
 	var team_draw := CheckBox.new()
 	team_draw.text = "Share with team"
 	team_draw.add_theme_font_size_override("font_size", 12)
@@ -3300,23 +3511,18 @@ func _build_ui() -> void:
 		_hide_others_draw = on
 		queue_redraw())
 	vbox.add_child(hide_draw)
-	vbox.add_child(_compact_button("Chat ▾", _toggle_chat))
 
-	# Строка сети появляется, только когда партия действительно сетевая.
-	_net_status = Label.new()
-	_net_status.add_theme_font_size_override("font_size", 11)
-	_net_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_net_status.hide()
-	vbox.add_child(_net_status)
+	# Убрано из правого меню по item 6 — обновляющие функции этих ссылок уже
+	# null-безопасны. Журнал боя переехал в свою панель (снизу слева), чат остаётся
+	# отдельной панелью (Enter), сохранение — по Ctrl+S; ИИ/сложность задаются в лобби.
+	_info_label = null
+	_init_label = null
+	_p1_btn = null
+	_p2_btn = null
+	_diff_btn = null
+	_net_status = null
 
-	vbox.add_child(_hsep())
-	_log_label = RichTextLabel.new()
-	_log_label.custom_minimum_size = Vector2(0, 150)
-	_log_label.add_theme_font_size_override("normal_font_size", 11)
-	_log_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_log_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_log_label.scroll_following = true
-	vbox.add_child(_log_label)
+	_build_log_panel()
 
 	# Всплывающее меню действий и выбор числа выстрелов — в общем оконном стиле
 	# SteamChrome (рамка + шапка), как остальной интерфейс. Тело красим один раз,
@@ -3339,6 +3545,24 @@ func _build_ui() -> void:
 	_build_chat_panel()
 	if replay != null:
 		_build_replay_bar()
+
+## Журнал боя (item 6) — своя панель внизу слева, а не строка в правом меню. Тот же
+## _log_label, что и раньше, поэтому publish_result/_on_log_line работают без правок.
+func _build_log_panel() -> void:
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(360, 150)
+	SteamChrome.apply_panel(panel)
+	_ui_layer.add_child(panel)
+	_log_panel = panel
+	var frame := VBoxContainer.new()
+	frame.add_theme_constant_override("separation", 0)
+	panel.add_child(frame)
+	frame.add_child(SteamChrome.header_bar("Combat Log"))
+	_log_label = RichTextLabel.new()
+	_log_label.custom_minimum_size = Vector2(360, 130)
+	_log_label.add_theme_font_size_override("normal_font_size", 11)
+	_log_label.scroll_following = true
+	frame.add_child(SteamChrome.pad(_log_label, 8, 6))
 
 ## Полоса управления повтором (item 53) внизу экрана: в начало, шаг назад,
 ## пуск/пауза, шаг вперёд, скорость, в конец. Строится только в режиме просмотра —
@@ -3366,9 +3590,27 @@ func _build_replay_bar() -> void:
 	_replay_label.custom_minimum_size = Vector2(180, 0)
 	_replay_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(_replay_label)
+	# Таймлайн (item 7): тянешь ползунок — прыгаешь в любую точку записи, минуя всё
+	# между. Перемотка идёт через seek(), тем же путём, что и кнопки шага.
+	var slider_wrap := HBoxContainer.new()
+	frame.add_child(SteamChrome.pad(slider_wrap, 12, 4))
+	_replay_slider = HSlider.new()
+	_replay_slider.min_value = 0
+	_replay_slider.step = 1
+	_replay_slider.custom_minimum_size = Vector2(360, 18)
+	_replay_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_replay_slider.value_changed.connect(_on_replay_slider)
+	slider_wrap.add_child(_replay_slider)
 	_replay_bar = panel
 	_ui_layer.add_child(_replay_bar)
 	_refresh_replay_bar()
+
+## Игрок потянул таймлайн (item 7). Программные обновления ползунка идут с поднятым
+## флагом, чтобы не спутать их с ручной перемоткой и не зациклить seek.
+func _on_replay_slider(value: float) -> void:
+	if _replay_slider_syncing or replay == null:
+		return
+	_replay_seek(int(round(value)))
 
 func _replay_btn(text: String, handler: Callable) -> Button:
 	var b := Button.new()
@@ -3476,7 +3718,9 @@ func _build_initiative_overlay() -> void:
 	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	overlay.hide()
 	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.55)
+	# Полупрозрачный оверлей (item 6): доску за инициативой видно, лёгкое затемнение
+	# лишь чуть гасит фон. Клик по фону закрывает — как и Tab.
+	dim.color = Color(0, 0, 0, 0.20)
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	dim.mouse_filter = Control.MOUSE_FILTER_STOP
 	dim.gui_input.connect(func(e: InputEvent) -> void:
@@ -3490,6 +3734,7 @@ func _build_initiative_overlay() -> void:
 	var panel := PanelContainer.new()
 	panel.custom_minimum_size = Vector2(420, 0)
 	SteamChrome.apply_panel(panel)
+	panel.modulate = Color(1, 1, 1, 0.82)  # само окно инициативы — полупрозрачное (item 6)
 	center.add_child(panel)
 	var frame := VBoxContainer.new()
 	frame.add_theme_constant_override("separation", 0)
@@ -3606,6 +3851,40 @@ func _enter_draw() -> void:
 	mode = Mode.DRAW
 	queue_redraw()
 
+## Ластик (item 6): режим стирания СВОИХ штрихов кистью заданного радиуса.
+func _enter_erase() -> void:
+	_deselect()
+	mode = Mode.ERASE
+	queue_redraw()
+
+## Стереть из своих штрихов все точки в радиусе ластика (в клетках) вокруг cell.
+## Штрих, у которого не осталось точек, удаляется целиком. Стирание локальное — как и
+## «очистить свои» раньше: аннотации косметические и правки по сети не гоняются.
+func _erase_at(cell: Vector2i) -> void:
+	if not state.grid.in_bounds(cell):
+		return
+	var me := _draw_author()
+	var r := _erase_brush
+	var kept: Array = []
+	var changed := false
+	for rec: Dictionary in _strokes:
+		if int(rec["author"]) != me:
+			kept.append(rec)
+			continue
+		var cells: Array = rec["cells"]
+		var new_cells: Array = []
+		for c: Vector2i in cells:
+			if Combat.distance(c, cell) > r:
+				new_cells.append(c)
+		if new_cells.size() != cells.size():
+			changed = true
+		if not new_cells.is_empty():
+			rec["cells"] = new_cells
+			kept.append(rec)
+	if changed:
+		_strokes = kept
+		queue_redraw()
+
 func _stroke_add(cell: Vector2i) -> void:
 	if not state.grid.in_bounds(cell):
 		return
@@ -3620,6 +3899,7 @@ func _stroke_commit() -> void:
 		"author": _draw_author(),
 		"scope": DrawScope.TEAM if _draw_scope_team else DrawScope.SELF,
 		"cells": _cur_stroke.duplicate(),
+		"width": _draw_brush,  # толщина линии из ползунка (item 6)
 	}
 	_strokes.append(rec)
 	_cur_stroke = []
@@ -3628,7 +3908,8 @@ func _stroke_commit() -> void:
 		for c: Vector2i in rec["cells"]:
 			flat.append(c.x)
 			flat.append(c.y)
-		session.send({"k": K_DRAW, "a": rec["author"], "s": rec["scope"], "c": flat})
+		session.send({"k": K_DRAW, "a": rec["author"], "s": rec["scope"],
+			"c": flat, "w": rec["width"]})
 	queue_redraw()
 
 ## Пришедший чужой штрих (item 51): область видимости уважаем — «для себя» до нас не
@@ -3643,7 +3924,8 @@ func _on_remote_stroke(msg: Dictionary) -> void:
 	if cells.is_empty():
 		return
 	_strokes.append({"author": int(msg.get("a", -1)),
-			"scope": int(msg.get("s", DrawScope.TEAM)), "cells": cells})
+			"scope": int(msg.get("s", DrawScope.TEAM)), "cells": cells,
+			"width": int(msg.get("w", 3))})
 	queue_redraw()
 
 ## Видит ли просматривающий игрок этот штрих (item 51): свои — всегда; «для команды» —
@@ -3675,7 +3957,7 @@ func _draw_annotations() -> void:
 	if not _cur_stroke.is_empty():
 		all.append({"author": _draw_author(),
 				"scope": DrawScope.TEAM if _draw_scope_team else DrawScope.SELF,
-				"cells": _cur_stroke})
+				"cells": _cur_stroke, "width": _draw_brush})
 	for rec: Dictionary in all:
 		if not _stroke_visible_to_viewer(rec):
 			continue
@@ -3683,13 +3965,14 @@ func _draw_annotations() -> void:
 		if cells.size() < 1:
 			continue
 		var col := _side_color(int(rec["author"]))
+		var w: float = float(rec.get("width", 3))
 		var pts := PackedVector2Array()
 		for c in cells:
 			pts.append(_cell_origin(c) + Vector2(CELL, CELL) * 0.5)
 		if pts.size() == 1:
-			draw_circle(pts[0], CELL * 0.15, col)
+			draw_circle(pts[0], maxf(CELL * 0.1, w * 0.6), col)
 		else:
-			draw_polyline(pts, col, 3.0)
+			draw_polyline(pts, col, w)
 
 # --- Чат (item 50) ---
 
@@ -3862,11 +4145,10 @@ func _anchor_menu(panel: Control) -> void:
 func _side_color(side: int) -> Color:
 	if MCF.is_neutral(side):
 		return NEUTRAL_COLOR
-	# Перспектива «своё синее, чужое красное» работает, только пока чужая сторона
-	# ОДНА. За столом на троих она бы слила двух разных противников в один цвет и
-	# скрыла, кто кому враг, — поэтому там каждый носит свой цвет из ростера.
-	if networked and state.roster.player_ids().size() == 2:
-		return OWN_COLOR if side == my_owner else FOE_COLOR
+	# Каждая сторона носит СВОЙ цвет из ростера — всегда (item 16). Прежняя перспектива
+	# «своё синее, чужое красное» в сетевой игре на двоих перекрашивала стороны под
+	# зрителя и путала, чей это на самом деле цвет (особенно после захвата чужого танка);
+	# теперь цвет юнита/машины один и тот же на всех экранах.
 	return state.roster.color_of(side)
 
 func _open_menu(unit: UnitInstance) -> void:
@@ -4022,10 +4304,16 @@ func _open_menu(unit: UnitInstance) -> void:
 			if not resolver.mine_cells(unit).is_empty():
 				var mine_text := "Lay Mine" if unit.mine_credits <= 0 \
 					else "Lay Mine (%d left)" % unit.mine_credits
-				_act_btn(vb, mine_text, _enter_mine,
+				_act_btn(vb, mine_text, _enter_mine.bind(false),
+						unit.remaining_ap > 0 or unit.mine_credits > 0)
+				# Противотанковая мина (item 13) — тот же кредит на серию, другая мина.
+				_act_btn(vb, "Lay Anti-Vehicle Mine", _enter_mine.bind(true),
 						unit.remaining_ap > 0 or unit.mine_credits > 0)
 			_act_btn(vb, "Sweep for Mines (%d tiles)" % MCF.MINE_REVEAL_RADIUS,
 					_submit.bind(RevealMinesIntent.new(unit.id)), unit.remaining_ap > 0)
+			# Обезвредить подсвеченную чужую мину рядом (item 13).
+			if not resolver.disarmable_mine_cells(unit).is_empty():
+				_act_btn(vb, "Disarm Mine", _enter_disarm, unit.remaining_ap > 0)
 
 		# Копка окопа (§3.7): пехота 3 окопа / инженер 6 за 1 ОД.
 		if not resolver.diggable_cells(unit).is_empty():
@@ -4261,12 +4549,19 @@ func _order_labels() -> String:
 
 func _refresh_status() -> void:
 	if _status_label != null:
-		# Порядок инициативы фиксирован на всю партию (#53) — держим его на виду,
-		# но отдельной строкой: панель теперь узкая (#54).
-		_status_label.text = "Turn: %s  |  Round: %d\nOrder: %s" % [
-			_side_label(state.active_player()), state.turns.round_number,
-			_order_labels()
-		]
+		_status_label.text = "Turn: %s   |   Round: %d" % [
+			_side_label(state.active_player()), state.turns.round_number]
+	# Кто ходит до и после игрока (item 6) — отдельной строкой под текущим ходом.
+	if _turn_neighbors_label != null and state != null:
+		var me := _viewing_side()
+		var prev := state.turns.neighbor_slot(me, -1)
+		var nxt := state.turns.neighbor_slot(me, 1)
+		var parts: Array[String] = []
+		if prev >= 0:
+			parts.append("Prev: %s" % _side_label(prev))
+		if nxt >= 0:
+			parts.append("Next: %s" % _side_label(nxt))
+		_turn_neighbors_label.text = "   ".join(parts)
 	_refresh_initiative()
 	if _init_overlay != null and _init_overlay.visible:
 		_refresh_initiative_overlay()

@@ -18,9 +18,12 @@ const SLICE := 6          # 9-slice border, matches the 32px generated chrome
 const FONT_FALLBACKS := ["Tahoma", "Verdana", "Geneva", "DejaVu Sans", "Arial", "Helvetica"]
 
 # --- palette (gunmetal-gray "2003 Steam" skin) -----------------------
-const WINDOW_BG   := Color(0.227, 0.227, 0.227)
-const PANEL_BG    := Color(0.306, 0.306, 0.306)
-const SUNKEN_BG   := Color(0.172, 0.172, 0.172)
+# item 8: серые части меню сделаны заметно темнее (примерно на четверть). Один и тот
+# же сдвиг на всех трёх тонах сохраняет прежний контраст между окном, панелью и
+# утопленным полем — темнеет вся серая гамма разом, а не отдельные её куски.
+const WINDOW_BG   := Color(0.170, 0.170, 0.170)
+const PANEL_BG    := Color(0.235, 0.235, 0.235)
+const SUNKEN_BG   := Color(0.125, 0.125, 0.125)
 const HEADER_BG   := Color(0.118, 0.149, 0.125)
 const TEXT        := Color(0.847, 0.847, 0.847)
 const TEXT_BRIGHT := Color(0.95, 0.96, 0.93)

@@ -103,6 +103,10 @@ const FEATURE_DOT_OPEN := "dot_open"
 ## Мина (item 45). Укрытия не даёт и проходу не мешает — на неё именно НАСТУПАЮТ.
 ## Спрятана: чужой видит её, только пока сапёр её подсветил (см. GameState.revealed_mines).
 const FEATURE_MINE := "mine"
+## Противотанковая мина (item 13). Пехоту НЕ трогает — по ней ходят безопасно, и огонь
+## её не подрывает; срабатывает только под гусеницей: заезжая на неё, машина теряет
+## одну прочность, а мина расходуется.
+const FEATURE_AV_MINE := "av_mine"
 const FEATURE_WOOD_WALL := "wood_wall"     # деревянная стена, 2 м, горючая — сгорает в огне (#53)
 ## Мешки, сложенные в два яруса — глухая стена 2 м.
 const FEATURE_SANDBAG_WALL := "sandbag_wall"
@@ -126,6 +130,7 @@ const FEATURE_HEIGHT := {
 	FEATURE_DOT: 2.0,
 	FEATURE_DOT_OPEN: 2.0,
 	FEATURE_MINE: 0.0,
+	FEATURE_AV_MINE: 0.0,
 	FEATURE_WOOD_WALL: 2.0,
 	FEATURE_SANDBAG_WALL: 2.0,
 	FEATURE_HEDGEHOG_SANDBAGS: 2.0,
@@ -146,6 +151,7 @@ const FEATURE_NAMES := {
 	FEATURE_DOT: "Pillbox (Concrete)",
 	FEATURE_DOT_OPEN: "Pillbox (Embrasures)",
 	FEATURE_MINE: "Mine",
+	FEATURE_AV_MINE: "Anti-Vehicle Mine",
 	FEATURE_WOOD_WALL: "Wooden Wall",
 	FEATURE_SANDBAG_WALL: "Sandbag Wall",
 	FEATURE_HEDGEHOG_SANDBAGS: "Hedgehog on Sandbags",
@@ -166,6 +172,8 @@ const MINE_REVEAL_TURNS := 1
 ## В источнике эффект мины не описан вовсе; принято: пехоту убивает наповал на
 ## своей клетке, технике снимает единицу прочности. См. GAME_SPEC §7.9.
 const MINE_VEHICLE_DAMAGE := 1
+## Урон противотанковой мины технике (item 13): одна прочность за наезд.
+const AV_MINE_VEHICLE_DAMAGE := 1
 
 # --- Космос / невесомость (§3.11) ---
 # После выстрела (кроме противотанкиста) в невесомости: стрелка отбрасывает на 1 клетку,
@@ -261,6 +269,12 @@ const ANTI_TANK_BLAST_RADIUS := 1
 const ANTI_TANK_VEHICLE_DAMAGE := 1
 # Взрыв дрона по единой шкале урона — те же 1 прочности, что и у противотанкиста.
 const DRONE_EXPLOSION_DAMAGE := 1
+# Шахтёр в ближнем бою против техники (item 15): бьёт по корпусу и на 6 снимает 1
+# прочность. Порог намеренно высок — лом против брони берёт редко.
+const MINER_VEHICLE_HIT_NEED := 6
+const MINER_VEHICLE_DAMAGE := 1
+# Экипаж танка держит попадание увереннее пехоты: +1 к защите (item 16).
+const TANK_CREW_DEFENSE_BONUS := 1
 # Танковая пушка (#63): взрыв — «ромб» радиуса 2 по манхэттенской метрике (13 клеток).
 # Углы срезаны: по диагонали снаряд достаёт только на одну клетку.
 ## Дальность танковой пушки (#22). Значение по умолчанию для оружия без своей
