@@ -1150,7 +1150,9 @@ func _handle_click(coord: Vector2i) -> void:
 			var veh := _selected_vehicle()
 			if veh != null:
 				var d := coord - veh.center()
-				var dir := Vector2i(signi(d.x), signi(d.y))
+				# Только ортогональ (item 2): клик прижимается к доминирующей оси, так что
+				# танк не встаёт по диагонали.
+				var dir := _ortho_dir(d)
 				if dir != Vector2i.ZERO and dir != veh.facing:
 					_submit(VehicleTurnIntent.new(selected_vehicle_id, dir))
 					return
@@ -1757,7 +1759,9 @@ func _group_boardable_vehicle() -> int:
 			continue
 		var vs: Array = resolver.boardable_vehicles(u)
 		if not vs.is_empty():
-			return int(vs[0])
+			# boardable_vehicles() отдаёт объекты Vehicle, а не id — int(Vehicle)
+			# роняло игру «Nonexistent 'int' constructor» (item 6). Берём .id.
+			return int(vs[0].id)
 	return -1
 
 ## Усадить в машину vid всех выделенных, кто рядом и кому это разрешено (item 5).
@@ -2941,12 +2945,12 @@ func _draw() -> void:
 		if vt != null:
 			var vc := _cell_origin(vt.center()) + Vector2(CELL, CELL) * 0.5
 			draw_arc(vc, CELL * 1.1, 0, TAU, 40, Color(0.9, 0.8, 0.3, 0.6), 2.0)
-			# Восемь стрелок = восемь выбираемых направлений (#39). Клик в любую клетку
-			# по этому лучу поворачивает корпус туда.
+			# Четыре стрелки = четыре стороны света (item 2): диагональных разворотов у
+			# танка больше нет. Клик в любую клетку по лучу поворачивает корпус туда.
 			var thov := _pos_to_cell(get_global_mouse_position())
 			var thd := thov - vt.center()
-			var thdir := Vector2i(signi(thd.x), signi(thd.y))
-			for d: Vector2i in GameActionResolver.DIR8:
+			var thdir := _ortho_dir(thd)
+			for d: Vector2i in GameActionResolver.DIR4:
 				var v := Vector2(d).normalized()
 				var col := Color(0.55, 0.5, 0.35, 0.7)
 				if d == vt.facing:
@@ -3433,6 +3437,16 @@ func _facing_degrees(facing: Vector2i) -> float:
 	if facing == Vector2i.ZERO:
 		return 0.0
 	return rad_to_deg(Vector2(facing).angle()) + 90.0
+
+## Прижать вектор к ближайшей стороне света (item 2): танк смотрит только
+## вверх/вниз/влево/вправо, диагонали не бывает. По доминирующей оси; при равенстве
+## приоритет у горизонтали.
+func _ortho_dir(d: Vector2i) -> Vector2i:
+	if d == Vector2i.ZERO:
+		return Vector2i.ZERO
+	if absi(d.x) >= absi(d.y):
+		return Vector2i(signi(d.x), 0)
+	return Vector2i(0, signi(d.y))
 
 func _initials(name_ru: String) -> String:
 	var parts := name_ru.split(" ", false)
@@ -4099,8 +4113,11 @@ func _toggle_chat() -> void:
 		return
 	# Стрелка вниз (▾) сворачивает в маленький прямоугольник — как в начале матча (item 11).
 	_chat_body_wrap.visible = not _chat_body_wrap.visible
+	# Стрелка вниз (▾) = свёрнуто, весь серый блок спрятан и остаётся только шапка
+	# (item 4); вверх (▴) = развёрнуто. Тело сворачивается вместе с padding-обёрткой,
+	# так что панель сжимается до одной строки заголовка.
 	if _chat_toggle_btn != null:
-		_chat_toggle_btn.text = "▾" if _chat_body_wrap.visible else "▸"
+		_chat_toggle_btn.text = "▴" if _chat_body_wrap.visible else "▾"
 
 ## Сделать панель перетаскиваемой за её шапку (item 8). on_move помечает панель как
 ## сдвинутую вручную, чтобы _reposition_hud_grip перестал возвращать её в угол.

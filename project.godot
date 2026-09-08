@@ -10,7 +10,7 @@ config_version=5
 
 [application]
 
-config/name="MCF Tactics"
+config/name="MCF Isotope"
 run/main_scene="res://scenes/MainMenu.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 

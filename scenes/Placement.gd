@@ -313,15 +313,14 @@ func _cell_placeable(coord: Vector2i) -> bool:
 	# Объект-препятствие (кроме мягких укрытий) не мешает — но занятые клетки нельзя.
 	return _placed_at(coord) == -1 and _neutral_at(coord) == -1
 
-## Контекстное меню поворота танка (item 6): восемь направлений, выбор ставит фронт.
+## Контекстное меню поворота танка (item 6/2): четыре стороны света, выбор ставит фронт.
 func _open_tank_dir_menu(vi: int, screen_pos: Vector2) -> void:
 	var menu := PopupMenu.new()
-	var names := ["East →", "South-East ↘", "South ↓", "South-West ↙",
-		"West ←", "North-West ↖", "North ↑", "North-East ↗"]
-	for i in FACING8.size():
+	var names := ["East →", "South ↓", "West ←", "North ↑"]
+	for i in FACING4.size():
 		menu.add_item(names[i], i)
 	menu.id_pressed.connect(func(id: int) -> void:
-		placed[vi]["facing"] = FACING8[id]
+		placed[vi]["facing"] = FACING4[id]
 		_status.text = "Rotated the %s (free)." % _display_name(placed[vi]["stats_id"])
 		queue_redraw()
 		menu.queue_free())
@@ -353,9 +352,9 @@ func _process(delta: float) -> void:
 		pan += dir.normalized() * PAN_SPEED * delta
 		queue_redraw()
 
-## Восемь направлений фронта — для бесплатного поворота танка на закупке (item 21).
-const FACING8 := [Vector2i(1,0), Vector2i(1,1), Vector2i(0,1), Vector2i(-1,1),
-	Vector2i(-1,0), Vector2i(-1,-1), Vector2i(0,-1), Vector2i(1,-1)]
+## Четыре направления фронта — для бесплатного поворота танка на закупке (item 21).
+## Диагонали убраны (item 2): танк смотрит только по сторонам света.
+const FACING4 := [Vector2i(1,0), Vector2i(0,1), Vector2i(-1,0), Vector2i(0,-1)]
 
 ## Направление фронта поставленной машины (item 21); по умолчанию — «в глубину поля»
 ## от своей стороны. Пехоте фронт не нужен и не хранится.
@@ -373,11 +372,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		if vi != -1 and VehicleDB.is_vehicle(placed[vi]["stats_id"]) \
 				and bool(VehicleDB.get_vehicle(placed[vi]["stats_id"]).get("has_facing", false)):
 			var cur_face := _placed_facing(placed[vi])
-			var idx := FACING8.find(cur_face)
+			var idx := FACING4.find(cur_face)
 			if idx == -1:
 				idx = 0
 			var step := -1 if event.keycode == KEY_Q else 1
-			placed[vi]["facing"] = FACING8[(idx + step + FACING8.size()) % FACING8.size()]
+			placed[vi]["facing"] = FACING4[(idx + step + FACING4.size()) % FACING4.size()]
 			_status.text = "Rotated the %s (free)." % _display_name(placed[vi]["stats_id"])
 			queue_redraw()
 		return
@@ -691,15 +690,20 @@ func _draw() -> void:
 	for p in placed:
 		_draw_token(p["coord"], int(p["owner"]), p["stats_id"], font)
 		# Стрелка фронта танка (item 21): показывает, куда он смотрит, — крутится клавишей R.
+		# Якорь в НИЖНЕМ ЛЕВОМ углу следа (item 3): раньше стрелка шла из центра и
+		# перекрывала корпус/инициалы; теперь компактный указатель сидит в углу.
 		if VehicleDB.is_vehicle(p["stats_id"]) \
 				and bool(VehicleDB.get_vehicle(p["stats_id"]).get("has_facing", false)):
-			var vc := _cell_origin(p["coord"]) + Vector2(CELL, CELL) * 0.5
+			var vsize := VehicleDB.size_of(p["stats_id"])
+			var vorigin := _cell_origin(p["coord"])
+			var corner := vorigin + Vector2(CELL * 0.28, vsize.y * CELL - CELL * 0.28)
 			var fdir := Vector2(_placed_facing(p)).normalized()
-			draw_line(vc, vc + fdir * (CELL * 0.55), Color.WHITE, 3.0)
-			var perp := Vector2(-fdir.y, fdir.x) * (CELL * 0.14)
-			var tip := vc + fdir * (CELL * 0.55)
+			var alen := CELL * 0.4
+			var tip := corner + fdir * alen
+			draw_line(corner, tip, Color.WHITE, 3.0)
+			var perp := Vector2(-fdir.y, fdir.x) * (CELL * 0.12)
 			draw_colored_polygon(PackedVector2Array([
-				tip, tip - fdir * (CELL * 0.2) + perp, tip - fdir * (CELL * 0.2) - perp]), Color.WHITE)
+				tip, tip - fdir * (CELL * 0.18) + perp, tip - fdir * (CELL * 0.18) - perp]), Color.WHITE)
 	# Предпросмотр формы-инструмента (item 12): куда ляжет линия/прямоугольник/круг.
 	if _ptool != PTool.POINT and _shape_start != Vector2i(-9999, -9999):
 		for sc: Vector2i in _shape_cells(_shape_start, _shape_cur):

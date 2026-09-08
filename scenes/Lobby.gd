@@ -23,7 +23,10 @@ const GAME_MODES := ["domination"]
 const SLOT_COL_IDX := 26
 const SLOT_COL_TYPE := 124
 const SLOT_COL_COLOR := 124
-const SLOT_COL_TEAM := 64
+# SpinBox'ы имеют собственный минимум ширины ~86px (стрелки + текст). Колонка «Team»
+# была уже него (64) — контрол распирал её, и все следующие столбцы (Zone/Points)
+# уезжали вправо от своих заголовков (item 1). Даём запас под реальный минимум.
+const SLOT_COL_TEAM := 88
 const SLOT_COL_ZONE := 100
 const SLOT_COL_PTS := 124
 

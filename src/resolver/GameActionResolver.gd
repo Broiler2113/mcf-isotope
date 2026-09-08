@@ -2352,6 +2352,14 @@ func advance_fire(owner: int = -1, res: ActionResult = null) -> void:
 				# съедала бы кубики и сдвигала весь дальнейший поток случайности.
 				if state.turns.round_number < ncell.fire_suppressed_until:
 					continue
+				# Живой не-огнеупорный боец рядом с пламенем загорается СРАЗУ, без броска
+				# и независимо от того, горюч ли пол под ним (issue #9): огонь перекидывается
+				# на человека, а не только на траву. Клетка занимается огнём, apply-цикл
+				# ниже убивает бойца тем же путём, что и на любой загоревшейся клетке.
+				var occ := ncell.occupant
+				if occ != null and occ.is_alive() and not is_fireproof(occ):
+					ignite[n] = src.fire_owner
+					continue
 				var need := fire_need(ncell)
 				if need > 6:
 					continue  # не горит никогда — кубик не бросаем
@@ -2738,6 +2746,12 @@ func team_visible_coords(owner: int) -> Dictionary:
 	var sides := _vision_sides(owner)
 	for u in state.all_units():
 		if not u.is_alive() or not sides.has(u.owner):
+			continue
+		# Экипаж В МАШИНЕ вынесен за карту (coord = OFFBOARD, −9999): его обзор даёт сама
+		# машина ниже. Раньше пассажир всё равно попадал в _seen_from(), и луч Брезенхэма
+		# из −9999 индексировал сетку по отрицательному адресу — «out of bounds get index»
+		# при мультивыборе с посаженным юнитом (item 5). Пропускаем сидящих.
+		if u.aboard_vehicle_id != -1:
 			continue
 		live[u.id] = true
 		var fresh := _seen_from(u.coord, sight_of(u))
@@ -4771,6 +4785,11 @@ const DIR8 := [
 	Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1),
 ]
 
+## Танк ходит и целится ТОЛЬКО по четырём сторонам света (item 2): диагональные
+## развороты и стрельба по диагонали убраны. Пушка и так била лишь по прямой
+## (cannon_port), а фронт теперь тоже ограничен ортогональю.
+const DIR4 := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+
 ## «Клетка» экипажа внутри машины — вне поля, чтобы любые проверки по координатам
 ## (обзор/дальность/цели) автоматически исключали пассажиров (§техника).
 const OFFBOARD := Vector2i(-9999, -9999)
@@ -5031,8 +5050,9 @@ func _resolve_vehicle_turn(intent: VehicleTurnIntent) -> ActionResult:
 		return ActionResult.fail(err)
 	if veh.facing == Vector2i.ZERO:
 		return ActionResult.fail("This vehicle has no facing")
-	if not DIR8.has(intent.facing):
-		return ActionResult.fail("Bad facing")
+	# Только четыре стороны света (item 2): диагональный разворот запрещён.
+	if not DIR4.has(intent.facing):
+		return ActionResult.fail("Tanks turn only up/down/left/right")
 	if intent.facing == veh.facing:
 		return ActionResult.fail("Already facing that way")
 	veh.ap -= VehicleRules.TURN_COST
