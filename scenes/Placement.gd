@@ -6,7 +6,7 @@ extends Node2D
 ## MapData со спавнами и передаёт бой в Main через MapHandoff.
 
 const MAIN_SCENE := "res://scenes/Main.tscn"
-const SETUP_SCENE := "res://scenes/Setup.tscn"
+const LOBBY_SCENE := "res://scenes/Lobby.tscn"
 const MENU_SCENE := "res://scenes/MainMenu.tscn"
 ## Хелпер оформления окон в стиле «2003 Steam» (preload, без class_name).
 const SteamChrome = preload("res://src/ui/SteamChrome.gd")
@@ -271,7 +271,12 @@ func _sides() -> Array[int]:
 ## P2 справа) — просто записанное так, чтобы работать и на троих, и на шестерых.
 func _in_zone(coord: Vector2i, side: int) -> bool:
 	if _map_zones:
-		return map.get_zone(coord) == side
+		# Слот может быть посажен в ЛЮБУЮ нарисованную зону (item 10): сверяем с его
+		# назначенной зоной, а не жёстко с номером стороны.
+		var z := side
+		if roster != null and roster.slot(side) != null:
+			z = roster.slot(side).zone()
+		return map.get_zone(coord) == z
 	var sides := _sides()
 	var n := sides.size()
 	var slot := sides.find(side)
@@ -799,6 +804,8 @@ func _build_ui() -> void:
 	_palette.add_theme_constant_override("separation", 3)
 	vbox.add_child(_palette)
 	for id in PURCHASABLE:
+		if not GameConfig.unit_allowed(id):  # ограничение состава хостом (item 12)
+			continue
 		var s := _stats(id)
 		if s == null:
 			continue
@@ -810,7 +817,7 @@ func _build_ui() -> void:
 	mach_lbl.modulate = Color(0.75, 0.78, 0.85)
 	_palette.add_child(mach_lbl)
 	for vid in PURCHASABLE_VEHICLES:
-		if not VehicleDB.is_vehicle(vid):
+		if not VehicleDB.is_vehicle(vid) or not GameConfig.unit_allowed(vid):
 			continue
 		_add_palette_button(vid, "%s  -  %d pts" % [_display_name(vid), _cost(vid)])
 
@@ -851,7 +858,7 @@ func _build_ui() -> void:
 
 	var back_btn := Button.new()
 	# В сетевой партии «назад» рвёт связь, поэтому ведём в меню, а не в Setup (#93).
-	back_btn.text = "Leave Match" if networked() else "Back to Setup"
+	back_btn.text = "Leave Match" if networked() else "Back to Lobby"
 	back_btn.pressed.connect(_on_back)
 	vbox.add_child(back_btn)
 
@@ -1001,4 +1008,6 @@ func _on_back() -> void:
 		_drop_session()
 		get_tree().change_scene_to_file(MENU_SCENE)
 		return
-	get_tree().change_scene_to_file(SETUP_SCENE)
+	# Одиночная игра теперь создаётся в лобби (item 8/20) — назад ведёт туда же, а не в
+	# снятый с потока старый экран Setup.
+	get_tree().change_scene_to_file(LOBBY_SCENE)

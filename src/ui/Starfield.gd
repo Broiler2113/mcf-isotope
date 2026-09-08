@@ -44,6 +44,14 @@ var _viewport_size: Vector2 = Vector2.ZERO
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# Гарантированно ЧЁРНАЯ подложка (item 1): сплошной ColorRect под всем. Прежде фон
+	# рисовался только градиент-текстурой, и если она не растягивалась на весь экран,
+	# сквозь неё просвечивал серый clear-color окна — отсюда «параллакс не чёрный».
+	var solid := ColorRect.new()
+	solid.color = Color(0, 0, 0)
+	solid.set_anchors_preset(Control.PRESET_FULL_RECT)
+	solid.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(solid)
 	var base := TextureRect.new()
 	base.texture = _sky_gradient()
 	base.expand_mode = TextureRect.EXPAND_IGNORE_SIZE

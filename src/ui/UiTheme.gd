@@ -21,6 +21,8 @@ const FONT_FALLBACKS := ["Tahoma", "Verdana", "Geneva", "DejaVu Sans", "Arial", 
 # item 8: серые части меню сделаны заметно темнее (примерно на четверть). Один и тот
 # же сдвиг на всех трёх тонах сохраняет прежний контраст между окном, панелью и
 # утопленным полем — темнеет вся серая гамма разом, а не отдельные её куски.
+# Тёмный множитель на всю текстурную хромировку (item 8/18) — панели/кнопки/поля.
+const CHROME_MODULATE := Color(0.66, 0.66, 0.70)
 const WINDOW_BG   := Color(0.170, 0.170, 0.170)
 const PANEL_BG    := Color(0.235, 0.235, 0.235)
 const SUNKEN_BG   := Color(0.125, 0.125, 0.125)
@@ -337,6 +339,11 @@ func _sb(name: String, pad_h: int, pad_v: int) -> StyleBox:
 	sb.content_margin_right = pad_h
 	sb.content_margin_top = pad_v
 	sb.content_margin_bottom = pad_v
+	# Затемняем ВСЮ текстурную хромировку (item 8/18): панели, кнопки, поля идут
+	# картинками-9-слайсами, поэтому правка цветовых констант их не трогала совсем —
+	# кнопки оставались светлыми. Тёмный modulate гасит их разом. Ховер/акцент ставят
+	# свой modulate позже и этот перекрывают.
+	sb.modulate_color = CHROME_MODULATE
 	return sb
 
 func _sb_accent(name: String, pad_h: int, pad_v: int) -> StyleBox:

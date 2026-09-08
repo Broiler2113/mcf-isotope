@@ -30,6 +30,21 @@ const PALETTE := [
 	Color(0.85, 0.55, 0.90), Color(0.40, 0.60, 0.35),
 ]
 
+## Человекочитаемые имена цветов PALETTE в том же порядке (item 3): в лобби вместо
+## «C1…C26» показываем настоящие названия. Порядок строго соответствует PALETTE.
+const COLOR_NAMES := [
+	"Blue", "Red", "Green", "Gold", "Purple", "Cyan",
+	"Orange", "Pink", "Lime", "Indigo", "Crimson", "Teal",
+	"Tan", "Brown", "Mint", "Chartreuse", "Violet", "Salmon",
+	"Sky", "Khaki", "Gray", "Rose", "Emerald", "Periwinkle",
+	"Orchid", "Moss",
+]
+
+static func color_name(index: int) -> String:
+	if index >= 0 and index < COLOR_NAMES.size():
+		return COLOR_NAMES[index]
+	return "Color %d" % (index + 1)
+
 ## Цвет нейтральной стороны и её групп — один на всех: нейтралы не команда, они фон.
 const NEUTRAL_COLOR := Color(0.80, 0.80, 0.55)
 
@@ -51,6 +66,14 @@ class Slot extends RefCounted:
 	## Сторона выбита. Слот НЕ удаляется из инициативы: он остаётся видимым и
 	## пропускается — иначе из очереди пропадает история партии (§15.4).
 	var eliminated: bool = false
+	## Точка развёртывания (item 10): индекс зоны на карте, в которой этот слот
+	## расставляет отряд. −1 = «зона с моим же номером» (поведение по умолчанию).
+	## Позволяет посадить любого игрока в любую нарисованную зону.
+	var deploy_zone: int = -1
+
+	## Зона развёртывания слота: заданная явно, иначе — своя по номеру (item 10).
+	func zone() -> int:
+		return deploy_zone if deploy_zone >= 0 else id
 
 	func is_playing() -> bool:
 		return kind == SlotKind.HUMAN or kind == SlotKind.AI
@@ -81,6 +104,17 @@ func add_slot(kind: int = SlotKind.OPEN, team: int = -1) -> int:
 	s.display_name = MCF.owner_name(id)
 	slots.append(s)
 	return id
+
+## Убрать слот и переиндексировать оставшиеся (item 4). До старта партии id слота и есть
+## номер игрока, поэтому после удаления из середины ids/имена перенумеровываются подряд.
+## Нельзя опуститься ниже двух слотов — партии нужен минимум дуэт.
+func remove_slot(id: int) -> void:
+	if id < 0 or id >= slots.size() or slots.size() <= 2:
+		return
+	slots.remove_at(id)
+	for i in slots.size():
+		slots[i].id = i
+		slots[i].display_name = MCF.owner_name(i)
 
 ## Партия на двоих без команд — ровно то, чем игра была до этого шага. Служит
 ## значением по умолчанию везде, где ростер ещё не собран лобби.
