@@ -4372,9 +4372,11 @@ func _resolve_end_turn(intent: EndTurnIntent = null) -> ActionResult:
 ## Всё — «случится ли», «какое», «куда бьёт» — берётся из DiceService, чтобы хост и
 ## клиент разыграли одно и то же. Пока эффекты условны (заглушки).
 func _maybe_random_event(res: ActionResult) -> void:
-	if random_events == null or not random_events._due():
+	if random_events == null:
 		return
-	var id := random_events._pick(state.dice)
+	# Единая точка (item 11): «созрело ли», «обязательно ли», «какое» — всё внутри
+	# roll_event через DiceService, чтобы хост и клиент разыграли одно и то же.
+	var id := random_events.roll_event(state.dice)
 	if id == "":
 		return
 	res.log("⚠ Random event — %s" % RandomEvents.event_name(id))

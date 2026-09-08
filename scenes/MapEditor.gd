@@ -384,20 +384,31 @@ func _initials(sid: String) -> String:
 ## Панель, прижатая к краю экрана (item 11): редактор больше не одна широкая колонка
 ## справа, а два узких столбца по бокам, между которыми видно карту.
 func _edge_panel(to_left: bool) -> VBoxContainer:
+	# Панель во ВСЮ высоту экрана, прижата к своему краю (item 19: без якоря на низ
+	# ScrollContainer схлопывался в ноль и панели пропадали). Задаём все четыре
+	# смещения от краёв viewport вручную — это надёжнее пресетов на CanvasLayer.
 	var panel := PanelContainer.new()
 	SteamChrome.apply_panel(panel)
+	var w := 260.0
+	panel.anchor_top = 0.0
+	panel.anchor_bottom = 1.0
+	panel.offset_top = 12.0
+	panel.offset_bottom = -12.0
 	if to_left:
-		panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-		panel.offset_left = 12
+		panel.anchor_left = 0.0
+		panel.anchor_right = 0.0
+		panel.offset_left = 12.0
+		panel.offset_right = 12.0 + w
 	else:
-		panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-		panel.offset_right = -12
-	panel.offset_top = 12
-	panel.custom_minimum_size = Vector2(250, 0)
+		panel.anchor_left = 1.0
+		panel.anchor_right = 1.0
+		panel.offset_left = -12.0 - w
+		panel.offset_right = -12.0
 	_ui.add_child(panel)
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.custom_minimum_size = Vector2(250, 0)
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	panel.add_child(scroll)
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 6)
@@ -454,25 +465,28 @@ func _build_ui() -> void:
 	# ПРАВАЯ колонка — обустройство и файлы: зоны, нейтралы, размер, сохранение (item 11).
 	var rbox := _edge_panel(false)
 
-	# Зоны развёртывания (§3.3, #52): рисуем регионы, где каждая сторона расставляет
-	# отряд в пре-игре. Заменяет попиксельную расстановку конкретных юнитов.
+	# Зоны развёртывания (item 7): это НУМЕРОВАННЫЕ зоны, а не «зона игрока A/B». Зона N
+	# достаётся N-му игроку по порядку слотов в лобби — какие именно буквы сядут в бой,
+	# карта не знает. Внутри зона по-прежнему хранится индексом (Zone 1 → индекс 0).
 	var zone_lbl := Label.new()
 	zone_lbl.text = "Deployment Zones:"
 	zone_lbl.add_theme_font_size_override("font_size", 13)
 	rbox.add_child(zone_lbl)
+	var zone_hint := Label.new()
+	zone_hint.text = "Numbered zones; the lobby assigns each to a player."
+	zone_hint.add_theme_font_size_override("font_size", 10)
+	zone_hint.modulate = Color(0.72, 0.76, 0.85)
+	zone_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	rbox.add_child(zone_hint)
 	var zone_row := HBoxContainer.new()
 	rbox.add_child(zone_row)
-	# Игроков теперь до 26, кнопкой на каждого панель не застроишь: сторона
-	# выбирается списком, а кисть у неё одна.
 	_zone_player_opt = OptionButton.new()
 	for i in MCF.MAX_PLAYERS:
-		_zone_player_opt.add_item(MCF.owner_name(i), i)
+		_zone_player_opt.add_item("Zone %d" % (i + 1), i)
 	_zone_player_opt.select(0)
 	_zone_player_opt.item_selected.connect(_on_zone_player_selected)
 	zone_row.add_child(_zone_player_opt)
-	# «Zone Neut.» убрана (item 5): нейтралов теперь ставят поштучно, как юнитов, а не
-	# заливают зоной. Осталась только зона РАЗВЁРТЫВАНИЯ игроков.
-	for pair in [[ZONE_SELECTED_PLAYER, "Zone Player"], [-1, "No Zone"]]:
+	for pair in [[ZONE_SELECTED_PLAYER, "Paint Zone"], [-1, "No Zone"]]:
 		var zb := Button.new()
 		zb.text = pair[1]
 		zb.pressed.connect(_set_zone_brush.bind(pair[0], pair[1]))

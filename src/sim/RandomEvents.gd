@@ -50,19 +50,33 @@ func _init(cfg_enabled := false, cfg_mandatory := false, cfg_interval := 3,
 	interval = maxi(1, cfg_interval)
 	weights = cfg_weights.duplicate() if not cfg_weights.is_empty() else default_weights()
 
-## Пора ли разыгрывать событие на очередном ходу. Продвигает внутренний счётчик; когда
-## он дозрел — сбрасывает его и отвечает true. Обязательный режим срабатывает каждый ход.
+## d6, на котором и ниже ничего не происходит на «созревшем» ходу, когда режим НЕ
+## обязательный (item 11): 1–2 из шести ≈ треть — заметный, но не доминирующий шанс тишины.
+const NOTHING_ON := 2
+
+## Пора ли разыгрывать событие на очередном ходу. Частоту задаёт ТОЛЬКО интервал —
+## «обязательность» больше не значит «каждый ход» (item 11). Продвигает счётчик и,
+## дозрев, сбрасывает его и отвечает true.
 func _due() -> bool:
 	if not enabled or _total_weight() <= 0:
 		return false
 	turns_since += 1
-	if mandatory:
-		turns_since = 0
-		return true
 	if turns_since >= interval:
 		turns_since = 0
 		return true
 	return false
+
+## Итог хода по событиям (item 11): "" — ничего, иначе id случившегося события.
+## На «созревший» ход: если режим обязательный — одно из выбранных событий гарантированно;
+## иначе сперва бросок «а случится ли вообще», и есть шанс, что не случится ничего.
+## Все броски — через DiceService: и хост, и клиент прокатывают один поток (лок-степ).
+func roll_event(dice: DiceService) -> String:
+	if not _due():
+		return ""
+	if not mandatory:
+		if dice.roll_d6() <= NOTHING_ON:
+			return ""
+	return _pick(dice)
 
 func _total_weight() -> int:
 	var t := 0

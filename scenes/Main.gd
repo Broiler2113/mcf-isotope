@@ -238,6 +238,8 @@ var _init_overlay_body: VBoxContainer
 ## Чат, докнутый в правый-нижний угол (item 50): тело сворачивается кнопкой заголовка.
 var _chat_panel: PanelContainer
 var _chat_body: VBoxContainer
+## Обёртка-отступ вокруг тела чата — сворачивается целиком (item 15).
+var _chat_body_wrap: Control
 var _chat_log: RichTextLabel
 var _chat_input: LineEdit
 var _log_label: RichTextLabel
@@ -756,8 +758,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		_escape_pressed()
 		get_viewport().set_input_as_handled()
 		return
-	# Tab — показать/скрыть оверлей инициативы (item 6).
-	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_TAB:
+	# «1» — показать/скрыть оверлей инициативы (item 16: не Tab, его легко задеть и
+	# полупрозрачный оверлей потом молча съедал все клики по полю — отсюда item 17
+	# «нельзя выделить юниты»).
+	if event is InputEventKey and event.pressed and not event.echo \
+			and (event.keycode == KEY_1 or event.keycode == KEY_KP_1):
 		_toggle_initiative_overlay()
 		get_viewport().set_input_as_handled()
 		return
@@ -829,26 +834,26 @@ func _unhandled_input(event: InputEvent) -> void:
 			if event.pressed:
 				_stroke_drawing = true
 				_cur_stroke = []
-				_stroke_add(_pos_to_cell(get_global_mouse_position()))
+				_stroke_add(_draw_world_pos())
 			else:
 				_stroke_drawing = false
 				_stroke_commit()
 			return
 		if event is InputEventMouseMotion:
 			if _stroke_drawing:
-				_stroke_add(_pos_to_cell(get_global_mouse_position()))
+				_stroke_add(_draw_world_pos())
 			return
 	# Ластик (item 6): тем же жестом стираем СВОИ штрихи в радиусе кисти под курсором.
 	if mode == Mode.ERASE:
 		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
 				_stroke_drawing = true
-				_erase_at(_pos_to_cell(get_global_mouse_position()))
+				_erase_at(_draw_world_pos())
 			else:
 				_stroke_drawing = false
 			return
 		if event is InputEventMouseMotion and _stroke_drawing:
-			_erase_at(_pos_to_cell(get_global_mouse_position()))
+			_erase_at(_draw_world_pos())
 			return
 	if HOVER_PREVIEW_MODES.has(mode) and event is InputEventMouseMotion:
 		queue_redraw()  # обновляем предпросмотр радиуса/струи/окопа под курсором
@@ -3096,15 +3101,14 @@ func _draw() -> void:
 			# был поверх корпуса, над которым висит.
 			_drones_pending.append({"unit": unit, "at": at})
 			continue
-		# Боец: картинка по id типа (можно отдельную на сторону — light_infantry_p1),
-		# иначе прежний кружок владельца с инициалами (#55).
-		var unit_key := Sprites.resolve(unit.stats.id, _owner_suffix(unit.owner))
-		if unit_key != "":
-			Sprites.draw_texture_override(self, unit_key, _cell_origin(at), float(CELL))
-		else:
-			draw_circle(center, CELL * 0.34, _side_color(unit.owner))
-			draw_string(font, center + Vector2(-9, 5), _initials(unit.stats.display_name),
-				HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
+		# Боец рисуется КРУЖКОМ цвета своей стороны (item 6). Общую тонированную картинку
+		# на все стороны убрали: с ней разные игроки выглядели одинаково («цвета
+		# перемешаны»). Пока у сторон нет отдельных текстур — только цветной круг с
+		# инициалами, а цвета сторон гарантированно различны (уникальны в ростере).
+		draw_circle(center, CELL * 0.34, _side_color(unit.owner))
+		draw_arc(center, CELL * 0.34, 0, TAU, 20, _side_color(unit.owner).darkened(0.45), 1.5)
+		draw_string(font, center + Vector2(-9, 5), _initials(unit.stats.display_name),
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
 		if unit.id == selected_id:
 			draw_arc(center, CELL * 0.42, 0, TAU, 32, Color(1, 0.9, 0.2), 3.0)
 		# Вскрытый мирный житель охотится — красное кольцо тревоги (§3.10, #56).
@@ -3153,6 +3157,17 @@ func _draw() -> void:
 
 ## Отрисовка одного дрона (item 14): вынесена из общего прохода, чтобы дрон рисовался
 ## верхним слоем — поверх корпусов машин, над которыми он висит.
+## Чёрная полоса-дорожка под «булавкой» ползунка кисти (item 13): без неё грабер висел
+## на пустом месте и не читался. Даём слайдеру видимую тёмную дорожку и высоту.
+func _style_brush_slider(s: HSlider) -> void:
+	s.custom_minimum_size = Vector2(0, 18)
+	var track := StyleBoxFlat.new()
+	track.bg_color = Color(0, 0, 0, 0.85)
+	track.set_corner_radius_all(3)
+	track.content_margin_top = 6
+	track.content_margin_bottom = 6
+	s.add_theme_stylebox_override("slider", track)
+
 func _draw_drone(unit: UnitInstance, at: Vector2i) -> void:
 	var center := _cell_origin(at) + Vector2(CELL, CELL) * 0.5
 	# Дрон висит над клеткой (#13): рисуем со сдвигом в верхний-правый угол,
@@ -3487,6 +3502,7 @@ func _build_ui() -> void:
 	draw_slider.step = 1
 	draw_slider.value = _draw_brush
 	draw_slider.value_changed.connect(func(v: float) -> void: _draw_brush = int(v))
+	_style_brush_slider(draw_slider)
 	vbox.add_child(draw_slider)
 	var erase_lbl := Label.new()
 	erase_lbl.text = "Erase brush"
@@ -3498,6 +3514,7 @@ func _build_ui() -> void:
 	erase_slider.step = 1
 	erase_slider.value = _erase_brush
 	erase_slider.value_changed.connect(func(v: float) -> void: _erase_brush = int(v))
+	_style_brush_slider(erase_slider)
 	vbox.add_child(erase_slider)
 	var team_draw := CheckBox.new()
 	team_draw.text = "Share with team"
@@ -3636,8 +3653,11 @@ func _build_chat_panel() -> void:
 	frame.add_child(SteamChrome.header_bar("Chat", toggle))
 	_chat_body = VBoxContainer.new()
 	_chat_body.add_theme_constant_override("separation", 4)
-	_chat_body.visible = false
-	frame.add_child(SteamChrome.pad(_chat_body, 8, 8))
+	# Сворачиваем ОБЁРТКУ-отступ, а не сам _chat_body (item 15): прятать только внутренний
+	# VBox оставляло пустую padding-рамку, и окно не «уезжало» вниз — сжимается вся обёртка.
+	_chat_body_wrap = SteamChrome.pad(_chat_body, 8, 8)
+	_chat_body_wrap.visible = false
+	frame.add_child(_chat_body_wrap)
 	_chat_log = RichTextLabel.new()
 	_chat_log.bbcode_enabled = true
 	_chat_log.custom_minimum_size = Vector2(260, 120)
@@ -3718,9 +3738,10 @@ func _build_initiative_overlay() -> void:
 	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	overlay.hide()
 	var dim := ColorRect.new()
-	# Полупрозрачный оверлей (item 6): доску за инициативой видно, лёгкое затемнение
-	# лишь чуть гасит фон. Клик по фону закрывает — как и Tab.
-	dim.color = Color(0, 0, 0, 0.20)
+	# Полупрозрачный оверлей (item 6): доску за инициативой видно, но затемнение
+	# ЗАМЕТНОЕ — чтобы игрок сразу понимал, что оверлей открыт и потому клики по полю
+	# сейчас не проходят (item 17). Клик по фону закрывает, как и «1»/Esc.
+	dim.color = Color(0, 0, 0, 0.45)
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	dim.mouse_filter = Control.MOUSE_FILTER_STOP
 	dim.gui_input.connect(func(e: InputEvent) -> void:
@@ -3860,11 +3881,10 @@ func _enter_erase() -> void:
 ## Стереть из своих штрихов все точки в радиусе ластика (в клетках) вокруг cell.
 ## Штрих, у которого не осталось точек, удаляется целиком. Стирание локальное — как и
 ## «очистить свои» раньше: аннотации косметические и правки по сети не гоняются.
-func _erase_at(cell: Vector2i) -> void:
-	if not state.grid.in_bounds(cell):
-		return
+func _erase_at(pos: Vector2) -> void:
 	var me := _draw_author()
-	var r := _erase_brush
+	# Радиус ластика в пикселях draw-пространства: базовый + шаг за деление ползунка.
+	var r: float = (float(_erase_brush) + 1.0) * (CELL * 0.35)
 	var kept: Array = []
 	var changed := false
 	for rec: Dictionary in _strokes:
@@ -3873,8 +3893,8 @@ func _erase_at(cell: Vector2i) -> void:
 			continue
 		var cells: Array = rec["cells"]
 		var new_cells: Array = []
-		for c: Vector2i in cells:
-			if Combat.distance(c, cell) > r:
+		for c: Vector2 in cells:
+			if c.distance_to(pos) > r:
 				new_cells.append(c)
 		if new_cells.size() != cells.size():
 			changed = true
@@ -3885,11 +3905,16 @@ func _erase_at(cell: Vector2i) -> void:
 		_strokes = kept
 		queue_redraw()
 
-func _stroke_add(cell: Vector2i) -> void:
-	if not state.grid.in_bounds(cell):
-		return
-	if _cur_stroke.is_empty() or _cur_stroke[-1] != cell:
-		_cur_stroke.append(cell)
+## Позиция курсора в ПРОСТРАНСТВЕ ОТРИСОВКИ поля (item 14): рисунок свободный, не по
+## клеткам, поэтому храним пиксельные точки в той же системе, что и _cell_origin().
+func _draw_world_pos() -> Vector2:
+	return (get_global_mouse_position() - pan) / zoom
+
+## Свободный штрих (item 14): добавляем точку, если курсор заметно сдвинулся, — так
+## линия гладкая, но массив не пухнет от микродёрганий.
+func _stroke_add(pos: Vector2) -> void:
+	if _cur_stroke.is_empty() or Vector2(_cur_stroke[-1]).distance_to(pos) >= 4.0:
+		_cur_stroke.append(pos)
 		queue_redraw()
 
 func _stroke_commit() -> void:
@@ -3905,7 +3930,7 @@ func _stroke_commit() -> void:
 	_cur_stroke = []
 	if networked and session != null:
 		var flat: Array = []
-		for c: Vector2i in rec["cells"]:
+		for c: Vector2 in rec["cells"]:
 			flat.append(c.x)
 			flat.append(c.y)
 		session.send({"k": K_DRAW, "a": rec["author"], "s": rec["scope"],
@@ -3916,10 +3941,10 @@ func _stroke_commit() -> void:
 ## доходит вовсе (автор его и не шлёт), «для команды» видно только союзникам.
 func _on_remote_stroke(msg: Dictionary) -> void:
 	var flat: Array = msg.get("c", [])
-	var cells: Array[Vector2i] = []
+	var cells: Array[Vector2] = []
 	var i := 0
 	while i + 1 < flat.size():
-		cells.append(Vector2i(int(flat[i]), int(flat[i + 1])))
+		cells.append(Vector2(float(flat[i]), float(flat[i + 1])))
 		i += 2
 	if cells.is_empty():
 		return
@@ -3966,27 +3991,28 @@ func _draw_annotations() -> void:
 			continue
 		var col := _side_color(int(rec["author"]))
 		var w: float = float(rec.get("width", 3))
+		# Точки штриха уже в draw-пространстве (item 14: свободный рисунок, не по клеткам).
 		var pts := PackedVector2Array()
 		for c in cells:
-			pts.append(_cell_origin(c) + Vector2(CELL, CELL) * 0.5)
+			pts.append(c)
 		if pts.size() == 1:
-			draw_circle(pts[0], maxf(CELL * 0.1, w * 0.6), col)
+			draw_circle(pts[0], maxf(2.0, w * 0.6), col)
 		else:
 			draw_polyline(pts, col, w)
 
 # --- Чат (item 50) ---
 
 func _toggle_chat() -> void:
-	if _chat_body == null:
+	if _chat_body_wrap == null:
 		return
-	_chat_body.visible = not _chat_body.visible
+	_chat_body_wrap.visible = not _chat_body_wrap.visible
 
 func _chat_append(who: String, text: String) -> void:
 	if _chat_log == null:
 		return
 	_chat_log.append_text("[b]%s:[/b] %s\n" % [who, text])
-	if _chat_body != null and not _chat_body.visible:
-		_chat_body.visible = true
+	if _chat_body_wrap != null and not _chat_body_wrap.visible:
+		_chat_body_wrap.visible = true
 
 func _chat_send() -> void:
 	if _chat_input == null:

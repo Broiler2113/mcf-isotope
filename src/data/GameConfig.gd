@@ -66,6 +66,15 @@ static var random_events_enabled: bool = false
 static var random_events_mandatory: bool = false
 static var random_events_interval: int = 3
 static var random_events_weights: Dictionary = {}
+## Ограничение состава на закупку (item 12): id юнита -> разрешён ли. Пустой словарь =
+## разрешены ВСЕ. Заполняет лобби, применяет экран расстановки.
+static var allowed_units: Dictionary = {}
+
+## Разрешён ли юнит к покупке (item 12). Пустой список ограничений = можно всё.
+static func unit_allowed(id: String) -> bool:
+	if allowed_units.is_empty():
+		return true
+	return bool(allowed_units.get(id, false))
 
 ## Бюджет бесконечен для этого игрока? (item 40) 0 в budget исторически уже значил
 ## «без лимита», этим и пользуемся.

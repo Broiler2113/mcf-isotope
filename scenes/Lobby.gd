@@ -12,6 +12,9 @@ const PLACEMENT_SCENE := "res://scenes/Placement.tscn"
 const MENU_SCENE := "res://scenes/MainMenu.tscn"
 const MAIN_SCENE := "res://scenes/Main.tscn"
 const SteamChrome = preload("res://src/ui/SteamChrome.gd")
+## Списки покупаемых юнитов/техники берём из самого экрана расстановки (item 12) —
+## один источник правды, чтобы ограничения и палитра не разъехались.
+const PlacementScript = preload("res://scenes/Placement.gd")
 
 const GAME_MODES := ["domination"]
 
@@ -20,7 +23,6 @@ var roster: Roster
 var _is_client := false   # мы подключившийся гость (не хост)
 
 # Ссылки на управляющие элементы хоста.
-var _max_spin: SpinBox
 var _place_opt: OptionButton
 var _fog_opt: OptionButton
 var _army_opt: OptionButton
@@ -28,6 +30,10 @@ var _mode_opt: OptionButton
 var _ff_check: CheckBox
 var _live_check: CheckBox
 var _events_check: CheckBox
+## Галочки выбора событий в пул (item 5): ev_id -> CheckBox.
+var _event_checks: Dictionary = {}
+## Галочки разрешённых к покупке юнитов (item 12): unit_id -> CheckBox.
+var _unit_checks: Dictionary = {}
 var _events_mand: CheckBox
 var _events_interval: SpinBox
 var _map_opt: OptionButton
@@ -136,7 +142,6 @@ func _seed_roster() -> Roster:
 
 # --- UI ----------------------------------------------------------------------
 func _build_ui() -> void:
-	Ui.theme_canvas_layers()
 	_ui = CanvasLayer.new()
 	add_child(_ui)
 
@@ -195,6 +200,9 @@ func _build_ui() -> void:
 		start.text = "Start Match"
 		start.pressed.connect(_on_start)
 		bar.add_child(start)
+	# Тема применяется ПОСЛЕ сборки (item 2): раньше вызов стоял до создания _ui, и слой
+	# лобби оставался с дефолтным скином Godot вместо общего стиля игры.
+	Ui.theme_canvas_layers()
 
 func _titled(parent: VBoxContainer, title: String) -> VBoxContainer:
 	var lbl := Label.new()
@@ -221,11 +229,8 @@ func _row(box: VBoxContainer, label_text: String, control: Control) -> void:
 
 func _build_config(parent: VBoxContainer) -> void:
 	var box := _titled(parent, "Lobby Configuration")
-	_max_spin = SpinBox.new()
-	_max_spin.min_value = 2
-	_max_spin.max_value = MCF.MAX_PLAYERS
-	_max_spin.value = 2
-	_row(box, "Max Players:", _max_spin)
+	# «Max Players» убран (item 4): игроки добавляются кнопкой «+ Add Slot» и убираются
+	# «✕» в списке слотов; потолок — MCF.MAX_PLAYERS, но задавать его вручную не нужно.
 
 	_place_opt = _opt(["Asymmetric", "Mirrored"], GameConfig.placement_mode)
 	_row(box, "Placement:", _place_opt)
@@ -250,23 +255,68 @@ func _build_config(parent: VBoxContainer) -> void:
 	_live_check.button_pressed = GameConfig.live_placement_visible
 	box.add_child(_live_check)
 
+	# --- Случайные события (item 5/11) ---
+	# Раскладка: заголовок → «Enable» → «Mandatory» → интервал → список из трёх событий
+	# с галочками (выбранный пул). Семантика «Mandatory» новая (item 11): на «созревший»
+	# ход при включённом флаге ОБЯЗАТЕЛЬНО происходит одно из выбранных событий; при
+	# выключенном — есть шанс, что не случится ничего.
+	var ev_box := _titled(parent, "Random Events")
 	_events_check = CheckBox.new()
-	_events_check.text = "Random events"
+	_events_check.text = "Enable random events"
 	_events_check.button_pressed = GameConfig.random_events_enabled
-	box.add_child(_events_check)
+	ev_box.add_child(_events_check)
 	_events_mand = CheckBox.new()
-	_events_mand.text = "…mandatory every turn"
+	_events_mand.text = "Mandatory (a due turn always fires one)"
 	_events_mand.button_pressed = GameConfig.random_events_mandatory
-	box.add_child(_events_mand)
+	ev_box.add_child(_events_mand)
 	_events_interval = SpinBox.new()
 	_events_interval.min_value = 1
 	_events_interval.max_value = 20
 	_events_interval.value = GameConfig.random_events_interval
-	_row(box, "Turns between events:", _events_interval)
+	_row(ev_box, "Turns between events:", _events_interval)
+	var pool_lbl := Label.new()
+	pool_lbl.text = "Events in the pool:"
+	pool_lbl.add_theme_font_size_override("font_size", 12)
+	ev_box.add_child(pool_lbl)
+	_event_checks = {}
+	var cur_weights: Dictionary = GameConfig.random_events_weights
+	if cur_weights.is_empty():
+		cur_weights = RandomEvents.default_weights()
+	# REGISTRY — массив пар [id, name] в фиксированном порядке (не словарь).
+	for pair in RandomEvents.REGISTRY:
+		var ev_id: String = pair[0]
+		var cb := CheckBox.new()
+		cb.text = str(pair[1])
+		cb.button_pressed = float(cur_weights.get(ev_id, 0.0)) > 0.0
+		ev_box.add_child(cb)
+		_event_checks[ev_id] = cb
+
+	# --- Ограничение состава (item 12): галочка = юнит доступен к покупке ---
+	var ru_box := _titled(parent, "Allowed Units")
+	var ru_hint := Label.new()
+	ru_hint.text = "Unchecked units can't be bought in deployment."
+	ru_hint.add_theme_font_size_override("font_size", 10)
+	ru_hint.modulate = Color(0.72, 0.76, 0.85)
+	ru_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	ru_box.add_child(ru_hint)
+	_unit_checks = {}
+	var all_buyable: Array = []
+	all_buyable.append_array(PlacementScript.PURCHASABLE)
+	all_buyable.append_array(PlacementScript.PURCHASABLE_VEHICLES)
+	for uid: String in all_buyable:
+		var ucb := CheckBox.new()
+		ucb.text = uid.capitalize()
+		ucb.add_theme_font_size_override("font_size", 11)
+		ucb.button_pressed = GameConfig.unit_allowed(uid)
+		ru_box.add_child(ucb)
+		_unit_checks[uid] = ucb
 
 	if _is_client:
-		for c in [_max_spin, _place_opt, _fog_opt, _army_opt, _mode_opt,
-				_ff_check, _live_check, _events_check, _events_mand, _events_interval]:
+		var _client_locked: Array = [_place_opt, _fog_opt, _army_opt, _mode_opt,
+				_ff_check, _live_check, _events_check, _events_mand, _events_interval]
+		_client_locked.append_array(_event_checks.values())
+		_client_locked.append_array(_unit_checks.values())
+		for c in _client_locked:
 			# У кнопок (в т. ч. OptionButton/CheckBox — все наследники BaseButton) есть
 			# .disabled; у SpinBox её нет, он глохнет через .editable. Присваивать
 			# .disabled всем подряд нельзя (item 18): на SpinBox это роняло клиента с
@@ -395,7 +445,7 @@ func _build_personal(parent: VBoxContainer) -> void:
 	var box := _titled(parent, "Personal Setup")
 	var color_opt := OptionButton.new()
 	for i in Roster.PALETTE.size():
-		color_opt.add_item("Color %d" % (i + 1), i)
+		color_opt.add_item(Roster.color_name(i), i)  # имена цветов (item 3)
 	color_opt.select(_my_slot().color_index() if _my_slot() != null else 0)
 	color_opt.item_selected.connect(_on_my_color)
 	_row(box, "Selected Color:", color_opt)
@@ -404,7 +454,7 @@ func _build_personal(parent: VBoxContainer) -> void:
 	_preview_swatch.color = _my_slot().color if _my_slot() != null else Color.WHITE
 	box.add_child(_preview_swatch)
 	var note := Label.new()
-	note.text = "Live soldier preview (tinted to your color)."
+	note.text = "Your soldiers show as circles in this colour."
 	note.add_theme_font_size_override("font_size", 11)
 	note.modulate = Color(0.75, 0.78, 0.85)
 	box.add_child(note)
@@ -415,6 +465,7 @@ func _refresh_slots() -> void:
 		return
 	for c in _slots_box.get_children():
 		c.queue_free()
+	_slots_box.add_child(_slot_header())
 	for s: Roster.Slot in roster.slots:
 		_slots_box.add_child(_slot_row(s))
 
@@ -437,8 +488,9 @@ func _slot_row(s: Roster.Slot) -> Control:
 	row.add_child(kind)
 
 	var color := OptionButton.new()
+	# Настоящие названия цветов вместо «C1…C26» (item 3).
 	for i in Roster.PALETTE.size():
-		color.add_item("C%d" % (i + 1), i)
+		color.add_item(Roster.color_name(i), i)
 	color.select(s.color_index())
 	color.item_selected.connect(_on_slot_color.bind(s.id))
 	color.disabled = _is_client
@@ -453,6 +505,17 @@ func _slot_row(s: Roster.Slot) -> Control:
 	team.editable = not _is_client
 	row.add_child(team)
 
+	# Зона развёртывания (item 10): в какой нарисованной зоне слот ставит отряд.
+	# 0 = «своя по номеру», 1..N = конкретная Zone N.
+	var zone := SpinBox.new()
+	zone.min_value = 0
+	zone.max_value = MCF.MAX_PLAYERS
+	zone.value = (s.deploy_zone + 1) if s.deploy_zone >= 0 else 0
+	zone.prefix = "Zone "
+	zone.value_changed.connect(_on_slot_zone.bind(s.id))
+	zone.editable = not _is_client
+	row.add_child(zone)
+
 	# Из загруженного файла: какая армия достанется этому слоту (item 42).
 	if _save_armies.has(s.id):
 		var army := Label.new()
@@ -460,6 +523,27 @@ func _slot_row(s: Roster.Slot) -> Control:
 		army.add_theme_font_size_override("font_size", 11)
 		army.modulate = Color(0.75, 0.85, 0.75)
 		row.add_child(army)
+
+	# Удаление слота (item 4): «✕» справа. Нельзя убрать последние два — партии нужен
+	# хотя бы дуэт. Хост правит список, клиент только смотрит.
+	if not _is_client and roster.slots.size() > 2:
+		var del := Button.new()
+		del.text = "✕"
+		del.pressed.connect(_on_remove_slot.bind(s.id))
+		row.add_child(del)
+	return row
+
+## Заголовки колонок над списком слотов (item 9): что означает каждый столбец.
+func _slot_header() -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	for pair in [["#", 24], ["Type", 90], ["Color", 90], ["Team (T)", 70], ["Zone", 70]]:
+		var l := Label.new()
+		l.text = str(pair[0])
+		l.custom_minimum_size = Vector2(float(pair[1]), 0)
+		l.add_theme_font_size_override("font_size", 11)
+		l.modulate = Color(0.72, 0.76, 0.85)
+		row.add_child(l)
 	return row
 
 func _kind_index(s: Roster.Slot) -> int:
@@ -471,11 +555,30 @@ func _kind_index(s: Roster.Slot) -> int:
 	return 0
 
 func _on_add_slot() -> void:
-	if roster.slots.size() >= int(_max_spin.value):
-		_status.text = "Raise Max Players to add more slots."
+	# Потолок — MCF.MAX_PLAYERS; отдельного «Max Players» больше нет (item 4).
+	if roster.slots.size() >= MCF.MAX_PLAYERS:
+		_status.text = "That's the maximum number of players."
 		return
-	roster.add_slot(Roster.SlotKind.OPEN)
+	var id := roster.add_slot(Roster.SlotKind.OPEN)
+	if id >= 0:
+		_assign_color(id, _first_free_color())  # уникальный цвет новому слоту (item 6)
 	_refresh_slots()
+
+func _on_remove_slot(slot_id: int) -> void:
+	roster.remove_slot(slot_id)
+	_refresh_slots()
+
+## Первый ещё не занятый цвет палитры — чтобы новые слоты не дублировали цвета (item 6).
+func _first_free_color() -> int:
+	for i in Roster.PALETTE.size():
+		var taken := false
+		for s: Roster.Slot in roster.slots:
+			if s.color_index() == i:
+				taken = true
+				break
+		if not taken:
+			return i
+	return 0
 
 func _on_slot_kind(index: int, slot_id: int) -> void:
 	var s := roster.slots[slot_id] as Roster.Slot
@@ -491,6 +594,10 @@ func _on_slot_color(color_idx: int, slot_id: int) -> void:
 	if not _assign_color(slot_id, color_idx):
 		_status.text = "That colour is taken — no two players share a colour."
 	_refresh_slots()
+
+func _on_slot_zone(value: float, slot_id: int) -> void:
+	# 0 → «своя зона по номеру» (deploy_zone = -1); N → Zone N (индекс N-1).
+	(roster.slots[slot_id] as Roster.Slot).deploy_zone = int(value) - 1
 
 func _on_slot_team(value: float, slot_id: int) -> void:
 	(roster.slots[slot_id] as Roster.Slot).team = int(value) - 1
@@ -580,8 +687,16 @@ func _commit_config() -> void:
 	GameConfig.random_events_enabled = _events_check.button_pressed
 	GameConfig.random_events_mandatory = _events_mand.button_pressed
 	GameConfig.random_events_interval = int(_events_interval.value)
-	if GameConfig.random_events_weights.is_empty():
-		GameConfig.random_events_weights = RandomEvents.default_weights()
+	# Пул событий — только отмеченные галочками (item 5): вес 1 у выбранных, 0 у прочих.
+	var weights: Dictionary = {}
+	for ev_id: String in _event_checks:
+		weights[ev_id] = 1.0 if (_event_checks[ev_id] as CheckBox).button_pressed else 0.0
+	GameConfig.random_events_weights = weights
+	# Ограничение состава (item 12): пишем разрешённость каждого юнита.
+	var allowed: Dictionary = {}
+	for uid: String in _unit_checks:
+		allowed[uid] = (_unit_checks[uid] as CheckBox).button_pressed
+	GameConfig.allowed_units = allowed
 	GameConfig.map_path = _map_paths[_map_opt.selected]
 	GameConfig.roster = roster
 
