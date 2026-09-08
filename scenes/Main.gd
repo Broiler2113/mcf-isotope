@@ -117,6 +117,13 @@ var _pending_death_ids: Dictionary = {}
 ## клетки и техника рисуются по этим старым значениям, чтобы исход не опережал бросок.
 ## {"cells": {Vector2i: {...}}, "vehicles": {vid: {...}}}. Пусто — рисуем как есть.
 var _hold_visual: Dictionary = {}
+## Видимый на экране диапазон клеток (item 5) — отсечение трупов и косметики за краем.
+var _cull_x0: int = 0
+var _cull_x1: int = 0
+var _cull_y0: int = 0
+var _cull_y1: int = 0
+func _cell_on_screen(x: int, y: int) -> bool:
+	return x >= _cull_x0 and x <= _cull_x1 and y >= _cull_y0 and y <= _cull_y1
 ## Проигрываемый пеший переход: id юнита → клетка, на которой он сейчас РИСУЕТСЯ (#96).
 ## Мирные ходят вне потока намерений, и без этого весь их марш применялся одним кадром —
 ## житель возникал вплотную к отряду. Состояние уже переехало; словарь влияет только на
@@ -2601,9 +2608,22 @@ func _draw() -> void:
 	var fog_col := Color(0.02, 0.02, 0.04, 0.55)
 	var label_off := Vector2(6, CELL - 4)
 	var fx_damage: Dictionary = _fx.floor_damage
-	for y in gh:
+	# Отсечение по вьюпорту (item 5): на большой карте (город 50×50, бой 500×500) или
+	# крупном зуме рисуем ТОЛЬКО клетки, попадающие на экран, а не всю сетку целиком —
+	# это снимает основную нагрузку кадра. Границы с запасом в клетку.
+	var _vp := get_viewport_rect().size
+	var _tl := _pos_to_cell(Vector2.ZERO)
+	var _br := _pos_to_cell(_vp)
+	var vx0 := clampi(_tl.x - 1, 0, gw - 1)
+	var vx1 := clampi(_br.x + 1, 0, gw - 1)
+	var vy0 := clampi(_tl.y - 1, 0, gh - 1)
+	var vy1 := clampi(_br.y + 1, 0, gh - 1)
+	# Тот же диапазон членами — для функций отрисовки трупов и косметики (item 5).
+	_cull_x0 = _tl.x - 1; _cull_x1 = _br.x + 1
+	_cull_y0 = _tl.y - 1; _cull_y1 = _br.y + 1
+	for y in range(vy0, vy1 + 1):
 		var oy: float = ORIGIN.y + y * CELL
-		for x in gw:
+		for x in range(vx0, vx1 + 1):
 			var cell := grid.cell_fast(x, y)
 			var origin := Vector2(ORIGIN.x + x * CELL, oy)
 			var rect := Rect2(origin, csize)
@@ -2900,10 +2920,10 @@ func _draw() -> void:
 		for coord in item_cells:
 			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(0.4, 0.7, 1.0, 0.28))
 
-	# Статические объекты на клетках (станции дронов и т. п.).
-	for y in gh:
+	# Статические объекты на клетках (станции дронов и т. п.) — тоже только на экране (item 5).
+	for y in range(vy0, vy1 + 1):
 		var foy: float = ORIGIN.y + y * CELL
-		for x in gw:
+		for x in range(vx0, vx1 + 1):
 			var fcell := grid.cell_fast(x, y)
 			# item 22: пока крутится кубик выстрела, клетка рисуется по «слепку до взрыва» —
 			# снесённое укрепление ещё стоит, потрескавшееся ещё целое.
@@ -2971,10 +2991,13 @@ func _draw() -> void:
 		# счётчик врал: сверху «x2», а под ним ещё один невидимый труп-occupant.
 		if state.grid.cell(unit.coord).corpse_count > 0:
 			continue
+		if not _cell_on_screen(unit.coord.x, unit.coord.y):
+			continue
 		_draw_corpse(unit.coord, 1)
 
-	for cy in state.grid.height:
-		for cx in state.grid.width:
+	# Кучи трупов — только в видимом окне (item 5), а не по всей сетке.
+	for cy in range(vy0, vy1 + 1):
+		for cx in range(vx0, vx1 + 1):
 			var pile_coord := Vector2i(cx, cy)
 			var pile_cell := state.grid.cell(pile_coord)
 			if pile_cell == null or pile_cell.corpse_count <= 0:
@@ -3054,6 +3077,10 @@ func _draw() -> void:
 		# Во время проигрывания шагов житель рисуется на промежуточной клетке (#96),
 		# а не там, где он уже стоит по состоянию.
 		var at := _draw_cell(unit)
+		# Отсечение по вьюпорту (item 5): бойца за краем экрана не рисуем — на 500×500 это
+		# главный выигрыш, ведь армия почти всегда шире окна.
+		if at.x < vx0 or at.x > vx1 or at.y < vy0 or at.y > vy1:
+			continue
 		var center := _cell_origin(at) + Vector2(CELL, CELL) * 0.5
 		# Туман войны (§3.9): чужой юнит виден, только если его клетку видит команда.
 		if unit.owner != viewer and not visible.has(at):
@@ -3228,6 +3255,9 @@ const FX_TEXTURE := {
 
 func _draw_fx_one(kind: String, cell_pos: Vector2, rot: float, scale: float,
 		visible: Dictionary, fog_on: bool) -> void:
+	# Частицы за краем экрана не рисуем (item 5): на большой карте их накапливаются сотни.
+	if not _cell_on_screen(floori(cell_pos.x), floori(cell_pos.y)):
+		return
 	if fog_on and not visible.has(Vector2i(floori(cell_pos.x), floori(cell_pos.y))):
 		return
 	var look: Array = FX_LOOK.get(kind, [0.12, Color(0.8, 0.8, 0.8, 0.8)])
