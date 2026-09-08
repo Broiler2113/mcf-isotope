@@ -329,6 +329,17 @@ func _candidates(state: GameState, r: GameActionResolver, u: UnitInstance) -> Ar
 	if not veh_shot.is_empty():
 		out.append(veh_shot)
 
+	# Оператор запускает дрон со своей станции (item 17): дальше дроном рулит _drone_action.
+	var launch := _best_drone_launch(state, r, u)
+	if not launch.is_empty():
+		out.append(launch)
+
+	# Пехотинец садится в свободную СВОЮ машину рядом (item 17): дальше экипажем и
+	# самой машиной занимается очередь техники (_vehicle_candidates).
+	var board := _best_board(state, r, u)
+	if not board.is_empty():
+		out.append(board)
+
 	# Заряд в стену, если к врагу нет дороги (#103) — тоже выстрел, ОД тратит так же.
 	var blast := _best_blast_path(state, r, u)
 	if not blast.is_empty():
@@ -920,6 +931,27 @@ func _best_blast_path(state: GameState, r: GameActionResolver, u: UnitInstance) 
 ## Сближение противотанкиста с техникой (#61). Пока стрелять не по чему, он должен
 ## идти К МАШИНЕ, а не тянуться к ближайшему пехотинцу по общему геополю: подойдя к
 ## пехоте, он так и не окажется на линии огня с танком.
+## Запуск дрона оператором (item 17): есть развёрнутая станция, дрон ещё не в воздухе,
+## и хватает ОД. Умеренный приоритет — ниже прямого выстрела, но охотно, когда есть чем.
+func _best_drone_launch(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
+	if u.stats.special_ability_id != MCF.ABILITY_DRONE_OPERATOR or u.remaining_ap <= 0:
+		return {}
+	if r.deployed_station_of(u) == Vector2i(-1, -1) or r.active_drone_of(u) != null:
+		return {}
+	return {"score": SCORE_SHOOT_BASE * 0.6, "intent": SpawnDroneIntent.new(u.id)}
+
+## Посадка ИИ в свою свободную машину рядом (item 17): не щитоносец, без трупов на руках,
+## есть место в экипаже. Низкий приоритет — садимся, когда стрелять не во что.
+func _best_board(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
+	if u.remaining_ap <= 0 or u.stats.special_ability_id == MCF.ABILITY_SHIELD_BEARER \
+			or u.carried_corpses > 0:
+		return {}
+	for veh: Vehicle in r.boardable_vehicles(u):
+		if veh.owner == u.owner and veh.slots_used() < veh.capacity():
+			return {"score": SCORE_MOVE_BASE + 8.0,
+					"intent": VehicleBoardIntent.new(u.id, veh.id)}
+	return {}
+
 func _move_to_vehicle(state: GameState, u: UnitInstance) -> Dictionary:
 	if u.stats.special_ability_id != MCF.ABILITY_ANTI_TANK:
 		return {}

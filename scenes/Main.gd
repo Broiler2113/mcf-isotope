@@ -1246,8 +1246,8 @@ func _escape_pressed() -> void:
 		return
 	if _animating:
 		return
-	# Выход из режима рисования аннотаций (item 51): бросаем незавершённый штрих.
-	if mode == Mode.DRAW:
+	# Выход из режима рисования/стирания аннотаций (item 14/51): бросаем незавершённый штрих.
+	if mode == Mode.DRAW or mode == Mode.ERASE:
 		_stroke_drawing = false
 		_cur_stroke = []
 		mode = Mode.NONE
@@ -1727,6 +1727,15 @@ func _open_group_menu() -> void:
 	move_btn.pressed.connect(_enter_group_move)
 	vb.add_child(move_btn)
 
+	# Массовая посадка (item 5): если рядом с выделенными есть машина, в которую хоть
+	# кто-то из них может сесть, предлагаем усадить всех разом.
+	var vid := _group_boardable_vehicle()
+	if vid != -1:
+		var board_btn := Button.new()
+		board_btn.text = "Board Vehicle"
+		board_btn.pressed.connect(_group_embark.bind(vid))
+		vb.add_child(board_btn)
+
 	var cancel_btn := Button.new()
 	cancel_btn.text = "Cancel"
 	cancel_btn.pressed.connect(_deselect)
@@ -1739,6 +1748,26 @@ func _enter_group_move() -> void:
 	mode = Mode.GROUP_MOVE
 	_menu.hide()
 	queue_redraw()
+
+## Машина, в которую может сесть хоть один из выделенных юнитов (item 5). −1 — нет такой.
+func _group_boardable_vehicle() -> int:
+	for id in _group_ids:
+		var u := state.get_unit(id)
+		if u == null or not u.is_alive() or u.aboard_vehicle_id != -1:
+			continue
+		var vs: Array = resolver.boardable_vehicles(u)
+		if not vs.is_empty():
+			return int(vs[0])
+	return -1
+
+## Усадить в машину vid всех выделенных, кто рядом и кому это разрешено (item 5).
+## Резолвер сам проверит соседство, вместимость и запреты (щит/трупы — item 19).
+func _group_embark(vid: int) -> void:
+	for id in _group_ids.duplicate():
+		var u := state.get_unit(id)
+		if u != null and u.is_alive() and u.aboard_vehicle_id == -1:
+			_submit(VehicleBoardIntent.new(id, vid))
+	_deselect()
 
 ## Жадное групповое движение к клетке (#18): каждый юнит по очереди идёт в достижимую
 ## клетку, ближайшую (Чебышёв) к цели. Резолвится последовательно, поэтому юниты не
@@ -2252,10 +2281,9 @@ func _play_dice(events: Array) -> void:
 		if ev.get("kind", "") == "hold":
 			continue
 		if ev.get("kind", "") == "focus":
-			# Слот мирных отыгрывается сам и где угодно на карте (#103): если очередной
-			# житель за краем экрана, подводим к нему камеру — иначе игрок смотрит на
-			# кубики, не понимая, чьи они.
-			_ensure_visible(ev.get("coord", Vector2i.ZERO))
+			# Камеру за ходящими нейтралами БОЛЬШЕ НЕ ВОДИМ (item 8): игрока раздражало,
+			# что вид дёргается к каждому активному жителю. Событие оставляем (оно ещё
+			# помечает, чьи кубики крутятся), но камеру не трогаем — панорама за игроком.
 			continue
 		if ev.get("kind", "") == "walk":
 			await _play_walk(ev)
@@ -2333,7 +2361,13 @@ func _dice_steps(ev: Dictionary) -> Array:
 						{"value": det["def_roll"], "good": not det["parried"], "tag": "Pen %d+" % det["armor"]})
 			# Разбивка бонусов/штрафов к попаданию и защите (#49): показываем в подсказке.
 			var hit_note := _mods_text("To-hit", ev.get("hit_mods", []))
-			steps.append({"faces": hit_faces, "manual": false, "prompt": hit_note,
+			# Бросок на попадание катит САМ стрелок, если это местный человек (item 13):
+			# ждём его нажатия, как и бросок защиты у защищающегося.
+			var hit_manual := _owner_is_local_human(ev.get("shooter_owner", MCF.Owner.NEUTRAL))
+			var hit_prompt := hit_note
+			if hit_manual:
+				hit_prompt = (hit_note + "\n" if hit_note != "" else "") + "Your shot — roll to hit"
+			steps.append({"faces": hit_faces, "manual": hit_manual, "prompt": hit_prompt,
 				"speed": _roll_speed(ev["shots"], "need")})
 			if not pen_faces.is_empty():
 				var def_note := _mods_text("Defence", ev.get("def_mods", []))
@@ -3257,6 +3291,23 @@ func _draw_laser_preview(shooter: UnitInstance, aim: Vector2i) -> void:
 ## Картинки-замены имеют приоритет (glass_shard.png и т. п.); без них рисуются
 ## векторные примитивы, как и всё остальное в этой игре.
 func _draw_fx_props(visible: Dictionary) -> void:
+	# Следы лазера (item 11): полупрозрачные чёрные линии от стрелка до точки остановки.
+	# Рисуем прямыми отрезками — диагонали получаются сами собой.
+	for seg: Dictionary in _fx.laser_lines:
+		var a: Vector2 = ORIGIN + Vector2(seg["from"]) * CELL
+		var b: Vector2 = ORIGIN + Vector2(seg["to"]) * CELL
+		draw_line(a, b, Color(0, 0, 0, 0.4), 3.0)
+	# Пули-трассеры (item 16): жёлтый штрих летит от стрелка к цели.
+	for tr: Dictionary in _fx.tracers:
+		var k: float = clampf(float(tr["t"]) / maxf(0.001, float(tr["dur"])), 0.0, 1.0)
+		if k <= 0.0:
+			continue
+		var tf: Vector2 = ORIGIN + Vector2(tr["from"]) * CELL
+		var tt: Vector2 = ORIGIN + Vector2(tr["to"]) * CELL
+		var head: Vector2 = tf.lerp(tt, k)
+		var tail: Vector2 = tf.lerp(tt, maxf(0.0, k - 0.25))
+		draw_line(tail, head, Color(1.0, 0.95, 0.5, 0.9), 2.0)
+		draw_circle(head, 2.5, Color(1.0, 1.0, 0.7, 0.95))
 	if _fx.props.is_empty() and _fx.flying.is_empty():
 		return
 	var fog_on: bool = resolver.fog_enabled
@@ -3274,8 +3325,6 @@ const FX_LOOK := {
 	"shell_casing": [0.22, Color(1.0, 0.55, 0.1, 0.95)],
 	"blood_drop": [0.10, Color(0.55, 0.06, 0.06, 0.85)],
 	"blood_pool": [0.42, Color(0.42, 0.04, 0.04, 0.55)],
-	# След лазера марксмана на полу (item 10): тонкая тёмно-красная отметина.
-	"laser_mark": [0.30, Color(0.9, 0.15, 0.15, 0.5)],
 }
 const FX_TEXTURE := {
 	"shard": "glass_shard", "casing": "shell_casing",
@@ -3288,7 +3337,13 @@ const FX_TEXTURE := {
 func _draw_fx_one(kind: String, cell_pos: Vector2, rot: float, scale: float,
 		visible: Dictionary, fog_on: bool) -> void:
 	# Частицы за краем экрана не рисуем (item 5): на большой карте их накапливаются сотни.
-	if not _cell_on_screen(floori(cell_pos.x), floori(cell_pos.y)):
+	var _fxc := Vector2i(floori(cell_pos.x), floori(cell_pos.y))
+	if not _cell_on_screen(_fxc.x, _fxc.y):
+		return
+	# Осколки/частицы не оседают на стенах — они от них отскакивают (item 7). Клетку-стену
+	# просто не рисуем: обломок туда «не долетел».
+	var _wcell := state.grid.cell(_fxc)
+	if _wcell != null and _wcell.cover_height >= MCF.WALL_HEIGHT:
 		return
 	if fog_on and not visible.has(Vector2i(floori(cell_pos.x), floori(cell_pos.y))):
 		return
@@ -3892,12 +3947,25 @@ func _draw_author() -> int:
 	return my_owner if networked else _viewing_side()
 
 func _enter_draw() -> void:
+	# Повторное нажатие ВЫКЛЮЧАЕТ рисование (item 14): режим теперь снимается кнопкой,
+	# а не только Esc — раньше выйти из «рисования» было нечем.
+	if mode == Mode.DRAW:
+		mode = Mode.NONE
+		_stroke_drawing = false
+		_cur_stroke = []
+		queue_redraw()
+		return
 	_deselect()
 	mode = Mode.DRAW
 	queue_redraw()
 
 ## Ластик (item 6): режим стирания СВОИХ штрихов кистью заданного радиуса.
 func _enter_erase() -> void:
+	if mode == Mode.ERASE:  # повторное нажатие выключает (item 14)
+		mode = Mode.NONE
+		_stroke_drawing = false
+		queue_redraw()
+		return
 	_deselect()
 	mode = Mode.ERASE
 	queue_redraw()
@@ -4401,6 +4469,13 @@ func _open_menu(unit: UnitInstance) -> void:
 				else "Storm %s" % vname
 			_act_btn(vb, seat_text,
 					_submit.bind(VehicleBoardIntent.new(unit.id, veh.id)), unit.remaining_ap > 0)
+
+		# Вытащить труп из машины, чтобы освободить место (item 18).
+		for vid: int in resolver.unloadable_corpse_vehicle_ids(unit):
+			var uveh: Vehicle = state.get_vehicle(vid)
+			if uveh != null:
+				_act_btn(vb, "Pull Corpse from %s" % VehicleDB.get_vehicle(uveh.type_id).get("name", uveh.type_id),
+						_submit.bind(VehicleUnloadCorpseIntent.new(unit.id, vid)), unit.remaining_ap > 0)
 
 	# Выдохшемуся юниту меню не нужно (#97): когда ОД кончились и ни одного действия не
 	# набралось, панель с одной кнопкой Cancel только загораживает поле. Выделение при

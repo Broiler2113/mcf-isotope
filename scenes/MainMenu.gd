@@ -38,6 +38,14 @@ func _ready() -> void:
 	# И недоигранный файл тоже: в меню приходят, чтобы начать заново (M12).
 	SaveHandoff.discard()
 
+	# Гарантированно чёрная подложка ПОД параллаксом (item 3): даже если звёздный слой
+	# по какой-то причине не растянулся, меню всё равно чёрное, а не годотовское серое.
+	var black_bg := ColorRect.new()
+	black_bg.color = Color(0, 0, 0)
+	black_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	black_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(black_bg)
+
 	# Параллакс-звёзды вместо плоской заливки (M13, item 35). Фон живёт своей жизнью
 	# и ввод не перехватывает — меню поверх него работает как работало.
 	add_child(Starfield.new())

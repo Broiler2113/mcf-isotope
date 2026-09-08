@@ -4,12 +4,12 @@ initiative Neutral → Player A → Player B
     ok=true
     log: Sniper → Sniper: 1 shots, 0 hits (need 6+)
     log: … 1 of 1 stopped by the glass (need 4+ to pierce)
-    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:1,hit_mods:[{delta:0,label:Glass on the line}],killed:false,kind:attack,need:6,shooter:Sniper,shots:[{armor:6,def_roll:0,glass_need:4,glass_rolls:[3],hit:false,hit_roll:0,need:6,parried:true,stopped_by_glass:true}],target:Sniper}
+    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:1,hit_mods:[{delta:0,label:Glass on the line}],killed:false,kind:attack,need:6,shooter:Sniper,shooter_owner:0,shots:[{armor:6,def_roll:0,glass_need:4,glass_rolls:[3],hit:false,hit_roll:0,need:6,parried:true,stopped_by_glass:true}],target:Sniper}
 [r1 s3 p0] ShootIntent(a=8 cx=-999 cy=-999 s=-1 t=shoot tid=9)
     ok=true
     log: Sniper → Sniper: 1 shots, 0 hits (need 6+)
     log: … 1 of 1 stopped by the glass (need 4+ to pierce)
-    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:1,hit_mods:[{delta:0,label:Glass on the line}],killed:false,kind:attack,need:6,shooter:Sniper,shots:[{armor:6,def_roll:0,glass_need:4,glass_rolls:[1],hit:false,hit_roll:0,need:6,parried:true,stopped_by_glass:true}],target:Sniper}
+    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:1,hit_mods:[{delta:0,label:Glass on the line}],killed:false,kind:attack,need:6,shooter:Sniper,shooter_owner:0,shots:[{armor:6,def_roll:0,glass_need:4,glass_rolls:[1],hit:false,hit_roll:0,need:6,parried:true,stopped_by_glass:true}],target:Sniper}
 [r1 s3 p0] MoveIntent(a=0 dx=-999 dy=-999 t=move x=12 y=8)
     ok=true
     log: Light Infantry: move → (12, 8) [AP: 1]
@@ -62,7 +62,7 @@ initiative Neutral → Player A → Player B
     ok=true
     log: Light Infantry → Light Infantry: 2 shots, 1 hits (need 2+)
     log: Light Infantry killed!
-    dice: {armor:4,def_mods:[],def_owner:0,hit_mods:[],killed:true,kind:attack,need:2,shooter:Light Infantry,shots:[{armor:4,def_roll:0,hit:false,hit_roll:1,need:2,parried:true},{armor:4,def_roll:2,hit:true,hit_roll:2,need:2,parried:false}],target:Light Infantry}
+    dice: {armor:4,def_mods:[],def_owner:0,hit_mods:[],killed:true,kind:attack,need:2,shooter:Light Infantry,shooter_owner:1,shots:[{armor:4,def_roll:0,hit:false,hit_roll:1,need:2,parried:true},{armor:4,def_roll:2,hit:true,hit_roll:2,need:2,parried:false}],target:Light Infantry}
     deaths: [2]
 [r1 s4 p1] MoveIntent(a=3 dx=-999 dy=-999 t=move x=21 y=7)
     ok=true
@@ -71,25 +71,25 @@ initiative Neutral → Player A → Player B
     ok=true
     log: Light Infantry → Engineer: 2 shots, 1 hits (need 3+)
     log: Engineer killed!
-    dice: {armor:4,def_mods:[],def_owner:0,hit_mods:[],killed:true,kind:attack,need:3,shooter:Light Infantry,shots:[{armor:4,def_roll:1,hit:true,hit_roll:4,need:3,parried:false},{armor:4,def_roll:0,hit:false,hit_roll:2,need:3,parried:true}],target:Engineer}
+    dice: {armor:4,def_mods:[],def_owner:0,hit_mods:[],killed:true,kind:attack,need:3,shooter:Light Infantry,shooter_owner:1,shots:[{armor:4,def_roll:1,hit:true,hit_roll:4,need:3,parried:false},{armor:4,def_roll:0,hit:false,hit_roll:2,need:3,parried:true}],target:Engineer}
     deaths: [12]
 [r1 s4 p1] ShootIntent(a=9 cx=-999 cy=-999 s=-1 t=shoot tid=8)
     ok=true
     log: Sniper → Sniper: 1 shots, 0 hits (need 6+)
     log: … 1 of 1 stopped by the glass (need 4+ to pierce)
-    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:0,hit_mods:[{delta:0,label:Glass on the line}],killed:false,kind:attack,need:6,shooter:Sniper,shots:[{armor:6,def_roll:0,glass_need:4,glass_rolls:[2],hit:false,hit_roll:0,need:6,parried:true,stopped_by_glass:true}],target:Sniper}
+    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:0,hit_mods:[{delta:0,label:Glass on the line}],killed:false,kind:attack,need:6,shooter:Sniper,shooter_owner:1,shots:[{armor:6,def_roll:0,glass_need:4,glass_rolls:[2],hit:false,hit_roll:0,need:6,parried:true,stopped_by_glass:true}],target:Sniper}
 [r1 s4 p1] ShootIntent(a=9 cx=-999 cy=-999 s=-1 t=shoot tid=8)
     ok=true
     log: Sniper → Sniper: 1 shots, 0 hits (need 6+)
     log: … 1 of 1 stopped by the glass (need 4+ to pierce)
-    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:0,hit_mods:[{delta:0,label:Glass on the line}],killed:false,kind:attack,need:6,shooter:Sniper,shots:[{armor:6,def_roll:0,glass_need:4,glass_rolls:[2],hit:false,hit_roll:0,need:6,parried:true,stopped_by_glass:true}],target:Sniper}
+    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:0,hit_mods:[{delta:0,label:Glass on the line}],killed:false,kind:attack,need:6,shooter:Sniper,shooter_owner:1,shots:[{armor:6,def_roll:0,glass_need:4,glass_rolls:[2],hit:false,hit_roll:0,need:6,parried:true,stopped_by_glass:true}],target:Sniper}
 [r1 s4 p1] MoveIntent(a=5 dx=-999 dy=-999 t=move x=26 y=7)
     ok=true
     log: Heavy Infantry: move → (26, 7) [AP: 1]
 [r1 s4 p1] ShootIntent(a=5 cx=-999 cy=-999 s=3 t=shoot tid=0)
     ok=true
     log: Heavy Infantry → Light Infantry: 3 shots, 1 hits (need 3+)
-    dice: {armor:4,def_mods:[],def_owner:0,hit_mods:[],killed:false,kind:attack,need:3,shooter:Heavy Infantry,shots:[{armor:4,def_roll:6,hit:true,hit_roll:3,need:3,parried:true},{armor:4,def_roll:0,hit:false,hit_roll:2,need:3,parried:true},{armor:4,def_roll:0,hit:false,hit_roll:2,need:3,parried:true}],target:Light Infantry}
+    dice: {armor:4,def_mods:[],def_owner:0,hit_mods:[],killed:false,kind:attack,need:3,shooter:Heavy Infantry,shooter_owner:1,shots:[{armor:4,def_roll:6,hit:true,hit_roll:3,need:3,parried:true},{armor:4,def_roll:0,hit:false,hit_roll:2,need:3,parried:true},{armor:4,def_roll:0,hit:false,hit_roll:2,need:3,parried:true}],target:Light Infantry}
 [r1 s4 p1] MoveIntent(a=5 dx=-999 dy=-999 t=move x=24 y=5)
     ok=true
     log: Heavy Infantry: move → (24, 5) [AP: 0]
@@ -184,12 +184,12 @@ initiative Neutral → Player A → Player B
     ok=true
     log: Light Infantry → Machinegunner: 2 shots, 2 hits (need 1+)
     log: Machinegunner killed!
-    dice: {armor:3,def_mods:[],def_owner:1,hit_mods:[],killed:true,kind:attack,need:1,shooter:Light Infantry,shots:[{armor:3,def_roll:2,hit:true,hit_roll:1,need:1,parried:false},{armor:3,def_roll:1,hit:true,hit_roll:5,need:1,parried:false}],target:Machinegunner}
+    dice: {armor:3,def_mods:[],def_owner:1,hit_mods:[],killed:true,kind:attack,need:1,shooter:Light Infantry,shooter_owner:0,shots:[{armor:3,def_roll:2,hit:true,hit_roll:1,need:1,parried:false},{armor:3,def_roll:1,hit:true,hit_roll:5,need:1,parried:false}],target:Machinegunner}
     deaths: [7]
 [r2 s4 p0] ShootIntent(a=0 cx=-999 cy=-999 s=2 t=shoot tid=5)
     ok=true
     log: Light Infantry → Heavy Infantry: 2 shots, 1 hits (need 2+)
-    dice: {armor:3,def_mods:[],def_owner:1,hit_mods:[],killed:false,kind:attack,need:2,shooter:Light Infantry,shots:[{armor:3,def_roll:4,hit:true,hit_roll:3,need:2,parried:true},{armor:3,def_roll:0,hit:false,hit_roll:1,need:2,parried:true}],target:Heavy Infantry}
+    dice: {armor:3,def_mods:[],def_owner:1,hit_mods:[],killed:false,kind:attack,need:2,shooter:Light Infantry,shooter_owner:0,shots:[{armor:3,def_roll:4,hit:true,hit_roll:3,need:2,parried:true},{armor:3,def_roll:0,hit:false,hit_roll:1,need:2,parried:true}],target:Heavy Infantry}
 [r2 s4 p0] MoveIntent(a=4 dx=-999 dy=-999 t=move x=18 y=8)
     ok=true
     log: Heavy Infantry: move → (18, 8) [AP: 1]
@@ -197,7 +197,7 @@ initiative Neutral → Player A → Player B
     ok=true
     log: Heavy Infantry → Light Infantry: 3 shots, 3 hits (need 2+)
     log: Light Infantry killed!
-    dice: {armor:4,def_mods:[],def_owner:1,hit_mods:[],killed:true,kind:attack,need:2,shooter:Heavy Infantry,shots:[{armor:4,def_roll:4,hit:true,hit_roll:3,need:2,parried:true},{armor:4,def_roll:1,hit:true,hit_roll:4,need:2,parried:false},{armor:4,def_roll:3,hit:true,hit_roll:2,need:2,parried:false}],target:Light Infantry}
+    dice: {armor:4,def_mods:[],def_owner:1,hit_mods:[],killed:true,kind:attack,need:2,shooter:Heavy Infantry,shooter_owner:0,shots:[{armor:4,def_roll:4,hit:true,hit_roll:3,need:2,parried:true},{armor:4,def_roll:1,hit:true,hit_roll:4,need:2,parried:false},{armor:4,def_roll:3,hit:true,hit_roll:2,need:2,parried:false}],target:Light Infantry}
     deaths: [1]
 [r2 s4 p0] MoveIntent(a=4 dx=-999 dy=-999 t=move x=20 y=6)
     ok=true
@@ -218,11 +218,11 @@ initiative Neutral → Player A → Player B
     ok=true
     log: Machinegunner → Light Infantry: 3 shots, 2 hits (need 2+)
     log: … shots remaining in burst: 1
-    dice: {armor:4,def_mods:[],def_owner:1,hit_mods:[],killed:false,kind:attack,need:2,shooter:Machinegunner,shots:[{armor:4,def_roll:6,hit:true,hit_roll:3,need:2,parried:true},{armor:4,def_roll:6,hit:true,hit_roll:5,need:2,parried:true},{armor:4,def_roll:0,hit:false,hit_roll:1,need:2,parried:true}],target:Light Infantry}
+    dice: {armor:4,def_mods:[],def_owner:1,hit_mods:[],killed:false,kind:attack,need:2,shooter:Machinegunner,shooter_owner:0,shots:[{armor:4,def_roll:6,hit:true,hit_roll:3,need:2,parried:true},{armor:4,def_roll:6,hit:true,hit_roll:5,need:2,parried:true},{armor:4,def_roll:0,hit:false,hit_roll:1,need:2,parried:true}],target:Light Infantry}
 [r2 s4 p0] ShootIntent(a=6 cx=-999 cy=-999 s=-1 t=shoot tid=3)
     ok=true
     log: Machinegunner → Light Infantry: 1 shots, 0 hits (need 2+)
-    dice: {armor:4,def_mods:[],def_owner:1,hit_mods:[],killed:false,kind:attack,need:2,shooter:Machinegunner,shots:[{armor:4,def_roll:0,hit:false,hit_roll:1,need:2,parried:true}],target:Light Infantry}
+    dice: {armor:4,def_mods:[],def_owner:1,hit_mods:[],killed:false,kind:attack,need:2,shooter:Machinegunner,shooter_owner:0,shots:[{armor:4,def_roll:0,hit:false,hit_roll:1,need:2,parried:true}],target:Light Infantry}
 [r2 s4 p0] MoveIntent(a=6 dx=-999 dy=-999 t=move x=20 y=8)
     ok=true
     log: Machinegunner: move → (20, 8) [AP: 0]
@@ -243,12 +243,12 @@ initiative Neutral → Player A → Player B
     ok=true
     log: Sniper → Sniper: 1 shots, 0 hits (need 6+)
     log: … 1 of 1 stopped by the glass (need 4+ to pierce)
-    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:1,hit_mods:[{delta:0,label:Glass on the line}],killed:false,kind:attack,need:6,shooter:Sniper,shots:[{armor:6,def_roll:0,glass_need:4,glass_rolls:[3],hit:false,hit_roll:0,need:6,parried:true,stopped_by_glass:true}],target:Sniper}
+    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:1,hit_mods:[{delta:0,label:Glass on the line}],killed:false,kind:attack,need:6,shooter:Sniper,shooter_owner:0,shots:[{armor:6,def_roll:0,glass_need:4,glass_rolls:[3],hit:false,hit_roll:0,need:6,parried:true,stopped_by_glass:true}],target:Sniper}
 [r2 s4 p0] ShootIntent(a=8 cx=-999 cy=-999 s=-1 t=shoot tid=9)
     ok=true
     log: Sniper → Sniper: 1 shots, 0 hits (need 6+)
     log: … 1 of 1 stopped by the glass (need 4+ to pierce)
-    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:1,hit_mods:[{delta:0,label:Glass on the line}],killed:false,kind:attack,need:6,shooter:Sniper,shots:[{armor:6,def_roll:0,glass_need:4,glass_rolls:[3],hit:false,hit_roll:0,need:6,parried:true,stopped_by_glass:true}],target:Sniper}
+    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:1,hit_mods:[{delta:0,label:Glass on the line}],killed:false,kind:attack,need:6,shooter:Sniper,shooter_owner:0,shots:[{armor:6,def_roll:0,glass_need:4,glass_rolls:[3],hit:false,hit_roll:0,need:6,parried:true,stopped_by_glass:true}],target:Sniper}
 [r2 s4 p0] EndTurnIntent(q=-1 t=end)
     ok=true
     log: — Player A ended their turn. Player B to move (round 2) —
@@ -266,7 +266,7 @@ initiative Neutral → Player A → Player B
     ok=true
     log: Heavy Infantry → Light Infantry: 3 shots, 1 hits (need 2+)
     log: Light Infantry killed!
-    dice: {armor:4,def_mods:[],def_owner:0,hit_mods:[],killed:true,kind:attack,need:2,shooter:Heavy Infantry,shots:[{armor:4,def_roll:0,hit:false,hit_roll:1,need:2,parried:true},{armor:4,def_roll:0,hit:false,hit_roll:1,need:2,parried:true},{armor:4,def_roll:1,hit:true,hit_roll:2,need:2,parried:false}],target:Light Infantry}
+    dice: {armor:4,def_mods:[],def_owner:0,hit_mods:[],killed:true,kind:attack,need:2,shooter:Heavy Infantry,shooter_owner:1,shots:[{armor:4,def_roll:0,hit:false,hit_roll:1,need:2,parried:true},{armor:4,def_roll:0,hit:false,hit_roll:1,need:2,parried:true},{armor:4,def_roll:1,hit:true,hit_roll:2,need:2,parried:false}],target:Light Infantry}
     deaths: [0]
 [r2 s5 p1] PickUpCorpseIntent(a=5 t=corpse_up x=23 y=4)
     ok=true
@@ -275,24 +275,24 @@ initiative Neutral → Player A → Player B
     ok=true
     log: Light Infantry → Machinegunner: 2 shots, 2 hits (need 1+)
     log: Machinegunner killed!
-    dice: {armor:3,def_mods:[],def_owner:0,hit_mods:[],killed:true,kind:attack,need:1,shooter:Light Infantry,shots:[{armor:3,def_roll:1,hit:true,hit_roll:6,need:1,parried:false},{armor:3,def_roll:2,hit:true,hit_roll:5,need:1,parried:false}],target:Machinegunner}
+    dice: {armor:3,def_mods:[],def_owner:0,hit_mods:[],killed:true,kind:attack,need:1,shooter:Light Infantry,shooter_owner:1,shots:[{armor:3,def_roll:1,hit:true,hit_roll:6,need:1,parried:false},{armor:3,def_roll:2,hit:true,hit_roll:5,need:1,parried:false}],target:Machinegunner}
     deaths: [6]
 [r2 s5 p1] ShootIntent(a=3 cx=-999 cy=-999 s=2 t=shoot tid=4)
     ok=true
     log: Light Infantry → Heavy Infantry: 2 shots, 2 hits (need 1+)
     log: Heavy Infantry killed!
-    dice: {armor:3,def_mods:[],def_owner:0,hit_mods:[],killed:true,kind:attack,need:1,shooter:Light Infantry,shots:[{armor:3,def_roll:1,hit:true,hit_roll:5,need:1,parried:false},{armor:3,def_roll:2,hit:true,hit_roll:1,need:1,parried:false}],target:Heavy Infantry}
+    dice: {armor:3,def_mods:[],def_owner:0,hit_mods:[],killed:true,kind:attack,need:1,shooter:Light Infantry,shooter_owner:1,shots:[{armor:3,def_roll:1,hit:true,hit_roll:5,need:1,parried:false},{armor:3,def_roll:2,hit:true,hit_roll:1,need:1,parried:false}],target:Heavy Infantry}
     deaths: [4]
 [r2 s5 p1] ShootIntent(a=9 cx=-999 cy=-999 s=-1 t=shoot tid=10)
     ok=true
     log: Sniper → Anti-Tank: 1 shots, 1 hits (need 1+)
     log: Anti-Tank killed!
-    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:0,hit_mods:[{delta:0,label:Sniper auto-hit}],killed:true,kind:attack,need:1,shooter:Sniper,shots:[{armor:6,def_roll:3,hit:true,hit_roll:2,need:1,parried:false}],target:Anti-Tank}
+    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:0,hit_mods:[{delta:0,label:Sniper auto-hit}],killed:true,kind:attack,need:1,shooter:Sniper,shooter_owner:1,shots:[{armor:6,def_roll:3,hit:true,hit_roll:2,need:1,parried:false}],target:Anti-Tank}
     deaths: [10]
 [r2 s5 p1] ShootIntent(a=9 cx=-999 cy=-999 s=-1 t=shoot tid=8)
     ok=true
     log: Sniper → Sniper: 1 shots, 0 hits (need 6+)
-    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:0,hit_mods:[{delta:0,label:Glass on the line}],killed:false,kind:attack,need:6,shooter:Sniper,shots:[{armor:6,def_roll:0,glass_need:4,glass_rolls:[5],hit:false,hit_roll:2,need:6,parried:true,stopped_by_glass:false}],target:Sniper}
+    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:0,hit_mods:[{delta:0,label:Glass on the line}],killed:false,kind:attack,need:6,shooter:Sniper,shooter_owner:1,shots:[{armor:6,def_roll:0,glass_need:4,glass_rolls:[5],hit:false,hit_roll:2,need:6,parried:true,stopped_by_glass:false}],target:Sniper}
 [r2 s5 p1] EndTurnIntent(q=-1 t=end)
     ok=true
     log: — Player B ended their turn. Player A to move (round 3) —
@@ -350,13 +350,13 @@ initiative Neutral → Player A → Player B
     ok=true
     log: Sniper → Civilian: 1 shots, 1 hits (need 1+)
     log: Civilian killed!
-    dice: {armor:7,def_mods:[{delta:2,label:Shooter penetration}],def_owner:100,hit_mods:[{delta:0,label:Sniper auto-hit}],killed:true,kind:attack,need:1,shooter:Sniper,shots:[{armor:7,def_roll:2,hit:true,hit_roll:3,need:1,parried:false}],target:Civilian}
+    dice: {armor:7,def_mods:[{delta:2,label:Shooter penetration}],def_owner:100,hit_mods:[{delta:0,label:Sniper auto-hit}],killed:true,kind:attack,need:1,shooter:Sniper,shooter_owner:0,shots:[{armor:7,def_roll:2,hit:true,hit_roll:3,need:1,parried:false}],target:Civilian}
     deaths: [19]
 [r3 s4 p0] ShootIntent(a=8 cx=-999 cy=-999 s=-1 t=shoot tid=9)
     ok=true
     log: Sniper → Sniper: 1 shots, 1 hits (need 6+)
     log: Sniper killed!
-    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:1,hit_mods:[],killed:true,kind:attack,need:6,shooter:Sniper,shots:[{armor:6,def_roll:1,hit:true,hit_roll:6,need:6,parried:false}],target:Sniper}
+    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:1,hit_mods:[],killed:true,kind:attack,need:6,shooter:Sniper,shooter_owner:0,shots:[{armor:6,def_roll:1,hit:true,hit_roll:6,need:6,parried:false}],target:Sniper}
     deaths: [9]
 [r3 s4 p0] EndTurnIntent(q=-1 t=end)
     ok=true
@@ -448,11 +448,11 @@ initiative Neutral → Player A → Player B
 [r4 s4 p0] ShootIntent(a=8 cx=-999 cy=-999 s=-1 t=shoot tid=11)
     ok=true
     log: Sniper → Anti-Tank: 1 shots, 1 hits (need 3+)
-    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:1,hit_mods:[],killed:false,kind:attack,need:3,shooter:Sniper,shots:[{armor:6,def_roll:6,hit:true,hit_roll:5,need:3,parried:true}],target:Anti-Tank}
+    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:1,hit_mods:[],killed:false,kind:attack,need:3,shooter:Sniper,shooter_owner:0,shots:[{armor:6,def_roll:6,hit:true,hit_roll:5,need:3,parried:true}],target:Anti-Tank}
 [r4 s4 p0] ShootIntent(a=8 cx=-999 cy=-999 s=-1 t=shoot tid=11)
     ok=true
     log: Sniper → Anti-Tank: 1 shots, 0 hits (need 3+)
-    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:1,hit_mods:[],killed:false,kind:attack,need:3,shooter:Sniper,shots:[{armor:6,def_roll:0,hit:false,hit_roll:1,need:3,parried:true}],target:Anti-Tank}
+    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:1,hit_mods:[],killed:false,kind:attack,need:3,shooter:Sniper,shooter_owner:0,shots:[{armor:6,def_roll:0,hit:false,hit_roll:1,need:3,parried:true}],target:Anti-Tank}
 [r4 s4 p0] EndTurnIntent(q=-1 t=end)
     ok=true
     log: — Player A ended their turn. Player B to move (round 4) —
@@ -479,7 +479,7 @@ initiative Neutral → Player A → Player B
     ok=true
     log: Heavy Infantry → Sniper: 3 shots, 2 hits (need 5+)
     log: Sniper killed!
-    dice: {armor:4,def_mods:[],def_owner:0,hit_mods:[],killed:true,kind:attack,need:5,shooter:Heavy Infantry,shots:[{armor:4,def_roll:0,hit:false,hit_roll:4,need:5,parried:true},{armor:4,def_roll:2,hit:true,hit_roll:5,need:5,parried:false},{armor:4,def_roll:1,hit:true,hit_roll:5,need:5,parried:false}],target:Sniper}
+    dice: {armor:4,def_mods:[],def_owner:0,hit_mods:[],killed:true,kind:attack,need:5,shooter:Heavy Infantry,shooter_owner:1,shots:[{armor:4,def_roll:0,hit:false,hit_roll:4,need:5,parried:true},{armor:4,def_roll:2,hit:true,hit_roll:5,need:5,parried:false},{armor:4,def_roll:1,hit:true,hit_roll:5,need:5,parried:false}],target:Sniper}
     deaths: [8]
 [r4 s5 p1] MoveIntent(a=5 dx=-999 dy=-999 t=move x=7 y=8)
     ok=true
@@ -601,7 +601,7 @@ initiative Neutral → Player A → Player B
     ok=true
     log: Heavy Infantry → Civilian: 2 shots, 2 hits (need 1+)
     log: Civilian killed!
-    dice: {armor:5,def_mods:[],def_owner:101,hit_mods:[],killed:true,kind:attack,need:1,shooter:Heavy Infantry,shots:[{armor:5,def_roll:2,hit:true,hit_roll:4,need:1,parried:false},{armor:5,def_roll:5,hit:true,hit_roll:5,need:1,parried:true}],target:Civilian}
+    dice: {armor:5,def_mods:[],def_owner:101,hit_mods:[],killed:true,kind:attack,need:1,shooter:Heavy Infantry,shooter_owner:1,shots:[{armor:5,def_roll:2,hit:true,hit_roll:4,need:1,parried:false},{armor:5,def_roll:5,hit:true,hit_roll:5,need:1,parried:true}],target:Civilian}
     deaths: [16]
 [r6 s5 p1] MoveIntent(a=5 dx=-999 dy=-999 t=move x=5 y=9)
     ok=true

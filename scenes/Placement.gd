@@ -313,6 +313,23 @@ func _cell_placeable(coord: Vector2i) -> bool:
 	# Объект-препятствие (кроме мягких укрытий) не мешает — но занятые клетки нельзя.
 	return _placed_at(coord) == -1 and _neutral_at(coord) == -1
 
+## Контекстное меню поворота танка (item 6): восемь направлений, выбор ставит фронт.
+func _open_tank_dir_menu(vi: int, screen_pos: Vector2) -> void:
+	var menu := PopupMenu.new()
+	var names := ["East →", "South-East ↘", "South ↓", "South-West ↙",
+		"West ←", "North-West ↖", "North ↑", "North-East ↗"]
+	for i in FACING8.size():
+		menu.add_item(names[i], i)
+	menu.id_pressed.connect(func(id: int) -> void:
+		placed[vi]["facing"] = FACING8[id]
+		_status.text = "Rotated the %s (free)." % _display_name(placed[vi]["stats_id"])
+		queue_redraw()
+		menu.queue_free())
+	menu.close_requested.connect(func() -> void: menu.queue_free())
+	add_child(menu)
+	menu.position = Vector2i(screen_pos) + Vector2i(get_window().position)
+	menu.popup()
+
 func _placed_at(coord: Vector2i) -> int:
 	for i in placed.size():
 		if _footprint(placed[i]["stats_id"], placed[i]["coord"]).has(coord):
@@ -367,6 +384,14 @@ func _unhandled_input(event: InputEvent) -> void:
 	# Ввод над палитрой принадлежит панели — не панорамируем/зумим/ставим под ней.
 	if event is InputEventMouseButton and _pointer_over_panel(event.position):
 		return
+	# ПКМ по поставленному танку — контекстное меню поворота (item 6). Иначе ПКМ панорамит.
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		var rc := _pos_to_cell(get_global_mouse_position())
+		var rvi := _placed_at(rc)
+		if rvi != -1 and VehicleDB.is_vehicle(placed[rvi]["stats_id"]) \
+				and bool(VehicleDB.get_vehicle(placed[rvi]["stats_id"]).get("has_facing", false)):
+			_open_tank_dir_menu(rvi, event.position)
+			return
 	if event is InputEventMouseButton and event.button_index in [MOUSE_BUTTON_MIDDLE, MOUSE_BUTTON_RIGHT]:
 		_mouse_panning = event.pressed
 		return

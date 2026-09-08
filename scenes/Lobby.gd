@@ -18,6 +18,15 @@ const PlacementScript = preload("res://scenes/Placement.gd")
 
 const GAME_MODES := ["domination"]
 
+## Ширины колонок таблицы слотов (item 4): один и тот же набор у заголовков и у строк,
+## чтобы «Type/Color/Zone/Points» стояли ровно над своими контролами, а не сбоку.
+const SLOT_COL_IDX := 26
+const SLOT_COL_TYPE := 124
+const SLOT_COL_COLOR := 124
+const SLOT_COL_TEAM := 64
+const SLOT_COL_ZONE := 100
+const SLOT_COL_PTS := 124
+
 var _ui: CanvasLayer
 var roster: Roster
 var _is_client := false   # мы подключившийся гость (не хост)
@@ -28,6 +37,8 @@ var _fog_opt: OptionButton
 var _army_opt: OptionButton
 var _mode_opt: OptionButton
 var _ff_check: CheckBox
+## «Disable neutrals» (item 2): инверсия GameConfig.civilians_enabled.
+var _no_neutrals_check: CheckBox
 ## Командный режим (item 4): пока выключен — колонка «Team» и «дружественный огонь»
 ## скрыты. Отдельные команды появляются только по этому тумблеру.
 var _team_mode: bool = false
@@ -278,6 +289,13 @@ func _build_config(parent: VBoxContainer) -> void:
 	_live_check.button_pressed = GameConfig.live_placement_visible
 	box.add_child(_live_check)
 
+	# «Disable neutrals» (item 2): выключает мирных/нейтралов на карте. Инвертируем
+	# GameConfig.civilians_enabled — галочка «выключить» удобнее, чем «включить».
+	_no_neutrals_check = CheckBox.new()
+	_no_neutrals_check.text = "Disable neutrals"
+	_no_neutrals_check.button_pressed = not GameConfig.civilians_enabled
+	box.add_child(_no_neutrals_check)
+
 	# --- Случайные события (item 5/11) ---
 	# Раскладка: заголовок → «Enable» → «Mandatory» → интервал → список из трёх событий
 	# с галочками (выбранный пул). Семантика «Mandatory» новая (item 11): на «созревший»
@@ -312,8 +330,8 @@ func _build_config(parent: VBoxContainer) -> void:
 
 	if _is_client:
 		var _client_locked: Array = [_place_opt, _fog_opt, _army_opt, _mode_opt,
-				_ff_check, _team_check, _live_check, _events_check, _events_mand,
-				_events_interval]
+				_ff_check, _team_check, _live_check, _no_neutrals_check, _events_check,
+				_events_mand, _events_interval]
 		for c in _client_locked:
 			# У кнопок (в т. ч. OptionButton/CheckBox — все наследники BaseButton) есть
 			# .disabled; у SpinBox её нет, он глохнет через .editable. Присваивать
@@ -338,15 +356,11 @@ func _build_map(parent: VBoxContainer) -> void:
 	_map_paths = []
 	_map_opt.add_item("Blank arena")
 	_map_paths.append("")
-	var dir := DirAccess.open("res://maps")
-	if dir != null:
-		dir.list_dir_begin()
-		var f := dir.get_next()
-		while f != "":
-			if f.ends_with(".json"):
-				_map_opt.add_item(f.get_basename())
-				_map_paths.append("res://maps/" + f)
-			f = dir.get_next()
+	# ВСЕ сохранённые карты (item 1): и поставочные (res://maps), и созданные в редакторе
+	# (user://maps). MapData.list_maps() объединяет оба каталога без дублей.
+	for name in MapData.list_maps():
+		_map_opt.add_item(name.get_basename())
+		_map_paths.append(MapData.path_for(name))
 	_map_opt.select(0)
 	# Смена карты обновляет и превью, и слоты — у зон свой предел от карты (item 6).
 	_map_opt.item_selected.connect(func(_i: int) -> void:
@@ -475,7 +489,7 @@ func _slot_row(s: Roster.Slot) -> Control:
 	row.add_theme_constant_override("separation", 6)
 	var idx := Label.new()
 	idx.text = "%d." % (s.id + 1)
-	idx.custom_minimum_size = Vector2(24, 0)
+	idx.custom_minimum_size = Vector2(SLOT_COL_IDX, 0)
 	row.add_child(idx)
 
 	var kind := OptionButton.new()
@@ -486,6 +500,7 @@ func _slot_row(s: Roster.Slot) -> Control:
 	kind.select(_kind_index(s))
 	kind.item_selected.connect(_on_slot_kind.bind(s.id))
 	kind.disabled = _is_client
+	kind.custom_minimum_size = Vector2(SLOT_COL_TYPE, 0)
 	row.add_child(kind)
 
 	var color := OptionButton.new()
@@ -495,6 +510,7 @@ func _slot_row(s: Roster.Slot) -> Control:
 	color.select(s.color_index())
 	color.item_selected.connect(_on_slot_color.bind(s.id))
 	color.disabled = _is_client
+	color.custom_minimum_size = Vector2(SLOT_COL_COLOR, 0)
 	row.add_child(color)
 
 	# Колонка команды показывается ТОЛЬКО в командном режиме (item 4).
@@ -506,6 +522,7 @@ func _slot_row(s: Roster.Slot) -> Control:
 		team.prefix = "T"
 		team.value_changed.connect(_on_slot_team.bind(s.id))
 		team.editable = not _is_client
+		team.custom_minimum_size = Vector2(SLOT_COL_TEAM, 0)
 		row.add_child(team)
 
 	# Зона развёртывания (item 10): в какой нарисованной зоне слот ставит отряд.
@@ -518,6 +535,7 @@ func _slot_row(s: Roster.Slot) -> Control:
 	zone.prefix = "Zone "
 	zone.value_changed.connect(_on_slot_zone.bind(s.id))
 	zone.editable = not _is_client
+	zone.custom_minimum_size = Vector2(SLOT_COL_ZONE, 0)
 	row.add_child(zone)
 
 	# Личный бюджет очков (item 1): без жёсткого потолка. 0 = безлимит.
@@ -529,6 +547,7 @@ func _slot_row(s: Roster.Slot) -> Control:
 	budget.prefix = "Pts "
 	budget.value_changed.connect(_on_slot_budget.bind(s.id))
 	budget.editable = not _is_client
+	budget.custom_minimum_size = Vector2(SLOT_COL_PTS, 0)
 	row.add_child(budget)
 
 	# Ограничение состава ДЛЯ ЭТОГО ИГРОКА (item 2): открывает окно с галочками.
@@ -560,10 +579,11 @@ func _slot_row(s: Roster.Slot) -> Control:
 func _slot_header() -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
-	var cols: Array = [["#", 24], ["Type", 90], ["Color", 90]]
+	# Ширины СТРОГО совпадают с контролами строк, иначе заголовки съезжают вбок (item 4).
+	var cols: Array = [["#", SLOT_COL_IDX], ["Type", SLOT_COL_TYPE], ["Color", SLOT_COL_COLOR]]
 	if _team_mode:
-		cols.append(["Team", 70])
-	cols.append_array([["Zone", 70], ["Points", 90]])
+		cols.append(["Team", SLOT_COL_TEAM])
+	cols.append_array([["Zone", SLOT_COL_ZONE], ["Points", SLOT_COL_PTS]])
 	for pair in cols:
 		var l := Label.new()
 		l.text = str(pair[0])
@@ -817,6 +837,7 @@ func _commit_config() -> void:
 	GameConfig.army_select_mode = _army_opt.selected
 	GameConfig.game_mode = GAME_MODES[clampi(_mode_opt.selected, 0, GAME_MODES.size() - 1)]
 	GameConfig.live_placement_visible = _live_check.button_pressed
+	GameConfig.civilians_enabled = not _no_neutrals_check.button_pressed  # item 2
 	GameConfig.random_events_enabled = _events_check.button_pressed
 	GameConfig.random_events_mandatory = _events_mand.button_pressed
 	GameConfig.random_events_interval = int(_events_interval.value)

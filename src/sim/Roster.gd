@@ -182,6 +182,11 @@ func has_teams() -> bool:
 func are_allies(a: int, b: int) -> bool:
 	if a == b:
 		return true
+	# Все нейтралы — союзники друг другу, независимо от активационной группы (item 15):
+	# они не нападают между собой и видят друг в друге своих. Вражда нейтралов
+	# направлена только на игроков (§14).
+	if MCF.is_neutral(a) and MCF.is_neutral(b):
+		return true
 	if not MCF.is_player(a) or not MCF.is_player(b):
 		return false
 	var ta := team_of(a)

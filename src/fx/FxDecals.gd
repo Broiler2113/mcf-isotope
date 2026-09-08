@@ -56,6 +56,12 @@ var floor_damage: Dictionary = {}
 var props: Array = []
 ## Ещё летящие: то же плюс from/to и таймер. По приземлении переезжают в props.
 var flying: Array = []
+## Отрезки лазерного следа (item 11): [{from: Vector2, to: Vector2}] в клетках.
+var laser_lines: Array = []
+## Летящие пули-трассеры (item 16): [{from, to, t, dur}] в клетках. Живут доли секунды,
+## по истечении исчезают. Не оседают — это мгновенный полёт снаряда от стрелка к цели.
+var tracers: Array = []
+const TRACER_DUR := 0.16
 
 ## Детерминированный генератор на одну частицу. Зерно — чистая функция от описания
 ## события, поэтому одинаково у всех, кто это описание получил.
@@ -70,6 +76,21 @@ func clear() -> void:
 	floor_damage.clear()
 	props.clear()
 	flying.clear()
+	laser_lines.clear()
+	tracers.clear()
+
+## Пуля-трассер (item 16): короткий полёт от стрелка к цели. По одному следу на выстрел,
+## но чуть разнесённые по времени, чтобы очередь читалась как несколько пуль.
+func _tracer(ev: Dictionary) -> void:
+	var from_arr: Array = ev.get("from", [])
+	var to_arr: Array = ev.get("to", [])
+	if from_arr.size() < 2 or to_arr.size() < 2:
+		return
+	var a := Vector2(float(from_arr[0]) + 0.5, float(from_arr[1]) + 0.5)
+	var b := Vector2(float(to_arr[0]) + 0.5, float(to_arr[1]) + 0.5)
+	var n: int = maxi(1, int(ev.get("count", 1)))
+	for i in n:
+		tracers.append({"from": a, "to": b, "t": -0.05 * i, "dur": TRACER_DUR})
 
 ## Разобрать список описаний из ActionResult.fx.
 func apply(events: Array) -> void:
@@ -85,6 +106,8 @@ func apply(events: Array) -> void:
 				_blood(ev)
 			"laser":
 				_laser(ev)
+			"tracer":
+				_tracer(ev)
 
 ## 21.1 — пол под разрушенным объектом меняет текстуру, эпицентр сильнее прочих.
 func _debris(ev: Dictionary) -> void:
@@ -121,28 +144,20 @@ func _casings(ev: Dictionary) -> void:
 		var rng := _rng_for(kind, at, i)
 		_launch(kind, at, back, rng, CASING_RANGE_MIN, r_max, CASING_FLIGHT_SEC)
 
-## След лазера на полу (item 10): осевшая метка «laser_mark» в каждой клетке от стрелка
-## до точки остановки. Детерминированно, DiceService не трогаем — как и вся косметика.
+## След лазера на полу (item 10/11): непрерывная ПОЛУПРОЗРАЧНАЯ ЧЁРНАЯ ЛИНИЯ от стрелка
+## прямо до точки остановки — единым отрезком, поэтому диагонали рисуются как есть, без
+## лесенки из точек. Детерминированно, DiceService не трогаем.
 func _laser(ev: Dictionary) -> void:
 	var from_arr: Array = ev.get("from", [])
 	var to_arr: Array = ev.get("to", [])
 	if from_arr.size() < 2 or to_arr.size() < 2:
 		return
-	var a := Vector2i(int(from_arr[0]), int(from_arr[1]))
-	var b := Vector2i(int(to_arr[0]), int(to_arr[1]))
-	var d := b - a
-	var steps := maxi(absi(d.x), absi(d.y))
-	if steps <= 0:
-		return
-	var sx := signi(d.x)
-	var sy := signi(d.y)
-	var cur := a
-	# Начинаем со следующей за стрелком клетки — под самим марксманом отметку не ставим.
-	for _i in steps:
-		cur += Vector2i(sx, sy)
-		props.append({"kind": "laser_mark", "pos": Vector2(cur) + Vector2(0.5, 0.5),
-				"rot": 0.0, "scale": 1.0})
-	_trim()
+	laser_lines.append({
+		"from": Vector2(float(from_arr[0]) + 0.5, float(from_arr[1]) + 0.5),
+		"to": Vector2(float(to_arr[0]) + 0.5, float(to_arr[1]) + 0.5)})
+	# Не копим бесконечно — держим последние отрезки, как и осевшие частицы.
+	if laser_lines.size() > 200:
+		laser_lines = laser_lines.slice(laser_lines.size() - 200)
 
 ## 21.4 — лужа под трупом плюс веер брызг против направления убившего выстрела.
 func _blood(ev: Dictionary) -> void:
@@ -186,8 +201,15 @@ func _launch(kind: String, at: Vector2i, dir: Vector2, rng: RandomNumberGenerato
 
 ## Продвинуть полёты. Возвращает true, если что-то изменилось и надо перерисовать.
 func advance(delta: float) -> bool:
+	# Пули-трассеры (item 16): двигаем время, отработавшие убираем.
+	var tracers_active := not tracers.is_empty()
+	if tracers_active:
+		for i in range(tracers.size() - 1, -1, -1):
+			tracers[i]["t"] = float(tracers[i]["t"]) + delta
+			if float(tracers[i]["t"]) >= float(tracers[i]["dur"]):
+				tracers.remove_at(i)
 	if flying.is_empty():
-		return false
+		return tracers_active
 	var landed: Array = []
 	for i in range(flying.size() - 1, -1, -1):
 		var f: Dictionary = flying[i]
