@@ -39,7 +39,7 @@ enum Mode {NONE, MENU, MOVE, SHOOT, GRAB, ITEM, PUSH, DRONE_FLY, BUILD, BUILD_WA
 	CORPSE_DROP, WELD, MOVE_HELD, MINE, DISARM,
 	GROUP_MENU, GROUP_MOVE,
 	VEH_MENU, VEH_MOVE, VEH_TURN, VEH_CANNON, VEH_DISEMBARK,
-	DRAW}
+	DRAW, ERASE}
 
 ## Аннотации на поле (item 51). Каждый штрих — список клеток, автор и область видимости.
 enum DrawScope {SELF, TEAM}
@@ -210,7 +210,18 @@ const HUD_MIN_SIZE := Vector2(230, 170)
 ## Стартовый размер боковой панели (#54). Панель заметно уже и ниже прежней
 ## (540×680): она закрывала половину поля, а сеть с неё уехала в главное меню.
 const HUD_START_SIZE := Vector2(330, 430)
+## Ширина правого меню (item 6): панель приклеена к правому краю, тянется только по
+## горизонтали в этих пределах.
+var _hud_width: float = 250.0
+const HUD_WIDTH_MIN := 180.0
+const HUD_WIDTH_MAX := 460.0
+## Толщина кисти рисования (пиксели линии) и радиус ластика (в клетках), item 6.
+var _draw_brush: int = 3
+var _erase_brush: int = 1
 var _status_label: Label
+var _turn_neighbors_label: Label
+var _draw_btn: Button
+var _erase_btn: Button
 var _info_label: Label
 ## Живой свод армий и место игрока в очереди (item 20). Полный разбор инициативы
 ## открывается кнопкой в отдельном центральном оверлее (item 49).
@@ -223,6 +234,8 @@ var _chat_body: VBoxContainer
 var _chat_log: RichTextLabel
 var _chat_input: LineEdit
 var _log_label: RichTextLabel
+## Журнал боя вынесен из правого меню в свою панель (item 6), внизу слева.
+var _log_panel: PanelContainer
 var _menu: PanelContainer
 var _picker: PanelContainer
 var _dice: DiceRoller
@@ -736,6 +749,18 @@ func _unhandled_input(event: InputEvent) -> void:
 		_escape_pressed()
 		get_viewport().set_input_as_handled()
 		return
+	# Tab — показать/скрыть оверлей инициативы (item 6).
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_TAB:
+		_toggle_initiative_overlay()
+		get_viewport().set_input_as_handled()
+		return
+	# Ctrl+S — сохранить партию (item 6/19): кнопки Save в правом меню больше нет.
+	if event is InputEventKey and event.pressed and not event.echo \
+			and event.keycode == KEY_S and event.ctrl_pressed:
+		if replay == null:
+			_save_game()
+		get_viewport().set_input_as_handled()
+		return
 	# Ввод над всплывающим меню принадлежит меню (#8): не панорамируем, не зумим
 	# и не кликаем по полю под ним. Прокрутку колесом уже получил сам ScrollContainer;
 	# всё, что «просочилось» сюда (например, докрутка на границе), просто гасим, чтобы
@@ -805,6 +830,18 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event is InputEventMouseMotion:
 			if _stroke_drawing:
 				_stroke_add(_pos_to_cell(get_global_mouse_position()))
+			return
+	# Ластик (item 6): тем же жестом стираем СВОИ штрихи в радиусе кисти под курсором.
+	if mode == Mode.ERASE:
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed:
+				_stroke_drawing = true
+				_erase_at(_pos_to_cell(get_global_mouse_position()))
+			else:
+				_stroke_drawing = false
+			return
+		if event is InputEventMouseMotion and _stroke_drawing:
+			_erase_at(_pos_to_cell(get_global_mouse_position()))
 			return
 	if HOVER_PREVIEW_MODES.has(mode) and event is InputEventMouseMotion:
 		queue_redraw()  # обновляем предпросмотр радиуса/струи/окопа под курсором
@@ -3286,183 +3323,152 @@ func _initials(name_ru: String) -> String:
 		return (parts[0].substr(0, 1) + parts[1].substr(0, 1)).to_upper()
 	return name_ru.substr(0, 2).to_upper()
 
-# --- Движимое/масштабируемое окно HUD ---
-func _on_hud_header_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
-		if event.pressed:
-			_hud_dragging = true
-			_hud_drag_offset = _hud_window.position - event.global_position
-		else:
-			_hud_dragging = false
-	elif event is InputEventMouseMotion and _hud_dragging:
-		var vp := get_viewport_rect().size
-		var new_pos: Vector2 = event.global_position + _hud_drag_offset
-		new_pos.x = clampf(new_pos.x, 0.0, maxf(0.0, vp.x - _hud_window.size.x))
-		new_pos.y = clampf(new_pos.y, 0.0, maxf(0.0, vp.y - _hud_window.size.y))
-		_hud_window.position = new_pos
-		_reposition_hud_grip()
-
+# --- Правое меню боя: только горизонтальный размер, окно неподвижно (item 6) ---
+## Тянем ЛЕВЫЙ край панели: влево — шире, вправо — уже. Панель остаётся приклеенной к
+## правому краю экрана (offset_right = 0), меняется лишь offset_left = -ширина.
 func _on_hud_grip_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			_hud_resizing = true
 			_hud_resize_start = event.global_position
-			_hud_resize_origin = _hud_window.size
+			_hud_resize_origin = Vector2(_hud_width, 0)
 		else:
 			_hud_resizing = false
 	elif event is InputEventMouseMotion and _hud_resizing:
-		var delta: Vector2 = event.global_position - _hud_resize_start
-		var new_size: Vector2 = _hud_resize_origin + delta
-		new_size.x = maxf(HUD_MIN_SIZE.x, new_size.x)
-		new_size.y = maxf(HUD_MIN_SIZE.y, new_size.y)
-		var vp := get_viewport_rect().size
-		new_size.x = minf(new_size.x, vp.x - _hud_window.position.x)
-		new_size.y = minf(new_size.y, vp.y - _hud_window.position.y)
-		_hud_window.size = new_size
+		var dx: float = event.global_position.x - _hud_resize_start.x
+		_hud_width = clampf(_hud_resize_origin.x - dx, HUD_WIDTH_MIN, HUD_WIDTH_MAX)
+		if _hud_window != null:
+			_hud_window.offset_left = -_hud_width
 		_reposition_hud_grip()
 
 func _reposition_hud_grip() -> void:
 	if _hud_grip == null or _hud_window == null:
 		return
-	_hud_grip.position = _hud_window.position + _hud_window.size - _hud_grip.size
-	# Чат приколот к правому-нижнему углу экрана (item 50).
+	# Грип — тонкая полоса на левом крае панели, во всю её высоту.
+	var vp := get_viewport_rect().size
+	_hud_grip.position = Vector2(vp.x - _hud_width - _hud_grip.custom_minimum_size.x, 0)
+	_hud_grip.size = Vector2(_hud_grip.custom_minimum_size.x, vp.y)
+	# Чат приколот к правому-нижнему углу, но левее правого меню, чтобы не налезал.
 	if _chat_panel != null:
-		var vp := get_viewport_rect().size
-		_chat_panel.position = Vector2(vp.x - _chat_panel.size.x - 12.0,
+		_chat_panel.position = Vector2(vp.x - _hud_width - _chat_panel.size.x - 20.0,
 				vp.y - _chat_panel.size.y - 12.0)
+	# Журнал боя — в левом-нижнем углу (item 6: убран из правого меню в свою панель).
+	if _log_panel != null:
+		_log_panel.position = Vector2(12.0, vp.y - _log_panel.size.y - 12.0)
 	# Полоса повтора (M12) — по центру внизу, как у любого проигрывателя.
 	if _replay_bar != null:
-		var screen := get_viewport_rect().size
-		_replay_bar.position = Vector2((screen.x - _replay_bar.size.x) * 0.5,
-				screen.y - _replay_bar.size.y - 14.0)
+		_replay_bar.position = Vector2((vp.x - _replay_bar.size.x) * 0.5,
+				vp.y - _replay_bar.size.y - 14.0)
 
 # --- UI ---
 func _build_ui() -> void:
 	_ui_layer = CanvasLayer.new()
 	add_child(_ui_layer)
 
-	# --- Движимое/масштабируемое окно HUD в стиле Steam ------------------
+	# --- Правое меню боя (item 6): приклеено к правому краю, не двигается, тянется
+	# ТОЛЬКО по горизонтали. Содержит строго заданный набор: ход/раунд, конец хода,
+	# отмена/повтор, возврат в меню, мульти-выбор, рисование/стирание с размерами кистей,
+	# «показывать команде» и «скрыть чужие рисунки» — и ничего больше.
 	var panel := PanelContainer.new()
-	panel.position = Vector2(700, 20)
-	panel.size = HUD_START_SIZE
-	panel.custom_minimum_size = HUD_MIN_SIZE
 	SteamChrome.apply_panel(panel)
+	panel.anchor_left = 1.0
+	panel.anchor_right = 1.0
+	panel.anchor_top = 0.0
+	panel.anchor_bottom = 1.0
+	panel.offset_left = -_hud_width
+	panel.offset_right = 0.0
+	panel.offset_top = 0.0
+	panel.offset_bottom = 0.0
 	_ui_layer.add_child(panel)
 	_hud_window = panel
 
-	# Угловой «грип» для изменения размера — отдельный оверлей поверх окна,
-	# который _process держит в правом-нижнем углу окна.
+	# Ручка ширины — узкая вертикальная полоса на ЛЕВОМ крае панели. Тянешь влево/вправо —
+	# меняешь только ширину; окно с места не сдвигается.
 	_hud_grip = Control.new()
-	_hud_grip.custom_minimum_size = Vector2(18, 18)
-	_hud_grip.size = Vector2(18, 18)
+	_hud_grip.custom_minimum_size = Vector2(8, 0)
 	_hud_grip.mouse_filter = Control.MOUSE_FILTER_STOP
-	_hud_grip.mouse_default_cursor_shape = Control.CURSOR_FDIAGSIZE
+	_hud_grip.mouse_default_cursor_shape = Control.CURSOR_HSIZE
 	_hud_grip.gui_input.connect(_on_hud_grip_input)
 	_ui_layer.add_child(_hud_grip)
-	# Видимый маркер грипа (маленький акцентный уголок).
 	var grip_mark := ColorRect.new()
 	grip_mark.color = Ui.accent_color()
 	grip_mark.set_anchors_preset(Control.PRESET_FULL_RECT)
 	grip_mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hud_grip.add_child(grip_mark)
 
-	# Внешняя раскладка окна: заголовок-ручка + прокручиваемое тело.
 	var frame := VBoxContainer.new()
 	frame.add_theme_constant_override("separation", 0)
-	frame.set_anchors_preset(Control.PRESET_FULL_RECT)
 	panel.add_child(frame)
-
-	# Полоса заголовка = ручка перетаскивания окна.
-	var header := SteamChrome.header_bar("MCF Tactics")
-	header.mouse_filter = Control.MOUSE_FILTER_STOP
-	header.gui_input.connect(_on_hud_header_input)
-	frame.add_child(header)
-
-	# Тело окна прокручивается, чтобы содержимое влезало при уменьшении.
+	frame.add_child(SteamChrome.header_bar("MCF Tactics"))
 	var body := ScrollContainer.new()
 	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	body.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	frame.add_child(body)
-
-	# Компактная раскладка (#54): служебные кнопки — парами в ряд, шрифты мельче,
-	# журнал ниже. Сетевого блока здесь больше нет — он во вкладке главного меню.
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 5)
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	body.add_child(SteamChrome.pad(vbox, 8, 6))
 
+	# Текущий ход + номер раунда, и отдельной строкой — кто ходит до и после игрока.
 	_status_label = Label.new()
-	_status_label.add_theme_font_size_override("font_size", 12)
+	_status_label.add_theme_font_size_override("font_size", 13)
 	_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(_status_label)
+	_turn_neighbors_label = Label.new()
+	_turn_neighbors_label.add_theme_font_size_override("font_size", 11)
+	_turn_neighbors_label.modulate = Color(0.78, 0.81, 0.88)
+	_turn_neighbors_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vbox.add_child(_turn_neighbors_label)
 
-	_info_label = Label.new()
-	_info_label.add_theme_font_size_override("font_size", 11)
-	_info_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_info_label.custom_minimum_size = Vector2(0, 30)
-	vbox.add_child(_info_label)
-
-	var btn := Button.new()
-	btn.text = "End Turn"
-	btn.custom_minimum_size = Vector2(0, 30)
-	vbox.add_child(btn)
-	btn.pressed.connect(_on_end_turn_pressed)
-
+	vbox.add_child(_hsep())
+	var end_btn := Button.new()
+	end_btn.text = "End Turn"
+	end_btn.custom_minimum_size = Vector2(0, 32)
+	end_btn.pressed.connect(_on_end_turn_pressed)
+	vbox.add_child(end_btn)
 	_undo_btn = _compact_button("Undo", _on_undo_pressed)
 	_undo_btn.disabled = true
 	_redo_btn = _compact_button("Redo", _on_redo_pressed)
 	_redo_btn.disabled = true
 	vbox.add_child(_button_row([_undo_btn, _redo_btn]))
+	# «Возврат в меню» — единая кнопка: в сети уводит из партии, в одиночке — в главное меню.
+	vbox.add_child(_compact_button("Return to Menu", _to_lobby))
 
-	# Эти две подписи длинные, поэтому каждая занимает свою строку: в паре они не
-	# помещались по ширине и обрезались до пары букв.
-	_p1_btn = _compact_button("", _toggle_p1_ai)
-	_p2_btn = _compact_button("", _toggle_p2_ai)
-	_diff_btn = _compact_button("", _cycle_difficulty)
-	vbox.add_child(_p1_btn)
-	vbox.add_child(_p2_btn)
-	vbox.add_child(_diff_btn)
-	_refresh_ai_buttons()
-
-	# Камеру легко увести за край большой карты (город 50×50) и потерять свои
-	# войска — кнопка возвращает вид к исходной точке.
-	vbox.add_child(_compact_button("Return to Map", _recenter_camera))
-
-	# Сохранение партии (item 42) — рядом с выходом: обе кнопки про «закончить сейчас».
-	_save_btn = _compact_button("Save Game", _save_game)
-	_save_btn.disabled = replay != null
-	vbox.add_child(_save_btn)
-
-	var menu_btn := _compact_button("Main Menu", _to_menu)
-	var editor_btn := _compact_button("Editor", _open_editor)
-	vbox.add_child(_button_row([menu_btn, editor_btn]))
-
+	vbox.add_child(_hsep())
 	_multi_btn = CheckBox.new()
 	_multi_btn.text = "Multi-Select"
 	_multi_btn.add_theme_font_size_override("font_size", 12)
 	_multi_btn.toggled.connect(_on_multi_toggled)
 	vbox.add_child(_multi_btn)
 
-	# Возврат в лобби (item 20): в сетевой партии — к экрану лобби, в локальной — в меню.
-	vbox.add_child(_compact_button("Return to Lobby", _to_lobby))
-
-	# Живой статус армий и место игрока в очереди (item 20). Полный разбор — по кнопке.
 	vbox.add_child(_hsep())
-	vbox.add_child(_compact_button("Initiative ▸", _toggle_initiative_overlay))
-	_init_label = RichTextLabel.new()
-	_init_label.bbcode_enabled = true
-	_init_label.fit_content = true
-	_init_label.custom_minimum_size = Vector2(0, 90)
-	_init_label.add_theme_font_size_override("normal_font_size", 11)
-	_init_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	vbox.add_child(_init_label)
-
-	# Инструмент рисования (item 51): режим рисунка + область видимости + фильтр чужих.
-	vbox.add_child(_hsep())
-	vbox.add_child(_button_row([
-		_compact_button("Draw", _enter_draw),
-		_compact_button("Clear Mine", _clear_my_drawings)]))
+	# Рисование и стирание (item 6/51) с размерами кистей.
+	_draw_btn = _compact_button("Draw", _enter_draw)
+	_erase_btn = _compact_button("Erase", _enter_erase)
+	vbox.add_child(_button_row([_draw_btn, _erase_btn]))
+	var draw_lbl := Label.new()
+	draw_lbl.text = "Draw brush"
+	draw_lbl.add_theme_font_size_override("font_size", 11)
+	vbox.add_child(draw_lbl)
+	var draw_slider := HSlider.new()
+	draw_slider.min_value = 1
+	draw_slider.max_value = 12
+	draw_slider.step = 1
+	draw_slider.value = _draw_brush
+	draw_slider.value_changed.connect(func(v: float) -> void: _draw_brush = int(v))
+	vbox.add_child(draw_slider)
+	var erase_lbl := Label.new()
+	erase_lbl.text = "Erase brush"
+	erase_lbl.add_theme_font_size_override("font_size", 11)
+	vbox.add_child(erase_lbl)
+	var erase_slider := HSlider.new()
+	erase_slider.min_value = 0
+	erase_slider.max_value = 8
+	erase_slider.step = 1
+	erase_slider.value = _erase_brush
+	erase_slider.value_changed.connect(func(v: float) -> void: _erase_brush = int(v))
+	vbox.add_child(erase_slider)
 	var team_draw := CheckBox.new()
 	team_draw.text = "Share with team"
 	team_draw.add_theme_font_size_override("font_size", 12)
@@ -3475,23 +3481,18 @@ func _build_ui() -> void:
 		_hide_others_draw = on
 		queue_redraw())
 	vbox.add_child(hide_draw)
-	vbox.add_child(_compact_button("Chat ▾", _toggle_chat))
 
-	# Строка сети появляется, только когда партия действительно сетевая.
-	_net_status = Label.new()
-	_net_status.add_theme_font_size_override("font_size", 11)
-	_net_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_net_status.hide()
-	vbox.add_child(_net_status)
+	# Убрано из правого меню по item 6 — обновляющие функции этих ссылок уже
+	# null-безопасны. Журнал боя переехал в свою панель (снизу слева), чат остаётся
+	# отдельной панелью (Enter), сохранение — по Ctrl+S; ИИ/сложность задаются в лобби.
+	_info_label = null
+	_init_label = null
+	_p1_btn = null
+	_p2_btn = null
+	_diff_btn = null
+	_net_status = null
 
-	vbox.add_child(_hsep())
-	_log_label = RichTextLabel.new()
-	_log_label.custom_minimum_size = Vector2(0, 150)
-	_log_label.add_theme_font_size_override("normal_font_size", 11)
-	_log_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_log_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_log_label.scroll_following = true
-	vbox.add_child(_log_label)
+	_build_log_panel()
 
 	# Всплывающее меню действий и выбор числа выстрелов — в общем оконном стиле
 	# SteamChrome (рамка + шапка), как остальной интерфейс. Тело красим один раз,
@@ -3514,6 +3515,24 @@ func _build_ui() -> void:
 	_build_chat_panel()
 	if replay != null:
 		_build_replay_bar()
+
+## Журнал боя (item 6) — своя панель внизу слева, а не строка в правом меню. Тот же
+## _log_label, что и раньше, поэтому publish_result/_on_log_line работают без правок.
+func _build_log_panel() -> void:
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(360, 150)
+	SteamChrome.apply_panel(panel)
+	_ui_layer.add_child(panel)
+	_log_panel = panel
+	var frame := VBoxContainer.new()
+	frame.add_theme_constant_override("separation", 0)
+	panel.add_child(frame)
+	frame.add_child(SteamChrome.header_bar("Combat Log"))
+	_log_label = RichTextLabel.new()
+	_log_label.custom_minimum_size = Vector2(360, 130)
+	_log_label.add_theme_font_size_override("normal_font_size", 11)
+	_log_label.scroll_following = true
+	frame.add_child(SteamChrome.pad(_log_label, 8, 6))
 
 ## Полоса управления повтором (item 53) внизу экрана: в начало, шаг назад,
 ## пуск/пауза, шаг вперёд, скорость, в конец. Строится только в режиме просмотра —
@@ -3669,7 +3688,9 @@ func _build_initiative_overlay() -> void:
 	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	overlay.hide()
 	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.55)
+	# Полупрозрачный оверлей (item 6): доску за инициативой видно, лёгкое затемнение
+	# лишь чуть гасит фон. Клик по фону закрывает — как и Tab.
+	dim.color = Color(0, 0, 0, 0.20)
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	dim.mouse_filter = Control.MOUSE_FILTER_STOP
 	dim.gui_input.connect(func(e: InputEvent) -> void:
@@ -3683,6 +3704,7 @@ func _build_initiative_overlay() -> void:
 	var panel := PanelContainer.new()
 	panel.custom_minimum_size = Vector2(420, 0)
 	SteamChrome.apply_panel(panel)
+	panel.modulate = Color(1, 1, 1, 0.82)  # само окно инициативы — полупрозрачное (item 6)
 	center.add_child(panel)
 	var frame := VBoxContainer.new()
 	frame.add_theme_constant_override("separation", 0)
@@ -3799,6 +3821,40 @@ func _enter_draw() -> void:
 	mode = Mode.DRAW
 	queue_redraw()
 
+## Ластик (item 6): режим стирания СВОИХ штрихов кистью заданного радиуса.
+func _enter_erase() -> void:
+	_deselect()
+	mode = Mode.ERASE
+	queue_redraw()
+
+## Стереть из своих штрихов все точки в радиусе ластика (в клетках) вокруг cell.
+## Штрих, у которого не осталось точек, удаляется целиком. Стирание локальное — как и
+## «очистить свои» раньше: аннотации косметические и правки по сети не гоняются.
+func _erase_at(cell: Vector2i) -> void:
+	if not state.grid.in_bounds(cell):
+		return
+	var me := _draw_author()
+	var r := _erase_brush
+	var kept: Array = []
+	var changed := false
+	for rec: Dictionary in _strokes:
+		if int(rec["author"]) != me:
+			kept.append(rec)
+			continue
+		var cells: Array = rec["cells"]
+		var new_cells: Array = []
+		for c: Vector2i in cells:
+			if Combat.distance(c, cell) > r:
+				new_cells.append(c)
+		if new_cells.size() != cells.size():
+			changed = true
+		if not new_cells.is_empty():
+			rec["cells"] = new_cells
+			kept.append(rec)
+	if changed:
+		_strokes = kept
+		queue_redraw()
+
 func _stroke_add(cell: Vector2i) -> void:
 	if not state.grid.in_bounds(cell):
 		return
@@ -3813,6 +3869,7 @@ func _stroke_commit() -> void:
 		"author": _draw_author(),
 		"scope": DrawScope.TEAM if _draw_scope_team else DrawScope.SELF,
 		"cells": _cur_stroke.duplicate(),
+		"width": _draw_brush,  # толщина линии из ползунка (item 6)
 	}
 	_strokes.append(rec)
 	_cur_stroke = []
@@ -3821,7 +3878,8 @@ func _stroke_commit() -> void:
 		for c: Vector2i in rec["cells"]:
 			flat.append(c.x)
 			flat.append(c.y)
-		session.send({"k": K_DRAW, "a": rec["author"], "s": rec["scope"], "c": flat})
+		session.send({"k": K_DRAW, "a": rec["author"], "s": rec["scope"],
+			"c": flat, "w": rec["width"]})
 	queue_redraw()
 
 ## Пришедший чужой штрих (item 51): область видимости уважаем — «для себя» до нас не
@@ -3836,7 +3894,8 @@ func _on_remote_stroke(msg: Dictionary) -> void:
 	if cells.is_empty():
 		return
 	_strokes.append({"author": int(msg.get("a", -1)),
-			"scope": int(msg.get("s", DrawScope.TEAM)), "cells": cells})
+			"scope": int(msg.get("s", DrawScope.TEAM)), "cells": cells,
+			"width": int(msg.get("w", 3))})
 	queue_redraw()
 
 ## Видит ли просматривающий игрок этот штрих (item 51): свои — всегда; «для команды» —
@@ -3868,7 +3927,7 @@ func _draw_annotations() -> void:
 	if not _cur_stroke.is_empty():
 		all.append({"author": _draw_author(),
 				"scope": DrawScope.TEAM if _draw_scope_team else DrawScope.SELF,
-				"cells": _cur_stroke})
+				"cells": _cur_stroke, "width": _draw_brush})
 	for rec: Dictionary in all:
 		if not _stroke_visible_to_viewer(rec):
 			continue
@@ -3876,13 +3935,14 @@ func _draw_annotations() -> void:
 		if cells.size() < 1:
 			continue
 		var col := _side_color(int(rec["author"]))
+		var w: float = float(rec.get("width", 3))
 		var pts := PackedVector2Array()
 		for c in cells:
 			pts.append(_cell_origin(c) + Vector2(CELL, CELL) * 0.5)
 		if pts.size() == 1:
-			draw_circle(pts[0], CELL * 0.15, col)
+			draw_circle(pts[0], maxf(CELL * 0.1, w * 0.6), col)
 		else:
-			draw_polyline(pts, col, 3.0)
+			draw_polyline(pts, col, w)
 
 # --- Чат (item 50) ---
 
@@ -4459,12 +4519,19 @@ func _order_labels() -> String:
 
 func _refresh_status() -> void:
 	if _status_label != null:
-		# Порядок инициативы фиксирован на всю партию (#53) — держим его на виду,
-		# но отдельной строкой: панель теперь узкая (#54).
-		_status_label.text = "Turn: %s  |  Round: %d\nOrder: %s" % [
-			_side_label(state.active_player()), state.turns.round_number,
-			_order_labels()
-		]
+		_status_label.text = "Turn: %s   |   Round: %d" % [
+			_side_label(state.active_player()), state.turns.round_number]
+	# Кто ходит до и после игрока (item 6) — отдельной строкой под текущим ходом.
+	if _turn_neighbors_label != null and state != null:
+		var me := _viewing_side()
+		var prev := state.turns.neighbor_slot(me, -1)
+		var nxt := state.turns.neighbor_slot(me, 1)
+		var parts: Array[String] = []
+		if prev >= 0:
+			parts.append("Prev: %s" % _side_label(prev))
+		if nxt >= 0:
+			parts.append("Next: %s" % _side_label(nxt))
+		_turn_neighbors_label.text = "   ".join(parts)
 	_refresh_initiative()
 	if _init_overlay != null and _init_overlay.visible:
 		_refresh_initiative_overlay()
