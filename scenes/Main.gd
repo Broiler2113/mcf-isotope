@@ -113,6 +113,10 @@ var _wall_drawing: bool = false
 ## Юниты, чья смерть уже применена, но ещё анимируется бросок защиты (#46): рисуем
 ## их живыми, пока крутится кубик, чтобы не «спойлерить» исход.
 var _pending_death_ids: Dictionary = {}
+## «Визуальный слепок» зоны взрыва ДО разрушения (item 22): пока крутится кубик выстрела,
+## клетки и техника рисуются по этим старым значениям, чтобы исход не опережал бросок.
+## {"cells": {Vector2i: {...}}, "vehicles": {vid: {...}}}. Пусто — рисуем как есть.
+var _hold_visual: Dictionary = {}
 ## Проигрываемый пеший переход: id юнита → клетка, на которой он сейчас РИСУЕТСЯ (#96).
 ## Мирные ходят вне потока намерений, и без этого весь их марш применялся одним кадром —
 ## житель возникал вплотную к отряду. Состояние уже переехало; словарь влияет только на
@@ -589,9 +593,11 @@ func _show_result(result: ActionResult) -> void:
 		_pending_death_ids.clear()
 		for id: int in result.deaths:
 			_pending_death_ids[id] = true
+		_hold_visual = result.visual_hold  # item 22
 		queue_redraw()
 		await _play_dice(result.dice_events)
 		_pending_death_ids.clear()
+		_hold_visual = {}
 	if not result.fx.is_empty():
 		_fx.apply(result.fx)
 	state.log.publish_result(result)
@@ -2009,9 +2015,11 @@ func _on_intent_ready(intent: Intent) -> void:
 				"kind": "ap", "unit": ap_actor.id,
 				"from": ap_before, "left": ap_actor.remaining_ap,
 			})
+		_hold_visual = result.visual_hold  # item 22: держим «до взрыва», пока крутится кубик
 		queue_redraw()
 		await _play_dice(result.dice_events)
 		_pending_death_ids.clear()
+		_hold_visual = {}
 		queue_redraw()
 	# Косметика (#21) добавляется ПОСЛЕ анимации броска — вместе с показом смерти,
 	# иначе лужа крови проявлялась бы раньше, чем кубик решил судьбу цели.
@@ -2860,20 +2868,30 @@ func _draw() -> void:
 		var foy: float = ORIGIN.y + y * CELL
 		for x in gw:
 			var fcell := grid.cell_fast(x, y)
-			if fcell.feature_id == "":
+			# item 22: пока крутится кубик выстрела, клетка рисуется по «слепку до взрыва» —
+			# снесённое укрепление ещё стоит, потрескавшееся ещё целое.
+			var _fid := fcell.feature_id
+			var _fdur := fcell.feature_durability
+			if not _hold_visual.is_empty():
+				var _hc: Dictionary = _hold_visual.get("cells", {})
+				var _hkey := Vector2i(x, y)
+				if _hc.has(_hkey):
+					_fid = _hc[_hkey]["feature_id"]
+					_fdur = _hc[_hkey]["feature_durability"]
+			if _fid == "":
 				continue
 			# Мина видна только тому, кто её поставил, — и тому, чей сапёр её нашёл
 			# (item 45). Иначе смысла в минном поле не было бы вовсе.
-			if (fcell.feature_id == MCF.FEATURE_MINE or fcell.feature_id == MCF.FEATURE_AV_MINE) \
+			if (_fid == MCF.FEATURE_MINE or _fid == MCF.FEATURE_AV_MINE) \
 					and not resolver.mine_visible_to(viewer, Vector2i(x, y)):
 				continue
 			var o := Vector2(ORIGIN.x + x * CELL, foy)
 			# Имя картинки совпадает с id объекта (sandbags.png, trench.png...) (#55).
-			if Sprites.draw_texture_override(self, fcell.feature_id, o, float(CELL)):
+			if Sprites.draw_texture_override(self, _fid, o, float(CELL)):
 				continue
-			var tag: String = FEATURE_TAGS.get(fcell.feature_id, "?")
+			var tag: String = FEATURE_TAGS.get(_fid, "?")
 			# ЛДФ — чёрный монолит (#85): заливка, а не контур, чтобы отличался от бетона.
-			if fcell.feature_id == MCF.FEATURE_LDF:
+			if _fid == MCF.FEATURE_LDF:
 				draw_rect(Rect2(o + Vector2(3, 3), Vector2(CELL - 6, CELL - 6)), LDF_COLOR)
 				draw_rect(Rect2(o + Vector2(3, 3), Vector2(CELL - 6, CELL - 6)),
 					Color(0.35, 0.35, 0.4), false, 1.0)
@@ -2886,7 +2904,7 @@ func _draw() -> void:
 			draw_string(font, o + Vector2(6, CELL - 15), tag,
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.75, 0.75, 0.85))
 			# Треснувший ДОТ (потеряна прочность) — красная риска в углу (#89).
-			if fcell.feature_durability > 0 and fcell.feature_durability < MCF.feature_durability(fcell.feature_id):
+			if _fdur > 0 and _fdur < MCF.feature_durability(_fid):
 				draw_line(o + Vector2(CELL - 12, 8), o + Vector2(CELL - 6, 16),
 					Color(0.9, 0.25, 0.2), 2.0)
 
@@ -2945,17 +2963,26 @@ func _draw() -> void:
 				break
 		if not vseen:
 			continue
+		# item 22: во время броска выстрела показываем ПРЕЖНЮЮ прочность/целость машины —
+		# снятие прочности и превращение в обломок не должны опережать кубик.
+		var disp_wrecked := veh.wrecked
+		var disp_dur := veh.durability
+		if not _hold_visual.is_empty():
+			var _hv: Dictionary = _hold_visual.get("vehicles", {})
+			if _hv.has(veh.id):
+				disp_wrecked = _hv[veh.id]["wrecked"]
+				disp_dur = _hv[veh.id]["durability"]
 		var org := _cell_origin(veh.origin)
 		var vsize := Vector2(veh.size.x * CELL, veh.size.y * CELL)
 		var hull := Rect2(org + Vector2(3, 3), vsize - Vector2(6, 6))
 		var hull_col: Color = _side_color(veh.owner)
-		if veh.wrecked:
+		if disp_wrecked:
 			hull_col = Color(0.3, 0.3, 0.32)
 		var vcenter := org + vsize * 0.5
 		# Картинка машины растягивается на весь след и поворачивается по фронту (#55).
-		var veh_name := (veh.type_id + "_wreck") if veh.wrecked else veh.type_id
+		var veh_name := (veh.type_id + "_wreck") if disp_wrecked else veh.type_id
 		var veh_key := Sprites.resolve(veh_name)
-		if veh_key == "" and veh.wrecked:
+		if veh_key == "" and disp_wrecked:
 			veh_key = Sprites.resolve(veh.type_id)
 		if veh_key != "":
 			Sprites.draw_texture_override_rect(self, veh_key, Rect2(org, vsize),
@@ -2964,17 +2991,17 @@ func _draw() -> void:
 			draw_rect(hull, hull_col.darkened(0.35))
 			draw_rect(hull, hull_col, false, 3.0)
 			# Направление (стрелка фронта) — у танка.
-			if veh.facing != Vector2i.ZERO and not veh.wrecked:
+			if veh.facing != Vector2i.ZERO and not disp_wrecked:
 				var dir := Vector2(veh.facing.x, veh.facing.y).normalized()
 				draw_line(vcenter, vcenter + dir * (CELL * 0.6), Color.WHITE, 3.0)
 		var label: String = VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)
-		if veh.wrecked:
+		if disp_wrecked:
 			label = "WRECK"
 		draw_string(font, org + Vector2(8, 18), "%s" % label,
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color.WHITE)
-		if not veh.wrecked:
+		if not disp_wrecked:
 			draw_string(font, org + Vector2(8, vsize.y - 8),
-				"DUR %d  CREW %d" % [veh.durability, veh.living_crew_count()],
+				"DUR %d  CREW %d" % [disp_dur, veh.living_crew_count()],
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.9, 0.9, 0.6))
 			# Жёлтые точки ОД машины (item 3): та же метка, что у пехоты, — по одной точке
 			# на очко действия, в правом-верхнем углу следа, чтобы не спорить с подписью.

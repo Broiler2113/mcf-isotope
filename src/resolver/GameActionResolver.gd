@@ -708,6 +708,9 @@ func _resolve_anti_tank(shooter: UnitInstance, center: Vector2i) -> ActionResult
 		else:
 			result.log("%s: roll %d (need %d+) — missed, charge fell short at (%d, %d)." % [
 				shooter.stats.display_name, roll, need, landing.x, landing.y])
+	# Снимок «до взрыва» для показа во время броска (item 22).
+	var at_area := MCF.blast_square(landing, MCF.ANTI_TANK_BLAST_RADIUS)
+	_capture_visual_hold(result, at_area)
 	# Прямое попадание в ДОТ: бетон забирает весь удар, осколочного поля нет.
 	if _pillbox_absorbs(landing, MCF.ANTI_TANK_VEHICLE_DAMAGE, result):
 		return result
@@ -739,6 +742,35 @@ func _shortfall_landing(from_coord: Vector2i, target: Vector2i, roll: int, need:
 	if land_index <= 0:
 		return from_coord
 	return _throw_path(from_coord, target)[land_index - 1]
+
+## Снять «визуальный слепок» зоны ДО взрыва (item 22): прежние объекты клеток и прежняя
+## прочность/целость техники в области. UI показывает их, пока крутится кубик выстрела,
+## и разрушение не опережает бросок. Чисто косметика — на состояние не влияет.
+func _capture_visual_hold(res: ActionResult, area: Array) -> void:
+	if res == null:
+		return
+	var cells: Dictionary = res.visual_hold.get("cells", {})
+	for c: Vector2i in area:
+		var cell := state.grid.cell(c)
+		if cell == null or cells.has(c):
+			continue
+		cells[c] = {
+			"feature_id": cell.feature_id, "feature_durability": cell.feature_durability,
+			"cover_height": cell.cover_height, "corpse_count": cell.corpse_count,
+		}
+	res.visual_hold["cells"] = cells
+	var vehs: Dictionary = res.visual_hold.get("vehicles", {})
+	var in_area := {}
+	for c: Vector2i in area:
+		in_area[c] = true
+	for veh: Vehicle in state.all_vehicles():
+		if vehs.has(veh.id):
+			continue
+		for fc in veh.footprint():
+			if in_area.has(fc):
+				vehs[veh.id] = {"durability": veh.durability, "wrecked": veh.wrecked}
+				break
+	res.visual_hold["vehicles"] = vehs
 
 ## Взрыв: авто-уничтожение всех живых в зоне поражения, кроме щитоносцев вне
 ## эпицентра (они прикрывают союзников рядом). Возвращает имена погибших (§3.14).
@@ -5059,6 +5091,11 @@ func _resolve_vehicle_cannon(intent: VehicleCannonIntent) -> ActionResult:
 	else:
 		res.log("%s fires — shot falls short, shell lands at (%d, %d)! (roll %d, need %d+)" % [
 			spec.get("name", veh.type_id), landing.x, landing.y, roll, need])
+	# Снимок «до взрыва» для показа во время броска (item 22): разрушения и снятая
+	# прочность появятся только ПОСЛЕ того, как кубик докрутится.
+	var pre_area := cannon_blast_cells(veh, landing)
+	pre_area.append(landing)
+	_capture_visual_hold(res, pre_area)
 	# Прямое попадание в ДОТ: бетон принимает снаряд целиком (2 прочности = 1 выстрел
 	# танка), осколочного поля вокруг не возникает.
 	if _pillbox_absorbs(landing, int(gun.get("vehicle_damage", 2)), res):
