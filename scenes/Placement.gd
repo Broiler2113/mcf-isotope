@@ -219,7 +219,20 @@ func _stats(id: String) -> UnitStats:
 ## Действующий бюджет стороны (item 40): 0 = безлимит. «Свободная расстановка» снимает
 ## лимит либо со всех, либо с одного выбранного хостом игрока (GameConfig.unlimited_for).
 func _effective_budget(side: int) -> int:
-	return 0 if GameConfig.unlimited_for(side) else budget
+	if GameConfig.unlimited_for(side):
+		return 0
+	# Личный бюджет игрока из ростера (item 1); 0 = безлимит; иначе общий бюджет партии.
+	if roster != null and roster.slot(side) != null and roster.slot(side).budget > 0:
+		return roster.slot(side).budget
+	return budget
+
+## Разрешён ли юнит активной стороне к покупке (item 2): сперва личное ограничение
+## слота, затем общее (GameConfig), иначе можно.
+func _unit_allowed_for_active(id: String) -> bool:
+	if roster != null and roster.slot(active_side) != null \
+			and not roster.slot(active_side).allowed_units.is_empty():
+		return roster.slot(active_side).unit_allowed(id)
+	return GameConfig.unit_allowed(id)
 
 func _cost(id: String) -> int:
 	if VehicleDB.is_vehicle(id):
@@ -300,6 +313,22 @@ func _cell_placeable(coord: Vector2i) -> bool:
 	# Объект-препятствие (кроме мягких укрытий) не мешает — но занятые клетки нельзя.
 	return _placed_at(coord) == -1 and _neutral_at(coord) == -1
 
+## Контекстное меню поворота танка (item 6/2): четыре стороны света, выбор ставит фронт.
+func _open_tank_dir_menu(vi: int, screen_pos: Vector2) -> void:
+	var menu := PopupMenu.new()
+	var names := ["East →", "South ↓", "West ←", "North ↑"]
+	for i in FACING4.size():
+		menu.add_item(names[i], i)
+	menu.id_pressed.connect(func(id: int) -> void:
+		placed[vi]["facing"] = FACING4[id]
+		_status.text = "Rotated the %s (free)." % _display_name(placed[vi]["stats_id"])
+		queue_redraw()
+		menu.queue_free())
+	menu.close_requested.connect(func() -> void: menu.queue_free())
+	add_child(menu)
+	menu.position = Vector2i(screen_pos) + Vector2i(get_window().position)
+	menu.popup()
+
 func _placed_at(coord: Vector2i) -> int:
 	for i in placed.size():
 		if _footprint(placed[i]["stats_id"], placed[i]["coord"]).has(coord):
@@ -323,9 +352,9 @@ func _process(delta: float) -> void:
 		pan += dir.normalized() * PAN_SPEED * delta
 		queue_redraw()
 
-## Восемь направлений фронта — для бесплатного поворота танка на закупке (item 21).
-const FACING8 := [Vector2i(1,0), Vector2i(1,1), Vector2i(0,1), Vector2i(-1,1),
-	Vector2i(-1,0), Vector2i(-1,-1), Vector2i(0,-1), Vector2i(1,-1)]
+## Четыре направления фронта — для бесплатного поворота танка на закупке (item 21).
+## Диагонали убраны (item 2): танк смотрит только по сторонам света.
+const FACING4 := [Vector2i(1,0), Vector2i(0,1), Vector2i(-1,0), Vector2i(0,-1)]
 
 ## Направление фронта поставленной машины (item 21); по умолчанию — «в глубину поля»
 ## от своей стороны. Пехоте фронт не нужен и не хранится.
@@ -343,17 +372,25 @@ func _unhandled_input(event: InputEvent) -> void:
 		if vi != -1 and VehicleDB.is_vehicle(placed[vi]["stats_id"]) \
 				and bool(VehicleDB.get_vehicle(placed[vi]["stats_id"]).get("has_facing", false)):
 			var cur_face := _placed_facing(placed[vi])
-			var idx := FACING8.find(cur_face)
+			var idx := FACING4.find(cur_face)
 			if idx == -1:
 				idx = 0
 			var step := -1 if event.keycode == KEY_Q else 1
-			placed[vi]["facing"] = FACING8[(idx + step + FACING8.size()) % FACING8.size()]
+			placed[vi]["facing"] = FACING4[(idx + step + FACING4.size()) % FACING4.size()]
 			_status.text = "Rotated the %s (free)." % _display_name(placed[vi]["stats_id"])
 			queue_redraw()
 		return
 	# Ввод над палитрой принадлежит панели — не панорамируем/зумим/ставим под ней.
 	if event is InputEventMouseButton and _pointer_over_panel(event.position):
 		return
+	# ПКМ по поставленному танку — контекстное меню поворота (item 6). Иначе ПКМ панорамит.
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		var rc := _pos_to_cell(get_global_mouse_position())
+		var rvi := _placed_at(rc)
+		if rvi != -1 and VehicleDB.is_vehicle(placed[rvi]["stats_id"]) \
+				and bool(VehicleDB.get_vehicle(placed[rvi]["stats_id"]).get("has_facing", false)):
+			_open_tank_dir_menu(rvi, event.position)
+			return
 	if event is InputEventMouseButton and event.button_index in [MOUSE_BUTTON_MIDDLE, MOUSE_BUTTON_RIGHT]:
 		_mouse_panning = event.pressed
 		return
@@ -653,15 +690,20 @@ func _draw() -> void:
 	for p in placed:
 		_draw_token(p["coord"], int(p["owner"]), p["stats_id"], font)
 		# Стрелка фронта танка (item 21): показывает, куда он смотрит, — крутится клавишей R.
+		# Якорь в НИЖНЕМ ЛЕВОМ углу следа (item 3): раньше стрелка шла из центра и
+		# перекрывала корпус/инициалы; теперь компактный указатель сидит в углу.
 		if VehicleDB.is_vehicle(p["stats_id"]) \
 				and bool(VehicleDB.get_vehicle(p["stats_id"]).get("has_facing", false)):
-			var vc := _cell_origin(p["coord"]) + Vector2(CELL, CELL) * 0.5
+			var vsize := VehicleDB.size_of(p["stats_id"])
+			var vorigin := _cell_origin(p["coord"])
+			var corner := vorigin + Vector2(CELL * 0.28, vsize.y * CELL - CELL * 0.28)
 			var fdir := Vector2(_placed_facing(p)).normalized()
-			draw_line(vc, vc + fdir * (CELL * 0.55), Color.WHITE, 3.0)
-			var perp := Vector2(-fdir.y, fdir.x) * (CELL * 0.14)
-			var tip := vc + fdir * (CELL * 0.55)
+			var alen := CELL * 0.4
+			var tip := corner + fdir * alen
+			draw_line(corner, tip, Color.WHITE, 3.0)
+			var perp := Vector2(-fdir.y, fdir.x) * (CELL * 0.12)
 			draw_colored_polygon(PackedVector2Array([
-				tip, tip - fdir * (CELL * 0.2) + perp, tip - fdir * (CELL * 0.2) - perp]), Color.WHITE)
+				tip, tip - fdir * (CELL * 0.18) + perp, tip - fdir * (CELL * 0.18) - perp]), Color.WHITE)
 	# Предпросмотр формы-инструмента (item 12): куда ляжет линия/прямоугольник/круг.
 	if _ptool != PTool.POINT and _shape_start != Vector2i(-9999, -9999):
 		for sc: Vector2i in _shape_cells(_shape_start, _shape_cur):
@@ -803,23 +845,7 @@ func _build_ui() -> void:
 	_palette = VBoxContainer.new()
 	_palette.add_theme_constant_override("separation", 3)
 	vbox.add_child(_palette)
-	for id in PURCHASABLE:
-		if not GameConfig.unit_allowed(id):  # ограничение состава хостом (item 12)
-			continue
-		var s := _stats(id)
-		if s == null:
-			continue
-		_add_palette_button(id, "%s  -  %d pts" % [s.display_name, s.cost])
-
-	# Раздел техники (#10).
-	var mach_lbl := Label.new()
-	mach_lbl.text = "— Machinery —"
-	mach_lbl.modulate = Color(0.75, 0.78, 0.85)
-	_palette.add_child(mach_lbl)
-	for vid in PURCHASABLE_VEHICLES:
-		if not VehicleDB.is_vehicle(vid) or not GameConfig.unit_allowed(vid):
-			continue
-		_add_palette_button(vid, "%s  -  %d pts" % [_display_name(vid), _cost(vid)])
+	_populate_palette()
 
 	vbox.add_child(HSeparator.new())
 
@@ -870,6 +896,28 @@ func _build_ui() -> void:
 
 	# UI живёт на CanvasLayer — подтянуть общий скин Steam (#59).
 	Ui.theme_canvas_layers()
+
+## Наполнить палитру для АКТИВНОЙ стороны (item 2): у каждого игрока может быть свой
+## разрешённый состав, поэтому при передаче хода следующему список пересобирается.
+func _populate_palette() -> void:
+	_palette_buttons = {}
+	for c in _palette.get_children():
+		c.queue_free()
+	for id in PURCHASABLE:
+		if not _unit_allowed_for_active(id):
+			continue
+		var s := _stats(id)
+		if s == null:
+			continue
+		_add_palette_button(id, "%s  -  %d pts" % [s.display_name, s.cost])
+	var mach_lbl := Label.new()
+	mach_lbl.text = "— Machinery —"
+	mach_lbl.modulate = Color(0.75, 0.78, 0.85)
+	_palette.add_child(mach_lbl)
+	for vid in PURCHASABLE_VEHICLES:
+		if not VehicleDB.is_vehicle(vid) or not _unit_allowed_for_active(vid):
+			continue
+		_add_palette_button(vid, "%s  -  %d pts" % [_display_name(vid), _cost(vid)])
 
 func _add_palette_button(id: String, label: String) -> void:
 	var btn := Button.new()
@@ -947,9 +995,7 @@ func _on_flow() -> void:
 	if at >= 0 and at < sides.size() - 1:
 		active_side = sides[at + 1]
 		brush_unit = ""
-		for c in _palette.get_children():
-			if c is Button:
-				c.button_pressed = false
+		_populate_palette()  # у нового игрока может быть свой разрешённый состав (item 2)
 		_status.text = ""
 		_refresh_labels()
 		queue_redraw()

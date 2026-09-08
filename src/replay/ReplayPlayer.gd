@@ -18,6 +18,10 @@ var resolver: GameActionResolver = null
 var index: int = 0
 ## Итог открывающего слота мирных на текущей позиции — UI отыгрывает его анимацией.
 var opening_result: ActionResult = null
+## Косметика (кровь, гильзы, разрушенный пол), накопленная во время последней перемотки
+## (item 9): seek() собирает её из фаст-форварда, а UI применяет к своему слою, чтобы
+## после прыжка по таймлайну следы боя не пропадали.
+var seek_fx: Array = []
 
 func _init(p_data: Dictionary) -> void:
 	data = p_data
@@ -39,15 +43,17 @@ func at_start() -> bool:
 ## с последнего кадра.
 func seek(target: int) -> void:
 	var want := clampi(target, 0, step_count())
-	# Идти вперёд от того, что уже собрано, дешевле, чем пересобирать с кадра.
-	if state != null and index <= want:
-		while index < want:
-			play_next()
-		return
+	# Косметику пересобираем ВСЕГДА с ближайшего ключевого кадра до цели (item 9), чтобы
+	# после прыжка по таймлайну кровь/гильзы/разрушенный пол были на месте, а не исчезали.
+	seek_fx = []
 	var frame := _frame_at_or_before(want)
 	_rebuild(frame)
+	if opening_result != null:
+		seek_fx.append_array(opening_result.fx)
 	while index < want:
-		play_next()
+		var r := play_next()
+		if r != null:
+			seek_fx.append_array(r.fx)
 
 ## Применить следующее записанное действие. null — запись кончилась.
 func play_next() -> ActionResult:

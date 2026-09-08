@@ -5,14 +5,11 @@ extends Control
 ##   • Multiplayer   — P2P по IP: связь налаживается ЗДЕСЬ и уезжает в бой готовой
 ##     сессией через NetHandoff. На боковой панели боя сетевых кнопок больше нет.
 
-const SETUP_SCENE := "res://scenes/Setup.tscn"
 const LOBBY_SCENE := "res://scenes/Lobby.tscn"
 const EDITOR_SCENE := "res://scenes/MapEditor.tscn"
 const PLACEMENT_SCENE := "res://scenes/Placement.tscn"
 const MAIN_SCENE := "res://scenes/Main.tscn"
 
-var _saves_list: ItemList
-var _map_names: PackedStringArray
 
 # --- Сохранения и повторы (M12) ---
 var _game_list: ItemList
@@ -37,6 +34,14 @@ func _ready() -> void:
 	NetHandoff.discard()
 	# И недоигранный файл тоже: в меню приходят, чтобы начать заново (M12).
 	SaveHandoff.discard()
+
+	# Гарантированно чёрная подложка ПОД параллаксом (item 3): даже если звёздный слой
+	# по какой-то причине не растянулся, меню всё равно чёрное, а не годотовское серое.
+	var black_bg := ColorRect.new()
+	black_bg.color = Color(0, 0, 0)
+	black_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	black_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(black_bg)
 
 	# Параллакс-звёзды вместо плоской заливки (M13, item 35). Фон живёт своей жизнью
 	# и ввод не перехватывает — меню поверх него работает как работало.
@@ -67,7 +72,7 @@ func _ready() -> void:
 	title_row.add_theme_constant_override("separation", 12)
 	vbox.add_child(title_row)
 	var title := Label.new()
-	title.text = "MCF Tactics"
+	title.text = "MCF Isotope"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 44)
 	title_row.add_child(title)
@@ -108,17 +113,8 @@ func _build_single_tab() -> Control:
 
 	page.add_child(_menu_button("New Game", _new_game))
 	page.add_child(_menu_button("Map Editor", _open_editor))
-
-	var saves_label := Label.new()
-	saves_label.text = "Saved maps"
-	page.add_child(saves_label)
-
-	_saves_list = ItemList.new()
-	_saves_list.custom_minimum_size = Vector2(0, 150)
-	_saves_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_saves_list.item_activated.connect(_on_map_activated)
-	page.add_child(_saves_list)
-	_refresh_saves()
+	# Окно «Saved maps» убрано из главного меню (item 7): карты грузятся в редакторе,
+	# а партии — из вкладки «Saved Games and Replays».
 	return page
 
 # --- Вкладка сохранений и повторов (M12, items 42 и 53) ---
@@ -127,7 +123,7 @@ func _build_single_tab() -> Control:
 ## лобби: там для этого есть тот же список файлов.
 func _build_files_tab() -> Control:
 	var page := VBoxContainer.new()
-	page.name = "Load / Replay"
+	page.name = "Saved Games and Replays"
 	page.add_theme_constant_override("separation", 8)
 
 	var hint := Label.new()
@@ -364,16 +360,6 @@ func _menu_button(text: String, handler: Callable) -> Button:
 	btn.pressed.connect(handler)
 	return btn
 
-func _refresh_saves() -> void:
-	_saves_list.clear()
-	_map_names = MapData.list_maps()
-	if _map_names.is_empty():
-		_saves_list.add_item("(no saved maps — make one in the editor)")
-		_saves_list.set_item_disabled(0, true)
-		return
-	for name in _map_names:
-		_saves_list.add_item(name.get_basename())
-
 ## Одиночная игра теперь открывает ТО ЖЕ лобби, что и мультиплеер (item 20): единый
 ## экран создания партии, где противники — слоты-ИИ. Отдельного «Match Setup» и опции
 ## «Default squads» больше нет — расстановка всегда свободная.
@@ -384,12 +370,6 @@ func _new_game() -> void:
 	GameConfig.p2_is_ai = false
 	GameConfig.free_placement = true
 	get_tree().change_scene_to_file(LOBBY_SCENE)
-
-func _on_map_activated(idx: int) -> void:
-	if idx < 0 or idx >= _map_names.size():
-		return
-	GameConfig.map_path = MapData.path_for(_map_names[idx])
-	get_tree().change_scene_to_file(SETUP_SCENE)
 
 func _open_editor() -> void:
 	get_tree().change_scene_to_file(EDITOR_SCENE)

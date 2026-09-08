@@ -242,6 +242,8 @@ func _dispatch(intent: Intent) -> ActionResult:
 		return _resolve_vehicle_cannon(intent)
 	elif intent is VehicleMeleeIntent:
 		return _resolve_vehicle_melee(intent)
+	elif intent is VehicleUnloadCorpseIntent:
+		return _resolve_vehicle_unload_corpse(intent)
 	elif intent is GroupMoveIntent:
 		return _resolve_group_move(intent)
 	elif intent is PlaceMineIntent:
@@ -619,6 +621,8 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 			gcell.clear_feature()
 			notify_cell_changed(gc)
 			_fx(result, {"fx": "shards", "at": gc, "from": shooter.coord})
+			# После осыпания стекла клетка становится РАЗРУШЕННЫМ полом (item 7).
+			_fx(result, {"fx": "debris", "at": NOWHERE, "cells": [gc]})
 	if killed:
 		_kill(target, result, shooter.coord)  # труп остаётся на клетке, но не перекрывает ЛОС
 
@@ -629,6 +633,10 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 	if fired > 0:
 		_fx(result, {"fx": "casings", "at": shooter.coord,
 			"toward": target.coord, "count": fired})
+		# Пуля летит от стрелка к цели (item 16) — по трассеру на выстрел.
+		_fx(result, {"fx": "tracer", "at": shooter.coord,
+			"from": [shooter.coord.x, shooter.coord.y],
+			"to": [target.coord.x, target.coord.y], "count": fired})
 	if shield_immune:
 		def_mods.append({"label": "Shield blocks (immune)", "delta": 0})
 	result.dice_events.append({
@@ -636,6 +644,7 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 		"target": target.stats.display_name, "need": need,
 		"armor": parry_need, "shots": shot_details, "killed": killed,
 		"hit_mods": hit_mods, "def_mods": def_mods, "def_owner": target.owner,
+		"shooter_owner": shooter.owner,  # чей бросок на попадание (item 13: игрок катит сам)
 	})
 	if redirect_line != "":
 		result.log(redirect_line)
@@ -870,6 +879,7 @@ func _blast_destroy_terrain(c: Vector2i, res: ActionResult = null,
 		if fid == MCF.FEATURE_GLASS:
 			_fx(res, {"fx": "shards", "at": c,
 				"from": from_coord if from_coord != NOWHERE else c})
+			_fx(res, {"fx": "debris", "at": NOWHERE, "cells": [c]})  # разрушенный пол (item 7)
 		cell.clear_feature()
 		notify_cell_changed(c)  # снесённое укрепление будит соседей квартала (§3.1a)
 		# Стену из трупов взрыв не стирает, а вскрывает (#98): пять тел вылетают из неё
@@ -984,11 +994,14 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i) -> ActionResult:
 	result.ok = true
 	var potential := MCF.MARKSMAN_POTENTIAL
 	var killed_names: Array = []
+	# Докуда дотянулся луч — для следа на полу (item 10). Обновляется на каждой клетке.
+	var beam_last := shooter.coord
 	# Трассу считает тот же код, что рисует предпросмотр (laser_path), — подсветка
 	# и настоящий выстрел не могут разойтись.
 	for rec: Dictionary in _laser_trace(shooter.coord, step):
 		potential -= int(rec["cost"])
 		var c: Vector2i = rec["coord"]
+		beam_last = c
 		var cell := state.grid.cell(c)
 		var destroyed: bool = bool(rec["destroyed"])
 		match String(rec["kind"]):
@@ -1024,6 +1037,9 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i) -> ActionResult:
 					cell.cover_height = 0.0
 					result.log("Beam blows the wall at (%d, %d) apart" % [c.x, c.y])
 
+	# След луча на полу от стрелка до точки остановки (item 10) — чистая косметика.
+	_fx(result, {"fx": "laser", "from": [shooter.coord.x, shooter.coord.y],
+		"to": [beam_last.x, beam_last.y]})
 	result.log_lines.push_front("%s: laser shot %s (potential left %d)" % [
 		shooter.stats.display_name, _dir_name(step), maxi(0, potential)])
 	if killed_names.is_empty():
@@ -1263,7 +1279,7 @@ func _resolve_assault(shooter: UnitInstance, target: UnitInstance) -> ActionResu
 			"kind": "attack", "shooter": shooter.stats.display_name,
 			"target": t.stats.display_name, "need": need,
 			"armor": parry_need, "shots": shot_details, "killed": t_killed,
-			"def_owner": t.owner,
+			"def_owner": t.owner, "shooter_owner": shooter.owner,  # item 13
 		})
 		result.log("%s ⇒ %s: %d hits (need %d+, defense %d+)" % [
 			shooter.stats.display_name, t.stats.display_name, hits, need, parry_need])
@@ -2336,6 +2352,14 @@ func advance_fire(owner: int = -1, res: ActionResult = null) -> void:
 				# съедала бы кубики и сдвигала весь дальнейший поток случайности.
 				if state.turns.round_number < ncell.fire_suppressed_until:
 					continue
+				# Живой не-огнеупорный боец рядом с пламенем загорается СРАЗУ, без броска
+				# и независимо от того, горюч ли пол под ним (issue #9): огонь перекидывается
+				# на человека, а не только на траву. Клетка занимается огнём, apply-цикл
+				# ниже убивает бойца тем же путём, что и на любой загоревшейся клетке.
+				var occ := ncell.occupant
+				if occ != null and occ.is_alive() and not is_fireproof(occ):
+					ignite[n] = src.fire_owner
+					continue
 				var need := fire_need(ncell)
 				if need > 6:
 					continue  # не горит никогда — кубик не бросаем
@@ -2723,6 +2747,12 @@ func team_visible_coords(owner: int) -> Dictionary:
 	for u in state.all_units():
 		if not u.is_alive() or not sides.has(u.owner):
 			continue
+		# Экипаж В МАШИНЕ вынесен за карту (coord = OFFBOARD, −9999): его обзор даёт сама
+		# машина ниже. Раньше пассажир всё равно попадал в _seen_from(), и луч Брезенхэма
+		# из −9999 индексировал сетку по отрицательному адресу — «out of bounds get index»
+		# при мультивыборе с посаженным юнитом (item 5). Пропускаем сидящих.
+		if u.aboard_vehicle_id != -1:
+			continue
 		live[u.id] = true
 		var fresh := _seen_from(u.coord, sight_of(u))
 		var was: Variant = seen.get(u.id)
@@ -2859,6 +2889,15 @@ func _civ_sees_soldier(civ: UnitInstance) -> bool:
 		if Combat.is_on_firing_line(civ.coord, s.coord) \
 				and not los_blocked(civ.coord, s.coord, true, false, true):
 			return true
+	# Техника будит нейтралов ровно как пехота (item 12): танк или челнок игрока в прямой
+	# видимости — такой же повод вскрыться, как и солдат.
+	for veh: Vehicle in state.all_vehicles():
+		if not veh.alive() or MCF.is_neutral(veh.owner):
+			continue
+		for fc: Vector2i in veh.footprint():
+			if Combat.is_on_firing_line(civ.coord, fc) \
+					and not los_blocked(civ.coord, fc, true, false, true):
+				return true
 	return false
 
 ## Вскрытие жителя (§3, item 3): пробуждается, если сам видит солдата (см. _civ_sees_soldier).
@@ -4036,7 +4075,7 @@ func _resolve_dpmg(intent: DPMGFireIntent) -> ActionResult:
 	result.dice_events.append({
 		"kind": "attack", "shooter": "DPMG", "target": target.stats.display_name,
 		"need": need, "armor": parry_need, "shots": shot_details, "killed": killed,
-		"def_owner": target.owner,
+		"def_owner": target.owner, "shooter_owner": state.active_player(),  # item 13
 	})
 	result.log("DPMG (%s) → %s: %d shots, %d hits (need %d+)" % [
 		actor.stats.display_name, target.stats.display_name, fired, hits, need])
@@ -4204,6 +4243,7 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 				gdet["survived"] = false
 		if not gdet["survived"]:
 			_fx(result, {"fx": "shards", "at": gc, "from": center})
+			_fx(result, {"fx": "debris", "at": NOWHERE, "cells": [gc]})  # разрушенный пол (item 7)
 			gcell.clear_feature()
 			broken_glass.append(gc)
 		details.append(gdet)
@@ -4623,7 +4663,12 @@ func hostile_target_ids(shooter: UnitInstance) -> Array:
 	var sowner: int = shooter.owner
 	var sid: int = shooter.id
 	for u in state.all_units():
-		if u.owner == sowner or u.id == sid or not u.is_alive():
+		if u.id == sid or not u.is_alive():
+			continue
+		# Не считаем целью СОЮЗНИКОВ: ни свой слот, ни товарища по команде, ни (для
+		# нейтралов) другого нейтрала — ИИ не должен даже пытаться в них стрелять
+		# (item 15 + запрос про ИИ-команды). is_ally_of покрывает все три случая.
+		if is_ally_of(shooter, u):
 			continue
 		if u.aboard_vehicle_id != -1 or not state.grid.in_bounds(u.coord):
 			continue
@@ -4740,6 +4785,11 @@ const DIR8 := [
 	Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1),
 ]
 
+## Танк ходит и целится ТОЛЬКО по четырём сторонам света (item 2): диагональные
+## развороты и стрельба по диагонали убраны. Пушка и так била лишь по прямой
+## (cannon_port), а фронт теперь тоже ограничен ортогональю.
+const DIR4 := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+
 ## «Клетка» экипажа внутри машины — вне поля, чтобы любые проверки по координатам
 ## (обзор/дальность/цели) автоматически исключали пассажиров (§техника).
 const OFFBOARD := Vector2i(-9999, -9999)
@@ -4803,6 +4853,59 @@ func _resolve_vehicle_melee(intent: VehicleMeleeIntent) -> ActionResult:
 			unit.stats.display_name, veh_name, roll, MCF.MINER_VEHICLE_HIT_NEED])
 	return res
 
+## Вытащить труп из машины на свободную соседнюю клетку (item 18): павший экипаж
+## занимает место, его выгружают, чтобы освободить слот. Стоит 1 ОД.
+func _resolve_vehicle_unload_corpse(intent: VehicleUnloadCorpseIntent) -> ActionResult:
+	var unit := state.get_unit(intent.actor_id)
+	var err := _validate_actor(unit)
+	if err != "":
+		return ActionResult.fail(err)
+	if unit.remaining_ap <= 0:
+		return ActionResult.fail("Unit has no AP left")
+	var veh := state.get_vehicle(intent.vehicle_id)
+	if veh == null or not veh.alive():
+		return ActionResult.fail("No such vehicle")
+	if not _adjacent_to_vehicle(unit.coord, veh):
+		return ActionResult.fail("Must stand next to the vehicle")
+	if veh.corpse_slots.is_empty():
+		return ActionResult.fail("No bodies to pull out")
+	# Свободная клетка рядом с бойцом — куда положить тело.
+	var spot := NOWHERE
+	for n in state.grid.neighbors(unit.coord):
+		var nc := state.grid.cell(n)
+		if nc != null and nc.occupant == null and not nc.is_wall() and not nc.is_space \
+				and nc.corpse_count < MCF.CORPSE_WALL_COUNT:
+			spot = n
+			break
+	if spot == NOWHERE:
+		return ActionResult.fail("No room beside you to set the body down")
+	unit.remaining_ap -= 1
+	var name: String = veh.corpse_slots.pop_back()
+	state.grid.cell(spot).corpse_count += 1
+	notify_cell_changed(spot)
+	return ActionResult.success(["%s pulls %s's body out of the %s at (%d, %d)." % [
+		unit.stats.display_name, name,
+		VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id), spot.x, spot.y]])
+
+## Соседние машины, из которых боец может вытащить труп (для UI, item 18): свои/чужие
+## рядом, у которых есть трупы в слотах и куда есть куда положить тело.
+func unloadable_corpse_vehicle_ids(actor: UnitInstance) -> Array:
+	var out: Array = []
+	if actor == null or actor.remaining_ap <= 0 or actor.aboard_vehicle_id != -1:
+		return out
+	var has_spot := false
+	for n in state.grid.neighbors(actor.coord):
+		var nc := state.grid.cell(n)
+		if nc != null and nc.occupant == null and not nc.is_wall() and not nc.is_space:
+			has_spot = true
+			break
+	if not has_spot:
+		return out
+	for veh: Vehicle in state.all_vehicles():
+		if veh.alive() and not veh.corpse_slots.is_empty() and _adjacent_to_vehicle(actor.coord, veh):
+			out.append(veh.id)
+	return out
+
 ## Соседние вражеские машины, по которым шахтёр может ударить (для подсветки в UI).
 ## Возвращает id машин. Пусто для не-шахтёра или без ОД.
 func meleeable_vehicle_ids(actor: UnitInstance) -> Array:
@@ -4825,11 +4928,16 @@ func _resolve_vehicle_board(intent: VehicleBoardIntent) -> ActionResult:
 	var veh := state.get_vehicle(intent.vehicle_id)
 	if veh == null or not veh.alive():
 		return ActionResult.fail("No such vehicle")
+	# Щитоносцу и несущему трупы в машине не место (item 19): щит и груз внутрь не лезут.
+	if _is_shield(unit):
+		return ActionResult.fail("A shield-bearer can't fit inside a vehicle")
+	if unit.carried_corpses > 0:
+		return ActionResult.fail("Drop the corpses before boarding")
 	# Можно садиться и во вражескую технику (§техника, захват экипажа).
 	if not _adjacent_to_vehicle(unit.coord, veh):
 		return ActionResult.fail("Must stand next to the vehicle")
 	if veh.slots_used() >= veh.capacity():
-		return ActionResult.fail("Vehicle is full")
+		return ActionResult.fail("Vehicle is full — pull a corpse out to make room")
 
 	var boarding_enemy: bool = veh.owner != unit.owner
 	unit.remaining_ap -= 1
@@ -4942,8 +5050,9 @@ func _resolve_vehicle_turn(intent: VehicleTurnIntent) -> ActionResult:
 		return ActionResult.fail(err)
 	if veh.facing == Vector2i.ZERO:
 		return ActionResult.fail("This vehicle has no facing")
-	if not DIR8.has(intent.facing):
-		return ActionResult.fail("Bad facing")
+	# Только четыре стороны света (item 2): диагональный разворот запрещён.
+	if not DIR4.has(intent.facing):
+		return ActionResult.fail("Tanks turn only up/down/left/right")
 	if intent.facing == veh.facing:
 		return ActionResult.fail("Already facing that way")
 	veh.ap -= VehicleRules.TURN_COST

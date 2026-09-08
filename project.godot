@@ -10,7 +10,7 @@ config_version=5
 
 [application]
 
-config/name="MCF Tactics"
+config/name="MCF Isotope"
 run/main_scene="res://scenes/MainMenu.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 
@@ -28,3 +28,6 @@ window/stretch/mode="canvas_items"
 [rendering]
 
 renderer/rendering_method="gl_compatibility"
+# Чёрный фон окна по умолчанию (item 5). Годотовский серый (~0.3) просвечивал везде,
+# где параллакс/сцена не закрашивали кадр целиком — отсюда «параллакс серый, не чёрный».
+environment/defaults/default_clear_color=Color(0, 0, 0, 1)

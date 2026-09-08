@@ -245,6 +245,14 @@ var _chat_input: LineEdit
 var _log_label: RichTextLabel
 ## Журнал боя вынесен из правого меню в свою панель (item 6), внизу слева.
 var _log_panel: PanelContainer
+## Кнопка-стрелка сворачивания чата (item 11) и флаги «панель передвинута вручную»
+## (item 8): пока не тронута — держим её в углу автоматически, после перетаскивания — нет.
+var _chat_toggle_btn: Button
+var _chat_moved: bool = false
+var _log_moved: bool = false
+## Состояние перетаскивания панелей (item 8).
+var _panel_drag: Control = null
+var _panel_drag_off: Vector2 = Vector2.ZERO
 var _menu: PanelContainer
 var _picker: PanelContainer
 var _dice: DiceRoller
@@ -300,8 +308,11 @@ func _ready() -> void:
 	# У записи нет игроков: смотреть — не играть, поэтому контроллеров не заводим
 	# вовсе. Ровно это и делает просмотр безопасным: подать намерение некому.
 	if replay == null:
-		if not _loaded_from_save:
-			_sync_roster_from_config()
+		# Раньше здесь _sync_roster_from_config() перезаписывал вид слотов из флагов
+		# p1_is_ai/p2_is_ai — а лобби эти флаги не трогает (item 12). Из-за этого слот,
+		# выбранный в лобби как AI, снова становился HUMAN, и ИИ никем не управлял.
+		# Ростер (и из лобби, и из демо-пути через default_duel) уже несёт верный вид
+		# слотов, поэтому синхронизация не нужна и только мешала.
 		_build_controllers()
 	_build_ui()
 	Ui.theme_canvas_layers()  # HUD lives on a CanvasLayer; pull in the Steam skin.
@@ -588,7 +599,11 @@ func _take_replay_state() -> void:
 	# разрешает больше, — поэтому воспроизведение от этого не съедет.
 	resolver.fog_mode = MCF.Fog.OFF
 	state.log.line_added.connect(_on_log_line)
+	# Косметику пересобираем из фаст-форварда перемотки (item 9): после прыжка по
+	# таймлайну кровь, гильзы и разрушенный пол остаются на доске, а не пропадают.
 	_fx.clear()
+	if replay != null:
+		_fx.apply(replay.seek_fx)
 	selected_id = -1
 	selected_vehicle_id = -1
 	mode = Mode.NONE
@@ -1135,7 +1150,9 @@ func _handle_click(coord: Vector2i) -> void:
 			var veh := _selected_vehicle()
 			if veh != null:
 				var d := coord - veh.center()
-				var dir := Vector2i(signi(d.x), signi(d.y))
+				# Только ортогональ (item 2): клик прижимается к доминирующей оси, так что
+				# танк не встаёт по диагонали.
+				var dir := _ortho_dir(d)
 				if dir != Vector2i.ZERO and dir != veh.facing:
 					_submit(VehicleTurnIntent.new(selected_vehicle_id, dir))
 					return
@@ -1231,8 +1248,8 @@ func _escape_pressed() -> void:
 		return
 	if _animating:
 		return
-	# Выход из режима рисования аннотаций (item 51): бросаем незавершённый штрих.
-	if mode == Mode.DRAW:
+	# Выход из режима рисования/стирания аннотаций (item 14/51): бросаем незавершённый штрих.
+	if mode == Mode.DRAW or mode == Mode.ERASE:
 		_stroke_drawing = false
 		_cur_stroke = []
 		mode = Mode.NONE
@@ -1712,6 +1729,15 @@ func _open_group_menu() -> void:
 	move_btn.pressed.connect(_enter_group_move)
 	vb.add_child(move_btn)
 
+	# Массовая посадка (item 5): если рядом с выделенными есть машина, в которую хоть
+	# кто-то из них может сесть, предлагаем усадить всех разом.
+	var vid := _group_boardable_vehicle()
+	if vid != -1:
+		var board_btn := Button.new()
+		board_btn.text = "Board Vehicle"
+		board_btn.pressed.connect(_group_embark.bind(vid))
+		vb.add_child(board_btn)
+
 	var cancel_btn := Button.new()
 	cancel_btn.text = "Cancel"
 	cancel_btn.pressed.connect(_deselect)
@@ -1724,6 +1750,28 @@ func _enter_group_move() -> void:
 	mode = Mode.GROUP_MOVE
 	_menu.hide()
 	queue_redraw()
+
+## Машина, в которую может сесть хоть один из выделенных юнитов (item 5). −1 — нет такой.
+func _group_boardable_vehicle() -> int:
+	for id in _group_ids:
+		var u := state.get_unit(id)
+		if u == null or not u.is_alive() or u.aboard_vehicle_id != -1:
+			continue
+		var vs: Array = resolver.boardable_vehicles(u)
+		if not vs.is_empty():
+			# boardable_vehicles() отдаёт объекты Vehicle, а не id — int(Vehicle)
+			# роняло игру «Nonexistent 'int' constructor» (item 6). Берём .id.
+			return int(vs[0].id)
+	return -1
+
+## Усадить в машину vid всех выделенных, кто рядом и кому это разрешено (item 5).
+## Резолвер сам проверит соседство, вместимость и запреты (щит/трупы — item 19).
+func _group_embark(vid: int) -> void:
+	for id in _group_ids.duplicate():
+		var u := state.get_unit(id)
+		if u != null and u.is_alive() and u.aboard_vehicle_id == -1:
+			_submit(VehicleBoardIntent.new(id, vid))
+	_deselect()
 
 ## Жадное групповое движение к клетке (#18): каждый юнит по очереди идёт в достижимую
 ## клетку, ближайшую (Чебышёв) к цели. Резолвится последовательно, поэтому юниты не
@@ -2237,10 +2285,9 @@ func _play_dice(events: Array) -> void:
 		if ev.get("kind", "") == "hold":
 			continue
 		if ev.get("kind", "") == "focus":
-			# Слот мирных отыгрывается сам и где угодно на карте (#103): если очередной
-			# житель за краем экрана, подводим к нему камеру — иначе игрок смотрит на
-			# кубики, не понимая, чьи они.
-			_ensure_visible(ev.get("coord", Vector2i.ZERO))
+			# Камеру за ходящими нейтралами БОЛЬШЕ НЕ ВОДИМ (item 8): игрока раздражало,
+			# что вид дёргается к каждому активному жителю. Событие оставляем (оно ещё
+			# помечает, чьи кубики крутятся), но камеру не трогаем — панорама за игроком.
 			continue
 		if ev.get("kind", "") == "walk":
 			await _play_walk(ev)
@@ -2318,7 +2365,13 @@ func _dice_steps(ev: Dictionary) -> Array:
 						{"value": det["def_roll"], "good": not det["parried"], "tag": "Pen %d+" % det["armor"]})
 			# Разбивка бонусов/штрафов к попаданию и защите (#49): показываем в подсказке.
 			var hit_note := _mods_text("To-hit", ev.get("hit_mods", []))
-			steps.append({"faces": hit_faces, "manual": false, "prompt": hit_note,
+			# Бросок на попадание катит САМ стрелок, если это местный человек (item 13):
+			# ждём его нажатия, как и бросок защиты у защищающегося.
+			var hit_manual := _owner_is_local_human(ev.get("shooter_owner", MCF.Owner.NEUTRAL))
+			var hit_prompt := hit_note
+			if hit_manual:
+				hit_prompt = (hit_note + "\n" if hit_note != "" else "") + "Your shot — roll to hit"
+			steps.append({"faces": hit_faces, "manual": hit_manual, "prompt": hit_prompt,
 				"speed": _roll_speed(ev["shots"], "need")})
 			if not pen_faces.is_empty():
 				var def_note := _mods_text("Defence", ev.get("def_mods", []))
@@ -2892,12 +2945,12 @@ func _draw() -> void:
 		if vt != null:
 			var vc := _cell_origin(vt.center()) + Vector2(CELL, CELL) * 0.5
 			draw_arc(vc, CELL * 1.1, 0, TAU, 40, Color(0.9, 0.8, 0.3, 0.6), 2.0)
-			# Восемь стрелок = восемь выбираемых направлений (#39). Клик в любую клетку
-			# по этому лучу поворачивает корпус туда.
+			# Четыре стрелки = четыре стороны света (item 2): диагональных разворотов у
+			# танка больше нет. Клик в любую клетку по лучу поворачивает корпус туда.
 			var thov := _pos_to_cell(get_global_mouse_position())
 			var thd := thov - vt.center()
-			var thdir := Vector2i(signi(thd.x), signi(thd.y))
-			for d: Vector2i in GameActionResolver.DIR8:
+			var thdir := _ortho_dir(thd)
+			for d: Vector2i in GameActionResolver.DIR4:
 				var v := Vector2(d).normalized()
 				var col := Color(0.55, 0.5, 0.35, 0.7)
 				if d == vt.facing:
@@ -3242,6 +3295,23 @@ func _draw_laser_preview(shooter: UnitInstance, aim: Vector2i) -> void:
 ## Картинки-замены имеют приоритет (glass_shard.png и т. п.); без них рисуются
 ## векторные примитивы, как и всё остальное в этой игре.
 func _draw_fx_props(visible: Dictionary) -> void:
+	# Следы лазера (item 11): полупрозрачные чёрные линии от стрелка до точки остановки.
+	# Рисуем прямыми отрезками — диагонали получаются сами собой.
+	for seg: Dictionary in _fx.laser_lines:
+		var a: Vector2 = ORIGIN + Vector2(seg["from"]) * CELL
+		var b: Vector2 = ORIGIN + Vector2(seg["to"]) * CELL
+		draw_line(a, b, Color(0, 0, 0, 0.4), 3.0)
+	# Пули-трассеры (item 16): жёлтый штрих летит от стрелка к цели.
+	for tr: Dictionary in _fx.tracers:
+		var k: float = clampf(float(tr["t"]) / maxf(0.001, float(tr["dur"])), 0.0, 1.0)
+		if k <= 0.0:
+			continue
+		var tf: Vector2 = ORIGIN + Vector2(tr["from"]) * CELL
+		var tt: Vector2 = ORIGIN + Vector2(tr["to"]) * CELL
+		var head: Vector2 = tf.lerp(tt, k)
+		var tail: Vector2 = tf.lerp(tt, maxf(0.0, k - 0.25))
+		draw_line(tail, head, Color(1.0, 0.95, 0.5, 0.9), 2.0)
+		draw_circle(head, 2.5, Color(1.0, 1.0, 0.7, 0.95))
 	if _fx.props.is_empty() and _fx.flying.is_empty():
 		return
 	var fog_on: bool = resolver.fog_enabled
@@ -3271,7 +3341,13 @@ const FX_TEXTURE := {
 func _draw_fx_one(kind: String, cell_pos: Vector2, rot: float, scale: float,
 		visible: Dictionary, fog_on: bool) -> void:
 	# Частицы за краем экрана не рисуем (item 5): на большой карте их накапливаются сотни.
-	if not _cell_on_screen(floori(cell_pos.x), floori(cell_pos.y)):
+	var _fxc := Vector2i(floori(cell_pos.x), floori(cell_pos.y))
+	if not _cell_on_screen(_fxc.x, _fxc.y):
+		return
+	# Осколки/частицы не оседают на стенах — они от них отскакивают (item 7). Клетку-стену
+	# просто не рисуем: обломок туда «не долетел».
+	var _wcell := state.grid.cell(_fxc)
+	if _wcell != null and _wcell.cover_height >= MCF.WALL_HEIGHT:
 		return
 	if fog_on and not visible.has(Vector2i(floori(cell_pos.x), floori(cell_pos.y))):
 		return
@@ -3362,6 +3438,16 @@ func _facing_degrees(facing: Vector2i) -> float:
 		return 0.0
 	return rad_to_deg(Vector2(facing).angle()) + 90.0
 
+## Прижать вектор к ближайшей стороне света (item 2): танк смотрит только
+## вверх/вниз/влево/вправо, диагонали не бывает. По доминирующей оси; при равенстве
+## приоритет у горизонтали.
+func _ortho_dir(d: Vector2i) -> Vector2i:
+	if d == Vector2i.ZERO:
+		return Vector2i.ZERO
+	if absi(d.x) >= absi(d.y):
+		return Vector2i(signi(d.x), 0)
+	return Vector2i(0, signi(d.y))
+
 func _initials(name_ru: String) -> String:
 	var parts := name_ru.split(" ", false)
 	if parts.size() >= 2:
@@ -3393,12 +3479,13 @@ func _reposition_hud_grip() -> void:
 	var vp := get_viewport_rect().size
 	_hud_grip.position = Vector2(vp.x - _hud_width - _hud_grip.custom_minimum_size.x, 0)
 	_hud_grip.size = Vector2(_hud_grip.custom_minimum_size.x, vp.y)
-	# Чат приколот к правому-нижнему углу, но левее правого меню, чтобы не налезал.
-	if _chat_panel != null:
+	# Чат приколот к правому-нижнему углу, но левее правого меню — пока игрок его не
+	# перетащил сам (item 8): после ручного переноса автопозиционирование отключается.
+	if _chat_panel != null and not _chat_moved:
 		_chat_panel.position = Vector2(vp.x - _hud_width - _chat_panel.size.x - 20.0,
 				vp.y - _chat_panel.size.y - 12.0)
-	# Журнал боя — в левом-нижнем углу (item 6: убран из правого меню в свою панель).
-	if _log_panel != null:
+	# Журнал боя — в левом-нижнем углу (item 6), тоже до первого ручного переноса (item 8).
+	if _log_panel != null and not _log_moved:
 		_log_panel.position = Vector2(12.0, vp.y - _log_panel.size.y - 12.0)
 	# Полоса повтора (M12) — по центру внизу, как у любого проигрывателя.
 	if _replay_bar != null:
@@ -3574,7 +3661,9 @@ func _build_log_panel() -> void:
 	var frame := VBoxContainer.new()
 	frame.add_theme_constant_override("separation", 0)
 	panel.add_child(frame)
-	frame.add_child(SteamChrome.header_bar("Combat Log"))
+	var log_header := SteamChrome.header_bar("Combat Log")
+	_make_panel_draggable(panel, log_header, func() -> void: _log_moved = true)  # item 8
+	frame.add_child(log_header)
 	_log_label = RichTextLabel.new()
 	_log_label.custom_minimum_size = Vector2(360, 130)
 	_log_label.add_theme_font_size_override("normal_font_size", 11)
@@ -3617,6 +3706,7 @@ func _build_replay_bar() -> void:
 	_replay_slider.custom_minimum_size = Vector2(360, 18)
 	_replay_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_replay_slider.value_changed.connect(_on_replay_slider)
+	_style_brush_slider(_replay_slider)  # чёрная дорожка под ползунком (item 7)
 	slider_wrap.add_child(_replay_slider)
 	_replay_bar = panel
 	_ui_layer.add_child(_replay_bar)
@@ -3650,7 +3740,10 @@ func _build_chat_panel() -> void:
 	var toggle := Button.new()
 	toggle.text = "▾"
 	toggle.pressed.connect(_toggle_chat)
-	frame.add_child(SteamChrome.header_bar("Chat", toggle))
+	_chat_toggle_btn = toggle
+	var chat_header := SteamChrome.header_bar("Chat", toggle)
+	_make_panel_draggable(panel, chat_header, func() -> void: _chat_moved = true)  # item 8
+	frame.add_child(chat_header)
 	_chat_body = VBoxContainer.new()
 	_chat_body.add_theme_constant_override("separation", 4)
 	# Сворачиваем ОБЁРТКУ-отступ, а не сам _chat_body (item 15): прятать только внутренний
@@ -3868,12 +3961,25 @@ func _draw_author() -> int:
 	return my_owner if networked else _viewing_side()
 
 func _enter_draw() -> void:
+	# Повторное нажатие ВЫКЛЮЧАЕТ рисование (item 14): режим теперь снимается кнопкой,
+	# а не только Esc — раньше выйти из «рисования» было нечем.
+	if mode == Mode.DRAW:
+		mode = Mode.NONE
+		_stroke_drawing = false
+		_cur_stroke = []
+		queue_redraw()
+		return
 	_deselect()
 	mode = Mode.DRAW
 	queue_redraw()
 
 ## Ластик (item 6): режим стирания СВОИХ штрихов кистью заданного радиуса.
 func _enter_erase() -> void:
+	if mode == Mode.ERASE:  # повторное нажатие выключает (item 14)
+		mode = Mode.NONE
+		_stroke_drawing = false
+		queue_redraw()
+		return
 	_deselect()
 	mode = Mode.ERASE
 	queue_redraw()
@@ -4005,7 +4111,32 @@ func _draw_annotations() -> void:
 func _toggle_chat() -> void:
 	if _chat_body_wrap == null:
 		return
+	# Стрелка вниз (▾) сворачивает в маленький прямоугольник — как в начале матча (item 11).
 	_chat_body_wrap.visible = not _chat_body_wrap.visible
+	# Стрелка вниз (▾) = свёрнуто, весь серый блок спрятан и остаётся только шапка
+	# (item 4); вверх (▴) = развёрнуто. Тело сворачивается вместе с padding-обёрткой,
+	# так что панель сжимается до одной строки заголовка.
+	if _chat_toggle_btn != null:
+		_chat_toggle_btn.text = "▴" if _chat_body_wrap.visible else "▾"
+
+## Сделать панель перетаскиваемой за её шапку (item 8). on_move помечает панель как
+## сдвинутую вручную, чтобы _reposition_hud_grip перестал возвращать её в угол.
+func _make_panel_draggable(panel: Control, header: Control, on_move: Callable) -> void:
+	header.mouse_filter = Control.MOUSE_FILTER_STOP
+	header.gui_input.connect(func(e: InputEvent) -> void:
+		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
+			if e.pressed:
+				_panel_drag = panel
+				_panel_drag_off = panel.global_position - e.global_position
+				on_move.call()
+			elif _panel_drag == panel:
+				_panel_drag = null
+		elif e is InputEventMouseMotion and _panel_drag == panel:
+			var vp := get_viewport_rect().size
+			var p: Vector2 = e.global_position + _panel_drag_off
+			p.x = clampf(p.x, 0.0, maxf(0.0, vp.x - panel.size.x))
+			p.y = clampf(p.y, 0.0, maxf(0.0, vp.y - panel.size.y))
+			panel.position = p)
 
 func _chat_append(who: String, text: String) -> void:
 	if _chat_log == null:
@@ -4355,6 +4486,13 @@ func _open_menu(unit: UnitInstance) -> void:
 				else "Storm %s" % vname
 			_act_btn(vb, seat_text,
 					_submit.bind(VehicleBoardIntent.new(unit.id, veh.id)), unit.remaining_ap > 0)
+
+		# Вытащить труп из машины, чтобы освободить место (item 18).
+		for vid: int in resolver.unloadable_corpse_vehicle_ids(unit):
+			var uveh: Vehicle = state.get_vehicle(vid)
+			if uveh != null:
+				_act_btn(vb, "Pull Corpse from %s" % VehicleDB.get_vehicle(uveh.type_id).get("name", uveh.type_id),
+						_submit.bind(VehicleUnloadCorpseIntent.new(unit.id, vid)), unit.remaining_ap > 0)
 
 	# Выдохшемуся юниту меню не нужно (#97): когда ОД кончились и ни одного действия не
 	# набралось, панель с одной кнопкой Cancel только загораживает поле. Выделение при

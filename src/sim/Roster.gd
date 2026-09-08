@@ -70,6 +70,15 @@ class Slot extends RefCounted:
 	## расставляет отряд. −1 = «зона с моим же номером» (поведение по умолчанию).
 	## Позволяет посадить любого игрока в любую нарисованную зону.
 	var deploy_zone: int = -1
+	## Ограничение состава ЛИЧНО для этого игрока (item 2): id юнита -> разрешён ли.
+	## Пустой словарь = разрешено всё. Заполняет лобби, применяет экран расстановки.
+	var allowed_units: Dictionary = {}
+
+	## Разрешён ли юнит этому слоту к покупке (item 2). Пусто = можно всё.
+	func unit_allowed(id: String) -> bool:
+		if allowed_units.is_empty():
+			return true
+		return bool(allowed_units.get(id, false))
 
 	## Зона развёртывания слота: заданная явно, иначе — своя по номеру (item 10).
 	func zone() -> int:
@@ -172,6 +181,11 @@ func has_teams() -> bool:
 ## включая других нейтралов: их вражда ко всем описана отдельно (§14).
 func are_allies(a: int, b: int) -> bool:
 	if a == b:
+		return true
+	# Все нейтралы — союзники друг другу, независимо от активационной группы (item 15):
+	# они не нападают между собой и видят друг в друге своих. Вражда нейтралов
+	# направлена только на игроков (§14).
+	if MCF.is_neutral(a) and MCF.is_neutral(b):
 		return true
 	if not MCF.is_player(a) or not MCF.is_player(b):
 		return false

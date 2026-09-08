@@ -329,6 +329,17 @@ func _candidates(state: GameState, r: GameActionResolver, u: UnitInstance) -> Ar
 	if not veh_shot.is_empty():
 		out.append(veh_shot)
 
+	# Оператор запускает дрон со своей станции (item 17): дальше дроном рулит _drone_action.
+	var launch := _best_drone_launch(state, r, u)
+	if not launch.is_empty():
+		out.append(launch)
+
+	# Пехотинец садится в свободную СВОЮ машину рядом (item 17): дальше экипажем и
+	# самой машиной занимается очередь техники (_vehicle_candidates).
+	var board := _best_board(state, r, u)
+	if not board.is_empty():
+		out.append(board)
+
 	# Заряд в стену, если к врагу нет дороги (#103) — тоже выстрел, ОД тратит так же.
 	var blast := _best_blast_path(state, r, u)
 	if not blast.is_empty():
@@ -355,6 +366,10 @@ func _candidates(state: GameState, r: GameActionResolver, u: UnitInstance) -> Ar
 		var flee := _flee_fire(state, u)
 		if not flee.is_empty():
 			out.append(flee)
+		# Первый ход: идём набивать свои пустые танки (item 6) — до сближения с врагом.
+		var to_own_veh := _move_to_own_vehicle(state, u)
+		if not to_own_veh.is_empty():
+			out.append(to_own_veh)
 		var to_veh := _move_to_vehicle(state, u)
 		if not to_veh.is_empty():
 			out.append(to_veh)
@@ -381,6 +396,10 @@ func _neutral_candidates(state: GameState, r: GameActionResolver, u: UnitInstanc
 	var veh_shot := _best_vehicle_shot(state, r, u)
 	if not veh_shot.is_empty():
 		out.append(veh_shot)
+	# Нейтрал тоже может залезть в любую свободную технику рядом (item 6).
+	var board := _best_board(state, r, u)
+	if not board.is_empty():
+		out.append(board)
 	var drop := _best_corpse_drop(state, r, u)
 	if not drop.is_empty():
 		out.append(drop)
@@ -920,6 +939,39 @@ func _best_blast_path(state: GameState, r: GameActionResolver, u: UnitInstance) 
 ## Сближение противотанкиста с техникой (#61). Пока стрелять не по чему, он должен
 ## идти К МАШИНЕ, а не тянуться к ближайшему пехотинцу по общему геополю: подойдя к
 ## пехоте, он так и не окажется на линии огня с танком.
+## Запуск дрона оператором (item 17): есть развёрнутая станция, дрон ещё не в воздухе,
+## и хватает ОД. Умеренный приоритет — ниже прямого выстрела, но охотно, когда есть чем.
+func _best_drone_launch(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
+	if u.stats.special_ability_id != MCF.ABILITY_DRONE_OPERATOR or u.remaining_ap <= 0:
+		return {}
+	if r.deployed_station_of(u) == Vector2i(-1, -1) or r.active_drone_of(u) != null:
+		return {}
+	return {"score": SCORE_SHOOT_BASE * 0.6, "intent": SpawnDroneIntent.new(u.id)}
+
+## Посадка ИИ в свою свободную машину рядом (item 17): не щитоносец, без трупов на руках,
+## есть место в экипаже. Низкий приоритет — садимся, когда стрелять не во что.
+func _best_board(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
+	if u.remaining_ap <= 0 or u.stats.special_ability_id == MCF.ABILITY_SHIELD_BEARER \
+			or u.carried_corpses > 0:
+		return {}
+	# Нейтралам тоже разрешено садиться в технику (item 6) — в любую свободную рядом,
+	# своей у них нет. Армейский ИИ садится только в СВОЮ.
+	var neutral := MCF.is_neutral(owner)
+	# На ПЕРВОМ ходу заполнить пустые танки — приоритет (item 6): экипаж важнее прочего,
+	# поэтому оценка посадки в свою машину взлетает выше стрельбы/движения.
+	var first_turn := state.turns.round_number <= 1
+	for veh: Vehicle in r.boardable_vehicles(u):
+		if veh.slots_used() >= veh.capacity():
+			continue
+		var own := veh.owner == u.owner
+		if not own and not neutral:
+			continue
+		var score := SCORE_MOVE_BASE + 8.0
+		if own and first_turn:
+			score = SCORE_SHOOT_BASE + 40.0  # заполняем экипаж прежде всего
+		return {"score": score, "intent": VehicleBoardIntent.new(u.id, veh.id)}
+	return {}
+
 func _move_to_vehicle(state: GameState, u: UnitInstance) -> Dictionary:
 	if u.stats.special_ability_id != MCF.ABILITY_ANTI_TANK:
 		return {}
@@ -946,12 +998,55 @@ func _move_to_vehicle(state: GameState, u: UnitInstance) -> Dictionary:
 			best = {"score": score, "intent": MoveIntent.new(u.id, coord)}
 	return best
 
+## Первый ход: пехотинец идёт занимать свой пустой танк (item 6). Пока экипаж не набран,
+## это важнее сближения с врагом — оценка выше обычного хода. Щитоносцу и несущему трупы
+## внутрь нельзя, их не гоняем. Работает только в первом раунде.
+func _move_to_own_vehicle(state: GameState, u: UnitInstance) -> Dictionary:
+	if state.turns.round_number > 1:
+		return {}
+	if u.stats.special_ability_id == MCF.ABILITY_SHIELD_BEARER or u.carried_corpses > 0:
+		return {}
+	if u.remaining_ap <= 0 and u.move_credit <= 0:
+		return {}
+	var field := _own_empty_vehicle_field(state)
+	if not field.has(u.coord):
+		return {}
+	var start: int = field.at(u.coord)
+	if start <= 0:
+		return {}  # уже вплотную — посадкой займётся _best_board
+	var reach := Movement.reachable_for(state.grid, u, _move_budget(u))
+	var dodge := _avoids_fire(u)
+	var best: Dictionary = {}
+	for coord: Vector2i in reach.cost:
+		if dodge and _fire_near(state, coord):
+			continue
+		var gain := float(start - int(field.at(coord)))
+		if gain <= 0.0:
+			continue
+		var score := SCORE_MOVE_BASE + 30.0 + gain * 3.0
+		score -= float(reach.cost[coord]) * SCORE_STEP_COST
+		if best.is_empty() or score > best["score"]:
+			best = {"score": score, "intent": MoveIntent.new(u.id, coord)}
+	return best
+
 ## Геополе до вражеской техники — тот же волновой BFS, что и для пехоты, но
 ## засеянный клетками следов машин. Кэш общий, ключ "veh".
 func _vehicle_distance_field(state: GameState) -> GeoField:
+	return _seed_vehicle_field(state, _enemy_vehicles(state), "veh")
+
+## Геополе до СВОИХ незаполненных машин (item 6): на первом ходу пехота идёт занимать
+## пустые танки. Тот же волновой BFS, засеянный клетками их следов; ключ "ownveh".
+func _own_empty_vehicle_field(state: GameState) -> GeoField:
+	var seeds: Array = []
+	for veh: Vehicle in state.all_vehicles():
+		if veh.alive() and veh.owner == owner and veh.slots_used() < veh.capacity():
+			seeds.append(veh)
+	return _seed_vehicle_field(state, seeds, "ownveh")
+
+func _seed_vehicle_field(state: GameState, seeds: Array, key: String) -> GeoField:
 	_refresh_geo_stamp(state)
-	if _geo_cache.has("veh"):
-		return _geo_cache["veh"]
+	if _geo_cache.has(key):
+		return _geo_cache[key]
 	var off: Dictionary = {}
 	var grid := state.grid
 	var w := grid.width
@@ -968,7 +1063,7 @@ func _vehicle_distance_field(state: GameState) -> GeoField:
 	var qx := PackedInt32Array()
 	var qy := PackedInt32Array()
 	var qd := PackedInt32Array()
-	for veh: Vehicle in _enemy_vehicles(state):
+	for veh: Vehicle in seeds:
 		for fc: Vector2i in veh.footprint():
 			var fx: int = fc.x
 			var fy: int = fc.y
@@ -1016,7 +1111,7 @@ func _vehicle_distance_field(state: GameState) -> GeoField:
 			qy.append(ny)
 			qd.append(nd)
 	var field := GeoField.new(w, h, dist, off)
-	_geo_cache["veh"] = field
+	_geo_cache[key] = field
 	return field
 
 # --- Захват ---
@@ -1391,7 +1486,9 @@ func _vehicle_candidates(state: GameState, r: GameActionResolver, veh: Vehicle) 
 
 		# Разворот танка к врагу, если двигаться вдоль текущего курса некуда.
 		if targets.is_empty() and veh.facing != Vector2i.ZERO:
-			var want := _dir_toward(veh.center(), enemy.coord)
+			# Только ортогональный фронт (item 2): диагональные развороты убраны, иначе
+			# резолвер отклонит намерение и ИИ будет впустую его предлагать.
+			var want := _ortho_toward(veh.center(), enemy.coord)
 			if want != Vector2i.ZERO and want != veh.facing and want != -veh.facing:
 				out.append({"score": SCORE_MOVE_BASE * 0.5,
 					"intent": VehicleTurnIntent.new(veh.id, want)})
@@ -1437,6 +1534,17 @@ func _ally_near(state: GameState, cell: Vector2i, radius: int) -> bool:
 ## Нормализованное 8-направление от a к b (для разворота танка).
 func _dir_toward(a: Vector2i, b: Vector2i) -> Vector2i:
 	return Vector2i(signi(b.x - a.x), signi(b.y - a.y))
+
+## Ортогональное направление от a к b по доминирующей оси (item 2): танк
+## разворачивается только по сторонам света.
+func _ortho_toward(a: Vector2i, b: Vector2i) -> Vector2i:
+	var dx := b.x - a.x
+	var dy := b.y - a.y
+	if dx == 0 and dy == 0:
+		return Vector2i.ZERO
+	if absi(dx) >= absi(dy):
+		return Vector2i(signi(dx), 0)
+	return Vector2i(0, signi(dy))
 
 # --- Профиль сложности ---
 func _seeks_cover() -> bool:
