@@ -290,6 +290,12 @@ func _best_for_actor(state: GameState, r: GameActionResolver, row: Dictionary) -
 	var u := state.get_unit(row["id"])
 	if u == null or not u.is_alive() or u.owner != owner:
 		return {}
+	# Пассажир В МАШИНЕ вынесен за карту (coord = OFFBOARD, −9999) — как пехота он больше
+	# не ходит, всё его участие идёт через экипаж машины (_vehicle_candidates). Раньше он
+	# всё равно доходил до _candidates, а там Movement.reachable_for стартовал из −9999 и
+	# индексировал сетку по отрицательному адресу — «out of bounds» при посадке ИИ.
+	if u.aboard_vehicle_id != -1:
+		return {}
 	if not _can_command(u):
 		return {}
 	# Недоеденные клетки прошлого движения (§3.2) — полноценный ресурс, а не остаток:
