@@ -5,6 +5,10 @@ extends Control
 ##   • Multiplayer   — P2P по IP: связь налаживается ЗДЕСЬ и уезжает в бой готовой
 ##     сессией через NetHandoff. На боковой панели боя сетевых кнопок больше нет.
 
+## Через preload, а не по class_name: скрипт добавлен без пересканирования проекта,
+## и глобальный кеш классов о нём ещё не знает.
+const UserDataMigrationScript = preload("res://src/data/UserDataMigration.gd")
+
 const LOBBY_SCENE := "res://scenes/Lobby.tscn"
 const EDITOR_SCENE := "res://scenes/MapEditor.tscn"
 const PLACEMENT_SCENE := "res://scenes/Placement.tscn"
@@ -30,6 +34,12 @@ var _lan_list: ItemList
 var _lan_servers: Array = []
 
 func _ready() -> void:
+	# Главное меню — первая сцена запуска, поэтому забрать сохранённое из каталога
+	# прежнего имени игры надо здесь, ДО того как лобби/редактор полезут в user://
+	# за картами (item 7 переименовал приложение и вместе с ним user://).
+	var imported := UserDataMigrationScript.migrate_legacy()
+	if imported > 0:
+		print("Imported %d file(s) from the previous user data folder." % imported)
 	# Уходя в меню, старую сессию не тащим — начинаем с чистого листа.
 	NetHandoff.discard()
 	# И недоигранный файл тоже: в меню приходят, чтобы начать заново (M12).
