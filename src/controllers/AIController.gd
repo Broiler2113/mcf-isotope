@@ -62,6 +62,10 @@ const FORCED_TRIES_PER_UNIT := 2
 ## сближением и захватом: подойти к танку для него важнее, чем брести к пехоте,
 ## но выстрел (SCORE_SHOOT_BASE) всё равно перевешивает любой ход.
 const SCORE_ANTI_TANK_APPROACH := 25.0
+## Клетка, с которой танк ВЫВОДИТ ПУШКУ НА ЛИНИЮ огня. Пушка бьёт только по прямой
+## (#55), поэтому «встать в створ» для машины ценно само по себе — даже когда шаг
+## не сокращает дистанцию до врага.
+const SCORE_VEHICLE_FIRING_LINE := 18.0
 
 var difficulty: int = Difficulty.NORMAL
 
@@ -1456,12 +1460,22 @@ func _vehicle_candidates(state: GameState, r: GameActionResolver, veh: Vehicle) 
 	# Пушка (взрыв-ромб радиуса 2, #63): бьём по ближайшему видимому врагу в
 	# дальности, если рядом с точкой прицела нет своих. Лазера у танка больше нет.
 	var gun: Dictionary = weapons.get("main_gun", {})
-	if not gun.is_empty() and veh.cannon_shots_this_round < int(gun.get("max_per_turn", 2)) \
-			and veh.ap >= int(gun.get("ap_cost", 1)):
-		var target := _vehicle_best_target(state, r, veh, int(gun.get("range", MCF.CANNON_RANGE)))
-		if target != null and not _ally_near(state, target.coord, MCF.CANNON_BLAST_RADIUS):
-			out.append({"score": SCORE_SHOOT_BASE + _unit_value(target) + 6.0,
-				"intent": VehicleCannonIntent.new(veh.id, target.coord)})
+	# Может ли пушка выстрелить ВООБЩЕ в этот ход: есть ствол, лимит выстрелов не
+	# выбран, ОД хватает. От этого зависит и стоит ли ради выстрела маневрировать.
+	var gun_ready: bool = not gun.is_empty() \
+			and veh.cannon_shots_this_round < int(gun.get("max_per_turn", 2)) \
+			and veh.ap >= int(gun.get("ap_cost", 1))
+	var shot_target: UnitInstance = null
+	if gun_ready:
+		shot_target = _vehicle_best_target(state, r, veh, int(gun.get("range", MCF.CANNON_RANGE)))
+		if shot_target != null and not _ally_near(state, shot_target.coord, MCF.CANNON_BLAST_RADIUS):
+			out.append({"score": SCORE_SHOOT_BASE + _unit_value(shot_target) + 6.0,
+				"intent": VehicleCannonIntent.new(veh.id, shot_target.coord)})
+		else:
+			shot_target = null
+	# Искать створ имеет смысл, только если стрелять ЕСТЬ ЧЕМ и прямо сейчас цели нет:
+	# иначе танк принимался бы переезжать с одной пригодной клетки на другую без конца.
+	var seek_line := gun_ready and shot_target == null
 
 	# Сближение: катимся к достижимому в обход стен врагу (#62), не по прямой.
 	# Прогресс считаем по общему мультиисточниковому геополю (#63), а не по отдельному
@@ -1480,25 +1494,81 @@ func _vehicle_candidates(state: GameState, r: GameActionResolver, veh: Vehicle) 
 				gain = float(start_d - new_d)
 			else:
 				gain = float(Combat.distance(veh.center(), enemy.coord) - Combat.distance(center, enemy.coord))
-			if gain <= 0.0 and difficulty != Difficulty.EASY:
+			var mv: Dictionary = targets[center]
+			# Встать в створ — самостоятельная причина тронуться (#55). Без этого танк,
+			# уже подъехавший к врагу вплотную, отвергал КАЖДЫЙ ход (gain <= 0) и потому
+			# не мог довести пушку до линии огня.
+			var lines_up := seek_line \
+					and _opens_cannon_line(state, r, veh, veh.origin + Vector2i(mv["dir"]) * int(mv["steps"]))
+			if gain <= 0.0 and not lines_up and difficulty != Difficulty.EASY:
 				continue
 			var score := SCORE_MOVE_BASE + gain * 3.0
-			var mv: Dictionary = targets[center]
+			if lines_up:
+				score += SCORE_VEHICLE_FIRING_LINE
 			if best_move.is_empty() or score > best_move["score"]:
 				best_move = {"score": score,
 					"intent": VehicleMoveIntent.new(veh.id, mv["dir"], int(mv["steps"]))}
 		if not best_move.is_empty():
 			out.append(best_move)
 
-		# Разворот танка к врагу, если двигаться вдоль текущего курса некуда.
-		if targets.is_empty() and veh.facing != Vector2i.ZERO:
+		# Разворот. Раньше он предлагался ТОЛЬКО когда ехать совсем некуда
+		# (targets.is_empty()), и машина, которой «ближе уже не стать», замирала
+		# навсегда: ходы формально были, но все с gain <= 0, выстрел не находился, а
+		# довернуть корпус правило не разрешало. Теперь разворот — это то, что танк
+		# делает, когда ему больше нечем заняться.
+		if veh.facing != Vector2i.ZERO and out.is_empty():
 			# Только ортогональный фронт (item 2): диагональные развороты убраны, иначе
 			# резолвер отклонит намерение и ИИ будет впустую его предлагать.
 			var want := _ortho_toward(veh.center(), enemy.coord)
-			if want != Vector2i.ZERO and want != veh.facing and want != -veh.facing:
+			if want == Vector2i.ZERO or want == veh.facing or want == -veh.facing:
+				# Уже стоим вдоль нужной оси и всё равно застряли — доворачиваем ПОПЕРЁК:
+				# это открывает вторую ось движения, а с ней и новые линии огня.
+				want = Vector2i(-veh.facing.y, veh.facing.x)
+			if want != veh.facing and want != -veh.facing:
 				out.append({"score": SCORE_MOVE_BASE * 0.5,
 					"intent": VehicleTurnIntent.new(veh.id, want)})
 	return out
+
+## Появится ли у машины НАСТОЯЩАЯ линия огня, если её корпус встанет в new_origin (#55).
+## Повторяет условия cannon_port(): общая строка/столбец с клеткой борта, ствол не
+## упирается в собственный корпус, дальность, непрегражденный луч. Проверка обязана быть
+## точной: приблизительная (без луча) гоняла танк с одной «почти пригодной» клетки на
+## другую, так и не давая выстрела.
+func _opens_cannon_line(state: GameState, r: GameActionResolver, veh: Vehicle,
+		new_origin: Vector2i) -> bool:
+	var gun: Dictionary = VehicleDB.get_vehicle(veh.type_id).get("weapons", {}).get("main_gun", {})
+	if gun.is_empty():
+		return false
+	var rng := int(gun.get("range", MCF.CANNON_RANGE))
+	var hull := veh.footprint_from(new_origin)
+	var own := {}
+	for fc: Vector2i in hull:
+		own[fc] = true
+	var hub := Vehicle.center_of(new_origin, veh.size)
+	for e: UnitInstance in _enemies_of(state):
+		if CivilianAI.is_npc(e) or own.has(e.coord):
+			continue
+		# Дешёвый отсев до построения лучей: заведомо далёкие цели не считаем.
+		if Combat.distance(hub, e.coord) > rng + maxi(veh.size.x, veh.size.y):
+			continue
+		# ТА ЖЕ оговорка о своих, что и при самом выстреле: по цели, рядом с которой
+		# стоит союзник, танк стрелять не станет. Без этой сверки машина считала клетку
+		# «створом», приезжала — и отказывалась бить, а на следующем решении ехала
+		# обратно: получался бесконечный челнок между двумя клетками.
+		if _ally_near(state, e.coord, MCF.CANNON_BLAST_RADIUS):
+			continue
+		if not r.is_visible_to_team(owner, e):
+			continue
+		for fc: Vector2i in hull:
+			if fc.x != e.coord.x and fc.y != e.coord.y:
+				continue  # пушка бьёт только по прямой
+			var step := Vector2i(signi(e.coord.x - fc.x), signi(e.coord.y - fc.y))
+			if step == Vector2i.ZERO or own.has(fc + step):
+				continue  # ствол смотрит в собственную броню
+			if Combat.distance(fc, e.coord) > rng or r.los_blocked(fc, e.coord):
+				continue
+			return true
+	return false
 
 ## Ближайший видимый (иначе любой) вражеский НЕмирный юнит в пределах дальности.
 ## Пушка и лазер танка бьют только по прямой (#55) — цель должна быть на одной
