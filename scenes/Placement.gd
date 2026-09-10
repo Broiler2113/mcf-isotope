@@ -474,17 +474,39 @@ func _mirror_locked() -> bool:
 func _stamp_formation() -> void:
 	var host: int = _sides()[0]
 	var added := 0
+	var skipped := 0
 	for p in placed.duplicate():
 		if int(p["owner"]) != host:
 			continue
 		var src: Vector2i = p["coord"]
-		var dst := Vector2i(map.width - 1 - src.x, map.height - 1 - src.y)
-		if _placed_at(dst) != -1 or not _footprint_placeable(p["stats_id"], dst, active_side):
+		var id := String(p["stats_id"])
+		# Отражается ВЕСЬ СЛЕД, а не одна клетка (item 8: «tanks don't transfer, and
+		# shuttles too sometimes»). Координата в записи — это ЛЕВЫЙ ВЕРХНИЙ угол следа,
+		# и он растёт вправо-вниз (см. _footprint). Зеркало через центр карты переносит
+		# этот угол туда, где должен оказаться ПРОТИВОПОЛОЖНЫЙ, — значит новый угол надо
+		# отсчитать на размер следа назад. У пехоты след 1×1, и старая формула для неё
+		# верна: оттого баг и не замечали. У танка 2×3 копия уезжала на клетку вправо и
+		# две вниз, вылезала из зоны высадки — и молча не ставилась совсем. Челнок 1×2
+		# промахивался только по одной оси, оттого «sometimes».
+		var size := VehicleDB.size_of(id) if VehicleDB.is_vehicle(id) else Vector2i.ONE
+		var dst := Vector2i(map.width - src.x - size.x, map.height - src.y - size.y)
+		if _placed_at(dst) != -1 or not _footprint_placeable(id, dst, active_side):
+			skipped += 1
 			continue
-		placed.append({"stats_id": p["stats_id"], "owner": active_side,
-				"coord": dst, "paid_by": active_side})
+		var rec := {"stats_id": id, "owner": active_side,
+				"coord": dst, "paid_by": active_side}
+		# Формация отражена на 180°, значит и фронт машины смотрит навстречу — иначе
+		# отзеркаленный танк встал бы стволом в собственный тыл.
+		if VehicleDB.is_vehicle(id) \
+				and bool(VehicleDB.get_vehicle(id).get("has_facing", false)):
+			rec["facing"] = -_placed_facing(p)
+		placed.append(rec)
 		added += 1
+	# О пропущенных сообщаем ЯВНО: молчаливая недостача — это ровно то, из-за чего
+	# пропажу танков пришлось ловить в бою, а не на расстановке.
 	_status.text = "Stamped %d units from the host's formation." % added
+	if skipped > 0:
+		_status.text += "  %d didn't fit the deployment zone." % skipped
 	_refresh_labels()
 	queue_redraw()
 

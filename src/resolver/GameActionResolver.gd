@@ -509,18 +509,17 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 	# попадания/защиты помечается ярлыком, чтобы показать её при броске кубика.
 	var hit_mods: Array = []   # [{label, delta}] — влияют на число «нужно попасть»
 	var def_mods: Array = []   # [{label, delta}] — влияют на «защиту» цели
-	var _dist := Combat.distance(shooter.coord, target.coord)
-	var need := Combat.hit_number(_dist, shooter.stats.fire_range)
+	# Нужное число на кубике считает hit_need_for() — ОДНА формула на весь проект
+	# (item 6): по ней стреляем здесь и по ней же ИИ решает, есть ли смысл стрелять.
+	# Разбивку для броска она заполняет сама.
+	var need := hit_need_for(shooter, target, hit_mods)
 	# Штраф стрелка к защите цели (снайпер −2, щитоносец −2, шахтёр −1): цель парирует хуже.
 	var parry_need: int = target.stats.armor_threshold + shooter.stats.target_defense_penalty
 	if shooter.stats.target_defense_penalty != 0:
 		def_mods.append({"label": "Shooter penetration", "delta": shooter.stats.target_defense_penalty})
-	# Укрытие цели (§3.7): стрелку сложнее попасть, цель лучше парирует.
+	# Укрытие цели (§3.7): стрелку сложнее попасть (учтено выше), цель лучше парирует.
 	var cover := cover_effect(shooter, target)
-	need += cover["hit_penalty"]
 	parry_need -= cover["defense_bonus"]
-	if cover["hit_penalty"] != 0:
-		hit_mods.append({"label": "Target cover", "delta": cover["hit_penalty"]})
 	if cover["defense_bonus"] != 0:
 		def_mods.append({"label": "Target cover", "delta": cover["defense_bonus"]})
 	# Переносимый труп-щит (#6): +1 к защите за каждый несомый цель труп.
@@ -528,18 +527,6 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 	if corpse_def != 0:
 		parry_need -= corpse_def
 		def_mods.append({"label": "Corpse shield", "delta": corpse_def})
-	# Стрельба через горящие клетки (§3.8): −1 к попаданию (кроме снайпера).
-	if shooter.stats.special_ability_id != MCF.ABILITY_SNIPER \
-			and _fire_between(shooter.coord, target.coord):
-		need += MCF.FIRE_SHOOT_PENALTY
-		hit_mods.append({"label": "Fire on the line", "delta": MCF.FIRE_SHOOT_PENALTY})
-	# Снайпер: автопопадание на ≤12 кл. без укреплений между ним и целью (§5).
-	if shooter.stats.special_ability_id == MCF.ABILITY_SNIPER \
-			and Combat.distance(shooter.coord, target.coord) <= MCF.SNIPER_AUTOHIT_RANGE \
-			and not _fortification_between(shooter.coord, target.coord):
-		need = 1
-		hit_mods.append({"label": "Sniper auto-hit", "delta": 0})
-	need = clampi(need, 1, 7)
 	# Щитоносец получает урон только в упор; снайпер — исключение (§3.14).
 	var shield_immune := _shield_blocks_shot(shooter, target)
 	var shot_details: Array = []
@@ -730,7 +717,7 @@ func _resolve_anti_tank(shooter: UnitInstance, center: Vector2i) -> ActionResult
 	# Технике взрыв тоже вредит (#67): раньше противотанкист выкашивал пехоту вокруг
 	# танка, а сам танк оставался с нетронутой прочностью. Снимаем единицу с каждой
 	# машины, чей след задет взрывом.
-	_damage_vehicles_in_area(area, MCF.ANTI_TANK_VEHICLE_DAMAGE, -1, result, "anti-tank")
+	_damage_vehicles_in_area(area, landing, MCF.ANTI_TANK_VEHICLE_DAMAGE, -1, result, "anti-tank")
 	if killed_names.is_empty():
 		result.log("… nobody destroyed")
 	else:
@@ -1433,7 +1420,44 @@ func _protected_by(u: UnitInstance, protectors: Array) -> bool:
 ## Публичная обёртка нужна, чтобы правило жило в одном месте: исключение для снайпера
 ## меняется здесь и сразу подхватывается ИИ.
 func shot_is_futile(shooter: UnitInstance, target: UnitInstance) -> bool:
-	return _shield_blocks_shot(shooter, target)
+	if _shield_blocks_shot(shooter, target):
+		return true
+	# Семёрки на шестиграннике не бывает (item 6). Укрытие цели и огонь на линии
+	# поднимают нужное число, и на 7 выстрел перестаёт быть «плохим» — он становится
+	# невозможным. ИИ раньше мерил цель одной дальностью и исправно тратил ОД на
+	# бойца за бетонной стеной; теперь такая цель просто не предлагается.
+	return hit_need_for(shooter, target) >= 7
+
+## Нужное число на кубике, чтобы попасть (§3.5/§3.7/§3.8/§5) — единственная формула
+## на весь проект. Её спрашивает и сам выстрел, и ИИ, прикидывая, стоит ли стрелять:
+## две отдельные оценки неизбежно разошлись бы, и разошлись именно там, где дороже
+## всего, — в решении «тратить ли ОД».
+##
+## mods (необязательный) заполняется разбивкой для броска (#49): ярлык на каждую
+## правку, в том же порядке, в каком её показывает кубик.
+func hit_need_for(shooter: UnitInstance, target: UnitInstance, mods: Array = []) -> int:
+	if shooter == null or target == null:
+		return 7
+	var dist := Combat.distance(shooter.coord, target.coord)
+	var need := Combat.hit_number(dist, shooter.stats.fire_range)
+	# Укрытие цели (§3.7).
+	var cover := cover_effect(shooter, target)
+	var pen := int(cover["hit_penalty"])
+	need += pen
+	if pen != 0:
+		mods.append({"label": "Target cover", "delta": pen})
+	# Стрельба через горящие клетки (§3.8): −1 к попаданию (кроме снайпера).
+	if shooter.stats.special_ability_id != MCF.ABILITY_SNIPER \
+			and _fire_between(shooter.coord, target.coord):
+		need += MCF.FIRE_SHOOT_PENALTY
+		mods.append({"label": "Fire on the line", "delta": MCF.FIRE_SHOOT_PENALTY})
+	# Снайпер: автопопадание на ≤12 кл. без укреплений между ним и целью (§5).
+	if shooter.stats.special_ability_id == MCF.ABILITY_SNIPER \
+			and dist <= MCF.SNIPER_AUTOHIT_RANGE \
+			and not _fortification_between(shooter.coord, target.coord):
+		need = 1
+		mods.append({"label": "Sniper auto-hit", "delta": 0})
+	return clampi(need, 1, 7)
 
 func _shield_blocks_shot(shooter: UnitInstance, target: UnitInstance) -> bool:
 	if not _is_shield(target):
@@ -1528,7 +1552,8 @@ func _resolve_pickup_corpse(intent: PickUpCorpseIntent) -> ActionResult:
 	if _is_shield(unit):
 		return ActionResult.fail("A shield-bearer can't carry corpses")
 	if unit.carried_corpses >= MCF.CORPSE_CARRY_MAX:
-		return ActionResult.fail("Hands full — %d bodies is the limit" % MCF.CORPSE_CARRY_MAX)
+		return ActionResult.fail("Hands full — %s" % ("one body is the limit"
+			if MCF.CORPSE_CARRY_MAX == 1 else "%d bodies is the limit" % MCF.CORPSE_CARRY_MAX))
 	if Combat.distance(unit.coord, intent.from) > 1:
 		return ActionResult.fail("Corpse is out of reach")
 	if not has_corpse(intent.from):
@@ -2283,7 +2308,7 @@ func _detonate_mine(coord: Vector2i, victim: UnitInstance, res: ActionResult) ->
 	var area: Array[Vector2i] = [coord]
 	# Клетка мины оседает ОБЫЧНЫМ разрушенным полом, а не выжженным эпицентром (item 13).
 	var killed := _blast(coord, res, area, false)
-	_damage_vehicles_in_area(area, MCF.MINE_VEHICLE_DAMAGE, -1, res, "mine")
+	_damage_vehicles_in_area(area, coord, MCF.MINE_VEHICLE_DAMAGE, -1, res, "mine")
 	if killed.is_empty():
 		# victim == null — подрыв не под ногами (огонь дошёл): некому «уйти».
 		if victim != null:
@@ -3393,14 +3418,31 @@ func _resolve_drone_move(intent: DroneMoveIntent) -> ActionResult:
 			drone.move_credit = 0
 		if state.grid.cell(intent.target).is_wall():
 			entry = _drone_entry_cell(drone, intent.target, reach)
+		# Маршрут снимаем ДО переезда (item 12): восстанавливается он от СТАРОЙ клетки.
+		var route := _drone_route(drone.coord, intent.target)
+		var flew_from := drone.coord
 		# Дрон не занимает слот клетки — просто переносим его координату (#13).
 		drone.coord = intent.target
 		drone.wall_entry_from = entry
+		# Строку лога ставим ветвлением, а не тернарником в аргументе: success() принимает
+		# ТИПИЗИРОВАННЫЙ Array[String], а тернарник отдаёт нетипизированный литерал, и
+		# на таком вызове движок уходит в себя намертво. Развилка и читается лучше.
+		var flight := ActionResult.new()
+		flight.ok = true
 		if entry != Vector2i(-1, -1):
-			return ActionResult.success(["Drone hovers over the wall at (%d, %d) [AP: %d]" % [
-				intent.target.x, intent.target.y, drone.remaining_ap]])
-		return ActionResult.success(["Drone flies to (%d, %d) [AP: %d]" % [
-			intent.target.x, intent.target.y, drone.remaining_ap]])
+			flight.log("Drone hovers over the wall at (%d, %d) [AP: %d]" % [
+				intent.target.x, intent.target.y, drone.remaining_ap])
+		else:
+			flight.log("Drone flies to (%d, %d) [AP: %d]" % [
+				intent.target.x, intent.target.y, drone.remaining_ap])
+		# Полёт отыгрывается по клеткам тем же событием, что и пеший переход (item 12):
+		# тридцать клеток за один подлёт иначе выглядели телепортом, и в чужой ход было
+		# не понять, откуда дрон взялся над твоим отрядом.
+		if not route.is_empty():
+			flight.dice_events.append({
+				"kind": "walk", "unit": drone.id, "from": flew_from, "path": route,
+			})
+		return flight
 	# Столкновение: цель занята/стена — дрон таранит и взрывается (§3.12).
 	var pre := _approach_cell(drone, intent.target, reach)
 	if pre != Vector2i(-1, -1):
@@ -3409,9 +3451,18 @@ func _resolve_drone_move(intent: DroneMoveIntent) -> ActionResult:
 		if not use_credit:
 			drone.remaining_ap -= 1
 		drone.move_credit = 0  # таран — конец подлёта в любом случае
+		var ram_from := drone.coord
+		var ram_route := _drone_route(drone.coord, pre)
 		if pre != drone.coord:
 			drone.coord = pre
-		return _drone_explode(drone, intent.target, "crashed into an obstacle")
+		var boom := _drone_explode(drone, intent.target, "crashed into an obstacle")
+		# Разгон перед тараном виден так же, как обычный полёт (item 12): взрыв на
+		# ровном месте читается куда хуже, чем взрыв в конце разбега.
+		if not ram_route.is_empty():
+			boom.dice_events.push_front({
+				"kind": "walk", "unit": drone.id, "from": ram_from, "path": ram_route,
+			})
+		return boom
 	return ActionResult.fail("Target out of the drone's reach")
 
 func _resolve_drone_detonate(intent: DroneDetonateIntent) -> ActionResult:
@@ -3439,7 +3490,7 @@ func _drone_explode(drone: UnitInstance, center: Vector2i, why: String) -> Actio
 	var killed := _blast(center, result, area)
 	# Дрон, подорвавшийся над техникой, снимает с неё 1 прочность (item 14): раньше
 	# взрыв дрона выкашивал пехоту вокруг машины, а сам корпус не трогал вовсе.
-	_damage_vehicles_in_area(area, MCF.DRONE_EXPLOSION_DAMAGE, -1, result, "drone")
+	_damage_vehicles_in_area(area, center, MCF.DRONE_EXPLOSION_DAMAGE, -1, result, "drone")
 	if killed.is_empty():
 		result.log("… nobody destroyed")
 	else:
@@ -3643,9 +3694,38 @@ const DRONE_DIRS_8 := [
 	Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1),
 ]
 
+## Клетка → откуда в неё прилетели по кратчайшему маршруту. Заполняет _drone_reach,
+## читает _drone_route (item 12): по ней восстанавливается ПУТЬ, а не только цена.
+## Живёт ровно до следующего запроса разлёта — это черновик одного расчёта, не состояние.
+var _drone_prev: Dictionary = {}
+
+## Маршрут дрона от его клетки до target, БЕЗ старта и включая финиш (item 12).
+##
+## Дрон до сих пор просто телепортировался: пехота свой переход отыгрывает по клеткам
+## (событие «walk»), а полёт на тридцать клеток случался мгновенно, и в чужой ход
+## игрок видел лишь «дрон был там, стал тут». Событие то же самое, что у пехоты, —
+## значит и рисуется тем же кодом.
+##
+## Пустой массив — маршрут не восстанавливается (цель не из последнего разлёта).
+## Шаги ограничены размером карты: испорченная цепочка предшественников не должна
+## закручивать резолвер в вечный цикл.
+func _drone_route(from_coord: Vector2i, target: Vector2i) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	if target == from_coord:
+		return out
+	var cur := target
+	var guard: int = state.grid.width * state.grid.height + 2
+	while cur != from_coord and guard > 0:
+		out.push_front(cur)
+		if not _drone_prev.has(cur):
+			return [] as Array[Vector2i]
+		cur = _drone_prev[cur]
+		guard -= 1
+	return out if cur == from_coord else [] as Array[Vector2i]
+
 ## Клетки, куда дрон может долететь СВОБОДНЫМ МАРШРУТОМ (§3.12, ответ игрока «Free path,
 ## diag=2»): Дейкстра по 8 направлениям, ортогональный шаг = 1, диагональный = 2, бюджет
-## полёта = DRONE_FLIGHT_RANGE, привязь к станции ≤ DRONE_FLIGHT_RANGE. Корпус машины и
+## полёта = DRONE_FLIGHT_RANGE, привязь к станции ≤ DRONE_LEASH (item 13). Корпус машины и
 ## чужой дрон непроходимы; горящая клетка — терминал (влететь можно, пролететь сквозь — нет).
 ##
 ## Стена — тоже терминал (#96): над ней дрон ЗАВИСАЕТ, но не пролетает. Так делается
@@ -3657,8 +3737,9 @@ const DRONE_DIRS_8 := [
 ## подлёта, если он есть (#13): дрон доканчивает начатое движение так же, как пехота
 ## доходит остаток своего (#44), и второго действия за это не платит.
 ##
-## Привязь к станции считается ОТДЕЛЬНО и всегда по полной дальности: она не «запас
-## хода», а радиус связи, и укоротить её остатком бюджета было бы неверно.
+## Привязь к станции считается ОТДЕЛЬНО и всегда по полному радиусу связи (DRONE_LEASH):
+## она не «запас хода», а расстояние, на котором станция ещё держит дрон, и укоротить
+## её остатком бюджета было бы неверно.
 func _drone_reach(drone: UnitInstance) -> Dictionary:
 	var budget: int = drone.move_credit if drone.move_credit > 0 else MCF.DRONE_FLIGHT_RANGE
 	if state.grid.cell(drone.coord).is_wall():
@@ -3667,6 +3748,7 @@ func _drone_reach(drone: UnitInstance) -> Dictionary:
 	var out: Dictionary = {}
 	var visited: Dictionary = {}
 	var frontier: Array = [drone.coord]
+	_drone_prev = {}
 	while not frontier.is_empty():
 		var best_i := 0
 		for i in range(1, frontier.size()):
@@ -3689,7 +3771,7 @@ func _drone_reach(drone: UnitInstance) -> Dictionary:
 			var nd: int = int(dist[cur]) + step_cost
 			if nd > budget:
 				continue
-			if Combat.distance(nxt, drone.home_station) > MCF.DRONE_FLIGHT_RANGE:
+			if Combat.distance(nxt, drone.home_station) > MCF.DRONE_LEASH:
 				continue
 			var cell := state.grid.cell(nxt)
 			# Дрон перелетает трупы и юнитов и садится на них (#13): мешают лишь
@@ -3699,6 +3781,7 @@ func _drone_reach(drone: UnitInstance) -> Dictionary:
 				continue
 			if not dist.has(nxt) or nd < int(dist[nxt]):
 				dist[nxt] = nd
+				_drone_prev[nxt] = cur  # item 12: по этой цепочке строится маршрут полёта
 				frontier.append(nxt)
 	return out
 
@@ -3709,12 +3792,13 @@ func _drone_wall_exit(drone: UnitInstance) -> Dictionary:
 	var back := drone.wall_entry_from
 	if back == Vector2i(-1, -1) or not state.grid.in_bounds(back) or back == drone.coord:
 		return {}
-	if Combat.distance(back, drone.home_station) > MCF.DRONE_FLIGHT_RANGE:
+	if Combat.distance(back, drone.home_station) > MCF.DRONE_LEASH:
 		return {}
 	var cell := state.grid.cell(back)
 	var od := _drone_at(back)
 	if cell.vehicle_id != -1 or (od != null and od != drone):
 		return {}
+	_drone_prev = {back: drone.coord}  # спуск — тоже маршрут, пусть и в один шаг (item 12)
 	return {back: 1}
 
 func drone_flight_cells(drone: UnitInstance) -> Array:
@@ -5330,7 +5414,7 @@ func _resolve_vehicle_cannon(intent: VehicleCannonIntent) -> ActionResult:
 	for n in killed:
 		res.log("%s killed in the blast!" % n)
 	# Технике — 2 прочности (§техника). Все машины, чей след задет ромбом.
-	_damage_vehicles_in_area(area, int(gun.get("vehicle_damage", 2)), veh.id, res)
+	_damage_vehicles_in_area(area, landing, int(gun.get("vehicle_damage", 2)), veh.id, res)
 	if killed.is_empty():
 		res.log("… no infantry caught.")
 	return res
@@ -5401,7 +5485,21 @@ func cannon_target_cells(veh: Vehicle, limit_to: Dictionary = {}) -> Array[Vecto
 	return out
 
 ## Урон всем машинам (кроме source_id), чей след задет зоной взрыва area.
-func _damage_vehicles_in_area(area: Array[Vector2i], amount: int,
+## Урон технике от взрыва — ТОЛЬКО ПРЯМЫМ ПОПАДАНИЕМ (item 16: «only a direct explosion
+## (tank/anti-tank hit) deals damage to vehicles»).
+##
+## Раньше хватало того, что след машины задет осколочным полем: заряд, легший В СОСЕДНЮЮ
+## клетку, снимал с танка прочность наравне с попаданием в борт. Отсюда и жалоба — броня
+## таяла от всего, что рвалось поблизости: чужая мина, подрыв дрона, детонация другой
+## машины, недолёт противотанкиста.
+##
+## Теперь условие одно и жёсткое: ЭПИЦЕНТР взрыва должен лежать НА СЛЕДЕ машины. Снаряд
+## танка и заряд противотанкиста, попавшие в корпус, работают как работали; всё, что
+## разорвалось рядом, машину больше не трогает. Пехоту вокруг осколки по-прежнему косят —
+## это ведает _blast(), и правило её не касается.
+##
+## center — та самая точка разрыва (место падения заряда, а не центр области).
+func _damage_vehicles_in_area(area: Array[Vector2i], center: Vector2i, amount: int,
 		source_id: int, res: ActionResult, source: String = "cannon") -> void:
 	var in_area := {}
 	for c: Vector2i in area:
@@ -5409,12 +5507,15 @@ func _damage_vehicles_in_area(area: Array[Vector2i], amount: int,
 	for veh: Vehicle in state.all_vehicles():
 		if veh.id == source_id or not veh.alive():
 			continue
-		var hit := false
+		var direct := false
 		for fc in veh.footprint():
-			if in_area.has(fc):
-				hit = true
+			# Эпицентр на корпусе — это и есть прямое попадание. Проверка «клетка в
+			# области» остаётся страховкой: точка разрыва обязана быть внутри своего же
+			# осколочного поля, и если это вдруг не так — урона нет.
+			if fc == center and in_area.has(fc):
+				direct = true
 				break
-		if hit:
+		if direct:
 			_apply_vehicle_damage(veh, amount, source, res)
 
 ## Нанести машине урон прочности; для танка — попадание по случайному члену
@@ -5506,7 +5607,7 @@ func _destroy_vehicle(veh: Vehicle, res: ActionResult) -> void:
 			if occ != null and occ.is_alive():
 				_kill(occ)
 				res.log("%s caught in the explosion!" % occ.stats.display_name)
-		_damage_vehicles_in_area(area, 2, veh.id, res, "explosion")
+		_damage_vehicles_in_area(area, center, 2, veh.id, res, "explosion")
 	# Танк остаётся корпусом-обломком (укрытие/блок линии); челнок исчезает.
 	if bool(dtable.get("wreck", false)):
 		veh.wrecked = true
@@ -5579,6 +5680,38 @@ func vehicle_move_targets(veh: Vehicle) -> Dictionary:
 			if reached < steps:
 				break
 	return out
+
+## Раздавит ли этот ход СВОИХ (item 7).
+##
+## Гусеница давит всё, что под ней. Врага — и пусть: таран пехоты противника машине
+## и положен. А вот своих ИИ переезжал совершенно буднично: подбор хода мерил только
+## сближение с врагом, и о том, что по дороге лежит собственный отряд, план не знал
+## вовсе. Танк выкашивал полвзвода и записывал это себе в прогресс.
+##
+## Спрашиваем ТОТ ЖЕ планировщик, что исполнит переезд (VehicleRules.plan_line_move):
+## своя, отдельная прикидка «кто попадёт под гусеницу» неизбежно разошлась бы с
+## настоящей — и разошлась бы молча.
+func vehicle_move_crushes_ally(veh: Vehicle, dir: Vector2i, steps: int) -> bool:
+	if veh == null or not veh.alive():
+		return false
+	var credit := vehicle_move_credit(veh)
+	var speed := credit if credit > 0 \
+			else int(VehicleDB.get_vehicle(veh.type_id).get("speed", 0))
+	var plan := VehicleRules.plan_line_move(state, veh, dir, steps, speed)
+	if not plan["ok"]:
+		return false
+	for cc: Vector2i in plan["crush_cells"]:
+		var cell := state.grid.cell(cc)
+		if cell == null:
+			continue
+		var occ: UnitInstance = cell.occupant
+		if occ == null or not occ.is_alive():
+			continue
+		# Мирные жители своими не считаются — они никому не союзники; но и давить их
+		# незачем, поэтому ИИ обходит и их (см. вызывающего).
+		if occ.owner == veh.owner or state.roster.are_allies(veh.owner, occ.owner):
+			return true
+	return false
 
 ## Свободные соседние со следом клетки для высадки экипажа.
 func vehicle_disembark_cells(veh: Vehicle) -> Array:

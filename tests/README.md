@@ -80,6 +80,21 @@ and the code fell through to a backup branch. The run also pins the promise in
 imported one is still read straight off disk, so reskinning from source needs no
 re-import.
 
+**`run_ai_conduct.gd`** watches how the AI *behaves*, not what it computes. It asserts
+the AI never spends an action point on a shot it cannot land (cover can push the
+required roll to 7, which a d6 never shows — range alone used to be the only thing
+checked); never drives a tank over its own infantry; never walks a unit back to
+where it stood a turn ago; and that an idle vehicle is picked up by the forced pass
+and given a real order, even when the infantry has already met its activity quota.
+
+**`run_mirror_stamp.gd`** builds the real placement scene, stages one of every kind
+in the host's zone and stamps the mirrored formation, asserting that infantry *and
+every vehicle* cross over and land fully inside the guest's deployment zone. It
+exists because the mirror mapped a footprint's top-left corner to where its
+bottom-right belongs: harmless for 1×1 infantry, fatal for a 3×3 tank, and a coin
+toss for a 2×2 shuttle — which is exactly the "tanks don't transfer, and shuttles
+too sometimes" the report described.
+
 ## Scope
 
 None of these runs is evidence that the game *plays* correctly. They are evidence

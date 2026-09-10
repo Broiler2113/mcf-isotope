@@ -526,7 +526,11 @@ firing line and **still detonates**:
 land_index = clampi(int(dist * roll / float(need)), 0, dist)
 ```
 
-Vehicles in the area take 1 damage via `_damage_vehicles_in_area(area, 1, -1, …)`.
+A vehicle takes damage only from a **direct hit** — the charge must land *on* its
+footprint (`_damage_vehicles_in_area(area, center, …)` checks `center` against the hull,
+item 16). A blast in the next cell over shreds the infantry around the vehicle and leaves
+its armour untouched; splash from a mine, a drone, or another vehicle's detonation never
+damages a hull at all.
 
 ### 7.2 Flamethrower (§3.8)
 
@@ -1170,6 +1174,13 @@ reason.
 `_resolve_vehicle_move` crushes, scatters, or rams everything in the footprint's path,
 reducing those cells to bare floor. Tanks have a `facing`; shuttles do not.
 
+**An airlock is a doorway, not a shelter** (item 9). `VehicleRules.cell_entry` used to
+answer an airlock cell and return there and then, which cost two rules at once: the doors
+were never marked as rammed, so a tank drove through them and left them standing, and the
+occupant check below was never reached, so a man caught inside an open airlock survived
+the tracks. An airlock is now an ordinary crushable obstacle — rammed like glass, and the
+cell's occupant is crushed exactly as on open ground.
+
 **A crushed unit leaves a body** (#97). It is killed, its id goes into
 `ActionResult.deaths`, and once the track-clearing pass has scrubbed the path, its corpse
 is placed back as the cell's `occupant` — the same corpse a bullet would have left, so it
@@ -1378,7 +1389,7 @@ its only budget, so a unit with `move_credit` but no AP was treated as spent.
   for the fourth, which makes the next one a corpse wall (`CORPSE_WALL_COUNT = 5`). Grab
   and drop can never fight over the same cell: grab requires `field[n] < start_geo`, drop
   requires `field[n] >= start_geo`. The pair terminates because a pickup costs 1 AP and a
-  drop always decrements `carried_corpses`, capped at `CORPSE_CARRY_MAX = 2`.
+  drop always decrements `carried_corpses`, capped at `CORPSE_CARRY_MAX = 1` (item 15).
 
 ### 17.4 Both sides can be machines (#103)
 
@@ -1897,7 +1908,8 @@ FIRE_SPREAD_FLAMMABLE     = 3       # wood/grass ignites on 3+
 FIRE_SPREAD_OTHER         = 4       # other floor on 4+
 FIRE_SHOOT_PENALTY        = 1
 
-DRONE_FLIGHT_RANGE        = 30
+DRONE_FLIGHT_RANGE        = 30      # tiles of flight bought by one action point
+DRONE_LEASH               = 15      # and never further than this from its station (item 15)
 DRONE_ARMOR               = 5
 RSP_RANGE                 = 12
 RSP_RATE_OF_FIRE          = 8

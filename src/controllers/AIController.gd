@@ -44,9 +44,12 @@ const SCORE_BLAST_PATH := 44.0
 ## Во сколько раз обход должен быть длиннее прямой, чтобы стену стало дешевле взорвать.
 const BLAST_DETOUR_FACTOR := 2
 
-## Труп-щит берут, если враг ближе этого (#40); нести больше двух смысла нет.
+## Труп-щит берут, если враг ближе этого (#40).
 const CORPSE_GRAB_ENEMY_RANGE := 8
-const CORPSE_CARRY_MAX := 2
+## Сколько тел ИИ носит. Своей копии у него больше нет (item 15): предел живёт в
+## MCF.CORPSE_CARRY_MAX, и две константы с одним смыслом неминуемо разъехались бы —
+## резолвер отказывал бы в подъёме, а ИИ продолжал его просить и жёг ход на отказах.
+const CORPSE_CARRY_MAX := MCF.CORPSE_CARRY_MAX
 
 ## Обязательная явка (#103): за ход должно отходить не меньше этой доли живой армии.
 ## Раньше боец, которому жадная оценка не нашла ни одного кандидата (некуда сближаться,
@@ -92,6 +95,27 @@ var _forced_tries: Dictionary = {}
 ## бездельниками бесконечно и ход ИИ никогда бы не кончился.
 var _forced_pass: bool = false
 
+## Память о том, где боец уже стоял (item 1: «ping-ponging… make AIs do actual moves
+## and not this slop»).
+##
+## Челнок берётся не из одной ошибки, а из устройства жадного выбора: оценка считается
+## ЗАНОВО на каждое решение и ничего не помнит. Клетки A и B почти равны, крошечный
+## перевес плавает от хода к ходу (враг сместился, союзник ушёл с линии, план назначил
+## другую цель) — и боец честно исполняет «сейчас лучше туда», всю партию, между двумя
+## клетками. Хуже всего это в принудительном проходе (_forced_action), где условие
+## «шаг обязан сокращать путь» снято вовсе: бездельника гоняет квота явки, а не смысл.
+##
+## Лечится памятью: клетка, где боец уже стоял в последних ходах, дешевле остальных на
+## SCORE_BACKTRACK. Штраф НАМЕРЕННО мал — настоящее продвижение (gain × 3) его
+## перебивает, и настоящий обход по своим следам (обойти стену, вернуться в укрытие)
+## остаётся возможен. Не проходит только шаг «туда-сюда без выигрыша» — ровно тот, что
+## игрок и называет слопом.
+const RECENT_CELLS := 3
+const SCORE_BACKTRACK := 7.0
+## Ключ явки (_row_key) -> Array[Vector2i], от старых к свежим. Последняя запись — это
+## клетка, из которой боец ходит прямо сейчас.
+var _recent: Dictionary = {}
+
 ## Штабной план на весь ход (#100): куда каждый боец должен встать и в каком порядке
 ## армия ходит. Считается ОДИН раз в начале хода — дальше отдельные решения лишь
 ## исполняют его. См. AIPlanner.
@@ -134,7 +158,7 @@ func _decide(state: GameState) -> Intent:
 	while not _queue.is_empty():
 		var row: Dictionary = _queue[0]
 		var best := _best_for_actor(state, r, row)
-		if best.is_empty() and _forced_pass and not row["vehicle"]:
+		if best.is_empty() and _forced_pass:
 			best = _forced_action(state, r, row)
 		if not best.is_empty():
 			_acted[_row_key(row)] = true
@@ -155,6 +179,38 @@ func _activity_quota() -> float:
 func _row_key(row: Dictionary) -> String:
 	return ("v%d" if row["vehicle"] else "u%d") % int(row["id"])
 
+## Запомнить, где вся сторона стоит на начало хода (item 1). Раз в ход — этой
+## частоты и хватает: челнок виден именно между ходами.
+func _remember_positions(state: GameState) -> void:
+	for u: UnitInstance in state.living_units_of(owner):
+		if u.is_drone or u.aboard_vehicle_id != -1:
+			continue
+		_push_recent("u%d" % u.id, u.coord)
+	for veh: Vehicle in state.all_vehicles():
+		if veh.owner == owner and veh.alive():
+			_push_recent("v%d" % veh.id, veh.center())
+
+## Дописать клетку в память бойца. Повтор подряд не пишем: простоял ход на месте —
+## это не «побывал здесь ещё раз», и память не должна вытесняться простоем.
+func _push_recent(key: String, coord: Vector2i) -> void:
+	var hist: Array = _recent.get(key, [])
+	if not hist.is_empty() and hist[hist.size() - 1] == coord:
+		return
+	hist.append(coord)
+	while hist.size() > RECENT_CELLS:
+		hist.pop_front()
+	_recent[key] = hist
+
+## Насколько клетка «уже хожена» (item 1). Последняя запись — клетка, из которой боец
+## ходит сейчас: вернуться в неё значит просто остаться на месте, и это бесплатно.
+## Штрафуются те, что были ДО неё, — то есть ровно возврат по своим следам.
+func _backtrack_penalty(key: String, coord: Vector2i) -> float:
+	var hist: Array = _recent.get(key, [])
+	for i in range(hist.size() - 1):
+		if hist[i] == coord:
+			return SCORE_BACKTRACK
+	return 0.0
+
 ## Кто ещё может действовать, но за ход так и не сделал ничего (#103). Возвращаем
 ## пустой массив, если явка и так набрана — гонять армию ради галочки незачем.
 func _idle_rows(state: GameState) -> Array:
@@ -165,15 +221,27 @@ func _idle_rows(state: GameState) -> Array:
 		if not _can_command(u):
 			continue
 		live.append(u)
-	if live.is_empty():
-		return []
 	var acted := 0
 	for u: UnitInstance in live:
 		if _acted.has("u%d" % u.id):
 			acted += 1
-	if float(acted) >= float(live.size()) * _activity_quota():
-		return []
 	var rows: Array = []
+	# Пехоте хватает квоты явки; ТЕХНИКЕ поблажки нет вовсе (item 10: «make it so that
+	# it's mandatory for AI to move all tanks»). Машина, которой жадная оценка не нашла
+	# хода, раньше просто выпадала из очереди — и на глазах у игрока половина танков
+	# стояла весь бой. Поэтому техника добирается в принудительный проход ВСЕГДА,
+	# независимо от того, набрала пехота свою квоту или нет.
+	for veh: Vehicle in state.all_vehicles():
+		if veh.owner != owner or not veh.alive():
+			continue
+		if _acted.has("v%d" % veh.id):
+			continue
+		if veh.ap <= 0 and veh.move_credit <= 0:
+			continue
+		rows.append({"id": veh.id, "vehicle": true})
+	# Пехота добирается, только если её квота явки НЕ набрана (и есть кому её набирать).
+	if live.is_empty() or float(acted) >= float(live.size()) * _activity_quota():
+		return _sorted_rows(rows)
 	for u: UnitInstance in live:
 		if _acted.has("u%d" % u.id):
 			continue
@@ -182,9 +250,16 @@ func _idle_rows(state: GameState) -> Array:
 		if u.remaining_ap <= 0 and u.move_credit <= 0:
 			continue
 		rows.append({"id": u.id, "vehicle": false})
-	# По id — иначе порядок зависел бы от порядка обхода словаря, и сетевые стороны
-	# разъехались бы на разных сборках (§2.3).
-	rows.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a["id"] < b["id"])
+	return _sorted_rows(rows)
+
+## Порядок очереди обязан быть один и тот же у всех (§2.3): иначе хост и клиент
+## разойдутся на разных сборках. Сортируем по паре «техника, id» — одного id мало,
+## потому что машины и бойцы нумеруются независимо и их номера пересекаются.
+func _sorted_rows(rows: Array) -> Array:
+	rows.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		if bool(a["vehicle"]) != bool(b["vehicle"]):
+			return bool(b["vehicle"])
+		return int(a["id"]) < int(b["id"]))
 	return rows
 
 ## Принудительное дело для бездельника (#103). Жадная оценка ему ничего не нашла:
@@ -200,9 +275,15 @@ func _forced_action(state: GameState, r: GameActionResolver, row: Dictionary) ->
 	if tries >= FORCED_TRIES_PER_UNIT:
 		return {}
 	_forced_tries[key] = tries + 1
+	if row["vehicle"]:
+		return _forced_vehicle_action(state, r, state.get_vehicle(row["id"]), key)
 	var u := state.get_unit(row["id"])
 	if u == null or not u.is_alive() or u.is_held():
 		return {}
+	# Боец стоит здесь ПРЯМО СЕЙЧАС (item 1). Записываем это до выбора хода: вторая
+	# принудительная попытка в том же ходу иначе вернула бы его ровно туда, откуда
+	# первая только что увела, — тот самый челнок, но внутри одного хода.
+	_push_recent(key, u.coord)
 	# 1. Хоть куда-нибудь: любая достижимая свободная клетка, оценённая укрытием и
 	#    близостью к врагу по прямой. Условие «шаг обязан сокращать путь» здесь снято —
 	#    именно оно и оставляло бойца стоять столбом.
@@ -220,6 +301,7 @@ func _forced_action(state: GameState, r: GameActionResolver, row: Dictionary) ->
 			if enemy != null:
 				score -= Combat.distance(coord, enemy.coord) * 0.5
 			score -= float(reach.cost[coord]) * SCORE_STEP_COST
+			score -= _backtrack_penalty(key, coord)  # item 1: не топчемся по своим следам
 			if best.is_empty() or score > best["score"]:
 				best = {"score": score, "intent": MoveIntent.new(u.id, coord)}
 		if not best.is_empty():
@@ -236,6 +318,50 @@ func _forced_action(state: GameState, r: GameActionResolver, row: Dictionary) ->
 	for c: Vector2i in r.diggable_cells(u):
 		if c == u.coord:
 			return {"score": SCORE_MOVE_BASE, "intent": DigIntent.new(u.id, c)}
+	return {}
+
+## Обязательный ход машины (item 10: «make it so that it's mandatory for AI to move all
+## tanks»). Жадная оценка отказала: ближе к врагу не станешь, створа не откроешь — и
+## машина выпадала из очереди, простаивая бой целиком.
+##
+## Порядок отчаяния тот же, что у пехоты: сперва любой переезд, какой не давит своих,
+## потом доворот корпуса — он открывает вторую ось движения, а с ней и новые линии
+## огня, так что следующему решению уже будет куда ехать.
+func _forced_vehicle_action(state: GameState, r: GameActionResolver, veh: Vehicle,
+		key: String) -> Dictionary:
+	if veh == null or not veh.alive():
+		return {}
+	_push_recent(key, veh.center())  # item 1: и техника не должна ходить челноком
+	var enemy := _nearest_enemy(state, veh.center(), false, r)
+	var targets := r.vehicle_move_targets(veh)
+	var best: Dictionary = {}
+	for center: Vector2i in targets:
+		var mv: Dictionary = targets[center]
+		# Своих не давим даже под принуждением (item 7): «хоть куда-нибудь» не значит
+		# «сквозь собственный взвод».
+		if r.vehicle_move_crushes_ally(veh, Vector2i(mv["dir"]), int(mv["steps"])):
+			continue
+		var score := SCORE_MOVE_BASE
+		if enemy != null:
+			score -= float(Combat.distance(center, enemy.coord)) * 0.5
+		score -= float(int(mv["steps"])) * SCORE_STEP_COST
+		score -= _backtrack_penalty(key, center)
+		if best.is_empty() or score > best["score"]:
+			best = {"score": score,
+				"intent": VehicleMoveIntent.new(veh.id, mv["dir"], int(mv["steps"]))}
+	if not best.is_empty():
+		return best
+	# Ехать некуда — доворачиваем корпус. Только ортогонально (item 2): диагональный
+	# фронт резолвер отклонит, и ИИ предлагал бы его вхолостую.
+	if veh.facing != Vector2i.ZERO:
+		var want := Vector2i(-veh.facing.y, veh.facing.x)
+		if enemy != null:
+			var toward := _ortho_toward(veh.center(), enemy.coord)
+			if toward != Vector2i.ZERO and toward != veh.facing and toward != -veh.facing:
+				want = toward
+		if want != veh.facing and want != -veh.facing:
+			return {"score": SCORE_MOVE_BASE * 0.5,
+				"intent": VehicleTurnIntent.new(veh.id, want)}
 	return {}
 
 ## Уникальный номер текущего хода: раунд + чей ход. Смена номера = новый ход ИИ.
@@ -255,6 +381,8 @@ func _sync_turn(state: GameState, r: GameActionResolver) -> void:
 	_acted.clear()
 	_forced_tries.clear()
 	_forced_pass = false
+	# Где все стояли на начало хода (item 1) — по этому следу оценка узнаёт челнок.
+	_remember_positions(state)
 	# Сперва штаб раскладывает ход целиком (#100), и только потом бойцы начинают
 	# исполнять. Геополе считается тут же и переиспользуется планом.
 	_planner.owner = owner
@@ -1257,6 +1385,10 @@ func _best_move(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dic
 		# останавливается раньше, а неизрасходованная скорость остаётся кредитом (§3.2)
 		# и доходится уже после выстрела — это и есть дробление движения.
 		score -= float(cost[coord]) * SCORE_STEP_COST
+		# Клетка, где боец уже стоял ходом-двумя раньше, дешевле прочих (item 1): так
+		# челнок между двумя почти равными клетками перестаёт быть выгодным, а честное
+		# продвижение (gain × 3) штраф перебивает и идёт как шло.
+		score -= _backtrack_penalty("u%d" % u.id, coord)
 		if covers:
 			var c := grid.cell(coord)
 			if c.has_cover():
@@ -1527,9 +1659,15 @@ func _vehicle_candidates(state: GameState, r: GameActionResolver, veh: Vehicle) 
 					and _opens_cannon_line(state, r, veh, veh.origin + Vector2i(mv["dir"]) * int(mv["steps"]))
 			if gain <= 0.0 and not lines_up and difficulty != Difficulty.EASY:
 				continue
+			# Своих под гусеницу не берём (item 7). Врага давить и нужно — за этим машина
+			# и едет, — а вот собственную пехоту ИИ переезжал буднично: подбор хода мерил
+			# только сближение и о том, кто лежит по дороге, не спрашивал вовсе.
+			if r.vehicle_move_crushes_ally(veh, Vector2i(mv["dir"]), int(mv["steps"])):
+				continue
 			var score := SCORE_MOVE_BASE + gain * 3.0
 			if lines_up:
 				score += SCORE_VEHICLE_FIRING_LINE
+			score -= _backtrack_penalty("v%d" % veh.id, center)  # item 1
 			if best_move.is_empty() or score > best_move["score"]:
 				best_move = {"score": score,
 					"intent": VehicleMoveIntent.new(veh.id, mv["dir"], int(mv["steps"]))}

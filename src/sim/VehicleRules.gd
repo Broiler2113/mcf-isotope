@@ -7,7 +7,7 @@ extends RefCounted
 ## Стоимость входа в клетку (очки скорости), по таблице правил:
 ##   обычный ход .............. 1
 ##   стекло / деревянная стена  1  (таранится → уничтожается)
-##   шлюз ..................... 1
+##   шлюз ..................... 1  (таранится → уничтожается, item 9)
 ##   стена (бетон) ............ 3  (таранится → в пол)
 ##   стена из трупов .......... 3  (трупы разлетаются по ходу движения)
 ##   юнит (пехота) ............ 4  (давится)
@@ -59,19 +59,28 @@ static func cell_entry(state: GameState, cell: Vector2i, self_id: int) -> Dictio
 		return ok.call(COST_GLASS, {"ram": true})
 	if c.feature_id == MCF.FEATURE_CORPSE_WALL:
 		return ok.call(COST_CORPSE_WALL, {"scatter": true, "ram": true})
-	if c.feature_id == MCF.FEATURE_AIRLOCK:
-		return ok.call(COST_AIRLOCK)
+	# Шлюз (item 9). Здесь НЕ возвращаемся: раньше эта ветка обрывала разбор клетки, и
+	# ценой ровно двух ошибок сразу. Створки не помечались тараном — то есть гусеница
+	# проезжала шлюз насквозь, а сам он оставался цел; и, что хуже, до проверки жильца
+	# дело не доходило вовсе — боец, стоявший в открытом шлюзе, оставался жив под
+	# танком. Теперь шлюз — обычная сминаемая преграда, как стекло, и разбор клетки
+	# идёт дальше, к тому, кто в ней стоит.
+	var airlock: bool = c.feature_id == MCF.FEATURE_AIRLOCK
 
 	# Живой юнит: давится. Щитоносец — особый случай (стоп + урон машине).
 	if c.occupant != null and c.occupant.is_alive():
 		if c.occupant.stats.special_ability_id == MCF.ABILITY_SHIELD_BEARER:
 			return ok.call(COST_SHIELD, {"crush": true, "stop": true,
-				"self_damage": SHIELD_STOP_DAMAGE})
-		return ok.call(COST_UNIT, {"crush": true})
+				"ram": airlock, "self_damage": SHIELD_STOP_DAMAGE})
+		return ok.call(maxi(COST_UNIT, COST_AIRLOCK) if airlock else COST_UNIT,
+			{"crush": true, "ram": airlock})
 
 	# Труп на клетке — разлетается, не мешает (одиночный, не стена).
 	if c.occupant != null:  # status CORPSE
-		return ok.call(COST_NORMAL, {"scatter": true})
+		return ok.call(COST_NORMAL, {"scatter": true, "ram": airlock})
+
+	if airlock:
+		return ok.call(COST_AIRLOCK, {"ram": true})
 
 	# Каменная стена (высота >= 2, не спецобъект) — таранится в пол.
 	if c.is_wall():
