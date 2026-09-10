@@ -631,6 +631,7 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 
 	# Гильза на каждый ушедший выстрел (#21.3), вылетают за спину стрелка.
 	if fired > 0:
+		_fx_lane(result, shooter.coord, target.coord, shooter.owner)  # issue 8
 		_fx(result, {"fx": "casings", "at": shooter.coord,
 			"toward": target.coord, "count": fired})
 		# Пуля летит от стрелка к цели (item 16) — по трассеру на выстрел.
@@ -693,6 +694,7 @@ func _resolve_anti_tank(shooter: UnitInstance, center: Vector2i) -> ActionResult
 	# но вид «shell_casing». Направление — на цель (частица летит от неё, назад).
 	_fx(result, {"fx": "casings", "at": shooter.coord, "toward": center,
 		"count": 1, "shell": true})
+	_fx_lane(result, shooter.coord, center, shooter.owner, "blast")  # issue 8
 	# Выстрел ПОД СЕБЯ (#11): заряд кладётся в собственную клетку, и мазать тут
 	# нечем — бросок не делается вовсе. Кубик здесь не просто лишний: любой
 	# холостой бросок сдвигает поток случайности и разводит хост с клиентом.
@@ -751,6 +753,57 @@ func _shortfall_landing(from_coord: Vector2i, target: Vector2i, roll: int, need:
 	if land_index <= 0:
 		return from_coord
 	return _throw_path(from_coord, target)[land_index - 1]
+
+## Опасен ли выстрел противотанкиста ДЛЯ СВОИХ (issue 3) — «AI Anti-tank units kill
+## themselves when they're shooting, it happens a lot».
+##
+## Заряд накрывает квадрат 3×3 вокруг ТОЧКИ ПАДЕНИЯ, а промах (#7) кладёт его НЕ ДОЛЕТЕВ:
+## landing = dist · roll / need вдоль линии огня. На единице кубика заряд ложится в
+## первую-вторую клетку от стрелка — то есть себе под ноги, — и осколки забирают его
+## самого. Живой игрок видит это по трассе и в упор не бьёт; ИИ же брал ближайшую цель
+## на луче и регулярно подрывался.
+##
+## Считаем ВСЕ шесть исходов кубика (их ровно шесть, и они известны заранее): попадёт
+## ли хоть один взрыв на самого стрелка или на его союзника. Да — выстрел не предлагаем.
+## Оценка НАМЕРЕННО осторожная: прикрытие чужим щитоносцем в расчёт не берём (он к
+## следующему ходу отойдёт), а окоп и собственный щит — берём, они при бойце.
+##
+## Обходим не армию, а клетки взрыва: их не больше 6×9, и жильца каждой отдаёт сама
+## сетка. На переборе целей ИИ это разница между сотней проверок и сотней тысяч.
+func anti_tank_shot_endangers_own(shooter: UnitInstance, center: Vector2i) -> bool:
+	if shooter == null or not _is_anti_tank(shooter):
+		return false
+	# Выстрел под себя (#11) — гарантированное самоубийство, кубик там не бросается.
+	if center == shooter.coord:
+		return true
+	var need := Combat.hit_number(
+		Combat.distance(shooter.coord, center), shooter.stats.fire_range)
+	# Клетка -> лежит ли она в ЭПИЦЕНТРЕ хоть одного из шести исходов: в эпицентре не
+	# спасают ни окоп (#30), ни щит (§3.14), по соседней клетке — спасают оба.
+	var risk: Dictionary = {}
+	for roll in range(1, 7):
+		var landing := _shortfall_landing(shooter.coord, center, roll, need)
+		for c: Vector2i in MCF.blast_square(landing, MCF.ANTI_TANK_BLAST_RADIUS):
+			if c == landing:
+				risk[c] = true
+			elif not risk.has(c):
+				risk[c] = false
+	var grid := state.grid
+	for c: Vector2i in risk:
+		var cell := grid.cell(c)
+		if cell == null:
+			continue
+		var occ := cell.occupant
+		if occ == null or not occ.is_alive():
+			continue
+		if occ.id != shooter.id and not is_ally_of(shooter, occ):
+			continue  # чужого взрыв и должен накрывать — за этим и стреляем
+		if not bool(risk[c]):
+			# Не эпицентр: окоп прячет от осколков (#30), щитоносец их держит (§3.14).
+			if cell.feature_id == MCF.FEATURE_TRENCH or _is_shield(occ):
+				continue
+		return true
+	return false
 
 ## Снять «визуальный слепок» зоны ДО взрыва (item 22): прежние объекты клеток и прежняя
 ## прочность/целость техники в области. UI показывает их, пока крутится кубик выстрела,
@@ -925,6 +978,7 @@ func _resolve_flame(shooter: UnitInstance, target_coord: Vector2i) -> ActionResu
 
 	var result := ActionResult.new()
 	result.ok = true
+	_fx_lane(result, shooter.coord, last, shooter.owner, "flame")  # issue 8
 	result.log("%s: flame jet" % shooter.stats.display_name)
 	if killed_names.is_empty():
 		result.log("… nobody hit")
@@ -1040,6 +1094,7 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i) -> ActionResult:
 	# След луча на полу от стрелка до точки остановки (item 10) — чистая косметика.
 	_fx(result, {"fx": "laser", "from": [shooter.coord.x, shooter.coord.y],
 		"to": [beam_last.x, beam_last.y]})
+	_fx_lane(result, shooter.coord, beam_last, shooter.owner, "beam")  # issue 8
 	result.log_lines.push_front("%s: laser shot %s (potential left %d)" % [
 		shooter.stats.display_name, _dir_name(step), maxi(0, potential)])
 	if killed_names.is_empty():
@@ -1209,6 +1264,8 @@ func can_laser_cell(shooter: UnitInstance, cell: Vector2i) -> String:
 		return "Only the marksman fires a laser"
 	if not state.grid.in_bounds(cell):
 		return "Target out of bounds"
+	if shooter.aboard_vehicle_id != -1 or not state.grid.in_bounds(shooter.coord):
+		return "Shooter is not on the board"
 	if _step_toward(shooter.coord, cell) == Vector2i.ZERO:
 		return "Pick a direction to fire in"
 	if shooter.remaining_ap < MCF.MARKSMAN_AP_COST:
@@ -1281,6 +1338,7 @@ func _resolve_assault(shooter: UnitInstance, target: UnitInstance) -> ActionResu
 			"armor": parry_need, "shots": shot_details, "killed": t_killed,
 			"def_owner": t.owner, "shooter_owner": shooter.owner,  # item 13
 		})
+		_fx_lane(result, shooter.coord, t.coord, shooter.owner)  # issue 8
 		result.log("%s ⇒ %s: %d hits (need %d+, defense %d+)" % [
 			shooter.stats.display_name, t.stats.display_name, hits, need, parry_need])
 		if t_killed:
@@ -1392,6 +1450,8 @@ func _shield_blocks_shot(shooter: UnitInstance, target: UnitInstance) -> bool:
 ## Условие «не по прямой» повторяет line_cells(): она вернула бы пустой массив, а цикл
 ## по нему не выполнился бы ни разу — то есть ответ «нет», как и здесь.
 func _wall_between(from_coord: Vector2i, to_coord: Vector2i) -> bool:
+	if _line_off_board(from_coord, to_coord):
+		return false
 	var dx := to_coord.x - from_coord.x
 	var dy := to_coord.y - from_coord.y
 	if (dx == 0 and dy == 0) or (dx != 0 and dy != 0 and absi(dx) != absi(dy)):
@@ -1410,6 +1470,8 @@ func _wall_between(from_coord: Vector2i, to_coord: Vector2i) -> bool:
 
 ## Есть ли горящая клетка на линии огня (§3.8).
 func _fire_between(from_coord: Vector2i, to_coord: Vector2i) -> bool:
+	if _line_off_board(from_coord, to_coord):
+		return false
 	var dx := to_coord.x - from_coord.x
 	var dy := to_coord.y - from_coord.y
 	if (dx == 0 and dy == 0) or (dx != 0 and dy != 0 and absi(dx) != absi(dy)):
@@ -1428,6 +1490,8 @@ func _fire_between(from_coord: Vector2i, to_coord: Vector2i) -> bool:
 
 ## Есть ли укрепление (укрытие или стена) между стрелком и целью (§5, автопопадание снайпера).
 func _fortification_between(from_coord: Vector2i, to_coord: Vector2i) -> bool:
+	if _line_off_board(from_coord, to_coord):
+		return false
 	var dx := to_coord.x - from_coord.x
 	var dy := to_coord.y - from_coord.y
 	if (dx == 0 and dy == 0) or (dx != 0 and dy != 0 and absi(dx) != absi(dy)):
@@ -1519,6 +1583,15 @@ func _resolve_drop_corpse(intent: DropCorpseIntent) -> ActionResult:
 func _fx(res: ActionResult, ev: Dictionary) -> void:
 	if res != null:
 		res.fx.append(ev)
+
+## Дорожка «кто в кого» (issue 8: «add visual clues that would tell the player who is
+## shooting at who»). Кладётся КАЖДОЙ атакой — пулей, лучом, струёй, зарядом, пушкой,
+## ДПМГ, — чтобы в чужой ход было видно не только «где-то стреляли», но и кто по кому.
+## Как и всё в fx, на правила не влияет: слой рисует её у себя и через LANE_DUR забывает.
+func _fx_lane(res: ActionResult, from_coord: Vector2i, to_coord: Vector2i,
+		owner: int, kind: String = "shot") -> void:
+	_fx(res, {"fx": "lane", "from": [from_coord.x, from_coord.y],
+		"to": [to_coord.x, to_coord.y], "owner": owner, "kind": kind})
 
 ## Единственная точка смерти в резолвере (#8). Всё, что боец нёс в руках, обязано
 ## оказаться на доске: погибший с телом на руках оставляет на своей клетке ДВА трупа —
@@ -2441,6 +2514,8 @@ func sight_of(unit: UnitInstance) -> int:
 ## Порядок обхода и условие обрыва буква в букву те же, что были у _ray_cells;
 ## сама она удалена — других вызывающих у неё не осталось.
 func _vision_blocked(a: Vector2i, b: Vector2i) -> bool:
+	if _line_off_board(a, b):
+		return true
 	var dx: int = absi(b.x - a.x)
 	var dy: int = absi(b.y - a.y)
 	var sx: int = 1 if a.x < b.x else -1
@@ -2573,6 +2648,11 @@ static func _catch_up_seen(from_version: int) -> void:
 		_seen_cache.erase(key)
 
 func _seen_from(coord: Vector2i, r: int) -> PackedInt32Array:
+	# Смотрящий вне поля (сидит в машине, coord = OFFBOARD) не видит ничего: лучи из
+	# такой точки уходят за край сетки. Вызывающие сидящих и так пропускают — это
+	# страховка на будущих вызывающих (issue 2).
+	if not state.grid.in_bounds(coord):
+		return PackedInt32Array()
 	var gid := state.grid.get_instance_id()
 	if _seen_version != GridCell.vision_version or _seen_grid != gid:
 		# Сброс целиком — только когда точечная инвалидация невозможна: сменилась сетка,
@@ -4077,6 +4157,7 @@ func _resolve_dpmg(intent: DPMGFireIntent) -> ActionResult:
 		"need": need, "armor": parry_need, "shots": shot_details, "killed": killed,
 		"def_owner": target.owner, "shooter_owner": state.active_player(),  # item 13
 	})
+	_fx_lane(result, intent.dpmg_coord, target.coord, actor.owner)  # issue 8
 	result.log("DPMG (%s) → %s: %d shots, %d hits (need %d+)" % [
 		actor.stats.display_name, target.stats.display_name, fired, hits, need])
 	if killed:
@@ -4449,6 +4530,8 @@ func _maybe_random_event(res: ActionResult) -> void:
 ## считают стеной, поэтому по умолчанию он выключен.
 func los_blocked(from_coord: Vector2i, to_coord: Vector2i, allow_embrasure: bool = true,
 		ignore_units: bool = false, glass_passable: bool = false) -> bool:
+	if _line_off_board(from_coord, to_coord):
+		return false
 	var dx := to_coord.x - from_coord.x
 	var dy := to_coord.y - from_coord.y
 	if dx == 0 and dy == 0:
@@ -4493,6 +4576,8 @@ func los_blocked(from_coord: Vector2i, to_coord: Vector2i, allow_embrasure: bool
 ## Каждое из них каждая пуля пробивает отдельным броском. Ноль — обычный выстрел,
 ## и тогда лишних кубиков не бросается вовсе: поток случайности старых партий цел.
 func _glass_on_line(from_coord: Vector2i, to_coord: Vector2i) -> int:
+	if _line_off_board(from_coord, to_coord):
+		return 0
 	var dx := to_coord.x - from_coord.x
 	var dy := to_coord.y - from_coord.y
 	if (dx == 0 and dy == 0) or (dx != 0 and dy != 0 and absi(dx) != absi(dy)):
@@ -4515,6 +4600,8 @@ func _glass_on_line(from_coord: Vector2i, to_coord: Vector2i) -> int:
 ## сосчитать. Порядок совпадает с порядком бросков на пробитие в _resolve_shoot.
 func _glass_cells_on_line(from_coord: Vector2i, to_coord: Vector2i) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
+	if _line_off_board(from_coord, to_coord):
+		return out
 	var dx := to_coord.x - from_coord.x
 	var dy := to_coord.y - from_coord.y
 	if (dx == 0 and dy == 0) or (dx != 0 and dy != 0 and absi(dx) != absi(dy)):
@@ -4531,6 +4618,20 @@ func _glass_cells_on_line(from_coord: Vector2i, to_coord: Vector2i) -> Array[Vec
 		y += sy
 	return out
 
+## Ни один шаг по линии не имеет смысла, если её конец лежит ВНЕ ПОЛЯ, — а такой конец
+## приходит сюда буднично: у бойца В МАШИНЕ координата вынесена за карту (OFFBOARD,
+## −9999, §техника). Проверки «на одной ли прямой» это не ловит: от (−9999, −9999)
+## диагональ проходит через половину карты, и цикл честно шагал ОТ края мира внутрь,
+## индексируя _cells отрицательным адресом на первом же шаге — «Out of bounds get index
+## '-509898' (on base: Array[GridCell])» в отчёте игрока (issue 2). Отсекаем такие
+## линии в одном месте: каждый ходок по лучу спрашивает эту проверку первой строкой,
+## и ни один из них больше не может уйти за край.
+##
+## Вне поля линия «пустая»: нет ни стены, ни огня, ни стекла, ни тела на пути.
+func _line_off_board(a: Vector2i, b: Vector2i) -> bool:
+	var g := state.grid
+	return not g.in_bounds(a) or not g.in_bounds(b)
+
 ## Первый живой боец, стоящий НА ЛИНИИ между стрелком и целью (концы не считаются).
 ## Именно в него уходит выстрел, если стрелок бьёт сквозь чужую спину (#100).
 ## null = линия чистая, и пуля дойдёт до заявленной цели.
@@ -4540,6 +4641,8 @@ func _glass_cells_on_line(from_coord: Vector2i, to_coord: Vector2i) -> Array[Vec
 ## убивать его случайно всё так же было бы можно.
 func first_unit_on_line(from_coord: Vector2i, to_coord: Vector2i,
 		skip_allies_of: UnitInstance = null) -> UnitInstance:
+	if _line_off_board(from_coord, to_coord):
+		return null
 	# Шаги по линии вместо Combat.line_cells(): массив-посредник здесь не нужен, а
 	# функция стоит на пути КАЖДОГО выстрела. Проверка «конец линии» из старого цикла
 	# не переносится: line_cells() концы и так не отдавала, она была холостой.
@@ -4581,6 +4684,11 @@ func can_shoot(shooter: UnitInstance, target: UnitInstance) -> String:
 		return "No target"
 	if target.id == shooter.id:
 		return "Can't shoot yourself"
+	# СТРЕЛОК вне поля — зеркало проверки цели ниже (issue 2): сидящий в машине стреляет
+	# из неё только орудиями машины, а его собственная координата вынесена за карту, и
+	# любая линия от неё уходит за край сетки.
+	if shooter.aboard_vehicle_id != -1 or not state.grid.in_bounds(shooter.coord):
+		return "Shooter is not on the board"
 	# Боец В МАШИНЕ целью быть не может (#23): его координата — OFFBOARD (-9999,-9999),
 	# и она вне поля. is_on_firing_line() отвечает на неё «да» (по диагонали от почти
 	# любой клетки), после чего trench_protected() дёргает cell(OFFBOARD).feature_id на
@@ -4684,6 +4792,8 @@ func can_blast_cell(shooter: UnitInstance, cell: Vector2i) -> String:
 		return "Only the anti-tank can hit the ground"
 	if not state.grid.in_bounds(cell):
 		return "Target out of bounds"
+	if shooter.aboard_vehicle_id != -1 or not state.grid.in_bounds(shooter.coord):
+		return "Shooter is not on the board"
 	var c := state.grid.cell(cell)
 	if c.is_space:
 		return "Can't hit space — no floor"
@@ -4730,6 +4840,8 @@ func can_flame_cell(shooter: UnitInstance, cell: Vector2i) -> String:
 		return "Only the flamethrower can spray the ground"
 	if not state.grid.in_bounds(cell):
 		return "Target out of bounds"
+	if shooter.aboard_vehicle_id != -1 or not state.grid.in_bounds(shooter.coord):
+		return "Shooter is not on the board"
 	if cell == shooter.coord:
 		return "Pick a cell in front"
 	if state.grid.cell(cell).is_space:
@@ -5207,6 +5319,7 @@ func _resolve_vehicle_cannon(intent: VehicleCannonIntent) -> ActionResult:
 	var pre_area := cannon_blast_cells(veh, landing)
 	pre_area.append(landing)
 	_capture_visual_hold(res, pre_area)
+	_fx_lane(res, port, landing, veh.owner, "blast")  # issue 8: кто и куда бьёт пушкой
 	# Прямое попадание в ДОТ: бетон принимает снаряд целиком (2 прочности = 1 выстрел
 	# танка), осколочного поля вокруг не возникает.
 	if _pillbox_absorbs(landing, int(gun.get("vehicle_damage", 2)), res):

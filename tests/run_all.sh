@@ -10,7 +10,8 @@ EXTRA=""
 
 fail=0
 for script in tests/check_scripts.gd tests/run_codec.gd tests/run_headless.gd \
-              tests/run_lockstep.gd tests/run_player_actions.gd; do
+              tests/run_lockstep.gd tests/run_player_actions.gd \
+              tests/run_lobby_maps.gd tests/run_combat_safety.gd; do
   echo "=== $script ==="
   # shellcheck disable=SC2086
   "$GODOT" --headless --script "res://$script" $EXTRA

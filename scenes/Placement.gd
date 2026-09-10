@@ -646,6 +646,7 @@ func _draw() -> void:
 	if map == null:
 		return
 	draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
+	Sprites.set_base_transform(pan, Vector2(zoom, zoom))
 	var font := ThemeDB.fallback_font
 	# Поле рисуется ТЕМИ ЖЕ спрайтами и цветами, что и в бою (#100): раньше расстановка
 	# показывала лишь серые квадраты, и игрок расставлял отряд вслепую — мешки, окопы,

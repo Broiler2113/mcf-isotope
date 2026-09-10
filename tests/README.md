@@ -1,6 +1,7 @@
 # Regression harness
 
-Two headless runs, no engine window, no assets required.
+Headless runs, no engine window (the lobby check builds its scene without
+rendering it), no assets required.
 
 ```
 bash tests/run_all.sh            # verify
@@ -54,8 +55,24 @@ never does: digging with hand-picked dirt cells, a group move order, undo/redo,
 and refusing an end-turn or undo from a side that is not acting. Same
 host/client protocol as `run_lockstep.gd`, with per-action board comparison.
 
+**`run_lobby_maps.gd`** builds the real lobby scene and asserts that every map on
+disk — shipped in `res://maps` and saved by the editor in `user://maps` — is a row
+in its dropdown, that each row points at a file that still reads back as a map, and
+that rescanning the folders neither loses maps nor doubles them. It exists because
+"my saved maps are not in the list" has now been reported twice: the first cause
+(the app rename moved `user://`) was fixed in code nothing checked.
+
+**`run_combat_safety.gd`** covers three rules that only show up in play:
+a line of fire that starts or ends *off the board* (a soldier riding inside a
+vehicle sits at −9999, and every walker along a ray used to march off the grid
+from there — "Out of bounds get index '-509898'"); the AI anti-tank refusing a
+charge whose blast — on any of the six die rolls, shortfall included — would
+catch himself or a squadmate; and the shot cosmetics: one casing per round fired,
+a second burst from the same cell landing in its *own* spots, and one
+"who shot whom" lane per attack.
+
 ## Scope
 
-Neither run is evidence that the game *plays* correctly. They are evidence that
-it does not crash, does not deadlock the AI, and does not desync. Play the real
-game as well.
+None of these runs is evidence that the game *plays* correctly. They are evidence
+that it does not crash, does not deadlock the AI, and does not desync. Play the
+real game as well.
