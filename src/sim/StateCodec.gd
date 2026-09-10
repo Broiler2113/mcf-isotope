@@ -77,6 +77,10 @@ static func _encode_unit(u: UnitInstance) -> Dictionary:
 static func _encode_vehicle(v: Vehicle) -> Dictionary:
 	return {
 		"id": v.id, "type": v.type_id, "owner": v.owner,
+		# Узлы едут ЦЕЛИКОМ (веха «Modular tank system»): по одному durability машину
+		# уже не восстановить — разбитая ходовая и заклиненная башня живут в components.
+		"components": v.components.duplicate(),
+		"tower_dir": _xy(v.tower_locked_dir),
 		"durability": v.durability, "origin": _xy(v.origin), "size": _xy(v.size),
 		"facing": _xy(v.facing), "ap": v.ap,
 		"occupants": _copy(v.occupants), "corpse_slots": _copy(v.corpse_slots),
@@ -258,8 +262,17 @@ static func _decode_vehicle(raw: Dictionary) -> Dictionary:
 	var corpses: Array[String] = []
 	for type_id in raw.get("corpse_slots", []):
 		corpses.append(str(type_id))
+	# Старая запись (одно durability, без узлов) читается как машина с целыми узлами и
+	# заданным корпусом — иначе сохранения прежних партий открывались бы с нулевой бронёй.
+	var comps: Dictionary = {}
+	for comp: String in raw.get("components", {}):
+		comps[comp] = int(raw["components"][comp])
+	if comps.is_empty():
+		comps = v.components.duplicate()
+		comps[MCF.COMP_HULL] = int(raw.get("durability", 0))
 	return {
 		"obj": v, "id": v.id, "owner": v.owner,
+		"components": comps, "tower_locked_dir": _vec(raw.get("tower_dir"), Vector2i.ZERO),
 		"durability": v.durability, "origin": v.origin, "size": v.size,
 		"facing": _vec(raw.get("facing"), Vector2i(1, 0)), "ap": int(raw.get("ap", 0)),
 		"occupants": occupants, "corpse_slots": corpses, "seats": seats,

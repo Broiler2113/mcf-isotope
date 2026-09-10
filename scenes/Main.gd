@@ -246,6 +246,13 @@ var _info_label: Label
 var _init_label: RichTextLabel
 var _init_overlay: Control
 var _init_overlay_body: VBoxContainer
+## Панель узлов выбранной машины (веха «Modular tank system», §9). Показывается ТОЛЬКО
+## пока машина выбрана — постоянно висеть на экране этим числам незачем, — стоит над
+## журналом боя и, как остальные окна, таскается за шапку.
+var _comp_panel: PanelContainer = null
+var _comp_body: VBoxContainer = null
+var _comp_moved := false
+
 ## Бой машина-против-машины идёт сам и остановить его было нечем (item 4). Пока за
 ## столом есть человек, пауза не нужна: ход всё равно ждёт его действия. А когда обе
 ## стороны ведёт ИИ, партия отыгрывается сама собой, и посмотреть на позицию — или
@@ -1091,10 +1098,25 @@ func _handle_click(coord: Vector2i) -> void:
 			# Марксманн: клик по ЛЮБОЙ клетке задаёт направление, луч уходит вперёд (#49).
 			# Отказ (мало ОД, клик по себе) отдаём резолверу — он объяснит причину в журнале.
 			if _is_marksman(_selected_unit()) and coord != _selected_unit().coord:
+				# Луч выжигает НАЗВАННЫЙ узел (веха «Modular tank system»): если машина
+				# стоит прямо в точке прицела, спрашиваем какой.
+				var beam_foe := _vehicle_at_cell(coord)
+				if beam_foe != null:
+					var sid := selected_id
+					_open_component_picker(beam_foe, "Burn through", func(comp: String) -> void:
+						_submit(ShootIntent.new(sid, -1, -1, coord, comp)))
+					return
 				_submit(ShootIntent.new(selected_id, -1, -1, coord))
 				return
 			# Противотанкист: удар по пустой клетке пола (§3.14).
 			if item_cells.has(coord):
+				# Заряд в борт машины наводится на узел — за этим противотанкист и нужен.
+				var at_foe := _vehicle_at_cell(coord)
+				if at_foe != null and at_foe.owner != _viewing_side():
+					var sid2 := selected_id
+					_open_component_picker(at_foe, "Aim at", func(comp: String) -> void:
+						_submit(ShootIntent.new(sid2, -1, -1, coord, comp)))
+					return
 				_submit(ShootIntent.new(selected_id, -1, -1, coord))
 				return
 			if _is_own_active(occupant):
@@ -1252,6 +1274,15 @@ func _handle_click(coord: Vector2i) -> void:
 			_veh_back_to_menu()
 		Mode.VEH_CANNON:
 			if item_cells.has(coord):
+				# По вражеской машине снаряд наводится на УЗЕЛ (веха «Modular tank
+				# system»): спрашиваем куда, и лишь потом отдаём приказ. По земле и по
+				# пехоте выбирать нечего — там узлов нет.
+				var foe := _vehicle_at_cell(coord)
+				if foe != null and foe.owner != _viewing_side():
+					var vid := selected_vehicle_id
+					_open_component_picker(foe, "Aim at", func(comp: String) -> void:
+						_submit(VehicleCannonIntent.new(vid, coord, comp)))
+					return
 				_submit(VehicleCannonIntent.new(selected_vehicle_id, coord))
 				return
 			_veh_back_to_menu()
@@ -1320,6 +1351,8 @@ func _deselect() -> void:
 	item_cells = []
 	_menu.hide()
 	_picker.hide()
+	if _comp_panel != null:
+		_comp_panel.hide()  # машину сняли с выбора — панель узлов уходит с ней
 	_refresh_info()
 	queue_redraw()
 
@@ -1401,6 +1434,7 @@ func _select_vehicle(veh: Vehicle) -> void:
 	item_cells = []
 	_open_vehicle_menu(veh)
 	_refresh_info()
+	_refresh_component_panel()
 	queue_redraw()
 
 func _veh_back_to_menu() -> void:
@@ -2284,6 +2318,7 @@ func _refresh_pause_button() -> void:
 
 func _after_action() -> void:
 	_refresh_status()
+	_refresh_component_panel()
 	# Цепочка действий машины: переоткрыть её меню, пока она жива.
 	if selected_vehicle_id != -1:
 		var veh := _selected_vehicle()
@@ -3678,6 +3713,14 @@ func _reposition_hud_grip() -> void:
 	# Журнал боя — в левом-нижнем углу (item 6), тоже до первого ручного переноса (item 8).
 	if _log_panel != null and not _log_moved:
 		_log_panel.position = Vector2(12.0, vp.y - _log_panel.size.y - 12.0)
+	# Панель узлов машины (веха «Modular tank system») — НАД журналом боя, в том же
+	# левом краю: журнал остаётся на месте, а панель встаёт над ним ровно на время,
+	# пока машина выбрана. После ручного переноса её больше не двигаем (item 8).
+	if _comp_panel != null and _comp_panel.visible and not _comp_moved:
+		var log_top: float = vp.y - 12.0
+		if _log_panel != null:
+			log_top = _log_panel.position.y
+		_comp_panel.position = Vector2(12.0, log_top - _comp_panel.size.y - 8.0)
 	# Полоса повтора (M12) — по центру внизу, как у любого проигрывателя.
 	if _replay_bar != null:
 		_replay_bar.position = Vector2((vp.x - _replay_bar.size.x) * 0.5,
@@ -3827,6 +3870,7 @@ func _build_ui() -> void:
 	_net_status = null
 
 	_build_log_panel()
+	_build_component_panel()
 
 	# Всплывающее меню действий и выбор числа выстрелов — в общем оконном стиле
 	# SteamChrome (рамка + шапка), как остальной интерфейс. Тело красим один раз,
@@ -3877,6 +3921,91 @@ func _build_log_panel() -> void:
 	_log_label.scroll_following = true
 	_log_body_wrap = SteamChrome.pad(_log_label, 8, 6)
 	frame.add_child(_log_body_wrap)
+
+## Панель прочности узлов машины (веха «Modular tank system», §9).
+##
+## Постоянно на экране этих чисел нет: четыре шкалы на каждую машину — это шум, а нужны
+## они ровно в тот момент, когда машину выбрали и решают, куда бить или что чинить.
+## Поэтому панель живёт скрытой и всплывает над журналом боя при выборе машины.
+func _build_component_panel() -> void:
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(240, 0)
+	SteamChrome.apply_panel(panel)
+	panel.hide()
+	_ui_layer.add_child(panel)
+	_comp_panel = panel
+	var frame := VBoxContainer.new()
+	frame.add_theme_constant_override("separation", 0)
+	panel.add_child(frame)
+	var header := SteamChrome.header_bar("Vehicle")
+	_make_panel_draggable(panel, header, func() -> void: _comp_moved = true)
+	frame.add_child(header)
+	_comp_body = VBoxContainer.new()
+	_comp_body.add_theme_constant_override("separation", 3)
+	frame.add_child(SteamChrome.pad(_comp_body, 8, 6))
+
+## Перерисовать панель узлов под текущий выбор. Машина не выбрана — панель прячется.
+func _refresh_component_panel() -> void:
+	if _comp_panel == null or _comp_body == null:
+		return
+	var veh := _selected_vehicle()
+	if veh == null or state == null:
+		_comp_panel.hide()
+		return
+	for c in _comp_body.get_children():
+		c.queue_free()
+	var title := Label.new()
+	title.text = "%s — %s" % [
+		VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id), _side_label(veh.owner)]
+	title.add_theme_font_size_override("font_size", 12)
+	_comp_body.add_child(title)
+	for comp: String in MCF.COMPONENT_ORDER:
+		if not veh.has_component(comp):
+			continue
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 6)
+		var name_lbl := Label.new()
+		name_lbl.text = String(MCF.COMPONENT_NAMES.get(comp, comp))
+		name_lbl.custom_minimum_size = Vector2(74, 0)
+		name_lbl.add_theme_font_size_override("font_size", 11)
+		row.add_child(name_lbl)
+		var left: int = veh.component(comp)
+		var cap: int = maxi(1, veh.component_max(comp))
+		var bar := ProgressBar.new()
+		bar.max_value = cap
+		bar.value = left
+		bar.show_percentage = false
+		bar.custom_minimum_size = Vector2(80, 12)
+		bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(bar)
+		var num := Label.new()
+		num.text = "%d/%d" % [left, cap]
+		num.add_theme_font_size_override("font_size", 11)
+		# Выбитый узел подписан красным и словом, а не только пустой шкалой: по цвету
+		# одному игрок не обязан догадываться, ЧТО именно сломалось.
+		if left == 0:
+			num.text = "OUT"
+			num.add_theme_color_override("font_color", Color(0.95, 0.35, 0.3))
+		row.add_child(num)
+		_comp_body.add_child(row)
+	# Что именно отвалилось — словами, чтобы не держать таблицу в голове.
+	var notes: Array[String] = []
+	if not veh.can_drive():
+		notes.append("immobilised")
+	if veh.has_component(MCF.COMP_GUN) and not veh.can_fire_gun():
+		notes.append("gun out")
+	if veh.tower_jammed():
+		notes.append("tower jammed")
+	if not notes.is_empty():
+		var note := Label.new()
+		note.text = ", ".join(notes)
+		note.add_theme_font_size_override("font_size", 11)
+		note.add_theme_color_override("font_color", Color(0.95, 0.6, 0.35))
+		_comp_body.add_child(note)
+	_comp_panel.show()
+	if not _comp_moved:
+		_comp_panel.call_deferred("reset_size")
+		call_deferred("_reposition_hud_grip")
 
 ## Полоса управления повтором (item 53) внизу экрана: в начало, шаг назад,
 ## пуск/пауза, шаг вперёд, скорость, в конец. Строится только в режиме просмотра —
@@ -4642,7 +4771,15 @@ func _open_menu(unit: UnitInstance) -> void:
 		if controllable:
 			var det_btn := Button.new()
 			det_btn.text = "Detonate"
-			det_btn.pressed.connect(_submit.bind(DroneDetonateIntent.new(unit.id)))
+			# Подрыв дрона узел не разыгрывает (§4): игрок указывает, и туда и приходится.
+			var under := _vehicle_at_cell(unit.coord)
+			if under != null:
+				var did := unit.id
+				det_btn.pressed.connect(func() -> void:
+					_open_component_picker(under, "Detonate on", func(comp: String) -> void:
+						_submit(DroneDetonateIntent.new(did, comp))))
+			else:
+				det_btn.pressed.connect(_submit.bind(DroneDetonateIntent.new(unit.id)))
 			vb.add_child(det_btn)
 	elif unit.is_held():
 		# Удерживаемый юнит может только пытаться освободиться (§3.4).
@@ -4747,6 +4884,21 @@ func _open_menu(unit: UnitInstance) -> void:
 		# Инженер/шахтёр: слом укреплений (§3.7).
 		if not resolver.breakable_cells(unit).is_empty():
 			_act_btn(vb, "Demolish Fortification", _enter_break, unit.remaining_ap > 0)
+
+		# Инженер чинит свою машину (веха «Modular tank system», §8): одно очко узлу
+		# за 1 ОД. Кнопка на каждую машину рядом — их редко больше одной, а выбирать
+		# «какую именно» отдельным окном ради этого не стоит.
+		for veh: Vehicle in resolver.repairable_vehicles(unit):
+			var fix_btn := Button.new()
+			fix_btn.text = "Repair %s (1 AP)" % VehicleDB.get_vehicle(veh.type_id).get(
+					"name", veh.type_id)
+			var uid := unit.id
+			var target_veh := veh
+			fix_btn.pressed.connect(func() -> void:
+				_open_component_picker(target_veh, "Repair", func(comp: String) -> void:
+					_submit(RepairVehicleIntent.new(uid, target_veh.id, comp)),
+					resolver.repairable_components(state.get_unit(uid), target_veh)))
+			vb.add_child(fix_btn)
 
 		# Отдельной кнопки «подобрать труп» больше нет (#7): тело поднимается из режима
 		# «рука» кликом по клетке, как и всё остальное, что можно взять.
@@ -4861,6 +5013,56 @@ func _open_picker(target: UnitInstance, available: int) -> void:
 	vb.add_child(all_btn)
 	_anchor_menu(_picker)
 	_picker.show()
+
+## Спросить, по какому УЗЛУ машины бить (веха «Modular tank system», §3.1b).
+##
+## Выбор обязателен: прицельный выстрел идёт с +1, и «просто выстрелить» — это тот же
+## выстрел с названным узлом. Разбитые узлы в список не попадают: по ним нельзя целиться
+## и каскад их всё равно пропустит.
+##
+## on_pick принимает id узла. Панель — та же, что для числа выстрелов: игрок уже знает
+## это окно, и второй такой же незачем.
+## only — список узлов, которые показывать. Пустой = все ЖИВЫЕ (так стреляют: по
+## разбитому узлу целиться нельзя). Ремонт передаёт свой список — там как раз выбитые
+## узлы и нужны, иначе чинить было бы нечего.
+func _open_component_picker(veh: Vehicle, title: String, on_pick: Callable,
+		only: Array = []) -> void:
+	_menu.hide()
+	for c in _picker.get_children():
+		c.queue_free()
+	var vb := _scroll_menu(_picker, title)
+	for comp: String in MCF.COMPONENT_ORDER:
+		if only.is_empty():
+			if not veh.component_alive(comp):
+				continue
+		elif not only.has(comp):
+			continue
+		var b := Button.new()
+		if only.is_empty():
+			var need: int = clampi(
+				int(MCF.COMPONENT_NEED.get(comp, 6)) - MCF.COMPONENT_AIM_BONUS, 1, 6)
+			b.text = "%s  %d/%d  (%d+)" % [
+				MCF.COMPONENT_NAMES.get(comp, comp), veh.component(comp),
+				veh.component_max(comp), need]
+		else:
+			b.text = "%s  %d/%d" % [MCF.COMPONENT_NAMES.get(comp, comp),
+				veh.component(comp), veh.component_max(comp)]
+		b.pressed.connect(func() -> void:
+			_picker.hide()
+			on_pick.call(comp))
+		vb.add_child(b)
+	_anchor_menu(_picker)
+	_picker.show()
+
+## Машина под клеткой, если по ней вообще есть смысл выбирать узел.
+func _vehicle_at_cell(coord: Vector2i) -> Vehicle:
+	if state == null or not state.grid.in_bounds(coord):
+		return null
+	var vid := state.grid.vehicle_at(coord)
+	if vid == -1:
+		return null
+	var veh := state.get_vehicle(vid)
+	return veh if veh != null and veh.alive() and not veh.live_components().is_empty() else null
 
 ## Выбор станции для запуска дрона (item 17). Клеток немного (максимум восемь
 ## соседей), поэтому список — просто кнопки с координатами; подсветка на доске

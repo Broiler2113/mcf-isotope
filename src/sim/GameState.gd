@@ -123,6 +123,7 @@ func snapshot() -> Dictionary:
 	for v: Vehicle in vehicles.values():
 		vs.append({
 			"obj": v, "id": v.id, "owner": v.owner, "durability": v.durability,
+			"components": v.components.duplicate(), "tower_locked_dir": v.tower_locked_dir,
 			"origin": v.origin, "size": v.size, "facing": v.facing, "ap": v.ap,
 			"occupants": v.occupants.duplicate(),
 			"corpse_slots": v.corpse_slots.duplicate(),
@@ -192,6 +193,11 @@ func restore(snap: Dictionary) -> void:
 	for rec: Dictionary in snap["vehicles"]:
 		var v: Vehicle = rec["obj"]
 		v.owner = rec["owner"]
+		# Узлы восстанавливаем ДО корпуса: durability — это ячейка components, и запись
+		# в него после присвоения словаря иначе затёрлась бы старым значением.
+		if rec.has("components"):
+			v.components = (rec["components"] as Dictionary).duplicate()
+		v.tower_locked_dir = rec.get("tower_locked_dir", Vector2i.ZERO)
 		v.durability = rec["durability"]
 		v.origin = rec["origin"]
 		v.size = rec["size"]

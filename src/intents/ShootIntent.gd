@@ -11,8 +11,13 @@ var shots: int = -1
 ## Ignored unless target_id < 0. Sentinel (-999,-999) = no cell.
 var target_cell: Vector2i = Vector2i(-999, -999)
 
-func _init(p_actor_id: int, p_target_id: int, p_shots: int = -1, p_target_cell: Vector2i = Vector2i(-999, -999)) -> void:
+## Узел машины, по которому целится стрелок (веха «Modular tank system»): "" = узел не
+## назван, и попадание разбирается каскадом. Для выстрела по пехоте не значит ничего.
+var component: String = ""
+
+func _init(p_actor_id: int, p_target_id: int, p_shots: int = -1, p_target_cell: Vector2i = Vector2i(-999, -999), p_component: String = "") -> void:
 	super(p_actor_id)
 	target_id = p_target_id
 	shots = p_shots
 	target_cell = p_target_cell
+	component = p_component

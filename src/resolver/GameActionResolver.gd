@@ -240,6 +240,8 @@ func _dispatch(intent: Intent) -> ActionResult:
 		return _resolve_vehicle_move(intent)
 	elif intent is VehicleCannonIntent:
 		return _resolve_vehicle_cannon(intent)
+	elif intent is RepairVehicleIntent:
+		return _resolve_repair_vehicle(intent)
 	elif intent is VehicleMeleeIntent:
 		return _resolve_vehicle_melee(intent)
 	elif intent is VehicleUnloadCorpseIntent:
@@ -436,7 +438,7 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 		var ground_reason := can_blast_cell(shooter, intent.target_cell)
 		if ground_reason != "":
 			return ActionResult.fail(ground_reason)
-		return _resolve_anti_tank(shooter, intent.target_cell)
+		return _resolve_anti_tank(shooter, intent.target_cell, intent.component)
 
 	# Огнемётчик может пустить струю по пустой клетке пола (как противотанкист): струя
 	# идёт в её направлении, поджигает пол и убивает всех на пути.
@@ -452,7 +454,7 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 		var laser_reason := can_laser_cell(shooter, intent.target_cell)
 		if laser_reason != "":
 			return ActionResult.fail(laser_reason)
-		return _resolve_laser(shooter, intent.target_cell)
+		return _resolve_laser(shooter, intent.target_cell, intent.component)
 
 	var target := state.get_unit(intent.target_id)
 	var reason := can_shoot(shooter, target)
@@ -477,11 +479,11 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 	# Спецстрельба (§3.13, §3.14) — отдельная геометрия, без дробления действия.
 	match shooter.stats.special_ability_id:
 		MCF.ABILITY_ANTI_TANK:
-			return _resolve_anti_tank(shooter, target.coord)
+			return _resolve_anti_tank(shooter, target.coord, intent.component)
 		MCF.ABILITY_FLAMETHROWER:
 			return _resolve_flame(shooter, target.coord)
 		MCF.ABILITY_MARKSMAN:
-			return _resolve_laser(shooter, target.coord)
+			return _resolve_laser(shooter, target.coord, intent.component)
 		MCF.ABILITY_ASSAULT:
 			return _resolve_assault(shooter, target)
 
@@ -669,7 +671,9 @@ func _resolve_cancel_shot(intent: CancelShotIntent) -> ActionResult:
 
 # --- Противотанкист (§3.14): выстрел-взрыв, авто-поражение в радиусе 1 ---
 ## center — клетка эпицентра (координата цели ИЛИ пустой клетки пола, §3.14).
-func _resolve_anti_tank(shooter: UnitInstance, center: Vector2i) -> ActionResult:
+## center — куда ложится заряд; aimed — узел машины, если стрелок его назвал.
+func _resolve_anti_tank(shooter: UnitInstance, center: Vector2i, aimed: String = "") -> ActionResult:
+	_aimed_component = aimed
 	if shooter.remaining_ap <= 0:
 		return ActionResult.fail("Unit has no AP left")
 	shooter.remaining_ap -= 1
@@ -717,7 +721,8 @@ func _resolve_anti_tank(shooter: UnitInstance, center: Vector2i) -> ActionResult
 	# Технике взрыв тоже вредит (#67): раньше противотанкист выкашивал пехоту вокруг
 	# танка, а сам танк оставался с нетронутой прочностью. Снимаем единицу с каждой
 	# машины, чей след задет взрывом.
-	_damage_vehicles_in_area(area, landing, MCF.ANTI_TANK_VEHICLE_DAMAGE, -1, result, "anti-tank")
+	_damage_vehicles_in_area(area, landing, MCF.COMPONENT_DAMAGE_ANTI_TANK, -1, result,
+		shooter.stats.display_name, _aimed_component)
 	if killed_names.is_empty():
 		result.log("… nobody destroyed")
 	else:
@@ -1022,7 +1027,10 @@ func _extinguish_cell(cell: GridCell) -> bool:
 # --- Марксманн (§3.13): лазер с потенциалом 10, пробитие, 2 ОД ---
 ## Целиться можно и в бойца, и просто в НАПРАВЛЕНИЕ (#49): луч уходит по лучу от стрелка
 ## и летит вперёд, пока хватает потенциала, — точная клетка прицела роли не играет.
-func _resolve_laser(shooter: UnitInstance, aim: Vector2i) -> ActionResult:
+## aimed — узел машины, который марксман назвал заранее. Луч узел не разыгрывает: он
+## бьёт туда, куда его навели, и снимает по очку за каждые LASER_POTENTIAL_PER_COMPONENT
+## потенциала — больше, чем в узле осталось, снять нельзя.
+func _resolve_laser(shooter: UnitInstance, aim: Vector2i, aimed: String = "") -> ActionResult:
 	if shooter.remaining_ap < MCF.MARKSMAN_AP_COST:
 		return ActionResult.fail("Laser needs %d AP" % MCF.MARKSMAN_AP_COST)
 	var step := _step_toward(shooter.coord, aim)
@@ -1050,7 +1058,12 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i) -> ActionResult:
 				var veh := state.get_vehicle(int(rec["vehicle_id"]))
 				var dmg := int(rec["damage"])
 				if veh != null and dmg > 0:
-					_apply_vehicle_damage(veh, dmg, "laser", result)
+					# Луч выжигает НАЗВАННЫЙ узел, без бросков — как подрыв дрона. Не
+					# назвали (или узла уже нет) — уходит в корпус: луч всё равно
+					# упирается в броню и там же гаснет.
+					var comp: String = aimed if veh.component_alive(aimed) else MCF.COMP_HULL
+					_damage_component(veh, comp, mini(dmg, veh.component(comp)),
+						"laser", result)
 			"shield", "unit":
 				var occ: UnitInstance = cell.occupant
 				if destroyed and occ != null and occ.is_alive():
@@ -1608,6 +1621,14 @@ func _resolve_drop_corpse(intent: DropCorpseIntent) -> ActionResult:
 func _fx(res: ActionResult, ev: Dictionary) -> void:
 	if res != null:
 		res.fx.append(ev)
+
+## Узел, который назвал стрелок текущего действия (веха «Modular tank system»).
+##
+## Живёт ровно на время одного resolve() и ставится в самом начале обработки выстрела.
+## Отдельным полем, а не параметром, потому что путь от намерения до урона машине идёт
+## через полдюжины функций (_blast, зачистка области, обход машин), и протаскивать
+## сквозь них одну строку значило бы переписать их сигнатуры ради неё одной.
+var _aimed_component: String = ""
 
 ## Дорожка «кто в кого» (issue 8: «add visual clues that would tell the player who is
 ## shooting at who»). Кладётся КАЖДОЙ атакой — пулей, лучом, струёй, зарядом, пушкой,
@@ -3478,6 +3499,7 @@ func _resolve_drone_detonate(intent: DroneDetonateIntent) -> ActionResult:
 		return ActionResult.fail("It's the other player's turn")
 	if not operator_controls(drone):
 		return ActionResult.fail("Operator not at the station")
+	_aimed_component = intent.component
 	return _drone_explode(drone, drone.coord, "detonated")
 
 ## Взрыв дрона: снимаем его с поля (не оставляет труп) и детонируем как противотанкист.
@@ -3495,7 +3517,9 @@ func _drone_explode(drone: UnitInstance, center: Vector2i, why: String) -> Actio
 	var killed := _blast(center, result, area)
 	# Дрон, подорвавшийся над техникой, снимает с неё 1 прочность (item 14): раньше
 	# взрыв дрона выкашивал пехоту вокруг машины, а сам корпус не трогал вовсе.
-	_damage_vehicles_in_area(area, center, MCF.DRONE_EXPLOSION_DAMAGE, -1, result, "drone")
+	# Подрыв дрона узел НЕ разыгрывает (§4): игрок указал — туда и пришлось.
+	_damage_vehicles_in_area(area, center, MCF.DRONE_EXPLOSION_DAMAGE, -1, result, "drone",
+		_aimed_component, false)
 	if killed.is_empty():
 		result.log("… nobody destroyed")
 	else:
@@ -5056,11 +5080,88 @@ func _resolve_vehicle_melee(intent: VehicleMeleeIntent) -> ActionResult:
 	if hit:
 		res.log("%s wrenches the %s (roll %d, need %d+)!" % [
 			unit.stats.display_name, veh_name, roll, MCF.MINER_VEHICLE_HIT_NEED])
-		_apply_vehicle_damage(veh, MCF.MINER_VEHICLE_DAMAGE, "miner", res)
+		# Шахтёр ковыряет ИМЕННО КОРПУС (§5): ни выбора узла, ни каскада — он лезет
+		# монтировкой под броневой лист, а не выцеливает башню.
+		_damage_component(veh, MCF.COMP_HULL, MCF.MINER_VEHICLE_DAMAGE, "miner", res)
 	else:
 		res.log("%s strikes the %s but the hull holds (roll %d, need %d+)." % [
 			unit.stats.display_name, veh_name, roll, MCF.MINER_VEHICLE_HIT_NEED])
 	return res
+
+## Ремонт узла машины инженером (веха «Modular tank system», §8).
+##
+## 1 ОД — одно очко прочности любому узлу на выбор, не выше его стартового значения.
+## Узел, вернувшийся выше нуля, ТУТ ЖЕ снова работает: отдельного «включения» нет —
+## починил ходовую, и машина в этот же ход поедет.
+##
+## Чего ремонт НЕ умеет: поднимать машину с разбитым корпусом. Корпус на нуле — это
+## конец, а не поломка: экипаж погиб, машина сгорела и осталась на поле обломком.
+## Чинить чужую технику тоже нельзя — инженер обслуживает свою армию, а не любую броню,
+## до которой смог дойти.
+func _resolve_repair_vehicle(intent: RepairVehicleIntent) -> ActionResult:
+	var unit := state.get_unit(intent.actor_id)
+	var err := _validate_actor(unit)
+	if err != "":
+		return ActionResult.fail(err)
+	if unit.stats.special_ability_id != MCF.ABILITY_ENGINEER:
+		return ActionResult.fail("Only an engineer can repair a vehicle")
+	if unit.remaining_ap <= 0:
+		return ActionResult.fail("Unit has no AP left")
+	if unit.aboard_vehicle_id != -1:
+		return ActionResult.fail("Step out of the vehicle to work on it")
+	var veh := state.get_vehicle(intent.vehicle_id)
+	if veh == null:
+		return ActionResult.fail("No such vehicle")
+	if not veh.alive():
+		return ActionResult.fail("The hull is gone — nothing left to repair")
+	if veh.owner != unit.owner and not state.roster.are_allies(veh.owner, unit.owner):
+		return ActionResult.fail("That's not your vehicle")
+	if not _adjacent_to_vehicle(unit.coord, veh):
+		return ActionResult.fail("Must stand next to the vehicle")
+	var comp: String = intent.component
+	if not veh.has_component(comp):
+		return ActionResult.fail("This vehicle has no such component")
+	var cap := veh.component_max(comp)
+	if veh.component(comp) >= cap:
+		return ActionResult.fail("%s is already sound" % MCF.COMPONENT_NAMES.get(comp, comp))
+	unit.remaining_ap -= 1
+	var was := veh.component(comp)
+	veh.components[comp] = mini(cap, was + 1)
+	var res := ActionResult.new()
+	res.ok = true
+	var veh_name: String = VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)
+	var label: String = MCF.COMPONENT_NAMES.get(comp, comp)
+	res.log("%s repairs the %s's %s (%d → %d) [AP: %d]" % [
+		unit.stats.display_name, veh_name, label, was, veh.component(comp),
+		unit.remaining_ap])
+	if was == 0:
+		res.log("%s: %s is back in service." % [veh_name, label])
+	return res
+
+## Узлы машины, которые инженер может починить прямо сейчас — для меню и подсветки.
+## Условия ДОСЛОВНО те же, что проверяет _resolve_repair_vehicle.
+func repairable_components(unit: UnitInstance, veh: Vehicle) -> Array:
+	var out: Array = []
+	if unit == null or veh == null or not veh.alive():
+		return out
+	if unit.stats.special_ability_id != MCF.ABILITY_ENGINEER or unit.remaining_ap <= 0:
+		return out
+	if unit.aboard_vehicle_id != -1 or not _adjacent_to_vehicle(unit.coord, veh):
+		return out
+	if veh.owner != unit.owner and not state.roster.are_allies(veh.owner, unit.owner):
+		return out
+	for comp: String in MCF.COMPONENT_ORDER:
+		if veh.has_component(comp) and veh.component(comp) < veh.component_max(comp):
+			out.append(comp)
+	return out
+
+## Машины рядом с инженером, которым есть что чинить (для кнопки в меню).
+func repairable_vehicles(unit: UnitInstance) -> Array:
+	var out: Array = []
+	for veh: Vehicle in state.all_vehicles():
+		if not repairable_components(unit, veh).is_empty():
+			out.append(veh)
+	return out
 
 ## Вытащить труп из машины на свободную соседнюю клетку (item 18): павший экипаж
 ## занимает место, его выгружают, чтобы освободить слот. Стоит 1 ОД.
@@ -5264,6 +5365,10 @@ func _resolve_vehicle_turn(intent: VehicleTurnIntent) -> ActionResult:
 		return ActionResult.fail(err)
 	if veh.facing == Vector2i.ZERO:
 		return ActionResult.fail("This vehicle has no facing")
+	# Разбитая ходовая держит машину намертво: ни ехать, ни доворачивать корпус
+	# (веха «Modular tank system»). Разворот — работа тех же гусениц.
+	if not veh.can_drive():
+		return ActionResult.fail("The tracks are knocked out")
 	# Только четыре стороны света (item 2): диагональный разворот запрещён.
 	if not DIR4.has(intent.facing):
 		return ActionResult.fail("Tanks turn only up/down/left/right")
@@ -5285,6 +5390,8 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 	var err := _validate_vehicle(veh, credit)
 	if err != "":
 		return ActionResult.fail(err)
+	if not veh.can_drive():
+		return ActionResult.fail("The tracks are knocked out")
 	var dir: Vector2i = intent.dir
 	if veh.facing != Vector2i.ZERO and dir != veh.facing and dir != -veh.facing:
 		return ActionResult.fail("Tank can only drive along its facing")
@@ -5317,8 +5424,14 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 	var driven: Dictionary = {}
 	for cc in (plan["crush_cells"] + plan["scatter_cells"] + plan["ram_cells"]):
 		driven[cc] = true
-	for fc in veh.footprint_from(veh.origin + dir * int(plan["steps"])):
-		driven[fc] = true
+	# КАЖДАЯ клетка, которую след машины замёл по дороге, а не только раздавленные и
+	# конечная стоянка. Прежний список брал лишь их — и мина, по которой танк ПРОЕХАЛ,
+	# не считалась перееханной: под гусеницей она рвалась, только если машина на ней
+	# останавливалась или если клетка чем-то была занята. Пустой пол с миной проезжали
+	# насквозь бесплатно.
+	for i in range(1, int(plan["steps"]) + 1):
+		for fc in veh.footprint_from(veh.origin + dir * i):
+			driven[fc] = true
 	for mc: Vector2i in driven:
 		var mcell := state.grid.cell(mc)
 		if mcell == null:
@@ -5326,18 +5439,30 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 		if mcell.feature_id != MCF.FEATURE_MINE and mcell.feature_id != MCF.FEATURE_AV_MINE:
 			continue
 		var av := mcell.feature_id == MCF.FEATURE_AV_MINE
-		var dmg: int = MCF.AV_MINE_VEHICLE_DAMAGE if av else MCF.MINE_VEHICLE_DAMAGE
 		mcell.clear_feature()
 		notify_cell_changed(mc)
 		_fx(res, {"fx": "debris", "at": NOWHERE, "cells": [mc]})
 		res.log("The %s rolls over %s at (%d, %d)!" % [
 			VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id),
 			"an anti-vehicle mine" if av else "a mine", mc.x, mc.y])
-		_apply_vehicle_damage(veh, dmg, "mine", res)
+		# ПРОТИВОТАНКОВАЯ мина бьёт по ходовой без всякого броска — она для того и
+		# ставится. Ходовая уже разбита — заряд уходит в корпус: под днищем рвётся то же
+		# самое, и пропадать ему некуда.
+		# ПРОТИВОПЕХОТНАЯ машине больше не вредит вовсе: она рассчитана на человека, и
+		# считать её ещё и противотанковой значило бы, что противотанковая не нужна.
+		if av:
+			var comp: String = MCF.COMP_TRACKS if veh.component_alive(MCF.COMP_TRACKS) \
+					else MCF.COMP_HULL
+			_damage_component(veh, comp, MCF.AV_MINE_VEHICLE_DAMAGE, "mine", res)
 	# Всё под гусеницами сносится в пол (трупы, укрытия, тараненные стены).
+	# Ежей считаем ЗДЕСЬ, до зачистки: clear_feature() ниже сотрёт их молча, и после
+	# переезда узнать, сколько их было, стало бы неоткуда.
 	var flattened: Array[Vector2i] = []
+	var hedgehogs := 0
 	for cell_coord in (plan["crush_cells"] + plan["scatter_cells"] + plan["ram_cells"]):
 		var c := state.grid.cell(cell_coord)
+		if c.feature_id == MCF.FEATURE_HEDGEHOG:
+			hedgehogs += 1
 		c.occupant = null
 		c.clear_feature()
 		c.corpse_count = 0
@@ -5367,11 +5492,20 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 	res.log("%s drives %d cell(s). (AP %d, %d move left)" % [
 		VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id),
 		int(plan["steps"]), veh.ap, veh.move_credit])
-	# Щитоносец глушит машину и наносит ей урон (§таблица столкновений).
-	var self_dmg := int(plan["self_damage"])
-	if self_dmg > 0:
-		res.log("Shield bearer halts the vehicle (−%d durability)." % self_dmg)
-		_apply_vehicle_damage(veh, self_dmg, "collision", res)
+	# Щитоносец глушит машину и калечит ей ХОДОВУЮ (§таблица столкновений): плита
+	# упирается в гусеницу, а не в броню, поэтому урон всегда туда и всегда 2.
+	if int(plan["self_damage"]) > 0:
+		res.log("Shield bearer halts the vehicle.")
+		_damage_component(veh, MCF.COMP_TRACKS, MCF.COMPONENT_DAMAGE_SHIELD,
+			"collision", res)
+	# Противотанковый ёж рвёт гусеницу, но машину не останавливает — она проходит
+	# насквозь, ломая конструкцию. Считается ОДИН раз за переезд, сколько бы ежей ни
+	# смело: это одна поездка по одному ежовому полю, а не отдельная авария на каждом.
+	if hedgehogs > 0:
+		res.log("The %s grinds through %d hedgehog(s)." % [
+			VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id), hedgehogs])
+		_damage_component(veh, MCF.COMP_TRACKS, MCF.COMPONENT_DAMAGE_HEDGEHOG,
+			"hedgehog", res)
 	return res
 
 # --- Главная пушка танка (взрыв-ромб радиуса 2, #63) ---
@@ -5384,6 +5518,10 @@ func _resolve_vehicle_cannon(intent: VehicleCannonIntent) -> ActionResult:
 	var gun: Dictionary = spec.get("weapons", {}).get("main_gun", {})
 	if gun.is_empty():
 		return ActionResult.fail("This vehicle has no cannon")
+	_aimed_component = intent.component
+	# Разбитое орудие не стреляет (веха «Modular tank system»).
+	if not veh.can_fire_gun():
+		return ActionResult.fail("The main gun is knocked out")
 	if veh.cannon_shots_this_round >= int(gun.get("max_per_turn", 2)):
 		return ActionResult.fail("Cannon already fired twice this turn")
 	if not state.grid.in_bounds(intent.target):
@@ -5402,8 +5540,22 @@ func _resolve_vehicle_cannon(intent: VehicleCannonIntent) -> ActionResult:
 	# проверяется тем же los_blocked, что и у пехоты: он покрывает всё сразу.
 	if los_blocked(port, intent.target):
 		return ActionResult.fail("Line of fire is blocked")
+	# Заклиненная башня (tower = 0) не поворачивается: стрелять можно только туда же,
+	# куда смотрел последний выстрел. Направление хранится ОТНОСИТЕЛЬНО корпуса, так что
+	# развернуть машину — законный способ переприцелиться, а вот выбрать новый сектор,
+	# стоя на месте, уже нельзя. Не стреляла ни разу — заклинившая башня не смотрит
+	# никуда, и до ремонта орудие молчит.
+	var fire_dir := Vector2i(signi(intent.target.x - port.x), signi(intent.target.y - port.y))
+	if veh.tower_jammed():
+		var locked := veh.tower_world_dir()
+		if locked == Vector2i.ZERO:
+			return ActionResult.fail("The tower is jammed and has never been laid")
+		if fire_dir != locked:
+			return ActionResult.fail("The tower is jammed — it fires only where it last did")
 
 	veh.ap -= int(gun.get("ap_cost", 1))
+	# Куда смотрел ствол в этот раз — на случай, если башню собьют следующим попаданием.
+	veh.remember_shot_dir(fire_dir)
 	veh.cannon_shots_this_round += 1
 	var res := ActionResult.new()
 	res.ok = true
@@ -5441,7 +5593,8 @@ func _resolve_vehicle_cannon(intent: VehicleCannonIntent) -> ActionResult:
 	for n in killed:
 		res.log("%s killed in the blast!" % n)
 	# Технике — 2 прочности (§техника). Все машины, чей след задет ромбом.
-	_damage_vehicles_in_area(area, landing, int(gun.get("vehicle_damage", 2)), veh.id, res)
+	_damage_vehicles_in_area(area, landing, MCF.COMPONENT_DAMAGE_CANNON, veh.id, res,
+		String(spec.get("name", veh.type_id)), _aimed_component)
 	if killed.is_empty():
 		res.log("… no infantry caught.")
 	return res
@@ -5481,6 +5634,11 @@ func cannon_port(veh: Vehicle, target: Vector2i) -> Vector2i:
 ## в UI. Учитывает амбразуры (#62), дальность и перекрытие линии огня (#58, #70).
 func cannon_target_cells(veh: Vehicle, limit_to: Dictionary = {}) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
+	# Подсветка обязана совпадать с тем, что примет резолвер: разбитое орудие не
+	# стреляет вовсе, а заклиненная башня — только вдоль своего последнего сектора.
+	if veh != null and (not veh.can_fire_gun()
+			or (veh.tower_jammed() and veh.tower_world_dir() == Vector2i.ZERO)):
+		return out
 	if veh == null or not veh.alive():
 		return out
 	var gun: Dictionary = VehicleDB.get_vehicle(veh.type_id).get(
@@ -5526,8 +5684,12 @@ func cannon_target_cells(veh: Vehicle, limit_to: Dictionary = {}) -> Array[Vecto
 ## это ведает _blast(), и правило её не касается.
 ##
 ## center — та самая точка разрыва (место падения заряда, а не центр области).
+## aimed — узел, который назвал стрелок; "" = стрелка нет (детонация соседней машины),
+## тогда узел выбирает каскад. roll_location=false — узел задан НАПРЯМУЮ, без бросков
+## (подрыв дрона: игрок указывает узел, и он гарантированно его и получает).
 func _damage_vehicles_in_area(area: Array[Vector2i], center: Vector2i, amount: int,
-		source_id: int, res: ActionResult, source: String = "cannon") -> void:
+		source_id: int, res: ActionResult, source: String = "cannon",
+		aimed: String = "", roll_location: bool = true) -> void:
 	var in_area := {}
 	for c: Vector2i in area:
 		in_area[c] = true
@@ -5543,23 +5705,123 @@ func _damage_vehicles_in_area(area: Array[Vector2i], center: Vector2i, amount: i
 				direct = true
 				break
 		if direct:
-			_apply_vehicle_damage(veh, amount, source, res)
+			if not roll_location:
+				_damage_component(veh, aimed, amount, source, res)
+			else:
+				var comp := _resolve_hit_location(veh, aimed, res, source)
+				if comp != "":
+					_damage_component(veh, comp, amount, source, res)
 
-## Нанести машине урон прочности; для танка — попадание по случайному члену
-## экипажа за каждую единицу урона; при 0 прочности — уничтожение.
-func _apply_vehicle_damage(veh: Vehicle, amount: int, source: String, res: ActionResult) -> void:
-	if not veh.alive():
+## Разобрать ПОПАДАНИЕ по машине и решить, какой узел пострадал (веха «Modular tank
+## system», §3.1).
+##
+## Стрелок называет узел заранее и бьёт по нему с надбавкой за прицел (+1). Не попал —
+## удар не пропадает: он сходит по каскаду от самого труднопопадаемого узла к самому
+## лёгкому (пушка → башня → ходовая → корпус), пропуская названный и все разбитые, и
+## уже БЕЗ надбавки: премия полагается за объявленный выбор, а не за всю очередь. Если
+## не прошёл ни один бросок — бьём в последний оставшийся узел: «попал по танку, но
+## ничего не задел» исходом не бывает.
+##
+## Возвращает id узла или "" — если у машины не осталось ни одного живого узла.
+func _resolve_hit_location(veh: Vehicle, aimed: String, res: ActionResult,
+		actor_name: String) -> String:
+	var live := veh.live_components()
+	if live.is_empty():
+		return ""
+	var aimed_at := ""
+	# ПРИЦЕЛЬНЫЙ бросок делается, только если узел действительно назвали и он цел.
+	# Источники без стрелка (детонация соседней машины) узла не называют — им сразу
+	# каскад по базовым порогам, без надбавки за прицел.
+	if aimed != "" and veh.component_alive(aimed):
+		aimed_at = aimed
+		var need: int = clampi(
+			int(MCF.COMPONENT_NEED.get(aimed_at, 6)) - MCF.COMPONENT_AIM_BONUS, 1, 6)
+		var roll := state.dice.roll_d6()
+		var hit := roll >= need
+		res.dice_events.append({
+			"kind": "check",
+			"actor": "%s → %s" % [actor_name, MCF.COMPONENT_NAMES.get(aimed_at, aimed_at)],
+			"roll": roll, "need": need, "ok": hit,
+		})
+		if hit:
+			return aimed_at
+	# Каскад: тот же порядок, что в правилах, без названного узла и без надбавки.
+	for comp: String in MCF.COMPONENT_ORDER:
+		if comp == aimed_at or not veh.component_alive(comp):
+			continue
+		var c_need: int = int(MCF.COMPONENT_NEED.get(comp, 6))
+		var c_roll := state.dice.roll_d6()
+		var c_hit := c_roll >= c_need
+		res.dice_events.append({
+			"kind": "check",
+			"actor": "%s → %s" % [actor_name, MCF.COMPONENT_NAMES.get(comp, comp)],
+			"roll": c_roll, "need": c_need, "ok": c_hit,
+		})
+		if c_hit:
+			return comp
+	# Пол гарантии: не прошло вообще ничего — задет последний уцелевший узел.
+	return live[live.size() - 1]
+
+## Снять с УЗЛА очки прочности. Излишек (пушка танка бьёт на 2, а в узле остался 1)
+## уходит В КОРПУС: снаряд, добивший ходовую, продолжает бить в машину, а не пропадает.
+##
+## Экипаж рискует ТОЛЬКО от попадания в корпус: несмертельное даёт одному человеку
+## бросок на выживание, смертельное убивает весь экипаж без броска (это делает
+## _destroy_vehicle). Разбитые башня, ходовая и пушка экипажу не угрожают никогда.
+func _damage_component(veh: Vehicle, comp: String, amount: int, source: String,
+		res: ActionResult) -> void:
+	if veh == null or not veh.alive() or amount <= 0:
 		return
+	var target := comp
+	if target == "" or not veh.has_component(target):
+		target = MCF.COMP_HULL
 	var name: String = VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)
-	veh.durability -= amount
-	res.log("%s takes %d damage (durability %d)." % [name, amount, maxi(0, veh.durability)])
-	# Танк: ОДИН случайный член экипажа проверяет броню за ПОПАДАНИЕ, а не за каждую
-	# снятую единицу прочности (item 16). Раньше выстрел пушки на 2 урона заставлял
-	# катить дважды и выкашивал экипаж вдвое быстрее задуманного.
-	if veh.type_id == "tank":
-		_tank_crew_hit(veh, res)
-	if veh.durability <= 0:
+	var label: String = MCF.COMPONENT_NAMES.get(target, target)
+	# Узел уже выбит (или его у машины нет вовсе) — весь удар принимает корпус. Так же
+	# ведёт себя противотанковая мина по разбитой ходовой: рвётся-то она всё равно, и
+	# деваться её заряду некуда. Пропасть впустую урон не может ни при каких условиях.
+	if veh.component(target) <= 0 and target != MCF.COMP_HULL:
+		_damage_component(veh, MCF.COMP_HULL, amount, source, res)
+		return
+	var left: int = veh.component(target)
+	var dealt: int = mini(amount, left)
+	var overflow: int = amount - dealt
+	if dealt > 0:
+		veh.components[target] = left - dealt
+		res.log("%s: %s takes %d damage (%d left)." % [
+			name, label, dealt, veh.component(target)])
+		if veh.component(target) == 0:
+			res.log("%s: %s is knocked out!" % [name, label])
+	# Корпус на нуле — машине конец, и добивать дальше нечего.
+	if target == MCF.COMP_HULL and veh.component(MCF.COMP_HULL) <= 0:
 		_destroy_vehicle(veh, res)
+		return
+	if target == MCF.COMP_HULL:
+		# Несмертельное попадание в корпус: один человек проверяет броню (§6).
+		_tank_crew_hit(veh, res)
+	elif overflow > 0 and dealt > 0:
+		# Излишек добивает корпус — со всеми последствиями попадания в корпус.
+		_damage_component(veh, MCF.COMP_HULL, overflow, source, res)
+
+## Нанести машине урон ПО КАСКАДУ, когда узел не выбирают: детонация соседней машины,
+## взрыв под гусеницей и прочие источники без стрелка. Прицела нет — значит нет и
+## надбавки: каскад начинается с самого труднопопадаемого узла.
+func _damage_vehicle_cascade(veh: Vehicle, amount: int, source: String,
+		res: ActionResult, actor_name: String) -> void:
+	if veh == null or not veh.alive():
+		return
+	var comp := _resolve_hit_location(veh, "", res, actor_name)
+	if comp == "":
+		return
+	_damage_component(veh, comp, amount, source, res)
+
+## Урон машине от источника, который узел НЕ выбирает. Разбирается каскадом
+## (_damage_vehicle_cascade) — прежняя «одна общая прочность» больше не существует.
+##
+## Оставлено отдельным именем, потому что зовущих много и все они говорят об одном:
+## «машине прилетело столько-то, куда именно — решай сам».
+func _apply_vehicle_damage(veh: Vehicle, amount: int, source: String, res: ActionResult) -> void:
+	_damage_vehicle_cascade(veh, amount, source, res, source)
 
 ## Попадание по экипажу танка (§техника «как от одной пули»): случайный живой
 ## член экипажа бросает d6 против своей брони; провал — гибнет.
@@ -5634,7 +5896,7 @@ func _destroy_vehicle(veh: Vehicle, res: ActionResult) -> void:
 			if occ != null and occ.is_alive():
 				_kill(occ)
 				res.log("%s caught in the explosion!" % occ.stats.display_name)
-		_damage_vehicles_in_area(area, center, 2, veh.id, res, "explosion")
+		_damage_vehicles_in_area(area, center, 2, veh.id, res, "%s detonation" % name)
 	# Танк остаётся корпусом-обломком (укрытие/блок линии); челнок исчезает.
 	if bool(dtable.get("wreck", false)):
 		veh.wrecked = true
@@ -5684,6 +5946,8 @@ func vehicle_move_targets(veh: Vehicle) -> Dictionary:
 	var credit := vehicle_move_credit(veh)
 	if veh == null or not veh.alive() or (veh.ap <= 0 and credit <= 0):
 		return out
+	if not veh.can_drive():
+		return out  # разбитая ходовая — ехать некуда (веха «Modular tank system»)
 	# Тот же бюджет, что спишет резолвер (#97): остаток прошлого движения — вместо ОД.
 	var speed := credit if credit > 0 \
 			else int(VehicleDB.get_vehicle(veh.type_id).get("speed", 0))

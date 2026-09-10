@@ -289,20 +289,22 @@ func _only_direct_hits_hurt_vehicles() -> void:
 	ck(area.has(on_hull),
 			"the fixture is honest: the near-miss blast really does cover the hull")
 
-	var before := veh.durability
+	# Считаем ВСЮ броню, а не только корпус: попадание разбирается по узлам, и очко
+	# может лечь в башню или ходовую — «прочность машины» теперь это их сумма.
+	var before := _armour_total(veh)
 	var res := ActionResult.new()
 	res.ok = true
-	r._damage_vehicles_in_area(area, beside, MCF.ANTI_TANK_VEHICLE_DAMAGE, -1, res, "anti-tank")
-	ck(veh.durability == before,
+	r._damage_vehicles_in_area(area, beside, MCF.COMPONENT_DAMAGE_ANTI_TANK, -1, res, "anti-tank")
+	ck(_armour_total(veh) == before,
 			"a blast NEXT TO the hull leaves the armour alone (%d -> %d)"
-			% [before, veh.durability])
+			% [before, _armour_total(veh)])
 
 	var direct_area := MCF.blast_square(on_hull, MCF.ANTI_TANK_BLAST_RADIUS)
-	r._damage_vehicles_in_area(direct_area, on_hull, MCF.ANTI_TANK_VEHICLE_DAMAGE, -1,
+	r._damage_vehicles_in_area(direct_area, on_hull, MCF.COMPONENT_DAMAGE_ANTI_TANK, -1,
 			res, "anti-tank")
-	ck(veh.durability < before,
-			"a blast ON the hull still takes durability off (%d -> %d)"
-			% [before, veh.durability])
+	ck(_armour_total(veh) < before,
+			"a blast ON the hull still takes armour off (%d -> %d)"
+			% [before, _armour_total(veh)])
 
 # --- 6. В руках одно тело (item 15) --------------------------------------------------
 func _hands_hold_one_body() -> void:
@@ -543,3 +545,10 @@ func _neutrals_shoot_in_plain_sight() -> void:
 			"a civilian shooting a player's soldier leaves a who-shot-whom lane (%d)" % lanes)
 	ck(slot_marks > 0,
 			"and the civilian slot announces itself so the initiative list can mark it")
+
+## Сумма очков всех узлов машины: «сколько в ней ещё брони» одним числом.
+func _armour_total(veh: Vehicle) -> int:
+	var n := 0
+	for comp: String in veh.components:
+		n += int(veh.components[comp])
+	return n

@@ -66,6 +66,53 @@ const SIGHT_UNLIMITED := 1024
 ##   REALISTIC  — вне текущего обзора не видно НИЧЕГО, включая рельеф.
 enum Fog {OFF, STANDARD, REALISTIC}
 
+# --- Модульная броня (веха «Modular tank system») ---
+#
+# Машина — не один пул прочности, а НЕСКОЛЬКО НЕЗАВИСИМЫХ узлов. Ноль на узле не
+# убивает машину: он отнимает ровно одну способность, и её можно вернуть ремонтом.
+# Убивает только КОРПУС — он же и хранит «жив ли вообще» (Vehicle.durability).
+#
+# Порядок в COMPONENT_ORDER значим: это очередь каскада при промахе по выбранному
+# узлу, от самого труднопопадаемого к самому лёгкому.
+const COMP_GUN := "gun"
+const COMP_TOWER := "tower"
+const COMP_TRACKS := "tracks"
+const COMP_HULL := "hull"
+const COMPONENT_ORDER := [COMP_GUN, COMP_TOWER, COMP_TRACKS, COMP_HULL]
+
+## Человеческие имена узлов — для журнала и панели выбора.
+const COMPONENT_NAMES := {
+	COMP_GUN: "Main Gun", COMP_TOWER: "Tower",
+	COMP_TRACKS: "Tracks", COMP_HULL: "Hull",
+}
+
+## Нужное число на d6, чтобы попасть ИМЕННО в этот узел. Чем крупнее узел, тем легче.
+const COMPONENT_NEED := {
+	COMP_GUN: 5, COMP_TOWER: 4, COMP_TRACKS: 3, COMP_HULL: 2,
+}
+
+## Надбавка за ПРИЦЕЛЬНЫЙ выстрел: стрелок называет узел заранее и бьёт по нему с +1.
+## На каскадные броски (когда по названному узлу не попали) она НЕ распространяется —
+## премия полагается за объявленный выбор, а не за всю очередь.
+const COMPONENT_AIM_BONUS := 1
+
+## Стартовая прочность узлов по типу машины. У челнока башни и пушки нет вовсе —
+## отсутствующий в словаре узел не существует: по нему нельзя целиться, и каскад его
+## пропускает наравне с разбитым.
+const VEHICLE_COMPONENTS := {
+	"tank": {COMP_HULL: 8, COMP_TOWER: 6, COMP_TRACKS: 4, COMP_GUN: 4},
+	"shuttle": {COMP_HULL: 4, COMP_TRACKS: 4},
+}
+
+## Урон по узлу за одно попадание — зависит от того, ЧЕМ стреляли.
+const COMPONENT_DAMAGE_ANTI_TANK := 1
+const COMPONENT_DAMAGE_CANNON := 2
+## Щитоносец, остановивший машину собой, и противотанковый ёж под гусеницей бьют по ходовой.
+const COMPONENT_DAMAGE_SHIELD := 2
+const COMPONENT_DAMAGE_HEDGEHOG := 2
+## Сколько потенциала луча марксмана стоит одно очко прочности узла (§3.13).
+const LASER_POTENTIAL_PER_COMPONENT := 10
+
 # --- Дроны (§3.12) ---
 # Полёт 30 клеток = 1 действие.
 const DRONE_FLIGHT_RANGE := 30

@@ -27,8 +27,26 @@ var id: int = -1
 var type_id: String = ""
 var owner: int = -1
 
-## Прочность (durability). При 0 машина уничтожена (бросок — на стороне резолвера).
-var durability: int = 0
+## Прочность УЗЛОВ (веха «Modular tank system»): id узла → текущие очки.
+## Отсутствующий ключ = узла у этой машины нет вовсе (у челнока нет башни и пушки).
+## Заполняется из MCF.VEHICLE_COMPONENTS при появлении машины на поле.
+var components: Dictionary = {}
+
+## Прочность КОРПУСА. Осталась отдельным именем, потому что корпус — единственный узел,
+## чей ноль означает «машины больше нет»: на него смотрят alive(), условие победы,
+## оценка ИИ и слепок доски. Физически это просто ячейка components — синонимы, а не
+## два разных числа, иначе они бы неминуемо разошлись.
+var durability: int:
+	get:
+		return int(components.get(MCF.COMP_HULL, 0))
+	set(value):
+		components[MCF.COMP_HULL] = maxi(0, value)
+
+## Куда башня смотрела при ПОСЛЕДНЕМ выстреле — в системе координат КОРПУСА, а не поля.
+## Разбитая башня (tower = 0) больше не поворачивается, и стрелять машина может только
+## туда же; но корпус-то вращается, и вместе с ним разворачивается заклиненная башня —
+## поэтому направление и хранится относительно фронта. Vector2i.ZERO = ещё не стреляла.
+var tower_locked_dir: Vector2i = Vector2i.ZERO
 
 ## Верхний-левый угол следа и его размеры в клетках.
 var origin: Vector2i = Vector2i.ZERO
@@ -75,7 +93,13 @@ func _init(p_id: int = -1, p_type_id: String = "", p_owner: int = -1,
 	owner = p_owner
 	origin = p_origin
 	size = p_size
-	durability = p_durability
+	# Узлы берутся из справочника по типу машины; p_durability остаётся запасным
+	# вариантом для машин, которых в VEHICLE_COMPONENTS нет.
+	var spec: Dictionary = MCF.VEHICLE_COMPONENTS.get(p_type_id, {})
+	if spec.is_empty():
+		components = {MCF.COMP_HULL: maxi(0, p_durability)}
+	else:
+		components = spec.duplicate()
 
 
 ## Машина «жива» (может действовать / учитывается в условии победы), пока есть
@@ -169,3 +193,65 @@ static func footprint_at(origin_cell: Vector2i, size_cells: Vector2i) -> Array[V
 
 static func center_of(origin_cell: Vector2i, size_cells: Vector2i) -> Vector2i:
 	return origin_cell + size_cells / 2
+
+
+## Есть ли у машины такой узел ВООБЩЕ (у челнока нет башни и пушки).
+func has_component(comp: String) -> bool:
+	return components.has(comp)
+
+## Текущие очки узла; 0 и для разбитого, и для отсутствующего.
+func component(comp: String) -> int:
+	return int(components.get(comp, 0))
+
+## Узел ЖИВ: он есть у машины и его очки не на нуле. Именно этот вопрос задают
+## и прицеливание, и каскад, и проверки «может ли ехать/стрелять».
+func component_alive(comp: String) -> bool:
+	return component(comp) > 0
+
+## Стартовая прочность узла — потолок для ремонта.
+func component_max(comp: String) -> int:
+	return int(MCF.VEHICLE_COMPONENTS.get(type_id, {}).get(comp, 0))
+
+## Узлы этой машины в порядке каскада, только живые.
+func live_components() -> Array:
+	var out: Array = []
+	for comp: String in MCF.COMPONENT_ORDER:
+		if component_alive(comp):
+			out.append(comp)
+	return out
+
+## Может ли машина ехать и поворачивать: ходовая цела (item: Tracks at 0).
+func can_drive() -> bool:
+	return component_alive(MCF.COMP_TRACKS)
+
+## Может ли машина стрелять главным орудием.
+func can_fire_gun() -> bool:
+	return component_alive(MCF.COMP_GUN)
+
+## Заклинена ли башня — стрелять можно только вдоль tower_locked_dir.
+func tower_jammed() -> bool:
+	return has_component(MCF.COMP_TOWER) and not component_alive(MCF.COMP_TOWER)
+
+## Направление заклиненной башни В КООРДИНАТАХ ПОЛЯ: хранится оно относительно фронта,
+## поэтому разворот корпуса разворачивает и её. Vector2i.ZERO = машина ещё не стреляла,
+## и заклиненная башня не смотрит никуда.
+func tower_world_dir() -> Vector2i:
+	if tower_locked_dir == Vector2i.ZERO:
+		return Vector2i.ZERO
+	if facing == Vector2i.ZERO:
+		return tower_locked_dir
+	# Фронт корпуса — это поворот от «вправо» (1,0). Тем же поворотом крутим и башню.
+	return Vector2i(
+		tower_locked_dir.x * facing.x - tower_locked_dir.y * facing.y,
+		tower_locked_dir.x * facing.y + tower_locked_dir.y * facing.x)
+
+## Запомнить направление выстрела — в координатах КОРПУСА (обратный поворот).
+func remember_shot_dir(world_dir: Vector2i) -> void:
+	if world_dir == Vector2i.ZERO:
+		return
+	if facing == Vector2i.ZERO:
+		tower_locked_dir = world_dir
+		return
+	tower_locked_dir = Vector2i(
+		world_dir.x * facing.x + world_dir.y * facing.y,
+		world_dir.y * facing.x - world_dir.x * facing.y)
