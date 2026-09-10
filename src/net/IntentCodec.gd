@@ -38,6 +38,7 @@ const T_VEH_TURN := "veh_turn"
 const T_VEH_MOVE := "veh_move"
 const T_VEH_CANNON := "veh_cannon"
 const T_VEH_MELEE := "veh_melee"
+const T_VEH_REPAIR := "veh_repair"
 const T_VEH_UNLOAD := "veh_unload"
 const T_WELD := "weld"
 
@@ -75,8 +76,10 @@ static func encode(intent: Intent) -> Dictionary:
 	if intent is ShootIntent:
 		# target_cell нужен для выстрела противотанкиста по полу (§3.14) — без него
 		# клиент воспроизводил бы «выстрел в никуда» и расходился с хостом.
+		# Узел, по которому целится стрелок (веха «Modular tank system»), тоже обязан
+		# доехать: от него зависит и бросок, и куда лягут очки прочности.
 		return {"t": T_SHOOT, "a": intent.actor_id, "tid": intent.target_id, "s": intent.shots,
-			"cx": intent.target_cell.x, "cy": intent.target_cell.y}
+			"cx": intent.target_cell.x, "cy": intent.target_cell.y, "cm": intent.component}
 	if intent is CaptureIntent:
 		return {"t": T_CAPTURE, "a": intent.actor_id, "tid": intent.target_id}
 	if intent is ReleaseIntent:
@@ -100,7 +103,7 @@ static func encode(intent: Intent) -> Dictionary:
 	if intent is DroneMoveIntent:
 		return {"t": T_DRONE_MOVE, "a": intent.actor_id, "x": intent.target.x, "y": intent.target.y}
 	if intent is DroneDetonateIntent:
-		return {"t": T_DRONE_DET, "a": intent.actor_id}
+		return {"t": T_DRONE_DET, "a": intent.actor_id, "cm": intent.component}
 	if intent is BuildIntent:
 		return {"t": T_BUILD, "a": intent.actor_id, "x": intent.target.x, "y": intent.target.y, "f": intent.feature_id}
 	if intent is BreakIntent:
@@ -145,9 +148,13 @@ static func encode(intent: Intent) -> Dictionary:
 		return {"t": T_VEH_MOVE, "a": intent.actor_id, "x": intent.dir.x, "y": intent.dir.y,
 			"s": intent.steps}
 	if intent is VehicleCannonIntent:
-		return {"t": T_VEH_CANNON, "a": intent.actor_id, "x": intent.target.x, "y": intent.target.y}
+		return {"t": T_VEH_CANNON, "a": intent.actor_id, "x": intent.target.x, "y": intent.target.y,
+			"cm": intent.component}
 	if intent is VehicleMeleeIntent:
 		return {"t": T_VEH_MELEE, "a": intent.actor_id, "v": intent.vehicle_id}
+	if intent is RepairVehicleIntent:
+		return {"t": T_VEH_REPAIR, "a": intent.actor_id, "v": intent.vehicle_id,
+			"cm": intent.component}
 	if intent is VehicleUnloadCorpseIntent:
 		return {"t": T_VEH_UNLOAD, "a": intent.actor_id, "v": intent.vehicle_id}
 	return {}
@@ -174,7 +181,7 @@ static func decode(d: Dictionary) -> Intent:
 		T_MOVE: return MoveIntent.new(a, coord,
 			Vector2i(int(d.get("dx", -999)), int(d.get("dy", -999))))
 		T_SHOOT: return ShootIntent.new(a, int(d.get("tid", -1)), int(d.get("s", -1)),
-			Vector2i(int(d.get("cx", -999)), int(d.get("cy", -999))))
+			Vector2i(int(d.get("cx", -999)), int(d.get("cy", -999))), str(d.get("cm", "")))
 		T_CAPTURE: return CaptureIntent.new(a, int(d.get("tid", -1)))
 		T_RELEASE: return ReleaseIntent.new(a)
 		T_CANCEL_SHOT: return CancelShotIntent.new(a)
@@ -185,7 +192,7 @@ static func decode(d: Dictionary) -> Intent:
 		T_SPAWN_DRONE: return SpawnDroneIntent.new(a,
 			Vector2i(int(d.get("x", -999)), int(d.get("y", -999))))
 		T_DRONE_MOVE: return DroneMoveIntent.new(a, coord)
-		T_DRONE_DET: return DroneDetonateIntent.new(a)
+		T_DRONE_DET: return DroneDetonateIntent.new(a, str(d.get("cm", "")))
 		T_BUILD: return BuildIntent.new(a, coord, str(d.get("f", "")))
 		T_BREAK: return BreakIntent.new(a, coord)
 		T_DRAG: return DragIntent.new(a, Vector2i(int(d.get("ox", 0)), int(d.get("oy", 0))), coord)
@@ -206,7 +213,9 @@ static func decode(d: Dictionary) -> Intent:
 		T_VEH_OUT: return VehicleDisembarkIntent.new(a, coord)
 		T_VEH_TURN: return VehicleTurnIntent.new(a, coord)
 		T_VEH_MOVE: return VehicleMoveIntent.new(a, coord, int(d.get("s", 1)))
-		T_VEH_CANNON: return VehicleCannonIntent.new(a, coord)
+		T_VEH_CANNON: return VehicleCannonIntent.new(a, coord, str(d.get("cm", "")))
 		T_VEH_MELEE: return VehicleMeleeIntent.new(a, int(d.get("v", -1)))
+		T_VEH_REPAIR: return RepairVehicleIntent.new(a, int(d.get("v", -1)),
+			str(d.get("cm", "")))
 		T_VEH_UNLOAD: return VehicleUnloadCorpseIntent.new(a, int(d.get("v", -1)))
 	return null

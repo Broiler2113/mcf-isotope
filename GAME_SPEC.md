@@ -824,6 +824,11 @@ the data:
 1 durability = 10 laser potential = 1 drone explosion = 1 anti-tank shot = 0.5 tank shots
 ```
 
+Since milestone 14 a vehicle's durability is split across components (§16.2b), so this
+scale describes what one point *costs*, not how many points a vehicle has: the laser
+still buys one point per 10 potential, the anti-tank still takes 1 and the tank gun 2 —
+they simply now land on a named component rather than a single pool.
+
 `POTENTIAL_PER_DURABILITY = 10` makes it explicit — a shuttle (2 durability) is 20
 potential, a tank (6) is 60, which is exactly what the laser-potential table prescribes.
 
@@ -1168,6 +1173,68 @@ reason.
 - `_vehicle_crew_ap(veh)` counts **only owner-side living crew** — a contested vehicle
   with no majority does nothing.
 - Crew seats hold living crew; `corpse_slots` hold the dead separately.
+
+### 16.2b Modular armour — a tank is four separate machines (milestone 14)
+
+A vehicle is no longer one pool of durability. It is a set of **independently damageable
+components**, and only one of them can end it:
+
+| Component | Tank | Shuttle | At 0 durability |
+|---|:---:|:---:|---|
+| Hull | 8 | 4 | The vehicle is finished — crew die, destruction roll, wreck |
+| Tower | 6 | — | Fires only along its **last shot's direction** until repaired |
+| Tracks | 4 | 4 | Cannot drive **and cannot turn** |
+| Main Gun | 4 | — | Cannot fire the cannon |
+
+`Vehicle.durability` still exists and still means "is this thing alive", but it is now
+literally the Hull cell of `Vehicle.components` — a synonym, not a second number, so the
+two can never drift apart. A component the vehicle does not have (a shuttle's tower)
+is absent from the dictionary and is skipped everywhere a destroyed one would be.
+
+**Aimed attacks** (tank cannon, AT gunner) resolve in this order:
+
+1. The existing **to-hit roll**. A miss falls short and explodes on the ground; per
+   §16.4 it never damages the vehicle it was aimed at.
+2. The attacker **names a component**, and rolls against its threshold **with +1**:
+   Main Gun 5+, Tower 4+, Tracks 3+, Hull 2+ — so an aimed Hull shot cannot miss, and
+   the choice is a real one: the Hull is the guaranteed point but needs eight of them,
+   while the Tracks are riskier and disable in four.
+3. On a failure the hit **cascades** Main Gun → Tower → Tracks → Hull at the *base*
+   thresholds — the +1 is a reward for the declared choice, not for the whole queue —
+   skipping the named component and every destroyed one.
+4. If every check fails, the last surviving component is hit anyway. Once step 1
+   connects there is no "hit the tank and damage nothing" outcome.
+
+**Overkill runs into the Hull.** A tank cannon deals 2; against Tracks sitting on 1 that
+is Tracks to 0 and one point into the Hull. Damage aimed at a component that is already
+gone goes to the Hull whole. Nothing is ever silently lost.
+
+**Fixed-target sources** skip the whole sequence:
+
+| Source | Where it lands |
+|---|---|
+| Drone detonation | Component **chosen by the player**, 1 point, no rolls at all |
+| Miner prying at the hull | **Hull**, 1 point, on a natural 6 |
+| Anti-vehicle mine | **Tracks**, 1 point, no roll (Hull if the tracks are already gone) |
+| Personnel mine | Nothing — it is an anti-personnel weapon and no longer touches vehicles |
+| Marksman laser | Component **chosen by the marksman**, 1 point per whole 10 potential |
+| Shield-bearer halting a vehicle | **Tracks**, 2 points |
+| Driving over hedgehogs | **Tracks**, 2 points, once per move however many are crushed |
+| Another vehicle detonating nearby | Normal cascade, no aim bonus |
+
+**Crew are only ever at risk from Hull hits.** A non-lethal one gives a single crewman
+the existing survival roll (`max(1, armour − 1)`, the +1 for being under armour); a Hull
+taken to 0 kills the crew outright with no roll. Tower, Tracks and Gun hits never touch
+them, however many land.
+
+**Repair.** An Engineer standing on the ground beside an own or allied vehicle spends
+1 AP to return **1 point to a component of his choice**, never above its starting value.
+Several Engineers can work on the same vehicle in the same turn, and a component
+crossing back above 0 re-enables its capability immediately — repair the tracks and the
+tank drives that same turn. A Hull at 0 is not repairable: that is a wreck, not a fault.
+
+**Capture** is unchanged in cost (boarding an empty enemy vehicle is the usual 1 AP) and
+preserves the component state exactly — capturing neither repairs nor resets anything.
 
 ### 16.3 Movement
 

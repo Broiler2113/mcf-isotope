@@ -101,6 +101,15 @@ bottom-right belongs: harmless for 1×1 infantry, fatal for a 3×3 tank, and a c
 toss for a 2×2 shuttle — which is exactly the "tanks don't transfer, and shuttles
 too sometimes" the report described.
 
+**`run_modular_tank.gd`** covers the modular armour milestone end to end: the four
+independent pools and their starting values, each zero taking away exactly one
+capability, the aimed roll's +1 (an aimed Hull shot cannot miss), the cascade skipping
+destroyed components and never returning "nothing hit", overkill carrying into the Hull,
+the fixed-target sources (mines, miner, personnel mines no longer touching vehicles),
+crew being risked only by Hull hits, Engineer repair with its cap and ownership rules,
+capture preserving component state, and finally a live anti-tank gunner wearing a tank
+down through the real resolver.
+
 ## Scope
 
 None of these runs is evidence that the game *plays* correctly. They are evidence

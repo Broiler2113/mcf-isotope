@@ -76,6 +76,12 @@ const SCORE_ANTI_TANK_APPROACH := 25.0
 ## снимает с брони прочность, и разменивать его на пехоту нечем. Надбавка заведомо
 ## перекрывает разброс _unit_value, поэтому ДОСТУПНАЯ машина побеждает любую пехоту.
 const SCORE_ANTI_TANK_PRIORITY := 60.0
+## Узел с таким остатком добивают, не раздумывая: ещё одно попадание — и способность
+## машины выключена насовсем (веха «Modular tank system»).
+const AIM_FINISH_AT := 2
+## Дальше этого «издалека»: разбирать машину по узлам на такой дистанции бессмысленно —
+## она успеет уехать или починиться, — поэтому бьём в корпус, приближая её конец.
+const AIM_FAR_DISTANCE := 8
 ## Клетка, с которой танк ВЫВОДИТ ПУШКУ НА ЛИНИЮ огня. Пушка бьёт только по прямой
 ## (#55), поэтому «встать в створ» для машины ценно само по себе — даже когда шаг
 ## не сокращает дистанцию до врага.
@@ -343,6 +349,10 @@ func _forced_vehicle_action(state: GameState, r: GameActionResolver, veh: Vehicl
 	if veh == null or not veh.alive():
 		return {}
 	_push_recent(key, veh.center())  # item 1: и техника не должна ходить челноком
+	# Обездвиженной машине принудительный ход не поможет — ни ехать, ни повернуть она
+	# не может (веха «Modular tank system»), и любой такой приказ резолвер отклонит.
+	if not veh.can_drive():
+		return {}
 	var enemy := _nearest_enemy(state, veh.center(), false, r)
 	var targets := r.vehicle_move_targets(veh)
 	var best: Dictionary = {}
@@ -477,6 +487,11 @@ func _candidates(state: GameState, r: GameActionResolver, u: UnitInstance) -> Ar
 	var veh_shot := _best_vehicle_shot(state, r, u)
 	if not veh_shot.is_empty():
 		out.append(veh_shot)
+
+	# Инженер чинит СВОЮ машину (веха «Modular tank system»).
+	var fix := _best_repair(state, r, u)
+	if not fix.is_empty():
+		out.append(fix)
 
 	# Оператор запускает дрон со своей станции (item 17): дальше дроном рулит _drone_action.
 	var launch := _best_drone_launch(state, r, u)
@@ -1039,7 +1054,8 @@ func _best_vehicle_shot(state: GameState, r: GameActionResolver, u: UnitInstance
 			var score := SCORE_SHOOT_BASE + SCORE_ANTI_TANK_PRIORITY \
 					+ _vehicle_value(veh) + ease * 2.0
 			if best.is_empty() or score > best["score"]:
-				best = {"score": score, "intent": ShootIntent.new(u.id, -1, -1, fc)}
+				best = {"score": score, "intent": ShootIntent.new(u.id, -1, -1, fc,
+					_aim_component(veh, u.coord))}
 	return best
 
 ## Противотанкист прорубает себе дорогу (#103).
@@ -1631,12 +1647,28 @@ func _vehicle_candidates(state: GameState, r: GameActionResolver, veh: Vehicle) 
 	var gun: Dictionary = weapons.get("main_gun", {})
 	# Может ли пушка выстрелить ВООБЩЕ в этот ход: есть ствол, лимит выстрелов не
 	# выбран, ОД хватает. От этого зависит и стоит ли ради выстрела маневрировать.
+	# Разбитое орудие не стреляет, а заклиненная башня, ни разу не стрелявшая, не
+	# наведётся никуда (веха «Modular tank system»): предлагать такой выстрел — значит
+	# получать отказ резолвера и жечь на нём ход.
 	var gun_ready: bool = not gun.is_empty() \
+			and veh.can_fire_gun() \
+			and not (veh.tower_jammed() and veh.tower_world_dir() == Vector2i.ZERO) \
 			and veh.cannon_shots_this_round < int(gun.get("max_per_turn", 2)) \
 			and veh.ap >= int(gun.get("ap_cost", 1))
 	var shot_target: UnitInstance = null
 	if gun_ready:
-		shot_target = _vehicle_best_target(state, r, veh, int(gun.get("range", MCF.CANNON_RANGE)))
+		var rng := int(gun.get("range", MCF.CANNON_RANGE))
+		# ВРАЖЕСКАЯ БРОНЯ — цель важнее пехоты: танк, оставленный в покое, стреляет
+		# в ответ, и разменивать снаряд на солдата, когда напротив стоит машина, незачем.
+		var armour := _vehicle_best_armour_target(state, r, veh, rng)
+		if not armour.is_empty():
+			var foe: Vehicle = armour["veh"]
+			var cell: Vector2i = armour["cell"]
+			out.append({"score": SCORE_SHOOT_BASE + SCORE_ANTI_TANK_PRIORITY
+					+ _vehicle_value(foe) + 6.0,
+				"intent": VehicleCannonIntent.new(veh.id, cell,
+					_aim_component(foe, veh.center()))})
+		shot_target = _vehicle_best_target(state, r, veh, rng)
 		if shot_target != null and not _ally_near(state, shot_target.coord, MCF.CANNON_BLAST_RADIUS):
 			out.append({"score": SCORE_SHOOT_BASE + _unit_value(shot_target) + 6.0,
 				"intent": VehicleCannonIntent.new(veh.id, shot_target.coord)})
@@ -1650,7 +1682,7 @@ func _vehicle_candidates(state: GameState, r: GameActionResolver, veh: Vehicle) 
 	# Прогресс считаем по общему мультиисточниковому геополю (#63), а не по отдельному
 	# BFS на врага — иначе ход ИИ жутко тормозит.
 	var enemy := _nearest_enemy(state, veh.center(), false, r)
-	if enemy != null:
+	if enemy != null and veh.can_drive():
 		var field := _enemy_distance_field(state, false, r)
 		var use_geo := field.has(veh.center())
 		var start_d: int = field.at(veh.center())
@@ -1771,6 +1803,103 @@ func _vehicle_best_target(state: GameState, r: GameActionResolver, veh: Vehicle,
 		if d < best_d:
 			best_d = d
 			best = e
+	return best
+
+## Какой узел вражеской машины выбрать под выстрел (веха «Modular tank system»).
+##
+## Правило игрока, слово в слово: «издалека — корпус, вблизи — по обстановке, а если
+## что-то висит на одном-двух очках, надо просто добить».
+##
+##   1. ДОБИТЬ. Узел на AIM_FINISH_AT очках или меньше — цель без вариантов: одно
+##      попадание, и способность выключена. Из нескольких берём самый слабый, а при
+##      равенстве — по порядку каскада, чтобы хост и клиент выбрали ОДИН И ТОТ ЖЕ.
+##   2. ИЗДАЛЕКА — КОРПУС. По нему всё равно не промахнёшься (прицельный бросок с +1
+##      даёт 1+), и каждое очко приближает конец машины.
+##   3. ВБЛИЗИ — ПО ОБСТАНОВКЕ. Машина на ходу опаснее всего подвижностью — рвём
+##      ходовую; уже обездвиженную, но с орудием — глушим пушку; безногую и безоружную
+##      добиваем в корпус.
+func _aim_component(veh: Vehicle, from: Vector2i) -> String:
+	if veh == null:
+		return ""
+	var live: Array = veh.live_components()
+	if live.is_empty():
+		return ""
+	# 1. Добить почти выбитый узел.
+	var finish := ""
+	var fewest := 1 << 30
+	for comp: String in MCF.COMPONENT_ORDER:
+		if not veh.component_alive(comp):
+			continue
+		var left: int = veh.component(comp)
+		if left <= AIM_FINISH_AT and left < fewest:
+			fewest = left
+			finish = comp
+	if finish != "":
+		return finish
+	# 2. Издалека — корпус.
+	if Combat.distance(from, veh.center()) > AIM_FAR_DISTANCE:
+		return MCF.COMP_HULL if veh.component_alive(MCF.COMP_HULL) else live[0]
+	# 3. Вблизи — по обстановке.
+	if veh.component_alive(MCF.COMP_TRACKS):
+		return MCF.COMP_TRACKS
+	if veh.component_alive(MCF.COMP_GUN):
+		return MCF.COMP_GUN
+	return MCF.COMP_HULL if veh.component_alive(MCF.COMP_HULL) else live[0]
+
+## Клетка корпуса ВРАЖЕСКОЙ МАШИНЫ, по которой танк может отработать пушкой, и сама
+## машина: {cell, veh} или пусто.
+##
+## Раньше пушка танка выбирала цель только среди ПЕХОТЫ (_vehicle_best_target перебирает
+## юнитов), поэтому вражеский танк для неё просто не существовал: две машины могли
+## стоять друг против друга весь бой и не сделать ни выстрела. Единственным, кто вообще
+## бил по броне, оставался противотанкист.
+func _vehicle_best_armour_target(state: GameState, r: GameActionResolver, veh: Vehicle,
+		rng: int) -> Dictionary:
+	var best: Dictionary = {}
+	var best_d := 1 << 30
+	for other: Vehicle in state.all_vehicles():
+		if not other.alive() or other.id == veh.id:
+			continue
+		if other.owner == owner or state.roster.are_allies(owner, other.owner):
+			continue
+		for fc: Vector2i in other.footprint():
+			var port := r.cannon_port(veh, fc)
+			if port == Vector2i(-1, -1):
+				continue
+			var d := Combat.distance(port, fc)
+			if d > rng or d >= best_d:
+				continue
+			if r.los_blocked(port, fc):
+				continue
+			# Своих взрывом не накрываем — то же правило, что и по пехоте.
+			if _ally_near(state, fc, MCF.CANNON_BLAST_RADIUS):
+				continue
+			best_d = d
+			best = {"cell": fc, "veh": other}
+	return best
+
+## Инженер возвращает своей машине выбитый узел (веха «Modular tank system», §8).
+##
+## Чинить стоит дороже, чем брести к врагу, но дешевле выстрела: отряд существует,
+## чтобы стрелять, и бросать бой ради гайки незачем. Внутри выбираем узел, который
+## РЕШАЕТ БОЛЬШЕ ВСЕГО: выбитый (0 очков) возвращает машине целую способность — это
+## всегда важнее, чем долить очко в уже работающий узел. Из выбитых берём самый
+## дешёвый в починке, из целых — самый пострадавший.
+func _best_repair(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
+	if u.stats.special_ability_id != MCF.ABILITY_ENGINEER or u.remaining_ap <= 0:
+		return {}
+	var best: Dictionary = {}
+	var best_score := 0.0
+	for veh: Vehicle in r.repairable_vehicles(u):
+		for comp: String in r.repairable_components(u, veh):
+			var left: int = veh.component(comp)
+			# Выбитый узел — восстановление способности; целый — просто запас прочности.
+			var score := SCORE_CORPSE_BASE + (30.0 if left == 0 else 0.0)
+			score -= float(left)
+			if best.is_empty() or score > best_score:
+				best_score = score
+				best = {"score": score,
+					"intent": RepairVehicleIntent.new(u.id, veh.id, comp)}
 	return best
 
 ## Есть ли живой союзник (владельца машины) в радиусе r по Чебышёву от клетки.
