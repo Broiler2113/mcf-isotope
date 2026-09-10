@@ -235,6 +235,10 @@ var _info_label: Label
 var _init_label: RichTextLabel
 var _init_overlay: Control
 var _init_overlay_body: VBoxContainer
+## Прозрачность окна чата (issue 5: «make the chat window half-transparent»). Половина —
+## буквально: 0.5 по альфе фона рамки и её шапки, текст внутри остаётся непрозрачным.
+const PANEL_GLASS_ALPHA := 0.5
+
 ## Чат, докнутый в правый-нижний угол (item 50): тело сворачивается кнопкой заголовка.
 var _chat_panel: PanelContainer
 var _chat_body: VBoxContainer
@@ -245,6 +249,9 @@ var _chat_input: LineEdit
 var _log_label: RichTextLabel
 ## Журнал боя вынесен из правого меню в свою панель (item 6), внизу слева.
 var _log_panel: PanelContainer
+## Тело журнала и его стрелка-переключатель (issue 6): журнал сворачивается, как чат.
+var _log_body_wrap: Control
+var _log_toggle_btn: Button
 ## Кнопка-стрелка сворачивания чата (item 11) и флаги «панель передвинута вручную»
 ## (item 8): пока не тронута — держим её в углу автоматически, после перетаскивания — нет.
 var _chat_toggle_btn: Button
@@ -626,6 +633,11 @@ func _show_result(result: ActionResult) -> void:
 	if not result.ok:
 		state.log.add("[denied] " + result.reason)
 		return
+	# Дорожки «кто в кого» (issue 8) ставятся ДО броска: прицел должен быть виден,
+	# пока крутится кубик, — иначе игрок узнаёт о выстреле уже по его результату.
+	if not result.fx.is_empty():
+		_fx.apply_lanes(result.fx)
+		queue_redraw()
 	if not result.dice_events.is_empty():
 		_pending_death_ids.clear()
 		for id: int in result.deaths:
@@ -2100,6 +2112,10 @@ func _on_intent_ready(intent: Intent) -> void:
 	if intent is UndoIntent or intent is RedoIntent:
 		_resync_after_restore()
 		return
+	# Дорожки «кто в кого» (issue 8) — до броска, вместе с прицелом на цели.
+	if not result.fx.is_empty():
+		_fx.apply_lanes(result.fx)
+		queue_redraw()
 	if not result.dice_events.is_empty():
 		# Кто погиб в этом действии — рисуем живым до конца броска.
 		_pending_death_ids.clear()
@@ -2644,6 +2660,9 @@ func _draw() -> void:
 		return
 	# Панорама + масштаб «камеры»: всё поле рисуется в локальных координатах.
 	draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
+	# То же преобразование — слою замены спрайтов: повёрнутая картинка (танк по фронту,
+	# осколки, лежащий труп) обязана вернуть холст в НАШУ панораму, а не в единицу.
+	Sprites.set_base_transform(pan, Vector2(zoom, zoom))
 	var font := ThemeDB.fallback_font
 	# Множество видимых клеток нужно и дальше по функции (юниты, трупы, техника), поэтому
 	# берётся всегда — резолвер отдаёт его из кеша, пока обстановка не изменилась.
@@ -3105,6 +3124,10 @@ func _draw() -> void:
 		if veh_key != "":
 			Sprites.draw_texture_override_rect(self, veh_key, Rect2(org, vsize),
 				_facing_degrees(veh.facing))
+			# Рамка в цвете стороны поверх картинки (issue 4): поставочная текстура
+			# танка одна на всех, и без рамки два вражеских танка выглядели бы
+			# одинаково — а принадлежность машины игрок обязан читать с доски.
+			draw_rect(Rect2(org + Vector2(2, 2), vsize - Vector2(4, 4)), hull_col, false, 2.0)
 		else:
 			draw_rect(hull, hull_col.darkened(0.35))
 			draw_rect(hull, hull_col, false, 3.0)
@@ -3295,6 +3318,7 @@ func _draw_laser_preview(shooter: UnitInstance, aim: Vector2i) -> void:
 ## Картинки-замены имеют приоритет (glass_shard.png и т. п.); без них рисуются
 ## векторные примитивы, как и всё остальное в этой игре.
 func _draw_fx_props(visible: Dictionary) -> void:
+	_draw_fx_lanes(visible)
 	# Следы лазера (item 11): полупрозрачные чёрные линии от стрелка до точки остановки.
 	# Рисуем прямыми отрезками — диагонали получаются сами собой.
 	for seg: Dictionary in _fx.laser_lines:
@@ -3320,6 +3344,43 @@ func _draw_fx_props(visible: Dictionary) -> void:
 	for f: Dictionary in _fx.flying:
 		_draw_fx_one(f["kind"], FxDecals.flight_pos(f), FxDecals.flight_rot(f),
 				f["scale"], visible, fog_on)
+
+## Дорожки боя (issue 8): «кто в кого стреляет». Трассер живёт 0.16 с — увидеть его
+## можно, разобрать перестрелку нельзя, особенно в ход ИИ, когда за один заход стреляют
+## десятки бойцов. Дорожка держится секунды: линия в цвете СТОРОНЫ СТРЕЛКА, кольцо у
+## стрелка и прицел у цели, всё гаснет само.
+##
+## Туман войны при этом не протекает (§3.9): невидимого стрелка дорожка не выдаёт —
+## у цели остаётся только прицел, то есть «по этому бойцу работают», а откуда — ищи сам.
+func _draw_fx_lanes(visible: Dictionary) -> void:
+	if _fx.lanes.is_empty():
+		return
+	var fog_on: bool = resolver.fog_enabled
+	for lane: Dictionary in _fx.lanes:
+		var la := FxDecals.lane_alpha(lane)
+		if la <= 0.0:
+			continue
+		var from_cell := Vector2(lane["from"])
+		var to_cell := Vector2(lane["to"])
+		var a: Vector2 = ORIGIN + from_cell * CELL
+		var b: Vector2 = ORIGIN + to_cell * CELL
+		var col: Color = _side_color(int(lane["owner"]))
+		var kind := str(lane["kind"])
+		var wide: float = 3.0 if kind == "shot" else 5.0
+		var shooter_seen: bool = not fog_on \
+				or visible.has(Vector2i(floori(from_cell.x), floori(from_cell.y)))
+		if shooter_seen:
+			# Сама дорожка: широкий полупрозрачный след и яркая нить по центру.
+			draw_line(a, b, Color(col.r, col.g, col.b, 0.22 * la), wide + 4.0)
+			draw_line(a, b, Color(col.r, col.g, col.b, 0.80 * la), wide)
+			# Кольцо у стрелка — «отсюда стреляли».
+			draw_arc(a, CELL * 0.46, 0.0, TAU, 24, Color(col.r, col.g, col.b, 0.85 * la), 2.0)
+		# Прицел у цели рисуется ВСЕГДА: «по этому месту работают» игрок вправе видеть.
+		var rr := CELL * 0.40
+		var tcol := Color(col.r, col.g, col.b, 0.95 * la)
+		draw_arc(b, rr, 0.0, TAU, 28, tcol, 2.5)
+		for d: Vector2 in [Vector2.LEFT, Vector2.RIGHT, Vector2.UP, Vector2.DOWN]:
+			draw_line(b + d * rr * 0.55, b + d * rr * 1.45, tcol, 2.0)
 
 ## Размер частицы в долях клетки и запасной цвет, когда картинки-замены нет.
 const FX_LOOK := {
@@ -3654,21 +3715,29 @@ func _build_ui() -> void:
 ## _log_label, что и раньше, поэтому publish_result/_on_log_line работают без правок.
 func _build_log_panel() -> void:
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(360, 150)
+	# Высоту в минимум НЕ пишем (issue 6): свёрнутая панель обязана ужаться до шапки,
+	# а заданный минимум держал бы её прежней. Тело задаёт высоту само, пока открыто.
+	panel.custom_minimum_size = Vector2(360, 0)
 	SteamChrome.apply_panel(panel)
 	_ui_layer.add_child(panel)
 	_log_panel = panel
 	var frame := VBoxContainer.new()
 	frame.add_theme_constant_override("separation", 0)
 	panel.add_child(frame)
-	var log_header := SteamChrome.header_bar("Combat Log")
+	# Журнал сворачивается и разворачивается той же стрелкой, что и чат (issue 6).
+	var log_toggle := Button.new()
+	log_toggle.text = "▴"
+	log_toggle.pressed.connect(_toggle_log)
+	_log_toggle_btn = log_toggle
+	var log_header := SteamChrome.header_bar("Combat Log", log_toggle)
 	_make_panel_draggable(panel, log_header, func() -> void: _log_moved = true)  # item 8
 	frame.add_child(log_header)
 	_log_label = RichTextLabel.new()
 	_log_label.custom_minimum_size = Vector2(360, 130)
 	_log_label.add_theme_font_size_override("normal_font_size", 11)
 	_log_label.scroll_following = true
-	frame.add_child(SteamChrome.pad(_log_label, 8, 6))
+	_log_body_wrap = SteamChrome.pad(_log_label, 8, 6)
+	frame.add_child(_log_body_wrap)
 
 ## Полоса управления повтором (item 53) внизу экрана: в начало, шаг назад,
 ## пуск/пауза, шаг вперёд, скорость, в конец. Строится только в режиме просмотра —
@@ -3732,6 +3801,9 @@ func _build_chat_panel() -> void:
 	var panel := PanelContainer.new()
 	panel.custom_minimum_size = Vector2(280, 0)
 	SteamChrome.apply_panel(panel)
+	# Полупрозрачное окно чата (issue 5). Красим self_modulate, а не modulate: первый
+	# гасит ТОЛЬКО фон самой панели, второй утянул бы за собой и текст с кнопками.
+	panel.self_modulate = Color(1, 1, 1, PANEL_GLASS_ALPHA)
 	_ui_layer.add_child(panel)
 	_chat_panel = panel
 	var frame := VBoxContainer.new()
@@ -3742,6 +3814,7 @@ func _build_chat_panel() -> void:
 	toggle.pressed.connect(_toggle_chat)
 	_chat_toggle_btn = toggle
 	var chat_header := SteamChrome.header_bar("Chat", toggle)
+	chat_header.self_modulate = Color(1, 1, 1, PANEL_GLASS_ALPHA)  # issue 5
 	_make_panel_draggable(panel, chat_header, func() -> void: _chat_moved = true)  # item 8
 	frame.add_child(chat_header)
 	_chat_body = VBoxContainer.new()
@@ -4111,13 +4184,39 @@ func _draw_annotations() -> void:
 func _toggle_chat() -> void:
 	if _chat_body_wrap == null:
 		return
-	# Стрелка вниз (▾) сворачивает в маленький прямоугольник — как в начале матча (item 11).
-	_chat_body_wrap.visible = not _chat_body_wrap.visible
-	# Стрелка вниз (▾) = свёрнуто, весь серый блок спрятан и остаётся только шапка
-	# (item 4); вверх (▴) = развёрнуто. Тело сворачивается вместе с padding-обёрткой,
-	# так что панель сжимается до одной строки заголовка.
-	if _chat_toggle_btn != null:
-		_chat_toggle_btn.text = "▴" if _chat_body_wrap.visible else "▾"
+	# Стрелка вниз (▾) = свёрнуто, остаётся одна шапка; вверх (▴) = развёрнуто.
+	_set_panel_collapsed(_chat_panel, _chat_body_wrap, _chat_toggle_btn,
+			_chat_body_wrap.visible)
+
+## Свернуть/развернуть журнал боя (issue 6) — ровно тем же способом, что и чат.
+func _toggle_log() -> void:
+	if _log_body_wrap == null:
+		return
+	_set_panel_collapsed(_log_panel, _log_body_wrap, _log_toggle_btn,
+			_log_body_wrap.visible)
+
+## Свернуть (collapsed) или раскрыть панель с шапкой.
+##
+## Спрятать одно тело НЕДОСТАТОЧНО (issue 5: «chat still isn't closeable, just make that
+## entire gray rectangle completely disappear»). Панель здесь — верхнеуровневый Control
+## на CanvasLayer, а такой узел свой размер сам не уменьшает: минимальный размер упал,
+## но size остался прежним, и на месте свёрнутого чата продолжал висеть тот же серый
+## прямоугольник. reset_size() возвращает панели её МИНИМАЛЬНЫЙ размер — от свёрнутого
+## окна остаётся одна шапка со стрелкой.
+##
+## Вызов отложенный: тело спрятано только что, и контейнер пересчитает свой минимум
+## лишь к концу кадра — reset_size() здесь же взял бы ещё старое значение.
+func _set_panel_collapsed(panel: Control, body: Control, btn: Button,
+		collapsed: bool) -> void:
+	if panel == null or body == null:
+		return
+	body.visible = not collapsed
+	if btn != null:
+		btn.text = "▾" if collapsed else "▴"
+	panel.call_deferred("reset_size")
+	# Панель приколота к нижнему краю — после смены высоты её надо переставить,
+	# иначе свёрнутая шапка уедет от угла на высоту прежнего тела.
+	call_deferred("_reposition_hud_grip")
 
 ## Сделать панель перетаскиваемой за её шапку (item 8). on_move помечает панель как
 ## сдвинутую вручную, чтобы _reposition_hud_grip перестал возвращать её в угол.
@@ -4142,8 +4241,9 @@ func _chat_append(who: String, text: String) -> void:
 	if _chat_log == null:
 		return
 	_chat_log.append_text("[b]%s:[/b] %s\n" % [who, text])
+	# Пришло сообщение — чат разворачивается сам, вместе со стрелкой и размером панели.
 	if _chat_body_wrap != null and not _chat_body_wrap.visible:
-		_chat_body_wrap.visible = true
+		_set_panel_collapsed(_chat_panel, _chat_body_wrap, _chat_toggle_btn, false)
 
 func _chat_send() -> void:
 	if _chat_input == null:

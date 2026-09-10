@@ -356,28 +356,55 @@ func _opt(items: Array, selected: int) -> OptionButton:
 func _build_map(parent: VBoxContainer) -> void:
 	var box := _titled(parent, "Map Selection & Preview")
 	_map_opt = OptionButton.new()
-	_map_paths = []
-	_map_opt.add_item("Blank arena")
-	_map_paths.append("")
-	# ВСЕ сохранённые карты (item 1): и поставочные (res://maps), и созданные в редакторе
-	# (user://maps). MapData.list_maps() объединяет оба каталога без дублей.
-	for name in MapData.list_maps():
-		_map_opt.add_item(name.get_basename())
-		_map_paths.append(MapData.path_for(name))
-	_map_opt.select(0)
+	_reload_map_items()
 	# Смена карты обновляет и превью, и слоты — у зон свой предел от карты (item 6).
 	_map_opt.item_selected.connect(func(_i: int) -> void:
 		_refresh_map_preview()
 		_refresh_slots())
 	if _is_client:
 		_map_opt.disabled = true
-	_row(box, "Map:", _map_opt)
+	# Список читается один раз при входе в лобби, а карту могли нарисовать и положить
+	# рядом только что (issue 1) — кнопка перечитывает каталоги, не выходя из лобби.
+	var refresh := Button.new()
+	refresh.text = "⟳"
+	refresh.tooltip_text = "Rescan the map folders"
+	refresh.custom_minimum_size = Vector2(34, 0)
+	refresh.pressed.connect(func() -> void:
+		_reload_map_items()
+		_refresh_map_preview()
+		_refresh_slots())
+	var map_row := HBoxContainer.new()
+	map_row.add_theme_constant_override("separation", 6)
+	_map_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	map_row.add_child(_map_opt)
+	map_row.add_child(refresh)
+	_row(box, "Map:", map_row)
 
 	_map_preview = TextureRect.new()
 	_map_preview.custom_minimum_size = Vector2(260, 180)
 	_map_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_map_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	box.add_child(_map_preview)
+
+## Перечитать каталоги карт и пересобрать выпадающий список (item 1, issue 1).
+##
+## ВСЕ сохранённые карты: и поставочные (res://maps), и созданные в редакторе
+## (user://maps). MapData.list_maps() объединяет оба каталога без дублей.
+## Выбранная карта сохраняется по ПУТИ, а не по номеру строки: после пересканирования
+## список мог сдвинуться, и номер указывал бы на чужую карту.
+func _reload_map_items() -> void:
+	var keep := ""
+	if _map_opt != null and _map_opt.selected >= 0 and _map_opt.selected < _map_paths.size():
+		keep = _map_paths[_map_opt.selected]
+	_map_opt.clear()
+	_map_paths = []
+	_map_opt.add_item("Blank arena")
+	_map_paths.append("")
+	for name in MapData.list_maps():
+		_map_opt.add_item(name.get_basename())
+		_map_paths.append(MapData.path_for(name))
+	var idx := _map_paths.find(keep)
+	_map_opt.select(idx if idx >= 0 else 0)
 
 ## Открыть сохранённую партию прямо в лобби (item 42). Смысл именно здесь, а не в
 ## меню: доска и армии в файле уже есть, а вот КТО их ведёт — вопрос сегодняшнего

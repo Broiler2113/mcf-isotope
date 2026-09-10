@@ -292,6 +292,9 @@ func _pos_to_cell(pos: Vector2) -> Vector2i:
 func _draw() -> void:
 	if map == null:
 		return
+	# Редактор рисует БЕЗ собственного преобразования холста — сообщаем это слою замен,
+	# иначе он остался бы с панорамой боя, из которого сюда пришли.
+	Sprites.set_base_transform(Vector2.ZERO, Vector2.ONE)
 	var font := ThemeDB.fallback_font
 	var cs := _cell_size()
 	# Размер шрифта на плитках привязан к масштабу клетки, а не фиксирован (item 25):

@@ -84,19 +84,43 @@ static func _scan_override_dir(dir_path: String) -> void:
 	d.list_dir_begin()
 	var fname := d.get_next()
 	while fname != "":
-		var ext := fname.get_extension().to_lower()
+		# В СОБРАННОЙ игре картинка из res:// лежит уже импортированной, а рядом с ней
+		# указатель «имя.png.remap». Снимаем суффикс — дальше всё как с обычным файлом
+		# (загрузку разводит _load_texture_at). Без этого поставочные текстуры (танк,
+		# issue 4) были бы видны в редакторе и пропадали в экспорте.
+		var base_name := fname
+		if base_name.ends_with(".remap"):
+			base_name = base_name.substr(0, base_name.length() - 6)
+		var ext := base_name.get_extension().to_lower()
 		if not d.current_is_dir() and SUPPORTED_IMG.has(ext):
-			var key := fname.get_basename().to_lower()
+			var key := base_name.get_basename().to_lower()
 			# PNG выигрывает у прочих форматов при совпадении имени; user://
 			# сканируется последним, поэтому перебивает res:// — но не меняет PNG
 			# на формат хуже.
 			var better := not _overrides.has(key) or ext == "png"
 			if better:
-				var img := Image.new()
-				if img.load(dir_path + "/" + fname) == OK:
-					_overrides[key] = ImageTexture.create_from_image(img)
+				var tex := _load_texture_at(dir_path + "/" + base_name)
+				if tex != null:
+					_overrides[key] = tex
 		fname = d.get_next()
 	d.list_dir_end()
+
+## Картинка по пути. Порядок попыток разный для разных каталогов:
+##   • res:// — сперва ЗАГРУЗЧИК РЕСУРСОВ: поставочный png импортирован движком, и в
+##     собранной игре доступен только так (Image.load там честно предупреждает
+##     «will not work on export»);
+##   • user:// — сперва ФАЙЛ: картинку игрока никто не импортировал, её и нет в
+##     реестре ресурсов.
+## Вторая попытка идёт как запасная — на случай неимпортированного png в проекте.
+static func _load_texture_at(path: String) -> Texture2D:
+	if path.begins_with("res://") and ResourceLoader.exists(path):
+		var res := ResourceLoader.load(path) as Texture2D
+		if res != null:
+			return res
+	var img := Image.new()
+	if img.load(path) == OK:
+		return ImageTexture.create_from_image(img)
+	return null
 
 ## id объекта → имя файла-замены. Нужен ровно для переименованных объектов.
 const ALIASES := {
@@ -120,6 +144,22 @@ static func resolve(name: String, suffix: String = "") -> String:
 	return ""
 
 # --- Отрисовка ---
+## Собственное преобразование холста вызывающего (панорама и зум карты).
+##
+## Повёрнутая картинка рисуется через draw_set_transform, и вернуть его надо в ТО, что
+## стояло у вызывающего, а не в единицу: сцена боя рисует всё поле в draw_set_transform(
+## pan, 0, zoom), и сброс в единицу посреди кадра увёл бы всё нарисованное ПОСЛЕ
+## повёрнутой картинки в другой угол экрана с другим масштабом. Пока повёрнутых замен
+## никто не подкладывал, это не всплывало; с поставочной текстурой танка (issue 4),
+## которая поворачивается по фронту, всплыло бы первым же кадром.
+static var _base_offset: Vector2 = Vector2.ZERO
+static var _base_scale: Vector2 = Vector2.ONE
+
+## Вызывающий сообщает своё преобразование сразу после draw_set_transform в _draw().
+static func set_base_transform(offset: Vector2, scale: Vector2) -> void:
+	_base_offset = offset
+	_base_scale = scale
+
 ## Нарисовать картинку в клетку. Возвращает false, если замены нет — тогда
 ## вызывающий рисует свою векторную версию (ровно как в marble_race).
 static func draw_texture_override(ci: CanvasItem, name: String, o: Vector2,
@@ -147,9 +187,10 @@ static func draw_texture_override_rect(ci: CanvasItem, name: String, rect: Rect2
 		ci.draw_texture_rect(tex, rect, false, tint)
 	else:
 		var center := rect.position + rect.size * 0.5
-		ci.draw_set_transform(center, deg_to_rad(rot_deg), Vector2.ONE)
+		ci.draw_set_transform(_base_offset + center * _base_scale,
+				deg_to_rad(rot_deg), _base_scale)
 		ci.draw_texture_rect(tex, Rect2(-rect.size * 0.5, rect.size), false, tint)
-		ci.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+		ci.draw_set_transform(_base_offset, 0.0, _base_scale)
 	return true
 
 # --- Файл-справка ---

@@ -452,10 +452,16 @@ func _neutral_survival(state: GameState, r: GameActionResolver, u: UnitInstance)
 
 ## Солдаты-угрозы для нейтрала — только живые бойцы ИГРОКОВ (§4.1). Дрон и другой
 ## нейтрал сюда не идут: створ строят люди, а своих нейтралы не боятся.
+##
+## Сидящий В МАШИНЕ створа не строит и в список не попадает (issue 2). Его координата
+## вынесена за карту (OFFBOARD, −9999), а _on_any_lane() ниже спрашивает у резолвера
+## линию ОТ неё: от (−9999, −9999) диагональ накрывает половину карты, и трассировка
+## уходила за край сетки — «Out of bounds get index '-509898'» при ходе нейтралов.
 func _neutral_soldiers(state: GameState) -> Array:
 	var out: Array = []
+	var grid := state.grid
 	for o: UnitInstance in state.all_units():
-		if CivilianAI.is_soldier(o):
+		if CivilianAI.is_soldier(o) and o.aboard_vehicle_id == -1 and grid.in_bounds(o.coord):
 			out.append(o)
 	return out
 
@@ -532,8 +538,13 @@ func _neutral_outnumbers(state: GameState, r: GameActionResolver, u: UnitInstanc
 	for o: UnitInstance in state.all_units():
 		if not o.is_alive():
 			continue
-		if o.id != u.id and r.los_blocked(u.coord, o.coord, true, true):
-			continue
+		if o.id != u.id:
+			# Сидящего в машине не видно и не считаем: он вне поля (issue 2), и луч
+			# до его координаты ушёл бы за край сетки.
+			if o.aboard_vehicle_id != -1 or not state.grid.in_bounds(o.coord):
+				continue
+			if r.los_blocked(u.coord, o.coord, true, true):
+				continue
 		if CivilianAI.is_npc(o):
 			neutrals += 1
 		elif CivilianAI.is_soldier(o):
@@ -774,7 +785,8 @@ func _best_shoot(state: GameState, r: GameActionResolver, u: UnitInstance) -> Di
 	# (#5) — поэтому при неудаче мы не выходим, а падаем в общий подбор цели ниже (#103).
 	if _pending_shoot(u):
 		var t := state.get_unit(u.action_state.target_id)
-		if t != null and t.is_alive() and r.can_shoot(u, t) == "" and not r.shot_is_futile(u, t):
+		if t != null and t.is_alive() and r.can_shoot(u, t) == "" and not r.shot_is_futile(u, t) \
+				and not r.anti_tank_shot_endangers_own(u, t.coord):
 			return {"score": SCORE_SHOOT_BASE + _unit_value(t),
 				"intent": ShootIntent.new(u.id, t.id, _shots_for(r, u, t))}
 	elif u.remaining_ap < _shoot_ap_cost(u):
@@ -802,6 +814,11 @@ func _best_shoot(state: GameState, r: GameActionResolver, u: UnitInstance) -> Di
 		# очередь с другого конца карты (#69). Дистанцию не считаем сами: правило и
 		# исключение для снайпера живут в резолвере.
 		if r.shot_is_futile(u, t):
+			continue
+		# Противотанкист бьёт ВЗРЫВОМ (§3.14), и промах кладёт заряд недолётом (#7):
+		# по цели в двух шагах он подрывает сам себя. Резолвер считает все шесть
+		# исходов кубика и отвечает, накроет ли своих (issue 3).
+		if r.anti_tank_shot_endangers_own(u, t.coord):
 			continue
 		var dist := Combat.distance(u.coord, t.coord)
 		var hit_need := Combat.hit_number(dist, u.stats.fire_range)
@@ -874,6 +891,10 @@ func _best_vehicle_shot(state: GameState, r: GameActionResolver, u: UnitInstance
 			# Условия проверяет сам резолвер — линия огня, стены, дальность.
 			if r.can_blast_cell(u, fc) != "":
 				continue
+			# Своих (и себя) взрывом не накрываем (issue 3): танк стоит близко, и
+			# соблазн ударить в упор здесь особенно велик.
+			if r.anti_tank_shot_endangers_own(u, fc):
+				continue
 			var ease := float(7 - Combat.hit_number(
 				Combat.distance(u.coord, fc), u.stats.fire_range))
 			var score := SCORE_SHOOT_BASE + _vehicle_value(veh) + ease * 2.0
@@ -934,6 +955,10 @@ func _best_blast_path(state: GameState, r: GameActionResolver, u: UnitInstance) 
 		if hit.x < 0:
 			continue
 		if r.can_blast_cell(u, hit) != "":
+			continue
+		# Недолёт при плохом броске (#7) достаёт и сапёра: ту же проверку, что у
+		# боевого выстрела, проходит и подрыв стены (issue 3).
+		if r.anti_tank_shot_endangers_own(u, hit):
 			continue
 		# Пробоина полезна, только если она ВЕДЁТ к врагу: клетка за стеной должна быть
 		# ближе к нему, чем мы сами, иначе ИИ будет крошить стены за спиной.
