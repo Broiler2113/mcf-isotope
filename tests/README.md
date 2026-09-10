@@ -71,6 +71,15 @@ catch himself or a squadmate; and the shot cosmetics: one casing per round fired
 a second burst from the same cell landing in its *own* spots, and one
 "who shot whom" lane per attack.
 
+**`run_ui_assets.gd`** asserts every texture the interface skin is built from
+comes back as an *imported* resource rather than a raw disk read. The skin used
+to be loaded with `Image.load`, which the engine warns "will not work on
+export" — it survived only because `file_exists()` answers "no" inside a `.pck`
+and the code fell through to a backup branch. The run also pins the promise in
+`HOW_TO_REPLACE_INTERFACE_TEXTURES.txt` §4: a PNG dropped in on top of an
+imported one is still read straight off disk, so reskinning from source needs no
+re-import.
+
 ## Scope
 
 None of these runs is evidence that the game *plays* correctly. They are evidence

@@ -6,14 +6,18 @@ extends Node
 # Ported from Crazy Ball Runner 2D. Builds one Theme from the PNGs in
 # res://interface_textures/ and hangs it on the root Window, so EVERY
 # Control in EVERY menu inherits the gunmetal Steam look with no
-# per-scene wiring. Textures are read straight off disk (Image.load), so
-# dropping a replacement PNG reskins the game with no re-import.
+# per-scene wiring. Textures come from the IMPORTED resource, with a raw
+# disk read kept for a PNG the editor has not re-imported yet, so dropping
+# a replacement still reskins the game from source (see _load_tex).
 #
 # Headless-safe: skipped entirely when there is no display server, so the
 # sim/headless smoke tests are never touched.
 
 const TEX_DIR := "res://interface_textures/"
-const FONT_TTF := "res://interface_textures/ui_font.ttf"
+## Подложенный игроком шрифт: ui_font.ttf или ui_font.otf (оба обещаны в
+## HOW_TO_REPLACE_INTERFACE_TEXTURES.txt, §3).
+const FONT_BASE := "res://interface_textures/ui_font"
+const FONT_EXTS := ["ttf", "otf"]
 const SLICE := 6          # 9-slice border, matches the 32px generated chrome
 const FONT_FALLBACKS := ["Tahoma", "Verdana", "Geneva", "DejaVu Sans", "Arial", "Helvetica"]
 
@@ -284,10 +288,9 @@ func _build() -> Theme:
 #  Helpers
 # =====================================================================
 func _font() -> Font:
-	if FileAccess.file_exists(FONT_TTF):
-		var ff := FontFile.new()
-		if ff.load_dynamic_font(FONT_TTF) == OK:
-			return ff
+	var dropped := _font_file()
+	if dropped != null:
+		return dropped
 	var sf := SystemFont.new()
 	sf.font_names = PackedStringArray(FONT_FALLBACKS)
 	sf.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_AUTO
@@ -304,21 +307,76 @@ func get_ui_font() -> Font:
 func get_texture(name: String) -> Texture2D:
 	return _load_tex(name)
 
+## Подложенный игроком шрифт, если он есть. Порядок тот же, что у картинок.
+##
+## Раньше здесь стоял голый FileAccess.file_exists + load_dynamic_font, и в СОБРАННОЙ
+## игре это значило «шрифта нет»: сырого .ttf в .pck не лежит, а импортированный
+## никто не спрашивал. Игрок, подложивший свой шрифт, видел его из редактора и терял
+## в сборке — молча, с откатом на системный Tahoma.
+func _font_file() -> Font:
+	for ext: String in FONT_EXTS:
+		var path: String = FONT_BASE + "." + ext
+		if _raw_is_newer(path):
+			var fresh := FontFile.new()
+			if fresh.load_dynamic_font(path) == OK:
+				return fresh
+		if ResourceLoader.exists(path):
+			var res := ResourceLoader.load(path) as Font
+			if res != null:
+				return res
+		if FileAccess.file_exists(path):
+			var raw := FontFile.new()
+			if raw.load_dynamic_font(path) == OK:
+				return raw
+	return null
+
+## Картинка интерфейса по имени.
+##
+## Порядок попыток ОБРАТЕН прежнему, и это главное здесь. Раньше первым шёл сырой файл
+## с диска (Image.load), а импортированный ресурс лежал в запасных. Движок на это
+## честно ругался — «Loaded resource as image file, this will not work on export», —
+## и работало оно лишь по случайности: в .pck сырого PNG нет, file_exists() отвечает
+## «нет», и мы сваливались в запасную ветку. Стоило бы экспорту прихватить PNG как
+## обычный файл, и ВЕСЬ интерфейс поехал бы мимо импорта — без сжатия, без настроек
+## фильтра, с лишней распаковкой на старте.
+##
+## Теперь главный — импортированный ресурс. Обещание из
+## HOW_TO_REPLACE_INTERFACE_TEXTURES.txt (§4: «подменил PNG, запустил из исходников —
+## видно сразу, без переимпорта») при этом цело: редактор, разобрав картинку,
+## переписывает её .import, поэтому «PNG новее своего .import» — это ровно «положили
+## и ещё не разобрали», и такой файл читается с диска. В собранной игре рядом нет ни
+## PNG, ни .import, и эта ветка не оживает никогда.
 func _load_tex(name: String) -> Texture2D:
 	if _tex_cache.has(name):
 		return _tex_cache[name]
 	var path := TEX_DIR + name + ".png"
 	var tex: Texture2D = null
-	if FileAccess.file_exists(path):
+	if _raw_is_newer(path):
 		var img := Image.new()
 		if img.load(path) == OK:
 			tex = ImageTexture.create_from_image(img)
 	if tex == null and ResourceLoader.exists(path):
-		var r := load(path)
-		if r is Texture2D:
-			tex = r
+		var res := ResourceLoader.load(path) as Texture2D
+		if res != null:
+			tex = res
+	# Последняя попытка: .import на месте, а разобранного файла нет (свежий клон без
+	# .godot/, запуск мимо редактора). Лучше картинка без импорта, чем серый квадрат.
+	if tex == null and FileAccess.file_exists(path):
+		var img_raw := Image.new()
+		if img_raw.load(path) == OK:
+			tex = ImageTexture.create_from_image(img_raw)
 	_tex_cache[name] = tex
 	return tex
+
+## Лежит ли на диске файл СВЕЖЕЕ своего разбора: сам он есть, а .import старше его
+## (или .import нет вовсе). Это и значит «положили своё, редактор ещё не видел».
+static func _raw_is_newer(path: String) -> bool:
+	if not FileAccess.file_exists(path):
+		return false
+	var imported := path + ".import"
+	if not FileAccess.file_exists(imported):
+		return true
+	return FileAccess.get_modified_time(path) > FileAccess.get_modified_time(imported)
 
 func _sb(name: String, pad_h: int, pad_v: int) -> StyleBox:
 	var tex := _load_tex(name)
