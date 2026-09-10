@@ -1187,6 +1187,18 @@ is placed back as the cell's `occupant` — the same corpse a bullet would have 
 can still be picked up, dragged, or stacked into a wall. Order matters: the clearing pass
 walks the very same cells, so putting the body down first would erase it.
 
+**Boarding is not a refuel** (item 4). A vehicle's AP is set from its living
+owner-side crew at the start of its activation. Someone climbing in mid-turn adds *his*
+point but does not restore points the vehicle already spent — `veh.ap` becomes
+`min(veh.ap + 1, crew)`, not `crew`. Before this, a tank that had driven and fired was
+back to full the moment a passenger boarded, which read on the board as AP markers that
+would not go away.
+
+**Tracks leave a mark** (item 1). Everything the footprint flattens — rammed walls,
+crushed cover, scattered bodies — is reported to the cosmetics layer as `debris`, the
+same event an explosion sends, so the tiles read as destroyed instead of reverting to
+clean floor. Purely visual: the cells were already cleared before.
+
 **Vehicles finish partial moves like infantry** (#97). `Vehicle.move_credit` mirrors
 `UnitInstance.move_credit` under §3.2 action splitting: a fresh Move spends 1 AP and banks
 `speed − cost`, and any later Move that turn spends the banked points instead of AP. The

@@ -65,6 +65,17 @@ const FORCED_TRIES_PER_UNIT := 2
 ## сближением и захватом: подойти к танку для него важнее, чем брести к пехоте,
 ## но выстрел (SCORE_SHOOT_BASE) всё равно перевешивает любой ход.
 const SCORE_ANTI_TANK_APPROACH := 25.0
+## Надбавка противотанкисту за выстрел ПО ТЕХНИКЕ (item 7: «make AI anti-tankers
+## prioritize destroying enemy tanks (when they're accessible) over killing units or
+## moving around»).
+##
+## Одной оценки цели для этого не хватало: выстрел по машине стоил
+## SCORE_SHOOT_BASE + _vehicle_value, выстрел по пехоте — SCORE_SHOOT_BASE + _unit_value,
+## и у побитого челнока с одним живым водителем цена падала ниже пулемётчика. Формально
+## верно — а по смыслу нет: противотанкист единственный в армии, чей выстрел вообще
+## снимает с брони прочность, и разменивать его на пехоту нечем. Надбавка заведомо
+## перекрывает разброс _unit_value, поэтому ДОСТУПНАЯ машина побеждает любую пехоту.
+const SCORE_ANTI_TANK_PRIORITY := 60.0
 ## Клетка, с которой танк ВЫВОДИТ ПУШКУ НА ЛИНИЮ огня. Пушка бьёт только по прямой
 ## (#55), поэтому «встать в створ» для машины ценно само по себе — даже когда шаг
 ## не сокращает дистанцию до врага.
@@ -1025,7 +1036,8 @@ func _best_vehicle_shot(state: GameState, r: GameActionResolver, u: UnitInstance
 				continue
 			var ease := float(7 - Combat.hit_number(
 				Combat.distance(u.coord, fc), u.stats.fire_range))
-			var score := SCORE_SHOOT_BASE + _vehicle_value(veh) + ease * 2.0
+			var score := SCORE_SHOOT_BASE + SCORE_ANTI_TANK_PRIORITY \
+					+ _vehicle_value(veh) + ease * 2.0
 			if best.is_empty() or score > best["score"]:
 				best = {"score": score, "intent": ShootIntent.new(u.id, -1, -1, fc)}
 	return best

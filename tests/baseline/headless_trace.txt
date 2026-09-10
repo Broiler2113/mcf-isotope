@@ -140,6 +140,7 @@ initiative Neutral → Player A → Player B
     log: Civilian: move → (12, 23) [AP: 1]
     log: Civilian: move → (11, 22) [AP: 0]
     log: Civilian: move → (3, 24) [AP: 0]
+    dice: {kind:slot,owner:101}
     dice: {kind:hold,units:{16:(13, 22)}}
     dice: {coord:(13, 22),kind:focus,unit:16}
     dice: {from:(13, 22),kind:walk,path:[(13, 21)],unit:16}
@@ -151,6 +152,7 @@ initiative Neutral → Player A → Player B
     dice: {from:1,kind:ap,left:0,unit:16}
     dice: {coord:(2, 25),kind:focus,unit:16}
     dice: {from:(2, 25),kind:walk,path:[(3, 24),(4, 23),(5, 22),(6, 21),(7, 20),(8, 19)],unit:16}
+    dice: {kind:slot,owner:102}
     dice: {kind:hold,units:{18:(19, 22)}}
     dice: {coord:(19, 22),kind:focus,unit:18}
     dice: {from:(19, 22),kind:walk,path:[(20, 21),(21, 20),(22, 19)],unit:18}
@@ -162,6 +164,7 @@ initiative Neutral → Player A → Player B
     dice: {from:1,kind:ap,left:0,unit:18}
     dice: {coord:(31, 25),kind:focus,unit:18}
     dice: {from:(31, 25),kind:walk,path:[(30, 24),(29, 23),(28, 22),(27, 21),(26, 20),(25, 19)],unit:18}
+    dice: {kind:slot,owner:100}
     dice: {kind:hold,units:{19:(17, 18)}}
     dice: {coord:(17, 18),kind:focus,unit:19}
     dice: {from:(17, 18),kind:walk,path:[(16, 19),(15, 20),(16, 21)],unit:19}
@@ -291,6 +294,7 @@ initiative Neutral → Player A → Player B
     log: Civilian: move → (0, 19) [AP: 1]
     log: Civilian: move → (5, 13) [AP: 0]
     log: Civilian: move → (5, 12) [AP: 0]
+    dice: {kind:slot,owner:101}
     dice: {kind:hold,units:{16:(8, 19)}}
     dice: {coord:(8, 19),kind:focus,unit:16}
     dice: {from:(8, 19),kind:walk,path:[(7, 18),(6, 17),(5, 16),(4, 15),(4, 14),(5, 13)],unit:16}
@@ -312,6 +316,7 @@ initiative Neutral → Player A → Player B
     dice: {from:(5, 9),kind:walk,path:[(5, 8)],unit:16}
     dice: {coord:(5, 8),kind:focus,unit:16}
     dice: {from:(5, 8),kind:walk,path:[(5, 9)],unit:16}
+    dice: {kind:slot,owner:102}
     dice: {kind:hold,units:{18:(25, 19)}}
     dice: {coord:(25, 19),kind:focus,unit:18}
     dice: {from:(25, 19),kind:walk,path:[(24, 18),(24, 17),(25, 16),(26, 15),(27, 14),(28, 13)],unit:18}
@@ -329,6 +334,7 @@ initiative Neutral → Player A → Player B
     dice: {from:(27, 13),kind:walk,path:[(28, 12)],unit:18}
     dice: {coord:(28, 12),kind:focus,unit:18}
     dice: {from:(28, 12),kind:walk,path:[(27, 13)],unit:18}
+    dice: {kind:slot,owner:100}
     dice: {kind:hold,units:{19:(3, 24)}}
     dice: {coord:(3, 24),kind:focus,unit:19}
     dice: {from:(3, 24),kind:walk,path:[(2, 23)],unit:19}
@@ -435,6 +441,7 @@ initiative Neutral → Player A → Player B
     log: Civilian: move → (5, 9) [AP: 0]
     log: Civilian: move → (5, 8) [AP: 0]
     log: Civilian: move → (5, 9) [AP: 0]
+    dice: {kind:slot,owner:101}
     dice: {kind:hold,units:{16:(5, 9)}}
     dice: {coord:(5, 9),kind:focus,unit:16}
     dice: {from:(5, 9),kind:walk,path:[(5, 8)],unit:16}
@@ -541,6 +548,7 @@ initiative Neutral → Player A → Player B
     log: Civilian: move → (5, 9) [AP: 0]
     log: Civilian: move → (5, 8) [AP: 0]
     log: Civilian: move → (5, 9) [AP: 0]
+    dice: {kind:slot,owner:101}
     dice: {kind:hold,units:{16:(5, 9)}}
     dice: {coord:(5, 9),kind:focus,unit:16}
     dice: {from:(5, 9),kind:walk,path:[(5, 8)],unit:16}
@@ -611,6 +619,7 @@ initiative Neutral → Player A → Player B
     log: Civilian: move → (5, 8) [AP: 1]
     log: Civilian: move → (13, 7) [AP: 1]
     log: Civilian: move → (4, 0) [AP: 0]
+    dice: {kind:slot,owner:101}
     dice: {kind:hold,units:{16:(5, 9)}}
     dice: {coord:(5, 9),kind:focus,unit:16}
     dice: {from:(5, 9),kind:walk,path:[(5, 8)],unit:16}
@@ -637,6 +646,7 @@ initiative Neutral → Player A → Player B
     log: Civilian: move → (13, 9) [AP: 1]
     log: Civilian: move → (21, 5) [AP: 0]
     log: Civilian: move → (20, 5) [AP: 0]
+    dice: {kind:slot,owner:101}
     dice: {kind:hold,units:{16:(4, 0)}}
     dice: {coord:(4, 0),kind:focus,unit:16}
     dice: {from:(4, 0),kind:walk,path:[(5, 1),(6, 2),(7, 3),(8, 4),(9, 5),(10, 6),(11, 7),(12, 8),(13, 9)],unit:16}

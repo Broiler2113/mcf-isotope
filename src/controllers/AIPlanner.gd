@@ -35,6 +35,17 @@ const W_LANE_BLOCK := -20.0   # за то, что встали в створ С�
 const W_LANE_CLEAR := 14.0    # за то, что ушли из чужого створа, освободив линию
 const W_STAY := 2.0           # инерция: без выгоды бойца с места не гоняем
 const W_STEP := -0.15         # за каждое потраченное очко движения (ровные пути)
+## За то, что боец встал НА ДОРОГЕ СВОЕЙ ЖЕ ТЕХНИКЕ (item 2: «creates a path that
+## doesn't have allied soldiers in the tanks' way beforehand»).
+##
+## Танк давит всё, что под гусеницей, и своих в том числе. Запретить ему такой переезд
+## мало — от этого он просто перестаёт ехать: пехота уже стоит в колее, объезжать
+## машине негде, и вместо раздавленного взвода получается танк, простоявший бой. Лечить
+## это надо РАНЬШЕ, на раздаче клеток: штаб просто не посылает людей в коридор, по
+## которому сегодня поедет машина. Вес держится между укрытием и створом — место в
+## колее плохое, но если там единственная позиция с сектором обстрела, боец всё равно
+## её займёт.
+const W_TANK_PATH := -12.0
 
 var owner: int = -1
 ## unit_id -> Vector2i: куда штаб послал бойца в этом ходу.
@@ -49,6 +60,9 @@ var _r: GameActionResolver = null
 var _enemies: Array = []       # живые враги, по которым ИИ вообще стреляет
 var _threats: Array = []       # все живые враги, включая мирных — они тоже стреляют
 var _field: GeoField = null    # геополе до врага (шаги в обход стен)
+## Клетки, по которым СЕГОДНЯ может проехать наша техника (item 2). Считается один раз
+## на план: позиции машин внутри плана не меняются.
+var _tank_path: Dictionary = {}
 
 ## Карта створов: Vector2i -> {ally_id: true} — кто из своих стрелков простреливает
 ## эту клетку насквозь. Считается ОДИН раз на весь план.
@@ -121,6 +135,7 @@ func plan(state: GameState, r: GameActionResolver, field: GeoField,
 	_build_lanes(actors)
 	_build_exposure()
 	_build_line_targets()
+	_build_tank_paths()
 
 	# Кандидаты — плоские тройки [score, id, coord], а не словари: их десятки тысяч,
 	# и словарь на каждую клетку карты стоит дороже самой оценки. Сравнение в
@@ -246,8 +261,43 @@ func _score_cell(u: UnitInstance, coord: Vector2i, start_geo: int, steps: int,
 		score += float(lanes) * W_LANE_BLOCK
 	elif leaving_lane:
 		score += W_LANE_CLEAR  # мы стояли в створе и уходим с него — это ценно само по себе
+	# 5. Не стоять на дороге у своей же техники (item 2).
+	if _tank_path.has(coord):
+		score += W_TANK_PATH
 	score += float(steps) * W_STEP
 	return score
+
+## Коридор, по которому сегодня поедет своя техника (item 2).
+##
+## Берём КАЖДОЕ направление, куда машина вправе тронуться (танк — вдоль фронта, челнок —
+## на все восемь), планируем ход на весь запас хода теми же правилами, что его исполнят,
+## и помечаем все клетки, которые след машины при этом заметёт. Это и есть «дорога
+## танка»: не линия, а полоса шириной в корпус.
+##
+## Планируем на ПОЛНЫЙ запас, хотя машина, скорее всего, проедет меньше: пустая колея
+## впереди стоит дёшево, а вот боец, оставленный в трёх клетках по курсу, дороже — танк
+## доедет до него именно тогда, когда ему понадобится ехать.
+func _build_tank_paths() -> void:
+	_tank_path.clear()
+	for veh: Vehicle in _state.all_vehicles():
+		if veh.owner != owner or not veh.alive():
+			continue
+		var speed: int = int(VehicleDB.get_vehicle(veh.type_id).get("speed", 0))
+		if speed <= 0:
+			continue
+		var dirs: Array = []
+		if veh.facing != Vector2i.ZERO:
+			dirs = [veh.facing, -veh.facing]
+		else:
+			dirs = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1),
+				Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1)]
+		for dir: Vector2i in dirs:
+			var plan_res := VehicleRules.plan_line_move(_state, veh, dir, speed, speed)
+			if not plan_res["ok"]:
+				continue
+			for i in range(1, int(plan_res["steps"]) + 1):
+				for fc: Vector2i in veh.footprint_from(veh.origin + dir * i):
+					_tank_path[fc] = true
 
 ## Насколько легко бойцу shooter попасть по цели из клетки from: 0..6, −1 = не достанет.
 ## target можно не задавать, тогда стреляем по клетке at (для оценки простреливаемости).

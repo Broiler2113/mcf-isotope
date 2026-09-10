@@ -33,9 +33,12 @@ func _initialize() -> void:
 	_cover_can_make_a_shot_impossible()
 	_tanks_spare_their_own()
 	_every_tank_gets_moving()
+	_plan_keeps_the_tank_lane_clear()
+	_anti_tank_goes_for_the_armour()
 
 	if fails.is_empty():
-		print("ai conduct: no wasted shots, no crushed allies, every tank moves, no ping-pong")
+		print("ai conduct: no wasted shots, no crushed allies, every tank moves,"
+				+ " no ping-pong, clear tank lanes, anti-tank picks armour")
 		quit(0)
 		return
 	printerr("ai conduct: %d failure(s)" % fails.size())
@@ -326,3 +329,134 @@ func _every_tank_gets_moving() -> void:
 		ck(res.ok, "the resolver accepts the forced vehicle order (%s)" % res.reason)
 		ck(veh.origin != before_origin or veh.facing != before_facing,
 				"the vehicle actually ends up somewhere new")
+
+# --- 5. Штаб не ставит своих на дороге у своей же техники (item 2) --------------------
+##
+## «Make it so that when AI plans out a move… creates a path that doesn't have allied
+## soldiers in tanks' way beforehand». Запрещать танку давить своих (item 7 прошлой
+## партии правок) мало: от запрета машина просто перестаёт ехать — пехота уже в колее,
+## объезжать негде. Разводить их надо РАНЬШЕ, при раздаче клеток.
+##
+## Проверяется САМ МЕХАНИЗМ, а не удачная расстановка: колея строится там, где танк
+## действительно может проехать, и клетка в колее оценивается штабом строго ниже такой
+## же клетки вне её. Прогон «сыграть ход и посчитать, кто где встал» тут ничего не
+## доказывает — на открытом поле бойцы и без штрафа расходятся кто куда.
+func _plan_keeps_the_tank_lane_clear() -> void:
+	var m := MapData.new(26, 11)
+	for y in 11:
+		for x in 26:
+			m.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	m.set_spawn(Vector2i(1, 4), "tank", MCF.Owner.PLAYER_1, Vector2i(1, 0))
+	for i in 4:
+		m.set_spawn(Vector2i(2 + i, 9), "light_infantry", MCF.Owner.PLAYER_1)
+	for i in 3:
+		m.set_spawn(Vector2i(23, 3 + i * 2), "light_infantry", MCF.Owner.PLAYER_2)
+	GameConfig.civilians_enabled = false
+	var state := m.build_state(9)
+	var r := GameActionResolver.new(state)
+	r.fog_enabled = false
+	while state.active_player() != MCF.Owner.PLAYER_1:
+		r.resolve(EndTurnIntent.new())
+	var veh: Vehicle = state.all_vehicles()[0] if not state.all_vehicles().is_empty() else null
+	if veh == null:
+		ck(false, "the lane fixture has a tank")
+		return
+	veh.ap = 2  # машине нужно быть способной ехать, иначе и колеи нет
+
+	var planner := AIPlanner.new()
+	planner.owner = MCF.Owner.PLAYER_1
+	# Геополе строит сам ИИ — своё, с нуля, здесь бы просто не собралось.
+	var brain := AIController.new(MCF.Owner.PLAYER_1, AIController.Difficulty.NORMAL)
+	planner.plan(state, r, brain._enemy_distance_field(state, false, r), [])
+
+	var lane: Dictionary = planner._tank_path
+	ck(not lane.is_empty(), "the plan knows where the tank can drive")
+	# Клетка прямо по курсу обязана быть в колее; клетка далеко в стороне — нет.
+	var ahead: Vector2i = veh.origin + veh.facing * 2
+	ck(lane.has(ahead), "a cell straight ahead of the tank counts as its lane")
+	var aside := Vector2i(veh.origin.x, 10)
+	ck(not lane.has(aside), "a cell well off the axis does not")
+
+	# И оценка клетки в колее строго ниже — ровно на вес штрафа.
+	var soldier: UnitInstance = null
+	for u: UnitInstance in state.living_units_of(MCF.Owner.PLAYER_1):
+		if u.aboard_vehicle_id == -1:
+			soldier = u
+			break
+	if soldier == null:
+		ck(false, "the lane fixture has a soldier to score")
+		return
+	var in_lane := planner._score_cell(soldier, ahead, 0, 0, false)
+	var out_lane := planner._score_cell(soldier, ahead + Vector2i(0, 4), 0, 0, false)
+	ck(lane.has(ahead) and not lane.has(ahead + Vector2i(0, 4)),
+			"the two probe cells really are one in the lane and one out")
+	ck(in_lane < out_lane,
+			"a cell in the tank's lane scores below one beside it (%.1f vs %.1f)"
+			% [in_lane, out_lane])
+
+# --- 6. Противотанкист выбирает броню, а не пехоту (item 7) --------------------------
+##
+## «Make AI anti-tankers prioritize destroying enemy tanks (when they're accessible)
+## over killing units or moving around».
+##
+## Сцена нарочно ставит выбор ПРОТИВ машины: побитый челнок далеко (дешёвая цель,
+## трудное попадание), а пулемётчик — рядом и на линии (дорогая цель, лёгкое попадание).
+## По одной лишь оценке цели пехота здесь честно выигрывает, и до правки ИИ её и брал.
+## По смыслу это неверно: противотанкист единственный в армии, чей выстрел вообще
+## снимает с брони прочность, и разменивать его на пехоту нечем — на то и надбавка.
+func _anti_tank_goes_for_the_armour() -> void:
+	var m := MapData.new(24, 14)
+	for y in 14:
+		for x in 24:
+			m.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	m.set_spawn(Vector2i(2, 4), "anti_tank", MCF.Owner.PLAYER_1)
+	m.set_spawn(Vector2i(16, 4), "shuttle", MCF.Owner.PLAYER_2)
+	m.set_spawn(Vector2i(6, 8), "machinegunner", MCF.Owner.PLAYER_2)
+	GameConfig.civilians_enabled = false
+	var state := m.build_state(2024)
+	var r := GameActionResolver.new(state)
+	r.fog_enabled = false
+	while state.active_player() != MCF.Owner.PLAYER_1:
+		r.resolve(EndTurnIntent.new())
+	var veh: Vehicle = state.all_vehicles()[0] if not state.all_vehicles().is_empty() else null
+	if veh == null:
+		ck(false, "the anti-tank fixture has an enemy vehicle")
+		return
+	veh.durability = 1  # побитый корпус: как цель он дёшев, и в этом весь смысл сцены
+	var at: UnitInstance = null
+	var gunner: UnitInstance = null
+	for u: UnitInstance in state.all_units():
+		if not u.is_alive():
+			continue
+		if u.owner == MCF.Owner.PLAYER_1:
+			at = u
+		elif u.stats.special_ability_id != MCF.ABILITY_ANTI_TANK:
+			gunner = u
+	if at == null or gunner == null:
+		ck(false, "the anti-tank fixture has both an anti-tank and an infantry target")
+		return
+
+	# ОБЕ цели обязаны быть доступны — иначе это не выбор, а единственный вариант.
+	var hull: Vector2i = Vector2i(-1, -1)
+	for fc: Vector2i in veh.footprint():
+		if r.can_blast_cell(at, fc) == "":
+			hull = fc
+			break
+	ck(hull != Vector2i(-1, -1), "the enemy hull is a legal target from here")
+	ck(r.can_shoot(at, gunner) == "" and not r.shot_is_futile(at, gunner),
+			"and so is the infantryman (%s)" % r.can_shoot(at, gunner))
+	# Пехота здесь ДОРОЖЕ и БЛИЖЕ — по голой оценке цели она и должна была побеждать.
+	ck(Combat.distance(at.coord, gunner.coord) < Combat.distance(at.coord, hull),
+			"the infantry target is the closer, easier shot")
+
+	var ai := AIController.new(MCF.Owner.PLAYER_1, AIController.Difficulty.NORMAL)
+	ai.intent_ready.connect(_on_intent)
+	_pending = null
+	ai.begin_turn(state)
+	var picked_armour := false
+	if _pending is ShootIntent:
+		var sh: ShootIntent = _pending
+		picked_armour = sh.target_cell != Vector2i(-999, -999) \
+				and state.grid.vehicle_at(sh.target_cell) != -1
+	ck(picked_armour,
+			"the anti-tank still opens on the hull, not on the softer infantry target")

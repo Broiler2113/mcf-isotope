@@ -3221,6 +3221,11 @@ func advance_civilians(owner: int = MCF.Owner.NEUTRAL) -> ActionResult:
 		res.dice_events.append_array(sub.dice_events)
 		res.log_lines.append_array(sub.log_lines)
 		res.deaths.append_array(sub.deaths)
+		# Косметика жителя — ТА ЖЕ, что у любого другого стрелка (item 5): дорожка «кто в
+		# кого», трассер, гильзы, кровь. Этой строки здесь не было, и весь список fx
+		# подслота молча выбрасывался: мирные стреляли в полной тишине, и по экрану нельзя
+		# было понять, откуда прилетело.
+		res.fx.append_array(sub.fx)
 	# hold идёт ПЕРВЫМ во всём слоте (item 23): Main по нему снимает всех ходоков в их
 	# стартовые клетки разом, а уже потом проигрывает шаги и выстрелы по порядку.
 	if not moved_from.is_empty():
@@ -4521,7 +4526,14 @@ func play_civilian_slots() -> ActionResult:
 		var slot := state.turns.active_index
 		var res := advance_civilians(state.active_player())
 		out.log_lines.append_array(res.log_lines)
+		# Метка «сейчас ходит вот этот слот» (item 6): по ней экран подсвечивает нейтральную
+		# группу в списке инициативы, пока её ход отыгрывается. Своего active_player у неё в
+		# этот момент нет — резолвер проводит все нейтральные слоты внутри ОДНОЙ передачи
+		# хода, и очередь снаружи показывает уже следующего игрока.
+		if not res.dice_events.is_empty() or not res.fx.is_empty():
+			out.dice_events.append({"kind": "slot", "owner": state.active_player()})
 		out.dice_events.append_array(res.dice_events)
+		out.fx.append_array(res.fx)
 		out.deaths.append_array(res.deaths)
 		state.turns.end_turn(state.all_units())
 		if state.turns.active_index == slot:
@@ -4564,6 +4576,7 @@ func _resolve_end_turn(intent: EndTurnIntent = null) -> ActionResult:
 	# Броски жителей едут вместе с передачей хода: UI отыграет их анимацией, а смерти
 	# покажет только после кубика защиты — как и в любом другом обмене выстрелами (#96).
 	out.dice_events = civ.dice_events
+	out.fx.append_array(civ.fx)
 	out.deaths = civ.deaths
 	# Погибшие и косметика от подорвавшихся в огне мин — тоже частью передачи хода.
 	out.deaths.append_array(fire_res.deaths)
@@ -5151,7 +5164,12 @@ func _resolve_vehicle_board(intent: VehicleBoardIntent) -> ActionResult:
 	# переходит к ней, и она может водить/стрелять как своей (§техника).
 	var captured := _recompute_vehicle_owner(veh)
 	# ОД машины считаем только по экипажу-владельцу — чужаки не дают ходов машине.
-	veh.ap = _vehicle_crew_ap(veh)
+	# Севший добавляет СВОЁ очко, но потраченные машиной НЕ возвращает (item 4:
+	# «yellow circles on tanks don't disappear when action points are spent»). Здесь
+	# стоял полный пересчёт по числу экипажа — то есть посадка посреди хода возвращала
+	# танку всё, что он уже истратил: проехал, отстрелялся, подобрал пехотинца — и снова
+	# полон очков, с той же гроздью жёлтых точек на борту.
+	veh.ap = mini(veh.ap + 1, _vehicle_crew_ap(veh))
 	var res := ActionResult.new()
 	res.ok = true
 	var veh_name: String = VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)
@@ -5317,11 +5335,20 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 			"an anti-vehicle mine" if av else "a mine", mc.x, mc.y])
 		_apply_vehicle_damage(veh, dmg, "mine", res)
 	# Всё под гусеницами сносится в пол (трупы, укрытия, тараненные стены).
+	var flattened: Array[Vector2i] = []
 	for cell_coord in (plan["crush_cells"] + plan["scatter_cells"] + plan["ram_cells"]):
 		var c := state.grid.cell(cell_coord)
 		c.occupant = null
 		c.clear_feature()
 		c.corpse_count = 0
+		flattened.append(cell_coord)
+	# Пол под гусеницей выглядит РАЗБИТЫМ (item 1): «if a tank rams through a wall, make
+	# these tiles display as destroyed». Клетка менялась и раньше — стена исчезала, — но
+	# на вид оставалась чистым полом, будто там ничего и не стояло. Метка та же, что
+	# кладёт взрыв, поэтому и рисуется теми же щербинами. Эпицентра у переезда нет
+	# (NOWHERE): танк не взрывается, он ровняет — все клетки следа одинаковы.
+	if not flattened.is_empty():
+		_fx(res, {"fx": "debris", "at": NOWHERE, "cells": flattened})
 	# Раздавленный не пропадает бесследно (#97): на его клетке остаётся труп — такой же,
 	# как от пули, поэтому его можно подобрать или сложить в стену. Кладём ПОСЛЕ зачистки
 	# следа: она идёт по тем же клеткам и иначе сама бы его и стёрла.

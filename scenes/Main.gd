@@ -257,6 +257,15 @@ var _init_overlay_body: VBoxContainer
 var _paused: bool = false
 var _pause_btn: Button = null
 
+## Какой слот отыгрывается ПРЯМО СЕЙЧАС, когда это не active_player (item 6).
+##
+## Нейтральные слоты резолвер проводит все разом внутри ОДНОЙ передачи хода, поэтому
+## снаружи active_player() уже показывает следующего игрока, и группа жителей никогда
+## не оказывалась «активной» в тот момент, когда её ход видно на экране. Резолвер
+## помечает начало каждого такого слота событием {"kind": "slot"}, и на время его
+## проигрывания подсветка списка инициативы берётся отсюда. −1 = никто.
+var _playing_slot: int = -1
+
 ## Зелёный «сейчас ходит» в списке инициативы (item 5). Свой цвет, а не общий акцент
 ## интерфейса: акцент приглушённо-оливковый и рядом с цветными метками сторон за
 ## «зелёный» не читается, а метка хода обязана быть заметна с одного взгляда.
@@ -468,6 +477,13 @@ func _kick_if_ai() -> void:
 ## Показать отыгранный слот мирных (#96): сначала анимация их шагов и бросков, и лишь
 ## затем строки в журнал — иначе лог сообщал бы об убитом раньше, чем упадёт кубик.
 func _play_civilian_result(res: ActionResult) -> void:
+	# Дорожки «кто в кого» — ДО броска, ровно как у игроков и ИИ (item 5: «make the
+	# shooting indication also appear when neutrals are shooting at players' soldiers»).
+	# Житель стрелял беззвучно и без единой пометки: снаружи это выглядело так, будто
+	# боец умер сам по себе, и найти стрелявшего было нечем.
+	if not res.fx.is_empty():
+		_fx.apply_lanes(res.fx)
+		queue_redraw()
 	if not res.dice_events.is_empty():
 		_pending_death_ids.clear()
 		for id: int in res.deaths:
@@ -478,6 +494,15 @@ func _play_civilian_result(res: ActionResult) -> void:
 		_fast_playback = false
 		_pending_death_ids.clear()
 		queue_redraw()
+	# Остальная косметика (трассеры, гильзы, кровь) ложится ПОСЛЕ броска — иначе кровь
+	# опережала бы решение кубика.
+	if not res.fx.is_empty():
+		_fx.apply(res.fx)
+		queue_redraw()
+	# Слот отыгран — подсветку «сейчас ходит» снимаем (item 6).
+	_playing_slot = -1
+	if _init_overlay != null and _init_overlay.visible:
+		_refresh_initiative_overlay()
 	state.log.publish_result(res)
 	_refresh_status()
 
@@ -2398,6 +2423,12 @@ func _play_dice(events: Array) -> void:
 	for ev in events:
 		if ev.get("kind", "") == "hold":
 			continue
+		if ev.get("kind", "") == "slot":
+			# Начался ход нейтральной группы (item 6) — подсвечиваем её в списке.
+			_playing_slot = int(ev.get("owner", -1))
+			if _init_overlay != null and _init_overlay.visible:
+				_refresh_initiative_overlay()
+			continue
 		if ev.get("kind", "") == "focus":
 			# Камеру за ходящими нейтралами БОЛЬШЕ НЕ ВОДИМ (item 8): игрока раздражало,
 			# что вид дёргается к каждому активному жителю. Событие оставляем (оно ещё
@@ -4125,7 +4156,10 @@ func _refresh_initiative_overlay() -> void:
 			continue
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 8)
-		var active: bool = slot == tm.active_player()
+		# «Сейчас ходит» — либо активный слот очереди, либо нейтральная группа, чей ход
+		# отыгрывается прямо сейчас (item 6). Правило одно на всех: игрок, общий слот
+		# мирных и любая их группа помечаются одинаково.
+		var active: bool = slot == (_playing_slot if _playing_slot != -1 else tm.active_player())
 		var swatch := ColorRect.new()
 		swatch.custom_minimum_size = Vector2(14, 14)
 		swatch.color = _side_color(slot)
