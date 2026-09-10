@@ -39,7 +39,18 @@ enum Mode {NONE, MENU, MOVE, SHOOT, GRAB, ITEM, PUSH, DRONE_FLY, BUILD, BUILD_WA
 	CORPSE_DROP, WELD, MOVE_HELD, MINE, DISARM,
 	GROUP_MENU, GROUP_MOVE,
 	VEH_MENU, VEH_MOVE, VEH_TURN, VEH_CANNON, VEH_DISEMBARK,
-	DRAW, ERASE}
+	DRAW, ERASE, RULER}
+
+## Линейка (item 11): два конца и клетка под курсором. Инструмент чисто зрительский —
+## состояния не трогает, по сети не ходит, в повтор не пишется.
+##
+## Меряет она ту же дистанцию, что и правила (Combat.distance — «клетки по-королевски»,
+## диагональ равна прямой), а не расстояние по экрану: линейка, показывающая не то
+## число, по которому считается попадание, была бы хуже, чем никакой.
+var _ruler_a := Vector2i(-1, -1)
+var _ruler_b := Vector2i(-1, -1)
+var _ruler_hover := Vector2i(-1, -1)
+var _ruler_btn: Button = null
 
 ## Аннотации на поле (item 51). Каждый штрих — список клеток, автор и область видимости.
 enum DrawScope {SELF, TEAM}
@@ -235,6 +246,22 @@ var _info_label: Label
 var _init_label: RichTextLabel
 var _init_overlay: Control
 var _init_overlay_body: VBoxContainer
+## Бой машина-против-машины идёт сам и остановить его было нечем (item 4). Пока за
+## столом есть человек, пауза не нужна: ход всё равно ждёт его действия. А когда обе
+## стороны ведёт ИИ, партия отыгрывается сама собой, и посмотреть на позицию — или
+## просто отойти — можно было только закрыв игру.
+##
+## Пауза держит ровно одно: следующий шаг ИИ. Состояние она не трогает, поэтому
+## встать на паузу безопасно в любой момент, в том числе посреди чужого хода —
+## доигранное останется доигранным.
+var _paused: bool = false
+var _pause_btn: Button = null
+
+## Зелёный «сейчас ходит» в списке инициативы (item 5). Свой цвет, а не общий акцент
+## интерфейса: акцент приглушённо-оливковый и рядом с цветными метками сторон за
+## «зелёный» не читается, а метка хода обязана быть заметна с одного взгляда.
+const TURN_ACTIVE_COLOR := Color(0.35, 0.92, 0.42)
+
 ## Прозрачность окна чата (issue 5: «make the chat window half-transparent»). Половина —
 ## буквально: 0.5 по альфе фона рамки и её шапки, текст внутри остаётся непрозрачным.
 const PANEL_GLASS_ALPHA := 0.5
@@ -432,7 +459,7 @@ func _open_match() -> void:
 
 ## Отдать ход текущей стороне, если ею управляет не человек.
 func _kick_if_ai() -> void:
-	if state == null or _animating:
+	if state == null or _animating or _paused:
 		return
 	var ac: PlayerController = controllers.get(state.active_player())
 	if ac != null and not ac.is_local_human():
@@ -793,6 +820,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		_toggle_initiative_overlay()
 		get_viewport().set_input_as_handled()
 		return
+	# «P» — пауза боя ИИ против ИИ (item 4). Работает и во время анимации: пауза держит
+	# только СЛЕДУЮЩИЙ шаг машины, а начатое доигрывается до конца.
+	if event is InputEventKey and event.pressed and not event.echo \
+			and event.keycode == KEY_P and not event.ctrl_pressed:
+		_toggle_pause()
+		get_viewport().set_input_as_handled()
+		return
 	# Ctrl+S — сохранить партию (item 6/19): кнопки Save в правом меню больше нет.
 	if event is InputEventKey and event.pressed and not event.echo \
 			and event.keycode == KEY_S and event.ctrl_pressed:
@@ -854,6 +888,28 @@ func _unhandled_input(event: InputEvent) -> void:
 			if event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
 				_wall_commit()
 				return
+	# Линейка (item 11). Первый клик ставит начало, дальше расстояние тянется за курсором,
+	# второй клик закрепляет отрезок; следующий клик начинает новое измерение. Правая
+	# кнопка здесь не годится — она панорамирует камеру, — поэтому выход по Esc/кнопке.
+	if mode == Mode.RULER:
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT \
+				and event.pressed:
+			var at := _pos_to_cell(get_global_mouse_position())
+			if not state.grid.in_bounds(at):
+				return
+			if _ruler_a == Vector2i(-1, -1) or _ruler_b != Vector2i(-1, -1):
+				_ruler_a = at
+				_ruler_b = Vector2i(-1, -1)
+			else:
+				_ruler_b = at
+			queue_redraw()
+			return
+		if event is InputEventMouseMotion:
+			var hov := _pos_to_cell(get_global_mouse_position())
+			if hov != _ruler_hover:
+				_ruler_hover = hov
+				queue_redraw()
+			return
 	# Рисование аннотаций (item 51): тянем штрих левой кнопкой; отпускание фиксирует его
 	# и, в сетевой партии, рассылает. Симуляции это не касается — чистый клиентский слой.
 	if mode == Mode.DRAW:
@@ -1259,6 +1315,10 @@ func _escape_pressed() -> void:
 		_quit_dialog.hide()
 		return
 	if _animating:
+		return
+	# Выход из линейки (item 11) — с очисткой отрезка.
+	if mode == Mode.RULER:
+		_exit_ruler()
 		return
 	# Выход из режима рисования/стирания аннотаций (item 14/51): бросаем незавершённый штрих.
 	if mode == Mode.DRAW or mode == Mode.ERASE:
@@ -2155,9 +2215,47 @@ func _on_intent_ready(intent: Intent) -> void:
 ## заметно ходят ОДИН ЗА ДРУГИМ. Пауза же не даёт кадру «залипнуть» на расчётах.
 func _queue_ai_step(ctrl: PlayerController) -> void:
 	await get_tree().create_timer(AI_STEP_DELAY).timeout
+	# Пауза (item 4) держится здесь, в единственной точке, откуда ИИ вообще получает
+	# ход. Снятие паузы само зовёт _kick_if_ai(), и бой продолжается с того же места.
+	if _paused:
+		return
 	# За время паузы ход мог смениться (сдача хода, загрузка, конец боя).
 	if is_inside_tree() and state != null and state.active_player() == ctrl.owner:
 		ctrl.begin_turn(state)
+
+## Можно ли вообще ставить на паузу (item 4): когда КАЖДУЮ сторону ведёт машина.
+## В сети и в просмотре повтора паузы нет: там темпом распоряжается не эта сессия.
+func _pause_available() -> bool:
+	if networked or replay != null or state == null or state.roster == null:
+		return false
+	var sides := state.roster.player_ids()
+	if sides.is_empty():
+		return false
+	for side: int in sides:
+		if not _side_is_ai(side):
+			return false
+	return true
+
+func _toggle_pause() -> void:
+	if not _pause_available():
+		return
+	_paused = not _paused
+	_refresh_pause_button()
+	state.log.add("[paused]" if _paused else "[resumed]")
+	if not _paused:
+		_kick_if_ai()
+
+## Кнопка паузы видна только там, где пауза имеет смысл, и всегда говорит, что сделает.
+func _refresh_pause_button() -> void:
+	if _pause_btn == null:
+		return
+	var can := _pause_available()
+	_pause_btn.visible = can
+	_pause_btn.text = "Resume (AI vs AI)" if _paused else "Pause (AI vs AI)"
+	# Сторону мог взять человек, пока стояла пауза, — тогда держать бой больше нечем.
+	if not can and _paused:
+		_paused = false
+		_kick_if_ai()
 
 func _after_action() -> void:
 	_refresh_status()
@@ -3230,6 +3328,7 @@ func _draw() -> void:
 
 	# Аннотации игроков поверх поля (item 51).
 	_draw_annotations()
+	_draw_ruler()
 
 ## Отрисовка одного дрона (item 14): вынесена из общего прохода, чтобы дрон рисовался
 ## верхним слоем — поверх корпусов машин, над которыми он висит.
@@ -3627,6 +3726,11 @@ func _build_ui() -> void:
 	vbox.add_child(_button_row([_undo_btn, _redo_btn]))
 	# «Возврат в меню» — единая кнопка: в сети уводит из партии, в одиночке — в главное меню.
 	vbox.add_child(_compact_button("Return to Menu", _to_lobby))
+	# Пауза боя машин (item 4). Кнопка живёт рядом с управлением ходом и показывается
+	# только когда обе стороны ведёт ИИ — в остальных случаях останавливать нечего.
+	_pause_btn = _compact_button("Pause (AI vs AI)", _toggle_pause)
+	vbox.add_child(_pause_btn)
+	_refresh_pause_button()
 
 	vbox.add_child(_hsep())
 	_multi_btn = CheckBox.new()
@@ -3640,6 +3744,10 @@ func _build_ui() -> void:
 	_draw_btn = _compact_button("Draw", _enter_draw)
 	_erase_btn = _compact_button("Erase", _enter_erase)
 	vbox.add_child(_button_row([_draw_btn, _erase_btn]))
+	# Линейка (item 11) — рядом с рисованием: это такой же зрительский инструмент,
+	# ничего не меняющий на доске.
+	_ruler_btn = _compact_button("Ruler", _enter_ruler)
+	vbox.add_child(_ruler_btn)
 	var draw_lbl := Label.new()
 	draw_lbl.text = "Draw brush"
 	draw_lbl.add_theme_font_size_override("font_size", 11)
@@ -4005,8 +4113,19 @@ func _refresh_initiative_overlay() -> void:
 	var counts := _army_counts()
 	var tm := state.turns
 	for slot: int in tm.round_order:
+		var rec: Dictionary = counts.get(slot, {"alive": 0, "dead": 0})
+		# Слот, в котором НИКОГО НЕ БЫЛО (ни живых, ни павших), в очереди не показываем
+		# (item 2). Берётся он так: общий нейтральный слот («Neutral», без номера) держит
+		# спящих жителей, но стоит кварталу проснуться — §15 переводит весь кластер в
+		# СОБСТВЕННЫЙ слот группы (Neutral I, II, …), и исходный остаётся пустой
+		# навсегда. Из очереди он не вычёркивается намеренно — по ней читается история
+		# партии, — но показывать «Neutral — 0 alive / 0 dead» в каждом раунде незачем.
+		# Слот с павшими (все жители погибли) — другое дело: это уже история, она остаётся.
+		if int(rec["alive"]) == 0 and int(rec["dead"]) == 0:
+			continue
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 8)
+		var active: bool = slot == tm.active_player()
 		var swatch := ColorRect.new()
 		swatch.custom_minimum_size = Vector2(14, 14)
 		swatch.color = _side_color(slot)
@@ -4018,9 +4137,12 @@ func _refresh_initiative_overlay() -> void:
 				name_txt += " · %s" % MCF.team_name(t)
 		var lbl := Label.new()
 		lbl.text = "%s — %s" % [name_txt, _count_str(counts, slot)]
-		if slot == tm.active_player():
+		# Чей ход ИДЁТ ПРЯМО СЕЙЧАС — стрелка и зелёный (item 5). Правило одно на всех:
+		# слот мирных и слот активированной группы жителей помечаются ровно так же, как
+		# игрок, — по очереди ходят и они, и по ней же игрок сверяется, чей сейчас ход.
+		if active:
 			lbl.text = "▶ " + lbl.text
-			lbl.add_theme_color_override("font_color", Ui.accent_color())
+			lbl.add_theme_color_override("font_color", TURN_ACTIVE_COLOR)
 		if tm.is_eliminated(slot):
 			lbl.text += "  (eliminated)"
 			lbl.modulate = Color(1, 1, 1, 0.45)
@@ -4032,6 +4154,32 @@ func _refresh_initiative_overlay() -> void:
 ## Чей это рисунок: в сетевой партии — мой слот, в локальной — активная сторона.
 func _draw_author() -> int:
 	return my_owner if networked else _viewing_side()
+
+## Линейка (item 11): «measure distances» — включается и выключается своей кнопкой,
+## как рисование. Юнит при этом снимается с выделения: мерить обычно нужно ДО того, как
+## решишь, кем ходить, и открытое меню действий только мешало бы кликать по полю.
+func _enter_ruler() -> void:
+	if mode == Mode.RULER:
+		_exit_ruler()
+		return
+	_deselect()
+	mode = Mode.RULER
+	_ruler_a = Vector2i(-1, -1)
+	_ruler_b = Vector2i(-1, -1)
+	_ruler_hover = _pos_to_cell(get_global_mouse_position())
+	_refresh_ruler_button()
+	queue_redraw()
+
+func _exit_ruler() -> void:
+	mode = Mode.NONE
+	_ruler_a = Vector2i(-1, -1)
+	_ruler_b = Vector2i(-1, -1)
+	_refresh_ruler_button()
+	queue_redraw()
+
+func _refresh_ruler_button() -> void:
+	if _ruler_btn != null:
+		_ruler_btn.text = "Ruler: on" if mode == Mode.RULER else "Ruler"
 
 func _enter_draw() -> void:
 	# Повторное нажатие ВЫКЛЮЧАЕТ рисование (item 14): режим теперь снимается кнопкой,
@@ -4156,6 +4304,37 @@ func _clear_my_drawings() -> void:
 	queue_redraw()
 
 ## Нарисовать все видимые штрихи как ломаные по центрам клеток (item 51).
+## Линейка на поле (item 11): отрезок между концами, кружки на концах и число клеток
+## посередине. Число — это Combat.distance, то самое, по которому считается попадание:
+## по диагонали «две клетки» и «две клетки наискось» равны, и линейка обязана показывать
+## именно так, иначе игрок мерил бы одно, а правила считали другое.
+##
+## Второй конец, пока он не закреплён, берётся из-под курсора — расстояние тянется за
+## мышью, и прикинуть дистанцию можно не кликая вовсе.
+func _draw_ruler() -> void:
+	if mode != Mode.RULER or _ruler_a == Vector2i(-1, -1):
+		return
+	var b := _ruler_b if _ruler_b != Vector2i(-1, -1) else _ruler_hover
+	if not state.grid.in_bounds(b):
+		return
+	var pa := _cell_origin(_ruler_a) + Vector2(CELL, CELL) * 0.5
+	var pb := _cell_origin(b) + Vector2(CELL, CELL) * 0.5
+	var col := Color(1.0, 0.86, 0.25)
+	draw_line(pa, pb, Color(0, 0, 0, 0.55), 5.0)
+	draw_line(pa, pb, col, 2.0)
+	draw_arc(pa, CELL * 0.28, 0.0, TAU, 20, col, 2.0)
+	draw_arc(pb, CELL * 0.28, 0.0, TAU, 20, col, 2.0)
+	var dist := Combat.distance(_ruler_a, b)
+	var label := "%d" % dist if dist == 1 else "%d cells" % dist
+	var font := ThemeDB.fallback_font
+	var mid := (pa + pb) * 0.5
+	var size := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 16)
+	# Подложка под числом: над светлым полом жёлтая надпись иначе теряется.
+	draw_rect(Rect2(mid + Vector2(-size.x * 0.5 - 4, -14), size + Vector2(8, 6)),
+			Color(0, 0, 0, 0.7))
+	draw_string(font, mid + Vector2(-size.x * 0.5, 0), label,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 16, col)
+
 func _draw_annotations() -> void:
 	var all := _strokes.duplicate()
 	if not _cur_stroke.is_empty():
@@ -4673,6 +4852,7 @@ func _toggle_p2_ai() -> void:
 	_deselect()
 	_make_side(MCF.Owner.PLAYER_2)
 	_refresh_ai_buttons()
+	_refresh_pause_button()
 	_kick_if_ai()
 
 ## Тот же переключатель для первого игрока (#103) — так бой ИИ против ИИ включается прямо
@@ -4685,6 +4865,7 @@ func _toggle_p1_ai() -> void:
 	_deselect()
 	_make_side(MCF.Owner.PLAYER_1)
 	_refresh_ai_buttons()
+	_refresh_pause_button()
 	queue_redraw()
 	_kick_if_ai()
 
@@ -4710,6 +4891,7 @@ func _cycle_difficulty() -> void:
 	if p2_is_ai:
 		_make_side(MCF.Owner.PLAYER_2)
 	_refresh_ai_buttons()
+	_refresh_pause_button()
 	_kick_if_ai()
 
 func _refresh_ai_buttons() -> void:
@@ -4812,6 +4994,10 @@ func _order_labels() -> String:
 	return " → ".join(parts)
 
 func _refresh_status() -> void:
+	# Пауза (item 4) появляется и исчезает вместе с составом стола: сторону может взять
+	# человек, и наоборот. Дешевле сверять её здесь, на каждом обновлении строки хода,
+	# чем помнить про кнопку в каждой точке, где меняется ростер.
+	_refresh_pause_button()
 	if _status_label != null:
 		_status_label.text = "Turn: %s   |   Round: %d" % [
 			_side_label(state.active_player()), state.turns.round_number]

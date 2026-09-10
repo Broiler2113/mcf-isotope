@@ -26,9 +26,14 @@ func _initialize() -> void:
 	_offboard_lines()
 	_anti_tank_never_blasts_itself()
 	_fx_counts_every_shot()
+	_airlock_is_no_shelter()
+	_only_direct_hits_hurt_vehicles()
+	_hands_hold_one_body()
+	_drone_stays_near_its_station()
 
 	if fails.is_empty():
-		print("combat safety: off-board lines, anti-tank self-blast and shot cosmetics all hold")
+		print("combat safety: off-board lines, self-blast, cosmetics, airlocks,"
+				+ " direct-hit armour, one-body hands and the drone leash all hold")
 		quit(0)
 		return
 	printerr("combat safety: %d failure(s)" % fails.size())
@@ -201,3 +206,194 @@ func _spawn(state: GameState, stats_id: String, coord: Vector2i, owner: int) -> 
 		fails.append("cell %s is not free for the fixture" % coord)
 		return null
 	return state.spawn_unit(stats, coord, owner)
+
+# --- 4. Шлюз — не убежище от гусеницы (item 9) ---------------------------------------
+##
+## «When a unit is standing in an airlock and gets run over by a tank, they don't die.
+## Also, for some reason, airlocks don't get destroyed». Разбор клетки обрывался на
+## первой же подходящей ветке: увидев шлюз, правила техники возвращали «проезд стоит 1»
+## и до жильца не доходили вовсе — а сам шлюз при этом не помечался тараном и потому
+## оставался цел под танком.
+func _airlock_is_no_shelter() -> void:
+	var state := TS.build_state()
+	var grid := state.grid
+	var victim: UnitInstance = null
+	for u: UnitInstance in state.all_units():
+		if u.is_alive() and MCF.is_player(u.owner) \
+				and u.stats.special_ability_id != MCF.ABILITY_SHIELD_BEARER:
+			victim = u
+			break
+	if victim == null:
+		fails.append("no victim for the airlock fixture")
+		return
+	grid.cell(victim.coord).feature_id = MCF.FEATURE_AIRLOCK
+	var e := VehicleRules.cell_entry(state, victim.coord, -1)
+	ck(bool(e["ok"]), "a vehicle may drive into an airlock cell")
+	ck(bool(e["crush"]), "the man standing in the airlock is crushed")
+	ck(bool(e["ram"]), "the airlock is rammed, so the move clears it")
+
+	var empty := _free_plain_cell(state)
+	if empty != Vector2i(-1, -1):
+		grid.cell(empty).feature_id = MCF.FEATURE_AIRLOCK
+		var e2 := VehicleRules.cell_entry(state, empty, -1)
+		ck(bool(e2["ram"]), "an empty airlock is destroyed too")
+		ck(not bool(e2["crush"]), "…without claiming anybody who is not there")
+
+## Первая свободная клетка без объектов — площадка под приспособление.
+func _free_plain_cell(state: GameState) -> Vector2i:
+	for y in state.grid.height:
+		for x in state.grid.width:
+			var c := state.grid.cell(Vector2i(x, y))
+			if c != null and c.occupant == null and c.feature_id == "" \
+					and not c.is_wall() and not c.is_space and c.vehicle_id == -1:
+				return Vector2i(x, y)
+	return Vector2i(-1, -1)
+
+# --- 5. Броню пробивает только ПРЯМОЕ попадание (item 16) ----------------------------
+##
+## «Only a direct explosion (tank/anti-tank hit) deals damage to vehicles». Прежде
+## хватало того, что след машины задет осколочным полем: заряд в соседней клетке снимал
+## прочность наравне с попаданием в борт.
+func _only_direct_hits_hurt_vehicles() -> void:
+	var m := MapData.new(24, 12)
+	for y in 12:
+		for x in 24:
+			m.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	m.set_spawn(Vector2i(10, 5), "tank", MCF.Owner.PLAYER_2, Vector2i(1, 0))
+	m.set_spawn(Vector2i(2, 5), "anti_tank", MCF.Owner.PLAYER_1)
+	GameConfig.civilians_enabled = false
+	var state := m.build_state(555)
+	var r := GameActionResolver.new(state)
+	r.fog_enabled = false
+	var veh: Vehicle = state.all_vehicles()[0] if not state.all_vehicles().is_empty() else null
+	if veh == null:
+		fails.append("no vehicle for the direct-hit fixture")
+		return
+	var hull := veh.footprint()
+	var on_hull: Vector2i = hull[0]
+	# Клетка вплотную к корпусу, но НЕ на нём: соседний взрыв.
+	var beside := Vector2i(-1, -1)
+	for d: Vector2i in [Vector2i(-1, 0), Vector2i(0, -1), Vector2i(-1, -1)]:
+		var c: Vector2i = on_hull + d
+		if state.grid.in_bounds(c) and not hull.has(c):
+			beside = c
+			break
+	if beside == Vector2i(-1, -1):
+		fails.append("no cell beside the hull for the direct-hit fixture")
+		return
+	var area := MCF.blast_square(beside, MCF.ANTI_TANK_BLAST_RADIUS)
+	ck(area.has(on_hull),
+			"the fixture is honest: the near-miss blast really does cover the hull")
+
+	var before := veh.durability
+	var res := ActionResult.new()
+	res.ok = true
+	r._damage_vehicles_in_area(area, beside, MCF.ANTI_TANK_VEHICLE_DAMAGE, -1, res, "anti-tank")
+	ck(veh.durability == before,
+			"a blast NEXT TO the hull leaves the armour alone (%d -> %d)"
+			% [before, veh.durability])
+
+	var direct_area := MCF.blast_square(on_hull, MCF.ANTI_TANK_BLAST_RADIUS)
+	r._damage_vehicles_in_area(direct_area, on_hull, MCF.ANTI_TANK_VEHICLE_DAMAGE, -1,
+			res, "anti-tank")
+	ck(veh.durability < before,
+			"a blast ON the hull still takes durability off (%d -> %d)"
+			% [before, veh.durability])
+
+# --- 6. В руках одно тело (item 15) --------------------------------------------------
+func _hands_hold_one_body() -> void:
+	ck(MCF.CORPSE_CARRY_MAX == 1, "one body is the carrying limit")
+	var state := TS.build_state()
+	var r := GameActionResolver.new(state)
+	r.fog_enabled = false
+	var carrier: UnitInstance = null
+	for u: UnitInstance in state.all_units():
+		if u.is_alive() and MCF.is_player(u.owner) \
+				and u.stats.special_ability_id != MCF.ABILITY_SHIELD_BEARER:
+			carrier = u
+			break
+	if carrier == null:
+		fails.append("no carrier for the corpse fixture")
+		return
+	while state.active_player() != carrier.owner:
+		r.resolve(EndTurnIntent.new())
+	var a := carrier.coord + Vector2i(1, 0)
+	var b := carrier.coord + Vector2i(0, 1)
+	state.grid.cell(a).corpse_count = 2
+	state.grid.cell(b).corpse_count = 2
+	carrier.remaining_ap = 4
+	ck(r.resolve(PickUpCorpseIntent.new(carrier.id, a)).ok, "the first body goes into the hands")
+	ck(not r.resolve(PickUpCorpseIntent.new(carrier.id, b)).ok, "the second one is refused")
+	ck(carrier.carried_corpses == 1, "and the carrier is still holding exactly one")
+	# Подсветка обязана совпадать с отказом, иначе клик «не работает» молча.
+	ck(r.corpse_pickup_cells(carrier).is_empty(),
+			"no cell is offered for a second pickup")
+
+# --- 7. Дрон: привязь к станции (item 13) и видимый полёт (item 12) -------------------
+func _drone_stays_near_its_station() -> void:
+	ck(MCF.DRONE_LEASH == 15, "the leash is 15 tiles")
+	ck(MCF.DRONE_FLIGHT_RANGE == 30, "a full action point still buys 30 tiles of flight")
+	ck(MCF.DRONE_LEASH < MCF.DRONE_FLIGHT_RANGE,
+			"the leash, not the fuel, is what limits how far the drone gets")
+
+	var state := TS.build_state()
+	var r := GameActionResolver.new(state)
+	r.fog_enabled = false
+	var pilot: UnitInstance = null
+	for u: UnitInstance in state.living_units_of(MCF.Owner.PLAYER_1):
+		pilot = u
+		break
+	if pilot == null:
+		fails.append("no pilot for the drone fixture")
+		return
+	while state.active_player() != MCF.Owner.PLAYER_1:
+		r.resolve(EndTurnIntent.new())
+	var station := pilot.coord + Vector2i(1, 0)
+	state.grid.cell(station).feature_id = MCF.FEATURE_DRONE_STATION
+	state.grid.cell(station).feature_owner = pilot.owner
+	var drone := r._launch_drone_at(station, pilot)
+	if drone == null:
+		fails.append("the drone would not launch")
+		return
+	drone.remaining_ap = 2
+	drone.move_credit = 0
+
+	# Ни одна достижимая клетка не лежит дальше привязи — это и есть правило item 13.
+	var beyond := 0
+	var farthest := 0
+	for c: Vector2i in r.drone_flight_cells(drone):
+		var d := Combat.distance(c, drone.home_station)
+		farthest = maxi(farthest, d)
+		if d > MCF.DRONE_LEASH:
+			beyond += 1
+	ck(beyond == 0, "no cell beyond the leash is offered (%d were)" % beyond)
+	ck(farthest > 1, "the drone can still get somewhere (farthest %d)" % farthest)
+
+	# Полёт отыгрывается ПО КЛЕТКАМ (item 12): тем же событием, что и пеший переход.
+	var target := drone.coord
+	for c: Vector2i in r.drone_flight_cells(drone):
+		if Combat.distance(c, drone.coord) > Combat.distance(target, drone.coord):
+			target = c
+	var from := drone.coord
+	var res := r.resolve(DroneMoveIntent.new(drone.id, target))
+	ck(res.ok, "the drone flies (%s)" % res.reason)
+	var walk: Dictionary = {}
+	for ev: Dictionary in res.dice_events:
+		if String(ev.get("kind", "")) == "walk":
+			walk = ev
+	ck(not walk.is_empty(), "the flight comes back as a walk event, not a teleport")
+	if walk.is_empty():
+		return
+	ck(int(walk["unit"]) == drone.id, "the walk event belongs to the drone")
+	ck(walk["from"] == from, "it starts where the drone stood")
+	var path: Array = walk["path"]
+	ck(path.size() >= 1 and path[path.size() - 1] == target,
+			"and its path ends on the target cell")
+	# Каждый шаг маршрута — соседняя клетка: путь, а не отрезок между концами.
+	var jumps := 0
+	var prev: Vector2i = from
+	for step: Vector2i in path:
+		if Combat.distance(prev, step) != 1:
+			jumps += 1
+		prev = step
+	ck(jumps == 0, "the path is a real cell-by-cell route (%d jumps in it)" % jumps)
