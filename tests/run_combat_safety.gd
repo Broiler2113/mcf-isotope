@@ -30,10 +30,14 @@ func _initialize() -> void:
 	_only_direct_hits_hurt_vehicles()
 	_hands_hold_one_body()
 	_drone_stays_near_its_station()
+	_tracks_leave_wreckage()
+	_boarding_is_not_a_refuel()
+	_neutrals_shoot_in_plain_sight()
 
 	if fails.is_empty():
 		print("combat safety: off-board lines, self-blast, cosmetics, airlocks,"
-				+ " direct-hit armour, one-body hands and the drone leash all hold")
+				+ " direct-hit armour, one-body hands, the drone leash, track marks,"
+				+ " vehicle AP and visible neutral fire all hold")
 		quit(0)
 		return
 	printerr("combat safety: %d failure(s)" % fails.size())
@@ -397,3 +401,145 @@ func _drone_stays_near_its_station() -> void:
 			jumps += 1
 		prev = step
 	ck(jumps == 0, "the path is a real cell-by-cell route (%d jumps in it)" % jumps)
+
+# --- 8. Гусеница оставляет след (item 1) ---------------------------------------------
+##
+## «If a tank rams through a wall, make these tiles display as destroyed». Клетка
+## менялась и раньше — стена исчезала, — но на вид оставалась чистым полом, будто там
+## ничего и не стояло: переезд не сообщал КОСМЕТИКЕ ни слова, и слой следов о нём не
+## знал. Метка та же, что кладёт взрыв, поэтому и рисуется теми же щербинами.
+func _tracks_leave_wreckage() -> void:
+	var m := MapData.new(16, 8)
+	for y in 8:
+		for x in 16:
+			m.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	for y in 8:
+		m.set_cell(Vector2i(8, y), MCF.FLOOR_NORMAL, 0.0, false, MCF.FEATURE_WALL)
+	m.set_spawn(Vector2i(1, 2), "tank", MCF.Owner.PLAYER_1, Vector2i(1, 0))
+	m.set_spawn(Vector2i(0, 2), "light_infantry", MCF.Owner.PLAYER_1)
+	m.set_spawn(Vector2i(14, 2), "light_infantry", MCF.Owner.PLAYER_2)
+	GameConfig.civilians_enabled = false
+	var state := m.build_state(77)
+	var r := GameActionResolver.new(state)
+	r.fog_enabled = false
+	while state.active_player() != MCF.Owner.PLAYER_1:
+		r.resolve(EndTurnIntent.new())
+	var veh: Vehicle = state.all_vehicles()[0] if not state.all_vehicles().is_empty() else null
+	if veh == null:
+		fails.append("no tank for the track fixture")
+		return
+	var crew: UnitInstance = null
+	for u: UnitInstance in state.living_units_of(MCF.Owner.PLAYER_1):
+		crew = u
+		break
+	r.resolve(VehicleBoardIntent.new(crew.id, veh.id))
+	ck(state.grid.cell(Vector2i(8, 2)).is_wall(), "the wall is standing before the ram")
+	var res := r.resolve(VehicleMoveIntent.new(veh.id, Vector2i(1, 0), 8))
+	ck(res.ok, "the tank drives through it (%s)" % res.reason)
+	ck(not state.grid.cell(Vector2i(8, 2)).is_wall(), "and the wall is gone afterwards")
+	var debris: Dictionary = {}
+	for ev: Dictionary in res.fx:
+		if String(ev.get("fx", "")) == "debris":
+			debris = ev
+	ck(not debris.is_empty(), "the move reports the flattened tiles to the cosmetics layer")
+	if debris.is_empty():
+		return
+	ck((debris["cells"] as Array).has(Vector2i(8, 2)),
+			"the rammed wall tile is among them")
+	# И слой следов действительно помечает пол разбитым — это и рисуется игроку.
+	var fx := FxDecals.new()
+	fx.apply(res.fx)
+	ck(int(fx.floor_damage.get(Vector2i(8, 2), 0)) > 0,
+			"the tile now reads as damaged floor")
+
+# --- 9. Посадка не заправляет машину (item 4) ----------------------------------------
+##
+## «Yellow circles on tanks don't disappear when action points are spent». Точек на
+## борту ровно столько, сколько у машины ОД, — а посадка пересчитывала их по числу
+## экипажа с нуля, то есть возвращала всё потраченное: проехал, отстрелялся, подобрал
+## пехотинца — и снова полон очков.
+func _boarding_is_not_a_refuel() -> void:
+	var m := MapData.new(22, 9)
+	for y in 9:
+		for x in 22:
+			m.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	m.set_spawn(Vector2i(4, 3), "tank", MCF.Owner.PLAYER_1, Vector2i(1, 0))
+	m.set_spawn(Vector2i(3, 3), "light_infantry", MCF.Owner.PLAYER_1)
+	m.set_spawn(Vector2i(3, 4), "light_infantry", MCF.Owner.PLAYER_1)
+	m.set_spawn(Vector2i(3, 5), "light_infantry", MCF.Owner.PLAYER_1)
+	m.set_spawn(Vector2i(19, 3), "light_infantry", MCF.Owner.PLAYER_2)
+	GameConfig.civilians_enabled = false
+	var state := m.build_state(4242)
+	var r := GameActionResolver.new(state)
+	r.fog_enabled = false
+	while state.active_player() != MCF.Owner.PLAYER_1:
+		r.resolve(EndTurnIntent.new())
+	var veh: Vehicle = state.all_vehicles()[0] if not state.all_vehicles().is_empty() else null
+	if veh == null:
+		fails.append("no tank for the AP fixture")
+		return
+	var crew: Array = []
+	for u: UnitInstance in state.living_units_of(MCF.Owner.PLAYER_1):
+		crew.append(u)
+	ck(r.resolve(VehicleBoardIntent.new(crew[0].id, veh.id)).ok, "the first crewman boards")
+	ck(r.resolve(VehicleBoardIntent.new(crew[1].id, veh.id)).ok, "the second boards")
+	ck(veh.ap == 2, "two crew give the tank two action points (got %d)" % veh.ap)
+	ck(r.resolve(VehicleMoveIntent.new(veh.id, veh.facing, 2)).ok, "the tank drives")
+	ck(veh.ap == 1, "which spends one of them (got %d)" % veh.ap)
+	# Третий садится вплотную к борту: очко добавляется, потраченное НЕ возвращается.
+	var spare: UnitInstance = crew[2]
+	var beside: Vector2i = veh.footprint()[0] + Vector2i(0, -1)
+	if state.grid.in_bounds(beside) and state.grid.cell(beside).occupant == null:
+		# place() сам снимает юнита с прежней клетки — отдельного remove у сетки нет.
+		state.grid.place(spare, beside)
+		var b := r.resolve(VehicleBoardIntent.new(spare.id, veh.id))
+		if b.ok:
+			ck(veh.ap <= 2, "a third crewman does not refund the spent point (ap=%d)" % veh.ap)
+			ck(veh.ap == 2, "he adds his own, though (ap=%d, crew=%d)"
+					% [veh.ap, veh.living_crew_count()])
+
+# --- 10. Мирные стреляют на виду (items 5 и 6) ---------------------------------------
+##
+## «Make the shooting indication also appear when neutrals are shooting at players'
+## soldiers and add the same shooting animation». Косметика жителя собиралась как у
+## всех, но при сборке слота её просто выбрасывали — список fx подытога никуда не
+## копировался. Житель стрелял в полной тишине: боец падал, и найти стрелявшего было
+## нечем. Заодно слот сообщает о себе (item 6), чтобы список инициативы мог подсветить
+## идущую группу: своего active_player у неё нет — резолвер проводит все нейтральные
+## слоты внутри одной передачи хода.
+func _neutrals_shoot_in_plain_sight() -> void:
+	var m := MapData.new(16, 8)
+	for y in 8:
+		for x in 16:
+			m.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	# Мирные дерутся, только когда их БОЛЬШЕ, чем солдат рядом (§нейтралы): один житель
+	# против взвода честно убегает, и выстрела в такой сцене не дождёшься.
+	for i in 5:
+		m.set_spawn(Vector2i(2 + i, 5), "civilian", MCF.Owner.NEUTRAL)
+	m.set_spawn(Vector2i(4, 3), "light_infantry", MCF.Owner.PLAYER_1)
+	GameConfig.civilians_enabled = true
+	var state := m.build_state(31)
+	var r := GameActionResolver.new(state)
+	r.fog_enabled = false
+	for u: UnitInstance in state.all_units():
+		if MCF.is_neutral(u.owner):
+			u.civilian_active = true
+	var lanes := 0
+	var slot_marks := 0
+	var shots := 0
+	for i in 8:
+		var res := r.resolve(EndTurnIntent.new())
+		for ev: Dictionary in res.fx:
+			if String(ev.get("fx", "")) == "lane":
+				lanes += 1
+		for ev: Dictionary in res.dice_events:
+			if String(ev.get("kind", "")) == "slot":
+				slot_marks += 1
+		for line: String in res.log_lines:
+			if line.findn("hits (need") != -1:
+				shots += 1
+	ck(shots > 0, "the fixture really does get civilians shooting (%d volleys)" % shots)
+	ck(lanes > 0,
+			"a civilian shooting a player's soldier leaves a who-shot-whom lane (%d)" % lanes)
+	ck(slot_marks > 0,
+			"and the civilian slot announces itself so the initiative list can mark it")

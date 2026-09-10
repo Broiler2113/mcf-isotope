@@ -87,6 +87,12 @@ checked); never drives a tank over its own infantry; never walks a unit back to
 where it stood a turn ago; and that an idle vehicle is picked up by the forced pass
 and given a real order, even when the infantry has already met its activity quota.
 
+`run_ai_conduct.gd` also covers the planner keeping soldiers out of a friendly tank's
+driving lane, and the anti-tank opening on armour rather than on a closer, softer
+infantry target. `run_combat_safety.gd` also covers a tank's tracks reporting the
+tiles they flatten, boarding not refunding a vehicle's spent AP, and a civilian's
+fire producing the same who-shot-whom lane as anyone else's.
+
 **`run_mirror_stamp.gd`** builds the real placement scene, stages one of every kind
 in the host's zone and stamps the mirrored formation, asserting that infantry *and
 every vehicle* cross over and land fully inside the guest's deployment zone. It
