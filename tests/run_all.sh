@@ -13,7 +13,8 @@ for script in tests/check_scripts.gd tests/run_codec.gd tests/run_headless.gd \
               tests/run_lockstep.gd tests/run_player_actions.gd \
               tests/run_lobby_maps.gd tests/run_combat_safety.gd \
               tests/run_ui_assets.gd tests/run_ai_conduct.gd \
-              tests/run_mirror_stamp.gd tests/run_modular_tank.gd; do
+              tests/run_mirror_stamp.gd tests/run_modular_tank.gd \
+              tests/run_mines_and_corpses.gd; do
   echo "=== $script ==="
   # shellcheck disable=SC2086
   "$GODOT" --headless --script "res://$script" $EXTRA
@@ -23,6 +24,10 @@ for script in tests/check_scripts.gd tests/run_codec.gd tests/run_headless.gd \
     fail=1
   fi
 done
+
+# Сетевая партия на двух процессах (batch 12): лобби → расстановка → бой по ENet.
+echo "=== tests/run_net_match.sh ==="
+bash tests/run_net_match.sh || fail=1
 
 if [ $fail -ne 0 ]; then
   echo "regression run FAILED"

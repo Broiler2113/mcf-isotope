@@ -89,8 +89,12 @@ class Slot extends RefCounted:
 
 	## Индекс цвета слота в PALETTE (для списков лобби). −1 нет: подбираем ближайший.
 	func color_index() -> int:
+		# Допуск шире is_equal_approx (batch 12 #8): цвет мог проехать через сеть или
+		# файл в 8-битном html-виде, и 0.85 возвращается как 0.851.
 		for i in Roster.PALETTE.size():
-			if Roster.PALETTE[i].is_equal_approx(color):
+			var pc: Color = Roster.PALETTE[i]
+			if absf(pc.r - color.r) < 0.01 and absf(pc.g - color.g) < 0.01 \
+					and absf(pc.b - color.b) < 0.01:
 				return i
 		return id % Roster.PALETTE.size()
 
@@ -237,6 +241,21 @@ func is_ai(owner: int) -> bool:
 	var s := slot(owner)
 	return s != null and s.kind == SlotKind.AI
 
+## Сторона, которую в сетевой партии ведёт этот пир (batch 12 #8); −1 — ни одна.
+func side_of_peer(peer_id: int) -> int:
+	if peer_id < 0:
+		return -1
+	for s: Slot in slots:
+		if s.kind == SlotKind.HUMAN and s.peer_id == peer_id:
+			return s.id
+	return -1
+
+## Живой человек за сетью или за этим же столом: слот HUMAN с пиром. Бросок такого
+## игрока в сетевой партии ждут все (batch 12 #14).
+func is_networked_human(owner: int) -> bool:
+	var s := slot(owner)
+	return s != null and s.kind == SlotKind.HUMAN and s.peer_id >= 0
+
 ## Цвет каждого игрока уникален (§4 лобби). Проверка живёт здесь, а не в лобби,
 ## чтобы её нельзя было обойти, собрав ростер другим путём (сохранение, реплей).
 func has_duplicate_colors() -> bool:
@@ -257,9 +276,12 @@ func to_dict() -> Dictionary:
 	for s: Slot in slots:
 		out.append({
 			"id": s.id, "kind": s.kind, "name": s.display_name,
-			"color": s.color.to_html(false), "team": s.team,
+			"color": [s.color.r, s.color.g, s.color.b], "team": s.team,
 			"ai": s.ai_difficulty, "budget": s.budget, "peer": s.peer_id,
 			"dead": s.eliminated,
+			# Зона и личный список юнитов раньше по сети не ехали (batch 12 #8/#9): гость
+			# расставлялся не там и покупал не то, что разрешил хост.
+			"zone": s.deploy_zone, "allow": s.allowed_units.duplicate(),
 		})
 	return {"slots": out, "team_budgets": team_budgets.duplicate()}
 
@@ -272,11 +294,20 @@ static func from_dict(d: Dictionary) -> Roster:
 			break
 		var s: Slot = r.slots[id]
 		s.display_name = str(rec.get("name", s.display_name))
-		s.color = Color.from_string(str(rec.get("color", "")), s.color)
+		var col: Variant = rec.get("color", "")
+		if col is Array and (col as Array).size() >= 3:
+			s.color = Color(float(col[0]), float(col[1]), float(col[2]))
+		else:
+			s.color = Color.from_string(str(col), s.color)  # старые файлы: html
 		s.ai_difficulty = int(rec.get("ai", 1))
 		s.budget = int(rec.get("budget", 0))
 		s.peer_id = int(rec.get("peer", -1))
 		s.eliminated = bool(rec.get("dead", false))
+		s.deploy_zone = int(rec.get("zone", -1))
+		var allow: Variant = rec.get("allow", {})
+		if allow is Dictionary:
+			for k in allow:
+				s.allowed_units[str(k)] = bool(allow[k])
 	for b in d.get("team_budgets", []):
 		r.team_budgets.append(int(b))
 	return r

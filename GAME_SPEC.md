@@ -588,6 +588,14 @@ that trace and the battle screen draws, for every object on the line, a floating
 potential left. The cell where the budget runs out is marked as the **beam's end**, so
 the player sees exactly how far the shot reaches before committing 2 AP.
 
+**Naming the part (batch 12 #5).** When the beam's trace reaches a vehicle with damage
+to spare, the battle screen opens the component picker for **that** vehicle before
+sending the intent — whichever cell was clicked. It used to ask only when the click
+landed on the hull itself, so a click past or short of the tank sent the same beam into
+the same tank silently, and always into the Hull. The picker lists only the components
+visible from the marksman's side (`_aimable_components`), without the "(N+)" roll hints:
+a laser burns what it is told to, it does not roll.
+
 ### 7.4 Assault (§3.14)
 
 Shotgun chain of up to **3 targets** in a straight line directly behind one another.
@@ -656,6 +664,12 @@ destination is on fire the captive dies there and the death is reported in
 down inside a doorway.
 
 ### 8.2 Release
+
+**A captor's death frees the captive (batch 12 #1).** `_kill` — the resolver's single
+death point — looks up `held_unit_of(victim)` before marking the corpse and sets the
+captive back to `ALIVE` with `captor_id = -1`, logging "X is free — Y is dead". Without
+this the captive stayed HELD pointing at a corpse: unable to act and unable to break
+free, because `_resolve_release` looks for a living captor.
 
 Escaping an **allied** captor is free and needs no roll (#37). Escaping an enemy costs
 1 AP and requires a **4+**.
@@ -1276,6 +1290,13 @@ so both kinds travel together.
 
 ### 16.3 Movement
 
+**Bodies survive the tracks (batch 12 #2).** A vehicle driving over a cell no longer
+clears its corpse occupant or `corpse_count`; only a *living* occupant is crushed (and
+becomes a corpse on the same cell). A corpse **wall** stops being a wall — the feature is
+cleared — but its five bodies stay as a loose pile of `CORPSE_WALL_COUNT`. A body under a
+standing vehicle cannot be picked up (`corpse_pickup_cells` skips vehicle cells and
+`_resolve_pickup_corpse` refuses); once the vehicle moves on, it is an ordinary corpse.
+
 `_resolve_vehicle_move` crushes, scatters, or rams everything in the footprint's path,
 reducing those cells to bare floor. Tanks have a `facing`; shuttles do not.
 
@@ -1525,7 +1546,39 @@ can be started from Setup or switched on mid-battle. Two consequences had to be 
 - **Nobody is waiting for a click.** The old loop only re-invoked the AI *after* a human
   action, so an AI-vs-AI match sat motionless — there was no human to act. `_kick_if_ai`
   runs after setup, after the opening civilian slot, and after every side switch.
-  Networked matches are unaffected: both sides there are human by construction (§22.3).
+  In a networked match the **host** runs the AI slots the same way (§22.4); guests never
+  kick a side that is not theirs.
+
+### 17.5 Sappers, mines and the paths that avoid them (batch 12 #3, #4, #7)
+
+**Nobody walks onto a mine they know about.** `Movement.reachable(...)` takes an
+`avoid_cells` set; `GameActionResolver.known_mine_cells(owner)` fills it with every
+personnel mine that side can see — its own and its allies' always, an enemy's while a
+sweep's highlight lasts (`mine_visible_to`). A known mine is neither a step nor a
+destination, so the move highlight, the resolver's validation and every AI path agree:
+all of them go through `resolver.reachable_for(unit, budget)`, and the bare
+`Movement.reachable_for` is no longer called from the UI or the AI. The avoid set joins
+the Dijkstra cache key, so a fresh reveal is a fresh flood. Unknown enemy mines still
+detonate under foot exactly as before (`_mine_on_path`). Anti-vehicle mines are not in
+the set — they do nothing to infantry.
+
+**A mine laid under a standing unit goes off at once.** `_resolve_place_mine` checks the
+target cell's occupant: a living unit — friend, foe or the sapper himself — is killed
+outright (no roll), the mine is spent and the death is reported with a debris mark.
+An anti-vehicle mine laid under infantry simply stays armed.
+
+**The AI sapper** (`AIController._best_mine`) lays a field *in front of* his line while
+the enemy is still on the way: candidate cells are `mine_cells(u)` minus his own cell
+and any occupied one, must be reachable by the enemy (`GeoField`), at least
+`MINE_ENEMY_MIN = 2` steps from the nearest enemy, and no farther from the enemy than
+the sapper himself. Chokepoints (few walkable neighbours) score higher, cells adjacent to
+an existing own mine score −10 (−3 at two cells) so the field spreads instead of
+clumping, and a cell beside a squadmate loses a little. `SCORE_MINE_BASE = 28` sits above
+an ordinary approach step and below every shot and grab; the free credit mines of the same
+action add `SCORE_MINE_FREE_BONUS = 15`, and `_best_for_actor` keeps a sapper with
+`mine_credits` in the queue at zero AP so the whole action is delivered. He lays
+anti-vehicle mines while the enemy has more live vehicles than he has AV mines on the
+board, personnel mines otherwise, and stops at `MINE_FIELD_CAP = 12` own personnel mines.
 
 ---
 
@@ -1646,13 +1699,25 @@ Rolls play one at a time in a SteamChrome-framed **Dice Roll** window showing th
 accuracy or defence prompt with every buff and debuff itemised. `FAST_ROLL_SPEED = 2.0`
 speeds up long bursts.
 
-**Who presses the button.** `_owner_is_local_human(owner)` decides whether a defence roll
-waits for a click or spins by itself. In a network match it is `owner == my_owner`, so
-**the defender always rolls their own dice on their own screen** (#93) while the attacker
-watches the die spin automatically. This is presentation only — the outcome is already
-fixed (the client's rolls are scripted), so the button is a gesture, not a source of
-randomness, and it cannot desync. The AI never waits for a click — but a **civilian's
-shot does**, because the one being shot at is the player (§14.1).
+**Who presses the button.** `_owner_is_local_human(owner)` decides whether a roll waits
+for a click or spins by itself. In a network match it is `owner == my_owner`: the shooter
+rolls to hit on their screen, the defender rolls to defend on theirs. This is presentation
+only — the outcome is already fixed (the client's rolls are scripted), so the button is a
+gesture, not a source of randomness, and it cannot desync. The AI never waits for a
+click — but a **civilian's shot does**, because the one being shot at is the player
+(§14.1).
+
+**Everyone waits for that click (batch 12 #14).** Every step carries a `roller`. In a
+network match a step whose roller is a networked human — `Roster.is_networked_human`,
+a Player slot with a peer — is numbered with `_roll_seq`, identical on every machine
+because actions and their dice arrive in one order. On the roller's screen the die shows
+the Roll button; when pressed, `DiceRoller.rolled` fires and the screen broadcasts
+`K_ROLL {n}`. On every other screen the same step shows "…Waiting for Player C to roll…"
+(`DiceRoller.play(..., wait_remote = true)`) and spins only when that `K_ROLL` arrives —
+early arrivals wait in `_roll_inbox`, since a faster peer may press before a slower one
+has reached the step. Rolls belonging to the AI or to civilians spin by themselves for
+everyone. The prompt also states the target before the die moves: "(need 4+)" for hits,
+the armour number for defence, "beat N" for a grab.
 
 **Event kinds.** `_dice_steps` splits an event into one-die-at-a-time steps: `attack`
 (all hit dice, then all penetration dice), `opposed`, `check`, `grenade`. `walk` is the
@@ -1814,6 +1879,15 @@ mutating with the game and replays began from the wrong board.
 
 ---
 
+### 21.1 Particles stay on the board (batch 12 #6)
+
+`FxDecals.bounds` is the grid size in cells, set by the battle screen after the state is
+built. `_launch` clips every casing, blood drop and glass shard against the four edges:
+the first edge the flight would cross becomes a `via` point at fraction `split` of the
+flight, the remainder is reflected on that axis, and `flight_pos` follows the broken
+line — to the wall, then back in. With no bounds set (unit tests without a scene) nothing
+changes. This is cosmetics: it consults no dice and touches no state.
+
 ## 22. Networking
 
 ### 22.1 The lockstep contract
@@ -1903,13 +1977,68 @@ Two details make that build byte-identical on both machines:
   initiative roll inside `begin_match()` agrees before the `K_INIT` handshake even
   confirms it.
 
-**Perspective, not allegiance, drives colour.** `_side_color(side)` — present in both
-Placement and Main — paints **your** army blue and the enemy red **for both players**;
-`_side_label` shows "Player A (host)" / "Player B" with "(you)" appended to your own. In
-hotseat there is no perspective, so the fixed P1-blue / P2-red mapping stays.
+**Colour is the roster's, everywhere (batch 12 #11).** `_side_color(side)` in Placement
+and Main both return `roster.color_of(side)`: the colour a player picked in the lobby is
+the colour they deploy in and fight in, on every screen. The earlier "your army blue, the
+enemy red" perspective is gone — with three or more players it merged two opponents into
+one colour, and it made the deployment screen disagree with the battle.
 
 In battle each player controls only their own units, the **defender rolls their own
 dice** (§18.5), and group selection is disabled.
+
+### 22.4 The lobby is one window shown on every machine (batch 12 #8–#10)
+
+The host owns the roster and the rules; everyone else sees the same thing. Every change
+the host makes — a slot's type, colour, zone, budget or allowed units, any rule row, the
+map — is followed by `_broadcast_lobby()`, which sends `NetHandoff.K_LOBBY` carrying
+`NetHandoff.encode_rules()` (the full `GameConfig` rule set **plus `Roster.to_dict()`**)
+and the map's name. The map itself travels separately as `K_LOBBY_MAP`, only when it
+changes, because a map dictionary is large and a snapshot is sent on every click. Guests
+apply the snapshot through `NetHandoff.apply_rules`, rebuild their (read-only) controls
+from `GameConfig`, and redraw the slot table.
+
+**Seats.** The host's own slot carries `peer_id = 1` (the ENet server id). When a guest
+connects, `NetworkSession.peer_joined` hands the host its id and `_seat_peer` turns the
+first **Open** slot into **Player** with that `peer_id` — or adds a slot if none is open.
+A **Who** column shows who sits where: "Player C (you)", "Player A (host)", or "(nobody
+yet)" for a Player slot the host set by hand; an Open slot shows a **Join** button to
+guests. Leaving returns the slot to Open. A guest cannot be un-seated from the slot list
+(the host must wait for them to disconnect), and the host cannot start while a Player
+slot has nobody in it.
+
+**Guests ask, the host decides.** A guest's colour pick or Join click is a
+`K_LOBBY_REQ` (`op: "color" | "slot"`) stamped by the transport with `_from`, the sender's
+peer id. The host validates it (colour free? slot open?), applies it, and broadcasts the
+next snapshot — there is no local prediction, so two guests can never disagree.
+
+**Start** sends `K_SETUP`, which is `encode_rules()` plus the map: budgets, mirrored
+placement, live-placement visibility, friendly fire, random events and the roster all
+arrive together. Before batch 12 only the map, budget, civilians and fog travelled, which
+is why guests deployed against the default 300 points (#9) and ignored the mirrored
+setting (#10).
+
+**Placement for N players (batch 12 #12, #15).** `_my_side` is
+`roster.side_of_peer(my_peer_id())`. The host also deploys every **AI** slot in turn
+("Next: Player B (AI) >" before "Ready"). Each Ready broadcasts `K_ROSTER` with two lists:
+`sides` — the sides whose armies are in the packet (they replace what was known) — and
+`ready` — the sides confirming. The battle starts on a machine when it is ready itself
+and every other playing side has confirmed. In **mirrored** mode the host is the only
+one who places: on Ready it stamps its formation into every other zone, sends all of
+them in one packet, confirms the AI sides itself, and guests — whose screen is locked and
+whose Ready button only lights up once the host's formation has arrived — confirm their
+own with `sides: []`, so nothing they send can overwrite the stamped army. While "Live
+placement visibility" is on, every placement change broadcasts `K_LIVE`, and a peer
+entering the screen sends `K_LIVE_REQ` to see what the others already placed; live units
+draw with a shadow, final ones plainly.
+
+**AI slots in a network match are driven by the host (batch 12 #15).** The host's
+`_setup_network_controllers` gives every AI side a real `AIController` whose intents go
+through `net.submit_local` like a human's — resolved on the host, broadcast to all.
+Guests hold a `NetworkController` for those sides and only ever "kick" an AI that is
+theirs to run. Network actions are shown **one at a time** (`_net_queue`): the state is
+applied on receipt, the display waits for the previous animation to finish, and the
+display path now matches the local one — lanes before the dice, blood and casings after,
+undo/redo resyncing the board.
 
 ---
 
@@ -1974,7 +2103,7 @@ These are deliberate choices that look like bugs if you don't know the reasoning
 - **Tank-cannon AI ignores the blast-shield rule.**
 - **Shuttle `driver_move_ap`, `passenger_defense_bonus`, `collision_durability_threshold`**
   are data-only and unread (§16.6).
-- **Mines are unimplemented.**
+- **AI sappers** lay mines (§17.5) but do not sweep for or disarm enemy ones.
 - **No commander aura** — the Commander is stats and 3 AP, nothing more.
 
 ---

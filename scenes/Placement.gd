@@ -31,9 +31,7 @@ const PURCHASABLE := [
 	"civilian",
 ]
 
-## Перспективные цвета дуэли (#93); цвета конкретных игроков живут в ростере.
-const OWN_COLOR := Color(0.3, 0.55, 1.0)
-const FOE_COLOR := Color(1.0, 0.4, 0.35)
+## Цвета игроков живут в ростере (batch 12 #11); здесь остался только нейтральный.
 const NEUTRAL_COLOR := Color(0.7, 0.7, 0.7)
 
 var map: MapData
@@ -84,12 +82,23 @@ var _tool_buttons: Dictionary = {}
 ## ставит её ТОЛЬКО в своей зоне. По «Ready» стороны обмениваются ростерами и,
 ## получив оба, строят одинаковый MapData и уходят в бой.
 const K_ROSTER := "roster"
+## Живая расстановка (batch 12 #15): пока «Live placement visibility» включена, каждый
+## щелчок по полю уезжает остальным, и они видят чужую армию по мере её сборки.
+const K_LIVE := "live"
+## Просьба показать текущую расстановку (batch 12 #15): шлёт вошедший на экран, чтобы
+## увидеть то, что остальные успели поставить до его прихода.
+const K_LIVE_REQ := "live_req"
 var _net: NetworkSession = null
 var _net_is_host: bool = false
 var _my_side: int = MCF.Owner.PLAYER_1
 var _my_ready: bool = false
-var _remote_roster: Array = []
-var _remote_ready: bool = false
+## Армии, присланные по сети готовыми, по сторонам: side -> Array записей (batch 12 #12).
+## Хост шлёт сразу несколько сторон (свою, ИИ, а в зеркальном режиме — всех).
+var _remote_units: Dictionary = {}
+## Стороны, чья армия уже пришла окончательно.
+var _ready_sides: Dictionary = {}
+## Чужая расстановка «вживую» (K_LIVE): side -> Array записей, только для показа.
+var _live_units: Dictionary = {}
 ## Общее зерно кубиков, чтобы у обеих сторон совпал локальный бросок инициативы.
 var _shared_seed: int = -1
 
@@ -116,6 +125,7 @@ func _ready() -> void:
 	# всё, что накопилось в буфере, а обработчик трогает метки панели.
 	if _net != null:
 		_net.attach()
+		_net.send({"k": K_LIVE_REQ})
 
 func networked() -> bool:
 	return _net != null
@@ -126,7 +136,12 @@ func _adopt_network() -> void:
 		return
 	_net_is_host = NetHandoff.is_host
 	_net = NetHandoff.take()
-	_my_side = MCF.Owner.PLAYER_1 if _net_is_host else MCF.Owner.PLAYER_2
+	# Своя сторона — слот с моим сетевым номером (batch 12 #8/#11); у хоста он 1.
+	# Старая дуэльная раскладка «хост — первый, гость — второй» остаётся запасной.
+	var mine := roster.side_of_peer(_net.my_peer_id())
+	if mine < 0:
+		mine = MCF.Owner.PLAYER_1 if _net_is_host else MCF.Owner.PLAYER_2
+	_my_side = mine
 	active_side = _my_side
 	# Зерно назначает хост — оно едет вместе с его ростером.
 	if _net_is_host:
@@ -149,22 +164,112 @@ func _drop_session() -> void:
 	_net = null
 
 func _on_net_message(msg: Dictionary) -> void:
-	if str(msg.get("k", "")) != K_ROSTER:
-		return
-	_remote_roster = msg.get("u", [])
-	_remote_ready = true
+	match str(msg.get("k", "")):
+		K_LIVE_REQ:
+			_send_live()
+			return
+		K_LIVE:
+			# Чужая армия по мере сборки (batch 12 #15) — только картинка.
+			for side in msg.get("sides", []):
+				_live_units[int(side)] = []
+			for e in msg.get("u", []):
+				var side := int(e["o"])
+				if not _live_units.has(side):
+					_live_units[side] = []
+				_live_units[side].append(e)
+			queue_redraw()
+			return
+		K_ROSTER:
+			pass
+		_:
+			return
+	# «sides» — чьи армии лежат в пакете (они заменяют прежнее), «ready» — кто
+	# подтвердил готовность. Гость зеркальной партии шлёт только готовность: его армию
+	# уже прислал хост, и затирать её пустым списком нельзя (batch 12 #12).
+	var units: Array = msg.get("u", [])
+	var sides: Array = msg.get("sides", [])
+	for side in sides:
+		_remote_units[int(side)] = []
+		_live_units.erase(int(side))
+	for e in units:
+		var side := int(e["o"])
+		if not _remote_units.has(side):
+			_remote_units[side] = []
+		_remote_units[side].append(e)
+	for side in msg.get("ready", sides):
+		_ready_sides[int(side)] = true
 	if int(msg.get("seed", -1)) >= 0:
 		_shared_seed = int(msg["seed"])
+	# Зеркальная партия (batch 12 #12): армия хоста пришла — моя зона уже заполнена
+	# её отражением, самому ставить нечего, остаётся подтвердить готовность.
+	if _mirrored_guest() and _remote_units.has(_my_side):
+		_status.text = "The host's formation has been mirrored into your zone. Press Ready."
 	_refresh_labels()
+	queue_redraw()
 	if _my_ready:
+		_try_start()
+	elif _status != null and not _mirrored_guest():
+		_status.text = "%s is ready. Deploy your squad and press Ready." % _ready_names()
+
+## Кто из соперников уже готов — для подписи.
+func _ready_names() -> String:
+	var names: Array[String] = []
+	for side in _ready_sides:
+		if int(side) != _my_side and not _host_sides().has(int(side)):
+			names.append(roster.name_of(int(side)))
+	return ", ".join(names) if not names.is_empty() else "Another player"
+
+## Гость в зеркальной партии: сам ничего не ставит (batch 12 #12).
+func _mirrored_guest() -> bool:
+	return networked() and not _net_is_host \
+			and GameConfig.placement_mode == GameConfig.Placement.MIRRORED
+
+## Стороны, которые расставляет ЭТА машина (batch 12 #15): свою и — у хоста — все
+## ИИ-слоты, ведь больше их набрать некому. В зеркальном режиме ИИ получают отражение
+## армии хоста, а не свою закупку.
+func _host_sides() -> Array[int]:
+	var out: Array[int] = [_my_side]
+	if networked() and _net_is_host:
+		for side in _sides():
+			if side != _my_side and roster.is_ai(side) \
+					and GameConfig.placement_mode != GameConfig.Placement.MIRRORED:
+				out.append(side)
+	return out
+
+## Все ли стороны на месте (batch 12 #12): «when everyone's ready the match starts».
+## Стороны, которые ставит хост (ИИ, зеркальные копии), едут с его пакетом.
+func _all_sides_ready() -> bool:
+	if not _my_ready:
+		return false
+	for side in _sides():
+		if _host_sides().has(side):
+			continue
+		if not _ready_sides.has(side):
+			return false
+	return _shared_seed >= 0
+
+## Армию этой стороны собирала ЭТА машина — в присланных пакетах её быть не должно, а
+## если она там есть (эхо своего же пакета), брать её не надо. Гость зеркальной партии
+## сам не ставит ничего, и его сторона приходит от хоста как чужая.
+func _placed_here(side: int) -> bool:
+	if _mirrored_guest():
+		return false
+	if _host_sides().has(side):
+		return true
+	# Хост зеркальной партии отштамповал все стороны сам — они лежат в placed.
+	return networked() and _net_is_host \
+			and GameConfig.placement_mode == GameConfig.Placement.MIRRORED and _my_ready
+
+func _try_start() -> void:
+	if _all_sides_ready():
 		_start_battle()
-	elif _status != null:
-		_status.text = "The other player is ready. Deploy your squad and press Ready."
 
 ## Ростер в JSON-совместимом виде (Vector2i → пара x/y).
-func _encode_roster() -> Array:
+func _encode_roster(sides: Array = []) -> Array:
 	var out: Array = []
 	for p in placed:
+		if not sides.is_empty() and not sides.has(int(p["owner"])):
+			continue
 		var c: Vector2i = p["coord"]
 		var f := _placed_facing_or_zero(p)
 		out.append({"id": p["stats_id"], "o": int(p["owner"]), "x": c.x, "y": c.y,
@@ -180,19 +285,60 @@ func _placed_facing_or_zero(rec: Dictionary) -> Vector2i:
 func _on_net_ready() -> void:
 	if _my_ready:
 		return
-	if _side_unit_count(_my_side) == 0:
-		_status.text = "Deploy at least one unit before you're ready."
+	# Хост ставит и за ИИ (batch 12 #15): пока не обойдены все его стороны, кнопка
+	# ведёт к следующей, а не к готовности.
+	var mine := _host_sides()
+	var at := mine.find(active_side)
+	if not _mirrored_guest() and _side_unit_count(active_side) == 0:
+		_status.text = "Deploy at least one unit for %s." % _side_label(active_side)
 		return
+	if at >= 0 and at < mine.size() - 1:
+		active_side = mine[at + 1]
+		brush_unit = ""
+		_populate_palette()
+		_status.text = ""
+		_refresh_labels()
+		queue_redraw()
+		return
+	var sent_sides: Array = []
+	var ready_sides: Array = []
+	if _mirrored_guest():
+		# Армия гостя уже на месте — от хоста; едет только готовность.
+		ready_sides.append(_my_side)
+	else:
+		sent_sides.append_array(mine)
+		ready_sides.append_array(mine)
+	# Зеркальная партия (batch 12 #12): хост отражает свою формацию во ВСЕ остальные зоны
+	# — и гостям, и ИИ — и шлёт всё одним пакетом. За ИИ он же и подтверждает готовность;
+	# гости подтверждают свою сами, когда увидят отражение.
+	if networked() and _net_is_host \
+			and GameConfig.placement_mode == GameConfig.Placement.MIRRORED:
+		for side in _sides():
+			if side == _my_side:
+				continue
+			_stamp_into(side)
+			sent_sides.append(side)
+			if roster.is_ai(side):
+				ready_sides.append(side)
 	_my_ready = true
-	var msg := {"k": K_ROSTER, "u": _encode_roster()}
+	var msg := {"k": K_ROSTER, "u": _encode_roster(sent_sides), "sides": sent_sides,
+		"ready": ready_sides}
 	if _net_is_host:
 		msg["seed"] = _shared_seed
 	_net.send(msg)
+	for side in ready_sides:
+		_ready_sides[side] = true
 	_flow_btn.disabled = true
-	_status.text = "Waiting for the other player..."
+	_status.text = "Waiting for the other players..."
 	_refresh_labels()
-	if _remote_ready:
-		_start_battle()
+	_try_start()
+
+## Отправить свою расстановку «вживую» (batch 12 #15) — если хост это разрешил.
+func _send_live() -> void:
+	if not networked() or _net == null or _my_ready or not GameConfig.live_placement_visible:
+		return
+	var mine := _host_sides()
+	_net.send({"k": K_LIVE, "u": _encode_roster(mine), "sides": mine})
 
 func _load_or_blank_map() -> MapData:
 	# Сетевая партия играется на карте ХОСТА, пришедшей целиком (#99) — у клиента
@@ -466,12 +612,26 @@ func _zoom_at(screen_pos: Vector2, factor: float) -> void:
 ## Зеркальная расстановка (item 39): не-хост не расставляет свободно — только «штампует»
 ## формацию хоста. В этот момент кисть и перетаскивание для него заблокированы.
 func _mirror_locked() -> bool:
+	if _mirrored_guest():
+		return true
 	return GameConfig.placement_mode == GameConfig.Placement.MIRRORED \
 			and not _sides().is_empty() and active_side != _sides()[0]
 
 ## Отштамповать формацию хоста (первой стороны) в зону текущей стороны, отразив её через
 ## центр карты (item 39). Копии бесплатны — это отражение уже оплаченного отряда хоста.
 func _stamp_formation() -> void:
+	var res := _stamp_into(active_side)
+	# О пропущенных сообщаем ЯВНО: молчаливая недостача — это ровно то, из-за чего
+	# пропажу танков пришлось ловить в бою, а не на расстановке.
+	_status.text = "Stamped %d units from the host's formation." % int(res["added"])
+	if int(res["skipped"]) > 0:
+		_status.text += "  %d didn't fit the deployment zone." % int(res["skipped"])
+	_refresh_labels()
+	queue_redraw()
+
+## Отражение формации первой стороны в зону target (batch 12 #12): одна функция и для
+## кнопки «Stamp Formation» в хот-сите, и для авто-штампа хоста по сети.
+func _stamp_into(target: int) -> Dictionary:
 	var host: int = _sides()[0]
 	var added := 0
 	var skipped := 0
@@ -490,11 +650,11 @@ func _stamp_formation() -> void:
 		# промахивался только по одной оси, оттого «sometimes».
 		var size := VehicleDB.size_of(id) if VehicleDB.is_vehicle(id) else Vector2i.ONE
 		var dst := Vector2i(map.width - src.x - size.x, map.height - src.y - size.y)
-		if _placed_at(dst) != -1 or not _footprint_placeable(id, dst, active_side):
+		if _placed_at(dst) != -1 or not _footprint_placeable(id, dst, target):
 			skipped += 1
 			continue
-		var rec := {"stats_id": id, "owner": active_side,
-				"coord": dst, "paid_by": active_side}
+		var rec := {"stats_id": id, "owner": target,
+				"coord": dst, "paid_by": target}
 		# Формация отражена на 180°, значит и фронт машины смотрит навстречу — иначе
 		# отзеркаленный танк встал бы стволом в собственный тыл.
 		if VehicleDB.is_vehicle(id) \
@@ -502,13 +662,7 @@ func _stamp_formation() -> void:
 			rec["facing"] = -_placed_facing(p)
 		placed.append(rec)
 		added += 1
-	# О пропущенных сообщаем ЯВНО: молчаливая недостача — это ровно то, из-за чего
-	# пропажу танков пришлось ловить в бою, а не на расстановке.
-	_status.text = "Stamped %d units from the host's formation." % added
-	if skipped > 0:
-		_status.text += "  %d didn't fit the deployment zone." % skipped
-	_refresh_labels()
-	queue_redraw()
+	return {"added": added, "skipped": skipped}
 
 func _paint_at(coord: Vector2i) -> void:
 	if _mirror_locked() or brush_unit == "" or _placed_at(coord) != -1:
@@ -524,6 +678,7 @@ func _paint_at(coord: Vector2i) -> void:
 	spent[active_side] += c
 	_refresh_labels()
 	queue_redraw()
+	_send_live()
 
 func _paid_by(rec: Dictionary) -> int:
 	return int(rec.get("paid_by", rec["owner"]))
@@ -620,6 +775,7 @@ func _place_many(cells: Array) -> void:
 	_status.text = "Deployed %d %s." % [added, _display_name(brush_unit)]
 	_refresh_labels()
 	queue_redraw()
+	_send_live()
 
 func _click_cell(coord: Vector2i) -> void:
 	# Клик по своему расставленному юниту — снять и вернуть очки.
@@ -630,6 +786,7 @@ func _click_cell(coord: Vector2i) -> void:
 			placed.remove_at(idx)
 			_refresh_labels()
 			queue_redraw()
+			_send_live()
 		else:
 			_status.text = "That unit belongs to the other side."
 		return
@@ -654,6 +811,7 @@ func _click_cell(coord: Vector2i) -> void:
 	spent[active_side] += c
 	_refresh_labels()
 	queue_redraw()
+	_send_live()
 
 # --- Геометрия (локальные координаты; pan/zoom добавляет draw_set_transform) ---
 func _cell_origin(coord: Vector2i) -> Vector2:
@@ -709,6 +867,20 @@ func _draw() -> void:
 	# Сохранённые мирные.
 	for s in preserved_neutral:
 		_draw_token(s["coord"], MCF.Owner.NEUTRAL, s["stats_id"], font)
+	# Чужие армии (batch 12 #12/#15): присланные готовыми — как свои; собираемые
+	# «вживую» — с тенью, они ещё могут измениться.
+	for side in _remote_units:
+		if _placed_here(int(side)):
+			continue
+		for e in _remote_units[side]:
+			_draw_token(Vector2i(int(e["x"]), int(e["y"])), int(e["o"]), str(e["id"]), font)
+	for side in _live_units:
+		if _remote_units.has(side) or _placed_here(int(side)):
+			continue
+		for e in _live_units[side]:
+			var c := Vector2i(int(e["x"]), int(e["y"]))
+			_draw_token(c, int(e["o"]), str(e["id"]), font)
+			draw_rect(Rect2(_cell_origin(c), Vector2(CELL, CELL)), Color(0, 0, 0, 0.35))
 	# Расставленные юниты.
 	for p in placed:
 		_draw_token(p["coord"], int(p["owner"]), p["stats_id"], font)
@@ -969,9 +1141,19 @@ func _refresh_labels() -> void:
 	else:
 		_budget_label.text = "Points spent: %d   (unlimited — units: %d)" % [spent[active_side], count]
 	if _stamp_btn != null:
-		_stamp_btn.visible = _mirror_locked()
+		# По сети зеркало ставит хост сам (batch 12 #12) — кнопка только для хот-сита.
+		_stamp_btn.visible = _mirror_locked() and not networked()
 	if networked():
-		_flow_btn.text = "Waiting..." if _my_ready else "Ready"
+		var mine := _host_sides()
+		var at := mine.find(active_side)
+		if _my_ready:
+			_flow_btn.text = "Waiting..."
+		elif at >= 0 and at < mine.size() - 1:
+			_flow_btn.text = "Next: %s  >" % _side_label(mine[at + 1])
+		else:
+			_flow_btn.text = "Ready"
+		# Гость зеркальной партии готов только когда пришла формация хоста (#12).
+		_flow_btn.disabled = _my_ready or (_mirrored_guest() and not _remote_units.has(_my_side))
 	else:
 		var sides := _sides()
 		var at := sides.find(active_side)
@@ -984,10 +1166,13 @@ func _refresh_labels() -> void:
 func _side_label(side: int) -> String:
 	var base := roster.name_of(side)
 	if networked():
-		if side == MCF.Owner.PLAYER_1:
+		var slot := roster.slot(side)
+		if slot != null and slot.peer_id == 1:
 			base += " (host)"
 		if side == _my_side:
 			base += " (you)"
+		elif roster.is_ai(side):
+			base += " (AI)"
 	return base
 
 ## Свои — синие, чужие — красные, у обеих сторон одинаково (#93). В горячем стуле
@@ -995,10 +1180,9 @@ func _side_label(side: int) -> String:
 func _side_color(side: int) -> Color:
 	if MCF.is_neutral(side):
 		return NEUTRAL_COLOR
-	# Перспектива работает, только пока противник ОДИН: на троих она слила бы двух
-	# разных соперников в один цвет.
-	if networked() and _sides().size() == 2:
-		return OWN_COLOR if side == _my_side else FOE_COLOR
+	# Всегда цвет из ростера (batch 12 #11): игрок ставит войска ТОГО цвета, который
+	# выбрал в лобби, и видит его же в бою. Прежняя перспектива «своё синее, чужое
+	# красное» показывала на расстановке не те цвета, что потом в бою.
 	return roster.color_of(side)
 
 func _side_unit_count(side: int) -> int:
@@ -1030,10 +1214,15 @@ func _start_battle() -> void:
 	map.spawns = []
 	for p in placed:
 		map.set_spawn(p["coord"], p["stats_id"], int(p["owner"]), _placed_facing_or_zero(p))
-	# Армия соперника приходит по сети — обе стороны собирают ОДИН И ТОТ ЖЕ ростер (#93).
-	for e in _remote_roster:
-		map.set_spawn(Vector2i(int(e["x"]), int(e["y"])), str(e["id"]), int(e["o"]),
-			Vector2i(int(e.get("fx", 0)), int(e.get("fy", 0))))
+	# Армии соперников приходят по сети — все стороны собирают ОДИН И ТОТ ЖЕ ростер (#93).
+	# Стороны, что ставила эта машина, в присланных пакетах не встречаются, поэтому
+	# дублей не будет.
+	for side in _remote_units:
+		if _placed_here(int(side)):
+			continue
+		for e in _remote_units[side]:
+			map.set_spawn(Vector2i(int(e["x"]), int(e["y"])), str(e["id"]), int(e["o"]),
+				Vector2i(int(e.get("fx", 0)), int(e.get("fy", 0))))
 	for s in preserved_neutral:
 		map.set_spawn(s["coord"], s["stats_id"], MCF.Owner.NEUTRAL)
 	if networked():

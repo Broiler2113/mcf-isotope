@@ -61,9 +61,14 @@ static var _cache_grid: int = 0
 
 ## Разлив для КОНКРЕТНОГО бойца: сам решает, обходить ли огонь (#1). Щитоносец и
 ## огнемётчик огня не боятся, и для них он — обычный пол (#2).
-static func reachable_for(grid: Grid, unit: UnitInstance, budget: int) -> Reachability:
+## avoid_cells — клетки, куда боец ЗАВЕДОМО не ступит (batch 12 #3/#4): известные ему
+## противопехотные мины (свои и подсвеченные чужие). Их даёт
+## GameActionResolver.known_mine_cells(owner); маршрут прокладывается в обход, и сама
+## клетка недостижима — на своей мине не остановишься даже нарочно.
+static func reachable_for(grid: Grid, unit: UnitInstance, budget: int,
+		avoid_cells: Dictionary = {}) -> Reachability:
 	var avoid := not MCF.ability_is_fireproof(unit.stats.special_ability_id)
-	return reachable(grid, unit.coord, budget, avoid)
+	return reachable(grid, unit.coord, budget, avoid, avoid_cells)
 
 ## avoid_fire — маршрут ОБХОДИТ горящие клетки (#1): в них можно войти, но нельзя
 ## ИЗ них выйти, поэтому они остаются в разливе как тупики. Это та же схема
@@ -71,7 +76,7 @@ static func reachable_for(grid: Grid, unit: UnitInstance, budget: int) -> Reacha
 ## по-прежнему может осознанно послать бойца в огонь (Main спросит подтверждение),
 ## но автоматический маршрут сквозь пламя не проложится.
 static func reachable(grid: Grid, start: Vector2i, budget: int,
-		avoid_fire: bool = false) -> Reachability:
+		avoid_fire: bool = false, avoid_cells: Dictionary = {}) -> Reachability:
 	var gid := grid.get_instance_id()
 	if _cache_version != GridCell.walk_version or _cache_grid != gid:
 		_cache.clear()
@@ -82,7 +87,11 @@ static func reachable(grid: Grid, start: Vector2i, budget: int,
 	# (огня нет вообще) кеш не хранил две одинаковые копии каждого разлива.
 	if GridCell.burning == 0:
 		avoid_fire = false
-	var key := Vector4i(start.x, start.y, budget, 1 if avoid_fire else 0)
+	# Без запретных клеток ключ — прежний Vector4i (самый частый случай); с ними в ключ
+	# входит и сам набор: содержимое словаря хешируется по значению.
+	var key: Variant = Vector4i(start.x, start.y, budget, 1 if avoid_fire else 0)
+	if not avoid_cells.is_empty():
+		key = [key, avoid_cells.keys()]
 	var hit: Variant = _cache.get(key)
 	if hit != null:
 		return hit
@@ -136,6 +145,7 @@ static func reachable(grid: Grid, start: Vector2i, budget: int,
 	var f_hedgehog: String = MCF.FEATURE_HEDGEHOG
 	var jump: int = MCF.HEDGEHOG_JUMP_COST
 	var nowhere := Vector2i(-1, -1)
+	var skip_mines := not avoid_cells.is_empty()
 	# Цены извлечения у Дейкстры не убывают, поэтому цена ПРЕДЫДУЩЕГО извлечения —
 	# честная нижняя граница для следующего (#106). Наткнувшись на неё, поиск минимума
 	# можно обрывать: меньше уже не будет, а всё, что левее, мы только что просмотрели
@@ -214,6 +224,9 @@ static func reachable(grid: Grid, start: Vector2i, budget: int,
 					continue
 				step = jump
 			elif step < 0:
+				continue
+			# Известная мина — не клетка, а дыра в полу (batch 12 #4): ни пройти, ни встать.
+			if skip_mines and avoid_cells.has(dest):
 				continue
 			var new_cost := current_cost + step
 			if new_cost > budget:

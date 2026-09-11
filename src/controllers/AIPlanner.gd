@@ -207,7 +207,7 @@ func _candidates_for(u: UnitInstance, out: Array) -> void:
 	var budget: int = u.move_credit if u.move_credit > 0 else u.stats.speed
 	if u.remaining_ap <= 0 and u.move_credit <= 0:
 		budget = 0
-	var reach := Movement.reachable_for(_state.grid, u, budget) if budget > 0 else null
+	var reach := _r.reachable_for(u, budget) if budget > 0 else null
 	var start_geo: int = _field.at(u.coord)
 	# «Уходим ли мы из чужого створа» зависит только от бойца, а не от клетки —
 	# считаем один раз на все его кандидатуры.

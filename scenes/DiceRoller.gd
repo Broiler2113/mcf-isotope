@@ -7,6 +7,11 @@ extends CenterContainer
 ## требует ручного нажатия «Бросок» защищающимся игроком.
 
 signal finished
+## Игрок нажал «Roll» (batch 12 #14) — бросок сейчас закрутится. Сцена боя по этому
+## сигналу сообщает остальным, что можно открывать тот же бросок у них.
+signal rolled
+## Внешнее «можно» для броска, которого ждём от другого игрока (см. release()).
+signal _released
 
 ## Хелпер оформления окон в стиле «2003 Steam» (preload, без class_name).
 const SteamChrome = preload("res://src/ui/SteamChrome.gd")
@@ -55,10 +60,17 @@ func _ready() -> void:
 	vbox.add_child(_roll_btn)
 	hide()
 
+## Чужой бросок дождался нажатия у своего хозяина (batch 12 #14): крутим.
+func release() -> void:
+	_released.emit()
+
 ## dice: [{"value": int, "good": bool, "tag": String}]
 ## manual = true → перед прокруткой ждём нажатия «Roll» (бросок защиты).
 ## speed — множитель темпа: 2.0 = вдвое быстрее (для заведомо успешных бросков 1+, #46).
-func play(dice: Array, manual: bool = false, prompt: String = "", speed: float = 1.0) -> void:
+## wait_remote = true → кнопки нет, но прокрутка не начнётся, пока не позовут release():
+## бросок принадлежит другому игроку, и все ждут ЕГО нажатия (batch 12 #14).
+func play(dice: Array, manual: bool = false, prompt: String = "", speed: float = 1.0,
+		wait_remote: bool = false) -> void:
 	var rate: float = maxf(speed, 0.1)
 	for c in _row.get_children():
 		c.queue_free()
@@ -81,6 +93,9 @@ func play(dice: Array, manual: bool = false, prompt: String = "", speed: float =
 		_roll_btn.show()
 		await _roll_btn.pressed
 		_roll_btn.hide()
+		rolled.emit()
+	elif wait_remote:
+		await _released
 	for _spin in maxi(1, int(round(SPIN_STEPS / rate))):
 		for lbl in labels:
 			lbl.text = str(randi_range(1, 6))

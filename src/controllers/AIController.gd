@@ -82,6 +82,20 @@ const AIM_FINISH_AT := 2
 ## Дальше этого «издалека»: разбирать машину по узлам на такой дистанции бессмысленно —
 ## она успеет уехать или починиться, — поэтому бьём в корпус, приближая её конец.
 const AIM_FAR_DISTANCE := 8
+## Минирование сапёром (batch 12 #3). Выше обычного сближения, ниже захвата и любого
+## выстрела: пока враг далеко, сапёр сперва кладёт три мины за одно ОД и лишь потом
+## идёт — так поле встаёт ПЕРЕД его линией до подхода противника. Вплотную к врагу
+## выстрел (SCORE_SHOOT_BASE) всё равно перевешивает.
+const SCORE_MINE_BASE := 28.0
+## Остаток кредита (вторая и третья мина того же действия) ОД не стоит — доставить
+## его надо в любом случае, поэтому такая мина дороже.
+const SCORE_MINE_FREE_BONUS := 15.0
+## Мины кладутся там, куда враг ПРИДЁТ, а не под ним: ближе этого (по пути) — поздно.
+const MINE_ENEMY_MIN := 2
+## Больше стольких своих противопехотных мин на поле сапёр не ставит: поле, а не
+## ковёр. Вторую сторону ограничение не касается — оно на владельца.
+const MINE_FIELD_CAP := 12
+
 ## Клетка, с которой танк ВЫВОДИТ ПУШКУ НА ЛИНИЮ огня. Пушка бьёт только по прямой
 ## (#55), поэтому «встать в створ» для машины ценно само по себе — даже когда шаг
 ## не сокращает дистанцию до врага.
@@ -95,6 +109,10 @@ var difficulty: int = Difficulty.NORMAL
 ## ход ИИ: враги на нашем ходу не двигаются, пересчёт нужен лишь когда кто-то погиб (#52).
 var _geo_cache: Dictionary = {}
 var _geo_stamp: int = -1
+## Резолвер текущего решения (batch 12 #3): через него считаются разливы движения —
+## r.reachable_for() обходит мины, о которых сторона знает. Голый Movement.reachable_for
+## отсюда больше не зовётся, иначе ИИ-пехота топала бы по собственному минному полю.
+var _r: GameActionResolver = null
 const GEO_FAR := 1 << 20
 
 ## Очередь хода (#52): ИИ доигрывает ОДНОГО бойца до конца и лишь затем берётся за
@@ -169,6 +187,7 @@ func _decide(state: GameState) -> Intent:
 	_decide_gen += 1  # новое решение — штамп геополя надо сверить заново (#106)
 	var r := GameActionResolver.new(state)
 	r.omniscient_side = owner  # ИИ знает позиции всех сквозь туман (#43)
+	_r = r
 	_sync_turn(state, r)
 	# Доигрываем текущего актёра; когда ходов у него не осталось — берём следующего.
 	# Очередь только укорачивается, поэтому цикл конечен.
@@ -306,7 +325,7 @@ func _forced_action(state: GameState, r: GameActionResolver, row: Dictionary) ->
 	#    именно оно и оставляло бойца стоять столбом.
 	if u.remaining_ap > 0 or u.move_credit > 0:
 		var enemy := _nearest_enemy(state, u.coord, false, r)
-		var reach := Movement.reachable_for(state.grid, u, _move_budget(u))
+		var reach := _r.reachable_for(u, _move_budget(u))
 		var dodge := _avoids_fire(u)
 		var best: Dictionary = {}
 		for coord: Vector2i in reach.cost:
@@ -455,7 +474,10 @@ func _best_for_actor(state: GameState, r: GameActionResolver, row: Dictionary) -
 	# их можно дошагать БЕЗ ОД, в том числе уже после выстрела (#103). Раньше боец с
 	# нулём ОД снимался с очереди прямо здесь, и весь накопленный кредит пропадал —
 	# то есть дробить движение ИИ технически умел, а пользоваться этим не мог.
-	if u.remaining_ap <= 0 and u.move_credit <= 0 and not _pending_shoot(u):
+	# Недоставленные мины (item 45) — такой же ресурс: остаток кредита кладётся без ОД
+	# (batch 12 #3), иначе сапёр ставил бы по одной мине за действие.
+	if u.remaining_ap <= 0 and u.move_credit <= 0 and u.mine_credits <= 0 \
+			and not _pending_shoot(u):
 		return {}
 	# Пленник сохраняет ОД (#76), но единственное, что ему доступно, — рывок на свободу.
 	if u.is_held():
@@ -513,6 +535,12 @@ func _candidates(state: GameState, r: GameActionResolver, u: UnitInstance) -> Ar
 	var drop := _best_corpse_drop(state, r, u)
 	if not drop.is_empty():
 		out.append(drop)
+
+	# Сапёр минирует подход к своей позиции (batch 12 #3). Остаток кредита кладётся и
+	# без ОД — как и мины у игрока.
+	var mine := _best_mine(state, r, u)
+	if not mine.is_empty():
+		out.append(mine)
 
 	if u.remaining_ap > 0:
 		var cap := _best_capture(state, r, u)
@@ -594,7 +622,7 @@ func _neutral_survival(state: GameState, r: GameActionResolver, u: UnitInstance)
 	var soldiers := _neutral_soldiers(state)
 	if soldiers.is_empty():
 		return {}
-	var reach := Movement.reachable_for(state.grid, u, _move_budget(u))
+	var reach := _r.reachable_for(u, _move_budget(u))
 	if _on_any_lane(r, soldiers, u.coord):
 		var off := _neutral_off_lane(r, soldiers, reach, u)
 		if not off.is_empty():
@@ -1172,7 +1200,7 @@ func _move_to_vehicle(state: GameState, u: UnitInstance) -> Dictionary:
 	if not field.has(u.coord):
 		return {}
 	var start: int = field.at(u.coord)
-	var reach := Movement.reachable_for(state.grid, u, _move_budget(u))
+	var reach := _r.reachable_for(u, _move_budget(u))
 	var dodge := _avoids_fire(u)
 	var best: Dictionary = {}
 	for coord: Vector2i in reach.cost:
@@ -1205,7 +1233,7 @@ func _move_to_own_vehicle(state: GameState, u: UnitInstance) -> Dictionary:
 	var start: int = field.at(u.coord)
 	if start <= 0:
 		return {}  # уже вплотную — посадкой займётся _best_board
-	var reach := Movement.reachable_for(state.grid, u, _move_budget(u))
+	var reach := _r.reachable_for(u, _move_budget(u))
 	var dodge := _avoids_fire(u)
 	var best: Dictionary = {}
 	for coord: Vector2i in reach.cost:
@@ -1306,6 +1334,94 @@ func _seed_vehicle_field(state: GameState, seeds: Array, key: String) -> GeoFiel
 	return field
 
 # --- Захват ---
+## Куда сапёру положить мину (batch 12 #3): «tactically place mines and not step on
+## their own mines». Второе — не здесь: маршруты всей стороны идут через
+## r.reachable_for() и известные мины обходят сами. Здесь — первое.
+##
+## Мина хороша там, где враг ПРОЙДЁТ: по геополю клетка должна лежать ближе к врагу,
+## чем сам сапёр (он кладёт её перед собой, а не за спину), но не под самым носом у
+## врага и не на другом краю карты (MINE_ENEMY_MIN..MAX). Дороже всего узкие места —
+## клетка, у которой мало проходимых соседей, перекрывает проход целиком, — и дешевле
+## всего ковёр: вторая мина вплотную к первой почти ничего не добавляет. Клетка под
+## живым бойцом исключена всегда: мина под ногами рвётся сразу (#7), и своего сапёр не
+## подрывает — как и себя.
+##
+## Противотанковую кладём, пока у врага есть живая техника, а наших противотанковых
+## на поле меньше, чем его машин; дальше — противопехотные.
+func _best_mine(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
+	if u.stats.special_ability_id != MCF.ABILITY_SAPPER:
+		return {}
+	var free_credit := u.mine_credits > 0
+	if not free_credit and u.remaining_ap <= 0:
+		return {}
+	var own_mines := 0
+	var own_av := 0
+	for c: GridCell in state.grid.cells_flat():
+		if c.feature_owner != owner:
+			continue
+		if c.feature_id == MCF.FEATURE_MINE:
+			own_mines += 1
+		elif c.feature_id == MCF.FEATURE_AV_MINE:
+			own_av += 1
+	var enemy_veh := _enemy_vehicle_count(state)
+	var lay_av := enemy_veh > 0 and own_av < enemy_veh
+	if not lay_av and own_mines >= MINE_FIELD_CAP and not free_credit:
+		return {}
+	var field := _enemy_distance_field(state, false, r)
+	if not field.has(u.coord):
+		return {}
+	var my_geo: int = field.at(u.coord)
+	var grid := state.grid
+	var have_best := false
+	var best_score := 0.0
+	var best_cell := Vector2i.ZERO
+	for cell: Vector2i in r.mine_cells(u):
+		if cell == u.coord:
+			continue
+		var gc := grid.cell(cell)
+		if gc.occupant != null and gc.occupant.is_alive():
+			continue
+		var geo: int = field.at(cell)
+		if geo == GeoField.FAR or geo < MINE_ENEMY_MIN:
+			continue
+		if geo > my_geo:
+			continue  # за спиной — врагу туда идти незачем
+		var score := SCORE_MINE_BASE
+		if free_credit:
+			score += SCORE_MINE_FREE_BONUS
+		# Узкое место: чем меньше проходимых соседей, тем плотнее мина закрывает проход.
+		var open := 0
+		for n: Vector2i in grid.neighbors(cell):
+			if not grid.blocks_walk(n):
+				open += 1
+		score += float(8 - open) * 1.5
+		# Перед собой, на пути врага: клетка ближе к нему, чем сапёр.
+		score += float(my_geo - geo) * 1.0
+		# Не ковром: соседняя своя мина почти обесценивает клетку, через одну — чуть.
+		for dy in range(-2, 3):
+			for dx in range(-2, 3):
+				if dx == 0 and dy == 0:
+					continue
+				var oc := grid.cell(cell + Vector2i(dx, dy))
+				if oc == null or oc.feature_owner != owner:
+					continue
+				if oc.feature_id != MCF.FEATURE_MINE and oc.feature_id != MCF.FEATURE_AV_MINE:
+					continue
+				score -= 10.0 if maxi(absi(dx), absi(dy)) == 1 else 3.0
+		# Свои рядом будут её обходить — лучше положить чуть в стороне от строя.
+		for ally: UnitInstance in state.living_units_of(owner):
+			if ally.id != u.id and ally.aboard_vehicle_id == -1 \
+					and Combat.distance(ally.coord, cell) <= 1:
+				score -= 2.0
+				break
+		if not have_best or score > best_score:
+			have_best = true
+			best_score = score
+			best_cell = cell
+	if not have_best:
+		return {}
+	return {"score": best_score, "intent": PlaceMineIntent.new(u.id, best_cell, lay_av)}
+
 func _best_capture(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
 	var ids := r.capturable_target_ids(u)
 	if ids.is_empty():
@@ -1332,7 +1448,7 @@ func _plan_move(state: GameState, u: UnitInstance) -> Dictionary:
 	if u.remaining_ap <= 0 and u.move_credit <= 0:
 		return {}
 	var budget: int = _move_budget(u)
-	var reach := Movement.reachable_for(state.grid, u, budget)
+	var reach := _r.reachable_for(u, budget)
 	var dodge := _avoids_fire(u)
 	# Клетка назначения из плана штаба может за это время загореться (#1): в разливе
 	# она осталась, но входить в неё — гарантированная смерть. Тогда план не
@@ -1374,7 +1490,7 @@ func _best_move(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dic
 	var straight := _nearest_enemy(state, u.coord, false, r)
 	if not use_geo and straight == null:
 		return {}
-	var reach := Movement.reachable_for(state.grid, u, _move_budget(u))
+	var reach := _r.reachable_for(u, _move_budget(u))
 	var start_geo: int = field.at(u.coord)
 	# Лучшее держим в простых переменных, а не в Dictionary (#106): разлив — под сотню
 	# клеток на бойца, и прежний код на каждое улучшение строил и словарь, и MoveIntent,
@@ -1558,7 +1674,7 @@ func _flee_fire(state: GameState, u: UnitInstance) -> Dictionary:
 	# Огнеупорному (#2) бежать не от чего — он в пламени и стоит, и воюет.
 	if not _avoids_fire(u) or not _fire_near(state, u.coord):
 		return {}
-	var reach := Movement.reachable_for(state.grid, u, _move_budget(u))
+	var reach := _r.reachable_for(u, _move_budget(u))
 	var best: Dictionary = {}
 	for coord: Vector2i in reach.cost:
 		if coord == u.coord or _fire_near(state, coord):

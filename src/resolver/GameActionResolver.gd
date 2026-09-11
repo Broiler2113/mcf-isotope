@@ -314,7 +314,7 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 	if burdened:
 		budget = mini(budget, carry_budget)
 
-	var reach := Movement.reachable_for(state.grid, unit, budget)
+	var reach := reachable_for(unit, budget)
 	if not reach.can_reach(intent.target):
 		return ActionResult.fail("Target out of reach (speed %d)" % budget)
 
@@ -1595,6 +1595,8 @@ func _resolve_pickup_corpse(intent: PickUpCorpseIntent) -> ActionResult:
 		return ActionResult.fail("Corpse is out of reach")
 	if not has_corpse(intent.from):
 		return ActionResult.fail("No corpse there")
+	if state.grid.vehicle_at(intent.from) != -1:
+		return ActionResult.fail("The body is under a vehicle")
 	var cell := state.grid.cell(intent.from)
 	# Снимаем один труп: сперва из кучи corpse_count, иначе труп-occupant.
 	if cell.corpse_count > 0:
@@ -1716,7 +1718,16 @@ func _kill(u: UnitInstance, res: ActionResult = null, from_coord: Vector2i = NOW
 			"from": from_coord if from_coord != NOWHERE else u.coord})
 	var load: int = u.carried_corpses
 	u.carried_corpses = 0
+	# Пленник погибшего носильщика освобождается сам (batch 12 #1): держать его больше
+	# некому. Раньше он оставался HELD с captor_id на труп — не мог действовать и не мог
+	# вырваться, потому что _resolve_release ищет живого захватчика.
+	var captive := held_unit_of(u)
 	u.kill()
+	if captive != null:
+		captive.status = MCF.Status.ALIVE
+		captive.captor_id = -1
+		if res != null:
+			res.log("%s is free — %s is dead." % [captive.stats.display_name, u.stats.display_name])
 	if load <= 0:
 		return
 	var cell := state.grid.cell(u.coord) if state.grid.in_bounds(u.coord) else null
@@ -2304,11 +2315,25 @@ func _resolve_place_mine(intent: PlaceMineIntent) -> ActionResult:
 		spent_ap = true
 	actor.mine_credits -= 1
 	var mine_feature: String = MCF.FEATURE_AV_MINE if intent.anti_vehicle else MCF.FEATURE_MINE
-	state.grid.cell(intent.target).set_feature(mine_feature, actor.owner)
+	var target_cell := state.grid.cell(intent.target)
+	target_cell.set_feature(mine_feature, actor.owner)
 	var kind_word := "an anti-vehicle mine" if intent.anti_vehicle else "a mine"
 	var tail := "[AP: %d, %d mine(s) left to lay]" % [actor.remaining_ap, actor.mine_credits]
-	return ActionResult.success(["%s laid %s at (%d, %d) %s" % [
+	var res := ActionResult.success(["%s laid %s at (%d, %d) %s" % [
 		actor.stats.display_name, kind_word, intent.target.x, intent.target.y, tail]])
+	# Противопехотная мина, заложенная ПОД стоящим бойцом — своим, чужим или самим
+	# сапёром, — рвётся сразу (batch 12 #7): взрыватель взводится под ногой. Бросков
+	# нет, это верная смерть; мина расходуется. Противотанковая под пехотой молчит —
+	# ей нужен вес гусеницы.
+	var under: UnitInstance = target_cell.occupant
+	if not intent.anti_vehicle and under != null and under.is_alive():
+		target_cell.clear_feature()
+		notify_cell_changed(intent.target)
+		_fx(res, {"fx": "debris", "at": intent.target, "cells": [intent.target]})
+		_kill(under, res, intent.target)
+		res.deaths.append(under.id)
+		res.log("The mine goes off under %s's feet — killed instantly!" % under.stats.display_name)
+	return res
 
 ## Сапёр обезвреживает подсвеченную его стороной чужую мину на соседней клетке (item 13).
 func _resolve_disarm_mine(intent: DisarmMineIntent) -> ActionResult:
@@ -2400,6 +2425,25 @@ func _detonate_mine(coord: Vector2i, victim: UnitInstance, res: ActionResult) ->
 	else:
 		for n in killed:
 			res.log("%s killed by the mine!" % n)
+
+## Противопехотные мины, о которых сторона ЗНАЕТ (batch 12 #3/#4): свои и союзные всегда,
+## чужие — пока держится подсветка зачистки. Словарь coord → true в порядке обхода
+## сетки, чтобы Movement мог класть его в ключ кеша. Маршруты этой стороны обходят
+## эти клетки; противотанковые мины сюда не входят — пехоте они не страшны.
+func known_mine_cells(owner: int) -> Dictionary:
+	var out: Dictionary = {}
+	for c: GridCell in state.grid.cells_flat():
+		if c.feature_id != MCF.FEATURE_MINE:
+			continue
+		if mine_visible_to(owner, c.coord):
+			out[c.coord] = true
+	return out
+
+## Разлив движения для бойца с обходом известных ему мин (batch 12 #4). Все, кто
+## считает ход пехоты — резолвер, интерфейс, ИИ, — обязаны идти через эту функцию,
+## иначе подсветка и проверка приказа разойдутся.
+func reachable_for(unit: UnitInstance, budget: int) -> Movement.Reachability:
+	return Movement.reachable_for(state.grid, unit, budget, known_mine_cells(unit.owner))
 
 ## Видит ли сторона эту мину. Своя мина видна всегда; чужая — пока держится подсветка.
 func mine_visible_to(owner: int, coord: Vector2i) -> bool:
@@ -3329,7 +3373,7 @@ func _civilian_route(actor: UnitInstance, intent: Intent) -> Array[Vector2i]:
 	var budget: int = actor.move_credit if actor.move_credit > 0 else actor.stats.speed
 	if budget <= 0:
 		return empty
-	var reach := Movement.reachable_for(state.grid, actor, budget)
+	var reach := reachable_for(actor, budget)
 	var dest: Vector2i = (intent as MoveIntent).target
 	if not reach.can_reach(dest):
 		return empty
@@ -4204,7 +4248,8 @@ func corpse_pickup_cells(actor: UnitInstance) -> Array:
 	if has_corpse(actor.coord):
 		out.append(actor.coord)
 	for n in state.grid.neighbors(actor.coord):
-		if has_corpse(n):
+		# Тело под стоящей машиной не достать (batch 12 #2): оно лежит там, но под днищем.
+		if has_corpse(n) and state.grid.vehicle_at(n) == -1:
 			out.append(n)
 	return out
 
@@ -5530,15 +5575,22 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 	# Всё под гусеницами сносится в пол (трупы, укрытия, тараненные стены).
 	# Ежей считаем ЗДЕСЬ, до зачистки: clear_feature() ниже сотрёт их молча, и после
 	# переезда узнать, сколько их было, стало бы неоткуда.
+	# Тела под гусеницей ОСТАЮТСЯ (batch 12 #2): труп-occupant и куча corpse_count не
+	# трогаются — машина проезжает поверх, а когда уедет, их можно подобрать как обычно.
+	# Только сложенная из тел стена перестаёт быть стеной: конструкция смята, но сами
+	# пять тел лежат на месте, отдельной кучей.
 	var flattened: Array[Vector2i] = []
 	var hedgehogs := 0
 	for cell_coord in (plan["crush_cells"] + plan["scatter_cells"] + plan["ram_cells"]):
 		var c := state.grid.cell(cell_coord)
 		if c.feature_id == MCF.FEATURE_HEDGEHOG:
 			hedgehogs += 1
-		c.occupant = null
+		var was_corpse_wall := c.feature_id == MCF.FEATURE_CORPSE_WALL
+		if c.occupant != null and c.occupant.is_alive():
+			c.occupant = null
 		c.clear_feature()
-		c.corpse_count = 0
+		if was_corpse_wall:
+			c.corpse_count = MCF.CORPSE_WALL_COUNT
 		flattened.append(cell_coord)
 	# Пол под гусеницей выглядит РАЗБИТЫМ (item 1): «if a tank rams through a wall, make
 	# these tiles display as destroyed». Клетка менялась и раньше — стена исчезала, — но

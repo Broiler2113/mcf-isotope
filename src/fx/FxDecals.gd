@@ -60,6 +60,11 @@ const SPLATTER_RANGE := 0.95
 ## Отрисовка от этого не страдает: частицы за краем экрана отсекаются в _draw_fx_one.
 const PROPS_CAP := 1500
 
+## Край поля в клетках (batch 12 #6): гильзы, брызги и осколки ОТСКАКИВАЮТ от него,
+## а не улетают в пустоту за карту. Ставит сцена боя по размеру сетки; нулевые границы
+## означают «без края» — тогда всё летит как раньше (тесты без сцены).
+var bounds: Vector2 = Vector2.ZERO
+
 ## Vector2i -> DAMAGE_*: побитый пол. Эпицентр не понижается до щебня повторным
 ## взрывом рядом — только повышается.
 var floor_damage: Dictionary = {}
@@ -274,12 +279,55 @@ func _launch(kind: String, at: Vector2i, dir: Vector2, rng: RandomNumberGenerato
 	var d := dir.rotated(spread)
 	var start := Vector2(at) + Vector2(0.5, 0.5) \
 			+ Vector2(rng.randf_range(-0.12, 0.12), rng.randf_range(-0.12, 0.12))
-	props.resize(props.size())  # без побочных эффектов: подсказка читателю, что props — статика
-	flying.append({
-		"kind": kind, "from": start, "to": start + d * rng.randf_range(r_min, r_max),
+	var to: Vector2 = start + d * rng.randf_range(r_min, r_max)
+	var f := {
+		"kind": kind, "from": start, "to": to,
 		"rot0": rng.randf_range(0.0, TAU), "rot1": rng.randf_range(-TAU, TAU),
 		"scale": rng.randf_range(0.6, 1.1), "t": 0.0, "dur": flight,
-	})
+	}
+	# Отскок от края поля (batch 12 #6): частица долетает до стенки и отражается —
+	# остаток пути идёт обратно внутрь. Точка удара и доля полёта до неё запоминаются,
+	# чтобы траектория на экране действительно ломалась о край.
+	var b := _bounce(start, to)
+	if not b.is_empty():
+		f["to"] = b["to"]
+		f["via"] = b["via"]
+		f["split"] = b["split"]
+	flying.append(f)
+
+## Отражение отрезка полёта от края поля (batch 12 #6). Пусто — край не задет.
+## {via: точка удара, split: доля полёта до неё, to: конец после отскока}.
+func _bounce(from: Vector2, to: Vector2) -> Dictionary:
+	if bounds.x <= 0.0 or bounds.y <= 0.0:
+		return {}
+	var d := to - from
+	var best_t := 2.0
+	var axis := -1
+	# Первая из четырёх стенок, которую пересекает отрезок.
+	for cand in [[0.0, 0], [bounds.x, 0], [0.0, 1], [bounds.y, 1]]:
+		var wall: float = cand[0]
+		var ax: int = cand[1]
+		var comp := d.x if ax == 0 else d.y
+		if absf(comp) < 0.0001:
+			continue
+		var origin := from.x if ax == 0 else from.y
+		var t := (wall - origin) / comp
+		if t > 0.0 and t <= 1.0 and t < best_t:
+			best_t = t
+			axis = ax
+	if axis < 0:
+		return {}
+	var via := from + d * best_t
+	var rest := d * (1.0 - best_t)
+	if axis == 0:
+		rest.x = -rest.x
+	else:
+		rest.y = -rest.y
+	var end := via + rest
+	# Угол поля: второй стенки не считаем, просто не даём вылететь.
+	end.x = clampf(end.x, 0.02, bounds.x - 0.02)
+	end.y = clampf(end.y, 0.02, bounds.y - 0.02)
+	return {"via": via, "split": best_t, "to": end}
 
 ## Продвинуть полёты. Возвращает true, если что-то изменилось и надо перерисовать.
 func advance(delta: float) -> bool:
@@ -320,7 +368,16 @@ func advance(delta: float) -> bool:
 ## полёт читался как бросок, а не как скольжение.
 static func flight_pos(f: Dictionary) -> Vector2:
 	var k: float = clampf(float(f["t"]) / maxf(0.001, float(f["dur"])), 0.0, 1.0)
-	var base: Vector2 = Vector2(f["from"]).lerp(Vector2(f["to"]), k)
+	var base: Vector2
+	if f.has("via"):
+		# Ломаная: до стенки — и обратно от неё (batch 12 #6).
+		var split: float = clampf(float(f["split"]), 0.001, 0.999)
+		if k < split:
+			base = Vector2(f["from"]).lerp(Vector2(f["via"]), k / split)
+		else:
+			base = Vector2(f["via"]).lerp(Vector2(f["to"]), (k - split) / (1.0 - split))
+	else:
+		base = Vector2(f["from"]).lerp(Vector2(f["to"]), k)
 	return base - Vector2(0.0, sin(k * PI) * 0.18)
 
 static func flight_rot(f: Dictionary) -> float:

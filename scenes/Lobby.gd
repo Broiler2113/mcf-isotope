@@ -22,6 +22,7 @@ const GAME_MODES := ["domination"]
 ## чтобы «Type/Color/Zone/Points» стояли ровно над своими контролами, а не сбоку.
 const SLOT_COL_IDX := 26
 const SLOT_COL_TYPE := 124
+const SLOT_COL_WHO := 110
 const SLOT_COL_COLOR := 124
 # SpinBox'ы имеют собственный минимум ширины ~86px (стрелки + текст). Колонка «Team»
 # была уже него (64) — контрол распирал её, и все следующие столбцы (Zone/Points)
@@ -59,6 +60,9 @@ var _preview_swatch: ColorRect
 var _status: Label
 
 var _map_paths: Array[String] = []
+## Карта хоста у гостя (batch 12 #8): своего списка карт у него нет — только превью.
+var _client_map: MapData = null
+var _color_opt: OptionButton
 
 # --- Загруженная партия (M12, item 42) ---
 ## Содержимое `.mcfs`, если хост открыл сохранение. Пусто — обычный матч с закупкой.
@@ -90,31 +94,169 @@ func _ready() -> void:
 		NetHandoff.session.message.connect(_on_client_message)
 		NetHandoff.session.disconnected.connect(_on_client_lost)
 		NetHandoff.session.attach()
-		_status.text = "Connected — waiting for the host to start the match…"
+		_status.text = "Connected — waiting for the host's lobby…"
 	# Сетевой хост открыл лобби сразу (item 10): ждём подключения, продолжая объявлять
-	# партию в LAN. Когда гость подключится — обновим статус.
+	# партию в LAN. Гости получают снимок лобби на каждое изменение (batch 12 #8).
 	if _is_host_net:
-		NetHandoff.session.peer_ready.connect(_on_host_peer_joined)
-		NetHandoff.session.disconnected.connect(_on_host_peer_left)
-		_status.text = "Hosting — waiting for a player to join. You can also add AI slots and start now."
+		var ses := NetHandoff.session
+		ses.peer_joined.connect(_on_host_peer_joined)
+		ses.peer_left.connect(_on_host_peer_left)
+		ses.message.connect(_on_host_message)
+		ses.attach()
+		# Гости, успевшие подключиться до открытия лобби, слот ещё не получили.
+		for id: int in ses.peers:
+			_seat_peer(id)
+		_refresh_host_status()
+		_lobby_changed()
+		_send_lobby_map()
 		_lan_adv = LanDiscovery.new()
 		get_tree().root.add_child.call_deferred(_lan_adv)
 		_lan_adv.start_advertising.call_deferred({
 			"name": "MCF Tactics", "players": 1, "port": NetworkSession.DEFAULT_PORT})
 
-func _on_host_peer_joined(_is_host: bool) -> void:
-	if _status != null:
-		_status.text = "A player joined — set their slot to Player, then Start Match."
-	# Свободный слот отдаём подключившемуся человеку, чтобы «playing >= 2» выполнилось.
+# --- Хост: рассадка гостей и рассылка снимка (batch 12 #8) --------------------------
+func _on_host_peer_joined(id: int) -> void:
+	_seat_peer(id)
+	_refresh_host_status()
+	_lobby_changed()
+	# Новому гостю нужна ещё и карта — снимок несёт только её имя.
+	_send_lobby_map()
+
+func _on_host_peer_left(id: int) -> void:
+	var side := roster.side_of_peer(id)
+	if side >= 0:
+		var s: Roster.Slot = roster.slots[side]
+		s.kind = Roster.SlotKind.OPEN
+		s.peer_id = -1
+		s.display_name = MCF.owner_name(side)
+	_refresh_host_status()
+	_lobby_changed()
+
+## Посадить пришедшего в первый открытый слот; если открытых нет — добавить новый.
+## Слот меняется на «Player» с буквой стороны, и это видят все (batch 12 #8).
+func _seat_peer(id: int) -> void:
+	if roster.side_of_peer(id) >= 0:
+		return
+	var target: Roster.Slot = null
 	for s: Roster.Slot in roster.slots:
 		if s.kind == Roster.SlotKind.OPEN:
-			s.kind = Roster.SlotKind.HUMAN
+			target = s
 			break
-	_refresh_slots()
+	if target == null:
+		var nid := roster.add_slot(Roster.SlotKind.OPEN)
+		if nid < 0:
+			return  # мест нет — гость останется зрителем лобби
+		_assign_color(nid, _first_free_color())
+		roster.slots[nid].budget = GameConfig.DEFAULT_BUDGET
+		target = roster.slots[nid]
+	target.kind = Roster.SlotKind.HUMAN
+	target.peer_id = id
+	target.display_name = MCF.owner_name(target.id)
 
-func _on_host_peer_left() -> void:
-	if _status != null:
-		_status.text = "The other player disconnected. Waiting for a new one…"
+func _refresh_host_status() -> void:
+	if _status == null or NetHandoff.session == null:
+		return
+	var n := NetHandoff.session.peers.size()
+	if n == 0:
+		_status.text = "Hosting — waiting for players to join. You can also add AI slots and start now."
+	else:
+		_status.text = "Hosting — %d player%s connected. Start when everyone is seated." % [
+			n, "" if n == 1 else "s"]
+
+## Любое изменение лобби у хоста: перерисовать и разослать гостям.
+func _lobby_changed() -> void:
+	_refresh_slots()
+	_broadcast_lobby()
+
+func _broadcast_lobby() -> void:
+	if not _is_host_net or NetHandoff.session == null:
+		return
+	_commit_config()
+	NetHandoff.session.send({"k": NetHandoff.K_LOBBY, "r": NetHandoff.encode_rules(),
+		"map": _map_opt.get_item_text(_map_opt.selected) if _map_opt != null else ""})
+
+## Карта едет отдельно и только когда меняется: словарь карты велик, а снимок лобби
+## летит на каждый щелчок.
+func _send_lobby_map() -> void:
+	if not _is_host_net or NetHandoff.session == null:
+		return
+	NetHandoff.session.send({"k": NetHandoff.K_LOBBY_MAP, "m": _selected_map().to_dict()})
+
+## Просьбы гостей (batch 12 #8): цвет и пересадка в открытый слот. Решает хост.
+func _on_host_message(msg: Dictionary) -> void:
+	if str(msg.get("k", "")) != NetHandoff.K_LOBBY_REQ:
+		return
+	var from := int(msg.get("_from", -1))
+	var side := roster.side_of_peer(from)
+	if side < 0:
+		return
+	match str(msg.get("op", "")):
+		"color":
+			_assign_color(side, int(msg.get("c", 0)))
+		"slot":
+			var want := int(msg.get("s", -1))
+			if want >= 0 and want < roster.slots.size() and want != side:
+				var dst: Roster.Slot = roster.slots[want]
+				var src: Roster.Slot = roster.slots[side]
+				if dst.kind == Roster.SlotKind.OPEN:
+					dst.kind = Roster.SlotKind.HUMAN
+					dst.peer_id = from
+					dst.display_name = MCF.owner_name(dst.id)
+					# Цвет переезжает вместе с игроком — он его выбирал.
+					var keep := src.color
+					src.kind = Roster.SlotKind.OPEN
+					src.peer_id = -1
+					src.display_name = MCF.owner_name(src.id)
+					src.color = dst.color
+					dst.color = keep
+	_lobby_changed()
+
+# --- Гость: снимок лобби от хоста (batch 12 #8) -------------------------------------
+func _apply_lobby_snapshot(msg: Dictionary) -> void:
+	var rules: Variant = msg.get("r", {})
+	if not (rules is Dictionary):
+		return
+	NetHandoff.apply_rules(rules)
+	roster = GameConfig.active_roster()
+	_team_mode = _roster_has_teams()
+	if _place_opt != null:
+		_place_opt.select(clampi(GameConfig.placement_mode, 0, 1))
+		_fog_opt.select(clampi(GameConfig.fog_mode, 0, 2))
+		_army_opt.select(clampi(GameConfig.army_select_mode, 0, 1))
+		_team_check.set_pressed_no_signal(_team_mode)
+		_ff_check.button_pressed = GameConfig.friendly_fire
+		_ff_check.visible = _team_mode
+		_live_check.button_pressed = GameConfig.live_placement_visible
+		_no_neutrals_check.button_pressed = not GameConfig.civilians_enabled
+		_events_check.button_pressed = GameConfig.random_events_enabled
+		_events_mand.button_pressed = GameConfig.random_events_mandatory
+		_events_interval.value = GameConfig.random_events_interval
+		for ev_id in _event_pool:
+			_event_pool[ev_id] = float(GameConfig.random_events_weights.get(ev_id, 0.0)) > 0.0
+	if _map_opt != null:
+		var map_name := str(msg.get("map", ""))
+		_map_opt.clear()
+		_map_opt.add_item(map_name if map_name != "" else "(host's map)")
+		_map_opt.select(0)
+	_refresh_slots()
+	var mine := _my_slot()
+	if mine != null:
+		if _color_opt != null:
+			_color_opt.select(mine.color_index())
+		if _preview_swatch != null:
+			_preview_swatch.color = mine.color
+		_status.text = "You are %s — waiting for the host to start the match." % mine.display_name
+	else:
+		_status.text = "Connected — no free slot yet. The host can add one."
+
+## Карта хоста для превью (batch 12 #8).
+func _apply_lobby_map(msg: Dictionary) -> void:
+	var m: Variant = msg.get("m", {})
+	if not (m is Dictionary):
+		return
+	_client_map = MapData.from_dict(m)
+	_refresh_map_preview()
+	_refresh_slots()
 
 func _exit_tree() -> void:
 	if _lan_adv != null:
@@ -123,6 +265,13 @@ func _exit_tree() -> void:
 		_lan_adv = null
 
 func _on_client_message(msg: Dictionary) -> void:
+	match str(msg.get("k", "")):
+		NetHandoff.K_LOBBY:
+			_apply_lobby_snapshot(msg)
+			return
+		NetHandoff.K_LOBBY_MAP:
+			_apply_lobby_map(msg)
+			return
 	# Хост открыл сохранение (M12): доска приезжает целиком, и закупка пропускается.
 	if str(msg.get("k", "")) == NetHandoff.K_LOAD:
 		NetHandoff.apply_load(msg)
@@ -157,6 +306,10 @@ func _seed_roster() -> Roster:
 	# Стартовый личный бюджет у каждого слота — общий по умолчанию (item 1).
 	for s: Roster.Slot in r.slots:
 		s.budget = GameConfig.DEFAULT_BUDGET
+	# Слот хоста помечен его сетевым номером (у сервера он всегда 1): по нему и гости,
+	# и бой узнают, чей это слот (batch 12 #8).
+	if _is_host_net:
+		r.slots[0].peer_id = 1
 	return r
 
 # --- UI ----------------------------------------------------------------------
@@ -331,6 +484,15 @@ func _build_config(parent: VBoxContainer) -> void:
 	pool_btn.pressed.connect(_open_events_window)
 	ev_box.add_child(pool_btn)
 
+	# Хост: любой щелчок по правилам сразу уезжает гостям (batch 12 #8/#9/#10).
+	if _is_host_net:
+		for o: OptionButton in [_place_opt, _fog_opt, _army_opt, _mode_opt]:
+			o.item_selected.connect(func(_i: int) -> void: _broadcast_lobby())
+		for cb: CheckBox in [_ff_check, _team_check, _live_check, _no_neutrals_check,
+				_events_check, _events_mand]:
+			cb.toggled.connect(func(_on: bool) -> void: _broadcast_lobby())
+		_events_interval.value_changed.connect(func(_v: float) -> void: _broadcast_lobby())
+
 	if _is_client:
 		var _client_locked: Array = [_place_opt, _fog_opt, _army_opt, _mode_opt,
 				_ff_check, _team_check, _live_check, _no_neutrals_check, _events_check,
@@ -360,7 +522,9 @@ func _build_map(parent: VBoxContainer) -> void:
 	# Смена карты обновляет и превью, и слоты — у зон свой предел от карты (item 6).
 	_map_opt.item_selected.connect(func(_i: int) -> void:
 		_refresh_map_preview()
-		_refresh_slots())
+		_refresh_slots()
+		_broadcast_lobby()
+		_send_lobby_map())
 	if _is_client:
 		_map_opt.disabled = true
 	# Список читается один раз при входе в лобби, а карту могли нарисовать и положить
@@ -493,6 +657,7 @@ func _build_personal(parent: VBoxContainer) -> void:
 		color_opt.add_item(Roster.color_name(i), i)  # имена цветов (item 3)
 	color_opt.select(_my_slot().color_index() if _my_slot() != null else 0)
 	color_opt.item_selected.connect(_on_my_color)
+	_color_opt = color_opt
 	_row(box, "Selected Color:", color_opt)
 	_preview_swatch = ColorRect.new()
 	_preview_swatch.custom_minimum_size = Vector2(64, 64)
@@ -532,6 +697,36 @@ func _slot_row(s: Roster.Slot) -> Control:
 	kind.disabled = _is_client
 	kind.custom_minimum_size = Vector2(SLOT_COL_TYPE, 0)
 	row.add_child(kind)
+
+	# Кто сидит (batch 12 #8): у занятого людьми слота — имя игрока с пометкой, у
+	# открытого — кнопка «Join» для гостя. Хост видит, какие места заняты, гость —
+	# куда можно сесть.
+	var who := Label.new()
+	who.custom_minimum_size = Vector2(SLOT_COL_WHO, 0)
+	who.add_theme_font_size_override("font_size", 11)
+	var my_peer := NetHandoff.session.my_peer_id() if NetHandoff.session != null else 1
+	if s.kind == Roster.SlotKind.HUMAN:
+		if s.peer_id == my_peer and NetHandoff.session != null:
+			who.text = "%s (you)" % s.display_name
+			who.modulate = Color(0.8, 0.95, 0.8)
+		elif s.peer_id == 1:
+			who.text = "%s (host)" % s.display_name
+		elif s.peer_id > 1:
+			who.text = s.display_name
+		else:
+			who.text = "%s (nobody yet)" % s.display_name if _is_host_net else s.display_name
+			who.modulate = Color(0.85, 0.75, 0.6)
+		row.add_child(who)
+	elif s.kind == Roster.SlotKind.OPEN and _is_client:
+		var join := Button.new()
+		join.text = "Join"
+		join.custom_minimum_size = Vector2(SLOT_COL_WHO, 0)
+		join.pressed.connect(_on_join_slot.bind(s.id))
+		row.add_child(join)
+	else:
+		who.text = "—" if s.kind == Roster.SlotKind.OPEN else ""
+		who.modulate = Color(0.6, 0.62, 0.7)
+		row.add_child(who)
 
 	var color := OptionButton.new()
 	# Настоящие названия цветов вместо «C1…C26» (item 3).
@@ -610,7 +805,8 @@ func _slot_header() -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
 	# Ширины СТРОГО совпадают с контролами строк, иначе заголовки съезжают вбок (item 4).
-	var cols: Array = [["#", SLOT_COL_IDX], ["Type", SLOT_COL_TYPE], ["Color", SLOT_COL_COLOR]]
+	var cols: Array = [["#", SLOT_COL_IDX], ["Type", SLOT_COL_TYPE], ["Who", SLOT_COL_WHO],
+			["Color", SLOT_COL_COLOR]]
 	if _team_mode:
 		cols.append(["Team", SLOT_COL_TEAM])
 	cols.append_array([["Zone", SLOT_COL_ZONE], ["Points", SLOT_COL_PTS]])
@@ -648,6 +844,7 @@ func _map_zone_count() -> int:
 
 func _on_slot_budget(value: float, slot_id: int) -> void:
 	(roster.slots[slot_id] as Roster.Slot).budget = int(value)
+	_broadcast_lobby()
 
 ## Окно ограничения состава ДЛЯ КОНКРЕТНОГО слота (item 2).
 func _open_unit_restrict_window(slot_id: int) -> void:
@@ -673,7 +870,8 @@ func _open_unit_restrict_window(slot_id: int) -> void:
 			if s.allowed_units.is_empty():
 				for x: String in all_buyable:
 					s.allowed_units[x] = true
-			s.allowed_units[u] = on)
+			s.allowed_units[u] = on
+			_broadcast_lobby())
 		body.add_child(cb)
 
 ## Окно выбора пула случайных событий (item 3).
@@ -690,7 +888,9 @@ func _open_events_window() -> void:
 		cb.text = str(pair[1])
 		cb.button_pressed = bool(_event_pool.get(ev_id, false))
 		var eid := ev_id
-		cb.toggled.connect(func(on: bool) -> void: _event_pool[eid] = on)
+		cb.toggled.connect(func(on: bool) -> void:
+			_event_pool[eid] = on
+			_broadcast_lobby())
 		body.add_child(cb)
 
 ## Общее модальное окно в стиле игры: затемнение + рамка SteamChrome + кнопка «Close».
@@ -746,11 +946,16 @@ func _on_add_slot() -> void:
 	if id >= 0:
 		_assign_color(id, _first_free_color())  # уникальный цвет новому слоту (item 6)
 		roster.slots[id].budget = GameConfig.DEFAULT_BUDGET  # личный бюджет (item 1)
-	_refresh_slots()
+	_lobby_changed()
 
 func _on_remove_slot(slot_id: int) -> void:
+	# Слот с живым гостем не убирают — сперва он должен уйти (batch 12 #8).
+	var s: Roster.Slot = roster.slots[slot_id]
+	if s.kind == Roster.SlotKind.HUMAN and s.peer_id > 1:
+		_status.text = "%s is sitting in that slot — it can't be removed." % s.display_name
+		return
 	roster.remove_slot(slot_id)
-	_refresh_slots()
+	_lobby_changed()
 
 ## Первый ещё не занятый цвет палитры — чтобы новые слоты не дублировали цвета (item 6).
 func _first_free_color() -> int:
@@ -766,6 +971,12 @@ func _first_free_color() -> int:
 
 func _on_slot_kind(index: int, slot_id: int) -> void:
 	var s := roster.slots[slot_id] as Roster.Slot
+	# Слот сидящего гостя хост не переназначает (batch 12 #8): игрока не выкинешь
+	# щелчком по списку — только отключением.
+	if s.kind == Roster.SlotKind.HUMAN and s.peer_id > 1 and index != 2:
+		_status.text = "%s is sitting in that slot — it stays a Player." % s.display_name
+		_refresh_slots()
+		return
 	match index:
 		0: s.kind = Roster.SlotKind.OPEN
 		1: s.kind = Roster.SlotKind.CLOSED
@@ -773,18 +984,23 @@ func _on_slot_kind(index: int, slot_id: int) -> void:
 		_:
 			s.kind = Roster.SlotKind.AI
 			s.ai_difficulty = clampi(index - 3, 0, 2)
+	if s.kind != Roster.SlotKind.HUMAN and s.peer_id > 1:
+		s.peer_id = -1
+	_lobby_changed()
 
 func _on_slot_color(color_idx: int, slot_id: int) -> void:
 	if not _assign_color(slot_id, color_idx):
 		_status.text = "That colour is taken — no two players share a colour."
-	_refresh_slots()
+	_lobby_changed()
 
 func _on_slot_zone(value: float, slot_id: int) -> void:
 	# 0 → «своя зона по номеру» (deploy_zone = -1); N → Zone N (индекс N-1).
 	(roster.slots[slot_id] as Roster.Slot).deploy_zone = int(value) - 1
+	_broadcast_lobby()
 
 func _on_slot_team(value: float, slot_id: int) -> void:
 	(roster.slots[slot_id] as Roster.Slot).team = int(value) - 1
+	_broadcast_lobby()
 
 ## Назначить цвет слоту, если он свободен (item 25/37 — цвета уникальны по всему лобби).
 func _assign_color(slot_id: int, color_idx: int) -> bool:
@@ -797,19 +1013,33 @@ func _assign_color(slot_id: int, color_idx: int) -> bool:
 
 # --- Личный цвет (доступен и клиенту) ---------------------------------------
 func _my_slot() -> Roster.Slot:
-	# Хост ведёт слот 0; гость — слот по порядку подключения (упрощённо — слот 1).
-	var id := 0 if not _is_client else 1
-	return roster.slots[id] if id < roster.slots.size() else null
+	# Хост ведёт слот 0; гость — слот, помеченный его сетевым номером (batch 12 #8).
+	if not _is_client:
+		return roster.slots[0] if not roster.slots.is_empty() else null
+	var id := -1
+	if NetHandoff.session != null:
+		id = roster.side_of_peer(NetHandoff.session.my_peer_id())
+	return roster.slots[id] if id >= 0 and id < roster.slots.size() else null
 
 func _on_my_color(color_idx: int) -> void:
 	var mine := _my_slot()
 	if mine == null:
 		return
+	# Гость просит хоста: цвет общий на всех, решает тот, кто держит ростер (batch 12 #8).
+	if _is_client:
+		if NetHandoff.session != null:
+			NetHandoff.session.send({"k": NetHandoff.K_LOBBY_REQ, "op": "color", "c": color_idx})
+		return
 	if not _assign_color(mine.id, color_idx):
 		_status.text = "That colour is taken."
 		return
 	_preview_swatch.color = mine.color
-	_refresh_slots()
+	_lobby_changed()
+
+## Гость пересаживается в открытый слот (batch 12 #8): просьба хосту.
+func _on_join_slot(slot_id: int) -> void:
+	if NetHandoff.session != null:
+		NetHandoff.session.send({"k": NetHandoff.K_LOBBY_REQ, "op": "slot", "s": slot_id})
 
 func _refresh_personal_enabled() -> void:
 	# «Host Decides» — цвет назначает хост; «Players Pick» — каждый выбирает сам.
@@ -817,6 +1047,9 @@ func _refresh_personal_enabled() -> void:
 
 # --- Предпросмотр карты (item 41) -------------------------------------------
 func _selected_map() -> MapData:
+	# У гостя своего списка нет — карта та, что прислал хост (batch 12 #8).
+	if _is_client:
+		return _client_map if _client_map != null else MapData.blank_arena()
 	var path: String = _map_paths[_map_opt.selected] if _map_opt != null else ""
 	if path == "":
 		return MapData.blank_arena()
@@ -908,6 +1141,13 @@ func _on_start() -> void:
 	if playing < 2:
 		_status.text = "Need at least two playing slots (Player or AI)."
 		return
+	# В сетевой партии за каждым «Player» должен сидеть человек (batch 12 #8): слот без
+	# пира никто не поведёт, и бой встанет на его ходу.
+	if _is_host_net:
+		for s: Roster.Slot in roster.slots:
+			if s.kind == Roster.SlotKind.HUMAN and s.peer_id < 0:
+				_status.text = "Slot %d is set to Player but nobody has joined it." % (s.id + 1)
+				return
 	if not _save.is_empty():
 		_start_loaded()
 		return

@@ -65,6 +65,10 @@ var _draw_scope_team: bool = false  # рисовать «для команды»
 var _hide_others_draw: bool = false # скрыть чужие рисунки целиком (item 51 — фильтр)
 const K_CHAT := "chat"
 const K_DRAW := "draw"
+## Игрок нажал «Roll» (batch 12 #14): его бросок открывается на ВСЕХ экранах разом.
+## Значения кубиков давно известны (их бросил хост при резолве), по сети едет только
+## жест — поэтому рассинхрона быть не может, а ждать нажатия обязаны все.
+const K_ROLL := "roll"
 
 ## Режимы, чей предпросмотр читает клетку под курсором. Каждому движению мыши нужен
 ## свой кадр (#97), иначе картинка обновляется только когда камера что-то дёрнет —
@@ -347,6 +351,17 @@ var networked: bool = false
 var my_owner: int = MCF.Owner.PLAYER_1
 var session: NetworkSession = null
 var net: NetGame = null
+## Ручные броски в сети (batch 12 #14). Каждый бросок, которого ждут нажатия, получает
+## порядковый номер — одинаковый на всех машинах, потому что действия и их кубики идут
+## у всех в одном порядке. Чужое нажатие может прийти раньше, чем мы дойдём до этого
+## броска (у соперника анимация впереди) — тогда оно лежит в _roll_inbox.
+var _roll_seq: int = 0
+var _roll_inbox: Dictionary = {}
+signal _roll_arrived(seq: int)
+## Пришедшие по сети действия ждут своей очереди на показ (batch 12 #15): второе не
+## должно крутить кубики поверх первого.
+var _net_queue: Array = []
+var _net_playing: bool = false
 ## Строка сетевого состояния — видна ТОЛЬКО в сетевой партии (#54); сами кнопки
 ## Host/Join уехали во вкладку Multiplayer главного меню.
 var _net_status: Label
@@ -359,6 +374,8 @@ func _ready() -> void:
 	# со следующей партии, перезапускать игру не нужно.
 	Sprites.reload_overrides()
 	_build_state()
+	# Край поля для косметики (batch 12 #6): гильзы, брызги и осколки отскакивают от него.
+	_fx.bounds = Vector2(state.grid.width, state.grid.height)
 	# У записи нет игроков: смотреть — не играть, поэтому контроллеров не заводим
 	# вовсе. Ровно это и делает просмотр безопасным: подать намерение некому.
 	if replay == null:
@@ -479,11 +496,17 @@ func _open_match() -> void:
 
 ## Отдать ход текущей стороне, если ею управляет не человек.
 func _kick_if_ai() -> void:
-	if state == null or _animating or _paused:
+	# В сети (batch 12 #15) ИИ ведёт хост, и шаг ему даётся только когда очередь показа
+	# пуста — иначе два таймера подняли бы его дважды за одно действие.
+	if state == null or _animating or _paused or _net_playing:
 		return
 	var ac: PlayerController = controllers.get(state.active_player())
-	if ac != null and not ac.is_local_human():
-		_queue_ai_step(ac)
+	if ac == null or ac.is_local_human():
+		return
+	# Удалённую сторону «пинать» некому и незачем — её ход придёт по сети.
+	if ac is NetworkController:
+		return
+	_queue_ai_step(ac)
 
 ## Показать отыгранный слот мирных (#96): сначала анимация их шагов и бросков, и лишь
 ## затем строки в журнал — иначе лог сообщал бы об убитом раньше, чем упадёт кубик.
@@ -1102,14 +1125,22 @@ func _handle_click(coord: Vector2i) -> void:
 			# Марксманн: клик по ЛЮБОЙ клетке задаёт направление, луч уходит вперёд (#49).
 			# Отказ (мало ОД, клик по себе) отдаём резолверу — он объяснит причину в журнале.
 			if _is_marksman(_selected_unit()) and coord != _selected_unit().coord:
-				# Луч выжигает НАЗВАННЫЙ узел (веха «Modular tank system»): если машина
-				# стоит прямо в точке прицела, спрашиваем какой.
-				var beam_foe := _vehicle_at_cell(coord)
-				if beam_foe != null:
+				# Луч выжигает НАЗВАННЫЙ узел (веха «Modular tank system»): если по трассе
+				# луча стоит машина, спрашиваем какой. Раньше вопрос задавался, только когда
+				# клик пришёлся ТОЧНО в клетку корпуса; клик за танк или перед ним посылал
+				# луч в ту же машину, но молча — в корпус (batch 12 #5). Берём ту же трассу,
+				# что рисует предпросмотр, и первую машину на ней, до которой луч дотянется.
+				var beam_foe := _vehicle_on_beam(_selected_unit(), coord)
+				var from_c: Vector2i = _selected_unit().coord
+				# Список — только видимые с этой стороны узлы; подписи без «(N+)»: луч
+				# не бросает кубик, он выжигает названное. Нечего выбирать (с этого борта
+				# не виден ни один живой узел) — луч идёт как есть, в корпус.
+				var burnable: Array = resolver._aimable_components(beam_foe, from_c) \
+						if beam_foe != null else []
+				if beam_foe != null and not burnable.is_empty():
 					var sid := selected_id
 					_open_component_picker(beam_foe, "Burn through", func(comp: String) -> void:
-						_submit(ShootIntent.new(sid, -1, -1, coord, comp)),
-						[], _selected_unit().coord)
+						_submit(ShootIntent.new(sid, -1, -1, coord, comp)), burnable, from_c)
 					return
 				_submit(ShootIntent.new(selected_id, -1, -1, coord))
 				return
@@ -1618,7 +1649,7 @@ func _enter_move() -> void:
 		budget = u.stats.speed
 	if burdened:
 		budget = mini(budget, carry_budget)
-	reach = Movement.reachable_for(state.grid, u, budget)
+	reach = resolver.reachable_for(u, budget)
 	reach_budget = budget
 	target_ids = []
 	_menu.hide()
@@ -1949,7 +1980,7 @@ func _group_reach_cells() -> Array[Vector2i]:
 		var u := state.get_unit(id)
 		if u == null or not u.is_alive() or u.remaining_ap <= 0:
 			continue
-		for c: Vector2i in Movement.reachable_for(state.grid, u, u.stats.speed).cost:
+		for c: Vector2i in resolver.reachable_for(u, u.stats.speed).cost:
 			if not seen.has(c):
 				seen[c] = true
 				out.append(c)
@@ -1973,7 +2004,7 @@ func _group_move_preview(dest: Vector2i) -> Array[Vector2i]:
 ## `taken` — клетки, уже разобранные другими юнитами группы (только для предпросмотра;
 ## в реальном ходе их занятость видна прямо на сетке).
 func _best_group_cell(u: UnitInstance, dest: Vector2i, taken: Dictionary = {}) -> Vector2i:
-	var reach_r := Movement.reachable_for(state.grid, u, u.stats.speed)
+	var reach_r := resolver.reachable_for(u, u.stats.speed)
 	var best := u.coord
 	var best_d := Combat.distance(u.coord, dest)
 	var best_cost := 0
@@ -2350,13 +2381,50 @@ func _after_action() -> void:
 	else:
 		_deselect()
 
-func _on_net_applied(_intent: Intent, result: ActionResult) -> void:
+func _on_net_applied(intent: Intent, result: ActionResult) -> void:
 	_menu.hide()
 	_picker.hide()
 	if not result.ok:
 		state.log.add("[denied] " + result.reason)
+		# Отказ ИИ-стороне на хосте (batch 12 #15): снять актёра с очереди и вести дальше,
+		# иначе ИИ подал бы то же намерение снова.
+		var denied_ctrl: PlayerController = controllers.get(state.active_player())
+		if denied_ctrl != null and denied_ctrl is AIController:
+			_ai_denied_streak += 1
+			denied_ctrl.notify_intent_denied(state)
+			if _ai_denied_streak >= AI_MAX_DENIED:
+				_ai_denied_streak = 0
+				_on_intent_ready(EndTurnIntent.new())
+				return
+			_queue_ai_step(denied_ctrl)
+			return
 		_after_action()
 		return
+	# По одному (batch 12 #15): пока крутятся кубики предыдущего действия, следующее
+	# ждёт — состояние уже применено резолвером, задерживается только показ.
+	_net_queue.append([intent, result])
+	if _net_playing:
+		return
+	_net_playing = true
+	while not _net_queue.is_empty():
+		var item: Array = _net_queue.pop_front()
+		await _show_net_action(item[0], item[1])
+	_net_playing = false
+	# Ход мог перейти к ИИ-слоту, которого ведёт хост.
+	_kick_if_ai()
+
+## Показ одного сетевого действия — тем же порядком, что и местного в _on_intent_ready
+## (batch 12 #15): дорожки «кто в кого» до кубика, кровь и гильзы после, откат/повтор
+## переставляют доску целиком. Раньше сетевой путь ничего из этого не делал, и по сети
+## бой шёл без единой капли крови.
+func _show_net_action(intent: Intent, result: ActionResult) -> void:
+	_ai_denied_streak = 0
+	if intent is UndoIntent or intent is RedoIntent:
+		_resync_after_restore()
+		return
+	if not result.fx.is_empty():
+		_fx.apply_lanes(result.fx)
+		queue_redraw()
 	if not result.dice_events.is_empty():
 		# Убитых мирными держим на карте живыми до конца анимации (#46, #96): передача
 		# хода везёт с собой весь слот жителей, и без этого трупы легли бы разом,
@@ -2364,10 +2432,16 @@ func _on_net_applied(_intent: Intent, result: ActionResult) -> void:
 		_pending_death_ids.clear()
 		for id: int in result.deaths:
 			_pending_death_ids[id] = true
+		_hold_visual = result.visual_hold
 		queue_redraw()
 		await _play_dice(result.dice_events)
 		_pending_death_ids.clear()
+		_hold_visual = {}
+	if not result.fx.is_empty():
+		_fx.apply(result.fx)
 	state.log.publish_result(result)
+	for c in controllers.values():
+		c.notify_state_changed(state)
 	_refresh_status()
 	queue_redraw()
 	_after_action()
@@ -2387,8 +2461,13 @@ func _adopt_network() -> void:
 
 func _on_peer_ready(is_host: bool) -> void:
 	networked = true
-	my_owner = MCF.Owner.PLAYER_1 if is_host else MCF.Owner.PLAYER_2
-	net = NetGame.new(state, resolver, is_host)
+	# Своя сторона — слот с моим сетевым номером из ростера лобби (batch 12 #8);
+	# дуэльная раскладка «хост — первый, гость — второй» остаётся запасной.
+	var mine := state.roster.side_of_peer(session.my_peer_id()) if state.roster != null else -1
+	if mine < 0:
+		mine = MCF.Owner.PLAYER_1 if is_host else MCF.Owner.PLAYER_2
+	my_owner = mine
+	net = NetGame.new(state, resolver, is_host, my_owner)
 	net.outgoing.connect(func(msg: Dictionary) -> void: session.send(msg))
 	net.action_applied.connect(_on_net_applied)
 	net.initiative_synced.connect(_on_initiative_synced)
@@ -2398,8 +2477,11 @@ func _on_peer_ready(is_host: bool) -> void:
 	_setup_network_controllers()
 	_deselect()
 	if _net_status != null:
-		_net_status.text = "Network: you are %s — your army is blue, the enemy red" % [
-			"Player A (host)" if is_host else "Player B (joined)"]
+		var slot := state.roster.slot(my_owner)
+		_net_status.text = "Network: you are %s (%s)%s" % [
+			state.roster.name_of(my_owner),
+			Roster.color_name(slot.color_index()) if slot != null else "?",
+			" — host" if is_host else ""]
 		_net_status.show()
 	_refresh_status()
 
@@ -2411,6 +2493,8 @@ func _on_initiative_synced() -> void:
 	queue_redraw()
 	await _play_civilian_result(net.opening_civilians)
 	queue_redraw()
+	# Первым может ходить ИИ-слот — его ведёт хост (batch 12 #15).
+	_kick_if_ai()
 
 func _on_net_message(msg: Dictionary) -> void:
 	# Несимуляционные сообщения (item 50/51) обрабатываем здесь и НЕ передаём в netcode:
@@ -2421,6 +2505,11 @@ func _on_net_message(msg: Dictionary) -> void:
 			return
 		K_DRAW:
 			_on_remote_stroke(msg)
+			return
+		K_ROLL:
+			var seq := int(msg.get("n", -1))
+			_roll_inbox[seq] = true
+			_roll_arrived.emit(seq)
 			return
 	if net != null:
 		net.receive(msg)
@@ -2440,8 +2529,17 @@ func _setup_network_controllers() -> void:
 	mine.intent_ready.connect(_on_intent_ready)
 	controllers[my_owner] = mine
 	# Удалённых сторон теперь может быть больше одной: каждой — свой контроллер.
+	# ИИ-слоты в сетевой партии водит ХОСТ (batch 12 #15): его AIController подаёт
+	# намерения в тот же net.submit_local, что и человек, — хост резолвит и рассылает.
+	# У гостей эти стороны — обычные удалённые.
 	for remote in net.remote_owners():
-		controllers[remote] = NetworkController.new(remote)
+		if net.is_host and state.roster.is_ai(remote):
+			var slot := state.roster.slot(remote)
+			var ai := AIController.new(remote, slot.ai_difficulty if slot != null else ai_difficulty)
+			ai.intent_ready.connect(_on_intent_ready)
+			controllers[remote] = ai
+		else:
+			controllers[remote] = NetworkController.new(remote)
 
 const DEFENSE_PROMPT := "You are under attack — click Roll to defend"
 const RESIST_PROMPT := "You are grabbed — click Roll to resist"
@@ -2487,7 +2585,29 @@ func _play_dice(events: Array) -> void:
 			continue
 		for step in _dice_steps(ev):
 			# Ручной бросок ждёт нажатия только у защитника-человека; мирные (NEUTRAL)
-			# и ИИ кидают защиту автоматически, но анимация всё равно видна (#64).
+			# и ИИ кидают защиту автоматически, но анимация всё же видна (#64).
+			# В сети (batch 12 #14) нажатия ждут ВСЕ: свой бросок — кнопкой, чужой — пока
+			# его хозяин не нажмёт у себя. Броски ИИ и мирных крутятся сами.
+			var roller := int(step.get("roller", MCF.Owner.NEUTRAL))
+			var remote_human: bool = networked and not bool(step["manual"]) \
+					and state.roster != null and state.roster.is_networked_human(roller)
+			if networked and (bool(step["manual"]) or remote_human):
+				var seq := _roll_seq
+				_roll_seq += 1
+				if step["manual"]:
+					_dice.play(step["faces"], true, step["prompt"], step.get("speed", 1.0))
+					await _dice.rolled
+					session.send({"k": K_ROLL, "n": seq})
+					await _dice.finished
+				else:
+					_dice.play(step["faces"], false, "%s\nWaiting for %s to roll…" % [
+						step["prompt"], state.roster.name_of(roller)], step.get("speed", 1.0), true)
+					while not _roll_inbox.has(seq):
+						await _roll_arrived
+					_roll_inbox.erase(seq)
+					_dice.release()
+					await _dice.finished
+				continue
 			_dice.play(step["faces"], step["manual"], step["prompt"], step.get("speed", 1.0))
 			await _dice.finished
 	_walk_cells.clear()
@@ -2554,24 +2674,36 @@ func _dice_steps(ev: Dictionary) -> Array:
 			var hit_note := _mods_text("To-hit", ev.get("hit_mods", []))
 			# Бросок на попадание катит САМ стрелок, если это местный человек (item 13):
 			# ждём его нажатия, как и бросок защиты у защищающегося.
-			var hit_manual := _owner_is_local_human(ev.get("shooter_owner", MCF.Owner.NEUTRAL))
+			var shooter_owner := int(ev.get("shooter_owner", MCF.Owner.NEUTRAL))
+			var hit_manual := _owner_is_local_human(shooter_owner)
+			# Сколько нужно выкинуть — в подсказке ДО броска (batch 12 #14).
+			var hit_need := _need_text(ev["shots"], "need")
 			var hit_prompt := hit_note
 			if hit_manual:
-				hit_prompt = (hit_note + "\n" if hit_note != "" else "") + "Your shot — roll to hit"
+				hit_prompt = (hit_note + "\n" if hit_note != "" else "") \
+						+ "Your shot — roll to hit" + hit_need
+			elif hit_need != "":
+				hit_prompt = (hit_note + "\n" if hit_note != "" else "") + "To hit" + hit_need
 			steps.append({"faces": hit_faces, "manual": hit_manual, "prompt": hit_prompt,
-				"speed": _roll_speed(ev["shots"], "need")})
+				"speed": _roll_speed(ev["shots"], "need"), "roller": shooter_owner})
 			if not pen_faces.is_empty():
 				var def_note := _mods_text("Defence", ev.get("def_mods", []))
-				var prompt: String = DEFENSE_PROMPT
+				var def_owner := int(ev.get("def_owner", MCF.Owner.NEUTRAL))
+				var def_need := _need_text(_hit_shots(ev["shots"]), "armor")
+				var prompt: String = DEFENSE_PROMPT + def_need
 				if def_note != "":
-					prompt = def_note + "\n" + DEFENSE_PROMPT
-				var manual := _owner_is_local_human(ev.get("def_owner", MCF.Owner.NEUTRAL))
-				steps.append({"faces": pen_faces, "manual": manual, "prompt": prompt})
+					prompt = def_note + "\n" + prompt
+				var manual := _owner_is_local_human(def_owner)
+				steps.append({"faces": pen_faces, "manual": manual, "prompt": prompt,
+					"roller": def_owner})
 		"opposed":
 			steps.append(_step({"value": ev["a_roll"], "good": ev["attacker_wins"], "tag": "Grab"}))
-			steps.append(_step(
+			var resist := _step(
 				{"value": ev["d_roll"], "good": not ev["attacker_wins"], "tag": "Def"},
-				_owner_is_local_human(ev.get("def_owner", MCF.Owner.NEUTRAL)), RESIST_PROMPT))
+				_owner_is_local_human(ev.get("def_owner", MCF.Owner.NEUTRAL)),
+				RESIST_PROMPT + " (beat %d)" % int(ev["a_roll"]))
+			resist["roller"] = int(ev.get("def_owner", MCF.Owner.NEUTRAL))
+			steps.append(resist)
 		"check":
 			var chk := _step({"value": ev["roll"], "good": ev["ok"], "tag": "%d+" % ev["need"]})
 			chk["speed"] = FAST_ROLL_SPEED if int(ev["need"]) <= 1 else 1.0
@@ -2589,12 +2721,46 @@ func _dice_steps(ev: Dictionary) -> Array:
 				# Ручной бросок — только если под осколки попал юнит-человек; если это
 				# лишь мирные/ИИ, защита катится сама (но видна).
 				var manual := false
+				var roller := MCF.Owner.NEUTRAL
 				for det in ev["targets"]:
 					if _owner_is_local_human(det.get("owner", MCF.Owner.NEUTRAL)):
 						manual = true
+						roller = int(det.get("owner", MCF.Owner.NEUTRAL))
 						break
-				steps.append({"faces": frag_faces, "manual": manual, "prompt": DEFENSE_PROMPT})
+				# В сети кидает первый человек под осколками (batch 12 #14).
+				if networked and not manual:
+					for det in ev["targets"]:
+						var o := int(det.get("owner", MCF.Owner.NEUTRAL))
+						if state.roster != null and state.roster.is_networked_human(o):
+							roller = o
+							break
+				steps.append({"faces": frag_faces, "manual": manual,
+					"prompt": DEFENSE_PROMPT + _need_text(ev["targets"], "need"),
+					"roller": roller})
 	return steps
+
+## «(need 4+)» по списку записей с полем-порогом (batch 12 #14); при разных порогах —
+## все через запятую. Пусто, если порогов нет или все заведомо проходят.
+func _need_text(entries: Array, key: String) -> String:
+	var seen: Array[int] = []
+	for e in entries:
+		var n := int(e.get(key, 0))
+		if n > 0 and not seen.has(n):
+			seen.append(n)
+	if seen.is_empty():
+		return ""
+	seen.sort()
+	var parts: Array[String] = []
+	for n in seen:
+		parts.append("%d+" % n)
+	return " (need %s)" % ", ".join(parts)
+
+func _hit_shots(shots: Array) -> Array:
+	var out: Array = []
+	for det in shots:
+		if det.get("hit", false) and not det.get("stopped_by_glass", false):
+			out.append(det)
+	return out
 
 func _step(face: Dictionary, manual: bool = false, prompt: String = "") -> Dictionary:
 	return {"faces": [face], "manual": manual, "prompt": prompt}
@@ -5065,6 +5231,22 @@ func _open_component_picker(veh: Vehicle, title: String, on_pick: Callable,
 		vb.add_child(b)
 	_anchor_menu(_picker)
 	_picker.show()
+
+## Первая машина на трассе луча марксмана, до которой он дотянется с уроном (batch 12 #5),
+## или null. Трасса — та же, что у предпросмотра и у настоящего выстрела.
+func _vehicle_on_beam(shooter: UnitInstance, aim: Vector2i) -> Vehicle:
+	if shooter == null or state == null or not state.grid.in_bounds(aim):
+		return null
+	for rec: Dictionary in resolver.laser_preview(shooter, aim):
+		if String(rec["kind"]) != "vehicle":
+			continue
+		if int(rec["damage"]) <= 0:
+			return null
+		var veh := state.get_vehicle(int(rec["vehicle_id"]))
+		if veh == null or not veh.alive() or veh.live_components().is_empty():
+			return null
+		return veh
+	return null
 
 ## Машина под клеткой, если по ней вообще есть смысл выбирать узел.
 func _vehicle_at_cell(coord: Vector2i) -> Vehicle:
