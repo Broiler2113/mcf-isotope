@@ -1055,7 +1055,7 @@ func _best_vehicle_shot(state: GameState, r: GameActionResolver, u: UnitInstance
 					+ _vehicle_value(veh) + ease * 2.0
 			if best.is_empty() or score > best["score"]:
 				best = {"score": score, "intent": ShootIntent.new(u.id, -1, -1, fc,
-					_aim_component(veh, u.coord))}
+					_aim_component(veh, u.coord, r))}
 	return best
 
 ## Противотанкист прорубает себе дорогу (#103).
@@ -1615,6 +1615,18 @@ func _drone_action(state: GameState, r: GameActionResolver, u: UnitInstance) -> 
 	# бы до конца хода с половиной дальности в запасе.
 	if not r.operator_controls(u) or (u.remaining_ap <= 0 and u.move_credit <= 0):
 		return {}
+	# Подрыв НАД ВРАЖЕСКОЙ МАШИНОЙ — лучшее, на что дрон способен: узел он выбирает сам,
+	# без бросков и без оглядки на борта (§4), то есть кладёт своё очко туда, куда
+	# захочет. Проверяем это раньше пехоты: размен дрона на солдата дешевле размена на
+	# гусеницу танка.
+	var vid := state.grid.vehicle_at(u.coord)
+	if vid != -1:
+		var under := state.get_vehicle(vid)
+		if under != null and under.alive() and under.owner != owner \
+				and not state.roster.are_allies(owner, under.owner):
+			return {"score": SCORE_SHOOT_BASE + SCORE_ANTI_TANK_PRIORITY + _vehicle_value(under),
+				"intent": DroneDetonateIntent.new(u.id,
+					_aim_component(under, u.coord, null))}
 	# Подрыв, если рядом враг (радиус взрыва 1 по Чебышёву). Он бесплатен (item 26),
 	# поэтому доступен и выдохшемуся дрону.
 	for e: UnitInstance in _enemies_of(state):
@@ -1667,7 +1679,7 @@ func _vehicle_candidates(state: GameState, r: GameActionResolver, veh: Vehicle) 
 			out.append({"score": SCORE_SHOOT_BASE + SCORE_ANTI_TANK_PRIORITY
 					+ _vehicle_value(foe) + 6.0,
 				"intent": VehicleCannonIntent.new(veh.id, cell,
-					_aim_component(foe, veh.center()))})
+					_aim_component(foe, veh.center(), r))})
 		shot_target = _vehicle_best_target(state, r, veh, rng)
 		if shot_target != null and not _ally_near(state, shot_target.coord, MCF.CANNON_BLAST_RADIUS):
 			out.append({"score": SCORE_SHOOT_BASE + _unit_value(shot_target) + 6.0,
@@ -1818,17 +1830,20 @@ func _vehicle_best_target(state: GameState, r: GameActionResolver, veh: Vehicle,
 ##   3. ВБЛИЗИ — ПО ОБСТАНОВКЕ. Машина на ходу опаснее всего подвижностью — рвём
 ##      ходовую; уже обездвиженную, но с орудием — глушим пушку; безногую и безоружную
 ##      добиваем в корпус.
-func _aim_component(veh: Vehicle, from: Vector2i) -> String:
+func _aim_component(veh: Vehicle, from: Vector2i, r: GameActionResolver = null) -> String:
 	if veh == null:
 		return ""
-	var live: Array = veh.live_components()
+	# Выбирать можно только из того, что ВИДНО С ЭТОГО БОРТА (веха 14.1): дальняя
+	# гусеница закрыта корпусом, ствол, смотрящий в другую сторону, — тоже. Просить
+	# недоступный узел значит просто отдать выбор каскаду.
+	var live: Array = r._aimable_components(veh, from) if r != null else veh.live_components()
 	if live.is_empty():
 		return ""
 	# 1. Добить почти выбитый узел.
 	var finish := ""
 	var fewest := 1 << 30
 	for comp: String in MCF.COMPONENT_ORDER:
-		if not veh.component_alive(comp):
+		if not live.has(comp):
 			continue
 		var left: int = veh.component(comp)
 		if left <= AIM_FINISH_AT and left < fewest:
@@ -1838,13 +1853,13 @@ func _aim_component(veh: Vehicle, from: Vector2i) -> String:
 		return finish
 	# 2. Издалека — корпус.
 	if Combat.distance(from, veh.center()) > AIM_FAR_DISTANCE:
-		return MCF.COMP_HULL if veh.component_alive(MCF.COMP_HULL) else live[0]
-	# 3. Вблизи — по обстановке.
-	if veh.component_alive(MCF.COMP_TRACKS):
-		return MCF.COMP_TRACKS
-	if veh.component_alive(MCF.COMP_GUN):
-		return MCF.COMP_GUN
-	return MCF.COMP_HULL if veh.component_alive(MCF.COMP_HULL) else live[0]
+		return MCF.COMP_HULL if live.has(MCF.COMP_HULL) else live[0]
+	# 3. Вблизи — по обстановке: сперва ходовая, потом ствол, потом корпус.
+	for comp: String in [MCF.COMP_TRACKS_L, MCF.COMP_TRACKS_R, MCF.COMP_TRACKS,
+			MCF.COMP_GUN, MCF.COMP_HULL]:
+		if live.has(comp):
+			return comp
+	return live[0]
 
 ## Клетка корпуса ВРАЖЕСКОЙ МАШИНЫ, по которой танк может отработать пушкой, и сама
 ## машина: {cell, veh} или пусто.

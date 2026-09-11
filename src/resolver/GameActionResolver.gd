@@ -558,7 +558,14 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 		for pane_i in panes:
 			var g_roll := state.dice.roll_d6()
 			glass_rolls.append(g_roll)
-			if g_roll < MCF.GLASS_PIERCE_NEED:
+			# У обычного стекла бросок решает, ПРОБИЛА ли его пуля (4+ — прошла).
+			# У бронированного тот же бросок читается наоборот: 4+ — стекло УСТОЯЛО и
+			# пуля в нём завязла. Порог совпал случайно, поэтому считаем их порознь:
+			# сравняй их в одну строку, и правка одного молча поменяет другое.
+			var gcell_i := state.grid.cell(glass_cells[pane_i])
+			var hold: int = MCF.glass_hold_need(gcell_i.feature_id) if gcell_i != null else 0
+			var through: bool = g_roll < hold if hold > 0 else g_roll >= MCF.GLASS_PIERCE_NEED
+			if not through:
 				pierced = false
 				break
 			# Пуля прошла сквозь это стекло — значит оно пробито и осыплется (item 4).
@@ -606,7 +613,7 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 	# летят прочь от стрелка. Снос — повод активации нейтралов вокруг клетки (§3.1a).
 	for gc: Vector2i in shattered:
 		var gcell := state.grid.cell(gc)
-		if gcell != null and gcell.feature_id == MCF.FEATURE_GLASS:
+		if gcell != null and MCF.is_glass(gcell.feature_id):
 			gcell.clear_feature()
 			notify_cell_changed(gc)
 			_fx(result, {"fx": "shards", "at": gc, "from": shooter.coord})
@@ -674,6 +681,7 @@ func _resolve_cancel_shot(intent: CancelShotIntent) -> ActionResult:
 ## center — куда ложится заряд; aimed — узел машины, если стрелок его назвал.
 func _resolve_anti_tank(shooter: UnitInstance, center: Vector2i, aimed: String = "") -> ActionResult:
 	_aimed_component = aimed
+	_aim_from = shooter.coord
 	if shooter.remaining_ap <= 0:
 		return ActionResult.fail("Unit has no AP left")
 	shooter.remaining_ap -= 1
@@ -714,6 +722,7 @@ func _resolve_anti_tank(shooter: UnitInstance, center: Vector2i, aimed: String =
 	var at_area := MCF.blast_square(landing, MCF.ANTI_TANK_BLAST_RADIUS)
 	_capture_visual_hold(result, at_area)
 	# Прямое попадание в ДОТ: бетон забирает весь удар, осколочного поля нет.
+	_blast_armor_wall(landing, result)
 	if _pillbox_absorbs(landing, MCF.ANTI_TANK_VEHICLE_DAMAGE, result):
 		return result
 	var area := MCF.blast_square(landing, MCF.ANTI_TANK_BLAST_RADIUS)
@@ -908,7 +917,7 @@ func _blast_destroy_terrain(c: Vector2i, res: ActionResult = null,
 	if cell.feature_durability > 0:
 		return
 	var destructible := [
-		MCF.FEATURE_WALL, MCF.FEATURE_GLASS, MCF.FEATURE_AIRLOCK,
+		MCF.FEATURE_WALL, MCF.FEATURE_GLASS, MCF.FEATURE_ARMOR_GLASS, MCF.FEATURE_AIRLOCK,
 		MCF.FEATURE_LDF, MCF.FEATURE_WOOD_WALL, MCF.FEATURE_CORPSE_WALL,
 		MCF.FEATURE_DRONE_STATION, MCF.FEATURE_DPMG,
 		MCF.FEATURE_SANDBAGS, MCF.FEATURE_SANDBAG_WALL, MCF.FEATURE_HEDGEHOG_SANDBAGS,
@@ -919,9 +928,13 @@ func _blast_destroy_terrain(c: Vector2i, res: ActionResult = null,
 		# оставалось бы нетронутым посреди голой земли. Противотанковую тоже сносит
 		# взрывом (item 13), хотя огонь её не берёт.
 		MCF.FEATURE_MINE, MCF.FEATURE_AV_MINE,
+		# БРОНЕВОЙ ПЛИТЫ здесь нет намеренно (веха 14.1): осколки её не берут, и это
+		# единственное место, где её неуязвимость к чужим разрывам и записана. Добавишь
+		# сюда — и она станет обычной стеной; прямой разрыв в неё сносит её отдельно,
+		# через _blast_armor_wall.
 	]
 	if fid in destructible:
-		if fid == MCF.FEATURE_GLASS:
+		if MCF.is_glass(fid):
 			_fx(res, {"fx": "shards", "at": c,
 				"from": from_coord if from_coord != NOWHERE else c})
 			_fx(res, {"fx": "debris", "at": NOWHERE, "cells": [c]})  # разрушенный пол (item 7)
@@ -1058,10 +1071,12 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i, aimed: String = "") ->
 				var veh := state.get_vehicle(int(rec["vehicle_id"]))
 				var dmg := int(rec["damage"])
 				if veh != null and dmg > 0:
-					# Луч выжигает НАЗВАННЫЙ узел, без бросков — как подрыв дрона. Не
-					# назвали (или узла уже нет) — уходит в корпус: луч всё равно
-					# упирается в броню и там же гаснет.
-					var comp: String = aimed if veh.component_alive(aimed) else MCF.COMP_HULL
+					# Луч выжигает НАЗВАННЫЙ узел, без бросков — как подрыв дрона. Но
+					# видеть его марксман обязан: гусеница с дальнего борта закрыта
+					# корпусом, и луч до неё не достанет. Не назвали, не видно или узла
+					# уже нет — жжём корпус: в него луч упирается в любом случае.
+					var reachable := _aimable_components(veh, shooter.coord)
+					var comp: String = aimed if reachable.has(aimed) else MCF.COMP_HULL
 					_damage_component(veh, comp, mini(dmg, veh.component(comp)),
 						"laser", result)
 			"shield", "unit":
@@ -1148,6 +1163,15 @@ func _laser_trace(from_coord: Vector2i, step: Vector2i) -> Array:
 		if from_in_trench and cell.feature_id != MCF.FEATURE_TRENCH:
 			rec["kind"] = "terrain"
 			rec["label"] = "Trench wall"
+			rec["stop"] = true
+			out.append(rec)
+			break
+		# Броневая плита гасит луч, сколько бы потенциала в нём ни оставалось (веха 14.1):
+		# прожечь её нельзя, обойти — тем более. В LASER_COST её нет намеренно — там
+		# отсутствие означало бы «пролетаем насквозь бесплатно», а тут всё наоборот.
+		if cell.feature_id == MCF.FEATURE_ARMOR_WALL:
+			rec["kind"] = "terrain"
+			rec["label"] = MCF.FEATURE_NAMES[MCF.FEATURE_ARMOR_WALL]
 			rec["stop"] = true
 			out.append(rec)
 			break
@@ -1629,6 +1653,42 @@ func _fx(res: ActionResult, ev: Dictionary) -> void:
 ## через полдюжины функций (_blast, зачистка области, обход машин), и протаскивать
 ## сквозь них одну строку значило бы переписать их сигнатуры ради неё одной.
 var _aimed_component: String = ""
+## Откуда пришёл выстрел — по нему считается БОРТ машины (веха 14.1). NOWHERE = стрелка
+## на поле нет (подрыв дрона над корпусом, детонация соседней машины): бортов тогда не
+## существует, и доступны все целые узлы.
+var _aim_from: Vector2i = NOWHERE
+
+## Какую гусеницу рвёт то, что приходит СНИЗУ — мина, ёж, упёршийся щитоносец.
+##
+## Борта у такого удара нет: он приходит под днище, а не с какой-то стороны. Берём
+## первую целую по фиксированному порядку (левая, потом правая) — порядок важен не сам
+## по себе, а тем, что он ОДИН И ТОТ ЖЕ у хоста и клиента. Целых не осталось — вернём
+## корпус, и _damage_component отправит удар туда.
+func _a_live_track(veh: Vehicle) -> String:
+	for comp: String in MCF.TRACK_COMPONENTS:
+		if veh.component_alive(comp):
+			return comp
+	return MCF.COMP_HULL
+
+## Прямой разрыв В БРОНЕВОЙ ПЛИТЕ (веха 14.1): единственное, что её берёт.
+##
+## Осколки, огонь, кирка шахтёра, гусеница танка и луч марксмана плиту не трогают — это
+## и есть вся её суть. Зато заряд, легший ИМЕННО В НЕЁ, сносит целиком, с одного раза:
+## взрывчатка кладётся вплотную и работает на пролом, а не на осколки.
+##
+## Зовётся из тех же мест, что и _pillbox_absorbs, но ведёт себя иначе: ДОТ забирает
+## удар себе и ОТМЕНЯЕТ взрыв, а плита просто рушится, и взрыв идёт своим чередом —
+## пехоту вокруг он положит.
+func _blast_armor_wall(center: Vector2i, res: ActionResult) -> void:
+	if not state.grid.in_bounds(center):
+		return
+	var cell := state.grid.cell(center)
+	if cell == null or cell.feature_id != MCF.FEATURE_ARMOR_WALL:
+		return
+	cell.clear_feature()
+	notify_cell_changed(center)
+	_fx(res, {"fx": "debris", "at": center, "cells": [center]})
+	res.log("Armored Wall at (%d, %d) is blown apart." % [center.x, center.y])
 
 ## Дорожка «кто в кого» (issue 8: «add visual clues that would tell the player who is
 ## shooting at who»). Кладётся КАЖДОЙ атакой — пулей, лучом, струёй, зарядом, пушкой,
@@ -2064,6 +2124,9 @@ func can_break_cell(actor: UnitInstance, coord: Vector2i) -> bool:
 	if not state.grid.in_bounds(coord) or Combat.distance(actor.coord, coord) != 1:
 		return false
 	var cell := state.grid.cell(coord)
+	# Броневую плиту киркой не взять (веха 14.1): её берёт только прямой взрыв.
+	if cell.feature_id == MCF.FEATURE_ARMOR_WALL:
+		return false
 	return BREAKABLE.has(cell.feature_id) or (cell.feature_id == "" and cell.is_wall())
 
 func _resolve_break(intent: BreakIntent) -> ActionResult:
@@ -2504,7 +2567,8 @@ func advance_fire(owner: int = -1, res: ActionResult = null) -> void:
 ## Постройки, которые огонь уничтожает вместе с клеткой (#53, #83). ЛДФ здесь нет
 ## намеренно: несгораемая секция вообще не загорается (_fire_blocked).
 const BURNS_AWAY := [
-	MCF.FEATURE_WOOD_WALL, MCF.FEATURE_WALL, MCF.FEATURE_GLASS, MCF.FEATURE_AIRLOCK,
+	MCF.FEATURE_WOOD_WALL, MCF.FEATURE_WALL, MCF.FEATURE_GLASS, MCF.FEATURE_ARMOR_GLASS,
+	MCF.FEATURE_AIRLOCK,
 ]
 
 ## Порог d6, с которого клетка загорается от СОСЕДНЕГО пламени (#14/#31). Шанс
@@ -2589,7 +2653,7 @@ func _vision_blocked(a: Vector2i, b: Vector2i) -> bool:
 		# стоит здесь дёшево: до него доходят только клетки, уже опознанные как стена.
 		if cell.vehicle_id != -1:
 			return true
-		if cell.cover_height >= MCF.WALL_HEIGHT and cell.feature_id != MCF.FEATURE_GLASS:
+		if cell.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(cell.feature_id):
 			return true
 	return false
 
@@ -3500,6 +3564,9 @@ func _resolve_drone_detonate(intent: DroneDetonateIntent) -> ActionResult:
 	if not operator_controls(drone):
 		return ActionResult.fail("Operator not at the station")
 	_aimed_component = intent.component
+	# Дрон рвётся НАД корпусом (§4): борта у такого удара нет, и выбор игрока ничем
+	# не ограничен — ни гусеницей с той стороны, ни направлением ствола.
+	_aim_from = NOWHERE
 	return _drone_explode(drone, drone.coord, "detonated")
 
 ## Взрыв дрона: снимаем его с поля (не оставляет труп) и детонируем как противотанкист.
@@ -3511,6 +3578,7 @@ func _drone_explode(drone: UnitInstance, center: Vector2i, why: String) -> Actio
 	result.ok = true
 	result.log("Drone %s — explosion at (%d, %d)" % [why, center.x, center.y])
 	# Дрон, влетевший прямо в ДОТ, весь свой заряд оставляет в бетоне.
+	_blast_armor_wall(center, result)
 	if _pillbox_absorbs(center, MCF.DRONE_EXPLOSION_DAMAGE, result):
 		return result
 	var area := MCF.blast_square(center, MCF.ANTI_TANK_BLAST_RADIUS)
@@ -4423,17 +4491,22 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 		if not state.grid.in_bounds(gc):
 			continue
 		var gcell := state.grid.cell(gc)
-		if gcell.feature_id != MCF.FEATURE_GLASS:
+		if not MCF.is_glass(gcell.feature_id):
 			continue
+		# Бронестекло держит удар по СВОЕМУ правилу: один кубик, 4+ — устояло. Обычное
+		# по-прежнему бросает два против 6+ и потому почти всегда бьётся.
+		var armored: int = MCF.glass_hold_need(gcell.feature_id)
 		var gdet := {
-			"name": MCF.FEATURE_NAMES[MCF.FEATURE_GLASS], "coord": gc, "owner": gcell.feature_owner,
-			"epicenter": false, "armor": GLASS_ARMOR, "need": GLASS_ARMOR + 1,
+			"name": MCF.FEATURE_NAMES.get(gcell.feature_id, "Glass"), "coord": gc,
+			"owner": gcell.feature_owner, "epicenter": false,
+			"armor": armored - 1 if armored > 0 else GLASS_ARMOR,
+			"need": armored if armored > 0 else GLASS_ARMOR + 1,
 			"rolls": [], "survived": true,
 		}
-		for _i in 2:
+		for _i in (1 if armored > 0 else 2):
 			var gr := state.dice.roll_d6()
 			gdet["rolls"].append(gr)
-			if gr < GLASS_ARMOR + 1:
+			if gr < int(gdet["need"]):
 				gdet["survived"] = false
 		if not gdet["survived"]:
 			_fx(result, {"fx": "shards", "at": gc, "from": center})
@@ -4678,7 +4751,7 @@ func los_blocked(from_coord: Vector2i, to_coord: Vector2i, allow_embrasure: bool
 			if d <= 1 and (fid == MCF.FEATURE_HEDGEHOG_SANDBAGS \
 					or (allow_embrasure and fid == MCF.FEATURE_DOT_OPEN)):
 				pass
-			elif glass_passable and fid == MCF.FEATURE_GLASS:
+			elif glass_passable and MCF.is_glass(fid):
 				pass  # стекло пуле не преграда, а испытание (#29)
 			else:
 				return true
@@ -4710,7 +4783,7 @@ func _glass_on_line(from_coord: Vector2i, to_coord: Vector2i) -> int:
 	var y := from_coord.y + sy
 	var panes := 0
 	while x != to_coord.x or y != to_coord.y:
-		if grid.cell_fast(x, y).feature_id == MCF.FEATURE_GLASS:
+		if MCF.is_glass(grid.cell_fast(x, y).feature_id):
 			panes += 1
 		x += sx
 		y += sy
@@ -5365,10 +5438,10 @@ func _resolve_vehicle_turn(intent: VehicleTurnIntent) -> ActionResult:
 		return ActionResult.fail(err)
 	if veh.facing == Vector2i.ZERO:
 		return ActionResult.fail("This vehicle has no facing")
-	# Разбитая ходовая держит машину намертво: ни ехать, ни доворачивать корпус
-	# (веха «Modular tank system»). Разворот — работа тех же гусениц.
-	if not veh.can_drive():
-		return ActionResult.fail("The tracks are knocked out")
+	# Развернуться можно, пока цела ХОТЬ ОДНА гусеница (веха 14.1): танк крутится на
+	# месте, тормозя одной стороной. Обе порваны — машина стоит намертво.
+	if not veh.can_turn():
+		return ActionResult.fail("Both tracks are knocked out")
 	# Только четыре стороны света (item 2): диагональный разворот запрещён.
 	if not DIR4.has(intent.facing):
 		return ActionResult.fail("Tanks turn only up/down/left/right")
@@ -5390,8 +5463,9 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 	var err := _validate_vehicle(veh, credit)
 	if err != "":
 		return ActionResult.fail(err)
+	# А вот ЕХАТЬ нужны обе: на одной гусенице машина только крутится.
 	if not veh.can_drive():
-		return ActionResult.fail("The tracks are knocked out")
+		return ActionResult.fail("A broken track — the vehicle cannot drive")
 	var dir: Vector2i = intent.dir
 	if veh.facing != Vector2i.ZERO and dir != veh.facing and dir != -veh.facing:
 		return ActionResult.fail("Tank can only drive along its facing")
@@ -5451,9 +5525,8 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 		# ПРОТИВОПЕХОТНАЯ машине больше не вредит вовсе: она рассчитана на человека, и
 		# считать её ещё и противотанковой значило бы, что противотанковая не нужна.
 		if av:
-			var comp: String = MCF.COMP_TRACKS if veh.component_alive(MCF.COMP_TRACKS) \
-					else MCF.COMP_HULL
-			_damage_component(veh, comp, MCF.AV_MINE_VEHICLE_DAMAGE, "mine", res)
+			_damage_component(veh, _a_live_track(veh), MCF.AV_MINE_VEHICLE_DAMAGE,
+				"mine", res)
 	# Всё под гусеницами сносится в пол (трупы, укрытия, тараненные стены).
 	# Ежей считаем ЗДЕСЬ, до зачистки: clear_feature() ниже сотрёт их молча, и после
 	# переезда узнать, сколько их было, стало бы неоткуда.
@@ -5496,7 +5569,7 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 	# упирается в гусеницу, а не в броню, поэтому урон всегда туда и всегда 2.
 	if int(plan["self_damage"]) > 0:
 		res.log("Shield bearer halts the vehicle.")
-		_damage_component(veh, MCF.COMP_TRACKS, MCF.COMPONENT_DAMAGE_SHIELD,
+		_damage_component(veh, _a_live_track(veh), MCF.COMPONENT_DAMAGE_SHIELD,
 			"collision", res)
 	# Противотанковый ёж рвёт гусеницу, но машину не останавливает — она проходит
 	# насквозь, ломая конструкцию. Считается ОДИН раз за переезд, сколько бы ежей ни
@@ -5504,7 +5577,7 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 	if hedgehogs > 0:
 		res.log("The %s grinds through %d hedgehog(s)." % [
 			VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id), hedgehogs])
-		_damage_component(veh, MCF.COMP_TRACKS, MCF.COMPONENT_DAMAGE_HEDGEHOG,
+		_damage_component(veh, _a_live_track(veh), MCF.COMPONENT_DAMAGE_HEDGEHOG,
 			"hedgehog", res)
 	return res
 
@@ -5554,6 +5627,9 @@ func _resolve_vehicle_cannon(intent: VehicleCannonIntent) -> ActionResult:
 			return ActionResult.fail("The tower is jammed — it fires only where it last did")
 
 	veh.ap -= int(gun.get("ap_cost", 1))
+	# Снаряд приходит от БОРТА, с которого стреляли (веха 14.1): по нему цель и считает,
+	# какая её гусеница открыта и виден ли ей ствол.
+	_aim_from = port
 	# Куда смотрел ствол в этот раз — на случай, если башню собьют следующим попаданием.
 	veh.remember_shot_dir(fire_dir)
 	veh.cannon_shots_this_round += 1
@@ -5585,6 +5661,7 @@ func _resolve_vehicle_cannon(intent: VehicleCannonIntent) -> ActionResult:
 	_fx_lane(res, port, landing, veh.owner, "blast")  # issue 8: кто и куда бьёт пушкой
 	# Прямое попадание в ДОТ: бетон принимает снаряд целиком (2 прочности = 1 выстрел
 	# танка), осколочного поля вокруг не возникает.
+	_blast_armor_wall(landing, res)
 	if _pillbox_absorbs(landing, int(gun.get("vehicle_damage", 2)), res):
 		return res
 	# Осколочное поле снаряда — ромб радиуса 2 (#63), а не квадрат 3×3.
@@ -5708,7 +5785,7 @@ func _damage_vehicles_in_area(area: Array[Vector2i], center: Vector2i, amount: i
 			if not roll_location:
 				_damage_component(veh, aimed, amount, source, res)
 			else:
-				var comp := _resolve_hit_location(veh, aimed, res, source)
+				var comp := _resolve_hit_location(veh, aimed, res, source, _aim_from)
 				if comp != "":
 					_damage_component(veh, comp, amount, source, res)
 
@@ -5723,16 +5800,54 @@ func _damage_vehicles_in_area(area: Array[Vector2i], center: Vector2i, amount: i
 ## ничего не задел» исходом не бывает.
 ##
 ## Возвращает id узла или "" — если у машины не осталось ни одного живого узла.
-func _resolve_hit_location(veh: Vehicle, aimed: String, res: ActionResult,
-		actor_name: String) -> String:
+## Узлы, по которым МОЖНО целиться с этой стороны (веха 14.1).
+##
+## До сих пор стрелок выбирал из всего, что у машины цело, откуда бы он ни бил. Но
+## гусеница — вещь бортовая: с левого борта видно левую, с правого правую, а в лоб и в
+## корму — обе. И ствол не всегда доступен: он смотрит туда, куда стрелял в прошлый раз,
+## и подходящему СЗАДИ него не виден вовсе.
+##
+## from = NOWHERE — стрелка на поле нет (подрыв дрона сверху, детонация соседней машины):
+## тогда борта не существует и доступно всё, что цело.
+func _aimable_components(veh: Vehicle, from: Vector2i) -> Array:
 	var live := veh.live_components()
+	if veh == null or from == NOWHERE or not state.grid.in_bounds(from):
+		return live
+	var side := veh.side_facing(from)
+	var out: Array = []
+	for comp: String in live:
+		if comp == MCF.COMP_TRACKS_L and side == "right":
+			continue
+		if comp == MCF.COMP_TRACKS_R and side == "left":
+			continue
+		if comp == MCF.COMP_GUN and _gun_hidden_from(veh, from):
+			continue
+		out.append(comp)
+	# Совсем без целей не остаёмся: корпус виден с любой стороны, но если сложилось так,
+	# что отсеклось всё, бьём по тому, что есть, — «попал и не задел» исходом не бывает.
+	return out if not out.is_empty() else live
+
+## Скрыт ли ствол от стрелка: тот стоит ПОЗАДИ сектора, в который смотрит башня.
+## Сбоку ствол виден (его видно в профиль), сзади — нет.
+func _gun_hidden_from(veh: Vehicle, from: Vector2i) -> bool:
+	var g := veh.gun_world_dir()
+	if g == Vector2i.ZERO:
+		return false
+	var rel := from - veh.center()
+	var along := rel.x * g.x + rel.y * g.y
+	var across := rel.x * -g.y + rel.y * g.x
+	return along < 0 and absi(along) > absi(across)
+
+func _resolve_hit_location(veh: Vehicle, aimed: String, res: ActionResult,
+		actor_name: String, from: Vector2i = NOWHERE) -> String:
+	var live := _aimable_components(veh, from)
 	if live.is_empty():
 		return ""
 	var aimed_at := ""
 	# ПРИЦЕЛЬНЫЙ бросок делается, только если узел действительно назвали и он цел.
 	# Источники без стрелка (детонация соседней машины) узла не называют — им сразу
 	# каскад по базовым порогам, без надбавки за прицел.
-	if aimed != "" and veh.component_alive(aimed):
+	if aimed != "" and live.has(aimed):
 		aimed_at = aimed
 		var need: int = clampi(
 			int(MCF.COMPONENT_NEED.get(aimed_at, 6)) - MCF.COMPONENT_AIM_BONUS, 1, 6)
@@ -5746,8 +5861,10 @@ func _resolve_hit_location(veh: Vehicle, aimed: String, res: ActionResult,
 		if hit:
 			return aimed_at
 	# Каскад: тот же порядок, что в правилах, без названного узла и без надбавки.
+	# Идёт он по тем же ДОСТУПНЫМ узлам: снаряд, пришедший слева, не может задеть
+	# правую гусеницу ни прицельно, ни случайно — её закрывает сам корпус.
 	for comp: String in MCF.COMPONENT_ORDER:
-		if comp == aimed_at or not veh.component_alive(comp):
+		if comp == aimed_at or not live.has(comp):
 			continue
 		var c_need: int = int(MCF.COMPONENT_NEED.get(comp, 6))
 		var c_roll := state.dice.roll_d6()
@@ -5888,6 +6005,8 @@ func _destroy_vehicle(veh: Vehicle, res: ActionResult) -> void:
 		var center := veh.center()
 		# Детонация боекомплекта — такой же взрыв-ромб, как у пушки (#63): по
 		# диагонали ударная волна уходит недалеко.
+		# У детонации борта нет — рвётся сама машина, а не кто-то по ней стреляет.
+		_aim_from = NOWHERE
 		var area := MCF.blast_diamond(center, r)
 		for bc: Vector2i in area:
 			if not state.grid.in_bounds(bc):

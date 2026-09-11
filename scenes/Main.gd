@@ -28,6 +28,10 @@ const FEATURE_TAGS := {
 	MCF.FEATURE_DOT_OPEN: "PBX+",
 	MCF.FEATURE_MINE: "!",
 	MCF.FEATURE_AV_MINE: "AV",
+	# Броневые версии подписаны отдельно: по виду они те же стена и стекло, а правила
+	# у них совсем другие, и спутать их на доске нельзя.
+	MCF.FEATURE_ARMOR_WALL: "A##",
+	MCF.FEATURE_ARMOR_GLASS: "A▢",
 }
 
 ## Хелпер оформления окон в стиле «2003 Steam» (preload, без class_name).
@@ -1104,7 +1108,8 @@ func _handle_click(coord: Vector2i) -> void:
 				if beam_foe != null:
 					var sid := selected_id
 					_open_component_picker(beam_foe, "Burn through", func(comp: String) -> void:
-						_submit(ShootIntent.new(sid, -1, -1, coord, comp)))
+						_submit(ShootIntent.new(sid, -1, -1, coord, comp)),
+						[], _selected_unit().coord)
 					return
 				_submit(ShootIntent.new(selected_id, -1, -1, coord))
 				return
@@ -1115,7 +1120,8 @@ func _handle_click(coord: Vector2i) -> void:
 				if at_foe != null and at_foe.owner != _viewing_side():
 					var sid2 := selected_id
 					_open_component_picker(at_foe, "Aim at", func(comp: String) -> void:
-						_submit(ShootIntent.new(sid2, -1, -1, coord, comp)))
+						_submit(ShootIntent.new(sid2, -1, -1, coord, comp)),
+						[], _selected_unit().coord)
 					return
 				_submit(ShootIntent.new(selected_id, -1, -1, coord))
 				return
@@ -1280,8 +1286,9 @@ func _handle_click(coord: Vector2i) -> void:
 				var foe := _vehicle_at_cell(coord)
 				if foe != null and foe.owner != _viewing_side():
 					var vid := selected_vehicle_id
+					var port := resolver.cannon_port(_selected_vehicle(), coord)
 					_open_component_picker(foe, "Aim at", func(comp: String) -> void:
-						_submit(VehicleCannonIntent.new(vid, coord, comp)))
+						_submit(VehicleCannonIntent.new(vid, coord, comp)), [], port)
 					return
 				_submit(VehicleCannonIntent.new(selected_vehicle_id, coord))
 				return
@@ -3990,8 +3997,12 @@ func _refresh_component_panel() -> void:
 		_comp_body.add_child(row)
 	# Что именно отвалилось — словами, чтобы не держать таблицу в голове.
 	var notes: Array[String] = []
-	if not veh.can_drive():
+	# Разница между «стоит намертво» и «только не едет» для игрока существенная: во
+	# втором случае машина ещё разворачивается и может навести орудие.
+	if not veh.can_turn():
 		notes.append("immobilised")
+	elif not veh.can_drive():
+		notes.append("cannot drive, can still turn")
 	if veh.has_component(MCF.COMP_GUN) and not veh.can_fire_gun():
 		notes.append("gun out")
 	if veh.tower_jammed():
@@ -5025,17 +5036,18 @@ func _open_picker(target: UnitInstance, available: int) -> void:
 ## only — список узлов, которые показывать. Пустой = все ЖИВЫЕ (так стреляют: по
 ## разбитому узлу целиться нельзя). Ремонт передаёт свой список — там как раз выбитые
 ## узлы и нужны, иначе чинить было бы нечего.
+## from — откуда бьют. Задана, значит список узлов урезается ПО БОРТУ (веха 14.1):
+## предлагать прицел в гусеницу, закрытую корпусом, нельзя — резолвер всё равно отдаст
+## такой выстрел каскаду, и игрок решил бы, что кнопка врёт.
 func _open_component_picker(veh: Vehicle, title: String, on_pick: Callable,
-		only: Array = []) -> void:
+		only: Array = [], from: Vector2i = Vector2i(-9999, -9999)) -> void:
 	_menu.hide()
 	for c in _picker.get_children():
 		c.queue_free()
 	var vb := _scroll_menu(_picker, title)
+	var visible: Array = resolver._aimable_components(veh, from) if only.is_empty() else only
 	for comp: String in MCF.COMPONENT_ORDER:
-		if only.is_empty():
-			if not veh.component_alive(comp):
-				continue
-		elif not only.has(comp):
+		if not visible.has(comp):
 			continue
 		var b := Button.new()
 		if only.is_empty():

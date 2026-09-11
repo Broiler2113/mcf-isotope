@@ -1183,8 +1183,16 @@ components**, and only one of them can end it:
 |---|:---:|:---:|---|
 | Hull | 8 | 4 | The vehicle is finished — crew die, destruction roll, wreck |
 | Tower | 6 | — | Fires only along its **last shot's direction** until repaired |
-| Tracks | 4 | 4 | Cannot drive **and cannot turn** |
+| Left Track | 4 | — | See below — one track stops it driving, not turning |
+| Right Track | 4 | — | |
+| Tracks (shared) | — | 4 | Shuttles have no front, so no sides: one pool |
 | Main Gun | 4 | — | Cannot fire the cannon |
+
+**A tank has two tracks, and they are not interchangeable.** Driving needs *both*;
+turning needs *either*. So one broken track leaves a tank that can still traverse to
+bring its gun round but cannot go anywhere, and two leave it frozen in place and facing.
+A shuttle has no facing — "left" and "right" mean nothing without a front — so it keeps
+a single shared track pool.
 
 `Vehicle.durability` still exists and still means "is this thing alive", but it is now
 literally the Hull cell of `Vehicle.components` — a synonym, not a second number, so the
@@ -1199,6 +1207,15 @@ is absent from the dictionary and is skipped everywhere a destroyed one would be
    Main Gun 5+, Tower 4+, Tracks 3+, Hull 2+ — so an aimed Hull shot cannot miss, and
    the choice is a real one: the Hull is the guaranteed point but needs eight of them,
    while the Tracks are riskier and disable in four.
+2b. **The side you shoot from decides what you can hit.** A track is a flank
+   component: from the tank's left only the left one can be aimed at, from its right
+   only the right, and from dead ahead or behind, both. Ties — an exact 45° approach —
+   count as the flank. The **main gun** is hidden from anyone standing behind where it
+   points (its last shot's direction; before its first shot, along the hull), though it
+   is plainly visible in profile from the side. This applies to the cascade as well as
+   the aimed roll: a shell arriving from the left cannot clip the right track even by
+   accident, because the hull is in the way. A drone detonating **overhead** has no
+   side and picks freely.
 3. On a failure the hit **cascades** Main Gun → Tower → Tracks → Hull at the *base*
    thresholds — the +1 is a reward for the declared choice, not for the whole queue —
    skipping the named component and every destroyed one.
@@ -1218,8 +1235,8 @@ gone goes to the Hull whole. Nothing is ever silently lost.
 | Anti-vehicle mine | **Tracks**, 1 point, no roll (Hull if the tracks are already gone) |
 | Personnel mine | Nothing — it is an anti-personnel weapon and no longer touches vehicles |
 | Marksman laser | Component **chosen by the marksman**, 1 point per whole 10 potential |
-| Shield-bearer halting a vehicle | **Tracks**, 2 points |
-| Driving over hedgehogs | **Tracks**, 2 points, once per move however many are crushed |
+| Shield-bearer halting a vehicle | **A track**, 2 points |
+| Driving over hedgehogs | **A track**, 2 points, once per move however many are crushed |
 | Another vehicle detonating nearby | Normal cascade, no aim bonus |
 
 **Crew are only ever at risk from Hull hits.** A non-lethal one gives a single crewman
@@ -1235,6 +1252,27 @@ tank drives that same turn. A Hull at 0 is not repairable: that is a wreck, not 
 
 **Capture** is unchanged in cost (boarding an empty enemy vehicle is the usual 1 AP) and
 preserves the component state exactly — capturing neither repairs nor resets anything.
+
+### 16.2c Armored wall and armored glass (milestone 14.1)
+
+Two materials that look like their ordinary counterparts and are placed from the map
+editor like them.
+
+**Armored wall** is a wall in every visible respect — 2 m, blocks movement, sight and
+fire. What makes it armoured is what *cannot* remove it: not a miner's pick, not fire,
+not a tank's tracks (it stops vehicles outright rather than being flattened), not the
+splinters of a blast next door, and not a marksman's beam, which dies on it whatever
+potential is left. Exactly one thing destroys it: an explosion landing **on** it, which
+takes it out whole. Its splash immunity lives in one place — it is simply absent from
+`_blast_destroy_terrain`'s destructible list.
+
+**Armored glass** is ordinary glass in every respect — you see through it, shoot
+through it, a beam passes it, and it burns away when the tile ignites — save for one
+roll. Every shot **at or through** it rolls a d6: on **4+** the pane holds, the bullet
+stops dead and the glass survives; below that the shot passes and the pane shatters as
+ordinary glass does. A blast rolls the same single die rather than ordinary glass's two
+against 6+. Everywhere the rules treat glass as special they now ask `MCF.is_glass()`,
+so both kinds travel together.
 
 ### 16.3 Movement
 

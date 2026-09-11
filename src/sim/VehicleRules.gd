@@ -53,6 +53,10 @@ static func cell_entry(state: GameState, cell: Vector2i, self_id: int) -> Dictio
 	# ДОТ (армированный бетон) — непроходим для техники.
 	if c.feature_id == MCF.FEATURE_DOT:
 		return blocked.call("pillbox blocks vehicles")
+	# Броневая плита тоже: её не таранят. Обычную стену гусеница валит в пол, а эту
+	# берёт только прямой взрыв — значит для машины она просто край поля.
+	if c.feature_id == MCF.FEATURE_ARMOR_WALL:
+		return blocked.call("armored wall blocks vehicles")
 	if c.feature_id == MCF.FEATURE_LDF:
 		return ok.call(COST_LDF, {"ram": true})
 	if c.feature_id == MCF.FEATURE_GLASS:
