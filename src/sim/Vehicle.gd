@@ -220,9 +220,37 @@ func live_components() -> Array:
 			out.append(comp)
 	return out
 
-## Может ли машина ехать и поворачивать: ходовая цела (item: Tracks at 0).
+## Гусеницы, которые у этой машины ЕСТЬ (у танка две, у челнока одна общая).
+func track_components() -> Array:
+	var out: Array = []
+	for comp: String in MCF.TRACK_COMPONENTS:
+		if has_component(comp):
+			out.append(comp)
+	return out
+
+## Сколько гусениц ещё целы.
+func live_tracks() -> int:
+	var n := 0
+	for comp: String in track_components():
+		if component_alive(comp):
+			n += 1
+	return n
+
+## ЕХАТЬ можно только на ОБЕИХ гусеницах: порванная с одной стороны машина крутится на
+## месте, но вперёд не идёт.
 func can_drive() -> bool:
-	return component_alive(MCF.COMP_TRACKS)
+	var tracks := track_components()
+	if tracks.is_empty():
+		return true
+	return live_tracks() == tracks.size()
+
+## ПОВЕРНУТЬ можно, пока цела хоть одна: танк разворачивается, тормозя одной гусеницей.
+## Обе порваны — машина стоит намертво, ни хода, ни разворота.
+func can_turn() -> bool:
+	var tracks := track_components()
+	if tracks.is_empty():
+		return true
+	return live_tracks() > 0
 
 ## Может ли машина стрелять главным орудием.
 func can_fire_gun() -> bool:
@@ -255,3 +283,32 @@ func remember_shot_dir(world_dir: Vector2i) -> void:
 	tower_locked_dir = Vector2i(
 		world_dir.x * facing.x + world_dir.y * facing.y,
 		world_dir.y * facing.x - world_dir.x * facing.y)
+
+
+## Борт машины, обращённый к клетке from: "front", "back", "left" или "right".
+##
+## Считается В КООРДИНАТАХ КОРПУСА: важно не где стрелок стоит на карте, а с какой
+## стороны он подходит к ЭТОЙ машине. Ось сравнивается с поперечиной, и что больше —
+## то и борт; ровно по диагонали засчитывается БОРТ (более строгий ответ), иначе
+## угловой выстрел давал бы доступ к обеим гусеницам сразу.
+##
+## У машины без фронта (челнок) бортов нет — всегда "front": все её узлы открыты.
+func side_facing(from: Vector2i) -> String:
+	if facing == Vector2i.ZERO:
+		return "front"
+	var rel := from - center()
+	# Вперёд — вдоль фронта; вправо — фронт, повёрнутый на 90° по часовой стрелке
+	# (ось Y на поле смотрит ВНИЗ, поэтому это (-y, x)).
+	var fwd := rel.x * facing.x + rel.y * facing.y
+	var side := rel.x * -facing.y + rel.y * facing.x
+	if absi(fwd) > absi(side):
+		return "front" if fwd > 0 else "back"
+	if side == 0 and fwd == 0:
+		return "front"
+	return "right" if side > 0 else "left"
+
+## Куда сейчас смотрит ствол В КООРДИНАТАХ ПОЛЯ. Пока машина не стреляла, башня стоит
+## по-походному — вдоль корпуса, — и именно этим направлением считается её сектор.
+func gun_world_dir() -> Vector2i:
+	var locked := tower_world_dir()
+	return locked if locked != Vector2i.ZERO else facing

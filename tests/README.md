@@ -110,6 +110,12 @@ crew being risked only by Hull hits, Engineer repair with its cap and ownership 
 capture preserving component state, and finally a live anti-tank gunner wearing a tank
 down through the real resolver.
 
+`run_modular_tank.gd` also covers the left/right track split (driving needs both,
+turning needs either), the flank rule deciding which track a shooter can reach and the
+gun being hidden from behind where it points, and the two armoured materials — a wall
+that shrugs off eight blasts beside it but dies to one on top, and glass that holds on
+4+.
+
 ## Scope
 
 None of these runs is evidence that the game *plays* correctly. They are evidence

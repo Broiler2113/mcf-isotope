@@ -270,6 +270,16 @@ static func _decode_vehicle(raw: Dictionary) -> Dictionary:
 	if comps.is_empty():
 		comps = v.components.duplicate()
 		comps[MCF.COMP_HULL] = int(raw.get("durability", 0))
+	# Запись с ПРЕЖНЕЙ единой ходовой (одна «tracks» на машину, до вехи 14.1) разливается
+	# поровну по двум гусеницам: иначе у старого танка не оказалось бы ни одной, и он
+	# грузился бы обездвиженным.
+	if comps.has(MCF.COMP_TRACKS) and not v.components.has(MCF.COMP_TRACKS):
+		var was: int = int(comps[MCF.COMP_TRACKS])
+		comps.erase(MCF.COMP_TRACKS)
+		for comp: String in [MCF.COMP_TRACKS_L, MCF.COMP_TRACKS_R]:
+			if v.components.has(comp):
+				comps[comp] = mini(was, int(MCF.VEHICLE_COMPONENTS.get(
+					v.type_id, {}).get(comp, was)))
 	return {
 		"obj": v, "id": v.id, "owner": v.owner,
 		"components": comps, "tower_locked_dir": _vec(raw.get("tower_dir"), Vector2i.ZERO),

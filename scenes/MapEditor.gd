@@ -28,6 +28,8 @@ const TERRAIN_BRUSHES := [
 	{"id": MCF.FEATURE_WALL, "label": "Wall"},
 	{"id": MCF.FEATURE_WOOD_WALL, "label": "Wooden Wall"},
 	{"id": MCF.FEATURE_GLASS, "label": "Glass"},
+	{"id": MCF.FEATURE_ARMOR_WALL, "label": "Armored Wall"},
+	{"id": MCF.FEATURE_ARMOR_GLASS, "label": "Armored Glass"},
 	{"id": MCF.FEATURE_SANDBAGS, "label": "Sandbags"},
 	{"id": MCF.FEATURE_HEDGEHOG, "label": "Hedgehog"},
 	{"id": MCF.FEATURE_TRENCH, "label": "Trench"},
@@ -36,6 +38,11 @@ const TERRAIN_BRUSHES := [
 	{"id": MCF.FEATURE_DOT, "label": "Pillbox"},
 	{"id": MCF.FEATURE_DOT_OPEN, "label": "Pillbox (Embrasures)"},
 ]
+
+## Ширина боковых колонок редактора и отступ их содержимого от рамки. Обе колонки
+## строятся по этим числам, поэтому и выглядят одинаково — на глаз подбирать нечего.
+const PANEL_WIDTH := 280.0
+const PANEL_PADDING := 14.0
 
 ## Инструменты рисования (как в редакторе Crazy Ball Runner): кисть, линия,
 ## прямоугольник, заливка.
@@ -378,6 +385,7 @@ func _feature_tag(fid: String) -> String:
 		MCF.FEATURE_AIRLOCK: "AL", MCF.FEATURE_DRONE_STATION: "ST",
 		MCF.FEATURE_WOOD_WALL: "WD",
 		MCF.FEATURE_DOT: "PBX", MCF.FEATURE_DOT_OPEN: "PBX+",
+		MCF.FEATURE_ARMOR_WALL: "A##", MCF.FEATURE_ARMOR_GLASS: "A▢",
 	}.get(fid, "?")
 
 func _initials(sid: String) -> String:
@@ -386,13 +394,25 @@ func _initials(sid: String) -> String:
 # --- UI ---
 ## Панель, прижатая к краю экрана (item 11): редактор больше не одна широкая колонка
 ## справа, а два узких столбца по бокам, между которыми видно карту.
+## Строка кнопок во всю ширину колонки. Заводится помощником, потому что рядов много,
+## и стоит одному из них забыть про растяжение — колонка сразу выглядит кривой.
+func _row() -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	return row
+
 func _edge_panel(to_left: bool) -> VBoxContainer:
 	# Панель во ВСЮ высоту экрана, прижата к своему краю (item 19: без якоря на низ
 	# ScrollContainer схлопывался в ноль и панели пропадали). Задаём все четыре
 	# смещения от краёв viewport вручную — это надёжнее пресетов на CanvasLayer.
 	var panel := PanelContainer.new()
 	SteamChrome.apply_panel(panel)
-	var w := 260.0
+	# Ширина ОБЕИХ колонок одна и та же, и содержимое обязано в неё укладываться.
+	# Раньше панель растягивало изнутри: ряд «W: [] H: [] Set Size» шире 260, а
+	# PanelContainer тянется под свой минимум — правую колонку и выносило за край
+	# экрана вместе с половиной кнопок (её-то и видно обрезанной на скриншоте).
+	var w := PANEL_WIDTH
 	panel.anchor_top = 0.0
 	panel.anchor_bottom = 1.0
 	panel.offset_top = 12.0
@@ -416,6 +436,9 @@ func _edge_panel(to_left: bool) -> VBoxContainer:
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 6)
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# Тело уже панели на padding с обеих сторон — иначе кнопки упираются в рамку, и
+	# колонка выглядит съехавшей.
+	vbox.custom_minimum_size = Vector2(w - PANEL_PADDING * 2.0, 0)
 	scroll.add_child(vbox)
 	return vbox
 
@@ -441,11 +464,12 @@ func _build_ui() -> void:
 	_tool_status.add_theme_font_size_override("font_size", 12)
 	_tool_status.text = "Tool: Paint"
 	vbox.add_child(_tool_status)
-	var tool_row := HBoxContainer.new()
+	var tool_row := _row()
 	vbox.add_child(tool_row)
 	for pair in [[Tool.PAINT, "Paint"], [Tool.LINE, "Line"], [Tool.RECT, "Rect"], [Tool.FILL, "Fill"]]:
 		var tb := Button.new()
 		tb.text = pair[1]
+		tb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		tb.pressed.connect(_set_tool.bind(pair[0], pair[1]))
 		tool_row.add_child(tb)
 
@@ -463,6 +487,11 @@ func _build_ui() -> void:
 		btn.text = b["label"]
 		btn.pressed.connect(_set_brush.bind(b["id"], b["label"]))
 		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		# Длинная подпись ПЕРЕНОСИТСЯ, а не раздвигает колонку. Без этого одна кнопка
+		# («Pillbox (Embrasures)») требовала себе ширины больше, чем вся панель, и левый
+		# столбец расползался шире правого — та самая кривизна, которую видно на глаз.
+		btn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		btn.custom_minimum_size = Vector2(0, 32)
 		grid.add_child(btn)
 
 	# ПРАВАЯ колонка — обустройство и файлы: зоны, нейтралы, размер, сохранение (item 11).
@@ -481,13 +510,14 @@ func _build_ui() -> void:
 	zone_hint.modulate = Color(0.72, 0.76, 0.85)
 	zone_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	rbox.add_child(zone_hint)
-	var zone_row := HBoxContainer.new()
+	var zone_row := _row()
 	rbox.add_child(zone_row)
 	_zone_player_opt = OptionButton.new()
 	for i in MCF.MAX_PLAYERS:
 		_zone_player_opt.add_item("Zone %d" % (i + 1), i)
 	_zone_player_opt.select(0)
 	_zone_player_opt.item_selected.connect(_on_zone_player_selected)
+	_zone_player_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	zone_row.add_child(_zone_player_opt)
 	for pair in [[ZONE_SELECTED_PLAYER, "Paint Zone"], [-1, "No Zone"]]:
 		var zb := Button.new()
@@ -503,43 +533,53 @@ func _build_ui() -> void:
 	nu_lbl.text = "Neutral Unit:"
 	nu_lbl.add_theme_font_size_override("font_size", 13)
 	rbox.add_child(nu_lbl)
-	var nu_row := HBoxContainer.new()
+	var nu_row := _row()
 	rbox.add_child(nu_row)
 	_neutral_unit_opt = OptionButton.new()
 	for i in NEUTRAL_UNIT_IDS.size():
 		_neutral_unit_opt.add_item(str(NEUTRAL_UNIT_IDS[i]), i)
 	_neutral_unit_opt.select(0)
+	_neutral_unit_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	nu_row.add_child(_neutral_unit_opt)
 	var place_btn := Button.new()
 	place_btn.text = "Place Neutral"
 	place_btn.pressed.connect(_set_brush.bind("spawn_neutral", "Neutral Unit"))
+	place_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	nu_row.add_child(place_btn)
 
 	rbox.add_child(HSeparator.new())
 
 	# Размер карты (можно делать большие поля).
-	var size_row := HBoxContainer.new()
-	rbox.add_child(size_row)
+	# Ширина, высота и «применить» — В ТРИ СТРОКИ, а не в одну: три поля со счётчиками
+	# и кнопкой в строку не помещаются ни при какой разумной ширине колонки, и именно
+	# они раздували панель за край экрана.
+	var size_grid := GridContainer.new()
+	size_grid.columns = 2
+	size_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rbox.add_child(size_grid)
 	var w_lbl := Label.new()
-	w_lbl.text = "W:"
-	size_row.add_child(w_lbl)
+	w_lbl.text = "Width"
+	size_grid.add_child(w_lbl)
 	_w_spin = SpinBox.new()
 	_w_spin.min_value = 1
 	_w_spin.max_value = 200
 	_w_spin.value = map.width
-	size_row.add_child(_w_spin)
+	_w_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	size_grid.add_child(_w_spin)
 	var h_lbl := Label.new()
-	h_lbl.text = "H:"
-	size_row.add_child(h_lbl)
+	h_lbl.text = "Height"
+	size_grid.add_child(h_lbl)
 	_h_spin = SpinBox.new()
 	_h_spin.min_value = 1
 	_h_spin.max_value = 200
 	_h_spin.value = map.height
-	size_row.add_child(_h_spin)
+	_h_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	size_grid.add_child(_h_spin)
 	var resize_btn := Button.new()
 	resize_btn.text = "Set Size"
+	resize_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	resize_btn.pressed.connect(_on_resize)
-	size_row.add_child(resize_btn)
+	rbox.add_child(resize_btn)
 
 	rbox.add_child(HSeparator.new())
 
@@ -549,28 +589,32 @@ func _build_ui() -> void:
 	_name_edit.text = "map1"
 	rbox.add_child(_name_edit)
 
-	var io_row := HBoxContainer.new()
+	var io_row := _row()
 	rbox.add_child(io_row)
 	var save_btn := Button.new()
 	save_btn.text = "Save"
 	save_btn.pressed.connect(_on_save)
+	save_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	io_row.add_child(save_btn)
 	var clear_btn := Button.new()
 	clear_btn.text = "Clear"
 	clear_btn.pressed.connect(_on_clear)
+	clear_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	io_row.add_child(clear_btn)
 
 	_maps_option = OptionButton.new()
 	rbox.add_child(_maps_option)
-	var load_row := HBoxContainer.new()
+	var load_row := _row()
 	rbox.add_child(load_row)
 	var load_btn := Button.new()
 	load_btn.text = "Load"
 	load_btn.pressed.connect(_on_load)
+	load_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	load_row.add_child(load_btn)
 	var play_btn := Button.new()
 	play_btn.text = "Play"
 	play_btn.pressed.connect(_on_play)
+	play_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	load_row.add_child(play_btn)
 
 	rbox.add_child(HSeparator.new())

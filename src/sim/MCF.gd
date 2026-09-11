@@ -76,19 +76,35 @@ enum Fog {OFF, STANDARD, REALISTIC}
 # узлу, от самого труднопопадаемого к самому лёгкому.
 const COMP_GUN := "gun"
 const COMP_TOWER := "tower"
+## Ходовая — ДВЕ независимые гусеницы, левая и правая. Порвать одну значит лишить танк
+## хода, но не разворота: на одной гусенице машина крутится на месте, а ехать не может.
+## Порвать обе — намертво. Борт у гусеницы свой, и достать её можно только С ЕЁ СТОРОНЫ.
+const COMP_TRACKS_L := "tracks_l"
+const COMP_TRACKS_R := "tracks_r"
+## Прежний единый узел ходовой. Остался ИМЕНЕМ для старых сохранений и карт: при
+## загрузке такая запись разливается поровну по двум гусеницам (см. Vehicle.components).
 const COMP_TRACKS := "tracks"
 const COMP_HULL := "hull"
-const COMPONENT_ORDER := [COMP_GUN, COMP_TOWER, COMP_TRACKS, COMP_HULL]
+## Челнок орудия и башни не имеет, а бортов у него нет вовсе — он без фронта, и «левая
+## гусеница» у машины, которая не знает, где у неё перёд, смысла не имеет. Поэтому у
+## челнока ходовая осталась ОДНИМ узлом.
+const COMPONENT_ORDER := [COMP_GUN, COMP_TOWER, COMP_TRACKS_L, COMP_TRACKS_R,
+	COMP_TRACKS, COMP_HULL]
+## Обе гусеницы одним списком — по нему считаются «может ехать» и «может повернуть».
+const TRACK_COMPONENTS := [COMP_TRACKS_L, COMP_TRACKS_R, COMP_TRACKS]
 
 ## Человеческие имена узлов — для журнала и панели выбора.
 const COMPONENT_NAMES := {
 	COMP_GUN: "Main Gun", COMP_TOWER: "Tower",
+	COMP_TRACKS_L: "Left Track", COMP_TRACKS_R: "Right Track",
 	COMP_TRACKS: "Tracks", COMP_HULL: "Hull",
 }
 
 ## Нужное число на d6, чтобы попасть ИМЕННО в этот узел. Чем крупнее узел, тем легче.
 const COMPONENT_NEED := {
-	COMP_GUN: 5, COMP_TOWER: 4, COMP_TRACKS: 3, COMP_HULL: 2,
+	COMP_GUN: 5, COMP_TOWER: 4,
+	COMP_TRACKS_L: 3, COMP_TRACKS_R: 3, COMP_TRACKS: 3,
+	COMP_HULL: 2,
 }
 
 ## Надбавка за ПРИЦЕЛЬНЫЙ выстрел: стрелок называет узел заранее и бьёт по нему с +1.
@@ -100,7 +116,7 @@ const COMPONENT_AIM_BONUS := 1
 ## отсутствующий в словаре узел не существует: по нему нельзя целиться, и каскад его
 ## пропускает наравне с разбитым.
 const VEHICLE_COMPONENTS := {
-	"tank": {COMP_HULL: 8, COMP_TOWER: 6, COMP_TRACKS: 4, COMP_GUN: 4},
+	"tank": {COMP_HULL: 8, COMP_TOWER: 6, COMP_TRACKS_L: 4, COMP_TRACKS_R: 4, COMP_GUN: 4},
 	"shuttle": {COMP_HULL: 4, COMP_TRACKS: 4},
 }
 
@@ -169,6 +185,19 @@ const FEATURE_SANDBAG_WALL := "sandbag_wall"
 ## Ёж поверх мешков — стена 2 м, но НЕ сплошная: сквозь неё стреляют с соседней клетки.
 const FEATURE_HEDGEHOG_SANDBAGS := "hedgehog_sandbags"
 
+## БРОНИРОВАННАЯ СТЕНА. Снаружи — обычная стена: те же 2 м, так же держит движение,
+## обзор и линию огня. Разница в том, ЧЕМ её берут: ничем, кроме ПРЯМОГО ВЗРЫВА в неё.
+## Кирка шахтёра, огонь, гусеница танка, осколки соседнего разрыва и луч марксмана её
+## не трогают — заряд противотанкиста или снаряд, легший ИМЕННО В НЕЁ, сносит целиком.
+const FEATURE_ARMOR_WALL := "armor_wall"
+## БРОНИРОВАННОЕ СТЕКЛО. Во всём остальном — обычное стекло (сквозь него видно, сквозь
+## него стреляют, оно так же выгорает в пожаре); отличается ровно одним: на каждый
+## выстрел ПО нему или СКВОЗЬ него оно бросает d6 и на 4+ держит — пуля вязнет, стекло
+## цело. Ниже — выстрел проходит, а рама осыпается, как у обычного.
+const FEATURE_ARMOR_GLASS := "armor_glass"
+## Что нужно бронестеклу, чтобы выдержать.
+const ARMOR_GLASS_HOLD_NEED := 4
+
 ## Высота укрытия каждого объекта (§3.7). 2 = полноценная стена.
 const FEATURE_HEIGHT := {
 	FEATURE_DRONE_STATION: 1.0,
@@ -190,6 +219,8 @@ const FEATURE_HEIGHT := {
 	FEATURE_WOOD_WALL: 2.0,
 	FEATURE_SANDBAG_WALL: 2.0,
 	FEATURE_HEDGEHOG_SANDBAGS: 2.0,
+	FEATURE_ARMOR_WALL: 2.0,
+	FEATURE_ARMOR_GLASS: 2.0,
 }
 
 const FEATURE_NAMES := {
@@ -211,6 +242,8 @@ const FEATURE_NAMES := {
 	FEATURE_WOOD_WALL: "Wooden Wall",
 	FEATURE_SANDBAG_WALL: "Sandbag Wall",
 	FEATURE_HEDGEHOG_SANDBAGS: "Hedgehog on Sandbags",
+	FEATURE_ARMOR_WALL: "Armored Wall",
+	FEATURE_ARMOR_GLASS: "Armored Glass",
 }
 
 # --- ДПМГ: стационарный пулемёт (§3.7) ---
@@ -308,6 +341,11 @@ const FIRE_NEED_BY_FEATURE := {
 	FEATURE_LDF: FIRE_NEVER,
 	FEATURE_DOT: FIRE_NEVER,
 	FEATURE_DOT_OPEN: FIRE_NEVER,
+	# Броневая плита не горит вообще — её берёт только прямой взрыв.
+	FEATURE_ARMOR_WALL: FIRE_NEVER,
+	# А бронестекло горит как обычное: от огня его броня не спасает (оно её и не для
+	# того носит — только против пуль).
+	FEATURE_ARMOR_GLASS: FIRE_NEED_GLASS,
 }
 
 ## Пожаротушительная граната (#19): квадрат 5×5 — радиус 2 по Чебышёву от эпицентра.
@@ -388,6 +426,12 @@ const MARKSMAN_AP_COST := 2  # 1 выстрел лазера = оба ОД
 ## луч проходит насквозь бесплатно. Стекло и деревянная стена гибнут даром: 0.
 const LASER_COST := {
 	FEATURE_GLASS: 0,
+	# Бронестекло луч режет так же, как обычное: своя защита у него только от ПУЛЬ
+	# (бросок 4+), а сплошной луч ей не помеха.
+	FEATURE_ARMOR_GLASS: 0,
+	# Бронированной стены в таблице НЕТ НАМЕРЕННО, и «нет» тут значит не «бесплатно», а
+	# «луч её не берёт»: см. laser_blocks_beam() — она гасит луч, сколько бы потенциала
+	# в нём ни осталось. Взять её может только прямой взрыв.
 	FEATURE_WOOD_WALL: 0,
 	FEATURE_AIRLOCK: 1,
 	FEATURE_WALL: 2,
@@ -499,6 +543,17 @@ enum ActionType {MOVE, SHOOT, CAPTURE, USE_ITEM}
 
 ## Прочность укрепления в единой шкале урона (0 = объект не имеет прочности и
 ## сносится любым попаданием). Пока прочность есть только у ДОТа.
+## Стекло ЛЮБОГО вида. Заводится отдельным вопросом, потому что «стеклянность» —
+## это целый пучок правил (сквозь него видно, сквозь него стреляют, оно осыпается,
+## оно горит), и бронестекло отличается от обычного ровно одним броском. Спрашивать
+## везде «== FEATURE_GLASS» значило бы, что бронестекло тихо выпадет из половины из них.
+static func is_glass(feature_id: String) -> bool:
+	return feature_id == FEATURE_GLASS or feature_id == FEATURE_ARMOR_GLASS
+
+## Сколько раз бронестекло держит удар: один бросок на выстрел, 4+ — устояло.
+static func glass_hold_need(feature_id: String) -> int:
+	return ARMOR_GLASS_HOLD_NEED if feature_id == FEATURE_ARMOR_GLASS else 0
+
 static func feature_durability(feature_id: String) -> int:
 	if feature_id == FEATURE_DOT or feature_id == FEATURE_DOT_OPEN:
 		return DOT_DURABILITY
