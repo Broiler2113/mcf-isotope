@@ -11,6 +11,10 @@ extends Node
 signal peer_ready(is_host: bool)  # связь установлена, можно начинать партию
 signal message(msg: Dictionary)    # пришло сообщение от второй стороны
 signal disconnected()
+## Конкретный гость пришёл/ушёл (batch 12 #8): лобби хоста раздаёт по этим событиям
+## слоты. peer_ready/disconnected остались — они общие «связь есть/нет».
+signal peer_joined(id: int)
+signal peer_left(id: int)
 
 const DEFAULT_PORT := 8642
 ## Постоянное имя узла в дереве. RPC доставляется по ПУТИ узла, поэтому сессия
@@ -68,6 +72,13 @@ func is_active() -> bool:
 func is_host() -> bool:
 	return _is_host
 
+## Свой сетевой номер: у хоста всегда 1 (так устроен ENet в Godot), у гостя — выданный
+## при подключении. По нему ростер лобби знает, чей это слот (batch 12 #8).
+func my_peer_id() -> int:
+	if _peer == null or not is_inside_tree():
+		return 1 if _is_host else -1
+	return multiplayer.get_unique_id()
+
 ## Сцена боя подписалась на message: отдаём накопленное и дальше шлём напрямую (#54).
 func attach() -> void:
 	_listening = true
@@ -94,6 +105,10 @@ func send(msg: Dictionary) -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func _relay(msg: Dictionary) -> void:
+	# Кто прислал (batch 12 #8): лобби хоста должно знать, чей это запрос, а сцене
+	# боя — чей это бросок. Ключ служебный, с подчёркиванием, чтобы не спутать с полями
+	# самих сообщений.
+	msg["_from"] = multiplayer.get_remote_sender_id()
 	if _listening:
 		message.emit(msg)
 	else:
@@ -103,6 +118,7 @@ func _relay(msg: Dictionary) -> void:
 func _on_peer_connected(id: int) -> void:
 	if not peers.has(id):
 		peers.append(id)
+	peer_joined.emit(id)
 	peer_ready.emit(true)  # хост: клиент подключился
 
 func _on_connected_to_server() -> void:
@@ -114,4 +130,9 @@ func _on_connection_failed() -> void:
 
 func _on_peer_disconnected(id: int = 0) -> void:
 	peers.erase(id)
+	peer_left.emit(id)
+	# У хоста «связь потеряна» — это когда ушёл ПОСЛЕДНИЙ гость (batch 12 #15): один
+	# отвалившийся игрок из трёх не должен выбрасывать в меню всех остальных.
+	if _is_host and not peers.is_empty():
+		return
 	disconnected.emit()

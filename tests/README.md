@@ -116,6 +116,23 @@ gun being hidden from behind where it points, and the two armoured materials —
 that shrugs off eight blasts beside it but dies to one on top, and glass that holds on
 4+.
 
+**`run_mines_and_corpses.gd`** covers batch 12's rules that only show in play: a captor's
+death frees the captive; bodies under a vehicle's tracks stay (and cannot be picked up
+while the hull sits on them); a personnel mine laid under a standing unit kills it at
+once while an anti-vehicle one stays armed; known mines shape the move flood for the
+player, the resolver and the AI alike (a 1-wide corridor with an own mine is cut off,
+an unknown enemy mine is not, a revealed one is); the AI sapper actually lays a field and
+never walks a unit onto its own mine; and cosmetics bounce off the board edge.
+
+**`run_net_match.sh`** is the only run that proves multiplayer works: it starts **two
+Godot processes** on localhost — `net_host_*.gd` and `net_guest_*.gd`, both built on
+`NetSmokeBase.gd` — and drives the real scenes through ENet: lobby (seating, colour and
+slot requests, rule sync), placement (budgets from the lobby, live placement, the host
+deploying its AI slot, the mirrored auto-stamp), and battle (the host's shot at the guest
+with **both** screens waiting for the other's Roll, the host driving the AI side, and the
+board digests agreeing at the end of the round). It runs twice, asymmetric and mirrored,
+and needs `NetworkSession.DEFAULT_PORT` free.
+
 ## Scope
 
 None of these runs is evidence that the game *plays* correctly. They are evidence
