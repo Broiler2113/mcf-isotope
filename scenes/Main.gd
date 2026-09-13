@@ -72,6 +72,9 @@ const K_ROLL := "roll"
 ## Слот стал ИИ посреди боя (batch 13 #2): хост сообщает гостям, что ушедшего игрока
 ## ведёт машина — их ростер перестаёт ждать его бросков.
 const K_SIDE_AI := "side_ai"
+## Исход партии объявляет ХОСТ (batch 14): гость свою доску победой не считает —
+## иначе рассинхрон рисовал бы «Player B wins» посреди чужого хода.
+const K_OVER := "match_over"
 
 ## Режимы, чей предпросмотр читает клетку под курсором. Каждому движению мыши нужен
 ## свой кадр (#97), иначе картинка обновляется только когда камера что-то дёрнет —
@@ -184,8 +187,10 @@ const BOX_DRAG_THRESHOLD := 8.0
 var selected_vehicle_id: int = -1
 var veh_move_targets: Dictionary = {}
 var veh_disembark_id: int = -1
-## Кто садится в выбранное кресло челнока (batch 13): id пехотинца в режиме VEH_BOARD_SEAT.
+## Кто садится в выбранное кресло челнока (batch 13): id пехотинца в режиме VEH_BOARD_SEAT,
+## и в какую машину (batch 14: выбор кресла открывается и из меню самого бойца).
 var veh_board_id: int = -1
+var veh_board_vid: int = -1
 var _animating: bool = false
 
 ## Пауза между действиями ИИ (#52): бойцы должны ходить ОДИН ЗА ДРУГИМ и на глазах,
@@ -1349,7 +1354,7 @@ func _handle_click(coord: Vector2i) -> void:
 			_back_to_menu()
 		Mode.VEH_BOARD_SEAT:
 			# Посадка в выбранное кресло (batch 13 S6).
-			var bveh := _selected_vehicle()
+			var bveh := state.get_vehicle(veh_board_vid)
 			if bveh != null and veh_board_id != -1 and item_cells.has(coord):
 				_submit(VehicleBoardIntent.new(veh_board_id, bveh.id, _seat_index_at(bveh, coord)))
 				return
@@ -1654,17 +1659,20 @@ func _seat_index_at(veh: Vehicle, coord: Vector2i) -> int:
 ## свободных больше одного, иначе садится в единственное.
 func _veh_board(unit_id: int) -> void:
 	var veh := _selected_vehicle()
-	if veh == null:
-		return
+	if veh != null:
+		_board_into(unit_id, veh)
+
+## Посадка бойца в машину (batch 14): в танк — сразу; в челнок — ВСЕГДА через выбор
+## кресла, чтобы игрок сам решал, садиться за руль или нет (кресло водителя подписано).
+func _board_into(unit_id: int, veh: Vehicle) -> void:
 	if not veh.seated():
-		_submit(VehicleBoardIntent.new(unit_id, selected_vehicle_id))
+		_submit(VehicleBoardIntent.new(unit_id, veh.id))
 		return
 	var free := resolver.seat_options(veh)
-	if free.size() <= 1:
-		_submit(VehicleBoardIntent.new(unit_id, selected_vehicle_id,
-				free[0] if not free.is_empty() else -1))
+	if free.is_empty():
 		return
 	veh_board_id = unit_id
+	veh_board_vid = veh.id
 	item_cells = []
 	for i in free:
 		item_cells.append(veh.seat_cell(i))
@@ -2535,6 +2543,9 @@ func _check_match_over() -> bool:
 		return true
 	if replay != null:
 		return false
+	# В сети исход объявляет хост (batch 14): гость ждёт K_OVER.
+	if networked and net != null and not net.is_host:
+		return false
 	var team := _winning_team()
 	if team == -2:
 		return false
@@ -2548,6 +2559,13 @@ func _check_match_over() -> bool:
 			title = "%s wins the match!" % names[0]
 		else:
 			title = "Team %d (%s) wins the match!" % [team + 1, ", ".join(names)]
+	if networked and session != null:
+		session.send({"k": K_OVER, "t": title})
+	_declare_match_over(title)
+	return true
+
+func _declare_match_over(title: String) -> void:
+	_match_over = true
 	state.log.add("— %s —" % title)
 	_deselect()
 	_menu.hide()
@@ -2555,7 +2573,6 @@ func _check_match_over() -> bool:
 	_show_victory(title)
 	_refresh_status()
 	queue_redraw()
-	return true
 
 ## Окно исхода в общем стиле SteamChrome (batch 13 #9). «Look at the Board» убирает окно,
 ## но доску не размораживает: посмотреть на поле можно, играть дальше — нет.
@@ -2729,6 +2746,15 @@ func _on_peer_ready(is_host: bool) -> void:
 	net.outgoing.connect(func(msg: Dictionary) -> void: session.send(msg))
 	net.action_applied.connect(_on_net_applied)
 	net.initiative_synced.connect(_on_initiative_synced)
+	# Рассинхрон (batch 14): гость просит снимок и, получив его, перечитывает доску.
+	net.desync_detected.connect(func() -> void:
+		state.log.add("[net] Board out of sync with the host — resynchronising…"))
+	net.resynced.connect(func() -> void:
+		_resync_after_restore()
+		for c in controllers.values():
+			c.notify_state_changed(state)
+		state.log.add("[net] Board resynchronised with the host.")
+		_kick_if_ai())
 	# Порядок инициативы бросается локально у каждой стороны, поэтому хост тут же
 	# объявляет свой — он и есть авторитетный (#53).
 	net.announce_initiative()
@@ -2771,6 +2797,10 @@ func _on_net_message(msg: Dictionary) -> void:
 			return
 		K_SIDE_AI:
 			_apply_side_ai(msg)
+			return
+		K_OVER:
+			if not _match_over:
+				_declare_match_over(str(msg.get("t", "The match is over")))
 			return
 	if net != null:
 		net.receive(msg)
@@ -3656,6 +3686,15 @@ func _draw() -> void:
 	if mode == Mode.VEH_DISEMBARK or mode == Mode.VEH_SEAT or mode == Mode.VEH_BOARD_SEAT:
 		for coord in item_cells:
 			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(0.4, 0.7, 1.0, 0.28))
+		# Кресло водителя подписано (batch 14): игрок решает, вести ему или ехать.
+		if mode != Mode.VEH_DISEMBARK:
+			var pv := state.get_vehicle(veh_board_vid) if mode == Mode.VEH_BOARD_SEAT \
+					else resolver.seated_vehicle_of(_selected_unit())
+			if pv != null and pv.seated():
+				var dc := pv.seat_cell(Vehicle.DRIVER_SEAT)
+				if item_cells.has(dc):
+					draw_string(font, _cell_origin(dc) + Vector2(4, 14), "DRIVER",
+						HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(1, 1, 0.6))
 
 	# Статические объекты на клетках (станции дронов и т. п.) — тоже только на экране (item 5).
 	for y in range(vy0, vy1 + 1):
@@ -5536,8 +5575,7 @@ func _open_menu(unit: UnitInstance) -> void:
 			var vname: String = VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)
 			var seat_text := "Board %s" % vname if veh.owner == unit.owner \
 				else "Storm %s" % vname
-			_act_btn(vb, seat_text,
-					_submit.bind(VehicleBoardIntent.new(unit.id, veh.id)), unit.remaining_ap > 0)
+			_act_btn(vb, seat_text, _board_into.bind(unit.id, veh), unit.remaining_ap > 0)
 
 		# Вытащить труп из машины, чтобы освободить место (item 18).
 		for vid: int in resolver.unloadable_corpse_vehicle_ids(unit):

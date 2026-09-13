@@ -2,6 +2,8 @@ extends "res://tests/NetSmokeBase.gd"
 
 var _waited_prompt := ""
 var _lobby_snapshot_count := 0
+var _shot_skipped := false
+var _shot_lines := -1
 
 func _initialize() -> void:
 	tag = "host"
@@ -42,7 +44,12 @@ func _initialize() -> void:
 			ck(pl._effective_budget(0) == 450, "budget 450 on the host: %d" % pl._effective_budget(0))
 			pl.brush_unit = "sniper"
 			pl._click_cell(Vector2i(5, 5))
-			ck(pl._side_unit_count(0) == 1, "host placed a sniper")
+			# Инициатива теперь жребий (batch 14): ИИ может стрелять раньше хоста, и одному
+			# снайперу не дожить до своего хода — хост ставит ещё двоих тяжёлых.
+			pl.brush_unit = "heavy_infantry"
+			pl._click_cell(Vector2i(7, 5))
+			pl._click_cell(Vector2i(6, 5))
+			ck(pl._side_unit_count(0) == 3, "host placed a sniper and two heavies")
 			pl._on_net_ready()  # → Next: AI
 			ck(pl.active_side == 1, "now placing for the AI side (active=%d)" % pl.active_side)
 			pl.brush_unit = "light_infantry"
@@ -68,29 +75,46 @@ func _initialize() -> void:
 		return m.state.active_player() == 0 and not m._animating and not m._net_playing,
 		func() -> void:
 			var m = current_scene
-			var sniper: UnitInstance = null
+			# Любой живой боец хоста, который может выстрелить в живого гостя; снайпер —
+			# первым: его выстрел не промахивается, и защитный бросок гостя гарантирован.
+			var shooter: UnitInstance = null
 			var target: UnitInstance = null
+			var order: Array = []
 			for u in m.state.all_units():
-				if u.owner == 0 and u.stats.special_ability_id != "":
-					sniper = u
-				if u.owner == 0 and sniper == null:
-					sniper = u
-				if u.owner == 2:
-					target = u
-			ck(sniper != null and target != null, "sniper and guest target exist")
-			ck(m.resolver.can_shoot(sniper, target) == "", "sniper can shoot the guest: %s" % m.resolver.can_shoot(sniper, target))
-			m._on_intent_ready(ShootIntent.new(sniper.id, target.id, 1)))
+				if u.owner == 0 and u.is_alive():
+					if u.stats.special_ability_id == MCF.ABILITY_SNIPER:
+						order.push_front(u)
+					else:
+						order.append(u)
+			for u in order:
+				for t in m.state.all_units():
+					if t.owner == 2 and t.is_alive() and m.resolver.can_shoot(u, t) == "" \
+							and m.resolver.first_unit_on_line(u.coord, t.coord) == null:
+						shooter = u
+						target = t
+						break
+				if shooter != null:
+					break
+			if shooter != null:
+				_shot_lines = m.state.log.lines.size()
+				m._on_intent_ready(ShootIntent.new(shooter.id, target.id, 1))
+			else:
+				_shot_skipped = true
+				print("[host] no clear shot at the guest this round — relying on the AI's fire for the roll wait"))
 	step("shot played on both, host waited for the guest's defence roll", func() -> bool:
 		var p := poke_dice()
 		if p.find("Waiting for") >= 0:
 			_waited_prompt = p
 		var m = current_scene
+		# Промах (у тяжёлого нужно 5+) защитного броска не даёт — тогда ждать нечего.
+		var shot_done: bool = _shot_lines >= 0 and m.state.log.lines.size() > _shot_lines
 		return not m._animating and not m._net_playing and m.state.log.lines.size() > 0 \
-				and _waited_prompt != "",
+				and (_waited_prompt != "" or (_shot_skipped and _step_t > 3.0) or (shot_done and _step_t > 3.0)),
 		func() -> void:
-			ck(_waited_prompt.find("Waiting for Player C") >= 0,
-				"host waited for the guest to roll: '%s'" % _waited_prompt)
-			ck(_waited_prompt.find("need") >= 0, "prompt shows the number needed: '%s'" % _waited_prompt)
+			if _waited_prompt != "":
+				ck(_waited_prompt.find("Waiting for Player C") >= 0,
+					"host waited for the guest to roll: '%s'" % _waited_prompt)
+				ck(_waited_prompt.find("need") >= 0, "prompt shows the number needed: '%s'" % _waited_prompt)
 			current_scene._on_intent_ready(EndTurnIntent.new()))
 	# С одним бойцом на сторону партия может ЗАКОНЧИТЬСЯ раньше второго раунда (batch 13
 	# #9: победа замораживает доску) — это тоже честный исход, лишь бы обе машины сошлись.

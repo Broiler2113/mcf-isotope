@@ -37,7 +37,7 @@ func _initialize() -> void:
 		return pl._remote_units.has(0) and pl._remote_units.has(1),
 		func() -> void:
 			var pl = current_scene
-			ck(pl._remote_units[0].size() == 1 and pl._remote_units[1].size() == 1,
+			ck(pl._remote_units[0].size() == 3 and pl._remote_units[1].size() == 1,
 				"host's and AI's armies arrived")
 			pl._on_net_ready())
 	step("battle up", func() -> bool: return scene_is("Main.gd") and current_scene.net != null,
@@ -50,8 +50,12 @@ func _initialize() -> void:
 		if p.find("Waiting for") >= 0:
 			_waited_prompt = p
 		var m = current_scene
-		return _waited_prompt != "" and not m._animating and not m._net_playing \
-				and m.state.turns.active_index > 0,
+		# Инициатива теперь жребий (batch 14): если гость ходит раньше хоста, он просто
+		# сдаёт ход, и хост стреляет в свой.
+		if _waited_prompt == "" and m.state.active_player() == 2 and not m._animating and not m._net_playing:
+			m._on_intent_ready(EndTurnIntent.new())
+			return false
+		return _waited_prompt != "" and not m._animating and not m._net_playing,
 		func() -> void:
 			ck(_waited_prompt.find("Waiting for Player A") >= 0,
 				"guest waited for the host's hit roll: '%s'" % _waited_prompt)
@@ -68,6 +72,11 @@ func _initialize() -> void:
 			var m = current_scene
 			print("[guest] digest ", TS_digest(m.state))
 			ck(_live_seen, "guest saw the host's placement live"))
+	# Жребий инициативы (batch 14): гость может отыграть своё раньше хоста — тогда он
+	# обязан остаться на связи и жать Roll, пока хост доигрывает свой ход.
+	step("stay online while the host finishes", func() -> bool:
+		poke_dice()
+		return _step_t > 20.0)
 
 func TS_digest(s: GameState) -> String:
 	return load("res://tests/TestSupport.gd").digest(s)

@@ -153,6 +153,7 @@ func _editor_checks() -> void:
 	for c in ed._rect_cells(Vector2i(10, 10), Vector2i(60, 60)):
 		ed._apply_brush(c)
 	ed._select_brush("grass", "Grass Floor")
+	ed._push_undo()  # то, что делает щелчок мыши перед заливкой
 	ed._flood_fill(Vector2i(30, 30))
 	ck(ed.map.get_floor(Vector2i(30, 30)) == MCF.FLOOR_GRASS
 			and ed.map.get_floor(Vector2i(5, 5)) != MCF.FLOOR_GRASS, "flood fill stays inside the walls")
@@ -162,3 +163,17 @@ func _editor_checks() -> void:
 	ck(ed.map.get_feature(Vector2i(10, 30)) == MCF.FEATURE_WALL
 			and ed.map.get_floor(Vector2i(30, 30)) == MCF.FLOOR_GRASS, "resize keeps what was drawn")
 	ck(ed._base_img.get_width() == 130 and ed._base_img.get_height() == 70, "base texture follows the size")
+	# Откат/повтор (batch 14): снимок на действие, размер откатывается вместе с содержимым.
+	ed._undo()
+	ck(ed.map.width == 120 and ed.map.height == 90 and ed.map.get_floor(Vector2i(30, 30)) == MCF.FLOOR_GRASS,
+			"undo restores the previous size and keeps earlier strokes")
+	ed._undo()
+	ck(ed.map.get_floor(Vector2i(30, 30)) != MCF.FLOOR_GRASS and ed.map.get_feature(Vector2i(10, 30)) == MCF.FEATURE_WALL,
+			"second undo takes the flood fill back but keeps the walls")
+	ed._redo()
+	ck(ed.map.get_floor(Vector2i(30, 30)) == MCF.FLOOR_GRASS, "redo brings the fill back")
+	ed._select_brush(MCF.FEATURE_SANDBAGS, "Sandbags")
+	ed._push_undo()
+	ed._paint(Vector2i(30, 30))
+	ck(ed._redo_stack.is_empty() and ed.map.get_feature(Vector2i(30, 30)) == MCF.FEATURE_SANDBAGS,
+			"a new stroke after undo clears the redo branch")

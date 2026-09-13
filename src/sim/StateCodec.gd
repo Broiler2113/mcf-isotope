@@ -179,6 +179,12 @@ static func decode(d: Dictionary) -> GameState:
 	if int(d.get("schema", 0)) > SCHEMA:
 		return null
 	var gs := GameState.new(int(d.get("w", 16)), int(d.get("h", 12)))
+	restore_into(gs, d)
+	return gs
+
+## Разложить снимок в УЖЕ существующее состояние (batch 14): так гость подтягивает доску
+## хоста посреди партии, когда обнаружен рассинхрон. Сетка обязана быть того же размера.
+static func restore_into(gs: GameState, d: Dictionary) -> void:
 	var dice: Dictionary = d.get("dice", {})
 	gs.dice.restore_position(int(dice.get("seed", 0)), int(dice.get("rolls", 0)))
 	gs.roster = Roster.from_dict(d.get("roster", {}))
@@ -216,7 +222,6 @@ static func decode(d: Dictionary) -> GameState:
 	gs.restore(snap)
 	gs.turns.initiative_rolled = bool(turns.get("rolled", true))
 	gs.revealed_mines = _decode_mines(d.get("mines", []))
-	return gs
 
 static func _decode_unit(raw: Dictionary) -> Dictionary:
 	var stats := load_stats(str(raw.get("stats", "")))

@@ -28,6 +28,8 @@ const PALETTE := [
 	Color(0.30, 0.75, 1.00), Color(0.70, 0.55, 0.35), Color(0.55, 0.55, 0.60),
 	Color(0.95, 0.35, 0.55), Color(0.35, 0.85, 0.30), Color(0.65, 0.75, 0.95),
 	Color(0.85, 0.55, 0.90), Color(0.40, 0.60, 0.35),
+	# Чёрный и белый (batch 14) — в конце палитры, чтобы индексы прежних цветов не сдвинулись.
+	Color(0.06, 0.06, 0.07), Color(0.97, 0.97, 0.97),
 ]
 
 ## Человекочитаемые имена цветов PALETTE в том же порядке (item 3): в лобби вместо
@@ -37,7 +39,7 @@ const COLOR_NAMES := [
 	"Orange", "Pink", "Lime", "Indigo", "Crimson", "Teal",
 	"Tan", "Brown", "Mint", "Chartreuse", "Violet", "Salmon",
 	"Sky", "Khaki", "Gray", "Rose", "Emerald", "Periwinkle",
-	"Orchid", "Moss",
+	"Orchid", "Moss", "Black", "White",
 ]
 
 static func color_name(index: int) -> String:
