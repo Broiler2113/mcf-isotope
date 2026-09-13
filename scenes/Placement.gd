@@ -18,7 +18,7 @@ const ZOOM_MAX := 2.5
 const ZOOM_STEP := 1.1
 
 ## Покупаемая техника (§техника, #10): танк и челнок.
-const PURCHASABLE_VEHICLES := ["tank", "shuttle"]
+const PURCHASABLE_VEHICLES := ["tank", "shuttle", "borg"]
 
 ## Покупаемые юниты (дрона в списке нет — его призывает оператор).
 ## Купленный мирный житель — обычный дешёвый боец СВОЕЙ стороны (#96): игрок им

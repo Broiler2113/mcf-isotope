@@ -275,7 +275,7 @@ func _idle_rows(state: GameState) -> Array:
 	# стояла весь бой. Поэтому техника добирается в принудительный проход ВСЕГДА,
 	# независимо от того, набрала пехота свою квоту или нет.
 	for veh: Vehicle in state.all_vehicles():
-		if veh.owner != owner or not veh.alive():
+		if veh.owner != owner or not veh.alive() or veh.is_borg():
 			continue
 		if _acted.has("v%d" % veh.id):
 			continue
@@ -451,7 +451,8 @@ func _sync_turn(state: GameState, r: GameActionResolver) -> void:
 func _vehicle_queue(state: GameState, r: GameActionResolver) -> Array:
 	var rows: Array = []
 	for veh: Vehicle in state.all_vehicles():
-		if not veh.alive() or veh.owner != owner:
+		# Борг — не машина для очереди техники (batch 13): им играют как бойцом.
+		if not veh.alive() or veh.owner != owner or veh.is_borg():
 			continue
 		var ev := _nearest_enemy(state, veh.center(), false, r)
 		rows.append({

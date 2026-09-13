@@ -1518,6 +1518,10 @@ func _veh_back_to_menu() -> void:
 	var veh := _selected_vehicle()
 	if veh != null and veh.alive() and _can_control(veh.owner):
 		_select_vehicle(veh)
+	elif selected_id != -1:
+		# Режим высадки открыт из меню БОЙЦА (пассажир челнока, оператор борга, batch 13):
+		# отмена возвращает его меню, а не снимает выделение.
+		_back_to_menu()
 	else:
 		_deselect()
 
@@ -1681,6 +1685,24 @@ func _enter_seat_switch() -> void:
 	if item_cells.is_empty():
 		return
 	mode = Mode.VEH_SEAT
+	reach = null
+	target_ids = []
+	_menu.hide()
+	queue_redraw()
+
+## Оператор вылезает из борга (batch 13): на свободную соседнюю клетку, 1 ОД.
+func _enter_borg_exit() -> void:
+	var u := _selected_unit()
+	if u == null or u.borg_id == -1 or u.remaining_ap <= 0:
+		return
+	veh_disembark_id = u.id
+	item_cells = []
+	for n in state.grid.neighbors(u.coord):
+		if not state.grid.blocks_walk(n):
+			item_cells.append(n)
+	if item_cells.is_empty():
+		return
+	mode = Mode.VEH_DISEMBARK
 	reach = null
 	target_ids = []
 	_menu.hide()
@@ -3754,6 +3776,9 @@ func _draw() -> void:
 		if disp_wrecked:
 			hull_col = Color(0.3, 0.3, 0.32)
 		var vcenter := org + vsize * 0.5
+		if veh.is_borg():
+			_draw_borg(veh, org, hull_col, disp_wrecked, disp_dur, font)
+			continue
 		# Картинка машины растягивается на весь след и поворачивается по фронту (#55).
 		var veh_name := (veh.type_id + "_wreck") if disp_wrecked else veh.type_id
 		var veh_key := Sprites.resolve(veh_name)
@@ -4120,6 +4145,34 @@ func _draw_pixel_bang(top_left: Vector2) -> void:
 		draw_rect(Rect2(b + Vector2(0, 4 * p), Vector2(p, p)), c)
 
 ## Суффикс стороны для картинок-замен (#55): light_infantry_p1.png и т.п.
+## Борг (batch 13 B17): квадратная рамка в цвете стороны с оператором внутри (его кружок
+## рисует общий проход бойцов поверх), пустой — серая рамка с точкой; бейдж «B» в углу,
+## прочность — точками у нижней кромки. Остов — серая рамка с крестом.
+func _draw_borg(veh: Vehicle, org: Vector2, col: Color, wrecked: bool, dur: int, font: Font) -> void:
+	var frame := Rect2(org + Vector2(2, 2), Vector2(CELL - 4, CELL - 4))
+	var op := state.get_unit(veh.borg_operator())
+	var manned := op != null and op.is_alive()
+	var key := Sprites.resolve("borg_wreck" if wrecked else "borg")
+	if key != "":
+		Sprites.draw_texture_override(self, key, org, float(CELL))
+	elif wrecked:
+		draw_rect(frame, Color(0.22, 0.22, 0.25))
+		draw_rect(frame, Color(0.45, 0.45, 0.5), false, 2.0)
+		draw_line(frame.position, frame.end, Color(0.6, 0.3, 0.3), 2.0)
+		draw_line(Vector2(frame.position.x, frame.end.y), Vector2(frame.end.x, frame.position.y),
+			Color(0.6, 0.3, 0.3), 2.0)
+		return
+	else:
+		var body := col if manned else Color(0.45, 0.47, 0.52)
+		draw_rect(frame, body.darkened(0.55))
+		draw_rect(frame, body, false, 3.0)
+		if not manned:
+			draw_circle(org + Vector2(CELL, CELL) * 0.5, 4.0, Color(0.7, 0.72, 0.78))
+	draw_string(font, org + Vector2(CELL - 12, 12), "B", HORIZONTAL_ALIGNMENT_LEFT, -1, 10,
+		Color(1, 1, 1, 0.9))
+	for i in maxi(0, dur):
+		draw_circle(org + Vector2(6 + i * 7, CELL - 5), 2.5, Color(0.9, 0.9, 0.6))
+
 func _owner_suffix(owner_id: int) -> String:
 	if MCF.is_neutral(owner_id):
 		return "_neutral"
@@ -5319,6 +5372,9 @@ func _open_menu(unit: UnitInstance) -> void:
 		# движения (item 27). Накопленный остаток тратится первым, в любой момент хода (#32).
 		var move_text := "Move (%d left)" % unit.move_credit if unit.move_credit > 0 else "Move"
 		_act_btn(vb, move_text, _enter_move, unit.remaining_ap > 0 or unit.move_credit > 0)
+		# Оператор борга (batch 13): вылезти наружу — 1 ОД, машина остаётся на клетке.
+		if unit.borg_id != -1:
+			_act_btn(vb, "Exit Borg (1 AP)", _enter_borg_exit, unit.remaining_ap > 0)
 
 		# Стрельба — тоже всегда присутствует; гаснет, когда не хватает ОД на выстрел.
 		var shoot_text := "Shoot"
@@ -5385,7 +5441,8 @@ func _open_menu(unit: UnitInstance) -> void:
 			for feat in [MCF.FEATURE_SANDBAGS, MCF.FEATURE_WALL, MCF.FEATURE_DOT,
 					MCF.FEATURE_DOT_OPEN, MCF.FEATURE_GLASS, MCF.FEATURE_AIRLOCK,
 					MCF.FEATURE_LDF, MCF.FEATURE_DPMG, MCF.FEATURE_HEDGEHOG]:
-				var cost: int = GameActionResolver.ENGINEER_BUILDABLE[feat]
+				# Инженер в борге строит партиями (batch 13 B7): цену и остаток даёт резолвер.
+				var cost: int = resolver.build_cost_for(unit, feat)
 				if resolver.buildable_cells(unit, feat).is_empty():
 					continue
 				# ЛДФ — одна на всю игру (#40): скрываем кнопку, если уже израсходована.
@@ -5397,8 +5454,12 @@ func _open_menu(unit: UnitInstance) -> void:
 					_act_btn(vb, "Build: LDF wall (%d tiles, %d AP)" % [MCF.LDF_WALL_LENGTH, cost],
 							_enter_build_wall, can_afford, "Needs %d AP" % cost)
 				else:
-					_act_btn(vb, "Build: %s (%d AP)" % [MCF.FEATURE_NAMES[feat], cost],
-							_enter_build.bind(feat), can_afford, "Needs %d AP" % cost)
+					var label := "Build: %s (%d AP)" % [MCF.FEATURE_NAMES[feat], cost]
+					if unit.borg_id != -1 and MCF.BORG_BATCH_FEATURES.has(feat):
+						var left: int = int(unit.build_credits.get(feat, 0))
+						label = "Build: %s (%s)" % [MCF.FEATURE_NAMES[feat],
+								("%d left in batch" % left) if left > 0 else "1 AP for %d" % MCF.BORG_BUILD_BATCH]
+					_act_btn(vb, label, _enter_build.bind(feat), can_afford, "Needs %d AP" % cost)
 
 		# Инженер: заварить соседний шлюз (#99).
 		if not resolver.weldable_cells(unit).is_empty():

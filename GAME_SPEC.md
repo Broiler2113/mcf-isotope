@@ -1178,10 +1178,11 @@ chequerboard of low cover standing where it flattened the stone wall beside it.
 
 ### 16.1 Data (`VehicleDB`)
 
-| Vehicle | Size | Durability | Crew | Speed | Facing | Cost |
-|---|:---:|:---:|:---:|:---:|:---:|---:|
-| Tank | 3×3 | 6 | 3 | 16 | yes | 300 |
-| Space Shuttle | 2×2 | 2 | 4 | 30 | no | 120 |
+| Vehicle | Size | Hull | Crew | Speed | Facing | Cost | Model |
+|---|:---:|:---:|:---:|:---:|:---:|---:|---|
+| Tank | 3×3 | 8 (+ tower, tracks, gun) | 3 | 16 | yes | 500 | crew off-board, own AP pool |
+| Space Shuttle | 2×2 | 4 | 4 seats | 30 | no | 125 | **seated** — passengers sit in the hull cells (§16.7) |
+| Borg | 1×1 | 2 | 1 | 9 | no | 100 | **mounted** — the operator stays on the grid and plays as a unit (§16.8) |
 
 `OFFBOARD = Vector2i(-9999, -9999)` marks a unit that is aboard rather than on the map.
 Boarding removes it from its cell (`occupant = null`) and moves it there, so
@@ -1210,14 +1211,17 @@ reason.
 A vehicle is no longer one pool of durability. It is a set of **independently damageable
 components**, and only one of them can end it:
 
-| Component | Tank | Shuttle | At 0 durability |
-|---|:---:|:---:|---|
-| Hull | 8 | 4 | The vehicle is finished — crew die, destruction roll, wreck |
-| Tower | 6 | — | Fires only along its **last shot's direction** until repaired |
-| Left Track | 4 | — | See below — one track stops it driving, not turning |
-| Right Track | 4 | — | |
-| Tracks (shared) | — | 4 | Shuttles have no front, so no sides: one pool |
-| Main Gun | 4 | — | Cannot fire the cannon |
+| Component | Tank | Shuttle | Borg | At 0 durability |
+|---|:---:|:---:|:---:|---|
+| Hull | 8 | 4 | 2 | The vehicle is finished — crew die, destruction roll, wreck |
+| Tower | 6 | — | — | Fires only along its **last shot's direction** until repaired |
+| Left Track | 4 | — | — | See below — one track stops it driving, not turning |
+| Right Track | 4 | — | — | |
+| Main Gun | 4 | — | — | Cannot fire the cannon |
+
+**The shuttle and the borg are hull-only (batch 13).** The shuttle's shared track pool is
+gone ("Shuttle changes" §6): every aimed shot at a shuttle is a Hull shot at 2+, and the
+cascade has nothing to skip.
 
 **A tank has two tracks, and they are not interchangeable.** Driving needs *both*;
 turning needs *either*. So one broken track leaves a tank that can still traverse to
@@ -1380,11 +1384,100 @@ event so the player watches the roll (#68):
 | Shuttle | 1–2 | Explodes, radius 1 |
 | Shuttle | 3+ | Destroyed outright, **no wreck** |
 
-### 16.6 Unwired shuttle data
+### 16.6 Shuttle data is wired now
 
-`driver_move_ap = 2`, `passenger_defense_bonus = 1`, and
-`collision_durability_threshold = 12` exist in `VehicleDB` but are **not yet read by
-the resolver**. They are documented intent, not behaviour (§24).
+The old unread `driver_move_ap` / `passenger_defense_bonus` /
+`collision_durability_threshold` keys are gone from `VehicleDB`; what replaced them is
+the seated model below (`"seated": true`, `MCF.SHUTTLE_CELLS_PER_AP = 15`,
+`MCF.SHUTTLE_PASSENGER_DEFENSE_BONUS = 1`).
+
+### 16.7 The seated shuttle (batch 13, "Shuttle changes")
+
+A shuttle has **four seats, one per hull cell** (`Vehicle.SEAT_OFFSETS`, top-right is the
+**driver's seat**). A passenger is not parked off-board like tank crew: they **sit in the
+hull cell** — `coord` is the seat cell, they are the cell's `occupant`, they are drawn on
+top of the hull, and `aboard_vehicle_id` marks the shuttle. Everything else follows from
+that one fact:
+
+- **Boarding (1 AP)** from any cell adjacent to the hull into a chosen free seat
+  (`VehicleBoardIntent.seat`, `-1` = first free, the driver's seat first). The UI asks
+  which seat when more than one is free. **Changing seats costs 1 AP**
+  (`VehicleSeatIntent`); **exiting is free** and goes through your own side — any free
+  cell adjacent to *your seat's* hull cell (`vehicle_disembark_cells(veh, unit_id)`).
+  Shield bearers and corpse carriers cannot board; enemies can (the majority rule of
+  §16.2 still decides who owns it).
+- **Driving is paid by the driver.** There is no crew AP pool (`_vehicle_crew_ap` is 0
+  for a seated vehicle): a Move may cover `move_credit + 15 × driver AP` cells, and the
+  driver pays **1 AP per 15 cells or part** (`MCF.SHUTTLE_CELLS_PER_AP`); the unused
+  remainder of the last paid AP is banked in `move_credit`. `vehicle_ap(veh)` is the
+  driver's AP; with nobody alive in the driver's seat the shuttle does not move.
+  Passengers ride along (`VehicleRules.cell_entry` treats a unit whose
+  `aboard_vehicle_id` is the moving vehicle as part of it), a body under a seat is folded
+  into the cell's `corpse_count`, and a station in a seat moves with the hull.
+- **Passengers fight from their seats** with their own weapon, AP and rules: the firing
+  line, LOS and range are measured from the seat; `los_blocked` never lets a hull block
+  a line that starts or ends on that hull, and `first_unit_on_line` ignores fellow
+  passengers of the shooter's own shuttle. Grenades, the laser, the flame jet and the AT
+  rocket all work from a seat. Only what needs the floor is refused
+  (`_aboard_allowed`: move, grab, build, dig, weld, repair, mines, boarding another
+  vehicle).
+- **Passengers are targets.** Anyone with a firing line and LOS to the seat cell may
+  shoot them; small arms roll against their armour **+1 for the hull**
+  (`SHUTTLE_PASSENGER_DEFENSE_BONUS`). They cannot be grabbed.
+- **Heavy hits** (AT shell, cannon, drone, mine, a neighbour's detonation): the passenger
+  on the **landing cell dies outright**, every other passenger of that shuttle inside the
+  blast area **rolls a plain defence** (`_shuttle_passengers_hit`, ordinary `check` dice
+  events), and the hull takes its usual damage on a direct hit. Passengers are exempt from
+  the blast's general auto-kill so that rule can apply.
+- **A dead passenger keeps the seat** (`_kill` drops them from `occupants` but not from
+  `seats`). A unit standing next to *that* hull cell pulls the body out for 1 AP
+  (`VehicleUnloadCorpseIntent`) and it lies down beside them.
+- **Drone station in a seat.** A seated operator plants their station into an empty
+  adjacent seat (1 AP, `station_place_cells`); the seat is marked `SEAT_STATION`, the
+  hull cell carries `FEATURE_DRONE_STATION`, the drone launches from it, is controlled
+  from any adjacent seat, may land back on it, and packing the station up frees the seat.
+- **Hull 0**: passengers die where they sit, the seats empty, the destruction roll of
+  §16.5 is unchanged.
+- **The AI** boards its shuttle on the first turn, flies toward the enemy with the driver's
+  AP and, after the vehicle queue, activates every passenger for shooting only
+  (`_passenger_candidates`).
+
+### 16.8 The borg (batch 13, "Borg characteristics")
+
+A borg is a **1×1 vehicle bought for 100 points** that is *played as a unit*. Boarding it
+(1 AP, from an adjacent cell; shield bearers and corpse carriers cannot) does not take the
+operator off the board: they **stand in the borg's cell** with `borg_id` set, the borg's
+`origin` follows them after every resolved action (`_sync_borgs`), and its hull footprint
+is **not registered on the grid** while someone alive is inside — so it is transparent to
+lines of fire and to pathing exactly like a soldier, and cover applies to it like a
+soldier. Empty, or with a dead operator inside, it *is* registered as a hull so it can be
+clicked, boarded and shot.
+
+While inside, the operator's numbers come from the borg via
+`UnitInstance.speed()/armor()/fire_range()/rate_of_fire()/max_ap()` — the only way
+those stats are read anywhere any more:
+
+| | Any unit | Engineer |
+|---|---|---|
+| AP per activation | 3 | 3 |
+| Move | 9 | 9 |
+| Armour | own threshold −2 (4+ → 2+) | −2 |
+| Weapon | **range 12, RoF 4** replaces the base gun; abilities stay (laser, jet, rocket, chain, sniper auto-hit) | own gun |
+| Fire | immune (`is_fireproof`) | immune |
+| Trenches | cannot enter (`reachable_for` adds them to the avoid set) | same |
+| Mines | AV mine: hull −1, stops there; personnel mine ignored | same |
+| Builds | — | **batches**: 1 AP buys 3 credits of one type from wall / glass / airlock / sandbags / hedgehog, spent one at a time between other actions, expiring at the end of the round (`build_credits`); pillbox 1 AP; trenches 6 per AP as before |
+
+Everything else a soldier does — grab, carry, dig, items, drone launch — still works.
+**Exit** costs 1 AP to a free adjacent cell and leaves the borg on the cell as a hull.
+Small arms never touch the hull: bullets go at the operator. Heavy weapons landing on the
+cell kill the operator outright and take 1 hull point (2 for the cannon); other passengers'
+rule applies to the operator in the blast area (a defence roll). At **hull 0** the operator
+dies, then a d6: **4+ explodes** — a 3×3 auto-kill square like an AT shell, flattening
+terrain, and nothing is left; **1–3 leaves a wreck** on the cell. **Overtaking**: boarding a
+borg whose operator is dead pushes the body onto a free neighbouring cell. The AI boards an
+empty borg it finds next to it (the first-turn "fill your vehicles" rule) and then fights
+with the operator as with any soldier; it does not buy them.
 
 ---
 
@@ -2191,7 +2284,8 @@ These are deliberate choices that look like bugs if you don't know the reasoning
 - **Replays are not recorded in network play** — the host's dice log already occupies
   that channel (§20.1). Save a game instead.
 - **AI does not** throw grenades, build, dig, pilot drones, or ram with vehicles. It
-  *does* demolish obstacles in its path with a miner or engineer (#90).
+  *does* demolish obstacles in its path with a miner or engineer (#90), fly shuttles and
+  shoot from their seats, and fight in a borg it climbed into (batch 13).
 - **Tank-cannon AI ignores the blast-shield rule.**
 - **Shuttle `driver_move_ap`, `passenger_defense_bonus`, `collision_durability_threshold`**
   are data-only and unread (§16.6).
@@ -2407,6 +2501,7 @@ number appears elsewhere in this document it is because the source comments cite
 | 103 | One unit per cell is enforced by the board itself — `Grid.place` and `move_occupant` refuse to overwrite an occupant and report failure, so no two soldiers, civilians or AI units can ever share a tile (§2.2); hovering a green move tile draws the **cheapest actual route** to it out of the Dijkstra tree, and every green tile is labelled with what standing there costs out of the movement total (§18.3); a marksman's laser no longer reaches a man in a trench from a tile that is not one, at any range including adjacent (§6.6, §7.3); NPC civilians and the army are driven by **one brain** — the second, cell-at-a-time civilian AI is deleted and a civilian is now an `AIController` with the Neutral owner, so it plans, fragments its movement, fires partial bursts and hauls corpses by the army's rules (§14, §17); the AI uses fragmented movement and partial bursts — `move_credit` is a spendable budget, a step costs score, and a burst orders `ceil(1/p)` bullets instead of the whole magazine (§17.3); an anti-tank sapper cut off by a wall **blasts through it** instead of shuffling along it (§17.3, §7.1); the AI and civilians pick up bodies that block the road and **stack them aside into piles**, the fifth forming a corpse wall (§17.3, §8.4); at least 80% of an army must act each turn and **every** civilian must, enforced by a second forced pass over whoever the plan left idle (§17.2); Player 1 can be an AI too, so AI-vs-AI matches run from Setup or a mid-battle toggle (§17.4); and the camera zooms out to 0.12 so a 60×40 board fits on one screen (§18.4) |
 | 104 | The map editor can be left the way it was entered: the **"To Demo Game"** button is gone, replaced by **"Main Menu"**, which clears `MapHandoff.pending` and returns to `MainMenu.tscn` instead of dumping the designer into a demo battle on the built-in roster (§19) |
 | 105 | A marksman firing **from** a trench is as boxed in as a marksman firing **into** one: the laser cannot climb out of the ditch any more than it could drop into it, so from the trench floor the only reachable target is one lying in the **same continuous run** of trench, along a straight line with no gap — a bend or a break means the beam hits the earth wall. The trench is now symmetric cover against the beam instead of a firing position that ignored its own walls (§6.6, §7.3) |
+| 108 | Batch 13, part 2 — **the seated shuttle**: passengers sit in the hull cells, are drawn on top, shoot from their seat with their own weapon and AP and can be shot at (+1 hull cover); whoever sits in the driver's seat pays 1 of their own AP per 15 cells flown and there is no crew pool; boarding picks a seat, switching costs 1 AP, exiting is free through the seat's own side; a heavy hit kills the passenger on the landing cell, everyone else aboard rolls defence, the hull takes its damage; the hull is the shuttle's only component; a dead passenger holds the seat until pulled out; a drone station mounts in an empty seat and rides along; the AI flies and fires from seats (§16.7). **The borg**: a 100-point 1×1 vehicle played as a unit — the operator stays on the grid with 3 AP, 9 movement, −2 to their armour threshold, a 12/4 gun (abilities kept; the engineer keeps its own gun and builds in batches of three per AP), fire immunity, no trenches, AV mines hurt the hull, small arms never do; at hull 0 the operator dies and a 4+ explodes it in a 3×3, otherwise a wreck stays; a dead operator is pushed out by whoever boards next; the AI climbs into one it finds (§16.8). All unit stats are now read through `UnitInstance.speed()/armor()/fire_range()/rate_of_fire()` |
 | 107 | Batch 13 — sight is unlimited in every direction and stops only at walls and closed airlocks: units, corpses and vehicle hulls never block it, and a vehicle sees through its crew from every hull cell (§11); a player who leaves the lobby, the deployment or the battle is replaced by a Hard AI, and a host left alone keeps playing (§22.4); *Save Game* is back in the side panel and the pause button just says Pause (§18.6); a corpse in an airlock holds the doors open and blocks welding (§9.4); an eraser tool on the purchase screen (§19); the map editor draws in constant time from a one-pixel-per-cell base texture with viewport culling and LOD, resizes without wiping, and is laid out as a workflow with lit toggle buttons, a brush size and confirmations (§19); a match freezes with a *Match Over* window the moment one team is left (§24); the guest is seated in a hand-reserved Player slot and can re-request the match setup if it missed it, and a typed budget survives a colour change (§22.4); mirrored placement is live — the mirror follows every change, there is no stamp step and a mirrored guest confirms automatically (§19); the vehicle component panel stands beside the action menu instead of under it (§18.6) |
 | 106 | Large-scale optimization pass — as with #101 and #102, **no rule, number or decision changed**, only the cost of computing them, proved by a byte-identical golden trace over a 360-unit, 300-corpse, 6-round battle. `team_sees` answers a point query directly instead of rebuilding the entire team's fog of war for every shot; airlocks are re-evaluated from their own 3×3 neighbourhood instead of by sweeping all units; the AI's geodesic field became `GeoField` — a flat `PackedInt32Array` built by an allocation-free wave — instead of a dictionary of `Vector2i` keys; the Dijkstra frontier uses tombstones with remembered slots, in-place decrease-key and a monotone early break, all three provably picking the same cell as the old linear scan; `GridCell.burning` lets the fire check exit before touching a single neighbour; and the AI stopped rebuilding enemy lists, geodesic stamps and per-candidate dictionaries inside its hottest loops. A six-round battle at 360 units went from 31.1 s to 3.90 s (§27.14–§27.20) |
 
