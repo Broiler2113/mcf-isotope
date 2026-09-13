@@ -114,6 +114,16 @@ var _floor_sprites: bool = false
 ## Несохранённые правки — звёздочка в заголовке и предупреждение при выходе.
 var _dirty: bool = false
 
+## Откат/повтор (batch 14): снимки карты целиком (MapData.to_dict) по одному на
+## ДЕЙСТВИЕ — мазок от нажатия до отпускания, линия, прямоугольник, заливка, размер,
+## очистка, загрузка. Снимок — плоские массивы, на 200×200 это единицы мегабайт;
+## глубина ограничена, чтобы долгая сессия не съела память.
+const UNDO_DEPTH := 40
+var _undo_stack: Array[Dictionary] = []
+var _redo_stack: Array[Dictionary] = []
+var _undo_btn: Button = null
+var _redo_btn: Button = null
+
 var _ui: CanvasLayer
 var _name_edit: LineEdit
 var _status: Label
@@ -158,6 +168,14 @@ func _process(delta: float) -> void:
 
 # --- Ввод ---
 func _unhandled_input(event: InputEvent) -> void:
+	# Ctrl+Z / Ctrl+Y (и Ctrl+Shift+Z) — откат и повтор (batch 14).
+	if event is InputEventKey and event.pressed and not event.echo and event.ctrl_pressed:
+		if event.keycode == KEY_Z and event.shift_pressed:
+			_redo(); return
+		if event.keycode == KEY_Z:
+			_undo(); return
+		if event.keycode == KEY_Y:
+			_redo(); return
 	# Горячие клавиши инструментов (batch 13 #14): 1–4, чтобы не тянуться к панели.
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
@@ -203,8 +221,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.pressed:
 			match tool:
 				Tool.PAINT:
+					_push_undo()  # один снимок на весь мазок
 					_paint(coord)
 				Tool.FILL:
+					_push_undo()
 					_flood_fill(coord)
 				Tool.LINE, Tool.RECT:
 					_drag_start = coord
@@ -213,6 +233,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		else:
 			# Отпустили — фиксируем линию/прямоугольник.
 			if tool in [Tool.LINE, Tool.RECT] and _drag_start != Vector2i(-1, -1):
+				_push_undo()
 				var cells := _line_cells(_drag_start, _drag_cur) if tool == Tool.LINE else _rect_cells(_drag_start, _drag_cur)
 				for c in cells:
 					_apply_brush(c)
@@ -686,6 +707,22 @@ func _build_ui() -> void:
 		tool_row.add_child(tb)
 		_tool_buttons[pair[0]] = tb
 	_hint(tools, "Keys 1–4. Paint drags; Line and Rect drag from corner to corner; Fill floods same cells.")
+	var undo_row := _row()
+	tools.add_child(undo_row)
+	_undo_btn = Button.new()
+	_undo_btn.text = "Undo"
+	_undo_btn.tooltip_text = "Ctrl+Z"
+	_undo_btn.disabled = true
+	_undo_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_undo_btn.pressed.connect(_undo)
+	undo_row.add_child(_undo_btn)
+	_redo_btn = Button.new()
+	_redo_btn.text = "Redo"
+	_redo_btn.tooltip_text = "Ctrl+Y"
+	_redo_btn.disabled = true
+	_redo_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_redo_btn.pressed.connect(_redo)
+	undo_row.add_child(_redo_btn)
 	var size_row := _row()
 	tools.add_child(size_row)
 	_size_label = Label.new()
@@ -918,6 +955,40 @@ func _mark_dirty() -> void:
 		_dirty = true
 		_refresh_status()
 
+# --- Откат / повтор (batch 14) ---
+func _push_undo() -> void:
+	_undo_stack.append(map.to_dict())
+	while _undo_stack.size() > UNDO_DEPTH:
+		_undo_stack.pop_front()
+	_redo_stack.clear()
+	_refresh_undo_buttons()
+
+func _undo() -> void:
+	if _undo_stack.is_empty():
+		return
+	_redo_stack.append(map.to_dict())
+	map = MapData.from_dict(_undo_stack.pop_back())
+	_mark_dirty()
+	_map_replaced()
+	_refresh_undo_buttons()
+	_status.text = "Undo"
+
+func _redo() -> void:
+	if _redo_stack.is_empty():
+		return
+	_undo_stack.append(map.to_dict())
+	map = MapData.from_dict(_redo_stack.pop_back())
+	_mark_dirty()
+	_map_replaced()
+	_refresh_undo_buttons()
+	_status.text = "Redo"
+
+func _refresh_undo_buttons() -> void:
+	if _undo_btn != null:
+		_undo_btn.disabled = _undo_stack.is_empty()
+	if _redo_btn != null:
+		_redo_btn.disabled = _redo_stack.is_empty()
+
 ## Показать всю карту (batch 13 #6/#14): масштаб по меньшей стороне, с полями под панели.
 func _fit_view() -> void:
 	var vp := get_viewport_rect().size
@@ -989,6 +1060,7 @@ func _on_save() -> void:
 func _on_clear() -> void:
 	_confirm("Clear Map", "Erase everything on this map? It becomes empty space again.", "Clear",
 		func() -> void:
+			_push_undo()
 			map.resize(map.width, map.height)
 			map.fill_all_space()
 			_mark_dirty()
@@ -1000,6 +1072,7 @@ func _on_resize() -> void:
 	var h := int(_h_spin.value)
 	if w == map.width and h == map.height:
 		return
+	_push_undo()
 	map.resize_keep(w, h)
 	_mark_dirty()
 	_map_replaced()
@@ -1020,6 +1093,7 @@ func _on_load() -> void:
 		if loaded == null:
 			_status.text = "Load error"
 			return
+		_push_undo()
 		map = loaded
 		_dirty = false
 		_name_edit.text = fname.get_basename()

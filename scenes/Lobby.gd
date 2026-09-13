@@ -97,6 +97,10 @@ func _ready() -> void:
 		NetHandoff.session.disconnected.connect(_on_client_lost)
 		NetHandoff.session.attach()
 		_status.text = "Connected — waiting for the host's lobby…"
+		# Просим хоста прислать лобби ещё раз (batch 14): снимок, ушедший до того, как
+		# гость открыл этот экран, мог потеряться при быстром переподключении, и гость
+		# сидел бы «в ожидании» вечно. Хост усадит нас (если ещё не усадил) и вышлет всё.
+		NetHandoff.session.send({"k": NetHandoff.K_LOBBY_REQ, "op": "hello"})
 	# Сетевой хост открыл лобби сразу (item 10): ждём подключения, продолжая объявлять
 	# партию в LAN. Гости получают снимок лобби на каждое изменение (batch 12 #8).
 	if _is_host_net:
@@ -202,6 +206,13 @@ func _on_host_message(msg: Dictionary) -> void:
 	if str(msg.get("k", "")) != NetHandoff.K_LOBBY_REQ:
 		return
 	var from := int(msg.get("_from", -1))
+	if str(msg.get("op", "")) == "hello":
+		# Гость открыл лобби (batch 14): усадить, если ещё не усажен, и выслать всё заново.
+		_seat_peer(from)
+		_refresh_host_status()
+		_lobby_changed()
+		_send_lobby_map()
+		return
 	var side := roster.side_of_peer(from)
 	if side < 0:
 		return
@@ -559,6 +570,7 @@ func _build_map(parent: VBoxContainer) -> void:
 	refresh.tooltip_text = "Rescan the map folders"
 	refresh.custom_minimum_size = Vector2(34, 0)
 	refresh.pressed.connect(func() -> void:
+		_map_cache = null  # файл могли перезаписать в редакторе — перечитать
 		_reload_map_items()
 		_refresh_map_preview()
 		_refresh_slots())
@@ -686,6 +698,8 @@ func _build_personal(parent: VBoxContainer) -> void:
 	_row(box, "Selected Color:", color_opt)
 	_preview_swatch = ColorRect.new()
 	_preview_swatch.custom_minimum_size = Vector2(64, 64)
+	# Квадрат, а не полоса во всю ширину колонки (batch 14): VBox растягивал его.
+	_preview_swatch.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	_preview_swatch.color = _my_slot().color if _my_slot() != null else Color.WHITE
 	box.add_child(_preview_swatch)
 	var note := Label.new()
@@ -870,14 +884,19 @@ func _map_zone_count() -> int:
 	var m := _selected_map()
 	if m == null:
 		return MCF.MAX_PLAYERS
-	var seen := {}
-	for y in m.height:
-		for x in m.width:
-			var z := m.get_zone(Vector2i(x, y))
+	var key := m.get_instance_id()
+	var zones: int
+	if _zone_count_cache.has(key):
+		zones = int(_zone_count_cache[key])
+	else:
+		var seen := {}
+		for z in m.zone_owner:
 			if z >= 0:
 				seen[z] = true
+		zones = seen.size()
+		_zone_count_cache[key] = zones
 	# Нет размеченных зон — карта делится автоматически, зоны по числу игроков.
-	return seen.size() if seen.size() > 0 else roster.slots.size()
+	return zones if zones > 0 else roster.slots.size()
 
 func _on_slot_budget(value: float, slot_id: int) -> void:
 	(roster.slots[slot_id] as Roster.Slot).budget = int(value)
@@ -1083,15 +1102,28 @@ func _refresh_personal_enabled() -> void:
 	pass
 
 # --- Предпросмотр карты (item 41) -------------------------------------------
+## Кеш выбранной карты (batch 14): раньше КАЖДАЯ строка таблицы слотов перечитывала
+## файл карты с диска ради числа зон, а превью растрировалось по 6 px на клетку — на
+## большой карте лобби открывалось секундами и вздрагивало на каждом щелчке.
+var _map_cache_path: String = "\u0001"
+var _map_cache: MapData = null
+var _zone_count_cache: Dictionary = {}  # instance id карты -> число зон
+
 func _selected_map() -> MapData:
 	# У гостя своего списка нет — карта та, что прислал хост (batch 12 #8).
 	if _is_client:
 		return _client_map if _client_map != null else MapData.blank_arena()
 	var path: String = _map_paths[_map_opt.selected] if _map_opt != null else ""
-	if path == "":
-		return MapData.blank_arena()
-	var m := MapData.load_from(path)
-	return m if m != null else MapData.blank_arena()
+	if path == _map_cache_path and _map_cache != null:
+		return _map_cache
+	var m: MapData = null
+	if path != "":
+		m = MapData.load_from(path)
+	if m == null:
+		m = MapData.blank_arena()
+	_map_cache_path = path
+	_map_cache = m
+	return m
 
 func _refresh_map_preview() -> void:
 	if _map_preview == null:
@@ -1101,7 +1133,9 @@ func _refresh_map_preview() -> void:
 ## Полный верхний вид карты В КАРТИНКУ, включая нейтральные спавны (item 41). Рисуем
 ## по клеткам в Image — без отдельного вьюпорта, зато детерминированно и без сцены.
 func _render_map_texture(map: MapData) -> ImageTexture:
-	var sc := 6
+	# Масштаб по размеру карты (batch 14): большая карта рисуется по пикселю на
+	# клетку, а не по 36 на каждую — превью всё равно ужимается в 260×180.
+	var sc: int = clampi(int(600 / maxi(1, maxi(map.width, map.height))), 1, 6)
 	var w := maxi(1, map.width) * sc
 	var h := maxi(1, map.height) * sc
 	var img := Image.create(w, h, false, Image.FORMAT_RGB8)

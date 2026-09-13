@@ -199,6 +199,10 @@ func _station_in_a_seat() -> void:
 	ck(st.grid.cell(Vector2i(4, 6)).feature_id == MCF.FEATURE_DRONE_STATION
 			and st.grid.cell(Vector2i(4, 4)).feature_id == "", "station rode along to the new seat cell")
 	ck(op.coord == sh.seat_cell(3), "operator rode along")
+	var drone2 := r.active_drone_of(op)
+	ck(drone2 != null and drone2.home_station == Vector2i(4, 6) and drone2.coord == Vector2i(4, 6),
+			"the drone on the station flew with the shuttle (at %s, home %s)" % [str(drone2.coord) if drone2 else "-", str(drone2.home_station) if drone2 else "-"])
+	ck(drone2 != null and r.operator_controls(drone2), "and is still controllable")
 
 var _pending: Intent = null
 func _on_intent(i: Intent) -> void:

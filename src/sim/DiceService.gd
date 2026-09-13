@@ -65,6 +65,11 @@ func feed_scripted(rolls: Array) -> void:
 func scripted_remaining() -> int:
 	return _scripted.size()
 
+## Сбросить недоеденные броски (batch 14): после рассинхрона они принадлежат другой
+## доске и только испортили бы следующее действие.
+func clear_scripted() -> void:
+	_scripted.clear()
+
 ## Хост: начать запись бросков нового действия (журнал очищается).
 func begin_record() -> void:
 	record_enabled = true

@@ -69,9 +69,17 @@ func release() -> void:
 ## speed — множитель темпа: 2.0 = вдвое быстрее (для заведомо успешных бросков 1+, #46).
 ## wait_remote = true → кнопки нет, но прокрутка не начнётся, пока не позовут release():
 ## бросок принадлежит другому игроку, и все ждут ЕГО нажатия (batch 12 #14).
+## Поколение показа (batch 14): play(), начатый поверх ещё не докрученного (например,
+## ждавшего нажатия ушедшего игрока), делает прежние подписи мусором. Старая корутина,
+## проснувшись, обязана это заметить и тихо выйти — иначе «Invalid assignment of
+## property 'text' … on a base object of type 'Nil'» на освобождённой подписи.
+var _generation: int = 0
+
 func play(dice: Array, manual: bool = false, prompt: String = "", speed: float = 1.0,
 		wait_remote: bool = false) -> void:
 	var rate: float = maxf(speed, 0.1)
+	_generation += 1
+	var my_gen := _generation
 	for c in _row.get_children():
 		c.queue_free()
 	var labels: Array[Label] = []
@@ -96,16 +104,28 @@ func play(dice: Array, manual: bool = false, prompt: String = "", speed: float =
 		rolled.emit()
 	elif wait_remote:
 		await _released
+	if my_gen != _generation or not is_inside_tree():
+		finished.emit()  # показ перебит новым — тот и докрутит; ждущих всё равно отпускаем
+		return
 	for _spin in maxi(1, int(round(SPIN_STEPS / rate))):
 		for lbl in labels:
-			lbl.text = str(randi_range(1, 6))
+			if is_instance_valid(lbl):
+				lbl.text = str(randi_range(1, 6))
 		await get_tree().create_timer(SPIN_DELAY).timeout
+		if my_gen != _generation:
+			finished.emit()
+			return
 	for i in dice.size():
+		if not is_instance_valid(labels[i]):
+			continue
 		labels[i].text = "%d\n%s" % [dice[i]["value"], dice[i]["tag"]]
 		labels[i].add_theme_color_override(
 			"font_color", Color(0.45, 1.0, 0.45) if dice[i]["good"] else Color(1.0, 0.5, 0.5)
 		)
 	await get_tree().create_timer(LAND_PAUSE / rate).timeout
+	if my_gen != _generation:
+		finished.emit()
+		return
 	_prompt.hide()
 	hide()
 	finished.emit()

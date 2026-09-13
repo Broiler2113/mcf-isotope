@@ -148,7 +148,10 @@ Initiative is an order of **sides**, not of individual units, and it is rolled
 placement so the roll can see whether any civilians exist. `initiative_rolled` latches;
 a second call is a no-op.
 
-- **Player 1 always precedes Player 2.** That is fixed.
+- **The players' order is a dice shuffle (batch 14).** Player 1 used to precede Player 2
+  by right of letter; now `begin_match` runs a Fisher–Yates over the player slots with
+  indices drawn from `DiceService` (three d6 per draw), so the host and a guest with the
+  same seed shuffle identically — and the host announces its order over `K_INIT` anyway.
 - If any living civilian is on the map, the **Neutral slot** is inserted at one of three
   positions by `dice.roll_d6() % 3` (equiprobable 0/1/2):
 
@@ -1400,8 +1403,10 @@ top of the hull, and `aboard_vehicle_id` marks the shuttle. Everything else foll
 that one fact:
 
 - **Boarding (1 AP)** from any cell adjacent to the hull into a chosen free seat
-  (`VehicleBoardIntent.seat`, `-1` = first free, the driver's seat first). The UI asks
-  which seat when more than one is free. **Changing seats costs 1 AP**
+  (`VehicleBoardIntent.seat`, `-1` = first free, the driver's seat first). The UI
+  **always asks which seat** (batch 14) — from the vehicle menu and from the soldier's own
+  *Board* button alike — and labels the driver's seat, so a player can deliberately take
+  the wheel or deliberately stay off it. **Changing seats costs 1 AP**
   (`VehicleSeatIntent`); **exiting is free** and goes through your own side — any free
   cell adjacent to *your seat's* hull cell (`vehicle_disembark_cells(veh, unit_id)`).
   Shield bearers and corpse carriers cannot board; enemies can (the majority rule of
@@ -1436,6 +1441,10 @@ that one fact:
   adjacent seat (1 AP, `station_place_cells`); the seat is marked `SEAT_STATION`, the
   hull cell carries `FEATURE_DRONE_STATION`, the drone launches from it, is controlled
   from any adjacent seat, may land back on it, and packing the station up frees the seat.
+  When the shuttle moves, the station moves with it **and so does its drone**
+  (batch 14): every drone tethered to that station gets the new `home_station`, and a
+  drone that was sitting on the station is carried to the new cell. Before this the drone
+  stayed behind over empty floor and lost its operator.
 - **Hull 0**: passengers die where they sit, the seats empty, the destruction roll of
   §16.5 is unchanged.
 - **The AI** boards its shuttle on the first turn, flies toward the enemy with the driver's
@@ -1829,6 +1838,13 @@ has reached the step. Rolls belonging to the AI or to civilians spin by themselv
 everyone. The prompt also states the target before the die moves: "(need 4+)" for hits,
 the armour number for defence, "beat N" for a grab.
 
+**A newer roll cancels an older one cleanly (batch 14).** `DiceRoller.play()` carries a
+generation counter: a play started on top of one still waiting (for a departed player's
+Roll, say) makes the earlier coroutine return quietly when it wakes, instead of writing
+into labels the new play has already freed ("Invalid assignment of property 'text' …
+on a base object of type 'Nil'", the error in the batch-14 report). Waiters are always
+released — `finished` is emitted either way.
+
 **Event kinds.** `_dice_steps` splits an event into one-die-at-a-time steps: `attack`
 (all hit dice, then all penetration dice), `opposed`, `check`, `grenade`. `walk` is the
 odd one out — it rolls nothing. `_play_dice` intercepts it and hands it to `_play_walk`,
@@ -1935,6 +1951,11 @@ MainMenu → Setup → Placement → Main (battle)
   `Vector2i` dictionary per cell. Measured: 179 ms → 7 ms per frame headless on 220×150
   (the 7 ms is mostly engine overhead). `ZOOM_MIN` dropped to 0.06 so a 300×300 board
   fits the screen; *Fit View* does that in one click.
+
+  **Undo and redo (batch 14).** One `MapData.to_dict()` snapshot per action — a paint
+  stroke from press to release, a line, a rectangle, a flood fill, a resize, a clear, a
+  load — on a 40-deep stack; Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z) and two buttons under the
+  tools. A new stroke after an undo drops the redo branch.
 
   **And it is laid out as a workflow (batch 13 #14).** Left column top-down: Tool (Paint /
   Line / Rect / Fill as **toggle buttons** — the active one is lit; keys 1–4; a **brush
@@ -2065,6 +2086,23 @@ Three message kinds (`NetGame`):
 Fog is **presentation only** — `is_visible_to_team` gates targeting, but the resolver's
 outcome does not depend on it, so a `fog_enabled` mismatch between peers cannot desync.
 
+**Every action carries the host's board signature, and a guest that disagrees resyncs
+(batch 14).** `K_ACTION` now includes `h = GameState.digest_hash()` — a hash over every
+unit's id/coord/owner/status/AP/credit/vehicle, every vehicle's origin/owner/durability
+and the turn queue. After applying the action the guest compares its own hash; if it
+differs, if the action the host accepted was *refused* locally, or if scripted dice are
+left over, it sends `K_RESYNC` and the host answers `K_STATE` with the full
+`StateCodec.encode(state)`, which the guest lays into its existing `GameState` through
+`StateCodec.restore_into` (the same path a save is loaded by). The battle screen logs
+"Board out of sync … resynchronising" and "Board resynchronised", re-reads the board
+exactly as after an undo, and play continues from the host's truth. Before this a
+desync stayed silent and surfaced as "Unit not found" on every one of the host's actions.
+
+**The match result is the host's to declare (batch 14).** A guest never runs
+`_winning_team()`; the host sends `K_OVER` with the title and the guest shows the same
+window. A desynced guest can therefore no longer announce "Player B wins" in the middle
+of somebody else's turn.
+
 **Every field an intent carries must be on the wire.** `IntentCodec` gained `T_MOVE_HELD`
 for `MoveHeldIntent` (§8.1) in #100, and the same pass fixed a latent desync: `MoveIntent`
 has always had a `carry_drop` cell, and the codec had never serialized it. A player who
@@ -2152,6 +2190,18 @@ and the map's name. The map itself travels separately as `K_LOBBY_MAP`, only whe
 changes, because a map dictionary is large and a snapshot is sent on every click. Guests
 apply the snapshot through `NetHandoff.apply_rules`, rebuild their (read-only) controls
 from `GameConfig`, and redraw the slot table.
+
+**A guest that opens the lobby asks for it (batch 14).** The client lobby sends
+`K_LOBBY_REQ op=hello` on entry; the host seats the peer if it has not yet, and re-sends
+the snapshot and the map. A snapshot that raced ahead of the guest's scene change can no
+longer leave the guest "waiting for the host's lobby" forever. The host also **caches the
+selected map** instead of re-reading the file for every slot row (`_map_zone_count` used
+to load the map from disk once per slot on every refresh), counts its zones once, and
+renders the preview at one pixel per cell for big maps — that was the "it took a while
+until it loaded".
+
+**Black and White are colours (batch 14)** — appended to `Roster.PALETTE` so no earlier
+index moves — and the personal colour swatch is a square, not a bar.
 
 **Seats.** The host's own slot carries `peer_id = 1` (the ENet server id). When a guest
 connects, `NetworkSession.peer_joined` hands the host its id and `_seat_peer` turns the
@@ -2501,6 +2551,7 @@ number appears elsewhere in this document it is because the source comments cite
 | 103 | One unit per cell is enforced by the board itself — `Grid.place` and `move_occupant` refuse to overwrite an occupant and report failure, so no two soldiers, civilians or AI units can ever share a tile (§2.2); hovering a green move tile draws the **cheapest actual route** to it out of the Dijkstra tree, and every green tile is labelled with what standing there costs out of the movement total (§18.3); a marksman's laser no longer reaches a man in a trench from a tile that is not one, at any range including adjacent (§6.6, §7.3); NPC civilians and the army are driven by **one brain** — the second, cell-at-a-time civilian AI is deleted and a civilian is now an `AIController` with the Neutral owner, so it plans, fragments its movement, fires partial bursts and hauls corpses by the army's rules (§14, §17); the AI uses fragmented movement and partial bursts — `move_credit` is a spendable budget, a step costs score, and a burst orders `ceil(1/p)` bullets instead of the whole magazine (§17.3); an anti-tank sapper cut off by a wall **blasts through it** instead of shuffling along it (§17.3, §7.1); the AI and civilians pick up bodies that block the road and **stack them aside into piles**, the fifth forming a corpse wall (§17.3, §8.4); at least 80% of an army must act each turn and **every** civilian must, enforced by a second forced pass over whoever the plan left idle (§17.2); Player 1 can be an AI too, so AI-vs-AI matches run from Setup or a mid-battle toggle (§17.4); and the camera zooms out to 0.12 so a 60×40 board fits on one screen (§18.4) |
 | 104 | The map editor can be left the way it was entered: the **"To Demo Game"** button is gone, replaced by **"Main Menu"**, which clears `MapHandoff.pending` and returns to `MainMenu.tscn` instead of dumping the designer into a demo battle on the built-in roster (§19) |
 | 105 | A marksman firing **from** a trench is as boxed in as a marksman firing **into** one: the laser cannot climb out of the ditch any more than it could drop into it, so from the trench floor the only reachable target is one lying in the **same continuous run** of trench, along a straight line with no gap — a bend or a break means the beam hits the earth wall. The trench is now symmetric cover against the beam instead of a firing position that ignored its own walls (§6.6, §7.3) |
+| 109 | Batch 14 (the "Isotope issues fix 2" report) — every network action carries the host's board hash and a guest that disagrees, refuses an accepted action, or has dice left over pulls the host's full state and continues (`K_RESYNC` / `K_STATE`, §22.1); the match result is declared by the host only (`K_OVER`); the dice window survives a play started on top of a waiting one (§18.5); the players' initiative order is a dice shuffle, Player A is no longer first by right (§3.2) — and a match with civilians in which both armies are dead no longer hangs the end-of-turn on an all-neutral rotation; boarding a shuttle always offers the seat choice with the driver's seat labelled, and a seat-mounted drone station takes its drone along when the shuttle moves (§16.7); the map editor has undo/redo (§19); a guest entering the lobby asks the host for the snapshot, the host caches the selected map and draws big previews at a pixel per cell (§22.4); Black and White join the palette and the colour swatch is a square; tests: a fourth two-process net pair on the town map with a deliberately corrupted guest board that must recover, and the other pairs are order-agnostic |
 | 108 | Batch 13, part 2 — **the seated shuttle**: passengers sit in the hull cells, are drawn on top, shoot from their seat with their own weapon and AP and can be shot at (+1 hull cover); whoever sits in the driver's seat pays 1 of their own AP per 15 cells flown and there is no crew pool; boarding picks a seat, switching costs 1 AP, exiting is free through the seat's own side; a heavy hit kills the passenger on the landing cell, everyone else aboard rolls defence, the hull takes its damage; the hull is the shuttle's only component; a dead passenger holds the seat until pulled out; a drone station mounts in an empty seat and rides along; the AI flies and fires from seats (§16.7). **The borg**: a 100-point 1×1 vehicle played as a unit — the operator stays on the grid with 3 AP, 9 movement, −2 to their armour threshold, a 12/4 gun (abilities kept; the engineer keeps its own gun and builds in batches of three per AP), fire immunity, no trenches, AV mines hurt the hull, small arms never do; at hull 0 the operator dies and a 4+ explodes it in a 3×3, otherwise a wreck stays; a dead operator is pushed out by whoever boards next; the AI climbs into one it finds (§16.8). All unit stats are now read through `UnitInstance.speed()/armor()/fire_range()/rate_of_fire()` |
 | 107 | Batch 13 — sight is unlimited in every direction and stops only at walls and closed airlocks: units, corpses and vehicle hulls never block it, and a vehicle sees through its crew from every hull cell (§11); a player who leaves the lobby, the deployment or the battle is replaced by a Hard AI, and a host left alone keeps playing (§22.4); *Save Game* is back in the side panel and the pause button just says Pause (§18.6); a corpse in an airlock holds the doors open and blocks welding (§9.4); an eraser tool on the purchase screen (§19); the map editor draws in constant time from a one-pixel-per-cell base texture with viewport culling and LOD, resizes without wiping, and is laid out as a workflow with lit toggle buttons, a brush size and confirmations (§19); a match freezes with a *Match Over* window the moment one team is left (§24); the guest is seated in a hand-reserved Player slot and can re-request the match setup if it missed it, and a typed budget survives a colour change (§22.4); mirrored placement is live — the mirror follows every change, there is no stamp step and a mirrored guest confirms automatically (§19); the vehicle component panel stands beside the action menu instead of under it (§18.6) |
 | 106 | Large-scale optimization pass — as with #101 and #102, **no rule, number or decision changed**, only the cost of computing them, proved by a byte-identical golden trace over a 360-unit, 300-corpse, 6-round battle. `team_sees` answers a point query directly instead of rebuilding the entire team's fog of war for every shot; airlocks are re-evaluated from their own 3×3 neighbourhood instead of by sweeping all units; the AI's geodesic field became `GeoField` — a flat `PackedInt32Array` built by an allocation-free wave — instead of a dictionary of `Vector2i` keys; the Dijkstra frontier uses tombstones with remembered slots, in-place decrease-key and a monotone early break, all three provably picking the same cell as the old linear scan; `GridCell.burning` lets the fire check exit before touching a single neighbour; and the AI stopped rebuilding enemy lists, geodesic stamps and per-candidate dictionaries inside its hottest loops. A six-round battle at 360 units went from 31.1 s to 3.90 s (§27.14–§27.20) |

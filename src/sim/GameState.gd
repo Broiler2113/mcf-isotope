@@ -97,6 +97,26 @@ func active_player() -> int:
 ## Восстановление мутирует ТЕ ЖЕ объекты (units/vehicles/cells), чтобы внешние
 ## ссылки (выбранный юнит в UI и т. п.) оставались валидными. Ссылки на юнитов
 ## в клетках восстанавливаются по id.
+## Короткая подпись доски (batch 14): по ней гость сверяет свою доску с доской хоста
+## после каждого действия. Юниты, машины и очередь ходов; клетки не включены — они
+## меняются только действиями, а их расхождение всё равно всплывёт через юнитов.
+func digest_hash() -> int:
+	var parts: PackedStringArray = []
+	var ids: Array = units.keys()
+	ids.sort()
+	for id: int in ids:
+		var u: UnitInstance = units[id]
+		parts.append("%d:%d,%d:%d:%d:%d:%d:%d:%d" % [u.id, u.coord.x, u.coord.y, u.owner,
+			u.status, u.remaining_ap, u.move_credit, u.aboard_vehicle_id, u.borg_id])
+	var vids: Array = vehicles.keys()
+	vids.sort()
+	for id: int in vids:
+		var v: Vehicle = vehicles[id]
+		parts.append("v%d:%d,%d:%d:%d:%d:%d" % [v.id, v.origin.x, v.origin.y, v.owner,
+			v.durability, v.ap, 1 if v.wrecked else 0])
+	parts.append("t%d:%d:%s" % [turns.round_number, turns.active_index, str(turns.round_order)])
+	return "|".join(parts).hash()
+
 func snapshot() -> Dictionary:
 	var us: Array = []
 	for u: UnitInstance in units.values():

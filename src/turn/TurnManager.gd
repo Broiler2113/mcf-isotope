@@ -45,6 +45,15 @@ func begin_match(all_units: Array, dice: DiceService, sides: Array = []) -> void
 		return
 	initiative_rolled = true
 	round_order = _player_slots(all_units, sides)
+	# Жребий среди игроков (batch 14): игрок A больше не ходит первым по праву буквы —
+	# порядок тасуется кубиками (Фишер–Йетс на d6), поэтому у хоста и гостя с одним
+	# зерном он одинаков, а в сети хост всё равно объявляет свой (K_INIT).
+	if dice != null and round_order.size() > 1:
+		for i in range(round_order.size() - 1, 0, -1):
+			var j := _dice_index(dice, i + 1)
+			var t: int = round_order[i]
+			round_order[i] = round_order[j]
+			round_order[j] = t
 	if _has_living(all_units, MCF.Owner.NEUTRAL):
 		# d6 % 3 даёт равновероятные 0/1/2 — позиция слота мирных в порядке.
 		# Бросок сохранён ровно таким, каким был на двоих: при двух игроках это
@@ -54,9 +63,18 @@ func begin_match(all_units: Array, dice: DiceService, sides: Array = []) -> void
 	active_index = _open_round(all_units)
 	active_player_changed.emit(active_player())
 
-## Слоты игроков для начального порядка. Игроки идут строго по номерам: игрок A
-## всегда раньше игрока B — это правило дуэли, и оно просто распространилось на
-## всех остальных, а не заменилось жеребьёвкой.
+## Случайный индекс 0..n−1 из общего потока кубиков: три d6 дают 216 значений, остаток
+## распределён достаточно ровно для жребия на десяток слотов.
+func _dice_index(dice: DiceService, n: int) -> int:
+	if n <= 1:
+		return 0
+	var v := 0
+	for _i in 3:
+		v = v * 6 + (dice.roll_d6() - 1)
+	return v % n
+
+## Слоты игроков для начального порядка — по номерам; жребий среди них бросает
+## begin_match (batch 14), раньше игрок A всегда ходил первым.
 func _player_slots(all_units: Array, sides: Array) -> Array[int]:
 	var out: Array[int] = []
 	if not sides.is_empty():

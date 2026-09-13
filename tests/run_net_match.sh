@@ -7,7 +7,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 GODOT="${GODOT:-godot}"
 fail=0
-for pair in "asym" "mirror" "leave"; do
+for pair in "asym" "mirror" "leave" "town"; do
   echo "=== net match: $pair ==="
   "$GODOT" --headless --script "res://tests/net_host_$pair.gd" > "/tmp/mcf_net_host_$pair.log" 2>&1 &
   hpid=$!

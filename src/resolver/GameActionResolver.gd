@@ -4885,8 +4885,15 @@ func play_civilian_slots() -> ActionResult:
 	var out := ActionResult.success()
 	# Играем ЛЮБОЙ нейтральный слот: общий (§до сбора групп) и слот каждой группы (§15) —
 	# у нейтральной стороны контроллера нет, её ход всегда проводит резолвер.
+	# Каждый нейтральный слот играется не больше раза за передачу хода (batch 14): когда
+	# обе армии перебиты, очередь состоит из одних жителей, и без этой памяти круг
+	# 0 → 1 → 2 → 0 … не кончался никогда — бой зависал на первом же EndTurn.
+	var played: Dictionary = {}
 	while MCF.is_neutral(state.active_player()):
 		var slot := state.turns.active_index
+		if played.has(slot):
+			break
+		played[slot] = true
 		var res := advance_civilians(state.active_player())
 		out.log_lines.append_array(res.log_lines)
 		# Метка «сейчас ходит вот этот слот» (item 6): по ней экран подсвечивает нейтральную
@@ -6094,11 +6101,13 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 	# тоже едет с машиной.
 	var riders: Array = []
 	var station_seats: Array[int] = []
+	var station_from: Dictionary = {}  # seat -> прежняя клетка станции (для дронов)
 	if seated:
 		for i in veh.seats.size():
 			var sid: int = veh.seats[i]
 			if sid == Vehicle.SEAT_STATION:
 				station_seats.append(i)
+				station_from[i] = veh.seat_cell(i)
 				var sc := state.grid.cell(veh.seat_cell(i))
 				if sc.feature_id == MCF.FEATURE_DRONE_STATION:
 					sc.feature_id = ""
@@ -6201,10 +6210,19 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 	for pair in riders:
 		_seat_unit(veh, pair[1], int(pair[0]))
 	for si in station_seats:
-		var nc := state.grid.cell(veh.seat_cell(si))
+		var new_c := veh.seat_cell(si)
+		var nc := state.grid.cell(new_c)
 		nc.set_feature(MCF.FEATURE_DRONE_STATION, veh.owner)
 		if driver != null:
 			nc.station_operator_id = _station_operator_aboard(veh)
+		# Дроны этой станции (batch 14): привязь переезжает вместе с ней, а дрон, сидевший
+		# на станции, летит с челноком — раньше он оставался висеть над пустым полом.
+		var old_c: Vector2i = station_from[si]
+		for d in state.all_units():
+			if d.is_drone and d.is_alive() and d.home_station == old_c:
+				d.home_station = new_c
+				if d.coord == old_c:
+					d.coord = new_c
 	if seated:
 		# Оплата водителем (S1): сперва остаток, потом по ОД за каждые 15 клеток.
 		var cost: int = int(plan["cost"])

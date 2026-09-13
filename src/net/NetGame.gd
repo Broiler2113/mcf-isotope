@@ -16,8 +16,16 @@ signal action_applied(intent: Intent, result: ActionResult)
 signal outgoing(msg: Dictionary)
 ## Клиент принял авторитетный порядок инициативы хоста (#53) — обновить HUD.
 signal initiative_synced()
+## Гость подтянул доску хоста целиком (batch 14) — экран обязан перечитать состояние.
+signal resynced()
+## Гость сверил доску с хостом после действия и она не сошлась — просьба уже ушла.
+signal desync_detected()
 
 const K_INTENT := "intent"   # клиент → хост: «прошу выполнить моё намерение»
+## Гость обнаружил, что его доска разошлась с доской хоста (batch 14): просит снимок.
+const K_RESYNC := "resync"
+## Хост → гость: полный снимок состояния (StateCodec) в ответ на K_RESYNC.
+const K_STATE := "state"
 const K_ACTION := "action"   # хост → клиент: «авторитетное действие + броски»
 const K_INIT := "init"       # хост → клиент: порядок инициативы на всю партию
 
@@ -77,10 +85,16 @@ func receive(msg: Dictionary) -> void:
 			if not is_host:
 				var it := _decode(msg)
 				if it != null:
-					_client_apply(it, msg.get("r", []))
+					_client_apply(it, msg.get("r", []), int(msg.get("h", 0)))
 		K_INIT:
 			if not is_host:
 				_client_adopt_initiative(msg)
+		K_RESYNC:
+			if is_host:
+				outgoing.emit({"k": K_STATE, "s": StateCodec.encode(state)})
+		K_STATE:
+			if not is_host:
+				_client_restore(msg)
 
 func _decode(msg: Dictionary) -> Intent:
 	var raw: Variant = msg.get("i")
@@ -132,13 +146,39 @@ func _host_resolve_and_send(intent: Intent) -> void:
 	var rolls := state.dice.take_log()
 	state.dice.record_enabled = false
 	if result.ok:
-		outgoing.emit({"k": K_ACTION, "i": IntentCodec.encode(intent), "r": rolls})
+		# Подпись доски ПОСЛЕ действия (batch 14): гость сверит с ней свою.
+		outgoing.emit({"k": K_ACTION, "i": IntentCodec.encode(intent), "r": rolls,
+			"h": state.digest_hash()})
 	action_applied.emit(intent, result)
 
 # --- Клиент: воспроизведение с присланными бросками ---
-func _client_apply(intent: Intent, rolls: Array) -> void:
+## Просьба о снимке уже ушла — до его прихода новые расхождения не считаем.
+var _resync_pending: bool = false
+
+func _client_apply(intent: Intent, rolls: Array, expected: int = 0) -> void:
 	state.dice.feed_scripted(rolls)
-	action_applied.emit(intent, _resolve_showing_ap(intent))
+	var result := _resolve_showing_ap(intent)
+	# Сверка с хостом (batch 14): действие, которое у хоста прошло, а у нас отвергнуто,
+	# недоеденные или недостающие броски, иная подпись доски — всё это рассинхрон. Раньше
+	# он копился молча и всплывал как «Unit not found» на каждое действие хоста; теперь
+	# гость просит у хоста полный снимок и продолжает с него.
+	var drift := not result.ok or state.dice.scripted_remaining() > 0 \
+			or (expected != 0 and state.digest_hash() != expected)
+	if drift and not _resync_pending:
+		_resync_pending = true
+		state.dice.clear_scripted()
+		outgoing.emit({"k": K_RESYNC})
+		desync_detected.emit()
+	action_applied.emit(intent, result)
+
+func _client_restore(msg: Dictionary) -> void:
+	var data: Variant = msg.get("s")
+	if not (data is Dictionary):
+		return
+	StateCodec.restore_into(state, data)
+	state.dice.clear_scripted()
+	_resync_pending = false
+	resynced.emit()
 
 ## Резолв + событие «точка ОД погасла» (#99). Остаток снимаем ДО действия, потому что
 ## к моменту сигнала состояние уже изменено, и по нему не понять, чего ход стоил. Так
