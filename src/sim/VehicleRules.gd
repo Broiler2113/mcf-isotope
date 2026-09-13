@@ -71,6 +71,9 @@ static func cell_entry(state: GameState, cell: Vector2i, self_id: int) -> Dictio
 	# идёт дальше, к тому, кто в ней стоит.
 	var airlock: bool = c.feature_id == MCF.FEATURE_AIRLOCK
 
+	# Свой пассажир в кресле (batch 13) — часть машины, не препятствие.
+	if self_id != -1 and c.occupant != null and c.occupant.aboard_vehicle_id == self_id:
+		return ok.call(COST_NORMAL)
 	# Живой юнит: давится. Щитоносец — особый случай (стоп + урон машине).
 	if c.occupant != null and c.occupant.is_alive():
 		if c.occupant.stats.special_ability_id == MCF.ABILITY_SHIELD_BEARER:

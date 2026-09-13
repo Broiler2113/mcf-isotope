@@ -60,8 +60,18 @@ var civilian_active: bool = false
 var neutral_group: int = 0
 ## Удерживаемого юнита нельзя переносить более одного раза за ход (§3.4).
 var carried_this_round: bool = false
-## Внутри машины (§техника): id машины, -1 = на поле. Экипаж/пассажир не на сетке.
+## Внутри машины (§техника): id машины, -1 = на поле. Экипаж танка не на сетке
+## (coord = OFFBOARD); пассажир челнока сидит В КЛЕТКЕ следа (batch 13) — у него
+## настоящая координата, и он под обстрелом, как любой боец.
 var aboard_vehicle_id: int = -1
+## Сидит в борге (batch 13, «Borg characteristics»): id машины, −1 = нет. Оператор
+## остаётся на сетке в клетке борга и играется как боец — только с числами борга:
+## см. speed() / armor() / fire_range() / rate_of_fire() / max_ap() ниже.
+var borg_id: int = -1
+## Строительные кредиты инженера в борге (batch 13): {feature_id: осталось}. 1 ОД
+## покупает BORG_BUILD_BATCH построек одного типа, класть их можно по одной между другими
+## действиями. Сгорают на границе раунда.
+var build_credits: Dictionary = {}
 ## Остаток «бесплатных» окопов в текущей копке (§3.7): за 1 ОД пехота роет 3, инженер 6.
 ## Сбрасывается при любом другом действии и в конце хода.
 var dig_credits: int = 0
@@ -96,9 +106,33 @@ func _init(p_id: int, p_stats: UnitStats, p_coord: Vector2i, p_owner: int) -> vo
 ## Сколько ОД юнит получает в свою активацию. Обычно MCF.AP_PER_ACTIVATION, но
 ## статы могут задать своё число — у командира их 3 (#66).
 func max_ap() -> int:
+	if borg_id != -1:
+		return maxi(MCF.BORG_AP, stats.action_points if stats != null else 0)
 	if stats != null and stats.action_points > 0:
 		return stats.action_points
 	return MCF.AP_PER_ACTIVATION
+
+# --- Действующие характеристики (batch 13): свои, либо борга, если боец сидит в нём ---
+## Инженер в борге сохраняет собственное оружие (B8), остальные стреляют из бортового:
+## дальность 12, скорострельность 4. Особые способности при этом остаются (B3): у
+## марксмана дальность бесконечна и здесь, лазер её и не читает.
+func _borg_gun() -> bool:
+	return borg_id != -1 and stats != null and stats.special_ability_id != MCF.ABILITY_ENGINEER
+
+func speed() -> int:
+	return MCF.BORG_SPEED if borg_id != -1 else stats.speed
+
+func armor() -> int:
+	return maxi(1, stats.armor_threshold - MCF.BORG_ARMOR_BONUS) if borg_id != -1 \
+			else stats.armor_threshold
+
+func fire_range() -> float:
+	if _borg_gun() and not is_inf(stats.fire_range) and stats.fire_range > 0.0:
+		return MCF.BORG_RANGE
+	return stats.fire_range
+
+func rate_of_fire() -> int:
+	return MCF.BORG_ROF if _borg_gun() else stats.rate_of_fire
 
 func is_alive() -> bool:
 	return status == MCF.Status.ALIVE
@@ -122,6 +156,8 @@ func reset_ap() -> void:
 	dragging = NOT_DRAGGING
 	# Недоставленные мины через раунд не переносятся (item 45).
 	mine_credits = 0
+	# Строительные кредиты борга сгорают в конце хода (batch 13, B7).
+	build_credits = {}
 
 func kill() -> void:
 	status = MCF.Status.CORPSE

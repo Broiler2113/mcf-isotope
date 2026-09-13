@@ -114,6 +114,7 @@ func snapshot() -> Dictionary:
 			"neutral_group": u.neutral_group,
 			"carried_this_round": u.carried_this_round,
 			"aboard_vehicle_id": u.aboard_vehicle_id, "dig_credits": u.dig_credits,
+			"borg_id": u.borg_id, "build_credits": u.build_credits.duplicate(),
 			"ldf_wall_used": u.ldf_wall_used, "move_credit": u.move_credit,
 			"mine_credits": u.mine_credits,
 			"carried_corpses": u.carried_corpses, "dragging": u.dragging,
@@ -174,6 +175,8 @@ func restore(snap: Dictionary) -> void:
 		u.neutral_group = rec.get("neutral_group", 0)
 		u.carried_this_round = rec["carried_this_round"]
 		u.aboard_vehicle_id = rec["aboard_vehicle_id"]
+		u.borg_id = int(rec.get("borg_id", -1))
+		u.build_credits = (rec.get("build_credits", {}) as Dictionary).duplicate()
 		u.dig_credits = rec["dig_credits"]
 		u.ldf_wall_used = rec["ldf_wall_used"]
 		u.move_credit = rec["move_credit"]

@@ -175,7 +175,9 @@ func _collect_enemies() -> void:
 	_enemies = []
 	_threats = []
 	for u: UnitInstance in _state.all_units():
-		if u.owner == owner or not u.is_alive() or u.aboard_vehicle_id != -1:
+		# Экипаж танка вне поля (OFFBOARD) — не цель; пассажир челнока сидит в клетке
+		# следа (batch 13) и стреляет оттуда — цель и угроза, как любой боец.
+		if u.owner == owner or not u.is_alive() or not _state.grid.in_bounds(u.coord):
 			continue
 		_threats.append(u)
 		# К мирным-НПС ИИ не рвётся и целями их не считает (#96).
@@ -204,7 +206,7 @@ func _plannable_units() -> Array:
 ## Все предложения одного бойца: [{id, coord, score}]. Текущая клетка тоже кандидат —
 ## иногда лучшее решение это никуда не идти и просто стрелять.
 func _candidates_for(u: UnitInstance, out: Array) -> void:
-	var budget: int = u.move_credit if u.move_credit > 0 else u.stats.speed
+	var budget: int = u.move_credit if u.move_credit > 0 else u.speed()
 	if u.remaining_ap <= 0 and u.move_credit <= 0:
 		budget = 0
 	var reach := _r.reachable_for(u, budget) if budget > 0 else null
@@ -310,7 +312,7 @@ func _fire_ease(shooter: UnitInstance, from: Vector2i, target: UnitInstance,
 		return -1.0
 	var dist := Combat.distance(from, to_coord)
 	var marksman := shooter.stats.special_ability_id == MCF.ABILITY_MARKSMAN
-	var need := Combat.hit_number(dist, shooter.stats.fire_range)
+	var need := Combat.hit_number(dist, shooter.fire_range())
 	if not marksman and need >= 7:
 		return -1.0
 	# Боец в окопе недосягаем с дистанции (§3.7) — и для нас, и для врага. Марксману
@@ -346,7 +348,7 @@ func _build_lanes(allies: Array) -> void:
 		if a.stats.special_ability_id == MCF.ABILITY_MARKSMAN:
 			continue  # лазер бьёт сквозь всё, ему створ не перекрыть
 		var from: Vector2i = a.coord
-		var rng: float = a.stats.fire_range
+		var rng: float = a.fire_range()
 		var aid: int = a.id
 		for e: UnitInstance in _enemies:
 			var to: Vector2i = e.coord
@@ -382,7 +384,7 @@ func _build_exposure() -> void:
 	var gh := grid.height
 	for e: UnitInstance in _threats:
 		var marksman := e.stats.special_ability_id == MCF.ABILITY_MARKSMAN
-		var rng: float = e.stats.fire_range
+		var rng: float = e.fire_range()
 		for dir: Vector2i in Grid.N8:
 			var dxs := dir.x
 			var dys := dir.y
@@ -469,7 +471,7 @@ func _fire_near(coord: Vector2i) -> bool:
 	return false
 
 func _unit_value(u: UnitInstance) -> float:
-	var v := 3.0 + float(u.stats.rate_of_fire)
+	var v := 3.0 + float(u.rate_of_fire())
 	if u.stats.special_ability_id != "" \
 			and u.stats.special_ability_id != MCF.ABILITY_CIVILIAN:
 		v += 3.0

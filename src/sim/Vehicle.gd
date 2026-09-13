@@ -22,6 +22,9 @@ const SEAT_OFFSETS := [Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1), Vector2i(
 
 ## Водитель всегда в правой-верхней клетке — слот 1.
 const DRIVER_SEAT := 1
+## Место занято станцией дронов (batch 13, «Shuttle changes» §4): в него никто не сядет,
+## пока оператор не заберёт станцию обратно.
+const SEAT_STATION := -2
 
 var id: int = -1
 var type_id: String = ""
@@ -198,6 +201,27 @@ func first_free_seat() -> int:
 		if seats[i] == -1:
 			return i
 	return -1
+
+## Свободные места (batch 13): −1 в массиве; станция и труп место держат.
+func free_seats() -> Array[int]:
+	ensure_seats()
+	var out: Array[int] = []
+	for i in seats.size():
+		if seats[i] == -1:
+			out.append(i)
+	return out
+
+## Машина с посадочными местами (челнок): экипаж сидит в клетках следа.
+func seated() -> bool:
+	return VehicleDB.is_seated(type_id)
+
+## Борг (batch 13): одноместная машина, которой управляют как бойцом.
+func is_borg() -> bool:
+	return VehicleDB.is_borg(type_id)
+
+## Оператор борга — единственный «экипаж»; −1, если пусто.
+func borg_operator() -> int:
+	return occupants[0] if not occupants.is_empty() else -1
 
 
 # --- чистая геометрия (статика, без состояния) ----------------------------

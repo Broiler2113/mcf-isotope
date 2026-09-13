@@ -40,19 +40,29 @@ const VEHICLES := {
 	"shuttle": {
 		"name": "Space Shuttle",
 		"size": [2, 2],
-		"durability": 2,
+		"durability": 4,
 		"crew_capacity": 4,
 		"speed": 30,
 		"has_facing": false,
 		"cost": 125,
 		"weapons": {},
-		# Едущий тратит 2 ОД (только водитель), пассажиры без штрафа.
-		"driver_move_ap": 2,
-		# Пассажиры внутри при обстреле: +1 к защите; противотанковый выстрел —
-		# бросок защиты 1 кубиком со штрафом −2.
-		"passenger_defense_bonus": 1,
-		# Столкновение с 12+ объектами за ход — минус 1 прочности.
-		"collision_durability_threshold": 12,
+		# Посадочные места (batch 13, «Shuttle changes»): пассажиры сидят В КЛЕТКАХ
+		# следа, видны поверх корпуса, стреляют со своего места и сами под обстрелом.
+		# Ходит машина за ОД ВОДИТЕЛЯ: 1 ОД за каждые SHUTTLE_CELLS_PER_AP клеток.
+		"seated": true,
+	},
+	# Борг (batch 13, «Borg characteristics»): одноместная машина 1×1 без узлов, кроме
+	# корпуса. Играется как боец — см. UnitInstance.borg_id и MCF.BORG_*.
+	"borg": {
+		"name": "Borg",
+		"size": [1, 1],
+		"durability": 2,
+		"crew_capacity": 1,
+		"speed": 9,
+		"has_facing": false,
+		"cost": 100,
+		"weapons": {},
+		"borg": true,
 	},
 }
 
@@ -63,7 +73,19 @@ const VEHICLES := {
 const DESTRUCTION := {
 	"tank": {"explode_min": 4, "explode_radius": 2, "wreck": true},
 	"shuttle": {"explode_min": 1, "explode_max": 2, "explode_radius": 1, "wreck": false},
+	# Борг: 4+ — взрыв радиуса 1 (квадрат 3×3, как противотанковый заряд), и тогда от
+	# него ничего не остаётся; 1–3 — остов, занимающий клетку.
+	"borg": {"explode_min": 4, "explode_radius": 1, "wreck": true, "square": true,
+		"wreck_unless_exploded": true},
 }
+
+## Машина с посадочными местами: экипаж сидит в клетках следа (челнок).
+static func is_seated(id: String) -> bool:
+	return bool(VEHICLES.get(id, {}).get("seated", false))
+
+## Борг — одноместная машина, которой управляют как бойцом.
+static func is_borg(id: String) -> bool:
+	return bool(VEHICLES.get(id, {}).get("borg", false))
 
 static func get_vehicle(id: String) -> Dictionary:
 	return VEHICLES.get(id, {})
