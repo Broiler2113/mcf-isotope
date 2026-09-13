@@ -42,7 +42,7 @@ const SteamChrome = preload("res://src/ui/SteamChrome.gd")
 enum Mode {NONE, MENU, MOVE, SHOOT, GRAB, ITEM, PUSH, DRONE_FLY, BUILD, BUILD_WALL, BREAK, DPMG_FIRE, DIG, CARRY_DROP,
 	CORPSE_DROP, WELD, MOVE_HELD, MINE, DISARM,
 	GROUP_MENU, GROUP_MOVE,
-	VEH_MENU, VEH_MOVE, VEH_TURN, VEH_CANNON, VEH_DISEMBARK,
+	VEH_MENU, VEH_MOVE, VEH_TURN, VEH_CANNON, VEH_DISEMBARK, VEH_SEAT, VEH_BOARD_SEAT,
 	DRAW, ERASE, RULER}
 
 ## Линейка (item 11): два конца и клетка под курсором. Инструмент чисто зрительский —
@@ -69,6 +69,9 @@ const K_DRAW := "draw"
 ## Значения кубиков давно известны (их бросил хост при резолве), по сети едет только
 ## жест — поэтому рассинхрона быть не может, а ждать нажатия обязаны все.
 const K_ROLL := "roll"
+## Слот стал ИИ посреди боя (batch 13 #2): хост сообщает гостям, что ушедшего игрока
+## ведёт машина — их ростер перестаёт ждать его бросков.
+const K_SIDE_AI := "side_ai"
 
 ## Режимы, чей предпросмотр читает клетку под курсором. Каждому движению мыши нужен
 ## свой кадр (#97), иначе картинка обновляется только когда камера что-то дёрнет —
@@ -181,6 +184,8 @@ const BOX_DRAG_THRESHOLD := 8.0
 var selected_vehicle_id: int = -1
 var veh_move_targets: Dictionary = {}
 var veh_disembark_id: int = -1
+## Кто садится в выбранное кресло челнока (batch 13): id пехотинца в режиме VEH_BOARD_SEAT.
+var veh_board_id: int = -1
 var _animating: bool = false
 
 ## Пауза между действиями ИИ (#52): бойцы должны ходить ОДИН ЗА ДРУГИМ и на глазах,
@@ -271,6 +276,11 @@ var _comp_moved := false
 ## доигранное останется доигранным.
 var _paused: bool = false
 var _pause_btn: Button = null
+## Партия окончена (batch 13 #9): осталась одна команда с живыми бойцами (или ни одной).
+## С этого момента доска замирает — ни ИИ, ни кнопки, ни сетевые намерения её не двигают;
+## остаётся смотреть на поле, сохранить и уйти в меню.
+var _match_over: bool = false
+var _victory_overlay: Control = null
 
 ## Какой слот отыгрывается ПРЯМО СЕЙЧАС, когда это не active_player (item 6).
 ##
@@ -498,7 +508,7 @@ func _open_match() -> void:
 func _kick_if_ai() -> void:
 	# В сети (batch 12 #15) ИИ ведёт хост, и шаг ему даётся только когда очередь показа
 	# пуста — иначе два таймера подняли бы его дважды за одно действие.
-	if state == null or _animating or _paused or _net_playing:
+	if state == null or _animating or _paused or _net_playing or _match_over:
 		return
 	var ac: PlayerController = controllers.get(state.active_player())
 	if ac == null or ac.is_local_human():
@@ -886,7 +896,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		_toggle_pause()
 		get_viewport().set_input_as_handled()
 		return
-	# Ctrl+S — сохранить партию (item 6/19): кнопки Save в правом меню больше нет.
+	# Ctrl+S — сохранить партию (item 6/19); кнопка Save в правом меню тоже есть (batch 13 #3).
 	if event is InputEventKey and event.pressed and not event.echo \
 			and event.keycode == KEY_S and event.ctrl_pressed:
 		if replay == null:
@@ -1329,10 +1339,31 @@ func _handle_click(coord: Vector2i) -> void:
 				_submit(VehicleDisembarkIntent.new(veh_disembark_id, coord))
 				return
 			_veh_back_to_menu()
+		Mode.VEH_SEAT:
+			# Пересадка пассажира (batch 13 S6): клик по подсвеченному креслу.
+			var pu := _selected_unit()
+			var pveh := resolver.seated_vehicle_of(pu)
+			if pu != null and pveh != null and item_cells.has(coord):
+				_submit(VehicleSeatIntent.new(pu.id, _seat_index_at(pveh, coord)))
+				return
+			_back_to_menu()
+		Mode.VEH_BOARD_SEAT:
+			# Посадка в выбранное кресло (batch 13 S6).
+			var bveh := _selected_vehicle()
+			if bveh != null and veh_board_id != -1 and item_cells.has(coord):
+				_submit(VehicleBoardIntent.new(veh_board_id, bveh.id, _seat_index_at(bveh, coord)))
+				return
+			_veh_back_to_menu()
 		_:
-			# Клик по корпусу своей машины — выбрать её.
+			# Клик по корпусу своей машины — выбрать её. Если в этой клетке сидит свой
+			# пассажир (batch 13), первый клик берёт его, повторный — саму машину.
 			var cveh := resolver.controllable_vehicle_at(coord, state.active_player())
 			if cveh != null and _can_control(cveh.owner):
+				var rider := _unit_at(coord)
+				if rider != null and rider.is_alive() and rider.aboard_vehicle_id == cveh.id \
+						and rider.owner == state.active_player() and selected_id != rider.id:
+					_select(rider)
+					return
 				_select_vehicle(cveh)
 				return
 			var pick := _cycle_pick(coord)
@@ -1347,8 +1378,16 @@ func _handle_click(coord: Vector2i) -> void:
 ## лезет в state.grid.cell(coord) и получает null. Наружу он выходит только через
 ## Disembark в меню самой машины.
 func _is_own_active(u: UnitInstance) -> bool:
-	return u != null and u.is_alive() and u.aboard_vehicle_id == -1 \
+	return u != null and u.is_alive() and _on_board(u) \
 			and u.owner == state.active_player() and _can_control(u.owner)
+
+## Стоит ли юнит на сетке: экипаж танка вынесен за поле (OFFBOARD), пассажир челнока
+## сидит в клетке следа (batch 13) — рисуется, выбирается и стреляет оттуда.
+func _on_board(u: UnitInstance) -> bool:
+	return u != null and state.grid.in_bounds(u.coord)
+
+func _is_passenger(u: UnitInstance) -> bool:
+	return u != null and resolver.seated_vehicle_of(u) != null
 
 ## Может ли ЛОКАЛЬНЫЙ игрок командовать этой стороной. Проверка только на networked
 ## была дырой (#60): в hotseat она пропускала всех, поэтому на ходу ИИ поле
@@ -1479,6 +1518,10 @@ func _veh_back_to_menu() -> void:
 	var veh := _selected_vehicle()
 	if veh != null and veh.alive() and _can_control(veh.owner):
 		_select_vehicle(veh)
+	elif selected_id != -1:
+		# Режим высадки открыт из меню БОЙЦА (пассажир челнока, оператор борга, batch 13):
+		# отмена возвращает его меню, а не снимает выделение.
+		_back_to_menu()
 	else:
 		_deselect()
 
@@ -1488,7 +1531,7 @@ func _open_vehicle_menu(veh: Vehicle) -> void:
 		c.queue_free()
 	var spec := VehicleDB.get_vehicle(veh.type_id)
 	var vb := _scroll_menu(_menu, spec.get("name", veh.type_id))
-	var acting: bool = veh.ap > 0 and _can_control(veh.owner)
+	var acting: bool = resolver.vehicle_ap(veh) > 0 and _can_control(veh.owner)
 
 	# Докатить остаток прошлого движения можно и без ОД (#97) — как у пехоты.
 	var veh_credit := resolver.vehicle_move_credit(veh)
@@ -1506,7 +1549,7 @@ func _open_vehicle_menu(veh: Vehicle) -> void:
 		vb.add_child(turn_btn)
 
 	var gun: Dictionary = spec.get("weapons", {}).get("main_gun", {})
-	if acting and not gun.is_empty() and veh.ap >= int(gun.get("ap_cost", 1)) \
+	if acting and not gun.is_empty() and resolver.vehicle_ap(veh) >= int(gun.get("ap_cost", 1)) \
 			and veh.cannon_shots_this_round < int(gun.get("max_per_turn", 2)):
 		var cannon_btn := Button.new()
 		cannon_btn.text = "Fire Cannon (%d AP)" % int(gun.get("ap_cost", 1))
@@ -1524,17 +1567,30 @@ func _open_vehicle_menu(veh: Vehicle) -> void:
 			board_btn.pressed.connect(_veh_board.bind(uid))
 			vb.add_child(board_btn)
 
-	# Высадка экипажа.
-	if _can_control(veh.owner) and not veh.occupants.is_empty() \
-			and not resolver.vehicle_disembark_cells(veh).is_empty():
+	# Высадка экипажа. Из челнока — бесплатно и через свой борт (batch 13 S7).
+	if _can_control(veh.owner) and not veh.occupants.is_empty():
 		for uid in veh.occupants:
 			var u := state.get_unit(uid)
-			if u == null:
+			if u == null or resolver.vehicle_disembark_cells(veh, uid).is_empty():
 				continue
 			var dis_btn := Button.new()
-			dis_btn.text = "Disembark: %s" % u.stats.display_name
+			dis_btn.text = "%s: %s" % ["Exit (free)" if veh.seated() else "Disembark", u.stats.display_name]
 			dis_btn.pressed.connect(_veh_enter_disembark.bind(uid))
 			vb.add_child(dis_btn)
+	# Тела в креслах челнока (batch 13 S10): напоминание, кто держит место.
+	if veh.seated():
+		for i in veh.seats.size():
+			var sid: int = veh.seats[i]
+			if sid == Vehicle.SEAT_STATION:
+				var st := Label.new()
+				st.text = "Seat %d: drone station" % (i + 1)
+				vb.add_child(st)
+			elif sid >= 0:
+				var b := state.get_unit(sid)
+				if b != null and b.status == MCF.Status.CORPSE:
+					var bl := Label.new()
+					bl.text = "Seat %d: %s's body (drag out from outside)" % [i + 1, b.stats.display_name]
+					vb.add_child(bl)
 
 	if not _has_action_button(vb):
 		_menu.hide()
@@ -1586,15 +1642,94 @@ func _veh_enter_cannon() -> void:
 	_menu.hide()
 	queue_redraw()
 
+## Индекс кресла челнока по клетке следа; −1 — не кресло.
+func _seat_index_at(veh: Vehicle, coord: Vector2i) -> int:
+	veh.ensure_seats()
+	for i in veh.seats.size():
+		if veh.seat_cell(i) == coord:
+			return i
+	return -1
+
+## Посадка (batch 13 S6): в танк — как раньше; в челнок — игрок выбирает кресло, если
+## свободных больше одного, иначе садится в единственное.
 func _veh_board(unit_id: int) -> void:
-	_submit(VehicleBoardIntent.new(unit_id, selected_vehicle_id))
+	var veh := _selected_vehicle()
+	if veh == null:
+		return
+	if not veh.seated():
+		_submit(VehicleBoardIntent.new(unit_id, selected_vehicle_id))
+		return
+	var free := resolver.seat_options(veh)
+	if free.size() <= 1:
+		_submit(VehicleBoardIntent.new(unit_id, selected_vehicle_id,
+				free[0] if not free.is_empty() else -1))
+		return
+	veh_board_id = unit_id
+	item_cells = []
+	for i in free:
+		item_cells.append(veh.seat_cell(i))
+	mode = Mode.VEH_BOARD_SEAT
+	veh_move_targets = {}
+	_menu.hide()
+	queue_redraw()
+
+## Пересадка пассажира внутри челнока (batch 13 S6, 1 ОД).
+func _enter_seat_switch() -> void:
+	var u := _selected_unit()
+	var veh := resolver.seated_vehicle_of(u)
+	if u == null or veh == null or u.remaining_ap <= 0:
+		return
+	item_cells = []
+	for i in resolver.seat_options(veh):
+		item_cells.append(veh.seat_cell(i))
+	if item_cells.is_empty():
+		return
+	mode = Mode.VEH_SEAT
+	reach = null
+	target_ids = []
+	_menu.hide()
+	queue_redraw()
+
+## Оператор вылезает из борга (batch 13): на свободную соседнюю клетку, 1 ОД.
+func _enter_borg_exit() -> void:
+	var u := _selected_unit()
+	if u == null or u.borg_id == -1 or u.remaining_ap <= 0:
+		return
+	veh_disembark_id = u.id
+	item_cells = []
+	for n in state.grid.neighbors(u.coord):
+		if not state.grid.blocks_walk(n):
+			item_cells.append(n)
+	if item_cells.is_empty():
+		return
+	mode = Mode.VEH_DISEMBARK
+	reach = null
+	target_ids = []
+	_menu.hide()
+	queue_redraw()
+
+## Выход пассажира из челнока (batch 13 S7): бесплатно, через свой борт.
+func _enter_passenger_exit() -> void:
+	var u := _selected_unit()
+	var veh := resolver.seated_vehicle_of(u)
+	if u == null or veh == null:
+		return
+	veh_disembark_id = u.id
+	item_cells = resolver.vehicle_disembark_cells(veh, u.id)
+	if item_cells.is_empty():
+		return
+	mode = Mode.VEH_DISEMBARK
+	reach = null
+	target_ids = []
+	_menu.hide()
+	queue_redraw()
 
 func _veh_enter_disembark(unit_id: int) -> void:
 	var veh := _selected_vehicle()
 	if veh == null:
 		return
 	veh_disembark_id = unit_id
-	item_cells = resolver.vehicle_disembark_cells(veh)
+	item_cells = resolver.vehicle_disembark_cells(veh, unit_id)
 	mode = Mode.VEH_DISEMBARK
 	veh_move_targets = {}
 	_menu.hide()
@@ -1639,14 +1774,14 @@ func _enter_move() -> void:
 	# с тем, что он примет, и движение «не работает» (§3.4, #42/#44/#65).
 	var burdened := resolver.held_unit_of(u) != null \
 			or resolver.dragged_cell_of(u) != UnitInstance.NOT_DRAGGING
-	var carry_budget := maxi(0, u.stats.speed - MCF.CAPTURE_CARRY_PENALTY)
+	var carry_budget := maxi(0, u.speed() - MCF.CAPTURE_CARRY_PENALTY)
 	var budget: int
 	if u.move_credit > 0:
 		budget = u.move_credit
 	elif burdened:
 		budget = carry_budget
 	else:
-		budget = u.stats.speed
+		budget = u.speed()
 	if burdened:
 		budget = mini(budget, carry_budget)
 	reach = resolver.reachable_for(u, budget)
@@ -1732,11 +1867,9 @@ func _enter_item() -> void:
 	reach = null
 	target_ids = []
 	if u.held_item_id == MCF.ITEM_DRONE_STATION:
-		# Станция ставится в соседнюю свободную клетку (§3.12).
-		item_cells = []
-		for n in state.grid.neighbors(u.coord):
-			if state.grid.cell(n).is_empty():
-				item_cells.append(n)
+		# Станция ставится в соседнюю свободную клетку (§3.12) или в пустое соседнее
+		# кресло челнока (batch 13 S8) — список даёт резолвер.
+		item_cells = resolver.station_place_cells(u)
 	else:
 		item_cells = resolver.grenade_target_cells(u)
 	_menu.hide()
@@ -1980,7 +2113,7 @@ func _group_reach_cells() -> Array[Vector2i]:
 		var u := state.get_unit(id)
 		if u == null or not u.is_alive() or u.remaining_ap <= 0:
 			continue
-		for c: Vector2i in resolver.reachable_for(u, u.stats.speed).cost:
+		for c: Vector2i in resolver.reachable_for(u, u.speed()).cost:
 			if not seen.has(c):
 				seen[c] = true
 				out.append(c)
@@ -2004,7 +2137,7 @@ func _group_move_preview(dest: Vector2i) -> Array[Vector2i]:
 ## `taken` — клетки, уже разобранные другими юнитами группы (только для предпросмотра;
 ## в реальном ходе их занятость видна прямо на сетке).
 func _best_group_cell(u: UnitInstance, dest: Vector2i, taken: Dictionary = {}) -> Vector2i:
-	var reach_r := resolver.reachable_for(u, u.stats.speed)
+	var reach_r := resolver.reachable_for(u, u.speed())
 	var best := u.coord
 	var best_d := Combat.distance(u.coord, dest)
 	var best_cost := 0
@@ -2209,7 +2342,7 @@ func _begin_shoot(target: UnitInstance) -> void:
 	if _pending_shoot(shooter):
 		available = shooter.action_state.remaining_shots
 	else:
-		available = shooter.stats.rate_of_fire
+		available = shooter.rate_of_fire()
 	if available <= 1:
 		_submit(ShootIntent.new(selected_id, target.id, -1))
 		return
@@ -2225,6 +2358,10 @@ func _submit(intent: Intent) -> void:
 	ctrl.submit(intent)
 
 func _on_intent_ready(intent: Intent) -> void:
+	# После победы доска стоит (batch 13 #9): намерения не принимаются ни от людей,
+	# ни от ИИ. В сети хост точно так же не передаёт их дальше.
+	if _match_over:
+		return
 	if networked:
 		net.submit_local(intent)
 		return
@@ -2299,6 +2436,9 @@ func _on_intent_ready(intent: Intent) -> void:
 	state.log.publish_result(result)
 	for c in controllers.values():
 		c.notify_state_changed(state)
+	# Победа (batch 13 #9): партия замирает, следующий шаг ИИ не заказывается.
+	if _check_match_over():
+		return
 	var active_ctrl: PlayerController = controllers[state.active_player()]
 	if not active_ctrl.is_local_human():
 		_refresh_status()
@@ -2348,11 +2488,125 @@ func _refresh_pause_button() -> void:
 		return
 	var can := _pause_available()
 	_pause_btn.visible = can
-	_pause_btn.text = "Resume (AI vs AI)" if _paused else "Pause (AI vs AI)"
+	_pause_btn.text = "Resume" if _paused else "Pause"
 	# Сторону мог взять человек, пока стояла пауза, — тогда держать бой больше нечем.
 	if not can and _paused:
 		_paused = false
 		_kick_if_ai()
+
+## Живые бойцы стороны — пехота на поле и экипаж в машинах; дрон сам по себе армией
+## не считается, и на пустую машину тоже никто не воюет.
+func _side_has_army(side: int) -> bool:
+	for u in state.all_units():
+		if u.owner == side and u.is_alive() and not u.is_drone:
+			return true
+	return false
+
+## Команда-победитель (batch 13 #9): −2 — бой продолжается (живы две команды и больше),
+## −1 — все погибли, иначе номер команды (для стороны вне команд — её собственный id,
+## сдвинутый в отрицательную область, чтобы не совпасть с настоящими командами).
+func _winning_team() -> int:
+	if state == null or state.roster == null:
+		return -2
+	var alive_teams: Dictionary = {}
+	for side: int in state.roster.player_ids():
+		if state.turns.is_eliminated(side) or not _side_has_army(side):
+			continue
+		var team := state.roster.team_of(side)
+		alive_teams[team if team >= 0 else -100 - side] = true
+	if alive_teams.size() >= 2:
+		return -2
+	if alive_teams.is_empty():
+		return -1
+	return alive_teams.keys()[0]
+
+func _team_members(team: int) -> Array[String]:
+	var out: Array[String] = []
+	for side: int in state.roster.player_ids():
+		var t := state.roster.team_of(side)
+		if (t if t >= 0 else -100 - side) == team:
+			out.append(state.roster.name_of(side))
+	return out
+
+## Проверить исход и, если он есть, остановить партию. Возвращает true, когда бой окончен.
+## В просмотре повтора исход не объявляется: там доской правит запись, а не игроки.
+func _check_match_over() -> bool:
+	if _match_over:
+		return true
+	if replay != null:
+		return false
+	var team := _winning_team()
+	if team == -2:
+		return false
+	_match_over = true
+	var title := ""
+	if team == -1:
+		title = "Everyone is dead — the match is a draw"
+	else:
+		var names := _team_members(team)
+		if names.size() == 1:
+			title = "%s wins the match!" % names[0]
+		else:
+			title = "Team %d (%s) wins the match!" % [team + 1, ", ".join(names)]
+	state.log.add("— %s —" % title)
+	_deselect()
+	_menu.hide()
+	_picker.hide()
+	_show_victory(title)
+	_refresh_status()
+	queue_redraw()
+	return true
+
+## Окно исхода в общем стиле SteamChrome (batch 13 #9). «Look at the Board» убирает окно,
+## но доску не размораживает: посмотреть на поле можно, играть дальше — нет.
+func _show_victory(title: String) -> void:
+	if _victory_overlay != null:
+		_victory_overlay.queue_free()
+	var overlay := Control.new()
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.45)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.add_child(center)
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(380, 0)
+	SteamChrome.apply_panel(panel)
+	center.add_child(panel)
+	var frame := VBoxContainer.new()
+	frame.add_theme_constant_override("separation", 0)
+	panel.add_child(frame)
+	frame.add_child(SteamChrome.header_bar("Match Over"))
+	var body := VBoxContainer.new()
+	body.add_theme_constant_override("separation", 14)
+	frame.add_child(SteamChrome.pad(body, 16, 14))
+	var msg := Label.new()
+	msg.text = title + "\nThe battle is frozen — nothing else will happen on the board."
+	msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	msg.custom_minimum_size = Vector2(340, 0)
+	body.add_child(msg)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_END
+	row.add_theme_constant_override("separation", 8)
+	body.add_child(row)
+	var close := Button.new()
+	close.text = "Look at the Board"
+	close.custom_minimum_size = Vector2(130, 34)
+	close.pressed.connect(func() -> void: overlay.hide())
+	row.add_child(close)
+	var menu := Button.new()
+	menu.text = "Return to Menu"
+	menu.custom_minimum_size = Vector2(130, 34)
+	menu.pressed.connect(_to_lobby)
+	row.add_child(menu)
+	_victory_overlay = overlay
+	_ui_layer.add_child(overlay)
+	Ui.theme_canvas_layers()
 
 func _after_action() -> void:
 	_refresh_status()
@@ -2444,6 +2698,8 @@ func _show_net_action(intent: Intent, result: ActionResult) -> void:
 		c.notify_state_changed(state)
 	_refresh_status()
 	queue_redraw()
+	if _check_match_over():
+		return
 	_after_action()
 
 ## Подхватить связь, налаженную во вкладке Multiplayer главного меню (#54).
@@ -2456,6 +2712,8 @@ func _adopt_network() -> void:
 	session = s
 	session.message.connect(_on_net_message)
 	session.disconnected.connect(_on_net_disconnected)
+	if NetHandoff.is_host:
+		session.peer_left.connect(_on_peer_left)
 	_on_peer_ready(NetHandoff.is_host)
 	session.attach()
 
@@ -2511,6 +2769,9 @@ func _on_net_message(msg: Dictionary) -> void:
 			_roll_inbox[seq] = true
 			_roll_arrived.emit(seq)
 			return
+		K_SIDE_AI:
+			_apply_side_ai(msg)
+			return
 	if net != null:
 		net.receive(msg)
 
@@ -2519,6 +2780,66 @@ func _on_net_disconnected() -> void:
 		_net_status.text = "Connection lost"
 	networked = false
 	net = null
+	# Хост остался один (batch 13 #2): ушедшие уже подменены ИИ в _on_peer_left, а
+	# «удалённых» сторон больше нет — их ход никто не пришлёт. Бой продолжается
+	# локально; если сейчас ход машины, будим её.
+	if state != null and state.roster != null:
+		for side: int in controllers.keys():
+			if controllers[side] is NetworkController:
+				_take_side_as_ai(side)
+	_refresh_status()
+	_kick_if_ai()
+
+## Гость вышел из боя (batch 13 #2): его сторону берёт ИИ высокой сложности — на хосте
+## настоящий AIController, у остальных гостей та же сторона остаётся удалённой (её ходы
+## по-прежнему приходят от хоста), только ростер узнаёт, что за ней машина.
+func _on_peer_left(id: int) -> void:
+	if state == null or state.roster == null:
+		return
+	var side := state.roster.side_of_peer(id)
+	if side < 0:
+		return
+	_take_side_as_ai(side)
+	if session != null:
+		session.send({"k": K_SIDE_AI, "side": side, "ai": AIController.Difficulty.HARD})
+	state.log.add("— %s left the match; a Hard AI takes over their army —" % state.roster.name_of(side))
+	_refresh_status()
+	_kick_if_ai()
+
+func _take_side_as_ai(side: int) -> void:
+	var slot := state.roster.slot(side)
+	if slot == null:
+		return
+	slot.kind = Roster.SlotKind.AI
+	slot.ai_difficulty = AIController.Difficulty.HARD
+	slot.peer_id = -1
+	# Только хост (или оставшийся в одиночестве хост) ведёт машину сам; у гостя сторона
+	# остаётся NetworkController — её ходы придут от хоста.
+	if not networked or (net != null and net.is_host):
+		var old: PlayerController = controllers.get(side)
+		if old != null and old.intent_ready.is_connected(_on_intent_ready):
+			old.intent_ready.disconnect(_on_intent_ready)
+		var ai := AIController.new(side, slot.ai_difficulty)
+		ai.intent_ready.connect(_on_intent_ready)
+		controllers[side] = ai
+	_refresh_omniscience()
+	# Кто-то мог ждать броска ушедшего — будим ожидание, оно перепроверит ростер.
+	_roll_arrived.emit(-1)
+
+## Гость узнал от хоста, что сторона перешла к ИИ (batch 13 #2).
+func _apply_side_ai(msg: Dictionary) -> void:
+	if state == null or state.roster == null:
+		return
+	var side := int(msg.get("side", -1))
+	var slot := state.roster.slot(side)
+	if slot == null:
+		return
+	slot.kind = Roster.SlotKind.AI
+	slot.ai_difficulty = int(msg.get("ai", AIController.Difficulty.HARD))
+	slot.peer_id = -1
+	state.log.add("— %s left the match; a Hard AI takes over their army —" % state.roster.name_of(side))
+	_refresh_status()
+	_roll_arrived.emit(-1)
 
 func _setup_network_controllers() -> void:
 	for c in controllers.values():
@@ -2602,7 +2923,9 @@ func _play_dice(events: Array) -> void:
 				else:
 					_dice.play(step["faces"], false, "%s\nWaiting for %s to roll…" % [
 						step["prompt"], state.roster.name_of(roller)], step.get("speed", 1.0), true)
-					while not _roll_inbox.has(seq):
+					# Ушедший игрок не нажмёт никогда (batch 13 #2): как только ростер
+					# перестаёт считать его живым человеком за сетью, ждать нечего.
+					while not _roll_inbox.has(seq) and state.roster.is_networked_human(roller):
 						await _roll_arrived
 					_roll_inbox.erase(seq)
 					_dice.release()
@@ -2955,7 +3278,7 @@ func _home_focus() -> Vector2i:
 	var sum := Vector2i.ZERO
 	var n := 0
 	for u in state.all_units():
-		if u.owner == side and u.is_on_field() and u.aboard_vehicle_id == -1:
+		if u.owner == side and u.is_on_field() and _on_board(u):
 			sum += u.coord
 			n += 1
 	for veh: Vehicle in state.all_vehicles():
@@ -3330,7 +3653,7 @@ func _draw() -> void:
 				if state.grid.in_bounds(bc):
 					draw_rect(Rect2(_cell_origin(bc), Vector2(CELL, CELL)), Color(1, 0.35, 0.1, 0.32))
 
-	if mode == Mode.VEH_DISEMBARK:
+	if mode == Mode.VEH_DISEMBARK or mode == Mode.VEH_SEAT or mode == Mode.VEH_BOARD_SEAT:
 		for coord in item_cells:
 			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(0.4, 0.7, 1.0, 0.28))
 
@@ -3390,7 +3713,7 @@ func _draw() -> void:
 	# статусом CORPSE, а положенный из рук (#6) — безымянная куча cell.corpse_count.
 	# Кучи не рисовались вовсе: тело давало +1 к защите, но на карте его не было.
 	for unit: UnitInstance in state.all_units():
-		if unit.aboard_vehicle_id != -1:
+		if not _on_board(unit):
 			continue
 		if unit.status != MCF.Status.CORPSE or _pending_death_ids.has(unit.id):
 			continue
@@ -3453,6 +3776,9 @@ func _draw() -> void:
 		if disp_wrecked:
 			hull_col = Color(0.3, 0.3, 0.32)
 		var vcenter := org + vsize * 0.5
+		if veh.is_borg():
+			_draw_borg(veh, org, hull_col, disp_wrecked, disp_dur, font)
+			continue
 		# Картинка машины растягивается на весь след и поворачивается по фронту (#55).
 		var veh_name := (veh.type_id + "_wreck") if disp_wrecked else veh.type_id
 		var veh_key := Sprites.resolve(veh_name)
@@ -3483,14 +3809,17 @@ func _draw() -> void:
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.9, 0.9, 0.6))
 			# Жёлтые точки ОД машины (item 3): та же метка, что у пехоты, — по одной точке
 			# на очко действия, в правом-верхнем углу следа, чтобы не спорить с подписью.
-			var vap: int = maxi(0, veh.ap)
+			# У челнока пула нет (batch 13): его водит пассажир за свои очки, и точки
+			# рисуются у него самого.
+			var vap: int = 0 if veh.seated() else maxi(0, veh.ap)
 			for i in vap:
 				draw_circle(org + Vector2(vsize.x - 8 - i * 8, 8), 3, Color(1, 1, 0.4))
 
 	var _drones_pending: Array = []
 	for unit in state.all_units():
-		# Экипаж внутри машины на поле не рисуется (§техника).
-		if unit.aboard_vehicle_id != -1:
+		# Экипаж танка на поле не рисуется (§техника); пассажир челнока — поверх корпуса,
+		# в клетке своего кресла (batch 13, «Shuttle changes» §1).
+		if not _on_board(unit):
 			continue
 		# Во время проигрывания шагов житель рисуется на промежуточной клетке (#96),
 		# а не там, где он уже стоит по состоянию.
@@ -3816,6 +4145,34 @@ func _draw_pixel_bang(top_left: Vector2) -> void:
 		draw_rect(Rect2(b + Vector2(0, 4 * p), Vector2(p, p)), c)
 
 ## Суффикс стороны для картинок-замен (#55): light_infantry_p1.png и т.п.
+## Борг (batch 13 B17): квадратная рамка в цвете стороны с оператором внутри (его кружок
+## рисует общий проход бойцов поверх), пустой — серая рамка с точкой; бейдж «B» в углу,
+## прочность — точками у нижней кромки. Остов — серая рамка с крестом.
+func _draw_borg(veh: Vehicle, org: Vector2, col: Color, wrecked: bool, dur: int, font: Font) -> void:
+	var frame := Rect2(org + Vector2(2, 2), Vector2(CELL - 4, CELL - 4))
+	var op := state.get_unit(veh.borg_operator())
+	var manned := op != null and op.is_alive()
+	var key := Sprites.resolve("borg_wreck" if wrecked else "borg")
+	if key != "":
+		Sprites.draw_texture_override(self, key, org, float(CELL))
+	elif wrecked:
+		draw_rect(frame, Color(0.22, 0.22, 0.25))
+		draw_rect(frame, Color(0.45, 0.45, 0.5), false, 2.0)
+		draw_line(frame.position, frame.end, Color(0.6, 0.3, 0.3), 2.0)
+		draw_line(Vector2(frame.position.x, frame.end.y), Vector2(frame.end.x, frame.position.y),
+			Color(0.6, 0.3, 0.3), 2.0)
+		return
+	else:
+		var body := col if manned else Color(0.45, 0.47, 0.52)
+		draw_rect(frame, body.darkened(0.55))
+		draw_rect(frame, body, false, 3.0)
+		if not manned:
+			draw_circle(org + Vector2(CELL, CELL) * 0.5, 4.0, Color(0.7, 0.72, 0.78))
+	draw_string(font, org + Vector2(CELL - 12, 12), "B", HORIZONTAL_ALIGNMENT_LEFT, -1, 10,
+		Color(1, 1, 1, 0.9))
+	for i in maxi(0, dur):
+		draw_circle(org + Vector2(6 + i * 7, CELL - 5), 2.5, Color(0.9, 0.9, 0.6))
+
 func _owner_suffix(owner_id: int) -> String:
 	if MCF.is_neutral(owner_id):
 		return "_neutral"
@@ -3886,14 +4243,17 @@ func _reposition_hud_grip() -> void:
 	# Журнал боя — в левом-нижнем углу (item 6), тоже до первого ручного переноса (item 8).
 	if _log_panel != null and not _log_moved:
 		_log_panel.position = Vector2(12.0, vp.y - _log_panel.size.y - 12.0)
-	# Панель узлов машины (веха «Modular tank system») — НАД журналом боя, в том же
-	# левом краю: журнал остаётся на месте, а панель встаёт над ним ровно на время,
-	# пока машина выбрана. После ручного переноса её больше не двигаем (item 8).
+	# Панель узлов машины (веха «Modular tank system») — СПРАВА от меню действий, на той
+	# же верхней линии (batch 13 #13). Раньше она стояла над журналом боя в левом-нижнем
+	# углу, и длинное меню машины, растущее из левого-верхнего, накрывало её. Меню и
+	# панель открываются вместе с выбором машины, так что рядом им и место; когда меню
+	# спрятано (машине нечего предложить), панель прижимается к самому углу.
+	# После ручного переноса её больше не двигаем (item 8).
 	if _comp_panel != null and _comp_panel.visible and not _comp_moved:
-		var log_top: float = vp.y - 12.0
-		if _log_panel != null:
-			log_top = _log_panel.position.y
-		_comp_panel.position = Vector2(12.0, log_top - _comp_panel.size.y - 8.0)
+		var left: float = MENU_ANCHOR.x
+		if _menu != null and _menu.visible:
+			left = _menu.position.x + _menu.size.x + 12.0
+		_comp_panel.position = Vector2(left, MENU_ANCHOR.y)
 	# Полоса повтора (M12) — по центру внизу, как у любого проигрывателя.
 	if _replay_bar != null:
 		_replay_bar.position = Vector2((vp.x - _replay_bar.size.x) * 0.5,
@@ -3971,11 +4331,15 @@ func _build_ui() -> void:
 	_redo_btn = _compact_button("Redo", _on_redo_pressed)
 	_redo_btn.disabled = true
 	vbox.add_child(_button_row([_undo_btn, _redo_btn]))
+	# Сохранение вернулось в правое меню (batch 13 #3): Ctrl+S остаётся, но кнопка
+	# нужна тем, кто горячих клавиш не знает. В просмотре повтора сохранять нечего.
+	_save_btn = _compact_button("Save Game", _save_game)
+	_save_btn.visible = replay == null
 	# «Возврат в меню» — единая кнопка: в сети уводит из партии, в одиночке — в главное меню.
-	vbox.add_child(_compact_button("Return to Menu", _to_lobby))
+	vbox.add_child(_button_row([_save_btn, _compact_button("Return to Menu", _to_lobby)]))
 	# Пауза боя машин (item 4). Кнопка живёт рядом с управлением ходом и показывается
 	# только когда обе стороны ведёт ИИ — в остальных случаях останавливать нечего.
-	_pause_btn = _compact_button("Pause (AI vs AI)", _toggle_pause)
+	_pause_btn = _compact_button("Pause", _toggle_pause)
 	vbox.add_child(_pause_btn)
 	_refresh_pause_button()
 
@@ -4909,6 +5273,8 @@ func _cap_scroll_height(scroll: ScrollContainer, vb: Control) -> void:
 	# Меню закреплено в левом верхнем углу (#87): запас снизу — на рамку и поля.
 	var cap := get_viewport_rect().size.y - MENU_ANCHOR.y - MENU_CHROME_H
 	scroll.custom_minimum_size.y = minf(vb.get_combined_minimum_size().y, maxf(cap, 120.0))
+	# Ширина меню известна только теперь — панель узлов машины встаёт правее него.
+	call_deferred("_reposition_hud_grip")
 
 ## Меню действий всегда живут в левом верхнем углу экрана, а не над юнитом (#87):
 ## над юнитом они закрывали поле и уезжали за край при зуме.
@@ -4965,11 +5331,50 @@ func _open_menu(unit: UnitInstance) -> void:
 			release_btn.text = "Break Free (4+)"
 			release_btn.pressed.connect(_submit.bind(ReleaseIntent.new(unit.id)))
 			vb.add_child(release_btn)
+	elif _is_passenger(unit):
+		# Пассажир челнока (batch 13): стреляет со своего кресла, бросает гранаты, ставит
+		# станцию в соседнее кресло, пересаживается (1 ОД) и выходит (бесплатно).
+		var pveh := resolver.seated_vehicle_of(unit)
+		var seat_lbl := Label.new()
+		seat_lbl.text = "Driver's seat" if pveh.driver_id() == unit.id else "Passenger seat"
+		seat_lbl.add_theme_font_size_override("font_size", 11)
+		vb.add_child(seat_lbl)
+		var pshoot := "Shoot"
+		if _valid_pending_shoot(unit):
+			pshoot = "Finish Burst"
+		elif unit.stats.special_ability_id == MCF.ABILITY_MARKSMAN:
+			pshoot = "Laser (2 AP)"
+		elif unit.stats.special_ability_id == MCF.ABILITY_FLAMETHROWER:
+			pshoot = "Flame"
+		if unit.fire_range() > 0.0:
+			_act_btn(vb, pshoot, _enter_shoot,
+					_valid_pending_shoot(unit) or unit.remaining_ap >= _shoot_ap_cost(unit))
+		if unit.held_item_id != "" and MCF.ITEM_NAMES.has(unit.held_item_id):
+			_act_btn(vb, MCF.ITEM_NAMES.get(unit.held_item_id, "Item"), _enter_item,
+					unit.remaining_ap > 0 and resolver.can_use_item(unit) == ""
+					and not (unit.held_item_id == MCF.ITEM_DRONE_STATION
+						and resolver.station_place_cells(unit).is_empty()))
+		var pstations := resolver.stations_near(unit)
+		if unit.stats.special_ability_id == MCF.ABILITY_DRONE_OPERATOR \
+				and not pstations.is_empty() and resolver.active_drone_of(unit) == null:
+			_act_btn(vb, "Launch Drone", _submit.bind(SpawnDroneIntent.new(unit.id, pstations[0])),
+					unit.remaining_ap > 0)
+		var pfold := resolver.station_pickup_cells(unit)
+		if not pfold.is_empty():
+			_act_btn(vb, "Pack Up Drone Station",
+					_submit.bind(PickUpStationIntent.new(unit.id, pfold[0])), unit.remaining_ap > 0)
+		if not resolver.seat_options(pveh).is_empty():
+			_act_btn(vb, "Change Seat (1 AP)", _enter_seat_switch, unit.remaining_ap > 0)
+		_act_btn(vb, "Exit Shuttle (free)", _enter_passenger_exit,
+				not resolver.vehicle_disembark_cells(pveh, unit.id).is_empty(), "No free cell beside your seat")
 	else:
 		# Движение — универсальное действие: кнопка есть всегда, гаснет без ОД и кредита
 		# движения (item 27). Накопленный остаток тратится первым, в любой момент хода (#32).
 		var move_text := "Move (%d left)" % unit.move_credit if unit.move_credit > 0 else "Move"
 		_act_btn(vb, move_text, _enter_move, unit.remaining_ap > 0 or unit.move_credit > 0)
+		# Оператор борга (batch 13): вылезти наружу — 1 ОД, машина остаётся на клетке.
+		if unit.borg_id != -1:
+			_act_btn(vb, "Exit Borg (1 AP)", _enter_borg_exit, unit.remaining_ap > 0)
 
 		# Стрельба — тоже всегда присутствует; гаснет, когда не хватает ОД на выстрел.
 		var shoot_text := "Shoot"
@@ -5036,7 +5441,8 @@ func _open_menu(unit: UnitInstance) -> void:
 			for feat in [MCF.FEATURE_SANDBAGS, MCF.FEATURE_WALL, MCF.FEATURE_DOT,
 					MCF.FEATURE_DOT_OPEN, MCF.FEATURE_GLASS, MCF.FEATURE_AIRLOCK,
 					MCF.FEATURE_LDF, MCF.FEATURE_DPMG, MCF.FEATURE_HEDGEHOG]:
-				var cost: int = GameActionResolver.ENGINEER_BUILDABLE[feat]
+				# Инженер в борге строит партиями (batch 13 B7): цену и остаток даёт резолвер.
+				var cost: int = resolver.build_cost_for(unit, feat)
 				if resolver.buildable_cells(unit, feat).is_empty():
 					continue
 				# ЛДФ — одна на всю игру (#40): скрываем кнопку, если уже израсходована.
@@ -5048,8 +5454,12 @@ func _open_menu(unit: UnitInstance) -> void:
 					_act_btn(vb, "Build: LDF wall (%d tiles, %d AP)" % [MCF.LDF_WALL_LENGTH, cost],
 							_enter_build_wall, can_afford, "Needs %d AP" % cost)
 				else:
-					_act_btn(vb, "Build: %s (%d AP)" % [MCF.FEATURE_NAMES[feat], cost],
-							_enter_build.bind(feat), can_afford, "Needs %d AP" % cost)
+					var label := "Build: %s (%d AP)" % [MCF.FEATURE_NAMES[feat], cost]
+					if unit.borg_id != -1 and MCF.BORG_BATCH_FEATURES.has(feat):
+						var left: int = int(unit.build_credits.get(feat, 0))
+						label = "Build: %s (%s)" % [MCF.FEATURE_NAMES[feat],
+								("%d left in batch" % left) if left > 0 else "1 AP for %d" % MCF.BORG_BUILD_BATCH]
+					_act_btn(vb, label, _enter_build.bind(feat), can_afford, "Needs %d AP" % cost)
 
 		# Инженер: заварить соседний шлюз (#99).
 		if not resolver.weldable_cells(unit).is_empty():
@@ -5354,7 +5764,7 @@ func _to_menu() -> void:
 	get_tree().change_scene_to_file("res://scenes/MainMenu.tscn")
 
 func _on_end_turn_pressed() -> void:
-	if _animating:
+	if _animating or _match_over:
 		return
 	_deselect()
 	_submit(EndTurnIntent.new(state.active_player()))
@@ -5455,14 +5865,14 @@ func _refresh_info() -> void:
 		_info_label.text = "%d units selected." % _group_ids.size() if not _group_ids.is_empty() \
 			else "Click to select a unit."
 		return
-	var range_text := "∞" if is_inf(u.stats.fire_range) else (
-		"—" if u.stats.fire_range <= 0 else str(int(u.stats.fire_range)))
+	var range_text := "∞" if is_inf(u.fire_range()) else (
+		"—" if u.fire_range() <= 0 else str(int(u.fire_range())))
 	var bonus := ""
 	if u.stats.target_defense_penalty > 0:
 		bonus = "  (−%d to target defense)" % u.stats.target_defense_penalty
 	_info_label.text = "%s - range %s, RoF %d, armor %d+, speed %d%s" % [
 		u.stats.display_name, range_text,
-		u.stats.rate_of_fire, u.stats.armor_threshold, u.stats.speed, bonus,
+		u.rate_of_fire(), u.armor(), u.speed(), bonus,
 	]
 
 func _on_log_line(text: String) -> void:

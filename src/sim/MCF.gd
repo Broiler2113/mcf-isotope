@@ -117,8 +117,32 @@ const COMPONENT_AIM_BONUS := 1
 ## пропускает наравне с разбитым.
 const VEHICLE_COMPONENTS := {
 	"tank": {COMP_HULL: 8, COMP_TOWER: 6, COMP_TRACKS_L: 4, COMP_TRACKS_R: 4, COMP_GUN: 4},
-	"shuttle": {COMP_HULL: 4, COMP_TRACKS: 4},
+	# Челнок — только корпус (batch 13, «Shuttle changes» §6): узлы танка к нему не
+	# относятся. Борг — тоже один корпус, и тот на два очка.
+	"shuttle": {COMP_HULL: 4},
+	"borg": {COMP_HULL: 2},
 }
+
+# --- Челнок с посадочными местами (batch 13, «Shuttle changes») ---
+## Водитель платит 1 своё ОД за каждые 15 клеток пути (или их часть).
+const SHUTTLE_CELLS_PER_AP := 15
+## Пассажир под обстрелом стрелкового оружия: борт даёт +1 к защите (S4).
+const SHUTTLE_PASSENGER_DEFENSE_BONUS := 1
+
+# --- Борг (batch 13, «Borg characteristics») ---
+## Одноместная машина 1×1, играется как боец: оператор остаётся на сетке в её клетке.
+const BORG_AP := 3
+const BORG_RANGE := 12.0
+const BORG_ROF := 4
+const BORG_ARMOR_BONUS := 2
+const BORG_SPEED := 9
+## Уничтожение: 4+ — взрыв в радиусе 1 (как противотанковый заряд), иначе остов.
+const BORG_EXPLODE_MIN := 4
+## Инженер в борге строит партиями: 1 ОД = 3 постройки ОДНОГО типа из списка ниже, либо
+## 1 ДОТ, либо 6 окопов. Кредиты сгорают в конце хода.
+const BORG_BUILD_BATCH := 3
+const BORG_BATCH_FEATURES := [FEATURE_WALL, FEATURE_GLASS, FEATURE_AIRLOCK, FEATURE_SANDBAGS, FEATURE_HEDGEHOG]
+const BORG_DIG_TRENCHES := 6
 
 ## Урон по узлу за одно попадание — зависит от того, ЧЕМ стреляли.
 const COMPONENT_DAMAGE_ANTI_TANK := 1

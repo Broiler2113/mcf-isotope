@@ -65,6 +65,7 @@ static func _encode_unit(u: UnitInstance) -> Dictionary:
 		"civ_active": u.civilian_active, "group": u.neutral_group,
 		"carried_round": u.carried_this_round,
 		"aboard": u.aboard_vehicle_id, "dig": u.dig_credits,
+		"borg": u.borg_id, "bcred": u.build_credits.duplicate(),
 		"ldf_wall": u.ldf_wall_used, "move_credit": u.move_credit,
 		"mines": u.mine_credits, "corpses": u.carried_corpses,
 		"dragging": _xy(u.dragging),
@@ -238,6 +239,8 @@ static func _decode_unit(raw: Dictionary) -> Dictionary:
 		"neutral_group": int(raw.get("group", 0)),
 		"carried_this_round": bool(raw.get("carried_round", false)),
 		"aboard_vehicle_id": int(raw.get("aboard", -1)),
+		"borg_id": int(raw.get("borg", -1)),
+		"build_credits": _int_dict(raw.get("bcred", {})),
 		"dig_credits": int(raw.get("dig", 0)),
 		"ldf_wall_used": bool(raw.get("ldf_wall", false)),
 		"move_credit": int(raw.get("move_credit", 0)),
@@ -355,6 +358,14 @@ static func _xy(v: Vector2i) -> Array:
 ## же массив под другим типом, и снимок, снятый в начале матча, продолжал жить вместе
 ## с партией: стартовый кадр повтора приезжал на диск с порядком инициативы, сложившимся
 ## к концу боя. Ошибка тихая — файл выглядит правильным, а воспроизводится с чужой доски.
+## Словарь {строка: целое} из JSON — ключи и значения приводятся явно.
+static func _int_dict(src: Variant) -> Dictionary:
+	var out: Dictionary = {}
+	if src is Dictionary:
+		for k in src:
+			out[str(k)] = int(src[k])
+	return out
+
 static func _copy(src: Array) -> Array:
 	var out: Array = []
 	for v in src:

@@ -120,6 +120,10 @@ func resolve(intent: Intent) -> ActionResult:
 	if recording:
 		state.dice.begin_record()
 	var result := _dispatch(intent)
+	# Борг едет за оператором (batch 13): куда бы боец ни сдвинулся — ходом, отбросом,
+	# переносом, — машина стоит в его клетке.
+	if result.ok:
+		_sync_borgs()
 	# Действие могло вскрыть квартал (§3 «Нейтралы»): соседняя клетка сменила состояние
 	# или в чей-то обзор вошёл солдат. Каскад и сбор группы идут ВНУТРИ resolve(), пока
 	# открыт поток записи кубиков, — иначе жребий места в очереди рассинхронил бы стороны.
@@ -186,10 +190,19 @@ func _dispatch(intent: Intent) -> ActionResult:
 	if intent is ShootIntent or intent is DPMGFireIntent or intent is DroneDetonateIntent \
 			or intent is VehicleCannonIntent:
 		state.combat_started = true
+	# Пассажир челнока (batch 13) действует со своего места: стреляет, бросает гранаты,
+	# ставит станцию в соседнее кресло, пересаживается и выходит. Всё, что требует стоять
+	# на полу — ходить, хватать, строить, копать, чинить, — из кресла недоступно.
+	var _rider := state.get_unit(intent.actor_id)
+	if _rider != null and _rider.aboard_vehicle_id != -1 and _rider.is_alive() \
+			and not _aboard_allowed(intent):
+		return ActionResult.fail("Not possible from inside the shuttle — disembark first")
 	if intent is EndTurnIntent:
 		return _resolve_end_turn(intent)
 	elif intent is MoveIntent:
 		return _resolve_move(intent)
+	elif intent is VehicleSeatIntent:
+		return _resolve_vehicle_seat(intent)
 	elif intent is ShootIntent:
 		return _resolve_shoot(intent)
 	elif intent is CaptureIntent:
@@ -299,7 +312,7 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 	var carried := held_unit_of(unit)
 	var dragged := dragged_cell_of(unit)
 	var burdened := carried != null or dragged != UnitInstance.NOT_DRAGGING
-	var carry_budget := maxi(0, unit.stats.speed - MCF.CAPTURE_CARRY_PENALTY)
+	var carry_budget := maxi(0, unit.speed() - MCF.CAPTURE_CARRY_PENALTY)
 	# Дробление действий (§3.2): недоеденные клетки прошлого движения тратятся ПЕРВЫМИ
 	# и в любой момент хода — между копкой, стрельбой и чем угодно ещё.
 	var use_credit := unit.move_credit > 0
@@ -309,7 +322,7 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 	elif burdened:
 		budget = carry_budget
 	else:
-		budget = unit.stats.speed
+		budget = unit.speed()
 	# С грузом потолок бюджета всегда −3 клетки, даже на старом кредите.
 	if burdened:
 		budget = mini(budget, carry_budget)
@@ -339,6 +352,31 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 	# Наступил на чужую мину где-то по дороге (item 45). Проверяется ВЕСЬ маршрут,
 	# а не только конечная клетка: мину ставят на пути, а не в точке назначения.
 	var mine := _mine_on_path(unit, path)
+	# Борг (batch 13 B15): противопехотную мину не замечает, противотанковая снимает
+	# очко корпуса и останавливает его на месте подрыва.
+	if unit.borg_id != -1:
+		mine = NOWHERE
+		for step: Vector2i in path:
+			var mc := state.grid.cell(step)
+			if mc != null and mc.feature_id == MCF.FEATURE_AV_MINE:
+				mine = step
+				break
+		if mine != NOWHERE:
+			if unit.coord != mine:
+				state.grid.move_occupant(unit.coord, mine)
+				update_airlocks()
+			unit.move_credit = 0
+			var bres := ActionResult.success(lines)
+			var bcell := state.grid.cell(mine)
+			bcell.clear_feature()
+			notify_cell_changed(mine)
+			_fx(bres, {"fx": "debris", "at": NOWHERE, "cells": [mine]})
+			bres.log("The borg rolls over an anti-vehicle mine at (%d, %d)!" % [mine.x, mine.y])
+			_sync_borg(unit)
+			var bveh := state.get_vehicle(unit.borg_id)
+			if bveh != null:
+				_damage_component(bveh, MCF.COMP_HULL, MCF.AV_MINE_VEHICLE_DAMAGE, "mine", bres)
+			return bres
 	if mine != NOWHERE:
 		# Боец остаётся ТАМ, где наступил. Это не косметика: взрыв бьёт по клетке
 		# мины, и не вернув его туда, мы подорвали бы пустую землю, а сам он дошёл
@@ -502,7 +540,7 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 		shooter.remaining_ap -= 1  # действие «Стрельба» стоит 1 ОД целиком (§3.2)
 		shooter.action_state = ActionState.new()
 		shooter.action_state.target_id = effective_tid
-		shooter.action_state.remaining_shots = shooter.stats.rate_of_fire
+		shooter.action_state.remaining_shots = shooter.rate_of_fire()
 
 	var available: int = shooter.action_state.remaining_shots
 	var want: int = available if intent.shots < 0 else clampi(intent.shots, 1, available)
@@ -516,7 +554,7 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 	# Разбивку для броска она заполняет сама.
 	var need := hit_need_for(shooter, target, hit_mods)
 	# Штраф стрелка к защите цели (снайпер −2, щитоносец −2, шахтёр −1): цель парирует хуже.
-	var parry_need: int = target.stats.armor_threshold + shooter.stats.target_defense_penalty
+	var parry_need: int = target.armor() + shooter.stats.target_defense_penalty
 	if shooter.stats.target_defense_penalty != 0:
 		def_mods.append({"label": "Shooter penetration", "delta": shooter.stats.target_defense_penalty})
 	# Укрытие цели (§3.7): стрелку сложнее попасть (учтено выше), цель лучше парирует.
@@ -529,6 +567,10 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 	if corpse_def != 0:
 		parry_need -= corpse_def
 		def_mods.append({"label": "Corpse shield", "delta": corpse_def})
+	# Борт челнока прикрывает пассажира от стрелкового оружия (batch 13 S4).
+	if seated_vehicle_of(target) != null:
+		parry_need -= MCF.SHUTTLE_PASSENGER_DEFENSE_BONUS
+		def_mods.append({"label": "Shuttle hull", "delta": MCF.SHUTTLE_PASSENGER_DEFENSE_BONUS})
 	# Щитоносец получает урон только в упор; снайпер — исключение (§3.14).
 	var shield_immune := _shield_blocks_shot(shooter, target)
 	var shot_details: Array = []
@@ -704,7 +746,7 @@ func _resolve_anti_tank(shooter: UnitInstance, center: Vector2i, aimed: String =
 	else:
 		# Бросок на попадание (#7): промах НЕ отменяет взрыв — заряд ложится ближе.
 		var dist := Combat.distance(shooter.coord, center)
-		var need := Combat.hit_number(dist, shooter.stats.fire_range)
+		var need := Combat.hit_number(dist, shooter.fire_range())
 		var roll := state.dice.roll_d6()
 		var on_target := roll >= need
 		landing = _shortfall_landing(shooter.coord, center, roll, need)
@@ -778,7 +820,7 @@ func anti_tank_shot_endangers_own(shooter: UnitInstance, center: Vector2i) -> bo
 	if center == shooter.coord:
 		return true
 	var need := Combat.hit_number(
-		Combat.distance(shooter.coord, center), shooter.stats.fire_range)
+		Combat.distance(shooter.coord, center), shooter.fire_range())
 	# Клетка -> лежит ли она в ЭПИЦЕНТРЕ хоть одного из шести исходов: в эпицентре не
 	# спасают ни окоп (#30), ни щит (§3.14), по соседней клетке — спасают оба.
 	var risk: Dictionary = {}
@@ -855,11 +897,30 @@ func _blast(center: Vector2i, res: ActionResult = null, cells: Array[Vector2i] =
 			protectors.append(u)
 
 	var killed_names: Array = []
+	# Пассажиры челноков в зоне (batch 13 S5): тот, чьё кресло — точка разрыва, гибнет,
+	# остальные бросают защиту. Разбирается по машинам, чтобы один пассажир не был
+	# посчитан дважды.
+	var seated_hit: Dictionary = {}
+	for veh: Vehicle in state.all_vehicles():
+		if not (_seated(veh) or veh.is_borg()) or not veh.alive():
+			continue
+		var touched := false
+		for uid in veh.occupants:
+			var pu := state.get_unit(uid)
+			if pu != null and pu.is_alive() and in_area.has(pu.coord):
+				touched = true
+				break
+		if touched:
+			seated_hit[veh.id] = true
+			killed_names.append_array(_shuttle_passengers_hit(veh, center, in_area, res))
 	for u in state.all_units():
 		if not u.is_alive():
 			continue
 		if not in_area.has(u.coord):
 			continue
+		if (u.aboard_vehicle_id != -1 and seated_hit.has(u.aboard_vehicle_id)) \
+				or (u.borg_id != -1 and seated_hit.has(u.borg_id)):
+			continue  # уже разобран как пассажир / оператор борга
 		if _is_shield(u) and u.coord != center:
 			continue  # щитоносец гибнет только при прямом попадании
 		# Окоп укрывает от взрыва по СОСЕДНЕЙ клетке (#30): осколки идут поверх
@@ -1288,7 +1349,7 @@ func can_laser_cell(shooter: UnitInstance, cell: Vector2i) -> String:
 		return "Only the marksman fires a laser"
 	if not state.grid.in_bounds(cell):
 		return "Target out of bounds"
-	if shooter.aboard_vehicle_id != -1 or not state.grid.in_bounds(shooter.coord):
+	if not state.grid.in_bounds(shooter.coord):
 		return "Shooter is not on the board"
 	if _step_toward(shooter.coord, cell) == Vector2i.ZERO:
 		return "Pick a direction to fire in"
@@ -1334,12 +1395,12 @@ func _resolve_assault(shooter: UnitInstance, target: UnitInstance) -> ActionResu
 	result.ok = true
 	var any_kill := false
 	for t in chain:
-		var need := Combat.hit_number(Combat.distance(shooter.coord, t.coord), shooter.stats.fire_range)
-		var parry_need: int = t.stats.armor_threshold + MCF.ASSAULT_DEFENSE_PENALTY - _corpse_shield_bonus(t)
+		var need := Combat.hit_number(Combat.distance(shooter.coord, t.coord), shooter.fire_range())
+		var parry_need: int = t.armor() + MCF.ASSAULT_DEFENSE_PENALTY - _corpse_shield_bonus(t)
 		var shot_details: Array = []
 		var hits := 0
 		var t_killed := false
-		for _i in shooter.stats.rate_of_fire:
+		for _i in shooter.rate_of_fire():
 			var hit_roll := state.dice.roll_d6()
 			var is_hit := hit_roll >= need
 			var det := {
@@ -1394,7 +1455,7 @@ func _resolve_push(intent: PushIntent) -> ActionResult:
 
 	actor.remaining_ap -= 1
 	var step := _step_toward(actor.coord, target.coord)
-	var need: int = target.stats.armor_threshold + MCF.SHIELD_PUSH_DEFENSE_PENALTY
+	var need: int = target.armor() + MCF.SHIELD_PUSH_DEFENSE_PENALTY
 	var roll := state.dice.roll_d6()
 	var survived := roll >= need
 	var pushed := false
@@ -1443,7 +1504,8 @@ func _is_shield(u: UnitInstance) -> bool:
 ## Не гибнет в огне и не обходит его при поиске пути (#1, #2): щитоносец и огнемётчик.
 ## Публичная — тем же вопросом задаётся Main, когда решает, рисовать ли крест-предупреждение.
 func is_fireproof(u: UnitInstance) -> bool:
-	return u != null and MCF.ability_is_fireproof(u.stats.special_ability_id)
+	# Борг не горит (batch 13 B10): оператор внутри огня не боится.
+	return u != null and (MCF.ability_is_fireproof(u.stats.special_ability_id) or u.borg_id != -1)
 
 func _protected_by(u: UnitInstance, protectors: Array) -> bool:
 	for sb in protectors:
@@ -1476,7 +1538,7 @@ func hit_need_for(shooter: UnitInstance, target: UnitInstance, mods: Array = [])
 	if shooter == null or target == null:
 		return 7
 	var dist := Combat.distance(shooter.coord, target.coord)
-	var need := Combat.hit_number(dist, shooter.stats.fire_range)
+	var need := Combat.hit_number(dist, shooter.fire_range())
 	# Укрытие цели (§3.7).
 	var cover := cover_effect(shooter, target)
 	var pen := int(cover["hit_penalty"])
@@ -1723,6 +1785,24 @@ func _kill(u: UnitInstance, res: ActionResult = null, from_coord: Vector2i = NOW
 	# вырваться, потому что _resolve_release ищет живого захватчика.
 	var captive := held_unit_of(u)
 	u.kill()
+	# Погибший пассажир челнока (batch 13 S10): выбывает из экипажа, но кресло держит
+	# его тело, пока снаружи его не вытащат.
+	var seat_veh := seated_vehicle_of(u)
+	if seat_veh != null:
+		seat_veh.occupants.erase(u.id)
+	# Погибший оператор борга (batch 13): машина снова размечается корпусом на своей
+	# клетке — её можно выбрать, занять (тело вытолкнется) или добить.
+	var bveh := borg_of(u)
+	if bveh != null:
+		bveh.occupants.erase(u.id)
+		if state.grid.in_bounds(u.coord):
+			bveh.origin = u.coord
+			if state.grid.vehicle_at(u.coord) != -1 and state.grid.vehicle_at(u.coord) != bveh.id:
+				# Раздавлен чужим корпусом вместе с оператором — от борга ничего не остаётся.
+				u.borg_id = -1
+				state.vehicles.erase(bveh.id)
+			elif not bveh.wrecked and bveh.alive():
+				state.grid.set_vehicle_footprint(bveh.id, bveh.footprint())
 	if captive != null:
 		captive.status = MCF.Status.ALIVE
 		captive.captor_id = -1
@@ -1998,6 +2078,25 @@ func _resolve_build(intent: BuildIntent) -> ActionResult:
 	if not cell.is_buildable() and stacked == "":
 		return ActionResult.fail("Cell is occupied")
 	var cost: int = ENGINEER_BUILDABLE[intent.feature_id]
+	var credit_note := ""
+	if actor.borg_id != -1:
+		# Инженер в борге (batch 13 B7): 1 ОД покупает BORG_BUILD_BATCH построек ОДНОГО
+		# типа, ставить их можно по одной между другими действиями; ДОТ — 1 за ОД.
+		# Кредиты сгорают на границе раунда (UnitInstance.reset_ap).
+		if MCF.BORG_BATCH_FEATURES.has(intent.feature_id):
+			var left: int = int(actor.build_credits.get(intent.feature_id, 0))
+			if left > 0:
+				actor.build_credits[intent.feature_id] = left - 1
+				cost = 0
+				credit_note = " (batch, %d left)" % (left - 1)
+			else:
+				if actor.remaining_ap < 1:
+					return ActionResult.fail("Need 1 AP")
+				cost = 1
+				actor.build_credits[intent.feature_id] = MCF.BORG_BUILD_BATCH - 1
+				credit_note = " (batch, %d left)" % (MCF.BORG_BUILD_BATCH - 1)
+		elif intent.feature_id == MCF.FEATURE_DOT or intent.feature_id == MCF.FEATURE_DOT_OPEN:
+			cost = 1
 	if actor.remaining_ap < cost:
 		return ActionResult.fail("Need %d AP" % cost)
 	actor.remaining_ap -= cost
@@ -2005,9 +2104,20 @@ func _resolve_build(intent: BuildIntent) -> ActionResult:
 	cell.set_feature(placed, actor.owner)
 	notify_cell_changed(intent.target)  # застроенная клетка будит соседей (§3.1a)
 	_extinguish_cell(cell)  # стройка на горящей клетке гасит огонь (#82)
-	return ActionResult.success(["%s builds: %s at (%d, %d) [AP: %d]" % [
+	return ActionResult.success(["%s builds: %s at (%d, %d) [AP: %d]%s" % [
 		actor.stats.display_name, MCF.FEATURE_NAMES.get(placed, placed),
-		intent.target.x, intent.target.y, actor.remaining_ap]])
+		intent.target.x, intent.target.y, actor.remaining_ap, credit_note]])
+
+## Цена постройки для этого инженера (для UI): в борге партия одного типа стоит 1 ОД,
+## а пока кредиты партии не кончились — ничего.
+func build_cost_for(actor: UnitInstance, feature_id: String) -> int:
+	var cost: int = ENGINEER_BUILDABLE.get(feature_id, 1)
+	if actor != null and actor.borg_id != -1:
+		if MCF.BORG_BATCH_FEATURES.has(feature_id):
+			return 0 if int(actor.build_credits.get(feature_id, 0)) > 0 else 1
+		if feature_id == MCF.FEATURE_DOT or feature_id == MCF.FEATURE_DOT_OPEN:
+			return 1
+	return cost
 
 const WELD_AIRLOCK_AP := 1
 
@@ -2020,7 +2130,8 @@ func weldable_cells(unit: UnitInstance) -> Array[Vector2i]:
 		return out
 	for c: Vector2i in state.grid.neighbors(unit.coord):
 		var cell := state.grid.cell(c)
-		if cell != null and cell.feature_id == MCF.FEATURE_AIRLOCK and not cell.airlock_welded:
+		if cell != null and cell.feature_id == MCF.FEATURE_AIRLOCK and not cell.airlock_welded \
+				and corpses_at(c) == 0:
 			out.append(c)
 	return out
 
@@ -2041,6 +2152,9 @@ func _resolve_weld_airlock(intent: WeldAirlockIntent) -> ActionResult:
 		return ActionResult.fail("There is no airlock there")
 	if cell.airlock_welded:
 		return ActionResult.fail("This airlock is already welded shut")
+	# Створки не сойдутся на теле (batch 13 #4) — сначала вытащить труп из проёма.
+	if corpses_at(intent.to) > 0:
+		return ActionResult.fail("A body is jamming the doors — drag it out first")
 	if actor.remaining_ap < WELD_AIRLOCK_AP:
 		return ActionResult.fail("Need %d AP" % WELD_AIRLOCK_AP)
 	actor.remaining_ap -= WELD_AIRLOCK_AP
@@ -2443,7 +2557,31 @@ func known_mine_cells(owner: int) -> Dictionary:
 ## считает ход пехоты — резолвер, интерфейс, ИИ, — обязаны идти через эту функцию,
 ## иначе подсветка и проверка приказа разойдутся.
 func reachable_for(unit: UnitInstance, budget: int) -> Movement.Reachability:
-	return Movement.reachable_for(state.grid, unit, budget, known_mine_cells(unit.owner))
+	var avoid := known_mine_cells(unit.owner)
+	# Борг в окоп не съезжает (batch 13 B11): окопы для него — не клетки.
+	if unit.borg_id != -1:
+		var merged: Dictionary = avoid.duplicate()
+		for c: Vector2i in _trench_cells():
+			merged[c] = true
+		avoid = merged
+	return Movement.reachable_for(state.grid, unit, budget, avoid)
+
+var _trench_cache: Array = []
+var _trench_cache_ver: int = -1
+var _trench_cache_grid: int = 0
+
+func _trench_cells() -> Array:
+	var gid := state.grid.get_instance_id()
+	if _trench_cache_ver == GridCell.feature_version and _trench_cache_grid == gid:
+		return _trench_cache
+	_trench_cache = []
+	for y in state.grid.height:
+		for x in state.grid.width:
+			if state.grid.cell_fast(x, y).feature_id == MCF.FEATURE_TRENCH:
+				_trench_cache.append(Vector2i(x, y))
+	_trench_cache_ver = GridCell.feature_version
+	_trench_cache_grid = gid
+	return _trench_cache
 
 ## Видит ли сторона эту мину. Своя мина видна всегда; чужая — пока держится подсветка.
 func mine_visible_to(owner: int, coord: Vector2i) -> bool:
@@ -2695,8 +2833,8 @@ func _vision_blocked(a: Vector2i, b: Vector2i) -> bool:
 		# стекло разрешено СТРЕЛЯТЬ, но цель за ним оставалась в тумане, а невидимую
 		# цель нельзя выбрать (can_shoot → "Target not visible"). Строковое сравнение
 		# стоит здесь дёшево: до него доходят только клетки, уже опознанные как стена.
-		if cell.vehicle_id != -1:
-			return true
+		# Корпуса машин и живые обзор не перекрывают (batch 13 #1) — только стена и
+		# закрытый шлюз, то есть ровно GridCell.blocks_sight().
 		if cell.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(cell.feature_id):
 			return true
 	return false
@@ -2874,13 +3012,34 @@ func _seen_from(coord: Vector2i, r: int) -> PackedInt32Array:
 				if px == cx and py == cy:
 					break
 				var cell := grid.cell_fast(px, py)
-				if cell.cover_height >= MCF.WALL_HEIGHT or cell.vehicle_id != -1:
+				# То же условие, что в _vision_blocked() / GridCell.blocks_sight(): стена
+				# или закрытый шлюз рвут луч, стекло — нет, корпус машины — нет.
+				if cell.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(cell.feature_id):
 					blocked = true
 					break
 			if not blocked:
 				out.append(row + cx)
 		dy += 1
 	_seen_cache[key] = out
+	return out
+
+## Обзор машины — объединение обзоров со ВСЕХ клеток её следа (batch 13 #1). Раньше
+## смотрели из origin (верхний-левый угол), а собственный корпус ещё и рвал луч: танк
+## видел только вверх и влево, остальное закрывали его же клетки. Теперь корпус лучу
+## не мешает, а бойницы есть по всему периметру — из-за угла выглядывает та кромка,
+## которая к нему ближе. Порядок сбора детерминирован (клетки следа по строкам, внутри
+## клетки — порядок _seen_from), поэтому сравнение «обзор не изменился» остаётся честным.
+func _vehicle_seen(veh: Vehicle) -> PackedInt32Array:
+	var cells := veh.footprint()
+	if cells.size() == 1:
+		return _seen_from(cells[0], MCF.SIGHT_UNLIMITED)
+	var merged: Dictionary = {}
+	var out := PackedInt32Array()
+	for c: Vector2i in cells:
+		for i: int in _seen_from(c, MCF.SIGHT_UNLIMITED):
+			if not merged.has(i):
+				merged[i] = true
+				out.append(i)
 	return out
 
 # --- Туман войны: обзор команды -------------------------------------------------------
@@ -3015,11 +3174,12 @@ func team_visible_coords(owner: int) -> Dictionary:
 	for veh: Vehicle in state.all_vehicles():
 		if veh.wrecked or not sides.has(veh.owner):
 			continue
+		# Смотрит ЭКИПАЖ, а не железо (batch 13 #1): пустая машина — слепая.
+		if veh.occupants.is_empty():
+			continue
 		var vkey := -1 - veh.id
 		live[vkey] = true
-		# Смотрит машина из своего центра — одной записи хватает на весь корпус:
-		# соседние клетки следа видят практически то же самое.
-		var vfresh := _seen_from(veh.origin, MCF.SIGHT_UNLIMITED)
+		var vfresh := _vehicle_seen(veh)
 		var vwas: Variant = seen.get(vkey)
 		if vwas != null:
 			if vwas == vfresh:
@@ -3370,7 +3530,7 @@ func _civilian_route(actor: UnitInstance, intent: Intent) -> Array[Vector2i]:
 	var empty: Array[Vector2i] = []
 	if not (intent is MoveIntent):
 		return empty
-	var budget: int = actor.move_credit if actor.move_credit > 0 else actor.stats.speed
+	var budget: int = actor.move_credit if actor.move_credit > 0 else actor.speed()
 	if budget <= 0:
 		return empty
 	var reach := reachable_for(actor, budget)
@@ -3439,7 +3599,9 @@ func update_airlocks() -> void:
 		if cell.airlock_welded:
 			cell.cover_height = MCF.WALL_HEIGHT
 			continue
-		var open := false
+		# Тело в проёме держит створки (batch 13 #4): шлюз не закроется, пока труп не
+		# вытащат. Проверяется САМА клетка шлюза — труп рядом, за порогом, дверям не мешает.
+		var open := corpses_at(cell.coord) > 0
 		var cx := cell.coord.x
 		var cy := cell.coord.y
 		var y := maxi(0, cy - radius)
@@ -3786,6 +3948,14 @@ func _resolve_pickup_station(intent: PickUpStationIntent) -> ActionResult:
 	var cell := state.grid.cell(intent.coord)
 	cell.station_operator_id = -1
 	cell.clear_feature()
+	# Станция стояла в кресле челнока (batch 13 S8) — кресло снова свободно.
+	var svid := state.grid.vehicle_at(intent.coord)
+	if svid != -1:
+		var sveh := state.get_vehicle(svid)
+		if _seated(sveh):
+			for i in sveh.seats.size():
+				if sveh.seat_cell(i) == intent.coord and sveh.seats[i] == Vehicle.SEAT_STATION:
+					sveh.seats[i] = -1
 	operator.remaining_ap -= 1
 	operator.held_item_id = MCF.ITEM_DRONE_STATION
 	return ActionResult.success(["%s folds the drone station at (%d, %d) back up [AP: %d]" % [
@@ -3918,7 +4088,9 @@ func _drone_reach(drone: UnitInstance) -> Dictionary:
 			# Дрон перелетает трупы и юнитов и садится на них (#13): мешают лишь
 			# корпус машины и другой дрон.
 			var od := _drone_at(nxt)
-			if cell.vehicle_id != -1 or (od != null and od != drone):
+			# Своя станция в кресле челнока (batch 13 S8) — единственная клетка корпуса,
+			# на которую дрон может сесть.
+			if (cell.vehicle_id != -1 and nxt != drone.home_station) or (od != null and od != drone):
 				continue
 			if not dist.has(nxt) or nd < int(dist[nxt]):
 				dist[nxt] = nd
@@ -3994,6 +4166,9 @@ func _resolve_capture(intent: CaptureIntent) -> ActionResult:
 	var target := state.get_unit(intent.target_id)
 	if target == null or not target.is_alive():
 		return ActionResult.fail("No target to capture")
+	# Пассажира челнока из кресла не выдернешь (batch 13): он под бортом, а не на полу.
+	if target.aboard_vehicle_id != -1:
+		return ActionResult.fail("Can't grab someone inside a shuttle")
 	if target.id == actor.id:
 		return ActionResult.fail("Can't grab yourself")
 	if target.captor_id != -1:
@@ -4121,7 +4296,7 @@ func _resolve_move_held(intent: MoveHeldIntent) -> ActionResult:
 ## Кредит именно ЗАДАЁТСЯ, а не берётся максимумом: иначе накопленный до граба остаток
 ## полной скорости пережил бы захват и пленника таскали бы без штрафа (#33).
 func _grant_carry_move(actor: UnitInstance) -> void:
-	actor.move_credit = maxi(0, actor.stats.speed - MCF.CAPTURE_CARRY_PENALTY)
+	actor.move_credit = maxi(0, actor.speed() - MCF.CAPTURE_CARRY_PENALTY)
 
 ## Юнит, которого удерживает captor (status HELD, captor_id == captor.id), или null (§3.4).
 func held_unit_of(captor: UnitInstance) -> UnitInstance:
@@ -4341,7 +4516,7 @@ func _resolve_dpmg(intent: DPMGFireIntent) -> ActionResult:
 		return ActionResult.fail("Too far for the DPMG")
 
 	actor.remaining_ap -= 1
-	var parry_need: int = target.stats.armor_threshold - _corpse_shield_bonus(target)
+	var parry_need: int = target.armor() - _corpse_shield_bonus(target)
 	var cover := cover_effect_from(intent.dpmg_coord, target)
 	need += cover["hit_penalty"]
 	parry_need -= cover["defense_bonus"]
@@ -4408,6 +4583,34 @@ func _resolve_use_item(intent: UseItemIntent) -> ActionResult:
 	if item_id == MCF.ITEM_DRONE_STATION:
 		if Combat.distance(actor.coord, intent.target) != 1:
 			return ActionResult.fail("The station is placed in an adjacent cell")
+		# Оператор в челноке ставит станцию в ПУСТОЕ соседнее кресло (batch 13 S8): кресло
+		# занимается станцией, дрон поднимается над ним; забрать станцию — освободить кресло.
+		var sveh := seated_vehicle_of(actor)
+		if sveh != null:
+			var seat := -1
+			for i in sveh.seats.size():
+				if sveh.seat_cell(i) == intent.target:
+					seat = i
+			if seat == -1:
+				return ActionResult.fail("From a seat the station goes into another seat")
+			if sveh.seats[seat] != -1:
+				return ActionResult.fail("That seat is taken")
+			if deployed_station_of(actor) != Vector2i(-1, -1):
+				return ActionResult.fail("Your station is already deployed")
+			actor.remaining_ap -= 1
+			actor.held_item_id = ""
+			sveh.seats[seat] = Vehicle.SEAT_STATION
+			var scell_s := state.grid.cell(intent.target)
+			scell_s.feature_id = MCF.FEATURE_DRONE_STATION
+			scell_s.feature_owner = actor.owner
+			scell_s.station_operator_id = actor.id
+			var res_s := ActionResult.success(["%s mounts a drone station in the shuttle seat at (%d, %d)" % [
+				actor.stats.display_name, intent.target.x, intent.target.y]])
+			var launched_s := _launch_drone_at(intent.target, actor)
+			if launched_s != null:
+				res_s.log("A drone rises above the shuttle at (%d, %d)" % [
+					launched_s.coord.x, launched_s.coord.y])
+			return res_s
 		if not state.grid.cell(intent.target).is_empty():
 			return ActionResult.fail("Cell is occupied")
 		# Одна развёрнутая станция на оператора (item 16): вторую не поставить, пока
@@ -4511,15 +4714,15 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 		var at_epicenter: bool = u.coord == center
 		var det := {
 			"name": u.stats.display_name, "coord": u.coord, "owner": u.owner,
-			"epicenter": at_epicenter, "armor": u.stats.armor_threshold,
-			"need": u.stats.armor_threshold + 1, "rolls": [], "survived": true,
+			"epicenter": at_epicenter, "armor": u.armor(),
+			"need": u.armor() + 1, "rolls": [], "survived": true,
 		}
 		var is_shield: bool = u.stats.special_ability_id == MCF.ABILITY_SHIELD_BEARER
 		if at_epicenter and not is_shield:
 			det["survived"] = false
 		else:
 			# Штраф −1 к каждому кубику; несомый труп-щит облегчает защиту (#6).
-			var need_roll: int = u.stats.armor_threshold + 1 - _corpse_shield_bonus(u)
+			var need_roll: int = u.armor() + 1 - _corpse_shield_bonus(u)
 			for _i in 2:
 				var r := state.dice.roll_d6()
 				det["rolls"].append(r)
@@ -4627,6 +4830,24 @@ func can_use_item(actor: UnitInstance) -> String:
 		return "Unknown item"
 	return ""
 
+## Куда оператор может поставить станцию (для UI): рядом на пустой пол, а из кресла
+## челнока — в пустое соседнее кресло (batch 13 S8).
+func station_place_cells(actor: UnitInstance) -> Array:
+	var out: Array = []
+	if actor == null:
+		return out
+	var sveh := seated_vehicle_of(actor)
+	if sveh != null:
+		for i in sveh.free_seats():
+			var sc := sveh.seat_cell(i)
+			if Combat.distance(actor.coord, sc) == 1:
+				out.append(sc)
+		return out
+	for n in state.grid.neighbors(actor.coord):
+		if state.grid.cell(n).is_empty():
+			out.append(n)
+	return out
+
 ## Клетки-цели для броска гранаты (в пределах дальности, в границах, не стена) — для UI.
 func grenade_target_cells(actor: UnitInstance) -> Array:
 	var out: Array = []
@@ -4648,7 +4869,7 @@ func grenade_target_cells(actor: UnitInstance) -> Array:
 func capturable_target_ids(actor: UnitInstance) -> Array:
 	var out: Array = []
 	for u in state.all_units():
-		if u.id == actor.id or u.captor_id != -1:
+		if u.id == actor.id or u.captor_id != -1 or u.aboard_vehicle_id != -1:
 			continue
 		if u.is_alive() and Combat.distance(actor.coord, u.coord) == 1:
 			out.append(u.id)
@@ -4800,8 +5021,11 @@ func los_blocked(from_coord: Vector2i, to_coord: Vector2i, allow_embrasure: bool
 				pass  # стекло пуле не преграда, а испытание (#29)
 			else:
 				return true
-		# Корпус машины перекрывает линию огня (§техника).
-		elif cell.vehicle_id != -1:
+		# Корпус машины перекрывает линию огня (§техника) — кроме своего же: линия,
+		# начатая или оконченная на клетке этого корпуса, идёт по его крыше (batch 13:
+		# пассажир стреляет со своего кресла, и в пассажира стреляют снаружи).
+		elif cell.vehicle_id != -1 and cell.vehicle_id != grid.vehicle_at(from_coord) \
+				and cell.vehicle_id != grid.vehicle_at(to_coord):
 			return true
 		# Живой юнит перекрывает линию огня; труп — нет (решение автора).
 		elif not ignore_units and cell.occupant != null and cell.occupant.is_alive():
@@ -4901,10 +5125,13 @@ func first_unit_on_line(from_coord: Vector2i, to_coord: Vector2i,
 			y += sy
 			continue
 		# Боец на дне окопа сидит ниже линии огня — пуля проходит над ним (§3.7).
+		# Сосед по челноку стрелку не мешает (batch 13): оба сидят в одной машине.
 		if cell.occupant != null and cell.occupant.is_alive() \
 				and not trench_protected(from_coord, cell.occupant) \
 				and not (skip_allies_of != null
-						and is_ally_of(skip_allies_of, cell.occupant)):
+						and is_ally_of(skip_allies_of, cell.occupant)) \
+				and not (cell.occupant.aboard_vehicle_id != -1
+						and cell.occupant.aboard_vehicle_id == grid.vehicle_at(from_coord)):
 			return cell.occupant
 		x += sx
 		y += sy
@@ -4926,14 +5153,14 @@ func can_shoot(shooter: UnitInstance, target: UnitInstance) -> String:
 	# СТРЕЛОК вне поля — зеркало проверки цели ниже (issue 2): сидящий в машине стреляет
 	# из неё только орудиями машины, а его собственная координата вынесена за карту, и
 	# любая линия от неё уходит за край сетки.
-	if shooter.aboard_vehicle_id != -1 or not state.grid.in_bounds(shooter.coord):
+	if not state.grid.in_bounds(shooter.coord):
 		return "Shooter is not on the board"
 	# Боец В МАШИНЕ целью быть не может (#23): его координата — OFFBOARD (-9999,-9999),
 	# и она вне поля. is_on_firing_line() отвечает на неё «да» (по диагонали от почти
 	# любой клетки), после чего trench_protected() дёргает cell(OFFBOARD).feature_id на
 	# null — отсюда «feature_id on Nil» при нажатии «Стрельба», а los_blocked() за ним
 	# уходит шагать десять тысяч клеток к краю мира. Отсекаем такие цели сразу.
-	if target.aboard_vehicle_id != -1 or not state.grid.in_bounds(target.coord):
+	if not state.grid.in_bounds(target.coord):
 		return "Target unavailable"
 	# Дружественный огонь (#100): по своим стрелять МОЖНО — оружие не разбирает форму.
 	# Выключенный в лобби, он запрещает и прицел в союзника (§7 «Лобби»).
@@ -4970,7 +5197,7 @@ func can_shoot(shooter: UnitInstance, target: UnitInstance) -> String:
 	if los_blocked(shooter.coord, target.coord, not _is_anti_tank(shooter), true,
 			not _is_anti_tank(shooter)):
 		return "Firing line is blocked"
-	if Combat.hit_number(dist, shooter.stats.fire_range) >= 7:
+	if Combat.hit_number(dist, shooter.fire_range()) >= 7:
 		return "Too far"
 	return ""
 
@@ -4990,8 +5217,9 @@ func shootable_target_ids(shooter: UnitInstance) -> Array:
 	for u in state.all_units():
 		if u.id == sid or not u.is_alive():
 			continue
-		# Бойцы в машине (coord = OFFBOARD) на поле не стоят — целями не считаются (#23).
-		if u.aboard_vehicle_id != -1 or not state.grid.in_bounds(u.coord):
+		# Экипаж танка (coord = OFFBOARD) на поле не стоит — целью не считается (#23);
+		# пассажир челнока сидит в клетке следа и под прицелом (batch 13 S5).
+		if not state.grid.in_bounds(u.coord):
 			continue
 		if not Combat.is_on_firing_line(from, u.coord):
 			continue
@@ -5017,7 +5245,7 @@ func hostile_target_ids(shooter: UnitInstance) -> Array:
 		# (item 15 + запрос про ИИ-команды). is_ally_of покрывает все три случая.
 		if is_ally_of(shooter, u):
 			continue
-		if u.aboard_vehicle_id != -1 or not state.grid.in_bounds(u.coord):
+		if not state.grid.in_bounds(u.coord):
 			continue
 		if not Combat.is_on_firing_line(from, u.coord):
 			continue
@@ -5031,7 +5259,7 @@ func can_blast_cell(shooter: UnitInstance, cell: Vector2i) -> String:
 		return "Only the anti-tank can hit the ground"
 	if not state.grid.in_bounds(cell):
 		return "Target out of bounds"
-	if shooter.aboard_vehicle_id != -1 or not state.grid.in_bounds(shooter.coord):
+	if not state.grid.in_bounds(shooter.coord):
 		return "Shooter is not on the board"
 	var c := state.grid.cell(cell)
 	if c.is_space:
@@ -5048,7 +5276,7 @@ func can_blast_cell(shooter: UnitInstance, cell: Vector2i) -> String:
 	# Заряд противотанкиста в амбразуру не пролезает (#86).
 	if los_blocked(shooter.coord, cell, false):
 		return "Firing line is blocked"
-	if Combat.hit_number(Combat.distance(shooter.coord, cell), shooter.stats.fire_range) >= 7:
+	if Combat.hit_number(Combat.distance(shooter.coord, cell), shooter.fire_range()) >= 7:
 		return "Too far"
 	return ""
 
@@ -5057,7 +5285,7 @@ func blastable_cells(shooter: UnitInstance) -> Array:
 	var out: Array = []
 	if shooter.stats.special_ability_id != MCF.ABILITY_ANTI_TANK:
 		return out
-	var reach := shooter.stats.fire_range
+	var reach := shooter.fire_range()
 	# Собственная клетка — первой в списке (#11): она и есть «ударить под себя»,
 	# и UI подсвечивает её наравне с остальными.
 	out.append(shooter.coord)
@@ -5079,7 +5307,7 @@ func can_flame_cell(shooter: UnitInstance, cell: Vector2i) -> String:
 		return "Only the flamethrower can spray the ground"
 	if not state.grid.in_bounds(cell):
 		return "Target out of bounds"
-	if shooter.aboard_vehicle_id != -1 or not state.grid.in_bounds(shooter.coord):
+	if not state.grid.in_bounds(shooter.coord):
 		return "Shooter is not on the board"
 	if cell == shooter.coord:
 		return "Pick a cell in front"
@@ -5131,6 +5359,241 @@ func _validate_actor(unit: UnitInstance, credit: int = 0) -> String:
 #  ТЕХНИКА (§техника): экипаж, движение, пушка, лазер, уничтожение.
 # ============================================================================
 
+# --- Борг (batch 13, «Borg characteristics») ----------------------------------------
+## Одноместная машина 1×1, которой управляют как бойцом. Оператор ОСТАЁТСЯ на сетке в
+## клетке борга (borg_id != -1), ходит/стреляет обычными намерениями, но с числами
+## борга (UnitInstance.speed()/armor()/fire_range()/rate_of_fire()/max_ap()). Пока внутри
+## живой оператор, след борга на сетке НЕ размечен — машина прозрачна для линий, как
+## боец (B14); пустой борг или борг с мёртвым оператором размечен как корпус, чтобы его
+## можно было выбрать и в него сесть.
+func _board_borg(unit: UnitInstance, veh: Vehicle) -> ActionResult:
+	var op := state.get_unit(veh.borg_operator())
+	if op != null and op.is_alive():
+		return ActionResult.fail("Someone is already at the controls")
+	var cell := state.grid.cell(veh.origin)
+	# Мёртвый оператор выталкивается наружу при посадке (B12) — на свободную клетку рядом.
+	if cell.occupant != null:
+		if cell.occupant.status != MCF.Status.CORPSE:
+			return ActionResult.fail("The borg's cell is blocked")
+		var spot := NOWHERE
+		for n in state.grid.neighbors(veh.origin):
+			if n == unit.coord:
+				continue
+			var nc := state.grid.cell(n)
+			if nc != null and nc.occupant == null and not nc.is_wall() and not nc.is_space \
+					and nc.vehicle_id == -1 and nc.corpse_count < MCF.CORPSE_WALL_COUNT:
+				spot = n
+				break
+		if spot == NOWHERE:
+			return ActionResult.fail("No room to push the body out")
+		var body: UnitInstance = cell.occupant
+		cell.occupant = null
+		body.borg_id = -1
+		body.coord = spot
+		state.grid.cell(spot).occupant = body
+	unit.remaining_ap -= 1
+	state.grid.clear_vehicle_footprint(veh.id, veh.footprint())
+	state.grid.cell(unit.coord).occupant = null
+	unit.coord = veh.origin
+	cell.occupant = unit
+	unit.borg_id = veh.id
+	veh.occupants = [unit.id]
+	var captured := veh.owner != unit.owner
+	veh.owner = unit.owner
+	# Новая активация борга — новые очки: боец получает 3 ОД, но уже потраченные не
+	# возвращаются (сел за 1 ОД — из трёх осталось два).
+	unit.remaining_ap = maxi(0, unit.remaining_ap + (unit.max_ap() - (unit.stats.action_points
+			if unit.stats.action_points > 0 else MCF.AP_PER_ACTIVATION)))
+	var res := ActionResult.new()
+	res.ok = true
+	res.log("%s %s the borg [AP: %d]" % [unit.stats.display_name,
+		"seizes" if captured else "climbs into", unit.remaining_ap])
+	return res
+
+func _exit_borg(unit: UnitInstance, veh: Vehicle, target: Vector2i) -> ActionResult:
+	if unit.remaining_ap <= 0:
+		return ActionResult.fail("Unit has no AP left")
+	if Combat.distance(unit.coord, target) != 1 or state.grid.blocks_walk(target):
+		return ActionResult.fail("Step out to a free cell next to the borg")
+	unit.remaining_ap -= 1
+	state.grid.cell(unit.coord).occupant = null
+	unit.borg_id = -1
+	veh.occupants = []
+	veh.origin = unit.coord
+	state.grid.set_vehicle_footprint(veh.id, veh.footprint())
+	state.grid.place(unit, target)
+	# Вне борга у бойца снова его собственный потолок ОД.
+	unit.remaining_ap = mini(unit.remaining_ap, unit.max_ap())
+	return ActionResult.success(["%s climbs out of the borg [AP: %d]" % [
+		unit.stats.display_name, unit.remaining_ap]])
+
+## Борг следует за своим оператором: любое перемещение бойца (ход, отброс, перенос)
+## переносит и машину. Зовётся после каждого разрешённого намерения.
+func _sync_borg(unit: UnitInstance) -> void:
+	if unit == null or unit.borg_id == -1:
+		return
+	var veh := state.get_vehicle(unit.borg_id)
+	if veh != null and state.grid.in_bounds(unit.coord):
+		veh.origin = unit.coord
+
+func _sync_borgs() -> void:
+	for veh: Vehicle in state.all_vehicles():
+		if not veh.is_borg():
+			continue
+		var op := state.get_unit(veh.borg_operator())
+		if op != null and state.grid.in_bounds(op.coord):
+			veh.origin = op.coord
+
+## Борг, в котором сидит боец; null — не в борге.
+func borg_of(u: UnitInstance) -> Vehicle:
+	if u == null or u.borg_id == -1:
+		return null
+	return state.get_vehicle(u.borg_id)
+
+# --- Челнок с посадочными местами (batch 13, «Shuttle changes») ---------------------
+## Пассажир челнока сидит В КЛЕТКЕ следа: у него настоящая координата, он occupant
+## своей клетки, виден поверх корпуса, стреляет со своего места и сам под обстрелом.
+## Экипаж танка по-прежнему вынесен за поле (OFFBOARD). Что позволено из кресла:
+func _aboard_allowed(intent: Intent) -> bool:
+	return intent is ShootIntent or intent is CancelShotIntent or intent is UseItemIntent \
+			or intent is SpawnDroneIntent or intent is PickUpStationIntent \
+			or intent is VehicleSeatIntent or intent is VehicleDisembarkIntent \
+			or intent is EndTurnIntent or intent is ReleaseIntent
+
+func _seated(veh: Vehicle) -> bool:
+	return veh != null and veh.seated()
+
+## Машина, в которой юнит сидит пассажиром (челнок), либо null.
+func seated_vehicle_of(u: UnitInstance) -> Vehicle:
+	if u == null or u.aboard_vehicle_id == -1:
+		return null
+	var veh := state.get_vehicle(u.aboard_vehicle_id)
+	return veh if _seated(veh) else null
+
+## Водитель челнока: живой боец стороны-владельца в кресле водителя, иначе null.
+func shuttle_driver(veh: Vehicle) -> UnitInstance:
+	if not _seated(veh):
+		return null
+	var d := state.get_unit(veh.driver_id())
+	if d == null or not d.is_alive() or d.owner != veh.owner:
+		return null
+	return d
+
+## Очки действия, которыми машина располагает СЕЙЧАС: у танка — свой пул, у челнока —
+## ОД водителя (машина ходит за его счёт, batch 13 S1).
+func vehicle_ap(veh: Vehicle) -> int:
+	if veh == null or not veh.alive():
+		return 0
+	if _seated(veh):
+		var d := shuttle_driver(veh)
+		return d.remaining_ap if d != null else 0
+	return veh.ap
+
+## Посадить пассажира в кресло seat: клетка следа становится его клеткой. Труп,
+## лежавший на полу под креслом, уходит в кучу corpse_count той же клетки.
+func _seat_unit(veh: Vehicle, unit: UnitInstance, seat: int) -> void:
+	veh.ensure_seats()
+	var cell_coord := veh.seat_cell(seat)
+	var cell := state.grid.cell(cell_coord)
+	if cell.occupant != null and cell.occupant.status == MCF.Status.CORPSE:
+		state.units.erase(cell.occupant.id)
+		cell.occupant = null
+		cell.corpse_count += 1
+	veh.seats[seat] = unit.id
+	unit.coord = cell_coord
+	unit.aboard_vehicle_id = veh.id
+	cell.occupant = unit
+
+## Клетка кресла, в котором сидит юнит; NOWHERE, если он не пассажир.
+func seat_cell_of(u: UnitInstance) -> Vector2i:
+	var veh := seated_vehicle_of(u)
+	if veh == null:
+		return NOWHERE
+	var si := veh.seat_of(u.id)
+	return veh.seat_cell(si) if si != -1 else NOWHERE
+
+## Пересадка внутри челнока (S6): 1 ОД, только в свободное кресло.
+func _resolve_vehicle_seat(intent: VehicleSeatIntent) -> ActionResult:
+	var unit := state.get_unit(intent.actor_id)
+	var err := _validate_actor(unit)
+	if err != "":
+		return ActionResult.fail(err)
+	var veh := seated_vehicle_of(unit)
+	if veh == null:
+		return ActionResult.fail("Not aboard a shuttle")
+	veh.ensure_seats()
+	if intent.seat < 0 or intent.seat >= veh.seats.size():
+		return ActionResult.fail("No such seat")
+	if veh.seats[intent.seat] != -1:
+		return ActionResult.fail("That seat is taken")
+	var from := veh.seat_of(unit.id)
+	if from == intent.seat:
+		return ActionResult.fail("Already in that seat")
+	unit.remaining_ap -= 1
+	state.grid.cell(unit.coord).occupant = null
+	veh.seats[from] = -1
+	_seat_unit(veh, unit, intent.seat)
+	var res := ActionResult.success(["%s moves to the %s seat [AP: %d]" % [
+		unit.stats.display_name, "driver's" if intent.seat == Vehicle.DRIVER_SEAT else "next",
+		unit.remaining_ap]])
+	return res
+
+## Сколько клеток челнок может проехать сейчас: остаток прошлого переезда плюс
+## 15 за каждое ОД водителя (batch 13 S1). Без водителя — только остаток, и тот ноль.
+func _shuttle_budget(veh: Vehicle) -> int:
+	var d := shuttle_driver(veh)
+	if d == null:
+		return 0
+	return veh.move_credit + d.remaining_ap * MCF.SHUTTLE_CELLS_PER_AP
+
+## Оператор, чья станция стоит в кресле этой машины (первый оператор на борту).
+func _station_operator_aboard(veh: Vehicle) -> int:
+	for uid in veh.occupants:
+		var u := state.get_unit(uid)
+		if u != null and u.is_alive() and u.stats.special_ability_id == MCF.ABILITY_DRONE_OPERATOR:
+			return u.id
+	return -1
+
+## Кресла, в которые юнит может сесть/пересесть (для UI): индексы свободных мест.
+func seat_options(veh: Vehicle) -> Array[int]:
+	if not _seated(veh):
+		return []
+	return veh.free_seats()
+
+## Пассажиры под ударом тяжёлого оружия (S5): тот, чья клетка — точка разрыва, гибнет
+## без броска; остальные пассажиры этой машины в зоне бросают обычную защиту.
+## Возвращает имена погибших; кубики пишутся в res.
+func _shuttle_passengers_hit(veh: Vehicle, center: Vector2i, in_area: Dictionary,
+		res: ActionResult) -> Array:
+	var killed: Array = []
+	for uid in veh.occupants.duplicate():
+		var u := state.get_unit(uid)
+		if u == null or not u.is_alive():
+			continue
+		if u.coord == center:
+			_kill(u, res, center)
+			killed.append(u.stats.display_name)
+			if res != null:
+				res.log("%s takes the hit square on — killed." % u.stats.display_name)
+			continue
+		if not in_area.has(u.coord):
+			continue
+		var need := u.armor()
+		var roll := state.dice.roll_d6()
+		var ok := roll >= need
+		if res != null:
+			res.dice_events.append({"kind": "check", "actor": "%s (passenger)" % u.stats.display_name,
+				"roll": roll, "need": need, "ok": ok, "roller": u.owner})
+		if not ok:
+			_kill(u, res, center)
+			killed.append(u.stats.display_name)
+			if res != null:
+				res.log("%s (passenger) fails the defence roll (%d, need %d+) — killed." % [
+					u.stats.display_name, roll, need])
+		elif res != null:
+			res.log("%s (passenger) holds on (roll %d, need %d+)." % [u.stats.display_name, roll, need])
+	return killed
+
 const DIR8 := [
 	Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1),
 	Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1),
@@ -5152,8 +5615,8 @@ func _validate_vehicle(veh: Vehicle, credit: int = 0) -> String:
 		return "Vehicle is destroyed"
 	if veh.owner != state.active_player():
 		return "It's the other player's turn"
-	if veh.ap <= 0 and credit <= 0:
-		return "Vehicle has no crew AP left"
+	if vehicle_ap(veh) <= 0 and credit <= 0:
+		return "Nobody at the wheel with AP left" if _seated(veh) else "Vehicle has no crew AP left"
 	return ""
 
 ## Свободна ли клетка соседняя со следом машины (для посадки/высадки).
@@ -5295,6 +5758,41 @@ func _resolve_vehicle_unload_corpse(intent: VehicleUnloadCorpseIntent) -> Action
 		return ActionResult.fail("No such vehicle")
 	if not _adjacent_to_vehicle(unit.coord, veh):
 		return ActionResult.fail("Must stand next to the vehicle")
+	if _seated(veh):
+		# Тело в кресле челнока (batch 13 S10): вытаскивают снаружи, стоя рядом с клеткой
+		# этого кресла; труп ложится к ногам вытащившего.
+		var seat := -1
+		for i in veh.seats.size():
+			var sid: int = veh.seats[i]
+			if sid < 0:
+				continue
+			var body := state.get_unit(sid)
+			if body != null and body.status == MCF.Status.CORPSE \
+					and Combat.distance(unit.coord, veh.seat_cell(i)) == 1:
+				seat = i
+				break
+		if seat == -1:
+			return ActionResult.fail("No body in a seat next to you")
+		var spot_s := NOWHERE
+		for n in state.grid.neighbors(unit.coord):
+			var nc := state.grid.cell(n)
+			if nc != null and nc.occupant == null and not nc.is_wall() and not nc.is_space \
+					and nc.vehicle_id == -1 and nc.corpse_count < MCF.CORPSE_WALL_COUNT:
+				spot_s = n
+				break
+		if spot_s == NOWHERE:
+			return ActionResult.fail("No room beside you to set the body down")
+		unit.remaining_ap -= 1
+		var corpse := state.get_unit(veh.seats[seat])
+		state.grid.cell(corpse.coord).occupant = null
+		veh.seats[seat] = -1
+		corpse.aboard_vehicle_id = -1
+		corpse.coord = spot_s
+		state.grid.cell(spot_s).occupant = corpse
+		notify_cell_changed(spot_s)
+		return ActionResult.success(["%s pulls %s's body out of the %s to (%d, %d)." % [
+			unit.stats.display_name, corpse.stats.display_name,
+			VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id), spot_s.x, spot_s.y]])
 	if veh.corpse_slots.is_empty():
 		return ActionResult.fail("No bodies to pull out")
 	# Свободная клетка рядом с бойцом — куда положить тело.
@@ -5330,7 +5828,17 @@ func unloadable_corpse_vehicle_ids(actor: UnitInstance) -> Array:
 	if not has_spot:
 		return out
 	for veh: Vehicle in state.all_vehicles():
-		if veh.alive() and not veh.corpse_slots.is_empty() and _adjacent_to_vehicle(actor.coord, veh):
+		if not veh.alive() or not _adjacent_to_vehicle(actor.coord, veh):
+			continue
+		if _seated(veh):
+			for i in veh.seats.size():
+				var sid: int = veh.seats[i]
+				var body := state.get_unit(sid) if sid >= 0 else null
+				if body != null and body.status == MCF.Status.CORPSE \
+						and Combat.distance(actor.coord, veh.seat_cell(i)) == 1:
+					out.append(veh.id)
+					break
+		elif not veh.corpse_slots.is_empty():
 			out.append(veh.id)
 	return out
 
@@ -5364,6 +5872,31 @@ func _resolve_vehicle_board(intent: VehicleBoardIntent) -> ActionResult:
 	# Можно садиться и во вражескую технику (§техника, захват экипажа).
 	if not _adjacent_to_vehicle(unit.coord, veh):
 		return ActionResult.fail("Must stand next to the vehicle")
+	if veh.is_borg():
+		return _board_borg(unit, veh)
+	if _seated(veh):
+		# Челнок (batch 13): садятся в конкретное кресло — выбранное или первое свободное.
+		veh.ensure_seats()
+		var seat := intent.seat if intent.seat >= 0 else veh.first_free_seat()
+		if seat < 0 or seat >= veh.seats.size() or veh.seats[seat] != -1:
+			return ActionResult.fail("That seat is taken — pull the body out or pick another")
+		var boarding_enemy_s: bool = veh.owner != unit.owner
+		unit.remaining_ap -= 1
+		state.grid.cell(unit.coord).occupant = null
+		veh.occupants.append(unit.id)
+		_seat_unit(veh, unit, seat)
+		var captured_s := _recompute_vehicle_owner(veh)
+		var res_s := ActionResult.new()
+		res_s.ok = true
+		var vname: String = VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)
+		if captured_s:
+			res_s.log("%s seizes control of the %s!" % [unit.stats.display_name, vname])
+		elif boarding_enemy_s:
+			res_s.log("%s storms aboard the enemy %s!" % [unit.stats.display_name, vname])
+		else:
+			res_s.log("%s takes %s seat of the %s." % [unit.stats.display_name,
+				"the driver's" if seat == Vehicle.DRIVER_SEAT else "a", vname])
+		return res_s
 	if veh.slots_used() >= veh.capacity():
 		return ActionResult.fail("Vehicle is full — pull a corpse out to make room")
 
@@ -5374,11 +5907,6 @@ func _resolve_vehicle_board(intent: VehicleBoardIntent) -> ActionResult:
 	unit.coord = OFFBOARD
 	unit.aboard_vehicle_id = veh.id
 	veh.occupants.append(unit.id)
-	if not VehicleDB.get_vehicle(veh.type_id).get("has_facing", false):
-		veh.ensure_seats()
-		var seat := veh.first_free_seat()
-		if seat != -1:
-			veh.seats[seat] = unit.id
 	# Захват: если сторона нового экипажа теперь преобладает на борту — машина
 	# переходит к ней, и она может водить/стрелять как своей (§техника).
 	var captured := _recompute_vehicle_owner(veh)
@@ -5429,11 +5957,19 @@ func _recompute_vehicle_owner(veh: Vehicle) -> bool:
 ## экипажа она не катится вовсе: очки скорости могли остаться с прошлого действия, но
 ## водить их некому — иначе подбитый экипаж «доезжал» бы уже мёртвым.
 func vehicle_move_credit(veh: Vehicle) -> int:
-	if veh == null or not veh.alive() or _vehicle_crew_ap(veh) <= 0:
+	if veh == null or not veh.alive():
+		return 0
+	# Челнок докатывает остаток только пока за рулём кто-то живой (batch 13).
+	if _seated(veh):
+		return veh.move_credit if shuttle_driver(veh) != null else 0
+	if _vehicle_crew_ap(veh) <= 0:
 		return 0
 	return veh.move_credit
 
 func _vehicle_crew_ap(veh: Vehicle) -> int:
+	# У челнока собственного пула нет — он ходит за ОД водителя (batch 13 S1).
+	if _seated(veh):
+		return 0
 	var n := 0
 	for uid in veh.occupants:
 		var u := state.get_unit(uid)
@@ -5446,15 +5982,40 @@ func _resolve_vehicle_disembark(intent: VehicleDisembarkIntent) -> ActionResult:
 	var unit := state.get_unit(intent.actor_id)
 	if unit == null or not unit.is_alive():
 		return ActionResult.fail("Unit not found")
-	if unit.aboard_vehicle_id == -1:
+	if unit.aboard_vehicle_id == -1 and unit.borg_id == -1:
 		return ActionResult.fail("Not aboard a vehicle")
 	if unit.owner != state.active_player():
 		return ActionResult.fail("It's the other player's turn")
-	if unit.remaining_ap <= 0:
-		return ActionResult.fail("Unit has no AP left")
-	var veh := state.get_vehicle(unit.aboard_vehicle_id)
+	var veh := state.get_vehicle(unit.aboard_vehicle_id if unit.aboard_vehicle_id != -1 else unit.borg_id)
 	if veh == null:
 		return ActionResult.fail("Vehicle gone")
+	if veh.is_borg():
+		return _exit_borg(unit, veh, intent.target)
+	if _seated(veh):
+		# Из челнока выходят БЕСПЛАТНО, через свой борт (batch 13 S7): на любую свободную
+		# клетку рядом с клеткой своего кресла.
+		var seat_c := seat_cell_of(unit)
+		if seat_c == NOWHERE or Combat.distance(seat_c, intent.target) != 1:
+			return ActionResult.fail("Step out next to your own seat")
+		if state.grid.is_occupied_or_wall(intent.target) or state.grid.vehicle_at(intent.target) != -1:
+			return ActionResult.fail("That cell is blocked")
+		if unit.is_held():
+			return ActionResult.fail("Unit is being held")
+		veh.occupants.erase(unit.id)
+		var si_s := veh.seat_of(unit.id)
+		if si_s != -1:
+			veh.seats[si_s] = -1
+		state.grid.cell(unit.coord).occupant = null
+		unit.aboard_vehicle_id = -1
+		state.grid.place(unit, intent.target)
+		_recompute_vehicle_owner(veh)
+		var res_s := ActionResult.new()
+		res_s.ok = true
+		res_s.log("%s climbs out of the %s (free)." % [unit.stats.display_name,
+			VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)])
+		return res_s
+	if unit.remaining_ap <= 0:
+		return ActionResult.fail("Unit has no AP left")
 	if not _adjacent_to_vehicle(intent.target, veh):
 		return ActionResult.fail("Must step out next to the vehicle")
 	if state.grid.is_occupied_or_wall(intent.target):
@@ -5518,10 +6079,37 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 	var use_credit := credit > 0
 	var speed := credit if use_credit \
 			else int(VehicleDB.get_vehicle(veh.type_id).get("speed", 0))
+	# Челнок (batch 13 S1): бюджет — остаток плюс 15 клеток за каждое ОД водителя; за
+	# один переезд можно потратить и несколько его ОД.
+	var seated := _seated(veh)
+	var driver := shuttle_driver(veh)
+	if seated:
+		speed = _shuttle_budget(veh)
 	var plan := VehicleRules.plan_line_move(state, veh, dir, intent.steps, speed)
 	if not plan["ok"]:
 		return ActionResult.fail(String(plan["reason"]))
 
+	# Пассажиры челнока едут в своих креслах (batch 13): на время переезда снимаем их
+	# с клеток, иначе зачистка следа приняла бы их за раздавленных. Станция в кресле
+	# тоже едет с машиной.
+	var riders: Array = []
+	var station_seats: Array[int] = []
+	if seated:
+		for i in veh.seats.size():
+			var sid: int = veh.seats[i]
+			if sid == Vehicle.SEAT_STATION:
+				station_seats.append(i)
+				var sc := state.grid.cell(veh.seat_cell(i))
+				if sc.feature_id == MCF.FEATURE_DRONE_STATION:
+					sc.feature_id = ""
+					sc.cover_height = 0.0
+			elif sid >= 0:
+				var ru := state.get_unit(sid)
+				if ru != null:
+					riders.append([i, ru])
+					var rc := state.grid.cell(ru.coord)
+					if rc != null and rc.occupant == ru:
+						rc.occupant = null
 	# Снять старый след.
 	state.grid.clear_vehicle_footprint(veh.id, veh.footprint())
 	var res := ActionResult.new()
@@ -5609,14 +6197,35 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 	# Переместить и разметить новый след.
 	veh.origin += dir * int(plan["steps"])
 	state.grid.set_vehicle_footprint(veh.id, veh.footprint())
-	# Кредит списывается вместо ОД; свежее движение стоит 1 ОД и оставляет остаток (#97).
-	if not use_credit:
-		veh.ap -= 1
-	veh.move_credit = maxi(0, speed - int(plan["cost"]))
-
-	res.log("%s drives %d cell(s). (AP %d, %d move left)" % [
-		VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id),
-		int(plan["steps"]), veh.ap, veh.move_credit])
+	# Пассажиры и станция садятся обратно в свои кресла на новом месте.
+	for pair in riders:
+		_seat_unit(veh, pair[1], int(pair[0]))
+	for si in station_seats:
+		var nc := state.grid.cell(veh.seat_cell(si))
+		nc.set_feature(MCF.FEATURE_DRONE_STATION, veh.owner)
+		if driver != null:
+			nc.station_operator_id = _station_operator_aboard(veh)
+	if seated:
+		# Оплата водителем (S1): сперва остаток, потом по ОД за каждые 15 клеток.
+		var cost: int = int(plan["cost"])
+		var from_credit := mini(cost, veh.move_credit)
+		veh.move_credit -= from_credit
+		var rest := cost - from_credit
+		if rest > 0:
+			var ap_cost := int(ceil(float(rest) / float(MCF.SHUTTLE_CELLS_PER_AP)))
+			driver.remaining_ap -= ap_cost
+			veh.move_credit = ap_cost * MCF.SHUTTLE_CELLS_PER_AP - rest
+		res.log("%s flies %d cell(s) — %s at the wheel (AP %d, %d cells left)" % [
+			VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id),
+			int(plan["steps"]), driver.stats.display_name, driver.remaining_ap, veh.move_credit])
+	else:
+		# Кредит списывается вместо ОД; свежее движение стоит 1 ОД и оставляет остаток (#97).
+		if not use_credit:
+			veh.ap -= 1
+		veh.move_credit = maxi(0, speed - int(plan["cost"]))
+		res.log("%s drives %d cell(s). (AP %d, %d move left)" % [
+			VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id),
+			int(plan["steps"]), veh.ap, veh.move_credit])
 	# Щитоносец глушит машину и калечит ей ХОДОВУЮ (§таблица столкновений): плита
 	# упирается в гусеницу, а не в броню, поэтому урон всегда туда и всегда 2.
 	if int(plan["self_damage"]) > 0:
@@ -5965,8 +6574,10 @@ func _damage_component(veh: Vehicle, comp: String, amount: int, source: String,
 	if target == MCF.COMP_HULL and veh.component(MCF.COMP_HULL) <= 0:
 		_destroy_vehicle(veh, res)
 		return
-	if target == MCF.COMP_HULL:
+	if target == MCF.COMP_HULL and not _seated(veh) and not veh.is_borg():
 		# Несмертельное попадание в корпус: один человек проверяет броню (§6).
+		# У челнока пассажиры разобраны самим взрывом (batch 13 S5); у борга оператор
+		# страдает только вместе с машиной (B6).
 		_tank_crew_hit(veh, res)
 	elif overflow > 0 and dealt > 0:
 		# Излишек добивает корпус — со всеми последствиями попадания в корпус.
@@ -6006,7 +6617,7 @@ func _tank_crew_hit(veh: Vehicle, res: ActionResult) -> void:
 		return
 	# Экипаж в броне держится увереннее пехоты: +1 к защите (item 16) — порог выживания
 	# на единицу ниже собственной брони, но не мягче 1+.
-	var need: int = maxi(1, crew.stats.armor_threshold - MCF.TANK_CREW_DEFENSE_BONUS)
+	var need: int = maxi(1, crew.armor() - MCF.TANK_CREW_DEFENSE_BONUS)
 	var roll := state.dice.roll_d6()
 	var survived := roll >= need
 	res.dice_events.append({
@@ -6029,12 +6640,25 @@ func _destroy_vehicle(veh: Vehicle, res: ActionResult) -> void:
 	var spec := VehicleDB.get_vehicle(veh.type_id)
 	var name: String = spec.get("name", veh.type_id)
 	var dtable: Dictionary = VehicleDB.DESTRUCTION.get(veh.type_id, {})
-	# Экипаж внутри гибнет.
-	for uid in veh.occupants:
+	# Экипаж внутри гибнет. Пассажиры челнока остаются трупами на своих клетках,
+	# машина из-под них исчезает (batch 13 S12).
+	for uid in veh.occupants.duplicate():
 		var crew := state.get_unit(uid)
 		if crew != null:
-			_kill(crew)
+			_kill(crew, res)
 	veh.occupants.clear()
+	if _seated(veh):
+		for i in veh.seats.size():
+			var sid: int = veh.seats[i]
+			if sid == Vehicle.SEAT_STATION:
+				var sc := state.grid.cell(veh.seat_cell(i))
+				if sc != null and sc.feature_id == MCF.FEATURE_DRONE_STATION:
+					sc.clear_feature()
+			elif sid >= 0:
+				var body := state.get_unit(sid)
+				if body != null:
+					body.aboard_vehicle_id = -1
+			veh.seats[i] = -1
 	veh.durability = 0
 	var roll := state.dice.roll_d6()
 	var explode := false
@@ -6051,6 +6675,12 @@ func _destroy_vehicle(veh: Vehicle, res: ActionResult) -> void:
 		"roll": roll, "need": need, "ok": explode,
 	})
 	res.log("%s is destroyed! (destruction roll %d)" % [name, roll])
+	# Оператор борга гибнет вместе с машиной (batch 13 B6) — его тело остаётся на клетке.
+	if veh.is_borg():
+		var bop := state.get_unit(veh.borg_operator())
+		if bop != null and bop.is_alive():
+			_kill(bop, res)
+		veh.occupants.clear()
 	if explode:
 		var r := int(dtable.get("explode_radius", 1))
 		res.log("It explodes (radius %d)!" % r)
@@ -6059,7 +6689,17 @@ func _destroy_vehicle(veh: Vehicle, res: ActionResult) -> void:
 		# диагонали ударная волна уходит недалеко.
 		# У детонации борта нет — рвётся сама машина, а не кто-то по ней стреляет.
 		_aim_from = NOWHERE
-		var area := MCF.blast_diamond(center, r)
+		var area := MCF.blast_square(center, r) if bool(dtable.get("square", false)) \
+				else MCF.blast_diamond(center, r)
+		if bool(dtable.get("square", false)):
+			# Борг рвётся как противотанковый заряд (B6): всё в квадрате 3×3 гибнет,
+			# стены и укрытия сносятся.
+			state.grid.clear_vehicle_footprint(veh.id, veh.footprint())
+			state.vehicles.erase(veh.id)
+			for n in _blast(center, res, area):
+				res.log("%s destroyed!" % n)
+			_damage_vehicles_in_area(area, center, 1, veh.id, res, "%s detonation" % name)
+			return
 		for bc: Vector2i in area:
 			if not state.grid.in_bounds(bc):
 				continue
@@ -6071,6 +6711,8 @@ func _destroy_vehicle(veh: Vehicle, res: ActionResult) -> void:
 	# Танк остаётся корпусом-обломком (укрытие/блок линии); челнок исчезает.
 	if bool(dtable.get("wreck", false)):
 		veh.wrecked = true
+		if veh.is_borg():
+			state.grid.set_vehicle_footprint(veh.id, veh.footprint())
 	else:
 		state.grid.clear_vehicle_footprint(veh.id, veh.footprint())
 		state.vehicles.erase(veh.id)
@@ -6091,7 +6733,7 @@ func boardable_vehicles(unit: UnitInstance) -> Array:
 		return out
 	var seen := {}
 	for veh: Vehicle in state.all_vehicles():
-		if not veh.alive() or veh.slots_used() >= veh.capacity():
+		if not veh.alive() or _vehicle_full(veh):
 			continue
 		if seen.has(veh.id):
 			continue
@@ -6100,10 +6742,19 @@ func boardable_vehicles(unit: UnitInstance) -> Array:
 			out.append(veh)
 	return out
 
+## Мест больше нет: у челнока — ни одного свободного кресла, у прочих — все слоты заняты.
+func _vehicle_full(veh: Vehicle) -> bool:
+	if _seated(veh):
+		return veh.free_seats().is_empty()
+	if veh.is_borg():
+		var op := state.get_unit(veh.borg_operator())
+		return op != null and op.is_alive()
+	return veh.slots_used() >= veh.capacity()
+
 ## Соседняя своя пехота, которая может сесть в машину.
 func vehicle_board_candidates(veh: Vehicle) -> Array:
 	var out: Array = []
-	if veh == null or not veh.alive() or veh.slots_used() >= veh.capacity():
+	if veh == null or not veh.alive() or _vehicle_full(veh):
 		return out
 	for u in state.all_units():
 		if u.is_alive() and u.owner == veh.owner and u.aboard_vehicle_id == -1 \
@@ -6115,13 +6766,15 @@ func vehicle_board_candidates(veh: Vehicle) -> Array:
 func vehicle_move_targets(veh: Vehicle) -> Dictionary:
 	var out: Dictionary = {}
 	var credit := vehicle_move_credit(veh)
-	if veh == null or not veh.alive() or (veh.ap <= 0 and credit <= 0):
+	if veh == null or not veh.alive() or (vehicle_ap(veh) <= 0 and credit <= 0):
 		return out
 	if not veh.can_drive():
 		return out  # разбитая ходовая — ехать некуда (веха «Modular tank system»)
 	# Тот же бюджет, что спишет резолвер (#97): остаток прошлого движения — вместо ОД.
 	var speed := credit if credit > 0 \
 			else int(VehicleDB.get_vehicle(veh.type_id).get("speed", 0))
+	if _seated(veh):
+		speed = _shuttle_budget(veh)  # водитель платит по 15 клеток за ОД (batch 13)
 	var dirs: Array = []
 	if veh.facing != Vector2i.ZERO:
 		dirs = [veh.facing, -veh.facing]
@@ -6159,6 +6812,8 @@ func vehicle_move_crushes_ally(veh: Vehicle, dir: Vector2i, steps: int) -> bool:
 	var credit := vehicle_move_credit(veh)
 	var speed := credit if credit > 0 \
 			else int(VehicleDB.get_vehicle(veh.type_id).get("speed", 0))
+	if _seated(veh):
+		speed = _shuttle_budget(veh)
 	var plan := VehicleRules.plan_line_move(state, veh, dir, steps, speed)
 	if not plan["ok"]:
 		return false
@@ -6176,12 +6831,20 @@ func vehicle_move_crushes_ally(veh: Vehicle, dir: Vector2i, steps: int) -> bool:
 	return false
 
 ## Свободные соседние со следом клетки для высадки экипажа.
-func vehicle_disembark_cells(veh: Vehicle) -> Array:
+func vehicle_disembark_cells(veh: Vehicle, unit_id: int = -1) -> Array:
 	var out: Array = []
 	if veh == null:
 		return out
 	var seen := {}
-	for fc in veh.footprint():
+	var cells: Array[Vector2i] = veh.footprint()
+	# Пассажир челнока выходит через СВОЙ борт (batch 13 S7): только клетки вокруг
+	# клетки его кресла.
+	if _seated(veh) and unit_id != -1:
+		var sc := seat_cell_of(state.get_unit(unit_id))
+		if sc == NOWHERE:
+			return out
+		cells = [sc]
+	for fc in cells:
 		for n in state.grid.neighbors(fc):
 			if seen.has(n):
 				continue

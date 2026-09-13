@@ -79,6 +79,8 @@ var _is_solo: bool = false
 ## Маяк локальной сети хоста (item 10): пока хост сидит в лобби, он продолжает
 ## объявлять партию — иначе клиенты перестали бы его находить.
 var _lan_adv: LanDiscovery = null
+## Гость уже попросил хоста повторить объявление матча (batch 13 #11) — один раз.
+var _setup_requested: bool = false
 
 func _ready() -> void:
 	_is_client = NetHandoff.session != null and not NetHandoff.is_host
@@ -122,13 +124,17 @@ func _on_host_peer_joined(id: int) -> void:
 	# Новому гостю нужна ещё и карта — снимок несёт только её имя.
 	_send_lobby_map()
 
+## Ушедшего гостя подменяет ИИ высокой сложности (batch 13 #2): партия остаётся
+## готовой к старту, а его место — занятым. Хост волен переключить слот обратно.
 func _on_host_peer_left(id: int) -> void:
 	var side := roster.side_of_peer(id)
 	if side >= 0:
 		var s: Roster.Slot = roster.slots[side]
-		s.kind = Roster.SlotKind.OPEN
+		s.kind = Roster.SlotKind.AI
+		s.ai_difficulty = AIController.Difficulty.HARD
 		s.peer_id = -1
 		s.display_name = MCF.owner_name(side)
+		_status.text = "%s left — a Hard AI takes that slot." % s.display_name
 	_refresh_host_status()
 	_lobby_changed()
 
@@ -138,10 +144,19 @@ func _seat_peer(id: int) -> void:
 	if roster.side_of_peer(id) >= 0:
 		return
 	var target: Roster.Slot = null
+	# Слот, который хост уже выставил в «Player», но за которым никто не сидит, — это
+	# место, приготовленное для друга (batch 13 #11): гость садится ТУДА, а не в новый
+	# слот. Раньше такой слот оставался пустым, «Start Match» отказывал («nobody has
+	# joined it»), и партия не начиналась вовсе.
 	for s: Roster.Slot in roster.slots:
-		if s.kind == Roster.SlotKind.OPEN:
+		if s.kind == Roster.SlotKind.HUMAN and s.peer_id < 0:
 			target = s
 			break
+	if target == null:
+		for s: Roster.Slot in roster.slots:
+			if s.kind == Roster.SlotKind.OPEN:
+				target = s
+				break
 	if target == null:
 		var nid := roster.add_slot(Roster.SlotKind.OPEN)
 		if nid < 0:
@@ -272,6 +287,16 @@ func _on_client_message(msg: Dictionary) -> void:
 		NetHandoff.K_LOBBY_MAP:
 			_apply_lobby_map(msg)
 			return
+	# Хост уже на закупке, а объявление матча до нас не дошло (batch 13 #11): о фазе
+	# говорят пакеты расстановки. Просим хоста повторить K_SETUP, вместо того чтобы
+	# сидеть в лобби до скончания века.
+	if str(msg.get("k", "")) in [PlacementScript.K_LIVE_REQ, PlacementScript.K_LIVE,
+			PlacementScript.K_ROSTER]:
+		if not _setup_requested and NetHandoff.session != null:
+			_setup_requested = true
+			_status.text = "The host has started — catching up…"
+			NetHandoff.session.send({"k": NetHandoff.K_SETUP_REQ})
+		return
 	# Хост открыл сохранение (M12): доска приезжает целиком, и закупка пропускается.
 	if str(msg.get("k", "")) == NetHandoff.K_LOAD:
 		NetHandoff.apply_load(msg)
@@ -673,6 +698,14 @@ func _build_personal(parent: VBoxContainer) -> void:
 func _refresh_slots() -> void:
 	if _slots_box == null:
 		return
+	# Строки пересобираются с нуля, а число, набранное в SpinBox, но не подтверждённое
+	# Enter'ом или уходом фокуса, живёт только в его поле ввода (batch 13 #12): смена
+	# цвета перестраивала таблицу, и набранные 500 очков молча возвращались к 300.
+	# Сначала применяем всё набранное — apply() шлёт value_changed, и ростер узнаёт.
+	for row in _slots_box.get_children():
+		for c in row.get_children():
+			if c is SpinBox:
+				(c as SpinBox).apply()
 	for c in _slots_box.get_children():
 		c.queue_free()
 	_slots_box.add_child(_slot_header())
@@ -771,6 +804,10 @@ func _slot_row(s: Roster.Slot) -> Control:
 	budget.value = s.budget
 	budget.prefix = "Pts "
 	budget.value_changed.connect(_on_slot_budget.bind(s.id))
+	# Набранное число попадает в ростер сразу, не дожидаясь Enter (batch 13 #12).
+	budget.get_line_edit().text_changed.connect(func(t: String) -> void:
+		if t.is_valid_int():
+			(roster.slots[s.id] as Roster.Slot).budget = int(t))
 	budget.editable = not _is_client
 	budget.custom_minimum_size = Vector2(SLOT_COL_PTS, 0)
 	row.add_child(budget)
@@ -1146,7 +1183,7 @@ func _on_start() -> void:
 	if _is_host_net:
 		for s: Roster.Slot in roster.slots:
 			if s.kind == Roster.SlotKind.HUMAN and s.peer_id < 0:
-				_status.text = "Slot %d is set to Player but nobody has joined it." % (s.id + 1)
+				_status.text = "Slot %d is 'Player' but nobody has joined it — wait for them, or set the slot to Open / AI." % (s.id + 1)
 				return
 	if not _save.is_empty():
 		_start_loaded()

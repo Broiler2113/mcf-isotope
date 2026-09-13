@@ -23,7 +23,13 @@ func _initialize() -> void:
 			pl._click_cell(Vector2i(4, 6))
 			pl.brush_unit = "tank"
 			pl._click_cell(Vector2i(2, 9))
-			ck(pl._side_unit_count(0) == 3, "host placed 3 (got %d)" % pl._side_unit_count(0)))
+			ck(pl._side_unit_count(0) == 3, "host placed 3 (got %d)" % pl._side_unit_count(0))
+			ck(pl._side_unit_count(1) == 3, "guest zone mirrored live with 3 (got %d)" % pl._side_unit_count(1))
+			# снятый оригинал уносит и копию
+			pl._click_cell(Vector2i(4, 6))
+			ck(pl._side_unit_count(1) == 2, "removing the original removes its mirror (got %d)" % pl._side_unit_count(1))
+			pl.brush_unit = "light_infantry"
+			pl._click_cell(Vector2i(4, 6)))
 	step("ready", func() -> bool: return _step_t > 1.0, func() -> void:
 		var pl = current_scene
 		pl._on_net_ready()

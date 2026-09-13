@@ -211,6 +211,13 @@ func _decide(state: GameState) -> Intent:
 func _activity_quota() -> float:
 	return 1.0 if owner == MCF.Owner.NEUTRAL else MIN_ARMY_ACTIVITY
 
+## ОД машины без резолвера (batch 13): у челнока — ОД водителя, у танка — свой пул.
+func _veh_ap(state: GameState, veh: Vehicle) -> int:
+	if veh.seated():
+		var d := state.get_unit(veh.driver_id())
+		return d.remaining_ap if d != null and d.is_alive() and d.owner == veh.owner else 0
+	return veh.ap
+
 ## Ключ явки: техника и пехота нумеруются независимо, поэтому id мало.
 func _row_key(row: Dictionary) -> String:
 	return ("v%d" if row["vehicle"] else "u%d") % int(row["id"])
@@ -268,11 +275,11 @@ func _idle_rows(state: GameState) -> Array:
 	# стояла весь бой. Поэтому техника добирается в принудительный проход ВСЕГДА,
 	# независимо от того, набрала пехота свою квоту или нет.
 	for veh: Vehicle in state.all_vehicles():
-		if veh.owner != owner or not veh.alive():
+		if veh.owner != owner or not veh.alive() or veh.is_borg():
 			continue
 		if _acted.has("v%d" % veh.id):
 			continue
-		if veh.ap <= 0 and veh.move_credit <= 0:
+		if _veh_ap(state, veh) <= 0 and veh.move_credit <= 0:
 			continue
 		rows.append({"id": veh.id, "vehicle": true})
 	# Пехота добирается, только если её квота явки НЕ набрана (и есть кому её набирать).
@@ -431,6 +438,12 @@ func _sync_turn(state: GameState, r: GameActionResolver) -> void:
 	# ссылке она стирала бы САМ ПЛАН — а он нужен целиком до конца хода (отладка,
 	# журнал, проверка «кто кого ждёт»).
 	_queue = _planner.order.duplicate()
+	# Пассажиры челноков (batch 13 S14) в план не входят — им некуда идти, — но стрелять
+	# из кресел они обязаны: добавляем их в очередь ПОСЛЕ машин, чтобы челнок сперва
+	# подлетел, а потом уже открыл огонь со всех бортов.
+	for u: UnitInstance in state.living_units_of(owner):
+		if u.aboard_vehicle_id != -1 and r.seated_vehicle_of(u) != null:
+			_queue.append({"id": u.id, "vehicle": false})
 
 ## Техника в очереди хода: своя/захваченная, ближняя к врагу — первой (§техника).
 ## Пехотную часть очереди строит планировщик, машины он не расставляет — у них
@@ -438,7 +451,8 @@ func _sync_turn(state: GameState, r: GameActionResolver) -> void:
 func _vehicle_queue(state: GameState, r: GameActionResolver) -> Array:
 	var rows: Array = []
 	for veh: Vehicle in state.all_vehicles():
-		if not veh.alive() or veh.owner != owner:
+		# Борг — не машина для очереди техники (batch 13): им играют как бойцом.
+		if not veh.alive() or veh.owner != owner or veh.is_borg():
 			continue
 		var ev := _nearest_enemy(state, veh.center(), false, r)
 		rows.append({
@@ -453,7 +467,9 @@ func _best_for_actor(state: GameState, r: GameActionResolver, row: Dictionary) -
 	var best: Dictionary = {}
 	if row["vehicle"]:
 		var veh := state.get_vehicle(row["id"])
-		if veh == null or not veh.alive() or veh.owner != owner or veh.ap <= 0:
+		# У челнока пула нет — считаются ОД водителя (batch 13 S1).
+		if veh == null or not veh.alive() or veh.owner != owner \
+				or (r.vehicle_ap(veh) <= 0 and r.vehicle_move_credit(veh) <= 0):
 			return {}
 		for cand: Dictionary in _vehicle_candidates(state, r, veh):
 			if best.is_empty() or cand["score"] > best["score"]:
@@ -462,12 +478,21 @@ func _best_for_actor(state: GameState, r: GameActionResolver, row: Dictionary) -
 	var u := state.get_unit(row["id"])
 	if u == null or not u.is_alive() or u.owner != owner:
 		return {}
-	# Пассажир В МАШИНЕ вынесен за карту (coord = OFFBOARD, −9999) — как пехота он больше
+	# Экипаж ТАНКА вынесен за карту (coord = OFFBOARD, −9999) — как пехота он больше
 	# не ходит, всё его участие идёт через экипаж машины (_vehicle_candidates). Раньше он
 	# всё равно доходил до _candidates, а там Movement.reachable_for стартовал из −9999 и
 	# индексировал сетку по отрицательному адресу — «out of bounds» при посадке ИИ.
+	# Пассажир ЧЕЛНОКА сидит в клетке следа (batch 13) и стреляет оттуда: ему предлагаются
+	# только выстрелы (_passenger_candidates), ходить из кресла нельзя.
 	if u.aboard_vehicle_id != -1:
-		return {}
+		if r.seated_vehicle_of(u) == null:
+			return {}
+		if u.remaining_ap <= 0 and not _pending_shoot(u):
+			return {}
+		for cand: Dictionary in _passenger_candidates(state, r, u):
+			if best.is_empty() or cand["score"] > best["score"]:
+				best = cand
+		return best
 	if not _can_command(u):
 		return {}
 	# Недоеденные клетки прошлого движения (§3.2) — полноценный ресурс, а не остаток:
@@ -486,6 +511,18 @@ func _best_for_actor(state: GameState, r: GameActionResolver, row: Dictionary) -
 		if best.is_empty() or cand["score"] > best["score"]:
 			best = cand
 	return best
+
+## Пассажир челнока (batch 13 S14): стреляет со своего кресла из всего, что есть —
+## обычный огонь, противотанковый заряд, лазер, струя. Ни ходов, ни захватов из кресла.
+func _passenger_candidates(state: GameState, r: GameActionResolver, u: UnitInstance) -> Array:
+	var out: Array = []
+	var shoot := _best_shoot(state, r, u)
+	if not shoot.is_empty():
+		out.append(shoot)
+	var veh_shot := _best_vehicle_shot(state, r, u)
+	if not veh_shot.is_empty():
+		out.append(veh_shot)
+	return out
 
 ## Все действия-кандидаты одного юнита с оценками.
 func _candidates(state: GameState, r: GameActionResolver, u: UnitInstance) -> Array:
@@ -643,7 +680,9 @@ func _neutral_soldiers(state: GameState) -> Array:
 	var out: Array = []
 	var grid := state.grid
 	for o: UnitInstance in state.all_units():
-		if CivilianAI.is_soldier(o) and o.aboard_vehicle_id == -1 and grid.in_bounds(o.coord):
+		# Пассажир челнока сидит в клетке следа (batch 13) — он на поле и в счёт идёт;
+		# вне поля только экипаж танка (OFFBOARD).
+		if CivilianAI.is_soldier(o) and grid.in_bounds(o.coord):
 			out.append(o)
 	return out
 
@@ -723,7 +762,7 @@ func _neutral_outnumbers(state: GameState, r: GameActionResolver, u: UnitInstanc
 		if o.id != u.id:
 			# Сидящего в машине не видно и не считаем: он вне поля (issue 2), и луч
 			# до его координаты ушёл бы за край сетки.
-			if o.aboard_vehicle_id != -1 or not state.grid.in_bounds(o.coord):
+			if not state.grid.in_bounds(o.coord):
 				continue
 			if r.los_blocked(u.coord, o.coord, true, true):
 				continue
@@ -739,7 +778,7 @@ func _neutral_outnumbers(state: GameState, r: GameActionResolver, u: UnitInstanc
 ## кредит прошлого движения тратится ПЕРВЫМ и без ОД — точно так же считает резолвер
 ## (_resolve_move), поэтому оценка ИИ и правило игры не расходятся.
 func _move_budget(u: UnitInstance) -> int:
-	return u.move_credit if u.move_credit > 0 else u.stats.speed
+	return u.move_credit if u.move_credit > 0 else u.speed()
 
 ## Шахтёр (и инженер) сносит преграду, стоящую на пути к врагу, вместо того чтобы
 ## обходить её (#90). Берём соседнюю ломаемую клетку, которая ближе к цели, чем мы
@@ -862,7 +901,7 @@ func _unit_value(u: UnitInstance) -> float:
 	# такой же боец вражеской армии, и обходить его стороной ИИ незачем.
 	if CivilianAI.is_npc(u):
 		return -1.0
-	var v := 3.0 + float(u.stats.rate_of_fire)
+	var v := 3.0 + float(u.rate_of_fire())
 	# «Гражданский» — не боевая специальность, надбавки за неё нет.
 	if u.stats.special_ability_id != "" \
 			and u.stats.special_ability_id != MCF.ABILITY_CIVILIAN:
@@ -1003,7 +1042,7 @@ func _best_shoot(state: GameState, r: GameActionResolver, u: UnitInstance) -> Di
 		if r.anti_tank_shot_endangers_own(u, t.coord):
 			continue
 		var dist := Combat.distance(u.coord, t.coord)
-		var hit_need := Combat.hit_number(dist, u.stats.fire_range)
+		var hit_need := Combat.hit_number(dist, u.fire_range())
 		var ease := float(7 - hit_need)  # чем меньше нужное число, тем выше
 		var score := SCORE_SHOOT_BASE + _unit_value(t) + ease * 2.0
 		if _pref_hard():
@@ -1023,15 +1062,15 @@ func _best_shoot(state: GameState, r: GameActionResolver, u: UnitInstance) -> Di
 ## вся очередь (что и правильно). −1 («всё») возвращается там, где дробить нечего:
 ## очередь длиной 1 или заведомо безнадёжный расклад.
 func _shots_for(r: GameActionResolver, u: UnitInstance, t: UnitInstance) -> int:
-	var available: int = u.stats.rate_of_fire
+	var available: int = u.rate_of_fire()
 	if _pending_shoot(u):
 		available = u.action_state.remaining_shots
 	if available <= 1:
 		return -1
 	var cover := r.cover_effect(u, t)
-	var need := Combat.hit_number(Combat.distance(u.coord, t.coord), u.stats.fire_range) \
+	var need := Combat.hit_number(Combat.distance(u.coord, t.coord), u.fire_range()) \
 			+ int(cover["hit_penalty"])
-	var parry: int = t.stats.armor_threshold + u.stats.target_defense_penalty \
+	var parry: int = t.armor() + u.stats.target_defense_penalty \
 			- int(cover["defense_bonus"]) - t.carried_corpses
 	var p_hit := clampf(float(7 - need) / 6.0, 0.0, 1.0)
 	var p_pen := clampf(float(parry - 1) / 6.0, 0.0, 1.0)
@@ -1078,7 +1117,7 @@ func _best_vehicle_shot(state: GameState, r: GameActionResolver, u: UnitInstance
 			if r.anti_tank_shot_endangers_own(u, fc):
 				continue
 			var ease := float(7 - Combat.hit_number(
-				Combat.distance(u.coord, fc), u.stats.fire_range))
+				Combat.distance(u.coord, fc), u.fire_range()))
 			var score := SCORE_SHOOT_BASE + SCORE_ANTI_TANK_PRIORITY \
 					+ _vehicle_value(veh) + ease * 2.0
 			if best.is_empty() or score > best["score"]:
@@ -1118,7 +1157,7 @@ func _best_blast_path(state: GameState, r: GameActionResolver, u: UnitInstance) 
 	# Заряд летит только по линии огня (8 направлений, §3.5), поэтому перебираем именно
 	# их, а не «луч к врагу»: враг почти никогда не стоит ровно на одной из восьми осей.
 	# По каждой оси берём ПЕРВУЮ преграду — снесём её, и стена вскроется.
-	var reach := int(u.stats.fire_range)
+	var reach := int(u.fire_range())
 	var best: Dictionary = {}
 	for dir: Vector2i in Grid.N8:
 		var hit := Vector2i(-1, -1)
@@ -1782,7 +1821,7 @@ func _vehicle_candidates(state: GameState, r: GameActionResolver, veh: Vehicle) 
 			and veh.can_fire_gun() \
 			and not (veh.tower_jammed() and veh.tower_world_dir() == Vector2i.ZERO) \
 			and veh.cannon_shots_this_round < int(gun.get("max_per_turn", 2)) \
-			and veh.ap >= int(gun.get("ap_cost", 1))
+			and r.vehicle_ap(veh) >= int(gun.get("ap_cost", 1))
 	var shot_target: UnitInstance = null
 	if gun_ready:
 		var rng := int(gun.get("range", MCF.CANNON_RANGE))

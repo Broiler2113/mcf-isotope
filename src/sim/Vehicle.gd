@@ -22,10 +22,18 @@ const SEAT_OFFSETS := [Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1), Vector2i(
 
 ## Водитель всегда в правой-верхней клетке — слот 1.
 const DRIVER_SEAT := 1
+## Место занято станцией дронов (batch 13, «Shuttle changes» §4): в него никто не сядет,
+## пока оператор не заберёт станцию обратно.
+const SEAT_STATION := -2
 
 var id: int = -1
 var type_id: String = ""
-var owner: int = -1
+var owner: int = -1:
+	set(v):
+		if owner == v:
+			return
+		owner = v
+		UnitInstance.vision_epoch += 1
 
 ## Прочность УЗЛОВ (веха «Modular tank system»): id узла → текущие очки.
 ## Отсутствующий ключ = узла у этой машины нет вовсе (у челнока нет башни и пушки).
@@ -49,7 +57,16 @@ var durability: int:
 var tower_locked_dir: Vector2i = Vector2i.ZERO
 
 ## Верхний-левый угол следа и его размеры в клетках.
-var origin: Vector2i = Vector2i.ZERO
+## origin, owner и wrecked двигают UnitInstance.vision_epoch (batch 13 #1): обзор стороны
+## складывается и из глаз экипажа машины, а корпус обзор больше не перекрывает — значит
+## переезд машины не трогает GridCell.vision_version, и без этой подписи кеш
+## team_visible_coords() не узнал бы, что танк смотрит уже из другого места.
+var origin: Vector2i = Vector2i.ZERO:
+	set(v):
+		if origin == v:
+			return
+		origin = v
+		UnitInstance.vision_epoch += 1
 var size: Vector2i = Vector2i.ONE
 
 ## Направление (единичный вектор) для машин с фронтом — у танка (одно из 8).
@@ -74,7 +91,12 @@ var seats: Array[int] = []
 
 ## Обломки танка (результат уничтожения без взрыва): прочность 0, экипаж мёртв, но
 ## корпус ОСТАЁТСЯ на поле как непроходимое препятствие/укрытие и перекрывает линию.
-var wrecked: bool = false
+var wrecked: bool = false:
+	set(v):
+		if wrecked == v:
+			return
+		wrecked = v
+		UnitInstance.vision_epoch += 1
 
 ## Сколько раз главная пушка стреляла в этом раунде (не чаще 2×/ход).
 var cannon_shots_this_round: int = 0
@@ -179,6 +201,27 @@ func first_free_seat() -> int:
 		if seats[i] == -1:
 			return i
 	return -1
+
+## Свободные места (batch 13): −1 в массиве; станция и труп место держат.
+func free_seats() -> Array[int]:
+	ensure_seats()
+	var out: Array[int] = []
+	for i in seats.size():
+		if seats[i] == -1:
+			out.append(i)
+	return out
+
+## Машина с посадочными местами (челнок): экипаж сидит в клетках следа.
+func seated() -> bool:
+	return VehicleDB.is_seated(type_id)
+
+## Борг (batch 13): одноместная машина, которой управляют как бойцом.
+func is_borg() -> bool:
+	return VehicleDB.is_borg(type_id)
+
+## Оператор борга — единственный «экипаж»; −1, если пусто.
+func borg_operator() -> int:
+	return occupants[0] if not occupants.is_empty() else -1
 
 
 # --- чистая геометрия (статика, без состояния) ----------------------------

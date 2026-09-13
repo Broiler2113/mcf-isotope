@@ -67,8 +67,9 @@ func _check() -> void:
 		staged.append(id)
 	ck(staged.size() == wanted.size(), "every kind was staged on the host side")
 
-	p.active_side = guest
-	p._stamp_formation()
+	# Зеркало живёт само (batch 13 #13): любое изменение отряда хоста пересобирает
+	# отражения во все остальные зоны — штамповать вручную больше нечего.
+	p._placement_changed()
 
 	for id: String in staged:
 		var copy: Dictionary = {}

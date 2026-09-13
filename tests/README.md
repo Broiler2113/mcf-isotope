@@ -124,6 +124,24 @@ player, the resolver and the AI alike (a 1-wide corridor with an own mine is cut
 an unknown enemy mine is not, a revealed one is); the AI sapper actually lays a field and
 never walks a unit onto its own mine; and cosmetics bounce off the board edge.
 
+**`run_batch13.gd`** covers batch 13's rules that only show in play: sight is unlimited in
+range and direction and stops only at walls and closed airlocks (units, corpses and hulls
+never block it), a crewed vehicle sees from every hull cell and an empty one is blind, a
+body in an airlock holds the doors open, the purchase eraser refunds and never touches
+mirrors, and the map editor resizes without wiping and flood-fills inside walls.
+
+**`run_shuttle.gd`** covers the seated shuttle end to end — seat choice, the driver paying
+1 AP per 15 cells with a banked remainder, passengers riding along, shooting from and into
+seats (+1 hull cover, no grabbing), a heavy hit killing the passenger on the landing cell
+while the others roll, a body holding its seat until pulled out, a station mounted in a seat
+that rides along — and the AI boarding, flying and firing from seats.
+
+**`run_borg.gd`** covers the borg: boarding and exiting, the operator's numbers (3 AP,
+9 move, 12/4 gun, −2 armour, abilities kept), the engineer keeping its gun and building in
+batches that expire with the round, fire immunity, trenches refused, AV mines hurting the
+hull, destruction (operator dies; explode or wreck), a dead operator being pushed out by the
+next boarder, and the AI climbing into an empty borg.
+
 **`run_net_match.sh`** is the only run that proves multiplayer works: it starts **two
 Godot processes** on localhost — `net_host_*.gd` and `net_guest_*.gd`, both built on
 `NetSmokeBase.gd` — and drives the real scenes through ENet: lobby (seating, colour and

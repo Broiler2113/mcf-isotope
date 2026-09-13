@@ -101,9 +101,10 @@ func _pools_are_independent() -> void:
 	GameConfig.civilians_enabled = false
 	var st := m.build_state(3)
 	var sh: Vehicle = st.all_vehicles()[0]
-	# У челнока фронта нет, а значит нет и бортов: ходовая у него осталась ОДНИМ узлом.
-	ck(sh.component(MCF.COMP_HULL) == 4 and sh.component(MCF.COMP_TRACKS) == 4,
-			"shuttle carries hull 4 and one shared track pool of 4")
+	# Челнок — только корпус (batch 13, «Shuttle changes» §6): ни башни, ни ходовой.
+	ck(sh.component(MCF.COMP_HULL) == 4 and not sh.has_component(MCF.COMP_TRACKS)
+			and sh.live_components() == [MCF.COMP_HULL],
+			"shuttle carries hull 4 and nothing else")
 	ck(not sh.has_component(MCF.COMP_TRACKS_L),
 			"and no left/right split, having no front to measure sides from")
 	ck(not sh.has_component(MCF.COMP_TOWER) and not sh.has_component(MCF.COMP_GUN),
