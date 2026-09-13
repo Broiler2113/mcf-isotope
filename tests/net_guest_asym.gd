@@ -59,6 +59,8 @@ func _initialize() -> void:
 	step("round went by", func() -> bool:
 		poke_dice()
 		var m = current_scene
+		if m._match_over:
+			return true
 		if m.state.active_player() == 2 and not m._animating and not m._net_playing and m.state.turns.round_number < 2:
 			m._on_intent_ready(EndTurnIntent.new())
 		return m.state.turns.round_number >= 2,

@@ -457,7 +457,7 @@ refused.
   an adjacent cell, never from range. The third argument `allow_embrasure` turns this
   off for the **Anti-Tank** (`can_shoot` passes `not _is_anti_tank(shooter)`, and
   `can_blast_cell` passes `false` outright): a rocket does not fit through a slit.
-- Vehicle hulls block (#47).
+- Vehicle hulls block **line of fire** (#47) — but not **sight** (batch 13 #1, §11).
 - **Living units block** — unless the caller passes `ignore_units = true`. Since #100
   `can_shoot` does exactly that: a body no longer *forbids* the shot, it *intercepts* it
   (§6.9).
@@ -795,6 +795,12 @@ scaled would have charged a soldier for vaulting a door that simply slides aside
 **welded** airlock fails `airlock_opens()` and therefore stays impassable forever, exactly
 as #99 intends.
 
+**A body in the doorway holds the doors (batch 13 #4).** `update_airlocks()` treats a corpse
+*on the airlock cell itself* (`corpses_at(cell) > 0`) as a permanent "open": the doors
+cannot close on a body, and they stay open until somebody drags it out. A corpse on the
+threshold *beside* the doorway does nothing. Welding such an airlock is refused
+("A body is jamming the doors — drag it out first") and `weldable_cells` never offers it.
+
 **Welding (#99).** An **engineer** standing next to an airlock can weld it shut for
 **1 AP** (`WELD_AIRLOCK_AP`, `WeldAirlockIntent`). The cell gains `airlock_welded`, its
 height snaps to `WALL_HEIGHT` immediately — even with the engineer himself standing
@@ -918,10 +924,21 @@ the map, never cleared. Civilians key off it (§14).
 
 | Function | Purpose |
 |---|---|
-| `_unit_sees(unit, coord)` | Chebyshev radius (`sight_range`, default 12) plus a ray cast. Walls and vehicle hulls block; **living units do not**. |
+| `_seen_from(coord, r)` | Everything visible from a cell: a Bresenham ray to every cell of the board. **Only a wall-height cell that is not glass blocks** — a wall, a closed airlock, a BRU, a pillbox; **living units, corpses and vehicle hulls do not**. Sight is unlimited in range and in direction (batch 13 #1). |
+| `_vehicle_seen(veh)` | A vehicle's eyes are its **crew's**: an empty or wrecked vehicle sees nothing. It looks out from **every hull cell**, so a tank in a doorway sees round both jambs. |
 | `team_sees(owner, coord)` | Visibility is **shared across the whole team**. |
 | `is_visible_to_team(owner, target)` | The targeting gate used by `can_shoot`. |
 | `team_visible_coords(owner)` | The set the renderer uses to draw the fog overlay. |
+
+**Why hulls stopped blocking (batch 13 #1).** A tank used to look out from its `origin`
+— the top-left hull cell — and its *own* hull blocked the ray, so it saw only up and
+left: the "weird FOV" in the report. The rule is now `GridCell.blocks_sight()` and it
+names exactly two things, a wall and a closed airlock (glass excepted, #29). Because
+hulls no longer matter, `vehicle_id` no longer bumps `vision_version`; instead
+`Vehicle.origin` / `owner` / `wrecked` bump `UnitInstance.vision_epoch`, which is what
+tells the team-fog cache that a vehicle moved. A wall turned to glass at the same
+height bumps `vision_version` from the `feature_id` setter — the height setter cannot
+see that change.
 
 - **`fog_enabled` defaults to `true`** on the resolver; the Setup screen turns it off
   (#12 made the checkbox default to off at the UI level). With fog disabled,
@@ -1731,6 +1748,14 @@ instead of appearing at its destination.
 A movable, resizable side panel (`HUD_START_SIZE = (330, 430)`) with a universal base
 action menu shared by all units.
 
+**Save Game is a button again (batch 13 #3).** It sits beside *Return to Menu* in the side
+panel (Ctrl+S still works) and is hidden while watching a replay. **The pause button just
+says Pause / Resume (batch 13 #10)** — the "(AI vs AI)" suffix is gone; the button still
+appears only when every side is a machine. **The vehicle component panel stands to the
+right of the action menu (batch 13 #13)**, on the same top line, instead of above the
+combat log where a long vehicle menu used to grow over it; `_reposition_hud_grip` places it
+once the menu's width is known, and it stays wherever the player drags it.
+
 **Action menus are anchored to the top-left corner (#87)**, at `MENU_ANCHOR = (16, 16)`,
 not floated above the unit — over the unit they covered the board and slid off-screen
 when zoomed. Every menu is a `ScrollContainer`; `_cap_scroll_height` clamps it to
@@ -1774,6 +1799,21 @@ MainMenu → Setup → Placement → Main (battle)
   (Under #91 a bought civilian entered play Neutral and hostile to everyone; that made the
   purchase unusable — the player paid 20 points for a unit that hunted their own squad.)
 
+  **Eraser (batch 13 #5).** A toggle under the brush tools: while it is on, the point brush
+  removes your own units under the click or drag, and Line / Rect / Circle / Full erase
+  their whole area, refunding the points. Mirrored copies and other players' units are
+  never touched; picking a unit from the palette turns the eraser off.
+
+  **Mirrored placement is live (batch 13 #13).** There is no *Stamp Formation* step any
+  more. Every change the first side makes — a unit placed, removed, or a tank rotated —
+  rebuilds the mirror image in every other zone at once (`_refresh_mirrors`, records
+  flagged `mirror`), so the other players watch their army appear as the host builds it.
+  In hot-seat the flow goes straight from the first side to *Start Battle*; over the
+  network the host sends the mirrors with its live placement, and a mirrored guest
+  confirms readiness **automatically** the moment the host's final formation arrives.
+  Units that do not fit the other zone are reported in the status line rather than
+  silently dropped.
+
   **The purchase screen draws the real map (#100).** Deployment used to happen over flat
   coloured squares, so the player picked positions blind and only discovered the walls,
   trenches and sandbags once the battle started. `Placement._draw` now runs the same
@@ -1788,6 +1828,29 @@ MainMenu → Setup → Placement → Main (battle)
   the other features; and **deployment-zone painting** for P1 / P2 / Neutral / No Zone
   as a tinted overlay (stored per cell in `MapData.zone_owner`). Maps default to
   all-space and support large sizes.
+
+  **The editor draws in constant time (batch 13 #6).** `_draw()` used to walk every cell
+  of the map with three to five draw commands each, on every mouse-move with the button
+  down — 150–200 k commands per frame on a 200×200 map, ~180 ms a frame. The floor,
+  space, wall, cover tint and zone tint are now composed into **one pixel per cell** of
+  an `Image` that is drawn as a single `draw_texture_rect` (nearest filtering keeps the
+  cells crisp); a brush stroke updates only the pixels it touched. Everything on top —
+  grid lines (one `draw_multiline`), object tags, spawns, the brush cursor — is drawn only
+  for cells inside the viewport, with level-of-detail cut-offs: below 14 px a feature is a
+  dot and a spawn a plain circle, below 7 px there is no grid at all. Flood fill walks a
+  `PackedInt32Array` stack over flat indices instead of building a string signature and a
+  `Vector2i` dictionary per cell. Measured: 179 ms → 7 ms per frame headless on 220×150
+  (the 7 ms is mostly engine overhead). `ZOOM_MIN` dropped to 0.06 so a 300×300 board
+  fits the screen; *Fit View* does that in one click.
+
+  **And it is laid out as a workflow (batch 13 #14).** Left column top-down: Tool (Paint /
+  Line / Rect / Fill as **toggle buttons** — the active one is lit; keys 1–4; a **brush
+  size** slider), Floor & Eraser, Objects (with *Remove Object*). Right column: Play &
+  Leave at the very top, Deployment Zones, Neutral Units, Map Size, Save & Load. Each
+  section is a framed SteamChrome header with a one-line hint. The status line reads
+  `brush · tool | W×H cell x, y`, the title shows `*` while there are unsaved changes,
+  and Clear / Load / Main Menu ask before discarding them. **Resizing keeps the map**
+  (`MapData.resize_keep`) — *Set Size* used to wipe it.
 
   **The editor has a way back (#104).** It leaves by two doors: **"Play"** hands the map
   to `MapHandoff.pending` and opens the battle, and **"Main Menu"** (`_on_main_menu`)
@@ -2006,6 +2069,30 @@ guests. Leaving returns the slot to Open. A guest cannot be un-seated from the s
 (the host must wait for them to disconnect), and the host cannot start while a Player
 slot has nobody in it.
 
+**A player who leaves is replaced by a Hard AI (batch 13 #2).** In the lobby the slot flips
+to *AI – Hard* instead of *Open*; during placement the host's `_on_peer_left` does the
+same, keeps the army the guest had already sent (or, if they had not, un-readies the host
+and walks it through deploying for that side), and tells the other guests with
+`K_SLOT_AI`; in battle `Main._on_peer_left` swaps the `NetworkController` for an
+`AIController` on the host and broadcasts `K_SIDE_AI` so guests stop waiting for that
+player's dice (the roll wait re-checks `is_networked_human` and is woken by
+`_roll_arrived`). A host left alone no longer falls back to the menu: the session stays
+(closed, its `send` a no-op) and the match continues against the machines.
+
+**Seating respects a reserved seat (batch 13 #11).** A slot the host set to *Player* by
+hand before anyone joined is the seat prepared for the friend: a connecting guest is put
+there first, then into the first *Open* slot, then into a new one. Before this the guest
+landed in a fresh slot while the hand-made one stayed empty, and *Start Match* refused
+with "nobody has joined it". As a further safety net, a guest still in the lobby that
+sees placement traffic (`live_req` / `live` / `roster`) sends `K_SETUP_REQ`, and the host's
+placement screen answers with the full `K_SETUP` (map with its neutral spawns included).
+
+**Points survive a colour change (batch 13 #12).** The slot table is rebuilt on every
+change, and a budget typed into a `SpinBox` but not yet confirmed lived only in its text
+field — so choosing a colour reverted 500 back to 300. `_refresh_slots` now calls
+`apply()` on every spin box before rebuilding, and the budget field writes the roster on
+each keystroke.
+
 **Guests ask, the host decides.** A guest's colour pick or Join click is a
 `K_LOBBY_REQ` (`op: "color" | "slot"`) stamped by the transport with `_from`, the sender's
 peer id. The host validates it (colour free? slot open?), applies it, and broadcasts the
@@ -2095,7 +2182,12 @@ These are deliberate choices that look like bugs if you don't know the reasoning
 
 ## 24. Known Gaps & Deliberate Non-Features
 
-- **No automated victory conditions.** The match runs until the players stop.
+- **Victory freezes the board, it does not end the session (batch 13 #9).** `Main._winning_team()`
+  runs after every resolved action — local, networked or AI — and the moment only one
+  team (or nobody) has a living non-drone soldier, `_match_over` latches: a *Match Over*
+  window names the winner, and from then on no intent is accepted from anyone,
+  `_kick_if_ai` never wakes a machine, and End Turn is inert. Saving and returning to the
+  menu still work. Replays never trigger it — the recording is the authority there.
 - **Replays are not recorded in network play** — the host's dice log already occupies
   that channel (§20.1). Save a game instead.
 - **AI does not** throw grenades, build, dig, pilot drones, or ram with vehicles. It
@@ -2315,6 +2407,7 @@ number appears elsewhere in this document it is because the source comments cite
 | 103 | One unit per cell is enforced by the board itself — `Grid.place` and `move_occupant` refuse to overwrite an occupant and report failure, so no two soldiers, civilians or AI units can ever share a tile (§2.2); hovering a green move tile draws the **cheapest actual route** to it out of the Dijkstra tree, and every green tile is labelled with what standing there costs out of the movement total (§18.3); a marksman's laser no longer reaches a man in a trench from a tile that is not one, at any range including adjacent (§6.6, §7.3); NPC civilians and the army are driven by **one brain** — the second, cell-at-a-time civilian AI is deleted and a civilian is now an `AIController` with the Neutral owner, so it plans, fragments its movement, fires partial bursts and hauls corpses by the army's rules (§14, §17); the AI uses fragmented movement and partial bursts — `move_credit` is a spendable budget, a step costs score, and a burst orders `ceil(1/p)` bullets instead of the whole magazine (§17.3); an anti-tank sapper cut off by a wall **blasts through it** instead of shuffling along it (§17.3, §7.1); the AI and civilians pick up bodies that block the road and **stack them aside into piles**, the fifth forming a corpse wall (§17.3, §8.4); at least 80% of an army must act each turn and **every** civilian must, enforced by a second forced pass over whoever the plan left idle (§17.2); Player 1 can be an AI too, so AI-vs-AI matches run from Setup or a mid-battle toggle (§17.4); and the camera zooms out to 0.12 so a 60×40 board fits on one screen (§18.4) |
 | 104 | The map editor can be left the way it was entered: the **"To Demo Game"** button is gone, replaced by **"Main Menu"**, which clears `MapHandoff.pending` and returns to `MainMenu.tscn` instead of dumping the designer into a demo battle on the built-in roster (§19) |
 | 105 | A marksman firing **from** a trench is as boxed in as a marksman firing **into** one: the laser cannot climb out of the ditch any more than it could drop into it, so from the trench floor the only reachable target is one lying in the **same continuous run** of trench, along a straight line with no gap — a bend or a break means the beam hits the earth wall. The trench is now symmetric cover against the beam instead of a firing position that ignored its own walls (§6.6, §7.3) |
+| 107 | Batch 13 — sight is unlimited in every direction and stops only at walls and closed airlocks: units, corpses and vehicle hulls never block it, and a vehicle sees through its crew from every hull cell (§11); a player who leaves the lobby, the deployment or the battle is replaced by a Hard AI, and a host left alone keeps playing (§22.4); *Save Game* is back in the side panel and the pause button just says Pause (§18.6); a corpse in an airlock holds the doors open and blocks welding (§9.4); an eraser tool on the purchase screen (§19); the map editor draws in constant time from a one-pixel-per-cell base texture with viewport culling and LOD, resizes without wiping, and is laid out as a workflow with lit toggle buttons, a brush size and confirmations (§19); a match freezes with a *Match Over* window the moment one team is left (§24); the guest is seated in a hand-reserved Player slot and can re-request the match setup if it missed it, and a typed budget survives a colour change (§22.4); mirrored placement is live — the mirror follows every change, there is no stamp step and a mirrored guest confirms automatically (§19); the vehicle component panel stands beside the action menu instead of under it (§18.6) |
 | 106 | Large-scale optimization pass — as with #101 and #102, **no rule, number or decision changed**, only the cost of computing them, proved by a byte-identical golden trace over a 360-unit, 300-corpse, 6-round battle. `team_sees` answers a point query directly instead of rebuilding the entire team's fog of war for every shot; airlocks are re-evaluated from their own 3×3 neighbourhood instead of by sweeping all units; the AI's geodesic field became `GeoField` — a flat `PackedInt32Array` built by an allocation-free wave — instead of a dictionary of `Vector2i` keys; the Dijkstra frontier uses tombstones with remembered slots, in-place decrease-key and a monotone early break, all three provably picking the same cell as the old linear scan; `GridCell.burning` lets the fire check exit before touching a single neighbour; and the AI stopped rebuilding enemy lists, geodesic stamps and per-candidate dictionaries inside its hottest loops. A six-round battle at 360 units went from 31.1 s to 3.90 s (§27.14–§27.20) |
 
 ---

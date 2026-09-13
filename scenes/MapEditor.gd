@@ -4,6 +4,15 @@ extends Node2D
 ## спавна кистями, сохраняем/загружаем JSON (user://maps). Работает с данными
 ## MapData; симуляция строится из карты через MapData.build_state().
 ## Запускается напрямую как сцена; «Play» открывает Main с выбранной картой.
+##
+## Отрисовка (batch 13 #6). Раньше _draw() обходил ВСЕ клетки карты и на каждую клал
+## по 3–5 команд рисования: на поле 200×200 это 150–200 тысяч команд на кадр, а кадр
+## запрашивается на каждое движение мыши с зажатой кнопкой. Теперь:
+##   • подложка (пол/космос/стена/укрытие/зона) — ОДНА текстура, пиксель на клетку,
+##     рисуется одним draw_texture_rect; кисть меняет пиксели точечно;
+##   • всё поверх (сетка, объекты, спавны, превью) рисуется только для клеток В КАДРЕ и
+##     с уровнями детализации: мелкие клетки не получают ни подписей, ни сетки.
+## Стоимость кадра больше не зависит от размера карты — только от размера экрана.
 
 const CELL := 40
 const ORIGIN := Vector2(40, 40)
@@ -19,12 +28,14 @@ static func owner_color(owner_id: int) -> Color:
 		return Roster.PALETTE[owner_id % Roster.PALETTE.size()]
 	return Color.WHITE
 
-# Кисти рельефа/объектов. Спавн-кисти обрабатываются отдельно (owner + unit).
+# Кисти рельефа и объектов — двумя группами, чтобы «пол» и «что стоит на полу» не
+# лежали в одной куче (batch 13 #14). Спавн-кисти обрабатываются отдельно.
 const TERRAIN_BRUSHES := [
-	{"id": "erase", "label": "Erase"},
-	{"id": "space", "label": "Space"},
 	{"id": "floor", "label": "Floor"},
 	{"id": "grass", "label": "Grass Floor"},
+	{"id": "space", "label": "Space"},
+]
+const OBJECT_BRUSHES := [
 	{"id": MCF.FEATURE_WALL, "label": "Wall"},
 	{"id": MCF.FEATURE_WOOD_WALL, "label": "Wooden Wall"},
 	{"id": MCF.FEATURE_GLASS, "label": "Glass"},
@@ -47,9 +58,14 @@ const PANEL_PADDING := 14.0
 ## Инструменты рисования (как в редакторе Crazy Ball Runner): кисть, линия,
 ## прямоугольник, заливка.
 enum Tool { PAINT, LINE, RECT, FILL }
+const TOOL_NAMES := {Tool.PAINT: "Paint", Tool.LINE: "Line", Tool.RECT: "Rectangle", Tool.FILL: "Fill"}
 
 var map: MapData
 var brush: String = MCF.FEATURE_WALL
+var _brush_label: String = "Wall"
+## Радиус кисти (batch 13 #14): 1 = одна клетка. Действует на Paint; на большой карте
+## красить пол по клетке — мучение.
+var brush_size: int = 1
 ## Владелец кисти зоны развёртывания (#52); -1 = стирать зону.
 var zone_brush_owner: int = MCF.Owner.PLAYER_1
 ## Псевдо-владелец кисти: «тот игрок, что выбран в списке сторон».
@@ -69,14 +85,34 @@ var tool: int = Tool.PAINT
 ## Начало/текущая клетка перетаскивания для линии/прямоугольника (-1 = нет).
 var _drag_start: Vector2i = Vector2i(-1, -1)
 var _drag_cur: Vector2i = Vector2i(-1, -1)
+## Клетка под курсором — для строки состояния и подсветки.
+var _hover: Vector2i = Vector2i(-1, -1)
 
 ## Смещение «камеры» (панорама) и коэффициент масштаба.
 var pan: Vector2 = Vector2.ZERO
 var zoom: float = 1.0
 const PAN_SPEED := 700.0        # px/сек для WASD
-const ZOOM_MIN := 0.35
+## Нижний предел отодвинут (batch 13 #6): большая карта обязана помещаться на экран
+## целиком, а подложка-текстура стоит одинаково при любом масштабе.
+const ZOOM_MIN := 0.06
 const ZOOM_MAX := 2.5
 var _mouse_panning: bool = false
+
+## Пороги детализации по размеру клетки на экране (px).
+const LOD_GRID := 7.0      # ниже — сетку не рисуем
+const LOD_TAGS := 14.0     # ниже — объекты и спавны без подписей, одной меткой
+const LOD_SPRITES := 18.0  # ниже — картинки-замены пола не рисуем (подложки хватает)
+
+# --- Подложка-текстура ---
+var _base_img: Image = null
+var _base_tex: ImageTexture = null
+## Пиксели правились с последнего кадра — текстуру надо обновить.
+var _base_stale: bool = false
+## Есть ли картинки-замены для пола: тогда при крупной клетке рисуем их поверх.
+var _floor_sprites: bool = false
+
+## Несохранённые правки — звёздочка в заголовке и предупреждение при выходе.
+var _dirty: bool = false
 
 var _ui: CanvasLayer
 var _name_edit: LineEdit
@@ -84,15 +120,28 @@ var _status: Label
 var _maps_option: OptionButton
 var _w_spin: SpinBox
 var _h_spin: SpinBox
-var _tool_status: Label
+var _title: Label
+var _tool_buttons: Dictionary = {}
+var _brush_buttons: Dictionary = {}
+var _brush_group := ButtonGroup.new()
+var _tool_group := ButtonGroup.new()
+var _size_label: Label
 
 func _ready() -> void:
 	Sprites.reload_overrides()  # подменённые картинки видны и в редакторе (#55)
+	# Подложка — пиксель на клетку, растянутый до размера клетки: фильтрация должна
+	# быть ступенчатой, иначе границы клеток размажутся.
+	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	map = MapData.new(16, 12)
 	map.fill_all_space()  # пустая карта — сплошной космос, пол рисует игрок
+	_floor_sprites = Sprites.has_override("floor") or Sprites.has_override("floor_space") \
+			or Sprites.has_override("floor_wall")
+	_rebuild_base()
 	_build_ui()
 	Ui.theme_canvas_layers()  # editor toolbar is on a CanvasLayer; apply Steam skin.
 	_refresh_maps_list()
+	_select_tool(Tool.PAINT)
+	_select_brush(MCF.FEATURE_WALL, "Wall")
 	set_process(true)
 	queue_redraw()
 
@@ -109,6 +158,13 @@ func _process(delta: float) -> void:
 
 # --- Ввод ---
 func _unhandled_input(event: InputEvent) -> void:
+	# Горячие клавиши инструментов (batch 13 #14): 1–4, чтобы не тянуться к панели.
+	if event is InputEventKey and event.pressed and not event.echo:
+		match event.keycode:
+			KEY_1: _select_tool(Tool.PAINT); return
+			KEY_2: _select_tool(Tool.LINE); return
+			KEY_3: _select_tool(Tool.RECT); return
+			KEY_4: _select_tool(Tool.FILL); return
 	# Панорама мышью: средняя или правая кнопка «тянет» карту.
 	if event is InputEventMouseButton and event.button_index in [MOUSE_BUTTON_MIDDLE, MOUSE_BUTTON_RIGHT]:
 		_mouse_panning = event.pressed
@@ -131,6 +187,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		pan += event.relative
 		queue_redraw()
 		return
+	if event is InputEventMouseMotion:
+		var hc := _pos_to_cell(get_global_mouse_position())
+		if hc != _hover:
+			_hover = hc
+			_refresh_status()
+			# Подсветка курсора перерисовывается только при крупной клетке — мелкую
+			# всё равно не разглядеть, а кадр на каждое движение мыши стоит денег.
+			if _cell_size() >= LOD_GRID:
+				queue_redraw()
 
 	# Рисование инструментами.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
@@ -173,8 +238,16 @@ func _zoom_at(screen_pos: Vector2, factor: float) -> void:
 	pan += Vector2(after.x - before.x, after.y - before.y) * cs
 	queue_redraw()
 
+## Кисть с радиусом (batch 13 #14): квадрат brush_size×brush_size вокруг клетки.
 func _paint(coord: Vector2i) -> void:
-	_apply_brush(coord)
+	if brush_size <= 1:
+		_apply_brush(coord)
+	else:
+		var r0 := -(brush_size - 1) / 2
+		var r1 := brush_size / 2
+		for dy in range(r0, r1 + 1):
+			for dx in range(r0, r1 + 1):
+				_apply_brush(coord + Vector2i(dx, dy))
 	queue_redraw()
 
 ## Применить текущую кисть к клетке без перерисовки (для инструментов).
@@ -188,7 +261,7 @@ func _apply_brush(coord: Vector2i) -> void:
 			map.clear_spawn_at(coord)
 			map.set_zone(coord, -1)
 		"space":
-			map.set_cell(coord, map.get_floor(coord), map.get_cover(coord), not map.get_space(coord), map.get_feature(coord))
+			map.set_cell(coord, map.get_floor(coord), map.get_cover(coord), true, map.get_feature(coord))
 		"floor":
 			# Обычный твёрдый пол (снимает космос).
 			map.set_cell(coord, MCF.FLOOR_NORMAL, map.get_cover(coord), false, map.get_feature(coord))
@@ -207,10 +280,15 @@ func _apply_brush(coord: Vector2i) -> void:
 					map.get_cover(coord), false, map.get_feature(coord))
 			map.clear_spawn_at(coord)
 			map.set_spawn(coord, uid, MCF.Owner.NEUTRAL)
+		"clear_object":
+			# Снять объект, оставив пол как есть.
+			map.set_cell(coord, map.get_floor(coord), 0.0, map.get_space(coord), "")
 		_:
 			# Кисть-объект: под укрытием подразумевается пол, поэтому снимаем космос.
 			var h: float = MCF.FEATURE_HEIGHT.get(brush, 0.0)
 			map.set_cell(coord, map.get_floor(coord), h, false, brush)
+	_refresh_base_cell(coord)
+	_mark_dirty()
 
 # --- Инструменты рисования ---
 ## Клетки прямой Брезенхэма между a и b (включительно).
@@ -254,33 +332,42 @@ func _rect_cells(a: Vector2i, b: Vector2i) -> Array:
 	return cells
 
 ## Заливка: заменяет связную область с той же «сигнатурой», что и стартовая клетка.
+## Волна идёт по плоским индексам с байтовой отметкой «был» (batch 13 #6): прежняя
+## версия строила строку-сигнатуру и словарь Vector2i на КАЖДУЮ клетку, и заливка
+## пустого поля 200×200 подвисала на секунды.
 func _flood_fill(start: Vector2i) -> void:
 	if not map.in_bounds(start):
 		return
-	var target := _cell_signature(start)
-	var seen := {}
-	var stack: Array = [start]
+	var w := map.width
+	var h := map.height
+	var si := start.y * w + start.x
+	var t_floor: int = map.floor_type[si]
+	var t_cover: float = map.cover_height[si]
+	var t_space: int = map.is_space[si]
+	var t_feat: String = map.feature_id[si]
+	var seen := PackedByteArray()
+	seen.resize(w * h)
+	var stack := PackedInt32Array()
+	stack.append(si)
 	var painted := 0
-	while not stack.is_empty() and painted < 40000:
-		var c: Vector2i = stack.pop_back()
-		if seen.has(c) or not map.in_bounds(c):
+	while not stack.is_empty() and painted < 200000:
+		var i: int = stack[stack.size() - 1]
+		stack.resize(stack.size() - 1)
+		if seen[i] != 0:
 			continue
-		seen[c] = true
-		if _cell_signature(c) != target:
+		seen[i] = 1
+		if map.floor_type[i] != t_floor or map.cover_height[i] != t_cover \
+				or map.is_space[i] != t_space or map.feature_id[i] != t_feat:
 			continue
-		_apply_brush(c)
+		var x := i % w
+		var y := i / w
+		_apply_brush(Vector2i(x, y))
 		painted += 1
-		stack.append(c + Vector2i(1, 0))
-		stack.append(c + Vector2i(-1, 0))
-		stack.append(c + Vector2i(0, 1))
-		stack.append(c + Vector2i(0, -1))
+		if x + 1 < w: stack.append(i + 1)
+		if x > 0: stack.append(i - 1)
+		if y + 1 < h: stack.append(i + w)
+		if y > 0: stack.append(i - w)
 	queue_redraw()
-
-## Сигнатура клетки для заливки: пол + укрытие + космос + объект.
-func _cell_signature(coord: Vector2i) -> String:
-	return "%d|%.2f|%s|%s" % [
-		map.get_floor(coord), map.get_cover(coord),
-		str(map.get_space(coord)), map.get_feature(coord)]
 
 # --- Геометрия ---
 func _cell_size() -> float:
@@ -295,6 +382,55 @@ func _pos_to_cell(pos: Vector2) -> Vector2i:
 	var local := pos - ORIGIN - pan
 	return Vector2i(floori(local.x / cs), floori(local.y / cs))
 
+# --- Подложка (batch 13 #6) ---
+## Цвет клетки в подложке: то же, что раньше рисовалось пятью прямоугольниками —
+## основа (космос/стена/пол), оттенок пола, оттенок укрытия, зона — сведено в один пиксель.
+func _cell_color(i: int) -> Color:
+	var ch: float = map.cover_height[i]
+	var col := Color(0.14, 0.15, 0.18)
+	if map.is_space[i] != 0:
+		col = Color(0.03, 0.02, 0.08)  # космос — почти чёрный с фиолетовым
+	elif ch >= MCF.WALL_HEIGHT:
+		col = Color(0.35, 0.3, 0.25)
+	match map.floor_type[i]:
+		MCF.FLOOR_FLAMMABLE:
+			col = col.blend(Color(0.4, 0.5, 0.15, 0.25))
+		MCF.FLOOR_GRASS:
+			col = col.blend(Color(0.32, 0.55, 0.18, 0.35))
+	if ch > 0.0 and ch < MCF.WALL_HEIGHT:
+		col = col.blend(Color(0.5, 0.45, 0.2, 0.12 + 0.12 * ch))
+	var zo: int = map.zone_owner[i]
+	if zo != -1:
+		var zc: Color = owner_color(zo)
+		zc.a = 0.22
+		col = col.blend(zc)
+	return col
+
+func _rebuild_base() -> void:
+	_base_img = Image.create(map.width, map.height, false, Image.FORMAT_RGBA8)
+	var w := map.width
+	for y in map.height:
+		var row := y * w
+		for x in w:
+			_base_img.set_pixel(x, y, _cell_color(row + x))
+	_base_tex = ImageTexture.create_from_image(_base_img)
+	_base_stale = false
+
+func _refresh_base_cell(coord: Vector2i) -> void:
+	if _base_img == null or not map.in_bounds(coord):
+		return
+	_base_img.set_pixel(coord.x, coord.y, _cell_color(coord.y * map.width + coord.x))
+	_base_stale = true
+
+## Карта заменена целиком (загрузка, размер, очистка): подложка и подписи заново.
+func _map_replaced() -> void:
+	_rebuild_base()
+	if _w_spin != null:
+		_w_spin.value = map.width
+		_h_spin.value = map.height
+	_refresh_status()
+	queue_redraw()
+
 # --- Рендер ---
 func _draw() -> void:
 	if map == null:
@@ -304,71 +440,121 @@ func _draw() -> void:
 	Sprites.set_base_transform(Vector2.ZERO, Vector2.ONE)
 	var font := ThemeDB.fallback_font
 	var cs := _cell_size()
-	# Размер шрифта на плитках привязан к масштабу клетки, а не фиксирован (item 25):
-	# при отдалении камеры клетка мельчает, а прежний постоянный кегль оставался тем же
-	# и потому «рос» относительно плитки, накрывая соседей. Теперь текст ужимается
-	# вместе с клеткой (с нижним порогом, чтобы не пропасть совсем).
+	var w := map.width
+	var h := map.height
+	var top_left := ORIGIN + pan
+
+	# 1. Подложка — одна текстура на всю карту.
+	if _base_stale:
+		_base_tex.update(_base_img)
+		_base_stale = false
+	draw_texture_rect(_base_tex, Rect2(top_left, Vector2(w, h) * cs), false)
+
+	# 2. Окно видимых клеток: всё, что за экраном, не рисуется вовсе.
+	var vp := get_viewport_rect().size
+	var x0 := maxi(0, floori((0.0 - top_left.x) / cs))
+	var y0 := maxi(0, floori((0.0 - top_left.y) / cs))
+	var x1 := mini(w - 1, ceili((vp.x - top_left.x) / cs))
+	var y1 := mini(h - 1, ceili((vp.y - top_left.y) / cs))
+	if x1 < x0 or y1 < y0:
+		_draw_preview(cs)
+		return
+
+	# Размер шрифта на плитках привязан к масштабу клетки, а не фиксирован (item 25).
 	var tag_fs := clampi(int(round(cs * 0.30)), 5, 22)
 	var init_fs := clampi(int(round(cs * 0.36)), 6, 26)
-	for y in map.height:
-		for x in map.width:
-			var coord := Vector2i(x, y)
-			var rect := Rect2(_cell_origin(coord), Vector2(cs, cs))
-			var ch := map.get_cover(coord)
-			# В редакторе те же картинки-замены, что и в бою (#55) — карта строится
-			# в том виде, в каком её потом увидят игроки.
-			var floor_name := "floor"
-			if map.get_space(coord):
-				floor_name = "floor_space"
-			elif ch >= MCF.WALL_HEIGHT:
-				floor_name = "floor_wall"
-			if not Sprites.draw_texture_override_rect(self, floor_name, rect):
-				var base := Color(0.14, 0.15, 0.18)
-				if map.get_space(coord):
-					base = Color(0.03, 0.02, 0.08)  # космос — почти чёрный с фиолетовым
-				if ch >= MCF.WALL_HEIGHT:
-					base = Color(0.35, 0.3, 0.25)
-				draw_rect(rect, base)
-			match map.get_floor(coord):
-				MCF.FLOOR_FLAMMABLE:
-					draw_rect(rect, Color(0.4, 0.5, 0.15, 0.25))
-				MCF.FLOOR_GRASS:
-					draw_rect(rect, Color(0.32, 0.55, 0.18, 0.35))
-			if ch > 0.0 and ch < MCF.WALL_HEIGHT:
-				draw_rect(rect, Color(0.5, 0.45, 0.2, 0.12 + 0.12 * ch))
-			# Зона развёртывания (#52): полупрозрачная заливка цветом стороны.
-			var zo := map.get_zone(coord)
-			if zo != -1:
-				var zc: Color = owner_color(zo)
-				zc.a = 0.22
-				draw_rect(rect, zc)
-			draw_rect(rect, Color(0.25, 0.27, 0.32), false, 1.0)
-			var fid := map.get_feature(coord)
-			if fid != "":
-				var o := _cell_origin(coord)
+	var draw_tags := cs >= LOD_TAGS
+	var draw_floor_sprites := _floor_sprites and cs >= LOD_SPRITES
+	var feats: Array[String] = map.feature_id
+	var spaces: PackedByteArray = map.is_space
+	var covers: PackedFloat32Array = map.cover_height
+
+	# 3. Картинки-замены пола (#55) — только когда клетка достаточно крупная, чтобы их
+	# разглядеть; иначе подложки достаточно.
+	if draw_floor_sprites:
+		for y in range(y0, y1 + 1):
+			var row := y * w
+			for x in range(x0, x1 + 1):
+				var i := row + x
+				var floor_name := "floor"
+				if spaces[i] != 0:
+					floor_name = "floor_space"
+				elif covers[i] >= MCF.WALL_HEIGHT:
+					floor_name = "floor_wall"
+				Sprites.draw_texture_override_rect(self,
+						floor_name, Rect2(top_left + Vector2(x, y) * cs, Vector2(cs, cs)))
+
+	# 4. Сетка — линиями по строкам и столбцам окна, одной командой.
+	if cs >= LOD_GRID:
+		var pts := PackedVector2Array()
+		var gx0 := top_left.x + x0 * cs
+		var gx1 := top_left.x + (x1 + 1) * cs
+		var gy0 := top_left.y + y0 * cs
+		var gy1 := top_left.y + (y1 + 1) * cs
+		for x in range(x0, x1 + 2):
+			var px := top_left.x + x * cs
+			pts.append(Vector2(px, gy0))
+			pts.append(Vector2(px, gy1))
+		for y in range(y0, y1 + 2):
+			var py := top_left.y + y * cs
+			pts.append(Vector2(gx0, py))
+			pts.append(Vector2(gx1, py))
+		draw_multiline(pts, Color(0.25, 0.27, 0.32), 1.0)
+
+	# 5. Объекты в окне: подпись/картинка при крупной клетке, метка — при мелкой.
+	for y in range(y0, y1 + 1):
+		var row := y * w
+		for x in range(x0, x1 + 1):
+			var fid: String = feats[row + x]
+			if fid == "":
+				continue
+			var o := top_left + Vector2(x, y) * cs
+			if draw_tags:
 				if not Sprites.draw_texture_override(self, fid, o, cs):
 					draw_string(font, o + Vector2(cs * 0.12, cs - cs * 0.18), _feature_tag(fid),
 						HORIZONTAL_ALIGNMENT_LEFT, -1, tag_fs, Color(0.8, 0.8, 0.9))
-	# Точки спавна.
+			elif covers[row + x] < MCF.WALL_HEIGHT:
+				# Стена и так видна цветом подложки; низкие объекты — светлой точкой.
+				draw_rect(Rect2(o + Vector2(cs, cs) * 0.3, Vector2(cs, cs) * 0.4), Color(0.8, 0.8, 0.9, 0.7))
+
+	# 6. Точки спавна — только те, что в окне.
 	for s in map.spawns:
-		var center := _cell_origin(s["coord"]) + Vector2(cs, cs) * 0.5
-		var spawn_key := Sprites.resolve(s["stats_id"], _spawn_suffix(s["owner"]))
-		if spawn_key != "":
-			Sprites.draw_texture_override(self, spawn_key, _cell_origin(s["coord"]), cs)
+		var c: Vector2i = s["coord"]
+		if c.x < x0 or c.x > x1 or c.y < y0 or c.y > y1:
 			continue
+		var o := top_left + Vector2(c.x, c.y) * cs
+		var center := o + Vector2(cs, cs) * 0.5
+		if draw_tags:
+			var spawn_key := Sprites.resolve(s["stats_id"], _spawn_suffix(s["owner"]))
+			if spawn_key != "":
+				Sprites.draw_texture_override(self, spawn_key, o, cs)
+				continue
 		draw_circle(center, cs * 0.3, owner_color(s["owner"]))
-		draw_string(font, center + Vector2(-init_fs * 0.6, init_fs * 0.35), _initials(s["stats_id"]),
-			HORIZONTAL_ALIGNMENT_LEFT, -1, init_fs, Color.WHITE)
-	# Превью линии/прямоугольника при перетаскивании.
-	if _drag_start != Vector2i(-1, -1) and _drag_cur != Vector2i(-1, -1):
-		var preview: Array = []
-		if tool == Tool.LINE:
-			preview = _line_cells(_drag_start, _drag_cur)
-		elif tool == Tool.RECT:
-			preview = _rect_cells(_drag_start, _drag_cur)
-		for c in preview:
-			if map.in_bounds(c):
-				draw_rect(Rect2(_cell_origin(c), Vector2(cs, cs)), Color(1.0, 0.9, 0.2, 0.35))
+		if draw_tags:
+			draw_string(font, center + Vector2(-init_fs * 0.6, init_fs * 0.35), _initials(s["stats_id"]),
+				HORIZONTAL_ALIGNMENT_LEFT, -1, init_fs, Color.WHITE)
+
+	# 7. Курсор: рамка кисти под мышью, чтобы было видно, куда и каким размером ляжет.
+	if cs >= LOD_GRID and map.in_bounds(_hover) and _drag_start == Vector2i(-1, -1):
+		var r0 := -(brush_size - 1) / 2 if tool == Tool.PAINT else 0
+		var r1 := brush_size / 2 if tool == Tool.PAINT else 0
+		var a := top_left + Vector2(_hover.x + r0, _hover.y + r0) * cs
+		var sz := Vector2(r1 - r0 + 1, r1 - r0 + 1) * cs
+		draw_rect(Rect2(a, sz), Color(1.0, 1.0, 1.0, 0.65), false, 1.5)
+	_draw_preview(cs)
+
+## Превью линии/прямоугольника при перетаскивании.
+func _draw_preview(cs: float) -> void:
+	if _drag_start == Vector2i(-1, -1) or _drag_cur == Vector2i(-1, -1):
+		return
+	var preview: Array = []
+	if tool == Tool.LINE:
+		preview = _line_cells(_drag_start, _drag_cur)
+	elif tool == Tool.RECT:
+		preview = _rect_cells(_drag_start, _drag_cur)
+	for c in preview:
+		if map.in_bounds(c):
+			draw_rect(Rect2(_cell_origin(c), Vector2(cs, cs)), Color(1.0, 0.9, 0.2, 0.35))
 
 ## Суффикс стороны для картинок-замен — тот же, что и в бою (#55).
 func _spawn_suffix(owner_id: int) -> String:
@@ -402,16 +588,30 @@ func _row() -> HBoxContainer:
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	return row
 
+## Заголовок раздела (batch 13 #14): тёмно-зелёная шапка в стиле окон меню — колонка
+## читается как список окон, а не как россыпь кнопок.
+func _section(parent: VBoxContainer, title: String) -> VBoxContainer:
+	parent.add_child(SteamChrome.header_bar(title))
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 5)
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	parent.add_child(SteamChrome.pad(box, 6, 6))
+	return box
+
+func _hint(parent: VBoxContainer, text: String) -> void:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", 10)
+	l.modulate = Color(0.72, 0.76, 0.85)
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	parent.add_child(l)
+
 func _edge_panel(to_left: bool) -> VBoxContainer:
 	# Панель во ВСЮ высоту экрана, прижата к своему краю (item 19: без якоря на низ
 	# ScrollContainer схлопывался в ноль и панели пропадали). Задаём все четыре
 	# смещения от краёв viewport вручную — это надёжнее пресетов на CanvasLayer.
 	var panel := PanelContainer.new()
 	SteamChrome.apply_panel(panel)
-	# Ширина ОБЕИХ колонок одна и та же, и содержимое обязано в неё укладываться.
-	# Раньше панель растягивало изнутри: ряд «W: [] H: [] Set Size» шире 260, а
-	# PanelContainer тянется под свой минимум — правую колонку и выносило за край
-	# экрана вместе с половиной кнопок (её-то и видно обрезанной на скриншоте).
 	var w := PANEL_WIDTH
 	panel.anchor_top = 0.0
 	panel.anchor_bottom = 1.0
@@ -442,76 +642,116 @@ func _edge_panel(to_left: bool) -> VBoxContainer:
 	scroll.add_child(vbox)
 	return vbox
 
+func _brush_button(id: String, label: String) -> Button:
+	var btn := Button.new()
+	btn.text = label
+	btn.toggle_mode = true
+	btn.button_group = _brush_group
+	btn.pressed.connect(_select_brush.bind(id, label))
+	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# Длинная подпись ПЕРЕНОСИТСЯ, а не раздвигает колонку.
+	btn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	btn.custom_minimum_size = Vector2(0, 30)
+	_brush_buttons[id] = btn
+	return btn
+
 func _build_ui() -> void:
 	_ui = CanvasLayer.new()
 	add_child(_ui)
 
 	# ЛЕВАЯ колонка — рисование: инструменты и кисти рельефа/объектов (item 11).
+	# Порядок сверху вниз повторяет порядок работы (batch 13 #14): чем рисуем →
+	# как рисуем → что рисуем. Активные кнопки подсвечены — раньше выбранный
+	# инструмент и кисть были видны только строчкой текста.
 	var vbox := _edge_panel(true)
-
-	var title := Label.new()
-	title.text = "Map Editor"
-	title.add_theme_font_size_override("font_size", 20)
-	vbox.add_child(title)
-
+	_title = Label.new()
+	_title.text = "Map Editor"
+	_title.add_theme_font_size_override("font_size", 20)
+	vbox.add_child(_title)
 	_status = Label.new()
-	_status.add_theme_font_size_override("font_size", 13)
-	_status.text = "Brush: Wall"
+	_status.add_theme_font_size_override("font_size", 12)
+	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(_status)
 
-	# Инструменты: кисть / линия / прямоугольник / заливка.
-	_tool_status = Label.new()
-	_tool_status.add_theme_font_size_override("font_size", 12)
-	_tool_status.text = "Tool: Paint"
-	vbox.add_child(_tool_status)
+	var tools := _section(vbox, "Tool")
 	var tool_row := _row()
-	vbox.add_child(tool_row)
+	tools.add_child(tool_row)
 	for pair in [[Tool.PAINT, "Paint"], [Tool.LINE, "Line"], [Tool.RECT, "Rect"], [Tool.FILL, "Fill"]]:
 		var tb := Button.new()
 		tb.text = pair[1]
+		tb.toggle_mode = true
+		tb.button_group = _tool_group
 		tb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		tb.pressed.connect(_set_tool.bind(pair[0], pair[1]))
+		tb.pressed.connect(_select_tool.bind(pair[0]))
 		tool_row.add_child(tb)
+		_tool_buttons[pair[0]] = tb
+	_hint(tools, "Keys 1–4. Paint drags; Line and Rect drag from corner to corner; Fill floods same cells.")
+	var size_row := _row()
+	tools.add_child(size_row)
+	_size_label = Label.new()
+	_size_label.text = "Brush size 1"
+	_size_label.add_theme_font_size_override("font_size", 11)
+	_size_label.custom_minimum_size = Vector2(84, 0)
+	size_row.add_child(_size_label)
+	var size_slider := HSlider.new()
+	size_slider.min_value = 1
+	size_slider.max_value = 9
+	size_slider.step = 1
+	size_slider.value = brush_size
+	size_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	size_slider.value_changed.connect(func(v: float) -> void:
+		brush_size = int(v)
+		_size_label.text = "Brush size %d" % brush_size
+		queue_redraw())
+	size_row.add_child(size_slider)
 
-	vbox.add_child(HSeparator.new())
-	var brush_lbl := Label.new()
-	brush_lbl.text = "Terrain & Objects:"
-	brush_lbl.add_theme_font_size_override("font_size", 13)
-	vbox.add_child(brush_lbl)
-	# Кисти рельефа/объектов — в сетке кнопок.
-	var grid := GridContainer.new()
-	grid.columns = 2
-	vbox.add_child(grid)
+	var terrain := _section(vbox, "Floor & Eraser")
+	_hint(terrain, "What the cell is: solid floor, grass (burns easily) or open space.")
+	var tgrid := GridContainer.new()
+	tgrid.columns = 3
+	tgrid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	terrain.add_child(tgrid)
 	for b in TERRAIN_BRUSHES:
-		var btn := Button.new()
-		btn.text = b["label"]
-		btn.pressed.connect(_set_brush.bind(b["id"], b["label"]))
-		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		# Длинная подпись ПЕРЕНОСИТСЯ, а не раздвигает колонку. Без этого одна кнопка
-		# («Pillbox (Embrasures)») требовала себе ширины больше, чем вся панель, и левый
-		# столбец расползался шире правого — та самая кривизна, которую видно на глаз.
-		btn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		btn.custom_minimum_size = Vector2(0, 32)
-		grid.add_child(btn)
+		tgrid.add_child(_brush_button(b["id"], b["label"]))
+	var eraser := _brush_button("erase", "Eraser — back to empty space")
+	eraser.tooltip_text = "Removes floor, object, zone and any unit on the cell"
+	terrain.add_child(eraser)
+
+	var objects := _section(vbox, "Objects")
+	_hint(objects, "What stands on the floor. Painting an object also lays floor under it.")
+	var ogrid := GridContainer.new()
+	ogrid.columns = 2
+	ogrid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	objects.add_child(ogrid)
+	for b in OBJECT_BRUSHES:
+		ogrid.add_child(_brush_button(b["id"], b["label"]))
+	var clear_obj := _brush_button("clear_object", "Remove Object (keep floor)")
+	objects.add_child(clear_obj)
 
 	# ПРАВАЯ колонка — обустройство и файлы: зоны, нейтралы, размер, сохранение (item 11).
+	# Выходы — СВЕРХУ (batch 13 #14): «Play» и «Main Menu» искали дольше всего.
 	var rbox := _edge_panel(false)
+	var exits := _section(rbox, "Play & Leave")
+	var exit_row := _row()
+	exits.add_child(exit_row)
+	var play_btn := Button.new()
+	play_btn.text = "Play This Map"
+	play_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	play_btn.pressed.connect(_on_play)
+	exit_row.add_child(play_btn)
+	var menu_btn := Button.new()
+	menu_btn.text = "Main Menu"
+	menu_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	menu_btn.pressed.connect(_on_main_menu)
+	exit_row.add_child(menu_btn)
 
 	# Зоны развёртывания (item 7): это НУМЕРОВАННЫЕ зоны, а не «зона игрока A/B». Зона N
 	# достаётся N-му игроку по порядку слотов в лобби — какие именно буквы сядут в бой,
 	# карта не знает. Внутри зона по-прежнему хранится индексом (Zone 1 → индекс 0).
-	var zone_lbl := Label.new()
-	zone_lbl.text = "Deployment Zones:"
-	zone_lbl.add_theme_font_size_override("font_size", 13)
-	rbox.add_child(zone_lbl)
-	var zone_hint := Label.new()
-	zone_hint.text = "Numbered zones; the lobby assigns each to a player."
-	zone_hint.add_theme_font_size_override("font_size", 10)
-	zone_hint.modulate = Color(0.72, 0.76, 0.85)
-	zone_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	rbox.add_child(zone_hint)
+	var zones := _section(rbox, "Deployment Zones")
+	_hint(zones, "Numbered zones; the lobby gives each one to a player. Pick a zone, then paint it like terrain.")
 	var zone_row := _row()
-	rbox.add_child(zone_row)
+	zones.add_child(zone_row)
 	_zone_player_opt = OptionButton.new()
 	for i in MCF.MAX_PLAYERS:
 		_zone_player_opt.add_item("Zone %d" % (i + 1), i)
@@ -519,50 +759,50 @@ func _build_ui() -> void:
 	_zone_player_opt.item_selected.connect(_on_zone_player_selected)
 	_zone_player_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	zone_row.add_child(_zone_player_opt)
-	for pair in [[ZONE_SELECTED_PLAYER, "Paint Zone"], [-1, "No Zone"]]:
-		var zb := Button.new()
-		zb.text = pair[1]
-		zb.pressed.connect(_set_zone_brush.bind(pair[0], pair[1]))
-		zone_row.add_child(zb)
-
-	rbox.add_child(HSeparator.new())
+	var zb := Button.new()
+	zb.text = "Paint Zone"
+	zb.toggle_mode = true
+	zb.button_group = _brush_group
+	zb.pressed.connect(_set_zone_brush.bind(ZONE_SELECTED_PLAYER, "Paint Zone"))
+	zone_row.add_child(zb)
+	_brush_buttons["zone"] = zb
+	var nz := Button.new()
+	nz.text = "Remove Zone"
+	nz.toggle_mode = true
+	nz.button_group = _brush_group
+	nz.pressed.connect(_set_zone_brush.bind(-1, "Remove Zone"))
+	zones.add_child(nz)
+	_brush_buttons["zone_clear"] = nz
 
 	# Нейтральные юниты (item 5): выбрать тип и ставить его на карту как нейтрала. Юнит
 	# уходит в map.spawns с owner == NEUTRAL и на старте боя попадает под нейтральный ИИ.
-	var nu_lbl := Label.new()
-	nu_lbl.text = "Neutral Unit:"
-	nu_lbl.add_theme_font_size_override("font_size", 13)
-	rbox.add_child(nu_lbl)
+	var neutrals := _section(rbox, "Neutral Units")
+	_hint(neutrals, "Neutrals that start on the map. Pick a type, then paint; the eraser removes them.")
 	var nu_row := _row()
-	rbox.add_child(nu_row)
+	neutrals.add_child(nu_row)
 	_neutral_unit_opt = OptionButton.new()
 	for i in NEUTRAL_UNIT_IDS.size():
-		_neutral_unit_opt.add_item(str(NEUTRAL_UNIT_IDS[i]), i)
+		_neutral_unit_opt.add_item(str(NEUTRAL_UNIT_IDS[i]).capitalize(), i)
 	_neutral_unit_opt.select(0)
 	_neutral_unit_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	nu_row.add_child(_neutral_unit_opt)
-	var place_btn := Button.new()
-	place_btn.text = "Place Neutral"
-	place_btn.pressed.connect(_set_brush.bind("spawn_neutral", "Neutral Unit"))
+	var place_btn := _brush_button("spawn_neutral", "Place Neutral")
 	place_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	nu_row.add_child(place_btn)
 
-	rbox.add_child(HSeparator.new())
-
-	# Размер карты (можно делать большие поля).
-	# Ширина, высота и «применить» — В ТРИ СТРОКИ, а не в одну: три поля со счётчиками
-	# и кнопкой в строку не помещаются ни при какой разумной ширине колонки, и именно
-	# они раздували панель за край экрана.
+	# Размер карты (можно делать большие поля). Содержимое СОХРАНЯЕТСЯ (batch 13 #14).
+	var size := _section(rbox, "Map Size")
+	_hint(size, "Resizing keeps what you drew; new cells are space.")
 	var size_grid := GridContainer.new()
 	size_grid.columns = 2
 	size_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	rbox.add_child(size_grid)
+	size.add_child(size_grid)
 	var w_lbl := Label.new()
 	w_lbl.text = "Width"
 	size_grid.add_child(w_lbl)
 	_w_spin = SpinBox.new()
 	_w_spin.min_value = 1
-	_w_spin.max_value = 200
+	_w_spin.max_value = 300
 	_w_spin.value = map.width
 	_w_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	size_grid.add_child(_w_spin)
@@ -571,77 +811,83 @@ func _build_ui() -> void:
 	size_grid.add_child(h_lbl)
 	_h_spin = SpinBox.new()
 	_h_spin.min_value = 1
-	_h_spin.max_value = 200
+	_h_spin.max_value = 300
 	_h_spin.value = map.height
 	_h_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	size_grid.add_child(_h_spin)
+	var size_btns := _row()
+	size.add_child(size_btns)
 	var resize_btn := Button.new()
-	resize_btn.text = "Set Size"
+	resize_btn.text = "Apply Size"
 	resize_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	resize_btn.pressed.connect(_on_resize)
-	rbox.add_child(resize_btn)
-
-	rbox.add_child(HSeparator.new())
+	size_btns.add_child(resize_btn)
+	var fit_btn := Button.new()
+	fit_btn.text = "Fit View"
+	fit_btn.tooltip_text = "Zoom out so the whole map is on screen"
+	fit_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	fit_btn.pressed.connect(_fit_view)
+	size_btns.add_child(fit_btn)
+	var clear_btn := Button.new()
+	clear_btn.text = "Clear Map…"
+	clear_btn.pressed.connect(_on_clear)
+	size.add_child(clear_btn)
 
 	# Сохранение/загрузка.
+	var files := _section(rbox, "Save & Load")
+	var name_row := _row()
+	files.add_child(name_row)
+	var name_lbl := Label.new()
+	name_lbl.text = "Name"
+	name_lbl.add_theme_font_size_override("font_size", 11)
+	name_row.add_child(name_lbl)
 	_name_edit = LineEdit.new()
 	_name_edit.placeholder_text = "map name"
 	_name_edit.text = "map1"
-	rbox.add_child(_name_edit)
-
-	var io_row := _row()
-	rbox.add_child(io_row)
+	_name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_row.add_child(_name_edit)
 	var save_btn := Button.new()
-	save_btn.text = "Save"
+	save_btn.text = "Save Map"
 	save_btn.pressed.connect(_on_save)
-	save_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	io_row.add_child(save_btn)
-	var clear_btn := Button.new()
-	clear_btn.text = "Clear"
-	clear_btn.pressed.connect(_on_clear)
-	clear_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	io_row.add_child(clear_btn)
-
-	_maps_option = OptionButton.new()
-	rbox.add_child(_maps_option)
+	files.add_child(save_btn)
+	save_btn.tooltip_text = "Saved maps appear in the lobby's map list"
 	var load_row := _row()
-	rbox.add_child(load_row)
+	files.add_child(load_row)
+	_maps_option = OptionButton.new()
+	_maps_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	load_row.add_child(_maps_option)
 	var load_btn := Button.new()
 	load_btn.text = "Load"
 	load_btn.pressed.connect(_on_load)
-	load_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	load_row.add_child(load_btn)
-	var play_btn := Button.new()
-	play_btn.text = "Play"
-	play_btn.pressed.connect(_on_play)
-	play_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	load_row.add_child(play_btn)
 
-	rbox.add_child(HSeparator.new())
-	var menu_btn := Button.new()
-	menu_btn.text = "Main Menu"
-	menu_btn.pressed.connect(_on_main_menu)
-	rbox.add_child(menu_btn)
-
-func _set_tool(t: int, label: String) -> void:
+func _select_tool(t: int) -> void:
 	tool = t
 	_drag_start = Vector2i(-1, -1)
 	_drag_cur = Vector2i(-1, -1)
-	_tool_status.text = "Tool: %s" % label
+	if _tool_buttons.has(t):
+		(_tool_buttons[t] as Button).button_pressed = true
+	_refresh_status()
 	queue_redraw()
 
-func _set_brush(id: String, label: String) -> void:
+func _select_brush(id: String, label: String) -> void:
 	brush = id
-	_status.text = "Brush: %s" % label
+	_brush_label = label
+	if _brush_buttons.has(id):
+		(_brush_buttons[id] as Button).button_pressed = true
+	_refresh_status()
+	queue_redraw()
 
 ## ZONE_SELECTED_PLAYER означает «того игрока, что выбран в списке» — иначе кисть
 ## пришлось бы переназначать после каждой смены стороны в выпадающем списке.
 func _set_zone_brush(owner: int, label: String) -> void:
 	brush = "zone"
 	zone_brush_owner = _selected_zone_player() if owner == ZONE_SELECTED_PLAYER else owner
-	_status.text = "Brush: %s" % (
-			"Zone %s" % MCF.owner_name(zone_brush_owner)
-			if owner == ZONE_SELECTED_PLAYER else label)
+	_brush_label = ("Zone %d" % (zone_brush_owner + 1)) if owner == ZONE_SELECTED_PLAYER else label
+	var key := "zone" if owner == ZONE_SELECTED_PLAYER else "zone_clear"
+	if _brush_buttons.has(key):
+		(_brush_buttons[key] as Button).button_pressed = true
+	_refresh_status()
 
 func _selected_zone_player() -> int:
 	if _zone_player_opt == null:
@@ -654,32 +900,110 @@ func _on_zone_player_selected(_index: int) -> void:
 	if brush == "zone" and MCF.is_player(zone_brush_owner):
 		_set_zone_brush(ZONE_SELECTED_PLAYER, "")
 
+## Одна строка состояния (batch 13 #14): кисть, инструмент, размер карты и клетка под
+## курсором — всё, что раньше приходилось собирать из трёх подписей.
+func _refresh_status() -> void:
+	if _status == null:
+		return
+	var where := ""
+	if map != null and map.in_bounds(_hover):
+		where = "   cell %d, %d" % [_hover.x, _hover.y]
+	_status.text = "%s · %s   |   %d×%d%s" % [
+		_brush_label, TOOL_NAMES.get(tool, "?"), map.width, map.height, where]
+	if _title != null:
+		_title.text = "Map Editor" + (" *" if _dirty else "")
+
+func _mark_dirty() -> void:
+	if not _dirty:
+		_dirty = true
+		_refresh_status()
+
+## Показать всю карту (batch 13 #6/#14): масштаб по меньшей стороне, с полями под панели.
+func _fit_view() -> void:
+	var vp := get_viewport_rect().size
+	var avail := Vector2(maxf(200.0, vp.x - PANEL_WIDTH * 2.0 - 60.0), maxf(200.0, vp.y - 40.0))
+	zoom = clampf(minf(avail.x / (map.width * CELL), avail.y / (map.height * CELL)), ZOOM_MIN, ZOOM_MAX)
+	var cs := _cell_size()
+	pan = Vector2((vp.x - map.width * cs) * 0.5, (vp.y - map.height * cs) * 0.5) - ORIGIN
+	queue_redraw()
+
+## Подтверждение для необратимых действий (batch 13 #14) — рамка в общем стиле.
+func _confirm(title: String, message: String, ok_text: String, on_ok: Callable) -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 90
+	_ui.add_child(layer)
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.5)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	layer.add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	layer.add_child(center)
+	var panel := PanelContainer.new()
+	SteamChrome.apply_panel(panel)
+	center.add_child(panel)
+	var frame := VBoxContainer.new()
+	frame.add_theme_constant_override("separation", 0)
+	panel.add_child(frame)
+	frame.add_child(SteamChrome.header_bar(title))
+	var body := VBoxContainer.new()
+	body.add_theme_constant_override("separation", 12)
+	frame.add_child(SteamChrome.pad(body, 16, 12))
+	var msg := Label.new()
+	msg.text = message
+	msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	msg.custom_minimum_size = Vector2(320, 0)
+	body.add_child(msg)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_END
+	row.add_theme_constant_override("separation", 8)
+	body.add_child(row)
+	var cancel := Button.new()
+	cancel.text = "Cancel"
+	cancel.pressed.connect(func() -> void: layer.queue_free())
+	row.add_child(cancel)
+	var ok := Button.new()
+	ok.text = ok_text
+	ok.pressed.connect(func() -> void:
+		layer.queue_free()
+		on_ok.call())
+	row.add_child(ok)
+	Ui.theme_canvas_layers()
+
 func _on_save() -> void:
 	var fname := _name_edit.text.strip_edges()
 	if fname == "":
-		_status.text = "Enter a map name"
+		_status.text = "Enter a map name first."
 		return
 	if not fname.ends_with(".json"):
 		fname += ".json"
 	if map.save_to("%s/%s" % [MapData.MAPS_DIR, fname]):
+		_dirty = false
+		_refresh_status()
 		_status.text = "Saved: %s" % fname
 		_refresh_maps_list()
 	else:
 		_status.text = "Save error"
 
 func _on_clear() -> void:
-	map.resize(map.width, map.height)
-	map.fill_all_space()
-	_status.text = "Map cleared (all space)"
-	queue_redraw()
+	_confirm("Clear Map", "Erase everything on this map? It becomes empty space again.", "Clear",
+		func() -> void:
+			map.resize(map.width, map.height)
+			map.fill_all_space()
+			_mark_dirty()
+			_map_replaced()
+			_status.text = "Map cleared (all space)")
 
 func _on_resize() -> void:
 	var w := int(_w_spin.value)
 	var h := int(_h_spin.value)
-	map.resize(w, h)
-	map.fill_all_space()
-	_status.text = "Size: %dx%d (map cleared)" % [w, h]
-	queue_redraw()
+	if w == map.width and h == map.height:
+		return
+	map.resize_keep(w, h)
+	_mark_dirty()
+	_map_replaced()
+	_status.text = "Size: %dx%d" % [w, h]
 
 func _refresh_maps_list() -> void:
 	_maps_option.clear()
@@ -691,27 +1015,35 @@ func _on_load() -> void:
 		_status.text = "No saved maps"
 		return
 	var fname := _maps_option.get_item_text(_maps_option.selected)
-	var loaded := MapData.load_from(MapData.path_for(fname))
-	if loaded == null:
-		_status.text = "Load error"
-		return
-	map = loaded
-	_status.text = "Loaded: %s" % fname
-	queue_redraw()
+	var do_load := func() -> void:
+		var loaded := MapData.load_from(MapData.path_for(fname))
+		if loaded == null:
+			_status.text = "Load error"
+			return
+		map = loaded
+		_dirty = false
+		_name_edit.text = fname.get_basename()
+		_map_replaced()
+		_fit_view()
+		_status.text = "Loaded: %s" % fname
+	if _dirty:
+		_confirm("Load Map", "You have unsaved changes. Load “%s” and lose them?" % fname, "Load", do_load)
+	else:
+		do_load.call()
 
 func _on_play() -> void:
 	# Передаём карту в Main через autoload-подобный статический слот.
 	MapHandoff.pending = map
 	get_tree().change_scene_to_file("res://scenes/Main.tscn")
 
-## Выход из редактора — в ГЛАВНОЕ МЕНЮ (#104). Раньше эта кнопка называлась «To Demo
-## Game» и бросала прямо в бой на встроенном ростере: единственная дверь из редактора
-## вела не туда, откуда в него вошли, и чтобы просто вернуться к настройке партии,
-## приходилось сперва запустить ненужную демо-игру и выйти уже из неё.
-##
-## Карту из слота передачи снимаем: она предназначалась кнопке «Play», и оставить её
-## висеть значило бы подсунуть нарисованную карту следующей партии, которую игрок
-## заведёт из меню совсем с другими намерениями.
+## Выход из редактора — в ГЛАВНОЕ МЕНЮ (#104). Карту из слота передачи снимаем: она
+## предназначалась кнопке «Play», и оставить её висеть значило бы подсунуть нарисованную
+## карту следующей партии, которую игрок заведёт из меню совсем с другими намерениями.
 func _on_main_menu() -> void:
-	MapHandoff.pending = null
-	get_tree().change_scene_to_file("res://scenes/MainMenu.tscn")
+	var leave := func() -> void:
+		MapHandoff.pending = null
+		get_tree().change_scene_to_file("res://scenes/MainMenu.tscn")
+	if _dirty:
+		_confirm("Leave Editor", "You have unsaved changes. Leave without saving?", "Leave", leave)
+	else:
+		leave.call()

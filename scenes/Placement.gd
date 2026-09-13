@@ -66,13 +66,16 @@ var _status: Label
 var _palette: VBoxContainer
 var _palette_buttons: Dictionary = {}
 var _flow_btn: Button
-var _stamp_btn: Button
 
 ## Инструменты кисти на фазе закупки (item 12): точка/линия/прямоугольник/круг/заливка
 ## зоны. Форма ставит выбранного юнита в каждую свою клетку — в пределах зоны, бюджета
 ## и проходимости. Точка — прежнее поведение (клик + перетаскивание).
 enum PTool { POINT, LINE, RECT, CIRCLE, FILL }
 var _ptool: int = PTool.POINT
+## Ластик (batch 13 #5): пока включён, кисть и формы не ставят, а СНИМАЮТ своих юнитов —
+## точкой, протяжкой, линией, прямоугольником, кругом или всей зоной разом.
+var _erasing: bool = false
+var _eraser_btn: Button = null
 var _shape_start: Vector2i = Vector2i(-9999, -9999)
 var _shape_cur: Vector2i = Vector2i(-9999, -9999)
 var _tool_buttons: Dictionary = {}
@@ -88,6 +91,9 @@ const K_LIVE := "live"
 ## Просьба показать текущую расстановку (batch 12 #15): шлёт вошедший на экран, чтобы
 ## увидеть то, что остальные успели поставить до его прихода.
 const K_LIVE_REQ := "live_req"
+## Слот стал ИИ (batch 13 #2): хост сообщает гостям, что ушедшего игрока подменяет
+## машина, — иначе их ростер продолжал бы ждать его армию и его броски.
+const K_SLOT_AI := "slot_ai"
 var _net: NetworkSession = null
 var _net_is_host: bool = false
 var _my_side: int = MCF.Owner.PLAYER_1
@@ -148,8 +154,67 @@ func _adopt_network() -> void:
 		_shared_seed = randi() & 0x7FFFFFFF
 	_net.message.connect(_on_net_message)
 	_net.disconnected.connect(_on_net_lost)
+	if _net_is_host:
+		_net.peer_left.connect(_on_peer_left)
+
+## Гость ушёл с закупки (batch 13 #2): его сторону берёт ИИ высокой сложности. Армию,
+## которую он успел сдать, оставляем ему; если не успел — хост набирает её сам, как за
+## любой ИИ-слот, даже если уже нажал «Ready».
+func _on_peer_left(id: int) -> void:
+	var side := roster.side_of_peer(id)
+	if side < 0:
+		return
+	var slot := roster.slot(side)
+	slot.kind = Roster.SlotKind.AI
+	slot.ai_difficulty = AIController.Difficulty.HARD
+	slot.peer_id = -1
+	_live_units.erase(side)
+	if _net != null:
+		_net.send({"k": K_SLOT_AI, "side": side, "ai": slot.ai_difficulty})
+	if _ready_sides.has(side) and _remote_units.has(side):
+		_status.text = "%s left — a Hard AI takes over their army." % roster.name_of(side)
+	else:
+		_ready_sides.erase(side)
+		_remote_units.erase(side)
+		_status.text = "%s left — deploy an army for the Hard AI that takes their place." % roster.name_of(side)
+		if _my_ready and GameConfig.placement_mode != GameConfig.Placement.MIRRORED:
+			# Своё уже сдано, а за ушедшего никто не ставил: возвращаем кнопку и ведём
+			# хоста по его новой стороне. Отправленные раньше стороны переслать не страшно —
+			# пакет «sides» заменяет их тем же самым.
+			_my_ready = false
+			_flow_btn.disabled = false
+			active_side = side
+			brush_unit = ""
+			_populate_palette()
+	_refresh_labels()
+	queue_redraw()
+	_try_start()
+
+## Гость узнал от хоста, что слот стал ИИ (batch 13 #2).
+func _apply_slot_ai(msg: Dictionary) -> void:
+	var side := int(msg.get("side", -1))
+	var slot := roster.slot(side)
+	if slot == null:
+		return
+	slot.kind = Roster.SlotKind.AI
+	slot.ai_difficulty = int(msg.get("ai", AIController.Difficulty.HARD))
+	slot.peer_id = -1
+	_live_units.erase(side)
+	if _status != null:
+		_status.text = "%s left — a Hard AI takes that side." % roster.name_of(side)
+	_refresh_labels()
+	queue_redraw()
 
 func _on_net_lost() -> void:
+	# Хост, оставшийся без гостей, не уходит в меню (batch 13 #2): ушедших уже подменил
+	# ИИ (peer_left приходит раньше), сессия остаётся жить закрытой — её send() молчит, —
+	# а расстановка и бой идут дальше тем же сетевым путём, только слать уже некому.
+	if _net_is_host:
+		if _status != null:
+			_status.text = "Everyone else left — the remaining sides are Hard AI. Finish deploying and press Ready."
+		_refresh_labels()
+		_try_start()
+		return
 	if _status != null:
 		_status.text = "Connection lost — returning to the menu."
 	_drop_session()
@@ -167,6 +232,21 @@ func _on_net_message(msg: Dictionary) -> void:
 	match str(msg.get("k", "")):
 		K_LIVE_REQ:
 			_send_live()
+			return
+		K_SLOT_AI:
+			_apply_slot_ai(msg)
+			return
+		NetHandoff.K_SETUP_REQ:
+			# Гость остался в лобби без объявления матча (batch 13 #11) — повторяем ему
+			# K_SETUP с той же картой; расстановка у него начнётся с этого места.
+			if _net_is_host and _net != null:
+				# Карта уходит С нейтральными спавнами: здесь они вынуты в
+				# preserved_neutral, а гость вынимает их из присланной карты сам.
+				var shared := MapData.from_dict(map.to_dict())
+				shared.spawns = []
+				for n in preserved_neutral:
+					shared.set_spawn(n["coord"], n["stats_id"], MCF.Owner.NEUTRAL)
+				_net.send(NetHandoff.encode_setup(shared))
 			return
 		K_LIVE:
 			# Чужая армия по мере сборки (batch 12 #15) — только картинка.
@@ -202,10 +282,14 @@ func _on_net_message(msg: Dictionary) -> void:
 		_shared_seed = int(msg["seed"])
 	# Зеркальная партия (batch 12 #12): армия хоста пришла — моя зона уже заполнена
 	# её отражением, самому ставить нечего, остаётся подтвердить готовность.
-	if _mirrored_guest() and _remote_units.has(_my_side):
-		_status.text = "The host's formation has been mirrored into your zone. Press Ready."
 	_refresh_labels()
 	queue_redraw()
+	# Гость зеркальной партии подтверждает готовность сам (batch 13 #13): его армия —
+	# отражение армии хоста, выбирать ему нечего, а лишняя кнопка только задерживала бой.
+	if _mirrored_guest() and _remote_units.has(_my_side) and not _my_ready:
+		_status.text = "The host's formation has been mirrored into your zone."
+		_on_net_ready()
+		return
 	if _my_ready:
 		_try_start()
 	elif _status != null and not _mirrored_guest():
@@ -313,10 +397,10 @@ func _on_net_ready() -> void:
 	# гости подтверждают свою сами, когда увидят отражение.
 	if networked() and _net_is_host \
 			and GameConfig.placement_mode == GameConfig.Placement.MIRRORED:
+		_refresh_mirrors()  # отражения уже стоят живьём (batch 13 #13) — только освежить
 		for side in _sides():
 			if side == _my_side:
 				continue
-			_stamp_into(side)
 			sent_sides.append(side)
 			if roster.is_ai(side):
 				ready_sides.append(side)
@@ -338,6 +422,9 @@ func _send_live() -> void:
 	if not networked() or _net == null or _my_ready or not GameConfig.live_placement_visible:
 		return
 	var mine := _host_sides()
+	# Зеркальный хост шлёт и отражения (batch 13 #13): гость видит свою армию живьём.
+	if _mirrors_live() and _net_is_host:
+		mine = _sides()
 	_net.send({"k": K_LIVE, "u": _encode_roster(mine), "sides": mine})
 
 func _load_or_blank_map() -> MapData:
@@ -468,7 +555,7 @@ func _open_tank_dir_menu(vi: int, screen_pos: Vector2) -> void:
 	menu.id_pressed.connect(func(id: int) -> void:
 		placed[vi]["facing"] = FACING4[id]
 		_status.text = "Rotated the %s (free)." % _display_name(placed[vi]["stats_id"])
-		queue_redraw()
+		_placement_changed()
 		menu.queue_free())
 	menu.close_requested.connect(func() -> void: menu.queue_free())
 	add_child(menu)
@@ -524,7 +611,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			var step := -1 if event.keycode == KEY_Q else 1
 			placed[vi]["facing"] = FACING4[(idx + step + FACING4.size()) % FACING4.size()]
 			_status.text = "Rotated the %s (free)." % _display_name(placed[vi]["stats_id"])
-			queue_redraw()
+			_placement_changed()
 		return
 	# Ввод над палитрой принадлежит панели — не панорамируем/зумим/ставим под ней.
 	if event is InputEventMouseButton and _pointer_over_panel(event.position):
@@ -565,12 +652,18 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
 				if _ptool == PTool.FILL:
-					_place_many(_zone_cells(active_side))
+					if _erasing:
+						_erase_many(_zone_cells(active_side))
+					else:
+						_place_many(_zone_cells(active_side))
 				else:
 					_shape_start = _pos_to_cell(get_global_mouse_position())
 					_shape_cur = _shape_start
 			elif _shape_start != Vector2i(-9999, -9999):
-				_place_many(_shape_cells(_shape_start, _shape_cur))
+				if _erasing:
+					_erase_many(_shape_cells(_shape_start, _shape_cur))
+				else:
+					_place_many(_shape_cells(_shape_start, _shape_cur))
 				_shape_start = Vector2i(-9999, -9999)
 			return
 		if event is InputEventMouseMotion and _shape_start != Vector2i(-9999, -9999):
@@ -583,7 +676,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.pressed:
 			_painting = true
 			_paint_last = _pos_to_cell(get_global_mouse_position())
-			_click_cell(_paint_last)
+			if _erasing:
+				_erase_at(_paint_last)
+			else:
+				_click_cell(_paint_last)
 		else:
 			_painting = false
 		return
@@ -591,7 +687,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		var cell := _pos_to_cell(get_global_mouse_position())
 		if cell != _paint_last:
 			_paint_last = cell
-			_paint_at(cell)
+			if _erasing:
+				_erase_at(cell)
+			else:
+				_paint_at(cell)
 		return
 
 ## Под курсором ли панель палитры (#9/#11): её ввод не трогает поле/камеру.
@@ -617,17 +716,41 @@ func _mirror_locked() -> bool:
 	return GameConfig.placement_mode == GameConfig.Placement.MIRRORED \
 			and not _sides().is_empty() and active_side != _sides()[0]
 
-## Отштамповать формацию хоста (первой стороны) в зону текущей стороны, отразив её через
-## центр карты (item 39). Копии бесплатны — это отражение уже оплаченного отряда хоста.
-func _stamp_formation() -> void:
-	var res := _stamp_into(active_side)
+## Зеркало живёт само (batch 13 #13): кнопки «Stamp Formation» больше нет. Каждое
+## изменение отряда первой стороны тут же отражается во ВСЕ остальные зоны — и в
+## хот-сите, и по сети (хост шлёт копии вживую, гости видят свою армию по мере того, как
+## хост её собирает). Копии помечены mirror и пересобираются с нуля при каждом изменении,
+## поэтому снятый юнит хоста исчезает и из отражений.
+func _mirrors_live() -> bool:
+	return GameConfig.placement_mode == GameConfig.Placement.MIRRORED \
+			and not _mirrored_guest() and not _sides().is_empty()
+
+func _refresh_mirrors() -> void:
+	if not _mirrors_live():
+		return
+	var source: int = _sides()[0]
+	var kept: Array = []
+	for p in placed:
+		if not bool(p.get("mirror", false)):
+			kept.append(p)
+	placed = kept
+	var skipped := 0
+	for side in _sides():
+		if side == source:
+			continue
+		var res := _stamp_into(side)
+		skipped += int(res["skipped"])
 	# О пропущенных сообщаем ЯВНО: молчаливая недостача — это ровно то, из-за чего
 	# пропажу танков пришлось ловить в бою, а не на расстановке.
-	_status.text = "Stamped %d units from the host's formation." % int(res["added"])
-	if int(res["skipped"]) > 0:
-		_status.text += "  %d didn't fit the deployment zone." % int(res["skipped"])
+	if skipped > 0 and _status != null:
+		_status.text = "%d mirrored unit(s) don't fit the other zone(s)." % skipped
+
+## Единая точка «отряд изменился»: зеркала, подписи, показ, живая рассылка.
+func _placement_changed() -> void:
+	_refresh_mirrors()
 	_refresh_labels()
 	queue_redraw()
+	_send_live()
 
 ## Отражение формации первой стороны в зону target (batch 12 #12): одна функция и для
 ## кнопки «Stamp Formation» в хот-сите, и для авто-штампа хоста по сети.
@@ -654,7 +777,7 @@ func _stamp_into(target: int) -> Dictionary:
 			skipped += 1
 			continue
 		var rec := {"stats_id": id, "owner": target,
-				"coord": dst, "paid_by": target}
+				"coord": dst, "paid_by": target, "mirror": true}
 		# Формация отражена на 180°, значит и фронт машины смотрит навстречу — иначе
 		# отзеркаленный танк встал бы стволом в собственный тыл.
 		if VehicleDB.is_vehicle(id) \
@@ -676,9 +799,7 @@ func _paint_at(coord: Vector2i) -> void:
 	placed.append({"stats_id": brush_unit, "owner": active_side,
 			"coord": coord, "paid_by": active_side})
 	spent[active_side] += c
-	_refresh_labels()
-	queue_redraw()
-	_send_live()
+	_placement_changed()
 
 func _paid_by(rec: Dictionary) -> int:
 	return int(rec.get("paid_by", rec["owner"]))
@@ -753,7 +874,7 @@ func _zone_cells(side: int) -> Array:
 ## проходимость, свободно). Одна операция — один пересчёт меток.
 func _place_many(cells: Array) -> void:
 	if _mirror_locked():
-		_status.text = "Mirrored placement: use “Stamp Formation”."
+		_status.text = "Mirrored placement: the host's formation is mirrored into your zone automatically."
 		return
 	if brush_unit == "":
 		_status.text = "Pick a unit from the palette first."
@@ -773,26 +894,58 @@ func _place_many(cells: Array) -> void:
 		spent[active_side] += cost
 		added += 1
 	_status.text = "Deployed %d %s." % [added, _display_name(brush_unit)]
+	_placement_changed()
+
+## Ластик (batch 13 #5): снять своего юнита с клетки и вернуть очки. Чужих и зеркальных
+## копий не трогает. Возвращает true, если что-то снял.
+func _erase_at(coord: Vector2i) -> bool:
+	var idx := _placed_at(coord)
+	if idx == -1:
+		return false
+	if _paid_by(placed[idx]) != active_side or bool(placed[idx].get("mirror", false)):
+		return false
+	spent[active_side] -= _cost(placed[idx]["stats_id"])
+	placed.remove_at(idx)
+	_placement_changed()
+	return true
+
+func _erase_many(cells: Array) -> void:
+	var removed := 0
+	for coord: Vector2i in cells:
+		if _erase_at(coord):
+			removed += 1
+	_status.text = "Removed %d unit(s)." % removed
 	_refresh_labels()
 	queue_redraw()
-	_send_live()
+
+func _toggle_eraser(on: bool) -> void:
+	_erasing = on
+	if on:
+		# Ластик и кисть взаимоисключающи: выбранный юнит гаснет в палитре.
+		brush_unit = ""
+		for bid in _palette_buttons:
+			_palette_buttons[bid].button_pressed = false
+		_status.text = "Eraser: click or drag over your units to remove them; shapes erase their whole area."
+	else:
+		_status.text = ""
+	queue_redraw()
 
 func _click_cell(coord: Vector2i) -> void:
 	# Клик по своему расставленному юниту — снять и вернуть очки.
 	var idx := _placed_at(coord)
 	if idx != -1:
-		if _paid_by(placed[idx]) == active_side:
+		if _paid_by(placed[idx]) == active_side and not bool(placed[idx].get("mirror", false)):
 			spent[active_side] -= _cost(placed[idx]["stats_id"])
 			placed.remove_at(idx)
-			_refresh_labels()
-			queue_redraw()
-			_send_live()
+			_placement_changed()
+		elif bool(placed[idx].get("mirror", false)):
+			_status.text = "That's a mirrored copy — remove the original instead."
 		else:
 			_status.text = "That unit belongs to the other side."
 		return
 	# Иначе — поставить выбранного юнита/технику.
 	if _mirror_locked():
-		_status.text = "Mirrored placement: use “Stamp Formation”, not free deployment."
+		_status.text = "Mirrored placement: the host's formation is mirrored into your zone automatically."
 		return
 	if brush_unit == "":
 		_status.text = "Pick a unit from the palette first."
@@ -809,9 +962,7 @@ func _click_cell(coord: Vector2i) -> void:
 	placed.append({"stats_id": brush_unit, "owner": active_side,
 			"coord": coord, "paid_by": active_side})
 	spent[active_side] += c
-	_refresh_labels()
-	queue_redraw()
-	_send_live()
+	_placement_changed()
 
 # --- Геометрия (локальные координаты; pan/zoom добавляет draw_set_transform) ---
 func _cell_origin(coord: Vector2i) -> Vector2:
@@ -902,8 +1053,12 @@ func _draw() -> void:
 	# Предпросмотр формы-инструмента (item 12): куда ляжет линия/прямоугольник/круг.
 	if _ptool != PTool.POINT and _shape_start != Vector2i(-9999, -9999):
 		for sc: Vector2i in _shape_cells(_shape_start, _shape_cur):
-			var col := Color(0.35, 0.85, 0.5, 0.35) if _footprint_placeable(brush_unit, sc, active_side) \
-				else Color(0.9, 0.3, 0.2, 0.25)
+			var col: Color
+			if _erasing:
+				col = Color(0.95, 0.35, 0.25, 0.4) if _placed_at(sc) != -1 else Color(0.9, 0.3, 0.2, 0.15)
+			else:
+				col = Color(0.35, 0.85, 0.5, 0.35) if _footprint_placeable(brush_unit, sc, active_side) \
+					else Color(0.9, 0.3, 0.2, 0.25)
 			draw_rect(Rect2(_cell_origin(sc), Vector2(CELL, CELL)), col)
 
 ## Ярлыки объектов — те же, что в бою (Main._draw): игрок должен видеть одну и ту же
@@ -1062,15 +1217,14 @@ func _build_ui() -> void:
 		tb.pressed.connect(func() -> void: _select_tool(pt))
 		tools_row.add_child(tb)
 		_tool_buttons[pt] = tb
+	# Ластик (batch 13 #5) — отдельный тумблер: работает с любой формой выше.
+	_eraser_btn = Button.new()
+	_eraser_btn.text = "Eraser  (remove units)"
+	_eraser_btn.toggle_mode = true
+	_eraser_btn.toggled.connect(_toggle_eraser)
+	vbox.add_child(_eraser_btn)
 
 	vbox.add_child(HSeparator.new())
-
-	# Кнопка штампа формации хоста для зеркального режима (item 39).
-	_stamp_btn = Button.new()
-	_stamp_btn.text = "Stamp Formation"
-	_stamp_btn.pressed.connect(_stamp_formation)
-	_stamp_btn.visible = false
-	vbox.add_child(_stamp_btn)
 
 	_flow_btn = Button.new()
 	_flow_btn.custom_minimum_size = Vector2(0, 42)
@@ -1124,6 +1278,9 @@ func _add_palette_button(id: String, label: String) -> void:
 
 func _on_pick_unit(id: String) -> void:
 	brush_unit = id
+	if _erasing and _eraser_btn != null:
+		_eraser_btn.button_pressed = false
+		_erasing = false
 	for bid in _palette_buttons:
 		_palette_buttons[bid].button_pressed = (bid == id)
 	_status.text = ""
@@ -1140,9 +1297,6 @@ func _refresh_labels() -> void:
 		_budget_label.text = "Points: %d / %d   (units: %d)" % [spent[active_side], eb, count]
 	else:
 		_budget_label.text = "Points spent: %d   (unlimited — units: %d)" % [spent[active_side], count]
-	if _stamp_btn != null:
-		# По сети зеркало ставит хост сам (batch 12 #12) — кнопка только для хот-сита.
-		_stamp_btn.visible = _mirror_locked() and not networked()
 	if networked():
 		var mine := _host_sides()
 		var at := mine.find(active_side)
@@ -1157,7 +1311,7 @@ func _refresh_labels() -> void:
 	else:
 		var sides := _sides()
 		var at := sides.find(active_side)
-		if at >= 0 and at < sides.size() - 1:
+		if at >= 0 and at < sides.size() - 1 and not _mirrors_live():
 			_flow_btn.text = "Next: %s  >" % _side_label(sides[at + 1])
 		else:
 			_flow_btn.text = "Start Battle"
@@ -1199,6 +1353,12 @@ func _on_flow() -> void:
 		return
 	var sides := _sides()
 	var at := sides.find(active_side)
+	# Зеркальная партия (batch 13 #13): остальные стороны — отражения, им расставлять
+	# нечего, так что после первой стороны сразу в бой.
+	if _mirrors_live():
+		_refresh_mirrors()
+		_start_battle()
+		return
 	if at >= 0 and at < sides.size() - 1:
 		active_side = sides[at + 1]
 		brush_unit = ""

@@ -14,7 +14,7 @@ for script in tests/check_scripts.gd tests/run_codec.gd tests/run_headless.gd \
               tests/run_lobby_maps.gd tests/run_combat_safety.gd \
               tests/run_ui_assets.gd tests/run_ai_conduct.gd \
               tests/run_mirror_stamp.gd tests/run_modular_tank.gd \
-              tests/run_mines_and_corpses.gd; do
+              tests/run_mines_and_corpses.gd tests/run_batch13.gd; do
   echo "=== $script ==="
   # shellcheck disable=SC2086
   "$GODOT" --headless --script "res://$script" $EXTRA

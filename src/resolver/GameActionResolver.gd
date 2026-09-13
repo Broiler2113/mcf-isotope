@@ -2020,7 +2020,8 @@ func weldable_cells(unit: UnitInstance) -> Array[Vector2i]:
 		return out
 	for c: Vector2i in state.grid.neighbors(unit.coord):
 		var cell := state.grid.cell(c)
-		if cell != null and cell.feature_id == MCF.FEATURE_AIRLOCK and not cell.airlock_welded:
+		if cell != null and cell.feature_id == MCF.FEATURE_AIRLOCK and not cell.airlock_welded \
+				and corpses_at(c) == 0:
 			out.append(c)
 	return out
 
@@ -2041,6 +2042,9 @@ func _resolve_weld_airlock(intent: WeldAirlockIntent) -> ActionResult:
 		return ActionResult.fail("There is no airlock there")
 	if cell.airlock_welded:
 		return ActionResult.fail("This airlock is already welded shut")
+	# Створки не сойдутся на теле (batch 13 #4) — сначала вытащить труп из проёма.
+	if corpses_at(intent.to) > 0:
+		return ActionResult.fail("A body is jamming the doors — drag it out first")
 	if actor.remaining_ap < WELD_AIRLOCK_AP:
 		return ActionResult.fail("Need %d AP" % WELD_AIRLOCK_AP)
 	actor.remaining_ap -= WELD_AIRLOCK_AP
@@ -2695,8 +2699,8 @@ func _vision_blocked(a: Vector2i, b: Vector2i) -> bool:
 		# стекло разрешено СТРЕЛЯТЬ, но цель за ним оставалась в тумане, а невидимую
 		# цель нельзя выбрать (can_shoot → "Target not visible"). Строковое сравнение
 		# стоит здесь дёшево: до него доходят только клетки, уже опознанные как стена.
-		if cell.vehicle_id != -1:
-			return true
+		# Корпуса машин и живые обзор не перекрывают (batch 13 #1) — только стена и
+		# закрытый шлюз, то есть ровно GridCell.blocks_sight().
 		if cell.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(cell.feature_id):
 			return true
 	return false
@@ -2874,13 +2878,34 @@ func _seen_from(coord: Vector2i, r: int) -> PackedInt32Array:
 				if px == cx and py == cy:
 					break
 				var cell := grid.cell_fast(px, py)
-				if cell.cover_height >= MCF.WALL_HEIGHT or cell.vehicle_id != -1:
+				# То же условие, что в _vision_blocked() / GridCell.blocks_sight(): стена
+				# или закрытый шлюз рвут луч, стекло — нет, корпус машины — нет.
+				if cell.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(cell.feature_id):
 					blocked = true
 					break
 			if not blocked:
 				out.append(row + cx)
 		dy += 1
 	_seen_cache[key] = out
+	return out
+
+## Обзор машины — объединение обзоров со ВСЕХ клеток её следа (batch 13 #1). Раньше
+## смотрели из origin (верхний-левый угол), а собственный корпус ещё и рвал луч: танк
+## видел только вверх и влево, остальное закрывали его же клетки. Теперь корпус лучу
+## не мешает, а бойницы есть по всему периметру — из-за угла выглядывает та кромка,
+## которая к нему ближе. Порядок сбора детерминирован (клетки следа по строкам, внутри
+## клетки — порядок _seen_from), поэтому сравнение «обзор не изменился» остаётся честным.
+func _vehicle_seen(veh: Vehicle) -> PackedInt32Array:
+	var cells := veh.footprint()
+	if cells.size() == 1:
+		return _seen_from(cells[0], MCF.SIGHT_UNLIMITED)
+	var merged: Dictionary = {}
+	var out := PackedInt32Array()
+	for c: Vector2i in cells:
+		for i: int in _seen_from(c, MCF.SIGHT_UNLIMITED):
+			if not merged.has(i):
+				merged[i] = true
+				out.append(i)
 	return out
 
 # --- Туман войны: обзор команды -------------------------------------------------------
@@ -3015,11 +3040,12 @@ func team_visible_coords(owner: int) -> Dictionary:
 	for veh: Vehicle in state.all_vehicles():
 		if veh.wrecked or not sides.has(veh.owner):
 			continue
+		# Смотрит ЭКИПАЖ, а не железо (batch 13 #1): пустая машина — слепая.
+		if veh.occupants.is_empty():
+			continue
 		var vkey := -1 - veh.id
 		live[vkey] = true
-		# Смотрит машина из своего центра — одной записи хватает на весь корпус:
-		# соседние клетки следа видят практически то же самое.
-		var vfresh := _seen_from(veh.origin, MCF.SIGHT_UNLIMITED)
+		var vfresh := _vehicle_seen(veh)
 		var vwas: Variant = seen.get(vkey)
 		if vwas != null:
 			if vwas == vfresh:
@@ -3439,7 +3465,9 @@ func update_airlocks() -> void:
 		if cell.airlock_welded:
 			cell.cover_height = MCF.WALL_HEIGHT
 			continue
-		var open := false
+		# Тело в проёме держит створки (batch 13 #4): шлюз не закроется, пока труп не
+		# вытащат. Проверяется САМА клетка шлюза — труп рядом, за порогом, дверям не мешает.
+		var open := corpses_at(cell.coord) > 0
 		var cx := cell.coord.x
 		var cy := cell.coord.y
 		var y := maxi(0, cy - radius)

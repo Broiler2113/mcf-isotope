@@ -92,15 +92,19 @@ func _initialize() -> void:
 				"host waited for the guest to roll: '%s'" % _waited_prompt)
 			ck(_waited_prompt.find("need") >= 0, "prompt shows the number needed: '%s'" % _waited_prompt)
 			current_scene._on_intent_ready(EndTurnIntent.new()))
+	# С одним бойцом на сторону партия может ЗАКОНЧИТЬСЯ раньше второго раунда (batch 13
+	# #9: победа замораживает доску) — это тоже честный исход, лишь бы обе машины сошлись.
 	step("AI side was driven by the host and passed the turn on", func() -> bool:
 		poke_dice()
 		var m = current_scene
+		if m._match_over:
+			return true
 		if m.state.active_player() == 0 and not m._animating and not m._net_playing and m.state.turns.round_number < 2:
 			m._on_intent_ready(EndTurnIntent.new())
 		return m.state.turns.round_number >= 2,
 		func() -> void:
 			var m = current_scene
-			ck(m.state.turns.round_number >= 2, "a full round went by (round %d)" % m.state.turns.round_number)
+			ck(m.state.turns.round_number >= 2 or m._match_over, "a full round went by (round %d)" % m.state.turns.round_number)
 			print("[host] digest ", TS_digest(m.state)))
 	step("hold for guest to finish", func() -> bool: return _step_t > 3.0)
 

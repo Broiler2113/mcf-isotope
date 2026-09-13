@@ -25,7 +25,12 @@ const DRIVER_SEAT := 1
 
 var id: int = -1
 var type_id: String = ""
-var owner: int = -1
+var owner: int = -1:
+	set(v):
+		if owner == v:
+			return
+		owner = v
+		UnitInstance.vision_epoch += 1
 
 ## Прочность УЗЛОВ (веха «Modular tank system»): id узла → текущие очки.
 ## Отсутствующий ключ = узла у этой машины нет вовсе (у челнока нет башни и пушки).
@@ -49,7 +54,16 @@ var durability: int:
 var tower_locked_dir: Vector2i = Vector2i.ZERO
 
 ## Верхний-левый угол следа и его размеры в клетках.
-var origin: Vector2i = Vector2i.ZERO
+## origin, owner и wrecked двигают UnitInstance.vision_epoch (batch 13 #1): обзор стороны
+## складывается и из глаз экипажа машины, а корпус обзор больше не перекрывает — значит
+## переезд машины не трогает GridCell.vision_version, и без этой подписи кеш
+## team_visible_coords() не узнал бы, что танк смотрит уже из другого места.
+var origin: Vector2i = Vector2i.ZERO:
+	set(v):
+		if origin == v:
+			return
+		origin = v
+		UnitInstance.vision_epoch += 1
 var size: Vector2i = Vector2i.ONE
 
 ## Направление (единичный вектор) для машин с фронтом — у танка (одно из 8).
@@ -74,7 +88,12 @@ var seats: Array[int] = []
 
 ## Обломки танка (результат уничтожения без взрыва): прочность 0, экипаж мёртв, но
 ## корпус ОСТАЁТСЯ на поле как непроходимое препятствие/укрытие и перекрывает линию.
-var wrecked: bool = false
+var wrecked: bool = false:
+	set(v):
+		if wrecked == v:
+			return
+		wrecked = v
+		UnitInstance.vision_epoch += 1
 
 ## Сколько раз главная пушка стреляла в этом раунде (не чаще 2×/ход).
 var cannon_shots_this_round: int = 0

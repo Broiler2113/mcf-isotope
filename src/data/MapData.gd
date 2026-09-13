@@ -48,6 +48,33 @@ func resize(p_width: int, p_height: int) -> void:
 		zone_owner[i] = -1
 	spawns = []
 
+## Изменить размер, СОХРАНИВ содержимое (batch 13 #14): клетки в пересечении старого и
+## нового поля остаются как были, новые — космос, спавны за краем отбрасываются. Раньше
+## единственный способ сменить размер стирал всю карту — «Set Size» был ловушкой.
+func resize_keep(p_width: int, p_height: int) -> void:
+	var old_w := width
+	var old_h := height
+	var old_floor := floor_type
+	var old_cover := cover_height
+	var old_space := is_space
+	var old_feat := feature_id
+	var old_zone := zone_owner
+	var old_spawns := spawns
+	resize(p_width, p_height)
+	fill_all_space()
+	for y in mini(old_h, height):
+		for x in mini(old_w, width):
+			var src := y * old_w + x
+			var dst := y * width + x
+			floor_type[dst] = old_floor[src]
+			cover_height[dst] = old_cover[src]
+			is_space[dst] = old_space[src]
+			feature_id[dst] = old_feat[src]
+			zone_owner[dst] = old_zone[src]
+	for s in old_spawns:
+		if in_bounds(s["coord"]):
+			spawns.append(s)
+
 ## Заполнить всю карту космосом (нет пола = космос, §3.11). Стартовое состояние
 ## редактора: игрок сам «прокрашивает» пол там, где нужна твёрдая поверхность.
 func fill_all_space() -> void:
