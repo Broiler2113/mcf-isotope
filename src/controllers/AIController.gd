@@ -19,7 +19,9 @@ extends PlayerController
 ## обе игровые армии (см. _enemies_of), а друг друга жители не трогают, потому что у них
 ## общий owner. Единственная поправка — §3.10: невскрытый житель неподвижен (_can_command).
 
-enum Difficulty {EASY, NORMAL, HARD}
+## LEARNED — не уровень этого мозга, а метка слота «AI - Learned» (RL v1, §7): такой слот
+## ведёт LearnedController, а сюда попадает лишь его запасной вариант (HARD).
+enum Difficulty {EASY, NORMAL, HARD, LEARNED}
 
 const SCORE_SHOOT_BASE := 100.0
 const SCORE_CAPTURE_BASE := 70.0
