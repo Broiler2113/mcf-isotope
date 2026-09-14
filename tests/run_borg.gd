@@ -18,9 +18,10 @@ func _initialize() -> void:
 	_fire_trench_and_mines()
 	_destruction()
 	_overtake_a_dead_operator()
+	_operator_stays_a_unit()
 	_ai_uses_a_borg()
 	if fails.is_empty():
-		print("borg: boarding, stats, engineer batches, fire, trenches, mines, destruction, overtaking and the AI all hold")
+		print("borg: boarding, stats, engineer batches, fire, trenches, mines, destruction, overtaking, one-vehicle-at-a-time and the AI all hold")
 		quit(0)
 		return
 	printerr("borg: %d failure(s)" % fails.size())
@@ -169,6 +170,9 @@ func _destruction() -> void:
 		ck(not st.vehicles.has(b.id), "exploded borg leaves nothing")
 	else:
 		ck(b.wrecked and st.grid.vehicle_at(Vector2i(5, 5)) == b.id, "unexploded borg leaves a wreck on its cell")
+	# The body is not «in» a vehicle any more — an exploded borg is gone from state.vehicles,
+	# and a dangling borg_id would point at nothing.
+	ck(sn.borg_id == -1, "dead operator's borg_id is cleared (%d)" % sn.borg_id)
 
 func _overtake_a_dead_operator() -> void:
 	var f := _field()
@@ -187,6 +191,45 @@ func _overtake_a_dead_operator() -> void:
 	ck(en.borg_id == b.id and en.coord == Vector2i(5, 5), "engineer at the controls")
 	ck(st.grid.in_bounds(sn.coord) and sn.coord != Vector2i(5, 5) and st.grid.cell(sn.coord).occupant == sn
 			and Combat.distance(sn.coord, Vector2i(5, 5)) == 1, "the body was pushed out next to the borg (%s)" % str(sn.coord))
+
+## Борг — это боец, а не машина: оператор не пересаживается из него прямо в танк (борг
+## оставался «занятым», а при высадке телепортировался к бойцу), а машинные намерения
+## (VehicleMove/Turn/Cannon) к боргу не применяются — после смены раунда у него
+## появлялось своё ОД экипажа, и VehicleMoveIntent катил корпус отдельно от оператора,
+## оставляя след без машины на клетке назначения.
+func _operator_stays_a_unit() -> void:
+	var f := _field([[Vector2i(8, 4), "tank", MCF.Owner.PLAYER_1]])  # hull (8,4)-(10,6)
+	var st: GameState = f["s"]
+	var r: GameActionResolver = f["r"]
+	var b: Vehicle = f["b"]
+	var tank := st.vehicle_on(Vector2i(8, 4))
+	var sn := _u(st, Vector2i(4, 5))
+	var res := r.resolve(VehicleBoardIntent.new(sn.id, b.id))
+	ck(res.ok, "board borg: " + res.reason)
+	res = r.resolve(MoveIntent.new(sn.id, Vector2i(7, 5)))  # next to the tank
+	ck(res.ok and sn.coord == Vector2i(7, 5) and b.origin == Vector2i(7, 5), "borg walks up to the tank")
+	res = r.resolve(VehicleBoardIntent.new(sn.id, tank.id))
+	ck(not res.ok, "operator cannot board a tank from inside the borg")
+	ck(sn.borg_id == b.id and sn.aboard_vehicle_id == -1 and sn.coord == Vector2i(7, 5),
+			"refused boarding changes nothing")
+	# a new round gives the borg a crew-AP pool; vehicle intents must still be refused
+	r.resolve(EndTurnIntent.new())
+	r.resolve(EndTurnIntent.new())
+	ck(st.active_player() == MCF.Owner.PLAYER_1, "back to P1")
+	res = r.resolve(VehicleMoveIntent.new(b.id, Vector2i(0, 1), 3))
+	ck(not res.ok, "VehicleMoveIntent on an operated borg is refused")
+	ck(b.origin == Vector2i(7, 5) and st.grid.vehicle_at(Vector2i(7, 8)) == -1
+			and st.grid.vehicle_at(Vector2i(7, 5)) == -1,
+			"no hull tag is left anywhere (origin %s)" % str(b.origin))
+	res = r.resolve(VehicleTurnIntent.new(b.id, Vector2i(0, 1)))
+	ck(not res.ok, "VehicleTurnIntent on a borg is refused")
+	res = r.resolve(VehicleCannonIntent.new(b.id, Vector2i(20, 5)))
+	ck(not res.ok, "VehicleCannonIntent on a borg is refused")
+	# and after climbing out the soldier boards the tank normally
+	res = r.resolve(VehicleDisembarkIntent.new(sn.id, Vector2i(7, 4)))
+	ck(res.ok and sn.borg_id == -1, "climbs out: " + res.reason)
+	res = r.resolve(VehicleBoardIntent.new(sn.id, tank.id))
+	ck(res.ok and sn.aboard_vehicle_id == tank.id, "then boards the tank: " + res.reason)
 
 var _pending: Intent = null
 func _on_intent(i: Intent) -> void:

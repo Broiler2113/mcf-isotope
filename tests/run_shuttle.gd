@@ -17,9 +17,10 @@ func _initialize() -> void:
 	_shooting_in_and_out()
 	_heavy_hit_and_bodies()
 	_station_in_a_seat()
+	_zero_g_keeps_passengers_seated()
 	_ai_flies_and_fires()
 	if fails.is_empty():
-		print("shuttle: seats, driver AP, fire from and into seats, heavy hits, bodies, stations and the AI all hold")
+		print("shuttle: seats, driver AP, fire from and into seats, heavy hits, bodies, stations, zero-g seats and the AI all hold")
 		quit(0)
 		return
 	printerr("shuttle: %d failure(s)" % fails.size())
@@ -203,6 +204,44 @@ func _station_in_a_seat() -> void:
 	ck(drone2 != null and drone2.home_station == Vector2i(4, 6) and drone2.coord == Vector2i(4, 6),
 			"the drone on the station flew with the shuttle (at %s, home %s)" % [str(drone2.coord) if drone2 else "-", str(drone2.home_station) if drone2 else "-"])
 	ck(drone2 != null and r.operator_controls(drone2), "and is still controllable")
+
+## Невесомость (§3.11): пассажир пристёгнут — ни отдача, ни попадание не вышибают его
+## из кресла. Раньше _knockback уносил стрелка с корпуса по диагонали, оставляя его «на
+## борту» с занятым креслом; тело потом подбирали с пола, и кресло указывало в никуда.
+func _zero_g_keeps_passengers_seated() -> void:
+	var f := _field()
+	var st: GameState = f["s"]
+	var r: GameActionResolver = f["r"]
+	var sh: Vehicle = f["sh"]
+	for c: GridCell in st.grid.cells_flat():
+		c.is_space = true
+	var li := _u(st, Vector2i(3, 4))
+	r.resolve(VehicleBoardIntent.new(li.id, sh.id, 3))  # seat (5,5), the hull's corner
+	# enemy at (2,8): recoil away from it goes (+1,-1) — straight off the hull at (6,4),
+	# which must be empty for the old bug to show (the anti-tank spawns there).
+	st.grid.move_occupant(Vector2i(6, 4), Vector2i(6, 9))
+	var foe := _u(st, Vector2i(12, 5))
+	st.grid.move_occupant(foe.coord, Vector2i(2, 8))
+	var res := r.resolve(ShootIntent.new(li.id, foe.id))
+	ck(res.ok, "passenger fires in zero-g: " + res.reason)
+	ck(li.coord == sh.seat_cell(3) and st.grid.cell(li.coord).occupant == li
+			and st.grid.vehicle_at(li.coord) == sh.id,
+			"recoil does not throw the passenger off the hull (at %s)" % str(li.coord))
+	# and the foe's return fire does not push the passenger either
+	r.resolve(EndTurnIntent.new())
+	if foe.is_alive():
+		res = r.resolve(ShootIntent.new(foe.id, li.id, 1))
+		ck(res.ok, "foe fires back: " + res.reason)
+		ck(li.coord == sh.seat_cell(3), "a hit does not knock the passenger out of the seat")
+	# a soldier on the floor in space still gets knocked back — the rule itself is intact
+	r.resolve(EndTurnIntent.new())
+	var sn := _u(st, Vector2i(3, 5))
+	st.grid.move_occupant(sn.coord, Vector2i(10, 9))
+	var foe2 := _u(st, Vector2i(20, 4))
+	st.grid.move_occupant(foe2.coord, Vector2i(2, 9))
+	res = r.resolve(ShootIntent.new(sn.id, foe2.id))
+	ck(res.ok, "floor sniper fires in zero-g: " + res.reason)
+	ck(sn.coord == Vector2i(11, 9), "floor shooter recoils one cell (%s)" % str(sn.coord))
 
 var _pending: Intent = null
 func _on_intent(i: Intent) -> void:

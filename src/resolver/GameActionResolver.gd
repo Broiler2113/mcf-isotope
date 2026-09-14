@@ -169,6 +169,20 @@ func _resolve_redo(intent: RedoIntent) -> ActionResult:
 
 func _dispatch(intent: Intent) -> ActionResult:
 	update_airlocks()  # состояние шлюзов зависит от текущих позиций (§3.11)
+	# Пассажир челнока (batch 13) действует со своего места: стреляет, бросает гранаты,
+	# ставит станцию в соседнее кресло, пересаживается и выходит. Всё, что требует стоять
+	# на полу — ходить, хватать, строить, копать, чинить, — из кресла недоступно.
+	var _rider := state.get_unit(intent.actor_id)
+	if _rider != null and _rider.aboard_vehicle_id != -1 and _rider.is_alive() \
+			and not _aboard_allowed(intent):
+		return ActionResult.fail("Not possible from inside the shuttle — disembark first")
+	var result := _route(intent)
+	# Побочные эффекты действия — ТОЛЬКО когда оно состоялось. Раньше они шли до проверок,
+	# и отвергнутое намерение (нет линии огня, цель вне досягаемости) всё равно сжигало
+	# инженеру серию окопов и роняло волочимый объект; в сетевой партии хост такой отказ
+	# гостю не шлёт, и доски разъезжались на первом же следующем окопе.
+	if not result.ok:
+		return result
 	# Любое НЕ-копательное действие завершает начатую серию окопов (§3.7).
 	# ИСКЛЮЧЕНИЕ (#65): ДВИЖЕНИЕ серию не рвёт. Окоп роют линией — шаг вдоль траншеи
 	# и есть часть копки, а не «другое действие». Раньше один шаг сжигал инженеру все
@@ -190,13 +204,10 @@ func _dispatch(intent: Intent) -> ActionResult:
 	if intent is ShootIntent or intent is DPMGFireIntent or intent is DroneDetonateIntent \
 			or intent is VehicleCannonIntent:
 		state.combat_started = true
-	# Пассажир челнока (batch 13) действует со своего места: стреляет, бросает гранаты,
-	# ставит станцию в соседнее кресло, пересаживается и выходит. Всё, что требует стоять
-	# на полу — ходить, хватать, строить, копать, чинить, — из кресла недоступно.
-	var _rider := state.get_unit(intent.actor_id)
-	if _rider != null and _rider.aboard_vehicle_id != -1 and _rider.is_alive() \
-			and not _aboard_allowed(intent):
-		return ActionResult.fail("Not possible from inside the shuttle — disembark first")
+	return result
+
+## Маршрутизация намерения к его резолверу — без побочных эффектов (см. _dispatch).
+func _route(intent: Intent) -> ActionResult:
 	if intent is EndTurnIntent:
 		return _resolve_end_turn(intent)
 	elif intent is MoveIntent:
@@ -3626,13 +3637,17 @@ func update_airlocks() -> void:
 
 ## Отдача/отбрасывание после выстрела в невесомости (§3.11). Только для юнитов,
 ## стоящих в клетке-космосе, и только если позади свободно на всю дистанцию.
+## Пассажир челнока (batch 13) пристёгнут к креслу: его не отбрасывает ни отдачей, ни
+## попаданием — иначе он вылетал бы из корпуса, оставаясь «на борту» с занятым креслом.
 func _apply_zero_g(shooter: UnitInstance, target: UnitInstance) -> void:
 	# Стрелка отбрасывает назад (от цели).
-	if shooter.is_alive() and state.grid.cell(shooter.coord).is_space:
+	if shooter.is_alive() and shooter.aboard_vehicle_id == -1 \
+			and state.grid.cell(shooter.coord).is_space:
 		var back := _step_toward(target.coord, shooter.coord)
 		_knockback(shooter, back, MCF.ZEROG_SHOOTER_KNOCKBACK)
 	# Цель отбрасывает дальше (от стрелка).
-	if target.is_alive() and state.grid.cell(target.coord).is_space:
+	if target.is_alive() and target.aboard_vehicle_id == -1 \
+			and state.grid.cell(target.coord).is_space:
 		var away := _step_toward(shooter.coord, target.coord)
 		_knockback(target, away, MCF.ZEROG_TARGET_KNOCKBACK)
 
@@ -5620,6 +5635,12 @@ func _validate_vehicle(veh: Vehicle, credit: int = 0) -> String:
 		return "Vehicle not found"
 	if not veh.alive():
 		return "Vehicle is destroyed"
+	# Боргом (batch 13) правят намерения ОПЕРАТОРА — Move/Shoot от его имени. Машинные
+	# намерения ему не адресуются: после смены раунда у борга появлялось своё «ОД
+	# экипажа», VehicleMoveIntent катил корпус отдельно от бойца и оставлял на клетке
+	# назначения след без машины.
+	if veh.is_borg():
+		return "A borg is driven by its operator"
 	if veh.owner != state.active_player():
 		return "It's the other player's turn"
 	if vehicle_ap(veh) <= 0 and credit <= 0:
@@ -5868,6 +5889,10 @@ func _resolve_vehicle_board(intent: VehicleBoardIntent) -> ActionResult:
 		return ActionResult.fail(err)
 	if unit.aboard_vehicle_id != -1:
 		return ActionResult.fail("Already aboard a vehicle")
+	# Оператор борга сперва выходит из него (batch 13): иначе боец уезжал в танк с
+	# borg_id на руках, борг оставался «занятым» и при высадке телепортировался к нему.
+	if unit.borg_id != -1:
+		return ActionResult.fail("Climb out of the borg first")
 	var veh := state.get_vehicle(intent.vehicle_id)
 	if veh == null or not veh.alive():
 		return ActionResult.fail("No such vehicle")
@@ -6664,6 +6689,10 @@ func _destroy_vehicle(veh: Vehicle, res: ActionResult) -> void:
 		var crew := state.get_unit(uid)
 		if crew != null:
 			_kill(crew, res)
+			# Тело оператора борга больше ни в какой машине не сидит: взорвавшийся борг
+			# из state.vehicles исчезает, и borg_id указывал бы в пустоту.
+			if veh.is_borg():
+				crew.borg_id = -1
 	veh.occupants.clear()
 	if _seated(veh):
 		for i in veh.seats.size():
@@ -6698,6 +6727,7 @@ func _destroy_vehicle(veh: Vehicle, res: ActionResult) -> void:
 		var bop := state.get_unit(veh.borg_operator())
 		if bop != null and bop.is_alive():
 			_kill(bop, res)
+			bop.borg_id = -1
 		veh.occupants.clear()
 	if explode:
 		var r := int(dtable.get("explode_radius", 1))

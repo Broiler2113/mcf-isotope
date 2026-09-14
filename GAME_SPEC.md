@@ -2356,7 +2356,7 @@ CLIMB_COST                = { 0.5: 2, 1.0: 3, 1.5: 4 }
 COVER_MOD                 = { 1.0: 2 }         # hit penalty only, no defence bonus
 HEDGEHOG_JUMP_COST        = 2                  # hedgehogs are hopped, not entered
 
-DEFAULT_SIGHT_RANGE       = 12
+DEFAULT_SIGHT_RANGE       = 12      # legacy; sight is unlimited since batch 13 (SIGHT_UNLIMITED = 1024)
 CAPTURE_CARRY_PENALTY     = 3
 CORPSE_WALL_COUNT         = 5
 
@@ -2386,21 +2386,33 @@ POTENTIAL_PER_DURABILITY  = 10      # the one damage scale (§9.8)
 SNIPER_AUTOHIT_RANGE      = 12
 SHIELD_PUSH_DEFENSE_PENALTY = 2
 
-FIRE_SPREAD_FLAMMABLE     = 3       # wood/grass ignites on 3+
-FIRE_SPREAD_OTHER         = 4       # other floor on 4+
+FIRE_NEED_FLOOR           = 4       # plain floor catches on 4+ (per-material table FIRE_NEED_BY_FEATURE)
+FIRE_NEED_GRASS           = 2       # grass on 2+
+FIRE_NEED_WOOD            = 4       # wooden wall on 4+
+FIRE_NEED_WALL            = 5       # wall skins on 5+
+FIRE_NEED_GLASS           = 5
+FIRE_NEED_COVER           = 4       # sandbags, hedgehog, RSP, 1 m dirt
+FIRE_NEED_TALL_DIRT       = 5       # 2 m dirt counts as a wall
 FIRE_SHOOT_PENALTY        = 1
+EXTINGUISHER_RADIUS       = 2
+EXTINGUISHER_SUPPRESS_TURNS = 3
 
 DRONE_FLIGHT_RANGE        = 30      # tiles of flight bought by one action point
 DRONE_LEASH               = 15      # and never further than this from its station (item 15)
 DRONE_ARMOR               = 5
-RSP_RANGE                 = 12
-RSP_RATE_OF_FIRE          = 8
+DPMG_RANGE                = 12      # the RSP / ДПМГ station gun
+DPMG_RATE_OF_FIRE         = 8
+MINES_PER_ACTION          = 5
+MINE_REVEAL_RADIUS        = 15
+MINE_REVEAL_TURNS         = 1
+MINE_VEHICLE_DAMAGE       = 1       # personnel mine vs a hull (only the borg's)
+AV_MINE_VEHICLE_DAMAGE    = 1
 
 AIRLOCK_OPEN_RADIUS       = 1
 ZEROG_SHOOTER_KNOCKBACK   = 1
 ZEROG_TARGET_KNOCKBACK    = 2
 
-BRU_WALL_LENGTH           = 6
+LDF_WALL_LENGTH           = 6       # the BRU / ЛДФ chain
 BUILD_COST_DEFAULT        = 1       # wall / glass / BRU
 BUILD_COST_SANDBAGS       = 1
 BUILD_COST_HEDGEHOG       = 2
@@ -2410,7 +2422,20 @@ BREAK_COST                = 1
 POTENTIAL_PER_DURABILITY  = 10      # the unified damage scale (§9.8)
 DOT_DURABILITY            = 2       # both pillbox variants
 
-enum Owner      { PLAYER_1 = 0, PLAYER_2 = 1, NEUTRAL = 2 }
+COMPONENT_DAMAGE_ANTI_TANK = 1      # modular armour (§16.2b)
+COMPONENT_DAMAGE_CANNON   = 2
+COMPONENT_DAMAGE_SHIELD   = 2
+COMPONENT_DAMAGE_HEDGEHOG = 2
+COMPONENT_AIM_BONUS       = 1
+VEHICLE_COMPONENTS        = { tank: hull 8 / tower 6 / tracks_l 4 / tracks_r 4 / gun 4,
+                              shuttle: hull 4, borg: hull 2 }   # the authoritative hull values
+
+SHUTTLE_CELLS_PER_AP      = 15      # §16.7
+SHUTTLE_PASSENGER_DEFENSE_BONUS = 1
+BORG_AP = 3, BORG_SPEED = 9, BORG_RANGE = 12, BORG_ROF = 4, BORG_ARMOR_BONUS = 2   # §16.8
+BORG_EXPLODE_MIN = 4, BORG_BUILD_BATCH = 3, BORG_DIG_TRENCHES = 6
+
+enum Owner      { PLAYER_1 = 0, PLAYER_2 = 1, NEUTRAL = 26 }   # 2..25 are further players (lobby)
 enum Status     { ALIVE, CORPSE, HELD }
 enum ActionType { MOVE, SHOOT, CAPTURE, USE_ITEM }
 ```
@@ -2551,6 +2576,7 @@ number appears elsewhere in this document it is because the source comments cite
 | 103 | One unit per cell is enforced by the board itself — `Grid.place` and `move_occupant` refuse to overwrite an occupant and report failure, so no two soldiers, civilians or AI units can ever share a tile (§2.2); hovering a green move tile draws the **cheapest actual route** to it out of the Dijkstra tree, and every green tile is labelled with what standing there costs out of the movement total (§18.3); a marksman's laser no longer reaches a man in a trench from a tile that is not one, at any range including adjacent (§6.6, §7.3); NPC civilians and the army are driven by **one brain** — the second, cell-at-a-time civilian AI is deleted and a civilian is now an `AIController` with the Neutral owner, so it plans, fragments its movement, fires partial bursts and hauls corpses by the army's rules (§14, §17); the AI uses fragmented movement and partial bursts — `move_credit` is a spendable budget, a step costs score, and a burst orders `ceil(1/p)` bullets instead of the whole magazine (§17.3); an anti-tank sapper cut off by a wall **blasts through it** instead of shuffling along it (§17.3, §7.1); the AI and civilians pick up bodies that block the road and **stack them aside into piles**, the fifth forming a corpse wall (§17.3, §8.4); at least 80% of an army must act each turn and **every** civilian must, enforced by a second forced pass over whoever the plan left idle (§17.2); Player 1 can be an AI too, so AI-vs-AI matches run from Setup or a mid-battle toggle (§17.4); and the camera zooms out to 0.12 so a 60×40 board fits on one screen (§18.4) |
 | 104 | The map editor can be left the way it was entered: the **"To Demo Game"** button is gone, replaced by **"Main Menu"**, which clears `MapHandoff.pending` and returns to `MainMenu.tscn` instead of dumping the designer into a demo battle on the built-in roster (§19) |
 | 105 | A marksman firing **from** a trench is as boxed in as a marksman firing **into** one: the laser cannot climb out of the ditch any more than it could drop into it, so from the trench floor the only reachable target is one lying in the **same continuous run** of trench, along a straight line with no gap — a bend or a break means the beam hits the earth wall. The trench is now symmetric cover against the beam instead of a firing position that ignored its own walls (§6.6, §7.3) |
+| 110 | General sweep (random-map fuzz, random-intent fuzz, lockstep twin) — six sim fixes, no rule changed: `StateCodec` restores a vehicle's **saved hull** instead of a fresh one (every load and every `K_RESYNC` used to heal damaged tanks, shuttles and borgs to full); a refused intent no longer touches the board (`dig_credits`, `dragging`, `combat_started` were cleared **before** validation, so a host-refused shot silently cost an engineer their trench series and desynced the guest); zero-g recoil and knockback skip seated passengers (§12, §16.7 — they were thrown off the hull while still "aboard"); a borg operator must climb out before boarding another vehicle, and `VehicleMove/Turn/Cannon` are refused for a borg outright (§16.8 — a round boundary gave the borg a crew-AP pool and the hull could be driven away from its operator, leaving a ghost footprint); an exploded borg clears its dead operator's `borg_id`; `Vehicle.seats` is allocated on construction; `VehicleDB.tank.durability` now reads 8 like `VEHICLE_COMPONENTS` (§16.1). Tests: `run_codec` spawns damaged vehicles, `run_shuttle` fires in zero-g, `run_borg` tries the tank from inside a borg, `run_player_actions` refuses a shot mid-dig on the host only. |
 | 109 | Batch 14 (the "Isotope issues fix 2" report) — every network action carries the host's board hash and a guest that disagrees, refuses an accepted action, or has dice left over pulls the host's full state and continues (`K_RESYNC` / `K_STATE`, §22.1); the match result is declared by the host only (`K_OVER`); the dice window survives a play started on top of a waiting one (§18.5); the players' initiative order is a dice shuffle, Player A is no longer first by right (§3.2) — and a match with civilians in which both armies are dead no longer hangs the end-of-turn on an all-neutral rotation; boarding a shuttle always offers the seat choice with the driver's seat labelled, and a seat-mounted drone station takes its drone along when the shuttle moves (§16.7); the map editor has undo/redo (§19); a guest entering the lobby asks the host for the snapshot, the host caches the selected map and draws big previews at a pixel per cell (§22.4); Black and White join the palette and the colour swatch is a square; tests: a fourth two-process net pair on the town map with a deliberately corrupted guest board that must recover, and the other pairs are order-agnostic |
 | 108 | Batch 13, part 2 — **the seated shuttle**: passengers sit in the hull cells, are drawn on top, shoot from their seat with their own weapon and AP and can be shot at (+1 hull cover); whoever sits in the driver's seat pays 1 of their own AP per 15 cells flown and there is no crew pool; boarding picks a seat, switching costs 1 AP, exiting is free through the seat's own side; a heavy hit kills the passenger on the landing cell, everyone else aboard rolls defence, the hull takes its damage; the hull is the shuttle's only component; a dead passenger holds the seat until pulled out; a drone station mounts in an empty seat and rides along; the AI flies and fires from seats (§16.7). **The borg**: a 100-point 1×1 vehicle played as a unit — the operator stays on the grid with 3 AP, 9 movement, −2 to their armour threshold, a 12/4 gun (abilities kept; the engineer keeps its own gun and builds in batches of three per AP), fire immunity, no trenches, AV mines hurt the hull, small arms never do; at hull 0 the operator dies and a 4+ explodes it in a 3×3, otherwise a wreck stays; a dead operator is pushed out by whoever boards next; the AI climbs into one it finds (§16.8). All unit stats are now read through `UnitInstance.speed()/armor()/fire_range()/rate_of_fire()` |
 | 107 | Batch 13 — sight is unlimited in every direction and stops only at walls and closed airlocks: units, corpses and vehicle hulls never block it, and a vehicle sees through its crew from every hull cell (§11); a player who leaves the lobby, the deployment or the battle is replaced by a Hard AI, and a host left alone keeps playing (§22.4); *Save Game* is back in the side panel and the pause button just says Pause (§18.6); a corpse in an airlock holds the doors open and blocks welding (§9.4); an eraser tool on the purchase screen (§19); the map editor draws in constant time from a one-pixel-per-cell base texture with viewport culling and LOD, resizes without wiping, and is laid out as a workflow with lit toggle buttons, a brush size and confirmations (§19); a match freezes with a *Match Over* window the moment one team is left (§24); the guest is seated in a hand-reserved Player slot and can re-request the match setup if it missed it, and a typed budget survives a colour change (§22.4); mirrored placement is live — the mirror follows every change, there is no stamp step and a mirrored guest confirms automatically (§19); the vehicle component panel stands beside the action menu instead of under it (§18.6) |

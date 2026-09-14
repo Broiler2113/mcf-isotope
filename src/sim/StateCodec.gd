@@ -267,6 +267,9 @@ static func _decode_vehicle(raw: Dictionary) -> Dictionary:
 	var seats: Array[int] = []
 	for id in raw.get("seats", []):
 		seats.append(int(id))
+	# Старая запись челнока без кресел ([]) читается как «все кресла свободны».
+	if seats.is_empty():
+		seats = v.seats.duplicate()
 	var corpses: Array[String] = []
 	for type_id in raw.get("corpse_slots", []):
 		corpses.append(str(type_id))
@@ -291,7 +294,11 @@ static func _decode_vehicle(raw: Dictionary) -> Dictionary:
 	return {
 		"obj": v, "id": v.id, "owner": v.owner,
 		"components": comps, "tower_locked_dir": _vec(raw.get("tower_dir"), Vector2i.ZERO),
-		"durability": v.durability, "origin": v.origin, "size": v.size,
+		# Корпус — из ПРОЧИТАННЫХ узлов, а не из свежесобранной машины: GameState.restore()
+		# пишет durability последним, и целый корпус новой Vehicle затирал бы сохранённый
+		# урон — каждая загрузка (и K_RESYNC) чинила технику до полной.
+		"durability": int(comps.get(MCF.COMP_HULL, raw.get("durability", 0))),
+		"origin": v.origin, "size": v.size,
 		"facing": _vec(raw.get("facing"), Vector2i(1, 0)), "ap": int(raw.get("ap", 0)),
 		"occupants": occupants, "corpse_slots": corpses, "seats": seats,
 		"wrecked": bool(raw.get("wrecked", false)),

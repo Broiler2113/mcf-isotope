@@ -25,7 +25,9 @@ const VEHICLES := {
 	"tank": {
 		"name": "Tank",
 		"size": [3, 3],
-		"durability": 6,
+		# Справочно: боевую прочность задаёт MCF.VEHICLE_COMPONENTS (корпус 8 + узлы);
+		# Vehicle._init читает это поле только для машин без таблицы узлов.
+		"durability": 8,
 		"crew_capacity": 3,
 		"speed": 16,
 		"has_facing": true,
