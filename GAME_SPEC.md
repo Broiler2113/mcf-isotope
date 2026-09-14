@@ -2341,6 +2341,14 @@ These are deliberate choices that look like bugs if you don't know the reasoning
   are data-only and unread (§16.6).
 - **AI sappers** lay mines (§17.5) but do not sweep for or disarm enemy ones.
 - **No commander aura** — the Commander is stats and 3 AP, nothing more.
+- **Learned (RL) enemy AI is deferred — not in the game yet.** A complete v1
+  (legal-intent enumerator, headless env bridge, PPO trainer, an "AI - Learned" lobby
+  slot that falls back to AI - Hard when no model is present) exists on the branch
+  `feature/rl-enemy-ai-v1` (commit `1f02dc2`, spec `13_reinforcement_learning_ai` rev. 2)
+  and is deliberately **not merged**: the shipped game has only the three scripted AI
+  levels of §17, and no `rl/` directory. Merging it later is a single PR — it touches
+  `main` only through `Lobby.gd` (one slot kind), `Main.gd` (a controller factory),
+  `AIController.Difficulty.LEARNED` (a tag), and `GameActionResolver.legal_intents()`.
 
 ---
 
