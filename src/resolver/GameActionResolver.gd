@@ -2918,6 +2918,26 @@ func is_visible_to_team(owner: int, target: UnitInstance) -> bool:
 static var _seen_cache: Dictionary = {}
 static var _seen_version: int = -1
 static var _seen_grid: int = 0
+## Плоская таблица «клетка рвёт луч» (1 байт на клетку, индекс y * width + x). Луч
+## Брезенхэма на каждом шаге спрашивал grid.cell_fast() и два поля объекта клетки; на
+## холодном пересчёте по городу 50×50 это ~80 000 вызовов на бойца — секунда на сторону
+## при старте партии, загрузке и K_RESYNC. Байт из PackedByteArray вдвое дешевле, а
+## результат тот же бит в бит. Собирается заново вместе с кешем — по тем же условиям.
+static var _blockers: PackedByteArray = PackedByteArray()
+
+## Пересобрать таблицу блокировщиков по текущему рельефу. Условие — в точности то,
+## что проверяет луч: стена (высота 2), но не стекло; корпус машины луч не рвёт.
+static func _rebuild_blockers(grid: Grid) -> void:
+	var gw := grid.width
+	var gh := grid.height
+	_blockers.resize(gw * gh)
+	_blockers.fill(0)
+	for y in gh:
+		var row := y * gw
+		for x in gw:
+			var cell := grid.cell_fast(x, y)
+			if cell.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(cell.feature_id):
+				_blockers[row + x] = 1
 ## Потолок кеша: за длинный бой в нём оседает по записи на каждую позицию, где кто-то
 ## постоял, и адресная чистка (проход по всем ключам) начинает стоить дороже пересчёта.
 const SEEN_CACHE_CAP := 8192
@@ -2968,9 +2988,11 @@ func _seen_from(coord: Vector2i, r: int) -> PackedInt32Array:
 			_catch_up_seen(_seen_version)
 		_seen_version = GridCell.vision_version
 		_seen_grid = gid
+		_rebuild_blockers(state.grid)
 	var grid := state.grid
 	var gw := grid.width
 	var gh := grid.height
+	var blockers := _blockers
 	# Неограниченный обзор (item 46) приходит сюда радиусом в тысячу клеток. Окно
 	# обхода урезаем до размеров карты СРАЗУ: дальше её края смотреть некуда, а
 	# перебирать четыре миллиона несуществующих клеток ради этого — нет. Обрезка
@@ -3022,10 +3044,10 @@ func _seen_from(coord: Vector2i, r: int) -> PackedInt32Array:
 					py += sy
 				if px == cx and py == cy:
 					break
-				var cell := grid.cell_fast(px, py)
 				# То же условие, что в _vision_blocked() / GridCell.blocks_sight(): стена
-				# или закрытый шлюз рвут луч, стекло — нет, корпус машины — нет.
-				if cell.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(cell.feature_id):
+				# или закрытый шлюз рвут луч, стекло — нет, корпус машины — нет, — но
+				# прочитанное один раз в _rebuild_blockers(), а не с объекта клетки на шаг.
+				if blockers[py * gw + px]:
 					blocked = true
 					break
 			if not blocked:
