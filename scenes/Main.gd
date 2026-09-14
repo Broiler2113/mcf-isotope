@@ -844,12 +844,25 @@ func _make_side(side: int) -> void:
 	var c: PlayerController
 	if _side_is_ai(side):
 		var slot := state.roster.slot(side)
-		c = AIController.new(side, slot.ai_difficulty if slot != null else ai_difficulty)
+		c = _ai_controller_for(side, slot.ai_difficulty if slot != null else ai_difficulty)
 	else:
 		c = LocalHumanController.new(side)
 	c.intent_ready.connect(_on_intent_ready)
 	controllers[side] = c
 	_refresh_omniscience()
+
+## Мозг для ИИ-слота (RL v1, §7): «AI - Learned» — обученная политика, остальные уровни —
+## AIController. Если модели нет, LearnedController сам переключается на HARD и говорит об
+## этом в журнал боя (§12) — партия не встаёт.
+func _ai_controller_for(side: int, difficulty: int) -> PlayerController:
+	if difficulty == AIController.Difficulty.LEARNED:
+		var learned := LearnedController.new(side)
+		learned.fallback_engaged.connect(func(reason: String) -> void:
+			state.log.add("— %s: learned AI unavailable (%s) — AI - Hard takes the seat —" % [
+				MCF.owner_name(side), reason])
+			_refresh_status())
+		return learned
+	return AIController.new(side, difficulty)
 
 ## Кто видит поле насквозь. ИИ знает позиции всех юнитов сквозь туман (#43): его прицел
 ## легален и по скрытым.
@@ -2886,7 +2899,7 @@ func _setup_network_controllers() -> void:
 	for remote in net.remote_owners():
 		if net.is_host and state.roster.is_ai(remote):
 			var slot := state.roster.slot(remote)
-			var ai := AIController.new(remote, slot.ai_difficulty if slot != null else ai_difficulty)
+			var ai := _ai_controller_for(remote, slot.ai_difficulty if slot != null else ai_difficulty)
 			ai.intent_ready.connect(_on_intent_ready)
 			controllers[remote] = ai
 		else:

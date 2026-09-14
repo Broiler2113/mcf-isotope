@@ -1,0 +1,34 @@
+# Phase A on the GPU workstation (D2). Size n_envs to the core count minus two.
+# Graduation to Phase B, growing the map pool, or a new curriculum stage = edit this
+# file, then `train.py resume <branch> --config rl/config/workstation.yaml` (8.2).
+godot: godot
+n_envs: 12
+maps:
+  - rl/maps/arena_34x26.json
+stage: 1
+phase: A            # A: scripted AI opponent; B: pool of past checkpoints + pool_ai_fraction scripted
+opponent: normal    # Phase A teacher; HARD is the graduation opponent (8.2)
+pool_ai_fraction: 0.15
+pool_size: 6
+round_cap: 10
+civilians: false
+random_events: false
+fog: standard
+friendly_fire: true
+rollout_steps: 512
+epochs: 4
+minibatch: 64
+lr: 0.0003
+gamma: 0.99
+lam: 0.95
+clip: 0.2
+ent_coef: 0.01
+vf_coef: 0.5
+total_steps: 50000000
+checkpoint_every: 10
+eval_every: 20
+eval_games: 24
+replays_per_checkpoint: 3
+map_rotate_matches: 5
+seed: 1
+torch_threads: 0

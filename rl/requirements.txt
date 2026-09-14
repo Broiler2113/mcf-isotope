@@ -1,0 +1,8 @@
+# RL Enemy AI v1 trainer (spec Section 1, C1). CPU torch pinned via --index-url in
+# rl/setup.sh; on the GPU workstation install the CUDA build instead.
+torch>=2.4
+numpy>=1.26
+tensorboard>=2.16
+pyyaml>=6.0
+onnx>=1.16
+onnxruntime>=1.18
