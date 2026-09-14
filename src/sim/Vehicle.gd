@@ -122,6 +122,10 @@ func _init(p_id: int = -1, p_type_id: String = "", p_owner: int = -1,
 		components = {MCF.COMP_HULL: maxi(0, p_durability)}
 	else:
 		components = spec.duplicate()
+	# Кресла челнока заводятся сразу: иначе две одинаковые доски писались бы в файл
+	# по-разному ([] у нетронутого челнока, [-1,-1,-1,-1] после первого запроса).
+	if VehicleDB.is_seated(p_type_id):
+		ensure_seats()
 
 
 ## Машина «жива» (может действовать / учитывается в условии победы), пока есть

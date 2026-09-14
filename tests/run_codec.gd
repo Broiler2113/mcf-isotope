@@ -146,6 +146,10 @@ func _check_state_codec() -> void:
 	var state := TS.build_state()
 	var resolver := GameActionResolver.new(state)
 	_play_a_while(state, resolver)
+	# Фиксированная карта техники не держит, а именно у машин кодек и терял урон: свежая
+	# Vehicle подставляла целый корпус вместо прочитанного, и каждая загрузка чинила
+	# танк до полной. Ставим по машине каждого типа и бьём по узлам.
+	_spawn_damaged_vehicles(state)
 	_touch_every_field(state)
 
 	var wire := StateCodec.encode(state)
@@ -174,6 +178,44 @@ func _check_state_codec() -> void:
 	if JSON.stringify(wire) != frozen:
 		fails.append("StateCodec.encode() kept a live reference into the match: "
 				+ "the snapshot changed by itself while the game went on")
+
+## Машина каждого типа на свободном месте, с побитыми узлами — и танк ещё и без гусеницы.
+func _spawn_damaged_vehicles(state: GameState) -> void:
+	var n := 0
+	for type_id in ["tank", "shuttle", "borg"]:
+		var size := VehicleDB.size_of(type_id)
+		var origin := _free_footprint(state, size)
+		if origin == Vector2i(-1, -1):
+			fails.append("StateCodec: no room on the board for a %s" % type_id)
+			continue
+		var v := state.spawn_vehicle(type_id, origin, MCF.Owner.PLAYER_1 if n % 2 == 0 else MCF.Owner.PLAYER_2)
+		n += 1
+		v.durability = maxi(1, v.durability - 1 - n)
+		if v.has_component(MCF.COMP_TRACKS_L):
+			v.components[MCF.COMP_TRACKS_L] = 0
+		if v.has_component(MCF.COMP_GUN):
+			v.components[MCF.COMP_GUN] = 1
+			v.tower_locked_dir = Vector2i(0, -1)
+	var tank: Vehicle = null
+	for v: Vehicle in state.all_vehicles():
+		if v.type_id == "tank":
+			tank = v
+	if tank != null and tank.durability == VehicleDB.get_vehicle("tank").get("durability", 0):
+		fails.append("StateCodec test: the tank must be damaged for the check to mean anything")
+
+func _free_footprint(state: GameState, size: Vector2i) -> Vector2i:
+	for y in range(0, state.grid.height - size.y):
+		for x in range(0, state.grid.width - size.x):
+			var ok := true
+			for dy in size.y:
+				for dx in size.x:
+					var c := state.grid.cell(Vector2i(x + dx, y + dy))
+					if c.occupant != null or c.vehicle_id != -1 or c.feature_id != "" \
+							or c.cover_height > 0.0:
+						ok = false
+			if ok:
+				return Vector2i(x, y)
+	return Vector2i(-1, -1)
 
 ## Тронуть КАЖДОЕ изменяемое поле, какое бывает у юнита, машины и клетки. Без этого
 ## проверка сверяет в основном нули: сапёра в тестовом ростере нет, окопов за два
@@ -327,6 +369,10 @@ func _compare_fields(label: String, want: Object, got: Object) -> void:
 		var name: String = prop["name"]
 		if name in OBJECT_FIELDS:
 			continue
-		if str(want.get(name)) != str(got.get(name)):
+		var a: Variant = want.get(name)
+		var b: Variant = got.get(name)
+		# Словарь сравнивается по содержимому: JSON не обещает порядок ключей.
+		var same: bool = (a == b) if (a is Dictionary and b is Dictionary) else (str(a) == str(b))
+		if not same:
 			fails.append("%s.%s did not survive the file: was %s, became %s"
 					% [label, name, str(want.get(name)), str(got.get(name))])

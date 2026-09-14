@@ -34,6 +34,7 @@ func _initialize() -> void:
 	_ensure_player_turn()
 
 	_dig_with_chosen_dirt()
+	_refusal_leaves_no_trace()
 	_group_move()
 	_undo_redo()
 	_mines()
@@ -119,6 +120,29 @@ func _dig_with_chosen_dirt() -> void:
 	ck(host.grid.cell(b).dirt_level > 0, "host put dirt where the player clicked (b)")
 	ck(client.grid.cell(a).dirt_level > 0, "client put dirt where the player clicked (a)")
 	ck(client.grid.cell(b).dirt_level > 0, "client put dirt where the player clicked (b)")
+
+## Отвергнутое намерение — не действие: хост его гостю не шлёт, значит, оно не вправе
+## менять доску хоста. Раньше _dispatch до всяких проверок гасил серию окопов и ронял
+## волочимый объект: инженер копал первый окоп, хост отклонял его выстрел без цели,
+## и следующий окоп у хоста стоил ОД, а у гостя шёл бесплатно — доски разъезжались.
+func _refusal_leaves_no_trace() -> void:
+	var digger := _unit_at(Vector2i(3, 16))
+	if digger == null:
+		return
+	ck(digger.dig_credits > 0, "the dig series is open on the host (%d credits)" % digger.dig_credits)
+	var before := TS.digest(host) + "|dig%d|drag%s" % [digger.dig_credits, str(digger.dragging)]
+	# Only the host sees a refused intent — exactly as NetGame does.
+	var res := r_host.resolve(ShootIntent.new(digger.id, -1))
+	ck(not res.ok, "a shot at nobody is refused")
+	var after := TS.digest(host) + "|dig%d|drag%s" % [digger.dig_credits, str(digger.dragging)]
+	ck(before == after, "a refused intent changed the host's board:\n" + _first_diff(before, after))
+	# the next trench is still free on both sides, and the boards still agree
+	res = _apply(DigIntent.new(digger.id, Vector2i(4, 15)))
+	ck(res.ok, "second trench: " + res.reason)
+	var c_digger := client.get_unit(digger.id)
+	ck(digger.remaining_ap == c_digger.remaining_ap and digger.dig_credits == c_digger.dig_credits,
+			"host and client agree on AP (%d/%d) and credits (%d/%d) after the refusal" % [
+				digger.remaining_ap, c_digger.remaining_ap, digger.dig_credits, c_digger.dig_credits])
 
 ## Item 34: групповой приказ. Клетки распределяет отдавший приказ, по проводу едет
 ## готовый список — пересчитай его резолвер, и у пиров вышло бы разное.
