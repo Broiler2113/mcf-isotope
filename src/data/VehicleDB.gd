@@ -73,12 +73,11 @@ const VEHICLES := {
 ## взрывается радиусом 2. Челнок: 1-2 → взрыв радиусом 1, иначе просто уничтожен
 ## (корпуса не остаётся).
 const DESTRUCTION := {
-	"tank": {"explode_min": 4, "explode_radius": 2, "wreck": true},
-	"shuttle": {"explode_min": 1, "explode_max": 2, "explode_radius": 1, "wreck": false},
-	# Борг: 4+ — взрыв радиуса 1 (квадрат 3×3, как противотанковый заряд), и тогда от
-	# него ничего не остаётся; 1–3 — остов, занимающий клетку.
-	"borg": {"explode_min": 4, "explode_radius": 1, "wreck": true, "square": true,
-		"wreck_unless_exploded": true},
+	# Остов остаётся ВСЕГДА (batch 17, item 7); таблица задаёт только бросок на взрыв.
+	"tank": {"explode_min": 4, "explode_radius": 2},
+	"shuttle": {"explode_min": 1, "explode_max": 2, "explode_radius": 1},
+	# Борг: 4+ — взрыв радиуса 1 (квадрат 3×3, как противотанковый заряд).
+	"borg": {"explode_min": 4, "explode_radius": 1, "square": true},
 }
 
 ## Машина с посадочными местами: экипаж сидит в клетках следа (челнок).

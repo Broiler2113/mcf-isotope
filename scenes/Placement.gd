@@ -1076,8 +1076,12 @@ const FEATURE_TAGS := {
 
 func _draw_feature(coord: Vector2i, fid: String, height: float, font: Font) -> void:
 	var o := _cell_origin(coord)
-	# Имя картинки совпадает с id объекта (sandbags.png, trench.png...) (#55).
-	if Sprites.draw_texture_override(self, fid, o, float(CELL)):
+	# Имя картинки совпадает с id объекта (sandbags.png, trench.png...) (#55);
+	# лист «<объект>_autotile.png» стыкует стены по соседям (batch 17, item 12).
+	if Sprites.draw_feature(self, fid, Rect2(o, Vector2(CELL, CELL)),
+			func(dx: int, dy: int) -> bool:
+				var n := coord + Vector2i(dx, dy)
+				return map.in_bounds(n) and map.get_feature(n) == fid):
 		return
 	var tag: String = FEATURE_TAGS.get(fid, "?")
 	if fid == MCF.FEATURE_LDF:

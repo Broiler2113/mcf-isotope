@@ -57,12 +57,15 @@ var _ruler_hover := Vector2i(-1, -1)
 var _ruler_btn: Button = null
 
 ## Аннотации на поле (item 51). Каждый штрих — список клеток, автор и область видимости.
-enum DrawScope {SELF, TEAM}
+enum DrawScope {SELF, TEAM, ALL}
 var _strokes: Array = []            # [{author:int, scope:int, cells:Array[Vector2i]}]
 var _cur_stroke: Array[Vector2i] = []
 var _stroke_drawing: bool = false
 var _draw_scope_team: bool = false  # рисовать «для команды», иначе только себе
+var _draw_scope_all: bool = false   # рисовать «для всех», и для врагов (batch 17, item 10)
 var _hide_others_draw: bool = false # скрыть чужие рисунки целиком (item 51 — фильтр)
+var _hide_my_draw: bool = false     # скрыть свои (batch 17, item 10)
+var _hide_all_draw: bool = false    # скрыть все (batch 17, item 10)
 const K_CHAT := "chat"
 const K_DRAW := "draw"
 ## Игрок нажал «Roll» (batch 12 #14): его бросок открывается на ВСЕХ экранах разом.
@@ -835,7 +838,7 @@ func _build_controllers() -> void:
 ## Кто ведёт сторону — решает РОСТЕР, а не пара флагов. Флаги p1_is_ai/p2_is_ai
 ## остались как удобство хот-сита на двоих (кнопки в HUD) и пишут в тот же ростер.
 func _side_is_ai(side: int) -> bool:
-	return state.roster.is_ai(side)
+	return state != null and state.roster != null and state.roster.is_ai(side)
 
 func _make_side(side: int) -> void:
 	var old: PlayerController = controllers.get(side)
@@ -1780,18 +1783,7 @@ func _enter_move() -> void:
 	mode = Mode.MOVE
 	# Бюджет обязан совпадать с резолвером, иначе подсвеченные клетки не совпадут
 	# с тем, что он примет, и движение «не работает» (§3.4, #42/#44/#65).
-	var burdened := resolver.held_unit_of(u) != null \
-			or resolver.dragged_cell_of(u) != UnitInstance.NOT_DRAGGING
-	var carry_budget := maxi(0, u.speed() - MCF.CAPTURE_CARRY_PENALTY)
-	var budget: int
-	if u.move_credit > 0:
-		budget = u.move_credit
-	elif burdened:
-		budget = carry_budget
-	else:
-		budget = u.speed()
-	if burdened:
-		budget = mini(budget, carry_budget)
+	var budget := resolver.move_budget(u)
 	reach = resolver.reachable_for(u, budget)
 	reach_budget = budget
 	target_ids = []
@@ -2100,9 +2092,9 @@ func _group_move_to(dest: Vector2i) -> void:
 	var taken: Dictionary = {}
 	for id in _group_ids.duplicate():
 		var u := state.get_unit(id)
-		if u == null or not u.is_alive() or u.remaining_ap <= 0:
+		if not resolver.can_move(u):
 			continue
-		var target := _best_group_cell(u, dest, taken)
+		var target := resolver.nearest_reachable(u, dest, taken)
 		taken[target] = true
 		if target == u.coord:
 			continue
@@ -2119,9 +2111,9 @@ func _group_reach_cells() -> Array[Vector2i]:
 	var seen: Dictionary = {}
 	for id in _group_ids:
 		var u := state.get_unit(id)
-		if u == null or not u.is_alive() or u.remaining_ap <= 0:
+		if not resolver.can_move(u):
 			continue
-		for c: Vector2i in resolver.reachable_for(u, u.speed()).cost:
+		for c: Vector2i in resolver.reachable_for(u, resolver.move_budget(u)).cost:
 			if not seen.has(c):
 				seen[c] = true
 				out.append(c)
@@ -2134,31 +2126,12 @@ func _group_move_preview(dest: Vector2i) -> Array[Vector2i]:
 	var taken: Dictionary = {}
 	for id in _group_ids:
 		var u := state.get_unit(id)
-		if u == null or not u.is_alive() or u.remaining_ap <= 0:
+		if not resolver.can_move(u):
 			continue
-		var spot := _best_group_cell(u, dest, taken)
+		var spot := resolver.nearest_reachable(u, dest, taken)
 		taken[spot] = true
 		out.append(spot)
 	return out
-
-## Достижимая клетка, ближайшая к цели (при равенстве — та, что дешевле по ходу).
-## `taken` — клетки, уже разобранные другими юнитами группы (только для предпросмотра;
-## в реальном ходе их занятость видна прямо на сетке).
-func _best_group_cell(u: UnitInstance, dest: Vector2i, taken: Dictionary = {}) -> Vector2i:
-	var reach_r := resolver.reachable_for(u, u.speed())
-	var best := u.coord
-	var best_d := Combat.distance(u.coord, dest)
-	var best_cost := 0
-	for c: Vector2i in reach_r.cost:
-		if taken.has(c):
-			continue
-		var d: int = Combat.distance(c, dest)
-		var cost: int = reach_r.cost[c]
-		if d < best_d or (d == best_d and cost < best_cost):
-			best_d = d
-			best_cost = cost
-			best = c
-	return best
 
 func _enter_push() -> void:
 	var u := _selected_unit()
@@ -2745,6 +2718,9 @@ func _on_peer_ready(is_host: bool) -> void:
 	net = NetGame.new(state, resolver, is_host, my_owner)
 	net.outgoing.connect(func(msg: Dictionary) -> void: session.send(msg))
 	net.action_applied.connect(_on_net_applied)
+	net.denied.connect(func(reason: String) -> void:
+		state.log.add("[denied] " + reason)
+		_refresh_status())
 	net.initiative_synced.connect(_on_initiative_synced)
 	# Рассинхрон (batch 14): гость просит снимок и, получив его, перечитывает доску.
 	net.desync_detected.connect(func() -> void:
@@ -2843,6 +2819,7 @@ func _take_side_as_ai(side: int) -> void:
 	slot.kind = Roster.SlotKind.AI
 	slot.ai_difficulty = AIController.Difficulty.HARD
 	slot.peer_id = -1
+	_drop_drawings_of(side)
 	# Только хост (или оставшийся в одиночестве хост) ведёт машину сам; у гостя сторона
 	# остаётся NetworkController — её ходы придут от хоста.
 	if not networked or (net != null and net.is_host):
@@ -2867,6 +2844,7 @@ func _apply_side_ai(msg: Dictionary) -> void:
 	slot.kind = Roster.SlotKind.AI
 	slot.ai_difficulty = int(msg.get("ai", AIController.Difficulty.HARD))
 	slot.peer_id = -1
+	_drop_drawings_of(side)
 	state.log.add("— %s left the match; a Hard AI takes over their army —" % state.roster.name_of(side))
 	_refresh_status()
 	_roll_arrived.emit(-1)
@@ -3234,23 +3212,11 @@ func _draw_move_preview() -> void:
 		draw_string(ThemeDB.fallback_font, last + Vector2(-CELL * 0.5, -CELL * 0.45), txt,
 			HORIZONTAL_ALIGNMENT_CENTER, CELL, 13, Color(0.75, 1.0, 0.85))
 
-## Клетки, которые накроет струя огнемёта из from к цели (для предпросмотра). Идёт
-## единичными шагами в направлении цели, максимум 6 клеток, останавливается на стене.
+## Клетки, которые накроет струя огнемёта из from к цели (для предпросмотра) — та же
+## геометрия, что у выстрела, включая разлёт о стену (batch 17, item 5).
 func _flame_jet_preview(from_coord: Vector2i, toward: Vector2i) -> Array:
-	var out: Array = []
 	var d := toward - from_coord
-	var step := Vector2i(signi(d.x), signi(d.y))
-	if step == Vector2i.ZERO:
-		return out
-	var cur := from_coord + step
-	for _i in MCF.FLAME_JET_LENGTH:
-		if not state.grid.in_bounds(cur):
-			break
-		out.append(cur)
-		if state.grid.cell(cur).is_wall():
-			break
-		cur += step
-	return out
+	return resolver.flame_cells(from_coord, Vector2i(signi(d.x), signi(d.y)))
 
 ## Подвести камеру к клетке, если она вне экрана (#103). Масштаб не трогаем: игрок сам
 ## выбрал, насколько близко смотрит, и менять это за него — потерять его точку обзора.
@@ -3719,8 +3685,10 @@ func _draw() -> void:
 					and not resolver.mine_visible_to(viewer, Vector2i(x, y)):
 				continue
 			var o := Vector2(ORIGIN.x + x * CELL, foy)
-			# Имя картинки совпадает с id объекта (sandbags.png, trench.png...) (#55).
-			if Sprites.draw_texture_override(self, _fid, o, float(CELL)):
+			# Имя картинки совпадает с id объекта (sandbags.png, trench.png...) (#55);
+			# лист «<объект>_autotile.png» стыкует стены по соседям (batch 17, item 12).
+			if Sprites.draw_feature(self, _fid, Rect2(o, Vector2(CELL, CELL)),
+					_same_feature.bind(Vector2i(x, y), _fid)):
 				continue
 			var tag: String = FEATURE_TAGS.get(_fid, "?")
 			# ЛДФ — чёрный монолит (#85): заливка, а не контур, чтобы отличался от бетона.
@@ -3769,7 +3737,7 @@ func _draw() -> void:
 			continue
 		if not _cell_on_screen(unit.coord.x, unit.coord.y):
 			continue
-		_draw_corpse(unit.coord, 1)
+		_draw_corpse(unit.coord, 1, unit)
 
 	# Кучи трупов — только в видимом окне (item 5), а не по всей сетке.
 	for cy in range(vy0, vy1 + 1):
@@ -3882,14 +3850,16 @@ func _draw() -> void:
 			# был поверх корпуса, над которым висит.
 			_drones_pending.append({"unit": unit, "at": at})
 			continue
-		# Боец рисуется КРУЖКОМ цвета своей стороны (item 6). Общую тонированную картинку
-		# на все стороны убрали: с ней разные игроки выглядели одинаково («цвета
-		# перемешаны»). Пока у сторон нет отдельных текстур — только цветной круг с
-		# инициалами, а цвета сторон гарантированно различны (уникальны в ростере).
-		draw_circle(center, CELL * 0.34, _side_color(unit.owner))
-		draw_arc(center, CELL * 0.34, 0, TAU, 20, _side_color(unit.owner).darkened(0.45), 1.5)
-		draw_string(font, center + Vector2(-9, 5), _initials(unit.stats.display_name),
-			HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
+		# Картинка бойца своей фракции (batch 17, item 13): light_infantry_nova.png, иначе
+		# общая light_infantry.png; без картинки — кружок цвета стороны с инициалами (item 6).
+		var skey := Sprites.resolve(unit.stats.id, _owner_suffix(unit.owner))
+		if skey != "":
+			Sprites.draw_texture_override(self, skey, _cell_origin(at), float(CELL))
+		else:
+			draw_circle(center, CELL * 0.34, _side_color(unit.owner))
+			draw_arc(center, CELL * 0.34, 0, TAU, 20, _side_color(unit.owner).darkened(0.45), 1.5)
+			draw_string(font, center + Vector2(-9, 5), _initials(unit.stats.display_name),
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
 		if unit.id == selected_id:
 			draw_arc(center, CELL * 0.42, 0, TAU, 32, Color(1, 0.9, 0.2), 3.0)
 		# Вскрытый мирный житель охотится — красное кольцо тревоги (§3.10, #56).
@@ -4137,12 +4107,15 @@ func _draw_fx_one(kind: String, cell_pos: Vector2, rot: float, scale: float,
 	draw_colored_polygon(PackedVector2Array([
 		center + a, center + b, center - a, center - b]), look[1])
 
-## count > 1 — куча тел; поворот на 90° влево (#21.4) кладёт бойца набок.
-func _draw_corpse(coord: Vector2i, count: int) -> void:
+## count > 1 — куча тел. Павший боец — СВОЯ картинка, повёрнутая на 90° по часовой
+## (batch 17, item 13); без неё — общий corpse.png набок (#21.4), без него — красный круг.
+func _draw_corpse(coord: Vector2i, count: int, who: UnitInstance = null) -> void:
 	var org := _cell_origin(coord)
 	var center := org + Vector2(CELL, CELL) * 0.5
-	# Поза смерти (#21.4): тело развёрнуто на 90° ПРОТИВ часовой стрелки.
-	if not Sprites.draw_texture_override(self, "corpse", org, float(CELL), CORPSE_LIE_DEG):
+	var own_key := Sprites.resolve(who.stats.id, _owner_suffix(who.owner)) if who != null else ""
+	if own_key != "":
+		Sprites.draw_texture_override(self, own_key, org, float(CELL), 90.0)
+	elif not Sprites.draw_texture_override(self, "corpse", org, float(CELL), CORPSE_LIE_DEG):
 		draw_circle(center, CELL * 0.34, CORPSE_COLOR)
 	if count > 1:
 		draw_string(ThemeDB.fallback_font, center + Vector2(CELL * 0.16, CELL * 0.3),
@@ -4183,7 +4156,6 @@ func _draw_pixel_bang(top_left: Vector2) -> void:
 		# Точка внизу с зазором.
 		draw_rect(Rect2(b + Vector2(0, 4 * p), Vector2(p, p)), c)
 
-## Суффикс стороны для картинок-замен (#55): light_infantry_p1.png и т.п.
 ## Борг (batch 13 B17): квадратная рамка в цвете стороны с оператором внутри (его кружок
 ## рисует общий проход бойцов поверх), пустой — серая рамка с точкой; бейдж «B» в углу,
 ## прочность — точками у нижней кромки. Остов — серая рамка с крестом.
@@ -4212,14 +4184,16 @@ func _draw_borg(veh: Vehicle, org: Vector2, col: Color, wrecked: bool, dur: int,
 	for i in maxi(0, dur):
 		draw_circle(org + Vector2(6 + i * 7, CELL - 5), 2.5, Color(0.9, 0.9, 0.6))
 
+## Тот же объект на соседней клетке (для автотайла, batch 17, item 12).
+func _same_feature(dx: int, dy: int, at: Vector2i, fid: String) -> bool:
+	var n := state.grid.cell(at + Vector2i(dx, dy))
+	return n != null and n.feature_id == fid
+
+## Суффикс картинок стороны — её фракция (batch 17, item 13): «_nova», «_neutral»…
 func _owner_suffix(owner_id: int) -> String:
-	if MCF.is_neutral(owner_id):
-		return "_neutral"
-	# _p1/_p2 — исторические имена из манифеста замен, менять их нельзя: у людей
-	# уже лежат такие файлы. Дальше нумерация просто продолжается: _p3 ... _p26.
-	if MCF.is_player(owner_id):
-		return "_p%d" % (owner_id + 1)
-	return ""
+	if state != null and state.roster != null:
+		return state.roster.faction_suffix_of(owner_id)
+	return "_neutral" if MCF.is_neutral(owner_id) else "_" + Roster.faction_key(owner_id)
 
 ## Поворот картинки техники под её фронт. Картинка рисуется «носом вверх»,
 ## поэтому вправо — это +90°. Без заданного фронта не поворачиваем вовсе.
@@ -4422,18 +4396,12 @@ func _build_ui() -> void:
 	erase_slider.value_changed.connect(func(v: float) -> void: _erase_brush = int(v))
 	_style_brush_slider(erase_slider)
 	vbox.add_child(erase_slider)
-	var team_draw := CheckBox.new()
-	team_draw.text = "Share with team"
-	team_draw.add_theme_font_size_override("font_size", 12)
-	team_draw.toggled.connect(func(on: bool) -> void: _draw_scope_team = on)
-	vbox.add_child(team_draw)
-	var hide_draw := CheckBox.new()
-	hide_draw.text = "Hide others' drawings"
-	hide_draw.add_theme_font_size_override("font_size", 12)
-	hide_draw.toggled.connect(func(on: bool) -> void:
-		_hide_others_draw = on
-		queue_redraw())
-	vbox.add_child(hide_draw)
+	# Кому видны штрихи и какие прятать (item 51, batch 17 item 10) — простые флажки.
+	vbox.add_child(_draw_toggle("Share with team", func(on: bool) -> void: _draw_scope_team = on))
+	vbox.add_child(_draw_toggle("Share with everyone", func(on: bool) -> void: _draw_scope_all = on))
+	vbox.add_child(_draw_toggle("Hide others' drawings", func(on: bool) -> void: _hide_others_draw = on))
+	vbox.add_child(_draw_toggle("Hide my drawings", func(on: bool) -> void: _hide_my_draw = on))
+	vbox.add_child(_draw_toggle("Hide all drawings", func(on: bool) -> void: _hide_all_draw = on))
 
 	# Убрано из правого меню по item 6 — обновляющие функции этих ссылок уже
 	# null-безопасны. Журнал боя переехал в свою панель (снизу слева), чат остаётся
@@ -4920,6 +4888,21 @@ func _exit_ruler() -> void:
 	_refresh_ruler_button()
 	queue_redraw()
 
+func _draw_toggle(text: String, on_toggle: Callable) -> CheckBox:
+	var cb := CheckBox.new()
+	cb.text = text
+	cb.add_theme_font_size_override("font_size", 12)
+	cb.toggled.connect(func(on: bool) -> void:
+		on_toggle.call(on)
+		queue_redraw())
+	return cb
+
+## Область видимости нового штриха: «для всех» сильнее «для команды».
+func _draw_scope() -> int:
+	if _draw_scope_all:
+		return DrawScope.ALL
+	return DrawScope.TEAM if _draw_scope_team else DrawScope.SELF
+
 func _refresh_ruler_button() -> void:
 	if _ruler_btn != null:
 		_ruler_btn.text = "Ruler: on" if mode == Mode.RULER else "Ruler"
@@ -4992,7 +4975,7 @@ func _stroke_commit() -> void:
 		return
 	var rec := {
 		"author": _draw_author(),
-		"scope": DrawScope.TEAM if _draw_scope_team else DrawScope.SELF,
+		"scope": _draw_scope(),
 		"cells": _cur_stroke.duplicate(),
 		"width": _draw_brush,  # толщина линии из ползунка (item 6)
 	}
@@ -5024,18 +5007,31 @@ func _on_remote_stroke(msg: Dictionary) -> void:
 	queue_redraw()
 
 ## Видит ли просматривающий игрок этот штрих (item 51): свои — всегда; «для команды» —
-## союзникам; и общий фильтр «скрыть чужие» прячет всё не своё.
+## союзникам; «для всех» — всем; фильтры «скрыть свои/чужие/все» (batch 17, item 10).
+## Сторона, которую ведёт ИИ, «своих» штрихов не имеет: в горячем кресле зритель — активная
+## сторона, и после ухода игрока его рисунки всплывали бы на ходу ИИ (item 11).
 func _stroke_visible_to_viewer(rec: Dictionary) -> bool:
+	if _hide_all_draw:
+		return false
 	var viewer := _viewing_side()
 	var author: int = rec["author"]
-	if author == viewer:
-		return true
+	if author == viewer and not _side_is_ai(author):
+		return not _hide_my_draw
 	if _hide_others_draw:
 		return false
-	if int(rec["scope"]) == DrawScope.TEAM and state.roster != null \
+	var scope := int(rec["scope"])
+	if scope == DrawScope.ALL:
+		return true
+	if scope == DrawScope.TEAM and state.roster != null \
 			and state.roster.are_allies(author, viewer):
 		return true
 	return false
+
+## Ушедший игрок уносит свои рисунки (batch 17, item 11): они и были подсказками для
+## него и его команды, а на ходу подменившего его ИИ всплывали у всех.
+func _drop_drawings_of(side: int) -> void:
+	_strokes = _strokes.filter(func(rec: Dictionary) -> bool: return int(rec["author"]) != side)
+	queue_redraw()
 
 func _clear_my_drawings() -> void:
 	var me := _draw_author()
@@ -5081,8 +5077,7 @@ func _draw_ruler() -> void:
 func _draw_annotations() -> void:
 	var all := _strokes.duplicate()
 	if not _cur_stroke.is_empty():
-		all.append({"author": _draw_author(),
-				"scope": DrawScope.TEAM if _draw_scope_team else DrawScope.SELF,
+		all.append({"author": _draw_author(), "scope": _draw_scope(),
 				"cells": _cur_stroke, "width": _draw_brush})
 	for rec: Dictionary in all:
 		if not _stroke_visible_to_viewer(rec):
@@ -5387,7 +5382,8 @@ func _open_menu(unit: UnitInstance) -> void:
 			pshoot = "Flame"
 		if unit.fire_range() > 0.0:
 			_act_btn(vb, pshoot, _enter_shoot,
-					_valid_pending_shoot(unit) or unit.remaining_ap >= _shoot_ap_cost(unit))
+					_valid_pending_shoot(unit) or unit.remaining_ap >= _shoot_ap_cost(unit),
+					"Laser needs both AP — don't move first" if _is_marksman(unit) else "No action points left")
 		if unit.held_item_id != "" and MCF.ITEM_NAMES.has(unit.held_item_id):
 			_act_btn(vb, MCF.ITEM_NAMES.get(unit.held_item_id, "Item"), _enter_item,
 					unit.remaining_ap > 0 and resolver.can_use_item(unit) == ""
@@ -5427,7 +5423,8 @@ func _open_menu(unit: UnitInstance) -> void:
 		elif unit.stats.special_ability_id == MCF.ABILITY_FLAMETHROWER:
 			shoot_text = "Flame"
 		_act_btn(vb, shoot_text, _enter_shoot,
-				_valid_pending_shoot(unit) or unit.remaining_ap >= _shoot_ap_cost(unit))
+				_valid_pending_shoot(unit) or unit.remaining_ap >= _shoot_ap_cost(unit),
+				"Laser needs both AP — don't move first" if _is_marksman(unit) else "No action points left")
 
 		# Переложить пленника на другую соседнюю клетку — бесплатно (#100). Кнопка
 		# появляется, только пока кого-то держим, и ОД не требует: носильщик просто
@@ -5575,7 +5572,8 @@ func _open_menu(unit: UnitInstance) -> void:
 			var vname: String = VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)
 			var seat_text := "Board %s" % vname if veh.owner == unit.owner \
 				else "Storm %s" % vname
-			_act_btn(vb, seat_text, _board_into.bind(unit.id, veh), unit.remaining_ap > 0)
+			_act_btn(vb, seat_text, _board_into.bind(unit.id, veh),
+					unit.remaining_ap > 0 or veh.seated() or veh.is_borg())  # бесплатно (batch 17)
 
 		# Вытащить труп из машины, чтобы освободить место (item 18).
 		for vid: int in resolver.unloadable_corpse_vehicle_ids(unit):

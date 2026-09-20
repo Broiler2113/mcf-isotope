@@ -299,6 +299,13 @@ func _resolve_group_move(intent: GroupMoveIntent) -> ActionResult:
 		if u == null or not u.is_alive() or u.coord == intent.targets[i]:
 			continue
 		var one := _dispatch(MoveIntent.new(u.id, intent.targets[i]))
+		if not one.ok:
+			# Сосед по группе успел встать на маршрут или бюджет был меньше показанного
+			# (batch 17, item 2): идём в ближайшую к цели достижимую клетку по ЖИВОЙ
+			# сетке — считается в резолвере, поэтому у всех пиров одинаково.
+			var alt := nearest_reachable(u, intent.targets[i])
+			if alt != u.coord:
+				one = _dispatch(MoveIntent.new(u.id, alt))
 		if one.ok:
 			moved = true
 			out.log_lines.append_array(one.log_lines)
@@ -322,21 +329,8 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 	# Перенос удерживаемого юнита (§3.4) или тяжёлого объекта (#34): бюджет −3 клетки.
 	var carried := held_unit_of(unit)
 	var dragged := dragged_cell_of(unit)
-	var burdened := carried != null or dragged != UnitInstance.NOT_DRAGGING
-	var carry_budget := maxi(0, unit.speed() - MCF.CAPTURE_CARRY_PENALTY)
-	# Дробление действий (§3.2): недоеденные клетки прошлого движения тратятся ПЕРВЫМИ
-	# и в любой момент хода — между копкой, стрельбой и чем угодно ещё.
 	var use_credit := unit.move_credit > 0
-	var budget: int
-	if use_credit:
-		budget = unit.move_credit
-	elif burdened:
-		budget = carry_budget
-	else:
-		budget = unit.speed()
-	# С грузом потолок бюджета всегда −3 клетки, даже на старом кредите.
-	if burdened:
-		budget = mini(budget, carry_budget)
+	var budget := move_budget(unit)
 
 	var reach := reachable_for(unit, budget)
 	if not reach.can_reach(intent.target):
@@ -1033,25 +1027,16 @@ func _resolve_flame(shooter: UnitInstance, target_coord: Vector2i) -> ActionResu
 	var step := _step_toward(shooter.coord, target_coord)
 
 	var killed_names: Array = []
-	var cur := shooter.coord + step
-	var last := shooter.coord  # последняя пройденная клетка (откуда пойдёт разлёт)
-	for i in MCF.FLAME_JET_LENGTH:
-		if not state.grid.in_bounds(cur):
-			break
-		var cell := state.grid.cell(cur)
+	var last := shooter.coord  # конец струи — для дорожки «кто в кого»
+	for c: Vector2i in flame_cells(shooter.coord, step):
+		var cell := state.grid.cell(c)
 		var occ: UnitInstance = cell.occupant
-		var shield_hit := occ != null and occ.is_alive() and _is_shield(occ)
-		# Удар о стену/ЛДФ/щитоносца: пламя разлетается перпендикулярно (§3.14).
-		if cell.is_wall() or shield_hit:
-			var remaining: int = MCF.FLAME_JET_LENGTH - i
-			_flame_splash(last, step, remaining, killed_names, shooter.owner)
-			break
 		if occ != null and occ.is_alive():
 			_kill(occ)
 			killed_names.append(occ.stats.display_name)
 		_ignite(cell, shooter.owner)  # поджог пола (§3.8)
-		last = cur
-		cur += step
+		if Combat.is_on_firing_line(shooter.coord, c) and _step_toward(shooter.coord, c) == step:
+			last = c
 
 	var result := ActionResult.new()
 	result.ok = true
@@ -1064,34 +1049,51 @@ func _resolve_flame(shooter: UnitInstance, target_coord: Vector2i) -> ActionResu
 			result.log("%s burned!" % n)
 	return result
 
-## Разлёт пламени перпендикулярно оси при ударе о преграду (§3.14): остаток длины
-## делится поровну на две стороны, лишняя клетка — на усмотрение владельца (левой стороне).
-func _flame_splash(origin: Vector2i, step: Vector2i, remaining: int, killed_names: Array, owner: int) -> void:
-	if remaining <= 0:
-		return
-	var left := Vector2i(-step.y, step.x)
-	var right := Vector2i(step.y, -step.x)
-	var left_count: int = int(ceil(remaining / 2.0))
-	var right_count: int = remaining - left_count
-	_flame_walk(origin, left, left_count, killed_names, owner)
-	_flame_walk(origin, right, right_count, killed_names, owner)
+## Клетки, которые накроет струя из from_coord шагом step (§3.14): ровно
+## FLAME_JET_LENGTH клеток, если поле позволяет. Удар о стену/ЛДФ/щитоносца — остаток
+## разлетается перпендикулярно от последней пройденной клетки, поровну на две стороны;
+## сторона, упёршаяся в стену или край, отдаёт недобранное другой (batch 17, item 5:
+## диагональная струя в прямую стену теряла половину разлёта о ту же стену).
+## Одна геометрия для выстрела и предпросмотра — они не могут разойтись.
+func flame_cells(from_coord: Vector2i, step: Vector2i) -> Array:
+	var out: Array = []
+	if step == Vector2i.ZERO:
+		return out
+	var last := from_coord
+	var cur := from_coord + step
+	for i in MCF.FLAME_JET_LENGTH:
+		if not state.grid.in_bounds(cur) or _flame_blocked(cur):
+			if state.grid.in_bounds(cur):
+				var remaining: int = MCF.FLAME_JET_LENGTH - i
+				var left := Vector2i(-step.y, step.x)
+				var right := Vector2i(step.y, -step.x)
+				var l := _flame_walk(last, left, int(ceil(remaining / 2.0)), out)
+				var r := _flame_walk(last, right, remaining - l, out)
+				if remaining - l - r > 0 and l > 0:
+					_flame_walk(last + left * l, left, remaining - l - r, out)
+			break
+		out.append(cur)
+		last = cur
+		cur += step
+	return out
 
-## Проход пламени по направлению dir на count клеток от origin: жжёт и убивает,
-## останавливается на стене/щитоносце/границе (§3.14).
-func _flame_walk(origin: Vector2i, dir: Vector2i, count: int, killed_names: Array, owner: int) -> void:
+func _flame_blocked(c: Vector2i) -> bool:
+	var cell := state.grid.cell(c)
+	var occ: UnitInstance = cell.occupant
+	return cell.is_wall() or (occ != null and occ.is_alive() and _is_shield(occ))
+
+## Разлёт по направлению dir на count клеток от origin, до стены/щитоносца/края.
+## Возвращает, сколько клеток набрано.
+func _flame_walk(origin: Vector2i, dir: Vector2i, count: int, out: Array) -> int:
 	var cur := origin + dir
+	var n := 0
 	for _i in count:
-		if not state.grid.in_bounds(cur):
-			return
-		var cell := state.grid.cell(cur)
-		var occ: UnitInstance = cell.occupant
-		if cell.is_wall() or (occ != null and occ.is_alive() and _is_shield(occ)):
-			return
-		if occ != null and occ.is_alive():
-			_kill(occ)
-			killed_names.append(occ.stats.display_name)
-		_ignite(cell, owner)
+		if not state.grid.in_bounds(cur) or _flame_blocked(cur):
+			return n
+		out.append(cur)
+		n += 1
 		cur += dir
+	return n
 
 ## Поджечь клетку, запомнив сторону-поджигателя: огонь расползается только на её ходу (#45).
 func _ignite(cell: GridCell, owner: int) -> void:
@@ -2567,6 +2569,39 @@ func known_mine_cells(owner: int) -> Dictionary:
 ## Разлив движения для бойца с обходом известных ему мин (batch 12 #4). Все, кто
 ## считает ход пехоты — резолвер, интерфейс, ИИ, — обязаны идти через эту функцию,
 ## иначе подсветка и проверка приказа разойдутся.
+## Бюджет движения — ровно тот, что спишет _resolve_move (batch 17, item 2): кредит
+## прошлого хода тратится ПЕРВЫМ (§3.2); с грузом потолок −3 клетки, даже на кредите.
+## Экран и групповой приказ обязаны считать по нему же, иначе подсветка врёт.
+func move_budget(unit: UnitInstance) -> int:
+	var burdened := held_unit_of(unit) != null \
+			or dragged_cell_of(unit) != UnitInstance.NOT_DRAGGING
+	var carry_budget := maxi(0, unit.speed() - MCF.CAPTURE_CARRY_PENALTY)
+	var budget := unit.move_credit if unit.move_credit > 0 \
+			else (carry_budget if burdened else unit.speed())
+	return mini(budget, carry_budget) if burdened else budget
+
+func can_move(unit: UnitInstance) -> bool:
+	return unit != null and unit.is_alive() and unit.aboard_vehicle_id == -1 \
+			and (unit.remaining_ap > 0 or unit.move_credit > 0)
+
+## Достижимая клетка, ближайшая к dest (при равенстве — дешевле по ходу); `taken` —
+## клетки, уже разобранные другими юнитами группы. Своя клетка, если идти некуда.
+func nearest_reachable(u: UnitInstance, dest: Vector2i, taken: Dictionary = {}) -> Vector2i:
+	var reach_r := reachable_for(u, move_budget(u))
+	var best := u.coord
+	var best_d := Combat.distance(u.coord, dest)
+	var best_cost := 0
+	for c: Vector2i in reach_r.cost:
+		if taken.has(c):
+			continue
+		var d: int = Combat.distance(c, dest)
+		var cost: int = reach_r.cost[c]
+		if d < best_d or (d == best_d and cost < best_cost):
+			best_d = d
+			best_cost = cost
+			best = c
+	return best
+
 func reachable_for(unit: UnitInstance, budget: int) -> Movement.Reachability:
 	var avoid := known_mine_cells(unit.owner)
 	# Борг в окоп не съезжает (batch 13 B11): окопы для него — не клетки.
@@ -3896,7 +3931,7 @@ func deployed_station_of(operator: UnitInstance) -> Vector2i:
 
 ## «Оператор -> его станция», пересобираемое только при смене расстановки объектов.
 ##
-## Кеш здесь не роскошь: operator_needs_station() зовёт _draw() на КАЖДОГО юнита
+## Кеш здесь не роскошь: operator_has_station() зовёт _draw() на КАЖДОГО юнита
 ## каждый кадр, а честный ответ требует прохода по всей карте. С привязкой к
 ## GridCell.feature_version проход случается ровно тогда, когда что-то построили,
 ## сломали или свернули, — то есть считаные разы за партию.
@@ -3920,23 +3955,24 @@ func _station_index() -> Dictionary:
 				_station_index_cache[cell.station_operator_id] = Vector2i(x, y)
 	return _station_index_cache
 
-## Оператору не из чего поднимать дрон — над ним висит предупреждение (item 16).
-## Тот же смысл, что у «инженер израсходовал свою ЛДФ»: нужного снаряжения нет.
-func operator_needs_station(u: UnitInstance) -> bool:
+## Оператор развернул станцию — над ним «!» (batch 17, item 8). Раньше знак висел,
+## пока станции НЕ было; по просьбе игрока он теперь означает обратное: станция стоит,
+## дрон можно поднять.
+func operator_has_station(u: UnitInstance) -> bool:
 	if u == null or not u.is_alive() \
 			or u.stats.special_ability_id != MCF.ABILITY_DRONE_OPERATOR:
 		return false
-	return deployed_station_of(u) == Vector2i(-1, -1)
+	return deployed_station_of(u) != Vector2i(-1, -1)
 
 ## Единый признак «не хватает обязательного снаряжения» (item 18): по нему рисуется общий
 ## восклицательный знак над юнитом. Сводит вместе четыре случая — инженер истратил свою ЛДФ,
-## оператор дронов без развёрнутой станции, огнемётчик без огнетушащей гранаты и пулемётчик
+## оператор дронов С развёрнутой станцией (item 8), огнемётчик без огнетушащей гранаты и пулемётчик
 ## без фраг-гранаты. Последние два опознаём по стартовому предмету стороны (default_item_id):
 ## юнит родился с ним, а сейчас в руках его нет.
 func unit_missing_equipment(u: UnitInstance) -> bool:
 	if u == null or not u.is_alive():
 		return false
-	if u.ldf_wall_used or operator_needs_station(u):
+	if u.ldf_wall_used or operator_has_station(u):
 		return true
 	var need: String = u.stats.default_item_id
 	if need == MCF.ITEM_EXTINGUISHER or need == MCF.ITEM_FRAG:
@@ -5435,7 +5471,7 @@ func _board_borg(unit: UnitInstance, veh: Vehicle) -> ActionResult:
 		body.borg_id = -1
 		body.coord = spot
 		state.grid.cell(spot).occupant = body
-	unit.remaining_ap -= 1
+	# Посадка бесплатна (batch 17, item 3): свежий боец садится и видит все 3 ОД борга.
 	state.grid.clear_vehicle_footprint(veh.id, veh.footprint())
 	state.grid.cell(unit.coord).occupant = null
 	unit.coord = veh.origin
@@ -5444,8 +5480,8 @@ func _board_borg(unit: UnitInstance, veh: Vehicle) -> ActionResult:
 	veh.occupants = [unit.id]
 	var captured := veh.owner != unit.owner
 	veh.owner = unit.owner
-	# Новая активация борга — новые очки: боец получает 3 ОД, но уже потраченные не
-	# возвращаются (сел за 1 ОД — из трёх осталось два).
+	# Новая активация борга — новые очки: боец получает 3 ОД, но уже потраченные до
+	# посадки не возвращаются.
 	unit.remaining_ap = maxi(0, unit.remaining_ap + (unit.max_ap() - (unit.stats.action_points
 			if unit.stats.action_points > 0 else MCF.AP_PER_ACTIVATION)))
 	var res := ActionResult.new()
@@ -5906,7 +5942,9 @@ func meleeable_vehicle_ids(actor: UnitInstance) -> Array:
 # --- Посадка экипажа/пассажира ---
 func _resolve_vehicle_board(intent: VehicleBoardIntent) -> ActionResult:
 	var unit := state.get_unit(intent.actor_id)
-	var err := _validate_actor(unit)
+	var veh := state.get_vehicle(intent.vehicle_id)
+	# Посадка в челнок и борг бесплатна (batch 17, items 1, 3): разрешена и при 0 ОД.
+	var err := _validate_actor(unit, 1 if veh != null and (_seated(veh) or veh.is_borg()) else 0)
 	if err != "":
 		return ActionResult.fail(err)
 	if unit.aboard_vehicle_id != -1:
@@ -5915,7 +5953,6 @@ func _resolve_vehicle_board(intent: VehicleBoardIntent) -> ActionResult:
 	# borg_id на руках, борг оставался «занятым» и при высадке телепортировался к нему.
 	if unit.borg_id != -1:
 		return ActionResult.fail("Climb out of the borg first")
-	var veh := state.get_vehicle(intent.vehicle_id)
 	if veh == null or not veh.alive():
 		return ActionResult.fail("No such vehicle")
 	# Щитоносцу и несущему трупы в машине не место (item 19): щит и груз внутрь не лезут.
@@ -5935,7 +5972,6 @@ func _resolve_vehicle_board(intent: VehicleBoardIntent) -> ActionResult:
 		if seat < 0 or seat >= veh.seats.size() or veh.seats[seat] != -1:
 			return ActionResult.fail("That seat is taken — pull the body out or pick another")
 		var boarding_enemy_s: bool = veh.owner != unit.owner
-		unit.remaining_ap -= 1
 		state.grid.cell(unit.coord).occupant = null
 		veh.occupants.append(unit.id)
 		_seat_unit(veh, unit, seat)
@@ -6756,36 +6792,24 @@ func _destroy_vehicle(veh: Vehicle, res: ActionResult) -> void:
 		res.log("It explodes (radius %d)!" % r)
 		var center := veh.center()
 		# Детонация боекомплекта — такой же взрыв-ромб, как у пушки (#63): по
-		# диагонали ударная волна уходит недалеко.
-		# У детонации борта нет — рвётся сама машина, а не кто-то по ней стреляет.
+		# диагонали ударная волна уходит недалеко. Борг рвётся как противотанковый
+		# заряд (B6) — квадрат 3×3. У детонации борта нет — рвётся сама машина.
 		_aim_from = NOWHERE
-		var area := MCF.blast_square(center, r) if bool(dtable.get("square", false)) \
-				else MCF.blast_diamond(center, r)
-		if bool(dtable.get("square", false)):
-			# Борг рвётся как противотанковый заряд (B6): всё в квадрате 3×3 гибнет,
-			# стены и укрытия сносятся.
-			state.grid.clear_vehicle_footprint(veh.id, veh.footprint())
-			state.vehicles.erase(veh.id)
-			for n in _blast(center, res, area):
-				res.log("%s destroyed!" % n)
-			_damage_vehicles_in_area(area, center, 1, veh.id, res, "%s detonation" % name)
-			return
-		for bc: Vector2i in area:
-			if not state.grid.in_bounds(bc):
-				continue
-			var occ: UnitInstance = state.grid.cell(bc).occupant
-			if occ != null and occ.is_alive():
-				_kill(occ)
-				res.log("%s caught in the explosion!" % occ.stats.display_name)
-		_damage_vehicles_in_area(area, center, 2, veh.id, res, "%s detonation" % name)
-	# Танк остаётся корпусом-обломком (укрытие/блок линии); челнок исчезает.
-	if bool(dtable.get("wreck", false)):
-		veh.wrecked = true
+		var square := bool(dtable.get("square", false))
+		var area := MCF.blast_square(center, r) if square else MCF.blast_diamond(center, r)
+		# Взрыв — тот же _blast, что у заряда (batch 17, item 7): гибнут все в зоне,
+		# укрепления сносятся, и под машиной остаётся выжженный пол.
 		if veh.is_borg():
-			state.grid.set_vehicle_footprint(veh.id, veh.footprint())
-	else:
-		state.grid.clear_vehicle_footprint(veh.id, veh.footprint())
-		state.vehicles.erase(veh.id)
+			state.grid.clear_vehicle_footprint(veh.id, veh.footprint())
+		for n in _blast(center, res, area):
+			res.log("%s destroyed!" % n)
+		_damage_vehicles_in_area(area, center, 1 if square else 2, veh.id, res,
+				"%s detonation" % name)
+	# Любая машина оставляет остов (batch 17, item 7): укрытие и блок линии огня —
+	# взорвалась она или нет. Раньше челнок исчезал всегда, борг — после взрыва.
+	veh.wrecked = true
+	if veh.is_borg():
+		state.grid.set_vehicle_footprint(veh.id, veh.footprint())
 
 # --- Запросы для UI ---
 

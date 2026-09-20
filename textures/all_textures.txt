@@ -44,7 +44,7 @@ Yours wins. Changes are picked up when a battle or the map editor opens.
   hedgehog_sandbags.png
   mine.png
 
--- Soldiers (add _p1 / _p2 / _neutral for a side-specific look) --
+-- Soldiers (add a faction suffix for a faction-specific look, see below) --
   anti_tank.png
   assault.png
   civilian.png
@@ -62,16 +62,60 @@ Yours wins. Changes are picked up when a battle or the map editor opens.
   shield_bearer.png
   sniper.png
 
+-- Faction portraits (shown in the lobby instead of the colour square) --
+  faction_nova.png
+  faction_purifiers.png
+  faction_prometheus.png
+  faction_alliance.png
+  faction_league.png
+  faction_martian.png
+  faction_barbarians.png
+
 -- Vehicles (stretched over the whole footprint) --
   tank.png
   shuttle.png
+  borg.png
   tank_wreck.png
   shuttle_wreck.png
+  borg_wreck.png
 
 -- Misc --
   corpse.png
 
-Soldiers also accept a side suffix: light_infantry_p1.png,
-light_infantry_p2.png, light_infantry_neutral.png. A plain
-light_infantry.png is used for any side that has no suffixed file.
+== Factions ==
+Sides are factions, not colours. Soldiers accept a faction suffix:
+  light_infantry_nova.png, light_infantry_purifiers.png, ... light_infantry_neutral.png
+Suffixes: nova, purifiers, prometheus, alliance, league, martian, barbarians, neutral.
+A plain light_infantry.png is used for any faction that has no suffixed file.
+Soldier art is drawn facing UP in a square; a corpse is the same picture turned
+90 degrees clockwise, so no separate corpse art is needed per soldier
+(corpse.png is the fallback for piles and for soldiers without art).
+faction_<key>.png is the portrait shown in the lobby's faction window.
+
+== Autotiling walls ==
+Any terrain feature may ship as a 4x4 tile sheet named <feature>_autotile.png
+(wall_autotile.png, glass_autotile.png, wood_wall_autotile.png, ...).
+The game looks at the four orthogonal neighbours that carry the SAME feature
+and picks tile index = N*1 + E*2 + S*4 + W*8; column = index % 4, row = index / 4:
+
+  row 0:  0 alone     1 N          2 E          3 N+E
+  row 1:  4 S         5 N+S (|)    6 E+S        7 N+E+S
+  row 2:  8 W         9 N+W       10 E+W (-)   11 N+E+W
+  row 3: 12 S+W      13 N+S+W     14 E+S+W     15 all four (+)
+
+Each tile is square; the sheet is 4 tiles wide and 4 tall (e.g. 256x256 for 64px
+tiles). If a sheet exists it wins over the plain <feature>.png. Diagonal
+neighbours are ignored on purpose: 16 tiles are enough for corridors and rooms.
+
+== Preparing a graphical update ==
+1. Author every sprite as a square PNG with transparency (64x64 or 128x128).
+   Art is stretched to the cell, so keep the subject inside the square.
+2. Name files exactly as listed above, lower case. Drop them into user://textures
+   to test without touching the project, then move them into res://textures to
+   ship them. Open the project once in the Godot editor so it imports them.
+3. Vehicles are drawn nose-up over their whole footprint (tank 3x3, shuttle 2x2).
+4. Floors: floor, floor_grass, floor_wall (under a wall), floor_space,
+   floor_cover, floor_destroyed, floor_epicenter, fire.
+5. Missing files fall back to the built-in vector look, so you can replace the
+   game piece by piece.
 

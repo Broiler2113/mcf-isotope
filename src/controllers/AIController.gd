@@ -682,7 +682,10 @@ func _neutral_soldiers(state: GameState) -> Array:
 	for o: UnitInstance in state.all_units():
 		# Пассажир челнока сидит в клетке следа (batch 13) — он на поле и в счёт идёт;
 		# вне поля только экипаж танка (OFFBOARD).
-		if CivilianAI.is_soldier(o) and grid.in_bounds(o.coord):
+		# Купленный игроком житель — цель, но не угроза (batch 17, item 6): нейтрал не
+		# бегает от него со створа на створ, а стреляет.
+		if CivilianAI.is_soldier(o) and grid.in_bounds(o.coord) \
+				and o.stats.special_ability_id != MCF.ABILITY_CIVILIAN:
 			out.append(o)
 	return out
 
@@ -768,8 +771,8 @@ func _neutral_outnumbers(state: GameState, r: GameActionResolver, u: UnitInstanc
 				continue
 		if CivilianAI.is_npc(o):
 			neutrals += 1
-		elif CivilianAI.is_soldier(o):
-			soldiers += 1
+		elif CivilianAI.is_soldier(o) and o.stats.special_ability_id != MCF.ABILITY_CIVILIAN:
+			soldiers += 1  # чужой житель не в счёт угроз (batch 17, item 6)
 	if soldiers == 0:
 		return neutrals > 0
 	return float(neutrals) >= 1.75 * float(soldiers)

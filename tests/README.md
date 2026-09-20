@@ -142,6 +142,13 @@ batches that expire with the round, fire immunity, trenches refused, AV mines hu
 hull, destruction (operator dies; explode or wreck), a dead operator being pushed out by the
 next boarder, and the AI climbing into an empty borg.
 
+**`run_batch17.gd`** covers batch 17's rules that only show in play: boarding a shuttle or a
+borg is free and works at 0 AP; a diagonal flame jet that meets a straight wall still burns all
+six cells (the side of the splash the wall cuts short hands its cells to the other side); a
+neutral civilian shoots a player's bought civilian instead of retreating from its lane; every
+vehicle kind leaves a wreck and an explosion scorches the floor; and a group order whose mover
+was cut off by a squadmate lands on the nearest reachable cell instead of standing still.
+
 **`run_net_match.sh`** is the only run that proves multiplayer works: it starts **two
 Godot processes** on localhost — `net_host_*.gd` and `net_guest_*.gd`, both built on
 `NetSmokeBase.gd` — and drives the real scenes through ENet: lobby (seating, colour and

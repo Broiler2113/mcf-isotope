@@ -18,6 +18,9 @@ signal outgoing(msg: Dictionary)
 signal initiative_synced()
 ## Гость подтянул доску хоста целиком (batch 14) — экран обязан перечитать состояние.
 signal resynced()
+## Хост отверг НАШЕ намерение (batch 17, item 4): причина для журнала. Раньше отказ
+## оставался на хосте, а у гостя кнопка просто «не работала» — ни строки в логе.
+signal denied(reason: String)
 ## Гость сверил доску с хостом после действия и она не сошлась — просьба уже ушла.
 signal desync_detected()
 
@@ -28,6 +31,7 @@ const K_RESYNC := "resync"
 const K_STATE := "state"
 const K_ACTION := "action"   # хост → клиент: «авторитетное действие + броски»
 const K_INIT := "init"       # хост → клиент: порядок инициативы на всю партию
+const K_DENIED := "denied"   # хост → клиент: намерение отвергнуто (actor + причина)
 
 var state: GameState
 var resolver: GameActionResolver
@@ -95,6 +99,11 @@ func receive(msg: Dictionary) -> void:
 		K_STATE:
 			if not is_host:
 				_client_restore(msg)
+		K_DENIED:
+			if not is_host:
+				var actor := state.get_unit(int(msg.get("a", -1)))
+				if actor != null and actor.owner == my_owner:
+					denied.emit(str(msg.get("reason", "")))
 
 func _decode(msg: Dictionary) -> Intent:
 	var raw: Variant = msg.get("i")
@@ -149,6 +158,8 @@ func _host_resolve_and_send(intent: Intent) -> void:
 		# Подпись доски ПОСЛЕ действия (batch 14): гость сверит с ней свою.
 		outgoing.emit({"k": K_ACTION, "i": IntentCodec.encode(intent), "r": rolls,
 			"h": state.digest_hash()})
+	else:
+		outgoing.emit({"k": K_DENIED, "a": intent.actor_id, "reason": result.reason})
 	action_applied.emit(intent, result)
 
 # --- Клиент: воспроизведение с присланными бросками ---

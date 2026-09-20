@@ -15,37 +15,34 @@ extends RefCounted
 
 enum SlotKind {OPEN, CLOSED, HUMAN, AI}
 
-## Цвета игроков. Первые два — исторические синий/красный дуэли, чтобы партия на
-## двоих выглядела ровно как раньше. Остальные подобраны так, чтобы различаться
-## и на тёмном полу, и на светлом снегу, и в сером тумане войны.
-const PALETTE := [
-	Color(0.30, 0.55, 1.00), Color(1.00, 0.40, 0.35), Color(0.40, 0.85, 0.45),
-	Color(1.00, 0.80, 0.25), Color(0.75, 0.45, 0.95), Color(0.20, 0.85, 0.85),
-	Color(1.00, 0.55, 0.15), Color(0.95, 0.45, 0.75), Color(0.55, 0.75, 0.25),
-	Color(0.35, 0.45, 0.85), Color(0.85, 0.25, 0.25), Color(0.25, 0.65, 0.55),
-	Color(0.90, 0.70, 0.50), Color(0.60, 0.35, 0.25), Color(0.50, 0.85, 0.75),
-	Color(0.80, 0.85, 0.40), Color(0.45, 0.30, 0.65), Color(1.00, 0.65, 0.65),
-	Color(0.30, 0.75, 1.00), Color(0.70, 0.55, 0.35), Color(0.55, 0.55, 0.60),
-	Color(0.95, 0.35, 0.55), Color(0.35, 0.85, 0.30), Color(0.65, 0.75, 0.95),
-	Color(0.85, 0.55, 0.90), Color(0.40, 0.60, 0.35),
-	# Чёрный и белый (batch 14) — в конце палитры, чтобы индексы прежних цветов не сдвинулись.
-	Color(0.06, 0.06, 0.07), Color(0.97, 0.97, 0.97),
+## Фракции (batch 17, item 13). Сторона выбирает не цвет, а ФРАКЦИЮ из лора MCF; цвет,
+## имя и ключ файлов текстур идут тремя параллельными списками в одном порядке. Первые
+## две — синяя и красная, чтобы дуэль выглядела как раньше. Фракций ровно столько,
+## сколько в лоре: больше сторон, чем фракций, делят фракцию (id % 7).
+## FACTION_KEYS — суффиксы картинок: light_infantry_nova.png, faction_nova.png (портрет
+## в лобби), см. Sprites.MANIFEST.
+const FACTION_KEYS := [
+	"nova", "purifiers", "prometheus", "alliance", "league", "martian", "barbarians",
 ]
-
-## Человекочитаемые имена цветов PALETTE в том же порядке (item 3): в лобби вместо
-## «C1…C26» показываем настоящие названия. Порядок строго соответствует PALETTE.
 const COLOR_NAMES := [
-	"Blue", "Red", "Green", "Gold", "Purple", "Cyan",
-	"Orange", "Pink", "Lime", "Indigo", "Crimson", "Teal",
-	"Tan", "Brown", "Mint", "Chartreuse", "Violet", "Salmon",
-	"Sky", "Khaki", "Gray", "Rose", "Emerald", "Periwinkle",
-	"Orchid", "Moss", "Black", "White",
+	"Conclave-NOVA", "National Front \"Purifiers\"", "Prometheus Noocracy",
+	"Alliance of Neutral Stations", "League of Neutral Stations", "Martian Militia",
+	"Barbarians",
+]
+const PALETTE := [
+	Color(0.30, 0.55, 1.00), Color(1.00, 0.40, 0.35), Color(1.00, 0.80, 0.25),
+	Color(0.20, 0.85, 0.85), Color(0.40, 0.85, 0.45), Color(1.00, 0.55, 0.15),
+	Color(0.75, 0.45, 0.95),
 ]
 
 static func color_name(index: int) -> String:
 	if index >= 0 and index < COLOR_NAMES.size():
 		return COLOR_NAMES[index]
-	return "Color %d" % (index + 1)
+	return "Faction %d" % (index + 1)
+
+## Ключ фракции по индексу палитры — суффикс файлов текстур.
+static func faction_key(index: int) -> String:
+	return FACTION_KEYS[posmod(index, FACTION_KEYS.size())]
 
 ## Цвет нейтральной стороны и её групп — один на всех: нейтралы не команда, они фон.
 const NEUTRAL_COLOR := Color(0.80, 0.80, 0.55)
@@ -229,6 +226,13 @@ func color_of(owner: int) -> Color:
 		return NEUTRAL_COLOR
 	var s := slot(owner)
 	return s.color if s != null else Color.WHITE
+
+## Суффикс картинок стороны (batch 17, item 13): «_nova» и т. п.; нейтралы — «_neutral».
+func faction_suffix_of(owner: int) -> String:
+	if MCF.is_neutral(owner):
+		return "_neutral"
+	var s := slot(owner)
+	return "_" + faction_key(s.color_index() if s != null else owner)
 
 func is_eliminated(owner: int) -> bool:
 	var s := slot(owner)
