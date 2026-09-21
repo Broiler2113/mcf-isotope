@@ -2088,9 +2088,10 @@ mutating with the game and replays began from the wrong board.
   is held visibly rather than silently dropped.
 - All UI strings are **English**; all code comments are **Russian**.
 - **Factions instead of colours (batch 17, item 13).** `Roster.FACTION_KEYS` /
-  `COLOR_NAMES` / `PALETTE` are three parallel lists of the seven lore factions —
-  Conclave-NOVA, National Front "Purifiers", Prometheus Noocracy, Alliance of Neutral
-  Stations, League of Neutral Stations, Martian Militia, Barbarians — and the lobby's
+  `COLOR_NAMES` / `PALETTE` are three parallel lists of the eight lore factions —
+  Conclave-NOVA (red), National Front "Purifiers" (yellow), Prometheus Noocracy (blue),
+  Alliance of Neutral Stations (green), League of Neutral Stations (brown), Martian
+  Militia (orange), Saint Order (white), New Kingdom of Jerusalem (purple) — and the lobby's
   picker offers exactly those. Every side keeps its colour for rings, AP pips, zones and
   the fallback circle, but a soldier is drawn from `<unit>_<faction>.png` when it exists
   (`Roster.faction_suffix_of(owner)` → `_nova`, `_neutral` for civilians), else the plain

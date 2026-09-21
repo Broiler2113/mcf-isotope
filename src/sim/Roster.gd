@@ -17,22 +17,22 @@ enum SlotKind {OPEN, CLOSED, HUMAN, AI}
 
 ## Фракции (batch 17, item 13). Сторона выбирает не цвет, а ФРАКЦИЮ из лора MCF; цвет,
 ## имя и ключ файлов текстур идут тремя параллельными списками в одном порядке. Первые
-## две — синяя и красная, чтобы дуэль выглядела как раньше. Фракций ровно столько,
-## сколько в лоре: больше сторон, чем фракций, делят фракцию (id % 7).
+## две — красная и жёлтая, чтобы дуэль читалась с первого взгляда. Фракций ровно столько,
+## сколько в лоре: больше сторон, чем фракций, делят фракцию (id % 8).
 ## FACTION_KEYS — суффиксы картинок: light_infantry_nova.png, faction_nova.png (портрет
 ## в лобби), см. Sprites.MANIFEST.
 const FACTION_KEYS := [
-	"nova", "purifiers", "prometheus", "alliance", "league", "martian", "barbarians",
+	"nova", "purifiers", "prometheus", "alliance", "league", "martian", "saints", "nkj",
 ]
 const COLOR_NAMES := [
 	"Conclave-NOVA", "National Front \"Purifiers\"", "Prometheus Noocracy",
 	"Alliance of Neutral Stations", "League of Neutral Stations", "Martian Militia",
-	"Barbarians",
+	"Saint Order", "New Kingdom of Jerusalem",
 ]
 const PALETTE := [
-	Color(0.30, 0.55, 1.00), Color(1.00, 0.40, 0.35), Color(1.00, 0.80, 0.25),
-	Color(0.20, 0.85, 0.85), Color(0.40, 0.85, 0.45), Color(1.00, 0.55, 0.15),
-	Color(0.75, 0.45, 0.95),
+	Color(1.00, 0.30, 0.30), Color(1.00, 0.90, 0.20), Color(0.30, 0.55, 1.00),
+	Color(0.30, 0.80, 0.35), Color(0.60, 0.40, 0.20), Color(1.00, 0.55, 0.15),
+	Color(1.00, 1.00, 1.00), Color(0.65, 0.30, 0.90),
 ]
 
 static func color_name(index: int) -> String:
