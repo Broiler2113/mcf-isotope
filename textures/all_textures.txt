@@ -69,7 +69,8 @@ Yours wins. Changes are picked up when a battle or the map editor opens.
   faction_alliance.png
   faction_league.png
   faction_martian.png
-  faction_barbarians.png
+  faction_saints.png
+  faction_nkj.png
 
 -- Vehicles (stretched over the whole footprint) --
   tank.png
@@ -85,7 +86,7 @@ Yours wins. Changes are picked up when a battle or the map editor opens.
 == Factions ==
 Sides are factions, not colours. Soldiers accept a faction suffix:
   light_infantry_nova.png, light_infantry_purifiers.png, ... light_infantry_neutral.png
-Suffixes: nova, purifiers, prometheus, alliance, league, martian, barbarians, neutral.
+Suffixes: nova, purifiers, prometheus, alliance, league, martian, saints, nkj, neutral.
 A plain light_infantry.png is used for any faction that has no suffixed file.
 Soldier art is drawn facing UP in a square; a corpse is the same picture turned
 90 degrees clockwise, so no separate corpse art is needed per soldier

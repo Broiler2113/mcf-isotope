@@ -55,7 +55,7 @@ const MANIFEST := [
 	]],
 	["Faction portraits (shown in the lobby instead of the colour square)", [
 		"faction_nova", "faction_purifiers", "faction_prometheus", "faction_alliance",
-		"faction_league", "faction_martian", "faction_barbarians",
+		"faction_league", "faction_martian", "faction_saints", "faction_nkj",
 	]],
 	["Vehicles (stretched over the whole footprint)", [
 		"tank", "shuttle", "borg", "tank_wreck", "shuttle_wreck", "borg_wreck",
