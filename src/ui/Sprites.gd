@@ -47,19 +47,32 @@ const MANIFEST := [
 		"wall", "glass", "ldf", "corpse_wall", "airlock",
 		"dpmg", "dot", "wood_wall", "sandbag_wall", "hedgehog_sandbags", "mine",
 	]],
-	["Soldiers (add _p1 / _p2 / _neutral for a side-specific look)", [
+	["Soldiers (add a faction suffix for a faction-specific look, see below)", [
 		"anti_tank", "assault", "civilian", "commander", "drone",
 		"drone_operator", "engineer", "flamethrower", "heavy_infantry",
 		"light_infantry", "machinegunner", "marksman", "miner", "sapper",
 		"shield_bearer", "sniper",
 	]],
+	["Faction portraits (shown in the lobby instead of the colour square)", [
+		"faction_nova", "faction_purifiers", "faction_prometheus", "faction_alliance",
+		"faction_league", "faction_martian", "faction_barbarians",
+	]],
 	["Vehicles (stretched over the whole footprint)", [
-		"tank", "shuttle", "tank_wreck", "shuttle_wreck",
+		"tank", "shuttle", "borg", "tank_wreck", "shuttle_wreck", "borg_wreck",
 	]],
 	["Misc", [
 		"corpse",
 	]],
 ]
+
+## Автотайл (batch 17, item 12): лист «<объект>_autotile.png» из 16 плиток 4×4. Плитка
+## выбирается по четырём соседям с ТЕМ ЖЕ объектом: индекс = N·1 + E·2 + S·4 + W·8,
+## колонка = индекс % 4, строка = индекс / 4. Плитка 0 — одиночный столб, 15 — крест.
+const AUTOTILE_SUFFIX := "_autotile"
+const AUTOTILE_N := 1
+const AUTOTILE_E := 2
+const AUTOTILE_S := 4
+const AUTOTILE_W := 8
 
 # --- Загрузка ---
 ## Перечитать папки текстур с нуля. Зовётся при входе в бой/редактор, чтобы
@@ -128,11 +141,16 @@ const ALIASES := {
 	"rsp": "dpmg",
 }
 
+## Сама текстура по имени (для виджетов вроде TextureRect); null — замены нет.
+static func texture_of(name: String) -> Texture2D:
+	ensure_overrides()
+	return _overrides.get(ALIASES.get(name, name).to_lower())
+
 static func has_override(name: String) -> bool:
 	ensure_overrides()
 	return _overrides.has(ALIASES.get(name, name).to_lower())
 
-## Имя с учётом стороны: сначала ищем «boec_p1», потом общее «boec» (#55).
+## Имя с учётом стороны: сначала ищем «boec_nova», потом общее «boec» (#55, batch 17).
 ## Пустая строка — картинки нет ни в каком виде, рисуем вектор как раньше.
 static func resolve(name: String, suffix: String = "") -> String:
 	ensure_overrides()
@@ -193,6 +211,33 @@ static func draw_texture_override_rect(ci: CanvasItem, name: String, rect: Rect2
 		ci.draw_set_transform(_base_offset, 0.0, _base_scale)
 	return true
 
+## Объект на клетке: автотайл, если для него лежит лист, иначе обычная картинка.
+## same(dx, dy) → стоит ли на соседней клетке тот же объект. false — замены нет вовсе,
+## вызывающий рисует вектор.
+static func draw_feature(ci: CanvasItem, name: String, rect: Rect2, same: Callable) -> bool:
+	ensure_overrides()
+	var key: String = ALIASES.get(name, name)
+	var sheet: Texture2D = _overrides.get(key + AUTOTILE_SUFFIX)
+	if sheet == null:
+		return draw_texture_override_rect(ci, key, rect)
+	var mask := 0
+	if same.call(0, -1):
+		mask |= AUTOTILE_N
+	if same.call(1, 0):
+		mask |= AUTOTILE_E
+	if same.call(0, 1):
+		mask |= AUTOTILE_S
+	if same.call(-1, 0):
+		mask |= AUTOTILE_W
+	draw_autotile(ci, sheet, rect, mask)
+	return true
+
+static func draw_autotile(ci: CanvasItem, sheet: Texture2D, rect: Rect2, mask: int) -> void:
+	var tw := sheet.get_width() / 4.0
+	var th := sheet.get_height() / 4.0
+	ci.draw_texture_rect_region(sheet, rect,
+			Rect2((mask % 4) * tw, (mask / 4) * th, tw, th))
+
 # --- Файл-справка ---
 ## Игра САМА пишет список имён рядом с папкой текстур: игроку не нужно лезть в код,
 ## чтобы узнать, как назвать файл. res:// в собранной игре только для чтения —
@@ -226,8 +271,43 @@ static func _manifest_text() -> String:
 		for entry in group[1]:
 			lines.append("  %s.png" % entry)
 		lines.append("")
-	lines.append("Soldiers also accept a side suffix: light_infantry_p1.png,")
-	lines.append("light_infantry_p2.png, light_infantry_neutral.png. A plain")
-	lines.append("light_infantry.png is used for any side that has no suffixed file.")
-	lines.append("")
+	lines.append_array([
+		"== Factions ==",
+		"Sides are factions, not colours. Soldiers accept a faction suffix:",
+		"  light_infantry_nova.png, light_infantry_purifiers.png, ... light_infantry_neutral.png",
+		"Suffixes: " + ", ".join(Roster.FACTION_KEYS) + ", neutral.",
+		"A plain light_infantry.png is used for any faction that has no suffixed file.",
+		"Soldier art is drawn facing UP in a square; a corpse is the same picture turned",
+		"90 degrees clockwise, so no separate corpse art is needed per soldier",
+		"(corpse.png is the fallback for piles and for soldiers without art).",
+		"faction_<key>.png is the portrait shown in the lobby's faction window.",
+		"",
+		"== Autotiling walls ==",
+		"Any terrain feature may ship as a 4x4 tile sheet named <feature>_autotile.png",
+		"(wall_autotile.png, glass_autotile.png, wood_wall_autotile.png, ...).",
+		"The game looks at the four orthogonal neighbours that carry the SAME feature",
+		"and picks tile index = N*1 + E*2 + S*4 + W*8; column = index % 4, row = index / 4:",
+		"",
+		"  row 0:  0 alone     1 N          2 E          3 N+E",
+		"  row 1:  4 S         5 N+S (|)    6 E+S        7 N+E+S",
+		"  row 2:  8 W         9 N+W       10 E+W (-)   11 N+E+W",
+		"  row 3: 12 S+W      13 N+S+W     14 E+S+W     15 all four (+)",
+		"",
+		"Each tile is square; the sheet is 4 tiles wide and 4 tall (e.g. 256x256 for 64px",
+		"tiles). If a sheet exists it wins over the plain <feature>.png. Diagonal",
+		"neighbours are ignored on purpose: 16 tiles are enough for corridors and rooms.",
+		"",
+		"== Preparing a graphical update ==",
+		"1. Author every sprite as a square PNG with transparency (64x64 or 128x128).",
+		"   Art is stretched to the cell, so keep the subject inside the square.",
+		"2. Name files exactly as listed above, lower case. Drop them into user://textures",
+		"   to test without touching the project, then move them into res://textures to",
+		"   ship them. Open the project once in the Godot editor so it imports them.",
+		"3. Vehicles are drawn nose-up over their whole footprint (tank 3x3, shuttle 2x2).",
+		"4. Floors: floor, floor_grass, floor_wall (under a wall), floor_space,",
+		"   floor_cover, floor_destroyed, floor_epicenter, fire.",
+		"5. Missing files fall back to the built-in vector look, so you can replace the",
+		"   game piece by piece.",
+		"",
+	])
 	return "\n".join(lines) + "\n"

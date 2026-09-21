@@ -23,7 +23,7 @@ const GAME_MODES := ["domination"]
 const SLOT_COL_IDX := 26
 const SLOT_COL_TYPE := 124
 const SLOT_COL_WHO := 110
-const SLOT_COL_COLOR := 124
+const SLOT_COL_COLOR := 190
 # SpinBox'ы имеют собственный минимум ширины ~86px (стрелки + текст). Колонка «Team»
 # была уже него (64) — контрол распирал её, и все следующие столбцы (Zone/Points)
 # уезжали вправо от своих заголовков (item 1). Даём запас под реальный минимум.
@@ -57,6 +57,7 @@ var _map_opt: OptionButton
 var _map_preview: TextureRect
 var _slots_box: VBoxContainer
 var _preview_swatch: ColorRect
+var _preview_portrait: TextureRect  # портрет фракции поверх квадрата (batch 17, item 13)
 var _status: Label
 
 var _map_paths: Array[String] = []
@@ -269,8 +270,7 @@ func _apply_lobby_snapshot(msg: Dictionary) -> void:
 	if mine != null:
 		if _color_opt != null:
 			_color_opt.select(mine.color_index())
-		if _preview_swatch != null:
-			_preview_swatch.color = mine.color
+		_refresh_swatch()
 		_status.text = "You are %s — waiting for the host to start the match." % mine.display_name
 	else:
 		_status.text = "Connected — no free slot yet. The host can add one."
@@ -695,18 +695,35 @@ func _build_personal(parent: VBoxContainer) -> void:
 	color_opt.select(_my_slot().color_index() if _my_slot() != null else 0)
 	color_opt.item_selected.connect(_on_my_color)
 	_color_opt = color_opt
-	_row(box, "Selected Color:", color_opt)
+	_row(box, "Faction:", color_opt)
 	_preview_swatch = ColorRect.new()
 	_preview_swatch.custom_minimum_size = Vector2(64, 64)
 	# Квадрат, а не полоса во всю ширину колонки (batch 14): VBox растягивал его.
 	_preview_swatch.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	_preview_swatch.color = _my_slot().color if _my_slot() != null else Color.WHITE
+	# Портрет фракции (faction_<key>.png) поверх цветного квадрата; без картинки виден цвет.
+	_preview_portrait = TextureRect.new()
+	_preview_portrait.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_preview_portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_preview_portrait.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_preview_swatch.add_child(_preview_portrait)
 	box.add_child(_preview_swatch)
+	_refresh_swatch()
 	var note := Label.new()
-	note.text = "Your soldiers show as circles in this colour."
+	note.text = "Your soldiers wear this faction's art (or its colour)."
 	note.add_theme_font_size_override("font_size", 11)
 	note.modulate = Color(0.75, 0.78, 0.85)
 	box.add_child(note)
+
+## Окно фракции (batch 17, item 13): цвет слота и, если лежит, портрет faction_<key>.png.
+func _refresh_swatch() -> void:
+	if _preview_swatch == null:
+		return
+	var mine := _my_slot()
+	_preview_swatch.color = mine.color if mine != null else Color.WHITE
+	if _preview_portrait != null:
+		var key := Sprites.resolve("faction_" + Roster.faction_key(mine.color_index())) \
+				if mine != null else ""
+		_preview_portrait.texture = Sprites.texture_of(key) if key != "" else null
 
 # --- Слоты -------------------------------------------------------------------
 func _refresh_slots() -> void:
@@ -857,7 +874,7 @@ func _slot_header() -> Control:
 	row.add_theme_constant_override("separation", 6)
 	# Ширины СТРОГО совпадают с контролами строк, иначе заголовки съезжают вбок (item 4).
 	var cols: Array = [["#", SLOT_COL_IDX], ["Type", SLOT_COL_TYPE], ["Who", SLOT_COL_WHO],
-			["Color", SLOT_COL_COLOR]]
+			["Faction", SLOT_COL_COLOR]]
 	if _team_mode:
 		cols.append(["Team", SLOT_COL_TEAM])
 	cols.append_array([["Zone", SLOT_COL_ZONE], ["Points", SLOT_COL_PTS]])
@@ -1046,7 +1063,7 @@ func _on_slot_kind(index: int, slot_id: int) -> void:
 
 func _on_slot_color(color_idx: int, slot_id: int) -> void:
 	if not _assign_color(slot_id, color_idx):
-		_status.text = "That colour is taken — no two players share a colour."
+		_status.text = "That faction is taken — no two players share a faction."
 	_lobby_changed()
 
 func _on_slot_zone(value: float, slot_id: int) -> void:
@@ -1087,9 +1104,9 @@ func _on_my_color(color_idx: int) -> void:
 			NetHandoff.session.send({"k": NetHandoff.K_LOBBY_REQ, "op": "color", "c": color_idx})
 		return
 	if not _assign_color(mine.id, color_idx):
-		_status.text = "That colour is taken."
+		_status.text = "That faction is taken."
 		return
-	_preview_swatch.color = mine.color
+	_refresh_swatch()
 	_lobby_changed()
 
 ## Гость пересаживается в открытый слот (batch 12 #8): просьба хосту.
@@ -1203,7 +1220,7 @@ func _start_loaded() -> void:
 
 func _on_start() -> void:
 	if roster.has_duplicate_colors():
-		_status.text = "Two players share a colour — fix that first."
+		_status.text = "Two players share a faction — fix that first."
 		return
 	var playing := 0
 	for s: Roster.Slot in roster.slots:

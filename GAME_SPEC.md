@@ -539,7 +539,12 @@ damages a hull at all.
 
 Projects a **6-cell** jet, igniting each floor cell with `shooter.owner` as
 `fire_owner`. On hitting a wall or a shield, the remaining length **splashes**:
-`left_count = ceil(remaining / 2.0)`, the rest goes right.
+`left_count = ceil(remaining / 2.0)`, the rest goes right. **A side the wall cuts short
+hands its unburned cells to the other side (batch 17)**, so the jet burns six cells
+whenever the board allows — a diagonal jet into a straight wall used to lose the half of
+its splash that ran back into the same wall. `flame_cells(from, step)` is the one
+geometry for the shot, the preview and the AI; `_resolve_flame` only kills and ignites
+what it lists.
 
 ### 7.3 Marksman laser (§3.13)
 
@@ -771,6 +776,10 @@ Raising the wall **extinguishes fire** under every section it covers (#82). The 
 also **fireproof** — fire neither burns it away nor spreads through it (§10). It renders
 as a solid **black** block (`BRU_COLOR`), distinct from the grey concrete structures
 (#85). When the engineer has spent it, a small pixelated **"!"** is drawn beside them.
+The same badge (`unit_missing_equipment`) marks a flamethrower without its extinguisher
+grenade, a machinegunner without its frag, and — inverted by request in batch 17 — a
+**drone operator whose station is deployed** (`operator_has_station`); an operator still
+carrying the station has no badge.
 
 ### 9.4 Airlocks (§3.11)
 
@@ -1052,6 +1061,11 @@ the shared brain:
 - `_activity_quota()` returns **1.0** for Neutral against `MIN_ARMY_ACTIVITY = 0.8` for an
   army (§17.2) — "every civilian must move or do something" is literal, while a soldier
   may legitimately hold a rear position.
+- **A player's bought civilian is a target, not a threat (batch 17).** `_neutral_soldiers`
+  and `_neutral_outnumbers` skip `ABILITY_CIVILIAN` units, so the survival priority (get off
+  the lane, cover, retreat) does not fire for them and the neutral shoots them instead;
+  `hostile_target_ids` still lists them. Before this a neutral facing an enemy civilian
+  retreated from its "lane" every slot and never fired.
 
 A civilian therefore walks its **whole speed** in one order, banks the remainder as
 `move_credit` and spends it after shooting, fires partial bursts, hauls corpses aside and
@@ -1383,9 +1397,18 @@ event so the player watches the roll (#68):
 | Vehicle | Roll | Result |
 |---|---|---|
 | Tank | any | Leaves a **wreck** (blocks movement and LOS) |
-| Tank | 4+ | **Additionally explodes**, radius 2 |
-| Shuttle | 1–2 | Explodes, radius 1 |
-| Shuttle | 3+ | Destroyed outright, **no wreck** |
+| Tank | 4+ | **Additionally explodes**, radius 2 (diamond) |
+| Shuttle | any | Leaves a **wreck** |
+| Shuttle | 1–2 | **Additionally explodes**, radius 1 |
+| Borg | any | Leaves a **wreck** |
+| Borg | 4+ | **Additionally explodes**, 3×3 square |
+
+**Every vehicle leaves a wreck, exploded or not (batch 17).** An explosion runs through
+the same `_blast` as an anti-tank charge: everyone in the area dies (shield / trench
+protections apply), fortifications in the area are demolished, and the floor under and
+around the hull is scorched (`debris` decals with the epicenter texture) — the wreck sits
+on the scorched floor. Before this a shuttle vanished on any roll and an exploded borg
+left nothing.
 
 ### 16.6 Shuttle data is wired now
 
@@ -1402,7 +1425,7 @@ hull cell** — `coord` is the seat cell, they are the cell's `occupant`, they a
 top of the hull, and `aboard_vehicle_id` marks the shuttle. Everything else follows from
 that one fact:
 
-- **Boarding (1 AP)** from any cell adjacent to the hull into a chosen free seat
+- **Boarding is free (0 AP, allowed at 0 AP — batch 17)** from any cell adjacent to the hull into a chosen free seat
   (`VehicleBoardIntent.seat`, `-1` = first free, the driver's seat first). The UI
   **always asks which seat** (batch 14) — from the vehicle menu and from the soldier's own
   *Board* button alike — and labels the driver's seat, so a player can deliberately take
@@ -1454,7 +1477,8 @@ that one fact:
 ### 16.8 The borg (batch 13, "Borg characteristics")
 
 A borg is a **1×1 vehicle bought for 100 points** that is *played as a unit*. Boarding it
-(1 AP, from an adjacent cell; shield bearers and corpse carriers cannot) does not take the
+(free — 0 AP, allowed at 0 AP, batch 17 — from an adjacent cell; shield bearers and corpse
+carriers cannot; a fresh soldier climbs in and has the full 3 AP) does not take the
 operator off the board: they **stand in the borg's cell** with `borg_id` set, the borg's
 `origin` follows them after every resolved action (`_sync_borgs`), and its hull footprint
 is **not registered on the grid** while someone alive is inside — so it is transparent to
@@ -1875,6 +1899,16 @@ pans or zooms the camera (#8).
 Corpses render in `CORPSE_COLOR = Color(0.8, 0.1, 0.1, 0.5)`; BRU sections render as
 solid `BRU_COLOR = Color(0.05, 0.05, 0.07)` fills (#85).
 
+**Drawings (item 51, batch 17).** Free-hand strokes over the board, cosmetic only, never
+part of the simulation. Each stroke carries its author and a scope — `SELF`, `TEAM`
+("Share with team") or `ALL` ("Share with everyone", visible to enemies too). Every
+stroke is sent over the wire; the viewer filters. Filters are plain checkboxes: *Hide
+others' drawings*, *Hide my drawings*, *Hide all drawings*. The viewer is `my_owner` in a
+network game and the active side in hotseat; **a side driven by an AI never counts as the
+viewer's own**, and when a player leaves and an AI takes over, their strokes are dropped
+on every screen (`_drop_drawings_of`) — before this the leaver's team drawings surfaced
+for everyone once the host went local and the AI's turn made it the "viewer".
+
 ### 18.7 Escape
 
 Context-sensitive cancel, in order: close dialog → exit build/sub-mode → deselect →
@@ -2053,6 +2087,27 @@ mutating with the game and replays began from the wrong board.
   supplied; a guessed port would look like settings without setting anything. The slot
   is held visibly rather than silently dropped.
 - All UI strings are **English**; all code comments are **Russian**.
+- **Factions instead of colours (batch 17, item 13).** `Roster.FACTION_KEYS` /
+  `COLOR_NAMES` / `PALETTE` are three parallel lists of the seven lore factions —
+  Conclave-NOVA, National Front "Purifiers", Prometheus Noocracy, Alliance of Neutral
+  Stations, League of Neutral Stations, Martian Militia, Barbarians — and the lobby's
+  picker offers exactly those. Every side keeps its colour for rings, AP pips, zones and
+  the fallback circle, but a soldier is drawn from `<unit>_<faction>.png` when it exists
+  (`Roster.faction_suffix_of(owner)` → `_nova`, `_neutral` for civilians), else the plain
+  `<unit>.png`, else the circle with initials. **A corpse is the soldier's own art turned
+  90° clockwise**; `corpse.png` (turned 90° counter-clockwise, #21.4) remains the fallback
+  for piles and for units without art. The lobby's colour square shows
+  `faction_<key>.png` on top of the colour when that portrait is shipped.
+- **Wall autotiling (batch 17, item 12).** A feature may ship a 4×4 sheet
+  `<feature>_autotile.png`; `Sprites.draw_feature` picks the tile from the four
+  orthogonal neighbours carrying the same feature id (`N·1 + E·2 + S·4 + W·8`, column =
+  index % 4, row = index / 4). It is used by the battle screen, the placement screen and
+  the map editor alike, and the plain `<feature>.png` still works where no sheet exists.
+  The full layout, naming and the "how to prepare a graphical update" checklist are
+  written by the game itself into `textures/all_textures.txt` (`Sprites._manifest_text`).
+- **Shipped blood decals (batch 17).** `textures/blood_pool.png` and
+  `textures/blood_splatter.png` are real textures now (generated once, imported), so
+  blood no longer falls back to the vector oval and quad.
 
 ---
 
@@ -2082,6 +2137,7 @@ Three message kinds (`NetGame`):
 | `K_INTENT` | client → host | "please resolve this intent for me" |
 | `K_ACTION` | host → client | authoritative intent **+ its dice log** |
 | `K_INIT` | host → client | initiative order, active index, round number, **+ the dice of the opening civilian slot** (§3.2) |
+| `K_DENIED` | host → client | the host refused an intent: actor id + reason. The guest whose unit it was logs `[denied] …`; before batch 17 a refused guest intent was silent on the guest's screen and looked like a dead button |
 
 Fog is **presentation only** — `is_visible_to_team` gates targeting, but the resolver's
 outcome does not depend on it, so a `fog_enabled` mismatch between peers cannot desync.
@@ -2200,8 +2256,8 @@ to load the map from disk once per slot on every refresh), counts its zones once
 renders the preview at one pixel per cell for big maps — that was the "it took a while
 until it loaded".
 
-**Black and White are colours (batch 14)** — appended to `Roster.PALETTE` so no earlier
-index moves — and the personal colour swatch is a square, not a bar.
+**Black and White were colours (batch 14)**; since batch 17 the palette is the seven lore
+factions (§21) and the personal square shows the faction's portrait when one is shipped.
 
 **Seats.** The host's own slot carries `peer_id = 1` (the ENet server id). When a guest
 connects, `NetworkSession.peer_joined` hands the host its id and `_seat_peer` turns the
@@ -2584,6 +2640,7 @@ number appears elsewhere in this document it is because the source comments cite
 | 103 | One unit per cell is enforced by the board itself — `Grid.place` and `move_occupant` refuse to overwrite an occupant and report failure, so no two soldiers, civilians or AI units can ever share a tile (§2.2); hovering a green move tile draws the **cheapest actual route** to it out of the Dijkstra tree, and every green tile is labelled with what standing there costs out of the movement total (§18.3); a marksman's laser no longer reaches a man in a trench from a tile that is not one, at any range including adjacent (§6.6, §7.3); NPC civilians and the army are driven by **one brain** — the second, cell-at-a-time civilian AI is deleted and a civilian is now an `AIController` with the Neutral owner, so it plans, fragments its movement, fires partial bursts and hauls corpses by the army's rules (§14, §17); the AI uses fragmented movement and partial bursts — `move_credit` is a spendable budget, a step costs score, and a burst orders `ceil(1/p)` bullets instead of the whole magazine (§17.3); an anti-tank sapper cut off by a wall **blasts through it** instead of shuffling along it (§17.3, §7.1); the AI and civilians pick up bodies that block the road and **stack them aside into piles**, the fifth forming a corpse wall (§17.3, §8.4); at least 80% of an army must act each turn and **every** civilian must, enforced by a second forced pass over whoever the plan left idle (§17.2); Player 1 can be an AI too, so AI-vs-AI matches run from Setup or a mid-battle toggle (§17.4); and the camera zooms out to 0.12 so a 60×40 board fits on one screen (§18.4) |
 | 104 | The map editor can be left the way it was entered: the **"To Demo Game"** button is gone, replaced by **"Main Menu"**, which clears `MapHandoff.pending` and returns to `MainMenu.tscn` instead of dumping the designer into a demo battle on the built-in roster (§19) |
 | 105 | A marksman firing **from** a trench is as boxed in as a marksman firing **into** one: the laser cannot climb out of the ditch any more than it could drop into it, so from the trench floor the only reachable target is one lying in the **same continuous run** of trench, along a straight line with no gap — a bend or a break means the beam hits the earth wall. The trench is now symmetric cover against the beam instead of a firing position that ignored its own walls (§6.6, §7.3) |
+| 112 | Batch 17 (the "Isotope issues fix 8" report) — boarding a shuttle or a borg is free and allowed at 0 AP, so a fresh operator has the borg's full 3 AP (§16.7, §16.8); the move budget is one function (`move_budget`, `nearest_reachable`, `can_move`) shared by the screen, the group order and the resolver, and a group mover whose target was cut off by a squadmate falls back to the nearest reachable cell inside the resolver (§18.3); the host answers a refused guest intent with `K_DENIED` so the guest sees why (§22.1), and the Laser button explains its 2-AP gate; the flame jet is one geometry (`flame_cells`) for the shot and the preview, and a splash side cut short by the wall hands its cells to the other side so the jet always burns six (§7.2); a player's bought civilian is a target but not a threat to neutrals, so they shoot it instead of fleeing its lane (§14); every vehicle leaves a wreck and an explosion scorches the floor through `_blast` (§16.5); the drone operator's "!" means "station deployed" (§9.3); drawings gain *Share with everyone*, *Hide my drawings* and *Hide all drawings*, an AI-driven side is never the viewer's own, and a leaver's strokes are dropped (§18.6); factions replace colours with faction-suffixed soldier art, corpses are the soldier's art turned 90° clockwise, walls autotile from a 4×4 sheet, and real blood decals ship (§21) |
 | 111 | Performance only, no rule changed — the line-of-sight ray in `_seen_from` reads a flat per-cell "blocks sight" byte table (rebuilt with the LOS cache on every `vision_version` step) instead of fetching the `GridCell` object twice per step; the visible set is bit-identical (verified against the old routine on the town map, before and after a wall fall and a glass build), and a cold recompute of one side's view on the town map drops from ~1.0 s to ~0.45 s — the freeze at match start, on *Load Game* and on every `K_RESYNC` with fog on (§11) |
 | 110 | General sweep (random-map fuzz, random-intent fuzz, lockstep twin) — six sim fixes, no rule changed: `StateCodec` restores a vehicle's **saved hull** instead of a fresh one (every load and every `K_RESYNC` used to heal damaged tanks, shuttles and borgs to full); a refused intent no longer touches the board (`dig_credits`, `dragging`, `combat_started` were cleared **before** validation, so a host-refused shot silently cost an engineer their trench series and desynced the guest); zero-g recoil and knockback skip seated passengers (§12, §16.7 — they were thrown off the hull while still "aboard"); a borg operator must climb out before boarding another vehicle, and `VehicleMove/Turn/Cannon` are refused for a borg outright (§16.8 — a round boundary gave the borg a crew-AP pool and the hull could be driven away from its operator, leaving a ghost footprint); an exploded borg clears its dead operator's `borg_id`; `Vehicle.seats` is allocated on construction; `VehicleDB.tank.durability` now reads 8 like `VEHICLE_COMPONENTS` (§16.1). Tests: `run_codec` spawns damaged vehicles, `run_shuttle` fires in zero-g, `run_borg` tries the tank from inside a borg, `run_player_actions` refuses a shot mid-dig on the host only. |
 | 109 | Batch 14 (the "Isotope issues fix 2" report) — every network action carries the host's board hash and a guest that disagrees, refuses an accepted action, or has dice left over pulls the host's full state and continues (`K_RESYNC` / `K_STATE`, §22.1); the match result is declared by the host only (`K_OVER`); the dice window survives a play started on top of a waiting one (§18.5); the players' initiative order is a dice shuffle, Player A is no longer first by right (§3.2) — and a match with civilians in which both armies are dead no longer hangs the end-of-turn on an all-neutral rotation; boarding a shuttle always offers the seat choice with the driver's seat labelled, and a seat-mounted drone station takes its drone along when the shuttle moves (§16.7); the map editor has undo/redo (§19); a guest entering the lobby asks the host for the snapshot, the host caches the selected map and draws big previews at a pixel per cell (§22.4); Black and White join the palette and the colour swatch is a square; tests: a fourth two-process net pair on the town map with a deliberately corrupted guest board that must recover, and the other pairs are order-agnostic |

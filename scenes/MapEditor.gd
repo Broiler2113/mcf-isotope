@@ -531,7 +531,12 @@ func _draw() -> void:
 				continue
 			var o := top_left + Vector2(x, y) * cs
 			if draw_tags:
-				if not Sprites.draw_texture_override(self, fid, o, cs):
+				if not Sprites.draw_feature(self, fid, Rect2(o, Vector2(cs, cs)),
+						func(dx: int, dy: int) -> bool:
+							var nx := x + dx
+							var ny := y + dy
+							return nx >= 0 and ny >= 0 and nx < w and ny < map.height \
+									and feats[ny * w + nx] == fid):
 					draw_string(font, o + Vector2(cs * 0.12, cs - cs * 0.18), _feature_tag(fid),
 						HORIZONTAL_ALIGNMENT_LEFT, -1, tag_fs, Color(0.8, 0.8, 0.9))
 			elif covers[row + x] < MCF.WALL_HEIGHT:
@@ -577,13 +582,11 @@ func _draw_preview(cs: float) -> void:
 		if map.in_bounds(c):
 			draw_rect(Rect2(_cell_origin(c), Vector2(cs, cs)), Color(1.0, 0.9, 0.2, 0.35))
 
-## Суффикс стороны для картинок-замен — тот же, что и в бою (#55).
+## Суффикс стороны для картинок-замен — фракция по номеру стороны (batch 17, item 13).
 func _spawn_suffix(owner_id: int) -> String:
 	if MCF.is_neutral(owner_id):
 		return "_neutral"
-	if MCF.is_player(owner_id):
-		return "_p%d" % (owner_id + 1)
-	return ""
+	return "_" + Roster.faction_key(owner_id)
 
 func _feature_tag(fid: String) -> String:
 	return {

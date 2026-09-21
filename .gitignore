@@ -8,3 +8,7 @@ export_presets.cfg
 # macOS
 .DS_Store
 ._*
+graphify-out/*
+!graphify-out/rebuild.py
+!graphify-out/.gd_extract.py
+!graphify-out/vis-network.min.js

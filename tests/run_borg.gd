@@ -66,7 +66,7 @@ func _board_stats_and_exit() -> void:
 	ck(sn.borg_id == b.id and sn.coord == Vector2i(5, 5) and st.grid.cell(Vector2i(5, 5)).occupant == sn,
 			"operator stands in the borg's cell")
 	ck(st.grid.vehicle_at(Vector2i(5, 5)) == -1, "manned borg is not a hull on the grid (transparent)")
-	ck(sn.max_ap() == 3 and sn.remaining_ap == 2, "3 AP pool, 1 spent on boarding (%d)" % sn.remaining_ap)
+	ck(sn.max_ap() == 3 and sn.remaining_ap == 3, "3 AP pool, boarding is free (%d)" % sn.remaining_ap)
 	ck(sn.speed() == 9 and sn.fire_range() == 12.0 and sn.rate_of_fire() == 4, "borg numbers: 9 move, 12 range, RoF 4")
 	ck(sn.armor() == 2, "sniper armour 4+ becomes 2+ (%d)" % sn.armor())
 	ck(sn.stats.special_ability_id == MCF.ABILITY_SNIPER, "ability stays")
@@ -166,12 +166,10 @@ func _destruction() -> void:
 	r._damage_component(b, MCF.COMP_HULL, 2, "test", res)
 	ck(not sn.is_alive(), "operator dies with the borg")
 	var exploded := res.log_lines.filter(func(l): return l.find("explodes") >= 0).size() > 0
+	ck(b.wrecked and st.grid.vehicle_at(Vector2i(5, 5)) == b.id, "borg leaves a wreck on its cell, exploded or not (batch 17)")
 	if exploded:
-		ck(not st.vehicles.has(b.id), "exploded borg leaves nothing")
-	else:
-		ck(b.wrecked and st.grid.vehicle_at(Vector2i(5, 5)) == b.id, "unexploded borg leaves a wreck on its cell")
-	# The body is not «in» a vehicle any more — an exploded borg is gone from state.vehicles,
-	# and a dangling borg_id would point at nothing.
+		ck(res.fx.any(func(f): return f.get("fx", "") == "debris"), "exploded borg scorches the floor")
+	# The body is not «in» a vehicle any more, and a dangling borg_id would point at nothing.
 	ck(sn.borg_id == -1, "dead operator's borg_id is cleared (%d)" % sn.borg_id)
 
 func _overtake_a_dead_operator() -> void:

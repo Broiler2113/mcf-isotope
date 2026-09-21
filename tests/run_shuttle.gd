@@ -65,6 +65,9 @@ func _boarding_seats_and_driver_ap() -> void:
 	ck(st.grid.cell(li.coord).occupant == li and st.grid.vehicle_at(li.coord) == sh.id, "passenger occupies a hull cell")
 	res = r.resolve(VehicleBoardIntent.new(sn.id, sh.id, 2))
 	ck(res.ok and sh.seat_of(sn.id) == 2 and sn.coord == sh.seat_cell(2), "second picks seat 3")
+	ck(li.remaining_ap == 2 and sn.remaining_ap == 2, "boarding is free (batch 17): %d/%d" % [li.remaining_ap, sn.remaining_ap])
+	li.remaining_ap = 1  # the rest of the scenario was written for one AP left each
+	sn.remaining_ap = 1
 	ck(r.vehicle_ap(sh) == 1, "vehicle AP is the driver's remaining AP (%d)" % r.vehicle_ap(sh))
 	# move 8 cells east: costs the driver 1 AP, leaves 7 cells of credit
 	res = r.resolve(VehicleMoveIntent.new(sh.id, Vector2i(1, 0), 8))
