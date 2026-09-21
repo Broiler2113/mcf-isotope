@@ -754,7 +754,7 @@ func _slot_row(s: Roster.Slot) -> Control:
 	var kind := OptionButton.new()
 	for pair in [[Roster.SlotKind.OPEN, "Open"], [Roster.SlotKind.CLOSED, "Closed"],
 			[Roster.SlotKind.HUMAN, "Player"], [-10, "AI - Easy"], [-11, "AI - Medium"],
-			[-12, "AI - Hard"]]:
+			[-12, "AI - Hard"], [-13, "AI - Learned"]]:
 		kind.add_item(str(pair[1]))
 	kind.select(_kind_index(s))
 	kind.item_selected.connect(_on_slot_kind.bind(s.id))
@@ -1007,7 +1007,7 @@ func _kind_index(s: Roster.Slot) -> int:
 		Roster.SlotKind.OPEN: return 0
 		Roster.SlotKind.CLOSED: return 1
 		Roster.SlotKind.HUMAN: return 2
-		Roster.SlotKind.AI: return 3 + clampi(s.ai_difficulty, 0, 2)
+		Roster.SlotKind.AI: return 3 + clampi(s.ai_difficulty, 0, 3)
 	return 0
 
 func _on_add_slot() -> void:
@@ -1056,7 +1056,7 @@ func _on_slot_kind(index: int, slot_id: int) -> void:
 		2: s.kind = Roster.SlotKind.HUMAN
 		_:
 			s.kind = Roster.SlotKind.AI
-			s.ai_difficulty = clampi(index - 3, 0, 2)
+			s.ai_difficulty = clampi(index - 3, 0, 3)
 	if s.kind != Roster.SlotKind.HUMAN and s.peer_id > 1:
 		s.peer_id = -1
 	_lobby_changed()

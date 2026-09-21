@@ -206,6 +206,13 @@ func _dispatch(intent: Intent) -> ActionResult:
 		state.combat_started = true
 	return result
 
+## Все ЗАКОННЫЕ намерения стороны прямо сейчас (RL v1, spec §4): маска легальности для
+## обучаемой политики. Сам перечислитель живёт в LegalIntents.gd — этот файл и так велик;
+## здесь лишь точка входа, о которой говорит спецификация. Точность (каждое
+## перечисленное намерение проходит resolve()) проверяет tests/run_legal_intents.gd.
+func legal_intents(side: int) -> Array:
+	return LegalIntents.enumerate(self, side)
+
 ## Маршрутизация намерения к его резолверу — без побочных эффектов (см. _dispatch).
 func _route(intent: Intent) -> ActionResult:
 	if intent is EndTurnIntent:

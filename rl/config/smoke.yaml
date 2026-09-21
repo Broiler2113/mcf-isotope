@@ -1,0 +1,25 @@
+# Smoke run (2 envs, tiny rollouts): proves the pipeline on any box. Real training: laptop.yaml.
+# Phase A, curriculum stage 1 (Q5: civilians and random events off), round cap 10 (Q4).
+n_envs: 2
+maps:
+  - rl/maps/arena_34x26.json
+stage: 1
+phase: A
+opponent: normal
+round_cap: 10
+civilians: false
+random_events: false
+fog: standard
+friendly_fire: true
+rollout_steps: 128
+epochs: 3
+minibatch: 32
+lr: 0.0003
+total_steps: 20000000
+checkpoint_every: 4
+eval_every: 8
+eval_games: 4
+replays_per_checkpoint: 2
+map_rotate_matches: 5
+seed: 1
+torch_threads: 1

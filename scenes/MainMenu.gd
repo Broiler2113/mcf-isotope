@@ -44,6 +44,17 @@ func _ready() -> void:
 	NetHandoff.discard()
 	# И недоигранный файл тоже: в меню приходят, чтобы начать заново (M12).
 	SaveHandoff.discard()
+	# Панель обучения RL (spec §11.7) открывает повтор снаружи:
+	#   godot --path . -- --replay=/abs/path.mcfr
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--replay="):
+			var data := ReplayFile.read(arg.trim_prefix("--replay="))
+			if not data.is_empty():
+				print("Opening replay from the command line: %s" % arg.trim_prefix("--replay="))
+				SaveHandoff.pending_replay = data
+				MapHandoff.pending = null
+				get_tree().change_scene_to_file.call_deferred(MAIN_SCENE)
+				return
 
 	# Гарантированно чёрная подложка ПОД параллаксом (item 3): даже если звёздный слой
 	# по какой-то причине не растянулся, меню всё равно чёрное, а не годотовское серое.
