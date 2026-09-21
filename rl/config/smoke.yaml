@@ -1,6 +1,5 @@
-# Smoke run on the VPS (D2: real training happens on the GPU workstation).
+# Smoke run (2 envs, tiny rollouts): proves the pipeline on any box. Real training: laptop.yaml.
 # Phase A, curriculum stage 1 (Q5: civilians and random events off), round cap 10 (Q4).
-godot: godot
 n_envs: 2
 maps:
   - rl/maps/arena_34x26.json

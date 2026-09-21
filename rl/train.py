@@ -54,7 +54,8 @@ UNIT_NAMES = ["light_infantry", "heavy_infantry", "machinegunner", "sniper", "an
               "tank", "shuttle", "borg"]
 
 DEFAULTS = dict(
-    godot="godot", n_envs=2, maps=["rl/maps/arena_34x26.json"], stage=1,
+    godot=os.environ.get("GODOT", "godot"),   # rl/.env sets GODOT; a config's godot: overrides
+    n_envs=2, maps=["rl/maps/arena_34x26.json"], stage=1,
     phase="A", opponent="normal", pool_ai_fraction=0.15, pool_size=6,
     round_cap=10, civilians=False, random_events=False, fog="standard", friendly_fire=True,
     rollout_steps=256, epochs=4, minibatch=32, lr=3e-4, gamma=0.99, lam=0.95, clip=0.2,
@@ -157,12 +158,27 @@ class Trainer:
     def save(self, tag: str | None = None) -> str:
         path = os.path.join(self.run_dir, f"ckpt_{self.global_step:09d}.pt" if tag is None else tag)
         tmp = path + ".tmp"
-        torch.save(self.state_dict(), tmp)
+        sd = self.state_dict()
+        torch.save(sd, tmp)
         os.replace(tmp, path)          # never leave a half-written checkpoint behind
         latest = os.path.join(self.run_dir, "latest.pt")
-        torch.save(self.state_dict(), latest + ".tmp")
+        torch.save(sd, latest + ".tmp")
         os.replace(latest + ".tmp", latest)
+        # Sidecar for the dashboard (11.4): everything but the weights, readable without torch.
+        meta = {k: v for k, v in sd.items() if k not in ("model", "opt", "rng")}
+        with open(path + ".json", "w") as f:
+            json.dump(meta, f)
         return path
+
+    def write_status(self, state: str):
+        """Heartbeat for the dashboard: who is training, how far, and whether the pid is alive."""
+        st = dict(state=state, pid=os.getpid(), step=self.global_step, update=self.update,
+                  matches=self.matches_done, phase=self.cfg["phase"], stage=self.cfg["stage"],
+                  time=time.time())
+        tmp = os.path.join(self.run_dir, "status.json.tmp")
+        with open(tmp, "w") as f:
+            json.dump(st, f)
+        os.replace(tmp, os.path.join(self.run_dir, "status.json"))
 
     def load(self, path: str, keep_cfg: bool = False):
         ck = torch.load(path, map_location=self.device, weights_only=False)
@@ -436,8 +452,14 @@ class Trainer:
                         k = played + j
                         if record_dir is not None and k < keep:
                             os.makedirs(record_dir, exist_ok=True)
-                            self.envs.envs[j].save_replay(
-                                os.path.join(record_dir, f"vs_{opponent}_{k + 1}_{results[-1]}.mcfr"))
+                            rp = os.path.join(record_dir, f"vs_{opponent}_{k + 1}_{results[-1]}.mcfr")
+                            if self.envs.envs[j].save_replay(rp):
+                                with open(rp + ".json", "w") as f:
+                                    json.dump(dict(branch=os.path.basename(self.run_dir),
+                                                   step=self.global_step, opponent=opponent,
+                                                   result=results[-1], value_diff=info["value_diff"],
+                                                   rounds=info["round"], map=cfgs[j].map_path,
+                                                   side=cfgs[j].side, time=time.time()), f)
                     else:
                         still.append(j)
                 active = still
@@ -461,13 +483,19 @@ class Trainer:
         stop_flag = os.path.join(self.run_dir, "STOP")
 
         def on_signal(signum, frame):
+            if signum == signal.SIGHUP:
+                # The terminal / tmux pane (and the tee behind stdout) is gone: keep logging
+                # straight into the branch log so the graceful stop below can still print.
+                sys.stdout = sys.stderr = open(os.path.join(RUNS, f"{os.path.basename(self.run_dir)}.log"), "a")
             print(f"[train] signal {signum}: finishing this update, then saving", flush=True)
             self.stop_requested = True
         signal.signal(signal.SIGINT, on_signal)
         signal.signal(signal.SIGTERM, on_signal)
+        signal.signal(signal.SIGHUP, on_signal)   # tmux kill-session / closed terminal
         print(f"[train] branch={os.path.basename(self.run_dir)} phase={cfg['phase']} "
               f"stage={cfg['stage']} maps={len(cfg['maps'])} envs={cfg['n_envs']} "
               f"step={self.global_step} update={self.update}", flush=True)
+        self.write_status("running")
         try:
             while self.global_step < cfg["total_steps"] and not self.stop_requested:
                 try:
@@ -480,6 +508,7 @@ class Trainer:
                 t0 = time.time()
                 losses = self.ppo_update(buffers)
                 self.log(info, losses, time.time() - t0)
+                self.write_status("running")
                 if self.update % cfg["checkpoint_every"] == 0:
                     path = self.save()
                     print(f"[train] checkpoint {path}", flush=True)
@@ -494,12 +523,16 @@ class Trainer:
             print(f"[train] final checkpoint {path}", flush=True)
             self.envs.close()
             self.writer.close()
+            self.write_status("stopped")
 
     def run_eval(self):
         rec = os.path.join(self.run_dir, "replays", f"checkpoint_{self.global_step:09d}")
+        row = {"step": self.global_step, "update": self.update, "time": time.time(),
+               "phase": self.cfg["phase"], "stage": self.cfg["stage"]}
         for opp in ("normal", "hard"):
             r = self.evaluate(opp, self.cfg["eval_games"], record_dir=rec,
                               keep=self.cfg["replays_per_checkpoint"])
+            row.update({f"{k}_{opp}": v for k, v in r.items()})
             self.writer.add_scalar(f"eval/winrate_{opp}", r["winrate"], self.global_step)
             self.writer.add_scalar(f"eval/drawrate_{opp}", r["drawrate"], self.global_step)
             self.writer.add_scalar(f"eval/value_diff_{opp}", r["value_diff"], self.global_step)
@@ -507,8 +540,7 @@ class Trainer:
             print(f"[eval] step={self.global_step} vs {opp}: win {r['winrate']:.2f} "
                   f"draw {r['drawrate']:.2f} diff {r['value_diff']:+.2f} rounds {r['rounds']:.1f}", flush=True)
         with open(os.path.join(self.run_dir, "eval_log.jsonl"), "a") as f:
-            f.write(json.dumps({"step": self.global_step, "update": self.update, "time": time.time(),
-                                **{k: v for k, v in r.items()}}) + "\n")
+            f.write(json.dumps(row) + "\n")
 
     def log(self, info: dict, losses: dict, update_secs: float):
         st = info["stats"]
@@ -555,12 +587,36 @@ def run_dir_for(branch: str) -> str:
     return os.path.join(RUNS, branch)
 
 
+def refuse_if_running(rd: str):
+    """Two trainers on one branch would race on latest.pt and the TensorBoard log."""
+    try:
+        with open(os.path.join(rd, "status.json")) as f:
+            st = json.load(f)
+        if st.get("state") == "running":
+            os.kill(int(st["pid"]), 0)
+            sys.exit(f"{os.path.basename(rd)} is already training (pid {st['pid']}) — stop it first")
+    except (OSError, ValueError, KeyError):
+        pass
+
+
 def cmd_start(a):
     cfg = load_config(a.config)
     rd = run_dir_for(a.branch)
+    refuse_if_running(rd)
     if os.path.exists(os.path.join(rd, "latest.pt")):
         sys.exit(f"branch {a.branch} exists — use resume, or pick another name")
-    Trainer(rd, cfg).train()
+    Trainer(rd, cfg, pick_device(cfg)).train()
+
+
+def pick_device(cfg: dict) -> str:
+    d = cfg.get("device", "cpu")
+    if d != "auto":
+        return d
+    if torch.cuda.is_available():
+        return "cuda"
+    if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
 
 
 def cmd_resume(a):
@@ -568,8 +624,10 @@ def cmd_resume(a):
     latest = os.path.join(rd, "latest.pt")
     if not os.path.exists(latest):
         sys.exit(f"no checkpoint in {rd}")
+    refuse_if_running(rd)
     cfg = load_config(a.config) if a.config else None
-    t = Trainer(rd, cfg or load_config(os.path.join(rd, "config.yaml")))
+    cfg = cfg or load_config(os.path.join(rd, "config.yaml"))
+    t = Trainer(rd, cfg, pick_device(cfg))
     t.load(latest, keep_cfg=True)
     t.train()
 
@@ -580,7 +638,7 @@ def cmd_fork(a):
         sys.exit(f"branch {a.branch} already exists")
     src_cfg = os.path.join(os.path.dirname(os.path.abspath(a.checkpoint)), "config.yaml")
     cfg = load_config(a.config or (src_cfg if os.path.exists(src_cfg) else None))
-    t = Trainer(rd, cfg)
+    t = Trainer(rd, cfg, pick_device(cfg))
     t.load(a.checkpoint, keep_cfg=True)
     t.parent = os.path.abspath(a.checkpoint)
     t.save()

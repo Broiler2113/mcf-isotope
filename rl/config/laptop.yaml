@@ -1,8 +1,10 @@
-# Phase A on the GPU workstation (D2). Size n_envs to the core count minus two.
-# Graduation to Phase B, growing the map pool, or a new curriculum stage = edit this
-# file, then `train.py resume <branch> --config rl/config/workstation.yaml` (8.2).
-godot: godot
-n_envs: 12
+# Phase A on the laptop (Apple Silicon). Godot env processes are the bottleneck, not the
+# network: n_envs ≈ performance cores minus two. device: cpu | mps | cuda | auto (cpu is
+# the safe default; try mps and compare speed/update_secs on the dashboard).
+# Graduation to Phase B, growing the map pool, or a new curriculum stage = edit the
+# branch's config on the dashboard (Apply config → stop, checkpoint, resume) (8.2, 11.3).
+device: cpu
+n_envs: 6
 maps:
   - rl/maps/arena_34x26.json
 stage: 1
