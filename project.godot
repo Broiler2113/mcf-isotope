@@ -39,4 +39,4 @@ environment/defaults/default_clear_color=Color(0, 0, 0, 1)
 ; trainer, once to a log nobody reads. Overnight it reached 6.5 GB in one file and 7.4 GB
 ; in the directory, consuming ~1.4 GB/hr and very nearly stopping training on a full disk.
 ; The trainer keeps its own logs under rl/runs/, so nothing is lost by turning this off.
-debug/file_logging/enable_file_logging=false
+file_logging/enable_file_logging=false
