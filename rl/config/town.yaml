@@ -38,7 +38,10 @@ friendly_fire: true
 rollout_steps: 256
 epochs: 4
 minibatch: 32
-lr: 0.0003
+lr: 0.0001           # was 3e-4, which ran at KL 0.077 and clipfrac 42%. target_kl pulled
+                     # KL back 5x on its own but kept braking 4 updates in 6 and clipfrac
+                     # stayed ~40% — per the rule in train.py that is the signal to lower
+                     # the rate rather than loosen the target.
 gamma: 0.99
 lam: 0.95
 clip: 0.2
@@ -46,8 +49,9 @@ ent_coef: 0.01
 vf_coef: 0.5
 total_steps: 50000000
 checkpoint_every: 10
-eval_every: 20       # evaluations are not free: an update is ~126 s and an 8-game eval
-                     # ~180 s, so testing every update would cost ~60% of throughput
+eval_every: 10       # evaluations are not free: an update is ~60-130 s and an 8-game eval
+                     # ~180 s, so every 10th update spends roughly a sixth of the time
+                     # testing. Every update would cost ~60% of throughput.
 eval_games: 8        # a town match is minutes, not seconds — 24 would cost an hour per eval
 eval_opponents: [hard]   # HARD only: NORMAL measured the same thing (AIController splits them
                          # on one shot-scoring tiebreak) and HARD is the graduation opponent

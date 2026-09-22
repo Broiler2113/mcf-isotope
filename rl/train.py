@@ -65,6 +65,14 @@ DEFAULTS = dict(
     civilians=False, random_events=False, fog="standard", friendly_fire=True,
     rollout_steps=256, epochs=4, minibatch=32, lr=3e-4, gamma=0.99, lam=0.95, clip=0.2,
     ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5, total_steps=20_000_000,
+    # Stop an update early once the policy has moved this far (mean KL over an epoch).
+    # Without it town-3 ran at KL 0.077 and clipfrac 42% against the usual 0.01 / 10-30%:
+    # per-step rewards there are ~1e-4, and normalising advantages by a near-zero standard
+    # deviation turns that noise into unit-scale gradients. The result was a policy flung
+    # around every update - `shoot` went 2.4% -> 5.3% -> 0.1% while entropy bounced between
+    # 4.5 and 6.2 - which reads as "not learning" but is really "learning something new and
+    # unrelated each time". 0 disables the check.
+    target_kl=0.02,
     checkpoint_every=5, eval_every=10, eval_games=6, replays_per_checkpoint=2,
     # Which scripted opponents an evaluation measures against. HARD only, because NORMAL
     # was very nearly the same measurement: six arena games came back identical to their
@@ -543,11 +551,13 @@ class Trainer:
         if N == 0:
             self.update += 1
             return {k: 0.0 for k in ("policy_loss", "value_loss", "entropy",
-                                     "approx_kl", "clipfrac")}
+                                     "approx_kl", "clipfrac", "epochs_run")}
         advs = (advs - advs.mean()) / (advs.std() + 1e-8)
         mb = cfg["minibatch"]
         out = defaultdict(list)
-        for _ in range(cfg["epochs"]):
+        stopped_at = cfg["epochs"]
+        for epoch in range(cfg["epochs"]):
+            epoch_kl = []
             order = np.random.permutation(N)
             for start in range(0, N, mb):
                 idx = order[start:start + mb]
@@ -571,14 +581,23 @@ class Trainer:
                 torch.nn.utils.clip_grad_norm_(self.net.parameters(), cfg["max_grad_norm"])
                 self.opt.step()
                 with torch.no_grad():
+                    kl = (old_logp - logp).mean().item()
+                    epoch_kl.append(kl)
                     out["policy_loss"].append(pg.item())
                     out["value_loss"].append(vloss.item())
                     out["entropy"].append(entropy.item())
-                    out["approx_kl"].append((old_logp - logp).mean().item())
+                    out["approx_kl"].append(kl)
                     out["clipfrac"].append(((ratio - 1).abs() > cfg["clip"]).float().mean().item())
+            # One epoch is the granularity: checking per minibatch would abandon an update
+            # halfway through a shuffle and bias which samples ever get used.
+            if cfg["target_kl"] and float(np.mean(epoch_kl)) > cfg["target_kl"]:
+                stopped_at = epoch + 1
+                break
         self.global_step += N
         self.update += 1
-        return {k: float(np.mean(v)) for k, v in out.items()}
+        res = {k: float(np.mean(v)) for k, v in out.items()}
+        res["epochs_run"] = float(stopped_at)
+        return res
 
     # -- evaluation (10.3): greedy, fixed seeds, not training data --
     def evaluate(self, opponent: str, games: int, record_dir: str | None = None,
@@ -846,6 +865,9 @@ class Trainer:
         w.add_scalar("mem/run_dir_mb", self.disk_mb(), s)
         for k, v in losses.items():
             w.add_scalar(f"ppo/{k}", v, s)
+        # epochs_run below cfg["epochs"] means target_kl braked the update. Persistently
+        # braking is the signal to lower lr, not to raise target_kl.
+        w.add_scalar("ppo/epochs_run", losses.get("epochs_run", self.cfg["epochs"]), s)
         if st["win"]:
             by_opp = defaultdict(list)
             by_map = defaultdict(list)
