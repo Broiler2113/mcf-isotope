@@ -9,6 +9,20 @@ LOG="$HERE/runs/supervisor-$BRANCH.log"
 say() { echo "$(date '+%F %T') $*" >> "$LOG"; }
 say "supervising $BRANCH"
 while true; do
+  # Godot mirrors stdout - which for the env servers IS the JSON protocol - into
+  # app_userdata/.../logs/godot.log, at ~1.5 GB/hr with four envs. Two attempts to turn
+  # that off through project.godot did nothing (the second used the correct
+  # section-stripped key and still had no effect, so the setting appears not to apply to
+  # `--script` runs). Truncating on a timer is crude but certain, and the file holds
+  # nothing the trainer has not already consumed.
+  LOGF="$HOME/Library/Application Support/Godot/app_userdata/MCF Isotope/logs/godot.log"
+  if [ -f "$LOGF" ] && [ "$(wc -c < "$LOGF")" -gt 209715200 ]; then
+    : > "$LOGF"
+    say "truncated godot.log (was >200MB)"
+  fi
+  find "$HOME/Library/Application Support/Godot/app_userdata/MCF Isotope/logs" \
+       -name 'godot2*.log' -delete 2>/dev/null
+
   [ -f "$HERE/runs/$BRANCH/SUPERVISOR_OFF" ] && { sleep 60; continue; }
   verdict=$(python3 - "$HERE/runs/$BRANCH/status.json" <<'PY'
 import json, os, sys
