@@ -2,10 +2,10 @@
 
 Runs next to the trainer on the same machine and reads what it writes under rl/runs/:
 TensorBoard event files (11.2), eval_log.jsonl, ckpt_*.pt.json sidecars (11.4), status.json
-heartbeats, replay sidecars (11.7). Controls go through rl/run.sh (tmux) - the dashboard is a
+heartbeats, replay sidecars (11.7). Controls go through rl/run.sh (nohup + pid files) - the dashboard is a
 UI over the v1 launcher, not a second trainer.
 
-    bash rl/run.sh up          # TensorBoard + this dashboard in tmux
+    bash rl/run.sh up          # TensorBoard + this dashboard in the background
     MCF_RLM_PASSWORD=... streamlit run rl/dashboard.py --server.port 8501
 """
 from __future__ import annotations

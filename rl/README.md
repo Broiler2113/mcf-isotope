@@ -25,23 +25,26 @@ tests/run_learned_controller.gd   fallback path (always) and live path (with MCF
 ## Setup (laptop = trainer + dashboard; the site is a tunnel to it)
 
 ```
-bash rl/setup.sh [<tunnel-token>]   # venv (CPU/MPS torch), tmux, cloudflared, rl/.env, Godot import
+bash rl/setup.sh [<tunnel-token>]   # uv + venv (CPU/MPS torch), Godot 4.7, rl/.env, cloudflared
 ```
 
-`rl/.env` (never committed) holds `MCF_RLM_PASSWORD` (the dashboard login, generated once),
-`GODOT` (binary path) and `VENV`. Godot 4.7 must be installed; on macOS setup finds
-`/Applications/Godot.app`. With a tunnel token the script also runs
-`cloudflared service install`, which makes **rlm.mindcontrolfactor.com** reach this machine's
-`:8501` from anywhere, at boot, for as long as the machine is on. The tunnel (`mcf-rlm`) and
-its DNS record live in Cloudflare; `rl/tools/cf_tunnel.sh` recreates them from an API token.
+No sudo and no Homebrew needed: uv goes to `~/.local/bin`, Godot to `~/Applications`
+(macOS) or `~/.local/bin` (Linux), cloudflared to `~/.local/bin`. `rl/.env` (never
+committed) holds `MCF_RLM_PASSWORD` (the dashboard login, generated once), `GODOT`, `VENV`
+and `TUNNEL_TOKEN`. With a tunnel token, macOS gets a user LaunchAgent
+(`com.mcf.rlm-tunnel`, starts at login) that makes **rlm.mindcontrolfactor.com** reach
+this machine's `:8501` for as long as it is on; on Linux `run.sh up` starts the connector.
+The tunnel (`mcf-rlm`) and its DNS record live in Cloudflare; `rl/tools/cf_tunnel.sh`
+recreates them from an API token.
 
 ## Running
 
 ```
-bash rl/run.sh up                                        # tmux: TensorBoard :6006 + dashboard :8501
+bash rl/run.sh up                                        # TensorBoard :6006 + dashboard :8501 (background)
 bash rl/run.sh start rl/config/laptop.yaml phaseA-1      # or press Start on the dashboard
-bash rl/run.sh attach                                    # watch; Ctrl-b d to detach
+bash rl/run.sh logs phaseA-1                             # tail the trainer log
 bash rl/run.sh status
+bash rl/run.sh down                                      # everything off; trainers checkpoint first
 bash rl/run.sh stop phaseA-1                             # checkpoint after this update, exit
 bash rl/run.sh resume phaseA-1 [new-config.yaml]         # continue; new config = graduation
 bash rl/run.sh restart phaseA-1 new-config.yaml          # stop → wait for checkpoint → resume
@@ -59,7 +62,7 @@ with outstanding tags and "open in the game" (§11.7), per-map trends (§11.8). 
 `rl/run.sh`, so anything it does you can also do from the terminal. TensorBoard stays on
 **127.0.0.1:6006** as the raw view.
 
-Ctrl-C / SIGTERM / the `STOP` flag file all finish the current update, save a checkpoint,
+SIGTERM / SIGHUP / the `STOP` flag file all finish the current update, save a checkpoint,
 and terminate every Godot process (they run in their own process group).
 
 ## What is where

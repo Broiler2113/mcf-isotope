@@ -30,6 +30,7 @@ class EpisodeConfig:
     side: int = 0
     opponent: int = NORMAL
     round_cap: int = 10
+    max_steps: int = 3000        # env steps (both sides) before the episode is called a draw
     civilians: bool = False
     random_events: bool = False
     fog: int = FOG_STANDARD
@@ -39,7 +40,7 @@ class EpisodeConfig:
     def to_cmd(self) -> dict:
         return {
             "cmd": "reset", "map": self.map_path, "seed": self.seed, "side": self.side,
-            "opponent": self.opponent, "round_cap": self.round_cap,
+            "opponent": self.opponent, "round_cap": self.round_cap, "max_steps": self.max_steps,
             "civilians": self.civilians, "random_events": self.random_events,
             "fog": self.fog, "friendly_fire": self.friendly_fire, "record": self.record,
         }

@@ -57,7 +57,7 @@ DEFAULTS = dict(
     godot=os.environ.get("GODOT", "godot"),   # rl/.env sets GODOT; a config's godot: overrides
     n_envs=2, maps=["rl/maps/arena_34x26.json"], stage=1,
     phase="A", opponent="normal", pool_ai_fraction=0.15, pool_size=6,
-    round_cap=10, civilians=False, random_events=False, fog="standard", friendly_fire=True,
+    round_cap=10, max_steps=3000, civilians=False, random_events=False, fog="standard", friendly_fire=True,
     rollout_steps=256, epochs=4, minibatch=32, lr=3e-4, gamma=0.99, lam=0.95, clip=0.2,
     ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5, total_steps=20_000_000,
     checkpoint_every=5, eval_every=10, eval_games=6, replays_per_checkpoint=2,
@@ -227,7 +227,7 @@ class Trainer:
         self.episode_seed += 1
         cfg = EpisodeConfig(
             map_path=maps[self.map_idx], seed=self.episode_seed,
-            side=self.episode_seed % 2, opponent=opp, round_cap=self.cfg["round_cap"],
+            side=self.episode_seed % 2, opponent=opp, round_cap=self.cfg["round_cap"], max_steps=self.cfg.get("max_steps", 3000),
             civilians=self.cfg["civilians"], random_events=self.cfg["random_events"],
             fog=FOGS[self.cfg["fog"]], friendly_fire=self.cfg["friendly_fire"], record=record,
         )
@@ -426,7 +426,7 @@ class Trainer:
                 k = played + j
                 cfgs.append(EpisodeConfig(
                     map_path=self.cfg["maps"][k % len(self.cfg["maps"])], seed=seed_base + k,
-                    side=k % 2, opponent=OPPONENTS[opponent], round_cap=self.cfg["round_cap"],
+                    side=k % 2, opponent=OPPONENTS[opponent], round_cap=self.cfg["round_cap"], max_steps=self.cfg.get("max_steps", 3000),
                     civilians=self.cfg["civilians"], random_events=self.cfg["random_events"],
                     fog=FOGS[self.cfg["fog"]], friendly_fire=self.cfg["friendly_fire"],
                     record=record_dir is not None and k < keep))
@@ -484,14 +484,14 @@ class Trainer:
 
         def on_signal(signum, frame):
             if signum == signal.SIGHUP:
-                # The terminal / tmux pane (and the tee behind stdout) is gone: keep logging
+                # The terminal is gone (closed window / nohup-less run): keep logging
                 # straight into the branch log so the graceful stop below can still print.
                 sys.stdout = sys.stderr = open(os.path.join(RUNS, f"{os.path.basename(self.run_dir)}.log"), "a")
             print(f"[train] signal {signum}: finishing this update, then saving", flush=True)
             self.stop_requested = True
         signal.signal(signal.SIGINT, on_signal)
         signal.signal(signal.SIGTERM, on_signal)
-        signal.signal(signal.SIGHUP, on_signal)   # tmux kill-session / closed terminal
+        signal.signal(signal.SIGHUP, on_signal)   # closed terminal
         print(f"[train] branch={os.path.basename(self.run_dir)} phase={cfg['phase']} "
               f"stage={cfg['stage']} maps={len(cfg['maps'])} envs={cfg['n_envs']} "
               f"step={self.global_step} update={self.update}", flush=True)
