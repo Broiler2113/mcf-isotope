@@ -78,6 +78,12 @@ const FREE_ACTIONS_PER_UNIT := 6
 ## max_steps. Общий бюджет режет именно это; для честной игры он щедр — перекладывают
 ## пленников и тела единицы юнитов, а не рота.
 const FREE_ACTIONS_PER_TURN := 48
+## Сколько клеток за ход сторона может перекопать (dig). Без потолка политика закапывает
+## пол-карты: dig шёл вторым по частоте после move — 14.5% всех действий, — а получившиеся
+## траншеи потом мешают её же манёврам. Копать по-прежнему можно, но как приём, а не как
+## образ жизни. Потолок структурный, а не через награду: штраф за копание политика
+## обобщила бы на «не трогать местность вообще», а окоп под огнём — правильный ход.
+const DIGS_PER_TURN := 8
 
 var state: GameState = null
 var resolver: GameActionResolver = null
@@ -114,6 +120,8 @@ var _free_total: int = 0
 ## Сколько раз за текущий ход уже начислялся бонус за САМО действие (выстрел/машина).
 ## Обнуляется там же, где счётчики бесплатных действий, — на смене хода.
 var _shaping_used: int = 0
+## Сколько клеток уже перекопано за этот ход; см. DIGS_PER_TURN.
+var _digs_used: int = 0
 
 func _initialize() -> void:
 	while true:
@@ -203,6 +211,7 @@ func _reset(req: Dictionary) -> Dictionary:
 	_free_turn = ""
 	_free_total = 0
 	_shaping_used = 0
+	_digs_used = 0
 	_advance()
 	return _response(0.0, true)
 
@@ -227,6 +236,8 @@ func _step(req: Dictionary) -> Dictionary:
 		reward += _step_penalty
 		if res.ok:
 			reward += _combat_reward(intent, res, hulls_before)
+			if _kind_of(intent) == "dig":
+				_digs_used += 1
 	if not res.ok:
 		# Не должно случаться (перечислитель точен) — но если случилось, шаг не теряется:
 		# считаем, штрафуем и, чтобы не зациклиться, отдаём ход после серии отказов.
@@ -461,24 +472,27 @@ func _drop_looping(list: Array) -> Array:
 		_free_kinds = {}
 		_free_total = 0
 		_shaping_used = 0
-		return list
-	if _free_count.is_empty():
+		_digs_used = 0
 		return list
 	# Сначала — КТО упёрся в потолок (бюджет стороны исчерпан — значит все, кто вообще
 	# ходил бесплатно). Это дёшево: словарь размером с число отметившихся актёров.
+	var dug_out := _digs_used >= DIGS_PER_TURN
 	var side_done := _free_total >= FREE_ACTIONS_PER_TURN
 	var blocked := {}
 	for key: Variant in _free_count:
 		if side_done or int(_free_count[key]) >= FREE_ACTIONS_PER_UNIT:
 			blocked[key] = true
-	if blocked.is_empty():
+	if blocked.is_empty() and not dug_out:
 		return list
 	# И только теперь фильтр. Порядок важен: _kind_of() зовёт IntentCodec.encode(), а он
 	# строит словарь на КАЖДОЕ намерение. Прогон по всему списку стоил 230 мс на шаг
 	# (276 против 45 до фильтра) — шестикратное замедление среды. Здесь он достаётся
-	# только намерениям упёршихся актёров, которых обычно единицы.
+	# только намерениям упёршихся актёров, которых обычно единицы; лопату же ловим
+	# проверкой класса, она бесплатна.
 	var out: Array = []
 	for intent: Intent in list:
+		if dug_out and intent is DigIntent:
+			continue
 		var key := _actor_key(intent)
 		if key != "" and blocked.has(key) \
 				and _free_kinds.has("%s|%s" % [key, _kind_of(intent)]):
