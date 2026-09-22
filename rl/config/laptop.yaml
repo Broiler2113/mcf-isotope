@@ -31,7 +31,17 @@ total_steps: 50000000
 checkpoint_every: 10
 eval_every: 20
 eval_games: 24
+eval_opponents: [hard]   # HARD only: NORMAL measured the same thing (AIController splits them
+                         # on one shot-scoring tiebreak) and HARD is the graduation opponent
 replays_per_checkpoint: 3
 map_rotate_matches: 5
 seed: 1
 torch_threads: 0
+# --- keeping the machine alive (a branch left alone for a month) ---
+keep_checkpoints: 12       # 4 MB each, one every checkpoint_every updates; 0 = keep all
+milestone_every: 2000000   # kept forever regardless of the line above
+keep_replay_sets: 8
+rollout_budget_mb: 2048    # cut a rollout short rather than grow past this
+mem_limit_mb: 8192         # trainer + its Godot envs; checkpoint and exit before the OOM killer
+max_actors: 0              # arena armies are small enough to enumerate whole
+max_candidates: 0

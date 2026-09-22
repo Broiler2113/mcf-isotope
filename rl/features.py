@@ -125,6 +125,33 @@ def grid_tensor(obs: dict) -> np.ndarray:
     return g
 
 
+class Sparse:
+    """A rollout step's tensors, kept as (index, value) pairs instead of dense arrays.
+
+    Dense, one step of a company-sized map costs 72x64x64 float16 for the grid (590 KB)
+    plus ~5600x94 float32 for the candidate rows (2.1 MB); a 512x6 rollout is then some
+    gigabytes of mostly zeros and the trainer is killed by the OS long before it learns
+    anything. Both tensors are one-hot-heavy — well under a tenth of the entries are
+    non-zero — so the buffer holds only those, and `dense()` rebuilds the full array at
+    minibatch time, where exactly one minibatch is alive at once.
+    """
+    __slots__ = ("idx", "val", "shape")
+
+    def __init__(self, a: np.ndarray):
+        flat = a.reshape(-1)
+        self.idx = np.flatnonzero(flat).astype(np.int32)
+        self.val = flat[self.idx].astype(np.float16)
+        self.shape = a.shape
+
+    @property
+    def nbytes(self) -> int:
+        return self.idx.nbytes + self.val.nbytes
+
+    def dense(self, out: np.ndarray) -> None:
+        """Scatter into `out` — a zeroed view whose last dims match self.shape."""
+        out.reshape(-1)[self.idx] = self.val
+
+
 def flat_vector(obs: dict) -> np.ndarray:
     f = np.zeros(FLAT_DIM, dtype=np.float32)
     cap = max(1, obs["round_cap"])

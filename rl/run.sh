@@ -8,6 +8,8 @@
 #   bash rl/run.sh restart <branch> <config.yaml>  # stop, wait for the checkpoint, resume (11.3)
 #   bash rl/run.sh fork   <ckpt rel. to runs/> <new-branch>
 #   bash rl/run.sh stop   <branch>                 # graceful: checkpoint after this update
+#   bash rl/run.sh pause  <branch>                 # checkpoint and hold; Godot envs stay up
+#   bash rl/run.sh continue <branch>               # release a paused run
 #   bash rl/run.sh status | logs <name> | alive <branch>
 # Reads rl/.env (MCF_RLM_PASSWORD, GODOT, VENV, TUNNEL_TOKEN) — written by rl/setup.sh, never committed.
 set -euo pipefail
@@ -18,6 +20,7 @@ PY="$VENV/bin/python"
 RUNS="$HERE/runs"; mkdir -p "$RUNS"
 TB_PORT="${TB_PORT:-6006}"
 DASH_PORT="${DASH_PORT:-8501}"
+LOG_MAX_MB="${LOG_MAX_MB:-64}"
 export PATH="$HOME/.local/bin:$PATH" GODOT="${GODOT:-godot}" MCF_RL_PYTHON="$PY" PYTHONUNBUFFERED=1
 
 abspath() { ( cd "$(dirname "$1")" && printf '%s/%s\n' "$(pwd)" "$(basename "$1")" ); }   # macOS has no realpath on older releases
@@ -26,14 +29,22 @@ alive() {   # trainer of <branch> still running? (status.json heartbeat + pid ch
   python3 - "$RUNS/$1/status.json" <<'PYEOF'
 import json, os, sys
 try:
-    s = json.load(open(sys.argv[1])); os.kill(int(s["pid"]), 0); sys.exit(0 if s["state"] == "running" else 1)
+    s = json.load(open(sys.argv[1])); os.kill(int(s["pid"]), 0)
+    sys.exit(0 if s["state"] in ("running", "paused") else 1)   # paused is still a live process
 except Exception:
     sys.exit(1)
 PYEOF
 }
+rotate() {  # keep runs/<name>.log under LOG_MAX_MB by moving it aside once, at spawn time
+  local f="$RUNS/$1.log"
+  [ -f "$f" ] || return 0
+  local kb; kb=$(( $(wc -c < "$f") / 1024 ))
+  if [ "$kb" -gt $(( LOG_MAX_MB * 1024 )) ]; then mv -f "$f" "$f.1"; fi   # one generation; .1 is overwritten
+}
 spawn() {  # spawn <name> <command...>: background, log to runs/<name>.log, pid to runs/<name>.pid
   local name="$1"; shift
   if pid_alive "$RUNS/$name.pid"; then echo "$name already running (pid $(cat "$RUNS/$name.pid"))"; return 0; fi
+  rotate "$name"   # a trainer that has crashed and resumed for a month appends forever otherwise
   ( cd "$HERE"; nohup "$@" >> "$RUNS/$name.log" 2>&1 & echo $! > "$RUNS/$name.pid" )   # "cd;" not "cd &&": & must bind to nohup alone so $! is its pid
   echo "$name: pid $(cat "$RUNS/$name.pid"), log $RUNS/$name.log"
 }
@@ -64,9 +75,11 @@ case "${1:-}" in
     echo "restart queued for $2: resumes with $CFG once the current update has checkpointed";;
   fork)    train "$3" fork "$RUNS/$2" --branch "$3";;
   stop)    "$PY" "$HERE/train.py" stop "$2"; rm -f "$RUNS/$2.pid";;
+  pause)    "$PY" "$HERE/train.py" pause "$2";;      # pid stays: a paused run is a live process
+  continue) "$PY" "$HERE/train.py" continue "$2";;
   status)  "$PY" "$HERE/train.py" status "${2:-}"
            for p in "$RUNS"/*.pid; do [ -f "$p" ] && pid_alive "$p" && echo "process: $(basename "$p" .pid) (pid $(cat "$p"))"; done; true;;
   logs)    tail -f "$RUNS/$2.log";;
   alive)   alive "$2";;
-  *) sed -n 2,12p "$0"; exit 2;;
+  *) sed -n 2,14p "$0"; exit 2;;
 esac

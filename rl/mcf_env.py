@@ -8,15 +8,20 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import signal
 import subprocess
-import sys
 import time
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVER_SCRIPT = "res://rl/env_server.gd"
+
+# A reply that never comes is the one failure mode a blocking readline cannot survive:
+# the trainer waits forever, the heartbeat goes stale, and nothing says why. Every read
+# is bounded; past the bound the env is declared dead and the trainer restarts it.
+# Generous, because one reply covers a whole AI turn on a company-sized map.
+READ_TIMEOUT = float(os.environ.get("MCF_RL_ENV_TIMEOUT", "900"))
 
 # AIController.Difficulty; -1 = the trainer serves the opponent's actions itself (Phase B).
 EASY, NORMAL, HARD, EXTERNAL = 0, 1, 2, -1
@@ -36,6 +41,8 @@ class EpisodeConfig:
     fog: int = FOG_STANDARD
     friendly_fire: bool = True
     record: bool = False
+    max_candidates: int = 0      # 0 = every legal intent; see env_server._cap_legal
+    max_actors: int = 0          # 0 = enumerate for every unit; see env_server._actor_subset
 
     def to_cmd(self) -> dict:
         return {
@@ -43,6 +50,7 @@ class EpisodeConfig:
             "opponent": self.opponent, "round_cap": self.round_cap, "max_steps": self.max_steps,
             "civilians": self.civilians, "random_events": self.random_events,
             "fog": self.fog, "friendly_fire": self.friendly_fire, "record": self.record,
+            "max_candidates": self.max_candidates, "max_actors": self.max_actors,
         }
 
 
@@ -59,35 +67,58 @@ class GodotEnv:
         self.proc: subprocess.Popen | None = None
         self.last: dict | None = None
         self.cfg: EpisodeConfig | None = None
+        self._buf = b""
         self.start()
 
     def start(self) -> None:
+        # Raw byte pipes, not text mode: recv() polls the fd with select, and a
+        # TextIOWrapper could hold a complete line in its own buffer where select
+        # cannot see it — the reply would then look like a hang until the timeout.
         self.proc = subprocess.Popen(
             [self.godot, "--headless", "--path", self.project, "--script", SERVER_SCRIPT],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True, bufsize=1,
+            bufsize=0,
             # Own process group so a trainer shutdown can kill every env together (9.5).
             preexec_fn=os.setsid if os.name == "posix" else None,
         )
+        self._buf = b""
         # Wait for the server before the first command: a ping proves the script loaded.
         self.send({"cmd": "ping"})
-        self.recv()
+        self.recv(timeout=min(READ_TIMEOUT, 120.0))
 
     def send(self, cmd: dict) -> None:
         assert self.proc is not None and self.proc.stdin is not None
         try:
-            self.proc.stdin.write(json.dumps(cmd) + "\n")
-            self.proc.stdin.flush()
+            self.proc.stdin.write(json.dumps(cmd).encode() + b"\n")
         except (BrokenPipeError, OSError) as e:
             raise EnvDied(f"env stdin closed: {e}")
 
-    def recv(self) -> dict:
+    def _readline(self, deadline: float) -> bytes:
+        """One line from the env, or EnvDied if it exits or goes quiet past `deadline`."""
         assert self.proc is not None and self.proc.stdout is not None
         while True:
-            line = self.proc.stdout.readline()
-            if not line:
+            nl = self._buf.find(b"\n")
+            if nl >= 0:
+                line, self._buf = self._buf[:nl], self._buf[nl + 1:]
+                return line
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise EnvDied(f"env {self.proc.pid} stopped replying (waited "
+                              f"{READ_TIMEOUT:.0f}s) — killed and restarted")
+            if not select.select([self.proc.stdout], [], [], min(left, 30.0))[0]:
+                if self.proc.poll() is not None:
+                    raise EnvDied("env process exited (rc=%s)" % self.proc.poll())
+                continue
+            chunk = os.read(self.proc.stdout.fileno(), 1 << 20)
+            if not chunk:
                 raise EnvDied("env process exited (rc=%s)" % self.proc.poll())
-            if line.startswith("{"):
+            self._buf += chunk
+
+    def recv(self, timeout: float = READ_TIMEOUT) -> dict:
+        deadline = time.monotonic() + timeout
+        while True:
+            line = self._readline(deadline)
+            if line.startswith(b"{"):    # anything else is Godot's own chatter
                 resp = json.loads(line)
                 if not resp.get("ok", True):
                     raise RuntimeError("env error: %s" % resp.get("error"))
@@ -141,10 +172,34 @@ class VecEnv:
     `step_wait` reads the replies, so the Godot processes work concurrently."""
 
     def __init__(self, n: int, godot: str = "godot"):
-        self.envs = [GodotEnv(godot) for _ in range(n)]
+        self.n = n
+        self.godot = godot
+        self.envs: list[GodotEnv] = []
+        self.rebuild()
 
     def __len__(self) -> int:
         return len(self.envs)
+
+    def rebuild(self, attempts: int = 6) -> None:
+        """Kill everything and boot a fresh set in place. Retried with backoff: a Godot
+        that fails to start (a machine briefly out of memory, a locked project folder)
+        must cost the run a few minutes, not the run."""
+        self.kill()
+        self.envs = []
+        delay = 5.0
+        for attempt in range(1, attempts + 1):
+            try:
+                self.envs = [GodotEnv(self.godot) for _ in range(self.n)]
+                return
+            except (EnvDied, OSError) as e:
+                self.kill()
+                self.envs = []
+                if attempt == attempts:
+                    raise EnvDied(f"could not start {self.n} envs after {attempts} tries: {e}")
+                print(f"[env] start failed ({e}); retry {attempt}/{attempts} in {delay:.0f}s",
+                      flush=True)
+                time.sleep(delay)
+                delay = min(delay * 2, 120.0)
 
     def reset_all(self, cfgs: list[EpisodeConfig]) -> list[dict]:
         for env, cfg in zip(self.envs, cfgs):

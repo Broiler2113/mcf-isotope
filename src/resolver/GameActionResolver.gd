@@ -210,8 +210,9 @@ func _dispatch(intent: Intent) -> ActionResult:
 ## обучаемой политики. Сам перечислитель живёт в LegalIntents.gd — этот файл и так велик;
 ## здесь лишь точка входа, о которой говорит спецификация. Точность (каждое
 ## перечисленное намерение проходит resolve()) проверяет tests/run_legal_intents.gd.
-func legal_intents(side: int) -> Array:
-	return LegalIntents.enumerate(self, side)
+## actors — необязательный фильтр по актёрам (см. LegalIntents.enumerate); пусто = все.
+func legal_intents(side: int, actors: Dictionary = {}) -> Array:
+	return LegalIntents.enumerate(self, side, actors)
 
 ## Маршрутизация намерения к его резолверу — без побочных эффектов (см. _dispatch).
 func _route(intent: Intent) -> ActionResult:

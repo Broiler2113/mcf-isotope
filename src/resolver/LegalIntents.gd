@@ -22,16 +22,29 @@ extends RefCounted
 const SENT := Vector2i(-999, -999)
 
 ## Все законные намерения стороны side на текущем состоянии r.state.
-static func enumerate(r: GameActionResolver, side: int) -> Array:
+##
+## actors — НЕОБЯЗАТЕЛЬНЫЙ фильтр по актёрам: ключи — id юнита (int) или "v<id>" для
+## машины (пространства id у юнитов и машин пересекаются, поэтому префикс обязателен).
+## Пустой словарь означает «все», и это поведение по умолчанию: точность перечислителя
+## проверяется именно на нём (tests/run_legal_intents.gd). Фильтр нужен ротным картам:
+## на town'е 176 бойцов за сторону — полный перебор стоит ~180 мс на КАЖДУЮ точку
+## решения и делает обучение неподъёмным. Среда просит подмножество актёров за шаг
+## (rl/env_server.gd, max_actors) — за ход политика всё равно доберётся до каждого,
+## потому что подмножество выбирается заново на каждом шаге. EndTurn есть всегда: без
+## него ход стало бы нечем закончить.
+static func enumerate(r: GameActionResolver, side: int, actors: Dictionary = {}) -> Array:
 	var out: Array = []
 	var state := r.state
 	if state.active_player() != side:
 		return out
+	var filtered := not actors.is_empty()
 	var ids: Array = state.units.keys()
 	ids.sort()
 	for id: int in ids:
 		var u: UnitInstance = state.units[id]
 		if u.owner != side or not u.is_alive():
+			continue
+		if filtered and not actors.has(id):
 			continue
 		_for_unit(r, u, out)
 	var vids: Array = state.vehicles.keys()
@@ -39,6 +52,8 @@ static func enumerate(r: GameActionResolver, side: int) -> Array:
 	for vid: int in vids:
 		var veh: Vehicle = state.vehicles[vid]
 		if veh.owner != side or not veh.alive() or veh.is_borg():
+			continue
+		if filtered and not actors.has("v%d" % vid):
 			continue
 		_for_vehicle(r, veh, out)
 	out.append(EndTurnIntent.new(side))

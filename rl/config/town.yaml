@@ -1,0 +1,66 @@
+# Town — the company-scale training set (rl/maps/town_50x50.json, built by
+# rl/tools/make_town_map.py). 176 units a side, mirrored: 1 tank, 1 borg, 1 shuttle,
+# 50 light infantry, 35 heavy, 20 machinegunners, 15 snipers, 10 anti-tank, 4 marksmen,
+# 1 flamethrower, 10 engineers, 8 sappers, 5 drone operators, 15 shield bearers.
+#
+# This map is nothing like the arena and the numbers below are why. Measured on an
+# M-series laptop, one env:
+#
+#   uncapped              8366 legal intents at the opening,  5.1 env steps/s
+#   max_actors 16 + 512   512 legal intents,                 14.7 env steps/s
+#
+# A full 10-round match measured 1249 own decisions in 90 s on one env and ended on the
+# round cap, so four envs finish on the order of 150 matches an hour.
+#
+# The cost is the legal-intent enumerator (~148 ms of a ~195 ms step), so the lever that
+# matters is max_actors — how many of the 176 units the enumerator looks at per decision.
+# A fresh random subset is drawn every step, units with AP left first, so over a turn the
+# policy still gets to move everybody. max_candidates then trims what survives, keeping
+# every rare intent kind and thinning the flood of moves (env_server._cap_legal).
+device: cpu
+n_envs: 4            # town envs are heavier than arena ones; leave the box some room
+maps:
+  - rl/maps/town_50x50.json
+stage: 1
+phase: A
+opponent: normal
+pool_ai_fraction: 0.15
+pool_size: 6
+round_cap: 10
+max_steps: 8000      # a measured 10-round match is ~1250 own decisions, so the round cap
+                     # bites first and this only ever catches a policy stuck on free actions
+max_actors: 16       # 0 = every unit, and then a step costs 195 ms
+max_candidates: 512
+civilians: false     # the map carries 12; turn this on to wake them
+random_events: false
+fog: standard
+friendly_fire: true
+rollout_steps: 256
+epochs: 4
+minibatch: 32
+lr: 0.0003
+gamma: 0.99
+lam: 0.95
+clip: 0.2
+ent_coef: 0.01
+vf_coef: 0.5
+total_steps: 50000000
+checkpoint_every: 10
+eval_every: 20
+eval_games: 8        # a town match is minutes, not seconds — 24 would cost an hour per eval
+eval_opponents: [hard]   # HARD only: NORMAL measured the same thing (AIController splits them
+                         # on one shot-scoring tiebreak) and HARD is the graduation opponent
+replays_per_checkpoint: 2
+map_rotate_matches: 5
+seed: 1
+torch_threads: 0
+# --- keeping the machine alive ---
+keep_checkpoints: 12
+milestone_every: 2000000   # every 2M steps is kept forever, as a lineage record
+keep_replay_sets: 6
+rollout_budget_mb: 2048    # cut a rollout short rather than grow past this
+mem_limit_mb: 4096         # trainer + its Godot envs. Must sit BELOW what the box can
+                           # actually spare or the OOM killer wins the race and there is
+                           # no reason left on the dashboard: this laptop is 16 GB with
+                           # ~5.7 GB free, and 4 town envs plus the trainer measure ~2.3 GB.
+                           # Re-check against `free_mb` on the dashboard before raising it.
