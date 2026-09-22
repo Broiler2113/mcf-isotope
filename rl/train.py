@@ -145,6 +145,7 @@ class Trainer:
         self.stop_requested = False
         self.pool_cache: dict[str, PolicyNet] = {}
         self.episode_seed = cfg["seed"] * 1000
+        self._last_status = 0.0
 
     # -- checkpoints (9.5) --
     def state_dict(self) -> dict:
@@ -170,11 +171,14 @@ class Trainer:
             json.dump(meta, f)
         return path
 
-    def write_status(self, state: str):
-        """Heartbeat for the dashboard: who is training, how far, and whether the pid is alive."""
+    def write_status(self, state: str, activity: str = "", done: int = 0, total: int = 0, **extra):
+        """Heartbeat for the dashboard: who is training, how far, what it is doing right now
+        (activity + done/total progress), and whether the pid is alive. Written at every
+        stage change and every few seconds inside a rollout, so "nothing moved" is visible."""
         st = dict(state=state, pid=os.getpid(), step=self.global_step, update=self.update,
                   matches=self.matches_done, phase=self.cfg["phase"], stage=self.cfg["stage"],
-                  time=time.time())
+                  activity=activity, done=done, total=total, time=time.time(), **extra)
+        self._last_status = time.time()
         tmp = os.path.join(self.run_dir, "status.json.tmp")
         with open(tmp, "w") as f:
             json.dump(st, f)
@@ -262,7 +266,13 @@ class Trainer:
             env.label = labels[i]
         t0 = time.time()
         self.pool_cache.pop("self", None)
+        self.write_status("running", "collecting rollout", 0, T * n)
         while min(len(b) for b in buffers) < T:
+            if time.time() - self._last_status > 3:
+                done = sum(len(b) for b in buffers)
+                self.write_status("running", "collecting rollout", done, T * n,
+                                  env_steps_per_sec=done / max(1e-6, time.time() - t0),
+                                  rounds=[int(e.last["info"]["round"]) for e in self.envs.envs if e.last])
             trainee_idx, opp_idx = [], []
             for i, env in enumerate(self.envs.envs):
                 r = env.last
@@ -420,6 +430,7 @@ class Trainer:
         played = 0
         seed_base = 900_000 + self.update * 100
         while played < games:
+            self.write_status("running", f"evaluating vs {opponent}", played, games)
             batch = min(n, games - played)
             cfgs = []
             for j in range(batch):
@@ -479,6 +490,7 @@ class Trainer:
             torch.set_num_threads(cfg["torch_threads"])
         with open(os.path.join(self.run_dir, "config.yaml"), "w") as f:
             yaml.safe_dump(cfg, f)
+        self.write_status("running", f"starting {cfg['n_envs']} Godot envs", 0, 0)
         self.envs = VecEnv(cfg["n_envs"], cfg["godot"])
         stop_flag = os.path.join(self.run_dir, "STOP")
 
@@ -495,7 +507,6 @@ class Trainer:
         print(f"[train] branch={os.path.basename(self.run_dir)} phase={cfg['phase']} "
               f"stage={cfg['stage']} maps={len(cfg['maps'])} envs={cfg['n_envs']} "
               f"step={self.global_step} update={self.update}", flush=True)
-        self.write_status("running")
         try:
             while self.global_step < cfg["total_steps"] and not self.stop_requested:
                 try:
@@ -506,9 +517,10 @@ class Trainer:
                     self.envs = VecEnv(cfg["n_envs"], cfg["godot"])
                     continue
                 t0 = time.time()
+                self.write_status("running", "PPO update", 0, 0)
                 losses = self.ppo_update(buffers)
                 self.log(info, losses, time.time() - t0)
-                self.write_status("running")
+                self.write_status("running", "update done", 0, 0)
                 if self.update % cfg["checkpoint_every"] == 0:
                     path = self.save()
                     print(f"[train] checkpoint {path}", flush=True)

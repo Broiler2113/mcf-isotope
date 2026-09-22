@@ -75,12 +75,60 @@ def pid_alive(pid: int) -> bool:
 
 
 def status(branch: str) -> dict:
-    """state: running | stopped | dead (heartbeat says running but the pid is gone)."""
+    """state: running | stopped | dead (heartbeat says running but the pid is gone) |
+    crashed (launched, never reached a heartbeat) | never started."""
     st_ = read_json(os.path.join(RUNS, branch, "status.json"), {}) or {}
     if st_.get("state") == "running" and not pid_alive(st_.get("pid")):
         st_["state"] = "dead"
-    st_["age_min"] = (time.time() - st_.get("time", 0)) / 60 if st_ else None
+    if not st_:
+        pidfile = os.path.join(RUNS, f"{branch}.pid")
+        st_["state"] = "never started" if not os.path.exists(pidfile) else (
+            "starting" if pid_alive(read_pid(pidfile)) else "crashed")
+    st_["age_s"] = time.time() - st_["time"] if "time" in st_ else None
+    st_["age_min"] = st_["age_s"] / 60 if st_["age_s"] is not None else None
     return st_
+
+
+def read_pid(path: str) -> int:
+    try:
+        with open(path) as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return -1
+
+
+def log_tail(name: str, n: int = 12) -> str:
+    path = os.path.join(RUNS, f"{name}.log")
+    if not os.path.exists(path):
+        return ""
+    with open(path, "rb") as f:
+        f.seek(max(0, os.path.getsize(path) - 6000))
+        return "\n".join(f.read().decode("utf-8", "replace").splitlines()[-n:])
+
+
+def live_card(b: str) -> None:
+    """What the trainer is doing right now — the answer to "is it even running?"."""
+    s = status(b)
+    state = s["state"]
+    icon = {"running": "🟢", "starting": "🟡", "stopped": "⚪", "dead": "🔴", "crashed": "🔴"}.get(state, "⚫")
+    age = f"{s['age_s']:.0f}s ago" if s.get("age_s") is not None else "no heartbeat yet"
+    stale = state == "running" and s["age_s"] > 120
+    st.markdown(f"### {icon} {b} — **{state}**" + ("  ⚠️ heartbeat stale" if stale else "")
+                + f"  · step {s.get('step', '—')} · update {s.get('update', '—')} · matches {s.get('matches', '—')}"
+                + f" · phase {s.get('phase', '—')} · heartbeat {age}")
+    act = s.get("activity", "")
+    if state == "running" and act:
+        if s.get("total"):
+            st.progress(min(1.0, s["done"] / s["total"]),
+                        text=f"{act}: {s['done']}/{s['total']}"
+                             + (f" · {s['env_steps_per_sec']:.1f} env steps/s" if "env_steps_per_sec" in s else "")
+                             + (f" · env rounds {s['rounds']}" if s.get("rounds") else ""))
+        else:
+            st.caption(act)
+    if state in ("dead", "crashed"):
+        st.error("the trainer process is gone — the log tail below usually says why")
+    with st.expander("log tail", expanded=state != "running"):
+        st.code(log_tail(b) or "(empty)")
 
 
 @st.cache_data(ttl=TTL, show_spinner=False)
@@ -276,6 +324,16 @@ def chart(sc: dict, tags: list[str], title: str) -> None:
 
 def page_overview() -> None:
     st.header("Runs")
+
+    @st.fragment(run_every=5)
+    def live() -> None:
+        bs = branches()
+        if not bs:
+            st.info("No runs yet — start one below.")
+        for b in bs:
+            live_card(b)
+    live()
+
     rows = []
     for b in branches():
         s = status(b)
@@ -288,8 +346,6 @@ def page_overview() -> None:
                          heartbeat_min=round(s["age_min"], 1) if s.get("age_min") is not None else None))
     if rows:
         st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
-    else:
-        st.info("No runs yet — start one below.")
 
     st.subheader("Start a new run")
     with st.form("start"):
@@ -311,18 +367,18 @@ def page_branch(b: str) -> None:
     s = status(b)
     cfg = branch_cfg(b)
     st.header(b)
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("state", s.get("state", "—"))
-    c2.metric("step", s.get("step", "—"))
-    c3.metric("phase / stage", f"{cfg.get('phase', '?')} / {cfg.get('stage', '?')}")
-    c4.metric("matches", s.get("matches", "—"))
-    c5.metric("heartbeat", f"{s['age_min']:.0f} min ago" if s.get("age_min") is not None else "—")
+
+    @st.fragment(run_every=5)
+    def head() -> None:
+        live_card(b)
+    head()
 
     @st.fragment(run_every=30)
     def live() -> None:
         sc = scalars(b, tb_stamp(b))
         if not sc:
-            st.info("no TensorBoard data yet")
+            st.info("no curves yet — they appear after the first PPO update (one full rollout of "
+                    f"{cfg.get('rollout_steps', '?')} × {cfg.get('n_envs', '?')} env steps)")
             return
         a, bcol = st.columns(2)
         with a:
@@ -387,12 +443,6 @@ def page_branch(b: str) -> None:
         ev = ev.copy()
         ev["time"] = pd.to_datetime(ev["time"], unit="s")
         st.dataframe(ev, width="stretch", hide_index=True)
-    with st.expander("log tail"):
-        log = os.path.join(RUNS, f"{b}.log")
-        if os.path.exists(log):
-            with open(log, "rb") as f:
-                f.seek(max(0, os.path.getsize(log) - 8000))
-                st.code(f.read().decode("utf-8", "replace"))
 
 
 def page_checkpoints() -> None:
