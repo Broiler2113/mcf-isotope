@@ -31,3 +31,12 @@ renderer/rendering_method="gl_compatibility"
 # Чёрный фон окна по умолчанию (item 5). Годотовский серый (~0.3) просвечивал везде,
 # где параллакс/сцена не закрашивали кадр целиком — отсюда «параллакс серый, не чёрный».
 environment/defaults/default_clear_color=Color(0, 0, 0, 1)
+
+[debug]
+
+; Godot mirrors stdout into app_userdata/.../logs/godot.log. For the RL env servers that
+; stdout IS the JSON protocol, so every response was being written twice - once to the
+; trainer, once to a log nobody reads. Overnight it reached 6.5 GB in one file and 7.4 GB
+; in the directory, consuming ~1.4 GB/hr and very nearly stopping training on a full disk.
+; The trainer keeps its own logs under rl/runs/, so nothing is lost by turning this off.
+debug/file_logging/enable_file_logging=false
