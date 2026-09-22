@@ -11,14 +11,18 @@ UI over the v1 launcher, not a second trainer.
 from __future__ import annotations
 
 import glob
+import hashlib
 import hmac
 import json
 import os
+import secrets
 import subprocess
 import sys
 import time
+from datetime import datetime, timedelta
 
 import altair as alt
+import extra_streamlit_components as stx
 import pandas as pd
 import streamlit as st
 import yaml
@@ -106,17 +110,81 @@ def pill(text: str, role: str) -> str:
 
 # --- auth ------------------------------------------------------------------------------------
 
+AUTH_COOKIE = "mcf_rlm_session"
+SESSIONS = os.path.join(RUNS, ".sessions.json")
+SESSION_DAYS = 14
+
+
+# One CookieManager per script run, created at module scope. It cannot be cached: it
+# renders a component, and Streamlit refuses widget commands inside a cached function.
+# The cookie is what carries a login across a browser reload — st.session_state dies with
+# the websocket, so on its own it re-prompts every time the page is refreshed.
+_JAR = stx.CookieManager(key="rlm-auth")
+
+
+def cookie_jar():
+    return _JAR
+
+
+def _sessions() -> dict:
+    return read_json(SESSIONS, {}) or {}
+
+
+def _issue_token() -> str:
+    """A fresh random session token. Only its SHA-256 is stored, so the file on disk
+    cannot be replayed as a login; expired entries are pruned on every issue."""
+    tok = secrets.token_urlsafe(32)
+    live = {k: v for k, v in _sessions().items() if float(v) > time.time()}
+    live[hashlib.sha256(tok.encode()).hexdigest()] = time.time() + SESSION_DAYS * 86400
+    os.makedirs(RUNS, exist_ok=True)
+    tmp = SESSIONS + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(live, f)
+    os.replace(tmp, SESSIONS)
+    os.chmod(SESSIONS, 0o600)
+    return tok
+
+
+def _token_valid(tok: str | None) -> bool:
+    if not tok:
+        return False
+    return float(_sessions().get(hashlib.sha256(tok.encode()).hexdigest(), 0)) > time.time()
+
+
+def _sign_out(tok: str | None) -> None:
+    if tok:
+        live = {k: v for k, v in _sessions().items()
+                if k != hashlib.sha256(tok.encode()).hexdigest()}
+        with open(SESSIONS, "w") as f:
+            json.dump(live, f)
+    cookie_jar().delete(AUTH_COOKIE, key="rlm-signout")
+    st.session_state.pop("auth", None)
+
+
 def gate() -> None:
     pw = os.environ.get("MCF_RLM_PASSWORD", "")
     if not pw:
         st.error("MCF_RLM_PASSWORD is not set — refusing to serve controls without a password.")
         st.stop()
+    jar = cookie_jar()
+    jar.get_all()          # forces the component to report before the first .get()
+    tok = jar.get(AUTH_COOKIE)
     if st.session_state.get("auth"):
+        st.session_state["auth_token"] = tok
+        return
+    if _token_valid(tok):
+        st.session_state.auth = True
+        st.session_state["auth_token"] = tok
         return
     with st.form("login"):
         typed = st.text_input("Password", type="password")
+        keep = st.checkbox(f"Stay signed in on this browser for {SESSION_DAYS} days",
+                           value=True)
         if st.form_submit_button("Enter") and hmac.compare_digest(typed, pw):
             st.session_state.auth = True
+            if keep:
+                jar.set(AUTH_COOKIE, _issue_token(),
+                        expires_at=datetime.now() + timedelta(days=SESSION_DAYS))
             st.rerun()
     st.stop()
 
@@ -632,7 +700,7 @@ def stacked_area(df: pd.DataFrame, title: str, order: list[str], colors: dict[st
 
 def show(ch) -> None:
     if ch is not None:
-        st.altair_chart(ch, use_container_width=True)
+        st.altair_chart(ch, width="stretch")
 
 
 def chart(sc: dict, tags: list[str], title: str, *, pct: bool = False,
@@ -1047,6 +1115,9 @@ def main() -> None:
     chosen = st.sidebar.selectbox("Branch", bs) if (per_branch and bs) else None
     if st.sidebar.button("Refresh data"):
         st.cache_data.clear()
+        st.rerun()
+    if st.sidebar.button("Sign out"):
+        _sign_out(st.session_state.get("auth_token"))
         st.rerun()
     st.sidebar.caption(f"runs: `{RUNS}`\n\nGodot: `{godot_bin()}`")
     if per_branch and not bs:

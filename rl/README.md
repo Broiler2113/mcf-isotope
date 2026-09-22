@@ -177,7 +177,11 @@ civilians on load.
 ## Decisions baked in (change = retrain)
 
 - Canvas 64×64, maps larger than that are not admitted to the pool (Q2).
-- `max_actors` / `max_candidates` (both 0 = off, and off on the arena). Company-scale maps
+- `max_actors` / `max_candidates` (both 0 = off, and off on the arena). They live in
+  `rl/IntentBudget.gd` because **both** sides of the wire must apply them identically: the
+  env server caps the list before showing it to the policy, and `LearnedController` has to
+  cap it the same way or a real game hands the network 8000 candidates where it learned on
+  512. `train.py play` passes the checkpoint's own caps through as environment variables. Company-scale maps
   need them: on `town_50x50` the opening has 8366 legal intents and the enumerator alone
   costs ~148 ms of a ~195 ms step. `max_actors` draws a fresh random subset of the side's
   units each decision point (those with AP left first), so the enumerator only looks at a
@@ -193,12 +197,27 @@ civilians on load.
   gathered from the CNN map) instead of sampling unit→kind→target in three steps. It is the
   same factorisation read off the map, and illegal actions are structurally impossible.
 - Reward (§6.1): Δ(own army value − enemy army value) per response, normalised by half the
-  starting total; **−0.0005 per own action**; −0.01 per own end-turn; +1/−1 terminal; −0.1 draw.
-  The per-action cost is not in the original spec and was added after `town-1`: with a free
-  action worth 0 and ending a turn worth −0.01, *never ending the turn* was strictly optimal,
-  and PPO found it in about ten updates (75% `move_held`, 0.4% `end`, two completed matches
-  in five hours). Time now costs something on its own — about −0.02 over a 40-action turn,
-  against ±1 for the match result — so dithering loses to any real move.
+  starting total; +1/−1 terminal; −0.1 draw. Plus, added after `town-1`:
+  - **Penalties are scale-free.** They are fractions of a typical kill (`TURNS_PER_KILL`,
+    `STEPS_PER_KILL`), not constants. They used to be constants, and because the kill
+    reward is normalised by army value while the penalties were not, a kill was worth
+    8.74 end-turns on the arena and **0.41** on town — ending your turn cost more than
+    killing someone gained. A scripted "always shoot" policy measured −0.00062 mean
+    reward per shot: the policy was correctly learning that fighting loses.
+  - **Explicit combat reward.** A kill pays the victim's cost (`R_KILL`), unconditionally
+    and separately from the differential, so a trade that kills *and* loses still reads as
+    good. Destroyed vehicles pay their buy cost. Small bonuses for taking a shot
+    (`R_SHOT`) and for operating a vehicle (`R_VEHICLE`).
+  - **Combo multiplier** (`R_COMBO`, capped at `COMBO_MAX`): several kills from one action
+    are worth more than the sum — 2 kills ×1.5, 3 ×2.0. Computed on summed cost, so
+    catching expensive targets pays. This is what a marksman's laser, an anti-tank blast,
+    a drone detonation and a flamethrower are *for*.
+  - The action bonuses are capped at `SHAPING_PER_TURN` and sit an order of magnitude
+    below a kill. Rewarding an action rather than an outcome is exactly the shape that
+    produced the `move_held` collapse; kills themselves are uncapped.
+
+  Measured before → after on town, same harness: mean reward per shooting step
+  −0.00062 → **+0.00104**, shooting steps that paid 68/302 → **138/302**.
 - A unit may take at most `FREE_ACTIONS_PER_UNIT` (6) actions per turn that spend no AP;
   past that, those *kinds* stop being offered to that unit for the rest of the turn.
   Structural, not reward shaping: shuffling a prisoner or a corpse is a legal move, just not

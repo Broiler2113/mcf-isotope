@@ -8,4 +8,5 @@ onnx>=1.16
 onnxruntime>=1.18
 streamlit>=1.40
 pandas>=2.2
+extra-streamlit-components>=0.1.8   # cookie for the dashboard login, so a reload does not re-prompt
 psutil>=5.9        # memory watchdog: trainer + Godot children vs what the box has left

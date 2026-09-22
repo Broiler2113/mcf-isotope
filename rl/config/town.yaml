@@ -46,7 +46,8 @@ ent_coef: 0.01
 vf_coef: 0.5
 total_steps: 50000000
 checkpoint_every: 10
-eval_every: 20
+eval_every: 20       # evaluations are not free: an update is ~126 s and an 8-game eval
+                     # ~180 s, so testing every update would cost ~60% of throughput
 eval_games: 8        # a town match is minutes, not seconds — 24 would cost an hour per eval
 eval_opponents: [hard]   # HARD only: NORMAL measured the same thing (AIController splits them
                          # on one shot-scoring tiebreak) and HARD is the graduation opponent

@@ -19,6 +19,15 @@ extends PlayerController
 
 const Obs = preload("res://rl/ObsEncoder.gd")
 const ENV_VAR := "MCF_RL_POLICY"
+const IntentBudget = preload("res://rl/IntentBudget.gd")
+## Потолки бюджета намерений: столько же, сколько видела политика при обучении.
+## `train.py play` выставляет их из конфига чекпойнта; 0 = без ограничения (так ведут
+## себя чекпойнты, обученные до появления потолков).
+const ENV_MAX_ACTORS := "MCF_RL_MAX_ACTORS"
+const ENV_MAX_CANDIDATES := "MCF_RL_MAX_CANDIDATES"
+var _max_actors: int = int(OS.get_environment(ENV_MAX_ACTORS))
+var _max_candidates: int = int(OS.get_environment(ENV_MAX_CANDIDATES))
+var _budget_rng := RandomNumberGenerator.new()
 const CONNECT_TIMEOUT_MS := 3000
 const REPLY_TIMEOUT_MS := 30000
 ## Лимит раундов, с которым обучалась политика (Q4): наблюдение содержит round/round_cap.
@@ -63,7 +72,13 @@ func _decide(state: GameState) -> Dictionary:
 		_resolver.fog_mode = GameConfig.fog_mode
 		_resolver.friendly_fire_enabled = GameConfig.friendly_fire
 		_resolver.omniscient_side = -1
-	var legal: Array = _resolver.legal_intents(owner)
+	# Тот же бюджет намерений, что и в обучении. Иначе в настоящей партии сеть увидит
+	# 8000+ кандидатов там, где училась на 512, и выберет argmax по совсем другому
+	# множеству: обучение и бой обязаны показывать политике список одной формы.
+	# Потолки приходят от `train.py play` из конфига самого чекпойнта.
+	var legal: Array = IntentBudget.cap(_resolver.legal_intents(
+			owner, IntentBudget.actor_subset(_resolver, owner, _max_actors, _budget_rng)),
+			_max_candidates, _budget_rng)
 	if legal.is_empty():
 		_last_error = "no legal intents"
 		return {}

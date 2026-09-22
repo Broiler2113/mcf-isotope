@@ -1036,7 +1036,13 @@ def cmd_play(a):
     srv = subprocess.Popen([sys.executable, os.path.join(PROJECT, "rl", "policy_server.py"),
                             a.checkpoint, "--port", str(port)])
     try:
-        env = dict(os.environ, MCF_RL_POLICY=f"127.0.0.1:{port}")
+        # The controller has to show the policy a candidate list of the same shape it
+        # trained on, so the checkpoint's own caps travel with it into the game.
+        ck = torch.load(a.checkpoint, map_location="cpu", weights_only=False)
+        cfg = with_defaults(ck.get("cfg", {}))
+        env = dict(os.environ, MCF_RL_POLICY=f"127.0.0.1:{port}",
+                   MCF_RL_MAX_ACTORS=str(cfg["max_actors"]),
+                   MCF_RL_MAX_CANDIDATES=str(cfg["max_candidates"]))
         subprocess.call([a.godot, "--path", PROJECT], env=env)
     finally:
         srv.terminate()

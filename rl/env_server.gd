@@ -24,17 +24,50 @@ extends SceneTree
 ## что видит человек.
 
 const Obs = preload("res://rl/ObsEncoder.gd")
+## preload, а не class_name: rl/ — не часть игрового автозагруза, и ObsEncoder здесь
+## подключён так же. Один и тот же бюджет обязан применять и боевой контроллер.
+const IntentBudget = preload("res://rl/IntentBudget.gd")
 
-const R_TURN_PENALTY := -0.01
 const R_DRAW := -0.1
 const AI_TURN_CAP := 4000
-## Цена ОДНОГО своего действия. Без неё «не делать ничего» было строго выгоднее, чем
-## закончить ход: конец хода стоит R_TURN_PENALTY, а бесплатное действие — ноль. Политика
-## это нашла: 75% её действий стали move_held (бесплатная перекладка пленника), end — 0.4%,
-## и за 13 апдейтов доигрались ДВЕ партии. Теперь тикает время само по себе, и топтание на
-## месте проигрывает любому осмысленному ходу. Число мало нарочно: ~0.02 за полный ход из
-## 40 действий против ±1 за исход партии.
-const R_STEP_PENALTY := -0.0005
+
+## Штрафы задаются В ДОЛЯХ ТИПОВОГО УБИЙСТВА, а не абсолютным числом.
+##
+## Награда за убийство нормируется на стоимость армий (§6.1), поэтому она зависит от
+## размера армии: убитый пехотинец стоит +0.087 на арене (10 бойцов) и +0.0041 на town'е
+## (176). Штрафы же были константами — и на town'е конец хода (-0.01) оказывался ВДВОЕ
+## ДОРОЖЕ убийства, а один шаг (-0.0005) съедал восьмую его часть. Политика честно
+## выучивала, что стрелять невыгодно: замер «всегда стреляй, если можешь» дал среднюю
+## награду -0.00062 за выстрел, то есть стрельба в минус.
+##
+## Теперь штрафы пересчитываются на каждый эпизод от стоимости ТИПОВОГО юнита стороны,
+## так что соотношение «убийство : конец хода : шаг» одинаково на любой карте.
+const TURNS_PER_KILL := 10.0   # убийство типового юнита ≈ 10 концов хода
+const STEPS_PER_KILL := 400.0  # …и ≈ 400 отдельных действий
+var _turn_penalty: float = -0.01
+var _step_penalty: float = -0.0005
+var _typical: float = 0.1      # стоимость типового юнита / _norm
+
+## --- Явная награда за бой ------------------------------------------------------------
+##
+## Дифференциал стоимости армий (§6.1) уже платит за убийство, но платит НЕТТО: размен,
+## в котором ты убил и потерял, выходит в ноль, и политика не видит, что убивать — хорошо.
+## Здесь награда за убийство начисляется ОТДЕЛЬНО и безусловно, ровно в стоимости жертвы
+## (нормированной, как и всё остальное), — то есть удачный выстрел всегда в плюс.
+const R_KILL := 1.0        # доля стоимости убитого; 1.0 = «сколько стоил, столько и дали»
+## Бонусы за САМО ДЕЙСТВИЕ — маленькие и с потолком. Награждать действие, а не результат,
+## — это ровно та форма, из которой вырос move_held: политика выучит жать кнопку. Поэтому
+## они (а) на порядок меньше убийства, (б) считаются не больше SHAPING_PER_TURN раз за ход.
+const R_SHOT := 0.05       # результативный выстрел по врагу
+const R_VEHICLE := 0.05    # осмысленное действие машиной (ход, пушка, таран, посадка)
+const SHAPING_PER_TURN := 20
+## Множитель за НЕСКОЛЬКО убийств ОДНИМ действием: лазер марксмана насквозь, взрыв
+## противотанкового заряда, подрыв дрона, шестиклеточный огнемёт. Два трупа с одного
+## действия стоят 1.5 суммы, три — 2.0, четыре — 2.5. Считается от суммы стоимостей, так
+## что выгодно накрывать дорогих, а не просто многих. Потолок нужен, чтобы редкий
+## шестикратный размен не перевесил исход партии целиком.
+const R_COMBO := 0.5
+const COMBO_MAX := 3.0
 ## Сколько БЕСПЛАТНЫХ (не потративших ОД) действий разрешено одному юниту за ход.
 ## Ограничение структурное, а не через награду: перечислитель обязан предлагать такие
 ## намерения (перекладка пленника и тела — законные ходы), но не бесконечно же.
@@ -56,10 +89,10 @@ var max_steps: int = 3000
 ## Потолок КАНДИДАТОВ на точку решения (0 — без потолка). Ротные карты вроде town дают
 ## 8000+ законных намерений за ход (из них ~5000 — «шагнуть в клетку»), и цена у этого
 ## тройная: перечислитель, JSON и тензор кандидатов в буфере роллаута. Потолок режет
-## список ЗДЕСЬ, до describe и до провода, — см. _cap_legal().
+## список ЗДЕСЬ, до describe и до провода, — см. IntentBudget.cap().
 var max_candidates: int = 0
 ## Потолок АКТЁРОВ, рассматриваемых за шаг (0 — все). Бьёт по самой дорогой части шага —
-## перечислителю; см. _actor_subset().
+## перечислителю; см. IntentBudget.actor_subset().
 var max_actors: int = 0
 var _cap_rng := RandomNumberGenerator.new()
 var brains: Dictionary = {}
@@ -78,6 +111,9 @@ var _free_count: Dictionary = {}
 var _free_kinds: Dictionary = {}
 var _free_turn: String = ""
 var _free_total: int = 0
+## Сколько раз за текущий ход уже начислялся бонус за САМО действие (выстрел/машина).
+## Обнуляется там же, где счётчики бесплатных действий, — на смене хода.
+var _shaping_used: int = 0
 
 func _initialize() -> void:
 	while true:
@@ -152,6 +188,11 @@ func _reset(req: Dictionary) -> Dictionary:
 	for pid: int in state.roster.player_ids():
 		total += Obs.army_value(state, pid)
 	_norm = maxf(1.0, total / 2.0)
+	# Штрафы — в долях типового убийства (см. TURNS_PER_KILL): иначе на ротной карте
+	# конец хода стоит дороже убитого врага, и стрелять становится невыгодно.
+	_typical = _typical_unit_value() / _norm
+	_turn_penalty = -_typical / TURNS_PER_KILL
+	_step_penalty = -_typical / STEPS_PER_KILL
 	_last_diff = _value_diff()
 	_done = false
 	_illegal = 0
@@ -161,6 +202,7 @@ func _reset(req: Dictionary) -> Dictionary:
 	_free_kinds = {}
 	_free_turn = ""
 	_free_total = 0
+	_shaping_used = 0
 	_advance()
 	return _response(0.0, true)
 
@@ -178,21 +220,24 @@ func _step(req: Dictionary) -> Dictionary:
 	# а вот «ОД не убавилось» верно всегда.
 	var key := _actor_key(intent)
 	var ap_before := _actor_ap(intent)
+	var hulls_before := _vehicle_hulls()
 	var res := resolver.resolve(intent)
 	_steps += 1
 	if acting == side:
-		reward += R_STEP_PENALTY
+		reward += _step_penalty
+		if res.ok:
+			reward += _combat_reward(intent, res, hulls_before)
 	if not res.ok:
 		# Не должно случаться (перечислитель точен) — но если случилось, шаг не теряется:
 		# считаем, штрафуем и, чтобы не зациклиться, отдаём ход после серии отказов.
 		_illegal += 1
 		if acting == side:
-			reward += R_TURN_PENALTY
+			reward += _turn_penalty
 		if _illegal % 8 == 0:
 			resolver.resolve(EndTurnIntent.new())
 	elif intent is EndTurnIntent:
 		if acting == side:
-			reward += R_TURN_PENALTY
+			reward += _turn_penalty
 	elif key != "" and _actor_ap(intent) >= ap_before:
 		# Действие прошло, а ОД не убавилось — оно бесплатное. Считаем его за этим
 		# актёром и запоминаем ВИД: после потолка именно этот вид у него и отключится.
@@ -288,6 +333,71 @@ func _check_over() -> bool:
 	_done = true
 	return true
 
+## Прочность корпусов всех машин — снимок ДО действия, чтобы заметить уничтоженную.
+func _vehicle_hulls() -> Dictionary:
+	var out := {}
+	for veh: Vehicle in state.all_vehicles():
+		out[veh.id] = 1 if veh.alive() else 0
+	return out
+
+
+## Явная награда за бой: убийства по стоимости плюс маленькие бонусы за выстрел и за
+## работу машиной. Считается ТОЛЬКО за ход обучаемого и только за успешное действие.
+##
+## Убийства не ограничены — убивать врага хорошо ровно столько раз, сколько получится.
+## Бонусы за само действие ограничены SHAPING_PER_TURN за ход: награда за нажатие кнопки,
+## а не за результат, — это та же ловушка, что и бесплатная перекладка пленника.
+func _combat_reward(intent: Intent, res: ActionResult, hulls_before: Dictionary) -> float:
+	var gained := 0.0
+	# 1. Убитые юниты — по стоимости жертвы. Свои потери сюда не идут: за них уже
+	#    наказывает дифференциал, и штрафовать дважды значит учить не рисковать вовсе.
+	var killed := 0
+	var worth := 0.0
+	for id: int in res.deaths:
+		var victim := state.get_unit(id)
+		if victim != null and Obs.rel_owner(resolver, side, victim.owner) == 1:
+			worth += float(victim.stats.cost)
+			killed += 1
+	# 2. Уничтоженная техника — тоже по цене, и в тот же зачёт комбо.
+	for vid: Variant in hulls_before:
+		if int(hulls_before[vid]) == 0:
+			continue
+		var veh := state.get_vehicle(int(vid))
+		if veh != null and not veh.alive() and Obs.rel_owner(resolver, side, veh.owner) == 1:
+			worth += float(VehicleDB.buy_cost(veh.type_id))
+			killed += 1
+	# 3. Комбо: несколько трупов ОДНИМ действием стоят дороже суммы. Именно за это и
+	#    берут марксмана, противотанкиста, дрон-подрывника и огнемётчика.
+	if killed > 0:
+		var combo := minf(1.0 + R_COMBO * float(killed - 1), COMBO_MAX)
+		gained += R_KILL * worth / _norm * combo
+	# 4. Бонусы за действие — под потолком.
+	if _shaping_used < SHAPING_PER_TURN:
+		var kind := _kind_of(intent)
+		var bonus := 0.0
+		if kind == "shoot" or kind == "rsp" or kind == "veh_cannon":
+			bonus = R_SHOT
+		elif kind.begins_with("veh_") or state.get_vehicle(intent.actor_id) != null:
+			bonus = R_VEHICLE
+		if bonus > 0.0:
+			_shaping_used += 1
+			gained += bonus * _typical
+	return gained
+
+
+## Стоимость ТИПОВОГО живого юнита обучаемой стороны на старте эпизода. Медиана, а не
+## среднее: одна машина ценой 500 не должна перекашивать масштаб роты из 176 пехотинцев.
+func _typical_unit_value() -> float:
+	var costs: Array[float] = []
+	for u in state.all_units():
+		if u.owner == side and u.is_alive() and not u.is_drone:
+			costs.append(float(u.stats.cost))
+	if costs.is_empty():
+		return 1.0
+	costs.sort()
+	return maxf(1.0, costs[costs.size() / 2])
+
+
 func _value_diff() -> float:
 	var mine := Obs.army_value(state, side)
 	var theirs := 0.0
@@ -315,7 +425,9 @@ func _response(reward: float, is_reset: bool) -> Dictionary:
 		return resp
 	var acting := state.active_player()
 	var t0 := Time.get_ticks_usec()
-	_legal = _cap_legal(_drop_looping(resolver.legal_intents(acting, _actor_subset(acting))))
+	_legal = IntentBudget.cap(_drop_looping(resolver.legal_intents(
+			acting, IntentBudget.actor_subset(resolver, acting, max_actors, _cap_rng))),
+			max_candidates, _cap_rng)
 	var t1 := Time.get_ticks_usec()
 	var desc: Array = []
 	for intent: Intent in _legal:
@@ -333,8 +445,8 @@ func _response(reward: float, is_reset: bool) -> Dictionary:
 ##
 ## Первый прогон town'а: 75% действий политики — move_held (бесплатная перекладка
 ## пленника), end — 0.4%, две доигранные партии за 13 апдейтов. Конец хода стоит
-## R_TURN_PENALTY, бесплатное действие — ноль, так что «перекладывать вечно» строго
-## выгоднее; PPO нашёл это за десяток апдейтов. R_STEP_PENALTY убирает выгоду, а этот
+## конец хода, бесплатное действие — ноль, так что «перекладывать вечно» строго
+## выгоднее; PPO нашёл это за десяток апдейтов. Штраф за шаг убирает выгоду, а этот
 ## фильтр убирает саму возможность.
 ##
 ## Режется ТОЧЕЧНО: только те виды, которые ЭТОТ юнит уже сделал бесплатно
@@ -348,6 +460,7 @@ func _drop_looping(list: Array) -> Array:
 		_free_count = {}
 		_free_kinds = {}
 		_free_total = 0
+		_shaping_used = 0
 		return list
 	if _free_count.is_empty():
 		return list
@@ -372,90 +485,6 @@ func _drop_looping(list: Array) -> Array:
 			continue
 		out.append(intent)
 	return out
-
-## Подмножество актёров, которых перечислитель рассматривает на ЭТОМ шаге (пусто = все).
-##
-## Перебор всех 176 бойцов стоит ~180 мс за точку решения; за ход таких точек сотни.
-## Поэтому за шаг рассматриваются max_actors случайных актёров — выбор каждый раз новый,
-## так что за ход очередь доходит до всех. Сначала берутся те, у кого ОСТАЛИСЬ ОД:
-## иначе подмножество из выдохшихся юнитов не предлагало бы ничего, кроме конца хода,
-## и сторона теряла бы ход с полными ОД на руках.
-func _actor_subset(acting: int) -> Dictionary:
-	if max_actors <= 0:
-		return {}
-	var ready: Array = []
-	var spent: Array = []
-	for u: UnitInstance in state.all_units():
-		if u.owner != acting or not u.is_alive():
-			continue
-		(ready if u.remaining_ap > 0 else spent).append(u.id)
-	for veh: Vehicle in state.all_vehicles():
-		if veh.owner != acting or not veh.alive() or veh.is_borg():
-			continue
-		(ready if resolver.vehicle_ap(veh) > 0 else spent).append("v%d" % veh.id)
-	if ready.size() + spent.size() <= max_actors:
-		return {}
-	_shuffle(ready)
-	_shuffle(spent)
-	var out := {}
-	for key: Variant in ready + spent:
-		if out.size() >= max_actors:
-			break
-		out[key] = true
-	return out
-
-## Урезать список кандидатов до max_candidates, НЕ обедняя выбор.
-##
-## Равномерная выборка здесь была бы ловушкой: на town'е 59% списка — «шагнуть», и
-## случайные 768 из 8366 почти наверняка не содержали бы ни одного выстрела. Поэтому
-## корзины (актёр, вид намерения) обходятся по кругу: каждый юнит получает по одному
-## варианту КАЖДОГО своего вида, прежде чем кто-то получит второй. Редкие виды
-## (выстрел, постройка, посадка) выживают целиком, режется только избыток ходов.
-##
-## Порядок берётся из _cap_rng (сид эпизода), так что эпизод воспроизводим, а EndTurn
-## остаётся в списке всегда — иначе ход некому было бы закончить.
-func _cap_legal(list: Array) -> Array:
-	if max_candidates <= 0 or list.size() <= max_candidates:
-		return list
-	var buckets := {}
-	var order: Array = []
-	var kept: Array = []
-	for intent: Intent in list:
-		if intent is EndTurnIntent:
-			kept.append(intent)
-			continue
-		var key := "%d:%s" % [intent.actor_id, str(IntentCodec.encode(intent).get("t", ""))]
-		if not buckets.has(key):
-			buckets[key] = []
-			order.append(key)
-		buckets[key].append(intent)
-	_shuffle(order)
-	for key: String in order:
-		_shuffle(buckets[key])
-	var round_index := 0
-	while kept.size() < max_candidates:
-		var took := false
-		for key: String in order:
-			var b: Array = buckets[key]
-			if round_index >= b.size():
-				continue
-			kept.append(b[round_index])
-			took = true
-			if kept.size() >= max_candidates:
-				break
-		if not took:
-			break          # все корзины исчерпаны раньше потолка
-		round_index += 1
-	return kept
-
-
-func _shuffle(a: Array) -> void:
-	for i in range(a.size() - 1, 0, -1):
-		var j := _cap_rng.randi_range(0, i)
-		var t: Variant = a[i]
-		a[i] = a[j]
-		a[j] = t
-
 
 func _save_replay(path: String) -> Dictionary:
 	if recorder == null or path == "":
