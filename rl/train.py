@@ -587,7 +587,8 @@ class Trainer:
                 logp = logp_all.gather(1, actions.unsqueeze(1)).squeeze(1)
                 probs = logp_all.exp() * mask
                 entropy = -(probs * logp_all.masked_fill(~mask, 0.0)).sum(1).mean()
-                ratio = (logp - old_logp).exp()
+                logratio = logp - old_logp
+                ratio = logratio.exp()
                 pg = -torch.min(ratio * adv, ratio.clamp(1 - cfg["clip"], 1 + cfg["clip"]) * adv).mean()
                 vloss = F.mse_loss(value, ret)
                 loss = pg + cfg["vf_coef"] * vloss - cfg["ent_coef"] * entropy
@@ -596,7 +597,12 @@ class Trainer:
                 torch.nn.utils.clip_grad_norm_(self.net.parameters(), cfg["max_grad_norm"])
                 self.opt.step()
                 with torch.no_grad():
-                    kl = (old_logp - logp).mean().item()
+                    # Schulman's k3 estimator: unbiased, lower variance, and always >= 0.
+                    # The naive k1, mean(old_logp - logp), routinely comes out NEGATIVE -
+                    # town-3 logged kl=-0.0470 at clipfrac 25.2% with all four epochs run,
+                    # because "-0.047 > 0.02" is false and the brake silently never fired
+                    # while the policy moved more than twice the target.
+                    kl = ((ratio - 1) - logratio).mean().item()
                     epoch_kl.append(kl)
                     out["policy_loss"].append(pg.item())
                     out["value_loss"].append(vloss.item())
