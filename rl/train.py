@@ -87,6 +87,12 @@ DEFAULTS = dict(
     milestone_every=0,        # also keep every checkpoint at a step multiple of this
     keep_replay_sets=8,       # newest N replays/checkpoint_* directories
     mem_limit_mb=0,           # >0: checkpoint and exit before the OS OOM-kills the run
+    # >0: checkpoint and exit while there is still room to write the checkpoint. A disk
+    # that fills mid-save leaves a truncated file and then a crash loop, because every
+    # restart tries the same failing write. Stopping early is the difference between
+    # "stopped: disk floor" in the morning and a branch that died at 4am taking its last
+    # checkpoint with it.
+    disk_floor_mb=1536,
     rollout_budget_mb=0,      # >0: end a rollout early once the buffer reaches this
 )
 
@@ -138,6 +144,14 @@ def mem_report() -> dict:
             return dict(rss_mb=peak, total_mb=peak, peak_only=True)
         except Exception:
             return {}
+
+
+def free_mb(path: str) -> float:
+    """Free space on the volume holding `path`."""
+    try:
+        return shutil.disk_usage(path).free / 2**20
+    except OSError:
+        return float("inf")
 
 
 def dir_mb(path: str) -> float:
@@ -319,7 +333,8 @@ class Trainer:
                   matches=self.matches_done, phase=self.cfg["phase"], stage=self.cfg["stage"],
                   activity=activity, done=done, total=total, time=time.time(),
                   next_eval_update=self.next_eval_update(), eval=self.last_eval,
-                  disk_mb=self.disk_mb(), **mem_report(), **extra)
+                  disk_mb=self.disk_mb(), disk_free_mb=round(free_mb(self.run_dir)),
+                  **mem_report(), **extra)
         self._last_status = time.time()
         tmp = os.path.join(self.run_dir, "status.json.tmp")
         with open(tmp, "w") as f:
@@ -756,7 +771,7 @@ class Trainer:
                 # trained before this rule existed: it evaluates on its next update.
                 if self.update % cfg["eval_every"] == 0 or not self.has_eval_history():
                     self.run_eval()
-                if self.over_memory_budget():
+                if self.over_memory_budget() or self.under_disk_floor():
                     break
                 if os.path.exists(stop_flag):
                     os.remove(stop_flag)
@@ -804,6 +819,18 @@ class Trainer:
             time.sleep(2)
         print("[train] continuing", flush=True)
         return False
+
+    def under_disk_floor(self) -> bool:
+        floor = float(self.cfg["disk_floor_mb"])
+        if floor <= 0:
+            return False
+        free = free_mb(self.run_dir)
+        if free >= floor:
+            return False
+        print(f"[train] disk floor reached: {free:.0f} MB free < {floor:.0f} MB "
+              f"— checkpointing and exiting while the write can still succeed", flush=True)
+        self.write_status("running", f"below disk_floor_mb ({free:.0f} MB free) — exiting", 0, 0)
+        return True
 
     def over_memory_budget(self) -> bool:
         limit = float(self.cfg["mem_limit_mb"])
