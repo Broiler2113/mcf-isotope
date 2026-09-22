@@ -4,7 +4,7 @@ extends SceneTree
 ## векторизованной среды: тренер на Python говорит с ним JSON-строками через stdin/stdout.
 ##
 ##   → {"cmd":"reset", "map":"/abs/path.json", "seed":N, "side":0|1, "opponent":0|1|2|-1,
-##      "round_cap":10, "civilians":false, "random_events":false, "fog":1,
+##      "round_cap":10, "max_steps":3000, "civilians":false, "random_events":false, "fog":1,
 ##      "friendly_fire":true, "record":true}
 ##   ← {"ok":true, "obs":{...}, "legal":[...], "acting":side, "reward":0, "done":false}
 ##   → {"cmd":"step", "action":k}          k — индекс в последнем списке legal
@@ -34,6 +34,8 @@ var resolver: GameActionResolver = null
 var side: int = MCF.Owner.PLAYER_1
 var opponent: int = AIController.Difficulty.NORMAL
 var round_cap: int = 10
+## Потолок шагов эпизода (обеих сторон); задаётся в reset как "max_steps", иначе 300 на раунд.
+var max_steps: int = 3000
 var brains: Dictionary = {}
 var recorder: ReplayRecorder = null
 var _legal: Array = []
@@ -88,6 +90,7 @@ func _reset(req: Dictionary) -> Dictionary:
 	side = int(req.get("side", MCF.Owner.PLAYER_1))
 	opponent = int(req.get("opponent", AIController.Difficulty.NORMAL))
 	round_cap = int(req.get("round_cap", 10))
+	max_steps = int(req.get("max_steps", round_cap * 300))
 	resolver = GameActionResolver.new(state)
 	resolver.fog_mode = int(req.get("fog", MCF.Fog.STANDARD))
 	resolver.friendly_fire_enabled = bool(req.get("friendly_fire", true))
@@ -195,6 +198,11 @@ func _check_over() -> bool:
 		_result = "win"
 	elif state.turns.round_number > round_cap:
 		_result = "draw_cap"
+	elif _steps >= max_steps:
+		# Страховка от вечного хода: политика (особенно жадная на оценке) может без конца
+		# выбирать бесплатное намерение и никогда не завершить ход — раундовый лимит тогда
+		# не наступает. Ничья по шагам; на панели видна как drawrate.
+		_result = "draw_steps"
 	else:
 		return false
 	_done = true

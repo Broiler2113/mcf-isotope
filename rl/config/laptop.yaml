@@ -13,6 +13,7 @@ opponent: normal    # Phase A teacher; HARD is the graduation opponent (8.2)
 pool_ai_fraction: 0.15
 pool_size: 6
 round_cap: 10
+max_steps: 3000     # env steps per episode before a forced draw (a policy stuck on a free action)
 civilians: false
 random_events: false
 fog: standard
