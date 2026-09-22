@@ -26,9 +26,9 @@ phase: A
 opponent: normal
 pool_ai_fraction: 0.15
 pool_size: 6
-round_cap: 10
-max_steps: 8000      # a measured 10-round match is ~1250 own decisions, so the round cap
-                     # bites first and this only ever catches a policy stuck on free actions
+round_cap: 12       # rounds per game before it is called a draw
+max_steps: 8000      # a measured 10-round match is ~1250 own decisions, so 12 rounds is
+                     # ~1500; the round cap bites first and this only catches a stuck policy
 max_actors: 16       # 0 = every unit, and then a step costs 195 ms
 max_candidates: 512
 civilians: false     # the map carries 12; turn this on to wake them
