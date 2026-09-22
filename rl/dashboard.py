@@ -115,15 +115,27 @@ SESSIONS = os.path.join(RUNS, ".sessions.json")
 SESSION_DAYS = 14
 
 
-# One CookieManager per script run, created at module scope. It cannot be cached: it
-# renders a component, and Streamlit refuses widget commands inside a cached function.
-# The cookie is what carries a login across a browser reload — st.session_state dies with
-# the websocket, so on its own it re-prompts every time the page is refreshed.
-_JAR = stx.CookieManager(key="rlm-auth")
-
-
 def cookie_jar():
-    return _JAR
+    """CookieManager, created only when something actually needs to WRITE a cookie.
+
+    Reading goes through st.context.cookies instead (see _cookie_token): the component's
+    .get() is asynchronous — on the first run of a fresh page load it returns None, the
+    login form renders, st.stop() halts the script, and the cookie round-trip never gets
+    to matter. That is why "stay signed in" appeared to do nothing on refresh. The server
+    already has the request cookies, so reading needs no component at all."""
+    return stx.CookieManager(key="rlm-auth")
+
+
+def _cookie_token() -> str | None:
+    """The session cookie as the browser sent it with THIS request. Deterministic and
+    available on the very first script run, unlike the component's async read."""
+    try:
+        tok = st.context.cookies.get(AUTH_COOKIE)
+    except Exception:
+        return None
+    # A cookie is a string or it is nothing. Anything else (a stub under the test
+    # harness, a future API change) must not reach sha256 and blow up the login page.
+    return tok if isinstance(tok, str) and tok else None
 
 
 def _sessions() -> dict:
@@ -146,7 +158,7 @@ def _issue_token() -> str:
 
 
 def _token_valid(tok: str | None) -> bool:
-    if not tok:
+    if not isinstance(tok, str) or not tok:
         return False
     return float(_sessions().get(hashlib.sha256(tok.encode()).hexdigest(), 0)) > time.time()
 
@@ -157,7 +169,10 @@ def _sign_out(tok: str | None) -> None:
                 if k != hashlib.sha256(tok.encode()).hexdigest()}
         with open(SESSIONS, "w") as f:
             json.dump(live, f)
-    cookie_jar().delete(AUTH_COOKIE, key="rlm-signout")
+    try:
+        cookie_jar().delete(AUTH_COOKIE, key="rlm-signout")
+    except Exception:
+        pass       # the token is already revoked server-side; a stale cookie cannot log in
     st.session_state.pop("auth", None)
 
 
@@ -166,12 +181,9 @@ def gate() -> None:
     if not pw:
         st.error("MCF_RLM_PASSWORD is not set — refusing to serve controls without a password.")
         st.stop()
-    jar = cookie_jar()
-    jar.get_all()          # forces the component to report before the first .get()
-    tok = jar.get(AUTH_COOKIE)
     if st.session_state.get("auth"):
-        st.session_state["auth_token"] = tok
         return
+    tok = _cookie_token()
     if _token_valid(tok):
         st.session_state.auth = True
         st.session_state["auth_token"] = tok
@@ -180,12 +192,18 @@ def gate() -> None:
         typed = st.text_input("Password", type="password")
         keep = st.checkbox(f"Stay signed in on this browser for {SESSION_DAYS} days",
                            value=True)
-        if st.form_submit_button("Enter") and hmac.compare_digest(typed, pw):
-            st.session_state.auth = True
-            if keep:
-                jar.set(AUTH_COOKIE, _issue_token(),
-                        expires_at=datetime.now() + timedelta(days=SESSION_DAYS))
-            st.rerun()
+        submitted = st.form_submit_button("Enter")
+    if submitted and hmac.compare_digest(typed, pw):
+        st.session_state.auth = True
+        if keep:
+            fresh = _issue_token()
+            st.session_state["auth_token"] = fresh
+            # Deliberately NO st.rerun() here: .set() is a component call that has to
+            # execute before the cookie exists in the browser, and rerunning immediately
+            # threw that away — the login "worked" but nothing was ever written.
+            cookie_jar().set(AUTH_COOKIE, fresh, key="rlm-set",
+                             expires_at=datetime.now() + timedelta(days=SESSION_DAYS))
+        return
     st.stop()
 
 
