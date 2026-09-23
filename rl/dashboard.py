@@ -345,13 +345,18 @@ def live_card(b: str) -> None:
         unsafe_allow_html=True)
 
     ev = s.get("eval") or {}
-    cols = st.columns(4)
+    cols = st.columns(5)
     cols[0].metric("win vs HARD", pct(ev.get("winrate_hard")),
                    help="the graduation opponent (§8.2); 0.55 is the reference bar")
     cols[1].metric("loss vs HARD", pct(ev.get("lossrate_hard")))
-    cols[2].metric("memory", f"{s['total_mb']:.0f} MB" if s.get("total_mb") else "—",
+    # Win/loss/draw read as one triple: on town a draw means the round cap was reached
+    # with the unit counts level, so it is the midpoint between the other two, not a
+    # separate outcome to hunt for.
+    cols[2].metric("draw vs HARD", pct(ev.get("drawrate_hard")),
+                   help="round cap reached with equal living units; stalls count here too")
+    cols[3].metric("memory", f"{s['total_mb']:.0f} MB" if s.get("total_mb") else "—",
                    help="trainer + its Godot envs; `free` is what the machine has left")
-    cols[3].metric("run on disk", f"{s['disk_mb']:.0f} MB" if s.get("disk_mb") is not None else "—")
+    cols[4].metric("run on disk", f"{s['disk_mb']:.0f} MB" if s.get("disk_mb") is not None else "—")
     if pct(ev.get("winrate_hard")) == "—":
         nxt = s.get("next_eval_update")
         st.caption("No evaluation yet — win rates appear after the first one"
@@ -830,6 +835,8 @@ def page_overview() -> None:
                          update=s.get("update"), matches=s.get("matches"), phase=s.get("phase"),
                          stage=s.get("stage"),
                          win_hard=last.get("winrate_hard"),
+                         loss_hard=last.get("lossrate_hard"),
+                         draw_hard=last.get("drawrate_hard"),
                          stall_hard=last.get("stallrate_hard"),
                          mem_mb=round(s["total_mb"]) if s.get("total_mb") else None,
                          disk_mb=s.get("disk_mb"),
