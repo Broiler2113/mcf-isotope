@@ -1058,7 +1058,7 @@ def page_evaluations(b: str) -> None:
     else:
         g = games
         st.caption(f"all {len(g)} games across every evaluation; select a test above to narrow.")
-    gc = [c for c in ("step", "opponent", "game", "result", "value_diff", "rounds",
+    gc = [c for c in ("step", "opponent", "game", "result", "by", "value_diff", "rounds",
                       "steps", "illegal", "map", "side", "seed", "when") if c in g]
     st.dataframe(g[gc].sort_values(["step", "opponent", "game"], ascending=[False, True, True]),
                  width="stretch", hide_index=True)

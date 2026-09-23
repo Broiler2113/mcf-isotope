@@ -680,7 +680,8 @@ class Trainer:
                         # four honest losses and four stalls, not eight of the same thing.
                         row = dict(
                             step=self.global_step, update=self.update, opponent=opponent,
-                            game=k + 1, result=results[-1], value_diff=info["value_diff"],
+                            game=k + 1, result=results[-1], by=info.get("by", ""),
+                            value_diff=info["value_diff"],
                             rounds=info["round"], steps=info.get("steps"),
                             illegal=info.get("illegal"), seed=cfgs[j].seed, side=cfgs[j].side,
                             map=os.path.basename(cfgs[j].map_path), time=time.time())
@@ -691,7 +692,9 @@ class Trainer:
                         with open(os.path.join(self.run_dir, "eval_games.jsonl"), "a") as f:
                             f.write(json.dumps(row) + "\n")
                         print(f"[eval]   vs {opponent} game {k + 1}/{games}: "
-                              f"{row['result']} in {row['rounds']}r / {row['steps']} steps",
+                              f"{row['result']}"
+                              f"{'(' + row['by'] + ')' if row['by'] else ''} "
+                              f"in {row['rounds']}r / {row['steps']} steps",
                               flush=True)
                         if record_dir is not None and k < keep:
                             os.makedirs(record_dir, exist_ok=True)

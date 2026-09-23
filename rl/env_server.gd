@@ -134,6 +134,10 @@ var _done: bool = true
 var _illegal: int = 0
 var _steps: int = 0
 var _result: String = ""
+## Как закончилась партия: "rout" (одна из армий уничтожена), "count" (перевес по составу
+## на лимите раундов) или "" (ничья/страховка). Едет в info, чтобы разгром и победу по
+## очкам можно было отличить в логе оценок.
+var _by: String = ""
 ## Бесплатные действия за текущий ход: ключ актёра → счётчик, и "<ключ>|<вид>" → true.
 ## Обнуляются на смене хода (_turn_token). См. FREE_ACTIONS_PER_UNIT и _drop_looping().
 var _free_count: Dictionary = {}
@@ -229,6 +233,7 @@ func _reset(req: Dictionary) -> Dictionary:
 	_illegal = 0
 	_steps = 0
 	_result = ""
+	_by = ""
 	_free_count = {}
 	_free_kinds = {}
 	_free_turn = ""
@@ -383,8 +388,18 @@ func _side_has_army(pid: int) -> bool:
 			return true
 	return false
 
-## Исход партии: своя армия мертва — поражение, чужая — победа, обе — ничья,
-## лимит раундов — ничья. Пишет _result и возвращает true, когда партия окончена.
+## Исход партии: своя армия мертва — поражение, чужая — победа, обе — ничья.
+##
+## На лимите раундов партия НЕ ничья по умолчанию, а считается по головам: у кого на конец
+## последнего раунда живых бойцов больше, тот и выиграл. Требование «уничтожить все 176
+## вражеских юнитов за 13 раундов» было победой только на бумаге — за всю ночь обучения
+## win не уходил с 0.00 ни разу, и уйти не мог. Перевес по составу достижим и при этом
+## по-прежнему честен: политика сейчас заканчивает матч, потеряв БОЛЬШЕ врага
+## (value_diff ≈ −0.5), так что для победы ей всё равно нужно научиться разменивать
+## лучше противника, а не просто досидеть до конца.
+##
+## Ничья остаётся только при РАВНОМ счёте. draw_steps (упёрлись в max_steps) считается
+## ничьёй всегда: это признак сломанного эпизода, а не результат партии.
 func _check_over() -> bool:
 	if _done:
 		return true
@@ -397,10 +412,25 @@ func _check_over() -> bool:
 		_result = "draw"
 	elif not mine:
 		_result = "loss"
+		_by = "rout"
 	elif not theirs:
 		_result = "win"
+		_by = "rout"
 	elif state.turns.round_number > round_cap:
-		_result = "draw_cap"
+		var mine_n := _living_count(side)
+		var theirs_n := 0
+		for pid: int in state.roster.player_ids():
+			if pid != side and Obs.rel_owner(resolver, side, pid) == 1:
+				theirs_n += _living_count(pid)
+		# Строки результата НЕ новые нарочно: "win"/"loss" читают и награда в _response,
+		# и счётчики winrate в train.py, и панель. Как именно победили — в info.by.
+		_by = "count"
+		if mine_n > theirs_n:
+			_result = "win"
+		elif mine_n < theirs_n:
+			_result = "loss"
+		else:
+			_result = "draw_cap"
 	elif _steps >= max_steps:
 		# Страховка от вечного хода: политика (особенно жадная на оценке) может без конца
 		# выбирать бесплатное намерение и никогда не завершить ход — раундовый лимит тогда
@@ -410,6 +440,17 @@ func _check_over() -> bool:
 		return false
 	_done = true
 	return true
+
+## Сколько живых бойцов у стороны. Дроны не в счёт (расходники, не состав); техника тоже —
+## «юнитов больше» в постановке владельца означает именно бойцов, а приравнивать танк к
+## пехотинцу было бы произвольным весом в ту или другую сторону.
+func _living_count(pid: int) -> int:
+	var n := 0
+	for u in state.all_units():
+		if u.owner == pid and u.is_alive() and not u.is_drone:
+			n += 1
+	return n
+
 
 ## Прочность корпусов всех машин — снимок ДО действия, чтобы заметить уничтоженную.
 func _vehicle_hulls() -> Dictionary:
@@ -512,6 +553,7 @@ func _response(reward: float, is_reset: bool) -> Dictionary:
 			"loss": resp["reward"] = float(resp["reward"]) - 1.0
 			_: resp["reward"] = float(resp["reward"]) + R_DRAW
 		resp["info"]["result"] = _result
+		resp["info"]["by"] = _by
 		_legal = []
 		resp["legal"] = []
 		resp["obs"] = Obs.encode(resolver, side, round_cap)
