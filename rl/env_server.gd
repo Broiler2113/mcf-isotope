@@ -107,12 +107,27 @@ const FREE_ACTIONS_PER_UNIT := 6
 ## max_steps. Общий бюджет режет именно это; для честной игры он щедр — перекладывают
 ## пленников и тела единицы юнитов, а не рота.
 const FREE_ACTIONS_PER_TURN := 48
+## …и на СКОЛЬКИХ бойцах этот бюджет мерили. Оба потолка ниже — штука на ход, а не на
+## юнита, и при вчетверо меньшей армии за ход происходит вчетверо меньше решений, так что
+## тот же абсолютный бюджет становится вчетверо большей ДОЛЕЙ всего, что делает политика.
+## town-5 поймал это ровно так: перетаскивание (бесплатное, как и перекладка пленника, и
+## комбинаторно обильное — каждый мешок, ёж и куча земли × каждая соседняя клетка) выросло
+## с 6% действий до 35% и стало самым частым действием вообще, обогнав move; оценки при
+## этом поехали вниз три раза подряд (-0.239 → -0.293 → -0.407, разгромов 2/4 → 3/4 → 4/4,
+## раундов 11.0 → 9.75 → 8.5). 48 из ~150 решений за ход — это и есть та самая треть.
+## Поэтому оба потолка теперь масштабируются от размера армии, а не стоят числом.
+const BUDGET_BASELINE_UNITS := 176
 ## Сколько клеток за ход сторона может перекопать (dig). Без потолка политика закапывает
 ## пол-карты: dig шёл вторым по частоте после move — 14.5% всех действий, — а получившиеся
 ## траншеи потом мешают её же манёврам. Копать по-прежнему можно, но как приём, а не как
 ## образ жизни. Потолок структурный, а не через награду: штраф за копание политика
 ## обобщила бы на «не трогать местность вообще», а окоп под огнём — правильный ход.
 const DIGS_PER_TURN := 8
+
+## Оба потолка, пересчитанные под РЕАЛЬНЫЙ размер армии этого эпизода (см.
+## BUDGET_BASELINE_UNITS). Считаются один раз на reset'е, как _turn_penalty и _typical.
+var _free_turn_cap: int = FREE_ACTIONS_PER_TURN
+var _digs_turn_cap: int = DIGS_PER_TURN
 
 var state: GameState = null
 var resolver: GameActionResolver = null
@@ -234,6 +249,14 @@ func _reset(req: Dictionary) -> Dictionary:
 	_typical = _typical_unit_value() / _norm
 	_turn_penalty = -_typical / TURNS_PER_KILL
 	_step_penalty = -_typical / STEPS_PER_KILL
+	# Потолки на ход — в ДОЛЮ от армии, на которой их мерили (BUDGET_BASELINE_UNITS), а не
+	# абсолютным числом. Минимумы не нулевые: и перетаскивание, и окоп обязаны остаться
+	# возможными на любой карте — вопрос лишь в том, чтобы они не были основным занятием.
+	var army := maxi(1, _living_count(side))
+	_free_turn_cap = maxi(8, int(round(float(FREE_ACTIONS_PER_TURN)
+			* float(army) / float(BUDGET_BASELINE_UNITS))))
+	_digs_turn_cap = maxi(2, int(round(float(DIGS_PER_TURN)
+			* float(army) / float(BUDGET_BASELINE_UNITS))))
 	_last_diff = _value_diff()
 	_done = false
 	_illegal = 0
@@ -624,8 +647,8 @@ func _drop_looping(list: Array) -> Array:
 		return list
 	# Сначала — КТО упёрся в потолок (бюджет стороны исчерпан — значит все, кто вообще
 	# ходил бесплатно). Это дёшево: словарь размером с число отметившихся актёров.
-	var dug_out := _digs_used >= DIGS_PER_TURN
-	var side_done := _free_total >= FREE_ACTIONS_PER_TURN
+	var dug_out := _digs_used >= _digs_turn_cap
+	var side_done := _free_total >= _free_turn_cap
 	var blocked := {}
 	for key: Variant in _free_count:
 		if side_done or int(_free_count[key]) >= FREE_ACTIONS_PER_UNIT:
