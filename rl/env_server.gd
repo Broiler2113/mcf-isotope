@@ -517,7 +517,25 @@ func _combat_reward(intent: Intent, res: ActionResult, hulls_before: Dictionary)
 			if intent is ShootIntent:
 				fired = intent.shots if intent.shots > 0 else maxi(1, _actor_rof(intent))
 			bonus = R_SHOT * float(fired) / maxf(1.0, float(_actor_rof(intent)))
-		elif kind.begins_with("veh_") or state.get_vehicle(intent.actor_id) != null:
+		elif kind == "veh_move" or kind == "veh_turn" or kind == "veh_melee":
+			# ТОЛЬКО работа машиной как машиной: проехать, довернуть корпус, таранить.
+			# (Выстрел из пушки платится выше, по стволам, вместе с обычной стрельбой.)
+			#
+			# Раньше здесь стоял begins_with("veh_"), то есть бонус получала ЛЮБАЯ возня с
+			# техникой — включая посадку и высадку. При R_VEHICLE 0.05 это ничего не стоило,
+			# при 0.30 политика нашла петлю за два часа. town-4, доля действий:
+			#
+			#   апдейт      2      39      64      91     119
+			#   veh_out   1.82%   1.82%   2.54%   4.75%   3.71%
+			#   veh_board 0.07%   0.65%   1.37%   3.65%   2.73%
+			#   veh_move  2.80%   0.20%   0.39%   0.00%   0.26%
+			#
+			# Вылезти-залезть-вылезти доросло до 8.4% ВСЕХ действий, а езда упала до нуля:
+			# бонус платился дважды за петлю, которая не меняет на поле ничего. Это та же
+			# ловушка, что и бесплатная перекладка пленника и плата за каждое нажатие спуска.
+			# Посадка не нуждается в поощрении вовсе: _crew_vehicles сажает экипажи на
+			# reset'е. Починка тоже не здесь — восстановленный корпус уже виден
+			# дифференциалу через Obs.army_value.
 			bonus = R_VEHICLE
 		if bonus > 0.0:
 			_shaping_used += 1

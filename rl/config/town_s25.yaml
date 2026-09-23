@@ -53,7 +53,14 @@ friendly_fire: true
 rollout_steps: 256
 epochs: 4
 minibatch: 32
-lr: 0.0001           # as town.yaml: 3e-4 ran at KL 0.077 and clipfrac 42%
+lr: 0.00005          # town.yaml's 1e-4 was itself a step down from 3e-4 (KL 0.077,
+                     # clipfrac 42%). On the platoon map even 1e-4 is too big: town-4 ran
+                     # updates 105-119 with target_kl braking to 2 epochs of 4 on twelve of
+                     # fourteen updates, KL pinned just under the 0.02 target and clipfrac
+                     # steady at ~22%. Half of every update's optimisation budget was being
+                     # thrown away. Per the rule in train.py, persistent braking together
+                     # with high clipfrac is the signal to lower the rate, not to loosen the
+                     # target.
 gamma: 0.99
 lam: 0.95
 clip: 0.2
