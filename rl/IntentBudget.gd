@@ -18,6 +18,16 @@ extends RefCounted
 ## сотни. Выбор новый на каждом шаге, так что за ход очередь доходит до всех. Сначала берутся
 ## те, у кого ОСТАЛИСЬ ОД: иначе подмножество из выдохшихся юнитов не предложило бы ничего,
 ## кроме конца хода, и сторона теряла бы ход с полными ОД на руках.
+##
+## ТЕХНИКА В ПОДМНОЖЕСТВЕ ВСЕГДА. Случайные 16 актёров из 176 означали, что намерения
+## конкретной машины попадали в список примерно в 9% точек решения: политика физически
+## почти не видела танк, шаттл и борга, и в записях боёв они простаивали всю партию.
+## Научиться пользоваться тем, чего не показывают, нельзя, поэтому машины берутся ВНЕ
+## жребия. Их мало (на town'е три на сторону), так что на долю пехоты это почти не влияет.
+##
+## Борг — не самостоятельный актёр: LegalIntents перечисляет его через юнита-пилота
+## (u.borg_id != -1), поэтому здесь резервируется именно пилот, а сам борг пропускается —
+## ровно как в LegalIntents.enumerate.
 static func actor_subset(r: GameActionResolver, acting: int, max_actors: int,
 		rng: RandomNumberGenerator) -> Dictionary:
 	if max_actors <= 0:
@@ -25,19 +35,27 @@ static func actor_subset(r: GameActionResolver, acting: int, max_actors: int,
 	var state := r.state
 	var ready: Array = []
 	var spent: Array = []
+	var always: Array = []
 	for u: UnitInstance in state.all_units():
 		if u.owner != acting or not u.is_alive():
 			continue
-		(ready if u.remaining_ap > 0 else spent).append(u.id)
+		if u.borg_id != -1:
+			always.append(u.id)
+		else:
+			(ready if u.remaining_ap > 0 else spent).append(u.id)
 	for veh: Vehicle in state.all_vehicles():
 		if veh.owner != acting or not veh.alive() or veh.is_borg():
 			continue
-		(ready if r.vehicle_ap(veh) > 0 else spent).append("v%d" % veh.id)
-	if ready.size() + spent.size() <= max_actors:
+		always.append("v%d" % veh.id)
+	if always.size() + ready.size() + spent.size() <= max_actors:
 		return {}
 	shuffle(ready, rng)
 	shuffle(spent, rng)
 	var out := {}
+	# Машины и пилоты боргов — целиком, даже если их одних больше потолка: потолок стоит
+	# ради цены перечисления пехоты, а техники на карте единицы.
+	for key: Variant in always:
+		out[key] = true
 	for key: Variant in ready + spent:
 		if out.size() >= max_actors:
 			break

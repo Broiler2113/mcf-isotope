@@ -1,0 +1,81 @@
+# Town, platoon scale — rl/maps/town_50x50_s25.json, built by
+#   python rl/tools/make_town_map.py --scale 0.25 --inset 10 --out rl/maps/town_50x50_s25.json
+#
+# Same 50x50 town terrain as rl/config/town.yaml, same eleven unit types, same three
+# vehicles; a quarter of the infantry and both armies moved ten rows towards the middle.
+# 50 a side instead of 176: 13 light, 9 heavy, 4 shield bearers, 5 machinegunners,
+# 4 snipers, 3 anti-tank, 1 marksman, 1 flamethrower, 3 engineers, 2 sappers,
+# 2 drone operators, 1 tank, 1 shuttle, 1 borg.
+#
+# WHY THIS RUN EXISTS. town-3 trained for 24 hours and 400 updates on the full company and
+# went flat: value_diff averaged -0.560 over updates 200-250 and -0.536 over updates
+# 250-400, an improvement smaller than the standard deviation of the measurement, with the
+# win rate at 0.00 throughout. It saw 138 matches in a day. A 176-unit tactics game is not
+# learnable from 138 examples, and the outcome signal never varies, so there is nothing for
+# the advantage estimator to tell apart.
+#
+# Two changes buy the throughput back, and both are measured, not guessed:
+#
+#   1. A quarter of the army. A full match ran ~2900 env steps; a platoon match runs a
+#      fraction of that, and the legal-intent enumerator — ~148 ms of a ~195 ms step, and
+#      the single most expensive thing in training — scales with the unit count too. The
+#      front ranks now start 19 rows apart instead of 39, so the walk-up is not the
+#      majority of the match.
+#   2. eval_every 25, not 10. At eval_every 10 an evaluation cost 10,500-11,600 env steps
+#      against the 10,240 steps of training it was measuring: MORE THAN HALF the machine
+#      was spent on measurement. Evaluation steps do not count towards `step` and never
+#      enter a rollout, so that half was pure overhead. 25 puts it near a fifth.
+#
+# Everything else is deliberately identical to town.yaml so the comparison stays honest.
+device: cpu
+n_envs: 6            # 10 cores; platoon envs are much lighter than company ones, and
+                     # mem_limit_mb below still bounds the total
+maps:
+  - rl/maps/town_50x50_s25.json
+stage: 1
+phase: A
+opponent: normal
+pool_ai_fraction: 0.15
+pool_size: 6
+round_cap: 12       # rounds per game before it is decided on head count
+max_steps: 8000      # a platoon match is a few hundred own decisions; this only catches a
+                     # stuck policy now, which is what it is for
+max_actors: 16       # unchanged ON PURPOSE: the in-game LearnedController caps with the
+                     # same number, and a policy trained on a different candidate-list
+                     # shape than it plays on is the bug rl/IntentBudget.gd exists to stop.
+                     # At 50 units a side this now covers ~32% of the army per decision
+                     # instead of ~9%, without touching either side of the wire.
+max_candidates: 512
+civilians: false     # the map carries 12; turn this on to wake them
+random_events: false
+fog: standard
+friendly_fire: true
+rollout_steps: 256
+epochs: 4
+minibatch: 32
+lr: 0.0001           # as town.yaml: 3e-4 ran at KL 0.077 and clipfrac 42%
+gamma: 0.99
+lam: 0.95
+clip: 0.2
+ent_coef: 0.01
+vf_coef: 0.5
+total_steps: 50000000
+checkpoint_every: 10
+eval_every: 25       # see the header — at 10 the evaluations cost more env steps than the
+                     # training they measured
+eval_games: 4
+eval_opponents: [hard]   # HARD only: NORMAL measured the same thing and HARD is the
+                         # graduation opponent
+replays_per_checkpoint: 2
+map_rotate_matches: 5
+seed: 1
+torch_threads: 0
+# --- keeping the machine alive ---
+keep_checkpoints: 12
+milestone_every: 2000000
+keep_replay_sets: 6
+rollout_budget_mb: 2048
+mem_limit_mb: 4096         # this laptop is 16 GB; town-3 measured ~2.3 GB for 4 company
+                           # envs plus the trainer. Re-check `free_mb` on the dashboard
+                           # before raising it.
+disk_floor_mb: 1536
