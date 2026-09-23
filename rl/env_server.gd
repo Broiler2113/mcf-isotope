@@ -55,6 +55,13 @@ var _typical: float = 0.1      # стоимость типового юнита 
 ## Здесь награда за убийство начисляется ОТДЕЛЬНО и безусловно, ровно в стоимости жертвы
 ## (нормированной, как и всё остальное), — то есть удачный выстрел всегда в плюс.
 const R_KILL := 1.0        # доля стоимости убитого; 1.0 = «сколько стоил, столько и дали»
+## Цена СВОЕГО бойца, убитого собственным действием. Раньше за своих отвечал только
+## дифференциал, и арифметика выходила чудовищная: взрыв, убивающий одного врага и двух
+## своих, давал +0.00412 бонуса, +0.00412 дифференциала за врага, −0.00825 за своих и
+## +0.00170 за сам выстрел — ИТОГО В ПЛЮС. Политика честно научилась стрелять по своим.
+## Теперь свои считаются тем же весом и сверх дифференциала, так что размен «двое своих
+## за одного чужого» однозначно убыточен.
+const R_FRIENDLY_FIRE := 1.0
 ## Бонусы за САМО ДЕЙСТВИЕ — маленькие и с потолком. Награждать действие, а не результат,
 ## — это ровно та форма, из которой вырос move_held: политика выучит жать кнопку. Поэтому
 ## они (а) на порядок меньше убийства, (б) считаются не больше SHAPING_PER_TURN раз за ход.
@@ -69,6 +76,11 @@ const R_KILL := 1.0        # доля стоимости убитого; 1.0 = �
 ## Фармить это нельзя по существу: выстрел требует врага в зоне видимости, стоит ОД и
 ## ограничен SHAPING_PER_TURN за ход. «Нафармить» тут можно только стрельбу по врагу,
 ## то есть ровно то, чего мы и добиваемся — в отличие от move_held.
+## …и платится ЗА ПУЛЮ, а не за нажатие. Плата за действие научила стрелять по одной:
+## одиночный выстрел давал тот же бонус, что и очередь из шести, и оставлял юнита в
+## состоянии pending — то есть позволял получить бонус ещё раз тем же боезапасом. Шесть
+## одиночных приносили вшестеро больше за те же патроны, и в реплеях это видно как
+## «стреляет одной пулей и бросает остальные».
 const R_SHOT := 0.30
 const R_VEHICLE := 0.05    # осмысленное действие машиной (ход, пушка, таран, посадка)
 const SHAPING_PER_TURN := 20
@@ -223,8 +235,46 @@ func _reset(req: Dictionary) -> Dictionary:
 	_free_total = 0
 	_shaping_used = 0
 	_digs_used = 0
+	_crew_vehicles()
 	_advance()
 	return _response(0.0, true)
+
+## Посадить экипажи в машины ПЕРЕД началом партии.
+##
+## MapData.build_state ставит технику пустой: crew=0/3, ap=0, и ни одного veh_* намерения
+## в списке на открытии. То есть политика не «не пользуется танком» — она физически не
+## может, пока кто-то не сядет за рычаги, а это цепочка «подойти → сесть → поехать» без
+## единой промежуточной награды. В реальной партии игрок покупает технику С экипажем,
+## так что пустая машина здесь была артефактом генератора карты, а не правилом игры.
+##
+## Сажаем соседей-пехотинцев обеих сторон (симметрия важнее удобства) до полной
+## вместимости, через обычный резолвер — никаких особых путей, тот же VehicleBoardIntent,
+## который потом доступен политике.
+func _crew_vehicles() -> void:
+	# Посадка идёт через обычный резолвер, а он требует, чтобы актёр принадлежал АКТИВНОМУ
+	# игроку. На старте активна лишь одна сторона, поэтому вторая оставалась с пустой
+	# техникой — асимметрия, которая тихо подарила бы обучаемому танк в половине эпизодов
+	# и отняла в другой. Поэтому на время расстановки активный игрок подменяется, а
+	# исходный индекс возвращается сразу после.
+	var saved := state.turns.active_index
+	for veh: Vehicle in state.all_vehicles():
+		if not veh.alive():
+			continue
+		var owner_idx := state.turns.round_order.find(veh.owner)
+		if owner_idx < 0:
+			continue
+		state.turns.active_index = owner_idx
+		var guard := 0
+		while veh.living_crew_count() < veh.capacity() and guard < 8:
+			guard += 1
+			var cands: Array = resolver.vehicle_board_candidates(veh)
+			if cands.is_empty():
+				break
+			var res := resolver.resolve(VehicleBoardIntent.new(int(cands[0]), veh.id))
+			if not res.ok:
+				break
+	state.turns.active_index = saved
+
 
 func _step(req: Dictionary) -> Dictionary:
 	if _done or state == null:
@@ -287,6 +337,12 @@ func _actor_ap(intent: Intent) -> int:
 		return u.remaining_ap
 	var veh := state.get_vehicle(intent.actor_id)
 	return resolver.vehicle_ap(veh) if veh != null else -1
+
+## Скорострельность актёра — знаменатель для платы за пулю.
+func _actor_rof(intent: Intent) -> int:
+	var u := state.get_unit(intent.actor_id)
+	return maxi(1, u.rate_of_fire()) if u != null else 1
+
 
 func _kind_of(intent: Intent) -> String:
 	return str(IntentCodec.encode(intent).get("t", ""))
@@ -375,11 +431,20 @@ func _combat_reward(intent: Intent, res: ActionResult, hulls_before: Dictionary)
 	#    наказывает дифференциал, и штрафовать дважды значит учить не рисковать вовсе.
 	var killed := 0
 	var worth := 0.0
+	var own_lost := 0.0
 	for id: int in res.deaths:
 		var victim := state.get_unit(id)
-		if victim != null and Obs.rel_owner(resolver, side, victim.owner) == 1:
+		if victim == null:
+			continue
+		var rel := Obs.rel_owner(resolver, side, victim.owner)
+		if rel == 1:
 			worth += float(victim.stats.cost)
 			killed += 1
+		elif rel == 0:
+			# Свой, убитый СВОИМ ЖЕ действием (взрыв ПТ, огнемёт, подрыв дрона, очередь
+			# сквозь своих). Дифференциал это тоже заметит — здесь штраф ВТОРОЙ, чтобы
+			# он был симметричен бонусу за убийство врага.
+			own_lost += float(victim.stats.cost)
 	# 2. Уничтоженная техника — тоже по цене, и в тот же зачёт комбо.
 	for vid: Variant in hulls_before:
 		if int(hulls_before[vid]) == 0:
@@ -393,12 +458,18 @@ func _combat_reward(intent: Intent, res: ActionResult, hulls_before: Dictionary)
 	if killed > 0:
 		var combo := minf(1.0 + R_COMBO * float(killed - 1), COMBO_MAX)
 		gained += R_KILL * worth / _norm * combo
+	if own_lost > 0.0:
+		gained -= R_FRIENDLY_FIRE * own_lost / _norm
 	# 4. Бонусы за действие — под потолком.
 	if _shaping_used < SHAPING_PER_TURN:
 		var kind := _kind_of(intent)
 		var bonus := 0.0
 		if kind == "shoot" or kind == "rsp" or kind == "veh_cannon":
-			bonus = R_SHOT
+			# Пропорционально ВЫПУЩЕННЫМ пулям, иначе выгодно дробить очередь.
+			var fired := 1
+			if intent is ShootIntent:
+				fired = intent.shots if intent.shots > 0 else maxi(1, _actor_rof(intent))
+			bonus = R_SHOT * float(fired) / maxf(1.0, float(_actor_rof(intent)))
 		elif kind.begins_with("veh_") or state.get_vehicle(intent.actor_id) != null:
 			bonus = R_VEHICLE
 		if bonus > 0.0:

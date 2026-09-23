@@ -44,8 +44,14 @@ INFANTRY = [
     ("sapper", 8),
     ("drone_operator", 5),
 ]
-# (id, width, height, anchor x) — anchored at the back rows of the deployment band.
-VEHICLES = [("tank", 3, 3, 10), ("shuttle", 2, 2, 20), ("borg", 1, 1, 30)]
+# (id, width, height, anchor x, rows forward of the back edge).
+#
+# The forward offset exists so every vehicle ends up ADJACENT to infantry. Vehicles spawn
+# empty, and rl/env_server.gd crews them at reset from neighbouring units - but a 1x1 borg
+# parked on the back row had all eight neighbours empty (the back two rows hold nothing but
+# vehicles), so it stayed at crew 0/1 and ap 0, permanently unusable. The tank and shuttle
+# are tall enough to reach the infantry themselves; the borg has to be pushed into them.
+VEHICLES = [("tank", 3, 3, 10, 0), ("shuttle", 2, 2, 20, 0), ("borg", 1, 1, 30, 2)]
 
 
 def free_cell(m: dict, x: int, y: int) -> bool:
@@ -70,9 +76,11 @@ def place(m: dict, owner: int, roster: list[tuple[str, int]]) -> list[dict]:
     back = rows[-1]
     taken: set[tuple[int, int]] = set()
     out: list[dict] = []
-    for vid, vw, vh, ax in VEHICLES:
-        # The footprint grows towards the front line, so it stays inside the band.
-        top = back if back < rows[0] else back - (vh - 1)
+    for vid, vw, vh, ax, fwd in VEHICLES:
+        # The footprint grows towards the front line, so it stays inside the band, and
+        # `fwd` pushes it that many rows further forward (see VEHICLES).
+        step = 1 if back < rows[0] else -1
+        top = (back if back < rows[0] else back - (vh - 1)) + step * fwd
         cells = [(ax + dx, top + dy) for dx in range(vw) for dy in range(vh)]
         if not all(free_cell(m, x, y) and (x, y) not in taken for x, y in cells):
             raise SystemExit(f"no room for {vid} at ({ax},{top}) in owner {owner}'s zone")

@@ -10025,7 +10025,7 @@
 			"stats_id": "borg",
 			"owner": 0,
 			"x": 30,
-			"y": 0
+			"y": 2
 		},
 		{
 			"stats_id": "light_infantry",
@@ -11081,7 +11081,7 @@
 			"stats_id": "borg",
 			"owner": 1,
 			"x": 30,
-			"y": 49
+			"y": 47
 		},
 		{
 			"stats_id": "light_infantry",
