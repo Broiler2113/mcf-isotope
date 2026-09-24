@@ -82,6 +82,17 @@ const R_FRIENDLY_FIRE := 1.0
 ## одиночных приносили вшестеро больше за те же патроны, и в реплеях это видно как
 ## «стреляет одной пулей и бросает остальные».
 const R_SHOT := 0.30
+## Свой боец, сгоревший от РАСПОЛЗАНИЯ огня. Множитель к его стоимости, поверх того, что
+## за него уже снял дифференциал, — то есть такая потеря обходится в 1 + R_FIRE_DEATH
+## стоимости, против 1 + R_FRIENDLY_FIRE за застреленного своими.
+##
+## Дороже дружественного огня намеренно. Дружественный огонь — цена размена: очередь
+## сквозь своего или взрыв ПТ рядом хотя бы БЬЮТ по врагу. Сгоревший от подползшего
+## пламени не покупает вообще ничего, и избежать этого можно с гарантией: пламя ползёт
+## только по четырём ортогональным соседям, в начале хода той стороны, которая его
+## устроила, а живой не-огнеупорный боец рядом с огнём занимается БЕЗ БРОСКА (advance_fire) —
+## то есть «стоять вплотную к огню» это не риск, это назначенная смерть через ход.
+const R_FIRE_DEATH := 2.0
 const R_VEHICLE := 0.30    # осмысленное действие машиной (ход, пушка, таран, посадка).
                            # Было 0.05 — вшестеро дешевле выстрела, и в записях боёв техника
                            # простаивала всю партию. Причин было две, и обе сняты: намерения
@@ -190,6 +201,15 @@ var _free_total: int = 0
 var _shaping_used: int = 0
 ## Сколько клеток уже перекопано за этот ход; см. DIGS_PER_TURN.
 var _digs_used: int = 0
+## Штраф за своих, сгоревших за ЭТОТ шаг среды, и счётчик за эпизод.
+##
+## Копится отдельно, потому что огонь ползёт не в нашем действии. Пламя расходится в начале
+## хода той стороны, которая его зажгла, то есть внутри end_turn'а — а чужие ходы среда
+## доигрывает сама, в _advance(), где никакой награды уже не считают. Складывать штраф
+## прямо в _combat_reward значило бы ловить лишь ту редкую долю пожаров, что случилась
+## ровно в нашем собственном end_turn'е.
+var _fire_debt: float = 0.0
+var _fire_losses: int = 0
 
 func _initialize() -> void:
 	while true:
@@ -289,6 +309,8 @@ func _reset(req: Dictionary) -> Dictionary:
 	_free_total = 0
 	_shaping_used = 0
 	_digs_used = 0
+	_fire_debt = 0.0
+	_fire_losses = 0
 	_crew_vehicles()
 	_advance()
 	return _response(0.0, true)
@@ -345,7 +367,9 @@ func _step(req: Dictionary) -> Dictionary:
 	var key := _actor_key(intent)
 	var ap_before := _actor_ap(intent)
 	var hulls_before := _vehicle_hulls()
+	_fire_debt = 0.0
 	var res := resolver.resolve(intent)
+	_note_fire(res)
 	_steps += 1
 	if acting == side:
 		reward += _step_penalty
@@ -360,7 +384,7 @@ func _step(req: Dictionary) -> Dictionary:
 		if acting == side:
 			reward += _turn_penalty
 		if _illegal % 8 == 0:
-			resolver.resolve(EndTurnIntent.new())
+			_note_fire(resolver.resolve(EndTurnIntent.new()))
 	elif intent is EndTurnIntent:
 		if acting == side:
 			reward += _turn_penalty
@@ -372,7 +396,25 @@ func _step(req: Dictionary) -> Dictionary:
 		if acting == state.active_player():
 			_free_total += 1          # тот же ход продолжается — бюджет стороны тикает
 	_advance()
+	# Костры чужих ходов, доигранных только что: они горели наши, а не чужие.
+	reward += _fire_debt
 	return _response(reward, false)
+
+
+## Записать сгоревших СВОИХ из результата и назначить за них штраф.
+##
+## Только своя сторона: за сгоревшего врага дифференциал и так платит, а отдельная премия
+## сверху сделала бы поджог выгоднее прицельного огня — ровно та ловушка, в которую на
+## этом проекте уже трижды попадали подкрепления за действие.
+func _note_fire(res: ActionResult) -> void:
+	if res == null or res.fire_deaths.is_empty():
+		return
+	for id: int in res.fire_deaths:
+		var u := state.get_unit(id)
+		if u == null or u.owner != side or u.is_drone:
+			continue
+		_fire_losses += 1
+		_fire_debt -= R_FIRE_DEATH * float(u.stats.cost) / _norm
 
 ## Ключ актёра намерения: id юнита или "v<id>" для машины (пространства id пересекаются).
 func _actor_key(intent: Intent) -> String:
@@ -415,17 +457,18 @@ func _advance() -> void:
 			return
 		var ai: AIController = brains.get(act, null)
 		if ai == null:
-			resolver.resolve(EndTurnIntent.new())
+			_note_fire(resolver.resolve(EndTurnIntent.new()))
 			continue
 		_pending = null
 		ai.begin_turn(state)
 		var intent: Intent = _pending if _pending != null else EndTurnIntent.new()
 		var res := resolver.resolve(intent)
+		_note_fire(res)
 		if not res.ok:
 			ai.notify_intent_denied(state)
 		guard += 1
 		if guard > AI_TURN_CAP:
-			resolver.resolve(EndTurnIntent.new())
+			_note_fire(resolver.resolve(EndTurnIntent.new()))
 			guard = 0
 
 func _on_intent(intent: Intent) -> void:
@@ -613,7 +656,7 @@ func _response(reward: float, is_reset: bool) -> Dictionary:
 	_last_diff = diff
 	var resp := {"ok": true, "reward": reward, "done": _done, "acting": state.active_player(),
 			"info": {"round": state.turns.round_number, "steps": _steps, "illegal": _illegal,
-				"value_diff": diff / _norm}}
+				"value_diff": diff / _norm, "fire_losses": _fire_losses}}
 	if _done:
 		match _result:
 			"win": resp["reward"] = float(resp["reward"]) + 1.0

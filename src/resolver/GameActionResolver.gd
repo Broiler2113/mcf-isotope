@@ -2798,7 +2798,13 @@ func advance_fire(owner: int = -1, res: ActionResult = null) -> void:
 		# Юнит, оказавшийся на загоревшейся клетке, сгорает мгновенно (§6.5).
 		# Щитоносец (#50) и огнемётчик (#2) невосприимчивы к огню.
 		if cell.occupant != null and cell.occupant.is_alive() and not is_fireproof(cell.occupant):
-			_kill(cell.occupant)
+			var burned := cell.occupant
+			# res здесь только ради кровавой косметики — _kill сам в deaths не пишет,
+			# это делают вызывающие. Мы пишем в fire_deaths, но НЕ в deaths (см.
+			# ActionResult): иначе автор завершённого хода получил бы чужой костёр в зачёт.
+			_kill(burned, res)
+			if res != null:
+				res.fire_deaths.append(burned.id)
 
 ## Постройки, которые огонь уничтожает вместе с клеткой (#53, #83). ЛДФ здесь нет
 ## намеренно: несгораемая секция вообще не загорается (_fire_blocked).
@@ -5031,6 +5037,7 @@ func _resolve_end_turn(intent: EndTurnIntent = null) -> ActionResult:
 	out.deaths = civ.deaths
 	# Погибшие и косметика от подорвавшихся в огне мин — тоже частью передачи хода.
 	out.deaths.append_array(fire_res.deaths)
+	out.fire_deaths.append_array(fire_res.fire_deaths)
 	out.fx.append_array(fire_res.fx)
 	# Случайное событие на новый ход (item 61). Выключено по умолчанию — тогда ни одного
 	# кубика не бросается и поток случайности старых партий цел.

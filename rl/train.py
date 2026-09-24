@@ -691,7 +691,11 @@ class Trainer:
                             game=k + 1, result=results[-1], by=info.get("by", ""),
                             value_diff=info["value_diff"],
                             rounds=info["round"], steps=info.get("steps"),
-                            illegal=info.get("illegal"), seed=cfgs[j].seed, side=cfgs[j].side,
+                            illegal=info.get("illegal"),
+                            # Своих, сгоревших от расползания огня: смерть, которой можно
+                            # избежать с гарантией, поэтому её видно отдельной колонкой.
+                            fire_losses=info.get("fire_losses"),
+                            seed=cfgs[j].seed, side=cfgs[j].side,
                             map=os.path.basename(cfgs[j].map_path), time=time.time())
                         per_game.append(row)
                         # Appended as each game ends, not batched at the finish: a long
