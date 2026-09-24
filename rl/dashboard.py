@@ -549,6 +549,29 @@ def ckpt_stamp() -> str:
     return json.dumps(sorted(glob.glob(os.path.join(RUNS, "*", "ckpt_*.pt.json"))))
 
 
+# The env reports four terminal strings, and the panel has to offer three choices.
+# draw_cap is "the round cap ran out on an equal head count", draw_steps is "the episode
+# hit max_steps", and a viewer picking "draw" means both. The raw string stays in its own
+# column, so nothing is lost by grouping them here.
+OUTCOME = {"win": "win", "loss": "loss", "draw": "draw",
+           "draw_cap": "draw", "draw_steps": "draw"}
+
+
+def _dir_step(path: str) -> int:
+    """Global step from the containing directory, for a replay with no sidecar.
+
+    Wins live in replays/wins/, whose name carries no step — theirs is in the file name
+    instead. Returns 0 when neither says: a missing step must not take the panel down."""
+    try:
+        return int(os.path.basename(path).split("_")[0])
+    except ValueError:
+        pass
+    try:
+        return int(os.path.basename(os.path.dirname(path)).split("_")[-1])
+    except ValueError:
+        return 0
+
+
 @st.cache_data(ttl=TTL, show_spinner=False)
 def replays(_stamp: str) -> pd.DataFrame:
     """Gallery rows (11.7) from sidecars; replays without one fall back to the file name.
@@ -557,12 +580,14 @@ def replays(_stamp: str) -> pd.DataFrame:
     rows = []
     for path in glob.glob(os.path.join(RUNS, "*", "replays", "*", "*.mcfr")):
         m = read_json(path + ".json") or {}
-        name = os.path.basename(path)[:-5].split("_")   # vs_<opp>_<k>_<result>
+        name = os.path.basename(path)[:-5].split("_")   # [<step>_]vs_<opp>_<k>_<result>
+        result = m.get("result") or (name[-1] if name else "?")
         rows.append(dict(
+            outcome=OUTCOME.get(result, result),
             branch=m.get("branch") or path.split(os.sep)[-4],
-            step=int(m.get("step", path.split(os.sep)[-2].split("_")[-1] or 0)),
+            step=int(m.get("step") or _dir_step(path)),
             opponent=m.get("opponent") or (name[1] if len(name) > 1 else "?"),
-            result=m.get("result") or (name[-1] if name else "?"),
+            result=result, by=m.get("by") or "",
             value_diff=m.get("value_diff"), rounds=m.get("rounds"),
             map=os.path.basename(str(m.get("map", ""))).replace(".json", ""),
             date=pd.to_datetime(m.get("time") or os.path.getmtime(path), unit="s"),
@@ -1079,15 +1104,20 @@ def page_replays() -> None:
     if df.empty:
         st.info("no replays yet — the trainer records a few per evaluation")
         return
+    # The outcome filter offers all three every time, not just the ones on disk: an empty
+    # "win" list is itself the answer to "has it won yet", and a picker that hides the
+    # option makes that unanswerable.
+    counts = df["outcome"].value_counts()
     c1, c2, c3, c4 = st.columns(4)
-    fb = c1.multiselect("branch", sorted(df["branch"].unique()))
-    fo = c2.multiselect("opponent", sorted(df["opponent"].unique()))
-    fr = c3.multiselect("result", sorted(df["result"].unique()))
+    fc = c1.multiselect("outcome", ["win", "draw", "loss"],
+                        format_func=lambda o: f"{o} ({int(counts.get(o, 0))})")
+    fb = c2.multiselect("branch", sorted(df["branch"].unique()))
+    fo = c3.multiselect("opponent", sorted(df["opponent"].unique()))
     only = c4.checkbox("outstanding only")
     v = df
+    if fc: v = v[v["outcome"].isin(fc)]
     if fb: v = v[v["branch"].isin(fb)]
     if fo: v = v[v["opponent"].isin(fo)]
-    if fr: v = v[v["result"].isin(fr)]
     if only: v = v[v["outstanding"] != ""]
     v = v.sort_values("date", ascending=False).reset_index(drop=True)
     sel = st.dataframe(v.drop(columns=["file"]), width="stretch", hide_index=True,

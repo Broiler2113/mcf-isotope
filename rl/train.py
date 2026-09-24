@@ -315,6 +315,8 @@ class Trainer:
                         os.remove(p)
                     except OSError:
                         pass
+        # Только наборы чекпойнтов. replays/wins/ намеренно вне этого glob'а: победы
+        # не устаревают, их там единицы, и удалять их по возрасту нечего.
         keep_r = int(self.cfg["keep_replay_sets"])
         if keep_r > 0:
             sets = sorted(glob.glob(os.path.join(self.run_dir, "replays", "checkpoint_*")))
@@ -642,7 +644,13 @@ class Trainer:
                     fog=FOGS[self.cfg["fog"]], friendly_fire=self.cfg["friendly_fire"],
                     max_candidates=self.cfg["max_candidates"],
                     max_actors=self.cfg["max_actors"],
-                    record=record_dir is not None and k < keep))
+                    # Пишем КАЖДУЮ партию оценки, а не первые `keep`. Признак записи
+                    # задаётся на reset'е, а кто победил — известно только в конце, так
+                    # что «сохранять все победы» невозможно, если не включить запись
+                    # заранее. Эпизод от этого не меняется: ReplayRecorder.capture_opening()
+                    # сам зовёт play_civilian_slots(), ту же самую, что и ветка без записи.
+                    # На диск попадают не все — см. ниже.
+                    record=record_dir is not None))
             for j in range(batch):
                 self.envs.envs[j].cfg = cfgs[j]
                 self.envs.envs[j].send(cfgs[j].to_cmd())
@@ -696,16 +704,40 @@ class Trainer:
                               f"{'(' + row['by'] + ')' if row['by'] else ''} "
                               f"in {row['rounds']}r / {row['steps']} steps",
                               flush=True)
-                        if record_dir is not None and k < keep:
-                            os.makedirs(record_dir, exist_ok=True)
-                            rp = os.path.join(record_dir, f"vs_{opponent}_{k + 1}_{results[-1]}.mcfr")
+                        # Куда (и попадёт ли вообще) эта партия на диск.
+                        #
+                        # ПОБЕДА СОХРАНЯЕТСЯ ВСЕГДА, и не в набор чекпойнта, а в
+                        # replays/wins/, который _prune() не трогает (он чистит только
+                        # replays/checkpoint_*). Победа — это ровно то, ради чего всё
+                        # затеяно; потерять её из-за того, что она случилась пятой партией
+                        # из десяти или что набор состарился, было бы обидно до глупости.
+                        # Остальные партии, как и раньше, — выборка в `keep` штук.
+                        dest = None
+                        if record_dir is not None:
+                            if results[-1] == "win":
+                                wins_dir = os.path.join(self.run_dir, "replays", "wins")
+                                os.makedirs(wins_dir, exist_ok=True)
+                                dest = os.path.join(
+                                    wins_dir,
+                                    f"{self.global_step:09d}_vs_{opponent}_{k + 1}_win.mcfr")
+                            elif k < keep:
+                                os.makedirs(record_dir, exist_ok=True)
+                                dest = os.path.join(
+                                    record_dir, f"vs_{opponent}_{k + 1}_{results[-1]}.mcfr")
+                        if dest is not None:
+                            rp = dest
                             if self.envs.envs[j].save_replay(rp):
                                 with open(rp + ".json", "w") as f:
                                     json.dump(dict(branch=os.path.basename(self.run_dir),
-                                                   step=self.global_step, opponent=opponent,
-                                                   result=results[-1], value_diff=info["value_diff"],
+                                                   step=self.global_step, update=self.update,
+                                                   opponent=opponent,
+                                                   result=results[-1], by=info.get("by", ""),
+                                                   value_diff=info["value_diff"],
                                                    rounds=info["round"], map=cfgs[j].map_path,
-                                                   side=cfgs[j].side, time=time.time()), f)
+                                                   side=cfgs[j].side, game=k + 1,
+                                                   time=time.time()), f)
+                                if results[-1] == "win":
+                                    print(f"[eval]   WIN recorded -> {rp}", flush=True)
                     else:
                         still.append(j)
                 active = still
