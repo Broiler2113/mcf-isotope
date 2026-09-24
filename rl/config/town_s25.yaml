@@ -52,7 +52,14 @@ fog: standard
 friendly_fire: true
 rollout_steps: 256
 epochs: 4
-minibatch: 32
+minibatch: 128       # было 32. Замерено на этой машине (полный апдейт: 4 эпохи по 1536
+                     # сэмплов, сеть и данные настоящие):
+                     #   minibatch  32 -> 64.1 с   (192 шага градиента)
+                     #   minibatch 128 -> 59.6 с   ( 48 шагов)
+                     #   minibatch 256 -> 63.5 с   ( 24 шага)
+                     # 48 минибатчей по 32 — это очень много мелких шумных шагов; типовые
+                     # реализации PPO берут 4 минибатча на эпоху. Заодно меньше накладных
+                     # расходов на итерацию.
 lr: 0.00005          # town.yaml's 1e-4 was itself a step down from 3e-4 (KL 0.077,
                      # clipfrac 42%). On the platoon map even 1e-4 is too big: town-4 ran
                      # updates 105-119 with target_kl braking to 2 epochs of 4 on twelve of
@@ -85,7 +92,9 @@ eval_opponents: [hard]   # HARD only: NORMAL measured the same thing and HARD is
 replays_per_checkpoint: 2
 map_rotate_matches: 5
 seed: 1
-torch_threads: 0
+torch_threads: 8     # 0 означало «как решит torch», а он решал ЧЕТЫРЕ на десятиядерной
+                     # машине. Во время PPO-фазы шесть Godot-сред простаивают, так что
+                     # ядра есть: 4 -> 8 потоков дают 59.6 -> 57.6 с на апдейт.
 # --- keeping the machine alive ---
 keep_checkpoints: 12
 milestone_every: 2000000

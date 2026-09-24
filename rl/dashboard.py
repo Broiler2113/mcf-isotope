@@ -815,6 +815,269 @@ def show(ch) -> None:
         st.altair_chart(ch, width="stretch")
 
 
+# --- what the numbers mean -------------------------------------------------------------
+#
+# Every PPO quantity here is named after the paper, not after what it tells you, so the
+# panel was unreadable without knowing the algorithm. Each entry is: the plain meaning,
+# then what a healthy value looks like ON THIS PROJECT — the second half is the part
+# that is actually hard to look up.
+METRIC_HELP: dict[str, tuple[str, str]] = {
+    "value_diff": (
+        "Army points we have left minus the enemy's, at the final whistle, as a fraction "
+        "of one starting army.",
+        "0 means the armies traded evenly; −1 means ours was wiped while theirs was "
+        "untouched. This is the single best measure of how well the policy fights. It has "
+        "gone −0.75 → −0.19 over town-7.",
+    ),
+    "winrate": (
+        "Share of evaluation games won outright.",
+        "A win means MORE UNITS STANDING than the enemy at the round cap (or their army "
+        "destroyed) — not more points. A game can be won from behind on value.",
+    ),
+    "rounds": (
+        "How many rounds the average evaluation game lasted before it ended.",
+        "Short games mean the army is being destroyed; long ones mean it survives to the "
+        "cap and is decided on head count. Rising rounds is one of the least noisy signs "
+        "of progress. The cap is 12 (13 shown = reached it).",
+    ),
+    "rout": (
+        "Share of games that ended by one army being wiped out, rather than on head count "
+        "at the round cap.",
+        "Falling rout share means the policy is surviving. It went 7-in-10 to 2-in-10 "
+        "over updates 300–350.",
+    ),
+    "policy_loss": (
+        "The PPO objective being minimised — how hard the update is pushing the policy "
+        "towards actions that turned out better than expected.",
+        "Its ABSOLUTE VALUE is meaningless; only its behaviour matters. It is normally a "
+        "small negative number, around −0.02 to −0.03 here. Sudden jumps toward zero mean "
+        "the update found nothing to improve.",
+    ),
+    "value_loss": (
+        "How wrong the critic's prediction of the final outcome was, squared.",
+        "The critic guesses 'how well will this game end from here'. Lower is a better "
+        "guesser, but it is NOT a measure of how good the policy is — a policy that always "
+        "loses can predict that perfectly. ~2e-3 here; a jump of 10× is worth a look.",
+    ),
+    "entropy": (
+        "How undecided the policy still is — high means it spreads probability over many "
+        "actions, low means it has made up its mind.",
+        "Falls naturally as the policy learns. Falling FAST and early is the danger: it "
+        "locks in before it has explored. town-7 has drifted 5.9 → 3.1 over 400 updates, "
+        "which is a normal pace.",
+    ),
+    "approx_kl": (
+        "How far this update moved the policy away from the one that collected the data.",
+        "PPO is only valid for small steps, so the trainer aborts the update when this "
+        "exceeds target_kl (0.02). Riding right at the limit means the learning rate is "
+        "too high for the batch.",
+    ),
+    "clipfrac": (
+        "Fraction of samples whose update had to be clipped for trying to move too far.",
+        "Under ~20% is comfortable. Persistently above that, together with epochs being "
+        "cut short, is the signal to lower the learning rate — that is exactly why lr went "
+        "3e-4 → 1e-4 → 5e-5 on this project.",
+    ),
+    "epochs_run": (
+        "How many of the configured passes over the batch actually ran before the KL brake "
+        "stopped the update.",
+        "4 of 4 means the full batch was used. Frequently stopping at 2 means half of every "
+        "update's work is being thrown away — the classic 'lower the learning rate' sign.",
+    ),
+    "fire_losses": (
+        "Own units per game that burned to death from fire SPREADING, not from being shot.",
+        "Completely avoidable: fire creeps only to the four orthogonal neighbours, and a "
+        "unit standing next to flame catches with no dice roll at all. Costs 3× a normal "
+        "loss in the reward since the penalty was added.",
+    ),
+    "env_steps_per_sec": (
+        "Environment steps per second across all parallel Godot instances.",
+        "This is the throughput ceiling on learning: everything else is downstream of how "
+        "many game steps per hour the box can simulate.",
+    ),
+    "update_secs": (
+        "Seconds spent on the PPO optimisation itself, after a rollout is collected.",
+        "Roughly half of wall-clock time here. NOTE: it is measured with a wall clock, so "
+        "if the laptop sleeps mid-update the number includes the sleep.",
+    ),
+}
+
+
+def explain(key: str, *, inline: bool = False) -> None:
+    """Plain-English note under a chart. Short line always; the rest one click away, so a
+    panel that is read twenty times a day does not carry a paragraph each time."""
+    ent = METRIC_HELP.get(key)
+    if not ent:
+        return
+    lead, detail = ent
+    if inline:
+        st.caption(f"{lead} {detail}")
+        return
+    st.caption(lead)
+    with st.expander("what to look for"):
+        st.markdown(detail)
+
+
+def progress_chart(b: str, height: int = 260):
+    """value_diff per evaluation with a +/-1 standard-error band, and the win line at 0.
+
+    The band is the whole point. Every judgement on this project has turned on "is this
+    move real or is it ten noisy games", and reading a bare line invites calling noise a
+    trend — which happened twice before the band existed. SE is computed from the actual
+    spread of the games INSIDE each evaluation, so it tracks the real sample size instead
+    of a number remembered from when evaluations were four games long."""
+    g = eval_games(b)
+    if g.empty or "value_diff" not in g:
+        return None
+    agg = (g.groupby("step")["value_diff"]
+           .agg(mean="mean", sd=lambda s: float(s.std(ddof=0)), n="size").reset_index())
+    if agg.empty:
+        return None
+    agg["se"] = agg["sd"] / agg["n"].clip(lower=1) ** 0.5
+    agg["lo"] = agg["mean"] - agg["se"]
+    agg["hi"] = agg["mean"] + agg["se"]
+    x = alt.X("step:Q", title="env steps", axis=alt.Axis(format="~s"))
+    band = (alt.Chart(agg).mark_area(opacity=0.22, color=SERIES[0])
+            .encode(x=x, y=alt.Y("lo:Q", title=None, scale=alt.Scale(zero=False)), y2="hi:Q"))
+    line = (alt.Chart(agg).mark_line(strokeWidth=2, interpolate="monotone", color=SERIES[0])
+            .encode(x=x, y=alt.Y("mean:Q", title=None, scale=alt.Scale(zero=False))))
+    dots = (alt.Chart(agg).mark_circle(size=70, color=SERIES[0]).encode(
+        x=x, y="mean:Q",
+        tooltip=[alt.Tooltip("step:Q", title="env steps", format="~s"),
+                 alt.Tooltip("mean:Q", title="value diff", format="+.3f"),
+                 alt.Tooltip("se:Q", title="± 1 SE", format=".3f"),
+                 alt.Tooltip("n:Q", title="games")]))
+    zero = (alt.Chart(pd.DataFrame({"y": [0.0]}))
+            .mark_rule(color=STATUS["good"], strokeWidth=1, strokeDash=[4, 4])
+            .encode(y="y:Q"))
+    ch = alt.layer(band, line, dots, zero,
+                   title="army-value differential per evaluation (band = ±1 SE)"
+                   ).properties(height=height)
+    return _style(ch)
+
+
+def _style(ch):
+    return ch.configure_view(stroke=None).configure_axis(
+        grid=True, gridColor=GRID, gridOpacity=0.4, domainColor=GRID, tickColor=GRID,
+        labelColor=INK_DIM, titleColor=INK_DIM, labelFontSize=11, titleFontSize=11,
+        titleFontWeight="normal"
+    ).configure_legend(labelColor=INK, titleColor=INK_DIM, labelFontSize=11
+    ).configure_title(color=INK, fontSize=13, fontWeight=600, anchor="start")
+
+
+def decisiveness(b: str):
+    """How games END, per evaluation: share routed vs decided on head count at the cap.
+
+    Rout share and match length are the least noisy indicators this project has — they
+    moved cleanly while value_diff was still inside its error band."""
+    g = eval_games(b)
+    if g.empty or "by" not in g:
+        return None
+    d = (g.assign(routed=(g["by"] == "rout").astype(float))
+         .groupby("step").agg(rout=("routed", "mean"), rounds=("rounds", "mean")).reset_index())
+    if d.empty:
+        return None
+    x = alt.X("step:Q", title="env steps", axis=alt.Axis(format="~s"))
+    rout = (alt.Chart(d).mark_line(strokeWidth=2, interpolate="monotone", color=SERIES[1])
+            .encode(x=x, y=alt.Y("rout:Q", title=None, axis=alt.Axis(format=".0%"),
+                                 scale=alt.Scale(domain=[0, 1])),
+                    tooltip=[alt.Tooltip("step:Q", format="~s"),
+                             alt.Tooltip("rout:Q", title="routed", format=".0%")])
+            .properties(height=200, title="share of games that ended in a rout (lower is better)"))
+    rounds = (alt.Chart(d).mark_line(strokeWidth=2, interpolate="monotone", color=SERIES[2])
+              .encode(x=x, y=alt.Y("rounds:Q", title=None, scale=alt.Scale(zero=False)),
+                      tooltip=[alt.Tooltip("step:Q", format="~s"),
+                               alt.Tooltip("rounds:Q", title="rounds", format=".1f")])
+              .properties(height=200, title="average match length (rounds)"))
+    return _style(rout), _style(rounds)
+
+
+def latest_games(b: str, height: int = 260):
+    """Every game of the newest evaluation: how long it ran against how it finished.
+
+    The aggregate hides the shape. These games are bimodal — a cluster that survives to
+    the round cap and finishes close, and a tail that gets routed early — and the mean of
+    the two is a number no single game resembles."""
+    g = eval_games(b)
+    if g.empty:
+        return None
+    g = g[g["step"] == g["step"].max()]
+    if g.empty:
+        return None
+    present = [o for o in OUTCOME_ORDER if o in set(g["result"])]
+    ch = (alt.Chart(g).mark_circle(size=140, opacity=0.9, stroke=SURFACE, strokeWidth=2)
+          .encode(x=alt.X("rounds:Q", title="rounds the game lasted",
+                          scale=alt.Scale(zero=False, nice=True)),
+                  y=alt.Y("value_diff:Q", title="value diff at the end",
+                          scale=alt.Scale(zero=False)),
+                  color=alt.Color("result:N",
+                                  scale=alt.Scale(domain=present,
+                                                  range=[OUTCOME_COLOR[o] for o in present]),
+                                  legend=alt.Legend(title=None, orient="top")),
+                  tooltip=[alt.Tooltip("game:Q", title="game"),
+                           alt.Tooltip("result:N", title="result"),
+                           alt.Tooltip("by:N", title="decided by"),
+                           alt.Tooltip("value_diff:Q", format="+.3f"),
+                           alt.Tooltip("rounds:Q"),
+                           alt.Tooltip("fire_losses:Q", title="burned")]
+                  if "fire_losses" in g else
+                  [alt.Tooltip("game:Q"), alt.Tooltip("result:N"), alt.Tooltip("by:N"),
+                   alt.Tooltip("value_diff:Q", format="+.3f"), alt.Tooltip("rounds:Q")])
+          .properties(height=height, title="the newest evaluation, game by game"))
+    zero = (alt.Chart(pd.DataFrame({"y": [0.0]}))
+            .mark_rule(color=STATUS["good"], strokeWidth=1, strokeDash=[4, 4]).encode(y="y:Q"))
+    return _style(alt.layer(ch, zero).properties(height=height))
+
+
+def fire_chart(b: str):
+    """Own units lost per game to fire spreading — the avoidable death."""
+    g = eval_games(b)
+    if g.empty or "fire_losses" not in g or g["fire_losses"].dropna().empty:
+        return None
+    d = g.dropna(subset=["fire_losses"]).groupby("step")["fire_losses"].mean().reset_index()
+    ch = (alt.Chart(d).mark_line(strokeWidth=2, interpolate="monotone", color=SERIES[3])
+          .encode(x=alt.X("step:Q", title="env steps", axis=alt.Axis(format="~s")),
+                  y=alt.Y("fire_losses:Q", title=None, scale=alt.Scale(zero=True)),
+                  tooltip=[alt.Tooltip("step:Q", format="~s"),
+                           alt.Tooltip("fire_losses:Q", title="burned per game", format=".1f")])
+          .properties(height=200, title="own units burned per game (fire spread)"))
+    return _style(ch)
+
+
+def vehicle_chart(sc: dict):
+    """Vehicles used AS vehicles, against crews climbing in and out.
+
+    Split this way because the totals lie: a run can show a healthy 'vehicle share' that
+    is entirely boarding and dismounting while the tank never drives or fires, which is
+    what town-4 did until the reward was fixed."""
+    def summed(kinds: list[str], label: str):
+        # tidy() already normalises scalars()' tag-named column to "value"; summing the
+        # kinds there is the whole job.
+        d = tidy(sc, [f"usage/kind_{k}" for k in kinds])
+        if d.empty:
+            return None
+        s = d.groupby("step", as_index=False)["value"].sum()
+        s["series"] = label
+        return s[["step", "series", "value"]]
+
+    names = ["driving / firing", "boarding / dismounting"]
+    parts = [p for p in (summed(["veh_move", "veh_cannon", "veh_turn", "veh_melee"], names[0]),
+                         summed(["veh_out", "veh_board", "veh_seat"], names[1])) if p is not None]
+    if not parts:
+        return None
+    return line_chart(pd.concat(parts, ignore_index=True),
+                      "vehicles: used as vehicles vs crews climbing in and out",
+                      order=names, height=200)
+
+
+def glossary() -> None:
+    st.markdown("#### What these numbers mean")
+    st.caption("Everything the panels above show, in plain English.")
+    for key, (lead, detail) in METRIC_HELP.items():
+        st.markdown(f"**{key}** — {lead}  \n<span class='rlm-sub'>{detail}</span>",
+                    unsafe_allow_html=True)
+
+
 def chart(sc: dict, tags: list[str], title: str, *, pct: bool = False,
           names: dict[str, str] | None = None) -> None:
     show(line_chart(tidy(sc, tags, names), title, pct=pct))
@@ -995,20 +1258,67 @@ def page_branch(b: str) -> None:
             st.info("no curves yet — they appear after the first PPO update (one full rollout of "
                     f"{cfg.get('rollout_steps', '?')} × {cfg.get('n_envs', '?')} env steps)")
             return
-        a, bcol = st.columns(2)
-        with a:
-            chart(sc, ["train/winrate_vs_ai", "train/winrate_vs_pool", "train/drawrate"],
-                  "win / draw rate (training)", pct=True)
-            chart(sc, ["eval/winrate_hard", "eval/stallrate_hard"],
-                  "greedy eval vs HARD (0.55 is the §8.2 reference bar)", pct=True)
-            chart(sc, ["train/value_diff_end"], "army-value differential at match end")
-            chart(sc, ["train/match_rounds"], "match length (rounds)")
-        with bcol:
-            chart(sc, ["ppo/policy_loss", "ppo/value_loss"], "PPO losses")
-            chart(sc, ["ppo/entropy", "ppo/approx_kl"], "entropy / KL")
-            chart(sc, ["speed/env_steps_per_sec", "speed/update_secs"], "speed")
-            chart(sc, ["speed/matches_done"], "matches completed (flat = episodes never end)")
+        # --- is it winning? ------------------------------------------------------------
+        st.markdown("#### Is it getting better?")
+        show(progress_chart(b))
+        explain("value_diff")
+        dec = decisiveness(b)
+        if dec:
+            c1, c2 = st.columns(2)
+            with c1:
+                show(dec[0]); explain("rout")
+            with c2:
+                show(dec[1]); explain("rounds")
+        c1, c2 = st.columns(2)
+        with c1:
+            show(latest_games(b))
+        with c2:
+            show(fire_chart(b))
+            explain("fire_losses")
+
+        st.divider()
+        st.markdown("#### What the policy is doing")
         behaviour(sc)
+        show(vehicle_chart(sc))
+
+        # --- is the optimiser healthy? --------------------------------------------------
+        #
+        # One metric per chart. These used to share an axis in pairs — policy_loss with
+        # value_loss, entropy with approx_kl — which put quantities three orders of
+        # magnitude apart on one scale and flattened the smaller one into the axis.
+        st.divider()
+        st.markdown("#### Is the optimiser healthy?")
+        st.caption("These describe the LEARNING, not the play. They are named after the "
+                   "PPO paper; each one says what it means and what to look for.")
+        c1, c2 = st.columns(2)
+        with c1:
+            chart(sc, ["ppo/approx_kl"], "approx_kl — how far each update moved the policy")
+            explain("approx_kl")
+            chart(sc, ["ppo/entropy"], "entropy — how undecided the policy still is")
+            explain("entropy")
+            chart(sc, ["ppo/policy_loss"], "policy_loss — the PPO objective")
+            explain("policy_loss")
+        with c2:
+            chart(sc, ["ppo/clipfrac"], "clipfrac — share of samples clipped", pct=True)
+            explain("clipfrac")
+            chart(sc, ["ppo/epochs_run"], "epochs_run — passes finished before the KL brake")
+            explain("epochs_run")
+            chart(sc, ["ppo/value_loss"], "value_loss — how wrong the critic was")
+            explain("value_loss")
+
+        st.divider()
+        st.markdown("#### Throughput")
+        c1, c2 = st.columns(2)
+        with c1:
+            chart(sc, ["speed/env_steps_per_sec"], "environment steps per second")
+            explain("env_steps_per_sec")
+        with c2:
+            chart(sc, ["speed/update_secs"], "seconds per PPO update")
+            explain("update_secs")
+        chart(sc, ["speed/matches_done"], "matches completed (flat = episodes never end)")
+
+        with st.expander("Glossary — every metric in plain English"):
+            glossary()
     live()
 
     st.subheader("Controls")
