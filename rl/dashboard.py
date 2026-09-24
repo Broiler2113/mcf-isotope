@@ -219,6 +219,35 @@ def branches() -> list[str]:
                   if os.path.isdir(os.path.join(RUNS, b)) and not b.startswith("_"))
 
 
+def default_branch(bs: list[str]) -> int:
+    """Index of the branch the Branch and Evaluations pages should open on.
+
+    branches() is sorted by name, so the default used to be whichever sorted first —
+    town-3, retired days ago — and every visit to either page began by re-picking the
+    run you actually care about. Ranked by the status heartbeat instead, so it follows
+    the live run and does not need touching again when the next branch starts.
+
+    Falls back to the file's mtime for a run whose status.json predates the heartbeat
+    field, and to 0 for one with no status at all — a branch that never ran should not
+    win the default.
+    """
+    if not bs:
+        return 0
+
+    def when(b: str) -> float:
+        path = os.path.join(RUNS, b, "status.json")
+        s = read_json(path) or {}
+        t = float(s.get("time") or 0.0)
+        if t:
+            return t
+        try:
+            return os.path.getmtime(path)
+        except OSError:
+            return 0.0
+
+    return max(range(len(bs)), key=lambda i: when(bs[i]))
+
+
 def read_json(path: str, default=None):
     try:
         with open(path) as f:
@@ -1167,7 +1196,8 @@ def main() -> None:
     page = st.sidebar.radio(
         "Page", ["Overview", "Branch", "Evaluations", "Checkpoints", "Replays", "Maps"])
     per_branch = page in ("Branch", "Evaluations")
-    chosen = st.sidebar.selectbox("Branch", bs) if (per_branch and bs) else None
+    chosen = (st.sidebar.selectbox("Branch", bs, index=default_branch(bs))
+              if (per_branch and bs) else None)
     if st.sidebar.button("Refresh data"):
         st.cache_data.clear()
         st.rerun()
