@@ -219,6 +219,41 @@ def branches() -> list[str]:
                   if os.path.isdir(os.path.join(RUNS, b)) and not b.startswith("_"))
 
 
+def _flat_cell(v):
+    """A dict/list cell as something a person reads and a browser can parse."""
+    if isinstance(v, dict):
+        return ", ".join(f"{k} {v[k]}" for k in sorted(v))
+    if isinstance(v, (list, tuple, set)):
+        return ", ".join(str(x) for x in v)
+    return v
+
+
+def renderable(df: pd.DataFrame) -> pd.DataFrame:
+    """Flatten non-scalar cells before a DataFrame reaches st.dataframe.
+
+    The dataframe component JSON.parses complex cells, and a Python dict arrives as its
+    repr — {'loss': 8, 'win': 1} — whose SINGLE QUOTES are not JSON. The component throws
+    "SyntaxError: Invalid or unexpected token" and the whole table is replaced by a red
+    error box; the page around it renders fine, which is why it reads as a site-wide
+    breakage rather than one bad column. eval_log's outcomes_hard is the column that did
+    it, on both the Branch and Evaluations pages.
+
+    Applied at every call site rather than at the one known column, so the next dict
+    someone logs cannot take a page down again. Returns the frame untouched when there is
+    nothing to flatten, and never mutates the cached original.
+    """
+    out = df
+    for c in df.columns:
+        if df[c].dtype != object:
+            continue
+        col = df[c]
+        if any(isinstance(v, (dict, list, tuple, set)) for v in col.dropna()):
+            if out is df:
+                out = df.copy()
+            out[c] = col.map(_flat_cell)
+    return out
+
+
 def default_branch(bs: list[str]) -> int:
     """Index of the branch the Branch and Evaluations pages should open on.
 
@@ -869,12 +904,28 @@ def controls(b: str, s: dict, key: str = "") -> None:
 def page_overview() -> None:
     st.header("Runs")
 
+    # The live run goes first and the retired ones fold away, so the page opens on what is
+    # actually training. branches() is sorted by name, which put town-3 — stopped two days
+    # ago — at the top and pushed the running branch five cards down.
+    def active_first(bs: list[str]) -> tuple[list[str], list[str]]:
+        live_states = ("running", "paused", "starting")
+        def fresh(b: str) -> float:
+            return float((status(b) or {}).get("time") or 0.0)
+        hot = sorted((b for b in bs if (status(b) or {}).get("state") in live_states),
+                     key=fresh, reverse=True)
+        cold = sorted((b for b in bs if b not in hot), key=fresh, reverse=True)
+        return hot, cold
+
     @st.fragment(run_every=5)
     def live() -> None:
         bs = branches()
         if not bs:
             st.info("No runs yet — start one below.")
-        for b in bs:
+            return
+        hot, _ = active_first(bs)
+        if not hot:
+            st.info("Nothing is training right now — every run below is stopped.")
+        for b in hot:
             live_card(b)
             controls(b, status(b), key="ov")
             st.divider()
@@ -896,7 +947,20 @@ def page_overview() -> None:
                          disk_mb=s.get("disk_mb"),
                          heartbeat_min=round(s["age_min"], 1) if s.get("age_min") is not None else None))
     if rows:
-        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+        hot, cold = active_first([r["branch"] for r in rows])
+        order = {b: i for i, b in enumerate(hot + cold)}
+        df = pd.DataFrame(rows).sort_values("branch", key=lambda c: c.map(order))
+        st.dataframe(renderable(df), width="stretch", hide_index=True)
+
+    # Retired runs keep their cards and controls, one fold down: they are history, and
+    # scrolling past four of them to reach the live one was the whole problem.
+    _, cold = active_first(branches())
+    if cold:
+        with st.expander(f"Stopped runs ({len(cold)})"):
+            for b in cold:
+                live_card(b)
+                controls(b, status(b), key="ov-cold")
+                st.divider()
 
     st.subheader("Start a new run")
     with st.form("start"):
@@ -989,7 +1053,7 @@ def page_branch(b: str) -> None:
     else:
         ev = ev.copy()
         ev["time"] = pd.to_datetime(ev["time"], unit="s")
-        st.dataframe(ev, width="stretch", hide_index=True)
+        st.dataframe(renderable(ev), width="stretch", hide_index=True)
 
 
 def page_checkpoints() -> None:
@@ -999,7 +1063,7 @@ def page_checkpoints() -> None:
         st.info("no checkpoints yet")
         return
     st.caption("Sort by clicking a header. `parent` shows fork lineage (§11.4).")
-    sel = st.dataframe(df, width="stretch", hide_index=True, on_select="rerun",
+    sel = st.dataframe(renderable(df), width="stretch", hide_index=True, on_select="rerun",
                        selection_mode="single-row")
     st.download_button("Download CSV", df.to_csv(index=False).encode(), "isotope_rlm_checkpoints.csv",
                        "text/csv")
@@ -1097,7 +1161,7 @@ def page_evaluations(b: str) -> None:
     cols = [c for c in ("step", "update", "opponent", "games", "winrate", "lossrate",
                         "drawrate", "stallrate", "value_diff", "rounds", "when") if c in lg]
     tbl = lg[cols].sort_values(["step", "opponent"], ascending=[False, True])
-    sel = st.dataframe(tbl, width="stretch", hide_index=True, on_select="rerun",
+    sel = st.dataframe(renderable(tbl), width="stretch", hide_index=True, on_select="rerun",
                        selection_mode="single-row",
                        column_config={c: st.column_config.NumberColumn(format="%.2f")
                                       for c in ("winrate", "lossrate", "drawrate",
@@ -1121,7 +1185,7 @@ def page_evaluations(b: str) -> None:
         st.caption(f"all {len(g)} games across every evaluation; select a test above to narrow.")
     gc = [c for c in ("step", "opponent", "game", "result", "by", "value_diff", "rounds",
                       "steps", "illegal", "map", "side", "seed", "when") if c in g]
-    st.dataframe(g[gc].sort_values(["step", "opponent", "game"], ascending=[False, True, True]),
+    st.dataframe(renderable(g[gc].sort_values(["step", "opponent", "game"], ascending=[False, True, True])),
                  width="stretch", hide_index=True)
     st.download_button("Download games CSV", g[gc].to_csv(index=False).encode(),
                        f"{b}_eval_games.csv", "text/csv")
@@ -1149,7 +1213,7 @@ def page_replays() -> None:
     if fo: v = v[v["opponent"].isin(fo)]
     if only: v = v[v["outstanding"] != ""]
     v = v.sort_values("date", ascending=False).reset_index(drop=True)
-    sel = st.dataframe(v.drop(columns=["file"]), width="stretch", hide_index=True,
+    sel = st.dataframe(renderable(v.drop(columns=["file"])), width="stretch", hide_index=True,
                        on_select="rerun", selection_mode="single-row")
     rows = sel.get("selection", {}).get("rows", []) if isinstance(sel, dict) else sel.selection.rows
     if rows:
@@ -1183,7 +1247,7 @@ def page_maps() -> None:
     if not rows:
         st.info("no per-map data yet")
         return
-    st.dataframe(pd.DataFrame(rows).sort_values(["map", "branch"]), width="stretch", hide_index=True)
+    st.dataframe(renderable(pd.DataFrame(rows).sort_values(["map", "branch"])), width="stretch", hide_index=True)
     st.caption("training win rate per map, per branch")
     st.line_chart(pd.concat(series, axis=1).sort_index(), height=300)
 
