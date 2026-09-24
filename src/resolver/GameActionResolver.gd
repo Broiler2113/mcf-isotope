@@ -944,6 +944,8 @@ func _blast(center: Vector2i, res: ActionResult = null, cells: Array[Vector2i] =
 			continue
 		_kill(u, res, center)
 		killed_names.append(u.stats.display_name)
+		if res != null:
+			res.deaths.append(u.id)
 
 	# Взрыв сносит укрепления в зоне: стены, стекло, шлюзы, ЛДФ, деревянные и
 	# трупные стены, станции дронов и ДПМГ (§3.6/§3.7/§3.12). ДОТ устойчив (#17).
@@ -1034,20 +1036,23 @@ func _resolve_flame(shooter: UnitInstance, target_coord: Vector2i) -> ActionResu
 	shooter.action_state = null
 	var step := _step_toward(shooter.coord, target_coord)
 
+	# result заводится ДО цикла: сожжённых струёй надо записать в result.deaths, иначе
+	# награда за бой их не увидит (см. ниже про _blast).
+	var result := ActionResult.new()
+	result.ok = true
 	var killed_names: Array = []
 	var last := shooter.coord  # конец струи — для дорожки «кто в кого»
 	for c: Vector2i in flame_cells(shooter.coord, step):
 		var cell := state.grid.cell(c)
 		var occ: UnitInstance = cell.occupant
 		if occ != null and occ.is_alive():
-			_kill(occ)
+			_kill(occ, result)
 			killed_names.append(occ.stats.display_name)
+			result.deaths.append(occ.id)
 		_ignite(cell, shooter.owner)  # поджог пола (§3.8)
 		if Combat.is_on_firing_line(shooter.coord, c) and _step_toward(shooter.coord, c) == step:
 			last = c
 
-	var result := ActionResult.new()
-	result.ok = true
 	_fx_lane(result, shooter.coord, last, shooter.owner, "flame")  # issue 8
 	result.log("%s: flame jet" % shooter.stats.display_name)
 	if killed_names.is_empty():
@@ -1166,6 +1171,7 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i, aimed: String = "") ->
 				if destroyed and occ != null and occ.is_alive():
 					_kill(occ)
 					killed_names.append(occ.stats.display_name)
+					result.deaths.append(occ.id)
 			"feature":
 				var was: String = cell.feature_id
 				var cracks := int(rec["cracks"])
@@ -5669,6 +5675,8 @@ func _shuttle_passengers_hit(veh: Vehicle, center: Vector2i, in_area: Dictionary
 			_kill(u, res, center)
 			killed.append(u.stats.display_name)
 			if res != null:
+				res.deaths.append(u.id)
+			if res != null:
 				res.log("%s takes the hit square on — killed." % u.stats.display_name)
 			continue
 		if not in_area.has(u.coord):
@@ -5682,6 +5690,8 @@ func _shuttle_passengers_hit(veh: Vehicle, center: Vector2i, in_area: Dictionary
 		if not ok:
 			_kill(u, res, center)
 			killed.append(u.stats.display_name)
+			if res != null:
+				res.deaths.append(u.id)
 			if res != null:
 				res.log("%s (passenger) fails the defence roll (%d, need %d+) — killed." % [
 					u.stats.display_name, roll, need])
