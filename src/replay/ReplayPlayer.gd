@@ -108,3 +108,20 @@ func position_text() -> String:
 	var total := step_count()
 	var round_no := state.turns.round_number if state != null else 1
 	return "action %d / %d · round %d" % [index, total, round_no]
+
+## Кем в этой записи играла обучаемая политика — или "", если запись не из обучения.
+##
+## Без этого повтор обучения смотреть почти бесполезно: две одинаковые армии ходят по
+## очереди, и понять, чьи ходы разбирать, неоткуда. Сторона лежит в meta с самой записи
+## (rl/env_server.gd кладёт туда side и opponent при begin()), просто её никто не
+## показывал.
+func rl_side_text() -> String:
+	var meta: Dictionary = data.get("meta", {})
+	if not bool(meta.get("rl", false)):
+		return ""
+	var side := int(meta.get("side", -1))
+	if not MCF.is_player(side):
+		return ""
+	var opp := str(meta.get("opponent", ""))
+	var against := " vs %s AI" % opp.to_upper() if opp != "" else ""
+	return "RLM plays %s%s" % [MCF.owner_name(side), against]

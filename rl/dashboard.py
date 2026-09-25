@@ -621,6 +621,15 @@ OUTCOME = {"win": "win", "loss": "loss", "draw": "draw",
            "draw_cap": "draw", "draw_steps": "draw"}
 
 
+def _side_label(side) -> str:
+    """Which player the learned policy was, matching MCF.owner_name's lettering."""
+    try:
+        i = int(side)
+    except (TypeError, ValueError):
+        return ""
+    return f"Player {'AB'[i]}" if i in (0, 1) else ""
+
+
 def _dir_step(path: str) -> int:
     """Global step from the containing directory, for a replay with no sidecar.
 
@@ -652,6 +661,10 @@ def replays(_stamp: str) -> pd.DataFrame:
             step=int(m.get("step") or _dir_step(path)),
             opponent=m.get("opponent") or (name[1] if len(name) > 1 else "?"),
             result=result, by=m.get("by") or "",
+            # Which army the policy actually played. Both sides field the same roster on
+            # a mirrored map, so without this a replay is two identical armies taking
+            # turns and there is no way to tell whose moves are the ones under test.
+            rlm=_side_label(m.get("side")),
             value_diff=m.get("value_diff"), rounds=m.get("rounds"),
             map=os.path.basename(str(m.get("map", ""))).replace(".json", ""),
             date=pd.to_datetime(m.get("time") or os.path.getmtime(path), unit="s"),
