@@ -17,6 +17,8 @@ func _initialize() -> void:
 	_flame_into_corner_is_six()
 	_flame_one_sided_splash_is_six()
 	_sniper_hit_ladder()
+	_hull_kill_reports_its_crew()
+	_capture_is_reported()
 	_neutral_shoots_bought_civilian()
 	_every_vehicle_leaves_a_wreck()
 	_group_move_falls_back()
@@ -162,6 +164,44 @@ func _sniper_hit_ladder() -> void:
 	var r2: GameActionResolver = near["r"]
 	ck(r2.hit_need_for(_u(st2, Vector2i(2, 7)), _u(st2, Vector2i(16, 7))) == 1,
 			"sniper auto-hits at 14 tiles")
+
+## Подбитый корпус обязан отчитаться о ЭКИПАЖЕ в res.deaths, а не только о себе.
+## _kill() сам в deaths ничего не кладёт, и _destroy_vehicle этого не делал: сжечь
+## гружёный танк приносило ровно столько же, сколько пустой, и трое внутри не попадали
+## ни в награду за убийство, ни в счётчик комбо.
+func _hull_kill_reports_its_crew() -> void:
+	var f := _field([[Vector2i(5, 5), "tank", MCF.Owner.PLAYER_1],
+			[Vector2i(4, 4), "light_infantry", MCF.Owner.PLAYER_1],
+			[Vector2i(25, 10), "light_infantry", MCF.Owner.PLAYER_2]])
+	var st: GameState = f["s"]
+	var r: GameActionResolver = f["r"]
+	var veh: Vehicle = st.vehicle_on(Vector2i(5, 5))
+	var crew := _u(st, Vector2i(4, 4))
+	ck(r.resolve(VehicleBoardIntent.new(crew.id, veh.id)).ok, "crew boards the tank")
+	ck(veh.occupants.has(crew.id), "crew is aboard")
+	var res := ActionResult.new()
+	res.ok = true
+	r._destroy_vehicle(veh, res)
+	ck(res.deaths.has(crew.id),
+			"a destroyed hull reports its crew in deaths (got %s)" % str(res.deaths))
+	ck(not crew.is_alive(), "the crew really died")
+
+## Захват вражеской машины должен быть ВИДЕН в результате, а не только в строке лога:
+## награда за него иначе неотличима от обычной посадки.
+func _capture_is_reported() -> void:
+	var f := _field([[Vector2i(5, 5), "tank", MCF.Owner.PLAYER_2],
+			[Vector2i(4, 4), "light_infantry", MCF.Owner.PLAYER_1],
+			[Vector2i(25, 10), "light_infantry", MCF.Owner.PLAYER_2]])
+	var st: GameState = f["s"]
+	var r: GameActionResolver = f["r"]
+	var veh: Vehicle = st.vehicle_on(Vector2i(5, 5))
+	var taker := _u(st, Vector2i(4, 4))
+	ck(veh.owner == MCF.Owner.PLAYER_2, "the hull starts enemy-owned")
+	var res := r.resolve(VehicleBoardIntent.new(taker.id, veh.id))
+	ck(res.ok, "boarding an empty enemy hull is legal: " + res.reason)
+	ck(veh.owner == MCF.Owner.PLAYER_1, "the hull changed hands (owner %d)" % veh.owner)
+	ck(res.captured_vehicles.has(veh.id),
+			"the capture is reported in captured_vehicles (got %s)" % str(res.captured_vehicles))
 
 func _neutral_shoots_bought_civilian() -> void:
 	var f := _field([[Vector2i(5, 5), "civilian", MCF.Owner.PLAYER_1],

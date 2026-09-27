@@ -6061,6 +6061,7 @@ func _resolve_vehicle_board(intent: VehicleBoardIntent) -> ActionResult:
 		res_s.ok = true
 		var vname: String = VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)
 		if captured_s:
+			res_s.captured_vehicles.append(veh.id)
 			res_s.log("%s seizes control of the %s!" % [unit.stats.display_name, vname])
 		elif boarding_enemy_s:
 			res_s.log("%s storms aboard the enemy %s!" % [unit.stats.display_name, vname])
@@ -6092,6 +6093,7 @@ func _resolve_vehicle_board(intent: VehicleBoardIntent) -> ActionResult:
 	res.ok = true
 	var veh_name: String = VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)
 	if captured:
+		res.captured_vehicles.append(veh.id)
 		res.log("%s seizes control of the %s!" % [unit.stats.display_name, veh_name])
 	elif boarding_enemy:
 		res.log("%s storms aboard the enemy %s!" % [unit.stats.display_name, veh_name])
@@ -6824,10 +6826,18 @@ func _destroy_vehicle(veh: Vehicle, res: ActionResult) -> void:
 	var dtable: Dictionary = VehicleDB.DESTRUCTION.get(veh.type_id, {})
 	# Экипаж внутри гибнет. Пассажиры челнока остаются трупами на своих клетках,
 	# машина из-под них исчезает (batch 13 S12).
+	#
+	# ВАЖНО: _kill() сам в res.deaths НИЧЕГО не кладёт — это делает каждый вызывающий,
+	# и здесь этого не делал никто. То есть подбитый танк засчитывался только корпусом,
+	# а трое внутри не попадали ни в награду за убийство, ни в счётчик комбо: сжечь
+    # гружёную машину стоило ровно столько же, сколько пустую. Та же поломка, что была
+	# у _blast/лазера/огнемёта, и на танковой карте она особенно дорога — там ВЕСЬ отряд
+	# сидит внутри корпусов, и без этой строки карта не учила бы ничему.
 	for uid in veh.occupants.duplicate():
 		var crew := state.get_unit(uid)
 		if crew != null:
 			_kill(crew, res)
+			res.deaths.append(crew.id)
 			# Тело оператора борга больше ни в какой машине не сидит: взорвавшийся борг
 			# из state.vehicles исчезает, и borg_id указывал бы в пустоту.
 			if veh.is_borg():
