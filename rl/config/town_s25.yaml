@@ -37,7 +37,19 @@ phase: A
 opponent: normal
 pool_ai_fraction: 0.15
 pool_size: 6
-round_cap: 12       # rounds per game before it is decided on head count
+round_cap: 20       # rounds per game before it is decided on head count.
+                    # БЫЛО 12 и поднято до 20 на апдейте ~1850 живого town-7 — но правка
+                    # осталась только в rl/runs/town-7/config.yaml, а сюда не попала, так
+                    # что любой resume с ЭТИМ файлом молча откатил бы её. Синхронизировано.
+                    #
+                    # ВАЖНО ПРИ ЧТЕНИИ ОЦЕНОК: смена cap РАЗРЫВАЕТ сравнимость состава
+                    # исходов до и после апдейта 1850. При cap=12 партия, дожившая до
+                    # предела, шла в зачёт by=count; при cap=20 те же партии продолжаются,
+                    # и HARD успевает добить — доля by=rout выросла 0.29 (упд 1300-1700)
+                    # -> 0.49 (1900-2300), а доля побед упала 0.218 -> 0.120 БЕЗ какого-либо
+                    # изменения политики. Средняя длина партии 11.8 -> 18.7 раундов.
+                    # Сравнивать через этот рубеж можно только value_diff (он плоский:
+                    # -0.198 / -0.183 / -0.207 при SE(diff)=0.134), но НЕ wins и НЕ routs.
 max_steps: 8000      # a platoon match is a few hundred own decisions; this only catches a
                      # stuck policy now, which is what it is for
 max_actors: 16       # unchanged ON PURPOSE: the in-game LearnedController caps with the
@@ -105,4 +117,14 @@ rollout_budget_mb: 2048
 mem_limit_mb: 4096         # this laptop is 16 GB; town-3 measured ~2.3 GB for 4 company
                            # envs plus the trainer. Re-check `free_mb` on the dashboard
                            # before raising it.
-disk_floor_mb: 1536
+disk_floor_mb: 400        # БЫЛО 1536, и на этом пороге town-7 встал 26.09 в 22:26 и простоял
+                          # 19 часов: на диске оставалось 986 МБ свободного места, а тренер
+                          # выходит, «пока запись ещё может пройти». Порог мерил не тот
+                          # объём, который ему нужно защитить. Вся папка прогона — 68 МБ:
+                          # чекпойнт 4.2 МБ (keep_checkpoints: 12), tb — 8 МБ за 2279
+                          # апдейтов, 272 реплея побед — 6 МБ. Пиковая разовая запись
+                          # меньше 50 МБ, то есть 1536 МБ — это в тридцать раз больше
+                          # нужного, и порог останавливал обучение, а не защищал его.
+                          # Проверено после снижения: чекпойнт ckpt_003502080.pt записан
+                          # при 896 МБ свободного места, апдейты 2280-2282 прошли штатно.
+                          # 400 МБ всё ещё оставляет запас для самой macOS.
