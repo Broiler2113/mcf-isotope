@@ -771,7 +771,8 @@ class Trainer:
         with open(os.path.join(self.run_dir, "config.yaml"), "w") as f:
             yaml.safe_dump(cfg, f)
         self.write_status("running", f"starting {cfg['n_envs']} Godot envs", 0, 0)
-        self.envs = VecEnv(cfg["n_envs"], cfg["godot"])
+        self.envs = VecEnv(cfg["n_envs"], cfg["godot"],
+                           log_dir=os.path.join(self.run_dir, "envlogs"))
         stop_flag = os.path.join(self.run_dir, "STOP")
 
         def on_signal(signum, frame):
@@ -869,6 +870,13 @@ class Trainer:
         floor = float(self.cfg["disk_floor_mb"])
         if floor <= 0:
             return False
+        # Godot mirrors each env's stdout — which IS the JSON protocol — into a log file
+        # at ~1.1 GB/hr across six envs. They are redirected into run_dir/envlogs (see
+        # mcf_env.GodotEnv.start), but redirecting does not make them smaller; bound them
+        # here, on the tick that already asks about disk, BEFORE deciding to give up.
+        reclaimed = self.envs.trim_logs() if getattr(self, "envs", None) else 0
+        if reclaimed:
+            print(f"[train] trimmed {reclaimed} MB of Godot env logs", flush=True)
         free = free_mb(self.run_dir)
         if free >= floor:
             return False
@@ -1098,7 +1106,8 @@ def cmd_eval(a):
     cfg = ck["cfg"]
     t = Trainer(os.path.join(RUNS, "_eval"), cfg)
     t.load(a.checkpoint, keep_cfg=True)
-    t.envs = VecEnv(cfg["n_envs"], cfg["godot"])
+    t.envs = VecEnv(cfg["n_envs"], cfg["godot"],
+                    log_dir=os.path.join(t.run_dir, "envlogs"))
     try:
         r = t.evaluate(a.opponent, a.games, record_dir=a.record, keep=a.games if a.record else 0)
         print(json.dumps(r))

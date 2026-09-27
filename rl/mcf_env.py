@@ -61,9 +61,11 @@ class EnvDied(RuntimeError):
 class GodotEnv:
     """One headless Godot process. All calls are synchronous unless split into send/recv."""
 
-    def __init__(self, godot: str = "godot", project: str = PROJECT):
+    def __init__(self, godot: str = "godot", project: str = PROJECT,
+                 log_path: str | None = None):
         self.godot = godot
         self.project = project
+        self.log_path = log_path
         self.proc: subprocess.Popen | None = None
         self.last: dict | None = None
         self.cfg: EpisodeConfig | None = None
@@ -74,8 +76,30 @@ class GodotEnv:
         # Raw byte pipes, not text mode: recv() polls the fd with select, and a
         # TextIOWrapper could hold a complete line in its own buffer where select
         # cannot see it — the reply would then look like a hang until the timeout.
+        # --log-file moves Godot's stdout mirror OFF the shared default log.
+        #
+        # Godot mirrors stdout into app_userdata/<project>/logs/godot.log, and for these
+        # processes stdout IS the JSON protocol — every observation, every legal-intent
+        # list, every board dump written to disk a second time. Measured across six envs:
+        # 19 MB/min, ~1.1 GB/hr, all six holding the SAME godot.log open for append (lsof).
+        # It filled the disk to zero, took the trainer down on its disk floor, and was the
+        # real source of a drain chased across two nights of checks.
+        #
+        # `debug/file_logging/enable_file_logging=false` is already set in project.godot
+        # for exactly this reason and DOES NOT WORK: a probe shows ProjectSettings really
+        # does read back false at runtime, so the engine must build the logger before it
+        # applies the setting and never re-checks. The commit that added it believed it
+        # had fixed this; it had not.
+        #
+        # NOT /dev/null: `--log-file /dev/null` makes Godot crash with signal 11 on this
+        # build (verified — run_codec segfaults instead of passing). A real path is fine,
+        # and giving each env its own keeps the trainer able to bound them.
+        argv = [self.godot, "--headless", "--path", self.project]
+        if self.log_path:
+            argv += ["--log-file", self.log_path]
+        argv += ["--script", SERVER_SCRIPT]
         self.proc = subprocess.Popen(
-            [self.godot, "--headless", "--path", self.project, "--script", SERVER_SCRIPT],
+            argv,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             bufsize=0,
             # Own process group so a trainer shutdown can kill every env together (9.5).
@@ -171,14 +195,45 @@ class VecEnv:
     """N envs stepped in lockstep. `step_async` writes every command first, then
     `step_wait` reads the replies, so the Godot processes work concurrently."""
 
-    def __init__(self, n: int, godot: str = "godot"):
+    def __init__(self, n: int, godot: str = "godot", log_dir: str | None = None):
         self.n = n
         self.godot = godot
+        self.log_dir = log_dir
         self.envs: list[GodotEnv] = []
         self.rebuild()
 
     def __len__(self) -> int:
         return len(self.envs)
+
+    def _log_for(self, i: int) -> str | None:
+        """Per-env Godot log path, or None to leave the engine default alone."""
+        if not self.log_dir:
+            return None
+        os.makedirs(self.log_dir, exist_ok=True)
+        return os.path.join(self.log_dir, f"env{i}.log")
+
+    def trim_logs(self, keep_mb: float = 8.0) -> int:
+        """Truncate the per-env Godot logs once they pass keep_mb. Returns MB reclaimed.
+
+        Redirecting the logs does not make them smaller — it only moves ~1.1 GB/hr
+        somewhere the trainer owns. They are append-only engine noise nobody reads, so
+        truncating in place is safe: every env holds its file O_APPEND, and a POSIX append
+        write after truncate simply resumes at the new end of file.
+        """
+        freed = 0.0
+        for i in range(self.n):
+            p = self._log_for(i)
+            if not p or not os.path.exists(p):
+                continue
+            try:
+                mb = os.path.getsize(p) / (1024.0 * 1024.0)
+                if mb >= keep_mb:
+                    with open(p, "r+") as f:
+                        f.truncate(0)
+                    freed += mb
+            except OSError:
+                pass
+        return int(freed)
 
     def rebuild(self, attempts: int = 6) -> None:
         """Kill everything and boot a fresh set in place. Retried with backoff: a Godot
@@ -189,7 +244,8 @@ class VecEnv:
         delay = 5.0
         for attempt in range(1, attempts + 1):
             try:
-                self.envs = [GodotEnv(self.godot) for _ in range(self.n)]
+                self.envs = [GodotEnv(self.godot, log_path=self._log_for(i))
+                             for i in range(self.n)]
                 return
             except (EnvDied, OSError) as e:
                 self.kill()
