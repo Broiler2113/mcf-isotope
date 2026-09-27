@@ -14,6 +14,9 @@ func ck(c: bool, w: String) -> void:
 func _initialize() -> void:
 	_free_boarding()
 	_flame_splash_is_six()
+	_flame_into_corner_is_six()
+	_flame_one_sided_splash_is_six()
+	_sniper_hit_ladder()
 	_neutral_shoots_bought_civilian()
 	_every_vehicle_leaves_a_wreck()
 	_group_move_falls_back()
@@ -88,6 +91,77 @@ func _flame_splash_is_six() -> void:
 	ck(burning == cells.size(), "every listed cell is on fire (%d/%d)" % [burning, cells.size()])
 	for c: Vector2i in cells:
 		ck(not st.grid.cell(c).is_wall(), "fire never lands on a wall cell %s" % str(c))
+
+## Струя в УГОЛ. Огнемётчик в (5,5), стена идёт по колонке 6 и по строке 4: клетка
+## (6,4) — внутренний угол, и обе перпендикулярные стороны от стрелка тоже заперты.
+## Старый код здесь отдавал почти ничего: разлёт налево упирался в стену (l = 0), а
+## добор был написан под условием l > 0 и не срабатывал никогда.
+func _flame_into_corner_is_six() -> void:
+	var walls: Array = []
+	for y in 14:
+		walls.append(Vector2i(6, y))
+	for x in 30:
+		walls.append(Vector2i(x, 4))
+	var f := _field([[Vector2i(5, 5), "flamethrower", MCF.Owner.PLAYER_1],
+			[Vector2i(25, 10), "light_infantry", MCF.Owner.PLAYER_2]], walls)
+	var st: GameState = f["s"]
+	var r: GameActionResolver = f["r"]
+	var ft := _u(st, Vector2i(5, 5))
+	var cells: Array = r.flame_cells(ft.coord, Vector2i(1, -1))
+	ck(cells.size() == MCF.FLAME_JET_LENGTH,
+			"jet into a corner still burns %d cells (got %d: %s)"
+			% [MCF.FLAME_JET_LENGTH, cells.size(), str(cells)])
+	for c: Vector2i in cells:
+		ck(not st.grid.cell(c).is_wall(), "corner splash never lands on a wall %s" % str(c))
+		ck(c != ft.coord, "corner splash never burns the flamethrower's own cell")
+
+## Разлёт, у которого сторона «налево» заперта СРАЗУ (l = 0), а «направо» обрывается
+## через клетку. Прежний код добирал остаток только налево и только под условием
+## l > 0 — то есть ровно здесь не добирал ничего и терял четыре клетки из шести.
+func _flame_one_sided_splash_is_six() -> void:
+	var walls: Array = []
+	for y in 14:
+		walls.append(Vector2i(6, y))
+	walls.append(Vector2i(5, 6))   # «налево» от струи (1,0) — вниз: заперто сразу
+	walls.append(Vector2i(5, 3))   # «направо» — вверх: одна свободная клетка (5,4)
+	var f := _field([[Vector2i(5, 5), "flamethrower", MCF.Owner.PLAYER_1],
+			[Vector2i(25, 10), "light_infantry", MCF.Owner.PLAYER_2]], walls)
+	var st: GameState = f["s"]
+	var r: GameActionResolver = f["r"]
+	var ft := _u(st, Vector2i(5, 5))
+	var cells: Array = r.flame_cells(ft.coord, Vector2i(1, 0))
+	ck(cells.size() == MCF.FLAME_JET_LENGTH,
+			"one-sided splash still burns %d cells (got %d: %s)"
+			% [MCF.FLAME_JET_LENGTH, cells.size(), str(cells)])
+	var uniq := {}
+	for c: Vector2i in cells:
+		ck(not uniq.has(c), "splash never lists the same cell twice %s" % str(c))
+		uniq[c] = true
+
+## Лестница снайпера (§5): авто до 15, потом 2+/3+/4+/5+/6 по пятёркам, за 40 — никак.
+## Границы полос ВЕРХНИЕ, поэтому проверяем и саму границу, и клетку за ней.
+func _sniper_hit_ladder() -> void:
+	var want := {1: 1, 10: 1, 15: 1, 16: 2, 20: 2, 21: 3, 25: 3, 26: 4, 30: 4,
+			31: 5, 35: 5, 36: 6, 40: 6, 41: 7, 50: 7}
+	for d: int in want:
+		var got := Combat.sniper_hit_number(d)
+		ck(got == want[d], "sniper needs %d+ at %d tiles (got %d)" % [want[d], d, got])
+	# И то же через боевой путь, которым реально стреляют: цель на 20 клетках по прямой,
+	# без укрытия и укреплений — 2+, а общая формула дала бы 3+.
+	var f := _field([[Vector2i(2, 7), "sniper", MCF.Owner.PLAYER_1],
+			[Vector2i(22, 7), "light_infantry", MCF.Owner.PLAYER_2]])
+	var st: GameState = f["s"]
+	var r: GameActionResolver = f["r"]
+	var sn := _u(st, Vector2i(2, 7))
+	var tg := _u(st, Vector2i(22, 7))
+	ck(r.hit_need_for(sn, tg) == 2,
+			"sniper at 20 tiles needs 2+ (got %d)" % r.hit_need_for(sn, tg))
+	var near := _field([[Vector2i(2, 7), "sniper", MCF.Owner.PLAYER_1],
+			[Vector2i(16, 7), "light_infantry", MCF.Owner.PLAYER_2]])
+	var st2: GameState = near["s"]
+	var r2: GameActionResolver = near["r"]
+	ck(r2.hit_need_for(_u(st2, Vector2i(2, 7)), _u(st2, Vector2i(16, 7))) == 1,
+			"sniper auto-hits at 14 tiles")
 
 func _neutral_shoots_bought_civilian() -> void:
 	var f := _field([[Vector2i(5, 5), "civilian", MCF.Owner.PLAYER_1],

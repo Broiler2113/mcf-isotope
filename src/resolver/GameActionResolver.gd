@@ -1077,18 +1077,67 @@ func flame_cells(from_coord: Vector2i, step: Vector2i) -> Array:
 	for i in MCF.FLAME_JET_LENGTH:
 		if not state.grid.in_bounds(cur) or _flame_blocked(cur):
 			if state.grid.in_bounds(cur):
-				var remaining: int = MCF.FLAME_JET_LENGTH - i
-				var left := Vector2i(-step.y, step.x)
-				var right := Vector2i(step.y, -step.x)
-				var l := _flame_walk(last, left, int(ceil(remaining / 2.0)), out)
-				var r := _flame_walk(last, right, remaining - l, out)
-				if remaining - l - r > 0 and l > 0:
-					_flame_walk(last + left * l, left, remaining - l - r, out)
+				_flame_splash(last, step, MCF.FLAME_JET_LENGTH - i, out, from_coord)
 			break
 		out.append(cur)
 		last = cur
 		cur += step
 	return out
+
+## Разлёт остатка струи от клетки origin. Отдаёт ВСЕ remaining клеток, если на поле
+## есть куда их деть, — «шесть клеток всегда» это инвариант, а не пожелание.
+##
+## Прежний код раздавал остаток за один проход: половину налево, остальное направо, и
+## один-единственный добор налево — да и тот под условием l > 0. Из-за этого он ТЕРЯЛ
+## клетки в двух случаях. Если левая сторона упиралась сразу (l = 0), а правая
+## обрывалась раньше срока, добирать было некому — условие l > 0 не пускало. Если обе
+## стороны упирались (струя в угол), не появлялось вообще ничего: огнемёт бил в упор
+## в угол и поджигал в лучшем случае одну клетку вместо шести.
+##
+## Теперь это три ступени, каждая подбирает то, что не смогла предыдущая:
+##   1. поровну в обе стороны, как и раньше;
+##   2. недобор одной стороны отдаётся другой — в ЛЮБУЮ сторону, а не только налево;
+##   3. если и после этого мало (угол), огонь растекается волной от уже занятых
+##      клеток по соседям — так же, как он потом расползается сам (§3.8).
+func _flame_splash(origin: Vector2i, step: Vector2i, remaining: int, out: Array,
+		from_coord: Vector2i) -> void:
+	var left := Vector2i(-step.y, step.x)
+	var right := Vector2i(step.y, -step.x)
+	var l := _flame_walk(origin, left, int(ceil(remaining / 2.0)), out)
+	var r := _flame_walk(origin, right, remaining - l, out)
+	if l + r < remaining:
+		l += _flame_walk(origin + left * l, left, remaining - l - r, out)
+	if l + r < remaining:
+		r += _flame_walk(origin + right * r, right, remaining - l - r, out)
+	if l + r < remaining:
+		_flame_flood(origin, remaining - l - r, out, from_coord)
+
+## Волна по соседям от уже подожжённых клеток, пока не наберётся count штук.
+## Клетку самого огнемётчика не трогаем: струя из него выходит, а не в него.
+func _flame_flood(origin: Vector2i, count: int, out: Array, from_coord: Vector2i) -> void:
+	var seen := {from_coord: true, origin: true}
+	for c: Vector2i in out:
+		seen[c] = true
+	var frontier: Array[Vector2i] = [origin]
+	frontier.append_array(out)
+	var added := 0
+	while added < count and not frontier.is_empty():
+		var next: Array[Vector2i] = []
+		for f: Vector2i in frontier:
+			for dx in [-1, 0, 1]:
+				for dy in [-1, 0, 1]:
+					if dx == 0 and dy == 0:
+						continue
+					var c := f + Vector2i(dx, dy)
+					if seen.has(c) or not state.grid.in_bounds(c) or _flame_blocked(c):
+						continue
+					seen[c] = true
+					out.append(c)
+					next.append(c)
+					added += 1
+					if added >= count:
+						return
+		frontier = next
 
 func _flame_blocked(c: Vector2i) -> bool:
 	var cell := state.grid.cell(c)
@@ -1565,7 +1614,21 @@ func hit_need_for(shooter: UnitInstance, target: UnitInstance, mods: Array = [])
 	if shooter == null or target == null:
 		return 7
 	var dist := Combat.distance(shooter.coord, target.coord)
-	var need := Combat.hit_number(dist, shooter.fire_range())
+	var is_sniper := shooter.stats.special_ability_id == MCF.ABILITY_SNIPER
+	# Снайпер считается по своей лестнице (§5), остальные — по общей формуле (§3.5).
+	# Раньше снайпер шёл по общей, и она мазала на каждой полосе: при дальности 40
+	# давала 3+ там, где нужно автопопадание, и 3+/4+/5+/6 там, где нужно 2+/3+/4+/5+.
+	var need := Combat.sniper_hit_number(dist) if is_sniper \
+			else Combat.hit_number(dist, shooter.fire_range())
+	if is_sniper and need == 1:
+		# Автопопадание — именно АВТО: оно и раньше выставлялось ПОСЛЕ укрытия и
+		# перекрывало его, и это сохранено. Снимает автопопадание только укрепление
+		# на линии; полоса тогда первая неавтоматическая — 2+, а не общая формула.
+		if not _fortification_between(shooter.coord, target.coord):
+			mods.append({"label": "Sniper auto-hit", "delta": 0})
+			return 1
+		need = 2
+		mods.append({"label": "Fortification on the line", "delta": 1})
 	# Укрытие цели (§3.7).
 	var cover := cover_effect(shooter, target)
 	var pen := int(cover["hit_penalty"])
@@ -1573,16 +1636,9 @@ func hit_need_for(shooter: UnitInstance, target: UnitInstance, mods: Array = [])
 	if pen != 0:
 		mods.append({"label": "Target cover", "delta": pen})
 	# Стрельба через горящие клетки (§3.8): −1 к попаданию (кроме снайпера).
-	if shooter.stats.special_ability_id != MCF.ABILITY_SNIPER \
-			and _fire_between(shooter.coord, target.coord):
+	if not is_sniper and _fire_between(shooter.coord, target.coord):
 		need += MCF.FIRE_SHOOT_PENALTY
 		mods.append({"label": "Fire on the line", "delta": MCF.FIRE_SHOOT_PENALTY})
-	# Снайпер: автопопадание на ≤12 кл. без укреплений между ним и целью (§5).
-	if shooter.stats.special_ability_id == MCF.ABILITY_SNIPER \
-			and dist <= MCF.SNIPER_AUTOHIT_RANGE \
-			and not _fortification_between(shooter.coord, target.coord):
-		need = 1
-		mods.append({"label": "Sniper auto-hit", "delta": 0})
 	return clampi(need, 1, 7)
 
 func _shield_blocks_shot(shooter: UnitInstance, target: UnitInstance) -> bool:

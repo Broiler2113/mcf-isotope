@@ -6,8 +6,8 @@
 script = ExtResource("1")
 id = "sniper"
 display_name = "Sniper"
-fire_range = 30.0
+fire_range = 40.0
 target_defense_penalty = 2
 cost = 60
 special_ability_id = "sniper"
-notes = "−2 к защите цели; автопопадание ≤12 кл. без укреплений между стрелком и целью (§5)."
+notes = "−2 к защите цели; автопопадание ≤15 кл. без укреплений между стрелком и целью; дальше 2+ до 20, 3+ до 25, 4+ до 30, 5+ до 35, 6 до 40 (§5)."
