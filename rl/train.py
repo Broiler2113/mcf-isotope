@@ -691,6 +691,15 @@ class Trainer:
                 # to prevent. Report the rounds each game has reached, so a game that is
                 # genuinely stuck is distinguishable from one that is merely long.
                 if time.time() - self._last_status > 5:
+                    # Bound the Godot env logs DURING the evaluation, not only on the
+                    # per-update disk tick. An evaluation is ten games of several hundred
+                    # steps each and runs BETWEEN updates, so under_disk_floor() is not
+                    # called once for its whole duration: measured 425 -> 540 MB of
+                    # envlogs and 119 MB of disk inside two minutes of one evaluation,
+                    # heading for ~1 GB unchecked. Running out of disk mid-evaluation
+                    # stops the trainer on its own floor, which has already cost this
+                    # project one overnight run.
+                    self.envs.trim_logs()
                     self.write_status(
                         "running", f"evaluating vs {opponent}", played, games,
                         eval_rounds=[int(self.envs.envs[j].last["info"]["round"])
