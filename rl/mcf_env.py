@@ -220,10 +220,17 @@ class VecEnv:
     def trim_logs(self, keep_mb: float = 8.0) -> int:
         """Truncate the per-env Godot logs once they pass keep_mb. Returns MB reclaimed.
 
-        Redirecting the logs does not make them smaller — it only moves ~1.1 GB/hr
-        somewhere the trainer owns. They are append-only engine noise nobody reads, so
-        truncating in place is safe: every env holds its file O_APPEND, and a POSIX append
-        write after truncate simply resumes at the new end of file.
+        Redirecting the logs does not make them smaller — it only moves the writes
+        somewhere the trainer owns. They are engine noise nobody reads, so truncating in
+        place is safe and does free the blocks.
+
+        MEASURED IN BLOCKS, NOT st_size, and that is not a detail. Godot does NOT open
+        these with O_APPEND — it keeps its own file offset — so after truncate(0) the next
+        write lands at the old offset and leaves a hole. The file is then SPARSE: env0.log
+        measured 624 MB by st_size against 22 MB of real blocks. Summing st_size made the
+        trimmer report "trimmed 3375 MB" for an update that had actually reclaimed about a
+        hundred, which is both alarming and false. st_blocks is what the filesystem is
+        actually holding, so that is what the threshold and the report use.
         """
         freed = 0.0
         for i in range(self.n):
@@ -231,7 +238,7 @@ class VecEnv:
             if not p or not os.path.exists(p):
                 continue
             try:
-                mb = os.path.getsize(p) / (1024.0 * 1024.0)
+                mb = os.stat(p).st_blocks * 512 / (1024.0 * 1024.0)
                 if mb >= keep_mb:
                     with open(p, "r+") as f:
                         f.truncate(0)

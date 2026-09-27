@@ -644,6 +644,17 @@ class Trainer:
         results, diffs, rounds = [], [], []
         per_game: list[dict] = []     # one row per game, for the dashboard's drill-down
         played = 0
+        # Evaluation maps are configurable SEPARATELY from training maps, and default to
+        # the training pool so nothing changes for runs that do not set it.
+        #
+        # This exists because evaluation picks its map per game (`maps[k % len(maps)]`).
+        # The moment a pool holds more than one KIND of map, a 10-game evaluation becomes
+        # two or three games on each of several different tasks and value_diff_hard turns
+        # into their average — a mixture whose mean measures nothing, and whose scatter no
+        # longer matches the noise floor every decision here is judged against. Pinning
+        # evaluation to one map keeps the number comparable across a pool change, which is
+        # the only way to answer "did adding those maps help?".
+        eval_maps = self.cfg.get("eval_maps") or self.cfg["maps"]
         seed_base = 900_000 + self.update * 100
         while played < games:
             self.write_status("running", f"evaluating vs {opponent}", played, games)
@@ -652,7 +663,7 @@ class Trainer:
             for j in range(batch):
                 k = played + j
                 cfgs.append(EpisodeConfig(
-                    map_path=self.cfg["maps"][k % len(self.cfg["maps"])], seed=seed_base + k,
+                    map_path=eval_maps[k % len(eval_maps)], seed=seed_base + k,
                     side=k % 2, opponent=OPPONENTS[opponent], round_cap=self.cfg["round_cap"], max_steps=self.cfg.get("max_steps", 3000),
                     civilians=self.cfg["civilians"], random_events=self.cfg["random_events"],
                     fog=FOGS[self.cfg["fog"]], friendly_fire=self.cfg["friendly_fire"],

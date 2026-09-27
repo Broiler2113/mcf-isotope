@@ -73,7 +73,13 @@ case "${1:-}" in
     rm -f "$RUNS/$2.pid"
     spawn "restart-$2" bash -c "while bash '$HERE/run.sh' alive '$2'; do sleep 5; done; bash '$HERE/run.sh' resume '$2' '$CFG'"
     echo "restart queued for $2: resumes with $CFG once the current update has checkpointed";;
-  fork)    train "$3" fork "$RUNS/$2" --branch "$3";;
+  fork)    # optional 4th arg: the config the fork should train under. Without it the fork
+           # inherits the parent's config.yaml, which is right for "same task, new branch"
+           # and wrong for every fork that exists BECAUSE the task changed (a new map pool,
+           # a new opponent). train.py fork has always accepted --config; only this line
+           # was missing, so the config had to be written into the run dir by hand.
+           if [ -n "${4:-}" ]; then train "$3" fork "$RUNS/$2" --branch "$3" --config "$(abspath "$4")"
+           else train "$3" fork "$RUNS/$2" --branch "$3"; fi;;
   stop)    "$PY" "$HERE/train.py" stop "$2"; rm -f "$RUNS/$2.pid";;
   pause)    "$PY" "$HERE/train.py" pause "$2";;      # pid stays: a paused run is a live process
   continue) "$PY" "$HERE/train.py" continue "$2";;
