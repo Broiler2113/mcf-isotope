@@ -222,6 +222,19 @@ def choose(net: PolicyNet, encoded: list, device, greedy=False):
 
 # --- trainer ---------------------------------------------------------------------------
 
+def disembark_allowed(cfg: dict, map_path: str) -> bool:
+    """False on maps that seal crews into their hulls.
+
+    Driven by a config list of filename substrings rather than a global flag, because a
+    pool mixes map kinds: the tank map is the whole point of the ban, and applying it to
+    the platoon map would quietly change what every other map trains. Matching on the
+    filename keeps the rule visible in the config instead of buried in the map JSON.
+    """
+    needles = cfg.get("sealed_crew_maps") or []
+    base = os.path.basename(map_path)
+    return not any(str(n) in base for n in needles)
+
+
 class Trainer:
     def __init__(self, run_dir: str, cfg: dict, device="cpu"):
         self.run_dir = run_dir
@@ -398,6 +411,7 @@ class Trainer:
             side=self.episode_seed % 2, opponent=opp, round_cap=self.cfg["round_cap"], max_steps=self.cfg.get("max_steps", 3000),
             civilians=self.cfg["civilians"], random_events=self.cfg["random_events"],
             fog=FOGS[self.cfg["fog"]], friendly_fire=self.cfg["friendly_fire"], record=record,
+            disembark=disembark_allowed(self.cfg, maps[self.map_idx]),
             max_candidates=self.cfg["max_candidates"], max_actors=self.cfg["max_actors"],
         )
         return cfg, label
@@ -642,6 +656,8 @@ class Trainer:
                     side=k % 2, opponent=OPPONENTS[opponent], round_cap=self.cfg["round_cap"], max_steps=self.cfg.get("max_steps", 3000),
                     civilians=self.cfg["civilians"], random_events=self.cfg["random_events"],
                     fog=FOGS[self.cfg["fog"]], friendly_fire=self.cfg["friendly_fire"],
+                    disembark=disembark_allowed(
+                        self.cfg, self.cfg["maps"][k % len(self.cfg["maps"])]),
                     max_candidates=self.cfg["max_candidates"],
                     max_actors=self.cfg["max_actors"],
                     # Пишем КАЖДУЮ партию оценки, а не первые `keep`. Признак записи

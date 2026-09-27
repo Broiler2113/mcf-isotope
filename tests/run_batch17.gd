@@ -19,6 +19,7 @@ func _initialize() -> void:
 	_sniper_hit_ladder()
 	_hull_kill_reports_its_crew()
 	_capture_is_reported()
+	_sealed_crew_cannot_disembark()
 	_neutral_shoots_bought_civilian()
 	_every_vehicle_leaves_a_wreck()
 	_group_move_falls_back()
@@ -202,6 +203,38 @@ func _capture_is_reported() -> void:
 	ck(veh.owner == MCF.Owner.PLAYER_1, "the hull changed hands (owner %d)" % veh.owner)
 	ck(res.captured_vehicles.has(veh.id),
 			"the capture is reported in captured_vehicles (got %s)" % str(res.captured_vehicles))
+
+## disembark_enabled = false должен и НЕ ПРЕДЛАГАТЬ высадку, и ОТКАЗЫВАТЬ в ней. Одного
+## фильтра в перечислителе мало: резолвер принимает намерения и не из него (встроенный ИИ,
+## сеть, повтор), и запрет, живущий только в списке, обходится молча.
+func _sealed_crew_cannot_disembark() -> void:
+	var f := _field([[Vector2i(5, 5), "tank", MCF.Owner.PLAYER_1],
+			[Vector2i(4, 4), "light_infantry", MCF.Owner.PLAYER_1],
+			[Vector2i(25, 10), "light_infantry", MCF.Owner.PLAYER_2]])
+	var st: GameState = f["s"]
+	var r: GameActionResolver = f["r"]
+	var veh: Vehicle = st.vehicle_on(Vector2i(5, 5))
+	var crew := _u(st, Vector2i(4, 4))
+	ck(r.resolve(VehicleBoardIntent.new(crew.id, veh.id)).ok, "crew boards")
+	var cells: Array = r.vehicle_disembark_cells(veh)
+	ck(not cells.is_empty(), "there IS somewhere to get out to")
+
+	# Пока разрешено — высадка и предлагается, и проходит.
+	var offered := 0
+	for i: Intent in LegalIntents.enumerate(r, MCF.Owner.PLAYER_1):
+		if i is VehicleDisembarkIntent and i.actor_id == crew.id:
+			offered += 1
+	ck(offered > 0, "with disembark on, the crew is offered a way out (%d)" % offered)
+
+	r.disembark_enabled = false
+	offered = 0
+	for i: Intent in LegalIntents.enumerate(r, MCF.Owner.PLAYER_1):
+		if i is VehicleDisembarkIntent and i.actor_id == crew.id:
+			offered += 1
+	ck(offered == 0, "sealed: no disembark is enumerated (got %d)" % offered)
+	var res := r.resolve(VehicleDisembarkIntent.new(crew.id, cells[0]))
+	ck(not res.ok, "sealed: the resolver refuses a disembark it never offered")
+	ck(crew.aboard_vehicle_id == veh.id, "sealed: the crew is still aboard")
 
 func _neutral_shoots_bought_civilian() -> void:
 	var f := _field([[Vector2i(5, 5), "civilian", MCF.Owner.PLAYER_1],

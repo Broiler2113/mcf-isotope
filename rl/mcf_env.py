@@ -40,6 +40,10 @@ class EpisodeConfig:
     random_events: bool = False
     fog: int = FOG_STANDARD
     friendly_fire: bool = True
+    # Экипажи заперты в корпусах. Для карт, весь смысл которых — воевать техникой
+    # (rl/maps/town_tank.json): без запрета политика паркует танк и уходит пешком.
+    # Флаг едет в резолвер, а значит связывает ОБЕ стороны, а не только обучаемого.
+    disembark: bool = True
     record: bool = False
     max_candidates: int = 0      # 0 = every legal intent; see env_server._cap_legal
     max_actors: int = 0          # 0 = enumerate for every unit; see env_server._actor_subset
@@ -49,7 +53,8 @@ class EpisodeConfig:
             "cmd": "reset", "map": self.map_path, "seed": self.seed, "side": self.side,
             "opponent": self.opponent, "round_cap": self.round_cap, "max_steps": self.max_steps,
             "civilians": self.civilians, "random_events": self.random_events,
-            "fog": self.fog, "friendly_fire": self.friendly_fire, "record": self.record,
+            "fog": self.fog, "friendly_fire": self.friendly_fire,
+            "disembark": self.disembark, "record": self.record,
             "max_candidates": self.max_candidates, "max_actors": self.max_actors,
         }
 

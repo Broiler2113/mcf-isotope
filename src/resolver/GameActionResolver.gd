@@ -30,6 +30,16 @@ var omniscient_side: int = -1
 ## В партии без команд флаг не меняет ничего, кроме запрета стрелять в СВОИХ же
 ## юнитов: «союзник» без команд — это только ты сам.
 var friendly_fire_enabled: bool = true
+## Разрешено ли вообще покидать машину. Выключается ТОЛЬКО тренировочными картами, где
+## весь смысл — заставить воевать корпусами (rl/maps/town_tank.json): иначе политика
+## паркует танк и уходит воевать пешком, то есть ровно то, ради чего карта и делалась,
+## не происходит.
+##
+## Живёт здесь, рядом с friendly_fire_enabled, а не в rl/: через резолвер ходят ОБЕ
+## стороны, и запрет, поставленный в env_server, связал бы только обучаемого, а
+## встроенный ИИ продолжил бы спешиваться. Асимметрия правил — это уже не «карта про
+## танки», а «карта, где у соперника больше ходов».
+var disembark_enabled: bool = true
 
 ## Случайные события (§1.5 лобби, item 61). null или выключенные — событий нет и
 ## ни одного лишнего кубика не бросается, поэтому старые партии идут прежним потоком.
@@ -6152,6 +6162,8 @@ func _vehicle_crew_ap(veh: Vehicle) -> int:
 
 # --- Высадка ---
 func _resolve_vehicle_disembark(intent: VehicleDisembarkIntent) -> ActionResult:
+	if not disembark_enabled:
+		return ActionResult.fail("Crews are sealed in on this map")
 	var unit := state.get_unit(intent.actor_id)
 	if unit == null or not unit.is_alive():
 		return ActionResult.fail("Unit not found")

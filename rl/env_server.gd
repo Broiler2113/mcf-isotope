@@ -287,6 +287,10 @@ func _reset(req: Dictionary) -> Dictionary:
 	resolver = GameActionResolver.new(state)
 	resolver.fog_mode = int(req.get("fog", MCF.Fog.STANDARD))
 	resolver.friendly_fire_enabled = bool(req.get("friendly_fire", true))
+	# Ставится В РЕЗОЛВЕР, а не в этот сервер: через резолвер ходят обе стороны, поэтому
+	# запрет связывает и встроенный ИИ. Запрети мы высадку только обучаемому — получилась
+	# бы не «карта про танки», а карта, где у соперника есть лишний манёвр.
+	resolver.disembark_enabled = bool(req.get("disembark", true))
 	if bool(req.get("random_events", false)):
 		resolver.random_events = RandomEvents.new(true)
 	resolver.update_airlocks()

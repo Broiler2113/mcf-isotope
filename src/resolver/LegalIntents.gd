@@ -73,7 +73,7 @@ static func _for_unit(r: GameActionResolver, u: UnitInstance, out: Array) -> voi
 	# Экипаж танка (за картой): может только выйти.
 	if u.aboard_vehicle_id != -1 and not state.grid.in_bounds(u.coord):
 		var tv := state.get_vehicle(u.aboard_vehicle_id)
-		if tv != null and u.remaining_ap > 0:
+		if tv != null and u.remaining_ap > 0 and r.disembark_enabled:
 			for c: Vector2i in r.vehicle_disembark_cells(tv):
 				out.append(VehicleDisembarkIntent.new(u.id, c))
 		return
@@ -91,7 +91,7 @@ static func _for_unit(r: GameActionResolver, u: UnitInstance, out: Array) -> voi
 			for c: Vector2i in r.station_pickup_cells(u):
 				out.append(PickUpStationIntent.new(u.id, c))
 		var seat_c := r.seat_cell_of(u)
-		if seat_c != GameActionResolver.NOWHERE:
+		if seat_c != GameActionResolver.NOWHERE and r.disembark_enabled:
 			for n: Vector2i in state.grid.neighbors(seat_c):
 				if not state.grid.is_occupied_or_wall(n) and state.grid.vehicle_at(n) == -1:
 					out.append(VehicleDisembarkIntent.new(u.id, n))
@@ -179,7 +179,7 @@ static func _for_unit(r: GameActionResolver, u: UnitInstance, out: Array) -> voi
 				else:
 					for seat: int in r.seat_options(veh):
 						out.append(VehicleBoardIntent.new(u.id, veh.id, seat))
-		if u.borg_id != -1:
+		if u.borg_id != -1 and r.disembark_enabled:
 			for n: Vector2i in state.grid.neighbors(u.coord):
 				if not state.grid.blocks_walk(n):
 					out.append(VehicleDisembarkIntent.new(u.id, n))
