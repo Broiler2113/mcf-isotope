@@ -931,6 +931,23 @@ def explain(key: str, *, inline: bool = False) -> None:
         st.markdown(detail)
 
 
+def eval_by_map(g: pd.DataFrame, height: int = 260):
+    """value_diff per evaluation, one line per evaluation map.
+
+    The +/-1 SE band is dropped here on purpose: with the games of one evaluation split
+    across several maps each band would be drawn from two or three games, which is a
+    width that suggests far more precision than it has.
+    """
+    agg = (g.groupby(["step", "map"])["value_diff"].mean().reset_index()
+           .rename(columns={"value_diff": "value", "map": "series"}))
+    agg["series"] = agg["series"].str.replace(r"\.json$", "", regex=True)
+    if agg.empty:
+        return None
+    return line_chart(agg[["step", "series", "value"]],
+                      "value_diff per evaluation, by map", height=height,
+                      order=sorted(agg["series"].unique()))
+
+
 def progress_chart(b: str, height: int = 260):
     """value_diff per evaluation with a +/-1 standard-error band, and the win line at 0.
 
@@ -942,6 +959,12 @@ def progress_chart(b: str, height: int = 260):
     g = eval_games(b)
     if g.empty or "value_diff" not in g:
         return None
+    # If a run evaluates on more than one map, aggregating across them produces a mean
+    # over different tasks — a number no single map ever scores, with a standard error
+    # inflated by the gap between maps rather than by the spread within one. Keep them
+    # separate; evaluation is usually pinned to one map, in which case this is a no-op.
+    if "map" in g and g["map"].nunique() > 1:
+        return eval_by_map(g, height)
     agg = (g.groupby("step")["value_diff"]
            .agg(mean="mean", sd=lambda s: float(s.std(ddof=0)), n="size").reset_index())
     if agg.empty:
@@ -1081,6 +1104,69 @@ def vehicle_chart(sc: dict):
     return line_chart(pd.concat(parts, ignore_index=True),
                       "vehicles: used as vehicles vs crews climbing in and out",
                       order=names, height=200)
+
+
+def maps_in(sc: dict) -> list[str]:
+    """Map stems that have per-map curves recorded (usage_map/<stem>/...)."""
+    out = set()
+    for t in sc:
+        if t.startswith("usage_map/"):
+            rest = t[len("usage_map/"):]
+            if "/" in rest:
+                out.add(rest.split("/", 1)[0])
+    return sorted(out)
+
+
+def for_map(sc: dict, stem: str | None) -> dict:
+    """View of the scalars as if only `stem` existed.
+
+    Per-map curves are stored as usage_map/<stem>/kind_x; every chart below already knows
+    how to read usage/kind_x. Rather than teach each of them a second tag layout, hand
+    them a dict where the chosen map's curves wear the usual names. `None` means the
+    pooled series, exactly as before.
+    """
+    if not stem:
+        return sc
+    pre = f"usage_map/{stem}/"
+    view = {t: d for t, d in sc.items() if not t.startswith(("usage/", "usage_map/"))}
+    for t, d in sc.items():
+        if t.startswith(pre):
+            view["usage/" + t[len(pre):]] = d
+    return view
+
+
+def map_picker(sc: dict, key: str) -> str | None:
+    """Radio over the maps in the pool; returns None for 'all maps pooled'.
+
+    Single-map runs get no picker at all — a control that can only be set one way is
+    noise.
+    """
+    ms = maps_in(sc)
+    if len(ms) < 2:
+        return None
+    labels = ["all maps pooled"] + ms
+    pick = st.radio("map", labels, horizontal=True, key=key, label_visibility="collapsed")
+    return None if pick == labels[0] else pick
+
+
+def map_match_chart(sc: dict, suffix: str, title: str, *, pct: bool = False):
+    """One line per map for map/<stem>_<suffix> (winrate, rounds, value_diff)."""
+    parts = []
+    for t, d in sc.items():
+        if not (t.startswith("map/") and t.endswith("_" + suffix)):
+            continue
+        stem = t[len("map/"):-len("_" + suffix)]
+        e = tidy(sc, [t])
+        if e.empty:
+            continue
+        e = e.copy()
+        e["series"] = stem
+        parts.append(e[["step", "series", "value"]])
+    if not parts:
+        return None
+    df = pd.concat(parts, ignore_index=True)
+    return line_chart(df, title, pct=pct, height=220,
+                      order=sorted(df["series"].unique()))
 
 
 def glossary() -> None:
@@ -1291,8 +1377,31 @@ def page_branch(b: str) -> None:
 
         st.divider()
         st.markdown("#### What the policy is doing")
-        behaviour(sc)
-        show(vehicle_chart(sc))
+        # The pooled action mix is actively misleading on a multi-map pool: a share like
+        # "vehicles 15%" is not 15% everywhere, it is most of the tank map and almost
+        # nothing on the other three. Pick a map and every chart below follows it.
+        picked = map_picker(sc, "mix_map")
+        if picked:
+            st.caption(f"showing **{picked}** only — shares are of that map's decisions")
+        behaviour(for_map(sc, picked))
+        show(vehicle_chart(for_map(sc, picked)))
+
+        # Per-map match outcomes. These are TRAINING matches, so unlike the evaluation
+        # charts above they cover every map in the pool, not just the pinned one.
+        wr = map_match_chart(sc, "winrate", "training win rate by map", pct=True)
+        rd = map_match_chart(sc, "rounds", "match length by map (rounds)")
+        vd = map_match_chart(sc, "value_diff", "end-of-match value_diff by map")
+        if wr or rd or vd:
+            st.markdown("##### Per map, in training")
+            st.caption("Evaluation is pinned to one map so it can be compared across runs; "
+                       "these are the training matches, where the whole pool is played.")
+            if wr and rd:
+                c1, c2 = st.columns(2)
+                with c1: show(wr)
+                with c2: show(rd)
+            else:
+                show(wr or rd)
+            show(vd)
 
         # --- is the optimiser healthy? --------------------------------------------------
         #

@@ -436,6 +436,13 @@ class Trainer:
         stats = defaultdict(list)
         usage_units = Counter()
         usage_kinds = Counter()
+        # Per-map copies of the same counters. The pooled numbers are the ones that
+        # mislead on a mixed pool: "veh_move+cannon 15%" is not a policy that drives a bit
+        # everywhere, it is a policy that drives constantly on the tank map and barely at
+        # all on the other three, and the pooled share cannot tell those apart. Keyed by
+        # map basename, which is what the dashboard and the eval rows already use.
+        usage_units_map: dict[str, Counter] = defaultdict(Counter)
+        usage_kinds_map: dict[str, Counter] = defaultdict(Counter)
         illegal = 0
         # Reset envs that are not mid-episode.
         cfgs = []
@@ -501,10 +508,14 @@ class Trainer:
                     buf_bytes += step.nbytes
                     actions[i] = int(a[j])
                     legal = self.envs.envs[i].last["legal"][int(a[j])]
+                    ecfg = self.envs.envs[i].cfg
+                    mp = os.path.basename(ecfg.map_path) if ecfg else "?"
                     usage_kinds[legal["i"]["t"]] += 1
+                    usage_kinds_map[mp][legal["i"]["t"]] += 1
                     at = legal.get("at", -1)
                     if at is not None and at >= 0:
                         usage_units[at] += 1
+                        usage_units_map[mp][at] += 1
             # Phase B: opponent decision points served by a frozen pool member.
             by_net = defaultdict(list)
             for i in opp_idx:
@@ -559,6 +570,7 @@ class Trainer:
                 carry[i] = 0.0
         dt = time.time() - t0
         info = dict(stats=stats, usage_units=usage_units, usage_kinds=usage_kinds,
+                    usage_units_map=usage_units_map, usage_kinds_map=usage_kinds_map,
                     illegal=illegal, seconds=dt)
         return buffers, info
 
@@ -1013,6 +1025,18 @@ class Trainer:
                 w.add_scalar(f"train/winrate_vs_{kind}", float(np.mean(vals)), s)
             for mp, vals in by_map.items():
                 w.add_scalar(f"map/{os.path.splitext(mp)[0]}_winrate", float(np.mean(vals)), s)
+            # Per-map match shape, not just the win rate. On a mixed pool the pooled
+            # rounds/value_diff are an average over tasks of different length and
+            # lethality, which is a number no single map ever produces.
+            by_map_rounds = defaultdict(list)
+            by_map_vd = defaultdict(list)
+            for (label, mp, res), rnd, vd in zip(st["result"], st["rounds"], st["value_diff"]):
+                by_map_rounds[mp].append(rnd)
+                by_map_vd[mp].append(vd)
+            for mp, vals in by_map_rounds.items():
+                w.add_scalar(f"map/{os.path.splitext(mp)[0]}_rounds", float(np.mean(vals)), s)
+            for mp, vals in by_map_vd.items():
+                w.add_scalar(f"map/{os.path.splitext(mp)[0]}_value_diff", float(np.mean(vals)), s)
             w.add_scalar("train/drawrate", float(np.mean(st["draw"])), s)
             w.add_scalar("train/match_rounds", float(np.mean(st["rounds"])), s)
             w.add_scalar("train/value_diff_end", float(np.mean(st["value_diff"])), s)
@@ -1023,6 +1047,22 @@ class Trainer:
         total_k = max(1, sum(info["usage_kinds"].values()))
         for k, c in info["usage_kinds"].items():
             w.add_scalar(f"usage/kind_{k}", c / total_k, s)
+        # Same shares again, split by map. Kept UNDER a separate prefix rather than
+        # replacing the pooled tags: the pooled series is what every run before this one
+        # recorded, and rewriting its meaning would silently invalidate the comparisons
+        # already drawn from it. Shares are normalised WITHIN each map, so each map's
+        # bands sum to 1 and a map that happened to supply few decisions this update is
+        # not flattened by one that supplied many.
+        for mp, counter in info.get("usage_kinds_map", {}).items():
+            stem = os.path.splitext(mp)[0]
+            tot = max(1, sum(counter.values()))
+            for k, c in counter.items():
+                w.add_scalar(f"usage_map/{stem}/kind_{k}", c / tot, s)
+        for mp, counter in info.get("usage_units_map", {}).items():
+            stem = os.path.splitext(mp)[0]
+            tot = max(1, sum(counter.values()))
+            for t, c in counter.items():
+                w.add_scalar(f"usage_map/{stem}/unit_{UNIT_NAMES[t]}", c / tot, s)
         w.add_scalar("train/curriculum_stage", self.cfg["stage"], s)
         w.add_scalar("train/phase", 0 if self.cfg["phase"] == "A" else 1, s)
         w.flush()
