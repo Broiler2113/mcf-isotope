@@ -442,12 +442,21 @@ class Trainer:
         out = defaultdict(list)
         stopped = False
         epochs = 0
+        per_epoch = (N + mb - 1) // mb
+        total_mb = cfg["epochs"] * per_epoch
+        done_mb = 0
+        self.write_status("running", "PPO update", 0, total_mb)
         for _ in range(cfg["epochs"]):
             if stopped:
                 break
             epochs += 1
             order = np.random.permutation(N)
             for start in range(0, N, mb):
+                # The update is the long half on a CPU; without this the heartbeat went
+                # silent for its whole duration and the dashboard called the run stale.
+                if time.time() - self._last_status > 3:
+                    self.write_status("running", "PPO update", done_mb, total_mb)
+                done_mb += 1
                 idx = order[start:start + mb]
                 steps = [flat_steps[k] for k in idx]
                 grid, flat, cand, cells, mask = collate(steps, self.device)
@@ -593,8 +602,7 @@ class Trainer:
                     self.envs = VecEnv(cfg["n_envs"], cfg["godot"])
                     continue
                 t0 = time.time()
-                self.write_status("running", "PPO update", 0, 0)
-                losses = self.ppo_update(buffers)
+                losses = self.ppo_update(buffers)     # writes its own progress heartbeats
                 self.log(info, losses, time.time() - t0)
                 self.write_status("running", "update done", 0, 0)
                 if self.update % cfg["checkpoint_every"] == 0:
