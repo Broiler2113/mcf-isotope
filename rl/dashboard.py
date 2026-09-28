@@ -1131,7 +1131,13 @@ def for_map(sc: dict, stem: str | None) -> dict:
     view = {t: d for t, d in sc.items() if not t.startswith(("usage/", "usage_map/"))}
     for t, d in sc.items():
         if t.startswith(pre):
-            view["usage/" + t[len(pre):]] = d
+            new = "usage/" + t[len(pre):]
+            # The COLUMN has to be renamed too, not just the dict key. scalars() names each
+            # frame's value column after its tag, and tidy() renames that column by looking
+            # it up by tag name — so a re-keyed frame still carrying its old column name
+            # makes tidy() produce a frame with no "value" column, and every chart built on
+            # it dies with KeyError "['value'] not in index".
+            view[new] = d.rename(columns={t: new})
     return view
 
 
