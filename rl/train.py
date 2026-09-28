@@ -164,11 +164,19 @@ def free_mb(path: str) -> float:
 
 
 def dir_mb(path: str) -> float:
+    """Megabytes the directory actually OCCUPIES, counted in allocated blocks.
+
+    st_size is the wrong question here. The Godot env logs are truncated in place while
+    their writers hold an open file offset, which leaves holes: the files are sparse, and
+    summing st_size reported this run directory as 6692 MB when `du` said 159 MB — a 42x
+    overstatement, shown on the dashboard's disk panel where it reads as a run about to
+    fill the machine. st_blocks is what the filesystem has really handed out.
+    """
     total = 0
     for root, _dirs, files in os.walk(path):
         for f in files:
             try:
-                total += os.path.getsize(os.path.join(root, f))
+                total += os.stat(os.path.join(root, f)).st_blocks * 512
             except OSError:
                 pass
     return total / (1024 * 1024)
