@@ -2395,6 +2395,11 @@ func _on_intent_ready(intent: Intent) -> void:
 		_back_to_menu()
 		return
 	_ai_denied_streak = 0
+	# Действие прошло — контроллеру, который копит отказы, пора их забыть (иначе
+	# LearnedController продолжит исключать намерения, отказанные на ПРЕЖНЕЙ доске).
+	var ok_ctrl: PlayerController = controllers.get(state.active_player())
+	if ok_ctrl != null and ok_ctrl.has_method("notify_intent_accepted"):
+		ok_ctrl.notify_intent_accepted()
 	# Откат и повтор переставляют всю доску разом: выделение и подсветка после них
 	# указывают в пустоту, а контроллеры держат устаревшую картину.
 	if intent is UndoIntent or intent is RedoIntent:

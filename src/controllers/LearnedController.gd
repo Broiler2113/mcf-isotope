@@ -30,8 +30,19 @@ var _max_candidates: int = int(OS.get_environment(ENV_MAX_CANDIDATES))
 var _budget_rng := RandomNumberGenerator.new()
 const CONNECT_TIMEOUT_MS := 3000
 const REPLY_TIMEOUT_MS := 30000
-## Лимит раундов, с которым обучалась политика (Q4): наблюдение содержит round/round_cap.
-const ROUND_CAP := 10
+## Лимит раундов, с которым обучалась политика (Q4): наблюдение содержит round/round_cap,
+## то есть номер раунда попадает в сеть ПОДЕЛЁННЫМ на это число. Значит оно обязано быть
+## тем же, с которым училась политика, иначе один из входов systematically смещён.
+##
+## Раньше здесь стояла жёсткая 10, а town-7/town-8 учились с round_cap 20: в бою сеть
+## получала вдвое больший «прогресс партии», чем видела при обучении, и после десятого
+## раунда — значение за пределами всего, что ей вообще показывали. Приходит от
+## `train.py play` из конфига самого чекпойнта, как и потолки бюджета; 10 остаётся
+## запасным значением для чекпойнтов, обученных до появления переменной.
+const ENV_ROUND_CAP := "MCF_RL_ROUND_CAP"
+const ROUND_CAP_FALLBACK := 10
+var _round_cap: int = (int(OS.get_environment(ENV_ROUND_CAP))
+		if int(OS.get_environment(ENV_ROUND_CAP)) > 0 else ROUND_CAP_FALLBACK)
 
 signal fallback_engaged(reason: String)
 
@@ -55,12 +66,36 @@ func begin_turn(state: GameState) -> void:
 		return
 	intent_ready.emit(picked["intent"])
 
+## Действие прошло — накопленные отказы относились к прежней доске. Зовётся из Main.gd
+## там же, где сбрасывается счётчик отказов.
+func notify_intent_accepted() -> void:
+	_denied.clear()
+
 ## Список политики точен (tests/run_legal_intents.gd): отказ резолвера здесь — признак
 ## расхождения досок, а не «повторить тот же расчёт». На следующем begin_turn список
 ## перечисляется заново с настоящей доски; запасному мозгу отказ передаём как есть.
 func notify_intent_denied(state: GameState) -> void:
 	if _fallback != null:
 		_fallback.notify_intent_denied(state)
+		return
+	# Отказ при ЖИВОЙ политике раньше не делал ничего, и это было тихой ловушкой.
+	#
+	# Сервер политики отвечает ЖАДНО: одно и то же наблюдение — один и тот же индекс.
+	# Значит, если резолвер отказал, следующий begin_turn на той же доске предложит ровно
+	# то же намерение, и так до тех пор, пока Main.gd не насчитает AI_MAX_DENIED отказов
+	# подряд и не завершит ход принудительно. Со стороны это выглядит буквально как «ИИ
+	# пропускает ход».
+	#
+	# Запоминаем отказанное намерение и на следующем решении исключаем его из списка: сеть
+	# вынуждена выбрать что-то другое, цикл рвётся, ход продолжается.
+	_denied.append(_last_intent_key)
+
+## Ключи намерений, отказанных на ТЕКУЩЕЙ доске. Чистится, как только решение прошло.
+var _denied: Array[String] = []
+var _last_intent_key := ""
+
+static func _intent_key(i: Intent) -> String:
+	return "%s|%d|%s" % [i.get_class(), i.actor_id, JSON.stringify(IntentCodec.encode(i))]
 
 var _last_error := ""
 
@@ -79,13 +114,22 @@ func _decide(state: GameState) -> Dictionary:
 	var legal: Array = IntentBudget.cap(_resolver.legal_intents(
 			owner, IntentBudget.actor_subset(_resolver, owner, _max_actors, _budget_rng)),
 			_max_candidates, _budget_rng)
+	# Выкинуть то, что резолвер уже отказал на этой доске (см. notify_intent_denied).
+	# Если после этого не осталось ничего — список исчерпан, и честнее сдать ход, чем
+	# предлагать отказанное по кругу.
+	if not _denied.is_empty():
+		var kept: Array = []
+		for intent: Intent in legal:
+			if not _denied.has(_intent_key(intent)):
+				kept.append(intent)
+		legal = kept
 	if legal.is_empty():
 		_last_error = "no legal intents"
 		return {}
 	var desc: Array = []
 	for intent: Intent in legal:
 		desc.append(Obs.describe(state, intent))
-	var req := {"obs": Obs.encode(_resolver, owner, ROUND_CAP), "legal": desc}
+	var req := {"obs": Obs.encode(_resolver, owner, _round_cap), "legal": desc}
 	var reply := _ask(req)
 	if reply.is_empty():
 		return {}
@@ -93,6 +137,9 @@ func _decide(state: GameState) -> Dictionary:
 	if k < 0 or k >= legal.size():
 		_last_error = "policy answered index %d of %d" % [k, legal.size()]
 		return {}
+	# Решение прошло: запоминаем ключ (вдруг откажут) и сбрасываем накопленные отказы —
+	# доска после успешного действия другая, и старый список к ней уже не относится.
+	_last_intent_key = _intent_key(legal[k])
 	return {"intent": legal[k]}
 
 func _engage_fallback(state: GameState, reason: String) -> void:
