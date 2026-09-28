@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -17,6 +18,11 @@ from typing import Any
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVER_SCRIPT = "res://rl/env_server.gd"
+
+# A reply that never comes used to block the trainer forever (readline has no timeout):
+# one wedged Godot and the run is dead until someone notices the flat dashboard. Past this
+# many seconds of silence the env is killed and restarted like any other EnvDied.
+REPLY_TIMEOUT = float(os.environ.get("MCF_RL_ENV_TIMEOUT", "300"))
 
 # AIController.Difficulty; -1 = the trainer serves the opponent's actions itself (Phase B).
 EASY, NORMAL, HARD, EXTERNAL = 0, 1, 2, -1
@@ -53,22 +59,29 @@ class EnvDied(RuntimeError):
 class GodotEnv:
     """One headless Godot process. All calls are synchronous unless split into send/recv."""
 
-    def __init__(self, godot: str = "godot", project: str = PROJECT):
+    def __init__(self, godot: str = "godot", project: str = PROJECT,
+                 timeout: float = REPLY_TIMEOUT):
         self.godot = godot
         self.project = project
+        self.timeout = timeout
         self.proc: subprocess.Popen | None = None
         self.last: dict | None = None
         self.cfg: EpisodeConfig | None = None
+        self.label: str = ""
+        self.buf = bytearray()
         self.start()
 
     def start(self) -> None:
+        # Binary, unbuffered: the timeout in _readline needs the bytes the OS has, not
+        # whatever a TextIOWrapper is holding back (select would lie about those).
         self.proc = subprocess.Popen(
             [self.godot, "--headless", "--path", self.project, "--script", SERVER_SCRIPT],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True, bufsize=1,
+            bufsize=0,
             # Own process group so a trainer shutdown can kill every env together (9.5).
             preexec_fn=os.setsid if os.name == "posix" else None,
         )
+        self.buf.clear()
         # Wait for the server before the first command: a ping proves the script loaded.
         self.send({"cmd": "ping"})
         self.recv()
@@ -76,18 +89,39 @@ class GodotEnv:
     def send(self, cmd: dict) -> None:
         assert self.proc is not None and self.proc.stdin is not None
         try:
-            self.proc.stdin.write(json.dumps(cmd) + "\n")
+            self.proc.stdin.write((json.dumps(cmd) + "\n").encode())
             self.proc.stdin.flush()
         except (BrokenPipeError, OSError) as e:
             raise EnvDied(f"env stdin closed: {e}")
 
-    def recv(self) -> dict:
+    def _readline(self) -> bytes:
+        """One line from the env, or EnvDied once it has been silent for `timeout`."""
         assert self.proc is not None and self.proc.stdout is not None
+        deadline = time.monotonic() + self.timeout
         while True:
-            line = self.proc.stdout.readline()
-            if not line:
+            nl = self.buf.find(b"\n")
+            if nl >= 0:
+                line = bytes(self.buf[:nl])
+                del self.buf[:nl + 1]
+                return line
+            left = deadline - time.monotonic()
+            if left <= 0:
+                self.kill()
+                raise EnvDied(f"env silent for {self.timeout:.0f}s — killed")
+            if os.name == "posix":
+                if not select.select([self.proc.stdout], [], [], min(left, 5.0))[0]:
+                    continue
+                chunk = os.read(self.proc.stdout.fileno(), 1 << 16)
+            else:
+                chunk = self.proc.stdout.readline()   # no timeout off posix
+            if not chunk:
                 raise EnvDied("env process exited (rc=%s)" % self.proc.poll())
-            if line.startswith("{"):
+            self.buf += chunk
+
+    def recv(self) -> dict:
+        while True:
+            line = self._readline()
+            if line.startswith(b"{"):
                 resp = json.loads(line)
                 if not resp.get("ok", True):
                     raise RuntimeError("env error: %s" % resp.get("error"))

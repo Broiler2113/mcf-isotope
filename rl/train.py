@@ -39,8 +39,8 @@ import torch  # noqa: E402
 import torch.nn.functional as F  # noqa: E402
 from torch.utils.tensorboard import SummaryWriter  # noqa: E402
 
-from features import (CANVAS, INTENT_KINDS, N_ACTOR_TYPES, candidate_rows,  # noqa: E402
-                      flat_vector, grid_tensor)
+from features import (CANVAS, INTENT_KINDS, N_ACTOR_TYPES, N_CHANNELS,  # noqa: E402
+                      candidate_rows, canvas_offset, flat_vector, grid_tensor)
 from mcf_env import (EASY, EXTERNAL, HARD, NORMAL, PROJECT, EnvDied,  # noqa: E402
                      EpisodeConfig, VecEnv)
 from model import OnnxWrapper, PolicyNet  # noqa: E402
@@ -61,6 +61,7 @@ DEFAULTS = dict(
     rollout_steps=256, epochs=4, minibatch=32, lr=3e-4, gamma=0.99, lam=0.95, clip=0.2,
     ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5, total_steps=20_000_000,
     checkpoint_every=5, eval_every=10, eval_games=6, replays_per_checkpoint=2,
+    keep_checkpoints=0,          # 0 = keep every checkpoint; N = keep the newest N
     map_rotate_matches=5, seed=1, torch_threads=0,
 )
 
@@ -93,28 +94,40 @@ class Step:
 
 
 def collate(steps: list[Step], device):
+    """Pad the stored per-map grids back onto the 64x64 canvas the network expects
+    (features.grid_tensor stores them cropped), and pad the candidate rows to the widest
+    row count in this batch."""
     n = max(s.cand.shape[0] for s in steps)
     B = len(steps)
     cand = np.zeros((B, n, steps[0].cand.shape[1]), dtype=np.float32)
     cells = np.full((B, n, 2), -1, dtype=np.int64)
     mask = np.zeros((B, n), dtype=bool)
+    grid = np.zeros((B, N_CHANNELS, CANVAS, CANVAS), dtype=np.float32)
     for i, s in enumerate(steps):
         k = s.cand.shape[0]
         cand[i, :k] = s.cand
         cells[i, :k] = s.cells
         mask[i, :k] = True
-    grid = torch.from_numpy(np.stack([s.grid for s in steps]).astype(np.float32)).to(device)
+        _, h, w = s.grid.shape
+        ox, oy = canvas_offset(w, h)
+        grid[i, :, oy:oy + h, ox:ox + w] = s.grid
     flat = torch.from_numpy(np.stack([s.flat for s in steps])).to(device)
-    return (grid, flat, torch.from_numpy(cand).to(device), torch.from_numpy(cells).to(device),
-            torch.from_numpy(mask).to(device))
+    return (torch.from_numpy(grid).to(device), flat, torch.from_numpy(cand).to(device),
+            torch.from_numpy(cells).to(device), torch.from_numpy(mask).to(device))
 
 
 def encode(resp: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Rollout-sized: half precision for the two big arrays, which are one-hots and
+    normalised fractions either way. A step on the 34x26 arena with ~1500 legal intents
+    is 124 KiB of grid + 287 KiB of candidate rows.
+    ponytail: the candidate rows are 4 one-hots and ~9 numbers per row stored dense in 94
+    float16 columns. If a rollout still does not fit, store the one-hot indices and scatter
+    them in collate (~7x) before touching rollout_steps."""
     obs = resp["obs"]
     g = grid_tensor(obs).astype(np.float16)
     f = flat_vector(obs)
     c, cells = candidate_rows(obs, resp["legal"])
-    return g, f, c, cells
+    return g, f, c.astype(np.float16), cells.astype(np.int32)
 
 
 def choose(net: PolicyNet, encoded: list, device, greedy=False):
@@ -169,7 +182,22 @@ class Trainer:
         meta = {k: v for k, v in sd.items() if k not in ("model", "opt", "rng")}
         with open(path + ".json", "w") as f:
             json.dump(meta, f)
+        self.prune_checkpoints()
         return path
+
+    def prune_checkpoints(self) -> None:
+        """Keep the newest `keep_checkpoints` (0 = all). A checkpoint is ~4 MB of weights
+        plus optimizer state; at one every ten updates a long run fills a laptop's disk,
+        and a failed torch.save is a dead trainer. The sidecar goes with the weights so
+        the dashboard never offers a fork from a file that is gone."""
+        keep = int(self.cfg.get("keep_checkpoints", 0))
+        if keep <= 0:
+            return
+        keep = max(keep, self.cfg["pool_size"] + 1)   # the Phase B pool must survive
+        for p in sorted(glob.glob(os.path.join(self.run_dir, "ckpt_*.pt")))[:-keep]:
+            os.remove(p)
+            if os.path.exists(p + ".json"):
+                os.remove(p + ".json")
 
     def write_status(self, state: str, activity: str = "", done: int = 0, total: int = 0, **extra):
         """Heartbeat for the dashboard: who is training, how far, what it is doing right now
@@ -216,6 +244,13 @@ class Trainer:
             self.pool_cache[path] = net.eval()
         return self.pool_cache[path]
 
+    def trim_pool_cache(self) -> None:
+        """Only the current pool stays resident. Without this the cache kept one net
+        (~1.4 MB) for every checkpoint ever sampled, for the life of the run."""
+        live = set(self.pool_checkpoints())
+        for p in [p for p in self.pool_cache if p != "self" and p not in live]:
+            del self.pool_cache[p]
+
     def pick_opponent(self) -> tuple[int, str]:
         """(env opponent code, label). Phase A: the scripted AI. Phase B: the pool."""
         if self.cfg["phase"] == "A" or self.rng.random() < self.cfg["pool_ai_fraction"]:
@@ -237,6 +272,14 @@ class Trainer:
         )
         return cfg, label
 
+    def send_resets(self, pairs: list[tuple[int, EpisodeConfig]]) -> None:
+        """Reset these envs in parallel: every command out first, then every reply."""
+        for i, ec in pairs:
+            self.envs.envs[i].cfg = ec
+            self.envs.envs[i].send(ec.to_cmd())
+        for i, _ in pairs:
+            self.envs.envs[i].last = self.envs.envs[i].recv()
+
     # -- rollout (5.1) --
     def collect(self) -> tuple[list[list[Step]], dict]:
         cfg = self.cfg
@@ -256,17 +299,15 @@ class Trainer:
                 ec, labels[i] = self.next_episode()
                 cfgs.append((i, ec))
             else:
-                labels[i] = getattr(env, "label", "ai:" + cfg["opponent"])
-        for i, ec in cfgs:
-            self.envs.envs[i].cfg = ec
-            self.envs.envs[i].send(ec.to_cmd())
-        for i, ec in cfgs:
-            env = self.envs.envs[i]
-            env.last = env.recv()
-            env.label = labels[i]
+                labels[i] = env.label or "ai:" + cfg["opponent"]
+        self.send_resets(cfgs)
+        for i, _ in cfgs:
+            self.envs.envs[i].label = labels[i]
         t0 = time.time()
         self.pool_cache.pop("self", None)
+        self.trim_pool_cache()
         self.write_status("running", "collecting rollout", 0, T * n)
+        idle = 0
         while min(len(b) for b in buffers) < T:
             if time.time() - self._last_status > 3:
                 done = sum(len(b) for b in buffers)
@@ -305,6 +346,21 @@ class Trainer:
                 a, _, _ = choose(net, enc, self.device)
                 for j, i in enumerate(idxs):
                     actions[i] = int(a[j])
+            if not actions:
+                # Every env is parked on a finished episode: a reset can come back already
+                # done on a degenerate map. Stepping nobody used to spin here at 100% CPU
+                # forever, with the heartbeat still saying "running".
+                idle += 1
+                if idle > 8:
+                    raise EnvDied("no env offered a decision point in 8 tries")
+                pairs = []
+                for i, env in enumerate(self.envs.envs):
+                    if env.last is None or env.last["done"]:
+                        ec, env.label = self.next_episode()
+                        pairs.append((i, ec))
+                self.send_resets(pairs)
+                continue
+            idle = 0
             self.envs.step_async(actions)
             replies = self.envs.step_wait(list(actions.keys()))
             resets = []
@@ -336,11 +392,7 @@ class Trainer:
                     carry[i] = 0.0
                 elif was_trainee:
                     pass  # opponent's turn now; reward keeps accumulating in carry
-            for i, ec in resets:
-                self.envs.envs[i].cfg = ec
-                self.envs.envs[i].send(ec.to_cmd())
-            for i, ec in resets:
-                self.envs.envs[i].last = self.envs.envs[i].recv()
+            self.send_resets(resets)
         # Give un-finished last steps their pending reward (kept as not-done; bootstrap).
         for i in range(n):
             if buffers[i] and carry[i] != 0.0:
@@ -441,12 +493,8 @@ class Trainer:
                     civilians=self.cfg["civilians"], random_events=self.cfg["random_events"],
                     fog=FOGS[self.cfg["fog"]], friendly_fire=self.cfg["friendly_fire"],
                     record=record_dir is not None and k < keep))
-            for j in range(batch):
-                self.envs.envs[j].cfg = cfgs[j]
-                self.envs.envs[j].send(cfgs[j].to_cmd())
-            for j in range(batch):
-                self.envs.envs[j].last = self.envs.envs[j].recv()
-            active = list(range(batch))
+            self.send_resets(list(enumerate(cfgs)))
+            active = [j for j in range(batch) if not self.envs.envs[j].last["done"]]
             while active:
                 enc = [encode(self.envs.envs[j].last) for j in active]
                 a, _, _ = choose(net, enc, self.device, greedy=True)
@@ -525,7 +573,14 @@ class Trainer:
                     path = self.save()
                     print(f"[train] checkpoint {path}", flush=True)
                 if self.update % cfg["eval_every"] == 0:
-                    self.run_eval()
+                    try:
+                        self.run_eval()
+                    except EnvDied as e:
+                        # Evaluation used to be outside the restart path: one env dying
+                        # there took the whole run down between checkpoints.
+                        print(f"[train] {e} during eval; restarting envs, eval skipped", flush=True)
+                        self.envs.kill()
+                        self.envs = VecEnv(cfg["n_envs"], cfg["godot"])
                 if os.path.exists(stop_flag):
                     os.remove(stop_flag)
                     print("[train] STOP flag found", flush=True)

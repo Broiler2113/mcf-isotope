@@ -29,6 +29,7 @@ ent_coef: 0.01
 vf_coef: 0.5
 total_steps: 50000000
 checkpoint_every: 10
+keep_checkpoints: 40   # ~170 MB of weights; 0 keeps every one and a 50M-step run is ~7 GB
 eval_every: 20
 eval_games: 24
 replays_per_checkpoint: 3

@@ -137,7 +137,9 @@ def scalars(branch: str, _stamp: float) -> dict[str, pd.DataFrame]:
     tb = os.path.join(RUNS, branch, "tb")
     if not os.path.isdir(tb):
         return {}
-    acc = EventAccumulator(tb, size_guidance={"scalars": 0})
+    # 0 would mean "every point ever logged": this reload happens every 30 s for the life
+    # of the run, so cap it the way TensorBoard's own UI does (reservoir sample).
+    acc = EventAccumulator(tb, size_guidance={"scalars": 20_000})
     acc.Reload()
     out = {}
     for tag in acc.Tags().get("scalars", []):

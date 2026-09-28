@@ -69,45 +69,51 @@ F_MISC = F_TARGET_TYPE + N_UNIT_TYPES      # shots_full, shots_single, av_mine, 
 CAND_DIM = F_MISC + 5 + len(BUILD_FEATURES)
 
 
+def canvas_offset(w: int, h: int) -> tuple[int, int]:
+    """Where a w x h map sits on the 64x64 canvas. `candidate_rows` uses it for the cell
+    indices the CNN feature map is gathered at, `train.collate` to pad a stored grid."""
+    return (CANVAS - w) // 2, (CANVAS - h) // 2
+
+
 def grid_tensor(obs: dict) -> np.ndarray:
+    """Channels over the map's own w x h, NOT the padded canvas: a stored rollout step
+    used to carry 64x64 of mostly-zero padding (590 KB at float16), and one rollout of
+    6 envs x 512 steps is ~1.8 GB of that. `train.collate` centres it on the canvas when
+    it builds a batch, so the network still sees the same 64x64 input."""
     w, h = obs["w"], obs["h"]
-    g = np.zeros((N_CHANNELS, CANVAS, CANVAS), dtype=np.float32)
-    ox = (CANVAS - w) // 2
-    oy = (CANVAS - h) // 2
+    g = np.zeros((N_CHANNELS, h, w), dtype=np.float32)
     def plane(key):
         return np.asarray(obs[key], dtype=np.int32).reshape(h, w)
     floor = plane("floor"); feat = plane("feat"); fown = plane("feat_own")
     cover = plane("cover"); fire = plane("fire"); corpse = plane("corpse")
     dirt = plane("dirt"); fog = plane("fog"); veh = plane("veh")
-    sl = (slice(oy, oy + h), slice(ox, ox + w))
-    g[C_VALID][sl] = 1.0
+    g[C_VALID] = 1.0
     for k in range(3):
-        g[C_FLOOR + k][sl] = (floor == k + 1)
-    g[C_SPACE][sl] = (floor == 3)
+        g[C_FLOOR + k] = (floor == k + 1)
+    g[C_SPACE] = (floor == 3)
     for k in range(N_FEATURES):
-        g[C_FEAT + k][sl] = (feat == k + 1)
+        g[C_FEAT + k] = (feat == k + 1)
     for k in range(3):
-        g[C_FEAT_OWN + k][sl] = (fown == k + 1)
-        g[C_FOG + k][sl] = (fog == k)
-    g[C_COVER][sl] = cover / 4.0
-    g[C_FIRE][sl] = fire
-    g[C_CORPSE][sl] = corpse / 5.0
-    g[C_DIRT][sl] = dirt / 2.0
-    g[C_VEH_FOOT][sl] = veh
+        g[C_FEAT_OWN + k] = (fown == k + 1)
+        g[C_FOG + k] = (fog == k)
+    g[C_COVER] = cover / 4.0
+    g[C_FIRE] = fire
+    g[C_CORPSE] = corpse / 5.0
+    g[C_DIRT] = dirt / 2.0
+    g[C_VEH_FOOT] = veh
     for u in obs["units"]:
         x, y = u["x"], u["y"]
         if x < 0 or y < 0 or x >= w or y >= h:
             continue  # tank crew parked off-board
-        cx, cy = x + ox, y + oy
-        g[C_UNIT_OWN + u["own"], cy, cx] = 1.0
-        g[C_UNIT_TYPE + u["type"], cy, cx] = 1.0
-        g[C_UNIT_AP, cy, cx] = u["ap"] / max(1, u["max_ap"])
-        g[C_UNIT_HELD, cy, cx] = u["held"]
-        g[C_UNIT_CORPSES, cy, cx] = u["corpses"]
-        g[C_UNIT_ITEM, cy, cx] = 1.0 if u["item"] else 0.0
-        g[C_UNIT_CIV, cy, cx] = u["civ"]
-        g[C_UNIT_PENDING, cy, cx] = u.get("pending", 0) / 8.0
-        g[C_UNIT_MC, cy, cx] = min(u["mc"], 16) / 16.0
+        g[C_UNIT_OWN + u["own"], y, x] = 1.0
+        g[C_UNIT_TYPE + u["type"], y, x] = 1.0
+        g[C_UNIT_AP, y, x] = u["ap"] / max(1, u["max_ap"])
+        g[C_UNIT_HELD, y, x] = u["held"]
+        g[C_UNIT_CORPSES, y, x] = u["corpses"]
+        g[C_UNIT_ITEM, y, x] = 1.0 if u["item"] else 0.0
+        g[C_UNIT_CIV, y, x] = u["civ"]
+        g[C_UNIT_PENDING, y, x] = u.get("pending", 0) / 8.0
+        g[C_UNIT_MC, y, x] = min(u["mc"], 16) / 16.0
     for v in obs["vehicles"]:
         hull = v["comps"].get("hull", [1, 1])
         frac = hull[0] / max(1, hull[1])
@@ -115,13 +121,12 @@ def grid_tensor(obs: dict) -> np.ndarray:
             for dx in range(v["w"]):
                 x, y = v["x"] + dx, v["y"] + dy
                 if 0 <= x < w and 0 <= y < h:
-                    cx, cy = x + ox, y + oy
-                    g[C_VEH_OWN + v["own"], cy, cx] = 1.0
-                    g[C_VEH_TYPE + v["type"], cy, cx] = 1.0
-                    g[C_VEH_HULL, cy, cx] = frac
-                    g[C_VEH_FX, cy, cx] = v["fx"]
-                    g[C_VEH_FY, cy, cx] = v["fy"]
-                    g[C_VEH_WRECK, cy, cx] = v["wrecked"]
+                    g[C_VEH_OWN + v["own"], y, x] = 1.0
+                    g[C_VEH_TYPE + v["type"], y, x] = 1.0
+                    g[C_VEH_HULL, y, x] = frac
+                    g[C_VEH_FX, y, x] = v["fx"]
+                    g[C_VEH_FY, y, x] = v["fy"]
+                    g[C_VEH_WRECK, y, x] = v["wrecked"]
     return g
 
 
@@ -155,8 +160,7 @@ def candidate_rows(obs: dict, legal: list[dict]) -> tuple[np.ndarray, np.ndarray
     """Per-candidate feature rows plus the canvas cell index of actor and target
     (for gathering the CNN feature map; -1 when off-board)."""
     w, h = obs["w"], obs["h"]
-    ox = (CANVAS - w) // 2
-    oy = (CANVAS - h) // 2
+    ox, oy = canvas_offset(w, h)
     n = len(legal)
     rows = np.zeros((n, CAND_DIM), dtype=np.float32)
     cells = np.full((n, 2), -1, dtype=np.int64)

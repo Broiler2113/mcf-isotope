@@ -20,6 +20,7 @@ rl/tools/make_pool.gd             exports the test arena as the first pool map  
 rl/tools/check_replay.gd          plays a recorded .mcfr through ReplayPlayer                 (10.3)
 tests/run_legal_intents.gd        exactness: every enumerated intent resolves OK               (13.1)
 tests/run_learned_controller.gd   fallback path (always) and live path (with MCF_RL_POLICY)
+rl/test_rl.py                     `python rl/test_rl.py` — grid/canvas, padding, read timeout
 ```
 
 ## Setup (laptop = trainer + dashboard; the site is a tunnel to it)
@@ -64,6 +65,18 @@ with outstanding tags and "open in the game" (§11.7), per-map trends (§11.8). 
 
 SIGTERM / SIGHUP / the `STOP` flag file all finish the current update, save a checkpoint,
 and terminate every Godot process (they run in their own process group).
+
+## Staying alive and staying small
+
+- An env that goes silent for `MCF_RL_ENV_TIMEOUT` seconds (default 300) is killed and the
+  whole vec-env restarted, in the rollout *and* in evaluation. A wedged Godot used to hang
+  the trainer with no timeout and a heartbeat still reading "running".
+- The rollout stores each observation at the map's own size, not padded to 64x64; padding
+  happens per minibatch. That is ~4x less memory on a 34x26 map (a 6-env, 512-step rollout
+  goes from ~1.8 GB of grids to ~390 MB).
+- `keep_checkpoints: N` in the config keeps the newest N `ckpt_*.pt` (never fewer than
+  `pool_size + 1`) and deletes the rest with their sidecars; `0` keeps everything, which is
+  ~4 MB per checkpoint. The eval history (`eval_log.jsonl`) and TensorBoard are untouched.
 
 ## What is where
 
