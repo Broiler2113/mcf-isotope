@@ -256,6 +256,8 @@ class Trainer:
         self.update = 0
         self.matches_done = 0
         self.map_idx = 0
+        # Maps that already have a rollout replay in the current checkpoint window.
+        self._replay_maps: set[str] = set()
         self.parent = None
         self.rng = random.Random(self.cfg["seed"])
         self.writer = SummaryWriter(os.path.join(run_dir, "tb"))
@@ -344,6 +346,12 @@ class Trainer:
             sets = sorted(glob.glob(os.path.join(self.run_dir, "replays", "checkpoint_*")))
             for d in sets[:-keep_r]:
                 shutil.rmtree(d, ignore_errors=True)
+            # Training replays are per-step directories too, and grow with one set per
+            # checkpoint window; prune them on the same rule so the pool's replays cannot
+            # quietly outgrow the evaluation ones.
+            tsets = sorted(glob.glob(os.path.join(self.run_dir, "replays", "train_*")))
+            for d in tsets[:-keep_r]:
+                shutil.rmtree(d, ignore_errors=True)
 
     def write_status(self, state: str, activity: str = "", done: int = 0, total: int = 0, **extra):
         """Heartbeat for the dashboard: who is training, how far, what it is doing right now
@@ -409,10 +417,57 @@ class Trainer:
         members = ["self"] + self.pool_checkpoints()
         return EXTERNAL, "pool:" + self.rng.choice(members)
 
+    def _save_rollout_replay(self, env, result: str) -> None:
+        """Write one training replay for the map this episode was played on.
+
+        Filed under replays/train/<step>/ rather than replays/checkpoint_*/ so it is
+        obvious in the dashboard which replays came from TRAINING (whole map pool, the
+        policy against whatever opponent the rotation picked) and which came from
+        EVALUATION (pinned map, always vs the graduation opponent). Mixing them in one
+        directory would make the map column look inconsistent for no stated reason.
+        """
+        mp = os.path.basename(env.cfg.map_path)
+        stem = os.path.splitext(mp)[0]
+        # train_<step>, NOT train/<step>: the dashboard gallery globs
+        # runs/*/replays/*/*.mcfr, which is exactly two levels, so a nested directory
+        # would write files the gallery can never find.
+        d = os.path.join(self.run_dir, "replays", f"train_{self.global_step:09d}")
+        try:
+            os.makedirs(d, exist_ok=True)
+            path = os.path.join(d, f"{stem}_{result}.mcfr")
+            if env.save_replay(path):
+                # Sidecar in the same schema the evaluation replays use, so the gallery
+                # shows map, result and rounds instead of falling back to the file name.
+                with open(path + ".json", "w") as f:
+                    json.dump(dict(branch=os.path.basename(self.run_dir),
+                                   step=self.global_step, update=self.update,
+                                   opponent=env.label, source="training",
+                                   result=result, map=env.cfg.map_path,
+                                   side=env.cfg.side, seed=env.cfg.seed,
+                                   time=time.time()), f)
+        except Exception as e:      # a replay is a nicety; never take the run down for one
+            print(f"[train] could not save rollout replay for {mp}: {e}", flush=True)
+
     def next_episode(self, record: bool = False) -> tuple[EpisodeConfig, str]:
         # Rotation: every map_rotate_matches completed matches, the next map (8.2.2).
         maps = self.cfg["maps"]
         self.map_idx = (self.matches_done // self.cfg["map_rotate_matches"]) % len(maps)
+        # Record ONE rollout episode per map per checkpoint window.
+        #
+        # Replays used to come only from evaluation, and evaluation is pinned to a single
+        # map so the whole pool can be compared against earlier runs. The consequence was
+        # that every replay on the dashboard was the same map: three of the four maps in
+        # training had no watchable game anywhere, which reads as "those maps are not
+        # running". Rollout episodes happen regardless, so capturing one costs a replay
+        # write rather than extra games.
+        here = os.path.basename(maps[self.map_idx])
+        if here not in self._replay_maps:
+            record = True
+            # Claim the map HERE, when the assignment is handed out, not when the replay
+            # is written. All six envs are on the same map at the same time, so marking it
+            # on save would hand every one of them a recording flag for the same episode:
+            # six simultaneous recordings, five of them overwriting the sixth's file.
+            self._replay_maps.add(here)
         opp, label = self.pick_opponent()
         self.episode_seed += 1
         cfg = EpisodeConfig(
@@ -550,6 +605,10 @@ class Trainer:
                     stats["result"].append((env.label, os.path.basename(env.cfg.map_path), res))
                     illegal += info["illegal"]
                     self.matches_done += 1
+                    # Save BEFORE the reset below: the recording lives in the env and the
+                    # reset discards it.
+                    if env.cfg is not None and env.cfg.record:
+                        self._save_rollout_replay(env, res)
                     ec, label = self.next_episode()
                     env.label = label
                     resets.append((i, ec))
@@ -877,6 +936,10 @@ class Trainer:
                 if self.update % cfg["checkpoint_every"] == 0:
                     path = self.save()
                     print(f"[train] checkpoint {path}", flush=True)
+                    # New window: let every map be recorded again. Without this the set
+                    # fills once and the gallery freezes on the first few episodes of the
+                    # run, which is a subtler version of the problem this fixes.
+                    self._replay_maps.clear()
                 # Evaluate on schedule, but also whenever this branch has no win rate at
                 # all yet. eval_every is tens of updates and an update can take minutes,
                 # so a fresh run used to show a blank "win vs NORMAL / HARD" for hours

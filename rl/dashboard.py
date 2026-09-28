@@ -668,7 +668,13 @@ def replays(_stamp: str) -> pd.DataFrame:
             value_diff=m.get("value_diff"), rounds=m.get("rounds"),
             map=os.path.basename(str(m.get("map", ""))).replace(".json", ""),
             date=pd.to_datetime(m.get("time") or os.path.getmtime(path), unit="s"),
-            source="training", file=path))
+            # Where the game came from. This was hardcoded to "training" — meaning "a
+            # replay from a training run" rather than anything about the game — and now
+            # that the sidecars distinguish rollout from evaluation it has to be read,
+            # or the column labels every evaluation replay as training. Older sidecars
+            # have no such field and are all evaluation games, since rollout replays did
+            # not exist before.
+            source=m.get("source") or "evaluation", file=path))
     df = pd.DataFrame(rows)
     if df.empty:
         return df
