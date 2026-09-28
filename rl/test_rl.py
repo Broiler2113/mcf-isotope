@@ -72,24 +72,81 @@ def test_collate_pads_grid_and_candidates():
     assert grid[0, ft.C_VALID, 0, 0].item() == 0.0      # the pad stays empty
 
 
+def _scores_unpacked(net, fm, s, cand, cells, mask):
+    """The candidate head written the obvious way: every padded row, state copied in."""
+    import torch
+    B, N, _ = cand.shape
+    flat_fm = fm.flatten(2).transpose(1, 2)
+    idx = cells.clamp(min=0)
+    a = torch.gather(flat_fm, 1, idx[..., 0:1].expand(B, N, net.fmap)) * (cells[..., 0:1] >= 0).float()
+    t = torch.gather(flat_fm, 1, idx[..., 1:2].expand(B, N, net.fmap)) * (cells[..., 1:2] >= 0).float()
+    x = torch.cat([cand, a, t, s.unsqueeze(1).expand(B, N, s.shape[1])], dim=2)
+    return net.cand(x).squeeze(-1).masked_fill(~mask, -1e9)
+
+
+def test_packed_head_is_the_same_function():
+    """model.scores skips padding and hoists the state term; the logits and every
+    gradient must match the unpacked head it replaced (same weights = old checkpoints)."""
+    import torch
+    from model import PolicyNet
+    from train import Step, collate
+    torch.manual_seed(0)
+    rng = np.random.default_rng(0)
+    steps = []
+    for n_cand in (3, 40, 7):                          # ragged, like a real minibatch
+        obs = fake_obs(ux=int(rng.integers(W)), uy=int(rng.integers(H)))
+        legal = [dict(i=dict(t="move"), at=int(rng.integers(19)), tt=-1,
+                      ax=int(rng.integers(W)), ay=int(rng.integers(H)),
+                      tx=int(rng.integers(-1, W)), ty=int(rng.integers(H))) for _ in range(n_cand)]
+        c, cl = candidate_rows(obs, legal)
+        steps.append(Step(grid_tensor(obs), ft.flat_vector(obs), c, cl, 0, 0.0, 0.0))
+    grid, flat, cand, cells, mask = collate(steps, "cpu")
+    net = PolicyNet()
+    grads = []
+    for fn in (net.scores, lambda *a: _scores_unpacked(net, *a)):
+        net.zero_grad()
+        fm, s = net.embed(grid, flat)
+        logits = fn(fm, s, cand, cells, mask)
+        torch.log_softmax(logits, 1)[:, 0].sum().backward()
+        grads.append((logits.detach(), [p.grad.clone() for p in net.parameters() if p.grad is not None]))
+    (l1, g1), (l2, g2) = grads
+    assert torch.allclose(l1[mask], l2[mask], atol=1e-5), (l1[mask] - l2[mask]).abs().max()
+    assert (l1[~mask] == -1e9).all()
+    assert len(g1) == len(g2) > 0
+    for a, b in zip(g1, g2):
+        assert torch.allclose(a, b, atol=1e-5, rtol=1e-4), (a - b).abs().max()
+
+
+def test_device_self_check():
+    """device: auto keeps a GPU only if it computes the policy net like the CPU; a backend
+    that cannot must fall back, not raise."""
+    from train import device_matches_cpu
+    assert device_matches_cpu("cpu")
+    assert not device_matches_cpu("meta")      # "runs" nothing: fails the comparison
+
+
 def test_pool_cache_is_trimmed():
     from train import Trainer
     t = Trainer.__new__(Trainer)
     t.run_dir, t.cfg = "/nonexistent", dict(pool_size=2)
     t.pool_cache = {"self": 1, "/a/ckpt_1.pt": 1, "/a/ckpt_2.pt": 1}
+    # A game still running against ckpt_2 keeps it, even though it left the pool (and its
+    # file may already be pruned); ckpt_1 has no game left and goes.
+    t.envs = type("V", (), dict(envs=[type("E", (), dict(label=l))() for l in
+                                      ("pool:/a/ckpt_2.pt", "ai:normal", "pool:self")]))()
     t.trim_pool_cache()                                  # glob finds nothing -> pool empty
-    assert list(t.pool_cache) == ["self"]
+    assert sorted(t.pool_cache) == ["/a/ckpt_2.pt", "self"]
 
 
 def test_env_read_times_out():
+    import socket
     from mcf_env import EnvDied, GodotEnv
-    r, w = os.pipe()
+    ours, godot = socket.socketpair()
     env = GodotEnv.__new__(GodotEnv)
-    env.buf, env.timeout, env.proc = bytearray(), 0.4, type(
-        "P", (), dict(stdout=os.fdopen(r, "rb", 0), poll=lambda self: None,
-                      pid=os.getpid()))()
+    env.buf, env.timeout, env.sock = bytearray(), 0.4, ours
+    env.proc = type("P", (), dict(poll=lambda self: None))()
     env.kill = lambda: None
-    os.write(w, b'{"ok":true}\n{"ok":')                  # one line, then a partial one
+    godot.sendall(b'{"ok":true}\n{"ok":')                # one line, then a partial one
     assert env._readline() == b'{"ok":true}'
     t0 = time.monotonic()
     try:
@@ -99,7 +156,13 @@ def test_env_read_times_out():
     else:
         raise AssertionError("a silent env must raise EnvDied, not block forever")
     assert 0.3 < time.monotonic() - t0 < 5.0
-    os.close(w)
+    godot.close()
+    try:
+        env._readline()                                  # env gone: EOF is a death, not a hang
+    except EnvDied:
+        pass
+    else:
+        raise AssertionError("a closed socket must raise EnvDied")
 
 
 if __name__ == "__main__":

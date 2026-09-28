@@ -10,11 +10,10 @@ import json
 import os
 import select
 import signal
+import socket
 import subprocess
-import sys
 import time
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVER_SCRIPT = "res://rl/env_server.gd"
@@ -69,18 +68,39 @@ class GodotEnv:
         self.cfg: EpisodeConfig | None = None
         self.label: str = ""
         self.buf = bytearray()
+        self.sock: socket.socket | None = None
+        self.sent_at = 0.0
         self.start()
 
     def start(self) -> None:
-        # Binary, unbuffered: the timeout in _readline needs the bytes the OS has, not
-        # whatever a TextIOWrapper is holding back (select would lie about those).
+        # Replies come back over a local socket, not stdout: Godot copies everything print()
+        # writes into user://logs/godot.log, and a reply is ~56 KiB (see env_server.gd).
+        lsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        lsock.bind(("127.0.0.1", 0))
+        lsock.listen(1)
+        lsock.settimeout(1.0)
         self.proc = subprocess.Popen(
-            [self.godot, "--headless", "--path", self.project, "--script", SERVER_SCRIPT],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            [self.godot, "--headless", "--path", self.project, "--script", SERVER_SCRIPT,
+             "--", f"--reply-port={lsock.getsockname()[1]}"],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             bufsize=0,
             # Own process group so a trainer shutdown can kill every env together (9.5).
             preexec_fn=os.setsid if os.name == "posix" else None,
         )
+        try:
+            for _ in range(60):
+                try:
+                    self.sock, _ = lsock.accept()
+                    break
+                except socket.timeout:
+                    if self.proc.poll() is not None:
+                        break
+            if self.sock is None:
+                rc = self.proc.poll()
+                self.kill()
+                raise EnvDied(f"env never connected back (rc={rc})")
+        finally:
+            lsock.close()
         self.buf.clear()
         # Wait for the server before the first command: a ping proves the script loaded.
         self.send({"cmd": "ping"})
@@ -93,10 +113,11 @@ class GodotEnv:
             self.proc.stdin.flush()
         except (BrokenPipeError, OSError) as e:
             raise EnvDied(f"env stdin closed: {e}")
+        self.sent_at = time.monotonic()
 
     def _readline(self) -> bytes:
         """One line from the env, or EnvDied once it has been silent for `timeout`."""
-        assert self.proc is not None and self.proc.stdout is not None
+        assert self.proc is not None and self.sock is not None
         deadline = time.monotonic() + self.timeout
         while True:
             nl = self.buf.find(b"\n")
@@ -108,15 +129,23 @@ class GodotEnv:
             if left <= 0:
                 self.kill()
                 raise EnvDied(f"env silent for {self.timeout:.0f}s — killed")
-            if os.name == "posix":
-                if not select.select([self.proc.stdout], [], [], min(left, 5.0))[0]:
-                    continue
-                chunk = os.read(self.proc.stdout.fileno(), 1 << 16)
-            else:
-                chunk = self.proc.stdout.readline()   # no timeout off posix
-            if not chunk:
-                raise EnvDied("env process exited (rc=%s)" % self.proc.poll())
-            self.buf += chunk
+            if not select.select([self.sock], [], [], min(left, 5.0))[0]:
+                continue
+            self._fill()
+
+    def _fill(self) -> None:
+        """Append whatever the socket has (caller knows it is readable)."""
+        try:
+            chunk = self.sock.recv(1 << 16)
+        except OSError:
+            chunk = b""
+        if not chunk:
+            raise EnvDied("env process exited (rc=%s)" % self.proc.poll())
+        self.buf += chunk
+
+    def has_reply(self) -> bool:
+        """A complete protocol line is already buffered (recv() will not block)."""
+        return b"\n" in self.buf
 
     def recv(self) -> dict:
         while True:
@@ -154,6 +183,9 @@ class GodotEnv:
         self.kill()
 
     def kill(self) -> None:
+        if self.sock is not None:
+            self.sock.close()
+            self.sock = None
         if self.proc is None:
             return
         try:
@@ -171,8 +203,10 @@ class GodotEnv:
 
 
 class VecEnv:
-    """N envs stepped in lockstep. `step_async` writes every command first, then
-    `step_wait` reads the replies, so the Godot processes work concurrently."""
+    """N envs, each running at its own pace: the caller sends to whichever envs it has
+    decided for, and `wait_any` hands back whichever have replied. (Stepping them in
+    lockstep waited on the slowest env every step, and an end-turn that lets the scripted
+    opponent play takes ~8x as long as an own action.)"""
 
     def __init__(self, n: int, godot: str = "godot"):
         self.envs = [GodotEnv(godot) for _ in range(n)]
@@ -180,26 +214,24 @@ class VecEnv:
     def __len__(self) -> int:
         return len(self.envs)
 
-    def reset_all(self, cfgs: list[EpisodeConfig]) -> list[dict]:
-        for env, cfg in zip(self.envs, cfgs):
-            env.cfg = cfg
-            env.send(cfg.to_cmd())
-        out = []
-        for env in self.envs:
-            env.last = env.recv()
-            out.append(env.last)
-        return out
-
-    def step_async(self, actions: dict[int, int]) -> None:
-        for i, a in actions.items():
-            self.envs[i].send({"cmd": "step", "action": int(a)})
-
-    def step_wait(self, idxs: list[int]) -> dict[int, dict]:
-        out = {}
-        for i in idxs:
-            self.envs[i].last = self.envs[i].recv()
-            out[i] = self.envs[i].last
-        return out
+    def wait_any(self, idxs: list[int]) -> list[int]:
+        """The envs among `idxs` whose reply is in (recv() will not block); waits for at
+        least one. An env silent for its timeout is killed and raises EnvDied."""
+        while True:
+            ready = [i for i in idxs if self.envs[i].has_reply()]
+            if ready:
+                return ready
+            socks = {self.envs[i].sock: i for i in idxs}
+            readable = select.select(list(socks), [], [], 1.0)[0]
+            for s in readable:
+                self.envs[socks[s]]._fill()
+            if not readable:
+                now = time.monotonic()
+                for i in idxs:
+                    e = self.envs[i]
+                    if now - e.sent_at > e.timeout:
+                        e.kill()
+                        raise EnvDied(f"env {i} silent for {e.timeout:.0f}s — killed")
 
     def close(self) -> None:
         for e in self.envs:

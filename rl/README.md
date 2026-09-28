@@ -66,8 +66,36 @@ with outstanding tags and "open in the game" (§11.7), per-map trends (§11.8). 
 SIGTERM / SIGHUP / the `STOP` flag file all finish the current update, save a checkpoint,
 and terminate every Godot process (they run in their own process group).
 
+## Speed
+
+Measured on the VPS (2 vCPU) against the pre-change code, same config and seeds; the laptop
+has more cores, which is where the lockstep loss was worst.
+
+- **Envs run at their own pace.** The rollout decides for whichever envs have replied (one
+  batched forward) and sends straight back, while the others keep computing; evaluation starts
+  an env's next game the moment it finishes one. Lockstep waited on the slowest env every
+  step — an end-turn, where the scripted opponent plays, takes ~130 ms against ~16 ms for an
+  own action. Rollout throughput: 27.5 → 39.7 steps/s at 2 envs, 23.2 → 44.1 at 4.
+- **The candidate head scores only real candidates** (a minibatch pads every state to its
+  widest, ~4x the real count) and computes the state embedding's share of its first layer
+  once per state. Same weights, same function (`test_packed_head_is_the_same_function`), so
+  old checkpoints load as they are. A 64-step minibatch: 3.6 s → 2.2 s on the VPS.
+- **`device` is where the PPO update runs; rollouts always decide on the CPU** (a copy
+  synced after each update). On a CPU the update's conv backward is ~60% of a minibatch;
+  `device: auto` (laptop.yaml) puts the update on the Mac's GPU after a startup self-check
+  against the CPU, and falls back to `cpu` — with a log line — if it fails.
+- **Threads:** rollout forwards get the cores the Godot envs leave free; the update gets all
+  of them (`torch_threads` caps both).
+- **`target_kl`** (laptop.yaml: 0.03) ends an update's epochs early once the policy has
+  moved that far; `ppo/epochs` shows how many ran, `ppo/approx_kl` is now the k3 estimator
+  (never negative).
+
 ## Staying alive and staying small
 
+- **Replies travel over a local socket, not stdout.** Godot copies everything `print()`
+  writes into `user://logs/godot.log`, and a reply is ~56 KiB: six envs wrote tens of GB per
+  hour into files that only rotate when a process restarts. If you trained before this, check
+  `~/Library/Application Support/Godot/app_userdata/MCF Isotope/logs` on the Mac.
 - An env that goes silent for `MCF_RL_ENV_TIMEOUT` seconds (default 300) is killed and the
   whole vec-env restarted, in the rollout *and* in evaluation. A wedged Godot used to hang
   the trainer with no timeout and a heartbeat still reading "running".

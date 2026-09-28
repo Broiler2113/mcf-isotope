@@ -1,9 +1,11 @@
-# Phase A on the laptop (Apple Silicon). Godot env processes are the bottleneck, not the
-# network: n_envs ≈ performance cores minus two. device: cpu | mps | cuda | auto (cpu is
-# the safe default; try mps and compare speed/update_secs on the dashboard).
+# Phase A on the laptop (Apple Silicon). n_envs ≈ performance cores minus two.
+# device is where the PPO update runs (rollouts always decide on the CPU). On a CPU the
+# update is most of the wall clock — its conv backward is ~60% of a minibatch — so `auto`
+# puts it on the Mac's GPU (mps) when that passes a self-check against the CPU at startup,
+# and falls back to cpu otherwise; the log says which. Compare speed/update_secs.
 # Graduation to Phase B, growing the map pool, or a new curriculum stage = edit the
 # branch's config on the dashboard (Apply config → stop, checkpoint, resume) (8.2, 11.3).
-device: cpu
+device: auto
 n_envs: 6
 maps:
   - rl/maps/arena_34x26.json
@@ -27,6 +29,7 @@ lam: 0.95
 clip: 0.2
 ent_coef: 0.01
 vf_coef: 0.5
+target_kl: 0.03    # an update stops its epochs early once the policy has moved this far (ppo/epochs)
 total_steps: 50000000
 checkpoint_every: 10
 keep_checkpoints: 40   # ~170 MB of weights; 0 keeps every one and a 50M-step run is ~7 GB

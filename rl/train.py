@@ -39,8 +39,8 @@ import torch  # noqa: E402
 import torch.nn.functional as F  # noqa: E402
 from torch.utils.tensorboard import SummaryWriter  # noqa: E402
 
-from features import (CANVAS, INTENT_KINDS, N_ACTOR_TYPES, N_CHANNELS,  # noqa: E402
-                      candidate_rows, canvas_offset, flat_vector, grid_tensor)
+from features import (CAND_DIM, CANVAS, FLAT_DIM, N_CHANNELS, candidate_rows,  # noqa: E402
+                      canvas_offset, flat_vector, grid_tensor)
 from mcf_env import (EASY, EXTERNAL, HARD, NORMAL, PROJECT, EnvDied,  # noqa: E402
                      EpisodeConfig, VecEnv)
 from model import OnnxWrapper, PolicyNet  # noqa: E402
@@ -60,6 +60,7 @@ DEFAULTS = dict(
     round_cap=10, max_steps=3000, civilians=False, random_events=False, fog="standard", friendly_fire=True,
     rollout_steps=256, epochs=4, minibatch=32, lr=3e-4, gamma=0.99, lam=0.95, clip=0.2,
     ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5, total_steps=20_000_000,
+    target_kl=None,              # stop an update's epochs early once KL passes 1.5x this
     checkpoint_every=5, eval_every=10, eval_games=6, replays_per_checkpoint=2,
     keep_checkpoints=0,          # 0 = keep every checkpoint; N = keep the newest N
     map_rotate_matches=5, seed=1, torch_threads=0,
@@ -143,10 +144,19 @@ class Trainer:
     def __init__(self, run_dir: str, cfg: dict, device="cpu"):
         self.run_dir = run_dir
         self.cfg = cfg
-        self.device = device
+        self.device = device                       # where the PPO update runs
         os.makedirs(run_dir, exist_ok=True)
         self.net = PolicyNet().to(device)
         self.opt = torch.optim.Adam(self.net.parameters(), lr=cfg["lr"], eps=1e-5)
+        # Rollouts and evaluation always decide on the CPU: they are forwards of a few
+        # states at a time between env replies, where a GPU's launch/sync cost loses. With
+        # the update on a GPU this is a CPU copy, synced after every update.
+        self.act_net = self.net if device == "cpu" else copy.deepcopy(self.net).cpu()
+        # Rollouts share the CPU with n_envs Godot processes, so their forwards get the cores
+        # those leave free (torch's default of every core, with OpenMP workers spin-waiting
+        # between forwards, starves the envs); the update has the machine to itself.
+        self.update_threads = cfg.get("torch_threads") or torch.get_num_threads()
+        self.act_threads = max(1, min(self.update_threads, (os.cpu_count() or 2) - cfg["n_envs"]))
         self.global_step = 0
         self.update = 0
         self.matches_done = 0
@@ -227,6 +237,11 @@ class Trainer:
         self.episode_seed = ck.get("episode_seed", self.episode_seed)
         for g in self.opt.param_groups:
             g["lr"] = self.cfg["lr"]
+        self.sync_act_net()
+
+    def sync_act_net(self) -> None:
+        if self.act_net is not self.net:
+            self.act_net.load_state_dict(self.net.state_dict())
 
     # -- opponents (8.2) --
     def pool_checkpoints(self) -> list[str]:
@@ -235,19 +250,21 @@ class Trainer:
 
     def pool_net(self, path: str) -> PolicyNet:
         if path == "self":
-            net = copy.deepcopy(self.net).eval()
+            net = copy.deepcopy(self.act_net).eval()
             self.pool_cache["self"] = net
             return net
         if path not in self.pool_cache:
-            net = PolicyNet().to(self.device)
-            net.load_state_dict(torch.load(path, map_location=self.device, weights_only=False)["model"])
+            net = PolicyNet()
+            net.load_state_dict(torch.load(path, map_location="cpu", weights_only=False)["model"])
             self.pool_cache[path] = net.eval()
         return self.pool_cache[path]
 
     def trim_pool_cache(self) -> None:
-        """Only the current pool stays resident. Without this the cache kept one net
-        (~1.4 MB) for every checkpoint ever sampled, for the life of the run."""
+        """Only the current pool, and the opponents of games still running, stay resident.
+        Without this the cache kept one net (~1.4 MB) for every checkpoint ever sampled,
+        for the life of the run."""
         live = set(self.pool_checkpoints())
+        live |= {e.label.split(":", 1)[1] for e in self.envs.envs if e.label.startswith("pool:")}
         for p in [p for p in self.pool_cache if p != "self" and p not in live]:
             del self.pool_cache[p]
 
@@ -255,8 +272,12 @@ class Trainer:
         """(env opponent code, label). Phase A: the scripted AI. Phase B: the pool."""
         if self.cfg["phase"] == "A" or self.rng.random() < self.cfg["pool_ai_fraction"]:
             return OPPONENTS[self.cfg["opponent"]], "ai:" + self.cfg["opponent"]
-        members = ["self"] + self.pool_checkpoints()
-        return EXTERNAL, "pool:" + self.rng.choice(members)
+        member = self.rng.choice(["self"] + self.pool_checkpoints())
+        if member != "self":
+            # Load it now: by the opponent's first move this checkpoint may have left the
+            # pool and been pruned from disk (keep_checkpoints), and the game still needs it.
+            self.pool_net(member)
+        return EXTERNAL, "pool:" + member
 
     def next_episode(self, record: bool = False) -> tuple[EpisodeConfig, str]:
         # Rotation: every map_rotate_matches completed matches, the next map (8.2.2).
@@ -272,108 +293,97 @@ class Trainer:
         )
         return cfg, label
 
-    def send_resets(self, pairs: list[tuple[int, EpisodeConfig]]) -> None:
-        """Reset these envs in parallel: every command out first, then every reply."""
-        for i, ec in pairs:
-            self.envs.envs[i].cfg = ec
-            self.envs.envs[i].send(ec.to_cmd())
-        for i, _ in pairs:
-            self.envs.envs[i].last = self.envs.envs[i].recv()
-
     # -- rollout (5.1) --
     def collect(self) -> tuple[list[list[Step]], dict]:
+        """Every env runs at its own pace: whatever replies are in get decided in one batched
+        forward and are sent straight back, while the other envs keep computing. Stepping
+        all envs in lockstep waited on the slowest one every step (an end-turn, where the
+        scripted opponent plays, is ~8x slower than an own action)."""
         cfg = self.cfg
-        n = len(self.envs)
+        envs = self.envs.envs
+        n = len(envs)
         T = cfg["rollout_steps"]
         buffers: list[list[Step]] = [[] for _ in range(n)]
-        carry = [0.0] * n
-        labels = [""] * n
         stats = defaultdict(list)
         usage_units = Counter()
         usage_kinds = Counter()
         illegal = 0
-        # Reset envs that are not mid-episode.
-        cfgs = []
-        for i, env in enumerate(self.envs.envs):
+        inflight: dict[int, str] = {}          # env -> "reset" | "step" awaiting its reply
+        bad_resets = [0] * n
+
+        def new_episode(i: int) -> None:
+            ec, envs[i].label = self.next_episode()
+            envs[i].cfg = ec
+            envs[i].send(ec.to_cmd())
+            inflight[i] = "reset"
+
+        torch.set_num_threads(self.act_threads)
+        for i, env in enumerate(envs):
             if env.last is None or env.last.get("done", True):
-                ec, labels[i] = self.next_episode()
-                cfgs.append((i, ec))
-            else:
-                labels[i] = env.label or "ai:" + cfg["opponent"]
-        self.send_resets(cfgs)
-        for i, _ in cfgs:
-            self.envs.envs[i].label = labels[i]
+                new_episode(i)
+            elif not env.label:
+                env.label = "ai:" + cfg["opponent"]
         t0 = time.time()
         self.pool_cache.pop("self", None)
         self.trim_pool_cache()
         self.write_status("running", "collecting rollout", 0, T * n)
-        idle = 0
-        while min(len(b) for b in buffers) < T:
+        taken = 0
+        while taken < T * n or inflight:
             if time.time() - self._last_status > 3:
-                done = sum(len(b) for b in buffers)
-                self.write_status("running", "collecting rollout", done, T * n,
-                                  env_steps_per_sec=done / max(1e-6, time.time() - t0),
-                                  rounds=[int(e.last["info"]["round"]) for e in self.envs.envs if e.last])
-            trainee_idx, opp_idx = [], []
-            for i, env in enumerate(self.envs.envs):
-                r = env.last
-                if r["done"]:
+                self.write_status("running", "collecting rollout", taken, T * n,
+                                  env_steps_per_sec=taken / max(1e-6, time.time() - t0),
+                                  rounds=[int(e.last["info"]["round"]) for e in envs if e.last])
+            if taken < T * n:
+                waiting = [i for i in range(n) if i not in inflight]
+                trainee = [i for i in waiting if envs[i].last["acting"] == envs[i].cfg.side]
+                actions = {}
+                if trainee:
+                    enc = [encode(envs[i].last) for i in trainee]
+                    a, lp, v = choose(self.act_net, enc, "cpu")
+                    for j, i in enumerate(trainee):
+                        g, f, c, cl = enc[j]
+                        buffers[i].append(Step(g, f, c, cl, int(a[j]), float(lp[j]), float(v[j])))
+                        actions[i] = int(a[j])
+                        legal = envs[i].last["legal"][int(a[j])]
+                        usage_kinds[legal["i"]["t"]] += 1
+                        at = legal.get("at", -1)
+                        if at is not None and at >= 0:
+                            usage_units[at] += 1
+                    taken += len(trainee)
+                # Phase B: opponent decision points served by a frozen pool member.
+                by_net = defaultdict(list)
+                for i in waiting:
+                    if i not in actions:
+                        by_net[envs[i].label.split(":", 1)[1]].append(i)
+                for path, idxs in by_net.items():
+                    a, _, _ = choose(self.pool_net(path), [encode(envs[i].last) for i in idxs], "cpu")
+                    for j, i in enumerate(idxs):
+                        actions[i] = int(a[j])
+                for i, act in actions.items():
+                    envs[i].send({"cmd": "step", "action": act})
+                    inflight[i] = "step"
+            for i in self.envs.wait_any(list(inflight)):
+                r = envs[i].last = envs[i].recv()
+                if inflight.pop(i) == "reset":
+                    if r["done"]:
+                        # A reset that comes back already over (degenerate map) gets a new
+                        # seed; one that keeps doing it is a broken env, not a reason to spin.
+                        bad_resets[i] += 1
+                        if bad_resets[i] > 8:
+                            raise EnvDied(f"env {i}: 8 resets in a row came back already over")
+                        new_episode(i)
+                    else:
+                        bad_resets[i] = 0
                     continue
-                if r["acting"] == env.cfg.side:
-                    trainee_idx.append(i)
-                else:
-                    opp_idx.append(i)
-            actions = {}
-            if trainee_idx:
-                enc = [encode(self.envs.envs[i].last) for i in trainee_idx]
-                a, lp, v = choose(self.net, enc, self.device)
-                for j, i in enumerate(trainee_idx):
-                    g, f, c, cl = enc[j]
-                    buffers[i].append(Step(g, f, c, cl, int(a[j]), float(lp[j]), float(v[j])))
-                    actions[i] = int(a[j])
-                    legal = self.envs.envs[i].last["legal"][int(a[j])]
-                    usage_kinds[legal["i"]["t"]] += 1
-                    at = legal.get("at", -1)
-                    if at is not None and at >= 0:
-                        usage_units[at] += 1
-            # Phase B: opponent decision points served by a frozen pool member.
-            by_net = defaultdict(list)
-            for i in opp_idx:
-                by_net[self.envs.envs[i].label.split(":", 1)[1]].append(i)
-            for path, idxs in by_net.items():
-                net = self.pool_net(path)
-                enc = [encode(self.envs.envs[i].last) for i in idxs]
-                a, _, _ = choose(net, enc, self.device)
-                for j, i in enumerate(idxs):
-                    actions[i] = int(a[j])
-            if not actions:
-                # Every env is parked on a finished episode: a reset can come back already
-                # done on a degenerate map. Stepping nobody used to spin here at 100% CPU
-                # forever, with the heartbeat still saying "running".
-                idle += 1
-                if idle > 8:
-                    raise EnvDied("no env offered a decision point in 8 tries")
-                pairs = []
-                for i, env in enumerate(self.envs.envs):
-                    if env.last is None or env.last["done"]:
-                        ec, env.label = self.next_episode()
-                        pairs.append((i, ec))
-                self.send_resets(pairs)
-                continue
-            idle = 0
-            self.envs.step_async(actions)
-            replies = self.envs.step_wait(list(actions.keys()))
-            resets = []
-            for i, r in replies.items():
-                env = self.envs.envs[i]
-                carry[i] += r["reward"]
-                was_trainee = i in trainee_idx
+                buf = buffers[i]
+                # Every reward belongs to the trainee's latest decision in this episode, the
+                # ones that arrive over a pool opponent's moves (Phase B) included — those
+                # used to be credited to the trainee's *next* decision instead.
+                if buf and not buf[-1].done:
+                    buf[-1].reward += r["reward"]
                 if r["done"]:
-                    # Reward since the last trainee decision belongs to that decision.
-                    if buffers[i]:
-                        buffers[i][-1].reward += carry[i]
-                        buffers[i][-1].done = True
-                    carry[i] = 0.0
+                    if buf:
+                        buf[-1].done = True
                     info = r["info"]
                     res = info.get("result", "draw")
                     stats["win"].append(1.0 if res == "win" else 0.0)
@@ -381,26 +391,14 @@ class Trainer:
                     stats["rounds"].append(info["round"])
                     stats["value_diff"].append(info["value_diff"])
                     stats["illegal"].append(info["illegal"])
-                    stats["result"].append((env.label, os.path.basename(env.cfg.map_path), res))
+                    stats["result"].append((envs[i].label, os.path.basename(envs[i].cfg.map_path), res))
                     illegal += info["illegal"]
                     self.matches_done += 1
-                    ec, label = self.next_episode()
-                    env.label = label
-                    resets.append((i, ec))
-                elif was_trainee and r["acting"] == env.cfg.side:
-                    buffers[i][-1].reward += carry[i]
-                    carry[i] = 0.0
-                elif was_trainee:
-                    pass  # opponent's turn now; reward keeps accumulating in carry
-            self.send_resets(resets)
-        # Give un-finished last steps their pending reward (kept as not-done; bootstrap).
-        for i in range(n):
-            if buffers[i] and carry[i] != 0.0:
-                buffers[i][-1].reward += carry[i]
-                carry[i] = 0.0
+                    if taken < T * n:
+                        new_episode(i)
         dt = time.time() - t0
         info = dict(stats=stats, usage_units=usage_units, usage_kinds=usage_kinds,
-                    illegal=illegal, seconds=dt)
+                    illegal=illegal, seconds=dt, steps=taken)
         return buffers, info
 
     # -- PPO update --
@@ -410,14 +408,15 @@ class Trainer:
         # Bootstrap value for each env's last state, unless it ended.
         last_vals = []
         for i, env in enumerate(self.envs.envs):
-            if buffers[i][-1].done or env.last is None or env.last["done"]:
+            if not buffers[i] or buffers[i][-1].done or env.last is None or env.last["done"]:
                 last_vals.append(0.0)
             elif env.last["acting"] == env.cfg.side:
                 enc = [encode(env.last)]
-                _, _, v = choose(self.net, enc, self.device)
+                _, _, v = choose(self.act_net, enc, "cpu")
                 last_vals.append(float(v[0]))
             else:
                 last_vals.append(float(buffers[i][-1].value))
+        torch.set_num_threads(self.update_threads)
         flat_steps, advs, rets = [], [], []
         for i, buf in enumerate(buffers):
             adv = np.zeros(len(buf), dtype=np.float32)
@@ -439,8 +438,14 @@ class Trainer:
         advs = (advs - advs.mean()) / (advs.std() + 1e-8)
         N = len(flat_steps)
         mb = cfg["minibatch"]
+        target_kl = cfg.get("target_kl")
         out = defaultdict(list)
+        stopped = False
+        epochs = 0
         for _ in range(cfg["epochs"]):
+            if stopped:
+                break
+            epochs += 1
             order = np.random.permutation(N)
             for start in range(0, N, mb):
                 idx = order[start:start + mb]
@@ -455,7 +460,16 @@ class Trainer:
                 logp = logp_all.gather(1, actions.unsqueeze(1)).squeeze(1)
                 probs = logp_all.exp() * mask
                 entropy = -(probs * logp_all.masked_fill(~mask, 0.0)).sum(1).mean()
-                ratio = (logp - old_logp).exp()
+                logratio = logp - old_logp
+                ratio = logratio.exp()
+                with torch.no_grad():
+                    # k3 estimator: unbiased and never negative, unlike mean(old - new).
+                    kl = ((ratio - 1) - logratio).mean().item()
+                if target_kl and kl > 1.5 * target_kl:
+                    # The policy has already moved as far as this update should take it;
+                    # more epochs on the same rollout only push it off a cliff.
+                    stopped = True
+                    break
                 pg = -torch.min(ratio * adv, ratio.clamp(1 - cfg["clip"], 1 + cfg["clip"]) * adv).mean()
                 vloss = F.mse_loss(value, ret)
                 loss = pg + cfg["vf_coef"] * vloss - cfg["ent_coef"] * entropy
@@ -467,63 +481,79 @@ class Trainer:
                     out["policy_loss"].append(pg.item())
                     out["value_loss"].append(vloss.item())
                     out["entropy"].append(entropy.item())
-                    out["approx_kl"].append((old_logp - logp).mean().item())
+                    out["approx_kl"].append(kl)
                     out["clipfrac"].append(((ratio - 1).abs() > cfg["clip"]).float().mean().item())
+        self.sync_act_net()
         self.global_step += N
         self.update += 1
-        return {k: float(np.mean(v)) for k, v in out.items()}
+        res = {k: float(np.mean(v)) for k, v in out.items()}
+        res["epochs"] = epochs
+        return res
 
     # -- evaluation (10.3): greedy, fixed seeds, not training data --
     def evaluate(self, opponent: str, games: int, record_dir: str | None = None,
                  keep: int = 0, net: PolicyNet | None = None) -> dict:
-        net = net or self.net
-        n = len(self.envs)
+        """Game k always gets seed_base + k and side k % 2, whichever env plays it; an env
+        starts its next game the moment it finishes one instead of waiting for the slowest
+        game of a batch."""
+        net = net or self.act_net
+        envs = self.envs.envs
         results, diffs, rounds = [], [], []
-        played = 0
         seed_base = 900_000 + self.update * 100
-        while played < games:
-            self.write_status("running", f"evaluating vs {opponent}", played, games)
-            batch = min(n, games - played)
-            cfgs = []
-            for j in range(batch):
-                k = played + j
-                cfgs.append(EpisodeConfig(
-                    map_path=self.cfg["maps"][k % len(self.cfg["maps"])], seed=seed_base + k,
-                    side=k % 2, opponent=OPPONENTS[opponent], round_cap=self.cfg["round_cap"], max_steps=self.cfg.get("max_steps", 3000),
-                    civilians=self.cfg["civilians"], random_events=self.cfg["random_events"],
-                    fog=FOGS[self.cfg["fog"]], friendly_fire=self.cfg["friendly_fire"],
-                    record=record_dir is not None and k < keep))
-            self.send_resets(list(enumerate(cfgs)))
-            active = [j for j in range(batch) if not self.envs.envs[j].last["done"]]
-            while active:
-                enc = [encode(self.envs.envs[j].last) for j in active]
-                a, _, _ = choose(net, enc, self.device, greedy=True)
-                self.envs.step_async({j: int(a[q]) for q, j in enumerate(active)})
-                replies = self.envs.step_wait(active)
-                still = []
-                for j in active:
-                    r = replies[j]
-                    if r["done"]:
-                        info = r["info"]
-                        results.append(info.get("result", "draw"))
-                        diffs.append(info["value_diff"])
-                        rounds.append(info["round"])
-                        k = played + j
-                        if record_dir is not None and k < keep:
-                            os.makedirs(record_dir, exist_ok=True)
-                            rp = os.path.join(record_dir, f"vs_{opponent}_{k + 1}_{results[-1]}.mcfr")
-                            if self.envs.envs[j].save_replay(rp):
-                                with open(rp + ".json", "w") as f:
-                                    json.dump(dict(branch=os.path.basename(self.run_dir),
-                                                   step=self.global_step, opponent=opponent,
-                                                   result=results[-1], value_diff=info["value_diff"],
-                                                   rounds=info["round"], map=cfgs[j].map_path,
-                                                   side=cfgs[j].side, time=time.time()), f)
-                    else:
-                        still.append(j)
-                active = still
-            played += batch
-        for env in self.envs.envs:
+        game_of: dict[int, int] = {}
+        inflight: set[int] = set()
+        started = 0
+
+        def start(i: int) -> None:
+            nonlocal started
+            k = game_of[i] = started
+            started += 1
+            envs[i].cfg = EpisodeConfig(
+                map_path=self.cfg["maps"][k % len(self.cfg["maps"])], seed=seed_base + k,
+                side=k % 2, opponent=OPPONENTS[opponent], round_cap=self.cfg["round_cap"],
+                max_steps=self.cfg.get("max_steps", 3000),
+                civilians=self.cfg["civilians"], random_events=self.cfg["random_events"],
+                fog=FOGS[self.cfg["fog"]], friendly_fire=self.cfg["friendly_fire"],
+                record=record_dir is not None and k < keep)
+            envs[i].send(envs[i].cfg.to_cmd())
+            inflight.add(i)
+
+        torch.set_num_threads(self.act_threads)
+        for i in range(min(len(envs), games)):
+            start(i)
+        while inflight:
+            if time.time() - self._last_status > 3:
+                self.write_status("running", f"evaluating vs {opponent}", len(results), games)
+            todo = []
+            for i in self.envs.wait_any(sorted(inflight)):
+                inflight.discard(i)
+                r = envs[i].last = envs[i].recv()
+                if not r["done"]:
+                    todo.append(i)
+                    continue
+                info = r["info"]
+                results.append(info.get("result", "draw"))
+                diffs.append(info["value_diff"])
+                rounds.append(info["round"])
+                k = game_of[i]
+                if record_dir is not None and k < keep:
+                    os.makedirs(record_dir, exist_ok=True)
+                    rp = os.path.join(record_dir, f"vs_{opponent}_{k + 1}_{results[-1]}.mcfr")
+                    if envs[i].save_replay(rp):
+                        with open(rp + ".json", "w") as f:
+                            json.dump(dict(branch=os.path.basename(self.run_dir),
+                                           step=self.global_step, opponent=opponent,
+                                           result=results[-1], value_diff=info["value_diff"],
+                                           rounds=info["round"], map=envs[i].cfg.map_path,
+                                           side=envs[i].cfg.side, time=time.time()), f)
+                if started < games:
+                    start(i)
+            if todo:
+                a, _, _ = choose(net, [encode(envs[i].last) for i in todo], "cpu", greedy=True)
+                for q, i in enumerate(todo):
+                    envs[i].send({"cmd": "step", "action": int(a[q])})
+                    inflight.add(i)
+        for env in envs:
             env.last = None   # evaluation episodes are over; training resets next collect
         wins = sum(r == "win" for r in results)
         draws = sum(r.startswith("draw") for r in results)
@@ -534,8 +564,6 @@ class Trainer:
     # -- main loop --
     def train(self):
         cfg = self.cfg
-        if cfg["torch_threads"]:
-            torch.set_num_threads(cfg["torch_threads"])
         with open(os.path.join(self.run_dir, "config.yaml"), "w") as f:
             yaml.safe_dump(cfg, f)
         self.write_status("running", f"starting {cfg['n_envs']} Godot envs", 0, 0)
@@ -612,8 +640,7 @@ class Trainer:
     def log(self, info: dict, losses: dict, update_secs: float):
         st = info["stats"]
         w, s = self.writer, self.global_step
-        steps = self.cfg["rollout_steps"] * self.cfg["n_envs"]
-        w.add_scalar("speed/env_steps_per_sec", steps / max(1e-6, info["seconds"]), s)
+        w.add_scalar("speed/env_steps_per_sec", info["steps"] / max(1e-6, info["seconds"]), s)
         w.add_scalar("speed/update_secs", update_secs, s)
         w.add_scalar("speed/matches_done", self.matches_done, s)
         for k, v in losses.items():
@@ -644,7 +671,7 @@ class Trainer:
         wr = f"{np.mean(st['win']):.2f}" if st["win"] else "-"
         print(f"[train] upd={self.update} step={s} matches={self.matches_done} win={wr} "
               f"pl={losses['policy_loss']:+.3f} vl={losses['value_loss']:.3f} "
-              f"ent={losses['entropy']:.2f} kl={losses['approx_kl']:.4f} "
+              f"ent={losses['entropy']:.2f} kl={losses['approx_kl']:.4f} ep={losses['epochs']} "
               f"env={info['seconds']:.0f}s upd={update_secs:.0f}s", flush=True)
 
 
@@ -676,14 +703,49 @@ def cmd_start(a):
 
 
 def pick_device(cfg: dict) -> str:
+    """Where the PPO update runs (rollouts are always on the CPU). `auto` takes a GPU only
+    if it computes the real network the way the CPU does, so a backend missing an op or
+    getting one wrong costs speed, not the run."""
     d = cfg.get("device", "cpu")
     if d != "auto":
         return d
+    gpus = []
     if torch.cuda.is_available():
-        return "cuda"
+        gpus.append("cuda")
     if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
-        return "mps"
+        gpus.append("mps")
+    for g in gpus:
+        if device_matches_cpu(g):
+            print(f"[train] PPO update on {g}", flush=True)
+            return g
     return "cpu"
+
+
+def device_matches_cpu(dev: str) -> bool:
+    """One forward + backward of PolicyNet on `dev` against the CPU: logits, value and the
+    first conv's gradient must agree."""
+    try:
+        torch.manual_seed(0)
+        cpu_net = PolicyNet()
+        dev_net = copy.deepcopy(cpu_net).to(dev)
+        B, N = 3, 7
+        batch = (torch.rand(B, N_CHANNELS, CANVAS, CANVAS), torch.rand(B, FLAT_DIM),
+                 torch.rand(B, N, CAND_DIM), torch.randint(-1, CANVAS * CANVAS, (B, N, 2)),
+                 torch.rand(B, N) < 0.8)
+        batch[4][:, 0] = True
+        got = []
+        for net, d in ((cpu_net, "cpu"), (dev_net, dev)):
+            logits, value = net(*(t.to(d) for t in batch))
+            (torch.log_softmax(logits, 1)[:, 0].sum() + value.sum()).backward()
+            got.append((logits.detach().cpu()[batch[4]], value.detach().cpu(),
+                        net.conv[0].weight.grad.cpu()))
+        ok = all(torch.allclose(a, b, atol=1e-3, rtol=1e-3) for a, b in zip(*got))
+        if not ok:
+            print(f"[train] {dev} disagrees with the CPU on the policy net; updating on cpu", flush=True)
+        return ok
+    except Exception as e:  # noqa: BLE001 - any backend failure means "don't use it"
+        print(f"[train] {dev} failed its self-check ({type(e).__name__}: {e}); updating on cpu", flush=True)
+        return False
 
 
 def cmd_resume(a):
