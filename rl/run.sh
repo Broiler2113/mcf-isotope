@@ -57,6 +57,16 @@ case "${1:-}" in
   up)
     spawn tensorboard "$VENV/bin/tensorboard" --logdir runs --host 127.0.0.1 --port "$TB_PORT" --reload_interval 30
     spawn dashboard "$VENV/bin/streamlit" run dashboard.py --server.port "$DASH_PORT" --server.address 127.0.0.1 --server.headless true --browser.gatherUsageStats false
+    # macOS is skipped ON PURPOSE, and not for portability: on this laptop the tunnel is
+    # owned by the launchd agent ~/Library/LaunchAgents/com.mcf.rlm-tunnel.plist
+    # (RunAtLoad + KeepAlive, logging to ~/Library/Logs/mcf-rlm-tunnel.log). Spawning a
+    # second cloudflared from here would leave two processes serving one tunnel and make
+    # "which one is broken" unanswerable — briefly the case while diagnosing this.
+    #
+    # KeepAlive only restarts the process when it EXITS. It cannot see the failure that
+    # actually happens: cloudflared alive, holding zero edge connections, public host on
+    # Cloudflare 1033 while localhost:8501 answers 200. That gap is covered by the tunnel
+    # watchdog in rl/tools/supervise.sh, which probes end to end and kickstarts the agent.
     if [ "$(uname)" != Darwin ] && [ -n "${TUNNEL_TOKEN:-}" ]; then spawn tunnel cloudflared tunnel run --token "$TUNNEL_TOKEN"; fi
     echo "tensorboard http://127.0.0.1:$TB_PORT   dashboard http://127.0.0.1:$DASH_PORT";;
   down)

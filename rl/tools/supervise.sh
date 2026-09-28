@@ -6,6 +6,10 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"
 BRANCH="${1:-town-3}"
 CFG="${2:-$HERE/config/town.yaml}"
 LOG="$HERE/runs/supervisor-$BRANCH.log"
+# Public URL the tunnel watchdog probes. Read from rl/.env so the token and the hostname
+# live in the same untracked place; empty disables the watchdog.
+[ -f "$HERE/.env" ] && set -a && . "$HERE/.env" && set +a
+TUNNEL_URL="${TUNNEL_URL:-}"
 say() { echo "$(date '+%F %T') $*" >> "$LOG"; }
 say "supervising $BRANCH"
 while true; do
@@ -22,6 +26,49 @@ while true; do
   fi
   find "$HOME/Library/Application Support/Godot/app_userdata/MCF Isotope/logs" \
        -name 'godot2*.log' -delete 2>/dev/null
+
+  # --- tunnel watchdog -----------------------------------------------------------
+  #
+  # Checking that cloudflared is RUNNING is not enough, and that is the whole point of
+  # this block. The failure seen twice now is a live process holding no edge connections:
+  # `ps` shows it up, localhost:8501 answers 200, and the public host serves Cloudflare
+  # 1033. A pid check calls that healthy. Only an end-to-end request can tell.
+  #
+  # So: ask the PUBLIC url. If it answers, nothing to do. If it does not, ask localhost
+  # first — when the dashboard itself is down the tunnel is innocent and restarting it
+  # would be noise. Only "local fine, public broken" means the tunnel, and that is the
+  # case a restart actually fixes.
+  if [ -n "${TUNNEL_URL:-}" ]; then
+    pub=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$TUNNEL_URL" || echo 000)
+    if [ "$pub" != 200 ]; then
+      loc=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+            "http://127.0.0.1:${DASH_PORT:-8501}/" || echo 000)
+      if [ "$loc" = 200 ]; then
+        # Restart THROUGH the owner, never around it. cloudflared belongs to the launchd
+        # agent com.mcf.rlm-tunnel (KeepAlive), so spawning a replacement here would give
+        # one tunnel two processes; `kickstart -k` kills and relaunches the agent's own
+        # instance, leaving exactly one. On anything without launchd, fall back to run.sh.
+        say "tunnel down: public=$pub local=$loc -> kickstarting com.mcf.rlm-tunnel"
+        # SIGCONT first. A SUSPENDED cloudflared (state T) is one of the shapes this
+        # failure takes, and a stopped process never reaches the signal handler that makes
+        # it shut down, so the kickstart leaves the old instance behind and the tunnel ends
+        # up with two processes - worse than the fault being repaired. Resuming it first
+        # lets it actually die.
+        pkill -CONT -f 'cloudflared tunnel run' 2>/dev/null
+        if command -v launchctl >/dev/null 2>&1 \
+           && launchctl print "gui/$(id -u)/com.mcf.rlm-tunnel" >/dev/null 2>&1; then
+          launchctl kickstart -k "gui/$(id -u)/com.mcf.rlm-tunnel" >> "$LOG" 2>&1
+        else
+          pkill -f 'cloudflared tunnel run' 2>/dev/null
+          sleep 3
+          bash "$HERE/run.sh" up >> "$LOG" 2>&1
+        fi
+        sleep 20
+      else
+        say "public=$pub but local=$loc too - dashboard problem, not the tunnel"
+      fi
+    fi
+  fi
 
   [ -f "$HERE/runs/$BRANCH/SUPERVISOR_OFF" ] && { sleep 60; continue; }
   verdict=$(python3 - "$HERE/runs/$BRANCH/status.json" <<'PY'

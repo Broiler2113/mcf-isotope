@@ -102,10 +102,19 @@ def load_config(path: str | None) -> dict:
     if path:
         with open(path) as f:
             cfg.update(yaml.safe_load(f) or {})
-    cfg["maps"] = [m if os.path.isabs(m) else os.path.join(PROJECT, m) for m in cfg["maps"]]
-    for m in cfg["maps"]:
-        if not os.path.exists(m):
-            sys.exit(f"map not found: {m}")
+    # eval_maps gets the SAME treatment as maps, and it was missing it. The trainer runs
+    # with cwd=rl/, so a relative "rl/maps/x.json" resolves to rl/rl/maps/x.json — which
+    # does not exist. It only appeared to work because the path is handed to Godot, which
+    # resolves it against the project root instead; the evaluations were correct by luck,
+    # not by construction, and the same config would have failed the instant anything on
+    # the Python side tried to open the file.
+    for key in ("maps", "eval_maps"):
+        if not cfg.get(key):
+            continue
+        cfg[key] = [m if os.path.isabs(m) else os.path.join(PROJECT, m) for m in cfg[key]]
+        for m in cfg[key]:
+            if not os.path.exists(m):
+                sys.exit(f"map not found ({key}): {m}")
     bad = [o for o in cfg["eval_opponents"] if o not in OPPONENTS]
     if bad:
         sys.exit(f"eval_opponents: unknown {bad}; pick from {sorted(OPPONENTS)}")
@@ -458,9 +467,19 @@ class Trainer:
                 break
             if time.time() - self._last_status > 3:
                 done = sum(len(b) for b in buffers)
+                # Report WHICH MAP each env is playing. Without it the only record of the
+                # training pool is map_idx inside a checkpoint, so a multi-map run looks
+                # single-map from outside: evaluation is pinned to one map, and every
+                # replay on the dashboard comes from evaluation, so the other maps leave
+                # no visible trace anywhere. That is exactly how a correctly rotating
+                # four-map pool came to look like it was ignoring three of them.
                 self.write_status("running", "collecting rollout", done, T * n,
                                   env_steps_per_sec=done / max(1e-6, time.time() - t0),
                                   buffer_mb=round(buf_bytes / 2**20, 1),
+                                  map_idx=self.map_idx,
+                                  map_name=os.path.basename(self.cfg["maps"][self.map_idx]),
+                                  env_maps=[os.path.basename(e.cfg.map_path)
+                                            for e in self.envs.envs if e.cfg],
                                   rounds=[int(e.last["info"]["round"]) for e in self.envs.envs if e.last])
             trainee_idx, opp_idx = [], []
             for i, env in enumerate(self.envs.envs):
