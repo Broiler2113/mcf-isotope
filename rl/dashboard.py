@@ -44,9 +44,14 @@ def gate() -> None:
         return
     with st.form("login"):
         typed = st.text_input("Password", type="password")
-        if st.form_submit_button("Enter") and hmac.compare_digest(typed, pw):
+        submitted = st.form_submit_button("Enter")
+    if submitted:
+        # Pasted passwords often carry a stray space/newline; a mismatch used to do nothing
+        # at all, which looked like a broken button.
+        if hmac.compare_digest(typed.strip(), pw.strip()):
             st.session_state.auth = True
             st.rerun()
+        st.error("Wrong password.")
     st.stop()
 
 
