@@ -189,7 +189,7 @@ var _digs_turn_cap: int = DIGS_PER_TURN
 var state: GameState = null
 var resolver: GameActionResolver = null
 var side: int = MCF.Owner.PLAYER_1
-var opponent: int = AIController.Difficulty.NORMAL
+var opponent: int = AIController.Difficulty.HARD
 var round_cap: int = 10
 ## Потолок шагов эпизода (обеих сторон); задаётся в reset как "max_steps", иначе 300 на раунд.
 var max_steps: int = 3000
@@ -311,7 +311,7 @@ func _reset(req: Dictionary) -> Dictionary:
 		if s != null:
 			s.kind = Roster.SlotKind.AI   # без стека Undo
 	side = int(req.get("side", MCF.Owner.PLAYER_1))
-	opponent = int(req.get("opponent", AIController.Difficulty.NORMAL))
+	opponent = int(req.get("opponent", AIController.Difficulty.HARD))
 	round_cap = int(req.get("round_cap", 10))
 	max_steps = int(req.get("max_steps", round_cap * 300))
 	max_candidates = int(req.get("max_candidates", 0))

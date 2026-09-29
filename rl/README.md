@@ -54,7 +54,7 @@ bash rl/run.sh stop phaseA-1                             # checkpoint after this
 bash rl/run.sh resume phaseA-1 [new-config.yaml]         # continue; new config = graduation
 bash rl/run.sh restart phaseA-1 new-config.yaml          # stop → wait for checkpoint → resume
 bash rl/run.sh fork phaseA-1/ckpt_000100000.pt experiment-1
-python rl/train.py eval rl/runs/phaseA-1/latest.pt --games 20 --opponent hard --record /tmp/ev
+python rl/train.py eval rl/runs/phaseA-1/latest.pt --games 20 --record /tmp/ev   # vs HARD
 python rl/train.py play rl/runs/phaseA-1/latest.pt       # real game, checkpoint in the AI slot
 python rl/train.py export rl/runs/phaseA-1/latest.pt policy.onnx
 ```
@@ -160,14 +160,14 @@ more cores loses more to lockstep.
 - `rl/runs/<branch>/STOP`, `PAUSE` — flag files; `run.sh stop` / `pause` write them.
 - `rl/runs/<branch>/tb/` — TensorBoard: `ppo/*`, `train/winrate_vs_ai`, `train/winrate_vs_pool`,
   `train/drawrate`, `train/match_rounds`, `train/value_diff_end`, `train/illegal_per_match`,
-  `usage/unit_*`, `usage/kind_*`, `map/<map>_winrate`, `eval/winrate_{normal,hard}`,
+  `usage/unit_*`, `usage/kind_*`, `map/<map>_winrate`, `eval/winrate_hard`,
   `speed/*` (including `speed/env_legal_ms`), `mem/*`.
-- `rl/runs/<branch>/replays/checkpoint_<step>/vs_{normal,hard}_<k>_<result>.mcfr` — the sampled
+- `rl/runs/<branch>/replays/checkpoint_<step>/vs_hard_<k>_<result>.mcfr` — the sampled
   evaluation games; open them from the game's replay screen or check with
   `godot --headless --script res://rl/tools/check_replay.gd -- <file>`.
 - `rl/runs/<branch>/eval_log.jsonl` — the clean win-rate series, one line per evaluation
   with `*_<opponent>` columns (win/loss/draw/stall rates, value diff, rounds, and the
-  outcome counts). `eval_opponents` picks who that is: **HARD only** by default. Each recorded replay has a `.mcfr.json` sidecar (branch, step,
+  outcome counts), against HARD. Each recorded replay has a `.mcfr.json` sidecar (branch, step,
   opponent, result, value diff, rounds, map) for the gallery. A branch evaluates every
   `eval_every` updates **and** whenever this file is still empty, so the dashboard's win
   rates are never blank for long.
@@ -175,16 +175,19 @@ more cores loses more to lockstep.
   diff, rounds, steps, illegal count, seed, side, map. What the Evaluations page drills
   into; an aggregate hides whether a 0% win rate was honest losses or stalls.
 
-## Why only HARD
+## Only HARD
 
-`eval_opponents` defaults to `[hard]` because NORMAL was measuring the same thing. Six
-arena games came back identical to their HARD counterparts step for step (98, 108, 154,
-158, 88, 102 env steps), and the reason is in `AIController`: NORMAL and HARD differ in
-exactly one line — a shot-scoring tiebreak at 1053, `score += ease` — while everything
-else keyed off difficulty is EASY-only. Two columns that agree by construction cost twice
-the evaluation time and tell you one thing, and HARD is the graduation opponent anyway
-(8.2). Set `eval_opponents: [normal, hard]` to get both back; widening the gap between the
-two AI profiles is the real fix, and it lives in the game, not here.
+The scripted opponent is AIController **HARD**, always: in Phase A training, in the scripted
+share of Phase B (`pool_ai_fraction`), and in every evaluation. The owner retired NORMAL and
+EASY from the RL pipeline, so there is no setting that selects them — `opponent:` and
+`eval_opponents:` are gone, and a branch whose saved config still has them simply loses them
+on its next resume (its eval_log keeps any old `*_normal` columns as history; the dashboard
+shows HARD only). The game itself keeps all three difficulties for human matches.
+
+NORMAL was also measuring very nearly the same thing: six arena games came back identical to
+their HARD counterparts step for step, because `AIController` separates the two in exactly one
+line — a shot-scoring tiebreak, `score += ease` — while everything else keyed off difficulty is
+EASY-only.
 
 ## Maps in the pool
 

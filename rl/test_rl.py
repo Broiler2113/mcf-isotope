@@ -151,6 +151,25 @@ def test_device_self_check():
     assert not device_matches_cpu("meta")
 
 
+def test_only_hard():
+    """The owner's rule: RL trains and evaluates against HARD only. A config (or a branch's
+    saved config.yaml) that still asks for NORMAL must lose the key, not honour it."""
+    import yaml
+    from mcf_env import HARD
+    from train import Trainer, load_config
+    d = tempfile.mkdtemp()
+    path = os.path.join(d, "old.yaml")
+    with open(path, "w") as f:
+        yaml.safe_dump({"opponent": "normal", "eval_opponents": ["normal", "hard"], "phase": "A",
+                        "maps": [os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                              "maps", "arena_34x26.json")]}, f)
+    cfg = load_config(path)
+    assert "opponent" not in cfg and "eval_opponents" not in cfg
+    t = Trainer.__new__(Trainer)
+    t.cfg, t.rng = cfg, __import__("random").Random(0)
+    assert t.pick_opponent() == (HARD, "ai:hard")
+
+
 def test_pool_keeps_a_running_games_opponent():
     """The cache holds pool_size + 1 nets, but never evicts one a running game still plays
     against — its checkpoint may already be pruned from disk."""
