@@ -30,7 +30,7 @@ RUN_SH = os.path.join(HERE, "run.sh")
 CONFIGS = sorted(glob.glob(os.path.join(HERE, "config", "*.yaml")))
 TTL = 20  # seconds; the trainer logs once per PPO update, which takes longer than this
 
-st.set_page_config(page_title="Isotope RLM", page_icon="🎯", layout="wide")
+st.set_page_config(page_title="Isotope RLM", layout="wide")
 
 
 # --- auth ------------------------------------------------------------------------------------
@@ -115,10 +115,10 @@ def live_card(b: str) -> None:
     """What the trainer is doing right now — the answer to "is it even running?"."""
     s = status(b)
     state = s["state"]
-    icon = {"running": "🟢", "starting": "🟡", "stopped": "⚪", "dead": "🔴", "crashed": "🔴"}.get(state, "⚫")
+    color = {"running": "green", "starting": "orange", "stopped": "gray", "dead": "red", "crashed": "red"}.get(state, "gray")
     age = f"{s['age_s']:.0f}s ago" if s.get("age_s") is not None else "no heartbeat yet"
     stale = state == "running" and s["age_s"] > 120
-    st.markdown(f"### {icon} {b} — **{state}**" + ("  ⚠️ heartbeat stale" if stale else "")
+    st.markdown(f"### {b} — :{color}[**{state}**]" + ("  :orange[heartbeat stale]" if stale else "")
                 + f"  · step {s.get('step', '—')} · update {s.get('update', '—')} · matches {s.get('matches', '—')}"
                 + f" · phase {s.get('phase', '—')} · heartbeat {age}")
     act = s.get("activity", "")
