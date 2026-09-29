@@ -8,3 +8,5 @@ onnx>=1.16
 onnxruntime>=1.18
 streamlit>=1.40
 pandas>=2.2
+extra-streamlit-components
+altair
