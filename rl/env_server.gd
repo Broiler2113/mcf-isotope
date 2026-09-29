@@ -321,6 +321,14 @@ func _reset(req: Dictionary) -> Dictionary:
 	if bool(req.get("random_events", false)):
 		resolver.random_events = RandomEvents.new(true)
 	resolver.update_airlocks()
+	# Экипажи — ДО начала записи: машина появляется на поле уже с экипажем, как в
+	# настоящей партии (там технику покупают вместе с ним). Раньше посадка шла после
+	# recorder.begin() и попадала в повтор шагами veh_board — а _crew_vehicles подменяет
+	# активного игрока, чего повтор не умеет: посадку второй стороны он отклонял («ход
+	# другого игрока»), её танки оставались пустыми, и каждое её veh_* в повторе тоже
+	# отклонялось. Смотрящий видел сторону, которая «пропускает ходы и не атакует», хотя
+	# в самой партии она воевала. Теперь посадка входит в стартовый кадр записи.
+	_crew_vehicles()
 	recorder = null
 	if bool(req.get("record", false)):
 		recorder = ReplayRecorder.new()
@@ -368,7 +376,6 @@ func _reset(req: Dictionary) -> Dictionary:
 	_digs_used = 0
 	_fire_debt = 0.0
 	_fire_losses = 0
-	_crew_vehicles()
 	_advance()
 	return _response(0.0, true)
 
