@@ -425,7 +425,19 @@ def live_card(b: str) -> None:
                    help="round cap reached with equal living units; stalls count here too")
     cols[3].metric("memory", f"{s['total_mb']:.0f} MB" if s.get("total_mb") else "—",
                    help="trainer + its Godot envs; `free` is what the machine has left")
-    cols[4].metric("run on disk", f"{s['disk_mb']:.0f} MB" if s.get("disk_mb") is not None else "—")
+    # Free DISK, not free memory — the number that decides whether the run survives the
+    # night. The trainer checkpoints and exits below `disk_floor_mb`, and it wrote
+    # disk_free_mb into every heartbeat all along; the card only ever showed free RAM, so
+    # town-8 stopped on a full volume while this panel read a comfortable "3306 MB free".
+    floor = float(branch_cfg(b).get("disk_floor_mb") or 0)
+    free_disk = s.get("disk_free_mb")
+    cols[4].metric("disk free", f"{free_disk:,.0f} MB" if free_disk is not None else "—",
+                   delta=(None if free_disk is None or floor <= 0
+                          else f"{free_disk - floor:+,.0f} MB vs floor"),
+                   delta_color="normal",
+                   help=f"free space on the runs volume; the trainer checkpoints and exits "
+                        f"below disk_floor_mb ({floor:.0f} MB). This run's own directory is "
+                        f"{s['disk_mb']:.0f} MB." if s.get("disk_mb") is not None else None)
     if pct(ev.get("winrate_hard")) == "—":
         nxt = s.get("next_eval_update")
         st.caption("No evaluation yet — win rates appear after the first one"
