@@ -103,6 +103,26 @@ static func aims_at(intent: Intent, zone: Dictionary, state: GameState) -> bool:
 	return false
 
 
+## Выбросить выстрелы «в пустоту»: пушку танка, разрыв ПТ и струю огнемёта по клетке, рядом
+## с которой не стоит ни одного видимого врага. Тот же принцип, что «стрельба только по
+## врагам» у винтовки (LegalIntents): ход, ценность которого почти всегда нулевая, не
+## держим в пространстве действий. Иначе целиться — отдельная задача: у танка из ~366
+## клеток сектора враг рядом с ~20, и town-8 за 4.8 млн шагов её не решил (6% попаданий
+## против 56% у ИИ); 20 апдейтов с премией только за прицельные — тоже 6%.
+##
+## Цена: нельзя выстрелить вслепую в туман и нарочно подорвать стену. Выстрел по юниту
+## (винтовка, пулемёт, ПТ по цели) не трогается — он и так всегда по врагу.
+static func drop_blind_shots(list: Array, r: GameActionResolver, side: int) -> Array:
+	var zone := hostile_zone(r, side)
+	var out: Array = []
+	for it: Intent in list:
+		var cell_shot: bool = it is VehicleCannonIntent or (it is ShootIntent and it.target_id < 0)
+		if cell_shot and not aims_at(it, zone, r.state):
+			continue
+		out.append(it)
+	return out
+
+
 ## Урезать список кандидатов до max_candidates, НЕ обедняя выбор.
 ##
 ## Равномерная выборка здесь была бы ловушкой: на town'е 59% списка — «шагнуть», и случайные

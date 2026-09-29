@@ -781,9 +781,9 @@ func _response(reward: float, is_reset: bool) -> Dictionary:
 		return resp
 	var acting := state.active_player()
 	var t0 := Time.get_ticks_usec()
-	_legal = IntentBudget.cap(_drop_looping(resolver.legal_intents(
+	_legal = IntentBudget.cap(IntentBudget.drop_blind_shots(_drop_looping(resolver.legal_intents(
 			acting, IntentBudget.actor_subset(resolver, acting, max_actors, _cap_rng))),
-			max_candidates, _cap_rng, resolver, acting)
+			resolver, acting), max_candidates, _cap_rng, resolver, acting)
 	var t1 := Time.get_ticks_usec()
 	var desc: Array = []
 	for intent: Intent in _legal:
