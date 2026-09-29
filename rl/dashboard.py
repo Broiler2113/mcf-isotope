@@ -845,6 +845,15 @@ def show(ch) -> None:
 # then what a healthy value looks like ON THIS PROJECT — the second half is the part
 # that is actually hard to look up.
 METRIC_HELP: dict[str, tuple[str, str]] = {
+    "hit_rate": (
+        "Of the policy's shots, the share that damaged an enemy (killed a unit or knocked "
+        "points off a vehicle); next to it, how many shots it takes per game.",
+        "Together they answer \"is it attacking?\". town-8 fired the tank cannon 1202 times in "
+        "12 tank-map games and 6% did damage — it was choosing target squares at random — "
+        "while the scripted AI hit 56%. Blind shots are no longer offered, which alone took "
+        "the same weights to 73% on 148 shots; what training has to add is shooting more "
+        "often when a target is there.",
+    ),
     "value_diff": (
         "Army points we have left minus the enemy's, at the final whistle, as a fraction "
         "of one starting army.",
@@ -1407,6 +1416,8 @@ def page_branch(b: str) -> None:
         wr = map_match_chart(sc, "winrate", "training win rate by map", pct=True)
         rd = map_match_chart(sc, "rounds", "match length by map (rounds)")
         vd = map_match_chart(sc, "value_diff", "end-of-match value_diff by map")
+        hr = map_match_chart(sc, "hit_rate", "shots that hit an enemy, by map", pct=True)
+        sh = map_match_chart(sc, "shots", "shots per game, by map")
         if wr or rd or vd:
             st.markdown("##### Per map, in training")
             st.caption("Evaluation is pinned to one map so it can be compared across runs; "
@@ -1418,6 +1429,14 @@ def page_branch(b: str) -> None:
             else:
                 show(wr or rd)
             show(vd)
+            if hr or sh:
+                if hr and sh:
+                    c1, c2 = st.columns(2)
+                    with c1: show(hr)
+                    with c2: show(sh)
+                else:
+                    show(hr or sh)
+                explain("hit_rate")
 
         # --- is the optimiser healthy? --------------------------------------------------
         #

@@ -237,6 +237,12 @@ var _digs_used: int = 0
 ## ровно в нашем собственном end_turn'е.
 var _fire_debt: float = 0.0
 var _fire_losses: int = 0
+## Выстрелы обучаемой стороны за эпизод и сколько из них задели врага (убит юнит или
+## машина потеряла очки узлов). Прямой ответ на «атакует ли политика врага» — панель Maps:
+## town-8 на танковой карте стрелял из пушки 1202 раза за 12 партий, в цель 6%.
+var _shots: int = 0
+var _shots_hit: int = 0
+const SHOT_KINDS := ["shoot", "rsp", "veh_cannon"]
 
 func _initialize() -> void:
 	# С `-- --reply-port=N` ответы идут в TCP-сокет 127.0.0.1:N, а не в stdout: всё, что
@@ -376,6 +382,8 @@ func _reset(req: Dictionary) -> Dictionary:
 	_digs_used = 0
 	_fire_debt = 0.0
 	_fire_losses = 0
+	_shots = 0
+	_shots_hit = 0
 	_advance()
 	return _response(0.0, true)
 
@@ -431,6 +439,10 @@ func _step(req: Dictionary) -> Dictionary:
 	var key := _actor_key(intent)
 	var ap_before := _actor_ap(intent)
 	var hulls_before := _vehicle_hulls()
+	var enemy_pts_before := _enemy_vehicle_points()
+	# Нацелен ли выстрел на видимого врага — ДО броска: после него цель может быть уже мертва.
+	var aimed := acting == side and _kind_of(intent) in SHOT_KINDS \
+			and IntentBudget.aims_at(intent, IntentBudget.hostile_zone(resolver, side), state)
 	_fire_debt = 0.0
 	var res := resolver.resolve(intent)
 	_note_fire(res)
@@ -438,7 +450,16 @@ func _step(req: Dictionary) -> Dictionary:
 	if acting == side:
 		reward += _step_penalty
 		if res.ok:
-			reward += _combat_reward(intent, res, hulls_before)
+			reward += _combat_reward(intent, res, hulls_before, aimed)
+			if _kind_of(intent) in SHOT_KINDS:
+				_shots += 1
+				var killed_enemy := false
+				for id: int in res.deaths:
+					var v := state.get_unit(id)
+					if v != null and Obs.rel_owner(resolver, side, v.owner) == 1:
+						killed_enemy = true
+				if killed_enemy or _enemy_vehicle_points() < enemy_pts_before:
+					_shots_hit += 1
 			if _kind_of(intent) == "dig":
 				_digs_used += 1
 	if not res.ok:
@@ -621,6 +642,15 @@ func _living_count(pid: int) -> int:
 
 
 ## Прочность корпусов всех машин — снимок ДО действия, чтобы заметить уничтоженную.
+## Сумма очков всех узлов вражеской (для обучаемого) техники: упала — выстрел её задел.
+func _enemy_vehicle_points() -> int:
+	var pts := 0
+	for veh: Vehicle in state.all_vehicles():
+		if veh.alive() and Obs.rel_owner(resolver, side, veh.owner) == 1:
+			for c: String in veh.components.keys():
+				pts += veh.component(c)
+	return pts
+
 func _vehicle_hulls() -> Dictionary:
 	var out := {}
 	for veh: Vehicle in state.all_vehicles():
@@ -634,7 +664,8 @@ func _vehicle_hulls() -> Dictionary:
 ## Убийства не ограничены — убивать врага хорошо ровно столько раз, сколько получится.
 ## Бонусы за само действие ограничены SHAPING_PER_TURN за ход: награда за нажатие кнопки,
 ## а не за результат, — это та же ловушка, что и бесплатная перекладка пленника.
-func _combat_reward(intent: Intent, res: ActionResult, hulls_before: Dictionary) -> float:
+func _combat_reward(intent: Intent, res: ActionResult, hulls_before: Dictionary,
+		aimed: bool) -> float:
 	var gained := 0.0
 	# 1. Убитые юниты — по стоимости жертвы. Свои потери сюда не идут: за них уже
 	#    наказывает дифференциал, и штрафовать дважды значит учить не рисковать вовсе.
@@ -686,7 +717,13 @@ func _combat_reward(intent: Intent, res: ActionResult, hulls_before: Dictionary)
 	if _shaping_used < SHAPING_PER_TURN:
 		var kind := _kind_of(intent)
 		var bonus := 0.0
-		if kind == "shoot" or kind == "rsp" or kind == "veh_cannon":
+		if (kind == "shoot" or kind == "rsp" or kind == "veh_cannon") and aimed:
+			# ТОЛЬКО выстрел в зону видимого врага (IntentBudget.aims_at). R_SHOT подняли до
+			# 0.30 с расчётом «выстрел требует врага в прицеле» — для винтовки это так, но у
+			# пушки танка, разрыва ПТ и огнемёта цель — клетка, и почти все клетки пусты.
+			# town-8 на танковой карте: 1202 выстрела из пушки, в цель 6% (у ИИ 56%) — премию
+			# платили за стрельбу в землю, и политика её честно собирала.
+			#
 			# Пропорционально ВЫПУЩЕННЫМ пулям, иначе выгодно дробить очередь.
 			var fired := 1
 			if intent is ShootIntent:
@@ -745,7 +782,8 @@ func _response(reward: float, is_reset: bool) -> Dictionary:
 	_last_diff = diff
 	var resp := {"ok": true, "reward": reward, "done": _done, "acting": state.active_player(),
 			"info": {"round": state.turns.round_number, "steps": _steps, "illegal": _illegal,
-				"value_diff": diff / _norm, "fire_losses": _fire_losses}}
+				"value_diff": diff / _norm, "fire_losses": _fire_losses,
+				"shots": _shots, "shots_hit": _shots_hit}}
 	if _done:
 		match _result:
 			"win": resp["reward"] = float(resp["reward"]) + 1.0
@@ -759,9 +797,9 @@ func _response(reward: float, is_reset: bool) -> Dictionary:
 		return resp
 	var acting := state.active_player()
 	var t0 := Time.get_ticks_usec()
-	_legal = IntentBudget.cap(_drop_looping(resolver.legal_intents(
+	_legal = IntentBudget.cap(IntentBudget.drop_blind_shots(_drop_looping(resolver.legal_intents(
 			acting, IntentBudget.actor_subset(resolver, acting, max_actors, _cap_rng))),
-			max_candidates, _cap_rng)
+			resolver, acting), max_candidates, _cap_rng, resolver, acting)
 	var t1 := Time.get_ticks_usec()
 	var desc: Array = []
 	for intent: Intent in _legal:
