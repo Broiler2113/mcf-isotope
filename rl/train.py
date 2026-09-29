@@ -617,6 +617,16 @@ class Trainer:
                         print(f"[train] {e} during eval; restarting envs, eval skipped", flush=True)
                         self.envs.kill()
                         self.envs = VecEnv(cfg["n_envs"], cfg["godot"])
+                # Pause (dashboard button / `run.sh pause`): hold between updates, envs kept
+                # alive, until PAUSE is removed; STOP or a signal still ends the run.
+                pause_flag = os.path.join(self.run_dir, "PAUSE")
+                if os.path.exists(pause_flag):
+                    print("[train] paused", flush=True)
+                    while (os.path.exists(pause_flag) and not self.stop_requested
+                           and not os.path.exists(stop_flag)):
+                        self.write_status("paused", "paused - press Continue", 0, 0)
+                        time.sleep(2)
+                    print("[train] continuing", flush=True)
                 if os.path.exists(stop_flag):
                     os.remove(stop_flag)
                     print("[train] STOP flag found", flush=True)
@@ -694,7 +704,7 @@ def refuse_if_running(rd: str):
     try:
         with open(os.path.join(rd, "status.json")) as f:
             st = json.load(f)
-        if st.get("state") == "running":
+        if st.get("state") in ("running", "paused"):
             os.kill(int(st["pid"]), 0)
             sys.exit(f"{os.path.basename(rd)} is already training (pid {st['pid']}) — stop it first")
     except (OSError, ValueError, KeyError):
