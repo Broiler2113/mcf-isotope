@@ -113,7 +113,7 @@ func _decide(state: GameState) -> Dictionary:
 	# Потолки приходят от `train.py play` из конфига самого чекпойнта.
 	var legal: Array = IntentBudget.cap(_resolver.legal_intents(
 			owner, IntentBudget.actor_subset(_resolver, owner, _max_actors, _budget_rng)),
-			_max_candidates, _budget_rng)
+			_max_candidates, _budget_rng, _resolver, owner)
 	# Выкинуть то, что резолвер уже отказал на этой доске (см. notify_intent_denied).
 	# Если после этого не осталось ничего — список исчерпан, и честнее сдать ход, чем
 	# предлагать отказанное по кругу.

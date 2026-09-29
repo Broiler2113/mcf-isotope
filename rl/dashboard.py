@@ -845,6 +845,15 @@ def show(ch) -> None:
 # then what a healthy value looks like ON THIS PROJECT — the second half is the part
 # that is actually hard to look up.
 METRIC_HELP: dict[str, tuple[str, str]] = {
+    "aimed": (
+        "Of the policy's shots, the share aimed at an enemy it can see (the enemy's square "
+        "or next to it).",
+        "Firing is not attacking: a tank cannon, an anti-tank blast and a flamethrower all "
+        "target squares, and most squares are empty. town-8 fired the cannon 1202 times in 12 "
+        "tank-map games with 6% of shots at an enemy — about what picking a square at random "
+        "gives — while the scripted AI managed 56%. The shot bonus now pays only for aimed "
+        "shots, so this line should climb.",
+    ),
     "value_diff": (
         "Army points we have left minus the enemy's, at the final whistle, as a fraction "
         "of one starting army.",
@@ -1407,6 +1416,7 @@ def page_branch(b: str) -> None:
         wr = map_match_chart(sc, "winrate", "training win rate by map", pct=True)
         rd = map_match_chart(sc, "rounds", "match length by map (rounds)")
         vd = map_match_chart(sc, "value_diff", "end-of-match value_diff by map")
+        am = map_match_chart(sc, "aimed", "shots aimed at a visible enemy, by map", pct=True)
         if wr or rd or vd:
             st.markdown("##### Per map, in training")
             st.caption("Evaluation is pinned to one map so it can be compared across runs; "
@@ -1418,6 +1428,9 @@ def page_branch(b: str) -> None:
             else:
                 show(wr or rd)
             show(vd)
+            if am:
+                show(am)
+                explain("aimed")
 
         # --- is the optimiser healthy? --------------------------------------------------
         #

@@ -646,6 +646,8 @@ class Trainer:
                     stats["value_diff"].append(info["value_diff"])
                     stats["illegal"].append(info["illegal"])
                     stats["result"].append((env.label, os.path.basename(env.cfg.map_path), res))
+                    stats["aim"].append((os.path.basename(env.cfg.map_path),
+                                         info.get("shots", 0), info.get("shots_aimed", 0)))
                     illegal += info["illegal"]
                     self.matches_done += 1
                     # Save BEFORE any reset: the recording lives in the env and a reset
@@ -1137,6 +1139,19 @@ class Trainer:
                 w.add_scalar(f"map/{os.path.splitext(mp)[0]}_rounds", float(np.mean(vals)), s)
             for mp, vals in by_map_vd.items():
                 w.add_scalar(f"map/{os.path.splitext(mp)[0]}_value_diff", float(np.mean(vals)), s)
+            # Share of the policy's shots aimed at a visible enemy. Firing is not attacking:
+            # town-8 fired its tank cannon 1202 times in 12 tank-map games and 6% of those
+            # were at an enemy (the scripted AI: 56%), which no win rate or action share shows.
+            aim = defaultdict(lambda: [0, 0])
+            for mp, shots, aimed in st["aim"]:
+                aim[mp][0] += shots
+                aim[mp][1] += aimed
+            for mp, (shots, aimed) in aim.items():
+                if shots:
+                    w.add_scalar(f"map/{os.path.splitext(mp)[0]}_aimed", aimed / shots, s)
+            shots_all = sum(v[0] for v in aim.values())
+            if shots_all:
+                w.add_scalar("train/aimed_shot_rate", sum(v[1] for v in aim.values()) / shots_all, s)
             w.add_scalar("train/drawrate", float(np.mean(st["draw"])), s)
             w.add_scalar("train/match_rounds", float(np.mean(st["rounds"])), s)
             w.add_scalar("train/value_diff_end", float(np.mean(st["value_diff"])), s)
@@ -1170,7 +1185,13 @@ class Trainer:
         print(f"[train] upd={self.update} step={s} matches={self.matches_done} win={wr} "
               f"pl={losses['policy_loss']:+.3f} vl={losses['value_loss']:.3f} "
               f"ent={losses['entropy']:.2f} kl={losses['approx_kl']:.4f} "
+              f"aim={self._aim_text(st)} "
               f"env={info['seconds']:.0f}s upd={update_secs:.0f}s", flush=True)
+
+    @staticmethod
+    def _aim_text(st: dict) -> str:
+        shots = sum(x[1] for x in st.get("aim", []))
+        return f"{sum(x[2] for x in st.get('aim', [])) / shots:.0%}" if shots else "-"
 
 
 # --- CLI ----------------------------------------------------------------------------------

@@ -5454,8 +5454,11 @@ func blastable_cells(shooter: UnitInstance) -> Array:
 		return out
 	var reach := shooter.fire_range()
 	# Собственная клетка — первой в списке (#11): она и есть «ударить под себя»,
-	# и UI подсвечивает её наравне с остальными.
-	out.append(shooter.coord)
+	# и UI подсвечивает её наравне с остальными. Через ту же проверку, что и остальные:
+	# стоящий на клетке космоса (без пола) ударить под себя не может, а список её
+	# предлагал — перечислитель RL выдавал намерение, которое резолвер отклонял.
+	if can_blast_cell(shooter, shooter.coord) == "":
+		out.append(shooter.coord)
 	for dy in range(-int(reach), int(reach) + 1):
 		for dx in range(-int(reach), int(reach) + 1):
 			var c := Vector2i(shooter.coord.x + dx, shooter.coord.y + dy)
