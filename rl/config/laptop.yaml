@@ -9,7 +9,6 @@ maps:
   - rl/maps/arena_34x26.json
 stage: 1
 phase: A            # A: scripted AI opponent; B: pool of past checkpoints + pool_ai_fraction scripted
-opponent: normal    # Phase A teacher; HARD is the graduation opponent (8.2)
 pool_ai_fraction: 0.15
 pool_size: 6
 round_cap: 10
@@ -31,8 +30,6 @@ total_steps: 50000000
 checkpoint_every: 10
 eval_every: 20
 eval_games: 24
-eval_opponents: [hard]   # HARD only: NORMAL measured the same thing (AIController splits them
-                         # on one shot-scoring tiebreak) and HARD is the graduation opponent
 replays_per_checkpoint: 3
 map_rotate_matches: 5
 seed: 1

@@ -61,9 +61,10 @@ STATUS = {"good": "#0ca30c", "warning": "#fab219", "serious": "#ec835a", "critic
 OUTCOME_ORDER = ["win", "loss", "draw_cap", "draw_steps", "draw"]
 OUTCOME_COLOR = dict(zip(OUTCOME_ORDER, SERIES))
 
-# Mirrors train.py's DEFAULTS["eval_opponents"], for branches whose config.yaml predates
-# the key. Without it an old branch would keep showing its retired NORMAL column.
-DEFAULT_EVAL_OPPONENTS = ["hard"]
+# The one scripted opponent RL is trained and evaluated against (train.py SCRIPTED). Old
+# branches may still have NORMAL columns in eval_log.jsonl; those are history and are not
+# shown next to the live measurement.
+EVAL_OPPONENTS = ["hard"]
 
 THEME_CSS = f"""
 <style>
@@ -436,9 +437,8 @@ def live_card(b: str) -> None:
         if stall >= 0.25:
             st.caption(f"{stall:.0%} of the last evaluation's games ended on the step cap "
                        f"(`max_steps`) — the greedy policy stalls on a free action instead of "
-                       f"ending its turn, so those games say little about either opponent. "
-                       f"If NORMAL and HARD also read identical, the stall is swallowing the "
-                       f"whole evaluation; expect this to fall as the policy learns to end a turn.")
+                       f"ending its turn, so those games say little about the opponent; "
+                       f"expect this to fall as the policy learns to end a turn.")
     if s.get("free_mb") is not None:
         st.caption(f"machine: {s['free_mb']:.0f} MB free ({s.get('machine_pct', 0):.0f}% used)"
                    + (f" · envs {s['envs_mb']:.0f} MB · trainer {s['rss_mb']:.0f} MB"
@@ -524,9 +524,7 @@ def eval_games(branch: str) -> pd.DataFrame:
         df["branch"] = branch
         df["when"] = pd.to_datetime(df["time"], unit="s")
         # Same filter as long_evals, so the games shown belong to the tests shown.
-        want = [str(o).lower() for o in
-                (branch_cfg(branch).get("eval_opponents") or DEFAULT_EVAL_OPPONENTS)]
-        keep = df[df["opponent"].str.lower().isin(want)]
+        keep = df[df["opponent"].str.lower().isin(EVAL_OPPONENTS)]
         if not keep.empty:
             df = keep
     return df
@@ -538,15 +536,11 @@ def long_evals(branch: str) -> pd.DataFrame:
     ev = evals(branch)
     if ev.empty:
         return ev
-    # Which opponents to show: what the branch's config asks for, intersected with what
-    # is actually in the log. The intersection matters both ways — a branch evaluated
-    # against NORMAL before `eval_opponents` narrowed to HARD still has those columns on
-    # disk, and showing them would put a stale, retired measurement next to a live one.
+    # HARD only. A branch evaluated against NORMAL before it was retired still has those
+    # columns on disk; showing them would put a retired measurement next to the live one.
     # The jsonl keeps the history either way.
     found = sorted({c.rsplit("_", 1)[1] for c in ev.columns if c.startswith("winrate_")})
-    want = [str(o).lower() for o in
-            (branch_cfg(branch).get("eval_opponents") or DEFAULT_EVAL_OPPONENTS)]
-    opponents = [o for o in found if o in want] or found
+    opponents = [o for o in found if o in EVAL_OPPONENTS]
     out = []
     for opp in opponents:
         cols = {c: c[: -len(opp) - 1] for c in ev.columns if c.endswith(f"_{opp}")}
@@ -592,7 +586,7 @@ def checkpoints(_stamp: str) -> pd.DataFrame:
             parent = m.get("parent")
             row = dict(branch=b, step=int(m.get("global_step", 0)), update=m.get("update"),
                        matches=m.get("matches_done"), phase=cfg.get("phase"),
-                       stage=cfg.get("stage"), opponent=cfg.get("opponent"),
+                       stage=cfg.get("stage"),
                        maps=len(cfg.get("maps", [])), n_envs=cfg.get("n_envs"),
                        parent=(os.path.relpath(parent, RUNS) if parent else ""),
                        saved=pd.to_datetime(m.get("saved_at", 0), unit="s"),
@@ -606,7 +600,7 @@ def checkpoints(_stamp: str) -> pd.DataFrame:
                                draw_hard=e.get("drawrate_hard"), rounds_hard=e.get("rounds_hard"),
                                value_diff_hard=e.get("value_diff_hard"))
             rows.append(row)
-    cols = ["branch", "step", "update", "matches", "phase", "stage", "opponent", "maps", "n_envs",
+    cols = ["branch", "step", "update", "matches", "phase", "stage", "maps", "n_envs",
             "eval_step", "win_hard", "loss_hard", "draw_hard", "rounds_hard", "value_diff_hard",
             "parent", "saved", "file"]
     df = pd.DataFrame(rows)
@@ -1488,8 +1482,8 @@ def page_branch(b: str) -> None:
         path = write_next_config(b, text)
         if path:
             run_sh("restart", b, path)
-    grad = dict(cfg, phase="B", opponent="hard")
-    if c2.button("Graduate → Phase B, HARD teacher (§8.2)", disabled=cfg.get("phase") == "B", key="grad"):
+    grad = dict(cfg, phase="B")
+    if c2.button("Graduate → Phase B (§8.2)", disabled=cfg.get("phase") == "B", key="grad"):
         path = write_next_config(b, yaml.safe_dump(grad))
         if path:
             run_sh("restart", b, path)
@@ -1510,13 +1504,13 @@ def page_branch(b: str) -> None:
     ev = evals(b)
     if ev.empty:
         st.warning(
-            f"**No evaluation has finished yet, so the win rates vs NORMAL and HARD are "
+            f"**No evaluation has finished yet, so the win rate vs HARD is "
             f"blank.** A run evaluates on its first update and then every "
             f"`eval_every` ({cfg.get('eval_every', '?')}) updates — at update "
             f"{s.get('update', 0)} the next one lands at {s.get('next_eval_update', '?')}. "
             f"For a quicker read, lower `eval_every` and `eval_games` below, or run one "
             f"by hand:")
-        st.code(f"python rl/train.py eval rl/runs/{b}/latest.pt --games 10 --opponent hard")
+        st.code(f"python rl/train.py eval rl/runs/{b}/latest.pt --games 10")
     else:
         ev = ev.copy()
         ev["time"] = pd.to_datetime(ev["time"], unit="s")
@@ -1569,7 +1563,7 @@ def page_evaluations(b: str) -> None:
                 f"first update and then every `eval_every` "
                 f"({cfg.get('eval_every', '?')}) updates — it is at update "
                 f"{s.get('update', 0)}, next test at {s.get('next_eval_update', '?')}.")
-        st.code(f"python rl/train.py eval rl/runs/{b}/latest.pt --games 10 --opponent hard")
+        st.code(f"python rl/train.py eval rl/runs/{b}/latest.pt --games 10")
         return
 
     latest = lg[lg["step"] == lg["step"].max()]
@@ -1611,7 +1605,7 @@ def page_evaluations(b: str) -> None:
     with c1:
         show(line_chart(lg.rename(columns={"opponent": "series", "winrate": "value"})
                         [["step", "series", "value"]],
-                        "win rate (0.55 vs NORMAL is the §8.2 graduation bar)", pct=True))
+                        "win rate vs HARD (0.55 is the §8.2 graduation bar)", pct=True))
         show(line_chart(lg.rename(columns={"opponent": "series", "value_diff": "value"})
                         [["step", "series", "value"]],
                         "army-value differential at the end"))

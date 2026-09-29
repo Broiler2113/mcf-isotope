@@ -8,7 +8,7 @@
     train.py pause  <branch>                          checkpoint and hold; envs stay up
     train.py continue <branch>                        release a paused run
     train.py status [branch]
-    train.py eval   <checkpoint.pt> [--games N] [--opponent normal|hard|easy] [--record DIR]
+    train.py eval   <checkpoint.pt> [--games N] [--record DIR]      greedy games vs HARD
     train.py play   <checkpoint.pt>                   real game, checkpoint in the AI slot
     train.py export <checkpoint.pt> <out.onnx>        policy + value head (Section 12)
 
@@ -45,12 +45,18 @@ from torch.utils.tensorboard import SummaryWriter  # noqa: E402
 
 from features import (CAND_DIM, CANVAS, FLAT_DIM, N_CHANNELS, Sparse, candidate_rows,  # noqa: E402
                       flat_vector, grid_tensor)
-from mcf_env import (EASY, EXTERNAL, HARD, NORMAL, PROJECT, EnvDied,  # noqa: E402
+from mcf_env import (EXTERNAL, HARD, PROJECT, EnvDied,  # noqa: E402
                      EpisodeConfig, VecEnv)
 from model import OnnxWrapper, PolicyNet  # noqa: E402
 
 RUNS = os.path.join(PROJECT, "rl", "runs")
-OPPONENTS = {"easy": EASY, "normal": NORMAL, "hard": HARD}
+# The one scripted opponent: AIController HARD, for training (Phase A, and the scripted
+# share of Phase B) and for every evaluation. The owner retired NORMAL and EASY outright;
+# the game keeps them for human matches, the RL pipeline has no way to select them.
+SCRIPTED = "hard"
+# Config keys that used to choose the scripted opponent. Dropped from any config a run
+# loads — a branch whose saved config still says `opponent: normal` trains vs HARD.
+RETIRED_KEYS = ("opponent", "eval_opponents")
 FOGS = {"off": 0, "standard": 1, "realistic": 2}
 UNIT_NAMES = ["light_infantry", "heavy_infantry", "machinegunner", "sniper", "anti_tank",
               "engineer", "flamethrower", "assault", "marksman", "miner", "sapper",
@@ -60,7 +66,7 @@ UNIT_NAMES = ["light_infantry", "heavy_infantry", "machinegunner", "sniper", "an
 DEFAULTS = dict(
     godot=os.environ.get("GODOT", "godot"),   # rl/.env sets GODOT; a config's godot: overrides
     n_envs=2, maps=["rl/maps/arena_34x26.json"], stage=1,
-    phase="A", opponent="normal", pool_ai_fraction=0.15, pool_size=6,
+    phase="A", pool_ai_fraction=0.15, pool_size=6,
     round_cap=10, max_steps=3000, max_candidates=0, max_actors=0,
     civilians=False, random_events=False, fog="standard", friendly_fire=True,
     rollout_steps=256, epochs=4, minibatch=32, lr=3e-4, gamma=0.99, lam=0.95, clip=0.2,
@@ -74,13 +80,6 @@ DEFAULTS = dict(
     # unrelated each time". 0 disables the check.
     target_kl=0.02,
     checkpoint_every=5, eval_every=10, eval_games=6, replays_per_checkpoint=2,
-    # Which scripted opponents an evaluation measures against. HARD only, because NORMAL
-    # was very nearly the same measurement: six arena games came back identical to their
-    # HARD counterparts step for step, and AIController differentiates the two in exactly
-    # one line (a shot-scoring tiebreak at 1053) — everything else keyed off difficulty is
-    # EASY-only. Two columns that agree by construction cost twice the eval time and say
-    # one thing. HARD is also the graduation opponent (8.2), so it is the one that counts.
-    eval_opponents=["hard"],
     map_rotate_matches=5, seed=1, torch_threads=0,
     # --- keeping the machine alive (the trainer runs for weeks, unattended) ---
     keep_checkpoints=12,      # newest N kept on disk; 0 = keep everything
@@ -115,16 +114,16 @@ def load_config(path: str | None) -> dict:
         for m in cfg[key]:
             if not os.path.exists(m):
                 sys.exit(f"map not found ({key}): {m}")
-    bad = [o for o in cfg["eval_opponents"] if o not in OPPONENTS]
-    if bad:
-        sys.exit(f"eval_opponents: unknown {bad}; pick from {sorted(OPPONENTS)}")
-    return cfg
+    return with_defaults(cfg)
 
 
 def with_defaults(cfg: dict) -> dict:
     """A config read out of an old checkpoint predates keys added since. Fill them in
-    rather than sprinkling .get() over the trainer."""
-    return dict(DEFAULTS) | dict(cfg or {})
+    rather than sprinkling .get() over the trainer — and drop the retired ones."""
+    out = dict(DEFAULTS) | dict(cfg or {})
+    for k in RETIRED_KEYS:
+        out.pop(k, None)
+    return out
 
 
 def mem_report() -> dict:
@@ -441,7 +440,7 @@ class Trainer:
     def pick_opponent(self) -> tuple[int, str]:
         """(env opponent code, label). Phase A: the scripted AI. Phase B: the pool."""
         if self.cfg["phase"] == "A" or self.rng.random() < self.cfg["pool_ai_fraction"]:
-            return OPPONENTS[self.cfg["opponent"]], "ai:" + self.cfg["opponent"]
+            return HARD, "ai:" + SCRIPTED
         member = self.rng.choice(["self"] + self.pool_checkpoints())
         if member != "self":
             # Load it now: by the opponent's first move this checkpoint may have left the
@@ -549,7 +548,7 @@ class Trainer:
             if env.last is None or env.last.get("done", True):
                 new_episode(i)
             elif not env.label:
-                env.label = "ai:" + cfg["opponent"]
+                env.label = "ai:" + SCRIPTED
         t0 = time.time()
         budget = float(cfg["rollout_budget_mb"]) * 2**20
         buf_bytes = 0
@@ -766,11 +765,12 @@ class Trainer:
         return res
 
     # -- evaluation (10.3): greedy, fixed seeds, not training data --
-    def evaluate(self, opponent: str, games: int, record_dir: str | None = None,
+    def evaluate(self, games: int, record_dir: str | None = None,
                  keep: int = 0, net: PolicyNet | None = None) -> dict:
         """Game k always gets seed_base + k and side k % 2, whichever env plays it; an env
         starts its next game the moment it finishes one instead of waiting for the slowest
         game of a batch."""
+        opponent = SCRIPTED
         net = net or self.act_net
         envs = self.envs.envs
         results, diffs, rounds = [], [], []
@@ -797,7 +797,7 @@ class Trainer:
             started += 1
             envs[i].cfg = EpisodeConfig(
                 map_path=eval_maps[k % len(eval_maps)], seed=seed_base + k,
-                side=k % 2, opponent=OPPONENTS[opponent], round_cap=self.cfg["round_cap"], max_steps=self.cfg.get("max_steps", 3000),
+                side=k % 2, opponent=HARD, round_cap=self.cfg["round_cap"], max_steps=self.cfg.get("max_steps", 3000),
                 civilians=self.cfg["civilians"], random_events=self.cfg["random_events"],
                 fog=FOGS[self.cfg["fog"]], friendly_fire=self.cfg["friendly_fire"],
                 disembark=disembark_allowed(
@@ -915,9 +915,9 @@ class Trainer:
         draws = sum(r.startswith("draw") for r in results)
         # How the games ended, not just how many were won. An untrained greedy policy
         # tends to stall on a free action and never end its turn, so the episode dies on
-        # max_steps ("draw_steps") before the scripted opponent has played at all — and
-        # then NORMAL and HARD report identical numbers, which looks like a broken
-        # evaluation rather than what it is. The breakdown makes that legible.
+        # max_steps ("draw_steps") before the scripted opponent has played at all, which
+        # looks like a broken evaluation rather than what it is. The breakdown makes that
+        # legible.
         outcomes = Counter(results)
         return dict(games=len(results), winrate=wins / max(1, len(results)),
                     lossrate=outcomes["loss"] / max(1, len(results)),
@@ -976,7 +976,7 @@ class Trainer:
                     self._replay_maps.clear()
                 # Evaluate on schedule, but also whenever this branch has no win rate at
                 # all yet. eval_every is tens of updates and an update can take minutes,
-                # so a fresh run used to show a blank "win vs NORMAL / HARD" for hours
+                # so a fresh run used to show a blank "win vs HARD" for hours
                 # and read as broken (§11.2). The second clause also rescues a branch
                 # trained before this rule existed: it evaluates on its next update.
                 if self.update % cfg["eval_every"] == 0 or not self.has_eval_history():
@@ -1069,21 +1069,21 @@ class Trainer:
         return True
 
     def run_eval(self):
-        """Both reference opponents, every time. An eval that dies with its Godot env
+        """Greedy games vs HARD, every time. An eval that dies with its Godot env
         must not take the run with it — the win rate is a diagnostic, not the training
         signal, so a failed one is logged as such and training carries on."""
         rec = os.path.join(self.run_dir, "replays", f"checkpoint_{self.global_step:09d}")
         row = {"step": self.global_step, "update": self.update, "time": time.time(),
                "phase": self.cfg["phase"], "stage": self.cfg["stage"]}
-        for opp in self.cfg["eval_opponents"]:
-            try:
-                r = self.evaluate(opp, self.cfg["eval_games"], record_dir=rec,
-                                  keep=self.cfg["replays_per_checkpoint"])
-            except EnvDied as e:
-                print(f"[eval] vs {opp} aborted: {e}", flush=True)
-                row[f"error_{opp}"] = str(e)
-                self.envs.rebuild()
-                continue
+        opp = SCRIPTED
+        try:
+            r = self.evaluate(self.cfg["eval_games"], record_dir=rec,
+                              keep=self.cfg["replays_per_checkpoint"])
+        except EnvDied as e:
+            print(f"[eval] vs {opp} aborted: {e}", flush=True)
+            row[f"error_{opp}"] = str(e)
+            self.envs.rebuild()
+        else:
             row.update({f"{k}_{opp}": v for k, v in r.items()})
             for k in ("winrate", "lossrate", "drawrate", "value_diff", "rounds", "stallrate"):
                 self.writer.add_scalar(f"eval/{k}_{opp}", r[k], self.global_step)
@@ -1363,7 +1363,7 @@ def cmd_eval(a):
     t.envs = VecEnv(cfg["n_envs"], cfg["godot"],
                     log_dir=os.path.join(t.run_dir, "envlogs"))
     try:
-        r = t.evaluate(a.opponent, a.games, record_dir=a.record, keep=a.games if a.record else 0)
+        r = t.evaluate(a.games, record_dir=a.record, keep=a.games if a.record else 0)
         print(json.dumps(r))
     finally:
         t.envs.close()
@@ -1458,7 +1458,7 @@ def main():
     s = sp.add_parser("continue"); s.add_argument("branch"); s.set_defaults(fn=cmd_continue)
     s = sp.add_parser("status"); s.add_argument("branch", nargs="?"); s.set_defaults(fn=cmd_status)
     s = sp.add_parser("eval"); s.add_argument("checkpoint"); s.add_argument("--games", type=int, default=10)
-    s.add_argument("--opponent", choices=list(OPPONENTS), default="normal"); s.add_argument("--record"); s.set_defaults(fn=cmd_eval)
+    s.add_argument("--record"); s.set_defaults(fn=cmd_eval)
     s = sp.add_parser("export"); s.add_argument("checkpoint"); s.add_argument("out"); s.set_defaults(fn=cmd_export)
     s = sp.add_parser("play"); s.add_argument("checkpoint"); s.add_argument("--port", type=int, default=7791)
     s.add_argument("--godot", default="godot"); s.set_defaults(fn=cmd_play)
