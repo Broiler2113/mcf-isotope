@@ -14,6 +14,12 @@ func ck(c: bool, w: String) -> void:
 func _initialize() -> void:
 	_free_boarding()
 	_flame_splash_is_six()
+	_flame_into_corner_is_six()
+	_flame_one_sided_splash_is_six()
+	_sniper_hit_ladder()
+	_hull_kill_reports_its_crew()
+	_capture_is_reported()
+	_sealed_crew_cannot_disembark()
 	_neutral_shoots_bought_civilian()
 	_every_vehicle_leaves_a_wreck()
 	_group_move_falls_back()
@@ -88,6 +94,147 @@ func _flame_splash_is_six() -> void:
 	ck(burning == cells.size(), "every listed cell is on fire (%d/%d)" % [burning, cells.size()])
 	for c: Vector2i in cells:
 		ck(not st.grid.cell(c).is_wall(), "fire never lands on a wall cell %s" % str(c))
+
+## Струя в УГОЛ. Огнемётчик в (5,5), стена идёт по колонке 6 и по строке 4: клетка
+## (6,4) — внутренний угол, и обе перпендикулярные стороны от стрелка тоже заперты.
+## Старый код здесь отдавал почти ничего: разлёт налево упирался в стену (l = 0), а
+## добор был написан под условием l > 0 и не срабатывал никогда.
+func _flame_into_corner_is_six() -> void:
+	var walls: Array = []
+	for y in 14:
+		walls.append(Vector2i(6, y))
+	for x in 30:
+		walls.append(Vector2i(x, 4))
+	var f := _field([[Vector2i(5, 5), "flamethrower", MCF.Owner.PLAYER_1],
+			[Vector2i(25, 10), "light_infantry", MCF.Owner.PLAYER_2]], walls)
+	var st: GameState = f["s"]
+	var r: GameActionResolver = f["r"]
+	var ft := _u(st, Vector2i(5, 5))
+	var cells: Array = r.flame_cells(ft.coord, Vector2i(1, -1))
+	ck(cells.size() == MCF.FLAME_JET_LENGTH,
+			"jet into a corner still burns %d cells (got %d: %s)"
+			% [MCF.FLAME_JET_LENGTH, cells.size(), str(cells)])
+	for c: Vector2i in cells:
+		ck(not st.grid.cell(c).is_wall(), "corner splash never lands on a wall %s" % str(c))
+		ck(c != ft.coord, "corner splash never burns the flamethrower's own cell")
+
+## Разлёт, у которого сторона «налево» заперта СРАЗУ (l = 0), а «направо» обрывается
+## через клетку. Прежний код добирал остаток только налево и только под условием
+## l > 0 — то есть ровно здесь не добирал ничего и терял четыре клетки из шести.
+func _flame_one_sided_splash_is_six() -> void:
+	var walls: Array = []
+	for y in 14:
+		walls.append(Vector2i(6, y))
+	walls.append(Vector2i(5, 6))   # «налево» от струи (1,0) — вниз: заперто сразу
+	walls.append(Vector2i(5, 3))   # «направо» — вверх: одна свободная клетка (5,4)
+	var f := _field([[Vector2i(5, 5), "flamethrower", MCF.Owner.PLAYER_1],
+			[Vector2i(25, 10), "light_infantry", MCF.Owner.PLAYER_2]], walls)
+	var st: GameState = f["s"]
+	var r: GameActionResolver = f["r"]
+	var ft := _u(st, Vector2i(5, 5))
+	var cells: Array = r.flame_cells(ft.coord, Vector2i(1, 0))
+	ck(cells.size() == MCF.FLAME_JET_LENGTH,
+			"one-sided splash still burns %d cells (got %d: %s)"
+			% [MCF.FLAME_JET_LENGTH, cells.size(), str(cells)])
+	var uniq := {}
+	for c: Vector2i in cells:
+		ck(not uniq.has(c), "splash never lists the same cell twice %s" % str(c))
+		uniq[c] = true
+
+## Лестница снайпера (§5): авто до 15, потом 2+/3+/4+/5+/6 по пятёркам, за 40 — никак.
+## Границы полос ВЕРХНИЕ, поэтому проверяем и саму границу, и клетку за ней.
+func _sniper_hit_ladder() -> void:
+	var want := {1: 1, 10: 1, 15: 1, 16: 2, 20: 2, 21: 3, 25: 3, 26: 4, 30: 4,
+			31: 5, 35: 5, 36: 6, 40: 6, 41: 7, 50: 7}
+	for d: int in want:
+		var got := Combat.sniper_hit_number(d)
+		ck(got == want[d], "sniper needs %d+ at %d tiles (got %d)" % [want[d], d, got])
+	# И то же через боевой путь, которым реально стреляют: цель на 20 клетках по прямой,
+	# без укрытия и укреплений — 2+, а общая формула дала бы 3+.
+	var f := _field([[Vector2i(2, 7), "sniper", MCF.Owner.PLAYER_1],
+			[Vector2i(22, 7), "light_infantry", MCF.Owner.PLAYER_2]])
+	var st: GameState = f["s"]
+	var r: GameActionResolver = f["r"]
+	var sn := _u(st, Vector2i(2, 7))
+	var tg := _u(st, Vector2i(22, 7))
+	ck(r.hit_need_for(sn, tg) == 2,
+			"sniper at 20 tiles needs 2+ (got %d)" % r.hit_need_for(sn, tg))
+	var near := _field([[Vector2i(2, 7), "sniper", MCF.Owner.PLAYER_1],
+			[Vector2i(16, 7), "light_infantry", MCF.Owner.PLAYER_2]])
+	var st2: GameState = near["s"]
+	var r2: GameActionResolver = near["r"]
+	ck(r2.hit_need_for(_u(st2, Vector2i(2, 7)), _u(st2, Vector2i(16, 7))) == 1,
+			"sniper auto-hits at 14 tiles")
+
+## Подбитый корпус обязан отчитаться о ЭКИПАЖЕ в res.deaths, а не только о себе.
+## _kill() сам в deaths ничего не кладёт, и _destroy_vehicle этого не делал: сжечь
+## гружёный танк приносило ровно столько же, сколько пустой, и трое внутри не попадали
+## ни в награду за убийство, ни в счётчик комбо.
+func _hull_kill_reports_its_crew() -> void:
+	var f := _field([[Vector2i(5, 5), "tank", MCF.Owner.PLAYER_1],
+			[Vector2i(4, 4), "light_infantry", MCF.Owner.PLAYER_1],
+			[Vector2i(25, 10), "light_infantry", MCF.Owner.PLAYER_2]])
+	var st: GameState = f["s"]
+	var r: GameActionResolver = f["r"]
+	var veh: Vehicle = st.vehicle_on(Vector2i(5, 5))
+	var crew := _u(st, Vector2i(4, 4))
+	ck(r.resolve(VehicleBoardIntent.new(crew.id, veh.id)).ok, "crew boards the tank")
+	ck(veh.occupants.has(crew.id), "crew is aboard")
+	var res := ActionResult.new()
+	res.ok = true
+	r._destroy_vehicle(veh, res)
+	ck(res.deaths.has(crew.id),
+			"a destroyed hull reports its crew in deaths (got %s)" % str(res.deaths))
+	ck(not crew.is_alive(), "the crew really died")
+
+## Захват вражеской машины должен быть ВИДЕН в результате, а не только в строке лога:
+## награда за него иначе неотличима от обычной посадки.
+func _capture_is_reported() -> void:
+	var f := _field([[Vector2i(5, 5), "tank", MCF.Owner.PLAYER_2],
+			[Vector2i(4, 4), "light_infantry", MCF.Owner.PLAYER_1],
+			[Vector2i(25, 10), "light_infantry", MCF.Owner.PLAYER_2]])
+	var st: GameState = f["s"]
+	var r: GameActionResolver = f["r"]
+	var veh: Vehicle = st.vehicle_on(Vector2i(5, 5))
+	var taker := _u(st, Vector2i(4, 4))
+	ck(veh.owner == MCF.Owner.PLAYER_2, "the hull starts enemy-owned")
+	var res := r.resolve(VehicleBoardIntent.new(taker.id, veh.id))
+	ck(res.ok, "boarding an empty enemy hull is legal: " + res.reason)
+	ck(veh.owner == MCF.Owner.PLAYER_1, "the hull changed hands (owner %d)" % veh.owner)
+	ck(res.captured_vehicles.has(veh.id),
+			"the capture is reported in captured_vehicles (got %s)" % str(res.captured_vehicles))
+
+## disembark_enabled = false должен и НЕ ПРЕДЛАГАТЬ высадку, и ОТКАЗЫВАТЬ в ней. Одного
+## фильтра в перечислителе мало: резолвер принимает намерения и не из него (встроенный ИИ,
+## сеть, повтор), и запрет, живущий только в списке, обходится молча.
+func _sealed_crew_cannot_disembark() -> void:
+	var f := _field([[Vector2i(5, 5), "tank", MCF.Owner.PLAYER_1],
+			[Vector2i(4, 4), "light_infantry", MCF.Owner.PLAYER_1],
+			[Vector2i(25, 10), "light_infantry", MCF.Owner.PLAYER_2]])
+	var st: GameState = f["s"]
+	var r: GameActionResolver = f["r"]
+	var veh: Vehicle = st.vehicle_on(Vector2i(5, 5))
+	var crew := _u(st, Vector2i(4, 4))
+	ck(r.resolve(VehicleBoardIntent.new(crew.id, veh.id)).ok, "crew boards")
+	var cells: Array = r.vehicle_disembark_cells(veh)
+	ck(not cells.is_empty(), "there IS somewhere to get out to")
+
+	# Пока разрешено — высадка и предлагается, и проходит.
+	var offered := 0
+	for i: Intent in LegalIntents.enumerate(r, MCF.Owner.PLAYER_1):
+		if i is VehicleDisembarkIntent and i.actor_id == crew.id:
+			offered += 1
+	ck(offered > 0, "with disembark on, the crew is offered a way out (%d)" % offered)
+
+	r.disembark_enabled = false
+	offered = 0
+	for i: Intent in LegalIntents.enumerate(r, MCF.Owner.PLAYER_1):
+		if i is VehicleDisembarkIntent and i.actor_id == crew.id:
+			offered += 1
+	ck(offered == 0, "sealed: no disembark is enumerated (got %d)" % offered)
+	var res := r.resolve(VehicleDisembarkIntent.new(crew.id, cells[0]))
+	ck(not res.ok, "sealed: the resolver refuses a disembark it never offered")
+	ck(crew.aboard_vehicle_id == veh.id, "sealed: the crew is still aboard")
 
 func _neutral_shoots_bought_civilian() -> void:
 	var f := _field([[Vector2i(5, 5), "civilian", MCF.Owner.PLAYER_1],

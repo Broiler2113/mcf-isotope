@@ -2395,6 +2395,11 @@ func _on_intent_ready(intent: Intent) -> void:
 		_back_to_menu()
 		return
 	_ai_denied_streak = 0
+	# Действие прошло — контроллеру, который копит отказы, пора их забыть (иначе
+	# LearnedController продолжит исключать намерения, отказанные на ПРЕЖНЕЙ доске).
+	var ok_ctrl: PlayerController = controllers.get(state.active_player())
+	if ok_ctrl != null and ok_ctrl.has_method("notify_intent_accepted"):
+		ok_ctrl.notify_intent_accepted()
 	# Откат и повтор переставляют всю доску разом: выделение и подсветка после них
 	# указывают в пустоту, а контроллеры держат устаревшую картину.
 	if intent is UndoIntent or intent is RedoIntent:
@@ -4594,6 +4599,21 @@ func _build_replay_bar() -> void:
 	_replay_label.custom_minimum_size = Vector2(180, 0)
 	_replay_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(_replay_label)
+	# Кем играла обучаемая политика. Пусто для обычных записей — метка появляется только
+	# у записей из обучения, где иначе не отличить её ходы от ходов ИИ.
+	var rl_text := replay.rl_side_text()
+	if rl_text != "":
+		var rl_label := Label.new()
+		rl_label.text = rl_text
+		rl_label.add_theme_font_size_override("font_size", 12)
+		# Тем же цветом, каким сторона нарисована на доске (Roster.color_of, item 16), —
+		# иначе подпись пришлось бы сверять с полем глазами.
+		var rl_side := int(replay.data.get("meta", {}).get("side", 0))
+		if replay.state != null:
+			rl_label.add_theme_color_override("font_color",
+					replay.state.roster.color_of(rl_side))
+		rl_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		row.add_child(rl_label)
 	# Таймлайн (item 7): тянешь ползунок — прыгаешь в любую точку записи, минуя всё
 	# между. Перемотка идёт через seek(), тем же путём, что и кнопки шага.
 	var slider_wrap := HBoxContainer.new()

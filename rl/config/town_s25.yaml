@@ -1,0 +1,130 @@
+# Town, platoon scale — rl/maps/town_50x50_s25.json, built by
+#   python rl/tools/make_town_map.py --scale 0.25 --inset 10 --out rl/maps/town_50x50_s25.json
+#
+# Same 50x50 town terrain as rl/config/town.yaml, same eleven unit types, same three
+# vehicles; a quarter of the infantry and both armies moved ten rows towards the middle.
+# 50 a side instead of 176: 13 light, 9 heavy, 4 shield bearers, 5 machinegunners,
+# 4 snipers, 3 anti-tank, 1 marksman, 1 flamethrower, 3 engineers, 2 sappers,
+# 2 drone operators, 1 tank, 1 shuttle, 1 borg.
+#
+# WHY THIS RUN EXISTS. town-3 trained for 24 hours and 400 updates on the full company and
+# went flat: value_diff averaged -0.560 over updates 200-250 and -0.536 over updates
+# 250-400, an improvement smaller than the standard deviation of the measurement, with the
+# win rate at 0.00 throughout. It saw 138 matches in a day. A 176-unit tactics game is not
+# learnable from 138 examples, and the outcome signal never varies, so there is nothing for
+# the advantage estimator to tell apart.
+#
+# Two changes buy the throughput back, and both are measured, not guessed:
+#
+#   1. A quarter of the army. A full match ran ~2900 env steps; a platoon match runs a
+#      fraction of that, and the legal-intent enumerator — ~148 ms of a ~195 ms step, and
+#      the single most expensive thing in training — scales with the unit count too. The
+#      front ranks now start 19 rows apart instead of 39, so the walk-up is not the
+#      majority of the match.
+#   2. eval_every 25, not 10. At eval_every 10 an evaluation cost 10,500-11,600 env steps
+#      against the 10,240 steps of training it was measuring: MORE THAN HALF the machine
+#      was spent on measurement. Evaluation steps do not count towards `step` and never
+#      enter a rollout, so that half was pure overhead. 25 puts it near a fifth.
+#
+# Everything else is deliberately identical to town.yaml so the comparison stays honest.
+device: cpu
+n_envs: 6            # 10 cores; platoon envs are much lighter than company ones, and
+                     # mem_limit_mb below still bounds the total
+maps:
+  - rl/maps/town_50x50_s25.json
+stage: 1
+phase: A
+opponent: normal
+pool_ai_fraction: 0.15
+pool_size: 6
+round_cap: 20       # rounds per game before it is decided on head count.
+                    # БЫЛО 12 и поднято до 20 на апдейте ~1850 живого town-7 — но правка
+                    # осталась только в rl/runs/town-7/config.yaml, а сюда не попала, так
+                    # что любой resume с ЭТИМ файлом молча откатил бы её. Синхронизировано.
+                    #
+                    # ВАЖНО ПРИ ЧТЕНИИ ОЦЕНОК: смена cap РАЗРЫВАЕТ сравнимость состава
+                    # исходов до и после апдейта 1850. При cap=12 партия, дожившая до
+                    # предела, шла в зачёт by=count; при cap=20 те же партии продолжаются,
+                    # и HARD успевает добить — доля by=rout выросла 0.29 (упд 1300-1700)
+                    # -> 0.49 (1900-2300), а доля побед упала 0.218 -> 0.120 БЕЗ какого-либо
+                    # изменения политики. Средняя длина партии 11.8 -> 18.7 раундов.
+                    # Сравнивать через этот рубеж можно только value_diff (он плоский:
+                    # -0.198 / -0.183 / -0.207 при SE(diff)=0.134), но НЕ wins и НЕ routs.
+max_steps: 8000      # a platoon match is a few hundred own decisions; this only catches a
+                     # stuck policy now, which is what it is for
+max_actors: 16       # unchanged ON PURPOSE: the in-game LearnedController caps with the
+                     # same number, and a policy trained on a different candidate-list
+                     # shape than it plays on is the bug rl/IntentBudget.gd exists to stop.
+                     # At 50 units a side this now covers ~32% of the army per decision
+                     # instead of ~9%, without touching either side of the wire.
+max_candidates: 512
+civilians: false     # the map carries 12; turn this on to wake them
+random_events: false
+fog: standard
+friendly_fire: true
+rollout_steps: 256
+epochs: 4
+minibatch: 32        # ОСТАЁТСЯ 32. Оффлайн-замер обещал, что 128 сократит PPO-фазу с
+                     # 64.1 до 59.6 с за апдейт, и это НЕ ПОДТВЕРДИЛОСЬ в бою: на чистой
+                     # выборке в 23 апдейта (mb=128 + 8 потоков) PPO вышел 41.2 с против
+                     # 35.9 с на базовой конфигурации, то есть на 15% ДОЛЬШЕ, а фаза среды
+                     # заодно 35.4 -> 38.4 с. Стенд мерил не то, что происходит рядом с
+                     # шестью живыми Godot-средами.
+lr: 0.00005          # town.yaml's 1e-4 was itself a step down from 3e-4 (KL 0.077,
+                     # clipfrac 42%). On the platoon map even 1e-4 is too big: town-4 ran
+                     # updates 105-119 with target_kl braking to 2 epochs of 4 on twelve of
+                     # fourteen updates, KL pinned just under the 0.02 target and clipfrac
+                     # steady at ~22%. Half of every update's optimisation budget was being
+                     # thrown away. Per the rule in train.py, persistent braking together
+                     # with high clipfrac is the signal to lower the rate, not to loosen the
+                     # target.
+gamma: 0.99
+lam: 0.95
+clip: 0.2
+ent_coef: 0.01
+vf_coef: 0.5
+total_steps: 50000000
+checkpoint_every: 10
+eval_every: 25       # see the header — at 10 the evaluations cost more env steps than the
+                     # training they measured
+eval_games: 10      # было 4, и это оказалось МЕНЬШЕ разрешения, которое нужно вопросу.
+                    # Разброс между четырьмя партиями одной оценки, измеренный по 15
+                    # оценкам town-5/6/7: sd = 0.089, то есть стандартная ошибка среднего
+                    # по 4 партиям — 0.044, а разности двух оценок — 0.063. Эффекты, за
+                    # которыми мы гоняемся, — те же 0.05-0.10. Из-за этого по одной
+                    # оценке дважды за ночь был сделан вывод, который следующая же оценка
+                    # отменяла. При 10 партиях ошибка среднего — 0.028.
+                    # Цена: ~4500 шагов среды на оценку против 38 400 обучающих шагов на
+                    # те же 25 апдейтов, то есть около 12% — на ротной карте это было бы
+                    # неподъёмно, на взводной уже нет.
+eval_opponents: [hard]   # HARD only: NORMAL measured the same thing and HARD is the
+                         # graduation opponent
+replays_per_checkpoint: 2
+map_rotate_matches: 5
+seed: 1
+torch_threads: 0     # ОСТАЁТСЯ 0 (torch берёт 4 на этой машине). Попытка поставить 8
+                     # исходила из того, что в PPO-фазе шесть сред простаивают; на деле
+                     # 8 потоков torch плюс 6 процессов Godot — это 14 на 10 ядрах, и
+                     # суммарно апдейт стал 79.6 с против 71.3 с. См. minibatch выше:
+                     # обе правки откачены одним заходом, разделять их нечем — мерили их
+                     # вместе.
+
+# --- keeping the machine alive ---
+keep_checkpoints: 12
+milestone_every: 2000000
+keep_replay_sets: 6
+rollout_budget_mb: 2048
+mem_limit_mb: 4096         # this laptop is 16 GB; town-3 measured ~2.3 GB for 4 company
+                           # envs plus the trainer. Re-check `free_mb` on the dashboard
+                           # before raising it.
+disk_floor_mb: 400        # БЫЛО 1536, и на этом пороге town-7 встал 26.09 в 22:26 и простоял
+                          # 19 часов: на диске оставалось 986 МБ свободного места, а тренер
+                          # выходит, «пока запись ещё может пройти». Порог мерил не тот
+                          # объём, который ему нужно защитить. Вся папка прогона — 68 МБ:
+                          # чекпойнт 4.2 МБ (keep_checkpoints: 12), tb — 8 МБ за 2279
+                          # апдейтов, 272 реплея побед — 6 МБ. Пиковая разовая запись
+                          # меньше 50 МБ, то есть 1536 МБ — это в тридцать раз больше
+                          # нужного, и порог останавливал обучение, а не защищал его.
+                          # Проверено после снижения: чекпойнт ckpt_003502080.pt записан
+                          # при 896 МБ свободного места, апдейты 2280-2282 прошли штатно.
+                          # 400 МБ всё ещё оставляет запас для самой macOS.

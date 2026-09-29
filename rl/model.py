@@ -47,17 +47,25 @@ class PolicyNet(nn.Module):
         return fm, s
 
     def scores(self, fm, s, cand, cells, mask):
-        """cand: B,N,CAND_DIM; cells: B,N,2 (canvas index or -1); mask: B,N bool."""
+        """cand: B,N,CAND_DIM; cells: B,N,2 (canvas index or -1); mask: B,N bool.
+
+        Each candidate is scored from cat([its row, fm at the actor, fm at the target,
+        the state embedding]). Two things keep that cheap without changing it: only the
+        mask's real candidates go through the MLP (a minibatch pads every state to its
+        widest one, ~4x the real count), and the state's share of the first layer is
+        computed once per state, not copied into every candidate row."""
         B, N, _ = cand.shape
+        b, k = mask.nonzero(as_tuple=True)                     # K real candidates
+        c = cells[b, k]                                        # K, 2
         flat_fm = fm.flatten(2).transpose(1, 2)                # B, 4096, F
-        idx = cells.clamp(min=0)
-        a = torch.gather(flat_fm, 1, idx[..., 0:1].expand(B, N, self.fmap))
-        t = torch.gather(flat_fm, 1, idx[..., 1:2].expand(B, N, self.fmap))
-        a = a * (cells[..., 0:1] >= 0).float()
-        t = t * (cells[..., 1:2] >= 0).float()
-        x = torch.cat([cand, a, t, s.unsqueeze(1).expand(B, N, s.shape[1])], dim=2)
-        logits = self.cand(x).squeeze(-1)
-        return logits.masked_fill(~mask, -1e9)
+        a = flat_fm[b, c[:, 0].clamp(min=0)] * (c[:, 0:1] >= 0)
+        t = flat_fm[b, c[:, 1].clamp(min=0)] * (c[:, 1:2] >= 0)
+        first = self.cand[0]
+        d = cand.shape[2] + 2 * self.fmap                      # columns of the per-candidate part
+        h = torch.cat([cand[b, k], a, t], dim=1) @ first.weight[:, :d].T
+        h = h + (s @ first.weight[:, d:].T + first.bias)[b]
+        out = self.cand[1:](h).squeeze(-1)
+        return torch.full((B, N), -1e9, dtype=out.dtype, device=out.device).index_put((b, k), out)
 
     def forward(self, grid, flat, cand, cells, mask):
         fm, s = self.embed(grid, flat)

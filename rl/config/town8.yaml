@@ -1,0 +1,92 @@
+# town-8 — a FORK of town-7 at update 2565, trained on a four-map pool.
+#
+# Same policy weights, same hyperparameters, same opponent. The single change under test
+# is the map pool: town-7 saw one map, town-8 sees four. Everything else is held fixed on
+# purpose, so that whatever the evaluations say afterwards is attributable to the pool.
+#
+# WHAT THE THREE NEW MAPS ARE FOR. Each exists because the platoon map cannot teach the
+# thing it teaches:
+#   town_tank    — 5 tanks a side, crews sealed in (see sealed_crew_maps). On the platoon
+#                  map one tank sits among fifty units and vehicle intents are ~3% of the
+#                  action mix, which is far too thin a signal to learn gunnery from.
+#   drone_44x44  — rooms and doorways, 8 drone operators a side, troops laid out in clumps
+#                  so a detonation can catch several bodies and actually pay its combo.
+#   sapper_44x44 — mirrored walled compounds, three entrances each, engineers and sappers
+#                  over-represented: a small number of approaches worth mining, and time
+#                  to prepare before contact.
+#
+# EVALUATION IS PINNED TO THE ORIGINAL MAP — see eval_maps below. This is the part that
+# makes the experiment readable rather than merely new.
+device: cpu
+n_envs: 6
+maps:
+  - rl/maps/town_50x50_s25.json
+  - rl/maps/town_tank.json
+  - rl/maps/drone_44x44.json
+  - rl/maps/sapper_44x44.json
+
+# Evaluation runs on the platoon map ONLY, the same map town-7's 26-evaluation history was
+# measured on.
+#
+# Without this the experiment could not be read at all. Evaluation picks its map per game
+# (`eval_maps[k % len(eval_maps)]`), so a four-map pool would turn every 10-game
+# evaluation into two or three games on each of four different tasks, and value_diff_hard
+# into their average. That average is not a measurement of anything: a tank-only duel and
+# a fifty-unit infantry fight do not produce comparable differentials, the noise floor
+# measured on town-7 (sd 0.052, SE(diff) 0.074) would no longer apply, and the +2.49 sigma
+# block signal town-7 ended on would become unreadable — not worse, just uninterpretable.
+#
+# Pinned, the question stays answerable: does training on four maps make the policy better
+# or worse AT THE ORIGINAL GAME, on the same yardstick as before?
+eval_maps:
+  - rl/maps/town_50x50_s25.json
+
+# Crews cannot leave their hulls on the tank map, for BOTH sides (the flag is set on the
+# resolver, which both the policy and the built-in AI act through). Without it the policy
+# can park a tank and walk away, which is exactly what the map exists to prevent.
+sealed_crew_maps:
+  - town_tank
+
+stage: 1
+phase: A
+opponent: normal
+pool_ai_fraction: 0.15
+pool_size: 6
+round_cap: 20
+max_steps: 8000
+max_actors: 16
+max_candidates: 512
+civilians: false
+random_events: false
+fog: standard
+friendly_fire: true
+rollout_steps: 256
+epochs: 4
+minibatch: 32
+lr: 0.00005
+gamma: 0.99
+lam: 0.95
+clip: 0.2
+ent_coef: 0.01
+vf_coef: 0.5
+target_kl: 0.02
+max_grad_norm: 0.5
+total_steps: 50000000
+checkpoint_every: 10
+eval_every: 25
+eval_games: 10
+eval_opponents: [hard]
+replays_per_checkpoint: 2
+
+# Five matches per map before rotating, so each of the four maps takes ~25% of training.
+map_rotate_matches: 5
+seed: 1
+torch_threads: 0
+
+# --- keeping the machine alive ---
+keep_checkpoints: 12
+milestone_every: 2000000
+keep_replay_sets: 6
+rollout_budget_mb: 2048
+mem_limit_mb: 4096
+disk_floor_mb: 400

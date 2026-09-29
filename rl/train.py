@@ -5,6 +5,8 @@
     train.py resume <branch>                          continue from latest checkpoint
     train.py fork   <checkpoint.pt> --branch NAME [--config c.yaml]
     train.py stop   <branch>                          graceful stop after this update
+    train.py pause  <branch>                          checkpoint and hold; envs stay up
+    train.py continue <branch>                        release a paused run
     train.py status [branch]
     train.py eval   <checkpoint.pt> [--games N] [--opponent normal|hard|easy] [--record DIR]
     train.py play   <checkpoint.pt>                   real game, checkpoint in the AI slot
@@ -23,11 +25,13 @@ import glob
 import json
 import os
 import random
+import shutil
 import signal
 import subprocess
 import sys
 import time
-from collections import Counter, defaultdict
+import traceback
+from collections import Counter, OrderedDict, defaultdict
 from dataclasses import dataclass
 
 import numpy as np
@@ -39,7 +43,7 @@ import torch  # noqa: E402
 import torch.nn.functional as F  # noqa: E402
 from torch.utils.tensorboard import SummaryWriter  # noqa: E402
 
-from features import (CANVAS, INTENT_KINDS, N_ACTOR_TYPES, candidate_rows,  # noqa: E402
+from features import (CAND_DIM, CANVAS, FLAT_DIM, N_CHANNELS, Sparse, candidate_rows,  # noqa: E402
                       flat_vector, grid_tensor)
 from mcf_env import (EASY, EXTERNAL, HARD, NORMAL, PROJECT, EnvDied,  # noqa: E402
                      EpisodeConfig, VecEnv)
@@ -57,11 +61,39 @@ DEFAULTS = dict(
     godot=os.environ.get("GODOT", "godot"),   # rl/.env sets GODOT; a config's godot: overrides
     n_envs=2, maps=["rl/maps/arena_34x26.json"], stage=1,
     phase="A", opponent="normal", pool_ai_fraction=0.15, pool_size=6,
-    round_cap=10, max_steps=3000, civilians=False, random_events=False, fog="standard", friendly_fire=True,
+    round_cap=10, max_steps=3000, max_candidates=0, max_actors=0,
+    civilians=False, random_events=False, fog="standard", friendly_fire=True,
     rollout_steps=256, epochs=4, minibatch=32, lr=3e-4, gamma=0.99, lam=0.95, clip=0.2,
     ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5, total_steps=20_000_000,
+    # Stop an update early once the policy has moved this far (mean KL over an epoch).
+    # Without it town-3 ran at KL 0.077 and clipfrac 42% against the usual 0.01 / 10-30%:
+    # per-step rewards there are ~1e-4, and normalising advantages by a near-zero standard
+    # deviation turns that noise into unit-scale gradients. The result was a policy flung
+    # around every update - `shoot` went 2.4% -> 5.3% -> 0.1% while entropy bounced between
+    # 4.5 and 6.2 - which reads as "not learning" but is really "learning something new and
+    # unrelated each time". 0 disables the check.
+    target_kl=0.02,
     checkpoint_every=5, eval_every=10, eval_games=6, replays_per_checkpoint=2,
+    # Which scripted opponents an evaluation measures against. HARD only, because NORMAL
+    # was very nearly the same measurement: six arena games came back identical to their
+    # HARD counterparts step for step, and AIController differentiates the two in exactly
+    # one line (a shot-scoring tiebreak at 1053) — everything else keyed off difficulty is
+    # EASY-only. Two columns that agree by construction cost twice the eval time and say
+    # one thing. HARD is also the graduation opponent (8.2), so it is the one that counts.
+    eval_opponents=["hard"],
     map_rotate_matches=5, seed=1, torch_threads=0,
+    # --- keeping the machine alive (the trainer runs for weeks, unattended) ---
+    keep_checkpoints=12,      # newest N kept on disk; 0 = keep everything
+    milestone_every=0,        # also keep every checkpoint at a step multiple of this
+    keep_replay_sets=8,       # newest N replays/checkpoint_* directories
+    mem_limit_mb=0,           # >0: checkpoint and exit before the OS OOM-kills the run
+    # >0: checkpoint and exit while there is still room to write the checkpoint. A disk
+    # that fills mid-save leaves a truncated file and then a crash loop, because every
+    # restart tries the same failing write. Stopping early is the difference between
+    # "stopped: disk floor" in the morning and a branch that died at 4am taking its last
+    # checkpoint with it.
+    disk_floor_mb=1536,
+    rollout_budget_mb=0,      # >0: end a rollout early once the buffer reaches this
 )
 
 
@@ -70,20 +102,93 @@ def load_config(path: str | None) -> dict:
     if path:
         with open(path) as f:
             cfg.update(yaml.safe_load(f) or {})
-    cfg["maps"] = [m if os.path.isabs(m) else os.path.join(PROJECT, m) for m in cfg["maps"]]
-    for m in cfg["maps"]:
-        if not os.path.exists(m):
-            sys.exit(f"map not found: {m}")
+    # eval_maps gets the SAME treatment as maps, and it was missing it. The trainer runs
+    # with cwd=rl/, so a relative "rl/maps/x.json" resolves to rl/rl/maps/x.json — which
+    # does not exist. It only appeared to work because the path is handed to Godot, which
+    # resolves it against the project root instead; the evaluations were correct by luck,
+    # not by construction, and the same config would have failed the instant anything on
+    # the Python side tried to open the file.
+    for key in ("maps", "eval_maps"):
+        if not cfg.get(key):
+            continue
+        cfg[key] = [m if os.path.isabs(m) else os.path.join(PROJECT, m) for m in cfg[key]]
+        for m in cfg[key]:
+            if not os.path.exists(m):
+                sys.exit(f"map not found ({key}): {m}")
+    bad = [o for o in cfg["eval_opponents"] if o not in OPPONENTS]
+    if bad:
+        sys.exit(f"eval_opponents: unknown {bad}; pick from {sorted(OPPONENTS)}")
     return cfg
+
+
+def with_defaults(cfg: dict) -> dict:
+    """A config read out of an old checkpoint predates keys added since. Fill them in
+    rather than sprinkling .get() over the trainer."""
+    return dict(DEFAULTS) | dict(cfg or {})
+
+
+def mem_report() -> dict:
+    """What this run is costing the machine: the trainer, its Godot children, and how
+    much the box has left. psutil is the accurate path; without it fall back to peak
+    RSS from resource(), which never falls and so only ever over-reports."""
+    try:
+        import psutil
+        me = psutil.Process()
+        own = me.memory_info().rss
+        kids = 0
+        for c in me.children(recursive=True):
+            try:
+                kids += c.memory_info().rss
+            except psutil.Error:
+                pass
+        vm = psutil.virtual_memory()
+        return dict(rss_mb=own / 2**20, envs_mb=kids / 2**20,
+                    total_mb=(own + kids) / 2**20, free_mb=vm.available / 2**20,
+                    machine_pct=vm.percent)
+    except Exception:
+        try:
+            import resource
+            peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            peak = peak / 2**20 if sys.platform == "darwin" else peak / 1024
+            return dict(rss_mb=peak, total_mb=peak, peak_only=True)
+        except Exception:
+            return {}
+
+
+def free_mb(path: str) -> float:
+    """Free space on the volume holding `path`."""
+    try:
+        return shutil.disk_usage(path).free / 2**20
+    except OSError:
+        return float("inf")
+
+
+def dir_mb(path: str) -> float:
+    """Megabytes the directory actually OCCUPIES, counted in allocated blocks.
+
+    st_size is the wrong question here. The Godot env logs are truncated in place while
+    their writers hold an open file offset, which leaves holes: the files are sparse, and
+    summing st_size reported this run directory as 6692 MB when `du` said 159 MB — a 42x
+    overstatement, shown on the dashboard's disk panel where it reads as a run about to
+    fill the machine. st_blocks is what the filesystem has really handed out.
+    """
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.stat(os.path.join(root, f)).st_blocks * 512
+            except OSError:
+                pass
+    return total / (1024 * 1024)
 
 
 # --- rollout storage --------------------------------------------------------------------
 
 @dataclass
 class Step:
-    grid: np.ndarray
+    grid: Sparse          # (N_CHANNELS, CANVAS, CANVAS)
     flat: np.ndarray
-    cand: np.ndarray
+    cand: Sparse          # (n_candidates, CAND_DIM)
     cells: np.ndarray
     action: int
     logp: float
@@ -91,30 +196,38 @@ class Step:
     reward: float = 0.0
     done: bool = False
 
+    @property
+    def nbytes(self) -> int:
+        return self.grid.nbytes + self.cand.nbytes + self.flat.nbytes + self.cells.nbytes
+
 
 def collate(steps: list[Step], device):
-    n = max(s.cand.shape[0] for s in steps)
+    """Rebuild the dense batch from the sparse buffer. One batch is alive at a time,
+    which is the whole point: the rollout itself never holds a dense grid (see Sparse)."""
     B = len(steps)
-    cand = np.zeros((B, n, steps[0].cand.shape[1]), dtype=np.float32)
+    n = max(s.cand.shape[0] for s in steps)
+    grid = np.zeros((B, N_CHANNELS, CANVAS, CANVAS), dtype=np.float32)
+    cand = np.zeros((B, n, CAND_DIM), dtype=np.float32)
     cells = np.full((B, n, 2), -1, dtype=np.int64)
     mask = np.zeros((B, n), dtype=bool)
     for i, s in enumerate(steps):
+        s.grid.dense(grid[i])
         k = s.cand.shape[0]
-        cand[i, :k] = s.cand
+        s.cand.dense(cand[i, :k])
         cells[i, :k] = s.cells
         mask[i, :k] = True
-    grid = torch.from_numpy(np.stack([s.grid for s in steps]).astype(np.float32)).to(device)
-    flat = torch.from_numpy(np.stack([s.flat for s in steps])).to(device)
-    return (grid, flat, torch.from_numpy(cand).to(device), torch.from_numpy(cells).to(device),
+    flat = np.stack([s.flat for s in steps])
+    return (torch.from_numpy(grid).to(device), torch.from_numpy(flat).to(device),
+            torch.from_numpy(cand).to(device), torch.from_numpy(cells).to(device),
             torch.from_numpy(mask).to(device))
 
 
-def encode(resp: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def encode(resp: dict) -> tuple[Sparse, np.ndarray, Sparse, np.ndarray]:
     obs = resp["obs"]
-    g = grid_tensor(obs).astype(np.float16)
+    g = Sparse(grid_tensor(obs))
     f = flat_vector(obs)
     c, cells = candidate_rows(obs, resp["legal"])
-    return g, f, c, cells
+    return g, f, Sparse(c), cells.astype(np.int32)
 
 
 def choose(net: PolicyNet, encoded: list, device, greedy=False):
@@ -126,26 +239,71 @@ def choose(net: PolicyNet, encoded: list, device, greedy=False):
 
 # --- trainer ---------------------------------------------------------------------------
 
+def disembark_allowed(cfg: dict, map_path: str) -> bool:
+    """False on maps that seal crews into their hulls.
+
+    Driven by a config list of filename substrings rather than a global flag, because a
+    pool mixes map kinds: the tank map is the whole point of the ban, and applying it to
+    the platoon map would quietly change what every other map trains. Matching on the
+    filename keeps the rule visible in the config instead of buried in the map JSON.
+    """
+    needles = cfg.get("sealed_crew_maps") or []
+    base = os.path.basename(map_path)
+    return not any(str(n) in base for n in needles)
+
+
 class Trainer:
     def __init__(self, run_dir: str, cfg: dict, device="cpu"):
         self.run_dir = run_dir
-        self.cfg = cfg
+        self.cfg = with_defaults(cfg)
         self.device = device
         os.makedirs(run_dir, exist_ok=True)
         self.net = PolicyNet().to(device)
-        self.opt = torch.optim.Adam(self.net.parameters(), lr=cfg["lr"], eps=1e-5)
+        self.opt = torch.optim.Adam(self.net.parameters(), lr=self.cfg["lr"], eps=1e-5)
+        # Rollouts and evaluation always decide on the CPU: forwards of a few states at a
+        # time between env replies, where a GPU's launch/sync cost loses. With the update
+        # on a GPU (`device`), this is a CPU copy synced after every update.
+        self.act_net = self.net if device == "cpu" else copy.deepcopy(self.net).cpu()
+        # Rollout forwards share the CPU with n_envs Godot processes, so they get the cores
+        # those leave free (every core, with OpenMP workers spin-waiting between forwards,
+        # starves the envs); the update has the machine to itself.
+        self.update_threads = self.cfg.get("torch_threads") or torch.get_num_threads()
+        self.act_threads = max(1, min(self.update_threads,
+                                      (os.cpu_count() or 2) - self.cfg["n_envs"]))
         self.global_step = 0
         self.update = 0
         self.matches_done = 0
         self.map_idx = 0
+        # Maps that already have a rollout replay in the current checkpoint window.
+        self._replay_maps: set[str] = set()
         self.parent = None
-        self.rng = random.Random(cfg["seed"])
+        self.rng = random.Random(self.cfg["seed"])
         self.writer = SummaryWriter(os.path.join(run_dir, "tb"))
         self.envs: VecEnv | None = None
         self.stop_requested = False
-        self.pool_cache: dict[str, PolicyNet] = {}
-        self.episode_seed = cfg["seed"] * 1000
+        # Ordered so the least recently used frozen opponent is the one evicted: one
+        # PolicyNet per pool member is a few MB, and an unbounded dict grew without end.
+        self.pool_cache: OrderedDict[str, PolicyNet] = OrderedDict()
+        self.episode_seed = self.cfg["seed"] * 1000
         self._last_status = 0.0
+        self.last_eval: dict = {}
+        self._disk = (0.0, 0.0)          # (measured at, MB)
+
+    def has_eval_history(self) -> bool:
+        p = os.path.join(self.run_dir, "eval_log.jsonl")
+        return os.path.exists(p) and os.path.getsize(p) > 0
+
+    def next_eval_update(self) -> int:
+        n = max(1, int(self.cfg["eval_every"]))
+        return self.update + (n - self.update % n)
+
+    def disk_mb(self) -> float:
+        """Walking the run directory on every 3-second heartbeat would be silly; once a
+        minute is plenty for a number that moves when a checkpoint lands."""
+        now = time.time()
+        if now - self._disk[0] > 60:
+            self._disk = (now, round(dir_mb(self.run_dir), 1))
+        return self._disk[1]
 
     # -- checkpoints (9.5) --
     def state_dict(self) -> dict:
@@ -169,15 +327,64 @@ class Trainer:
         meta = {k: v for k, v in sd.items() if k not in ("model", "opt", "rng")}
         with open(path + ".json", "w") as f:
             json.dump(meta, f)
+        self.prune()
         return path
+
+    # -- retention: a run left alone for a month must not fill the disk --
+    def prune(self) -> None:
+        """Drop old checkpoints and old replay sets.
+
+        A checkpoint is 4 MB and one lands every `checkpoint_every` updates, so an
+        unattended branch writes a few hundred MB a day — on the VPS that is the thing
+        that fills up first. Kept: the newest `keep_checkpoints`, every milestone, and
+        never fewer than the Phase B pool draws from, because pool_checkpoints() reads
+        these same files. The sidecar .json follows its checkpoint out.
+        """
+        keep_n = int(self.cfg["keep_checkpoints"])
+        if keep_n > 0:
+            keep_n = max(keep_n, self.cfg["pool_size"] + 1)
+            every = int(self.cfg["milestone_every"])
+            cks = sorted(glob.glob(os.path.join(self.run_dir, "ckpt_*.pt")))
+            for path in cks[:-keep_n]:
+                try:
+                    step = int(os.path.basename(path)[5:-3])
+                except ValueError:
+                    continue
+                if every > 0 and step % every == 0:
+                    continue
+                for p in (path, path + ".json"):
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+        # Только наборы чекпойнтов. replays/wins/ намеренно вне этого glob'а: победы
+        # не устаревают, их там единицы, и удалять их по возрасту нечего.
+        keep_r = int(self.cfg["keep_replay_sets"])
+        if keep_r > 0:
+            sets = sorted(glob.glob(os.path.join(self.run_dir, "replays", "checkpoint_*")))
+            for d in sets[:-keep_r]:
+                shutil.rmtree(d, ignore_errors=True)
+            # Training replays are per-step directories too, and grow with one set per
+            # checkpoint window; prune them on the same rule so the pool's replays cannot
+            # quietly outgrow the evaluation ones.
+            tsets = sorted(glob.glob(os.path.join(self.run_dir, "replays", "train_*")))
+            for d in tsets[:-keep_r]:
+                shutil.rmtree(d, ignore_errors=True)
 
     def write_status(self, state: str, activity: str = "", done: int = 0, total: int = 0, **extra):
         """Heartbeat for the dashboard: who is training, how far, what it is doing right now
         (activity + done/total progress), and whether the pid is alive. Written at every
-        stage change and every few seconds inside a rollout, so "nothing moved" is visible."""
+        stage change and every few seconds inside a rollout, so "nothing moved" is visible.
+
+        Carries memory and disk too. When the OS kills the run there is no exception to
+        catch and no traceback to write — the last heartbeat before the kill is the only
+        evidence, so it has to say what the run was costing at that moment."""
         st = dict(state=state, pid=os.getpid(), step=self.global_step, update=self.update,
                   matches=self.matches_done, phase=self.cfg["phase"], stage=self.cfg["stage"],
-                  activity=activity, done=done, total=total, time=time.time(), **extra)
+                  activity=activity, done=done, total=total, time=time.time(),
+                  next_eval_update=self.next_eval_update(), eval=self.last_eval,
+                  disk_mb=self.disk_mb(), disk_free_mb=round(free_mb(self.run_dir)),
+                  **mem_report(), **extra)
         self._last_status = time.time()
         tmp = os.path.join(self.run_dir, "status.json.tmp")
         with open(tmp, "w") as f:
@@ -189,7 +396,7 @@ class Trainer:
         self.net.load_state_dict(ck["model"])
         self.opt.load_state_dict(ck["opt"])
         if not keep_cfg:
-            self.cfg = ck["cfg"]
+            self.cfg = with_defaults(ck["cfg"])
         self.global_step = ck["global_step"]
         self.update = ck["update"]
         self.matches_done = ck["matches_done"]
@@ -199,6 +406,11 @@ class Trainer:
         self.episode_seed = ck.get("episode_seed", self.episode_seed)
         for g in self.opt.param_groups:
             g["lr"] = self.cfg["lr"]
+        self.sync_act_net()
+
+    def sync_act_net(self) -> None:
+        if self.act_net is not self.net:
+            self.act_net.load_state_dict(self.net.state_dict())
 
     # -- opponents (8.2) --
     def pool_checkpoints(self) -> list[str]:
@@ -207,26 +419,87 @@ class Trainer:
 
     def pool_net(self, path: str) -> PolicyNet:
         if path == "self":
-            net = copy.deepcopy(self.net).eval()
+            net = copy.deepcopy(self.act_net).eval()
             self.pool_cache["self"] = net
             return net
         if path not in self.pool_cache:
-            net = PolicyNet().to(self.device)
-            net.load_state_dict(torch.load(path, map_location=self.device, weights_only=False)["model"])
+            net = PolicyNet()
+            net.load_state_dict(torch.load(path, map_location="cpu", weights_only=False)["model"])
             self.pool_cache[path] = net.eval()
+            # The pool is pool_size members plus "self"; anything beyond that rotated out
+            # of the pool — unless a game that started against it is still running, which
+            # still needs it and whose checkpoint prune() may already have deleted.
+            live = {e.label.split(":", 1)[1] for e in (self.envs.envs if self.envs else [])
+                    if e.label.startswith("pool:")}
+            for old in [k for k in self.pool_cache if k not in live and k != path]:
+                if len(self.pool_cache) <= self.cfg["pool_size"] + 1:
+                    break
+                del self.pool_cache[old]
+        self.pool_cache.move_to_end(path)
         return self.pool_cache[path]
 
     def pick_opponent(self) -> tuple[int, str]:
         """(env opponent code, label). Phase A: the scripted AI. Phase B: the pool."""
         if self.cfg["phase"] == "A" or self.rng.random() < self.cfg["pool_ai_fraction"]:
             return OPPONENTS[self.cfg["opponent"]], "ai:" + self.cfg["opponent"]
-        members = ["self"] + self.pool_checkpoints()
-        return EXTERNAL, "pool:" + self.rng.choice(members)
+        member = self.rng.choice(["self"] + self.pool_checkpoints())
+        if member != "self":
+            # Load it now: by the opponent's first move this checkpoint may have left the
+            # pool and been pruned from disk, and the game still needs it.
+            self.pool_net(member)
+        return EXTERNAL, "pool:" + member
+
+    def _save_rollout_replay(self, env, result: str) -> None:
+        """Write one training replay for the map this episode was played on.
+
+        Filed under replays/train/<step>/ rather than replays/checkpoint_*/ so it is
+        obvious in the dashboard which replays came from TRAINING (whole map pool, the
+        policy against whatever opponent the rotation picked) and which came from
+        EVALUATION (pinned map, always vs the graduation opponent). Mixing them in one
+        directory would make the map column look inconsistent for no stated reason.
+        """
+        mp = os.path.basename(env.cfg.map_path)
+        stem = os.path.splitext(mp)[0]
+        # train_<step>, NOT train/<step>: the dashboard gallery globs
+        # runs/*/replays/*/*.mcfr, which is exactly two levels, so a nested directory
+        # would write files the gallery can never find.
+        d = os.path.join(self.run_dir, "replays", f"train_{self.global_step:09d}")
+        try:
+            os.makedirs(d, exist_ok=True)
+            path = os.path.join(d, f"{stem}_{result}.mcfr")
+            if env.save_replay(path):
+                # Sidecar in the same schema the evaluation replays use, so the gallery
+                # shows map, result and rounds instead of falling back to the file name.
+                with open(path + ".json", "w") as f:
+                    json.dump(dict(branch=os.path.basename(self.run_dir),
+                                   step=self.global_step, update=self.update,
+                                   opponent=env.label, source="training",
+                                   result=result, map=env.cfg.map_path,
+                                   side=env.cfg.side, seed=env.cfg.seed,
+                                   time=time.time()), f)
+        except Exception as e:      # a replay is a nicety; never take the run down for one
+            print(f"[train] could not save rollout replay for {mp}: {e}", flush=True)
 
     def next_episode(self, record: bool = False) -> tuple[EpisodeConfig, str]:
         # Rotation: every map_rotate_matches completed matches, the next map (8.2.2).
         maps = self.cfg["maps"]
         self.map_idx = (self.matches_done // self.cfg["map_rotate_matches"]) % len(maps)
+        # Record ONE rollout episode per map per checkpoint window.
+        #
+        # Replays used to come only from evaluation, and evaluation is pinned to a single
+        # map so the whole pool can be compared against earlier runs. The consequence was
+        # that every replay on the dashboard was the same map: three of the four maps in
+        # training had no watchable game anywhere, which reads as "those maps are not
+        # running". Rollout episodes happen regardless, so capturing one costs a replay
+        # write rather than extra games.
+        here = os.path.basename(maps[self.map_idx])
+        if here not in self._replay_maps:
+            record = True
+            # Claim the map HERE, when the assignment is handed out, not when the replay
+            # is written. All six envs are on the same map at the same time, so marking it
+            # on save would hand every one of them a recording flag for the same episode:
+            # six simultaneous recordings, five of them overwriting the sixth's file.
+            self._replay_maps.add(here)
         opp, label = self.pick_opponent()
         self.episode_seed += 1
         cfg = EpisodeConfig(
@@ -234,90 +507,137 @@ class Trainer:
             side=self.episode_seed % 2, opponent=opp, round_cap=self.cfg["round_cap"], max_steps=self.cfg.get("max_steps", 3000),
             civilians=self.cfg["civilians"], random_events=self.cfg["random_events"],
             fog=FOGS[self.cfg["fog"]], friendly_fire=self.cfg["friendly_fire"], record=record,
+            disembark=disembark_allowed(self.cfg, maps[self.map_idx]),
+            max_candidates=self.cfg["max_candidates"], max_actors=self.cfg["max_actors"],
         )
         return cfg, label
 
     # -- rollout (5.1) --
     def collect(self) -> tuple[list[list[Step]], dict]:
+        """Every env runs at its own pace: whatever replies are in get one batched forward
+        and go straight back while the other envs keep computing. Stepping all envs in
+        lockstep waited on the slowest one every step — an end-turn, where the scripted
+        opponent plays, is ~8x slower than an own action — and ran the policy while every
+        Godot process sat idle."""
         cfg = self.cfg
-        n = len(self.envs)
+        envs = self.envs.envs
+        n = len(envs)
         T = cfg["rollout_steps"]
         buffers: list[list[Step]] = [[] for _ in range(n)]
-        carry = [0.0] * n
-        labels = [""] * n
         stats = defaultdict(list)
         usage_units = Counter()
         usage_kinds = Counter()
+        # Per-map copies of the same counters. The pooled numbers are the ones that
+        # mislead on a mixed pool: "veh_move+cannon 15%" is not a policy that drives a bit
+        # everywhere, it is a policy that drives constantly on the tank map and barely at
+        # all on the other three, and the pooled share cannot tell those apart. Keyed by
+        # map basename, which is what the dashboard and the eval rows already use.
+        usage_units_map: dict[str, Counter] = defaultdict(Counter)
+        usage_kinds_map: dict[str, Counter] = defaultdict(Counter)
         illegal = 0
-        # Reset envs that are not mid-episode.
-        cfgs = []
-        for i, env in enumerate(self.envs.envs):
+        inflight: dict[int, str] = {}          # env -> "reset" | "step" awaiting its reply
+        bad_resets = [0] * n
+
+        def new_episode(i: int) -> None:
+            ec, envs[i].label = self.next_episode()
+            envs[i].cfg = ec
+            envs[i].send(ec.to_cmd())
+            inflight[i] = "reset"
+
+        torch.set_num_threads(self.act_threads)
+        for i, env in enumerate(envs):
             if env.last is None or env.last.get("done", True):
-                ec, labels[i] = self.next_episode()
-                cfgs.append((i, ec))
-            else:
-                labels[i] = getattr(env, "label", "ai:" + cfg["opponent"])
-        for i, ec in cfgs:
-            self.envs.envs[i].cfg = ec
-            self.envs.envs[i].send(ec.to_cmd())
-        for i, ec in cfgs:
-            env = self.envs.envs[i]
-            env.last = env.recv()
-            env.label = labels[i]
+                new_episode(i)
+            elif not env.label:
+                env.label = "ai:" + cfg["opponent"]
         t0 = time.time()
+        budget = float(cfg["rollout_budget_mb"]) * 2**20
+        buf_bytes = 0
         self.pool_cache.pop("self", None)
         self.write_status("running", "collecting rollout", 0, T * n)
-        while min(len(b) for b in buffers) < T:
+        taken = 0
+        capped = False
+        while (taken < T * n and not capped) or inflight:
+            if not capped and budget > 0 and buf_bytes > budget:
+                # A map whose decision points carry thousands of candidates makes the
+                # per-step cost unpredictable. Cutting the rollout short costs this
+                # update some samples; running out of memory costs the whole run.
+                print(f"[train] rollout capped at {buf_bytes / 2**20:.0f} MB "
+                      f"({taken}/{T * n} steps)", flush=True)
+                capped = True
             if time.time() - self._last_status > 3:
-                done = sum(len(b) for b in buffers)
-                self.write_status("running", "collecting rollout", done, T * n,
-                                  env_steps_per_sec=done / max(1e-6, time.time() - t0),
-                                  rounds=[int(e.last["info"]["round"]) for e in self.envs.envs if e.last])
-            trainee_idx, opp_idx = [], []
-            for i, env in enumerate(self.envs.envs):
-                r = env.last
-                if r["done"]:
+                # Report WHICH MAP each env is playing. Without it the only record of the
+                # training pool is map_idx inside a checkpoint, so a multi-map run looks
+                # single-map from outside: evaluation is pinned to one map, and every
+                # replay on the dashboard comes from evaluation, so the other maps leave
+                # no visible trace anywhere. That is exactly how a correctly rotating
+                # four-map pool came to look like it was ignoring three of them.
+                self.write_status("running", "collecting rollout", taken, T * n,
+                                  env_steps_per_sec=taken / max(1e-6, time.time() - t0),
+                                  buffer_mb=round(buf_bytes / 2**20, 1),
+                                  map_idx=self.map_idx,
+                                  map_name=os.path.basename(self.cfg["maps"][self.map_idx]),
+                                  env_maps=[os.path.basename(e.cfg.map_path)
+                                            for e in envs if e.cfg],
+                                  rounds=[int(e.last["info"]["round"]) for e in envs if e.last])
+            if taken < T * n and not capped:
+                waiting = [i for i in range(n) if i not in inflight]
+                trainee = [i for i in waiting if envs[i].last["acting"] == envs[i].cfg.side]
+                actions = {}
+                if trainee:
+                    enc = [encode(envs[i].last) for i in trainee]
+                    a, lp, v = choose(self.act_net, enc, "cpu")
+                    for j, i in enumerate(trainee):
+                        g, f, c, cl = enc[j]
+                        step = Step(g, f, c, cl, int(a[j]), float(lp[j]), float(v[j]))
+                        buffers[i].append(step)
+                        buf_bytes += step.nbytes
+                        actions[i] = int(a[j])
+                        legal = envs[i].last["legal"][int(a[j])]
+                        mp = os.path.basename(envs[i].cfg.map_path) if envs[i].cfg else "?"
+                        usage_kinds[legal["i"]["t"]] += 1
+                        usage_kinds_map[mp][legal["i"]["t"]] += 1
+                        at = legal.get("at", -1)
+                        if at is not None and at >= 0:
+                            usage_units[at] += 1
+                            usage_units_map[mp][at] += 1
+                    taken += len(trainee)
+                # Phase B: opponent decision points served by a frozen pool member.
+                by_net = defaultdict(list)
+                for i in waiting:
+                    if i not in actions:
+                        by_net[envs[i].label.split(":", 1)[1]].append(i)
+                for path, idxs in by_net.items():
+                    a, _, _ = choose(self.pool_net(path), [encode(envs[i].last) for i in idxs], "cpu")
+                    for j, i in enumerate(idxs):
+                        actions[i] = int(a[j])
+                for i, act in actions.items():
+                    envs[i].send({"cmd": "step", "action": act})
+                    inflight[i] = "step"
+            for i in self.envs.wait_any(list(inflight)):
+                env = envs[i]
+                r = env.last = env.recv()
+                if inflight.pop(i) == "reset":
+                    if r["done"]:
+                        # A reset that comes back already over (a degenerate map) gets a new
+                        # seed; one that keeps doing it is a broken env, not a reason to spin.
+                        bad_resets[i] += 1
+                        if bad_resets[i] > 8:
+                            raise EnvDied(f"env {i}: 8 resets in a row came back already over")
+                        new_episode(i)
+                    else:
+                        bad_resets[i] = 0
                     continue
-                if r["acting"] == env.cfg.side:
-                    trainee_idx.append(i)
-                else:
-                    opp_idx.append(i)
-            actions = {}
-            if trainee_idx:
-                enc = [encode(self.envs.envs[i].last) for i in trainee_idx]
-                a, lp, v = choose(self.net, enc, self.device)
-                for j, i in enumerate(trainee_idx):
-                    g, f, c, cl = enc[j]
-                    buffers[i].append(Step(g, f, c, cl, int(a[j]), float(lp[j]), float(v[j])))
-                    actions[i] = int(a[j])
-                    legal = self.envs.envs[i].last["legal"][int(a[j])]
-                    usage_kinds[legal["i"]["t"]] += 1
-                    at = legal.get("at", -1)
-                    if at is not None and at >= 0:
-                        usage_units[at] += 1
-            # Phase B: opponent decision points served by a frozen pool member.
-            by_net = defaultdict(list)
-            for i in opp_idx:
-                by_net[self.envs.envs[i].label.split(":", 1)[1]].append(i)
-            for path, idxs in by_net.items():
-                net = self.pool_net(path)
-                enc = [encode(self.envs.envs[i].last) for i in idxs]
-                a, _, _ = choose(net, enc, self.device)
-                for j, i in enumerate(idxs):
-                    actions[i] = int(a[j])
-            self.envs.step_async(actions)
-            replies = self.envs.step_wait(list(actions.keys()))
-            resets = []
-            for i, r in replies.items():
-                env = self.envs.envs[i]
-                carry[i] += r["reward"]
-                was_trainee = i in trainee_idx
+                stats["legal_ms"].append(r["info"].get("legal_ms", 0.0))
+                buf = buffers[i]
+                # Every reward belongs to the trainee's latest decision in this episode —
+                # the ones that arrive over a pool opponent's moves (Phase B) included; those
+                # used to be credited to the trainee's NEXT decision instead.
+                if buf and not buf[-1].done:
+                    buf[-1].reward += r["reward"]
                 if r["done"]:
-                    # Reward since the last trainee decision belongs to that decision.
-                    if buffers[i]:
-                        buffers[i][-1].reward += carry[i]
-                        buffers[i][-1].done = True
-                    carry[i] = 0.0
+                    if buf:
+                        buf[-1].done = True
                     info = r["info"]
                     res = info.get("result", "draw")
                     stats["win"].append(1.0 if res == "win" else 0.0)
@@ -328,27 +648,16 @@ class Trainer:
                     stats["result"].append((env.label, os.path.basename(env.cfg.map_path), res))
                     illegal += info["illegal"]
                     self.matches_done += 1
-                    ec, label = self.next_episode()
-                    env.label = label
-                    resets.append((i, ec))
-                elif was_trainee and r["acting"] == env.cfg.side:
-                    buffers[i][-1].reward += carry[i]
-                    carry[i] = 0.0
-                elif was_trainee:
-                    pass  # opponent's turn now; reward keeps accumulating in carry
-            for i, ec in resets:
-                self.envs.envs[i].cfg = ec
-                self.envs.envs[i].send(ec.to_cmd())
-            for i, ec in resets:
-                self.envs.envs[i].last = self.envs.envs[i].recv()
-        # Give un-finished last steps their pending reward (kept as not-done; bootstrap).
-        for i in range(n):
-            if buffers[i] and carry[i] != 0.0:
-                buffers[i][-1].reward += carry[i]
-                carry[i] = 0.0
+                    # Save BEFORE any reset: the recording lives in the env and a reset
+                    # discards it.
+                    if env.cfg is not None and env.cfg.record:
+                        self._save_rollout_replay(env, res)
+                    if taken < T * n and not capped:
+                        new_episode(i)
         dt = time.time() - t0
         info = dict(stats=stats, usage_units=usage_units, usage_kinds=usage_kinds,
-                    illegal=illegal, seconds=dt)
+                    usage_units_map=usage_units_map, usage_kinds_map=usage_kinds_map,
+                    illegal=illegal, seconds=dt, steps=taken)
         return buffers, info
 
     # -- PPO update --
@@ -358,11 +667,13 @@ class Trainer:
         # Bootstrap value for each env's last state, unless it ended.
         last_vals = []
         for i, env in enumerate(self.envs.envs):
-            if buffers[i][-1].done or env.last is None or env.last["done"]:
+            if not buffers[i]:        # env contributed nothing (a short-cut rollout)
+                last_vals.append(0.0)
+            elif buffers[i][-1].done or env.last is None or env.last["done"]:
                 last_vals.append(0.0)
             elif env.last["acting"] == env.cfg.side:
                 enc = [encode(env.last)]
-                _, _, v = choose(self.net, enc, self.device)
+                _, _, v = choose(self.act_net, enc, "cpu")
                 last_vals.append(float(v[0]))
             else:
                 last_vals.append(float(buffers[i][-1].value))
@@ -384,13 +695,28 @@ class Trainer:
                 rets.append(adv[t] + s.value)
         advs = np.asarray(advs, dtype=np.float32)
         rets = np.asarray(rets, dtype=np.float32)
-        advs = (advs - advs.mean()) / (advs.std() + 1e-8)
         N = len(flat_steps)
+        if N == 0:
+            self.update += 1
+            return {k: 0.0 for k in ("policy_loss", "value_loss", "entropy",
+                                     "approx_kl", "clipfrac", "epochs_run")}
+        advs = (advs - advs.mean()) / (advs.std() + 1e-8)
         mb = cfg["minibatch"]
         out = defaultdict(list)
-        for _ in range(cfg["epochs"]):
+        stopped_at = cfg["epochs"]
+        torch.set_num_threads(self.update_threads)
+        total_mb = cfg["epochs"] * ((N + mb - 1) // mb)
+        done_mb = 0
+        self.write_status("running", "PPO update", 0, total_mb)
+        for epoch in range(cfg["epochs"]):
+            epoch_kl = []
             order = np.random.permutation(N)
             for start in range(0, N, mb):
+                # The update is minutes on a CPU; without this the heartbeat went silent
+                # for all of it and the dashboard called a healthy run stale.
+                if time.time() - self._last_status > 3:
+                    self.write_status("running", "PPO update", done_mb, total_mb)
+                done_mb += 1
                 idx = order[start:start + mb]
                 steps = [flat_steps[k] for k in idx]
                 grid, flat, cand, cells, mask = collate(steps, self.device)
@@ -403,7 +729,8 @@ class Trainer:
                 logp = logp_all.gather(1, actions.unsqueeze(1)).squeeze(1)
                 probs = logp_all.exp() * mask
                 entropy = -(probs * logp_all.masked_fill(~mask, 0.0)).sum(1).mean()
-                ratio = (logp - old_logp).exp()
+                logratio = logp - old_logp
+                ratio = logratio.exp()
                 pg = -torch.min(ratio * adv, ratio.clamp(1 - cfg["clip"], 1 + cfg["clip"]) * adv).mean()
                 vloss = F.mse_loss(value, ret)
                 loss = pg + cfg["vf_coef"] * vloss - cfg["ent_coef"] * entropy
@@ -412,86 +739,199 @@ class Trainer:
                 torch.nn.utils.clip_grad_norm_(self.net.parameters(), cfg["max_grad_norm"])
                 self.opt.step()
                 with torch.no_grad():
+                    # Schulman's k3 estimator: unbiased, lower variance, and always >= 0.
+                    # The naive k1, mean(old_logp - logp), routinely comes out NEGATIVE -
+                    # town-3 logged kl=-0.0470 at clipfrac 25.2% with all four epochs run,
+                    # because "-0.047 > 0.02" is false and the brake silently never fired
+                    # while the policy moved more than twice the target.
+                    kl = ((ratio - 1) - logratio).mean().item()
+                    epoch_kl.append(kl)
                     out["policy_loss"].append(pg.item())
                     out["value_loss"].append(vloss.item())
                     out["entropy"].append(entropy.item())
-                    out["approx_kl"].append((old_logp - logp).mean().item())
+                    out["approx_kl"].append(kl)
                     out["clipfrac"].append(((ratio - 1).abs() > cfg["clip"]).float().mean().item())
+            # One epoch is the granularity: checking per minibatch would abandon an update
+            # halfway through a shuffle and bias which samples ever get used.
+            if cfg["target_kl"] and float(np.mean(epoch_kl)) > cfg["target_kl"]:
+                stopped_at = epoch + 1
+                break
+        self.sync_act_net()
         self.global_step += N
         self.update += 1
-        return {k: float(np.mean(v)) for k, v in out.items()}
+        res = {k: float(np.mean(v)) for k, v in out.items()}
+        res["epochs_run"] = float(stopped_at)
+        return res
 
     # -- evaluation (10.3): greedy, fixed seeds, not training data --
     def evaluate(self, opponent: str, games: int, record_dir: str | None = None,
                  keep: int = 0, net: PolicyNet | None = None) -> dict:
-        net = net or self.net
-        n = len(self.envs)
+        """Game k always gets seed_base + k and side k % 2, whichever env plays it; an env
+        starts its next game the moment it finishes one instead of waiting for the slowest
+        game of a batch."""
+        net = net or self.act_net
+        envs = self.envs.envs
         results, diffs, rounds = [], [], []
-        played = 0
+        per_game: list[dict] = []     # one row per game, for the dashboard's drill-down
+        # Evaluation maps are configurable SEPARATELY from training maps, and default to
+        # the training pool so nothing changes for runs that do not set it.
+        #
+        # This exists because evaluation picks its map per game (`maps[k % len(maps)]`).
+        # The moment a pool holds more than one KIND of map, a 10-game evaluation becomes
+        # two or three games on each of several different tasks and value_diff_hard turns
+        # into their average — a mixture whose mean measures nothing, and whose scatter no
+        # longer matches the noise floor every decision here is judged against. Pinning
+        # evaluation to one map keeps the number comparable across a pool change, which is
+        # the only way to answer "did adding those maps help?".
+        eval_maps = self.cfg.get("eval_maps") or self.cfg["maps"]
         seed_base = 900_000 + self.update * 100
-        while played < games:
-            self.write_status("running", f"evaluating vs {opponent}", played, games)
-            batch = min(n, games - played)
-            cfgs = []
-            for j in range(batch):
-                k = played + j
-                cfgs.append(EpisodeConfig(
-                    map_path=self.cfg["maps"][k % len(self.cfg["maps"])], seed=seed_base + k,
-                    side=k % 2, opponent=OPPONENTS[opponent], round_cap=self.cfg["round_cap"], max_steps=self.cfg.get("max_steps", 3000),
-                    civilians=self.cfg["civilians"], random_events=self.cfg["random_events"],
-                    fog=FOGS[self.cfg["fog"]], friendly_fire=self.cfg["friendly_fire"],
-                    record=record_dir is not None and k < keep))
-            for j in range(batch):
-                self.envs.envs[j].cfg = cfgs[j]
-                self.envs.envs[j].send(cfgs[j].to_cmd())
-            for j in range(batch):
-                self.envs.envs[j].last = self.envs.envs[j].recv()
-            active = list(range(batch))
-            while active:
-                enc = [encode(self.envs.envs[j].last) for j in active]
-                a, _, _ = choose(net, enc, self.device, greedy=True)
-                self.envs.step_async({j: int(a[q]) for q, j in enumerate(active)})
-                replies = self.envs.step_wait(active)
-                still = []
-                for j in active:
-                    r = replies[j]
-                    if r["done"]:
-                        info = r["info"]
-                        results.append(info.get("result", "draw"))
-                        diffs.append(info["value_diff"])
-                        rounds.append(info["round"])
-                        k = played + j
-                        if record_dir is not None and k < keep:
-                            os.makedirs(record_dir, exist_ok=True)
-                            rp = os.path.join(record_dir, f"vs_{opponent}_{k + 1}_{results[-1]}.mcfr")
-                            if self.envs.envs[j].save_replay(rp):
-                                with open(rp + ".json", "w") as f:
-                                    json.dump(dict(branch=os.path.basename(self.run_dir),
-                                                   step=self.global_step, opponent=opponent,
-                                                   result=results[-1], value_diff=info["value_diff"],
-                                                   rounds=info["round"], map=cfgs[j].map_path,
-                                                   side=cfgs[j].side, time=time.time()), f)
-                    else:
-                        still.append(j)
-                active = still
-            played += batch
+        game_of: dict[int, int] = {}
+        inflight: set[int] = set()
+        started = 0
+
+        def start(i: int) -> None:
+            nonlocal started
+            k = game_of[i] = started
+            started += 1
+            envs[i].cfg = EpisodeConfig(
+                map_path=eval_maps[k % len(eval_maps)], seed=seed_base + k,
+                side=k % 2, opponent=OPPONENTS[opponent], round_cap=self.cfg["round_cap"], max_steps=self.cfg.get("max_steps", 3000),
+                civilians=self.cfg["civilians"], random_events=self.cfg["random_events"],
+                fog=FOGS[self.cfg["fog"]], friendly_fire=self.cfg["friendly_fire"],
+                disembark=disembark_allowed(
+                    self.cfg, self.cfg["maps"][k % len(self.cfg["maps"])]),
+                max_candidates=self.cfg["max_candidates"],
+                max_actors=self.cfg["max_actors"],
+                # Пишем КАЖДУЮ партию оценки, а не первые `keep`. Признак записи
+                # задаётся на reset'е, а кто победил — известно только в конце, так
+                # что «сохранять все победы» невозможно, если не включить запись
+                # заранее. Эпизод от этого не меняется: ReplayRecorder.capture_opening()
+                # сам зовёт play_civilian_slots(), ту же самую, что и ветка без записи.
+                # На диск попадают не все — см. ниже.
+                record=record_dir is not None)
+            envs[i].send(envs[i].cfg.to_cmd())
+            inflight.add(i)
+
+        torch.set_num_threads(self.act_threads)
+        self.write_status("running", f"evaluating vs {opponent}", 0, games)
+        for i in range(min(len(envs), games)):
+            start(i)
+        while inflight:
+            # A company-scale game runs for many minutes; without a heartbeat in here the
+            # dashboard sees nothing move and calls the run stale. The same tick bounds the
+            # env logs, since an evaluation runs between updates and so between the
+            # per-update disk checks.
+            if time.time() - self._last_status > 5:
+                self.envs.trim_logs()
+                self.write_status(
+                    "running", f"evaluating vs {opponent}", len(results), games,
+                    eval_rounds=[int(envs[j].last["info"]["round"])
+                                 for j in sorted(inflight) if envs[j].last],
+                    eval_steps=[int(envs[j].last["info"].get("steps", 0))
+                                for j in sorted(inflight) if envs[j].last])
+            todo = []
+            for i in self.envs.wait_any(sorted(inflight)):
+                inflight.discard(i)
+                r = envs[i].last = envs[i].recv()
+                if not r["done"]:
+                    todo.append(i)
+                    continue
+                info = r["info"]
+                results.append(info.get("result", "draw"))
+                diffs.append(info["value_diff"])
+                rounds.append(info["round"])
+                k = game_of[i]
+                # An aggregate win rate hides which games went wrong and how. One
+                # row per game means the dashboard can show that a 0% win rate was
+                # four honest losses and four stalls, not eight of the same thing.
+                row = dict(
+                    step=self.global_step, update=self.update, opponent=opponent,
+                    game=k + 1, result=results[-1], by=info.get("by", ""),
+                    value_diff=info["value_diff"],
+                    rounds=info["round"], steps=info.get("steps"),
+                    illegal=info.get("illegal"),
+                    # Своих, сгоревших от расползания огня: смерть, которой можно
+                    # избежать с гарантией, поэтому её видно отдельной колонкой.
+                    fire_losses=info.get("fire_losses"),
+                    seed=envs[i].cfg.seed, side=envs[i].cfg.side,
+                    map=os.path.basename(envs[i].cfg.map_path), time=time.time())
+                per_game.append(row)
+                # Appended as each game ends, not batched at the finish: a long
+                # evaluation should show its results filling in, and if it dies
+                # halfway the games it did play are already on disk.
+                with open(os.path.join(self.run_dir, "eval_games.jsonl"), "a") as f:
+                    f.write(json.dumps(row) + "\n")
+                print(f"[eval]   vs {opponent} game {k + 1}/{games}: "
+                      f"{row['result']}"
+                      f"{'(' + row['by'] + ')' if row['by'] else ''} "
+                      f"in {row['rounds']}r / {row['steps']} steps",
+                      flush=True)
+                # Куда (и попадёт ли вообще) эта партия на диск.
+                #
+                # ПОБЕДА СОХРАНЯЕТСЯ ВСЕГДА, и не в набор чекпойнта, а в
+                # replays/wins/, который _prune() не трогает (он чистит только
+                # replays/checkpoint_*). Победа — это ровно то, ради чего всё
+                # затеяно; потерять её из-за того, что она случилась пятой партией
+                # из десяти или что набор состарился, было бы обидно до глупости.
+                # Остальные партии, как и раньше, — выборка в `keep` штук.
+                dest = None
+                if record_dir is not None:
+                    if results[-1] == "win":
+                        wins_dir = os.path.join(self.run_dir, "replays", "wins")
+                        os.makedirs(wins_dir, exist_ok=True)
+                        dest = os.path.join(
+                            wins_dir,
+                            f"{self.global_step:09d}_vs_{opponent}_{k + 1}_win.mcfr")
+                    elif k < keep:
+                        os.makedirs(record_dir, exist_ok=True)
+                        dest = os.path.join(
+                            record_dir, f"vs_{opponent}_{k + 1}_{results[-1]}.mcfr")
+                if dest is not None:
+                    rp = dest
+                    if envs[i].save_replay(rp):
+                        with open(rp + ".json", "w") as f:
+                            json.dump(dict(branch=os.path.basename(self.run_dir),
+                                           step=self.global_step, update=self.update,
+                                           opponent=opponent,
+                                           result=results[-1], by=info.get("by", ""),
+                                           value_diff=info["value_diff"],
+                                           rounds=info["round"], map=envs[i].cfg.map_path,
+                                           side=envs[i].cfg.side, game=k + 1,
+                                           time=time.time()), f)
+                        if results[-1] == "win":
+                            print(f"[eval]   WIN recorded -> {rp}", flush=True)
+                if started < games:
+                    start(i)
+            if todo:
+                a, _, _ = choose(net, [encode(envs[i].last) for i in todo], "cpu", greedy=True)
+                for q, i in enumerate(todo):
+                    envs[i].send({"cmd": "step", "action": int(a[q])})
+                    inflight.add(i)
         for env in self.envs.envs:
             env.last = None   # evaluation episodes are over; training resets next collect
         wins = sum(r == "win" for r in results)
         draws = sum(r.startswith("draw") for r in results)
+        # How the games ended, not just how many were won. An untrained greedy policy
+        # tends to stall on a free action and never end its turn, so the episode dies on
+        # max_steps ("draw_steps") before the scripted opponent has played at all — and
+        # then NORMAL and HARD report identical numbers, which looks like a broken
+        # evaluation rather than what it is. The breakdown makes that legible.
+        outcomes = Counter(results)
         return dict(games=len(results), winrate=wins / max(1, len(results)),
+                    lossrate=outcomes["loss"] / max(1, len(results)),
                     drawrate=draws / max(1, len(results)), value_diff=float(np.mean(diffs)),
-                    rounds=float(np.mean(rounds)))
+                    rounds=float(np.mean(rounds)),
+                    stallrate=outcomes["draw_steps"] / max(1, len(results)),
+                    outcomes=dict(outcomes))
 
     # -- main loop --
     def train(self):
         cfg = self.cfg
-        if cfg["torch_threads"]:
-            torch.set_num_threads(cfg["torch_threads"])
         with open(os.path.join(self.run_dir, "config.yaml"), "w") as f:
             yaml.safe_dump(cfg, f)
         self.write_status("running", f"starting {cfg['n_envs']} Godot envs", 0, 0)
-        self.envs = VecEnv(cfg["n_envs"], cfg["godot"])
+        self.envs = VecEnv(cfg["n_envs"], cfg["godot"],
+                           log_dir=os.path.join(self.run_dir, "envlogs"))
         stop_flag = os.path.join(self.run_dir, "STOP")
 
         def on_signal(signum, frame):
@@ -507,62 +947,174 @@ class Trainer:
         print(f"[train] branch={os.path.basename(self.run_dir)} phase={cfg['phase']} "
               f"stage={cfg['stage']} maps={len(cfg['maps'])} envs={cfg['n_envs']} "
               f"step={self.global_step} update={self.update}", flush=True)
+        crash: dict = {}
         try:
             while self.global_step < cfg["total_steps"] and not self.stop_requested:
+                if self.wait_while_paused():
+                    break
                 try:
                     buffers, info = self.collect()
                 except EnvDied as e:
                     print(f"[train] {e}; restarting envs", flush=True)
-                    self.envs.kill()
-                    self.envs = VecEnv(cfg["n_envs"], cfg["godot"])
+                    self.write_status("running", f"restarting envs after: {e}", 0, 0)
+                    self.envs.rebuild()
                     continue
                 t0 = time.time()
-                self.write_status("running", "PPO update", 0, 0)
-                losses = self.ppo_update(buffers)
+                losses = self.ppo_update(buffers)      # writes its own progress heartbeat
+                del buffers            # the rollout is the biggest thing alive; drop it
+                                       # before eval opens a second front on memory
                 self.log(info, losses, time.time() - t0)
                 self.write_status("running", "update done", 0, 0)
                 if self.update % cfg["checkpoint_every"] == 0:
                     path = self.save()
                     print(f"[train] checkpoint {path}", flush=True)
-                if self.update % cfg["eval_every"] == 0:
-                    self.run_eval()
+                    # New window: let every map be recorded again. Without this the set
+                    # fills once and the gallery freezes on the first few episodes of the
+                    # run, which is a subtler version of the problem this fixes.
+                    self._replay_maps.clear()
+                # Evaluate on schedule, but also whenever this branch has no win rate at
+                # all yet. eval_every is tens of updates and an update can take minutes,
+                # so a fresh run used to show a blank "win vs NORMAL / HARD" for hours
+                # and read as broken (§11.2). The second clause also rescues a branch
+                # trained before this rule existed: it evaluates on its next update.
+                if self.update % cfg["eval_every"] == 0 or not self.has_eval_history():
+                    try:
+                        self.run_eval()
+                    except EnvDied as e:
+                        # An env dying mid-evaluation costs this evaluation, not the run.
+                        print(f"[train] {e} during eval; restarting envs, eval skipped", flush=True)
+                        self.envs.rebuild()
+                if self.over_memory_budget() or self.under_disk_floor():
+                    break
                 if os.path.exists(stop_flag):
                     os.remove(stop_flag)
                     print("[train] STOP flag found", flush=True)
                     break
+        except (KeyboardInterrupt, SystemExit):
+            raise                        # an asked-for stop, not a crash
+        except BaseException as e:       # noqa: BLE001 - the reason must survive to disk
+            crash = dict(error=f"{type(e).__name__}: {e}",
+                         traceback="".join(traceback.format_exc())[-4000:],
+                         crashed_at=time.time(), crashed_update=self.update)
+            print("[train] CRASHED: " + crash["error"] + "\n" + crash["traceback"], flush=True)
+            raise
         finally:
-            path = self.save()
-            print(f"[train] final checkpoint {path}", flush=True)
+            try:
+                path = self.save()
+                print(f"[train] final checkpoint {path}", flush=True)
+            except Exception as e:       # a crash mid-save must not hide the first cause
+                print(f"[train] could not write the final checkpoint: {e}", flush=True)
             self.envs.close()
             self.writer.close()
-            self.write_status("stopped")
+            self.write_status("crashed" if crash else "stopped", **crash)
+
+    # -- pause (11.3): hold the run without tearing the envs down --
+    def wait_while_paused(self) -> bool:
+        """Block while rl/runs/<branch>/PAUSE exists. Returns True if the run should end.
+
+        Stopping and resuming would also work, but it throws away the Godot processes
+        and the rollout in flight and takes a minute to come back. A pause keeps the
+        envs warm, so continuing is instant — the difference between "pause while I
+        play a match against it" and "restart the run"."""
+        flag = os.path.join(self.run_dir, "PAUSE")
+        if not os.path.exists(flag):
+            return False
+        print(f"[train] paused at update {self.update} (remove {flag} to continue)", flush=True)
+        self.save()
+        while os.path.exists(flag):
+            self.write_status("paused", f"paused at update {self.update}", 0, 0)
+            if self.stop_requested:
+                return True
+            if os.path.exists(os.path.join(self.run_dir, "STOP")):
+                os.remove(os.path.join(self.run_dir, "STOP"))
+                print("[train] STOP while paused", flush=True)
+                return True
+            time.sleep(2)
+        print("[train] continuing", flush=True)
+        return False
+
+    def under_disk_floor(self) -> bool:
+        floor = float(self.cfg["disk_floor_mb"])
+        if floor <= 0:
+            return False
+        # Godot mirrors each env's stdout — which IS the JSON protocol — into a log file
+        # at ~1.1 GB/hr across six envs. They are redirected into run_dir/envlogs (see
+        # mcf_env.GodotEnv.start), but redirecting does not make them smaller; bound them
+        # here, on the tick that already asks about disk, BEFORE deciding to give up.
+        reclaimed = self.envs.trim_logs() if getattr(self, "envs", None) else 0
+        if reclaimed:
+            print(f"[train] trimmed {reclaimed} MB of Godot env logs", flush=True)
+        free = free_mb(self.run_dir)
+        if free >= floor:
+            return False
+        print(f"[train] disk floor reached: {free:.0f} MB free < {floor:.0f} MB "
+              f"— checkpointing and exiting while the write can still succeed", flush=True)
+        self.write_status("running", f"below disk_floor_mb ({free:.0f} MB free) — exiting", 0, 0)
+        return True
+
+    def over_memory_budget(self) -> bool:
+        limit = float(self.cfg["mem_limit_mb"])
+        if limit <= 0:
+            return False
+        used = mem_report().get("total_mb", 0.0)
+        if used < limit:
+            return False
+        # Exiting here is the friendly failure: a checkpoint is written and the reason
+        # is on the dashboard. An OOM kill leaves neither.
+        print(f"[train] memory budget reached: {used:.0f} MB >= {limit:.0f} MB "
+              f"(trainer + envs) — checkpointing and exiting", flush=True)
+        self.write_status("running", f"over mem_limit_mb ({used:.0f} MB) — exiting", 0, 0)
+        return True
 
     def run_eval(self):
+        """Both reference opponents, every time. An eval that dies with its Godot env
+        must not take the run with it — the win rate is a diagnostic, not the training
+        signal, so a failed one is logged as such and training carries on."""
         rec = os.path.join(self.run_dir, "replays", f"checkpoint_{self.global_step:09d}")
         row = {"step": self.global_step, "update": self.update, "time": time.time(),
                "phase": self.cfg["phase"], "stage": self.cfg["stage"]}
-        for opp in ("normal", "hard"):
-            r = self.evaluate(opp, self.cfg["eval_games"], record_dir=rec,
-                              keep=self.cfg["replays_per_checkpoint"])
+        for opp in self.cfg["eval_opponents"]:
+            try:
+                r = self.evaluate(opp, self.cfg["eval_games"], record_dir=rec,
+                                  keep=self.cfg["replays_per_checkpoint"])
+            except EnvDied as e:
+                print(f"[eval] vs {opp} aborted: {e}", flush=True)
+                row[f"error_{opp}"] = str(e)
+                self.envs.rebuild()
+                continue
             row.update({f"{k}_{opp}": v for k, v in r.items()})
-            self.writer.add_scalar(f"eval/winrate_{opp}", r["winrate"], self.global_step)
-            self.writer.add_scalar(f"eval/drawrate_{opp}", r["drawrate"], self.global_step)
-            self.writer.add_scalar(f"eval/value_diff_{opp}", r["value_diff"], self.global_step)
-            self.writer.add_scalar(f"eval/rounds_{opp}", r["rounds"], self.global_step)
+            for k in ("winrate", "lossrate", "drawrate", "value_diff", "rounds", "stallrate"):
+                self.writer.add_scalar(f"eval/{k}_{opp}", r[k], self.global_step)
             print(f"[eval] step={self.global_step} vs {opp}: win {r['winrate']:.2f} "
-                  f"draw {r['drawrate']:.2f} diff {r['value_diff']:+.2f} rounds {r['rounds']:.1f}", flush=True)
+                  f"draw {r['drawrate']:.2f} diff {r['value_diff']:+.2f} "
+                  f"rounds {r['rounds']:.1f} outcomes {r['outcomes']}", flush=True)
+        self.writer.flush()
+        self.last_eval = row
         with open(os.path.join(self.run_dir, "eval_log.jsonl"), "a") as f:
             f.write(json.dumps(row) + "\n")
+        self.prune()
 
     def log(self, info: dict, losses: dict, update_secs: float):
         st = info["stats"]
         w, s = self.writer, self.global_step
-        steps = self.cfg["rollout_steps"] * self.cfg["n_envs"]
+        steps = info.get("steps") or self.cfg["rollout_steps"] * self.cfg["n_envs"]
         w.add_scalar("speed/env_steps_per_sec", steps / max(1e-6, info["seconds"]), s)
         w.add_scalar("speed/update_secs", update_secs, s)
         w.add_scalar("speed/matches_done", self.matches_done, s)
+        if st["legal_ms"]:
+            # Where a slow step actually goes: on company-sized maps the legal-intent
+            # enumerator is most of it, and max_actors is the knob that moves this number.
+            w.add_scalar("speed/env_legal_ms", float(np.mean(st["legal_ms"])), s)
+        mem = mem_report()
+        for k in ("rss_mb", "envs_mb", "free_mb"):
+            if k in mem:
+                w.add_scalar(f"mem/{k}", mem[k], s)
+        w.add_scalar("mem/run_dir_mb", self.disk_mb(), s)
         for k, v in losses.items():
             w.add_scalar(f"ppo/{k}", v, s)
+        # epochs_run below cfg["epochs"] means target_kl braked the update. Persistently
+        # braking is the signal to lower lr, not to raise target_kl.
+        w.add_scalar("ppo/epochs_run", losses.get("epochs_run", self.cfg["epochs"]), s)
         if st["win"]:
             by_opp = defaultdict(list)
             by_map = defaultdict(list)
@@ -573,6 +1125,18 @@ class Trainer:
                 w.add_scalar(f"train/winrate_vs_{kind}", float(np.mean(vals)), s)
             for mp, vals in by_map.items():
                 w.add_scalar(f"map/{os.path.splitext(mp)[0]}_winrate", float(np.mean(vals)), s)
+            # Per-map match shape, not just the win rate. On a mixed pool the pooled
+            # rounds/value_diff are an average over tasks of different length and
+            # lethality, which is a number no single map ever produces.
+            by_map_rounds = defaultdict(list)
+            by_map_vd = defaultdict(list)
+            for (label, mp, res), rnd, vd in zip(st["result"], st["rounds"], st["value_diff"]):
+                by_map_rounds[mp].append(rnd)
+                by_map_vd[mp].append(vd)
+            for mp, vals in by_map_rounds.items():
+                w.add_scalar(f"map/{os.path.splitext(mp)[0]}_rounds", float(np.mean(vals)), s)
+            for mp, vals in by_map_vd.items():
+                w.add_scalar(f"map/{os.path.splitext(mp)[0]}_value_diff", float(np.mean(vals)), s)
             w.add_scalar("train/drawrate", float(np.mean(st["draw"])), s)
             w.add_scalar("train/match_rounds", float(np.mean(st["rounds"])), s)
             w.add_scalar("train/value_diff_end", float(np.mean(st["value_diff"])), s)
@@ -583,6 +1147,22 @@ class Trainer:
         total_k = max(1, sum(info["usage_kinds"].values()))
         for k, c in info["usage_kinds"].items():
             w.add_scalar(f"usage/kind_{k}", c / total_k, s)
+        # Same shares again, split by map. Kept UNDER a separate prefix rather than
+        # replacing the pooled tags: the pooled series is what every run before this one
+        # recorded, and rewriting its meaning would silently invalidate the comparisons
+        # already drawn from it. Shares are normalised WITHIN each map, so each map's
+        # bands sum to 1 and a map that happened to supply few decisions this update is
+        # not flattened by one that supplied many.
+        for mp, counter in info.get("usage_kinds_map", {}).items():
+            stem = os.path.splitext(mp)[0]
+            tot = max(1, sum(counter.values()))
+            for k, c in counter.items():
+                w.add_scalar(f"usage_map/{stem}/kind_{k}", c / tot, s)
+        for mp, counter in info.get("usage_units_map", {}).items():
+            stem = os.path.splitext(mp)[0]
+            tot = max(1, sum(counter.values()))
+            for t, c in counter.items():
+                w.add_scalar(f"usage_map/{stem}/unit_{UNIT_NAMES[t]}", c / tot, s)
         w.add_scalar("train/curriculum_stage", self.cfg["stage"], s)
         w.add_scalar("train/phase", 0 if self.cfg["phase"] == "A" else 1, s)
         w.flush()
@@ -604,11 +1184,22 @@ def refuse_if_running(rd: str):
     try:
         with open(os.path.join(rd, "status.json")) as f:
             st = json.load(f)
-        if st.get("state") == "running":
+        if st.get("state") in ("running", "paused"):
             os.kill(int(st["pid"]), 0)
-            sys.exit(f"{os.path.basename(rd)} is already training (pid {st['pid']}) — stop it first")
+            sys.exit(f"{os.path.basename(rd)} is already training (pid {st['pid']}, "
+                     f"{st['state']}) — stop it first")
     except (OSError, ValueError, KeyError):
         pass
+
+
+def clear_flags(rd: str) -> None:
+    """A STOP or PAUSE left behind by the previous run would stop or freeze the new one
+    on its first update."""
+    for name in ("STOP", "PAUSE"):
+        try:
+            os.remove(os.path.join(rd, name))
+        except OSError:
+            pass
 
 
 def cmd_start(a):
@@ -617,18 +1208,55 @@ def cmd_start(a):
     refuse_if_running(rd)
     if os.path.exists(os.path.join(rd, "latest.pt")):
         sys.exit(f"branch {a.branch} exists — use resume, or pick another name")
+    os.makedirs(rd, exist_ok=True)
+    clear_flags(rd)
     Trainer(rd, cfg, pick_device(cfg)).train()
 
 
 def pick_device(cfg: dict) -> str:
+    """Where the PPO update runs (rollouts always act on the CPU). `auto` takes a GPU only
+    if it computes the real network the way the CPU does, so a backend missing an op or
+    getting one wrong costs speed, not the run."""
     d = cfg.get("device", "cpu")
     if d != "auto":
         return d
+    gpus = []
     if torch.cuda.is_available():
-        return "cuda"
+        gpus.append("cuda")
     if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
-        return "mps"
+        gpus.append("mps")
+    for g in gpus:
+        if device_matches_cpu(g):
+            print(f"[train] PPO update on {g}", flush=True)
+            return g
     return "cpu"
+
+
+def device_matches_cpu(dev: str) -> bool:
+    """One forward + backward of PolicyNet on `dev` against the CPU: logits, value and the
+    first conv's gradient must agree."""
+    try:
+        torch.manual_seed(0)
+        cpu_net = PolicyNet()
+        dev_net = copy.deepcopy(cpu_net).to(dev)
+        B, N = 3, 7
+        batch = (torch.rand(B, N_CHANNELS, CANVAS, CANVAS), torch.rand(B, FLAT_DIM),
+                 torch.rand(B, N, CAND_DIM), torch.randint(-1, CANVAS * CANVAS, (B, N, 2)),
+                 torch.rand(B, N) < 0.8)
+        batch[4][:, 0] = True
+        got = []
+        for net, d in ((cpu_net, "cpu"), (dev_net, dev)):
+            logits, value = net(*(t.to(d) for t in batch))
+            (torch.log_softmax(logits, 1)[:, 0].sum() + value.sum()).backward()
+            got.append((logits.detach().cpu()[batch[4]], value.detach().cpu(),
+                        net.conv[0].weight.grad.cpu()))
+        ok = all(torch.allclose(a, b, atol=1e-3, rtol=1e-3) for a, b in zip(*got))
+        if not ok:
+            print(f"[train] {dev} disagrees with the CPU on the policy net; updating on cpu", flush=True)
+        return ok
+    except Exception as e:  # noqa: BLE001 - any backend failure means "don't use it"
+        print(f"[train] {dev} failed its self-check ({type(e).__name__}: {e}); updating on cpu", flush=True)
+        return False
 
 
 def cmd_resume(a):
@@ -637,6 +1265,7 @@ def cmd_resume(a):
     if not os.path.exists(latest):
         sys.exit(f"no checkpoint in {rd}")
     refuse_if_running(rd)
+    clear_flags(rd)
     cfg = load_config(a.config) if a.config else None
     cfg = cfg or load_config(os.path.join(rd, "config.yaml"))
     t = Trainer(rd, cfg, pick_device(cfg))
@@ -662,6 +1291,23 @@ def cmd_stop(a):
     rd = run_dir_for(a.branch)
     open(os.path.join(rd, "STOP"), "w").close()
     print(f"[stop] requested; {a.branch} saves a checkpoint after its current update")
+
+
+def cmd_pause(a):
+    rd = run_dir_for(a.branch)
+    if not os.path.isdir(rd):
+        sys.exit(f"no such branch: {a.branch}")
+    open(os.path.join(rd, "PAUSE"), "w").close()
+    print(f"[pause] requested; {a.branch} checkpoints after its current update and holds "
+          f"(its Godot envs stay up, so continuing is instant)")
+
+
+def cmd_continue(a):
+    rd = run_dir_for(a.branch)
+    flag = os.path.join(rd, "PAUSE")
+    if os.path.exists(flag):
+        os.remove(flag)
+    print(f"[continue] {a.branch} resumes within a couple of seconds")
 
 
 def cmd_status(a):
@@ -690,7 +1336,8 @@ def cmd_eval(a):
     cfg = ck["cfg"]
     t = Trainer(os.path.join(RUNS, "_eval"), cfg)
     t.load(a.checkpoint, keep_cfg=True)
-    t.envs = VecEnv(cfg["n_envs"], cfg["godot"])
+    t.envs = VecEnv(cfg["n_envs"], cfg["godot"],
+                    log_dir=os.path.join(t.run_dir, "envlogs"))
     try:
         r = t.evaluate(a.opponent, a.games, record_dir=a.record, keep=a.games if a.record else 0)
         print(json.dumps(r))
@@ -703,7 +1350,7 @@ def cmd_export(a):
     net = PolicyNet()
     net.load_state_dict(ck["model"])
     net.eval()
-    from features import CAND_DIM, FLAT_DIM, N_CHANNELS
+    from features import FLAT_DIM
     grid = torch.zeros(1, N_CHANNELS, CANVAS, CANVAS)
     flat = torch.zeros(1, FLAT_DIM)
     cand = torch.zeros(1, 8, CAND_DIM)
@@ -718,11 +1365,59 @@ def cmd_export(a):
 def cmd_play(a):
     """Real game with the checkpoint in the AI slot: a local policy server plus the game
     launched with MCF_RL_POLICY pointing at it (LearnedController.gd connects)."""
+    import socket as _socket
     port = a.port
+    ck = torch.load(a.checkpoint, map_location="cpu", weights_only=False)
+    cfg = with_defaults(ck.get("cfg", {}))
+
+    # REFUSE to start if the port is already taken, instead of launching anyway.
+    #
+    # This is the failure that makes "am I even playing the latest version?" a fair
+    # question. policy_server binds the port at startup; if a server from an earlier
+    # `play` is still holding it, the new one dies instantly with "Address already in
+    # use" — but Popen still succeeds, the game still launches with MCF_RL_POLICY
+    # pointing at that port, and it connects to the OLD server. The game then plays a
+    # STALE checkpoint, silently, with nothing on screen to say so. If that old server is
+    # wedged rather than serving, the controller times out after 30s and quietly falls
+    # back to the heuristic instead.
+    probe = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    busy = probe.connect_ex(("127.0.0.1", port)) == 0
+    probe.close()
+    if busy:
+        sys.exit(f"port {port} is already serving a policy — another `train.py play` is "
+                 f"probably still running.\n"
+                 f"  stop it (pkill -f policy_server.py) or pass --port <other>.\n"
+                 f"  Refusing to launch, because the game would silently play THAT "
+                 f"checkpoint instead of {os.path.basename(a.checkpoint)}.")
+
     srv = subprocess.Popen([sys.executable, os.path.join(PROJECT, "rl", "policy_server.py"),
                             a.checkpoint, "--port", str(port)])
     try:
-        env = dict(os.environ, MCF_RL_POLICY=f"127.0.0.1:{port}")
+        # Wait for it to actually listen, and fail loudly if it never does.
+        deadline = time.time() + 30.0
+        ready = False
+        while time.time() < deadline:
+            if srv.poll() is not None:
+                sys.exit(f"policy server exited immediately (rc={srv.returncode}) — "
+                         f"the game would have fallen back to the scripted AI")
+            c = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+            if c.connect_ex(("127.0.0.1", port)) == 0:
+                c.close(); ready = True; break
+            c.close(); time.sleep(0.2)
+        if not ready:
+            sys.exit(f"policy server did not start listening on {port} within 30s")
+        print(f"[play] serving {a.checkpoint}\n"
+              f"       step {ck.get('global_step')} update {ck.get('update')} "
+              f"| round_cap {cfg['round_cap']} max_actors {cfg['max_actors']} "
+              f"max_candidates {cfg['max_candidates']}", flush=True)
+
+        # The controller has to show the policy a candidate list of the same shape it
+        # trained on, so the checkpoint's own caps travel with it into the game — and so
+        # does round_cap, which the observation normalises the round number by.
+        env = dict(os.environ, MCF_RL_POLICY=f"127.0.0.1:{port}",
+                   MCF_RL_MAX_ACTORS=str(cfg["max_actors"]),
+                   MCF_RL_MAX_CANDIDATES=str(cfg["max_candidates"]),
+                   MCF_RL_ROUND_CAP=str(cfg["round_cap"]))
         subprocess.call([a.godot, "--path", PROJECT], env=env)
     finally:
         srv.terminate()
@@ -735,6 +1430,8 @@ def main():
     s = sp.add_parser("resume"); s.add_argument("branch"); s.add_argument("--config"); s.set_defaults(fn=cmd_resume)
     s = sp.add_parser("fork"); s.add_argument("checkpoint"); s.add_argument("--branch", required=True); s.add_argument("--config"); s.set_defaults(fn=cmd_fork)
     s = sp.add_parser("stop"); s.add_argument("branch"); s.set_defaults(fn=cmd_stop)
+    s = sp.add_parser("pause"); s.add_argument("branch"); s.set_defaults(fn=cmd_pause)
+    s = sp.add_parser("continue"); s.add_argument("branch"); s.set_defaults(fn=cmd_continue)
     s = sp.add_parser("status"); s.add_argument("branch", nargs="?"); s.set_defaults(fn=cmd_status)
     s = sp.add_parser("eval"); s.add_argument("checkpoint"); s.add_argument("--games", type=int, default=10)
     s.add_argument("--opponent", choices=list(OPPONENTS), default="normal"); s.add_argument("--record"); s.set_defaults(fn=cmd_eval)

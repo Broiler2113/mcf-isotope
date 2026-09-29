@@ -30,6 +30,16 @@ var omniscient_side: int = -1
 ## В партии без команд флаг не меняет ничего, кроме запрета стрелять в СВОИХ же
 ## юнитов: «союзник» без команд — это только ты сам.
 var friendly_fire_enabled: bool = true
+## Разрешено ли вообще покидать машину. Выключается ТОЛЬКО тренировочными картами, где
+## весь смысл — заставить воевать корпусами (rl/maps/town_tank.json): иначе политика
+## паркует танк и уходит воевать пешком, то есть ровно то, ради чего карта и делалась,
+## не происходит.
+##
+## Живёт здесь, рядом с friendly_fire_enabled, а не в rl/: через резолвер ходят ОБЕ
+## стороны, и запрет, поставленный в env_server, связал бы только обучаемого, а
+## встроенный ИИ продолжил бы спешиваться. Асимметрия правил — это уже не «карта про
+## танки», а «карта, где у соперника больше ходов».
+var disembark_enabled: bool = true
 
 ## Случайные события (§1.5 лобби, item 61). null или выключенные — событий нет и
 ## ни одного лишнего кубика не бросается, поэтому старые партии идут прежним потоком.
@@ -210,8 +220,9 @@ func _dispatch(intent: Intent) -> ActionResult:
 ## обучаемой политики. Сам перечислитель живёт в LegalIntents.gd — этот файл и так велик;
 ## здесь лишь точка входа, о которой говорит спецификация. Точность (каждое
 ## перечисленное намерение проходит resolve()) проверяет tests/run_legal_intents.gd.
-func legal_intents(side: int) -> Array:
-	return LegalIntents.enumerate(self, side)
+## actors — необязательный фильтр по актёрам (см. LegalIntents.enumerate); пусто = все.
+func legal_intents(side: int, actors: Dictionary = {}) -> Array:
+	return LegalIntents.enumerate(self, side, actors)
 
 ## Маршрутизация намерения к его резолверу — без побочных эффектов (см. _dispatch).
 func _route(intent: Intent) -> ActionResult:
@@ -943,6 +954,8 @@ func _blast(center: Vector2i, res: ActionResult = null, cells: Array[Vector2i] =
 			continue
 		_kill(u, res, center)
 		killed_names.append(u.stats.display_name)
+		if res != null:
+			res.deaths.append(u.id)
 
 	# Взрыв сносит укрепления в зоне: стены, стекло, шлюзы, ЛДФ, деревянные и
 	# трупные стены, станции дронов и ДПМГ (§3.6/§3.7/§3.12). ДОТ устойчив (#17).
@@ -1033,20 +1046,23 @@ func _resolve_flame(shooter: UnitInstance, target_coord: Vector2i) -> ActionResu
 	shooter.action_state = null
 	var step := _step_toward(shooter.coord, target_coord)
 
+	# result заводится ДО цикла: сожжённых струёй надо записать в result.deaths, иначе
+	# награда за бой их не увидит (см. ниже про _blast).
+	var result := ActionResult.new()
+	result.ok = true
 	var killed_names: Array = []
 	var last := shooter.coord  # конец струи — для дорожки «кто в кого»
 	for c: Vector2i in flame_cells(shooter.coord, step):
 		var cell := state.grid.cell(c)
 		var occ: UnitInstance = cell.occupant
 		if occ != null and occ.is_alive():
-			_kill(occ)
+			_kill(occ, result)
 			killed_names.append(occ.stats.display_name)
+			result.deaths.append(occ.id)
 		_ignite(cell, shooter.owner)  # поджог пола (§3.8)
 		if Combat.is_on_firing_line(shooter.coord, c) and _step_toward(shooter.coord, c) == step:
 			last = c
 
-	var result := ActionResult.new()
-	result.ok = true
 	_fx_lane(result, shooter.coord, last, shooter.owner, "flame")  # issue 8
 	result.log("%s: flame jet" % shooter.stats.display_name)
 	if killed_names.is_empty():
@@ -1071,18 +1087,67 @@ func flame_cells(from_coord: Vector2i, step: Vector2i) -> Array:
 	for i in MCF.FLAME_JET_LENGTH:
 		if not state.grid.in_bounds(cur) or _flame_blocked(cur):
 			if state.grid.in_bounds(cur):
-				var remaining: int = MCF.FLAME_JET_LENGTH - i
-				var left := Vector2i(-step.y, step.x)
-				var right := Vector2i(step.y, -step.x)
-				var l := _flame_walk(last, left, int(ceil(remaining / 2.0)), out)
-				var r := _flame_walk(last, right, remaining - l, out)
-				if remaining - l - r > 0 and l > 0:
-					_flame_walk(last + left * l, left, remaining - l - r, out)
+				_flame_splash(last, step, MCF.FLAME_JET_LENGTH - i, out, from_coord)
 			break
 		out.append(cur)
 		last = cur
 		cur += step
 	return out
+
+## Разлёт остатка струи от клетки origin. Отдаёт ВСЕ remaining клеток, если на поле
+## есть куда их деть, — «шесть клеток всегда» это инвариант, а не пожелание.
+##
+## Прежний код раздавал остаток за один проход: половину налево, остальное направо, и
+## один-единственный добор налево — да и тот под условием l > 0. Из-за этого он ТЕРЯЛ
+## клетки в двух случаях. Если левая сторона упиралась сразу (l = 0), а правая
+## обрывалась раньше срока, добирать было некому — условие l > 0 не пускало. Если обе
+## стороны упирались (струя в угол), не появлялось вообще ничего: огнемёт бил в упор
+## в угол и поджигал в лучшем случае одну клетку вместо шести.
+##
+## Теперь это три ступени, каждая подбирает то, что не смогла предыдущая:
+##   1. поровну в обе стороны, как и раньше;
+##   2. недобор одной стороны отдаётся другой — в ЛЮБУЮ сторону, а не только налево;
+##   3. если и после этого мало (угол), огонь растекается волной от уже занятых
+##      клеток по соседям — так же, как он потом расползается сам (§3.8).
+func _flame_splash(origin: Vector2i, step: Vector2i, remaining: int, out: Array,
+		from_coord: Vector2i) -> void:
+	var left := Vector2i(-step.y, step.x)
+	var right := Vector2i(step.y, -step.x)
+	var l := _flame_walk(origin, left, int(ceil(remaining / 2.0)), out)
+	var r := _flame_walk(origin, right, remaining - l, out)
+	if l + r < remaining:
+		l += _flame_walk(origin + left * l, left, remaining - l - r, out)
+	if l + r < remaining:
+		r += _flame_walk(origin + right * r, right, remaining - l - r, out)
+	if l + r < remaining:
+		_flame_flood(origin, remaining - l - r, out, from_coord)
+
+## Волна по соседям от уже подожжённых клеток, пока не наберётся count штук.
+## Клетку самого огнемётчика не трогаем: струя из него выходит, а не в него.
+func _flame_flood(origin: Vector2i, count: int, out: Array, from_coord: Vector2i) -> void:
+	var seen := {from_coord: true, origin: true}
+	for c: Vector2i in out:
+		seen[c] = true
+	var frontier: Array[Vector2i] = [origin]
+	frontier.append_array(out)
+	var added := 0
+	while added < count and not frontier.is_empty():
+		var next: Array[Vector2i] = []
+		for f: Vector2i in frontier:
+			for dx in [-1, 0, 1]:
+				for dy in [-1, 0, 1]:
+					if dx == 0 and dy == 0:
+						continue
+					var c := f + Vector2i(dx, dy)
+					if seen.has(c) or not state.grid.in_bounds(c) or _flame_blocked(c):
+						continue
+					seen[c] = true
+					out.append(c)
+					next.append(c)
+					added += 1
+					if added >= count:
+						return
+		frontier = next
 
 func _flame_blocked(c: Vector2i) -> bool:
 	var cell := state.grid.cell(c)
@@ -1165,6 +1230,7 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i, aimed: String = "") ->
 				if destroyed and occ != null and occ.is_alive():
 					_kill(occ)
 					killed_names.append(occ.stats.display_name)
+					result.deaths.append(occ.id)
 			"feature":
 				var was: String = cell.feature_id
 				var cracks := int(rec["cracks"])
@@ -1558,7 +1624,21 @@ func hit_need_for(shooter: UnitInstance, target: UnitInstance, mods: Array = [])
 	if shooter == null or target == null:
 		return 7
 	var dist := Combat.distance(shooter.coord, target.coord)
-	var need := Combat.hit_number(dist, shooter.fire_range())
+	var is_sniper := shooter.stats.special_ability_id == MCF.ABILITY_SNIPER
+	# Снайпер считается по своей лестнице (§5), остальные — по общей формуле (§3.5).
+	# Раньше снайпер шёл по общей, и она мазала на каждой полосе: при дальности 40
+	# давала 3+ там, где нужно автопопадание, и 3+/4+/5+/6 там, где нужно 2+/3+/4+/5+.
+	var need := Combat.sniper_hit_number(dist) if is_sniper \
+			else Combat.hit_number(dist, shooter.fire_range())
+	if is_sniper and need == 1:
+		# Автопопадание — именно АВТО: оно и раньше выставлялось ПОСЛЕ укрытия и
+		# перекрывало его, и это сохранено. Снимает автопопадание только укрепление
+		# на линии; полоса тогда первая неавтоматическая — 2+, а не общая формула.
+		if not _fortification_between(shooter.coord, target.coord):
+			mods.append({"label": "Sniper auto-hit", "delta": 0})
+			return 1
+		need = 2
+		mods.append({"label": "Fortification on the line", "delta": 1})
 	# Укрытие цели (§3.7).
 	var cover := cover_effect(shooter, target)
 	var pen := int(cover["hit_penalty"])
@@ -1566,16 +1646,9 @@ func hit_need_for(shooter: UnitInstance, target: UnitInstance, mods: Array = [])
 	if pen != 0:
 		mods.append({"label": "Target cover", "delta": pen})
 	# Стрельба через горящие клетки (§3.8): −1 к попаданию (кроме снайпера).
-	if shooter.stats.special_ability_id != MCF.ABILITY_SNIPER \
-			and _fire_between(shooter.coord, target.coord):
+	if not is_sniper and _fire_between(shooter.coord, target.coord):
 		need += MCF.FIRE_SHOOT_PENALTY
 		mods.append({"label": "Fire on the line", "delta": MCF.FIRE_SHOOT_PENALTY})
-	# Снайпер: автопопадание на ≤12 кл. без укреплений между ним и целью (§5).
-	if shooter.stats.special_ability_id == MCF.ABILITY_SNIPER \
-			and dist <= MCF.SNIPER_AUTOHIT_RANGE \
-			and not _fortification_between(shooter.coord, target.coord):
-		need = 1
-		mods.append({"label": "Sniper auto-hit", "delta": 0})
 	return clampi(need, 1, 7)
 
 func _shield_blocks_shot(shooter: UnitInstance, target: UnitInstance) -> bool:
@@ -2797,7 +2870,13 @@ func advance_fire(owner: int = -1, res: ActionResult = null) -> void:
 		# Юнит, оказавшийся на загоревшейся клетке, сгорает мгновенно (§6.5).
 		# Щитоносец (#50) и огнемётчик (#2) невосприимчивы к огню.
 		if cell.occupant != null and cell.occupant.is_alive() and not is_fireproof(cell.occupant):
-			_kill(cell.occupant)
+			var burned := cell.occupant
+			# res здесь только ради кровавой косметики — _kill сам в deaths не пишет,
+			# это делают вызывающие. Мы пишем в fire_deaths, но НЕ в deaths (см.
+			# ActionResult): иначе автор завершённого хода получил бы чужой костёр в зачёт.
+			_kill(burned, res)
+			if res != null:
+				res.fire_deaths.append(burned.id)
 
 ## Постройки, которые огонь уничтожает вместе с клеткой (#53, #83). ЛДФ здесь нет
 ## намеренно: несгораемая секция вообще не загорается (_fire_blocked).
@@ -5030,6 +5109,7 @@ func _resolve_end_turn(intent: EndTurnIntent = null) -> ActionResult:
 	out.deaths = civ.deaths
 	# Погибшие и косметика от подорвавшихся в огне мин — тоже частью передачи хода.
 	out.deaths.append_array(fire_res.deaths)
+	out.fire_deaths.append_array(fire_res.fire_deaths)
 	out.fx.append_array(fire_res.fx)
 	# Случайное событие на новый ход (item 61). Выключено по умолчанию — тогда ни одного
 	# кубика не бросается и поток случайности старых партий цел.
@@ -5661,6 +5741,8 @@ func _shuttle_passengers_hit(veh: Vehicle, center: Vector2i, in_area: Dictionary
 			_kill(u, res, center)
 			killed.append(u.stats.display_name)
 			if res != null:
+				res.deaths.append(u.id)
+			if res != null:
 				res.log("%s takes the hit square on — killed." % u.stats.display_name)
 			continue
 		if not in_area.has(u.coord):
@@ -5674,6 +5756,8 @@ func _shuttle_passengers_hit(veh: Vehicle, center: Vector2i, in_area: Dictionary
 		if not ok:
 			_kill(u, res, center)
 			killed.append(u.stats.display_name)
+			if res != null:
+				res.deaths.append(u.id)
 			if res != null:
 				res.log("%s (passenger) fails the defence roll (%d, need %d+) — killed." % [
 					u.stats.display_name, roll, need])
@@ -5987,6 +6071,7 @@ func _resolve_vehicle_board(intent: VehicleBoardIntent) -> ActionResult:
 		res_s.ok = true
 		var vname: String = VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)
 		if captured_s:
+			res_s.captured_vehicles.append(veh.id)
 			res_s.log("%s seizes control of the %s!" % [unit.stats.display_name, vname])
 		elif boarding_enemy_s:
 			res_s.log("%s storms aboard the enemy %s!" % [unit.stats.display_name, vname])
@@ -6018,6 +6103,7 @@ func _resolve_vehicle_board(intent: VehicleBoardIntent) -> ActionResult:
 	res.ok = true
 	var veh_name: String = VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)
 	if captured:
+		res.captured_vehicles.append(veh.id)
 		res.log("%s seizes control of the %s!" % [unit.stats.display_name, veh_name])
 	elif boarding_enemy:
 		res.log("%s storms aboard the enemy %s!" % [unit.stats.display_name, veh_name])
@@ -6076,6 +6162,8 @@ func _vehicle_crew_ap(veh: Vehicle) -> int:
 
 # --- Высадка ---
 func _resolve_vehicle_disembark(intent: VehicleDisembarkIntent) -> ActionResult:
+	if not disembark_enabled:
+		return ActionResult.fail("Crews are sealed in on this map")
 	var unit := state.get_unit(intent.actor_id)
 	if unit == null or not unit.is_alive():
 		return ActionResult.fail("Unit not found")
@@ -6750,10 +6838,18 @@ func _destroy_vehicle(veh: Vehicle, res: ActionResult) -> void:
 	var dtable: Dictionary = VehicleDB.DESTRUCTION.get(veh.type_id, {})
 	# Экипаж внутри гибнет. Пассажиры челнока остаются трупами на своих клетках,
 	# машина из-под них исчезает (batch 13 S12).
+	#
+	# ВАЖНО: _kill() сам в res.deaths НИЧЕГО не кладёт — это делает каждый вызывающий,
+	# и здесь этого не делал никто. То есть подбитый танк засчитывался только корпусом,
+	# а трое внутри не попадали ни в награду за убийство, ни в счётчик комбо: сжечь
+    # гружёную машину стоило ровно столько же, сколько пустую. Та же поломка, что была
+	# у _blast/лазера/огнемёта, и на танковой карте она особенно дорога — там ВЕСЬ отряд
+	# сидит внутри корпусов, и без этой строки карта не учила бы ничему.
 	for uid in veh.occupants.duplicate():
 		var crew := state.get_unit(uid)
 		if crew != null:
 			_kill(crew, res)
+			res.deaths.append(crew.id)
 			# Тело оператора борга больше ни в какой машине не сидит: взорвавшийся борг
 			# из state.vehicles исчезает, и borg_id указывал бы в пустоту.
 			if veh.is_borg():

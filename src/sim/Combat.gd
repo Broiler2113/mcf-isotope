@@ -18,6 +18,17 @@ static func hit_number(dist: int, fire_range: float) -> int:
 	var x := int(ceil(float(dist) / (fire_range / 6.0)))
 	return clampi(x, 1, 7)
 
+## Бросок, нужный снайперу (§5). Своя лестница вместо hit_number():
+##   ≤15 клеток — автопопадание (1), дальше +1 за каждые SNIPER_BAND_STEP клеток:
+##   16-20 → 2+, 21-25 → 3+, 26-30 → 4+, 31-35 → 5+, 36-40 → 6, дальше невозможно.
+## Границы полос — ВЕРХНИЕ: «6 на 40» значит, что 40 ещё берётся шестёркой, а 41 уже нет.
+static func sniper_hit_number(dist: int) -> int:
+	if dist <= MCF.SNIPER_AUTOHIT_RANGE:
+		return 1
+	var over := dist - MCF.SNIPER_AUTOHIT_RANGE
+	var x := int(ceil(float(over) / float(MCF.SNIPER_BAND_STEP))) + 1
+	return x if x <= 6 else 7
+
 ## Вероятность попадания одним кубиком: P = 1 - (x - 1) / 6.
 static func hit_probability(dist: int, fire_range: float) -> float:
 	var x := hit_number(dist, fire_range)

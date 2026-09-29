@@ -1,0 +1,18 @@
+# Theme for the RLM dashboard. Dark is a deliberate commitment, not a default: the panel
+# lives on a wall/second monitor next to a dark isometric game, and every chart colour in
+# dashboard.py is the dataviz reference palette's *dark* step, validated against the
+# #1a1a19 surface below. Switching this to light would leave those steps on the wrong
+# surface, so change both together or neither.
+[theme]
+base = "dark"
+primaryColor = "#3987e5"
+backgroundColor = "#0d0d0d"
+secondaryBackgroundColor = "#1a1a19"
+textColor = "#ffffff"
+font = "sans serif"
+
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false

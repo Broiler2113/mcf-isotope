@@ -108,4 +108,11 @@ func _touch(path: String, offset_sec: int = 0) -> void:
 	f.close()
 	var real := ProjectSettings.globalize_path(path)
 	var when := Time.get_unix_time_from_system() + offset_sec
-	OS.execute("touch", ["-d", "@%d" % int(when), real])
+	# `touch -d @<epoch>` is a GNU extension and FAILS on macOS ("illegal time
+	# specification"), so the timestamp was never applied: all three probe files kept the
+	# mtime of the moment they were written, landing in the same second, and a rule built
+	# on `raw > import` could not distinguish them. That is the whole reason this check
+	# has been failing. `-t [[CC]YY]MMDDhhmm.SS` is accepted by both BSD and GNU touch.
+	var t := Time.get_datetime_dict_from_unix_time(int(when))
+	OS.execute("touch", ["-t", "%04d%02d%02d%02d%02d.%02d" % [t.year, t.month, t.day,
+			t.hour, t.minute, t.second], real])

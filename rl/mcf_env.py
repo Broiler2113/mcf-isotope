@@ -1,22 +1,28 @@
 """Bridge to headless Godot env servers (spec Section 1 C1, 5.1, 9.1).
 
 One `GodotEnv` wraps one `godot --headless --script res://rl/env_server.gd` process and
-speaks JSON lines over its stdin/stdout. `VecEnv` fans a command out to N of them and
-gathers the replies, so the N simulations run in parallel while the trainer waits.
+takes JSON-line commands on stdin and answers on a local socket. `VecEnv` runs N of them,
+each at its own pace: `wait_any` hands back whichever envs have replied.
 """
 from __future__ import annotations
 
 import json
 import os
+import select
 import signal
+import socket
 import subprocess
-import sys
 import time
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVER_SCRIPT = "res://rl/env_server.gd"
+
+# A reply that never comes is the one failure mode a blocking readline cannot survive:
+# the trainer waits forever, the heartbeat goes stale, and nothing says why. Every read
+# is bounded; past the bound the env is declared dead and the trainer restarts it.
+# Generous, because one reply covers a whole AI turn on a company-sized map.
+READ_TIMEOUT = float(os.environ.get("MCF_RL_ENV_TIMEOUT", "900"))
 
 # AIController.Difficulty; -1 = the trainer serves the opponent's actions itself (Phase B).
 EASY, NORMAL, HARD, EXTERNAL = 0, 1, 2, -1
@@ -35,14 +41,22 @@ class EpisodeConfig:
     random_events: bool = False
     fog: int = FOG_STANDARD
     friendly_fire: bool = True
+    # Экипажи заперты в корпусах. Для карт, весь смысл которых — воевать техникой
+    # (rl/maps/town_tank.json): без запрета политика паркует танк и уходит пешком.
+    # Флаг едет в резолвер, а значит связывает ОБЕ стороны, а не только обучаемого.
+    disembark: bool = True
     record: bool = False
+    max_candidates: int = 0      # 0 = every legal intent; see env_server._cap_legal
+    max_actors: int = 0          # 0 = enumerate for every unit; see env_server._actor_subset
 
     def to_cmd(self) -> dict:
         return {
             "cmd": "reset", "map": self.map_path, "seed": self.seed, "side": self.side,
             "opponent": self.opponent, "round_cap": self.round_cap, "max_steps": self.max_steps,
             "civilians": self.civilians, "random_events": self.random_events,
-            "fog": self.fog, "friendly_fire": self.friendly_fire, "record": self.record,
+            "fog": self.fog, "friendly_fire": self.friendly_fire,
+            "disembark": self.disembark, "record": self.record,
+            "max_candidates": self.max_candidates, "max_actors": self.max_actors,
         }
 
 
@@ -51,43 +65,116 @@ class EnvDied(RuntimeError):
 
 
 class GodotEnv:
-    """One headless Godot process. All calls are synchronous unless split into send/recv."""
+    """One headless Godot process. Commands go in on stdin; replies come back on a local
+    TCP socket (env_server.gd `--reply-port`). All calls are synchronous unless split into
+    send / recv, or driven through VecEnv.wait_any."""
 
-    def __init__(self, godot: str = "godot", project: str = PROJECT):
+    def __init__(self, godot: str = "godot", project: str = PROJECT,
+                 log_path: str | None = None):
         self.godot = godot
         self.project = project
+        self.log_path = log_path
         self.proc: subprocess.Popen | None = None
+        self.sock: socket.socket | None = None
         self.last: dict | None = None
         self.cfg: EpisodeConfig | None = None
+        self.label: str = ""
+        self.sent_at = 0.0
+        self._buf = b""
         self.start()
 
     def start(self) -> None:
+        # Replies travel over a socket, NOT stdout. Godot mirrors everything print() writes
+        # into its file log, and for these processes stdout used to BE the JSON protocol:
+        # every observation and legal-intent list written to disk a second time, ~1.1 GB/hr
+        # across six envs. --log-file below moved that off the shared default log and
+        # trim_logs() bounded it; taking the protocol off print() stops the writes at the
+        # source, so the per-env logs now hold only Godot's own messages.
+        #
+        # `debug/file_logging/enable_file_logging=false` in project.godot does NOT stop it
+        # for --script runs (verified), and `--log-file /dev/null` makes this Godot build
+        # crash with signal 11 — a real path is honoured.
+        lsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        lsock.bind(("127.0.0.1", 0))
+        lsock.listen(1)
+        lsock.settimeout(1.0)
+        argv = [self.godot, "--headless", "--path", self.project]
+        if self.log_path:
+            argv += ["--log-file", self.log_path]
+        argv += ["--script", SERVER_SCRIPT, "--", f"--reply-port={lsock.getsockname()[1]}"]
         self.proc = subprocess.Popen(
-            [self.godot, "--headless", "--path", self.project, "--script", SERVER_SCRIPT],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True, bufsize=1,
+            argv,
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            bufsize=0,
             # Own process group so a trainer shutdown can kill every env together (9.5).
             preexec_fn=os.setsid if os.name == "posix" else None,
         )
+        try:
+            for _ in range(120):
+                try:
+                    self.sock, _ = lsock.accept()
+                    break
+                except socket.timeout:
+                    if self.proc.poll() is not None:
+                        break
+            if self.sock is None:
+                rc = self.proc.poll()
+                self.kill()
+                raise EnvDied(f"env never connected back (rc={rc})")
+        finally:
+            lsock.close()
+        self._buf = b""
         # Wait for the server before the first command: a ping proves the script loaded.
         self.send({"cmd": "ping"})
-        self.recv()
+        self.recv(timeout=min(READ_TIMEOUT, 120.0))
 
     def send(self, cmd: dict) -> None:
         assert self.proc is not None and self.proc.stdin is not None
         try:
-            self.proc.stdin.write(json.dumps(cmd) + "\n")
-            self.proc.stdin.flush()
+            self.proc.stdin.write(json.dumps(cmd).encode() + b"\n")
         except (BrokenPipeError, OSError) as e:
             raise EnvDied(f"env stdin closed: {e}")
+        self.sent_at = time.monotonic()
 
-    def recv(self) -> dict:
-        assert self.proc is not None and self.proc.stdout is not None
+    def _fill(self) -> None:
+        """Append what the socket has (the caller knows it is readable)."""
+        try:
+            chunk = self.sock.recv(1 << 20)
+        except OSError:
+            chunk = b""
+        if not chunk:
+            raise EnvDied("env process exited (rc=%s)" % (self.proc.poll() if self.proc else None))
+        self._buf += chunk
+
+    def has_reply(self) -> bool:
+        """A complete line is already buffered, so recv() will not block."""
+        return b"\n" in self._buf
+
+    def _readline(self, deadline: float) -> bytes:
+        """One line from the env, or EnvDied if it exits or goes quiet past `deadline`."""
+        assert self.proc is not None and self.sock is not None
         while True:
-            line = self.proc.stdout.readline()
-            if not line:
-                raise EnvDied("env process exited (rc=%s)" % self.proc.poll())
-            if line.startswith("{"):
+            nl = self._buf.find(b"\n")
+            if nl >= 0:
+                line, self._buf = self._buf[:nl], self._buf[nl + 1:]
+                return line
+            left = deadline - time.monotonic()
+            if left <= 0:
+                pid = self.proc.pid
+                self.kill()
+                raise EnvDied(f"env {pid} stopped replying (waited "
+                              f"{READ_TIMEOUT:.0f}s) — killed and restarted")
+            if not select.select([self.sock], [], [], min(left, 30.0))[0]:
+                if self.proc.poll() is not None:
+                    raise EnvDied("env process exited (rc=%s)" % self.proc.poll())
+                continue
+            self._fill()
+
+    def recv(self, timeout: float = READ_TIMEOUT) -> dict:
+        deadline = time.monotonic() + timeout
+        while True:
+            line = self._readline(deadline)
+            if line.startswith(b"{"):    # anything else is Godot's own chatter
                 resp = json.loads(line)
                 if not resp.get("ok", True):
                     raise RuntimeError("env error: %s" % resp.get("error"))
@@ -120,6 +207,9 @@ class GodotEnv:
         self.kill()
 
     def kill(self) -> None:
+        if self.sock is not None:
+            self.sock.close()
+            self.sock = None
         if self.proc is None:
             return
         try:
@@ -137,35 +227,99 @@ class GodotEnv:
 
 
 class VecEnv:
-    """N envs stepped in lockstep. `step_async` writes every command first, then
-    `step_wait` reads the replies, so the Godot processes work concurrently."""
+    """N envs, each running at its own pace: the caller sends to whichever envs it has
+    decided for, and `wait_any` hands back whichever have replied. (Stepping them in
+    lockstep waited on the slowest env every step, and an end-turn that lets the scripted
+    opponent play takes ~8x as long as an own action.)"""
 
-    def __init__(self, n: int, godot: str = "godot"):
-        self.envs = [GodotEnv(godot) for _ in range(n)]
+    def __init__(self, n: int, godot: str = "godot", log_dir: str | None = None):
+        self.n = n
+        self.godot = godot
+        self.log_dir = log_dir
+        self.envs: list[GodotEnv] = []
+        self.rebuild()
 
     def __len__(self) -> int:
         return len(self.envs)
 
-    def reset_all(self, cfgs: list[EpisodeConfig]) -> list[dict]:
-        for env, cfg in zip(self.envs, cfgs):
-            env.cfg = cfg
-            env.send(cfg.to_cmd())
-        out = []
-        for env in self.envs:
-            env.last = env.recv()
-            out.append(env.last)
-        return out
+    def _log_for(self, i: int) -> str | None:
+        """Per-env Godot log path, or None to leave the engine default alone."""
+        if not self.log_dir:
+            return None
+        os.makedirs(self.log_dir, exist_ok=True)
+        return os.path.join(self.log_dir, f"env{i}.log")
 
-    def step_async(self, actions: dict[int, int]) -> None:
-        for i, a in actions.items():
-            self.envs[i].send({"cmd": "step", "action": int(a)})
+    def trim_logs(self, keep_mb: float = 8.0) -> int:
+        """Truncate the per-env Godot logs once they pass keep_mb. Returns MB reclaimed.
 
-    def step_wait(self, idxs: list[int]) -> dict[int, dict]:
-        out = {}
-        for i in idxs:
-            self.envs[i].last = self.envs[i].recv()
-            out[i] = self.envs[i].last
-        return out
+        Redirecting the logs does not make them smaller — it only moves the writes
+        somewhere the trainer owns. They are engine noise nobody reads, so truncating in
+        place is safe and does free the blocks.
+
+        MEASURED IN BLOCKS, NOT st_size, and that is not a detail. Godot does NOT open
+        these with O_APPEND — it keeps its own file offset — so after truncate(0) the next
+        write lands at the old offset and leaves a hole. The file is then SPARSE: env0.log
+        measured 624 MB by st_size against 22 MB of real blocks. Summing st_size made the
+        trimmer report "trimmed 3375 MB" for an update that had actually reclaimed about a
+        hundred, which is both alarming and false. st_blocks is what the filesystem is
+        actually holding, so that is what the threshold and the report use.
+        """
+        freed = 0.0
+        for i in range(self.n):
+            p = self._log_for(i)
+            if not p or not os.path.exists(p):
+                continue
+            try:
+                mb = os.stat(p).st_blocks * 512 / (1024.0 * 1024.0)
+                if mb >= keep_mb:
+                    with open(p, "r+") as f:
+                        f.truncate(0)
+                    freed += mb
+            except OSError:
+                pass
+        return int(freed)
+
+    def rebuild(self, attempts: int = 6) -> None:
+        """Kill everything and boot a fresh set in place. Retried with backoff: a Godot
+        that fails to start (a machine briefly out of memory, a locked project folder)
+        must cost the run a few minutes, not the run."""
+        self.kill()
+        self.envs = []
+        delay = 5.0
+        for attempt in range(1, attempts + 1):
+            try:
+                self.envs = [GodotEnv(self.godot, log_path=self._log_for(i))
+                             for i in range(self.n)]
+                return
+            except (EnvDied, OSError) as e:
+                self.kill()
+                self.envs = []
+                if attempt == attempts:
+                    raise EnvDied(f"could not start {self.n} envs after {attempts} tries: {e}")
+                print(f"[env] start failed ({e}); retry {attempt}/{attempts} in {delay:.0f}s",
+                      flush=True)
+                time.sleep(delay)
+                delay = min(delay * 2, 120.0)
+
+    def wait_any(self, idxs: list[int]) -> list[int]:
+        """The envs among `idxs` whose reply is in (recv() will not block); waits for at
+        least one. An env silent for READ_TIMEOUT is killed and raises EnvDied."""
+        while True:
+            ready = [i for i in idxs if self.envs[i].has_reply()]
+            if ready:
+                return ready
+            socks = {self.envs[i].sock: i for i in idxs}
+            readable = select.select(list(socks), [], [], 1.0)[0]
+            for s in readable:
+                self.envs[socks[s]]._fill()
+            if not readable:
+                now = time.monotonic()
+                for i in idxs:
+                    e = self.envs[i]
+                    if now - e.sent_at > READ_TIMEOUT:
+                        e.kill()
+                        raise EnvDied(f"env {i} stopped replying (waited {READ_TIMEOUT:.0f}s)"
+                                      " — killed and restarted")
 
     def close(self) -> None:
         for e in self.envs:
