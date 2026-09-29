@@ -212,6 +212,7 @@ var _done: bool = true
 var _illegal: int = 0
 var _steps: int = 0
 var _result: String = ""
+var _out: StreamPeerTCP = null   ## канал ответов (--reply-port), иначе stdout
 ## Как закончилась партия: "rout" (одна из армий уничтожена), "count" (перевес по составу
 ## на лимите раундов) или "" (ничья/страховка). Едет в info, чтобы разгром и победу по
 ## очкам можно было отличить в логе оценок.
@@ -238,6 +239,24 @@ var _fire_debt: float = 0.0
 var _fire_losses: int = 0
 
 func _initialize() -> void:
+	# С `-- --reply-port=N` ответы идут в TCP-сокет 127.0.0.1:N, а не в stdout: всё, что
+	# печатает print(), Godot дублирует в файловый лог, а ответ — это десятки КиБ на шаг.
+	# Команды по-прежнему читаются из stdin; без флага всё работает через stdout, как раньше.
+	for a: String in OS.get_cmdline_user_args():
+		if a.begins_with("--reply-port="):
+			_out = StreamPeerTCP.new()
+			if _out.connect_to_host("127.0.0.1", int(a.get_slice("=", 1))) != OK:
+				quit(1)
+				return
+			var t0 := Time.get_ticks_msec()
+			while _out.get_status() == StreamPeerTCP.STATUS_CONNECTING \
+					and Time.get_ticks_msec() - t0 < 30000:
+				_out.poll()
+				OS.delay_msec(1)
+			if _out.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+				quit(1)
+				return
+			_out.set_no_delay(true)
 	while true:
 		var line := OS.read_string_from_stdin(1 << 22)
 		if line == "":
@@ -247,7 +266,7 @@ func _initialize() -> void:
 			continue
 		var req: Variant = JSON.parse_string(line)
 		if typeof(req) != TYPE_DICTIONARY:
-			print(JSON.stringify({"ok": false, "error": "bad json"}))
+			_emit({"ok": false, "error": "bad json"})
 			continue
 		var cmd: String = str(req.get("cmd", ""))
 		var resp: Dictionary
@@ -257,11 +276,19 @@ func _initialize() -> void:
 			"save_replay": resp = _save_replay(str(req.get("path", "")))
 			"ping": resp = {"ok": true}
 			"quit":
-				print(JSON.stringify({"ok": true}))
+				_emit({"ok": true})
 				break
 			_: resp = {"ok": false, "error": "unknown cmd %s" % cmd}
-		print(JSON.stringify(resp))
+		_emit(resp)
+	if _out != null:
+		_out.disconnect_from_host()
 	quit(0)
+
+func _emit(resp: Dictionary) -> void:
+	if _out == null:
+		print(JSON.stringify(resp))
+	else:
+		_out.put_data((JSON.stringify(resp) + "\n").to_utf8_buffer())   # блокирует до отправки
 
 # --- Эпизод -------------------------------------------------------------------------
 

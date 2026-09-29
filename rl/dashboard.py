@@ -193,7 +193,11 @@ def gate() -> None:
         keep = st.checkbox(f"Stay signed in on this browser for {SESSION_DAYS} days",
                            value=True)
         submitted = st.form_submit_button("Enter")
-    if submitted and hmac.compare_digest(typed, pw):
+    # Pasted passwords often carry a stray space/newline; a mismatch used to do nothing
+    # at all, which looked like a broken button.
+    if submitted and not hmac.compare_digest(typed.strip(), pw.strip()):
+        st.error("Wrong password.")
+    if submitted and hmac.compare_digest(typed.strip(), pw.strip()):
         st.session_state.auth = True
         if keep:
             fresh = _issue_token()

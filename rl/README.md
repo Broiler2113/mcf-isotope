@@ -21,6 +21,7 @@ rl/tools/make_town_map.py         maps/town.json + both armies -> rl/maps/town_5
 rl/tools/check_replay.gd          plays a recorded .mcfr through ReplayPlayer                 (10.3)
 tests/run_legal_intents.gd        exactness: every enumerated intent resolves OK               (13.1)
 tests/run_learned_controller.gd   fallback path (always) and live path (with MCF_RL_POLICY)
+rl/test_rl.py                     `~/.venvs/mcf-rl/bin/python rl/test_rl.py` — head, storage, timeouts
 ```
 
 ## Setup (laptop = trainer + dashboard; the site is a tunnel to it)
@@ -117,6 +118,35 @@ instead and says so, with the memory figures from that moment. Godot reads are b
 `MCF_RL_ENV_TIMEOUT` (900 s) — an env that stops replying is killed and rebuilt rather
 than hanging the trainer forever — and `VecEnv.rebuild()` retries with backoff. A failed
 evaluation no longer takes the run down with it.
+
+## Speed
+
+Measured on the VPS (2 vCPU) against the lockstep code, same config and seeds; a machine with
+more cores loses more to lockstep.
+
+- **Envs run at their own pace.** The rollout decides for whichever envs have replied (one
+  batched forward on the CPU copy of the policy) and sends straight back while the others keep
+  computing; evaluation starts an env's next game the moment it finishes one. Lockstep waited
+  on the slowest env every step — an end-turn, where the scripted opponent plays, takes ~130 ms
+  against ~16 ms for an own action. Rollout throughput: 27.5 → 39.7 steps/s at 2 envs, 23.2 →
+  44.1 at 4. The rollout ends at `rollout_steps x n_envs` trainee steps in total.
+- **The candidate head scores only real candidates** (a minibatch pads every state to its
+  widest, ~4x the real count on the arena and far more on town maps) and computes the state
+  embedding's share of its first layer once per state. Same weights, same function
+  (`test_packed_head_is_the_same_function`), so old checkpoints load as they are. A 64-step
+  arena minibatch: 3.6 s → 2.2 s on the VPS.
+- **`device` is where the PPO update runs; rollouts always decide on the CPU** (a copy synced
+  after each update). On a CPU the update's conv backward is ~60% of a minibatch. `device: auto`
+  puts the update on the Mac's GPU after a startup self-check against the CPU, and falls back
+  to `cpu` — with a log line — if it fails. Not set in any config yet: try it on one branch and
+  compare `speed/update_secs`.
+- **Threads:** rollout forwards get the cores the Godot envs leave free; the update gets all of
+  them (`torch_threads` caps both).
+- **Replies travel over a local socket, not stdout,** so the per-env Godot logs under
+  `envlogs/` hold only Godot's own messages instead of every observation twice (~1.1 GB/hr at
+  six envs); `trim_logs()` stays as the backstop.
+- **Phase B credit:** rewards that arrive over a pool opponent's moves now go to the trainee
+  decision that preceded them, not the one after.
 
 ## What is where
 
