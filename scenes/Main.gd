@@ -3324,10 +3324,30 @@ func _zoom_at(screen_pos: Vector2, factor: float) -> void:
 ##
 ## В горячем кресле (два человека за одним экраном, ИИ) активный игрок и зритель —
 ## одно и то же лицо, и поведение не меняется.
+##
+## Против ИИ «активный игрок» во время хода ИИ — сам ИИ, и экран показывал игроку его
+## обзор: все вражеские бойцы как на ладони. Поэтому смотрит последний человек, сидевший
+## за этим столом, а до первого его хода (ИИ ходит первым) — первый человек в ростере.
+## Людей нет вовсе (ИИ против ИИ) — зритель следит за тем, чей ход: тумана там и так нет.
+var _last_viewer := -1
+
 func _viewing_side() -> int:
 	if state == null:
 		return MCF.Owner.PLAYER_1
-	return my_owner if networked else state.active_player()
+	if networked:
+		return my_owner
+	var active := state.active_player()
+	var c: PlayerController = controllers.get(active)
+	if c != null and c.is_local_human():
+		_last_viewer = active
+		return active
+	if _last_viewer != -1:
+		return _last_viewer
+	for side: int in state.roster.player_ids():
+		var h: PlayerController = controllers.get(side)
+		if h != null and h.is_local_human():
+			return side
+	return active
 
 # --- Дальний план большой карты ---
 ## На сильном отъезде клетка — несколько пикселей, и поклеточная отрисовка тратила кадр
