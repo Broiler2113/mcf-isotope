@@ -1460,7 +1460,14 @@ def latest_game_dir() -> str:
             raise RuntimeError(f"git {' '.join(args)}: {(r.stderr or r.stdout).strip()}")
         return r.stdout.strip()
 
-    git("fetch", "--quiet", "origin", "main")
+    try:
+        git("fetch", "--quiet", "origin", "main")
+    except RuntimeError:
+        # The dashboard runs in the background (nohup), where the SSH key or its agent may
+        # not be reachable; the repository is public, so the same main comes over HTTPS
+        # with no key at all.
+        url = _public_url(git("remote", "get-url", "origin"))
+        git("fetch", "--quiet", url, "+refs/heads/main:refs/remotes/origin/main")
     ok = os.path.isdir(PLAY_DIR)
     if ok:
         try:
@@ -1473,6 +1480,18 @@ def latest_game_dir() -> str:
         git("worktree", "prune")
         git("worktree", "add", "--force", "--detach", PLAY_DIR, "origin/main")
     return PLAY_DIR
+
+
+def _public_url(url: str) -> str:
+    """git@github.com:owner/repo.git or ssh://git@github.com/owner/repo.git -> https://github.com/owner/repo.git"""
+    url = url.strip()
+    if url.startswith("git@"):
+        host, path = url[4:].split(":", 1)
+        return f"https://{host}/{path}"
+    if url.startswith("ssh://"):
+        rest = url[len("ssh://"):]
+        return "https://" + rest.split("@", 1)[-1]
+    return url
 
 
 def game_version(path: str) -> str:
