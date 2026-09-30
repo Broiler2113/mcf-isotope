@@ -35,10 +35,11 @@ func _initialize() -> void:
 	_every_tank_gets_moving()
 	_plan_keeps_the_tank_lane_clear()
 	_anti_tank_goes_for_the_armour()
+	_operator_deploys_flies_and_detonates()
 
 	if fails.is_empty():
 		print("ai conduct: no wasted shots, no crushed allies, every tank moves,"
-				+ " no ping-pong, clear tank lanes, anti-tank picks armour")
+				+ " no ping-pong, clear tank lanes, anti-tank picks armour, drones fly")
 		quit(0)
 		return
 	printerr("ai conduct: %d failure(s)" % fails.size())
@@ -460,3 +461,38 @@ func _anti_tank_goes_for_the_armour() -> void:
 				and state.grid.vehicle_at(sh.target_cell) != -1
 	ck(picked_armour,
 			"the anti-tank still opens on the hull, not on the softer infantry target")
+
+# --- 7: оператор дронов (HARD) ставит станцию, дрон летит и взрывается в тот же ход ---
+## Раньше ИИ не делал из этого НИЧЕГО: UseItem он не выбирал (станция не ставилась), дронов
+## не было в очереди хода (планировщик их пропускает), а выдохшемуся после подлёта дрону
+## подрыв не предлагался. На карте дронов восемь операторов на сторону ходили пехотой.
+func _operator_deploys_flies_and_detonates() -> void:
+	var m := MapData.new(24, 14)
+	for y in 14:
+		for x in 24:
+			m.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	m.set_spawn(Vector2i(2, 6), "drone_operator", MCF.Owner.PLAYER_1)
+	# Дальше винтовки оператора (12), но в пределах привязи дрона (15 от станции).
+	m.set_spawn(Vector2i(15, 6), "light_infantry", MCF.Owner.PLAYER_2)
+	GameConfig.civilians_enabled = false
+	var state := m.build_state(2026)
+	var r := GameActionResolver.new(state)
+	r.fog_enabled = false
+	while state.active_player() != MCF.Owner.PLAYER_1:
+		r.resolve(EndTurnIntent.new())
+	var ai := AIController.new(MCF.Owner.PLAYER_1, AIController.Difficulty.HARD)
+	ai.intent_ready.connect(_on_intent)
+	var kinds: Array = []
+	for i in 40:
+		_pending = null
+		ai.begin_turn(state)
+		if _pending == null or _pending is EndTurnIntent:
+			break
+		kinds.append(str(IntentCodec.encode(_pending).get("t", "")))
+		if not r.resolve(_pending).ok:
+			ai.notify_intent_denied(state)
+	var foe_alive := not state.living_units_of(MCF.Owner.PLAYER_2).is_empty()
+	ck(kinds.has("item"), "HARD deploys its drone station (%s)" % [kinds])
+	ck(kinds.has("drone_move"), "HARD flies the drone it launched (%s)" % [kinds])
+	ck(kinds.has("drone_det"), "…and detonates it over the enemy the same turn (%s)" % [kinds])
+	ck(not foe_alive, "the enemy under the drone is dead")

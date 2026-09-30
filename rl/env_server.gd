@@ -473,7 +473,12 @@ func _step(req: Dictionary) -> Dictionary:
 	elif intent is EndTurnIntent:
 		if acting == side:
 			reward += _turn_penalty
-	elif key != "" and _actor_ap(intent) >= ap_before:
+	elif key != "" and _actor_ap(intent) >= ap_before and not (_kind_of(intent) in SHOT_KINDS) \
+			and not intent is DroneDetonateIntent:
+		# Дострел начатой очереди и подрыв дрона тоже «бесплатные», но зациклиться на них
+		# нельзя: пули кончаются, дрон взрывается один раз. Считай мы их, потолок стороны
+		# забивался бы ими, а затем _drop_looping отключал бы стрелку весь вид «shoot» —
+		# вместе с ПЛАТНЫМИ выстрелами на оставшиеся ОД.
 		# Действие прошло, а ОД не убавилось — оно бесплатное. Считаем его за этим
 		# актёром и запоминаем ВИД: после потолка именно этот вид у него и отключится.
 		_free_count[key] = int(_free_count.get(key, 0)) + 1
