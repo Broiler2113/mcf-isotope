@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
-# Keep one branch alive through genuine failures. Deliberately does NOT restart a branch
-# that stopped cleanly: that is either an operator stop or mem_limit_mb, and relaunching
-# into either produces a restart loop rather than a running trainer.
+# Keep one branch alive. Restarts a crash, a vanished process, and a RESOURCE stop (the
+# trainer ran out of disk, or out of memory it could not shrink under); leaves an operator
+# stop alone, so `run.sh stop` and the dashboard's Stop still mean stop.
+#
+# The resource case used to be excluded together with the operator one, on the grounds that
+# relaunching into mem_limit_mb gives a restart loop rather than a trainer. That was true
+# when the memory ceiling ended the run outright; it now shrinks the rollout and carries on,
+# so a memory stop means the base process itself did not fit and a restart is worth one try.
+# A disk stop is worth retrying too — space comes back when something else on the machine
+# releases it — but slowly, which is what RESOURCE_BACKOFF is for. Without this the trainer
+# sat stopped for hours overnight while a watchdog pressed Start for it 28 times.
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 BRANCH="${1:-town-3}"
 CFG="${2:-$HERE/config/town.yaml}"
@@ -85,7 +93,10 @@ if s.get("state") in ("running", "paused"):
     except (OSError, ValueError, KeyError):
         print("dead")
     raise SystemExit
-print(s.get("state", "unknown"))
+# A clean stop says WHY in stop_reason: "memory"/"disk" are the machine's doing and worth
+# resuming, an operator stop leaves it empty and must be left alone.
+reason = str(s.get("stop_reason") or "")
+print(f"resource:{reason}" if reason in ("memory", "disk") else s.get("state", "unknown"))
 PY
 )
   case "$verdict" in
@@ -93,6 +104,12 @@ PY
       say "verdict=$verdict -> resuming"
       bash "$HERE/run.sh" resume "$BRANCH" "$CFG" >> "$LOG" 2>&1
       sleep 180 ;;                       # let it boot before judging again
+    resource:*)
+      # Space or memory. Back off so a machine that genuinely has neither is not thrashed,
+      # and so the log reads as "retrying every 10 min", not a loop.
+      say "verdict=$verdict -> resuming (resource stop)"
+      bash "$HERE/run.sh" resume "$BRANCH" "$CFG" >> "$LOG" 2>&1
+      sleep "${RESOURCE_BACKOFF:-600}" ;;
     *) sleep 60 ;;
   esac
 done

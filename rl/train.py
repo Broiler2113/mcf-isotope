@@ -50,6 +50,9 @@ from mcf_env import (EXTERNAL, HARD, PROJECT, EnvDied,  # noqa: E402
 from model import OnnxWrapper, PolicyNet  # noqa: E402
 
 RUNS = os.path.join(PROJECT, "rl", "runs")
+# Never shrink the rollout below this under memory pressure: a handful of transitions
+# per update is not training, and at that point the base process is the problem.
+MIN_ROLLOUT_MB = 192.0
 # The one scripted opponent: AIController HARD, for training (Phase A, and the scripted
 # share of Phase B) and for every evaluation. The owner retired NORMAL and EASY outright;
 # the game keeps them for human matches, the RL pipeline has no way to select them.
@@ -280,12 +283,19 @@ class Trainer:
         self.writer = SummaryWriter(os.path.join(run_dir, "tb"))
         self.envs: VecEnv | None = None
         self.stop_requested = False
+        # Why this process ended: "" (operator stop / total_steps), "memory" or "disk".
+        # The supervisor resumes a resource stop and leaves an operator stop alone.
+        self.stop_reason = ""
         # Ordered so the least recently used frozen opponent is the one evicted: one
         # PolicyNet per pool member is a few MB, and an unbounded dict grew without end.
         self.pool_cache: OrderedDict[str, PolicyNet] = OrderedDict()
         self.episode_seed = self.cfg["seed"] * 1000
         self._last_status = 0.0
         self.last_eval: dict = {}
+        # Live, shrinkable copy of the configured cap, plus the memory the process costs
+        # with no rollout held (measured after each update drops the buffer).
+        self.rollout_budget_mb = float(self.cfg["rollout_budget_mb"]) or float("inf")
+        self._base_mb = 0.0
         self._disk = (0.0, 0.0)          # (measured at, MB)
 
     def has_eval_history(self) -> bool:
@@ -559,7 +569,7 @@ class Trainer:
             elif not env.label:
                 env.label = "ai:" + SCRIPTED
         t0 = time.time()
-        budget = float(cfg["rollout_budget_mb"]) * 2**20
+        budget = float(self.rollout_budget_mb) * 2**20
         buf_bytes = 0
         self.pool_cache.pop("self", None)
         self.write_status("running", "collecting rollout", 0, T * n)
@@ -974,6 +984,9 @@ class Trainer:
                 losses = self.ppo_update(buffers)      # writes its own progress heartbeat
                 del buffers            # the rollout is the biggest thing alive; drop it
                                        # before eval opens a second front on memory
+                # With the buffer gone this is what the process costs empty — the number
+                # over_memory_budget() needs to know how much rollout it can still afford.
+                self._base_mb = mem_report().get("total_mb", 0.0)
                 self.log(info, losses, time.time() - t0)
                 self.write_status("running", "update done", 0, 0)
                 if self.update % cfg["checkpoint_every"] == 0:
@@ -1017,7 +1030,8 @@ class Trainer:
                 print(f"[train] could not write the final checkpoint: {e}", flush=True)
             self.envs.close()
             self.writer.close()
-            self.write_status("crashed" if crash else "stopped", **crash)
+            self.write_status("crashed" if crash else "stopped",
+                              stop_reason=self.stop_reason, **crash)
 
     # -- pause (11.3): hold the run without tearing the envs down --
     def wait_while_paused(self) -> bool:
@@ -1060,21 +1074,51 @@ class Trainer:
             return False
         print(f"[train] disk floor reached: {free:.0f} MB free < {floor:.0f} MB "
               f"— checkpointing and exiting while the write can still succeed", flush=True)
-        self.write_status("running", f"below disk_floor_mb ({free:.0f} MB free) — exiting", 0, 0)
+        self.write_status("running", f"below disk_floor_mb ({free:.0f} MB free) — exiting", 0, 0,
+                          stop_reason="disk")
+        self.stop_reason = "disk"
         return True
 
     def over_memory_budget(self) -> bool:
+        """True only when no rollout small enough to fit exists — otherwise SHRINK and
+        carry on.
+
+        The budget used to end the run. It is the elastic part of the process that pushes
+        it over — the rollout buffer, whose size is the map's candidate count times the
+        steps collected, and a company-scale town map is an order of magnitude heavier per
+        step than the arena the defaults were set on. So town-8 exited every few updates on
+        a limit it could simply have trained under: 3.6 GB of trainer against a 1.4 GB base
+        is 2.2 GB of buffer, and the run needed a smaller buffer, not a restart (which
+        rebuilds exactly the same buffer and exits again — 28 restarts overnight).
+
+        Shrinking costs samples per update, not correctness: a short rollout is still an
+        unbiased set of transitions, and ppo_update already handles a rollout cut short by
+        rollout_budget_mb. Only a BASE process too big to hold any rollout is fatal, and
+        that one still exits with a checkpoint and a reason."""
         limit = float(self.cfg["mem_limit_mb"])
         if limit <= 0:
             return False
         used = mem_report().get("total_mb", 0.0)
         if used < limit:
             return False
-        # Exiting here is the friendly failure: a checkpoint is written and the reason
-        # is on the dashboard. An OOM kill leaves neither.
-        print(f"[train] memory budget reached: {used:.0f} MB >= {limit:.0f} MB "
-              f"(trainer + envs) — checkpointing and exiting", flush=True)
-        self.write_status("running", f"over mem_limit_mb ({used:.0f} MB) — exiting", 0, 0)
+        # What the process costs with no rollout held: measured right after ppo_update
+        # dropped the buffer (see train()), so it is the real floor, not an estimate.
+        base = self._base_mb or used
+        headroom = limit - base
+        if headroom >= MIN_ROLLOUT_MB:
+            new_budget = max(MIN_ROLLOUT_MB, min(headroom * 0.8, self.rollout_budget_mb * 0.6))
+            if new_budget < self.rollout_budget_mb - 1:
+                print(f"[train] memory {used:.0f} MB >= {limit:.0f} MB — rollout budget "
+                      f"{self.rollout_budget_mb:.0f} -> {new_budget:.0f} MB "
+                      f"(base {base:.0f} MB) and carrying on", flush=True)
+                self.rollout_budget_mb = new_budget
+                self.writer.add_scalar("speed/rollout_budget_mb", new_budget, self.global_step)
+                return False
+        print(f"[train] memory budget reached: {used:.0f} MB >= {limit:.0f} MB with a "
+              f"{base:.0f} MB base — no rollout fits; checkpointing and exiting", flush=True)
+        self.write_status("running", f"over mem_limit_mb ({used:.0f} MB) — exiting", 0, 0,
+                          stop_reason="memory")
+        self.stop_reason = "memory"
         return True
 
     def run_eval(self):
