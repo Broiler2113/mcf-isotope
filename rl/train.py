@@ -448,7 +448,7 @@ class Trainer:
             self.pool_net(member)
         return EXTERNAL, "pool:" + member
 
-    def _save_rollout_replay(self, env, result: str) -> None:
+    def _save_rollout_replay(self, env, result: str, info: dict) -> None:
         """Write one training replay for the map this episode was played on.
 
         Filed under replays/train/<step>/ rather than replays/checkpoint_*/ so it is
@@ -467,13 +467,22 @@ class Trainer:
             os.makedirs(d, exist_ok=True)
             path = os.path.join(d, f"{stem}_{result}.mcfr")
             if env.save_replay(path):
-                # Sidecar in the same schema the evaluation replays use, so the gallery
-                # shows map, result and rounds instead of falling back to the file name.
+                # Sidecar in the same schema the evaluation replays use. It has to carry
+                # the match's OUTCOME NUMBERS too, not just its identity: without by /
+                # value_diff / rounds the gallery showed None in those columns for every
+                # training replay, which reads as "broken on every map except the
+                # evaluation one" — evaluation is pinned to a single map, so its rows were
+                # the only populated ones.
                 with open(path + ".json", "w") as f:
                     json.dump(dict(branch=os.path.basename(self.run_dir),
                                    step=self.global_step, update=self.update,
                                    opponent=env.label, source="training",
-                                   result=result, map=env.cfg.map_path,
+                                   result=result, by=info.get("by", ""),
+                                   value_diff=info.get("value_diff"),
+                                   rounds=info.get("round"), steps=info.get("steps"),
+                                   illegal=info.get("illegal"),
+                                   fire_losses=info.get("fire_losses"),
+                                   map=env.cfg.map_path,
                                    side=env.cfg.side, seed=env.cfg.seed,
                                    time=time.time()), f)
         except Exception as e:      # a replay is a nicety; never take the run down for one
@@ -652,7 +661,7 @@ class Trainer:
                     # Save BEFORE any reset: the recording lives in the env and a reset
                     # discards it.
                     if env.cfg is not None and env.cfg.record:
-                        self._save_rollout_replay(env, res)
+                        self._save_rollout_replay(env, res, info)
                     if taken < T * n and not capped:
                         new_episode(i)
         dt = time.time() - t0
