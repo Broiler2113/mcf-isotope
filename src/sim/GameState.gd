@@ -117,7 +117,9 @@ func digest_hash() -> int:
 	parts.append("t%d:%d:%s" % [turns.round_number, turns.active_index, str(turns.round_order)])
 	return "|".join(parts).hash()
 
-func snapshot() -> Dictionary:
+## with_cells=false — снимок без клеток: откат действия берёт их из журнала клеток
+## (GridCell.journal), а не копией всей доски (см. GameActionResolver.resolve()).
+func snapshot(with_cells: bool = true) -> Dictionary:
 	var us: Array = []
 	for u: UnitInstance in units.values():
 		var ast: Dictionary = {}
@@ -153,7 +155,7 @@ func snapshot() -> Dictionary:
 			"move_credit": v.move_credit,
 		})
 	var cs: Array = []
-	for c: GridCell in grid._cells:
+	for c: GridCell in grid._cells if with_cells else []:
 		cs.append({
 			"floor_type": c.floor_type, "cover_height": c.cover_height,
 			"on_fire": c.on_fire, "fire_owner": c.fire_owner, "is_space": c.is_space,
@@ -233,7 +235,12 @@ func restore(snap: Dictionary) -> void:
 		v.cannon_shots_this_round = rec["cannon_shots_this_round"]
 		v.move_credit = rec["move_credit"]
 		vehicles[v.id] = v
-	var cells: Array = snap["cells"]
+	# Клетки из журнала отката: {GridCell: image()} — только те, что трогало действие.
+	var images: Variant = snap.get("cells")
+	if images is Dictionary:
+		for c: GridCell in images:
+			c.apply_image(images[c])
+	var cells: Array = images if images is Array else []
 	for i in cells.size():
 		var rec: Dictionary = cells[i]
 		var c: GridCell = grid._cells[i]

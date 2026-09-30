@@ -153,8 +153,10 @@ func _check_bunker_custom_symmetric(lobby: Node) -> void:
 	size.select(MapGen.SIZE_CUSTOM)
 	size.item_selected.emit(MapGen.SIZE_CUSTOM)
 	ck(lobby._gen_dims_row.visible, "picking Custom shows width and height")
-	ck(lobby._gen_w.max_value == MapGen.MAX_DIM.x and lobby._gen_h.max_value == MapGen.MAX_DIM.y,
-			"a custom map can be up to %d×%d" % [MapGen.MAX_DIM.x, MapGen.MAX_DIM.y])
+	ck(lobby._gen_w.allow_greater and lobby._gen_h.allow_greater,
+			"custom width and height have no upper limit")
+	ck(lobby._gen_civilians.item_count == MapGen.CIV_LEVELS.size()
+			and lobby._gen_civilians.selected == 2, "civilians are a level, Normal by default")
 	lobby._gen_w.value = 64
 	lobby._gen_h.value = 40
 	var c: MapData = lobby._selected_map()

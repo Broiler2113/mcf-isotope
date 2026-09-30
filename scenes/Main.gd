@@ -3329,6 +3329,289 @@ func _viewing_side() -> int:
 		return MCF.Owner.PLAYER_1
 	return my_owner if networked else state.active_player()
 
+# --- Дальний план большой карты ---
+## На сильном отъезде клетка — несколько пикселей, и поклеточная отрисовка тратила кадр
+## на то, чего не разглядеть: на поле 250×250 при ZOOM_MIN это ~37 000 клеток и ~150 мс на
+## КАЖДЫЙ кадр — наведение мыши, панорама, анимация. Ниже LOD_ZOOM доска — три текстуры по
+## пикселю на клетку: рельеф, туман и объекты. Их слой стоит ПОД узлом боя
+## (show_behind_parent) и едет его же панорамой через свой transform, так что pan и zoom
+## его не перерисовывают вовсе. Правятся текстуры попиксельно: рельеф и объекты — по журналу
+## вида клеток (GridCell.look_changes), туман — по журналу видимости резолвера
+## (take_vis_changes). Бойцы, техника, трупы, мины, подсветки и эффекты рисуются поверх, как
+## и раньше; сетки и подписей высоты на таком отъезде нет — их всё равно не разглядеть.
+const LOD_ZOOM := 0.35
+const FOG_COL := Color(0.02, 0.02, 0.04, 0.55)
+
+## Порядок слоёв — как у поклеточного прохода: рельеф, над ним туман, над туманом объекты
+## (их поклеточный проход тоже рисует поверх пелены — и на неразведанных клетках).
+class LodLayer extends Node2D:
+	var terrain: ImageTexture = null
+	var fog: ImageTexture = null
+	var features: ImageTexture = null
+	var rect := Rect2()
+	var fog_on := false
+	func _draw() -> void:
+		if terrain != null:
+			draw_texture_rect(terrain, rect, false)
+		if fog_on and fog != null:
+			draw_texture_rect(fog, rect, false)
+		if features != null:
+			draw_texture_rect(features, rect, false)
+
+var _lod: LodLayer = null
+var _lod_terrain: Image = null
+var _lod_features: Image = null
+var _lod_fog: Image = null
+var _lod_terrain_key: Array = []   # доска, на которой собран рельеф
+var _lod_damage_ver: int = -1      # _fx.damage_version, по которому покрашена копоть
+var _lod_damaged: Dictionary = {}  # клетки, покрашенные побитыми
+var _lod_fog_key: Array = []       # доска, резолвер, зритель и режим тумана
+var _lod_look_ver: int = -1        # до какой GridCell.look_version доведён рельеф
+var _lod_terrain_stale := false    # картинка правилась, текстура ещё не выгружена
+var _lod_fog_stale := false
+var _lod_tex_avg: Dictionary = {}  # имя картинки-замены -> её средний цвет
+
+## Держит слой дальнего плана в согласии с доской. far — рисует ли им этот кадр. Слой
+## заводится при первом отъезде и дальше правится и вблизи: правка стоит столько, сколько
+## клеток сменилось, а новый отъезд обходится без сборки заново. Выгрузка текстур на
+## видеокарту — только когда слой на экране.
+func _lod_sync(far: bool, viewer: int, visible: Dictionary, remembered: Dictionary,
+		fog_on: bool) -> void:
+	if _lod == null:
+		if not far:
+			return
+		_lod = LodLayer.new()
+		_lod.show_behind_parent = true
+		_lod.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		add_child(_lod)
+	var grid := state.grid
+	var gw := grid.width
+	var gh := grid.height
+	_lod.visible = far
+	if far:
+		_lod.position = pan
+		_lod.scale = Vector2(zoom, zoom)
+		var rect := Rect2(ORIGIN, Vector2(gw * CELL, gh * CELL))
+		if _lod.rect != rect or _lod.fog_on != fog_on:
+			_lod.rect = rect
+			_lod.fog_on = fog_on
+			_lod.queue_redraw()
+	# Рельеф: целиком — на новой доске или оборванном журнале; иначе только клетки, что
+	# с прошлого раза записал журнал вида, и те, где сменилась копоть взрывов.
+	var tkey := [grid.get_instance_id()]
+	if tkey != _lod_terrain_key or _lod_terrain == null or _lod_look_ver < GridCell.look_log_base:
+		_lod_terrain_key = tkey
+		_lod_build_terrain()
+		_lod_damage_ver = _fx.damage_version
+		_lod_damaged = _fx.floor_damage.duplicate()
+		_lod.terrain = null
+		_lod.features = null
+	else:
+		if _lod_look_ver != GridCell.look_version:
+			var ch := GridCell.look_changes
+			var i: int = (_lod_look_ver - GridCell.look_log_base) * 2
+			while i < ch.size():
+				var x := ch[i]
+				var y := ch[i + 1]
+				if x < gw and y < gh:
+					var lc := grid.cell_fast(x, y)
+					_lod_terrain.set_pixel(x, y, _lod_color(lc))
+					_lod_features.set_pixel(x, y, _lod_feature_color(lc))
+				i += 2
+			_lod_terrain_stale = true
+		if _lod_damage_ver != _fx.damage_version:
+			# Копоть живёт в косметике, а не в клетках: перекрашиваем и прежние побитые
+			# клетки (перемотка повтора её стирает), и нынешние.
+			for c: Vector2i in _lod_damaged:
+				if grid.in_bounds(c):
+					_lod_terrain.set_pixel(c.x, c.y, _lod_color(grid.cell(c)))
+			for c: Vector2i in _fx.floor_damage:
+				if grid.in_bounds(c):
+					_lod_terrain.set_pixel(c.x, c.y, _lod_color(grid.cell(c)))
+			_lod_damage_ver = _fx.damage_version
+			_lod_damaged = _fx.floor_damage.duplicate()
+			_lod_terrain_stale = true
+	_lod_look_ver = GridCell.look_version
+	# Туман: целиком — при смене доски, зрителя или режима; иначе только клетки, чья
+	# видимость сменилась (take_vis_changes; null — «сменилось всё»).
+	if fog_on:
+		var fkey := [grid.get_instance_id(), resolver.get_instance_id(), viewer, resolver.fog_mode]
+		var changed: Variant = resolver.take_vis_changes(viewer)
+		if fkey != _lod_fog_key or _lod_fog == null or changed == null:
+			_lod_fog_key = fkey
+			_lod_fog = Image.create(gw, gh, false, Image.FORMAT_RGBA8)
+			_lod_fog.fill(UNKNOWN_COL)
+			for c: Vector2i in remembered:
+				_lod_fog.set_pixel(c.x, c.y, FOG_COL)
+			for c: Vector2i in visible:
+				_lod_fog.set_pixel(c.x, c.y, Color(0, 0, 0, 0))
+			_lod.fog = null
+		elif not (changed as Array).is_empty():
+			for i: int in changed:
+				var c := Vector2i(i % gw, i / gw)
+				_lod_fog.set_pixel(c.x, c.y, Color(0, 0, 0, 0) if visible.has(c)
+						else (FOG_COL if remembered.has(c) else UNKNOWN_COL))
+			_lod_fog_stale = true
+	if not far:
+		return
+	if _lod.terrain == null:
+		_lod.terrain = ImageTexture.create_from_image(_lod_terrain)
+		_lod.features = ImageTexture.create_from_image(_lod_features)
+		_lod.queue_redraw()
+	elif _lod_terrain_stale:
+		_lod.terrain.update(_lod_terrain)
+		_lod.features.update(_lod_features)
+	_lod_terrain_stale = false
+	if fog_on and _lod_fog != null:
+		if _lod.fog == null:
+			_lod.fog = ImageTexture.create_from_image(_lod_fog)
+			_lod.queue_redraw()
+		elif _lod_fog_stale:
+			_lod.fog.update(_lod_fog)
+		_lod_fog_stale = false
+
+## Рельеф и объекты целиком: байты RGBA по клеткам и по картинке из них. Голый пол и
+## голая стена (почти вся карта) берут готовый цвет, не заходя в _lod_color().
+func _lod_build_terrain() -> void:
+	_lod_tex_avg = _lod_texture_averages()
+	var grid := state.grid
+	var bytes := PackedByteArray()
+	bytes.resize(grid.width * grid.height * 4)
+	var fbytes := PackedByteArray()
+	fbytes.resize(grid.width * grid.height * 4)   # нули — прозрачно: объекта нет
+	var plain := _lod_tex_avg.is_empty() and _fx.floor_damage.is_empty()
+	var floor_u := _rgba32(LOD_FLOOR)
+	var wall_u := _rgba32(LOD_WALL)
+	var space_u := _rgba32(LOD_SPACE)
+	var grass_u := _rgba32(LOD_FLOOR.blend(GRASS_TINT))
+	var k := 0
+	for c: GridCell in grid.cells_flat():
+		var u: int
+		var h := c.cover_height
+		if plain and not c.on_fire and (h == 0.0 or h >= MCF.WALL_HEIGHT):
+			if h >= MCF.WALL_HEIGHT:
+				u = wall_u
+			elif c.is_space:
+				u = space_u
+			elif c.floor_type == MCF.FLOOR_GRASS:
+				u = grass_u
+			else:
+				u = floor_u
+		else:
+			u = _rgba32(_lod_color(c))
+		bytes.encode_u32(k, u)
+		if c.feature_id != "":
+			fbytes.encode_u32(k, _rgba32(_lod_feature_color(c)))
+		k += 4
+	_lod_terrain = Image.create_from_data(grid.width, grid.height, false, Image.FORMAT_RGBA8, bytes)
+	_lod_features = Image.create_from_data(grid.width, grid.height, false, Image.FORMAT_RGBA8,
+			fbytes)
+
+## Цвет как 4 байта RGBA одним словом (little-endian: r — младший байт).
+static func _rgba32(c: Color) -> int:
+	return c.r8 | (c.g8 << 8) | (c.b8 << 16) | (c.a8 << 24)
+
+const LOD_FLOOR := Color(0.14, 0.15, 0.18)
+const LOD_WALL := Color(0.35, 0.3, 0.25)
+const LOD_SPACE := Color(0.03, 0.02, 0.08)
+
+## Цвет клетки на дальнем плане — то же, что рисует поклеточный проход, сведённое к одному
+## пикселю: пол (или средний цвет его картинки-замены), трава, копоть, укрытие, огонь.
+## Объект клетки — отдельным слоем поверх тумана (_lod_feature_color).
+func _lod_color(cell: GridCell) -> Color:
+	var is_wall := cell.cover_height >= MCF.WALL_HEIGHT
+	var damage: int = 0
+	if not _fx.floor_damage.is_empty():
+		damage = int(_fx.floor_damage.get(cell.coord, 0))
+	# Почти вся карта — голый пол или голая стена без картинок-замен: цвет готов.
+	if damage == 0 and not cell.on_fire and _lod_tex_avg.is_empty():
+		if is_wall:
+			return LOD_WALL
+		if cell.cover_height == 0.0 and not cell.is_space and cell.floor_type != MCF.FLOOR_GRASS:
+			return LOD_FLOOR
+	var floor_name := "floor"
+	if cell.is_space:
+		floor_name = "floor_space"
+	elif is_wall:
+		floor_name = "floor_wall"
+	elif damage == FxDecals.DAMAGE_EPICENTER:
+		floor_name = "floor_epicenter"
+	elif damage == FxDecals.DAMAGE_RUBBLE:
+		floor_name = "floor_destroyed"
+	elif cell.floor_type == MCF.FLOOR_GRASS:
+		floor_name = "floor_grass"
+	var col: Color
+	if _lod_tex_avg.has(floor_name):
+		col = _lod_tex_avg[floor_name]
+	else:
+		col = LOD_FLOOR
+		if cell.is_space:
+			col = LOD_SPACE
+		if is_wall:
+			col = LOD_WALL
+		if not is_wall and not cell.is_space and cell.floor_type == MCF.FLOOR_GRASS:
+			col = col.blend(GRASS_TINT)
+		if damage != 0 and not cell.is_space:
+			col = col.blend(SCORCH_EPICENTER if damage == FxDecals.DAMAGE_EPICENTER
+					else SCORCH_RUBBLE)
+	var h := cell.cover_height
+	if h > 0.0 and not is_wall:
+		col = col.blend(_lod_tex_avg.get("floor_cover", Color(0.5, 0.45, 0.2, 0.12 + 0.12 * h)))
+	if cell.on_fire:
+		col = col.blend(_lod_tex_avg.get("fire", Color(1.0, 0.4, 0.05, 0.4)))
+	return col
+
+## Объект клетки на дальнем плане: пиксель слоя объектов (прозрачный — объекта нет). Мины
+## сюда не входят: их видимость своя у каждой стороны, их рисует _draw.
+func _lod_feature_color(cell: GridCell) -> Color:
+	var fid := cell.feature_id
+	if fid == "" or fid == MCF.FEATURE_MINE or fid == MCF.FEATURE_AV_MINE:
+		return Color(0, 0, 0, 0)
+	if _lod_tex_avg.has(fid):
+		return _lod_tex_avg[fid]
+	if fid == MCF.FEATURE_LDF:
+		return LDF_COLOR
+	if MCF.is_glass(fid):
+		return Color(0.55, 0.75, 0.9, 0.6)
+	if fid == MCF.FEATURE_AIRLOCK:
+		return Color(0.45, 0.6, 0.75, 0.55)
+	return Color(0.6, 0.6, 0.7, 0.45)
+
+## Средние цвета картинок-замен пола и объектов (#55): на дальнем плане картинка — это
+## её цвет. Считается раз на сборку рельефа.
+func _lod_texture_averages() -> Dictionary:
+	var out := {}
+	var names: Array = ["floor", "floor_space", "floor_wall", "floor_cover", "fire",
+			"floor_grass", "floor_destroyed", "floor_epicenter"]
+	names.append_array(FEATURE_TAGS.keys())
+	for n: String in names:
+		var tex := Sprites.texture_of(n)
+		if tex == null:
+			continue
+		var img := tex.get_image()
+		if img == null or img.is_empty():
+			continue
+		if img.is_compressed():
+			img.decompress()
+		img.resize(1, 1, Image.INTERPOLATE_BILINEAR)
+		out[n] = img.get_pixel(0, 0)
+	return out
+
+## Клетки с кучами тел (cell.corpse_count > 0). Кучи рисуются отдельным проходом, и
+## искать их перебором экрана на отъезде — это десятки тысяч клеток за кадр.
+var _piles: Array[Vector2i] = []
+var _piles_key: Array = []
+
+func _pile_cells() -> Array[Vector2i]:
+	var key := [state.grid.get_instance_id(), GridCell.corpse_version]
+	if key != _piles_key:
+		_piles_key = key
+		_piles = []
+		for c: GridCell in state.grid.cells_flat():
+			if c.corpse_count > 0:
+				_piles.append(c.coord)
+	return _piles
+
 func _draw() -> void:
 	if state == null:
 		return
@@ -3356,7 +3639,7 @@ func _draw() -> void:
 	var gh := grid.height
 	var csize := Vector2(CELL, CELL)
 	var grid_col := Color(0.25, 0.27, 0.32)
-	var fog_col := Color(0.02, 0.02, 0.04, 0.55)
+	var fog_col := FOG_COL
 	var label_off := Vector2(6, CELL - 4)
 	var fx_damage: Dictionary = _fx.floor_damage
 	# Отсечение по вьюпорту (item 5): на большой карте (город 50×50, бой 500×500) или
@@ -3372,74 +3655,97 @@ func _draw() -> void:
 	# Тот же диапазон членами — для функций отрисовки трупов и косметики (item 5).
 	_cull_x0 = _tl.x - 1; _cull_x1 = _br.x + 1
 	_cull_y0 = _tl.y - 1; _cull_y1 = _br.y + 1
-	for y in range(vy0, vy1 + 1):
-		var oy: float = ORIGIN.y + y * CELL
-		for x in range(vx0, vx1 + 1):
-			var cell := grid.cell_fast(x, y)
-			var origin := Vector2(ORIGIN.x + x * CELL, oy)
-			var rect := Rect2(origin, csize)
-			# Совсем НЕИЗВЕСТНАЯ клетка (item 46): ни в обзоре, ни в памяти разведки.
-			# В СТАНДАРТНОМ тумане память есть, и такой остаётся неразведанная даль;
-			# в РЕАЛИСТИЧНОМ памяти нет вовсе, и так выглядит всё вне обзора.
-			# Рисуем глухую заливку и уходим — рельеф под ней игрок знать не должен.
-			if fog_on:
-				var here := Vector2i(x, y)
-				if not visible.has(here) and not remembered.has(here):
-					draw_rect(rect, UNKNOWN_COL)
-					draw_rect(rect, grid_col, false, 1.0)
-					continue
-			var is_wall := cell.cover_height >= MCF.WALL_HEIGHT
-			# Пол: сначала картинка-замена, и только если её нет — заливка цветом (#55).
-			var floor_name := "floor"
-			# Побитый взрывом пол (#21.1). Проверка идёт ПОСЛЕ пустого слоя: пока
-			# ничего не рушили, словарь пуст и в цикл по 2400 клеткам не заходят.
-			var damage: int = 0
-			if not fx_damage.is_empty():
-				damage = int(fx_damage.get(Vector2i(x, y), 0))
-			if cell.is_space:
-				floor_name = "floor_space"
-			elif is_wall:
-				floor_name = "floor_wall"
-			elif damage == FxDecals.DAMAGE_EPICENTER:
-				floor_name = "floor_epicenter"   # выгоревшая клетка эпицентра
-			elif damage == FxDecals.DAMAGE_RUBBLE:
-				floor_name = "floor_destroyed"
-			elif cell.floor_type == MCF.FLOOR_GRASS:
-				floor_name = "floor_grass"   # трава (#14) — своя картинка-замена
-			if not Sprites.draw_texture_override_rect(self, floor_name, rect):
-				var base_col := Color(0.14, 0.15, 0.18)
+	# Дальний план (большие карты): рельеф, объекты и туман — текстурами слоя под нами.
+	var far := zoom < LOD_ZOOM
+	_lod_sync(far, viewer, visible, remembered, fog_on)
+	if not far:
+		var flat := grid.cells_flat()
+		# Картинок-замен пола в поставке нет вовсе: тогда их и не ищут ни на одной клетке.
+		var floor_tex := false
+		for fname: String in ["floor", "floor_space", "floor_wall", "floor_epicenter",
+				"floor_destroyed", "floor_grass", "floor_cover", "fire"]:
+			floor_tex = floor_tex or Sprites.has_override(fname)
+		for y in range(vy0, vy1 + 1):
+			var oy: float = ORIGIN.y + y * CELL
+			var row := y * gw
+			for x in range(vx0, vx1 + 1):
+				var cell: GridCell = flat[row + x]
+				var origin := Vector2(ORIGIN.x + x * CELL, oy)
+				var rect := Rect2(origin, csize)
+				# Совсем НЕИЗВЕСТНАЯ клетка (item 46): ни в обзоре, ни в памяти разведки.
+				# В СТАНДАРТНОМ тумане память есть, и такой остаётся неразведанная даль;
+				# в РЕАЛИСТИЧНОМ памяти нет вовсе, и так выглядит всё вне обзора.
+				# Рисуем глухую заливку и уходим — рельеф под ней игрок знать не должен.
+				var seen := true
+				if fog_on:
+					var here := Vector2i(x, y)
+					seen = visible.has(here)
+					if not seen and not remembered.has(here):
+						draw_rect(rect, UNKNOWN_COL)
+						continue
+				var is_wall := cell.cover_height >= MCF.WALL_HEIGHT
+				# Пол: сначала картинка-замена, и только если её нет — заливка цветом (#55).
+				var floor_name := "floor"
+				# Побитый взрывом пол (#21.1). Проверка идёт ПОСЛЕ пустого слоя: пока
+				# ничего не рушили, словарь пуст и в цикл по 2400 клеткам не заходят.
+				var damage: int = 0
+				if not fx_damage.is_empty():
+					damage = int(fx_damage.get(Vector2i(x, y), 0))
 				if cell.is_space:
-					base_col = Color(0.03, 0.02, 0.08)
-				if is_wall:
-					base_col = Color(0.35, 0.3, 0.25)
-				draw_rect(rect, base_col)
-				# Трава без картинки-замены: зелёный налёт поверх обычного пола, чтобы
-				# «сюда огонь придёт почти наверняка» читалось прямо на доске (#14).
-				if not is_wall and not cell.is_space and cell.floor_type == MCF.FLOOR_GRASS:
-					draw_rect(rect, GRASS_TINT)
-				# Побитый пол без картинки-замены: тёмная копоть, у эпицентра гуще.
-				if damage != 0 and not cell.is_space:
-					draw_rect(rect, SCORCH_EPICENTER if damage == FxDecals.DAMAGE_EPICENTER
-							else SCORCH_RUBBLE)
-			var h: float = cell.cover_height
-			# Низкое укрытие: тон тем ярче, чем выше (§3.7).
-			if h > 0.0 and not is_wall:
-				if not Sprites.draw_texture_override_rect(self, "floor_cover", rect):
-					draw_rect(rect, Color(0.5, 0.45, 0.2, 0.12 + 0.12 * h))
-			if cell.on_fire:
-				if not Sprites.draw_texture_override_rect(self, "fire", rect):
-					draw_rect(rect, Color(1.0, 0.4, 0.05, 0.4))
-			# Насыпь земли (§3.10): подпись высоты в клетке. Подписей всего пять штук,
-			# поэтому строка берётся из таблицы, а не форматируется заново каждый кадр.
-			if h > 0.0:
-				draw_string(font, origin + label_off, HEIGHT_LABELS.get(h, "%.1fm" % h),
-					HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.9, 0.78, 0.5))
-			draw_rect(rect, grid_col, false, 1.0)
-			# Разведанное, но сейчас не просматриваемое — под серой пеленой (item 46).
-			# Рельеф сквозь неё виден, а живых на такой клетке не рисуют вовсе: их
-			# отсеивают проходы по юнитам и трупам ниже, по тому же множеству visible.
-			if fog_on and not visible.has(Vector2i(x, y)):
-				draw_rect(rect, fog_col)
+					floor_name = "floor_space"
+				elif is_wall:
+					floor_name = "floor_wall"
+				elif damage == FxDecals.DAMAGE_EPICENTER:
+					floor_name = "floor_epicenter"   # выгоревшая клетка эпицентра
+				elif damage == FxDecals.DAMAGE_RUBBLE:
+					floor_name = "floor_destroyed"
+				elif cell.floor_type == MCF.FLOOR_GRASS:
+					floor_name = "floor_grass"   # трава (#14) — своя картинка-замена
+				if not floor_tex or not Sprites.draw_texture_override_rect(self, floor_name, rect):
+					var base_col := Color(0.14, 0.15, 0.18)
+					if cell.is_space:
+						base_col = Color(0.03, 0.02, 0.08)
+					if is_wall:
+						base_col = Color(0.35, 0.3, 0.25)
+					draw_rect(rect, base_col)
+					# Трава без картинки-замены: зелёный налёт поверх обычного пола, чтобы
+					# «сюда огонь придёт почти наверняка» читалось прямо на доске (#14).
+					if not is_wall and not cell.is_space and cell.floor_type == MCF.FLOOR_GRASS:
+						draw_rect(rect, GRASS_TINT)
+					# Побитый пол без картинки-замены: тёмная копоть, у эпицентра гуще.
+					if damage != 0 and not cell.is_space:
+						draw_rect(rect, SCORCH_EPICENTER if damage == FxDecals.DAMAGE_EPICENTER
+								else SCORCH_RUBBLE)
+				var h: float = cell.cover_height
+				# Низкое укрытие: тон тем ярче, чем выше (§3.7).
+				if h > 0.0 and not is_wall:
+					if not floor_tex or not Sprites.draw_texture_override_rect(self, "floor_cover", rect):
+						draw_rect(rect, Color(0.5, 0.45, 0.2, 0.12 + 0.12 * h))
+				if cell.on_fire:
+					if not floor_tex or not Sprites.draw_texture_override_rect(self, "fire", rect):
+						draw_rect(rect, Color(1.0, 0.4, 0.05, 0.4))
+				# Насыпь земли (§3.10): подпись высоты в клетке. Подписей всего пять штук,
+				# поэтому строка берётся из таблицы, а не форматируется заново каждый кадр.
+				if h > 0.0:
+					draw_string(font, origin + label_off, HEIGHT_LABELS.get(h, "%.1fm" % h),
+						HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.9, 0.78, 0.5))
+				# Разведанное, но сейчас не просматриваемое — под серой пеленой (item 46).
+				# Рельеф сквозь неё виден, а живых на такой клетке не рисуют вовсе: их
+				# отсеивают проходы по юнитам и трупам ниже, по тому же множеству visible.
+				if not seen:
+					draw_rect(rect, fog_col)
+		# Сетка — линиями по строкам и столбцам экрана, а не контуром каждой клетки: на
+		# отъезде это тысячи прямоугольников за кадр против сотни линий.
+		var top := ORIGIN.y + vy0 * CELL
+		var bottom := ORIGIN.y + (vy1 + 1) * CELL
+		var left := ORIGIN.x + vx0 * CELL
+		var right := ORIGIN.x + (vx1 + 1) * CELL
+		for x in range(vx0, vx1 + 2):
+			var lx: float = ORIGIN.x + x * CELL
+			draw_line(Vector2(lx, top), Vector2(lx, bottom), grid_col, 1.0)
+		for y in range(vy0, vy1 + 2):
+			var ly: float = ORIGIN.y + y * CELL
+			draw_line(Vector2(left, ly), Vector2(right, ly), grid_col, 1.0)
 
 	if mode == Mode.MOVE and reach != null:
 		_draw_move_preview()
@@ -3681,51 +3987,62 @@ func _draw() -> void:
 						HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(1, 1, 0.6))
 
 	# Статические объекты на клетках (станции дронов и т. п.) — тоже только на экране (item 5).
-	for y in range(vy0, vy1 + 1):
-		var foy: float = ORIGIN.y + y * CELL
-		for x in range(vx0, vx1 + 1):
-			var fcell := grid.cell_fast(x, y)
-			# item 22: пока крутится кубик выстрела, клетка рисуется по «слепку до взрыва» —
-			# снесённое укрепление ещё стоит, потрескавшееся ещё целое.
-			var _fid := fcell.feature_id
-			var _fdur := fcell.feature_durability
-			if not _hold_visual.is_empty():
-				var _hc: Dictionary = _hold_visual.get("cells", {})
-				var _hkey := Vector2i(x, y)
-				if _hc.has(_hkey):
-					_fid = _hc[_hkey]["feature_id"]
-					_fdur = _hc[_hkey]["feature_durability"]
-			if _fid == "":
-				continue
-			# Мина видна только тому, кто её поставил, — и тому, чей сапёр её нашёл
-			# (item 45). Иначе смысла в минном поле не было бы вовсе.
-			if (_fid == MCF.FEATURE_MINE or _fid == MCF.FEATURE_AV_MINE) \
-					and not resolver.mine_visible_to(viewer, Vector2i(x, y)):
-				continue
-			var o := Vector2(ORIGIN.x + x * CELL, foy)
-			# Имя картинки совпадает с id объекта (sandbags.png, trench.png...) (#55);
-			# лист «<объект>_autotile.png» стыкует стены по соседям (batch 17, item 12).
-			if Sprites.draw_feature(self, _fid, Rect2(o, Vector2(CELL, CELL)),
-					_same_feature.bind(Vector2i(x, y), _fid)):
-				continue
-			var tag: String = FEATURE_TAGS.get(_fid, "?")
-			# ЛДФ — чёрный монолит (#85): заливка, а не контур, чтобы отличался от бетона.
-			if _fid == MCF.FEATURE_LDF:
-				draw_rect(Rect2(o + Vector2(3, 3), Vector2(CELL - 6, CELL - 6)), LDF_COLOR)
-				draw_rect(Rect2(o + Vector2(3, 3), Vector2(CELL - 6, CELL - 6)),
-					Color(0.35, 0.35, 0.4), false, 1.0)
+	if not far:
+		var fflat := grid.cells_flat()
+		for y in range(vy0, vy1 + 1):
+			var foy: float = ORIGIN.y + y * CELL
+			var frow := y * gw
+			for x in range(vx0, vx1 + 1):
+				var fcell: GridCell = fflat[frow + x]
+				# item 22: пока крутится кубик выстрела, клетка рисуется по «слепку до взрыва» —
+				# снесённое укрепление ещё стоит, потрескавшееся ещё целое.
+				var _fid := fcell.feature_id
+				var _fdur := fcell.feature_durability
+				if not _hold_visual.is_empty():
+					var _hc: Dictionary = _hold_visual.get("cells", {})
+					var _hkey := Vector2i(x, y)
+					if _hc.has(_hkey):
+						_fid = _hc[_hkey]["feature_id"]
+						_fdur = _hc[_hkey]["feature_durability"]
+				if _fid == "":
+					continue
+				# Мина видна только тому, кто её поставил, — и тому, чей сапёр её нашёл
+				# (item 45). Иначе смысла в минном поле не было бы вовсе.
+				if (_fid == MCF.FEATURE_MINE or _fid == MCF.FEATURE_AV_MINE) \
+						and not resolver.mine_visible_to(viewer, Vector2i(x, y)):
+					continue
+				var o := Vector2(ORIGIN.x + x * CELL, foy)
+				# Имя картинки совпадает с id объекта (sandbags.png, trench.png...) (#55);
+				# лист «<объект>_autotile.png» стыкует стены по соседям (batch 17, item 12).
+				if Sprites.draw_feature(self, _fid, Rect2(o, Vector2(CELL, CELL)),
+						_same_feature.bind(Vector2i(x, y), _fid)):
+					continue
+				var tag: String = FEATURE_TAGS.get(_fid, "?")
+				# ЛДФ — чёрный монолит (#85): заливка, а не контур, чтобы отличался от бетона.
+				if _fid == MCF.FEATURE_LDF:
+					draw_rect(Rect2(o + Vector2(3, 3), Vector2(CELL - 6, CELL - 6)), LDF_COLOR)
+					draw_rect(Rect2(o + Vector2(3, 3), Vector2(CELL - 6, CELL - 6)),
+						Color(0.35, 0.35, 0.4), false, 1.0)
+					draw_string(font, o + Vector2(6, CELL - 15), tag,
+						HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.8, 0.8, 0.85))
+					continue
+				draw_rect(Rect2(o + Vector2(8, 8), Vector2(CELL - 16, CELL - 16)),
+					Color(0.6, 0.6, 0.7), false, 2.0)
+				# Тег стоит СТРОКОЙ ВЫШЕ подписи высоты, чтобы они не наезжали друг на друга (#35).
 				draw_string(font, o + Vector2(6, CELL - 15), tag,
-					HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.8, 0.8, 0.85))
-				continue
-			draw_rect(Rect2(o + Vector2(8, 8), Vector2(CELL - 16, CELL - 16)),
-				Color(0.6, 0.6, 0.7), false, 2.0)
-			# Тег стоит СТРОКОЙ ВЫШЕ подписи высоты, чтобы они не наезжали друг на друга (#35).
-			draw_string(font, o + Vector2(6, CELL - 15), tag,
-				HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.75, 0.75, 0.85))
-			# Треснувший ДОТ (потеряна прочность) — красная риска в углу (#89).
-			if _fdur > 0 and _fdur < MCF.feature_durability(_fid):
-				draw_line(o + Vector2(CELL - 12, 8), o + Vector2(CELL - 6, 16),
-					Color(0.9, 0.25, 0.2), 2.0)
+					HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.75, 0.75, 0.85))
+				# Треснувший ДОТ (потеряна прочность) — красная риска в углу (#89).
+				if _fdur > 0 and _fdur < MCF.feature_durability(_fid):
+					draw_line(o + Vector2(CELL - 12, 8), o + Vector2(CELL - 6, 16),
+						Color(0.9, 0.25, 0.2), 2.0)
+	else:
+		# На дальнем плане объекты — в текстуре рельефа, кроме мин: их видимость своя у
+		# каждой стороны (item 45). Мин на карте единицы — точкой в цвет тега.
+		for mk: String in [MCF.FEATURE_MINE, MCF.FEATURE_AV_MINE]:
+			for mc: Vector2i in resolver._feature_cells(mk):
+				if _cell_on_screen(mc.x, mc.y) and resolver.mine_visible_to(viewer, mc):
+					draw_rect(Rect2(_cell_origin(mc) + Vector2(CELL * 0.25, CELL * 0.25),
+							Vector2(CELL * 0.5, CELL * 0.5)), Color(0.85, 0.25, 0.2))
 
 	# Трупы идут ОТДЕЛЬНЫМ проходом до корпусов машин (#59): танк наезжает на тело,
 	# а не тело лежит поверх брони. Смерти, ещё не показанные из-за анимации броска
@@ -3757,23 +4074,23 @@ func _draw() -> void:
 			continue
 		_draw_corpse(unit.coord, 1, unit)
 
-	# Кучи трупов — только в видимом окне (item 5), а не по всей сетке.
-	for cy in range(vy0, vy1 + 1):
-		for cx in range(vx0, vx1 + 1):
-			var pile_coord := Vector2i(cx, cy)
-			var pile_cell := state.grid.cell(pile_coord)
-			if pile_cell == null or pile_cell.corpse_count <= 0:
-				continue
-			if not visible.has(pile_coord):
-				continue
-			# Павший на месте боец — такое же тело в стеке. Пока его смерть не доиграна
-			# (#46), он показан живым, поэтому в счёт стека не идёт.
-			var stack := pile_cell.corpse_count
-			var pile_occ: UnitInstance = pile_cell.occupant
-			if pile_occ != null and pile_occ.status == MCF.Status.CORPSE \
-					and not _pending_death_ids.has(pile_occ.id):
-				stack += 1
-			_draw_corpse(pile_coord, stack)
+	# Кучи трупов — по списку куч и только в видимом окне (item 5), а не по всей сетке.
+	for pile_coord: Vector2i in _pile_cells():
+		if not _cell_on_screen(pile_coord.x, pile_coord.y):
+			continue
+		var pile_cell := state.grid.cell(pile_coord)
+		if pile_cell == null or pile_cell.corpse_count <= 0:
+			continue
+		if not visible.has(pile_coord):
+			continue
+		# Павший на месте боец — такое же тело в стеке. Пока его смерть не доиграна
+		# (#46), он показан живым, поэтому в счёт стека не идёт.
+		var stack := pile_cell.corpse_count
+		var pile_occ: UnitInstance = pile_cell.occupant
+		if pile_occ != null and pile_occ.status == MCF.Status.CORPSE \
+				and not _pending_death_ids.has(pile_occ.id):
+			stack += 1
+		_draw_corpse(pile_coord, stack)
 
 	# Корпуса машин (§техника): прямоугольник по всему следу, цвет владельца.
 	for veh: Vehicle in state.all_vehicles():
