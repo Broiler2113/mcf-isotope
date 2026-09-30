@@ -3,6 +3,7 @@
 # rl/runs/, logs in rl/runs/<name>.log — no tmux, no sudo, works on macOS and Linux.
 #   bash rl/run.sh up                              # TensorBoard (127.0.0.1:6006) + dashboard (:8501) [+ tunnel on Linux]
 #   bash rl/run.sh down                            # stop dashboard/TensorBoard and every trainer (graceful)
+#   bash rl/run.sh dashboard                       # (re)start ONLY the dashboard — after a git pull; trainers untouched
 #   bash rl/run.sh start  <config.yaml> <branch>   # new run
 #   bash rl/run.sh resume <branch> [config.yaml]   # continue from latest checkpoint
 #   bash rl/run.sh restart <branch> <config.yaml>  # stop, wait for the checkpoint, resume (11.3)
@@ -70,6 +71,20 @@ case "${1:-}" in
     # watchdog in rl/tools/supervise.sh, which probes end to end and kickstarts the agent.
     if [ "$(uname)" != Darwin ] && [ -n "${TUNNEL_TOKEN:-}" ]; then spawn tunnel cloudflared tunnel run --token "$TUNNEL_TOKEN"; fi
     echo "tensorboard http://127.0.0.1:$TB_PORT   dashboard http://127.0.0.1:$DASH_PORT";;
+  dashboard)
+    # "kill, then up" raced: streamlit takes a moment to exit, `up` saw it still alive,
+    # skipped the start — and the site went to Cloudflare 502 once it did exit. Wait for it.
+    if pid_alive "$RUNS/dashboard.pid"; then
+      kill "$(cat "$RUNS/dashboard.pid")" 2>/dev/null || true
+      for _ in $(seq 1 100); do pid_alive "$RUNS/dashboard.pid" || break; sleep 0.2; done
+      if pid_alive "$RUNS/dashboard.pid"; then kill -9 "$(cat "$RUNS/dashboard.pid")" 2>/dev/null || true; sleep 1; fi
+    fi
+    spawn dashboard "$VENV/bin/streamlit" run dashboard.py --server.port "$DASH_PORT" --server.address 127.0.0.1 --server.headless true --browser.gatherUsageStats false
+    for _ in $(seq 1 60); do
+      curl -s -o /dev/null "http://127.0.0.1:$DASH_PORT/_stcore/health" && { echo "dashboard up: http://127.0.0.1:$DASH_PORT"; exit 0; }
+      sleep 0.5
+    done
+    echo "dashboard did not come up — last lines of $RUNS/dashboard.log:"; tail -20 "$RUNS/dashboard.log"; exit 1;;
   down)
     for p in "$RUNS"/*.pid; do
       [ -f "$p" ] || continue
@@ -105,5 +120,5 @@ case "${1:-}" in
            for p in "$RUNS"/*.pid; do [ -f "$p" ] && pid_alive "$p" && echo "process: $(basename "$p" .pid) (pid $(cat "$p"))"; done; true;;
   logs)    tail -f "$RUNS/$2.log";;
   alive)   alive "$2";;
-  *) sed -n 2,15p "$0"; exit 2;;
+  *) sed -n 2,16p "$0"; exit 2;;
 esac
