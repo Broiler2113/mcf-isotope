@@ -17,6 +17,8 @@ const SteamChrome = preload("res://src/ui/SteamChrome.gd")
 const PlacementScript = preload("res://scenes/Placement.gd")
 
 const GAME_MODES := ["domination"]
+## Строка «Random map» в списке карт: пути к файлу у неё нет, карту строит MapGen.
+const RANDOM_MAP := "<random>"
 
 ## Ширины колонок таблицы слотов (item 4): один и тот же набор у заголовков и у строк,
 ## чтобы «Type/Color/Zone/Points» стояли ровно над своими контролами, а не сбоку.
@@ -63,6 +65,24 @@ var _status: Label
 var _map_paths: Array[String] = []
 ## Карта хоста у гостя (batch 12 #8): своего списка карт у него нет — только превью.
 var _client_map: MapData = null
+
+# --- Случайная карта ---
+## Настройки генератора видны, только пока в списке выбрана «Random map».
+var _gen_box: VBoxContainer
+var _gen_players: SpinBox
+var _gen_units: SpinBox
+var _gen_style: OptionButton
+var _gen_size: OptionButton
+var _gen_density: OptionButton
+var _gen_space: CheckBox
+var _gen_fire: CheckBox
+var _gen_obstacles: CheckBox
+var _gen_civilians: CheckBox
+var _gen_seed: SpinBox
+var _gen_info: Label
+## Собранная карта и настройки, из которых она собрана: пока они те же — не пересобираем.
+var _gen_map: MapData = null
+var _gen_key := ""
 var _color_opt: OptionButton
 
 # --- Загруженная партия (M12, item 42) ---
@@ -185,8 +205,13 @@ func _refresh_host_status() -> void:
 
 ## Любое изменение лобби у хоста: перерисовать и разослать гостям.
 func _lobby_changed() -> void:
-	_refresh_slots()
+	# Случайная карта держит по зоне на слот: слот добавили или убрали — карта
+	# пересобирается (тем же зерном), и гостям уезжает новая.
+	var regen := _is_random() and _gen_key != str(_gen_options())
+	_refresh_slots()  # пересоберёт карту и превью сам — через _selected_map()
 	_broadcast_lobby()
+	if regen:
+		_send_lobby_map()
 
 func _broadcast_lobby() -> void:
 	if not _is_host_net or NetHandoff.session == null:
@@ -385,11 +410,13 @@ func _build_ui() -> void:
 	cols.add_child(right)
 
 	_build_config(left)
-	_build_map(left)
 	if not _is_client:
 		_build_load(left)
 	_build_slots(right)
 	_build_personal(right)
+	# Карта — справа, под слотами: там есть ширина, чтобы поставить превью рядом с
+	# настройками случайной карты, и «Players» там же, где список слотов.
+	_build_map(right)
 
 	# Нижняя полоса действий.
 	var bar := HBoxContainer.new()
@@ -552,11 +579,22 @@ func _opt(items: Array, selected: int) -> OptionButton:
 	return o
 
 func _build_map(parent: VBoxContainer) -> void:
-	var box := _titled(parent, "Map Selection & Preview")
+	var titled := _titled(parent, "Map Selection & Preview")
+	# Настройки слева, превью справа: крутишь ручки случайной карты — и видишь, что
+	# вышло, не пролистывая лобби вниз.
+	var split := HBoxContainer.new()
+	split.add_theme_constant_override("separation", 12)
+	titled.add_child(split)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 5)
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	split.add_child(box)
 	_map_opt = OptionButton.new()
 	_reload_map_items()
 	# Смена карты обновляет и превью, и слоты — у зон свой предел от карты (item 6).
 	_map_opt.item_selected.connect(func(_i: int) -> void:
+		if _gen_box != null:
+			_gen_box.visible = _is_random()
 		_refresh_map_preview()
 		_refresh_slots()
 		_broadcast_lobby()
@@ -580,12 +618,15 @@ func _build_map(parent: VBoxContainer) -> void:
 	map_row.add_child(_map_opt)
 	map_row.add_child(refresh)
 	_row(box, "Map:", map_row)
+	if not _is_client:
+		_build_generator(box)
 
 	_map_preview = TextureRect.new()
-	_map_preview.custom_minimum_size = Vector2(260, 180)
+	_map_preview.custom_minimum_size = Vector2(360, 260)
+	_map_preview.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_map_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_map_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	box.add_child(_map_preview)
+	split.add_child(_map_preview)
 
 ## Перечитать каталоги карт и пересобрать выпадающий список (item 1, issue 1).
 ##
@@ -601,11 +642,199 @@ func _reload_map_items() -> void:
 	_map_paths = []
 	_map_opt.add_item("Blank arena")
 	_map_paths.append("")
+	_map_opt.add_item("Random map")
+	_map_paths.append(RANDOM_MAP)
 	for name in MapData.list_maps():
 		_map_opt.add_item(name.get_basename())
 		_map_paths.append(MapData.path_for(name))
 	var idx := _map_paths.find(keep)
 	_map_opt.select(idx if idx >= 0 else 0)
+
+## Настройки случайной карты (строка «Random map»): стиль, размер, плотность, механики
+## и зерно. Любая правка пересобирает карту, превью и рассылку гостям. То же зерно при
+## тех же настройках всегда даёт ту же карту — удачную можно сохранить файлом, и дальше
+## она живёт в списке карт и в редакторе.
+func _build_generator(box: VBoxContainer) -> void:
+	_gen_box = VBoxContainer.new()
+	_gen_box.add_theme_constant_override("separation", 5)
+	_gen_box.visible = _is_random()
+	box.add_child(_gen_box)
+	var defaults := MapGen.default_options()
+	# Игроки — это слоты лобби (по зоне на каждого): спинбокс их добавляет и убирает.
+	_gen_players = SpinBox.new()
+	_gen_players.min_value = 2
+	_gen_players.max_value = MCF.MAX_PLAYERS
+	_gen_players.value = roster.slots.size()
+	_gen_players.tooltip_text = "One deployment zone per player; this is the slot list above."
+	_gen_players.value_changed.connect(func(v: float) -> void: _set_player_count(int(v)))
+	_gen_units = SpinBox.new()
+	_gen_units.min_value = 1
+	_gen_units.max_value = 300
+	_gen_units.value = int(defaults["units"])
+	_gen_units.tooltip_text = "How many units each side deploys: every zone is made big enough for them, and the map grows if it has to."
+	_gen_units.value_changed.connect(func(_v: float) -> void: _on_gen_changed())
+	var units_label := Label.new()
+	units_label.text = "Units per side:"
+	units_label.add_theme_font_size_override("font_size", 12)
+	var army := HBoxContainer.new()
+	army.add_theme_constant_override("separation", 8)
+	for c: Control in [_gen_players, units_label, _gen_units]:
+		army.add_child(c)
+	_gen_players.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_gen_units.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_row(_gen_box, "Players:", army)
+	# Стиль, размер и плотность — одной строкой: панель короче, превью рядом видно целиком.
+	_gen_style = _opt(MapGen.STYLE_NAMES, int(defaults["style"]))
+	_gen_style.tooltip_text = "Station: rooms and corridors in space. Town: streets and houses. Field: open ground and ruins."
+	var sizes: Array = []
+	for i in MapGen.SIZES.size():
+		var d: Vector2i = MapGen.SIZES[i]
+		sizes.append("%s (%d×%d)" % [MapGen.SIZE_NAMES[i], d.x, d.y])
+	_gen_size = _opt(sizes, int(defaults["size"]))
+	_gen_size.tooltip_text = "Starting size — the map grows if the armies don't fit."
+	_gen_density = _opt(MapGen.DENSITY_NAMES, int(defaults["density"]))
+	_gen_density.tooltip_text = "How built-up and cluttered the map is."
+	var look := HBoxContainer.new()
+	look.add_theme_constant_override("separation", 6)
+	for o: OptionButton in [_gen_style, _gen_size, _gen_density]:
+		o.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		look.add_child(o)
+	_row(_gen_box, "Terrain:", look)
+	var mech := HFlowContainer.new()
+	mech.add_theme_constant_override("h_separation", 10)
+	_gen_space = _gen_check(mech, "Space & airlocks",
+			"Vacuum you can fight in (zero-G); stations get airlocks and hull windows.")
+	_gen_fire = _gen_check(mech, "Flammable",
+			"Grass, plank floors, wooden walls and fences — ground that fire spreads over.")
+	_gen_obstacles = _gen_check(mech, "Obstacles",
+			"Sandbags, trenches, hedgehogs, barricades, crates and pillars.")
+	_gen_civilians = _gen_check(mech, "Civilians",
+			"Neutral civilians, mostly indoors and away from the deployment zones.")
+	_row(_gen_box, "Mechanics:", mech)
+	_gen_seed = SpinBox.new()
+	_gen_seed.max_value = MapGen.SEED_MAX
+	_gen_seed.value = randi_range(1, MapGen.SEED_MAX)
+	_gen_seed.tooltip_text = "The same seed and settings always build the same map."
+	var reroll := Button.new()
+	reroll.text = "Reroll"
+	reroll.pressed.connect(func() -> void: _gen_seed.value = randi_range(1, MapGen.SEED_MAX))
+	var save := Button.new()
+	save.text = "Save as Map"
+	save.tooltip_text = "Keep this map: it joins the map list and opens in the editor."
+	save.pressed.connect(_save_random_map)
+	var seed_row := HBoxContainer.new()
+	seed_row.add_theme_constant_override("separation", 6)
+	_gen_seed.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	seed_row.add_child(_gen_seed)
+	seed_row.add_child(reroll)
+	seed_row.add_child(save)
+	_row(_gen_box, "Seed:", seed_row)
+	_gen_info = Label.new()
+	_gen_info.add_theme_font_size_override("font_size", 12)
+	_gen_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_gen_box.add_child(_gen_info)
+	for o: OptionButton in [_gen_style, _gen_size, _gen_density]:
+		o.item_selected.connect(func(_i: int) -> void: _on_gen_changed())
+	_gen_seed.value_changed.connect(func(_v: float) -> void: _on_gen_changed())
+
+func _gen_check(parent: Control, text: String, tip: String) -> CheckBox:
+	var cb := CheckBox.new()
+	cb.text = text
+	cb.tooltip_text = tip
+	cb.button_pressed = true
+	cb.toggled.connect(func(_on: bool) -> void: _on_gen_changed())
+	parent.add_child(cb)
+	return cb
+
+func _is_random() -> bool:
+	return not _is_client and _map_opt != null and _map_opt.selected >= 0 \
+			and _map_opt.selected < _map_paths.size() \
+			and _map_paths[_map_opt.selected] == RANDOM_MAP
+
+## Настройки генератора из контролов. Зон — по одной на слот: слот без своей зоны
+## (Slot.zone() == его номер) не смог бы расставиться.
+func _gen_options() -> Dictionary:
+	if _gen_style == null:
+		return {}
+	return {"style": _gen_style.selected, "size": _gen_size.selected,
+			"density": _gen_density.selected, "seed": int(_gen_seed.value),
+			"zones": maxi(2, roster.slots.size()), "units": int(_gen_units.value),
+			"space": _gen_space.button_pressed,
+			"flammable": _gen_fire.button_pressed, "obstacles": _gen_obstacles.button_pressed,
+			"civilians": _gen_civilians.button_pressed}
+
+func _random_map() -> MapData:
+	var options := _gen_options()
+	var key := str(options)
+	if _gen_map == null or key != _gen_key:
+		_gen_map = MapGen.generate(options)
+		_gen_key = key
+		_gen_info.text = _zone_summary(_gen_map)
+	return _gen_map
+
+## Сколько места у каждой стороны. Зоны случайной карты одного размера — его и пишем,
+## а если тесно, подсказываем карту побольше.
+func _zone_summary(map: MapData) -> String:
+	var sizes := {}
+	for z in map.zone_owner:
+		if z >= 0:
+			sizes[z] = int(sizes.get(z, 0)) + 1
+	if sizes.is_empty():
+		return "No room for deployment zones — try fewer players."
+	var o := _gen_options()
+	var units := int(o["units"])
+	var cells: int = sizes.values().min()
+	var text := "%d deployment zones, %d cells each" % [sizes.size(), cells]
+	if cells < MapGen.zone_need(units):
+		return text + " — too tight for %d units each even at %d×%d; fewer players or units will fit." % [
+				units, map.width, map.height]
+	text += " — room for %d units each." % units
+	var dim: Vector2i = MapGen.SIZES[int(o["size"])]
+	if map.width > dim.x or map.height > dim.y:
+		text += " Map enlarged to %d×%d so they fit." % [map.width, map.height]
+	return text
+
+## «Players» случайной карты: слотов становится ровно столько. Новые — в одиночке ИИ
+## (партия сразу готова к старту), в сети — открытые под гостей; лишние снимаются с
+## конца, но слот, где сидит гость, не трогаем — как и крестик в списке слотов.
+func _set_player_count(n: int) -> void:
+	while roster.slots.size() < n:
+		var id := roster.add_slot(Roster.SlotKind.AI if _is_solo else Roster.SlotKind.OPEN)
+		if id < 0:
+			break
+		_assign_color(id, _first_free_color())
+		roster.slots[id].budget = GameConfig.DEFAULT_BUDGET
+	while roster.slots.size() > n:
+		var last: Roster.Slot = roster.slots[roster.slots.size() - 1]
+		if last.kind == Roster.SlotKind.HUMAN and last.peer_id > 1:
+			_status.text = "%s is sitting in the last slot — it can't be removed." % last.display_name
+			break
+		roster.remove_slot(last.id)
+		if roster.slots.has(last):
+			break  # меньше двух слотов ростер не отдаёт
+	_lobby_changed()
+
+func _on_gen_changed() -> void:
+	_refresh_slots()  # пересоберёт карту: число зон в слотах и превью — уже от новой
+	_broadcast_lobby()
+	_send_lobby_map()
+
+## Сохранить случайную карту файлом в user://maps — дальше это обычная карта: она в
+## списке и открывается в редакторе. Имя — стиль и зерно; чужой файл не перезаписываем.
+func _save_random_map() -> void:
+	var o := _gen_options()
+	var base := "random-%s-%d" % [str(MapGen.STYLE_NAMES[int(o["style"])]).to_lower(),
+			int(o["seed"])]
+	var name := base
+	var n := 2
+	while FileAccess.file_exists("%s/%s.json" % [MapData.MAPS_DIR, name]):
+		name = "%s-%d" % [base, n]
+		n += 1
+	if not _random_map().save_to("%s/%s.json" % [MapData.MAPS_DIR, name]):
+		_status.text = "Could not save the map."
+		return
+	_reload_map_items()  # выбор хранится по пути — «Random map» остаётся выбранной
+	_status.text = "Saved as '%s' — it's in the map list and the editor now." % name
 
 ## Открыть сохранённую партию прямо в лобби (item 42). Смысл именно здесь, а не в
 ## меню: доска и армии в файле уже есть, а вот КТО их ведёт — вопрос сегодняшнего
@@ -742,6 +971,10 @@ func _refresh_slots() -> void:
 	_slots_box.add_child(_slot_header())
 	for s: Roster.Slot in roster.slots:
 		_slots_box.add_child(_slot_row(s))
+	if _gen_players != null:
+		_gen_players.set_value_no_signal(roster.slots.size())
+	# Зоны в превью окрашены цветами слотов — смена цвета или зоны видна сразу.
+	_refresh_map_preview()
 
 func _slot_row(s: Roster.Slot) -> Control:
 	var row := HBoxContainer.new()
@@ -1131,6 +1364,8 @@ func _selected_map() -> MapData:
 	if _is_client:
 		return _client_map if _client_map != null else MapData.blank_arena()
 	var path: String = _map_paths[_map_opt.selected] if _map_opt != null else ""
+	if path == RANDOM_MAP:
+		return _random_map()
 	if path == _map_cache_path and _map_cache != null:
 		return _map_cache
 	var m: MapData = null
@@ -1142,14 +1377,33 @@ func _selected_map() -> MapData:
 	_map_cache = m
 	return m
 
+var _preview_key := ""
+
 func _refresh_map_preview() -> void:
 	if _map_preview == null:
 		return
-	_map_preview.texture = _render_map_texture(_selected_map())
+	var map := _selected_map()
+	var tints := _zone_tints()
+	# Зовётся на каждую пересборку слотов, поэтому рисуем заново, только если сменилась
+	# сама карта или цвета её зон: растеризация большой карты не бесплатна (batch 14).
+	var key := "%d %s" % [map.get_instance_id(), tints]
+	if key == _preview_key:
+		return
+	_preview_key = key
+	_map_preview.texture = _render_map_texture(map, tints)
 
-## Полный верхний вид карты В КАРТИНКУ, включая нейтральные спавны (item 41). Рисуем
-## по клеткам в Image — без отдельного вьюпорта, зато детерминированно и без сцены.
-func _render_map_texture(map: MapData) -> ImageTexture:
+## Цвет зоны в превью — цвет слота, который в ней расставляется (Slot.zone()).
+func _zone_tints() -> Dictionary:
+	var out := {}
+	for s: Roster.Slot in roster.slots:
+		if s.kind != Roster.SlotKind.CLOSED and not out.has(s.zone()):
+			out[s.zone()] = s.color
+	return out
+
+## Полный верхний вид карты В КАРТИНКУ, включая нейтральные спавны (item 41) и зоны
+## развёртывания цветами слотов. Рисуем по клеткам в Image — без отдельного вьюпорта,
+## зато детерминированно и без сцены.
+func _render_map_texture(map: MapData, tints: Dictionary = {}) -> ImageTexture:
 	# Масштаб по размеру карты (batch 14): большая карта рисуется по пикселю на
 	# клетку, а не по 36 на каждую — превью всё равно ужимается в 260×180.
 	var sc: int = clampi(int(600 / maxi(1, maxi(map.width, map.height))), 1, 6)
@@ -1158,7 +1412,12 @@ func _render_map_texture(map: MapData) -> ImageTexture:
 	var img := Image.create(w, h, false, Image.FORMAT_RGB8)
 	for y in map.height:
 		for x in map.width:
-			img.fill_rect(Rect2i(x * sc, y * sc, sc, sc), _cell_color(map, Vector2i(x, y)))
+			var coord := Vector2i(x, y)
+			var col := _cell_color(map, coord)
+			var zone := map.get_zone(coord)
+			if zone >= 0:
+				col = col.lerp(tints.get(zone, Color(0.85, 0.85, 0.85)), 0.4)
+			img.fill_rect(Rect2i(x * sc, y * sc, sc, sc), col)
 	# Нейтралы карты — жёлтые точки поверх (item 41: превью включает нейтралов).
 	for s in map.spawns:
 		if MCF.is_neutral(int(s["owner"])):
@@ -1201,7 +1460,8 @@ func _commit_config() -> void:
 	# (item 2). Глобальный список чистим, чтобы старое значение не перебивало личные.
 	GameConfig.allowed_units = {}
 	GameConfig.friendly_fire = _team_mode and _ff_check.button_pressed
-	GameConfig.map_path = _map_paths[_map_opt.selected]
+	# У случайной карты файла нет — на расстановку она уезжает готовой (_on_start).
+	GameConfig.map_path = "" if _is_random() else _map_paths[_map_opt.selected]
 	GameConfig.roster = roster
 
 ## Старт с загруженной партии: ростер лобби подменяет сохранённый прямо в словаре
@@ -1240,10 +1500,13 @@ func _on_start() -> void:
 		_start_loaded()
 		return
 	_commit_config()
-	# Сетевой хост объявляет карту клиентам тем же путём, что и старый Setup.
-	if NetHandoff.session != null and NetHandoff.is_host:
+	# Сетевой хост объявляет карту клиентам тем же путём, что и старый Setup. Случайная
+	# карта и в одиночке едет на расстановку готовой: перечитать её неоткуда.
+	var net_host := NetHandoff.session != null and NetHandoff.is_host
+	if net_host or _is_random():
 		var shared: MapData = _selected_map()
-		NetHandoff.session.send(NetHandoff.encode_setup(shared))
+		if net_host:
+			NetHandoff.session.send(NetHandoff.encode_setup(shared))
 		NetHandoff.lobby_map = shared
 	get_tree().change_scene_to_file(PLACEMENT_SCENE)
 
