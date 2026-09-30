@@ -2599,7 +2599,7 @@ func _resolve_reveal_mines(intent: RevealMinesIntent) -> ActionResult:
 				continue
 			if state.roster.are_allies(actor.owner, cell.feature_owner):
 				continue  # свои мины сапёр и так знает
-			if _vision_blocked(actor.coord, c):
+			if _vision_blocked(actor.coord, c, actor.owner):
 				continue
 			seen[c] = until
 			found += 1
@@ -2931,15 +2931,18 @@ func sight_of(unit: UnitInstance) -> int:
 	var s: int = unit.stats.sight_range
 	return s if s > 0 else MCF.SIGHT_UNLIMITED
 
-## Есть ли стена на луче между a и b (концы исключены).
+## Есть ли стена на луче между a и b (концы исключены) — для глаз стороны `viewer`:
+## ей закрывают обзор ещё и корпуса вражеских танков (см. _tank_sig). -1 — только рельеф.
 ## Брезенхэм шагает здесь ЖЕ. Раньше луч строился вспомогательной _ray_cells(), которая
 ## возвращала МАССИВ клеток, — а туман войны делает эту проверку по разу на каждую
 ## клетку в радиусе обзора каждого бойца, то есть тысячи массивов на один пересчёт.
 ## Порядок обхода и условие обрыва буква в букву те же, что были у _ray_cells;
 ## сама она удалена — других вызывающих у неё не осталось.
-func _vision_blocked(a: Vector2i, b: Vector2i) -> bool:
+func _vision_blocked(a: Vector2i, b: Vector2i, viewer: int = -1) -> bool:
 	if _line_off_board(a, b):
 		return true
+	var sig := _tank_sig(viewer)
+	var tanks: PackedInt32Array = _tank_sig_cells[sig] if sig != 0 else PackedInt32Array()
 	var dx: int = absi(b.x - a.x)
 	var dy: int = absi(b.y - a.y)
 	var sx: int = 1 if a.x < b.x else -1
@@ -2965,9 +2968,11 @@ func _vision_blocked(a: Vector2i, b: Vector2i) -> bool:
 		# стекло разрешено СТРЕЛЯТЬ, но цель за ним оставалась в тумане, а невидимую
 		# цель нельзя выбрать (can_shoot → "Target not visible"). Строковое сравнение
 		# стоит здесь дёшево: до него доходят только клетки, уже опознанные как стена.
-		# Корпуса машин и живые обзор не перекрывают (batch 13 #1) — только стена и
-		# закрытый шлюз, то есть ровно GridCell.blocks_sight().
+		# Живые обзор не перекрывают, машины — тоже, КРОМЕ вражеского танка: его корпус
+		# закрывает обзор противнику (не своим). Стена и закрытый шлюз — GridCell.blocks_sight().
 		if cell.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(cell.feature_id):
+			return true
+		if not tanks.is_empty() and tanks.has(cy * grid.width + cx):
 			return true
 	return false
 
@@ -3080,7 +3085,7 @@ static func _catch_up_seen(from_version: int) -> void:
 	var start: int = (from_version - GridCell.vision_log_base) * 2
 	var n := changes.size()
 	var doomed: Array = []
-	for key: Vector3i in _seen_cache:
+	for key: Vector4i in _seen_cache:
 		var r: int = key.z
 		var i := start
 		while i < n:
@@ -3088,10 +3093,69 @@ static func _catch_up_seen(from_version: int) -> void:
 				doomed.append(key)
 				break
 			i += 2
-	for key: Vector3i in doomed:
+	for key: Vector4i in doomed:
 		_seen_cache.erase(key)
 
-func _seen_from(coord: Vector2i, r: int) -> PackedInt32Array:
+## Корпуса танков в обзоре. Танк — единственная машина, которая закрывает обзор, и
+## закрывает он его только ВРАГУ (не своим и не союзникам): свой экипаж и пехота вокруг
+## смотрят сквозь, противник за танком ничего не видит. Челнок и борг обзор не закрывают,
+## обломки — тоже: это уже не танк. Меняется набор ровно тогда, когда танк переехал, сменил
+## хозяина или сгорел, — все три двигают UnitInstance.vision_epoch (Vehicle.gd), так что
+## кеш обзора стороны узнаёт об этом сам.
+##
+## Набор клеток «чужих танков» для стороны получает постоянный номер (_tank_sigs): номер —
+## часть ключа кеша обзора. Номера не переиспользуются, поэтому запись, собранная при
+## другом расположении танков, никогда не выдаст себя за нынешнюю.
+static var _tank_sigs: Dictionary = {}       # PackedInt32Array (клетки) -> номер
+static var _tank_sig_cells: Dictionary = {}  # номер -> PackedInt32Array
+static var _tank_sig_next: int = 1
+static var _tank_masks: Dictionary = {}      # номер -> _blockers с корпусами танков
+
+## Номер набора корпусов танков, враждебных стороне `viewer`; 0 — таких нет (или смотрит
+## «никто»: только рельеф).
+func _tank_sig(viewer: int) -> int:
+	if viewer < 0:
+		return 0
+	var gw := state.grid.width
+	var cells := PackedInt32Array()
+	for veh: Vehicle in state.all_vehicles():
+		if veh.type_id != "tank" or veh.wrecked or not veh.alive():
+			continue
+		if veh.owner == viewer or state.roster.are_allies(viewer, veh.owner):
+			continue
+		for fc: Vector2i in veh.footprint():
+			if state.grid.in_bounds(fc):
+				cells.append(fc.y * gw + fc.x)
+	if cells.is_empty():
+		return 0
+	cells.sort()
+	var id: Variant = _tank_sigs.get(cells)
+	if id == null:
+		if _tank_sigs.size() > 4096:
+			_tank_sigs.clear()
+			_tank_sig_cells.clear()
+		id = _tank_sig_next
+		_tank_sig_next += 1
+		_tank_sigs[cells] = id
+		_tank_sig_cells[id] = cells
+	return id
+
+## Таблица блокировщиков для набора `sig`: рельеф плюс корпуса этих танков.
+static func _tank_mask(sig: int) -> PackedByteArray:
+	if sig == 0:
+		return _blockers
+	var hit: Variant = _tank_masks.get(sig)
+	if hit != null:
+		return hit
+	if _tank_masks.size() > 64:
+		_tank_masks.clear()
+	var mask := _blockers.duplicate()
+	for i: int in _tank_sig_cells[sig]:
+		mask[i] = 1
+	_tank_masks[sig] = mask
+	return mask
+
+func _seen_from(coord: Vector2i, r: int, viewer: int = -1) -> PackedInt32Array:
 	# Смотрящий вне поля (сидит в машине, coord = OFFBOARD) не видит ничего: лучи из
 	# такой точки уходят за край сетки. Вызывающие сидящих и так пропускают — это
 	# страховка на будущих вызывающих (issue 2).
@@ -3110,71 +3174,152 @@ func _seen_from(coord: Vector2i, r: int) -> PackedInt32Array:
 		_seen_version = GridCell.vision_version
 		_seen_grid = gid
 		_rebuild_blockers(state.grid)
+		_tank_masks.clear()   # маски — рельеф плюс танки: рельеф сменился
 	var grid := state.grid
 	var gw := grid.width
 	var gh := grid.height
-	var blockers := _blockers
 	# Неограниченный обзор (item 46) приходит сюда радиусом в тысячу клеток. Окно
 	# обхода урезаем до размеров карты СРАЗУ: дальше её края смотреть некуда, а
 	# перебирать четыре миллиона несуществующих клеток ради этого — нет. Обрезка
 	# идёт до ключа кеша, поэтому все «безграничные» бойцы делят одну запись.
 	r = mini(r, maxi(gw, gh))
-	var key := Vector3i(coord.x, coord.y, r)
+	var sig := _tank_sig(viewer)
+	var key := Vector4i(coord.x, coord.y, r, sig)
 	var hit: Variant = _seen_cache.get(key)
 	if hit != null:
 		return hit
-	var out := PackedInt32Array()
-	var ux := coord.x
-	var uy := coord.y
-	# while вместо `for dy in range(...)`: range() строит массив на каждый вызов.
-	var dy := -r
-	while dy <= r:
-		var cy := uy + dy
-		if cy < 0 or cy >= gh:
-			dy += 1
-			continue
-		var row := cy * gw
-		var dx := -r
-		while dx <= r:
-			var cx := ux + dx
-			dx += 1
-			if cx < 0 or cx >= gw:
-				continue
-			# Дальность здесь уже соблюдена построением окна (радиус по Чебышёву),
-			# поэтому от прежней _unit_sees() остаётся ровно проверка луча.
-			#
-			# Луч Брезенхэма развёрнут здесь вместо вызова _vision_blocked(): арифметика
-			# в точности та же, но не строится Vector2i на каждую из ~600 клеток окна и
-			# не платится вызов функции. На холодном пересчёте это ~60 000 клеток, и
-			# накладные расходы там дороже самой трассировки.
-			var adx: int = absi(cx - ux)
-			var ady: int = absi(cy - uy)
-			var sx: int = 1 if ux < cx else -1
-			var sy: int = 1 if uy < cy else -1
-			var err: int = adx - ady
-			var px := ux
-			var py := uy
-			var blocked := false
-			while px != cx or py != cy:
-				var e2 := 2 * err
-				if e2 > -ady:
-					err -= ady
-					px += sx
-				if e2 < adx:
-					err += adx
-					py += sy
-				if px == cx and py == cy:
-					break
-				# То же условие, что в _vision_blocked() / GridCell.blocks_sight(): стена
-				# или закрытый шлюз рвут луч, стекло — нет, корпус машины — нет, — но
-				# прочитанное один раз в _rebuild_blockers(), а не с объекта клетки на шаг.
-				if blockers[py * gw + px]:
-					blocked = true
-					break
-			if not blocked:
-				out.append(row + cx)
-		dy += 1
+	var out := _sweep_seen(coord.x, coord.y, r, _tank_mask(sig), gw, gh)
 	_seen_cache[key] = out
+	return out
+
+## Что видно из (ux, uy) в радиусе r по Чебышёву при таблице блокировщиков blk. Это
+## ТО ЖЕ САМОЕ множество, что давал луч Брезенхэма в каждую клетку окна (_vision_blocked),
+## и в том же порядке — строки сверху вниз, в строке слева направо. Только быстрее.
+##
+## Почему можно. Этот Брезенхэм (err = dx − dy; шаг по x при 2·err > −dy, по y при
+## 2·err < dx) зависит лишь от смещения цели, и в октанте |dx| ≥ |dy| его клетка в
+## столбце i — ровно (i, ⌈i·s − ½⌉), s = |dy|/|dx|: наклон, округлённый с половиной ВНИЗ
+## (в октанте |dy| > |dx| — то же с осями наоборот, знаки — зеркало). Значит, стена в
+## столбце i, ряду j закрывает ровно те цели дальше столбца i, чей наклон лежит в
+## ((2j−1)/2i, (2j+1)/2i]. Идём по столбцам наружу и держим отсортированный список
+## закрытых промежутков наклона; цель в столбце a видна, если её b/a ни в один не попал.
+## Всё — в целых числах (дроби сравниваются крест-накрест), поэтому совпадение точное, а
+## не «почти»: tests/run_fog.gd сверяет с буквальным лучом на сотнях случайных полей.
+##
+## Цена — одна проверка на клетку вместо луча, а в застроенном месте октант обрывается, как
+## только закрыты все наклоны. Поле 250×250 с безграничным обзором: десятки миллисекунд на
+## бойца вместо сотен.
+static func _sweep_seen(ux: int, uy: int, r: int, blk: PackedByteArray, gw: int,
+		gh: int) -> PackedInt32Array:
+	var vis := PackedByteArray()
+	vis.resize(gw * gh)
+	var origin := uy * gw + ux
+	vis[origin] = 1
+	# Закрытые наклоны (lo, hi] — четыре параллельных массива: числители и знаменатели.
+	var lo_n := PackedInt32Array()
+	var lo_d := PackedInt32Array()
+	var hi_n := PackedInt32Array()
+	var hi_d := PackedInt32Array()
+	var reach := 0   # дальше этого столбца ни один октант не дошёл — видимое внутри
+	for oct in 8:
+		var xmajor := oct < 4
+		var sx := -1 if (oct & 1) != 0 else 1
+		var sy := -1 if (oct & 2) != 0 else 1
+		var major_step := sx
+		var minor_step := sy * gw
+		var major_room := (gw - 1 - ux) if sx > 0 else ux
+		var minor_room := (gh - 1 - uy) if sy > 0 else uy
+		if not xmajor:
+			major_step = sy * gw
+			minor_step = sx
+			major_room = (gh - 1 - uy) if sy > 0 else uy
+			minor_room = (gw - 1 - ux) if sx > 0 else ux
+		# Ось (b == 0) общая у двух соседних октантов — её считает «положительный».
+		var b0 := 1 if ((sy < 0) if xmajor else (sx < 0)) else 0
+		lo_n.clear()
+		lo_d.clear()
+		hi_n.clear()
+		hi_d.clear()
+		var amax := mini(r, major_room)
+		var a := 1
+		while a <= amax:
+			reach = maxi(reach, a)
+			var col := origin + major_step * a
+			# Цели столбца: в октанте |dy| > |dx| строго — диагональ досталась соседу.
+			var bmax := mini(a if xmajor else a - 1, minor_room)
+			var n := lo_n.size()
+			var k := 0
+			var b := b0
+			while b <= bmax:
+				while k < n and hi_n[k] * a < b * hi_d[k]:
+					k += 1
+				if k >= n or lo_n[k] * a >= b * lo_d[k]:
+					vis[col + minor_step * b] = 1
+				b += 1
+			# Стены столбца закрывают наклоны для всего, что дальше. Все — и те, что сами
+			# в тени: край чужой тени бывает шире своей.
+			var jmax := mini(a, minor_room)
+			var j := 0
+			var cell := col
+			while j <= jmax:
+				if blk[cell] != 0:
+					# Новый промежуток ((2j−1)/2a, (2j+1)/2a] вливается в список: всё, что с ним
+					# пересекается или смыкается, сливается в один.
+					var nl := 2 * j - 1
+					var dl := 2 * a
+					var nh := 2 * j + 1
+					var dh := 2 * a
+					var m := lo_n.size()
+					var p := 0
+					while p < m and hi_n[p] * dl < nl * hi_d[p]:
+						p += 1
+					var q := p
+					while q < m and lo_n[q] * dh <= nh * lo_d[q]:
+						if lo_n[q] * dl < nl * lo_d[q]:
+							nl = lo_n[q]
+							dl = lo_d[q]
+						if hi_n[q] * dh > nh * hi_d[q]:
+							nh = hi_n[q]
+							dh = hi_d[q]
+						q += 1
+					if q == p:
+						lo_n.insert(p, nl)
+						lo_d.insert(p, dl)
+						hi_n.insert(p, nh)
+						hi_d.insert(p, dh)
+					else:
+						lo_n[p] = nl
+						lo_d[p] = dl
+						hi_n[p] = nh
+						hi_d[p] = dh
+						for t in q - p - 1:
+							lo_n.remove_at(p + 1)
+							lo_d.remove_at(p + 1)
+							hi_n.remove_at(p + 1)
+							hi_d.remove_at(p + 1)
+				j += 1
+				cell += minor_step
+			# Закрыто всё от наклона 0 до 1 — дальше в этом октанте не видно ничего.
+			if lo_n.size() == 1 and lo_n[0] < 0 and hi_n[0] >= hi_d[0]:
+				break
+			a += 1
+	# Выписываем по строкам окна — но только в пределах того, докуда дошёл обход: в тесной
+	# комнате это десяток клеток, а не всё поле 250×250.
+	var out := PackedInt32Array()
+	var rr := mini(r, reach)
+	var y0 := maxi(0, uy - rr)
+	var y1 := mini(gh - 1, uy + rr)
+	var x0 := maxi(0, ux - rr)
+	var x1 := mini(gw - 1, ux + rr)
+	var y := y0
+	while y <= y1:
+		var i := y * gw + x0
+		var end := y * gw + x1
+		while i <= end:
+			if vis[i] != 0:
+				out.append(i)
+			i += 1
+		y += 1
 	return out
 
 ## Обзор машины — объединение обзоров со ВСЕХ клеток её следа (batch 13 #1). Раньше
@@ -3186,11 +3331,11 @@ func _seen_from(coord: Vector2i, r: int) -> PackedInt32Array:
 func _vehicle_seen(veh: Vehicle) -> PackedInt32Array:
 	var cells := veh.footprint()
 	if cells.size() == 1:
-		return _seen_from(cells[0], MCF.SIGHT_UNLIMITED)
+		return _seen_from(cells[0], MCF.SIGHT_UNLIMITED, veh.owner)
 	var merged: Dictionary = {}
 	var out := PackedInt32Array()
 	for c: Vector2i in cells:
-		for i: int in _seen_from(c, MCF.SIGHT_UNLIMITED):
+		for i: int in _seen_from(c, MCF.SIGHT_UNLIMITED, veh.owner):
 			if not merged.has(i):
 				merged[i] = true
 				out.append(i)
@@ -3301,7 +3446,7 @@ func team_visible_coords(owner: int) -> Dictionary:
 		if u.aboard_vehicle_id != -1:
 			continue
 		live[u.id] = true
-		var fresh := _seen_from(u.coord, sight_of(u))
+		var fresh := _seen_from(u.coord, sight_of(u), u.owner)
 		var was: Variant = seen.get(u.id)
 		if was != null:
 			# Обзор этого бойца не изменился — его вклад уже в счётчиках, и трогать
