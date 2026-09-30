@@ -2068,6 +2068,84 @@ not keep a live reference into the running match. That second check is not theor
 `Array(typed_array)` returns *the same array*, so the start-of-match keyframe kept
 mutating with the game and replays began from the wrong board.
 
+### 20.2 Random maps (`MapGen`)
+
+The lobby's map list has a second built-in row, **Random map**, right under *Blank
+arena*. Picking it shows the generator settings in place. Every change rebuilds the map
+and its preview, and a network host re-sends it to the guests (`K_LOBBY_MAP`, the same
+message a file map uses). A random map has no file: `GameConfig.map_path` stays empty and
+the finished `MapData` reaches Placement through `NetHandoff.lobby_map` — in a solo game
+exactly as over the network. The map section moved to the right column, under the slot
+list, with the preview *beside* the settings: turn a knob and the result is on screen
+without scrolling.
+
+| Setting | Effect |
+|---|---|
+| Players | **Is** the lobby's slot count. Raising it adds AI slots in solo and Open slots when hosting; lowering it drops slots from the end, never one a guest sits in. One zone per slot, because `Slot.zone()` defaults to the slot id. |
+| Units per side | Every zone gets `CELLS_PER_UNIT` (2) cells per unit, at least `ZONE_MIN` (16): room to arrange the squad and to park a 3×3 tank. |
+| Style | Station / Town / Field (below). |
+| Size | Small 28×20, Medium 38×28, Large 50×38 — a *starting* size. If the armies do not fit, the map is rebuilt larger (up to `MAX_DIM`, 80×60) and the readout under the settings says so. |
+| Density | Sparse / Normal / Dense: rooms, houses, clutter. |
+| Mechanics | *Space & airlocks*, *Flammable*, *Obstacles*, *Civilians* — each can be switched off on its own. |
+| Seed | The same seed and settings always build the byte-identical map. *Reroll* draws a new seed; *Save as Map* writes `user://maps/random-<style>-<seed>.json` (never over an existing file), after which it is an ordinary map — in the list and in the editor. |
+
+**Styles.**
+- *Station* — rooms from a BSP split, joined by L-shaped corridors, one per BSP node (so
+  the whole station is connected) plus a few extra for alternative routes. Outside the
+  hull is space, or solid rock with Space off. With Space on, some doorways get airlocks,
+  every doorway into the vented (zero-G) room gets one, and the hull gets windows and a
+  few exterior airlocks for going outside. Obstacles: pillars in big halls, stacks of
+  crates (wooden 2 m crates on plank decks), sandbags in corridors.
+- *Town* — a jittered street grid. Blocks become brick or wooden houses (doors, glass
+  windows, a partition in big ones) or grass lots. Obstacles: barricades across streets
+  with one gap, hedgehogs on the paving, trenches and sandbag nests in the lots. With
+  Space on, the town stands on a platform with a ragged edge and holes.
+- *Field* — grass in patches, ruins, rock outcrops. Obstacles: trenches, hedgehog belts
+  (every other cell, so they can be jumped), horseshoe sandbag nests, and wooden fences
+  when Flammable is on. Space adds chasms and a ragged edge.
+
+**Fair without a mirror.** Layouts are organic, not mirrored, so fairness lives in the
+zones:
+1. Anchors by farthest-point sampling: the first near the map edge, each next one as far
+   as possible from those already chosen.
+2. Zones grow in turns, one cell per zone per turn, closest-to-anchor first with a little
+   jitter (round zones, ragged edges). Doorways are passed through but never claimed, and
+   no zone comes within `ZONE_GAP` (3) cells of another.
+3. The best of several attempts is kept, then **every zone is trimmed to the size of the
+   smallest** — cutting the cells grown last, so each zone stays connected. All zones of a
+   random map are always the same size.
+4. If the zones still cannot hold the armies, the whole map is rebuilt larger. Only at
+   `MAX_DIM` may the gap shrink to 2, then 1 — and the readout then says the zones are too
+   tight.
+5. Last, a walk check (4-way, over the same cells `GridCell.walkable_terrain` accepts)
+   from zone 0 to every other zone. A zone it cannot reach gets an L-shaped tunnel. The
+   styles are connected by construction and sweeps have never needed it; it is the
+   guarantee, not the mechanism.
+
+**Neutrals start dormant.** A civilian wakes the moment it sees a soldier along a clear
+row, column or diagonal, or when a neighbouring cell changes — an airlock opening
+included (§14). Placed carelessly, they woke on the first action of the match. Generated
+civilians therefore go only on cells that no zone cell can see (glass does not block
+sight; airlocks count as open, because a soldier deployed beside one opens it) and never
+next to an airlock — on top of the old rules: clear floor, mostly indoors, 3+ cells from
+every zone.
+
+**Toggles do not reshuffle the map.** Each phase — structure, space, zones, dressing,
+civilians — draws from its own RNG stream, and decisions inside a phase are rolled even
+when a toggle cancels them. Switching Civilians, Obstacles or Flammable off removes exactly
+those things; streets, rooms and zones stay where they were.
+
+**The preview shows zones** in the colour of the slot that deploys there — for every map,
+not just random ones. It is redrawn only when the map or those colours change.
+
+Regression cover: `tests/run_mapgen.gd` checks, over every style and size, 2–6 sides,
+large armies and each toggle, that the promises above hold — same seed, same map; equal
+zones that fit the squads; every zone reachable on foot on the real board; toggles
+honoured; and, with every zone cell occupied by a soldier, not one civilian awake after
+the first action. It also plays a few AI-vs-AI rounds per style. `tests/run_lobby_maps.gd`
+drives the real lobby: the row, the settings, Players ↔ slots, zone sizing, the start
+handoff and *Save as Map*.
+
 ---
 
 ## 21. Texture Replacement & Theme

@@ -58,9 +58,20 @@ host/client protocol as `run_lockstep.gd`, with per-action board comparison.
 **`run_lobby_maps.gd`** builds the real lobby scene and asserts that every map on
 disk — shipped in `res://maps` and saved by the editor in `user://maps` — is a row
 in its dropdown, that each row points at a file that still reads back as a map, and
-that rescanning the folders neither loses maps nor doubles them. It exists because
+that rescanning the folders neither loses maps nor doubles them. It also drives the *Random
+map* row: one zone per slot, "Players" adding and removing slots, "Units per side"
+growing the zones, no file path on start, and *Save as Map* landing in `user://maps`. It exists because
 "my saved maps are not in the list" has now been reported twice: the first cause
 (the app rename moved `user://`) was fixed in code nothing checked.
+
+**`run_mapgen.gd`** holds the random-map generator (`MapGen`, the lobby's *Random map*)
+to what the lobby promises, over every style and size, 2–6 sides, big armies and each
+mechanic switched off: the same seed builds the same map byte for byte; one zone per
+side, all the same size, big enough for the squad (`MapGen.zone_need`) and apart from
+each other — or else the map must have grown; every zone reachable on foot on the real
+board; toggles honoured. Civilians must start the match **asleep**: every zone cell is
+filled with a soldier, one action is resolved, and not a single civilian may have woken.
+It then plays a few AI-vs-AI rounds on each style.
 
 **`run_combat_safety.gd`** covers three rules that only show up in play:
 a line of fire that starts or ends *off the board* (a soldier riding inside a

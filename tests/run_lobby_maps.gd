@@ -11,7 +11,11 @@ extends SceneTree
 ##   1. карта, сохранённая в user://maps (так пишет редактор), попадает в MapData.list_maps();
 ##   2. карта, поставляемая в res://maps, попадает туда же;
 ##   3. КАЖДОЕ имя из list_maps() есть в выпадающем списке лобби, и путь рядом с ним
-##      указывает на существующий файл, который читается как карта.
+##      указывает на существующий файл, который читается как карта;
+##   4. строка «Random map» собирает карту с зоной на каждый слот, пересобирает её при
+##      новом слоте или зерне (и только тогда), уходит на старт без пути к файлу, а
+##      «Save as Map» кладёт её в user://maps обычной картой списка. «Players» и есть
+##      число слотов (в одиночке добавляет ИИ), а «Units per side» растит зоны под отряд.
 ##
 ## Проверяется настоящая сцена лобби, а не её отдельные функции: между «файл на диске»
 ## и «строка в списке» стоял именно этот код.
@@ -48,9 +52,9 @@ func _check() -> void:
 	var paths: Array = lobby._map_paths
 	ck(opt != null, "the lobby built its map dropdown")
 	if opt != null:
-		# «Blank arena» + по строке на каждую карту, и ни одной лишней.
-		ck(opt.item_count == names.size() + 1,
-				"the dropdown holds every saved map: %d item(s) for %d map(s) + blank arena" % [
+		# «Blank arena», «Random map» + по строке на каждую карту, и ни одной лишней.
+		ck(opt.item_count == names.size() + 2,
+				"the dropdown holds every saved map: %d item(s) for %d map(s) + 2 built-in" % [
 					opt.item_count, names.size()])
 		ck(paths.size() == opt.item_count, "each dropdown row carries its own path")
 		var shown := {}
@@ -58,7 +62,7 @@ func _check() -> void:
 			shown[opt.get_item_text(i)] = true
 		for n: String in names:
 			ck(shown.has(n.get_basename()), "map '%s' is choosable in the lobby" % n)
-		for i in range(1, paths.size()):
+		for i in range(2, paths.size()):
 			var p: String = paths[i]
 			ck(FileAccess.file_exists(p), "row %d points at an existing file (%s)" % [i, p])
 			ck(MapData.load_from(p) != null, "row %d reads back as a map (%s)" % [i, p])
@@ -68,6 +72,7 @@ func _check() -> void:
 		var before := opt.item_count
 		lobby._reload_map_items()
 		ck(opt.item_count == before, "rescanning the folders keeps the list identical")
+		_check_random(lobby, opt, paths)
 
 	lobby.free()
 	DirAccess.remove_absolute(probe_path)
@@ -80,6 +85,59 @@ func _check() -> void:
 	for f in fails:
 		printerr("  " + f)
 	quit(1)
+
+func _check_random(lobby: Node, opt: OptionButton, paths: Array) -> void:
+	var ri := paths.find(lobby.RANDOM_MAP)
+	ck(ri == 1, "'Random map' sits right after the blank arena (row %d)" % ri)
+	if ri < 0:
+		return
+	ck(not lobby._gen_box.visible, "the generator settings stay hidden until 'Random map' is picked")
+	opt.select(ri)
+	opt.item_selected.emit(ri)
+	ck(lobby._gen_box.visible, "picking 'Random map' shows the generator settings")
+	lobby._gen_seed.value = 4242  # лобби бросает зерно само — для повторяемости задаём своё
+	var a: MapData = lobby._selected_map()
+	ck(a.width == MapGen.SIZES[1].x, "the default random map is Medium (%d wide)" % a.width)
+	ck(lobby._map_zone_count() == lobby.roster.slots.size(),
+			"one zone per slot: %d zone(s), %d slot(s)" % [lobby._map_zone_count(), lobby.roster.slots.size()])
+	ck(lobby._selected_map() == a, "the same settings don't rebuild the map on every read")
+	ck(lobby._map_preview.texture != null, "the random map has a preview")
+	ck(str(lobby._gen_info.text).contains("2 deployment zones"),
+			"the generator reports the zones (%s)" % lobby._gen_info.text)
+	lobby._on_add_slot()
+	var b: MapData = lobby._selected_map()
+	ck(b != a and lobby._map_zone_count() == 3, "a new slot rebuilds the map with a zone for it")
+	lobby._gen_seed.value = lobby._gen_seed.value + 1
+	ck(lobby._selected_map() != b, "a new seed builds a new map")
+	ck(int(lobby._gen_players.value) == 3, "'Players' follows the slot list (%d)" % lobby._gen_players.value)
+	lobby._gen_players.value = 4
+	ck(lobby.roster.slots.size() == 4 and lobby.roster.slots[3].kind == Roster.SlotKind.AI,
+			"'Players: 4' seats four, the new ones as AI in a solo lobby")
+	ck(lobby._map_zone_count() == 4, "four players, four zones (%d)" % lobby._map_zone_count())
+	lobby._gen_units.value = 40
+	var cells := {}
+	for z in lobby._selected_map().zone_owner:
+		if z >= 0:
+			cells[z] = int(cells.get(z, 0)) + 1
+	ck(cells.size() == 4 and cells.values().min() >= MapGen.zone_need(40),
+			"every zone fits 40 units (%s cells, %d needed)" % [cells.values(), MapGen.zone_need(40)])
+	ck(str(lobby._gen_info.text).contains("room for 40 units"), "the readout says so (%s)" % lobby._gen_info.text)
+	lobby._gen_players.value = 2
+	ck(lobby.roster.slots.size() == 2, "'Players: 2' drops the extra slots")
+	lobby._commit_config()
+	ck(GameConfig.map_path == "", "a random map starts without a file path ('%s')" % GameConfig.map_path)
+	var before := MapData.list_maps()
+	lobby._save_random_map()
+	var added: Array = []
+	for n in MapData.list_maps():
+		if not before.has(n):
+			added.append(n)
+	ck(added.size() == 1 and str(added[0]).begins_with("random-town-"),
+			"'Save as Map' adds one file to user://maps (%s)" % [added])
+	ck(lobby._is_random(), "'Random map' stays selected after saving")
+	for n: String in added:
+		ck(MapData.load_from(MapData.path_for(n)) != null, "the saved random map reads back")
+		DirAccess.remove_absolute("%s/%s" % [MapData.MAPS_DIR, n])
 
 func ck(cond: bool, what: String) -> void:
 	if not cond:
