@@ -74,6 +74,13 @@ var _gen_units: SpinBox
 var _gen_style: OptionButton
 var _gen_size: OptionButton
 var _gen_density: OptionButton
+## Свой размер (пункт «Custom» в списке размеров): строка видна только при нём.
+var _gen_dims_row: HBoxContainer
+var _gen_w: SpinBox
+var _gen_h: SpinBox
+var _gen_sym: CheckBox
+## Большую карту пересобираем, когда щелчки по настройкам стихнут, а не на каждый.
+var _gen_timer: Timer
 var _gen_space: CheckBox
 var _gen_fire: CheckBox
 var _gen_obstacles: CheckBox
@@ -457,7 +464,7 @@ func _titled(parent: VBoxContainer, title: String) -> VBoxContainer:
 	parent.add_child(HSeparator.new())
 	return box
 
-func _row(box: VBoxContainer, label_text: String, control: Control) -> void:
+func _row(box: VBoxContainer, label_text: String, control: Control) -> HBoxContainer:
 	var r := HBoxContainer.new()
 	r.add_theme_constant_override("separation", 8)
 	var l := Label.new()
@@ -468,6 +475,7 @@ func _row(box: VBoxContainer, label_text: String, control: Control) -> void:
 	control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	r.add_child(control)
 	box.add_child(r)
+	return r
 
 func _build_config(parent: VBoxContainer) -> void:
 	var box := _titled(parent, "Lobby Configuration")
@@ -692,13 +700,15 @@ func _build_generator(box: VBoxContainer) -> void:
 	_row(_gen_box, "Players:", army)
 	# Стиль, размер и плотность — одной строкой: панель короче, превью рядом видно целиком.
 	_gen_style = _opt(MapGen.STYLE_NAMES, int(defaults["style"]))
-	_gen_style.tooltip_text = "Station: rooms and corridors in space. Town: streets and houses. Field: open ground and ruins."
+	_gen_style.tooltip_text = "Station: rooms and hallways in space. Town: streets and houses. Field: open ground and ruins. Bunker: the same rooms and hallways as a station, dug into solid rock underground."
 	var sizes: Array = []
 	for i in MapGen.SIZES.size():
 		var d: Vector2i = MapGen.SIZES[i]
 		sizes.append("%s (%d×%d)" % [MapGen.SIZE_NAMES[i], d.x, d.y])
+	sizes.append("Custom…")
 	_gen_size = _opt(sizes, int(defaults["size"]))
-	_gen_size.tooltip_text = "Starting size — the map grows if the armies don't fit."
+	_gen_size.tooltip_text = "Starting size — the map grows if the armies don't fit. Custom: any width and height up to %d×%d." % [
+			MapGen.MAX_DIM.x, MapGen.MAX_DIM.y]
 	_gen_density = _opt(MapGen.DENSITY_NAMES, int(defaults["density"]))
 	_gen_density.tooltip_text = "How built-up and cluttered the map is."
 	var look := HBoxContainer.new()
@@ -707,10 +717,28 @@ func _build_generator(box: VBoxContainer) -> void:
 		o.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		look.add_child(o)
 	_row(_gen_box, "Terrain:", look)
+	# Свой размер: ширина × высота, до MapGen.MAX_DIM. Видно только при «Custom…».
+	_gen_w = _dim_spin(int(defaults["width"]), MapGen.MAX_DIM.x)
+	_gen_h = _dim_spin(int(defaults["height"]), MapGen.MAX_DIM.y)
+	var by := Label.new()
+	by.text = "×"
+	var dims := HBoxContainer.new()
+	dims.add_theme_constant_override("separation", 6)
+	for c: Control in [_gen_w, by, _gen_h]:
+		dims.add_child(c)
+	_gen_w.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_gen_h.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_gen_dims_row = _row(_gen_box, "Custom size:", dims)
+	_gen_dims_row.visible = false
+	_gen_sym = CheckBox.new()
+	_gen_sym.text = "Symmetrical"
+	_gen_sym.tooltip_text = "Mirror the map so every side gets the same ground. Four quarters for 4 or 8 players, left and right otherwise — with an odd number, one zone sits on the middle line."
+	_gen_sym.toggled.connect(func(_on: bool) -> void: _on_gen_changed())
+	_row(_gen_box, "Layout:", _gen_sym)
 	var mech := HFlowContainer.new()
 	mech.add_theme_constant_override("h_separation", 10)
 	_gen_space = _gen_check(mech, "Space & airlocks",
-			"Vacuum you can fight in (zero-G); stations get airlocks and hull windows.")
+			"Vacuum you can fight in (zero-G); stations get airlocks and hull windows. A bunker is underground: no vacuum, its airlocks are sealed blast doors.")
 	_gen_fire = _gen_check(mech, "Flammable",
 			"Grass, plank floors, wooden walls and fences — ground that fire spreads over.")
 	_gen_obstacles = _gen_check(mech, "Obstacles",
@@ -743,6 +771,21 @@ func _build_generator(box: VBoxContainer) -> void:
 	for o: OptionButton in [_gen_style, _gen_size, _gen_density]:
 		o.item_selected.connect(func(_i: int) -> void: _on_gen_changed())
 	_gen_seed.value_changed.connect(func(_v: float) -> void: _on_gen_changed())
+	for sp: SpinBox in [_gen_w, _gen_h]:
+		sp.value_changed.connect(func(_v: float) -> void: _on_gen_changed())
+	_gen_timer = Timer.new()
+	_gen_timer.one_shot = true
+	_gen_timer.wait_time = 0.3
+	_gen_timer.timeout.connect(_apply_gen_change)
+	_gen_box.add_child(_gen_timer)
+
+func _dim_spin(value: int, top: int) -> SpinBox:
+	var sp := SpinBox.new()
+	sp.min_value = MapGen.MIN_DIM
+	sp.max_value = top
+	sp.value = value
+	sp.tooltip_text = "Cells, %d to %d." % [MapGen.MIN_DIM, top]
+	return sp
 
 func _gen_check(parent: Control, text: String, tip: String) -> CheckBox:
 	var cb := CheckBox.new()
@@ -766,6 +809,8 @@ func _gen_options() -> Dictionary:
 	return {"style": _gen_style.selected, "size": _gen_size.selected,
 			"density": _gen_density.selected, "seed": int(_gen_seed.value),
 			"zones": maxi(2, roster.slots.size()), "units": int(_gen_units.value),
+			"width": int(_gen_w.value), "height": int(_gen_h.value),
+			"symmetric": _gen_sym.button_pressed,
 			"space": _gen_space.button_pressed,
 			"flammable": _gen_fire.button_pressed, "obstacles": _gen_obstacles.button_pressed,
 			"civilians": _gen_civilians.button_pressed}
@@ -796,9 +841,14 @@ func _zone_summary(map: MapData) -> String:
 		return text + " — too tight for %d units each even at %d×%d; fewer players or units will fit." % [
 				units, map.width, map.height]
 	text += " — room for %d units each." % units
-	var dim: Vector2i = MapGen.SIZES[int(o["size"])]
+	var dim := MapGen.dims_of(o)
 	if map.width > dim.x or map.height > dim.y:
 		text += " Map enlarged to %d×%d so they fit." % [map.width, map.height]
+	# Замер (HARD против HARD, по 10 бойцов): до 80×60 ход ИИ — доли секунды; на 250×250 —
+	# секунды на действие, и туман с безграничным обзором пересчитывается дольше. Играть
+	# можно — просто стоит знать заранее.
+	if map.width * map.height > 12000:
+		text += " A map this big plays slower: AI turns and fog updates can take a few seconds."
 	return text
 
 ## «Players» случайной карты: слотов становится ровно столько. Новые — в одиночке ИИ
@@ -822,6 +872,18 @@ func _set_player_count(n: int) -> void:
 	_lobby_changed()
 
 func _on_gen_changed() -> void:
+	if _gen_dims_row != null:
+		_gen_dims_row.visible = _gen_size.selected == MapGen.SIZE_CUSTOM
+	# Карта до ~100×100 собирается за десятки миллисекунд — сразу. Большая (до 250×250)
+	# — за полсекунды и дольше: ждём, пока щелчки по стрелкам затихнут, и строим один раз.
+	# Чтение карты (_selected_map) ждать не станет — она пересобирается по требованию.
+	var d := MapGen.dims_of(_gen_options())
+	if d.x * d.y > 10000 and _gen_timer != null and _gen_timer.is_inside_tree():
+		_gen_timer.start()
+		return
+	_apply_gen_change()
+
+func _apply_gen_change() -> void:
 	_refresh_slots()  # пересоберёт карту: число зон в слотах и превью — уже от новой
 	_broadcast_lobby()
 	_send_lobby_map()

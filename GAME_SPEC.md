@@ -2083,19 +2083,31 @@ without scrolling.
 |---|---|
 | Players | **Is** the lobby's slot count. Raising it adds AI slots in solo and Open slots when hosting; lowering it drops slots from the end, never one a guest sits in. One zone per slot, because `Slot.zone()` defaults to the slot id. |
 | Units per side | Every zone gets `CELLS_PER_UNIT` (2) cells per unit, at least `ZONE_MIN` (16): room to arrange the squad and to park a 3×3 tank. |
-| Style | Station / Town / Field (below). |
-| Size | Small 28×20, Medium 38×28, Large 50×38 — a *starting* size. If the armies do not fit, the map is rebuilt larger (up to `MAX_DIM`, 80×60) and the readout under the settings says so. |
+| Style | Station / Town / Field / Bunker (below). |
+| Size | Small 28×20, Medium 38×28, Large 50×38, Huge 80×60, Giant 125×95, Colossal 250×250, or **Custom…** — any width and height from 16 to 250 (a row with both appears only for Custom). A *starting* size: if the armies do not fit, the map is rebuilt larger (up to `MAX_DIM`, 250×250) and the readout under the settings says so. |
 | Density | Sparse / Normal / Dense: rooms, houses, clutter. |
+| Layout | *Symmetrical* (off by default) — see below. |
 | Mechanics | *Space & airlocks*, *Flammable*, *Obstacles*, *Civilians* — each can be switched off on its own. |
 | Seed | The same seed and settings always build the byte-identical map. *Reroll* draws a new seed; *Save as Map* writes `user://maps/random-<style>-<seed>.json` (never over an existing file), after which it is an ordinary map — in the list and in the editor. |
 
 **Styles.**
-- *Station* — rooms from a BSP split, joined by L-shaped corridors, one per BSP node (so
-  the whole station is connected) plus a few extra for alternative routes. Outside the
-  hull is space, or solid rock with Space off. With Space on, some doorways get airlocks,
-  every doorway into the vented (zero-G) room gets one, and the hull gets windows and a
-  few exterior airlocks for going outside. Obstacles: pillars in big halls, stacks of
-  crates (wooden 2 m crates on plank decks), sandbags in corridors.
+- *Station* — a facility of sectors and hallways. The footprint is split recursively
+  (BSP) and **every split line is a hallway** — 2–3 wide at the top level, 1–2 deeper —
+  running the full length of its piece, so each hallway ends on the one above it and the
+  network is connected by construction. Each sector is divided into rooms that share
+  walls; every dividing wall has a door (sometimes two), and every sector has at least one
+  door onto a hallway (roughly every other room facing a hallway gets one), so every room
+  is reachable. A new dividing wall never ends against an existing door. Up to a fifth of
+  the sectors — edge ones more often — are left empty: open space the hallways pass as
+  windowed tubes. Every map, even Small, gets at least one hallway. Outside the hull is
+  space, or solid rock with Space off. With Space on, a fifth of the doorways get
+  airlocks, every doorway into a vented (zero-G) room gets one (about one vented room per
+  40), and the hull gets windows and a few exterior airlocks. Obstacles: pillars in big
+  halls, stacks of crates (wooden 2 m crates on plank decks), sandbags in hallways.
+- *Bunker* — the same station from the same seed, dug underground: everything outside
+  the rooms and hallways is solid rock, never vacuum (no vented room, no hull). *Space &
+  airlocks* here means only the airlocks — sealed blast doors in the doorways. With Space
+  off, a bunker and a station of the same seed are the byte-identical map.
 - *Town* — a jittered street grid. Blocks become brick or wooden houses (doors, glass
   windows, a partition in big ones) or grass lots. Obstacles: barricades across streets
   with one gap, hedgehogs on the paving, trenches and sandbag nests in the lots. With
@@ -2104,8 +2116,19 @@ without scrolling.
   (every other cell, so they can be jumped), horseshoe sandbag nests, and wooden fences
   when Flammable is on. Space adds chasms and a ragged edge.
 
-**Fair without a mirror.** Layouts are organic, not mirrored, so fairness lives in the
-zones:
+**Symmetrical.** Off: layouts are organic. On: the map is mirrored — the left half (or
+the top-left quarter) is built and reflected, so every side fights over the same ground:
+- 4 or 8 sides — **four quarters** (mirrored left–right and top–bottom), a zone per
+  quarter (two per quarter for 8);
+- any other count — **left–right**, zones in mirrored pairs; with an odd count the last
+  zone sits **on the middle line** and is its own reflection.
+Zones grow together with their reflections: a cell taken on one side is taken on every
+mirrored side at once, each image keeping the usual gap to every other zone, so the
+zones are exact reflections and the same size. Civilians are mirrored too. Anything the
+mirror cut off (a room whose door was on the discarded side) is reconnected by the
+sealed-floor pass below, mirrored as well.
+
+**Fair without a mirror.** With Symmetrical off, fairness lives in the zones:
 1. Anchors by farthest-point sampling: the first near the map edge, each next one as far
    as possible from those already chosen.
 2. Zones grow in turns, one cell per zone per turn, closest-to-anchor first with a little
@@ -2117,10 +2140,19 @@ zones:
 4. If the zones still cannot hold the armies, the whole map is rebuilt larger. Only at
    `MAX_DIM` may the gap shrink to 2, then 1 — and the readout then says the zones are too
    tight.
-5. Last, a walk check (4-way, over the same cells `GridCell.walkable_terrain` accepts)
-   from zone 0 to every other zone. A zone it cannot reach gets an L-shaped tunnel. The
-   styles are connected by construction and sweeps have never needed it; it is the
-   guarantee, not the mechanism.
+5. **No sealed floor, anywhere.** After the structure and again after dressing, every
+   walkable area is labelled (4-way, the cells `GridCell.walkable_terrain` accepts). Any
+   area with floor that is cut off from the main one — before zones the largest, after
+   them the one holding zone 0 — is joined by the shortest possible breach: a 0-1 BFS
+   where walking is free and each wall, rock, crate or hedgehog removed costs 1, run once
+   from the main area to every pocket. This is what fixes a town house whose door found no
+   room, a crate line splitting a room, or a room cut off by the mirror. Vacuum-only
+   areas (open space outside a hull) are left alone. The old generator left such pockets
+   in a handful of *Space off* town and field maps (1–23 unreachable cells); the fix
+   there is a single cell, and the rest of those maps is unchanged.
+
+**Civilians are capped at 32** (`CIV_MAX`): the old rate of one per 160 cells would put
+~400 on a 250×250 map, and the whole civilian slot plays in one turn.
 
 **Neutrals start dormant.** A civilian wakes the moment it sees a soldier along a clear
 row, column or diagonal, or when a neighbouring cell changes — an airlock opening
@@ -2130,6 +2162,13 @@ sight; airlocks count as open, because a soldier deployed beside one opens it) a
 next to an airlock — on top of the old rules: clear floor, mostly indoors, 3+ cells from
 every zone.
 
+**Big maps stay responsive.** Everything that walks the whole map is linear in its cells
+(summed-area table for anchor candidates, a heap for zone fronts, one directional sweep
+for "seen from a zone", one BFS for sealed floor), candidates are thinned to 6000, and a
+250×250 map builds in well under a second. The lobby rebuilds a map over 100×100 once
+the clicks settle (0.3 s) instead of on every click; reading the map still builds it at
+once.
+
 **Toggles do not reshuffle the map.** Each phase — structure, space, zones, dressing,
 civilians — draws from its own RNG stream, and decisions inside a phase are rolled even
 when a toggle cancels them. Switching Civilians, Obstacles or Flammable off removes exactly
@@ -2138,13 +2177,19 @@ those things; streets, rooms and zones stay where they were.
 **The preview shows zones** in the colour of the slot that deploys there — for every map,
 not just random ones. It is redrawn only when the map or those colours change.
 
-Regression cover: `tests/run_mapgen.gd` checks, over every style and size, 2–6 sides,
-large armies and each toggle, that the promises above hold — same seed, same map; equal
-zones that fit the squads; every zone reachable on foot on the real board; toggles
-honoured; and, with every zone cell occupied by a soldier, not one civilian awake after
-the first action. It also plays a few AI-vs-AI rounds per style. `tests/run_lobby_maps.gd`
-drives the real lobby: the row, the settings, Players ↔ slots, zone sizing, the start
-handoff and *Save as Map*.
+Regression cover: `tests/run_mapgen.gd` checks, over every style, the sizes up to Huge in
+full and Giant/Colossal once each, 2–8 sides, large armies, each toggle, custom sizes and
+Symmetrical with 2, 3, 4, 5, 6 and 8 sides, that the promises above hold — same seed, same
+map; equal zones that fit the squads; **no walkable cell sealed off** on the real board;
+every airlock with somewhere to step on both sides; toggles honoured; symmetric maps equal
+to their reflections cell for cell, zone for zone and civilian for civilian; a bunker
+without vacuum, walled in rock, and identical to the station of its seed with Space off;
+stations and bunkers with rooms and hallways in proportion to their size; Colossal built
+within a time budget; civilians under the cap; and, with every zone cell occupied by a
+soldier, not one civilian awake after the first action. It also plays a few AI-vs-AI
+rounds per style. `tests/run_lobby_maps.gd` drives the real lobby: the row, the settings,
+Players ↔ slots, zone sizing, the start handoff, *Save as Map*, the bunker, Custom size up
+to 250×250, Symmetrical and the delayed rebuild of big maps.
 
 ---
 
