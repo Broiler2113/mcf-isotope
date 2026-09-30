@@ -4144,7 +4144,7 @@ func _draw() -> void:
 		if disp_wrecked:
 			label = "WRECK"
 		draw_string(font, org + Vector2(8, 18), "%s" % label,
-			HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color.WHITE)
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 14, _ink(hull_col.darkened(0.35)))
 		if not disp_wrecked:
 			draw_string(font, org + Vector2(8, vsize.y - 8),
 				"DUR %d  CREW %d" % [disp_dur, veh.living_crew_count()],
@@ -4194,7 +4194,7 @@ func _draw() -> void:
 			draw_circle(center, CELL * 0.34, _side_color(unit.owner))
 			draw_arc(center, CELL * 0.34, 0, TAU, 20, _side_color(unit.owner).darkened(0.45), 1.5)
 			draw_string(font, center + Vector2(-9, 5), _initials(unit.stats.display_name),
-				HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 16, _ink(_side_color(unit.owner)))
 		if unit.id == selected_id:
 			draw_arc(center, CELL * 0.42, 0, TAU, 32, Color(1, 0.9, 0.2), 3.0)
 		# Вскрытый мирный житель охотится — красное кольцо тревоги (§3.10, #56).
@@ -6264,3 +6264,7 @@ func _refresh_info() -> void:
 func _on_log_line(text: String) -> void:
 	if _log_label != null:
 		_log_label.append_text(text + "\n")
+
+## Цвет подписи поверх заливки: на светлой (белая сторона) — чёрный, иначе белый.
+static func _ink(bg: Color) -> Color:
+	return Color.BLACK if bg.get_luminance() > 0.6 else Color.WHITE

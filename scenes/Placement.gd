@@ -1290,13 +1290,13 @@ func _draw_token(coord: Vector2i, owner: int, stats_id: String, font: Font) -> v
 		draw_rect(rect, Color(0, 0, 0, 0.7), false, 2.0)
 		var vname := String(VehicleDB.get_vehicle(stats_id).get("name", "??"))
 		draw_string(font, rect.position + Vector2(6, 22), _initials(vname),
-			HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 16, _ink(_side_color(owner)))
 		return
 	var center := _cell_origin(coord) + Vector2(CELL, CELL) * 0.5
 	draw_circle(center, CELL * 0.33, _side_color(owner))
 	var s := _stats(stats_id)
 	var tag := _initials(s.display_name) if s != null else "??"
-	draw_string(font, center + Vector2(-9, 5), tag, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color.WHITE)
+	draw_string(font, center + Vector2(-9, 5), tag, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, _ink(_side_color(owner)))
 
 func _initials(name: String) -> String:
 	var parts := name.split(" ", false)
@@ -1616,3 +1616,7 @@ func _on_back() -> void:
 	# Одиночная игра теперь создаётся в лобби (item 8/20) — назад ведёт туда же, а не в
 	# снятый с потока старый экран Setup.
 	get_tree().change_scene_to_file(LOBBY_SCENE)
+
+## Цвет подписи поверх заливки: на светлой (белая сторона) — чёрный, иначе белый.
+static func _ink(bg: Color) -> Color:
+	return Color.BLACK if bg.get_luminance() > 0.6 else Color.WHITE
