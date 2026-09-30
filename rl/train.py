@@ -1439,6 +1439,36 @@ def cmd_export(a):
     print(f"[export] {a.out} ({os.path.getsize(a.out)} bytes) — policy logits + value head")
 
 
+PLAY_DIR = os.path.join(os.path.dirname(PROJECT), "mcf-play-latest")
+
+
+def latest_game_dir() -> str:
+    """The game "Play vs latest" opens: the newest main from GitHub, not this checkout.
+
+    This checkout is whatever the training run is on — often a branch or a commit weeks
+    behind — so the button used to open that fixed version. The newest main is kept in a
+    sibling worktree (PLAY_DIR), fetched and reset on every play; training is never touched.
+    Offline or on any git failure the current checkout is used, as before."""
+    def git(*args, cwd=PROJECT):
+        return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
+                              timeout=120)
+    try:
+        if git("fetch", "--quiet", "origin", "main").returncode != 0:
+            raise RuntimeError("fetch failed")
+        if not os.path.isdir(PLAY_DIR):
+            r = git("worktree", "add", "--detach", PLAY_DIR, "origin/main")
+        else:
+            r = git("checkout", "--quiet", "--detach", "origin/main", cwd=PLAY_DIR)
+            if r.returncode == 0:
+                r = git("reset", "--quiet", "--hard", "origin/main", cwd=PLAY_DIR)
+        if r.returncode != 0:
+            raise RuntimeError(r.stderr.strip())
+        return PLAY_DIR
+    except Exception as e:  # noqa: BLE001 — any failure falls back to this checkout
+        print(f"[play] could not update the latest game ({e}); using {PROJECT}", flush=True)
+        return PROJECT
+
+
 def cmd_play(a):
     """Real game against a checkpoint: a local policy server plus the game, opened straight
     on the lobby with that policy already in the opponent slot (`--vs-latest`).
@@ -1495,7 +1525,10 @@ def cmd_play(a):
                    MCF_RL_MAX_CANDIDATES=str(cfg["max_candidates"]),
                    MCF_RL_ROUND_CAP=str(cfg["round_cap"]),
                    MCF_RL_MODEL_LABEL=label)
-        subprocess.call([a.godot, "--path", PROJECT, "--", "--vs-latest"], env=env)
+        game = latest_game_dir()
+        refresh_class_cache(a.godot, game)
+        print(f"[play] game: {game}", flush=True)
+        subprocess.call([a.godot, "--path", game, "--", "--vs-latest"], env=env)
     finally:
         srv.terminate()
 
