@@ -55,7 +55,7 @@ bash rl/run.sh resume phaseA-1 [new-config.yaml]         # continue; new config 
 bash rl/run.sh restart phaseA-1 new-config.yaml          # stop → wait for checkpoint → resume
 bash rl/run.sh fork phaseA-1/ckpt_000100000.pt experiment-1
 python rl/train.py eval rl/runs/phaseA-1/latest.pt --games 20 --record /tmp/ev   # vs HARD
-python rl/train.py play rl/runs/phaseA-1/latest.pt       # real game, checkpoint in the AI slot
+python rl/train.py play rl/runs/phaseA-1/latest.pt       # real game: opens the lobby with this checkpoint as the AI - Learned opponent
 python rl/train.py export rl/runs/phaseA-1/latest.pt policy.onnx
 ```
 

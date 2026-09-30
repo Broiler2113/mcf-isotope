@@ -19,6 +19,16 @@ extends PlayerController
 
 const Obs = preload("res://rl/ObsEncoder.gd")
 const ENV_VAR := "MCF_RL_POLICY"
+## Подпись модели для лобби («town-8 · update 3867 · step 5,939,822»), от `train.py play`.
+const ENV_LABEL := "MCF_RL_MODEL_LABEL"
+
+## Игра запущена с сервером политики — есть против кого играть «AI - Learned».
+static func available() -> bool:
+	return OS.get_environment(ENV_VAR) != ""
+
+static func model_label() -> String:
+	var l := OS.get_environment(ENV_LABEL)
+	return l if l != "" else "served on " + OS.get_environment(ENV_VAR)
 const IntentBudget = preload("res://rl/IntentBudget.gd")
 ## Потолки бюджета намерений: столько же, сколько видела политика при обучении.
 ## `train.py play` выставляет их из конфига чекпойнта; 0 = без ограничения (так ведут

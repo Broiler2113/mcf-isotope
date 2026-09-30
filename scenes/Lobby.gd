@@ -111,6 +111,8 @@ func _ready() -> void:
 	_build_ui()
 	_refresh_slots()
 	_refresh_map_preview()
+	if _is_solo and LearnedController.available():
+		_status.text = "Opponent: AI - Learned — %s" % LearnedController.model_label()
 	# Гость (item 61) сидит в лобби и ждёт, когда хост объявит условия матча (K_SETUP);
 	# по ним он и уходит на закупку. До того он может трогать только свой цвет.
 	if _is_client and NetHandoff.session != null:
@@ -362,6 +364,11 @@ func _seed_roster() -> Roster:
 	# человека. В сетевой игре он ОТКРЫТ и ждёт гостя.
 	if _is_solo:
 		r.add_slot(Roster.SlotKind.AI)
+		# Игру запустили с обученной моделью («Play vs latest» на панели RL) — ею и играем.
+		# По умолчанию здесь стоит скриптовый ИИ, и сервер политики простаивал, пока слот не
+		# переключали руками: «играть против последней версии» на деле не получалось.
+		if LearnedController.available():
+			r.slots[1].ai_difficulty = AIController.Difficulty.LEARNED
 	else:
 		r.add_slot(Roster.SlotKind.OPEN)
 	# Стартовый личный бюджет у каждого слота — общий по умолчанию (item 1).

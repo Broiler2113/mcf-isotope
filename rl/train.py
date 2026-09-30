@@ -1440,52 +1440,49 @@ def cmd_export(a):
 
 
 def cmd_play(a):
-    """Real game with the checkpoint in the AI slot: a local policy server plus the game
-    launched with MCF_RL_POLICY pointing at it (LearnedController.gd connects)."""
+    """Real game against a checkpoint: a local policy server plus the game, opened straight
+    on the lobby with that policy already in the opponent slot (`--vs-latest`).
+
+    Launching the game at the main menu was the reason "Play vs latest" did not play the
+    latest: the solo lobby seats a scripted AI (Medium) by default, so unless you switched
+    the slot to AI - Learned by hand, the policy server sat idle and you played the script."""
     import socket as _socket
-    port = a.port
+
+    def taken(p: int) -> bool:
+        s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        try:
+            return s.connect_ex(("127.0.0.1", p)) == 0
+        finally:
+            s.close()
+
     ck = torch.load(a.checkpoint, map_location="cpu", weights_only=False)
     cfg = with_defaults(ck.get("cfg", {}))
-
-    # REFUSE to start if the port is already taken, instead of launching anyway.
-    #
-    # This is the failure that makes "am I even playing the latest version?" a fair
-    # question. policy_server binds the port at startup; if a server from an earlier
-    # `play` is still holding it, the new one dies instantly with "Address already in
-    # use" — but Popen still succeeds, the game still launches with MCF_RL_POLICY
-    # pointing at that port, and it connects to the OLD server. The game then plays a
-    # STALE checkpoint, silently, with nothing on screen to say so. If that old server is
-    # wedged rather than serving, the controller times out after 30s and quietly falls
-    # back to the heuristic instead.
-    probe = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
-    busy = probe.connect_ex(("127.0.0.1", port)) == 0
-    probe.close()
-    if busy:
-        sys.exit(f"port {port} is already serving a policy — another `train.py play` is "
-                 f"probably still running.\n"
-                 f"  stop it (pkill -f policy_server.py) or pass --port <other>.\n"
-                 f"  Refusing to launch, because the game would silently play THAT "
-                 f"checkpoint instead of {os.path.basename(a.checkpoint)}.")
+    # A server left over from an earlier `play` still holding the port would have the game
+    # silently talk to THAT checkpoint. Refusing (the old behaviour) turned into "nothing
+    # happens" behind the dashboard button; taking the next free port gives the same
+    # guarantee — the game is pointed only at the server started here.
+    port = next((p for p in range(a.port, a.port + 20) if not taken(p)), None)
+    if port is None:
+        sys.exit(f"ports {a.port}-{a.port + 19} are all taken — stop old policy servers "
+                 f"(pkill -f policy_server.py)")
 
     srv = subprocess.Popen([sys.executable, os.path.join(PROJECT, "rl", "policy_server.py"),
                             a.checkpoint, "--port", str(port)])
     try:
         # Wait for it to actually listen, and fail loudly if it never does.
         deadline = time.time() + 30.0
-        ready = False
-        while time.time() < deadline:
+        while not taken(port):
             if srv.poll() is not None:
                 sys.exit(f"policy server exited immediately (rc={srv.returncode}) — "
                          f"the game would have fallen back to the scripted AI")
-            c = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
-            if c.connect_ex(("127.0.0.1", port)) == 0:
-                c.close(); ready = True; break
-            c.close(); time.sleep(0.2)
-        if not ready:
-            sys.exit(f"policy server did not start listening on {port} within 30s")
-        print(f"[play] serving {a.checkpoint}\n"
-              f"       step {ck.get('global_step')} update {ck.get('update')} "
-              f"| round_cap {cfg['round_cap']} max_actors {cfg['max_actors']} "
+            if time.time() > deadline:
+                sys.exit(f"policy server did not start listening on {port} within 30s")
+            time.sleep(0.2)
+        branch = os.path.basename(os.path.dirname(os.path.abspath(a.checkpoint)))
+        label = (f"{branch} · update {ck.get('update', '?')} · "
+                 f"step {int(ck.get('global_step') or 0):,}")
+        print(f"[play] serving {a.checkpoint} on :{port}\n"
+              f"       {label} | round_cap {cfg['round_cap']} max_actors {cfg['max_actors']} "
               f"max_candidates {cfg['max_candidates']}", flush=True)
 
         # The controller has to show the policy a candidate list of the same shape it
@@ -1494,8 +1491,9 @@ def cmd_play(a):
         env = dict(os.environ, MCF_RL_POLICY=f"127.0.0.1:{port}",
                    MCF_RL_MAX_ACTORS=str(cfg["max_actors"]),
                    MCF_RL_MAX_CANDIDATES=str(cfg["max_candidates"]),
-                   MCF_RL_ROUND_CAP=str(cfg["round_cap"]))
-        subprocess.call([a.godot, "--path", PROJECT], env=env)
+                   MCF_RL_ROUND_CAP=str(cfg["round_cap"]),
+                   MCF_RL_MODEL_LABEL=label)
+        subprocess.call([a.godot, "--path", PROJECT, "--", "--vs-latest"], env=env)
     finally:
         srv.terminate()
 
