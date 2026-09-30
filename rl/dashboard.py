@@ -753,11 +753,30 @@ def launch_game(*user_args: str) -> None:
 
 
 def play_vs(ckpt_rel: str) -> None:
+    """Start `train.py play`: policy server + the game, opened on the lobby with this
+    checkpoint already in the opponent slot. Output goes to rl/runs/play.log — it used to
+    go to /dev/null, so a launch that died (a bad checkpoint, no Godot) still said
+    "launched" and the only symptom was a game that never appeared."""
     py = os.environ.get("MCF_RL_PYTHON") or sys.executable
     cmd = [py, os.path.join(HERE, "train.py"), "play", os.path.join(RUNS, ckpt_rel),
            "--godot", godot_bin()]
-    subprocess.Popen(cmd, cwd=PROJECT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    st.success("launched the game with this checkpoint in the AI slot (policy server on :7791)")
+    log = os.path.join(RUNS, "play.log")
+    with open(log, "w") as f:
+        proc = subprocess.Popen(cmd, cwd=PROJECT, stdout=f, stderr=subprocess.STDOUT)
+    for _ in range(40):                      # up to ~8 s for the server to come up
+        time.sleep(0.2)
+        if proc.poll() is not None:
+            break
+        with open(log) as f:
+            if "[play] serving" in f.read():
+                break
+    with open(log) as f:
+        out = f.read().strip()
+    if proc.poll() is not None:
+        st.error(f"the game did not start (exit {proc.returncode}):\n\n```\n{out[-1500:]}\n```")
+    else:
+        served = next((l.strip() for l in out.splitlines() if l.startswith("       ")), "")
+        st.success(f"game starting on the lobby with **AI - Learned** as your opponent — {served}")
 
 
 # --- pages -----------------------------------------------------------------------------------
@@ -1290,7 +1309,9 @@ def controls(b: str, s: dict, key: str = "") -> None:
     if c3.button("Stop", key=f"stop{key}{b}", disabled=not live,
                  help="checkpoint after this update, then exit"):
         run_sh("stop", b)
-    if c4.button("Play vs latest", key=f"play{key}{b}"):
+    if c4.button("Play vs latest", key=f"play{key}{b}",
+                 help="opens the game on the lobby with this branch's newest checkpoint "
+                      "as your AI - Learned opponent"):
         play_vs(os.path.join(b, "latest.pt"))
 
 

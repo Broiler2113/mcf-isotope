@@ -32,6 +32,7 @@ var _session: NetworkSession = null
 var _lan: LanDiscovery = null
 var _lan_list: ItemList
 var _lan_servers: Array = []
+static var _vs_latest_done := false
 
 func _ready() -> void:
 	# Главное меню — первая сцена запуска, поэтому забрать сохранённое из каталога
@@ -46,6 +47,13 @@ func _ready() -> void:
 	SaveHandoff.discard()
 	# Панель обучения RL (spec §11.7) открывает повтор снаружи:
 	#   godot --path . -- --replay=/abs/path.mcfr
+	# «Play vs latest» (train.py play) запускает игру сразу в лобби с обученным ИИ в слоте
+	# соперника. Один раз за запуск: вернувшись в меню после партии, игрок остаётся в меню.
+	if not _vs_latest_done and OS.get_cmdline_user_args().has("--vs-latest") \
+			and LearnedController.available():
+		_vs_latest_done = true
+		_new_game.call_deferred()
+		return
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--replay="):
 			var data := ReplayFile.read(arg.trim_prefix("--replay="))
