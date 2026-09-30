@@ -1447,26 +1447,41 @@ def latest_game_dir() -> str:
 
     This checkout is whatever the training run is on — often a branch or a commit weeks
     behind — so the button used to open that fixed version. The newest main is kept in a
-    sibling worktree (PLAY_DIR), fetched and reset on every play; training is never touched.
-    Offline or on any git failure the current checkout is used, as before."""
+    sibling worktree (PLAY_DIR), fetched and hard-reset on every play; training is never
+    touched. Hard reset, not checkout: Godot's import rewrites files in the worktree, and a
+    checkout over them refused — which silently fell back to the old game.
+    Raises if the newest game cannot be had: opening an old one quietly is the bug."""
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+
     def git(*args, cwd=PROJECT):
-        return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
-                              timeout=120)
-    try:
-        if git("fetch", "--quiet", "origin", "main").returncode != 0:
-            raise RuntimeError("fetch failed")
-        if not os.path.isdir(PLAY_DIR):
-            r = git("worktree", "add", "--detach", PLAY_DIR, "origin/main")
-        else:
-            r = git("checkout", "--quiet", "--detach", "origin/main", cwd=PLAY_DIR)
-            if r.returncode == 0:
-                r = git("reset", "--quiet", "--hard", "origin/main", cwd=PLAY_DIR)
+        r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
+                           timeout=180, env=env)
         if r.returncode != 0:
-            raise RuntimeError(r.stderr.strip())
-        return PLAY_DIR
-    except Exception as e:  # noqa: BLE001 — any failure falls back to this checkout
-        print(f"[play] could not update the latest game ({e}); using {PROJECT}", flush=True)
-        return PROJECT
+            raise RuntimeError(f"git {' '.join(args)}: {(r.stderr or r.stdout).strip()}")
+        return r.stdout.strip()
+
+    git("fetch", "--quiet", "origin", "main")
+    ok = os.path.isdir(PLAY_DIR)
+    if ok:
+        try:
+            git("reset", "--quiet", "--hard", "origin/main", cwd=PLAY_DIR)
+        except RuntimeError:
+            ok = False
+    if not ok:
+        # Missing or broken (deleted by hand, stale worktree record): start it over.
+        shutil.rmtree(PLAY_DIR, ignore_errors=True)
+        git("worktree", "prune")
+        git("worktree", "add", "--force", "--detach", PLAY_DIR, "origin/main")
+    return PLAY_DIR
+
+
+def game_version(path: str) -> str:
+    try:
+        return subprocess.run(["git", "log", "-1", "--format=%h %cd · %s", "--date=short"],
+                              cwd=path, capture_output=True, text=True,
+                              timeout=30).stdout.strip()
+    except Exception:  # noqa: BLE001
+        return "?"
 
 
 def cmd_play(a):
@@ -1525,9 +1540,12 @@ def cmd_play(a):
                    MCF_RL_MAX_CANDIDATES=str(cfg["max_candidates"]),
                    MCF_RL_ROUND_CAP=str(cfg["round_cap"]),
                    MCF_RL_MODEL_LABEL=label)
-        game = latest_game_dir()
+        try:
+            game = latest_game_dir()
+        except Exception as e:  # noqa: BLE001
+            sys.exit(f"could not get the newest game from GitHub: {e}")
         refresh_class_cache(a.godot, game)
-        print(f"[play] game: {game}", flush=True)
+        print(f"[play] game: {game_version(game)}", flush=True)
         subprocess.call([a.godot, "--path", game, "--", "--vs-latest"], env=env)
     finally:
         srv.terminate()

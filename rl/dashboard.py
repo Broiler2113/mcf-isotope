@@ -763,12 +763,12 @@ def play_vs(ckpt_rel: str) -> None:
     log = os.path.join(RUNS, "play.log")
     with open(log, "w") as f:
         proc = subprocess.Popen(cmd, cwd=PROJECT, stdout=f, stderr=subprocess.STDOUT)
-    for _ in range(40):                      # up to ~8 s for the server to come up
+    for _ in range(600):                     # fetching the newest game can take a while
         time.sleep(0.2)
         if proc.poll() is not None:
             break
         with open(log) as f:
-            if "[play] serving" in f.read():
+            if "[play] game:" in f.read():
                 break
     with open(log) as f:
         out = f.read().strip()
@@ -776,7 +776,10 @@ def play_vs(ckpt_rel: str) -> None:
         st.error(f"the game did not start (exit {proc.returncode}):\n\n```\n{out[-1500:]}\n```")
     else:
         served = next((l.strip() for l in out.splitlines() if l.startswith("       ")), "")
-        st.success(f"game starting on the lobby with **AI - Learned** as your opponent — {served}")
+        game = next((l.split(":", 1)[1].strip() for l in out.splitlines()
+                     if l.startswith("[play] game:")), "?")
+        st.success(f"game starting on the lobby with **AI - Learned** as your opponent — {served}"
+                   f"\n\ngame version (newest main): `{game}`")
 
 
 # --- pages -----------------------------------------------------------------------------------
