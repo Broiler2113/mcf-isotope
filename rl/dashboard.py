@@ -425,7 +425,19 @@ def live_card(b: str) -> None:
                    help="round cap reached with equal living units; stalls count here too")
     cols[3].metric("memory", f"{s['total_mb']:.0f} MB" if s.get("total_mb") else "—",
                    help="trainer + its Godot envs; `free` is what the machine has left")
-    cols[4].metric("run on disk", f"{s['disk_mb']:.0f} MB" if s.get("disk_mb") is not None else "—")
+    # Free DISK, not free memory — the number that decides whether the run survives the
+    # night. The trainer checkpoints and exits below `disk_floor_mb`, and it wrote
+    # disk_free_mb into every heartbeat all along; the card only ever showed free RAM, so
+    # town-8 stopped on a full volume while this panel read a comfortable "3306 MB free".
+    floor = float(branch_cfg(b).get("disk_floor_mb") or 0)
+    free_disk = s.get("disk_free_mb")
+    cols[4].metric("disk free", f"{free_disk:,.0f} MB" if free_disk is not None else "—",
+                   delta=(None if free_disk is None or floor <= 0
+                          else f"{free_disk - floor:+,.0f} MB vs floor"),
+                   delta_color="normal",
+                   help=f"free space on the runs volume; the trainer checkpoints and exits "
+                        f"below disk_floor_mb ({floor:.0f} MB). This run's own directory is "
+                        f"{s['disk_mb']:.0f} MB." if s.get("disk_mb") is not None else None)
     if pct(ev.get("winrate_hard")) == "—":
         nxt = s.get("next_eval_update")
         st.caption("No evaluation yet — win rates appear after the first one"
@@ -1662,18 +1674,37 @@ def page_replays() -> None:
     # "win" list is itself the answer to "has it won yet", and a picker that hides the
     # option makes that unanswerable.
     counts = df["outcome"].value_counts()
-    c1, c2, c3, c4 = st.columns(4)
+    # A replay with no map in its sidecar still needs a value, or it would vanish from the
+    # gallery the moment anyone filters by map.
+    df = df.copy()
+    df["map"] = df["map"].replace("", "?").fillna("?")
+    map_counts = df["map"].value_counts()
+    c1, c2, c3, c4, c5 = st.columns(5)
     fc = c1.multiselect("outcome", ["win", "draw", "loss"],
                         format_func=lambda o: f"{o} ({int(counts.get(o, 0))})")
-    fb = c2.multiselect("branch", sorted(df["branch"].unique()))
-    fo = c3.multiselect("opponent", sorted(df["opponent"].unique()))
-    only = c4.checkbox("outstanding only")
+    # The pool mixes map kinds, so "show me the tank games" is the first thing anyone asks
+    # of this gallery. Counts are on the options because an empty list for a map is itself
+    # an answer ("nothing recorded there yet").
+    fm = c2.multiselect("map", sorted(df["map"].unique()),
+                        format_func=lambda m: f"{m} ({int(map_counts.get(m, 0))})")
+    fb = c3.multiselect("branch", sorted(df["branch"].unique()))
+    fo = c4.multiselect("opponent", sorted(df["opponent"].unique()))
+    with c5:
+        sort_by = st.selectbox("sort by", ["newest", "map", "outcome", "value_diff", "rounds"])
+        only = st.checkbox("outstanding only")
     v = df
     if fc: v = v[v["outcome"].isin(fc)]
+    if fm: v = v[v["map"].isin(fm)]
     if fb: v = v[v["branch"].isin(fb)]
     if fo: v = v[v["opponent"].isin(fo)]
     if only: v = v[v["outstanding"] != ""]
-    v = v.sort_values("date", ascending=False).reset_index(drop=True)
+    # Sorting by a field other than the date keeps date as the tiebreak, so a map's games
+    # still read newest-first inside the group. (The table's own headers sort too; this is
+    # for the orderings worth one click.)
+    order = {"newest": ["date"], "map": ["map", "date"], "outcome": ["outcome", "date"],
+             "value_diff": ["value_diff", "date"], "rounds": ["rounds", "date"]}[sort_by]
+    v = v.sort_values(order, ascending=[sort_by in ("map", "outcome", "rounds")] + [False] * (len(order) - 1),
+                      na_position="last").reset_index(drop=True)
     sel = st.dataframe(renderable(v.drop(columns=["file"])), width="stretch", hide_index=True,
                        on_select="rerun", selection_mode="single-row")
     rows = sel.get("selection", {}).get("rows", []) if isinstance(sel, dict) else sel.selection.rows
