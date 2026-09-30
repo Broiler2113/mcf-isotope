@@ -18,7 +18,16 @@ extends SceneTree
 ##      зон; объекты карты — только известные, с высотой из таблицы;
 ##   5. мирные начинают партию СПЯЩИМИ: зоны забиты бойцами до отказа, и после первого
 ##      действия настоящий резолвер не разбудил ни одного жителя;
-##   6. на карте каждого стиля ИИ против ИИ доигрывает несколько раундов, не зависая.
+##   6. на карте каждого стиля ИИ против ИИ доигрывает несколько раундов, не зависая;
+##   7. отрезанного пола нет: КАЖДАЯ проходимая клетка (кроме вакуума за обшивкой)
+##      достижима пешком из первой зоны, и ни один шлюз не открывается в стену;
+##   8. «Symmetrical»: карта совпадает со своим отражением клетка в клетку (зеркало слева
+##      направо, четверти при 4 и 8 сторонах), зона переходит в зону, мирные — в мирных;
+##   9. бункер — та же станция под землёй: ни клетки вакуума даже с галочкой космоса,
+##      край карты — сплошная скала, а без космоса бункер и станция на одном зерне —
+##      одна и та же карта до байта. Станции и бункеры — с коридорами и десятками комнат;
+##  10. размеры до 250×250: готовые пункты и свой размер держат слово, самая большая
+##      карта собирается в разумное время, мирных не больше MapGen.CIV_MAX.
 
 const ROUNDS := 3
 const MAX_ACTIONS := 4000
@@ -29,9 +38,18 @@ var fails: PackedStringArray = []
 var maps := 0
 var _pending: Intent = null
 
+## Готовые размеры до «Huge» — полным перебором; «Giant» и «Colossal» — по разу на стиль:
+## они проверяют то же, но каждая стоит секунды.
+const FULL_SIZES := 4
+## Самая большая карта (250×250) обязана собираться не дольше этого: лобби строит её
+## заново на каждое изменение настроек. С запасом на медленную машину.
+const COLOSSAL_MS := 4000
+
 func _initialize() -> void:
+	ck(MapGen.SIZE_CUSTOM == MapGen.SIZES.size(), "'Custom' follows the last preset size")
+	ck(MapGen.SIZES[MapGen.SIZES.size() - 1] == MapGen.MAX_DIM, "the largest preset is the 250×250 cap")
 	for style in MapGen.STYLE_NAMES.size():
-		for size in MapGen.SIZES.size():
+		for size in FULL_SIZES:
 			for k in 3:
 				_check({"style": style, "size": size, "density": k, "seed": 1000 * k + 17 * style + size,
 						"zones": 2 + (k + size) % 3})
@@ -40,7 +58,27 @@ func _initialize() -> void:
 		# Большие отряды на маленьком поле: зоны обязаны их вместить — поле растёт.
 		_check({"style": style, "size": 0, "seed": 31 + style, "zones": 3, "units": 40})
 		_check({"style": style, "size": 1, "seed": 57 + style, "zones": 6, "units": 12})
+		# Зеркало: пары, пары с зоной на оси, четверти.
+		for n in [2, 3, 4, 5, 6, 8]:
+			_check({"style": style, "size": 2, "seed": 700 + 13 * style + n, "zones": n, "symmetric": true})
+		_check({"style": style, "size": 4, "seed": 11 + style, "zones": 3})
+		var t0 := Time.get_ticks_msec()
+		var colossal := MapGen.generate({"style": style, "size": 5, "seed": 13 + style})
+		var ms := Time.get_ticks_msec() - t0
+		ck(colossal.width == 250 and colossal.height == 250, "Colossal is 250×250")
+		ck(ms < COLOSSAL_MS, "%s: a 250×250 map builds in %d ms (budget %d)" % [
+				MapGen.STYLE_NAMES[style], ms, COLOSSAL_MS])
+		_check({"style": style, "size": 5, "seed": 13 + style})
 		_play(style)
+	# Свой размер: в пределах 16…250, и поле по-прежнему растёт, если отряды не влезают.
+	_check({"style": MapGen.Style.TOWN, "size": MapGen.SIZE_CUSTOM, "width": 250, "height": 120, "seed": 5})
+	_check({"style": MapGen.Style.FIELD, "size": MapGen.SIZE_CUSTOM, "width": 16, "height": 16,
+			"seed": 6, "zones": 3})
+	var huge := MapGen.generate({"size": MapGen.SIZE_CUSTOM, "width": 999, "height": 1})
+	ck(huge.width == MapGen.MAX_DIM.x and huge.height >= MapGen.MIN_DIM,
+			"custom size is clamped to %d..%d (%dx%d)" % [MapGen.MIN_DIM, MapGen.MAX_DIM.x, huge.width, huge.height])
+	_bunker_is_an_underground_station()
+	_stations_have_rooms_and_hallways()
 	if fails.is_empty():
 		print("mapgen: %d random maps keep every lobby promise; AI plays each style" % maps)
 		quit(0)
@@ -57,12 +95,12 @@ func ck(cond: bool, what: String) -> void:
 func _check(overrides: Dictionary) -> void:
 	var o := MapGen.default_options()
 	o.merge(overrides, true)
-	var tag := "%s %s %s" % [MapGen.STYLE_NAMES[o["style"]], MapGen.SIZE_NAMES[o["size"]], overrides]
+	var tag := "%s %s" % [MapGen.STYLE_NAMES[o["style"]], overrides]
 	var m := MapGen.generate(o)
 	maps += 1
 	ck(JSON.stringify(m.to_dict()) == JSON.stringify(MapGen.generate(o).to_dict()),
 			tag + ": the same seed builds the same map")
-	var dim: Vector2i = MapGen.SIZES[o["size"]]
+	var dim := MapGen.dims_of(o)
 	ck(m.width >= dim.x and m.height >= dim.y, tag + ": size %dx%d" % [m.width, m.height])
 	var need := MapGen.zone_need(int(o["units"]))
 	var tight := m.width >= MapGen.MAX_DIM.x or m.height >= MapGen.MAX_DIM.y
@@ -97,7 +135,7 @@ func _check(overrides: Dictionary) -> void:
 			if a < b and _gap(zones[a], zones[b]) <= (1 if tight else MapGen.ZONE_GAP):
 				ck(false, tag + ": zones %d and %d are %d cells apart" % [a, b, _gap(zones[a], zones[b])])
 
-	# Пеший путь — по настоящей доске.
+	# Пеший путь — по настоящей доске. И не только до зон: отрезанного пола нет вовсе.
 	if zones.has(0):
 		var grid := Grid.new(m.width, m.height)
 		m.apply_to_grid(grid)
@@ -108,6 +146,28 @@ func _check(overrides: Dictionary) -> void:
 				if not reach.has(c):
 					lost += 1
 			ck(lost == 0, tag + ": %d cell(s) of zone %d can't be reached on foot" % [lost, z])
+		var sealed := 0
+		var first := Vector2i(-1, -1)
+		for y in m.height:
+			for x in m.width:
+				var c := Vector2i(x, y)
+				if not m.get_space(c) and grid.cell(c).walkable_terrain() and not reach.has(c):
+					sealed += 1
+					if first.x < 0:
+						first = c
+		ck(sealed == 0, tag + ": %d walkable cell(s) are sealed off, e.g. %s" % [sealed, first])
+		# Шлюз — это дверь: по одну сторону и по другую должно быть куда шагнуть.
+		for y in m.height:
+			for x in m.width:
+				var c := Vector2i(x, y)
+				if m.get_feature(c) != MCF.FEATURE_AIRLOCK:
+					continue
+				var through := false
+				for d: Vector2i in [Vector2i(1, 0), Vector2i(0, 1)]:
+					if grid.in_bounds(c + d) and grid.in_bounds(c - d) \
+							and grid.cell(c + d).walkable_terrain() and grid.cell(c - d).walkable_terrain():
+						through = true
+				ck(through, tag + ": the airlock at %s opens into a wall" % c)
 
 	var civ := 0
 	for s in m.spawns:
@@ -136,6 +196,84 @@ func _check(overrides: Dictionary) -> void:
 		ck(civ > 0, tag + ": civilians are placed")
 	if civ > 0:
 		_dormant(m, tag)
+	ck(civ <= MapGen.CIV_MAX, tag + ": %d civilians, cap %d" % [civ, MapGen.CIV_MAX])
+	if o["style"] == MapGen.Style.BUNKER:
+		ck(not vacuum, tag + ": a bunker has no vacuum anywhere")
+		var open_edge := 0
+		for y in m.height:
+			for x in m.width:
+				if (x == 0 or y == 0 or x == m.width - 1 or y == m.height - 1) \
+						and m.get_feature(Vector2i(x, y)) != MCF.FEATURE_WALL:
+					open_edge += 1
+		ck(open_edge == 0, tag + ": the bunker's edge is solid rock (%d open cell(s))" % open_edge)
+	if o["symmetric"]:
+		_symmetric(m, o, zones, tag)
+
+## Карта совпадает со своими отражениями: четверти при 4 и 8 сторонах, иначе зеркало
+## слева направо. Клетка — в клетку, зона — в зону целиком, мирный — в мирного.
+func _symmetric(m: MapData, o: Dictionary, zones: Dictionary, tag: String) -> void:
+	var quad: bool = int(o["zones"]) % 4 == 0
+	var imgs := func(c: Vector2i) -> Array:
+		var out := [Vector2i(m.width - 1 - c.x, c.y)]
+		if quad:
+			out.append(Vector2i(c.x, m.height - 1 - c.y))
+			out.append(Vector2i(m.width - 1 - c.x, m.height - 1 - c.y))
+		return out
+	var bad := 0
+	for y in m.height:
+		for x in m.width:
+			var c := Vector2i(x, y)
+			for p: Vector2i in imgs.call(c):
+				if m.get_feature(c) != m.get_feature(p) or m.get_floor(c) != m.get_floor(p) \
+						or m.get_space(c) != m.get_space(p) or not is_equal_approx(m.get_cover(c), m.get_cover(p)):
+					bad += 1
+	ck(bad == 0, tag + ": %d cell(s) differ from their mirror image" % bad)
+	for z in zones:
+		for k in (3 if quad else 1):
+			var image := {}
+			for c: Vector2i in zones[z]:
+				image[m.get_zone(imgs.call(c)[k])] = true
+			ck(image.size() == 1 and not image.has(-1),
+					tag + ": zone %d does not mirror onto a single zone (%s)" % [z, image.keys()])
+	var civ := {}
+	for s in m.spawns:
+		civ[s["coord"]] = true
+	for c: Vector2i in civ:
+		for p: Vector2i in imgs.call(c):
+			ck(civ.has(p), tag + ": civilian at %s has no mirror at %s" % [c, p])
+
+## Бункер — станция того же зерна, только под землёй: без космоса они совпадают до байта,
+## а с космосом у бункера нет ни клетки вакуума.
+func _bunker_is_an_underground_station() -> void:
+	for seed in [3, 77, 1234]:
+		for size in 3:
+			var o := {"size": size, "seed": seed, "space": false}
+			o["style"] = MapGen.Style.STATION
+			var station := JSON.stringify(MapGen.generate(o).to_dict())
+			o["style"] = MapGen.Style.BUNKER
+			ck(station == JSON.stringify(MapGen.generate(o).to_dict()),
+					"seed %d size %d: without space, bunker and station are the same map" % [seed, size])
+
+## «Гораздо больше комнат и коридоров»: станция и бункер нарезаны на десятки комнат, а
+## коридоры — заметная доля поля, на любом размере.
+func _stations_have_rooms_and_hallways() -> void:
+	for style in [MapGen.Style.STATION, MapGen.Style.BUNKER]:
+		for size in 3:
+			for seed in [1, 2, 3, 4, 5, 6]:
+				var o := MapGen.default_options()
+				o.merge({"style": style, "size": size, "seed": seed, "density": 1}, true)
+				var dim: Vector2i = MapGen.SIZES[size]
+				var g := MapGen.new()
+				g._build(o, dim, MapGen.zone_need(10), false)
+				var halls := 0
+				for k in g._k:
+					if k == MapGen.K_HALL:
+						halls += 1
+				var tag := "%s %s seed %d" % [MapGen.STYLE_NAMES[style], MapGen.SIZE_NAMES[size], seed]
+				ck(g._rooms.size() >= dim.x * dim.y / 140,
+						tag + ": %d rooms on %d cells" % [g._rooms.size(), dim.x * dim.y])
+				ck(halls >= dim.x * dim.y / 25,
+						tag + ": hallways are %d of %d cells" % [halls, dim.x * dim.y])
 
 ## Худший случай расстановки: каждая клетка каждой зоны занята бойцом. Партия начинается
 ## так же, как у боевого экрана (шлюзы, слот мирных), затем одно действие — и ни один

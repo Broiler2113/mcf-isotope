@@ -1,26 +1,39 @@
 class_name MapGen
 extends RefCounted
 
-## Генератор случайных карт — строка «Random map» в лобби. Три стиля (станция, город,
-## поле) собираются из одного числа-зерна: удачную карту можно назвать этим числом, и
+## Генератор случайных карт — строка «Random map» в лобби. Четыре стиля (станция, город,
+## поле, бункер) собираются из одного числа-зерна: удачную карту можно назвать этим числом, и
 ## она соберётся снова точно такой же.
 ##
-## Карта органическая, без зеркала. Честность держится на другом: зоны развёртывания
-## одного размера, разнесены как можно дальше друг от друга, и из любой зоны в любую
-## есть пеший путь — это проверяется в самом конце, а где пути нет, он прорубается.
+## По умолчанию карта органическая, без зеркала. Честность держится на другом: зоны
+## развёртывания одного размера, разнесены как можно дальше друг от друга, и из любой зоны в
+## любую есть пеший путь. С галочкой «Symmetrical» карта зеркальная (_sym): строится левая
+## половина (или левая верхняя четверть) и отражается, а зоны растут сразу вместе со своими
+## отражениями — у каждой стороны та же местность, что у соседа, только в зеркале.
 ##
-## Зона обязана вместить отряд: на бойца — CELLS_PER_UNIT клеток. Не влезли на
-## выбранном размере — поле растёт (до MAX_DIM) и строится заново. Мирные ставятся
-## туда, где их не видно ни из одной зоны: иначе они проснулись бы от первого же хода.
+## Зона обязана вместить отряд: на бойца — CELLS_PER_UNIT клеток. Не влезли на выбранном
+## размере — поле растёт (до MAX_DIM) и строится заново. Мирные ставятся туда, где их не
+## видно ни из одной зоны: иначе они проснулись бы от первого же хода.
+##
+## Отрезанного пола на готовой карте нет: дом без двери, комната за зеркальной осью, закуток
+## за ящиками соединяются с остальной картой самым коротким проломом (_join_pockets).
 ##
 ## Строит карту только хост: гостю уезжает готовая MapData (K_LOBBY_MAP), так что сети
 ## детерминизм генератора не нужен — он нужен зерну. Каждая фаза тянет числа из СВОЕГО
 ## потока, поэтому снятая галочка «Civilians» убирает мирных, а не перекраивает улицы.
+##
+## Поле бывает до 250×250 (MAX_DIM), а лобби пересобирает карту на каждый щелчок настроек:
+## всё, что проходит по полю целиком, здесь линейно по числу клеток.
 
-enum Style {STATION, TOWN, FIELD}
-const STYLE_NAMES := ["Station", "Town", "Field"]
-const SIZES := [Vector2i(28, 20), Vector2i(38, 28), Vector2i(50, 38)]
-const SIZE_NAMES := ["Small", "Medium", "Large"]
+enum Style {STATION, TOWN, FIELD, BUNKER}
+const STYLE_NAMES := ["Station", "Town", "Field", "Bunker"]
+const SIZES := [Vector2i(28, 20), Vector2i(38, 28), Vector2i(50, 38), Vector2i(80, 60),
+		Vector2i(125, 95), Vector2i(250, 250)]
+const SIZE_NAMES := ["Small", "Medium", "Large", "Huge", "Giant", "Colossal"]
+## Пункт размера «свой»: ширина и высота берутся из настроек "width"/"height". Всегда
+## следующий за последним готовым размером (== SIZES.size()).
+const SIZE_CUSTOM := 6
+const MIN_DIM := 16
 const DENSITY_NAMES := ["Sparse", "Normal", "Dense"]
 const DENSITY_MULT := [0.55, 1.0, 1.6]
 const SEED_MAX := 9999999
@@ -29,16 +42,24 @@ const SEED_MAX := 9999999
 const ZONE_SHARE := 0.3
 ## Клеток зоны на бойца: есть где развернуться и куда поставить технику (танк — 3×3).
 const CELLS_PER_UNIT := 2
-## Дальше этого поле не растёт, даже если отряды всё ещё не влезают.
-const MAX_DIM := Vector2i(80, 60)
+## Дальше этого поле не растёт — ни по выбору игрока, ни когда отряды не влезают.
+const MAX_DIM := Vector2i(250, 250)
 ## Ближе этого (по Чебышёву) клетки разных зон друг к другу не подходят. Только если
 ## отряды не влезают и на самом большом поле, зазор ужимается до 2, потом до 1.
 const ZONE_GAP := 3
 const ZONE_MIN := 16
+## Мирных не больше этого на любой карте. Слот жителей играется весь за один ход, и прежняя
+## норма (житель на 160 клеток) дала бы на поле 250×250 ~400 жителей — минуты на их ход.
+const CIV_MAX := 32
+## Якорей-кандидатов не больше этого: на большой карте берётся каждый k-й. Якорь нужен
+## «где-то здесь», а перебор всех 60 000 клеток поля 250×250 — секунды на каждую попытку.
+const CAND_MAX := 6000
 
 enum Phase {STRUCTURE, SPACE, ZONES, DRESSING, CIVILIANS}
 
 const N4 := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+const DIRS8 := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1),
+		Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1)]
 
 # Разметка станции до переноса в MapData.
 const K_VOID := 0
@@ -53,6 +74,9 @@ var w: int
 var h: int
 var dens: float
 var _rng: RandomNumberGenerator
+var _style := Style.TOWN
+## Симметрия: 0 — нет, 1 — зеркало слева направо, 2 — ещё и сверху вниз (четыре четверти).
+var _sym := 0
 ## Клетки «под крышей» — комнаты станции, дома, руины. Мирные живут в основном тут.
 var _indoor: PackedByteArray
 ## Дверные проёмы. Зона сквозь них прорастает, но их не занимает; шлюзы — только в них.
@@ -60,43 +84,61 @@ var _door: PackedByteArray
 var _doors: Array[Vector2i] = []
 ## Комнаты станции, дома города, руины поля — прямоугольники со стенами по краю.
 var _rooms: Array[Rect2i] = []
+var _room_mask: PackedByteArray   # клетки прямоугольников _rooms (для поля)
 var _parks: Array[Rect2i] = []
 var _street: PackedByteArray
 var _k: PackedByteArray
+var _room_min := 6                # сторона самой маленькой комнаты станции, со стенами
 ## Номер зоны клетки (-1 — не зона) и якорь каждой зоны.
 var _zone: PackedInt32Array
 var _anchors: Array[Vector2i] = []
 ## Где украшениям не место: зоны с каймой, проёмы и подходы к ним.
 var _keep: PackedByteArray
-# Рабочие массивы роста зон — члены, чтобы _grow, _push и _near_other делили их, не
-# передавая друг другу.
+# Рабочие массивы роста зон — члены, чтобы _grow, _push, _claim и _near_other делили их,
+# не передавая друг другу.
 var _own: PackedInt32Array
 var _seen: PackedByteArray
-var _fronts: Array = []
-var _claimed: Array = []  # по зоне — её клетки в порядке захвата
+var _fronts: Array = []           # по представителю — куча [приоритет, клетка]
+var _claimed: Array = []          # по представителю — его клетки в порядке захвата
 var _gap := ZONE_GAP
-var _need := ZONE_MIN     # клеток на зону, чтобы влез отряд
-var _tight := false       # поле уже предельное — можно ужимать зазор между зонами
-var _zone_min := 0        # сколько клеток досталось каждой зоне
+var _need := ZONE_MIN             # клеток на зону, чтобы влез отряд
+var _tight := false               # поле уже предельное — можно ужимать зазор между зонами
+var _zone_min := 0                # сколько клеток досталось каждой зоне
+var _zone_n := 2
+## Зоны растут «представителями»: представитель — это зона вместе со всеми её отражениями
+## (или одна зона на оси, которая отражается сама в себя). Без симметрии представитель и
+## есть зона. По представителю — номер зоны для каждого преобразования группы (_img).
+var _rep_ids: Array = []
+var _rep_fold: Array[bool] = []
 
 static func default_options() -> Dictionary:
 	return {"style": Style.TOWN, "size": 1, "density": 1, "seed": 1, "zones": 2, "units": 10,
+			"width": 80, "height": 60, "symmetric": false,
 			"space": true, "flammable": true, "obstacles": true, "civilians": true}
 
 ## Сколько клеток нужно зоне, чтобы в неё встал отряд из `units` бойцов.
 static func zone_need(units: int) -> int:
 	return maxi(ZONE_MIN, units * CELLS_PER_UNIT)
 
+## Размер поля по настройкам: готовый пункт списка или свой (SIZE_CUSTOM) — в пределах
+## MIN_DIM…MAX_DIM.
+static func dims_of(options: Dictionary) -> Vector2i:
+	var s := int(options.get("size", 1))
+	if s >= 0 and s < SIZES.size():
+		return SIZES[s]
+	return Vector2i(clampi(int(options.get("width", 80)), MIN_DIM, MAX_DIM.x),
+			clampi(int(options.get("height", 60)), MIN_DIM, MAX_DIM.y))
+
 ## Собрать карту. Ключи настроек — как в default_options(); недостающие берутся оттуда.
 ## Отряды не влезли в зоны — поле растёт пропорционально нехватке и строится заново.
 static func generate(options: Dictionary) -> MapData:
 	var o := default_options()
 	o.merge(options, true)
-	var dim: Vector2i = SIZES[clampi(int(o["size"]), 0, SIZES.size() - 1)]
+	var dim := dims_of(o)
 	var need := zone_need(int(o["units"]))
 	var g: MapGen = null
 	for attempt in 6:
-		var last := attempt == 5 or dim.x >= MAX_DIM.x or dim.y >= MAX_DIM.y
+		var last := attempt == 5 or (dim.x >= MAX_DIM.x and dim.y >= MAX_DIM.y)
 		g = MapGen.new()
 		g._build(o, dim, need, last)
 		if g._zone_min >= need or last:
@@ -112,48 +154,64 @@ func _build(options: Dictionary, dim: Vector2i, need: int, tight: bool) -> void:
 	w = dim.x
 	h = dim.y
 	dens = DENSITY_MULT[clampi(int(opt["density"]), 0, DENSITY_MULT.size() - 1)]
+	_style = int(opt["style"])
+	var n := clampi(int(opt["zones"]), 2, MCF.MAX_PLAYERS)
+	# Четыре четверти — когда стороны делятся на них поровну (по стороне на четверть);
+	# иначе зеркало слева направо, и при нечётном числе одна зона стоит на оси.
+	_sym = 0 if not bool(opt.get("symmetric", false)) else (2 if n % 4 == 0 else 1)
 	m = MapData.new(w, h)
 	_indoor = _bytes()
 	_door = _bytes()
 	_street = _bytes()
 	_keep = _bytes()
+	_room_mask = _bytes()
 	_zone = PackedInt32Array()
 	_zone.resize(w * h)
 	_zone.fill(-1)
-	var style := int(opt["style"])
 	_phase(Phase.STRUCTURE)
-	match style:
-		Style.STATION:
+	match _style:
+		Style.STATION, Style.BUNKER:
 			_station()
 		Style.FIELD:
 			_field()
 		_:
 			_town()
+	_mirror()
+	_join_pockets(Vector2i(-1, -1))
 	_phase(Phase.SPACE)
-	if bool(opt["space"]):
-		if style == Style.STATION:
+	# Бункер под землёй: ни вакуума в отсеке, ни рваного края — только шлюзы-двери.
+	if bool(opt["space"]) and _style != Style.BUNKER:
+		if _style == Style.STATION:
 			_vent_room()
 		else:
 			_open_space()
+	_mirror()
 	_phase(Phase.ZONES)
-	_zones(clampi(int(opt["zones"]), 2, MCF.MAX_PLAYERS))
+	_zones(n)
 	_phase(Phase.DRESSING)
-	match style:
-		Style.STATION:
+	match _style:
+		Style.STATION, Style.BUNKER:
 			_dress_station()
 		Style.FIELD:
 			_dress_field()
 		_:
 			_dress_town()
-	_connect_zones()
+	_mirror()
+	# После украшений ещё раз: ящики и глыбы тоже могут отрезать кусок пола, а зоны должны
+	# быть связаны пешком — главная часть теперь та, где стоит первая зона.
+	if not _anchors.is_empty():
+		_join_pockets(_anchors[0])
 	_phase(Phase.CIVILIANS)
 	if bool(opt["civilians"]):
 		_civilians()
+		_mirror_spawns()
 
-## Свой поток случайных чисел на каждую фазу (см. шапку).
+## Свой поток случайных чисел на каждую фазу (см. шапку). Бункер тянет из потоков станции:
+## то же зерно — та же станция, только под землёй.
 func _phase(p: int) -> void:
+	var style_seed := Style.STATION if _style == Style.BUNKER else _style
 	_rng = RandomNumberGenerator.new()
-	_rng.seed = int(opt["seed"]) * 1000003 + p * 7919 + int(opt["style"]) * 131 \
+	_rng.seed = int(opt["seed"]) * 1000003 + p * 7919 + style_seed * 131 \
 			+ int(opt["size"]) * 17 + int(opt["density"])
 
 func _bytes() -> PackedByteArray:
@@ -172,9 +230,9 @@ func _ground(c: Vector2i, floor_type: int = MCF.FLOOR_NORMAL) -> void:
 func _put(c: Vector2i, feature: String) -> void:
 	m.set_cell(c, m.get_floor(c), float(MCF.FEATURE_HEIGHT.get(feature, 0.0)), false, feature)
 
-## Пустота за постройками: космос, а без космоса — сплошная скала.
+## Пустота за постройками: космос, а без космоса (и всегда в бункере) — сплошная скала.
 func _void(c: Vector2i) -> void:
-	if bool(opt["space"]):
+	if bool(opt["space"]) and _style != Style.BUNKER:
 		_space(c)
 	else:
 		_put(c, MCF.FEATURE_WALL)
@@ -190,18 +248,27 @@ func _space(c: Vector2i) -> void:
 func _clear(c: Vector2i) -> bool:
 	return _in(c) and not m.get_space(c) and m.get_feature(c) == "" and m.get_cover(c) <= 0.0
 
+## То же, что _clear, для всего поля разом.
+func _clear_mask() -> PackedByteArray:
+	var out := _bytes()
+	for i in w * h:
+		if m.is_space[i] == 0 and m.feature_id[i] == "" and m.cover_height[i] <= 0.0:
+			out[i] = 1
+	return out
+
 ## Проходима ли клетка пешком на пустой доске — то же, что GridCell.walkable_terrain():
 ## всё ниже стены, космос и шлюз. Ёж не считается: его только перепрыгивают, а путь
-## «через ежа» не нужен, чтобы зоны были связаны.
-func _walk(c: Vector2i) -> bool:
-	if not _in(c):
-		return false
-	var f := m.get_feature(c)
-	if f == MCF.FEATURE_AIRLOCK:
-		return true
-	if f == MCF.FEATURE_HEDGEHOG or f == MCF.FEATURE_DRONE_STATION:
-		return false
-	return m.get_space(c) or m.get_cover(c) < MCF.WALL_HEIGHT
+## «через ежа» не нужен, чтобы части карты были связаны.
+func _walk_mask() -> PackedByteArray:
+	var out := _bytes()
+	for i in w * h:
+		var f: String = m.feature_id[i]
+		if f == MCF.FEATURE_AIRLOCK:
+			out[i] = 1
+		elif f != MCF.FEATURE_HEDGEHOG and f != MCF.FEATURE_DRONE_STATION \
+				and (m.is_space[i] != 0 or m.cover_height[i] < MCF.WALL_HEIGHT):
+			out[i] = 1
+	return out
 
 ## Украшение ставится только на чистую клетку и не туда, где зона или проём.
 func _try_put(c: Vector2i, feature: String) -> bool:
@@ -236,10 +303,7 @@ func _touches_space(c: Vector2i) -> bool:
 	return false
 
 func _inside_room(c: Vector2i) -> bool:
-	for r in _rooms:
-		if r.has_point(c):
-			return true
-	return false
+	return _in(c) and _room_mask[c.y * w + c.x] != 0
 
 func _on_edge(r: Rect2i, c: Vector2i) -> bool:
 	return c.x == r.position.x or c.y == r.position.y or c.x == r.end.x - 1 or c.y == r.end.y - 1
@@ -268,59 +332,144 @@ func _outward(r: Rect2i, c: Vector2i) -> Vector2i:
 func _random_cell(margin: int = 1) -> Vector2i:
 	return Vector2i(_rng.randi_range(margin, w - 1 - margin), _rng.randi_range(margin, h - 1 - margin))
 
-# --- Станция ---------------------------------------------------------------------------
-## Комнаты — листья двоичного разбиения (BSP); коридор соединяет две ветви каждого
-## узла дерева, поэтому связна вся станция. Пара лишних коридоров даёт обходы: без
-## них у каждой комнаты был бы ровно один подход. Всё прочее — космос за обшивкой
-## (или скала, если космос выключен).
+# --- Симметрия ---------------------------------------------------------------------------
+## Преобразований в группе симметрии: 1, 2 (зеркало) или 4 (четверти).
+func _group() -> int:
+	return [1, 2, 4][_sym]
+
+## Образ клетки при g-м преобразовании: 0 — сама клетка, 1 — отражение по ширине,
+## 2 — по высоте, 3 — по обеим сразу.
+func _img(c: Vector2i, g: int) -> Vector2i:
+	return Vector2i(w - 1 - c.x if (g & 1) != 0 else c.x, h - 1 - c.y if (g & 2) != 0 else c.y)
+
+## Клетка «исходной» части — левой половины (или левой верхней четверти): строится
+## она, всё остальное — её отражения. Без симметрии исходное — всё поле.
+func _in_f(c: Vector2i) -> bool:
+	return (_sym == 0 or c.x <= (w - 1) / 2) and (_sym < 2 or c.y <= (h - 1) / 2)
+
+## Индекс клетки исходной части, отражением которой является (x, y).
+func _src_index(x: int, y: int) -> int:
+	var sx := mini(x, w - 1 - x) if _sym >= 1 else x
+	var sy := mini(y, h - 1 - y) if _sym >= 2 else y
+	return sy * w + sx
+
+## Переписать всё вне исходной части её отражением: клетки карты, служебные разметки и
+## списки комнат. Зоны и мирных это не касается — у них свой симметричный путь.
+func _mirror() -> void:
+	if _sym == 0:
+		return
+	var has_k := _k.size() == w * h
+	for y in h:
+		for x in w:
+			var i := y * w + x
+			var s := _src_index(x, y)
+			if s == i:
+				continue
+			m.floor_type[i] = m.floor_type[s]
+			m.cover_height[i] = m.cover_height[s]
+			m.is_space[i] = m.is_space[s]
+			m.feature_id[i] = m.feature_id[s]
+			_indoor[i] = _indoor[s]
+			_door[i] = _door[s]
+			_street[i] = _street[s]
+			_room_mask[i] = _room_mask[s]
+			if has_k:
+				_k[i] = _k[s]
+	_doors.clear()
+	for i in w * h:
+		if _door[i] != 0:
+			_doors.append(Vector2i(i % w, i / w))
+	_rooms = _mirror_rects(_rooms)
+	_parks = _mirror_rects(_parks)
+
+## Прямоугольники после отражения: целиком в исходной части — он и его образы; через
+## ось — растянутый до симметричного (такой он теперь на карте); целиком за осью —
+## пропадает: его место заняло отражение другого.
+func _mirror_rects(list: Array[Rect2i]) -> Array[Rect2i]:
+	var out: Array[Rect2i] = []
+	var have := {}
+	for r in list:
+		var xs := _fold_span(r.position.x, r.end.x, w, _sym >= 1)
+		var ys := _fold_span(r.position.y, r.end.y, h, _sym >= 2)
+		for sx: Vector2i in xs:
+			for sy: Vector2i in ys:
+				var q := Rect2i(sx.x, sy.x, sx.y - sx.x, sy.y - sy.x)
+				if not have.has(q):
+					have[q] = true
+					out.append(q)
+	return out
+
+## Отрезок [a, b) одной оси после отражения этой оси — его образы.
+func _fold_span(a: int, b: int, n: int, on: bool) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	if not on:
+		out.append(Vector2i(a, b))
+		return out
+	var last := (n - 1) / 2          # последняя клетка исходной части
+	if a > last:
+		return out
+	if b - 1 <= last:
+		out.append(Vector2i(a, b))
+		out.append(Vector2i(n - b, n - a))
+	else:
+		out.append(Vector2i(a, n - a))
+	return out
+
+## Мирные симметрично: стоящие в исходной части остаются и отражаются, прочие уходят.
+func _mirror_spawns() -> void:
+	if _sym == 0:
+		return
+	var out: Array = []
+	var taken := {}
+	for s in m.spawns:
+		var c: Vector2i = s["coord"]
+		if not _in_f(c):
+			continue
+		for g in _group():
+			var p := _img(c, g)
+			if taken.has(p):
+				continue
+			taken[p] = true
+			var copy: Dictionary = s.duplicate()
+			copy["coord"] = p
+			out.append(copy)
+	m.spawns = out
+
+# --- Станция и бункер ------------------------------------------------------------------
+## Отсеки и коридоры. Всё поле делится пополам, половины — снова пополам, и так далее
+## (BSP), а каждая линия раздела становится коридором: сверху широкий, 2–3 клетки, глубже
+## уже. Раз каждый коридор тянется через весь свой кусок, он упирается концами в коридор
+## уровнем выше — сеть связна сама собой. Получившиеся блоки — отсеки: каждый делится
+## стенами на комнаты (стена общая, в каждой перегородке дверь, иногда две), и у каждого
+## отсека есть хотя бы одна дверь в коридор. Часть отсеков пустует — у краёв чаще: там
+## космос (или скала бункера), и коридор идёт мимо, как труба с окнами.
+##
+## Бункер — та же станция из тех же чисел, только вместо космоса скала (см. _void).
 func _station() -> void:
 	_k = _bytes()
-	var leaves: Array[Rect2i] = []
-	var pairs: Array = []
-	var min_leaf: int = [10, 8, 7][clampi(int(opt["density"]), 0, 2)]
-	_bsp(Rect2i(1, 1, w - 2, h - 2), min_leaf, leaves, pairs)
-	var room_of: Array[int] = []
-	for leaf in leaves:
-		# Изредка лист пустует — у станции появляется неровный силуэт.
-		var empty := _rng.randf() < 0.12 and leaves.size() >= 6
-		var rw := _rng.randi_range(maxi(6, leaf.size.x * 6 / 10), leaf.size.x - 1)
-		var rh := _rng.randi_range(maxi(6, leaf.size.y * 6 / 10), leaf.size.y - 1)
-		var r := Rect2i(leaf.position.x + _rng.randi_range(0, leaf.size.x - 1 - rw),
-				leaf.position.y + _rng.randi_range(0, leaf.size.y - 1 - rh), rw, rh)
-		if empty:
-			room_of.append(-1)
+	var di := clampi(int(opt["density"]), 0, 2)
+	var sector_min: int = [15, 12, 10][di]
+	# Хотя бы один коридор на любом поле: отсек не больше, чем влезает два поперёк самой
+	# длинной стороны (иначе маленькая станция была бы одним отсеком без коридоров).
+	sector_min = mini(sector_min, (maxi(w, h) - 5) / 2)
+	_room_min = [7, 6, 5][di]
+	var sectors: Array[Rect2i] = []
+	_split_sectors(Rect2i(1, 1, w - 2, h - 2), sector_min, 0, sectors)
+	# Пустые отсеки — у краёв чаще, но не больше пятой части: на карте из шести отсеков,
+	# где все у края, прежний бросок «каждому по 20%» оставлял от станции скелет коридоров.
+	var empty_left := sectors.size() / 5
+	for s in sectors:
+		var edge := s.position.x <= 1 or s.position.y <= 1 or s.end.x >= w - 1 or s.end.y >= h - 1
+		var empty_roll := _rng.randf()
+		if empty_left > 0 and empty_roll < (0.25 if edge else 0.08):
+			empty_left -= 1
 			continue
-		room_of.append(_rooms.size())
-		_rooms.append(r)
-		for y in range(r.position.y, r.end.y):
-			for x in range(r.position.x, r.end.x):
-				_k[y * w + x] = K_WALL if _on_edge(r, Vector2i(x, y)) else K_ROOM
-	for p in pairs:
-		var a := _rooms_in(p[0], room_of)
-		var b := _rooms_in(p[1], room_of)
-		if a.is_empty() or b.is_empty():
-			continue
-		# Ближайшая пара комнат из двух ветвей — коридор не тянется через полкарты.
-		var best := Vector2i(a[0], b[0])
-		var best_d := 1 << 30
-		for i in a:
-			for j in b:
-				var d := _rooms[i].get_center().distance_squared_to(_rooms[j].get_center())
-				if d < best_d:
-					best_d = d
-					best = Vector2i(i, j)
-		_hall(_rooms[best.x], _rooms[best.y])
-	# Обходы: лишний коридор от случайной комнаты к одной из трёх ближайших.
-	if _rooms.size() >= 3:
-		for n in maxi(1, _rooms.size() / 4):
-			var i := _rng.randi_range(0, _rooms.size() - 1)
-			var ci := _rooms[i].get_center()
-			var near := range(_rooms.size())
-			near.erase(i)
-			near.sort_custom(func(p: int, q: int) -> bool:
-				return ci.distance_squared_to(_rooms[p].get_center()) \
-						< ci.distance_squared_to(_rooms[q].get_center()))
-			_hall(_rooms[i], _rooms[near[_rng.randi_range(0, mini(2, near.size() - 1))]])
+		_sector_rooms(s)
+	if _sym > 0:
+		for y in h:
+			for x in w:
+				_k[y * w + x] = _k[_src_index(x, y)]
+		_rooms = _mirror_rects(_rooms)
 	# Обшивка: всякая пустота, касающаяся пола хотя бы углом, становится стеной.
 	for y in h:
 		for x in w:
@@ -344,77 +493,136 @@ func _station() -> void:
 			if _k[y * w + x] == K_DOOR and _is_doorway(x, y):
 				_mark_door(Vector2i(x, y))
 
-## Делит прямоугольник, пока есть куда; возвращает номера листьев своего поддерева.
-## Каждый внутренний узел записывает пару «листья слева / листья справа» — их потом
-## свяжет коридор.
-func _bsp(r: Rect2i, min_leaf: int, leaves: Array[Rect2i], pairs: Array) -> Array[int]:
-	var can_x := r.size.x >= min_leaf * 2
-	var can_y := r.size.y >= min_leaf * 2
-	# Иногда лист средней величины не делится дальше — так появляются большие залы.
-	var hall_roll := _rng.randf()
-	if not (can_x or can_y) \
-			or (hall_roll < 0.15 and r.size.x < min_leaf * 3 and r.size.y < min_leaf * 3):
-		leaves.append(r)
-		var one: Array[int] = [leaves.size() - 1]
-		return one
+## Делит кусок коридором, пока обе стороны не меньше `mn`. Листья — отсеки.
+func _split_sectors(r: Rect2i, mn: int, depth: int, out: Array[Rect2i]) -> void:
+	var hall_w := 2
+	var width_roll := _rng.randf()
+	if depth == 0:
+		hall_w = 3 if width_roll < 0.5 else 2
+	elif depth >= 2:
+		hall_w = 1 if width_roll < 0.45 else 2
+	var can_x := r.size.x >= mn * 2 + hall_w
+	var can_y := r.size.y >= mn * 2 + hall_w
+	# Иногда средний кусок не делится дальше — отсек выходит большим, в нём больше комнат.
+	var stop_roll := _rng.randf()
 	var split_roll := _rng.randf()
+	if not (can_x or can_y) \
+			or (depth > 0 and stop_roll < 0.12 and r.size.x < mn * 3 and r.size.y < mn * 3):
+		out.append(r)
+		return
 	var along_x := can_x and (not can_y or split_roll < float(r.size.x) / float(r.size.x + r.size.y))
-	var a: Array[int]
-	var b: Array[int]
 	if along_x:
-		var cut := _rng.randi_range(min_leaf, r.size.x - min_leaf)
-		a = _bsp(Rect2i(r.position.x, r.position.y, cut, r.size.y), min_leaf, leaves, pairs)
-		b = _bsp(Rect2i(r.position.x + cut, r.position.y, r.size.x - cut, r.size.y), min_leaf,
-				leaves, pairs)
+		var cut := _rng.randi_range(mn, r.size.x - mn - hall_w)
+		for y in range(r.position.y, r.end.y):
+			for x in range(r.position.x + cut, r.position.x + cut + hall_w):
+				_k[y * w + x] = K_HALL
+		_split_sectors(Rect2i(r.position.x, r.position.y, cut, r.size.y), mn, depth + 1, out)
+		_split_sectors(Rect2i(r.position.x + cut + hall_w, r.position.y,
+				r.size.x - cut - hall_w, r.size.y), mn, depth + 1, out)
 	else:
-		var cut := _rng.randi_range(min_leaf, r.size.y - min_leaf)
-		a = _bsp(Rect2i(r.position.x, r.position.y, r.size.x, cut), min_leaf, leaves, pairs)
-		b = _bsp(Rect2i(r.position.x, r.position.y + cut, r.size.x, r.size.y - cut), min_leaf,
-				leaves, pairs)
-	pairs.append([a, b])
-	var both: Array[int] = a.duplicate()
-	both.append_array(b)
-	return both
+		var cut := _rng.randi_range(mn, r.size.y - mn - hall_w)
+		for y in range(r.position.y + cut, r.position.y + cut + hall_w):
+			for x in range(r.position.x, r.end.x):
+				_k[y * w + x] = K_HALL
+		_split_sectors(Rect2i(r.position.x, r.position.y, r.size.x, cut), mn, depth + 1, out)
+		_split_sectors(Rect2i(r.position.x, r.position.y + cut + hall_w, r.size.x,
+				r.size.y - cut - hall_w), mn, depth + 1, out)
 
-func _rooms_in(leaf_ids: Array, room_of: Array[int]) -> Array[int]:
-	var out: Array[int] = []
-	for li: int in leaf_ids:
-		if room_of[li] >= 0:
-			out.append(room_of[li])
+## Отсек: стены по краю, комнаты внутри, двери в коридоры. Каждая комната, выходящая
+## стеной на коридор, получает дверь с вероятностью ~половина — но отсек без двери не
+## остаётся: не выпало ни одной — дверь ставится принудительно.
+func _sector_rooms(s: Rect2i) -> void:
+	for y in range(s.position.y, s.end.y):
+		for x in range(s.position.x, s.end.x):
+			_k[y * w + x] = K_WALL if _on_edge(s, Vector2i(x, y)) else K_ROOM
+	var leaves: Array[Rect2i] = []
+	_split_room(s, leaves)
+	_rooms.append_array(leaves)
+	var spare: Array[Vector2i] = []
+	var doors := 0
+	for r in leaves:
+		var cands := _hall_door_cells(r)
+		var roll := _rng.randf()
+		var pick := _rng.randi()
+		if cands.is_empty():
+			continue
+		spare.append_array(cands)
+		var c := cands[pick % cands.size()]
+		if roll < 0.55 and _door_ok(c):
+			_k[c.y * w + c.x] = K_DOOR
+			doors += 1
+	if doors == 0 and not spare.is_empty():
+		var start := _rng.randi_range(0, spare.size() - 1)
+		for k in spare.size():
+			var c := spare[(start + k) % spare.size()]
+			if _door_ok(c):
+				_k[c.y * w + c.x] = K_DOOR
+				break
+
+## Делит комнату общей стеной, пока обе части не меньше _room_min; в стене — дверь.
+## Новая стена не должна упереться торцом в дверь на периметре: та вела бы в стену.
+func _split_room(r: Rect2i, leaves: Array[Rect2i]) -> void:
+	var mn := _room_min
+	var can_x := r.size.x >= mn * 2 - 1
+	var can_y := r.size.y >= mn * 2 - 1
+	var big_roll := _rng.randf()
+	var split_roll := _rng.randf()
+	if not (can_x or can_y) or (big_roll < 0.12 and r.size.x < mn * 3 and r.size.y < mn * 3):
+		leaves.append(r)
+		return
+	var along_x := can_x and (not can_y or split_roll < float(r.size.x) / float(r.size.x + r.size.y))
+	for attempt in 4:
+		if along_x:
+			var cx := r.position.x + _rng.randi_range(mn - 1, r.size.x - mn)
+			if _kind(cx, r.position.y) == K_DOOR or _kind(cx, r.end.y - 1) == K_DOOR:
+				continue
+			for y in range(r.position.y + 1, r.end.y - 1):
+				_k[y * w + cx] = K_WALL
+			_wall_doors(Vector2i(cx, r.position.y + 1), Vector2i(0, 1), r.size.y - 2)
+			_split_room(Rect2i(r.position.x, r.position.y, cx - r.position.x + 1, r.size.y), leaves)
+			_split_room(Rect2i(cx, r.position.y, r.end.x - cx, r.size.y), leaves)
+			return
+		var cy := r.position.y + _rng.randi_range(mn - 1, r.size.y - mn)
+		if _kind(r.position.x, cy) == K_DOOR or _kind(r.end.x - 1, cy) == K_DOOR:
+			continue
+		for x in range(r.position.x + 1, r.end.x - 1):
+			_k[cy * w + x] = K_WALL
+		_wall_doors(Vector2i(r.position.x + 1, cy), Vector2i(1, 0), r.size.x - 2)
+		_split_room(Rect2i(r.position.x, r.position.y, r.size.x, cy - r.position.y + 1), leaves)
+		_split_room(Rect2i(r.position.x, cy, r.size.x, r.end.y - cy), leaves)
+		return
+	leaves.append(r)
+
+## Дверь в перегородке длиной `n` от `start` по `dir`; в длинной — иногда вторая, не
+## рядом с первой: у комнаты два выхода, и бой не упирается в одну дверь.
+func _wall_doors(start: Vector2i, dir: Vector2i, n: int) -> void:
+	var a := _rng.randi_range(0, n - 1)
+	var second_roll := _rng.randf()
+	var b := _rng.randi_range(0, n - 1)
+	var p := start + dir * a
+	_k[p.y * w + p.x] = K_DOOR
+	if n >= 7 and second_roll < 0.25 and absi(b - a) >= 3:
+		var q := start + dir * b
+		_k[q.y * w + q.x] = K_DOOR
+
+## Клетки стены комнаты, где может быть дверь в коридор: не угол, снаружи коридор, внутри
+## комната (а не торец перегородки).
+func _hall_door_cells(r: Rect2i) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	for c in _edge_cells(r):
+		if _is_corner(r, c):
+			continue
+		var d := _outward(r, c)
+		if _kind(c.x + d.x, c.y + d.y) == K_HALL and _kind(c.x - d.x, c.y - d.y) == K_ROOM:
+			out.append(c)
 	return out
 
-## Коридор «буквой Г» из случайной точки одной комнаты в случайную точку другой,
-## шириной 1 или 2. Пробитая им стена комнаты становится проёмом.
-func _hall(ra: Rect2i, rb: Rect2i) -> void:
-	var a := Vector2i(_rng.randi_range(ra.position.x + 1, ra.end.x - 2),
-			_rng.randi_range(ra.position.y + 1, ra.end.y - 2))
-	var b := Vector2i(_rng.randi_range(rb.position.x + 1, rb.end.x - 2),
-			_rng.randi_range(rb.position.y + 1, rb.end.y - 2))
-	var wide := _rng.randf() < 0.4
-	var bend := Vector2i(b.x, a.y) if _rng.randf() < 0.5 else Vector2i(a.x, b.y)
-	_hall_leg(a, bend, wide)
-	_hall_leg(bend, b, wide)
-
-func _hall_leg(from: Vector2i, to: Vector2i, wide: bool) -> void:
-	var step := (to - from).sign()
-	var side := Vector2i(absi(step.y), absi(step.x))  # вторая полоса — поперёк хода
-	var c := from
-	while true:
-		_carve(c)
-		if wide:
-			_carve(c + side)
-		if c == to:
-			break
-		c += step
-
-func _carve(c: Vector2i) -> void:
-	if c.x < 1 or c.y < 1 or c.x > w - 2 or c.y > h - 2:
-		return
-	var i := c.y * w + c.x
-	if _k[i] == K_VOID:
-		_k[i] = K_HALL
-	elif _k[i] == K_WALL:
-		_k[i] = K_DOOR
+## Двери не ставятся вплотную друг к другу — двойной проём читается как дыра в стене.
+func _door_ok(c: Vector2i) -> bool:
+	for d: Vector2i in DIRS8:
+		if _kind(c.x + d.x, c.y + d.y) == K_DOOR:
+			return false
+	return true
 
 func _kind(x: int, y: int) -> int:
 	if x < 0 or y < 0 or x >= w or y >= h:
@@ -430,7 +638,7 @@ func _touches_floor(x: int, y: int) -> bool:
 	return false
 
 ## Настоящий проём: стена слева и справа, проход спереди и сзади (или наоборот).
-## Коридор, прошедший ВДОЛЬ стены, снёс её целиком — это уже не дверь, а открытый край.
+## Проход, прошедший ВДОЛЬ стены, снёс её целиком — это уже не дверь, а открытый край.
 func _is_doorway(x: int, y: int) -> bool:
 	var wall := func(k: int) -> bool: return k == K_WALL or k == K_DOOR
 	var open := func(k: int) -> bool: return k == K_ROOM or k == K_HALL
@@ -440,27 +648,37 @@ func _is_doorway(x: int, y: int) -> bool:
 	var pass_y: bool = open.call(_kind(x, y - 1)) and open.call(_kind(x, y + 1))
 	return (wall_x and pass_y) or (wall_y and pass_x)
 
-## Разгерметизированный отсек: одна комната (не на каждой станции) — в невесомости.
-## Её проёмы потом обязательно получат шлюзы.
+## Разгерметизированные отсеки: комната на ~40 (не на каждой станции) — в невесомости.
+## Их проёмы потом обязательно получат шлюзы. При симметрии — из исходной части, чтобы
+## у отсека было отражение.
 func _vent_room() -> void:
-	if _rooms.size() < 4 or _rng.randf() > 0.7:
+	var pool: Array[Rect2i] = []
+	for r in _rooms:
+		if _in_f(r.get_center()):
+			pool.append(r)
+	if pool.size() < 4:
 		return
-	var r := _rooms[_rng.randi_range(0, _rooms.size() - 1)]
-	for y in range(r.position.y + 1, r.end.y - 1):
-		for x in range(r.position.x + 1, r.end.x - 1):
-			if _k[y * w + x] == K_ROOM:
-				_space(Vector2i(x, y))
+	for n in maxi(1, pool.size() / 40):
+		var roll := _rng.randf()
+		var r := pool[_rng.randi_range(0, pool.size() - 1)]
+		if roll > 0.7:
+			continue
+		for y in range(r.position.y + 1, r.end.y - 1):
+			for x in range(r.position.x + 1, r.end.x - 1):
+				if _k[y * w + x] == K_ROOM:
+					_space(Vector2i(x, y))
 
 func _vented(r: Rect2i) -> bool:
 	return m.get_space(r.get_center())
 
-## Станция: шлюзы в проёмах, окна и выходы в открытый космос в обшивке, деревянные
-## палубы складов — и уже потом мебель: колонны в больших залах, ящики, баррикады.
+## Станция и бункер: шлюзы в проёмах (в бункере — гермодвери, вакуума за ними нет), окна
+## и выходы в открытый космос в обшивке, деревянные палубы складов — и уже потом мебель:
+## колонны в больших залах, ящики, баррикады в коридорах.
 func _dress_station() -> void:
 	var space := bool(opt["space"])
 	for d in _doors:
 		var roll := _rng.randf()
-		if space and (roll < 0.3 or _touches_space(d)):
+		if space and (roll < 0.2 or _touches_space(d)):
 			_put(d, MCF.FEATURE_AIRLOCK)
 	for c in _hull():
 		var roll := _rng.randf()
@@ -512,6 +730,8 @@ func _dress_station() -> void:
 ## со стенами по бокам, — в них врезаются окна и внешние шлюзы.
 func _hull() -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
+	if not m.is_space.has(1):
+		return out
 	for y in range(1, h - 1):
 		for x in range(1, w - 1):
 			var c := Vector2i(x, y)
@@ -652,7 +872,8 @@ func _house(lot: Rect2i) -> void:
 	_mark_door(gap)
 
 ## Дверь наружу: на случайной стороне, не в углу, и ведёт на землю — не в стену соседа
-## и не за край карты. Не нашлась за дюжину попыток — дом остаётся без второй двери.
+## и не за край карты. Не нашлась за дюжину попыток — дом остаётся без этой двери (а дом
+## совсем без дверей потом получит пролом — см. _join_pockets).
 func _front_door(r: Rect2i, floor_type: int) -> void:
 	for attempt in 12:
 		var c: Vector2i
@@ -754,6 +975,9 @@ func _ruin() -> void:
 		if q.grow(2).intersects(r):
 			return
 	_rooms.append(r)
+	for y in range(r.position.y, r.end.y):
+		for x in range(r.position.x, r.end.x):
+			_room_mask[y * w + x] = 1
 	for i in edge.size():
 		if rolls[i] < keep_p:
 			_put(edge[i], MCF.FEATURE_WALL)
@@ -836,7 +1060,7 @@ func _open_space() -> void:
 			var edge := mini(mini(x, y), mini(w - 1 - x, h - 1 - y))
 			if float(edge) < 1.2 + 2.6 * noise.get_noise_2d(x, y):
 				_space(Vector2i(x, y))
-	var per := 800.0 if int(opt["style"]) == Style.TOWN else 450.0
+	var per := 800.0 if _style == Style.TOWN else 450.0
 	for n in 1 + roundi(w * h / per):
 		var c := _random_cell(4)
 		var rad := _rng.randf_range(1.5, 2.8)
@@ -845,43 +1069,185 @@ func _open_space() -> void:
 				if Vector2(dx, dy).length() + noise.get_noise_2d(c.x + dx, c.y + dy) <= rad:
 					_space(c + Vector2i(dx, dy))
 
+# --- Связность -----------------------------------------------------------------------------
+## Всё, по чему можно ходить, — одна часть. Пол, отрезанный от остального (дом, чья
+## дверь не нашла места; комната, чья дверь осталась за зеркальной осью; закуток за
+## ящиками), соединяется с главной частью самым коротким проломом — через наименьшее число
+## стен, скалы или ящиков. Главная часть — та, где стоит `from` (якорь первой зоны), а
+## без него — самая большая по полу. Куски из одного космоса не в счёт: открытый вакуум
+## за обшивкой и не должен вести внутрь.
+##
+## Один проход «0-1 BFS» от главной части сразу до всех отрезанных: шаг по проходимому
+## стоит 0, по стене — 1. Путь от ближайшей клетки каждого куска назад к главной части и
+## есть пролом. При симметрии пробиваются и все его отражения — карта остаётся зеркальной.
+func _join_pockets(from: Vector2i) -> void:
+	var n := w * h
+	var walk := _walk_mask()
+	var comp := PackedInt32Array()
+	comp.resize(n)
+	comp.fill(-1)
+	var floor_of := PackedInt32Array()
+	var queue := PackedInt32Array()
+	queue.resize(n)
+	var nb := PackedInt32Array()
+	nb.resize(4)
+	var count := 0
+	for s in n:
+		if walk[s] == 0 or comp[s] != -1:
+			continue
+		comp[s] = count
+		queue[0] = s
+		var head := 0
+		var tail := 1
+		var fl := 0
+		while head < tail:
+			var i := queue[head]
+			head += 1
+			if m.is_space[i] == 0:
+				fl += 1
+			var k := _neighbours(i, n, nb)
+			for t in k:
+				var j := nb[t]
+				if walk[j] != 0 and comp[j] == -1:
+					comp[j] = count
+					queue[tail] = j
+					tail += 1
+		floor_of.append(fl)
+		count += 1
+	var main := -1
+	if _in(from) and walk[from.y * w + from.x] != 0:
+		main = comp[from.y * w + from.x]
+	else:
+		for c in count:
+			if main < 0 or floor_of[c] > floor_of[main]:
+				main = c
+	var pockets := false
+	for c in count:
+		if c != main and floor_of[c] > 0:
+			pockets = true
+			break
+	if main < 0 or not pockets:
+		return
+	var dist := PackedInt32Array()
+	dist.resize(n)
+	dist.fill(1 << 30)
+	var par := PackedInt32Array()
+	par.resize(n)
+	par.fill(-1)
+	var cur := PackedInt32Array()
+	for i in n:
+		if comp[i] == main:
+			dist[i] = 0
+			cur.append(i)
+	var level := 0
+	while not cur.is_empty():
+		# Всё, что достижимо без новых проломов, — тот же уровень.
+		var q := 0
+		while q < cur.size():
+			var i := cur[q]
+			q += 1
+			var k := _neighbours(i, n, nb)
+			for t in k:
+				var j := nb[t]
+				if walk[j] != 0 and dist[j] > level:
+					dist[j] = level
+					par[j] = i
+					cur.append(j)
+		var nxt := PackedInt32Array()
+		for i in cur:
+			var k := _neighbours(i, n, nb)
+			for t in k:
+				var j := nb[t]
+				if walk[j] == 0 and dist[j] > level + 1:
+					dist[j] = level + 1
+					par[j] = i
+					nxt.append(j)
+		cur = nxt
+		level += 1
+	# Ближайшая к главной части клетка каждого отрезанного куска — и путь от неё назад.
+	var entry := {}
+	for i in n:
+		var c := comp[i]
+		if c < 0 or c == main or floor_of[c] == 0:
+			continue
+		if not entry.has(c) or dist[i] < dist[entry[c]]:
+			entry[c] = i
+	for c: int in entry:
+		var j: int = entry[c]
+		while j >= 0 and dist[j] > 0:
+			if walk[j] == 0:
+				for g in _group():
+					_ground(_img(Vector2i(j % w, j / w), g))
+			j = par[j]
+
+## Соседи клетки i по четырём сторонам — в nb; возвращает, сколько их.
+func _neighbours(i: int, n: int, nb: PackedInt32Array) -> int:
+	var k := 0
+	var x := i % w
+	if x > 0:
+		nb[k] = i - 1
+		k += 1
+	if x < w - 1:
+		nb[k] = i + 1
+		k += 1
+	if i >= w:
+		nb[k] = i - w
+		k += 1
+	if i + w < n:
+		nb[k] = i + w
+		k += 1
+	return k
+
 # --- Зоны развёртывания ------------------------------------------------------------------
 ## По зоне на слот. Якоря разнесены жадно — каждый следующий как можно дальше от уже
 ## выбранных, — а зоны растут от якорей по очереди, по клетке за ход. Из нескольких
 ## попыток берётся та, где самая маленькая зона больше всех, и все зоны срезаются до
 ## её размера: зона, запертая в тесной комнате, не должна оставлять соседей богаче.
+##
+## При симметрии растут представители (_rep_ids): клетка, взятая в исходной части,
+## берётся сразу со всеми отражениями, каждое — в свою зону.
 func _zones(n: int) -> void:
+	_zone_n = n
+	_setup_reps(n)
 	var clear := 0
-	for y in h:
-		for x in w:
-			if _clear(Vector2i(x, y)):
-				clear += 1
+	var mask := _clear_mask()
+	for i in w * h:
+		clear += mask[i]
 	var target := clampi(int(clear * ZONE_SHARE / n), _need, _need * 4)
 	var cand := _anchor_candidates(n)
 	if cand.is_empty():
 		return
 	var best := -1
 	var best_claimed: Array = []
+	var best_an: Array[Vector2i] = []
 	for gap in ([ZONE_GAP, 2, 1] if _tight else [ZONE_GAP]):
 		_gap = gap
+		var pools := _anchor_pools(cand)
 		for attempt in 6:
-			var an := _pick_anchors(cand, n)
+			var an := _pick_anchors(pools)
+			if an.is_empty():
+				break
 			var smallest := _grow(an, target)
 			if smallest > best:
 				best = smallest
 				best_claimed = _claimed
-				_anchors = an
+				best_an = an
 			if best >= target:
 				break
 		if best >= _need:
 			break
-	_zone_min = maxi(0, best)
+	if best < 0:
+		return
 	# Срезаем с конца роста — с дальнего от якоря края: зона остаётся связной и круглой.
-	for i in n:
-		var cells: Array = best_claimed[i]
-		for k in mini(best, cells.size()):
-			var c: Vector2i = cells[k]
-			_zone[c.y * w + c.x] = i
+	_zone_min = _paint_zones(best_claimed, best)
+	_anchors.clear()
+	for z in n:
+		_anchors.append(Vector2i(-1, -1))
+	for r in best_an.size():
+		var ids: PackedInt32Array = _rep_ids[r]
+		for g in ids.size():
+			if _anchors[ids[g]] == Vector2i(-1, -1):
+				_anchors[ids[g]] = _img(best_an[r], g)
 	m.zone_owner = _zone.duplicate()
 	# Кайма в клетку вокруг зон и подходы к проёмам — украшениям туда нельзя.
 	for y in h:
@@ -893,42 +1259,119 @@ func _zones(n: int) -> void:
 					if _in(Vector2i(x + dx, y + dy)):
 						_keep[(y + dy) * w + x + dx] = 1
 
+## Представители: без симметрии — по одному на зону; с зеркалом — пара «зона и её
+## отражение» (а при нечётном числе ещё одна зона на оси, сама себе отражение); с
+## четвертями — четвёрка.
+func _setup_reps(n: int) -> void:
+	_rep_ids.clear()
+	_rep_fold.clear()
+	var g := _group()
+	for r in n / g:
+		var ids := PackedInt32Array()
+		for k in g:
+			ids.append(r * g + k)
+		_rep_ids.append(ids)
+		_rep_fold.append(false)
+	if n % g != 0:
+		_rep_ids.append(PackedInt32Array([n - 1, n - 1]))
+		_rep_fold.append(true)
+
 ## Где удобно ставить якорь: чистая клетка, вокруг которой (5×5) почти всё чисто.
-## Если таких мало — любая чистая.
+## Если таких мало — любая чистая. Окно считается по суммам прямоугольников — четыре
+## обращения на клетку вместо двадцати пяти.
 func _anchor_candidates(n: int) -> Array[Vector2i]:
+	var clear := _clear_mask()
+	var sw := w + 1
+	var sat := PackedInt32Array()
+	sat.resize(sw * (h + 1))
+	for y in h:
+		var row := 0
+		for x in w:
+			row += clear[y * w + x]
+			sat[(y + 1) * sw + x + 1] = sat[y * sw + x + 1] + row
 	var open: Array[Vector2i] = []
 	var any: Array[Vector2i] = []
 	for y in h:
+		var y0 := maxi(0, y - 2)
+		var y1 := mini(h, y + 3)
 		for x in w:
-			var c := Vector2i(x, y)
-			if not _clear(c) or _door[y * w + x] != 0:
+			var i := y * w + x
+			if clear[i] == 0 or _door[i] != 0:
 				continue
-			any.append(c)
-			var k := 0
-			for dy in range(-2, 3):
-				for dx in range(-2, 3):
-					if _clear(c + Vector2i(dx, dy)):
-						k += 1
-			if k >= 20:
-				open.append(c)
-	return open if open.size() >= n * 4 else any
+			any.append(Vector2i(x, y))
+			var x0 := maxi(0, x - 2)
+			var x1 := mini(w, x + 3)
+			if sat[y1 * sw + x1] - sat[y0 * sw + x1] - sat[y1 * sw + x0] + sat[y0 * sw + x0] >= 20:
+				open.append(Vector2i(x, y))
+	var out := open if open.size() >= n * 4 else any
+	if out.size() <= CAND_MAX:
+		return out
+	var step := ceili(float(out.size()) / CAND_MAX)
+	var thin: Array[Vector2i] = []
+	for i in range(0, out.size(), step):
+		thin.append(out[i])
+	return thin
 
-func _pick_anchors(cand: Array[Vector2i], n: int) -> Array[Vector2i]:
-	var out: Array[Vector2i] = []
-	# Первый — ближе к краю карты: из тех, кто от центра дальше 0.6 от самого дальнего.
-	var mid := Vector2(w - 1, h - 1) * 0.5
-	var score := PackedFloat32Array()
+## Кандидаты по видам представителей: [обычные, на оси]. При симметрии обычный якорь
+## берётся в исходной части и подальше от своих отражений — иначе зоне некуда расти, не
+## подходя к собственному зеркалу; якорь зоны на оси — в клетке у самой оси.
+func _anchor_pools(cand: Array[Vector2i]) -> Array:
+	var fold: Array[Vector2i] = []
+	if _sym == 0:
+		return [cand, fold]
+	var generic: Array[Vector2i] = []
+	var loose: Array[Vector2i] = []
+	var fx := (w - 1) / 2
 	for c in cand:
-		score.append(((Vector2(c) - mid) / Vector2(w, h)).length())
-	out.append(_pick_top(cand, score, 0.6))
-	while out.size() < n:
-		score.clear()
-		for c in cand:
-			var d := INF
-			for a in out:
-				d = minf(d, Vector2(c).distance_to(Vector2(a)))
-			score.append(d)
-		out.append(_pick_top(cand, score, 0.9))
+		if not _in_f(c):
+			continue
+		if _sym == 1 and c.x == fx:
+			fold.append(c)
+		var sep := 1 << 30
+		for g in range(1, _group()):
+			var p := _img(c, g)
+			sep = mini(sep, maxi(absi(p.x - c.x), absi(p.y - c.y)))
+		if sep > 2 * _gap + 2:
+			generic.append(c)
+		elif sep > _gap:
+			loose.append(c)
+	return [generic if not generic.is_empty() else loose, fold]
+
+## Якоря представителей: первый — ближе к краю карты (из тех, кто от центра дальше 0.6
+## от самого дальнего), каждый следующий — подальше от уже выбранных и всех их отражений.
+## Расстояние до ближайшего выбранного копится по мере выбора, а не пересчитывается.
+func _pick_anchors(pools: Array) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	var mid := Vector2(w - 1, h - 1) * 0.5
+	var mind: Array = []
+	for p in 2:
+		var d := PackedFloat32Array()
+		d.resize((pools[p] as Array).size())
+		d.fill(INF)
+		mind.append(d)
+	for r in _rep_ids.size():
+		var which := 1 if _rep_fold[r] else 0
+		var pool: Array[Vector2i] = pools[which]
+		if pool.is_empty():
+			return []
+		var a: Vector2i
+		if out.is_empty():
+			var score := PackedFloat32Array()
+			score.resize(pool.size())
+			for i in pool.size():
+				score[i] = ((Vector2(pool[i]) - mid) / Vector2(w, h)).length()
+			a = _pick_top(pool, score, 0.6)
+		else:
+			a = _pick_top(pool, mind[which], 0.9)
+		out.append(a)
+		for p in 2:
+			var ps: Array[Vector2i] = pools[p]
+			var d: PackedFloat32Array = mind[p]
+			for g in _group():
+				var ag := Vector2(_img(a, g))
+				for i in ps.size():
+					d[i] = minf(d[i], Vector2(ps[i]).distance_to(ag))
+			mind[p] = d
 	return out
 
 ## Случайный кандидат из тех, чей счёт не ниже доли `share` от лучшего.
@@ -942,52 +1385,44 @@ func _pick_top(cand: Array[Vector2i], score: PackedFloat32Array, share: float) -
 			top.append(cand[i])
 	return top[_rng.randi_range(0, top.size() - 1)]
 
-## Растим зоны от якорей по очереди. Фронт зоны — соседи с приоритетом «расстояние до
-## якоря плюс дрожание»: зона выходит округлой, но с рваным краем. Проём зона проходит
+## Растим зоны от якорей по очереди. Фронт зоны — куча соседей с приоритетом «расстояние
+## до якоря плюс дрожание»: зона выходит округлой, но с рваным краем. Проём зона проходит
 ## насквозь, но не занимает — иначе дверь стала бы клеткой расстановки. Возвращает
-## размер самой маленькой зоны; клетки каждой зоны — в _claimed.
+## размер самой маленькой зоны; клетки каждого представителя — в _claimed.
 func _grow(an: Array[Vector2i], target: int) -> int:
-	var n := an.size()
+	var reps := an.size()
 	_own = PackedInt32Array()
 	_own.resize(w * h)
 	_own.fill(-1)
 	_seen = PackedByteArray()
-	_seen.resize(w * h * n)
+	_seen.resize(w * h * reps)
 	_fronts = []
 	_claimed = []
 	var sizes := PackedInt32Array()
-	sizes.resize(n)
-	for i in n:
+	sizes.resize(_zone_n)
+	for r in reps:
 		_fronts.append([])
 		_claimed.append([])
-		_push(i, an[i], an[i])
+		_push(r, an[r], an[r])
 	var grew := true
 	while grew:
 		grew = false
-		for i in n:
-			if sizes[i] >= target:
+		for r in reps:
+			if sizes[(_rep_ids[r] as PackedInt32Array)[0]] >= target:
 				continue
-			var f: Array = _fronts[i]
+			var f: Array = _fronts[r]
 			while not f.is_empty():
-				var bi := 0
-				for k in range(1, f.size()):
-					if f[k][0] < f[bi][0]:
-						bi = k
-				var c: Vector2i = f[bi][1]
-				f[bi] = f[f.size() - 1]
-				f.pop_back()
+				var c: Vector2i = _heap_pop(f)[1]
 				var idx := c.y * w + c.x
 				if _door[idx] != 0:
 					for d: Vector2i in N4:
-						_push(i, c + d, an[i])
+						_push(r, c + d, an[r])
 					continue
-				if _own[idx] != -1 or _near_other(c, i):
+				if not _claim(r, c, sizes):
 					continue
-				_own[idx] = i
-				_claimed[i].append(c)
-				sizes[i] += 1
+				_claimed[r].append(c)
 				for d: Vector2i in N4:
-					_push(i, c + d, an[i])
+					_push(r, c + d, an[r])
 				grew = true
 				break
 	var smallest := target
@@ -995,16 +1430,39 @@ func _grow(an: Array[Vector2i], target: int) -> int:
 		smallest = mini(smallest, s)
 	return smallest
 
-func _push(i: int, c: Vector2i, anchor: Vector2i) -> void:
-	if not _in(c):
+## Взять клетку представителю — вместе со всеми её отражениями. Каждое отражение обязано
+## быть свободным и не ближе зазора к чужой зоне, включая другие отражения этой же клетки.
+func _claim(r: int, c: Vector2i, sizes: PackedInt32Array) -> bool:
+	var ids: PackedInt32Array = _rep_ids[r]
+	var cells: Array[Vector2i] = []
+	var zids: Array[int] = []
+	for g in ids.size():
+		var p := _img(c, g)
+		if cells.has(p):
+			continue
+		var z := ids[g]
+		if _own[p.y * w + p.x] != -1 or _near_other(p, z):
+			return false
+		for k in cells.size():
+			if zids[k] != z and maxi(absi(cells[k].x - p.x), absi(cells[k].y - p.y)) <= _gap:
+				return false
+		cells.append(p)
+		zids.append(z)
+	for k in cells.size():
+		_own[cells[k].y * w + cells[k].x] = zids[k]
+		sizes[zids[k]] += 1
+	return true
+
+func _push(r: int, c: Vector2i, anchor: Vector2i) -> void:
+	if not _in(c) or not _in_f(c):
 		return
 	var idx := c.y * w + c.x
-	if _seen[i * w * h + idx] != 0:
+	if _seen[r * w * h + idx] != 0:
 		return
-	_seen[i * w * h + idx] = 1
+	_seen[r * w * h + idx] = 1
 	if _door[idx] == 0 and not _clear(c):
 		return
-	_fronts[i].append([Vector2(c).distance_to(Vector2(anchor)) + _rng.randf() * 1.6, c])
+	_heap_push(_fronts[r], [Vector2(c).distance_to(Vector2(anchor)) + _rng.randf() * 1.6, c])
 
 func _near_other(c: Vector2i, i: int) -> bool:
 	for dy in range(-_gap, _gap + 1):
@@ -1016,67 +1474,84 @@ func _near_other(c: Vector2i, i: int) -> bool:
 					return true
 	return false
 
-## Пеший путь между всеми зонами: волна от якоря первой зоны по проходимым клеткам.
-## Зону, до которой волна не дошла, соединяем ходом «буквой Г» с ближайшей достигнутой
-## клеткой. Прорубленная стена становится проёмом, скала — тоннелем.
-func _connect_zones() -> void:
-	for guard in _anchors.size():
-		var reach := _reach(_anchors[0])
-		var lost := -1
-		for i in range(1, _anchors.size()):
-			if reach[_anchors[i].y * w + _anchors[i].x] == 0:
-				lost = i
-				break
-		if lost < 0:
-			return
-		var a := _anchors[lost]
-		var best := _anchors[0]
-		var best_d := INF
-		for y in h:
-			for x in w:
-				if reach[y * w + x] != 0:
-					var d := Vector2(a).distance_squared_to(Vector2(x, y))
-					if d < best_d:
-						best_d = d
-						best = Vector2i(x, y)
-		_tunnel(a, best)
+## Двоичная куча по приоритету [0] — фронт зоны. Раньше фронт перебирался целиком на
+## каждой клетке, и на большом отряде рост зон стоил секунды.
+func _heap_push(f: Array, item: Array) -> void:
+	f.append(item)
+	var i := f.size() - 1
+	while i > 0:
+		var p := (i - 1) / 2
+		if f[p][0] <= item[0]:
+			break
+		f[i] = f[p]
+		i = p
+	f[i] = item
 
-func _reach(from: Vector2i) -> PackedByteArray:
-	var seen := _bytes()
-	seen[from.y * w + from.x] = 1
-	var queue: Array[Vector2i] = [from]
-	var head := 0
-	while head < queue.size():
-		var c := queue[head]
-		head += 1
-		for d: Vector2i in N4:
-			var p := c + d
-			if _in(p) and seen[p.y * w + p.x] == 0 and _walk(p):
-				seen[p.y * w + p.x] = 1
-				queue.append(p)
-	return seen
+func _heap_pop(f: Array) -> Array:
+	var top: Array = f[0]
+	var last: Array = f.pop_back()
+	if f.is_empty():
+		return top
+	var size := f.size()
+	var i := 0
+	while true:
+		var l := i * 2 + 1
+		if l >= size:
+			break
+		var s := l + 1 if l + 1 < size and f[l + 1][0] < f[l][0] else l
+		if f[s][0] >= last[0]:
+			break
+		f[i] = f[s]
+		i = s
+	f[i] = last
+	return top
 
-func _tunnel(a: Vector2i, b: Vector2i) -> void:
-	var bend := Vector2i(b.x, a.y)
-	for leg in [[a, bend], [bend, b]]:
-		var c: Vector2i = leg[0]
-		var to: Vector2i = leg[1]
-		var step := (to - c).sign()
-		while true:
-			if not _walk(c):
-				_ground(c)
-			if c == to:
-				break
-			c += step
+## Зоны на карту — первые клетки роста каждого представителя, поровну. Зона на оси
+## растёт по две клетки (клетка и отражение), поэтому её размер подбирается первым, и под
+## него срезаются остальные. Возвращает размер каждой зоны.
+func _paint_zones(claimed: Array, best: int) -> int:
+	var size := maxi(0, best)
+	for r in _rep_ids.size():
+		if _rep_fold[r]:
+			size = mini(size, _fold_prefix(claimed[r], size, -1))
+	for r in _rep_ids.size():
+		var ids: PackedInt32Array = _rep_ids[r]
+		if _rep_fold[r]:
+			_fold_prefix(claimed[r], size, ids[0])
+			continue
+		var cells: Array = claimed[r]
+		for k in mini(size, cells.size()):
+			for g in ids.size():
+				var p := _img(cells[k], g)
+				_zone[p.y * w + p.x] = ids[g]
+	return size
+
+## Сколько клеток даёт зона на оси, если брать её рост по порядку, не превышая `limit`.
+## zone >= 0 — заодно разметить эту зону.
+func _fold_prefix(cells: Array, limit: int, zone: int) -> int:
+	var size := 0
+	for c: Vector2i in cells:
+		var p := _img(c, 1)
+		var inc := 1 if p == c else 2
+		if size + inc > limit:
+			break
+		size += inc
+		if zone >= 0:
+			_zone[c.y * w + c.x] = zone
+			_zone[p.y * w + p.x] = zone
+	return size
 
 # --- Мирные ------------------------------------------------------------------------------
 ## Мирные — кучками по 1–3, в основном «под крышей», и не ближе трёх клеток к чьей-то
 ## зоне: иначе расстановка упиралась бы в чужого жителя. И они должны начать партию
 ## СПЯЩИМИ: житель просыпается, как только видит солдата по прямой или рядом с ним
 ## открывается шлюз (GameActionResolver._update_breached / update_airlocks). Поэтому —
-## только туда, куда не смотрит ни одна клетка зон, и не вплотную к шлюзу.
+## только туда, куда не смотрит ни одна клетка зон, и не вплотную к шлюзу. Не больше
+## CIV_MAX на карту; при симметрии — в исходной части, остальные — её отражения.
 func _civilians() -> void:
-	var want := maxi(2, roundi(w * h / 160.0 * dens))
+	var want := mini(CIV_MAX, maxi(2, roundi(w * h / 160.0 * dens)))
+	if _sym > 0:
+		want = maxi(1, want / _group())
 	var near := _bytes()
 	for y in h:
 		for x in w:
@@ -1087,21 +1562,32 @@ func _civilians() -> void:
 					if _in(Vector2i(x + dx, y + dy)):
 						near[(y + dy) * w + x + dx] = 1
 	var seen := _seen_from_zones()
-	var free := func(p: Vector2i) -> bool:
-		return _in(p) and near[p.y * w + p.x] == 0 and _door[p.y * w + p.x] == 0 \
-				and seen[p.y * w + p.x] == 0 and _clear(p) and not _has_spawn(p) \
-				and not _near_feature(p, MCF.FEATURE_AIRLOCK)
+	var ok := _clear_mask()
+	for i in w * h:
+		if m.feature_id[i] == MCF.FEATURE_AIRLOCK:   # не вплотную к шлюзу
+			var ax := i % w
+			var ay := i / w
+			for dy in range(-1, 2):
+				for dx in range(-1, 2):
+					if _in(Vector2i(ax + dx, ay + dy)) and (dx != 0 or dy != 0):
+						ok[(ay + dy) * w + ax + dx] = 0
+	for s in m.spawns:
+		var c: Vector2i = s["coord"]
+		ok[c.y * w + c.x] = 0
 	var inside: Array[Vector2i] = []
 	var outside: Array[Vector2i] = []
 	for y in h:
 		for x in w:
-			var c := Vector2i(x, y)
-			if not free.call(c):
-				continue
-			if _indoor[y * w + x] != 0:
-				inside.append(c)
+			var i := y * w + x
+			if near[i] != 0 or _door[i] != 0 or seen[i] != 0:
+				ok[i] = 0
+			elif ok[i] != 0 and _in_f(Vector2i(x, y)):
+				if _indoor[i] != 0:
+					inside.append(Vector2i(x, y))
+				else:
+					outside.append(Vector2i(x, y))
 			else:
-				outside.append(c)
+				ok[i] = 0
 	var placed := 0
 	for attempt in want * 8:
 		if placed >= want:
@@ -1117,34 +1603,41 @@ func _civilians() -> void:
 				Vector2i(0, -1)]:
 			if group == 0 or placed >= want:
 				break
-			if free.call(c + d):
-				m.set_spawn(c + d, "civilian", MCF.Owner.NEUTRAL)
+			var p := c + d
+			if _in(p) and ok[p.y * w + p.x] != 0:
+				m.set_spawn(p, "civilian", MCF.Owner.NEUTRAL)
+				ok[p.y * w + p.x] = 0
 				placed += 1
 				group -= 1
 
 ## Клетки, которые видно хоть из одной клетки зоны по прямой — ряд, столбец или ровная
 ## диагональ, как в _civ_sees_soldier; стекло взгляду не преграда. Шлюз считаем открытым:
 ## боец, вставший у двери, распахнёт его ещё до первого хода.
+##
+## Не луч из каждой клетки зоны (на большом отряде — миллионы шагов), а проход по полю
+## в каждом из восьми направлений: клетку видно по d, если её сосед со стороны -d — клетка
+## зоны или сам виден по d и взгляд не держит.
 func _seen_from_zones() -> PackedByteArray:
 	var seen := _bytes()
-	for y in h:
-		for x in w:
-			if _zone[y * w + x] < 0:
+	var block := _bytes()
+	for i in w * h:
+		var f: String = m.feature_id[i]
+		if m.cover_height[i] >= MCF.WALL_HEIGHT and not MCF.is_glass(f) and f != MCF.FEATURE_AIRLOCK:
+			block[i] = 1
+	for d: Vector2i in DIRS8:
+		var ray := _bytes()
+		var xs: Array = range(w) if d.x >= 0 else range(w - 1, -1, -1)
+		var ys: Array = range(h) if d.y >= 0 else range(h - 1, -1, -1)
+		for y: int in ys:
+			var py := y - d.y
+			if py < 0 or py >= h:
 				continue
-			for d: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1),
-					Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1)]:
-				var c := Vector2i(x, y) + d
-				while _in(c):
-					seen[c.y * w + c.x] = 1
-					var f := m.get_feature(c)
-					if m.get_cover(c) >= MCF.WALL_HEIGHT and not MCF.is_glass(f) \
-							and f != MCF.FEATURE_AIRLOCK:
-						break
-					c += d
+			for x: int in xs:
+				var px := x - d.x
+				if px < 0 or px >= w:
+					continue
+				var p := py * w + px
+				if _zone[p] >= 0 or (ray[p] != 0 and block[p] == 0):
+					ray[y * w + x] = 1
+					seen[y * w + x] = 1
 	return seen
-
-func _has_spawn(c: Vector2i) -> bool:
-	for s in m.spawns:
-		if s["coord"] == c:
-			return true
-	return false

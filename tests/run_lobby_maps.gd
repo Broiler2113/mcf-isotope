@@ -138,6 +138,53 @@ func _check_random(lobby: Node, opt: OptionButton, paths: Array) -> void:
 	for n: String in added:
 		ck(MapData.load_from(MapData.path_for(n)) != null, "the saved random map reads back")
 		DirAccess.remove_absolute("%s/%s" % [MapData.MAPS_DIR, n])
+	_check_bunker_custom_symmetric(lobby)
+
+## Бункер, свой размер до 250×250 и «Symmetrical» — через сами контролы лобби.
+func _check_bunker_custom_symmetric(lobby: Node) -> void:
+	var style: OptionButton = lobby._gen_style
+	var size: OptionButton = lobby._gen_size
+	ck(style.item_count == MapGen.STYLE_NAMES.size() and style.get_item_text(MapGen.Style.BUNKER) == "Bunker",
+			"the style list offers the bunker")
+	ck(size.item_count == MapGen.SIZES.size() + 1, "sizes: every preset plus Custom (%d)" % size.item_count)
+	ck(not lobby._gen_dims_row.visible, "the custom size row hides until Custom is picked")
+	style.select(MapGen.Style.BUNKER)
+	style.item_selected.emit(MapGen.Style.BUNKER)
+	size.select(MapGen.SIZE_CUSTOM)
+	size.item_selected.emit(MapGen.SIZE_CUSTOM)
+	ck(lobby._gen_dims_row.visible, "picking Custom shows width and height")
+	ck(lobby._gen_w.max_value == MapGen.MAX_DIM.x and lobby._gen_h.max_value == MapGen.MAX_DIM.y,
+			"a custom map can be up to %d×%d" % [MapGen.MAX_DIM.x, MapGen.MAX_DIM.y])
+	lobby._gen_w.value = 64
+	lobby._gen_h.value = 40
+	var c: MapData = lobby._selected_map()
+	ck(c.width == 64 and c.height == 40, "a custom 64×40 map is 64×40 (%dx%d)" % [c.width, c.height])
+	var vacuum := false
+	for i in c.width * c.height:
+		vacuum = vacuum or c.is_space[i] != 0
+	ck(not vacuum, "the bunker has no vacuum even with 'Space & airlocks' ticked")
+	lobby._gen_sym.button_pressed = true
+	var d: MapData = lobby._selected_map()
+	ck(d != c, "'Symmetrical' rebuilds the map")
+	var bad := 0
+	for y in d.height:
+		for x in d.width:
+			if d.get_feature(Vector2i(x, y)) != d.get_feature(Vector2i(d.width - 1 - x, y)):
+				bad += 1
+	ck(bad == 0, "the symmetrical map is its own mirror image (%d cell(s) differ)" % bad)
+	# 250×250 собирается за полсекунды: превью ждёт, пока щелчки стихнут, но чтение карты —
+	# сразу и уже нового размера.
+	lobby._gen_w.value = 250
+	lobby._gen_h.value = 250
+	ck(lobby._gen_timer.time_left > 0.0, "a 250×250 map waits for the clicks to settle before redrawing")
+	var big: MapData = lobby._selected_map()
+	ck(big.width == 250 and big.height == 250, "reading the map builds the 250×250 one right away")
+	lobby._gen_sym.button_pressed = false
+	size.select(1)
+	size.item_selected.emit(1)
+	style.select(MapGen.Style.TOWN)
+	style.item_selected.emit(MapGen.Style.TOWN)
+	ck(not lobby._gen_dims_row.visible, "back to a preset size hides the custom row")
 
 func ck(cond: bool, what: String) -> void:
 	if not cond:
