@@ -68,6 +68,8 @@ var bounds: Vector2 = Vector2.ZERO
 ## Vector2i -> DAMAGE_*: побитый пол. Эпицентр не понижается до щебня повторным
 ## взрывом рядом — только повышается.
 var floor_damage: Dictionary = {}
+## Растёт на каждую правку floor_damage: экран боя по нему перекрашивает дальний план.
+var damage_version: int = 0
 ## Осевшая статика: [{kind, pos: Vector2 (в клетках), rot: float, scale: float}].
 var props: Array = []
 ## Ещё летящие: то же плюс from/to и таймер. По приземлении переезжают в props.
@@ -121,6 +123,7 @@ static func _rng_for(kind: String, at: Vector2i, index: int,
 
 func clear() -> void:
 	floor_damage.clear()
+	damage_version += 1
 	props.clear()
 	flying.clear()
 	laser_lines.clear()
@@ -201,6 +204,7 @@ func _debris(ev: Dictionary) -> void:
 	for c: Vector2i in ev.get("cells", []):
 		var level: int = DAMAGE_EPICENTER if c == epicenter else DAMAGE_RUBBLE
 		floor_damage[c] = maxi(int(floor_damage.get(c, DAMAGE_NONE)), level)
+	damage_version += 1
 
 ## 21.2 — осколки стекла: 2..5 штук, летят ПРОТИВ направления удара, у каждого свои
 ## скорость и вращение.
@@ -410,6 +414,7 @@ func from_dict(d: Dictionary) -> void:
 	for entry in d.get("damage", []):
 		if entry is Array and (entry as Array).size() >= 3:
 			floor_damage[Vector2i(int(entry[0]), int(entry[1]))] = int(entry[2])
+	damage_version += 1
 	for entry in d.get("props", []):
 		if entry is Array and (entry as Array).size() >= 5:
 			props.append({"kind": str(entry[0]),

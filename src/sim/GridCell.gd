@@ -10,8 +10,9 @@ extends RefCounted
 ## Movement.reachable() кеширует разливы Дейкстры и сбрасывает кеш, как только версия
 ## изменилась. Поэтому перечисленные поля ОБЯЗАНЫ писаться через сеттеры (то есть
 ## обычным `cell.occupant = x`), а не в обход них. Поля, на проходимость не влияющие
-## (fire_owner, floor_type, corpse_count, feature_owner, feature_durability),
-## сеттеров намеренно не имеют — лишние сбросы кеша только замедляют.
+## (fire_owner, floor_type, corpse_count, feature_owner, feature_durability), версий
+## не двигают — лишние сбросы кеша только замедляют. Сеттеры у них есть ради одного
+## журнала отката (см. journal ниже).
 ##
 ## on_fire — исключение: с #1 огонь стал смертелен, и маршрут не-огнеупорного бойца
 ## его ОБХОДИТ (Movement.reachable(avoid_fire)). Значит загоревшаяся клетка меняет
@@ -67,14 +68,82 @@ static func reset_vision_log() -> void:
 	vision_version += 1
 	vision_changes.clear()
 	vision_log_base = vision_version
+	look_version += 1
+	look_changes.clear()
+	look_log_base = look_version
+
+## Журнал ВИДА клеток — пол, высота, огонь, космос, объект, насыпь, сварка: всё, из чего
+## экран боя собирает дальний план (Main, LOD) и ИИ — карту проходимости рельефа
+## (AIController._walk_mask). Устроен как журнал обзора: пары (x, y), по паре на единицу
+## look_version, look_log_base — версия начала. Держатель правит у себя только эти
+## клетки, а не пересобирает всю карту 250×250.
+static var look_version: int = 0
+static var look_changes: PackedInt32Array = PackedInt32Array()
+static var look_log_base: int = 0
+
+static func log_look_change(x: int, y: int) -> void:
+	look_version += 1
+	if look_changes.size() >= VISION_LOG_CAP:
+		look_changes.clear()
+		look_log_base = look_version
+		return
+	look_changes.append(x)
+	look_changes.append(y)
+
+## Смена числа тел в какой-нибудь клетке: экран держит по ней список куч трупов, чтобы
+## не перебирать ради них всё поле.
+static var corpse_version: int = 0
+
+## Журнал отката (Undo, §18.2). Пока journaling включён, ПЕРВАЯ правка клетки кладёт в
+## journal её прежний вид целиком (image()). Резолвер включает журнал на время действия
+## человека и хранит в стеке отката только тронутые клетки: полный снимок доски 250×250 —
+## это 62 500 словарей и ~250 мс на КАЖДЫЙ щелчок. Поэтому каждое изменяемое поле клетки
+## пишется через сеттер, даже если никаких версий не двигает.
+static var journaling: bool = false
+static var journal: Dictionary = {}   # GridCell -> Array (image() до первой правки)
+
+func _journal() -> void:
+	if not journal.has(self):
+		journal[self] = image()
+
+## Всё изменяемое в клетке, в порядке, который читает apply_image().
+func image() -> Array:
+	return [floor_type, cover_height, on_fire, fire_owner, fire_suppressed_until, is_space,
+			occupant, vehicle_id, feature_id, station_operator_id, feature_owner,
+			feature_durability, corpse_count, dirt_level, airlock_welded]
+
+## Вернуть клетке снятый image() — через сеттеры, чтобы версии и кеши узнали о правке.
+## Высота идёт раньше объекта: сеттер feature_id смотрит на неё (стекло в стене).
+func apply_image(im: Array) -> void:
+	floor_type = im[0]
+	cover_height = im[1]
+	on_fire = im[2]
+	fire_owner = im[3]
+	fire_suppressed_until = im[4]
+	is_space = im[5]
+	occupant = im[6]
+	vehicle_id = im[7]
+	feature_id = im[8]
+	station_operator_id = im[9]
+	feature_owner = im[10]
+	feature_durability = im[11]
+	corpse_count = im[12]
+	dirt_level = im[13]
+	airlock_welded = im[14]
 
 var coord: Vector2i
-var floor_type: int = 0
+var floor_type: int = 0:
+	set(v):
+		if floor_type != v:
+			if journaling: _journal()
+			floor_type = v
+			log_look_change(coord.x, coord.y)
 ## Высота укрытия/препятствия: 0 / 0.5 / 1 / 1.5 / 2 (2 = стена).
 var cover_height: float = 0.0:
 	set(v):
 		if cover_height == v:
 			return
+		if journaling: _journal()
 		# Обзору важна не высота, а ровно факт «стена или нет» — _vision_blocked() читает
 		# только сравнение с WALL_HEIGHT. Отрытый окоп, мешки с песком, куча земли по пояс
 		# высоту меняют, а видно из клетки остаётся ровно то же самое; двигать на них
@@ -83,6 +152,7 @@ var cover_height: float = 0.0:
 		var was_wall := cover_height >= MCF.WALL_HEIGHT
 		cover_height = v
 		walk_version += 1
+		log_look_change(coord.x, coord.y)
 		if was_wall != (v >= MCF.WALL_HEIGHT):
 			log_vision_change(coord.x, coord.y)
 ## Сколько клеток горит прямо сейчас — счётчик на все сетки разом (#106). Нужен ровно
@@ -98,22 +168,38 @@ var on_fire: bool = false:
 	set(v):
 		if on_fire == v:
 			return
+		if journaling: _journal()
 		on_fire = v
 		burning += 1 if v else -1
+		log_look_change(coord.x, coord.y)
 		walk_version += 1   # маршрут обходит огонь (#1) — см. заголовок файла
 ## Сторона, устроившая пожар: огонь расползается только на её ходу (#45). -1 = ничей.
-var fire_owner: int = -1
+var fire_owner: int = -1:
+	set(v):
+		if fire_owner != v:
+			if journaling: _journal()
+			fire_owner = v
 ## Номер раунда, ДО которого в клетку не может вползти огонь: пожаротушительная
 ## граната (#19) глушит клетку на EXTINGUISHER_SUPPRESS_TURNS раундов. Запрет
 ## касается только пассивного разлива — прямой выстрел огнемёта его игнорирует.
-var fire_suppressed_until: int = 0
+var fire_suppressed_until: int = 0:
+	set(v):
+		if fire_suppressed_until != v:
+			if journaling: _journal()
+			fire_suppressed_until = v
 ## "Космос" — правила невесомости (§3.11); задействуется на M5.
-var is_space: bool = false
+var is_space: bool = false:
+	set(v):
+		if is_space != v:
+			if journaling: _journal()
+			is_space = v
+			log_look_change(coord.x, coord.y)
 ## Живой юнит ИЛИ труп, занимающий клетку; null = пусто.
 var occupant: UnitInstance = null:
 	set(v):
 		if occupant == v:
 			return
+		if journaling: _journal()
 		occupant = v
 		walk_version += 1
 ## Корпус машины (танк/челнок), накрывающий клетку; -1 = нет (§ «Техника»).
@@ -121,6 +207,7 @@ var vehicle_id: int = -1:
 	set(v):
 		if vehicle_id == v:
 			return
+		if journaling: _journal()
 		# Корпус машины обзор НЕ перекрывает (batch 13 #1): видно всё до стены или
 		# закрытого шлюза, и техника, как и живые, лучу не мешает. Поэтому смена
 		# vehicle_id версию обзора не двигает — только проходимость.
@@ -138,6 +225,7 @@ var feature_id: String = "":
 	set(v):
 		if feature_id == v:
 			return
+		if journaling: _journal()
 		# Стекло прозрачно для обзора (#29), а высота у него стенная — значит замена
 		# стены на стекло (и обратно) при той же высоте меняет просматриваемость, и
 		# сеттер высоты этого не заметит. Ловим переход здесь.
@@ -145,33 +233,55 @@ var feature_id: String = "":
 		feature_id = v
 		walk_version += 1
 		feature_version += 1
+		log_look_change(coord.x, coord.y)
 		if cover_height >= MCF.WALL_HEIGHT and saw_through != MCF.is_glass(v):
 			log_vision_change(coord.x, coord.y)
-var feature_owner: int = -1
+var feature_owner: int = -1:
+	set(v):
+		if feature_owner != v:
+			if journaling: _journal()
+			feature_owner = v
 ## Оператор, развернувший станцию дронов (item 16); -1 = станции нет или её поставил
 ## не оператор (старые карты, редактор). Владельца-стороны для правила «одна станция
 ## на оператора» не хватает: у команды операторов много, а станция у каждого одна.
-var station_operator_id: int = -1
+var station_operator_id: int = -1:
+	set(v):
+		if station_operator_id != v:
+			if journaling: _journal()
+			station_operator_id = v
 ## Остаток прочности укрепления в единой шкале урона (§3.7): 0 = прочности нет,
 ## объект сносится любым попаданием. У ДОТа 2 — первое попадание оставляет трещину.
-var feature_durability: int = 0
+var feature_durability: int = 0:
+	set(v):
+		if feature_durability != v:
+			if journaling: _journal()
+			feature_durability = v
 ## Счётчик трупов на клетке — 5 образуют стену из трупов (§3.7).
-var corpse_count: int = 0
+var corpse_count: int = 0:
+	set(v):
+		if corpse_count != v:
+			if journaling: _journal()
+			corpse_count = v
+			corpse_version += 1
 ## Уровень кучи земли (§3.7): 0 = нет, 1..4 = 0.5 м на уровень (макс. 2 м = стена).
 var dirt_level: int = 0:
 	set(v):
 		if dirt_level == v:
 			return
+		if journaling: _journal()
 		dirt_level = v
 		walk_version += 1
+		log_look_change(coord.x, coord.y)
 ## Шлюз заварен инженером (#99): створки больше не разъезжаются от подошедшего юнита,
 ## клетка навсегда остаётся стеной. Снимается только сносом самого шлюза.
 var airlock_welded: bool = false:
 	set(v):
 		if airlock_welded == v:
 			return
+		if journaling: _journal()
 		airlock_welded = v
 		walk_version += 1
+		log_look_change(coord.x, coord.y)
 
 func _init(p_coord: Vector2i) -> void:
 	coord = p_coord

@@ -517,24 +517,30 @@ func _sides() -> Array[int]:
 ## P2 справа) — просто записанное так, чтобы работать и на троих, и на шестерых.
 func _in_zone(coord: Vector2i, side: int) -> bool:
 	if _map_zones:
-		# Слот может быть посажен в ЛЮБУЮ нарисованную зону (item 10): сверяем с его
-		# назначенной зоной, а не жёстко с номером стороны.
-		var z := side
-		if roster != null and roster.slot(side) != null:
-			z = roster.slot(side).zone()
-		return map.get_zone(coord) == z
+		return map.get_zone(coord) == _zone_of(side)
+	var band := _zone_band(side)
+	return coord.x >= band.x and coord.x < band.y
+
+## Нарисованная на карте зона стороны. Слот может быть посажен в ЛЮБУЮ зону (item 10):
+## сверяем с его назначенной зоной, а не жёстко с номером стороны.
+func _zone_of(side: int) -> int:
+	if roster != null and roster.slot(side) != null:
+		return roster.slot(side).zone()
+	return side
+
+## Без зон на карте поле делится на вертикальные полосы: [x, y) — столбцы стороны.
+func _zone_band(side: int) -> Vector2i:
 	var sides := _sides()
 	var n := sides.size()
 	var slot := sides.find(side)
 	if slot < 0:
-		return false
+		return Vector2i.ZERO
 	if n == 2:
 		var half := map.width / 2
-		return coord.x < half if slot == 0 else coord.x >= map.width - half
-	var band := maxi(1, map.width / n)
-	var lo := slot * band
-	var hi := map.width if slot == n - 1 else lo + band
-	return coord.x >= lo and coord.x < hi
+		return Vector2i(0, half) if slot == 0 else Vector2i(map.width - half, map.width)
+	var width := maxi(1, map.width / n)
+	var lo := slot * width
+	return Vector2i(lo, map.width if slot == n - 1 else lo + width)
 
 func _cell_placeable(coord: Vector2i) -> bool:
 	if not map.in_bounds(coord):
@@ -753,39 +759,187 @@ func _placement_changed() -> void:
 	_send_live()
 
 ## Отражение формации первой стороны в зону target (batch 12 #12): одна функция и для
-## кнопки «Stamp Formation» в хот-сите, и для авто-штампа хоста по сети.
+## хот-сита, и для авто-штампа хоста по сети. У КАЖДОГО игрока — та же армия.
+##
+## Раньше формация поворачивалась на 180° вокруг центра карты — и это верно лишь для зон
+## строго напротив друг друга. Зоны слева и справа на одной высоте, четыре четверти, трое
+## игроков — копии улетали мимо чужой зоны и молча пропускались: у соперника оказывалось
+## меньше бойцов, а то и ни одного. Теперь перенос подбирается под пару зон (_zone_transform):
+## симметрия самой карты, если она переводит зону хоста ровно в зону target, иначе — лучшее
+## наложение зон лицом к центру. Бойцу, чьё место занято или вне зоны, ищется ближайшая
+## свободная клетка той же зоны: армии одинаковы по составу всегда, по расстановке — насколько
+## позволяет карта.
 func _stamp_into(target: int) -> Dictionary:
 	var host: int = _sides()[0]
+	var xf := _zone_transform(host, target)
+	var l: Array = xf["l"]
+	var t: Vector2i = xf["t"]
+	var occ := {}
+	for p in placed:
+		for c in _footprint(p["stats_id"], p["coord"]):
+			occ[c] = true
+	for n in preserved_neutral:
+		occ[n["coord"]] = true
+	var zone := _zone_cells_of(target)
 	var added := 0
 	var skipped := 0
 	for p in placed.duplicate():
 		if int(p["owner"]) != host:
 			continue
-		var src: Vector2i = p["coord"]
 		var id := String(p["stats_id"])
-		# Отражается ВЕСЬ СЛЕД, а не одна клетка (item 8: «tanks don't transfer, and
-		# shuttles too sometimes»). Координата в записи — это ЛЕВЫЙ ВЕРХНИЙ угол следа,
-		# и он растёт вправо-вниз (см. _footprint). Зеркало через центр карты переносит
-		# этот угол туда, где должен оказаться ПРОТИВОПОЛОЖНЫЙ, — значит новый угол надо
-		# отсчитать на размер следа назад. У пехоты след 1×1, и старая формула для неё
-		# верна: оттого баг и не замечали. У танка 2×3 копия уезжала на клетку вправо и
-		# две вниз, вылезала из зоны высадки — и молча не ставилась совсем. Челнок 1×2
-		# промахивался только по одной оси, оттого «sometimes».
-		var size := VehicleDB.size_of(id) if VehicleDB.is_vehicle(id) else Vector2i.ONE
-		var dst := Vector2i(map.width - src.x - size.x, map.height - src.y - size.y)
-		if _placed_at(dst) != -1 or not _footprint_placeable(id, dst, target):
+		# Отражается ВЕСЬ СЛЕД, а не одна клетка (item 8): координата записи — левый верхний
+		# угол следа, и после отражения угол — это минимум образов всех его клеток.
+		var dst := Vector2i(1 << 30, 1 << 30)
+		for c: Vector2i in _footprint(id, p["coord"]):
+			var q := _apply_xf(l, t, c)
+			dst = Vector2i(mini(dst.x, q.x), mini(dst.y, q.y))
+		if not _fits(id, dst, target, occ):
+			dst = _nearest_fit(id, dst, target, occ, zone)
+		if dst.x < 0:
 			skipped += 1
 			continue
 		var rec := {"stats_id": id, "owner": target,
 				"coord": dst, "paid_by": target, "mirror": true}
-		# Формация отражена на 180°, значит и фронт машины смотрит навстречу — иначе
-		# отзеркаленный танк встал бы стволом в собственный тыл.
+		# Фронт машины поворачивается вместе с формацией — иначе копия встала бы стволом в тыл.
 		if VehicleDB.is_vehicle(id) \
 				and bool(VehicleDB.get_vehicle(id).get("has_facing", false)):
-			rec["facing"] = -_placed_facing(p)
+			var f := _placed_facing(p)
+			rec["facing"] = Vector2i(l[0] * f.x + l[1] * f.y, l[2] * f.x + l[3] * f.y)
 		placed.append(rec)
+		for c in _footprint(id, dst):
+			occ[c] = true
 		added += 1
 	return {"added": added, "skipped": skipped}
+
+## Восемь движений квадрата: (x, y) → (a·x + b·y, c·x + d·y). Тождество, повороты на 90°,
+## 180°, 270°, отражения по вертикали, по горизонтали и по двум диагоналям.
+const DIHEDRAL := [[1, 0, 0, 1], [0, -1, 1, 0], [-1, 0, 0, -1], [0, 1, -1, 0],
+		[-1, 0, 0, 1], [1, 0, 0, -1], [0, 1, 1, 0], [0, -1, -1, 0]]
+var _xf_cache := {}
+var _zone_cache := {}
+var _sym_cache := {}
+
+func _apply_xf(l: Array, t: Vector2i, c: Vector2i) -> Vector2i:
+	return Vector2i(l[0] * c.x + l[1] * c.y, l[2] * c.x + l[3] * c.y) + t
+
+## Клетки зоны стороны (по _in_zone — с полосами, если зон на карте нет).
+func _zone_cells_of(side: int) -> Array[Vector2i]:
+	if _zone_cache.has(side):
+		return _zone_cache[side]
+	var out: Array[Vector2i] = []
+	for y in map.height:
+		for x in map.width:
+			if _in_zone(Vector2i(x, y), side):
+				out.append(Vector2i(x, y))
+	_zone_cache[side] = out
+	return out
+
+## Как переносится зона хоста в зону target: {l: движение, t: сдвиг}.
+##
+## 1. Симметрия САМОЙ КАРТЫ (движение вокруг её центра, при котором рельеф совпадает клетка
+##    в клетку), переводящая зону хоста ровно в зону target, — тогда у каждого та же
+##    местность вокруг тех же бойцов. Зеркальные карты генератора и честные стоковые карты
+##    такую имеют; повороты на 90° и диагонали — только у квадратного поля.
+## 2. Иначе — движение со сдвигом центра зоны в центр зоны, при котором зоны перекрываются
+##    больше всего; при равенстве — то, что разворачивает формацию лицом к центру карты.
+func _zone_transform(host: int, target: int) -> Dictionary:
+	var key := Vector2i(host, target)
+	if _xf_cache.has(key):
+		return _xf_cache[key]
+	var src := _zone_cells_of(host)
+	var dst := _zone_cells_of(target)
+	var inside := {}
+	for c in dst:
+		inside[c] = true
+	var result := {"l": DIHEDRAL[2], "t": Vector2i(map.width - 1, map.height - 1)}
+	if src.is_empty() or dst.is_empty():
+		_xf_cache[key] = result
+		return result
+	var w := map.width - 1
+	var h := map.height - 1
+	var found := false
+	for l: Array in DIHEDRAL.slice(1):
+		if l[1] != 0 and map.width != map.height:
+			continue   # поворот на 90° и диагональ меняют стороны местами — только квадрат
+		var t := Vector2i(w, h) - Vector2i(l[0] * w + l[1] * h, l[2] * w + l[3] * h)
+		t = Vector2i(t.x / 2, t.y / 2)
+		if src.size() != dst.size():
+			break
+		var all := true
+		for c in src:
+			if not inside.has(_apply_xf(l, t, c)):
+				all = false
+				break
+		if all and _map_symmetric(l, t):
+			result = {"l": l, "t": t}
+			found = true
+			break
+	if not found:
+		var cs := Vector2.ZERO
+		for c in src:
+			cs += Vector2(c)
+		cs /= src.size()
+		var cd := Vector2.ZERO
+		for c in dst:
+			cd += Vector2(c)
+		cd /= dst.size()
+		var mid := Vector2(w, h) * 0.5
+		var best := -1
+		var best_face := -INF
+		for l: Array in DIHEDRAL:
+			var lc := Vector2(l[0] * cs.x + l[1] * cs.y, l[2] * cs.x + l[3] * cs.y)
+			var t := Vector2i((cd - lc).round())
+			var score := 0
+			for c in src:
+				if inside.has(_apply_xf(l, t, c)):
+					score += 1
+			var fwd := mid - cs
+			var face := Vector2(l[0] * fwd.x + l[1] * fwd.y, l[2] * fwd.x + l[3] * fwd.y) \
+					.normalized().dot((mid - cd).normalized())
+			if score > best or (score == best and face > best_face):
+				best = score
+				best_face = face
+				result = {"l": l, "t": t}
+	_xf_cache[key] = result
+	return result
+
+## Совпадает ли рельеф карты со своим образом при движении (l, t).
+func _map_symmetric(l: Array, t: Vector2i) -> bool:
+	var key := str(l) + str(t)
+	if _sym_cache.has(key):
+		return _sym_cache[key]
+	var ok := true
+	for y in map.height:
+		for x in map.width:
+			var c := Vector2i(x, y)
+			var q := _apply_xf(l, t, c)
+			if not map.in_bounds(q) or map.get_feature(c) != map.get_feature(q) \
+					or map.get_space(c) != map.get_space(q) or map.get_floor(c) != map.get_floor(q):
+				ok = false
+				break
+		if not ok:
+			break
+	_sym_cache[key] = ok
+	return ok
+
+## Весь след предмета — в зоне стороны, на проходимой земле и не на чужом месте (occ).
+func _fits(id: String, coord: Vector2i, side: int, occ: Dictionary) -> bool:
+	for c in _footprint(id, coord):
+		if not map.in_bounds(c) or occ.has(c) or map.get_space(c) \
+				or map.get_cover(c) >= MCF.WALL_HEIGHT or not _in_zone(c, side):
+			return false
+	return true
+
+## Ближайшая к want клетка зоны, куда предмет встаёт целиком; (-1, -1) — места нет.
+func _nearest_fit(id: String, want: Vector2i, side: int, occ: Dictionary,
+		zone: Array[Vector2i]) -> Vector2i:
+	var order := zone.duplicate()
+	order.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		return Vector2(a).distance_squared_to(Vector2(want)) < Vector2(b).distance_squared_to(Vector2(want)))
+	for c: Vector2i in order:
+		if _fits(id, c, side, occ):
+			return c
+	return Vector2i(-1, -1)
 
 func _paint_at(coord: Vector2i) -> void:
 	if _mirror_locked() or brush_unit == "" or _placed_at(coord) != -1:
@@ -982,24 +1136,43 @@ func _draw() -> void:
 	# Поле рисуется ТЕМИ ЖЕ спрайтами и цветами, что и в бою (#100): раньше расстановка
 	# показывала лишь серые квадраты, и игрок расставлял отряд вслепую — мешки, окопы,
 	# шлюзы и ДОТы проявлялись только после старта. Логика повторяет проход Main._draw().
-	for y in map.height:
-		for x in map.width:
+	# И так же — только клетки на экране: на карте 250×250 полный проход — 62 500 клеток
+	# на КАЖДЫЙ кадр, а кадр здесь перерисовывается на каждое движение мыши.
+	# Слои карты читаются напрямую, а зона стороны считается раз на кадр, не на клетку.
+	var tl := _pos_to_cell(Vector2.ZERO)
+	var br := _pos_to_cell(get_viewport_rect().size)
+	var vx0 := clampi(tl.x - 1, 0, map.width - 1)
+	var vx1 := clampi(br.x + 1, 0, map.width - 1)
+	var vy0 := clampi(tl.y - 1, 0, map.height - 1)
+	var vy1 := clampi(br.y + 1, 0, map.height - 1)
+	var fids := map.feature_id
+	var covers := map.cover_height
+	var spaces := map.is_space
+	var zones := map.zone_owner
+	var zid := _zone_of(active_side)
+	var band := _zone_band(active_side)
+	var zone_col := Color(_side_color(active_side), 0.10)
+	var floor_tex := Sprites.has_override("floor") or Sprites.has_override("floor_space") \
+			or Sprites.has_override("floor_wall") or Sprites.has_override("floor_cover")
+	for y in range(vy0, vy1 + 1):
+		for x in range(vx0, vx1 + 1):
+			var i := y * map.width + x
 			var coord := Vector2i(x, y)
 			var rect := Rect2(_cell_origin(coord), Vector2(CELL, CELL))
-			var fid := map.get_feature(coord)
+			var fid: String = fids[i]
 			# Высота укрытия объекта задаётся справочником, а не слоем cover_height:
 			# редактор хранит объект и рельеф раздельно (см. MapData.apply_to_grid).
-			var ch := map.get_cover(coord)
+			var ch: float = covers[i]
 			if fid != "" and MCF.FEATURE_HEIGHT.has(fid):
 				ch = float(MCF.FEATURE_HEIGHT[fid])
-			var is_space := map.get_space(coord)
+			var is_space := spaces[i] != 0
 			var is_wall := ch >= MCF.WALL_HEIGHT
 			var floor_name := "floor"
 			if is_space:
 				floor_name = "floor_space"
 			elif is_wall:
 				floor_name = "floor_wall"
-			if not Sprites.draw_texture_override_rect(self, floor_name, rect):
+			if not floor_tex or not Sprites.draw_texture_override_rect(self, floor_name, rect):
 				var base := Color(0.14, 0.15, 0.18)
 				if is_space:
 					base = Color(0.03, 0.02, 0.08)
@@ -1007,14 +1180,24 @@ func _draw() -> void:
 					base = Color(0.35, 0.3, 0.25)
 				draw_rect(rect, base)
 			if ch > 0.0 and not is_wall:
-				if not Sprites.draw_texture_override_rect(self, "floor_cover", rect):
+				if not floor_tex or not Sprites.draw_texture_override_rect(self, "floor_cover", rect):
 					draw_rect(rect, Color(0.5, 0.45, 0.2, 0.12 + 0.12 * ch))
 			if fid != "":
 				_draw_feature(coord, fid, ch, font)
 			# Подсветка зоны развёртывания активной стороны.
-			if _in_zone(coord, active_side) and not is_space and not is_wall:
-				draw_rect(rect, Color(_side_color(active_side), 0.10))
-			draw_rect(rect, Color(0.25, 0.27, 0.32), false, 1.0)
+			var in_zone := zones[i] == zid if _map_zones else (x >= band.x and x < band.y)
+			if in_zone and not is_space and not is_wall:
+				draw_rect(rect, zone_col)
+	# Сетка — линиями по строкам и столбцам экрана, а не контуром каждой клетки.
+	var grid_col := Color(0.25, 0.27, 0.32)
+	var top := ORIGIN.y + vy0 * CELL
+	var bottom := ORIGIN.y + (vy1 + 1) * CELL
+	var left := ORIGIN.x + vx0 * CELL
+	var right := ORIGIN.x + (vx1 + 1) * CELL
+	for x in range(vx0, vx1 + 2):
+		draw_line(Vector2(ORIGIN.x + x * CELL, top), Vector2(ORIGIN.x + x * CELL, bottom), grid_col, 1.0)
+	for y in range(vy0, vy1 + 2):
+		draw_line(Vector2(left, ORIGIN.y + y * CELL), Vector2(right, ORIGIN.y + y * CELL), grid_col, 1.0)
 	# Сохранённые мирные.
 	for s in preserved_neutral:
 		_draw_token(s["coord"], MCF.Owner.NEUTRAL, s["stats_id"], font)

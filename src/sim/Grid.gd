@@ -35,6 +35,9 @@ func _init(p_width: int, p_height: int) -> void:
 	GridCell.walk_version += 1
 	GridCell.feature_version += 1
 	GridCell.reset_vision_log()
+	# Журнал отката принадлежит действию на ПРЕЖНЕЙ доске; стройка новой в него не пишет.
+	GridCell.journaling = false
+	GridCell.journal = {}
 
 func in_bounds(coord: Vector2i) -> bool:
 	return coord.x >= 0 and coord.y >= 0 and coord.x < width and coord.y < height

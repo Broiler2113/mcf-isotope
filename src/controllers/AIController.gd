@@ -1353,66 +1353,15 @@ func _seed_vehicle_field(state: GameState, seeds: Array, key: String) -> GeoFiel
 	var grid := state.grid
 	var w := grid.width
 	var h := grid.height
-	var cells: Array[GridCell] = grid.cells_flat()
-	var wall_h: float = MCF.WALL_HEIGHT
-	# Устройство волны — как у пехотного поля выше (#106): плоские массивы вместо
-	# словаря, байт состояния на клетку, соседи по Grid.N8 без промежуточного массива.
-	var seen := PackedByteArray()
-	seen.resize(w * h)
-	var dist := PackedInt32Array()
-	dist.resize(w * h)
-	dist.fill(GeoField.FAR)
-	var qx := PackedInt32Array()
-	var qy := PackedInt32Array()
-	var qd := PackedInt32Array()
+	# Та же волна, что у пехотного поля (_wave): источники — все клетки следа машин.
+	var idx := PackedInt32Array()
 	for veh: Vehicle in seeds:
 		for fc: Vector2i in veh.footprint():
-			var fx: int = fc.x
-			var fy: int = fc.y
-			if fx < 0 or fy < 0 or fx >= w or fy >= h:
+			if fc.x < 0 or fc.y < 0 or fc.x >= w or fc.y >= h:
 				off[fc] = 0   # след машины свесился за карту — ключ прежний, волны нет
 				continue
-			var fi := fy * w + fx
-			if seen[fi] != 0:
-				continue
-			seen[fi] = 1
-			dist[fi] = 0
-			qx.append(fx)
-			qy.append(fy)
-			qd.append(0)
-	var head := 0
-	while head < qx.size():
-		var cx: int = qx[head]
-		var cy: int = qy[head]
-		var nd: int = qd[head] + 1
-		head += 1
-		for d: Vector2i in Grid.N8:
-			var nx: int = cx + d.x
-			var ny: int = cy + d.y
-			if nx < 0 or ny < 0 or nx >= w or ny >= h:
-				continue
-			var idx := ny * w + nx
-			if seen[idx] != 0:
-				continue
-			# --- инлайн walkable_terrain(): закрытый шлюз маршруту не помеха (#100).
-			var c: GridCell = cells[idx]
-			var fid: String = c.feature_id
-			var passable: bool
-			if fid == "" and c.dirt_level == 0:
-				passable = c.cover_height < wall_h
-			elif fid == MCF.FEATURE_AIRLOCK and not c.airlock_welded:
-				passable = true
-			else:
-				passable = c.cover_height < wall_h and not c.blocks_move()
-			if not passable:
-				seen[idx] = 2
-				continue
-			seen[idx] = 1
-			dist[idx] = nd
-			qx.append(nx)
-			qy.append(ny)
-			qd.append(nd)
-	var field := GeoField.new(w, h, dist, off)
+			idx.append((fc.y + 1) * (w + 2) + fc.x + 1)
+	var field := _wave(grid, idx, off)
 	_geo_cache[key] = field
 	return field
 
@@ -1668,30 +1617,18 @@ func _enemy_distance_field(state: GameState, only_visible: bool, r: GameActionRe
 	var grid := state.grid
 	var w := grid.width
 	var h := grid.height
-	var cells: Array[GridCell] = grid.cells_flat()
-	var wall_h: float = MCF.WALL_HEIGHT
-	# Волна идёт по ПЛОСКИМ индексам, а не по словарю (#106). Само поле — обход всей
-	# карты, две с половиной тысячи клеток по восемь соседей, и раньше на каждом шаге
-	# платились три вещи разом: grid.neighbors() строил новый массив из восьми Vector2i,
-	# «уже были тут?» спрашивалось у словаря по ключу-вектору, а проходимость соседа
-	# пересчитывалась заново из КАЖДОЙ соседней клетки — то есть у стены до восьми раз.
+	# Волна идёт по ПЛОСКИМ индексам, а не по словарю (#106): состояние клетки — байт
+	# (0 — не трогали, 1 — взята в волну, 2 — непроходима), очередь — PackedInt32Array
+	# индексов, шаги пишутся сразу в плоский массив GeoField. Проходимость рельефа берётся
+	# готовой (_walk_mask: общий слепок с рамкой непроходимых клеток по краю, так что
+	# проверка границ не нужна вовсе), а сосед — сдвиг индекса на константу. На карте
+	# 250×250 это 62 500 клеток и полмиллиона соседей: прежняя волна с чтением клеток и
+	# проверкой границ стоила ~140 мс на каждый ход ИИ.
 	#
-	# Здесь состояние клетки лежит в плоском байтовом массиве: 0 — не трогали, 1 — взята
-	# в волну, 2 — непроходима. Стена получает свою двойку при первой же встрече и дальше
-	# отсеивается сравнением байта. Очередь — три PackedInt32Array (x, y и накопленный
-	# шаг) вместо массива векторов со чтением цены из словаря.
-	#
-	# Готовые шаги пишутся сразу в плоский массив GeoField, без словаря на две с половиной
-	# тысячи ключей-векторов. Порядок обхода соседей — тот же Grid.N8, что и у
-	# grid.neighbors(), а волна FIFO, поэтому и числа в поле остались прежние.
-	var seen := PackedByteArray()
-	seen.resize(w * h)
-	var dist := PackedInt32Array()
-	dist.resize(w * h)
-	dist.fill(GeoField.FAR)
-	var qx := PackedInt32Array()
-	var qy := PackedInt32Array()
-	var qd := PackedInt32Array()
+	# Порядок обхода соседей — тот же Grid.N8, что и у grid.neighbors(), а волна FIFO,
+	# поэтому и числа в поле те же самые.
+	var pw := w + 2
+	var seeds := PackedInt32Array()
 	for e: UnitInstance in state.all_units():
 		if e.owner == owner or not e.is_alive():
 			continue
@@ -1706,50 +1643,86 @@ func _enemy_distance_field(state: GameState, only_visible: bool, r: GameActionRe
 			# такой ключ в поле нулём, а соседей у него не было ни одного — повторяем.
 			off[e.coord] = 0
 			continue
-		var ei := ey * w + ex
-		if seen[ei] != 0:
-			continue
-		seen[ei] = 1
-		dist[ei] = 0
-		qx.append(ex)
-		qy.append(ey)
-		qd.append(0)
-	var head := 0
-	while head < qx.size():
-		var cx: int = qx[head]
-		var cy: int = qy[head]
-		var nd: int = qd[head] + 1
-		head += 1
-		for d: Vector2i in Grid.N8:
-			var nx: int = cx + d.x
-			var ny: int = cy + d.y
-			if nx < 0 or ny < 0 or nx >= w or ny >= h:
-				continue
-			var idx := ny * w + nx
-			if seen[idx] != 0:
-				continue
-			# --- инлайн walkable_terrain(): закрытый шлюз маршруту не помеха (#100),
-			# он разъедется перед бойцом; стена и препятствие непроходимы.
-			var c: GridCell = cells[idx]
-			var fid: String = c.feature_id
-			var passable: bool
-			if fid == "" and c.dirt_level == 0:
-				passable = c.cover_height < wall_h   # чистый пол — большинство клеток
-			elif fid == MCF.FEATURE_AIRLOCK and not c.airlock_welded:
-				passable = true
-			else:
-				passable = c.cover_height < wall_h and not c.blocks_move()
-			if not passable:
-				seen[idx] = 2   # стену больше не пересчитываем — она отсеется байтом
-				continue
-			seen[idx] = 1
-			dist[idx] = nd
-			qx.append(nx)
-			qy.append(ny)
-			qd.append(nd)
-	var field := GeoField.new(w, h, dist, off)
+		seeds.append((ey + 1) * pw + ex + 1)
+	var field := _wave(grid, seeds, off)
 	_geo_cache[key] = field
 	return field
+
+## Волна по рельефу из клеток seeds (плоские индексы С РАМКОЙ, см. _walk_mask): шаги до
+## ближайшего источника по проходимым клеткам, живые юниты не в счёт. Источник — начало
+## волны, даже если сам непроходим (боец в проёме, корпус машины). Соседи — в порядке
+## Grid.N8, как у grid.neighbors(); не дошедшие клетки остаются GeoField.FAR.
+func _wave(grid: Grid, seeds: PackedInt32Array, off: Dictionary) -> GeoField:
+	var w := grid.width
+	var h := grid.height
+	var pw := w + 2
+	var st: PackedByteArray = _walk_mask(grid).duplicate()   # 0 — не взята, 1 — взята, 2 — стена
+	var pd := PackedInt32Array()
+	pd.resize(pw * (h + 2))
+	pd.fill(GeoField.FAR)
+	var q := PackedInt32Array()
+	for ei: int in seeds:
+		if st[ei] == 1:
+			continue
+		st[ei] = 1
+		pd[ei] = 0
+		q.append(ei)
+	var offs := PackedInt32Array([-pw - 1, -pw, -pw + 1, -1, 1, pw - 1, pw, pw + 1])
+	var head := 0
+	while head < q.size():
+		var cur: int = q[head]
+		head += 1
+		var nd: int = pd[cur] + 1
+		for o: int in offs:
+			var n := cur + o
+			if st[n] == 0:
+				st[n] = 1
+				pd[n] = nd
+				q.append(n)
+	# Обратно в поле без рамки.
+	var dist := PackedInt32Array()
+	for y in h:
+		var prow := (y + 1) * pw + 1
+		dist.append_array(pd.slice(prow, prow + w))
+	return GeoField.new(w, h, dist, off)
+
+
+## Проходимость рельефа для волн ИИ: байт на клетку (0 — пройти можно, 2 — нет) с рамкой
+## в клетку по краю, так что у каждой клетки поля ровно восемь соседей в массиве. Правило —
+## GridCell.walkable_terrain(): закрытый шлюз не помеха (#100), он разъедется перед бойцом;
+## жильцы не в счёт. Слепок общий на всех ИИ (static) и правится по журналу вида клеток —
+## только то, что сменилось; целиком собирается на новой сетке или оборванном журнале.
+static var _wmask: PackedByteArray = PackedByteArray()
+static var _wmask_grid: int = 0
+static var _wmask_look: int = -1
+
+static func _walk_mask(grid: Grid) -> PackedByteArray:
+	var w := grid.width
+	var h := grid.height
+	var pw := w + 2
+	if grid.get_instance_id() != _wmask_grid or _wmask_look < GridCell.look_log_base \
+			or _wmask.size() != pw * (h + 2):
+		_wmask.resize(pw * (h + 2))
+		_wmask.fill(2)
+		var cells := grid.cells_flat()
+		for y in h:
+			var row := y * w
+			var prow := (y + 1) * pw + 1
+			for x in w:
+				if cells[row + x].walkable_terrain():
+					_wmask[prow + x] = 0
+		_wmask_grid = grid.get_instance_id()
+	elif _wmask_look != GridCell.look_version:
+		var ch := GridCell.look_changes
+		var i: int = (_wmask_look - GridCell.look_log_base) * 2
+		while i < ch.size():
+			var x := ch[i]
+			var y := ch[i + 1]
+			if x < w and y < h:
+				_wmask[(y + 1) * pw + x + 1] = 0 if grid.cell_fast(x, y).walkable_terrain() else 2
+			i += 2
+	_wmask_look = GridCell.look_version
+	return _wmask
 
 ## Стоя вплотную к пламени, ИИ первым делом отходит на безопасную клетку (#48):
 ## сближение с врагом такой ход обычно не даёт, поэтому он идёт отдельным кандидатом.

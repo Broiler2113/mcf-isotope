@@ -18,6 +18,10 @@ extends RefCounted
 ## Отрезанного пола на готовой карте нет: дом без двери, комната за зеркальной осью, закуток
 ## за ящиками соединяются с остальной картой самым коротким проломом (_join_pockets).
 ##
+## Двери — шлюзы. Каждый проём дома, комнаты станции и бункера, хижины в поле — шлюз, с
+## космосом или без: закрытый шлюз держит взгляд, как стена, и открывается перед бойцом.
+## Поэтому мирные живут только в таких запертых помещениях и начинают партию спящими.
+##
 ## Строит карту только хост: гостю уезжает готовая MapData (K_LOBBY_MAP), так что сети
 ## детерминизм генератора не нужен — он нужен зерну. Каждая фаза тянет числа из СВОЕГО
 ## потока, поэтому снятая галочка «Civilians» убирает мирных, а не перекраивает улицы.
@@ -48,9 +52,16 @@ const MAX_DIM := Vector2i(250, 250)
 ## отряды не влезают и на самом большом поле, зазор ужимается до 2, потом до 1.
 const ZONE_GAP := 3
 const ZONE_MIN := 16
-## Мирных не больше этого на любой карте. Слот жителей играется весь за один ход, и прежняя
-## норма (житель на 160 клеток) дала бы на поле 250×250 ~400 жителей — минуты на их ход.
-const CIV_MAX := 32
+## Сколько мирных: порядок величины, а не точное число. Базовая норма — житель на 160
+## клеток при обычной застройке; уровень множит её и ограничивает сверху (слот жителей
+## играется весь за один ход, так что без потолка поле 250×250 получило бы сотни жителей).
+## Старое значение настройки — true/false — читается как Normal/None.
+const CIV_LEVELS := ["None", "Few", "Normal", "Many", "Crowd"]
+const CIV_MULT := [0.0, 0.35, 1.0, 2.5, 6.0]
+const CIV_MIN := [0, 1, 2, 4, 8]
+const CIV_CAP := [0, 12, 32, 80, 200]
+## Больше этого мирных не бывает ни на каком уровне.
+const CIV_MAX := 200
 ## Якорей-кандидатов не больше этого: на большой карте берётся каждый k-й. Якорь нужен
 ## «где-то здесь», а перебор всех 60 000 клеток поля 250×250 — секунды на каждую попытку.
 const CAND_MAX := 6000
@@ -114,20 +125,28 @@ var _rep_fold: Array[bool] = []
 static func default_options() -> Dictionary:
 	return {"style": Style.TOWN, "size": 1, "density": 1, "seed": 1, "zones": 2, "units": 10,
 			"width": 80, "height": 60, "symmetric": false,
-			"space": true, "flammable": true, "obstacles": true, "civilians": true}
+			"space": true, "flammable": true, "obstacles": true, "civilians": 2}
+
+## Уровень мирных по настройке: число 0…4 или прежнее true/false.
+static func civ_level(options: Dictionary) -> int:
+	var v: Variant = options.get("civilians", 2)
+	if v is bool:
+		return 2 if v else 0
+	return clampi(int(v), 0, CIV_LEVELS.size() - 1)
 
 ## Сколько клеток нужно зоне, чтобы в неё встал отряд из `units` бойцов.
 static func zone_need(units: int) -> int:
 	return maxi(ZONE_MIN, units * CELLS_PER_UNIT)
 
-## Размер поля по настройкам: готовый пункт списка или свой (SIZE_CUSTOM) — в пределах
-## MIN_DIM…MAX_DIM.
+## Размер поля по настройкам: готовый пункт списка или свой (SIZE_CUSTOM). У своего
+## потолка нет — только нижняя граница MIN_DIM; MAX_DIM ограничивает лишь авто-рост поля,
+## когда отряды не влезают.
 static func dims_of(options: Dictionary) -> Vector2i:
 	var s := int(options.get("size", 1))
 	if s >= 0 and s < SIZES.size():
 		return SIZES[s]
-	return Vector2i(clampi(int(options.get("width", 80)), MIN_DIM, MAX_DIM.x),
-			clampi(int(options.get("height", 60)), MIN_DIM, MAX_DIM.y))
+	return Vector2i(maxi(MIN_DIM, int(options.get("width", 80))),
+			maxi(MIN_DIM, int(options.get("height", 60))))
 
 ## Собрать карту. Ключи настроек — как в default_options(); недостающие берутся оттуда.
 ## Отряды не влезли в зоны — поле растёт пропорционально нехватке и строится заново.
@@ -138,13 +157,15 @@ static func generate(options: Dictionary) -> MapData:
 	var need := zone_need(int(o["units"]))
 	var g: MapGen = null
 	for attempt in 6:
-		var last := attempt == 5 or (dim.x >= MAX_DIM.x and dim.y >= MAX_DIM.y)
+		var last := attempt == 5 or (dim.x >= MAX_DIM.x and dim.y >= MAX_DIM.y) \
+				or dim.x * dim.y >= MAX_DIM.x * MAX_DIM.y
 		g = MapGen.new()
 		g._build(o, dim, need, last)
 		if g._zone_min >= need or last:
 			break
 		var grow := clampf(sqrt(float(need) / maxf(1.0, float(g._zone_min))) * 1.1, 1.15, 2.0)
-		dim = Vector2i(mini(ceili(dim.x * grow), MAX_DIM.x), mini(ceili(dim.y * grow), MAX_DIM.y))
+		dim = Vector2i(maxi(dim.x, mini(ceili(dim.x * grow), MAX_DIM.x)),
+				maxi(dim.y, mini(ceili(dim.y * grow), MAX_DIM.y)))
 	return g.m
 
 func _build(options: Dictionary, dim: Vector2i, need: int, tight: bool) -> void:
@@ -178,6 +199,7 @@ func _build(options: Dictionary, dim: Vector2i, need: int, tight: bool) -> void:
 			_town()
 	_mirror()
 	_join_pockets(Vector2i(-1, -1))
+	_seal_doors()
 	_phase(Phase.SPACE)
 	# Бункер под землёй: ни вакуума в отсеке, ни рваного края — только шлюзы-двери.
 	if bool(opt["space"]) and _style != Style.BUNKER:
@@ -202,7 +224,7 @@ func _build(options: Dictionary, dim: Vector2i, need: int, tight: bool) -> void:
 	if not _anchors.is_empty():
 		_join_pockets(_anchors[0])
 	_phase(Phase.CIVILIANS)
-	if bool(opt["civilians"]):
+	if civ_level(opt) > 0:
 		_civilians()
 		_mirror_spawns()
 
@@ -270,10 +292,36 @@ func _walk_mask() -> PackedByteArray:
 			out[i] = 1
 	return out
 
-## Украшение ставится только на чистую клетку и не туда, где зона или проём.
+## Каждый проём — шлюз (см. шапку). Двери размечены ещё при постройке (_door), шлюз
+## встаёт в каждую, пол под ним прежний.
+func _seal_doors() -> void:
+	for d in _doors:
+		if m.get_feature(d) == "":
+			_put(d, MCF.FEATURE_AIRLOCK)
+
+## Клетка-стена (или стекло, или шлюз): через неё не ходят и не смотрят поперёк.
+func _is_wallish(c: Vector2i) -> bool:
+	if not _in(c):
+		return true
+	return m.get_cover(c) >= MCF.WALL_HEIGHT
+
+## Проход «как дверь»: стены с двух противоположных сторон, проходимо с двух других.
+func _door_shaped(c: Vector2i, walk: PackedByteArray) -> bool:
+	var open := func(p: Vector2i) -> bool: return _in(p) and walk[p.y * w + p.x] != 0
+	return (_is_wallish(c + Vector2i(1, 0)) and _is_wallish(c - Vector2i(1, 0))
+			and open.call(c + Vector2i(0, 1)) and open.call(c - Vector2i(0, 1))) \
+			or (_is_wallish(c + Vector2i(0, 1)) and _is_wallish(c - Vector2i(0, 1))
+			and open.call(c + Vector2i(1, 0)) and open.call(c - Vector2i(1, 0)))
+
+## Украшение ставится только на чистую клетку и не туда, где зона или проём, — и никогда
+## вплотную к шлюзу: ящик за внешним шлюзом обшивки (он встаёт уже после разметки проёмов)
+## превращал дверь в тупик.
 func _try_put(c: Vector2i, feature: String) -> bool:
 	if not _clear(c) or _keep[c.y * w + c.x] != 0:
 		return false
+	for d: Vector2i in N4:
+		if m.get_feature(c + d) == MCF.FEATURE_AIRLOCK:
+			return false
 	_put(c, feature)
 	return true
 
@@ -671,15 +719,11 @@ func _vent_room() -> void:
 func _vented(r: Rect2i) -> bool:
 	return m.get_space(r.get_center())
 
-## Станция и бункер: шлюзы в проёмах (в бункере — гермодвери, вакуума за ними нет), окна
-## и выходы в открытый космос в обшивке, деревянные палубы складов — и уже потом мебель:
-## колонны в больших залах, ящики, баррикады в коридорах.
+## Станция и бункер: окна и выходы в открытый космос в обшивке (шлюзы в проёмах уже
+## стоят — _seal_doors), деревянные палубы складов — и уже потом мебель: колонны в больших
+## залах, ящики, баррикады в коридорах.
 func _dress_station() -> void:
-	var space := bool(opt["space"])
-	for d in _doors:
-		var roll := _rng.randf()
-		if space and (roll < 0.2 or _touches_space(d)):
-			_put(d, MCF.FEATURE_AIRLOCK)
+	# Шлюзы в проёмах уже стоят (_seal_doors); здесь — обшивка: окна и выходы наружу.
 	for c in _hull():
 		var roll := _rng.randf()
 		if roll < 0.025 and not _near_feature(c, MCF.FEATURE_AIRLOCK):
@@ -958,6 +1002,8 @@ func _field() -> void:
 	var area := float(w * h)
 	for n in maxi(1, roundi(area / 380.0 * dens)):
 		_ruin()
+	for n in maxi(1, roundi(area / 650.0 * dens)):
+		_hut()
 	for n in roundi(area / 320.0 * dens):
 		_rock()
 
@@ -985,6 +1031,54 @@ func _ruin() -> void:
 		for x in range(r.position.x + 1, r.end.x - 1):
 			_ground(Vector2i(x, y))
 			_indoor[y * w + x] = 1
+
+## Хижина: маленький дом со шлюзом вместо двери и окошком — единственное в поле место,
+## где могут жить мирные (они селятся только за шлюзами). Стены — камень, а при горючке
+## иногда доски.
+func _hut() -> void:
+	var rw := _rng.randi_range(5, 7)
+	var rh := _rng.randi_range(5, 6)
+	var r := Rect2i(_rng.randi_range(2, w - rw - 2), _rng.randi_range(2, h - rh - 2), rw, rh)
+	var wooden := _rng.randf() < 0.4 and bool(opt["flammable"])
+	var door_side := _rng.randi_range(0, 3)
+	var window_roll := _rng.randi_range(0, 9999)
+	if r.position.x < 2 or r.position.y < 2:
+		return
+	for q in _rooms:
+		if q.grow(2).intersects(r):
+			return
+	_rooms.append(r)
+	var wall := MCF.FEATURE_WOOD_WALL if wooden else MCF.FEATURE_WALL
+	for y in range(r.position.y, r.end.y):
+		for x in range(r.position.x, r.end.x):
+			_room_mask[y * w + x] = 1
+			var c := Vector2i(x, y)
+			if _on_edge(r, c):
+				_put(c, wall)
+			else:
+				_ground(c)
+				_indoor[y * w + x] = 1
+	var mid := Vector2i((r.position.x + r.end.x - 1) / 2, (r.position.y + r.end.y - 1) / 2)
+	var door: Vector2i = [Vector2i(mid.x, r.position.y), Vector2i(mid.x, r.end.y - 1),
+			Vector2i(r.position.x, mid.y), Vector2i(r.end.x - 1, mid.y)][door_side]
+	_ground(door)
+	_mark_door(door)
+	# Перед дверью — свободно: глыбы и изгороди ставятся уже после хижин и обходят
+	# _room_mask, так что три клетки перед порогом метим как часть хижины.
+	var out_dir := _outward(r, door)
+	var side_dir := Vector2i(out_dir.y, out_dir.x)
+	for k: int in [-1, 0, 1]:
+		var front := door + out_dir + side_dir * k
+		if _in(front):
+			_room_mask[front.y * w + front.x] = 1
+	# Окно — на стене напротив двери: изнутри видно поле, но из зоны мирного не видно
+	# (_seen_from_zones стекло не останавливает, и такие клетки им не достанутся).
+	var edge := _edge_cells(r)
+	for k in edge.size():
+		var c := edge[(window_roll + k) % edge.size()]
+		if not _is_corner(r, c) and c != door and not _near_door(c):
+			_put(c, MCF.FEATURE_GLASS)
+			break
 
 ## Глыба: неровное пятно стены радиусом в одну-две клетки.
 func _rock() -> void:
@@ -1172,13 +1266,32 @@ func _join_pockets(from: Vector2i) -> void:
 			continue
 		if not entry.has(c) or dist[i] < dist[entry[c]]:
 			entry[c] = i
+	var carved: Array[Vector2i] = []
 	for c: int in entry:
 		var j: int = entry[c]
 		while j >= 0 and dist[j] > 0:
 			if walk[j] == 0:
 				for g in _group():
-					_ground(_img(Vector2i(j % w, j / w), g))
+					var cell := _img(Vector2i(j % w, j / w), g)
+					_ground(cell)
+					carved.append(cell)
 			j = par[j]
+	# Пролом ведёт в комнату — значит, это новая дверь, а двери здесь шлюзы: иначе комнату
+	# с проломом уже не назвать запертой. Шлюз встаёт на каждый конец пролома, похожий на
+	# дверной проём (стены по бокам, проход насквозь); середина длинного тоннеля в скале —
+	# просто ход.
+	var open := _walk_mask()
+	var cut := {}
+	for cell in carved:
+		cut[cell] = true
+	for cell in carved:
+		var ends := 0
+		for d: Vector2i in N4:
+			if not cut.has(cell + d):
+				ends += 1
+		if ends >= 3 and _door_shaped(cell, open):
+			_put(cell, MCF.FEATURE_AIRLOCK)
+			_mark_door(cell)
 
 ## Соседи клетки i по четырём сторонам — в nb; возвращает, сколько их.
 func _neighbours(i: int, n: int, nb: PackedInt32Array) -> int:
@@ -1549,7 +1662,8 @@ func _fold_prefix(cells: Array, limit: int, zone: int) -> int:
 ## только туда, куда не смотрит ни одна клетка зон, и не вплотную к шлюзу. Не больше
 ## CIV_MAX на карту; при симметрии — в исходной части, остальные — её отражения.
 func _civilians() -> void:
-	var want := mini(CIV_MAX, maxi(2, roundi(w * h / 160.0 * dens)))
+	var lv := civ_level(opt)
+	var want := mini(CIV_CAP[lv], maxi(CIV_MIN[lv], roundi(w * h / 160.0 * dens * CIV_MULT[lv])))
 	if _sym > 0:
 		want = maxi(1, want / _group())
 	var near := _bytes()
@@ -1574,18 +1688,17 @@ func _civilians() -> void:
 	for s in m.spawns:
 		var c: Vector2i = s["coord"]
 		ok[c.y * w + c.x] = 0
+	# Только за шлюзами: помещение, от которого до любой зоны не дойти, не открыв шлюз.
+	var sealed := _sealed_rooms()
 	var inside: Array[Vector2i] = []
 	var outside: Array[Vector2i] = []
 	for y in h:
 		for x in w:
 			var i := y * w + x
-			if near[i] != 0 or _door[i] != 0 or seen[i] != 0:
+			if near[i] != 0 or _door[i] != 0 or seen[i] != 0 or sealed[i] == 0:
 				ok[i] = 0
 			elif ok[i] != 0 and _in_f(Vector2i(x, y)):
-				if _indoor[i] != 0:
-					inside.append(Vector2i(x, y))
-				else:
-					outside.append(Vector2i(x, y))
+				inside.append(Vector2i(x, y))
 			else:
 				ok[i] = 0
 	var placed := 0
@@ -1609,6 +1722,56 @@ func _civilians() -> void:
 				ok[p.y * w + p.x] = 0
 				placed += 1
 				group -= 1
+
+## Клетки запертых помещений: под крышей и в такой части карты, что при ЗАКРЫТЫХ шлюзах
+## от неё не дойти ни до одной клетки зон. Живущий здесь мирный отрезан шлюзами и до
+## первого открытого шлюза никого не встретит.
+func _sealed_rooms() -> PackedByteArray:
+	var walk := _walk_mask()
+	for i in w * h:
+		if m.feature_id[i] == MCF.FEATURE_AIRLOCK:
+			walk[i] = 0
+	var comp := _components(walk)
+	var exposed := {}
+	for i in w * h:
+		if _zone[i] >= 0 and comp[i] >= 0:
+			exposed[comp[i]] = true
+	var out := _bytes()
+	for i in w * h:
+		if _indoor[i] != 0 and comp[i] >= 0 and not exposed.has(comp[i]):
+			out[i] = 1
+	return out
+
+## Связные куски проходимого (по четырём сторонам): номер куска на клетку, -1 — не ходят.
+func _components(walk: PackedByteArray) -> PackedInt32Array:
+	var n := w * h
+	var comp := PackedInt32Array()
+	comp.resize(n)
+	comp.fill(-1)
+	var queue := PackedInt32Array()
+	queue.resize(n)
+	var nb := PackedInt32Array()
+	nb.resize(4)
+	var count := 0
+	for s in n:
+		if walk[s] == 0 or comp[s] != -1:
+			continue
+		comp[s] = count
+		queue[0] = s
+		var head := 0
+		var tail := 1
+		while head < tail:
+			var i := queue[head]
+			head += 1
+			var k := _neighbours(i, n, nb)
+			for t in k:
+				var j := nb[t]
+				if walk[j] != 0 and comp[j] == -1:
+					comp[j] = count
+					queue[tail] = j
+					tail += 1
+		count += 1
+	return comp
 
 ## Клетки, которые видно хоть из одной клетки зоны по прямой — ряд, столбец или ровная
 ## диагональ, как в _civ_sees_soldier; стекло взгляду не преграда. Шлюз считаем открытым:

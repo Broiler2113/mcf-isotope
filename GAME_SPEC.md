@@ -963,7 +963,14 @@ the major axis its cell in column *i* is exactly `(i, ⌈i·s − ½⌉)` with `
 cells beyond column *i* whose slope lies in `((2j−1)/2i, (2j+1)/2i]`. `_sweep_seen` walks
 the eight octants column by column, keeps the blocked slopes as merged intervals of exact
 integer fractions, marks a cell visible when its slope is outside all of them, and stops
-an octant once slopes 0…1 are all blocked. The result is the identical set, in the
+an octant once slopes 0…1 are all blocked. It works in **row ranges**, not cells: a
+blocked interval `(lo, hi]` hides exactly the rows `a·lo < b ≤ a·hi` of column *a*
+(exact integer floor division), so the visible rows are the gaps between those runs and
+each gap is written out at once as a progression of indices; the walls of a column are
+found by a byte search over a copy of the wall table in which that column is contiguous
+(transposed for the octants where it runs along a grid column). The old cell-by-cell
+sweep is kept in `tests/run_fog.gd` as a reference and must agree with it — visible and
+sensitive cells both — on 800 random boards. The result is the identical set, in the
 identical order, as the per-cell ray it replaced — `tests/run_fog.gd` checks that on 600
 random boards and on real generated maps with tanks, and a one-character change to the
 tie rule fails it on half of them. One soldier's unlimited sight on a 250×250 map went
@@ -980,6 +987,30 @@ change the terrain, `vehicle_id` does not bump `vision_version`; instead
 tells the team-fog cache that a vehicle moved. A wall turned to glass at the same
 height bumps `vision_version` from the `feature_id` setter — the height setter cannot
 see that change.
+
+**Which cached views a changed wall touches.** Sight is unlimited, so every soldier's
+window is the whole map, and invalidating cached views by window meant that any airlock
+opening anywhere recomputed every soldier's sight — with doors on every room, that was
+most actions. The sweep therefore also returns the view's **sensitive cells**: the cells
+whose slope interval `((2j−1)/2i, (2j+1)/2i]` is not wholly inside the slopes already
+blocked by nearer walls. Only a change on a sensitive cell can change that view: if a
+target behind cell *c* changes visibility, its ray runs through *c* with everything before
+*c* clear, so its slope is open at *c*'s column and lies in *c*'s interval. Cells beyond the
+column where an octant closed completely are never looked at and never marked. The cache
+drops exactly the views that list a changed cell (`_catch_up_seen`, a binary search per
+entry), keeps entries in least-recently-used order and evicts the oldest instead of
+clearing everything when it fills (8192 entries or 16 M stored cells, `SEEN_CELLS_CAP`),
+patches the wall table (`_blockers`) from the vision log instead of rebuilding it, and
+caches a vehicle's merged hull view as one entry. When an **enemy tank** moves, changes
+hands or burns, the set of tank cells a side must look past changes and so does the key
+of every view — but a view whose sensitive cells include none of the cells the tank left
+or took is still exact, and is reused under the new set without a sweep (`_reuse_under`,
+over the side's last few sets). The team counts are a flat array; a
+moved soldier's new view is added before the old one is taken away, so cells seen both
+before and after never leave the set, and the scouting memory grows only on the cells that
+just became visible. `tests/run_fog.gd` flips unmarked cells on 500 random boards and
+checks the view never changes, and compares the incremental team view with one built from
+scratch after every action of a game full of airlocks.
 
 - **`fog_enabled` defaults to `true`** on the resolver; the Setup screen turns it off
   (#12 made the checkbox default to off at the UI level). With fog disabled,
@@ -1775,9 +1806,18 @@ statement of which previews follow the mouse.
 
 ### 18.2 Undo and redo
 
-- **Undo restores a deep snapshot** (`GameState.snapshot()`). Restoration mutates *the
-  same* objects (units / vehicles / cells) so outside references — the selected unit in
-  the HUD, for instance — stay valid. Unit references inside cells are re-linked by id.
+- **Undo restores a deep snapshot** (`GameState.snapshot()`) of units, vehicles, turns and
+  roster — and, of the board, **only the cells the action touched**. While a player's
+  action resolves, `GridCell.journaling` is on and the first write to any cell field
+  stores that cell's whole previous look (`GridCell.image()`); the undo entry keeps those
+  images, and undo/redo swap them with the cells' current ones (`_counter_snapshot`). A
+  full copy of a 250×250 board was 62 500 dictionaries and ~250 ms on every click; every
+  cell field now goes through a setter so nothing can slip past the journal.
+  `tests/run_incremental.gd` plays twin games — one undoing through the journal, one
+  through full board copies — and compares every field of every cell after each of ~700
+  actions, 230 undos and 80 redos. Restoration mutates *the same* objects (units /
+  vehicles / cells) so outside references — the selected unit in the HUD, for instance —
+  stay valid.
 - Undo granularity is **one atomic step**: a single BRU tile, a single grab.
 - **Redo** (#38) re-applies a popped snapshot.
 - **Undo never crosses a turn boundary (#94).** The stack is keyed on
@@ -1864,6 +1904,25 @@ for. `_recenter_camera` ("Return to Map") picks `min(1.0, fit)` where `fit` is t
 which the whole board plus margins fits the viewport — so the button never returns the
 player to the same blindness he pressed it from. `_ensure_visible(coord)` (§14.1) pans
 without touching zoom: the scale is the player's choice.
+
+**The far plan (big maps).** Below `LOD_ZOOM` (0.35, a cell under 14 px) the board is not
+drawn cell by cell: at `ZOOM_MIN` on a 250×250 map that was ~37 000 cells and ~150 ms on
+*every* frame — every mouse move, pan step and animation tick. A child layer drawn behind
+the battle node (`LodLayer`, nearest filtering) shows three one-pixel-per-cell textures —
+terrain, the fog, and objects above the fog, the same order the cell pass draws them in —
+and follows the camera through its own transform, so panning and zooming never redraw
+it. The textures are patched pixel by pixel: terrain and objects from the cell look log
+(`GridCell.look_changes`), the fog from the resolver's visibility log
+(`take_vis_changes`), scorch marks from `FxDecals.damage_version`; they are built whole
+once (~55 ms on 250×250) and kept patched even while zoomed in, so zooming out again costs
+nothing. Units, vehicles, corpses, mines, highlights and effects are drawn on top as
+before; grid lines and height captions are left out — they are not readable at that
+scale. Closer in, the cell pass stays, with grid lines drawn per row and column instead
+of an outline per cell, no texture lookups when no replacement textures exist, and
+corpse piles from a list kept by `GridCell.corpse_version`. Measured `_draw` on a 250×250
+town: 149 ms → 0.2 ms at `ZOOM_MIN`, 17 ms → 8 ms just above `LOD_ZOOM`, 2.8 ms → 1.4 ms at
+1:1. The purchase screen got the same viewport culling (it drew all 62 500 cells every
+frame: ~500 ms → 2–8 ms).
 
 ### 18.5 Dice presentation
 
@@ -1985,6 +2044,22 @@ MainMenu → Setup → Placement → Main (battle)
   confirms readiness **automatically** the moment the host's final formation arrives.
   Units that do not fit the other zone are reported in the status line rather than
   silently dropped.
+
+  **Every side gets the same units, wherever its zone is.** The mirror used to reflect
+  the formation through the map centre, which is right only for two zones facing each
+  other; with zones side by side, in quarters or at odd angles the reflected cells fell
+  outside the other zone and whole squads were dropped. Now each zone gets the first
+  side's army carried by one of the eight grid motions (four rotations, four
+  reflections — `DIHEDRAL`) plus a shift, chosen per pair of zones
+  (`Placement._zone_transform`): first a symmetry of **the map itself** that carries the
+  first zone exactly onto that one, so every copy stands on the same ground (quarter
+  turns and diagonals only on a square map); failing that, the motion that overlaps the
+  two zones most once their centres coincide, ties going to the one that faces the
+  formation towards the map centre. Each unit lands on its carried cell or, if that is
+  taken or outside the zone, on the nearest cell where it fits; a tank's facing is carried
+  by the same motion. `tests/run_mirror_stamp.gd` checks, on left–right, quartered,
+  3-player symmetric and 3-player non-symmetric maps, that every side ends up with exactly
+  the same units — and exactly mirrored positions where the map is symmetric.
 
   **The purchase screen draws the real map (#100).** Deployment used to happen over flat
   coloured squares, so the player picked positions blind and only discovered the walls,
@@ -2113,10 +2188,11 @@ without scrolling.
 | Players | **Is** the lobby's slot count. Raising it adds AI slots in solo and Open slots when hosting; lowering it drops slots from the end, never one a guest sits in. One zone per slot, because `Slot.zone()` defaults to the slot id. |
 | Units per side | Every zone gets `CELLS_PER_UNIT` (2) cells per unit, at least `ZONE_MIN` (16): room to arrange the squad and to park a 3×3 tank. |
 | Style | Station / Town / Field / Bunker (below). |
-| Size | Small 28×20, Medium 38×28, Large 50×38, Huge 80×60, Giant 125×95, Colossal 250×250, or **Custom…** — any width and height from 16 to 250 (a row with both appears only for Custom). A *starting* size: if the armies do not fit, the map is rebuilt larger (up to `MAX_DIM`, 250×250) and the readout under the settings says so. |
+| Size | Small 28×20, Medium 38×28, Large 50×38, Huge 80×60, Giant 125×95, Colossal 250×250, or **Custom…** — any width and height from 16 up, with **no upper limit** (a row with both appears only for Custom). A *starting* size: if the armies do not fit, the map is rebuilt larger (automatic growth stops at `MAX_DIM`, 250×250; a larger custom size is kept as asked) and the readout under the settings says so. Beyond 250×250 the readout also warns what it costs: building takes seconds and a battle a lot of memory (measured ≈15 s and ≈1.3 GB at 1000×1000). |
 | Density | Sparse / Normal / Dense: rooms, houses, clutter. |
 | Layout | *Symmetrical* (off by default) — see below. |
-| Mechanics | *Space & airlocks*, *Flammable*, *Obstacles*, *Civilians* — each can be switched off on its own. |
+| Mechanics | *Space* (vacuum only — doors are airlocks either way, below), *Flammable*, *Obstacles* — each can be switched off on its own. |
+| Civilians | *None / Few / Normal / Many / Crowd* — how many neutrals, roughly (below). |
 | Seed | The same seed and settings always build the byte-identical map. *Reroll* draws a new seed; *Save as Map* writes `user://maps/random-<style>-<seed>.json` (never over an existing file), after which it is an ordinary map — in the list and in the editor. |
 
 **Styles.**
@@ -2129,21 +2205,32 @@ without scrolling.
   is reachable. A new dividing wall never ends against an existing door. Up to a fifth of
   the sectors — edge ones more often — are left empty: open space the hallways pass as
   windowed tubes. Every map, even Small, gets at least one hallway. Outside the hull is
-  space, or solid rock with Space off. With Space on, a fifth of the doorways get
-  airlocks, every doorway into a vented (zero-G) room gets one (about one vented room per
-  40), and the hull gets windows and a few exterior airlocks. Obstacles: pillars in big
-  halls, stacks of crates (wooden 2 m crates on plank decks), sandbags in hallways.
+  space, or solid rock with Space off. With Space on, about one room in 40 is vented
+  (zero-G), and the hull gets windows and a few exterior airlocks. Obstacles: pillars in
+  big halls, stacks of crates (wooden 2 m crates on plank decks), sandbags in hallways.
 - *Bunker* — the same station from the same seed, dug underground: everything outside
-  the rooms and hallways is solid rock, never vacuum (no vented room, no hull). *Space &
-  airlocks* here means only the airlocks — sealed blast doors in the doorways. With Space
-  off, a bunker and a station of the same seed are the byte-identical map.
+  the rooms and hallways is solid rock, never vacuum (no vented room, no hull), so the
+  Space toggle does nothing here. With Space off, a bunker and a station of the same seed
+  are the byte-identical map.
 - *Town* — a jittered street grid. Blocks become brick or wooden houses (doors, glass
   windows, a partition in big ones) or grass lots. Obstacles: barricades across streets
   with one gap, hedgehogs on the paving, trenches and sandbag nests in the lots. With
   Space on, the town stands on a platform with a ragged edge and holes.
-- *Field* — grass in patches, ruins, rock outcrops. Obstacles: trenches, hedgehog belts
-  (every other cell, so they can be jumped), horseshoe sandbag nests, and wooden fences
-  when Flammable is on. Space adds chasms and a ragged edge.
+- *Field* — grass in patches, ruins, rock outcrops, and huts: small 5–7 × 5–6 houses
+  (brick, or wood with Flammable on) with an airlock door, a window opposite it and a
+  doorstep that is always left clear — about one per 650 cells at Normal density.
+  Obstacles: trenches, hedgehog belts (every other cell, so they can be jumped), horseshoe
+  sandbag nests, and wooden fences when Flammable is on. Space adds chasms and a ragged
+  edge.
+
+**Every door is an airlock.** Every doorway of every room, house and hut — whatever the
+Space toggle — gets an airlock (`MapGen._seal_doors`, run right after the structure and
+before space, zones and dressing): it opens for a living soldier beside it and closes
+behind him (§9.4). A breach the sealed-floor pass cuts through a wall (below) that looks
+like a doorway — wall on both sides — gets one too. Dressing never puts an obstacle right
+next to an airlock (no crate, rock or sandbag walls a door shut) and a hut keeps its
+doorstep clear, so every door has floor to step on at both sides — `run_mapgen.gd` checks
+it on every generated map.
 
 **Symmetrical.** Off: layouts are organic. On: the map is mirrored — the left half (or
 the top-left quarter) is built and reflected, so every side fights over the same ground:
@@ -2180,16 +2267,20 @@ sealed-floor pass below, mirrored as well.
    in a handful of *Space off* town and field maps (1–23 unreachable cells); the fix
    there is a single cell, and the rest of those maps is unchanged.
 
-**Civilians are capped at 32** (`CIV_MAX`): the old rate of one per 160 cells would put
-~400 on a 250×250 map, and the whole civilian slot plays in one turn.
+**How many civilians** is a magnitude, not a number: *None / Few / Normal / Many /
+Crowd* (`MapGen.CIV_LEVELS`; Normal by default) scales the base rate of one per 160 cells
+(times density) by ×0 / 0.35 / 1 / 2.5 / 6, with at least 0 / 1 / 2 / 4 / 8 and at most
+0 / 12 / 32 / 80 / 200 per map (`CIV_MULT`, `CIV_MIN`, `CIV_CAP`). A Huge town measured
+0 / 11 / 30 / 75 / 180. Old saved options with the on/off switch read as Normal / None.
 
-**Neutrals start dormant.** A civilian wakes the moment it sees a soldier along a clear
-row, column or diagonal, or when a neighbouring cell changes — an airlock opening
-included (§14). Placed carelessly, they woke on the first action of the match. Generated
-civilians therefore go only on cells that no zone cell can see (glass does not block
-sight; airlocks count as open, because a soldier deployed beside one opens it) and never
-next to an airlock — on top of the old rules: clear floor, mostly indoors, 3+ cells from
-every zone.
+**Neutrals start sealed and dormant.** A civilian wakes the moment it sees a soldier along
+a clear row, column or diagonal, or when a neighbouring cell changes — an airlock opening
+included (§14). Generated civilians live only in **sealed rooms** (`_sealed_rooms`):
+indoor floor from which no deployment zone can be reached without passing an airlock.
+Nobody can see them and nothing next to them changes until a soldier opens their door —
+so no action at the start of the match can wake them, and waking a room is a choice. On
+top of that: never in a doorway, never next to an airlock, never on a cell a zone cell
+can see, 3+ cells from every zone, in clusters of one to three.
 
 **Big maps stay responsive.** Everything that walks the whole map is linear in its cells
 (summed-area table for anchor candidates, a heap for zone fronts, one directional sweep
@@ -2210,15 +2301,18 @@ Regression cover: `tests/run_mapgen.gd` checks, over every style, the sizes up t
 full and Giant/Colossal once each, 2–8 sides, large armies, each toggle, custom sizes and
 Symmetrical with 2, 3, 4, 5, 6 and 8 sides, that the promises above hold — same seed, same
 map; equal zones that fit the squads; **no walkable cell sealed off** on the real board;
-every airlock with somewhere to step on both sides; toggles honoured; symmetric maps equal
+every doorway an airlock, with somewhere to step on both sides, Space on or off; every
+civilian sealed in behind airlocks and the civilian levels in increasing order; custom
+sizes beyond 250×250 kept; toggles honoured; symmetric maps equal
 to their reflections cell for cell, zone for zone and civilian for civilian; a bunker
 without vacuum, walled in rock, and identical to the station of its seed with Space off;
 stations and bunkers with rooms and hallways in proportion to their size; Colossal built
 within a time budget; civilians under the cap; and, with every zone cell occupied by a
 soldier, not one civilian awake after the first action. It also plays a few AI-vs-AI
 rounds per style. `tests/run_lobby_maps.gd` drives the real lobby: the row, the settings,
-Players ↔ slots, zone sizing, the start handoff, *Save as Map*, the bunker, Custom size up
-to 250×250, Symmetrical and the delayed rebuild of big maps.
+Players ↔ slots, zone sizing, the start handoff, *Save as Map*, the bunker, Custom size
+with no upper limit, the Civilians selector, Symmetrical and the delayed rebuild of big
+maps.
 
 ---
 
@@ -2793,6 +2887,7 @@ number appears elsewhere in this document it is because the source comments cite
 | 103 | One unit per cell is enforced by the board itself — `Grid.place` and `move_occupant` refuse to overwrite an occupant and report failure, so no two soldiers, civilians or AI units can ever share a tile (§2.2); hovering a green move tile draws the **cheapest actual route** to it out of the Dijkstra tree, and every green tile is labelled with what standing there costs out of the movement total (§18.3); a marksman's laser no longer reaches a man in a trench from a tile that is not one, at any range including adjacent (§6.6, §7.3); NPC civilians and the army are driven by **one brain** — the second, cell-at-a-time civilian AI is deleted and a civilian is now an `AIController` with the Neutral owner, so it plans, fragments its movement, fires partial bursts and hauls corpses by the army's rules (§14, §17); the AI uses fragmented movement and partial bursts — `move_credit` is a spendable budget, a step costs score, and a burst orders `ceil(1/p)` bullets instead of the whole magazine (§17.3); an anti-tank sapper cut off by a wall **blasts through it** instead of shuffling along it (§17.3, §7.1); the AI and civilians pick up bodies that block the road and **stack them aside into piles**, the fifth forming a corpse wall (§17.3, §8.4); at least 80% of an army must act each turn and **every** civilian must, enforced by a second forced pass over whoever the plan left idle (§17.2); Player 1 can be an AI too, so AI-vs-AI matches run from Setup or a mid-battle toggle (§17.4); and the camera zooms out to 0.12 so a 60×40 board fits on one screen (§18.4) |
 | 104 | The map editor can be left the way it was entered: the **"To Demo Game"** button is gone, replaced by **"Main Menu"**, which clears `MapHandoff.pending` and returns to `MainMenu.tscn` instead of dumping the designer into a demo battle on the built-in roster (§19) |
 | 105 | A marksman firing **from** a trench is as boxed in as a marksman firing **into** one: the laser cannot climb out of the ditch any more than it could drop into it, so from the trench floor the only reachable target is one lying in the **same continuous run** of trench, along a straight line with no gap — a bend or a break means the beam hits the earth wall. The trench is now symmetric cover against the beam instead of a firing position that ignored its own walls (§6.6, §7.3) |
+| 113 | Airlocks, civilians and Colossal maps — every door of every room, house and hut is an airlock whatever the Space toggle; civilians come in five magnitudes (None to Crowd) and live only in rooms sealed by airlocks, so nothing at the start of a match can wake them; a custom map size has no upper limit; mirrored placement carries the army zone to zone by the map's own symmetry (or the best-overlapping grid motion), so every side gets the same units wherever its zone is (§19, §20.2). Performance only, no rule changed: undo journals the touched cells instead of copying the board (§18.2); a zoomed-out battle screen draws the board as cached textures and the purchase screen culls to the viewport (§18.4); fog drops only the cached views a change can reach (§11); objects, mines, stations, airlocks and fire are indexed and patched from a cell log; the AI's distance field walks a cached passability mask (§27.21). A 91-action Hard-vs-Hard game on a 250×250 town: 31.2 s → 1.5 s |
 | 112 | Batch 17 (the "Isotope issues fix 8" report) — boarding a shuttle or a borg is free and allowed at 0 AP, so a fresh operator has the borg's full 3 AP (§16.7, §16.8); the move budget is one function (`move_budget`, `nearest_reachable`, `can_move`) shared by the screen, the group order and the resolver, and a group mover whose target was cut off by a squadmate falls back to the nearest reachable cell inside the resolver (§18.3); the host answers a refused guest intent with `K_DENIED` so the guest sees why (§22.1), and the Laser button explains its 2-AP gate; the flame jet is one geometry (`flame_cells`) for the shot and the preview, and a splash side cut short by the wall hands its cells to the other side so the jet always burns six (§7.2); a player's bought civilian is a target but not a threat to neutrals, so they shoot it instead of fleeing its lane (§14); every vehicle leaves a wreck and an explosion scorches the floor through `_blast` (§16.5); the drone operator's "!" means "station deployed" (§9.3); drawings gain *Share with everyone*, *Hide my drawings* and *Hide all drawings*, an AI-driven side is never the viewer's own, and a leaver's strokes are dropped (§18.6); factions replace colours with faction-suffixed soldier art, corpses are the soldier's art turned 90° clockwise, walls autotile from a 4×4 sheet, and real blood decals ship (§21) |
 | 111 | Performance only, no rule changed — the line-of-sight ray in `_seen_from` reads a flat per-cell "blocks sight" byte table (rebuilt with the LOS cache on every `vision_version` step) instead of fetching the `GridCell` object twice per step; the visible set is bit-identical (verified against the old routine on the town map, before and after a wall fall and a glass build), and a cold recompute of one side's view on the town map drops from ~1.0 s to ~0.45 s — the freeze at match start, on *Load Game* and on every `K_RESYNC` with fog on (§11) |
 | 110 | General sweep (random-map fuzz, random-intent fuzz, lockstep twin) — six sim fixes, no rule changed: `StateCodec` restores a vehicle's **saved hull** instead of a fresh one (every load and every `K_RESYNC` used to heal damaged tanks, shuttles and borgs to full); a refused intent no longer touches the board (`dig_credits`, `dragging`, `combat_started` were cleared **before** validation, so a host-refused shot silently cost an engineer their trench series and desynced the guest); zero-g recoil and knockback skip seated passengers (§12, §16.7 — they were thrown off the hull while still "aboard"); a borg operator must climb out before boarding another vehicle, and `VehicleMove/Turn/Cannon` are refused for a borg outright (§16.8 — a round boundary gave the borg a crew-AP pool and the hull could be driven away from its operator, leaving a ghost footprint); an exploded borg clears its dead operator's `borg_id`; `Vehicle.seats` is allocated on construction; `VehicleDB.tank.durability` now reads 8 like `VEHICLE_COMPONENTS` (§16.1). Tests: `run_codec` spawns damaged vehicles, `run_shuttle` fires in zero-g, `run_borg` tries the tank from inside a borg, `run_player_actions` refuses a shot mid-dig on the host only. |
@@ -3232,3 +3327,50 @@ cannot choose a destination without knowing where it can walk. The next real gai
 have to come from calling the spill *less often*, not from making it cheaper; the spill
 itself is now within ~1.4× of where a bucket queue could take it, and §27.2 forbids the
 bucket queue.
+
+### 27.21 Colossal maps (250×250) — the whole map is never walked per action
+
+The Colossal preset and unlimited custom sizes made one pattern the dominant cost: code
+that touched every cell of the board — 62 500 on 250×250 — once per action, per frame or
+per AI decision, often in places where a 50×38 map made it invisible. The rule now is that
+nothing walks the whole map after the first time; it is patched from a log.
+
+- **Two cell logs.** Besides the vision log (§27.9), `GridCell` keeps a *look* log — every
+  change of floor, height, fire, space, object, dirt or welding, as `(x, y)` pairs behind
+  `look_version` / `look_log_base` — and a `corpse_version` counter. Holders remember the
+  version they read up to and patch just those cells; a holder that fell behind the start
+  of a log (it holds 2048 changes) rebuilds once.
+- **One object index for everyone.** `GameActionResolver._feature_cells_of(grid, fid)` —
+  static, because the AI builds a fresh resolver for every decision — lists the cells of
+  every object in board order, and also the burning cells. It serves the known mines of
+  every movement spill (`known_mine_cells` scanned the board per call: ~16 ms), trenches,
+  drone stations, the airlock list and fire spread, which now visits burning cells only,
+  in the same order, so the dice fall the same.
+- **Airlocks — candidates, not a sweep.** `update_airlocks` runs twice per move. Only an
+  airlock that was open after the last pass, stands next to a living soldier, or crossed
+  the wall threshold behind the pass's back (the vision log: undo, blasts, welding) can
+  change state; those are processed in list order, so civilians wake in the same order.
+- **Undo journal** (§18.2), **fog precision** (§11), **far-plan textures** (§18.4).
+- **The AI's distance field** walks `AIController._walk_mask` — a byte per cell of
+  `walkable_terrain()`, framed by a border of walls so no bounds checks are needed, shared
+  by every AI and patched from the look log — with neighbours as fixed index offsets:
+  ~140 ms → ~55 ms per field.
+
+`tests/run_incremental.gd` holds all of this to account: twin games (one incremental, one
+reference) compared field by field after every action, the object and fire indexes and the
+walk mask against a fresh scan, and the distance field against a plain BFS.
+
+| 250×250 town, Hard vs Hard, 10 soldiers a side, 91 actions | Before | After |
+|---|---:|---:|
+| Whole run | 31.2 s | 1.5 s |
+| Worst single action (the first: every cache cold) | 3.2 s | 0.18 s |
+| Undo snapshot per player action | ~280 ms | ~0.2 ms + touched cells |
+| Movement spill (`reachable_for`) | ~16 ms | ~0.5 ms |
+| Viewer fog after an action (average) | ~45 ms | ~5 ms |
+| AI decision (average) | ~48 ms | ~7 ms |
+| Battle screen `_draw` at `ZOOM_MIN` | 149 ms | 0.2 ms |
+| Purchase screen `_draw` | ~500 ms | 2–8 ms |
+
+With a tank a side the same town runs 96 actions in 1.4 s and an open **Field** Colossal
+98 in 2.0 s; the largest fog step left is one's own tank moving on open ground (~90 ms —
+nine new viewpoints, each a real sweep), where it was ~430 ms.

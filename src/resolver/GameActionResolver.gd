@@ -122,7 +122,12 @@ func resolve(intent: Intent) -> ActionResult:
 	var top := _resolve_depth == 1
 	var turn_before := _turn_key()
 	var undoable := top and _undoable_side(state.active_player())
-	var pre_snap: Dictionary = state.snapshot() if undoable else {}
+	# Снимок для отката — без клеток: их прежний вид собирает журнал GridCell по ходу
+	# действия, ровно для тронутых. Копия всей доски 250×250 стоила ~250 мс на щелчок.
+	var pre_snap: Dictionary = state.snapshot(false) if undoable else {}
+	if top:
+		GridCell.journal = {}
+		GridCell.journaling = undoable
 	# Запись повтора (M12). Пишем ровно то же, что хост шлёт клиенту, — и тем же
 	# способом. Условие record_enabled здесь не формальность: в сетевой партии журнал
 	# уже ведёт NetGame, и второй begin_record отобрал бы у него броски действия.
@@ -148,6 +153,11 @@ func resolve(intent: Intent) -> ActionResult:
 		if result.ok:
 			replay_recorder.on_resolved(intent, rolls)
 	_resolve_depth -= 1
+	if top:
+		GridCell.journaling = false
+		if undoable:
+			pre_snap["cells"] = GridCell.journal
+		GridCell.journal = {}
 	if top and result.ok:
 		# Новое действие обрывает откатанную ветку — повторять больше нечего (#38).
 		_redo_stack.clear()
@@ -162,8 +172,9 @@ func _resolve_undo(intent: UndoIntent) -> ActionResult:
 		return ActionResult.fail("Not your turn")
 	if _undo_stack.is_empty():
 		return ActionResult.fail("Nothing to undo")
-	_redo_stack.append(state.snapshot())
-	state.restore(_undo_stack.pop_back())
+	var snap: Dictionary = _undo_stack.pop_back()
+	_redo_stack.append(_counter_snapshot(snap))
+	state.restore(snap)
 	update_airlocks()
 	return ActionResult.success(["— undo —"])
 
@@ -172,10 +183,22 @@ func _resolve_redo(intent: RedoIntent) -> ActionResult:
 		return ActionResult.fail("Not your turn")
 	if _redo_stack.is_empty():
 		return ActionResult.fail("Nothing to redo")
-	_undo_stack.append(state.snapshot())
-	state.restore(_redo_stack.pop_back())
+	var snap: Dictionary = _redo_stack.pop_back()
+	_undo_stack.append(_counter_snapshot(snap))
+	state.restore(snap)
 	update_airlocks()
 	return ActionResult.success(["— redo —"])
+
+## Обратный снимок к snap: доска как сейчас, а из клеток — ровно те, что snap вернёт.
+## Прочие клетки между двумя снимками не менялись: каждую правку во время действия
+## ловит журнал GridCell, а откат с повтором кладут клетки только из снимков.
+func _counter_snapshot(snap: Dictionary) -> Dictionary:
+	var now := state.snapshot(false)
+	var cells := {}
+	for c: GridCell in snap["cells"]:
+		cells[c] = c.image()
+	now["cells"] = cells
+	return now
 
 func _dispatch(intent: Intent) -> ActionResult:
 	update_airlocks()  # состояние шлюзов зависит от текущих позиций (§3.11)
@@ -2639,11 +2662,9 @@ func _detonate_mine(coord: Vector2i, victim: UnitInstance, res: ActionResult) ->
 ## эти клетки; противотанковые мины сюда не входят — пехоте они не страшны.
 func known_mine_cells(owner: int) -> Dictionary:
 	var out: Dictionary = {}
-	for c: GridCell in state.grid.cells_flat():
-		if c.feature_id != MCF.FEATURE_MINE:
-			continue
-		if mine_visible_to(owner, c.coord):
-			out[c.coord] = true
+	for coord: Vector2i in _feature_cells(MCF.FEATURE_MINE):
+		if mine_visible_to(owner, coord):
+			out[coord] = true
 	return out
 
 ## Разлив движения для бойца с обходом известных ему мин (batch 12 #4). Все, кто
@@ -2692,22 +2713,97 @@ func reachable_for(unit: UnitInstance, budget: int) -> Movement.Reachability:
 		avoid = merged
 	return Movement.reachable_for(state.grid, unit, budget, avoid)
 
-var _trench_cache: Array = []
-var _trench_cache_ver: int = -1
-var _trench_cache_grid: int = 0
-
 func _trench_cells() -> Array:
-	var gid := state.grid.get_instance_id()
-	if _trench_cache_ver == GridCell.feature_version and _trench_cache_grid == gid:
-		return _trench_cache
-	_trench_cache = []
-	for y in state.grid.height:
-		for x in state.grid.width:
-			if state.grid.cell_fast(x, y).feature_id == MCF.FEATURE_TRENCH:
-				_trench_cache.append(Vector2i(x, y))
-	_trench_cache_ver = GridCell.feature_version
-	_trench_cache_grid = gid
-	return _trench_cache
+	return _feature_cells(MCF.FEATURE_TRENCH)
+
+## Клетки с объектом fid в порядке обхода сетки. Индекс общий на все резолверы (static):
+## ИИ заводит новый резолвер на КАЖДОЕ решение. Собирается одним проходом по карте на новой
+## сетке, а дальше правится по журналу вида клеток (GridCell.look_changes) — только
+## клетки, где объект сменился. Прежде known_mine_cells() перебирала все 62 500 клеток
+## карты 250×250 на КАЖДЫЙ разлив хода, а шлюзы и станции пересобирались полным проходом
+## на любую стройку.
+##
+## Заодно индекс держит горящие клетки (_burning_cells_of): огонь пишется в тот же журнал.
+##
+## Отдаваемый массив — сам индекс: его читают сразу и не держат через действие.
+static var _feature_index: Dictionary = {}   # fid -> Array[Vector2i] в порядке обхода
+static var _feature_at: Dictionary = {}      # Vector2i -> fid
+static var _feature_rev: Dictionary = {}     # fid -> номер правки его списка
+static var _burning: Array = []              # горящие клетки в порядке обхода
+static var _feature_grid: int = 0
+static var _feature_look: int = -1
+
+static func _burning_cells_of(grid: Grid) -> Array:
+	_feature_sync(grid)
+	return _burning
+
+func _feature_cells(fid: String) -> Array:
+	return _feature_cells_of(state.grid, fid)
+
+static func _feature_cells_of(grid: Grid, fid: String) -> Array:
+	_feature_sync(grid)
+	return _feature_index.get(fid, [])
+
+static func _feature_sync(grid: Grid) -> void:
+	var gid := grid.get_instance_id()
+	if gid != _feature_grid or _feature_look < GridCell.look_log_base:
+		# Правка — и у тех объектов, что исчезли с карты совсем: их списки тоже сменились.
+		for fid: String in _feature_index:
+			_feature_rev[fid] = int(_feature_rev.get(fid, 0)) + 1
+		_feature_index = {}
+		_feature_at = {}
+		_burning = []
+		for c: GridCell in grid.cells_flat():
+			if c.feature_id != "":
+				if not _feature_index.has(c.feature_id):
+					_feature_index[c.feature_id] = []
+				_feature_index[c.feature_id].append(c.coord)
+				_feature_at[c.coord] = c.feature_id
+			if c.on_fire:
+				_burning.append(c.coord)
+		for fid: String in _feature_index:
+			_feature_rev[fid] = int(_feature_rev.get(fid, 0)) + 1
+		_feature_grid = gid
+		_feature_look = GridCell.look_version
+		return
+	if _feature_look == GridCell.look_version:
+		return
+	var ch := GridCell.look_changes
+	var i: int = (_feature_look - GridCell.look_log_base) * 2
+	while i < ch.size():
+		var at := Vector2i(ch[i], ch[i + 1])
+		i += 2
+		if not grid.in_bounds(at):
+			continue
+		var cell := grid.cell(at)
+		var fk := _burning.bsearch_custom(at, _grid_order)
+		var listed: bool = fk < _burning.size() and _burning[fk] == at
+		if cell.on_fire and not listed:
+			_burning.insert(fk, at)
+		elif listed and not cell.on_fire:
+			_burning.remove_at(fk)
+		var now := cell.feature_id
+		var was: String = _feature_at.get(at, "")
+		if now == was:
+			continue
+		if was != "":
+			var list: Array = _feature_index[was]
+			var k := list.bsearch_custom(at, _grid_order)
+			if k < list.size() and list[k] == at:
+				list.remove_at(k)
+			_feature_rev[was] = int(_feature_rev.get(was, 0)) + 1
+			_feature_at.erase(at)
+		if now != "":
+			if not _feature_index.has(now):
+				_feature_index[now] = []
+			var list2: Array = _feature_index[now]
+			list2.insert(list2.bsearch_custom(at, _grid_order), at)
+			_feature_rev[now] = int(_feature_rev.get(now, 0)) + 1
+			_feature_at[at] = now
+	_feature_look = GridCell.look_version
+
+static func _grid_order(a: Vector2i, b: Vector2i) -> bool:
+	return a.y < b.y or (a.y == b.y and a.x < b.x)
 
 ## Видит ли сторона эту мину. Своя мина видна всегда; чужая — пока держится подсветка.
 func mine_visible_to(owner: int, coord: Vector2i) -> bool:
@@ -2822,39 +2918,38 @@ func breakable_cells(actor: UnitInstance) -> Array:
 ## Расползается только огонь, зажжённый стороной owner (#45); owner = -1 — весь огонь.
 func advance_fire(owner: int = -1, res: ActionResult = null) -> void:
 	var ignite: Dictionary = {}
-	for y in state.grid.height:
-		for x in state.grid.width:
-			var c := Vector2i(x, y)
-			var src := state.grid.cell(c)
-			if not src.on_fire:
+	# Горящие клетки — из индекса, в том же порядке обхода, что и прежний перебор всей
+	# карты: от него зависит порядок бросков. Карта 250×250 — 62 500 клеток на каждую
+	# передачу хода, даже когда не горит ничего.
+	for c: Vector2i in _burning_cells_of(state.grid):
+		var src := state.grid.cell(c)
+		if owner != -1 and src.fire_owner != owner:
+			continue
+		# Каждая горящая клетка бросает розжиг на своих 4 ортогональных соседей.
+		for n in _ortho4(c):
+			if ignite.has(n):
 				continue
-			if owner != -1 and src.fire_owner != owner:
+			var ncell := state.grid.cell(n)
+			if ncell.on_fire or _fire_blocked(ncell):
 				continue
-			# Каждая горящая клетка бросает розжиг на своих 4 ортогональных соседей.
-			for n in _ortho4(c):
-				if ignite.has(n):
-					continue
-				var ncell := state.grid.cell(n)
-				if ncell.on_fire or _fire_blocked(ncell):
-					continue
-				# Клетка под пожаротушительной гранатой (#19): пассивный разлив в неё
-				# не идёт. Бросок при этом НЕ делается — иначе заглушённая клетка
-				# съедала бы кубики и сдвигала весь дальнейший поток случайности.
-				if state.turns.round_number < ncell.fire_suppressed_until:
-					continue
-				# Живой не-огнеупорный боец рядом с пламенем загорается СРАЗУ, без броска
-				# и независимо от того, горюч ли пол под ним (issue #9): огонь перекидывается
-				# на человека, а не только на траву. Клетка занимается огнём, apply-цикл
-				# ниже убивает бойца тем же путём, что и на любой загоревшейся клетке.
-				var occ := ncell.occupant
-				if occ != null and occ.is_alive() and not is_fireproof(occ):
-					ignite[n] = src.fire_owner
-					continue
-				var need := fire_need(ncell)
-				if need > 6:
-					continue  # не горит никогда — кубик не бросаем
-				if state.dice.roll_d6() >= need:
-					ignite[n] = src.fire_owner
+			# Клетка под пожаротушительной гранатой (#19): пассивный разлив в неё
+			# не идёт. Бросок при этом НЕ делается — иначе заглушённая клетка
+			# съедала бы кубики и сдвигала весь дальнейший поток случайности.
+			if state.turns.round_number < ncell.fire_suppressed_until:
+				continue
+			# Живой не-огнеупорный боец рядом с пламенем загорается СРАЗУ, без броска
+			# и независимо от того, горюч ли пол под ним (issue #9): огонь перекидывается
+			# на человека, а не только на траву. Клетка занимается огнём, apply-цикл
+			# ниже убивает бойца тем же путём, что и на любой загоревшейся клетке.
+			var occ := ncell.occupant
+			if occ != null and occ.is_alive() and not is_fireproof(occ):
+				ignite[n] = src.fire_owner
+				continue
+			var need := fire_need(ncell)
+			if need > 6:
+				continue  # не горит никогда — кубик не бросаем
+			if state.dice.roll_d6() >= need:
+				ignite[n] = src.fire_owner
 	for c: Vector2i in ignite:
 		var cell := state.grid.cell(c)
 		# Новая клетка наследует поджигателя — цепочка остаётся привязана к своей стороне.
@@ -3050,6 +3145,9 @@ static var _seen_grid: int = 0
 ## при старте партии, загрузке и K_RESYNC. Байт из PackedByteArray вдвое дешевле, а
 ## результат тот же бит в бит. Собирается заново вместе с кешем — по тем же условиям.
 static var _blockers: PackedByteArray = PackedByteArray()
+## Та же таблица, транспонированная (x·высота + y): в ней сплошняком лежат столбцы сетки,
+## по которым обход ищет стены октантов |dx| ≥ |dy| (_sweep). Правится вместе с основной.
+static var _blockers_t: PackedByteArray = PackedByteArray()
 
 ## Пересобрать таблицу блокировщиков по текущему рельефу. Условие — в точности то,
 ## что проверяет луч: стена (высота 2), но не стекло; корпус машины луч не рвёт.
@@ -3058,15 +3156,69 @@ static func _rebuild_blockers(grid: Grid) -> void:
 	var gh := grid.height
 	_blockers.resize(gw * gh)
 	_blockers.fill(0)
+	_blockers_t.resize(gw * gh)
+	_blockers_t.fill(0)
 	for y in gh:
 		var row := y * gw
 		for x in gw:
 			var cell := grid.cell_fast(x, y)
 			if cell.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(cell.feature_id):
 				_blockers[row + x] = 1
+				_blockers_t[x * gh + y] = 1
 ## Потолок кеша: за длинный бой в нём оседает по записи на каждую позицию, где кто-то
 ## постоял, и адресная чистка (проход по всем ключам) начинает стоить дороже пересчёта.
 const SEEN_CACHE_CAP := 8192
+## И потолок по объёму: на карте 250×250 с безграничным обзором одна запись — до 62 500
+## клеток, и восемь тысяч таких записей — это гигабайты. 16 млн клеток — 64 МБ.
+const SEEN_CELLS_CAP := 16_000_000
+static var _seen_cells: int = 0
+## Чувствительные клетки каждой записи кеша (см. _sweep): ключ тот же, что в _seen_cache.
+static var _seen_sens: Dictionary = {}
+
+## Положить обзор в кеш. Кеш держится в порядке давности использования (попадание
+## переставляет запись в конец), и переполненный теряет самые давние записи, а не
+## обнуляется целиком: иначе раз в пару сотен шагов вся армия пересчитывала бы обзор разом.
+static func _store_seen(key: Vector4i, out: PackedInt32Array, sens: PackedInt32Array) -> void:
+	_seen_cache[key] = out
+	_seen_sens[key] = sens
+	_seen_cells += out.size() + sens.size()
+	if _seen_cache.size() <= SEEN_CACHE_CAP and _seen_cells <= SEEN_CELLS_CAP:
+		return
+	for old: Vector4i in _seen_cache.keys():
+		if _seen_cache.size() <= SEEN_CACHE_CAP / 2 and _seen_cells <= SEEN_CELLS_CAP / 2:
+			break
+		_drop_seen(old)
+
+static func _drop_seen(key: Vector4i) -> void:
+	_seen_cells -= (_seen_cache[key] as PackedInt32Array).size() \
+			+ (_seen_sens.get(key, PackedInt32Array()) as PackedInt32Array).size()
+	_seen_cache.erase(key)
+	_seen_sens.erase(key)
+
+static func _clear_seen() -> void:
+	_seen_cache.clear()
+	_seen_sens.clear()
+	_seen_cells = 0
+
+## Попадание: запись переезжает в конец порядка давности.
+static func _touch_seen(key: Vector4i, hit: PackedInt32Array) -> void:
+	_seen_cache.erase(key)
+	_seen_cache[key] = hit
+
+## Поправить таблицу стен по журналу обзора: только клетки, пересекавшие порог стены
+## после версии from_version. Журнал общий на все сетки, поэтому клетку перечитываем с
+## НАШЕЙ сетки — чужая запись просто перепроверит свою же клетку.
+static func _patch_blockers(grid: Grid, from_version: int) -> void:
+	var changes := GridCell.vision_changes
+	var gw := grid.width
+	var i: int = (from_version - GridCell.vision_log_base) * 2
+	while i < changes.size():
+		var c := grid.cell(Vector2i(changes[i], changes[i + 1]))
+		if c != null:
+			var b := 1 if c.blocks_sight() else 0
+			_blockers[c.coord.y * gw + c.coord.x] = b
+			_blockers_t[c.coord.x * grid.height + c.coord.y] = b
+		i += 2
 
 ## Клетки, видимые с coord при радиусе r. Порядок — dy снаружи, dx внутри, оба по
 ## возрастанию: тот же, в котором их складывал прежний двойной цикл team_visible_coords.
@@ -3080,21 +3232,26 @@ const SEEN_CACHE_CAP := 8192
 ## окна не выходит. Поэтому изменение в клетке (cx, cy) обесценивает ровно те записи,
 ## чьё окно её накрывает, — остальные остаются в силе. Из-за этого рухнувшая стена стоит
 ## пересчёта обзора нескольким бойцам, а не всей армии.
-static func _catch_up_seen(from_version: int) -> void:
+##
+## Точнее окна — список чувствительных клеток записи (_sweep): при безграничном обзоре
+## окно у всех — вся карта, а стену в тени чужих стен обзор просто не замечает.
+static func _catch_up_seen(from_version: int, gw: int) -> void:
 	var changes := GridCell.vision_changes
-	var start: int = (from_version - GridCell.vision_log_base) * 2
-	var n := changes.size()
+	var at := PackedInt32Array()
+	var i: int = (from_version - GridCell.vision_log_base) * 2
+	while i < changes.size():
+		at.append(changes[i + 1] * gw + changes[i])
+		i += 2
 	var doomed: Array = []
 	for key: Vector4i in _seen_cache:
-		var r: int = key.z
-		var i := start
-		while i < n:
-			if absi(changes[i] - key.x) <= r and absi(changes[i + 1] - key.y) <= r:
+		var sens: PackedInt32Array = _seen_sens.get(key, PackedInt32Array())
+		for v: int in at:
+			var k := sens.bsearch(v)
+			if k < sens.size() and sens[k] == v:
 				doomed.append(key)
 				break
-			i += 2
 	for key: Vector4i in doomed:
-		_seen_cache.erase(key)
+		_drop_seen(key)
 
 ## Корпуса танков в обзоре. Танк — единственная машина, которая закрывает обзор, и
 ## закрывает он его только ВРАГУ (не своим и не союзникам): свой экипаж и пехота вокруг
@@ -3109,7 +3266,7 @@ static func _catch_up_seen(from_version: int) -> void:
 static var _tank_sigs: Dictionary = {}       # PackedInt32Array (клетки) -> номер
 static var _tank_sig_cells: Dictionary = {}  # номер -> PackedInt32Array
 static var _tank_sig_next: int = 1
-static var _tank_masks: Dictionary = {}      # номер -> _blockers с корпусами танков
+static var _tank_masks: Dictionary = {}      # номер -> [_blockers, _blockers_t] с корпусами танков
 
 ## Номер набора корпусов танков, враждебных стороне `viewer`; 0 — таких нет (или смотрит
 ## «никто»: только рельеф).
@@ -3140,20 +3297,25 @@ func _tank_sig(viewer: int) -> int:
 		_tank_sig_cells[id] = cells
 	return id
 
-## Таблица блокировщиков для набора `sig`: рельеф плюс корпуса этих танков.
-static func _tank_mask(sig: int) -> PackedByteArray:
+## Пара [таблица, транспонированная таблица] блокировщиков для набора `sig`: рельеф плюс
+## корпуса этих танков. gh — высота сетки (для транспонированных индексов).
+static func _tank_masks_of(sig: int, gh: int) -> Array:
 	if sig == 0:
-		return _blockers
+		return [_blockers, _blockers_t]
 	var hit: Variant = _tank_masks.get(sig)
 	if hit != null:
 		return hit
 	if _tank_masks.size() > 64:
 		_tank_masks.clear()
 	var mask := _blockers.duplicate()
+	var mask_t := _blockers_t.duplicate()
+	var gw := mask.size() / gh
 	for i: int in _tank_sig_cells[sig]:
 		mask[i] = 1
-	_tank_masks[sig] = mask
-	return mask
+		mask_t[(i % gw) * gh + i / gw] = 1
+	var pair := [mask, mask_t]
+	_tank_masks[sig] = pair
+	return pair
 
 func _seen_from(coord: Vector2i, r: int, viewer: int = -1) -> PackedInt32Array:
 	# Смотрящий вне поля (сидит в машине, coord = OFFBOARD) не видит ничего: лучи из
@@ -3161,20 +3323,7 @@ func _seen_from(coord: Vector2i, r: int, viewer: int = -1) -> PackedInt32Array:
 	# страховка на будущих вызывающих (issue 2).
 	if not state.grid.in_bounds(coord):
 		return PackedInt32Array()
-	var gid := state.grid.get_instance_id()
-	if _seen_version != GridCell.vision_version or _seen_grid != gid:
-		# Сброс целиком — только когда точечная инвалидация невозможна: сменилась сетка,
-		# либо наша версия старше журнала (он обнулялся). Иначе выкидываем адресно.
-		# Разросшийся кеш тоже проще обнулить, чем перебирать его на каждое изменение.
-		if _seen_grid != gid or _seen_version < GridCell.vision_log_base \
-				or _seen_cache.size() > SEEN_CACHE_CAP:
-			_seen_cache.clear()
-		else:
-			_catch_up_seen(_seen_version)
-		_seen_version = GridCell.vision_version
-		_seen_grid = gid
-		_rebuild_blockers(state.grid)
-		_tank_masks.clear()   # маски — рельеф плюс танки: рельеф сменился
+	_sync_seen()
 	var grid := state.grid
 	var gw := grid.width
 	var gh := grid.height
@@ -3187,10 +3336,81 @@ func _seen_from(coord: Vector2i, r: int, viewer: int = -1) -> PackedInt32Array:
 	var key := Vector4i(coord.x, coord.y, r, sig)
 	var hit: Variant = _seen_cache.get(key)
 	if hit != null:
+		_touch_seen(key, hit)
 		return hit
-	var out := _sweep_seen(coord.x, coord.y, r, _tank_mask(sig), gw, gh)
-	_seen_cache[key] = out
-	return out
+	var same: Variant = _reuse_under(key, viewer)
+	if same != null:
+		return same
+	var masks := _tank_masks_of(sig, gh)
+	var res := _sweep(coord.x, coord.y, r, masks[0], gw, gh, masks[1])
+	_store_seen(key, res[0], res[1])
+	return res[0]
+
+## Вражеский танк переехал, сменил хозяина или сгорел — номер набора танков у стороны
+## стал другим, и ключ обзора тоже. Но обзор из этой точки меняется, только если одна из
+## клеток, где танк был или стал, для него чувствительна (_sweep): иначе вся перемена
+## лежит в чужой тени. Тогда запись под прежним номером годится и под новым — без обхода.
+## Прежние номера — несколько последних, под которыми смотрела эта сторона.
+static var _sig_history: Dictionary = {}   # viewer -> Array номеров, новый последним
+const SIG_HISTORY := 4
+
+func _reuse_under(key: Vector4i, viewer: int) -> Variant:
+	var hist: Array = _sig_history.get(viewer, [])
+	if hist.is_empty() or hist[hist.size() - 1] != key.w:
+		hist.erase(key.w)
+		hist.append(key.w)
+		if hist.size() > SIG_HISTORY:
+			hist.pop_front()
+		_sig_history[viewer] = hist
+	var now: Variant = _tank_sig_cells.get(key.w, PackedInt32Array() if key.w == 0 else null)
+	if now == null:
+		return null
+	for h in range(hist.size() - 2, -1, -1):
+		var prev: int = hist[h]
+		var old_key := Vector4i(key.x, key.y, key.z, prev)
+		var old: Variant = _seen_cache.get(old_key)
+		if old == null:
+			continue
+		var was: Variant = _tank_sig_cells.get(prev, PackedInt32Array() if prev == 0 else null)
+		if was == null:
+			continue   # реестр наборов обнулялся — разницы не узнать
+		var sens: PackedInt32Array = _seen_sens.get(old_key, PackedInt32Array())
+		if _touches(was, now, sens) or _touches(now, was, sens):
+			continue
+		_store_seen(key, old, sens)
+		return old
+	return null
+
+## Есть ли среди клеток mine, которых нет в other, хоть одна из sens (все по возрастанию).
+static func _touches(mine: PackedInt32Array, other: PackedInt32Array,
+		sens: PackedInt32Array) -> bool:
+	for c: int in mine:
+		var o := other.bsearch(c)
+		if o < other.size() and other[o] == c:
+			continue   # клетка корпуса и там и там — не перемена
+		var k := sens.bsearch(c)
+		if k < sens.size() and sens[k] == c:
+			return true
+	return false
+
+## Догнать кеш обзора до текущего рельефа (см. _catch_up_seen): сброс целиком — только
+## когда точечная инвалидация невозможна (сменилась сетка, либо наша версия старше
+## журнала — он обнулялся); иначе выкидываются ровно задетые записи.
+func _sync_seen() -> void:
+	var gid := state.grid.get_instance_id()
+	if _seen_version == GridCell.vision_version and _seen_grid == gid:
+		return
+	if _seen_grid != gid or _seen_version < GridCell.vision_log_base:
+		_clear_seen()
+		_rebuild_blockers(state.grid)
+	else:
+		_catch_up_seen(_seen_version, state.grid.width)
+		# Таблица стен — тоже адресно: открывшийся шлюз правит один байт, а не
+		# пересобирает 62 500 клеток карты 250×250.
+		_patch_blockers(state.grid, _seen_version)
+	_seen_version = GridCell.vision_version
+	_seen_grid = gid
+	_tank_masks.clear()   # маски — рельеф плюс танки: рельеф сменился
 
 ## Что видно из (ux, uy) в радиусе r по Чебышёву при таблице блокировщиков blk. Это
 ## ТО ЖЕ САМОЕ множество, что давал луч Брезенхэма в каждую клетку окна (_vision_blocked),
@@ -3211,16 +3431,35 @@ func _seen_from(coord: Vector2i, r: int, viewer: int = -1) -> PackedInt32Array:
 ## бойца вместо сотен.
 static func _sweep_seen(ux: int, uy: int, r: int, blk: PackedByteArray, gw: int,
 		gh: int) -> PackedInt32Array:
-	var vis := PackedByteArray()
-	vis.resize(gw * gh)
+	return _sweep(ux, uy, r, blk, gw, gh)[0]
+
+## Сам обход: [видимые клетки, чувствительные клетки] — оба списка плоских индексов по
+## возрастанию. Чувствительная — клетка, от стены на которой (или её сноса) этот обзор
+## может измениться: её промежуток наклонов ((2j−1)/2a, (2j+1)/2a] не лежит целиком в
+## тени ближних стен. Остальные клетки — в чужой тени целиком, и что бы с ними ни
+## случилось, отсюда видно то же самое. По этому списку журнал обзора решает, чью запись
+## в кеше выбрасывать (_catch_up_seen): при безграничном обзоре окно каждого бойца — вся
+## карта, и без него каждый открывшийся шлюз обнулял обзор всей армии.
+##
+## Строго: если после смены клетки c в столбце i цель t дальше неё стала (не)видна, луч
+## к t проходит через c, а всё до c на нём свободно. Тогда наклон t открыт в столбце i и
+## лежит в промежутке c — промежуток не в тени, и c отмечена. Клетки за столбцом, на
+## котором октант закрылся целиком, не просматриваются вовсе — и не отмечаются.
+static func _sweep(ux: int, uy: int, r: int, blk: PackedByteArray, gw: int,
+		gh: int, blk_t: PackedByteArray = PackedByteArray()) -> Array:
+	# Столбец октанта лежит сплошняком либо в самой таблице (октанты |dy| > |dx|: столбец —
+	# кусок строки сетки), либо в транспонированной (|dx| ≥ |dy|: кусок столбца сетки).
+	if blk_t.is_empty():
+		blk_t = _transpose(blk, gw, gh)
 	var origin := uy * gw + ux
-	vis[origin] = 1
+	var out := PackedInt32Array([origin])
+	var parts: Array = []   # куски списка чувствительных (Packed-массив в функцию — копией)
+	var shared := {}   # клетки осей и диагоналей: их просматривают два октанта сразу
 	# Закрытые наклоны (lo, hi] — четыре параллельных массива: числители и знаменатели.
 	var lo_n := PackedInt32Array()
 	var lo_d := PackedInt32Array()
 	var hi_n := PackedInt32Array()
 	var hi_d := PackedInt32Array()
-	var reach := 0   # дальше этого столбца ни один октант не дошёл — видимое внутри
 	for oct in 8:
 		var xmajor := oct < 4
 		var sx := -1 if (oct & 1) != 0 else 1
@@ -3234,6 +3473,8 @@ static func _sweep_seen(ux: int, uy: int, r: int, blk: PackedByteArray, gw: int,
 			minor_step = sx
 			major_room = (gh - 1 - uy) if sy > 0 else uy
 			minor_room = (gw - 1 - ux) if sx > 0 else ux
+		var run: PackedByteArray = blk_t if xmajor else blk
+		var run_dir := sy if xmajor else sx
 		# Ось (b == 0) общая у двух соседних октантов — её считает «положительный».
 		var b0 := 1 if ((sy < 0) if xmajor else (sx < 0)) else 0
 		lo_n.clear()
@@ -3243,84 +3484,138 @@ static func _sweep_seen(ux: int, uy: int, r: int, blk: PackedByteArray, gw: int,
 		var amax := mini(r, major_room)
 		var a := 1
 		while a <= amax:
-			reach = maxi(reach, a)
 			var col := origin + major_step * a
 			# Цели столбца: в октанте |dy| > |dx| строго — диагональ досталась соседу.
 			var bmax := mini(a if xmajor else a - 1, minor_room)
-			var n := lo_n.size()
-			var k := 0
-			var b := b0
-			while b <= bmax:
-				while k < n and hi_n[k] * a < b * hi_d[k]:
-					k += 1
-				if k >= n or lo_n[k] * a >= b * lo_d[k]:
-					vis[col + minor_step * b] = 1
-				b += 1
-			# Стены столбца закрывают наклоны для всего, что дальше. Все — и те, что сами
-			# в тени: край чужой тени бывает шире своей.
 			var jmax := mini(a, minor_room)
-			var j := 0
-			var cell := col
-			while j <= jmax:
-				if blk[cell] != 0:
-					# Новый промежуток ((2j−1)/2a, (2j+1)/2a] вливается в список: всё, что с ним
-					# пересекается или смыкается, сливается в один.
-					var nl := 2 * j - 1
-					var dl := 2 * a
-					var nh := 2 * j + 1
-					var dh := 2 * a
-					var m := lo_n.size()
-					var p := 0
-					while p < m and hi_n[p] * dl < nl * hi_d[p]:
-						p += 1
-					var q := p
-					while q < m and lo_n[q] * dh <= nh * lo_d[q]:
-						if lo_n[q] * dl < nl * lo_d[q]:
-							nl = lo_n[q]
-							dl = lo_d[q]
-						if hi_n[q] * dh > nh * hi_d[q]:
-							nh = hi_n[q]
-							dh = hi_d[q]
-						q += 1
-					if q == p:
-						lo_n.insert(p, nl)
-						lo_d.insert(p, dl)
-						hi_n.insert(p, nh)
-						hi_d.insert(p, dh)
-					else:
-						lo_n[p] = nl
-						lo_d[p] = dl
-						hi_n[p] = nh
-						hi_d[p] = dh
-						for t in q - p - 1:
-							lo_n.remove_at(p + 1)
-							lo_d.remove_at(p + 1)
-							hi_n.remove_at(p + 1)
-							hi_d.remove_at(p + 1)
-				j += 1
-				cell += minor_step
+			var n := lo_n.size()
+			# Цель b видна, если её наклон b/a не лежит ни в одном закрытом (lo, hi]: закрытый
+			# прячет ровно строки a·lo < b ≤ a·hi. Промежутки упорядочены и не касаются друг
+			# друга, так что видимое — просветы между их строками; каждый просвет — одна
+			# арифметическая прогрессия индексов, и выписывается она разом.
+			var cur := b0
+			var k := 0
+			while k < n and cur <= bmax:
+				var bs: int = _fdiv(a * lo_n[k], lo_d[k]) + 1
+				if bs > bmax:
+					break
+				var be: int = _fdiv(a * hi_n[k], hi_d[k])
+				if be >= cur and bs <= be:
+					if bs > cur:
+						out.append_array(_prog(col + minor_step * cur, minor_step, bs - cur))
+					cur = be + 1
+				k += 1
+			if cur <= bmax:
+				out.append_array(_prog(col + minor_step * cur, minor_step, bmax - cur + 1))
+			# Чувствительные клетки: промежуток клетки ((2j−1)/2a, (2j+1)/2a] не внутри одного
+			# закрытого (закрытые слиты — «в тени целиком» и есть «внутри одного»). Закрытый
+			# (lo, hi] накрывает целиком ровно строки 2a·lo + 1 ≤ 2j ≤ 2a·hi − 1.
+			var a2 := 2 * a
+			var js := 0
+			k = 0
+			while k < n and js <= jmax:
+				var cs: int = -_fdiv(-(a2 * lo_n[k] + lo_d[k]), 2 * lo_d[k])
+				if cs > jmax:
+					break
+				var ce: int = _fdiv(a2 * hi_n[k] - hi_d[k], 2 * hi_d[k])
+				if ce >= js and cs <= ce:
+					if cs > js:
+						_sens_rows(parts, shared, col, minor_step, js, cs - 1, a)
+					js = ce + 1
+				k += 1
+			if js <= jmax:
+				_sens_rows(parts, shared, col, minor_step, js, jmax, a)
+			# Стены столбца закрывают наклоны для всего, что дальше. Все — и те, что сами
+			# в тени: край чужой тени бывает шире своей. Ищутся они поиском байта по
+			# сплошному куску таблицы, а не перебором клеток.
+			var base: int = ((ux + sx * a) * gh + uy) if xmajor else col
+			var from: int = base if run_dir > 0 else base - jmax
+			var seg := run.slice(from, from + jmax + 1)
+			var hit := seg.find(1)
+			while hit != -1:
+				var j: int = hit if run_dir > 0 else jmax - hit
+				# Новый промежуток ((2j−1)/2a, (2j+1)/2a] вливается в список: всё, что с ним
+				# пересекается или смыкается, сливается в один.
+				var nl := 2 * j - 1
+				var dl := 2 * a
+				var nh := 2 * j + 1
+				var dh := 2 * a
+				var m := lo_n.size()
+				var p := 0
+				while p < m and hi_n[p] * dl < nl * hi_d[p]:
+					p += 1
+				var q := p
+				while q < m and lo_n[q] * dh <= nh * lo_d[q]:
+					if lo_n[q] * dl < nl * lo_d[q]:
+						nl = lo_n[q]
+						dl = lo_d[q]
+					if hi_n[q] * dh > nh * hi_d[q]:
+						nh = hi_n[q]
+						dh = hi_d[q]
+					q += 1
+				if q == p:
+					lo_n.insert(p, nl)
+					lo_d.insert(p, dl)
+					hi_n.insert(p, nh)
+					hi_d.insert(p, dh)
+				else:
+					lo_n[p] = nl
+					lo_d[p] = dl
+					hi_n[p] = nh
+					hi_d[p] = dh
+					for t in q - p - 1:
+						lo_n.remove_at(p + 1)
+						lo_d.remove_at(p + 1)
+						hi_n.remove_at(p + 1)
+						hi_d.remove_at(p + 1)
+				hit = seg.find(1, hit + 1)
 			# Закрыто всё от наклона 0 до 1 — дальше в этом октанте не видно ничего.
 			if lo_n.size() == 1 and lo_n[0] < 0 and hi_n[0] >= hi_d[0]:
 				break
 			a += 1
-	# Выписываем по строкам окна — но только в пределах того, докуда дошёл обход: в тесной
-	# комнате это десяток клеток, а не всё поле 250×250.
-	var out := PackedInt32Array()
-	var rr := mini(r, reach)
-	var y0 := maxi(0, uy - rr)
-	var y1 := mini(gh - 1, uy + rr)
-	var x0 := maxi(0, ux - rr)
-	var x1 := mini(gw - 1, ux + rr)
-	var y := y0
-	while y <= y1:
-		var i := y * gw + x0
-		var end := y * gw + x1
-		while i <= end:
-			if vis[i] != 0:
-				out.append(i)
-			i += 1
-		y += 1
-	return out
+	out.sort()
+	var sens := PackedInt32Array()
+	for part: PackedInt32Array in parts:
+		sens.append_array(part)
+	for i: int in shared:
+		sens.append(i)
+	sens.sort()
+	return [out, sens]
+
+## ⌊p / q⌋ при q > 0 — точно, в целых (деление GDScript округляет к нулю).
+static func _fdiv(p: int, q: int) -> int:
+	return (p - posmod(p, q)) / q
+
+## count индексов start, start + step, … одним массивом.
+static func _prog(start: int, step: int, count: int) -> PackedInt32Array:
+	if count == 1:
+		return PackedInt32Array([start])
+	return PackedInt32Array(range(start, start + step * count, step))
+
+## Чувствительные строки p..q столбца: внутренние — прогрессией в список, а клетки оси
+## (j = 0) и диагонали (j = a) — в общий словарь: их видят два октанта, и дважды в
+## списке им не место.
+static func _sens_rows(parts: Array, shared: Dictionary, col: int, step: int,
+		p: int, q: int, a: int) -> void:
+	if p == 0:
+		shared[col] = true
+		p = 1
+	if q == a:
+		shared[col + step * a] = true
+		q = a - 1
+	if p <= q:
+		parts.append(_prog(col + step * p, step, q - p + 1))
+
+## Таблица блокировщиков, транспонированная: индекс x·высота + y.
+static func _transpose(blk: PackedByteArray, gw: int, gh: int) -> PackedByteArray:
+	var t := PackedByteArray()
+	t.resize(gw * gh)
+	for y in gh:
+		var row := y * gw
+		for x in gw:
+			if blk[row + x] != 0:
+				t[x * gh + y] = 1
+	return t
 
 ## Обзор машины — объединение обзоров со ВСЕХ клеток её следа (batch 13 #1). Раньше
 ## смотрели из origin (верхний-левый угол), а собственный корпус ещё и рвал луч: танк
@@ -3328,17 +3623,42 @@ static func _sweep_seen(ux: int, uy: int, r: int, blk: PackedByteArray, gw: int,
 ## не мешает, а бойницы есть по всему периметру — из-за угла выглядывает та кромка,
 ## которая к нему ближе. Порядок сбора детерминирован (клетки следа по строкам, внутри
 ## клетки — порядок _seen_from), поэтому сравнение «обзор не изменился» остаётся честным.
+##
+## Объединение кешируется отдельной записью (r < 0 в ключе — метка «след машины»): его
+## спрашивают на каждом пересчёте тумана, а на карте 250×250 это девять обзоров по
+## десятку тысяч клеток. Чувствительные клетки записи — объединение чувствительных клеток
+## следа, так что журнал обзора выкидывает её ровно тогда же, когда любую из частей.
 func _vehicle_seen(veh: Vehicle) -> PackedInt32Array:
 	var cells := veh.footprint()
 	if cells.size() == 1:
 		return _seen_from(cells[0], MCF.SIGHT_UNLIMITED, veh.owner)
-	var merged: Dictionary = {}
+	_sync_seen()
+	var grid := state.grid
+	var sig := _tank_sig(veh.owner)
+	var key := Vector4i(veh.origin.x, veh.origin.y, -1 - (veh.size.x * 1024 + veh.size.y), sig)
+	var hit: Variant = _seen_cache.get(key)
+	if hit != null:
+		_touch_seen(key, hit)
+		return hit
+	var same: Variant = _reuse_under(key, veh.owner)
+	if same != null:
+		return same
+	var r := mini(MCF.SIGHT_UNLIMITED, maxi(grid.width, grid.height))
+	var mark := PackedByteArray()
+	mark.resize(grid.width * grid.height)
 	var out := PackedInt32Array()
+	var sens := PackedInt32Array()
 	for c: Vector2i in cells:
 		for i: int in _seen_from(c, MCF.SIGHT_UNLIMITED, veh.owner):
-			if not merged.has(i):
-				merged[i] = true
+			if mark[i] & 1 == 0:
+				mark[i] = mark[i] | 1
 				out.append(i)
+		for i: int in _seen_sens.get(Vector4i(c.x, c.y, r, sig), PackedInt32Array()):
+			if mark[i] & 2 == 0:
+				mark[i] = mark[i] | 2
+				sens.append(i)
+	sens.sort()
+	_store_seen(key, out, sens)
 	return out
 
 # --- Туман войны: обзор команды -------------------------------------------------------
@@ -3415,6 +3735,7 @@ func team_visible_coords(owner: int) -> Dictionary:
 		_vis_seen.clear()
 		_vis_epoch.clear()
 		_vis_vv.clear()
+		_vis_log.clear()   # всё видимое собирается заново — перерисовывать всё
 		_vis_grid = gid
 		_vis_fog = fog_enabled
 	if not fog_enabled:
@@ -3431,9 +3752,19 @@ func team_visible_coords(owner: int) -> Dictionary:
 		return full
 
 	var out: Dictionary = _vis_set.get(owner, {})
-	var counts: Dictionary = _vis_counts.get(owner, {})
-	var seen: Dictionary = _vis_seen.get(owner, {})
 	var gw := state.grid.width
+	# Счётчики — плоский массив по клеткам, а не словарь: на карте 250×250 обзор одного
+	# бойца — десятки тысяч клеток, и шаг такого бойца стоил столько же операций словаря.
+	var counts: PackedInt32Array = _vis_counts.get(owner, PackedInt32Array())
+	if counts.size() != gw * state.grid.height:
+		counts.resize(gw * state.grid.height)
+		counts.fill(0)
+	var seen: Dictionary = _vis_seen.get(owner, {})
+	var memory: Dictionary = explored.get(owner, {})
+	var log: Variant = _vis_log.get(owner)
+	if log != null and log.size() > counts.size():
+		_vis_log.erase(owner)   # никто не забирал — дешевле перерисовать всё
+		log = null
 	var live: Dictionary = {}
 	var sides := _vision_sides(owner)
 	for u in state.all_units():
@@ -3448,23 +3779,13 @@ func team_visible_coords(owner: int) -> Dictionary:
 		live[u.id] = true
 		var fresh := _seen_from(u.coord, sight_of(u), u.owner)
 		var was: Variant = seen.get(u.id)
+		# Обзор этого бойца не изменился — его вклад уже в счётчиках, и трогать нечего.
+		# На обычном ходу так отсеиваются 99 бойцов из 100.
+		if was != null and was == fresh:
+			continue
+		counts = _vis_add(fresh, counts, out, memory, gw, log)
 		if was != null:
-			# Обзор этого бойца не изменился — его вклад уже в счётчиках, и трогать
-			# нечего. На обычном ходу так отсеиваются 99 бойцов из 100.
-			if was == fresh:
-				continue
-			for i: int in was:
-				var n: int = int(counts[i]) - 1
-				if n <= 0:
-					counts.erase(i)
-					out.erase(Vector2i(i % gw, i / gw))
-				else:
-					counts[i] = n
-		for i: int in fresh:
-			var n2: int = int(counts.get(i, 0))
-			counts[i] = n2 + 1
-			if n2 == 0:
-				out[Vector2i(i % gw, i / gw)] = true
+			counts = _vis_drop(was, counts, out, gw, log)
 		seen[u.id] = fresh
 	# Техника тоже смотрит (item 46): обзор стороны — объединение ВСЕХ её глаз, а не
 	# только пеших. Экипаж внутри вынесен за карту и своего обзора не даёт, так что
@@ -3480,21 +3801,11 @@ func team_visible_coords(owner: int) -> Dictionary:
 		live[vkey] = true
 		var vfresh := _vehicle_seen(veh)
 		var vwas: Variant = seen.get(vkey)
+		if vwas != null and vwas == vfresh:
+			continue
+		counts = _vis_add(vfresh, counts, out, memory, gw, log)
 		if vwas != null:
-			if vwas == vfresh:
-				continue
-			for i: int in vwas:
-				var n: int = int(counts[i]) - 1
-				if n <= 0:
-					counts.erase(i)
-					out.erase(Vector2i(i % gw, i / gw))
-				else:
-					counts[i] = n
-		for i: int in vfresh:
-			var n2: int = int(counts.get(i, 0))
-			counts[i] = n2 + 1
-			if n2 == 0:
-				out[Vector2i(i % gw, i / gw)] = true
+			counts = _vis_drop(vwas, counts, out, gw, log)
 		seen[vkey] = vfresh
 	# Выбывшие — погиб, сел в машину, попал в плен, машину сожгли: снимаем их вклад.
 	var gone: Array = []
@@ -3502,21 +3813,62 @@ func team_visible_coords(owner: int) -> Dictionary:
 		if not live.has(uid):
 			gone.append(uid)
 	for uid: int in gone:
-		for i: int in seen[uid]:
-			var n: int = int(counts[i]) - 1
-			if n <= 0:
-				counts.erase(i)
-				out.erase(Vector2i(i % gw, i / gw))
-			else:
-				counts[i] = n
+		counts = _vis_drop(seen[uid], counts, out, gw, log)
 		seen.erase(uid)
 	_vis_set[owner] = out
 	_vis_counts[owner] = counts
 	_vis_seen[owner] = seen
 	_vis_epoch[owner] = UnitInstance.vision_epoch
 	_vis_vv[owner] = GridCell.vision_version
-	_remember_explored(owner, out)
+	explored[owner] = memory
 	return out
+
+## Вклад одного обзора в счётчики стороны. Сначала ПРИБАВЛЯЕТСЯ новый обзор, потом
+## вычитается прежний: клетки, видные и до шага, и после, так и не падают до нуля и не
+## выходят из множества, чтобы тут же вернуться. Порядок ключей множества от этого
+## другой, но его никто не перебирает — все спрашивают только has().
+##
+## Память разведки (item 46) пополняется здесь же, на переходе клетки 0 → 1: в видимое
+## клетка попадает только так, и прежний проход по ВСЕМУ видимому после каждого
+## пересчёта (десятки тысяч клеток на большой карте) давал ровно то же множество.
+## Packed-массив в GDScript передаётся копией, поэтому счётчики возвращаются.
+func _vis_add(cells: PackedInt32Array, counts: PackedInt32Array, out: Dictionary,
+		memory: Dictionary, gw: int, log: Variant) -> PackedInt32Array:
+	for i: int in cells:
+		var n: int = counts[i]
+		counts[i] = n + 1
+		if n == 0:
+			var c := Vector2i(i % gw, i / gw)
+			out[c] = true
+			memory[c] = true
+			if log != null:
+				log.append(i)
+	return counts
+
+func _vis_drop(cells: PackedInt32Array, counts: PackedInt32Array, out: Dictionary,
+		gw: int, log: Variant) -> PackedInt32Array:
+	for i: int in cells:
+		var n: int = counts[i] - 1
+		counts[i] = n
+		if n == 0:
+			out.erase(Vector2i(i % gw, i / gw))
+			if log != null:
+				log.append(i)
+	return counts
+
+## Журнал смен видимости для экрана боя: owner -> Array плоских индексов клеток, чья
+## видимость сменилась с прошлого take_vis_changes(). Заводится первым же вызовом — пока
+## его никто не спрашивает (ИИ, обучение, тесты), он не пишется вовсе.
+var _vis_log: Dictionary = {}
+
+## Клетки, чья видимость для стороны сменилась с прошлого вызова (в любую сторону, может
+## повторяться); null — «сменилось всё»: первый вызов, сброс тумана, новая сетка, журнал
+## переполнился. Экран боя держит по нему туман дальнего плана — текстуру, пиксель на
+## клетку, — и перекрашивает только эти пиксели.
+func take_vis_changes(owner: int) -> Variant:
+	var log: Variant = _vis_log.get(owner)
+	_vis_log[owner] = []
+	return log
 
 ## Память разведки (item 46, режим STANDARD): owner -> {Vector2i: true}, всё, что
 ## сторона когда-либо видела.
@@ -3529,18 +3881,11 @@ func team_visible_coords(owner: int) -> Dictionary:
 ##
 ## Как поле показа она к тому же и не нужна в состоянии: каждый клиент рисует свою
 ## сторону и накапливает ровно свою память.
-var explored: Dictionary = {}
-
+##
 ## В REALISTIC режиме память не нужна вовсе — там вне обзора не видно ничего, — но
 ## копим её всегда: переключить режим посреди партии дешевле, чем восстанавливать
-## историю задним числом, а стоит она один проход по свежевидимым клеткам.
-func _remember_explored(owner: int, visible: Dictionary) -> void:
-	if not fog_enabled:
-		return
-	var memory: Dictionary = explored.get(owner, {})
-	for c: Vector2i in visible:
-		memory[c] = true
-	explored[owner] = memory
+## историю задним числом, а пополняется она только клетками, впервые вошедшими в обзор.
+var explored: Dictionary = {}
 
 ## Известна ли стороне эта клетка: видна сейчас ИЛИ разведана раньше (item 46).
 ## В REALISTIC режиме память не учитывается — там вопрос только «видно сейчас».
@@ -3854,27 +4199,86 @@ func _ap_event(res: ActionResult, u: UnitInstance, before: int) -> void:
 ## Функцию зовут после КАЖДОГО действия, а шлюзов на карте единицы — поэтому список
 ## живых юнитов берётся один раз на всю сетку, а не заново на каждый шлюз, и клетка
 ## достаётся без проверки границ (координаты и так свои).
-## Список клеток-шлюзов, общий на все резолверы. Пересобирается, только когда на карте
-## переставили объекты (GridCell.feature_version), а не после каждого действия: шлюзы
-## строят и сносят единицы раз за бой, тогда как update_airlocks() зовут по разу на
-## КАЖДОЕ действие, и обход всей карты ради них стоил трети всего времени применения.
+## Список клеток-шлюзов, общий на все резолверы. Берётся из индекса объектов
+## (_feature_cells_of) и пересобирается, только когда сменился сам список шлюзов, а не
+## после каждого действия: шлюзы строят и сносят единицы раз за бой, тогда как
+## update_airlocks() зовут по разу на КАЖДОЕ действие.
 static var _airlock_cells: Array[GridCell] = []
-static var _airlock_version: int = -1
+static var _airlock_index: Dictionary = {}   # GridCell -> номер в _airlock_cells
+static var _airlock_version: int = -1        # правка списка шлюзов в индексе объектов
 static var _airlock_grid: int = 0
 
 static func _airlocks_of(grid: Grid) -> Array[GridCell]:
+	var coords := _feature_cells_of(grid, MCF.FEATURE_AIRLOCK)
 	var gid := grid.get_instance_id()
-	if _airlock_version == GridCell.feature_version and _airlock_grid == gid:
+	var rev: int = _feature_rev.get(MCF.FEATURE_AIRLOCK, 0)
+	if _airlock_version == rev and _airlock_grid == gid:
 		return _airlock_cells
 	_airlock_cells = []
-	for y in grid.height:
-		for x in grid.width:
-			var cell := grid.cell_fast(x, y)
-			if cell.feature_id == MCF.FEATURE_AIRLOCK:
-				_airlock_cells.append(cell)
-	_airlock_version = GridCell.feature_version
+	_airlock_index = {}
+	for c: Vector2i in coords:
+		var cell := grid.cell(c)
+		_airlock_index[cell] = _airlock_cells.size()
+		_airlock_cells.append(cell)
+	_airlock_version = rev
 	_airlock_grid = gid
 	return _airlock_cells
+
+## Шлюзы, которые МОГУТ сменить состояние, — в порядке общего списка. Дверь теперь у
+## каждого дома и комнаты, и на карте 250×250 их сотни; перебирать все с осмотром
+## девяти клеток на каждое действие (а ход — это два вызова) стоило ~5 мс впустую:
+## закрытая дверь без никого рядом закрытой и останется.
+##
+## Сменить состояние может только шлюз, который (а) был открыт после прошлого прохода —
+## мог закрыться; (б) стоит рядом с живым бойцом — мог открыться; (в) открылся или
+## закрылся с тех пор в обход этого прохода (откат, взрыв, сварка) — такое пересечение
+## порога стены пишет журнал обзора GridCell.vision_changes. Тело в проёме держит
+## створки открытыми, а открытыми они стали, пока тело было живым, — это случай (а).
+## Если журнал оборвался, сменилась сетка или сам список шлюзов — проходим все.
+var _al_open: Array[GridCell] = []
+var _al_vv: int = -1
+var _al_fv: int = -1
+var _al_grid: int = 0
+
+func _airlock_candidates(cells: Array[GridCell]) -> Array[GridCell]:
+	var grid := state.grid
+	if _al_grid != grid.get_instance_id() or _al_fv != _airlock_version \
+			or _al_vv < GridCell.vision_log_base:
+		return cells
+	var marks := {}
+	for c: GridCell in _al_open:
+		var idx: Variant = _airlock_index.get(c)
+		if idx != null:
+			marks[idx] = true
+	var changes := GridCell.vision_changes
+	var i: int = (_al_vv - GridCell.vision_log_base) * 2
+	while i < changes.size():
+		var idx: Variant = _airlock_index.get(grid.cell(Vector2i(changes[i], changes[i + 1])))
+		if idx != null:
+			marks[idx] = true
+		i += 2
+	var gw := grid.width
+	var gh := grid.height
+	for u: UnitInstance in state.units.values():
+		if u.is_drone or not u.is_alive():
+			continue
+		var y := maxi(0, u.coord.y - MCF.AIRLOCK_OPEN_RADIUS)
+		var y_end := mini(gh - 1, u.coord.y + MCF.AIRLOCK_OPEN_RADIUS)
+		while y <= y_end:
+			var x := maxi(0, u.coord.x - MCF.AIRLOCK_OPEN_RADIUS)
+			var x_end := mini(gw - 1, u.coord.x + MCF.AIRLOCK_OPEN_RADIUS)
+			while x <= x_end:
+				var idx: Variant = _airlock_index.get(grid.cell_fast(x, y))
+				if idx != null:
+					marks[idx] = true
+				x += 1
+			y += 1
+	var order: Array = marks.keys()
+	order.sort()
+	var out: Array[GridCell] = []
+	for k: int in order:
+		out.append(cells[k])
+	return out
 
 ## Створки смотрят на СВОИХ соседей, а не перебирают армию (#106). «Кто-то стоит в
 ## радиусе 1» — это ровно «в одной из девяти клеток вокруг есть жилец», и клеток всегда
@@ -3893,7 +4297,8 @@ func update_airlocks() -> void:
 	var gw := grid.width
 	var gh := grid.height
 	var radius: int = MCF.AIRLOCK_OPEN_RADIUS
-	for cell: GridCell in cells:
+	var still_open: Array[GridCell] = []
+	for cell: GridCell in _airlock_candidates(cells):
 		# Заваренный инженером шлюз не открывается ни для кого (#99).
 		if cell.airlock_welded:
 			cell.cover_height = MCF.WALL_HEIGHT
@@ -3922,6 +4327,12 @@ func update_airlocks() -> void:
 		# примере из задания игрок «вскрывает комнату», подойдя к её двери.
 		if open and was_closed:
 			notify_cell_changed(cell.coord)
+		if open:
+			still_open.append(cell)
+	_al_open = still_open
+	_al_vv = GridCell.vision_version
+	_al_fv = _airlock_version
+	_al_grid = grid.get_instance_id()
 
 ## Отдача/отбрасывание после выстрела в невесомости (§3.11). Только для юнитов,
 ## стоящих в клетке-космосе, и только если позади свободно на всю дистанцию.
@@ -4160,31 +4571,20 @@ func deployed_station_of(operator: UnitInstance) -> Vector2i:
 		return Vector2i(-1, -1)
 	return _station_index().get(operator.id, Vector2i(-1, -1))
 
-## «Оператор -> его станция», пересобираемое только при смене расстановки объектов.
-##
-## Кеш здесь не роскошь: operator_has_station() зовёт _draw() на КАЖДОГО юнита
-## каждый кадр, а честный ответ требует прохода по всей карте. С привязкой к
-## GridCell.feature_version проход случается ровно тогда, когда что-то построили,
-## сломали или свернули, — то есть считаные разы за партию.
+## «Оператор -> его станция» — по станциям из индекса объектов (_feature_cells), без
+## прохода по карте: operator_has_station() зовёт _draw() на КАЖДОГО юнита каждый кадр,
+## а ИИ — на каждом решении, из нового резолвера.
 ##
 ## Источник правды — метка на самой клетке, а не поле у оператора. Станцию может
 ## снести взрывом, и тогда она исчезает вместе с меткой сама; поле у оператора
 ## пришлось бы чистить из каждого места, где рушится рельеф.
-var _station_index_cache: Dictionary = {}
-var _station_index_version: int = -1
-
 func _station_index() -> Dictionary:
-	if _station_index_version == GridCell.feature_version:
-		return _station_index_cache
-	_station_index_version = GridCell.feature_version
-	_station_index_cache = {}
-	for y in state.grid.height:
-		for x in state.grid.width:
-			var cell := state.grid.cell_fast(x, y)
-			if cell.feature_id == MCF.FEATURE_DRONE_STATION \
-					and cell.station_operator_id != -1:
-				_station_index_cache[cell.station_operator_id] = Vector2i(x, y)
-	return _station_index_cache
+	var out := {}
+	for c: Vector2i in _feature_cells(MCF.FEATURE_DRONE_STATION):
+		var op := state.grid.cell(c).station_operator_id
+		if op != -1:
+			out[op] = c
+	return out
 
 ## Оператор развернул станцию — над ним «!» (batch 17, item 8). Раньше знак висел,
 ## пока станции НЕ было; по просьбе игрока он теперь означает обратное: станция стоит,

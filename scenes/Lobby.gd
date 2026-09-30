@@ -84,7 +84,7 @@ var _gen_timer: Timer
 var _gen_space: CheckBox
 var _gen_fire: CheckBox
 var _gen_obstacles: CheckBox
-var _gen_civilians: CheckBox
+var _gen_civilians: OptionButton
 var _gen_seed: SpinBox
 var _gen_info: Label
 ## Собранная карта и настройки, из которых она собрана: пока они те же — не пересобираем.
@@ -707,8 +707,7 @@ func _build_generator(box: VBoxContainer) -> void:
 		sizes.append("%s (%d×%d)" % [MapGen.SIZE_NAMES[i], d.x, d.y])
 	sizes.append("Custom…")
 	_gen_size = _opt(sizes, int(defaults["size"]))
-	_gen_size.tooltip_text = "Starting size — the map grows if the armies don't fit. Custom: any width and height up to %d×%d." % [
-			MapGen.MAX_DIM.x, MapGen.MAX_DIM.y]
+	_gen_size.tooltip_text = "Starting size — the map grows if the armies don't fit. Custom: any width and height, no upper limit."
 	_gen_density = _opt(MapGen.DENSITY_NAMES, int(defaults["density"]))
 	_gen_density.tooltip_text = "How built-up and cluttered the map is."
 	var look := HBoxContainer.new()
@@ -718,8 +717,8 @@ func _build_generator(box: VBoxContainer) -> void:
 		look.add_child(o)
 	_row(_gen_box, "Terrain:", look)
 	# Свой размер: ширина × высота, до MapGen.MAX_DIM. Видно только при «Custom…».
-	_gen_w = _dim_spin(int(defaults["width"]), MapGen.MAX_DIM.x)
-	_gen_h = _dim_spin(int(defaults["height"]), MapGen.MAX_DIM.y)
+	_gen_w = _dim_spin(int(defaults["width"]))
+	_gen_h = _dim_spin(int(defaults["height"]))
 	var by := Label.new()
 	by.text = "×"
 	var dims := HBoxContainer.new()
@@ -737,15 +736,19 @@ func _build_generator(box: VBoxContainer) -> void:
 	_row(_gen_box, "Layout:", _gen_sym)
 	var mech := HFlowContainer.new()
 	mech.add_theme_constant_override("h_separation", 10)
-	_gen_space = _gen_check(mech, "Space & airlocks",
-			"Vacuum you can fight in (zero-G); stations get airlocks and hull windows. A bunker is underground: no vacuum, its airlocks are sealed blast doors.")
+	_gen_space = _gen_check(mech, "Space",
+			"Vacuum you can fight in (zero-G): vented rooms and hull windows on stations, a ragged edge and holes in towns and fields. A bunker is underground and never has vacuum. Every door is an airlock either way.")
 	_gen_fire = _gen_check(mech, "Flammable",
 			"Grass, plank floors, wooden walls and fences — ground that fire spreads over.")
 	_gen_obstacles = _gen_check(mech, "Obstacles",
 			"Sandbags, trenches, hedgehogs, barricades, crates and pillars.")
-	_gen_civilians = _gen_check(mech, "Civilians",
-			"Neutral civilians, mostly indoors and away from the deployment zones.")
 	_row(_gen_box, "Mechanics:", mech)
+	# Мирных — порядок величины (MapGen.CIV_LEVELS), а не точное число: сколько именно —
+	# решают размер поля и застройка. Живут они только за шлюзами и начинают спящими.
+	_gen_civilians = _opt(MapGen.CIV_LEVELS, MapGen.civ_level(defaults))
+	_gen_civilians.tooltip_text = "How many neutral civilians, roughly. They live only in rooms sealed by airlocks, out of sight of every deployment zone, and start the match asleep."
+	_gen_civilians.item_selected.connect(func(_i: int) -> void: _on_gen_changed())
+	_row(_gen_box, "Civilians:", _gen_civilians)
 	_gen_seed = SpinBox.new()
 	_gen_seed.max_value = MapGen.SEED_MAX
 	_gen_seed.value = randi_range(1, MapGen.SEED_MAX)
@@ -779,12 +782,15 @@ func _build_generator(box: VBoxContainer) -> void:
 	_gen_timer.timeout.connect(_apply_gen_change)
 	_gen_box.add_child(_gen_timer)
 
-func _dim_spin(value: int, top: int) -> SpinBox:
+## Своя ширина/высота: снизу MapGen.MIN_DIM, сверху — ничего. Стрелки ходят до 1000, но
+## ввести можно и больше (allow_greater).
+func _dim_spin(value: int) -> SpinBox:
 	var sp := SpinBox.new()
 	sp.min_value = MapGen.MIN_DIM
-	sp.max_value = top
+	sp.max_value = 1000
+	sp.allow_greater = true
 	sp.value = value
-	sp.tooltip_text = "Cells, %d to %d." % [MapGen.MIN_DIM, top]
+	sp.tooltip_text = "Cells, at least %d — no upper limit. Very large maps take longer to build." % MapGen.MIN_DIM
 	return sp
 
 func _gen_check(parent: Control, text: String, tip: String) -> CheckBox:
@@ -813,7 +819,7 @@ func _gen_options() -> Dictionary:
 			"symmetric": _gen_sym.button_pressed,
 			"space": _gen_space.button_pressed,
 			"flammable": _gen_fire.button_pressed, "obstacles": _gen_obstacles.button_pressed,
-			"civilians": _gen_civilians.button_pressed}
+			"civilians": _gen_civilians.selected}
 
 func _random_map() -> MapData:
 	var options := _gen_options()
@@ -844,11 +850,10 @@ func _zone_summary(map: MapData) -> String:
 	var dim := MapGen.dims_of(o)
 	if map.width > dim.x or map.height > dim.y:
 		text += " Map enlarged to %d×%d so they fit." % [map.width, map.height]
-	# Замер (HARD против HARD, по 10 бойцов): до 80×60 ход ИИ — доли секунды; на 250×250 —
-	# секунды на действие, и туман с безграничным обзором пересчитывается дольше. Играть
-	# можно — просто стоит знать заранее.
-	if map.width * map.height > 12000:
-		text += " A map this big plays slower: AI turns and fog updates can take a few seconds."
+	# Своему размеру потолка нет (MapGen.dims_of) — зато есть цена: замер 500×500 — ~3 с на
+	# постройку и ~0,4 ГБ памяти в бою, 1000×1000 — ~15 с и ~1,3 ГБ.
+	if map.width * map.height > MapGen.MAX_DIM.x * MapGen.MAX_DIM.y:
+		text += " Beyond 250×250 building takes seconds (≈15 s at 1000×1000) and a battle needs a lot of memory (≈1.3 GB at 1000×1000)."
 	return text
 
 ## «Players» случайной карты: слотов становится ровно столько. Новые — в одиночке ИИ

@@ -16,6 +16,9 @@ extends RefCounted
 ## Кэш «имя → текстура». Заполняется один раз, дальше только чтение.
 static var _overrides: Dictionary = {}
 static var _overrides_loaded := false
+## Имена, для которых замены нет: одна проверка вместо двух поисков и to_lower() —
+## на большой карте это тысячи вызовов за кадр (пол, укрытие, огонь каждой клетки).
+static var _misses: Dictionary = {}
 
 const SUPPORTED_IMG := ["png", "jpg", "jpeg", "webp", "bmp", "tga", "svg"]
 
@@ -79,6 +82,7 @@ const AUTOTILE_W := 8
 ## подменённый файл подхватывался без перезапуска игры.
 static func reload_overrides() -> void:
 	_overrides.clear()
+	_misses.clear()
 	_overrides_loaded = true
 	DirAccess.make_dir_recursive_absolute(USER_DIR)
 	_write_manifest()
@@ -194,12 +198,13 @@ static func draw_texture_override_rect(ci: CanvasItem, name: String, rect: Rect2
 	# кадр. Поэтому сначала два дешёвых выхода — «замен вообще нет» и «имя уже в нижнем
 	# регистре» (а так его пишут все вызывающие: это литералы и id из MCF). to_lower()
 	# строит новую строку и остаётся только для регистронезависимой подстраховки.
-	if _overrides.is_empty():
+	if _overrides.is_empty() or _misses.has(name):
 		return false
 	var tex: Texture2D = _overrides.get(name)
 	if tex == null:
 		tex = _overrides.get(name.to_lower())
 		if tex == null:
+			_misses[name] = true
 			return false
 	if is_zero_approx(rot_deg):
 		ci.draw_texture_rect(tex, rect, false, tint)

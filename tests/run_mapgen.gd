@@ -26,8 +26,11 @@ extends SceneTree
 ##   9. бункер — та же станция под землёй: ни клетки вакуума даже с галочкой космоса,
 ##      край карты — сплошная скала, а без космоса бункер и станция на одном зерне —
 ##      одна и та же карта до байта. Станции и бункеры — с коридорами и десятками комнат;
-##  10. размеры до 250×250: готовые пункты и свой размер держат слово, самая большая
-##      карта собирается в разумное время, мирных не больше MapGen.CIV_MAX.
+##  10. размеры до 250×250 готовыми пунктами и без потолка своим размером; самая большая
+##      готовая карта собирается в разумное время;
+##  11. двери — шлюзы, с космосом и без; каждый мирный ЗАПЕРТ: при закрытых шлюзах от него
+##      не дойти ни до одной клетки зон; число мирных растёт с уровнем (None…Crowd) и не
+##      выходит за его потолок.
 
 const ROUNDS := 3
 const MAX_ACTIONS := 4000
@@ -74,11 +77,13 @@ func _initialize() -> void:
 	_check({"style": MapGen.Style.TOWN, "size": MapGen.SIZE_CUSTOM, "width": 250, "height": 120, "seed": 5})
 	_check({"style": MapGen.Style.FIELD, "size": MapGen.SIZE_CUSTOM, "width": 16, "height": 16,
 			"seed": 6, "zones": 3})
-	var huge := MapGen.generate({"size": MapGen.SIZE_CUSTOM, "width": 999, "height": 1})
-	ck(huge.width == MapGen.MAX_DIM.x and huge.height >= MapGen.MIN_DIM,
-			"custom size is clamped to %d..%d (%dx%d)" % [MapGen.MIN_DIM, MapGen.MAX_DIM.x, huge.width, huge.height])
+	var wide := MapGen.generate({"size": MapGen.SIZE_CUSTOM, "width": 400, "height": 1, "zones": 2,
+			"civilians": 0})
+	ck(wide.width == 400 and wide.height >= MapGen.MIN_DIM,
+			"custom size has no upper limit, only a floor of %d (%dx%d)" % [MapGen.MIN_DIM, wide.width, wide.height])
 	_bunker_is_an_underground_station()
 	_stations_have_rooms_and_hallways()
+	_civilian_levels()
 	if fails.is_empty():
 		print("mapgen: %d random maps keep every lobby promise; AI plays each style" % maps)
 		quit(0)
@@ -170,6 +175,7 @@ func _check(overrides: Dictionary) -> void:
 				ck(through, tag + ": the airlock at %s opens into a wall" % c)
 
 	var civ := 0
+	var level := MapGen.civ_level(o)
 	for s in m.spawns:
 		var c: Vector2i = s["coord"]
 		ck(MCF.is_neutral(int(s["owner"])) and s["stats_id"] == "civilian",
@@ -183,20 +189,26 @@ func _check(overrides: Dictionary) -> void:
 		floors[m.floor_type[i]] = true
 		vacuum = vacuum or m.is_space[i] != 0
 	if not o["space"]:
-		ck(not vacuum and not used.has(MCF.FEATURE_AIRLOCK), tag + ": no vacuum or airlocks")
+		ck(not vacuum, tag + ": no vacuum without Space")
+	# Двери — шлюзы, с космосом и без. От Medium и выше у станции всегда есть комнаты с
+	# дверями; на Small, порезанном на четверти для восьмерых, четверть 13×9 — это зал без
+	# перегородок, и дверей (а значит, и шлюзов) там может не быть вовсе.
+	if (o["style"] == MapGen.Style.STATION or o["style"] == MapGen.Style.BUNKER) and int(o["size"]) >= 1:
+		ck(used.has(MCF.FEATURE_AIRLOCK), tag + ": room doors are airlocks, with or without Space")
 	if not o["flammable"]:
 		ck(not floors.has(MCF.FLOOR_FLAMMABLE) and not floors.has(MCF.FLOOR_GRASS)
 				and not used.has(MCF.FEATURE_WOOD_WALL), tag + ": nothing flammable")
 	if not o["obstacles"]:
 		ck(not used.has(MCF.FEATURE_SANDBAGS) and not used.has(MCF.FEATURE_HEDGEHOG)
 				and not used.has(MCF.FEATURE_TRENCH), tag + ": no obstacles")
-	if not o["civilians"]:
+	if level == 0:
 		ck(civ == 0, tag + ": no civilians")
-	elif o["zones"] == 2 and o["size"] >= 1:
+	elif o["zones"] == 2 and o["size"] >= 1 and o["style"] != MapGen.Style.FIELD:
 		ck(civ > 0, tag + ": civilians are placed")
 	if civ > 0:
 		_dormant(m, tag)
-	ck(civ <= MapGen.CIV_MAX, tag + ": %d civilians, cap %d" % [civ, MapGen.CIV_MAX])
+		_sealed(m, tag)
+	ck(civ <= MapGen.CIV_CAP[level], tag + ": %d civilians, cap %d" % [civ, MapGen.CIV_CAP[level]])
 	if o["style"] == MapGen.Style.BUNKER:
 		ck(not vacuum, tag + ": a bunker has no vacuum anywhere")
 		var open_edge := 0
@@ -294,6 +306,48 @@ func _dormant(src: MapData, tag: String) -> void:
 	for u: UnitInstance in state.all_units():
 		if CivilianAI.is_npc(u) and (u.civilian_active or u.neutral_group != 0):
 			ck(false, tag + ": the civilian at %s is awake at the start" % u.coord)
+
+## Каждый мирный заперт шлюзами: если закрыть ВСЕ шлюзы, от его клетки до зон не дойти.
+## Проверяется по настоящей доске (walkable_terrain), шлюз считается стеной.
+func _sealed(m: MapData, tag: String) -> void:
+	var grid := Grid.new(m.width, m.height)
+	m.apply_to_grid(grid)
+	for s in m.spawns:
+		var start: Vector2i = s["coord"]
+		var seen := {start: true}
+		var queue: Array[Vector2i] = [start]
+		var head := 0
+		var reached := false
+		while head < queue.size() and not reached:
+			var c := queue[head]
+			head += 1
+			for d: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				var p := c + d
+				if not grid.in_bounds(p) or seen.has(p):
+					continue
+				if m.get_feature(p) == MCF.FEATURE_AIRLOCK or not grid.cell(p).walkable_terrain():
+					continue
+				if m.get_zone(p) >= 0:
+					reached = true
+					break
+				seen[p] = true
+				queue.append(p)
+		ck(not reached, tag + ": the civilian at %s can walk to a zone without opening an airlock" % start)
+
+## Уровень мирных — порядок величины: больше уровень — больше жителей, каждый под своим
+## потолком.
+func _civilian_levels() -> void:
+	for style in [MapGen.Style.TOWN, MapGen.Style.STATION]:
+		var counts: Array[int] = []
+		for lv in MapGen.CIV_LEVELS.size():
+			var m := MapGen.generate({"style": style, "size": 3, "seed": 404, "civilians": lv})
+			counts.append(m.spawns.size())
+			ck(m.spawns.size() <= MapGen.CIV_CAP[lv], "%s level %s: %d civilians over the cap %d" % [
+					MapGen.STYLE_NAMES[style], MapGen.CIV_LEVELS[lv], m.spawns.size(), MapGen.CIV_CAP[lv]])
+		ck(counts[0] == 0 and counts[1] > 0 and counts[1] < counts[2] and counts[2] < counts[3]
+				and counts[3] <= counts[4], "%s: civilians grow with the level %s" % [
+				MapGen.STYLE_NAMES[style], counts])
+		print("mapgen: %s Huge civilians per level %s" % [MapGen.STYLE_NAMES[style], counts])
 
 ## Ближайшее расстояние (по Чебышёву) между клетками двух зон.
 func _gap(a: Array, b: Array) -> int:
