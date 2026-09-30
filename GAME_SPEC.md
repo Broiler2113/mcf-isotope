@@ -936,17 +936,46 @@ the map, never cleared. Civilians key off it (§14).
 
 | Function | Purpose |
 |---|---|
-| `_seen_from(coord, r)` | Everything visible from a cell: a Bresenham ray to every cell of the board. **Only a wall-height cell that is not glass blocks** — a wall, a closed airlock, a BRU, a pillbox; **living units, corpses and vehicle hulls do not**. Sight is unlimited in range and in direction (batch 13 #1). |
+| `_seen_from(coord, r, viewer)` | Everything visible from a cell to the eyes of side `viewer`: a Bresenham ray to every cell of the board. **A wall-height cell that is not glass blocks** — a wall, a closed airlock, a BRU, a pillbox — and so does the hull of an **enemy tank** (below); **living units, corpses, other vehicles and your own or allied tanks do not**. Sight is unlimited in range and in direction (batch 13 #1). |
 | `_vehicle_seen(veh)` | A vehicle's eyes are its **crew's**: an empty or wrecked vehicle sees nothing. It looks out from **every hull cell**, so a tank in a doorway sees round both jambs. |
 | `team_sees(owner, coord)` | Visibility is **shared across the whole team**. |
 | `is_visible_to_team(owner, target)` | The targeting gate used by `can_shoot`. |
 | `team_visible_coords(owner)` | The set the renderer uses to draw the fog overlay. |
 
+**Tanks block the enemy's sight — and only tanks, and only the enemy's.** A living tank's
+hull (all 3×3 cells) blocks the line of sight of every side that is neither its owner nor
+an ally: the enemy cannot see — and so cannot target — anything behind it, while the
+tank's own side looks straight through (its crew and the infantry around it see as
+before). The tank itself stays visible: a ray ends *on* its near hull cells. Shuttles and
+borgs never block; a **wreck** blocks no one (it is no longer a tank); a **captured** tank
+blocks its former owner. The same rule applies to the single-line check
+`_vision_blocked(a, b, viewer)` (the sapper's mine sweep). Line of *fire* is unchanged;
+the omniscient AI (#43) is unaffected, as it is by all fog. Because the answer now
+depends on who is looking, the per-cell sight cache is keyed by the exact set of enemy
+tank cells as well (`_tank_sig`: one number per distinct set, never reused); a tank
+moving, changing hands or burning bumps `UnitInstance.vision_epoch`, so the team fog
+notices on its own.
+
+**How sight is computed — the same answer, without walking the rays.** The ray is this
+Bresenham variant: `err = dx − dy`; step x when `2·err > −dy`, y when `2·err < dx`. Along
+the major axis its cell in column *i* is exactly `(i, ⌈i·s − ½⌉)` with `s = minor/major`
+— the slope rounded half *down* — so a blocker at column *i*, row *j* hides exactly the
+cells beyond column *i* whose slope lies in `((2j−1)/2i, (2j+1)/2i]`. `_sweep_seen` walks
+the eight octants column by column, keeps the blocked slopes as merged intervals of exact
+integer fractions, marks a cell visible when its slope is outside all of them, and stops
+an octant once slopes 0…1 are all blocked. The result is the identical set, in the
+identical order, as the per-cell ray it replaced — `tests/run_fog.gd` checks that on 600
+random boards and on real generated maps with tanks, and a one-character change to the
+tie rule fails it on half of them. One soldier's unlimited sight on a 250×250 map went
+from ~175 ms (town) / ~364 ms (field) to ~23–27 ms, and to ~9 ms in a station, where
+walls close every slope early; a Large town went from 3.2 ms to 0.5 ms.
+
 **Why hulls stopped blocking (batch 13 #1).** A tank used to look out from its `origin`
 — the top-left hull cell — and its *own* hull blocked the ray, so it saw only up and
-left: the "weird FOV" in the report. The rule is now `GridCell.blocks_sight()` and it
-names exactly two things, a wall and a closed airlock (glass excepted, #29). Because
-hulls no longer matter, `vehicle_id` no longer bumps `vision_version`; instead
+left: the "weird FOV" in the report. The rule became `GridCell.blocks_sight()` — a wall and a closed airlock (glass
+excepted, #29) — and a vehicle's *own* hull never blocks its own view (the enemy-tank
+rule above is per viewer, so it cannot bring that bug back). Because hulls do not
+change the terrain, `vehicle_id` does not bump `vision_version`; instead
 `Vehicle.origin` / `owner` / `wrecked` bump `UnitInstance.vision_epoch`, which is what
 tells the team-fog cache that a vehicle moved. A wall turned to glass at the same
 height bumps `vision_version` from the `feature_id` setter — the height setter cannot
