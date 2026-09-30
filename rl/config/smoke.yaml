@@ -5,7 +5,6 @@ maps:
   - rl/maps/arena_34x26.json
 stage: 1
 phase: A
-opponent: normal
 round_cap: 10
 civilians: false
 random_events: false

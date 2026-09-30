@@ -24,8 +24,10 @@ SERVER_SCRIPT = "res://rl/env_server.gd"
 # Generous, because one reply covers a whole AI turn on a company-sized map.
 READ_TIMEOUT = float(os.environ.get("MCF_RL_ENV_TIMEOUT", "900"))
 
-# AIController.Difficulty; -1 = the trainer serves the opponent's actions itself (Phase B).
-EASY, NORMAL, HARD, EXTERNAL = 0, 1, 2, -1
+# AIController.Difficulty.HARD — the only scripted opponent RL plays (NORMAL and EASY are
+# retired from training and evaluation); -1 = the trainer serves the opponent's actions
+# itself (Phase B).
+HARD, EXTERNAL = 2, -1
 FOG_OFF, FOG_STANDARD, FOG_REALISTIC = 0, 1, 2
 
 
@@ -34,7 +36,7 @@ class EpisodeConfig:
     map_path: str
     seed: int
     side: int = 0
-    opponent: int = NORMAL
+    opponent: int = HARD
     round_cap: int = 10
     max_steps: int = 3000        # env steps (both sides) before the episode is called a draw
     civilians: bool = False

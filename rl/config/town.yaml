@@ -23,7 +23,6 @@ maps:
   - rl/maps/town_50x50.json
 stage: 1
 phase: A
-opponent: normal
 pool_ai_fraction: 0.15
 pool_size: 6
 round_cap: 12       # rounds per game before it is called a draw
@@ -56,8 +55,6 @@ eval_games: 4        # 8 took over five hours once the machine was contended (a 
                      # Chrome renderer at 98% plus 2.2 GB of swap), and a stuck evaluation
                      # blocks the pending stop, so a config change cannot land either.
                      # One batch across n_envs bounds the worst case.
-eval_opponents: [hard]   # HARD only: NORMAL measured the same thing (AIController splits them
-                         # on one shot-scoring tiebreak) and HARD is the graduation opponent
 replays_per_checkpoint: 2
 map_rotate_matches: 5
 seed: 1

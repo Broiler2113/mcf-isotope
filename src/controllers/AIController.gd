@@ -122,6 +122,7 @@ const GEO_FAR := 1 << 20
 ## волновых BFS — отсюда фриз при большом числе юнитов. Теперь на решение приходится
 ## один актёр, и на экране видно, что бойцы ходят по очереди, а не скачут вразнобой.
 var _queue: Array = []       # [{id: int, vehicle: bool}] в порядке хода
+var _drones_queued: Dictionary = {}   # id дронов, уже поставленных в очередь этого хода
 var _turn_token: int = -1    # ход, для которого построена очередь
 
 ## Явка на этот ход (#103): id тех, кто уже что-то сделал, и сколько принудительных
@@ -203,6 +204,12 @@ func _decide(state: GameState) -> Intent:
 			return best["intent"]
 		_queue.pop_front()
 		if _queue.is_empty() and not _forced_pass:
+			# Дрон, поднятый развёртыванием станции ПОСРЕДИ хода, в начальную очередь не
+			# попал — даём ему слетать сейчас, до принудительного прохода.
+			var late := _unqueued_drones(state)
+			if not late.is_empty():
+				_queue = late
+				continue
 			_forced_pass = true
 			_queue = _idle_rows(state)
 	return EndTurnIntent.new()
@@ -428,6 +435,7 @@ func _sync_turn(state: GameState, r: GameActionResolver) -> void:
 	_geo_probe = -1  # новый ход: штамп обязан пересчитаться, даже внутри того же решения
 	# Явка считается ровно за один ход (#103): в новом ходу все снова «не ходили».
 	_acted.clear()
+	_drones_queued.clear()
 	_forced_tries.clear()
 	_forced_pass = false
 	# Где все стояли на начало хода (item 1) — по этому следу оценка узнаёт челнок.
@@ -446,6 +454,18 @@ func _sync_turn(state: GameState, r: GameActionResolver) -> void:
 	for u: UnitInstance in state.living_units_of(owner):
 		if u.aboard_vehicle_id != -1 and r.seated_vehicle_of(u) != null:
 			_queue.append({"id": u.id, "vehicle": false})
+	_queue.append_array(_unqueued_drones(state))
+
+## Свои дроны, ещё не стоявшие в очереди этого хода. Планировщик дронов не расставляет
+## («летает по своей геометрии»), а больше их в очередь не ставил никто: _drone_action не
+## вызывался НИ РАЗУ, и дроны ИИ всю партию висели над станцией.
+func _unqueued_drones(state: GameState) -> Array:
+	var rows: Array = []
+	for u: UnitInstance in state.living_units_of(owner):
+		if u.is_drone and not _drones_queued.has(u.id):
+			_drones_queued[u.id] = true
+			rows.append({"id": u.id, "vehicle": false})
+	return rows
 
 ## Техника в очереди хода: своя/захваченная, ближняя к врагу — первой (§техника).
 ## Пехотную часть очереди строит планировщик, машины он не расставляет — у них
@@ -503,8 +523,10 @@ func _best_for_actor(state: GameState, r: GameActionResolver, row: Dictionary) -
 	# то есть дробить движение ИИ технически умел, а пользоваться этим не мог.
 	# Недоставленные мины (item 45) — такой же ресурс: остаток кредита кладётся без ОД
 	# (batch 12 #3), иначе сапёр ставил бы по одной мине за действие.
+	# Дрон — исключение: подрыв бесплатен (item 26), и выдохшийся после подлёта дрон
+	# обязан взорваться над врагом в этот же ход, а не висеть до следующего.
 	if u.remaining_ap <= 0 and u.move_credit <= 0 and u.mine_credits <= 0 \
-			and not _pending_shoot(u):
+			and not _pending_shoot(u) and not u.is_drone:
 		return {}
 	# Пленник сохраняет ОД (#76), но единственное, что ему доступно, — рывок на свободу.
 	if u.is_held():
@@ -597,6 +619,12 @@ func _candidates(state: GameState, r: GameActionResolver, u: UnitInstance) -> Ar
 		var flee := _flee_fire(state, u)
 		if not flee.is_empty():
 			out.append(flee)
+		# Оператор, чей дрон в воздухе, стоит у станции: шаг в сторону — и дрон теряет
+		# управление (operator_controls). От огня уходит — это выше дрона.
+		if u.stats.special_ability_id == MCF.ABILITY_DRONE_OPERATOR:
+			var drone := r.active_drone_of(u)
+			if drone != null and r.operator_controls(drone):
+				return out
 		# Первый ход: идём набивать свои пустые танки (item 6) — до сближения с врагом.
 		var to_own_veh := _move_to_own_vehicle(state, u)
 		if not to_own_veh.is_empty():
@@ -1204,11 +1232,22 @@ func _best_blast_path(state: GameState, r: GameActionResolver, u: UnitInstance) 
 ## пехоте, он так и не окажется на линии огня с танком.
 ## Запуск дрона оператором (item 17): есть развёрнутая станция, дрон ещё не в воздухе,
 ## и хватает ОД. Умеренный приоритет — ниже прямого выстрела, но охотно, когда есть чем.
+##
+## Станция ещё в руках — развернуть её: развёртывание само поднимает дрон (#77). Без этого
+## ИИ не ставил станцию НИКОГДА (UseItem он не выбирал вовсе), и на карте дронов восемь его
+## операторов всю партию ходили пехотой — обучение шло против соперника без дронов.
 func _best_drone_launch(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
 	if u.stats.special_ability_id != MCF.ABILITY_DRONE_OPERATOR or u.remaining_ap <= 0:
 		return {}
-	if r.deployed_station_of(u) == Vector2i(-1, -1) or r.active_drone_of(u) != null:
+	if r.active_drone_of(u) != null:
 		return {}
+	if r.deployed_station_of(u) == Vector2i(-1, -1):
+		if u.held_item_id != MCF.ITEM_DRONE_STATION or r.can_use_item(u) != "":
+			return {}
+		var cells: Array = r.station_place_cells(u)
+		if cells.is_empty():
+			return {}
+		return {"score": SCORE_SHOOT_BASE * 0.6, "intent": UseItemIntent.new(u.id, cells[0])}
 	return {"score": SCORE_SHOOT_BASE * 0.6, "intent": SpawnDroneIntent.new(u.id)}
 
 ## Посадка ИИ в свою свободную машину рядом (item 17): не щитоносец, без трупов на руках,
@@ -1773,7 +1812,7 @@ func _drone_action(state: GameState, r: GameActionResolver, u: UnitInstance) -> 
 	# Недолётанный остаток — такой же повод действовать, как целое ОД (#13): без
 	# него дрон, истративший своё единственное действие на короткий подлёт, замирал
 	# бы до конца хода с половиной дальности в запасе.
-	if not r.operator_controls(u) or (u.remaining_ap <= 0 and u.move_credit <= 0):
+	if not r.operator_controls(u):
 		return {}
 	# Подрыв НАД ВРАЖЕСКОЙ МАШИНОЙ — лучшее, на что дрон способен: узел он выбирает сам,
 	# без бросков и без оглядки на борта (§4), то есть кладёт своё очко туда, куда
@@ -1792,17 +1831,25 @@ func _drone_action(state: GameState, r: GameActionResolver, u: UnitInstance) -> 
 	for e: UnitInstance in _enemies_of(state):
 		if Combat.distance(u.coord, e.coord) <= MCF.ANTI_TANK_BLAST_RADIUS:
 			return {"score": SCORE_SHOOT_BASE + _unit_value(e), "intent": DroneDetonateIntent.new(u.id)}
-	# Иначе — лететь к ближайшему врагу.
+	# Иначе — лететь к ближайшему врагу. Подрыв выше бесплатен, а полёт — нет.
+	if u.remaining_ap <= 0 and u.move_credit <= 0:
+		return {}
 	var enemy := _nearest_enemy(state, u.coord, false, r)
 	if enemy == null:
 		return {}
 	var best: Dictionary = {}
+	# Лететь — только ближе, чем висит сейчас. Враг за привязью, и дрон, стоящий на её краю,
+	# перескакивал между равноудалёнными клетками, прожигая остаток подлёта по клетке:
+	# на карте дронов ~200 пустых полётов за два раунда.
+	var here := Combat.distance(u.coord, enemy.coord)
 	for coord: Vector2i in r.drone_flight_cells(u):
 		# Зависание над стеной (#96) — приём для подрыва самой стены, а ИИ охотится за
 		# людьми. Ему такая клетка только тупик: выход с неё ровно один, назад.
 		if state.grid.cell(coord).is_wall():
 			continue
 		var d := Combat.distance(coord, enemy.coord)
+		if d >= here:
+			continue
 		var score := SCORE_MOVE_BASE + float(1000 - d)
 		if best.is_empty() or score > best["score"]:
 			best = {"score": score, "intent": DroneMoveIntent.new(u.id, coord)}

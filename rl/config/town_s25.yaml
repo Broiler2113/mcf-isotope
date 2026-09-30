@@ -34,7 +34,6 @@ maps:
   - rl/maps/town_50x50_s25.json
 stage: 1
 phase: A
-opponent: normal
 pool_ai_fraction: 0.15
 pool_size: 6
 round_cap: 20       # rounds per game before it is decided on head count.
@@ -97,8 +96,6 @@ eval_games: 10      # было 4, и это оказалось МЕНЬШЕ ра
                     # Цена: ~4500 шагов среды на оценку против 38 400 обучающих шагов на
                     # те же 25 апдейтов, то есть около 12% — на ротной карте это было бы
                     # неподъёмно, на взводной уже нет.
-eval_opponents: [hard]   # HARD only: NORMAL measured the same thing and HARD is the
-                         # graduation opponent
 replays_per_checkpoint: 2
 map_rotate_matches: 5
 seed: 1

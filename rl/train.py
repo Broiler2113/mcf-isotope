@@ -8,7 +8,7 @@
     train.py pause  <branch>                          checkpoint and hold; envs stay up
     train.py continue <branch>                        release a paused run
     train.py status [branch]
-    train.py eval   <checkpoint.pt> [--games N] [--opponent normal|hard|easy] [--record DIR]
+    train.py eval   <checkpoint.pt> [--games N] [--record DIR]      greedy games vs HARD
     train.py play   <checkpoint.pt>                   real game, checkpoint in the AI slot
     train.py export <checkpoint.pt> <out.onnx>        policy + value head (Section 12)
 
@@ -45,12 +45,21 @@ from torch.utils.tensorboard import SummaryWriter  # noqa: E402
 
 from features import (CAND_DIM, CANVAS, FLAT_DIM, N_CHANNELS, Sparse, candidate_rows,  # noqa: E402
                       flat_vector, grid_tensor)
-from mcf_env import (EASY, EXTERNAL, HARD, NORMAL, PROJECT, EnvDied,  # noqa: E402
+from mcf_env import (EXTERNAL, HARD, PROJECT, EnvDied,  # noqa: E402
                      EpisodeConfig, VecEnv)
 from model import OnnxWrapper, PolicyNet  # noqa: E402
 
 RUNS = os.path.join(PROJECT, "rl", "runs")
-OPPONENTS = {"easy": EASY, "normal": NORMAL, "hard": HARD}
+# Never shrink the rollout below this under memory pressure: a handful of transitions
+# per update is not training, and at that point the base process is the problem.
+MIN_ROLLOUT_MB = 192.0
+# The one scripted opponent: AIController HARD, for training (Phase A, and the scripted
+# share of Phase B) and for every evaluation. The owner retired NORMAL and EASY outright;
+# the game keeps them for human matches, the RL pipeline has no way to select them.
+SCRIPTED = "hard"
+# Config keys that used to choose the scripted opponent. Dropped from any config a run
+# loads — a branch whose saved config still says `opponent: normal` trains vs HARD.
+RETIRED_KEYS = ("opponent", "eval_opponents")
 FOGS = {"off": 0, "standard": 1, "realistic": 2}
 UNIT_NAMES = ["light_infantry", "heavy_infantry", "machinegunner", "sniper", "anti_tank",
               "engineer", "flamethrower", "assault", "marksman", "miner", "sapper",
@@ -60,7 +69,7 @@ UNIT_NAMES = ["light_infantry", "heavy_infantry", "machinegunner", "sniper", "an
 DEFAULTS = dict(
     godot=os.environ.get("GODOT", "godot"),   # rl/.env sets GODOT; a config's godot: overrides
     n_envs=2, maps=["rl/maps/arena_34x26.json"], stage=1,
-    phase="A", opponent="normal", pool_ai_fraction=0.15, pool_size=6,
+    phase="A", pool_ai_fraction=0.15, pool_size=6,
     round_cap=10, max_steps=3000, max_candidates=0, max_actors=0,
     civilians=False, random_events=False, fog="standard", friendly_fire=True,
     rollout_steps=256, epochs=4, minibatch=32, lr=3e-4, gamma=0.99, lam=0.95, clip=0.2,
@@ -74,13 +83,6 @@ DEFAULTS = dict(
     # unrelated each time". 0 disables the check.
     target_kl=0.02,
     checkpoint_every=5, eval_every=10, eval_games=6, replays_per_checkpoint=2,
-    # Which scripted opponents an evaluation measures against. HARD only, because NORMAL
-    # was very nearly the same measurement: six arena games came back identical to their
-    # HARD counterparts step for step, and AIController differentiates the two in exactly
-    # one line (a shot-scoring tiebreak at 1053) — everything else keyed off difficulty is
-    # EASY-only. Two columns that agree by construction cost twice the eval time and say
-    # one thing. HARD is also the graduation opponent (8.2), so it is the one that counts.
-    eval_opponents=["hard"],
     map_rotate_matches=5, seed=1, torch_threads=0,
     # --- keeping the machine alive (the trainer runs for weeks, unattended) ---
     keep_checkpoints=12,      # newest N kept on disk; 0 = keep everything
@@ -115,16 +117,16 @@ def load_config(path: str | None) -> dict:
         for m in cfg[key]:
             if not os.path.exists(m):
                 sys.exit(f"map not found ({key}): {m}")
-    bad = [o for o in cfg["eval_opponents"] if o not in OPPONENTS]
-    if bad:
-        sys.exit(f"eval_opponents: unknown {bad}; pick from {sorted(OPPONENTS)}")
-    return cfg
+    return with_defaults(cfg)
 
 
 def with_defaults(cfg: dict) -> dict:
     """A config read out of an old checkpoint predates keys added since. Fill them in
-    rather than sprinkling .get() over the trainer."""
-    return dict(DEFAULTS) | dict(cfg or {})
+    rather than sprinkling .get() over the trainer — and drop the retired ones."""
+    out = dict(DEFAULTS) | dict(cfg or {})
+    for k in RETIRED_KEYS:
+        out.pop(k, None)
+    return out
 
 
 def mem_report() -> dict:
@@ -281,12 +283,19 @@ class Trainer:
         self.writer = SummaryWriter(os.path.join(run_dir, "tb"))
         self.envs: VecEnv | None = None
         self.stop_requested = False
+        # Why this process ended: "" (operator stop / total_steps), "memory" or "disk".
+        # The supervisor resumes a resource stop and leaves an operator stop alone.
+        self.stop_reason = ""
         # Ordered so the least recently used frozen opponent is the one evicted: one
         # PolicyNet per pool member is a few MB, and an unbounded dict grew without end.
         self.pool_cache: OrderedDict[str, PolicyNet] = OrderedDict()
         self.episode_seed = self.cfg["seed"] * 1000
         self._last_status = 0.0
         self.last_eval: dict = {}
+        # Live, shrinkable copy of the configured cap, plus the memory the process costs
+        # with no rollout held (measured after each update drops the buffer).
+        self.rollout_budget_mb = float(self.cfg["rollout_budget_mb"]) or float("inf")
+        self._base_mb = 0.0
         self._disk = (0.0, 0.0)          # (measured at, MB)
 
     def has_eval_history(self) -> bool:
@@ -441,7 +450,7 @@ class Trainer:
     def pick_opponent(self) -> tuple[int, str]:
         """(env opponent code, label). Phase A: the scripted AI. Phase B: the pool."""
         if self.cfg["phase"] == "A" or self.rng.random() < self.cfg["pool_ai_fraction"]:
-            return OPPONENTS[self.cfg["opponent"]], "ai:" + self.cfg["opponent"]
+            return HARD, "ai:" + SCRIPTED
         member = self.rng.choice(["self"] + self.pool_checkpoints())
         if member != "self":
             # Load it now: by the opponent's first move this checkpoint may have left the
@@ -449,7 +458,7 @@ class Trainer:
             self.pool_net(member)
         return EXTERNAL, "pool:" + member
 
-    def _save_rollout_replay(self, env, result: str) -> None:
+    def _save_rollout_replay(self, env, result: str, info: dict) -> None:
         """Write one training replay for the map this episode was played on.
 
         Filed under replays/train/<step>/ rather than replays/checkpoint_*/ so it is
@@ -468,13 +477,22 @@ class Trainer:
             os.makedirs(d, exist_ok=True)
             path = os.path.join(d, f"{stem}_{result}.mcfr")
             if env.save_replay(path):
-                # Sidecar in the same schema the evaluation replays use, so the gallery
-                # shows map, result and rounds instead of falling back to the file name.
+                # Sidecar in the same schema the evaluation replays use. It has to carry
+                # the match's OUTCOME NUMBERS too, not just its identity: without by /
+                # value_diff / rounds the gallery showed None in those columns for every
+                # training replay, which reads as "broken on every map except the
+                # evaluation one" — evaluation is pinned to a single map, so its rows were
+                # the only populated ones.
                 with open(path + ".json", "w") as f:
                     json.dump(dict(branch=os.path.basename(self.run_dir),
                                    step=self.global_step, update=self.update,
                                    opponent=env.label, source="training",
-                                   result=result, map=env.cfg.map_path,
+                                   result=result, by=info.get("by", ""),
+                                   value_diff=info.get("value_diff"),
+                                   rounds=info.get("round"), steps=info.get("steps"),
+                                   illegal=info.get("illegal"),
+                                   fire_losses=info.get("fire_losses"),
+                                   map=env.cfg.map_path,
                                    side=env.cfg.side, seed=env.cfg.seed,
                                    time=time.time()), f)
         except Exception as e:      # a replay is a nicety; never take the run down for one
@@ -549,9 +567,9 @@ class Trainer:
             if env.last is None or env.last.get("done", True):
                 new_episode(i)
             elif not env.label:
-                env.label = "ai:" + cfg["opponent"]
+                env.label = "ai:" + SCRIPTED
         t0 = time.time()
-        budget = float(cfg["rollout_budget_mb"]) * 2**20
+        budget = float(self.rollout_budget_mb) * 2**20
         buf_bytes = 0
         self.pool_cache.pop("self", None)
         self.write_status("running", "collecting rollout", 0, T * n)
@@ -646,12 +664,14 @@ class Trainer:
                     stats["value_diff"].append(info["value_diff"])
                     stats["illegal"].append(info["illegal"])
                     stats["result"].append((env.label, os.path.basename(env.cfg.map_path), res))
+                    stats["aim"].append((os.path.basename(env.cfg.map_path),
+                                         info.get("shots", 0), info.get("shots_hit", 0)))
                     illegal += info["illegal"]
                     self.matches_done += 1
                     # Save BEFORE any reset: the recording lives in the env and a reset
                     # discards it.
                     if env.cfg is not None and env.cfg.record:
-                        self._save_rollout_replay(env, res)
+                        self._save_rollout_replay(env, res, info)
                     if taken < T * n and not capped:
                         new_episode(i)
         dt = time.time() - t0
@@ -764,11 +784,12 @@ class Trainer:
         return res
 
     # -- evaluation (10.3): greedy, fixed seeds, not training data --
-    def evaluate(self, opponent: str, games: int, record_dir: str | None = None,
+    def evaluate(self, games: int, record_dir: str | None = None,
                  keep: int = 0, net: PolicyNet | None = None) -> dict:
         """Game k always gets seed_base + k and side k % 2, whichever env plays it; an env
         starts its next game the moment it finishes one instead of waiting for the slowest
         game of a batch."""
+        opponent = SCRIPTED
         net = net or self.act_net
         envs = self.envs.envs
         results, diffs, rounds = [], [], []
@@ -795,7 +816,7 @@ class Trainer:
             started += 1
             envs[i].cfg = EpisodeConfig(
                 map_path=eval_maps[k % len(eval_maps)], seed=seed_base + k,
-                side=k % 2, opponent=OPPONENTS[opponent], round_cap=self.cfg["round_cap"], max_steps=self.cfg.get("max_steps", 3000),
+                side=k % 2, opponent=HARD, round_cap=self.cfg["round_cap"], max_steps=self.cfg.get("max_steps", 3000),
                 civilians=self.cfg["civilians"], random_events=self.cfg["random_events"],
                 fog=FOGS[self.cfg["fog"]], friendly_fire=self.cfg["friendly_fire"],
                 disembark=disembark_allowed(
@@ -913,9 +934,9 @@ class Trainer:
         draws = sum(r.startswith("draw") for r in results)
         # How the games ended, not just how many were won. An untrained greedy policy
         # tends to stall on a free action and never end its turn, so the episode dies on
-        # max_steps ("draw_steps") before the scripted opponent has played at all — and
-        # then NORMAL and HARD report identical numbers, which looks like a broken
-        # evaluation rather than what it is. The breakdown makes that legible.
+        # max_steps ("draw_steps") before the scripted opponent has played at all, which
+        # looks like a broken evaluation rather than what it is. The breakdown makes that
+        # legible.
         outcomes = Counter(results)
         return dict(games=len(results), winrate=wins / max(1, len(results)),
                     lossrate=outcomes["loss"] / max(1, len(results)),
@@ -963,6 +984,9 @@ class Trainer:
                 losses = self.ppo_update(buffers)      # writes its own progress heartbeat
                 del buffers            # the rollout is the biggest thing alive; drop it
                                        # before eval opens a second front on memory
+                # With the buffer gone this is what the process costs empty — the number
+                # over_memory_budget() needs to know how much rollout it can still afford.
+                self._base_mb = mem_report().get("total_mb", 0.0)
                 self.log(info, losses, time.time() - t0)
                 self.write_status("running", "update done", 0, 0)
                 if self.update % cfg["checkpoint_every"] == 0:
@@ -974,7 +998,7 @@ class Trainer:
                     self._replay_maps.clear()
                 # Evaluate on schedule, but also whenever this branch has no win rate at
                 # all yet. eval_every is tens of updates and an update can take minutes,
-                # so a fresh run used to show a blank "win vs NORMAL / HARD" for hours
+                # so a fresh run used to show a blank "win vs HARD" for hours
                 # and read as broken (§11.2). The second clause also rescues a branch
                 # trained before this rule existed: it evaluates on its next update.
                 if self.update % cfg["eval_every"] == 0 or not self.has_eval_history():
@@ -1006,7 +1030,8 @@ class Trainer:
                 print(f"[train] could not write the final checkpoint: {e}", flush=True)
             self.envs.close()
             self.writer.close()
-            self.write_status("crashed" if crash else "stopped", **crash)
+            self.write_status("crashed" if crash else "stopped",
+                              stop_reason=self.stop_reason, **crash)
 
     # -- pause (11.3): hold the run without tearing the envs down --
     def wait_while_paused(self) -> bool:
@@ -1049,39 +1074,69 @@ class Trainer:
             return False
         print(f"[train] disk floor reached: {free:.0f} MB free < {floor:.0f} MB "
               f"— checkpointing and exiting while the write can still succeed", flush=True)
-        self.write_status("running", f"below disk_floor_mb ({free:.0f} MB free) — exiting", 0, 0)
+        self.write_status("running", f"below disk_floor_mb ({free:.0f} MB free) — exiting", 0, 0,
+                          stop_reason="disk")
+        self.stop_reason = "disk"
         return True
 
     def over_memory_budget(self) -> bool:
+        """True only when no rollout small enough to fit exists — otherwise SHRINK and
+        carry on.
+
+        The budget used to end the run. It is the elastic part of the process that pushes
+        it over — the rollout buffer, whose size is the map's candidate count times the
+        steps collected, and a company-scale town map is an order of magnitude heavier per
+        step than the arena the defaults were set on. So town-8 exited every few updates on
+        a limit it could simply have trained under: 3.6 GB of trainer against a 1.4 GB base
+        is 2.2 GB of buffer, and the run needed a smaller buffer, not a restart (which
+        rebuilds exactly the same buffer and exits again — 28 restarts overnight).
+
+        Shrinking costs samples per update, not correctness: a short rollout is still an
+        unbiased set of transitions, and ppo_update already handles a rollout cut short by
+        rollout_budget_mb. Only a BASE process too big to hold any rollout is fatal, and
+        that one still exits with a checkpoint and a reason."""
         limit = float(self.cfg["mem_limit_mb"])
         if limit <= 0:
             return False
         used = mem_report().get("total_mb", 0.0)
         if used < limit:
             return False
-        # Exiting here is the friendly failure: a checkpoint is written and the reason
-        # is on the dashboard. An OOM kill leaves neither.
-        print(f"[train] memory budget reached: {used:.0f} MB >= {limit:.0f} MB "
-              f"(trainer + envs) — checkpointing and exiting", flush=True)
-        self.write_status("running", f"over mem_limit_mb ({used:.0f} MB) — exiting", 0, 0)
+        # What the process costs with no rollout held: measured right after ppo_update
+        # dropped the buffer (see train()), so it is the real floor, not an estimate.
+        base = self._base_mb or used
+        headroom = limit - base
+        if headroom >= MIN_ROLLOUT_MB:
+            new_budget = max(MIN_ROLLOUT_MB, min(headroom * 0.8, self.rollout_budget_mb * 0.6))
+            if new_budget < self.rollout_budget_mb - 1:
+                print(f"[train] memory {used:.0f} MB >= {limit:.0f} MB — rollout budget "
+                      f"{self.rollout_budget_mb:.0f} -> {new_budget:.0f} MB "
+                      f"(base {base:.0f} MB) and carrying on", flush=True)
+                self.rollout_budget_mb = new_budget
+                self.writer.add_scalar("speed/rollout_budget_mb", new_budget, self.global_step)
+                return False
+        print(f"[train] memory budget reached: {used:.0f} MB >= {limit:.0f} MB with a "
+              f"{base:.0f} MB base — no rollout fits; checkpointing and exiting", flush=True)
+        self.write_status("running", f"over mem_limit_mb ({used:.0f} MB) — exiting", 0, 0,
+                          stop_reason="memory")
+        self.stop_reason = "memory"
         return True
 
     def run_eval(self):
-        """Both reference opponents, every time. An eval that dies with its Godot env
+        """Greedy games vs HARD, every time. An eval that dies with its Godot env
         must not take the run with it — the win rate is a diagnostic, not the training
         signal, so a failed one is logged as such and training carries on."""
         rec = os.path.join(self.run_dir, "replays", f"checkpoint_{self.global_step:09d}")
         row = {"step": self.global_step, "update": self.update, "time": time.time(),
                "phase": self.cfg["phase"], "stage": self.cfg["stage"]}
-        for opp in self.cfg["eval_opponents"]:
-            try:
-                r = self.evaluate(opp, self.cfg["eval_games"], record_dir=rec,
-                                  keep=self.cfg["replays_per_checkpoint"])
-            except EnvDied as e:
-                print(f"[eval] vs {opp} aborted: {e}", flush=True)
-                row[f"error_{opp}"] = str(e)
-                self.envs.rebuild()
-                continue
+        opp = SCRIPTED
+        try:
+            r = self.evaluate(self.cfg["eval_games"], record_dir=rec,
+                              keep=self.cfg["replays_per_checkpoint"])
+        except EnvDied as e:
+            print(f"[eval] vs {opp} aborted: {e}", flush=True)
+            row[f"error_{opp}"] = str(e)
+            self.envs.rebuild()
+        else:
             row.update({f"{k}_{opp}": v for k, v in r.items()})
             for k in ("winrate", "lossrate", "drawrate", "value_diff", "rounds", "stallrate"):
                 self.writer.add_scalar(f"eval/{k}_{opp}", r[k], self.global_step)
@@ -1137,6 +1192,22 @@ class Trainer:
                 w.add_scalar(f"map/{os.path.splitext(mp)[0]}_rounds", float(np.mean(vals)), s)
             for mp, vals in by_map_vd.items():
                 w.add_scalar(f"map/{os.path.splitext(mp)[0]}_value_diff", float(np.mean(vals)), s)
+            # Is it attacking? Shots per game and the share that damaged an enemy. Firing is
+            # not attacking: town-8 fired its tank cannon 1202 times in 12 tank-map games and
+            # 6% did damage (the scripted AI: 56%), which no win rate or action share shows.
+            aim = defaultdict(lambda: [0, 0, 0])
+            for mp, shots, hit in st["aim"]:
+                aim[mp][0] += shots
+                aim[mp][1] += hit
+                aim[mp][2] += 1
+            for mp, (shots, hit, games) in aim.items():
+                stem = os.path.splitext(mp)[0]
+                w.add_scalar(f"map/{stem}_shots", shots / games, s)
+                if shots:
+                    w.add_scalar(f"map/{stem}_hit_rate", hit / shots, s)
+            shots_all = sum(v[0] for v in aim.values())
+            if shots_all:
+                w.add_scalar("train/shot_hit_rate", sum(v[1] for v in aim.values()) / shots_all, s)
             w.add_scalar("train/drawrate", float(np.mean(st["draw"])), s)
             w.add_scalar("train/match_rounds", float(np.mean(st["rounds"])), s)
             w.add_scalar("train/value_diff_end", float(np.mean(st["value_diff"])), s)
@@ -1170,7 +1241,13 @@ class Trainer:
         print(f"[train] upd={self.update} step={s} matches={self.matches_done} win={wr} "
               f"pl={losses['policy_loss']:+.3f} vl={losses['value_loss']:.3f} "
               f"ent={losses['entropy']:.2f} kl={losses['approx_kl']:.4f} "
+              f"hit={self._aim_text(st)} "
               f"env={info['seconds']:.0f}s upd={update_secs:.0f}s", flush=True)
+
+    @staticmethod
+    def _aim_text(st: dict) -> str:
+        shots = sum(x[1] for x in st.get("aim", []))
+        return f"{sum(x[2] for x in st.get('aim', [])) / shots:.0%}" if shots else "-"
 
 
 # --- CLI ----------------------------------------------------------------------------------
@@ -1339,7 +1416,7 @@ def cmd_eval(a):
     t.envs = VecEnv(cfg["n_envs"], cfg["godot"],
                     log_dir=os.path.join(t.run_dir, "envlogs"))
     try:
-        r = t.evaluate(a.opponent, a.games, record_dir=a.record, keep=a.games if a.record else 0)
+        r = t.evaluate(a.games, record_dir=a.record, keep=a.games if a.record else 0)
         print(json.dumps(r))
     finally:
         t.envs.close()
@@ -1434,7 +1511,7 @@ def main():
     s = sp.add_parser("continue"); s.add_argument("branch"); s.set_defaults(fn=cmd_continue)
     s = sp.add_parser("status"); s.add_argument("branch", nargs="?"); s.set_defaults(fn=cmd_status)
     s = sp.add_parser("eval"); s.add_argument("checkpoint"); s.add_argument("--games", type=int, default=10)
-    s.add_argument("--opponent", choices=list(OPPONENTS), default="normal"); s.add_argument("--record"); s.set_defaults(fn=cmd_eval)
+    s.add_argument("--record"); s.set_defaults(fn=cmd_eval)
     s = sp.add_parser("export"); s.add_argument("checkpoint"); s.add_argument("out"); s.set_defaults(fn=cmd_export)
     s = sp.add_parser("play"); s.add_argument("checkpoint"); s.add_argument("--port", type=int, default=7791)
     s.add_argument("--godot", default="godot"); s.set_defaults(fn=cmd_play)

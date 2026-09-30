@@ -61,9 +61,10 @@ STATUS = {"good": "#0ca30c", "warning": "#fab219", "serious": "#ec835a", "critic
 OUTCOME_ORDER = ["win", "loss", "draw_cap", "draw_steps", "draw"]
 OUTCOME_COLOR = dict(zip(OUTCOME_ORDER, SERIES))
 
-# Mirrors train.py's DEFAULTS["eval_opponents"], for branches whose config.yaml predates
-# the key. Without it an old branch would keep showing its retired NORMAL column.
-DEFAULT_EVAL_OPPONENTS = ["hard"]
+# The one scripted opponent RL is trained and evaluated against (train.py SCRIPTED). Old
+# branches may still have NORMAL columns in eval_log.jsonl; those are history and are not
+# shown next to the live measurement.
+EVAL_OPPONENTS = ["hard"]
 
 THEME_CSS = f"""
 <style>
@@ -424,7 +425,19 @@ def live_card(b: str) -> None:
                    help="round cap reached with equal living units; stalls count here too")
     cols[3].metric("memory", f"{s['total_mb']:.0f} MB" if s.get("total_mb") else "—",
                    help="trainer + its Godot envs; `free` is what the machine has left")
-    cols[4].metric("run on disk", f"{s['disk_mb']:.0f} MB" if s.get("disk_mb") is not None else "—")
+    # Free DISK, not free memory — the number that decides whether the run survives the
+    # night. The trainer checkpoints and exits below `disk_floor_mb`, and it wrote
+    # disk_free_mb into every heartbeat all along; the card only ever showed free RAM, so
+    # town-8 stopped on a full volume while this panel read a comfortable "3306 MB free".
+    floor = float(branch_cfg(b).get("disk_floor_mb") or 0)
+    free_disk = s.get("disk_free_mb")
+    cols[4].metric("disk free", f"{free_disk:,.0f} MB" if free_disk is not None else "—",
+                   delta=(None if free_disk is None or floor <= 0
+                          else f"{free_disk - floor:+,.0f} MB vs floor"),
+                   delta_color="normal",
+                   help=f"free space on the runs volume; the trainer checkpoints and exits "
+                        f"below disk_floor_mb ({floor:.0f} MB). This run's own directory is "
+                        f"{s['disk_mb']:.0f} MB." if s.get("disk_mb") is not None else None)
     if pct(ev.get("winrate_hard")) == "—":
         nxt = s.get("next_eval_update")
         st.caption("No evaluation yet — win rates appear after the first one"
@@ -436,9 +449,8 @@ def live_card(b: str) -> None:
         if stall >= 0.25:
             st.caption(f"{stall:.0%} of the last evaluation's games ended on the step cap "
                        f"(`max_steps`) — the greedy policy stalls on a free action instead of "
-                       f"ending its turn, so those games say little about either opponent. "
-                       f"If NORMAL and HARD also read identical, the stall is swallowing the "
-                       f"whole evaluation; expect this to fall as the policy learns to end a turn.")
+                       f"ending its turn, so those games say little about the opponent; "
+                       f"expect this to fall as the policy learns to end a turn.")
     if s.get("free_mb") is not None:
         st.caption(f"machine: {s['free_mb']:.0f} MB free ({s.get('machine_pct', 0):.0f}% used)"
                    + (f" · envs {s['envs_mb']:.0f} MB · trainer {s['rss_mb']:.0f} MB"
@@ -524,9 +536,7 @@ def eval_games(branch: str) -> pd.DataFrame:
         df["branch"] = branch
         df["when"] = pd.to_datetime(df["time"], unit="s")
         # Same filter as long_evals, so the games shown belong to the tests shown.
-        want = [str(o).lower() for o in
-                (branch_cfg(branch).get("eval_opponents") or DEFAULT_EVAL_OPPONENTS)]
-        keep = df[df["opponent"].str.lower().isin(want)]
+        keep = df[df["opponent"].str.lower().isin(EVAL_OPPONENTS)]
         if not keep.empty:
             df = keep
     return df
@@ -538,15 +548,11 @@ def long_evals(branch: str) -> pd.DataFrame:
     ev = evals(branch)
     if ev.empty:
         return ev
-    # Which opponents to show: what the branch's config asks for, intersected with what
-    # is actually in the log. The intersection matters both ways — a branch evaluated
-    # against NORMAL before `eval_opponents` narrowed to HARD still has those columns on
-    # disk, and showing them would put a stale, retired measurement next to a live one.
+    # HARD only. A branch evaluated against NORMAL before it was retired still has those
+    # columns on disk; showing them would put a retired measurement next to the live one.
     # The jsonl keeps the history either way.
     found = sorted({c.rsplit("_", 1)[1] for c in ev.columns if c.startswith("winrate_")})
-    want = [str(o).lower() for o in
-            (branch_cfg(branch).get("eval_opponents") or DEFAULT_EVAL_OPPONENTS)]
-    opponents = [o for o in found if o in want] or found
+    opponents = [o for o in found if o in EVAL_OPPONENTS]
     out = []
     for opp in opponents:
         cols = {c: c[: -len(opp) - 1] for c in ev.columns if c.endswith(f"_{opp}")}
@@ -592,7 +598,7 @@ def checkpoints(_stamp: str) -> pd.DataFrame:
             parent = m.get("parent")
             row = dict(branch=b, step=int(m.get("global_step", 0)), update=m.get("update"),
                        matches=m.get("matches_done"), phase=cfg.get("phase"),
-                       stage=cfg.get("stage"), opponent=cfg.get("opponent"),
+                       stage=cfg.get("stage"),
                        maps=len(cfg.get("maps", [])), n_envs=cfg.get("n_envs"),
                        parent=(os.path.relpath(parent, RUNS) if parent else ""),
                        saved=pd.to_datetime(m.get("saved_at", 0), unit="s"),
@@ -606,7 +612,7 @@ def checkpoints(_stamp: str) -> pd.DataFrame:
                                draw_hard=e.get("drawrate_hard"), rounds_hard=e.get("rounds_hard"),
                                value_diff_hard=e.get("value_diff_hard"))
             rows.append(row)
-    cols = ["branch", "step", "update", "matches", "phase", "stage", "opponent", "maps", "n_envs",
+    cols = ["branch", "step", "update", "matches", "phase", "stage", "maps", "n_envs",
             "eval_step", "win_hard", "loss_hard", "draw_hard", "rounds_hard", "value_diff_hard",
             "parent", "saved", "file"]
     df = pd.DataFrame(rows)
@@ -845,6 +851,15 @@ def show(ch) -> None:
 # then what a healthy value looks like ON THIS PROJECT — the second half is the part
 # that is actually hard to look up.
 METRIC_HELP: dict[str, tuple[str, str]] = {
+    "hit_rate": (
+        "Of the policy's shots, the share that damaged an enemy (killed a unit or knocked "
+        "points off a vehicle); next to it, how many shots it takes per game.",
+        "Together they answer \"is it attacking?\". town-8 fired the tank cannon 1202 times in "
+        "12 tank-map games and 6% did damage — it was choosing target squares at random — "
+        "while the scripted AI hit 56%. Blind shots are no longer offered, which alone took "
+        "the same weights to 73% on 148 shots; what training has to add is shooting more "
+        "often when a target is there.",
+    ),
     "value_diff": (
         "Army points we have left minus the enemy's, at the final whistle, as a fraction "
         "of one starting army.",
@@ -1407,6 +1422,8 @@ def page_branch(b: str) -> None:
         wr = map_match_chart(sc, "winrate", "training win rate by map", pct=True)
         rd = map_match_chart(sc, "rounds", "match length by map (rounds)")
         vd = map_match_chart(sc, "value_diff", "end-of-match value_diff by map")
+        hr = map_match_chart(sc, "hit_rate", "shots that hit an enemy, by map", pct=True)
+        sh = map_match_chart(sc, "shots", "shots per game, by map")
         if wr or rd or vd:
             st.markdown("##### Per map, in training")
             st.caption("Evaluation is pinned to one map so it can be compared across runs; "
@@ -1418,6 +1435,14 @@ def page_branch(b: str) -> None:
             else:
                 show(wr or rd)
             show(vd)
+            if hr or sh:
+                if hr and sh:
+                    c1, c2 = st.columns(2)
+                    with c1: show(hr)
+                    with c2: show(sh)
+                else:
+                    show(hr or sh)
+                explain("hit_rate")
 
         # --- is the optimiser healthy? --------------------------------------------------
         #
@@ -1469,8 +1494,8 @@ def page_branch(b: str) -> None:
         path = write_next_config(b, text)
         if path:
             run_sh("restart", b, path)
-    grad = dict(cfg, phase="B", opponent="hard")
-    if c2.button("Graduate → Phase B, HARD teacher (§8.2)", disabled=cfg.get("phase") == "B", key="grad"):
+    grad = dict(cfg, phase="B")
+    if c2.button("Graduate → Phase B (§8.2)", disabled=cfg.get("phase") == "B", key="grad"):
         path = write_next_config(b, yaml.safe_dump(grad))
         if path:
             run_sh("restart", b, path)
@@ -1491,13 +1516,13 @@ def page_branch(b: str) -> None:
     ev = evals(b)
     if ev.empty:
         st.warning(
-            f"**No evaluation has finished yet, so the win rates vs NORMAL and HARD are "
+            f"**No evaluation has finished yet, so the win rate vs HARD is "
             f"blank.** A run evaluates on its first update and then every "
             f"`eval_every` ({cfg.get('eval_every', '?')}) updates — at update "
             f"{s.get('update', 0)} the next one lands at {s.get('next_eval_update', '?')}. "
             f"For a quicker read, lower `eval_every` and `eval_games` below, or run one "
             f"by hand:")
-        st.code(f"python rl/train.py eval rl/runs/{b}/latest.pt --games 10 --opponent hard")
+        st.code(f"python rl/train.py eval rl/runs/{b}/latest.pt --games 10")
     else:
         ev = ev.copy()
         ev["time"] = pd.to_datetime(ev["time"], unit="s")
@@ -1550,7 +1575,7 @@ def page_evaluations(b: str) -> None:
                 f"first update and then every `eval_every` "
                 f"({cfg.get('eval_every', '?')}) updates — it is at update "
                 f"{s.get('update', 0)}, next test at {s.get('next_eval_update', '?')}.")
-        st.code(f"python rl/train.py eval rl/runs/{b}/latest.pt --games 10 --opponent hard")
+        st.code(f"python rl/train.py eval rl/runs/{b}/latest.pt --games 10")
         return
 
     latest = lg[lg["step"] == lg["step"].max()]
@@ -1592,7 +1617,7 @@ def page_evaluations(b: str) -> None:
     with c1:
         show(line_chart(lg.rename(columns={"opponent": "series", "winrate": "value"})
                         [["step", "series", "value"]],
-                        "win rate (0.55 vs NORMAL is the §8.2 graduation bar)", pct=True))
+                        "win rate vs HARD (0.55 is the §8.2 graduation bar)", pct=True))
         show(line_chart(lg.rename(columns={"opponent": "series", "value_diff": "value"})
                         [["step", "series", "value"]],
                         "army-value differential at the end"))
@@ -1649,18 +1674,37 @@ def page_replays() -> None:
     # "win" list is itself the answer to "has it won yet", and a picker that hides the
     # option makes that unanswerable.
     counts = df["outcome"].value_counts()
-    c1, c2, c3, c4 = st.columns(4)
+    # A replay with no map in its sidecar still needs a value, or it would vanish from the
+    # gallery the moment anyone filters by map.
+    df = df.copy()
+    df["map"] = df["map"].replace("", "?").fillna("?")
+    map_counts = df["map"].value_counts()
+    c1, c2, c3, c4, c5 = st.columns(5)
     fc = c1.multiselect("outcome", ["win", "draw", "loss"],
                         format_func=lambda o: f"{o} ({int(counts.get(o, 0))})")
-    fb = c2.multiselect("branch", sorted(df["branch"].unique()))
-    fo = c3.multiselect("opponent", sorted(df["opponent"].unique()))
-    only = c4.checkbox("outstanding only")
+    # The pool mixes map kinds, so "show me the tank games" is the first thing anyone asks
+    # of this gallery. Counts are on the options because an empty list for a map is itself
+    # an answer ("nothing recorded there yet").
+    fm = c2.multiselect("map", sorted(df["map"].unique()),
+                        format_func=lambda m: f"{m} ({int(map_counts.get(m, 0))})")
+    fb = c3.multiselect("branch", sorted(df["branch"].unique()))
+    fo = c4.multiselect("opponent", sorted(df["opponent"].unique()))
+    with c5:
+        sort_by = st.selectbox("sort by", ["newest", "map", "outcome", "value_diff", "rounds"])
+        only = st.checkbox("outstanding only")
     v = df
     if fc: v = v[v["outcome"].isin(fc)]
+    if fm: v = v[v["map"].isin(fm)]
     if fb: v = v[v["branch"].isin(fb)]
     if fo: v = v[v["opponent"].isin(fo)]
     if only: v = v[v["outstanding"] != ""]
-    v = v.sort_values("date", ascending=False).reset_index(drop=True)
+    # Sorting by a field other than the date keeps date as the tiebreak, so a map's games
+    # still read newest-first inside the group. (The table's own headers sort too; this is
+    # for the orderings worth one click.)
+    order = {"newest": ["date"], "map": ["map", "date"], "outcome": ["outcome", "date"],
+             "value_diff": ["value_diff", "date"], "rounds": ["rounds", "date"]}[sort_by]
+    v = v.sort_values(order, ascending=[sort_by in ("map", "outcome", "rounds")] + [False] * (len(order) - 1),
+                      na_position="last").reset_index(drop=True)
     sel = st.dataframe(renderable(v.drop(columns=["file"])), width="stretch", hide_index=True,
                        on_select="rerun", selection_mode="single-row")
     rows = sel.get("selection", {}).get("rows", []) if isinstance(sel, dict) else sel.selection.rows

@@ -8,6 +8,7 @@
 #   bash rl/run.sh restart <branch> <config.yaml>  # stop, wait for the checkpoint, resume (11.3)
 #   bash rl/run.sh fork   <ckpt rel. to runs/> <new-branch>
 #   bash rl/run.sh stop   <branch>                 # graceful: checkpoint after this update
+#   bash rl/run.sh supervise <branch> [config]     # keep it alive: resume crashes and resource stops
 #   bash rl/run.sh pause  <branch>                 # checkpoint and hold; Godot envs stay up
 #   bash rl/run.sh continue <branch>               # release a paused run
 #   bash rl/run.sh status | logs <name> | alive <branch>
@@ -91,11 +92,18 @@ case "${1:-}" in
            if [ -n "${4:-}" ]; then train "$3" fork "$RUNS/$2" --branch "$3" --config "$(abspath "$4")"
            else train "$3" fork "$RUNS/$2" --branch "$3"; fi;;
   stop)    "$PY" "$HERE/train.py" stop "$2"; rm -f "$RUNS/$2.pid";;
+  supervise)
+    # Backgrounded through spawn like everything else, so it gets a pid file and
+    # `run.sh down` stops it too — a supervisor that outlived `down` would resume the
+    # very branch you just stopped.
+    CFG="${3:-$RUNS/$2/config.yaml}"
+    [ -f "$CFG" ] || { echo "no config at $CFG — pass one: run.sh supervise $2 <config.yaml>"; exit 2; }
+    spawn "supervisor-$2" bash "$HERE/tools/supervise.sh" "$2" "$(abspath "$CFG")";;
   pause)    "$PY" "$HERE/train.py" pause "$2";;      # pid stays: a paused run is a live process
   continue) "$PY" "$HERE/train.py" continue "$2";;
   status)  "$PY" "$HERE/train.py" status "${2:-}"
            for p in "$RUNS"/*.pid; do [ -f "$p" ] && pid_alive "$p" && echo "process: $(basename "$p" .pid) (pid $(cat "$p"))"; done; true;;
   logs)    tail -f "$RUNS/$2.log";;
   alive)   alive "$2";;
-  *) sed -n 2,14p "$0"; exit 2;;
+  *) sed -n 2,15p "$0"; exit 2;;
 esac

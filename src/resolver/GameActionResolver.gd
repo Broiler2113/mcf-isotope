@@ -4219,6 +4219,13 @@ func _drone_reach(drone: UnitInstance) -> Dictionary:
 	var visited: Dictionary = {}
 	var frontier: Array = [drone.coord]
 	_drone_prev = {}
+	# Дроны по клеткам — один проход вместо _drone_at() на каждого соседа каждой клетки:
+	# тот перебирал всех юнитов карты, и на карте дронов поиск стоил ~60 мс. Первый
+	# встреченный дрон на клетке — ровно тот, кого вернул бы _drone_at().
+	var drones_at := {}
+	for u in state.all_units():
+		if u.is_drone and u.is_alive() and not drones_at.has(u.coord):
+			drones_at[u.coord] = u
 	while not frontier.is_empty():
 		var best_i := 0
 		for i in range(1, frontier.size()):
@@ -4246,7 +4253,7 @@ func _drone_reach(drone: UnitInstance) -> Dictionary:
 			var cell := state.grid.cell(nxt)
 			# Дрон перелетает трупы и юнитов и садится на них (#13): мешают лишь
 			# корпус машины и другой дрон.
-			var od := _drone_at(nxt)
+			var od: UnitInstance = drones_at.get(nxt)
 			# Своя станция в кресле челнока (batch 13 S8) — единственная клетка корпуса,
 			# на которую дрон может сесть.
 			if (cell.vehicle_id != -1 and nxt != drone.home_station) or (od != null and od != drone):
@@ -5454,8 +5461,11 @@ func blastable_cells(shooter: UnitInstance) -> Array:
 		return out
 	var reach := shooter.fire_range()
 	# Собственная клетка — первой в списке (#11): она и есть «ударить под себя»,
-	# и UI подсвечивает её наравне с остальными.
-	out.append(shooter.coord)
+	# и UI подсвечивает её наравне с остальными. Через ту же проверку, что и остальные:
+	# стоящий на клетке космоса (без пола) ударить под себя не может, а список её
+	# предлагал — перечислитель RL выдавал намерение, которое резолвер отклонял.
+	if can_blast_cell(shooter, shooter.coord) == "":
+		out.append(shooter.coord)
 	for dy in range(-int(reach), int(reach) + 1):
 		for dx in range(-int(reach), int(reach) + 1):
 			var c := Vector2i(shooter.coord.x + dx, shooter.coord.y + dy)

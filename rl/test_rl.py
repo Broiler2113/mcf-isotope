@@ -151,6 +151,62 @@ def test_device_self_check():
     assert not device_matches_cpu("meta")
 
 
+def test_memory_pressure_shrinks_the_rollout():
+    """Over the budget, the trainer shrinks its rollout and keeps training; it only gives
+    up when the base process alone leaves no room. town-8 exited every few updates and was
+    restarted 28 times in a night on a limit it could simply have trained under."""
+    import train as T
+    t = T.Trainer.__new__(T.Trainer)
+    t.cfg = dict(mem_limit_mb=4096, rollout_budget_mb=2048)
+    t.rollout_budget_mb = 2048.0
+    t.global_step, t.stop_reason = 0, ""
+    t.writer = type("W", (), {"add_scalar": lambda *a, **k: None})()
+    t.write_status = lambda *a, **k: None
+    real = T.mem_report
+    try:
+        # 4300 MB in use against a 4096 limit, of which 1400 is the empty process.
+        T.mem_report = lambda: {"total_mb": 4300.0}
+        t._base_mb = 1400.0
+        assert t.over_memory_budget() is False           # shrink, do not exit
+        first = t.rollout_budget_mb
+        assert first < 2048, first
+        assert t.over_memory_budget() is False           # still room to shrink
+        assert t.rollout_budget_mb < first
+        for _ in range(20):                              # shrink to the floor, then stop
+            if t.over_memory_budget():
+                break
+        assert t.rollout_budget_mb >= T.MIN_ROLLOUT_MB
+        assert t.stop_reason == "memory"                 # the give-up is labelled
+        # A base that fits with room to spare keeps training at the floor rather than exiting.
+        t2 = T.Trainer.__new__(T.Trainer)
+        t2.cfg, t2.rollout_budget_mb = dict(mem_limit_mb=4096, rollout_budget_mb=2048), 2048.0
+        t2.global_step, t2.stop_reason, t2._base_mb = 0, "", 3990.0   # no headroom at all
+        t2.writer, t2.write_status = t.writer, t.write_status
+        assert t2.over_memory_budget() is True
+        assert t2.stop_reason == "memory"
+    finally:
+        T.mem_report = real
+
+
+def test_only_hard():
+    """The owner's rule: RL trains and evaluates against HARD only. A config (or a branch's
+    saved config.yaml) that still asks for NORMAL must lose the key, not honour it."""
+    import yaml
+    from mcf_env import HARD
+    from train import Trainer, load_config
+    d = tempfile.mkdtemp()
+    path = os.path.join(d, "old.yaml")
+    with open(path, "w") as f:
+        yaml.safe_dump({"opponent": "normal", "eval_opponents": ["normal", "hard"], "phase": "A",
+                        "maps": [os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                              "maps", "arena_34x26.json")]}, f)
+    cfg = load_config(path)
+    assert "opponent" not in cfg and "eval_opponents" not in cfg
+    t = Trainer.__new__(Trainer)
+    t.cfg, t.rng = cfg, __import__("random").Random(0)
+    assert t.pick_opponent() == (HARD, "ai:hard")
+
+
 def test_pool_keeps_a_running_games_opponent():
     """The cache holds pool_size + 1 nets, but never evicts one a running game still plays
     against — its checkpoint may already be pruned from disk."""
