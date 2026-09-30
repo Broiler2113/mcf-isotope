@@ -46,7 +46,7 @@ from torch.utils.tensorboard import SummaryWriter  # noqa: E402
 from features import (CAND_DIM, CANVAS, FLAT_DIM, N_CHANNELS, Sparse, candidate_rows,  # noqa: E402
                       flat_vector, grid_tensor)
 from mcf_env import (EXTERNAL, HARD, PROJECT, EnvDied,  # noqa: E402
-                     EpisodeConfig, VecEnv)
+                     EpisodeConfig, VecEnv, refresh_class_cache)
 from model import OnnxWrapper, PolicyNet  # noqa: E402
 
 RUNS = os.path.join(PROJECT, "rl", "runs")
@@ -1457,6 +1457,8 @@ def cmd_play(a):
 
     ck = torch.load(a.checkpoint, map_location="cpu", weights_only=False)
     cfg = with_defaults(ck.get("cfg", {}))
+    # A stale script-class cache opens the game on a gray window (see refresh_class_cache).
+    refresh_class_cache(a.godot)
     # A server left over from an earlier `play` still holding the port would have the game
     # silently talk to THAT checkpoint. Refusing (the old behaviour) turned into "nothing
     # happens" behind the dashboard button; taking the next free port gives the same
