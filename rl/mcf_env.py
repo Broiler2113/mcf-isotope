@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import select
 import signal
 import socket
@@ -64,6 +65,40 @@ class EpisodeConfig:
 
 class EnvDied(RuntimeError):
     pass
+
+
+def refresh_class_cache(godot: str = "godot", project: str = PROJECT) -> bool:
+    """Import the project when Godot's script-class cache is out of date. True if it ran.
+
+    Godot registers `class_name`s only on import (the editor does it on focus). A pull
+    that adds or renames one — release 23 added MapGen — leaves the cache stale, and every
+    script naming that class then fails to parse when the game is run from source: the
+    lobby became a gray window, and an env server would crash-loop the same way. Cheap to
+    check (read the declarations, compare with the cache), so it runs before every launch;
+    the import itself only when they differ."""
+    declared = set()
+    for d, dirs, files in os.walk(project):
+        dirs[:] = [x for x in dirs if not x.startswith(".") and x not in ("runs", "graphify-out")]
+        for f in files:
+            if f.endswith(".gd"):
+                with open(os.path.join(d, f), encoding="utf-8", errors="ignore") as fh:
+                    for line in fh:
+                        m = re.match(r"\s*class_name\s+(\w+)", line)
+                        if m:
+                            declared.add(m.group(1))
+                            break
+    try:
+        with open(os.path.join(project, ".godot", "global_script_class_cache.cfg")) as fh:
+            known = set(re.findall(r'"class": &"(\w+)"', fh.read()))
+    except OSError:
+        known = set()
+    if declared == known:
+        return False
+    print(f"[env] script classes changed ({', '.join(sorted(declared ^ known)[:6])}) — "
+          f"re-importing the project", flush=True)
+    subprocess.run([godot, "--headless", "--path", project, "--import"], timeout=900,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return True
 
 
 class GodotEnv:
@@ -239,6 +274,7 @@ class VecEnv:
         self.godot = godot
         self.log_dir = log_dir
         self.envs: list[GodotEnv] = []
+        refresh_class_cache(godot)          # before any env parses a script
         self.rebuild()
 
     def __len__(self) -> int:

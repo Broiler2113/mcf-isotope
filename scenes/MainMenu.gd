@@ -33,6 +33,7 @@ var _lan: LanDiscovery = null
 var _lan_list: ItemList
 var _lan_servers: Array = []
 static var _vs_latest_done := false
+var _lobby_broken := false
 
 func _ready() -> void:
 	# Главное меню — первая сцена запуска, поэтому забрать сохранённое из каталога
@@ -52,8 +53,16 @@ func _ready() -> void:
 	if not _vs_latest_done and OS.get_cmdline_user_args().has("--vs-latest") \
 			and LearnedController.available():
 		_vs_latest_done = true
-		_new_game.call_deferred()
-		return
+		# Лобби, которое не собирается, — это СЕРЫЙ ЭКРАН: меню уже не строится, а смена
+		# сцены на сломанный скрипт не показывает ничего. Так и вышло после выпуска со
+		# свежим class_name (MapGen): кеш классов обновляется только импортом, а игру из
+		# исходников запускают без него. Сломано — остаёмся в меню и говорим почему.
+		var lobby_script: Script = load("res://scenes/Lobby.gd")
+		if lobby_script != null and lobby_script.can_instantiate():
+			_new_game.call_deferred()
+			return
+		_lobby_broken = true
+		push_error("Lobby.gd does not compile — re-import the project (godot --headless --import)")
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--replay="):
 			var data := ReplayFile.read(arg.trim_prefix("--replay="))
@@ -92,6 +101,13 @@ func _ready() -> void:
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 12)
 	margin.add_child(vbox)
+	if _lobby_broken:
+		var warn := Label.new()
+		warn.text = ("The lobby failed to load: this copy of the game needs a re-import.\n"
+				+ "Run:  godot --headless --path <project> --import")
+		warn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		warn.add_theme_color_override("font_color", Color(1.0, 0.45, 0.4))
+		vbox.add_child(warn)
 
 	# Заголовок без эмблемы (item 1): logo.png — это логотип Crazy Ball Runner 2D,
 	# оставшийся от донора интерфейса; на главном меню MCF ему не место. Оставляем

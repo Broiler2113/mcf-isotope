@@ -188,6 +188,23 @@ def test_memory_pressure_shrinks_the_rollout():
         T.mem_report = real
 
 
+def test_class_cache_staleness():
+    """A pull that adds a class_name must trigger an import before Godot runs: without it
+    the lobby failed to parse and "Play vs latest" opened a gray window. A current cache
+    must not (an import on every launch would slow each env start)."""
+    from mcf_env import refresh_class_cache
+    d = tempfile.mkdtemp()
+    os.makedirs(os.path.join(d, ".godot"))
+    with open(os.path.join(d, "a.gd"), "w") as f:
+        f.write("extends Node\nclass_name Foo\n")
+    with open(os.path.join(d, ".godot", "global_script_class_cache.cfg"), "w") as f:
+        f.write('list=[{\n"class": &"Foo",\n}]\n')
+    assert refresh_class_cache("true", d) is False          # declared == cached
+    with open(os.path.join(d, "b.gd"), "w") as f:
+        f.write("class_name Bar extends RefCounted\n")
+    assert refresh_class_cache("true", d) is True           # Bar is new -> import
+
+
 def test_only_hard():
     """The owner's rule: RL trains and evaluates against HARD only. A config (or a branch's
     saved config.yaml) that still asks for NORMAL must lose the key, not honour it."""
