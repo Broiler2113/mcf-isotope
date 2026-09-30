@@ -30,6 +30,15 @@ const Obs = preload("res://rl/ObsEncoder.gd")
 ## Борг — не самостоятельный актёр: LegalIntents перечисляет его через юнита-пилота
 ## (u.borg_id != -1), поэтому здесь резервируется именно пилот, а сам борг пропускается —
 ## ровно как в LegalIntents.enumerate.
+##
+## ДРОНЫ В ПОДМНОЖЕСТВЕ ВСЕГДА — по той же причине, что и техника. У дрона одно ОД: после
+## подлёта он «выдохся» и попадал в хвост жеребьёвки, а подрыв (бесплатный) предлагался
+## только тогда, когда в подмножество попадал выдохшийся юнит, то есть почти никогда.
+## Дрон долетал до врага и висел над ним до следующего хода, пока его не сбивали.
+##
+## «Готов» — это «может что-то сделать», а не «есть ОД»: дострел начатой очереди,
+## остаток подлёта/хода, лопата и мины в кредит, рывок из своих рук, выгрузка тела —
+## всё это бесплатно и раньше тонуло среди выдохшихся.
 static func actor_subset(r: GameActionResolver, acting: int, max_actors: int,
 		rng: RandomNumberGenerator) -> Dictionary:
 	if max_actors <= 0:
@@ -38,13 +47,21 @@ static func actor_subset(r: GameActionResolver, acting: int, max_actors: int,
 	var ready: Array = []
 	var spent: Array = []
 	var always: Array = []
+	var captors := {}                     # кто кого держит — один проход, не по юниту
+	for u: UnitInstance in state.all_units():
+		if u.is_held():
+			captors[u.captor_id] = true
 	for u: UnitInstance in state.all_units():
 		if u.owner != acting or not u.is_alive():
 			continue
-		if u.borg_id != -1:
+		if u.is_drone:
+			# Без оператора у станции у дрона нет ни одного намерения — и места он не занимает.
+			if r.operator_controls(u):
+				always.append(u.id)
+		elif u.borg_id != -1:
 			always.append(u.id)
 		else:
-			(ready if u.remaining_ap > 0 else spent).append(u.id)
+			(ready if can_act(r, u, captors) else spent).append(u.id)
 	for veh: Vehicle in state.all_vehicles():
 		if veh.owner != acting or not veh.alive() or veh.is_borg():
 			continue
@@ -65,9 +82,31 @@ static func actor_subset(r: GameActionResolver, acting: int, max_actors: int,
 	return out
 
 
+## Может ли юнит сделать хоть что-то, кроме конца хода (дёшево, без перечисления).
+## Список путей — тот же, что в LegalIntents._for_unit; разойдётся — юнит всего лишь уйдёт
+## не в ту половину жеребьёвки, а не пропадёт из неё.
+##
+## Экипаж за картой — не «готов», даже с ОД, если высадка запрещена (танковая карта,
+## sealed_crew_maps): у него нет НИ ОДНОГО намерения, а раньше он занимал место в
+## подмножестве наравне с пехотой — пятнадцать таких на сторону при шестнадцати местах.
+static func can_act(r: GameActionResolver, u: UnitInstance, captors: Dictionary) -> bool:
+	if u.aboard_vehicle_id != -1:
+		if not r.state.grid.in_bounds(u.coord):
+			return u.remaining_ap > 0 and r.disembark_enabled
+		return u.remaining_ap > 0 or r.disembark_enabled     # из кресла выходят бесплатно
+	if u.is_held():
+		var captor := r.state.get_unit(u.captor_id)
+		return u.remaining_ap > 0 or (captor != null and captor.owner == u.owner)
+	return u.remaining_ap > 0 or u.move_credit > 0 or u.dig_credits > 0 or u.mine_credits > 0 \
+			or (u.action_state != null and u.action_state.is_pending()) \
+			or u.carried_corpses > 0 or captors.has(u.id)
+
+
 ## Клетки, выстрел в которые может задеть ВИДИМОГО врага стороны `side`: клетка каждого
 ## видимого вражеского юнита и каждой видимой клетки вражеской машины плюс восемь соседних
-## (разрыв ПТ, струя огнемёта и снаряд пушки бьют по площади). Невидимые враги не в счёт:
+## (разрыв ПТ, струя огнемёта и снаряд пушки бьют по площади). Значение — СКОЛЬКО врагов
+## накроет квадрат 3×3 с центром в этой клетке: им cap() ставит лучший подрыв первым.
+## Невидимые враги не в счёт:
 ## иначе награда за «выстрел по врагу» подсказывала бы, где в тумане кто-то стоит.
 static func hostile_zone(r: GameActionResolver, side: int) -> Dictionary:
 	var zone := {}
@@ -84,7 +123,8 @@ static func hostile_zone(r: GameActionResolver, side: int) -> Dictionary:
 			continue
 		for dy in range(-1, 2):
 			for dx in range(-1, 2):
-				zone[c + Vector2i(dx, dy)] = true
+				var k := c + Vector2i(dx, dy)
+				zone[k] = int(zone.get(k, 0)) + 1
 	return zone
 
 ## Нацелен ли выстрел в зону видимого врага (hostile_zone). Не-выстрелы — false.
@@ -95,6 +135,14 @@ static func hostile_zone(r: GameActionResolver, side: int) -> Dictionary:
 static func aims_at(intent: Intent, zone: Dictionary, state: GameState) -> bool:
 	if intent is VehicleCannonIntent:
 		return zone.has(intent.target)
+	if intent is DroneMoveIntent:
+		return zone.has(intent.target)
+	if intent is DroneDetonateIntent:
+		var d := state.get_unit(intent.actor_id)
+		return d != null and zone.has(d.coord)
+	if intent is UseItemIntent:
+		var thrower := state.get_unit(intent.actor_id)
+		return thrower != null and thrower.held_item_id == MCF.ITEM_FRAG and zone.has(intent.target)
 	if intent is ShootIntent or intent is DPMGFireIntent:
 		if intent.target_id >= 0:
 			var t := state.get_unit(intent.target_id)
@@ -165,6 +213,11 @@ static func cap(list: Array, max_candidates: int, rng: RandomNumberGenerator,
 			var rest: Array = []
 			for it: Intent in buckets[key]:
 				(hit if aims_at(it, zone, r.state) else rest).append(it)
+			# Лучший подрыв — первым: у дрона сотни клеток полёта, и из тех, что рядом с
+			# врагом, в список доходит пара штук. Раньше это были случайные соседи
+			# ближайшего врага, а не клетка над скоплением.
+			hit.sort_custom(func(a: Intent, b: Intent) -> bool:
+				return _aim_count(a, zone, r.state) > _aim_count(b, zone, r.state))
 			buckets[key] = hit + rest
 	var round_index := 0
 	while kept.size() < max_candidates:
@@ -181,6 +234,24 @@ static func cap(list: Array, max_candidates: int, rng: RandomNumberGenerator,
 			break          # все корзины исчерпаны раньше потолка
 		round_index += 1
 	return kept
+
+
+## Сколько врагов накрывает прицельное намерение (для порядка внутри корзины).
+static func _aim_count(intent: Intent, zone: Dictionary, state: GameState) -> int:
+	var c := Vector2i(-999, -999)
+	if intent is DroneDetonateIntent:
+		var d := state.get_unit(intent.actor_id)
+		if d != null:
+			c = d.coord
+	elif "target" in intent and intent.target is Vector2i:
+		c = intent.target
+	elif "target_id" in intent and intent.target_id >= 0:
+		var t := state.get_unit(intent.target_id)
+		if t != null:
+			c = t.coord
+	elif "target_cell" in intent:
+		c = intent.target_cell
+	return int(zone.get(c, 0))
 
 
 static func shuffle(a: Array, rng: RandomNumberGenerator) -> void:

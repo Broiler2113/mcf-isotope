@@ -24,7 +24,7 @@ func _initialize() -> void:
 		func() -> void:
 			var m = current_scene
 			for u in m.state.all_units():
-				if u.owner == 0 and u.is_alive(): _host_units += 1
+				if u.owner == 0 and u.is_alive() and not u.is_drone: _host_units += 1
 			print("[guest-t] units=%d vehicles=%d host_units=%d" % [m.state.all_units().size(), m.state.all_vehicles().size(), _host_units])
 			ck(_host_units == 5, "guest's state holds the host's 5 soldiers (%d)" % _host_units)
 			print("[guest-t] digest ", load("res://tests/TestSupport.gd").digest(m.state).hash())
@@ -58,7 +58,7 @@ func _initialize() -> void:
 			ck(resynced, "the guest noticed the drift and pulled the host's board")
 			var alive_host := 0
 			for u in m.state.all_units():
-				if u.owner == 0 and u.is_alive(): alive_host += 1
+				if u.owner == 0 and u.is_alive() and not u.is_drone: alive_host += 1
 			ck(alive_host == 5, "after the resync all 5 host soldiers are alive again (%d)" % alive_host)
 			var vis = m.resolver.team_visible_coords(1)
 			var seen := 0
