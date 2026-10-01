@@ -166,6 +166,14 @@ each lands exactly on the cell its preview showed, a blob sent far away keeps it
 instead of sliding to the map edge, and a *Tactical Move* lines the squad up behind
 sandbags facing a visible enemy — or facing every side when fog hides the enemy.
 
+**`run_team_session.gd`** covers the "team session" batch: an anti-tank blast at a cell
+holding a unit gets the same firing-line, wall and range checks as any other cell (the
+old shortcut let the AI fire through passengers at any angle and roll hopeless 7+
+checks); the civilians slider thins a prepared map evenly; deploy bands follow the zone
+picked in the lobby; generated maps remember their environment and pick its tiles; the
+eraser clears pixels exactly where it went; glass shards stop at walls; the new lobby
+settings (civilians, AI speed) reach guests; chat text cannot inject markup.
+
 **`run_net_match.sh`** is the only run that proves multiplayer works: it starts **two
 Godot processes** on localhost — `net_host_*.gd` and `net_guest_*.gd`, both built on
 `NetSmokeBase.gd` — and drives the real scenes through ENet: lobby (seating, colour and

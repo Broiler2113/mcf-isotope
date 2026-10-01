@@ -51,6 +51,7 @@ static func encode(state: GameState) -> Dictionary:
 		"next_id": state._next_id,
 		"next_vehicle_id": state._next_vehicle_id,
 		"combat_started": state.combat_started,
+		"env": state.env,
 	}
 
 static func _encode_unit(u: UnitInstance) -> Dictionary:
@@ -222,6 +223,7 @@ static func restore_into(gs: GameState, d: Dictionary) -> void:
 	gs.restore(snap)
 	gs.turns.initiative_rolled = bool(turns.get("rolled", true))
 	gs.revealed_mines = _decode_mines(d.get("mines", []))
+	gs.env = str(d.get("env", gs.env))
 
 static func _decode_unit(raw: Dictionary) -> Dictionary:
 	var stats := load_stats(str(raw.get("stats", "")))

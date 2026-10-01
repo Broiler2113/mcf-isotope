@@ -13,6 +13,7 @@ const LOBBY_SCENE := "res://scenes/Lobby.tscn"
 const EDITOR_SCENE := "res://scenes/MapEditor.tscn"
 const PLACEMENT_SCENE := "res://scenes/Placement.tscn"
 const MAIN_SCENE := "res://scenes/Main.tscn"
+const SteamChrome = preload("res://src/ui/SteamChrome.gd")
 
 
 # --- Сохранения и повторы (M12) ---
@@ -36,6 +37,11 @@ static var _vs_latest_done := false
 var _lobby_broken := false
 
 func _ready() -> void:
+	# Пока игрок в меню, компилируем бой в фоновом потоке: скрипты игры (резолвер, ИИ,
+	# экран боя) — это почти секунда компиляции при каждом запуске из исходников, и
+	# платить её на щелчке «New Game» незачем. Дальнейший load() той же сцены просто
+	# дождётся потока или возьмёт готовое из кеша.
+	Ui.warm_up([LOBBY_SCENE, MAIN_SCENE])
 	# Главное меню — первая сцена запуска, поэтому забрать сохранённое из каталога
 	# прежнего имени игры надо здесь, ДО того как лобби/редактор полезут в user://
 	# за картами (item 7 переименовал приложение и вместе с ним user://).
@@ -50,8 +56,10 @@ func _ready() -> void:
 	#   godot --path . -- --replay=/abs/path.mcfr
 	# «Play vs latest» (train.py play) запускает игру сразу в лобби с обученным ИИ в слоте
 	# соперника. Один раз за запуск: вернувшись в меню после партии, игрок остаётся в меню.
+	# LearnedController — через load(): прямая ссылка на класс компилировала бы весь
+	# резолвер ещё до появления меню, а нужен он только с --vs-latest.
 	if not _vs_latest_done and OS.get_cmdline_user_args().has("--vs-latest") \
-			and LearnedController.available():
+			and load("res://src/controllers/LearnedController.gd").available():
 		_vs_latest_done = true
 		# Лобби, которое не собирается, — это СЕРЫЙ ЭКРАН: меню уже не строится, а смена
 		# сцены на сломанный скрипт не показывает ничего. Так и вышло после выпуска со
@@ -89,14 +97,26 @@ func _ready() -> void:
 	center.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(center)
 
+	# Окно по набору интерфейса (item 23): шапка, вкладки, ряд кнопок справа внизу.
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(460, 0)
+	panel.custom_minimum_size = Vector2(480, 0)
+	SteamChrome.apply_panel(panel)
 	center.add_child(panel)
+	var frame := VBoxContainer.new()
+	frame.add_theme_constant_override("separation", 0)
+	panel.add_child(frame)
+	frame.add_child(SteamChrome.header_bar("MCF Isotope"))
 
+	# Середина окна прокручивается, если оно не влезает по высоте (крупный интерфейс,
+	# item 23): шапка и кнопки внизу всегда на экране.
+	var body := ScrollContainer.new()
+	body.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	frame.add_child(body)
 	var margin := MarginContainer.new()
+	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	for side in ["left", "right", "top", "bottom"]:
-		margin.add_theme_constant_override("margin_" + side, 28)
-	panel.add_child(margin)
+		margin.add_theme_constant_override("margin_" + side, 22)
+	body.add_child(margin)
 
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 12)
@@ -140,15 +160,28 @@ func _ready() -> void:
 	tabs.add_child(_build_multi_tab())
 	tabs.add_child(_build_files_tab())
 
-	vbox.add_child(HSeparator.new())
-	# Экран настроек (item 24) ждёт исходников: порт наугад дал бы меню, которое
-	# выглядит настройками, но ничего не настраивает. Кнопка стоит на своём месте
-	# погашенной — так видно, что место занято, а не забыто.
-	var settings := _menu_button("Settings", func() -> void: pass)
-	settings.disabled = true
-	settings.tooltip_text = "Not built yet — waiting on the original settings screen."
-	vbox.add_child(settings)
-	vbox.add_child(_menu_button("Quit", _quit))
+	# Настройки (items 17/23) и выход — рядом, справа внизу, как у окна набора.
+	var bottom := HBoxContainer.new()
+	bottom.alignment = BoxContainer.ALIGNMENT_END
+	bottom.add_theme_constant_override("separation", 10)
+	var settings := Button.new()
+	settings.text = "Settings"
+	settings.custom_minimum_size = Vector2(110, 32)
+	settings.pressed.connect(func() -> void: SettingsWindow.open(self))
+	bottom.add_child(settings)
+	var quit_btn := Button.new()
+	quit_btn.text = "Quit"
+	quit_btn.custom_minimum_size = Vector2(110, 32)
+	quit_btn.pressed.connect(_quit)
+	bottom.add_child(quit_btn)
+	frame.add_child(HSeparator.new())
+	frame.add_child(SteamChrome.pad(bottom, 16, 12))
+	var fit := func() -> void:
+		var chrome := panel.get_combined_minimum_size().y - body.get_combined_minimum_size().y
+		body.custom_minimum_size.y = minf(margin.get_combined_minimum_size().y,
+				maxf(120.0, center.size.y - chrome - 16.0))
+	center.resized.connect(fit)
+	fit.call_deferred()
 
 # --- Вкладка одиночной игры ---
 func _build_single_tab() -> Control:
@@ -159,7 +192,7 @@ func _build_single_tab() -> Control:
 	page.add_child(_menu_button("New Game", _new_game))
 	page.add_child(_menu_button("Map Editor", _open_editor))
 	# Окно «Saved maps» убрано из главного меню (item 7): карты грузятся в редакторе,
-	# а партии — из вкладки «Saved Games and Replays».
+	# а партии — из вкладки «Saves & Replays».
 	return page
 
 # --- Вкладка сохранений и повторов (M12, items 42 и 53) ---
@@ -168,7 +201,7 @@ func _build_single_tab() -> Control:
 ## лобби: там для этого есть тот же список файлов.
 func _build_files_tab() -> Control:
 	var page := VBoxContainer.new()
-	page.name = "Saved Games and Replays"
+	page.name = "Saves & Replays"
 	page.add_theme_constant_override("separation", 8)
 
 	var hint := Label.new()

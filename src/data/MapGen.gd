@@ -29,8 +29,14 @@ extends RefCounted
 ## Поле бывает до 250×250 (MAX_DIM), а лобби пересобирает карту на каждый щелчок настроек:
 ## всё, что проходит по полю целиком, здесь линейно по числу клеток.
 
-enum Style {STATION, TOWN, FIELD, BUNKER}
-const STYLE_NAMES := ["Station", "Town", "Field", "Bunker"]
+enum Style {STATION, TOWN, FIELD, BUNKER, ASTEROID}
+const STYLE_NAMES := ["Station", "Town", "Field", "Bunker", "Asteroid"]
+## Окружение карты по стилю (item 24) — им MapData выбирает плитки пола и стен.
+const STYLE_ENV := ["station", "town", "field", "bunker", "asteroid"]
+## Что включено по умолчанию у стиля (items 25/26): у города, поля и бункера космоса нет,
+## у бункера и станции нечему гореть, астероид — город в космосе, но не горит.
+const STYLE_SPACE := [true, false, false, false, true]
+const STYLE_FLAMMABLE := [false, true, true, false, false]
 const SIZES := [Vector2i(28, 20), Vector2i(38, 28), Vector2i(50, 38), Vector2i(80, 60),
 		Vector2i(125, 95), Vector2i(250, 250)]
 const SIZE_NAMES := ["Small", "Medium", "Large", "Huge", "Giant", "Colossal"]
@@ -128,6 +134,12 @@ static func default_options() -> Dictionary:
 			"space": true, "flammable": true, "obstacles": true, "civilians": 2}
 
 ## Уровень мирных по настройке: число 0…4 или прежнее true/false.
+## Будут ли на карте мирные: число с ползунка лобби (item 11), а без него — уровень.
+static func civ_wanted(options: Dictionary) -> bool:
+	if int(options.get("civilian_count", -1)) >= 0:
+		return int(options["civilian_count"]) > 0
+	return civ_level(options) > 0
+
 static func civ_level(options: Dictionary) -> int:
 	var v: Variant = options.get("civilians", 2)
 	if v is bool:
@@ -181,6 +193,7 @@ func _build(options: Dictionary, dim: Vector2i, need: int, tight: bool) -> void:
 	# иначе зеркало слева направо, и при нечётном числе одна зона стоит на оси.
 	_sym = 0 if not bool(opt.get("symmetric", false)) else (2 if n % 4 == 0 else 1)
 	m = MapData.new(w, h)
+	m.env = STYLE_ENV[clampi(_style, 0, STYLE_ENV.size() - 1)]
 	_indoor = _bytes()
 	_door = _bytes()
 	_street = _bytes()
@@ -202,7 +215,9 @@ func _build(options: Dictionary, dim: Vector2i, need: int, tight: bool) -> void:
 	_seal_doors()
 	_phase(Phase.SPACE)
 	# Бункер под землёй: ни вакуума в отсеке, ни рваного края — только шлюзы-двери.
-	if bool(opt["space"]) and _style != Style.BUNKER:
+	if _style == Style.ASTEROID:
+		_asteroid()   # остров — и с космосом, и без (тогда вокруг сплошная скала)
+	elif bool(opt["space"]) and _style != Style.BUNKER:
 		if _style == Style.STATION:
 			_vent_room()
 		else:
@@ -224,7 +239,7 @@ func _build(options: Dictionary, dim: Vector2i, need: int, tight: bool) -> void:
 	if not _anchors.is_empty():
 		_join_pockets(_anchors[0])
 	_phase(Phase.CIVILIANS)
-	if civ_level(opt) > 0:
+	if civ_wanted(opt):
 		_civilians()
 		_mirror_spawns()
 
@@ -1145,6 +1160,47 @@ func _nest(c: Vector2i) -> void:
 		_try_put(p, MCF.FEATURE_SANDBAGS)
 
 ## Космос на поверхности (город, поле): рваный край платформы и пробоины-воронки.
+## Астероид (item 26): город на островке посреди космоса. Всё дальше неровного края
+## острова — пустота (_void: открытый космос, а без него — скала); край рваный, и дома, на
+## которые он пришёлся, остаются разломанными, будто кусок города оторвало. Плотность
+## застройки — та же «Density», что у города.
+func _asteroid() -> void:
+	var noise := FastNoiseLite.new()
+	noise.seed = _rng.randi()
+	noise.frequency = 0.06
+	var half := Vector2((w - 1) * 0.5, (h - 1) * 0.5)
+	for y in h:
+		for x in w:
+			# Эллипс по размеру поля: остров вписан в доску, сколько бы её ни вытянули.
+			var d := Vector2((x - half.x) / half.x, (y - half.y) / half.y).length()
+			if d > 0.88 + 0.14 * noise.get_noise_2d(x, y):
+				_void(Vector2i(x, y))
+	# Дверь, за которой теперь скала (космос выключен), — уже не дверь: заделываем. Комнату
+	# за ней, если она отрезана, вскроет _join_pockets — как и любой другой закуток.
+	var walk := _walk_mask()
+	for i in w * h:
+		if m.feature_id[i] != MCF.FEATURE_AIRLOCK:
+			continue
+		var c := Vector2i(i % w, i / w)
+		var through := false
+		for d: Vector2i in [Vector2i(1, 0), Vector2i(0, 1)]:
+			var a := c + d
+			var b := c - d
+			if _in(a) and _in(b) and walk[a.y * w + a.x] != 0 and walk[b.y * w + b.x] != 0:
+				through = true
+		if not through:
+			_put(c, MCF.FEATURE_WALL)
+	# Пара кратеров внутри — каменный остров, а не ровная площадка.
+	for n in 1 + roundi(w * h / 1600.0):
+		var c := _random_cell(6)
+		var rad := _rng.randf_range(1.4, 2.4)
+		for dy in range(-3, 4):
+			for dx in range(-3, 4):
+				var q := c + Vector2i(dx, dy)
+				if _in(q) and Vector2(dx, dy).length() <= rad and m.get_feature(q) == "" \
+						and not m.get_space(q):
+					_put(q, MCF.FEATURE_DIRT_PILE)
+
 func _open_space() -> void:
 	var noise := FastNoiseLite.new()
 	noise.seed = _rng.randi()
@@ -1664,6 +1720,9 @@ func _fold_prefix(cells: Array, limit: int, zone: int) -> int:
 func _civilians() -> void:
 	var lv := civ_level(opt)
 	var want := mini(CIV_CAP[lv], maxi(CIV_MIN[lv], roundi(w * h / 160.0 * dens * CIV_MULT[lv])))
+	# Точное число с ползунка лобби (item 11) важнее уровня.
+	if int(opt.get("civilian_count", -1)) >= 0:
+		want = mini(int(opt["civilian_count"]), CIV_MAX)
 	if _sym > 0:
 		want = maxi(1, want / _group())
 	var near := _bytes()

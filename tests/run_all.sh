@@ -18,7 +18,7 @@ for script in tests/check_scripts.gd tests/run_codec.gd tests/run_headless.gd \
               tests/run_shuttle.gd tests/run_borg.gd tests/run_batch17.gd \
               tests/run_legal_intents.gd tests/run_intent_budget.gd tests/run_learned_controller.gd \
               tests/run_learned_town.gd tests/run_mapgen.gd tests/run_play_vs_learned.gd tests/run_fog.gd \
-              tests/run_incremental.gd tests/run_fog_viewer.gd tests/run_group_move.gd; do
+              tests/run_incremental.gd tests/run_fog_viewer.gd tests/run_group_move.gd tests/run_team_session.gd; do
   echo "=== $script ==="
   # shellcheck disable=SC2086
   "$GODOT" --headless --script "res://$script" $EXTRA

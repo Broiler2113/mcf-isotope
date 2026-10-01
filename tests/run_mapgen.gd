@@ -254,16 +254,23 @@ func _symmetric(m: MapData, o: Dictionary, zones: Dictionary, tag: String) -> vo
 		for p: Vector2i in imgs.call(c):
 			ck(civ.has(p), tag + ": civilian at %s has no mirror at %s" % [c, p])
 
-## Бункер — станция того же зерна, только под землёй: без космоса они совпадают до байта,
-## а с космосом у бункера нет ни клетки вакуума.
+## Бункер — станция того же зерна, только под землёй: без космоса их рельеф совпадает до
+## байта (разнится лишь окружение — плитки металла и скалы, item 24), а с космосом у
+## бункера нет ни клетки вакуума.
 func _bunker_is_an_underground_station() -> void:
 	for seed in [3, 77, 1234]:
 		for size in 3:
 			var o := {"size": size, "seed": seed, "space": false}
 			o["style"] = MapGen.Style.STATION
-			var station := JSON.stringify(MapGen.generate(o).to_dict())
+			var sm := MapGen.generate(o)
+			ck(sm.env == "station", "a station map is tagged station (%s)" % sm.env)
+			sm.env = ""
+			var station := JSON.stringify(sm.to_dict())
 			o["style"] = MapGen.Style.BUNKER
-			ck(station == JSON.stringify(MapGen.generate(o).to_dict()),
+			var bm := MapGen.generate(o)
+			ck(bm.env == "bunker", "a bunker map is tagged bunker (%s)" % bm.env)
+			bm.env = ""
+			ck(station == JSON.stringify(bm.to_dict()),
 					"seed %d size %d: without space, bunker and station are the same map" % [seed, size])
 
 ## «Гораздо больше комнат и коридоров»: станция и бункер нарезаны на десятки комнат, а

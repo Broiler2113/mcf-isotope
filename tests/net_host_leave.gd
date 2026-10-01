@@ -27,8 +27,11 @@ func _initialize() -> void:
 			print("[host-l] slot 2 is hard AI after leave"))
 	step("guest re-joined into the open slot 3", func() -> bool:
 		var r: Roster = current_scene.roster
-		return r.slots.size() == 3 and r.slots[2].kind == Roster.SlotKind.HUMAN and r.slots[2].peer_id > 1,
-		func() -> void: current_scene._on_start())
+		return r.slots.size() == 3 and r.slots[2].kind == Roster.SlotKind.HUMAN and r.slots[2].peer_id > 1)
+	# Старт — с паузой, как у живого хоста (и как в сценарии town): без неё «ты сел» и
+	# «партия началась» приходили гостю одним пакетом, и он уезжал на расстановку, не успев
+	# побыть в лобби, — шаг гостя «lobby again, seated» ловил гонку, а не ошибку.
+	step("start", func() -> bool: return _step_t > 1.5, func() -> void: current_scene._on_start())
 	step("placement up", func() -> bool: return scene_is("Placement.gd") and current_scene._status != null,
 		func() -> void:
 			var pl = current_scene

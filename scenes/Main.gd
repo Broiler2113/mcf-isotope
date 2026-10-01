@@ -41,7 +41,7 @@ const SteamChrome = preload("res://src/ui/SteamChrome.gd")
 ## Отдельного режима DRAG больше нет — кнопка одна, цели показываются вместе.
 enum Mode {NONE, MENU, MOVE, SHOOT, GRAB, ITEM, PUSH, DRONE_FLY, BUILD, BUILD_WALL, BREAK, DPMG_FIRE, DIG, CARRY_DROP,
 	CORPSE_DROP, WELD, MOVE_HELD, MINE, DISARM,
-	GROUP_MENU, GROUP_MOVE,
+	GROUP_MENU, GROUP_MOVE, GROUP_LASER,
 	VEH_MENU, VEH_MOVE, VEH_TURN, VEH_CANNON, VEH_DISEMBARK, VEH_SEAT, VEH_BOARD_SEAT,
 	DRAW, ERASE, RULER}
 
@@ -58,8 +58,9 @@ var _ruler_btn: Button = null
 
 ## Аннотации на поле (item 51). Каждый штрих — список клеток, автор и область видимости.
 enum DrawScope {SELF, TEAM, ALL}
-var _strokes: Array = []            # [{author:int, scope:int, cells:Array[Vector2i]}]
-var _cur_stroke: Array[Vector2i] = []
+## Рисунки на поле — растровые холсты по (автор, область видимости) (item 15: «как в Paint»).
+var _canvases: Dictionary = {}       # Vector2i(author, scope) -> DrawCanvas
+var _cur_stroke: Array = []          # точки текущего штриха/хода ластика (уйдут по сети)
 var _stroke_drawing: bool = false
 var _draw_scope_team: bool = false  # рисовать «для команды», иначе только себе
 var _draw_scope_all: bool = false   # рисовать «для всех», и для врагов (batch 17, item 10)
@@ -67,6 +68,10 @@ var _hide_others_draw: bool = false # скрыть чужие рисунки ц�
 var _hide_my_draw: bool = false     # скрыть свои (batch 17, item 10)
 var _hide_all_draw: bool = false    # скрыть все (batch 17, item 10)
 const K_CHAT := "chat"
+## Выпадающий темп ИИ на панели (item 5).
+var _ai_speed_opt: OptionButton = null
+## Игрок уже подтвердил выстрел по своим (item 13) — повторный клик идёт без вопроса.
+var _beam_confirmed := false
 const K_DRAW := "draw"
 ## Игрок нажал «Roll» (batch 12 #14): его бросок открывается на ВСЕХ экранах разом.
 ## Значения кубиков давно известны (их бросил хост при резолве), по сети едет только
@@ -78,6 +83,9 @@ const K_SIDE_AI := "side_ai"
 ## Исход партии объявляет ХОСТ (batch 14): гость свою доску победой не считает —
 ## иначе рассинхрон рисовал бы «Player B wins» посреди чужого хода.
 const K_OVER := "match_over"
+## Хост сменил темп ИИ (item 5): гости показывают ходы ИИ с той же скоростью, иначе у них
+## копилась бы очередь анимаций или, наоборот, всё мелькало бы.
+const K_AI_SPEED := "ai_speed"
 
 ## Режимы, чей предпросмотр читает клетку под курсором. Каждому движению мыши нужен
 ## свой кадр (#97), иначе картинка обновляется только когда камера что-то дёрнет —
@@ -98,7 +106,7 @@ const UNKNOWN_COL := Color(0.02, 0.02, 0.03, 1.0)
 const NOWHERE := Vector2i(-9999, -9999)
 
 const HOVER_PREVIEW_MODES := [Mode.MOVE, Mode.ITEM, Mode.SHOOT, Mode.DIG, Mode.MINE, Mode.DISARM,
-		Mode.CORPSE_DROP, Mode.WELD, Mode.MOVE_HELD, Mode.VEH_TURN, Mode.VEH_CANNON]
+		Mode.CORPSE_DROP, Mode.WELD, Mode.MOVE_HELD, Mode.VEH_TURN, Mode.VEH_CANNON, Mode.GROUP_LASER]
 
 ## Цвета «своя/чужая» для перспективной раскраски дуэли (#93). Цвета КОНКРЕТНЫХ
 ## игроков берутся из ростера (Roster.PALETTE) — их до 26, в словарь на два они
@@ -399,6 +407,10 @@ func _ready() -> void:
 	_build_state()
 	# Край поля для косметики (batch 12 #6): гильзы, брызги и осколки отскакивают от него.
 	_fx.bounds = Vector2(state.grid.width, state.grid.height)
+	# Частицы останавливаются о стены (item 7), а не «проваливаются» в них.
+	_fx.solid_at = func(c: Vector2i) -> bool:
+		var cl := state.grid.cell(c) if state != null else null
+		return cl == null or cl.cover_height >= MCF.WALL_HEIGHT
 	# У записи нет игроков: смотреть — не играть, поэтому контроллеров не заводим
 	# вовсе. Ровно это и делает просмотр безопасным: подать намерение некому.
 	if replay == null:
@@ -657,7 +669,20 @@ func _do_save_game(chosen_name: String) -> void:
 	if replay != null or state == null:
 		return
 	var meta := _match_meta()
-	var data := ReplayFile.build_save(state, resolver, meta, _fx.to_dict())
+	# Сохранение собирается здесь, а не в ReplayFile: тот читает список сохранений ещё в
+	# главном меню, и ссылка на StateCodec/резолвер тащила бы в меню компиляцию всей игры.
+	# Косметика (FxDecals) ни на что не влияет, но без неё перезагруженный бой выглядел бы
+	# стерильно-чистым после часа стрельбы (item 42).
+	var data := {
+		"schema": StateCodec.SCHEMA,
+		"kind": ReplayFile.KIND_SAVE,
+		"meta": meta.duplicate(true),
+		"state": StateCodec.encode(state),
+		"rules": StateCodec.encode_rules(resolver),
+	}
+	var fx := _fx.to_dict()
+	if not fx.is_empty():
+		data["fx"] = fx
 	var name := ReplayFile.named(chosen_name, ReplayFile.SAVE_EXT)
 	var path := ReplayFile.path_for(ReplayFile.SAVE_DIR, name)
 	if ReplayFile.write(path, data):
@@ -1020,18 +1045,23 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event is InputEventMouseMotion:
 			if _stroke_drawing:
 				_stroke_add(_draw_world_pos())
+			queue_redraw()  # кружок кисти под курсором
 			return
 	# Ластик (item 6): тем же жестом стираем СВОИ штрихи в радиусе кисти под курсором.
 	if mode == Mode.ERASE:
 		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
 				_stroke_drawing = true
+				_cur_stroke = []
 				_erase_at(_draw_world_pos())
 			else:
 				_stroke_drawing = false
+				_erase_commit()
 			return
-		if event is InputEventMouseMotion and _stroke_drawing:
-			_erase_at(_draw_world_pos())
+		if event is InputEventMouseMotion:
+			if _stroke_drawing:
+				_erase_at(_draw_world_pos())
+			queue_redraw()  # кружок ластика под курсором
 			return
 	if HOVER_PREVIEW_MODES.has(mode) and event is InputEventMouseMotion:
 		queue_redraw()  # обновляем предпросмотр радиуса/струи/окопа под курсором
@@ -1166,6 +1196,16 @@ func _handle_click(coord: Vector2i) -> void:
 				# клик пришёлся ТОЧНО в клетку корпуса; клик за танк или перед ним посылал
 				# луч в ту же машину, но молча — в корпус (batch 12 #5). Берём ту же трассу,
 				# что рисует предпросмотр, и первую машину на ней, до которой луч дотянется.
+				# Свои и союзники на трассе (item 13): спросить, прежде чем стрелять.
+				var friends := _beam_friendlies(_selected_unit(), coord)
+				if not friends.is_empty() and not _beam_confirmed:
+					var aim := coord
+					_confirm_dialog("Friendly units in the beam", _friendly_list_text(friends),
+							"Fire anyway", func() -> void:
+								_beam_confirmed = true
+								_handle_click(aim)
+								_beam_confirmed = false)
+					return
 				var beam_foe := _vehicle_on_beam(_selected_unit(), coord)
 				var from_c: Vector2i = _selected_unit().coord
 				# Список — только видимые с этой стороны узлы; подписи без «(N+)»: луч
@@ -1321,6 +1361,10 @@ func _handle_click(coord: Vector2i) -> void:
 				_select(occupant)
 				return
 			_set_group([])
+		Mode.GROUP_LASER:
+			var dir := _volley_dir(coord)
+			if dir != Vector2i.ZERO:
+				_fire_volley(dir)
 		Mode.GROUP_MOVE:
 			# Клик по своему юниту вне группы — обычное выделение; иначе двигаем группу.
 			if occupant != null and _is_own_active(occupant) and not _group_ids.has(occupant.id):
@@ -1495,7 +1539,7 @@ func _escape_pressed() -> void:
 		_back_to_menu()
 		return
 	# Групповое движение (#19) — вернуться в меню группы.
-	if mode == Mode.GROUP_MOVE:
+	if mode == Mode.GROUP_MOVE or mode == Mode.GROUP_LASER:
 		mode = Mode.GROUP_MENU
 		_open_group_menu()
 		queue_redraw()
@@ -1987,7 +2031,7 @@ func _box_selectable() -> bool:
 	if ctrl == null or not ctrl.is_local_human():
 		return false
 	return mode == Mode.NONE or mode == Mode.MENU \
-			or mode == Mode.GROUP_MENU or mode == Mode.GROUP_MOVE
+			or mode == Mode.GROUP_MENU or mode == Mode.GROUP_MOVE or mode == Mode.GROUP_LASER
 
 func _on_multi_toggled(pressed: bool) -> void:
 	if not pressed:
@@ -2018,7 +2062,7 @@ func _finalize_box() -> void:
 func _set_group(ids: Array[int]) -> void:
 	if ids.is_empty():
 		_group_ids = []
-		if mode == Mode.GROUP_MENU or mode == Mode.GROUP_MOVE:
+		if mode == Mode.GROUP_MENU or mode == Mode.GROUP_MOVE or mode == Mode.GROUP_LASER:
 			_deselect()
 		return
 	if ids.size() == 1:
@@ -2055,6 +2099,17 @@ func _open_group_menu() -> void:
 	tac_btn.pressed.connect(_enter_group_move.bind(true))
 	vb.add_child(tac_btn)
 
+	# Залп лазеров (item 12): все выделенные марксманы бьют в одну сторону.
+	if not _group_marksmen().is_empty():
+		var volley := Button.new()
+		volley.text = "Laser Volley"
+		volley.tooltip_text = "Every selected marksman fires the laser in the same direction"
+		volley.pressed.connect(func() -> void:
+			mode = Mode.GROUP_LASER
+			_menu.hide()
+			queue_redraw())
+		vb.add_child(volley)
+
 	# Массовая посадка (item 5): если рядом с выделенными есть машина, в которую хоть
 	# кто-то из них может сесть, предлагаем усадить всех разом.
 	var vid := _group_boardable_vehicle()
@@ -2071,6 +2126,79 @@ func _open_group_menu() -> void:
 
 	_anchor_menu(_menu)
 	_menu.show()
+
+## Марксманы выделенной группы, которым хватает ОД на луч (item 12).
+func _group_marksmen() -> Array:
+	var out: Array = []
+	for id in _group_ids:
+		var u := state.get_unit(id)
+		if _is_marksman(u) and u.is_alive() and u.remaining_ap >= MCF.MARKSMAN_AP_COST:
+			out.append(u)
+	return out
+
+## Направление залпа (item 12): от середины марксманов к клетке, одно из восьми.
+func _volley_dir(coord: Vector2i) -> Vector2i:
+	var ms := _group_marksmen()
+	if ms.is_empty() or not state.grid.in_bounds(coord):
+		return Vector2i.ZERO
+	var c := Vector2.ZERO
+	for m: UnitInstance in ms:
+		c += Vector2(m.coord)
+	c /= ms.size()
+	var d := Vector2(coord) - c
+	if d.length() < 0.5:
+		return Vector2i.ZERO
+	# Округление угла до ближайшего из восьми направлений.
+	var a := snappedf(d.angle(), PI / 4.0)
+	return Vector2i(roundi(cos(a)), roundi(sin(a)))
+
+## Залп (item 12): каждый марксман бьёт лучом в одну сторону. Свои на любом из лучей —
+## сначала подтверждение (item 13).
+func _fire_volley(dir: Vector2i) -> void:
+	var ms := _group_marksmen()
+	var friends: Array = []
+	for m: UnitInstance in ms:
+		for f: UnitInstance in _beam_friendlies(m, m.coord + dir):
+			if not friends.has(f):
+				friends.append(f)
+	var fire := func() -> void:
+		var ids: Array = []
+		for m: UnitInstance in ms:
+			ids.append(m.id)
+		_set_group([])
+		for id: int in ids:
+			var m := state.get_unit(id)
+			if m != null and m.is_alive():
+				_submit(ShootIntent.new(id, -1, -1, m.coord + dir))
+	if friends.is_empty():
+		fire.call()
+	else:
+		_confirm_dialog("Friendly units in the beams", _friendly_list_text(friends),
+				"Fire anyway", fire)
+
+## Свои и союзные бойцы, которых заденет луч марксмана в сторону aim (item 13): по той же
+## трассе, что рисует предпросмотр и по которой пойдёт выстрел.
+func _beam_friendlies(shooter: UnitInstance, aim: Vector2i) -> Array:
+	var out: Array = []
+	if shooter == null or state.roster == null:
+		return out
+	for rec: Dictionary in resolver.laser_preview(shooter, aim):
+		var kind := String(rec["kind"])
+		if kind != "unit" and kind != "shield":
+			continue
+		var occ := _unit_at(rec["coord"])
+		if occ != null and occ.is_alive() and occ.id != shooter.id \
+				and state.roster.are_allies(shooter.owner, occ.owner):
+			out.append(occ)
+	return out
+
+func _friendly_list_text(units: Array) -> String:
+	var lines: Array[String] = ["The laser will pass through:"]
+	for u: UnitInstance in units:
+		lines.append("  • %s (%s) at %d, %d" % [u.stats.display_name, _side_label(u.owner),
+				u.coord.x, u.coord.y])
+	lines.append("Fire anyway?")
+	return "\n".join(lines)
 
 func _enter_group_move(tactical: bool) -> void:
 	_group_tactical = tactical
@@ -2451,7 +2579,7 @@ func _on_intent_ready(intent: Intent) -> void:
 ## за считаные кадры, и вместо хода видно только мгновенный итог; с паузой бойцы
 ## заметно ходят ОДИН ЗА ДРУГИМ. Пауза же не даёт кадру «залипнуть» на расчётах.
 func _queue_ai_step(ctrl: PlayerController) -> void:
-	await get_tree().create_timer(AI_STEP_DELAY).timeout
+	await get_tree().create_timer(AI_STEP_DELAY / GameConfig.ai_speed).timeout
 	# Пауза (item 4) держится здесь, в единственной точке, откуда ИИ вообще получает
 	# ход. Снятие паузы само зовёт _kick_if_ai(), и бой продолжается с того же места.
 	if _paused:
@@ -2780,10 +2908,19 @@ func _on_net_message(msg: Dictionary) -> void:
 	# они никогда не касаются резолвера и лок-степа.
 	match msg.get("k", ""):
 		K_CHAT:
-			_chat_append(str(msg.get("who", "?")), str(msg.get("text", "")))
+			# Подпись строит ПОЛУЧАТЕЛЬ по номеру стороны: отправитель раньше слал готовую
+			# строку со своим «(you)», и у всех остальных чужие реплики шли как «(you)».
+			var who: String = _side_label(int(msg["side"])) if msg.has("side") \
+					else str(msg.get("who", "?"))
+			NetHandoff.chat_history.append({"side": int(msg.get("side", -1)),
+					"text": str(msg.get("text", ""))})
+			_chat_append(who, str(msg.get("text", "")))
 			return
 		K_DRAW:
 			_on_remote_stroke(msg)
+			return
+		K_AI_SPEED:
+			_set_ai_speed(float(msg.get("v", 1.0)), false)
 			return
 		K_ROLL:
 			var seq := int(msg.get("n", -1))
@@ -2929,7 +3066,7 @@ func _play_dice(events: Array) -> void:
 			_ap_display[int(ev["unit"])] = int(ev["left"])
 			queue_redraw()
 			await get_tree().create_timer(
-					NEUTRAL_AP_DOT_DELAY if _fast_playback else AP_DOT_DELAY).timeout
+					(NEUTRAL_AP_DOT_DELAY if _fast_playback else AP_DOT_DELAY) / _pace()).timeout
 			continue
 		for step in _dice_steps(ev):
 			# Ручной бросок ждёт нажатия только у защитника-человека; мирные (NEUTRAL)
@@ -2943,13 +3080,13 @@ func _play_dice(events: Array) -> void:
 				var seq := _roll_seq
 				_roll_seq += 1
 				if step["manual"]:
-					_dice.play(step["faces"], true, step["prompt"], step.get("speed", 1.0))
+					_dice.play(step["faces"], true, step["prompt"], step.get("speed", 1.0) * _pace())
 					await _dice.rolled
 					session.send({"k": K_ROLL, "n": seq})
 					await _dice.finished
 				else:
 					_dice.play(step["faces"], false, "%s\nWaiting for %s to roll…" % [
-						step["prompt"], state.roster.name_of(roller)], step.get("speed", 1.0), true)
+						step["prompt"], state.roster.name_of(roller)], step.get("speed", 1.0) * _pace(), true)
 					# Ушедший игрок не нажмёт никогда (batch 13 #2): как только ростер
 					# перестаёт считать его живым человеком за сетью, ждать нечего.
 					while not _roll_inbox.has(seq) and state.roster.is_networked_human(roller):
@@ -2958,7 +3095,7 @@ func _play_dice(events: Array) -> void:
 					_dice.release()
 					await _dice.finished
 				continue
-			_dice.play(step["faces"], step["manual"], step["prompt"], step.get("speed", 1.0))
+			_dice.play(step["faces"], step["manual"], step["prompt"], step.get("speed", 1.0) * _pace())
 			await _dice.finished
 	_walk_cells.clear()
 	_ap_display.clear()
@@ -2972,7 +3109,7 @@ func _play_walk(ev: Dictionary) -> void:
 	var id := int(ev["unit"])
 	_walk_cells[id] = ev["from"]
 	queue_redraw()
-	var step_delay := NEUTRAL_WALK_STEP_DELAY if _fast_playback else WALK_STEP_DELAY
+	var step_delay := (NEUTRAL_WALK_STEP_DELAY if _fast_playback else WALK_STEP_DELAY) / _pace()
 	for cell: Vector2i in ev["path"]:
 		await get_tree().create_timer(step_delay).timeout
 		_walk_cells[id] = cell
@@ -3268,28 +3405,22 @@ func _ensure_visible(coord: Vector2i) -> void:
 	_pan_tween.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	_pan_tween.tween_method(_set_pan, pan, target, ENSURE_VISIBLE_TWEEN)
 
-## Возврат камеры к исходному виду (#74). На большой карте (город 50×50) легко
-## укатиться за край и потерять из виду собственные войска — кнопка сбрасывает
-## масштаб и ставит в центр экрана то, ради чего игрок туда смотрит: свою армию.
-func _recenter_camera() -> void:
-	# Масштаб 1:1 берётся только если карта при нём на экран влезает. На поле 60×40
-	# это 2400×1600 px — больше любого окна, и «возврат камеры» возвращал игрока в
-	# точно такую же слепоту, из которой он и нажал кнопку. Поэтому отъезжаем ровно
-	# настолько, чтобы поле поместилось целиком, и не ближе 1:1.
+## Камера к войскам стороны (item 10): плавно ставит в центр экрана середину её бойцов и
+## машин, зум не трогает. В командной игре на панели есть кнопка на себя и на каждого
+## союзника — найти своих на большой карте одним щелчком.
+func _center_on_side(side: int) -> void:
 	var view := get_viewport_rect().size
-	var board := Vector2(state.grid.width * CELL, state.grid.height * CELL) \
-			+ ORIGIN * 2.0
-	var fit: float = minf(view.x / board.x, view.y / board.y)
-	zoom = clampf(minf(1.0, fit), ZOOM_MIN, ZOOM_MAX)
-	var focus := _home_focus()
-	var centre := _cell_origin(focus) + Vector2(CELL, CELL) * 0.5
-	pan = view * 0.5 - zoom * centre
-	queue_redraw()
+	var centre := _cell_origin(_home_focus(side)) + Vector2(CELL, CELL) * 0.5
+	_kill_pan_tween()
+	_pan_tween = create_tween()
+	_pan_tween.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	_pan_tween.tween_method(_set_pan, pan, view * 0.5 - zoom * centre, ENSURE_VISIBLE_TWEEN)
 
-## Клетка, на которую смотрит камера «по умолчанию»: середина своих войск на поле,
-## а если их не осталось — середина карты.
-func _home_focus() -> Vector2i:
-	var side: int = my_owner if networked else state.active_player()
+## Клетка, на которую смотрит камера «по умолчанию»: середина войск стороны на поле
+## (своей, если сторона не задана), а если их не осталось — середина карты.
+func _home_focus(side: int = -1) -> Vector2i:
+	if side < 0:
+		side = my_owner if networked else state.active_player()
 	var sum := Vector2i.ZERO
 	var n := 0
 	for u in state.all_units():
@@ -3361,17 +3492,39 @@ func _viewing_side() -> int:
 ## (take_vis_changes). Бойцы, техника, трупы, мины, подсветки и эффекты рисуются поверх, как
 ## и раньше; сетки и подписей высоты на таком отъезде нет — их всё равно не разглядеть.
 const LOD_ZOOM := 0.35
+## Ниже этого зума подписи высоты насыпей не рисуются — шрифт всё равно не прочесть.
+const HEIGHT_LABEL_ZOOM := 0.6
 const FOG_COL := Color(0.02, 0.02, 0.04, 0.55)
 
 ## Порядок слоёв — как у поклеточного прохода: рельеф, над ним туман, над туманом объекты
 ## (их поклеточный проход тоже рисует поверх пелены — и на неразведанных клетках).
+##
+## Вблизи (far = false) тот же слой выводит рельеф кусками-плитками TerrainTiles и туман
+## поверх них: пиксельным плиткам нужна фильтрация NEAREST, а она у узла одна на всё, что
+## он рисует, — бойцов главного узла она огрубила бы.
 class LodLayer extends Node2D:
 	var terrain: ImageTexture = null
 	var fog: ImageTexture = null
 	var features: ImageTexture = null
 	var rect := Rect2()
 	var fog_on := false
+	var far := true
+	var tiles: TerrainTiles = null
+	var near_cells := Rect2i()   # видимые клетки ближнего плана
 	func _draw() -> void:
+		if not far:
+			if tiles == null:
+				return
+			var r := near_cells
+			var res := TerrainTiles.prepare(self, float(CELL))
+			tiles.draw(self, rect.position, float(CELL), r.position.x, r.position.y, r.end.x, r.end.y,
+					false, res)
+			if fog_on and fog != null:
+				draw_texture_rect(fog, rect, false)
+			tiles.draw(self, rect.position, float(CELL), r.position.x, r.position.y, r.end.x, r.end.y,
+					true, res)
+			return
+		texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 		if terrain != null:
 			draw_texture_rect(terrain, rect, false)
 		if fog_on and fog != null:
@@ -3391,6 +3544,8 @@ var _lod_look_ver: int = -1        # до какой GridCell.look_version до�
 var _lod_terrain_stale := false    # картинка правилась, текстура ещё не выгружена
 var _lod_fog_stale := false
 var _lod_tex_avg: Dictionary = {}  # имя картинки-замены -> её средний цвет
+var _tiles: TerrainTiles = null     # ближний план рельефа кусками-плитками
+var _tiles_grid: int = 0
 
 ## Держит слой дальнего плана в согласии с доской. far — рисует ли им этот кадр. Слой
 ## заводится при первом отъезде и дальше правится и вблизи: правка стоит столько, сколько
@@ -3399,8 +3554,6 @@ var _lod_tex_avg: Dictionary = {}  # имя картинки-замены -> е�
 func _lod_sync(far: bool, viewer: int, visible: Dictionary, remembered: Dictionary,
 		fog_on: bool) -> void:
 	if _lod == null:
-		if not far:
-			return
 		_lod = LodLayer.new()
 		_lod.show_behind_parent = true
 		_lod.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
@@ -3408,51 +3561,65 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, remembered: Dictiona
 	var grid := state.grid
 	var gw := grid.width
 	var gh := grid.height
-	_lod.visible = far
-	if far:
-		_lod.position = pan
-		_lod.scale = Vector2(zoom, zoom)
-		var rect := Rect2(ORIGIN, Vector2(gw * CELL, gh * CELL))
-		if _lod.rect != rect or _lod.fog_on != fog_on:
-			_lod.rect = rect
-			_lod.fog_on = fog_on
-			_lod.queue_redraw()
-	# Рельеф: целиком — на новой доске или оборванном журнале; иначе только клетки, что
-	# с прошлого раза записал журнал вида, и те, где сменилась копоть взрывов.
-	var tkey := [grid.get_instance_id()]
-	if tkey != _lod_terrain_key or _lod_terrain == null or _lod_look_ver < GridCell.look_log_base:
-		_lod_terrain_key = tkey
-		_lod_build_terrain()
-		_lod_damage_ver = _fx.damage_version
-		_lod_damaged = _fx.floor_damage.duplicate()
-		_lod.terrain = null
-		_lod.features = null
-	else:
-		if _lod_look_ver != GridCell.look_version:
-			var ch := GridCell.look_changes
-			var i: int = (_lod_look_ver - GridCell.look_log_base) * 2
-			while i < ch.size():
-				var x := ch[i]
-				var y := ch[i + 1]
-				if x < gw and y < gh:
-					var lc := grid.cell_fast(x, y)
-					_lod_terrain.set_pixel(x, y, _lod_color(lc))
-					_lod_features.set_pixel(x, y, _lod_feature_color(lc))
-				i += 2
-			_lod_terrain_stale = true
-		if _lod_damage_ver != _fx.damage_version:
-			# Копоть живёт в косметике, а не в клетках: перекрашиваем и прежние побитые
-			# клетки (перемотка повтора её стирает), и нынешние.
-			for c: Vector2i in _lod_damaged:
-				if grid.in_bounds(c):
-					_lod_terrain.set_pixel(c.x, c.y, _lod_color(grid.cell(c)))
-			for c: Vector2i in _fx.floor_damage:
-				if grid.in_bounds(c):
-					_lod_terrain.set_pixel(c.x, c.y, _lod_color(grid.cell(c)))
+	_lod.position = pan
+	_lod.scale = Vector2(zoom, zoom)
+	var rect := Rect2(ORIGIN, Vector2(gw * CELL, gh * CELL))
+	if _lod.rect != rect or _lod.fog_on != fog_on or _lod.far != far:
+		_lod.rect = rect
+		_lod.fog_on = fog_on
+		_lod.far = far
+		_lod.queue_redraw()
+	if not far:
+		# Ближний план: плитки рельефа кусками (TerrainTiles). Набор кусков зависит от
+		# того, что на экране, поэтому слой перерисовывается вместе с кадром — это лишь
+		# несколько текстур, клетки внутри них не трогаются.
+		if _tiles == null or _tiles_grid != grid.get_instance_id():
+			_tiles = TerrainTiles.new(grid, state.env)
+			_tiles_grid = grid.get_instance_id()
+			_lod.tiles = _tiles
+		_tiles.sync(_fx.floor_damage, _fx.damage_version)
+		_lod.near_cells = Rect2i(_cull_x0, _cull_y0, _cull_x1 - _cull_x0, _cull_y1 - _cull_y0) \
+				.intersection(Rect2i(0, 0, gw - 1, gh - 1))
+		_lod.queue_redraw()
+	# Картинки дальнего плана заводятся при первом отъезде: вблизи рельеф — плитками,
+	# и строить пиксельную карту большой доски заранее незачем.
+	if far or _lod_terrain != null:
+		# Рельеф: целиком — на новой доске или оборванном журнале; иначе только клетки, что
+		# с прошлого раза записал журнал вида, и те, где сменилась копоть взрывов.
+		var tkey := [grid.get_instance_id()]
+		if tkey != _lod_terrain_key or _lod_terrain == null or _lod_look_ver < GridCell.look_log_base:
+			_lod_terrain_key = tkey
+			_lod_build_terrain()
 			_lod_damage_ver = _fx.damage_version
 			_lod_damaged = _fx.floor_damage.duplicate()
-			_lod_terrain_stale = true
-	_lod_look_ver = GridCell.look_version
+			_lod.terrain = null
+			_lod.features = null
+		else:
+			if _lod_look_ver != GridCell.look_version:
+				var ch := GridCell.look_changes
+				var i: int = (_lod_look_ver - GridCell.look_log_base) * 2
+				while i < ch.size():
+					var x := ch[i]
+					var y := ch[i + 1]
+					if x < gw and y < gh:
+						var lc := grid.cell_fast(x, y)
+						_lod_terrain.set_pixel(x, y, _lod_color(lc))
+						_lod_features.set_pixel(x, y, _lod_feature_color(lc))
+					i += 2
+				_lod_terrain_stale = true
+			if _lod_damage_ver != _fx.damage_version:
+				# Копоть живёт в косметике, а не в клетках: перекрашиваем и прежние побитые
+				# клетки (перемотка повтора её стирает), и нынешние.
+				for c: Vector2i in _lod_damaged:
+					if grid.in_bounds(c):
+						_lod_terrain.set_pixel(c.x, c.y, _lod_color(grid.cell(c)))
+				for c: Vector2i in _fx.floor_damage:
+					if grid.in_bounds(c):
+						_lod_terrain.set_pixel(c.x, c.y, _lod_color(grid.cell(c)))
+				_lod_damage_ver = _fx.damage_version
+				_lod_damaged = _fx.floor_damage.duplicate()
+				_lod_terrain_stale = true
+		_lod_look_ver = GridCell.look_version
 	# Туман: целиком — при смене доски, зрителя или режима; иначе только клетки, чья
 	# видимость сменилась (take_vis_changes; null — «сменилось всё»).
 	if fog_on:
@@ -3473,16 +3640,15 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, remembered: Dictiona
 				_lod_fog.set_pixel(c.x, c.y, Color(0, 0, 0, 0) if visible.has(c)
 						else (FOG_COL if remembered.has(c) else UNKNOWN_COL))
 			_lod_fog_stale = true
-	if not far:
-		return
-	if _lod.terrain == null:
-		_lod.terrain = ImageTexture.create_from_image(_lod_terrain)
-		_lod.features = ImageTexture.create_from_image(_lod_features)
-		_lod.queue_redraw()
-	elif _lod_terrain_stale:
-		_lod.terrain.update(_lod_terrain)
-		_lod.features.update(_lod_features)
-	_lod_terrain_stale = false
+	if far:
+		if _lod.terrain == null:
+			_lod.terrain = ImageTexture.create_from_image(_lod_terrain)
+			_lod.features = ImageTexture.create_from_image(_lod_features)
+			_lod.queue_redraw()
+		elif _lod_terrain_stale:
+			_lod.terrain.update(_lod_terrain)
+			_lod.features.update(_lod_features)
+		_lod_terrain_stale = false
 	if fog_on and _lod_fog != null:
 		if _lod.fog == null:
 			_lod.fog = ImageTexture.create_from_image(_lod_fog)
@@ -3606,7 +3772,8 @@ func _lod_texture_averages() -> Dictionary:
 			"floor_grass", "floor_destroyed", "floor_epicenter"]
 	names.append_array(FEATURE_TAGS.keys())
 	for n: String in names:
-		var tex := Sprites.texture_of(n)
+		# Окружение карты (item 24): дальний план того же цвета, что и плитки вблизи.
+		var tex := Sprites.texture_of(TerrainTiles.env_name(n, state.env))
 		if tex == null:
 			continue
 		var img := tex.get_image()
@@ -3658,11 +3825,9 @@ func _draw() -> void:
 	var grid := state.grid
 	var gw := grid.width
 	var gh := grid.height
-	var csize := Vector2(CELL, CELL)
-	var grid_col := Color(0.25, 0.27, 0.32)
-	var fog_col := FOG_COL
+	# Полупрозрачная тёмная сетка читается на любой плитке — светлом бетоне и тёмной стали.
+	var grid_col := Color(0, 0, 0, 0.32)
 	var label_off := Vector2(6, CELL - 4)
-	var fx_damage: Dictionary = _fx.floor_damage
 	# Отсечение по вьюпорту (item 5): на большой карте (город 50×50, бой 500×500) или
 	# крупном зуме рисуем ТОЛЬКО клетки, попадающие на экран, а не всю сетку целиком —
 	# это снимает основную нагрузку кадра. Границы с запасом в клетку.
@@ -3680,81 +3845,18 @@ func _draw() -> void:
 	var far := zoom < LOD_ZOOM
 	_lod_sync(far, viewer, visible, remembered, fog_on)
 	if not far:
-		var flat := grid.cells_flat()
-		# Картинок-замен пола в поставке нет вовсе: тогда их и не ищут ни на одной клетке.
-		var floor_tex := false
-		for fname: String in ["floor", "floor_space", "floor_wall", "floor_epicenter",
-				"floor_destroyed", "floor_grass", "floor_cover", "fire"]:
-			floor_tex = floor_tex or Sprites.has_override(fname)
-		for y in range(vy0, vy1 + 1):
-			var oy: float = ORIGIN.y + y * CELL
-			var row := y * gw
-			for x in range(vx0, vx1 + 1):
-				var cell: GridCell = flat[row + x]
-				var origin := Vector2(ORIGIN.x + x * CELL, oy)
-				var rect := Rect2(origin, csize)
-				# Совсем НЕИЗВЕСТНАЯ клетка (item 46): ни в обзоре, ни в памяти разведки.
-				# В СТАНДАРТНОМ тумане память есть, и такой остаётся неразведанная даль;
-				# в РЕАЛИСТИЧНОМ памяти нет вовсе, и так выглядит всё вне обзора.
-				# Рисуем глухую заливку и уходим — рельеф под ней игрок знать не должен.
-				var seen := true
-				if fog_on:
-					var here := Vector2i(x, y)
-					seen = visible.has(here)
-					if not seen and not remembered.has(here):
-						draw_rect(rect, UNKNOWN_COL)
-						continue
-				var is_wall := cell.cover_height >= MCF.WALL_HEIGHT
-				# Пол: сначала картинка-замена, и только если её нет — заливка цветом (#55).
-				var floor_name := "floor"
-				# Побитый взрывом пол (#21.1). Проверка идёт ПОСЛЕ пустого слоя: пока
-				# ничего не рушили, словарь пуст и в цикл по 2400 клеткам не заходят.
-				var damage: int = 0
-				if not fx_damage.is_empty():
-					damage = int(fx_damage.get(Vector2i(x, y), 0))
-				if cell.is_space:
-					floor_name = "floor_space"
-				elif is_wall:
-					floor_name = "floor_wall"
-				elif damage == FxDecals.DAMAGE_EPICENTER:
-					floor_name = "floor_epicenter"   # выгоревшая клетка эпицентра
-				elif damage == FxDecals.DAMAGE_RUBBLE:
-					floor_name = "floor_destroyed"
-				elif cell.floor_type == MCF.FLOOR_GRASS:
-					floor_name = "floor_grass"   # трава (#14) — своя картинка-замена
-				if not floor_tex or not Sprites.draw_texture_override_rect(self, floor_name, rect):
-					var base_col := Color(0.14, 0.15, 0.18)
-					if cell.is_space:
-						base_col = Color(0.03, 0.02, 0.08)
-					if is_wall:
-						base_col = Color(0.35, 0.3, 0.25)
-					draw_rect(rect, base_col)
-					# Трава без картинки-замены: зелёный налёт поверх обычного пола, чтобы
-					# «сюда огонь придёт почти наверняка» читалось прямо на доске (#14).
-					if not is_wall and not cell.is_space and cell.floor_type == MCF.FLOOR_GRASS:
-						draw_rect(rect, GRASS_TINT)
-					# Побитый пол без картинки-замены: тёмная копоть, у эпицентра гуще.
-					if damage != 0 and not cell.is_space:
-						draw_rect(rect, SCORCH_EPICENTER if damage == FxDecals.DAMAGE_EPICENTER
-								else SCORCH_RUBBLE)
-				var h: float = cell.cover_height
-				# Низкое укрытие: тон тем ярче, чем выше (§3.7).
-				if h > 0.0 and not is_wall:
-					if not floor_tex or not Sprites.draw_texture_override_rect(self, "floor_cover", rect):
-						draw_rect(rect, Color(0.5, 0.45, 0.2, 0.12 + 0.12 * h))
-				if cell.on_fire:
-					if not floor_tex or not Sprites.draw_texture_override_rect(self, "fire", rect):
-						draw_rect(rect, Color(1.0, 0.4, 0.05, 0.4))
-				# Насыпь земли (§3.10): подпись высоты в клетке. Подписей всего пять штук,
-				# поэтому строка берётся из таблицы, а не форматируется заново каждый кадр.
-				if h > 0.0:
-					draw_string(font, origin + label_off, HEIGHT_LABELS.get(h, "%.1fm" % h),
-						HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.9, 0.78, 0.5))
-				# Разведанное, но сейчас не просматриваемое — под серой пеленой (item 46).
-				# Рельеф сквозь неё виден, а живых на такой клетке не рисуют вовсе: их
-				# отсеивают проходы по юнитам и трупам ниже, по тому же множеству visible.
-				if not seen:
-					draw_rect(rect, fog_col)
+		# Пол, объекты, огонь и туман вблизи рисует слой под нами плитками (TerrainTiles,
+		# _lod_sync): здесь остаются подписи высоты насыпей — у кучи земли она бывает
+		# разной, и картинкой её не прочесть. Мелким шрифтом их не разглядеть на отъезде.
+		if zoom >= HEIGHT_LABEL_ZOOM:
+			for dc: Vector2i in resolver._feature_cells(MCF.FEATURE_DIRT_PILE):
+				if not _cell_on_screen(dc.x, dc.y):
+					continue
+				if fog_on and not visible.has(dc) and not remembered.has(dc):
+					continue
+				var dh: float = grid.cell(dc).cover_height
+				draw_string(font, _cell_origin(dc) + label_off, HEIGHT_LABELS.get(dh, "%.1fm" % dh),
+					HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.95, 0.85, 0.6))
 		# Сетка — линиями по строкам и столбцам экрана, а не контуром каждой клетки: на
 		# отъезде это тысячи прямоугольников за кадр против сотни линий.
 		var top := ORIGIN.y + vy0 * CELL
@@ -3773,6 +3875,13 @@ func _draw() -> void:
 
 	# Групповое движение (#88): зелёным — куда группа вообще дотягивается, а под
 	# курсором жёлтыми кружками — куда конкретно встанет каждый выделенный юнит.
+	# Залп марксманов (item 12): лучи всех в сторону курсора — те же трассы, что у выстрела.
+	if mode == Mode.GROUP_LASER:
+		var vdir := _volley_dir(_pos_to_cell(get_global_mouse_position()))
+		if vdir != Vector2i.ZERO:
+			for mm: UnitInstance in _group_marksmen():
+				_draw_laser_preview(mm, mm.coord + vdir)
+
 	if mode == Mode.GROUP_MOVE:
 		for coord: Vector2i in _group_reach_cells():
 			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(0.3, 0.8, 0.4, 0.24))
@@ -4009,53 +4118,30 @@ func _draw() -> void:
 					draw_string(font, _cell_origin(dc) + Vector2(4, 14), "DRIVER",
 						HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(1, 1, 0.6))
 
-	# Статические объекты на клетках (станции дронов и т. п.) — тоже только на экране (item 5).
+	# Статические объекты вблизи — в плитках TerrainTiles. Поверх них здесь только то, что
+	# у каждого своё или живёт мгновение: мины (видимость своя у каждой стороны, item 45),
+	# снимок «до взрыва» на время броска (item 22) и трещина на побитом ДОТе (#89).
 	if not far:
-		var fflat := grid.cells_flat()
-		for y in range(vy0, vy1 + 1):
-			var foy: float = ORIGIN.y + y * CELL
-			var frow := y * gw
-			for x in range(vx0, vx1 + 1):
-				var fcell: GridCell = fflat[frow + x]
-				# item 22: пока крутится кубик выстрела, клетка рисуется по «слепку до взрыва» —
-				# снесённое укрепление ещё стоит, потрескавшееся ещё целое.
-				var _fid := fcell.feature_id
-				var _fdur := fcell.feature_durability
-				if not _hold_visual.is_empty():
-					var _hc: Dictionary = _hold_visual.get("cells", {})
-					var _hkey := Vector2i(x, y)
-					if _hc.has(_hkey):
-						_fid = _hc[_hkey]["feature_id"]
-						_fdur = _hc[_hkey]["feature_durability"]
-				if _fid == "":
-					continue
-				# Мина видна только тому, кто её поставил, — и тому, чей сапёр её нашёл
-				# (item 45). Иначе смысла в минном поле не было бы вовсе.
-				if (_fid == MCF.FEATURE_MINE or _fid == MCF.FEATURE_AV_MINE) \
-						and not resolver.mine_visible_to(viewer, Vector2i(x, y)):
-					continue
-				var o := Vector2(ORIGIN.x + x * CELL, foy)
-				# Имя картинки совпадает с id объекта (sandbags.png, trench.png...) (#55);
-				# лист «<объект>_autotile.png» стыкует стены по соседям (batch 17, item 12).
-				if Sprites.draw_feature(self, _fid, Rect2(o, Vector2(CELL, CELL)),
-						_same_feature.bind(Vector2i(x, y), _fid)):
-					continue
-				var tag: String = FEATURE_TAGS.get(_fid, "?")
-				# ЛДФ — чёрный монолит (#85): заливка, а не контур, чтобы отличался от бетона.
-				if _fid == MCF.FEATURE_LDF:
-					draw_rect(Rect2(o + Vector2(3, 3), Vector2(CELL - 6, CELL - 6)), LDF_COLOR)
-					draw_rect(Rect2(o + Vector2(3, 3), Vector2(CELL - 6, CELL - 6)),
-						Color(0.35, 0.35, 0.4), false, 1.0)
-					draw_string(font, o + Vector2(6, CELL - 15), tag,
-						HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.8, 0.8, 0.85))
-					continue
-				draw_rect(Rect2(o + Vector2(8, 8), Vector2(CELL - 16, CELL - 16)),
-					Color(0.6, 0.6, 0.7), false, 2.0)
-				# Тег стоит СТРОКОЙ ВЫШЕ подписи высоты, чтобы они не наезжали друг на друга (#35).
-				draw_string(font, o + Vector2(6, CELL - 15), tag,
-					HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.75, 0.75, 0.85))
-				# Треснувший ДОТ (потеряна прочность) — красная риска в углу (#89).
-				if _fdur > 0 and _fdur < MCF.feature_durability(_fid):
+		var fcell_size := Vector2(CELL, CELL)
+		for mk: String in [MCF.FEATURE_MINE, MCF.FEATURE_AV_MINE]:
+			for mc: Vector2i in resolver._feature_cells(mk):
+				if _cell_on_screen(mc.x, mc.y) and resolver.mine_visible_to(viewer, mc):
+					if not Sprites.draw_texture_override_rect(self, mk, Rect2(_cell_origin(mc), fcell_size)):
+						draw_string(font, _cell_origin(mc) + Vector2(6, CELL - 15), FEATURE_TAGS[mk],
+							HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.9, 0.3, 0.25))
+		if not _hold_visual.is_empty():
+			var _hc: Dictionary = _hold_visual.get("cells", {})
+			for hk: Vector2i in _hc:
+				var hfid: String = _hc[hk]["feature_id"]
+				if hfid != "" and _cell_on_screen(hk.x, hk.y):
+					_tiles.draw_feature_tile(self, hfid, hk, Rect2(_cell_origin(hk), fcell_size))
+		for dk: String in [MCF.FEATURE_DOT, MCF.FEATURE_DOT_OPEN]:
+			for dcell: Vector2i in resolver._feature_cells(dk):
+				var ddur := grid.cell(dcell).feature_durability
+				if _hold_visual.get("cells", {}).has(dcell):
+					ddur = int(_hold_visual["cells"][dcell]["feature_durability"])
+				if ddur > 0 and ddur < MCF.feature_durability(dk) and _cell_on_screen(dcell.x, dcell.y):
+					var o := _cell_origin(dcell)
 					draw_line(o + Vector2(CELL - 12, 8), o + Vector2(CELL - 6, 16),
 						Color(0.9, 0.25, 0.2), 2.0)
 	else:
@@ -4374,10 +4460,11 @@ func _draw_fx_props(visible: Dictionary) -> void:
 		return
 	var fog_on: bool = resolver.fog_enabled
 	for prop: Dictionary in _fx.props:
-		_draw_fx_one(prop["kind"], prop["pos"], prop["rot"], prop["scale"], visible, fog_on)
+		_draw_fx_one(prop["kind"], prop["pos"], prop["rot"], prop["scale"], visible, fog_on,
+				prop.get("origin", Vector2i(-1, -1)))
 	for f: Dictionary in _fx.flying:
 		_draw_fx_one(f["kind"], FxDecals.flight_pos(f), FxDecals.flight_rot(f),
-				f["scale"], visible, fog_on)
+				f["scale"], visible, fog_on, f.get("origin", Vector2i(-1, -1)))
 
 ## Дорожки боя (issue 8): «кто в кого стреляет». Трассер живёт 0.16 с — увидеть его
 ## можно, разобрать перестрелку нельзя, особенно в ход ИИ, когда за один заход стреляют
@@ -4418,7 +4505,7 @@ func _draw_fx_lanes(visible: Dictionary) -> void:
 
 ## Размер частицы в долях клетки и запасной цвет, когда картинки-замены нет.
 const FX_LOOK := {
-	"shard": [0.16, Color(0.72, 0.88, 0.95, 0.85)],
+	"shard": [0.24, Color(0.72, 0.88, 0.95, 0.85)],
 	"casing": [0.11, Color(0.85, 0.72, 0.28, 0.9)],
 	# Гильза противотанкиста (item 24): оранжевая и вдвое крупнее пистолетной (0.11 → 0.22).
 	"shell_casing": [0.22, Color(1.0, 0.55, 0.1, 0.95)],
@@ -4433,8 +4520,10 @@ const FX_TEXTURE := {
 	"blood_drop": "blood_splatter", "blood_pool": "blood_pool",
 }
 
+## origin — клетка, откуда частица вылетела (разбитое окно): видел, как оно разбилось, —
+## видишь и все его осколки, даже долетевшие в туман (item 7).
 func _draw_fx_one(kind: String, cell_pos: Vector2, rot: float, scale: float,
-		visible: Dictionary, fog_on: bool) -> void:
+		visible: Dictionary, fog_on: bool, origin: Vector2i = Vector2i(-1, -1)) -> void:
 	# Частицы за краем экрана не рисуем (item 5): на большой карте их накапливаются сотни.
 	var _fxc := Vector2i(floori(cell_pos.x), floori(cell_pos.y))
 	if not _cell_on_screen(_fxc.x, _fxc.y):
@@ -4444,7 +4533,7 @@ func _draw_fx_one(kind: String, cell_pos: Vector2, rot: float, scale: float,
 	var _wcell := state.grid.cell(_fxc)
 	if _wcell != null and _wcell.cover_height >= MCF.WALL_HEIGHT:
 		return
-	if fog_on and not visible.has(Vector2i(floori(cell_pos.x), floori(cell_pos.y))):
+	if fog_on and not visible.has(_fxc) and not visible.has(origin):
 		return
 	var look: Array = FX_LOOK.get(kind, [0.12, Color(0.8, 0.8, 0.8, 0.8)])
 	var half: float = float(look[0]) * CELL * float(scale) * 0.5
@@ -4543,10 +4632,6 @@ func _draw_borg(veh: Vehicle, org: Vector2, col: Color, wrecked: bool, dur: int,
 		draw_circle(org + Vector2(6 + i * 7, CELL - 5), 2.5, Color(0.9, 0.9, 0.6))
 
 ## Тот же объект на соседней клетке (для автотайла, batch 17, item 12).
-func _same_feature(dx: int, dy: int, at: Vector2i, fid: String) -> bool:
-	var n := state.grid.cell(at + Vector2i(dx, dy))
-	return n != null and n.feature_id == fid
-
 ## Суффикс картинок стороны — её фракция (batch 17, item 13): «_nova», «_neutral»…
 func _owner_suffix(owner_id: int) -> String:
 	if state != null and state.roster != null:
@@ -4614,6 +4699,11 @@ func _reposition_hud_grip() -> void:
 	# Журнал боя — в левом-нижнем углу (item 6), тоже до первого ручного переноса (item 8).
 	if _log_panel != null and not _log_moved:
 		_log_panel.position = Vector2(12.0, vp.y - _log_panel.size.y - 12.0)
+	# Не помещаются рядом (крупный интерфейс, item 23, или раздвинутый журнал) — чат встаёт
+	# над журналом, а не поверх него.
+	if _chat_panel != null and _log_panel != null and not _chat_moved \
+			and _chat_panel.get_rect().intersects(_log_panel.get_rect()):
+		_chat_panel.position.y = maxf(0.0, _log_panel.position.y - _chat_panel.size.y - 8.0)
 	# Панель узлов машины (веха «Modular tank system») — СПРАВА от меню действий, на той
 	# же верхней линии (batch 13 #13). Раньше она стояла над журналом боя в левом-нижнем
 	# углу, и длинное меню машины, растущее из левого-верхнего, накрывало её. Меню и
@@ -4708,6 +4798,8 @@ func _build_ui() -> void:
 	_save_btn.visible = replay == null
 	# «Возврат в меню» — единая кнопка: в сети уводит из партии, в одиночке — в главное меню.
 	vbox.add_child(_button_row([_save_btn, _compact_button("Return to Menu", _to_lobby)]))
+	# Настройки (items 17/23): размер интерфейса и акцент — не выходя из боя.
+	vbox.add_child(_compact_button("Settings", func() -> void: SettingsWindow.open(self)))
 	# Пауза боя машин (item 4). Кнопка живёт рядом с управлением ходом и показывается
 	# только когда обе стороны ведёт ИИ — в остальных случаях останавливать нечего.
 	_pause_btn = _compact_button("Pause", _toggle_pause)
@@ -4730,6 +4822,30 @@ func _build_ui() -> void:
 	# ничего не меняющий на доске.
 	_ruler_btn = _compact_button("Ruler", _enter_ruler)
 	vbox.add_child(_ruler_btn)
+	# Камера к своим (item 10): «Me» всегда, а в командной игре — и к каждому союзнику.
+	vbox.add_child(_camera_row())
+	# Темп ИИ (item 5): видно, если в партии есть ИИ, а менять может хост (или игрок в
+	# одиночной партии) — гостям скорость приходит от хоста.
+	if state != null and state.roster != null and state.roster.slots.any(
+			func(sl: Roster.Slot) -> bool: return sl.kind == Roster.SlotKind.AI):
+		var sp_row := HBoxContainer.new()
+		var sp_lbl := Label.new()
+		sp_lbl.text = "AI speed"
+		sp_lbl.add_theme_font_size_override("font_size", 11)
+		sp_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		sp_row.add_child(sp_lbl)
+		_ai_speed_opt = OptionButton.new()
+		for sp: float in GameConfig.AI_SPEEDS:
+			_ai_speed_opt.add_item("%s×" % ("½" if sp < 1.0 else str(int(sp))))
+		_ai_speed_opt.select(maxi(0, GameConfig.AI_SPEEDS.find(GameConfig.ai_speed)))
+		_ai_speed_opt.add_theme_font_size_override("font_size", 12)
+		# Панель строится ДО подключения сети (_adopt_network) — роль берём из передачи лобби.
+		_ai_speed_opt.disabled = NetHandoff.session != null and not NetHandoff.is_host
+		_ai_speed_opt.tooltip_text = "How fast AI sides play. Only the host can change it."
+		_ai_speed_opt.item_selected.connect(func(i: int) -> void:
+			_set_ai_speed(GameConfig.AI_SPEEDS[i], true))
+		sp_row.add_child(_ai_speed_opt)
+		vbox.add_child(sp_row)
 	var draw_lbl := Label.new()
 	draw_lbl.text = "Draw brush"
 	draw_lbl.add_theme_font_size_override("font_size", 11)
@@ -4804,6 +4920,8 @@ func _build_log_panel() -> void:
 	# а заданный минимум держал бы её прежней. Тело задаёт высоту само, пока открыто.
 	panel.custom_minimum_size = Vector2(360, 0)
 	SteamChrome.apply_panel(panel)
+	# Полупрозрачный, как чат (item 18): self_modulate гасит только фон, не текст.
+	panel.self_modulate = Color(1, 1, 1, PANEL_GLASS_ALPHA)
 	_ui_layer.add_child(panel)
 	_log_panel = panel
 	var frame := VBoxContainer.new()
@@ -4814,11 +4932,18 @@ func _build_log_panel() -> void:
 	log_toggle.text = "▴"
 	log_toggle.pressed.connect(_toggle_log)
 	_log_toggle_btn = log_toggle
-	var log_header := SteamChrome.header_bar("Combat Log", log_toggle)
+	var log_tools := HBoxContainer.new()
+	log_tools.add_theme_constant_override("separation", 4)
+	var log_header := SteamChrome.header_bar("Combat Log", log_tools)
+	log_header.self_modulate = Color(1, 1, 1, PANEL_GLASS_ALPHA)  # item 18
 	_make_panel_draggable(panel, log_header, func() -> void: _log_moved = true)  # item 8
 	frame.add_child(log_header)
 	_log_label = RichTextLabel.new()
 	_log_label.custom_minimum_size = Vector2(360, 130)
+	_style_panel_scroll(_log_label)
+	# Размер — ручкой в шапке (item 18): вверх — выше, вправо — шире.
+	log_tools.add_child(_resize_grip(panel, _log_label, 1.0, func() -> void: pass))
+	log_tools.add_child(log_toggle)
 	_log_label.add_theme_font_size_override("normal_font_size", 11)
 	_log_label.scroll_following = true
 	_log_body_wrap = SteamChrome.pad(_log_label, 8, 6)
@@ -5002,7 +5127,9 @@ func _build_chat_panel() -> void:
 	toggle.text = "▾"
 	toggle.pressed.connect(_toggle_chat)
 	_chat_toggle_btn = toggle
-	var chat_header := SteamChrome.header_bar("Chat", toggle)
+	var chat_tools := HBoxContainer.new()
+	chat_tools.add_theme_constant_override("separation", 4)
+	var chat_header := SteamChrome.header_bar("Chat", chat_tools)
 	chat_header.self_modulate = Color(1, 1, 1, PANEL_GLASS_ALPHA)  # issue 5
 	_make_panel_draggable(panel, chat_header, func() -> void: _chat_moved = true)  # item 8
 	frame.add_child(chat_header)
@@ -5018,7 +5145,16 @@ func _build_chat_panel() -> void:
 	_chat_log.custom_minimum_size = Vector2(260, 120)
 	_chat_log.add_theme_font_size_override("normal_font_size", 11)
 	_chat_log.scroll_following = true
+	_style_panel_scroll(_chat_log)
 	_chat_body.add_child(_chat_log)
+	# Размер — ручкой в шапке (item 18): вверх — выше, влево — шире (чат стоит у правого края).
+	chat_tools.add_child(_resize_grip(panel, _chat_log, -1.0, func() -> void:
+		if _chat_body_wrap != null and not _chat_body_wrap.visible:
+			_set_panel_collapsed(_chat_panel, _chat_body_wrap, _chat_toggle_btn, false)))
+	chat_tools.add_child(toggle)
+	# Разговор из лобби и закупки (item 14) продолжается здесь. Отложенно: «(you)» в
+	# подписи зависит от своей стороны, а её знает только подключённая сеть.
+	_replay_chat_history.call_deferred()
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 4)
 	_chat_body.add_child(row)
@@ -5304,79 +5440,99 @@ func _enter_erase() -> void:
 	mode = Mode.ERASE
 	queue_redraw()
 
-## Стереть из своих штрихов все точки в радиусе ластика (в клетках) вокруг cell.
-## Штрих, у которого не осталось точек, удаляется целиком. Стирание локальное — как и
-## «очистить свои» раньше: аннотации косметические и правки по сети не гоняются.
+## Ластик (item 15): стирает пиксели СВОИХ рисунков там, где прошёл, — как в Paint. Ход
+## ластика уходит по сети при отпускании, и у остальных стирается то же самое (раньше
+## стирание было только у себя, и чужие экраны держали стёртое до конца партии).
 func _erase_at(pos: Vector2) -> void:
-	var me := _draw_author()
-	# Радиус ластика в пикселях draw-пространства: базовый + шаг за деление ползунка.
-	var r: float = (float(_erase_brush) + 1.0) * (CELL * 0.35)
-	var kept: Array = []
-	var changed := false
-	for rec: Dictionary in _strokes:
-		if int(rec["author"]) != me:
-			kept.append(rec)
-			continue
-		var cells: Array = rec["cells"]
-		var new_cells: Array = []
-		for c: Vector2 in cells:
-			if c.distance_to(pos) > r:
-				new_cells.append(c)
-		if new_cells.size() != cells.size():
-			changed = true
-		if not new_cells.is_empty():
-			rec["cells"] = new_cells
-			kept.append(rec)
-	if changed:
-		_strokes = kept
-		queue_redraw()
+	var last: Vector2 = _cur_stroke[-1] if not _cur_stroke.is_empty() else pos
+	_erase_segment(_draw_author(), last, pos, _erase_radius())
+	if _cur_stroke.is_empty() or last.distance_to(pos) >= 2.0:
+		_cur_stroke.append(pos)
+	queue_redraw()
+
+func _erase_segment(author: int, a: Vector2, b: Vector2, r: float) -> void:
+	for key: Vector2i in _canvases:
+		if key.x == author:
+			(_canvases[key] as DrawCanvas).stroke(a, b, r, Color(0, 0, 0, 0))
+
+func _erase_commit() -> void:
+	if _cur_stroke.is_empty():
+		return
+	if networked and session != null:
+		session.send({"k": K_DRAW, "a": _draw_author(), "e": true, "c": _flat_points(_cur_stroke),
+			"r": _erase_radius()})
+	_cur_stroke = []
+
+## Радиус ластика в пикселях поля: базовый + шаг за деление ползунка.
+func _erase_radius() -> float:
+	return (float(_erase_brush) + 1.0) * (CELL * 0.35)
+
+## Радиус кисти: ползунок задаёт толщину линии, как и раньше.
+static func _paint_radius(width: int) -> float:
+	return maxf(1.5, float(width) * 0.5)
+
+func _canvas(author: int, scope: int) -> DrawCanvas:
+	var key := Vector2i(author, scope)
+	if not _canvases.has(key):
+		_canvases[key] = DrawCanvas.new()
+	return _canvases[key]
+
+static func _flat_points(pts: Array) -> Array:
+	var flat: Array = []
+	for c: Vector2 in pts:
+		flat.append(c.x)
+		flat.append(c.y)
+	return flat
 
 ## Позиция курсора в ПРОСТРАНСТВЕ ОТРИСОВКИ поля (item 14): рисунок свободный, не по
 ## клеткам, поэтому храним пиксельные точки в той же системе, что и _cell_origin().
 func _draw_world_pos() -> Vector2:
 	return (get_global_mouse_position() - pan) / zoom
 
-## Свободный штрих (item 14): добавляем точку, если курсор заметно сдвинулся, — так
-## линия гладкая, но массив не пухнет от микродёрганий.
+## Свободный штрих (item 14): кисть рисует сразу, по мере движения мыши (item 15), а точки
+## копятся для рассылки — заметный сдвиг, чтобы массив не пух от микродёрганий.
 func _stroke_add(pos: Vector2) -> void:
-	if _cur_stroke.is_empty() or Vector2(_cur_stroke[-1]).distance_to(pos) >= 4.0:
-		_cur_stroke.append(pos)
-		queue_redraw()
+	if not _cur_stroke.is_empty() and (_cur_stroke[-1] as Vector2).distance_to(pos) < 2.0:
+		return
+	var last: Vector2 = _cur_stroke[-1] if not _cur_stroke.is_empty() else pos
+	var me := _draw_author()
+	_canvas(me, _draw_scope()).stroke(last, pos, _paint_radius(_draw_brush), _side_color(me))
+	_cur_stroke.append(pos)
+	queue_redraw()
 
 func _stroke_commit() -> void:
 	if _cur_stroke.is_empty():
 		return
-	var rec := {
-		"author": _draw_author(),
-		"scope": _draw_scope(),
-		"cells": _cur_stroke.duplicate(),
-		"width": _draw_brush,  # толщина линии из ползунка (item 6)
-	}
-	_strokes.append(rec)
-	_cur_stroke = []
 	if networked and session != null:
-		var flat: Array = []
-		for c: Vector2 in rec["cells"]:
-			flat.append(c.x)
-			flat.append(c.y)
-		session.send({"k": K_DRAW, "a": rec["author"], "s": rec["scope"],
-			"c": flat, "w": rec["width"]})
-	queue_redraw()
+		session.send({"k": K_DRAW, "a": _draw_author(), "s": _draw_scope(),
+			"c": _flat_points(_cur_stroke), "w": _draw_brush})
+	_cur_stroke = []
 
-## Пришедший чужой штрих (item 51): область видимости уважаем — «для себя» до нас не
-## доходит вовсе (автор его и не шлёт), «для команды» видно только союзникам.
+## Пришедший чужой штрих, ход ластика или «очистить свои» (item 51/15). Область видимости
+## уважаем при показе — «для себя» до нас не доходит вовсе (автор его и не шлёт).
 func _on_remote_stroke(msg: Dictionary) -> void:
+	var author := int(msg.get("a", -1))
+	if bool(msg.get("clear", false)):
+		_drop_drawings_of(author)
+		return
 	var flat: Array = msg.get("c", [])
-	var cells: Array[Vector2] = []
+	var pts: Array[Vector2] = []
 	var i := 0
 	while i + 1 < flat.size():
-		cells.append(Vector2(float(flat[i]), float(flat[i + 1])))
+		pts.append(Vector2(float(flat[i]), float(flat[i + 1])))
 		i += 2
-	if cells.is_empty():
+	if pts.is_empty():
 		return
-	_strokes.append({"author": int(msg.get("a", -1)),
-			"scope": int(msg.get("s", DrawScope.TEAM)), "cells": cells,
-			"width": int(msg.get("w", 3))})
+	if bool(msg.get("e", false)):
+		var r := float(msg.get("r", CELL * 0.35))
+		for k in pts.size():
+			_erase_segment(author, pts[maxi(0, k - 1)], pts[k], r)
+	else:
+		var canvas := _canvas(author, int(msg.get("s", DrawScope.TEAM)))
+		var rad := _paint_radius(int(msg.get("w", 3)))
+		var col := _side_color(author)
+		for k in pts.size():
+			canvas.stroke(pts[maxi(0, k - 1)], pts[k], rad, col)
 	queue_redraw()
 
 ## Видит ли просматривающий игрок этот штрих (item 51): свои — всегда; «для команды» —
@@ -5403,17 +5559,16 @@ func _stroke_visible_to_viewer(rec: Dictionary) -> bool:
 ## Ушедший игрок уносит свои рисунки (batch 17, item 11): они и были подсказками для
 ## него и его команды, а на ходу подменившего его ИИ всплывали у всех.
 func _drop_drawings_of(side: int) -> void:
-	_strokes = _strokes.filter(func(rec: Dictionary) -> bool: return int(rec["author"]) != side)
+	for key: Vector2i in _canvases.keys():
+		if key.x == side:
+			_canvases.erase(key)
 	queue_redraw()
 
 func _clear_my_drawings() -> void:
 	var me := _draw_author()
-	var kept: Array = []
-	for rec: Dictionary in _strokes:
-		if rec["author"] != me:
-			kept.append(rec)
-	_strokes = kept
-	queue_redraw()
+	_drop_drawings_of(me)
+	if networked and session != null:
+		session.send({"k": K_DRAW, "a": me, "clear": true})
 
 ## Нарисовать все видимые штрихи как ломаные по центрам клеток (item 51).
 ## Линейка на поле (item 11): отрезок между концами, кружки на концах и число клеток
@@ -5448,26 +5603,15 @@ func _draw_ruler() -> void:
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 16, col)
 
 func _draw_annotations() -> void:
-	var all := _strokes.duplicate()
-	if not _cur_stroke.is_empty():
-		all.append({"author": _draw_author(), "scope": _draw_scope(),
-				"cells": _cur_stroke, "width": _draw_brush})
-	for rec: Dictionary in all:
-		if not _stroke_visible_to_viewer(rec):
-			continue
-		var cells: Array = rec["cells"]
-		if cells.size() < 1:
-			continue
-		var col := _side_color(int(rec["author"]))
-		var w: float = float(rec.get("width", 3))
-		# Точки штриха уже в draw-пространстве (item 14: свободный рисунок, не по клеткам).
-		var pts := PackedVector2Array()
-		for c in cells:
-			pts.append(c)
-		if pts.size() == 1:
-			draw_circle(pts[0], maxf(2.0, w * 0.6), col)
-		else:
-			draw_polyline(pts, col, w)
+	var view := Rect2(-pan / zoom, get_viewport_rect().size / zoom)
+	for key: Vector2i in _canvases:
+		if _stroke_visible_to_viewer({"author": key.x, "scope": key.y}):
+			(_canvases[key] as DrawCanvas).draw(self, view)
+	# Кружок кисти/ластика под курсором — видно, какой толщины след ляжет (item 15).
+	if mode == Mode.DRAW or mode == Mode.ERASE:
+		var r := _paint_radius(_draw_brush) if mode == Mode.DRAW else _erase_radius()
+		var col := _side_color(_draw_author()) if mode == Mode.DRAW else Color(1, 1, 1, 0.8)
+		draw_arc(_draw_world_pos(), r, 0.0, TAU, 32, col, 1.5)
 
 # --- Чат (item 50) ---
 
@@ -5508,6 +5652,60 @@ func _set_panel_collapsed(panel: Control, body: Control, btn: Button,
 	# иначе свёрнутая шапка уедет от угла на высоту прежнего тела.
 	call_deferred("_reposition_hud_grip")
 
+## Ручка размера панели (item 18): тянешь вверх — панель выше, в сторону grow_x (1 — вправо,
+## −1 — влево) — шире. Нижняя кромка стоит на месте: панели живут у нижнего края экрана,
+## и расти им некуда, кроме как вверх. Меняется минимальный размер тела (body), панель
+## подстраивается под него.
+func _resize_grip(panel: Control, body: Control, grow_x: float, on_start: Callable) -> Control:
+	# Три косые черты — рисуем сами: стрелочных глифов в системном шрифте может не быть.
+	var grip := Control.new()
+	grip.custom_minimum_size = Vector2(16, 16)
+	grip.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	grip.draw.connect(func() -> void:
+		var col := Color("#b0b0b0")
+		for i in 3:
+			var k := 4.0 + i * 4.0
+			if grow_x < 0.0:
+				grip.draw_line(Vector2(0, 16 - k), Vector2(k, 16), col, 1.5)
+			else:
+				grip.draw_line(Vector2(16 - k, 16), Vector2(16, 16 - k), col, 1.5))
+	grip.tooltip_text = "Drag to resize"
+	grip.mouse_filter = Control.MOUSE_FILTER_STOP
+	grip.mouse_default_cursor_shape = Control.CURSOR_FDIAGSIZE if grow_x < 0.0 \
+			else Control.CURSOR_BDIAGSIZE
+	var state := {"on": false, "from": Vector2.ZERO, "size": Vector2.ZERO, "bottom": 0.0,
+			"right": 0.0}
+	grip.gui_input.connect(func(e: InputEvent) -> void:
+		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
+			state["on"] = e.pressed
+			if e.pressed:
+				on_start.call()
+				state["from"] = e.global_position
+				state["size"] = body.custom_minimum_size
+				state["bottom"] = panel.position.y + panel.size.y
+				state["right"] = panel.position.x + panel.size.x
+			grip.accept_event()
+		elif e is InputEventMouseMotion and state["on"]:
+			var d: Vector2 = e.global_position - state["from"]
+			var vp := get_viewport_rect().size
+			var sz: Vector2 = state["size"] + Vector2(d.x * grow_x, -d.y)
+			sz.x = clampf(sz.x, 220.0, vp.x * 0.6)
+			sz.y = clampf(sz.y, 60.0, vp.y * 0.7)
+			body.custom_minimum_size = sz
+			panel.reset_size()
+			# Нижняя кромка (и та боковая, от которой растём) — на месте.
+			var bottom: float = state["bottom"]
+			panel.position.y = clampf(bottom - panel.size.y, 0.0, vp.y - panel.size.y)
+			if grow_x < 0.0:
+				panel.position.x = clampf(float(state["right"]) - panel.size.x, 0.0, vp.x - panel.size.x)
+			grip.accept_event())
+	return grip
+
+## Полоса прокрутки журнала и чата (item 19): прокрутка включена, а ширину полосе даёт
+## тема (UiTheme: поля стиля полосы), так что её можно взять мышью и тащить.
+func _style_panel_scroll(rtl: RichTextLabel) -> void:
+	rtl.scroll_active = true
+
 ## Сделать панель перетаскиваемой за её шапку (item 8). on_move помечает панель как
 ## сдвинутую вручную, чтобы _reposition_hud_grip перестал возвращать её в угол.
 func _make_panel_draggable(panel: Control, header: Control, on_move: Callable) -> void:
@@ -5527,10 +5725,17 @@ func _make_panel_draggable(panel: Control, header: Control, on_move: Callable) -
 			p.y = clampf(p.y, 0.0, maxf(0.0, vp.y - panel.size.y))
 			panel.position = p)
 
+func _replay_chat_history() -> void:
+	if _chat_log == null:
+		return
+	for rec: Dictionary in NetHandoff.chat_history:
+		_chat_log.append_text("[b]%s:[/b] %s\n" % [ChatBox.escape(_side_label(int(rec["side"]))),
+				ChatBox.escape(str(rec["text"]))])
+
 func _chat_append(who: String, text: String) -> void:
 	if _chat_log == null:
 		return
-	_chat_log.append_text("[b]%s:[/b] %s\n" % [who, text])
+	_chat_log.append_text("[b]%s:[/b] %s\n" % [ChatBox.escape(who), ChatBox.escape(text)])
 	# Пришло сообщение — чат разворачивается сам, вместе со стрелкой и размером панели.
 	if _chat_body_wrap != null and not _chat_body_wrap.visible:
 		_set_panel_collapsed(_chat_panel, _chat_body_wrap, _chat_toggle_btn, false)
@@ -5542,10 +5747,11 @@ func _chat_send() -> void:
 	if text == "":
 		return
 	_chat_input.text = ""
-	var who := _side_label(_draw_author())
-	_chat_append(who, text)
+	var side := _draw_author()
+	NetHandoff.chat_history.append({"side": side, "text": text})
+	_chat_append(_side_label(side), text)
 	if networked and session != null:
-		session.send({"k": K_CHAT, "who": who, "text": text})
+		session.send({"k": K_CHAT, "side": side, "text": text})
 
 ## Первая горящая клетка на маршруте до dst, которая убьёт этого бойца (#1);
 ## NOWHERE — пути через огонь нет либо боец огнеупорен (#2).
@@ -5626,6 +5832,50 @@ func _hsep() -> HSeparator:
 	return HSeparator.new()
 
 ## Невысокая кнопка мелким шрифтом — из таких собрана компактная панель (#54).
+## Темп показа (item 5): ход стороны, которую ведёт ИИ, идёт с выставленной хостом
+## скоростью — и пауза между его действиями, и шаги, и кубики.
+func _pace() -> float:
+	if state == null or state.roster == null or not state.roster.is_ai(state.active_player()):
+		return 1.0
+	return GameConfig.ai_speed
+
+## Сменить темп ИИ (item 5). broadcast — сменил сам (хост или одиночная игра), а не пришло
+## от хоста по сети.
+func _set_ai_speed(v: float, broadcast: bool) -> void:
+	GameConfig.ai_speed = v if GameConfig.AI_SPEEDS.has(v) else 1.0
+	if _ai_speed_opt != null:
+		_ai_speed_opt.select(maxi(0, GameConfig.AI_SPEEDS.find(GameConfig.ai_speed)))
+	if broadcast and networked and session != null and net != null and net.is_host:
+		session.send({"k": K_AI_SPEED, "v": GameConfig.ai_speed})
+
+func _camera_row() -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	var lbl := Label.new()
+	lbl.text = "Camera"
+	lbl.add_theme_font_size_override("font_size", 11)
+	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(lbl)
+	var me := NetHandoff.my_side_hint(state.roster if state != null else null)
+	var sides: Array[int] = []
+	if state != null and state.roster != null:
+		for sid: int in state.roster.player_ids():
+			if sid == me or (state.roster.has_teams() and me >= 0 and state.roster.are_allies(me, sid)):
+				sides.append(sid)
+	if sides.is_empty():
+		sides.append(me if me >= 0 else 0)
+	for sid in sides:
+		var b := Button.new()
+		b.text = "Me" if sid == me else MCF.PLAYER_LETTERS[sid]
+		b.tooltip_text = "Centre the camera on %s" % ("your forces" if sid == me
+				else state.roster.name_of(sid) + "'s forces")
+		b.add_theme_font_size_override("font_size", 12)
+		b.custom_minimum_size = Vector2(30, 24)
+		var side := sid
+		b.pressed.connect(func() -> void: _center_on_side(side))
+		row.add_child(b)
+	return row
+
 func _compact_button(text: String, handler: Callable) -> Button:
 	var b := Button.new()
 	b.text = text

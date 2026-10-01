@@ -16,7 +16,6 @@ const SteamChrome = preload("res://src/ui/SteamChrome.gd")
 ## один источник правды, чтобы ограничения и палитра не разъехались.
 const PlacementScript = preload("res://scenes/Placement.gd")
 
-const GAME_MODES := ["domination"]
 ## Строка «Random map» в списке карт: пути к файлу у неё нет, карту строит MapGen.
 const RANDOM_MAP := "<random>"
 
@@ -24,14 +23,14 @@ const RANDOM_MAP := "<random>"
 ## чтобы «Type/Color/Zone/Points» стояли ровно над своими контролами, а не сбоку.
 const SLOT_COL_IDX := 26
 const SLOT_COL_TYPE := 124
-const SLOT_COL_WHO := 110
-const SLOT_COL_COLOR := 190
+const SLOT_COL_WHO := 96
+const SLOT_COL_COLOR := 168
 # SpinBox'ы имеют собственный минимум ширины ~86px (стрелки + текст). Колонка «Team»
 # была уже него (64) — контрол распирал её, и все следующие столбцы (Zone/Points)
 # уезжали вправо от своих заголовков (item 1). Даём запас под реальный минимум.
-const SLOT_COL_TEAM := 88
+const SLOT_COL_TEAM := 72
 const SLOT_COL_ZONE := 100
-const SLOT_COL_PTS := 124
+const SLOT_COL_PTS := 112
 
 var _ui: CanvasLayer
 var roster: Roster
@@ -41,10 +40,13 @@ var _is_client := false   # мы подключившийся гость (не �
 var _place_opt: OptionButton
 var _fog_opt: OptionButton
 var _army_opt: OptionButton
-var _mode_opt: OptionButton
 var _ff_check: CheckBox
 ## «Disable neutrals» (item 2): инверсия GameConfig.civilians_enabled.
-var _no_neutrals_check: CheckBox
+## Чат лобби (item 14).
+var _chat: ChatBox = null
+## Сколько мирных самое большее (item 11) и темп ИИ (item 5).
+var _civ_slider: HSlider
+var _ai_speed_opt: OptionButton
 ## Командный режим (item 4): пока выключен — колонка «Team» и «дружественный огонь»
 ## скрыты. Отдельные команды появляются только по этому тумблеру.
 var _team_mode: bool = false
@@ -84,7 +86,6 @@ var _gen_timer: Timer
 var _gen_space: CheckBox
 var _gen_fire: CheckBox
 var _gen_obstacles: CheckBox
-var _gen_civilians: OptionButton
 var _gen_seed: SpinBox
 var _gen_info: Label
 ## Собранная карта и настройки, из которых она собрана: пока они те же — не пересобираем.
@@ -238,6 +239,8 @@ func _send_lobby_map() -> void:
 
 ## Просьбы гостей (batch 12 #8): цвет и пересадка в открытый слот. Решает хост.
 func _on_host_message(msg: Dictionary) -> void:
+	if _chat != null and _chat.receive(msg):
+		return
 	if str(msg.get("k", "")) != NetHandoff.K_LOBBY_REQ:
 		return
 	var from := int(msg.get("_from", -1))
@@ -288,7 +291,9 @@ func _apply_lobby_snapshot(msg: Dictionary) -> void:
 		_ff_check.button_pressed = GameConfig.friendly_fire
 		_ff_check.visible = _team_mode
 		_live_check.button_pressed = GameConfig.live_placement_visible
-		_no_neutrals_check.button_pressed = not GameConfig.civilians_enabled
+		_civ_slider.set_value_no_signal(GameConfig.civilian_count)
+		_civ_slider.value_changed.emit(_civ_slider.value)  # подпись числа
+		_ai_speed_opt.select(maxi(0, GameConfig.AI_SPEEDS.find(GameConfig.ai_speed)))
 		_events_check.button_pressed = GameConfig.random_events_enabled
 		_events_mand.button_pressed = GameConfig.random_events_mandatory
 		_events_interval.value = GameConfig.random_events_interval
@@ -325,6 +330,8 @@ func _exit_tree() -> void:
 		_lan_adv = null
 
 func _on_client_message(msg: Dictionary) -> void:
+	if _chat != null and _chat.receive(msg):
+		return
 	match str(msg.get("k", "")):
 		NetHandoff.K_LOBBY:
 			_apply_lobby_snapshot(msg)
@@ -407,25 +414,40 @@ func _build_ui() -> void:
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	outer.add_child(scroll)
+	# Отступы на всю ширину окна: иначе колонкам доставалась лишь их минимальная ширина,
+	# и они переносились друг под друга даже на 100% (item 23).
 
-	var cols := HBoxContainer.new()
-	cols.add_theme_constant_override("separation", 14)
+	# Колонки переносятся: не хватает ширины (крупный интерфейс, item 17, или узкое окно) —
+	# правая встаёт под левую, а не уезжает за край экрана (item 23).
+	var cols := HFlowContainer.new()
+	cols.add_theme_constant_override("h_separation", 14)
+	cols.add_theme_constant_override("v_separation", 18)
 	cols.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(SteamChrome.pad(cols, 14, 12))
+	var cols_pad := SteamChrome.pad(cols, 14, 12)
+	cols_pad.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(cols_pad)
 
 	var left := VBoxContainer.new()
-	left.add_theme_constant_override("separation", 8)
-	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left.add_theme_constant_override("separation", 18)
+	# Настройки — по своей ширине, остальное отдаём таблице слотов и превью.
+	left.size_flags_horizontal = Control.SIZE_FILL
 	cols.add_child(left)
 
 	var right := VBoxContainer.new()
-	right.add_theme_constant_override("separation", 8)
+	right.add_theme_constant_override("separation", 18)
+	right.custom_minimum_size = Vector2(560, 0)
 	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	cols.add_child(right)
 
 	_build_config(left)
 	if not _is_client:
 		_build_load(left)
+	# Чат лобби (item 14) — только когда за столом есть кто-то по сети.
+	if NetHandoff.session != null:
+		_chat = ChatBox.new(_chat_label, func() -> int:
+			var mine := _my_slot()
+			return mine.id if mine != null else -1)
+		_titled(left, "Chat").add_child(_chat)
 	_build_slots(right)
 	_build_personal(right)
 	# Карта — справа, под слотами: там есть ширина, чтобы поставить превью рядом с
@@ -453,16 +475,12 @@ func _build_ui() -> void:
 	# лобби оставался с дефолтным скином Godot вместо общего стиля игры.
 	Ui.theme_canvas_layers()
 
+## Раздел лобби — групповое окошко набора интерфейса (item 23): рамка с подписью на
+## верхней кромке. Возвращает тело, куда кладутся строки раздела.
 func _titled(parent: VBoxContainer, title: String) -> VBoxContainer:
-	var lbl := Label.new()
-	lbl.text = title
-	lbl.add_theme_font_size_override("font_size", 15)
-	parent.add_child(lbl)
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 5)
-	parent.add_child(box)
-	parent.add_child(HSeparator.new())
-	return box
+	var g := SteamChrome.group_box(title)
+	parent.add_child(g)
+	return g.body
 
 func _row(box: VBoxContainer, label_text: String, control: Control) -> HBoxContainer:
 	var r := HBoxContainer.new()
@@ -491,9 +509,6 @@ func _build_config(parent: VBoxContainer) -> void:
 	_army_opt = _opt(["Host Decides", "Players Pick"], GameConfig.army_select_mode)
 	_army_opt.item_selected.connect(func(_i: int) -> void: _refresh_personal_enabled())
 	_row(box, "Army Select:", _army_opt)
-
-	_mode_opt = _opt(["Domination"], 0)
-	_row(box, "Game Mode:", _mode_opt)
 
 	# Командный режим (item 4): тумблер. Пока выключен — «дружественный огонь» и колонка
 	# команд в слотах скрыты. Включение перерисовывает слоты, чтобы показать колонку.
@@ -525,10 +540,23 @@ func _build_config(parent: VBoxContainer) -> void:
 
 	# «Disable neutrals» (item 2): выключает мирных/нейтралов на карте. Инвертируем
 	# GameConfig.civilians_enabled — галочка «выключить» удобнее, чем «включить».
-	_no_neutrals_check = CheckBox.new()
-	_no_neutrals_check.text = "Disable neutrals"
-	_no_neutrals_check.button_pressed = not GameConfig.civilians_enabled
-	box.add_child(_no_neutrals_check)
+	# Мирные (item 11): ползунок «не больше N» вместо прежнего «Disable neutrals» и
+	# уровня мирных у случайной карты. 0 — без мирных; готовая карта прореживается до N,
+	# случайная столько и строит.
+	_civ_slider = _slider_row(box, "Civilians (max):", 0, GameConfig.CIVILIANS_MAX, 1,
+			GameConfig.civilian_count, func(v: float) -> String: return "none" if v <= 0 else str(int(v)))
+	_civ_slider.tooltip_text = "How many neutral civilians the map may have, at most. Prepared maps are thinned evenly down to this; random maps build this many when there is room. Civilians live in rooms sealed by airlocks and start asleep."
+	_civ_slider.value_changed.connect(func(_v: float) -> void:
+		if _is_random():
+			_on_gen_changed())
+	# Темп ИИ (item 5): во сколько раз быстрее ходят и показываются ходы ИИ. В бою его же
+	# меняет хост ползунком на панели.
+	var speeds: Array = []
+	for sp: float in GameConfig.AI_SPEEDS:
+		speeds.append("%s×" % ("½" if sp < 1.0 else str(int(sp))))
+	_ai_speed_opt = _opt(speeds, maxi(0, GameConfig.AI_SPEEDS.find(GameConfig.ai_speed)))
+	_ai_speed_opt.tooltip_text = "How fast AI sides play their turns. The host can also change it during the battle."
+	_row(box, "AI speed:", _ai_speed_opt)
 
 	# --- Случайные события (item 5/11) ---
 	# Раскладка: заголовок → «Enable» → «Mandatory» → интервал → список из трёх событий
@@ -564,16 +592,18 @@ func _build_config(parent: VBoxContainer) -> void:
 
 	# Хост: любой щелчок по правилам сразу уезжает гостям (batch 12 #8/#9/#10).
 	if _is_host_net:
-		for o: OptionButton in [_place_opt, _fog_opt, _army_opt, _mode_opt]:
+		for o: OptionButton in [_place_opt, _fog_opt, _army_opt]:
 			o.item_selected.connect(func(_i: int) -> void: _broadcast_lobby())
-		for cb: CheckBox in [_ff_check, _team_check, _live_check, _no_neutrals_check,
+		_ai_speed_opt.item_selected.connect(func(_i: int) -> void: _broadcast_lobby())
+		_civ_slider.value_changed.connect(func(_v: float) -> void: _broadcast_lobby())
+		for cb: CheckBox in [_ff_check, _team_check, _live_check,
 				_events_check, _events_mand]:
 			cb.toggled.connect(func(_on: bool) -> void: _broadcast_lobby())
 		_events_interval.value_changed.connect(func(_v: float) -> void: _broadcast_lobby())
 
 	if _is_client:
-		var _client_locked: Array = [_place_opt, _fog_opt, _army_opt, _mode_opt,
-				_ff_check, _team_check, _live_check, _no_neutrals_check, _events_check,
+		var _client_locked: Array = [_place_opt, _fog_opt, _army_opt,
+				_ff_check, _team_check, _live_check, _civ_slider, _ai_speed_opt, _events_check,
 				_events_mand, _events_interval]
 		for c in _client_locked:
 			# У кнопок (в т. ч. OptionButton/CheckBox — все наследники BaseButton) есть
@@ -585,6 +615,45 @@ func _build_config(parent: VBoxContainer) -> void:
 			elif c is SpinBox:
 				(c as SpinBox).editable = false
 			(c as Control).mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+## Строка «подпись — ползунок — число» (как slider-row в наборе интерфейса). fmt — как
+## показать значение в окошке справа.
+func _slider_row(box: VBoxContainer, label_text: String, lo: float, hi: float, step: float,
+		value: float, fmt: Callable) -> HSlider:
+	var s := HSlider.new()
+	s.min_value = lo
+	s.max_value = hi
+	s.step = step
+	s.value = value
+	s.custom_minimum_size = Vector2(140, 0)
+	s.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var val := Label.new()
+	val.custom_minimum_size = Vector2(48, 0)
+	val.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	val.add_theme_font_size_override("font_size", 12)
+	Ui.style_value_box(val)
+	val.text = fmt.call(value)
+	s.value_changed.connect(func(v: float) -> void: val.text = fmt.call(v))
+	var hb := HBoxContainer.new()
+	hb.add_theme_constant_override("separation", 8)
+	hb.add_child(s)
+	hb.add_child(val)
+	s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_row(box, label_text, hb)
+	return s
+
+## Подпись в чате лобби: имя слота, своё — с «(you)», хост — с «(host)».
+func _chat_label(side: int) -> String:
+	if roster == null or side < 0 or side >= roster.slots.size():
+		return "Guest"
+	var s: Roster.Slot = roster.slots[side]
+	var name := s.display_name
+	if s.peer_id == 1:
+		name += " (host)"
+	var mine := _my_slot()
+	if mine != null and mine.id == side:
+		name += " (you)"
+	return name
 
 func _opt(items: Array, selected: int) -> OptionButton:
 	var o := OptionButton.new()
@@ -700,7 +769,7 @@ func _build_generator(box: VBoxContainer) -> void:
 	_row(_gen_box, "Players:", army)
 	# Стиль, размер и плотность — одной строкой: панель короче, превью рядом видно целиком.
 	_gen_style = _opt(MapGen.STYLE_NAMES, int(defaults["style"]))
-	_gen_style.tooltip_text = "Station: rooms and hallways in space. Town: streets and houses. Field: open ground and ruins. Bunker: the same rooms and hallways as a station, dug into solid rock underground."
+	_gen_style.tooltip_text = "Station: rooms and hallways in space. Town: streets and houses. Field: open ground and ruins. Bunker: the same rooms and hallways as a station, dug into solid rock underground. Asteroid: a town on a little rock island floating in space (Density sets how built-up it is)."
 	var sizes: Array = []
 	for i in MapGen.SIZES.size():
 		var d: Vector2i = MapGen.SIZES[i]
@@ -743,12 +812,11 @@ func _build_generator(box: VBoxContainer) -> void:
 	_gen_obstacles = _gen_check(mech, "Obstacles",
 			"Sandbags, trenches, hedgehogs, barricades, crates and pillars.")
 	_row(_gen_box, "Mechanics:", mech)
-	# Мирных — порядок величины (MapGen.CIV_LEVELS), а не точное число: сколько именно —
-	# решают размер поля и застройка. Живут они только за шлюзами и начинают спящими.
-	_gen_civilians = _opt(MapGen.CIV_LEVELS, MapGen.civ_level(defaults))
-	_gen_civilians.tooltip_text = "How many neutral civilians, roughly. They live only in rooms sealed by airlocks, out of sight of every deployment zone, and start the match asleep."
-	_gen_civilians.item_selected.connect(func(_i: int) -> void: _on_gen_changed())
-	_row(_gen_box, "Civilians:", _gen_civilians)
+	# Умолчания стиля (items 25/26): город, поле и бункер — без космоса, бункер и станция —
+	# негорючие, астероид — в космосе и не горит. Выставляются при выборе стиля, дальше
+	# игрок волен переключить. Подключено РАНЬШЕ пересборки карты по смене стиля.
+	_apply_style_defaults(_gen_style.selected)
+	_gen_style.item_selected.connect(_apply_style_defaults)
 	_gen_seed = SpinBox.new()
 	_gen_seed.max_value = MapGen.SEED_MAX
 	_gen_seed.value = randi_range(1, MapGen.SEED_MAX)
@@ -793,6 +861,12 @@ func _dim_spin(value: int) -> SpinBox:
 	sp.tooltip_text = "Cells, at least %d — no upper limit. Very large maps take longer to build." % MapGen.MIN_DIM
 	return sp
 
+func _apply_style_defaults(style: int) -> void:
+	if style < 0 or style >= MapGen.STYLE_SPACE.size():
+		return
+	_gen_space.set_pressed_no_signal(MapGen.STYLE_SPACE[style])
+	_gen_fire.set_pressed_no_signal(MapGen.STYLE_FLAMMABLE[style])
+
 func _gen_check(parent: Control, text: String, tip: String) -> CheckBox:
 	var cb := CheckBox.new()
 	cb.text = text
@@ -819,7 +893,7 @@ func _gen_options() -> Dictionary:
 			"symmetric": _gen_sym.button_pressed,
 			"space": _gen_space.button_pressed,
 			"flammable": _gen_fire.button_pressed, "obstacles": _gen_obstacles.button_pressed,
-			"civilians": _gen_civilians.selected}
+			"civilian_count": int(_civ_slider.value)}
 
 func _random_map() -> MapData:
 	var options := _gen_options()
@@ -979,16 +1053,23 @@ func _count_armies(saved: Dictionary) -> Dictionary:
 	return out
 
 func _build_slots(parent: VBoxContainer) -> void:
-	_titled(parent, "Team Slots & Players")
+	# Таблица слотов и «+ Add Slot» — внутри своего группового окошка (item 23).
+	var box := _titled(parent, "Team Slots & Players")
+	# Таблица шире колонки (крупный интерфейс, режим команд) — прокручивается вбок внутри
+	# своего окошка, а не раздвигает всё лобби за край экрана (item 23).
+	var table := ScrollContainer.new()
+	table.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	table.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(table)
 	_slots_box = VBoxContainer.new()
 	_slots_box.add_theme_constant_override("separation", 4)
-	parent.add_child(_slots_box)
+	_slots_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	table.add_child(_slots_box)
 	if not _is_client:
 		var add := Button.new()
 		add.text = "+ Add Slot"
 		add.pressed.connect(_on_add_slot)
-		parent.add_child(add)
-	parent.add_child(HSeparator.new())
+		box.add_child(add)
 
 func _build_personal(parent: VBoxContainer) -> void:
 	var box := _titled(parent, "Personal Setup")
@@ -1075,6 +1156,10 @@ func _slot_row(s: Roster.Slot) -> Control:
 	var who := Label.new()
 	who.custom_minimum_size = Vector2(SLOT_COL_WHO, 0)
 	who.add_theme_font_size_override("font_size", 11)
+	# Длинное имя не раздвигает таблицу (item 23): обрезается с «…», целиком — в подсказке.
+	who.clip_text = true
+	who.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	who.mouse_filter = Control.MOUSE_FILTER_PASS
 	var my_peer := NetHandoff.session.my_peer_id() if NetHandoff.session != null else 1
 	if s.kind == Roster.SlotKind.HUMAN:
 		if s.peer_id == my_peer and NetHandoff.session != null:
@@ -1087,6 +1172,7 @@ func _slot_row(s: Roster.Slot) -> Control:
 		else:
 			who.text = "%s (nobody yet)" % s.display_name if _is_host_net else s.display_name
 			who.modulate = Color(0.85, 0.75, 0.6)
+		who.tooltip_text = who.text
 		row.add_child(who)
 	elif s.kind == Roster.SlotKind.OPEN and _is_client:
 		var join := Button.new()
@@ -1106,6 +1192,11 @@ func _slot_row(s: Roster.Slot) -> Control:
 	color.select(s.color_index())
 	color.item_selected.connect(_on_slot_color.bind(s.id))
 	color.disabled = _is_client
+	# Ширина — по колонке, а не по самому длинному названию фракции (item 23).
+	color.fit_to_longest_item = false
+	color.clip_text = true
+	color.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	color.tooltip_text = color.get_item_text(color.selected)
 	color.custom_minimum_size = Vector2(SLOT_COL_COLOR, 0)
 	row.add_child(color)
 
@@ -1124,13 +1215,14 @@ func _slot_row(s: Roster.Slot) -> Control:
 	# Зона развёртывания (item 10): в какой нарисованной зоне слот ставит отряд.
 	# 0 = «своя по номеру», 1..N = конкретная Zone N. Диапазон ограничен зонами,
 	# которые РЕАЛЬНО есть на выбранной карте (item 6).
-	var zone := SpinBox.new()
-	zone.min_value = 0
-	zone.max_value = maxi(1, _map_zone_count())
-	zone.value = (s.deploy_zone + 1) if s.deploy_zone >= 0 else 0
-	zone.prefix = "Zone "
-	zone.value_changed.connect(_on_slot_zone.bind(s.id))
-	zone.editable = not _is_client
+	# Выпадающий список вместо счётчика «Zone 0» (item 22): «Auto» — своя по номеру.
+	var zone := OptionButton.new()
+	zone.add_item("Auto")
+	for zi in maxi(1, _map_zone_count()):
+		zone.add_item("Zone %d" % (zi + 1))
+	zone.select(clampi(s.deploy_zone + 1, 0, zone.item_count - 1))
+	zone.item_selected.connect(func(i: int) -> void: _on_slot_zone(float(i), s.id))
+	zone.disabled = _is_client
 	zone.custom_minimum_size = Vector2(SLOT_COL_ZONE, 0)
 	row.add_child(zone)
 
@@ -1376,6 +1468,7 @@ func _on_slot_color(color_idx: int, slot_id: int) -> void:
 func _on_slot_zone(value: float, slot_id: int) -> void:
 	# 0 → «своя зона по номеру» (deploy_zone = -1); N → Zone N (индекс N-1).
 	(roster.slots[slot_id] as Roster.Slot).deploy_zone = int(value) - 1
+	_refresh_map_preview()   # item 22: выбор зоны сразу виден на превью
 	_broadcast_lobby()
 
 func _on_slot_team(value: float, slot_id: int) -> void:
@@ -1460,11 +1553,30 @@ func _refresh_map_preview() -> void:
 	var tints := _zone_tints()
 	# Зовётся на каждую пересборку слотов, поэтому рисуем заново, только если сменилась
 	# сама карта или цвета её зон: растеризация большой карты не бесплатна (batch 14).
-	var key := "%d %s" % [map.get_instance_id(), tints]
+	var bands := _band_tints(map)
+	var key := "%d %s %s" % [map.get_instance_id(), tints, bands]
 	if key == _preview_key:
 		return
 	_preview_key = key
-	_map_preview.texture = _render_map_texture(map, tints)
+	_map_preview.texture = _render_map_texture(map, tints, bands)
+
+## Карта без нарисованных зон (item 22): полосы развёртывания цветами слотов — те же
+## полосы, что выдаст расстановка (MapData.band_of). {Vector2i(x0, x1): цвет}.
+func _band_tints(map: MapData) -> Dictionary:
+	var out := {}
+	if map == null:
+		return out
+	for z in map.zone_owner:
+		if z >= 0:
+			return out   # зоны нарисованы — их и показываем
+	var playing: Array = roster.slots.filter(func(sl: Roster.Slot) -> bool: return sl.is_playing())
+	for i in playing.size():
+		var sl: Roster.Slot = playing[i]
+		var index := sl.deploy_zone if sl.deploy_zone >= 0 else i
+		var band := MapData.band_of(index, playing.size(), map.width)
+		if not out.has(band):
+			out[band] = sl.color
+	return out
 
 ## Цвет зоны в превью — цвет слота, который в ней расставляется (Slot.zone()).
 func _zone_tints() -> Dictionary:
@@ -1477,7 +1589,7 @@ func _zone_tints() -> Dictionary:
 ## Полный верхний вид карты В КАРТИНКУ, включая нейтральные спавны (item 41) и зоны
 ## развёртывания цветами слотов. Рисуем по клеткам в Image — без отдельного вьюпорта,
 ## зато детерминированно и без сцены.
-func _render_map_texture(map: MapData, tints: Dictionary = {}) -> ImageTexture:
+func _render_map_texture(map: MapData, tints: Dictionary = {}, bands: Dictionary = {}) -> ImageTexture:
 	# Масштаб по размеру карты (batch 14): большая карта рисуется по пикселю на
 	# клетку, а не по 36 на каждую — превью всё равно ужимается в 260×180.
 	var sc: int = clampi(int(600 / maxi(1, maxi(map.width, map.height))), 1, 6)
@@ -1491,6 +1603,11 @@ func _render_map_texture(map: MapData, tints: Dictionary = {}) -> ImageTexture:
 			var zone := map.get_zone(coord)
 			if zone >= 0:
 				col = col.lerp(tints.get(zone, Color(0.85, 0.85, 0.85)), 0.4)
+			else:
+				for band: Vector2i in bands:
+					if x >= band.x and x < band.y:
+						col = col.lerp(bands[band], 0.3)
+						break
 			img.fill_rect(Rect2i(x * sc, y * sc, sc, sc), col)
 	# Нейтралы карты — жёлтые точки поверх (item 41: превью включает нейтралов).
 	for s in map.spawns:
@@ -1519,9 +1636,9 @@ func _commit_config() -> void:
 	GameConfig.placement_mode = _place_opt.selected
 	GameConfig.fog_mode = _fog_opt.selected
 	GameConfig.army_select_mode = _army_opt.selected
-	GameConfig.game_mode = GAME_MODES[clampi(_mode_opt.selected, 0, GAME_MODES.size() - 1)]
 	GameConfig.live_placement_visible = _live_check.button_pressed
-	GameConfig.civilians_enabled = not _no_neutrals_check.button_pressed  # item 2
+	GameConfig.civilian_count = int(_civ_slider.value)  # item 11
+	GameConfig.ai_speed = GameConfig.AI_SPEEDS[_ai_speed_opt.selected]  # item 5
 	GameConfig.random_events_enabled = _events_check.button_pressed
 	GameConfig.random_events_mandatory = _events_mand.button_pressed
 	GameConfig.random_events_interval = int(_events_interval.value)
