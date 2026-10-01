@@ -1849,11 +1849,32 @@ so that only actions valid for the whole selection are offered. Group control is
 
 **Group move preview (#88).** In `Mode.GROUP_MOVE` the map draws the union of every
 selected unit's reachable set in **green** (`_group_reach_cells`). Hovering a green tile
-tints it yellow and drops a **small yellow circle on each cell the group would actually
-occupy** if ordered there — `_group_move_preview` runs the same greedy allocator as the
-real order (`_best_group_cell`, nearest-to-destination, cheapest path on ties), reserving
-cells as it goes so two units never preview onto the same tile. The preview redraws on
-mouse motion, but only while the left button is up, so it cannot fight the selection box.
+tints it yellow and drops a **small circle on each cell the group would actually
+occupy** if ordered there — the preview and the real order are one `GroupMovePlanner.plan`
+call (cached per hovered cell), so the circles are exactly where the units land. The
+preview redraws on mouse motion, but only while the left button is up, so it cannot fight
+the selection box.
+
+**Group order planner (#114).** The planner simulates the order the resolver will execute:
+the unit nearest the destination goes first, and every later unit is planned on the board
+as it will be by then — cells its squadmates left are free (`Movement.reachable`'s
+`free_cells`), cells they took are blocked — so a unit boxed in by its own squad (the middle
+of a blob, the tail of a corridor column) still moves. "Nearest" is steps to the destination
+round walls (a wave bounded to where the squad can reach), then straight-line distance, then
+the straightest own path; a squad sent beyond its reach advances in formation instead of
+sliding to the map edge. Units are never ordered onto a burning cell (unless fireproof), and
+the `GroupMoveIntent` list order is the execution order.
+
+**Tactical Move (#114).** The group menu offers *Tactical Move* beside *Move* (cyan preview
+circles instead of yellow). Each unit first finds where a plain move would put it, then
+takes the most covered cell within 3 tiles of that spot. Cover is judged per visible enemy
+by the shooting rules: a trench shields from every shot but point-blank bullets (and from a
+marksman's beam entirely), a full wall or vehicle hull on the line toward the shooter hides
+the cell (glass does not, nor anything from a marksman), and 1 m cover pressed against the
+cell on the shooter's side halves the danger beyond 2 tiles. The direction to the shooter is
+rounded to the nearest of the eight firing lines, because the enemy will step onto one. Only
+the 8 visible enemies nearest the click count; with none visible (fog), every side counts,
+so the squad hugs the most enclosed cover near the click.
 
 **The move preview shows the route and its price (#103).** In `Mode.MOVE` the green
 reachable spill now carries two extra layers. Every green tile is labelled
@@ -2887,6 +2908,7 @@ number appears elsewhere in this document it is because the source comments cite
 | 103 | One unit per cell is enforced by the board itself — `Grid.place` and `move_occupant` refuse to overwrite an occupant and report failure, so no two soldiers, civilians or AI units can ever share a tile (§2.2); hovering a green move tile draws the **cheapest actual route** to it out of the Dijkstra tree, and every green tile is labelled with what standing there costs out of the movement total (§18.3); a marksman's laser no longer reaches a man in a trench from a tile that is not one, at any range including adjacent (§6.6, §7.3); NPC civilians and the army are driven by **one brain** — the second, cell-at-a-time civilian AI is deleted and a civilian is now an `AIController` with the Neutral owner, so it plans, fragments its movement, fires partial bursts and hauls corpses by the army's rules (§14, §17); the AI uses fragmented movement and partial bursts — `move_credit` is a spendable budget, a step costs score, and a burst orders `ceil(1/p)` bullets instead of the whole magazine (§17.3); an anti-tank sapper cut off by a wall **blasts through it** instead of shuffling along it (§17.3, §7.1); the AI and civilians pick up bodies that block the road and **stack them aside into piles**, the fifth forming a corpse wall (§17.3, §8.4); at least 80% of an army must act each turn and **every** civilian must, enforced by a second forced pass over whoever the plan left idle (§17.2); Player 1 can be an AI too, so AI-vs-AI matches run from Setup or a mid-battle toggle (§17.4); and the camera zooms out to 0.12 so a 60×40 board fits on one screen (§18.4) |
 | 104 | The map editor can be left the way it was entered: the **"To Demo Game"** button is gone, replaced by **"Main Menu"**, which clears `MapHandoff.pending` and returns to `MainMenu.tscn` instead of dumping the designer into a demo battle on the built-in roster (§19) |
 | 105 | A marksman firing **from** a trench is as boxed in as a marksman firing **into** one: the laser cannot climb out of the ditch any more than it could drop into it, so from the trench floor the only reachable target is one lying in the **same continuous run** of trench, along a straight line with no gap — a bend or a break means the beam hits the earth wall. The trench is now symmetric cover against the beam instead of a firing position that ignored its own walls (§6.6, §7.3) |
+| 114 | Group orders move the whole selection — the group planner simulates execution order (front unit first, squadmates' vacated cells free, taken cells blocked), so the middle of a blob and the tail of a corridor column are no longer dropped from the order; distance is steps round walls with straight-line ties, so far orders keep formation instead of drifting to the map edge; and a **Tactical Move** puts each unit in the best cover within 3 tiles of its plain-move spot against visible enemies (every side under fog) (§18.3) |
 | 113 | Airlocks, civilians and Colossal maps — every door of every room, house and hut is an airlock whatever the Space toggle; civilians come in five magnitudes (None to Crowd) and live only in rooms sealed by airlocks, so nothing at the start of a match can wake them; a custom map size has no upper limit; mirrored placement carries the army zone to zone by the map's own symmetry (or the best-overlapping grid motion), so every side gets the same units wherever its zone is (§19, §20.2). Performance only, no rule changed: undo journals the touched cells instead of copying the board (§18.2); a zoomed-out battle screen draws the board as cached textures and the purchase screen culls to the viewport (§18.4); fog drops only the cached views a change can reach (§11); objects, mines, stations, airlocks and fire are indexed and patched from a cell log; the AI's distance field walks a cached passability mask (§27.21). A 91-action Hard-vs-Hard game on a 250×250 town: 31.2 s → 1.5 s |
 | 112 | Batch 17 (the "Isotope issues fix 8" report) — boarding a shuttle or a borg is free and allowed at 0 AP, so a fresh operator has the borg's full 3 AP (§16.7, §16.8); the move budget is one function (`move_budget`, `nearest_reachable`, `can_move`) shared by the screen, the group order and the resolver, and a group mover whose target was cut off by a squadmate falls back to the nearest reachable cell inside the resolver (§18.3); the host answers a refused guest intent with `K_DENIED` so the guest sees why (§22.1), and the Laser button explains its 2-AP gate; the flame jet is one geometry (`flame_cells`) for the shot and the preview, and a splash side cut short by the wall hands its cells to the other side so the jet always burns six (§7.2); a player's bought civilian is a target but not a threat to neutrals, so they shoot it instead of fleeing its lane (§14); every vehicle leaves a wreck and an explosion scorches the floor through `_blast` (§16.5); the drone operator's "!" means "station deployed" (§9.3); drawings gain *Share with everyone*, *Hide my drawings* and *Hide all drawings*, an AI-driven side is never the viewer's own, and a leaver's strokes are dropped (§18.6); factions replace colours with faction-suffixed soldier art, corpses are the soldier's art turned 90° clockwise, walls autotile from a 4×4 sheet, and real blood decals ship (§21) |
 | 111 | Performance only, no rule changed — the line-of-sight ray in `_seen_from` reads a flat per-cell "blocks sight" byte table (rebuilt with the LOS cache on every `vision_version` step) instead of fetching the `GridCell` object twice per step; the visible set is bit-identical (verified against the old routine on the town map, before and after a wall fall and a glass build), and a cold recompute of one side's view on the town map drops from ~1.0 s to ~0.45 s — the freeze at match start, on *Load Game* and on every `K_RESYNC` with fog on (§11) |

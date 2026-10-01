@@ -65,10 +65,12 @@ static var _cache_grid: int = 0
 ## противопехотные мины (свои и подсвеченные чужие). Их даёт
 ## GameActionResolver.known_mine_cells(owner); маршрут прокладывается в обход, и сама
 ## клетка недостижима — на своей мине не остановишься даже нарочно.
+## free_cells — занятые клетки, которые считать пустыми: групповой приказ планирует
+## бойца так, будто товарищи, шедшие раньше, уже ушли со своих мест (GroupMovePlanner).
 static func reachable_for(grid: Grid, unit: UnitInstance, budget: int,
-		avoid_cells: Dictionary = {}) -> Reachability:
+		avoid_cells: Dictionary = {}, free_cells: Dictionary = {}) -> Reachability:
 	var avoid := not MCF.ability_is_fireproof(unit.stats.special_ability_id)
-	return reachable(grid, unit.coord, budget, avoid, avoid_cells)
+	return reachable(grid, unit.coord, budget, avoid, avoid_cells, free_cells)
 
 ## avoid_fire — маршрут ОБХОДИТ горящие клетки (#1): в них можно войти, но нельзя
 ## ИЗ них выйти, поэтому они остаются в разливе как тупики. Это та же схема
@@ -76,7 +78,8 @@ static func reachable_for(grid: Grid, unit: UnitInstance, budget: int,
 ## по-прежнему может осознанно послать бойца в огонь (Main спросит подтверждение),
 ## но автоматический маршрут сквозь пламя не проложится.
 static func reachable(grid: Grid, start: Vector2i, budget: int,
-		avoid_fire: bool = false, avoid_cells: Dictionary = {}) -> Reachability:
+		avoid_fire: bool = false, avoid_cells: Dictionary = {},
+		free_cells: Dictionary = {}) -> Reachability:
 	var gid := grid.get_instance_id()
 	if _cache_version != GridCell.walk_version or _cache_grid != gid:
 		_cache.clear()
@@ -92,7 +95,10 @@ static func reachable(grid: Grid, start: Vector2i, budget: int,
 	var key: Variant = Vector4i(start.x, start.y, budget, 1 if avoid_fire else 0)
 	if not avoid_cells.is_empty():
 		key = [key, avoid_cells.keys()]
-	var hit: Variant = _cache.get(key)
+	# Разлив с free_cells — «что было бы», а не доска: таких на каждый наведённый курсор
+	# группового приказа новые десятки, и кешу, живущему до следующего хода, они не нужны.
+	var has_free := not free_cells.is_empty()
+	var hit: Variant = null if has_free else _cache.get(key)
 	if hit != null:
 		return hit
 	var result := Reachability.new()
@@ -195,7 +201,8 @@ static func reachable(grid: Grid, start: Vector2i, budget: int,
 			# на каждого из восьми соседей каждой клетки разлива (#106).
 			var fid: String = nc.feature_id
 			var step := -1
-			if nc.vehicle_id == -1 and nc.occupant == null:
+			if nc.vehicle_id == -1 and (nc.occupant == null \
+					or (has_free and free_cells.has(Vector2i(nx, ny)))):
 				var to_h: float = nc.cover_height
 				var opens := fid == f_airlock and not nc.airlock_welded
 				var walkable: bool
@@ -249,5 +256,6 @@ static func reachable(grid: Grid, start: Vector2i, budget: int,
 					fcost.append(new_cost)
 					live += 1
 	cost.erase(start)
-	_cache[key] = result
+	if not has_free:
+		_cache[key] = result
 	return result
