@@ -42,6 +42,11 @@ const MANIFEST := [
 		# побитая плита, но выгоревшая, для самой клетки взрыва.
 		"floor_grass", "floor_destroyed", "floor_epicenter",
 	]],
+	["Map environments (a <tile>_<environment> file beats the plain one on that map)", [
+		"floor_station", "floor_bunker", "floor_town", "floor_field", "floor_asteroid",
+		"wall_station", "wall_bunker", "wall_town", "wall_field", "wall_asteroid",
+		"bedrock", "airlock_open",
+	]],
 	["Combat decoration (cosmetic only, never affects the rules)", [
 		"glass_shard", "shell_casing", "blood_pool", "blood_splatter",
 	]],
@@ -219,12 +224,13 @@ static func draw_texture_override_rect(ci: CanvasItem, name: String, rect: Rect2
 ## Объект на клетке: автотайл, если для него лежит лист, иначе обычная картинка.
 ## same(dx, dy) → стоит ли на соседней клетке тот же объект. false — замены нет вовсе,
 ## вызывающий рисует вектор.
-static func draw_feature(ci: CanvasItem, name: String, rect: Rect2, same: Callable) -> bool:
+static func draw_feature(ci: CanvasItem, name: String, rect: Rect2, same: Callable,
+		variant: int = 0) -> bool:
 	ensure_overrides()
 	var key: String = ALIASES.get(name, name)
 	var sheet: Texture2D = _overrides.get(key + AUTOTILE_SUFFIX)
 	if sheet == null:
-		return draw_texture_override_rect(ci, key, rect)
+		return draw_tile(ci, key, rect, variant)
 	var mask := 0
 	if same.call(0, -1):
 		mask |= AUTOTILE_N
@@ -234,14 +240,31 @@ static func draw_feature(ci: CanvasItem, name: String, rect: Rect2, same: Callab
 		mask |= AUTOTILE_S
 	if same.call(-1, 0):
 		mask |= AUTOTILE_W
-	draw_autotile(ci, sheet, rect, mask)
+	draw_autotile(ci, sheet, rect, mask, variant)
 	return true
 
-static func draw_autotile(ci: CanvasItem, sheet: Texture2D, rect: Rect2, mask: int) -> void:
+## Лист автотайла может нести несколько вариантов столбиком (4 × 4N плиток): плитки
+## квадратные, число вариантов — высота на ширину.
+static func draw_autotile(ci: CanvasItem, sheet: Texture2D, rect: Rect2, mask: int,
+		variant: int = 0) -> void:
 	var tw := sheet.get_width() / 4.0
-	var th := sheet.get_height() / 4.0
+	var n := maxi(1, int(sheet.get_height() / (tw * 4.0)))
+	var v := variant % n
 	ci.draw_texture_rect_region(sheet, rect,
-			Rect2((mask % 4) * tw, (mask / 4) * th, tw, th))
+			Rect2((mask % 4) * tw, (v * 4 + mask / 4) * tw, tw, tw))
+
+## Плитка рельефа: картинка может быть лентой вариантов N×1 (ширина кратна высоте) —
+## рисуется вариант variant % N. Только для плиток пола и объектов: спрайты бойцов и
+## машин бывают неквадратными, и лентой их читать нельзя. false — картинки нет.
+static func draw_tile(ci: CanvasItem, name: String, rect: Rect2, variant: int = 0) -> bool:
+	ensure_overrides()
+	var tex: Texture2D = _overrides.get(ALIASES.get(name, name))
+	if tex == null:
+		return false
+	var h := tex.get_height()
+	var n := tex.get_width() / h if tex.get_width() % h == 0 else 1
+	ci.draw_texture_rect_region(tex, rect, Rect2((variant % maxi(1, n)) * h, 0, h, h))
+	return true
 
 # --- Файл-справка ---
 ## Игра САМА пишет список имён рядом с папкой текстур: игроку не нужно лезть в код,
@@ -287,10 +310,20 @@ static func _manifest_text() -> String:
 		"(corpse.png is the fallback for piles and for soldiers without art).",
 		"faction_<key>.png is the portrait shown in the lobby's faction window.",
 		"",
+		"== Terrain tiles: 64x64, variants, environments ==",
+		"Floor and feature tiles are 64x64. A tile file may hold several VARIANTS side by",
+		"side (e.g. floor.png 384x64 = 6 variants); each cell picks one by its position, so",
+		"a field of the same floor never repeats as a visible pattern. Keep the edges of all",
+		"variants identical (or make each tile seamless) and the surface stays continuous.",
+		"A map's environment (station, bunker, town, field, asteroid) picks floor_<env>.png",
+		"and wall_<env>.png over the plain floor.png / wall.png when such a file exists.",
+		"",
 		"== Autotiling walls ==",
 		"Any terrain feature may ship as a 4x4 tile sheet named <feature>_autotile.png",
 		"(wall_autotile.png, glass_autotile.png, wood_wall_autotile.png, ...).",
-		"The game looks at the four orthogonal neighbours that carry the SAME feature",
+		"Several sheets may be stacked top to bottom as variants (256x1536 = 6 variants).",
+		"The game looks at the four orthogonal neighbours of the same FAMILY (walls, glass,",
+		"airlocks, bunkers and corpse walls join each other; sandbag pieces join each other)",
 		"and picks tile index = N*1 + E*2 + S*4 + W*8; column = index % 4, row = index / 4:",
 		"",
 		"  row 0:  0 alone     1 N          2 E          3 N+E",

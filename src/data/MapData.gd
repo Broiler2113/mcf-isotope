@@ -25,6 +25,10 @@ var spawns: Array = []
 ## массив width*height; -1 = не зона, иначе MCF.Owner.*. Заменяет попиксельный спавн
 ## юнитов в редакторе — игрок сам расставляет отряд внутри своей зоны (#52).
 var zone_owner: PackedInt32Array = PackedInt32Array()
+## Окружение карты (item 24): от него зависят плитки пола и стен — металл станции и
+## бункера, кирпич города и астероида, камень поля. Пусто — карта нарисована в редакторе
+## или старше этого поля: окружение выводится из самой карты (environment()).
+var env: String = ""
 
 func _init(p_width: int = 16, p_height: int = 12) -> void:
 	resize(p_width, p_height)
@@ -157,6 +161,30 @@ func apply_to_grid(grid: Grid) -> void:
 			else:
 				c.cover_height = cover_height[i]
 
+## Полоса развёртывания на карте без нарисованных зон (item 22): поле делится на count
+## вертикальных полос, index — номер полосы. [x, y) — столбцы. На двоих — прежние
+## половинки. Одна формула и для расстановки, и для превью в лобби.
+static func band_of(index: int, count: int, map_width: int) -> Vector2i:
+	var n := maxi(1, count)
+	var i := clampi(index, 0, n - 1)
+	if n == 2:
+		var half := map_width / 2
+		return Vector2i(0, half) if i == 0 else Vector2i(map_width - half, map_width)
+	var w := maxi(1, map_width / n)
+	return Vector2i(i * w, map_width if i == n - 1 else i * w + w)
+
+## Окружение для плиток (item 24): записанное, а без него — по самой карте. Деревянные
+## дома и трава — город; космос без них — станция; прочее — город.
+func environment() -> String:
+	if env != "":
+		return env
+	var space := false
+	for i in width * height:
+		if feature_id[i] == MCF.FEATURE_WOOD_WALL or floor_type[i] == MCF.FLOOR_GRASS:
+			return "town"
+		space = space or is_space[i] != 0
+	return "station" if space else "town"
+
 ## Построить готовый GameState: сетка + рельеф + заспавненные по карте юниты.
 ## roster — состав партии из лобби; null означает «выведи стороны из самой карты»
 ## (демо-ростер, редакторская проба, старое сохранение).
@@ -167,12 +195,23 @@ func build_state(dice_seed: int = -1, roster: Roster = null) -> GameState:
 	else:
 		st.roster = Roster.for_sides(_spawn_sides())
 	apply_to_grid(st.grid)
+	st.env = environment()
+	# Мирных не больше, чем задано ползунком лобби (item 11). Лишних прореживаем РАВНОМЕРНО
+	# по порядку карты — у каждого пира тот же порядок, значит и тот же выбор, и жители не
+	# сбиваются в одну половину поля.
+	var n_civ := 0
+	for s in spawns:
+		if MCF.is_neutral(int(s["owner"])):
+			n_civ += 1
+	var keep_civ := mini(n_civ, GameConfig.civilian_count)
+	var civ_i := 0
 	for s in spawns:
 		var sid: String = s["stats_id"]
-		# Нейтралов (item 5) выключает общий тумблер мирных — как раньше выключалась
-		# заливка нейтральной зоны: пустая карта без «жителей», если так задано.
-		if MCF.is_neutral(int(s["owner"])) and not GameConfig.civilians_enabled:
-			continue
+		if MCF.is_neutral(int(s["owner"])):
+			var take := (civ_i + 1) * keep_civ / maxi(1, n_civ) > civ_i * keep_civ / maxi(1, n_civ)
+			civ_i += 1
+			if not take:
+				continue
 		# Техника (§техника): id из VehicleDB — ставим машину, а не пехотинца (#10).
 		if VehicleDB.is_vehicle(sid):
 			var veh := st.spawn_vehicle(sid, s["coord"], s["owner"])
@@ -255,6 +294,7 @@ func to_dict() -> Dictionary:
 		"feature_id": feature_id.duplicate(),
 		"spawns": spawn_out,
 		"zone_owner": Array(zone_owner),
+		"env": env,
 	}
 
 static func from_dict(d: Dictionary) -> MapData:
@@ -274,6 +314,7 @@ static func from_dict(d: Dictionary) -> MapData:
 			m.is_space[i] = int(sp[i])
 		if i < fi.size():
 			m.feature_id[i] = str(fi[i])
+	m.env = str(d.get("env", ""))
 	var zo: Array = d.get("zone_owner", [])
 	for i in n:
 		if i < zo.size():

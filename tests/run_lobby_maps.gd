@@ -155,8 +155,9 @@ func _check_bunker_custom_symmetric(lobby: Node) -> void:
 	ck(lobby._gen_dims_row.visible, "picking Custom shows width and height")
 	ck(lobby._gen_w.allow_greater and lobby._gen_h.allow_greater,
 			"custom width and height have no upper limit")
-	ck(lobby._gen_civilians.item_count == MapGen.CIV_LEVELS.size()
-			and lobby._gen_civilians.selected == 2, "civilians are a level, Normal by default")
+	# Мирные — ползунок «не больше N» в настройках лобби (item 11), он же у случайной карты.
+	ck(lobby._civ_slider.max_value == GameConfig.CIVILIANS_MAX and lobby._gen_options().has("civilian_count"),
+			"civilians are a count slider that drives the random map")
 	lobby._gen_w.value = 64
 	lobby._gen_h.value = 40
 	var c: MapData = lobby._selected_map()

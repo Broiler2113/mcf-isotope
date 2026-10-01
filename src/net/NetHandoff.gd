@@ -26,6 +26,8 @@ const K_LOAD := "load"
 ## хоста может быть нарисована в его редакторе, и у клиента такого файла попросту нет.
 ## Заодно это гарантирует побайтово одинаковое поле у обеих сторон.
 static var lobby_map: MapData = null
+## Чат партии (item 14): лобби → закупка → бой, [{side, text}]. Сбрасывается вместе с сессией.
+static var chat_history: Array = []
 
 ## Забрать сессию (и обнулить передачу, чтобы бой не подхватил её дважды).
 static func take() -> NetworkSession:
@@ -33,9 +35,22 @@ static func take() -> NetworkSession:
 	session = null
 	return s
 
+## Своя сторона ещё до того, как экран боя подключил сеть (item 10): по своему сетевому
+## номеру в ростере. Без сети — первый слот, который ведёт человек.
+static func my_side_hint(r: Roster) -> int:
+	if r == null:
+		return -1
+	if session != null:
+		return r.side_of_peer(session.my_peer_id())
+	for s: Roster.Slot in r.slots:
+		if s.kind == Roster.SlotKind.HUMAN:
+			return s.id
+	return -1
+
 ## Оборвать неподхваченную сессию — например, игрок ушёл из вкладки мультиплеера.
 static func discard() -> void:
 	lobby_map = null
+	chat_history = []
 	if session != null:
 		session.close()
 		session.queue_free()
@@ -58,9 +73,10 @@ static func encode_rules() -> Dictionary:
 	var roster := GameConfig.active_roster()
 	return {
 		"b": GameConfig.budget, "c": GameConfig.civilians_enabled, "f": GameConfig.fog_mode,
+		"cn": GameConfig.civilian_count, "ais": GameConfig.ai_speed,
 		"pm": GameConfig.placement_mode, "lv": GameConfig.live_placement_visible,
 		"ff": GameConfig.friendly_fire, "as": GameConfig.army_select_mode,
-		"gm": GameConfig.game_mode, "fu": GameConfig.free_unlimited_for,
+		"fu": GameConfig.free_unlimited_for,
 		"re": GameConfig.random_events_enabled, "rm": GameConfig.random_events_mandatory,
 		"ri": GameConfig.random_events_interval,
 		"rw": GameConfig.random_events_weights.duplicate(),
@@ -70,6 +86,8 @@ static func encode_rules() -> Dictionary:
 static func apply_rules(msg: Dictionary) -> void:
 	GameConfig.budget = int(msg.get("b", GameConfig.DEFAULT_BUDGET))
 	GameConfig.civilians_enabled = bool(msg.get("c", true))
+	GameConfig.civilian_count = int(msg.get("cn", GameConfig.civilian_count))
+	GameConfig.ai_speed = float(msg.get("ais", 1.0))
 	# Режим тумана (item 46) едет числом. Старый хост слал сюда bool — int(false)
 	# даёт 0, то есть OFF, а int(true) — 1, STANDARD: ровно прежний смысл.
 	GameConfig.fog_mode = int(msg.get("f", MCF.Fog.OFF))
@@ -77,7 +95,6 @@ static func apply_rules(msg: Dictionary) -> void:
 	GameConfig.live_placement_visible = bool(msg.get("lv", true))
 	GameConfig.friendly_fire = bool(msg.get("ff", true))
 	GameConfig.army_select_mode = int(msg.get("as", GameConfig.ArmySelect.PLAYERS_PICK))
-	GameConfig.game_mode = str(msg.get("gm", "domination"))
 	GameConfig.free_unlimited_for = int(msg.get("fu", GameConfig.FREE_NONE))
 	GameConfig.random_events_enabled = bool(msg.get("re", false))
 	GameConfig.random_events_mandatory = bool(msg.get("rm", false))

@@ -29,13 +29,15 @@ const DAMAGE_EPICENTER := 2  # клетка эпицентра — выгоре�
 ## (item 5) откачено по прямой просьбе игрока (issue 7: «make more blood splatter
 ## particles appear as well as glass shards»): 3..6 вместо 2..3. Потолок осевших
 ## частиц (PROPS_CAP) поднят соразмерно, чтобы прибавка не выдавливала старые следы.
-const SHARDS_MIN := 3
-const SHARDS_MAX := 6
+const SHARDS_MIN := 5
+const SHARDS_MAX := 9
 ## Полёт осколка/гильзы: доли клетки в секунду и длительность. «Небольшая скорость»
 ## из задания — осколок пролетает меньше клетки.
 const SHARD_FLIGHT_SEC := 0.45
-const SHARD_RANGE_MIN := 0.25
-const SHARD_RANGE_MAX := 0.85
+## Осколки разлетаются на 0.7..2.4 клетки (item 7: «barely spread») — заметный веер, а не
+## кучка у окна; о стену они останавливаются (solid_at).
+const SHARD_RANGE_MIN := 0.7
+const SHARD_RANGE_MAX := 2.4
 const CASING_FLIGHT_SEC := 0.35
 ## Гильза обязана ВЫЛЕТЕТЬ ИЗ-ПОД БОЙЦА (issue 7). Кружок юнита занимает 0.34 клетки от
 ## центра, а гильзы ложились в 0.15..0.45 — то есть почти все оседали под ним, и на
@@ -64,6 +66,9 @@ const PROPS_CAP := 1500
 ## а не улетают в пустоту за карту. Ставит сцена боя по размеру сетки; нулевые границы
 ## означают «без края» — тогда всё летит как раньше (тесты без сцены).
 var bounds: Vector2 = Vector2.ZERO
+## Глухая ли клетка (стена) — частица до неё долетает и останавливается (item 7). Задаёт
+## экран боя; без него частицы летят как раньше.
+var solid_at: Callable = Callable()
 
 ## Vector2i -> DAMAGE_*: побитый пол. Эпицентр не понижается до щебня повторным
 ## взрывом рядом — только повышается.
@@ -216,7 +221,7 @@ func _shards(ev: Dictionary) -> void:
 	var count: int = count_rng.randi_range(SHARDS_MIN, SHARDS_MAX)
 	for i in count:
 		var rng := _rng_for("shard", at, i, _event_seq)
-		_launch("shard", at, away, rng, SHARD_RANGE_MIN, SHARD_RANGE_MAX, SHARD_FLIGHT_SEC)
+		_launch("shard", at, away, rng, SHARD_RANGE_MIN, SHARD_RANGE_MAX, SHARD_FLIGHT_SEC, 1.25)
 
 ## 21.3 — гильзы: по одной на выстрел, вылетают ЗА спину стрелка.
 func _casings(ev: Dictionary) -> void:
@@ -277,15 +282,16 @@ static func _away(at: Vector2i, source: Vector2i) -> Vector2:
 ## Запустить одну частицу: базовое направление + разброс по углу, своя дальность и
 ## своё вращение. Координаты — в КЛЕТКАХ, поэтому слой не зависит от зума и размера
 ## клетки; в пиксели их переводит уже отрисовка.
+## fan — полуширина веера в радианах (0.9 ≈ ±50°, у осколков шире).
 func _launch(kind: String, at: Vector2i, dir: Vector2, rng: RandomNumberGenerator,
-		r_min: float, r_max: float, flight: float) -> void:
-	var spread := rng.randf_range(-0.9, 0.9)   # ±~50° от базового направления
+		r_min: float, r_max: float, flight: float, fan: float = 0.9) -> void:
+	var spread := rng.randf_range(-fan, fan)
 	var d := dir.rotated(spread)
 	var start := Vector2(at) + Vector2(0.5, 0.5) \
 			+ Vector2(rng.randf_range(-0.12, 0.12), rng.randf_range(-0.12, 0.12))
-	var to: Vector2 = start + d * rng.randf_range(r_min, r_max)
+	var to: Vector2 = _clip_solid(start, start + d * rng.randf_range(r_min, r_max), at)
 	var f := {
-		"kind": kind, "from": start, "to": to,
+		"kind": kind, "from": start, "to": to, "origin": at,
 		"rot0": rng.randf_range(0.0, TAU), "rot1": rng.randf_range(-TAU, TAU),
 		"scale": rng.randf_range(0.6, 1.1), "t": 0.0, "dur": flight,
 	}
@@ -301,6 +307,22 @@ func _launch(kind: String, at: Vector2i, dir: Vector2, rng: RandomNumberGenerato
 
 ## Отражение отрезка полёта от края поля (batch 12 #6). Пусто — край не задет.
 ## {via: точка удара, split: доля полёта до неё, to: конец после отскока}.
+## Путь частицы обрывается перед первой глухой клеткой (item 7): осколок, улетевший в
+## стену рядом с окном, лежит у её подножия, а не «внутри» стены, где его не видно.
+## Своя клетка (окно, которое только что разбилось) не считается.
+func _clip_solid(from: Vector2, to: Vector2, own: Vector2i) -> Vector2:
+	if not solid_at.is_valid():
+		return to
+	var steps := maxi(1, int(ceil(from.distance_to(to) / 0.2)))
+	var last := from
+	for i in range(1, steps + 1):
+		var p := from.lerp(to, float(i) / steps)
+		var c := Vector2i(floori(p.x), floori(p.y))
+		if c != own and bool(solid_at.call(c)):
+			return last
+		last = p
+	return to
+
 func _bounce(from: Vector2, to: Vector2) -> Dictionary:
 	if bounds.x <= 0.0 or bounds.y <= 0.0:
 		return {}
@@ -363,6 +385,7 @@ func advance(delta: float) -> bool:
 		props.append({
 			"kind": f["kind"], "pos": f["to"],
 			"rot": float(f["rot0"]) + float(f["rot1"]), "scale": f["scale"],
+			"origin": f.get("origin", Vector2i(floori(f["to"].x), floori(f["to"].y))),
 		})
 	if not landed.is_empty():
 		_trim()

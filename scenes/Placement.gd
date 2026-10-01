@@ -107,6 +107,12 @@ var _ready_sides: Dictionary = {}
 var _live_units: Dictionary = {}
 ## Общее зерно кубиков, чтобы у обеих сторон совпал локальный бросок инициативы.
 var _shared_seed: int = -1
+## Плитки рельефа (items 1/9) и сетка, из которой они собраны (рельеф карты неизменен).
+var _tile_layer: TerrainTiles.Layer = null
+## Чат закупки (item 14) — тот же разговор, что в лобби и в бою.
+var _chat: ChatBox = null
+var _chat_win: PanelContainer = null
+var _tile_grid: Grid = null
 
 func _ready() -> void:
 	budget = GameConfig.budget
@@ -229,6 +235,8 @@ func _drop_session() -> void:
 	_net = null
 
 func _on_net_message(msg: Dictionary) -> void:
+	if _chat != null and _chat.receive(msg):
+		return
 	match str(msg.get("k", "")):
 		K_LIVE_REQ:
 			_send_live()
@@ -529,18 +537,16 @@ func _zone_of(side: int) -> int:
 	return side
 
 ## Без зон на карте поле делится на вертикальные полосы: [x, y) — столбцы стороны.
+## Полоса стороны на карте без зон: выбранная в лобби зона (item 22: раньше выбор здесь
+## молча игнорировался), а без выбора — по порядку стороны.
 func _zone_band(side: int) -> Vector2i:
 	var sides := _sides()
-	var n := sides.size()
-	var slot := sides.find(side)
-	if slot < 0:
+	var order := sides.find(side)
+	if order < 0:
 		return Vector2i.ZERO
-	if n == 2:
-		var half := map.width / 2
-		return Vector2i(0, half) if slot == 0 else Vector2i(map.width - half, map.width)
-	var width := maxi(1, map.width / n)
-	var lo := slot * width
-	return Vector2i(lo, map.width if slot == n - 1 else lo + width)
+	var slot := roster.slot(side) if roster != null else null
+	var index := slot.deploy_zone if slot != null and slot.deploy_zone >= 0 else order
+	return MapData.band_of(index, sides.size(), map.width)
 
 func _cell_placeable(coord: Vector2i) -> bool:
 	if not map.in_bounds(coord):
@@ -701,7 +707,8 @@ func _unhandled_input(event: InputEvent) -> void:
 
 ## Под курсором ли панель палитры (#9/#11): её ввод не трогает поле/камеру.
 func _pointer_over_panel(pos: Vector2) -> bool:
-	return _panel != null and _panel.get_global_rect().has_point(pos)
+	return (_panel != null and _panel.get_global_rect().has_point(pos)) \
+			or (_chat_win != null and _chat_win.get_global_rect().has_point(pos))
 
 func _zoom_at(screen_pos: Vector2, factor: float) -> void:
 	var new_zoom: float = clampf(zoom * factor, ZOOM_MIN, ZOOM_MAX)
@@ -1145,49 +1152,32 @@ func _draw() -> void:
 	var vx1 := clampi(br.x + 1, 0, map.width - 1)
 	var vy0 := clampi(tl.y - 1, 0, map.height - 1)
 	var vy1 := clampi(br.y + 1, 0, map.height - 1)
-	var fids := map.feature_id
-	var covers := map.cover_height
-	var spaces := map.is_space
-	var zones := map.zone_owner
-	var zid := _zone_of(active_side)
-	var band := _zone_band(active_side)
+	# Рельеф и объекты — плитками TerrainTiles на слое под нами (items 1/9): раньше каждая
+	# видимая клетка рисовалась заново на КАЖДЫЙ кадр — пол, тон укрытия, объект с подписью
+	# и подсветка зоны, — и на карте шести игроков с отъездом это были десятки тысяч
+	# примитивов на любое движение мыши. Рельеф на расстановке не меняется: куски
+	# собираются один раз.
+	if _tile_layer == null:
+		var g := Grid.new(map.width, map.height)
+		map.apply_to_grid(g)
+		_tile_layer = TerrainTiles.Layer.new()
+		_tile_layer.tiles = TerrainTiles.new(g, map.environment())
+		_tile_layer.origin = ORIGIN
+		_tile_layer.cell_size = CELL
+		_tile_grid = g
+		add_child(_tile_layer)
+	_tile_layer.position = pan
+	_tile_layer.scale = Vector2(zoom, zoom)
+	_tile_layer.cells = Rect2i(vx0, vy0, vx1 - vx0, vy1 - vy0)
+	_tile_layer.queue_redraw()
+	# Подсветка зоны развёртывания активной стороны — только клетки самой зоны.
 	var zone_col := Color(_side_color(active_side), 0.10)
-	var floor_tex := Sprites.has_override("floor") or Sprites.has_override("floor_space") \
-			or Sprites.has_override("floor_wall") or Sprites.has_override("floor_cover")
-	for y in range(vy0, vy1 + 1):
-		for x in range(vx0, vx1 + 1):
-			var i := y * map.width + x
-			var coord := Vector2i(x, y)
-			var rect := Rect2(_cell_origin(coord), Vector2(CELL, CELL))
-			var fid: String = fids[i]
-			# Высота укрытия объекта задаётся справочником, а не слоем cover_height:
-			# редактор хранит объект и рельеф раздельно (см. MapData.apply_to_grid).
-			var ch: float = covers[i]
-			if fid != "" and MCF.FEATURE_HEIGHT.has(fid):
-				ch = float(MCF.FEATURE_HEIGHT[fid])
-			var is_space := spaces[i] != 0
-			var is_wall := ch >= MCF.WALL_HEIGHT
-			var floor_name := "floor"
-			if is_space:
-				floor_name = "floor_space"
-			elif is_wall:
-				floor_name = "floor_wall"
-			if not floor_tex or not Sprites.draw_texture_override_rect(self, floor_name, rect):
-				var base := Color(0.14, 0.15, 0.18)
-				if is_space:
-					base = Color(0.03, 0.02, 0.08)
-				if is_wall:
-					base = Color(0.35, 0.3, 0.25)
-				draw_rect(rect, base)
-			if ch > 0.0 and not is_wall:
-				if not floor_tex or not Sprites.draw_texture_override_rect(self, "floor_cover", rect):
-					draw_rect(rect, Color(0.5, 0.45, 0.2, 0.12 + 0.12 * ch))
-			if fid != "":
-				_draw_feature(coord, fid, ch, font)
-			# Подсветка зоны развёртывания активной стороны.
-			var in_zone := zones[i] == zid if _map_zones else (x >= band.x and x < band.y)
-			if in_zone and not is_space and not is_wall:
-				draw_rect(rect, zone_col)
+	for zc: Vector2i in _zone_cells_of(active_side):
+		if zc.x < vx0 or zc.x > vx1 or zc.y < vy0 or zc.y > vy1:
+			continue
+		var zcell := _tile_grid.cell_fast(zc.x, zc.y)
+		if not zcell.is_space and zcell.cover_height < MCF.WALL_HEIGHT:
+			draw_rect(Rect2(_cell_origin(zc), Vector2(CELL, CELL)), zone_col)
 	# Сетка — линиями по строкам и столбцам экрана, а не контуром каждой клетки.
 	var grid_col := Color(0.25, 0.27, 0.32)
 	var top := ORIGIN.y + vy0 * CELL
@@ -1244,42 +1234,6 @@ func _draw() -> void:
 					else Color(0.9, 0.3, 0.2, 0.25)
 			draw_rect(Rect2(_cell_origin(sc), Vector2(CELL, CELL)), col)
 
-## Ярлыки объектов — те же, что в бою (Main._draw): игрок должен видеть одну и ту же
-## карту до и после старта, иначе расстановка превращается в угадайку.
-const FEATURE_TAGS := {
-	MCF.FEATURE_DRONE_STATION: "ST", MCF.FEATURE_SANDBAGS: "SB",
-	MCF.FEATURE_HEDGEHOG: "hdg", MCF.FEATURE_TRENCH: "tr",
-	MCF.FEATURE_WALL: "##", MCF.FEATURE_GLASS: "▢", MCF.FEATURE_LDF: "LDF",
-	MCF.FEATURE_CORPSE_WALL: "††", MCF.FEATURE_AIRLOCK: "AL",
-	MCF.FEATURE_DIRT_PILE: "drt", MCF.FEATURE_DPMG: "MG",
-	MCF.FEATURE_DOT: "PBX", MCF.FEATURE_WOOD_WALL: "WD",
-	MCF.FEATURE_SANDBAG_WALL: "SB", MCF.FEATURE_HEDGEHOG_SANDBAGS: "hSB",
-	MCF.FEATURE_DOT_OPEN: "PBX+",
-}
-
-func _draw_feature(coord: Vector2i, fid: String, height: float, font: Font) -> void:
-	var o := _cell_origin(coord)
-	# Имя картинки совпадает с id объекта (sandbags.png, trench.png...) (#55);
-	# лист «<объект>_autotile.png» стыкует стены по соседям (batch 17, item 12).
-	if Sprites.draw_feature(self, fid, Rect2(o, Vector2(CELL, CELL)),
-			func(dx: int, dy: int) -> bool:
-				var n := coord + Vector2i(dx, dy)
-				return map.in_bounds(n) and map.get_feature(n) == fid):
-		return
-	var tag: String = FEATURE_TAGS.get(fid, "?")
-	if fid == MCF.FEATURE_LDF:
-		draw_rect(Rect2(o + Vector2(3, 3), Vector2(CELL - 6, CELL - 6)), Color(0.06, 0.06, 0.07))
-		draw_rect(Rect2(o + Vector2(3, 3), Vector2(CELL - 6, CELL - 6)),
-			Color(0.35, 0.35, 0.4), false, 1.0)
-	else:
-		draw_rect(Rect2(o + Vector2(8, 8), Vector2(CELL - 16, CELL - 16)),
-			Color(0.6, 0.6, 0.7), false, 2.0)
-	draw_string(font, o + Vector2(6, CELL - 15), tag,
-		HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.75, 0.75, 0.85))
-	if height > 0.0:
-		draw_string(font, o + Vector2(6, CELL - 4), "%.1fm" % height,
-			HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.9, 0.78, 0.5))
-
 func _draw_token(coord: Vector2i, owner: int, stats_id: String, font: Font) -> void:
 	# Техника (#10) рисуется прямоугольником по всему следу.
 	if VehicleDB.is_vehicle(stats_id):
@@ -1309,9 +1263,18 @@ func _build_ui() -> void:
 	_ui = CanvasLayer.new()
 	add_child(_ui)
 
+	# Панель прижата к правому краю и тянется на всю высоту окна с отступами (item 23):
+	# раньше она стояла в точке (940, 20) с высотой 720 и при окне 720 уходила за нижний
+	# край, а на другом размере окна или интерфейса — вовсе мимо экрана.
 	_panel = PanelContainer.new()
-	_panel.position = Vector2(940, 20)
-	_panel.custom_minimum_size = Vector2(320, 720)
+	_panel.anchor_left = 1.0
+	_panel.anchor_right = 1.0
+	_panel.anchor_bottom = 1.0
+	_panel.offset_left = -340
+	_panel.offset_right = -20
+	_panel.offset_top = 20
+	_panel.offset_bottom = -20
+	_panel.custom_minimum_size = Vector2(320, 0)
 	SteamChrome.apply_panel(_panel)
 	_ui.add_child(_panel)
 
@@ -1322,9 +1285,13 @@ func _build_ui() -> void:
 	frame.add_child(SteamChrome.header_bar("Deploy Your Force"))
 
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(300, 660)
+	scroll.custom_minimum_size = Vector2(300, 0)
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	frame.add_child(SteamChrome.pad(scroll, 8, 8))
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	var scroll_pad := SteamChrome.pad(scroll, 8, 8)
+	scroll_pad.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	frame.add_child(scroll_pad)
+	frame.size_flags_vertical = Control.SIZE_EXPAND_FILL
 
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 6)
@@ -1429,6 +1396,28 @@ func _build_ui() -> void:
 	_status.custom_minimum_size = Vector2(290, 0)
 	_status.modulate = Color(1, 0.85, 0.4)
 	vbox.add_child(_status)
+
+	# Чат закупки (item 14): окошко внизу слева, как в бою; только в сетевой партии.
+	if networked():
+		var chat_win := PanelContainer.new()
+		SteamChrome.apply_panel(chat_win)
+		chat_win.anchor_top = 1.0
+		chat_win.anchor_bottom = 1.0
+		chat_win.offset_left = 20
+		chat_win.offset_right = 400
+		chat_win.offset_top = -230
+		chat_win.offset_bottom = -20
+		var cframe := VBoxContainer.new()
+		cframe.add_theme_constant_override("separation", 0)
+		chat_win.add_child(cframe)
+		cframe.add_child(SteamChrome.header_bar("Chat"))
+		_chat = ChatBox.new(_side_label, func() -> int: return _my_side)
+		_chat.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		var cpad := SteamChrome.pad(_chat, 8, 8)
+		cpad.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		cframe.add_child(cpad)
+		_ui.add_child(chat_win)
+		_chat_win = chat_win
 
 	# UI живёт на CanvasLayer — подтянуть общий скин Steam (#59).
 	Ui.theme_canvas_layers()

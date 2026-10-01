@@ -142,6 +142,11 @@ func _heavy_hit_and_bodies() -> void:
 	var at := _u(st, Vector2i(20, 4))
 	# AT shell at (5,4): the passenger there dies outright, the other rolls, hull -1
 	r.resolve(EndTurnIntent.new())  # back to P1
+	# Противотанкист P1 на (6,4) стоит ровно на линии огня: живой боец перекрывает её и
+	# для удара по клетке с пассажиром, как для любого выстрела (§7.1). Уводим его с ряда.
+	ck(r.can_blast_cell(at, Vector2i(5, 4)) != "", "a soldier on the row blocks the shell")
+	ck(r.resolve(MoveIntent.new(_u(st, Vector2i(6, 4)).id, Vector2i(7, 2))).ok,
+			"P1's anti-tank steps off the firing line")
 	r.resolve(EndTurnIntent.new())  # P2 again with fresh AP
 	var res := r.resolve(ShootIntent.new(at.id, -1, -1, Vector2i(5, 4)))
 	ck(res.ok, "AT shot: " + res.reason)

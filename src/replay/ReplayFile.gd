@@ -25,22 +25,6 @@ const NAME_CHARS := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456
 const KIND_SAVE := "save"
 const KIND_REPLAY := "replay"
 
-## Собрать сохранение матча: доска, правила боя и косметика (item 42).
-## fx — необязательный слепок FxDecals: он ни на что не влияет, но без него
-## перезагруженный бой выглядел бы стерильно-чистым после часа стрельбы.
-static func build_save(state: GameState, resolver: GameActionResolver,
-		meta: Dictionary = {}, fx: Dictionary = {}) -> Dictionary:
-	var out := {
-		"schema": StateCodec.SCHEMA,
-		"kind": KIND_SAVE,
-		"meta": meta.duplicate(true),
-		"state": StateCodec.encode(state),
-		"rules": StateCodec.encode_rules(resolver),
-	}
-	if not fx.is_empty():
-		out["fx"] = fx
-	return out
-
 static func write(path: String, data: Dictionary) -> bool:
 	DirAccess.make_dir_recursive_absolute(path.get_base_dir())
 	var f := FileAccess.open_compressed(path, FileAccess.WRITE, COMPRESSION)

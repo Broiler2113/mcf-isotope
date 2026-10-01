@@ -26,21 +26,53 @@ const FONT_FALLBACKS := ["Tahoma", "Verdana", "Geneva", "DejaVu Sans", "Arial", 
 # же сдвиг на всех трёх тонах сохраняет прежний контраст между окном, панелью и
 # утопленным полем — темнеет вся серая гамма разом, а не отдельные её куски.
 # Тёмный множитель на всю текстурную хромировку (item 8/18) — панели/кнопки/поля.
-const CHROME_MODULATE := Color(0.66, 0.66, 0.70)
+## Набор интерфейса (item 23) задаёт цвета хромировки точно — затемнять картинки больше не нужно.
+const CHROME_MODULATE := Color(1, 1, 1)
 const WINDOW_BG   := Color(0.170, 0.170, 0.170)
 const PANEL_BG    := Color(0.235, 0.235, 0.235)
 const SUNKEN_BG   := Color(0.125, 0.125, 0.125)
 const HEADER_BG   := Color(0.118, 0.149, 0.125)
-const TEXT        := Color(0.847, 0.847, 0.847)
+const TEXT        := Color(0.812, 0.812, 0.812)   # #cfcfcf — основной текст набора
 const TEXT_BRIGHT := Color(0.95, 0.96, 0.93)
 const TEXT_DIM    := Color(0.588, 0.588, 0.588)
 const TEXT_ACCENT := Color(0.647, 0.741, 0.549)
 const ACCENT      := Color(0.549, 0.635, 0.471)
-const ACCENT_BASE := Color(0.549, 0.635, 0.471)
+
+## Акцентные палитры набора интерфейса (item 23): заливка прогресса (fill1/fill2), её кант
+## (outline), текст и свечение строк состояния (text/glow), галочка и радио (check/checkGlow).
+const PALETTES := {
+	"green": {"fill1": Color("#6a9a6a"), "fill2": Color("#3a5a3a"), "outline": Color("#2a4a2a"),
+		"text": Color("#8aaa8a"), "glow": Color("#2a4a2a"), "check": Color("#7a9c7a"), "check_glow": Color("#2a4a2a")},
+	"blue": {"fill1": Color("#6a8aba"), "fill2": Color("#3a4a6a"), "outline": Color("#2a3a5a"),
+		"text": Color("#8aaada"), "glow": Color("#2a3a6a"), "check": Color("#7a9aca"), "check_glow": Color("#2a3a6a")},
+	"red": {"fill1": Color("#ba6a6a"), "fill2": Color("#6a3a3a"), "outline": Color("#5a2a2a"),
+		"text": Color("#da8a8a"), "glow": Color("#6a2a2a"), "check": Color("#ca7a7a"), "check_glow": Color("#6a2a2a")},
+	"yellow": {"fill1": Color("#baba6a"), "fill2": Color("#6a6a3a"), "outline": Color("#5a5a2a"),
+		"text": Color("#dada8a"), "glow": Color("#6a6a2a"), "check": Color("#caca7a"), "check_glow": Color("#6a6a2a")},
+	"purple": {"fill1": Color("#9a6aba"), "fill2": Color("#4a3a6a"), "outline": Color("#3a2a5a"),
+		"text": Color("#ba8ada"), "glow": Color("#3a2a6a"), "check": Color("#aa7aca"), "check_glow": Color("#3a2a6a")},
+	"cyan": {"fill1": Color("#6ababa"), "fill2": Color("#3a6a6a"), "outline": Color("#2a5a5a"),
+		"text": Color("#8adada"), "glow": Color("#2a5a6a"), "check": Color("#7acaca"), "check_glow": Color("#2a5a6a")},
+	"orange": {"fill1": Color("#ba8a6a"), "fill2": Color("#6a4a3a"), "outline": Color("#5a3a2a"),
+		"text": Color("#daaa8a"), "glow": Color("#6a3a2a"), "check": Color("#ca9a7a"), "check_glow": Color("#6a3a2a")},
+	"gray": {"fill1": Color("#9a9a9a"), "fill2": Color("#5a5a5a"), "outline": Color("#4a4a4a"),
+		"text": Color("#b0b0b0"), "glow": Color("#4a4a4a"), "check": Color("#b0b0b0"), "check_glow": Color("#4a4a4a")},
+}
+const ACCENT_ORDER := ["green", "blue", "red", "yellow", "purple", "cyan", "orange", "gray"]
+const ACCENT_LABELS := ["Green (default)", "Blue", "Red", "Yellow", "Purple", "Cyan", "Orange", "Gray"]
+## Размер интерфейса (item 17): множитель content_scale_factor корневого окна — растёт всё
+## разом, шрифты, кнопки и окна, без единого «съехавшего» элемента.
+const UI_SCALE_MIN := 0.75
+## Холст игры — 1280×720 (stretch canvas_items): на 150% это 853×480, больше — таблица
+## слотов лобби и меню боя уже не помещаются.
+const UI_SCALE_MAX := 1.5
+const SETTINGS_PATH := "user://settings.cfg"
 
 var theme: Theme
+var accent_name := "green"
+var ui_scale := 1.0
+var _pal: Dictionary = PALETTES["green"]
 
-# Static green accent (no per-user theme switching in this project).
 var _accent := ACCENT
 var _text_accent := TEXT_ACCENT
 var _header_bg := HEADER_BG
@@ -48,7 +80,81 @@ var _header_bg := HEADER_BG
 func _ready() -> void:
 	if DisplayServer.get_name() == "headless":
 		return
+	_load_settings()
+	get_tree().root.content_scale_factor = ui_scale
 	rebuild_theme()
+
+## Настройки игрока (item 17/23): акцент и размер интерфейса — в user://settings.cfg.
+func _load_settings() -> void:
+	var cf := ConfigFile.new()
+	if cf.load(SETTINGS_PATH) != OK:
+		return
+	var a := str(cf.get_value("ui", "accent", "green"))
+	if PALETTES.has(a):
+		_set_palette(a)
+	ui_scale = clampf(float(cf.get_value("ui", "scale", 1.0)), UI_SCALE_MIN, UI_SCALE_MAX)
+
+func _save_settings() -> void:
+	var cf := ConfigFile.new()
+	cf.load(SETTINGS_PATH)
+	cf.set_value("ui", "accent", accent_name)
+	cf.set_value("ui", "scale", ui_scale)
+	cf.save(SETTINGS_PATH)
+
+func _set_palette(name: String) -> void:
+	accent_name = name
+	_pal = PALETTES[name]
+	_accent = _pal["check"]
+	_text_accent = _pal["text"]
+
+## Сменить акцент (item 23): тема пересобирается, и все окна берут новый цвет сразу.
+func set_accent(name: String) -> void:
+	if not PALETTES.has(name):
+		return
+	_set_palette(name)
+	_save_settings()
+	rebuild_theme()
+
+## Сменить размер интерфейса (item 17).
+func set_ui_scale(s: float) -> void:
+	ui_scale = clampf(s, UI_SCALE_MIN, UI_SCALE_MAX)
+	_save_settings()
+	if DisplayServer.get_name() != "headless":
+		get_tree().root.content_scale_factor = ui_scale
+
+func palette() -> Dictionary:
+	return _pal
+
+# =====================================================================
+#  Фоновый прогрев сцен (ускорение запуска)
+# =====================================================================
+## Сцены, которые надо скомпилировать заранее, — по одной: два параллельных фоновых
+## запроса компилируют общие скрипты одновременно, и раз на десяток запусков это
+## заканчивалось «Parse Error» уже готовой сцены боя. Очередь живёт в автозагрузке, а не
+## в меню: уйди игрок из меню на середине — прогрев доведётся до конца.
+var _warm: Array = []
+
+func warm_up(paths: Array) -> void:
+	for p: String in paths:
+		if not _warm.has(p):
+			_warm.append(p)
+	set_process(true)
+
+func _process(_delta: float) -> void:
+	if _warm.is_empty():
+		set_process(false)
+		return
+	var p: String = _warm[0]
+	match ResourceLoader.load_threaded_get_status(p):
+		ResourceLoader.THREAD_LOAD_INVALID_RESOURCE:
+			if ResourceLoader.has_cached(p):
+				_warm.pop_front()      # уже загружена обычным путём
+			else:
+				ResourceLoader.load_threaded_request(p)
+		ResourceLoader.THREAD_LOAD_IN_PROGRESS:
+			pass
+		_:
+			_warm.pop_front()
 
 func rebuild_theme() -> void:
 	if DisplayServer.get_name() == "headless":
@@ -74,20 +180,6 @@ func _apply_canvas_layer_theme(n: Node) -> void:
 					(gc as Control).theme = theme
 		_apply_canvas_layer_theme(c)
 
-func _accent_modulate() -> Color:
-	return Color(
-		_accent.r / ACCENT_BASE.r,
-		_accent.g / ACCENT_BASE.g,
-		_accent.b / ACCENT_BASE.b,
-		1.0)
-
-func _header_modulate() -> Color:
-	return Color(
-		_header_bg.r / HEADER_BG.r,
-		_header_bg.g / HEADER_BG.g,
-		_header_bg.b / HEADER_BG.b,
-		1.0)
-
 func accent_color() -> Color:
 	return _accent
 
@@ -97,27 +189,14 @@ func text_accent_color() -> Color:
 func header_color() -> Color:
 	return _header_bg
 
+## Шапка окна набора (.window-title): серый градиент, без окраски акцентом.
 func header_box(pad_h: int = 0, pad_v: int = 0) -> StyleBox:
-	var sb := _sb("header", pad_h, pad_v)
-	if sb is StyleBoxTexture:
-		(sb as StyleBoxTexture).modulate_color = _header_modulate()
-	elif sb is StyleBoxFlat:
-		(sb as StyleBoxFlat).bg_color = _header_bg
-	return sb
+	return _sb("header", pad_h, pad_v)
 
-func _hover_modulate() -> Color:
-	var m: float = maxf(_accent.r, maxf(_accent.g, _accent.b))
-	if m <= 0.0:
-		return Color(1, 1, 1, 1)
-	return Color(_accent.r / m, _accent.g / m, _accent.b / m, 1.0)
-
+## Наведение — светлее та же серая кнопка (свой PNG), акцентом не красится: в наборе
+## акцент только у галочек, прогресса и строк состояния.
 func _sb_hover(name: String, pad_h: int, pad_v: int) -> StyleBox:
-	var sb := _sb(name, pad_h, pad_v)
-	if sb is StyleBoxTexture:
-		(sb as StyleBoxTexture).modulate_color = _hover_modulate()
-	elif sb is StyleBoxFlat:
-		(sb as StyleBoxFlat).bg_color = _accent
-	return sb
+	return _sb(name, pad_h, pad_v)
 
 # =====================================================================
 #  Theme construction
@@ -127,7 +206,7 @@ func _build() -> Theme:
 	var font := _font()
 	_ui_font = font
 	t.default_font = font
-	t.default_font_size = 14
+	t.default_font_size = 13
 
 	# ---- Label -------------------------------------------------------
 	t.set_color("font_color", "Label", TEXT)
@@ -151,17 +230,27 @@ func _build() -> Theme:
 		t.set_stylebox("normal", cls, b_norm)
 		t.set_stylebox("hover", cls, b_hover)
 		t.set_stylebox("pressed", cls, b_press)
-		t.set_stylebox("focus", cls, b_hover)
+		t.set_stylebox("focus", cls, StyleBoxEmpty.new())
 		t.set_stylebox("disabled", cls, b_dis)
-		t.set_color("font_color", cls, TEXT)
+		t.set_color("font_color", cls, Color("#e0e0e0"))
 		t.set_color("font_hover_color", cls, TEXT_BRIGHT)
-		t.set_color("font_pressed_color", cls, _text_accent)
-		t.set_color("font_focus_color", cls, TEXT_BRIGHT)
+		t.set_color("font_pressed_color", cls, Color("#b0b0b0"))
+		t.set_color("font_focus_color", cls, Color("#e0e0e0"))
 		t.set_color("font_disabled_color", cls, TEXT_DIM)
+		t.set_color("font_outline_color", cls, Color(0, 0, 0))
+	# Выпадающий список набора (select) — утопленное поле, а не выпуклая кнопка.
+	t.set_stylebox("normal", "OptionButton", _sb("select_normal", 8, 4))
+	t.set_stylebox("hover", "OptionButton", _sb("select_hover", 8, 4))
+	t.set_stylebox("pressed", "OptionButton", _sb("select_hover", 8, 4))
+	t.set_stylebox("disabled", "OptionButton", _sb("select_normal", 8, 4))
+	t.set_color("font_color", "OptionButton", Color("#d0d0d0"))
 
 	# ---- CheckBox / CheckButton -------------------------------------
-	var chk_on := _load_tex("check_on")
+	# Галочка и радио — цветом акцента (item 23), рисуются здесь же под выбранную палитру.
+	var chk_on := ImageTexture.create_from_image(make_check(_pal, true))
 	var chk_off := _load_tex("check_off")
+	var radio_on := ImageTexture.create_from_image(make_radio(_pal, true))
+	var radio_off := ImageTexture.create_from_image(make_radio(_pal, false))
 	for cls in ["CheckBox", "CheckButton"]:
 		for st in ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]:
 			t.set_stylebox(st, cls, StyleBoxEmpty.new())
@@ -175,6 +264,14 @@ func _build() -> Theme:
 			t.set_icon("unchecked_disabled", cls, chk_off)
 			t.set_icon("checked_mirrored", cls, chk_on)
 			t.set_icon("unchecked_mirrored", cls, chk_off)
+		t.set_icon("radio_checked", cls, radio_on)
+		t.set_icon("radio_unchecked", cls, radio_off)
+		t.set_icon("radio_checked_disabled", cls, radio_on)
+		t.set_icon("radio_unchecked_disabled", cls, radio_off)
+		t.set_color("font_color", cls, Color("#b8b8b8"))
+		# В наборе акцентом красится только сама галочка, подпись остаётся серой.
+		t.set_color("font_pressed_color", cls, Color("#b8b8b8"))
+		t.set_color("font_hover_pressed_color", cls, TEXT_BRIGHT)
 
 	# ---- LineEdit / TextEdit ----------------------------------------
 	var field := _sb("field", 8, 5)
@@ -188,7 +285,7 @@ func _build() -> Theme:
 		t.set_color("selection_color", cls, _accent * Color(1, 1, 1, 0.55))
 
 	# ---- Tabs --------------------------------------------------------
-	var tab_on := _sb_accent("tab_active", 14, 6)
+	var tab_on := _sb("tab_active", 14, 6)
 	var tab_off := _sb("tab_inactive", 14, 6)
 	for cls in ["TabContainer", "TabBar"]:
 		t.set_stylebox("tab_selected", cls, tab_on)
@@ -200,13 +297,23 @@ func _build() -> Theme:
 		t.set_color("font_hovered_color", cls, TEXT)
 
 	# ---- ProgressBar -------------------------------------------------
-	t.set_stylebox("background", "ProgressBar", _sb("progress_bg", 0, 0))
-	t.set_stylebox("fill", "ProgressBar", _sb_accent("progress_fill", 0, 0))
+	var pbg := _sb("progress_bg", 2, 2)
+	t.set_stylebox("background", "ProgressBar", pbg)
+	t.set_stylebox("fill", "ProgressBar", _tex_box(make_fill(_pal), 2, 0, 0))
 	t.set_color("font_color", "ProgressBar", TEXT_BRIGHT)
 
-	# ---- Sliders -----------------------------------------------------
-	var s_track := _sb("slider_track", 0, 0)
-	var s_fill := _sb_accent("progress_fill", 0, 0)
+	# ---- Tab bar ------------------------------------------------------
+	var tab_bar := StyleBoxFlat.new()
+	tab_bar.bg_color = Color("#252525")
+	tab_bar.border_color = Color("#3a3a3a")
+	tab_bar.border_width_bottom = 2
+	tab_bar.content_margin_left = 6
+	tab_bar.content_margin_top = 6
+	t.set_stylebox("tabbar_background", "TabContainer", tab_bar)
+
+	# ---- Sliders (набор: тонкий утопленный рельс и выпуклая ручка, без заливки) ----
+	var s_track := _tex_box(_load_tex("slider_track").get_image() if _load_tex("slider_track") else null, 1, 0, 2)
+	var s_fill := StyleBoxEmpty.new()
 	for cls in ["HSlider", "VSlider"]:
 		t.set_stylebox("slider", cls, s_track)
 		t.set_stylebox("grabber_area", cls, s_fill)
@@ -218,9 +325,11 @@ func _build() -> Theme:
 			t.set_icon("grabber_disabled", cls, grab)
 
 	# ---- ScrollBars --------------------------------------------------
-	var scroll_track := _sb("scroll_track", 0, 0)
-	var grab_norm := _sb("scroll_grabber", 0, 0)
-	var grab_hl := _sb("scroll_grabber_hl", 0, 0)
+	# Ширину полосе прокрутки задают поля стиля: при нулевых она выходила нулевой — видимой
+	# формально, но невидимой и неуловимой мышью во всех окнах игры (item 19).
+	var scroll_track := _sb("scroll_track", 6, 6)
+	var grab_norm := _sb("scroll_grabber", 6, 6)
+	var grab_hl := _sb("scroll_grabber_hl", 6, 6)
 	for cls in ["VScrollBar", "HScrollBar"]:
 		t.set_stylebox("scroll", cls, scroll_track)
 		t.set_stylebox("scroll_focus", cls, scroll_track)
@@ -232,10 +341,12 @@ func _build() -> Theme:
 	for cls in ["PopupMenu", "ItemList", "Tree"]:
 		t.set_stylebox("panel", cls, _sb("panel_sunken", 4, 4))
 		t.set_color("font_color", cls, TEXT)
-	t.set_stylebox("hover", "PopupMenu", _sb_accent("selection", 4, 2))
+	var sel := make_selection(_pal)
+	t.set_stylebox("hover", "PopupMenu", _tex_box(sel, 1, 4, 2))
 	t.set_color("font_hover_color", "PopupMenu", TEXT_BRIGHT)
-	t.set_stylebox("selected", "ItemList", _sb_accent("selection", 2, 2))
-	t.set_stylebox("selected", "Tree", _sb_accent("selection", 2, 2))
+	t.set_stylebox("selected", "ItemList", _tex_box(sel, 1, 2, 2))
+	t.set_stylebox("selected_focus", "ItemList", _tex_box(sel, 1, 2, 2))
+	t.set_stylebox("selected", "Tree", _tex_box(sel, 1, 2, 2))
 
 	# ---- SpinBox -----------------------------------------------------
 	var up := _load_tex("arrow_up")
@@ -259,8 +370,8 @@ func _build() -> Theme:
 	# ---- Separators --------------------------------------------------
 	for cls in ["HSeparator", "VSeparator"]:
 		var sep := StyleBoxLine.new()
-		sep.color = Color(0, 0, 0, 0.4)
-		sep.thickness = 1
+		sep.color = Color("#1a1a1a")   # .divider набора
+		sep.thickness = 2
 		sep.vertical = cls == "VSeparator"
 		t.set_stylebox("separator", cls, sep)
 
@@ -404,10 +515,121 @@ func _sb(name: String, pad_h: int, pad_v: int) -> StyleBox:
 	sb.modulate_color = CHROME_MODULATE
 	return sb
 
-func _sb_accent(name: String, pad_h: int, pad_v: int) -> StyleBox:
-	var sb := _sb(name, pad_h, pad_v)
-	if sb is StyleBoxTexture:
-		(sb as StyleBoxTexture).modulate_color = _accent_modulate()
-	elif sb is StyleBoxFlat:
-		(sb as StyleBoxFlat).bg_color = _accent
+## Картинка → StyleBoxTexture с фаской в margin пикселей (без затемнения).
+func _tex_box(img: Image, margin: int, pad_h: int, pad_v: int) -> StyleBox:
+	if img == null:
+		return StyleBoxEmpty.new()
+	var sb := StyleBoxTexture.new()
+	sb.texture = ImageTexture.create_from_image(img)
+	sb.set_texture_margin_all(margin)
+	sb.content_margin_left = pad_h
+	sb.content_margin_right = pad_h
+	sb.content_margin_top = pad_v
+	sb.content_margin_bottom = pad_v
 	return sb
+
+# =====================================================================
+#  Акцентные части набора (item 23) — рисуются под палитру
+# =====================================================================
+## Флажок 16×16: утопленный квадрат и, если on, галочка ✓ цветом check со свечением.
+func make_check(pal: Dictionary, on: bool) -> Image:
+	var img := Image.create(16, 16, false, Image.FORMAT_RGBA8)
+	_bevel(img, Color("#1e1e1e"), Color("#0a0a0a"), Color("#6a6a6a"))
+	if on:
+		var pts := [Vector2i(3, 8), Vector2i(4, 9), Vector2i(5, 10), Vector2i(6, 11), Vector2i(7, 10),
+				Vector2i(8, 9), Vector2i(9, 8), Vector2i(10, 7), Vector2i(11, 6), Vector2i(12, 5), Vector2i(13, 4)]
+		for p: Vector2i in pts:
+			for d in [Vector2i(0, 1), Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, -1)]:
+				var q: Vector2i = p + d
+				if q.x > 0 and q.y > 0 and q.x < 15 and q.y < 15 and img.get_pixel(q.x, q.y).a > 0.0 \
+						and img.get_pixel(q.x, q.y) == Color("#1e1e1e"):
+					img.set_pixel(q.x, q.y, pal["check_glow"])
+		for p: Vector2i in pts:
+			img.set_pixel(p.x, p.y, pal["check"])
+			img.set_pixel(p.x, p.y - 1, pal["check"])
+	return img
+
+## Радио 16×16: утопленный круг и точка 8 px цветом check.
+func make_radio(pal: Dictionary, on: bool) -> Image:
+	var img := Image.create(16, 16, false, Image.FORMAT_RGBA8)
+	var c := Vector2(7.5, 7.5)
+	for y in 16:
+		for x in 16:
+			var d := Vector2(x, y).distance_to(c)
+			if d <= 7.5:
+				var edge := d > 6.5
+				var col := Color("#1e1e1e")
+				if edge:
+					col = Color("#0a0a0a") if (x + y) < 15 else Color("#6a6a6a")
+				img.set_pixel(x, y, col)
+			if on and d <= 4.0:
+				img.set_pixel(x, y, pal["check"] if d <= 3.2 else pal["check_glow"])
+	return img
+
+## Заливка прогресса: градиент fill1 → fill2, кант outline и блик сверху (.progress-fill).
+func make_fill(pal: Dictionary) -> Image:
+	var img := Image.create(16, 14, false, Image.FORMAT_RGBA8)
+	for y in 14:
+		var col: Color = (pal["fill1"] as Color).lerp(pal["fill2"], float(y) / 13.0)
+		for x in 16:
+			img.set_pixel(x, y, col)
+	for x in 16:
+		img.set_pixel(x, 1, img.get_pixel(x, 1).lerp(Color.WHITE, 0.15))
+		img.set_pixel(x, 0, pal["outline"])
+		img.set_pixel(x, 13, pal["outline"])
+	for y in 14:
+		img.set_pixel(0, y, pal["outline"])
+		img.set_pixel(15, y, pal["outline"])
+	return img
+
+## Подсветка выбранной строки списка: полупрозрачный fill2 с кантом fill1.
+func make_selection(pal: Dictionary) -> Image:
+	var img := Image.create(8, 8, false, Image.FORMAT_RGBA8)
+	var body: Color = pal["fill2"]
+	body.a = 0.85
+	img.fill(body)
+	for i in 8:
+		for p in [Vector2i(i, 0), Vector2i(i, 7), Vector2i(0, i), Vector2i(7, i)]:
+			img.set_pixel(p.x, p.y, pal["fill1"])
+	return img
+
+func _bevel(img: Image, body: Color, tl: Color, br: Color) -> void:
+	var w := img.get_width()
+	var h := img.get_height()
+	img.fill(body)
+	for x in w:
+		img.set_pixel(x, 0, tl)
+		img.set_pixel(x, h - 1, br)
+	for y in h:
+		img.set_pixel(0, y, tl)
+		img.set_pixel(w - 1, y, br)
+
+# =====================================================================
+#  Готовые оформления элементов набора
+# =====================================================================
+var _mono: SystemFont = null
+
+func mono_font() -> Font:
+	if _mono == null:
+		_mono = SystemFont.new()
+		_mono.font_names = PackedStringArray(["Courier New", "DejaVu Sans Mono", "Liberation Mono", "monospace"])
+		_mono.font_weight = 700
+	return _mono
+
+## Окошко значения у ползунка (.slider-value): утопленное, жирный моноширинный шрифт.
+func style_value_box(lbl: Label) -> void:
+	lbl.add_theme_stylebox_override("normal", _sb("panel_sunken", 6, 3))
+	lbl.add_theme_font_override("font", mono_font())
+	lbl.add_theme_font_size_override("font_size", 12)
+	lbl.add_theme_color_override("font_color", Color("#d0d0d0"))
+
+## Строка состояния (.status-field): утопленная, моноширинный текст цветом акцента со
+## свечением.
+func style_status(lbl: Label) -> void:
+	lbl.add_theme_stylebox_override("normal", _sb("panel_sunken", 10, 6))
+	lbl.add_theme_font_override("font", mono_font())
+	lbl.add_theme_color_override("font_color", _pal["text"])
+	lbl.add_theme_color_override("font_shadow_color", _pal["glow"])
+	lbl.add_theme_constant_override("shadow_offset_x", 0)
+	lbl.add_theme_constant_override("shadow_offset_y", 0)
+	lbl.add_theme_constant_override("shadow_outline_size", 2)

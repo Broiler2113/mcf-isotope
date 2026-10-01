@@ -492,6 +492,8 @@ func _draw() -> void:
 
 	# 3. Картинки-замены пола (#55) — только когда клетка достаточно крупная, чтобы их
 	# разглядеть; иначе подложки достаточно.
+	# Окружение — один раз на кадр: без записанного оно выводится обходом всей карты.
+	var map_env := map.environment()
 	if draw_floor_sprites:
 		for y in range(y0, y1 + 1):
 			var row := y * w
@@ -502,8 +504,9 @@ func _draw() -> void:
 					floor_name = "floor_space"
 				elif covers[i] >= MCF.WALL_HEIGHT:
 					floor_name = "floor_wall"
-				Sprites.draw_texture_override_rect(self,
-						floor_name, Rect2(top_left + Vector2(x, y) * cs, Vector2(cs, cs)))
+				Sprites.draw_tile(self, TerrainTiles.env_name(floor_name, map_env),
+						Rect2(top_left + Vector2(x, y) * cs, Vector2(cs, cs)),
+						TerrainTiles.variant_of(Vector2i(x, y), 64))
 
 	# 4. Сетка — линиями по строкам и столбцам окна, одной командой.
 	if cs >= LOD_GRID:
@@ -531,12 +534,19 @@ func _draw() -> void:
 				continue
 			var o := top_left + Vector2(x, y) * cs
 			if draw_tags:
-				if not Sprites.draw_feature(self, fid, Rect2(o, Vector2(cs, cs)),
+				if not Sprites.draw_feature(self, TerrainTiles.env_name(fid, map_env),
+						Rect2(o, Vector2(cs, cs)),
 						func(dx: int, dy: int) -> bool:
 							var nx := x + dx
 							var ny := y + dy
-							return nx >= 0 and ny >= 0 and nx < w and ny < map.height \
-									and feats[ny * w + nx] == fid):
+							if nx < 0 or ny < 0 or nx >= w or ny >= map.height:
+								return false
+							# Стыкуются по семейству, как в бою (TerrainTiles.FAMILY): стена
+							# переходит в окно или шлюз без шва.
+							var nf: String = feats[ny * w + nx]
+							return nf != "" and TerrainTiles.FAMILY.get(nf, nf) \
+									== TerrainTiles.FAMILY.get(fid, fid),
+						TerrainTiles.variant_of(Vector2i(x, y), 64)):
 					draw_string(font, o + Vector2(cs * 0.12, cs - cs * 0.18), _feature_tag(fid),
 						HORIZONTAL_ALIGNMENT_LEFT, -1, tag_fs, Color(0.8, 0.8, 0.9))
 			elif covers[row + x] < MCF.WALL_HEIGHT:

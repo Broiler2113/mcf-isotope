@@ -20,6 +20,20 @@ Yours wins. Changes are picked up when a battle or the map editor opens.
   floor_destroyed.png
   floor_epicenter.png
 
+-- Map environments (a <tile>_<environment> file beats the plain one on that map) --
+  floor_station.png
+  floor_bunker.png
+  floor_town.png
+  floor_field.png
+  floor_asteroid.png
+  wall_station.png
+  wall_bunker.png
+  wall_town.png
+  wall_field.png
+  wall_asteroid.png
+  bedrock.png
+  airlock_open.png
+
 -- Combat decoration (cosmetic only, never affects the rules) --
   glass_shard.png
   shell_casing.png
@@ -93,10 +107,20 @@ Soldier art is drawn facing UP in a square; a corpse is the same picture turned
 (corpse.png is the fallback for piles and for soldiers without art).
 faction_<key>.png is the portrait shown in the lobby's faction window.
 
+== Terrain tiles: 64x64, variants, environments ==
+Floor and feature tiles are 64x64. A tile file may hold several VARIANTS side by
+side (e.g. floor.png 384x64 = 6 variants); each cell picks one by its position, so
+a field of the same floor never repeats as a visible pattern. Keep the edges of all
+variants identical (or make each tile seamless) and the surface stays continuous.
+A map's environment (station, bunker, town, field, asteroid) picks floor_<env>.png
+and wall_<env>.png over the plain floor.png / wall.png when such a file exists.
+
 == Autotiling walls ==
 Any terrain feature may ship as a 4x4 tile sheet named <feature>_autotile.png
 (wall_autotile.png, glass_autotile.png, wood_wall_autotile.png, ...).
-The game looks at the four orthogonal neighbours that carry the SAME feature
+Several sheets may be stacked top to bottom as variants (256x1536 = 6 variants).
+The game looks at the four orthogonal neighbours of the same FAMILY (walls, glass,
+airlocks, bunkers and corpse walls join each other; sandbag pieces join each other)
 and picks tile index = N*1 + E*2 + S*4 + W*8; column = index % 4, row = index / 4:
 
   row 0:  0 alone     1 N          2 E          3 N+E

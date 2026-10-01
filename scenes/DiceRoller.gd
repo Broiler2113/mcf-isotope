@@ -82,16 +82,15 @@ func play(dice: Array, manual: bool = false, prompt: String = "", speed: float =
 	var my_gen := _generation
 	for c in _row.get_children():
 		c.queue_free()
-	var labels: Array[Label] = []
+	# Настоящие кубики (item 16): кувыркаются и подпрыгивают, грани сменяются, к концу
+	# броска всё замедляется, и кубик ложится выпавшей гранью вверх.
+	var dies: Array[DieView] = []
 	for _d in dice:
-		var lbl := Label.new()
-		lbl.add_theme_font_size_override("font_size", 34)
-		lbl.custom_minimum_size = Vector2(58, 68)
-		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		lbl.text = "?"
-		_row.add_child(lbl)
-		labels.append(lbl)
+		var dv := DieView.new()
+		dv.custom_minimum_size = Vector2(66, 96)
+		dv.value = randi_range(1, 6)
+		_row.add_child(dv)
+		dies.append(dv)
 	show()
 	# Подсказку с бонусами/штрафами (#49) показываем всегда, пока крутится кубик.
 	if prompt != "":
@@ -107,21 +106,33 @@ func play(dice: Array, manual: bool = false, prompt: String = "", speed: float =
 	if my_gen != _generation or not is_inside_tree():
 		finished.emit()  # показ перебит новым — тот и докрутит; ждущих всё равно отпускаем
 		return
-	for _spin in maxi(1, int(round(SPIN_STEPS / rate))):
-		for lbl in labels:
-			if is_instance_valid(lbl):
-				lbl.text = str(randi_range(1, 6))
-		await get_tree().create_timer(SPIN_DELAY).timeout
+	var steps := maxi(1, int(round(SPIN_STEPS / rate)))
+	for spin in steps:
+		var t := float(spin) / steps   # 0 → 1: кувырок затухает
+		for i in dies.size():
+			var dv := dies[i]
+			if not is_instance_valid(dv):
+				continue
+			dv.value = randi_range(1, 6)
+			dv.angle = (1.0 - t) * randf_range(-1.1, 1.1)
+			dv.lift = (1.0 - t) * absf(sin(t * PI * 3.0 + i * 1.3)) * 22.0
+			dv.queue_redraw()
+		# Замедление к концу броска: как настоящий кубик, теряющий разгон.
+		await get_tree().create_timer(SPIN_DELAY * (0.6 + t)).timeout
 		if my_gen != _generation:
 			finished.emit()
 			return
 	for i in dice.size():
-		if not is_instance_valid(labels[i]):
+		var dv := dies[i]
+		if not is_instance_valid(dv):
 			continue
-		labels[i].text = "%d\n%s" % [dice[i]["value"], dice[i]["tag"]]
-		labels[i].add_theme_color_override(
-			"font_color", Color(0.45, 1.0, 0.45) if dice[i]["good"] else Color(1.0, 0.5, 0.5)
-		)
+		dv.value = int(dice[i]["value"])
+		dv.angle = 0.0
+		dv.lift = 0.0
+		dv.landed = true
+		dv.good = bool(dice[i]["good"])
+		dv.tag = str(dice[i]["tag"])
+		dv.queue_redraw()
 	await get_tree().create_timer(LAND_PAUSE / rate).timeout
 	if my_gen != _generation:
 		finished.emit()
@@ -129,3 +140,52 @@ func play(dice: Array, manual: bool = false, prompt: String = "", speed: float =
 	_prompt.hide()
 	hide()
 	finished.emit()
+
+## Один кубик (item 16): скруглённая кость цвета слоновой кости с точками, тенью на
+## «столе», наклоном и подскоком во время броска. Упав, показывает обводку удачи (зелёная)
+## или неудачи (красная) и подпись под собой.
+class DieView extends Control:
+	var value := 1
+	var angle := 0.0
+	var lift := 0.0
+	var landed := false
+	var good := false
+	var tag := ""
+	const SIZE := 46.0
+	const PIPS := {
+		1: [Vector2(0, 0)],
+		2: [Vector2(-1, -1), Vector2(1, 1)],
+		3: [Vector2(-1, -1), Vector2(0, 0), Vector2(1, 1)],
+		4: [Vector2(-1, -1), Vector2(1, -1), Vector2(-1, 1), Vector2(1, 1)],
+		5: [Vector2(-1, -1), Vector2(1, -1), Vector2(0, 0), Vector2(-1, 1), Vector2(1, 1)],
+		6: [Vector2(-1, -1), Vector2(1, -1), Vector2(-1, 0), Vector2(1, 0), Vector2(-1, 1), Vector2(1, 1)],
+	}
+	func _draw() -> void:
+		var c := Vector2(size.x * 0.5, SIZE * 0.5 + 14.0)
+		# Тень на столе — тем меньше и бледнее, чем выше подскочил кубик.
+		var k := clampf(1.0 - lift / 40.0, 0.4, 1.0)
+		draw_set_transform(c + Vector2(0, SIZE * 0.55), 0.0, Vector2(1.0, 0.28))
+		draw_circle(Vector2.ZERO, SIZE * 0.5 * k, Color(0, 0, 0, 0.35 * k))
+		draw_set_transform(c - Vector2(0, lift), angle, Vector2.ONE)
+		var r := Rect2(-SIZE * 0.5, -SIZE * 0.5, SIZE, SIZE)
+		var body := StyleBoxFlat.new()
+		body.bg_color = Color("#e9e3d2")
+		body.set_corner_radius_all(9)
+		body.set_border_width_all(2)
+		body.border_color = Color("#b9b19a")
+		body.shadow_color = Color(0, 0, 0, 0.25)
+		body.shadow_size = 2
+		if landed:
+			body.border_color = Color("#4fbf4f") if good else Color("#d05050")
+			body.set_border_width_all(3)
+		draw_style_box(body, r)
+		# Блик по верхней кромке — объём кости.
+		draw_line(Vector2(-SIZE * 0.32, -SIZE * 0.4), Vector2(SIZE * 0.32, -SIZE * 0.4),
+				Color(1, 1, 1, 0.55), 2.0)
+		for p: Vector2 in PIPS.get(value, []):
+			draw_circle(p * SIZE * 0.26, SIZE * 0.085, Color("#26221c"))
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+		if landed and tag != "":
+			var font := get_theme_default_font()
+			draw_string(font, Vector2(0, size.y - 8), tag, HORIZONTAL_ALIGNMENT_CENTER, size.x,
+					13, Color("#7fdc7f") if good else Color("#e88080"))

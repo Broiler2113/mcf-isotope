@@ -535,6 +535,14 @@ item 16). A blast in the next cell over shreds the infantry around the vehicle a
 its armour untouched; splash from a mine, a drone, or another vehicle's detonation never
 damages a hull at all.
 
+**A cell with someone in it is checked like any other (team-session batch, items 4 and
+8).** `can_blast_cell` used to accept any cell holding a living unit before checking
+anything else — firing line, walls, range. The AI asks it while scoring shells, so a
+soldier's cell (a tank passenger's, typically) was a legal target from any angle: Hard AI
+fired along lines the rules forbid — the "non-diagonal weird lines" — and rolled checks
+that needed 7+ on a d6. The shortcut is gone; an occupied cell passes the same line, wall
+and range checks as an empty one. `tests/run_team_session.gd` pins it.
+
 ### 7.2 Flamethrower (§3.8)
 
 Projects a **6-cell** jet, igniting each floor cell with `shooter.owner` as
@@ -603,6 +611,18 @@ landed on the hull itself, so a click past or short of the tank sent the same be
 the same tank silently, and always into the Hull. The picker lists only the components
 visible from the marksman's side (`_aimable_components`), without the "(N+)" roll hints:
 a laser burns what it is told to, it does not roll.
+
+**Volley (team-session batch, item 12).** With several marksmen multi-selected, the group
+menu offers **Laser Volley** (`Mode.GROUP_LASER`). One click picks the direction — the
+eight-way step from the group's centre to the clicked cell (`_volley_dir`) — and every
+selected marksman with 2 AP fires his own beam that way from his own cell. Each beam is an
+ordinary `ShootIntent`, so lockstep, undo and the log see separate shots.
+
+**Friendly units in the beam ask first (item 13).** Before a beam is sent, the screen walks
+the trace the preview draws (`laser_preview`) and collects every own or allied unit on it
+(`_beam_friendlies`). If there are any, a confirmation window lists them — type, side and
+cell — and the shot goes only on *Fire anyway*; a volley gathers the friendlies of all its
+beams into one window. Presentation only: the rules of the beam are unchanged.
 
 ### 7.4 Assault (§3.14)
 
@@ -1168,8 +1188,11 @@ for fire on the line. Those modifiers are listed in the dice event, so the defen
 neighbourhood, not a deployment area**: `MapData._fill_neutral_zone` (called from
 `build_state`, before `begin_match` rolls initiative) puts a civilian on **every**
 stand-on-able cell of the neutral zone. Space, vehicles, features, walls and occupied
-cells are skipped, and the whole pass is off when `GameConfig.civilians_enabled` is
-false. Authors mark the block once instead of placing residents one spawn at a time —
+cells are skipped. **How many of them reach the board is the lobby's *Civilians* slider
+(team-session batch, item 11):** `GameConfig.civilian_count` (0–`CIVILIANS_MAX` 200;
+`civilians_enabled` is now just `count > 0`) caps every neutral spawn of the map — painted
+zones, placed residents and generated ones alike. `build_state` keeps an even spread in
+map order (the same choice on every peer), not the first N. Authors mark the block once instead of placing residents one spawn at a time —
 and the placement screen already refuses to deploy into a neutral zone, so the quarter
 stays civilian.
 
@@ -1921,10 +1944,13 @@ middle/right-drag to pan.
 20 px cell — a 60×40 city (2400 cells, a 200-man battle) did not fit on any screen, so the
 player drove the camera blind, seeing neither flank. 0.12 gives a ~5 px cell: the figures
 are unreadable, but the *shape* of the battle is visible, and that is what one zooms out
-for. `_recenter_camera` ("Return to Map") picks `min(1.0, fit)` where `fit` is the scale at
-which the whole board plus margins fits the viewport — so the button never returns the
-player to the same blindness he pressed it from. `_ensure_visible(coord)` (§14.1) pans
-without touching zoom: the scale is the player's choice.
+for. `_ensure_visible(coord)` (§14.1) pans without touching zoom: the scale is the
+player's choice.
+
+**Camera row (team-session batch, item 10).** The side panel's *Camera* row has a **Me**
+button and, in team mode, one button per teammate (their letter). Each pans — zoom
+untouched — to the centre of that side's units and vehicles (`_home_focus(side)`,
+`_center_on_side`). "Me" is the seat this machine holds (`NetHandoff.my_side_hint`).
 
 **The far plan (big maps).** Below `LOD_ZOOM` (0.35, a cell under 14 px) the board is not
 drawn cell by cell: at `ZOOM_MIN` on a 250×250 map that was ~37 000 cells and ~150 ms on
@@ -1938,9 +1964,17 @@ it. The textures are patched pixel by pixel: terrain and objects from the cell l
 once (~55 ms on 250×250) and kept patched even while zoomed in, so zooming out again costs
 nothing. Units, vehicles, corpses, mines, highlights and effects are drawn on top as
 before; grid lines and height captions are left out — they are not readable at that
-scale. Closer in, the cell pass stays, with grid lines drawn per row and column instead
-of an outline per cell, no texture lookups when no replacement textures exist, and
-corpse piles from a list kept by `GridCell.corpse_version`. Measured `_draw` on a 250×250
+scale. Closer in, terrain is **baked, not drawn per cell (team-session batch, items 2 and 6)**:
+`TerrainTiles` renders 16×16-cell chunks into textures at 16, 32 or 64 px per cell —
+whichever is closest to the on-screen cell size — in two layers, floor and features,
+with the fog drawn between them as before. Chunks rebuild only when `GridCell.look_changes`
+touches them, at most four per frame (a missing chunk borrows another resolution
+meanwhile), and old ones are evicted least-recently-used under 128 MB. The cell pass
+keeps only what changes per frame or per unit: mines, held objects, DOT cracks, height
+captions (zoom ≥ `HEIGHT_LABEL_ZOOM` 0.6), grid lines per row and column, corpse piles
+from `GridCell.corpse_version`. A 6-side, 120-unit battle went from ~400 draw calls to
+~140 and `_draw` from 3.2 ms to 1.4 ms; the placement screen and the map editor use the
+same tiles. Measured `_draw` on a 250×250
 town: 149 ms → 0.2 ms at `ZOOM_MIN`, 17 ms → 8 ms just above `LOD_ZOOM`, 2.8 ms → 1.4 ms at
 1:1. The purchase screen got the same viewport culling (it drew all 62 500 cells every
 frame: ~500 ms → 2–8 ms).
@@ -1949,7 +1983,11 @@ frame: ~500 ms → 2–8 ms).
 
 Rolls play one at a time in a SteamChrome-framed **Dice Roll** window showing the
 accuracy or defence prompt with every buff and debuff itemised. `FAST_ROLL_SPEED = 2.0`
-speeds up long bursts.
+speeds up long bursts. **The die is a die (team-session batch, item 16):** `DieView`
+draws a rounded ivory cube with pips that tumbles — spin and hop decaying — before it
+settles on the rolled face, outlined green for a success and red for a failure, instead
+of numbers flicking past. An AI side's dice, steps and AP dots run at the **AI speed**
+(§18.6).
 
 **Who presses the button.** `_owner_is_local_human(owner)` decides whether a roll waits
 for a click or spins by itself. In a network match it is `owner == my_owner`: the shooter
@@ -1998,6 +2036,16 @@ right of the action menu (batch 13 #13)**, on the same top line, instead of abov
 combat log where a long vehicle menu used to grow over it; `_reposition_hud_grip` places it
 once the menu's width is known, and it stays wherever the player drags it.
 
+**Team-session additions (items 5, 17, 18, 19).** The side panel gains **Settings**
+(§21), the *Camera* row (§18.4) and, when any AI plays, **AI speed** — 0.5× / 1× / 2× /
+4× (`GameConfig.AI_SPEEDS`) dividing `AI_STEP_DELAY`, walk steps and dice time for AI
+sides only (`_pace`). It is the host's control: guests see it disabled, and a change is
+broadcast as `K_AI_SPEED`; the lobby sets the starting value. The **combat log** is a
+half-transparent glass panel like the chat, and **both resize** from a grip in their
+title bar. Their scrollbars are draggable bars: the theme's scrollbar styles now carry
+6-px margins — with none, a scrollbar without a forced width (the battle panel's, for one)
+collapsed to zero pixels.
+
 **Action menus are anchored to the top-left corner (#87)**, at `MENU_ANCHOR = (16, 16)`,
 not floated above the unit — over the unit they covered the board and slid off-screen
 when zoomed. Every menu is a `ScrollContainer`; `_cap_scroll_height` clamps it to
@@ -2008,8 +2056,13 @@ pans or zooms the camera (#8).
 Corpses render in `CORPSE_COLOR = Color(0.8, 0.1, 0.1, 0.5)`; BRU sections render as
 solid `BRU_COLOR = Color(0.05, 0.05, 0.07)` fills (#85).
 
-**Drawings (item 51, batch 17).** Free-hand strokes over the board, cosmetic only, never
-part of the simulation. Each stroke carries its author and a scope — `SELF`, `TEAM`
+**Drawings (item 51, batch 17; raster since the team-session batch, item 15).** Free-hand
+strokes over the board, cosmetic only, never part of the simulation. They are painted
+like in Paint: each (author, scope) owns a sparse raster `DrawCanvas` of 256-px tiles,
+the brush stamps round dabs along the mouse path, and the **eraser clears pixels** of the
+viewer's own canvases wherever it passes (erasing used to delete whole strokes it
+touched). Strokes and eraser passes travel as point lists with a radius (`K_DRAW`, `e`
+marks an eraser) and are replayed into the same canvases on every screen. Each stroke carries its author and a scope — `SELF`, `TEAM`
 ("Share with team") or `ALL` ("Share with everyone", visible to enemies too). Every
 stroke is sent over the wire; the viewer filters. Filters are plain checkboxes: *Hide
 others' drawings*, *Hide my drawings*, *Hide all drawings*. The viewer is `my_owner` in a
@@ -2135,6 +2188,15 @@ MainMenu → Setup → Placement → Main (battle)
   half-drawn map in it would silently impose it on the next match started from the menu.
 - **Quit-to-menu** — a SteamChrome overlay (dim + framed panel + title bar +
   Cancel / Main Menu), never an OS dialog.
+- **Team-session batch (items 14, 21, 22).** **Game modes are gone** (`GameConfig.game_mode`
+  and the lobby's mode picker; rules no longer carry `gm`). **Chat** lives in the lobby
+  (its own group box) and on the purchase screen (a window bottom-left) as well as in
+  battle — one conversation: `NetHandoff.chat_history` keeps it from the lobby to the end
+  of the match (`ChatBox`). **Deploy zones:** the lobby's per-slot *Zone* is a drop-down
+  (*Auto*, *Zone 1…N*); changing it redraws the map preview at once, and on a map without
+  painted zones the preview shows each slot's vertical band in its colour.
+  `MapData.band_of` is the one formula for that band, used by the preview and by
+  placement — which before this ignored the chosen zone on such maps.
 
 ---
 
@@ -2208,13 +2270,21 @@ without scrolling.
 |---|---|
 | Players | **Is** the lobby's slot count. Raising it adds AI slots in solo and Open slots when hosting; lowering it drops slots from the end, never one a guest sits in. One zone per slot, because `Slot.zone()` defaults to the slot id. |
 | Units per side | Every zone gets `CELLS_PER_UNIT` (2) cells per unit, at least `ZONE_MIN` (16): room to arrange the squad and to park a 3×3 tank. |
-| Style | Station / Town / Field / Bunker (below). |
+| Style | Station / Town / Field / Bunker / Asteroid (below). Picking a style resets *Space* and *Flammable* to its defaults: Space on for Station and Asteroid only, Flammable on for Town and Field only. |
 | Size | Small 28×20, Medium 38×28, Large 50×38, Huge 80×60, Giant 125×95, Colossal 250×250, or **Custom…** — any width and height from 16 up, with **no upper limit** (a row with both appears only for Custom). A *starting* size: if the armies do not fit, the map is rebuilt larger (automatic growth stops at `MAX_DIM`, 250×250; a larger custom size is kept as asked) and the readout under the settings says so. Beyond 250×250 the readout also warns what it costs: building takes seconds and a battle a lot of memory (measured ≈15 s and ≈1.3 GB at 1000×1000). |
 | Density | Sparse / Normal / Dense: rooms, houses, clutter. |
 | Layout | *Symmetrical* (off by default) — see below. |
 | Mechanics | *Space* (vacuum only — doors are airlocks either way, below), *Flammable*, *Obstacles* — each can be switched off on its own. |
-| Civilians | *None / Few / Normal / Many / Crowd* — how many neutrals, roughly (below). |
+| Civilians | The lobby's *Civilians* slider, 0–200: how many neutrals the generator places (it is also the cap at match start, §14). |
 | Seed | The same seed and settings always build the byte-identical map. *Reroll* draws a new seed; *Save as Map* writes `user://maps/random-<style>-<seed>.json` (never over an existing file), after which it is an ordinary map — in the list and in the editor. |
+
+**Every map has an environment (team-session batch, item 24).** `MapData.env` —
+`station`, `bunker`, `town`, `field` or `asteroid` — is set by the generator (from the
+style) and saved with the map; a map without one infers it (`environment()`: wooden walls
+or grass → town, otherwise space → station, otherwise town). It travels in `GameState.env`
+and the state codec, and picks the tiles: a `<tile>_<env>` texture beats the plain one —
+metal bulkheads and deck plate on stations, poured concrete in bunkers, brick on asphalt
+in towns, brick on regolith on asteroids, board-formed concrete and dirt in the field.
 
 **Styles.**
 - *Station* — a facility of sectors and hallways. The footprint is split recursively
@@ -2229,6 +2299,10 @@ without scrolling.
   space, or solid rock with Space off. With Space on, about one room in 40 is vented
   (zero-G), and the hull gets windows and a few exterior airlocks. Obstacles: pillars in
   big halls, stacks of crates (wooden 2 m crates on plank decks), sandbags in hallways.
+- *Asteroid* (team-session batch) — a little island in space with a town on it: a
+  ragged ellipse of rock and regolith, a town of the chosen *Density* built inside it,
+  craters of dirt piles, and vacuum all around (Space on, Flammable off by default).
+  Doors whose far side ends up in rock are sealed into walls.
 - *Bunker* — the same station from the same seed, dug underground: everything outside
   the rooms and hallways is solid rock, never vacuum (no vented room, no hull), so the
   Space toggle does nothing here. With Space off, a bunker and a station of the same seed
@@ -2288,7 +2362,8 @@ sealed-floor pass below, mirrored as well.
    in a handful of *Space off* town and field maps (1–23 unreachable cells); the fix
    there is a single cell, and the rest of those maps is unchanged.
 
-**How many civilians** is a magnitude, not a number: *None / Few / Normal / Many /
+**How many civilians** is the slider's number since the team-session batch
+(`civilian_count`). Older saved options without it still read the magnitudes: *None / Few / Normal / Many /
 Crowd* (`MapGen.CIV_LEVELS`; Normal by default) scales the base rate of one per 160 cells
 (times density) by ×0 / 0.35 / 1 / 2.5 / 6, with at least 0 / 1 / 2 / 4 / 8 and at most
 0 / 12 / 32 / 80 / 200 per map (`CIV_MULT`, `CIV_MIN`, `CIV_CAP`). A Huge town measured
@@ -2341,18 +2416,26 @@ maps.
 
 - **Textures (#55, #57):** any map or unit primitive may be replaced by a texture drop-in;
   the vector draw remains the fallback so the game is always playable with no art.
-- **Theme:** `UiTheme` (autoload `Ui`) applies the "2003 Steam" gunmetal skin to the root
-  window. In-game surfaces are framed by `SteamChrome` — panel body, dark-green title
-  bar, accent pip. The dice roller, deployment screen, and quit popup all use it.
+- **Theme (team-session batch, item 23):** `UiTheme` (autoload `Ui`) applies the
+  "MCF: Alert! UI kit" to the root window — neutral bevelled grey chrome from
+  `interface_textures/` (regenerated by `tools/gen_ui_kit.gd`), grey title bars with a
+  bold shadowed caption, framed group boxes with the caption on the border
+  (`SteamChrome.group_box`), and one **accent colour** for checks, radios, progress fills,
+  selections and status text. Accent pieces are drawn at runtime from `Ui.PALETTES`
+  (eight colours), so changing the accent needs no files.
 - **Main-menu background (item 35):** `Starfield` replaces the flat `ColorRect` with a
   gradient sky and three star layers drifting at 5 / 13 / 28 px per second — the *speed
   difference* is the whole parallax. Each layer is one 512-px tile tiled across the
   screen with only its position animated, so a frame costs three sprites no matter how
   many stars there are, and the layers are laid out from a fixed seed so the menu looks
   the same every launch. The bundled `logo.png` finally appears, beside the title.
-- **Settings (item 24) is a disabled button.** The original settings screen was never
-  supplied; a guessed port would look like settings without setting anything. The slot
-  is held visibly rather than silently dropped.
+- **Settings (items 17, 23).** `SettingsWindow`, opened from the main menu and the battle
+  panel: *Interface size* 75–150 % (`root.content_scale_factor`; the game draws on a
+  1280×720 canvas, and beyond 150 % the slot table and the battle panel no longer fit)
+  and *Accent colour* with live samples. Both apply at once and persist in
+  `user://settings.cfg`. Screens are built to survive the scale: the lobby's two columns
+  wrap, its slot table scrolls sideways inside its box when it must, the main menu's
+  middle scrolls, and the battle chat stacks above the log when they would overlap.
 - All UI strings are **English**; all code comments are **Russian**.
 - **Factions instead of colours (batch 17, item 13).** `Roster.FACTION_KEYS` /
   `COLOR_NAMES` / `PALETTE` are three parallel lists of the eight lore factions —
@@ -2366,6 +2449,15 @@ maps.
   90° clockwise**; `corpse.png` (turned 90° counter-clockwise, #21.4) remains the fallback
   for piles and for units without art. The lobby's colour square shows
   `faction_<key>.png` on top of the colour when that portrait is shipped.
+- **Shipped 64×64 tiles (team-session batch, items 9 and 20).** `tools/gen_textures.gd`
+  generates every floor and feature at 64 px in a brutalist look — poured and
+  board-formed concrete, steel deck, brick, sandbags — from seamless toroidal noise
+  whose features start at eight cells, so no cell-sized motif repeats. Each tile has six
+  variants (a single tile is a 384×64 strip, an autotile sheet is 256×1024: six 4×4
+  sheets stacked); the variant is a hash of the cell, so neighbours differ and the same
+  cell always looks the same. Autotiling joins **families**, not just one id (walls,
+  glass, airlocks, pillboxes, LDF blocks and corpse walls join each other; sandbags join sandbags;
+  trenches join trenches). The generator takes about a minute.
 - **Wall autotiling (batch 17, item 12).** A feature may ship a 4×4 sheet
   `<feature>_autotile.png`; `Sprites.draw_feature` picks the tile from the four
   orthogonal neighbours carrying the same feature id (`N·1 + E·2 + S·4 + W·8`, column =
@@ -2387,6 +2479,14 @@ the first edge the flight would cross becomes a `via` point at fraction `split` 
 flight, the remainder is reflected on that axis, and `flight_pos` follows the broken
 line — to the wall, then back in. With no bounds set (unit tests without a scene) nothing
 changes. This is cosmetics: it consults no dice and touches no state.
+
+**Glass shards (team-session batch, item 7).** A broken pane throws 5–9 shards 0.7–2.4
+cells in a ±70° fan (was 3–6 within one cell — "they barely spread"). A shard's flight
+stops at the first wall cell (`FxDecals.solid_at`, set by the battle screen) instead of
+landing inside it, and a shard carries its **origin** cell: the fog test draws it when
+either the cell it lies in or the pane it came from is visible, so a player who saw the
+glass break sees all of its shards, even those that landed in fog. Shards use
+`glass_shard.png` when shipped (it is now).
 
 ## 22. Networking
 
@@ -2584,6 +2684,12 @@ own with `sides: []`, so nothing they send can overwrite the stamped army. While
 placement visibility" is on, every placement change broadcasts `K_LIVE`, and a peer
 entering the screen sends `K_LIVE_REQ` to see what the others already placed; live units
 draw with a shadow, final ones plainly.
+
+**Chat names the sender on the receiving screen (team-session batch, item 3).** A chat
+message carries the sender's **side**, not a ready-made label; each screen builds the
+label itself — the side's name, plus "(you)" only when the side is its own. The old
+message carried the sender's label already rendered, so every player on the LAN showed
+up as "(you)". Text is escaped (`ChatBox.escape`), so a message cannot inject BBCode.
 
 **AI slots in a network match are driven by the host (batch 12 #15).** The host's
 `_setup_network_controllers` gives every AI side a real `AIController` whose intents go
@@ -2908,6 +3014,8 @@ number appears elsewhere in this document it is because the source comments cite
 | 103 | One unit per cell is enforced by the board itself — `Grid.place` and `move_occupant` refuse to overwrite an occupant and report failure, so no two soldiers, civilians or AI units can ever share a tile (§2.2); hovering a green move tile draws the **cheapest actual route** to it out of the Dijkstra tree, and every green tile is labelled with what standing there costs out of the movement total (§18.3); a marksman's laser no longer reaches a man in a trench from a tile that is not one, at any range including adjacent (§6.6, §7.3); NPC civilians and the army are driven by **one brain** — the second, cell-at-a-time civilian AI is deleted and a civilian is now an `AIController` with the Neutral owner, so it plans, fragments its movement, fires partial bursts and hauls corpses by the army's rules (§14, §17); the AI uses fragmented movement and partial bursts — `move_credit` is a spendable budget, a step costs score, and a burst orders `ceil(1/p)` bullets instead of the whole magazine (§17.3); an anti-tank sapper cut off by a wall **blasts through it** instead of shuffling along it (§17.3, §7.1); the AI and civilians pick up bodies that block the road and **stack them aside into piles**, the fifth forming a corpse wall (§17.3, §8.4); at least 80% of an army must act each turn and **every** civilian must, enforced by a second forced pass over whoever the plan left idle (§17.2); Player 1 can be an AI too, so AI-vs-AI matches run from Setup or a mid-battle toggle (§17.4); and the camera zooms out to 0.12 so a 60×40 board fits on one screen (§18.4) |
 | 104 | The map editor can be left the way it was entered: the **"To Demo Game"** button is gone, replaced by **"Main Menu"**, which clears `MapHandoff.pending` and returns to `MainMenu.tscn` instead of dumping the designer into a demo battle on the built-in roster (§19) |
 | 105 | A marksman firing **from** a trench is as boxed in as a marksman firing **into** one: the laser cannot climb out of the ditch any more than it could drop into it, so from the trench floor the only reachable target is one lying in the **same continuous run** of trench, along a straight line with no gap — a bend or a break means the beam hits the earth wall. The trench is now symmetric cover against the beam instead of a firing position that ignored its own walls (§6.6, §7.3) |
+| 116 | Team-session batch (3 humans vs 3 AIs) — anti-tank checks an occupied target cell like any other, so Hard AI no longer fires along illegal lines or rolls hopeless 7+ checks (§7.1); marksman volley and a friendly-in-the-beam confirmation (§7.3); the civilians slider caps every map's neutrals with an even spread (§14, §20.2); team camera row, baked 64-px terrain chunks (§18.4); real tumbling dice (§18.5); host-only AI speed, resizable glass log and chat with working scrollbars, Paint-like raster drawing with a pixel eraser (§18.6); game modes removed, chat in the lobby and on the purchase screen, deploy zone drop-down with a live preview and bands that placement now honours (§19); map environments with their own tiles, the Asteroid style and per-style Space / Flammable defaults (§20.2); the "MCF: Alert!" UI kit with an accent colour and an interface-size setting, 64×64 brutalist tiles in six variants with family autotiling (§21); glass shards spread, stop at walls and stay visible to whoever saw the pane break (§21.1); chat labels built by the receiver, so LAN players are no longer all "(you)" (§22.4). Tests: `run_team_session` (new), `run_mapgen` (environment tags, Asteroid), `run_lobby_maps` (slider), `run_shuttle` (its heavy-hit shell had flown through a soldier standing on the row; he now steps aside first, and the block itself is asserted). |
+| 115 | Faster boot — the main menu appears in ~0.5 s instead of ~1.2 s (headless, measured). The menu named `LearnedController` as a class, which compiled the whole resolver before the first frame; it is now `load()`ed only where the `--vs-latest` check needs it. Once the menu is on screen, the `Ui` autoload compiles the lobby and battle scenes in the background (`Ui.warm_up` — one `ResourceLoader.load_threaded_request` at a time; parallel requests raced on shared scripts), so *New Game* does not pay for it. No rule changed. |
 | 114 | Group orders move the whole selection — the group planner simulates execution order (front unit first, squadmates' vacated cells free, taken cells blocked), so the middle of a blob and the tail of a corridor column are no longer dropped from the order; distance is steps round walls with straight-line ties, so far orders keep formation instead of drifting to the map edge; and a **Tactical Move** puts each unit in the best cover within 3 tiles of its plain-move spot against visible enemies (every side under fog) (§18.3) |
 | 113 | Airlocks, civilians and Colossal maps — every door of every room, house and hut is an airlock whatever the Space toggle; civilians come in five magnitudes (None to Crowd) and live only in rooms sealed by airlocks, so nothing at the start of a match can wake them; a custom map size has no upper limit; mirrored placement carries the army zone to zone by the map's own symmetry (or the best-overlapping grid motion), so every side gets the same units wherever its zone is (§19, §20.2). Performance only, no rule changed: undo journals the touched cells instead of copying the board (§18.2); a zoomed-out battle screen draws the board as cached textures and the purchase screen culls to the viewport (§18.4); fog drops only the cached views a change can reach (§11); objects, mines, stations, airlocks and fire are indexed and patched from a cell log; the AI's distance field walks a cached passability mask (§27.21). A 91-action Hard-vs-Hard game on a 250×250 town: 31.2 s → 1.5 s |
 | 112 | Batch 17 (the "Isotope issues fix 8" report) — boarding a shuttle or a borg is free and allowed at 0 AP, so a fresh operator has the borg's full 3 AP (§16.7, §16.8); the move budget is one function (`move_budget`, `nearest_reachable`, `can_move`) shared by the screen, the group order and the resolver, and a group mover whose target was cut off by a squadmate falls back to the nearest reachable cell inside the resolver (§18.3); the host answers a refused guest intent with `K_DENIED` so the guest sees why (§22.1), and the Laser button explains its 2-AP gate; the flame jet is one geometry (`flame_cells`) for the shot and the preview, and a splash side cut short by the wall hands its cells to the other side so the jet always burns six (§7.2); a player's bought civilian is a target but not a threat to neutrals, so they shoot it instead of fleeing its lane (§14); every vehicle leaves a wreck and an explosion scorches the floor through `_blast` (§16.5); the drone operator's "!" means "station deployed" (§9.3); drawings gain *Share with everyone*, *Hide my drawings* and *Hide all drawings*, an AI-driven side is never the viewer's own, and a leaver's strokes are dropped (§18.6); factions replace colours with faction-suffixed soldier art, corpses are the soldier's art turned 90° clockwise, walls autotile from a 4×4 sheet, and real blood decals ship (§21) |

@@ -15,7 +15,20 @@ static var ai_difficulty: int = 1
 ## map_path == "" → демо-ростер по умолчанию (см. Main._build_state).
 const DEFAULT_BUDGET := 300
 static var map_path: String = ""
-static var civilians_enabled: bool = true
+## Сколько мирных жителей на карте самое большее (item 11): ползунок лобби. 0 — без мирных.
+## Готовая карта прореживается до этого числа, случайная столько и строит (если есть место).
+const CIVILIANS_MAX := 200
+static var civilian_count: int = CIVILIANS_MAX
+## Прежний флаг «мирные есть» — теперь лишь взгляд на ползунок.
+static var civilians_enabled: bool:
+	get:
+		return civilian_count > 0
+	set(v):
+		civilian_count = CIVILIANS_MAX if v else 0
+## Темп ИИ (item 5): во сколько раз быстрее ИИ ходит и как быстро его ходы показываются
+## у всех. Задаёт хост — в лобби и прямо в бою.
+const AI_SPEEDS := [0.5, 1.0, 2.0, 4.0]
+static var ai_speed: float = 1.0
 ## Режим тумана (item 46): MCF.Fog.OFF / STANDARD / REALISTIC. Прежний булев
 ## fog_enabled остался отдельным свойством ниже — им пользуются сохранённые настройки
 ## и старый экран подготовки, и он просто читает/пишет этот режим.
@@ -52,9 +65,6 @@ static var free_unlimited_for: int = FREE_NONE
 ## выбирает свой в личном блоке лобби.
 enum ArmySelect {HOST_DECIDES, PLAYERS_PICK}
 static var army_select_mode: int = ArmySelect.PLAYERS_PICK
-
-## Активный режим правил (§1.3). Пока — только «Domination» как заглушка-модуль.
-static var game_mode: String = "domination"
 
 ## Видно ли чужую расстановку в фазе закупки (item 48).
 static var live_placement_visible: bool = true
