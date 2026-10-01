@@ -1361,7 +1361,7 @@ func _seed_vehicle_field(state: GameState, seeds: Array, key: String) -> GeoFiel
 				off[fc] = 0   # след машины свесился за карту — ключ прежний, волны нет
 				continue
 			idx.append((fc.y + 1) * (w + 2) + fc.x + 1)
-	var field := _wave(grid, idx, off)
+	var field := wave(grid, idx, off)
 	_geo_cache[key] = field
 	return field
 
@@ -1644,7 +1644,7 @@ func _enemy_distance_field(state: GameState, only_visible: bool, r: GameActionRe
 			off[e.coord] = 0
 			continue
 		seeds.append((ey + 1) * pw + ex + 1)
-	var field := _wave(grid, seeds, off)
+	var field := wave(grid, seeds, off)
 	_geo_cache[key] = field
 	return field
 
@@ -1652,7 +1652,13 @@ func _enemy_distance_field(state: GameState, only_visible: bool, r: GameActionRe
 ## ближайшего источника по проходимым клеткам, живые юниты не в счёт. Источник — начало
 ## волны, даже если сам непроходим (боец в проёме, корпус машины). Соседи — в порядке
 ## Grid.N8, как у grid.neighbors(); не дошедшие клетки остаются GeoField.FAR.
-func _wave(grid: Grid, seeds: PackedInt32Array, off: Dictionary) -> GeoField:
+##
+## must_reach (те же плоские индексы) делает волну короткой: она идёт слой за слоем, пока
+## не накроет все эти клетки, и ещё extra слоёв сверх того, а дальше не считается. Так
+## групповой приказ (GroupMovePlanner) меряет путь до точки только там, куда отряд
+## успевает дойти, а не по всей карте 250×250 на каждую клетку под курсором.
+static func wave(grid: Grid, seeds: PackedInt32Array, off: Dictionary,
+		must_reach: PackedInt32Array = PackedInt32Array(), extra: int = 0) -> GeoField:
 	var w := grid.width
 	var h := grid.height
 	var pw := w + 2
@@ -1669,10 +1675,24 @@ func _wave(grid: Grid, seeds: PackedInt32Array, off: Dictionary) -> GeoField:
 		q.append(ei)
 	var offs := PackedInt32Array([-pw - 1, -pw, -pw + 1, -1, 1, pw - 1, pw, pw + 1])
 	var head := 0
+	var layer_end := -1 if must_reach.is_empty() else q.size()   # конец текущего слоя
+	var cap := GeoField.FAR
 	while head < q.size():
+		if head == layer_end:
+			# Все клетки ближе нового слоя уже размечены: если среди них все must_reach,
+			# дальше нужен только запас extra.
+			layer_end = q.size()
+			if cap == GeoField.FAR:
+				var reached := true
+				for i: int in must_reach:
+					reached = reached and pd[i] != GeoField.FAR
+				if reached:
+					cap = pd[q[head]] + extra
 		var cur: int = q[head]
 		head += 1
 		var nd: int = pd[cur] + 1
+		if nd > cap:
+			break
 		for o: int in offs:
 			var n := cur + o
 			if st[n] == 0:

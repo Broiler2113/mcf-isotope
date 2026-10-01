@@ -160,6 +160,12 @@ neutral civilian shoots a player's bought civilian instead of retreating from it
 vehicle kind leaves a wreck and an explosion scorches the floor; and a group order whose mover
 was cut off by a squadmate lands on the nearest reachable cell instead of standing still.
 
+**`run_group_move.gd`** covers the group order planner (`GroupMovePlanner`): every selected
+unit moves (the middle of a blob and the tail of a corridor column used to be dropped),
+each lands exactly on the cell its preview showed, a blob sent far away keeps its shape
+instead of sliding to the map edge, and a *Tactical Move* lines the squad up behind
+sandbags facing a visible enemy — or facing every side when fog hides the enemy.
+
 **`run_net_match.sh`** is the only run that proves multiplayer works: it starts **two
 Godot processes** on localhost — `net_host_*.gd` and `net_guest_*.gd`, both built on
 `NetSmokeBase.gd` — and drives the real scenes through ENet: lobby (seating, colour and

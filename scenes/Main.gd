@@ -179,6 +179,11 @@ var rsp_active: Vector2i = Vector2i(-1, -1)
 ## RTS-выделение группы (#18): id выбранных юнитов и состояние рамки выделения ЛКМ.
 ## Рамка задаётся экранными точками; протяжка > BOX_DRAG_THRESHOLD включает режим рамки.
 var _group_ids: Array[int] = []
+## Групповое движение «тактическое»: каждый встаёт в укрытие у точки приказа.
+var _group_tactical: bool = false
+## Раскладка под курсором считается заново, только когда сменились точка или доска.
+var _group_plan_key: Array = []
+var _group_plan_cache: Array = []
 ## Рамка работает только при нажатой кнопке «Multi-Select» (#21) — иначе ЛКМ
 ## всегда остаётся обычным кликом по клетке.
 var _multi_btn: CheckBox
@@ -2041,8 +2046,14 @@ func _open_group_menu() -> void:
 
 	var move_btn := Button.new()
 	move_btn.text = "Move"
-	move_btn.pressed.connect(_enter_group_move)
+	move_btn.pressed.connect(_enter_group_move.bind(false))
 	vb.add_child(move_btn)
+
+	var tac_btn := Button.new()
+	tac_btn.text = "Tactical Move"
+	tac_btn.tooltip_text = "Each unit takes the best cover near the clicked cell"
+	tac_btn.pressed.connect(_enter_group_move.bind(true))
+	vb.add_child(tac_btn)
 
 	# Массовая посадка (item 5): если рядом с выделенными есть машина, в которую хоть
 	# кто-то из них может сесть, предлагаем усадить всех разом.
@@ -2061,7 +2072,8 @@ func _open_group_menu() -> void:
 	_anchor_menu(_menu)
 	_menu.show()
 
-func _enter_group_move() -> void:
+func _enter_group_move(tactical: bool) -> void:
+	_group_tactical = tactical
 	mode = Mode.GROUP_MOVE
 	_menu.hide()
 	queue_redraw()
@@ -2088,9 +2100,8 @@ func _group_embark(vid: int) -> void:
 			_submit(VehicleBoardIntent.new(id, vid))
 	_deselect()
 
-## Жадное групповое движение к клетке (#18): каждый юнит по очереди идёт в достижимую
-## клетку, ближайшую (Чебышёв) к цели. Резолвится последовательно, поэтому юниты не
-## наступают друг на друга. После приказа выделение снимается (#19).
+## Групповое движение к клетке (#18): раскладку считает GroupMovePlanner. После приказа
+## выделение снимается (#19).
 func _group_move_to(dest: Vector2i) -> void:
 	if not state.grid.in_bounds(dest):
 		return
@@ -2098,25 +2109,24 @@ func _group_move_to(dest: Vector2i) -> void:
 	# (item 34). Раньше приказ применялся прямо на месте, минуя namерения, — потому
 	# в сети групповое выделение и было выключено: у каждого пира вышло бы своё.
 	#
-	# Тот же `taken`, что и в предпросмотре (§18.3): игрок получает ровно те клетки,
-	# жёлтые кружки которых он видел под курсором.
-	var ids: Array[int] = []
-	var dests: Array[Vector2i] = []
-	var taken: Dictionary = {}
-	for id in _group_ids.duplicate():
-		var u := state.get_unit(id)
-		if not resolver.can_move(u):
-			continue
-		var target := resolver.nearest_reachable(u, dest, taken)
-		taken[target] = true
-		if target == u.coord:
-			continue
-		ids.append(id)
-		dests.append(target)
+	# Та же раскладка, что и в предпросмотре (§18.3): игрок получает ровно те клетки,
+	# кружки которых он видел под курсором.
+	var plan := _group_plan(dest)
 	_set_group([])
 	queue_redraw()
-	if not ids.is_empty():
-		_submit(GroupMoveIntent.new(ids, dests))
+	if not plan[0].is_empty():
+		_submit(GroupMoveIntent.new(plan[0], plan[1]))
+
+## [ids, targets] для точки dest — один расчёт на точку и состояние доски: предпросмотр
+## спрашивает его на каждой перерисовке. Ход в ключе — ради ОД: новый ход их вернул,
+## даже если на доске никто не сдвинулся.
+func _group_plan(dest: Vector2i) -> Array:
+	var key: Array = [dest, _group_tactical, GridCell.walk_version, _group_ids.duplicate(),
+			state.turns.round_number, state.turns.active_index]
+	if key != _group_plan_key:
+		_group_plan_key = key
+		_group_plan_cache = GroupMovePlanner.plan(resolver, _group_ids, dest, _group_tactical)
+	return _group_plan_cache
 
 ## Объединение достижимых клеток всей выделенной группы — зелёная подсветка (#88).
 func _group_reach_cells() -> Array[Vector2i]:
@@ -2132,19 +2142,10 @@ func _group_reach_cells() -> Array[Vector2i]:
 				out.append(c)
 	return out
 
-## Куда встанет каждый юнит группы, если приказать идти в dest. Повторяет порядок и
-## занятость клеток из _group_move_to, поэтому предпросмотр совпадает с результатом.
+## Куда встанут юниты группы, если приказать идти в dest, — та же раскладка, что уйдёт
+## в приказ, поэтому предпросмотр совпадает с результатом. Стоящих на месте здесь нет.
 func _group_move_preview(dest: Vector2i) -> Array[Vector2i]:
-	var out: Array[Vector2i] = []
-	var taken: Dictionary = {}
-	for id in _group_ids:
-		var u := state.get_unit(id)
-		if not resolver.can_move(u):
-			continue
-		var spot := resolver.nearest_reachable(u, dest, taken)
-		taken[spot] = true
-		out.append(spot)
-	return out
+	return _group_plan(dest)[1]
 
 func _enter_push() -> void:
 	var u := _selected_unit()
@@ -3779,10 +3780,12 @@ func _draw() -> void:
 		if state.grid.in_bounds(ghov):
 			draw_rect(Rect2(_cell_origin(ghov), Vector2(CELL, CELL)), Color(0.95, 0.85, 0.2, 0.20))
 			var half := Vector2(CELL, CELL) * 0.5
+			# Тактический приказ — голубые кружки, обычный — жёлтые.
+			var dot := Color(0.35, 0.85, 1.0, 0.85) if _group_tactical else Color(1.0, 0.9, 0.25, 0.85)
 			for spot: Vector2i in _group_move_preview(ghov):
 				var c := _cell_origin(spot) + half
-				draw_circle(c, CELL * 0.18, Color(1.0, 0.9, 0.25, 0.85))
-				draw_arc(c, CELL * 0.18, 0.0, TAU, 16, Color(0.4, 0.35, 0.05, 0.9), 1.5)
+				draw_circle(c, CELL * 0.18, dot)
+				draw_arc(c, CELL * 0.18, 0.0, TAU, 16, dot.darkened(0.6), 1.5)
 
 	if mode == Mode.SHOOT or mode == Mode.DPMG_FIRE:
 		if mode == Mode.DPMG_FIRE and rsp_active != Vector2i(-1, -1):
