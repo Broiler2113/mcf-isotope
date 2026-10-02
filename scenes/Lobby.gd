@@ -47,7 +47,6 @@ var _chat: ChatBox = null
 ## Сколько мирных самое большее (item 11) и темп ИИ (item 5).
 var _civ_slider: HSlider = null  # только у хоста, в настройках случайной карты
 var _civ_check: CheckBox
-var _ai_speed_opt: OptionButton
 ## Командный режим (item 4): пока выключен — колонка «Team» и «дружественный огонь»
 ## скрыты. Отдельные команды появляются только по этому тумблеру.
 var _team_mode: bool = false
@@ -293,7 +292,6 @@ func _apply_lobby_snapshot(msg: Dictionary) -> void:
 		_ff_check.visible = _team_mode
 		_live_check.button_pressed = GameConfig.live_placement_visible
 		_civ_check.set_pressed_no_signal(GameConfig.civilian_count > 0)
-		_ai_speed_opt.select(maxi(0, GameConfig.AI_SPEEDS.find(GameConfig.ai_speed)))
 		_events_check.button_pressed = GameConfig.random_events_enabled
 		_events_mand.button_pressed = GameConfig.random_events_mandatory
 		_events_interval.value = GameConfig.random_events_interval
@@ -553,14 +551,8 @@ func _build_config(parent: VBoxContainer) -> void:
 		if _is_random():
 			_on_gen_changed())
 	box.add_child(_civ_check)
-	# Темп ИИ (item 5): во сколько раз быстрее ходят и показываются ходы ИИ. В бою его же
-	# меняет хост ползунком на панели.
-	var speeds: Array = []
-	for sp: float in GameConfig.AI_SPEEDS:
-		speeds.append(GameConfig.ai_speed_label(sp))
-	_ai_speed_opt = _opt(speeds, maxi(0, GameConfig.AI_SPEEDS.find(GameConfig.ai_speed)))
-	_ai_speed_opt.tooltip_text = "How fast AI sides play their turns. The host can also change it during the battle."
-	_row(box, "AI speed:", _ai_speed_opt)
+	# Темп ИИ в лобби больше не настраивается (batch group-zones): его меняют прямо в бою,
+	# на панели справа.
 
 	# --- Случайные события (item 5/11) ---
 	# Раскладка: заголовок → «Enable» → «Mandatory» → интервал → список из трёх событий
@@ -598,7 +590,6 @@ func _build_config(parent: VBoxContainer) -> void:
 	if _is_host_net:
 		for o: OptionButton in [_place_opt, _fog_opt, _army_opt]:
 			o.item_selected.connect(func(_i: int) -> void: _broadcast_lobby())
-		_ai_speed_opt.item_selected.connect(func(_i: int) -> void: _broadcast_lobby())
 		if _civ_slider != null:
 			_civ_slider.value_changed.connect(func(_v: float) -> void: _broadcast_lobby())
 		for cb: CheckBox in [_ff_check, _team_check, _live_check, _civ_check,
@@ -608,7 +599,7 @@ func _build_config(parent: VBoxContainer) -> void:
 
 	if _is_client:
 		var _client_locked: Array = [_place_opt, _fog_opt, _army_opt,
-				_ff_check, _team_check, _live_check, _civ_check, _ai_speed_opt, _events_check,
+				_ff_check, _team_check, _live_check, _civ_check, _events_check,
 				_events_mand, _events_interval]
 		for c in _client_locked:
 			# У кнопок (в т. ч. OptionButton/CheckBox — все наследники BaseButton) есть
@@ -1706,7 +1697,6 @@ func _commit_config() -> void:
 	GameConfig.army_select_mode = _army_opt.selected
 	GameConfig.live_placement_visible = _live_check.button_pressed
 	GameConfig.civilian_count = _civ_count()  # item 11
-	GameConfig.ai_speed = GameConfig.AI_SPEEDS[_ai_speed_opt.selected]  # item 5
 	GameConfig.random_events_enabled = _events_check.button_pressed
 	GameConfig.random_events_mandatory = _events_mand.button_pressed
 	GameConfig.random_events_interval = int(_events_interval.value)

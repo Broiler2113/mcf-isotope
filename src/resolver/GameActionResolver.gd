@@ -550,7 +550,7 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 		var ground_reason := can_blast_cell(shooter, intent.target_cell)
 		if ground_reason != "":
 			return ActionResult.fail(ground_reason)
-		return _resolve_anti_tank(shooter, intent.target_cell, intent.component)
+		return _recoiled(_resolve_anti_tank(shooter, intent.target_cell, intent.component), shooter, intent.target_cell)
 
 	# Огнемётчик может пустить струю по пустой клетке пола (как противотанкист): струя
 	# идёт в её направлении, поджигает пол и убивает всех на пути.
@@ -558,7 +558,7 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 		var flame_reason := can_flame_cell(shooter, intent.target_cell)
 		if flame_reason != "":
 			return ActionResult.fail(flame_reason)
-		return _resolve_flame(shooter, intent.target_cell)
+		return _recoiled(_resolve_flame(shooter, intent.target_cell), shooter, intent.target_cell)
 
 	# Марксманн стреляет в НАПРАВЛЕНИЕ (#49): целиться в конкретного бойца не обязательно,
 	# луч уходит по лучу через указанную клетку и летит дальше сам.
@@ -566,14 +566,14 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 		var laser_reason := can_laser_cell(shooter, intent.target_cell)
 		if laser_reason != "":
 			return ActionResult.fail(laser_reason)
-		return _resolve_laser(shooter, intent.target_cell, intent.component)
+		return _recoiled(_resolve_laser(shooter, intent.target_cell, intent.component), shooter, intent.target_cell)
 
 	# Выстрел по окну (batch ui-drones): обычный стрелок может разбить стекло пулей.
 	if intent.target_id < 0 and state.grid.in_bounds(intent.target_cell):
 		var window_reason := can_shoot_window(shooter, intent.target_cell)
 		if window_reason != "":
 			return ActionResult.fail(window_reason)
-		return _resolve_shoot_window(shooter, intent.target_cell)
+		return _recoiled(_resolve_shoot_window(shooter, intent.target_cell), shooter, intent.target_cell)
 
 	var target := state.get_unit(intent.target_id)
 	var reason := can_shoot(shooter, target)
@@ -598,11 +598,11 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 	# Спецстрельба (§3.13, §3.14) — отдельная геометрия, без дробления действия.
 	match shooter.stats.special_ability_id:
 		MCF.ABILITY_ANTI_TANK:
-			return _resolve_anti_tank(shooter, target.coord, intent.component)
+			return _recoiled(_resolve_anti_tank(shooter, target.coord, intent.component), shooter, target.coord)
 		MCF.ABILITY_FLAMETHROWER:
-			return _resolve_flame(shooter, target.coord)
+			return _recoiled(_resolve_flame(shooter, target.coord), shooter, target.coord)
 		MCF.ABILITY_MARKSMAN:
-			return _resolve_laser(shooter, target.coord, intent.component)
+			return _recoiled(_resolve_laser(shooter, target.coord, intent.component), shooter, target.coord)
 		MCF.ABILITY_ASSAULT:
 			return _resolve_assault(shooter, target)
 
@@ -686,8 +686,11 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 			# пуля в нём завязла. Порог совпал случайно, поэтому считаем их порознь:
 			# сравняй их в одну строку, и правка одного молча поменяет другое.
 			var gcell_i := state.grid.cell(glass_cells[pane_i])
-			var hold: int = MCF.glass_hold_need(gcell_i.feature_id) if gcell_i != null else 0
-			var through: bool = g_roll < hold if hold > 0 else g_roll >= MCF.GLASS_PIERCE_NEED
+			# Стекло держит пулю как броня (MCF.glass_bullet_save): обычное на 5+, бронестекло
+			# на 4+; не устояло — пуля прошла, и стекло осыпалось.
+			var hold: int = MCF.glass_bullet_save(gcell_i.feature_id) if gcell_i != null \
+					else MCF.GLASS_BULLET_SAVE
+			var through: bool = g_roll < hold
 			if not through:
 				pierced = false
 				break
@@ -698,7 +701,7 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 			shot_details.append({
 				"hit_roll": 0, "need": need, "hit": false,
 				"def_roll": 0, "armor": parry_need, "parried": true,
-				"glass_rolls": glass_rolls, "glass_need": MCF.GLASS_PIERCE_NEED,
+				"glass_rolls": glass_rolls, "glass_need": MCF.GLASS_BULLET_SAVE,
 				"stopped_by_glass": true,
 			})
 			continue
@@ -713,7 +716,7 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 		# UI, — притом что рассказывать им было бы не о чем.
 		if panes > 0:
 			det["glass_rolls"] = glass_rolls
-			det["glass_need"] = MCF.GLASS_PIERCE_NEED
+			det["glass_need"] = MCF.GLASS_BULLET_SAVE
 			det["stopped_by_glass"] = false
 		if is_hit:
 			hits += 1
@@ -788,8 +791,8 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 	]
 	result.log(summary)
 	if stopped_by_glass > 0:
-		result.log("… %d of %d stopped by the glass (need %d+ to pierce)" % [
-			stopped_by_glass, fired, MCF.GLASS_PIERCE_NEED])
+		result.log("… %d of %d stopped by the glass (it holds on %d+)" % [
+			stopped_by_glass, fired, MCF.GLASS_BULLET_SAVE])
 	if killed:
 		result.log("%s killed!" % target.stats.display_name)
 		result.deaths.append(target.id)
@@ -1735,6 +1738,17 @@ func hit_need_for(shooter: UnitInstance, target: UnitInstance, mods: Array = [])
 		mods.append({"label": "Fire on the line", "delta": MCF.FIRE_SHOOT_PENALTY})
 	return clampi(need, 1, 7)
 
+## Сколько выбросить пушке машины по клетке (подпись прицела) — та же формула, что бросит
+## _resolve_vehicle_cannon: от порта, через который пойдёт снаряд. 7 — не выстрелить.
+func cannon_aim_need(veh: Vehicle, cell: Vector2i) -> int:
+	if veh == null:
+		return 7
+	var port := cannon_port(veh, cell)
+	if port == Vector2i(-1, -1):
+		return 7
+	var gun: Dictionary = VehicleDB.get_vehicle(veh.type_id).get("weapons", {}).get("main_gun", {})
+	return Combat.hit_number(Combat.distance(port, cell), float(int(gun.get("range", MCF.CANNON_RANGE))))
+
 ## Сколько выбросить, целясь в клетку (для подписи прицела): та же формула, что бросит
 ## сам выстрел этого стрелка. 0 — броска нет (лазер, струя, ПТ себе под ноги),
 ## 7 — не попасть. target — юнит в клетке, если целятся в него.
@@ -1751,7 +1765,7 @@ func aim_need(shooter: UnitInstance, cell: Vector2i, target: UnitInstance = null
 		MCF.ABILITY_ASSAULT:
 			return Combat.hit_number(Combat.distance(shooter.coord, cell), shooter.fire_range())
 	if target == null:
-		# Окно бьётся без броска на попадание (_resolve_shoot_window).
+		# Окно: у стрелка броска нет — каждую пулю держит спасбросок стекла (glass_bullet_save).
 		if state.grid.in_bounds(cell) and MCF.is_glass(state.grid.cell(cell).feature_id):
 			return 0
 		return Combat.hit_number(Combat.distance(shooter.coord, cell), shooter.fire_range())
@@ -4469,15 +4483,26 @@ func update_airlocks() -> void:
 ## попаданием — иначе он вылетал бы из корпуса, оставаясь «на борту» с занятым креслом.
 func _apply_zero_g(shooter: UnitInstance, target: UnitInstance) -> void:
 	# Стрелка отбрасывает назад (от цели).
-	if shooter.is_alive() and shooter.aboard_vehicle_id == -1 \
-			and state.grid.cell(shooter.coord).is_space:
-		var back := _step_toward(target.coord, shooter.coord)
-		_knockback(shooter, back, MCF.ZEROG_SHOOTER_KNOCKBACK)
+	_recoil_shooter(shooter, target.coord)
 	# Цель отбрасывает дальше (от стрелка).
 	if target.is_alive() and target.aboard_vehicle_id == -1 \
 			and state.grid.cell(target.coord).is_space:
 		var away := _step_toward(shooter.coord, target.coord)
 		_knockback(target, away, MCF.ZEROG_TARGET_KNOCKBACK)
+
+## Отдача стрелка в невесомости: на клетку назад, прочь от точки прицела, — если позади
+## свободно. Общая для всех выстрелов (batch group-zones): раньше её получали только
+## винтовка и штурмовик, а заряд ПТ, струя, лазер и выстрел по окну стрелка не двигали.
+func _recoil_shooter(shooter: UnitInstance, aim: Vector2i) -> void:
+	if shooter.is_alive() and shooter.aboard_vehicle_id == -1 \
+			and state.grid.in_bounds(shooter.coord) and state.grid.cell(shooter.coord).is_space:
+		_knockback(shooter, _step_toward(aim, shooter.coord), MCF.ZEROG_SHOOTER_KNOCKBACK)
+
+## Результат спецвыстрела с отдачей стрелка (если выстрел состоялся).
+func _recoiled(result: ActionResult, shooter: UnitInstance, aim: Vector2i) -> ActionResult:
+	if result.ok:
+		_recoil_shooter(shooter, aim)
+	return result
 
 ## Сдвиг юнита на dist клеток по step, но только если ВСЕ клетки свободны (иначе нет).
 func _knockback(unit: UnitInstance, step: Vector2i, dist: int) -> void:
@@ -4508,8 +4533,8 @@ func _resolve_spawn_drone(intent: SpawnDroneIntent) -> ActionResult:
 		if not options.has(intent.station):
 			return ActionResult.fail("That station is not within reach")
 		station = intent.station
-	if active_drone_of(operator) != null:
-		return ActionResult.fail("Drone is already airborne")
+	# Дронов у оператора может быть несколько (batch group-zones): новый поднимается и
+	# тогда, когда прежний ещё в воздухе.
 	# Дрон всегда поднимается прямо над своей станцией (#22); если там уже висит
 	# чужой дрон — уходит на ближайшую свободную клетку.
 	var drone := _launch_drone_at(station, operator)
@@ -4660,8 +4685,6 @@ func _launch_drone_at(station: Vector2i, pilot: UnitInstance) -> UnitInstance:
 				op = u
 				break
 	if op == null:
-		return null
-	if active_drone_of(op) != null:
 		return null
 	var spawn_cell := station
 	if _drone_at(station) != null:
@@ -6300,13 +6323,16 @@ func _resolve_shoot_window(shooter: UnitInstance, cell: Vector2i) -> ActionResul
 	var result := ActionResult.success()
 	var gc := state.grid.cell(cell)
 	var fired := maxi(1, shooter.rate_of_fire())
-	var hold_need := MCF.glass_hold_need(gc.feature_id)
-	var broke := hold_need <= 0
+	# Окно держит каждую пулю спасброском (обычное 5+, бронестекло 4+), а не бьётся от
+	# первой же — как раньше обычное стекло.
+	var hold_need := MCF.glass_bullet_save(gc.feature_id)
+	var broke := false
 	for _i in fired:
 		if broke:
 			break
 		var r := state.dice.roll_d6()
-		result.dice_events.append({"kind": "check", "actor": "Armored glass",
+		result.dice_events.append({"kind": "check",
+			"actor": MCF.FEATURE_NAMES.get(gc.feature_id, "Glass"),
 			"roll": r, "need": hold_need, "ok": r >= hold_need})
 		broke = r < hold_need
 	_fx_lane(result, shooter.coord, cell, shooter.owner)
@@ -6320,8 +6346,9 @@ func _resolve_shoot_window(shooter: UnitInstance, cell: Vector2i) -> ActionResul
 		_fx(result, {"fx": "debris", "at": NOWHERE, "cells": [cell]})
 		result.log("%s shoots out the window at (%d, %d)" % [shooter.stats.display_name, cell.x, cell.y])
 	else:
-		result.log("%s fires at the armored glass at (%d, %d) — it holds" % [
-			shooter.stats.display_name, cell.x, cell.y])
+		result.log("%s fires at the %s at (%d, %d) — it holds" % [
+			shooter.stats.display_name,
+			String(MCF.FEATURE_NAMES.get(gc.feature_id, "glass")).to_lower(), cell.x, cell.y])
 	return result
 
 func _is_anti_tank(u: UnitInstance) -> bool:

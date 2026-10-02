@@ -31,8 +31,12 @@ const VIRTUAL_DIST := 6
 
 ## [ids, targets] в порядке исполнения — ровно то, что везёт GroupMoveIntent. Стоящие на
 ## месте в список не попадают.
+##
+## max_tier — сколько ОД сверх первого отряд вправе потратить на этот ход (0 — зелёная зона,
+## 1 — оранжевая, 2 — красная): столько, во сколько обошлась клетка, по которой щёлкнули,
+## как и у одиночного бойца. Дальше своей зоны (move_tier_budgets) никто не идёт.
 static func plan(r: GameActionResolver, ids: Array[int], dest: Vector2i,
-		tactical: bool = false) -> Array:
+		tactical: bool = false, max_tier: int = 0) -> Array:
 	var out_ids: Array[int] = []
 	var out_targets: Array[Vector2i] = []
 	var grid := r.state.grid
@@ -50,7 +54,7 @@ static func plan(r: GameActionResolver, ids: Array[int], dest: Vector2i,
 	var reach_extra := 0
 	for u: UnitInstance in movers:
 		at_movers.append((u.coord.y + 1) * pw + u.coord.x + 1)
-		reach_extra = maxi(reach_extra, r.move_budget(u))
+		reach_extra = maxi(reach_extra, budget_for(r, u, max_tier))
 	var geo := AIController.wave(grid, PackedInt32Array([(dest.y + 1) * pw + dest.x + 1]), {},
 			at_movers, reach_extra)
 	# Первым ходит ближний к цели: он и освобождает дорогу тем, кто за ним.
@@ -64,7 +68,7 @@ static func plan(r: GameActionResolver, ids: Array[int], dest: Vector2i,
 	for u: UnitInstance in movers:
 		var fireproof := r.is_fireproof(u)
 		var cands: Array = [u.coord]
-		for c: Vector2i in r.reachable_for(u, r.move_budget(u), claimed, vacated).cost:
+		for c: Vector2i in r.reachable_for(u, budget_for(r, u, max_tier), claimed, vacated).cost:
 			if fireproof or not grid.cell(c).on_fire:   # в огонь приказом не заводим
 				cands.append(c)
 		var from := u.coord
@@ -87,6 +91,11 @@ static func plan(r: GameActionResolver, ids: Array[int], dest: Vector2i,
 			vacated[u.coord] = true
 			claimed[best] = true
 	return [out_ids, out_targets]
+
+## Запас хода бойца в пределах зоны max_tier (меньше ОД — его последняя зона).
+static func budget_for(r: GameActionResolver, u: UnitInstance, max_tier: int) -> int:
+	var tiers := r.move_tier_budgets(u)
+	return tiers[clampi(max_tier, 0, tiers.size() - 1)]
 
 ## Шаги до цели в обход стен; куда волна не дошла (цель замурована) — после всех
 ## достижимых, по прямой.

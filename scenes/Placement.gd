@@ -107,6 +107,9 @@ var _ready_sides: Dictionary = {}
 var _live_units: Dictionary = {}
 ## Общее зерно кубиков, чтобы у обеих сторон совпал локальный бросок инициативы.
 var _shared_seed: int = -1
+## Порядок инициативы на панели справа (batch group-zones): пересобирается, когда зерно
+## становится известно (у гостя — с сообщением хоста).
+var _init_box: VBoxContainer = null
 ## Плитки рельефа (items 1/9) и сетка, из которой они собраны (рельеф карты неизменен).
 var _tile_layer: TerrainTiles.Layer = null
 ## Чат закупки (item 14) — тот же разговор, что в лобби и в бою.
@@ -129,6 +132,10 @@ func _ready() -> void:
 				preserved_neutral.append(s)
 	map.spawns = []
 	_adopt_network()
+	# Своё зерно и в одиночной партии: по нему панель показывает порядок инициативы, и
+	# по нему же его бросит бой (MapHandoff.dice_seed).
+	if not networked():
+		_shared_seed = randi() & 0x7FFFFFFF
 	_build_ui()
 	set_process(true)
 	_refresh_labels()
@@ -288,6 +295,7 @@ func _on_net_message(msg: Dictionary) -> void:
 		_ready_sides[int(side)] = true
 	if int(msg.get("seed", -1)) >= 0:
 		_shared_seed = int(msg["seed"])
+		_refresh_initiative()
 	# Зеркальная партия (batch 12 #12): армия хоста пришла — моя зона уже заполнена
 	# её отражением, самому ставить нечего, остаётся подтвердить готовность.
 	_refresh_labels()
@@ -304,6 +312,47 @@ func _on_net_message(msg: Dictionary) -> void:
 		_status.text = "%s is ready. Deploy your squad and press Ready." % _ready_names()
 
 ## Кто из соперников уже готов — для подписи.
+## Порядок хода, который бросит бой: игроки (тасовка от общего зерна) и место слота мирных,
+## если на карте будут мирные. Пока зерна нет (гость ждёт сообщения хоста) — «бросается».
+func _refresh_initiative() -> void:
+	if _init_box == null:
+		return
+	for c in _init_box.get_children():
+		c.queue_free()
+	if _shared_seed < 0:
+		var wait := Label.new()
+		wait.text = "Rolled when the host starts the match"
+		wait.add_theme_font_size_override("font_size", 11)
+		wait.modulate = Color(0.75, 0.78, 0.85)
+		_init_box.add_child(wait)
+		return
+	# Мирные карты ждут в preserved_neutral (map.spawns на закупке чистится); бой вставит
+	# их слот, если хоть один житель встанет на поле.
+	var neutrals := GameConfig.civilian_count > 0 and not preserved_neutral.is_empty()
+	var ids: Array = roster.player_ids().duplicate()
+	ids.sort()   # как _player_slots у боя
+	var order := TurnManager.roll_order(ids, DiceService.new(_shared_seed), neutrals)
+	for i in order.size():
+		var sid: int = order[i]
+		var irow := HBoxContainer.new()
+		irow.add_theme_constant_override("separation", 6)
+		var sw := ColorRect.new()
+		sw.custom_minimum_size = Vector2(12, 12)
+		sw.color = _side_color(sid) if MCF.is_player(sid) else Color(0.6, 0.62, 0.66)
+		irow.add_child(sw)
+		var nm := "%d. " % (i + 1)
+		if MCF.is_player(sid):
+			nm += roster.name_of(sid)
+			if roster.has_teams() and roster.team_of(sid) >= 0:
+				nm += " · %s" % MCF.team_name(roster.team_of(sid))
+		else:
+			nm += "Neutrals"
+		var il := Label.new()
+		il.text = nm
+		il.add_theme_font_size_override("font_size", 12)
+		irow.add_child(il)
+		_init_box.add_child(irow)
+
 func _ready_names() -> String:
 	var names: Array[String] = []
 	for side in _ready_sides:
@@ -1339,34 +1388,17 @@ func _build_ui() -> void:
 
 	vbox.add_child(HSeparator.new())
 
-	# Инициатива видна уже на расстановке (item 44): показываем порядок сторон с их
-	# цветами и командами. Точная позиция нейтральных групп бросается в бою (§15) — здесь
-	# лишь оговорка, что нейтралы вклиниваются в очередь при активации.
+	# Инициатива видна уже на расстановке (item 44). Раньше здесь шёл список сторон по
+	# номерам слотов под заголовком «Initiative» — а бой бросал свой порядок, и показанный
+	# почти никогда с ним не совпадал. Теперь это тот же жребий (TurnManager.roll_order)
+	# от того же зерна, что получит бой.
 	var init_title := Label.new()
 	init_title.text = "Initiative"
 	init_title.add_theme_font_size_override("font_size", 13)
 	vbox.add_child(init_title)
-	for sid: int in roster.player_ids():
-		var irow := HBoxContainer.new()
-		irow.add_theme_constant_override("separation", 6)
-		var sw := ColorRect.new()
-		sw.custom_minimum_size = Vector2(12, 12)
-		sw.color = _side_color(sid)
-		irow.add_child(sw)
-		var nm := roster.name_of(sid)
-		if roster.has_teams() and roster.team_of(sid) >= 0:
-			nm += " · %s" % MCF.team_name(roster.team_of(sid))
-		var il := Label.new()
-		il.text = nm
-		il.add_theme_font_size_override("font_size", 12)
-		irow.add_child(il)
-		vbox.add_child(irow)
-	if GameConfig.civilians_enabled:
-		var neut := Label.new()
-		neut.text = "+ Neutrals join initiative when activated"
-		neut.add_theme_font_size_override("font_size", 11)
-		neut.modulate = Color(0.75, 0.78, 0.85)
-		vbox.add_child(neut)
+	_init_box = VBoxContainer.new()
+	vbox.add_child(_init_box)
+	_refresh_initiative()
 
 	vbox.add_child(HSeparator.new())
 
@@ -1428,27 +1460,29 @@ func _build_ui() -> void:
 	_status.modulate = Color(1, 0.85, 0.4)
 	vbox.add_child(_status)
 
-	# Чат закупки (item 14): окошко внизу слева, как в бою; только в сетевой партии.
-	if networked():
-		var chat_win := PanelContainer.new()
-		SteamChrome.apply_panel(chat_win)
-		chat_win.anchor_top = 1.0
-		chat_win.anchor_bottom = 1.0
-		chat_win.offset_left = 20
-		chat_win.offset_right = 400
-		chat_win.offset_top = -230
-		chat_win.offset_bottom = -20
-		var cframe := VBoxContainer.new()
-		cframe.add_theme_constant_override("separation", 0)
-		chat_win.add_child(cframe)
-		cframe.add_child(SteamChrome.header_bar("Chat"))
-		_chat = ChatBox.new(_side_label, func() -> int: return _my_side)
-		_chat.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		var cpad := SteamChrome.pad(_chat, 8, 8)
-		cpad.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		cframe.add_child(cpad)
-		_ui.add_child(chat_win)
-		_chat_win = chat_win
+	# Чат закупки (item 14): окошко внизу слева, как в бою. В любой партии (batch
+	# group-zones), не только в сетевой: в одиночной пишет сторона, что сейчас закупается,
+	# а история та же, что увидит бой (NetHandoff.chat_history).
+	var chat_win := PanelContainer.new()
+	SteamChrome.apply_panel(chat_win)
+	chat_win.anchor_top = 1.0
+	chat_win.anchor_bottom = 1.0
+	chat_win.offset_left = 20
+	chat_win.offset_right = 400
+	chat_win.offset_top = -230
+	chat_win.offset_bottom = -20
+	var cframe := VBoxContainer.new()
+	cframe.add_theme_constant_override("separation", 0)
+	chat_win.add_child(cframe)
+	cframe.add_child(SteamChrome.header_bar("Chat"))
+	_chat = ChatBox.new(_side_label, func() -> int:
+		return _my_side if networked() else active_side)
+	_chat.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var cpad := SteamChrome.pad(_chat, 8, 8)
+	cpad.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	cframe.add_child(cpad)
+	_ui.add_child(chat_win)
+	_chat_win = chat_win
 
 	# UI живёт на CanvasLayer — подтянуть общий скин Steam (#59).
 	Ui.theme_canvas_layers()
@@ -1598,9 +1632,11 @@ func _start_battle() -> void:
 		# намерения (они ссылаются на id) применялись бы не к тем юнитам.
 		_sort_spawns()
 	MapHandoff.pending = map
-	if networked():
-		# Одно зерно на двоих: локальный бросок инициативы обязан совпасть.
+	# Одно зерно на двоих: локальный бросок инициативы обязан совпасть. И в одиночной
+	# партии тоже — его же порядок уже показан на панели справа.
+	if _shared_seed >= 0:
 		MapHandoff.dice_seed = _shared_seed
+	if networked():
 		_hand_session_to_battle()
 	get_tree().change_scene_to_file(MAIN_SCENE)
 

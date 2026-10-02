@@ -1547,6 +1547,15 @@ def cmd_resume(a):
     refuse_if_running(rd)
     clear_flags(rd)
     cfg = load_config(a.config) if a.config else None
+    if cfg is not None and int(cfg.get("shaping_decay_start", 0)) < 0:
+        # "-1 = from when this config was first applied": a resume that hands the same
+        # config file in again must keep the run's anchor, not restart the decay from now.
+        prev = os.path.join(rd, "config.yaml")
+        if os.path.exists(prev):
+            with open(prev) as f:
+                anchor = int((yaml.safe_load(f) or {}).get("shaping_decay_start", -1))
+            if anchor >= 0:
+                cfg["shaping_decay_start"] = anchor
     cfg = cfg or load_config(os.path.join(rd, "config.yaml"))
     t = Trainer(rd, cfg, pick_device(cfg))
     t.load(latest, keep_cfg=True)

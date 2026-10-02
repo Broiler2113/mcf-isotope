@@ -411,10 +411,6 @@ const TANK_CREW_DEFENSE_BONUS := 1
 ## ИИ и базой техники, как разъезжалось прежнее «30».
 const CANNON_RANGE := 24
 const CANNON_BLAST_RADIUS := 2
-## Пробитие стекла пулей (#29): каждая пуля, которой стекло попалось НА ПУТИ, бросает
-## свой кубик и проходит на 4+ (3/6). Бросок именно ПОБУЛЬНЫЙ, а не один на очередь:
-## из четырёх пуль сквозь стекло проходят обычно две — это и есть пример из задания.
-const GLASS_PIERCE_NEED := 4
 
 # --- Формы взрывов (#63, #64) ---
 ## Квадрат Чебышёва: все клетки, отстоящие не более чем на radius по обеим осям.
@@ -592,6 +588,13 @@ static func is_glass(feature_id: String) -> bool:
 ## Сколько раз бронестекло держит удар: один бросок на выстрел, 4+ — устояло.
 static func glass_hold_need(feature_id: String) -> int:
 	return ARMOR_GLASS_HOLD_NEED if feature_id == FEATURE_ARMOR_GLASS else 0
+
+## Спасбросок стекла против ПУЛИ (batch group-zones): каждая пуля по окну или сквозь окно
+## проверяется броском стекла, как бронёй: обычное держит на 5+, бронестекло — на 4+.
+## Лазер и взрывы этим правилом не пользуются — у них своё.
+const GLASS_BULLET_SAVE := 5
+static func glass_bullet_save(feature_id: String) -> int:
+	return ARMOR_GLASS_HOLD_NEED if feature_id == FEATURE_ARMOR_GLASS else GLASS_BULLET_SAVE
 
 static func feature_durability(feature_id: String) -> int:
 	if feature_id == FEATURE_DOT or feature_id == FEATURE_DOT_OPEN:

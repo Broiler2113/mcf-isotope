@@ -44,28 +44,38 @@ func begin_match(all_units: Array, dice: DiceService, sides: Array = []) -> void
 	if initiative_rolled:
 		return
 	initiative_rolled = true
-	round_order = _player_slots(all_units, sides)
-	# Жребий среди игроков (batch 14): игрок A больше не ходит первым по праву буквы —
-	# порядок тасуется кубиками (Фишер–Йетс на d6), поэтому у хоста и гостя с одним
-	# зерном он одинаков, а в сети хост всё равно объявляет свой (K_INIT).
-	if dice != null and round_order.size() > 1:
-		for i in range(round_order.size() - 1, 0, -1):
+	round_order = roll_order(_player_slots(all_units, sides), dice,
+			_has_living(all_units, MCF.Owner.NEUTRAL))
+	active_index = _open_round(all_units)
+	active_player_changed.emit(active_player())
+
+## Порядок хода по жребию — отдельной функцией (batch group-zones), чтобы экран закупки
+## показывал РОВНО тот порядок, что бросит бой: тот же поток кубиков от того же зерна.
+##
+## Жребий среди игроков (batch 14): игрок A больше не ходит первым по праву буквы —
+## порядок тасуется кубиками (Фишер–Йетс на d6), поэтому у хоста и гостя с одним
+## зерном он одинаков, а в сети хост всё равно объявляет свой (K_INIT).
+static func roll_order(slots: Array, dice: DiceService, neutrals: bool) -> Array[int]:
+	var order: Array[int] = []
+	for s in slots:
+		order.append(int(s))
+	if dice != null and order.size() > 1:
+		for i in range(order.size() - 1, 0, -1):
 			var j := _dice_index(dice, i + 1)
-			var t: int = round_order[i]
-			round_order[i] = round_order[j]
-			round_order[j] = t
-	if _has_living(all_units, MCF.Owner.NEUTRAL):
+			var t: int = order[i]
+			order[i] = order[j]
+			order[j] = t
+	if neutrals:
 		# d6 % 3 даёт равновероятные 0/1/2 — позиция слота мирных в порядке.
 		# Бросок сохранён ровно таким, каким был на двоих: при двух игроках это
 		# те же три расклада, что и раньше, и партия на двоих не сдвинулась.
 		var slot := (dice.roll_d6() if dice != null else 1) % 3
-		round_order.insert(mini(slot, round_order.size()), MCF.Owner.NEUTRAL)
-	active_index = _open_round(all_units)
-	active_player_changed.emit(active_player())
+		order.insert(mini(slot, order.size()), MCF.Owner.NEUTRAL)
+	return order
 
 ## Случайный индекс 0..n−1 из общего потока кубиков: три d6 дают 216 значений, остаток
 ## распределён достаточно ровно для жребия на десяток слотов.
-func _dice_index(dice: DiceService, n: int) -> int:
+static func _dice_index(dice: DiceService, n: int) -> int:
 	if n <= 1:
 		return 0
 	var v := 0

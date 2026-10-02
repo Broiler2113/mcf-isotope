@@ -86,8 +86,7 @@ static func _for_unit(r: GameActionResolver, u: UnitInstance, out: Array) -> voi
 			for seat: int in r.seat_options(sveh):
 				out.append(VehicleSeatIntent.new(u.id, seat))
 			for st: Vector2i in r.stations_near(u):
-				if r.active_drone_of(u) == null:
-					out.append(SpawnDroneIntent.new(u.id, st))
+				out.append(SpawnDroneIntent.new(u.id, st))
 			for c: Vector2i in r.station_pickup_cells(u):
 				out.append(PickUpStationIntent.new(u.id, c))
 		var seat_c := r.seat_cell_of(u)
@@ -129,8 +128,7 @@ static func _for_unit(r: GameActionResolver, u: UnitInstance, out: Array) -> voi
 				out.append(CaptureIntent.new(u.id, tid))
 		for tid: int in r.pushable_target_ids(u):
 			out.append(PushIntent.new(u.id, tid))
-		if r.active_drone_of(u) == null \
-				and u.stats.special_ability_id == MCF.ABILITY_DRONE_OPERATOR:
+		if u.stats.special_ability_id == MCF.ABILITY_DRONE_OPERATOR:
 			for st: Vector2i in r.stations_near(u):
 				out.append(SpawnDroneIntent.new(u.id, st))
 		for c: Vector2i in r.station_pickup_cells(u):
