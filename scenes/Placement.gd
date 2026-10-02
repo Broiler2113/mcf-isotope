@@ -824,6 +824,28 @@ const DIHEDRAL := [[1, 0, 0, 1], [0, -1, 1, 0], [-1, 0, 0, -1], [0, 1, -1, 0],
 		[-1, 0, 0, 1], [1, 0, 0, -1], [0, 1, 1, 0], [0, -1, -1, 0]]
 var _xf_cache := {}
 var _zone_cache := {}
+var _zone_edges := {}   # side -> [[from, to], …] — границы зоны в клетках
+
+## Отрезки границы зоны: сторона клетки зоны, за которой уже не зона.
+func _zone_edges_of(side: int) -> Array:
+	if _zone_edges.has(side):
+		return _zone_edges[side]
+	var inside := {}
+	for c: Vector2i in _zone_cells_of(side):
+		inside[c] = true
+	var out: Array = []
+	for c: Vector2i in inside:
+		var p := Vector2(c)
+		if not inside.has(c + Vector2i.UP):
+			out.append([p, p + Vector2(1, 0)])
+		if not inside.has(c + Vector2i.DOWN):
+			out.append([p + Vector2(0, 1), p + Vector2(1, 1)])
+		if not inside.has(c + Vector2i.LEFT):
+			out.append([p, p + Vector2(0, 1)])
+		if not inside.has(c + Vector2i.RIGHT):
+			out.append([p + Vector2(1, 0), p + Vector2(1, 1)])
+	_zone_edges[side] = out
+	return out
 var _sym_cache := {}
 
 func _apply_xf(l: Array, t: Vector2i, c: Vector2i) -> Vector2i:
@@ -1188,6 +1210,15 @@ func _draw() -> void:
 		draw_line(Vector2(ORIGIN.x + x * CELL, top), Vector2(ORIGIN.x + x * CELL, bottom), grid_col, 1.0)
 	for y in range(vy0, vy1 + 2):
 		draw_line(Vector2(left, ORIGIN.y + y * CELL), Vector2(right, ORIGIN.y + y * CELL), grid_col, 1.0)
+	# Контур своей зоны (gore batch): тонкая линия цвета стороны по её границе — поверх
+	# сетки, чтобы зону было видно и там, где заливка теряется на пёстром полу.
+	var edge_col := Color(_side_color(active_side), 0.9)
+	for seg: Array in _zone_edges_of(active_side):
+		var a: Vector2 = seg[0]
+		var b: Vector2 = seg[1]
+		if maxf(a.x, b.x) < vx0 or minf(a.x, b.x) > vx1 + 1 or maxf(a.y, b.y) < vy0 or minf(a.y, b.y) > vy1 + 1:
+			continue
+		draw_line(ORIGIN + a * CELL, ORIGIN + b * CELL, edge_col, 2.0)
 	# Сохранённые мирные.
 	for s in preserved_neutral:
 		_draw_token(s["coord"], MCF.Owner.NEUTRAL, s["stats_id"], font)

@@ -118,7 +118,7 @@ func play(dice: Array, manual: bool = false, prompt: String = "", speed: float =
 			dv.lift = (1.0 - t) * absf(sin(t * PI * 3.0 + i * 1.3)) * 22.0
 			dv.queue_redraw()
 		# Замедление к концу броска: как настоящий кубик, теряющий разгон.
-		await get_tree().create_timer(SPIN_DELAY * (0.6 + t)).timeout
+		await get_tree().create_timer(SPIN_DELAY * (0.6 + t) / maxf(1.0, rate)).timeout
 		if my_gen != _generation:
 			finished.emit()
 			return

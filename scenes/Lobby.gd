@@ -45,7 +45,8 @@ var _ff_check: CheckBox
 ## Чат лобби (item 14).
 var _chat: ChatBox = null
 ## Сколько мирных самое большее (item 11) и темп ИИ (item 5).
-var _civ_slider: HSlider
+var _civ_slider: HSlider = null  # только у хоста, в настройках случайной карты
+var _civ_check: CheckBox
 var _ai_speed_opt: OptionButton
 ## Командный режим (item 4): пока выключен — колонка «Team» и «дружественный огонь»
 ## скрыты. Отдельные команды появляются только по этому тумблеру.
@@ -291,8 +292,7 @@ func _apply_lobby_snapshot(msg: Dictionary) -> void:
 		_ff_check.button_pressed = GameConfig.friendly_fire
 		_ff_check.visible = _team_mode
 		_live_check.button_pressed = GameConfig.live_placement_visible
-		_civ_slider.set_value_no_signal(GameConfig.civilian_count)
-		_civ_slider.value_changed.emit(_civ_slider.value)  # подпись числа
+		_civ_check.set_pressed_no_signal(GameConfig.civilian_count > 0)
 		_ai_speed_opt.select(maxi(0, GameConfig.AI_SPEEDS.find(GameConfig.ai_speed)))
 		_events_check.button_pressed = GameConfig.random_events_enabled
 		_events_mand.button_pressed = GameConfig.random_events_mandatory
@@ -543,17 +543,21 @@ func _build_config(parent: VBoxContainer) -> void:
 	# Мирные (item 11): ползунок «не больше N» вместо прежнего «Disable neutrals» и
 	# уровня мирных у случайной карты. 0 — без мирных; готовая карта прореживается до N,
 	# случайная столько и строит.
-	_civ_slider = _slider_row(box, "Civilians (max):", 0, GameConfig.CIVILIANS_MAX, 1,
-			GameConfig.civilian_count, func(v: float) -> String: return "none" if v <= 0 else str(int(v)))
-	_civ_slider.tooltip_text = "How many neutral civilians the map may have, at most. Prepared maps are thinned evenly down to this; random maps build this many when there is room. Civilians live in rooms sealed by airlocks and start asleep."
-	_civ_slider.value_changed.connect(func(_v: float) -> void:
+	# Число мирных у случайной карты — ползунок в её настройках (_build_generator); здесь
+	# только «есть ли мирные вообще», и для готовых карт этого достаточно.
+	_civ_check = CheckBox.new()
+	_civ_check.text = "Civilians"
+	_civ_check.tooltip_text = "Neutral civilians on the map. Untick to play without them. Random maps set how many in their own settings."
+	_civ_check.button_pressed = GameConfig.civilian_count > 0
+	_civ_check.toggled.connect(func(_on: bool) -> void:
 		if _is_random():
 			_on_gen_changed())
+	box.add_child(_civ_check)
 	# Темп ИИ (item 5): во сколько раз быстрее ходят и показываются ходы ИИ. В бою его же
 	# меняет хост ползунком на панели.
 	var speeds: Array = []
 	for sp: float in GameConfig.AI_SPEEDS:
-		speeds.append("%s×" % ("½" if sp < 1.0 else str(int(sp))))
+		speeds.append(GameConfig.ai_speed_label(sp))
 	_ai_speed_opt = _opt(speeds, maxi(0, GameConfig.AI_SPEEDS.find(GameConfig.ai_speed)))
 	_ai_speed_opt.tooltip_text = "How fast AI sides play their turns. The host can also change it during the battle."
 	_row(box, "AI speed:", _ai_speed_opt)
@@ -595,15 +599,16 @@ func _build_config(parent: VBoxContainer) -> void:
 		for o: OptionButton in [_place_opt, _fog_opt, _army_opt]:
 			o.item_selected.connect(func(_i: int) -> void: _broadcast_lobby())
 		_ai_speed_opt.item_selected.connect(func(_i: int) -> void: _broadcast_lobby())
-		_civ_slider.value_changed.connect(func(_v: float) -> void: _broadcast_lobby())
-		for cb: CheckBox in [_ff_check, _team_check, _live_check,
+		if _civ_slider != null:
+			_civ_slider.value_changed.connect(func(_v: float) -> void: _broadcast_lobby())
+		for cb: CheckBox in [_ff_check, _team_check, _live_check, _civ_check,
 				_events_check, _events_mand]:
 			cb.toggled.connect(func(_on: bool) -> void: _broadcast_lobby())
 		_events_interval.value_changed.connect(func(_v: float) -> void: _broadcast_lobby())
 
 	if _is_client:
 		var _client_locked: Array = [_place_opt, _fog_opt, _army_opt,
-				_ff_check, _team_check, _live_check, _civ_slider, _ai_speed_opt, _events_check,
+				_ff_check, _team_check, _live_check, _civ_check, _ai_speed_opt, _events_check,
 				_events_mand, _events_interval]
 		for c in _client_locked:
 			# У кнопок (в т. ч. OptionButton/CheckBox — все наследники BaseButton) есть
@@ -711,6 +716,13 @@ func _build_map(parent: VBoxContainer) -> void:
 	_map_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_map_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	split.add_child(_map_preview)
+	# Номера зон развёртывания поверх превью (gore batch) — те же, что «Zone N» у слотов.
+	_preview_labels = Control.new()
+	_preview_labels.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_preview_labels.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_preview_labels.draw.connect(_draw_zone_numbers)
+	_map_preview.add_child(_preview_labels)
+	_map_preview.resized.connect(_preview_labels.queue_redraw)
 
 ## Перечитать каталоги карт и пересобрать выпадающий список (item 1, issue 1).
 ##
@@ -812,6 +824,14 @@ func _build_generator(box: VBoxContainer) -> void:
 	_gen_obstacles = _gen_check(mech, "Obstacles",
 			"Sandbags, trenches, hedgehogs, barricades, crates and pillars.")
 	_row(_gen_box, "Mechanics:", mech)
+	# Мирные случайной карты: точное число, до 1000 (готовые карты — галочка «Civilians»).
+	var civ0 := GameConfig.civilian_count
+	if civ0 <= 0 or civ0 >= GameConfig.CIVILIANS_MAX:
+		civ0 = GameConfig.CIVILIANS_DEFAULT
+	_civ_slider = _slider_row(_gen_box, "Civilians:", 1, GameConfig.CIVILIANS_MAX, 1, civ0,
+			func(v: float) -> String: return str(int(v)))
+	_civ_slider.tooltip_text = "How many neutral civilians to build, when there is room. They live in rooms sealed by airlocks and start asleep. Untick \"Civilians\" above for none."
+	_civ_slider.value_changed.connect(func(_v: float) -> void: _on_gen_changed())
 	# Умолчания стиля (items 25/26): город, поле и бункер — без космоса, бункер и станция —
 	# негорючие, астероид — в космосе и не горит. Выставляются при выборе стиля, дальше
 	# игрок волен переключить. Подключено РАНЬШЕ пересборки карты по смене стиля.
@@ -893,7 +913,16 @@ func _gen_options() -> Dictionary:
 			"symmetric": _gen_sym.button_pressed,
 			"space": _gen_space.button_pressed,
 			"flammable": _gen_fire.button_pressed, "obstacles": _gen_obstacles.button_pressed,
-			"civilian_count": int(_civ_slider.value)}
+			"civilian_count": _civ_count()}
+
+## Сколько мирных в партии: ноль без галочки, число ползунка у случайной карты, иначе все,
+## что есть на готовой карте.
+func _civ_count() -> int:
+	if not _civ_check.button_pressed:
+		return 0
+	if _civ_slider != null and _is_random():
+		return int(_civ_slider.value)
+	return GameConfig.CIVILIANS_MAX
 
 func _random_map() -> MapData:
 	var options := _gen_options()
@@ -1559,9 +1588,52 @@ func _refresh_map_preview() -> void:
 		return
 	_preview_key = key
 	_map_preview.texture = _render_map_texture(map, tints, bands)
+	_zone_marks = _zone_centres(map)
+	_preview_size = Vector2(maxi(1, map.width), maxi(1, map.height))
+	if _preview_labels != null:
+		_preview_labels.queue_redraw()
 
 ## Карта без нарисованных зон (item 22): полосы развёртывания цветами слотов — те же
 ## полосы, что выдаст расстановка (MapData.band_of). {Vector2i(x0, x1): цвет}.
+var _preview_labels: Control = null
+var _zone_marks: Array = []        # [[центр в клетках, "N"], …]
+var _preview_size := Vector2.ONE   # размер карты в клетках
+
+## Центр каждой зоны развёртывания и её номер. Нарисованные зоны — по их клеткам, иначе —
+## полосы по слотам (как и раскраска превью).
+func _zone_centres(map: MapData) -> Array:
+	var sums := {}
+	for y in map.height:
+		for x in map.width:
+			var z := map.get_zone(Vector2i(x, y))
+			if z >= 0:
+				var acc: Array = sums.get(z, [Vector2.ZERO, 0])
+				sums[z] = [acc[0] + Vector2(x + 0.5, y + 0.5), acc[1] + 1]
+	var out: Array = []
+	for z in sums:
+		out.append([sums[z][0] / float(sums[z][1]), str(int(z) + 1)])
+	if out.is_empty():
+		var playing: Array = roster.slots.filter(func(sl: Roster.Slot) -> bool: return sl.is_playing())
+		for i in playing.size():
+			var sl: Roster.Slot = playing[i]
+			var index := sl.deploy_zone if sl.deploy_zone >= 0 else i
+			var band := MapData.band_of(index, playing.size(), map.width)
+			out.append([Vector2((band.x + band.y) * 0.5, map.height * 0.5), str(index + 1)])
+	return out
+
+func _draw_zone_numbers() -> void:
+	var box := _preview_labels.size
+	var k := minf(box.x / _preview_size.x, box.y / _preview_size.y)
+	var off := (box - _preview_size * k) * 0.5
+	var font := _preview_labels.get_theme_default_font()
+	var fs := 18
+	for m: Array in _zone_marks:
+		var txt: String = m[1]
+		var w := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+		var pos: Vector2 = off + Vector2(m[0]) * k + Vector2(-w * 0.5, fs * 0.35)
+		_preview_labels.draw_string_outline(font, pos, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 4, Color(0, 0, 0, 0.9))
+		_preview_labels.draw_string(font, pos, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(1, 1, 1))
+
 func _band_tints(map: MapData) -> Dictionary:
 	var out := {}
 	if map == null:
@@ -1637,7 +1709,7 @@ func _commit_config() -> void:
 	GameConfig.fog_mode = _fog_opt.selected
 	GameConfig.army_select_mode = _army_opt.selected
 	GameConfig.live_placement_visible = _live_check.button_pressed
-	GameConfig.civilian_count = int(_civ_slider.value)  # item 11
+	GameConfig.civilian_count = _civ_count()  # item 11
 	GameConfig.ai_speed = GameConfig.AI_SPEEDS[_ai_speed_opt.selected]  # item 5
 	GameConfig.random_events_enabled = _events_check.button_pressed
 	GameConfig.random_events_mandatory = _events_mand.button_pressed

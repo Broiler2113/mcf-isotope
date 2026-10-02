@@ -1,6 +1,7 @@
 extends SceneTree
 
-## Текстуры клеток (items 9/20/24 + «64×64, брутализм, без повторяющегося рисунка»).
+## Текстуры клеток (items 9/20/24 + «брутализм, без повторяющегося рисунка»; с gore batch —
+## 32×32 в том же стиле).
 ## Рисуются кодом: у каждой плитки есть исходник, и тон, шум или размер меняются правкой
 ## числа. Запуск из корня проекта:
 ##   godot --headless --script res://tools/gen_textures.gd
@@ -21,7 +22,7 @@ extends SceneTree
 ## Стиль — брутализм: сырой бетон с отпечатками опалубки и следами стяжек, тяжёлая сталь,
 ## тёмный кирпич, глухие массы с толстой фаской и глубокой тенью, приглушённые цвета.
 
-const T := 64
+const T := 32
 const VARIANTS := 6
 const OUT := "res://textures/"
 
@@ -41,25 +42,33 @@ func _initialize() -> void:
 	_strip("bedrock", _bedrock)
 	_save("fire", _fire())
 	# --- Стены и прочие стыкующиеся объекты ---
-	_sheet("wall", _board_concrete, Color8(128, 126, 120), 6)
-	_sheet("wall_field", _board_concrete, Color8(128, 126, 120), 6)
-	_sheet("wall_station", _bulkhead, Color8(118, 126, 134), 6)
-	_sheet("wall_bunker", _blast_concrete, Color8(92, 92, 86), 6)
-	_sheet("wall_town", _dark_brick, Color8(108, 60, 48), 6)
-	_sheet("wall_asteroid", _dark_brick, Color8(108, 60, 48), 6)
-	_sheet("wood_wall", _timber, Color8(104, 72, 44), 6)
-	_sheet("armor_wall", _armor_plate, Color8(58, 64, 72), 6)
-	_sheet("glass", _glass_block, Color8(150, 180, 196), 4)
-	_sheet("armor_glass", _armor_glass, Color8(96, 126, 160), 4)
-	_sheet("dot", _blast_concrete, Color8(110, 110, 104), 7)
-	_sheet("dot_open", _embrasure, Color8(110, 110, 104), 7)
-	_sheet("ldf", _monolith, Color8(24, 20, 30), 6)
-	_sheet("corpse_wall", _flesh_pile, Color8(96, 44, 38), 5)
-	_sheet("airlock", _blast_door, Color8(150, 130, 60), 6)
-	_sheet("airlock_open", _blast_door_open, Color8(150, 130, 60), 6)
-	_sheet("sandbags", _sandbag, Color8(160, 142, 100), 4, 10)
-	_sheet("sandbag_wall", _sandbag, Color8(150, 132, 92), 4, 3)
-	_sheet("trench", _trench, Color8(70, 54, 38), 3, 6)
+	_sheet("wall", _board_concrete, Color8(128, 126, 120), 3)
+	_sheet("wall_field", _board_concrete, Color8(128, 126, 120), 3)
+	_sheet("wall_station", _bulkhead, Color8(118, 126, 134), 3)
+	_sheet("wall_bunker", _blast_concrete, Color8(92, 92, 86), 3)
+	_sheet("wall_town", _dark_brick, Color8(108, 60, 48), 3)
+	_sheet("wall_asteroid", _dark_brick, Color8(108, 60, 48), 3)
+	_sheet("wood_wall", _timber, Color8(104, 72, 44), 3)
+	_sheet("armor_wall", _armor_plate, Color8(58, 64, 72), 3)
+	_sheet("glass", _glass_block, Color8(150, 180, 196), 2)
+	_sheet("armor_glass", _armor_glass, Color8(96, 126, 160), 2)
+	_sheet("dot", _blast_concrete, Color8(110, 110, 104), 3)
+	_sheet("dot_open", _embrasure, Color8(110, 110, 104), 3)
+	_sheet("ldf", _monolith, Color8(24, 20, 30), 3)
+	_sheet("corpse_wall", _flesh_pile, Color8(96, 44, 38), 2)
+	_sheet("airlock", _blast_door, Color8(150, 130, 60), 3)
+	_sheet("airlock_open", _blast_door_open, Color8(150, 130, 60), 3)
+	# Город и поле (gore batch): вместо гермодвери — обычная тяжёлая дверь в бетонной раме,
+	# закрытая и распахнутая. Правила те же (это всё тот же шлюз), меняется только вид;
+	# TerrainTiles берёт «airlock_<окружение>» сам. Астероид остаётся с гермодверью.
+	_sheet("airlock_town", _door.bind(false, _street), Color8(96, 92, 86), 0)
+	_sheet("airlock_open_town", _door.bind(true, _street), Color8(96, 92, 86), 0)
+	_sheet("airlock_field", _door.bind(false, _dirt), Color8(96, 92, 86), 0)
+	_sheet("airlock_open_field", _door.bind(true, _dirt), Color8(96, 92, 86), 0)
+	_sheet("sandbags", _sandbag, Color8(160, 142, 100), 2, 5)
+	_sheet("sandbag_wall", _sandbag, Color8(150, 132, 92), 2, 2)
+	# Окоп — без кромки и отступа: он врезан В землю, свою тень рисует сам (_trench).
+	_sheet("trench", _trench, Color8(70, 54, 38), 0)
 	# --- Одиночные объекты ---
 	_strip("hedgehog", _hedgehog.bind(false))
 	_strip("hedgehog_sandbags", _hedgehog.bind(true))
@@ -113,6 +122,8 @@ func _fbm(x: float, y: float, s: int, octaves: int = 3) -> float:
 	var cells := 8
 	var norm := 0.0
 	for o in octaves:
+		if cells > T / 2:
+			break   # мельче двух точек — уже не узор, а рябь
 		sum += _tn(x, y, cells, s + o * 17) * amp
 		norm += amp
 		amp *= 0.5
@@ -126,7 +137,7 @@ func _shade(c: Color, k: float) -> Color:
 ## краям, и края у всех вариантов совпадают.
 func _inner(x: int, y: int, margin: float) -> float:
 	var d := float(mini(mini(x, y), mini(T - 1 - x, T - 1 - y)))
-	return clampf((d - 2.0) / margin, 0.0, 1.0)
+	return clampf((d - 1.0) / margin, 0.0, 1.0)
 
 func _save(name: String, img: Image) -> void:
 	img.save_png(OUT + name + ".png")
@@ -177,7 +188,9 @@ func _tile(img: Image, ox: int, oy: int, mask: int, v: int, fn: Callable, edge: 
 			var dw := (x - x0) if not w else 99
 			var de := (x1 - x) if not e else 99
 			var dmin := mini(mini(dn, ds), mini(dw, de))
-			if dmin == 0:
+			if bevel <= 0:
+				pass
+			elif dmin == 0:
 				c = Color(edge.r * 0.32, edge.g * 0.32, edge.b * 0.32, 1.0)
 			elif dmin <= bevel:
 				var k := 1.0 - float(dmin - 1) / float(bevel)
@@ -195,9 +208,9 @@ func _tile(img: Image, ox: int, oy: int, mask: int, v: int, fn: Callable, edge: 
 ## клетки не читается), мелкая зернь, у вариантов — своя потёртость.
 func _steel_deck(x: int, y: int, v: int) -> Color:
 	var k := 0.88 + 0.16 * _fbm(x, y, 11 + v)
-	var gx := x % 8
-	var gy := y % 8
-	if (gx == gy and gx < 5) or (gx == 7 - gy and gx > 2):
+	var gx := x % 4
+	var gy := y % 4
+	if (gx == gy and gx < 3) or (gx == 3 - gy and gx > 1):
 		k *= 1.14    # насечка
 	return _shade(Color8(50, 54, 60), k)
 
@@ -235,7 +248,7 @@ func _regolith(x: int, y: int, v: int) -> Color:
 	if _h(x + v * T, y, 53) > 0.975:
 		c = _shade(c, 0.7)
 	if v == 0:
-		var d := Vector2(x, y).distance_to(Vector2(30, 34)) / 9.0
+		var d := Vector2(x, y).distance_to(Vector2(15, 17)) / 4.5
 		if d < 1.0:
 			c = _shade(c, 0.66 + 0.24 * d)
 		elif d < 1.2:
@@ -244,7 +257,7 @@ func _regolith(x: int, y: int, v: int) -> Color:
 
 func _grass(x: int, y: int, v: int) -> Color:
 	var c := Color8(46, 72, 38).lerp(Color8(74, 106, 50), _fbm(x, y, 61 + v))
-	if _tn(x, y, 32, 62 + v * 3, 8) > 0.78:
+	if _tn(x, y, 16, 62 + v * 3, 4) > 0.78:
 		c = _shade(c, 1.22)
 	return c
 
@@ -275,7 +288,7 @@ func _scorch(x: int, y: int, v: int) -> Color:
 func _bedrock(x: int, y: int, v: int) -> Color:
 	var c := _shade(Color8(60, 54, 48), 0.74 + 0.4 * _fbm(x, y, 101 + v))
 	# Слоистость — частые тонкие прожилки по всей толще, без крупных пятен.
-	if _tn(x, y, 8, 102, 32) > 0.8:
+	if _tn(x, y, 8, 102, 16) > 0.8:
 		c = _shade(c, 0.78)
 	if _h(x + v * T, y, 103) > 0.982:
 		c = Color8(34, 30, 26)
@@ -298,28 +311,26 @@ func _fire() -> Image:
 #  Стены и стыкующиеся объекты: fn(x, y, v, mask) → цвет
 # =====================================================================================
 
-## Бетон по опалубке (брутализм): доски опалубки по 8 px с волокном, следы стяжек сеткой
-## 32 px, разводы у вариантов.
+## Бетон по опалубке (брутализм): доски опалубки по 4 px с волокном, разводы у вариантов.
+## Следы стяжек убраны по просьбе игрока (четыре тёмных квадратика на плитке).
 func _board_concrete(x: int, y: int, v: int, _mask: int) -> Color:
-	var board := y / 8
-	var grain := _tn(x, y, 2, 121 + board % 4, 16)
+	var board := y / 4
+	var grain := _tn(x, y, 2, 121 + board % 4, 8)
 	var k := 0.84 + 0.12 * grain + 0.14 * (_fbm(x, y, 122, 3) - 0.5)
 	var c := _shade(Color8(132, 130, 124), k * (0.94 + 0.12 * _fbm(x, y, 123 + v)))
-	if y % 8 == 7:
-		c = _shade(c, 0.78)
-	if (x % 32 == 15 or x % 32 == 16) and (y % 32 == 11 or y % 32 == 12):
-		c = Color8(54, 54, 52)
+	if y % 4 == 3:
+		c = _shade(c, 0.8)
 	return c
 
 ## Переборка станции: рёбра жёсткости через 16 px, заклёпки, копоть.
 func _bulkhead(x: int, y: int, v: int, _mask: int) -> Color:
 	var c := _shade(Color8(104, 112, 120), 0.88 + 0.14 * _fbm(x, y, 131, 3))
-	var rib := x % 16
+	var rib := x % 8
 	if rib == 0:
 		c = _shade(c, 0.62)
 	elif rib == 1:
 		c = _shade(c, 1.22)
-	if y % 16 == 4 and rib == 8:
+	if y % 8 == 2 and rib == 4:
 		c = _shade(c, 1.45)
 	return _shade(c, 0.93 + 0.12 * _fbm(x, y, 132 + v))
 
@@ -336,17 +347,17 @@ func _blast_concrete(x: int, y: int, v: int, _mask: int) -> Color:
 ## Амбразура ДОТа: тот же бетон и тёмная щель поперёк.
 func _embrasure(x: int, y: int, v: int, mask: int) -> Color:
 	var c := _blast_concrete(x, y, v, mask)
-	if y >= 28 and y <= 35:
-		c = Color8(12, 12, 12) if y > 28 and y < 35 else _shade(c, 0.6)
+	if y >= 13 and y <= 18:
+		c = Color8(12, 12, 12) if y > 13 and y < 18 else _shade(c, 0.6)
 	return c
 
-## Тёмный «инженерный» кирпич: ложковая перевязка 16×8, швы раствора, тон по хешу самого
+## Тёмный «инженерный» кирпич: ложковая перевязка 8×4, швы раствора, тон по хешу самого
 ## кирпича; кирпичи, переходящие через край плитки, одного тона у всех вариантов.
 func _dark_brick(x: int, y: int, v: int, _mask: int) -> Color:
-	var row := y / 8
-	var off := 8 if row % 2 == 1 else 0
-	var bx := posmod(x + off, T) / 16
-	if y % 8 == 7 or posmod(x + off, 16) == 15:
+	var row := y / 4
+	var off := 4 if row % 2 == 1 else 0
+	var bx := posmod(x + off, T) / 8
+	if y % 4 == 3 or posmod(x + off, 8) == 7:
 		return _shade(Color8(70, 66, 62), 0.9 + 0.2 * _h(x, y, 151))
 	var straddles := off != 0 and bx == 3
 	var tone := _h(bx, row, 152 if straddles else 152 + v * 31)
@@ -355,37 +366,37 @@ func _dark_brick(x: int, y: int, v: int, _mask: int) -> Color:
 
 ## Тяжёлый брус: вертикальные доски по 16 px, волокно, сучки у вариантов.
 func _timber(x: int, y: int, v: int, _mask: int) -> Color:
-	var plank := x / 16
+	var plank := x / 8
 	var c := _shade(Color8(102, 70, 42), 0.78 + 0.32 * _tn(x, y, 8, 161 + plank, 2))
-	if x % 16 == 15:
+	if x % 8 == 7:
 		c = _shade(c, 0.55)
-	var knot := Vector2(8 + plank * 16, 16 + _h(plank, v, 162) * 32)
-	if Vector2(x, y).distance_to(knot) < 3.0 and _h(plank, v, 163) > 0.5 and _inner(x, y, 4.0) > 0.0:
+	var knot := Vector2(4 + plank * 8, 8 + _h(plank, v, 162) * 16)
+	if Vector2(x, y).distance_to(knot) < 1.6 and _h(plank, v, 163) > 0.5 and _inner(x, y, 2.0) > 0.0:
 		c = _shade(c, 0.6)
 	return c
 
 ## Броня: тёмная сталь, раскосы и двойные ряды заклёпок.
 func _armor_plate(x: int, y: int, v: int, _mask: int) -> Color:
 	var c := _shade(Color8(58, 64, 72), 0.86 + 0.18 * _fbm(x, y, 171, 3))
-	if posmod(x - y, 32) <= 1 or posmod(x + y, 32) <= 1:
+	if posmod(x - y, 16) == 0 or posmod(x + y, 16) == 0:
 		c = _shade(c, 1.22)
-	if (y % 16 == 3 or y % 16 == 5) and x % 8 == 4:
+	if (y % 8 == 1 or y % 8 == 3) and x % 4 == 2:
 		c = _shade(c, 1.5)
 	return _shade(c, 0.94 + 0.1 * _fbm(x, y, 172 + v))
 
 ## Стеклоблоки: сетка 16 px, толстые светлые швы, блик в каждом блоке.
 func _glass_block(x: int, y: int, _v: int, _mask: int) -> Color:
-	var gx := x % 16
-	var gy := y % 16
+	var gx := x % 8
+	var gy := y % 8
 	if gx == 0 or gy == 0:
 		return Color(0.72, 0.76, 0.78, 0.95)
 	var c := Color(0.55, 0.7, 0.8, 0.62)
-	if gx + gy < 8:
+	if gx + gy < 5:
 		c = c.lerp(Color(1, 1, 1, 0.8), 0.5)
 	return c
 
 func _armor_glass(x: int, y: int, v: int, mask: int) -> Color:
-	if x % 32 <= 2:
+	if x % 16 <= 1:
 		return _armor_plate(x, y, v, mask)
 	var c := _glass_block(x, y, v, mask)
 	return Color(c.r * 0.7, c.g * 0.82, c.b, minf(1.0, c.a + 0.15))
@@ -407,11 +418,11 @@ func _blast_door(x: int, y: int, _v: int, mask: int) -> Color:
 	var a := x if horiz else y   # вдоль стены
 	var b := y if horiz else x   # поперёк — по проходу
 	var c := _shade(Color8(92, 94, 98), 0.86 + 0.16 * _fbm(x, y, 201, 3))
-	if b >= 24 and b <= 39:
-		c = Color8(198, 166, 40) if posmod(a + b, 16) < 8 else Color8(30, 28, 24)
-	elif b == 22 or b == 41:
+	if b >= 12 and b <= 19:
+		c = Color8(198, 166, 40) if posmod(a + b, 8) < 4 else Color8(30, 28, 24)
+	elif b == 11 or b == 20:
 		c = _shade(c, 0.5)
-	if a % 32 == 0:
+	if a % 16 == 0:
 		c = _shade(c, 0.6)
 	return c
 
@@ -419,40 +430,111 @@ func _blast_door(x: int, y: int, _v: int, mask: int) -> Color:
 func _blast_door_open(x: int, y: int, v: int, mask: int) -> Color:
 	var horiz := mask & (2 | 8) != 0 or mask & (1 | 4) == 0
 	var a := x if horiz else y
-	if a >= 10 and a <= 53:
+	if a >= 5 and a <= 26:
 		return _steel_deck(x, y, v)
 	return _shade(_blast_door(x, y, v, mask), 0.85)
 
-## Мешки с песком: ряды мешков 21×12 вразбежку с тёмными складками.
+## Мешки с песком: ряды мешков 11×6 вразбежку с тёмными складками.
 func _sandbag(x: int, y: int, v: int, _mask: int) -> Color:
-	var row := y / 12
-	var off := 10 if row % 2 == 1 else 0
-	var bx := posmod(x + off, 21)
-	var by := y % 12
-	var edge := minf(minf(bx, 20 - bx), minf(by, 11 - by))
+	var row := y / 6
+	var off := 5 if row % 2 == 1 else 0
+	var bx := posmod(x + off, 11)
+	var by := y % 6
+	var edge := minf(minf(bx, 10 - bx), minf(by, 5 - by))
 	var c := _shade(Color8(162, 144, 102), 0.86 + 0.18 * _tn(x, y, 16, 211 + v))
 	if edge < 1.0:
 		c = _shade(c, 0.6)
-	elif edge < 2.5:
+	elif edge < 1.5:
 		c = _shade(c, 0.85)
 	return c
 
-## Окоп: земляные стенки и тёмное дно по оси соединения.
+## Окоп (gore batch): канава, ВРЕЗАННАЯ в землю, а не насыпь поверх неё. Вне канавы
+## плитка прозрачна — виден пол клетки; вокруг — узкий бруствер выброшенной земли. Внутри:
+## тёмное дно, глубокая тень под северной и западной стенкой (свет сверху-слева) и светлая
+## земляная стенка напротив. Ширина канавы ~70 % клетки — боец в неё помещается.
+## Всё считается от формы канавы, продолженной ЗА край плитки по маске соседей, и шум у
+## всех вариантов общий, поэтому стыки, углы и Т-образные развилки сходятся без шва.
+const TRENCH_HALF := 11
+
+func _in_trench(x: int, y: int, mask: int) -> bool:
+	var m := T / 2
+	var hx := absi(x - m) <= TRENCH_HALF - (1 if x >= m else 0)
+	var hy := absi(y - m) <= TRENCH_HALF - (1 if y >= m else 0)
+	if hx and hy:
+		return true
+	if hx and ((y < m and mask & 1 != 0) or (y >= m and mask & 4 != 0)):
+		return true
+	if hy and ((x < m and mask & 8 != 0) or (x >= m and mask & 2 != 0)):
+		return true
+	return false
+
 func _trench(x: int, y: int, v: int, mask: int) -> Color:
-	var c := _shade(Color8(84, 64, 44), 0.8 + 0.3 * _fbm(x, y, 221 + v))
-	var mid := T / 2
-	var half := 12
-	var on := absi(x - mid) <= half and absi(y - mid) <= half
-	if mask & 1 and absi(x - mid) <= half and y < mid:
-		on = true
-	if mask & 4 and absi(x - mid) <= half and y >= mid:
-		on = true
-	if mask & 8 and absi(y - mid) <= half and x < mid:
-		on = true
-	if mask & 2 and absi(y - mid) <= half and x >= mid:
-		on = true
-	if on:
-		c = _shade(Color8(44, 34, 24), 0.85 + 0.25 * _tn(x, y, 16, 222))
+	if not _in_trench(x, y, mask):
+		# Бруствер: земля в 1–2 точках от края канавы, клочками.
+		for d in [Vector2i(0, 1), Vector2i(0, -1), Vector2i(1, 0), Vector2i(-1, 0),
+				Vector2i(0, 2), Vector2i(0, -2), Vector2i(2, 0), Vector2i(-2, 0)]:
+			if _in_trench(x + d.x, y + d.y, mask):
+				var near := absi(d.x) + absi(d.y) == 1
+				if not near and _tn(x, y, 16, 223) < 0.5:
+					break
+				var lip := _shade(Color8(104, 82, 56), 0.85 + 0.3 * _fbm(x, y, 221))
+				lip.a = 0.95 if near else 0.7
+				return lip
+		return Color(0, 0, 0, 0)
+	var c := _shade(Color8(46, 36, 26), 0.82 + 0.3 * _fbm(x, y, 222))
+	# Тень под северной/западной стенкой: чем ближе к ней, тем темнее.
+	for k in range(1, 5):
+		if not _in_trench(x, y - k, mask) or not _in_trench(x - k, y, mask):
+			return _shade(c, 0.45 + 0.12 * k)
+	# Освещённая стенка напротив — светлая земля.
+	for k in range(1, 3):
+		if not _in_trench(x, y + k, mask) or not _in_trench(x + k, y, mask):
+			return _shade(Color8(98, 76, 52), 0.9 + 0.2 * _fbm(x, y, 224) - 0.1 * k)
+	if _h(x + v * T, y, 225) > 0.97:
+		c = _shade(c, 1.35)   # камешки на дне
+	return c
+
+## Дверь города и поля (gore batch): бетонная рама по концам проёма, порог — пол
+## окружения, полотно — тяжёлые тёмные доски с двумя стальными полосами и ручкой.
+## Открытая — полотно повёрнуто на петле вдоль рамы, проход свободен.
+func _door(x: int, y: int, v: int, mask: int, open: bool, floor_fn: Callable) -> Color:
+	var horiz := mask & (2 | 8) != 0 or mask & (1 | 4) == 0
+	var a := x if horiz else y   # вдоль стены
+	var b := y if horiz else x   # поперёк — по проходу
+	var c: Color = floor_fn.call(x, y, v)
+	# Рама: бетонные косяки на всю толщину стены, с фаской.
+	if a <= 3 or a >= T - 4:
+		var post := _shade(Color8(124, 120, 112), 0.85 + 0.2 * _fbm(x, y, 271))
+		if a == 0 or a == T - 1:
+			post = _shade(post, 0.55)
+		elif a == 3 or a == T - 4:
+			post = _shade(post, 0.75)
+		return post
+	if not open:
+		if b >= 12 and b <= 19:
+			return _door_leaf(a, b, x, y)
+		if a >= 23 and a <= 24 and (b == 10 or b == 11 or b == 20 or b == 21):
+			return Color8(150, 146, 132)   # ручка с обеих сторон
+		if b == 11 or b == 20:
+			return _shade(c, 0.6)   # тень полотна на пороге
+		return c
+	# Открыто: полотно стоит вдоль левого косяка, распахнутое внутрь (вниз по проходу).
+	if a >= 4 and a <= 7 and b >= 16 and b <= T - 3:
+		return _door_leaf(b, a, x, y)
+	if a == 8 and b >= 17 and b <= T - 2:
+		return _shade(c, 0.6)
+	return c
+
+func _door_leaf(along: int, across: int, x: int, y: int) -> Color:
+	# Цельная тёмная плита: волокно вдоль полотна, две стальные полосы поперёк,
+	# светлая верхняя кромка и тёмная нижняя — читается как толщина двери.
+	var c := _shade(Color8(76, 52, 34), 0.82 + 0.24 * _tn(x, y, 2, 281, 16))
+	if along == 10 or along == 11 or along == 20 or along == 21:
+		c = _shade(Color8(88, 90, 94), 0.9 + 0.15 * _h(x, y, 282))
+	if across == 12:
+		c = _shade(c, 1.3)
+	elif across == 19:
+		c = _shade(c, 0.6)
 	return c
 
 # =====================================================================================
@@ -462,20 +544,20 @@ func _trench(x: int, y: int, v: int, mask: int) -> Color:
 ## Противотанковый ёж: три сваренных двутавра (по желанию — на мешках).
 func _hedgehog(x: int, y: int, v: int, on_bags: bool) -> Color:
 	var c := Color(0, 0, 0, 0)
-	if on_bags and y >= 36:
+	if on_bags and y >= 18:
 		c = _sandbag(x, y, v, 0)
 	var steel := _shade(Color8(124, 126, 132), 0.9 + 0.2 * _h(x, y, 231))
 	var d1 := absi(x - y)
 	var d2 := absi(x + y - (T - 1))
-	if (d1 <= 3 or d2 <= 3) and x > 6 and x < T - 7 and y > 6 and y < T - 7:
-		c = steel if mini(d1, d2) <= 1 else _shade(steel, 0.6)
-	if absi(x - T / 2) <= 2 and y > 12 and y < T - 12:
+	if (d1 <= 1 or d2 <= 1) and x > 3 and x < T - 4 and y > 3 and y < T - 4:
+		c = steel if mini(d1, d2) == 0 else _shade(steel, 0.6)
+	if absi(x - T / 2) <= 1 and y > 6 and y < T - 6:
 		c = _shade(steel, 1.1)
 	return c
 
 ## Куча земли: насыпь с тенью снизу-справа.
 func _dirt_pile(x: int, y: int, v: int) -> Color:
-	var mid := Vector2(T / 2.0, T / 2.0 + 4)
+	var mid := Vector2(T / 2.0, T / 2.0 + 2)
 	var d := Vector2(x, y).distance_to(mid) / (T * 0.44)
 	if d > 1.0 + 0.08 * (_tn(x, y, 8, 241 + v) - 0.5):
 		return Color(0, 0, 0, 0)
@@ -488,11 +570,11 @@ func _drone_station() -> Image:
 	for y in T:
 		for x in T:
 			var d := Vector2(x, y).distance_to(mid)
-			if d < 27.0:
+			if d < 13.5:
 				img.set_pixel(x, y, _shade(Color8(52, 62, 76), 0.9 + 0.15 * _fbm(x, y, 251, 3)))
-			if d > 22.0 and d < 27.0:
+			if d > 11.0 and d < 13.5:
 				img.set_pixel(x, y, Color8(96, 178, 210))
-			if absf(d - 9.0) < 1.6:
+			if absf(d - 4.5) < 0.8:
 				img.set_pixel(x, y, Color8(96, 178, 210))
 	return img
 
@@ -503,33 +585,33 @@ func _dpmg() -> Image:
 	for y in T:
 		for x in T:
 			var d := Vector2(x, y).distance_to(mid)
-			if d > 17.0 and d < 30.0:
+			if d > 8.5 and d < 15.0:
 				img.set_pixel(x, y, _sandbag(x, y, 0, 0))
-	for x in range(T / 2, T - 4):
-		for t in range(-2, 3):
-			img.set_pixel(x, T / 2 + t, Color8(40, 40, 44) if absi(t) < 2 else Color8(84, 84, 92))
-	for y in range(T / 2 - 9, T / 2 + 9):
-		for x in range(T / 2 - 10, T / 2 + 2):
+	for x in range(T / 2, T - 2):
+		for t in range(-1, 2):
+			img.set_pixel(x, T / 2 + t, Color8(40, 40, 44) if t == 0 else Color8(84, 84, 92))
+	for y in range(T / 2 - 4, T / 2 + 4):
+		for x in range(T / 2 - 5, T / 2 + 1):
 			img.set_pixel(x, y, _shade(Color8(62, 64, 70), 0.9 + 0.2 * _h(x, y, 261)))
 	return img
 
 ## Осколок стекла (item 7): зубчатый полупрозрачный клин со светлой кромкой и бликом.
 func _glass_shard() -> Image:
 	var img := Image.create(T, T, false, Image.FORMAT_RGBA8)
-	var pts := [Vector2(8, 40), Vector2(30, 6), Vector2(40, 20), Vector2(58, 26),
-			Vector2(36, 34), Vector2(44, 58)]
+	var pts := [Vector2(4, 20), Vector2(15, 3), Vector2(20, 10), Vector2(29, 13),
+			Vector2(18, 17), Vector2(22, 29)]
 	for y in T:
 		for x in T:
 			if Geometry2D.is_point_in_polygon(Vector2(x, y), PackedVector2Array(pts)):
 				var c := Color(0.68, 0.86, 0.96, 0.7)
-				if absf(float(x - y) + 8.0) < 2.0:
+				if absf(float(x - y) + 4.0) < 1.0:
 					c = Color(1, 1, 1, 0.85)   # блик
 				img.set_pixel(x, y, c)
 	for i in pts.size():
 		var a: Vector2 = pts[i]
 		var b: Vector2 = pts[(i + 1) % pts.size()]
-		for k in 40:
-			var p := a.lerp(b, k / 39.0)
+		for k in 20:
+			var p := a.lerp(b, k / 19.0)
 			img.set_pixel(int(p.x), int(p.y), Color(0.92, 0.98, 1.0, 0.95))
 	return img
 
@@ -539,8 +621,8 @@ func _mine(c: Color) -> Image:
 	for y in T:
 		for x in T:
 			var d := Vector2(x, y).distance_to(mid)
-			if d < 13.0:
-				img.set_pixel(x, y, _shade(c, 0.65 if d > 10.0 else 1.0))
-			if d < 3.0:
+			if d < 6.5:
+				img.set_pixel(x, y, _shade(c, 0.65 if d > 5.0 else 1.0))
+			if d < 1.5:
 				img.set_pixel(x, y, Color8(240, 230, 210))
 	return img

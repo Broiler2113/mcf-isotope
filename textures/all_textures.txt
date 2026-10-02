@@ -107,9 +107,9 @@ Soldier art is drawn facing UP in a square; a corpse is the same picture turned
 (corpse.png is the fallback for piles and for soldiers without art).
 faction_<key>.png is the portrait shown in the lobby's faction window.
 
-== Terrain tiles: 64x64, variants, environments ==
-Floor and feature tiles are 64x64. A tile file may hold several VARIANTS side by
-side (e.g. floor.png 384x64 = 6 variants); each cell picks one by its position, so
+== Terrain tiles: 32x32, variants, environments ==
+Floor and feature tiles are 32x32. A tile file may hold several VARIANTS side by
+side (e.g. floor.png 192x32 = 6 variants); each cell picks one by its position, so
 a field of the same floor never repeats as a visible pattern. Keep the edges of all
 variants identical (or make each tile seamless) and the surface stays continuous.
 A map's environment (station, bunker, town, field, asteroid) picks floor_<env>.png
@@ -128,7 +128,7 @@ and picks tile index = N*1 + E*2 + S*4 + W*8; column = index % 4, row = index / 
   row 2:  8 W         9 N+W       10 E+W (-)   11 N+E+W
   row 3: 12 S+W      13 N+S+W     14 E+S+W     15 all four (+)
 
-Each tile is square; the sheet is 4 tiles wide and 4 tall (e.g. 256x256 for 64px
+Each tile is square; the sheet is 4 tiles wide and 4 tall (e.g. 128x128 for 32px
 tiles). If a sheet exists it wins over the plain <feature>.png. Diagonal
 neighbours are ignored on purpose: 16 tiles are enough for corridors and rooms.
 
