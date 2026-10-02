@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import torch_compat  # noqa: F401,E402
 import torch  # noqa: E402
 
-from model import PolicyNet  # noqa: E402
+from model import PolicyNet, load_compat  # noqa: E402
 from train import choose, encode  # noqa: E402
 
 
@@ -29,7 +29,7 @@ def main():
     a = p.parse_args()
     ck = torch.load(a.checkpoint, map_location="cpu", weights_only=False)
     net = PolicyNet()
-    net.load_state_dict(ck["model"])
+    load_compat(net, ck["model"])
     net.eval()
     torch.set_num_threads(max(1, os.cpu_count() // 2))
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

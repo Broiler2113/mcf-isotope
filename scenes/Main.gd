@@ -55,6 +55,12 @@ var _ruler_a := Vector2i(-1, -1)
 var _ruler_b := Vector2i(-1, -1)
 var _ruler_hover := Vector2i(-1, -1)
 var _ruler_btn: Button = null
+## Отряд, выделенный до группового приказа: _after_action выделяет его снова.
+var _regroup_ids: Array[int] = []
+## Зоны хода за 2-е и 3-е ОД (клетка -> цена), см. _enter_move.
+var _reach_tiers: Array = []
+## Ярусы хода машины за 1/2/3 ОД (vehicle_move_tiers).
+var _veh_tiers: Array = []
 
 ## Аннотации на поле (item 51). Каждый штрих — список клеток, автор и область видимости.
 enum DrawScope {SELF, TEAM, ALL}
@@ -983,6 +989,28 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMagnifyGesture:
 		_zoom_at(event.position, event.factor)
 		return
+	# Линейка (item 11). Первый клик ставит начало, дальше расстояние тянется за курсором,
+	# второй клик закрепляет отрезок; следующий клик начинает новое измерение. Правая
+	# кнопка здесь не годится — она панорамирует камеру, — поэтому выход по Esc/кнопке.
+	if mode == Mode.RULER:
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT \
+				and event.pressed:
+			var at := _pos_to_cell(get_global_mouse_position())
+			if not state.grid.in_bounds(at):
+				return
+			if _ruler_a == Vector2i(-1, -1) or _ruler_b != Vector2i(-1, -1):
+				_ruler_a = at
+				_ruler_b = Vector2i(-1, -1)
+			else:
+				_ruler_b = at
+			queue_redraw()
+			return
+		if event is InputEventMouseMotion:
+			var hov := _pos_to_cell(get_global_mouse_position())
+			if hov != _ruler_hover:
+				_ruler_hover = hov
+				queue_redraw()
+			return
 	if _animating:
 		return
 	# Рисование ЛДФ-стены: тянем цепочку клеток левой кнопкой; Backspace — отмена
@@ -1008,28 +1036,6 @@ func _unhandled_input(event: InputEvent) -> void:
 			if event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
 				_wall_commit()
 				return
-	# Линейка (item 11). Первый клик ставит начало, дальше расстояние тянется за курсором,
-	# второй клик закрепляет отрезок; следующий клик начинает новое измерение. Правая
-	# кнопка здесь не годится — она панорамирует камеру, — поэтому выход по Esc/кнопке.
-	if mode == Mode.RULER:
-		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT \
-				and event.pressed:
-			var at := _pos_to_cell(get_global_mouse_position())
-			if not state.grid.in_bounds(at):
-				return
-			if _ruler_a == Vector2i(-1, -1) or _ruler_b != Vector2i(-1, -1):
-				_ruler_a = at
-				_ruler_b = Vector2i(-1, -1)
-			else:
-				_ruler_b = at
-			queue_redraw()
-			return
-		if event is InputEventMouseMotion:
-			var hov := _pos_to_cell(get_global_mouse_position())
-			if hov != _ruler_hover:
-				_ruler_hover = hov
-				queue_redraw()
-			return
 	# Рисование аннотаций (item 51): тянем штрих левой кнопкой; отпускание фиксирует его
 	# и, в сетевой партии, рассылает. Симуляции это не касается — чистый клиентский слой.
 	if mode == Mode.DRAW:
@@ -1492,7 +1498,10 @@ func _deselect() -> void:
 	veh_move_targets = {}
 	veh_disembark_id = -1
 	_group_ids = []
-	mode = Mode.NONE
+	# Линейка — инструмент смотрящего, а не приказ бойцу (batch ui-drones): чужой ход,
+	# действие ИИ или конец хода её не выключают, только Esc или сама кнопка.
+	if mode != Mode.RULER:
+		mode = Mode.NONE
 	reach = null
 	target_ids = []
 	item_cells = []
@@ -1519,11 +1528,11 @@ func _escape_pressed() -> void:
 	if _quit_dialog.visible:
 		_quit_dialog.hide()
 		return
-	if _animating:
-		return
-	# Выход из линейки (item 11) — с очисткой отрезка.
+	# Выход из линейки (item 11) — с очисткой отрезка; и во время чужой анимации тоже.
 	if mode == Mode.RULER:
 		_exit_ruler()
+		return
+	if _animating:
 		return
 	# Выход из режима рисования/стирания аннотаций (item 14/51): бросаем незавершённый штрих.
 	if mode == Mode.DRAW or mode == Mode.ERASE:
@@ -1683,6 +1692,7 @@ func _veh_enter_move() -> void:
 	if veh == null:
 		return
 	veh_move_targets = resolver.vehicle_move_targets(veh)
+	_veh_tiers = resolver.vehicle_move_tiers(veh)
 	mode = Mode.VEH_MOVE
 	item_cells = []
 	_menu.hide()
@@ -1848,6 +1858,17 @@ func _enter_move() -> void:
 	var budget := resolver.move_budget(u)
 	reach = resolver.reachable_for(u, budget)
 	reach_budget = budget
+	# Дальние зоны (batch ui-drones): оранжевая — куда хватит ещё одного ОД, красная —
+	# ещё двух. Остаток движения переносится между действиями, поэтому «два хода подряд»
+	# и есть один путь с суммой бюджетов. Только подсказка: «Move» по-прежнему принимает
+	# зелёную зону.
+	_reach_tiers = []
+	var extra_ap := u.remaining_ap - (0 if u.move_credit > 0 else 1)
+	var step := resolver.move_budget_fresh(u)
+	for k in range(1, 3):
+		if extra_ap < k or step <= 0:
+			break
+		_reach_tiers.append(resolver.reachable_for(u, budget + step * k).cost)
 	target_ids = []
 	_menu.hide()
 	queue_redraw()
@@ -1876,6 +1897,9 @@ func _enter_shoot() -> void:
 		# Шахтёр может ломом бить по соседней вражеской машине (item 15).
 		elif u.stats.special_ability_id == MCF.ABILITY_MINER:
 			_melee_veh_ids = resolver.meleeable_vehicle_ids(u)
+		# Обычный стрелок может разбить окно (batch ui-drones) — клик по стеклу.
+		elif u.remaining_ap > 0 and not _is_marksman(u):
+			item_cells = resolver.shootable_window_cells(u)
 	else:
 		target_ids = []
 	_menu.hide()
@@ -1949,7 +1973,8 @@ func _enter_drone_fly() -> void:
 		return
 	# Спуск со стены бесплатен (#99), поэтому «Fly» открывается и на нулевых ОД —
 	# иначе дрон оставался бы сидеть на стене до конца раунда.
-	if u.remaining_ap <= 0 and not _drone_on_wall(u):
+	# Недолётанный остаток (до 30 клеток за подлёт) тратится без нового ОД.
+	if u.remaining_ap <= 0 and u.move_credit <= 0 and not _drone_on_wall(u):
 		return
 	mode = Mode.DRONE_FLY
 	reach = null
@@ -2165,6 +2190,7 @@ func _fire_volley(dir: Vector2i) -> void:
 		var ids: Array = []
 		for m: UnitInstance in ms:
 			ids.append(m.id)
+		_regroup_ids = _group_ids.duplicate()
 		_set_group([])
 		for id: int in ids:
 			var m := state.get_unit(id)
@@ -2240,6 +2266,7 @@ func _group_move_to(dest: Vector2i) -> void:
 	# Та же раскладка, что и в предпросмотре (§18.3): игрок получает ровно те клетки,
 	# кружки которых он видел под курсором.
 	var plan := _group_plan(dest)
+	_regroup_ids = _group_ids.duplicate()  # после хода отряд выделяется снова
 	_set_group([])
 	queue_redraw()
 	if not plan[0].is_empty():
@@ -2767,7 +2794,21 @@ func _after_action() -> void:
 			and not resolver.diggable_cells(u).is_empty():
 		_enter_dig()
 		return
-	if _is_own_active(u) and (u.remaining_ap > 0 or _valid_pending_shoot(u) or u.dig_credits > 0 or u.move_credit > 0):
+	# Выделенная группа остаётся выделенной после приказа (batch ui-drones): раньше её
+	# снимало, и для следующего шага отряд приходилось обводить заново.
+	if _group_ids.is_empty() and not _regroup_ids.is_empty():
+		_group_ids = _regroup_ids
+	_regroup_ids = []
+	if not _group_ids.is_empty():
+		var keep: Array[int] = []
+		for gid: int in _group_ids:
+			if _is_own_active(state.get_unit(gid)):
+				keep.append(gid)
+		_set_group(keep)
+		return
+	# Один боец тоже остаётся выделенным, даже без ОД: меню просто показывает погашенные
+	# кнопки. Снимается выделение лишь с погибшего или когда ход ушёл.
+	if _is_own_active(u):
 		_select(u)  # переоткрываем меню для цепочки действий
 	else:
 		_deselect()
@@ -3033,6 +3074,7 @@ const RESIST_PROMPT := "You are grabbed — click Roll to resist"
 ## броски защиты ждут ручного нажатия «Roll» защищающимся игроком (§3.5).
 func _play_dice(events: Array) -> void:
 	_animating = true
+	var fast_before := _fast_playback
 	# Точки ОД отматываем к тому, что было ДО хода: дальше события гасят их по одной.
 	for ev in events:
 		if ev.get("kind", "") == "ap" and not _ap_display.has(int(ev["unit"])):
@@ -3051,6 +3093,9 @@ func _play_dice(events: Array) -> void:
 		if ev.get("kind", "") == "slot":
 			# Начался ход нейтральной группы (item 6) — подсвечиваем её в списке.
 			_playing_slot = int(ev.get("owner", -1))
+			# Ходы жителей после конца хода — ускоренно, как и открывающий слот (batch
+			# ui-drones: «конец раунда тянется»). Раньше ускорялся лишь слот в начале боя.
+			_fast_playback = true
 			if _init_overlay != null and _init_overlay.visible:
 				_refresh_initiative_overlay()
 			continue
@@ -3095,15 +3140,16 @@ func _play_dice(events: Array) -> void:
 					_dice.release()
 					await _dice.finished
 				continue
-			# 8× и быстрее (кнопка «быстрее» для ИИ): автоматический бросок не показываем —
-			# итог всё равно в журнале, а кубики съедали почти весь ход.
-			if not step["manual"] and _pace() >= 8.0:
+			# 8× и быстрее (кнопка «быстрее» для ИИ) и ход жителей: автоматический бросок не
+			# показываем — итог всё равно в журнале, а кубики съедали почти весь ход.
+			if not step["manual"] and (_pace() >= 8.0 or _fast_playback):
 				continue
 			_dice.play(step["faces"], step["manual"], step["prompt"], step.get("speed", 1.0) * _pace())
 			await _dice.finished
 	_walk_cells.clear()
 	_ap_display.clear()
 	_animating = false
+	_fast_playback = fast_before
 	# Ходы нейтральных групп отыграны — окно инициативы снова показывает настоящую
 	# активную сторону. Без сброса «▶» навсегда оставался на последней группе жителей.
 	if _playing_slot != -1:
@@ -3149,6 +3195,16 @@ func _owner_is_local_human(owner_id: int) -> bool:
 
 ## Разбить событие бросков на отдельные шаги: {faces, manual, prompt}.
 ## Каждый шаг — один кубик, чтобы попадание и пробитие крутились по очереди.
+## Цвет кубика с точки зрения смотрящего (batch ui-drones): удача бросавшего — зелёная,
+## если бросал свой или союзник, и красная, если бросал противник (его неудачная защита —
+## зелёная для нас). Хозяин броска неизвестен (-1) — как раньше, по самому броску.
+func _good_for_viewer(success: bool, roller: int) -> bool:
+	if roller < 0 or state == null or state.roster == null:
+		return success
+	var me := _viewing_side()
+	var mine: bool = roller == me or (MCF.is_player(roller) and state.roster.are_allies(me, roller))
+	return success if mine else not success
+
 func _dice_steps(ev: Dictionary) -> Array:
 	var steps: Array = []
 	match ev["kind"]:
@@ -3162,11 +3218,15 @@ func _dice_steps(ev: Dictionary) -> Array:
 				# «нельзя выкинуть 0»). Факт застревания уже виден в журнале.
 				if det.get("stopped_by_glass", false):
 					continue
-				hit_faces.append(
-					{"value": det["hit_roll"], "good": det["hit"], "tag": "Hit %d+" % det["need"]})
+				var s_own := int(ev.get("shooter_owner", -1))
+				var d_own := int(ev.get("def_owner", -1))
+				hit_faces.append({"value": det["hit_roll"],
+					"good": _good_for_viewer(det["hit"], s_own), "tag": "Hit %d+" % det["need"]})
 				if det["hit"]:
-					pen_faces.append(
-						{"value": det["def_roll"], "good": not det["parried"], "tag": "Pen %d+" % det["armor"]})
+					# Зелёный — то, что хорошо для СМОТРЯЩЕГО (batch ui-drones): своя защита не
+					# выдержала — красный, вражеская — зелёный.
+					pen_faces.append({"value": det["def_roll"],
+						"good": _good_for_viewer(det["parried"], d_own), "tag": "Pen %d+" % det["armor"]})
 			# Разбивка бонусов/штрафов к попаданию и защите (#49): показываем в подсказке.
 			var hit_note := _mods_text("To-hit", ev.get("hit_mods", []))
 			# Бросок на попадание катит САМ стрелок, если это местный человек (item 13):
@@ -3202,7 +3262,8 @@ func _dice_steps(ev: Dictionary) -> Array:
 			resist["roller"] = int(ev.get("def_owner", MCF.Owner.NEUTRAL))
 			steps.append(resist)
 		"check":
-			var chk := _step({"value": ev["roll"], "good": ev["ok"], "tag": "%d+" % ev["need"]})
+			var chk := _step({"value": ev["roll"],
+				"good": _good_for_viewer(ev["ok"], int(ev.get("roller", -1))), "tag": "%d+" % ev["need"]})
 			chk["speed"] = FAST_ROLL_SPEED if int(ev["need"]) <= 1 else 1.0
 			steps.append(chk)
 		"grenade":
@@ -3212,8 +3273,9 @@ func _dice_steps(ev: Dictionary) -> Array:
 				if det["epicenter"] and det["rolls"].is_empty():
 					continue  # эпицентр: автосмерть без броска
 				for r in det["rolls"]:
-					frag_faces.append(
-						{"value": r, "good": r >= det["need"], "tag": "R%d+" % det["need"]})
+					frag_faces.append({"value": r,
+						"good": _good_for_viewer(r >= det["need"], int(det.get("owner", -1))),
+						"tag": "R%d+" % det["need"]})
 			if not frag_faces.is_empty():
 				# Ручной бросок — только если под осколки попал юнит-человек; если это
 				# лишь мирные/ИИ, защита катится сама (но видна).
@@ -3338,6 +3400,13 @@ func _draw_move_preview() -> void:
 	# Горящие клетки разлива помечаются чёрным крестом (#1): дойти до них можно, но
 	# это смерть. Огнеупорному бойцу (#2) огонь не вредит — ему крестов не рисуем.
 	var mark_fire: bool = GridCell.burning > 0 and not resolver.is_fireproof(_selected_unit())
+	# Сначала дальние ярусы — красный (3 ОД), затем оранжевый (2 ОД); зелёный сверху.
+	for k in range(_reach_tiers.size() - 1, -1, -1):
+		var tier_col := Color(1.0, 0.5, 0.0, 0.45) if k == 0 else Color(1.0, 0.1, 0.05, 0.4)
+		var inner: Dictionary = reach.cost if k == 0 else _reach_tiers[k - 1]
+		for coord: Vector2i in _reach_tiers[k]:
+			if not inner.has(coord):
+				draw_rect(Rect2(_cell_origin(coord), cvec), tier_col)
 	for coord: Vector2i in reach.cost:
 		var origin := _cell_origin(coord)
 		var lit: bool = on_path.has(coord)
@@ -3934,13 +4003,18 @@ func _draw() -> void:
 				# Предпросмотр струи 6×1 в направлении наведённой клетки.
 				for jc in _flame_jet_preview(su.coord, shov):
 					draw_rect(Rect2(_cell_origin(jc), Vector2(CELL, CELL)), Color(1, 0.4, 0.05, 0.34))
-			else:
+			elif su.stats.special_ability_id == MCF.ABILITY_ANTI_TANK:
 				# Предпросмотр радиуса взрыва (3x3) вокруг наведённой клетки.
 				for dy in range(-1, 2):
 					for dx in range(-1, 2):
 						var bc := Vector2i(shov.x + dx, shov.y + dy)
 						if state.grid.in_bounds(bc):
 							draw_rect(Rect2(_cell_origin(bc), Vector2(CELL, CELL)), Color(1, 0.35, 0.1, 0.32))
+		# Сколько нужно выбросить на попадание (batch ui-drones) — у каждой цели, по той же
+		# формуле, что и сам выстрел (hit_need_for). У лазера, струи и заряда ПТ кубика
+		# попадания нет — им не подписываем.
+		var show_need: bool = mode == Mode.SHOOT and su != null and not su.stats.special_ability_id in [
+				MCF.ABILITY_MARKSMAN, MCF.ABILITY_FLAMETHROWER, MCF.ABILITY_ANTI_TANK]
 		for tid in target_ids:
 			var t := state.get_unit(tid)
 			if t != null:
@@ -3948,6 +4022,14 @@ func _draw() -> void:
 				draw_arc(c, CELL * 0.46, 0, TAU, 28, Color(1, 0.3, 0.3), 2.5)
 				draw_line(c - Vector2(CELL * 0.5, 0), c + Vector2(CELL * 0.5, 0), Color(1, 0.3, 0.3, 0.7), 1.5)
 				draw_line(c - Vector2(0, CELL * 0.5), c + Vector2(0, CELL * 0.5), Color(1, 0.3, 0.3, 0.7), 1.5)
+				if show_need:
+					var need: int = resolver.hit_need_for(su, t)
+					var txt := "%d+" % need if need <= 6 else "—"
+					var big: bool = t.coord == shov
+					var fs := 16 if big else 12
+					var tp := c + Vector2(CELL * 0.3, -CELL * 0.3)
+					draw_string_outline(font, tp, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 4, Color(0, 0, 0, 0.9))
+					draw_string(font, tp, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(1, 0.92, 0.5))
 
 	if mode == Mode.GRAB:
 		# Бойцы под захват — оранжевые круги; объекты (труп/мешки/ёж/куча) — жёлтые клетки,
@@ -3977,6 +4059,17 @@ func _draw() -> void:
 		var is_station: bool = _selected_unit() != null and _selected_unit().held_item_id == MCF.ITEM_DRONE_STATION
 		for coord in item_cells:
 			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(0.9, 0.5, 0.1, 0.16))
+		# Станция дронов (batch ui-drones): под курсором — квадрат поводка, дальше
+		# DRONE_LEASH клеток от станции её дрон не улетит.
+		if is_station and item_cells.has(hover):
+			var lr := MCF.DRONE_LEASH
+			var tl := Vector2i(maxi(0, hover.x - lr), maxi(0, hover.y - lr))
+			var br := Vector2i(mini(state.grid.width - 1, hover.x + lr), mini(state.grid.height - 1, hover.y + lr))
+			var rect := Rect2(_cell_origin(tl), Vector2(br - tl + Vector2i.ONE) * CELL)
+			draw_rect(rect, Color(0.38, 0.7, 0.85, 0.08))
+			draw_rect(rect, Color(0.38, 0.7, 0.85, 0.85), false, 2.0)
+			draw_string(ThemeDB.fallback_font, rect.position + Vector2(6, 16),
+				"Drone range %d" % lr, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0.6, 0.85, 0.95))
 		if item_cells.has(hover) and not is_station:
 			# Предпросмотр зоны взрыва вокруг наведённой клетки (#64): у осколочной и
 			# у пожаротушительной это «косой крест», а не квадрат 3×3. Форму берём у
@@ -4083,8 +4176,11 @@ func _draw() -> void:
 			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), wt)
 
 	if mode == Mode.VEH_MOVE:
-		for coord: Vector2i in veh_move_targets.keys():
-			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(0.3, 0.8, 0.9, 0.30))
+		# Как у пехоты (batch ui-drones): зелёный — за 1 ОД, оранжевый — за 2, красный — за 3.
+		var vcols := [Color(0.3, 0.8, 0.4, 0.30), Color(1.0, 0.55, 0.05, 0.38), Color(1.0, 0.12, 0.08, 0.34)]
+		for k in _veh_tiers.size():
+			for coord: Vector2i in _veh_tiers[k]:
+				draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), vcols[k])
 
 	if mode == Mode.VEH_TURN:
 		var vt := _selected_vehicle()
@@ -4323,7 +4419,7 @@ func _draw() -> void:
 		else:
 			draw_circle(ucenter, usz * 0.34, _side_color(unit.owner))
 			draw_arc(ucenter, usz * 0.34, 0, TAU, 20, _side_color(unit.owner).darkened(0.45), 1.5)
-			draw_string(font, ucenter + Vector2(-9, 5), _initials(unit.stats.display_name),
+			draw_string(font, ucenter + Vector2(-9, 5), Sprites.unit_tag(unit.stats.id, unit.stats.display_name),
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 16, _ink(_side_color(unit.owner)))
 		if in_trench:
 			draw_rect(Rect2(uorg + Vector2(usz * 0.12, usz * 0.72), Vector2(usz * 0.76, usz * 0.2)),
@@ -4379,7 +4475,8 @@ func _draw() -> void:
 ## верхним слоем — поверх корпусов машин, над которыми он висит.
 ## Чёрная полоса-дорожка под «булавкой» ползунка кисти (item 13): без неё грабер висел
 ## на пустом месте и не читался. Даём слайдеру видимую тёмную дорожку и высоту.
-func _style_brush_slider(s: HSlider) -> void:
+## Чёрная дорожка под ползунком повтора (item 7).
+func _style_replay_slider(s: HSlider) -> void:
 	s.custom_minimum_size = Vector2(0, 18)
 	var track := StyleBoxFlat.new()
 	track.bg_color = Color(0, 0, 0, 0.85)
@@ -4387,6 +4484,19 @@ func _style_brush_slider(s: HSlider) -> void:
 	track.content_margin_top = 6
 	track.content_margin_bottom = 6
 	s.add_theme_stylebox_override("slider", track)
+
+## Ползунок кисти в строку с окошком значения, куда можно вписать число (оформление —
+## общий набор интерфейса, как у ползунков лобби).
+func _brush_row(s: HSlider) -> HBoxContainer:
+	s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	s.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	row.add_child(s)
+	var e := Ui.slider_entry(s, func(v: float) -> String: return str(int(v)))
+	e.custom_minimum_size = Vector2(40, 0)
+	row.add_child(e)
+	return row
 
 func _draw_drone(unit: UnitInstance, at: Vector2i) -> void:
 	var center := _cell_origin(at) + Vector2(CELL, CELL) * 0.5
@@ -4704,12 +4814,6 @@ func _ortho_dir(d: Vector2i) -> Vector2i:
 		return Vector2i(signi(d.x), 0)
 	return Vector2i(0, signi(d.y))
 
-func _initials(name_ru: String) -> String:
-	var parts := name_ru.split(" ", false)
-	if parts.size() >= 2:
-		return (parts[0].substr(0, 1) + parts[1].substr(0, 1)).to_upper()
-	return name_ru.substr(0, 2).to_upper()
-
 # --- Правое меню боя: только горизонтальный размер, окно неподвижно (item 6) ---
 ## Тянем ЛЕВЫЙ край панели: влево — шире, вправо — уже. Панель остаётся приклеенной к
 ## правому краю экрана (offset_right = 0), меняется лишь offset_left = -ширина.
@@ -4900,8 +5004,7 @@ func _build_ui() -> void:
 	draw_slider.step = 1
 	draw_slider.value = _draw_brush
 	draw_slider.value_changed.connect(func(v: float) -> void: _draw_brush = int(v))
-	_style_brush_slider(draw_slider)
-	vbox.add_child(draw_slider)
+	vbox.add_child(_brush_row(draw_slider))
 	var erase_lbl := Label.new()
 	erase_lbl.text = "Erase brush"
 	erase_lbl.add_theme_font_size_override("font_size", 11)
@@ -4912,8 +5015,7 @@ func _build_ui() -> void:
 	erase_slider.step = 1
 	erase_slider.value = _erase_brush
 	erase_slider.value_changed.connect(func(v: float) -> void: _erase_brush = int(v))
-	_style_brush_slider(erase_slider)
-	vbox.add_child(erase_slider)
+	vbox.add_child(_brush_row(erase_slider))
 	# Кому видны штрихи и какие прятать (item 51, batch 17 item 10) — простые флажки.
 	vbox.add_child(_draw_toggle("Share with team", func(on: bool) -> void: _draw_scope_team = on))
 	vbox.add_child(_draw_toggle("Share with everyone", func(on: bool) -> void: _draw_scope_all = on))
@@ -5132,8 +5234,8 @@ func _build_replay_bar() -> void:
 	_replay_slider.step = 1
 	_replay_slider.custom_minimum_size = Vector2(360, 18)
 	_replay_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_replay_slider(_replay_slider)  # чёрная дорожка под ползунком (item 7)
 	_replay_slider.value_changed.connect(_on_replay_slider)
-	_style_brush_slider(_replay_slider)  # чёрная дорожка под ползунком (item 7)
 	slider_wrap.add_child(_replay_slider)
 	_replay_bar = panel
 	_ui_layer.add_child(_replay_bar)
@@ -5902,12 +6004,28 @@ func _camera_row() -> Control:
 	row.add_child(lbl)
 	var me := NetHandoff.my_side_hint(state.roster if state != null else null)
 	var sides: Array[int] = []
+	# Все стороны — машины (batch ui-drones): зритель свой у всех, камера ездит к любой
+	# армии, как к союзнику.
+	var all_ai := false
 	if state != null and state.roster != null:
+		all_ai = not state.roster.player_ids().is_empty()
 		for sid: int in state.roster.player_ids():
-			if sid == me or (state.roster.has_teams() and me >= 0 and state.roster.are_allies(me, sid)):
+			if not state.roster.is_ai(sid):
+				all_ai = false
+		for sid: int in state.roster.player_ids():
+			if all_ai or sid == me or (state.roster.has_teams() and me >= 0 and state.roster.are_allies(me, sid)):
 				sides.append(sid)
+	if all_ai:
+		me = -1
 	if sides.is_empty():
 		sides.append(me if me >= 0 else 0)
+	# Кнопки переносятся на новую строку: при восьми армиях ряд не влез бы в панель.
+	var flow := HFlowContainer.new()
+	flow.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	flow.alignment = FlowContainer.ALIGNMENT_END
+	flow.add_theme_constant_override("h_separation", 4)
+	flow.add_theme_constant_override("v_separation", 4)
+	row.add_child(flow)
 	for sid in sides:
 		var b := Button.new()
 		b.text = "Me" if sid == me else MCF.PLAYER_LETTERS[sid]
@@ -5917,7 +6035,7 @@ func _camera_row() -> Control:
 		b.custom_minimum_size = Vector2(30, 24)
 		var side := sid
 		b.pressed.connect(func() -> void: _center_on_side(side))
-		row.add_child(b)
+		flow.add_child(b)
 	return row
 
 func _compact_button(text: String, handler: Callable) -> Button:
@@ -6007,9 +6125,10 @@ func _open_menu(unit: UnitInstance) -> void:
 			var warn := Label.new()
 			warn.text = "Operator not at the station"
 			vb.add_child(warn)
-		if controllable and (unit.remaining_ap > 0 or _drone_on_wall(unit)):
+		if controllable and (unit.remaining_ap > 0 or unit.move_credit > 0 or _drone_on_wall(unit)):
 			var fly_btn := Button.new()
-			fly_btn.text = "Descend" if _drone_on_wall(unit) else "Fly"
+			fly_btn.text = "Descend" if _drone_on_wall(unit) \
+					else ("Fly (%d left)" % unit.move_credit if unit.move_credit > 0 else "Fly")
 			fly_btn.pressed.connect(_enter_drone_fly)
 			vb.add_child(fly_btn)
 		if controllable:

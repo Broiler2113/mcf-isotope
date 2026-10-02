@@ -229,4 +229,20 @@ static func describe(state: GameState, intent: Intent) -> Dictionary:
 	if state.grid.in_bounds(tgt):
 		d["tx"] = tgt.x
 		d["ty"] = tgt.y
+	# Дрон (batch ui-drones): поводок и техника. «lf» — насколько клетка полёта близка к
+	# пределу в DRONE_LEASH клеток от своей станции (1 = дальше не улетит); «vh» — сколько
+	# клеток вражеской техники накроет подрыв дрона там (дрон снимает прочность корпуса).
+	if actor != null and actor.is_drone:
+		var at_cell: Vector2i = tgt if intent is DroneMoveIntent else actor.coord
+		if intent is DroneMoveIntent or intent is DroneDetonateIntent:
+			d["lf"] = float(Combat.distance(at_cell, actor.home_station)) / float(MCF.DRONE_LEASH)
+			var hit := 0
+			for c: Vector2i in MCF.blast_square(at_cell, MCF.ANTI_TANK_BLAST_RADIUS):
+				if not state.grid.in_bounds(c):
+					continue
+				var v := state.get_vehicle(state.grid.vehicle_at(c))
+				if v != null and v.alive() and v.owner != actor.owner \
+						and not state.roster.are_allies(actor.owner, v.owner):
+					hit += 1
+			d["vh"] = hit
 	return d
