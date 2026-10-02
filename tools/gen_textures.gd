@@ -49,6 +49,7 @@ func _initialize() -> void:
 	_sheet("wall_town", _dark_brick, Color8(108, 60, 48), 3)
 	_sheet("wall_asteroid", _dark_brick, Color8(108, 60, 48), 3)
 	_sheet("wood_wall", _timber, Color8(104, 72, 44), 3)
+	_sheet("soil", _packed_soil, Color8(58, 42, 28), 2)
 	_sheet("armor_wall", _armor_plate, Color8(58, 64, 72), 3)
 	_sheet("glass", _glass_block, Color8(150, 180, 196), 2)
 	_sheet("armor_glass", _armor_glass, Color8(96, 126, 160), 2)
@@ -365,6 +366,22 @@ func _blast_concrete(x: int, y: int, v: int, _mask: int) -> Color:
 		c = _shade(c, 0.55)
 	if _tn(x, y, 16, 143 + v, 4) > 0.76:
 		c = _shade(c, 0.86)
+	return c
+
+## Грунт бункера: утрамбованная земля — бурые пласты, комья, камни и тонкие корни.
+## Темнее и теплее бетона стен, чтобы толща земли читалась отдельно от облицовки.
+func _packed_soil(x: int, y: int, v: int, _mask: int) -> Color:
+	var c := Color8(74, 54, 36).lerp(Color8(104, 78, 50), _fbm(x, y, 171 + v))
+	# Пласты — пологие полосы, как у среза земли.
+	if _tn(x, y + int(4.0 * _fbm(x, 0, 172)), 8, 173, 16) > 0.74:
+		c = _shade(c, 0.8)
+	var r := _h(x + v * T, y, 174)
+	if r > 0.985:
+		c = Color8(128, 120, 106)        # камешек
+	elif r > 0.965:
+		c = _shade(c, 0.62)              # ком
+	if _h(x, y * 3 + v, 175) > 0.993:
+		c = Color8(46, 32, 20)           # корешок
 	return c
 
 ## Амбразура ДОТа: тот же бетон и тёмная щель поперёк.

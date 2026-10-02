@@ -79,6 +79,10 @@ while true; do
   fi
 
   [ -f "$HERE/runs/$BRANCH/SUPERVISOR_OFF" ] && { sleep 60; continue; }
+  # A STOP still lying in the run directory is the operator's: never resume over it, even
+  # if the trainer recorded a resource reason on its way out (a stop that landed while
+  # the disk sat under its floor once came back as "disk" and was resumed).
+  [ -f "$HERE/runs/$BRANCH/STOP" ] && { sleep 60; continue; }
   verdict=$(python3 - "$HERE/runs/$BRANCH/status.json" <<'PY'
 import json, os, sys
 try:

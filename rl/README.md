@@ -214,7 +214,7 @@ its parent on its first step.
 | opponents | `train.py` | phase `league`: HARD styles + past checkpoints, prioritised toward those that beat it (PFSP) |
 | measuring | dashboard **Tactics** page | drill win rates vs HARD, per unit type: action share, hit rate, kills, losses; exposure at end of turn; 2-3 AP moves |
 
-A generated map is written `gen:<style|any>:<size index>:<units>:<tanks>` in `maps:`.
+A generated map is written `gen:<style|any>:<size index>:<units>:<tanks>` in `maps:`; units and tanks may be ranges (`60-200`), drawn per episode. Generated maps stay within the 64×64 canvas (an army that would grow the map past it is cut back).
 Cost: an env step on the company-scale town map is ~1.5× the pre-tactical one (threat maps,
 the larger move list, the ordering) — fewer samples per hour, each one far more informative.
 

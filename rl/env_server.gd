@@ -430,15 +430,23 @@ func _reset(req: Dictionary) -> Dictionary:
 	return _response(0.0, true)
 
 ## Карта из генератора: "gen:<стиль|any>:<размер>:<бойцов>:<танков>". Стиль — номер
-## MapGen.Style или any (любой), размер — индекс MapGen.SIZES. Зерно карты и армия — от
-## сида эпизода, так что каждая партия — новая местность, но воспроизводимая.
+## MapGen.Style или any (любой), размер — индекс MapGen.SIZES. Бойцы и танки — число или
+## диапазон «от-до» (каждая партия тянет своё: «10-30» — от 10 до 30 бойцов на сторону).
+## Зерно карты и армия — от сида эпизода: каждая партия — новая местность и новый состав,
+## но воспроизводимые.
+##
+## Поле сети — 64×64 клетки (features.CANVAS). Генератор растит поле, если армия не влезла
+## в зоны; карта шире канвы сеть не увидит, поэтому такая армия ужимается на четверть, и
+## карта строится заново.
+const GEN_CANVAS := 64
+
 func _gen_map(spec: String, arng: RandomNumberGenerator) -> MapData:
 	var p := spec.split(":")
 	var style_s := p[1] if p.size() > 1 else "any"
 	var size := int(p[2]) if p.size() > 2 else 0
-	var units := int(p[3]) if p.size() > 3 else 12
-	var tanks := int(p[4]) if p.size() > 4 else 0
-	for attempt in 4:
+	var units := _pick_range(p[3] if p.size() > 3 else "12", arng)
+	var tanks := _pick_range(p[4] if p.size() > 4 else "0", arng)
+	for attempt in 8:
 		var style := arng.randi_range(0, MapGen.STYLE_NAMES.size() - 1) if style_s == "any" \
 				else int(style_s)
 		var opts := {"style": style, "size": size, "density": arng.randi_range(0, 2),
@@ -446,9 +454,21 @@ func _gen_map(spec: String, arng: RandomNumberGenerator) -> MapData:
 				"units": units + tanks * (ArmyBuilder.TANK_CREW + 9),
 				"symmetric": arng.randf() < 0.5, "civilians": 0, "civilian_count": 0}
 		var m := MapGen.generate(opts)
+		if m != null and (m.width > GEN_CANVAS or m.height > GEN_CANVAS):
+			units = maxi(4, units * 3 / 4)
+			tanks = tanks * 3 / 4
+			continue
 		if m != null and ArmyBuilder.populate(m, arng, units, tanks):
 			return m
 	return null
+
+## «12» -> 12; «10-30» -> равномерно от 10 до 30.
+func _pick_range(s: String, arng: RandomNumberGenerator) -> int:
+	if "-" in s:
+		var ab := s.split("-")
+		return arng.randi_range(int(ab[0]), int(ab[1]))
+	return int(s)
+
 
 ## Посадить экипажи в машины ПЕРЕД началом партии.
 ##

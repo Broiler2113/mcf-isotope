@@ -49,10 +49,14 @@ maps:
   - rl/maps/drill_drone_recon.json
   - rl/maps/drill_crossfire.json
   - rl/maps/drill_sniper_lanes.json
-  - gen:any:0:12:0
-  - gen:any:1:18:1
-  - gen:any:2:28:2
-map_weights: [3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 1.5]
+  # Generated every episode: random style, terrain and a random army of random size, the
+  # same for both sides. Small 28x20 -> 10-30 a side, medium 38x28 -> 25-80, large
+  # 50x38 -> 60-200 (64x64 is the network's canvas; an army that would make the generator
+  # grow past it is cut back by a quarter until it fits).
+  - gen:any:0:10-30:0-1
+  - gen:any:1:25-80:0-2
+  - gen:any:2:60-200:1-4
+map_weights: [3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2.5, 2.5, 2.5]
 eval_maps:
   - rl/maps/town_50x50_s25.json
 drill_eval_maps:
