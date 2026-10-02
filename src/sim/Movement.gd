@@ -207,7 +207,8 @@ static func reachable(grid: Grid, start: Vector2i, budget: int,
 			# на каждого из восьми соседей каждой клетки разлива (#106).
 			var fid: String = nc.feature_id
 			var step := -1
-			if nc.vehicle_id == -1 and (nc.occupant == null \
+			# Куча тел (corpse_count) — такое же препятствие, как лежащее тело-occupant.
+			if nc.vehicle_id == -1 and nc.corpse_count == 0 and (nc.occupant == null \
 					or (has_free and free_cells.has(Vector2i(nx, ny)))):
 				var to_h: float = nc.cover_height
 				var opens := fid == f_airlock and not nc.airlock_welded

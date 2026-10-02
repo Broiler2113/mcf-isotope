@@ -52,6 +52,7 @@ static func encode(state: GameState) -> Dictionary:
 		"next_vehicle_id": state._next_vehicle_id,
 		"combat_started": state.combat_started,
 		"env": state.env,
+		"fx_seq": state.fx_seq,
 	}
 
 static func _encode_unit(u: UnitInstance) -> Dictionary:
@@ -224,6 +225,7 @@ static func restore_into(gs: GameState, d: Dictionary) -> void:
 	gs.turns.initiative_rolled = bool(turns.get("rolled", true))
 	gs.revealed_mines = _decode_mines(d.get("mines", []))
 	gs.env = str(d.get("env", gs.env))
+	gs.fx_seq = int(d.get("fx_seq", gs.fx_seq))
 
 static func _decode_unit(raw: Dictionary) -> Dictionary:
 	var stats := load_stats(str(raw.get("stats", "")))

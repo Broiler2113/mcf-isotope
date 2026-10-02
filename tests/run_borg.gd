@@ -106,8 +106,8 @@ func _engineer_batches() -> void:
 	var en := _u(st, Vector2i(4, 6))
 	var res := r.resolve(VehicleBoardIntent.new(en.id, b.id))
 	ck(res.ok, "engineer boards: " + res.reason)
-	ck(en.fire_range() == en.stats.fire_range and en.rate_of_fire() == en.stats.rate_of_fire,
-			"engineer keeps its own gun")
+	ck(en.fire_range() == en.stats.fire_range and en.rate_of_fire() == MCF.BORG_ROF,
+			"engineer keeps its own range, the borg's RoF 4 applies to everyone")
 	ck(en.speed() == 9 and en.armor() == en.stats.armor_threshold - 2 and en.max_ap() == 3, "engineer gets move/armour/AP")
 	ck(r.build_cost_for(en, MCF.FEATURE_WALL) == 1 and r.build_cost_for(en, MCF.FEATURE_DOT) == 1, "wall batch 1 AP, pillbox 1 AP")
 	var ap0 := en.remaining_ap

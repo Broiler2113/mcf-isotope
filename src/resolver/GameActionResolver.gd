@@ -95,7 +95,7 @@ func _turn_key() -> Vector2i:
 	return Vector2i(state.turns.round_number, state.turns.active_index)
 
 ## События потока «кубиков», которые на деле — только анимация, без броска.
-const ANIMATION_ONLY_EVENTS := ["walk", "hold", "ap", "focus", "slot"]
+const ANIMATION_ONLY_EVENTS := ["walk", "hold", "ap", "focus", "slot", "veh_walk"]
 
 ## Действие, которое нельзя откатить (#81). Любой выстрел — открытая карта: кубики
 ## уже брошены и результат известен, откат превратился бы в переброс. Лазер марксманна
@@ -1418,14 +1418,17 @@ func _laser_trace(from_coord: Vector2i, step: Vector2i) -> Array:
 			out.append(rec)
 			cur += step
 			continue
-		if cell.vehicle_id != -1:
+		var covering := vehicle_covering(cur)
+		if covering != null:
 			# Броня: челнок 2 прочности = 20 потенциала, танк 6 = 60. Луч гаснет о корпус
-			# в любом случае — пробил он его насквозь или только поцарапал.
-			var veh := state.get_vehicle(cell.vehicle_id)
+			# в любом случае — пробил он его насквозь или только поцарапал. Борг тоже
+			# (batch borg-corpses): у борга с пилотом на сетке нет следа корпуса, в клетке
+			# стоит сам пилот, и луч раньше проходил его как пехотинца, насквозь.
+			var veh := covering
 			var dur: int = veh.durability if veh != null else 1
 			var full: int = dur * MCF.POTENTIAL_PER_DURABILITY
 			rec["kind"] = "vehicle"
-			rec["vehicle_id"] = cell.vehicle_id
+			rec["vehicle_id"] = veh.id
 			rec["stop"] = true
 			rec["label"] = VehicleDB.get_vehicle(veh.type_id).get("name", "Vehicle") \
 					if veh != null else "Vehicle"
@@ -1921,6 +1924,10 @@ func _resolve_drop_corpse(intent: DropCorpseIntent) -> ActionResult:
 ## показывать его всё равно некому.
 func _fx(res: ActionResult, ev: Dictionary) -> void:
 	if res != null:
+		# Номер события — из доски (batch mp-perf): по нему FxDecals засевает разлёт, и у
+		# всех пиров он один и тот же, сколько бы событий кто ни пропустил или ни пересчитал.
+		ev["seq"] = state.fx_seq
+		state.fx_seq += 1
 		res.fx.append(ev)
 
 ## Узел, который назвал стрелок текущего действия (веха «Modular tank system»).
@@ -2527,7 +2534,10 @@ func _resolve_dig(intent: DigIntent) -> ActionResult:
 		if actor.remaining_ap <= 0:
 			return ActionResult.fail("No AP left to dig")
 		actor.remaining_ap -= 1
-		var per_ap: int = DIG_TRENCHES_ENGINEER if actor.stats.special_ability_id == MCF.ABILITY_ENGINEER else DIG_TRENCHES_NORMAL
+		# Борг роет BORG_DIG_TRENCHES (9) за ОД, кто бы в нём ни сидел (batch borg-corpses).
+		var per_ap: int = MCF.BORG_DIG_TRENCHES if actor.borg_id != -1 \
+				else (DIG_TRENCHES_ENGINEER if actor.stats.special_ability_id == MCF.ABILITY_ENGINEER
+				else DIG_TRENCHES_NORMAL)
 		actor.dig_credits = per_ap
 		spent_ap = true
 	actor.dig_credits -= 1
@@ -4064,14 +4074,27 @@ func _civ_sees_soldier(civ: UnitInstance, idx: Dictionary = {}) -> bool:
 ## каждый спящий житель перебирал ВСЕХ солдат (и заново собирал их список): 150 жителей ×
 ## 90 солдат давали ~80 мс на каждое действие в большой партии. Теперь проверяются только
 ## те, кто с ним на одной прямой, — ровно те, кого пропускал Combat.is_on_firing_line.
+## Отладка/тест: шлюзы и пробуждение жителей всегда считаются полностью, без выборки
+## «что изменилось». Итог обязан совпасть — это и проверяет tests/run_mp_perf.gd.
+var check_everything := false
+
+var _wk_pos: Dictionary = {}   # солдат -> клетка на прошлой проверке пробуждения
+var _wk_vv: int = -1
+var _wk_vsig: int = 0
+var _wk_grid: int = 0
+
 func _sight_index() -> Dictionary:
-	var idx := {}
 	var targets: Array[Vector2i] = []
 	for s: UnitInstance in _living_soldiers():
 		targets.append(s.coord)
 	for veh: Vehicle in state.all_vehicles():
 		if veh.alive() and not MCF.is_neutral(veh.owner):
 			targets.append_array(veh.footprint())
+	return _index_lines(targets)
+
+## Клетки, разложенные по линиям огня (строка, столбец, две диагонали).
+func _index_lines(targets: Array[Vector2i]) -> Dictionary:
+	var idx := {}
 	for t in targets:
 		for key: Vector3i in [Vector3i(0, t.y, 0), Vector3i(1, t.x, 0), Vector3i(2, t.x - t.y, 0), Vector3i(3, t.x + t.y, 0)]:
 			if not idx.has(key):
@@ -4189,16 +4212,97 @@ func _wake_and_group(res: ActionResult) -> void:
 ## Засеять фронт теми спящими НЕ сгруппированными нейтралами, кто видит солдата (§3.1b).
 ## Дорого только когда на карте есть и спящие нейтралы, и солдаты, — иначе выходит сразу.
 func _seed_sight_activation() -> void:
-	if _living_soldiers().is_empty():
+	var soldiers := _living_soldiers()
+	if soldiers.is_empty():
 		return
-	var idx := _sight_index()
+	# Проверяем только то, что могло измениться с прошлого раза (batch mp-perf). Раньше на
+	# каждое действие строился индекс ВСЕЙ армии и каждый спящий житель проверялся по нему
+	# заново: ~4 мс на шаг в бою на полтысячи бойцов, у хоста и у каждого гостя.
+	#
+	# Итог обязан быть РОВНО тем же, что у полной проверки (иначе пиры с разной историей
+	# кэша разошлись бы): житель, не видевший солдата, может увидеть его, только если
+	#   * солдат сдвинулся или появился — проверяем по ним;
+	#   * с линии между ними ушёл заслонявший юнит (живые юниты обзор закрывают) — житель
+	#     на линии через освободившуюся клетку проверяется целиком;
+	#   * сменился рельеф или машины — тогда проверяется всё.
+	# Видевшие солдата, но ещё не собранные в группу проверяются целиком каждый раз.
+	var sleepers: Array = []
 	for u in state.all_units():
-		if not _is_civilian(u) or not u.is_alive() or u.neutral_group != 0:
-			continue
+		if _is_civilian(u) and u.is_alive() and u.neutral_group == 0:
+			sleepers.append(u)
+	var pos := {}
+	for u: UnitInstance in state.units.values():
+		if not u.is_drone and u.is_alive() and state.grid.in_bounds(u.coord):
+			pos[u.id] = u.coord
+	var vsig := 0
+	for veh: Vehicle in state.all_vehicles():
+		if veh.alive():
+			vsig = hash([vsig, veh.id, veh.origin])
+	# Смена рельефа (шлюз открылся, стену снесли) — не повод проверять всех: она записана
+	# по клеткам в журнале обзора, и увидеть больше можно лишь сквозь изменившуюся клетку на
+	# своей линии. Журнала не хватило (давно не проверяли) — тогда уже всех.
+	var full := _wk_vsig != vsig or _wk_grid != state.grid.get_instance_id() \
+			or check_everything or (_wk_vv != GridCell.vision_version and _wk_vv < GridCell.vision_log_base)
+	var moved: Array[Vector2i] = []
+	var vacated := {}
+	if not full:
+		for so: UnitInstance in soldiers:
+			var c: Vector2i = so.coord
+			if _wk_pos.get(so.id) != c:
+				moved.append(c)
+		for id: int in _wk_pos:
+			var was: Vector2i = _wk_pos[id]
+			if pos.get(id) != was:
+				for key in _line_keys(was):
+					vacated[key] = true
+		if _wk_vv != GridCell.vision_version:
+			var changes := GridCell.vision_changes
+			var i: int = (_wk_vv - GridCell.vision_log_base) * 2
+			while i < changes.size():
+				for key in _line_keys(Vector2i(changes[i], changes[i + 1])):
+					vacated[key] = true
+				i += 2
+	var prev_seen := _wk_seen
+	var prev_sleepers := _wk_sleepers
+	_wk_seen = {}
+	_wk_sleepers = {}
+	for u: UnitInstance in sleepers:
+		_wk_sleepers[u.id] = true
+	_wk_pos = pos
+	_wk_vv = GridCell.vision_version
+	_wk_vsig = vsig
+	_wk_grid = state.grid.get_instance_id()
+	if sleepers.is_empty():
+		return
+	var full_idx: Dictionary = {}
+	var moved_idx := _index_lines(moved)
+	for u: UnitInstance in sleepers:
 		if _activation_frontier.has(u.id):
 			continue
-		if _civ_sees_soldier(u, idx):
+		# Новый спящий (раньше не проверялся вовсе) — тоже целиком.
+		var whole := full or prev_seen.has(u.id) or not prev_sleepers.has(u.id)
+		if not whole and not vacated.is_empty():
+			for key in _line_keys(u.coord):
+				if vacated.has(key):
+					whole = true
+					break
+		var sees := false
+		if whole:
+			if full_idx.is_empty():
+				full_idx = _sight_index()
+			sees = _civ_sees_soldier(u, full_idx)
+		elif not moved.is_empty():
+			sees = _civ_sees_soldier(u, moved_idx)
+		if sees:
+			_wk_seen[u.id] = true
 			_activation_frontier.append(u.id)
+
+## Четыре линии огня через клетку: строка, столбец, две диагонали (ключи _index_lines).
+static func _line_keys(t: Vector2i) -> Array:
+	return [Vector3i(0, t.y, 0), Vector3i(1, t.x, 0), Vector3i(2, t.x - t.y, 0), Vector3i(3, t.x + t.y, 0)]
+
+var _wk_seen: Dictionary = {}   # жители, видевшие солдата на прошлой проверке
+var _wk_sleepers: Dictionary = {}   # спящие жители на прошлой проверке
 
 ## Штаб мирного квартала (#103). Ровно тот же класс, что водит армию ИИ, только с
 ## нейтральным владельцем: см. большой комментарий в AIController. Хранится на резолвере,
@@ -4382,11 +4486,34 @@ var _al_open: Array[GridCell] = []
 var _al_vv: int = -1
 var _al_fv: int = -1
 var _al_grid: int = 0
+## Живые бойцы на прошлом пересчёте шлюзов: id -> клетка (см. _airlock_candidates).
+var _al_pos: Dictionary = {}
+
+func _mark_airlocks_near(c: Vector2i, marks: Dictionary) -> void:
+	var grid := state.grid
+	if not grid.in_bounds(c):
+		return
+	var r: int = MCF.AIRLOCK_OPEN_RADIUS
+	for y in range(maxi(0, c.y - r), mini(grid.height - 1, c.y + r) + 1):
+		for x in range(maxi(0, c.x - r), mini(grid.width - 1, c.x + r) + 1):
+			var idx: Variant = _airlock_index.get(grid.cell_fast(x, y))
+			if idx != null:
+				marks[idx] = true
 
 func _airlock_candidates(cells: Array[GridCell]) -> Array[GridCell]:
 	var grid := state.grid
+	# Где стоят живые бойцы сейчас — и сравнение с прошлым разом (batch mp-perf): створки
+	# могут поменяться только у шлюзов рядом с тем, кто сдвинулся, появился или выбыл.
+	# Раньше на каждый вызов перебирались девять клеток вокруг КАЖДОГО бойца карты —
+	# на армиях в полтысячи это было ~7 мс на каждый шаг каждого бойца.
+	var pos := {}
+	for u: UnitInstance in state.units.values():
+		if not u.is_drone and u.is_alive():
+			pos[u.id] = u.coord
+	var prev := _al_pos
+	_al_pos = pos
 	if _al_grid != grid.get_instance_id() or _al_fv != _airlock_version \
-			or _al_vv < GridCell.vision_log_base:
+			or _al_vv < GridCell.vision_log_base or check_everything:
 		return cells
 	var marks := {}
 	for c: GridCell in _al_open:
@@ -4400,22 +4527,17 @@ func _airlock_candidates(cells: Array[GridCell]) -> Array[GridCell]:
 		if idx != null:
 			marks[idx] = true
 		i += 2
-	var gw := grid.width
-	var gh := grid.height
-	for u: UnitInstance in state.units.values():
-		if u.is_drone or not u.is_alive():
+	for id: int in pos:
+		var was: Variant = prev.get(id)
+		var now: Vector2i = pos[id]
+		if was != null and was == now:
 			continue
-		var y := maxi(0, u.coord.y - MCF.AIRLOCK_OPEN_RADIUS)
-		var y_end := mini(gh - 1, u.coord.y + MCF.AIRLOCK_OPEN_RADIUS)
-		while y <= y_end:
-			var x := maxi(0, u.coord.x - MCF.AIRLOCK_OPEN_RADIUS)
-			var x_end := mini(gw - 1, u.coord.x + MCF.AIRLOCK_OPEN_RADIUS)
-			while x <= x_end:
-				var idx: Variant = _airlock_index.get(grid.cell_fast(x, y))
-				if idx != null:
-					marks[idx] = true
-				x += 1
-			y += 1
+		_mark_airlocks_near(now, marks)
+		if was != null:
+			_mark_airlocks_near(was, marks)
+	for id: int in prev:
+		if not pos.has(id):
+			_mark_airlocks_near(prev[id], marks)
 	var order: Array = marks.keys()
 	order.sort()
 	var out: Array[GridCell] = []
@@ -4504,6 +4626,17 @@ func _recoiled(result: ActionResult, shooter: UnitInstance, aim: Vector2i) -> Ac
 		_recoil_shooter(shooter, aim)
 	return result
 
+## Машина, корпус которой занимает клетку: по следу на сетке, а борг — по своей клетке
+## (у борга с пилотом следа на сетке нет — в клетке стоит пилот). Живая или остов.
+func vehicle_covering(c: Vector2i) -> Vehicle:
+	var vid := state.grid.vehicle_at(c)
+	if vid != -1:
+		return state.get_vehicle(vid)
+	for veh: Vehicle in state.all_vehicles():
+		if veh.is_borg() and veh.origin == c:
+			return veh
+	return null
+
 ## Сдвиг юнита на dist клеток по step, но только если ВСЕ клетки свободны (иначе нет).
 func _knockback(unit: UnitInstance, step: Vector2i, dist: int) -> void:
 	if step == Vector2i.ZERO:
@@ -4576,9 +4709,11 @@ func _resolve_drone_move(intent: DroneMoveIntent) -> ActionResult:
 			return _drone_explode(drone, intent.target, "flew into fire")
 		# Заход на стену запоминаем ДО переезда (#96): уйти с неё можно только назад.
 		var entry := Vector2i(-1, -1)
-		if state.grid.cell(intent.target).is_wall() or descending:
-			# Над стеной у дрона свой единственный ход — вернуться назад (#96), и
-			# обычный остаток дальности там не работает.
+		# Над стеной у дрона один ход — назад (#96), но остаток подлёта он НЕ теряет
+		# (batch borg-corpses): раньше и заход на стену, и спуск обнуляли его, и дрон,
+		# заглянув за стену, оставался без полёта до конца хода. Спуск тратит из остатка
+		# одну клетку; спуск без остатка бесплатен, но и нового запаса не даёт.
+		if descending and not use_credit:
 			drone.move_credit = 0
 		if state.grid.cell(intent.target).is_wall():
 			entry = _drone_entry_cell(drone, intent.target, reach)
@@ -4949,12 +5084,10 @@ func _drone_reach(drone: UnitInstance) -> Dictionary:
 			if Combat.distance(nxt, drone.home_station) > MCF.DRONE_LEASH:
 				continue
 			var cell := state.grid.cell(nxt)
-			# Дрон перелетает трупы и юнитов и садится на них (#13): мешают лишь
-			# корпус машины и другой дрон.
+			# Дрон перелетает трупы, юнитов и технику и зависает над ними (#13; над
+			# корпусом машины — batch borg-corpses): мешает лишь другой дрон.
 			var od: UnitInstance = drones_at.get(nxt)
-			# Своя станция в кресле челнока (batch 13 S8) — единственная клетка корпуса,
-			# на которую дрон может сесть.
-			if (cell.vehicle_id != -1 and nxt != drone.home_station) or (od != null and od != drone):
+			if od != null and od != drone:
 				continue
 			if not dist.has(nxt) or nd < int(dist[nxt]):
 				dist[nxt] = nd
@@ -4971,9 +5104,8 @@ func _drone_wall_exit(drone: UnitInstance) -> Dictionary:
 		return {}
 	if Combat.distance(back, drone.home_station) > MCF.DRONE_LEASH:
 		return {}
-	var cell := state.grid.cell(back)
 	var od := _drone_at(back)
-	if cell.vehicle_id != -1 or (od != null and od != drone):
+	if od != null and od != drone:
 		return {}
 	_drone_prev = {back: drone.coord}  # спуск — тоже маршрут, пусть и в один шаг (item 12)
 	return {back: 1}
@@ -5014,12 +5146,11 @@ func _drone_entry_cell(drone: UnitInstance, target: Vector2i, reach: Dictionary)
 func _approach_cell(drone: UnitInstance, target: Vector2i, reach: Dictionary) -> Vector2i:
 	if not state.grid.in_bounds(target):
 		return Vector2i(-1, -1)
-	var tcell := state.grid.cell(target)
-	# Таран только по корпусу машины или другому дрону (#13): юнитов/трупов дрон
-	# облетает и садится на них, а над стеной ЗАВИСАЕТ (#96) — она больше не цель тарана.
+	# Таран — только по другому дрону (#13): юнитов, трупы и технику дрон облетает и
+	# зависает над ними (над машиной — batch borg-corpses; бить её — подрывом сверху), а
+	# над стеной ЗАВИСАЕТ (#96).
 	var other_drone := _drone_at(target)
-	var blocked: bool = tcell.vehicle_id != -1 \
-			or (other_drone != null and other_drone != drone)
+	var blocked: bool = other_drone != null and other_drone != drone
 	if not blocked:
 		return Vector2i(-1, -1)
 	# Дрон таранит из любой соседней клетки, куда может долететь (8 направлений).
@@ -7387,6 +7518,9 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 		if dc != null and dc.occupant == null:
 			dc.occupant = dead
 	# Переместить и разметить новый след.
+	# Переезд на экране — плавно, по клеткам (batch borg-corpses), как шаг бойца.
+	res.dice_events.append({"kind": "veh_walk", "vehicle": veh.id, "from": veh.origin,
+			"steps": int(plan["steps"])})
 	veh.origin += dir * int(plan["steps"])
 	state.grid.set_vehicle_footprint(veh.id, veh.footprint())
 	# Пассажиры и станция садятся обратно в свои кресла на новом месте.

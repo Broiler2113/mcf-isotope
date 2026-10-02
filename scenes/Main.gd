@@ -44,7 +44,7 @@ enum Mode {NONE, MENU, MOVE, SHOOT, GRAB, ITEM, PUSH, DRONE_FLY, BUILD, BUILD_WA
 	CORPSE_DROP, WELD, MOVE_HELD, MINE, DISARM,
 	GROUP_MENU, GROUP_MOVE, GROUP_LASER,
 	VEH_MENU, VEH_MOVE, VEH_TURN, VEH_CANNON, VEH_DISEMBARK, VEH_SEAT, VEH_BOARD_SEAT,
-	DRAW, ERASE, RULER}
+	DRAW, ERASE, RULER, BOARD_PICK}
 
 ## Линейка (item 11): два конца и клетка под курсором. Инструмент чисто зрительский —
 ## состояния не трогает, по сети не ходит, в повтор не пишется.
@@ -120,7 +120,7 @@ const NOWHERE := Vector2i(-9999, -9999)
 ## дрона догоняли мышь лишь при следующем постороннем событии — «с задержкой».
 const HOVER_PREVIEW_MODES := [Mode.MOVE, Mode.ITEM, Mode.SHOOT, Mode.DIG, Mode.MINE, Mode.DISARM,
 		Mode.CORPSE_DROP, Mode.WELD, Mode.MOVE_HELD, Mode.VEH_TURN, Mode.VEH_CANNON, Mode.GROUP_LASER,
-		Mode.VEH_MOVE, Mode.DRONE_FLY]
+		Mode.VEH_MOVE, Mode.DRONE_FLY, Mode.BOARD_PICK]
 
 ## Цвета «своя/чужая» для перспективной раскраски дуэли (#93). Цвета КОНКРЕТНЫХ
 ## игроков берутся из ростера (Roster.PALETTE) — их до 26, в словарь на два они
@@ -181,6 +181,8 @@ var _walk_cells: Dictionary = {}
 var _walk_offset: Dictionary = {}
 ## Сколько переходов играется прямо сейчас (групповой приказ идёт всеми сразу).
 var _walks_running := 0
+## Сдвиг рисунка машины на время плавного переезда (id машины -> Vector2, точки).
+var _veh_offset: Dictionary = {}
 ## Сколько точек ОД РИСОВАТЬ у юнита, пока идёт анимация чужого хода (#99): id → число.
 ## Ход ИИ и слот мирных применяются к состоянию целиком и лишь потом отыгрываются, так
 ## что без этого жёлтые точки гасли разом до первого кубика и игрок не видел, за что
@@ -431,6 +433,10 @@ func _ready() -> void:
 	_fx.solid_at = func(c: Vector2i) -> bool:
 		var cl := state.grid.cell(c) if state != null else null
 		return cl == null or cl.cover_height >= MCF.WALL_HEIGHT
+	# Открытый космос: крови там не бывает (batch borg-corpses), только куски от взрыва.
+	_fx.space_at = func(c: Vector2i) -> bool:
+		var sc := state.grid.cell(c) if state != null else null
+		return sc != null and sc.is_space
 	# У записи нет игроков: смотреть — не играть, поэтому контроллеров не заводим
 	# вовсе. Ровно это и делает просмотр безопасным: подать намерение некому.
 	if replay == null:
@@ -1404,6 +1410,15 @@ func _handle_click(coord: Vector2i) -> void:
 				_select(occupant)
 				return
 			_group_move_to(coord)
+		Mode.BOARD_PICK:
+			var pick := _board_pick_at(coord)
+			if pick != null:
+				if _board_pick_group:
+					_group_embark(pick.id)
+				else:
+					_board_into(selected_id, pick)
+				return
+			_back_to_menu()
 		Mode.VEH_MOVE:
 			if veh_move_targets.has(coord):
 				var mt: Dictionary = veh_move_targets[coord]
@@ -2049,10 +2064,10 @@ func _drone_can_ram(coord: Vector2i) -> bool:
 	var u := _selected_unit()
 	if u == null or not u.is_drone or not state.grid.in_bounds(coord):
 		return false
-	var cell := state.grid.cell(coord)
-	# Таран только по стене, корпусу машины или другому дрону (#13).
+	# Таран — только по другому дрону (как у резолвера, _approach_cell): над стеной и над
+	# машиной дрон зависает.
 	var other := _drone_at(coord)
-	var blocked: bool = cell.is_wall() or cell.vehicle_id != -1 or (other != null and other != u)
+	var blocked: bool = other != null and other != u
 	if not blocked:
 		return false
 	if _adjacent8(coord, u.coord):
@@ -2160,11 +2175,14 @@ func _open_group_menu() -> void:
 
 	# Массовая посадка (item 5): если рядом с выделенными есть машина, в которую хоть
 	# кто-то из них может сесть, предлагаем усадить всех разом.
-	var vid := _group_boardable_vehicle()
-	if vid != -1:
+	var gvs := _group_boardable_vehicles()
+	if not gvs.is_empty():
 		var board_btn := Button.new()
-		board_btn.text = "Board Vehicle"
-		board_btn.pressed.connect(_group_embark.bind(vid))
+		board_btn.text = "Board Vehicle" if gvs.size() == 1 else "Board… (%d vehicles)" % gvs.size()
+		if gvs.size() == 1:
+			board_btn.pressed.connect(_group_embark.bind(int(gvs[0].id)))
+		else:
+			board_btn.pressed.connect(_enter_board_pick.bind(gvs, true))
 		vb.add_child(board_btn)
 
 	var cancel_btn := Button.new()
@@ -2255,18 +2273,47 @@ func _enter_group_move(tactical: bool) -> void:
 	_menu.hide()
 	queue_redraw()
 
-## Машина, в которую может сесть хоть один из выделенных юнитов (item 5). −1 — нет такой.
-func _group_boardable_vehicle() -> int:
+## Машины, в которые может сесть хоть один из выделенных юнитов (item 5): все разные,
+## в порядке нахождения. Больше одной — игрок выбирает щелчком (BOARD_PICK).
+func _group_boardable_vehicles() -> Array:
+	var out: Array = []
+	var seen := {}
 	for id in _group_ids:
 		var u := state.get_unit(id)
 		if u == null or not u.is_alive() or u.aboard_vehicle_id != -1:
 			continue
-		var vs: Array = resolver.boardable_vehicles(u)
-		if not vs.is_empty():
-			# boardable_vehicles() отдаёт объекты Vehicle, а не id — int(Vehicle)
-			# роняло игру «Nonexistent 'int' constructor» (item 6). Берём .id.
-			return int(vs[0].id)
-	return -1
+		for v: Vehicle in resolver.boardable_vehicles(u):
+			if not seen.has(v.id):
+				seen[v.id] = true
+				out.append(v)
+	return out
+
+## Выбор машины для посадки щелчком (batch borg-corpses): подсвечиваются корпуса всех
+## подходящих машин, щелчок по любой клетке корпуса — посадка в неё (группой — всех).
+var _board_pick: Array = []
+var _board_pick_group := false
+
+func _enter_board_pick(vehicles: Array, group: bool) -> void:
+	_board_pick = vehicles
+	_board_pick_group = group
+	mode = Mode.BOARD_PICK
+	reach = null
+	target_ids = []
+	item_cells = []
+	for v: Vehicle in vehicles:
+		item_cells.append_array(_veh_cells(v))
+	_menu.hide()
+	queue_redraw()
+
+## Клетки машины на поле: след на сетке, а у борга — его клетка.
+func _veh_cells(v: Vehicle) -> Array:
+	return [v.origin] if v.is_borg() else v.footprint()
+
+func _board_pick_at(coord: Vector2i) -> Vehicle:
+	for v: Vehicle in _board_pick:
+		if _veh_cells(v).has(coord):
+			return v
+	return null
 
 ## Усадить в машину vid всех выделенных, кто рядом и кому это разрешено (item 5).
 ## Резолвер сам проверит соседство, вместимость и запреты (щит/трупы — item 19).
@@ -2360,7 +2407,8 @@ func _enter_push() -> void:
 
 func _enter_build(feature_id: String) -> void:
 	var u := _selected_unit()
-	if u == null or u.remaining_ap <= 0:
+	# Без ОД строить можно на остатке партии борга (batch 13 B7).
+	if u == null or (u.remaining_ap <= 0 and int(u.build_credits.get(feature_id, 0)) <= 0):
 		return
 	build_feature = feature_id
 	mode = Mode.BUILD
@@ -2839,6 +2887,13 @@ func _after_action() -> void:
 			and not resolver.diggable_cells(u).is_empty():
 		_enter_dig()
 		return
+	# Партия борга (batch borg-corpses): три постройки за ОД кладутся подряд, как окопы, —
+	# режим остаётся, пока в партии что-то есть и есть куда ставить.
+	if mode == Mode.BUILD and _is_own_active(u) and u.borg_id != -1 \
+			and int(u.build_credits.get(build_feature, 0)) > 0 \
+			and not resolver.buildable_cells(u, build_feature).is_empty():
+		_enter_build(build_feature)
+		return
 	# Выделенная группа остаётся выделенной после приказа (batch ui-drones): раньше её
 	# снимало, и для следующего шага отряд приходилось обводить заново.
 	if _group_ids.is_empty() and not _regroup_ids.is_empty():
@@ -2958,7 +3013,11 @@ func _on_peer_ready(is_host: bool) -> void:
 	# Рассинхрон (batch 14): гость просит снимок и, получив его, перечитывает доску.
 	net.desync_detected.connect(func() -> void:
 		state.log.add("[net] Board out of sync with the host — resynchronising…"))
+	# Снимок хоста везёт и косметику поля — её гость кладёт вместо своей.
+	net.fx_snapshot = func() -> Dictionary: return _fx.to_dict()
 	net.resynced.connect(func() -> void:
+		if not net.restored_fx.is_empty():
+			_fx.from_dict(net.restored_fx)
 		_resync_after_restore()
 		for c in controllers.values():
 			c.notify_state_changed(state)
@@ -3131,6 +3190,9 @@ func _play_dice(events: Array) -> void:
 		if ev.get("kind", "") == "hold":
 			for id in ev["units"]:
 				_walk_cells[int(id)] = ev["units"][id]
+		elif ev.get("kind", "") == "veh_walk":
+			# Машина (и пассажиры в креслах) рисуется на старте, пока до неё не дошла очередь.
+			_set_veh_offset(ev, 1.0)
 	queue_redraw()  # (состояние уже применено; кадр обновится после анимации)
 	for ev in events:
 		if ev.get("kind", "") == "hold":
@@ -3148,6 +3210,10 @@ func _play_dice(events: Array) -> void:
 			# Камеру за ходящими нейтралами БОЛЬШЕ НЕ ВОДИМ (item 8): игрока раздражало,
 			# что вид дёргается к каждому активному жителю. Событие оставляем (оно ещё
 			# помечает, чьи кубики крутятся), но камеру не трогаем — панорама за игроком.
+			continue
+		if ev.get("kind", "") == "veh_walk":
+			await _await_walks()
+			await _play_veh_walk(ev)
 			continue
 		if ev.get("kind", "") == "walk":
 			# Подряд идущие переходы (групповой приказ) играются ОДНОВРЕМЕННО: отряд
@@ -3199,6 +3265,7 @@ func _play_dice(events: Array) -> void:
 	await _await_walks()
 	_walk_cells.clear()
 	_walk_offset.clear()
+	_veh_offset.clear()
 	_ap_display.clear()
 	_animating = false
 	_fast_playback = fast_before
@@ -3226,6 +3293,37 @@ func _await_walks() -> void:
 			_walk_offset.clear()
 			break
 		await get_tree().process_frame
+
+## Переезд машины (batch borg-corpses): корпус и пассажиры в креслах скользят от старта к
+## концу с той же скоростью на клетку, что и бойцы. k — сколько пути ещё впереди (1..0).
+func _set_veh_offset(ev: Dictionary, k: float) -> void:
+	var veh := state.get_vehicle(int(ev["vehicle"]))
+	if veh == null:
+		return
+	var off := Vector2(Vector2i(ev["from"]) - veh.origin) * CELL * k
+	_veh_offset[veh.id] = off
+	for u: UnitInstance in state.all_units():
+		if u.aboard_vehicle_id == veh.id and state.grid.in_bounds(u.coord):
+			_walk_offset[u.id] = off
+
+func _play_veh_walk(ev: Dictionary) -> void:
+	var steps := maxi(1, int(ev.get("steps", 1)))
+	var dur_ms := SOLDIER_WALK_STEP_DELAY * steps / _pace() * 1000.0
+	var t0 := Time.get_ticks_msec()
+	while true:
+		var k := minf(1.0, float(Time.get_ticks_msec() - t0) / maxf(1.0, dur_ms))
+		_set_veh_offset(ev, 1.0 - k)
+		queue_redraw()
+		if k >= 1.0:
+			break
+		await get_tree().process_frame
+	var veh := state.get_vehicle(int(ev["vehicle"]))
+	if veh != null:
+		_veh_offset.erase(veh.id)
+		for u: UnitInstance in state.all_units():
+			if u.aboard_vehicle_id == veh.id:
+				_walk_offset.erase(u.id)
+	queue_redraw()
 
 ## Проиграть один пеший переход по клеткам (#96). Юнит УЖЕ стоит в конце маршрута —
 ## отматываем его отрисовку к старту и ведём по пути, чтобы игрок увидел, откуда и
@@ -3617,6 +3715,35 @@ func _draw_zone_preview(costs: Dictionary, budgets: Array[int], from_cell: Vecto
 			HORIZONTAL_ALIGNMENT_CENTER, CELL * 2, 13, Color(0.08, 0.08, 0.08))
 		draw_string(font, to + Vector2(-CELL, -CELL * 0.45), txt,
 			HORIZONTAL_ALIGNMENT_CENTER, CELL * 2, 13, col.lightened(0.3))
+
+## Подпись броска (как у целей-юнитов): жёлтая с обводкой, под курсором крупнее.
+func _draw_need(pos: Vector2, txt: String, big: bool) -> void:
+	var font := ThemeDB.fallback_font
+	var fs := 16 if big else 12
+	draw_string_outline(font, pos, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 4, Color(0, 0, 0, 0.9))
+	draw_string(font, pos, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(1, 0.92, 0.5))
+
+## Бросок над каждой вражеской машиной, корпус которой можно накрыть (клетки корпуса в
+## item_cells): одна подпись над корпусом, по ближайшей доступной клетке. need_at(c) —
+## сколько выбросить по клетке c (0 — без броска).
+func _draw_vehicle_needs(owner: int, need_at: Callable) -> void:
+	var hov := _pos_to_cell(get_global_mouse_position())
+	for v: Vehicle in state.all_vehicles():
+		if not v.alive() or v.owner == owner or state.roster.are_allies(owner, v.owner):
+			continue
+		var cells: Array = [v.origin] if v.is_borg() else v.footprint()
+		var best := Vector2i(-1, -1)
+		var lit := false
+		for c: Vector2i in cells:
+			if item_cells.has(c):
+				lit = lit or c == hov
+				if best == Vector2i(-1, -1) or c == v.center():
+					best = c
+		if best == Vector2i(-1, -1):
+			continue
+		var n: int = need_at.call(best)
+		var top := _cell_origin(Vector2i(v.center().x, v.origin.y)) + Vector2(CELL * 0.3, -CELL * 0.08)
+		_draw_need(top, "auto" if n <= 0 else ("%d+" % n if n <= 6 else "—"), lit)
 
 ## Клетки, которые накроет струя огнемёта из from к цели (для предпросмотра) — та же
 ## геометрия, что у выстрела, включая разлёт о стену (batch 17, item 5).
@@ -4236,6 +4363,9 @@ func _draw() -> void:
 					var tp := c + Vector2(CELL * 0.3, -CELL * 0.3)
 					draw_string_outline(font, tp, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 4, Color(0, 0, 0, 0.9))
 					draw_string(font, tp, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(1, 0.92, 0.5))
+		# И над вражескими машинами, по которым этот стрелок может ударить (ПТ, лазер, струя).
+		if show_need and not item_cells.is_empty():
+			_draw_vehicle_needs(su.owner, func(c: Vector2i) -> int: return resolver.aim_need(su, c))
 
 	if mode == Mode.GRAB:
 		# Бойцы под захват — оранжевые круги; объекты (труп/мешки/ёж/куча) — жёлтые клетки,
@@ -4388,6 +4518,7 @@ func _draw() -> void:
 	if mode == Mode.VEH_MOVE:
 		_draw_veh_move_preview()
 
+
 	if mode == Mode.VEH_TURN:
 		var vt := _selected_vehicle()
 		if vt != null:
@@ -4426,18 +4557,13 @@ func _draw() -> void:
 		if cveh_sel != null:
 			for coord: Vector2i in item_cells:
 				var occ := _unit_at(coord)
-				var hov: bool = coord == chov
-				var enemy_here: bool = (occ != null and occ.owner != cveh_sel.owner) \
-						or (state.get_vehicle(state.grid.vehicle_at(coord)) != null
-						and state.get_vehicle(state.grid.vehicle_at(coord)).owner != cveh_sel.owner)
-				if not hov and not enemy_here:
-					continue
-				var cn: int = resolver.cannon_aim_need(cveh_sel, coord)
-				var ct := "%d+" % cn if cn <= 6 else "—"
-				var cfs := 16 if hov else 12
-				var cpos := _cell_origin(coord) + Vector2(CELL * 0.62, CELL * 0.22)
-				draw_string_outline(font, cpos, ct, HORIZONTAL_ALIGNMENT_LEFT, -1, cfs, 4, Color(0, 0, 0, 0.9))
-				draw_string(font, cpos, ct, HORIZONTAL_ALIGNMENT_LEFT, -1, cfs, Color(1, 0.92, 0.5))
+				if coord == chov or (occ != null and occ.owner != cveh_sel.owner):
+					var cn: int = resolver.cannon_aim_need(cveh_sel, coord)
+					_draw_need(_cell_origin(coord) + Vector2(CELL * 0.62, CELL * 0.22),
+							"%d+" % cn if cn <= 6 else "—", coord == chov)
+			# Над вражескими машинами — один бросок на корпус, а не по цифре на клетку.
+			_draw_vehicle_needs(cveh_sel.owner, func(c: Vector2i) -> int:
+				return resolver.cannon_aim_need(cveh_sel, c))
 
 	if mode == Mode.VEH_DISEMBARK or mode == Mode.VEH_SEAT or mode == Mode.VEH_BOARD_SEAT:
 		for coord in item_cells:
@@ -4498,9 +4624,14 @@ func _draw() -> void:
 	# статусом CORPSE, а положенный из рук (#6) — безымянная куча cell.corpse_count.
 	# Кучи не рисовались вовсе: тело давало +1 к защите, но на карте его не было.
 	for unit: UnitInstance in state.all_units():
-		if not _on_board(unit):
+		# Самые дешёвые отсевы — первыми (batch mp-perf): на большой карте почти все юниты
+		# живы или за краем экрана, и вызовы функций на каждого стоили больше самой отрисовки.
+		if unit.status != MCF.Status.CORPSE:
 			continue
-		if unit.status != MCF.Status.CORPSE or _pending_death_ids.has(unit.id):
+		var uc := unit.coord
+		if uc.x < vx0 or uc.x > vx1 or uc.y < vy0 or uc.y > vy1:
+			continue
+		if _pending_death_ids.has(unit.id):
 			continue
 		if unit.owner != viewer and not visible.has(unit.coord):
 			continue
@@ -4537,6 +4668,15 @@ func _draw() -> void:
 
 	# Корпуса машин (§техника): прямоугольник по всему следу, цвет владельца.
 	for veh: Vehicle in state.all_vehicles():
+		# Плавный переезд: рисунок машины сдвинут к ещё не пройденной части пути; борг
+		# идёт вместе со своим пилотом (его шаг — шаг бойца).
+		var voff: Vector2 = _veh_offset.get(veh.id, Vector2.ZERO)
+		if veh.is_borg():
+			var pilot := state.get_unit(veh.borg_operator())
+			if pilot != null and state.grid.in_bounds(pilot.coord):
+				voff = _cell_origin(_draw_cell(pilot)) - _cell_origin(veh.origin) \
+						+ _walk_offset.get(pilot.id, Vector2.ZERO)
+		draw_set_transform(pan + voff * zoom, 0.0, Vector2(zoom, zoom))
 		var fp := veh.footprint()
 		var vseen := false
 		for fc in fp:
@@ -4600,24 +4740,59 @@ func _draw() -> void:
 			for i in vap:
 				draw_circle(org + Vector2(vsize.x - 8 - i * 8, 8), 3, Color(1, 1, 0.4))
 
+	draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
+	# Выбор машины для посадки — поверх корпусов, иначе подсветку закрывала сама машина.
+	if mode == Mode.BOARD_PICK:
+		var bhov := _board_pick_at(_pos_to_cell(get_global_mouse_position()))
+		for bv: Vehicle in _board_pick:
+			var lit: bool = bv == bhov
+			for bc: Vector2i in _veh_cells(bv):
+				draw_rect(Rect2(_cell_origin(bc), Vector2(CELL, CELL)),
+						Color(0.4, 0.7, 1.0, 0.45 if lit else 0.2))
+				draw_rect(Rect2(_cell_origin(bc), Vector2(CELL, CELL)), Color(0.55, 0.8, 1.0, 0.9), false, 2.0)
+			if lit:
+				var bname: String = VehicleDB.get_vehicle(bv.type_id).get("name", bv.type_id)
+				draw_string_outline(font, _cell_origin(bv.origin) + Vector2(2, -6), "Board %s" % bname,
+						HORIZONTAL_ALIGNMENT_LEFT, -1, 14, 4, Color(0, 0, 0, 0.9))
+				draw_string(font, _cell_origin(bv.origin) + Vector2(2, -6), "Board %s" % bname,
+						HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0.75, 0.88, 1.0))
 	var _drones_pending: Array = []
-	for unit in state.all_units():
-		# Экипаж танка на поле не рисуется (§техника); пассажир челнока — поверх корпуса,
-		# в клетке своего кресла (batch 13, «Shuttle changes» §1).
-		if not _on_board(unit):
-			continue
+	var shifted := false
+	var walking := not _walk_cells.is_empty()
+	# Раз на кадр (batch mp-perf): цвета сторон, есть ли выделенная группа, ведётся ли показ
+	# старых ОД, и мелкие подробности (обводка, метка, точки ОД) — только когда их видно.
+	var side_cols: Dictionary = {}
+	var has_group := not _group_ids.is_empty()
+	var ap_held := not _ap_display.is_empty()
+	var details := zoom >= UNIT_DETAIL_ZOOM
+	var canvas := get_canvas_item()
+	for unit: UnitInstance in state.all_units():
+		# Экипаж танка на поле не рисуется (§техника): он за краем поля, и отсечение по окну
+		# ниже его отбрасывает. Пассажир челнока — поверх корпуса, в клетке своего кресла.
 		# Во время проигрывания шагов житель рисуется на промежуточной клетке (#96),
 		# а не там, где он уже стоит по состоянию.
-		var at := _draw_cell(unit)
-		# Плавный шаг: весь рисунок бойца сдвинут на долю пути к следующей клетке.
-		draw_set_transform(pan + _walk_offset.get(unit.id, Vector2.ZERO) * zoom, 0.0, Vector2(zoom, zoom))
+		var at: Vector2i = _walk_cells.get(unit.id, unit.coord) if walking else unit.coord
+		# Отсечение по вьюпорту — первым и без вызовов функций (batch mp-perf): на большой
+		# карте почти вся армия за краем экрана.
+		if at.x < vx0 or at.x > vx1 or at.y < vy0 or at.y > vy1:
+			continue
+		# Плавный шаг: рисунок бойца сдвинут на долю пути к следующей клетке. Смена
+		# преобразования — команда отрисовки, поэтому только у тех, кто сейчас идёт
+		# (batch mp-perf): раньше её получал каждый боец каждый кадр.
+		var woff: Variant = _walk_offset.get(unit.id)
+		if woff != null:
+			draw_set_transform(pan + Vector2(woff) * zoom, 0.0, Vector2(zoom, zoom))
+			shifted = true
+		elif shifted:
+			draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
+			shifted = false
 		# Отсечение по вьюпорту (item 5): бойца за краем экрана не рисуем — на 500×500 это
 		# главный выигрыш, ведь армия почти всегда шире окна.
 		if at.x < vx0 or at.x > vx1 or at.y < vy0 or at.y > vy1:
 			continue
-		var center := _cell_origin(at) + Vector2(CELL, CELL) * 0.5
 		# Туман войны (§3.9): чужой юнит виден, только если его клетку видит команда.
-		if unit.owner != viewer and not visible.has(at):
+		var uown := unit.owner
+		if uown != viewer and fog_on and not visible.has(at):
 			continue
 		# Смерть в текущем действии показываем лишь ПОСЛЕ анимации броска (#46):
 		# пока крутится кубик, погибший рисуется как живой юнит.
@@ -4630,50 +4805,64 @@ func _draw() -> void:
 			# был поверх корпуса, над которым висит.
 			_drones_pending.append({"unit": unit, "at": at})
 			continue
+		# Тело цикла — без лишних вызовов (batch mp-perf): на отъезде на экране сотни
+		# бойцов, и вызовы функций на каждого стоили больше самих команд отрисовки.
+		# Угол клетки считается здесь же, цвета стороны — раз на кадр (side_cols).
+		var corner := ORIGIN + Vector2(at.x * CELL, at.y * CELL)
+		var center := corner + Vector2(CELL, CELL) * 0.5
+		var cols: Array = side_cols.get(uown, [])
+		if cols.is_empty():
+			var sc := _side_color(uown)
+			cols = [sc, sc.darkened(0.45), _ink(sc)]
+			side_cols[uown] = cols
 		# Картинка бойца своей фракции (batch 17, item 13): light_infantry_nova.png, иначе
 		# общая light_infantry.png; без картинки — кружок цвета стороны с инициалами (item 6).
-		var skey := Sprites.resolve(unit.stats.id, _owner_suffix(unit.owner))
+		var skey := _sprite_key(unit)
 		# Боец в окопе (gore batch) стоит В канаве: чуть меньше и ниже, ноги скрыты
 		# тенью земляной стенки — не «висит» над окопом.
-		var in_trench := grid.cell(at).feature_id == MCF.FEATURE_TRENCH
+		var in_trench := grid.cell_fast(at.x, at.y).feature_id == MCF.FEATURE_TRENCH
 		var usz := CELL * (0.8 if in_trench else 1.0)
-		var uorg := _cell_origin(at) + Vector2((CELL - usz) * 0.5, (CELL - usz) * 0.75)
+		var uorg := corner + Vector2((CELL - usz) * 0.5, (CELL - usz) * 0.75)
 		var ucenter := uorg + Vector2(usz, usz) * 0.5
 		if skey != "":
 			Sprites.draw_texture_override(self, skey, uorg, usz)
 		else:
-			draw_circle(ucenter, usz * 0.34, _side_color(unit.owner))
-			draw_arc(ucenter, usz * 0.34, 0, TAU, 20, _side_color(unit.owner).darkened(0.45), 1.5)
-			draw_string(font, ucenter + Vector2(-9, 5), Sprites.unit_tag(unit.stats.id, unit.stats.display_name),
-				HORIZONTAL_ALIGNMENT_LEFT, -1, 16, _ink(_side_color(unit.owner)))
+			draw_circle(ucenter, usz * 0.34, cols[0])
+			if details:
+				draw_arc(ucenter, usz * 0.34, 0, TAU, 20, cols[1], 1.5)
+				_tag_line(unit).draw(canvas, ucenter + Vector2(-9, 5 - 16 * 0.8), cols[2])
 		if in_trench:
 			draw_rect(Rect2(uorg + Vector2(usz * 0.12, usz * 0.72), Vector2(usz * 0.76, usz * 0.2)),
 					Color(0.1, 0.07, 0.04, 0.55))
 		if unit.id == selected_id:
 			draw_arc(center, CELL * 0.42, 0, TAU, 32, Color(1, 0.9, 0.2), 3.0)
-		# Вскрытый мирный житель охотится — красное кольцо тревоги (§3.10, #56).
-		if CivilianAI.is_npc(unit) and unit.civilian_active:
-			draw_arc(center, CELL * 0.45, 0, TAU, 22, Color(0.85, 0.15, 0.15, 0.95), 2.0)
-		# Бейдж активационной группы (item 15): чёрный квадратик с римской цифрой в
-		# правом-нижнем углу — по нему видно, что инициатива изменилась.
-		if unit.neutral_group > 0:
-			_draw_group_badge(_cell_origin(at), unit.neutral_group, font)
+		if MCF.is_neutral(uown):
+			# Вскрытый мирный житель охотится — красное кольцо тревоги (§3.10, #56).
+			if unit.civilian_active:
+				draw_arc(center, CELL * 0.45, 0, TAU, 22, Color(0.85, 0.15, 0.15, 0.95), 2.0)
+			# Бейдж активационной группы (item 15): чёрный квадратик с римской цифрой в
+			# правом-нижнем углу — по нему видно, что инициатива изменилась.
+			if unit.neutral_group > 0:
+				_draw_group_badge(corner, unit.neutral_group, font)
 		# Кольцо принадлежности к RTS-группе (#18).
-		if _group_ids.has(unit.id):
+		if has_group and _group_ids.has(unit.id):
 			draw_arc(center, CELL * 0.46, 0, TAU, 32, Color(0.4, 1.0, 0.5), 2.5)
 		if unit.is_held():
 			draw_arc(center, CELL * 0.48, 0, TAU, 32, Color(0.8, 0.3, 1.0), 3.0)
-		if _pending_shoot(unit):
+		if unit.action_state != null and unit.action_state.is_pending():
 			draw_arc(center, CELL * 0.5, 0, TAU, 32, Color(1, 0.6, 0.1), 2.0)
-		for i in _draw_ap(unit):
-			draw_circle(_cell_origin(at) + Vector2(6 + i * 8, CELL - 6), 3, Color(1, 1, 0.4))
+		if details:
+			var ap: int = unit.remaining_ap if not ap_held else int(_ap_display.get(unit.id, unit.remaining_ap))
+			for i in ap:
+				draw_circle(corner + Vector2(6 + i * 8, CELL - 6), 3, Color(1, 1, 0.4))
 		# Снаряжения не хватает — общий пиксельный «!» (item 18): инженер без ЛДФ,
-		# оператор без станции, огнемётчик без огнетушителя, пулемётчик без фраги.
-		if resolver.unit_missing_equipment(unit):
-			_draw_pixel_bang(_cell_origin(at) + Vector2(CELL - 12, 4))
+		# оператор без станции, огнемётчик без огнетушителя, пулемётчик без фраги. Спрашиваем
+		# только тех, у кого это вообще бывает (gear_check по роду).
+		if _gear_checked(unit) and resolver.unit_missing_equipment(unit):
+			_draw_pixel_bang(corner + Vector2(CELL - 12, 4))
 		# Юнит тащит на себе труп-щит (#6) — без метки это видно только в подсказке (#71).
 		if unit.carried_corpses > 0:
-			_draw_corpse_marker(_cell_origin(at) + Vector2(9, 9),
+			_draw_corpse_marker(corner + Vector2(9, 9),
 				unit.carried_corpses, font)
 
 	# Дроны — верхний слой (item 14): рисуются поверх машин и наземных юнитов.
@@ -5014,6 +5203,38 @@ func _draw_borg(veh: Vehicle, org: Vector2, col: Color, wrecked: bool, dur: int,
 
 ## Тот же объект на соседней клетке (для автотайла, batch 17, item 12).
 ## Суффикс картинок стороны — её фракция (batch 17, item 13): «_nova», «_neutral»…
+## Ниже этого зума обводка кружка, буквы рода и точки ОД не читаются (клетка — 10 точек):
+## их не рисуем, остаётся цветной кружок и все метки состояния.
+const UNIT_DETAIL_ZOOM := 0.3
+
+## Может ли у бойца быть «!» нехватки снаряжения: истративший ЛДФ, оператор (станция) и
+## те, кто родился с предметом (то же условие, что в unit_missing_equipment). Остальным незачем спрашивать резолвер каждый кадр.
+func _gear_checked(u: UnitInstance) -> bool:
+	return u.ldf_wall_used or u.stats.default_item_id != "" \
+			or u.stats.special_ability_id == MCF.ABILITY_DRONE_OPERATOR
+
+## Метка юнита в кружке — заранее «вылепленная» строка (TextLine) на род: draw_string
+## заново раскладывает текст на каждом вызове, а меток на поле сотни (batch mp-perf).
+var _tag_lines: Dictionary = {}
+func _tag_line(unit: UnitInstance) -> TextLine:
+	var tl: Variant = _tag_lines.get(unit.stats.id)
+	if tl == null:
+		tl = TextLine.new()
+		tl.add_string(Sprites.unit_tag(unit.stats.id, unit.stats.display_name), ThemeDB.fallback_font, 16)
+		_tag_lines[unit.stats.id] = tl
+	return tl
+
+## Имя картинки бойца — по (род, владелец), раз на пару, а не строками на каждого бойца
+## каждый кадр (batch mp-perf: сотни юнитов на поле).
+var _skey_cache: Dictionary = {}
+func _sprite_key(unit: UnitInstance) -> String:
+	var k := Vector2i(unit.stats.get_instance_id(), unit.owner)
+	var hit: Variant = _skey_cache.get(k)
+	if hit == null:
+		hit = Sprites.resolve(unit.stats.id, _owner_suffix(unit.owner))
+		_skey_cache[k] = hit
+	return hit
+
 func _owner_suffix(owner_id: int) -> String:
 	if state != null and state.roster != null:
 		return state.roster.faction_suffix_of(owner_id)
@@ -6590,8 +6811,17 @@ func _open_menu(unit: UnitInstance) -> void:
 			_act_btn(vb, dig_text, _enter_dig,
 					unit.remaining_ap > 0 or unit.dig_credits > 0)
 
-		# Посадка в стоящую рядом технику (свою или вражескую).
-		for veh: Vehicle in resolver.boardable_vehicles(unit):
+		# Посадка в стоящую рядом технику (свою или вражескую). Машин рядом несколько —
+		# одна кнопка, а какую именно, игрок выбирает щелчком по полю (batch borg-corpses):
+		# раньше выходили одинаковые «Board Tank», и не понять было, какая куда.
+		var boardable: Array = resolver.boardable_vehicles(unit)
+		if boardable.size() > 1:
+			var any_free := false
+			for bv: Vehicle in boardable:
+				any_free = any_free or bv.seated() or bv.is_borg()
+			_act_btn(vb, "Board… (%d vehicles)" % boardable.size(),
+					_enter_board_pick.bind(boardable, false), unit.remaining_ap > 0 or any_free)
+		for veh: Vehicle in (boardable if boardable.size() == 1 else []):
 			var vname: String = VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)
 			var seat_text := "Board %s" % vname if veh.owner == unit.owner \
 				else "Storm %s" % vname
@@ -6941,3 +7171,4 @@ func _on_log_line(text: String) -> void:
 ## Цвет подписи поверх заливки: на светлой (белая сторона) — чёрный, иначе белый.
 static func _ink(bg: Color) -> Color:
 	return Color.BLACK if bg.get_luminance() > 0.6 else Color.WHITE
+

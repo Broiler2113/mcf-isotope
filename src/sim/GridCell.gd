@@ -263,6 +263,7 @@ var corpse_count: int = 0:
 			if journaling: _journal()
 			corpse_count = v
 			corpse_version += 1
+			walk_version += 1   # куча тел — не проход (batch borg-corpses), маршрут её обходит
 ## Уровень кучи земли (§3.7): 0 = нет, 1..4 = 0.5 м на уровень (макс. 2 м = стена).
 var dirt_level: int = 0:
 	set(v):
@@ -371,7 +372,7 @@ func blocks_move() -> bool:
 			or is_tall_dirt()
 
 func is_empty() -> bool:
-	return occupant == null and not is_wall() and not blocks_move()
+	return occupant == null and corpse_count == 0 and not is_wall() and not blocks_move()
 
 ## Клетка полностью пустая под постройку укрепления: без юнита, укрытия и объекта.
 func is_buildable() -> bool:

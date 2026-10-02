@@ -41,6 +41,11 @@ var my_owner: int
 ## и клиента совпали, но показать его — дело UI: он ждёт `initiative_synced` и прогоняет
 ## этот результат через обычную анимацию кубиков.
 var opening_civilians: ActionResult = ActionResult.success()
+## Косметика поля (кровь, осколки, гильзы, разбитый пол) в снимок пересинхронизации
+## (batch mp-perf): хост отдаёт свою (fx_snapshot -> FxDecals.to_dict), гость получает её в
+## restored_fx и кладёт поверх доски — после пересинхронизации поле выглядит как у хоста.
+var fx_snapshot: Callable = Callable()
+var restored_fx: Dictionary = {}
 
 ## p_my_owner — сторона, за которую играет ЭТА машина. −1 означает старую дуэльную
 ## раскладку «хост — первый, гость — второй»; лобби на N игроков передаёт номер явно.
@@ -95,7 +100,10 @@ func receive(msg: Dictionary) -> void:
 				_client_adopt_initiative(msg)
 		K_RESYNC:
 			if is_host:
-				outgoing.emit({"k": K_STATE, "s": StateCodec.encode(state)})
+				var snap := {"k": K_STATE, "s": StateCodec.encode(state)}
+				if fx_snapshot.is_valid():
+					snap["fx"] = fx_snapshot.call()
+				outgoing.emit(snap)
 		K_STATE:
 			if not is_host:
 				_client_restore(msg)
@@ -187,6 +195,8 @@ func _client_restore(msg: Dictionary) -> void:
 	if not (data is Dictionary):
 		return
 	StateCodec.restore_into(state, data)
+	var fx: Variant = msg.get("fx")
+	restored_fx = fx if fx is Dictionary else {}
 	state.dice.clear_scripted()
 	_resync_pending = false
 	resynced.emit()

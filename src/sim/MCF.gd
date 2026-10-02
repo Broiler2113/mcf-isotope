@@ -139,10 +139,10 @@ const BORG_SPEED := 9
 ## Уничтожение: 4+ — взрыв в радиусе 1 (как противотанковый заряд), иначе остов.
 const BORG_EXPLODE_MIN := 4
 ## Инженер в борге строит партиями: 1 ОД = 3 постройки ОДНОГО типа из списка ниже, либо
-## 1 ДОТ, либо 6 окопов. Кредиты сгорают в конце хода.
+## 1 ДОТ, либо 9 окопов (BORG_DIG_TRENCHES). Кредиты сгорают в конце хода.
 const BORG_BUILD_BATCH := 3
 const BORG_BATCH_FEATURES := [FEATURE_WALL, FEATURE_GLASS, FEATURE_AIRLOCK, FEATURE_SANDBAGS, FEATURE_HEDGEHOG]
-const BORG_DIG_TRENCHES := 6
+const BORG_DIG_TRENCHES := 9
 
 ## Урон по узлу за одно попадание — зависит от того, ЧЕМ стреляли.
 const COMPONENT_DAMAGE_ANTI_TANK := 1
