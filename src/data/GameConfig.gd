@@ -17,8 +17,11 @@ const DEFAULT_BUDGET := 300
 static var map_path: String = ""
 ## Сколько мирных жителей на карте самое большее (item 11): ползунок лобби. 0 — без мирных.
 ## Готовая карта прореживается до этого числа, случайная столько и строит (если есть место).
-const CIVILIANS_MAX := 200
-static var civilian_count: int = CIVILIANS_MAX
+## Случайная карта берёт число с ползунка генератора (до 1000), готовая — всех своих
+## (галочка «Civilians») или никого.
+const CIVILIANS_MAX := 1000
+const CIVILIANS_DEFAULT := 200
+static var civilian_count: int = CIVILIANS_DEFAULT
 ## Прежний флаг «мирные есть» — теперь лишь взгляд на ползунок.
 static var civilians_enabled: bool:
 	get:
@@ -27,7 +30,10 @@ static var civilians_enabled: bool:
 		civilian_count = CIVILIANS_MAX if v else 0
 ## Темп ИИ (item 5): во сколько раз быстрее ИИ ходит и как быстро его ходы показываются
 ## у всех. Задаёт хост — в лобби и прямо в бою.
-const AI_SPEEDS := [0.5, 1.0, 2.0, 4.0]
+## 8× и выше кубики ИИ не крутятся вовсе; «Max» — шаг ИИ раз в кадр.
+const AI_SPEEDS := [0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 64.0]
+static func ai_speed_label(sp: float) -> String:
+	return "Max" if sp >= 64.0 else "%s×" % ("½" if sp < 1.0 else str(int(sp)))
 static var ai_speed: float = 1.0
 ## Режим тумана (item 46): MCF.Fog.OFF / STANDARD / REALISTIC. Прежний булев
 ## fog_enabled остался отдельным свойством ниже — им пользуются сохранённые настройки

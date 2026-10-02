@@ -16,7 +16,7 @@ func _initialize() -> void:
 			lob._fog_opt.select(1); lob._fog_opt.item_selected.emit(1)
 			# Мирных выключаем: слот из полутора сотен жителей играется десятки секунд,
 			# а проверяется здесь не он, а совпадение досок и отсутствие отказов.
-			lob._civ_slider.value = 0   # ползунок мирных (item 11) вместо флажка «Disable neutrals»
+			lob._civ_check.button_pressed = false   # галочка мирных (item 11)
 			for i in lob._map_opt.item_count:
 				if lob._map_opt.get_item_text(i).find("town") >= 0:
 					lob._map_opt.select(i); lob._map_opt.item_selected.emit(i)

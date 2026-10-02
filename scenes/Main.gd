@@ -3095,11 +3095,21 @@ func _play_dice(events: Array) -> void:
 					_dice.release()
 					await _dice.finished
 				continue
+			# 8× и быстрее (кнопка «быстрее» для ИИ): автоматический бросок не показываем —
+			# итог всё равно в журнале, а кубики съедали почти весь ход.
+			if not step["manual"] and _pace() >= 8.0:
+				continue
 			_dice.play(step["faces"], step["manual"], step["prompt"], step.get("speed", 1.0) * _pace())
 			await _dice.finished
 	_walk_cells.clear()
 	_ap_display.clear()
 	_animating = false
+	# Ходы нейтральных групп отыграны — окно инициативы снова показывает настоящую
+	# активную сторону. Без сброса «▶» навсегда оставался на последней группе жителей.
+	if _playing_slot != -1:
+		_playing_slot = -1
+		if _init_overlay != null and _init_overlay.visible:
+			_refresh_initiative_overlay()
 	queue_redraw()
 
 ## Проиграть один пеший переход по клеткам (#96). Юнит УЖЕ стоит в конце маршрута —
@@ -3491,7 +3501,10 @@ func _viewing_side() -> int:
 ## вида клеток (GridCell.look_changes), туман — по журналу видимости резолвера
 ## (take_vis_changes). Бойцы, техника, трупы, мины, подсветки и эффекты рисуются поверх, как
 ## и раньше; сетки и подписей высоты на таком отъезде нет — их всё равно не разглядеть.
-const LOD_ZOOM := 0.35
+## Плитки видны при любом зуме (gore batch): отъезд больше не сводит доску к пятнам
+## цвета — TerrainTiles держит для него куски по 8 точек на клетку. Дальний план остался
+## лишь как запасной путь (LOD_ZOOM = 0 его не включает).
+const LOD_ZOOM := 0.0
 ## Ниже этого зума подписи высоты насыпей не рисуются — шрифт всё равно не прочесть.
 const HEIGHT_LABEL_ZOOM := 0.6
 const FOG_COL := Color(0.02, 0.02, 0.04, 0.55)
@@ -3863,12 +3876,14 @@ func _draw() -> void:
 		var bottom := ORIGIN.y + (vy1 + 1) * CELL
 		var left := ORIGIN.x + vx0 * CELL
 		var right := ORIGIN.x + (vx1 + 1) * CELL
-		for x in range(vx0, vx1 + 2):
-			var lx: float = ORIGIN.x + x * CELL
-			draw_line(Vector2(lx, top), Vector2(lx, bottom), grid_col, 1.0)
-		for y in range(vy0, vy1 + 2):
-			var ly: float = ORIGIN.y + y * CELL
-			draw_line(Vector2(left, ly), Vector2(right, ly), grid_col, 1.0)
+		# На дальнем отъезде линии сливаются в серую пелену поверх плиток — не рисуем.
+		if zoom >= 0.3:
+			for x in range(vx0, vx1 + 2):
+				var lx: float = ORIGIN.x + x * CELL
+				draw_line(Vector2(lx, top), Vector2(lx, bottom), grid_col, 1.0)
+			for y in range(vy0, vy1 + 2):
+				var ly: float = ORIGIN.y + y * CELL
+				draw_line(Vector2(left, ly), Vector2(right, ly), grid_col, 1.0)
 
 	if mode == Mode.MOVE and reach != null:
 		_draw_move_preview()
@@ -4297,13 +4312,22 @@ func _draw() -> void:
 		# Картинка бойца своей фракции (batch 17, item 13): light_infantry_nova.png, иначе
 		# общая light_infantry.png; без картинки — кружок цвета стороны с инициалами (item 6).
 		var skey := Sprites.resolve(unit.stats.id, _owner_suffix(unit.owner))
+		# Боец в окопе (gore batch) стоит В канаве: чуть меньше и ниже, ноги скрыты
+		# тенью земляной стенки — не «висит» над окопом.
+		var in_trench := grid.cell(at).feature_id == MCF.FEATURE_TRENCH
+		var usz := CELL * (0.8 if in_trench else 1.0)
+		var uorg := _cell_origin(at) + Vector2((CELL - usz) * 0.5, (CELL - usz) * 0.75)
+		var ucenter := uorg + Vector2(usz, usz) * 0.5
 		if skey != "":
-			Sprites.draw_texture_override(self, skey, _cell_origin(at), float(CELL))
+			Sprites.draw_texture_override(self, skey, uorg, usz)
 		else:
-			draw_circle(center, CELL * 0.34, _side_color(unit.owner))
-			draw_arc(center, CELL * 0.34, 0, TAU, 20, _side_color(unit.owner).darkened(0.45), 1.5)
-			draw_string(font, center + Vector2(-9, 5), _initials(unit.stats.display_name),
+			draw_circle(ucenter, usz * 0.34, _side_color(unit.owner))
+			draw_arc(ucenter, usz * 0.34, 0, TAU, 20, _side_color(unit.owner).darkened(0.45), 1.5)
+			draw_string(font, ucenter + Vector2(-9, 5), _initials(unit.stats.display_name),
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 16, _ink(_side_color(unit.owner)))
+		if in_trench:
+			draw_rect(Rect2(uorg + Vector2(usz * 0.12, usz * 0.72), Vector2(usz * 0.76, usz * 0.2)),
+					Color(0.1, 0.07, 0.04, 0.55))
 		if unit.id == selected_id:
 			draw_arc(center, CELL * 0.42, 0, TAU, 32, Color(1, 0.9, 0.2), 3.0)
 		# Вскрытый мирный житель охотится — красное кольцо тревоги (§3.10, #56).
@@ -4456,9 +4480,12 @@ func _draw_fx_props(visible: Dictionary) -> void:
 		var tail: Vector2 = tf.lerp(tt, maxf(0.0, k - 0.25))
 		draw_line(tail, head, Color(1.0, 0.95, 0.5, 0.9), 2.0)
 		draw_circle(head, 2.5, Color(1.0, 1.0, 0.7, 0.95))
-	if _fx.props.is_empty() and _fx.flying.is_empty():
+	if _fx.props.is_empty() and _fx.flying.is_empty() and _fx.prints.is_empty():
 		return
 	var fog_on: bool = resolver.fog_enabled
+	for prop: Dictionary in _fx.prints:
+		_draw_fx_one(prop["kind"], prop["pos"], prop["rot"], prop["scale"], visible, fog_on,
+				prop["origin"])
 	for prop: Dictionary in _fx.props:
 		_draw_fx_one(prop["kind"], prop["pos"], prop["rot"], prop["scale"], visible, fog_on,
 				prop.get("origin", Vector2i(-1, -1)))
@@ -4509,8 +4536,12 @@ const FX_LOOK := {
 	"casing": [0.11, Color(0.85, 0.72, 0.28, 0.9)],
 	# Гильза противотанкиста (item 24): оранжевая и вдвое крупнее пистолетной (0.11 → 0.22).
 	"shell_casing": [0.22, Color(1.0, 0.55, 0.1, 0.95)],
-	"blood_drop": [0.10, Color(0.55, 0.06, 0.06, 0.85)],
-	"blood_pool": [0.42, Color(0.42, 0.04, 0.04, 0.55)],
+	"blood_drop": [0.2, Color(0.6, 0.04, 0.04, 0.9)],
+	"blood_pool": [0.95, Color(0.42, 0.03, 0.03, 0.8)],
+	# Ошмётки после взрыва: тёмно-красные куски, крупнее капли.
+	"gib": [0.24, Color(0.42, 0.05, 0.06, 0.95)],
+	# Кровавый след: пара отпечатков; scale — насколько ещё свежий (1 → бледнее).
+	"footprint": [0.34, Color(0.45, 0.03, 0.03, 0.75)],
 }
 const FX_TEXTURE := {
 	"shard": "glass_shard", "casing": "shell_casing",
@@ -4536,8 +4567,21 @@ func _draw_fx_one(kind: String, cell_pos: Vector2, rot: float, scale: float,
 	if fog_on and not visible.has(_fxc) and not visible.has(origin):
 		return
 	var look: Array = FX_LOOK.get(kind, [0.12, Color(0.8, 0.8, 0.8, 0.8)])
-	var half: float = float(look[0]) * CELL * float(scale) * 0.5
 	var center := ORIGIN + cell_pos * CELL
+	if kind == "footprint":
+		# Два отпечатка по бокам хода, носком вперёд; бледнеют к концу следа.
+		var col: Color = look[1]
+		col.a *= clampf(scale, 0.25, 1.0)
+		var len_px: float = float(look[0]) * CELL * 0.5
+		var side := Vector2(0, CELL * 0.1).rotated(rot)
+		var fwd := Vector2(CELL * 0.12, 0).rotated(rot)
+		for k in [-1.0, 1.0]:
+			draw_set_transform(pan + (center + side * k + fwd * k) * zoom, rot,
+					Vector2(zoom, zoom * 0.45))
+			draw_circle(Vector2.ZERO, len_px * 0.5, col)
+		draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
+		return
+	var half: float = float(look[0]) * CELL * float(scale) * 0.5
 	var rect := Rect2(center - Vector2(half, half), Vector2(half, half) * 2.0)
 	if Sprites.draw_texture_override_rect(self, FX_TEXTURE.get(kind, kind), rect,
 			rad_to_deg(rot)):
@@ -4836,7 +4880,7 @@ func _build_ui() -> void:
 		sp_row.add_child(sp_lbl)
 		_ai_speed_opt = OptionButton.new()
 		for sp: float in GameConfig.AI_SPEEDS:
-			_ai_speed_opt.add_item("%s×" % ("½" if sp < 1.0 else str(int(sp))))
+			_ai_speed_opt.add_item(GameConfig.ai_speed_label(sp))
 		_ai_speed_opt.select(maxi(0, GameConfig.AI_SPEEDS.find(GameConfig.ai_speed)))
 		_ai_speed_opt.add_theme_font_size_override("font_size", 12)
 		# Панель строится ДО подключения сети (_adopt_network) — роль берём из передачи лобби.

@@ -47,12 +47,19 @@ const CASING_RANGE_MIN := 0.42
 const CASING_RANGE_MAX := 0.85
 ## Брызги крови: капли летят против направления убившего выстрела. Тоже вернули щедрость
 ## (issue 7) и добавили сверх прежнего: 5..9 вместо 2..4.
-const SPLATTER_MIN := 5
-const SPLATTER_MAX := 9
+## Ещё раз щедрее (gore batch): 10..16, и летят дальше — кровь видна издалека.
+const SPLATTER_MIN := 10
+const SPLATTER_MAX := 16
 ## Ближняя граница — тоже за кружком юнита: под телом брызги не видны, а лужа под ним
 ## и без того есть.
-const SPLATTER_RANGE_MIN := 0.38
-const SPLATTER_RANGE := 0.95
+const SPLATTER_RANGE_MIN := 0.4
+const SPLATTER_RANGE := 1.5
+## Разорван взрывом или раздавлен (blast): брызги кольцом вдвое гуще и дальше, плюс ошмётки.
+const GIBS_MIN := 4
+const GIBS_MAX := 7
+## Кровавые следы: прошёл по луже — ещё столько клеток оставляет отпечатки.
+const BLOODY_STEPS := 6
+const PRINTS_CAP := 800
 
 ## Потолок осевших частиц. Косметика не должна расти бесконечно: длинный бой на
 ## большой карте иначе набирает десятки тысяч точек, и отрисовка начинает стоить
@@ -77,6 +84,12 @@ var floor_damage: Dictionary = {}
 var damage_version: int = 0
 ## Осевшая статика: [{kind, pos: Vector2 (в клетках), rot: float, scale: float}].
 var props: Array = []
+## Кровавые отпечатки ног — отдельно от props со своим потолком, чтобы длинные цепочки
+## следов не вытесняли лужи. Те же поля, что у props.
+var prints: Array = []
+## Клетки с лужей крови (по ним считаются следы) и id бойца -> сколько клеток ещё следить.
+var pool_cells: Dictionary = {}
+var bloody: Dictionary = {}
 ## Ещё летящие: то же плюс from/to и таймер. По приземлении переезжают в props.
 var flying: Array = []
 ## Отрезки лазерного следа (item 11): [{from: Vector2, to: Vector2}] в клетках.
@@ -130,6 +143,9 @@ func clear() -> void:
 	floor_damage.clear()
 	damage_version += 1
 	props.clear()
+	prints.clear()
+	pool_cells.clear()
+	bloody.clear()
 	flying.clear()
 	laser_lines.clear()
 	tracers.clear()
@@ -175,6 +191,8 @@ func _apply(events: Array, lanes_only: bool) -> void:
 				_casings(ev)
 			"blood":
 				_blood(ev)
+			"steps":
+				_steps(ev)
 			"laser":
 				_laser(ev)
 			"tracer":
@@ -258,18 +276,60 @@ func _laser(ev: Dictionary) -> void:
 func _blood(ev: Dictionary) -> void:
 	var at: Vector2i = ev.get("at", Vector2i.ZERO)
 	var from: Vector2i = ev.get("from", at)
+	var blast: bool = bool(ev.get("blast", false))
 	var pool_rng := _rng_for("pool", at, 0, _event_seq)
 	props.append({
 		"kind": "blood_pool", "pos": Vector2(at) + Vector2(0.5, 0.5),
-		"rot": pool_rng.randf_range(0.0, TAU), "scale": pool_rng.randf_range(0.7, 1.0),
+		"rot": pool_rng.randf_range(0.0, TAU),
+		"scale": pool_rng.randf_range(1.0, 1.3) * (1.25 if blast else 1.0),
 	})
+	pool_cells[at] = true
 	var away := _away(at, from)
+	# Подтёки вокруг главной лужи: по ходу брызг (кольцом при взрыве).
+	for i in pool_rng.randi_range(2, 3) + (3 if blast else 0):
+		var d := away.rotated(pool_rng.randf_range(-PI, PI) if blast else pool_rng.randf_range(-0.7, 0.7))
+		var pos := Vector2(at) + Vector2(0.5, 0.5) + d * pool_rng.randf_range(0.35, 0.9 if blast else 0.7)
+		pos = _clip_solid(Vector2(at) + Vector2(0.5, 0.5), pos, at)
+		props.append({"kind": "blood_pool", "pos": pos, "rot": pool_rng.randf_range(0.0, TAU),
+				"scale": pool_rng.randf_range(0.35, 0.6), "origin": at})
+		if blast:
+			pool_cells[Vector2i(floori(pos.x), floori(pos.y))] = true
+	var fan := PI if blast else 0.9
+	var reach := 1.6 if blast else 1.0
 	var drops_rng := _rng_for("splatter_n", at, 0, _event_seq)
-	for i in drops_rng.randi_range(SPLATTER_MIN, SPLATTER_MAX):
+	for i in drops_rng.randi_range(SPLATTER_MIN, SPLATTER_MAX) * (2 if blast else 1):
 		var rng := _rng_for("splatter", at, i, _event_seq)
-		_launch("blood_drop", at, away, rng, SPLATTER_RANGE_MIN, SPLATTER_RANGE,
-				SHARD_FLIGHT_SEC)
+		_launch("blood_drop", at, away, rng, SPLATTER_RANGE_MIN, SPLATTER_RANGE * reach,
+				SHARD_FLIGHT_SEC, fan)
+	if blast:
+		for i in drops_rng.randi_range(GIBS_MIN, GIBS_MAX):
+			var rng := _rng_for("gib", at, i, _event_seq)
+			_launch("gib", at, away, rng, 0.5, 2.2, SHARD_FLIGHT_SEC * 1.4, PI)
 	_trim()
+
+## Шаги бойца (gore batch): наступил в лужу — следующие BLOODY_STEPS клеток оставляет
+## отпечатки, всё бледнее. Чистая косметика: только из описания хода, без кубиков.
+func _steps(ev: Dictionary) -> void:
+	var id := int(ev.get("unit", -1))
+	var prev: Vector2i = ev.get("from", Vector2i.ZERO)
+	if pool_cells.has(prev):
+		bloody[id] = BLOODY_STEPS
+	for c: Vector2i in ev.get("path", []):
+		var left := int(bloody.get(id, 0))
+		if left > 0:
+			var dir := Vector2(c - prev)
+			prints.append({"kind": "footprint", "pos": Vector2(c) + Vector2(0.5, 0.5),
+					"rot": dir.angle(), "scale": float(left) / BLOODY_STEPS, "origin": c})
+			left -= 1
+			if left > 0:
+				bloody[id] = left
+			else:
+				bloody.erase(id)
+		if pool_cells.has(c):
+			bloody[id] = BLOODY_STEPS
+		prev = c
+	if prints.size() > PRINTS_CAP:
+		prints = prints.slice(prints.size() - PRINTS_CAP)
 
 ## Направление «прочь от источника». Источник совпал с целью (взрыв под ногами,
 ## смерть без стрелка) — веер уходит во все стороны, и базовый угол берётся вверх.
@@ -430,7 +490,17 @@ func to_dict() -> Dictionary:
 	for p: Dictionary in props:
 		var pos: Vector2 = p["pos"]
 		settled.append([str(p["kind"]), pos.x, pos.y, float(p["rot"]), float(p["scale"])])
-	return {"damage": damage, "props": settled}
+	var steps: Array = []
+	for p: Dictionary in prints:
+		var pos: Vector2 = p["pos"]
+		steps.append([pos.x, pos.y, float(p["rot"]), float(p["scale"])])
+	var pools: Array = []
+	for c: Vector2i in pool_cells:
+		pools.append([c.x, c.y])
+	var feet: Array = []
+	for id in bloody:
+		feet.append([int(id), int(bloody[id])])
+	return {"damage": damage, "props": settled, "prints": steps, "pools": pools, "bloody": feet}
 
 func from_dict(d: Dictionary) -> void:
 	clear()
@@ -444,3 +514,14 @@ func from_dict(d: Dictionary) -> void:
 					"pos": Vector2(float(entry[1]), float(entry[2])),
 					"rot": float(entry[3]), "scale": float(entry[4])})
 	_trim()
+	for e in d.get("prints", []):
+		if e is Array and (e as Array).size() >= 4:
+			var pos := Vector2(float(e[0]), float(e[1]))
+			prints.append({"kind": "footprint", "pos": pos, "rot": float(e[2]),
+					"scale": float(e[3]), "origin": Vector2i(floori(pos.x), floori(pos.y))})
+	for e in d.get("pools", []):
+		if e is Array and (e as Array).size() >= 2:
+			pool_cells[Vector2i(int(e[0]), int(e[1]))] = true
+	for e in d.get("bloody", []):
+		if e is Array and (e as Array).size() >= 2:
+			bloody[int(e[0])] = int(e[1])

@@ -352,6 +352,7 @@ func _resolve_group_move(intent: GroupMoveIntent) -> ActionResult:
 			out.log_lines.append_array(one.log_lines)
 			out.dice_events.append_array(one.dice_events)
 			out.deaths.append_array(one.deaths)
+			out.fx.append_array(one.fx)
 	if not moved:
 		return ActionResult.fail("Nobody could move")
 	return out
@@ -436,6 +437,7 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 		# Дальше идти некуда — недоеденные клетки этого движения пропадают вместе с ним.
 		unit.move_credit = 0
 		var mine_res := ActionResult.success(lines)
+		_fx_steps(mine_res, unit, origin, path, mine)
 		_detonate_mine(mine, unit, mine_res)
 		return mine_res
 
@@ -450,6 +452,7 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 			update_airlocks()
 		unit.move_credit = 0
 		var burn_res := ActionResult.success(lines)
+		_fx_steps(burn_res, unit, origin, path, fire)
 		# Кровь льётся с той стороны, откуда боец пришёл в огонь (#21.4).
 		_kill(unit, burn_res, origin)
 		burn_res.log("%s burned to death at (%d, %d)!" % [
@@ -476,7 +479,18 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 			unit.dragging = UnitInstance.NOT_DRAGGING
 			lines.append("  ↳ dropped the object at (%d, %d)" % [dragged.x, dragged.y])
 
-	return ActionResult.success(lines)
+	var moved_res := ActionResult.success(lines)
+	_fx_steps(moved_res, unit, origin, path, intent.target)
+	return moved_res
+
+## Шаги по клеткам для косметики (кровавые следы): маршрут до точки остановки включительно.
+func _fx_steps(res: ActionResult, unit: UnitInstance, origin: Vector2i, path: Array, stop: Vector2i) -> void:
+	var cut: Array = []
+	for c: Vector2i in path:
+		cut.append(c)
+		if c == stop:
+			break
+	_fx(res, {"fx": "steps", "unit": unit.id, "from": origin, "path": cut})
 
 ## Клетка волочимого объекта, если юнит и правда его тащит и объект ещё рядом (#34).
 func dragged_cell_of(unit: UnitInstance) -> Vector2i:
@@ -975,7 +989,7 @@ func _blast(center: Vector2i, res: ActionResult = null, cells: Array[Vector2i] =
 			continue
 		if _protected_by(u, protectors):
 			continue
-		_kill(u, res, center)
+		_kill(u, res, center, true)
 		killed_names.append(u.stats.display_name)
 		if res != null:
 			res.deaths.append(u.id)
@@ -1251,7 +1265,7 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i, aimed: String = "") ->
 			"shield", "unit":
 				var occ: UnitInstance = cell.occupant
 				if destroyed and occ != null and occ.is_alive():
-					_kill(occ)
+					_kill(occ, result, shooter.coord)
 					killed_names.append(occ.stats.display_name)
 					result.deaths.append(occ.id)
 			"feature":
@@ -1536,7 +1550,7 @@ func _resolve_assault(shooter: UnitInstance, target: UnitInstance) -> ActionResu
 		result.log("%s ⇒ %s: %d hits (need %d+, defense %d+)" % [
 			shooter.stats.display_name, t.stats.display_name, hits, need, parry_need])
 		if t_killed:
-			_kill(t)
+			_kill(t, result, shooter.coord)
 			any_kill = true
 			result.log("%s killed!" % t.stats.display_name)
 		else:
@@ -1584,6 +1598,7 @@ func _resolve_push(intent: PushIntent) -> ActionResult:
 		"roll": roll, "need": need, "ok": survived,
 	})
 	if not survived:
+		_fx(result, {"fx": "blood", "at": target.coord, "from": actor.coord})
 		result.log("%s shield-pushes %s — it dies (roll %d, need %d+)" % [
 			actor.stats.display_name, target.stats.display_name, roll, need])
 	elif pushed:
@@ -1888,12 +1903,14 @@ func _fx_lane(res: ActionResult, from_coord: Vector2i, to_coord: Vector2i,
 ## как и раньше, но теперь это редкий край, а не общее правило.
 ## from_coord — откуда прилетел убивший удар: брызги (#21.4) летят ПРОТИВ него.
 ## NOWHERE (значение по умолчанию) = источник неизвестен, тогда веер расходится кругом.
-func _kill(u: UnitInstance, res: ActionResult = null, from_coord: Vector2i = NOWHERE) -> void:
+func _kill(u: UnitInstance, res: ActionResult = null, from_coord: Vector2i = NOWHERE,
+		blast: bool = false) -> void:
 	if u == null or not u.is_alive():
 		return
 	if state.grid.in_bounds(u.coord):
+		# blast — разорван взрывом или раздавлен: кровь кольцом, ошмётки, лужи шире.
 		_fx(res, {"fx": "blood", "at": u.coord,
-			"from": from_coord if from_coord != NOWHERE else u.coord})
+			"from": from_coord if from_coord != NOWHERE else u.coord, "blast": blast})
 	var load: int = u.carried_corpses
 	u.carried_corpses = 0
 	# Пленник погибшего носильщика освобождается сам (batch 12 #1): держать его больше
@@ -3927,30 +3944,44 @@ var _activation_frontier: Array[int] = []
 ## преграда (item 29). Косой, не по лучу, взгляд «видимостью» не считается — иначе, раз
 ## los_blocked для непрямой линии отвечает «не перекрыто», нейтрал будил бы всех подряд
 ## через все стены. Это тот же примитив зрения, что был и раньше, только строже описан.
-func _civ_sees_soldier(civ: UnitInstance) -> bool:
-	for s: UnitInstance in _living_soldiers():
-		if Combat.is_on_firing_line(civ.coord, s.coord) \
-				and not los_blocked(civ.coord, s.coord, true, false, true):
-			return true
-	# Техника будит нейтралов ровно как пехота (item 12): танк или челнок игрока в прямой
-	# видимости — такой же повод вскрыться, как и солдат.
-	for veh: Vehicle in state.all_vehicles():
-		if not veh.alive() or MCF.is_neutral(veh.owner):
-			continue
-		for fc: Vector2i in veh.footprint():
-			if Combat.is_on_firing_line(civ.coord, fc) \
-					and not los_blocked(civ.coord, fc, true, false, true):
+func _civ_sees_soldier(civ: UnitInstance, idx: Dictionary = {}) -> bool:
+	if idx.is_empty():
+		idx = _sight_index()
+	var c := civ.coord
+	for key: Vector3i in [Vector3i(0, c.y, 0), Vector3i(1, c.x, 0), Vector3i(2, c.x - c.y, 0), Vector3i(3, c.x + c.y, 0)]:
+		for t: Vector2i in idx.get(key, []):
+			if t != c and not los_blocked(c, t, true, false, true):
 				return true
 	return false
+
+## Клетки, с которых нейтрала можно «увидеть» (§3.1b): живые солдаты и корпуса техники
+## игроков (item 12), разложенные по линиям огня — строка, столбец, две диагонали. Раньше
+## каждый спящий житель перебирал ВСЕХ солдат (и заново собирал их список): 150 жителей ×
+## 90 солдат давали ~80 мс на каждое действие в большой партии. Теперь проверяются только
+## те, кто с ним на одной прямой, — ровно те, кого пропускал Combat.is_on_firing_line.
+func _sight_index() -> Dictionary:
+	var idx := {}
+	var targets: Array[Vector2i] = []
+	for s: UnitInstance in _living_soldiers():
+		targets.append(s.coord)
+	for veh: Vehicle in state.all_vehicles():
+		if veh.alive() and not MCF.is_neutral(veh.owner):
+			targets.append_array(veh.footprint())
+	for t in targets:
+		for key: Vector3i in [Vector3i(0, t.y, 0), Vector3i(1, t.x, 0), Vector3i(2, t.x - t.y, 0), Vector3i(3, t.x + t.y, 0)]:
+			if not idx.has(key):
+				idx[key] = []
+			idx[key].append(t)
+	return idx
 
 ## Вскрытие жителя (§3, item 3): пробуждается, если сам видит солдата (см. _civ_sees_soldier).
 ## Общий бой БОЛЬШЕ не будит всех разом — повод строго локальный: соседняя клетка сменила
 ## состояние (notify_cell_changed) ЛИБО солдат вошёл в обзор (здесь). Обратно вскрытие не
 ## снимается. Ещё не сгруппированного заносим во фронт — _wake_and_group соберёт группу.
-func _update_breached(civ: UnitInstance) -> void:
+func _update_breached(civ: UnitInstance, idx: Dictionary = {}) -> void:
 	if civ.civilian_active:
 		return
-	if _civ_sees_soldier(civ):
+	if _civ_sees_soldier(civ, idx):
 		civ.civilian_active = true
 		if civ.neutral_group == 0 and not _activation_frontier.has(civ.id):
 			_activation_frontier.append(civ.id)
@@ -4055,12 +4086,13 @@ func _wake_and_group(res: ActionResult) -> void:
 func _seed_sight_activation() -> void:
 	if _living_soldiers().is_empty():
 		return
+	var idx := _sight_index()
 	for u in state.all_units():
 		if not _is_civilian(u) or not u.is_alive() or u.neutral_group != 0:
 			continue
 		if _activation_frontier.has(u.id):
 			continue
-		if _civ_sees_soldier(u):
+		if _civ_sees_soldier(u, idx):
 			_activation_frontier.append(u.id)
 
 ## Штаб мирного квартала (#103). Ровно тот же класс, что водит армию ИИ, только с
@@ -4096,10 +4128,11 @@ func advance_civilians(owner: int = MCF.Owner.NEUTRAL) -> ActionResult:
 	# Слот принадлежит КОНКРЕТНОМУ владельцу-нейтралу: общему слоту (§до сбора групп) или
 	# слоту активационной группы (§15). Ведём только его бойцов, чужих групп не трогаем.
 	var awake := 0
+	var idx := _sight_index()
 	for u in state.all_units():
 		if u.owner != owner or not _is_civilian(u) or not u.is_alive() or u.is_held():
 			continue
-		_update_breached(u)
+		_update_breached(u, idx)
 		if not u.civilian_active:
 			continue
 		# Слот жителей может прийтись до границы раунда — свою активацию житель всегда
@@ -5269,6 +5302,8 @@ func _resolve_dpmg(intent: DPMGFireIntent) -> ActionResult:
 
 	var result := ActionResult.new()
 	result.ok = true
+	if killed:
+		_fx(result, {"fx": "blood", "at": target.coord, "from": target.coord})
 	result.dice_events.append({
 		"kind": "attack", "shooter": "DPMG", "target": target.stats.display_name,
 		"need": need, "armor": parry_need, "shots": shot_details, "killed": killed,
@@ -5445,7 +5480,7 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 				if r < need_roll:
 					det["survived"] = false
 		if not det["survived"]:
-			_kill(u, result, center)
+			_kill(u, result, center, true)
 			killed_names.append(u.stats.display_name)
 		details.append(det)
 
@@ -6300,7 +6335,7 @@ func _shuttle_passengers_hit(veh: Vehicle, center: Vector2i, in_area: Dictionary
 		if u == null or not u.is_alive():
 			continue
 		if u.coord == center:
-			_kill(u, res, center)
+			_kill(u, res, center, true)
 			killed.append(u.stats.display_name)
 			if res != null:
 				res.deaths.append(u.id)
@@ -6316,7 +6351,7 @@ func _shuttle_passengers_hit(veh: Vehicle, center: Vector2i, in_area: Dictionary
 			res.dice_events.append({"kind": "check", "actor": "%s (passenger)" % u.stats.display_name,
 				"roll": roll, "need": need, "ok": ok, "roller": u.owner})
 		if not ok:
-			_kill(u, res, center)
+			_kill(u, res, center, true)
 			killed.append(u.stats.display_name)
 			if res != null:
 				res.deaths.append(u.id)
@@ -6868,7 +6903,7 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 	for cc in plan["crush_cells"]:
 		var occ: UnitInstance = state.grid.cell(cc).occupant
 		if occ != null and occ.is_alive():
-			_kill(occ)
+			_kill(occ, res, cc, true)
 			crushed.append(occ)
 			res.deaths.append(occ.id)
 			res.log("%s crushed under the %s!" % [occ.stats.display_name,
