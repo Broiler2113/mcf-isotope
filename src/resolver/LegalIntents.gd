@@ -99,25 +99,24 @@ static func _for_unit(r: GameActionResolver, u: UnitInstance, out: Array) -> voi
 	if u.aboard_vehicle_id != -1:
 		return
 	var ap := u.remaining_ap
-	# --- Движение (та же арифметика бюджета, что в _resolve_move) ---
+	# --- Движение: зелёная и оранжевая зоны _resolve_move (за 1 и 2 ОД) ---
+	# Оранжевая зона (batch move-zones) — законный ход одним приказом, и политике она нужна:
+	# обход с фланга длиннее одного ОД, а дробить его на шаги — терять темп. Красную (3 ОД)
+	# не перечисляем: ход на весь запас ОД тактически редок, а разлив на тройной бюджет —
+	# вдевятеро больше клеток и самая дорогая часть шага. Резолвер её по-прежнему примет.
 	if ap > 0 or u.move_credit > 0:
-		var carried := r.held_unit_of(u)
-		var dragged := r.dragged_cell_of(u)
-		var burdened := carried != null or dragged != UnitInstance.NOT_DRAGGING
-		var carry_budget := maxi(0, u.speed() - MCF.CAPTURE_CARRY_PENALTY)
-		var budget: int
-		if u.move_credit > 0:
-			budget = u.move_credit
-		elif burdened:
-			budget = carry_budget
-		else:
-			budget = u.speed()
-		if burdened:
-			budget = mini(budget, carry_budget)
+		var tiers := r.move_tier_budgets(u)
+		var budget: int = tiers[mini(1, tiers.size() - 1)]
 		if budget > 0:
 			var reach := r.reachable_for(u, budget)
+			var near: int = tiers[0]
 			for c: Vector2i in reach.cost.keys():
 				if c == u.coord or state.grid.blocks_walk(c):
+					continue
+				# Дальние зоны — проредить: втрое больший бюджет даёт вдевятеро больше клеток,
+				# а длинный ход нужен ради укрытия, угла или фланга, не ради каждой клетки
+				# поля. Берётся решётка 2×2 и все клетки с укрытием или у стены.
+				if int(reach.cost[c]) > near and not _far_worthy(state.grid, c):
 					continue
 				out.append(MoveIntent.new(u.id, c, SENT))
 	# --- Стрельба и всё, что стоит ОД ---
@@ -253,6 +252,17 @@ static func _items(r: GameActionResolver, u: UnitInstance, out: Array, seated: b
 		_:
 			pass  # ЛДФ («bru») кладётся BuildWallIntent, не UseItem — см. шапку
 
+static func _far_worthy(grid: Grid, c: Vector2i) -> bool:
+	if c.x % 2 == 0 and c.y % 2 == 0:
+		return true
+	if grid.cell_fast(c.x, c.y).has_cover():
+		return true
+	for d: Vector2i in GameActionResolver.DIR4:
+		var n := c + d
+		if grid.in_bounds(n) and grid.cell_fast(n.x, n.y).blocks_sight():
+			return true
+	return false
+
 static func _for_drone(r: GameActionResolver, u: UnitInstance, out: Array) -> void:
 	if not r.operator_controls(u):
 		return
@@ -271,7 +281,7 @@ static func _for_vehicle(r: GameActionResolver, veh: Vehicle, out: Array) -> voi
 		for d: Vector2i in GameActionResolver.DIR4:
 			if d != veh.facing:
 				out.append(VehicleTurnIntent.new(veh.id, d))
-	var targets := r.vehicle_move_targets(veh)
+	var targets := r.vehicle_move_targets_all(veh)   # и оранжевая/красная зоны
 	for center: Vector2i in targets.keys():
 		var mv: Dictionary = targets[center]
 		out.append(VehicleMoveIntent.new(veh.id, mv["dir"], int(mv["steps"])))

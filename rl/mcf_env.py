@@ -51,6 +51,11 @@ class EpisodeConfig:
     record: bool = False
     max_candidates: int = 0      # 0 = every legal intent; see env_server._cap_legal
     max_actors: int = 0          # 0 = enumerate for every unit; see env_server._actor_subset
+    # --- tactical env (config/tactical.yaml) ---
+    opponent_style: int = 0      # AIController.Style for the HARD opponent: 0 standard, 1 rush, 2 turtle, 3 flank
+    shaping_scale: float = 1.0   # multiplies the per-action bonuses (R_SHOT, R_VEHICLE); decays in training
+    potential_coef: float = 0.0  # weight of the position potential (env_server._phi); 0 = off
+    army: str = ""               # "" as on the map, "shuffle" = mirrored type swap (fixed maps)
 
     def to_cmd(self) -> dict:
         return {
@@ -60,6 +65,8 @@ class EpisodeConfig:
             "fog": self.fog, "friendly_fire": self.friendly_fire,
             "disembark": self.disembark, "record": self.record,
             "max_candidates": self.max_candidates, "max_actors": self.max_actors,
+            "opponent_style": self.opponent_style, "shaping_scale": self.shaping_scale,
+            "potential_coef": self.potential_coef, "army": self.army,
         }
 
 

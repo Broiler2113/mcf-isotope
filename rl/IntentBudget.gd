@@ -197,7 +197,7 @@ static func cap(list: Array, max_candidates: int, rng: RandomNumberGenerator,
 		if intent is EndTurnIntent:
 			kept.append(intent)
 			continue
-		var key := "%d:%s" % [intent.actor_id, str(IntentCodec.encode(intent).get("t", ""))]
+		var key := "%d:%s" % [intent.actor_id, _kind(intent)]
 		if not buckets.has(key):
 			buckets[key] = []
 			order.append(key)
@@ -206,7 +206,8 @@ static func cap(list: Array, max_candidates: int, rng: RandomNumberGenerator,
 	var zone := hostile_zone(r, side) if r != null else {}
 	for key: String in order:
 		shuffle(buckets[key], rng)
-		if not zone.is_empty():
+		# Пеший ход не прицеливается никогда — тысячи ходов незачем проверять на прицел.
+		if not zone.is_empty() and not key.ends_with(":move"):
 			# Порядок внутри корзины — после той же перетасовки, так что жребий (и значит
 			# детерминизм от сида) не меняется; меняется лишь то, кто стоит первым.
 			var hit: Array = []
@@ -219,6 +220,11 @@ static func cap(list: Array, max_candidates: int, rng: RandomNumberGenerator,
 			hit.sort_custom(func(a: Intent, b: Intent) -> bool:
 				return _aim_count(a, zone, r.state) > _aim_count(b, zone, r.state))
 			buckets[key] = hit + rest
+	if r != null:
+		var foes := _visible_foes(r, side)
+		for key: String in order:
+			if key.ends_with(":move") and buckets[key].size() > 4:
+				buckets[key] = _tactical_order(buckets[key], r, side, foes)
 	var round_index := 0
 	while kept.size() < max_candidates:
 		var took := false
@@ -234,6 +240,102 @@ static func cap(list: Array, max_candidates: int, rng: RandomNumberGenerator,
 			break          # все корзины исчерпаны раньше потолка
 		round_index += 1
 	return kept
+
+
+## Порядок ходов внутри корзины юнита: лучшие по тактике вперемешку со случайными.
+##
+## Потолок кандидатов режет корзину «шагнуть» сильнее всего: у бойца сотни клеток хода, в
+## список доходят единицы. Случайные единицы означали, что клетка за укрытием или вне
+## простреливаемой линии попадала к политике по жребию, — научиться выбирать её из того,
+## чего не показывают, нельзя. Чистая сортировка по эвристике была бы другой ловушкой:
+## политика видела бы только то, что считает хорошим эвристика, и не превзошла бы её.
+## Поэтому через одного: лучший по оценке, случайный, следующий лучший, случайный…
+##
+## Оценка клетки: меньше огня по ней (fire_cover врага, туман честен), есть укрытие, ближе
+## к видимому врагу. Порядок исходного списка уже перетасован жребием, так что детерминизм
+## от сида сохраняется.
+static func _visible_foes(r: GameActionResolver, side: int) -> Array[Vector2i]:
+	var foes: Array[Vector2i] = []
+	var grid := r.state.grid
+	for u: UnitInstance in r.state.all_units():
+		if u.is_alive() and not u.is_drone and grid.in_bounds(u.coord) \
+				and Obs.rel_owner(r, side, u.owner) == 1 and r.is_visible_to_team(side, u):
+			foes.append(u.coord)
+	return foes
+
+static func _tactical_order(moves: Array, r: GameActionResolver, side: int,
+		all_foes: Array[Vector2i] = []) -> Array:
+	var state := r.state
+	var grid := state.grid
+	var gw := grid.width
+	var threat := r.fire_cover(side, true)
+	var foes: Array[Vector2i] = all_foes.duplicate() if not all_foes.is_empty() \
+			else _visible_foes(r, side)
+	var actor := state.get_unit(moves[0].actor_id)
+	# Сближение меряем до шести ближайших к бойцу врагов, а не до всех: дальше его хода
+	# остальные на выбор клетки не влияют, а перебор «каждая клетка × каждый враг» на
+	# ротной карте стоил больше, чем весь остальной шаг.
+	if actor != null and foes.size() > 6:
+		var ac := actor.coord
+		var dk := PackedInt64Array()
+		for i in foes.size():
+			dk.append(Combat.distance(foes[i], ac) * 4096 + i)
+		dk.sort()
+		var near: Array[Vector2i] = []
+		for j in 6:
+			near.append(foes[dk[j] % 4096])
+		foes = near
+	var d0 := _nearest(foes, actor.coord) if actor != null else 0
+	# Ключ сортировки — целое: оценка (в сотых, со сдвигом в плюс) и индекс. Родная
+	# сортировка целых на порядок быстрее sort_custom с лямбдой, а индекс сохраняет
+	# порядок жребия при равной оценке.
+	var keys := PackedInt64Array()
+	for i in moves.size():
+		var c: Vector2i = moves[i].target
+		var sc := -1.5 * minf(threat[c.y * gw + c.x], 4.0)
+		if grid.cell_fast(c.x, c.y).has_cover():
+			sc += 1.0
+		if not foes.is_empty():
+			sc += 0.15 * float(d0 - _nearest(foes, c))
+		keys.append(int(round((1000.0 - sc) * 100.0)) * 65536 + i)
+	keys.sort()
+	var out: Array = []
+	var used := PackedByteArray()
+	used.resize(moves.size())
+	var top := 0
+	var rnd := 0
+	while out.size() < moves.size():
+		while top < keys.size() and used[keys[top] % 65536]:
+			top += 1
+		if top < keys.size():
+			var bi: int = keys[top] % 65536
+			used[bi] = 1
+			out.append(moves[bi])
+		while rnd < moves.size() and used[rnd]:
+			rnd += 1
+		if rnd < moves.size():
+			used[rnd] = 1
+			out.append(moves[rnd])
+	return out
+
+static func _nearest(foes: Array[Vector2i], c: Vector2i) -> int:
+	var best := 1 << 20
+	for f: Vector2i in foes:
+		best = mini(best, Combat.distance(f, c))
+	return best
+
+
+## Вид намерения для корзины. Ходы — большая часть списка (с зонами 2-3 ОД их тысячи), и
+## строить на каждый словарь провода ради одной строки «move» стоило десятки миллисекунд
+## на шаг; частые виды узнаются по классу, остальные — как раньше, через провод.
+static func _kind(intent: Intent) -> String:
+	if intent is MoveIntent:
+		return "move"
+	if intent is DroneMoveIntent:
+		return "drone_move"
+	if intent is VehicleMoveIntent:
+		return "veh_move"
+	return str(IntentCodec.encode(intent).get("t", ""))
 
 
 ## Сколько врагов накрывает прицельное намерение (для порядка внутри корзины).

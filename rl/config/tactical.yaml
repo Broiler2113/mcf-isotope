@@ -1,0 +1,124 @@
+# tactical — the "play it like an engine" environment. Fork the current best run onto it:
+#
+#   bash rl/run.sh ... or:  python rl/train.py fork rl/runs/<best-branch>/latest.pt \
+#                              --branch tactical-1 --config rl/config/tactical.yaml
+#
+# The checkpoint GROWS into the new network (rl/model.py load_compat): the two new map
+# layers and seven new candidate columns start at zero weight and the residual trunk starts
+# as the identity, so the fork plays exactly like its parent on its first step and learns
+# the rest from there. Owner's decisions (2026-10-02): self-play league allowed for
+# training, evaluation vs standard HARD only, annihilation only.
+#
+# WHAT CHANGED VS town8.yaml, AND WHY
+#
+# 1. It sees tactics. Two grid layers — expected enemy hits per cell (visible enemies only,
+#    fog stays honest) and our own fire coverage — plus, per candidate: threat, own fire and
+#    cover at the destination, and the AP cost of a move. Moves now reach the orange and red
+#    zones (2-3 AP in one order): long flanks are one decision instead of three.
+# 2. It sees the RIGHT candidates. The 512-candidate cap used to keep a random handful of
+#    each unit's ~hundreds of moves; it now keeps the best-scoring cells (cover, out of the
+#    line of fire, closer) interleaved with random ones (IntentBudget._tactical_order).
+# 3. It is rewarded for position, not for button presses. The per-action bonuses decay to
+#    zero over 400 updates (shaping_decay_*); a potential-based position term
+#    (potential_coef) pays for concentrating fire on visible enemies and for taking our
+#    units out of theirs. Potential-based shaping cannot change the optimal policy.
+# 4. It cannot win by memorising. Maps: the four town8 maps, six skill drills (one tactic
+#    wins each; rl/tools/make_drills.gd), and freshly GENERATED maps every episode
+#    ("gen:<style>:<size>:<units>:<tanks>", all five MapGen styles, random armies mirrored
+#    for both sides). Fixed maps get their infantry types swapped 30% of the time.
+# 4b. It plays mostly with full information (fog off in 70% of games) and predicts the
+#    enemy: next-turn enemy fire and reach layers, and memory of enemies lost in fog.
+# 5. It cannot win by exploiting one bot. League: half the games vs HARD in four styles
+#    (standard / rush / turtle / flank), half vs its own past checkpoints, prioritised
+#    toward the ones that beat it (PFSP). Evaluation never changes: standard HARD.
+#
+# WHAT TO WATCH (dashboard): eval win vs HARD on the pinned town map (comparable with the
+# parent's history), eval/drill_*_winrate (one per tactic), tac/<map>/exposure (falling =
+# it learned to use cover), tac/<map>/act_* (every unit type in use), tac/*/hit_* (aim),
+# league/pool_winrate (should hover near 50% — it is playing itself).
+device: auto
+n_envs: 4
+maps:
+  - rl/maps/town_50x50_s25.json
+  - rl/maps/town_tank.json
+  - rl/maps/drone_44x44.json
+  - rl/maps/sapper_44x44.json
+  - rl/maps/drill_mg_nest.json
+  - rl/maps/drill_tank_screen.json
+  - rl/maps/drill_breach.json
+  - rl/maps/drill_drone_recon.json
+  - rl/maps/drill_crossfire.json
+  - rl/maps/drill_sniper_lanes.json
+  - gen:any:0:12:0
+  - gen:any:1:18:1
+  - gen:any:2:28:2
+map_weights: [3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 1.5]
+eval_maps:
+  - rl/maps/town_50x50_s25.json
+drill_eval_maps:
+  - rl/maps/drill_mg_nest.json
+  - rl/maps/drill_tank_screen.json
+  - rl/maps/drill_breach.json
+  - rl/maps/drill_drone_recon.json
+  - rl/maps/drill_crossfire.json
+  - rl/maps/drill_sniper_lanes.json
+drill_eval_games: 4           # both sides x fog on/off
+sealed_crew_maps:
+  - town_tank
+
+# Fog of war in only 30% of training games. HARD sees through fog anyway (it is
+# omniscient), and many human games are played without it: the policy must learn to read a
+# fully visible board — where every enemy can walk and shoot next turn (C_FNEXT / C_EREACH)
+# — and, in the fog games, to remember enemies that went out of sight (C_LASTSEEN).
+fog_off_share: 0.7
+eval_nofog_games: 6           # extra fog-off eval on eval_maps; the main eval keeps fog
+
+army_shuffle: 0.3
+potential_coef: 0.5
+shaping_decay_updates: 400
+shaping_floor: 0.0
+shaping_decay_start: -1      # from the update the fork starts at
+
+phase: league
+pool_ai_fraction: 0.5
+pool_size: 8
+opponent_styles: [0.4, 0.2, 0.2, 0.2]   # standard, rush, turtle, flank
+pfsp_power: 2.0
+pfsp_floor: 0.05
+
+stage: 1
+round_cap: 20
+max_steps: 8000
+max_actors: 16
+max_candidates: 512
+civilians: false
+random_events: false
+fog: standard
+friendly_fire: true
+rollout_steps: 384
+epochs: 4
+minibatch: 32
+lr: 0.00005
+gamma: 0.99
+lam: 0.95
+clip: 0.2
+ent_coef: 0.01
+vf_coef: 0.5
+target_kl: 0.02
+max_grad_norm: 0.5
+total_steps: 200000000
+checkpoint_every: 10
+eval_every: 25
+eval_games: 10
+replays_per_checkpoint: 2
+map_rotate_matches: 5
+seed: 1
+torch_threads: 0
+
+# --- keeping the machine alive ---
+keep_checkpoints: 12
+milestone_every: 2000000
+keep_replay_sets: 6
+rollout_budget_mb: 2048
+mem_limit_mb: 6144
+disk_floor_mb: 400

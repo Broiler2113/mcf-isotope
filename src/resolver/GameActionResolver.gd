@@ -5946,6 +5946,198 @@ func first_unit_on_line(from_coord: Vector2i, to_coord: Vector2i,
 
 ## Свой ли это боец для стрелка — сам или союзник по команде. Единственная точка,
 ## через которую правила спрашивают «в него вообще можно целиться».
+## Огневое покрытие клеток (RL-тактика, стиль HARD «фланг»): по каждой клетке — сколько
+## попаданий за ход в неё ОЖИДАЕТСЯ от стрелков, то есть сумма P(попадания) × скорострельность.
+##
+## hostile = true — стрелки, ВРАЖДЕБНЫЕ viewer'у и видимые ему (туман честен: невидимый враг
+## сюда не попадает, иначе карта угроз подсказывала бы, где он прячется); false — свои и
+## союзные стрелки viewer'а (их он знает всех).
+##
+## Геометрия та же, что у can_shoot: огонь только по восьми прямым (§3.5), стена или корпус
+## машины луч останавливают (стекло — нет), шанс — та же лестница hit_number/sniper.
+## Марксман бьёт сквозь всё, огнемёт — на FLAME_JET_LENGTH. Пушка танка — лучами из центра
+## на дальность орудия. Окопы и укрытия не учитываются: это оценка «простреливается ли
+## клетка», а не точный бросок.
+func fire_cover(viewer: int, hostile: bool) -> PackedFloat32Array:
+	var grid := state.grid
+	var w := grid.width
+	var shooters: Array = []
+	var key := hash([viewer, hostile, fog_enabled, GridCell.vision_version, w, grid.height])
+	for u: UnitInstance in state.all_units():
+		if not u.is_alive() or u.is_drone or u.aboard_vehicle_id != -1 or u.is_held() \
+				or MCF.is_neutral(u.owner) or not grid.in_bounds(u.coord):
+			continue
+		var mine := state.roster.are_allies(viewer, u.owner)
+		if mine == hostile:
+			continue
+		if hostile and not is_visible_to_team(viewer, u):
+			continue
+		if u.fire_range() <= 0.0 and u.stats.special_ability_id != MCF.ABILITY_MARKSMAN:
+			continue
+		shooters.append(u)
+		key = hash([key, u.id, u.coord, u.remaining_ap > 0])
+	var guns: Array = []
+	for veh: Vehicle in state.all_vehicles():
+		if not veh.alive() or veh.is_borg() or veh.occupants.is_empty():
+			continue
+		var gun: Dictionary = VehicleDB.get_vehicle(veh.type_id).get("weapons", {}).get("main_gun", {})
+		if gun.is_empty() or state.roster.are_allies(viewer, veh.owner) == hostile:
+			continue
+		if hostile:
+			var seen := not fog_enabled
+			var vis := team_visible_coords(viewer)
+			for fc: Vector2i in veh.footprint():
+				if vis.has(fc):
+					seen = true
+					break
+			if not seen:
+				continue
+		guns.append(veh)
+		key = hash([key, -1 - veh.id, veh.origin])
+	if _cover_cache.has(key):
+		return _cover_cache[key]
+	var out := PackedFloat32Array()
+	out.resize(w * grid.height)
+	for u: UnitInstance in shooters:
+		var ability: String = u.stats.special_ability_id
+		var pierce := ability == MCF.ABILITY_MARKSMAN
+		var sniper := ability == MCF.ABILITY_SNIPER
+		var reach := MCF.FLAME_JET_LENGTH if ability == MCF.ABILITY_FLAMETHROWER else 1 << 20
+		var rof := float(maxi(1, u.rate_of_fire()))
+		for d: Vector2i in DIR8:
+			var c: Vector2i = u.coord
+			var dist := 0
+			while true:
+				c += d
+				dist += 1
+				if dist > reach or not grid.in_bounds(c):
+					break
+				var cell := grid.cell_fast(c.x, c.y)
+				if not pierce and (cell.blocks_sight() or cell.vehicle_id != -1):
+					break
+				var need := 1 if pierce else (Combat.sniper_hit_number(dist) if sniper
+						else Combat.hit_number(dist, u.fire_range()))
+				if need >= 7:
+					break
+				out[c.y * w + c.x] += rof * float(7 - need) / 6.0
+	for veh: Vehicle in guns:
+		var rng := int(VehicleDB.get_vehicle(veh.type_id)["weapons"]["main_gun"].get("range", MCF.CANNON_RANGE))
+		for d: Vector2i in DIR8:
+			var c: Vector2i = veh.center()
+			var dist := 0
+			while true:
+				c += d
+				dist += 1
+				if dist > rng or not grid.in_bounds(c):
+					break
+				var cell := grid.cell_fast(c.x, c.y)
+				if cell.vehicle_id == veh.id:
+					continue
+				if cell.blocks_sight() or cell.vehicle_id != -1:
+					break
+				out[c.y * w + c.x] += 1.0
+	if _cover_cache.size() > 8:
+		_cover_cache.clear()
+	_cover_cache[key] = out
+	return out
+
+var _cover_cache: Dictionary = {}
+
+## Прогноз на ход противника (RL-тактика): что видимые враги смогут сделать СЛЕДУЮЩИМ ходом.
+##   "reach" — сколько врагов дойдут до клетки за один ход (по настоящим путям, как ходят);
+##   "fire"  — ожидаемые попадания по клетке после их хода: каждый стрелок берётся в лучшей
+##             для него точке из тех, куда дойдёт (решётка 3×3 его разлива плюс текущая
+##             клетка), — то есть «здесь безопасно сейчас, но не через ход».
+## Туман честен: только враги, видимые viewer'у. Вклад каждого врага кэшируется по его клетке
+## и раунду — пока наша сторона ходит, враги стоят, и прогноз считается один раз на ход.
+func enemy_forecast(viewer: int) -> Dictionary:
+	var grid := state.grid
+	var w := grid.width
+	var n := w * grid.height
+	var gid := grid.get_instance_id()
+	if _fc_grid != gid:
+		_fc_unit.clear()
+		_fc_total.clear()
+		_fc_grid = gid
+	var hostiles: Array = []
+	var key := hash([viewer, fog_enabled, GridCell.vision_version, state.turns.round_number, n])
+	for u: UnitInstance in state.all_units():
+		if not u.is_alive() or u.is_drone or u.aboard_vehicle_id != -1 or u.is_held() \
+				or MCF.is_neutral(u.owner) or not grid.in_bounds(u.coord) \
+				or state.roster.are_allies(viewer, u.owner) or not is_visible_to_team(viewer, u):
+			continue
+		hostiles.append(u)
+		key = hash([key, u.id, u.coord])
+	if _fc_total.has(key):
+		return _fc_total[key]
+	var reach := PackedFloat32Array()
+	reach.resize(n)
+	var fire := PackedFloat32Array()
+	fire.resize(n)
+	for u: UnitInstance in hostiles:
+		var ukey := hash([u.coord, GridCell.vision_version, state.turns.round_number])
+		var rec: Variant = _fc_unit.get(u.id)
+		if rec == null or rec[0] != ukey:
+			rec = [ukey] + _forecast_unit(u)
+			_fc_unit[u.id] = rec
+		for i: int in rec[1]:
+			reach[i] += 1.0
+		var fi: PackedInt32Array = rec[2]
+		var fv: PackedFloat32Array = rec[3]
+		for j in fi.size():
+			fire[fi[j]] += fv[j]
+	if _fc_total.size() > 8:
+		_fc_total.clear()
+	_fc_total[key] = {"reach": reach, "fire": fire}
+	return _fc_total[key]
+
+var _fc_unit: Dictionary = {}    # id врага -> [ключ, клетки досягаемости, клетки огня, значения]
+var _fc_total: Dictionary = {}
+var _fc_grid: int = 0
+
+## Вклад одного врага в прогноз: клетки, куда он дойдёт, и лучший огонь по каждой клетке
+## из точек, куда он дойдёт (максимум, а не сумма: стоять он будет в одной точке).
+func _forecast_unit(u: UnitInstance) -> Array:
+	var grid := state.grid
+	var w := grid.width
+	var cost: Dictionary = reachable_for(u, move_budget_fresh(u)).cost
+	var reach_idx := PackedInt32Array()
+	var spots: Array[Vector2i] = [u.coord]
+	for c: Vector2i in cost:
+		reach_idx.append(c.y * w + c.x)
+		if c.x % 3 == 0 and c.y % 3 == 0 and c != u.coord and not grid.blocks_walk(c):
+			spots.append(c)
+	var best: Dictionary = {}
+	var ability: String = u.stats.special_ability_id
+	if u.fire_range() > 0.0 or ability == MCF.ABILITY_MARKSMAN:
+		var pierce := ability == MCF.ABILITY_MARKSMAN
+		var sniper := ability == MCF.ABILITY_SNIPER
+		var max_d := MCF.FLAME_JET_LENGTH if ability == MCF.ABILITY_FLAMETHROWER else 1 << 20
+		var rof := float(maxi(1, u.rate_of_fire()))
+		for from: Vector2i in spots:
+			for d: Vector2i in DIR8:
+				var c: Vector2i = from
+				var dist := 0
+				while true:
+					c += d
+					dist += 1
+					if dist > max_d or not grid.in_bounds(c):
+						break
+					var cell := grid.cell_fast(c.x, c.y)
+					if not pierce and (cell.blocks_sight() or cell.vehicle_id != -1):
+						break
+					var need := 1 if pierce else (Combat.sniper_hit_number(dist) if sniper
+							else Combat.hit_number(dist, u.fire_range()))
+					if need >= 7:
+						break
+					var i := c.y * w + c.x
+					var v := rof * float(7 - need) / 6.0
+					if v > float(best.get(i, 0.0)):
+						best[i] = v
+	var fi := PackedInt32Array(best.keys())
+	var fv := PackedFloat32Array(best.values())
+	return [reach_idx, fi, fv]
+
 func is_ally_of(a: UnitInstance, b: UnitInstance) -> bool:
 	if a == null or b == null:
 		return false

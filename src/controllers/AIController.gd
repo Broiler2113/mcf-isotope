@@ -104,6 +104,15 @@ const MINE_FIELD_CAP := 12
 const SCORE_VEHICLE_FIRING_LINE := 18.0
 
 var difficulty: int = Difficulty.NORMAL
+## Манера HARD для обучения RL (rl/env_server, «opponent_style»): чтобы политика училась
+## воевать, а не вскрывать привычки одного бота. STANDARD — обычный HARD (штабной план,
+## и именно им идёт оценка). Остальные заменяют план штаба своим выбором клетки хода:
+##   RUSH   — сближение любой ценой, укрытие почти не важно;
+##   TURTLE — держит укрытия и не входит в простреливаемые клетки, пока враг виден;
+##   FLANK  — сближается в обход простреливаемых линий (resolver.fire_cover).
+## Стрельба, техника, дроны — общие для всех манер.
+enum Style {STANDARD, RUSH, TURTLE, FLANK}
+var style: int = Style.STANDARD
 
 ## Кэш мультиисточниковых геополей расстояний: ключ "vis"/"all", значение —
 ## Dictionary{Vector2i -> шаги до ближайшего врага}. Позволяет ИИ обходить стены и
@@ -1505,10 +1514,12 @@ func _plan_move(state: GameState, u: UnitInstance) -> Dictionary:
 	return best
 
 func _best_move(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
-	# План старше жадности: если штаб назначил бойцу клетку, идём туда.
-	var planned := _plan_move(state, u)
-	if not planned.is_empty():
-		return planned
+	# План старше жадности: если штаб назначил бойцу клетку, идём туда. У особой манеры
+	# (style) свой выбор клетки — штабной план её бы перекрыл.
+	if style == Style.STANDARD:
+		var planned := _plan_move(state, u)
+		if not planned.is_empty():
+			return planned
 	# Сближение оцениваем по РЕАЛЬНОМУ пути в обход стен (геодезическое поле), а не по
 	# прямой — иначе ИИ прижимается к стене и застревает у угла (#62). Поле строится
 	# ОДНИМ волновым BFS сразу от всех врагов, поэтому не тормозит на ходу ИИ (#63).
@@ -1538,6 +1549,14 @@ func _best_move(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dic
 	var best_score := 0.0
 	var best_coord := Vector2i.ZERO
 	var dodge := _avoids_fire(u)
+	var gain_k := 5.0 if style == Style.RUSH else (1.5 if style == Style.TURTLE else 3.0)
+	var cover_k := 0.5 if style == Style.RUSH else (3.0 if style == Style.TURTLE else 1.0)
+	var threat := PackedFloat32Array()
+	var threat_k := 0.0
+	if style == Style.FLANK or style == Style.TURTLE:
+		threat = r.fire_cover(owner, true)
+		threat_k = 6.0 if style == Style.FLANK else 10.0
+	var gw := grid.width
 	for coord: Vector2i in cost:
 		if dodge and _fire_near(state, coord):
 			continue  # держим дистанцию минимум в 1 клетку от огня (#48)
@@ -1547,7 +1566,7 @@ func _best_move(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dic
 			var gain := float(start_geo - new_geo)
 			if gain <= 0.0 and not easy:
 				continue  # не подходим ближе по пути — незачем (кроме бестолкового EASY)
-			score = SCORE_MOVE_BASE + gain * 3.0
+			score = SCORE_MOVE_BASE + gain * gain_k
 			# Небольшой уклон к клеткам ближе по прямой — сглаживает равные пути.
 			if straight != null:
 				score -= Combat.distance(coord, straight_coord) * 0.05
@@ -1556,7 +1575,7 @@ func _best_move(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dic
 			var gain := float(start_straight - Combat.distance(coord, straight_coord))
 			if gain <= 0.0 and not easy:
 				continue
-			score = SCORE_MOVE_BASE + gain * 3.0
+			score = SCORE_MOVE_BASE + gain * gain_k
 		# Каждая пройденная клетка чего-то стоит (#103): при равном приближении ИИ
 		# останавливается раньше, а неизрасходованная скорость остаётся кредитом (§3.2)
 		# и доходится уже после выстрела — это и есть дробление движения.
@@ -1568,7 +1587,9 @@ func _best_move(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dic
 		if covers:
 			var c := grid.cell(coord)
 			if c.has_cover():
-				score += float(MCF.COVER_MOD.get(c.cover_height, 1)) * 2.0
+				score += float(MCF.COVER_MOD.get(c.cover_height, 1)) * 2.0 * cover_k
+		if threat_k > 0.0:
+			score -= minf(threat[coord.y * gw + coord.x], 3.0) * threat_k
 		if easy:
 			score += randf() * 4.0  # шумит, ходит менее осмысленно
 		if not have_best or score > best_score:

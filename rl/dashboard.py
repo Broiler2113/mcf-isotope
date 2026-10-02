@@ -1741,6 +1741,83 @@ def page_replays() -> None:
             c2.download_button("Download .mcfr", f.read(), os.path.basename(path))
 
 
+UNIT_ORDER = ["light_infantry", "heavy_infantry", "machinegunner", "sniper", "anti_tank",
+              "engineer", "flamethrower", "assault", "marksman", "miner", "sapper",
+              "shield_bearer", "drone_operator", "commander", "drone", "tank", "shuttle", "borg"]
+
+
+def page_tactics(b: str) -> None:
+    """Is it playing WELL, not just winning: skill drills, every unit type pulling its
+    weight, cover discipline. Fed by the tactical env (config/tactical.yaml)."""
+    st.header(f"Tactics — {b}")
+    sc = scalars(b, tb_stamp(b))
+    drills = sorted(t for t in sc if t.startswith("eval/drill_") and t.endswith("_winrate"))
+    tac = sorted({t.split("/")[1] for t in sc if t.startswith("tac/")})
+    if not drills and not tac:
+        st.info("No tactics data yet. It comes from the tactical environment — a branch "
+                "trained with rl/config/tactical.yaml (drills, tactical metrics) — after "
+                "its first update and first evaluation.")
+        return
+    if drills:
+        st.markdown("#### Skill drills vs HARD")
+        st.caption("Each drill is a small scenario that one tactic wins: flank the MG nest, "
+                   "screen the tank, breach the compound, scout with drones, concentrate fire "
+                   "through one gap, fight down the sniper lanes. Both sides of every drill are "
+                   "played. A drill stuck at 0% is a tactic it has not learned.")
+        names = {t: t[len("eval/drill_"):-len("_winrate")].removeprefix("drill_") for t in drills}
+        rows = [dict(drill=names[t], latest=float(sc[t].iloc[-1, 1]),
+                     best=float(sc[t].iloc[:, 1].max()), evaluations=len(sc[t])) for t in drills]
+        st.dataframe(renderable(pd.DataFrame(rows)), width="stretch", hide_index=True)
+        chart(sc, drills, "drill win rate vs HARD", pct=True, names=names)
+    if tac:
+        st.divider()
+        st.markdown("#### How it uses its army (training games)")
+        pick = st.radio("map", tac, horizontal=True, key="tac_map",
+                        index=tac.index("all") if "all" in tac else 0,
+                        label_visibility="collapsed")
+        pre = f"tac/{pick}/"
+        kinds = sorted({t[len(pre):].split("_", 1)[1] for t in sc
+                        if t.startswith(pre) and t[len(pre):].split("_", 1)[0] in ("act", "kills", "hit", "lost")},
+                       key=lambda k: UNIT_ORDER.index(k) if k in UNIT_ORDER else 99)
+
+        def last(tag: str):
+            return round(float(sc[tag].iloc[-1, 1]), 3) if tag in sc else None
+        rows = [dict(unit=k, share_of_actions=last(pre + f"act_{k}"), hit_rate=last(pre + f"hit_{k}"),
+                     kills_per_game=last(pre + f"kills_{k}"), lost_share=last(pre + f"lost_{k}"))
+                for k in kinds]
+        st.dataframe(renderable(pd.DataFrame(rows)), width="stretch", hide_index=True)
+        st.caption("share_of_actions — of the trainee's decisions; hit_rate — shots that hurt an "
+                   "enemy; lost_share — of that type fielded, how many died. A unit type with a "
+                   "near-zero share is one it does not know how to use.")
+        c1, c2 = st.columns(2)
+        with c1:
+            chart(sc, [pre + "exposure"], "army under fire without cover, end of turn", pct=True)
+            st.caption("Falling = it learned to end turns in cover or out of sight.")
+        with c2:
+            chart(sc, [pre + "multi_ap_per_game"], "2-3 AP moves per game")
+            st.caption("Long manoeuvres in one order — flanks, retreats, rushes to cover.")
+        chart(sc, [pre + f"act_{k}" for k in kinds], "share of actions by unit type", pct=True,
+              names={pre + f"act_{k}": k for k in kinds})
+    if any(t.startswith("train/winrate_fog_") or t.endswith("_nofog") for t in sc):
+        st.divider()
+        st.markdown("#### Fog of war on and off")
+        st.caption("70% of training games are played with fog off. The main evaluation keeps "
+                   "fog so its history stays comparable; the fog-off evaluation is separate.")
+        c1, c2 = st.columns(2)
+        with c1:
+            chart(sc, ["train/winrate_fog_on", "train/winrate_fog_off"], "training win rate",
+                  pct=True, names={"train/winrate_fog_on": "fog on", "train/winrate_fog_off": "fog off"})
+        with c2:
+            chart(sc, ["eval/winrate_hard", "eval/winrate_hard_nofog"], "eval win rate vs HARD",
+                  pct=True, names={"eval/winrate_hard": "fog on", "eval/winrate_hard_nofog": "fog off"})
+    c1, c2 = st.columns(2)
+    with c1:
+        chart(sc, ["train/shaping_scale"], "per-action bonus scale (decays to 0)")
+    with c2:
+        chart(sc, ["league/pool_winrate"], "win rate vs its own past checkpoints", pct=True)
+        st.caption("Hovering near 50% is healthy: it is playing itself.")
+
+
 def page_maps() -> None:
     st.header("Per-map stats (§11.8)")
     rows, series = [], {}
@@ -1774,8 +1851,8 @@ def main() -> None:
     st.sidebar.title("Isotope RLM")
     bs = branches()
     page = st.sidebar.radio(
-        "Page", ["Overview", "Branch", "Evaluations", "Checkpoints", "Replays", "Maps"])
-    per_branch = page in ("Branch", "Evaluations")
+        "Page", ["Overview", "Branch", "Tactics", "Evaluations", "Checkpoints", "Replays", "Maps"])
+    per_branch = page in ("Branch", "Tactics", "Evaluations")
     chosen = (st.sidebar.selectbox("Branch", bs, index=default_branch(bs))
               if (per_branch and bs) else None)
     if st.sidebar.button("Refresh data"):
@@ -1791,6 +1868,8 @@ def main() -> None:
         page_overview()
     elif page == "Branch":
         page_branch(chosen)
+    elif page == "Tactics":
+        page_tactics(chosen)
     elif page == "Evaluations":
         page_evaluations(chosen)
     elif page == "Checkpoints":
