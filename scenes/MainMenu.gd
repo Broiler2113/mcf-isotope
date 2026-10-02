@@ -248,9 +248,20 @@ func _fill_file_list(list: ItemList, names: PackedStringArray, dir: String,
 		list.set_item_disabled(0, true)
 		return
 	for name in names:
-		var data := ReplayFile.read(ReplayFile.path_for(dir, name))
-		var note := ReplayFile.describe(data)
-		list.add_item(name.get_basename() if note == "" else "%s  —  %s" % [name.get_basename(), note])
+		list.add_item(name.get_basename())
+	_fill_notes(list, names, dir)
+
+## Подписи к файлам — после того как меню уже на экране, по несколько за кадр: файл без
+## готовой подписи (старый, до .note) читается целиком, и меню не должно его ждать.
+func _fill_notes(list: ItemList, names: PackedStringArray, dir: String) -> void:
+	for i in names.size():
+		if i % 4 == 3:
+			await get_tree().process_frame
+		if not is_instance_valid(list) or list.item_count <= i:
+			return
+		var note := ReplayFile.note_for(ReplayFile.path_for(dir, names[i]))
+		if note != "":
+			list.set_item_text(i, "%s  —  %s" % [names[i].get_basename(), note])
 
 func _on_game_activated(idx: int) -> void:
 	if idx < 0 or idx >= _game_names.size():

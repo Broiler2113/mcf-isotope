@@ -17,8 +17,10 @@ func _initialize() -> void:
 	_corridor_column_all_move()
 	_tactical_takes_cover(false)
 	_tactical_takes_cover(true)
+	_orange_zone_order(false)
+	_orange_zone_order(true)
 	if fails.is_empty():
-		print("group move: everyone moves, plan == result, formation holds, tactical takes cover")
+		print("group move: everyone moves, plan == result, formation holds, tactical takes cover, orange orders cost 2 AP")
 		quit(0)
 		return
 	printerr("group move: %d failure(s)" % fails.size())
@@ -60,6 +62,38 @@ func _order(f: Dictionary, dest: Vector2i, tactical: bool, what: String) -> Dict
 		var u := st.get_unit(plan[0][i])
 		ck(u.coord == plan[1][i], "%s: unit %d at %s, preview showed %s" % [what, u.id, u.coord, plan[1][i]])
 	return from
+
+## Приказ в оранжевую зону (batch group-zones): отряд идёт дальше зелёной и платит 2 ОД;
+## тот же приказ в зелёную — 1 ОД, как раньше.
+func _orange_zone_order(tactical: bool) -> void:
+	var tag := "orange %s" % ("tactical" if tactical else "plain")
+	var spawns: Array = [[Vector2i(37, 18), "light_infantry", MCF.Owner.PLAYER_2]]
+	for y in [5, 7]:
+		spawns.append([Vector2i(3, y), "light_infantry", MCF.Owner.PLAYER_1])
+	var f := _field(spawns)
+	var st: GameState = f["s"]
+	var r: GameActionResolver = f["r"]
+	var ids: Array[int] = []
+	for u in st.living_units_of(MCF.Owner.PLAYER_1):
+		u.remaining_ap = 3
+		ids.append(u.id)
+	var sp: int = st.get_unit(ids[0]).speed()
+	var green := GroupMovePlanner.plan(r, ids, Vector2i(30, 6), tactical, 0)
+	for i in green[0].size():
+		ck(Combat.distance(st.get_unit(green[0][i]).coord, green[1][i]) <= sp,
+				"%s: a green order stays within one move" % tag)
+	var plan := GroupMovePlanner.plan(r, ids, Vector2i(30, 6), tactical, 1)
+	var far := false
+	for i in plan[0].size():
+		if Combat.distance(st.get_unit(plan[0][i]).coord, plan[1][i]) > sp:
+			far = true
+	ck(far, "%s: an orange order goes beyond the green zone" % tag)
+	var res := r.resolve(GroupMoveIntent.new(plan[0], plan[1]))
+	ck(res.ok, "%s: order refused: %s" % [tag, res.reason])
+	for i in plan[0].size():
+		var u := st.get_unit(plan[0][i])
+		ck(u.coord == plan[1][i], "%s: unit at %s, preview showed %s" % [tag, u.coord, plan[1][i]])
+		ck(u.remaining_ap == 1, "%s: the long move cost 2 AP (left %d)" % [tag, u.remaining_ap])
 
 func _blob_keeps_formation() -> void:
 	var spawns: Array = [[Vector2i(37, 18), "light_infantry", MCF.Owner.PLAYER_2]]

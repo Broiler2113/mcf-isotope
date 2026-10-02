@@ -1711,7 +1711,10 @@ func _open_vehicle_menu(veh: Vehicle) -> void:
 
 ## Есть ли куда ехать (для показа кнопки Move без мутаций).
 func veh_move_targets_preview(veh: Vehicle) -> Dictionary:
-	return resolver.vehicle_move_targets(veh)
+	# Все три зоны, а не одна первая: после хода с остатком первая зона — это сам остаток
+	# (пара клеток), и стоило им упереться в стену или край, кнопка Move пропадала при
+	# полных ОД экипажа — «танк не ходит в третий раз».
+	return resolver.vehicle_move_targets_all(veh)
 
 func _veh_enter_move() -> void:
 	var veh := _selected_vehicle()
@@ -2296,31 +2299,53 @@ func _group_move_to(dest: Vector2i) -> void:
 ## спрашивает его на каждой перерисовке. Ход в ключе — ради ОД: новый ход их вернул,
 ## даже если на доске никто не сдвинулся.
 func _group_plan(dest: Vector2i) -> Array:
-	var key: Array = [dest, _group_tactical, GridCell.walk_version, _group_ids.duplicate(),
+	# Зона клетки, по которой щёлкнули, — столько ОД отряд и потратит (как у бойца).
+	var tier: int = int(_group_zone()["tier"].get(dest, 0))
+	var key: Array = [dest, _group_tactical, tier, GridCell.walk_version, _group_ids.duplicate(),
 			state.turns.round_number, state.turns.active_index]
 	if key != _group_plan_key:
 		_group_plan_key = key
-		_group_plan_cache = GroupMovePlanner.plan(resolver, _group_ids, dest, _group_tactical)
+		_group_plan_cache = GroupMovePlanner.plan(resolver, _group_ids, dest, _group_tactical, tier)
 	return _group_plan_cache
 
-## Объединение достижимых клеток всей выделенной группы — зелёная подсветка (#88).
-func _group_reach_cells() -> Array[Vector2i]:
-	var out: Array[Vector2i] = []
-	var seen: Dictionary = {}
+## Зоны хода выделенного отряда (batch group-zones): у каждой клетки — лучшая зона, в
+## которую до неё дойдёт хоть кто-то из группы (1/2/3 ОД), и подпись «цена/потолок» того,
+## кому это дешевле всех. Считается раз на состояние доски и состав группы.
+var _gz_key: Array = []
+var _gz: Dictionary = {}
+
+func _group_zone() -> Dictionary:
+	var ap := 0
+	for id in _group_ids:
+		var gu := state.get_unit(id)
+		if gu != null:
+			ap += gu.remaining_ap * 64 + gu.move_credit
+	var key: Array = [GridCell.walk_version, _group_ids.duplicate(), state.turns.round_number,
+			state.turns.active_index, ap]
+	if key == _gz_key:
+		return _gz
+	_gz_key = key
+	var tier_at: Dictionary = {}
+	var label_at: Dictionary = {}
+	var best: Dictionary = {}   # клетка -> [зона, цена]
+	var reaches: Dictionary = {}
 	for id in _group_ids:
 		var u := state.get_unit(id)
 		if not resolver.can_move(u):
 			continue
-		for c: Vector2i in resolver.reachable_for(u, resolver.move_budget(u)).cost:
-			if not seen.has(c):
-				seen[c] = true
-				out.append(c)
-	return out
-
-## Куда встанут юниты группы, если приказать идти в dest, — та же раскладка, что уйдёт
-## в приказ, поэтому предпросмотр совпадает с результатом. Стоящих на месте здесь нет.
-func _group_move_preview(dest: Vector2i) -> Array[Vector2i]:
-	return _group_plan(dest)[1]
+		var tiers := resolver.move_tier_budgets(u)
+		var rc := resolver.reachable_for(u, tiers[tiers.size() - 1])
+		reaches[id] = [tiers, rc]
+		for c: Vector2i in rc.cost:
+			var cost := int(rc.cost[c])
+			var k := GameActionResolver.tier_of(tiers, cost)
+			var b: Variant = best.get(c)
+			if b == null or k < int(b[0]) or (k == int(b[0]) and cost < int(b[1])):
+				best[c] = [k, cost]
+				tier_at[c] = k
+				label_at[c] = "%d/%d" % [cost, tiers[k]]
+	_gz = {"tier": tier_at, "label": label_at, "reach": reaches}
+	return _gz
 
 func _enter_push() -> void:
 	var u := _selected_unit()
@@ -3129,11 +3154,9 @@ func _play_dice(events: Array) -> void:
 			# идёт вместе, а не бойцы по очереди.
 			_play_walk(ev)
 			if not ev.get("soldier", false):
-				while _walks_running > 0:
-					await get_tree().process_frame
+				await _await_walks()
 			continue
-		while _walks_running > 0:
-			await get_tree().process_frame
+		await _await_walks()
 		if ev.get("kind", "") == "ap":
 			_ap_display[int(ev["unit"])] = int(ev["left"])
 			queue_redraw()
@@ -3173,8 +3196,7 @@ func _play_dice(events: Array) -> void:
 				continue
 			_dice.play(step["faces"], step["manual"], step["prompt"], step.get("speed", 1.0) * _pace())
 			await _dice.finished
-	while _walks_running > 0:
-		await get_tree().process_frame
+	await _await_walks()
 	_walk_cells.clear()
 	_walk_offset.clear()
 	_ap_display.clear()
@@ -3187,6 +3209,23 @@ func _play_dice(events: Array) -> void:
 		if _init_overlay != null and _init_overlay.visible:
 			_refresh_initiative_overlay()
 	queue_redraw()
+
+## Дождаться всех идущих переходов — но не дольше, чем они могут длиться. Переход ведёт
+## счётчик _walks_running; если он почему-то не вернулся к нулю (корутина оборвалась),
+## ожидание не должно вешать весь показ хода — а в сетевой партии и ход у обоих пиров.
+const WALK_WAIT_LIMIT_MS := 6000
+
+func _await_walks() -> void:
+	var t0 := Time.get_ticks_msec()
+	while _walks_running > 0:
+		if Time.get_ticks_msec() - t0 > WALK_WAIT_LIMIT_MS:
+			push_warning("walk animation did not finish in %d ms (%d running) - continuing"
+					% [WALK_WAIT_LIMIT_MS, _walks_running])
+			_walks_running = 0
+			_walk_cells.clear()
+			_walk_offset.clear()
+			break
+		await get_tree().process_frame
 
 ## Проиграть один пеший переход по клеткам (#96). Юнит УЖЕ стоит в конце маршрута —
 ## отматываем его отрисовку к старту и ведём по пути, чтобы игрок увидел, откуда и
@@ -3216,7 +3255,7 @@ func _play_walk(ev: Dictionary) -> void:
 		_walk_offset.erase(id)
 	_walk_cells.erase(id)
 	_walk_offset.erase(id)
-	_walks_running -= 1
+	_walks_running = maxi(0, _walks_running - 1)
 	queue_redraw()
 
 ## Клетка, на которой юнит рисуется ПРЯМО СЕЙЧАС: обычно его настоящая координата,
@@ -3523,6 +3562,28 @@ func _draw_veh_move_preview() -> void:
 	_draw_zone_preview(costs, _veh_tiers, veh.center(),
 			0 if resolver.vehicle_move_credit(veh) > 0 else 1)
 
+## Клетки зон хода: заливка по зоне (подсвеченная под курсором), контур по краю зоны и
+## подпись клетки. Общая часть для техники, дрона и отряда.
+func _draw_zone_cells(tier_at: Dictionary, label_at: Dictionary) -> void:
+	var font := ThemeDB.fallback_font
+	var cvec := Vector2(CELL, CELL)
+	var half := cvec * 0.5
+	var hover := _pos_to_cell(get_global_mouse_position())
+	var labels: bool = zoom >= MOVE_LABEL_MIN_ZOOM
+	for c: Vector2i in tier_at:
+		var origin := _cell_origin(c)
+		var k: int = tier_at[c]
+		draw_rect(Rect2(origin, cvec), MOVE_TIER_COLS[k][1 if c == hover else 0])
+		for d: Vector2i in GameActionResolver.DIR4:
+			if tier_at.has(c + d) and int(tier_at[c + d]) <= k:
+				continue
+			var a := origin + half + (Vector2(d) + Vector2(-d.y, d.x)) * half
+			var b := origin + half + (Vector2(d) - Vector2(-d.y, d.x)) * half
+			draw_line(a, b, MOVE_TIER_COLS[k][2], 2.0)
+		if labels and label_at.has(c):
+			draw_string(font, origin + Vector2(4, 13), label_at[c],
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.92, 0.95, 0.9, 0.85))
+
 ## Зоны хода по цене клеток (техника, дрон): заливка по зоне (1/2/3 ОД — зелёная,
 ## оранжевая, красная), контур, подпись «цена/потолок зоны», а под курсором — линия от
 ## from_cell и сколько ОД уйдёт. ap_base — ОД за первую зону (0, если ход на остатке).
@@ -3536,22 +3597,11 @@ func _draw_zone_preview(costs: Dictionary, budgets: Array[int], from_cell: Vecto
 	var hover := _pos_to_cell(get_global_mouse_position())
 	var labels: bool = zoom >= MOVE_LABEL_MIN_ZOOM
 	var tier_at: Dictionary = {}
+	var label_at: Dictionary = {}
 	for c: Vector2i in costs:
 		tier_at[c] = GameActionResolver.tier_of(budgets, int(costs[c]))
-	for c: Vector2i in costs:
-		var origin := _cell_origin(c)
-		var k: int = tier_at[c]
-		var lit: bool = c == hover
-		draw_rect(Rect2(origin, cvec), MOVE_TIER_COLS[k][1 if lit else 0])
-		for d: Vector2i in GameActionResolver.DIR4:
-			if tier_at.has(c + d) and int(tier_at[c + d]) <= k:
-				continue
-			var a := origin + half + (Vector2(d) + Vector2(-d.y, d.x)) * half
-			var b := origin + half + (Vector2(d) - Vector2(-d.y, d.x)) * half
-			draw_line(a, b, MOVE_TIER_COLS[k][2], 2.0)
-		if labels:
-			draw_string(font, origin + Vector2(4, 13), "%d/%d" % [int(costs[c]), budgets[k]],
-				HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.92, 0.95, 0.9, 0.85))
+		label_at[c] = "%d/%d" % [int(costs[c]), budgets[int(tier_at[c])]]
+	_draw_zone_cells(tier_at, label_at)
 	if not costs.has(hover):
 		return
 	var hk: int = tier_at[hover]
@@ -4088,16 +4138,41 @@ func _draw() -> void:
 				_draw_laser_preview(mm, mm.coord + vdir)
 
 	if mode == Mode.GROUP_MOVE:
-		for coord: Vector2i in _group_reach_cells():
-			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(0.3, 0.8, 0.4, 0.24))
+		# Как у одиночного бойца (batch group-zones): зелёная/оранжевая/красная зоны с
+		# контуром и ценой клетки; под курсором — путь каждого бойца в цвет его зоны,
+		# кружок места и сколько ОД он потратит.
+		var gz := _group_zone()
+		_draw_zone_cells(gz["tier"], gz["label"])
 		var ghov := _pos_to_cell(get_global_mouse_position())
 		if state.grid.in_bounds(ghov):
 			draw_rect(Rect2(_cell_origin(ghov), Vector2(CELL, CELL)), Color(0.95, 0.85, 0.2, 0.20))
 			var half := Vector2(CELL, CELL) * 0.5
 			# Тактический приказ — голубые кружки, обычный — жёлтые.
 			var dot := Color(0.35, 0.85, 1.0, 0.85) if _group_tactical else Color(1.0, 0.9, 0.25, 0.85)
-			for spot: Vector2i in _group_move_preview(ghov):
+			var plan := _group_plan(ghov)
+			var reaches: Dictionary = gz["reach"]
+			for i in plan[0].size():
+				var gid: int = plan[0][i]
+				var spot: Vector2i = plan[1][i]
+				var gu := state.get_unit(gid)
 				var c := _cell_origin(spot) + half
+				if gu != null and reaches.has(gid):
+					var tiers: Array[int] = reaches[gid][0]
+					var rc: Movement.Reachability = reaches[gid][1]
+					if rc.can_reach(spot):
+						var k := GameActionResolver.tier_of(tiers, int(rc.cost[spot]))
+						var col: Color = MOVE_TIER_COLS[k][3]
+						var pts := PackedVector2Array([_cell_origin(gu.coord) + half])
+						for p: Vector2i in rc.path_to(spot):
+							pts.append(_cell_origin(p) + half)
+						draw_polyline(pts, Color(0.05, 0.1, 0.05, 0.6), 4.0)
+						draw_polyline(pts, col, 2.0)
+						if zoom >= MOVE_LABEL_MIN_ZOOM:
+							var ap_txt := "%d AP" % (k + (0 if gu.move_credit > 0 else 1))
+							draw_string_outline(font, c + Vector2(-CELL * 0.5, -CELL * 0.28), ap_txt,
+								HORIZONTAL_ALIGNMENT_CENTER, CELL, 11, 3, Color(0, 0, 0, 0.85))
+							draw_string(font, c + Vector2(-CELL * 0.5, -CELL * 0.28), ap_txt,
+								HORIZONTAL_ALIGNMENT_CENTER, CELL, 11, col.lightened(0.3))
 				draw_circle(c, CELL * 0.18, dot)
 				draw_arc(c, CELL * 0.18, 0.0, TAU, 16, dot.darkened(0.6), 1.5)
 
@@ -4135,6 +4210,10 @@ func _draw() -> void:
 			if mode == Mode.SHOOT and _unit_at(shov) == null:
 				var cneed: int = resolver.aim_need(su, shov)
 				var ctxt := "auto" if cneed <= 0 else ("%d+" % cneed if cneed <= 6 else "—")
+				# Окно: бросает не стрелок, а стекло — его спасбросок против каждой пули.
+				var gfid := state.grid.cell(shov).feature_id
+				if MCF.is_glass(gfid) and su.stats.special_ability_id != MCF.ABILITY_MARKSMAN:
+					ctxt = "glass %d+" % MCF.glass_bullet_save(gfid)
 				var ctp := _cell_origin(shov) + Vector2(CELL * 0.8, CELL * 0.2)
 				draw_string_outline(font, ctp, ctxt, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, 4, Color(0, 0, 0, 0.9))
 				draw_string(font, ctp, ctxt, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 0.92, 0.5))
@@ -4342,6 +4421,23 @@ func _draw() -> void:
 			for bc: Vector2i in resolver.cannon_blast_cells(cveh_sel, chov):
 				if state.grid.in_bounds(bc):
 					draw_rect(Rect2(_cell_origin(bc), Vector2(CELL, CELL)), Color(1, 0.35, 0.1, 0.32))
+		# Бросок пушки (batch group-zones) — как у пехоты: у каждого видимого врага в секторе
+		# и крупно под курсором.
+		if cveh_sel != null:
+			for coord: Vector2i in item_cells:
+				var occ := _unit_at(coord)
+				var hov: bool = coord == chov
+				var enemy_here: bool = (occ != null and occ.owner != cveh_sel.owner) \
+						or (state.get_vehicle(state.grid.vehicle_at(coord)) != null
+						and state.get_vehicle(state.grid.vehicle_at(coord)).owner != cveh_sel.owner)
+				if not hov and not enemy_here:
+					continue
+				var cn: int = resolver.cannon_aim_need(cveh_sel, coord)
+				var ct := "%d+" % cn if cn <= 6 else "—"
+				var cfs := 16 if hov else 12
+				var cpos := _cell_origin(coord) + Vector2(CELL * 0.62, CELL * 0.22)
+				draw_string_outline(font, cpos, ct, HORIZONTAL_ALIGNMENT_LEFT, -1, cfs, 4, Color(0, 0, 0, 0.9))
+				draw_string(font, cpos, ct, HORIZONTAL_ALIGNMENT_LEFT, -1, cfs, Color(1, 0.92, 0.5))
 
 	if mode == Mode.VEH_DISEMBARK or mode == Mode.VEH_SEAT or mode == Mode.VEH_BOARD_SEAT:
 		for coord in item_cells:
@@ -6319,7 +6415,7 @@ func _open_menu(unit: UnitInstance) -> void:
 						and resolver.station_place_cells(unit).is_empty()))
 		var pstations := resolver.stations_near(unit)
 		if unit.stats.special_ability_id == MCF.ABILITY_DRONE_OPERATOR \
-				and not pstations.is_empty() and resolver.active_drone_of(unit) == null:
+				and not pstations.is_empty():
 			_act_btn(vb, "Launch Drone", _submit.bind(SpawnDroneIntent.new(unit.id, pstations[0])),
 					unit.remaining_ap > 0)
 		var pfold := resolver.station_pickup_cells(unit)
@@ -6379,8 +6475,7 @@ func _open_menu(unit: UnitInstance) -> void:
 		# Оператор дронов: запуск дрона со стоящей рядом станции (§3.12).
 		var stations := resolver.stations_near(unit)
 		if unit.stats.special_ability_id == MCF.ABILITY_DRONE_OPERATOR \
-				and not stations.is_empty() \
-				and resolver.active_drone_of(unit) == null:
+				and not stations.is_empty():
 			if stations.size() > 1:
 				# Станций рядом несколько — выбирает игрок, а не порядок обхода (item 17).
 				_act_btn(vb, "Launch Drone (%d stations)…" % stations.size(),

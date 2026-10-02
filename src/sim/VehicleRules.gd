@@ -148,6 +148,8 @@ static func plan_line_move(state: GameState, veh: Vehicle, dir: Vector2i,
 	var self_damage := 0
 	var reached := 0
 	var stopped := false
+	# Танк — наземная машина: в открытый космос он не съезжает (челнок летает, ему можно).
+	var grounded := veh.type_id == "tank"
 	for i in range(1, steps + 1):
 		# Клетки, впервые попавшие под след на этом шаге.
 		var new_cells: Array[Vector2i] = []
@@ -163,7 +165,7 @@ static func plan_line_move(state: GameState, veh: Vehicle, dir: Vector2i,
 		var step_blocked := false
 		for cell in new_cells:
 			var e := cell_entry(state, cell, veh.id)
-			if not e["ok"]:
+			if not e["ok"] or (grounded and state.grid.cell(cell).is_space):
 				step_blocked = true
 				break
 			step_extra += int(e["cost"]) - COST_NORMAL

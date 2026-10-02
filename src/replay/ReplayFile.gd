@@ -32,7 +32,34 @@ static func write(path: String, data: Dictionary) -> bool:
 		return false
 	f.store_string(JSON.stringify(data))
 	f.close()
+	_write_note(path, describe(data))
 	return true
+
+## Подпись файла для списков меню — из маленького соседнего файла «<путь>.note».
+##
+## Меню раньше распаковывало и разбирало КАЖДЫЙ повтор и сохранение целиком ради одной
+## строки «карта · раунд · действий»: повтор большой карты с кадрами доски — мегабайты, и
+## выход в меню медленнел с каждой сыгранной партией. Подпись пишется вместе с файлом; у
+## старых файлов она создаётся при первом чтении, дальше — только маленький текст.
+const NOTE_EXT := ".note"
+
+static func note_for(path: String) -> String:
+	var np := path + NOTE_EXT
+	if FileAccess.file_exists(np):
+		var nf := FileAccess.open(np, FileAccess.READ)
+		if nf != null:
+			var t := nf.get_as_text()
+			nf.close()
+			return t
+	var note := describe(read(path))
+	_write_note(path, note)
+	return note
+
+static func _write_note(path: String, note: String) -> void:
+	var nf := FileAccess.open(path + NOTE_EXT, FileAccess.WRITE)
+	if nf != null:
+		nf.store_string(note)
+		nf.close()
 
 ## Пустой словарь = файла нет либо он не читается. Разбирать «наполовину прочитанный»
 ## матч нельзя, поэтому любая беда сводится к одному «не открылось».
