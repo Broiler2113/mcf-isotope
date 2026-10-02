@@ -54,7 +54,7 @@ func _initialize() -> void:
 	_sheet("armor_glass", _armor_glass, Color8(96, 126, 160), 2)
 	_sheet("dot", _blast_concrete, Color8(110, 110, 104), 3)
 	_sheet("dot_open", _embrasure, Color8(110, 110, 104), 3)
-	_sheet("ldf", _monolith, Color8(24, 20, 30), 3)
+	_sheet("ldf", _monolith, Color8(40, 40, 44), 3)
 	_sheet("corpse_wall", _flesh_pile, Color8(96, 44, 38), 2)
 	_sheet("airlock", _blast_door, Color8(150, 130, 60), 3)
 	_sheet("airlock_open", _blast_door_open, Color8(150, 130, 60), 3)
@@ -169,28 +169,24 @@ func _sheet(name: String, fn: Callable, edge: Color, bevel: int, inset: int = 0)
 
 func _tile(img: Image, ox: int, oy: int, mask: int, v: int, fn: Callable, edge: Color,
 		bevel: int, inset: int) -> void:
-	var n := mask & 1 != 0
-	var e := mask & 2 != 0
-	var s := mask & 4 != 0
-	var w := mask & 8 != 0
-	var x0 := 0 if w else inset
-	var x1 := T - 1 if e else T - 1 - inset
-	var y0 := 0 if n else inset
-	var y1 := T - 1 if s else T - 1 - inset
-	for y in range(y0, y1 + 1):
-		for x in range(x0, x1 + 1):
-			var c: Color = fn.call(x, y, v, mask)
-			if c.a <= 0.0:
+	for y in T:
+		for x in T:
+			if not _in_band(x, y, mask, inset):
 				continue
-			# Расстояние до свободных кромок — фаска и тень.
-			var dn := (y - y0) if not n else 99
-			var ds := (y1 - y) if not s else 99
-			var dw := (x - x0) if not w else 99
-			var de := (x1 - x) if not e else 99
+			var c: Color = fn.call(x, y, v, mask)
+			if c.a <= 0.0 or bevel <= 0:
+				if c.a > 0.0:
+					img.set_pixel(ox + x, oy + y, c)
+				continue
+			# Расстояние до края формы по четырём сторонам. Форма продолжается за край плитки
+			# туда, где есть сосед (_in_band), поэтому на стыке кромки нет, а углы и
+			# Т-образные развилки у соседних плиток сходятся точка в точку.
+			var dn := _edge_dist(x, y, 0, -1, mask, inset, bevel)
+			var ds := _edge_dist(x, y, 0, 1, mask, inset, bevel)
+			var dw := _edge_dist(x, y, -1, 0, mask, inset, bevel)
+			var de := _edge_dist(x, y, 1, 0, mask, inset, bevel)
 			var dmin := mini(mini(dn, ds), mini(dw, de))
-			if bevel <= 0:
-				pass
-			elif dmin == 0:
+			if dmin == 0:
 				c = Color(edge.r * 0.32, edge.g * 0.32, edge.b * 0.32, 1.0)
 			elif dmin <= bevel:
 				var k := 1.0 - float(dmin - 1) / float(bevel)
@@ -199,6 +195,30 @@ func _tile(img: Image, ox: int, oy: int, mask: int, v: int, fn: Callable, edge: 
 				else:
 					c = c.lerp(Color(0, 0, 0, c.a), 0.45 * k)
 			img.set_pixel(ox + x, oy + y, c)
+
+## Форма стыкующегося объекта: вся клетка (inset 0) или, для мешков, — центральный квадрат
+## с отступом inset плюс «рукава» той же ширины к каждому соседу маски. Работает и для точек
+## за краем плитки: рукав к соседу продолжается дальше.
+func _in_band(x: int, y: int, mask: int, inset: int) -> bool:
+	var inx := x >= inset and x <= T - 1 - inset
+	var iny := y >= inset and y <= T - 1 - inset
+	if inset <= 0:
+		return (x >= 0 or mask & 8 != 0) and (x < T or mask & 2 != 0) \
+				and (y >= 0 or mask & 1 != 0) and (y < T or mask & 4 != 0)
+	if inx and iny:
+		return true
+	if inx and ((y < inset and mask & 1 != 0) or (y > T - 1 - inset and mask & 4 != 0)):
+		return true
+	if iny and ((x < inset and mask & 8 != 0) or (x > T - 1 - inset and mask & 2 != 0)):
+		return true
+	return false
+
+## Сколько точек от (x, y) до края формы в направлении (dx, dy), не дальше bevel+1.
+func _edge_dist(x: int, y: int, dx: int, dy: int, mask: int, inset: int, bevel: int) -> int:
+	for k in range(1, bevel + 2):
+		if not _in_band(x + dx * k, y + dy * k, mask, inset):
+			return k - 1
+	return 99
 
 # =====================================================================================
 #  Полы (бесшовные; варианты — детали внутри)
@@ -294,17 +314,20 @@ func _bedrock(x: int, y: int, v: int) -> Color:
 		c = Color8(34, 30, 26)
 	return c
 
+## Огонь сверху (batch ui-drones): не языки пламени сбоку, а горящая клетка с высоты —
+## оранжевое поле с жёлтыми горячими пятнами и тёмно-красными краями языков, бесшовное,
+## чтобы пожар на нескольких клетках шёл сплошным полем.
 func _fire() -> Image:
 	var img := Image.create(T, T, false, Image.FORMAT_RGBA8)
 	for y in T:
 		for x in T:
-			var tongue := 0.45 + 0.35 * _tn(x, 0, 8, 111) + 0.2 * _tn(x, y, 16, 112)
-			var hgt := float(T - y) / T
-			if hgt < tongue:
-				var k := hgt / tongue
-				var c := Color(1.0, 0.88, 0.35).lerp(Color(0.85, 0.18, 0.04), k)
-				c.a = 0.78 - 0.4 * k
-				img.set_pixel(x, y, c)
+			var n := _fbm(x, y, 111)
+			var hot := _tn(x, y, 8, 112)
+			var c := Color8(178, 48, 12).lerp(Color8(236, 120, 24), n)
+			if hot > 0.62:
+				c = c.lerp(Color8(255, 214, 92), clampf((hot - 0.62) * 3.0, 0.0, 1.0))
+			c.a = 0.82
+			img.set_pixel(x, y, c)
 	return img
 
 # =====================================================================================
@@ -401,11 +424,13 @@ func _armor_glass(x: int, y: int, v: int, mask: int) -> Color:
 	var c := _glass_block(x, y, v, mask)
 	return Color(c.r * 0.7, c.g * 0.82, c.b, minf(1.0, c.a + 0.15))
 
-## ЛДФ — чёрный монолит с лиловыми прожилками.
+## ЛДФ (batch ui-drones) — резиновый чёрный монолит: матовая сплошная масса без швов и
+## прожилок, мягкий отблеск, как у резины, и едва заметная зернистость поверхности.
 func _monolith(x: int, y: int, v: int, _mask: int) -> Color:
-	if absf(_tn(x, y, 8, 181 + v) - 0.5) < 0.03:
-		return Color8(96, 70, 150)
-	return Color8(16, 14, 22)
+	var sheen := _tn(x, y, 2, 181, 2)          # широкие мягкие блики через всю стену
+	var grain := _h(x + v * T, y, 182)
+	var k := 0.85 + 0.4 * sheen + (0.06 if grain > 0.8 else 0.0)
+	return _shade(Color8(22, 22, 25), k)
 
 ## Стена из тел — тёмная масса с бурыми пятнами (без подробностей).
 func _flesh_pile(x: int, y: int, v: int, _mask: int) -> Color:

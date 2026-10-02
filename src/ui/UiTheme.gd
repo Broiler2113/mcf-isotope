@@ -83,6 +83,15 @@ func _ready() -> void:
 	_load_settings()
 	get_tree().root.content_scale_factor = ui_scale
 	rebuild_theme()
+	# Окна поверх игры (подтверждения, итог боя, оверлеи) живут на CanvasLayer, а тема по
+	# цепочке владельцев за его границу не проходит. Раньше каждый такой вызов должен был
+	# сам помнить про theme_canvas_layers(), и окно «Friendly units in the beam» забыло —
+	# вышло со шрифтом и кнопками движка по умолчанию. Теперь тема цепляется сама к любому
+	# Control, добавленному прямо под CanvasLayer.
+	get_tree().node_added.connect(func(n: Node) -> void:
+		if theme != null and n is Control and n.get_parent() is CanvasLayer \
+				and (n as Control).theme == null:
+			(n as Control).theme = theme)
 
 ## Настройки игрока (item 17/23): акцент и размер интерфейса — в user://settings.cfg.
 func _load_settings() -> void:
@@ -622,6 +631,39 @@ func style_value_box(lbl: Label) -> void:
 	lbl.add_theme_font_override("font", mono_font())
 	lbl.add_theme_font_size_override("font_size", 12)
 	lbl.add_theme_color_override("font_color", Color("#d0d0d0"))
+
+## То же окошко, но в него можно ВПЕЧАТАТЬ число (batch ui-drones): Enter или уход фокуса
+## ставят ползунок на введённое значение (в его пределах и с его шагом). Понимает «12»,
+## «12%» и «none» (= 0). fmt — подпись значения, как у обычного окошка; on_commit — что
+## сделать после ввода (у масштаба интерфейса применение идёт не по каждому сдвигу).
+func slider_entry(s: Range, fmt: Callable, on_commit: Callable = Callable()) -> LineEdit:
+	var e := LineEdit.new()
+	for st in ["normal", "focus", "read_only"]:
+		e.add_theme_stylebox_override(st, _sb("panel_sunken", 6, 3))
+	e.add_theme_font_override("font", mono_font())
+	e.add_theme_font_size_override("font_size", 12)
+	e.add_theme_color_override("font_color", Color("#d0d0d0"))
+	e.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	e.select_all_on_focus = true
+	e.context_menu_enabled = false
+	e.text = fmt.call(s.value)
+	s.value_changed.connect(func(v: float) -> void:
+		if not e.has_focus():
+			e.text = fmt.call(v))
+	var commit := func() -> void:
+		var t := e.text.strip_edges().to_lower().replace("%", "").replace("×", "")
+		if t == "none":
+			t = "0"
+		if t.is_valid_float():
+			s.value = clampf(t.to_float(), s.min_value, s.max_value)
+			if on_commit.is_valid():
+				on_commit.call()
+		e.text = fmt.call(s.value)
+	e.text_submitted.connect(func(_t: String) -> void:
+		commit.call()
+		e.release_focus())
+	e.focus_exited.connect(commit)
+	return e
 
 ## Строка состояния (.status-field): утопленная, моноширинный текст цветом акцента со
 ## свечением.

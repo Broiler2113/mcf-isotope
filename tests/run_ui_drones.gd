@@ -1,0 +1,81 @@
+extends SceneTree
+## Batch ui-drones: window shots, vehicles shattering glass, vehicle move tiers, drone
+## leftover flight at 0 AP, a shot-down drone exploding its own cell, no blood from fire.
+var fails := 0
+func ck(ok: bool, what: String) -> void:
+	print(("ok   " if ok else "FAIL ") + what)
+	if not ok: fails += 1
+func field(spawns: Array, glass: Array = []) -> Dictionary:
+	var m := MapData.new(30, 14)
+	for y in 14:
+		for x in 30:
+			m.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	for g: Vector2i in glass:
+		m.set_cell(g, MCF.FLOOR_NORMAL, MCF.WALL_HEIGHT, false, MCF.FEATURE_GLASS)
+	for sp in spawns:
+		m.set_spawn(sp[0], sp[1], sp[2])
+	GameConfig.civilians_enabled = false
+	var st := m.build_state(7)
+	var r := GameActionResolver.new(st)
+	r.fog_enabled = false
+	while st.active_player() != 0:
+		r.resolve(EndTurnIntent.new())
+	return {"s": st, "r": r}
+func _initialize() -> void:
+	# Window shot.
+	var f := field([[Vector2i(5, 5), "light_infantry", 0], [Vector2i(25, 10), "light_infantry", 1]], [Vector2i(8, 5)])
+	var st: GameState = f["s"]; var r: GameActionResolver = f["r"]
+	var li := st.grid.cell(Vector2i(5, 5)).occupant
+	ck(r.shootable_window_cells(li).has(Vector2i(8, 5)), "window is offered as a target")
+	var res := r.resolve(ShootIntent.new(li.id, -1, -1, Vector2i(8, 5)))
+	ck(res.ok and st.grid.cell(Vector2i(8, 5)).feature_id == "", "window shot out (%s)" % res.reason)
+	ck(res.fx.any(func(e): return e["fx"] == "shards"), "shards fly")
+	# Tank over glass.
+	f = field([[Vector2i(4, 5), "light_infantry", 0], [Vector2i(5, 4), "tank", 0], [Vector2i(25, 10), "light_infantry", 1]], [Vector2i(10, 5)])
+	st = f["s"]; r = f["r"]
+	var veh: Vehicle = st.all_vehicles()[0]
+	var crew := st.grid.cell(Vector2i(4, 5)).occupant
+	r.resolve(VehicleBoardIntent.new(crew.id, veh.id))
+	var tiers := r.vehicle_move_tiers(veh)
+	ck(not tiers[0].is_empty(), "tank has a 1-AP zone (%d cells)" % tiers[0].size())
+	print("     tank tiers: ", tiers.map(func(t): return t.size()), " ap=", r.vehicle_ap(veh))
+	res = r.resolve(VehicleMoveIntent.new(veh.id, veh.facing if veh.facing != Vector2i.ZERO else Vector2i(1, 0), 6))
+	ck(res.ok and st.grid.cell(Vector2i(10, 5)).feature_id == "", "tank drives through the window (%s)" % res.reason)
+	ck(res.fx.any(func(e): return e["fx"] == "shards"), "the window shatters under the tank")
+	# Drone: leftover flight with 0 AP, then shot down -> explodes.
+	f = field([[Vector2i(5, 5), "drone_operator", 0], [Vector2i(14, 5), "light_infantry", 1], [Vector2i(14, 7), "light_infantry", 1]])
+	st = f["s"]; r = f["r"]
+	var op := st.grid.cell(Vector2i(5, 5)).occupant
+	var station := Vector2i(6, 5)
+	st.grid.cell(station).feature_id = MCF.FEATURE_DRONE_STATION
+	st.grid.cell(station).feature_owner = 0
+	var drone := r._launch_drone_at(station, op)
+	drone.remaining_ap = 1
+	res = r.resolve(DroneMoveIntent.new(drone.id, station + Vector2i(3, 0)))
+	ck(res.ok and drone.remaining_ap == 0 and drone.move_credit > 0, "first hop leaves credit (%d)" % drone.move_credit)
+	res = r.resolve(DroneMoveIntent.new(drone.id, station + Vector2i(6, 0)))
+	ck(res.ok, "second hop on leftover flight with 0 AP (%s)" % res.reason)
+	drone.coord = Vector2i(14, 6)
+	r.resolve(EndTurnIntent.new())
+	while st.active_player() != 1:
+		r.resolve(EndTurnIntent.new())
+	var shooter := st.grid.cell(Vector2i(14, 5)).occupant
+	var killed := false
+	for i in 20:
+		shooter.remaining_ap = 1
+		shooter.action_state = null
+		res = r.resolve(ShootIntent.new(shooter.id, drone.id))
+		if not drone.is_alive():
+			killed = true
+			break
+	ck(killed, "drone shot down")
+	ck(res.log_lines.any(func(l): return l.find("shot down") >= 0), "shot-down drone explodes: %s" % [res.log_lines])
+	# Fire death: no blood.
+	f = field([[Vector2i(5, 5), "light_infantry", 0], [Vector2i(25, 10), "light_infantry", 1]])
+	st = f["s"]; r = f["r"]
+	li = st.grid.cell(Vector2i(5, 5)).occupant
+	st.grid.cell(Vector2i(7, 5)).on_fire = true
+	res = r.resolve(MoveIntent.new(li.id, Vector2i(7, 5)))
+	ck(not li.is_alive() and not res.fx.any(func(e): return e["fx"] == "blood"), "burned without blood")
+	print("rules: %d failure(s)" % fails)
+	quit(1 if fails else 0)

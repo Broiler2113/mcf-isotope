@@ -47,7 +47,7 @@ from features import (CAND_DIM, CANVAS, FLAT_DIM, N_CHANNELS, Sparse, candidate_
                       flat_vector, grid_tensor)
 from mcf_env import (EXTERNAL, HARD, PROJECT, EnvDied,  # noqa: E402
                      EpisodeConfig, VecEnv, refresh_class_cache)
-from model import OnnxWrapper, PolicyNet  # noqa: E402
+from model import OnnxWrapper, PolicyNet, load_compat  # noqa: E402
 
 RUNS = os.path.join(PROJECT, "rl", "runs")
 # Never shrink the rollout below this under memory pressure: a handful of transitions
@@ -402,8 +402,7 @@ class Trainer:
 
     def load(self, path: str, keep_cfg: bool = False):
         ck = torch.load(path, map_location=self.device, weights_only=False)
-        self.net.load_state_dict(ck["model"])
-        self.opt.load_state_dict(ck["opt"])
+        load_compat(self.net, ck["model"], self.opt, ck["opt"])
         if not keep_cfg:
             self.cfg = with_defaults(ck["cfg"])
         self.global_step = ck["global_step"]
@@ -433,7 +432,7 @@ class Trainer:
             return net
         if path not in self.pool_cache:
             net = PolicyNet()
-            net.load_state_dict(torch.load(path, map_location="cpu", weights_only=False)["model"])
+            load_compat(net, torch.load(path, map_location="cpu", weights_only=False)["model"])
             self.pool_cache[path] = net.eval()
             # The pool is pool_size members plus "self"; anything beyond that rotated out
             # of the pool — unless a game that started against it is still running, which
@@ -1425,7 +1424,7 @@ def cmd_eval(a):
 def cmd_export(a):
     ck = torch.load(a.checkpoint, map_location="cpu", weights_only=False)
     net = PolicyNet()
-    net.load_state_dict(ck["model"])
+    load_compat(net, ck["model"])
     net.eval()
     from features import FLAT_DIM
     grid = torch.zeros(1, N_CHANNELS, CANVAS, CANVAS)

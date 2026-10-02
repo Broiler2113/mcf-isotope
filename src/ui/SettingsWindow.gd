@@ -10,7 +10,7 @@ extends CanvasLayer
 const SteamChrome = preload("res://src/ui/SteamChrome.gd")
 
 var _scale_slider: HSlider
-var _scale_value: Label
+var _scale_value: LineEdit
 var _accent_opt: OptionButton
 var _body: Control = null
 
@@ -77,14 +77,10 @@ func _build() -> void:
 	_scale_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_scale_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	row.add_child(_scale_slider)
-	_scale_value = Label.new()
-	_scale_value.custom_minimum_size = Vector2(52, 0)
-	_scale_value.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	Ui.style_value_box(_scale_value)
+	_scale_value = Ui.slider_entry(_scale_slider, func(v: float) -> String: return "%d%%" % int(v),
+			_apply_scale)
+	_scale_value.custom_minimum_size = Vector2(60, 0)
 	row.add_child(_scale_value)
-	_scale_value.text = "%d%%" % int(_scale_slider.value)
-	_scale_slider.value_changed.connect(func(v: float) -> void:
-		_scale_value.text = "%d%%" % int(v))
 	# Применяем по отпусканию (и по клавиатуре): иначе окно росло бы прямо под мышью.
 	_scale_slider.drag_ended.connect(func(_changed: bool) -> void: _apply_scale())
 	_scale_slider.gui_input.connect(func(e: InputEvent) -> void:

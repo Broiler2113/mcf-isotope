@@ -632,13 +632,9 @@ func _slider_row(box: VBoxContainer, label_text: String, lo: float, hi: float, s
 	s.value = value
 	s.custom_minimum_size = Vector2(140, 0)
 	s.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	var val := Label.new()
-	val.custom_minimum_size = Vector2(48, 0)
-	val.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	val.add_theme_font_size_override("font_size", 12)
-	Ui.style_value_box(val)
-	val.text = fmt.call(value)
-	s.value_changed.connect(func(v: float) -> void: val.text = fmt.call(v))
+	# Окошко значения — с вводом числа с клавиатуры.
+	var val := Ui.slider_entry(s, fmt)
+	val.custom_minimum_size = Vector2(56, 0)
 	var hb := HBoxContainer.new()
 	hb.add_theme_constant_override("separation", 8)
 	hb.add_child(s)
@@ -826,9 +822,9 @@ func _build_generator(box: VBoxContainer) -> void:
 	_row(_gen_box, "Mechanics:", mech)
 	# Мирные случайной карты: точное число, до 1000 (готовые карты — галочка «Civilians»).
 	var civ0 := GameConfig.civilian_count
-	if civ0 <= 0 or civ0 >= GameConfig.CIVILIANS_MAX:
+	if civ0 < 0 or civ0 >= GameConfig.CIVILIANS_MAX:
 		civ0 = GameConfig.CIVILIANS_DEFAULT
-	_civ_slider = _slider_row(_gen_box, "Civilians:", 1, GameConfig.CIVILIANS_MAX, 1, civ0,
+	_civ_slider = _slider_row(_gen_box, "Civilians:", 0, GameConfig.CIVILIANS_MAX, 1, civ0,
 			func(v: float) -> String: return str(int(v)))
 	_civ_slider.tooltip_text = "How many neutral civilians to build, when there is room. They live in rooms sealed by airlocks and start asleep. Untick \"Civilians\" above for none."
 	_civ_slider.value_changed.connect(func(_v: float) -> void: _on_gen_changed())

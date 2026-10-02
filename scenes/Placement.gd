@@ -1280,7 +1280,7 @@ func _draw_token(coord: Vector2i, owner: int, stats_id: String, font: Font) -> v
 	var center := _cell_origin(coord) + Vector2(CELL, CELL) * 0.5
 	draw_circle(center, CELL * 0.33, _side_color(owner))
 	var s := _stats(stats_id)
-	var tag := _initials(s.display_name) if s != null else "??"
+	var tag := Sprites.unit_tag(stats_id, s.display_name) if s != null else "??"
 	draw_string(font, center + Vector2(-9, 5), tag, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, _ink(_side_color(owner)))
 
 func _initials(name: String) -> String:

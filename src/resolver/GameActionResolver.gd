@@ -453,8 +453,7 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 		unit.move_credit = 0
 		var burn_res := ActionResult.success(lines)
 		_fx_steps(burn_res, unit, origin, path, fire)
-		# Кровь льётся с той стороны, откуда боец пришёл в огонь (#21.4).
-		_kill(unit, burn_res, origin)
+		_kill(unit)  # сгорел — крови нет (batch ui-drones)
 		burn_res.log("%s burned to death at (%d, %d)!" % [
 			unit.stats.display_name, fire.x, fire.y])
 		return burn_res
@@ -553,6 +552,13 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 		if laser_reason != "":
 			return ActionResult.fail(laser_reason)
 		return _resolve_laser(shooter, intent.target_cell, intent.component)
+
+	# Выстрел по окну (batch ui-drones): обычный стрелок может разбить стекло пулей.
+	if intent.target_id < 0 and state.grid.in_bounds(intent.target_cell):
+		var window_reason := can_shoot_window(shooter, intent.target_cell)
+		if window_reason != "":
+			return ActionResult.fail(window_reason)
+		return _resolve_shoot_window(shooter, intent.target_cell)
 
 	var target := state.get_unit(intent.target_id)
 	var reason := can_shoot(shooter, target)
@@ -721,7 +727,22 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 			_fx(result, {"fx": "shards", "at": gc, "from": shooter.coord})
 			# После осыпания стекла клетка становится РАЗРУШЕННЫМ полом (item 7).
 			_fx(result, {"fx": "debris", "at": NOWHERE, "cells": [gc]})
-	if killed:
+	if killed and target.is_drone:
+		# Сбитый дрон падает и рвётся под собой (batch ui-drones): тот же взрыв, что и
+		# подрыв оператором, — по клетке, над которой он висел.
+		# Удар по технике — как у подрыва: без борта и без названного узла.
+		var keep_from := _aim_from
+		var keep_comp := _aimed_component
+		_aim_from = NOWHERE
+		_aimed_component = ""
+		var boom := _drone_explode(target, target.coord, "shot down", 0)  # только клетка под ним
+		_aim_from = keep_from
+		_aimed_component = keep_comp
+		result.log_lines.append_array(boom.log_lines)
+		result.deaths.append_array(boom.deaths)
+		result.dice_events.append_array(boom.dice_events)
+		result.fx.append_array(boom.fx)
+	elif killed:
 		_kill(target, result, shooter.coord)  # труп остаётся на клетке, но не перекрывает ЛОС
 
 	# Невесомость (§3.11): отдача стрелка и отбрасывание цели (кроме противотанкиста).
@@ -1093,7 +1114,7 @@ func _resolve_flame(shooter: UnitInstance, target_coord: Vector2i) -> ActionResu
 		var cell := state.grid.cell(c)
 		var occ: UnitInstance = cell.occupant
 		if occ != null and occ.is_alive():
-			_kill(occ, result)
+			_kill(occ)  # огнемёт — крови нет
 			killed_names.append(occ.stats.display_name)
 			result.deaths.append(occ.id)
 		_ignite(cell, shooter.owner)  # поджог пола (§3.8)
@@ -1265,7 +1286,7 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i, aimed: String = "") ->
 			"shield", "unit":
 				var occ: UnitInstance = cell.occupant
 				if destroyed and occ != null and occ.is_alive():
-					_kill(occ, result, shooter.coord)
+					_kill(occ)  # луч прижигает — крови нет (batch ui-drones)
 					killed_names.append(occ.stats.display_name)
 					result.deaths.append(occ.id)
 			"feature":
@@ -2698,6 +2719,12 @@ func move_budget(unit: UnitInstance) -> int:
 			else (carry_budget if burdened else unit.speed())
 	return mini(budget, carry_budget) if burdened else budget
 
+## Бюджет СВЕЖЕГО движения за 1 ОД, без остатка прошлого (для зон 2-го и 3-го ОД).
+func move_budget_fresh(unit: UnitInstance) -> int:
+	var burdened := held_unit_of(unit) != null \
+			or dragged_cell_of(unit) != UnitInstance.NOT_DRAGGING
+	return maxi(0, unit.speed() - MCF.CAPTURE_CARRY_PENALTY) if burdened else unit.speed()
+
 func can_move(unit: UnitInstance) -> bool:
 	return unit != null and unit.is_alive() and unit.aboard_vehicle_id == -1 \
 			and not unit.is_held() and (unit.remaining_ap > 0 or unit.move_credit > 0)
@@ -2991,7 +3018,7 @@ func advance_fire(owner: int = -1, res: ActionResult = null) -> void:
 			# res здесь только ради кровавой косметики — _kill сам в deaths не пишет,
 			# это делают вызывающие. Мы пишем в fire_deaths, но НЕ в deaths (см.
 			# ActionResult): иначе автор завершённого хода получил бы чужой костёр в зачёт.
-			_kill(burned, res)
+			_kill(burned)  # пожар — крови нет
 			if res != null:
 				res.fire_deaths.append(burned.id)
 
@@ -4529,7 +4556,8 @@ func _resolve_drone_detonate(intent: DroneDetonateIntent) -> ActionResult:
 
 ## Взрыв дрона: снимаем его с поля (не оставляет труп) и детонируем как противотанкист.
 ## Дрон не занимает слот клетки (#13), так что снимать occupant не нужно.
-func _drone_explode(drone: UnitInstance, center: Vector2i, why: String) -> ActionResult:
+func _drone_explode(drone: UnitInstance, center: Vector2i, why: String,
+		radius: int = MCF.ANTI_TANK_BLAST_RADIUS) -> ActionResult:
 	drone.status = MCF.Status.CORPSE
 	drone.remaining_ap = 0
 	var result := ActionResult.new()
@@ -4539,7 +4567,7 @@ func _drone_explode(drone: UnitInstance, center: Vector2i, why: String) -> Actio
 	_blast_armor_wall(center, result)
 	if _pillbox_absorbs(center, MCF.DRONE_EXPLOSION_DAMAGE, result):
 		return result
-	var area := MCF.blast_square(center, MCF.ANTI_TANK_BLAST_RADIUS)
+	var area := MCF.blast_square(center, radius)
 	var killed := _blast(center, result, area)
 	# Дрон, подорвавшийся над техникой, снимает с неё 1 прочность (item 14): раньше
 	# взрыв дрона выкашивал пехоту вокруг машины, а сам корпус не трогал вовсе.
@@ -5960,6 +5988,72 @@ func can_shoot(shooter: UnitInstance, target: UnitInstance) -> String:
 		return "Too far"
 	return ""
 
+## Окно под выстрел (batch ui-drones): видимая клетка со стеклом на линии огня и в
+## пределах дальности. Спецстрелкам (противотанкист, огнемётчик, марксман) свой путь.
+func can_shoot_window(shooter: UnitInstance, cell: Vector2i) -> String:
+	if shooter.stats.special_ability_id in [MCF.ABILITY_ANTI_TANK, MCF.ABILITY_FLAMETHROWER,
+			MCF.ABILITY_MARKSMAN, MCF.ABILITY_ASSAULT, MCF.ABILITY_MINER, MCF.ABILITY_SHIELD_BEARER]:
+		return "This unit can't shoot at windows"
+	if not state.grid.in_bounds(shooter.coord) or not state.grid.in_bounds(cell):
+		return "No target"
+	if not MCF.is_glass(state.grid.cell(cell).feature_id):
+		return "No window there"
+	if not Combat.is_on_firing_line(shooter.coord, cell):
+		return "Target not on the firing line"
+	if fog_enabled and not team_visible_coords(shooter.owner).has(cell):
+		return "Target not visible"
+	if los_blocked(shooter.coord, cell, true, true, true):
+		return "Firing line is blocked"
+	if Combat.hit_number(Combat.distance(shooter.coord, cell), shooter.fire_range()) >= 7:
+		return "Too far"
+	if shooter.remaining_ap <= 0:
+		return "Unit has no AP left"
+	return ""
+
+## Окна, которые стрелок сейчас может разбить (для подсветки в режиме стрельбы).
+func shootable_window_cells(shooter: UnitInstance) -> Array:
+	var out: Array = []
+	var reach := int(shooter.fire_range())
+	for dy in range(-reach, reach + 1):
+		for dx in range(-reach, reach + 1):
+			var c := shooter.coord + Vector2i(dx, dy)
+			if state.grid.in_bounds(c) and MCF.is_glass(state.grid.cell(c).feature_id) \
+					and can_shoot_window(shooter, c) == "":
+				out.append(c)
+	return out
+
+## Выстрел по окну: 1 ОД, очередь целиком. Обычное стекло бьётся сразу; бронестекло
+## держит каждую пулю на 4+ (как и пробивая его по пути к цели, §29).
+func _resolve_shoot_window(shooter: UnitInstance, cell: Vector2i) -> ActionResult:
+	shooter.remaining_ap -= 1
+	shooter.action_state = null
+	var result := ActionResult.success()
+	var gc := state.grid.cell(cell)
+	var fired := maxi(1, shooter.rate_of_fire())
+	var hold_need := MCF.glass_hold_need(gc.feature_id)
+	var broke := hold_need <= 0
+	for _i in fired:
+		if broke:
+			break
+		var r := state.dice.roll_d6()
+		result.dice_events.append({"kind": "check", "actor": "Armored glass",
+			"roll": r, "need": hold_need, "ok": r >= hold_need})
+		broke = r < hold_need
+	_fx_lane(result, shooter.coord, cell, shooter.owner)
+	_fx(result, {"fx": "casings", "at": shooter.coord, "toward": cell, "count": fired})
+	_fx(result, {"fx": "tracer", "at": shooter.coord, "from": [shooter.coord.x, shooter.coord.y],
+		"to": [cell.x, cell.y], "count": fired})
+	if broke:
+		gc.clear_feature()
+		notify_cell_changed(cell)
+		_fx(result, {"fx": "shards", "at": cell, "from": shooter.coord})
+		_fx(result, {"fx": "debris", "at": NOWHERE, "cells": [cell]})
+		result.log("%s shoots out the window at (%d, %d)" % [shooter.stats.display_name, cell.x, cell.y])
+	else:
+		result.log("%s fires at the armored glass at (%d, %d) — it holds" % [
+			shooter.stats.display_name, cell.x, cell.y])
+	return result
+
 func _is_anti_tank(u: UnitInstance) -> bool:
 	return u != null and u.stats.special_ability_id == MCF.ABILITY_ANTI_TANK
 
@@ -6953,17 +7047,29 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 	# пять тел лежат на месте, отдельной кучей.
 	var flattened: Array[Vector2i] = []
 	var hedgehogs := 0
+	var smashed := 0
+	var from_c := veh.center()
 	for cell_coord in (plan["crush_cells"] + plan["scatter_cells"] + plan["ram_cells"]):
 		var c := state.grid.cell(cell_coord)
 		if c.feature_id == MCF.FEATURE_HEDGEHOG:
 			hedgehogs += 1
 		var was_corpse_wall := c.feature_id == MCF.FEATURE_CORPSE_WALL
+		# Окно под гусеницей бьётся (batch ui-drones) — так же, как от пули: осколки летят
+		# по ходу машины. Раньше стекло исчезало молча, будто его и не было.
+		if MCF.is_glass(c.feature_id):
+			_fx(res, {"fx": "shards", "at": cell_coord, "from": from_c})
+		if c.is_wall():
+			smashed += 1
+			notify_cell_changed(cell_coord)  # снос стены — повод проснуться жителям рядом
 		if c.occupant != null and c.occupant.is_alive():
 			c.occupant = null
 		c.clear_feature()
 		if was_corpse_wall:
 			c.corpse_count = MCF.CORPSE_WALL_COUNT
 		flattened.append(cell_coord)
+	if smashed > 0:
+		res.log("The %s smashes through %d wall cell(s)" % [
+			VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id), smashed])
 	# Пол под гусеницей выглядит РАЗБИТЫМ (item 1): «if a tank rams through a wall, make
 	# these tiles display as destroyed». Клетка менялась и раньше — стена исчезала, — но
 	# на вид оставалась чистым полом, будто там ничего и не стояло. Метка та же, что
@@ -7557,7 +7663,7 @@ func vehicle_board_candidates(veh: Vehicle) -> Array:
 	return out
 
 ## Куда может доехать машина: центр итоговой позиции → { dir, steps }.
-func vehicle_move_targets(veh: Vehicle) -> Dictionary:
+func vehicle_move_targets(veh: Vehicle, speed_bonus: int = 0) -> Dictionary:
 	var out: Dictionary = {}
 	var credit := vehicle_move_credit(veh)
 	if veh == null or not veh.alive() or (vehicle_ap(veh) <= 0 and credit <= 0):
@@ -7569,6 +7675,7 @@ func vehicle_move_targets(veh: Vehicle) -> Dictionary:
 			else int(VehicleDB.get_vehicle(veh.type_id).get("speed", 0))
 	if _seated(veh):
 		speed = _shuttle_budget(veh)  # водитель платит по 15 клеток за ОД (batch 13)
+	speed += speed_bonus  # предпросмотр «куда доеду за следующие ОД» (batch ui-drones)
 	var dirs: Array = []
 	if veh.facing != Vector2i.ZERO:
 		dirs = [veh.facing, -veh.facing]
@@ -7585,10 +7692,38 @@ func vehicle_move_targets(veh: Vehicle) -> Dictionary:
 				break
 			last = reached
 			var center := Vehicle.center_of(veh.origin + dir * reached, veh.size)
-			out[center] = {"dir": dir, "steps": reached}
+			out[center] = {"dir": dir, "steps": reached, "cost": int(plan["cost"])}
 			if reached < steps:
 				break
 	return out
+
+## Куда машина доедет за 1, 2 и 3 ОД (batch ui-drones): массив словарей центр -> true,
+## каждый следующий — только клетки, которых нет в предыдущих. Первый ярус и есть то, что
+## примет «Move» сейчас; дальние — подсказка, куда хватит следующих ОД.
+func vehicle_move_tiers(veh: Vehicle) -> Array:
+	var tiers: Array = [{}, {}, {}]
+	if veh == null:
+		return tiers
+	var credit := vehicle_move_credit(veh)
+	if _seated(veh):
+		# Водитель челнока платит по SHUTTLE_CELLS_PER_AP клеток за ОД — ярус по цене пути.
+		var all := vehicle_move_targets(veh)
+		for c: Vector2i in all:
+			var cost := int(all[c]["cost"])
+			var k := 0 if cost <= credit else int(ceil(float(cost - credit) / MCF.SHUTTLE_CELLS_PER_AP)) - 1
+			tiers[clampi(k, 0, 2)][c] = true
+		return tiers
+	var speed := int(VehicleDB.get_vehicle(veh.type_id).get("speed", 0))
+	var extra_ap := vehicle_ap(veh) - (0 if credit > 0 else 1)
+	var seen := {}
+	for k in 3:
+		if k > 0 and extra_ap < k:
+			break
+		for c: Vector2i in vehicle_move_targets(veh, speed * k):
+			if not seen.has(c):
+				seen[c] = true
+				tiers[k][c] = true
+	return tiers
 
 ## Раздавит ли этот ход СВОИХ (item 7).
 ##

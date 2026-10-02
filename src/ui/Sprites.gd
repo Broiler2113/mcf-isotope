@@ -189,6 +189,20 @@ static func set_base_transform(offset: Vector2, scale: Vector2) -> void:
 
 ## Нарисовать картинку в клетку. Возвращает false, если замены нет — тогда
 ## вызывающий рисует свою векторную версию (ровно как в marble_race).
+## Метка юнита в кружке без картинки — одна на все экраны. Двух букв имени не хватало:
+## пулемётчик и марксман оба выходили «MA» (batch ui-drones), поэтому у тех, кто путался,
+## метка своя.
+const UNIT_TAGS := {
+	"machinegunner": "MG", "marksman": "MK", "anti_tank": "AT", "sniper": "SN",
+	"shield_bearer": "SB", "drone_operator": "DO", "light_infantry": "LI",
+	"heavy_infantry": "HI", "miner": "MI", "sapper": "SA",
+}
+static func unit_tag(stats_id: String, display_name: String = "") -> String:
+	if UNIT_TAGS.has(stats_id):
+		return UNIT_TAGS[stats_id]
+	var name := display_name if display_name != "" else stats_id
+	return name.substr(0, 2).to_upper()
+
 static func draw_texture_override(ci: CanvasItem, name: String, o: Vector2,
 		tile: float, rot_deg := 0.0, tint := Color.WHITE) -> bool:
 	return draw_texture_override_rect(ci, name, Rect2(o, Vector2(tile, tile)), rot_deg, tint)

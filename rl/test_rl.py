@@ -247,6 +247,31 @@ def test_pool_keeps_a_running_games_opponent():
     t.pool_net(paths[0])                                # served from memory, no disk read
 
 
+def test_old_checkpoint_grows():
+    """A checkpoint from before the drone candidate columns still loads (and trains on):
+    the new columns start at zero, so its scores are unchanged."""
+    import torch
+    from features import CAND_DIM, CANVAS, FLAT_DIM, N_CHANNELS
+    from model import PolicyNet, load_compat
+    torch.manual_seed(0)
+    new = PolicyNet()
+    sd = new.state_dict()
+    w = sd["cand.0.weight"]
+    old_sd = dict(sd)
+    old_sd["cand.0.weight"] = torch.cat([w[:, :CAND_DIM - 2], w[:, CAND_DIM:]], dim=1)
+    net = PolicyNet()
+    load_compat(net, old_sd)
+    args = (torch.rand(1, N_CHANNELS, CANVAS, CANVAS), torch.rand(1, FLAT_DIM),
+            torch.rand(1, 4, CAND_DIM), torch.zeros(1, 4, 2, dtype=torch.long),
+            torch.ones(1, 4, dtype=torch.bool))
+    args[2][..., CAND_DIM - 2:] = 0.0
+    with torch.no_grad():
+        a = net(*args)[0]
+        new.cand[0].weight[:, CAND_DIM - 2:CAND_DIM] = 0.0
+        b = new(*args)[0]
+    assert torch.allclose(a, b, atol=1e-5)
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

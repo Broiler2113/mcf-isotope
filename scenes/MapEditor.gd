@@ -567,7 +567,7 @@ func _draw() -> void:
 				continue
 		draw_circle(center, cs * 0.3, owner_color(s["owner"]))
 		if draw_tags:
-			draw_string(font, center + Vector2(-init_fs * 0.6, init_fs * 0.35), _initials(s["stats_id"]),
+			draw_string(font, center + Vector2(-init_fs * 0.6, init_fs * 0.35), Sprites.unit_tag(s["stats_id"]),
 				HORIZONTAL_ALIGNMENT_LEFT, -1, init_fs, Color.WHITE)
 
 	# 7. Курсор: рамка кисти под мышью, чтобы было видно, куда и каким размером ляжет.
@@ -607,9 +607,6 @@ func _feature_tag(fid: String) -> String:
 		MCF.FEATURE_DOT: "PBX", MCF.FEATURE_DOT_OPEN: "PBX+",
 		MCF.FEATURE_ARMOR_WALL: "A##", MCF.FEATURE_ARMOR_GLASS: "A▢",
 	}.get(fid, "?")
-
-func _initials(sid: String) -> String:
-	return sid.substr(0, 2).to_upper()
 
 # --- UI ---
 ## Панель, прижатая к краю экрана (item 11): редактор больше не одна широкая колонка

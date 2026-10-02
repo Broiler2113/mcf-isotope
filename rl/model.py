@@ -82,6 +82,42 @@ class PolicyNet(nn.Module):
         return action, logp.gather(1, action.unsqueeze(1)).squeeze(1), value
 
 
+def _grow_cand(w: torch.Tensor, want_in: int) -> torch.Tensor:
+    """cand.0.weight (or its Adam moment) from a checkpoint with fewer candidate features:
+    zero columns go at the END of the candidate-row block, before the feature-map and
+    state columns, so old behaviour is unchanged and the new features start at no effect."""
+    old_cand = CAND_DIM - (want_in - w.shape[1])
+    pad = torch.zeros(w.shape[0], want_in - w.shape[1], dtype=w.dtype, device=w.device)
+    return torch.cat([w[:, :old_cand], pad, w[:, old_cand:]], dim=1)
+
+
+def load_compat(net: "PolicyNet", sd: dict, opt: torch.optim.Optimizer | None = None,
+                opt_sd: dict | None = None) -> None:
+    """load_state_dict that accepts checkpoints made before candidate features were added
+    (e.g. the drone leash / drone-vs-vehicle columns). Training resumes from them instead
+    of starting over. Adam's moments for the grown layer are grown the same way."""
+    key = "cand.0.weight"
+    want = net.state_dict()[key].shape
+    grown = key in sd and sd[key].shape != want
+    if grown:
+        sd = dict(sd)
+        sd[key] = _grow_cand(sd[key], want[1])
+    net.load_state_dict(sd)
+    if opt is None or opt_sd is None:
+        return
+    if grown:
+        idx = [n for n, _ in net.named_parameters()].index(key)
+        opt_sd = {"state": dict(opt_sd["state"]), "param_groups": opt_sd["param_groups"]}
+        st = opt_sd["state"].get(idx)
+        if st is not None:
+            st = dict(st)
+            for m in ("exp_avg", "exp_avg_sq"):
+                if m in st and st[m].shape != want:
+                    st[m] = _grow_cand(st[m], want[1])
+            opt_sd["state"][idx] = st
+    opt.load_state_dict(opt_sd)
+
+
 class OnnxWrapper(nn.Module):
     """Export shape: one state, N candidates -> (logits[N], value[]). Both heads (5.2)."""
 

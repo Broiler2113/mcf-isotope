@@ -66,7 +66,8 @@ F_ACTOR_TYPE = F_KIND + N_KINDS            # 19
 F_GEOM = F_ACTOR_TYPE + N_ACTOR_TYPES      # ax, ay, tx, ty, dx, dy, dist, has_target
 F_TARGET_TYPE = F_GEOM + 8                 # 16
 F_MISC = F_TARGET_TYPE + N_UNIT_TYPES      # shots_full, shots_single, av_mine, seat, steps, build_feature(9), comp(0)
-CAND_DIM = F_MISC + 5 + len(BUILD_FEATURES)
+F_DRONE = F_MISC + 5 + len(BUILD_FEATURES)  # leash fraction, enemy vehicle cells in blast
+CAND_DIM = F_DRONE + 2
 
 
 def grid_tensor(obs: dict) -> np.ndarray:
@@ -222,4 +223,6 @@ def candidate_rows(obs: dict, legal: list[dict]) -> tuple[np.ndarray, np.ndarray
         fid = wire.get("f", "")
         if fid in BUILD_FEATURES:
             rows[i, m + 5 + BUILD_FEATURES.index(fid)] = 1.0
+        rows[i, F_DRONE] = float(c.get("lf", 0.0))
+        rows[i, F_DRONE + 1] = min(float(c.get("vh", 0)), 9.0) / 9.0
     return rows, cells
