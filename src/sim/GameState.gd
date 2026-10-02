@@ -22,6 +22,10 @@ var _next_vehicle_id: int = Vehicle.ID_BASE
 ## на карте и больше не снимается. Мирные жители по ней вскрываются ВСЕ разом —
 ## выстрел слышен всем, а не только тем, кто его видел.
 var combat_started: bool = false
+## Сквозной номер косметического события (batch mp-perf): им засевается разлёт крови,
+## осколков и гильз (FxDecals). Он — часть доски, а не счётчик экрана, поэтому у хоста и
+## каждого гостя одинаков, переживает пересинхронизацию и сохранение.
+var fx_seq: int = 0
 ## Окружение карты (item 24) — вид плиток пола и стен; правил не касается.
 var env: String = "town"
 
@@ -117,6 +121,8 @@ func digest_hash() -> int:
 		parts.append("v%d:%d,%d:%d:%d:%d:%d" % [v.id, v.origin.x, v.origin.y, v.owner,
 			v.durability, v.ap, 1 if v.wrecked else 0])
 	parts.append("t%d:%d:%s" % [turns.round_number, turns.active_index, str(turns.round_order)])
+	# Номер косметического события тоже — разойдись он, у гостя полетели бы другие брызги.
+	parts.append("f%d" % fx_seq)
 	return "|".join(parts).hash()
 
 ## with_cells=false — снимок без клеток: откат действия берёт их из журнала клеток

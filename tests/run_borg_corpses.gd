@@ -1,0 +1,138 @@
+extends SceneTree
+## Batch borg-corpses: bodies block the way, drone wall dips keep their flight, drones hover
+## over vehicles, the borg's gun and laser armour, borg trenches, no blood in space,
+## smooth vehicle moves stay undoable.
+var fails := 0
+func ck(ok: bool, what: String) -> void:
+	print(("ok   " if ok else "FAIL ") + what)
+	if not ok: fails += 1
+
+func field(w: int, h: int, spawns: Array, feats: Dictionary = {}) -> Dictionary:
+	var m := MapData.new(w, h)
+	for y in h:
+		for x in w:
+			m.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	for c: Vector2i in feats:
+		m.set_cell(c, MCF.FLOOR_NORMAL, 0.0, false, feats[c])
+	for sp in spawns:
+		m.set_spawn(sp[0], sp[1], sp[2])
+	GameConfig.civilians_enabled = false
+	var st := m.build_state(3)
+	var r := GameActionResolver.new(st)
+	r.fog_mode = MCF.Fog.OFF
+	while st.active_player() != 0:
+		r.resolve(EndTurnIntent.new())
+	return {"s": st, "r": r}
+
+func _initialize() -> void:
+	# --- bodies block the way: a pile of bodies and a body lying where it fell ---
+	var f := field(14, 3, [[Vector2i(1, 1), "light_infantry", 0], [Vector2i(12, 2), "light_infantry", 1]])
+	var st: GameState = f["s"]
+	var r: GameActionResolver = f["r"]
+	var li := st.grid.cell(Vector2i(1, 1)).occupant
+	for y in 3:
+		if y != 1:
+			st.grid.cell(Vector2i(4, y)).set_feature(MCF.FEATURE_WALL)
+	st.grid.cell(Vector2i(4, 1)).corpse_count = 1
+	var reach := r.reachable_for(li, 9)
+	ck(not reach.can_reach(Vector2i(4, 1)) and not reach.can_reach(Vector2i(6, 1)),
+			"a pile of bodies can be neither stood on nor walked through")
+	ck(not r.resolve(MoveIntent.new(li.id, Vector2i(4, 1))).ok, "a move onto the pile is refused")
+	st.grid.cell(Vector2i(4, 1)).corpse_count = 0
+	ck(r.reachable_for(li, 9).can_reach(Vector2i(6, 1)), "once the pile is gone the way is open")
+
+	# --- a drone that dips over a wall keeps the rest of its flight ---
+	f = field(20, 10, [[Vector2i(5, 5), "drone_operator", 0], [Vector2i(18, 8), "light_infantry", 1]],
+			{Vector2i(9, 5): MCF.FEATURE_WALL})
+	st = f["s"]; r = f["r"]
+	var op := st.grid.cell(Vector2i(5, 5)).occupant
+	var station := Vector2i(6, 5)
+	st.grid.cell(station).feature_id = MCF.FEATURE_DRONE_STATION
+	st.grid.cell(station).feature_owner = 0
+	var drone := r._launch_drone_at(station, op)
+	drone.remaining_ap = 1
+	var up := r.resolve(DroneMoveIntent.new(drone.id, Vector2i(9, 5)))
+	var credit_up := drone.move_credit
+	var down := r.resolve(DroneMoveIntent.new(drone.id, drone.wall_entry_from))
+	ck(up.ok and down.ok and credit_up > 0 and drone.move_credit == credit_up - 1,
+			"after the wall dip the drone still has %d of its flight (had %d)" % [drone.move_credit, credit_up])
+
+	# --- drones hover over vehicles instead of ramming them ---
+	f = field(24, 12, [[Vector2i(5, 5), "drone_operator", 0], [Vector2i(10, 4), "tank", 1],
+			[Vector2i(22, 10), "light_infantry", 1]])
+	st = f["s"]; r = f["r"]
+	op = st.grid.cell(Vector2i(5, 5)).occupant
+	st.grid.cell(station).feature_id = MCF.FEATURE_DRONE_STATION
+	st.grid.cell(station).feature_owner = 0
+	drone = r._launch_drone_at(station, op)
+	drone.remaining_ap = 1
+	var tank: Vehicle = st.all_vehicles()[0]
+	var over := tank.center()
+	ck(r.drone_flight_cells(drone).has(over), "the tank's hull is in the drone's flight zone")
+	var hover := r.resolve(DroneMoveIntent.new(drone.id, over))
+	ck(hover.ok and drone.is_alive() and drone.coord == over, "the drone hovers over the tank (%s)" % hover.reason)
+
+	# --- the borg: RoF 4 for anyone, its hull stops a laser ---
+	f = field(20, 8, [[Vector2i(4, 4), "engineer", 0], [Vector2i(5, 4), "borg", 0],
+			[Vector2i(12, 4), "marksman", 1], [Vector2i(2, 4), "light_infantry", 0]])
+	st = f["s"]; r = f["r"]
+	var borg: Vehicle = st.all_vehicles()[0]
+	var en := st.grid.cell(Vector2i(4, 4)).occupant
+	r.resolve(VehicleBoardIntent.new(en.id, borg.id))
+	ck(en.rate_of_fire() == MCF.BORG_ROF, "an engineer in a borg fires the borg's 4 shots")
+	var behind := st.grid.cell(Vector2i(2, 4)).occupant
+	r.resolve(EndTurnIntent.new())
+	while st.active_player() != 1:
+		r.resolve(EndTurnIntent.new())
+	var mk := st.grid.cell(Vector2i(12, 4)).occupant
+	var trace: Array = r._laser_trace(mk.coord, Vector2i(-1, 0))
+	var stops_at_borg := false
+	for rec: Dictionary in trace:
+		if rec["kind"] == "vehicle" and int(rec["vehicle_id"]) == borg.id:
+			stops_at_borg = bool(rec["stop"])
+	ck(stops_at_borg, "the laser stops at the borg's hull")
+	r.resolve(ShootIntent.new(mk.id, -1, -1, Vector2i(0, 4)))
+	ck(behind.is_alive(), "the soldier behind the borg is untouched")
+	# --- a borg digs 9 trenches per AP ---
+	r.resolve(EndTurnIntent.new())
+	while st.active_player() != 0:
+		r.resolve(EndTurnIntent.new())
+	if en.is_alive() and en.borg_id != -1:
+		var cells: Array = r.diggable_cells(en)
+		var res := r.resolve(DigIntent.new(en.id, cells[0], LegalIntents.SENT, LegalIntents.SENT)) if not cells.is_empty() else ActionResult.fail("nowhere")
+		ck(res.ok and en.dig_credits == MCF.BORG_DIG_TRENCHES - 1,
+				"a borg's first trench opens %d more (%s)" % [en.dig_credits, res.reason])
+
+	# --- no blood in space; an explosion there still throws chunks ---
+	var fx := FxDecals.new()
+	fx.space_at = func(c: Vector2i) -> bool: return c.x < 5
+	fx.apply([{"fx": "blood", "at": Vector2i(2, 2), "from": Vector2i(8, 2)}])
+	var pools := fx.props.filter(func(p): return p["kind"] == "blood_pool").size()
+	ck(pools == 0 and fx.flying.is_empty(), "a death in space leaves no blood")
+	fx.apply([{"fx": "blood", "at": Vector2i(2, 2), "from": Vector2i(2, 2), "blast": true}])
+	var gibs := fx.flying.filter(func(p): return p["kind"] == "gib").size()
+	var drops := fx.flying.filter(func(p): return p["kind"] == "blood_drop").size()
+	ck(gibs > 0 and drops == 0, "an explosion in space throws chunks, not blood (%d chunks)" % gibs)
+	fx.apply([{"fx": "blood", "at": Vector2i(9, 2), "from": Vector2i(12, 2)}])
+	ck(fx.props.filter(func(p): return p["kind"] == "blood_pool").size() > 0, "on the floor blood still pools")
+
+	# --- a vehicle move animates and stays undoable ---
+	f = field(30, 10, [[Vector2i(2, 4), "light_infantry", 0], [Vector2i(2, 5), "light_infantry", 0],
+			[Vector2i(2, 6), "light_infantry", 0], [Vector2i(3, 4), "tank", 0],
+			[Vector2i(28, 8), "light_infantry", 1]])
+	st = f["s"]; r = f["r"]
+	var veh: Vehicle = st.all_vehicles()[0]
+	for i in 3:
+		var bc: Array = r.vehicle_board_candidates(veh)
+		if not bc.is_empty():
+			r.resolve(VehicleBoardIntent.new(int(bc[0]), veh.id))
+	veh.ap = 3
+	var from := veh.origin
+	var mv := r.resolve(VehicleMoveIntent.new(veh.id, Vector2i(1, 0), 5))
+	var walks := mv.dice_events.filter(func(e): return e.get("kind", "") == "veh_walk")
+	ck(mv.ok and walks.size() == 1 and walks[0]["from"] == from and int(walks[0]["steps"]) == 5,
+			"a vehicle move is played as a smooth drive")
+	ck(not r._is_irreversible(VehicleMoveIntent.new(veh.id, Vector2i(1, 0), 1), mv), "and stays undoable")
+
+	print("borg corpses: %d failure(s)" % fails)
+	quit(1 if fails else 0)

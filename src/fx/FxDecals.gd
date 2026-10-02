@@ -76,6 +76,8 @@ var bounds: Vector2 = Vector2.ZERO
 ## Глухая ли клетка (стена) — частица до неё долетает и останавливается (item 7). Задаёт
 ## экран боя; без него частицы летят как раньше.
 var solid_at: Callable = Callable()
+## Клетка — открытый космос (batch borg-corpses): ни луж, ни брызг; взрыв даёт только куски.
+var space_at: Callable = Callable()
 
 ## Vector2i -> DAMAGE_*: побитый пол. Эпицентр не понижается до щебня повторным
 ## взрывом рядом — только повышается.
@@ -127,6 +129,9 @@ const LANE_CAP := 12
 ## список описаний в ОДНОМ И ТОМ ЖЕ порядке, значит и счётчик у них идёт одинаково.
 ## Кубики игры (DiceService) он по-прежнему не трогает.
 var _event_seq: int = 0
+## Зерно текущего события: номер из доски (ev["seq"], ставит резолвер — один у всех пиров);
+## у событий без номера (старые записи) — местный счётчик, как раньше.
+var _seq: int = 0
 
 ## Детерминированный генератор на одну частицу. Зерно — чистая функция от описания
 ## события и его порядкового номера, поэтому одинаково у всех, кто это описание получил.
@@ -179,6 +184,7 @@ func apply(events: Array) -> void:
 func _apply(events: Array, lanes_only: bool) -> void:
 	for ev: Dictionary in events:
 		_event_seq += 1
+		_seq = int(ev["seq"]) if ev.has("seq") else _event_seq
 		var fx_kind := str(ev.get("fx", ""))
 		if (fx_kind == "lane") != lanes_only:
 			continue
@@ -235,10 +241,10 @@ func _shards(ev: Dictionary) -> void:
 	var at: Vector2i = ev.get("at", Vector2i.ZERO)
 	var from: Vector2i = ev.get("from", at)
 	var away := _away(at, from)
-	var count_rng := _rng_for("shards_n", at, 0, _event_seq)
+	var count_rng := _rng_for("shards_n", at, 0, _seq)
 	var count: int = count_rng.randi_range(SHARDS_MIN, SHARDS_MAX)
 	for i in count:
-		var rng := _rng_for("shard", at, i, _event_seq)
+		var rng := _rng_for("shard", at, i, _seq)
 		_launch("shard", at, away, rng, SHARD_RANGE_MIN, SHARD_RANGE_MAX, SHARD_FLIGHT_SEC, 1.25)
 
 ## 21.3 — гильзы: по одной на выстрел, вылетают ЗА спину стрелка.
@@ -254,7 +260,7 @@ func _casings(ev: Dictionary) -> void:
 	var kind := "shell_casing" if shell else "casing"
 	var r_max: float = CASING_RANGE_MAX * (1.3 if shell else 1.0)
 	for i in int(ev.get("count", 0)):
-		var rng := _rng_for(kind, at, i, _event_seq)
+		var rng := _rng_for(kind, at, i, _seq)
 		_launch(kind, at, back, rng, CASING_RANGE_MIN, r_max, CASING_FLIGHT_SEC)
 
 ## След лазера на полу (item 10/11): непрерывная ПОЛУПРОЗРАЧНАЯ ЧЁРНАЯ ЛИНИЯ от стрелка
@@ -277,7 +283,16 @@ func _blood(ev: Dictionary) -> void:
 	var at: Vector2i = ev.get("at", Vector2i.ZERO)
 	var from: Vector2i = ev.get("from", at)
 	var blast: bool = bool(ev.get("blast", false))
-	var pool_rng := _rng_for("pool", at, 0, _event_seq)
+	if _space(at):
+		# В вакууме кровь не растекается и не брызжет; от взрыва летят только куски.
+		if blast:
+			var srng := _rng_for("splatter_n", at, 0, _seq)
+			for i in srng.randi_range(GIBS_MIN, GIBS_MAX):
+				_launch("gib", at, _away(at, from), _rng_for("gib", at, i, _seq), 0.5, 2.2,
+						SHARD_FLIGHT_SEC * 1.4, PI)
+			_trim()
+		return
+	var pool_rng := _rng_for("pool", at, 0, _seq)
 	props.append({
 		"kind": "blood_pool", "pos": Vector2(at) + Vector2(0.5, 0.5),
 		"rot": pool_rng.randf_range(0.0, TAU),
@@ -290,22 +305,27 @@ func _blood(ev: Dictionary) -> void:
 		var d := away.rotated(pool_rng.randf_range(-PI, PI) if blast else pool_rng.randf_range(-0.7, 0.7))
 		var pos := Vector2(at) + Vector2(0.5, 0.5) + d * pool_rng.randf_range(0.35, 0.9 if blast else 0.7)
 		pos = _clip_solid(Vector2(at) + Vector2(0.5, 0.5), pos, at)
+		if _space(Vector2i(floori(pos.x), floori(pos.y))):
+			continue   # подтёк не ложится на вакуум
 		props.append({"kind": "blood_pool", "pos": pos, "rot": pool_rng.randf_range(0.0, TAU),
 				"scale": pool_rng.randf_range(0.35, 0.6), "origin": at})
 		if blast:
 			pool_cells[Vector2i(floori(pos.x), floori(pos.y))] = true
 	var fan := PI if blast else 0.9
 	var reach := 1.6 if blast else 1.0
-	var drops_rng := _rng_for("splatter_n", at, 0, _event_seq)
+	var drops_rng := _rng_for("splatter_n", at, 0, _seq)
 	for i in drops_rng.randi_range(SPLATTER_MIN, SPLATTER_MAX) * (2 if blast else 1):
-		var rng := _rng_for("splatter", at, i, _event_seq)
+		var rng := _rng_for("splatter", at, i, _seq)
 		_launch("blood_drop", at, away, rng, SPLATTER_RANGE_MIN, SPLATTER_RANGE * reach,
 				SHARD_FLIGHT_SEC, fan)
 	if blast:
 		for i in drops_rng.randi_range(GIBS_MIN, GIBS_MAX):
-			var rng := _rng_for("gib", at, i, _event_seq)
+			var rng := _rng_for("gib", at, i, _seq)
 			_launch("gib", at, away, rng, 0.5, 2.2, SHARD_FLIGHT_SEC * 1.4, PI)
 	_trim()
+
+func _space(c: Vector2i) -> bool:
+	return space_at.is_valid() and bool(space_at.call(c))
 
 ## Шаги бойца (gore batch): наступил в лужу — следующие BLOODY_STEPS клеток оставляет
 ## отпечатки, всё бледнее. Чистая косметика: только из описания хода, без кубиков.
@@ -442,6 +462,9 @@ func advance(delta: float) -> bool:
 		landed.append(f)
 		flying.remove_at(i)
 	for f: Dictionary in landed:
+		# Капля, долетевшая до вакуума, не ложится пятном (batch borg-corpses).
+		if f["kind"] == "blood_drop" and _space(Vector2i(floori(f["to"].x), floori(f["to"].y))):
+			continue
 		props.append({
 			"kind": f["kind"], "pos": f["to"],
 			"rot": float(f["rot0"]) + float(f["rot1"]), "scale": f["scale"],
@@ -490,6 +513,13 @@ func to_dict() -> Dictionary:
 	for p: Dictionary in props:
 		var pos: Vector2 = p["pos"]
 		settled.append([str(p["kind"]), pos.x, pos.y, float(p["rot"]), float(p["scale"])])
+	# Ещё летящие осколки и брызги — там, где они лягут (batch mp-perf): снимок уходит гостю
+	# при пересинхронизации, и без них у него недоставало бы последнего выстрела.
+	for f: Dictionary in flying:
+		var to: Vector2 = f["to"]
+		if f["kind"] == "blood_drop" and _space(Vector2i(floori(to.x), floori(to.y))):
+			continue
+		settled.append([str(f["kind"]), to.x, to.y, float(f["rot0"]) + float(f["rot1"]), float(f["scale"])])
 	var steps: Array = []
 	for p: Dictionary in prints:
 		var pos: Vector2 = p["pos"]

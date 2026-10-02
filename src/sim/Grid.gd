@@ -71,7 +71,9 @@ func is_occupied_or_wall(coord: Vector2i) -> bool:
 		return true
 	if c.vehicle_id != -1:
 		return true
-	return c.occupant != null
+	# Тела — и лежащее на месте гибели (occupant), и сложенные в кучу (corpse_count) —
+	# не проходятся и не служат клеткой стоянки (batch borg-corpses), как живой боец.
+	return c.occupant != null or c.corpse_count > 0
 
 ## То же самое, но для ПЕШЕГО маршрута (#100): закрытый шлюз здесь не преграда —
 ## он разъедется перед подошедшим бойцом, поэтому путь сквозь него планировать можно.
@@ -81,7 +83,7 @@ func blocks_walk(coord: Vector2i) -> bool:
 		return true
 	if c.vehicle_id != -1:
 		return true
-	return c.occupant != null
+	return c.occupant != null or c.corpse_count > 0
 
 ## Есть ли на клетке корпус машины; -1 = нет.
 func vehicle_at(coord: Vector2i) -> int:

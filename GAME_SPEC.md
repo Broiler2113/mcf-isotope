@@ -291,8 +291,9 @@ every reachable cell with back-pointers for path reconstruction. Costs:
 - Height ≥ 2.0, dirt > 1 m, drone stations, **hedgehogs**, vehicle hulls, living units:
   **impassable**
 
-Corpses do **not** block movement pathing at the Dijkstra level but occupy the cell as
-an obstacle for standing.
+Corpses **block movement** (batch borg-corpses, 2026-10-02): a body lying where it fell
+(the cell's `occupant`) and a pile of bodies (`corpse_count`) are both impassable and
+cannot be stood on, like a living unit. Vehicles still roll over them (§17.3).
 
 **Hedgehog jump (#78).** An anti-tank hedgehog is barbed steel: `GridCell.blocks_move()`
 refuses it as a destination outright. Instead the Dijkstra treats it as a **hop** — when

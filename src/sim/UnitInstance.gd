@@ -131,8 +131,10 @@ func fire_range() -> float:
 		return MCF.BORG_RANGE
 	return stats.fire_range
 
+## Скорострельность борга — 4 у ЛЮБОГО, кто в нём сидит (batch borg-corpses), инженера
+## тоже: бортовой ствол один на всех. Дальность у инженера по-прежнему своя (B8).
 func rate_of_fire() -> int:
-	return MCF.BORG_ROF if _borg_gun() else stats.rate_of_fire
+	return MCF.BORG_ROF if borg_id != -1 else stats.rate_of_fire
 
 func is_alive() -> bool:
 	return status == MCF.Status.ALIVE
