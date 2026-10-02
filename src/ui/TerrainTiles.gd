@@ -46,7 +46,7 @@ const MEMORY_BUDGET := 128 * 1024 * 1024
 const FAMILY := {
 	"wall": "wall", "wood_wall": "wall", "glass": "wall", "armor_wall": "wall",
 	"armor_glass": "wall", "dot": "wall", "dot_open": "wall", "bru": "wall",
-	"airlock": "wall", "corpse_wall": "wall",
+	"airlock": "wall", "corpse_wall": "wall", "soil": "wall",
 	"sandbags": "bags", "sandbag_wall": "bags", "hedgehog_sandbags": "bags", "rsp": "bags",
 	"trench": "trench",
 }

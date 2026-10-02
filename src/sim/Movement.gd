@@ -158,6 +158,12 @@ static func reachable(grid: Grid, start: Vector2i, budget: int,
 	# и меньшего там не нашли — значит найденное звено и есть «первое строго минимальное»,
 	# ровно то же самое, что выбрал бы полный проход. На разливе в шесть очков цен всего
 	# горстка, и такая находка случается в начале списка, а не в конце.
+	# Сколько диагоналей в запомненном пути до клетки. Из равных по цене путей берётся тот,
+	# где их меньше (batch soil-rulers): при диагонали по цене прямого шага «идти прямо»
+	# и «идти углом через (6, 5)» стоят одинаково, и боец, который теперь виден на ходу,
+	# шагал к соседней по ряду клетке зигзагом. Меняется ТОЛЬКО came_from — цены, фронт
+	# и порядок ключей cost (их читает AIPlanner) остаются прежними.
+	var diag: Dictionary = {start: 0}
 	var lo := 0
 	while live > 0:
 		while fcost[first] == TOMB:
@@ -239,9 +245,15 @@ static func reachable(grid: Grid, start: Vector2i, budget: int,
 			if new_cost > budget:
 				continue
 			var prev: Variant = cost.get(dest)
+			var nd: int = int(diag[current]) + (1 if d.x != 0 and d.y != 0 else 0)
+			if prev != null and new_cost == int(prev) and nd < int(diag.get(dest, 1 << 20)):
+				came_from[dest] = current
+				diag[dest] = nd
+				continue
 			if prev == null or new_cost < int(prev):
 				cost[dest] = new_cost
 				came_from[dest] = current
+				diag[dest] = nd
 				var at: Variant = slot.get(dest)
 				if at != null:
 					# Клетка уже в очереди — правим её цену НА МЕСТЕ, не добавляя дубль.

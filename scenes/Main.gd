@@ -20,6 +20,7 @@ const FEATURE_TAGS := {
 	MCF.FEATURE_DRONE_STATION: "ST", MCF.FEATURE_SANDBAGS: "SB",
 	MCF.FEATURE_HEDGEHOG: "hdg", MCF.FEATURE_TRENCH: "tr",
 	MCF.FEATURE_WALL: "##", MCF.FEATURE_GLASS: "▢",
+	MCF.FEATURE_SOIL: "░░",
 	MCF.FEATURE_LDF: "LDF",
 	MCF.FEATURE_CORPSE_WALL: "††", MCF.FEATURE_AIRLOCK: "AL",
 	MCF.FEATURE_DIRT_PILE: "drt", MCF.FEATURE_DPMG: "MG",
@@ -52,13 +53,17 @@ enum Mode {NONE, MENU, MOVE, SHOOT, GRAB, ITEM, PUSH, DRONE_FLY, BUILD, BUILD_WA
 ## диагональ равна прямой), а не расстояние по экрану: линейка, показывающая не то
 ## число, по которому считается попадание, была бы хуже, чем никакой.
 var _ruler_a := Vector2i(-1, -1)
-var _ruler_b := Vector2i(-1, -1)
 var _ruler_hover := Vector2i(-1, -1)
+## Закреплённые отрезки линейки — их может быть сколько угодно: [начало, конец].
+var _rulers: Array = []
 var _ruler_btn: Button = null
 ## Отряд, выделенный до группового приказа: _after_action выделяет его снова.
 var _regroup_ids: Array[int] = []
 ## Потолки зон хода за 1/2/3 ОД (resolver.move_tier_budgets), см. _enter_move.
 var _reach_tiers: Array[int] = []
+## Зона полёта дрона (клетка -> цена) и потолок подлёта — для _draw_zone_preview.
+var _drone_costs: Dictionary = {}
+var _drone_budget: int = 0
 ## Потолки зон хода машины за 1/2/3 ОД (resolver.vehicle_tier_budgets).
 var _veh_tiers: Array[int] = []
 
@@ -111,8 +116,11 @@ const UNKNOWN_COL := Color(0.02, 0.02, 0.03, 1.0)
 ## «Нигде» — маркер отсутствия клетки (тот же, что и в резолвере).
 const NOWHERE := Vector2i(-9999, -9999)
 
+## VEH_MOVE и DRONE_FLY тоже: без них линия хода и кольцо цели под курсором машины и
+## дрона догоняли мышь лишь при следующем постороннем событии — «с задержкой».
 const HOVER_PREVIEW_MODES := [Mode.MOVE, Mode.ITEM, Mode.SHOOT, Mode.DIG, Mode.MINE, Mode.DISARM,
-		Mode.CORPSE_DROP, Mode.WELD, Mode.MOVE_HELD, Mode.VEH_TURN, Mode.VEH_CANNON, Mode.GROUP_LASER]
+		Mode.CORPSE_DROP, Mode.WELD, Mode.MOVE_HELD, Mode.VEH_TURN, Mode.VEH_CANNON, Mode.GROUP_LASER,
+		Mode.VEH_MOVE, Mode.DRONE_FLY]
 
 ## Цвета «своя/чужая» для перспективной раскраски дуэли (#93). Цвета КОНКРЕТНЫХ
 ## игроков берутся из ростера (Roster.PALETTE) — их до 26, в словарь на два они
@@ -168,6 +176,11 @@ func _cell_on_screen(x: int, y: int) -> bool:
 ## житель возникал вплотную к отряду. Состояние уже переехало; словарь влияет только на
 ## отрисовку, поэтому на симуляцию и сетевой лок-степ он не воздействует.
 var _walk_cells: Dictionary = {}
+## Доля пути до следующей клетки в точках (id -> Vector2): шаг рисуется плавно, а не
+## прыжком из клетки в клетку.
+var _walk_offset: Dictionary = {}
+## Сколько переходов играется прямо сейчас (групповой приказ идёт всеми сразу).
+var _walks_running := 0
 ## Сколько точек ОД РИСОВАТЬ у юнита, пока идёт анимация чужого хода (#99): id → число.
 ## Ход ИИ и слот мирных применяются к состоянию целиком и лишь потом отыгрываются, так
 ## что без этого жёлтые точки гасли разом до первого кубика и игрок не видел, за что
@@ -223,6 +236,10 @@ const WALK_STEP_DELAY := 0.07
 ## отыгрывается с ускоренным шагом — заметно быстрее базовой скорости. (Когда появится
 ## меню настроек из item 24, эти значения станут настраиваемыми; пока — быстрые дефолты.)
 const NEUTRAL_WALK_STEP_DELAY := 0.028
+## Свои и чужие бойцы и дроны (batch soil-rulers): плавно, но быстро — клетка за 40 мс,
+## дрон вдвое быстрее прежнего (тридцать клеток подлёта — около секунды).
+const SOLDIER_WALK_STEP_DELAY := 0.04
+const DRONE_FLY_STEP_DELAY := 0.035
 const NEUTRAL_AP_DOT_DELAY := 0.07
 ## Идёт отыгрыш нейтрального слота — берём ускоренные паузы выше.
 var _fast_playback: bool = false
@@ -987,20 +1004,32 @@ func _unhandled_input(event: InputEvent) -> void:
 		_zoom_at(event.position, event.factor)
 		return
 	# Линейка (item 11). Первый клик ставит начало, дальше расстояние тянется за курсором,
-	# второй клик закрепляет отрезок; следующий клик начинает новое измерение. Правая
-	# кнопка здесь не годится — она панорамирует камеру, — поэтому выход по Esc/кнопке.
+	# второй клик закрепляет отрезок; следующий клик начинает НОВЫЙ, а прежние остаются на
+	# поле — линеек сколько угодно. Backspace снимает последнюю (или недотянутую), выход
+	# из режима (Esc/кнопка) убирает все. Правая кнопка панорамирует камеру — ею не мерим.
 	if mode == Mode.RULER:
 		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT \
 				and event.pressed:
 			var at := _pos_to_cell(get_global_mouse_position())
 			if not state.grid.in_bounds(at):
 				return
-			if _ruler_a == Vector2i(-1, -1) or _ruler_b != Vector2i(-1, -1):
+			if _ruler_a == Vector2i(-1, -1):
 				_ruler_a = at
-				_ruler_b = Vector2i(-1, -1)
 			else:
-				_ruler_b = at
+				_rulers.append([_ruler_a, at])
+				_ruler_a = Vector2i(-1, -1)
+			_refresh_ruler_button()
 			queue_redraw()
+			return
+		if event is InputEventKey and event.pressed and not event.echo \
+				and event.keycode == KEY_BACKSPACE:
+			if _ruler_a != Vector2i(-1, -1):
+				_ruler_a = Vector2i(-1, -1)
+			elif not _rulers.is_empty():
+				_rulers.pop_back()
+			_refresh_ruler_button()
+			queue_redraw()
+			get_viewport().set_input_as_handled()
 			return
 		if event is InputEventMouseMotion:
 			var hov := _pos_to_cell(get_global_mouse_position())
@@ -1969,6 +1998,8 @@ func _enter_drone_fly() -> void:
 	reach = null
 	target_ids = []
 	item_cells = resolver.drone_flight_cells(u)
+	_drone_costs = resolver.drone_flight_costs(u)
+	_drone_budget = resolver.drone_flight_budget(u)
 	_menu.hide()
 	queue_redraw()
 
@@ -3094,8 +3125,15 @@ func _play_dice(events: Array) -> void:
 			# помечает, чьи кубики крутятся), но камеру не трогаем — панорама за игроком.
 			continue
 		if ev.get("kind", "") == "walk":
-			await _play_walk(ev)
+			# Подряд идущие переходы (групповой приказ) играются ОДНОВРЕМЕННО: отряд
+			# идёт вместе, а не бойцы по очереди.
+			_play_walk(ev)
+			if not ev.get("soldier", false):
+				while _walks_running > 0:
+					await get_tree().process_frame
 			continue
+		while _walks_running > 0:
+			await get_tree().process_frame
 		if ev.get("kind", "") == "ap":
 			_ap_display[int(ev["unit"])] = int(ev["left"])
 			queue_redraw()
@@ -3135,7 +3173,10 @@ func _play_dice(events: Array) -> void:
 				continue
 			_dice.play(step["faces"], step["manual"], step["prompt"], step.get("speed", 1.0) * _pace())
 			await _dice.finished
+	while _walks_running > 0:
+		await get_tree().process_frame
 	_walk_cells.clear()
+	_walk_offset.clear()
 	_ap_display.clear()
 	_animating = false
 	_fast_playback = fast_before
@@ -3152,14 +3193,31 @@ func _play_dice(events: Array) -> void:
 ## куда пришёл житель, а не обнаружил его вплотную к своему отряду.
 func _play_walk(ev: Dictionary) -> void:
 	var id := int(ev["unit"])
-	_walk_cells[id] = ev["from"]
-	queue_redraw()
-	var step_delay := (NEUTRAL_WALK_STEP_DELAY if _fast_playback else WALK_STEP_DELAY) / _pace()
+	_walks_running += 1
+	var u := state.get_unit(id)
+	var base: float = DRONE_FLY_STEP_DELAY if u != null and u.is_drone \
+			else (SOLDIER_WALK_STEP_DELAY if ev.get("soldier", false)
+			else (NEUTRAL_WALK_STEP_DELAY if _fast_playback else WALK_STEP_DELAY))
+	var step_ms := base / _pace() * 1000.0
+	var prev: Vector2i = ev["from"]
+	_walk_cells[id] = prev
 	for cell: Vector2i in ev["path"]:
-		await get_tree().create_timer(step_delay).timeout
+		var t0 := Time.get_ticks_msec()
+		var delta := Vector2(cell - prev) * CELL
+		while true:
+			var k := minf(1.0, float(Time.get_ticks_msec() - t0) / maxf(1.0, step_ms))
+			_walk_offset[id] = delta * k
+			queue_redraw()
+			if k >= 1.0:
+				break
+			await get_tree().process_frame
+		prev = cell
 		_walk_cells[id] = cell
-		queue_redraw()
+		_walk_offset.erase(id)
 	_walk_cells.erase(id)
+	_walk_offset.erase(id)
+	_walks_running -= 1
+	queue_redraw()
 
 ## Клетка, на которой юнит рисуется ПРЯМО СЕЙЧАС: обычно его настоящая координата,
 ## а во время проигрывания перехода — промежуточная клетка маршрута.
@@ -3459,15 +3517,28 @@ func _draw_veh_move_preview() -> void:
 	var veh := _selected_vehicle()
 	if veh == null or _veh_tiers.is_empty():
 		return
+	var costs: Dictionary = {}
+	for c: Vector2i in veh_move_targets:
+		costs[c] = int(veh_move_targets[c]["cost"])
+	_draw_zone_preview(costs, _veh_tiers, veh.center(),
+			0 if resolver.vehicle_move_credit(veh) > 0 else 1)
+
+## Зоны хода по цене клеток (техника, дрон): заливка по зоне (1/2/3 ОД — зелёная,
+## оранжевая, красная), контур, подпись «цена/потолок зоны», а под курсором — линия от
+## from_cell и сколько ОД уйдёт. ap_base — ОД за первую зону (0, если ход на остатке).
+func _draw_zone_preview(costs: Dictionary, budgets: Array[int], from_cell: Vector2i,
+		ap_base: int) -> void:
+	if budgets.is_empty():
+		return
 	var font := ThemeDB.fallback_font
 	var cvec := Vector2(CELL, CELL)
 	var half := cvec * 0.5
 	var hover := _pos_to_cell(get_global_mouse_position())
 	var labels: bool = zoom >= MOVE_LABEL_MIN_ZOOM
 	var tier_at: Dictionary = {}
-	for c: Vector2i in veh_move_targets:
-		tier_at[c] = GameActionResolver.tier_of(_veh_tiers, int(veh_move_targets[c]["cost"]))
-	for c: Vector2i in veh_move_targets:
+	for c: Vector2i in costs:
+		tier_at[c] = GameActionResolver.tier_of(budgets, int(costs[c]))
+	for c: Vector2i in costs:
 		var origin := _cell_origin(c)
 		var k: int = tier_at[c]
 		var lit: bool = c == hover
@@ -3479,21 +3550,19 @@ func _draw_veh_move_preview() -> void:
 			var b := origin + half + (Vector2(d) - Vector2(-d.y, d.x)) * half
 			draw_line(a, b, MOVE_TIER_COLS[k][2], 2.0)
 		if labels:
-			draw_string(font, origin + Vector2(4, 13), "%d/%d" % [int(veh_move_targets[c]["cost"]), _veh_tiers[k]],
+			draw_string(font, origin + Vector2(4, 13), "%d/%d" % [int(costs[c]), budgets[k]],
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.92, 0.95, 0.9, 0.85))
-	if not veh_move_targets.has(hover):
+	if not costs.has(hover):
 		return
 	var hk: int = tier_at[hover]
 	var col: Color = MOVE_TIER_COLS[hk][3]
-	var from := _cell_origin(veh.center()) + half
+	var from := _cell_origin(from_cell) + half
 	var to := _cell_origin(hover) + half
 	draw_line(from, to, Color(0.05, 0.1, 0.05, 0.65), 5.0)
 	draw_line(from, to, col, 2.5)
 	draw_arc(to, CELL * 0.36, 0.0, TAU, 24, col, 2.0)
 	if labels:
-		var credit := resolver.vehicle_move_credit(veh)
-		var txt := "%d/%d · %d AP" % [int(veh_move_targets[hover]["cost"]), _veh_tiers[hk],
-			hk + (0 if credit > 0 else 1)]
+		var txt := "%d/%d · %d AP" % [int(costs[hover]), budgets[hk], hk + ap_base]
 		draw_string(font, to + Vector2(-CELL, -CELL * 0.42), txt,
 			HORIZONTAL_ALIGNMENT_CENTER, CELL * 2, 13, Color(0.08, 0.08, 0.08))
 		draw_string(font, to + Vector2(-CELL, -CELL * 0.45), txt,
@@ -4062,11 +4131,17 @@ func _draw() -> void:
 						var bc := Vector2i(shov.x + dx, shov.y + dy)
 						if state.grid.in_bounds(bc):
 							draw_rect(Rect2(_cell_origin(bc), Vector2(CELL, CELL)), Color(1, 0.35, 0.1, 0.32))
-		# Сколько нужно выбросить на попадание (batch ui-drones) — у каждой цели, по той же
-		# формуле, что и сам выстрел (hit_need_for). У лазера, струи и заряда ПТ кубика
-		# попадания нет — им не подписываем.
-		var show_need: bool = mode == Mode.SHOOT and su != null and not su.stats.special_ability_id in [
-				MCF.ABILITY_MARKSMAN, MCF.ABILITY_FLAMETHROWER, MCF.ABILITY_ANTI_TANK]
+			# Бросок и для выстрела по клетке пола (окно, разрыв ПТ) — как у целей-юнитов.
+			if mode == Mode.SHOOT and _unit_at(shov) == null:
+				var cneed: int = resolver.aim_need(su, shov)
+				var ctxt := "auto" if cneed <= 0 else ("%d+" % cneed if cneed <= 6 else "—")
+				var ctp := _cell_origin(shov) + Vector2(CELL * 0.8, CELL * 0.2)
+				draw_string_outline(font, ctp, ctxt, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, 4, Color(0, 0, 0, 0.9))
+				draw_string(font, ctp, ctxt, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 0.92, 0.5))
+		# Сколько нужно выбросить на попадание — у каждой цели и у каждого стрелка.
+		# У всех стрелков (batch soil-rulers): ПТ — свой бросок без укрытия, у лазера и
+		# струи броска нет — «auto». Число берёт resolver.aim_need — то же, что бросит выстрел.
+		var show_need: bool = mode == Mode.SHOOT and su != null
 		for tid in target_ids:
 			var t := state.get_unit(tid)
 			if t != null:
@@ -4075,8 +4150,8 @@ func _draw() -> void:
 				draw_line(c - Vector2(CELL * 0.5, 0), c + Vector2(CELL * 0.5, 0), Color(1, 0.3, 0.3, 0.7), 1.5)
 				draw_line(c - Vector2(0, CELL * 0.5), c + Vector2(0, CELL * 0.5), Color(1, 0.3, 0.3, 0.7), 1.5)
 				if show_need:
-					var need: int = resolver.hit_need_for(su, t)
-					var txt := "%d+" % need if need <= 6 else "—"
+					var need: int = resolver.aim_need(su, t.coord, t)
+					var txt := "auto" if need <= 0 else ("%d+" % need if need <= 6 else "—")
 					var big: bool = t.coord == shov
 					var fs := 16 if big else 12
 					var tp := c + Vector2(CELL * 0.3, -CELL * 0.3)
@@ -4133,8 +4208,12 @@ func _draw() -> void:
 					draw_rect(Rect2(_cell_origin(bc), Vector2(CELL, CELL)), Color(1, 0.35, 0.1, 0.32))
 
 	if mode == Mode.DRONE_FLY:
-		for coord in item_cells:
-			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(0.3, 0.9, 0.9, 0.18))
+		# Как у пехоты и техники (batch soil-rulers): зелёная зона с контуром, цена клетки
+		# «сколько/потолок», под курсором — линия от дрона и сколько ОД уйдёт.
+		var dr := _selected_unit()
+		if dr != null and dr.is_drone:
+			var budgets: Array[int] = [_drone_budget]
+			_draw_zone_preview(_drone_costs, budgets, dr.coord, 0 if dr.move_credit > 0 else 1)
 
 	if mode == Mode.BUILD:
 		for coord in item_cells:
@@ -4434,6 +4513,8 @@ func _draw() -> void:
 		# Во время проигрывания шагов житель рисуется на промежуточной клетке (#96),
 		# а не там, где он уже стоит по состоянию.
 		var at := _draw_cell(unit)
+		# Плавный шаг: весь рисунок бойца сдвинут на долю пути к следующей клетке.
+		draw_set_transform(pan + _walk_offset.get(unit.id, Vector2.ZERO) * zoom, 0.0, Vector2(zoom, zoom))
 		# Отсечение по вьюпорту (item 5): бойца за краем экрана не рисуем — на 500×500 это
 		# главный выигрыш, ведь армия почти всегда шире окна.
 		if at.x < vx0 or at.x > vx1 or at.y < vy0 or at.y > vy1:
@@ -4501,7 +4582,9 @@ func _draw() -> void:
 
 	# Дроны — верхний слой (item 14): рисуются поверх машин и наземных юнитов.
 	for d: Dictionary in _drones_pending:
+		draw_set_transform(pan + _walk_offset.get(d["unit"].id, Vector2.ZERO) * zoom, 0.0, Vector2(zoom, zoom))
 		_draw_drone(d["unit"], d["at"])
+	draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
 
 	# Рамка выделения (#18): сетка-выровненный зелёный прямоугольник поверх поля.
 	if _box_dragging:
@@ -5582,7 +5665,7 @@ func _enter_ruler() -> void:
 	_deselect()
 	mode = Mode.RULER
 	_ruler_a = Vector2i(-1, -1)
-	_ruler_b = Vector2i(-1, -1)
+	_rulers.clear()
 	_ruler_hover = _pos_to_cell(get_global_mouse_position())
 	_refresh_ruler_button()
 	queue_redraw()
@@ -5590,7 +5673,7 @@ func _enter_ruler() -> void:
 func _exit_ruler() -> void:
 	mode = Mode.NONE
 	_ruler_a = Vector2i(-1, -1)
-	_ruler_b = Vector2i(-1, -1)
+	_rulers.clear()
 	_refresh_ruler_button()
 	queue_redraw()
 
@@ -5611,7 +5694,12 @@ func _draw_scope() -> int:
 
 func _refresh_ruler_button() -> void:
 	if _ruler_btn != null:
-		_ruler_btn.text = "Ruler: on" if mode == Mode.RULER else "Ruler"
+		if mode != Mode.RULER:
+			_ruler_btn.text = "Ruler"
+		else:
+			_ruler_btn.text = "Ruler: on (%d)" % _rulers.size() if not _rulers.is_empty() else "Ruler: on"
+		_ruler_btn.tooltip_text = "Click two cells to measure; every ruler stays until you leave. " \
+				+ "Backspace removes the last one, Esc or this button clears them all."
 
 func _enter_draw() -> void:
 	# Повторное нажатие ВЫКЛЮЧАЕТ рисование (item 14): режим теперь снимается кнопкой,
@@ -5776,19 +5864,22 @@ func _clear_my_drawings() -> void:
 ## Второй конец, пока он не закреплён, берётся из-под курсора — расстояние тянется за
 ## мышью, и прикинуть дистанцию можно не кликая вовсе.
 func _draw_ruler() -> void:
-	if mode != Mode.RULER or _ruler_a == Vector2i(-1, -1):
+	if mode != Mode.RULER:
 		return
-	var b := _ruler_b if _ruler_b != Vector2i(-1, -1) else _ruler_hover
-	if not state.grid.in_bounds(b):
-		return
-	var pa := _cell_origin(_ruler_a) + Vector2(CELL, CELL) * 0.5
+	for seg: Array in _rulers:
+		_draw_ruler_segment(seg[0], seg[1], Color(1.0, 0.86, 0.25))
+	# Недотянутая линейка — за курсором, чуть светлее закреплённых.
+	if _ruler_a != Vector2i(-1, -1) and state.grid.in_bounds(_ruler_hover):
+		_draw_ruler_segment(_ruler_a, _ruler_hover, Color(1.0, 0.95, 0.6))
+
+func _draw_ruler_segment(a: Vector2i, b: Vector2i, col: Color) -> void:
+	var pa := _cell_origin(a) + Vector2(CELL, CELL) * 0.5
 	var pb := _cell_origin(b) + Vector2(CELL, CELL) * 0.5
-	var col := Color(1.0, 0.86, 0.25)
 	draw_line(pa, pb, Color(0, 0, 0, 0.55), 5.0)
 	draw_line(pa, pb, col, 2.0)
 	draw_arc(pa, CELL * 0.28, 0.0, TAU, 20, col, 2.0)
 	draw_arc(pb, CELL * 0.28, 0.0, TAU, 20, col, 2.0)
-	var dist := Combat.distance(_ruler_a, b)
+	var dist := Combat.distance(a, b)
 	var label := "%d" % dist if dist == 1 else "%d cells" % dist
 	var font := ThemeDB.fallback_font
 	var mid := (pa + pb) * 0.5

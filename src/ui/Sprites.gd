@@ -53,7 +53,7 @@ const MANIFEST := [
 	["Terrain features (one per object on a tile)", [
 		"drone_station", "sandbags", "hedgehog", "dirt_pile", "trench",
 		"wall", "glass", "ldf", "corpse_wall", "airlock",
-		"dpmg", "dot", "wood_wall", "sandbag_wall", "hedgehog_sandbags", "mine",
+		"dpmg", "dot", "wood_wall", "sandbag_wall", "hedgehog_sandbags", "mine", "soil",
 	]],
 	["Soldiers (add a faction suffix for a faction-specific look, see below)", [
 		"anti_tank", "assault", "civilian", "commander", "drone",

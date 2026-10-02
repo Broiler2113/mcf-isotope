@@ -182,6 +182,10 @@ const FEATURE_HEDGEHOG := "hedgehog"       # противотанковый ёж
 const FEATURE_DIRT_PILE := "dirt_pile"     # куча земли, 0.5 м (§3.4/§3.7, копка окопа)
 const FEATURE_TRENCH := "trench"           # окоп, авто-укрытие выс. 1
 const FEATURE_WALL := "wall"               # стена, 2 м
+## Грунт (бункер): толща земли, в которой вырыт бункер. По правилам — ровно стена (высота,
+## взгляд, огонь, лазер, взрыв, лом); отличается только видом. Генератор кладёт его в
+## пустоту бункера вместо стены.
+const FEATURE_SOIL := "soil"
 const FEATURE_GLASS := "glass"             # стекло, 2 м (простреливается лазером как стена)
 ## ЛДФ (бывш. ЛДФ, item 43). Идентификатор НА ДИСКЕ намеренно остался "bru":
 ## по нему записаны все существующие карты, и переименование строки сделало бы их
@@ -231,6 +235,7 @@ const FEATURE_HEIGHT := {
 	# Окоп — ЯМА, а не укрытие над землёй: своей высоты не даёт (глубина ниже, §3.7).
 	FEATURE_TRENCH: 0.0,
 	FEATURE_WALL: 2.0,
+	FEATURE_SOIL: 2.0,
 	FEATURE_GLASS: 2.0,
 	FEATURE_LDF: 2.0,
 	FEATURE_CORPSE_WALL: 2.0,
@@ -254,6 +259,7 @@ const FEATURE_NAMES := {
 	FEATURE_DIRT_PILE: "Dirt Pile",
 	FEATURE_TRENCH: "Trench",
 	FEATURE_WALL: "Wall",
+	FEATURE_SOIL: "Soil",
 	FEATURE_GLASS: "Glass",
 	FEATURE_LDF: "LDF",
 	FEATURE_CORPSE_WALL: "Corpse Wall",
@@ -357,6 +363,7 @@ const FIRE_NEVER := 99            # заведомо недостижимо ше
 ## объекты-укрытия однотипны, и новый скин мешков не должен требовать правки таблицы.
 const FIRE_NEED_BY_FEATURE := {
 	FEATURE_WALL: FIRE_NEED_WALL,
+	FEATURE_SOIL: FIRE_NEED_WALL,
 	FEATURE_CORPSE_WALL: FIRE_NEED_WALL,
 	FEATURE_WOOD_WALL: FIRE_NEED_WOOD,
 	FEATURE_GLASS: FIRE_NEED_GLASS,
@@ -459,6 +466,7 @@ const LASER_COST := {
 	FEATURE_WOOD_WALL: 0,
 	FEATURE_AIRLOCK: 1,
 	FEATURE_WALL: 2,
+	FEATURE_SOIL: 2,
 	FEATURE_CORPSE_WALL: 3,   # трупы разлетаются вдоль траектории луча
 	FEATURE_LDF: 4,
 	FEATURE_SANDBAG_WALL: 2,

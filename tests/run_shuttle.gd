@@ -227,7 +227,7 @@ func _zero_g_keeps_passengers_seated() -> void:
 	r.resolve(VehicleBoardIntent.new(li.id, sh.id, 3))  # seat (5,5), the hull's corner
 	# enemy at (2,8): recoil away from it goes (+1,-1) — straight off the hull at (6,4),
 	# which must be empty for the old bug to show (the anti-tank spawns there).
-	st.grid.move_occupant(Vector2i(6, 4), Vector2i(6, 9))
+	st.grid.move_occupant(Vector2i(6, 4), Vector2i(6, 11))   # off every firing line used below
 	var foe := _u(st, Vector2i(12, 5))
 	st.grid.move_occupant(foe.coord, Vector2i(2, 8))
 	var res := r.resolve(ShootIntent.new(li.id, foe.id))

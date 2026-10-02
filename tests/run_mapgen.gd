@@ -215,7 +215,8 @@ func _check(overrides: Dictionary) -> void:
 		for y in m.height:
 			for x in m.width:
 				if (x == 0 or y == 0 or x == m.width - 1 or y == m.height - 1) \
-						and m.get_feature(Vector2i(x, y)) != MCF.FEATURE_WALL:
+						and m.get_feature(Vector2i(x, y)) != MCF.FEATURE_WALL \
+						and m.get_feature(Vector2i(x, y)) != MCF.FEATURE_SOIL:
 					open_edge += 1
 		ck(open_edge == 0, tag + ": the bunker's edge is solid rock (%d open cell(s))" % open_edge)
 	if o["symmetric"]:
@@ -255,8 +256,9 @@ func _symmetric(m: MapData, o: Dictionary, zones: Dictionary, tag: String) -> vo
 			ck(civ.has(p), tag + ": civilian at %s has no mirror at %s" % [c, p])
 
 ## Бункер — станция того же зерна, только под землёй: без космоса их рельеф совпадает до
-## байта (разнится лишь окружение — плитки металла и скалы, item 24), а с космосом у
-## бункера нет ни клетки вакуума.
+## байта (разнится лишь окружение — плитки металла и скалы, item 24, — и то, что пустота
+## бункера — грунт, а не стена; по правилам это одно и то же), а с космосом у бункера нет
+## ни клетки вакуума.
 func _bunker_is_an_underground_station() -> void:
 	for seed in [3, 77, 1234]:
 		for size in 3:
@@ -270,6 +272,9 @@ func _bunker_is_an_underground_station() -> void:
 			var bm := MapGen.generate(o)
 			ck(bm.env == "bunker", "a bunker map is tagged bunker (%s)" % bm.env)
 			bm.env = ""
+			for i in bm.feature_id.size():
+				if bm.feature_id[i] == MCF.FEATURE_SOIL:
+					bm.feature_id[i] = MCF.FEATURE_WALL
 			ck(station == JSON.stringify(bm.to_dict()),
 					"seed %d size %d: without space, bunker and station are the same map" % [seed, size])
 

@@ -112,8 +112,8 @@ static func encode(r: GameActionResolver, side: int, round_cap: int, tac: Dictio
 				if not (cell.feature_owner == side or r.mine_visible_to(side, c)):
 					fid = ""
 			var fi := FEATURES.find(fid)
-			if fi < 0 and fid == "" and cell.is_wall():
-				fi = 0   # стена рельефа без имени объекта — как обычная стена
+			if fi < 0 and (fid == MCF.FEATURE_SOIL or (fid == "" and cell.is_wall())):
+				fi = 0   # стена рельефа без имени объекта и грунт — как обычная стена
 			feat_a[i] = fi + 1
 			if fid != "" and cell.feature_owner >= 0:
 				feat_own[i] = rel_owner(r, side, cell.feature_owner) + 1

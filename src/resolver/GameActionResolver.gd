@@ -94,12 +94,17 @@ func can_redo() -> bool:
 func _turn_key() -> Vector2i:
 	return Vector2i(state.turns.round_number, state.turns.active_index)
 
+## События потока «кубиков», которые на деле — только анимация, без броска.
+const ANIMATION_ONLY_EVENTS := ["walk", "hold", "ap", "focus", "slot"]
+
 ## Действие, которое нельзя откатить (#81). Любой выстрел — открытая карта: кубики
 ## уже брошены и результат известен, откат превратился бы в переброс. Лазер марксманна
 ## кубиков не бросает, но тоже необратим — он уже снёс стену и убил всех на линии.
 func _is_irreversible(intent: Intent, result: ActionResult) -> bool:
-	if not result.dice_events.is_empty():
-		return true
+	for ev: Dictionary in result.dice_events:
+		# Переход по клеткам и прочие отметки анимации — не броски: шаг остаётся отменяемым.
+		if not ANIMATION_ONLY_EVENTS.has(String(ev.get("kind", ""))):
+			return true
 	return intent is ShootIntent or intent is DPMGFireIntent \
 			or intent is DroneDetonateIntent or intent is VehicleCannonIntent
 
@@ -493,6 +498,13 @@ func _fx_steps(res: ActionResult, unit: UnitInstance, origin: Vector2i, path: Ar
 		if c == stop:
 			break
 	_fx(res, {"fx": "steps", "unit": unit.id, "from": origin, "path": cut})
+	# Боец идёт по клеткам на экране, а не появляется в конце (batch soil-rulers): то же
+	# событие «walk», каким уже ходят жители и летают дроны, и «hold», который до начала
+	# анимации держит его рисунок в стартовой клетке.
+	if not cut.is_empty():
+		res.dice_events.append({"kind": "hold", "units": {unit.id: origin}})
+		res.dice_events.append({"kind": "walk", "unit": unit.id, "from": origin,
+				"path": cut, "soldier": true})
 
 ## Клетка волочимого объекта, если юнит и правда его тащит и объект ещё рядом (#34).
 func dragged_cell_of(unit: UnitInstance) -> Vector2i:
@@ -1064,8 +1076,8 @@ func _blast_destroy_terrain(c: Vector2i, res: ActionResult = null,
 	if cell.feature_durability > 0:
 		return
 	var destructible := [
-		MCF.FEATURE_WALL, MCF.FEATURE_GLASS, MCF.FEATURE_ARMOR_GLASS, MCF.FEATURE_AIRLOCK,
-		MCF.FEATURE_LDF, MCF.FEATURE_WOOD_WALL, MCF.FEATURE_CORPSE_WALL,
+		MCF.FEATURE_WALL, MCF.FEATURE_SOIL, MCF.FEATURE_GLASS, MCF.FEATURE_ARMOR_GLASS,
+		MCF.FEATURE_AIRLOCK, MCF.FEATURE_LDF, MCF.FEATURE_WOOD_WALL, MCF.FEATURE_CORPSE_WALL,
 		MCF.FEATURE_DRONE_STATION, MCF.FEATURE_DPMG,
 		MCF.FEATURE_SANDBAGS, MCF.FEATURE_SANDBAG_WALL, MCF.FEATURE_HEDGEHOG_SANDBAGS,
 		# Низкие укрытия сносит той же волной (#97): ёж и куча земли переживали взрыв,
@@ -1265,6 +1277,8 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i, aimed: String = "") ->
 	var killed_names: Array = []
 	# Докуда дотянулся луч — для следа на полу (item 10). Обновляется на каждой клетке.
 	var beam_last := shooter.coord
+	# Стены, которые луч разнёс, — под ними разбитый пол, как под гусеницей танка.
+	var blasted: Array[Vector2i] = []
 	# Трассу считает тот же код, что рисует предпросмотр (laser_path), — подсветка
 	# и настоящий выстрел не могут разойтись.
 	for rec: Dictionary in _laser_trace(shooter.coord, step):
@@ -1298,6 +1312,8 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i, aimed: String = "") ->
 				if cracks > 0:
 					cell.feature_durability -= cracks
 				if destroyed:
+					if cell.is_wall():
+						blasted.append(c)
 					cell.clear_feature()
 					result.log("Beam destroys %s at (%d, %d)" % [
 						MCF.FEATURE_NAMES.get(was, was), c.x, c.y])
@@ -1312,7 +1328,13 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i, aimed: String = "") ->
 			"terrain":
 				if destroyed:
 					cell.cover_height = 0.0
+					blasted.append(c)
 					result.log("Beam blows the wall at (%d, %d) apart" % [c.x, c.y])
+
+	# Разбитый пол там, где луч снёс стену (та же метка, что кладёт переезд танка): без
+	# эпицентра — луч не взрывается, он прожигает насквозь.
+	if not blasted.is_empty():
+		_fx(result, {"fx": "debris", "at": NOWHERE, "cells": blasted})
 
 	# След луча на полу от стрелка до точки остановки (item 10) — чистая косметика.
 	_fx(result, {"fx": "laser", "from": [shooter.coord.x, shooter.coord.y],
@@ -1712,6 +1734,28 @@ func hit_need_for(shooter: UnitInstance, target: UnitInstance, mods: Array = [])
 		need += MCF.FIRE_SHOOT_PENALTY
 		mods.append({"label": "Fire on the line", "delta": MCF.FIRE_SHOOT_PENALTY})
 	return clampi(need, 1, 7)
+
+## Сколько выбросить, целясь в клетку (для подписи прицела): та же формула, что бросит
+## сам выстрел этого стрелка. 0 — броска нет (лазер, струя, ПТ себе под ноги),
+## 7 — не попасть. target — юнит в клетке, если целятся в него.
+func aim_need(shooter: UnitInstance, cell: Vector2i, target: UnitInstance = null) -> int:
+	if shooter == null:
+		return 7
+	match shooter.stats.special_ability_id:
+		MCF.ABILITY_MARKSMAN, MCF.ABILITY_FLAMETHROWER:
+			return 0
+		MCF.ABILITY_ANTI_TANK:
+			if cell == shooter.coord:
+				return 0
+			return Combat.hit_number(Combat.distance(shooter.coord, cell), shooter.fire_range())
+		MCF.ABILITY_ASSAULT:
+			return Combat.hit_number(Combat.distance(shooter.coord, cell), shooter.fire_range())
+	if target == null:
+		# Окно бьётся без броска на попадание (_resolve_shoot_window).
+		if state.grid.in_bounds(cell) and MCF.is_glass(state.grid.cell(cell).feature_id):
+			return 0
+		return Combat.hit_number(Combat.distance(shooter.coord, cell), shooter.fire_range())
+	return hit_need_for(shooter, target)
 
 func _shield_blocks_shot(shooter: UnitInstance, target: UnitInstance) -> bool:
 	if not _is_shield(target):
@@ -2391,7 +2435,7 @@ func bru_cells_connected(cells: Array) -> bool:
 
 ## Ломать может шахтёр (стены/стёкла/ЛДФ) и инженер (свои постройки, сетка).
 const BREAKABLE := [
-	MCF.FEATURE_WALL, MCF.FEATURE_GLASS, MCF.FEATURE_AIRLOCK, MCF.FEATURE_LDF,
+	MCF.FEATURE_WALL, MCF.FEATURE_SOIL, MCF.FEATURE_GLASS, MCF.FEATURE_AIRLOCK, MCF.FEATURE_LDF,
 	MCF.FEATURE_CORPSE_WALL, MCF.FEATURE_DOT, MCF.FEATURE_DOT_OPEN,
 	MCF.FEATURE_SANDBAG_WALL, MCF.FEATURE_HEDGEHOG_SANDBAGS, MCF.FEATURE_HEDGEHOG,
 ]
@@ -3045,8 +3089,8 @@ func advance_fire(owner: int = -1, res: ActionResult = null) -> void:
 ## Постройки, которые огонь уничтожает вместе с клеткой (#53, #83). ЛДФ здесь нет
 ## намеренно: несгораемая секция вообще не загорается (_fire_blocked).
 const BURNS_AWAY := [
-	MCF.FEATURE_WOOD_WALL, MCF.FEATURE_WALL, MCF.FEATURE_GLASS, MCF.FEATURE_ARMOR_GLASS,
-	MCF.FEATURE_AIRLOCK,
+	MCF.FEATURE_WOOD_WALL, MCF.FEATURE_WALL, MCF.FEATURE_SOIL, MCF.FEATURE_GLASS,
+	MCF.FEATURE_ARMOR_GLASS, MCF.FEATURE_AIRLOCK,
 ]
 
 ## Порог d6, с которого клетка загорается от СОСЕДНЕГО пламени (#14/#31). Шанс
@@ -4914,6 +4958,14 @@ func _drone_wall_exit(drone: UnitInstance) -> Dictionary:
 func drone_flight_cells(drone: UnitInstance) -> Array:
 	return _drone_reach(drone).keys()
 
+## Клетки полёта с ценой (клетка -> сколько клеток подлёта уйдёт) — для зон хода на экране.
+func drone_flight_costs(drone: UnitInstance) -> Dictionary:
+	return _drone_reach(drone)
+
+## Потолок одного подлёта: остаток прошлого или полный подлёт за ОД.
+func drone_flight_budget(drone: UnitInstance) -> int:
+	return drone.move_credit if drone.move_credit > 0 else MCF.DRONE_FLIGHT_RANGE
+
 ## С какой клетки дрон зашёл на стену (#96) — туда же он потом и вернётся. Берём
 ## предшественника на кратчайшем маршруте, ничьи разрешаем по координатам: иначе хост
 ## и клиент записали бы РАЗНЫЕ пути отхода. (-1,-1) — зайти на стену неоткуда.
@@ -6196,6 +6248,12 @@ func can_shoot(shooter: UnitInstance, target: UnitInstance) -> String:
 	if los_blocked(shooter.coord, target.coord, not _is_anti_tank(shooter), true,
 			not _is_anti_tank(shooter)):
 		return "Firing line is blocked"
+	# Стоящий за чужой спиной — не цель (batch soil-rulers): пуля и заряд ПТ всё равно
+	# достались бы первому на линии (см. перехват в _resolve_shoot), а прицел, который
+	# показывает заднего, обещал выстрел, которого в игре нет. Целиться — в того, кто ближе.
+	if first_unit_on_line(shooter.coord, target.coord,
+			shooter if not friendly_fire_enabled else null) != null:
+		return "Another unit is in the way"
 	if Combat.hit_number(dist, shooter.fire_range()) >= 7:
 		return "Too far"
 	return ""

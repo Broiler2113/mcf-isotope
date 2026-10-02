@@ -38,6 +38,7 @@ const TERRAIN_BRUSHES := [
 const OBJECT_BRUSHES := [
 	{"id": MCF.FEATURE_WALL, "label": "Wall"},
 	{"id": MCF.FEATURE_WOOD_WALL, "label": "Wooden Wall"},
+	{"id": MCF.FEATURE_SOIL, "label": "Soil"},
 	{"id": MCF.FEATURE_GLASS, "label": "Glass"},
 	{"id": MCF.FEATURE_ARMOR_WALL, "label": "Armored Wall"},
 	{"id": MCF.FEATURE_ARMOR_GLASS, "label": "Armored Glass"},
@@ -603,7 +604,7 @@ func _feature_tag(fid: String) -> String:
 		MCF.FEATURE_WALL: "##", MCF.FEATURE_GLASS: "▢", MCF.FEATURE_SANDBAGS: "SB",
 		MCF.FEATURE_HEDGEHOG: "hdg", MCF.FEATURE_TRENCH: "tr", MCF.FEATURE_LDF: "LDF",
 		MCF.FEATURE_AIRLOCK: "AL", MCF.FEATURE_DRONE_STATION: "ST",
-		MCF.FEATURE_WOOD_WALL: "WD",
+		MCF.FEATURE_WOOD_WALL: "WD", MCF.FEATURE_SOIL: "░░",
 		MCF.FEATURE_DOT: "PBX", MCF.FEATURE_DOT_OPEN: "PBX+",
 		MCF.FEATURE_ARMOR_WALL: "A##", MCF.FEATURE_ARMOR_GLASS: "A▢",
 	}.get(fid, "?")

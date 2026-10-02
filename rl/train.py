@@ -1119,11 +1119,15 @@ class Trainer:
                         # An env dying mid-evaluation costs this evaluation, not the run.
                         print(f"[train] {e} during eval; restarting envs, eval skipped", flush=True)
                         self.envs.rebuild()
-                if self.over_memory_budget() or self.under_disk_floor():
-                    break
+                # The operator's stop is checked FIRST. Checked after the resource
+                # ceilings, a stop requested while the disk happened to sit under its floor
+                # was recorded as stop_reason "disk" — and the supervisor, which resumes
+                # resource stops by design, started the run again (town-8, 2026-10-02).
                 if os.path.exists(stop_flag):
                     os.remove(stop_flag)
                     print("[train] STOP flag found", flush=True)
+                    break
+                if self.over_memory_budget() or self.under_disk_floor():
                     break
         except (KeyboardInterrupt, SystemExit):
             raise                        # an asked-for stop, not a crash

@@ -267,9 +267,11 @@ func _ground(c: Vector2i, floor_type: int = MCF.FLOOR_NORMAL) -> void:
 func _put(c: Vector2i, feature: String) -> void:
 	m.set_cell(c, m.get_floor(c), float(MCF.FEATURE_HEIGHT.get(feature, 0.0)), false, feature)
 
-## Пустота за постройками: космос, а без космоса (и всегда в бункере) — сплошная скала.
+## Пустота за постройками: космос, а без космоса — сплошная скала; бункер вырыт в грунте.
 func _void(c: Vector2i) -> void:
-	if bool(opt["space"]) and _style != Style.BUNKER:
+	if _style == Style.BUNKER:
+		_put(c, MCF.FEATURE_SOIL)
+	elif bool(opt["space"]):
 		_space(c)
 	else:
 		_put(c, MCF.FEATURE_WALL)

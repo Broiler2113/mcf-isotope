@@ -57,6 +57,7 @@ Yours wins. Changes are picked up when a battle or the map editor opens.
   sandbag_wall.png
   hedgehog_sandbags.png
   mine.png
+  soil.png
 
 -- Soldiers (add a faction suffix for a faction-specific look, see below) --
   anti_tank.png
