@@ -855,7 +855,7 @@ func _best_break(state: GameState, r: GameActionResolver, u: UnitInstance) -> Di
 ## Подбор трупа (#40): труп либо загораживает дорогу к врагу (клетка с ним ближе по
 ## геополю, но занята), либо враг уже рядом — тогда труп нужен как щит (+1 к защите).
 func _best_corpse_grab(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
-	if u.carried_corpses >= CORPSE_CARRY_MAX:
+	if u.carried_corpses >= CORPSE_CARRY_MAX or u.borg_id != -1:
 		return {}
 	var enemy := _nearest_enemy(state, u.coord, false, r)
 	var enemy_near := enemy != null \
