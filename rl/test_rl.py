@@ -248,28 +248,109 @@ def test_pool_keeps_a_running_games_opponent():
 
 
 def test_old_checkpoint_grows():
-    """A checkpoint from before the drone candidate columns still loads (and trains on):
-    the new columns start at zero, so its scores are unchanged."""
+    """A checkpoint from before the tactical env (72 grid channels, no tactical/drone
+    candidate columns, no residual trunk) still loads, optimizer state included, and
+    scores every candidate exactly as it did: new inputs start at zero weight and the
+    residual blocks start as the identity."""
     import torch
+    import torch.nn as nn
     from features import CAND_DIM, CANVAS, FLAT_DIM, N_CHANNELS
     from model import PolicyNet, load_compat
     torch.manual_seed(0)
-    new = PolicyNet()
-    sd = new.state_dict()
-    w = sd["cand.0.weight"]
-    old_sd = dict(sd)
-    old_sd["cand.0.weight"] = torch.cat([w[:, :CAND_DIM - 2], w[:, CAND_DIM:]], dim=1)
+    old_ch, old_cand = 72, CAND_DIM - 9
+
+    class OldNet(PolicyNet):
+        """The network as it was: a narrower first conv and candidate layer, no trunk."""
+        def __init__(self):
+            super().__init__()
+            self.conv[0] = nn.Conv2d(old_ch, self.fmap, 3, padding=1)
+            first = self.cand[0]
+            self.cand[0] = nn.Linear(first.in_features - (CAND_DIM - old_cand), first.out_features)
+            del self.res
+            self.res = nn.ModuleList()
+
+    old = OldNet()
+    opt_old = torch.optim.Adam(old.parameters(), lr=1e-3)
+    grid = torch.rand(1, N_CHANNELS, CANVAS, CANVAS)
+    flat = torch.rand(1, FLAT_DIM)
+    cand = torch.rand(1, 4, CAND_DIM)
+    cells = torch.zeros(1, 4, 2, dtype=torch.long)
+    mask = torch.ones(1, 4, dtype=torch.bool)
+    # one optimizer step so Adam has moments to grow
+    d = old.cand[0].in_features - old_cand
+    old_cand_in = torch.cat([cand[..., :old_cand]], dim=-1)
+    loss = old(grid[:, :old_ch], flat, old_cand_in, cells, mask)[0].sum()
+    loss.backward()
+    opt_old.step()
     net = PolicyNet()
-    load_compat(net, old_sd)
-    args = (torch.rand(1, N_CHANNELS, CANVAS, CANVAS), torch.rand(1, FLAT_DIM),
-            torch.rand(1, 4, CAND_DIM), torch.zeros(1, 4, 2, dtype=torch.long),
-            torch.ones(1, 4, dtype=torch.bool))
-    args[2][..., CAND_DIM - 2:] = 0.0
+    opt = torch.optim.Adam(net.parameters(), lr=1e-3)
+    load_compat(net, old.state_dict(), opt, opt_old.state_dict())
+    g2 = grid.clone(); g2[:, old_ch:] = 0.0
+    c2 = cand.clone(); c2[..., old_cand:] = 0.0
     with torch.no_grad():
-        a = net(*args)[0]
-        new.cand[0].weight[:, CAND_DIM - 2:CAND_DIM] = 0.0
-        b = new(*args)[0]
-    assert torch.allclose(a, b, atol=1e-5)
+        a = net(g2, flat, c2, cells, mask)
+        b = old(grid[:, :old_ch], flat, cand[..., :old_cand], cells, mask)
+    assert torch.allclose(a[0], b[0], atol=1e-5) and torch.allclose(a[1], b[1], atol=1e-5)
+    # and it trains: a step through the grown optimizer runs and moves the trunk
+    net(grid, flat, cand, cells, mask)[0].sum().backward()
+    opt.step()
+    assert any(p.abs().sum() > 0 for p in net.res[0][2].parameters())
+
+
+def test_tactical_trainer_knobs():
+    """League picks harder pool members more often, evaluation-only HARD is untouched,
+    the per-action bonus decays from where the config was applied, map weights and
+    generated maps are accepted."""
+    import random
+    import yaml
+    from mcf_env import HARD
+    from train import Trainer, load_config
+    d = tempfile.mkdtemp()
+    arena = os.path.join(os.path.dirname(os.path.abspath(__file__)), "maps", "arena_34x26.json")
+    path = os.path.join(d, "t.yaml")
+    with open(path, "w") as f:
+        yaml.safe_dump({"maps": [arena, "gen:any:0:8:1"], "map_weights": [0, 1], "phase": "league",
+                        "pool_ai_fraction": 0.0, "opponent_styles": [0, 0, 0, 1],
+                        "shaping_decay_updates": 100, "shaping_floor": 0.2,
+                        "shaping_decay_start": 50}, f)
+    cfg = load_config(path)
+    assert cfg["maps"][1] == "gen:any:0:8:1"
+    t = Trainer.__new__(Trainer)
+    t.cfg, t.rng, t.update = cfg, random.Random(0), 100
+    t.pfsp = {"self": [100, 95], "strong": [100, 5]}
+    t.pool_checkpoints = lambda: ["strong"]
+    t.pool_net = lambda p: None
+    picks = [t.pick_opponent()[1] for _ in range(400)]
+    assert picks.count("pool:strong") > 3 * picks.count("pool:self"), picks.count("pool:strong")
+    assert t.pick_style() == 3
+    assert abs(t.shaping_scale() - 0.6) < 1e-9            # halfway from 1.0 to the 0.2 floor
+    t.update = 1000
+    assert t.shaping_scale() == 0.2
+    assert {t.pick_map() for _ in range(50)} == {1}
+    t.cfg = dict(cfg, phase="A")
+    assert t.pick_opponent() == (HARD, "ai:hard")          # phase A is still HARD only
+
+
+def test_tactical_features():
+    """The tactical wire fields land in the new grid layers and candidate columns."""
+    import numpy as np
+    from features import (C_FCOVER, C_FNEXT, C_LASTSEEN, C_THREAT, CANVAS, F_PRED, F_TAC,
+                          candidate_rows, grid_tensor)
+    w, h = 4, 3
+    z = [0] * (w * h)
+    obs = {"w": w, "h": h, "floor": z, "feat": z, "feat_own": z, "cover": z, "fire": z,
+           "corpse": z, "dirt": z, "fog": [2] * (w * h), "veh": z, "units": [], "vehicles": [],
+           "threat": [0] * 5 + [12] + [0] * 6, "fcover": [24] + [0] * 11,
+           "fnext": [0] * 11 + [6], "ereach": [4] * 12, "lastseen": [0, 50] + [0] * 10}
+    g = grid_tensor(obs)
+    ox, oy = (CANVAS - w) // 2, (CANVAS - h) // 2
+    assert abs(g[C_THREAT, oy + 1, ox + 1] - 0.5) < 1e-6 and g[C_FCOVER, oy, ox] == 1.0
+    assert abs(g[C_FNEXT, oy + 2, ox + 3] - 0.25) < 1e-6 and g[C_LASTSEEN, oy, ox + 1] == 0.5
+    legal = [{"i": {"t": "move"}, "ax": 0, "ay": 0, "tx": 1, "ty": 1, "tt": -1, "at": 0,
+              "th": 3.0, "fc": 6.0, "cv": 1.0, "apc": 2, "tn": 1.5, "er": 3}]
+    rows, _ = candidate_rows(obs, legal)
+    assert np.allclose(rows[0, F_TAC:F_TAC + 5], [0.5, 1.0, 0.5, 2 / 3, 1.0])
+    assert np.allclose(rows[0, F_PRED:F_PRED + 2], [0.25, 0.5])
 
 
 if __name__ == "__main__":

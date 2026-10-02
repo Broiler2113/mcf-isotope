@@ -19,6 +19,7 @@ from features import CAND_DIM, CANVAS, FLAT_DIM, N_CHANNELS
 
 FMAP = 32
 EMB = 256
+RES_DILATIONS = (2, 4, 8, 16)
 
 
 class PolicyNet(nn.Module):
@@ -39,9 +40,24 @@ class PolicyNet(nn.Module):
             nn.Linear(128, 1),
         )
         self.value = nn.Sequential(nn.Linear(emb, 128), nn.ReLU(), nn.Linear(128, 1))
+        # Dilated residual trunk (tactical env). Three 3x3 convs see a 7x7 window, which is
+        # one rifle's reach at best: whether a cell is flanked, covered or cut off depends on
+        # what stands 20 cells away. Dilations 2/4/8/16 widen the field to ~67 cells. Each
+        # block's last conv starts at zero, so a block is the identity until it learns
+        # something — an older checkpoint loads and plays exactly as it did.
+        # Registered LAST so the old parameters keep their optimizer indices.
+        self.res = nn.ModuleList()
+        for d in RES_DILATIONS:
+            blk = nn.Sequential(nn.Conv2d(fmap, fmap, 3, padding=d, dilation=d), nn.ReLU(),
+                                nn.Conv2d(fmap, fmap, 3, padding=d, dilation=d))
+            nn.init.zeros_(blk[2].weight)
+            nn.init.zeros_(blk[2].bias)
+            self.res.append(blk)
 
     def embed(self, grid: torch.Tensor, flat: torch.Tensor):
         fm = self.conv(grid)                                   # B, F, 64, 64
+        for blk in self.res:
+            fm = F.relu(fm + blk(fm))
         pooled = self.pool(fm).flatten(1)                      # B, F*16
         s = self.state(torch.cat([pooled, self.flat(flat)], dim=1))
         return fm, s
@@ -91,30 +107,59 @@ def _grow_cand(w: torch.Tensor, want_in: int) -> torch.Tensor:
     return torch.cat([w[:, :old_cand], pad, w[:, old_cand:]], dim=1)
 
 
+def _grow_in(w: torch.Tensor, want_in: int) -> torch.Tensor:
+    """conv.0.weight (or its Adam moment) from a checkpoint with fewer grid channels: the
+    new channels are appended, so their zero columns go at the end."""
+    pad = torch.zeros(w.shape[0], want_in - w.shape[1], *w.shape[2:], dtype=w.dtype, device=w.device)
+    return torch.cat([w, pad], dim=1)
+
+
+GROWERS = {"cand.0.weight": _grow_cand, "conv.0.weight": _grow_in}
+
+
 def load_compat(net: "PolicyNet", sd: dict, opt: torch.optim.Optimizer | None = None,
                 opt_sd: dict | None = None) -> None:
-    """load_state_dict that accepts checkpoints made before candidate features were added
-    (e.g. the drone leash / drone-vs-vehicle columns). Training resumes from them instead
-    of starting over. Adam's moments for the grown layer are grown the same way."""
-    key = "cand.0.weight"
-    want = net.state_dict()[key].shape
-    grown = key in sd and sd[key].shape != want
-    if grown:
-        sd = dict(sd)
-        sd[key] = _grow_cand(sd[key], want[1])
+    """load_state_dict that accepts checkpoints from before the network grew:
+    - fewer candidate features (drone, tactical columns) -> zero columns in cand.0;
+    - fewer grid channels (threat / fire-cover layers) -> zero columns in conv.0;
+    - no residual trunk -> the freshly built blocks stay at identity.
+    Training resumes from such a checkpoint instead of starting over; Adam's moments
+    are grown the same way and the new parameters start with no optimizer state."""
+    want_sd = net.state_dict()
+    sd = dict(sd)
+    grown = []
+    for key, grow in GROWERS.items():
+        if key in sd and sd[key].shape != want_sd[key].shape:
+            sd[key] = grow(sd[key], want_sd[key].shape[1])
+            grown.append(key)
+    missing = [k for k in want_sd if k not in sd]
+    unexpected = [k for k in sd if k not in want_sd]
+    bad = [k for k in missing if not k.startswith("res.")] + unexpected
+    if bad:
+        raise RuntimeError(f"checkpoint does not fit this network: {bad[:6]}")
+    for k in missing:
+        sd[k] = want_sd[k]
     net.load_state_dict(sd)
     if opt is None or opt_sd is None:
         return
-    if grown:
-        idx = [n for n, _ in net.named_parameters()].index(key)
-        opt_sd = {"state": dict(opt_sd["state"]), "param_groups": opt_sd["param_groups"]}
+    names = [n for n, _ in net.named_parameters()]
+    opt_sd = {"state": dict(opt_sd["state"]),
+              "param_groups": [dict(g) for g in opt_sd["param_groups"]]}
+    for key in grown:
+        idx = names.index(key)
         st = opt_sd["state"].get(idx)
         if st is not None:
             st = dict(st)
             for m in ("exp_avg", "exp_avg_sq"):
-                if m in st and st[m].shape != want:
-                    st[m] = _grow_cand(st[m], want[1])
+                if m in st and st[m].shape != want_sd[key].shape:
+                    st[m] = GROWERS[key](st[m], want_sd[key].shape[1])
             opt_sd["state"][idx] = st
+    have = sum(len(g["params"]) for g in opt_sd["param_groups"])
+    if have < len(names):
+        # New parameters (the residual trunk) are registered last: give them the next
+        # indices in the last group, with no Adam state yet.
+        opt_sd["param_groups"][-1]["params"] = list(opt_sd["param_groups"][-1]["params"]) \
+            + list(range(have, len(names)))
     opt.load_state_dict(opt_sd)
 
 

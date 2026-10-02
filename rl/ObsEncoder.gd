@@ -52,7 +52,32 @@ static func army_value(state: GameState, side: int) -> float:
 		v += float(VehicleDB.buy_cost(veh.type_id)) * float(veh.component(MCF.COMP_HULL)) / float(cap)
 	return v
 
-static func encode(r: GameActionResolver, side: int, round_cap: int) -> Dictionary:
+## Тактический контекст точки решения (RL tactical env): карта огня врага по клеткам,
+## своё огневое покрытие и кэши ходов. Считается ОДИН раз на ответ и отдаётся и в encode,
+## и в describe каждого кандидата. Туман честен: fire_cover(…, true) видит только тех
+## врагов, что видны стороне.
+## Прогноз (enemy_forecast) — что видимые враги смогут следующим ходом: куда дойдут и куда
+## достанут огнём. memory — EnemyMemory этой стороны (null — без памяти о скрытых врагах).
+static func tactics(r: GameActionResolver, side: int, memory: RefCounted = null) -> Dictionary:
+	var fc: Dictionary = r.enemy_forecast(side)
+	return {"r": r, "side": side, "w": r.state.grid.width,
+			"threat": r.fire_cover(side, true), "cover": r.fire_cover(side, false),
+			"fnext": fc["fire"], "ereach": fc["reach"],
+			"lastseen": memory.layer(r, side) if memory != null else PackedInt32Array(),
+			"reach": {}, "vt": {}}
+
+## Карта огня в провод: целыми четвертями ожидаемого попадания (JSON легче и точности
+## хватает с запасом), с потолком — десять стволов на клетку и так «смертельно».
+static func _quarters(a: PackedFloat32Array) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	out.resize(a.size())
+	for i in a.size():
+		out[i] = mini(int(round(a[i] * 4.0)), 40)
+	return out
+
+static func encode(r: GameActionResolver, side: int, round_cap: int, tac: Dictionary = {}) -> Dictionary:
+	if tac.is_empty():
+		tac = tactics(r, side)
 	var state := r.state
 	var grid := state.grid
 	var w := grid.width
@@ -166,11 +191,14 @@ static func encode(r: GameActionResolver, side: int, round_cap: int) -> Dictiona
 		"fog_mode": r.fog_mode if r.fog_enabled else MCF.Fog.OFF,
 		"my_value": my_value, "enemy_value": enemy_value,
 		"combat_started": 1 if state.combat_started else 0,
+		"threat": _quarters(tac["threat"]), "fcover": _quarters(tac["cover"]),
+		"fnext": _quarters(tac["fnext"]), "ereach": _quarters(tac["ereach"]),
+		"lastseen": tac["lastseen"],
 	}
 
 ## Подпись кандидата для сети: провод IntentCodec плюс координаты актёра/цели, чтобы
 ## Python не восстанавливал их по id.
-static func describe(state: GameState, intent: Intent) -> Dictionary:
+static func describe(state: GameState, intent: Intent, tac: Dictionary = {}) -> Dictionary:
 	var d := {"i": IntentCodec.encode(intent), "ax": -1, "ay": -1, "tx": -1, "ty": -1, "tt": -1}
 	var actor := state.get_unit(intent.actor_id)
 	if actor != null:
@@ -245,4 +273,42 @@ static func describe(state: GameState, intent: Intent) -> Dictionary:
 						and not state.roster.are_allies(actor.owner, v.owner):
 					hit += 1
 			d["vh"] = hit
+	if not tac.is_empty() and state.grid.in_bounds(tgt):
+		_describe_tactics(state, intent, tgt, d, tac)
 	return d
+
+## Тактика кандидата: огонь врага и своё покрытие в клетке цели, укрытие там же и, для хода,
+## сколько ОД он спишет (1-3, зоны move_tier_budgets). Ровно то, что отличает «выйти под
+## пулемёт» от «перебежать за мешки».
+static func _describe_tactics(state: GameState, intent: Intent, tgt: Vector2i, d: Dictionary,
+		tac: Dictionary) -> void:
+	var r: GameActionResolver = tac["r"]
+	var i: int = tgt.y * int(tac["w"]) + tgt.x
+	d["th"] = snappedf(tac["threat"][i], 0.01)
+	d["tn"] = snappedf(tac["fnext"][i], 0.01)
+	d["er"] = int(tac["ereach"][i])
+	d["fc"] = snappedf(tac["cover"][i], 0.01)
+	d["cv"] = state.grid.cell(tgt).cover_height
+	if intent is MoveIntent:
+		var u := state.get_unit(intent.actor_id)
+		if u == null:
+			return
+		var memo: Dictionary = tac["reach"]
+		if not memo.has(u.id):
+			var tiers := r.move_tier_budgets(u)
+			memo[u.id] = [tiers, r.reachable_for(u, tiers[tiers.size() - 1]).cost]
+		var cost: Dictionary = memo[u.id][1]
+		if cost.has(tgt):
+			var k := GameActionResolver.tier_of(memo[u.id][0], int(cost[tgt]))
+			d["apc"] = k + (0 if u.move_credit > 0 else 1)
+	elif intent is VehicleMoveIntent:
+		var veh := state.get_vehicle(intent.actor_id)
+		if veh == null:
+			return
+		var vmemo: Dictionary = tac["vt"]
+		if not vmemo.has(veh.id):
+			vmemo[veh.id] = [r.vehicle_tier_budgets(veh), r.vehicle_move_targets_all(veh)]
+		var all: Dictionary = vmemo[veh.id][1]
+		if all.has(tgt) and not vmemo[veh.id][0].is_empty():
+			var vk := GameActionResolver.tier_of(vmemo[veh.id][0], int(all[tgt]["cost"]))
+			d["apc"] = vk + (0 if r.vehicle_move_credit(veh) > 0 else 1)

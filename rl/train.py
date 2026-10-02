@@ -96,7 +96,48 @@ DEFAULTS = dict(
     # checkpoint with it.
     disk_floor_mb=1536,
     rollout_budget_mb=0,      # >0: end a rollout early once the buffer reaches this
+    # --- tactical env (config/tactical.yaml); every default keeps the old behaviour ---
+    # Per-map sampling weights, same order as `maps`. Empty = the old fixed rotation.
+    map_weights=[],
+    # Chance that a fixed map's infantry types are swapped (mirrored for both sides), so the
+    # policy meets every unit type instead of the map's one composition.
+    army_shuffle=0.0,
+    # The per-action bonuses (R_SHOT, R_VEHICLE) taught a novice that shooting and driving
+    # pay at all. A strong policy should play for the outcome: the bonus scale falls
+    # linearly from 1 to shaping_floor over shaping_decay_updates updates (0 = never).
+    shaping_decay_updates=0, shaping_floor=0.0, shaping_decay_start=0,
+    # Weight of the position potential (env_server._phi): fire concentrated on visible
+    # enemies minus enemy fire on us. Potential-based, so the optimal policy is unchanged.
+    potential_coef=0.0,
+    # HARD's play styles in TRAINING games vs the scripted AI: weights for
+    # [standard, rush, turtle, flank]. Evaluation always plays standard HARD.
+    opponent_styles=[1.0, 0.0, 0.0, 0.0],
+    # Prioritised fictitious self-play (phase "league"): a pool member that beats us more
+    # often is picked more often — weight (1 - our win rate vs it)^pfsp_power + pfsp_floor.
+    pfsp_power=2.0, pfsp_floor=0.05,
+    # Skill drills evaluated vs standard HARD at every evaluation, `drill_eval_games` each,
+    # on top of the main eval. Read per drill on the dashboard (eval/drill_<map>_winrate).
+    drill_eval_maps=[], drill_eval_games=2,
+    # Share of TRAINING games played with fog off (full information). Human players often
+    # play without fog, and HARD sees through it regardless; a policy that only ever played
+    # in fog never learns to read a whole board. The rest use `fog`.
+    fog_off_share=0.0,
+    # Extra evaluation games vs HARD with fog OFF on eval_maps (eval/*_hard_nofog). The main
+    # evaluation keeps `fog`, so its history stays comparable.
+    eval_nofog_games=0,
 )
+
+STYLE_NAMES = ["standard", "rush", "turtle", "flank"]
+
+
+def map_name(path: str) -> str:
+    """Display/tag name of a map: the file name, or the generator spec with ':' made
+    tag-safe ("gen:any:0:12:1" -> "gen_any_0_12_1")."""
+    return os.path.basename(path).replace(":", "_")
+
+
+def is_generated(m: str) -> bool:
+    return str(m).startswith("gen:")
 
 
 def load_config(path: str | None) -> dict:
@@ -110,13 +151,18 @@ def load_config(path: str | None) -> dict:
     # resolves it against the project root instead; the evaluations were correct by luck,
     # not by construction, and the same config would have failed the instant anything on
     # the Python side tried to open the file.
-    for key in ("maps", "eval_maps"):
+    for key in ("maps", "eval_maps", "drill_eval_maps"):
         if not cfg.get(key):
             continue
-        cfg[key] = [m if os.path.isabs(m) else os.path.join(PROJECT, m) for m in cfg[key]]
+        # "gen:<style>:<size>:<units>:<tanks>" is a map the env builds per episode (MapGen);
+        # there is no file to resolve or check.
+        cfg[key] = [m if is_generated(m) or os.path.isabs(m) else os.path.join(PROJECT, m)
+                    for m in cfg[key]]
         for m in cfg[key]:
-            if not os.path.exists(m):
+            if not is_generated(m) and not os.path.exists(m):
                 sys.exit(f"map not found ({key}): {m}")
+    if cfg.get("map_weights") and len(cfg["map_weights"]) != len(cfg["maps"]):
+        sys.exit("map_weights must have one weight per map")
     return with_defaults(cfg)
 
 
@@ -290,6 +336,9 @@ class Trainer:
         # PolicyNet per pool member is a few MB, and an unbounded dict grew without end.
         self.pool_cache: OrderedDict[str, PolicyNet] = OrderedDict()
         self.episode_seed = self.cfg["seed"] * 1000
+        self._tac_kinds: dict[str, set] = {}
+        # League bookkeeping: pool member -> [games, trainee wins] (phase "league").
+        self.pfsp: dict[str, list[int]] = {}
         self._last_status = 0.0
         self.last_eval: dict = {}
         # Live, shrinkable copy of the configured cap, plus the memory the process costs
@@ -321,7 +370,7 @@ class Trainer:
                     matches_done=self.matches_done, map_idx=self.map_idx,
                     parent=self.parent, rng=self.rng.getstate(),
                     episode_seed=self.episode_seed, branch=os.path.basename(self.run_dir),
-                    saved_at=time.time())
+                    pfsp=self.pfsp, saved_at=time.time())
 
     def save(self, tag: str | None = None) -> str:
         path = os.path.join(self.run_dir, f"ckpt_{self.global_step:09d}.pt" if tag is None else tag)
@@ -412,6 +461,7 @@ class Trainer:
         self.parent = ck.get("parent")
         self.rng.setstate(ck["rng"])
         self.episode_seed = ck.get("episode_seed", self.episode_seed)
+        self.pfsp = dict(ck.get("pfsp") or {})
         for g in self.opt.param_groups:
             g["lr"] = self.cfg["lr"]
         self.sync_act_net()
@@ -447,15 +497,49 @@ class Trainer:
         return self.pool_cache[path]
 
     def pick_opponent(self) -> tuple[int, str]:
-        """(env opponent code, label). Phase A: the scripted AI. Phase B: the pool."""
+        """(env opponent code, label). Phase A: the scripted AI. Phase B: the pool.
+        Phase "league": the pool, prioritised toward members that beat us (PFSP)."""
         if self.cfg["phase"] == "A" or self.rng.random() < self.cfg["pool_ai_fraction"]:
             return HARD, "ai:" + SCRIPTED
-        member = self.rng.choice(["self"] + self.pool_checkpoints())
+        cands = ["self"] + self.pool_checkpoints()
+        if self.cfg["phase"] == "league":
+            member = self.rng.choices(cands, weights=[self.pfsp_weight(c) for c in cands])[0]
+        else:
+            member = self.rng.choice(cands)
         if member != "self":
             # Load it now: by the opponent's first move this checkpoint may have left the
             # pool and been pruned from disk, and the game still needs it.
             self.pool_net(member)
         return EXTERNAL, "pool:" + member
+
+    def pfsp_weight(self, member: str) -> float:
+        """Harder opponents more often. Unknown members count as even (0.5)."""
+        games, wins = self.pfsp.get(member, [0, 0])
+        wr = (wins + 1) / (games + 2)
+        return (1.0 - wr) ** float(self.cfg["pfsp_power"]) + float(self.cfg["pfsp_floor"])
+
+    def pick_style(self) -> int:
+        """HARD's play style for a TRAINING game (evaluation always plays standard)."""
+        w = list(self.cfg.get("opponent_styles") or [1.0])
+        w = (w + [0.0] * 4)[:4]
+        if sum(w) <= 0:
+            return 0
+        return self.rng.choices(range(4), weights=w)[0]
+
+    def shaping_scale(self) -> float:
+        n = int(self.cfg["shaping_decay_updates"])
+        if n <= 0:
+            return 1.0
+        done = max(0, self.update - int(self.cfg["shaping_decay_start"]))
+        floor = float(self.cfg["shaping_floor"])
+        return max(floor, 1.0 - (1.0 - floor) * done / n)
+
+    def pick_map(self) -> int:
+        """Weighted draw when map_weights is set, else the fixed rotation (8.2.2)."""
+        maps = self.cfg["maps"]
+        if self.cfg.get("map_weights"):
+            return self.rng.choices(range(len(maps)), weights=self.cfg["map_weights"])[0]
+        return (self.matches_done // self.cfg["map_rotate_matches"]) % len(maps)
 
     def _save_rollout_replay(self, env, result: str, info: dict) -> None:
         """Write one training replay for the map this episode was played on.
@@ -466,7 +550,7 @@ class Trainer:
         EVALUATION (pinned map, always vs the graduation opponent). Mixing them in one
         directory would make the map column look inconsistent for no stated reason.
         """
-        mp = os.path.basename(env.cfg.map_path)
+        mp = map_name(env.cfg.map_path)
         stem = os.path.splitext(mp)[0]
         # train_<step>, NOT train/<step>: the dashboard gallery globs
         # runs/*/replays/*/*.mcfr, which is exactly two levels, so a nested directory
@@ -500,7 +584,7 @@ class Trainer:
     def next_episode(self, record: bool = False) -> tuple[EpisodeConfig, str]:
         # Rotation: every map_rotate_matches completed matches, the next map (8.2.2).
         maps = self.cfg["maps"]
-        self.map_idx = (self.matches_done // self.cfg["map_rotate_matches"]) % len(maps)
+        self.map_idx = self.pick_map()
         # Record ONE rollout episode per map per checkpoint window.
         #
         # Replays used to come only from evaluation, and evaluation is pinned to a single
@@ -509,7 +593,7 @@ class Trainer:
         # training had no watchable game anywhere, which reads as "those maps are not
         # running". Rollout episodes happen regardless, so capturing one costs a replay
         # write rather than extra games.
-        here = os.path.basename(maps[self.map_idx])
+        here = map_name(maps[self.map_idx])
         if here not in self._replay_maps:
             record = True
             # Claim the map HERE, when the assignment is handed out, not when the replay
@@ -518,14 +602,22 @@ class Trainer:
             # six simultaneous recordings, five of them overwriting the sixth's file.
             self._replay_maps.add(here)
         opp, label = self.pick_opponent()
+        style = self.pick_style() if opp == HARD else 0
+        if style:
+            label += ":" + STYLE_NAMES[style]
         self.episode_seed += 1
+        mp = maps[self.map_idx]
+        army = "shuffle" if not is_generated(mp) and self.rng.random() < float(self.cfg["army_shuffle"]) else ""
+        fog = FOGS["off"] if self.rng.random() < float(self.cfg["fog_off_share"]) else FOGS[self.cfg["fog"]]
         cfg = EpisodeConfig(
             map_path=maps[self.map_idx], seed=self.episode_seed,
             side=self.episode_seed % 2, opponent=opp, round_cap=self.cfg["round_cap"], max_steps=self.cfg.get("max_steps", 3000),
             civilians=self.cfg["civilians"], random_events=self.cfg["random_events"],
-            fog=FOGS[self.cfg["fog"]], friendly_fire=self.cfg["friendly_fire"], record=record,
+            fog=fog, friendly_fire=self.cfg["friendly_fire"], record=record,
             disembark=disembark_allowed(self.cfg, maps[self.map_idx]),
             max_candidates=self.cfg["max_candidates"], max_actors=self.cfg["max_actors"],
+            opponent_style=style, shaping_scale=self.shaping_scale(),
+            potential_coef=float(self.cfg["potential_coef"]), army=army,
         )
         return cfg, label
 
@@ -593,8 +685,8 @@ class Trainer:
                                   env_steps_per_sec=taken / max(1e-6, time.time() - t0),
                                   buffer_mb=round(buf_bytes / 2**20, 1),
                                   map_idx=self.map_idx,
-                                  map_name=os.path.basename(self.cfg["maps"][self.map_idx]),
-                                  env_maps=[os.path.basename(e.cfg.map_path)
+                                  map_name=map_name(self.cfg["maps"][self.map_idx]),
+                                  env_maps=[map_name(e.cfg.map_path)
                                             for e in envs if e.cfg],
                                   rounds=[int(e.last["info"]["round"]) for e in envs if e.last])
             if taken < T * n and not capped:
@@ -611,7 +703,7 @@ class Trainer:
                         buf_bytes += step.nbytes
                         actions[i] = int(a[j])
                         legal = envs[i].last["legal"][int(a[j])]
-                        mp = os.path.basename(envs[i].cfg.map_path) if envs[i].cfg else "?"
+                        mp = map_name(envs[i].cfg.map_path) if envs[i].cfg else "?"
                         usage_kinds[legal["i"]["t"]] += 1
                         usage_kinds_map[mp][legal["i"]["t"]] += 1
                         at = legal.get("at", -1)
@@ -662,8 +754,15 @@ class Trainer:
                     stats["rounds"].append(info["round"])
                     stats["value_diff"].append(info["value_diff"])
                     stats["illegal"].append(info["illegal"])
-                    stats["result"].append((env.label, os.path.basename(env.cfg.map_path), res))
-                    stats["aim"].append((os.path.basename(env.cfg.map_path),
+                    stats["result"].append((env.label, map_name(env.cfg.map_path), res))
+                    stats["fog_win"].append((env.cfg.fog, 1.0 if res == "win" else 0.0))
+                    if "tac" in info:
+                        stats["tac"].append((map_name(env.cfg.map_path), info["tac"]))
+                    if env.label.startswith("pool:"):
+                        rec = self.pfsp.setdefault(env.label.split(":", 1)[1], [0, 0])
+                        rec[0] += 1
+                        rec[1] += 1 if res == "win" else 0
+                    stats["aim"].append((map_name(env.cfg.map_path),
                                          info.get("shots", 0), info.get("shots_hit", 0)))
                     illegal += info["illegal"]
                     self.matches_done += 1
@@ -784,7 +883,9 @@ class Trainer:
 
     # -- evaluation (10.3): greedy, fixed seeds, not training data --
     def evaluate(self, games: int, record_dir: str | None = None,
-                 keep: int = 0, net: PolicyNet | None = None) -> dict:
+                 keep: int = 0, net: PolicyNet | None = None,
+                 maps: list[str] | None = None, log_games: bool = True,
+                 fogs: list[int] | None = None) -> dict:
         """Game k always gets seed_base + k and side k % 2, whichever env plays it; an env
         starts its next game the moment it finishes one instead of waiting for the slowest
         game of a batch."""
@@ -803,7 +904,7 @@ class Trainer:
         # longer matches the noise floor every decision here is judged against. Pinning
         # evaluation to one map keeps the number comparable across a pool change, which is
         # the only way to answer "did adding those maps help?".
-        eval_maps = self.cfg.get("eval_maps") or self.cfg["maps"]
+        eval_maps = maps or self.cfg.get("eval_maps") or self.cfg["maps"]
         seed_base = 900_000 + self.update * 100
         game_of: dict[int, int] = {}
         inflight: set[int] = set()
@@ -817,9 +918,9 @@ class Trainer:
                 map_path=eval_maps[k % len(eval_maps)], seed=seed_base + k,
                 side=k % 2, opponent=HARD, round_cap=self.cfg["round_cap"], max_steps=self.cfg.get("max_steps", 3000),
                 civilians=self.cfg["civilians"], random_events=self.cfg["random_events"],
-                fog=FOGS[self.cfg["fog"]], friendly_fire=self.cfg["friendly_fire"],
-                disembark=disembark_allowed(
-                    self.cfg, self.cfg["maps"][k % len(self.cfg["maps"])]),
+                fog=fogs[k % len(fogs)] if fogs else FOGS[self.cfg["fog"]],
+                friendly_fire=self.cfg["friendly_fire"],
+                disembark=disembark_allowed(self.cfg, eval_maps[k % len(eval_maps)]),
                 max_candidates=self.cfg["max_candidates"],
                 max_actors=self.cfg["max_actors"],
                 # Пишем КАЖДУЮ партию оценки, а не первые `keep`. Признак записи
@@ -874,13 +975,14 @@ class Trainer:
                     # избежать с гарантией, поэтому её видно отдельной колонкой.
                     fire_losses=info.get("fire_losses"),
                     seed=envs[i].cfg.seed, side=envs[i].cfg.side,
-                    map=os.path.basename(envs[i].cfg.map_path), time=time.time())
+                    map=map_name(envs[i].cfg.map_path), time=time.time())
                 per_game.append(row)
                 # Appended as each game ends, not batched at the finish: a long
                 # evaluation should show its results filling in, and if it dies
                 # halfway the games it did play are already on disk.
-                with open(os.path.join(self.run_dir, "eval_games.jsonl"), "a") as f:
-                    f.write(json.dumps(row) + "\n")
+                if log_games:
+                    with open(os.path.join(self.run_dir, "eval_games.jsonl"), "a") as f:
+                        f.write(json.dumps(row) + "\n")
                 print(f"[eval]   vs {opponent} game {k + 1}/{games}: "
                       f"{row['result']}"
                       f"{'(' + row['by'] + ')' if row['by'] else ''} "
@@ -937,7 +1039,11 @@ class Trainer:
         # looks like a broken evaluation rather than what it is. The breakdown makes that
         # legible.
         outcomes = Counter(results)
+        by_map: dict[str, list[float]] = defaultdict(list)
+        for row in per_game:
+            by_map[row["map"]].append(1.0 if row["result"] == "win" else 0.0)
         return dict(games=len(results), winrate=wins / max(1, len(results)),
+                    by_map={m: float(np.mean(v)) for m, v in by_map.items()},
                     lossrate=outcomes["loss"] / max(1, len(results)),
                     drawrate=draws / max(1, len(results)), value_diff=float(np.mean(diffs)),
                     rounds=float(np.mean(rounds)),
@@ -947,6 +1053,12 @@ class Trainer:
     # -- main loop --
     def train(self):
         cfg = self.cfg
+        # shaping_decay_start: -1 means "from the update this config was first applied":
+        # a fork of a run thousands of updates in must decay from where it starts, not
+        # find its bonuses already gone. Anchored once, before config.yaml is written, so a
+        # resume keeps the same anchor.
+        if int(cfg.get("shaping_decay_start", 0)) < 0:
+            cfg["shaping_decay_start"] = self.update
         with open(os.path.join(self.run_dir, "config.yaml"), "w") as f:
             yaml.safe_dump(cfg, f)
         self.write_status("running", f"starting {cfg['n_envs']} Godot envs", 0, 0)
@@ -1142,6 +1254,44 @@ class Trainer:
             print(f"[eval] step={self.global_step} vs {opp}: win {r['winrate']:.2f} "
                   f"draw {r['drawrate']:.2f} diff {r['value_diff']:+.2f} "
                   f"rounds {r['rounds']:.1f} outcomes {r['outcomes']}", flush=True)
+        # Skill drills: each is a scenario only one tactic wins (flank the MG nest, screen
+        # the tank, breach the wall...). Played vs standard HARD like the main eval, with
+        # both sides of each drill (game k plays side k % 2), and scored per drill.
+        nofog = int(self.cfg.get("eval_nofog_games") or 0)
+        if nofog > 0:
+            try:
+                r2 = self.evaluate(nofog, log_games=False, fogs=[FOGS["off"]])
+            except EnvDied as e:
+                print(f"[eval] fog-off eval aborted: {e}", flush=True)
+                self.envs.rebuild()
+            else:
+                row["nofog"] = {k: r2[k] for k in ("winrate", "value_diff", "rounds")}
+                for k in ("winrate", "lossrate", "drawrate", "value_diff", "rounds"):
+                    self.writer.add_scalar(f"eval/{k}_{opp}_nofog", r2[k], self.global_step)
+                print(f"[eval] fog off: win {r2['winrate']:.2f} diff {r2['value_diff']:+.2f}", flush=True)
+        drills = list(self.cfg.get("drill_eval_maps") or [])
+        if drills:
+            per = max(1, int(self.cfg["drill_eval_games"]))
+            order = [m for m in drills for _ in range(per)]
+            # With 4 games a drill (the default in tactical.yaml) each drill is played from
+            # both sides (game k plays side k % 2) AND both in fog and with fog off: games
+            # 0-1 in fog, 2-3 without. Fog is keyed on k // 2 so it never coincides with side.
+            fogs = [FOGS["off"] if ((k % per) // 2) % 2 == 1 else FOGS[self.cfg["fog"]]
+                    for k in range(len(order))]
+            try:
+                d = self.evaluate(len(order), maps=order, log_games=False, fogs=fogs)
+            except EnvDied as e:
+                print(f"[eval] drills aborted: {e}", flush=True)
+                self.envs.rebuild()
+            else:
+                row["drills"] = d["by_map"]
+                for mp, wr in d["by_map"].items():
+                    stem = os.path.splitext(mp)[0].removeprefix("drill_")
+                    self.writer.add_scalar(f"eval/drill_{stem}_winrate", wr, self.global_step)
+                self.writer.add_scalar("eval/drills_winrate", d["winrate"], self.global_step)
+                print(f"[eval] drills: win {d['winrate']:.2f} " +
+                      " ".join(f"{os.path.splitext(m)[0]}={v:.2f}" for m, v in sorted(d["by_map"].items())),
+                      flush=True)
         self.writer.flush()
         self.last_eval = row
         with open(os.path.join(self.run_dir, "eval_log.jsonl"), "a") as f:
@@ -1233,6 +1383,16 @@ class Trainer:
             tot = max(1, sum(counter.values()))
             for t, c in counter.items():
                 w.add_scalar(f"usage_map/{stem}/unit_{UNIT_NAMES[t]}", c / tot, s)
+        self.log_tactics(st.get("tac", []), s)
+        by_fog = defaultdict(list)
+        for fog, won in st.get("fog_win", []):
+            by_fog["off" if fog == FOGS["off"] else "on"].append(won)
+        for k, v in by_fog.items():
+            w.add_scalar(f"train/winrate_fog_{k}", float(np.mean(v)), s)
+        w.add_scalar("train/shaping_scale", self.shaping_scale(), s)
+        if self.pfsp:
+            w.add_scalar("league/pool_winrate", sum(v[1] for v in self.pfsp.values())
+                         / max(1, sum(v[0] for v in self.pfsp.values())), s)
         w.add_scalar("train/curriculum_stage", self.cfg["stage"], s)
         w.add_scalar("train/phase", 0 if self.cfg["phase"] == "A" else 1, s)
         w.flush()
@@ -1242,6 +1402,46 @@ class Trainer:
               f"ent={losses['entropy']:.2f} kl={losses['approx_kl']:.4f} "
               f"hit={self._aim_text(st)} "
               f"env={info['seconds']:.0f}s upd={update_secs:.0f}s", flush=True)
+
+    def log_tactics(self, games: list, s: int) -> None:
+        """Is it using its army well? Per map (tac/<map>/...) and pooled (tac/all/...):
+        per unit type — share of actions, hit rate, kills and losses per game — plus
+        multi-AP moves per game and the share of the army left under fire without cover
+        at end of turn (exposure). A policy that wins on rifles alone, parks the tank or
+        never launches a drone shows up here long before it shows in a win rate."""
+        if not games:
+            return
+        groups: dict[str, list[dict]] = defaultdict(list)
+        for mp, tac in games:
+            groups[os.path.splitext(mp)[0]].append(tac)
+            groups["all"].append(tac)
+        w = self.writer
+        for stem, tacs in groups.items():
+            n = len(tacs)
+            pre = f"tac/{stem}/"
+            w.add_scalar(pre + "exposure", float(np.mean([t.get("exposure", 0.0) for t in tacs])), s)
+            w.add_scalar(pre + "multi_ap_per_game", sum(t.get("multi_ap", 0) for t in tacs) / n, s)
+            act, shots, hits, kills, lost, fielded = (Counter() for _ in range(6))
+            for t in tacs:
+                act.update(t.get("act", {}))
+                shots.update(t.get("shots", {}))
+                hits.update(t.get("hits", {}))
+                kills.update(t.get("kills", {}))
+                lost.update(t.get("lost", {}))
+                fielded.update(t.get("fielded", {}))
+            total = max(1, sum(act.values()))
+            # A type seen in an earlier update but absent now must read 0, not keep its old
+            # share: TensorBoard holds the last value of a tag, and the dashboard's table
+            # would otherwise add up stale shares to more than 100%.
+            seen = self._tac_kinds.setdefault(stem, set())
+            seen |= set(act) | set(fielded)
+            for kind in seen:
+                w.add_scalar(pre + f"act_{kind}", act[kind] / total, s)
+                w.add_scalar(pre + f"kills_{kind}", kills[kind] / n, s)
+                if shots[kind]:
+                    w.add_scalar(pre + f"hit_{kind}", hits[kind] / shots[kind], s)
+                if fielded[kind]:
+                    w.add_scalar(pre + f"lost_{kind}", lost[kind] / fielded[kind], s)
 
     @staticmethod
     def _aim_text(st: dict) -> str:

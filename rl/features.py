@@ -43,7 +43,17 @@ C_VEH_HULL = 68
 C_VEH_FX = 69
 C_VEH_FY = 70
 C_VEH_WRECK = 71
-N_CHANNELS = 72
+# Tactical layers (tactical env). Appended, never inserted: model.load_compat grows the first
+# conv by zero columns at the END, so an older checkpoint keeps its exact behaviour.
+C_THREAT = 72          # expected enemy hits per turn on the cell (visible enemies only)
+C_FCOVER = 73          # the same for our own fire
+# Forecast of the enemy's next turn (GameActionResolver.enemy_forecast) and memory of
+# enemies that went out of sight (EnemyMemory): what an engine needs to play AHEAD of the
+# opponent, not just against the position in front of it.
+C_FNEXT = 74           # expected enemy hits on the cell after they move (best spot each)
+C_EREACH = 75          # how many visible enemies can walk onto the cell next turn
+C_LASTSEEN = 76        # a hidden enemy was last seen here, fading with age (fog games)
+N_CHANNELS = 77
 
 FLAT_DIM = 20
 
@@ -67,7 +77,9 @@ F_GEOM = F_ACTOR_TYPE + N_ACTOR_TYPES      # ax, ay, tx, ty, dx, dy, dist, has_t
 F_TARGET_TYPE = F_GEOM + 8                 # 16
 F_MISC = F_TARGET_TYPE + N_UNIT_TYPES      # shots_full, shots_single, av_mine, seat, steps, build_feature(9), comp(0)
 F_DRONE = F_MISC + 5 + len(BUILD_FEATURES)  # leash fraction, enemy vehicle cells in blast
-CAND_DIM = F_DRONE + 2
+F_TAC = F_DRONE + 2    # threat at target, own fire at target, cover there, AP cost/3, multi-AP move
+F_PRED = F_TAC + 5     # next-turn enemy fire at target, enemies that can reach the target
+CAND_DIM = F_PRED + 2
 
 
 def grid_tensor(obs: dict) -> np.ndarray:
@@ -95,6 +107,16 @@ def grid_tensor(obs: dict) -> np.ndarray:
     g[C_CORPSE][sl] = corpse / 5.0
     g[C_DIRT][sl] = dirt / 2.0
     g[C_VEH_FOOT][sl] = veh
+    # Quarters of an expected hit on the wire (ObsEncoder._quarters); six hits a turn is
+    # already "certain death", so the channel saturates there.
+    if "threat" in obs:
+        g[C_THREAT][sl] = np.minimum(plane("threat") / 24.0, 1.0)
+        g[C_FCOVER][sl] = np.minimum(plane("fcover") / 24.0, 1.0)
+    if "fnext" in obs:
+        g[C_FNEXT][sl] = np.minimum(plane("fnext") / 24.0, 1.0)
+        g[C_EREACH][sl] = np.minimum(plane("ereach") / 24.0, 1.0)
+        if len(obs.get("lastseen", [])) == w * h:
+            g[C_LASTSEEN][sl] = plane("lastseen") / 100.0
     for u in obs["units"]:
         x, y = u["x"], u["y"]
         if x < 0 or y < 0 or x >= w or y >= h:
@@ -225,4 +247,15 @@ def candidate_rows(obs: dict, legal: list[dict]) -> tuple[np.ndarray, np.ndarray
             rows[i, m + 5 + BUILD_FEATURES.index(fid)] = 1.0
         rows[i, F_DRONE] = float(c.get("lf", 0.0))
         rows[i, F_DRONE + 1] = min(float(c.get("vh", 0)), 9.0) / 9.0
+        if "th" in c:
+            rows[i, F_TAC] = min(float(c["th"]), 6.0) / 6.0
+            rows[i, F_TAC + 1] = min(float(c.get("fc", 0.0)), 6.0) / 6.0
+            rows[i, F_TAC + 2] = float(c.get("cv", 0.0)) / 2.0
+        if "tn" in c:
+            rows[i, F_PRED] = min(float(c["tn"]), 6.0) / 6.0
+            rows[i, F_PRED + 1] = min(float(c.get("er", 0)), 6.0) / 6.0
+        apc = int(c.get("apc", 0))
+        if apc:
+            rows[i, F_TAC + 3] = apc / 3.0
+            rows[i, F_TAC + 4] = 1.0 if apc >= 2 else 0.0
     return rows, cells

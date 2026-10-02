@@ -27,6 +27,8 @@ const Obs = preload("res://rl/ObsEncoder.gd")
 ## preload, а не class_name: rl/ — не часть игрового автозагруза, и ObsEncoder здесь
 ## подключён так же. Один и тот же бюджет обязан применять и боевой контроллер.
 const IntentBudget = preload("res://rl/IntentBudget.gd")
+const ArmyBuilder = preload("res://rl/ArmyBuilder.gd")
+const EnemyMemory = preload("res://rl/EnemyMemory.gd")
 
 const R_DRAW := -0.1
 const AI_TURN_CAP := 4000
@@ -244,6 +246,23 @@ var _shots: int = 0
 var _shots_hit: int = 0
 const SHOT_KINDS := ["shoot", "rsp", "veh_cannon"]
 
+## --- Тактическая среда (rl/config/tactical.yaml) ------------------------------------
+##
+## Множитель бонусов за САМО действие (R_SHOT, R_VEHICLE). Тренер гасит его по ходу
+## обучения (shaping_decay_updates): подсказка «стрелять и ездить вообще полезно» нужна
+## новичку, а сильной политике она только мешает — платит за нажатие, а не за исход.
+var _shaping_scale: float = 1.0
+## Вес позиционной награды (_phi). Ноль — выключена (как было до tactical env).
+var _potential_coef: float = 0.0
+var _last_phi: float = 0.0
+## Метрики партии со стороны обучаемого: по родам войск — действия, выстрелы и попадания,
+## убийства и потери; ходы за 2-3 ОД; доля армии под огнём в конце хода. Уходят в info.tac
+## на последнем шаге, тренер раскладывает их по картам на панели.
+var _tac: Dictionary = {}
+var _exposure: Array = []
+## Память о скрытых врагах — своя у каждой стороны (во внешней игре решают обе).
+var _memory: Dictionary = {}
+
 func _initialize() -> void:
 	# С `-- --reply-port=N` ответы идут в TCP-сокет 127.0.0.1:N, а не в stdout: всё, что
 	# печатает print(), Godot дублирует в файловый лог, а ответ — это десятки КиБ на шаг.
@@ -300,11 +319,22 @@ func _emit(resp: Dictionary) -> void:
 
 func _reset(req: Dictionary) -> Dictionary:
 	var path := str(req.get("map", ""))
-	var m := MapData.load_from(path)
-	if m == null:
-		return {"ok": false, "error": "map not found: %s" % path}
-	GameConfig.civilians_enabled = bool(req.get("civilians", false))
 	var seed_value := int(req.get("seed", 1))
+	# Свой поток жребия для карты и армии: от сида эпизода, но не тот, что у кубиков.
+	var arng := RandomNumberGenerator.new()
+	arng.seed = seed_value * 7919 + 13
+	var m: MapData = null
+	if path.begins_with("gen:"):
+		m = _gen_map(path, arng)
+		if m == null:
+			return {"ok": false, "error": "map generator could not fit the armies: %s" % path}
+	else:
+		m = MapData.load_from(path)
+		if m == null:
+			return {"ok": false, "error": "map not found: %s" % path}
+		if str(req.get("army", "")) == "shuffle":
+			ArmyBuilder.shuffle(m, arng)
+	GameConfig.civilians_enabled = bool(req.get("civilians", false))
 	state = m.build_state(seed_value)
 	for pid: int in state.roster.player_ids():
 		var s := state.roster.slot(pid)
@@ -316,6 +346,8 @@ func _reset(req: Dictionary) -> Dictionary:
 	max_steps = int(req.get("max_steps", round_cap * 300))
 	max_candidates = int(req.get("max_candidates", 0))
 	max_actors = int(req.get("max_actors", 0))
+	_shaping_scale = float(req.get("shaping_scale", 1.0))
+	_potential_coef = float(req.get("potential_coef", 0.0))
 	_cap_rng.seed = seed_value
 	resolver = GameActionResolver.new(state)
 	resolver.fog_mode = int(req.get("fog", MCF.Fog.STANDARD))
@@ -349,6 +381,7 @@ func _reset(req: Dictionary) -> Dictionary:
 		for pid: int in state.roster.player_ids():
 			if pid != side:
 				var ai := AIController.new(pid, opponent)
+				ai.style = int(req.get("opponent_style", AIController.Style.STANDARD))
 				ai.intent_ready.connect(_on_intent)
 				brains[pid] = ai
 	var total := 0.0
@@ -384,8 +417,38 @@ func _reset(req: Dictionary) -> Dictionary:
 	_fire_losses = 0
 	_shots = 0
 	_shots_hit = 0
+	_tac = {"act": {}, "shots": {}, "hits": {}, "kills": {}, "multi_ap": 0, "fielded": {}}
+	# Состав — на старте: тела, поднятые или сложенные в стену, из state.units уходят, и
+	# посчитанный в конце он недосчитывал бы именно погибших.
+	for u: UnitInstance in state.all_units():
+		if u.owner == side and not u.is_drone:
+			_bump("fielded", u.stats.id)
+	_exposure = []
+	_memory = {}
+	_last_phi = _phi(Obs.tactics(resolver, side)) if _potential_coef > 0.0 else 0.0
 	_advance()
 	return _response(0.0, true)
+
+## Карта из генератора: "gen:<стиль|any>:<размер>:<бойцов>:<танков>". Стиль — номер
+## MapGen.Style или any (любой), размер — индекс MapGen.SIZES. Зерно карты и армия — от
+## сида эпизода, так что каждая партия — новая местность, но воспроизводимая.
+func _gen_map(spec: String, arng: RandomNumberGenerator) -> MapData:
+	var p := spec.split(":")
+	var style_s := p[1] if p.size() > 1 else "any"
+	var size := int(p[2]) if p.size() > 2 else 0
+	var units := int(p[3]) if p.size() > 3 else 12
+	var tanks := int(p[4]) if p.size() > 4 else 0
+	for attempt in 4:
+		var style := arng.randi_range(0, MapGen.STYLE_NAMES.size() - 1) if style_s == "any" \
+				else int(style_s)
+		var opts := {"style": style, "size": size, "density": arng.randi_range(0, 2),
+				"seed": arng.randi_range(1, MapGen.SEED_MAX), "zones": 2,
+				"units": units + tanks * (ArmyBuilder.TANK_CREW + 9),
+				"symmetric": arng.randf() < 0.5, "civilians": 0, "civilian_count": 0}
+		var m := MapGen.generate(opts)
+		if m != null and ArmyBuilder.populate(m, arng, units, tanks):
+			return m
+	return null
 
 ## Посадить экипажи в машины ПЕРЕД началом партии.
 ##
@@ -444,6 +507,9 @@ func _step(req: Dictionary) -> Dictionary:
 	var aimed := acting == side and _kind_of(intent) in SHOT_KINDS \
 			and IntentBudget.aims_at(intent, IntentBudget.hostile_zone(resolver, side), state)
 	_fire_debt = 0.0
+	var who := _actor_label(intent) if acting == side else ""
+	if acting == side and intent is EndTurnIntent:
+		_exposure.append(_exposed_share())
 	var res := resolver.resolve(intent)
 	_note_fire(res)
 	_steps += 1
@@ -451,15 +517,22 @@ func _step(req: Dictionary) -> Dictionary:
 		reward += _step_penalty
 		if res.ok:
 			reward += _combat_reward(intent, res, hulls_before, aimed)
+			_bump("act", who)
+			if (intent is MoveIntent or intent is VehicleMoveIntent) and ap_before - _actor_ap(intent) >= 2:
+				_tac["multi_ap"] = int(_tac["multi_ap"]) + 1
+			var kills := 0
+			for id: int in res.deaths:
+				var dv := state.get_unit(id)
+				if dv != null and Obs.rel_owner(resolver, side, dv.owner) == 1:
+					kills += 1
+			if kills > 0:
+				_bump("kills", who, kills)
 			if _kind_of(intent) in SHOT_KINDS:
 				_shots += 1
-				var killed_enemy := false
-				for id: int in res.deaths:
-					var v := state.get_unit(id)
-					if v != null and Obs.rel_owner(resolver, side, v.owner) == 1:
-						killed_enemy = true
-				if killed_enemy or _enemy_vehicle_points() < enemy_pts_before:
+				_bump("shots", who)
+				if kills > 0 or _enemy_vehicle_points() < enemy_pts_before:
 					_shots_hit += 1
+					_bump("hits", who)
 			if _kind_of(intent) == "dig":
 				_digs_used += 1
 	if not res.ok:
@@ -756,7 +829,7 @@ func _combat_reward(intent: Intent, res: ActionResult, hulls_before: Dictionary,
 			bonus = R_VEHICLE
 		if bonus > 0.0:
 			_shaping_used += 1
-			gained += bonus * _typical
+			gained += bonus * _typical * _shaping_scale
 	return gained
 
 
@@ -785,11 +858,21 @@ func _response(reward: float, is_reset: bool) -> Dictionary:
 	var diff := _value_diff()
 	reward += (diff - _last_diff) / _norm
 	_last_diff = diff
-	var resp := {"ok": true, "reward": reward, "done": _done, "acting": state.active_player(),
+	var acting_now := state.active_player()
+	if _potential_coef > 0.0 and not is_reset:
+		# Потенциал позиции (Ng et al.): платится РАЗНОСТЬ Φ, поэтому оптимальная политика
+		# от неё не меняется — она лишь подсказывает раньше, что позиция стала лучше.
+		# На конце партии Φ = 0, как того требует теорема.
+		var tac_side := Obs.tactics(resolver, side)
+		var phi := 0.0 if _done else _phi(tac_side)
+		reward += _potential_coef * (phi - _last_phi)
+		_last_phi = phi
+	var resp := {"ok": true, "reward": reward, "done": _done, "acting": acting_now,
 			"info": {"round": state.turns.round_number, "steps": _steps, "illegal": _illegal,
 				"value_diff": diff / _norm, "fire_losses": _fire_losses,
 				"shots": _shots, "shots_hit": _shots_hit}}
 	if _done:
+		resp["info"]["tac"] = _tac_summary()
 		match _result:
 			"win": resp["reward"] = float(resp["reward"]) + 1.0
 			"loss": resp["reward"] = float(resp["reward"]) - 1.0
@@ -806,11 +889,15 @@ func _response(reward: float, is_reset: bool) -> Dictionary:
 			acting, IntentBudget.actor_subset(resolver, acting, max_actors, _cap_rng))),
 			resolver, acting), max_candidates, _cap_rng, resolver, acting)
 	var t1 := Time.get_ticks_usec()
+	if not _memory.has(acting):
+		_memory[acting] = EnemyMemory.new()
+	_memory[acting].observe(resolver, acting)
+	var tac_acting := Obs.tactics(resolver, acting, _memory[acting])
 	var desc: Array = []
 	for intent: Intent in _legal:
-		desc.append(Obs.describe(state, intent))
+		desc.append(Obs.describe(state, intent, tac_acting))
 	resp["legal"] = desc
-	resp["obs"] = Obs.encode(resolver, acting, round_cap)
+	resp["obs"] = Obs.encode(resolver, acting, round_cap, tac_acting)
 	# Во что обошёлся ЭТОТ ответ. Перечислитель — самая дорогая часть шага на больших
 	# картах (town без max_actors: ~180 мс из ~190), и когда обучение «висит», первым
 	# делом хочется видеть именно это число, а не гадать. Тренер пишет его в TB.
@@ -864,6 +951,77 @@ func _drop_looping(list: Array) -> Array:
 				and _free_kinds.has("%s|%s" % [key, _kind_of(intent)]):
 			continue
 		out.append(intent)
+	return out
+
+## Потенциал позиции обучаемого: сколько огня его армия держит на ВИДИМЫХ врагах минус
+## сколько огня видимых врагов лежит на ней, по стоимости, с укрытием за полцены. Это и есть
+## тактика в одном числе: сосредоточить огонь (трое на одного), выйти во фланг (их видно,
+## нас нет), уйти из-под пулемёта за мешки. Огонь на клетке — до трёх стволов: больше
+## уже не важно. Огонь, который враги смогут положить на клетку СЛЕДУЮЩИМ ходом (fnext),
+## считается за полцены: это и есть предвидение — не вставать туда, куда пулемёт развернётся.
+func _phi(tac: Dictionary) -> float:
+	var threat: PackedFloat32Array = tac["threat"]
+	var fnext: PackedFloat32Array = tac["fnext"]
+	var cover: PackedFloat32Array = tac["cover"]
+	var w: int = tac["w"]
+	var mine := 0.0
+	var theirs := 0.0
+	for u: UnitInstance in state.all_units():
+		if not u.is_alive() or u.is_drone or not state.grid.in_bounds(u.coord):
+			continue
+		var rel := Obs.rel_owner(resolver, side, u.owner)
+		var i := u.coord.y * w + u.coord.x
+		var k := 0.5 if state.grid.cell(u.coord).has_cover() else 1.0
+		if rel == 0:
+			mine += float(u.stats.cost) * (minf(threat[i], 3.0) + 0.5 * minf(fnext[i], 3.0)) * k
+		elif rel == 1 and resolver.is_visible_to_team(side, u):
+			theirs += float(u.stats.cost) * minf(cover[i], 3.0) * k
+	return (theirs - mine) / _norm / 3.0
+
+## Доля стоимости армии обучаемого, стоящей под огнём видимого врага без укрытия.
+func _exposed_share() -> float:
+	var tac := Obs.tactics(resolver, side)
+	var threat: PackedFloat32Array = tac["threat"]
+	var w: int = tac["w"]
+	var total := 0.0
+	var bad := 0.0
+	for u: UnitInstance in state.all_units():
+		if u.owner != side or not u.is_alive() or u.is_drone or not state.grid.in_bounds(u.coord):
+			continue
+		total += float(u.stats.cost)
+		if threat[u.coord.y * w + u.coord.x] > 0.0 and not state.grid.cell(u.coord).has_cover():
+			bad += float(u.stats.cost)
+	return bad / total if total > 0.0 else 0.0
+
+## Род войск исполнителя: id юнита-рода, "drone" или тип машины.
+func _actor_label(intent: Intent) -> String:
+	if intent is EndTurnIntent:
+		return ""
+	var u := state.get_unit(intent.actor_id)
+	if u != null:
+		return "drone" if u.is_drone else u.stats.id
+	var veh := state.get_vehicle(intent.actor_id)
+	return veh.type_id if veh != null else ""
+
+func _bump(table: String, key: String, n: int = 1) -> void:
+	if key == "":
+		return
+	var t: Dictionary = _tac[table]
+	t[key] = int(t.get(key, 0)) + n
+
+## Итог партии для тренера: по родам и по армии в целом.
+func _tac_summary() -> Dictionary:
+	# Потери = состав на старте минус живые сейчас (тела могли уйти из state.units).
+	var lost: Dictionary = (_tac["fielded"] as Dictionary).duplicate()
+	for u: UnitInstance in state.all_units():
+		if u.owner == side and not u.is_drone and u.is_alive():
+			lost[u.stats.id] = int(lost.get(u.stats.id, 0)) - 1
+	var exp := 0.0
+	for e: float in _exposure:
+		exp += e
+	var out := _tac.duplicate(true)
+	out["lost"] = lost
+	out["exposure"] = exp / float(_exposure.size()) if not _exposure.is_empty() else 0.0
 	return out
 
 func _save_replay(path: String) -> Dictionary:

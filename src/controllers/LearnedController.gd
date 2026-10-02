@@ -30,6 +30,9 @@ static func model_label() -> String:
 	var l := OS.get_environment(ENV_LABEL)
 	return l if l != "" else "served on " + OS.get_environment(ENV_VAR)
 const IntentBudget = preload("res://rl/IntentBudget.gd")
+const EnemyMemory = preload("res://rl/EnemyMemory.gd")
+## Память о врагах, ушедших в туман, — та же, что у обучаемого в env_server.
+var _memory := EnemyMemory.new()
 ## Потолки бюджета намерений: столько же, сколько видела политика при обучении.
 ## `train.py play` выставляет их из конфига чекпойнта; 0 = без ограничения (так ведут
 ## себя чекпойнты, обученные до появления потолков).
@@ -136,10 +139,13 @@ func _decide(state: GameState) -> Dictionary:
 	if legal.is_empty():
 		_last_error = "no legal intents"
 		return {}
+	# Тот же тактический контекст (карта огня, цена хода в ОД), что и в обучении.
+	_memory.observe(_resolver, owner)
+	var tac: Dictionary = Obs.tactics(_resolver, owner, _memory)
 	var desc: Array = []
 	for intent: Intent in legal:
-		desc.append(Obs.describe(state, intent))
-	var req := {"obs": Obs.encode(_resolver, owner, _round_cap), "legal": desc}
+		desc.append(Obs.describe(state, intent, tac))
+	var req := {"obs": Obs.encode(_resolver, owner, _round_cap, tac), "legal": desc}
 	var reply := _ask(req)
 	if reply.is_empty():
 		return {}

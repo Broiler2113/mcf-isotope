@@ -189,6 +189,35 @@ their HARD counterparts step for step, because `AIController` separates the two 
 line — a shot-scoring tiebreak, `score += ease` — while everything else keyed off difficulty is
 EASY-only.
 
+Since the tactical env (2026-10-02, owner's decision) the TRAINING side may also face HARD in
+four play styles (`opponent_styles`: standard / rush / turtle / flank — `AIController.Style`)
+and its own past checkpoints (phase `league`). Evaluation is unchanged: standard HARD only.
+
+## Tactical environment (`config/tactical.yaml`)
+
+The environment that teaches play rather than a win rate against one bot. Fork the best run
+onto it — `python rl/train.py fork rl/runs/<branch>/latest.pt --branch tactical-1 --config
+rl/config/tactical.yaml`; the checkpoint grows into the new network and plays exactly like
+its parent on its first step.
+
+| piece | where | what it does |
+| --- | --- | --- |
+| fire map | `GameActionResolver.fire_cover` | expected hits per cell from visible enemies (and from our own fire); 8 firing lines, walls stop them, same hit ladder as `can_shoot` |
+| new inputs | `ObsEncoder`, `features.py` | 2 grid layers (threat, own fire) + 5 candidate columns (threat / own fire / cover at the target, AP cost, multi-AP flag) |
+| deeper net | `model.py` | dilated residual trunk (2/4/8/16), receptive field ~67 cells; starts as identity |
+| long moves | `LegalIntents` | moves into the orange zone (2 AP) in one order; far cells thinned to a 2×2 lattice plus cover and wall-side cells |
+| smart cap | `IntentBudget._tactical_order` | each unit's kept moves: best by cover / out of fire / approach, interleaved with random ones |
+| rewards | `env_server` | per-action bonuses decay to 0 (`shaping_decay_*`); potential-based position term (`potential_coef`): our fire on visible enemies minus theirs on us |
+| maps | `maps/drill_*.json`, `gen:` | six skill drills (`tools/make_drills.gd`), fresh MapGen maps every episode with mirrored random armies (`ArmyBuilder.gd`), type shuffles on fixed maps (`army_shuffle`) |
+| fog mix | `train.py` (`fog_off_share`) | fog of war in only 30% of training games; fog-off eval (`eval_nofog_games`); every drill played in fog and without |
+| enemy forecast | `GameActionResolver.enemy_forecast`, `EnemyMemory.gd` | 3 grid layers + 2 candidate columns: where visible enemies can walk and shoot NEXT turn, and where hidden ones were last seen; the position reward counts next-turn fire at half weight |
+| opponents | `train.py` | phase `league`: HARD styles + past checkpoints, prioritised toward those that beat it (PFSP) |
+| measuring | dashboard **Tactics** page | drill win rates vs HARD, per unit type: action share, hit rate, kills, losses; exposure at end of turn; 2-3 AP moves |
+
+A generated map is written `gen:<style|any>:<size index>:<units>:<tanks>` in `maps:`.
+Cost: an env step on the company-scale town map is ~1.5× the pre-tactical one (threat maps,
+the larger move list, the ordering) — fewer samples per hour, each one far more informative.
+
 ## Maps in the pool
 
 | map | size | per side | notes |
