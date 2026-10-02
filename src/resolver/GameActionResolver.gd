@@ -372,13 +372,16 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 	var carried := held_unit_of(unit)
 	var dragged := dragged_cell_of(unit)
 	var use_credit := unit.move_credit > 0
-	var budget := move_budget(unit)
-
-	var reach := reachable_for(unit, budget)
+	# Клетка в оранжевой/красной зоне — ход за 2/3 ОД одним путём (остаток переносится).
+	var tiers := move_tier_budgets(unit)
+	var reach := reachable_for(unit, tiers[tiers.size() - 1])
 	if not reach.can_reach(intent.target):
-		return ActionResult.fail("Target out of reach (speed %d)" % budget)
+		return ActionResult.fail("Target out of reach (speed %d)" % tiers[tiers.size() - 1])
 
 	var spent: int = reach.cost[intent.target]
+	var extra := tier_of(tiers, spent)
+	var budget: int = tiers[extra]
+	unit.remaining_ap -= extra
 	var path := reach.path_to(intent.target)
 	var origin := unit.coord
 	state.grid.move_occupant(unit.coord, intent.target)
@@ -2724,6 +2727,23 @@ func move_budget_fresh(unit: UnitInstance) -> int:
 	var burdened := held_unit_of(unit) != null \
 			or dragged_cell_of(unit) != UnitInstance.NOT_DRAGGING
 	return maxi(0, unit.speed() - MCF.CAPTURE_CARRY_PENALTY) if burdened else unit.speed()
+
+## Потолки хода за 1, 2 и 3 ОД (зелёная, оранжевая, красная зоны): [i] — сколько клеток
+## пройдёт боец, потратив ещё i ОД сверх первого (на кредите первый ОД не нужен). Цена
+## клетки от бюджета не зависит, поэтому один разлив по последнему потолку даёт все три
+## зоны. Волочение ОД не стоит, ему дальних зон нет. Экран и _resolve_move считают по ней.
+func move_tier_budgets(unit: UnitInstance) -> Array[int]:
+	var budget := move_budget(unit)
+	var out: Array[int] = [budget]
+	if dragged_cell_of(unit) != UnitInstance.NOT_DRAGGING:
+		return out
+	var extra_ap := unit.remaining_ap - (0 if unit.move_credit > 0 else 1)
+	var step := move_budget_fresh(unit)
+	for k in range(1, mini(extra_ap, 2) + 1):
+		if step <= 0:
+			break
+		out.append(budget + step * k)
+	return out
 
 func can_move(unit: UnitInstance) -> bool:
 	return unit != null and unit.is_alive() and unit.aboard_vehicle_id == -1 \
@@ -6959,8 +6979,13 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 	# один переезд можно потратить и несколько его ОД.
 	var seated := _seated(veh)
 	var driver := shuttle_driver(veh)
+	# Танк может уехать в оранжевую/красную зону одним переездом (batch ui-drones 2):
+	# бюджет — потолок дальней зоны, списание — по зоне, куда влезла цена пути.
+	var tank_tiers := vehicle_tier_budgets(veh)
 	if seated:
 		speed = _shuttle_budget(veh)
+	elif not tank_tiers.is_empty():
+		speed = tank_tiers[tank_tiers.size() - 1]
 	var plan := VehicleRules.plan_line_move(state, veh, dir, intent.steps, speed)
 	if not plan["ok"]:
 		return ActionResult.fail(String(plan["reason"]))
@@ -7119,8 +7144,10 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 			int(plan["steps"]), driver.stats.display_name, driver.remaining_ap, veh.move_credit])
 	else:
 		# Кредит списывается вместо ОД; свежее движение стоит 1 ОД и оставляет остаток (#97).
-		if not use_credit:
-			veh.ap -= 1
+		var tk := tier_of(tank_tiers, int(plan["cost"])) if not tank_tiers.is_empty() else 0
+		veh.ap -= tk + (0 if use_credit else 1)
+		if not tank_tiers.is_empty():
+			speed = tank_tiers[tk]
 		veh.move_credit = maxi(0, speed - int(plan["cost"]))
 		res.log("%s drives %d cell(s). (AP %d, %d move left)" % [
 			VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id),
@@ -7697,32 +7724,50 @@ func vehicle_move_targets(veh: Vehicle, speed_bonus: int = 0) -> Dictionary:
 				break
 	return out
 
+## Потолки хода машины за 1/2/3 ОД — как move_tier_budgets у пехоты: [0] — остаток
+## прошлого движения (тогда он и есть первая зона, без ОД) или ход за 1 ОД, дальше по
+## ходу за каждое следующее ОД. Челнок платит по SHUTTLE_CELLS_PER_AP клеток за ОД.
+func vehicle_tier_budgets(veh: Vehicle) -> Array[int]:
+	var out: Array[int] = []
+	if veh == null or not veh.alive():
+		return out
+	var credit := vehicle_move_credit(veh)
+	var step := MCF.SHUTTLE_CELLS_PER_AP if _seated(veh) \
+			else int(VehicleDB.get_vehicle(veh.type_id).get("speed", 0))
+	var extra := vehicle_ap(veh) - (0 if credit > 0 else 1)
+	if extra < 0 or step <= 0:
+		return out if credit <= 0 else [credit]
+	out.append(credit if credit > 0 else step)
+	for k in range(1, mini(extra, 2) + 1):
+		out.append(out[0] + step * k)
+	return out
+
+## Зона хода по цене пути: первый потолок, в который цена влезла (0 — зелёная).
+static func tier_of(budgets: Array[int], cost: int) -> int:
+	var k := 0
+	while k < budgets.size() - 1 and cost > budgets[k]:
+		k += 1
+	return k
+
+## Все клетки, куда машина доедет за 1-3 ОД (центр -> {dir, steps, cost}); зона клетки —
+## tier_of(vehicle_tier_budgets, cost). Это и подсветка, и то, что примет клик.
+func vehicle_move_targets_all(veh: Vehicle) -> Dictionary:
+	var tb := vehicle_tier_budgets(veh)
+	if tb.is_empty():
+		return {}
+	# Челнок и так считает весь запас водителя (_shuttle_budget).
+	if _seated(veh):
+		return vehicle_move_targets(veh)
+	return vehicle_move_targets(veh, tb[tb.size() - 1] - tb[0])
+
 ## Куда машина доедет за 1, 2 и 3 ОД (batch ui-drones): массив словарей центр -> true,
-## каждый следующий — только клетки, которых нет в предыдущих. Первый ярус и есть то, что
-## примет «Move» сейчас; дальние — подсказка, куда хватит следующих ОД.
+## каждый следующий — только клетки, которых нет в предыдущих.
 func vehicle_move_tiers(veh: Vehicle) -> Array:
 	var tiers: Array = [{}, {}, {}]
-	if veh == null:
-		return tiers
-	var credit := vehicle_move_credit(veh)
-	if _seated(veh):
-		# Водитель челнока платит по SHUTTLE_CELLS_PER_AP клеток за ОД — ярус по цене пути.
-		var all := vehicle_move_targets(veh)
-		for c: Vector2i in all:
-			var cost := int(all[c]["cost"])
-			var k := 0 if cost <= credit else int(ceil(float(cost - credit) / MCF.SHUTTLE_CELLS_PER_AP)) - 1
-			tiers[clampi(k, 0, 2)][c] = true
-		return tiers
-	var speed := int(VehicleDB.get_vehicle(veh.type_id).get("speed", 0))
-	var extra_ap := vehicle_ap(veh) - (0 if credit > 0 else 1)
-	var seen := {}
-	for k in 3:
-		if k > 0 and extra_ap < k:
-			break
-		for c: Vector2i in vehicle_move_targets(veh, speed * k):
-			if not seen.has(c):
-				seen[c] = true
-				tiers[k][c] = true
+	var tb := vehicle_tier_budgets(veh)
+	var all := vehicle_move_targets_all(veh)
+	for c: Vector2i in all:
+		tiers[tier_of(tb, int(all[c]["cost"]))][c] = true
 	return tiers
 
 ## Раздавит ли этот ход СВОИХ (item 7).

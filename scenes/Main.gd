@@ -57,10 +57,10 @@ var _ruler_hover := Vector2i(-1, -1)
 var _ruler_btn: Button = null
 ## Отряд, выделенный до группового приказа: _after_action выделяет его снова.
 var _regroup_ids: Array[int] = []
-## Зоны хода за 2-е и 3-е ОД (клетка -> цена), см. _enter_move.
-var _reach_tiers: Array = []
-## Ярусы хода машины за 1/2/3 ОД (vehicle_move_tiers).
-var _veh_tiers: Array = []
+## Потолки зон хода за 1/2/3 ОД (resolver.move_tier_budgets), см. _enter_move.
+var _reach_tiers: Array[int] = []
+## Потолки зон хода машины за 1/2/3 ОД (resolver.vehicle_tier_budgets).
+var _veh_tiers: Array[int] = []
 
 ## Аннотации на поле (item 51). Каждый штрих — список клеток, автор и область видимости.
 enum DrawScope {SELF, TEAM, ALL}
@@ -139,9 +139,6 @@ var controllers: Dictionary = {}
 var mode: int = Mode.NONE
 var selected_id: int = -1
 var reach: Movement.Reachability = null
-## Запас движения, на который посчитан `reach` (#103). Нужен подсказке «3/6»: сама
-## Reachability знает лишь потраченное, а игроку важно, сколько от ЗАПАСА останется.
-var reach_budget: int = 0
 var target_ids: Array = []
 var item_cells: Array = []
 ## Соседние вражеские машины, по которым шахтёр может ударить в режиме «Hit» (item 15).
@@ -1691,8 +1688,9 @@ func _veh_enter_move() -> void:
 	var veh := _selected_vehicle()
 	if veh == null:
 		return
-	veh_move_targets = resolver.vehicle_move_targets(veh)
-	_veh_tiers = resolver.vehicle_move_tiers(veh)
+	# Все три зоны кликабельны (batch ui-drones 2): резолвер спишет 1/2/3 ОД по зоне.
+	veh_move_targets = resolver.vehicle_move_targets_all(veh)
+	_veh_tiers = resolver.vehicle_tier_budgets(veh)
 	mode = Mode.VEH_MOVE
 	item_cells = []
 	_menu.hide()
@@ -1855,20 +1853,11 @@ func _enter_move() -> void:
 	mode = Mode.MOVE
 	# Бюджет обязан совпадать с резолвером, иначе подсвеченные клетки не совпадут
 	# с тем, что он примет, и движение «не работает» (§3.4, #42/#44/#65).
-	var budget := resolver.move_budget(u)
-	reach = resolver.reachable_for(u, budget)
-	reach_budget = budget
-	# Дальние зоны (batch ui-drones): оранжевая — куда хватит ещё одного ОД, красная —
-	# ещё двух. Остаток движения переносится между действиями, поэтому «два хода подряд»
-	# и есть один путь с суммой бюджетов. Только подсказка: «Move» по-прежнему принимает
-	# зелёную зону.
-	_reach_tiers = []
-	var extra_ap := u.remaining_ap - (0 if u.move_credit > 0 else 1)
-	var step := resolver.move_budget_fresh(u)
-	for k in range(1, 3):
-		if extra_ap < k or step <= 0:
-			break
-		_reach_tiers.append(resolver.reachable_for(u, budget + step * k).cost)
+	# Один разлив по потолку красной зоны (batch ui-drones): цена клетки от бюджета не
+	# зависит, а зона — это первый потолок из move_tier_budgets, в который цена влезла.
+	# Клик по оранжевой/красной клетке — тот же MoveIntent, резолвер спишет 2/3 ОД.
+	_reach_tiers = resolver.move_tier_budgets(u)
+	reach = resolver.reachable_for(u, _reach_tiers[_reach_tiers.size() - 1])
 	target_ids = []
 	_menu.hide()
 	queue_redraw()
@@ -3382,6 +3371,17 @@ func _pos_to_cell(pos: Vector2) -> Vector2i:
 ## доля кадра.
 const MOVE_LABEL_MIN_ZOOM := 0.45
 
+## Цвета зон хода: [заливка, подсвеченный маршрут, контур, линия пути] за 1/2/3 ОД.
+const MOVE_TIER_COLS := [
+	[Color(0.3, 0.8, 0.4, 0.28), Color(0.45, 1.0, 0.55, 0.42), Color(0.55, 1.0, 0.65, 0.95), Color(0.6, 1.0, 0.7, 0.95)],
+	[Color(1.0, 0.5, 0.0, 0.40), Color(1.0, 0.65, 0.2, 0.55), Color(1.0, 0.7, 0.25, 0.95), Color(1.0, 0.78, 0.4, 0.95)],
+	[Color(1.0, 0.1, 0.05, 0.36), Color(1.0, 0.3, 0.2, 0.52), Color(1.0, 0.35, 0.3, 0.95), Color(1.0, 0.5, 0.45, 0.95)],
+]
+
+## Зона клетки: 0 — зелёная (1 ОД), 1 — оранжевая, 2 — красная.
+func _move_tier(spent: int) -> int:
+	return GameActionResolver.tier_of(_reach_tiers, spent)
+
 func _draw_move_preview() -> void:
 	var font := ThemeDB.fallback_font
 	var cvec := Vector2(CELL, CELL)
@@ -3396,56 +3396,108 @@ func _draw_move_preview() -> void:
 		for p: Vector2i in path:
 			on_path[p] = true
 	var labels: bool = zoom >= MOVE_LABEL_MIN_ZOOM
-	var budget_txt := "/%d" % reach_budget
 	# Горящие клетки разлива помечаются чёрным крестом (#1): дойти до них можно, но
 	# это смерть. Огнеупорному бойцу (#2) огонь не вредит — ему крестов не рисуем.
 	var mark_fire: bool = GridCell.burning > 0 and not resolver.is_fireproof(_selected_unit())
-	# Сначала дальние ярусы — красный (3 ОД), затем оранжевый (2 ОД); зелёный сверху.
-	for k in range(_reach_tiers.size() - 1, -1, -1):
-		var tier_col := Color(1.0, 0.5, 0.0, 0.45) if k == 0 else Color(1.0, 0.1, 0.05, 0.4)
-		var inner: Dictionary = reach.cost if k == 0 else _reach_tiers[k - 1]
-		for coord: Vector2i in _reach_tiers[k]:
-			if not inner.has(coord):
-				draw_rect(Rect2(_cell_origin(coord), cvec), tier_col)
+	# Все три зоны рисуются одинаково (batch ui-drones 2): заливка, подпись «цена/потолок
+	# зоны», контур по краю. Подпись в оранжевой — «9/12»: 12 клеток дают два ОД.
 	for coord: Vector2i in reach.cost:
 		var origin := _cell_origin(coord)
 		var lit: bool = on_path.has(coord)
-		draw_rect(Rect2(origin, cvec),
-			Color(0.45, 1.0, 0.55, 0.42) if lit else Color(0.3, 0.8, 0.4, 0.28))
+		var spent: int = reach.cost[coord]
+		var k := _move_tier(spent)
+		draw_rect(Rect2(origin, cvec), MOVE_TIER_COLS[k][1 if lit else 0])
 		if mark_fire and state.grid.cell(coord).on_fire:
 			# Наведённая клетка — крест в полную силу, остальные приглушены, иначе
 			# пожар в полкарты забивает собой всю подсветку хода.
 			_draw_black_cross(origin, float(CELL), 0.95 if lit else 0.5)
+		# Контур зоны: сторона клетки, за которой соседа этой же или более близкой зоны нет.
+		for d: Vector2i in GameActionResolver.DIR4:
+			var n: Vector2i = coord + d
+			if reach.cost.has(n) and _move_tier(reach.cost[n]) <= k:
+				continue
+			var a := origin + half + (Vector2(d) + Vector2(-d.y, d.x)) * half
+			var b := origin + half + (Vector2(d) - Vector2(-d.y, d.x)) * half
+			draw_line(a, b, MOVE_TIER_COLS[k][2], 2.0)
 		if not labels:
 			continue
-		var spent: int = reach.cost[coord]
-		draw_string(font, origin + Vector2(4, 13), str(spent) + budget_txt,
+		draw_string(font, origin + Vector2(4, 13), "%d/%d" % [spent, _reach_tiers[k]],
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 10,
-			Color(0.92, 1.0, 0.92) if lit else Color(0.75, 0.9, 0.78, 0.85))
+			Color(0.95, 1.0, 0.95) if lit else Color(0.92, 0.95, 0.9, 0.85))
 	# Сам маршрут поверх заливки: ломаная от бойца через каждую клетку пути.
 	if path.is_empty():
 		return
 	var u := _selected_unit()
 	if u == null:
 		return
+	var hk := _move_tier(reach.cost[hover])
+	var line_col: Color = MOVE_TIER_COLS[hk][3]
 	var pts := PackedVector2Array()
 	pts.append(_cell_origin(u.coord) + half)
 	for p: Vector2i in path:
 		pts.append(_cell_origin(p) + half)
-	draw_polyline(pts, Color(0.05, 0.25, 0.1, 0.65), 5.0)
-	draw_polyline(pts, Color(0.6, 1.0, 0.7, 0.95), 2.5)
+	draw_polyline(pts, Color(0.05, 0.1, 0.05, 0.65), 5.0)
+	draw_polyline(pts, line_col, 2.5)
 	for i in range(1, pts.size()):
-		draw_circle(pts[i], CELL * 0.09, Color(0.7, 1.0, 0.8, 0.9))
-	# Финиш — кольцо и итоговая цена крупнее, её игрок и ищет глазами.
+		draw_circle(pts[i], CELL * 0.09, line_col)
+	# Финиш — кольцо и итоговая цена крупнее, её игрок и ищет глазами; за пределами
+	# зелёной зоны — ещё и сколько ОД уйдёт на ход.
 	var last: Vector2 = pts[pts.size() - 1]
-	draw_arc(last, CELL * 0.36, 0.0, TAU, 24, Color(0.6, 1.0, 0.7, 0.95), 2.0)
+	draw_arc(last, CELL * 0.36, 0.0, TAU, 24, line_col, 2.0)
 	if labels:
-		var total: int = reach.cost[hover]
-		var txt := "%d/%d" % [total, reach_budget]
-		draw_string(ThemeDB.fallback_font, last + Vector2(-CELL * 0.5, -CELL * 0.42), txt,
-			HORIZONTAL_ALIGNMENT_CENTER, CELL, 13, Color(0.1, 0.2, 0.1))
-		draw_string(ThemeDB.fallback_font, last + Vector2(-CELL * 0.5, -CELL * 0.45), txt,
-			HORIZONTAL_ALIGNMENT_CENTER, CELL, 13, Color(0.75, 1.0, 0.85))
+		var txt := "%d/%d" % [reach.cost[hover], _reach_tiers[hk]]
+		if hk > 0 or u.move_credit <= 0:
+			txt += " · %d AP" % (hk + (0 if u.move_credit > 0 else 1))
+		draw_string(font, last + Vector2(-CELL, -CELL * 0.42), txt,
+			HORIZONTAL_ALIGNMENT_CENTER, CELL * 2, 13, Color(0.08, 0.08, 0.08))
+		draw_string(font, last + Vector2(-CELL, -CELL * 0.45), txt,
+			HORIZONTAL_ALIGNMENT_CENTER, CELL * 2, 13, line_col.lightened(0.3))
+
+## Предпросмотр хода машины — как у пехоты (batch ui-drones 2): заливка по зоне,
+## контур, подпись «цена/потолок зоны», а под курсором — линия от машины и сколько ОД уйдёт.
+func _draw_veh_move_preview() -> void:
+	var veh := _selected_vehicle()
+	if veh == null or _veh_tiers.is_empty():
+		return
+	var font := ThemeDB.fallback_font
+	var cvec := Vector2(CELL, CELL)
+	var half := cvec * 0.5
+	var hover := _pos_to_cell(get_global_mouse_position())
+	var labels: bool = zoom >= MOVE_LABEL_MIN_ZOOM
+	var tier_at: Dictionary = {}
+	for c: Vector2i in veh_move_targets:
+		tier_at[c] = GameActionResolver.tier_of(_veh_tiers, int(veh_move_targets[c]["cost"]))
+	for c: Vector2i in veh_move_targets:
+		var origin := _cell_origin(c)
+		var k: int = tier_at[c]
+		var lit: bool = c == hover
+		draw_rect(Rect2(origin, cvec), MOVE_TIER_COLS[k][1 if lit else 0])
+		for d: Vector2i in GameActionResolver.DIR4:
+			if tier_at.has(c + d) and int(tier_at[c + d]) <= k:
+				continue
+			var a := origin + half + (Vector2(d) + Vector2(-d.y, d.x)) * half
+			var b := origin + half + (Vector2(d) - Vector2(-d.y, d.x)) * half
+			draw_line(a, b, MOVE_TIER_COLS[k][2], 2.0)
+		if labels:
+			draw_string(font, origin + Vector2(4, 13), "%d/%d" % [int(veh_move_targets[c]["cost"]), _veh_tiers[k]],
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.92, 0.95, 0.9, 0.85))
+	if not veh_move_targets.has(hover):
+		return
+	var hk: int = tier_at[hover]
+	var col: Color = MOVE_TIER_COLS[hk][3]
+	var from := _cell_origin(veh.center()) + half
+	var to := _cell_origin(hover) + half
+	draw_line(from, to, Color(0.05, 0.1, 0.05, 0.65), 5.0)
+	draw_line(from, to, col, 2.5)
+	draw_arc(to, CELL * 0.36, 0.0, TAU, 24, col, 2.0)
+	if labels:
+		var credit := resolver.vehicle_move_credit(veh)
+		var txt := "%d/%d · %d AP" % [int(veh_move_targets[hover]["cost"]), _veh_tiers[hk],
+			hk + (0 if credit > 0 else 1)]
+		draw_string(font, to + Vector2(-CELL, -CELL * 0.42), txt,
+			HORIZONTAL_ALIGNMENT_CENTER, CELL * 2, 13, Color(0.08, 0.08, 0.08))
+		draw_string(font, to + Vector2(-CELL, -CELL * 0.45), txt,
+			HORIZONTAL_ALIGNMENT_CENTER, CELL * 2, 13, col.lightened(0.3))
 
 ## Клетки, которые накроет струя огнемёта из from к цели (для предпросмотра) — та же
 ## геометрия, что у выстрела, включая разлёт о стену (batch 17, item 5).
@@ -4176,11 +4228,7 @@ func _draw() -> void:
 			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), wt)
 
 	if mode == Mode.VEH_MOVE:
-		# Как у пехоты (batch ui-drones): зелёный — за 1 ОД, оранжевый — за 2, красный — за 3.
-		var vcols := [Color(0.3, 0.8, 0.4, 0.30), Color(1.0, 0.55, 0.05, 0.38), Color(1.0, 0.12, 0.08, 0.34)]
-		for k in _veh_tiers.size():
-			for coord: Vector2i in _veh_tiers[k]:
-				draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), vcols[k])
+		_draw_veh_move_preview()
 
 	if mode == Mode.VEH_TURN:
 		var vt := _selected_vehicle()
@@ -5425,6 +5473,9 @@ func _to_lobby() -> void:
 func _army_counts() -> Dictionary:
 	var out: Dictionary = {}
 	for u: UnitInstance in state.all_units():
+		# Дрон — техника станции, а не боец: в свод не идёт (станция — клетка карты).
+		if u.is_drone:
+			continue
 		var rec: Dictionary = out.get(u.owner, {"alive": 0, "dead": 0})
 		if u.is_alive():
 			rec["alive"] += 1
