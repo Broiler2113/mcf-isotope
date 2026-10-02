@@ -77,5 +77,44 @@ func _initialize() -> void:
 	st.grid.cell(Vector2i(7, 5)).on_fire = true
 	res = r.resolve(MoveIntent.new(li.id, Vector2i(7, 5)))
 	ck(not li.is_alive() and not res.fx.any(func(e): return e["fx"] == "blood"), "burned without blood")
+	# Orange / red zone: one move spends 2 / 3 AP, leftover becomes credit.
+	f = field([[Vector2i(2, 5), "light_infantry", 0], [Vector2i(28, 12), "light_infantry", 1]])
+	st = f["s"]; r = f["r"]
+	li = st.grid.cell(Vector2i(2, 5)).occupant
+	li.remaining_ap = 3
+	var sp := li.speed()
+	var tb := r.move_tier_budgets(li)
+	ck(tb == [sp, sp * 2, sp * 3], "tier budgets %s (speed %d)" % [tb, sp])
+	res = r.resolve(MoveIntent.new(li.id, Vector2i(2 + sp + 1, 5)))
+	ck(res.ok and li.remaining_ap == 1 and li.move_credit == sp - 1,
+		"orange move costs 2 AP (%s, ap %d, credit %d)" % [res.reason, li.remaining_ap, li.move_credit])
+	f = field([[Vector2i(2, 5), "light_infantry", 0], [Vector2i(28, 12), "light_infantry", 1]])
+	st = f["s"]; r = f["r"]
+	li = st.grid.cell(Vector2i(2, 5)).occupant
+	li.remaining_ap = 3
+	res = r.resolve(MoveIntent.new(li.id, Vector2i(2 + sp * 2 + 1, 5)))
+	ck(res.ok and li.remaining_ap == 0, "red move costs 3 AP (%s, ap %d)" % [res.reason, li.remaining_ap])
+	li.remaining_ap = 0
+	res = r.resolve(MoveIntent.new(li.id, Vector2i(li.coord.x + li.move_credit + 1, 5)))
+	ck(not res.ok, "no AP: beyond the credit is out of reach")
+	# Tank: orange zone drives in one go and spends 2 crew AP.
+	f = field([[Vector2i(2, 5), "light_infantry", 0], [Vector2i(3, 4), "tank", 0], [Vector2i(28, 12), "light_infantry", 1]])
+	st = f["s"]; r = f["r"]
+	veh = st.all_vehicles()[0]
+	crew = st.grid.cell(Vector2i(2, 5)).occupant
+	r.resolve(VehicleBoardIntent.new(crew.id, veh.id))
+	veh.ap = 3
+	var vtb := r.vehicle_tier_budgets(veh)
+	var vall := r.vehicle_move_targets_all(veh)
+	var orange := -1
+	for c: Vector2i in vall:
+		if GameActionResolver.tier_of(vtb, int(vall[c]["cost"])) == 1:
+			orange = c.x if orange == -1 else orange
+			var mv: Dictionary = vall[c]
+			res = r.resolve(VehicleMoveIntent.new(veh.id, mv["dir"], int(mv["steps"])))
+			ck(res.ok and veh.ap == 1 and veh.center() == c,
+				"tank orange move costs 2 AP (%s, ap %d, budgets %s)" % [res.reason, veh.ap, vtb])
+			break
+	ck(orange != -1, "tank has an orange zone (budgets %s, %d targets)" % [vtb, vall.size()])
 	print("rules: %d failure(s)" % fails)
 	quit(1 if fails else 0)
