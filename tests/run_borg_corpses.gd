@@ -93,6 +93,13 @@ func _initialize() -> void:
 	ck(stops_at_borg, "the laser stops at the borg's hull")
 	r.resolve(ShootIntent.new(mk.id, -1, -1, Vector2i(0, 4)))
 	ck(behind.is_alive(), "the soldier behind the borg is untouched")
+	# --- no corpses in a borg ---
+	if en.is_alive() and en.borg_id != -1:
+		st.grid.cell(en.coord + Vector2i(0, 1)).corpse_count = 1
+		ck(r.corpse_pickup_cells(en).is_empty(), "a borg is offered no corpse to pick up")
+		ck(not r.resolve(PickUpCorpseIntent.new(en.id, en.coord + Vector2i(0, 1))).ok,
+				"and a pick-up from the borg is refused")
+		st.grid.cell(en.coord + Vector2i(0, 1)).corpse_count = 0
 	# --- a borg digs 9 trenches per AP ---
 	r.resolve(EndTurnIntent.new())
 	while st.active_player() != 0:
@@ -102,6 +109,49 @@ func _initialize() -> void:
 		var res := r.resolve(DigIntent.new(en.id, cells[0], LegalIntents.SENT, LegalIntents.SENT)) if not cells.is_empty() else ActionResult.fail("nowhere")
 		ck(res.ok and en.dig_credits == MCF.BORG_DIG_TRENCHES - 1,
 				"a borg's first trench opens %d more (%s)" % [en.dig_credits, res.reason])
+
+	# --- a soldier carrying a body is not offered the borg ---
+	f = field(12, 6, [[Vector2i(4, 3), "light_infantry", 0], [Vector2i(5, 3), "borg", 0],
+			[Vector2i(10, 5), "light_infantry", 1]])
+	st = f["s"]; r = f["r"]
+	var carrier := st.grid.cell(Vector2i(4, 3)).occupant
+	var empty_borg: Vehicle = st.all_vehicles()[0]
+	ck(r.boardable_vehicles(carrier).has(empty_borg), "an empty-handed soldier may board the borg")
+	carrier.carried_corpses = 1
+	ck(not r.boardable_vehicles(carrier).has(empty_borg), "carrying a body, the borg is not offered")
+	ck(not r.resolve(VehicleBoardIntent.new(carrier.id, empty_borg.id)).ok, "and boarding is refused")
+
+	# --- shuttle passengers can't shoot through each other ---
+	var sm := MapData.new(20, 8)
+	for y in 8:
+		for x in 20:
+			sm.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	sm.set_spawn(Vector2i(3, 4), "light_infantry", 0)
+	sm.set_spawn(Vector2i(3, 5), "light_infantry", 0)
+	sm.set_spawn(Vector2i(4, 4), "shuttle", 0)
+	sm.set_spawn(Vector2i(15, 4), "light_infantry", 1)
+	GameConfig.civilians_enabled = false
+	st = sm.build_state(3)
+	r = GameActionResolver.new(st)
+	r.fog_mode = MCF.Fog.OFF
+	while st.active_player() != 0:
+		r.resolve(EndTurnIntent.new())
+	var sh: Vehicle = st.all_vehicles()[0]
+	var back_u := st.grid.cell(Vector2i(3, 4)).occupant
+	var front_u := st.grid.cell(Vector2i(3, 5)).occupant
+	var foe := st.grid.cell(Vector2i(15, 4)).occupant
+	# Rear seat and front seat on row 4: (4,4) and (5,4).
+	var rear := -1
+	var front := -1
+	for i in sh.seats.size():
+		if sh.seat_cell(i) == Vector2i(4, 4): rear = i
+		if sh.seat_cell(i) == Vector2i(5, 4): front = i
+	r.resolve(VehicleBoardIntent.new(back_u.id, sh.id, rear))
+	r.resolve(VehicleBoardIntent.new(front_u.id, sh.id, front))
+	ck(back_u.coord == Vector2i(4, 4) and front_u.coord == Vector2i(5, 4), "two passengers seated on one row")
+	ck(r.can_shoot(back_u, foe) != "" and not r.shootable_target_ids(back_u).has(foe.id),
+			"the rear passenger can't shoot through the front one (%s)" % r.can_shoot(back_u, foe))
+	ck(r.can_shoot(front_u, foe) == "", "the front passenger still can")
 
 	# --- no blood in space; an explosion there still throws chunks ---
 	var fx := FxDecals.new()

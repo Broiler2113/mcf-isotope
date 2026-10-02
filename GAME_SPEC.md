@@ -1528,8 +1528,8 @@ that one fact:
   into the cell's `corpse_count`, and a station in a seat moves with the hull.
 - **Passengers fight from their seats** with their own weapon, AP and rules: the firing
   line, LOS and range are measured from the seat; `los_blocked` never lets a hull block
-  a line that starts or ends on that hull, and `first_unit_on_line` ignores fellow
-  passengers of the shooter's own shuttle. Grenades, the laser, the flame jet and the AT
+  a line that starts or ends on that hull. Fellow passengers **block** the line like any
+  other unit — nobody shoots through the soldier in the next seat. Grenades, the laser, the flame jet and the AT
   rocket all work from a seat. Only what needs the floor is refused
   (`_aboard_allowed`: move, grab, build, dig, weld, repair, mines, boarding another
   vehicle).
@@ -1592,7 +1592,9 @@ cell kill the operator outright and take 1 hull point (2 for the cannon); other 
 rule applies to the operator in the blast area (a defence roll). At **hull 0** the operator
 dies, then a d6: **4+ explodes** — a 3×3 auto-kill square like an AT shell, flattening
 terrain, and nothing is left; **1–3 leaves a wreck** on the cell. **Overtaking**: boarding a
-borg whose operator is dead pushes the body onto a free neighbouring cell. The AI boards an
+borg whose operator is dead pushes the body onto a free neighbouring cell. **No corpses in
+a borg**: a soldier carrying a body cannot climb in (the Board option is not offered), and
+the operator cannot pick bodies up. The AI boards an
 empty borg it finds next to it (the first-turn "fill your vehicles" rule) and then fights
 with the operator as with any soldier; it does not buy them.
 

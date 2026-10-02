@@ -1866,6 +1866,9 @@ func _resolve_pickup_corpse(intent: PickUpCorpseIntent) -> ActionResult:
 	# защита для остальных бойцов, но не для того, кто и так укрыт своей плитой.
 	if _is_shield(unit):
 		return ActionResult.fail("A shield-bearer can't carry corpses")
+	# Борг трупов не подбирает: несущему трупы в борг нельзя, значит и в борге их не взять.
+	if unit.borg_id != -1:
+		return ActionResult.fail("A borg can't pick up corpses")
 	if unit.carried_corpses >= MCF.CORPSE_CARRY_MAX:
 		return ActionResult.fail("Hands full — %s" % ("one body is the limit"
 			if MCF.CORPSE_CARRY_MAX == 1 else "%d bodies is the limit" % MCF.CORPSE_CARRY_MAX))
@@ -5420,8 +5423,8 @@ func draggable_cells(actor: UnitInstance) -> Array:
 func corpse_pickup_cells(actor: UnitInstance) -> Array:
 	var out: Array = []
 	if actor == null or actor.remaining_ap <= 0 \
-			or actor.carried_corpses >= MCF.CORPSE_CARRY_MAX \
-			or _is_shield(actor):  # щитоносец трупы не носит (item 17)
+			or actor.carried_corpses >= MCF.CORPSE_CARRY_MAX or actor.borg_id != -1 \
+			or _is_shield(actor):  # щитоносец трупы не носит (item 17), борг тоже
 		return out
 	if has_corpse(actor.coord):
 		out.append(actor.coord)
@@ -6138,13 +6141,11 @@ func first_unit_on_line(from_coord: Vector2i, to_coord: Vector2i,
 			y += sy
 			continue
 		# Боец на дне окопа сидит ниже линии огня — пуля проходит над ним (§3.7).
-		# Сосед по челноку стрелку не мешает (batch 13): оба сидят в одной машине.
+		# Сосед по челноку перекрывает линию, как любой боец: стрелять сквозь него нельзя.
 		if cell.occupant != null and cell.occupant.is_alive() \
 				and not trench_protected(from_coord, cell.occupant) \
 				and not (skip_allies_of != null
-						and is_ally_of(skip_allies_of, cell.occupant)) \
-				and not (cell.occupant.aboard_vehicle_id != -1
-						and cell.occupant.aboard_vehicle_id == grid.vehicle_at(from_coord)):
+						and is_ally_of(skip_allies_of, cell.occupant)):
 			return cell.occupant
 		x += sx
 		y += sy
@@ -8067,8 +8068,9 @@ func controllable_vehicle_at(coord: Vector2i, owner: int) -> Vehicle:
 ## Машины (свои и вражеские) рядом с юнитом, в которые он может сесть.
 func boardable_vehicles(unit: UnitInstance) -> Array:
 	var out: Array = []
-	if unit == null or not unit.is_alive() or unit.aboard_vehicle_id != -1 or unit.is_drone:
-		return out
+	if unit == null or not unit.is_alive() or unit.aboard_vehicle_id != -1 or unit.is_drone \
+			or unit.borg_id != -1 or unit.carried_corpses > 0 or _is_shield(unit):
+		return out   # то же, что отклонит _resolve_vehicle_board: меню не предлагает отказ
 	var seen := {}
 	for veh: Vehicle in state.all_vehicles():
 		if not veh.alive() or _vehicle_full(veh):
