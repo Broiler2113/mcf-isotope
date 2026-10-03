@@ -111,7 +111,20 @@ case "${1:-}" in
     # Backgrounded through spawn like everything else, so it gets a pid file and
     # `run.sh down` stops it too — a supervisor that outlived `down` would resume the
     # very branch you just stopped.
-    CFG="${3:-$RUNS/$2/config.yaml}"
+    CFG="${3:-}"
+    if [ -z "$CFG" ]; then
+      # Wait for the trainer to write runs/<branch>/config.yaml — it does that when train()
+      # begins, which is seconds after `fork`/`start` returns (torch, the checkpoint load,
+      # the first save). "run.sh fork … ; run.sh supervise …" pasted as one block always
+      # lost that race and left the run unsupervised. Only while its process is alive: a
+      # branch that was never started still fails immediately, as before.
+      CFG="$RUNS/$2/config.yaml"
+      for _ in $(seq 120); do
+        if [ -f "$CFG" ]; then break; fi
+        pid_alive "$RUNS/$2.pid" || break
+        sleep 1
+      done
+    fi
     [ -f "$CFG" ] || { echo "no config at $CFG — pass one: run.sh supervise $2 <config.yaml>"; exit 2; }
     spawn "supervisor-$2" bash "$HERE/tools/supervise.sh" "$2" "$(abspath "$CFG")";;
   pause)    "$PY" "$HERE/train.py" pause "$2";;      # pid stays: a paused run is a live process
