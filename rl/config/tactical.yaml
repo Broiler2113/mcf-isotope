@@ -32,8 +32,10 @@
 #    (standard / rush / turtle / flank), half vs its own past checkpoints, prioritised
 #    toward the ones that beat it (PFSP). Evaluation never changes: standard HARD.
 #
-# WHAT TO WATCH (dashboard): eval win vs HARD on the pinned town map (comparable with the
-# parent's history), eval/drill_*_winrate (one per tactic), tac/<map>/exposure (falling =
+# WHAT TO WATCH (dashboard): eval win vs HARD on the pinned town map (since 2026-10-03 the
+# round cap is scored on army value, not head count, so compare only with runs forked after
+# that, e.g. tactical-2), the rout chart's "we wiped them out" line (a rout pays ±1, the cap
+# ±0.5), eval/drill_*_winrate (one per tactic), tac/<map>/exposure (falling =
 # it learned to use cover), tac/<map>/act_* (every unit type in use), tac/*/hit_* (aim),
 # league/pool_winrate (should hover near 50% — it is playing itself).
 device: auto

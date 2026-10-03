@@ -5426,10 +5426,10 @@ func corpse_pickup_cells(actor: UnitInstance) -> Array:
 			or actor.carried_corpses >= MCF.CORPSE_CARRY_MAX or actor.borg_id != -1 \
 			or _is_shield(actor):  # щитоносец трупы не носит (item 17), борг тоже
 		return out
-	if has_corpse(actor.coord):
-		out.append(actor.coord)
-	for n in state.grid.neighbors(actor.coord):
-		# Тело под стоящей машиной не достать (batch 12 #2): оно лежит там, но под днищем.
+	# Тело под стоящей машиной не достать (batch 12 #2): оно лежит там, но под днищем. Своя
+	# клетка — не исключение: резолвер проверяет любую, и без этой проверки перечислитель
+	# RL предлагал подъём, который тут же отклонялся («The body is under a vehicle»).
+	for n in [actor.coord] + state.grid.neighbors(actor.coord):
 		if has_corpse(n) and state.grid.vehicle_at(n) == -1:
 			out.append(n)
 	return out
@@ -6654,25 +6654,13 @@ func _validate_actor(unit: UnitInstance, credit: int = 0) -> String:
 ## боец (B14); пустой борг или борг с мёртвым оператором размечен как корпус, чтобы его
 ## можно было выбрать и в него сесть.
 func _board_borg(unit: UnitInstance, veh: Vehicle) -> ActionResult:
-	var op := state.get_unit(veh.borg_operator())
-	if op != null and op.is_alive():
-		return ActionResult.fail("Someone is already at the controls")
+	var err := _borg_entry_error(unit, veh)
+	if err != "":
+		return ActionResult.fail(err)
 	var cell := state.grid.cell(veh.origin)
 	# Мёртвый оператор выталкивается наружу при посадке (B12) — на свободную клетку рядом.
 	if cell.occupant != null:
-		if cell.occupant.status != MCF.Status.CORPSE:
-			return ActionResult.fail("The borg's cell is blocked")
-		var spot := NOWHERE
-		for n in state.grid.neighbors(veh.origin):
-			if n == unit.coord:
-				continue
-			var nc := state.grid.cell(n)
-			if nc != null and nc.occupant == null and not nc.is_wall() and not nc.is_space \
-					and nc.vehicle_id == -1 and nc.corpse_count < MCF.CORPSE_WALL_COUNT:
-				spot = n
-				break
-		if spot == NOWHERE:
-			return ActionResult.fail("No room to push the body out")
+		var spot := _borg_push_spot(unit, veh)
 		var body: UnitInstance = cell.occupant
 		cell.occupant = null
 		body.borg_id = -1
@@ -6696,6 +6684,33 @@ func _board_borg(unit: UnitInstance, veh: Vehicle) -> ActionResult:
 	res.log("%s %s the borg [AP: %d]" % [unit.stats.display_name,
 		"seizes" if captured else "climbs into", unit.remaining_ap])
 	return res
+
+## Почему боец не сядет в борг ("" — сядет). Одна проверка и для посадки, и для списка
+## boardable_vehicles: раньше список проверял только «жив ли оператор», и борг, чьего
+## оператора взяли в плен (HELD — не жив, но и не труп, лежит в клетке), предлагался
+## перечислителю RL, а посадку резолвер отклонял: «The borg's cell is blocked».
+func _borg_entry_error(unit: UnitInstance, veh: Vehicle) -> String:
+	var op := state.get_unit(veh.borg_operator())
+	if op != null and op.is_alive():
+		return "Someone is already at the controls"
+	var cell := state.grid.cell(veh.origin)
+	if cell.occupant != null:
+		if cell.occupant.status != MCF.Status.CORPSE:
+			return "The borg's cell is blocked"
+		if _borg_push_spot(unit, veh) == NOWHERE:
+			return "No room to push the body out"
+	return ""
+
+## Свободная соседняя клетка, куда при посадке выталкивается мёртвый оператор (B12).
+func _borg_push_spot(unit: UnitInstance, veh: Vehicle) -> Vector2i:
+	for n in state.grid.neighbors(veh.origin):
+		if n == unit.coord:
+			continue
+		var nc := state.grid.cell(n)
+		if nc != null and nc.occupant == null and not nc.is_wall() and not nc.is_space \
+				and nc.vehicle_id == -1 and nc.corpse_count < MCF.CORPSE_WALL_COUNT:
+			return n
+	return NOWHERE
 
 func _exit_borg(unit: UnitInstance, veh: Vehicle, target: Vector2i) -> ActionResult:
 	if unit.remaining_ap <= 0:
@@ -8075,7 +8090,7 @@ func boardable_vehicles(unit: UnitInstance) -> Array:
 	for veh: Vehicle in state.all_vehicles():
 		if not veh.alive() or _vehicle_full(veh):
 			continue
-		if seen.has(veh.id):
+		if seen.has(veh.id) or (veh.is_borg() and _borg_entry_error(unit, veh) != ""):
 			continue
 		if _adjacent_to_vehicle(unit.coord, veh):
 			seen[veh.id] = true

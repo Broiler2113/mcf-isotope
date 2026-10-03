@@ -18,10 +18,11 @@ func _initialize() -> void:
 	_fire_trench_and_mines()
 	_destruction()
 	_overtake_a_dead_operator()
+	_captured_operator_not_offered()
 	_operator_stays_a_unit()
 	_ai_uses_a_borg()
 	if fails.is_empty():
-		print("borg: boarding, stats, engineer batches, fire, trenches, mines, destruction, overtaking, one-vehicle-at-a-time and the AI all hold")
+		print("borg: boarding, stats, engineer batches, fire, trenches, mines, destruction, overtaking, a held operator's borg not offered, one-vehicle-at-a-time and the AI all hold")
 		quit(0)
 		return
 	printerr("borg: %d failure(s)" % fails.size())
@@ -189,6 +190,22 @@ func _overtake_a_dead_operator() -> void:
 	ck(en.borg_id == b.id and en.coord == Vector2i(5, 5), "engineer at the controls")
 	ck(st.grid.in_bounds(sn.coord) and sn.coord != Vector2i(5, 5) and st.grid.cell(sn.coord).occupant == sn
 			and Combat.distance(sn.coord, Vector2i(5, 5)) == 1, "the body was pushed out next to the borg (%s)" % str(sn.coord))
+
+## Оператор в плену (HELD — не жив, но и не труп, лежит в клетке борга): посадку в борг не
+## предлагают. Раньше список смотрел только «жив ли оператор», и перечислитель RL предлагал
+## посадку, которую резолвер тут же отклонял: «The borg's cell is blocked» (фазз среды).
+func _captured_operator_not_offered() -> void:
+	var f := _field()
+	var st: GameState = f["s"]
+	var r: GameActionResolver = f["r"]
+	var b: Vehicle = f["b"]
+	var sn := _u(st, Vector2i(4, 5))
+	var en := _u(st, Vector2i(4, 6))
+	r.resolve(VehicleBoardIntent.new(sn.id, b.id))
+	sn.status = MCF.Status.HELD
+	ck(not r.boardable_vehicles(en).has(b), "a borg whose operator is held is not offered")
+	var res := r.resolve(VehicleBoardIntent.new(en.id, b.id))
+	ck(not res.ok, "boarding it is refused (%s)" % res.reason)
 
 ## Борг — это боец, а не машина: оператор не пересаживается из него прямо в танк (борг
 ## оставался «занятым», а при высадке телепортировался к бойцу), а машинные намерения

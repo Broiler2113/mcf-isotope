@@ -31,6 +31,11 @@ const ArmyBuilder = preload("res://rl/ArmyBuilder.gd")
 const EnemyMemory = preload("res://rl/EnemyMemory.gd")
 
 const R_DRAW := -0.1
+## Исход партии (решение владельца, 2026-10-03): разгром — ±1, итог на лимите раундов — ±0.5.
+## Добить армию вдвое выгоднее, чем досидеть до звонка с перевесом: «только уничтожение»
+## остаётся целью, а лимит — всего лишь страховкой от бесконечной партии.
+const R_ROUT := 1.0
+const R_CAP := 0.5
 const AI_TURN_CAP := 4000
 
 ## Штрафы задаются В ДОЛЯХ ТИПОВОГО УБИЙСТВА, а не абсолютным числом.
@@ -215,9 +220,9 @@ var _illegal: int = 0
 var _steps: int = 0
 var _result: String = ""
 var _out: StreamPeerTCP = null   ## канал ответов (--reply-port), иначе stdout
-## Как закончилась партия: "rout" (одна из армий уничтожена), "count" (перевес по составу
-## на лимите раундов) или "" (ничья/страховка). Едет в info, чтобы разгром и победу по
-## очкам можно было отличить в логе оценок.
+## Как закончилась партия: "rout" (одна из армий уничтожена), "value" (перевес по стоимости
+## армий на лимите раундов; до 2026-10-03 — "count", по головам) или "" (ничья/страховка).
+## Едет в info, чтобы разгром и победу по очкам можно было отличить в логе оценок.
 var _by: String = ""
 ## Бесплатные действия за текущий ход: ключ актёра → счётчик, и "<ключ>|<вид>" → true.
 ## Обнуляются на смене хода (_turn_token). См. FREE_ACTIONS_PER_UNIT и _drop_looping().
@@ -558,6 +563,9 @@ func _step(req: Dictionary) -> Dictionary:
 	if not res.ok:
 		# Не должно случаться (перечислитель точен) — но если случилось, шаг не теряется:
 		# считаем, штрафуем и, чтобы не зациклиться, отдаём ход после серии отказов.
+		# В лог среды — что именно и почему: счётчик в eval_games.jsonl говорит лишь «было».
+		printerr("REFUSED r%d %s %s: %s" % [state.turns.round_number, _actor_label(intent),
+				JSON.stringify(IntentCodec.encode(intent)), res.reason])
 		_illegal += 1
 		if acting == side:
 			reward += _turn_penalty
@@ -677,16 +685,16 @@ func _side_has_army(pid: int) -> bool:
 
 ## Исход партии: своя армия мертва — поражение, чужая — победа, обе — ничья.
 ##
-## На лимите раундов партия НЕ ничья по умолчанию, а считается по головам: у кого на конец
-## последнего раунда живых бойцов больше, тот и выиграл. Требование «уничтожить все 176
-## вражеских юнитов за 13 раундов» было победой только на бумаге — за всю ночь обучения
-## win не уходил с 0.00 ни разу, и уйти не мог. Перевес по составу достижим и при этом
-## по-прежнему честен: политика сейчас заканчивает матч, потеряв БОЛЬШЕ врага
-## (value_diff ≈ −0.5), так что для победы ей всё равно нужно научиться разменивать
-## лучше противника, а не просто досидеть до конца.
+## На лимите раундов партия НЕ ничья по умолчанию, а решается по СТОИМОСТИ оставшихся армий
+## (Obs.army_value — та же мера, что у дифференциала). Раньше (с 2026-09-23) — по головам, и
+## tactical-1 это выучил: 215 из 217 побед — по головам на лимите, четверть из них — с МЕНЬШЕЙ
+## армией по стоимости. Ранний удар дронами, потом прятаться и беречь дешёвых бойцов; чем
+## меньше действий за партию, тем выше доля побед. По стоимости беречь пехоту ценой танка
+## бессмысленно, а за разгром платится вдвое больше (R_ROUT против R_CAP).
 ##
-## Ничья остаётся только при РАВНОМ счёте. draw_steps (упёрлись в max_steps) считается
-## ничьёй всегда: это признак сломанного эпизода, а не результат партии.
+## Ничья на лимите — перевес меньше одного типового бойца (_typical): иначе исход решала бы
+## сотая доля очка. draw_steps (упёрлись в max_steps) — ничья всегда: это признак сломанного
+## эпизода, а не результат партии.
 func _check_over() -> bool:
 	if _done:
 		return true
@@ -704,17 +712,13 @@ func _check_over() -> bool:
 		_result = "win"
 		_by = "rout"
 	elif state.turns.round_number > round_cap:
-		var mine_n := _living_count(side)
-		var theirs_n := 0
-		for pid: int in state.roster.player_ids():
-			if pid != side and Obs.rel_owner(resolver, side, pid) == 1:
-				theirs_n += _living_count(pid)
+		var lead := _value_diff() / _norm
 		# Строки результата НЕ новые нарочно: "win"/"loss" читают и награда в _response,
 		# и счётчики winrate в train.py, и панель. Как именно победили — в info.by.
-		_by = "count"
-		if mine_n > theirs_n:
+		_by = "value"
+		if lead > _typical:
 			_result = "win"
-		elif mine_n < theirs_n:
+		elif lead < -_typical:
 			_result = "loss"
 		else:
 			_result = "draw_cap"
@@ -893,9 +897,10 @@ func _response(reward: float, is_reset: bool) -> Dictionary:
 				"shots": _shots, "shots_hit": _shots_hit}}
 	if _done:
 		resp["info"]["tac"] = _tac_summary()
+		var stake := R_ROUT if _by == "rout" else R_CAP
 		match _result:
-			"win": resp["reward"] = float(resp["reward"]) + 1.0
-			"loss": resp["reward"] = float(resp["reward"]) - 1.0
+			"win": resp["reward"] = float(resp["reward"]) + stake
+			"loss": resp["reward"] = float(resp["reward"]) - stake
 			_: resp["reward"] = float(resp["reward"]) + R_DRAW
 		resp["info"]["result"] = _result
 		resp["info"]["by"] = _by
