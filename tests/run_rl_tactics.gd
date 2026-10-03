@@ -164,5 +164,21 @@ func _initialize() -> void:
 	var t_turtle: Vector2i = picks[AIController.Style.TURTLE]
 	ck(t_rush != t_turtle, "rush and turtle pick different cells (%s vs %s)" % [t_rush, t_turtle])
 	ck(t_rush.x >= t_turtle.x, "rush goes at least as far forward")
+
+	# --- army value: every component of a vehicle counts, not only the hull ---
+	f = field([[Vector2i(5, 5), "tank", 0], [Vector2i(3, 12), "light_infantry", 0],
+			[Vector2i(20, 8), "light_infantry", 1]])
+	st = f["s"]
+	var tank: Vehicle = st.all_vehicles()[0]
+	var parts: Dictionary = MCF.VEHICLE_COMPONENTS["tank"]
+	var points := 0
+	for p: int in parts.values():
+		points += p
+	var full := Obs.army_value(st, 0)
+	tank.components[MCF.COMP_GUN] = 0
+	var lost := full - Obs.army_value(st, 0)
+	var want := float(VehicleDB.buy_cost("tank")) * float(parts[MCF.COMP_GUN]) / float(points)
+	ck(absf(lost - want) < 0.01, "a knocked-out gun costs its share of the tank (%.1f, want %.1f)"
+			% [lost, want])
 	print("rl tactics: %d failure(s)" % fails)
 	quit(1 if fails else 0)

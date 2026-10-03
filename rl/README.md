@@ -246,11 +246,19 @@ civilians on load.
   512. `train.py play` passes the checkpoint's own caps through as environment variables. Company-scale maps
   need them: on `town_50x50` the opening has 8366 legal intents and the enumerator alone
   costs ~148 ms of a ~195 ms step. `max_actors` draws a fresh random subset of the side's
-  units each decision point (those with AP left first), so the enumerator only looks at a
-  few — over a turn the policy still reaches everybody. `max_candidates` then trims what
+  units each decision point (those with AP left first, and among them those with a visible
+  enemy in reach on a firing line first), so the enumerator only looks at a few — over a
+  turn the policy still reaches everybody. The contact-first order exists because a plain
+  draw of 16 from ~46 showed a sniper's legal shot in 46% of the points where it had one,
+  an anti-tank shot at a vehicle in 41% (tactical-1 eval, 2026-10-03). `max_candidates` then trims what
   survives, round-robin over (actor, intent kind) buckets so every rare kind and every
   actor keeps a slot. Together: 5.1 → 14.7 env steps/s, and a rollout that fits in RAM.
-- Round cap 10 per training episode; the cap is a draw with a small negative reward (Q4, owner's number).
+- Round cap per training episode (`round_cap`, 20 in `tactical.yaml`). Wiping the enemy army
+  out ends the game at once and pays ±1. At the cap the remaining ARMY VALUE decides and pays
+  ±0.5; a lead under one typical unit is `draw_cap` (−0.1). Owner's call, 2026-10-03: the cap
+  went by head count before, and tactical-1 won a quarter of those games from behind on
+  value — an early drone strike, then hiding cheap units until the bell. `info.by` is
+  `rout` or `value` (`count` in older eval logs).
 - Stage 1: civilians off, random events off (Q5). Turn them on in the config for later stages.
 - Action space: all 37 intent kinds minus Undo/Redo (C6), minus GroupMove (a client-side
   bundle of moves) and BuildWall (6-cell LDF chain; v1 skips it), shots only at hostiles,
@@ -259,7 +267,10 @@ civilians on load.
   gathered from the CNN map) instead of sampling unit→kind→target in three steps. It is the
   same factorisation read off the map, and illegal actions are structurally impossible.
 - Reward (§6.1): Δ(own army value − enemy army value) per response, normalised by half the
-  starting total; +1/−1 terminal; −0.1 draw. Plus, added after `town-1`:
+  starting total; terminal ±1 for a rout, ±0.5 at the cap, −0.1 draw. A vehicle's value is
+  its price × the share of ALL its component points left (it used to be the hull alone, so
+  18 of a tank's 26 points — gun, turret, tracks — paid nothing until it died, and
+  tactical-1 never fired an anti-tank shot at one). Plus, added after `town-1`:
   - **Penalties are scale-free.** They are fractions of a typical kill (`TURNS_PER_KILL`,
     `STEPS_PER_KILL`), not constants. They used to be constants, and because the kill
     reward is normalised by army value while the penalties were not, a kill was worth

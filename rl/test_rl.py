@@ -353,6 +353,36 @@ def test_tactical_features():
     assert np.allclose(rows[0, F_PRED:F_PRED + 2], [0.25, 0.5])
 
 
+def test_round_cap_is_scored_on_value():
+    """At the round cap the env scores army VALUE, not head count, and pays ±0.5 (a rout
+    pays ±1). Owner's call 2026-10-03, after tactical-1 won a quarter of its head-count
+    wins from behind on value. Needs Godot: one real arena episode with round_cap 1."""
+    import shutil
+    from mcf_env import HARD, EpisodeConfig, GodotEnv
+    godot = os.environ.get("GODOT") or shutil.which("godot")
+    if not godot:
+        raise ImportError("no godot on PATH")
+    env = GodotEnv(godot)
+    try:
+        r = env.reset(EpisodeConfig(map_path=os.path.join(os.path.dirname(__file__), "maps",
+                                                          "arena_34x26.json"),
+                                    seed=3, opponent=HARD, round_cap=1, max_steps=500))
+        prev = r["info"]["value_diff"]
+        while not r["done"]:
+            prev = r["info"]["value_diff"]
+            end = next(i for i, d in enumerate(r["legal"]) if d["i"].get("t") == "end")
+            r = env.step(end)
+    finally:
+        env.close()
+    info = r["info"]
+    assert info["by"] == "value", info
+    vd = info["value_diff"]
+    assert info["result"] == ("win" if vd > 0 else "loss") or info["result"] == "draw_cap", info
+    stake = {"win": 0.5, "loss": -0.5}.get(info["result"], -0.1)
+    # the last reward = value differential of that step + the stake + one end-turn penalty
+    assert abs(r["reward"] - (vd - prev) - stake) < 0.05, (r["reward"], vd, prev, stake)
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

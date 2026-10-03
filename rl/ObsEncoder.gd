@@ -38,8 +38,14 @@ static func unit_type(u: UnitInstance) -> int:
 		return UNIT_TYPES.size() - 1
 	return maxi(0, UNIT_TYPES.find(u.stats.id))
 
-## Стоимость живой армии стороны: пехота по cost, техника — цена × доля корпуса.
+## Стоимость живой армии стороны: пехота по cost, техника — цена × доля очков ВСЕХ узлов.
 ## Это и есть «army value» из награды §6.1; дрон и станции ничего не стоят.
+##
+## Раньше техника стоила цену × долю одного КОРПУСА. Но у танка корпус — 8 очков из 26, а
+## промах по узлу уходит каскадом пушка → башня → гусеницы → корпус: 18 очков урона
+## (и выбитая пушка, и порванные гусеницы) не стоили в награде ничего, пока танк не умрёт.
+## tactical-1 так и не стал стрелять противотанкистом по технике (0 раз из 26 показанных
+## случаев), а танк HARD'а делал 30% его убийств и доживал до конца в 94% партий.
 static func army_value(state: GameState, side: int) -> float:
 	var v := 0.0
 	for u in state.all_units():
@@ -48,8 +54,14 @@ static func army_value(state: GameState, side: int) -> float:
 	for veh: Vehicle in state.all_vehicles():
 		if veh.owner != side or not veh.alive():
 			continue
-		var cap := maxi(1, veh.component_max(MCF.COMP_HULL))
-		v += float(VehicleDB.buy_cost(veh.type_id)) * float(veh.component(MCF.COMP_HULL)) / float(cap)
+		var have := 0
+		var full := 0
+		for comp: String in veh.components:
+			var top := veh.component_max(comp)
+			if top > 0:
+				have += mini(veh.component(comp), top)
+				full += top
+		v += float(VehicleDB.buy_cost(veh.type_id)) * float(have) / float(maxi(1, full))
 	return v
 
 ## Тактический контекст точки решения (RL tactical env): карта огня врага по клеткам,

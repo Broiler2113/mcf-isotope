@@ -305,6 +305,11 @@ class Trainer:
         self.run_dir = run_dir
         self.cfg = with_defaults(cfg)
         self.device = device
+        # The game rules this process trains on: the env servers load the checkout as it was
+        # at start, and a later pull changes nothing until a restart. tactical-1 trained for a
+        # day on rules two merges behind main without anyone seeing it; the dashboard now
+        # compares this commit with the checkout and with origin/main.
+        self.code = game_version(PROJECT)
         os.makedirs(run_dir, exist_ok=True)
         self.net = PolicyNet().to(device)
         self.opt = torch.optim.Adam(self.net.parameters(), lr=self.cfg["lr"], eps=1e-5)
@@ -442,7 +447,7 @@ class Trainer:
                   activity=activity, done=done, total=total, time=time.time(),
                   next_eval_update=self.next_eval_update(), eval=self.last_eval,
                   disk_mb=self.disk_mb(), disk_free_mb=round(free_mb(self.run_dir)),
-                  **mem_report(), **extra)
+                  code=self.code, **mem_report(), **extra)
         self._last_status = time.time()
         tmp = os.path.join(self.run_dir, "status.json.tmp")
         with open(tmp, "w") as f:

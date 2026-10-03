@@ -6,6 +6,7 @@ extends SceneTree
 ##      бесплатный подрыв почти не предлагался — дрон висел над врагом до следующего хода.
 ##   2. Из сотен клеток полёта до списка доходили случайные, а не клетка над скоплением.
 ##   3. Экипаж, запертый в танке, считался «готовым» и занимал места пехоты.
+##   4. Боец, которому есть в кого стрелять, проигрывал жеребьёвку праздным (оценка tactical-1).
 
 const TS = preload("res://tests/TestSupport.gd")
 const Budget = preload("res://rl/IntentBudget.gd")
@@ -81,11 +82,36 @@ func _initialize() -> void:
 	ck(Budget.can_act(r, crew, {}), "a crewman who may disembark can act")
 	crew.aboard_vehicle_id = -1
 	crew.coord = at
+
+	# 4. Кому есть в кого стрелять — первым в жребии. На оценке tactical-1 жребий 16 из ~46
+	#    показывал выстрел снайпера лишь в 46% точек, где он был законен.
+	var sniper := state.spawn_unit(load("res://src/data/units/sniper.tres"),
+			Vector2i(10, 10), side, false)
+	for i in 6:
+		state.spawn_unit(inf, Vector2i(1 + i, 1), side, false)
+	var foes := Budget._foe_cells(r, side)
+	ck(Budget.in_contact(sniper, foes), "the fixture sniper has the cluster on its line")
+	var hot := {}
+	var cold := 0
+	for u: UnitInstance in state.living_units_of(side):
+		if u.is_drone or not Budget.can_act(r, u, {}):
+			continue
+		if Budget.in_contact(u, foes):
+			hot[u.id] = true
+		else:
+			cold += 1
+	ck(cold >= 3, "the fixture also has idle units for the draw (%d)" % cold)
+	var always := Budget.actor_subset(r, side, 1, rng).size()  # дрон: вне жребия
+	for i in 30:
+		var sub := Budget.actor_subset(r, side, always + hot.size(), rng)
+		for id: int in hot:
+			ck(sub.has(id), "a unit with a target is drawn before idle ones (try %d)" % i)
 	_finish()
 
 func _finish() -> void:
 	if fails.is_empty():
-		print("intent budget: spent drones detonate, best blast first, sealed crews skipped")
+		print("intent budget: spent drones detonate, best blast first, sealed crews skipped, "
+				+ "shooters with a target drawn first")
 		quit(0)
 		return
 	printerr("intent budget: %d failure(s)" % fails.size())

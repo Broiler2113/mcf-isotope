@@ -387,6 +387,24 @@ def pct(v) -> str:
     return f"{float(v):.0%}"
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def rules_behind(sha: str) -> int:
+    """Commits that change the game or the env (src/, rl/*.gd, the trainer) on origin/main —
+    as last fetched: every "Play vs latest" fetches it — or in this checkout, that the
+    trainer started at `sha` does not have. A pull alone changes nothing for a running
+    trainer: its Godot envs loaded the rules when it started."""
+    paths = ["src", "rl/*.gd", "rl/train.py", "rl/model.py", "rl/features.py", "rl/mcf_env.py"]
+    most = 0
+    for ref in ("HEAD", "origin/main"):
+        try:
+            out = subprocess.run(["git", "rev-list", "--count", f"{sha}..{ref}", "--", *paths],
+                                 cwd=PROJECT, capture_output=True, text=True, timeout=10)
+            most = max(most, int(out.stdout.strip() or 0))
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+    return most
+
+
 def live_card(b: str) -> None:
     """What the trainer is doing right now — the answer to "is it even running?"."""
     s = status(b)
@@ -399,6 +417,10 @@ def live_card(b: str) -> None:
         flags += " " + pill("heartbeat stale", "warning")
     if s.get("pause_requested") and state == "running":
         flags += " " + pill("pause requested", "warning")
+    code = str(s.get("code") or "")
+    behind = rules_behind(code.split()[0]) if code and code != "?" and state == "running" else 0
+    if behind:
+        flags += " " + pill(f"rules {behind} commit{'s' * (behind > 1)} behind", "warning")
     # Name and state on one line, the run's vitals beneath it — the colour of the state
     # pill repeats the word inside it, so it is never the only carrier of the meaning.
     st.markdown(
@@ -406,23 +428,40 @@ def live_card(b: str) -> None:
         f'{pill(state, role)}{flags}</h3>'
         f'<span class="rlm-sub">step <b>{s.get("step", "—"):,}</b> · update '
         f'<b>{s.get("update", "—")}</b> · matches <b>{s.get("matches", "—")}</b> · phase '
-        f'<b>{s.get("phase", "—")}</b> · heartbeat {age}</span></div>'
+        f'<b>{s.get("phase", "—")}</b> · heartbeat {age}'
+        + (f'<br>game rules: {code}' if code else '') + '</span></div>'
         if isinstance(s.get("step"), int) else
         f'<div class="rlm-card"><h3 style="margin:0 0 6px 0">{b} '
         f'{pill(state, role)}{flags}</h3>'
         f'<span class="rlm-sub">no progress recorded yet · heartbeat {age}</span></div>',
         unsafe_allow_html=True)
 
+    if behind:
+        st.caption(f"This run trains on the game rules of `{code}`; {behind} newer commit"
+                   f"{'s change' if behind > 1 else ' changes'} the game or the env. Pull on "
+                   f"this machine, then restart or fork the run to train on them — a pull "
+                   f"alone changes nothing for a running trainer.")
     ev = s.get("eval") or {}
+    # The cards average the last five evaluations. One evaluation is ten games, so its win
+    # rate swings ±15 points on luck alone: tactical-1 read 70% and 80% on the card while
+    # 450 games put it at 48%.
+    hist = evals(b)
+    recent = hist.tail(5) if "winrate_hard" in hist else pd.DataFrame()
+
+    def avg(col: str):
+        return recent[col].mean() if col in recent and recent[col].notna().any() else ev.get(col)
+
     cols = st.columns(5)
-    cols[0].metric("win vs HARD", pct(ev.get("winrate_hard")),
-                   help="the graduation opponent (§8.2); 0.55 is the reference bar")
-    cols[1].metric("loss vs HARD", pct(ev.get("lossrate_hard")))
+    cols[0].metric("win vs HARD", pct(avg("winrate_hard")),
+                   help="average of the last 5 evaluations; the graduation opponent (§8.2), "
+                        "0.55 is the reference bar")
+    cols[1].metric("loss vs HARD", pct(avg("lossrate_hard")))
     # Win/loss/draw read as one triple: on town a draw means the round cap was reached
-    # with the unit counts level, so it is the midpoint between the other two, not a
+    # with the army values level, so it is the midpoint between the other two, not a
     # separate outcome to hunt for.
-    cols[2].metric("draw vs HARD", pct(ev.get("drawrate_hard")),
-                   help="round cap reached with equal living units; stalls count here too")
+    cols[2].metric("draw vs HARD", pct(avg("drawrate_hard")),
+                   help="round cap reached with the army values within one typical unit of "
+                        "each other; stalls count here too")
     cols[3].metric("memory", f"{s['total_mb']:.0f} MB" if s.get("total_mb") else "—",
                    help="trainer + its Godot envs; `free` is what the machine has left")
     # Free DISK, not free memory — the number that decides whether the run survives the
@@ -445,6 +484,9 @@ def live_card(b: str) -> None:
                    + " A run now evaluates on its first update too, so this should not stay"
                      " blank for long; lower `eval_every` to see it sooner.")
     else:
+        st.caption(f"Win / loss / draw: average of the last {len(recent) or 1} evaluations. "
+                   f"Newest alone: {pct(ev.get('winrate_hard'))} won, "
+                   f"{pct(ev.get('lossrate_hard'))} lost.")
         stall = ev.get("stallrate_hard") or 0
         if stall >= 0.25:
             st.caption(f"{stall:.0%} of the last evaluation's games ended on the step cap "
@@ -624,7 +666,7 @@ def ckpt_stamp() -> str:
 
 
 # The env reports four terminal strings, and the panel has to offer three choices.
-# draw_cap is "the round cap ran out on an equal head count", draw_steps is "the episode
+# draw_cap is "the round cap ran out with the army values level", draw_steps is "the episode
 # hit max_steps", and a viewer picking "draw" means both. The raw string stays in its own
 # column, so nothing is lost by grouping them here.
 OUTCOME = {"win": "win", "loss": "loss", "draw": "draw",
@@ -891,20 +933,19 @@ METRIC_HELP: dict[str, tuple[str, str]] = {
     ),
     "winrate": (
         "Share of evaluation games won outright.",
-        "A win means MORE UNITS STANDING than the enemy at the round cap (or their army "
-        "destroyed) — not more points. A game can be won from behind on value.",
+        "A win means the enemy army destroyed, or MORE ARMY VALUE left at the round cap "
+        "(by more than one typical unit). Until 2026-10-03 the cap went by head count, and "
+        "tactical-1 won a quarter of its games from behind on value by hoarding cheap units.",
     ),
     "rounds": (
         "How many rounds the average evaluation game lasted before it ended.",
-        "Short games mean the army is being destroyed; long ones mean it survives to the "
-        "cap and is decided on head count. Rising rounds is one of the least noisy signs "
-        "of progress. The cap is 12 (13 shown = reached it).",
+        "Short games mean one army was wiped out — read the rout chart for whose; games that "
+        "reach the cap (round_cap + 1 shown) are decided on army value.",
     ),
     "rout": (
-        "Share of games that ended by one army being wiped out, rather than on head count "
-        "at the round cap.",
-        "Falling rout share means the policy is surviving. It went 7-in-10 to 2-in-10 "
-        "over updates 300–350.",
+        "Share of games that ended with one army wiped out, split by whose.",
+        "A rout pays twice what a win at the cap pays, so 'we wiped them out' should climb "
+        "and 'they wiped us out' should fall.",
     ),
     "policy_loss": (
         "The PPO objective being minimised — how hard the update is pushing the policy "
@@ -1049,24 +1090,35 @@ def _style(ch):
 
 
 def decisiveness(b: str):
-    """How games END, per evaluation: share routed vs decided on head count at the cap.
+    """How games END, per evaluation: routed (either way) vs decided on value at the cap.
 
     Rout share and match length are the least noisy indicators this project has — they
-    moved cleanly while value_diff was still inside its error band."""
+    moved cleanly while value_diff was still inside its error band. Routs are split by who
+    was wiped out: since 2026-10-03 a rout pays twice a win at the cap, so "we wiped them
+    out" is the line that should climb."""
     g = eval_games(b)
     if g.empty or "by" not in g:
         return None
-    d = (g.assign(routed=(g["by"] == "rout").astype(float))
-         .groupby("step").agg(rout=("routed", "mean"), rounds=("rounds", "mean")).reset_index())
+    routed = g["by"] == "rout"
+    d = (g.assign(won=(routed & (g["result"] == "win")).astype(float),
+                  lost=(routed & (g["result"] == "loss")).astype(float))
+         .groupby("step").agg(won=("won", "mean"), lost=("lost", "mean"),
+                              rounds=("rounds", "mean")).reset_index())
     if d.empty:
         return None
     x = alt.X("step:Q", title="env steps", axis=alt.Axis(format="~s"))
-    rout = (alt.Chart(d).mark_line(strokeWidth=2, interpolate="monotone", color=SERIES[1])
-            .encode(x=x, y=alt.Y("rout:Q", title=None, axis=alt.Axis(format=".0%"),
+    who = {"won": "we wiped them out", "lost": "they wiped us out"}
+    rout = (alt.Chart(d.melt(id_vars=["step"], value_vars=list(who), var_name="who",
+                             value_name="share").replace({"who": who}))
+            .mark_line(strokeWidth=2, interpolate="monotone")
+            .encode(x=x, y=alt.Y("share:Q", title=None, axis=alt.Axis(format=".0%"),
                                  scale=alt.Scale(domain=[0, 1])),
-                    tooltip=[alt.Tooltip("step:Q", format="~s"),
-                             alt.Tooltip("rout:Q", title="routed", format=".0%")])
-            .properties(height=200, title="share of games that ended in a rout (lower is better)"))
+                    color=alt.Color("who:N", title=None,
+                                    scale=alt.Scale(domain=list(who.values()),
+                                                    range=[SERIES[0], SERIES[1]])),
+                    tooltip=[alt.Tooltip("step:Q", format="~s"), "who:N",
+                             alt.Tooltip("share:Q", title="share", format=".0%")])
+            .properties(height=200, title="games ended by wiping an army out"))
     rounds = (alt.Chart(d).mark_line(strokeWidth=2, interpolate="monotone", color=SERIES[2])
               .encode(x=x, y=alt.Y("rounds:Q", title=None, scale=alt.Scale(zero=False)),
                       tooltip=[alt.Tooltip("step:Q", format="~s"),
@@ -1274,13 +1326,21 @@ def behaviour(sc: dict) -> None:
             top = sorted(((float(d.iloc[-1, 1]), k) for k, d in kinds.items()), reverse=True)
             share, name = top[0]
             ends = float(kinds["end"].iloc[-1, 1]) if "end" in kinds else 0.0
-            if share >= 0.5:
+            # A loop shows in OUTCOMES, not in the share alone: an army of 50 moves most of
+            # its units every turn, so `move` over 50% with `end` near 1/50 is just a big
+            # army (tactical-1 was flagged at 54% move while finishing every match). The
+            # town-1 loop was move_held at 75% AND matches that stopped finishing.
+            stall = sc.get("eval/stallrate_hard")
+            stalled = float(stall.iloc[-1, 1]) if stall is not None and len(stall) else 0.0
+            md = sc.get("speed/matches_done")
+            starved = md is not None and len(md) >= 10 and md.iloc[-1, 1] - md.iloc[-10, 1] < 2
+            if share >= 0.5 and (stalled >= 0.3 or starved):
                 st.markdown(
                     f'{pill("collapsed", "critical")} <span class="rlm-sub">'
-                    f'<b>{share:.0%}</b> of actions are <b>{name}</b> and only '
-                    f'<b>{ends:.1%}</b> end a turn — the policy has found a loop rather '
-                    f'than a strategy.</span>', unsafe_allow_html=True)
-            elif share >= 0.35:
+                    f'<b>{share:.0%}</b> of actions are <b>{name}</b>, only '
+                    f'<b>{ends:.1%}</b> end a turn and matches stopped finishing — the policy '
+                    f'has found a loop rather than a strategy.</span>', unsafe_allow_html=True)
+            elif share >= 0.35 and name != "move":
                 st.markdown(
                     f'{pill("narrowing", "warning")} <span class="rlm-sub">'
                     f'<b>{share:.0%}</b> of actions are <b>{name}</b>. Worth watching.'
@@ -1763,10 +1823,12 @@ def page_tactics(b: str) -> None:
         st.caption("Each drill is a small scenario that one tactic wins: flank the MG nest, "
                    "screen the tank, breach the compound, scout with drones, concentrate fire "
                    "through one gap, fight down the sniper lanes. Both sides of every drill are "
-                   "played. A drill stuck at 0% is a tactic it has not learned.")
+                   "played. A drill stuck at 0% is a tactic it has not learned. One evaluation "
+                   "is only a few games a drill, so trust the last-5 average over the latest.")
         names = {t: t[len("eval/drill_"):-len("_winrate")].removeprefix("drill_") for t in drills}
         rows = [dict(drill=names[t], latest=float(sc[t].iloc[-1, 1]),
-                     best=float(sc[t].iloc[:, 1].max()), evaluations=len(sc[t])) for t in drills]
+                     last_5=float(sc[t].iloc[-5:, 1].mean()), evaluations=len(sc[t]))
+                for t in drills]
         st.dataframe(renderable(pd.DataFrame(rows)), width="stretch", hide_index=True)
         chart(sc, drills, "drill win rate vs HARD", pct=True, names=names)
     if tac:

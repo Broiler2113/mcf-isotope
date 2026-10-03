@@ -39,6 +39,13 @@ const Obs = preload("res://rl/ObsEncoder.gd")
 ## «Готов» — это «может что-то сделать», а не «есть ОД»: дострел начатой очереди,
 ## остаток подлёта/хода, лопата и мины в кредит, рывок из своих рук, выгрузка тела —
 ## всё это бесплатно и раньше тонуло среди выдохшихся.
+##
+## СРЕДИ ГОТОВЫХ ПЕРВЫМИ — ТЕ, КОМУ ЕСТЬ В КОГО СТРЕЛЯТЬ (видимый враг на линии огня в
+## пределах дальности). Жребий 16 из ~46 показывал выстрел редкого бойца лишь в части точек,
+## где он был законен: на 17 партиях оценки tactical-1 снайпера — в 46%, противотанкиста по
+## технике — в 41%, огнемётчика — в 47%. Политика, увидев снайперский выстрел, брала его в
+## 31% случаев — она не отказывалась стрелять, ей просто не показывали. Внутри обеих групп
+## порядок по-прежнему жребий, и вызовы rng те же, что и раньше.
 static func actor_subset(r: GameActionResolver, acting: int, max_actors: int,
 		rng: RandomNumberGenerator) -> Dictionary:
 	if max_actors <= 0:
@@ -70,6 +77,13 @@ static func actor_subset(r: GameActionResolver, acting: int, max_actors: int,
 		return {}
 	shuffle(ready, rng)
 	shuffle(spent, rng)
+	var foes := _foe_cells(r, acting)
+	if not foes.is_empty():
+		var hot: Array = []
+		var cold: Array = []
+		for id: int in ready:
+			(hot if in_contact(state.get_unit(id), foes) else cold).append(id)
+		ready = hot + cold
 	var out := {}
 	# Машины и пилоты боргов — целиком, даже если их одних больше потолка: потолок стоит
 	# ради цены перечисления пехоты, а техники на карте единицы.
@@ -100,6 +114,35 @@ static func can_act(r: GameActionResolver, u: UnitInstance, captors: Dictionary)
 	return u.remaining_ap > 0 or u.move_credit > 0 or u.dig_credits > 0 or u.mine_credits > 0 \
 			or (u.action_state != null and u.action_state.is_pending()) \
 			or u.carried_corpses > 0 or captors.has(u.id)
+
+
+## Клетки ВИДИМЫХ врагов стороны: бойцы (_visible_foes) и след каждой машины. Туман честен.
+static func _foe_cells(r: GameActionResolver, side: int) -> Array[Vector2i]:
+	var out := _visible_foes(r, side)
+	var visible: Dictionary = r.team_visible_coords(side) if r.fog_enabled else {}
+	for veh: Vehicle in r.state.all_vehicles():
+		if veh.alive() and Obs.rel_owner(r, side, veh.owner) == 1:
+			for c: Vector2i in veh.footprint():
+				if not r.fog_enabled or visible.has(c):
+					out.append(c)
+	return out
+
+## Есть ли у бойца в кого стрелять: враг в пределах дальности и на линии огня (8 направлений).
+## Только порядок жеребьёвки, не законность: стены и укрытия проверит перечислитель.
+## Разрыв ПТ и струя огнемёта бьют по клетке, а не по линии — им хватает дальности.
+static func in_contact(u: UnitInstance, foes: Array[Vector2i]) -> bool:
+	if u == null:
+		return false
+	var reach := u.fire_range()
+	if reach <= 0.0:
+		return false
+	var ability := u.stats.special_ability_id
+	var any_line := ability == MCF.ABILITY_ANTI_TANK or ability == MCF.ABILITY_FLAMETHROWER
+	for c: Vector2i in foes:
+		if float(Combat.distance(u.coord, c)) <= reach \
+				and (any_line or Combat.is_on_firing_line(u.coord, c)):
+			return true
+	return false
 
 
 ## Клетки, выстрел в которые может задеть ВИДИМОГО врага стороны `side`: клетка каждого
