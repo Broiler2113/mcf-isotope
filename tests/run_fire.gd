@@ -21,6 +21,7 @@ func ck(cond: bool, what: String) -> void:
 func _initialize() -> void:
 	_fire_eats_the_cell()
 	_a_flame_jet_sweeps_too()
+	_space_never_burns()
 	if fails.is_empty():
 		print("fire: the cell is swept bare by spreading flame and by the jet alike — bodies and hulls aside")
 		quit(0)
@@ -128,3 +129,40 @@ func _a_flame_jet_sweeps_too() -> void:
 	ck(st.grid.cell(at).cover_height == 0.0, "and the cover they gave")
 	fx.apply(res.fx)
 	ck(_decals_at(fx, at) == 0, "and the brass with them (%d left)" % _decals_at(fx, at))
+
+## В вакууме гореть нечему (editor-rework): струя проходит над космосом, не поджигая его
+## и не трогая того, кто там висит, а пол за пробоиной горит как обычно. Расползание в
+## космос тоже не идёт.
+func _space_never_burns() -> void:
+	var m := MapData.new(20, 9)
+	for y in 9:
+		for x in 20:
+			m.set_cell(Vector2i(x, y), MCF.FLOOR_FLAMMABLE, 0.0, false, "")
+	for x in [6, 7]:
+		m.set_cell(Vector2i(x, 4), MCF.FLOOR_NORMAL, 0.0, true, "")
+	m.set_spawn(Vector2i(4, 4), "flamethrower", MCF.Owner.PLAYER_1)
+	m.set_spawn(Vector2i(7, 4), "light_infantry", MCF.Owner.PLAYER_2)
+	m.set_spawn(Vector2i(8, 4), "light_infantry", MCF.Owner.PLAYER_2)
+	m.set_spawn(Vector2i(18, 8), "light_infantry", MCF.Owner.PLAYER_2)
+	GameConfig.civilians_enabled = false
+	var st := m.build_state(9)
+	var r := GameActionResolver.new(st)
+	r.fog_mode = MCF.Fog.OFF
+	r.fog_enabled = false
+	while st.active_player() != MCF.Owner.PLAYER_1:
+		r.resolve(EndTurnIntent.new())
+	var floater: UnitInstance = st.grid.cell(Vector2i(7, 4)).occupant
+	var beyond: UnitInstance = st.grid.cell(Vector2i(8, 4)).occupant
+	var ft: UnitInstance = st.grid.cell(Vector2i(4, 4)).occupant
+	var res := r.resolve(ShootIntent.new(ft.id, -1, -1, Vector2i(9, 4)))
+	ck(res.ok, "the jet fires across the gap: %s" % res.reason)
+	ck(not st.grid.cell(Vector2i(6, 4)).on_fire and not st.grid.cell(Vector2i(7, 4)).on_fire,
+			"space cells under the jet stay unlit")
+	ck(floater.is_alive(), "a soldier floating in the vacuum is not burned")
+	ck(not beyond.is_alive() and st.grid.cell(Vector2i(8, 4)).on_fire,
+			"the floor beyond the gap burns, and so does the soldier on it")
+	ck(st.grid.cell(Vector2i(5, 4)).on_fire, "the floor before the gap burns")
+	for _i in 6:
+		r.advance_fire(MCF.Owner.PLAYER_1, ActionResult.new())
+	ck(not st.grid.cell(Vector2i(6, 4)).on_fire and not st.grid.cell(Vector2i(7, 4)).on_fire,
+			"spreading flame never enters space either")
