@@ -922,6 +922,9 @@ pillbox is drawn with a **red notch** in the corner of its tile.
 - **Blocked entirely** by space, **BRU** (#84), and both pillbox variants — `_fire_blocked`
   refuses to ignite those cells at all, so a BRU section neither burns nor lets fire past
 - An occupant of an igniting cell **dies**, unless it's a shield bearer (#50)
+- **Nothing burns in vacuum (editor-rework).** `_ignite` — the only way a cell catches
+  fire — refuses space cells, so neither the spread nor the flamethrower lights them. A
+  jet passes over a gap without burning a unit floating there; floor beyond still burns.
 
 **Fire eats the structure on the cell it takes (#83).** Anything in `BURNS_AWAY` is
 cleared the moment the cell ignites:
@@ -2148,48 +2151,55 @@ MainMenu → Setup → Placement → Main (battle)
   `drt`, `MG`, `PBX`, `WD`, `hSB`, `PBX+`) plus a `"%.1fm"` height caption, including the
   BRU black-monolith special case (§18.6). Same tags, same colours, same heights — what
   you deploy onto is what you fight on.
-- **Map Editor** — camera pan (WASD / middle-or-right-drag); single, **line, rectangle,
-  and fill** tools; terrain brushes for floor, wall, glass, **wooden wall**, and
-  the other features; and **deployment-zone painting** for P1 / P2 / Neutral / No Zone
-  as a tinted overlay (stored per cell in `MapData.zone_owner`). Maps default to
-  all-space and support large sizes.
+- **Map Editor** (rebuilt in editor-rework, laid out "like Paint" at the owner's choice).
+  Menu bar on top — **File** (New, Open, Save, Save As, Play This Map, Exit), **Edit**
+  (Undo, Redo, Cut, Copy, Paste, Delete, Select All, Rotate / Flip pasted, Clear Map;
+  items with nothing to do are greyed out), **View** (zoom, Fit Map, Grid, Deployment
+  Zones, Minimap, Keyboard Shortcuts) and **Map** (Resize, Preset) — with the tool
+  options (brush size, *Filled*, Symmetry) and **Play** on the same strip. An icon
+  toolbar on the left: **Brush, Eraser, Line, Rectangle, Fill, Select, Eyedropper,
+  Stamp** (keys B E L R F M I T). A palette on the right shows the **real tile
+  thumbnails** of the map's preset: Terrain, Walls & doors, Objects, Neutral units,
+  Deployment zones (1–8, *More zones* for all 26) and Stamps. Status bar and a
+  **minimap** (click or drag to move the view) at the bottom.
 
-  **The editor draws in constant time (batch 13 #6).** `_draw()` used to walk every cell
-  of the map with three to five draw commands each, on every mouse-move with the button
-  down — 150–200 k commands per frame on a 200×200 map, ~180 ms a frame. The floor,
-  space, wall, cover tint and zone tint are now composed into **one pixel per cell** of
-  an `Image` that is drawn as a single `draw_texture_rect` (nearest filtering keeps the
-  cells crisp); a brush stroke updates only the pixels it touched. Everything on top —
-  grid lines (one `draw_multiline`), object tags, spawns, the brush cursor — is drawn only
-  for cells inside the viewport, with level-of-detail cut-offs: below 14 px a feature is a
-  dot and a spawn a plain circle, below 7 px there is no grid at all. Flood fill walks a
-  `PackedInt32Array` stack over flat indices instead of building a string signature and a
-  `Vector2i` dictionary per cell. Measured: 179 ms → 7 ms per frame headless on 220×150
-  (the 7 ms is mostly engine overhead). `ZOOM_MIN` dropped to 0.06 so a 300×300 board
-  fits the screen; *Fit View* does that in one click.
+  - **The canvas is the battle's own renderer.** `TerrainTiles` chunks on a `Grid` kept
+    in step with `MapData` cell by cell; GridCell's look log marks the touched chunks
+    and only those rebuild. Zones are a 1-px-per-cell overlay texture with each zone's
+    number in its middle; spawns, grid and overlays are drawn for on-screen cells only.
+  - **Undo is per-cell deltas** (before/after of every touched cell, plus the spawn list
+    if it changed), 100 deep. The old editor saved the whole map per stroke — 0.9 MB at
+    250×250, 3.5 MB at 500×500. Resize and Clear Map still keep full snapshots; New and
+    Open start a fresh history. A repeated stroke over identical cells records nothing.
+  - **Symmetry**: Left / Right, Top / Bottom, Four quarters — strokes, shapes, fills,
+    stamps and pastes are mirrored. A mirrored zone goes to the matching player (pair
+    0↔1, 2↔3…; in quarters 0→1 by X, 0→2 by Y, 0→3 by both), neutrals stay neutral. A
+    *moved* selection is not mirrored: it was lifted without its mirror.
+  - **Select / copy / paste**: drag a box; drag inside it to move it (one undo step);
+    Ctrl+C / X / V, Delete; R rotates and H / V flip what is in hand. Clipboard, moved
+    selections and stamps share one pattern format (`MapPresets.pattern`).
+  - **Stamps**: small room, large room, corridor, house, pillbox, sandbag nest, trench
+    line, hedgehog row — drawn in the map's preset tiles, airlock doors included. A stamp
+    stays in hand for the next placement.
+  - **Eyedropper** (or Alt+click with any tool) picks the tile, unit or zone under the
+    cursor. The **eraser** clears to the preset's empty ground (space on Station and
+    Asteroid, grass in Field, bare floor in Town and Bunker), removing units and zones.
+  - **New Map** asks for a name, preset and size, and starts either from the preset's
+    pre-fill or from the **random map generator** (density, zones, seed, symmetrical,
+    civilians), which you then edit. **Open** lists the maps with a preview. **Play This
+    Map** keeps the map, name, view and unsaved mark in `MapHandoff.editor_session`, so
+    the editor comes back to it after the trial battle; *Exit to Main Menu* clears it and
+    `MapHandoff.pending` (#104).
+  - Measured on 250×250: a size-5 stroke step 0.2–0.4 ms, a whole-map fill 0.67 s, its
+    undo 0.25 s. Covered by `tests/run_editor.gd` (real input events) and the ported
+    batch 13 checks.
 
-  **Undo and redo (batch 14).** One `MapData.to_dict()` snapshot per action — a paint
-  stroke from press to release, a line, a rectangle, a flood fill, a resize, a clear, a
-  load — on a 40-deep stack; Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z) and two buttons under the
-  tools. A new stroke after an undo drops the redo branch.
-
-  **And it is laid out as a workflow (batch 13 #14).** Left column top-down: Tool (Paint /
-  Line / Rect / Fill as **toggle buttons** — the active one is lit; keys 1–4; a **brush
-  size** slider), Floor & Eraser, Objects (with *Remove Object*). Right column: Play &
-  Leave at the very top, Deployment Zones, Neutral Units, Map Size, Save & Load. Each
-  section is a framed SteamChrome header with a one-line hint. The status line reads
-  `brush · tool | W×H cell x, y`, the title shows `*` while there are unsaved changes,
-  and Clear / Load / Main Menu ask before discarding them. **Resizing keeps the map**
-  (`MapData.resize_keep`) — *Set Size* used to wipe it.
-
-  **The editor has a way back (#104).** It leaves by two doors: **"Play"** hands the map
-  to `MapHandoff.pending` and opens the battle, and **"Main Menu"** (`_on_main_menu`)
-  clears that slot and returns to `MainMenu.tscn`. The second door used to read **"To Demo
-  Game"** and dropped the designer straight into a match on the built-in roster — the only
-  exit from the editor led somewhere he had not come from, so returning to the menu meant
-  starting a demo battle he did not want and quitting out of *that*. Clearing
-  `MapHandoff.pending` on the way out matters: the slot belongs to "Play", and leaving a
-  half-drawn map in it would silently impose it on the next match started from the menu.
+  **Map presets** (`MapPresets`): Station, Town, Field, Bunker, Asteroid — the generator's
+  styles. A preset is the map's environment (`MapData.env`): it picks the tiles of walls,
+  floors and doors, and decides how a **new** map is pre-filled — Station a deck with a
+  rim of space, Town street, Field grass with bare patches, Bunker solid rock (the eraser
+  carves it), Asteroid an island in space. Per the owner, a preset does not change the
+  brushes, the rules or the lobby. Map ▸ Preset re-skins an existing map (one undo step).
 - **Quit-to-menu** — a SteamChrome overlay (dim + framed panel + title bar +
   Cancel / Main Menu), never an OS dialog.
 - **Team-session batch (items 14, 21, 22).** **Game modes are gone** (`GameConfig.game_mode`
@@ -2207,8 +2217,8 @@ MainMenu → Setup → Placement → Main (battle)
 ## 20. Maps & Data
 
 `MapData` stores dimensions, per-cell floor type, cover height, space flag, feature id,
-and `zone_owner`. Maps serialise to disk and load in Setup. New maps start as **all
-space** — the designer paints floor in.
+`zone_owner` and the environment preset (`env`). Maps serialise to disk and are picked in
+the lobby. A new editor map starts pre-filled for its preset (§19, Map Editor).
 
 ### 20.1 Saved games and replays (items 42, 53)
 
@@ -3018,6 +3028,7 @@ number appears elsewhere in this document it is because the source comments cite
 | 103 | One unit per cell is enforced by the board itself — `Grid.place` and `move_occupant` refuse to overwrite an occupant and report failure, so no two soldiers, civilians or AI units can ever share a tile (§2.2); hovering a green move tile draws the **cheapest actual route** to it out of the Dijkstra tree, and every green tile is labelled with what standing there costs out of the movement total (§18.3); a marksman's laser no longer reaches a man in a trench from a tile that is not one, at any range including adjacent (§6.6, §7.3); NPC civilians and the army are driven by **one brain** — the second, cell-at-a-time civilian AI is deleted and a civilian is now an `AIController` with the Neutral owner, so it plans, fragments its movement, fires partial bursts and hauls corpses by the army's rules (§14, §17); the AI uses fragmented movement and partial bursts — `move_credit` is a spendable budget, a step costs score, and a burst orders `ceil(1/p)` bullets instead of the whole magazine (§17.3); an anti-tank sapper cut off by a wall **blasts through it** instead of shuffling along it (§17.3, §7.1); the AI and civilians pick up bodies that block the road and **stack them aside into piles**, the fifth forming a corpse wall (§17.3, §8.4); at least 80% of an army must act each turn and **every** civilian must, enforced by a second forced pass over whoever the plan left idle (§17.2); Player 1 can be an AI too, so AI-vs-AI matches run from Setup or a mid-battle toggle (§17.4); and the camera zooms out to 0.12 so a 60×40 board fits on one screen (§18.4) |
 | 104 | The map editor can be left the way it was entered: the **"To Demo Game"** button is gone, replaced by **"Main Menu"**, which clears `MapHandoff.pending` and returns to `MainMenu.tscn` instead of dumping the designer into a demo battle on the built-in roster (§19) |
 | 105 | A marksman firing **from** a trench is as boxed in as a marksman firing **into** one: the laser cannot climb out of the ditch any more than it could drop into it, so from the trench floor the only reachable target is one lying in the **same continuous run** of trench, along a straight line with no gap — a bend or a break means the beam hits the earth wall. The trench is now symmetric cover against the beam instead of a firing position that ignored its own walls (§6.6, §7.3) |
+| 119 | Editor rework and UI audit — the map editor is rebuilt "like Paint": menu bar, icon toolbar, a palette of real tile thumbnails, minimap and status bar; the canvas draws the battle's own tile chunks; undo stores per-cell deltas; symmetry (L/R, T/B, quarters, zones handed to the matching player), select / move / copy / paste with rotate and flip, room and building stamps, eyedropper, New Map from the random generator, and Play This Map returns to the same map (§19). Map presets (Station, Town, Field, Bunker, Asteroid) set the tileset and pre-fill a new map (§20). Nothing burns in vacuum (§10). UI audit at 75/100/150 %: main-menu sub-pages, purchase panel, battle sidebar and lobby dialogs are framed in group boxes, main buttons stay on screen, the lobby puts slots and map first when its columns wrap. Tests: `run_editor` (new, 55 checks), `run_fire` (vacuum), `run_batch13` ported. |
 | 118 | Playtest batch (20 items + 2) — **Unready** on the purchase screen: only the host starts the battle (`go`), a guest's unready is a request the host confirms (`unready_req` → `unready`), and a ready army is locked until unready (§19); **Fullscreen** in Settings → Display, saved in `settings.cfg`; the **Real** clock starts with the battle scene — network games used to count from app launch, so it also ran on across matches; **double-click** on a shuttle passenger selects the shuttle, and the driver's seat has a thin outline (§16.7); a **welded airlock** gets steel straps and weld beads baked into its tile; decals are no longer wiped by undo/redo or by a network resync (the restored host decals were cleared right after loading), laser marks and the new **tank track marks** travel in the decal snapshot, and the casing/laser caps rise to 8000/2000; Godot's ENet timeout is relaxed to 20–90 s so a short stall no longer hands a friend's army to the AI (§22.4); running over own/allied units and blowing a drone up next to them ask first; the **Match Over** window lists kills per unit and vehicle with run-overs (`GameState.kills`, part of the undo snapshot and `StateCodec`, not the digest); under standard fog, hidden walls get a much darker veil, corpses stay visible, and trenches, sandbags, dirt piles and hedgehogs are drawn only where seen now (§11); **Undo drawing** (button or Ctrl+Z while drawing) restores the touched raster tiles and is mirrored to every peer; bodies killed by fire, flame or laser are drawn burnt (`UnitInstance.burnt`); breached civilians are ruthless and grab every body within reach without ever dropping one (§14); the turn line and the initiative window agree — Prev/Next skip slots with nobody alive, the line follows the neutral group being played, and the window scrolls and leaves out wiped-out groups. Golden trace re-baselined: civilians now shoot instead of dodging, which shifts the dice stream. |
 | 117 | Gore / trenches / AI batch — civilians' wake-up sight check indexes soldiers by firing line instead of testing every civilian against every soldier after every action (6-side MP host: 92 → 19 ms per AI action, p99 frame 90 → 17 ms, measured); AI speed adds 8×, 16× and Max, and from 8× AI dice are not animated (§18.6); the initiative window no longer keeps pointing at the last civilian group after their slots play; civilians are a random-map setting again (up to 1000), prepared maps get an on/off checkbox (§14, §20.2); your own deploy zone is outlined on the purchase screen and zone numbers sit on the lobby preview (§19); terrain tiles are 32×32 in the same brutalist style, stay textured at every zoom (8-px chunks for far zoom), town and field airlocks are drawn as doors (closed and open), the concrete wall loses its tie marks, and trenches are cut into the ground with continuous corners and junctions and units sit inside them (§21); bigger blood pools and spray, gibs and ring splatter for blast and crush kills, blood for laser/assault/push/DPMG/crush kills, and 6 tiles of fading footprints after walking through blood (§21.4). Tests: suite green; `net_host_town` uses the new checkbox. |
 | 116 | Team-session batch (3 humans vs 3 AIs) — anti-tank checks an occupied target cell like any other, so Hard AI no longer fires along illegal lines or rolls hopeless 7+ checks (§7.1); marksman volley and a friendly-in-the-beam confirmation (§7.3); the civilians slider caps every map's neutrals with an even spread (§14, §20.2); team camera row, baked 64-px terrain chunks (§18.4); real tumbling dice (§18.5); host-only AI speed, resizable glass log and chat with working scrollbars, Paint-like raster drawing with a pixel eraser (§18.6); game modes removed, chat in the lobby and on the purchase screen, deploy zone drop-down with a live preview and bands that placement now honours (§19); map environments with their own tiles, the Asteroid style and per-style Space / Flammable defaults (§20.2); the "MCF: Alert!" UI kit with an accent colour and an interface-size setting, 64×64 brutalist tiles in six variants with family autotiling (§21); glass shards spread, stop at walls and stay visible to whoever saw the pane break (§21.1); chat labels built by the receiver, so LAN players are no longer all "(you)" (§22.4). Tests: `run_team_session` (new), `run_mapgen` (environment tags, Asteroid), `run_lobby_maps` (slider), `run_shuttle` (its heavy-hit shell had flown through a soldier standing on the row; he now steps aside first, and the block itself is asserted). |

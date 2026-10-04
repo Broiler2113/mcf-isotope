@@ -1857,7 +1857,8 @@ func _save_named(name: String) -> bool:
 
 func play() -> void:
 	MapHandoff.editor_session = {"map": map, "name": map_name, "dirty": _dirty, "pan": pan, "zoom": zoom}
-	MapHandoff.pending = map
+	# Бою — копию: правки боя (если когда-нибудь появятся) не должны вернуться в редактор.
+	MapHandoff.pending = MapData.from_dict(map.to_dict())
 	get_tree().change_scene_to_file("res://scenes/Main.tscn")
 
 ## Выход в главное меню (#104): слот передачи пуст, иначе нарисованная карта ушла бы в
