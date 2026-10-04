@@ -28,6 +28,13 @@ const OUT := "res://textures/"
 
 func _initialize() -> void:
 	var t0 := Time.get_ticks_msec()
+	# `-- --furniture` — только мебель (§3.15): прочие плитки не трогаем, их файлы
+	# остаются байт в байт.
+	if "--furniture" in OS.get_cmdline_user_args():
+		_furniture_all()
+		print("furniture textures written to %s in %d ms" % [OUT, Time.get_ticks_msec() - t0])
+		quit()
+		return
 	# --- Пол: общий и по окружениям (item 24) ---
 	_strip("floor", _steel_deck)
 	_strip("floor_station", _steel_deck)
@@ -79,6 +86,7 @@ func _initialize() -> void:
 	_save("mine", _mine(Color8(186, 58, 48)))
 	_save("av_mine", _mine(Color8(206, 132, 36)))
 	_save("glass_shard", _glass_shard())
+	_furniture_all()
 	print("textures written to %s in %d ms" % [OUT, Time.get_ticks_msec() - t0])
 	quit()
 
@@ -668,3 +676,221 @@ func _mine(c: Color) -> Image:
 			if d < 1.5:
 				img.set_pixel(x, y, Color8(240, 230, 210))
 	return img
+
+# =====================================================================================
+#  Мебель (§3.15): вид сверху, СПИНКОЙ К ВЕРХУ плитки. TerrainTiles поворачивает плитку
+#  так, чтобы спинка смотрела в стену (а стул — от своего стола). Тень вниз-вправо тем
+#  длиннее, чем выше предмет: 0.5 м — точка, 2 м — четыре.
+# =====================================================================================
+
+const WOOD := Color8(126, 88, 54)
+const WOOD_DARK := Color8(92, 62, 38)
+const STEEL := Color8(118, 124, 132)
+const STEEL_DARK := Color8(70, 74, 82)
+const FABRIC := Color8(96, 106, 128)
+const FABRIC_RED := Color8(132, 70, 60)
+const LINEN := Color8(206, 202, 190)
+const WHITE_METAL := Color8(198, 202, 204)
+const GREEN_PLASTIC := Color8(66, 104, 78)
+const OLIVE := Color8(92, 100, 64)
+const SCREEN := Color8(70, 170, 190)
+const LAMP_RED := Color8(220, 70, 50)
+const LAMP_GREEN := Color8(90, 210, 110)
+
+func _furniture_all() -> void:
+	for fid: String in Furniture.ids():
+		_save(fid, _furniture(fid))
+
+func _furniture(fid: String) -> Image:
+	var img := Image.create(T, T, false, Image.FORMAT_RGBA8)
+	var lift := int(Furniture.height_of(fid) * 2.0)   # длина тени, точки
+	var ops := _furniture_ops(fid)
+	# Тень всех частей разом — под ними.
+	for op: Array in ops:
+		if op[0] == "box" or op[0] == "round":
+			var r: Rect2i = op[1]
+			_fill_shape(img, op[0], Rect2i(r.position + Vector2i(lift, lift), r.size),
+					Color(0, 0, 0, 0.38), false)
+	for op: Array in ops:
+		match op[0]:
+			"box":
+				_fill_material(img, op[1], op[2], false)
+			"round":
+				_fill_material(img, op[1], op[2], true)
+			"rect":
+				var r: Rect2i = op[1]
+				img.fill_rect(r, op[2])
+			"dot":
+				img.set_pixelv(op[1], op[2])
+	return img
+
+## Описание предмета набором фигур: ["box", прямоугольник, цвет] — тело с кромкой и
+## фаской; ["round", …] — то же, но со скруглением; ["rect", …] — плоская деталь;
+## ["dot", точка, цвет].
+func _furniture_ops(fid: String) -> Array:
+	match fid:
+		"chair":
+			return [["box", Rect2i(9, 8, 14, 16), WOOD], ["box", Rect2i(9, 6, 14, 5), WOOD_DARK]]
+		"armchair":
+			return [["round", Rect2i(5, 6, 22, 21), FABRIC_RED], ["box", Rect2i(5, 6, 22, 6), _shade(FABRIC_RED, 0.75)],
+					["box", Rect2i(5, 10, 4, 17), _shade(FABRIC_RED, 0.85)], ["box", Rect2i(23, 10, 4, 17), _shade(FABRIC_RED, 0.85)]]
+		"sofa":
+			return [["round", Rect2i(1, 7, 30, 19), FABRIC], ["box", Rect2i(1, 7, 30, 6), _shade(FABRIC, 0.75)],
+					["rect", Rect2i(15, 13, 1, 12), _shade(FABRIC, 0.7)],
+					["box", Rect2i(1, 11, 4, 15), _shade(FABRIC, 0.85)], ["box", Rect2i(27, 11, 4, 15), _shade(FABRIC, 0.85)]]
+		"bed":
+			return [["box", Rect2i(4, 2, 24, 28), WOOD_DARK], ["box", Rect2i(6, 4, 20, 24), LINEN],
+					["round", Rect2i(8, 5, 16, 6), Color8(232, 230, 222)],
+					["box", Rect2i(6, 13, 20, 15), Color8(84, 104, 136)]]
+		"nightstand":
+			return [["box", Rect2i(8, 8, 16, 16), WOOD], ["rect", Rect2i(10, 17, 12, 1), WOOD_DARK],
+					["dot", Vector2i(16, 20), Color8(210, 190, 120)]]
+		"desk":
+			return [["box", Rect2i(2, 5, 28, 16), WOOD], ["rect", Rect2i(6, 8, 9, 6), Color8(222, 220, 210)],
+					["box", Rect2i(20, 7, 7, 5), Color8(50, 54, 60)]]
+		"dining_table":
+			return [["round", Rect2i(3, 3, 26, 26), WOOD], ["rect", Rect2i(8, 15, 16, 1), WOOD_DARK]]
+		"coffee_table":
+			return [["round", Rect2i(6, 9, 20, 14), WOOD_DARK], ["rect", Rect2i(12, 13, 6, 4), Color8(170, 160, 120)]]
+		"wardrobe":
+			return [["box", Rect2i(1, 2, 30, 15), WOOD_DARK], ["rect", Rect2i(15, 4, 2, 11), _shade(WOOD_DARK, 0.6)],
+					["dot", Vector2i(13, 11), Color8(210, 190, 120)], ["dot", Vector2i(18, 11), Color8(210, 190, 120)]]
+		"dresser":
+			return [["box", Rect2i(2, 3, 28, 13), WOOD], ["rect", Rect2i(4, 8, 24, 1), WOOD_DARK],
+					["dot", Vector2i(10, 11), Color8(210, 190, 120)], ["dot", Vector2i(21, 11), Color8(210, 190, 120)]]
+		"bookshelf":
+			return [["box", Rect2i(1, 2, 30, 11), WOOD_DARK], ["rect", Rect2i(3, 4, 4, 7), Color8(150, 60, 50)],
+					["rect", Rect2i(8, 4, 3, 7), Color8(60, 90, 140)], ["rect", Rect2i(12, 4, 5, 7), Color8(170, 150, 80)],
+					["rect", Rect2i(19, 4, 3, 7), Color8(70, 120, 80)], ["rect", Rect2i(23, 4, 6, 7), Color8(130, 110, 150)]]
+		"cabinet":
+			return [["box", Rect2i(3, 3, 26, 14), WOOD], ["rect", Rect2i(15, 5, 1, 10), WOOD_DARK],
+					["dot", Vector2i(13, 10), Color8(210, 190, 120)], ["dot", Vector2i(18, 10), Color8(210, 190, 120)]]
+		"kitchen_counter":
+			return [["box", Rect2i(0, 2, 32, 16), Color8(176, 172, 160)], ["round", Rect2i(9, 5, 12, 9), STEEL],
+					["dot", Vector2i(15, 6), STEEL_DARK]]
+		"refrigerator":
+			return [["box", Rect2i(4, 2, 24, 22), WHITE_METAL], ["rect", Rect2i(6, 10, 20, 1), _shade(WHITE_METAL, 0.7)],
+					["rect", Rect2i(23, 4, 1, 5), STEEL_DARK]]
+		"office_desk":
+			return [["box", Rect2i(2, 4, 28, 15), Color8(150, 150, 146)], ["box", Rect2i(9, 5, 14, 5), Color8(40, 42, 48)],
+					["rect", Rect2i(10, 6, 12, 3), SCREEN], ["rect", Rect2i(10, 13, 12, 3), Color8(60, 62, 68)]]
+		"conference_table":
+			return [["round", Rect2i(1, 6, 30, 20), WOOD_DARK], ["rect", Rect2i(4, 15, 24, 1), _shade(WOOD_DARK, 0.7)],
+					["rect", Rect2i(9, 10, 5, 3), Color8(222, 220, 210)], ["rect", Rect2i(19, 18, 5, 3), Color8(222, 220, 210)]]
+		"filing_cabinet":
+			return [["box", Rect2i(7, 3, 18, 16), STEEL], ["rect", Rect2i(9, 8, 14, 1), STEEL_DARK],
+					["rect", Rect2i(9, 13, 14, 1), STEEL_DARK], ["rect", Rect2i(14, 10, 4, 1), Color8(220, 220, 220)]]
+		"locker":
+			return [["box", Rect2i(6, 2, 20, 14), OLIVE], ["rect", Rect2i(15, 4, 1, 10), _shade(OLIVE, 0.6)],
+					["rect", Rect2i(9, 5, 4, 1), _shade(OLIVE, 0.6)], ["rect", Rect2i(19, 5, 4, 1), _shade(OLIVE, 0.6)]]
+		"reception_desk":
+			return [["box", Rect2i(1, 4, 30, 10), Color8(168, 136, 98)], ["box", Rect2i(1, 4, 7, 22), Color8(168, 136, 98)],
+					["box", Rect2i(12, 6, 8, 5), Color8(40, 42, 48)], ["rect", Rect2i(13, 7, 6, 3), SCREEN]]
+		"display_shelf":
+			return [["box", Rect2i(1, 2, 30, 12), Color8(150, 120, 84)], ["rect", Rect2i(3, 4, 5, 8), Color8(200, 80, 60)],
+					["rect", Rect2i(10, 4, 5, 8), Color8(220, 190, 80)], ["rect", Rect2i(17, 4, 5, 8), Color8(80, 150, 200)],
+					["rect", Rect2i(24, 4, 5, 8), Color8(110, 180, 100)]]
+		"checkout_counter":
+			return [["box", Rect2i(1, 6, 30, 12), Color8(160, 128, 90)], ["box", Rect2i(20, 7, 8, 7), Color8(52, 54, 60)],
+					["rect", Rect2i(22, 8, 4, 2), LAMP_GREEN], ["rect", Rect2i(4, 9, 12, 2), Color8(60, 60, 64)]]
+		"vending_machine":
+			return [["box", Rect2i(4, 1, 24, 20), Color8(176, 48, 44)], ["rect", Rect2i(6, 3, 13, 15), Color8(40, 46, 60)],
+					["rect", Rect2i(7, 4, 3, 3), Color8(220, 200, 80)], ["rect", Rect2i(11, 4, 3, 3), Color8(80, 190, 120)],
+					["rect", Rect2i(15, 4, 3, 3), Color8(90, 140, 230)], ["rect", Rect2i(21, 6, 4, 3), SCREEN]]
+		"workbench":
+			return [["box", Rect2i(1, 4, 30, 15), WOOD], ["box", Rect2i(4, 6, 6, 5), STEEL_DARK],
+					["rect", Rect2i(14, 9, 9, 2), STEEL], ["rect", Rect2i(24, 7, 3, 7), Color8(200, 160, 40)]]
+		"tool_cabinet":
+			return [["box", Rect2i(5, 3, 22, 15), Color8(170, 40, 36)], ["rect", Rect2i(7, 7, 18, 1), _shade(Color8(170, 40, 36), 0.55)],
+					["rect", Rect2i(7, 11, 18, 1), _shade(Color8(170, 40, 36), 0.55)], ["rect", Rect2i(7, 14, 18, 1), _shade(Color8(170, 40, 36), 0.55)]]
+		"storage_shelf":
+			return [["box", Rect2i(0, 6, 32, 20), STEEL_DARK], ["box", Rect2i(2, 8, 9, 7), Color8(160, 128, 84)],
+					["box", Rect2i(12, 8, 8, 7), Color8(140, 110, 72)], ["box", Rect2i(21, 8, 9, 7), Color8(160, 128, 84)],
+					["box", Rect2i(4, 17, 11, 7), Color8(120, 130, 120)], ["box", Rect2i(17, 17, 11, 7), Color8(160, 128, 84)]]
+		"server_rack":
+			return [["box", Rect2i(5, 2, 22, 26), Color8(36, 38, 44)], ["rect", Rect2i(7, 5, 18, 1), Color8(70, 74, 82)],
+					["rect", Rect2i(7, 10, 18, 1), Color8(70, 74, 82)], ["rect", Rect2i(7, 15, 18, 1), Color8(70, 74, 82)],
+					["rect", Rect2i(7, 20, 18, 1), Color8(70, 74, 82)], ["dot", Vector2i(23, 7), LAMP_GREEN],
+					["dot", Vector2i(23, 12), LAMP_GREEN], ["dot", Vector2i(21, 12), LAMP_RED], ["dot", Vector2i(23, 17), LAMP_GREEN],
+					["dot", Vector2i(23, 22), Color8(230, 180, 60)]]
+		"industrial_cabinet":
+			return [["box", Rect2i(2, 2, 28, 16), Color8(84, 96, 88)], ["rect", Rect2i(15, 4, 2, 12), _shade(Color8(84, 96, 88), 0.6)],
+					["rect", Rect2i(5, 5, 6, 4), Color8(220, 190, 60)], ["rect", Rect2i(21, 7, 3, 4), STEEL]]
+		"pallet":
+			return [["box", Rect2i(3, 4, 26, 24), Color8(150, 116, 74)], ["rect", Rect2i(3, 10, 26, 2), Color8(96, 70, 44)],
+					["rect", Rect2i(3, 19, 26, 2), Color8(96, 70, 44)]]
+		"crate":
+			return [["box", Rect2i(6, 6, 20, 20), Color8(150, 112, 66)], ["rect", Rect2i(8, 8, 16, 1), Color8(104, 74, 42)],
+					["rect", Rect2i(8, 23, 16, 1), Color8(104, 74, 42)], ["rect", Rect2i(15, 8, 2, 16), Color8(104, 74, 42)]]
+		"barrel":
+			return [["round", Rect2i(7, 7, 18, 18), Color8(52, 92, 132)], ["round", Rect2i(11, 11, 10, 10), _shade(Color8(52, 92, 132), 0.75)],
+					["dot", Vector2i(13, 13), Color8(200, 200, 200)]]
+		"equipment_cart":
+			return [["box", Rect2i(6, 4, 20, 22), STEEL], ["box", Rect2i(9, 7, 7, 6), Color8(220, 180, 50)],
+					["box", Rect2i(17, 15, 6, 7), STEEL_DARK], ["rect", Rect2i(6, 27, 3, 2), Color8(30, 30, 32)],
+					["rect", Rect2i(23, 27, 3, 2), Color8(30, 30, 32)]]
+		"generator":
+			return [["box", Rect2i(2, 4, 28, 22), Color8(196, 160, 40)], ["box", Rect2i(5, 7, 12, 14), STEEL_DARK],
+					["rect", Rect2i(6, 9, 10, 1), STEEL], ["rect", Rect2i(6, 12, 10, 1), STEEL], ["rect", Rect2i(6, 15, 10, 1), STEEL],
+					["box", Rect2i(20, 8, 7, 7), Color8(40, 40, 44)], ["dot", Vector2i(23, 11), LAMP_RED]]
+		"toolbox":
+			return [["box", Rect2i(8, 11, 16, 10), Color8(186, 44, 40)], ["rect", Rect2i(12, 8, 8, 2), Color8(40, 40, 44)],
+					["rect", Rect2i(8, 15, 16, 1), _shade(Color8(186, 44, 40), 0.6)]]
+		"ammo_crate":
+			return [["box", Rect2i(4, 6, 24, 20), OLIVE], ["rect", Rect2i(4, 14, 24, 2), _shade(OLIVE, 0.6)],
+					["rect", Rect2i(8, 9, 10, 2), Color8(220, 200, 120)], ["rect", Rect2i(8, 19, 4, 3), Color8(220, 200, 120)]]
+		"machinery":
+			return [["box", Rect2i(1, 1, 30, 30), Color8(82, 88, 96)], ["round", Rect2i(5, 5, 14, 14), Color8(52, 56, 62)],
+					["round", Rect2i(8, 8, 8, 8), Color8(196, 160, 40)], ["box", Rect2i(21, 5, 6, 22), STEEL_DARK],
+					["rect", Rect2i(5, 23, 13, 3), Color8(196, 160, 40)], ["dot", Vector2i(24, 9), LAMP_GREEN]]
+		"exam_table":
+			return [["box", Rect2i(9, 2, 14, 28), STEEL], ["box", Rect2i(10, 4, 12, 24), Color8(140, 190, 180)],
+					["round", Rect2i(11, 5, 10, 5), Color8(220, 230, 228)]]
+		"bench":
+			return [["box", Rect2i(1, 10, 30, 12), WOOD], ["rect", Rect2i(1, 14, 30, 1), WOOD_DARK],
+					["rect", Rect2i(1, 18, 30, 1), WOOD_DARK]]
+		"trash_bin":
+			return [["round", Rect2i(9, 9, 14, 14), GREEN_PLASTIC], ["round", Rect2i(12, 12, 8, 8), _shade(GREEN_PLASTIC, 0.6)]]
+		"dumpster":
+			return [["box", Rect2i(1, 4, 30, 22), Color8(54, 96, 70)], ["rect", Rect2i(15, 6, 2, 18), _shade(Color8(54, 96, 70), 0.6)],
+					["rect", Rect2i(3, 6, 2, 18), _shade(Color8(54, 96, 70), 1.2)]]
+		"park_table":
+			return [["box", Rect2i(4, 9, 24, 14), WOOD], ["box", Rect2i(4, 3, 24, 4), WOOD_DARK],
+					["box", Rect2i(4, 25, 24, 4), WOOD_DARK]]
+		"street_cabinet":
+			return [["box", Rect2i(6, 4, 20, 13), Color8(110, 120, 112)], ["rect", Rect2i(8, 7, 7, 1), _shade(Color8(110, 120, 112), 0.6)],
+					["rect", Rect2i(19, 8, 4, 4), Color8(220, 190, 60)]]
+	return [["box", Rect2i(6, 6, 20, 20), WOOD]]
+
+func _in_shape(kind: String, r: Rect2i, x: int, y: int) -> bool:
+	if not r.has_point(Vector2i(x, y)):
+		return false
+	if kind != "round":
+		return true
+	var cx := r.position.x + (r.size.x - 1) * 0.5
+	var cy := r.position.y + (r.size.y - 1) * 0.5
+	var dx := (x - cx) / maxf(1.0, r.size.x * 0.5)
+	var dy := (y - cy) / maxf(1.0, r.size.y * 0.5)
+	return dx * dx + dy * dy <= 1.02
+
+func _fill_shape(img: Image, kind: String, r: Rect2i, c: Color, _blend: bool) -> void:
+	for y in range(maxi(0, r.position.y), mini(T, r.end.y)):
+		for x in range(maxi(0, r.position.x), mini(T, r.end.x)):
+			if _in_shape(kind, r, x, y) and img.get_pixel(x, y).a < 0.5:
+				img.set_pixel(x, y, c)
+
+## Тело предмета: материал с лёгкой фактурой, тёмный контур, светлая фаска сверху-слева.
+func _fill_material(img: Image, r: Rect2i, base: Color, round: bool) -> void:
+	var kind := "round" if round else "box"
+	for y in range(maxi(0, r.position.y), mini(T, r.end.y)):
+		for x in range(maxi(0, r.position.x), mini(T, r.end.x)):
+			if not _in_shape(kind, r, x, y):
+				continue
+			var c := _shade(base, 0.9 + 0.18 * _fbm(x, y, 301))
+			var edge := not _in_shape(kind, r, x - 1, y) or not _in_shape(kind, r, x + 1, y) \
+					or not _in_shape(kind, r, x, y - 1) or not _in_shape(kind, r, x, y + 1)
+			if edge:
+				c = _shade(base, 0.45)
+			elif not _in_shape(kind, r, x - 2, y) or not _in_shape(kind, r, x, y - 2):
+				c = _shade(base, 1.22)
+			img.set_pixel(x, y, c)

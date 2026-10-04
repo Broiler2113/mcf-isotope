@@ -111,7 +111,8 @@ func _read_expected() -> Dictionary:
 static func build_map(cfg: Dictionary) -> MapData:
 	var m := MapGen.generate({"style": 1, "size": MapGen.SIZE_CUSTOM, "width": cfg["w"],
 			"height": cfg["h"], "seed": cfg["seed"], "zones": 2, "units": cfg["units"],
-			"civilians": 2, "density": 1, "space": false, "flammable": true})
+			"civilians": 2, "density": 1, "space": false, "flammable": true,
+			"furniture": 0})
 	var taken := {}
 	for s: Dictionary in m.spawns:
 		taken[s["coord"]] = true

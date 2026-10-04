@@ -283,6 +283,13 @@ func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> voi
 			or fid == MCF.FEATURE_DRONE_STATION or skip_features.has(fid):
 		return
 	var name := tile_name(cell)
+	if Furniture.is_furniture(fid):
+		var turned := _turned(name, res, furniture_turn(_grid, c, fid))
+		if turned != null:
+			feat.blit_rect(turned, full, at)
+			if cell.feature_durability < Furniture.durability_of(fid):
+				feat.blend_rect(_crack_overlay(res), full, at)
+		return
 	var sheets := _sheet(name, res)
 	if not sheets.is_empty():
 		var mask := mask_at(_grid, c, fid)
@@ -318,6 +325,66 @@ func _weld_overlay(res: int) -> Image:
 	for p: Vector2i in [Vector2i(b, b), Vector2i(res - 1 - b, b), Vector2i(b, res - 1 - b),
 			Vector2i(res - 1 - b, res - 1 - b), Vector2i(res / 2, res / 2)]:
 		img.fill_rect(Rect2i(p - Vector2i(b, b) / 2, Vector2i(b + 1, b + 1)), bead)
+	_tiles[key] = [img]
+	return img
+
+## Мебель нарисована спинкой вверх (§3.15) и встаёт спинкой к стене: k четвертей оборота
+## по часовой, при которых верх плитки смотрит на первую стену среди С/В/Ю/З. Стул и
+## кресло прежде всего поворачиваются лицом к соседнему столу. Ни стены, ни стола —
+## поворот по хешу клетки, чтобы одинаковые предметы не стояли строем.
+const _TURN_DIRS := [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
+const _TABLES := {"dining_table": true, "desk": true, "office_desk": true,
+		"conference_table": true, "coffee_table": true, "park_table": true,
+		"reception_desk": true, "workbench": true, "checkout_counter": true}
+const _CHAIRS := {"chair": true, "armchair": true}
+
+static func furniture_turn(grid: Grid, c: Vector2i, fid: String) -> int:
+	# Стул смотрит на стол, стол — на свой стул (место, где сидят, — низ плитки).
+	var faces: Dictionary = _TABLES if fid == "chair" or fid == "armchair" \
+			else (_CHAIRS if _TABLES.has(fid) else {})
+	if not faces.is_empty():
+		for k in 4:
+			var n: Vector2i = c + _TURN_DIRS[k]
+			if grid.in_bounds(n) and faces.has(grid.cell_fast(n.x, n.y).feature_id):
+				return (k + 2) % 4
+	for k in 4:
+		var n: Vector2i = c + _TURN_DIRS[k]
+		if not grid.in_bounds(n) or grid.cell_fast(n.x, n.y).is_wall():
+			return k
+	return variant_of(c, 4)
+
+## Плитка мебели в разрешении res, повёрнутая на k четвертей (кэш по трём ключам).
+func _turned(name: String, res: int, k: int) -> Image:
+	var key := "%s@%d@%d" % [name, res, k]
+	if _tiles.has(key):
+		var hit: Array = _tiles[key]
+		return hit[0] if not hit.is_empty() else null
+	var base := _tile(name, res)
+	if base.is_empty():
+		_tiles[key] = []
+		return null
+	var img: Image = (base[0] as Image).duplicate()
+	for i in k:
+		img.rotate_90(CLOCKWISE)
+	_tiles[key] = [img]
+	return img
+
+## Трещины по побитой мебели: два тёмных излома поперёк плитки.
+func _crack_overlay(res: int) -> Image:
+	var key := "crack@%d" % res
+	if _tiles.has(key):
+		return _tiles[key][0]
+	var img := Image.create(res, res, false, Image.FORMAT_RGBA8)
+	var ink := Color(0.08, 0.06, 0.05, 0.85)
+	var pts := [Vector2(0.18, 0.22), Vector2(0.42, 0.40), Vector2(0.36, 0.58), Vector2(0.62, 0.78),
+			Vector2(0.84, 0.70)]
+	for i in pts.size() - 1:
+		var a: Vector2 = pts[i] * res
+		var b: Vector2 = pts[i + 1] * res
+		var steps := maxi(2, int(a.distance_to(b)))
+		for t in steps + 1:
+			var p := a.lerp(b, float(t) / steps)
+			img.set_pixel(clampi(int(p.x), 0, res - 1), clampi(int(p.y), 0, res - 1), ink)
 	_tiles[key] = [img]
 	return img
 
@@ -368,12 +435,25 @@ static func mask_at(grid: Grid, c: Vector2i, fid: String) -> int:
 
 ## Плитка объекта для отдельной отрисовки поверх куска (снимок «до взрыва» на время броска).
 func draw_feature_tile(ci: CanvasItem, fid: String, c: Vector2i, rect: Rect2) -> void:
+	if Furniture.is_furniture(fid):
+		var img := _turned(fid, TerrainTiles.T, furniture_turn(_grid, c, fid))
+		if img != null:
+			ci.draw_texture_rect(_furniture_tex(img), rect, false)
+		return
 	var name: String = env_name(Sprites.ALIASES.get(fid, fid), env)
 	var sheet := Sprites.texture_of(name + Sprites.AUTOTILE_SUFFIX)
 	if sheet != null:
 		Sprites.draw_autotile(ci, sheet, rect, mask_at(_grid, c, fid), variant_of(c, 64))
 	else:
 		Sprites.draw_tile(ci, name, rect, variant_of(c, 64))
+
+var _furn_tex: Dictionary = {}   # Image -> ImageTexture для отдельной отрисовки мебели
+func _furniture_tex(img: Image) -> ImageTexture:
+	var t: Variant = _furn_tex.get(img)
+	if t == null:
+		t = ImageTexture.create_from_image(img)
+		_furn_tex[img] = t
+	return t
 
 ## Слой для экранов без своего (расстановка): рисует куски под родителем (show_behind_parent).
 ## Родитель задаёт position/scale своей панорамой и видимые клетки.

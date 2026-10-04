@@ -98,6 +98,49 @@ Yours wins. Changes are picked up when a battle or the map editor opens.
 -- Misc --
   corpse.png
 
+-- Furniture (drawn from above, back of the piece at the TOP; the game turns it to the wall) --
+  chair.png
+  armchair.png
+  sofa.png
+  bed.png
+  nightstand.png
+  desk.png
+  dining_table.png
+  coffee_table.png
+  wardrobe.png
+  dresser.png
+  bookshelf.png
+  cabinet.png
+  kitchen_counter.png
+  refrigerator.png
+  office_desk.png
+  conference_table.png
+  filing_cabinet.png
+  locker.png
+  reception_desk.png
+  display_shelf.png
+  checkout_counter.png
+  vending_machine.png
+  workbench.png
+  tool_cabinet.png
+  storage_shelf.png
+  server_rack.png
+  industrial_cabinet.png
+  pallet.png
+  crate.png
+  barrel.png
+  equipment_cart.png
+  generator.png
+  toolbox.png
+  ammo_crate.png
+  machinery.png
+  exam_table.png
+  bench.png
+  trash_bin.png
+  dumpster.png
+  park_table.png
+  street_cabinet.png
+
 == Factions ==
 Sides are factions, not colours. Soldiers accept a faction suffix:
   light_infantry_nova.png, light_infantry_purifiers.png, ... light_infantry_neutral.png

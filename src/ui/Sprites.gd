@@ -313,6 +313,11 @@ static func _manifest_text() -> String:
 		for entry in group[1]:
 			lines.append("  %s.png" % entry)
 		lines.append("")
+	# Мебель (§3.15) — из её таблицы, чтобы новый предмет попадал в справку сам.
+	lines.append("-- Furniture (drawn from above, back of the piece at the TOP; the game turns it to the wall) --")
+	for fid: String in Furniture.ids():
+		lines.append("  %s.png" % fid)
+	lines.append("")
 	lines.append_array([
 		"== Factions ==",
 		"Sides are factions, not colours. Soldiers accept a faction suffix:",

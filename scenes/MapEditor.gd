@@ -261,6 +261,10 @@ static func map_color(m: MapData, i: int, env: String) -> Color:
 	var feat: String = m.feature_id[i]
 	if m.is_space[i] != 0:
 		col = Color(0.03, 0.03, 0.07)
+	elif Furniture.is_furniture(feat):
+		# Мебель (§3.15) — свой тёплый тон, высокая темнее: план комнат читается сразу.
+		col = Color(0.40, 0.30, 0.22) if m.cover_height[i] >= MCF.WALL_HEIGHT \
+				else Color(0.55, 0.42, 0.28)
 	elif m.cover_height[i] >= MCF.WALL_HEIGHT:
 		col = WALL_TONE.get(env, Color(0.45, 0.42, 0.38))
 		if MCF.is_glass(feat):
@@ -518,7 +522,7 @@ func _brush_cell(c: Vector2i, mask: int) -> void:
 				t[1] = 0.0
 			_:
 				t[3] = brush
-				t[1] = float(MCF.FEATURE_HEIGHT.get(brush, 0.0))
+				t[1] = maxf(0.0, MCF.feature_height(brush))
 				t[2] = false
 	_write(i, t)
 
@@ -1444,6 +1448,14 @@ func _refresh_palette() -> void:
 	_palette_group("Terrain", TERRAIN)
 	_palette_group("Walls & doors", WALLS)
 	_palette_group("Objects", OBJECTS)
+	# Мебель (§3.15) — по разделам; на кнопке имя и высота, в подсказке всё остальное.
+	for cat: String in Furniture.CATEGORIES:
+		var items: Array = []
+		for fid: String in Furniture.ids():
+			if Furniture.DEFS[fid]["cat"] == cat:
+				items.append([fid, "%s %.1f" % [Furniture.name_of(fid), Furniture.height_of(fid)],
+						_furniture_hint(fid)])
+		_palette_group("Furniture: %s" % Furniture.CATEGORY_NAMES[cat], items)
 	var units: Array = []
 	for id: String in NEUTRAL_UNIT_IDS:
 		units.append(["unit:" + id, id.capitalize()])
@@ -1672,7 +1684,20 @@ func _brush_name(id: String) -> String:
 		for it: Array in group:
 			if it[0] == id:
 				return it[1]
+	if Furniture.is_furniture(id):
+		return "%s — %.1f m" % [Furniture.name_of(id), Furniture.height_of(id)]
 	return id
+
+## Подсказка кнопки мебели: высота, материал, прочность, подвижность, цена слома.
+static func _furniture_hint(fid: String) -> String:
+	var d: Dictionary = Furniture.def_of(fid)
+	var move: String = {"portable": "carried by hand", "drag": "dragged",
+			"fixed": "immovable"}[Furniture.mobility_name(fid)]
+	var cover := "wall-height" if Furniture.blocks_move(fid) \
+			else ("cover −%d" % Furniture.cover_penalty(float(d["h"])) if Furniture.cover_penalty(float(d["h"])) > 0
+			else "climbable, no cover")
+	return "%s — %.1f m, %s, %s\n%s, durability %d, breaks for %d AP" % [Furniture.name_of(fid),
+			float(d["h"]), d["mat"], cover, move.capitalize(), int(d["dur"]), int(d["ap"])]
 
 # --- Строка состояния и заголовок ---
 

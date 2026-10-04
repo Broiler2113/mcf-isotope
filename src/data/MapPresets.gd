@@ -108,7 +108,7 @@ static func pattern(w: int, h: int) -> Dictionary:
 
 static func _put(p: Dictionary, x: int, y: int, feature: String = "",
 		floor_t: int = MCF.FLOOR_NORMAL) -> void:
-	p["cells"][y * int(p["w"]) + x] = [floor_t, float(MCF.FEATURE_HEIGHT.get(feature, 0.0)),
+	p["cells"][y * int(p["w"]) + x] = [floor_t, maxf(0.0, MCF.feature_height(feature)),
 			false, feature, KEEP]
 
 ## Коробка: стены по контуру, пол внутри.

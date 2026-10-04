@@ -29,6 +29,10 @@ var zone_owner: PackedInt32Array = PackedInt32Array()
 ## бункера, кирпич города и астероида, камень поля. Пусто — карта нарисована в редакторе
 ## или старше этого поля: окружение выводится из самой карты (environment()).
 var env: String = ""
+## Побитая мебель (§3.15) — редкие клетки, у которых прочность ниже табличной: индекс →
+## [id объекта, прочность]. Запись действует, только пока на клетке тот же объект, так что
+## перекрашенная в редакторе клетка старую прочность не наследует. Пусто почти всегда.
+var feature_dur: Dictionary = {}
 
 func _init(p_width: int = 16, p_height: int = 12) -> void:
 	resize(p_width, p_height)
@@ -51,6 +55,7 @@ func resize(p_width: int, p_height: int) -> void:
 		feature_id.append("")
 		zone_owner[i] = -1
 	spawns = []
+	feature_dur = {}
 
 ## Изменить размер, СОХРАНИВ содержимое (batch 13 #14): клетки в пересечении старого и
 ## нового поля остаются как были, новые — космос, спавны за краем отбрасываются. Раньше
@@ -64,6 +69,7 @@ func resize_keep(p_width: int, p_height: int) -> void:
 	var old_feat := feature_id
 	var old_zone := zone_owner
 	var old_spawns := spawns
+	var old_dur := feature_dur
 	resize(p_width, p_height)
 	fill_all_space()
 	for y in mini(old_h, height):
@@ -75,6 +81,8 @@ func resize_keep(p_width: int, p_height: int) -> void:
 			is_space[dst] = old_space[src]
 			feature_id[dst] = old_feat[src]
 			zone_owner[dst] = old_zone[src]
+			if old_dur.has(src):
+				feature_dur[dst] = old_dur[src]
 	for s in old_spawns:
 		if in_bounds(s["coord"]):
 			spawns.append(s)
@@ -158,8 +166,29 @@ func apply_to_grid(grid: Grid) -> void:
 			var fid := feature_id[i]
 			if fid != "":
 				c.set_feature(fid)
+				var dmg: Variant = feature_dur.get(i)
+				if dmg != null and str(dmg[0]) == fid:
+					c.feature_durability = clampi(int(dmg[1]), 1, c.feature_durability)
 			else:
 				c.cover_height = cover_height[i]
+
+## Прочность предмета на клетке ниже табличной (§3.15); dur ≥ табличной снимает запись.
+func set_feature_damage(coord: Vector2i, dur: int) -> void:
+	if not in_bounds(coord):
+		return
+	var i := _index(coord)
+	var fid := feature_id[i]
+	if fid == "" or dur >= MCF.feature_durability(fid):
+		feature_dur.erase(i)
+	else:
+		feature_dur[i] = [fid, maxi(1, dur)]
+
+func get_feature_damage(coord: Vector2i) -> int:
+	var i := _index(coord)
+	var dmg: Variant = feature_dur.get(i)
+	if dmg != null and str(dmg[0]) == feature_id[i]:
+		return int(dmg[1])
+	return MCF.feature_durability(feature_id[i])
 
 ## Полоса развёртывания на карте без нарисованных зон (item 22): поле делится на count
 ## вертикальных полос, index — номер полосы. [x, y) — столбцы. На двоих — прежние
@@ -284,7 +313,7 @@ func to_dict() -> Dictionary:
 	for s in spawns:
 		var co: Vector2i = s["coord"]
 		spawn_out.append({"stats_id": s["stats_id"], "owner": s["owner"], "x": co.x, "y": co.y})
-	return {
+	var out := {
 		"version": MAP_VERSION,
 		"width": width,
 		"height": height,
@@ -296,6 +325,14 @@ func to_dict() -> Dictionary:
 		"zone_owner": Array(zone_owner),
 		"env": env,
 	}
+	# Только если есть побитая мебель: обычная карта пишется байт в байт как раньше.
+	var dur_out := {}
+	for i: int in feature_dur:
+		if i < feature_id.size() and str(feature_dur[i][0]) == feature_id[i]:
+			dur_out[str(i)] = feature_dur[i]
+	if not dur_out.is_empty():
+		out["feature_durability"] = dur_out
+	return out
 
 static func from_dict(d: Dictionary) -> MapData:
 	var m := MapData.new(int(d.get("width", 16)), int(d.get("height", 12)))
@@ -315,6 +352,11 @@ static func from_dict(d: Dictionary) -> MapData:
 		if i < fi.size():
 			m.feature_id[i] = str(fi[i])
 	m.env = str(d.get("env", ""))
+	var fd: Dictionary = d.get("feature_durability", {})
+	for k: String in fd:
+		var rec: Array = fd[k]
+		if int(k) < n and rec.size() == 2:
+			m.feature_dur[int(k)] = [str(rec[0]), int(rec[1])]
 	var zo: Array = d.get("zone_owner", [])
 	for i in n:
 		if i < zo.size():

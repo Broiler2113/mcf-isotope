@@ -336,6 +336,8 @@ func _route(intent: Intent) -> ActionResult:
 		return _resolve_build_wall(intent)
 	elif intent is WeldAirlockIntent:
 		return _resolve_weld_airlock(intent)
+	elif intent is CarryIntent:
+		return _resolve_carry(intent)
 	elif intent is BreakIntent:
 		return _resolve_break(intent)
 	elif intent is DragIntent:
@@ -529,7 +531,7 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 		if _move_light_object(dragged, spot):
 			unit.dragging = spot
 			lines.append("  ↳ dragging \"%s\" → (%d, %d)" % [
-				MCF.FEATURE_NAMES.get(state.grid.cell(spot).feature_id, "object"), spot.x, spot.y])
+				MCF.feature_name(state.grid.cell(spot).feature_id, "object"), spot.x, spot.y])
 		else:
 			unit.dragging = UnitInstance.NOT_DRAGGING
 			lines.append("  ↳ dropped the object at (%d, %d)" % [dragged.x, dragged.y])
@@ -560,7 +562,7 @@ func dragged_cell_of(unit: UnitInstance) -> Vector2i:
 		return UnitInstance.NOT_DRAGGING
 	if not state.grid.in_bounds(unit.dragging) \
 			or Combat.distance(unit.coord, unit.dragging) > 1 \
-			or not DRAGGABLE_FEATURES.has(state.grid.cell(unit.dragging).feature_id):
+			or not is_draggable_feature(state.grid.cell(unit.dragging).feature_id):
 		unit.dragging = UnitInstance.NOT_DRAGGING
 	return unit.dragging
 
@@ -575,8 +577,10 @@ func _move_light_object(src: Vector2i, dst: Vector2i) -> bool:
 	var fid := src_cell.feature_id
 	var fowner := src_cell.feature_owner
 	var dirt := src_cell.dirt_level
+	var dur := src_cell.feature_durability
 	src_cell.clear_feature()
 	dst_cell.set_feature(fid, fowner)
+	dst_cell.feature_durability = dur
 	if fid == MCF.FEATURE_DIRT_PILE:
 		dst_cell.dirt_level = dirt
 		dst_cell.cover_height = MCF.DIRT_HEIGHT_PER_LEVEL * float(dirt)
@@ -1102,9 +1106,11 @@ func _pillbox_absorbs(center: Vector2i, damage: int, res: ActionResult) -> bool:
 	if not state.grid.in_bounds(center):
 		return false
 	var cell := state.grid.cell(center)
-	if cell.feature_durability <= 0:
+	# Мебель тоже держит прочность, но удар на себя не принимает: стол не ДОТ, разрыв на
+	# нём идёт полной волной и сам стол бьёт через _blast_destroy_terrain.
+	if cell.feature_durability <= 0 or Furniture.is_furniture(cell.feature_id):
 		return false
-	var was: String = MCF.FEATURE_NAMES.get(cell.feature_id, cell.feature_id)
+	var was: String = MCF.feature_name(cell.feature_id, cell.feature_id)
 	cell.feature_durability -= damage
 	if cell.feature_durability <= 0:
 		cell.clear_feature()
@@ -1124,6 +1130,13 @@ func _blast_destroy_terrain(c: Vector2i, res: ActionResult = null,
 		return
 	var cell := state.grid.cell(c)
 	var fid := cell.feature_id
+	# Мебель разрыв бьёт по прочности (§3.15): лёгкое разлетается сразу, тяжёлое — со
+	# второго-третьего разрыва.
+	if Furniture.is_furniture(fid):
+		cell.feature_durability -= Furniture.BLAST_DAMAGE
+		if cell.feature_durability <= 0:
+			_destroy_furniture(cell, res)
+		return
 	if cell.feature_durability > 0:
 		return
 	var destructible := [
@@ -1316,6 +1329,8 @@ func _ignite(cell: GridCell, owner: int, res: ActionResult = null) -> void:
 	# огне всё равно гибнет, просто без взрыва, общей зачисткой ниже.
 	if cell.feature_id == MCF.FEATURE_MINE and res != null:
 		_detonate_mine(c, null, res)
+	elif Furniture.is_furniture(cell.feature_id) and not Furniture.flammable(cell.feature_id):
+		pass   # железный шкаф струя огнемёта обжигает, но не сжигает (§3.15)
 	elif cell.feature_id != MCF.FEATURE_CORPSE_WALL:
 		cell.clear_feature()
 	_fx(res, {"fx": "burn", "cells": [c]})
@@ -1391,7 +1406,7 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i, aimed: String = "") ->
 						blasted.append(c)
 					cell.clear_feature()
 					result.log("Beam destroys %s at (%d, %d)" % [
-						MCF.FEATURE_NAMES.get(was, was), c.x, c.y])
+						MCF.feature_name(was, was), c.x, c.y])
 					# Стена из трупов рассыпается вдоль траектории луча (таблица §3.13).
 					if was == MCF.FEATURE_CORPSE_WALL:
 						cell.corpse_count = 0
@@ -1399,7 +1414,7 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i, aimed: String = "") ->
 						result.log("… bodies scatter along the beam")
 				elif cracks > 0:
 					result.log("Beam cracks %s at (%d, %d) [durability %d]" % [
-						MCF.FEATURE_NAMES.get(was, was), c.x, c.y, cell.feature_durability])
+						MCF.feature_name(was, was), c.x, c.y, cell.feature_durability])
 			"terrain":
 				if destroyed:
 					cell.cover_height = 0.0
@@ -1529,9 +1544,20 @@ func _laser_trace(from_coord: Vector2i, step: Vector2i) -> Array:
 					rec["destroyed"] = true
 				else:
 					rec["stop"] = true
+		elif Furniture.is_furniture(cell.feature_id):
+			# Мебель луч прожигает за её текущую прочность (§3.15): стул — за единицу,
+			# генератор — за пять. Не хватило — луч в ней вязнет.
+			rec["kind"] = "feature"
+			rec["label"] = Furniture.name_of(cell.feature_id)
+			var f_cost := cell.feature_durability
+			if potential >= f_cost:
+				rec["cost"] = f_cost
+				rec["destroyed"] = true
+			else:
+				rec["stop"] = true
 		elif cell.has_feature() and MCF.LASER_COST.has(cell.feature_id):
 			rec["kind"] = "feature"
-			rec["label"] = MCF.FEATURE_NAMES.get(cell.feature_id, cell.feature_id)
+			rec["label"] = MCF.feature_name(cell.feature_id, cell.feature_id)
 			if cell.feature_id == MCF.FEATURE_GLASS:
 				# Стекло фокусирует луч: каждое второе на пути ВОЗВРАЩАЕТ единицу (#99).
 				# Отрицательная стоимость — это прибавка, её же покажет предпросмотр.
@@ -2147,7 +2173,13 @@ func cover_effect_from(from_coord: Vector2i, target: UnitInstance) -> Dictionary
 	var shield_cell := target.coord + _step_toward(target.coord, from_coord)
 	if not state.grid.in_bounds(shield_cell):
 		return none
-	var h: float = state.grid.cell(shield_cell).cover_height
+	var shield := state.grid.cell(shield_cell)
+	var h: float = shield.cover_height
+	# Мебель — своя таблица (§3.15): в ней есть и 1.5 м (−3). Обычные объекты и рельеф
+	# считаются по MCF.COVER_MOD, как и раньше.
+	if Furniture.is_furniture(shield.feature_id):
+		var fp := Furniture.cover_penalty(h)
+		return {"hit_penalty": fp, "defense_bonus": 0} if fp > 0 else none
 	if MCF.COVER_MOD.has(h):
 		return {"hit_penalty": int(MCF.COVER_MOD[h]), "defense_bonus": 0}
 	# Труп, просто лежащий на земле, укрытием не считается (#97): плашмя он ничего не
@@ -2412,7 +2444,7 @@ func _resolve_build(intent: BuildIntent) -> ActionResult:
 	notify_cell_changed(intent.target)  # застроенная клетка будит соседей (§3.1a)
 	_extinguish_cell(cell)  # стройка на горящей клетке гасит огонь (#82)
 	return ActionResult.success(["%s builds: %s at (%d, %d) [AP: %d]%s" % [
-		actor.stats.display_name, MCF.FEATURE_NAMES.get(placed, placed),
+		actor.stats.display_name, MCF.feature_name(placed, placed),
 		intent.target.x, intent.target.y, actor.remaining_ap, credit_note]])
 
 ## Цена постройки для этого инженера (для UI): в борге партия одного типа стоит 1 ОД,
@@ -2567,6 +2599,9 @@ func _resolve_break(intent: BreakIntent) -> ActionResult:
 		return ActionResult.fail("Unit unavailable")
 	if actor.owner != state.active_player():
 		return ActionResult.fail("It's the other player's turn")
+	if state.grid.in_bounds(intent.target) \
+			and Furniture.is_furniture(state.grid.cell(intent.target).feature_id):
+		return _resolve_smash_furniture(actor, intent.target)
 	var ability := actor.stats.special_ability_id
 	if ability != MCF.ABILITY_MINER and ability != MCF.ABILITY_ENGINEER:
 		return ActionResult.fail("Only a miner or engineer can demolish")
@@ -2580,7 +2615,7 @@ func _resolve_break(intent: BreakIntent) -> ActionResult:
 	if actor.remaining_ap < MCF.BREAK_COST:
 		return ActionResult.fail("Need %d AP" % MCF.BREAK_COST)
 	actor.remaining_ap -= MCF.BREAK_COST
-	var was: String = MCF.FEATURE_NAMES.get(cell.feature_id, "wall")
+	var was: String = MCF.feature_name(cell.feature_id, "wall")
 	cell.clear_feature()
 	cell.corpse_count = 0
 	return ActionResult.success(["%s demolishes: %s at (%d, %d) [AP: %d]" % [
@@ -3122,6 +3157,147 @@ func buildable_cells(actor: UnitInstance, feature_id: String = "") -> Array:
 			out.append(n)
 	return out
 
+# --- Мебель (§3.15): разломать, унести в руках, поставить ---------------------------
+## Мебель ломает ЛЮБОЙ боец, а не только шахтёр с инженером: это не укрепление, а стол.
+## То же намерение BreakIntent и та же зачистка клетки, что у слома укреплений; цена в
+## ОД — из таблицы мебели (1 обычное, 2 крупное, 3 тяжёлое железо). Не боец (дрон) и
+## пассажир машины ломать не могут: первому нечем, второй сидит в кресле.
+func can_smash_furniture(actor: UnitInstance, coord: Vector2i) -> String:
+	var err := _validate_actor(actor)
+	if err != "":
+		return err
+	if actor.is_drone:
+		return "A drone can't do that"
+	if actor.aboard_vehicle_id != -1:
+		return "Get out of the vehicle first"
+	if not state.grid.in_bounds(coord) or Combat.distance(actor.coord, coord) != 1:
+		return "Can only break furniture in an adjacent cell"
+	var fid := state.grid.cell(coord).feature_id
+	if not Furniture.is_furniture(fid):
+		return "No furniture there"
+	var cost := Furniture.break_ap(fid)
+	if actor.remaining_ap < cost:
+		return "Need %d AP" % cost
+	return ""
+
+func _resolve_smash_furniture(actor: UnitInstance, coord: Vector2i) -> ActionResult:
+	var reason := can_smash_furniture(actor, coord)
+	if reason != "":
+		return ActionResult.fail(reason)
+	var cell := state.grid.cell(coord)
+	var fid := cell.feature_id
+	actor.remaining_ap -= Furniture.break_ap(fid)
+	var res := ActionResult.success(["%s smashes the %s at (%d, %d) [AP: %d]" % [
+		actor.stats.display_name, Furniture.name_of(fid).to_lower(), coord.x, coord.y,
+		actor.remaining_ap]])
+	_destroy_furniture(cell, res)
+	return res
+
+## Снести предмет мебели с клетки: пол остаётся, высота сбрасывается в ноль (clear_feature),
+## журнал вида и обзора узнаёт об этом через сеттеры клетки. Щепки — той же косметикой
+## «разрушенный пол», что и у снесённых укреплений.
+func _destroy_furniture(cell: GridCell, res: ActionResult) -> void:
+	cell.clear_feature()
+	notify_cell_changed(cell.coord)
+	_fx(res, {"fx": "debris", "at": NOWHERE, "cells": [cell.coord]})
+
+## Соседняя мебель, которую боец может разломать прямо сейчас (для UI).
+func furniture_smash_cells(actor: UnitInstance) -> Array:
+	var out: Array = []
+	if actor == null:
+		return out
+	for n in state.grid.neighbors(actor.coord):
+		if can_smash_furniture(actor, n) == "":
+			out.append(n)
+	return out
+
+## Поднять переносной предмет в руки (как труп или свёрнутую станцию): 1 ОД, руки должны
+## быть пусты. Предмет уходит с доски в held_item_id; ставит его на место UseItemIntent.
+## Вся переносная мебель — прочности 1 (проверяет run_furniture), так что держать в руках
+## нечего, кроме самого id: «поцарапанного» стула, которого надо помнить, не бывает.
+func can_carry_furniture(actor: UnitInstance, coord: Vector2i) -> String:
+	var err := _validate_actor(actor)
+	if err != "":
+		return err
+	if actor.is_drone or actor.borg_id != -1 or actor.aboard_vehicle_id != -1 or _is_shield(actor):
+		return "This unit can't carry furniture"
+	if actor.held_item_id != "" or actor.carried_corpses > 0 or held_unit_of(actor) != null:
+		return "Hands are full"
+	if not state.grid.in_bounds(coord) or Combat.distance(actor.coord, coord) != 1:
+		return "Can only pick up from an adjacent cell"
+	var cell := state.grid.cell(coord)
+	if not Furniture.carriable(cell.feature_id):
+		return "Nothing to carry there"
+	if cell.occupant != null or cell.vehicle_id != -1:
+		return "Someone is standing on it"
+	return ""
+
+func _resolve_carry(intent: CarryIntent) -> ActionResult:
+	var actor := state.get_unit(intent.actor_id)
+	var reason := can_carry_furniture(actor, intent.coord)
+	if reason != "":
+		return ActionResult.fail(reason)
+	var cell := state.grid.cell(intent.coord)
+	var fid := cell.feature_id
+	actor.remaining_ap -= 1
+	actor.held_item_id = fid
+	cell.clear_feature()
+	return ActionResult.success(["%s picks up the %s at (%d, %d) [AP: %d]" % [
+		actor.stats.display_name, Furniture.name_of(fid).to_lower(), intent.coord.x,
+		intent.coord.y, actor.remaining_ap]])
+
+func furniture_carry_cells(actor: UnitInstance) -> Array:
+	var out: Array = []
+	if actor == null:
+		return out
+	for n in state.grid.neighbors(actor.coord):
+		if can_carry_furniture(actor, n) == "":
+			out.append(n)
+	return out
+
+## Поставить несомый предмет на соседнюю пустую клетку — бесплатно, как положить труп.
+## Ничего не затирает: клетка обязана быть пустой под постройку (без бойца, объекта и
+## высоты); в открытый космос мебель не ставят.
+func can_put_down_furniture(actor: UnitInstance, coord: Vector2i) -> String:
+	if actor == null or not actor.is_alive():
+		return "Unit unavailable"
+	if actor.owner != state.active_player():
+		return "It's the other player's turn"
+	if actor.is_held():
+		return "Unit is being held — break free first"
+	if not Furniture.is_furniture(actor.held_item_id):
+		return "Not carrying furniture"
+	if not state.grid.in_bounds(coord) or Combat.distance(actor.coord, coord) != 1:
+		return "Put it down in an adjacent cell"
+	var cell := state.grid.cell(coord)
+	if not cell.is_buildable() or cell.vehicle_id != -1 or cell.corpse_count > 0:
+		return "That cell is not free"
+	if cell.is_space:
+		return "Nothing to set it on in open space"
+	return ""
+
+func _put_down_furniture(actor: UnitInstance, coord: Vector2i) -> ActionResult:
+	var reason := can_put_down_furniture(actor, coord)
+	if reason != "":
+		return ActionResult.fail(reason)
+	var fid := actor.held_item_id
+	actor.held_item_id = ""
+	var cell := state.grid.cell(coord)
+	cell.set_feature(fid, -1)
+	_extinguish_cell(cell)   # поставленный на огонь предмет сбивает пламя, как и всё (#82)
+	return ActionResult.success(["%s puts the %s down at (%d, %d) [AP: %d]" % [
+		actor.stats.display_name, Furniture.name_of(fid).to_lower(), coord.x, coord.y,
+		actor.remaining_ap]])
+
+func furniture_put_cells(actor: UnitInstance) -> Array:
+	var out: Array = []
+	if actor == null:
+		return out
+	for n in state.grid.neighbors(actor.coord):
+		if can_put_down_furniture(actor, n) == "":
+			out.append(n)
+	return out
+
 ## Соседние клетки, которые можно сломать (для UI).
 func breakable_cells(actor: UnitInstance) -> Array:
 	var out: Array = []
@@ -3209,6 +3385,10 @@ func fire_need(cell: GridCell) -> int:
 	if cell.is_tall_dirt():
 		return MCF.FIRE_NEED_TALL_DIRT
 	if cell.feature_id != "":
+		# Мебель (§3.15): дерево, ткань, пластик горят как деревянная стена; железо от
+		# соседнего пламени не занимается вовсе.
+		if Furniture.is_furniture(cell.feature_id):
+			return MCF.FIRE_NEED_WOOD if Furniture.flammable(cell.feature_id) else MCF.FIRE_NEVER
 		# Всё, чего в таблице нет, — рядовое укрытие: мешки, ёж, ДПМГ, куча 1 м.
 		return int(MCF.FIRE_NEED_BY_FEATURE.get(cell.feature_id, MCF.FIRE_NEED_COVER))
 	match cell.floor_type:
@@ -5425,6 +5605,11 @@ const DRAGGABLE_FEATURES := [
 	MCF.FEATURE_SANDBAGS, MCF.FEATURE_HEDGEHOG, MCF.FEATURE_DIRT_PILE,
 ]
 
+## Волочат мешки, ежа, кучу земли — и тяжёлую мебель (§3.15): шкаф, стол, верстак едут
+## тем же волочением, без своей механики.
+static func is_draggable_feature(fid: String) -> bool:
+	return DRAGGABLE_FEATURES.has(fid) or Furniture.draggable(fid)
+
 func _resolve_drag(intent: DragIntent) -> ActionResult:
 	var actor := state.get_unit(intent.actor_id)
 	var err := _validate_actor(actor)
@@ -5467,7 +5652,7 @@ func _resolve_drag(intent: DragIntent) -> ActionResult:
 			actor.stats.display_name, dst.x, dst.y, actor.remaining_ap]])
 
 	# Лёгкий объект (мешки/ёж/куча земли) — тащить может любой юнит (#30).
-	if DRAGGABLE_FEATURES.has(src_cell.feature_id):
+	if is_draggable_feature(src_cell.feature_id):
 		var fid := src_cell.feature_id
 		var fowner := src_cell.feature_owner
 		var dirt := src_cell.dirt_level
@@ -5476,8 +5661,11 @@ func _resolve_drag(intent: DragIntent) -> ActionResult:
 		if not dst_cell.is_buildable() and stacked == "":
 			return ActionResult.fail("Target cell is occupied")
 		var placed: String = stacked if stacked != "" else fid
+		var dur := src_cell.feature_durability
 		src_cell.clear_feature()
 		dst_cell.set_feature(placed, fowner)
+		if stacked == "":
+			dst_cell.feature_durability = dur   # поцарапанный шкаф не чинится переездом
 		if placed == MCF.FEATURE_DIRT_PILE:
 			# Куча переезжает целиком, вместе с набранной высотой.
 			dst_cell.dirt_level = dirt
@@ -5490,7 +5678,7 @@ func _resolve_drag(intent: DragIntent) -> ActionResult:
 			actor.dragging = dst
 			_grant_carry_move(actor)
 		return ActionResult.success(["%s dragged \"%s\" → (%d, %d) [AP: %d]" % [
-			actor.stats.display_name, MCF.FEATURE_NAMES.get(placed, placed),
+			actor.stats.display_name, MCF.feature_name(placed, placed),
 			dst.x, dst.y, actor.remaining_ap]])
 
 	return ActionResult.fail("Nothing here to drag")
@@ -5503,7 +5691,7 @@ func draggable_cells(actor: UnitInstance) -> Array:
 	var out: Array = []
 	for n in state.grid.neighbors(actor.coord):
 		var cell := state.grid.cell(n)
-		if DRAGGABLE_FEATURES.has(cell.feature_id):
+		if is_draggable_feature(cell.feature_id):
 			out.append(n)
 	return out
 
@@ -5666,6 +5854,9 @@ func _resolve_dpmg(intent: DPMGFireIntent) -> ActionResult:
 # --- Применение предметов / гранаты (§3.6) ---
 func _resolve_use_item(intent: UseItemIntent) -> ActionResult:
 	var actor := state.get_unit(intent.actor_id)
+	# Несомую мебель ставят бесплатно (§3.15) — до проверки ОД.
+	if actor != null and Furniture.is_furniture(actor.held_item_id):
+		return _put_down_furniture(actor, intent.target)
 	var err := _validate_actor(actor)
 	if err != "":
 		return ActionResult.fail(err)
@@ -5843,7 +6034,7 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 		# по-прежнему бросает два против 6+ и потому почти всегда бьётся.
 		var armored: int = MCF.glass_hold_need(gcell.feature_id)
 		var gdet := {
-			"name": MCF.FEATURE_NAMES.get(gcell.feature_id, "Glass"), "coord": gc,
+			"name": MCF.feature_name(gcell.feature_id, "Glass"), "coord": gc,
 			"owner": gcell.feature_owner, "epicenter": false,
 			"armor": armored - 1 if armored > 0 else GLASS_ARMOR,
 			"need": armored if armored > 0 else GLASS_ARMOR + 1,
@@ -6578,7 +6769,7 @@ func _resolve_shoot_window(shooter: UnitInstance, cell: Vector2i) -> ActionResul
 			break
 		var r := state.dice.roll_d6()
 		result.dice_events.append({"kind": "check",
-			"actor": MCF.FEATURE_NAMES.get(gc.feature_id, "Glass"),
+			"actor": MCF.feature_name(gc.feature_id, "Glass"),
 			"roll": r, "need": hold_need, "ok": r >= hold_need})
 		broke = r < hold_need
 	_fx_lane(result, shooter.coord, cell, shooter.owner)
@@ -6594,7 +6785,7 @@ func _resolve_shoot_window(shooter: UnitInstance, cell: Vector2i) -> ActionResul
 	else:
 		result.log("%s fires at the %s at (%d, %d) — it holds" % [
 			shooter.stats.display_name,
-			String(MCF.FEATURE_NAMES.get(gc.feature_id, "glass")).to_lower(), cell.x, cell.y])
+			String(MCF.feature_name(gc.feature_id, "glass")).to_lower(), cell.x, cell.y])
 	return result
 
 func _is_anti_tank(u: UnitInstance) -> bool:
