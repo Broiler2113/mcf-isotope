@@ -128,6 +128,66 @@ func _initialize() -> void:
 	var enc := Obs.encode(r, 0, 10, tac)
 	ck(enc["threat"].size() == st.grid.width * st.grid.height, "obs carries the threat layer")
 
+	# --- the station-reach feature ("rh"): the leash, at the moment the CELL is chosen ---
+	# A station tethers its drone to DRONE_LEASH cells and pins the operator beside it, so
+	# one planted out of the enemy's reach costs the operator the rest of the game. "lf"
+	# above cannot answer this: there the actor is the drone, already in the air, and the
+	# station's cell was settled long before. Absent on every other kind of candidate.
+	var rm := MapData.new(60, 9)
+	for y in 9:
+		for x in 60:
+			rm.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	rm.set_spawn(Vector2i(3, 4), "drone_operator", MCF.Owner.PLAYER_1)
+	rm.set_spawn(Vector2i(19, 4), "light_infantry", MCF.Owner.PLAYER_2)
+	var rst := rm.build_state(5)
+	var rr := GameActionResolver.new(rst)
+	rr.fog_mode = MCF.Fog.OFF
+	rr.fog_enabled = false
+	while rst.active_player() != MCF.Owner.PLAYER_1:
+		rr.resolve(EndTurnIntent.new())
+	var rop: UnitInstance = rst.grid.cell(Vector2i(3, 4)).occupant
+	var rtac := Obs.tactics(rr, MCF.Owner.PLAYER_1)
+	# (4,4) is 15 from the enemy — the drone just reaches, with no slack.
+	var edge: Dictionary = Obs.describe(rst, UseItemIntent.new(rop.id, Vector2i(4, 4)), rtac)
+	# (2,4) is 17 — one step too far, and the drone never gets there.
+	var over: Dictionary = Obs.describe(rst, UseItemIntent.new(rop.id, Vector2i(2, 4)), rtac)
+	ck(float(edge.get("rh", 0.0)) > 0.0,
+			"a station right on the leash still reads as reachable (%s)" % str(edge.get("rh", "absent")))
+	ck(float(over.get("rh", -1.0)) == 0.0,
+			"and past the leash it reads as out of reach (%s)" % str(over.get("rh", "absent")))
+	ck(float(edge["rh"]) < 0.5, "reaching with no slack is near the bottom of the scale")
+	ck(not Obs.describe(rst, MoveIntent.new(rop.id, Vector2i(4, 5)), rtac).has("rh"),
+			"a plain move carries no reach feature at all")
+	# Fog is respected: an enemy in reach but WALLED OUT OF SIGHT promises nothing, or the
+	# feature would leak knowledge the team has not earned. Same cell, same 15 cells of
+	# distance — only the seeing differs, so fog off must still read as reachable.
+	var wm := MapData.new(60, 9)
+	for y in 9:
+		for x in 60:
+			wm.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	for c: Vector2i in [Vector2i(18, 3), Vector2i(18, 4), Vector2i(18, 5), Vector2i(19, 3),
+			Vector2i(19, 5), Vector2i(20, 3), Vector2i(20, 4), Vector2i(20, 5)]:
+		wm.set_cell(c, MCF.FLOOR_NORMAL, 0.0, false, MCF.FEATURE_WALL)
+	wm.set_spawn(Vector2i(3, 4), "drone_operator", MCF.Owner.PLAYER_1)
+	wm.set_spawn(Vector2i(19, 4), "light_infantry", MCF.Owner.PLAYER_2)
+	var wst := wm.build_state(5)
+	var wr := GameActionResolver.new(wst)
+	wr.fog_mode = MCF.Fog.OFF
+	wr.fog_enabled = false
+	while wst.active_player() != MCF.Owner.PLAYER_1:
+		wr.resolve(EndTurnIntent.new())
+	var wop: UnitInstance = wst.grid.cell(Vector2i(3, 4)).occupant
+	var seen: Dictionary = Obs.describe(wst, UseItemIntent.new(wop.id, Vector2i(4, 4)),
+			Obs.tactics(wr, MCF.Owner.PLAYER_1))
+	ck(float(seen.get("rh", 0.0)) > 0.0,
+			"with fog off the walled enemy is still counted (%s)" % str(seen.get("rh", "absent")))
+	wr.fog_mode = MCF.Fog.STANDARD
+	wr.fog_enabled = true
+	var unseen: Dictionary = Obs.describe(wst, UseItemIntent.new(wop.id, Vector2i(4, 4)),
+			Obs.tactics(wr, MCF.Owner.PLAYER_1))
+	ck(float(unseen.get("rh", -1.0)) == 0.0,
+			"an enemy out of sight promises no reach (%s)" % str(unseen.get("rh", "absent")))
+
 	# --- army builder ---
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 5

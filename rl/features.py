@@ -79,7 +79,15 @@ F_MISC = F_TARGET_TYPE + N_UNIT_TYPES      # shots_full, shots_single, av_mine, 
 F_DRONE = F_MISC + 5 + len(BUILD_FEATURES)  # leash fraction, enemy vehicle cells in blast
 F_TAC = F_DRONE + 2    # threat at target, own fire at target, cover there, AP cost/3, multi-AP move
 F_PRED = F_TAC + 5     # next-turn enemy fire at target, enemies that can reach the target
-CAND_DIM = F_PRED + 2
+# Drone-station reach (ObsEncoder "rh"), on the candidate that CHOOSES THE STATION'S CELL
+# (deploying it from hand, or launching off one already down): 1 = an enemy right at the
+# station, a small positive value = reachable but with no slack left, and exactly 0 = none
+# within DRONE_LEASH of it, 0 as well when no enemy is in sight.
+# Appended at the END, so model.load_compat grows cand.0 by a zero column and an older
+# checkpoint keeps its exact behaviour. F_DRONE's leash fraction is a different question:
+# there the actor is the drone itself, already airborne.
+F_REACH = F_PRED + 2
+CAND_DIM = F_REACH + 1
 
 
 def grid_tensor(obs: dict) -> np.ndarray:
@@ -254,6 +262,7 @@ def candidate_rows(obs: dict, legal: list[dict]) -> tuple[np.ndarray, np.ndarray
         if "tn" in c:
             rows[i, F_PRED] = min(float(c["tn"]), 6.0) / 6.0
             rows[i, F_PRED + 1] = min(float(c.get("er", 0)), 6.0) / 6.0
+        rows[i, F_REACH] = float(c.get("rh", 0.0))
         apc = int(c.get("apc", 0))
         if apc:
             rows[i, F_TAC + 3] = apc / 3.0

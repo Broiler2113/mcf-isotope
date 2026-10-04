@@ -285,9 +285,54 @@ static func describe(state: GameState, intent: Intent, tac: Dictionary = {}) -> 
 						and not state.roster.are_allies(actor.owner, v.owner):
 					hit += 1
 			d["vh"] = hit
+	# Поводок станции (§3.12) в тот момент, когда выбирают МЕСТО под неё. Дрон не уходит
+	# дальше DRONE_LEASH клеток от своей станции, а оператор не отходит от станции, не
+	# потеряв управление, — поэтому станция, поставленная дальше поводка от врага, просто
+	# вычитает оператора из боя до конца партии. «lf» выше этого случая НЕ покрывает: там
+	# актёр — САМ ДРОН, то есть он уже в воздухе, а место станции давно выбрано.
+	#
+	# 1 — враг вплотную к станции, 0 — на поводке его не достать. Столько же и когда врага
+	# не видно: по умолчанию признак НИЧЕГО не обещает (в отличие от «lf», у которого ноль
+	# значит «поводок цел»).
+	if not tac.is_empty() and _is_station_choice(state, intent):
+		var at: Vector2i = tgt if state.grid.in_bounds(tgt) else Vector2i(int(d["ax"]), int(d["ay"]))
+		if state.grid.in_bounds(at):
+			d["rh"] = snappedf(_station_reach(tac["r"], int(tac["side"]), at), 0.01)
 	if not tac.is_empty() and state.grid.in_bounds(tgt):
 		_describe_tactics(state, intent, tgt, d, tac)
 	return d
+
+## Кандидат выбирает МЕСТО под станцию дронов: либо разворачивает её из рук, либо
+## поднимает дрон с уже стоящей. Прочих намерений поводок не касается.
+static func _is_station_choice(state: GameState, intent: Intent) -> bool:
+	if intent is SpawnDroneIntent:
+		return true
+	if intent is UseItemIntent:
+		var u := state.get_unit(intent.actor_id)
+		return u != null and u.held_item_id == MCF.ITEM_DRONE_STATION
+	return false
+
+## Запас поводка до ближайшего ВИДИМОГО врага из клетки станции: 1 — враг у самой станции,
+## 0 — дальше DRONE_LEASH или врага не видно. Туман соблюдается, как и всюду в наблюдении:
+## спрашивать о том, чего команда не видит, политике нельзя. Дроны в расчёт не идут — за
+## ними не охотятся станцией.
+static func _station_reach(r: GameActionResolver, side: int, at: Vector2i) -> float:
+	var best := -1
+	for u: UnitInstance in r.state.all_units():
+		if not u.is_alive() or u.is_drone or rel_owner(r, side, u.owner) != 1:
+			continue
+		if r.fog_enabled and not r.is_visible_to_team(side, u):
+			continue
+		var dist := Combat.distance(at, u.coord)
+		if best < 0 or dist < best:
+			best = dist
+	if best < 0:
+		return 0.0
+	# Делится на LEASH + 1, а не на LEASH: тогда РОВНО на поводке (враг в 15 клетках —
+	# дрон его ещё достаёт, но без запаса) выходит не ноль, а 1/16, и «дотянуться в упор»
+	# не путается с «не дотянуться вовсе». Ноль остаётся ровно за тем, кого не достать.
+	var span := float(MCF.DRONE_LEASH + 1)
+	return clampf((span - float(best)) / span, 0.0, 1.0)
 
 ## Тактика кандидата: огонь врага и своё покрытие в клетке цели, укрытие там же и, для хода,
 ## сколько ОД он спишет (1-3, зоны move_tier_budgets). Ровно то, что отличает «выйти под
