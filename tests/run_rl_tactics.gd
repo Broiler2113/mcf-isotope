@@ -188,6 +188,56 @@ func _initialize() -> void:
 	ck(float(unseen.get("rh", -1.0)) == 0.0,
 			"an enemy out of sight promises no reach (%s)" % str(unseen.get("rh", "absent")))
 
+	# --- the enemy drone-station threat layer ---
+	# A drone flies DRONE_LEASH from its station and detonates over an area, so anything
+	# inside that sum can be wiped in one enemy turn. The layer only counts stations the
+	# side can SEE and that have a live operator beside them (a station with nobody on the
+	# console answers to nothing), and it never scares the side that owns it.
+	var tm := MapData.new(50, 12)
+	for y in 12:
+		for x in 50:
+			tm.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	tm.set_cell(Vector2i(25, 6), MCF.FLOOR_NORMAL, 0.0, false, MCF.FEATURE_DRONE_STATION)
+	tm.set_spawn(Vector2i(26, 6), "drone_operator", MCF.Owner.PLAYER_2)
+	tm.set_spawn(Vector2i(3, 6), "light_infantry", MCF.Owner.PLAYER_1)
+	var tst := tm.build_state(9)
+	var tr := GameActionResolver.new(tst)
+	tr.fog_mode = MCF.Fog.OFF
+	tr.fog_enabled = false
+	tst.grid.cell(Vector2i(25, 6)).feature_owner = MCF.Owner.PLAYER_2
+	var tw := tst.grid.width
+	var reach: int = MCF.DRONE_LEASH + MCF.ANTI_TANK_BLAST_RADIUS
+	var dlay := Obs.drone_threat(tr, MCF.Owner.PLAYER_1)
+	ck(dlay[6 * tw + 25] == 1.0, "the station's own cell is full danger (%f)" % dlay[6 * tw + 25])
+	ck(dlay[6 * tw + 25 + reach] > 0.0, "the rim of the radius is still danger (%f)"
+			% dlay[6 * tw + 25 + reach])
+	ck(dlay[6 * tw + 25 + reach + 1] == 0.0, "one cell past it is clear (%f)"
+			% dlay[6 * tw + 25 + reach + 1])
+	ck(dlay[6 * tw + 25 + 5] > dlay[6 * tw + 25 + 12],
+			"and danger falls off with distance, so close is not the same as barely inside")
+	ck(Obs.drone_threat(tr, MCF.Owner.PLAYER_2)[6 * tw + 25] == 0.0,
+			"a side is not frightened by its own station")
+	var top: UnitInstance = tst.grid.cell(Vector2i(26, 6)).occupant
+	tr._kill(top)
+	ck(Obs.drone_threat(tr, MCF.Owner.PLAYER_1)[6 * tw + 25] == 0.0,
+			"with the operator dead the console is dead and so is the threat")
+
+	# --- a vehicle is worth its surviving components, and both callers agree ---
+	var vm := MapData.new(20, 10)
+	for y in 10:
+		for x in 20:
+			vm.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	vm.set_spawn(Vector2i(4, 4), "tank", MCF.Owner.PLAYER_1, Vector2i(1, 0))
+	var vst := vm.build_state(9)
+	var vtank: Vehicle = vst.all_vehicles()[0]
+	var whole := Obs.vehicle_worth(vtank)
+	vtank.components[MCF.COMP_GUN] = 0
+	var hurt := Obs.vehicle_worth(vtank)
+	ck(hurt < whole, "a knocked-out gun costs the tank part of its worth (%.1f -> %.1f)"
+			% [whole, hurt])
+	ck(absf(Obs.army_value(vst, MCF.Owner.PLAYER_1) - hurt) < 0.01,
+			"and army_value counts it exactly the same way")
+
 	# --- army builder ---
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 5

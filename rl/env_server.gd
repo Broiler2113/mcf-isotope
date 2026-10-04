@@ -90,6 +90,16 @@ const R_FRIENDLY_FIRE := 2.0
 ## Считается СВЕРХ R_FRIENDLY_FIRE, ровно как R_FIRE_DEATH считается сверх дифференциала
 ## за сгоревших, и по той же причине — избегаемое должно быть дороже неизбежного.
 const R_SELF_KILL := 1.0
+## Своя ТЕХНИКА, разбитая собственным действием: взрыв ПТ под своим танком, огнемёт по
+## своему челноку, подрыв дрона над собственным бортом. Считается СВЕРХ дифференциала,
+## как и R_FRIENDLY_FIRE за своего бойца, и по той же причине — иначе размен выходит в
+## ноль и политика считает его приемлемым.
+##
+## Дороже, чем за пехотинца (2.0), намеренно. Машина — самая дорогая вещь на поле и
+## чинится инженером: разбить СВОЮ нечем оправдать, цель для площадного выстрела всегда
+## можно выбрать иначе. Берётся по ДОЛЕ УЦЕЛЕВШИХ УЗЛОВ (Obs.vehicle_worth), поэтому
+## наказывается не только уничтожение, но и сбитая гусеница.
+const R_FRIENDLY_VEHICLE := 3.0
 ## Захват вражеской машины (§техника). Платится ОДИН раз, в момент смены хозяина.
 ##
 ## Дифференциал это и так видит — корпус уходит у них и появляется у нас, качели вдвое
@@ -538,6 +548,7 @@ func _step(req: Dictionary) -> Dictionary:
 	var key := _actor_key(intent)
 	var ap_before := _actor_ap(intent)
 	var hulls_before := _vehicle_hulls()
+	var own_veh_before := _own_vehicle_worth()
 	var enemy_pts_before := _enemy_vehicle_points()
 	# Нацелен ли выстрел на видимого врага — ДО броска: после него цель может быть уже мертва.
 	var aimed := acting == side and _kind_of(intent) in SHOT_KINDS \
@@ -552,7 +563,7 @@ func _step(req: Dictionary) -> Dictionary:
 	if acting == side:
 		reward += _step_penalty
 		if res.ok:
-			reward += _combat_reward(intent, res, hulls_before, aimed)
+			reward += _combat_reward(intent, res, hulls_before, aimed, own_veh_before)
 			_bump("act", who)
 			if (intent is MoveIntent or intent is VehicleMoveIntent) and ap_before - _actor_ap(intent) >= 2:
 				_tac["multi_ap"] = int(_tac["multi_ap"]) + 1
@@ -764,6 +775,15 @@ func _enemy_vehicle_points() -> int:
 				pts += veh.component(c)
 	return pts
 
+## Во что оценивается СВОЯ (и союзная) техника прямо сейчас. Разница до/после действия и
+## есть то, что мы сломали себе сами: и добитый корпус, и каждый выбитый узел.
+func _own_vehicle_worth() -> float:
+	var v := 0.0
+	for veh: Vehicle in state.all_vehicles():
+		if veh.alive() and Obs.rel_owner(resolver, side, veh.owner) == 0:
+			v += Obs.vehicle_worth(veh)
+	return v
+
 func _vehicle_hulls() -> Dictionary:
 	var out := {}
 	for veh: Vehicle in state.all_vehicles():
@@ -778,7 +798,7 @@ func _vehicle_hulls() -> Dictionary:
 ## Бонусы за само действие ограничены SHAPING_PER_TURN за ход: награда за нажатие кнопки,
 ## а не за результат, — это та же ловушка, что и бесплатная перекладка пленника.
 func _combat_reward(intent: Intent, res: ActionResult, hulls_before: Dictionary,
-		aimed: bool) -> float:
+		aimed: bool, own_veh_before: float = -1.0) -> float:
 	var gained := 0.0
 	# 1. Убитые юниты — по стоимости жертвы. Свои потери сюда не идут: за них уже
 	#    наказывает дифференциал, и штрафовать дважды значит учить не рисковать вовсе.
@@ -821,6 +841,13 @@ func _combat_reward(intent: Intent, res: ActionResult, hulls_before: Dictionary,
 		gained -= R_FRIENDLY_FIRE * own_lost / _norm
 	if self_lost > 0.0:
 		gained -= R_SELF_KILL * self_lost / _norm
+	# Своя техника, разбитая этим же действием. Считается по стоимости узлов, а не по
+	# факту уничтожения: отбитая своим же взрывом гусеница — это тоже потеря, и заметить
+	# её надо сразу, а не когда корпус добьют.
+	if own_veh_before >= 0.0:
+		var own_veh_lost := own_veh_before - _own_vehicle_worth()
+		if own_veh_lost > 0.0:
+			gained -= R_FRIENDLY_VEHICLE * own_veh_lost / _norm
 	# Захват вражеской машины — по цене корпуса, один раз, в момент смены хозяина.
 	for vid: int in res.captured_vehicles:
 		var taken := state.get_vehicle(vid)

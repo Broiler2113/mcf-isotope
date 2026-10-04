@@ -54,15 +54,23 @@ static func army_value(state: GameState, side: int) -> float:
 	for veh: Vehicle in state.all_vehicles():
 		if veh.owner != side or not veh.alive():
 			continue
-		var have := 0
-		var full := 0
-		for comp: String in veh.components:
-			var top := veh.component_max(comp)
-			if top > 0:
-				have += mini(veh.component(comp), top)
-				full += top
-		v += float(VehicleDB.buy_cost(veh.type_id)) * float(have) / float(maxi(1, full))
+		v += vehicle_worth(veh)
 	return v
+
+## Чего стоит МАШИНА в её нынешнем виде: цена корпуса, умноженная на долю уцелевших узлов.
+## Вынесено отдельно, чтобы «сколько мы потеряли на технике» считалось той же арифметикой,
+## что и общая стоимость армии, — иначе подбитая гусеница стоила бы в двух местах по-разному.
+static func vehicle_worth(veh: Vehicle) -> float:
+	if veh == null or not veh.alive():
+		return 0.0
+	var have := 0
+	var full := 0
+	for comp: String in veh.components:
+		var top := veh.component_max(comp)
+		if top > 0:
+			have += mini(veh.component(comp), top)
+			full += top
+	return float(VehicleDB.buy_cost(veh.type_id)) * float(have) / float(maxi(1, full))
 
 ## Тактический контекст точки решения (RL tactical env): карта огня врага по клеткам,
 ## своё огневое покрытие и кэши ходов. Считается ОДИН раз на ответ и отдаётся и в encode,
@@ -76,7 +84,60 @@ static func tactics(r: GameActionResolver, side: int, memory: RefCounted = null)
 			"threat": r.fire_cover(side, true), "cover": r.fire_cover(side, false),
 			"fnext": fc["fire"], "ereach": fc["reach"],
 			"lastseen": memory.layer(r, side) if memory != null else PackedInt32Array(),
+			"dthreat": drone_threat(r, side),
 			"reach": {}, "vt": {}}
+
+## Угроза вражеского дрона (§3.12). Дрон не уходит от своей станции дальше DRONE_LEASH
+## и рвётся по площади ANTI_TANK_BLAST_RADIUS — значит всё, что ближе их суммы к ЧУЖОЙ
+## станции, может быть накрыто за один чужой ход. Без этого слоя станция для политики —
+## рядовой предмет на полу, и она спокойно сводила роту внутрь её радиуса.
+##
+## Берутся только те станции, которые СТОРОНЕ ВИДНЫ и у которых рядом живой вражеский
+## оператор: без оператора пульт мёртв (operator_controls), а о невидимой станции знать
+## не положено — тот же честный туман, что и у остальных слоёв.
+##
+## Значение: 1 у самой станции и плавно к нулю на краю радиуса, чтобы «впритирку» и
+## «в эпицентре» не читались одинаково.
+static func drone_threat(r: GameActionResolver, side: int) -> PackedFloat32Array:
+	var grid := r.state.grid
+	var out := PackedFloat32Array()
+	out.resize(grid.width * grid.height)
+	out.fill(0.0)
+	var reach: int = MCF.DRONE_LEASH + MCF.ANTI_TANK_BLAST_RADIUS
+	var visible := r.team_visible_coords(side)
+	for y in grid.height:
+		for x in grid.width:
+			var cell := grid.cell_fast(x, y)
+			if cell.feature_id != MCF.FEATURE_DRONE_STATION:
+				continue
+			if rel_owner(r, side, cell.feature_owner) != 1:
+				continue
+			if r.fog_enabled and not visible.has(Vector2i(x, y)):
+				continue
+			if not _station_is_manned(r, Vector2i(x, y), cell.feature_owner):
+				continue
+			for dy in range(-reach, reach + 1):
+				for dx in range(-reach, reach + 1):
+					var tx := x + dx
+					var ty := y + dy
+					if tx < 0 or ty < 0 or tx >= grid.width or ty >= grid.height:
+						continue
+					var d: int = maxi(absi(dx), absi(dy))
+					var i := ty * grid.width + tx
+					out[i] = maxf(out[i], 1.0 - float(d) / float(reach + 1))
+	return out
+
+## Есть ли у станции живой оператор вплотную — то же условие, по которому дрон вообще
+## слушается пульта (operator_controls).
+static func _station_is_manned(r: GameActionResolver, at: Vector2i, owner: int) -> bool:
+	for u: UnitInstance in r.state.all_units():
+		if not u.is_alive() or u.is_drone or u.owner != owner:
+			continue
+		if u.stats.special_ability_id != MCF.ABILITY_DRONE_OPERATOR:
+			continue
+		if Combat.distance(u.coord, at) == 1:
+			return true
+	return false
 
 ## Карта огня в провод: целыми четвертями ожидаемого попадания (JSON легче и точности
 ## хватает с запасом), с потолком — десять стволов на клетку и так «смертельно».
@@ -205,6 +266,7 @@ static func encode(r: GameActionResolver, side: int, round_cap: int, tac: Dictio
 		"combat_started": 1 if state.combat_started else 0,
 		"threat": _quarters(tac["threat"]), "fcover": _quarters(tac["cover"]),
 		"fnext": _quarters(tac["fnext"]), "ereach": _quarters(tac["ereach"]),
+		"dthreat": _quarters(tac["dthreat"]),
 		"lastseen": tac["lastseen"],
 	}
 

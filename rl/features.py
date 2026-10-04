@@ -53,7 +53,12 @@ C_FCOVER = 73          # the same for our own fire
 C_FNEXT = 74           # expected enemy hits on the cell after they move (best spot each)
 C_EREACH = 75          # how many visible enemies can walk onto the cell next turn
 C_LASTSEEN = 76        # a hidden enemy was last seen here, fading with age (fog games)
-N_CHANNELS = 77
+# Reach of a VISIBLE, manned enemy drone station: a drone flies DRONE_LEASH from its
+# station and detonates over an area, so everything inside that sum can be hit in one
+# enemy turn. 1 at the station, fading to 0 at the rim. Without it the policy read a
+# station as ordinary floor furniture and walked whole squads into its radius.
+C_DRONE_THREAT = 77
+N_CHANNELS = 78
 
 FLAT_DIM = 20
 
@@ -120,6 +125,10 @@ def grid_tensor(obs: dict) -> np.ndarray:
     if "threat" in obs:
         g[C_THREAT][sl] = np.minimum(plane("threat") / 24.0, 1.0)
         g[C_FCOVER][sl] = np.minimum(plane("fcover") / 24.0, 1.0)
+    if "dthreat" in obs:
+        # Sent as quarters like the fire layers, but the source is already 0..1, so a
+        # full-strength cell arrives as 4.
+        g[C_DRONE_THREAT][sl] = np.minimum(plane("dthreat") / 4.0, 1.0)
     if "fnext" in obs:
         g[C_FNEXT][sl] = np.minimum(plane("fnext") / 24.0, 1.0)
         g[C_EREACH][sl] = np.minimum(plane("ereach") / 24.0, 1.0)
