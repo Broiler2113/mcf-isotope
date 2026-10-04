@@ -324,6 +324,10 @@ var _pause_btn: Button = null
 ## остаётся смотреть на поле, сохранить и уйти в меню.
 var _match_over: bool = false
 var _victory_overlay: Control = null
+## Доска, какой она была в начале боя — картинка по пикселю на клетку (см.
+## _board_thumbnail). Снимается один раз, на открытии матча; в конце по ней видно, во
+## что бой превратил карту.
+var _opening_board: Image = null
 
 ## Какой слот отыгрывается ПРЯМО СЕЙЧАС, когда это не active_player (item 6).
 ##
@@ -366,6 +370,10 @@ var _panel_drag: Control = null
 var _panel_drag_off: Vector2 = Vector2.ZERO
 var _menu: PanelContainer
 var _picker: PanelContainer
+## Клетка под наведённой кнопкой выбора («Station at (45, 32)» и подобные). Пока мышь на
+## кнопке, на доске горит ИМЕННО этот объект: список голых координат глазами не читается,
+## а объект на поле — читается сразу. (-1,-1) — ни на что не наведено.
+var _hover_cell := Vector2i(-1, -1)
 var _dice: DiceRoller
 ## Кастомное модальное окно «выйти в меню» в общем стиле интерфейса (#51), а не
 ## системный ConfirmationDialog. Полноэкранный затемнитель + рамка SteamChrome.
@@ -545,6 +553,7 @@ func _build_state() -> void:
 ## нейтральной стороны нет, её ход проводит сам резолвер.
 func _open_match() -> void:
 	_begin_recording()
+	_opening_board = _board_thumbnail()
 	state.log.add("— Initiative this match: %s —" % state.turns.order_names())
 	# Открывающий слот мирных играется ВНЕ потока намерений, но кубики бросает —
 	# поэтому под запись он уходит через сам регистратор (см. ReplayRecorder).
@@ -1124,6 +1133,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			if _box_dragging:
 				_box_dragging = false
 				_finalize_box()
+			elif event.shift_pressed:
+				_shift_pick(_pos_to_cell(get_global_mouse_position()))
 			else:
 				_handle_click(_pos_to_cell(get_global_mouse_position()))
 		return
@@ -1550,6 +1561,7 @@ func _deselect() -> void:
 	item_cells = []
 	_menu.hide()
 	_picker.hide()
+	_clear_hint_cell()
 	if _comp_panel != null:
 		_comp_panel.hide()  # машину сняли с выбора — панель узлов уходит с ней
 	_refresh_info()
@@ -1649,6 +1661,7 @@ func _veh_back_to_menu() -> void:
 
 func _open_vehicle_menu(veh: Vehicle) -> void:
 	_picker.hide()
+	_clear_hint_cell()
 	for c in _menu.get_children():
 		c.queue_free()
 	var spec := VehicleDB.get_vehicle(veh.type_id)
@@ -2104,6 +2117,30 @@ func _on_multi_toggled(pressed: bool) -> void:
 	_box_dragging = false
 	queue_redraw()
 
+## Shift + клик при включённом мульти-выделении: добавить бойца в отряд, а если он там
+## уже есть — убрать. Рамка берёт всех подряд в прямоугольнике, и отряд из троих, стоящих
+## вразнобой, иначе собирался рамкой в пол-экрана и разбором лишних.
+##
+## Условия отбора — ДОСЛОВНО те же, что у рамки (_finalize_box): свой, активный, живой,
+## не дрон и не в машине. Иначе shift набирал бы в отряд тех, кем отряд всё равно не ходит.
+func _shift_pick(coord: Vector2i) -> void:
+	var u := _unit_at(coord)
+	if u == null or u.owner != state.active_player() or not u.is_alive() \
+			or not _can_control(u.owner) or u.is_drone or u.aboard_vehicle_id != -1:
+		return
+	var ids: Array[int] = _group_ids.duplicate()
+	# Один уже выбранный боец — тоже начало отряда: shift по второму собирает пару, а не
+	# бросает первого. Без этого собрать отряд можно было только с рамки.
+	if ids.is_empty() and selected_id != -1 and selected_id != u.id:
+		var cur := state.get_unit(selected_id)
+		if cur != null and cur.is_alive() and not cur.is_drone and cur.aboard_vehicle_id == -1:
+			ids.append(selected_id)
+	if ids.has(u.id):
+		ids.erase(u.id)
+	else:
+		ids.append(u.id)
+	_set_group(ids)
+
 ## По завершении рамки — собрать своих активных пехотинцев внутри прямоугольника.
 func _finalize_box() -> void:
 	var a := _pos_to_cell(_box_start_screen)
@@ -2142,6 +2179,7 @@ func _set_group(ids: Array[int]) -> void:
 	target_ids = []
 	item_cells = []
 	_picker.hide()
+	_clear_hint_cell()
 	_open_group_menu()
 	_refresh_info()
 	queue_redraw()
@@ -2612,6 +2650,7 @@ func _on_intent_ready(intent: Intent) -> void:
 		return
 	_menu.hide()
 	_picker.hide()
+	_clear_hint_cell()
 	# Снимки для отката берёт РЕЗОЛВЕР (item 28) — он один делает это одинаково у
 	# всех пиров. Здесь остаётся только показ.
 	# Смерть показываем только ПОСЛЕ анимации броска защиты (#46): снимок живых
@@ -2813,12 +2852,104 @@ func _declare_match_over(title: String) -> void:
 	_deselect()
 	_menu.hide()
 	_picker.hide()
+	_clear_hint_cell()
 	_show_victory(title)
 	_refresh_status()
 	queue_redraw()
 
 ## Окно исхода в общем стиле SteamChrome (batch 13 #9). «Look at the Board» убирает окно,
 ## но доску не размораживает: посмотреть на поле можно, играть дальше — нет.
+## Доска одной картинкой, по пикселю на клетку: та же палитра, что у дальнего плана
+## (_lod_color / _lod_feature_color), плюс точки живых бойцов и машин цветом их стороны.
+## По ней видно и застройку, и расстановку — то есть ровно то, что бой и меняет.
+func _board_thumbnail() -> Image:
+	var grid := state.grid
+	var img := Image.create(grid.width, grid.height, false, Image.FORMAT_RGBA8)
+	for y in grid.height:
+		for x in grid.width:
+			var cell := grid.cell_fast(x, y)
+			var col := _lod_color(cell)
+			var fc := _lod_feature_color(cell)
+			if fc.a > 0.0:
+				col = col.blend(fc)
+			img.set_pixel(x, y, col)
+	for u: UnitInstance in state.all_units():
+		if not u.is_alive() or u.is_drone or not grid.in_bounds(u.coord):
+			continue
+		img.set_pixel(u.coord.x, u.coord.y, _side_color(u.owner))
+	for veh: Vehicle in state.all_vehicles():
+		if not veh.alive():
+			continue
+		for c: Vector2i in veh.footprint():
+			if grid.in_bounds(c):
+				img.set_pixel(c.x, c.y, _side_color(veh.owner).lightened(0.3))
+	return img
+
+## «Было / стало» в конце боя: две картинки доски рядом, до первого хода и после
+## последнего. Масштаб — целым числом, чтобы клетки остались квадратными и считались
+## глазом, и с фильтрацией NEAREST: это карта, а не фотография.
+func _show_board_comparison() -> void:
+	if _opening_board == null:
+		return
+	var before := _opening_board
+	var after := _board_thumbnail()
+	var overlay := Control.new()
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.72)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.add_child(center)
+	var panel := PanelContainer.new()
+	SteamChrome.apply_panel(panel)
+	center.add_child(panel)
+	var frame := VBoxContainer.new()
+	frame.add_theme_constant_override("separation", 0)
+	panel.add_child(frame)
+	frame.add_child(SteamChrome.header_bar("Before and After"))
+	var body := VBoxContainer.new()
+	body.add_theme_constant_override("separation", 10)
+	frame.add_child(SteamChrome.pad(body, 16, 14))
+	var pair := HBoxContainer.new()
+	pair.add_theme_constant_override("separation", 16)
+	body.add_child(pair)
+	# Обе картинки одного размера — масштаб считаем по одной.
+	var zoom: int = maxi(1, mini(int(520.0 / maxf(1.0, float(before.get_width()))),
+			int(420.0 / maxf(1.0, float(before.get_height())))))
+	for pane: Array in [["At the first move", before], ["At the last", after]]:
+		var col := VBoxContainer.new()
+		col.add_theme_constant_override("separation", 6)
+		var cap := Label.new()
+		cap.text = String(pane[0])
+		col.add_child(cap)
+		var tr := TextureRect.new()
+		tr.texture = ImageTexture.create_from_image(pane[1] as Image)
+		tr.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		tr.custom_minimum_size = Vector2((pane[1] as Image).get_width() * zoom,
+				(pane[1] as Image).get_height() * zoom)
+		col.add_child(tr)
+		pair.add_child(col)
+	var note := Label.new()
+	note.text = "Walls knocked through, floors burned and scarred, and who was left standing where."
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.custom_minimum_size = Vector2(420, 0)
+	body.add_child(note)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_END
+	body.add_child(row)
+	var shut := Button.new()
+	shut.text = "Close"
+	shut.custom_minimum_size = Vector2(120, 34)
+	shut.pressed.connect(overlay.queue_free)
+	row.add_child(shut)
+	_ui_layer.add_child(overlay)
+	Ui.theme_canvas_layers()
+
 func _show_victory(title: String) -> void:
 	if _victory_overlay != null:
 		_victory_overlay.queue_free()
@@ -2854,6 +2985,12 @@ func _show_victory(title: String) -> void:
 	row.alignment = BoxContainer.ALIGNMENT_END
 	row.add_theme_constant_override("separation", 8)
 	body.add_child(row)
+	if _opening_board != null:
+		var compare := Button.new()
+		compare.text = "Before / After"
+		compare.custom_minimum_size = Vector2(130, 34)
+		compare.pressed.connect(_show_board_comparison)
+		row.add_child(compare)
 	var close := Button.new()
 	close.text = "Look at the Board"
 	close.custom_minimum_size = Vector2(130, 34)
@@ -2919,6 +3056,7 @@ func _after_action() -> void:
 func _on_net_applied(intent: Intent, result: ActionResult) -> void:
 	_menu.hide()
 	_picker.hide()
+	_clear_hint_cell()
 	if not result.ok:
 		state.log.add("[denied] " + result.reason)
 		# Отказ ИИ-стороне на хосте (batch 12 #15): снять актёра с очереди и вести дальше,
@@ -4654,6 +4792,23 @@ func _draw() -> void:
 				draw_rect(Rect2(_cell_origin(sc) + Vector2(CELL * 0.25, CELL * 0.25),
 						Vector2(CELL * 0.5, CELL * 0.5)), Color(0.5, 0.8, 0.95))
 
+	# Объект под наведённой кнопкой выбора — поверх рельефа и объектов, чтобы его было
+	# видно сразу. Для станции заодно показываем поводок её дрона: выбор «с какой
+	# запускать» — это и есть выбор, докуда дрон дотянется.
+	if state.grid.in_bounds(_hover_cell):
+		var ho := _cell_origin(_hover_cell)
+		var hsz := Vector2(CELL, CELL)
+		if grid.cell(_hover_cell).feature_id == MCF.FEATURE_DRONE_STATION:
+			var hl := MCF.DRONE_LEASH
+			var htl := Vector2i(maxi(0, _hover_cell.x - hl), maxi(0, _hover_cell.y - hl))
+			var hbr := Vector2i(mini(grid.width - 1, _hover_cell.x + hl),
+					mini(grid.height - 1, _hover_cell.y + hl))
+			var hrect := Rect2(_cell_origin(htl), Vector2(hbr - htl + Vector2i.ONE) * CELL)
+			draw_rect(hrect, Color(0.38, 0.7, 0.85, 0.08))
+			draw_rect(hrect, Color(0.38, 0.7, 0.85, 0.7), false, 2.0)
+		draw_rect(Rect2(ho, hsz), Color(0.45, 0.85, 1.0, 0.25))
+		draw_rect(Rect2(ho, hsz), Color(0.6, 0.92, 1.0), false, 3.0)
+
 	# Трупы идут ОТДЕЛЬНЫМ проходом до корпусов машин (#59): танк наезжает на тело,
 	# а не тело лежит поверх брони. Смерти, ещё не показанные из-за анимации броска
 	# (#46), рисуются как живые в общем проходе ниже.
@@ -5541,6 +5696,7 @@ func _build_ui() -> void:
 	_picker = PanelContainer.new()
 	SteamChrome.apply_panel(_picker)
 	_picker.hide()
+	_clear_hint_cell()
 	_ui_layer.add_child(_picker)
 
 	_dice = DiceRoller.new()
@@ -6619,6 +6775,7 @@ func _side_color(side: int) -> Color:
 
 func _open_menu(unit: UnitInstance) -> void:
 	_picker.hide()
+	_clear_hint_cell()
 	for c in _menu.get_children():
 		c.queue_free()
 	var vb := _scroll_menu(_menu, unit.stats.display_name)
@@ -6972,6 +7129,7 @@ func _open_component_picker(veh: Vehicle, title: String, on_pick: Callable,
 				veh.component(comp), veh.component_max(comp)]
 		b.pressed.connect(func() -> void:
 			_picker.hide()
+			_clear_hint_cell()
 			on_pick.call(comp))
 		vb.add_child(b)
 	_anchor_menu(_picker)
@@ -7015,6 +7173,7 @@ func _open_station_picker(stations: Array) -> void:
 		var b := Button.new()
 		b.text = "Station at (%d, %d)" % [st.x, st.y]
 		b.pressed.connect(_submit.bind(SpawnDroneIntent.new(selected_id, st)))
+		_hint_cell(b, st)
 		vb.add_child(b)
 	_anchor_menu(_picker)
 	_picker.show()
@@ -7219,6 +7378,23 @@ func _refresh_info() -> void:
 ## темноты на свет игрок действительно видит. Строки без автора (конец хода, пожар,
 ## нейтралы) показываются всегда — у них actor_owner = −1.
 ## Видит ли зритель клетку ПРЯМО СЕЙЧАС (не «помнит»). Без тумана видно всё.
+## Связать кнопку выбора с клеткой на доске: наведение зажигает её, уход — гасит.
+## Годится любому списку, который выбирает КЛЕТКУ, а не только станциям.
+func _hint_cell(b: Button, c: Vector2i) -> void:
+	b.mouse_entered.connect(func() -> void:
+		_hover_cell = c
+		queue_redraw())
+	b.mouse_exited.connect(func() -> void:
+		if _hover_cell == c:
+			_hover_cell = Vector2i(-1, -1)
+			queue_redraw())
+
+## Погасить подсветку выбора (список закрылся — наводиться больше не на что).
+func _clear_hint_cell() -> void:
+	if _hover_cell != Vector2i(-1, -1):
+		_hover_cell = Vector2i(-1, -1)
+		queue_redraw()
+
 func _cell_seen_now(c: Vector2i, seen: Dictionary) -> bool:
 	return not resolver.fog_enabled or seen.has(c)
 

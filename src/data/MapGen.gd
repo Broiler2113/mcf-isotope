@@ -1122,7 +1122,13 @@ func _dress_field() -> void:
 	if not bool(opt["obstacles"]):
 		return
 	var area := float(w * h)
-	for n in roundi(area / 190.0 * dens):
+	# Нитки окопов — главная черта поля. Их число и длина растут с плотностью: на редкой
+	# карте это пара линий у складок местности, на плотной — сплошная система позиций.
+	for n in roundi(area / 420.0 * dens):
+		_trench_line(_random_cell(), roundi(float(w + h) * 0.25 * (0.6 + 0.4 * dens)))
+	# Одиночные ячейки остались, но их втрое меньше: поле и так изрыто линиями, а стакан
+	# коротких огрызков поверх них читался как мусор, а не как позиция.
+	for n in roundi(area / 430.0 * dens):
 		_trench(_random_cell())
 	for n in roundi(area / 420.0 * dens):
 		var c := _random_cell()
@@ -1140,6 +1146,43 @@ func _dress_field() -> void:
 	if bool(opt["flammable"]):
 		for n in roundi(area / 420.0 * dens):
 			_fence()
+
+## Нитка окопов через поле: длинные прямые участки вдоль одного направления, разбитые
+## короткими изломами вбок. Излом здесь не для красоты — он и в жизни затем, чтобы окоп
+## не простреливался насквозь во всю длину, и в игре работает так же.
+##
+## Упор в занятую клетку нитку НЕ обрывает: она шагает дальше и ложится там, где свободно.
+## Иначе каждая линия умирала бы о первый же куст мешков, и «длинных» их не бывало бы
+## вовсе. Шаги считаются отдельно от уложенных клеток и ограничены сверху, поэтому нитка
+## не может ни зациклиться, ни блуждать по карте бесконечно.
+func _trench_line(c: Vector2i, length: int) -> void:
+	if length <= 0:
+		return
+	var main: Vector2i = N4[_rng.randi_range(0, 3)]
+	var side := Vector2i(main.y, main.x)
+	var left := length
+	var steps := 0
+	var cap := length * 3
+	while left > 0 and steps < cap:
+		for _k in _rng.randi_range(3, 6):
+			if left <= 0 or steps >= cap:
+				return
+			steps += 1
+			if not _in(c):
+				return
+			if _try_put(c, MCF.FEATURE_TRENCH):
+				left -= 1
+			c += main
+		var s := side * (1 if _rng.randf() < 0.5 else -1)
+		for _k in _rng.randi_range(1, 2):
+			if left <= 0 or steps >= cap:
+				return
+			steps += 1
+			if not _in(c):
+				return
+			if _try_put(c, MCF.FEATURE_TRENCH):
+				left -= 1
+			c += s
 
 ## Окоп: 3–7 клеток, иногда с поворотом.
 func _trench(c: Vector2i) -> void:
