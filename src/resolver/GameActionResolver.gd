@@ -150,6 +150,8 @@ func resolve(intent: Intent) -> ActionResult:
 		actor_owner = av.owner
 		actor_from = av.center()
 	var result := _dispatch(intent)
+	if top and result.ok:
+		_credit_kills(intent, au, av, result)
 	if top:
 		result.actor_owner = actor_owner
 		result.actor_from = actor_from
@@ -189,6 +191,29 @@ func resolve(intent: Intent) -> ActionResult:
 		elif undoable:
 			_undo_stack.append(pre_snap)
 	return result
+
+## Счёт таблицы итогов (playtest-20): убитые этим действием записываются тому, кто
+## действовал, — бойцу, дрону или машине; раздавленные гусеницей — отдельной колонкой.
+## Своих и союзников в счёт не берём, как и смерти от шага: идущий на мину или в огонь
+## не «убил» тех, кого задело.
+func _credit_kills(intent: Intent, au: UnitInstance, av: Vehicle, result: ActionResult) -> void:
+	if result.deaths.is_empty() or intent is MoveIntent or intent is GroupMoveIntent \
+			or intent is EndTurnIntent:
+		return
+	if au == null and av == null:
+		return
+	var killer_owner := au.owner if au != null else av.owner
+	var key := au.id if au != null else av.id
+	var crushed := av != null and intent is VehicleMoveIntent
+	for vid: int in result.deaths:
+		var victim := state.get_unit(vid)
+		if victim == null or victim == au or state.roster.are_allies(killer_owner, victim.owner):
+			continue
+		var rec: Array = state.kills.get(key, [0, 0])
+		rec[0] += 1
+		if crushed:
+			rec[1] += 1
+		state.kills[key] = rec
 
 func _resolve_undo(intent: UndoIntent) -> ActionResult:
 	if intent.requester >= 0 and intent.requester != state.active_player():
@@ -267,7 +292,12 @@ func _dispatch(intent: Intent) -> ActionResult:
 ## здесь лишь точка входа, о которой говорит спецификация. Точность (каждое
 ## перечисленное намерение проходит resolve()) проверяет tests/run_legal_intents.gd.
 ## actors — необязательный фильтр по актёрам (см. LegalIntents.enumerate); пусто = все.
+## Шлюзы — сначала (playtest-20): dispatch пересчитывает их в НАЧАЛЕ действия, и после
+## прошлого хода створка могла ещё стоять открытой. Перечислитель видел открытый шлюз и
+## предлагал дрону лететь сквозь него, а резолвер, закрыв створку, отказывал «Target out
+## of the drone's reach» (run_legal_intents, seed 5). Доска перечисления = доска действия.
 func legal_intents(side: int, actors: Dictionary = {}) -> Array:
+	update_airlocks()
 	return LegalIntents.enumerate(self, side, actors)
 
 ## Маршрутизация намерения к его резолверу — без побочных эффектов (см. _dispatch).
@@ -479,7 +509,7 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 		unit.move_credit = 0
 		var burn_res := ActionResult.success(lines)
 		_fx_steps(burn_res, unit, origin, path, fire)
-		_kill(unit)  # сгорел — крови нет (batch ui-drones)
+		_kill_burnt(unit)  # сгорел — крови нет (batch ui-drones)
 		burn_res.log("%s burned to death at (%d, %d)!" % [
 			unit.stats.display_name, fire.x, fire.y])
 		return burn_res
@@ -1150,7 +1180,7 @@ func _resolve_flame(shooter: UnitInstance, target_coord: Vector2i) -> ActionResu
 		var cell := state.grid.cell(c)
 		var occ: UnitInstance = cell.occupant
 		if occ != null and occ.is_alive():
-			_kill(occ)  # огнемёт — крови нет
+			_kill_burnt(occ)  # огнемёт — крови нет
 			killed_names.append(occ.stats.display_name)
 			result.deaths.append(occ.id)
 		_ignite(cell, shooter.owner, result)  # поджог пола (§3.8)
@@ -1342,7 +1372,7 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i, aimed: String = "") ->
 			"shield", "unit":
 				var occ: UnitInstance = cell.occupant
 				if destroyed and occ != null and occ.is_alive():
-					_kill(occ)  # луч прижигает — крови нет (batch ui-drones)
+					_kill_burnt(occ)  # луч прижигает — крови нет (batch ui-drones)
 					killed_names.append(occ.stats.display_name)
 					result.deaths.append(occ.id)
 			"feature":
@@ -2031,6 +2061,12 @@ func _fx_lane(res: ActionResult, from_coord: Vector2i, to_coord: Vector2i,
 ## как и раньше, но теперь это редкий край, а не общее правило.
 ## from_coord — откуда прилетел убивший удар: брызги (#21.4) летят ПРОТИВ него.
 ## NOWHERE (значение по умолчанию) = источник неизвестен, тогда веер расходится кругом.
+## Сгорел в огне или прижжён лучом (playtest-20): тело остаётся обугленным.
+func _kill_burnt(u: UnitInstance) -> void:
+	if u != null and u.is_alive():
+		u.burnt = true
+	_kill(u)
+
 func _kill(u: UnitInstance, res: ActionResult = null, from_coord: Vector2i = NOWHERE,
 		blast: bool = false) -> void:
 	if u == null or not u.is_alive():
@@ -3144,7 +3180,7 @@ func advance_fire(owner: int = -1, res: ActionResult = null) -> void:
 			# res здесь только ради кровавой косметики — _kill сам в deaths не пишет,
 			# это делают вызывающие. Мы пишем в fire_deaths, но НЕ в deaths (см.
 			# ActionResult): иначе автор завершённого хода получил бы чужой костёр в зачёт.
-			_kill(burned)  # пожар — крови нет
+			_kill_burnt(burned)  # пожар — крови нет
 			if res != null:
 				res.fire_deaths.append(burned.id)
 
@@ -5339,7 +5375,7 @@ func _resolve_move_held(intent: MoveHeldIntent) -> ActionResult:
 		actor.stats.display_name, carried.stats.display_name, intent.to.x, intent.to.y])
 	# Переставленный на горящую клетку пленник сгорает — как и любой, кто туда попал.
 	if state.grid.cell(intent.to).on_fire and not is_fireproof(carried):
-		_kill(carried)
+		_kill_burnt(carried)
 		res.log("%s burned to death!" % carried.stats.display_name)
 		res.deaths.append(carried.id)
 	return res
@@ -7623,6 +7659,12 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 	# Переезд на экране — плавно, по клеткам (batch borg-corpses), как шаг бойца.
 	res.dice_events.append({"kind": "veh_walk", "vehicle": veh.id, "from": veh.origin,
 			"steps": int(plan["steps"])})
+	# Следы гусениц (playtest-20) — только у танка: челнок летит, борг шагает. Кладём
+	# мимо _fx(): зерна им не нужно, а номер события (fx_seq) входит в подпись доски.
+	if not seated and not veh.is_borg():
+		res.fx.append({"fx": "tracks", "from": [veh.origin.x, veh.origin.y],
+				"dir": [dir.x, dir.y], "steps": int(plan["steps"]),
+				"size": [veh.size.x, veh.size.y]})
 	veh.origin += dir * int(plan["steps"])
 	state.grid.set_vehicle_footprint(veh.id, veh.footprint())
 	# Пассажиры и станция садятся обратно в свои кресла на новом месте.
@@ -8317,6 +8359,32 @@ func vehicle_move_crushes_ally(veh: Vehicle, dir: Vector2i, steps: int) -> bool:
 		if occ.owner == veh.owner or state.roster.are_allies(veh.owner, occ.owner):
 			return true
 	return false
+
+## Свои и союзники, которых раздавит ЭТОТ переезд (playtest-20: игрок подтверждает наезд).
+## Тот же планировщик и тот же бюджет клеток, что у _resolve_vehicle_move, — иначе
+## переезд в оранжевую/красную зону танка не спросил бы ни о ком. Пассажиры челнока едут
+## в своих креслах и в список не попадают.
+func vehicle_move_crushed_friends(veh: Vehicle, dir: Vector2i, steps: int) -> Array:
+	var out: Array = []
+	if veh == null or not veh.alive() or state.roster == null:
+		return out
+	var speed := vehicle_move_credit(veh)
+	if speed <= 0:
+		speed = int(VehicleDB.get_vehicle(veh.type_id).get("speed", 0))
+	var tiers := vehicle_tier_budgets(veh)
+	if _seated(veh):
+		speed = _shuttle_budget(veh)
+	elif not tiers.is_empty():
+		speed = tiers[tiers.size() - 1]
+	var plan := VehicleRules.plan_line_move(state, veh, dir, steps, speed)
+	if not plan["ok"]:
+		return out
+	for cc: Vector2i in plan["crush_cells"]:
+		var occ: UnitInstance = state.grid.cell(cc).occupant
+		if occ != null and occ.is_alive() and occ.aboard_vehicle_id != veh.id \
+				and state.roster.are_allies(veh.owner, occ.owner):
+			out.append(occ)
+	return out
 
 ## Свободные соседние со следом клетки для высадки экипажа.
 func vehicle_disembark_cells(veh: Vehicle, unit_id: int = -1) -> Array:

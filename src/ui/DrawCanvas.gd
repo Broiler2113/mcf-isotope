@@ -19,6 +19,25 @@ const TILE := 256
 const SCALE := 1.0
 
 var _tiles: Dictionary = {}   # Vector2i -> {"img": Image, "tex": ImageTexture, "dirty": bool}
+## Запись для отката (playtest-20): пока она идёт, ПЕРВАЯ правка куска сохраняет его
+## прежний вид (null — куска не было). Хранятся только тронутые куски, не весь холст.
+var _undo_rec: Variant = null
+
+func begin_record() -> void:
+	_undo_rec = {}
+
+func end_record() -> Dictionary:
+	var rec: Dictionary = _undo_rec if _undo_rec != null else {}
+	_undo_rec = null
+	return rec
+
+## Вернуть куски к виду из записи end_record().
+func restore(rec: Dictionary) -> void:
+	for key: Vector2i in rec:
+		if rec[key] == null:
+			_tiles.erase(key)
+		else:
+			_tiles[key] = {"img": rec[key], "tex": null, "dirty": true}
 
 func is_empty() -> bool:
 	return _tiles.is_empty()
@@ -52,6 +71,9 @@ func _stamp(c: Vector2, r: float, color: Color) -> void:
 		while tx * TILE <= x1:
 			var key := Vector2i(tx, ty)
 			var t: Dictionary = _tiles.get(key, {})
+			if _undo_rec != null and not (_undo_rec as Dictionary).has(key) \
+					and not (t.is_empty() and erase):
+				_undo_rec[key] = null if t.is_empty() else (t["img"] as Image).duplicate()
 			if t.is_empty():
 				if erase:
 					tx += 1

@@ -94,10 +94,22 @@ const K_LIVE_REQ := "live_req"
 ## Слот стал ИИ (batch 13 #2): хост сообщает гостям, что ушедшего игрока подменяет
 ## машина, — иначе их ростер продолжал бы ждать его армию и его броски.
 const K_SLOT_AI := "slot_ai"
+## Снять готовность (playtest-20). Гость ПРОСИТ (K_UNREADY_REQ), хост решает и объявляет
+## всем (K_UNREADY): начать бой может только хост (K_GO), поэтому просьба, пришедшая уже
+## после старта, просто опоздала — и гость уходит в бой с той армией, что успел сдать.
+## Иначе гость мог бы снять готовность и переставить армию в ту же секунду, когда хост
+## по его старому ростеру уже начал бой.
+const K_UNREADY_REQ := "unready_req"
+const K_UNREADY := "unready"
+const K_GO := "go"
 var _net: NetworkSession = null
 var _net_is_host: bool = false
 var _my_side: int = MCF.Owner.PLAYER_1
 var _my_ready: bool = false
+## Просьба снять готовность ушла хосту, ответа ещё нет: армию трогать пока нельзя.
+var _unready_pending: bool = false
+## Хост объявил старт (K_GO): гость уходит в бой, как только у него сошлись все армии.
+var _go: bool = false
 ## Армии, присланные по сети готовыми, по сторонам: side -> Array записей (batch 12 #12).
 ## Хост шлёт сразу несколько сторон (свою, ИИ, а в зеркальном режиме — всех).
 var _remote_units: Dictionary = {}
@@ -251,6 +263,19 @@ func _on_net_message(msg: Dictionary) -> void:
 		K_SLOT_AI:
 			_apply_slot_ai(msg)
 			return
+		K_UNREADY_REQ:
+			# Хост принимает просьбу, только пока бой не начат — начатый бой эту сцену
+			# уже закрыл, и опоздавшая просьба сюда не дойдёт.
+			if _net_is_host:
+				_announce_unready(msg.get("sides", []))
+			return
+		K_UNREADY:
+			_apply_unready(msg.get("sides", []))
+			return
+		K_GO:
+			_go = true
+			_try_start()
+			return
 		NetHandoff.K_SETUP_REQ:
 			# Гость остался в лобби без объявления матча (batch 13 #11) — повторяем ему
 			# K_SETUP с той же картой; расстановка у него начнётся с этого места.
@@ -402,8 +427,61 @@ func _placed_here(side: int) -> bool:
 			and GameConfig.placement_mode == GameConfig.Placement.MIRRORED and _my_ready
 
 func _try_start() -> void:
-	if _all_sides_ready():
-		_start_battle()
+	if not _all_sides_ready():
+		return
+	# Начинает только хост (playtest-20): гость ждёт его K_GO — так снятая готовность
+	# не может разминуться со стартом на другой машине.
+	if networked() and not _net_is_host:
+		if not _go:
+			return
+	elif networked() and _net != null:
+		_net.send({"k": K_GO})
+	_start_battle()
+
+## Армия сдана — поле расстановки заперто до Unready (playtest-20).
+func _ready_locked() -> bool:
+	return networked() and _my_ready
+
+## Кнопка в сетевой партии: Ready, а у готового — Unready (playtest-20).
+func _on_net_flow() -> void:
+	if _my_ready:
+		_on_net_unready()
+	else:
+		_on_net_ready()
+
+func _on_net_unready() -> void:
+	if not _my_ready or _unready_pending or _mirrored_guest():
+		return
+	var sides: Array = [_my_side]
+	if _net_is_host:
+		# Хост сдавал и за ИИ — их готовность снимается вместе с его.
+		for side in _sides():
+			if roster.is_ai(side):
+				sides.append(side)
+		_announce_unready(sides)
+	else:
+		_unready_pending = true
+		_status.text = "Asking the host to take your army back..."
+		_net.send({"k": K_UNREADY_REQ, "sides": sides})
+		_refresh_labels()
+
+## Хост: снять готовность сторон у себя и у всех.
+func _announce_unready(sides: Array) -> void:
+	_net.send({"k": K_UNREADY, "sides": sides})
+	_apply_unready(sides)
+
+func _apply_unready(sides: Array) -> void:
+	for side in sides:
+		_ready_sides.erase(int(side))
+	if sides.has(_my_side) and _my_ready:
+		_my_ready = false
+		_unready_pending = false
+		_status.text = "You are no longer ready — change your army and press Ready again."
+		_send_live()
+	elif not sides.is_empty() and _status != null:
+		_status.text = "%s is no longer ready." % roster.name_of(int(sides[0]))
+	_refresh_labels()
+	queue_redraw()
 
 ## Ростер в JSON-совместимом виде (Vector2i → пара x/y).
 func _encode_roster(sides: Array = []) -> Array:
@@ -469,7 +547,6 @@ func _on_net_ready() -> void:
 	_net.send(msg)
 	for side in ready_sides:
 		_ready_sides[side] = true
-	_flow_btn.disabled = true
 	_status.text = "Waiting for the other players..."
 	_refresh_labels()
 	_try_start()
@@ -663,7 +740,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			and event.keycode in [KEY_R, KEY_Q, KEY_E]:
 		var cur := _pos_to_cell(get_global_mouse_position())
 		var vi := _placed_at(cur)
-		if vi != -1 and VehicleDB.is_vehicle(placed[vi]["stats_id"]) \
+		if vi != -1 and not _ready_locked() and VehicleDB.is_vehicle(placed[vi]["stats_id"]) \
 				and bool(VehicleDB.get_vehicle(placed[vi]["stats_id"]).get("has_facing", false)):
 			var cur_face := _placed_facing(placed[vi])
 			var idx := FACING4.find(cur_face)
@@ -681,7 +758,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 		var rc := _pos_to_cell(get_global_mouse_position())
 		var rvi := _placed_at(rc)
-		if rvi != -1 and VehicleDB.is_vehicle(placed[rvi]["stats_id"]) \
+		if rvi != -1 and not _ready_locked() and VehicleDB.is_vehicle(placed[rvi]["stats_id"]) \
 				and bool(VehicleDB.get_vehicle(placed[rvi]["stats_id"]).get("has_facing", false)):
 			_open_tank_dir_menu(rvi, event.position)
 			return
@@ -706,6 +783,13 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventPanGesture:
 		pan -= event.delta * 24.0
 		queue_redraw()
+		return
+	# Сданную армию не правят (playtest-20): правка не ушла бы соперникам, и бой начался бы
+	# с разными армиями. Сначала Unready.
+	if _ready_locked():
+		if event is InputEventMouseButton and event.pressed \
+				and event.button_index == MOUSE_BUTTON_LEFT:
+			_status.text = "You're ready — press Unready to change your army."
 		return
 	# Инструменты-формы (item 12): линия/прямоугольник/круг тянутся от нажатия к
 	# отпусканию, заливка ставит всю зону одним кликом. Точка — прежнее перетаскивание.
@@ -1445,7 +1529,7 @@ func _build_ui() -> void:
 
 	_flow_btn = Button.new()
 	_flow_btn.custom_minimum_size = Vector2(0, 42)
-	_flow_btn.pressed.connect(_on_net_ready if networked() else _on_flow)
+	_flow_btn.pressed.connect(_on_net_flow if networked() else _on_flow)
 	vbox.add_child(_flow_btn)
 
 	var back_btn := Button.new()
@@ -1542,13 +1626,16 @@ func _refresh_labels() -> void:
 		var mine := _host_sides()
 		var at := mine.find(active_side)
 		if _my_ready:
-			_flow_btn.text = "Waiting..."
+			# Готовность можно снять, пока бой не начат (playtest-20); гостю зеркальной
+			# партии снимать нечего — его армия и так отражение хостовой.
+			_flow_btn.text = "Waiting..." if _unready_pending or _mirrored_guest() else "Unready"
 		elif at >= 0 and at < mine.size() - 1:
 			_flow_btn.text = "Next: %s  >" % _side_label(mine[at + 1])
 		else:
 			_flow_btn.text = "Ready"
 		# Гость зеркальной партии готов только когда пришла формация хоста (#12).
-		_flow_btn.disabled = _my_ready or (_mirrored_guest() and not _remote_units.has(_my_side))
+		_flow_btn.disabled = _unready_pending or (_mirrored_guest()
+				and (_my_ready or not _remote_units.has(_my_side)))
 	else:
 		var sides := _sides()
 		var at := sides.find(active_side)

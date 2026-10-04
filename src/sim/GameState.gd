@@ -26,6 +26,10 @@ var combat_started: bool = false
 ## осколков и гильз (FxDecals). Он — часть доски, а не счётчик экрана, поэтому у хоста и
 ## каждого гостя одинаков, переживает пересинхронизацию и сохранение.
 var fx_seq: int = 0
+## Счёт для таблицы итогов боя (playtest-20): id бойца или машины -> [убито, из них
+## раздавлено]. В подпись доски не входит — на правила не влияет; в снимок отката входит,
+## чтобы отменённый наезд вернул и счёт.
+var kills: Dictionary = {}
 ## Окружение карты (item 24) — вид плиток пола и стен; правил не касается.
 var env: String = "town"
 
@@ -147,7 +151,7 @@ func snapshot(with_cells: bool = true) -> Dictionary:
 			"borg_id": u.borg_id, "build_credits": u.build_credits.duplicate(),
 			"ldf_wall_used": u.ldf_wall_used, "move_credit": u.move_credit,
 			"mine_credits": u.mine_credits,
-			"carried_corpses": u.carried_corpses, "dragging": u.dragging,
+			"carried_corpses": u.carried_corpses, "dragging": u.dragging, "burnt": u.burnt,
 			"action_state": ast,
 		})
 	var vs: Array = []
@@ -184,10 +188,12 @@ func snapshot(with_cells: bool = true) -> Dictionary:
 		"revealed_mines": _snapshot_revealed_mines(),
 		"next_id": _next_id, "next_vehicle_id": _next_vehicle_id,
 		"combat_started": combat_started,
+		"kills": kills.duplicate(true),
 	}
 
 ## Откатить состояние к ранее взятому снимку (см. snapshot()).
 func restore(snap: Dictionary) -> void:
+	kills = (snap.get("kills", {}) as Dictionary).duplicate(true)
 	units.clear()
 	for rec: Dictionary in snap["units"]:
 		var u: UnitInstance = rec["obj"]
@@ -212,6 +218,7 @@ func restore(snap: Dictionary) -> void:
 		u.move_credit = rec["move_credit"]
 		u.mine_credits = rec.get("mine_credits", 0)
 		u.carried_corpses = rec["carried_corpses"]
+		u.burnt = bool(rec.get("burnt", false))
 		u.dragging = rec["dragging"]
 		var ast: Dictionary = rec["action_state"]
 		if ast.is_empty():

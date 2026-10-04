@@ -115,13 +115,29 @@ func _relay(msg: Dictionary) -> void:
 		_inbox.append(msg)
 
 # --- События соединения ---
+## Терпение ENet к молчащему пиру (playtest-20: «друга ни с того ни с сего подменил ИИ»).
+## По умолчанию ENet рвёт связь уже после ~5 с без подтверждений — хватает подвисания
+## VPN вроде Radmin или долгой загрузки большой карты, и хост отдаёт сторону машине.
+## Теперь обрыв засчитывается после 20 с тишины, в худшем случае через 90.
+const PEER_TIMEOUT_LIMIT := 64
+const PEER_TIMEOUT_MIN_MS := 20000
+const PEER_TIMEOUT_MAX_MS := 90000
+
+func _loosen_timeout(id: int) -> void:
+	var pp := _peer.get_peer(id) if _peer != null else null
+	if pp != null:
+		pp.set_timeout(PEER_TIMEOUT_LIMIT, PEER_TIMEOUT_MIN_MS, PEER_TIMEOUT_MAX_MS)
+
 func _on_peer_connected(id: int) -> void:
 	if not peers.has(id):
 		peers.append(id)
+	if _is_host:
+		_loosen_timeout(id)
 	peer_joined.emit(id)
 	peer_ready.emit(true)  # хост: клиент подключился
 
 func _on_connected_to_server() -> void:
+	_loosen_timeout(1)
 	peer_ready.emit(false)  # клиент: подключились к хосту
 
 func _on_connection_failed() -> void:

@@ -40,6 +40,8 @@ var status: int = MCF.Status.ALIVE:
 		vision_epoch += 1
 var action_state: ActionState = null
 var held_item_id: String = ""
+## Погиб в огне или от лазера (playtest-20): тело рисуется обугленным.
+var burnt: bool = false
 ## Кто удерживает этого юнита (id захватившего), -1 = свободен (§3.4).
 var captor_id: int = -1
 ## Дрон (§3.12): помечает летающую сущность и её привязку к станции/оператору.

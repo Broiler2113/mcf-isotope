@@ -137,6 +137,8 @@ const NEUTRAL_COLOR := Color(0.7, 0.7, 0.7)
 
 ## Труп на земле (#59): красный круг, прозрачность 50%.
 const CORPSE_COLOR := Color(0.8, 0.1, 0.1, 0.5)
+## Обугленное тело (playtest-20): множитель к картинке трупа — темнее и в бурый.
+const BURNT_TINT := Color(0.58, 0.42, 0.28)
 
 ## Левый верхний угол — постоянное место всех меню действий (#87).
 const MENU_ANCHOR := Vector2(16, 16)
@@ -225,6 +227,8 @@ var _box_end_screen: Vector2 = Vector2.ZERO
 const BOX_DRAG_THRESHOLD := 8.0
 ## Техника (§техника): выбранная машина и цели её движения (центр → {dir, steps}).
 var selected_vehicle_id: int = -1
+## Текущий щелчок ЛКМ — двойной (см. _unhandled_input).
+var _click_double := false
 var veh_move_targets: Dictionary = {}
 var veh_disembark_id: int = -1
 ## Кто садится в выбранное кресло челнока (batch 13): id пехотинца в режиме VEH_BOARD_SEAT,
@@ -309,18 +313,28 @@ var _status_label: Label
 ## останавливается вместе с ней.
 const IN_GAME_SECONDS_PER_ROUND := 6
 var _clock_label: Label = null
-var _real_start_ms: int = 0
+## С появления сцены боя, то есть ПОСЛЕ закупки. Раньше его ставил только _open_match, а
+## сетевой бой туда не заходит: там стоял 0, и «Real» считал от запуска игры — с лобби,
+## закупкой и всеми прошлыми партиями.
+var _real_start_ms: int = Time.get_ticks_msec()
 var _real_stop_ms: int = -1   # −1 = секундомер ещё идёт
 var _clock_shown := ""
 var _turn_neighbors_label: Label
 var _draw_btn: Button
 var _erase_btn: Button
+## Откат рисунков (playtest-20): автор -> [{ключ холста: запись DrawCanvas}], по записи на
+## штрих или ход ластика. Чужие штрихи пишутся так же — их автор шлёт «undo», и все
+## снимают у него одно и то же последнее действие.
+var _draw_history: Dictionary = {}
+const DRAW_UNDO_DEPTH := 50
+var _draw_rec_keys: Array = []
 var _info_label: Label
 ## Живой свод армий и место игрока в очереди (item 20). Полный разбор инициативы
 ## открывается кнопкой в отдельном центральном оверлее (item 49).
 var _init_label: RichTextLabel
 var _init_overlay: Control
 var _init_overlay_body: VBoxContainer
+var _init_overlay_scroll: ScrollContainer = null
 ## Панель узлов выбранной машины (веха «Modular tank system», §9). Показывается ТОЛЬКО
 ## пока машина выбрана — постоянно висеть на экране этим числам незачем, — стоит над
 ## журналом боя и, как остальные окна, таскается за шапку.
@@ -574,8 +588,6 @@ func _build_state() -> void:
 func _open_match() -> void:
 	_begin_recording()
 	_opening_board = _board_thumbnail()
-	_real_start_ms = Time.get_ticks_msec()
-	_real_stop_ms = -1
 	state.log.add("— Initiative this match: %s —" % state.turns.order_names())
 	# Открывающий слот мирных играется ВНЕ потока намерений, но кубики бросает —
 	# поэтому под запись он уходит через сам регистратор (см. ReplayRecorder).
@@ -1108,10 +1120,17 @@ func _unhandled_input(event: InputEvent) -> void:
 			if event.pressed:
 				_stroke_drawing = true
 				_cur_stroke = []
+				_draw_record_begin(_draw_author(), _draw_scope())
 				_stroke_add(_draw_world_pos())
 			else:
 				_stroke_drawing = false
 				_stroke_commit()
+				_draw_record_end(_draw_author())
+			return
+		if event is InputEventKey and event.pressed and not event.echo \
+				and event.keycode == KEY_Z and event.ctrl_pressed:
+			_undo_my_drawing()
+			get_viewport().set_input_as_handled()
 			return
 		if event is InputEventMouseMotion:
 			if _stroke_drawing:
@@ -1124,10 +1143,17 @@ func _unhandled_input(event: InputEvent) -> void:
 			if event.pressed:
 				_stroke_drawing = true
 				_cur_stroke = []
+				_draw_record_begin(_draw_author(), -1)
 				_erase_at(_draw_world_pos())
 			else:
 				_stroke_drawing = false
 				_erase_commit()
+				_draw_record_end(_draw_author())
+			return
+		if event is InputEventKey and event.pressed and not event.echo \
+				and event.keycode == KEY_Z and event.ctrl_pressed:
+			_undo_my_drawing()
+			get_viewport().set_input_as_handled()
 			return
 		if event is InputEventMouseMotion:
 			if _stroke_drawing:
@@ -1146,6 +1172,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	# Рамка выделения (RTS, #18): в нейтральных режимах ЛКМ тянет прямоугольник,
 	# отпускание выделяет всех своих активных юнитов внутри. Короткая протяжка — обычный
 	# клик. В сетевой игре групповое управление отключено (риск десинка).
+	# Двойной щелчок по пассажиру — сам челнок. Одиночные щелчки чередуют «пассажир ↔
+	# машина», и если пассажир уже был выбран, двойной приходил обратно к нему.
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+		_click_double = event.double_click
 	if _box_selectable() and event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			_box_start_screen = event.position
@@ -1351,7 +1381,11 @@ func _handle_click(coord: Vector2i) -> void:
 				return
 			_back_to_menu()
 		Mode.DRONE_FLY:
-			if item_cells.has(coord) or _drone_can_ram(coord):
+			if _drone_can_ram(coord):
+				# Таран — это подрыв на клетке цели (playtest-20: спросить про своих).
+				_confirm_blast(_selected_unit(), coord, DroneMoveIntent.new(selected_id, coord))
+				return
+			if item_cells.has(coord):
 				_submit(DroneMoveIntent.new(selected_id, coord))
 				return
 			if _is_own_active(occupant):
@@ -1457,7 +1491,16 @@ func _handle_click(coord: Vector2i) -> void:
 		Mode.VEH_MOVE:
 			if veh_move_targets.has(coord):
 				var mt: Dictionary = veh_move_targets[coord]
-				_submit(VehicleMoveIntent.new(selected_vehicle_id, mt["dir"], mt["steps"]))
+				var mv := VehicleMoveIntent.new(selected_vehicle_id, mt["dir"], mt["steps"])
+				# Свои под гусеницей (playtest-20) — давить только с подтверждения.
+				var run_over := resolver.vehicle_move_crushed_friends(_selected_vehicle(),
+						mt["dir"], mt["steps"])
+				if not run_over.is_empty():
+					_confirm_dialog("Friendly units in the way", _friendly_list_text(run_over,
+							"The vehicle will run over:", "Drive anyway?"), "Run them over",
+							_submit.bind(mv))
+					return
+				_submit(mv)
 				return
 			_veh_back_to_menu()
 		Mode.VEH_TURN:
@@ -1513,7 +1556,8 @@ func _handle_click(coord: Vector2i) -> void:
 			if cveh != null and _can_control(cveh.owner):
 				var rider := _unit_at(coord)
 				if rider != null and rider.is_alive() and rider.aboard_vehicle_id == cveh.id \
-						and rider.owner == state.active_player() and selected_id != rider.id:
+						and rider.owner == state.active_player() and selected_id != rider.id \
+						and not _click_double:
 					_select(rider)
 					return
 				_select_vehicle(cveh)
@@ -1613,7 +1657,15 @@ func _escape_pressed() -> void:
 		return
 	# Выход из режима рисования/стирания аннотаций (item 14/51): бросаем незавершённый штрих.
 	if mode == Mode.DRAW or mode == Mode.ERASE:
-		_stroke_drawing = false
+		# Недотянутый штрих уже на холсте — доводим его, как при отпускании кнопки: иначе
+		# он остался бы только у себя, не ушёл бы по сети и не откатывался бы.
+		if _stroke_drawing:
+			_stroke_drawing = false
+			if mode == Mode.DRAW:
+				_stroke_commit()
+			else:
+				_erase_commit()
+			_draw_record_end(_draw_author())
 		_cur_stroke = []
 		mode = Mode.NONE
 		queue_redraw()
@@ -2321,13 +2373,33 @@ func _beam_friendlies(shooter: UnitInstance, aim: Vector2i) -> Array:
 			out.append(occ)
 	return out
 
-func _friendly_list_text(units: Array) -> String:
-	var lines: Array[String] = ["The laser will pass through:"]
+func _friendly_list_text(units: Array, head: String = "The laser will pass through:",
+		ask: String = "Fire anyway?") -> String:
+	var lines: Array[String] = [head]
 	for u: UnitInstance in units:
 		lines.append("  • %s (%s) at %d, %d" % [u.stats.display_name, _side_label(u.owner),
 				u.coord.x, u.coord.y])
-	lines.append("Fire anyway?")
+	lines.append(ask)
 	return "\n".join(lines)
+
+## Подрыв дрона в center (playtest-20): свои и союзники в зоне взрыва — сначала вопрос.
+## Зона — та же, что у _drone_explode; укрытия (окоп, щит) не вычитаются: лучше лишний
+## раз спросить, чем молча подорвать своих.
+func _confirm_blast(drone: UnitInstance, center: Vector2i, intent: Intent) -> void:
+	var friends: Array = []
+	if drone != null and state.roster != null:
+		var area := {}
+		for c: Vector2i in MCF.blast_square(center, MCF.ANTI_TANK_BLAST_RADIUS):
+			area[c] = true
+		for u in state.all_units():
+			if u != drone and u.is_alive() and area.has(u.coord) \
+					and state.roster.are_allies(drone.owner, u.owner):
+				friends.append(u)
+	if friends.is_empty():
+		_submit(intent)
+		return
+	_confirm_dialog("Friendly units in the blast", _friendly_list_text(friends,
+			"The explosion will hit:", "Detonate anyway?"), "Detonate", _submit.bind(intent))
 
 func _enter_group_move(tactical: bool) -> void:
 	_group_tactical = tactical
@@ -3101,7 +3173,7 @@ func _show_victory(title: String) -> void:
 	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	overlay.add_child(center)
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(380, 0)
+	panel.custom_minimum_size = Vector2(460, 0)
 	SteamChrome.apply_panel(panel)
 	center.add_child(panel)
 	var frame := VBoxContainer.new()
@@ -3116,6 +3188,7 @@ func _show_victory(title: String) -> void:
 	msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	msg.custom_minimum_size = Vector2(340, 0)
 	body.add_child(msg)
+	body.add_child(_kills_table())
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_END
 	row.add_theme_constant_override("separation", 8)
@@ -3145,6 +3218,63 @@ func _show_victory(title: String) -> void:
 	_victory_overlay = overlay
 	_ui_layer.add_child(overlay)
 	Ui.theme_canvas_layers()
+
+## Таблица итогов (playtest-20): сколько убил каждый боец и каждая машина — пулей,
+## взрывом, лучом или гусеницей (state.kills ведёт резолвер). Лучшие — сверху.
+func _kills_table() -> Control:
+	var box := SteamChrome.group_box("Unit efficiency")
+	var ids: Array = state.kills.keys()
+	ids.sort_custom(func(a: int, b: int) -> bool:
+		var ka: int = state.kills[a][0]
+		var kb: int = state.kills[b][0]
+		return ka > kb if ka != kb else a < b)
+	if ids.is_empty():
+		var none := Label.new()
+		none.text = "Nobody was killed this match."
+		box.body.add_child(none)
+		return box
+	var table := GridContainer.new()
+	table.columns = 4
+	table.add_theme_constant_override("h_separation", 18)
+	table.add_theme_constant_override("v_separation", 3)
+	for h: String in ["Unit", "Player", "Kills", "Run over"]:
+		var hl := Label.new()
+		hl.text = h
+		hl.add_theme_font_size_override("font_size", 12)
+		hl.add_theme_color_override("font_color", Color("#b0b0b0"))
+		table.add_child(hl)
+	for id: int in ids:
+		var rec: Array = state.kills[id]
+		var who := ""
+		var side := -1
+		var alive := true
+		var u := state.get_unit(id)
+		var v := state.get_vehicle(id) if u == null else null
+		if u != null:
+			who = u.stats.display_name
+			side = u.owner
+			alive = u.is_alive()
+		elif v != null:
+			who = VehicleDB.get_vehicle(v.type_id).get("name", v.type_id)
+			side = v.owner
+			alive = v.alive()
+		else:
+			continue
+		var cells: Array[String] = [who + ("" if alive else "  †"), _side_label(side),
+				str(rec[0]), str(rec[1]) if v != null else "—"]
+		for i in cells.size():
+			var l := Label.new()
+			l.text = cells[i]
+			l.add_theme_font_size_override("font_size", 12)
+			if i == 1:
+				l.add_theme_color_override("font_color", _side_color(side).lightened(0.25))
+			table.add_child(l)
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.custom_minimum_size = Vector2(0, mini(240, 22 + ids.size() * 20))
+	scroll.add_child(table)
+	box.body.add_child(scroll)
+	return box
 
 func _after_action() -> void:
 	_refresh_status()
@@ -3486,8 +3616,7 @@ func _play_dice(events: Array) -> void:
 			# Ходы жителей после конца хода — ускоренно, как и открывающий слот (batch
 			# ui-drones: «конец раунда тянется»). Раньше ускорялся лишь слот в начале боя.
 			_fast_playback = true
-			if _init_overlay != null and _init_overlay.visible:
-				_refresh_initiative_overlay()
+			_refresh_status()   # и строка хода, и окно инициативы — на ходящую группу
 			continue
 		if ev.get("kind", "") == "focus":
 			# Камеру за ходящими нейтралами БОЛЬШЕ НЕ ВОДИМ (item 8): игрока раздражало,
@@ -3556,8 +3685,7 @@ func _play_dice(events: Array) -> void:
 	# активную сторону. Без сброса «▶» навсегда оставался на последней группе жителей.
 	if _playing_slot != -1:
 		_playing_slot = -1
-		if _init_overlay != null and _init_overlay.visible:
-			_refresh_initiative_overlay()
+		_refresh_status()
 	queue_redraw()
 
 ## Дождаться всех идущих переходов — но не дольше, чем они могут длиться. Переход ведёт
@@ -4187,7 +4315,12 @@ const HEIGHT_LABEL_ZOOM := 0.6
 const FOG_COL := Color(0.02, 0.02, 0.04, 0.55)
 ## Стена, которой сейчас не видно (обычный туман): серая пелена в половину силы. План
 ## здания игрок помнит и стену видит — но не то, что у неё творится.
-const UNSEEN_WALL_COL := Color(0.55, 0.55, 0.58, 0.5)
+## Темнее, чем была (playtest-20: светло-серая пелена читалась как ещё видимая стена).
+const UNSEEN_WALL_COL := Color(0.07, 0.07, 0.09, 0.72)
+## Полевые укрепления видны только там, где их видят СЕЙЧАС (playtest-20): из плиток они
+## исключены (TerrainTiles.skip_features) и рисуются поклеточно, как станция дронов.
+const FOG_HIDDEN_FEATURES := [MCF.FEATURE_TRENCH, MCF.FEATURE_SANDBAGS, MCF.FEATURE_SANDBAG_WALL,
+		MCF.FEATURE_HEDGEHOG, MCF.FEATURE_HEDGEHOG_SANDBAGS, MCF.FEATURE_DIRT_PILE]
 
 ## Порядок слоёв — как у поклеточного прохода: рельеф, над ним туман, над туманом объекты
 ## (их поклеточный проход тоже рисует поверх пелены — и на неразведанных клетках).
@@ -4238,7 +4371,7 @@ var _lod_terrain_stale := false    # картинка правилась, тек
 var _lod_fog_stale := false
 var _lod_tex_avg: Dictionary = {}  # имя картинки-замены -> её средний цвет
 var _tiles: TerrainTiles = null     # ближний план рельефа кусками-плитками
-var _tiles_grid: int = 0
+var _tiles_grid: Array = []      # [доска, туман]: под туманом укрепления не запекаются
 
 ## Держит слой дальнего плана в согласии с доской. far — рисует ли им этот кадр. Слой
 ## заводится при первом отъезде и дальше правится и вблизи: правка стоит столько, сколько
@@ -4266,9 +4399,13 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, remembered: Dictiona
 		# Ближний план: плитки рельефа кусками (TerrainTiles). Набор кусков зависит от
 		# того, что на экране, поэтому слой перерисовывается вместе с кадром — это лишь
 		# несколько текстур, клетки внутри них не трогаются.
-		if _tiles == null or _tiles_grid != grid.get_instance_id():
+		var tkey: Array = [grid.get_instance_id(), fog_on]
+		if _tiles == null or _tiles_grid != tkey:
 			_tiles = TerrainTiles.new(grid, state.env)
-			_tiles_grid = grid.get_instance_id()
+			if fog_on:
+				for hf: String in FOG_HIDDEN_FEATURES:
+					_tiles.skip_features[hf] = true
+			_tiles_grid = tkey
 			_lod.tiles = _tiles
 		_tiles.sync(_fx.floor_damage, _fx.damage_version)
 		_lod.near_cells = Rect2i(_cull_x0, _cull_y0, _cull_x1 - _cull_x0, _cull_y1 - _cull_y0) \
@@ -4548,7 +4685,7 @@ func _draw() -> void:
 			for dc: Vector2i in resolver._feature_cells(MCF.FEATURE_DIRT_PILE):
 				if not _cell_on_screen(dc.x, dc.y):
 					continue
-				if fog_on and not visible.has(dc) and not remembered.has(dc):
+				if fog_on and not visible.has(dc):
 					continue
 				var dh: float = grid.cell(dc).cover_height
 				draw_string(font, _cell_origin(dc) + label_off, HEIGHT_LABELS.get(dh, "%.1fm" % dh),
@@ -4908,6 +5045,11 @@ func _draw() -> void:
 			if _cell_on_screen(sc.x, sc.y) and _cell_seen_now(sc, visible):
 				_tiles.draw_feature_tile(self, MCF.FEATURE_DRONE_STATION, sc,
 						Rect2(_cell_origin(sc), fcell_size))
+		if not _tiles.skip_features.is_empty():
+			for hf: String in FOG_HIDDEN_FEATURES:
+				for hc: Vector2i in resolver._feature_cells(hf):
+					if _cell_on_screen(hc.x, hc.y) and visible.has(hc):
+						_tiles.draw_feature_tile(self, hf, hc, Rect2(_cell_origin(hc), fcell_size))
 		# Пелена ПОВЕРХ объектов. Статика живёт в плитках, а плитки рисуются над общим
 		# туманом (так задумано: план здания игрок знает и в темноте), поэтому то, что
 		# должно меркнуть вместе с клеткой, меркнет здесь, отдельным проходом.
@@ -4999,8 +5141,8 @@ func _draw() -> void:
 			continue
 		if _pending_death_ids.has(unit.id):
 			continue
-		if unit.owner != viewer and not visible.has(unit.coord):
-			continue
+		# Трупы видны и под туманом (playtest-20): тело никуда не уходит, и поле боя
+		# должно его показывать.
 		# Раздавленный гусеницами труп вычищается из клетки (occupant = null), но сам
 		# UnitInstance остаётся в списке — без этой проверки он всплывал бы призраком.
 		if state.grid.cell(unit.coord) == null or state.grid.cell(unit.coord).occupant != unit:
@@ -5020,8 +5162,6 @@ func _draw() -> void:
 			continue
 		var pile_cell := state.grid.cell(pile_coord)
 		if pile_cell == null or pile_cell.corpse_count <= 0:
-			continue
-		if not visible.has(pile_coord):
 			continue
 		# Павший на месте боец — такое же тело в стеке. Пока его смерть не доиграна
 		# (#46), он показан живым, поэтому в счёт стека не идёт.
@@ -5202,6 +5342,12 @@ func _draw() -> void:
 					Color(0.1, 0.07, 0.04, 0.55))
 		if unit.id == selected_id:
 			draw_arc(center, CELL * 0.42, 0, TAU, 32, Color(1, 0.9, 0.2), 3.0)
+		# Водитель челнока — тонкая рамка по клетке кресла: видно, кто ведёт машину.
+		if unit.aboard_vehicle_id != -1:
+			var dveh := state.get_vehicle(unit.aboard_vehicle_id)
+			if dveh != null and dveh.driver_id() == unit.id:
+				draw_rect(Rect2(corner + Vector2(2, 2), Vector2(CELL - 4, CELL - 4)),
+						Color(1.0, 0.95, 0.7, 0.9), false, 1.5)
 		if MCF.is_neutral(uown):
 			# Вскрытый мирный житель охотится — красное кольцо тревоги (§3.10, #56).
 			if unit.civilian_active:
@@ -5355,6 +5501,15 @@ func _draw_laser_preview(shooter: UnitInstance, aim: Vector2i) -> void:
 ## векторные примитивы, как и всё остальное в этой игре.
 func _draw_fx_props(visible: Dictionary) -> void:
 	_draw_fx_lanes(visible)
+	# Колея танка (playtest-20): еле заметные тёмные полосы, под туманом не видна.
+	var tfog: bool = resolver.fog_enabled
+	for seg: Dictionary in _fx.track_marks:
+		var ta: Vector2 = seg["from"]
+		var tb: Vector2 = seg["to"]
+		var tm := Vector2i(floori((ta.x + tb.x) * 0.5), floori((ta.y + tb.y) * 0.5))
+		if not _cell_on_screen(tm.x, tm.y) or (tfog and not visible.has(tm)):
+			continue
+		draw_line(ORIGIN + ta * CELL, ORIGIN + tb * CELL, Color(0.1, 0.08, 0.05, 0.2), CELL * 0.22)
 	# Следы лазера (item 11): полупрозрачные чёрные линии от стрелка до точки остановки.
 	# Рисуем прямыми отрезками — диагонали получаются сами собой.
 	for seg: Dictionary in _fx.laser_lines:
@@ -5501,10 +5656,12 @@ func _draw_corpse(coord: Vector2i, count: int, who: UnitInstance = null) -> void
 	var org := _cell_origin(coord)
 	var center := org + Vector2(CELL, CELL) * 0.5
 	var own_key := Sprites.resolve(who.stats.id, _owner_suffix(who.owner)) if who != null else ""
+	# Сгоревший в огне или прижжённый лучом — обугленный, в бурых тонах (playtest-20).
+	var tint := BURNT_TINT if who != null and who.burnt else Color.WHITE
 	if own_key != "":
-		Sprites.draw_texture_override(self, own_key, org, float(CELL), 90.0)
-	elif not Sprites.draw_texture_override(self, "corpse", org, float(CELL), CORPSE_LIE_DEG):
-		draw_circle(center, CELL * 0.34, CORPSE_COLOR)
+		Sprites.draw_texture_override(self, own_key, org, float(CELL), 90.0, tint)
+	elif not Sprites.draw_texture_override(self, "corpse", org, float(CELL), CORPSE_LIE_DEG, tint):
+		draw_circle(center, CELL * 0.34, CORPSE_COLOR * tint)
 	if count > 1:
 		draw_string(ThemeDB.fallback_font, center + Vector2(CELL * 0.16, CELL * 0.3),
 			"x%d" % count, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 0.85, 0.85))
@@ -5789,6 +5946,9 @@ func _build_ui() -> void:
 	_draw_btn = _compact_button("Draw", _enter_draw)
 	_erase_btn = _compact_button("Erase", _enter_erase)
 	vbox.add_child(_button_row([_draw_btn, _erase_btn]))
+	var undo_draw := _compact_button("Undo drawing", _undo_my_drawing)
+	undo_draw.tooltip_text = "Take back your last stroke or erase (Ctrl+Z while drawing)."
+	vbox.add_child(undo_draw)
 	# Линейка (item 11) — рядом с рисованием: это такой же зрительский инструмент,
 	# ничего не меняющий на доске.
 	_ruler_btn = _compact_button("Ruler", _enter_ruler)
@@ -6227,7 +6387,14 @@ func _build_initiative_overlay() -> void:
 	frame.add_child(SteamChrome.header_bar("Initiative", close))
 	_init_overlay_body = VBoxContainer.new()
 	_init_overlay_body.add_theme_constant_override("separation", 6)
-	frame.add_child(SteamChrome.pad(_init_overlay_body, 16, 14))
+	# Прокрутка (playtest-20): групп жителей бывают десятки, и без неё список уходил за
+	# край экрана — нижние строки, в том числе нейтралы, просто не было видно.
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.add_child(_init_overlay_body)
+	_init_overlay_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_init_overlay_scroll = scroll
+	frame.add_child(SteamChrome.pad(scroll, 16, 14))
 	_init_overlay = overlay
 	_ui_layer.add_child(_init_overlay)
 
@@ -6272,15 +6439,15 @@ func _refresh_initiative() -> void:
 	var me := _viewing_side()
 	var tm := state.turns
 	var lines: Array[String] = []
-	var cur := "[b]Turn:[/b] %s" % _side_label(tm.active_player())
+	var cur := "[b]Turn:[/b] %s" % _side_label(_turn_now())
 	if state.roster != null and state.roster.has_teams():
 		var t := state.roster.team_of(tm.active_player())
 		if t >= 0:
 			cur += "  (%s)" % MCF.team_name(t)
 	lines.append(cur)
 	lines.append("[b]Round:[/b] %d" % tm.round_number)
-	var prev := tm.neighbor_slot(me, -1)
-	var nxt := tm.neighbor_slot(me, 1)
+	var prev := tm.neighbor_slot(me, -1, state.all_units())
+	var nxt := tm.neighbor_slot(me, 1, state.all_units())
 	if prev >= 0:
 		lines.append("Before you: %s" % _side_label(prev))
 	if nxt >= 0:
@@ -6299,6 +6466,7 @@ func _refresh_initiative_overlay() -> void:
 	if _init_overlay_body == null or state == null:
 		return
 	for c in _init_overlay_body.get_children():
+		_init_overlay_body.remove_child(c)   # сразу из дерева: высота ниже — по новым строкам
 		c.queue_free()
 	var counts := _army_counts()
 	var tm := state.turns
@@ -6313,12 +6481,16 @@ func _refresh_initiative_overlay() -> void:
 		# Слот с павшими (все жители погибли) — другое дело: это уже история, она остаётся.
 		if int(rec["alive"]) == 0 and int(rec["dead"]) == 0:
 			continue
+		# Вырезанная группа жителей больше не ходит (end_turn её пропускает) — в списке ей
+		# не место (playtest-20): иначе десятки мёртвых групп вытесняли живые.
+		if MCF.is_neutral(slot) and int(rec["alive"]) == 0:
+			continue
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 8)
 		# «Сейчас ходит» — либо активный слот очереди, либо нейтральная группа, чей ход
 		# отыгрывается прямо сейчас (item 6). Правило одно на всех: игрок, общий слот
 		# мирных и любая их группа помечаются одинаково.
-		var active: bool = slot == (_playing_slot if _playing_slot != -1 else tm.active_player())
+		var active: bool = slot == _turn_now()
 		var swatch := ColorRect.new()
 		swatch.custom_minimum_size = Vector2(14, 14)
 		swatch.color = _side_color(slot)
@@ -6341,6 +6513,10 @@ func _refresh_initiative_overlay() -> void:
 			lbl.modulate = Color(1, 1, 1, 0.45)
 		row.add_child(lbl)
 		_init_overlay_body.add_child(row)
+	# Высота по содержимому, но не выше экрана — дальше прокрутка.
+	if _init_overlay_scroll != null:
+		_init_overlay_scroll.custom_minimum_size = Vector2(388, minf(
+				_init_overlay_body.get_combined_minimum_size().y, get_viewport_rect().size.y - 140.0))
 
 # --- Аннотации на поле (item 51) ---
 
@@ -6493,6 +6669,9 @@ func _on_remote_stroke(msg: Dictionary) -> void:
 	if bool(msg.get("clear", false)):
 		_drop_drawings_of(author)
 		return
+	if bool(msg.get("undo", false)):
+		_undo_drawing_of(author)
+		return
 	var flat: Array = msg.get("c", [])
 	var pts: Array[Vector2] = []
 	var i := 0
@@ -6503,15 +6682,64 @@ func _on_remote_stroke(msg: Dictionary) -> void:
 		return
 	if bool(msg.get("e", false)):
 		var r := float(msg.get("r", CELL * 0.35))
+		_draw_record_begin(author, -1)
 		for k in pts.size():
 			_erase_segment(author, pts[maxi(0, k - 1)], pts[k], r)
+		_draw_record_end(author)
 	else:
-		var canvas := _canvas(author, int(msg.get("s", DrawScope.TEAM)))
+		var scope := int(msg.get("s", DrawScope.TEAM))
+		var canvas := _canvas(author, scope)
 		var rad := _paint_radius(int(msg.get("w", 3)))
 		var col := _side_color(author)
+		_draw_record_begin(author, scope)
 		for k in pts.size():
 			canvas.stroke(pts[maxi(0, k - 1)], pts[k], rad, col)
+		_draw_record_end(author)
 	queue_redraw()
+
+## Начать запись отката: штрих пишет один холст (scope), ластик — все холсты автора (-1).
+func _draw_record_begin(author: int, scope: int) -> void:
+	_draw_rec_keys = []
+	if scope >= 0:
+		_canvas(author, scope)
+	for key: Vector2i in _canvases:
+		if key.x == author and (scope < 0 or key.y == scope):
+			(_canvases[key] as DrawCanvas).begin_record()
+			_draw_rec_keys.append(key)
+
+func _draw_record_end(author: int) -> void:
+	var op := {}
+	for key: Vector2i in _draw_rec_keys:
+		if _canvases.has(key):
+			var rec := (_canvases[key] as DrawCanvas).end_record()
+			if not rec.is_empty():
+				op[key] = rec
+	_draw_rec_keys = []
+	if op.is_empty():
+		return
+	var hist: Array = _draw_history.get(author, [])
+	hist.append(op)
+	if hist.size() > DRAW_UNDO_DEPTH:
+		hist.pop_front()
+	_draw_history[author] = hist
+
+## Снять последнее своё действие кистью или ластиком — у себя и у всех в сети.
+func _undo_my_drawing() -> void:
+	var me := _draw_author()
+	if not _undo_drawing_of(me):
+		return
+	if networked and session != null:
+		session.send({"k": K_DRAW, "a": me, "undo": true})
+
+func _undo_drawing_of(author: int) -> bool:
+	var hist: Array = _draw_history.get(author, [])
+	if hist.is_empty():
+		return false
+	var op: Dictionary = hist.pop_back()
+	for key: Vector2i in op:
+		_canvas(key.x, key.y).restore(op[key])
+	queue_redraw()
+	return true
 
 ## Видит ли просматривающий игрок этот штрих (item 51): свои — всегда; «для команды» —
 ## союзникам; «для всех» — всем; фильтры «скрыть свои/чужие/все» (batch 17, item 10).
@@ -6540,6 +6768,7 @@ func _drop_drawings_of(side: int) -> void:
 	for key: Vector2i in _canvases.keys():
 		if key.x == side:
 			_canvases.erase(key)
+	_draw_history.erase(side)   # стёртое целиком назад не откатывается
 	queue_redraw()
 
 func _clear_my_drawings() -> void:
@@ -6976,9 +7205,11 @@ func _open_menu(unit: UnitInstance) -> void:
 				var did := unit.id
 				det_btn.pressed.connect(func() -> void:
 					_open_component_picker(under, "Detonate on", func(comp: String) -> void:
-						_submit(DroneDetonateIntent.new(did, comp))))
+						_confirm_blast(state.get_unit(did), state.get_unit(did).coord,
+								DroneDetonateIntent.new(did, comp))))
 			else:
-				det_btn.pressed.connect(_submit.bind(DroneDetonateIntent.new(unit.id)))
+				det_btn.pressed.connect(func() -> void:
+					_confirm_blast(unit, unit.coord, DroneDetonateIntent.new(unit.id)))
 			vb.add_child(det_btn)
 	elif unit.is_held():
 		# Удерживаемый юнит может только пытаться освободиться (§3.4).
@@ -7458,10 +7689,10 @@ func _on_redo_pressed() -> void:
 
 ## Доска переставлена откатом/повтором внутри резолвера — привести к ней экран.
 func _resync_after_restore() -> void:
-	# Откат переставляет доску назад во времени — вместе с ней снимается и косметика
-	# отменённых действий (#21/#28). Восстанавливать её по шагам незачем: она ни на
-	# что не влияет, а расходиться с доской не должна.
-	_fx.clear()
+	# Косметику НЕ стираем (playtest-20). Здесь стоял _fx.clear(): любой откат смывал с поля
+	# всю кровь, гильзы, подпалины и разбитый пол за партию, а у гостя сети — и снимок
+	# хоста, который net.resynced кладёт перед этим вызовом. Откатить можно только ход без
+	# кубиков (стрельба необратима), так что лишнего остаётся от силы пара следов ног.
 	_deselect()
 	for c in controllers.values():
 		c.notify_state_changed(state)
@@ -7529,12 +7760,12 @@ func _refresh_status() -> void:
 	_refresh_pause_button()
 	if _status_label != null:
 		_status_label.text = "Turn: %s   |   Round: %d" % [
-			_side_label(state.active_player()), state.turns.round_number]
+			_side_label(_turn_now()), state.turns.round_number]
 	# Кто ходит до и после игрока (item 6) — отдельной строкой под текущим ходом.
 	if _turn_neighbors_label != null and state != null:
 		var me := _viewing_side()
-		var prev := state.turns.neighbor_slot(me, -1)
-		var nxt := state.turns.neighbor_slot(me, 1)
+		var prev := state.turns.neighbor_slot(me, -1, state.all_units())
+		var nxt := state.turns.neighbor_slot(me, 1, state.all_units())
 		var parts: Array[String] = []
 		if prev >= 0:
 			parts.append("Prev: %s" % _side_label(prev))
@@ -7546,6 +7777,11 @@ func _refresh_status() -> void:
 	if _init_overlay != null and _init_overlay.visible:
 		_refresh_initiative_overlay()
 	_refresh_undo_btn()
+
+## Чей ход ИДЁТ сейчас: пока отыгрывается группа жителей — она, иначе активный слот.
+## Одно правило для строки хода и для окна инициативы (playtest-20: они расходились).
+func _turn_now() -> int:
+	return _playing_slot if _playing_slot != -1 else state.active_player()
 
 func _refresh_info() -> void:
 	if _info_label == null:

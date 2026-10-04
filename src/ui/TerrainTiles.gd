@@ -52,6 +52,9 @@ const FAMILY := {
 }
 
 var _grid: Grid
+## Объекты, которые НЕ запекаются в куски (playtest-20): экран боя прячет полевые
+## укрепления под туманом и рисует их сам там, где их видят сейчас.
+var skip_features: Dictionary = {}
 ## Окружение карты (item 24): плитка «<имя>_<окружение>» важнее общей.
 var env: String = ""
 var _chunks: Dictionary = {}     # Vector3i(cx, cy, res) -> {"floor", "feat": ImageTexture, "used": int, "bytes": int}
@@ -277,7 +280,7 @@ func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> voi
 	# Станция дронов — как мина: в плитки НЕ запекается, потому что видимость у неё своя
 	# у каждой стороны (туман). Её рисует поклеточный проход экрана боя.
 	if fid == "" or fid == MCF.FEATURE_MINE or fid == MCF.FEATURE_AV_MINE \
-			or fid == MCF.FEATURE_DRONE_STATION:
+			or fid == MCF.FEATURE_DRONE_STATION or skip_features.has(fid):
 		return
 	var name := tile_name(cell)
 	var sheets := _sheet(name, res)
@@ -285,10 +288,38 @@ func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> voi
 		var mask := mask_at(_grid, c, fid)
 		feat.blit_rect(sheets[variant_of(c, sheets.size())],
 				Rect2i((mask % 4) * res, (mask / 4) * res, res, res), at)
-		return
-	var singles := _tile(name, res)
-	if not singles.is_empty():
-		feat.blit_rect(singles[variant_of(c, singles.size())], full, at)
+	else:
+		var singles := _tile(name, res)
+		if not singles.is_empty():
+			feat.blit_rect(singles[variant_of(c, singles.size())], full, at)
+	if cell.airlock_welded:
+		feat.blend_rect(_weld_overlay(res), full, at)
+
+## Заваренный шлюз: поверх створок — крест из стальных полос с оранжевыми швами по
+## концам и посередине. Рисуется кодом, в res×res, один раз на разрешение.
+func _weld_overlay(res: int) -> Image:
+	var key := "weld@%d" % res
+	if _tiles.has(key):
+		return _tiles[key][0]
+	var img := Image.create(res, res, false, Image.FORMAT_RGBA8)
+	var w := maxi(1, res / 8)
+	var steel := Color(0.36, 0.37, 0.40)
+	var edge := Color(0.62, 0.63, 0.66)
+	var bead := Color(1.0, 0.58, 0.16)
+	for y in res:
+		for x in res:
+			var d1 := absi(x - y)
+			var d2 := absi(x + y - (res - 1))
+			var d := mini(d1, d2)
+			if d <= w:
+				img.set_pixel(x, y, edge if d == w else steel)
+	# Швы: квадратики у четырёх углов и в центре креста.
+	var b := maxi(1, res / 10)
+	for p: Vector2i in [Vector2i(b, b), Vector2i(res - 1 - b, b), Vector2i(b, res - 1 - b),
+			Vector2i(res - 1 - b, res - 1 - b), Vector2i(res / 2, res / 2)]:
+		img.fill_rect(Rect2i(p - Vector2i(b, b) / 2, Vector2i(b + 1, b + 1)), bead)
+	_tiles[key] = [img]
+	return img
 
 func _buried(c: Vector2i) -> bool:
 	for dy in range(-1, 2):
