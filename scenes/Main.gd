@@ -63,6 +63,12 @@ var _regroup_ids: Array[int] = []
 var _reach_tiers: Array[int] = []
 ## Зона полёта дрона (клетка -> цена) и потолок подлёта — для _draw_zone_preview.
 var _drone_costs: Dictionary = {}
+## Маршрут полёта до наведённой клетки, с памятью на то, для какой клетки он посчитан:
+## путь рисуется каждый кадр, а Дейкстра по зоне полёта — не то, что стоит гонять по
+## шестьдесят раз в секунду.
+var _drone_path: Array[Vector2i] = []
+var _drone_path_for := Vector2i(-2, -2)
+var _drone_path_from := Vector2i(-2, -2)
 var _drone_budget: int = 0
 ## Потолки зон хода машины за 1/2/3 ОД (resolver.vehicle_tier_budgets).
 var _veh_tiers: Array[int] = []
@@ -293,6 +299,19 @@ const HUD_WIDTH_MAX := 460.0
 var _draw_brush: int = 3
 var _erase_brush: int = 1
 var _status_label: Label
+## Часы боя. Их двое, и считают они разное.
+##
+## «In-game» — время ВНУТРИ боя: раунд длится ровно шесть секунд, и других источников у
+## него нет. Оно не идёт, пока игрок думает над ходом, и не бежит быстрее, когда он
+## торопится: шесть секунд за раунд, и ничто другое его не двигает.
+##
+## «Real» — время, которое бой занял у стола: обычный секундомер с начала партии,
+## останавливается вместе с ней.
+const IN_GAME_SECONDS_PER_ROUND := 6
+var _clock_label: Label = null
+var _real_start_ms: int = 0
+var _real_stop_ms: int = -1   # −1 = секундомер ещё идёт
+var _clock_shown := ""
 var _turn_neighbors_label: Label
 var _draw_btn: Button
 var _erase_btn: Button
@@ -473,6 +492,7 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	# Не двигаем камеру, пока игрок печатает в текстовом поле (например, IP хоста).
 	_reposition_hud_grip()
+	_refresh_clocks()
 	var focused := get_viewport().gui_get_focus_owner()
 	if focused is LineEdit:
 		return
@@ -554,6 +574,8 @@ func _build_state() -> void:
 func _open_match() -> void:
 	_begin_recording()
 	_opening_board = _board_thumbnail()
+	_real_start_ms = Time.get_ticks_msec()
+	_real_stop_ms = -1
 	state.log.add("— Initiative this match: %s —" % state.turns.order_names())
 	# Открывающий слот мирных играется ВНЕ потока намерений, но кубики бросает —
 	# поэтому под запись он уходит через сам регистратор (см. ReplayRecorder).
@@ -3061,6 +3083,9 @@ func _toast_analysis(text: String) -> void:
 	state.log.add(text)
 
 func _show_victory(title: String) -> void:
+	# Бой кончился — секундомер стола встаёт здесь и дальше не бежит.
+	if _real_stop_ms < 0:
+		_real_stop_ms = Time.get_ticks_msec()
 	if _victory_overlay != null:
 		_victory_overlay.queue_free()
 	var overlay := Control.new()
@@ -3920,7 +3945,18 @@ func _draw_veh_move_preview() -> void:
 
 ## Клетки зон хода: заливка по зоне (подсвеченная под курсором), контур по краю зоны и
 ## подпись клетки. Общая часть для техники, дрона и отряда.
-func _draw_zone_cells(tier_at: Dictionary, label_at: Dictionary) -> void:
+## Маршрут полёта до наведённой клетки. Считается, только когда курсор или сам дрон
+## сдвинулись: рисуется путь каждый кадр, а разлёт — это Дейкстра.
+func _drone_path_to(dr: UnitInstance, hover: Vector2i) -> Array[Vector2i]:
+	if dr == null:
+		return [] as Array[Vector2i]
+	if hover != _drone_path_for or dr.coord != _drone_path_from:
+		_drone_path_for = hover
+		_drone_path_from = dr.coord
+		_drone_path = resolver.drone_route_to(dr, hover)
+	return _drone_path
+
+func _draw_zone_cells(tier_at: Dictionary, label_at: Dictionary, on_path: Dictionary = {}) -> void:
 	var font := ThemeDB.fallback_font
 	var cvec := Vector2(CELL, CELL)
 	var half := cvec * 0.5
@@ -3929,7 +3965,7 @@ func _draw_zone_cells(tier_at: Dictionary, label_at: Dictionary) -> void:
 	for c: Vector2i in tier_at:
 		var origin := _cell_origin(c)
 		var k: int = tier_at[c]
-		draw_rect(Rect2(origin, cvec), MOVE_TIER_COLS[k][1 if c == hover else 0])
+		draw_rect(Rect2(origin, cvec), MOVE_TIER_COLS[k][1 if c == hover or on_path.has(c) else 0])
 		for d: Vector2i in GameActionResolver.DIR4:
 			if tier_at.has(c + d) and int(tier_at[c + d]) <= k:
 				continue
@@ -3944,7 +3980,7 @@ func _draw_zone_cells(tier_at: Dictionary, label_at: Dictionary) -> void:
 ## оранжевая, красная), контур, подпись «цена/потолок зоны», а под курсором — линия от
 ## from_cell и сколько ОД уйдёт. ap_base — ОД за первую зону (0, если ход на остатке).
 func _draw_zone_preview(costs: Dictionary, budgets: Array[int], from_cell: Vector2i,
-		ap_base: int) -> void:
+		ap_base: int, path: Array[Vector2i] = [] as Array[Vector2i]) -> void:
 	if budgets.is_empty():
 		return
 	var font := ThemeDB.fallback_font
@@ -3957,15 +3993,31 @@ func _draw_zone_preview(costs: Dictionary, budgets: Array[int], from_cell: Vecto
 	for c: Vector2i in costs:
 		tier_at[c] = GameActionResolver.tier_of(budgets, int(costs[c]))
 		label_at[c] = "%d/%d" % [int(costs[c]), budgets[int(tier_at[c])]]
-	_draw_zone_cells(tier_at, label_at)
+	var on_path: Dictionary = {}
+	for p: Vector2i in path:
+		on_path[p] = true
+	_draw_zone_cells(tier_at, label_at, on_path)
 	if not costs.has(hover):
 		return
 	var hk: int = tier_at[hover]
 	var col: Color = MOVE_TIER_COLS[hk][3]
 	var from := _cell_origin(from_cell) + half
 	var to := _cell_origin(hover) + half
-	draw_line(from, to, Color(0.05, 0.1, 0.05, 0.65), 5.0)
-	draw_line(from, to, col, 2.5)
+	# Ломаная по НАСТОЯЩЕМУ маршруту, если он дан (дрон): прямая от дрона к курсору
+	# показывала путь, которым он не полетит — он обходит корпуса, чужих дронов и
+	# огонь. Техника линию не передаёт и остаётся с прямой: она и едет по прямой
+	# (plan_line_move), так что прямая для неё — не упрощение, а правда.
+	var pts := PackedVector2Array([from])
+	for p: Vector2i in path:
+		pts.append(_cell_origin(p) + half)
+	if pts.size() < 2:
+		pts = PackedVector2Array([from, to])
+	# Тёмная обводка целиком, затем цвет: иначе обводка каждого звена ложилась бы
+	# поверх соседнего и ломаная выходила бы пунктиром.
+	for i in range(1, pts.size()):
+		draw_line(pts[i - 1], pts[i], Color(0.05, 0.1, 0.05, 0.65), 5.0)
+	for i in range(1, pts.size()):
+		draw_line(pts[i - 1], pts[i], col, 2.5)
 	draw_arc(to, CELL * 0.36, 0.0, TAU, 24, col, 2.0)
 	if labels:
 		var txt := "%d/%d · %d AP" % [int(costs[hover]), budgets[hk], hk + ap_base]
@@ -4686,7 +4738,9 @@ func _draw() -> void:
 		var dr := _selected_unit()
 		if dr != null and dr.is_drone:
 			var budgets: Array[int] = [_drone_budget]
-			_draw_zone_preview(_drone_costs, budgets, dr.coord, 0 if dr.move_credit > 0 else 1)
+			_draw_zone_preview(_drone_costs, budgets, dr.coord,
+					0 if dr.move_credit > 0 else 1,
+					_drone_path_to(dr, _pos_to_cell(get_global_mouse_position())))
 
 	if mode == Mode.BUILD:
 		for coord in item_cells:
@@ -5693,6 +5747,10 @@ func _build_ui() -> void:
 	_turn_neighbors_label.modulate = Color(0.78, 0.81, 0.88)
 	_turn_neighbors_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(_turn_neighbors_label)
+	_clock_label = Label.new()
+	_clock_label.add_theme_font_size_override("font_size", 11)
+	_clock_label.modulate = Color(0.78, 0.81, 0.88)
+	vbox.add_child(_clock_label)
 
 	vbox.add_child(_hsep())
 	var end_btn := Button.new()
@@ -7443,6 +7501,27 @@ func _order_labels() -> String:
 		parts.append(_side_label(s))
 	return " → ".join(parts)
 
+## Обновить обе строки часов. Текст пересобирается каждый кадр, а в Label уходит только
+## когда ИЗМЕНИЛСЯ: секунда меняется раз в шестьдесят кадров, а перерисовка подписи не
+## бесплатна.
+func _refresh_clocks() -> void:
+	if _clock_label == null or state == null:
+		return
+	var now: int = _real_stop_ms if _real_stop_ms >= 0 else Time.get_ticks_msec()
+	var text := "In-game %s   |   Real %s" % [
+			_clock_text(state.turns.round_number * IN_GAME_SECONDS_PER_ROUND),
+			_clock_text(maxi(0, now - _real_start_ms) / 1000)]
+	if text != _clock_shown:
+		_clock_shown = text
+		_clock_label.text = text
+
+## Секунды в «м:сс», а за час — в «ч:мм:сс».
+static func _clock_text(total_seconds: int) -> String:
+	var t: int = maxi(0, total_seconds)
+	if t >= 3600:
+		return "%d:%02d:%02d" % [t / 3600, (t / 60) % 60, t % 60]
+	return "%d:%02d" % [t / 60, t % 60]
+
 func _refresh_status() -> void:
 	# Пауза (item 4) появляется и исчезает вместе с составом стола: сторону может взять
 	# человек, и наоборот. Дешевле сверять её здесь, на каждом обновлении строки хода,
@@ -7462,6 +7541,7 @@ func _refresh_status() -> void:
 		if nxt >= 0:
 			parts.append("Next: %s" % _side_label(nxt))
 		_turn_neighbors_label.text = "   ".join(parts)
+	_refresh_clocks()
 	_refresh_initiative()
 	if _init_overlay != null and _init_overlay.visible:
 		_refresh_initiative_overlay()

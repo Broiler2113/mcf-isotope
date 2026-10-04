@@ -887,6 +887,7 @@ initiative Neutral → Player B → Player A
     log: Civilian: move → (28, 8) [AP: 0]
     log: Civilian: move → (28, 9) [AP: 0]
     log: — Civilians take their turn (1 active) —
+    log: Civilian: move → (5, 9) [AP: 1]
     log: Civilian: move → (5, 8) [AP: 1]
     log: Civilian burned to death at (5, 8)!
     dice: {kind:slot,owner:100}
@@ -1032,10 +1033,15 @@ initiative Neutral → Player B → Player A
     dice: {kind:slot,owner:101}
     dice: {kind:hold,units:{16:(5, 7)}}
     dice: {coord:(5, 7),kind:focus,unit:16}
-    dice: {from:(5, 7),kind:walk,path:[(5, 8)],unit:16}
-    dice: {from:2,kind:ap,left:0,unit:16}
+    dice: {from:(5, 7),kind:walk,path:[(4, 8),(5, 9)],unit:16}
+    dice: {from:2,kind:ap,left:1,unit:16}
     dice: {kind:hold,units:{16:(5, 7)}}
-    dice: {from:(5, 7),kind:walk,path:[(5, 8)],soldier:true,unit:16}
+    dice: {from:(5, 7),kind:walk,path:[(4, 8),(5, 9)],soldier:true,unit:16}
+    dice: {coord:(5, 9),kind:focus,unit:16}
+    dice: {from:(5, 9),kind:walk,path:[(5, 8)],unit:16}
+    dice: {from:1,kind:ap,left:0,unit:16}
+    dice: {kind:hold,units:{16:(5, 9)}}
+    dice: {from:(5, 9),kind:walk,path:[(5, 8)],soldier:true,unit:16}
 [r5 s5 p1] MoveIntent(a=15 dx=-999 dy=-999 t=move x=5 y=13)
     ok=true
     log: Flamethrower: move → (5, 13) [AP: 1]
@@ -1572,7 +1578,7 @@ C 5,7 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
 C 6,7 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
 C 3,8 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
 C 4,8 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 5,8 f=sandbags h=1.0 fire1 dur0 dirt0 corp0 weld0
+C 5,8 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
 C 6,8 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
 C 17,8 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
 C 28,8 f=sandbags h=1.0 fire0 dur0 dirt0 corp0 weld0
