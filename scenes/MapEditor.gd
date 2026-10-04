@@ -99,6 +99,9 @@ var _mouse_panning := false
 var _hover := Vector2i(-1, -1)
 
 # --- Отрисовка ---
+## Окружение карты, посчитанное один раз: у старых карт без пресета environment()
+## выводит его обходом всей карты, и звать его на каждую клетку значило бы O(N²).
+var _env := ""
 var _grid: Grid = null
 var _tiles: TerrainTiles = null
 var _layer: TerrainTiles.Layer = null
@@ -180,9 +183,10 @@ func _ready() -> void:
 
 ## Карта заменена целиком (новая, открытая, размер, очистка, откат снимка).
 func _map_replaced() -> void:
+	_env = map.environment()
 	_grid = Grid.new(map.width, map.height)
 	map.apply_to_grid(_grid)
-	_tiles = TerrainTiles.new(_grid, map.environment())
+	_tiles = TerrainTiles.new(_grid, _env)
 	if _layer == null:
 		_layer = TerrainTiles.Layer.new()
 		_layer.origin = Vector2.ZERO
@@ -197,7 +201,7 @@ func _map_replaced() -> void:
 	for i in map.width * map.height:
 		var c := Vector2i(i % map.width, i / map.width)
 		_zone_img.set_pixelv(c, _zone_color(map.zone_owner[i]))
-		_mini_img.set_pixelv(c, map_color(map, i))
+		_mini_img.set_pixelv(c, map_color(map, i, _env))
 	_zone_tex = ImageTexture.create_from_image(_zone_img)
 	_mini_tex = ImageTexture.create_from_image(_mini_img)
 	if _mini_rect != null:
@@ -213,10 +217,11 @@ func _map_replaced() -> void:
 
 ## Окружение сменилось — плитки и палитра в новом наряде, клетки те же.
 func _env_changed() -> void:
-	_tiles = TerrainTiles.new(_grid, map.environment())
+	_env = map.environment()
+	_tiles = TerrainTiles.new(_grid, _env)
 	_layer.tiles = _tiles
 	for i in map.width * map.height:
-		_mini_img.set_pixelv(Vector2i(i % map.width, i / map.width), map_color(map, i))
+		_mini_img.set_pixelv(Vector2i(i % map.width, i / map.width), map_color(map, i, _env))
 	_mini_stale = true
 	_refresh_palette()
 	_refresh_status()
@@ -236,18 +241,24 @@ static func owner_color(owner_id: int) -> Color:
 		return Roster.PALETTE[owner_id % Roster.PALETTE.size()]
 	return Color.WHITE
 
+## Тона миникарты по окружению — константами: словарь-литерал внутри map_color строился
+## бы заново на каждую клетку.
+const WALL_TONE := {"station": Color(0.42, 0.45, 0.5), "town": Color(0.5, 0.32, 0.26),
+		"field": Color(0.45, 0.43, 0.38), "bunker": Color(0.38, 0.37, 0.35),
+		"asteroid": Color(0.46, 0.36, 0.28)}
+const FLOOR_TONE := {"station": Color(0.22, 0.24, 0.27), "town": Color(0.3, 0.29, 0.27),
+		"field": Color(0.36, 0.3, 0.22), "bunker": Color(0.25, 0.25, 0.24),
+		"asteroid": Color(0.33, 0.28, 0.24)}
+
 ## Цвет клетки на миникарте и в превью открываемой карты: окружение задаёт тон стен и
 ## пола, зона подмешивается поверх.
-static func map_color(m: MapData, i: int) -> Color:
-	var env := m.environment()
+static func map_color(m: MapData, i: int, env: String) -> Color:
 	var col: Color
 	var feat: String = m.feature_id[i]
 	if m.is_space[i] != 0:
 		col = Color(0.03, 0.03, 0.07)
 	elif m.cover_height[i] >= MCF.WALL_HEIGHT:
-		col = {"station": Color(0.42, 0.45, 0.5), "town": Color(0.5, 0.32, 0.26),
-				"field": Color(0.45, 0.43, 0.38), "bunker": Color(0.38, 0.37, 0.35),
-				"asteroid": Color(0.46, 0.36, 0.28)}.get(env, Color(0.45, 0.42, 0.38))
+		col = WALL_TONE.get(env, Color(0.45, 0.42, 0.38))
 		if MCF.is_glass(feat):
 			col = Color(0.45, 0.65, 0.75)
 		elif feat == MCF.FEATURE_AIRLOCK:
@@ -257,9 +268,7 @@ static func map_color(m: MapData, i: int) -> Color:
 	elif m.floor_type[i] == MCF.FLOOR_GRASS:
 		col = Color(0.28, 0.45, 0.2)
 	else:
-		col = {"station": Color(0.22, 0.24, 0.27), "town": Color(0.3, 0.29, 0.27),
-				"field": Color(0.36, 0.3, 0.22), "bunker": Color(0.25, 0.25, 0.24),
-				"asteroid": Color(0.33, 0.28, 0.24)}.get(env, Color(0.28, 0.28, 0.28))
+		col = FLOOR_TONE.get(env, Color(0.28, 0.28, 0.28))
 		if feat == MCF.FEATURE_TRENCH:
 			col = col.darkened(0.35)
 		elif feat != "":
@@ -279,29 +288,43 @@ func _tuple(i: int) -> Array:
 
 ## Записать клетку: в карту, в зеркало плиток, в миникарту и слой зон.
 func _write(i: int, t: Array) -> void:
+	var fl := int(t[0])
+	var cover := float(t[1])
+	var sp := bool(t[2])
+	var feat := String(t[3])
+	var zone := int(t[4])
+	# Клетка уже такая — ни записи, ни отката: повторный мазок по тем же клеткам бесплатен.
+	if map.floor_type[i] == fl and map.cover_height[i] == cover and (map.is_space[i] != 0) == sp \
+			and map.feature_id[i] == feat and map.zone_owner[i] == zone:
+		return
 	if _act.has("cells") and not _act["cells"].has(i):
 		_act["cells"][i] = _tuple(i)
-	map.floor_type[i] = int(t[0])
-	map.cover_height[i] = float(t[1])
-	map.is_space[i] = 1 if bool(t[2]) else 0
-	map.feature_id[i] = String(t[3])
-	var zone_changed := int(t[4]) != map.zone_owner[i]
-	map.zone_owner[i] = int(t[4])
+	map.floor_type[i] = fl
+	map.cover_height[i] = cover
+	map.is_space[i] = 1 if sp else 0
+	map.feature_id[i] = feat
+	var zone_changed := zone != map.zone_owner[i]
+	map.zone_owner[i] = zone
 	var x := i % map.width
 	var y := i / map.width
+	# Зеркало плиток — только изменившиеся поля: у каждого сеттера GridCell свой журнал, и
+	# лишний вызов на заливке в четверть миллиона клеток стоил больше самой правки.
 	var gc := _grid.cell_fast(x, y)
-	gc.floor_type = int(t[0])
-	gc.is_space = bool(t[2])
-	if String(t[3]) != "":
-		gc.set_feature(String(t[3]))
-		gc.cover_height = float(t[1])
-	else:
-		gc.clear_feature()
-		gc.cover_height = float(t[1])
+	if gc.floor_type != fl:
+		gc.floor_type = fl
+	if gc.is_space != sp:
+		gc.is_space = sp
+	if gc.feature_id != feat:
+		if feat != "":
+			gc.set_feature(feat)
+		else:
+			gc.clear_feature()
+	if gc.cover_height != cover:
+		gc.cover_height = cover
 	if zone_changed:
 		_zone_img.set_pixel(x, y, _zone_color(int(t[4])))
 		_zone_stale = true
-	_mini_img.set_pixel(x, y, map_color(map, i))
+	_mini_img.set_pixel(x, y, map_color(map, i, _env))
 	_mini_stale = true
 
 func _begin() -> void:
@@ -440,13 +463,18 @@ func _brush_cells(c: Vector2i) -> Array[Vector2i]:
 
 ## Нанести кисть (или ластик) на набор клеток со всеми отражениями.
 func _paint_cells(cells: Array, erase: bool) -> void:
+	var masks := _sym_masks()
 	var done := {}
-	for mask: int in _sym_masks():
+	var dedupe := masks.size() > 1   # без симметрии клетки и так свои — словарь не нужен
+	for mask: int in masks:
 		for c: Vector2i in cells:
-			var m := _mirror(c, mask)
-			if not map.in_bounds(m) or done.has(m):
+			var m := c if mask == 0 else _mirror(c, mask)
+			if not map.in_bounds(m):
 				continue
-			done[m] = true
+			if dedupe:
+				if done.has(m):
+					continue
+				done[m] = true
 			if erase:
 				_erase_cell(m)
 			else:
@@ -455,7 +483,7 @@ func _paint_cells(cells: Array, erase: bool) -> void:
 
 func _erase_cell(c: Vector2i) -> void:
 	var i := c.y * map.width + c.x
-	var b := MapPresets.blank_cell(map.environment())
+	var b := MapPresets.blank_cell(_env)
 	_write(i, [b[0], b[1], b[2], b[3], -1])
 	_clear_spawn(c)
 
@@ -1605,7 +1633,7 @@ func _refresh_status() -> void:
 	var parts: Array[String] = ["%s · %s" % [tname, what]]
 	if tool in [Tool.BRUSH, Tool.ERASER, Tool.LINE]:
 		parts[0] += " · size %d" % brush_size
-	parts.append("%d×%d %s" % [map.width, map.height, MapPresets.name_of(map.environment())])
+	parts.append("%d×%d %s" % [map.width, map.height, MapPresets.name_of(_env)])
 	if map.in_bounds(_hover):
 		parts.append("(%d, %d) %s" % [_hover.x, _hover.y, _describe(_hover)])
 	if symmetry != Sym.OFF:
@@ -1643,7 +1671,7 @@ func _mark_dirty() -> void:
 
 ## Картинка кисти — та же плитка, что ляжет на карту, в окружении пресета.
 func _thumb(id: String) -> Texture2D:
-	var env := map.environment() if map != null else ""
+	var env := _env
 	if id.begins_with("unit:"):
 		var key := Sprites.resolve(id.substr(5), "_neutral")
 		return Sprites.texture_of(key) if key != "" else _swatch(Roster.NEUTRAL_COLOR)
@@ -2042,8 +2070,9 @@ func _open_dialog() -> void:
 			preview.texture = null
 			return
 		var img := Image.create(m.width, m.height, false, Image.FORMAT_RGBA8)
+		var menv := m.environment()
 		for k in m.width * m.height:
-			img.set_pixel(k % m.width, k / m.width, map_color(m, k))
+			img.set_pixel(k % m.width, k / m.width, map_color(m, k, menv))
 		preview.texture = ImageTexture.create_from_image(img)
 		info.text = "%d×%d · %s" % [m.width, m.height, MapPresets.name_of(m.environment())])
 	var do_open := func() -> Variant:
