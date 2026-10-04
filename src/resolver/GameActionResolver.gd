@@ -139,7 +139,25 @@ func resolve(intent: Intent) -> ActionResult:
 	var recording := top and replay_recorder != null and not state.dice.record_enabled
 	if recording:
 		state.dice.begin_record()
+	var actor_owner := -1
+	var actor_from := Vector2i(-1, -1)
+	var au := state.get_unit(intent.actor_id)
+	var av := state.get_vehicle(intent.actor_id) if au == null else null
+	if au != null:
+		actor_owner = au.owner
+		actor_from = au.coord
+	elif av != null:
+		actor_owner = av.owner
+		actor_from = av.center()
 	var result := _dispatch(intent)
+	if top:
+		result.actor_owner = actor_owner
+		result.actor_from = actor_from
+		result.actor_to = actor_from
+		if au != null:
+			result.actor_to = au.coord
+		elif av != null:
+			result.actor_to = av.center()
 	# Борг едет за оператором (batch 13): куда бы боец ни сдвинулся — ходом, отбросом,
 	# переносом, — машина стоит в его клетке.
 	if result.ok:

@@ -32,8 +32,9 @@ func _initialize() -> void:
 	_tanks_block_enemy_sight_only()
 	_big_map_sight_is_fast()
 	_incremental_matches_fresh()
+	_results_say_who_acted_and_where()
 	if fails.is_empty():
-		print("fog: sweep == ray on every board; tanks hide only from the enemy; 250×250 sight is fast; incremental == fresh")
+		print("fog: sweep == ray on every board; tanks hide only from the enemy; 250×250 sight is fast; incremental == fresh; results name their actor")
 		quit(0)
 		return
 	printerr("fog: %d failure(s)" % fails.size())
@@ -523,3 +524,31 @@ func _fresh_sight(st: GameState, side: int) -> Dictionary:
 	R._blockers = saved[5]
 	R._tank_masks = saved[6]
 	return want
+
+## 5. Каждый итог действия знает, ЧЕЙ он и откуда куда. На правила это не влияет (как fx
+##    и visual_hold, по сети не едет) — на этом экран боя решает, печатать ли строку в
+##    лог: ход врага, которого не видно, рассказывать текстом нельзя, иначе лог выдаёт
+##    ровно то, что прячет туман.
+func _results_say_who_acted_and_where() -> void:
+	var m := MapData.new(20, 10)
+	for y in 10:
+		for x in 20:
+			m.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	m.set_spawn(Vector2i(3, 3), "light_infantry", MCF.Owner.PLAYER_1)
+	m.set_spawn(Vector2i(16, 7), "light_infantry", MCF.Owner.PLAYER_2)
+	GameConfig.civilians_enabled = false
+	var st := m.build_state(31)
+	var r := GameActionResolver.new(st)
+	r.fog_mode = MCF.Fog.OFF
+	r.fog_enabled = false
+	while st.active_player() != MCF.Owner.PLAYER_1:
+		r.resolve(EndTurnIntent.new())
+	var u: UnitInstance = st.grid.cell(Vector2i(3, 3)).occupant
+	var res := r.resolve(MoveIntent.new(u.id, Vector2i(4, 3)))
+	ck(res.ok, "the move resolves: %s" % res.reason)
+	ck(res.actor_owner == MCF.Owner.PLAYER_1, "the result names its side (%d)" % res.actor_owner)
+	ck(res.actor_from == Vector2i(3, 3), "and where the mover started (%s)" % str(res.actor_from))
+	ck(res.actor_to == Vector2i(4, 3), "and where it ended (%s)" % str(res.actor_to))
+	# Конец хода автора не имеет — такие строки показываются всегда.
+	var done := r.resolve(EndTurnIntent.new())
+	ck(done.actor_owner == -1, "end of turn belongs to nobody (%d)" % done.actor_owner)

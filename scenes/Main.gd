@@ -598,7 +598,8 @@ func _play_civilian_result(res: ActionResult) -> void:
 	_playing_slot = -1
 	if _init_overlay != null and _init_overlay.visible:
 		_refresh_initiative_overlay()
-	state.log.publish_result(res)
+	if _result_is_audible(res):
+		state.log.publish_result(res)
 	_refresh_status()
 
 # --- Запись матча (item 53) --------------------------------------------------
@@ -809,7 +810,8 @@ func _show_result(result: ActionResult) -> void:
 		_hold_visual = {}
 	if not result.fx.is_empty():
 		_fx.apply(result.fx)
-	state.log.publish_result(result)
+	if _result_is_audible(result):
+		state.log.publish_result(result)
 	_refresh_status()
 	queue_redraw()
 
@@ -2681,7 +2683,8 @@ func _on_intent_ready(intent: Intent) -> void:
 	if not result.fx.is_empty():
 		_fx.apply(result.fx)
 		queue_redraw()
-	state.log.publish_result(result)
+	if _result_is_audible(result):
+		state.log.publish_result(result)
 	for c in controllers.values():
 		c.notify_state_changed(state)
 	# Победа (batch 13 #9): партия замирает, следующий шаг ИИ не заказывается.
@@ -2971,7 +2974,8 @@ func _show_net_action(intent: Intent, result: ActionResult) -> void:
 		_hold_visual = {}
 	if not result.fx.is_empty():
 		_fx.apply(result.fx)
-	state.log.publish_result(result)
+	if _result_is_audible(result):
+		state.log.publish_result(result)
 	for c in controllers.values():
 		c.notify_state_changed(state)
 	_refresh_status()
@@ -3875,6 +3879,9 @@ const LOD_ZOOM := 0.0
 ## Ниже этого зума подписи высоты насыпей не рисуются — шрифт всё равно не прочесть.
 const HEIGHT_LABEL_ZOOM := 0.6
 const FOG_COL := Color(0.02, 0.02, 0.04, 0.55)
+## Стена, которой сейчас не видно (обычный туман): серая пелена в половину силы. План
+## здания игрок помнит и стену видит — но не то, что у неё творится.
+const UNSEEN_WALL_COL := Color(0.55, 0.55, 0.58, 0.5)
 
 ## Порядок слоёв — как у поклеточного прохода: рельеф, над ним туман, над туманом объекты
 ## (их поклеточный проход тоже рисует поверх пелены — и на неразведанных клетках).
@@ -4132,7 +4139,10 @@ func _lod_color(cell: GridCell) -> Color:
 ## сюда не входят: их видимость своя у каждой стороны, их рисует _draw.
 func _lod_feature_color(cell: GridCell) -> Color:
 	var fid := cell.feature_id
-	if fid == "" or fid == MCF.FEATURE_MINE or fid == MCF.FEATURE_AV_MINE:
+	# Станция дронов, как и мина, в общий слой объектов не идёт: её видно только тому, кто
+	# её видит сейчас, и рисуется она поклеточно.
+	if fid == "" or fid == MCF.FEATURE_MINE or fid == MCF.FEATURE_AV_MINE \
+			or fid == MCF.FEATURE_DRONE_STATION:
 		return Color(0, 0, 0, 0)
 	if _lod_tex_avg.has(fid):
 		return _lod_tex_avg[fid]
@@ -4583,6 +4593,33 @@ func _draw() -> void:
 	# снимок «до взрыва» на время броска (item 22) и трещина на побитом ДОТе (#89).
 	if not far:
 		var fcell_size := Vector2(CELL, CELL)
+		# Станция дронов — только там, где игрок СЕЙЧАС видит (туман). Из плиток она
+		# исключена ровно за этим: запечённая, она светила бы сквозь пелену и выдавала
+		# чужого оператора вернее, чем он сам.
+		for sc: Vector2i in resolver._feature_cells(MCF.FEATURE_DRONE_STATION):
+			if _cell_on_screen(sc.x, sc.y) and _cell_seen_now(sc, visible):
+				_tiles.draw_feature_tile(self, MCF.FEATURE_DRONE_STATION, sc,
+						Rect2(_cell_origin(sc), fcell_size))
+		# Пелена ПОВЕРХ объектов. Статика живёт в плитках, а плитки рисуются над общим
+		# туманом (так задумано: план здания игрок знает и в темноте), поэтому то, что
+		# должно меркнуть вместе с клеткой, меркнет здесь, отдельным проходом.
+		#
+		# Створка шлюза заодно возвращается к ЗАКРЫТОМУ виду: открывшийся в темноте шлюз
+		# рассказывал о чужом ходе ровно то, что туман и прячет.
+		if resolver.fog_enabled and resolver.fog_mode == MCF.Fog.STANDARD:
+			for wy in range(vy0, vy1 + 1):
+				for wx in range(vx0, vx1 + 1):
+					var wc := Vector2i(wx, wy)
+					if visible.has(wc):
+						continue
+					var wcell := grid.cell_fast(wx, wy)
+					var as_wall := wcell.is_wall()
+					if wcell.feature_id == MCF.FEATURE_AIRLOCK and not as_wall:
+						_tiles.draw_feature_tile(self, MCF.FEATURE_AIRLOCK, wc,
+								Rect2(_cell_origin(wc), fcell_size))
+						as_wall = true
+					if as_wall:
+						draw_rect(Rect2(_cell_origin(wc), fcell_size), UNSEEN_WALL_COL)
 		for mk: String in [MCF.FEATURE_MINE, MCF.FEATURE_AV_MINE]:
 			for mc: Vector2i in resolver._feature_cells(mk):
 				if _cell_on_screen(mc.x, mc.y) and resolver.mine_visible_to(viewer, mc):
@@ -4612,6 +4649,10 @@ func _draw() -> void:
 				if _cell_on_screen(mc.x, mc.y) and resolver.mine_visible_to(viewer, mc):
 					draw_rect(Rect2(_cell_origin(mc) + Vector2(CELL * 0.25, CELL * 0.25),
 							Vector2(CELL * 0.5, CELL * 0.5)), Color(0.85, 0.25, 0.2))
+		for sc: Vector2i in resolver._feature_cells(MCF.FEATURE_DRONE_STATION):
+			if _cell_on_screen(sc.x, sc.y) and _cell_seen_now(sc, visible):
+				draw_rect(Rect2(_cell_origin(sc) + Vector2(CELL * 0.25, CELL * 0.25),
+						Vector2(CELL * 0.5, CELL * 0.5)), Color(0.5, 0.8, 0.95))
 
 	# Трупы идут ОТДЕЛЬНЫМ проходом до корпусов машин (#59): танк наезжает на тело,
 	# а не тело лежит поверх брони. Смерти, ещё не показанные из-за анимации броска
@@ -7168,6 +7209,27 @@ func _refresh_info() -> void:
 		u.stats.display_name, range_text,
 		u.rate_of_fire(), u.armor(), u.speed(), bonus,
 	]
+
+## Показывать ли в логе то, что сделал этот ход. Под туманом ход ВРАЖЕСКОГО бойца,
+## которого игрок не видит, в лог не идёт вовсе — ни строкой, ни броском кубика: иначе
+## текст рассказывает ровно то, что туман прячет («Rifleman fires at…» с именем и
+## результатом), и прятать юнит на доске становится бессмысленно.
+##
+## Ход виден, если видна клетка, ОТКУДА он начался, или та, где боец оказался: шаг из
+## темноты на свет игрок действительно видит. Строки без автора (конец хода, пожар,
+## нейтралы) показываются всегда — у них actor_owner = −1.
+## Видит ли зритель клетку ПРЯМО СЕЙЧАС (не «помнит»). Без тумана видно всё.
+func _cell_seen_now(c: Vector2i, seen: Dictionary) -> bool:
+	return not resolver.fog_enabled or seen.has(c)
+
+func _result_is_audible(res: ActionResult) -> bool:
+	if res == null or not resolver.fog_enabled or res.actor_owner == -1:
+		return true
+	var viewer := _viewing_side()
+	if res.actor_owner == viewer or state.roster.are_allies(res.actor_owner, viewer):
+		return true
+	var seen := resolver.team_visible_coords(viewer)
+	return seen.has(res.actor_from) or seen.has(res.actor_to)
 
 func _on_log_line(text: String) -> void:
 	if _log_label != null:
