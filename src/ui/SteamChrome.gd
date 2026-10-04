@@ -80,6 +80,17 @@ static func group_box(title: String) -> GroupBox:
 	g.title = title
 	return g
 
+## Групповое окошко с узкими полями — для боковых панелей (правое меню боя, закупка), где
+## стандартные 16 точек с каждой стороны съедали треть ширины и выталкивали кнопки за край.
+static func group_box_compact(title: String) -> GroupBox:
+	var g := group_box(title)
+	var mc := g._frame.get_child(0) as MarginContainer
+	mc.add_theme_constant_override("margin_left", 8)
+	mc.add_theme_constant_override("margin_right", 8)
+	mc.add_theme_constant_override("margin_top", 12)
+	mc.add_theme_constant_override("margin_bottom", 10)
+	return g
+
 class GroupBox extends Container:
 	var title := "":
 		set(v):

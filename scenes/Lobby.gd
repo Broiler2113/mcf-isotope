@@ -451,6 +451,12 @@ func _build_ui() -> void:
 	# Карта — справа, под слотами: там есть ширина, чтобы поставить превью рядом с
 	# настройками случайной карты, и «Players» там же, где список слотов.
 	_build_map(right)
+	# Перенос колонок (аудит UI): когда окно узкое (интерфейс 150 %), главное — слоты и
+	# карта — встаёт ПЕРВЫМ, а настройки уходят под него. Иначе за краем экрана оказывалось
+	# именно то, ради чего лобби открывают, а правая половина окна пустовала.
+	cols.resized.connect(func() -> void:
+		var wide := cols.size.x >= left.get_combined_minimum_size().x + right.custom_minimum_size.x + 14.0
+		cols.move_child(left, 0 if wide else 1))
 
 	# Нижняя полоса действий.
 	var bar := HBoxContainer.new()
@@ -1407,13 +1413,26 @@ func _modal_window(title: String) -> VBoxContainer:
 	close.pressed.connect(func() -> void: layer.queue_free())
 	frame.add_child(SteamChrome.header_bar(title, close))
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(320, 380)
+	scroll.custom_minimum_size = Vector2(320, 0)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	frame.add_child(SteamChrome.pad(scroll, 12, 10))
 	var body := VBoxContainer.new()
 	body.add_theme_constant_override("separation", 4)
 	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(body)
+	# Высота — по содержимому, но не больше 380: три галочки событий не держат окно
+	# пустым на полэкрана, а длинный список юнитов прокручивается (аудит UI).
+	body.minimum_size_changed.connect(func() -> void:
+		scroll.custom_minimum_size.y = minf(body.get_combined_minimum_size().y, 380.0))
+	# Ряд кнопок справа внизу, как у окон набора.
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_END
+	frame.add_child(SteamChrome.pad(row, 12, 10))
+	var done := Button.new()
+	done.text = "Close"
+	done.custom_minimum_size = Vector2(96, 0)
+	done.pressed.connect(func() -> void: layer.queue_free())
+	row.add_child(done)
 	Ui.theme_canvas_layers()
 	return body
 

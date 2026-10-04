@@ -37,6 +37,9 @@ static var _vs_latest_done := false
 var _lobby_broken := false
 ## Страницы меню. Полоса вкладок у контейнера скрыта: ходим по ним кнопками самого меню.
 var _pages: TabContainer = null
+## Крупная надпись и подзаголовок — только на главной странице: на страницах второго
+## уровня они съедали высоту, и «Back» уезжал за край окна (editor-rework, аудит UI).
+var _hero: Array[Control] = []
 const PAGE_HOME := 0
 const PAGE_MULTI := 1
 const PAGE_FILES := 2
@@ -146,6 +149,7 @@ func _ready() -> void:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 44)
 	title_row.add_child(title)
+	_hero.append(title_row)
 
 	var subtitle := Label.new()
 	subtitle.text = "Turn-based tactics"
@@ -153,8 +157,11 @@ func _ready() -> void:
 	subtitle.add_theme_font_size_override("font_size", 16)
 	subtitle.modulate = Color(0.7, 0.72, 0.78)
 	vbox.add_child(subtitle)
+	_hero.append(subtitle)
 
-	vbox.add_child(HSeparator.new())
+	var hero_sep := HSeparator.new()
+	vbox.add_child(hero_sep)
+	_hero.append(hero_sep)
 
 	# ОДИН список кнопок, а не полоса вкладок плюс россыпь по углам. Раньше «New Game» и
 	# «Map Editor» лежали на вкладке, мультиплеер и файлы — на соседних, а настройки с
@@ -197,33 +204,44 @@ func _build_home_page() -> Control:
 	return page
 
 func _show_multiplayer() -> void:
-	_pages.current_tab = PAGE_MULTI
+	_show_page(PAGE_MULTI)
 
 func _show_files() -> void:
-	_pages.current_tab = PAGE_FILES
+	_show_page(PAGE_FILES)
+
+func _show_page(i: int) -> void:
+	_pages.current_tab = i
+	for c in _hero:
+		c.visible = i == PAGE_HOME
 
 func _show_settings() -> void:
 	SettingsWindow.open(self)
 
 func _show_home() -> void:
-	_pages.current_tab = PAGE_HOME
+	_show_page(PAGE_HOME)
 
 ## Страница второго уровня: её содержимое и возврат в меню. Без «Back» единственной
 ## дорогой назад осталась бы полоса вкладок, которой здесь больше нет.
 func _page_with_back(content: Control, title: String) -> Control:
 	var page := VBoxContainer.new()
 	page.name = title
-	page.add_theme_constant_override("separation", 10)
-	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	page.add_child(content)
+	page.add_theme_constant_override("separation", 12)
+	# «Back» и название страницы — сверху: так возврат виден всегда, а не после прокрутки.
 	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	row.add_theme_constant_override("separation", 12)
 	var back := Button.new()
 	back.text = "< Back"
-	back.custom_minimum_size = Vector2(110, 32)
+	back.custom_minimum_size = Vector2(96, 30)
 	back.pressed.connect(_show_home)
 	row.add_child(back)
+	var head := Label.new()
+	head.text = title
+	head.add_theme_font_size_override("font_size", 20)
+	head.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(head)
 	page.add_child(row)
+	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	page.add_child(content)
 	return page
 
 # --- Вкладка сохранений и повторов (M12, items 42 и 53) ---
@@ -242,21 +260,19 @@ func _build_files_tab() -> Control:
 	hint.modulate = Color(0.72, 0.74, 0.8)
 	page.add_child(hint)
 
-	var games_label := Label.new()
-	games_label.text = "Saved games"
-	page.add_child(games_label)
+	var games := SteamChrome.group_box("Saved games")
+	page.add_child(games)
 	_game_list = ItemList.new()
-	_game_list.custom_minimum_size = Vector2(0, 110)
+	_game_list.custom_minimum_size = Vector2(0, 96)
 	_game_list.item_activated.connect(_on_game_activated)
-	page.add_child(_game_list)
+	games.body.add_child(_game_list)
 
-	var replays_label := Label.new()
-	replays_label.text = "Replays"
-	page.add_child(replays_label)
+	var replays := SteamChrome.group_box("Replays")
+	page.add_child(replays)
 	_replay_list = ItemList.new()
-	_replay_list.custom_minimum_size = Vector2(0, 110)
+	_replay_list.custom_minimum_size = Vector2(0, 96)
 	_replay_list.item_activated.connect(_on_replay_activated)
-	page.add_child(_replay_list)
+	replays.body.add_child(_replay_list)
 
 	_refresh_files()
 	return page
@@ -327,26 +343,38 @@ func _build_multi_tab() -> Control:
 	hint.modulate = Color(0.72, 0.74, 0.8)
 	page.add_child(hint)
 
+	var direct := SteamChrome.group_box("Direct connection")
+	page.add_child(direct)
+	var ip_row := HBoxContainer.new()
+	ip_row.add_theme_constant_override("separation", 10)
+	direct.body.add_child(ip_row)
+	var ip_lbl := Label.new()
+	ip_lbl.text = "Host IP"
+	ip_lbl.add_theme_color_override("font_color", Color("#b0b0b0"))
+	ip_row.add_child(ip_lbl)
 	_mp_ip = LineEdit.new()
 	_mp_ip.placeholder_text = "Host IP"
 	_mp_ip.text = "127.0.0.1"
-	page.add_child(_mp_ip)
-
+	_mp_ip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ip_row.add_child(_mp_ip)
+	var btn_row := HBoxContainer.new()
+	btn_row.add_theme_constant_override("separation", 10)
+	direct.body.add_child(btn_row)
 	_mp_host_btn = _menu_button("Host Game", _host_game)
-	page.add_child(_mp_host_btn)
+	_mp_host_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn_row.add_child(_mp_host_btn)
 	_mp_join_btn = _menu_button("Join Game", _join_game)
-	page.add_child(_mp_join_btn)
+	_mp_join_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn_row.add_child(_mp_join_btn)
 
 	# Автопоиск серверов в локальной сети (item 38). Хост объявляет о себе, а этот
 	# список наполняется найденными хостами; клик по строке подключается напрямую.
-	var lan_lbl := Label.new()
-	lan_lbl.text = "LAN games:"
-	lan_lbl.add_theme_font_size_override("font_size", 12)
-	page.add_child(lan_lbl)
+	var lan_box := SteamChrome.group_box("LAN games")
+	page.add_child(lan_box)
 	_lan_list = ItemList.new()
-	_lan_list.custom_minimum_size = Vector2(0, 90)
+	_lan_list.custom_minimum_size = Vector2(0, 80)
 	_lan_list.item_activated.connect(_on_lan_pick)
-	page.add_child(_lan_list)
+	lan_box.body.add_child(_lan_list)
 	_lan = LanDiscovery.new()
 	get_tree().root.add_child.call_deferred(_lan)
 	_lan.servers_changed.connect(_on_lan_servers)
@@ -358,8 +386,8 @@ func _build_multi_tab() -> Control:
 
 	_mp_status = Label.new()
 	_mp_status.text = "Offline"
-	_mp_status.add_theme_font_size_override("font_size", 13)
 	_mp_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	Ui.style_status(_mp_status)   # строка состояния набора — акцентом в утопленной рамке
 	page.add_child(_mp_status)
 	return page
 

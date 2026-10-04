@@ -64,6 +64,8 @@ var _budget_label: Label
 var _phase_label: Label
 var _status: Label
 var _palette: VBoxContainer
+## Техника — своей рамкой под пехотой (аудит UI: разделы — групповые окошки набора).
+var _veh_palette: VBoxContainer
 var _palette_buttons: Dictionary = {}
 var _flow_btn: Button
 
@@ -714,6 +716,9 @@ func _neutral_at(coord: Vector2i) -> int:
 
 # --- Ввод ---
 func _process(delta: float) -> void:
+	# Строка состояния — рамкой набора; пустая рамка без сообщения ни к чему.
+	if _status != null:
+		_status.visible = _status.text != ""
 	var dir := Vector2.ZERO
 	if Input.is_key_pressed(KEY_W): dir.y += 1
 	if Input.is_key_pressed(KEY_S): dir.y -= 1
@@ -1448,72 +1453,73 @@ func _build_ui() -> void:
 	_panel.add_child(frame)
 	frame.add_child(SteamChrome.header_bar("Deploy Your Force"))
 
+	# Шапка: чья закупка и сколько очков — всегда на виду.
+	var top := VBoxContainer.new()
+	top.add_theme_constant_override("separation", 2)
+	frame.add_child(SteamChrome.pad(top, 10, 8))
+	_phase_label = Label.new()
+	_phase_label.add_theme_font_size_override("font_size", 16)
+	top.add_child(_phase_label)
+	_budget_label = Label.new()
+	_budget_label.add_theme_font_size_override("font_size", 14)
+	top.add_child(_budget_label)
+
+	# Середина прокручивается: разделы — групповые окошки набора (аудит UI), а главная
+	# кнопка (Ready / Start Battle) живёт ниже, вне прокрутки, и не уезжает за край.
 	var scroll := ScrollContainer.new()
 	scroll.custom_minimum_size = Vector2(300, 0)
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	var scroll_pad := SteamChrome.pad(scroll, 8, 8)
+	var scroll_pad := SteamChrome.pad(scroll, 8, 4)
 	scroll_pad.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	frame.add_child(scroll_pad)
 	frame.size_flags_vertical = Control.SIZE_EXPAND_FILL
 
 	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 6)
+	vbox.add_theme_constant_override("separation", 10)
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(vbox)
 
-	_phase_label = Label.new()
-	_phase_label.add_theme_font_size_override("font_size", 16)
-	vbox.add_child(_phase_label)
-
-	_budget_label = Label.new()
-	_budget_label.add_theme_font_size_override("font_size", 15)
-	vbox.add_child(_budget_label)
-
-	vbox.add_child(HSeparator.new())
-
-	# Инициатива видна уже на расстановке (item 44). Раньше здесь шёл список сторон по
-	# номерам слотов под заголовком «Initiative» — а бой бросал свой порядок, и показанный
-	# почти никогда с ним не совпадал. Теперь это тот же жребий (TurnManager.roll_order)
+	# Инициатива видна уже на расстановке (item 44): тот же жребий (TurnManager.roll_order)
 	# от того же зерна, что получит бой.
-	var init_title := Label.new()
-	init_title.text = "Initiative"
-	init_title.add_theme_font_size_override("font_size", 13)
-	vbox.add_child(init_title)
+	var init_group := SteamChrome.group_box_compact("Initiative")
+	vbox.add_child(init_group)
 	_init_box = VBoxContainer.new()
-	vbox.add_child(_init_box)
+	init_group.body.add_child(_init_box)
 	_refresh_initiative()
 
-	vbox.add_child(HSeparator.new())
-
+	var units_group := SteamChrome.group_box_compact("Infantry")
+	vbox.add_child(units_group)
 	var hint := Label.new()
-	hint.text = "Pick a unit, then click/drag (Point) or drag a Line/Rect/Circle, or Full to fill your zone. Click a deployed unit to refund. Hover a tank and press R (Q/E) to rotate it for free. WASD / drag to pan, wheel to zoom."
+	hint.text = "Pick a unit, then click or drag in your zone. Click a deployed unit to refund it. Hover a tank and press R (Q/E) to turn it. WASD or right-drag pans, the wheel zooms."
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint.custom_minimum_size = Vector2(290, 0)
-	hint.modulate = Color(0.75, 0.78, 0.85)
-	vbox.add_child(hint)
-
+	hint.add_theme_font_size_override("font_size", 11)
+	hint.add_theme_color_override("font_color", Color("#8a8a8a"))
+	units_group.body.add_child(hint)
 	_palette = VBoxContainer.new()
 	_palette.add_theme_constant_override("separation", 3)
-	vbox.add_child(_palette)
+	units_group.body.add_child(_palette)
+	var veh_group := SteamChrome.group_box_compact("Vehicles")
+	vbox.add_child(veh_group)
+	_veh_palette = VBoxContainer.new()
+	_veh_palette.add_theme_constant_override("separation", 3)
+	veh_group.body.add_child(_veh_palette)
 	_populate_palette()
 
-	vbox.add_child(HSeparator.new())
-
 	# Инструменты-формы (item 12): точка/линия/прямоугольник/круг/заливка зоны.
-	var tools_lbl := Label.new()
-	tools_lbl.text = "Brush"
-	tools_lbl.add_theme_font_size_override("font_size", 13)
-	vbox.add_child(tools_lbl)
+	var brush_group := SteamChrome.group_box_compact("Brush")
+	vbox.add_child(brush_group)
 	var tools_row := HBoxContainer.new()
 	tools_row.add_theme_constant_override("separation", 4)
-	vbox.add_child(tools_row)
+	brush_group.body.add_child(tools_row)
 	for pair in [[PTool.POINT, "Point"], [PTool.LINE, "Line"], [PTool.RECT, "Rect"],
 			[PTool.CIRCLE, "Circle"], [PTool.FILL, "Full"]]:
 		var tb := Button.new()
 		tb.text = String(pair[1])
 		tb.toggle_mode = true
 		tb.button_pressed = _ptool == int(pair[0])
+		tb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		tb.add_theme_font_size_override("font_size", 12)
 		var pt: int = int(pair[0])
 		tb.pressed.connect(func() -> void: _select_tool(pt))
 		tools_row.add_child(tb)
@@ -1523,26 +1529,25 @@ func _build_ui() -> void:
 	_eraser_btn.text = "Eraser  (remove units)"
 	_eraser_btn.toggle_mode = true
 	_eraser_btn.toggled.connect(_toggle_eraser)
-	vbox.add_child(_eraser_btn)
+	brush_group.body.add_child(_eraser_btn)
 
-	vbox.add_child(HSeparator.new())
-
+	# Низ окна — вне прокрутки: строка состояния, главная кнопка и выход.
+	var bottom := VBoxContainer.new()
+	bottom.add_theme_constant_override("separation", 6)
+	frame.add_child(SteamChrome.pad(bottom, 10, 10))
+	_status = Label.new()
+	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	Ui.style_status(_status)
+	bottom.add_child(_status)
 	_flow_btn = Button.new()
-	_flow_btn.custom_minimum_size = Vector2(0, 42)
+	_flow_btn.custom_minimum_size = Vector2(0, 40)
 	_flow_btn.pressed.connect(_on_net_flow if networked() else _on_flow)
-	vbox.add_child(_flow_btn)
-
+	bottom.add_child(_flow_btn)
 	var back_btn := Button.new()
 	# В сетевой партии «назад» рвёт связь, поэтому ведём в меню, а не в Setup (#93).
 	back_btn.text = "Leave Match" if networked() else "Back to Lobby"
 	back_btn.pressed.connect(_on_back)
-	vbox.add_child(back_btn)
-
-	_status = Label.new()
-	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_status.custom_minimum_size = Vector2(290, 0)
-	_status.modulate = Color(1, 0.85, 0.4)
-	vbox.add_child(_status)
+	bottom.add_child(back_btn)
 
 	# Чат закупки (item 14): окошко внизу слева, как в бою. В любой партии (batch
 	# group-zones), не только в сетевой: в одиночной пишет сторона, что сейчас закупается,
@@ -1575,8 +1580,9 @@ func _build_ui() -> void:
 ## разрешённый состав, поэтому при передаче хода следующему список пересобирается.
 func _populate_palette() -> void:
 	_palette_buttons = {}
-	for c in _palette.get_children():
-		c.queue_free()
+	for box: VBoxContainer in [_palette, _veh_palette]:
+		for c in box.get_children():
+			c.queue_free()
 	for id in PURCHASABLE:
 		if not _unit_allowed_for_active(id):
 			continue
@@ -1584,21 +1590,17 @@ func _populate_palette() -> void:
 		if s == null:
 			continue
 		_add_palette_button(id, "%s  -  %d pts" % [s.display_name, s.cost])
-	var mach_lbl := Label.new()
-	mach_lbl.text = "— Machinery —"
-	mach_lbl.modulate = Color(0.75, 0.78, 0.85)
-	_palette.add_child(mach_lbl)
 	for vid in PURCHASABLE_VEHICLES:
 		if not VehicleDB.is_vehicle(vid) or not _unit_allowed_for_active(vid):
 			continue
-		_add_palette_button(vid, "%s  -  %d pts" % [_display_name(vid), _cost(vid)])
+		_add_palette_button(vid, "%s  -  %d pts" % [_display_name(vid), _cost(vid)], true)
 
-func _add_palette_button(id: String, label: String) -> void:
+func _add_palette_button(id: String, label: String, vehicle: bool = false) -> void:
 	var btn := Button.new()
 	btn.text = label
 	btn.toggle_mode = true
 	btn.pressed.connect(_on_pick_unit.bind(id))
-	_palette.add_child(btn)
+	(_veh_palette if vehicle else _palette).add_child(btn)
 	_palette_buttons[id] = btn
 
 func _on_pick_unit(id: String) -> void:

@@ -296,7 +296,7 @@ const HUD_MIN_SIZE := Vector2(230, 170)
 const HUD_START_SIZE := Vector2(330, 430)
 ## Ширина правого меню (item 6): панель приклеена к правому краю, тянется только по
 ## горизонтали в этих пределах.
-var _hud_width: float = 250.0
+var _hud_width: float = 264.0
 const HUD_WIDTH_MIN := 180.0
 const HUD_WIDTH_MAX := 460.0
 ## Толщина кисти рисования (пиксели линии) и радиус ластика (в клетках), item 6.
@@ -5894,7 +5894,9 @@ func _build_ui() -> void:
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 5)
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	body.add_child(SteamChrome.pad(vbox, 8, 6))
+	var vpad := SteamChrome.pad(vbox, 8, 6)
+	vpad.size_flags_horizontal = Control.SIZE_EXPAND_FILL   # иначе разделы ужимались до своего минимума
+	body.add_child(vpad)
 
 	# Текущий ход + номер раунда, и отдельной строкой — кто ходит до и после игрока.
 	_status_label = Label.new()
@@ -5911,52 +5913,46 @@ func _build_ui() -> void:
 	_clock_label.modulate = Color(0.78, 0.81, 0.88)
 	vbox.add_child(_clock_label)
 
-	vbox.add_child(_hsep())
+	# Разделы — групповые окошки набора (аудит UI, editor-rework): «ход», «партия»,
+	# «инструменты», «рисование». Состав кнопок тот же, что задан в item 6.
+	var turn_box := _hud_group(vbox, "Turn")
 	var end_btn := Button.new()
 	end_btn.text = "End Turn"
 	end_btn.custom_minimum_size = Vector2(0, 32)
 	end_btn.pressed.connect(_on_end_turn_pressed)
-	vbox.add_child(end_btn)
+	turn_box.add_child(end_btn)
 	_undo_btn = _compact_button("Undo", _on_undo_pressed)
 	_undo_btn.disabled = true
 	_redo_btn = _compact_button("Redo", _on_redo_pressed)
 	_redo_btn.disabled = true
-	vbox.add_child(_button_row([_undo_btn, _redo_btn]))
+	turn_box.add_child(_button_row([_undo_btn, _redo_btn]))
 	# Сохранение вернулось в правое меню (batch 13 #3): Ctrl+S остаётся, но кнопка
 	# нужна тем, кто горячих клавиш не знает. В просмотре повтора сохранять нечего.
-	_save_btn = _compact_button("Save Game", _save_game)
-	_save_btn.visible = replay == null
-	# «Возврат в меню» — единая кнопка: в сети уводит из партии, в одиночке — в главное меню.
-	vbox.add_child(_button_row([_save_btn, _compact_button("Return to Menu", _to_lobby)]))
-	# Настройки (items 17/23): размер интерфейса и акцент — не выходя из боя.
-	vbox.add_child(_compact_button("Settings", func() -> void: SettingsWindow.open(self)))
 	# Пауза боя машин (item 4). Кнопка живёт рядом с управлением ходом и показывается
 	# только когда обе стороны ведёт ИИ — в остальных случаях останавливать нечего.
 	_pause_btn = _compact_button("Pause", _toggle_pause)
-	vbox.add_child(_pause_btn)
+	turn_box.add_child(_pause_btn)
 	_refresh_pause_button()
 
-	vbox.add_child(_hsep())
+	var match_box := _hud_group(vbox, "Match")
+	_save_btn = _compact_button("Save Game", _save_game)
+	_save_btn.visible = replay == null
+	# «Возврат в меню» — единая кнопка: в сети уводит из партии, в одиночке — в главное меню.
+	match_box.add_child(_button_row([_save_btn, _compact_button("Return to Menu", _to_lobby)]))
+	# Настройки (items 17/23): размер интерфейса и акцент — не выходя из боя.
+	match_box.add_child(_compact_button("Settings", func() -> void: SettingsWindow.open(self)))
+
+	var tools_box := _hud_group(vbox, "Tools")
 	_multi_btn = CheckBox.new()
 	_multi_btn.text = "Multi-Select"
 	_multi_btn.add_theme_font_size_override("font_size", 12)
 	_multi_btn.toggled.connect(_on_multi_toggled)
-	vbox.add_child(_multi_btn)
-
-	vbox.add_child(_hsep())
-	# Рисование и стирание (item 6/51) с размерами кистей.
-	_draw_btn = _compact_button("Draw", _enter_draw)
-	_erase_btn = _compact_button("Erase", _enter_erase)
-	vbox.add_child(_button_row([_draw_btn, _erase_btn]))
-	var undo_draw := _compact_button("Undo drawing", _undo_my_drawing)
-	undo_draw.tooltip_text = "Take back your last stroke or erase (Ctrl+Z while drawing)."
-	vbox.add_child(undo_draw)
-	# Линейка (item 11) — рядом с рисованием: это такой же зрительский инструмент,
-	# ничего не меняющий на доске.
+	tools_box.add_child(_multi_btn)
+	# Линейка (item 11) — зрительский инструмент, ничего не меняющий на доске.
 	_ruler_btn = _compact_button("Ruler", _enter_ruler)
-	vbox.add_child(_ruler_btn)
+	tools_box.add_child(_ruler_btn)
 	# Камера к своим (item 10): «Me» всегда, а в командной игре — и к каждому союзнику.
-	vbox.add_child(_camera_row())
+	tools_box.add_child(_camera_row())
 	# Темп ИИ (item 5): видно, если в партии есть ИИ, а менять может хост (или игрок в
 	# одиночной партии) — гостям скорость приходит от хоста.
 	if state != null and state.roster != null and state.roster.slots.any(
@@ -5978,35 +5974,43 @@ func _build_ui() -> void:
 		_ai_speed_opt.item_selected.connect(func(i: int) -> void:
 			_set_ai_speed(GameConfig.AI_SPEEDS[i], true))
 		sp_row.add_child(_ai_speed_opt)
-		vbox.add_child(sp_row)
+		match_box.add_child(sp_row)
+	# Рисование и стирание (item 6/51) с размерами кистей.
+	var draw_box := _hud_group(vbox, "Drawing")
+	_draw_btn = _compact_button("Draw", _enter_draw)
+	_erase_btn = _compact_button("Erase", _enter_erase)
+	draw_box.add_child(_button_row([_draw_btn, _erase_btn]))
+	var undo_draw := _compact_button("Undo drawing", _undo_my_drawing)
+	undo_draw.tooltip_text = "Take back your last stroke or erase (Ctrl+Z while drawing)."
+	draw_box.add_child(undo_draw)
 	var draw_lbl := Label.new()
 	draw_lbl.text = "Draw brush"
 	draw_lbl.add_theme_font_size_override("font_size", 11)
-	vbox.add_child(draw_lbl)
+	draw_box.add_child(draw_lbl)
 	var draw_slider := HSlider.new()
 	draw_slider.min_value = 1
 	draw_slider.max_value = 12
 	draw_slider.step = 1
 	draw_slider.value = _draw_brush
 	draw_slider.value_changed.connect(func(v: float) -> void: _draw_brush = int(v))
-	vbox.add_child(_brush_row(draw_slider))
+	draw_box.add_child(_brush_row(draw_slider))
 	var erase_lbl := Label.new()
 	erase_lbl.text = "Erase brush"
 	erase_lbl.add_theme_font_size_override("font_size", 11)
-	vbox.add_child(erase_lbl)
+	draw_box.add_child(erase_lbl)
 	var erase_slider := HSlider.new()
 	erase_slider.min_value = 0
 	erase_slider.max_value = 8
 	erase_slider.step = 1
 	erase_slider.value = _erase_brush
 	erase_slider.value_changed.connect(func(v: float) -> void: _erase_brush = int(v))
-	vbox.add_child(_brush_row(erase_slider))
+	draw_box.add_child(_brush_row(erase_slider))
 	# Кому видны штрихи и какие прятать (item 51, batch 17 item 10) — простые флажки.
-	vbox.add_child(_draw_toggle("Share with team", func(on: bool) -> void: _draw_scope_team = on))
-	vbox.add_child(_draw_toggle("Share with everyone", func(on: bool) -> void: _draw_scope_all = on))
-	vbox.add_child(_draw_toggle("Hide others' drawings", func(on: bool) -> void: _hide_others_draw = on))
-	vbox.add_child(_draw_toggle("Hide my drawings", func(on: bool) -> void: _hide_my_draw = on))
-	vbox.add_child(_draw_toggle("Hide all drawings", func(on: bool) -> void: _hide_all_draw = on))
+	draw_box.add_child(_draw_toggle("Share with team", func(on: bool) -> void: _draw_scope_team = on))
+	draw_box.add_child(_draw_toggle("Share with everyone", func(on: bool) -> void: _draw_scope_all = on))
+	draw_box.add_child(_draw_toggle("Hide others' drawings", func(on: bool) -> void: _hide_others_draw = on))
+	draw_box.add_child(_draw_toggle("Hide my drawings", func(on: bool) -> void: _hide_my_draw = on))
+	draw_box.add_child(_draw_toggle("Hide all drawings", func(on: bool) -> void: _hide_all_draw = on))
 
 	# Убрано из правого меню по item 6 — обновляющие функции этих ссылок уже
 	# null-безопасны. Журнал боя переехал в свою панель (снизу слева), чат остаётся
@@ -6043,6 +6047,13 @@ func _build_ui() -> void:
 	_build_chat_panel()
 	if replay != null:
 		_build_replay_bar()
+
+## Раздел правого меню — групповое окошко набора с подписью на рамке; возвращает тело.
+func _hud_group(parent: Container, title: String) -> VBoxContainer:
+	var g := SteamChrome.group_box_compact(title)
+	parent.add_child(g)
+	g.body.add_theme_constant_override("separation", 5)
+	return g.body
 
 ## Журнал боя (item 6) — своя панель внизу слева, а не строка в правом меню. Тот же
 ## _log_label, что и раньше, поэтому publish_result/_on_log_line работают без правок.
