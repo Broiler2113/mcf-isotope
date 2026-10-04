@@ -17,7 +17,7 @@ for script in tests/check_scripts.gd tests/run_codec.gd tests/run_headless.gd \
               tests/run_mines_and_corpses.gd tests/run_batch13.gd \
               tests/run_shuttle.gd tests/run_borg.gd tests/run_batch17.gd \
               tests/run_legal_intents.gd tests/run_intent_budget.gd tests/run_learned_controller.gd \
-              tests/run_learned_town.gd tests/run_mapgen.gd tests/run_play_vs_learned.gd tests/run_fog.gd \
+              tests/run_learned_town.gd tests/run_mapgen.gd tests/run_play_vs_learned.gd tests/run_fog.gd tests/run_fire.gd \
               tests/run_incremental.gd tests/run_fog_viewer.gd tests/run_group_move.gd tests/run_team_session.gd \
               tests/run_ui_drones.gd tests/run_rl_tactics.gd tests/run_match_analysis.gd tests/run_soil_rulers.gd tests/run_batch_zones.gd tests/run_borg_corpses.gd tests/run_mp_perf.gd; do
   echo "=== $script ==="

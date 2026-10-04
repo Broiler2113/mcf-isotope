@@ -216,6 +216,8 @@ func _apply(events: Array, lanes_only: bool) -> void:
 				_blood(ev)
 			"steps":
 				_steps(ev)
+			"burn":
+				_burn(ev)
 			"laser":
 				_laser(ev)
 			"tracer":
@@ -374,6 +376,33 @@ func _blood(ev: Dictionary) -> void:
 			var rng := _rng_for("gib", at, i, _seq)
 			_launch("gib", at, away, rng, 0.5, 2.2, SHARD_FLIGHT_SEC * 1.4, PI)
 	_trim()
+
+## Огонь съел клетку: с неё исчезает ВСЯ осевшая косметика — кровь, ошмётки, гильзы,
+## осколки, отпечатки. Пламя прошло по земле, и под ним не остаётся ни лужи, ни латуни.
+## Тела и машины сюда не относятся: это не косметика, и огонь их по правилам не трогает
+## (см. advance_fire) — здесь их попросту нет.
+##
+## Копоть на полу (floor_damage) ОСТАЁТСЯ: это и есть след пожара, стирать его нечем.
+func _burn(ev: Dictionary) -> void:
+	var hit := {}
+	for c: Vector2i in ev.get("cells", []):
+		hit[c] = true
+	if hit.is_empty():
+		return
+	props = _swept(props, hit)
+	gore = _swept(gore, hit)
+	prints = _swept(prints, hit)
+	for c: Vector2i in hit:
+		pool_cells.erase(c)
+
+static func _swept(list: Array, hit: Dictionary) -> Array:
+	var kept: Array = []
+	for p: Dictionary in list:
+		var pos: Vector2 = p["pos"]
+		if hit.has(Vector2i(floori(pos.x), floori(pos.y))):
+			continue
+		kept.append(p)
+	return kept
 
 func _space(c: Vector2i) -> bool:
 	return space_at.is_valid() and bool(space_at.call(c))
