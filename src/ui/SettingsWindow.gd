@@ -92,6 +92,15 @@ func _build() -> void:
 	hint.add_theme_color_override("font_color", Color("#8a8a8a"))
 	size_box.body.add_child(hint)
 
+	# --- Экран ---
+	var disp_box := SteamChrome.group_box("Display")
+	page.add_child(disp_box)
+	var fs := CheckBox.new()
+	fs.text = "Fullscreen"
+	fs.button_pressed = Ui.fullscreen
+	fs.toggled.connect(Ui.set_fullscreen)
+	disp_box.body.add_child(fs)
+
 	# --- Акцент (item 23) ---
 	var acc_box := SteamChrome.group_box("Accent colour")
 	page.add_child(acc_box)
@@ -155,6 +164,7 @@ func _build() -> void:
 	reset.pressed.connect(func() -> void:
 		Ui.set_ui_scale(1.0)
 		Ui.set_accent("green")
+		Ui.set_fullscreen(false)
 		_build.call_deferred())
 	bottom.add_child(reset)
 	var close := Button.new()

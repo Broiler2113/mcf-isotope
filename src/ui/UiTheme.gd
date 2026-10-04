@@ -71,6 +71,7 @@ const SETTINGS_PATH := "user://settings.cfg"
 var theme: Theme
 var accent_name := "green"
 var ui_scale := 1.0
+var fullscreen := false
 var _pal: Dictionary = PALETTES["green"]
 
 var _accent := ACCENT
@@ -82,6 +83,8 @@ func _ready() -> void:
 		return
 	_load_settings()
 	get_tree().root.content_scale_factor = ui_scale
+	if fullscreen:
+		_apply_fullscreen()
 	rebuild_theme()
 	# Окна поверх игры (подтверждения, итог боя, оверлеи) живут на CanvasLayer, а тема по
 	# цепочке владельцев за его границу не проходит. Раньше каждый такой вызов должен был
@@ -102,12 +105,14 @@ func _load_settings() -> void:
 	if PALETTES.has(a):
 		_set_palette(a)
 	ui_scale = clampf(float(cf.get_value("ui", "scale", 1.0)), UI_SCALE_MIN, UI_SCALE_MAX)
+	fullscreen = bool(cf.get_value("display", "fullscreen", false))
 
 func _save_settings() -> void:
 	var cf := ConfigFile.new()
 	cf.load(SETTINGS_PATH)
 	cf.set_value("ui", "accent", accent_name)
 	cf.set_value("ui", "scale", ui_scale)
+	cf.set_value("display", "fullscreen", fullscreen)
 	cf.save(SETTINGS_PATH)
 
 func _set_palette(name: String) -> void:
@@ -130,6 +135,19 @@ func set_ui_scale(s: float) -> void:
 	_save_settings()
 	if DisplayServer.get_name() != "headless":
 		get_tree().root.content_scale_factor = ui_scale
+
+## Полный экран (настройки → Display). Выключенный — обратно в развёрнутое окно, как в
+## project.godot (window/size/mode=2), а не в маленькое 1280×720.
+func set_fullscreen(on: bool) -> void:
+	fullscreen = on
+	_save_settings()
+	_apply_fullscreen()
+
+func _apply_fullscreen() -> void:
+	if DisplayServer.get_name() == "headless":
+		return
+	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN if fullscreen
+			else DisplayServer.WINDOW_MODE_MAXIMIZED)
 
 func palette() -> Dictionary:
 	return _pal

@@ -66,11 +66,13 @@ const BLOODY_STEPS := 6
 ## вместе с щедростью осколков и брызг (issue 7): при 500 гильзы и кровь одного
 ## боестолкновения выдавливали следы предыдущего прямо на глазах.
 ## Отрисовка от этого не страдает: частицы за краем экрана отсекаются в _draw_fx_one.
-const PROPS_CAP := 1500
+## 8000 (playtest-20): игрок хочет, чтобы гильзы и осколки ОСТАВАЛИСЬ — при 1500 сетевая
+## партия на четверых выдавливала первые перестрелки ещё до середины боя.
+const PROPS_CAP := 8000
 
 ## Потолок отрезков лазерного следа. Считается в ОТРЕЗКАХ, а не в выстрелах: над
 ## космосом след не кладётся, поэтому один луч вдоль пробоины даёт несколько кусков.
-const LASER_CAP := 200
+const LASER_CAP := 2000
 ## Шаг проверки «над чем идёт луч» в долях клетки. Мельче клетки, иначе граница куска
 ## встала бы по её середине и след заезжал бы в космос на пол-клетки.
 const LASER_STEP := 0.25
@@ -112,6 +114,10 @@ var bloody: Dictionary = {}
 var flying: Array = []
 ## Отрезки лазерного следа (item 11): [{from: Vector2, to: Vector2}] в клетках.
 var laser_lines: Array = []
+## Следы гусениц танка (playtest-20): [{from, to}] в клетках, кусками не длиннее клетки —
+## туман прячет их поклеточно, как и прочие следы, и чужой танк не выдаёт себя колеёй.
+var track_marks: Array = []
+const TRACKS_CAP := 6000
 ## Летящие пули-трассеры (item 16): [{from, to, t, dur}] в клетках. Живут доли секунды,
 ## по истечении исчезают. Не оседают — это мгновенный полёт снаряда от стрелка к цели.
 var tracers: Array = []
@@ -170,6 +176,7 @@ func clear() -> void:
 	bloody.clear()
 	flying.clear()
 	laser_lines.clear()
+	track_marks.clear()
 	tracers.clear()
 	lanes.clear()
 	_event_seq = 0
@@ -220,6 +227,8 @@ func _apply(events: Array, lanes_only: bool) -> void:
 				_burn(ev)
 			"laser":
 				_laser(ev)
+			"tracks":
+				_tracks(ev)
 			"tracer":
 				_tracer(ev)
 			"lane":
@@ -305,6 +314,38 @@ func _laser(ev: Dictionary) -> void:
 	# Не копим бесконечно — держим последние отрезки, как и осевшие частицы.
 	if laser_lines.size() > LASER_CAP:
 		laser_lines = laser_lines.slice(laser_lines.size() - LASER_CAP)
+
+## Две колеи по бортам танка от старого места до нового (playtest-20). Над космосом колеи
+## нет — там нечего продавить.
+func _tracks(ev: Dictionary) -> void:
+	var o: Array = ev.get("from", [])
+	var d: Array = ev.get("dir", [])
+	var sz: Array = ev.get("size", [])
+	var steps := int(ev.get("steps", 0))
+	if o.size() < 2 or d.size() < 2 or sz.size() < 2 or steps <= 0:
+		return
+	var step := Vector2(float(d[0]), float(d[1]))
+	if step == Vector2.ZERO:
+		return
+	var dir := step.normalized()
+	var perp := Vector2(-dir.y, dir.x)
+	var size := Vector2(float(sz[0]), float(sz[1]))
+	var c0 := Vector2(float(o[0]), float(o[1])) + size * 0.5
+	var c1 := c0 + step * steps
+	var half_w := (absf(perp.x) * size.x + absf(perp.y) * size.y) * 0.5 - 0.3
+	var half_l := (absf(dir.x) * size.x + absf(dir.y) * size.y) * 0.5 - 0.2
+	for side: float in [-1.0, 1.0]:
+		var a := c0 - dir * half_l + perp * half_w * side
+		var b := c1 + dir * half_l + perp * half_w * side
+		for run: Array in _ground_runs(a, b):
+			var ra: Vector2 = run[0]
+			var rb: Vector2 = run[1]
+			var n := maxi(1, ceili(ra.distance_to(rb)))
+			for i in n:
+				track_marks.append({"from": ra.lerp(rb, float(i) / n),
+						"to": ra.lerp(rb, float(i + 1) / n)})
+	if track_marks.size() > TRACKS_CAP:
+		track_marks = track_marks.slice(track_marks.size() - TRACKS_CAP)
 
 ## Куски отрезка a→b, идущие НАД ПОЛОМ, в виде [[начало, конец], …]. Космические клетки
 ## выбрасываются, соседние клетки с полом склеиваются в один кусок — ровная линия там, где
@@ -622,7 +663,19 @@ func to_dict() -> Dictionary:
 	var feet: Array = []
 	for id in bloody:
 		feet.append([int(id), int(bloody[id])])
-	return {"damage": damage, "props": settled, "prints": steps, "pools": pools, "bloody": feet}
+	# Следы лазера (playtest-20): без них снимок пересинхронизации стирал гостю все подпалины.
+	var lasers: Array = []
+	for seg: Dictionary in laser_lines:
+		var la: Vector2 = seg["from"]
+		var lb: Vector2 = seg["to"]
+		lasers.append([la.x, la.y, lb.x, lb.y])
+	var tracks: Array = []
+	for seg: Dictionary in track_marks:
+		var ta: Vector2 = seg["from"]
+		var tb: Vector2 = seg["to"]
+		tracks.append([ta.x, ta.y, tb.x, tb.y])
+	return {"damage": damage, "props": settled, "prints": steps, "pools": pools, "bloody": feet,
+			"lasers": lasers, "tracks": tracks}
 
 func from_dict(d: Dictionary) -> void:
 	clear()
@@ -651,3 +704,11 @@ func from_dict(d: Dictionary) -> void:
 	for e in d.get("bloody", []):
 		if e is Array and (e as Array).size() >= 2:
 			bloody[int(e[0])] = int(e[1])
+	for e in d.get("lasers", []):
+		if e is Array and (e as Array).size() >= 4:
+			laser_lines.append({"from": Vector2(float(e[0]), float(e[1])),
+					"to": Vector2(float(e[2]), float(e[3]))})
+	for e in d.get("tracks", []):
+		if e is Array and (e as Array).size() >= 4:
+			track_marks.append({"from": Vector2(float(e[0]), float(e[1])),
+					"to": Vector2(float(e[2]), float(e[3]))})

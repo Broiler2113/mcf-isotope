@@ -53,6 +53,7 @@ static func encode(state: GameState) -> Dictionary:
 		"combat_started": state.combat_started,
 		"env": state.env,
 		"fx_seq": state.fx_seq,
+		"kills": state.kills.duplicate(true),
 	}
 
 static func _encode_unit(u: UnitInstance) -> Dictionary:
@@ -72,6 +73,8 @@ static func _encode_unit(u: UnitInstance) -> Dictionary:
 		"mines": u.mine_credits, "corpses": u.carried_corpses,
 		"dragging": _xy(u.dragging),
 	}
+	if u.burnt:
+		rec["burnt"] = true
 	if u.action_state != null:
 		rec["action"] = {"target": u.action_state.target_id,
 				"shots": u.action_state.remaining_shots}
@@ -218,6 +221,7 @@ static func restore_into(gs: GameState, d: Dictionary) -> void:
 		"next_id": int(d.get("next_id", 0)),
 		"next_vehicle_id": int(d.get("next_vehicle_id", Vehicle.ID_BASE)),
 		"combat_started": bool(d.get("combat_started", false)),
+		"kills": _decode_kills(d.get("kills", {})),
 	}
 	# roster и revealed_mines в снимок НЕ кладём намеренно: restore() умеет только
 	# их изменяемую часть (кто выбит), а из файла приходит весь состав целиком.
@@ -226,6 +230,16 @@ static func restore_into(gs: GameState, d: Dictionary) -> void:
 	gs.revealed_mines = _decode_mines(d.get("mines", []))
 	gs.env = str(d.get("env", gs.env))
 	gs.fx_seq = int(d.get("fx_seq", gs.fx_seq))
+
+## Ключи JSON — строки, числа — дробные: обратно в {id: [убито, раздавлено]}.
+static func _decode_kills(raw: Variant) -> Dictionary:
+	var out := {}
+	if raw is Dictionary:
+		for k in raw:
+			var v: Variant = raw[k]
+			if v is Array and (v as Array).size() >= 2:
+				out[int(k)] = [int(v[0]), int(v[1])]
+	return out
 
 static func _decode_unit(raw: Dictionary) -> Dictionary:
 	var stats := load_stats(str(raw.get("stats", "")))
@@ -255,6 +269,7 @@ static func _decode_unit(raw: Dictionary) -> Dictionary:
 		"move_credit": int(raw.get("move_credit", 0)),
 		"mine_credits": int(raw.get("mines", 0)),
 		"carried_corpses": int(raw.get("corpses", 0)),
+		"burnt": bool(raw.get("burnt", false)),
 		"dragging": _vec(raw.get("dragging"), UnitInstance.NOT_DRAGGING),
 		"action_state": action,
 	}

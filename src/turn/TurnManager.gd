@@ -136,8 +136,10 @@ func order_names() -> String:
 	return " → ".join(parts)
 
 ## Слот, играющий по кругу в сторону dir (+1 после, −1 до) от данного, пропуская
-## выбитые (item 20). −1, если очередь пуста или в ней один слот.
-func neighbor_slot(slot: int, dir: int) -> int:
+## выбитые (item 20). −1, если очередь пуста или в ней один слот. С all_units пропускает
+## и слоты без живых — ровно как end_turn() (playtest-20: «Prev: Neutral XXIII» называл
+## давно вырезанную группу, которая на деле не ходит).
+func neighbor_slot(slot: int, dir: int, all_units: Array = []) -> int:
 	var idx := round_order.find(slot)
 	var n := round_order.size()
 	if idx < 0 or n <= 1:
@@ -147,7 +149,9 @@ func neighbor_slot(slot: int, dir: int) -> int:
 		i = (i + dir + n) % n
 		if i == idx:
 			return -1
-		if not is_eliminated(round_order[i]):
+		if all_units.is_empty() and not is_eliminated(round_order[i]):
+			return round_order[i]
+		if not all_units.is_empty() and _has_living(all_units, round_order[i]):
 			return round_order[i]
 	return -1
 
