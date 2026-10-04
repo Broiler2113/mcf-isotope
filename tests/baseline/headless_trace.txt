@@ -1577,13 +1577,13 @@ C 6,8 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
 C 17,8 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
 C 28,8 f=sandbags h=1.0 fire0 dur0 dirt0 corp0 weld0
 C 4,9 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 5,9 f=sandbags h=1.0 fire1 dur0 dirt0 corp0 weld0
+C 5,9 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
 C 6,9 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
 C 7,9 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
 C 8,9 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
 C 17,9 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
 C 28,9 f=sandbags h=1.0 fire0 dur0 dirt0 corp0 weld0
-C 5,10 f=sandbags h=1.0 fire1 dur0 dirt0 corp0 weld0
+C 5,10 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
 C 6,10 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
 C 7,10 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
 C 8,10 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
