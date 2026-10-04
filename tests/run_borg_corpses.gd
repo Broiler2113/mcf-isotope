@@ -166,6 +166,33 @@ func _initialize() -> void:
 	fx.apply([{"fx": "blood", "at": Vector2i(9, 2), "from": Vector2i(12, 2)}])
 	ck(fx.props.filter(func(p): return p["kind"] == "blood_pool").size() > 0, "on the floor blood still pools")
 
+	# --- nor does the laser scorch space, and nor does rubble settle there ---
+	# Same reason as the blood above: there is no floor in space to take the mark. The
+	# screens already drew such a cell as space, but the record still rode to the guest
+	# and into the save, and a shot across a breach drew a black line over the void.
+	fx.apply([{"fx": "debris", "at": Vector2i(2, 2),
+			"cells": [Vector2i(2, 2), Vector2i(3, 2), Vector2i(6, 2)]}])
+	ck(not fx.floor_damage.has(Vector2i(2, 2)) and not fx.floor_damage.has(Vector2i(3, 2))
+			and fx.floor_damage.has(Vector2i(6, 2)),
+			"an explosion scars the floor and leaves the space beside it clean (%s)"
+			% str(fx.floor_damage.keys()))
+	fx.laser_lines.clear()
+	fx.apply([{"fx": "laser", "from": [0, 2], "to": [9, 2]}])
+	var trail_from: Vector2 = fx.laser_lines[0]["from"] if not fx.laser_lines.is_empty() else Vector2.ZERO
+	ck(fx.laser_lines.size() == 1 and absf(trail_from.x - 5.0) < 0.3,
+			"the trail of a shot across a breach starts where the floor does (%s)"
+			% str(fx.laser_lines))
+	fx.laser_lines.clear()
+	fx.apply([{"fx": "laser", "from": [0, 5], "to": [3, 5]}])
+	ck(fx.laser_lines.is_empty(), "a shot wholly across space leaves no trail at all")
+	fx.laser_lines.clear()
+	fx.apply([{"fx": "laser", "from": [6, 7], "to": [9, 7]}])
+	ck(fx.laser_lines.size() == 1, "and over plain floor it stays ONE unbroken line")
+	# Without a scene nothing knows where space is, and the trail must behave as before.
+	var bare := FxDecals.new()
+	bare.apply([{"fx": "laser", "from": [0, 0], "to": [4, 0]}])
+	ck(bare.laser_lines.size() == 1, "with no space hook wired the trail is unchanged")
+
 	# --- a vehicle move animates and stays undoable ---
 	f = field(30, 10, [[Vector2i(2, 4), "light_infantry", 0], [Vector2i(2, 5), "light_infantry", 0],
 			[Vector2i(2, 6), "light_infantry", 0], [Vector2i(3, 4), "tank", 0],
