@@ -16,6 +16,17 @@ var units: Dictionary = {}  # id -> UnitInstance
 var _next_id: int = 0
 
 var vehicles: Dictionary = {}  # id -> Vehicle
+## Списки для all_units()/all_vehicles() (perf pass #1). values() собирал новый массив на
+## КАЖДЫЙ вызов, а зовут их десятки раз за действие. Теперь список один и пересобирается
+## лениво — после правки словаря через spawn_*/remove_*/restore(); размер сверяется ещё и
+## на случай, если словарь поправят в обход них. Порядок прежний — порядок вставки, тот
+## же, что отдаёт values(). Список только для чтения: правка вызывающим дала бы ошибку, а
+## не испортила бы его всем. При правке словаря старый список не меняется, а заменяется
+## новым, поэтому цикл, в котором кто-то погиб или родился, идёт по снимку — как раньше.
+var _unit_list: Array = []
+var _units_dirty := true
+var _vehicle_list: Array = []
+var _vehicles_dirty := true
 var _next_vehicle_id: int = Vehicle.ID_BASE
 
 ## Защёлка «бой начался» (§3.10, #56): взводится первым же выстрелом/взрывом где угодно
@@ -56,6 +67,7 @@ func spawn_unit(stats: UnitStats, coord: Vector2i, owner: int,
 	var unit := UnitInstance.new(_next_id, stats, coord, owner)
 	_next_id += 1
 	units[unit.id] = unit
+	_units_dirty = true
 	if occupy:
 		grid.place(unit, coord)
 	return unit
@@ -64,7 +76,16 @@ func get_unit(id: int) -> UnitInstance:
 	return units.get(id, null)
 
 func all_units() -> Array:
-	return units.values()
+	if _units_dirty or _unit_list.size() != units.size():
+		_unit_list = units.values()
+		_unit_list.make_read_only()
+		_units_dirty = false
+	return _unit_list
+
+## Убрать юнита из партии совсем (тело ушло в кучу, переработано боргом и т. п.).
+func remove_unit(id: int) -> void:
+	units.erase(id)
+	_units_dirty = true
 
 ## Создать машину (танк/челнок) по типу из VehicleDB и разметить её след на сетке.
 ## coord = верхний-левый угол следа. Возвращает Vehicle или null, если тип неизвестен.
@@ -79,6 +100,7 @@ func spawn_vehicle(type_id: String, coord: Vector2i, owner: int) -> Vehicle:
 		veh.facing = Vector2i.ZERO
 	_next_vehicle_id += 1
 	vehicles[veh.id] = veh
+	_vehicles_dirty = true
 	grid.set_vehicle_footprint(veh.id, veh.footprint())
 	return veh
 
@@ -86,7 +108,15 @@ func get_vehicle(id: int) -> Vehicle:
 	return vehicles.get(id, null)
 
 func all_vehicles() -> Array:
-	return vehicles.values()
+	if _vehicles_dirty or _vehicle_list.size() != vehicles.size():
+		_vehicle_list = vehicles.values()
+		_vehicle_list.make_read_only()
+		_vehicles_dirty = false
+	return _vehicle_list
+
+func remove_vehicle(id: int) -> void:
+	vehicles.erase(id)
+	_vehicles_dirty = true
 
 func vehicle_on(coord: Vector2i) -> Vehicle:
 	var vid := grid.vehicle_at(coord)
@@ -94,7 +124,7 @@ func vehicle_on(coord: Vector2i) -> Vehicle:
 
 func living_units_of(owner: int) -> Array:
 	var out: Array = []
-	for u in units.values():
+	for u in all_units():
 		if u.owner == owner and u.is_alive():
 			out.append(u)
 	return out
@@ -110,20 +140,26 @@ func active_player() -> int:
 ## Короткая подпись доски (batch 14): по ней гость сверяет свою доску с доской хоста
 ## после каждого действия. Юниты, машины и очередь ходов; клетки не включены — они
 ## меняются только действиями, а их расхождение всё равно всплывёт через юнитов.
+##
+## Строки собираются через str(…) с перечнем частей, а не форматом "%d:%d…" % [...]
+## (perf pass #11): текст выходит тот же байт в байт — все поля int, а для int "%d" и str()
+## пишут одно и то же, — но без массива аргументов и разбора формата на каждого юнита.
+## Подпись зовётся на каждом действии у обеих сторон сети.
 func digest_hash() -> int:
 	var parts: PackedStringArray = []
 	var ids: Array = units.keys()
 	ids.sort()
 	for id: int in ids:
 		var u: UnitInstance = units[id]
-		parts.append("%d:%d,%d:%d:%d:%d:%d:%d:%d" % [u.id, u.coord.x, u.coord.y, u.owner,
-			u.status, u.remaining_ap, u.move_credit, u.aboard_vehicle_id, u.borg_id])
+		var at := u.coord
+		parts.append(str(u.id, ":", at.x, ",", at.y, ":", u.owner, ":", u.status, ":",
+				u.remaining_ap, ":", u.move_credit, ":", u.aboard_vehicle_id, ":", u.borg_id))
 	var vids: Array = vehicles.keys()
 	vids.sort()
 	for id: int in vids:
 		var v: Vehicle = vehicles[id]
-		parts.append("v%d:%d,%d:%d:%d:%d:%d" % [v.id, v.origin.x, v.origin.y, v.owner,
-			v.durability, v.ap, 1 if v.wrecked else 0])
+		parts.append(str("v", v.id, ":", v.origin.x, ",", v.origin.y, ":", v.owner, ":",
+				v.durability, ":", v.ap, ":", 1 if v.wrecked else 0))
 	parts.append("t%d:%d:%s" % [turns.round_number, turns.active_index, str(turns.round_order)])
 	# Номер косметического события тоже — разойдись он, у гостя полетели бы другие брызги.
 	parts.append("f%d" % fx_seq)
@@ -133,7 +169,7 @@ func digest_hash() -> int:
 ## (GridCell.journal), а не копией всей доски (см. GameActionResolver.resolve()).
 func snapshot(with_cells: bool = true) -> Dictionary:
 	var us: Array = []
-	for u: UnitInstance in units.values():
+	for u: UnitInstance in all_units():
 		var ast: Dictionary = {}
 		if u.action_state != null:
 			ast = {"target_id": u.action_state.target_id,
@@ -155,7 +191,7 @@ func snapshot(with_cells: bool = true) -> Dictionary:
 			"action_state": ast,
 		})
 	var vs: Array = []
-	for v: Vehicle in vehicles.values():
+	for v: Vehicle in all_vehicles():
 		vs.append({
 			"obj": v, "id": v.id, "owner": v.owner, "durability": v.durability,
 			"components": v.components.duplicate(), "tower_locked_dir": v.tower_locked_dir,
@@ -195,6 +231,7 @@ func snapshot(with_cells: bool = true) -> Dictionary:
 func restore(snap: Dictionary) -> void:
 	kills = (snap.get("kills", {}) as Dictionary).duplicate(true)
 	units.clear()
+	_units_dirty = true
 	for rec: Dictionary in snap["units"]:
 		var u: UnitInstance = rec["obj"]
 		u.coord = rec["coord"]
@@ -230,6 +267,7 @@ func restore(snap: Dictionary) -> void:
 			u.action_state = a
 		units[u.id] = u
 	vehicles.clear()
+	_vehicles_dirty = true
 	for rec: Dictionary in snap["vehicles"]:
 		var v: Vehicle = rec["obj"]
 		v.owner = rec["owner"]

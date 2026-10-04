@@ -1955,7 +1955,7 @@ func _resolve_pickup_corpse(intent: PickUpCorpseIntent) -> ActionResult:
 	if cell.corpse_count > 0:
 		cell.corpse_count -= 1
 	elif cell.occupant != null and cell.occupant.status == MCF.Status.CORPSE:
-		state.units.erase(cell.occupant.id)
+		state.remove_unit(cell.occupant.id)
 		cell.occupant = null
 	unit.remaining_ap -= 1
 	unit.carried_corpses += 1
@@ -2107,7 +2107,7 @@ func _kill(u: UnitInstance, res: ActionResult = null, from_coord: Vector2i = NOW
 			if state.grid.vehicle_at(u.coord) != -1 and state.grid.vehicle_at(u.coord) != bveh.id:
 				# Раздавлен чужим корпусом вместе с оператором — от борга ничего не остаётся.
 				u.borg_id = -1
-				state.vehicles.erase(bveh.id)
+				state.remove_vehicle(bveh.id)
 			elif not bveh.wrecked and bveh.alive():
 				state.grid.set_vehicle_footprint(bveh.id, bveh.footprint())
 	if captive != null:
@@ -2292,7 +2292,7 @@ func _add_corpse_to_cell(coord: Vector2i) -> bool:
 	# Тела ушли внутрь стены: и счётчик, и труп-occupant обнуляются, а сам UnitInstance
 	# выбывает из игры. Наружу они вернутся только разлётом от взрыва.
 	if c.occupant != null and c.occupant.status == MCF.Status.CORPSE:
-		state.units.erase(c.occupant.id)
+		state.remove_unit(c.occupant.id)
 		c.occupant = null
 	c.corpse_count = 0
 	c.set_feature(MCF.FEATURE_CORPSE_WALL)
@@ -5451,7 +5451,7 @@ func _resolve_drag(intent: DragIntent) -> ActionResult:
 				return ActionResult.fail("No room for another body here")
 			# Перетаскиваемый труп уходит в кучу — убираем его из игры.
 			src_cell.occupant = null
-			state.units.erase(corpse.id)
+			state.remove_unit(corpse.id)
 			if _add_corpse_to_cell(dst):
 				return ActionResult.success(["%s formed a corpse wall at (%d, %d) [AP: %d]" % [
 					actor.stats.display_name, dst.x, dst.y, actor.remaining_ap]])
@@ -6912,7 +6912,7 @@ func _seat_unit(veh: Vehicle, unit: UnitInstance, seat: int) -> void:
 	var cell_coord := veh.seat_cell(seat)
 	var cell := state.grid.cell(cell_coord)
 	if cell.occupant != null and cell.occupant.status == MCF.Status.CORPSE:
-		state.units.erase(cell.occupant.id)
+		state.remove_unit(cell.occupant.id)
 		cell.occupant = null
 		cell.corpse_count += 1
 	veh.seats[seat] = unit.id

@@ -187,6 +187,12 @@ regression safety net is not reproducible, so none of §27's invariants — nor 
 performance figures — can be re-verified after any future change. Given §27.2's warning,
 this is the finding most likely to cost real time later.
 
+> **Status (0.8.2 perf pass):** resolved. `tests/run_headless.gd` replays the fixed-seed
+> match against the byte-exact `tests/baseline/headless_trace.txt`, and
+> `tests/bench/run_bench.gd` times small/medium/large Hard-vs-Hard matches through the net
+> layer, save/load and replay against fixed behaviour hashes (GAME_SPEC §27.22). Both run
+> in `tests/run_all.sh`.
+
 ---
 
 ## 4. Spec drift

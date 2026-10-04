@@ -31,6 +31,13 @@ for script in tests/check_scripts.gd tests/run_codec.gd tests/run_headless.gd \
   fi
 done
 
+# Стенд производительности (perf pass, §27.22) в режиме сверки: малая и средняя партии
+# HARD против HARD с туманом, мирными и техникой, сетевой близнец, сохранение и повтор —
+# итоговые хеши обязаны совпасть с tests/bench/expected.txt. Время здесь не проверяется.
+echo "=== tests/bench/run_bench.gd ==="
+# shellcheck disable=SC2086
+"$GODOT" --headless --script res://tests/bench/run_bench.gd -- small medium --reps 1 ${EXTRA:+--update} || fail=1
+
 # Сетевая партия на двух процессах (batch 12): лобби → расстановка → бой по ENet.
 echo "=== tests/run_net_match.sh ==="
 bash tests/run_net_match.sh || fail=1

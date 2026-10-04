@@ -3028,6 +3028,7 @@ number appears elsewhere in this document it is because the source comments cite
 | 103 | One unit per cell is enforced by the board itself — `Grid.place` and `move_occupant` refuse to overwrite an occupant and report failure, so no two soldiers, civilians or AI units can ever share a tile (§2.2); hovering a green move tile draws the **cheapest actual route** to it out of the Dijkstra tree, and every green tile is labelled with what standing there costs out of the movement total (§18.3); a marksman's laser no longer reaches a man in a trench from a tile that is not one, at any range including adjacent (§6.6, §7.3); NPC civilians and the army are driven by **one brain** — the second, cell-at-a-time civilian AI is deleted and a civilian is now an `AIController` with the Neutral owner, so it plans, fragments its movement, fires partial bursts and hauls corpses by the army's rules (§14, §17); the AI uses fragmented movement and partial bursts — `move_credit` is a spendable budget, a step costs score, and a burst orders `ceil(1/p)` bullets instead of the whole magazine (§17.3); an anti-tank sapper cut off by a wall **blasts through it** instead of shuffling along it (§17.3, §7.1); the AI and civilians pick up bodies that block the road and **stack them aside into piles**, the fifth forming a corpse wall (§17.3, §8.4); at least 80% of an army must act each turn and **every** civilian must, enforced by a second forced pass over whoever the plan left idle (§17.2); Player 1 can be an AI too, so AI-vs-AI matches run from Setup or a mid-battle toggle (§17.4); and the camera zooms out to 0.12 so a 60×40 board fits on one screen (§18.4) |
 | 104 | The map editor can be left the way it was entered: the **"To Demo Game"** button is gone, replaced by **"Main Menu"**, which clears `MapHandoff.pending` and returns to `MainMenu.tscn` instead of dumping the designer into a demo battle on the built-in roster (§19) |
 | 105 | A marksman firing **from** a trench is as boxed in as a marksman firing **into** one: the laser cannot climb out of the ditch any more than it could drop into it, so from the trench floor the only reachable target is one lying in the **same continuous run** of trench, along a straight line with no gap — a bend or a break means the beam hits the earth wall. The trench is now symmetric cover against the beam instead of a firing position that ignored its own walls (§6.6, §7.3) |
+| 120 | Performance only, no rule changed — the general optimization audit (§27.22): a reproducible benchmark and behaviour harness `tests/bench/run_bench.gd` (small/medium/large Hard-vs-Hard MapGen matches through the net layer, save/load and replay, plus a battle-screen render mode; `run_all.sh` checks the small and medium hashes); `all_units()`/`all_vehicles()` return a cached read-only list (`remove_unit`/`remove_vehicle`); the clock rebuilds its text once a second; group membership in `_draw` is a set; `digest_hash` builds the identical string with `str()` (−20 %). The HUD grip, vehicle lookups, the "!" check, the dice queue, AI temporaries and FX RNG were measured and left unchanged. |
 | 119 | Editor rework and UI audit — the map editor is rebuilt "like Paint": menu bar, icon toolbar, a palette of real tile thumbnails, minimap and status bar; the canvas draws the battle's own tile chunks; undo stores per-cell deltas; symmetry (L/R, T/B, quarters, zones handed to the matching player), select / move / copy / paste with rotate and flip, room and building stamps, eyedropper, New Map from the random generator, and Play This Map returns to the same map (§19). Map presets (Station, Town, Field, Bunker, Asteroid) set the tileset and pre-fill a new map (§20). Nothing burns in vacuum (§10). UI audit at 75/100/150 %: main-menu sub-pages, purchase panel, battle sidebar and lobby dialogs are framed in group boxes, main buttons stay on screen, the lobby puts slots and map first when its columns wrap. Tests: `run_editor` (new, 55 checks), `run_fire` (vacuum), `run_batch13` ported. |
 | 118 | Playtest batch (20 items + 2) — **Unready** on the purchase screen: only the host starts the battle (`go`), a guest's unready is a request the host confirms (`unready_req` → `unready`), and a ready army is locked until unready (§19); **Fullscreen** in Settings → Display, saved in `settings.cfg`; the **Real** clock starts with the battle scene — network games used to count from app launch, so it also ran on across matches; **double-click** on a shuttle passenger selects the shuttle, and the driver's seat has a thin outline (§16.7); a **welded airlock** gets steel straps and weld beads baked into its tile; decals are no longer wiped by undo/redo or by a network resync (the restored host decals were cleared right after loading), laser marks and the new **tank track marks** travel in the decal snapshot, and the casing/laser caps rise to 8000/2000; Godot's ENet timeout is relaxed to 20–90 s so a short stall no longer hands a friend's army to the AI (§22.4); running over own/allied units and blowing a drone up next to them ask first; the **Match Over** window lists kills per unit and vehicle with run-overs (`GameState.kills`, part of the undo snapshot and `StateCodec`, not the digest); under standard fog, hidden walls get a much darker veil, corpses stay visible, and trenches, sandbags, dirt piles and hedgehogs are drawn only where seen now (§11); **Undo drawing** (button or Ctrl+Z while drawing) restores the touched raster tiles and is mirrored to every peer; bodies killed by fire, flame or laser are drawn burnt (`UnitInstance.burnt`); breached civilians are ruthless and grab every body within reach without ever dropping one (§14); the turn line and the initiative window agree — Prev/Next skip slots with nobody alive, the line follows the neutral group being played, and the window scrolls and leaves out wiped-out groups. Golden trace re-baselined: civilians now shoot instead of dodging, which shifts the dice stream. |
 | 117 | Gore / trenches / AI batch — civilians' wake-up sight check indexes soldiers by firing line instead of testing every civilian against every soldier after every action (6-side MP host: 92 → 19 ms per AI action, p99 frame 90 → 17 ms, measured); AI speed adds 8×, 16× and Max, and from 8× AI dice are not animated (§18.6); the initiative window no longer keeps pointing at the last civilian group after their slots play; civilians are a random-map setting again (up to 1000), prepared maps get an on/off checkbox (§14, §20.2); your own deploy zone is outlined on the purchase screen and zone numbers sit on the lobby preview (§19); terrain tiles are 32×32 in the same brutalist style, stay textured at every zoom (8-px chunks for far zoom), town and field airlocks are drawn as doors (closed and open), the concrete wall loses its tie marks, and trenches are cut into the ground with continuous corners and junctions and units sit inside them (§21); bigger blood pools and spray, gibs and ring splatter for blast and crush kills, blood for laser/assault/push/DPMG/crush kills, and 6 tiles of fading footprints after walking through blood (§21.4). Tests: suite green; `net_host_town` uses the new checkbox. |
@@ -3521,3 +3522,71 @@ walk mask against a fresh scan, and the distance field against a plain BFS.
 With a tank a side the same town runs 96 actions in 1.4 s and an open **Field** Colossal
 98 in 2.0 s; the largest fog step left is one's own tank moving on open ground (~90 ms —
 nine new viewpoints, each a real sweep), where it was ~430 ms.
+
+### 27.22 The general performance pass (audit "MCF General Optimization Audit", 0.8.2)
+
+An outside audit listed thirteen findings — repeated `.values()` copies, per-frame HUD and
+clock work, linear group membership in `_draw`, renderer-side equipment checks, an O(n)
+dice queue, AI temporaries and Callables, a per-particle RNG object, `digest_hash`
+strings, and the missing harness of §27.1/§27.14. The pass followed the same gate as
+#101–#106: nothing was kept on the strength of an argument; each change was measured and
+the behaviour hashes had to come back identical.
+
+**The harness (finding 13)** is `tests/bench/run_bench.gd`. Three MapGen scenes, Hard vs
+Hard with fog, civilians and tanks — small (38×28, 12 a side, 6 rounds), medium (56×40, 50
+a side, 3 rounds), large (80×60, 150 a side + 2 tanks, 2 rounds). The host plays through
+`NetGame`; the guest receives the host's whole wire **after** the match (in a real game the
+peers are separate processes, and a guest answering between host actions in the same
+process would thrash the static caches that hold one grid — the object index and the
+spill cache — and inflate both sides' timings); the final board then round-trips
+`StateCodec` through JSON and replays from the start as a `ReplayPlayer`. The signature
+— board digest, ordered action trace, survivors, cosmetic state, guest equality, resyncs,
+save and replay equality — must match `tests/bench/expected.txt`; `run_all.sh` checks small
+and medium. `-- render` opens the battle screen on the large board with the whole map in
+view and 150 soldiers group-selected, times `_process`/`_draw`, and prices the individual
+per-frame expressions on the live screen.
+
+**Kept**
+
+| Finding | Change | Measured |
+|---|---|---|
+| 1 | `all_units()` / `all_vehicles()` hand out one cached, read-only list, rebuilt lazily after `spawn_*`, `remove_unit/remove_vehicle` (the resolver's five direct `erase` calls now go through them) or `restore()`; a size check catches any edit that bypasses them. A mutating caller gets an error instead of corrupting the list; a list in hand is replaced, never edited, so loops that kill or spawn still walk a snapshot. | `values()` at 330 units: 8 µs a call, ~25 000 calls per large match |
+| 3 | `_refresh_clocks` builds its strings only when the shown second or round changes. | 3.0 → 0.5 µs a frame; `_process` 19 → 12 µs |
+| 5 | `_group_ids` keeps a companion set, rebuilt by its setter (it is only ever assigned, never edited in place). | group-ring check 280 → 75 µs a frame at 150 selected |
+| 11 | `digest_hash` formats with `str(…)` instead of `"%d:…" % [...]`; every field is `int`, so the text — and the hash — is byte-identical. | 0.65 → 0.52 ms a call at 330 units (−20 %); called once per action on each peer |
+
+Back-to-back, best of three, whole scene (host side / guest / replay, ms):
+
+| Scene | Before | After |
+|---|---|---|
+| small | 745 / 379 / 350 | 781 / 386 / 368 |
+| medium | 4494 / 1701 / 1554 | 4509 / 1755 / 1633 |
+| large | 18414 / 5578 / 5029 | 18138 / 5232 / 4483 |
+
+Whole-match totals move within noise — which is the finding of the pass: apart from the
+digest, none of the audited paths was a hotspot.
+
+**Measured and left alone**
+
+- **2 — HUD grip:** 2 µs a frame. A cache key would need the viewport, the HUD width, the
+  chat, log, menu, component panel and replay bar geometry — about what recomputing costs.
+- **4 — vehicle sprite and name lookups:** 6 µs a frame for four vehicles.
+- **6 — the "!" equipment check:** ~0.3 ms a frame with all 330 on screen, nearly all of it
+  GDScript call overhead in `unit_missing_equipment` for the ~64 soldiers who can carry the
+  mark. A per-unit cache needs an invalidation signal that does not exist — undo, resync,
+  replay seek and the net layer change `held_item_id`, deaths and stations outside
+  `resolve()` — and a stale mark would show on the wrong soldier. A per-type prefilter was
+  tried and gained only ~0.05 ms; it was removed.
+- **7 — `DiceService.pop_front()`:** the longest scripted queue in any scene was 8 rolls.
+- **8, 12 — AI temporaries, `sort_custom`, Callables:** candidate dictionaries are a handful
+  per decision; both sorts run once per turn; `GroupMovePlanner` serves only the player's
+  cached group-move preview. The AI's time is the movement spill and target evaluation
+  (§27.20), not representation.
+- **9, 10 — `FxDecals`:** `apply()` totals 5–14 ms over a whole match. A fresh RNG costs
+  0.4 µs more than a reused one, and sharing one is unsafe (`_blood` holds one while
+  drawing another).
+
+**Where the time actually is** (large scene, host side): the viewer's fog after each action
+(`team_visible_coords`, ~6 ms at 330 units — 42 % of host time), the movement spill
+(`Movement.reachable`, §27.2 forbids changing its order), the AI's per-turn plan and
+`_best_shoot`. None was in the audit; they are the next pass.
