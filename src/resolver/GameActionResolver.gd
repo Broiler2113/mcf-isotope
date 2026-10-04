@@ -1999,7 +1999,11 @@ func _kill(u: UnitInstance, res: ActionResult = null, from_coord: Vector2i = NOW
 		blast: bool = false) -> void:
 	if u == null or not u.is_alive():
 		return
-	if state.grid.in_bounds(u.coord):
+	# Дрон — машина: ни лужи, ни брызг, ни ошмётков. Сбитый дрон и так рвётся на своей
+	# клетке (_drone_explode), и взрыв оставляет щербины на полу — этого довольно.
+	# Трупом он на доске не ложится: клетку дрон не занимает (spawn_unit occupy=false),
+	# поэтому проход отрисовки трупов его и не берёт — лишней была ровно кровь.
+	if state.grid.in_bounds(u.coord) and not u.is_drone:
 		# blast — разорван взрывом или раздавлен: кровь кольцом, ошмётки, лужи шире.
 		_fx(res, {"fx": "blood", "at": u.coord,
 			"from": from_coord if from_coord != NOWHERE else u.coord, "blast": blast})
@@ -7469,6 +7473,20 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 	for mc: Vector2i in driven:
 		var mcell := state.grid.cell(mc)
 		if mcell == null:
+			continue
+		# Станция дронов под гусеницей ломается: это ящик с пультом на полу, а не укрытие.
+		# Считается по ПОЛНОМУ следу, ровно как мина и по той же причине: станция на чистом
+		# полу, через которую машина лишь ПРОЕХАЛА, в crush_cells не попадает, и зачистка
+		# следа ниже её бы не тронула — танк проезжал по ней бесплатно.
+		# Дрон с этой станции остаётся в воздухе, но управление теряет сам (operator_controls
+		# не находит станции на клетке) — отдельно сбивать его незачем.
+		if mcell.feature_id == MCF.FEATURE_DRONE_STATION:
+			mcell.station_operator_id = -1
+			mcell.clear_feature()
+			notify_cell_changed(mc)
+			_fx(res, {"fx": "debris", "at": NOWHERE, "cells": [mc]})
+			res.log("The %s crushes a drone station at (%d, %d)!" % [
+				VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id), mc.x, mc.y])
 			continue
 		if mcell.feature_id != MCF.FEATURE_MINE and mcell.feature_id != MCF.FEATURE_AV_MINE:
 			continue

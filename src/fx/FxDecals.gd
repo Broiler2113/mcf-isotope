@@ -59,7 +59,6 @@ const GIBS_MIN := 4
 const GIBS_MAX := 7
 ## Кровавые следы: прошёл по луже — ещё столько клеток оставляет отпечатки.
 const BLOODY_STEPS := 6
-const PRINTS_CAP := 800
 
 ## Потолок осевших частиц. Косметика не должна расти бесконечно: длинный бой на
 ## большой карте иначе набирает десятки тысяч точек, и отрисовка начинает стоить
@@ -93,6 +92,16 @@ var floor_damage: Dictionary = {}
 var damage_version: int = 0
 ## Осевшая статика: [{kind, pos: Vector2 (в клетках), rot: float, scale: float}].
 var props: Array = []
+## Кровь и ошмётки — отдельно от props и БЕЗ вытеснения по ходу боя. Та же мысль, что
+## развела props и prints, доведённая до конца: во что поле превратилось к концу партии —
+## это и есть картина боя, и смотреть на неё игрок хочет целиком. Гильзы и осколки
+## остаются в props под прежним потолком: их на порядок больше, а ценности в старых нет.
+##
+## Потолок здесь всё-таки есть, но заведомо выше любой партии: он страхует от
+## бесконечного роста в патологическом случае, а не подчищает поле.
+const GORE_CAP := 60000
+const GORE_KINDS := {"blood_pool": true, "blood_drop": true, "gib": true}
+var gore: Array = []
 ## Кровавые отпечатки ног — отдельно от props со своим потолком, чтобы длинные цепочки
 ## следов не вытесняли лужи. Те же поля, что у props.
 var prints: Array = []
@@ -155,6 +164,7 @@ func clear() -> void:
 	floor_damage.clear()
 	damage_version += 1
 	props.clear()
+	gore.clear()
 	prints.clear()
 	pool_cells.clear()
 	bloody.clear()
@@ -334,7 +344,7 @@ func _blood(ev: Dictionary) -> void:
 			_trim()
 		return
 	var pool_rng := _rng_for("pool", at, 0, _seq)
-	props.append({
+	gore.append({
 		"kind": "blood_pool", "pos": Vector2(at) + Vector2(0.5, 0.5),
 		"rot": pool_rng.randf_range(0.0, TAU),
 		"scale": pool_rng.randf_range(1.0, 1.3) * (1.25 if blast else 1.0),
@@ -348,7 +358,7 @@ func _blood(ev: Dictionary) -> void:
 		pos = _clip_solid(Vector2(at) + Vector2(0.5, 0.5), pos, at)
 		if _space(Vector2i(floori(pos.x), floori(pos.y))):
 			continue   # подтёк не ложится на вакуум
-		props.append({"kind": "blood_pool", "pos": pos, "rot": pool_rng.randf_range(0.0, TAU),
+		gore.append({"kind": "blood_pool", "pos": pos, "rot": pool_rng.randf_range(0.0, TAU),
 				"scale": pool_rng.randf_range(0.35, 0.6), "origin": at})
 		if blast:
 			pool_cells[Vector2i(floori(pos.x), floori(pos.y))] = true
@@ -389,8 +399,9 @@ func _steps(ev: Dictionary) -> void:
 		if pool_cells.has(c):
 			bloody[id] = BLOODY_STEPS
 		prev = c
-	if prints.size() > PRINTS_CAP:
-		prints = prints.slice(prints.size() - PRINTS_CAP)
+	# Отпечатки — тоже кровь, и живут столько же: вытесняются лишь на аварийном потолке.
+	if prints.size() > GORE_CAP:
+		prints = prints.slice(prints.size() - GORE_CAP)
 
 ## Направление «прочь от источника». Источник совпал с целью (взрыв под ногами,
 ## смерть без стрелка) — веер уходит во все стороны, и базовый угол берётся вверх.
@@ -506,11 +517,15 @@ func advance(delta: float) -> bool:
 		# Капля, долетевшая до вакуума, не ложится пятном (batch borg-corpses).
 		if f["kind"] == "blood_drop" and _space(Vector2i(floori(f["to"].x), floori(f["to"].y))):
 			continue
-		props.append({
+		var settled_prop := {
 			"kind": f["kind"], "pos": f["to"],
 			"rot": float(f["rot0"]) + float(f["rot1"]), "scale": f["scale"],
 			"origin": f.get("origin", Vector2i(floori(f["to"].x), floori(f["to"].y))),
-		})
+		}
+		if GORE_KINDS.has(str(f["kind"])):
+			gore.append(settled_prop)
+		else:
+			props.append(settled_prop)
 	if not landed.is_empty():
 		_trim()
 	return true
@@ -539,6 +554,10 @@ func _trim() -> void:
 	var over := props.size() - PROPS_CAP
 	if over > 0:
 		props = props.slice(over)
+	# Кровь вытесняется только на аварийном потолке — см. GORE_CAP.
+	var gore_over := gore.size() - GORE_CAP
+	if gore_over > 0:
+		gore = gore.slice(gore_over)
 
 # --- Сохранение косметики (M12, item 42) ---
 ## Осевшая косметика — часть того, КАК выглядит бой, поэтому сохранение везёт её с
@@ -550,8 +569,11 @@ func to_dict() -> Dictionary:
 	keys.sort()
 	for c: Vector2i in keys:
 		damage.append([c.x, c.y, int(floor_damage[c])])
+	# Кровь едет тем же списком "props", что и гильзы: формат на проводе не меняется, и
+	# сверка декалей у хоста с гостем (batch mp-perf) остаётся побайтово той же. Обратно
+	# from_dict() разводит записи по виду частицы.
 	var settled: Array = []
-	for p: Dictionary in props:
+	for p: Dictionary in props + gore:
 		var pos: Vector2 = p["pos"]
 		settled.append([str(p["kind"]), pos.x, pos.y, float(p["rot"]), float(p["scale"])])
 	# Ещё летящие осколки и брызги — там, где они лягут (batch mp-perf): снимок уходит гостю
@@ -581,9 +603,13 @@ func from_dict(d: Dictionary) -> void:
 	damage_version += 1
 	for entry in d.get("props", []):
 		if entry is Array and (entry as Array).size() >= 5:
-			props.append({"kind": str(entry[0]),
+			var loaded := {"kind": str(entry[0]),
 					"pos": Vector2(float(entry[1]), float(entry[2])),
-					"rot": float(entry[3]), "scale": float(entry[4])})
+					"rot": float(entry[3]), "scale": float(entry[4])}
+			if GORE_KINDS.has(str(entry[0])):
+				gore.append(loaded)
+			else:
+				props.append(loaded)
 	_trim()
 	for e in d.get("prints", []):
 		if e is Array and (e as Array).size() >= 4:

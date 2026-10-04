@@ -5006,12 +5006,17 @@ func _draw_fx_props(visible: Dictionary) -> void:
 		var tail: Vector2 = tf.lerp(tt, maxf(0.0, k - 0.25))
 		draw_line(tail, head, Color(1.0, 0.95, 0.5, 0.9), 2.0)
 		draw_circle(head, 2.5, Color(1.0, 1.0, 0.7, 0.95))
-	if _fx.props.is_empty() and _fx.flying.is_empty() and _fx.prints.is_empty():
+	if _fx.props.is_empty() and _fx.gore.is_empty() and _fx.flying.is_empty() \
+			and _fx.prints.is_empty():
 		return
 	var fog_on: bool = resolver.fog_enabled
 	for prop: Dictionary in _fx.prints:
 		_draw_fx_one(prop["kind"], prop["pos"], prop["rot"], prop["scale"], visible, fog_on,
 				prop["origin"])
+	# Кровь — первым слоем: гильзы и осколки ложатся ПОВЕРХ лужи, а не тонут под ней.
+	for prop: Dictionary in _fx.gore:
+		_draw_fx_one(prop["kind"], prop["pos"], prop["rot"], prop["scale"], visible, fog_on,
+				prop.get("origin", Vector2i(-1, -1)))
 	for prop: Dictionary in _fx.props:
 		_draw_fx_one(prop["kind"], prop["pos"], prop["rot"], prop["scale"], visible, fog_on,
 				prop.get("origin", Vector2i(-1, -1)))

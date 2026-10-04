@@ -157,14 +157,14 @@ func _initialize() -> void:
 	var fx := FxDecals.new()
 	fx.space_at = func(c: Vector2i) -> bool: return c.x < 5
 	fx.apply([{"fx": "blood", "at": Vector2i(2, 2), "from": Vector2i(8, 2)}])
-	var pools := fx.props.filter(func(p): return p["kind"] == "blood_pool").size()
+	var pools := fx.gore.filter(func(p): return p["kind"] == "blood_pool").size()
 	ck(pools == 0 and fx.flying.is_empty(), "a death in space leaves no blood")
 	fx.apply([{"fx": "blood", "at": Vector2i(2, 2), "from": Vector2i(2, 2), "blast": true}])
 	var gibs := fx.flying.filter(func(p): return p["kind"] == "gib").size()
 	var drops := fx.flying.filter(func(p): return p["kind"] == "blood_drop").size()
 	ck(gibs > 0 and drops == 0, "an explosion in space throws chunks, not blood (%d chunks)" % gibs)
 	fx.apply([{"fx": "blood", "at": Vector2i(9, 2), "from": Vector2i(12, 2)}])
-	ck(fx.props.filter(func(p): return p["kind"] == "blood_pool").size() > 0, "on the floor blood still pools")
+	ck(fx.gore.filter(func(p): return p["kind"] == "blood_pool").size() > 0, "on the floor blood still pools")
 
 	# --- nor does the laser scorch space, and nor does rubble settle there ---
 	# Same reason as the blood above: there is no floor in space to take the mark. The
@@ -192,6 +192,55 @@ func _initialize() -> void:
 	var bare := FxDecals.new()
 	bare.apply([{"fx": "laser", "from": [0, 0], "to": [4, 0]}])
 	ck(bare.laser_lines.size() == 1, "with no space hook wired the trail is unchanged")
+
+	# --- a downed drone is machinery: no blood, no gibs ---
+	var dm := MapData.new(20, 10)
+	for y in 10:
+		for x in 20:
+			dm.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	dm.set_cell(Vector2i(6, 5), MCF.FLOOR_NORMAL, 0.0, false, MCF.FEATURE_DRONE_STATION)
+	dm.set_spawn(Vector2i(5, 5), "drone_operator", MCF.Owner.PLAYER_1)
+	dm.set_spawn(Vector2i(15, 5), "light_infantry", MCF.Owner.PLAYER_2)
+	GameConfig.civilians_enabled = false
+	var dst := dm.build_state(21)
+	var dr := GameActionResolver.new(dst)
+	dr.fog_mode = MCF.Fog.OFF
+	dr.fog_enabled = false
+	dst.grid.cell(Vector2i(6, 5)).feature_owner = MCF.Owner.PLAYER_1
+	while dst.active_player() != MCF.Owner.PLAYER_1:
+		dr.resolve(EndTurnIntent.new())
+	var dop: UnitInstance = dst.grid.cell(Vector2i(5, 5)).occupant
+	ck(dr.resolve(SpawnDroneIntent.new(dop.id, Vector2i(6, 5))).ok, "a drone goes up for the gore check")
+	var uav := dr.active_drone_of(dop)
+	ck(uav != null, "and it is airborne")
+	var dres := ActionResult.new()
+	dr._kill(uav, dres, Vector2i(15, 5))
+	var dfx := FxDecals.new()
+	dfx.apply(dres.fx)
+	ck(dfx.gore.is_empty(), "a downed drone leaves no blood and no gibs (%d)" % dfx.gore.size())
+	ck(dst.grid.cell(uav.coord).occupant != uav, "and no body on the cell — it never occupied one")
+	# Positive control: a man shot in the same breath still bleeds.
+	var man: UnitInstance = dst.grid.cell(Vector2i(15, 5)).occupant
+	var mres := ActionResult.new()
+	dr._kill(man, mres, Vector2i(5, 5))
+	var mfx := FxDecals.new()
+	mfx.apply(mres.fx)
+	ck(not mfx.gore.is_empty(), "while a man killed beside it still does")
+
+	# --- blood stays for the whole battle; casings are what gets evicted ---
+	var gfx := FxDecals.new()
+	gfx.apply([{"fx": "blood", "at": Vector2i(5, 5), "from": Vector2i(8, 5)}])
+	for _i in 60:
+		gfx.advance(1.0)
+	var settled := gfx.gore.size()
+	ck(settled > 0, "blood settles into the gore layer (%d)" % settled)
+	for _i in 400:
+		gfx.apply([{"fx": "casings", "at": Vector2i(7, 7), "toward": Vector2i(9, 7), "count": 8}])
+		gfx.advance(1.0)
+	ck(gfx.props.size() <= FxDecals.PROPS_CAP,
+			"casings are still capped (%d <= %d)" % [gfx.props.size(), FxDecals.PROPS_CAP])
+	ck(gfx.gore.size() == settled,
+			"and not one drop of blood was pushed out (%d -> %d)" % [settled, gfx.gore.size()])
 
 	# --- a vehicle move animates and stays undoable ---
 	f = field(30, 10, [[Vector2i(2, 4), "light_infantry", 0], [Vector2i(2, 5), "light_infantry", 0],

@@ -10,12 +10,13 @@ var fails: PackedStringArray = []
 func _initialize() -> void:
 	_captor_death_frees_captive()
 	_corpses_survive_a_tank()
+	_a_station_breaks_under_the_tracks()
 	_mine_under_a_unit_kills()
 	_known_mines_are_routed_around()
 	_ai_sapper_lays_mines_and_walks_around_them()
 	_fx_bounces_off_the_border()
 	if fails.is_empty():
-		print("mines and corpses: captor death, bodies under tracks, mine under foot, known-mine routing, AI sapper and border bounce all hold")
+		print("mines and corpses: captor death, bodies under tracks, a crushed drone station, mine under foot, known-mine routing, AI sapper and border bounce all hold")
 		quit(0)
 		return
 	printerr("mines and corpses: %d failure(s)" % fails.size())
@@ -251,3 +252,35 @@ func _fx_bounces_off_the_border() -> void:
 		if (f["to"] as Vector2).x < 0.0:
 			any_out = true
 	ck(any_out, "with no bounds particles still fly past the edge (unchanged behaviour)")
+
+# 2b. Станция дронов под гусеницами ломается — и именно ПРОЕХАННАЯ, а не только та, на
+#     которой машина встала. Зачистка следа берёт лишь crush/scatter/ram-клетки, то есть
+#     занятые и протаранённые; станция на чистом полу в них не попадает, и танк проезжал
+#     по ней бесплатно — та же дыра, что когда-то закрыли для мины.
+func _a_station_breaks_under_the_tracks() -> void:
+	var m := _flat(20, 8)
+	m.set_spawn(Vector2i(2, 2), "tank", MCF.Owner.PLAYER_1, Vector2i(1, 0))
+	m.set_spawn(Vector2i(1, 2), "light_infantry", MCF.Owner.PLAYER_1)
+	m.set_spawn(Vector2i(18, 6), "light_infantry", MCF.Owner.PLAYER_2)
+	var f := _build(m)
+	var s: GameState = f["s"]
+	var r: GameActionResolver = f["r"]
+	var veh: Vehicle = s.all_vehicles()[0]
+	var crew := _u(s, Vector2i(1, 2))
+	ck(r.resolve(VehicleBoardIntent.new(crew.id, veh.id)).ok, "crew boards for the station run")
+	# Станция на ЧИСТОМ полу посреди маршрута: танк её проезжает, а встаёт дальше.
+	var at := Vector2i(5, 2)
+	var cell := s.grid.cell(at)
+	cell.feature_id = MCF.FEATURE_DRONE_STATION
+	cell.feature_owner = MCF.Owner.PLAYER_2
+	var res := r.resolve(VehicleMoveIntent.new(veh.id, Vector2i(1, 0), 6))
+	ck(res.ok, "tank drives over the station: %s" % res.reason)
+	ck(not veh.footprint().has(at), "and does NOT park on it (origin=%s)" % str(veh.origin))
+	ck(s.grid.cell(at).feature_id == "",
+			"the station is crushed, not driven past (left '%s')" % s.grid.cell(at).feature_id)
+	ck(s.grid.cell(at).station_operator_id == -1, "and its operator mark is cleared")
+	var said := false
+	for l: String in res.log_lines:
+		if l.contains("drone station"):
+			said = true
+	ck(said, "the log says so (%s)" % [res.log_lines])
