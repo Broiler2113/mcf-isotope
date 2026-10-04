@@ -17,10 +17,11 @@ func _initialize() -> void:
 	_shooting_in_and_out()
 	_heavy_hit_and_bodies()
 	_station_in_a_seat()
+	_only_the_operator_launches_from_a_seat()
 	_zero_g_keeps_passengers_seated()
 	_ai_flies_and_fires()
 	if fails.is_empty():
-		print("shuttle: seats, driver AP, fire from and into seats, heavy hits, bodies, stations, zero-g seats and the AI all hold")
+		print("shuttle: seats, driver AP, fire from and into seats, heavy hits, bodies, stations, operator-only launches, zero-g seats and the AI all hold")
 		quit(0)
 		return
 	printerr("shuttle: %d failure(s)" % fails.size())
@@ -212,6 +213,40 @@ func _station_in_a_seat() -> void:
 	ck(drone2 != null and drone2.home_station == Vector2i(4, 6) and drone2.coord == Vector2i(4, 6),
 			"the drone on the station flew with the shuttle (at %s, home %s)" % [str(drone2.coord) if drone2 else "-", str(drone2.home_station) if drone2 else "-"])
 	ck(drone2 != null and r.operator_controls(drone2), "and is still controllable")
+
+## Запуск дрона из кресла — только оператору (§3.12). Станция встаёт в пустое кресло
+## (batch 13 S8), так что сосед по борту сидит вплотную к ней: перечислитель предлагал
+## подъём дрона ЛЮБОМУ пассажиру, а резолвер его отклонял («Only an operator can launch
+## a drone»). Незаконное действие в списке — это испорченная выборка для политики RL и
+## отказ в ответ на ход ИИ; на своих двоих тот же запуск давно под проверкой умения.
+func _only_the_operator_launches_from_a_seat() -> void:
+	var f := _field()
+	var st: GameState = f["s"]
+	var r: GameActionResolver = f["r"]
+	var sh: Vehicle = f["sh"]
+	var op := _u(st, Vector2i(6, 6))
+	var sn := _u(st, Vector2i(3, 5))
+	r.resolve(MoveIntent.new(op.id, Vector2i(6, 5)))
+	ck(r.resolve(VehicleBoardIntent.new(op.id, sh.id, 3)).ok, "operator boards seat 4")
+	r.resolve(EndTurnIntent.new()); r.resolve(EndTurnIntent.new())
+	ck(r.resolve(UseItemIntent.new(op.id, Vector2i(4, 4))).ok, "station into seat 1")
+	ck(r.resolve(VehicleBoardIntent.new(sn.id, sh.id, 2)).ok,
+			"the sniper takes the seat next to the station")
+	r.resolve(EndTurnIntent.new()); r.resolve(EndTurnIntent.new())
+	ck(r.stations_near(sn).has(Vector2i(4, 4)), "the sniper really does sit next to the station")
+	ck(sn.remaining_ap > 0, "and has the AP that opens the seated branch")
+	var for_sniper := 0
+	var for_operator := 0
+	for i in r.legal_intents(MCF.Owner.PLAYER_1):
+		if i is SpawnDroneIntent:
+			if i.actor_id == sn.id:
+				for_sniper += 1
+			elif i.actor_id == op.id:
+				for_operator += 1
+	ck(for_sniper == 0, "no launch offered to a seated non-operator (got %d)" % for_sniper)
+	ck(for_operator > 0, "the seated operator is still offered a launch")
+	ck(not r.resolve(SpawnDroneIntent.new(sn.id, Vector2i(4, 4))).ok,
+			"and the resolver turns the sniper down anyway")
 
 ## Невесомость (§3.11): пассажир пристёгнут — ни отдача, ни попадание не вышибают его
 ## из кресла. Раньше _knockback уносил стрелка с корпуса по диагонали, оставляя его «на
