@@ -116,5 +116,56 @@ func _initialize() -> void:
 				"tank orange move costs 2 AP (%s, ap %d, budgets %s)" % [res.reason, veh.ap, vtb])
 			break
 	ck(orange != -1, "tank has an orange zone (budgets %s, %d targets)" % [vtb, vall.size()])
+	_the_flight_preview_shows_the_real_route()
 	print("rules: %d failure(s)" % fails)
 	quit(1 if fails else 0)
+
+## Предпросмотр полёта показывает МАРШРУТ, а не отрезок до курсора.
+##
+## У пехоты путь рисуется по настоящему маршруту (reach.path_to), у дрона рисовалась
+## прямая от него к наведённой клетке — а дрон летит не по прямой: корпуса, чужие дроны и
+## огонь он обходит. Линия обещала путь, которым он не полетит.
+##
+## Проверяется не «линия есть», а то, что это именно маршрут: стена посреди поля, цель за
+## ней, и путь обязан быть ДЛИННЕЕ прямой, идти по соседним клеткам, кончаться в цели и
+## нигде не проходить сквозь стену.
+func _the_flight_preview_shows_the_real_route() -> void:
+	var m := MapData.new(30, 14)
+	for y in 14:
+		for x in 30:
+			m.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	# Глухая стена с проходом только поверху.
+	for y in range(4, 14):
+		m.set_cell(Vector2i(12, y), MCF.FLOOR_NORMAL, 0.0, false, MCF.FEATURE_WALL)
+	m.set_cell(Vector2i(9, 8), MCF.FLOOR_NORMAL, 0.0, false, MCF.FEATURE_DRONE_STATION)
+	m.set_spawn(Vector2i(8, 8), "drone_operator", MCF.Owner.PLAYER_1)
+	m.set_spawn(Vector2i(25, 12), "light_infantry", MCF.Owner.PLAYER_2)
+	GameConfig.civilians_enabled = false
+	var st := m.build_state(11)
+	var r := GameActionResolver.new(st)
+	r.fog_enabled = false
+	st.grid.cell(Vector2i(9, 8)).feature_owner = MCF.Owner.PLAYER_1
+	while st.active_player() != 0:
+		r.resolve(EndTurnIntent.new())
+	var op: UnitInstance = st.grid.cell(Vector2i(8, 8)).occupant
+	ck(r.resolve(SpawnDroneIntent.new(op.id, Vector2i(9, 8))).ok, "a drone goes up for the preview")
+	var dr := r.active_drone_of(op)
+	ck(dr != null, "and it is airborne")
+	var target := Vector2i(14, 8)   # прямо за стеной
+	var route := r.drone_route_to(dr, target)
+	ck(route.size() > 0, "the preview has a route to the far side")
+	ck(route[route.size() - 1] == target, "that ends on the hovered cell")
+	ck(route.size() > Combat.distance(dr.coord, target),
+			"and is LONGER than the straight line, because it goes around (%d vs %d)"
+			% [route.size(), Combat.distance(dr.coord, target)])
+	var prev := dr.coord
+	var stepwise := true
+	var through_wall := false
+	for c: Vector2i in route:
+		if Combat.distance(prev, c) != 1:
+			stepwise = false
+		if st.grid.cell(c).is_wall():
+			through_wall = true
+		prev = c
+	ck(stepwise, "every leg is one cell, so it is a flight path and not a chord (%s)" % [route])
+	ck(not through_wall, "and it never passes through the wall")

@@ -20,8 +20,9 @@ func ck(cond: bool, what: String) -> void:
 
 func _initialize() -> void:
 	_fire_eats_the_cell()
+	_a_flame_jet_sweeps_too()
 	if fails.is_empty():
-		print("fire: the cell is swept bare — bodies and hulls aside")
+		print("fire: the cell is swept bare by spreading flame and by the jet alike — bodies and hulls aside")
 		quit(0)
 		return
 	printerr("fire: %d failure(s)" % fails.size())
@@ -90,3 +91,40 @@ func _decals_at(fx: FxDecals, c: Vector2i) -> int:
 			if Vector2i(floori(pos.x), floori(pos.y)) == c:
 				n += 1
 	return n
+
+## Струя огнемёта съедает клетку ТАК ЖЕ, как расползающееся пламя.
+##
+## Это и был второй случай той же дыры: правило «огонь съедает клетку» лежало в
+## расползании (advance_fire), а поджечь клетку можно двумя путями, и второй — струя
+## (§3.8). Игрок видел ровно это: огнемёт заливает позицию огнём, а мешки и гильзы на ней
+## стоят целыми. Теперь зачистка живёт в самом поджоге (_ignite), и путь к ней один.
+func _a_flame_jet_sweeps_too() -> void:
+	var m := MapData.new(20, 9)
+	for y in 9:
+		for x in 20:
+			m.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	var at := Vector2i(8, 4)
+	m.set_cell(at, MCF.FLOOR_NORMAL, 0.0, false, MCF.FEATURE_SANDBAGS)
+	m.set_spawn(Vector2i(4, 4), "flamethrower", MCF.Owner.PLAYER_1)
+	m.set_spawn(Vector2i(18, 8), "light_infantry", MCF.Owner.PLAYER_2)
+	GameConfig.civilians_enabled = false
+	var st := m.build_state(9)
+	var r := GameActionResolver.new(st)
+	r.fog_mode = MCF.Fog.OFF
+	r.fog_enabled = false
+	while st.active_player() != MCF.Owner.PLAYER_1:
+		r.resolve(EndTurnIntent.new())
+	var fx := FxDecals.new()
+	fx.apply([{"fx": "casings", "at": at, "toward": Vector2i(12, 4), "count": 6}])
+	for _i in 40:
+		fx.advance(1.0)
+	ck(_decals_at(fx, at) > 0, "brass is lying on the sandbags (%d)" % _decals_at(fx, at))
+	var ft: UnitInstance = st.grid.cell(Vector2i(4, 4)).occupant
+	var res := r.resolve(ShootIntent.new(ft.id, -1, -1, at))
+	ck(res.ok, "the flame jet fires: %s" % res.reason)
+	ck(st.grid.cell(at).on_fire, "the cell is alight")
+	ck(st.grid.cell(at).feature_id == "",
+			"the jet eats the sandbags, not just the ground (left '%s')" % st.grid.cell(at).feature_id)
+	ck(st.grid.cell(at).cover_height == 0.0, "and the cover they gave")
+	fx.apply(res.fx)
+	ck(_decals_at(fx, at) == 0, "and the brass with them (%d left)" % _decals_at(fx, at))

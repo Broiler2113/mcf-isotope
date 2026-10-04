@@ -9,6 +9,8 @@ var fails: PackedStringArray = []
 
 func _initialize() -> void:
 	_captor_death_frees_captive()
+	_a_captive_of_a_dead_captor_frees_itself()
+	_space_cannot_be_dug()
 	_corpses_survive_a_tank()
 	_a_station_breaks_under_the_tracks()
 	_mine_under_a_unit_kills()
@@ -16,7 +18,7 @@ func _initialize() -> void:
 	_ai_sapper_lays_mines_and_walks_around_them()
 	_fx_bounces_off_the_border()
 	if fails.is_empty():
-		print("mines and corpses: captor death, bodies under tracks, a crushed drone station, mine under foot, known-mine routing, AI sapper and border bounce all hold")
+		print("mines and corpses: captor death, orphaned captives, no digging in vacuum, bodies under tracks, a crushed drone station, mine under foot, known-mine routing, AI sapper and border bounce all hold")
 		quit(0)
 		return
 	printerr("mines and corpses: %d failure(s)" % fails.size())
@@ -284,3 +286,47 @@ func _a_station_breaks_under_the_tracks() -> void:
 		if l.contains("drone station"):
 			said = true
 	ck(said, "the log says so (%s)" % [res.log_lines])
+
+# 1b. Пленник, чей захватчик мёртв, освобождается сам — даже если держат его уже
+#     покойником. Смерть захватчика пленника отпускает (_kill, прогон выше), и во всех
+#     случаях, какие удалось построить, отпускает исправно. Игрок всё же видел бойца,
+#     оставшегося схваченным. Поэтому страховка стоит не на пути смерти, а на переходе
+#     хода, и здесь ей подсовывают ровно ту доску, которую игрок описал: держащий мёртв,
+#     держимый всё ещё HELD.
+func _a_captive_of_a_dead_captor_frees_itself() -> void:
+	var m := _flat(12, 6)
+	m.set_spawn(Vector2i(2, 2), "light_infantry", MCF.Owner.PLAYER_1)
+	m.set_spawn(Vector2i(3, 2), "light_infantry", MCF.Owner.PLAYER_1)
+	m.set_spawn(Vector2i(10, 4), "light_infantry", MCF.Owner.PLAYER_2)
+	var f := _build(m)
+	var s: GameState = f["s"]
+	var r: GameActionResolver = f["r"]
+	var captor := _u(s, Vector2i(2, 2))
+	var captive := _u(s, Vector2i(3, 2))
+	ck(r.resolve(CaptureIntent.new(captor.id, captive.id)).ok, "the soldier is picked up")
+	# Та самая испорченная доска: держащий — труп, держимый всё ещё схвачен.
+	captor.status = MCF.Status.CORPSE
+	captive.status = MCF.Status.HELD
+	captive.captor_id = captor.id
+	ck(captive.is_held(), "and starts the check still held by a corpse")
+	r.resolve(EndTurnIntent.new())
+	ck(not captive.is_held(), "the turn change frees him")
+	ck(captive.captor_id == -1, "and drops the dead captor's name")
+	ck(captive.is_alive(), "he is alive, not raised — freeing is not resurrection")
+
+# 1c. В космосе копать нечего: под ногами пустота, а не грунт.
+func _space_cannot_be_dug() -> void:
+	var m := _flat(12, 6)
+	m.set_cell(Vector2i(5, 3), MCF.FLOOR_NORMAL, 0.0, true, "")
+	m.set_spawn(Vector2i(4, 3), "engineer", MCF.Owner.PLAYER_1)
+	m.set_spawn(Vector2i(10, 4), "light_infantry", MCF.Owner.PLAYER_2)
+	var f := _build(m)
+	var s: GameState = f["s"]
+	var r: GameActionResolver = f["r"]
+	var dig := _u(s, Vector2i(4, 3))
+	ck(not r.diggable_cells(dig).has(Vector2i(5, 3)), "a vacuum cell is never offered to dig")
+	var res := r.resolve(DigIntent.new(dig.id, Vector2i(5, 3)))
+	ck(not res.ok, "and the resolver turns it down too (%s)" % res.reason)
+	ck(s.grid.cell(Vector2i(5, 3)).feature_id == "", "nothing was dug there")
+	# Соседняя клетка с полом копается как обычно — отказ про космос, а не про всё подряд.
+	ck(r.diggable_cells(dig).has(Vector2i(4, 2)), "while ordinary ground still digs")

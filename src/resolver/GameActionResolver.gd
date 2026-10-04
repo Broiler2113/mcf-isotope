@@ -1153,7 +1153,7 @@ func _resolve_flame(shooter: UnitInstance, target_coord: Vector2i) -> ActionResu
 			_kill(occ)  # огнемёт — крови нет
 			killed_names.append(occ.stats.display_name)
 			result.deaths.append(occ.id)
-		_ignite(cell, shooter.owner)  # поджог пола (§3.8)
+		_ignite(cell, shooter.owner, result)  # поджог пола (§3.8)
 		if Combat.is_on_firing_line(shooter.coord, c) and _step_toward(shooter.coord, c) == step:
 			last = c
 
@@ -1262,9 +1262,27 @@ func _flame_walk(origin: Vector2i, dir: Vector2i, count: int, out: Array) -> int
 	return n
 
 ## Поджечь клетку, запомнив сторону-поджигателя: огонь расползается только на её ходу (#45).
-func _ignite(cell: GridCell, owner: int) -> void:
+## Зажечь клетку — и СЪЕСТЬ её. Всё, что на ней лежало и стояло, исчезает вместе с
+## укрытием и глубиной: постройки, мешки, окоп, куча земли, ёж, ДПМГ, а с ними кровь,
+## гильзы и отпечатки. Остаются ровно двое, и ни один из них не «постройка»: ТЕЛА
+## (стена из пяти трупов — это тела) и МАШИНА (её огонь не трогает вовсе).
+##
+## Зачистка живёт ЗДЕСЬ, а не у вызывающих, и это главное. Поджечь клетку можно двумя
+## путями — струёй огнемёта (§3.8) и расползанием пламени (advance_fire), — и пока
+## правило лежало в одном из них, струя оставляла за собой нетронутые мешки и гильзы
+## на горящем полу. Теперь путь поджога один, и правило у него одно.
+func _ignite(cell: GridCell, owner: int, res: ActionResult = null) -> void:
 	cell.on_fire = true
 	cell.fire_owner = owner
+	var c := cell.coord
+	# Огонь подрывает обычную мину, до которой добрался (item 13). Противотанковую —
+	# НЕТ: её взрыватель реагирует лишь на вес гусеницы, не на пламя, — но сама она в
+	# огне всё равно гибнет, просто без взрыва, общей зачисткой ниже.
+	if cell.feature_id == MCF.FEATURE_MINE and res != null:
+		_detonate_mine(c, null, res)
+	elif cell.feature_id != MCF.FEATURE_CORPSE_WALL:
+		cell.clear_feature()
+	_fx(res, {"fx": "burn", "cells": [c]})
 	# Появление огня — повод активации соседних нейтралов (§3.1a).
 	notify_cell_changed(cell.coord)
 
@@ -2546,6 +2564,11 @@ func _resolve_dig(intent: DigIntent) -> ActionResult:
 	# нельзя копать сквозь стену/укрепление/уже существующий окоп.
 	if cell.feature_id != "" or cell.cover_height != 0.0 or cell.is_wall():
 		return ActionResult.fail("Can't dig this cell (something is built here)")
+	# В космосе копать нечего: под ногами не грунт, а пустота — ни окопа, ни земли под
+	# насыпь. Перечислитель такую клетку и не предлагает (diggable_cells); проверка здесь
+	# — для намерений не из UI: сеть, повтор, политика RL.
+	if cell.is_space:
+		return ActionResult.fail("There is nothing to dig in open space")
 	# Куда сложить землю: выбор игрока, если задан и корректен; иначе — авто (§3.7).
 	var spots := _dirt_spots(intent.target, actor.coord)
 	var picked := _chosen_dirt_spots(intent, spots)
@@ -3037,7 +3060,7 @@ func diggable_cells(actor: UnitInstance) -> Array:
 	for c in candidates:
 		var cell := state.grid.cell(c)
 		if cell.feature_id == "" and cell.cover_height == 0.0 and not cell.is_wall() \
-				and _dirt_room(c, actor.coord) >= 2:
+				and not cell.is_space and _dirt_room(c, actor.coord) >= 2:
 			out.append(c)
 	return out
 
@@ -3115,27 +3138,7 @@ func advance_fire(owner: int = -1, res: ActionResult = null) -> void:
 	for c: Vector2i in ignite:
 		var cell := state.grid.cell(c)
 		# Новая клетка наследует поджигателя — цепочка остаётся привязана к своей стороне.
-		_ignite(cell, ignite[c])
-		# Огонь съедает КЛЕТКУ, а не только то, что на ней построено (#83). Каркас стены
-		# ведёт, стекло лопается, шлюз заклинивает — но и мешки, окоп, куча земли, ёж и
-		# ДПМГ сгорают так же. Раньше горели лишь стены и стёкла, а мешки посреди пожара
-		# стояли как ни в чём не бывало.
-		#
-		# Два исключения, и оба — не «постройка»: МАШИНА (её огонь не трогает вовсе) и
-		# ТЕЛА. Стена из пяти трупов — это тела, и в пепел она не обращается.
-		#
-		# Огонь подрывает обычную мину, до которой дополз (item 13). Противотанковую — НЕТ:
-		# её взрыватель реагирует лишь на вес гусеницы, не на пламя, — но сама она в огне
-		# всё равно гибнет, просто без взрыва, и уходит общей зачисткой ниже.
-		if cell.feature_id == MCF.FEATURE_MINE and res != null:
-			_detonate_mine(c, null, res)
-		elif cell.feature_id != MCF.FEATURE_CORPSE_WALL:
-			cell.clear_feature()
-		# Юнит, оказавшийся на загоревшейся клетке, сгорает мгновенно (§6.5).
-		# Щитоносец (#50) и огнемётчик (#2) невосприимчивы к огню.
-		# Косметике тоже конец: кровь, ошмётки, гильзы и отпечатки с этой клетки исчезают.
-		# Пламя прошло по земле — под ним не остаётся ни лужи, ни латуни.
-		_fx(res, {"fx": "burn", "cells": [c]})
+		_ignite(cell, ignite[c], res)
 		if cell.occupant != null and cell.occupant.is_alive() and not is_fireproof(cell.occupant):
 			var burned := cell.occupant
 			# res здесь только ради кровавой косметики — _kill сам в deaths не пишет,
@@ -5152,6 +5155,19 @@ func drone_flight_cells(drone: UnitInstance) -> Array:
 func drone_flight_costs(drone: UnitInstance) -> Dictionary:
 	return _drone_reach(drone)
 
+## Маршрут полёта дрона до клетки — для предпросмотра (item 12). Это ТОТ ЖЕ путь, по
+## которому дрон потом полетит: цепочку предшественников строит сам разлёт, и другого
+## маршрута у него нет.
+##
+## Разлёт пересчитывается здесь намеренно: _drone_prev живёт ровно до следующего чужого
+## расчёта, а между двумя кадрами отрисовки резолвер успевает посчитать что угодно —
+## взять «последний» _drone_prev и понадеяться, что он про этого дрона, нельзя.
+func drone_route_to(drone: UnitInstance, target: Vector2i) -> Array[Vector2i]:
+	if drone == null or not drone.is_drone or not state.grid.in_bounds(target):
+		return [] as Array[Vector2i]
+	_drone_reach(drone)
+	return _drone_route(drone.coord, target)
+
 ## Потолок одного подлёта: остаток прошлого или полный подлёт за ОД.
 func drone_flight_budget(drone: UnitInstance) -> int:
 	return drone.move_credit if drone.move_credit > 0 else MCF.DRONE_FLIGHT_RANGE
@@ -5950,6 +5966,29 @@ func play_civilian_slots() -> ActionResult:
 			break
 	return out
 
+## Пленник, чьего захватчика больше нет, отпускается сам.
+##
+## Смерть захватчика пленника освобождает — это делает _kill, и делает во всех случаях,
+## какие удалось построить: свой и чужой захват, перенос, переложенный пленник, пожар,
+## взрыв, раунд спустя. И всё же игрок видел бойца, оставшегося схваченным после гибели
+## того, кто его держал.
+##
+## Поэтому страховка стоит не на пути смерти, а на переходе хода: любая ссылка на
+## захватчика, которого нет в живых, разрывается здесь. Освобождение перестаёт зависеть
+## от того, каким путём захватчик выбыл, — а «схвачен покойником» перестаёт быть
+## состоянием, которое доска вообще может держать.
+func _free_orphaned_captives() -> void:
+	for u: UnitInstance in state.all_units():
+		if u.captor_id == -1:
+			continue
+		var captor := state.get_unit(u.captor_id)
+		if captor != null and captor.is_alive():
+			continue
+		u.captor_id = -1
+		# Труп так трупом и остаётся: воскрешать освобождением нельзя.
+		if u.is_held():
+			u.status = MCF.Status.ALIVE
+
 func _resolve_end_turn(intent: EndTurnIntent = null) -> ActionResult:
 	# Единственный авторитетный переход состояния без проверки прав (AUDIT §2.4):
 	# actor_id здесь −1, поэтому _validate_actor не срабатывает, и клиент мог
@@ -5959,6 +5998,7 @@ func _resolve_end_turn(intent: EndTurnIntent = null) -> ActionResult:
 			and intent.requester != state.active_player():
 		return ActionResult.fail("Not your turn")
 	var prev := state.active_player()
+	_free_orphaned_captives()
 	state.turns.end_turn(state.all_units())
 	var civ := play_civilian_slots()
 	# Огонь ползёт в начале хода той стороны, которая его устроила (#45). Дошедшее до
