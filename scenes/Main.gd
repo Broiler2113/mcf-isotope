@@ -2950,6 +2950,116 @@ func _show_board_comparison() -> void:
 	_ui_layer.add_child(overlay)
 	Ui.theme_canvas_layers()
 
+## Разбор партии обученной политикой (item: «play vs latest»). Прогоняет записанный матч
+## и на каждом решении обеих сторон спрашивает политику, что сделала бы она и во что
+## оценивает позицию; из расхождений и провалов оценки складывается список ошибок.
+##
+## Идёт порциями с возвратом кадра: каждый вопрос — это обращение к серверу политики, и
+## матч на триста ходов иначе подвесил бы экран на минуты.
+func _show_match_analysis() -> void:
+	if recorder == null or recorder.is_empty():
+		return
+	var analyst := MatchAnalyst.new()
+	if not analyst.begin(recorder.to_dict(), _round_cap_for_analysis()):
+		_toast_analysis("The recording could not be opened: " + analyst.error)
+		return
+	var overlay := Control.new()
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.72)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.add_child(center)
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(560, 0)
+	SteamChrome.apply_panel(panel)
+	center.add_child(panel)
+	var frame := VBoxContainer.new()
+	frame.add_theme_constant_override("separation", 0)
+	panel.add_child(frame)
+	frame.add_child(SteamChrome.header_bar("What the Model Makes of It"))
+	var body := VBoxContainer.new()
+	body.add_theme_constant_override("separation", 10)
+	frame.add_child(SteamChrome.pad(body, 16, 14))
+	var status := Label.new()
+	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	status.custom_minimum_size = Vector2(520, 0)
+	status.text = "Going back through the match…"
+	body.add_child(status)
+	var report := RichTextLabel.new()
+	report.custom_minimum_size = Vector2(520, 300)
+	report.bbcode_enabled = false
+	report.scroll_following = false
+	body.add_child(report)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_END
+	body.add_child(row)
+	var shut := Button.new()
+	shut.text = "Close"
+	shut.custom_minimum_size = Vector2(120, 34)
+	shut.pressed.connect(overlay.queue_free)
+	row.add_child(shut)
+	_ui_layer.add_child(overlay)
+	Ui.theme_canvas_layers()
+	while analyst.has_next():
+		if not is_instance_valid(overlay):
+			return   # окно закрыли — разбор никому не нужен
+		analyst.step_many()
+		status.text = "Going back through the match… %d of %d" % [analyst.done(), analyst.total()]
+		await get_tree().process_frame
+	if not is_instance_valid(overlay):
+		return
+	if analyst.rows.is_empty():
+		status.text = "No verdict: " + (analyst.error if analyst.error != ""
+				else "the model had nothing to say about this match.")
+		return
+	status.text = _analysis_summary(analyst)
+	report.text = _analysis_body(analyst)
+
+## Шапка разбора: насколько часто каждая сторона играла то же, что выбрала бы политика.
+func _analysis_summary(analyst: MatchAnalyst) -> String:
+	var out := "Agreement with the model, move by move:\n"
+	for side: int in state.roster.player_ids():
+		if not MCF.is_player(side):
+			continue
+		out += "  %s — %d%%\n" % [state.roster.name_of(side),
+				roundi(analyst.agreement(side) * 100.0)]
+	out += "\nBelow: the moves after which the model's own read of the position fell "
+	out += "the furthest. That drop covers the move AND whatever the opponent did next."
+	return out
+
+func _analysis_body(analyst: MatchAnalyst) -> String:
+	var out := ""
+	for row: Dictionary in analyst.worst(10):
+		if float(row["swing"]) >= 0.0:
+			continue
+		out += "Round %d · %s\n" % [int(row["round"]), state.roster.name_of(int(row["side"]))]
+		out += "    played      %s\n" % String(row["played"])
+		if not bool(row["offered"]):
+			out += "    (the model was not shown this move, so it does not judge it)\n"
+		elif not bool(row["agreed"]):
+			out += "    would play  %s\n" % String(row["suggested"])
+		else:
+			out += "    the model would have played the same and still lost ground\n"
+		out += "    position    %+.3f after it\n\n" % float(row["swing"])
+	if out == "":
+		out = "Nothing stands out: the model never saw the position swing hard against either side."
+	return out
+
+## Потолок раундов, с которым политика училась. Для разбора важно лишь, чтобы он был тем
+## же самым, что в бою, — иначе «сколько осталось» читается иначе.
+func _round_cap_for_analysis() -> int:
+	var env := int(OS.get_environment("MCF_RL_ROUND_CAP"))
+	return env if env > 0 else 40
+
+func _toast_analysis(text: String) -> void:
+	state.log.add(text)
+
 func _show_victory(title: String) -> void:
 	if _victory_overlay != null:
 		_victory_overlay.queue_free()
@@ -2985,6 +3095,12 @@ func _show_victory(title: String) -> void:
 	row.alignment = BoxContainer.ALIGNMENT_END
 	row.add_theme_constant_override("separation", 8)
 	body.add_child(row)
+	if MatchAnalyst.available() and recorder != null and not recorder.is_empty():
+		var study := Button.new()
+		study.text = "Ask the Model"
+		study.custom_minimum_size = Vector2(130, 34)
+		study.pressed.connect(_show_match_analysis)
+		row.add_child(study)
 	if _opening_board != null:
 		var compare := Button.new()
 		compare.text = "Before / After"
