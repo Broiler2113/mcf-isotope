@@ -1,5 +1,10 @@
 extends "res://tests/NetSmokeBase.gd"
 var _host_units := 0
+## Где стояли солдаты хоста, когда бой открылся. Ход хоста считается ПО ДОСКЕ: под
+## туманом (а эта партия именно туманная) чужие ходы гостю в журнал не попадают вовсе —
+## и не должны, иначе текст рассказывал бы ровно то, что туман прячет. Доска же у сторон
+## общая, и сдвинувшийся солдат виден на ней независимо от того, видел ли гость сам ход.
+var _host_start := {}
 func _initialize() -> void:
 	tag = "guest-t"
 	start_net(false)
@@ -24,7 +29,9 @@ func _initialize() -> void:
 		func() -> void:
 			var m = current_scene
 			for u in m.state.all_units():
-				if u.owner == 0 and u.is_alive() and not u.is_drone: _host_units += 1
+				if u.owner == 0 and u.is_alive() and not u.is_drone:
+					_host_units += 1
+					_host_start[u.id] = u.coord
 			print("[guest-t] units=%d vehicles=%d host_units=%d" % [m.state.all_units().size(), m.state.all_vehicles().size(), _host_units])
 			ck(_host_units == 5, "guest's state holds the host's 5 soldiers (%d)" % _host_units)
 			print("[guest-t] digest ", load("res://tests/TestSupport.gd").digest(m.state).hash())
@@ -38,8 +45,10 @@ func _initialize() -> void:
 		poke_dice()
 		var m = current_scene
 		var host_moves := 0
-		for l in m.state.log.lines:
-			if str(l).find(": move →") >= 0: host_moves += 1
+		for id: int in _host_start:
+			var hu = m.state.get_unit(id)
+			if hu != null and hu.coord != _host_start[id]:
+				host_moves += 1
 		# Жребий инициативы (batch 14): гость может ходить первым — тогда сдаёт ход и
 		# ждёт, пока хост походит.
 		if host_moves < 3 and m.state.active_player() == 1 and not m._animating and not m._net_playing:
