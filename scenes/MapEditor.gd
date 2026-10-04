@@ -108,6 +108,9 @@ var _layer: TerrainTiles.Layer = null
 var _zone_img: Image = null
 var _zone_tex: ImageTexture = null
 var _zone_stale := false
+## Номера зон на холсте: середина каждой зоны, пересчёт только когда зоны менялись.
+var _zone_centers: Dictionary = {}
+var _zone_centers_dirty := true
 var _mini_img: Image = null
 var _mini_tex: ImageTexture = null
 var _mini_stale := false
@@ -208,6 +211,7 @@ func _map_replaced() -> void:
 		_mini_rect.texture = _mini_tex
 	_zone_stale = false
 	_mini_stale = false
+	_zone_centers_dirty = true
 	_selection = Rect2i()
 	_float = {}
 	_refresh_palette()
@@ -324,6 +328,7 @@ func _write(i: int, t: Array) -> void:
 	if zone_changed:
 		_zone_img.set_pixel(x, y, _zone_color(int(t[4])))
 		_zone_stale = true
+		_zone_centers_dirty = true
 	_mini_img.set_pixel(x, y, map_color(map, i, _env))
 	_mini_stale = true
 
@@ -941,6 +946,8 @@ func _shortcut(e: InputEventKey) -> bool:
 			_refresh_menu_checks()
 		KEY_F5:
 			play()
+		KEY_F1:
+			_shortcuts_dialog()
 		_:
 			for t: Dictionary in TOOLS:
 				if e.keycode == t["key"]:
@@ -1062,9 +1069,34 @@ func _draw() -> void:
 			if cs >= 14.0:
 				draw_string(font, o + Vector2(CELL * 0.22, CELL * 0.62), Sprites.unit_tag(s["stats_id"]),
 						HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color.WHITE)
+	if show_zones:
+		_draw_zone_numbers(font)
 	_draw_symmetry_axes()
 	_draw_overlays()
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+## Номер зоны крупно в её середине — какая из цветных областей кому достанется.
+func _draw_zone_numbers(font: Font) -> void:
+	if _zone_centers_dirty:
+		var sums := {}
+		for i in map.width * map.height:
+			var z: int = map.zone_owner[i]
+			if z < 0:
+				continue
+			var acc: Array = sums.get(z, [Vector2.ZERO, 0])
+			acc[0] += Vector2(i % map.width, i / map.width)
+			acc[1] += 1
+			sums[z] = acc
+		_zone_centers.clear()
+		for z: int in sums:
+			_zone_centers[z] = (sums[z][0] / float(sums[z][1]) + Vector2(0.5, 0.5)) * CELL
+		_zone_centers_dirty = false
+	var fs := int(clampf(28.0 / zoom, 16.0, 400.0))
+	for z: int in _zone_centers:
+		var txt := str(z + 1)
+		var at: Vector2 = _zone_centers[z] + Vector2(-fs * 0.3 * txt.length(), fs * 0.35)
+		draw_string_outline(font, at, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, maxi(2, fs / 6), Color(0, 0, 0, 0.85))
+		draw_string(font, at, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(1, 1, 1, 0.95))
 
 func _draw_symmetry_axes() -> void:
 	var col := Ui.accent_color()
@@ -1202,7 +1234,8 @@ func _build_menu_bar() -> void:
 			["Clear Map…", _clear_dialog]]],
 		["View", [["Zoom In  (wheel)", zoom_in], ["Zoom Out  (wheel)", zoom_out],
 			["Fit Map  (Ctrl+0)", fit_view], [],
-			["check:grid", "Grid  (G)"], ["check:zones", "Deployment Zones"], ["check:mini", "Minimap"]]],
+			["check:grid", "Grid  (G)"], ["check:zones", "Deployment Zones"], ["check:mini", "Minimap"], [],
+			["Keyboard Shortcuts…  (F1)", _shortcuts_dialog]]],
 		["Map", [["Resize…", _resize_dialog], [], ["label", "Preset"]] + _preset_items()],
 	]:
 		var mb := MenuButton.new()
@@ -1228,6 +1261,8 @@ func _build_menu_bar() -> void:
 				pm.add_item(item[0])
 				actions.append(item[1])
 		pm.index_pressed.connect(func(idx: int) -> void: _menu_action(actions[idx]))
+		if spec[0] == "Edit":
+			pm.about_to_popup.connect(_refresh_edit_menu.bind(pm))
 		row.add_child(mb)
 		_menus[spec[0]] = pm
 	row.add_child(VSeparator.new())
@@ -1285,6 +1320,24 @@ func _build_menu_bar() -> void:
 	row.add_child(play_btn)
 	_set_brush_size(brush_size)
 	_refresh_menu_checks()
+
+## Пункты «Правки», которым сейчас нечего делать, гаснут: откат без истории, вставка без
+## буфера, копия без выделения.
+func _refresh_edit_menu(pm: PopupMenu) -> void:
+	for i in pm.item_count:
+		var t := pm.get_item_text(i)
+		var off := false
+		if t.begins_with("Undo"):
+			off = _undo_stack.is_empty()
+		elif t.begins_with("Redo"):
+			off = _redo_stack.is_empty()
+		elif t.begins_with("Cut") or t.begins_with("Copy") or t.begins_with("Delete"):
+			off = not _has_selection()
+		elif t.begins_with("Paste"):
+			off = _clipboard.is_empty()
+		elif t.begins_with("Rotate") or t.begins_with("Flip"):
+			off = _float.is_empty()
+		pm.set_item_disabled(i, off)
 
 func _preset_items() -> Array:
 	var out: Array = []
@@ -2143,6 +2196,39 @@ func _resize_dialog() -> void:
 	_dialog("Resize Map", body, [["Cancel", null], ["Resize", func() -> void:
 		resize_map(int(w.value), int(h.value))
 		fit_view()]])
+
+func _shortcuts_dialog() -> void:
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 24)
+	grid.add_theme_constant_override("v_separation", 4)
+	var rows := [
+		["B / E / L / R / F", "Brush, Eraser, Line, Rectangle, Fill"],
+		["M / I / T", "Select, Eyedropper, Stamp"],
+		["Alt + click", "Pick the tile under the cursor"],
+		["[  ]", "Brush size"],
+		["R / H / V", "Rotate / flip what you are placing"],
+		["Ctrl+Z / Ctrl+Y", "Undo / redo"],
+		["Ctrl+C / X / V", "Copy, cut, paste the selection"],
+		["Delete", "Clear the selection"],
+		["Ctrl+A", "Select the whole map"],
+		["Esc", "Cancel placing, drop the selection"],
+		["Ctrl+S / Ctrl+Shift+S", "Save / save as"],
+		["Ctrl+N / Ctrl+O", "New map / open"],
+		["WASD, arrows, right-drag", "Pan"],
+		["Wheel / Ctrl+0", "Zoom / fit the map"],
+		["G", "Grid on or off"],
+		["F5", "Play this map"],
+	]
+	for r: Array in rows:
+		var k := Label.new()
+		k.text = r[0]
+		k.add_theme_color_override("font_color", Ui.text_accent_color())
+		grid.add_child(k)
+		var d := Label.new()
+		d.text = r[1]
+		grid.add_child(d)
+	_dialog("Keyboard Shortcuts", grid, [["Close", null]], 460.0)
 
 func _clear_dialog() -> void:
 	_confirm("Clear Map", "Erase everything and start again from the %s preset's ground? You can undo this."
