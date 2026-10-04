@@ -53,7 +53,12 @@ C_FCOVER = 73          # the same for our own fire
 C_FNEXT = 74           # expected enemy hits on the cell after they move (best spot each)
 C_EREACH = 75          # how many visible enemies can walk onto the cell next turn
 C_LASTSEEN = 76        # a hidden enemy was last seen here, fading with age (fog games)
-N_CHANNELS = 77
+# Reach of a VISIBLE, manned enemy drone station: a drone flies DRONE_LEASH from its
+# station and detonates over an area, so everything inside that sum can be hit in one
+# enemy turn. 1 at the station, fading to 0 at the rim. Without it the policy read a
+# station as ordinary floor furniture and walked whole squads into its radius.
+C_DRONE_THREAT = 77
+N_CHANNELS = 78
 
 FLAT_DIM = 20
 
@@ -79,7 +84,15 @@ F_MISC = F_TARGET_TYPE + N_UNIT_TYPES      # shots_full, shots_single, av_mine, 
 F_DRONE = F_MISC + 5 + len(BUILD_FEATURES)  # leash fraction, enemy vehicle cells in blast
 F_TAC = F_DRONE + 2    # threat at target, own fire at target, cover there, AP cost/3, multi-AP move
 F_PRED = F_TAC + 5     # next-turn enemy fire at target, enemies that can reach the target
-CAND_DIM = F_PRED + 2
+# Drone-station reach (ObsEncoder "rh"), on the candidate that CHOOSES THE STATION'S CELL
+# (deploying it from hand, or launching off one already down): 1 = an enemy right at the
+# station, a small positive value = reachable but with no slack left, and exactly 0 = none
+# within DRONE_LEASH of it, 0 as well when no enemy is in sight.
+# Appended at the END, so model.load_compat grows cand.0 by a zero column and an older
+# checkpoint keeps its exact behaviour. F_DRONE's leash fraction is a different question:
+# there the actor is the drone itself, already airborne.
+F_REACH = F_PRED + 2
+CAND_DIM = F_REACH + 1
 
 
 def grid_tensor(obs: dict) -> np.ndarray:
@@ -112,6 +125,10 @@ def grid_tensor(obs: dict) -> np.ndarray:
     if "threat" in obs:
         g[C_THREAT][sl] = np.minimum(plane("threat") / 24.0, 1.0)
         g[C_FCOVER][sl] = np.minimum(plane("fcover") / 24.0, 1.0)
+    if "dthreat" in obs:
+        # Sent as quarters like the fire layers, but the source is already 0..1, so a
+        # full-strength cell arrives as 4.
+        g[C_DRONE_THREAT][sl] = np.minimum(plane("dthreat") / 4.0, 1.0)
     if "fnext" in obs:
         g[C_FNEXT][sl] = np.minimum(plane("fnext") / 24.0, 1.0)
         g[C_EREACH][sl] = np.minimum(plane("ereach") / 24.0, 1.0)
@@ -254,6 +271,7 @@ def candidate_rows(obs: dict, legal: list[dict]) -> tuple[np.ndarray, np.ndarray
         if "tn" in c:
             rows[i, F_PRED] = min(float(c["tn"]), 6.0) / 6.0
             rows[i, F_PRED + 1] = min(float(c.get("er", 0)), 6.0) / 6.0
+        rows[i, F_REACH] = float(c.get("rh", 0.0))
         apc = int(c.get("apc", 0))
         if apc:
             rows[i, F_TAC + 3] = apc / 3.0

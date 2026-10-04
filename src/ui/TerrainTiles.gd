@@ -274,7 +274,10 @@ func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> voi
 		if not rock.is_empty():
 			feat.blit_rect(rock[variant_of(c, rock.size())], full, at)
 			return
-	if fid == "" or fid == MCF.FEATURE_MINE or fid == MCF.FEATURE_AV_MINE:
+	# Станция дронов — как мина: в плитки НЕ запекается, потому что видимость у неё своя
+	# у каждой стороны (туман). Её рисует поклеточный проход экрана боя.
+	if fid == "" or fid == MCF.FEATURE_MINE or fid == MCF.FEATURE_AV_MINE \
+			or fid == MCF.FEATURE_DRONE_STATION:
 		return
 	var name := tile_name(cell)
 	var sheets := _sheet(name, res)

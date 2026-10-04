@@ -50,6 +50,7 @@ const COLOSSAL_MS := 4000
 
 func _initialize() -> void:
 	ck(MapGen.SIZE_CUSTOM == MapGen.SIZES.size(), "'Custom' follows the last preset size")
+	_field_digs_trench_lines()
 	ck(MapGen.SIZES[MapGen.SIZES.size() - 1] == MapGen.MAX_DIM, "the largest preset is the 250×250 cap")
 	for style in MapGen.STYLE_NAMES.size():
 		for size in FULL_SIZES:
@@ -415,3 +416,53 @@ func _play(style: int) -> void:
 			ai.notify_intent_denied(state)
 	ck(actions < MAX_ACTIONS, "%s: the AI keeps ending its turns" % MapGen.STYLE_NAMES[style])
 	ck(actions > 0, "%s: the AI finds something to do" % MapGen.STYLE_NAMES[style])
+
+## Поле роется НИТКАМИ окопов, а не только ячейками, и роется тем гуще, чем выше
+## плотность. Проверяется не «есть окопы», а длина СВЯЗНОЙ линии: короткие огрызки
+## _trench() дают максимум семь клеток, поэтому цепь заметно длиннее семи может взяться
+## только из _trench_line.
+func _field_digs_trench_lines() -> void:
+	var by_density: Array[int] = []
+	var longest_at: Array[int] = []
+	for dens in [0, 1, 2]:
+		var cells_total := 0
+		var longest := 0
+		for n in 5:
+			var m := MapGen.generate({"style": MapGen.Style.FIELD, "size": 2, "density": dens,
+					"seed": 400 + n * 13, "zones": 2, "units": 20})
+			var dug := {}
+			for y in m.height:
+				for x in m.width:
+					if m.get_feature(Vector2i(x, y)) == MCF.FEATURE_TRENCH:
+						dug[Vector2i(x, y)] = true
+			cells_total += dug.size()
+			longest = maxi(longest, _longest_chain(dug))
+		by_density.append(cells_total)
+		longest_at.append(longest)
+	ck(longest_at[1] > 12,
+			"a normal field grows trench lines, not just pits (longest chain %d)" % longest_at[1])
+	ck(by_density[0] < by_density[1] and by_density[1] < by_density[2],
+			"and density decides how much of it there is (%s)" % [by_density])
+	ck(longest_at[2] >= longest_at[0],
+			"a dense field digs lines at least as long as a sparse one (%s)" % [longest_at])
+
+## Длина самой длинной СВЯЗНОЙ (по четырём сторонам) цепочки окопов.
+func _longest_chain(dug: Dictionary) -> int:
+	var seen := {}
+	var best := 0
+	for c: Vector2i in dug:
+		if seen.has(c):
+			continue
+		var stack: Array = [c]
+		seen[c] = true
+		var n := 0
+		while not stack.is_empty():
+			var p: Vector2i = stack.pop_back()
+			n += 1
+			for d: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				var q: Vector2i = p + d
+				if dug.has(q) and not seen.has(q):
+					seen[q] = true
+					stack.append(q)
+		best = maxi(best, n)
+	return best

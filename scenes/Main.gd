@@ -324,6 +324,10 @@ var _pause_btn: Button = null
 ## остаётся смотреть на поле, сохранить и уйти в меню.
 var _match_over: bool = false
 var _victory_overlay: Control = null
+## Доска, какой она была в начале боя — картинка по пикселю на клетку (см.
+## _board_thumbnail). Снимается один раз, на открытии матча; в конце по ней видно, во
+## что бой превратил карту.
+var _opening_board: Image = null
 
 ## Какой слот отыгрывается ПРЯМО СЕЙЧАС, когда это не active_player (item 6).
 ##
@@ -366,6 +370,10 @@ var _panel_drag: Control = null
 var _panel_drag_off: Vector2 = Vector2.ZERO
 var _menu: PanelContainer
 var _picker: PanelContainer
+## Клетка под наведённой кнопкой выбора («Station at (45, 32)» и подобные). Пока мышь на
+## кнопке, на доске горит ИМЕННО этот объект: список голых координат глазами не читается,
+## а объект на поле — читается сразу. (-1,-1) — ни на что не наведено.
+var _hover_cell := Vector2i(-1, -1)
 var _dice: DiceRoller
 ## Кастомное модальное окно «выйти в меню» в общем стиле интерфейса (#51), а не
 ## системный ConfirmationDialog. Полноэкранный затемнитель + рамка SteamChrome.
@@ -545,6 +553,7 @@ func _build_state() -> void:
 ## нейтральной стороны нет, её ход проводит сам резолвер.
 func _open_match() -> void:
 	_begin_recording()
+	_opening_board = _board_thumbnail()
 	state.log.add("— Initiative this match: %s —" % state.turns.order_names())
 	# Открывающий слот мирных играется ВНЕ потока намерений, но кубики бросает —
 	# поэтому под запись он уходит через сам регистратор (см. ReplayRecorder).
@@ -598,7 +607,8 @@ func _play_civilian_result(res: ActionResult) -> void:
 	_playing_slot = -1
 	if _init_overlay != null and _init_overlay.visible:
 		_refresh_initiative_overlay()
-	state.log.publish_result(res)
+	if _result_is_audible(res):
+		state.log.publish_result(res)
 	_refresh_status()
 
 # --- Запись матча (item 53) --------------------------------------------------
@@ -809,7 +819,8 @@ func _show_result(result: ActionResult) -> void:
 		_hold_visual = {}
 	if not result.fx.is_empty():
 		_fx.apply(result.fx)
-	state.log.publish_result(result)
+	if _result_is_audible(result):
+		state.log.publish_result(result)
 	_refresh_status()
 	queue_redraw()
 
@@ -1122,6 +1133,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			if _box_dragging:
 				_box_dragging = false
 				_finalize_box()
+			elif event.shift_pressed:
+				_shift_pick(_pos_to_cell(get_global_mouse_position()))
 			else:
 				_handle_click(_pos_to_cell(get_global_mouse_position()))
 		return
@@ -1548,6 +1561,7 @@ func _deselect() -> void:
 	item_cells = []
 	_menu.hide()
 	_picker.hide()
+	_clear_hint_cell()
 	if _comp_panel != null:
 		_comp_panel.hide()  # машину сняли с выбора — панель узлов уходит с ней
 	_refresh_info()
@@ -1647,6 +1661,7 @@ func _veh_back_to_menu() -> void:
 
 func _open_vehicle_menu(veh: Vehicle) -> void:
 	_picker.hide()
+	_clear_hint_cell()
 	for c in _menu.get_children():
 		c.queue_free()
 	var spec := VehicleDB.get_vehicle(veh.type_id)
@@ -2102,6 +2117,30 @@ func _on_multi_toggled(pressed: bool) -> void:
 	_box_dragging = false
 	queue_redraw()
 
+## Shift + клик при включённом мульти-выделении: добавить бойца в отряд, а если он там
+## уже есть — убрать. Рамка берёт всех подряд в прямоугольнике, и отряд из троих, стоящих
+## вразнобой, иначе собирался рамкой в пол-экрана и разбором лишних.
+##
+## Условия отбора — ДОСЛОВНО те же, что у рамки (_finalize_box): свой, активный, живой,
+## не дрон и не в машине. Иначе shift набирал бы в отряд тех, кем отряд всё равно не ходит.
+func _shift_pick(coord: Vector2i) -> void:
+	var u := _unit_at(coord)
+	if u == null or u.owner != state.active_player() or not u.is_alive() \
+			or not _can_control(u.owner) or u.is_drone or u.aboard_vehicle_id != -1:
+		return
+	var ids: Array[int] = _group_ids.duplicate()
+	# Один уже выбранный боец — тоже начало отряда: shift по второму собирает пару, а не
+	# бросает первого. Без этого собрать отряд можно было только с рамки.
+	if ids.is_empty() and selected_id != -1 and selected_id != u.id:
+		var cur := state.get_unit(selected_id)
+		if cur != null and cur.is_alive() and not cur.is_drone and cur.aboard_vehicle_id == -1:
+			ids.append(selected_id)
+	if ids.has(u.id):
+		ids.erase(u.id)
+	else:
+		ids.append(u.id)
+	_set_group(ids)
+
 ## По завершении рамки — собрать своих активных пехотинцев внутри прямоугольника.
 func _finalize_box() -> void:
 	var a := _pos_to_cell(_box_start_screen)
@@ -2140,6 +2179,7 @@ func _set_group(ids: Array[int]) -> void:
 	target_ids = []
 	item_cells = []
 	_picker.hide()
+	_clear_hint_cell()
 	_open_group_menu()
 	_refresh_info()
 	queue_redraw()
@@ -2610,6 +2650,7 @@ func _on_intent_ready(intent: Intent) -> void:
 		return
 	_menu.hide()
 	_picker.hide()
+	_clear_hint_cell()
 	# Снимки для отката берёт РЕЗОЛВЕР (item 28) — он один делает это одинаково у
 	# всех пиров. Здесь остаётся только показ.
 	# Смерть показываем только ПОСЛЕ анимации броска защиты (#46): снимок живых
@@ -2681,7 +2722,8 @@ func _on_intent_ready(intent: Intent) -> void:
 	if not result.fx.is_empty():
 		_fx.apply(result.fx)
 		queue_redraw()
-	state.log.publish_result(result)
+	if _result_is_audible(result):
+		state.log.publish_result(result)
 	for c in controllers.values():
 		c.notify_state_changed(state)
 	# Победа (batch 13 #9): партия замирает, следующий шаг ИИ не заказывается.
@@ -2810,12 +2852,214 @@ func _declare_match_over(title: String) -> void:
 	_deselect()
 	_menu.hide()
 	_picker.hide()
+	_clear_hint_cell()
 	_show_victory(title)
 	_refresh_status()
 	queue_redraw()
 
 ## Окно исхода в общем стиле SteamChrome (batch 13 #9). «Look at the Board» убирает окно,
 ## но доску не размораживает: посмотреть на поле можно, играть дальше — нет.
+## Доска одной картинкой, по пикселю на клетку: та же палитра, что у дальнего плана
+## (_lod_color / _lod_feature_color), плюс точки живых бойцов и машин цветом их стороны.
+## По ней видно и застройку, и расстановку — то есть ровно то, что бой и меняет.
+func _board_thumbnail() -> Image:
+	var grid := state.grid
+	var img := Image.create(grid.width, grid.height, false, Image.FORMAT_RGBA8)
+	for y in grid.height:
+		for x in grid.width:
+			var cell := grid.cell_fast(x, y)
+			var col := _lod_color(cell)
+			var fc := _lod_feature_color(cell)
+			if fc.a > 0.0:
+				col = col.blend(fc)
+			img.set_pixel(x, y, col)
+	for u: UnitInstance in state.all_units():
+		if not u.is_alive() or u.is_drone or not grid.in_bounds(u.coord):
+			continue
+		img.set_pixel(u.coord.x, u.coord.y, _side_color(u.owner))
+	for veh: Vehicle in state.all_vehicles():
+		if not veh.alive():
+			continue
+		for c: Vector2i in veh.footprint():
+			if grid.in_bounds(c):
+				img.set_pixel(c.x, c.y, _side_color(veh.owner).lightened(0.3))
+	return img
+
+## «Было / стало» в конце боя: две картинки доски рядом, до первого хода и после
+## последнего. Масштаб — целым числом, чтобы клетки остались квадратными и считались
+## глазом, и с фильтрацией NEAREST: это карта, а не фотография.
+func _show_board_comparison() -> void:
+	if _opening_board == null:
+		return
+	var before := _opening_board
+	var after := _board_thumbnail()
+	var overlay := Control.new()
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.72)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.add_child(center)
+	var panel := PanelContainer.new()
+	SteamChrome.apply_panel(panel)
+	center.add_child(panel)
+	var frame := VBoxContainer.new()
+	frame.add_theme_constant_override("separation", 0)
+	panel.add_child(frame)
+	frame.add_child(SteamChrome.header_bar("Before and After"))
+	var body := VBoxContainer.new()
+	body.add_theme_constant_override("separation", 10)
+	frame.add_child(SteamChrome.pad(body, 16, 14))
+	var pair := HBoxContainer.new()
+	pair.add_theme_constant_override("separation", 16)
+	body.add_child(pair)
+	# Обе картинки одного размера — масштаб считаем по одной.
+	var zoom: int = maxi(1, mini(int(520.0 / maxf(1.0, float(before.get_width()))),
+			int(420.0 / maxf(1.0, float(before.get_height())))))
+	for pane: Array in [["At the first move", before], ["At the last", after]]:
+		var col := VBoxContainer.new()
+		col.add_theme_constant_override("separation", 6)
+		var cap := Label.new()
+		cap.text = String(pane[0])
+		col.add_child(cap)
+		var tr := TextureRect.new()
+		tr.texture = ImageTexture.create_from_image(pane[1] as Image)
+		tr.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		tr.custom_minimum_size = Vector2((pane[1] as Image).get_width() * zoom,
+				(pane[1] as Image).get_height() * zoom)
+		col.add_child(tr)
+		pair.add_child(col)
+	var note := Label.new()
+	note.text = "Walls knocked through, floors burned and scarred, and who was left standing where."
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.custom_minimum_size = Vector2(420, 0)
+	body.add_child(note)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_END
+	body.add_child(row)
+	var shut := Button.new()
+	shut.text = "Close"
+	shut.custom_minimum_size = Vector2(120, 34)
+	shut.pressed.connect(overlay.queue_free)
+	row.add_child(shut)
+	_ui_layer.add_child(overlay)
+	Ui.theme_canvas_layers()
+
+## Разбор партии обученной политикой (item: «play vs latest»). Прогоняет записанный матч
+## и на каждом решении обеих сторон спрашивает политику, что сделала бы она и во что
+## оценивает позицию; из расхождений и провалов оценки складывается список ошибок.
+##
+## Идёт порциями с возвратом кадра: каждый вопрос — это обращение к серверу политики, и
+## матч на триста ходов иначе подвесил бы экран на минуты.
+func _show_match_analysis() -> void:
+	if recorder == null or recorder.is_empty():
+		return
+	var analyst := MatchAnalyst.new()
+	if not analyst.begin(recorder.to_dict(), _round_cap_for_analysis()):
+		_toast_analysis("The recording could not be opened: " + analyst.error)
+		return
+	var overlay := Control.new()
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.72)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.add_child(center)
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(560, 0)
+	SteamChrome.apply_panel(panel)
+	center.add_child(panel)
+	var frame := VBoxContainer.new()
+	frame.add_theme_constant_override("separation", 0)
+	panel.add_child(frame)
+	frame.add_child(SteamChrome.header_bar("What the Model Makes of It"))
+	var body := VBoxContainer.new()
+	body.add_theme_constant_override("separation", 10)
+	frame.add_child(SteamChrome.pad(body, 16, 14))
+	var status := Label.new()
+	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	status.custom_minimum_size = Vector2(520, 0)
+	status.text = "Going back through the match…"
+	body.add_child(status)
+	var report := RichTextLabel.new()
+	report.custom_minimum_size = Vector2(520, 300)
+	report.bbcode_enabled = false
+	report.scroll_following = false
+	body.add_child(report)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_END
+	body.add_child(row)
+	var shut := Button.new()
+	shut.text = "Close"
+	shut.custom_minimum_size = Vector2(120, 34)
+	shut.pressed.connect(overlay.queue_free)
+	row.add_child(shut)
+	_ui_layer.add_child(overlay)
+	Ui.theme_canvas_layers()
+	while analyst.has_next():
+		if not is_instance_valid(overlay):
+			return   # окно закрыли — разбор никому не нужен
+		analyst.step_many()
+		status.text = "Going back through the match… %d of %d" % [analyst.done(), analyst.total()]
+		await get_tree().process_frame
+	if not is_instance_valid(overlay):
+		return
+	if analyst.rows.is_empty():
+		status.text = "No verdict: " + (analyst.error if analyst.error != ""
+				else "the model had nothing to say about this match.")
+		return
+	status.text = _analysis_summary(analyst)
+	report.text = _analysis_body(analyst)
+
+## Шапка разбора: насколько часто каждая сторона играла то же, что выбрала бы политика.
+func _analysis_summary(analyst: MatchAnalyst) -> String:
+	var out := "Agreement with the model, move by move:\n"
+	for side: int in state.roster.player_ids():
+		if not MCF.is_player(side):
+			continue
+		out += "  %s — %d%%\n" % [state.roster.name_of(side),
+				roundi(analyst.agreement(side) * 100.0)]
+	out += "\nBelow: the moves after which the model's own read of the position fell "
+	out += "the furthest. That drop covers the move AND whatever the opponent did next."
+	return out
+
+func _analysis_body(analyst: MatchAnalyst) -> String:
+	var out := ""
+	for row: Dictionary in analyst.worst(10):
+		if float(row["swing"]) >= 0.0:
+			continue
+		out += "Round %d · %s\n" % [int(row["round"]), state.roster.name_of(int(row["side"]))]
+		out += "    played      %s\n" % String(row["played"])
+		if not bool(row["offered"]):
+			out += "    (the model was not shown this move, so it does not judge it)\n"
+		elif not bool(row["agreed"]):
+			out += "    would play  %s\n" % String(row["suggested"])
+		else:
+			out += "    the model would have played the same and still lost ground\n"
+		out += "    position    %+.3f after it\n\n" % float(row["swing"])
+	if out == "":
+		out = "Nothing stands out: the model never saw the position swing hard against either side."
+	return out
+
+## Потолок раундов, с которым политика училась. Для разбора важно лишь, чтобы он был тем
+## же самым, что в бою, — иначе «сколько осталось» читается иначе.
+func _round_cap_for_analysis() -> int:
+	var env := int(OS.get_environment("MCF_RL_ROUND_CAP"))
+	return env if env > 0 else 40
+
+func _toast_analysis(text: String) -> void:
+	state.log.add(text)
+
 func _show_victory(title: String) -> void:
 	if _victory_overlay != null:
 		_victory_overlay.queue_free()
@@ -2851,6 +3095,18 @@ func _show_victory(title: String) -> void:
 	row.alignment = BoxContainer.ALIGNMENT_END
 	row.add_theme_constant_override("separation", 8)
 	body.add_child(row)
+	if MatchAnalyst.available() and recorder != null and not recorder.is_empty():
+		var study := Button.new()
+		study.text = "Ask the Model"
+		study.custom_minimum_size = Vector2(130, 34)
+		study.pressed.connect(_show_match_analysis)
+		row.add_child(study)
+	if _opening_board != null:
+		var compare := Button.new()
+		compare.text = "Before / After"
+		compare.custom_minimum_size = Vector2(130, 34)
+		compare.pressed.connect(_show_board_comparison)
+		row.add_child(compare)
 	var close := Button.new()
 	close.text = "Look at the Board"
 	close.custom_minimum_size = Vector2(130, 34)
@@ -2916,6 +3172,7 @@ func _after_action() -> void:
 func _on_net_applied(intent: Intent, result: ActionResult) -> void:
 	_menu.hide()
 	_picker.hide()
+	_clear_hint_cell()
 	if not result.ok:
 		state.log.add("[denied] " + result.reason)
 		# Отказ ИИ-стороне на хосте (batch 12 #15): снять актёра с очереди и вести дальше,
@@ -2971,7 +3228,8 @@ func _show_net_action(intent: Intent, result: ActionResult) -> void:
 		_hold_visual = {}
 	if not result.fx.is_empty():
 		_fx.apply(result.fx)
-	state.log.publish_result(result)
+	if _result_is_audible(result):
+		state.log.publish_result(result)
 	for c in controllers.values():
 		c.notify_state_changed(state)
 	_refresh_status()
@@ -3875,6 +4133,9 @@ const LOD_ZOOM := 0.0
 ## Ниже этого зума подписи высоты насыпей не рисуются — шрифт всё равно не прочесть.
 const HEIGHT_LABEL_ZOOM := 0.6
 const FOG_COL := Color(0.02, 0.02, 0.04, 0.55)
+## Стена, которой сейчас не видно (обычный туман): серая пелена в половину силы. План
+## здания игрок помнит и стену видит — но не то, что у неё творится.
+const UNSEEN_WALL_COL := Color(0.55, 0.55, 0.58, 0.5)
 
 ## Порядок слоёв — как у поклеточного прохода: рельеф, над ним туман, над туманом объекты
 ## (их поклеточный проход тоже рисует поверх пелены — и на неразведанных клетках).
@@ -4132,7 +4393,10 @@ func _lod_color(cell: GridCell) -> Color:
 ## сюда не входят: их видимость своя у каждой стороны, их рисует _draw.
 func _lod_feature_color(cell: GridCell) -> Color:
 	var fid := cell.feature_id
-	if fid == "" or fid == MCF.FEATURE_MINE or fid == MCF.FEATURE_AV_MINE:
+	# Станция дронов, как и мина, в общий слой объектов не идёт: её видно только тому, кто
+	# её видит сейчас, и рисуется она поклеточно.
+	if fid == "" or fid == MCF.FEATURE_MINE or fid == MCF.FEATURE_AV_MINE \
+			or fid == MCF.FEATURE_DRONE_STATION:
 		return Color(0, 0, 0, 0)
 	if _lod_tex_avg.has(fid):
 		return _lod_tex_avg[fid]
@@ -4583,6 +4847,33 @@ func _draw() -> void:
 	# снимок «до взрыва» на время броска (item 22) и трещина на побитом ДОТе (#89).
 	if not far:
 		var fcell_size := Vector2(CELL, CELL)
+		# Станция дронов — только там, где игрок СЕЙЧАС видит (туман). Из плиток она
+		# исключена ровно за этим: запечённая, она светила бы сквозь пелену и выдавала
+		# чужого оператора вернее, чем он сам.
+		for sc: Vector2i in resolver._feature_cells(MCF.FEATURE_DRONE_STATION):
+			if _cell_on_screen(sc.x, sc.y) and _cell_seen_now(sc, visible):
+				_tiles.draw_feature_tile(self, MCF.FEATURE_DRONE_STATION, sc,
+						Rect2(_cell_origin(sc), fcell_size))
+		# Пелена ПОВЕРХ объектов. Статика живёт в плитках, а плитки рисуются над общим
+		# туманом (так задумано: план здания игрок знает и в темноте), поэтому то, что
+		# должно меркнуть вместе с клеткой, меркнет здесь, отдельным проходом.
+		#
+		# Створка шлюза заодно возвращается к ЗАКРЫТОМУ виду: открывшийся в темноте шлюз
+		# рассказывал о чужом ходе ровно то, что туман и прячет.
+		if resolver.fog_enabled and resolver.fog_mode == MCF.Fog.STANDARD:
+			for wy in range(vy0, vy1 + 1):
+				for wx in range(vx0, vx1 + 1):
+					var wc := Vector2i(wx, wy)
+					if visible.has(wc):
+						continue
+					var wcell := grid.cell_fast(wx, wy)
+					var as_wall := wcell.is_wall()
+					if wcell.feature_id == MCF.FEATURE_AIRLOCK and not as_wall:
+						_tiles.draw_feature_tile(self, MCF.FEATURE_AIRLOCK, wc,
+								Rect2(_cell_origin(wc), fcell_size))
+						as_wall = true
+					if as_wall:
+						draw_rect(Rect2(_cell_origin(wc), fcell_size), UNSEEN_WALL_COL)
 		for mk: String in [MCF.FEATURE_MINE, MCF.FEATURE_AV_MINE]:
 			for mc: Vector2i in resolver._feature_cells(mk):
 				if _cell_on_screen(mc.x, mc.y) and resolver.mine_visible_to(viewer, mc):
@@ -4612,6 +4903,27 @@ func _draw() -> void:
 				if _cell_on_screen(mc.x, mc.y) and resolver.mine_visible_to(viewer, mc):
 					draw_rect(Rect2(_cell_origin(mc) + Vector2(CELL * 0.25, CELL * 0.25),
 							Vector2(CELL * 0.5, CELL * 0.5)), Color(0.85, 0.25, 0.2))
+		for sc: Vector2i in resolver._feature_cells(MCF.FEATURE_DRONE_STATION):
+			if _cell_on_screen(sc.x, sc.y) and _cell_seen_now(sc, visible):
+				draw_rect(Rect2(_cell_origin(sc) + Vector2(CELL * 0.25, CELL * 0.25),
+						Vector2(CELL * 0.5, CELL * 0.5)), Color(0.5, 0.8, 0.95))
+
+	# Объект под наведённой кнопкой выбора — поверх рельефа и объектов, чтобы его было
+	# видно сразу. Для станции заодно показываем поводок её дрона: выбор «с какой
+	# запускать» — это и есть выбор, докуда дрон дотянется.
+	if state.grid.in_bounds(_hover_cell):
+		var ho := _cell_origin(_hover_cell)
+		var hsz := Vector2(CELL, CELL)
+		if grid.cell(_hover_cell).feature_id == MCF.FEATURE_DRONE_STATION:
+			var hl := MCF.DRONE_LEASH
+			var htl := Vector2i(maxi(0, _hover_cell.x - hl), maxi(0, _hover_cell.y - hl))
+			var hbr := Vector2i(mini(grid.width - 1, _hover_cell.x + hl),
+					mini(grid.height - 1, _hover_cell.y + hl))
+			var hrect := Rect2(_cell_origin(htl), Vector2(hbr - htl + Vector2i.ONE) * CELL)
+			draw_rect(hrect, Color(0.38, 0.7, 0.85, 0.08))
+			draw_rect(hrect, Color(0.38, 0.7, 0.85, 0.7), false, 2.0)
+		draw_rect(Rect2(ho, hsz), Color(0.45, 0.85, 1.0, 0.25))
+		draw_rect(Rect2(ho, hsz), Color(0.6, 0.92, 1.0), false, 3.0)
 
 	# Трупы идут ОТДЕЛЬНЫМ проходом до корпусов машин (#59): танк наезжает на тело,
 	# а не тело лежит поверх брони. Смерти, ещё не показанные из-за анимации броска
@@ -5006,12 +5318,17 @@ func _draw_fx_props(visible: Dictionary) -> void:
 		var tail: Vector2 = tf.lerp(tt, maxf(0.0, k - 0.25))
 		draw_line(tail, head, Color(1.0, 0.95, 0.5, 0.9), 2.0)
 		draw_circle(head, 2.5, Color(1.0, 1.0, 0.7, 0.95))
-	if _fx.props.is_empty() and _fx.flying.is_empty() and _fx.prints.is_empty():
+	if _fx.props.is_empty() and _fx.gore.is_empty() and _fx.flying.is_empty() \
+			and _fx.prints.is_empty():
 		return
 	var fog_on: bool = resolver.fog_enabled
 	for prop: Dictionary in _fx.prints:
 		_draw_fx_one(prop["kind"], prop["pos"], prop["rot"], prop["scale"], visible, fog_on,
 				prop["origin"])
+	# Кровь — первым слоем: гильзы и осколки ложатся ПОВЕРХ лужи, а не тонут под ней.
+	for prop: Dictionary in _fx.gore:
+		_draw_fx_one(prop["kind"], prop["pos"], prop["rot"], prop["scale"], visible, fog_on,
+				prop.get("origin", Vector2i(-1, -1)))
 	for prop: Dictionary in _fx.props:
 		_draw_fx_one(prop["kind"], prop["pos"], prop["rot"], prop["scale"], visible, fog_on,
 				prop.get("origin", Vector2i(-1, -1)))
@@ -5495,6 +5812,7 @@ func _build_ui() -> void:
 	_picker = PanelContainer.new()
 	SteamChrome.apply_panel(_picker)
 	_picker.hide()
+	_clear_hint_cell()
 	_ui_layer.add_child(_picker)
 
 	_dice = DiceRoller.new()
@@ -6573,6 +6891,7 @@ func _side_color(side: int) -> Color:
 
 func _open_menu(unit: UnitInstance) -> void:
 	_picker.hide()
+	_clear_hint_cell()
 	for c in _menu.get_children():
 		c.queue_free()
 	var vb := _scroll_menu(_menu, unit.stats.display_name)
@@ -6926,6 +7245,7 @@ func _open_component_picker(veh: Vehicle, title: String, on_pick: Callable,
 				veh.component(comp), veh.component_max(comp)]
 		b.pressed.connect(func() -> void:
 			_picker.hide()
+			_clear_hint_cell()
 			on_pick.call(comp))
 		vb.add_child(b)
 	_anchor_menu(_picker)
@@ -6969,6 +7289,7 @@ func _open_station_picker(stations: Array) -> void:
 		var b := Button.new()
 		b.text = "Station at (%d, %d)" % [st.x, st.y]
 		b.pressed.connect(_submit.bind(SpawnDroneIntent.new(selected_id, st)))
+		_hint_cell(b, st)
 		vb.add_child(b)
 	_anchor_menu(_picker)
 	_picker.show()
@@ -7163,6 +7484,44 @@ func _refresh_info() -> void:
 		u.stats.display_name, range_text,
 		u.rate_of_fire(), u.armor(), u.speed(), bonus,
 	]
+
+## Показывать ли в логе то, что сделал этот ход. Под туманом ход ВРАЖЕСКОГО бойца,
+## которого игрок не видит, в лог не идёт вовсе — ни строкой, ни броском кубика: иначе
+## текст рассказывает ровно то, что туман прячет («Rifleman fires at…» с именем и
+## результатом), и прятать юнит на доске становится бессмысленно.
+##
+## Ход виден, если видна клетка, ОТКУДА он начался, или та, где боец оказался: шаг из
+## темноты на свет игрок действительно видит. Строки без автора (конец хода, пожар,
+## нейтралы) показываются всегда — у них actor_owner = −1.
+## Видит ли зритель клетку ПРЯМО СЕЙЧАС (не «помнит»). Без тумана видно всё.
+## Связать кнопку выбора с клеткой на доске: наведение зажигает её, уход — гасит.
+## Годится любому списку, который выбирает КЛЕТКУ, а не только станциям.
+func _hint_cell(b: Button, c: Vector2i) -> void:
+	b.mouse_entered.connect(func() -> void:
+		_hover_cell = c
+		queue_redraw())
+	b.mouse_exited.connect(func() -> void:
+		if _hover_cell == c:
+			_hover_cell = Vector2i(-1, -1)
+			queue_redraw())
+
+## Погасить подсветку выбора (список закрылся — наводиться больше не на что).
+func _clear_hint_cell() -> void:
+	if _hover_cell != Vector2i(-1, -1):
+		_hover_cell = Vector2i(-1, -1)
+		queue_redraw()
+
+func _cell_seen_now(c: Vector2i, seen: Dictionary) -> bool:
+	return not resolver.fog_enabled or seen.has(c)
+
+func _result_is_audible(res: ActionResult) -> bool:
+	if res == null or not resolver.fog_enabled or res.actor_owner == -1:
+		return true
+	var viewer := _viewing_side()
+	if res.actor_owner == viewer or state.roster.are_allies(res.actor_owner, viewer):
+		return true
+	var seen := resolver.team_visible_coords(viewer)
+	return seen.has(res.actor_from) or seen.has(res.actor_to)
 
 func _on_log_line(text: String) -> void:
 	if _log_label != null:

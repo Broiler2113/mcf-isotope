@@ -35,6 +35,11 @@ var _lan_list: ItemList
 var _lan_servers: Array = []
 static var _vs_latest_done := false
 var _lobby_broken := false
+## Страницы меню. Полоса вкладок у контейнера скрыта: ходим по ним кнопками самого меню.
+var _pages: TabContainer = null
+const PAGE_HOME := 0
+const PAGE_MULTI := 1
+const PAGE_FILES := 2
 
 func _ready() -> void:
 	# Пока игрок в меню, компилируем бой в фоновом потоке: скрипты игры (резолвер, ИИ,
@@ -151,31 +156,22 @@ func _ready() -> void:
 
 	vbox.add_child(HSeparator.new())
 
-	# Вкладки: одиночная игра и мультиплеер — совершенно раздельные режимы (#54).
-	var tabs := TabContainer.new()
-	tabs.custom_minimum_size = Vector2(0, 340)
-	tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	vbox.add_child(tabs)
-	tabs.add_child(_build_single_tab())
-	tabs.add_child(_build_multi_tab())
-	tabs.add_child(_build_files_tab())
-
-	# Настройки (items 17/23) и выход — рядом, справа внизу, как у окна набора.
-	var bottom := HBoxContainer.new()
-	bottom.alignment = BoxContainer.ALIGNMENT_END
-	bottom.add_theme_constant_override("separation", 10)
-	var settings := Button.new()
-	settings.text = "Settings"
-	settings.custom_minimum_size = Vector2(110, 32)
-	settings.pressed.connect(func() -> void: SettingsWindow.open(self))
-	bottom.add_child(settings)
-	var quit_btn := Button.new()
-	quit_btn.text = "Quit"
-	quit_btn.custom_minimum_size = Vector2(110, 32)
-	quit_btn.pressed.connect(_quit)
-	bottom.add_child(quit_btn)
-	frame.add_child(HSeparator.new())
-	frame.add_child(SteamChrome.pad(bottom, 16, 12))
+	# ОДИН список кнопок, а не полоса вкладок плюс россыпь по углам. Раньше «New Game» и
+	# «Map Editor» лежали на вкладке, мультиплеер и файлы — на соседних, а настройки с
+	# выходом жили вообще отдельной строкой внизу: четыре места на шесть пунктов, и
+	# половина меню — пустое поле под двумя кнопками.
+	#
+	# Страницы остались ровно теми же, сменилась навигация: полоса вкладок скрыта, на
+	# мультиплеер и файлы ведут обычные кнопки того же списка, и с каждой есть «Back».
+	var pages := TabContainer.new()
+	pages.custom_minimum_size = Vector2(0, 340)
+	pages.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pages.tabs_visible = false
+	vbox.add_child(pages)
+	_pages = pages
+	pages.add_child(_build_home_page())
+	pages.add_child(_page_with_back(_build_multi_tab(), "Multiplayer"))
+	pages.add_child(_page_with_back(_build_files_tab(), "Saves & Replays"))
 	var fit := func() -> void:
 		var chrome := panel.get_combined_minimum_size().y - body.get_combined_minimum_size().y
 		body.custom_minimum_size.y = minf(margin.get_combined_minimum_size().y,
@@ -183,16 +179,51 @@ func _ready() -> void:
 	center.resized.connect(fit)
 	fit.call_deferred()
 
-# --- Вкладка одиночной игры ---
-func _build_single_tab() -> Control:
+# --- Главная страница меню ---
+## Всё, с чего начинается партия, одним столбцом и в одном порядке чтения: сыграть,
+## построить карту, сыграть с живым соперником, вернуться к начатому, настроить, выйти.
+## Окно «Saved maps» в меню не вернулось (item 7): карты грузятся в редакторе, а
+## партии — на странице «Saves & Replays».
+func _build_home_page() -> Control:
 	var page := VBoxContainer.new()
-	page.name = "Single Player"
+	page.name = "Main"
 	page.add_theme_constant_override("separation", 10)
-
 	page.add_child(_menu_button("New Game", _new_game))
 	page.add_child(_menu_button("Map Editor", _open_editor))
-	# Окно «Saved maps» убрано из главного меню (item 7): карты грузятся в редакторе,
-	# а партии — из вкладки «Saves & Replays».
+	page.add_child(_menu_button("Multiplayer", _show_multiplayer))
+	page.add_child(_menu_button("Saves & Replays", _show_files))
+	page.add_child(_menu_button("Settings", _show_settings))
+	page.add_child(_menu_button("Quit", _quit))
+	return page
+
+func _show_multiplayer() -> void:
+	_pages.current_tab = PAGE_MULTI
+
+func _show_files() -> void:
+	_pages.current_tab = PAGE_FILES
+
+func _show_settings() -> void:
+	SettingsWindow.open(self)
+
+func _show_home() -> void:
+	_pages.current_tab = PAGE_HOME
+
+## Страница второго уровня: её содержимое и возврат в меню. Без «Back» единственной
+## дорогой назад осталась бы полоса вкладок, которой здесь больше нет.
+func _page_with_back(content: Control, title: String) -> Control:
+	var page := VBoxContainer.new()
+	page.name = title
+	page.add_theme_constant_override("separation", 10)
+	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	page.add_child(content)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	var back := Button.new()
+	back.text = "< Back"
+	back.custom_minimum_size = Vector2(110, 32)
+	back.pressed.connect(_show_home)
+	row.add_child(back)
+	page.add_child(row)
 	return page
 
 # --- Вкладка сохранений и повторов (M12, items 42 и 53) ---

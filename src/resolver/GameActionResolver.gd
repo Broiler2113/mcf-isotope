@@ -139,7 +139,25 @@ func resolve(intent: Intent) -> ActionResult:
 	var recording := top and replay_recorder != null and not state.dice.record_enabled
 	if recording:
 		state.dice.begin_record()
+	var actor_owner := -1
+	var actor_from := Vector2i(-1, -1)
+	var au := state.get_unit(intent.actor_id)
+	var av := state.get_vehicle(intent.actor_id) if au == null else null
+	if au != null:
+		actor_owner = au.owner
+		actor_from = au.coord
+	elif av != null:
+		actor_owner = av.owner
+		actor_from = av.center()
 	var result := _dispatch(intent)
+	if top:
+		result.actor_owner = actor_owner
+		result.actor_from = actor_from
+		result.actor_to = actor_from
+		if au != null:
+			result.actor_to = au.coord
+		elif av != null:
+			result.actor_to = av.center()
 	# Борг едет за оператором (batch 13): куда бы боец ни сдвинулся — ходом, отбросом,
 	# переносом, — машина стоит в его клетке.
 	if result.ok:
@@ -1999,7 +2017,11 @@ func _kill(u: UnitInstance, res: ActionResult = null, from_coord: Vector2i = NOW
 		blast: bool = false) -> void:
 	if u == null or not u.is_alive():
 		return
-	if state.grid.in_bounds(u.coord):
+	# Дрон — машина: ни лужи, ни брызг, ни ошмётков. Сбитый дрон и так рвётся на своей
+	# клетке (_drone_explode), и взрыв оставляет щербины на полу — этого довольно.
+	# Трупом он на доске не ложится: клетку дрон не занимает (spawn_unit occupy=false),
+	# поэтому проход отрисовки трупов его и не берёт — лишней была ровно кровь.
+	if state.grid.in_bounds(u.coord) and not u.is_drone:
 		# blast — разорван взрывом или раздавлен: кровь кольцом, ошмётки, лужи шире.
 		_fx(res, {"fx": "blood", "at": u.coord,
 			"from": from_coord if from_coord != NOWHERE else u.coord, "blast": blast})
@@ -3094,16 +3116,26 @@ func advance_fire(owner: int = -1, res: ActionResult = null) -> void:
 		var cell := state.grid.cell(c)
 		# Новая клетка наследует поджигателя — цепочка остаётся привязана к своей стороне.
 		_ignite(cell, ignite[c])
-		# Постройка на загоревшейся клетке сгорает дотла и оставляет открытый огонь (#83):
-		# каркас стены ведёт, стекло лопается, шлюз заклинивает и выгорает.
-		if BURNS_AWAY.has(cell.feature_id):
-			cell.clear_feature()
-		# Огонь подрывает обычную мину, до которой дополз (item 13). Противотанковую —
-		# НЕТ: её взрыватель реагирует лишь на вес гусеницы, не на пламя.
-		elif cell.feature_id == MCF.FEATURE_MINE and res != null:
+		# Огонь съедает КЛЕТКУ, а не только то, что на ней построено (#83). Каркас стены
+		# ведёт, стекло лопается, шлюз заклинивает — но и мешки, окоп, куча земли, ёж и
+		# ДПМГ сгорают так же. Раньше горели лишь стены и стёкла, а мешки посреди пожара
+		# стояли как ни в чём не бывало.
+		#
+		# Два исключения, и оба — не «постройка»: МАШИНА (её огонь не трогает вовсе) и
+		# ТЕЛА. Стена из пяти трупов — это тела, и в пепел она не обращается.
+		#
+		# Огонь подрывает обычную мину, до которой дополз (item 13). Противотанковую — НЕТ:
+		# её взрыватель реагирует лишь на вес гусеницы, не на пламя, — но сама она в огне
+		# всё равно гибнет, просто без взрыва, и уходит общей зачисткой ниже.
+		if cell.feature_id == MCF.FEATURE_MINE and res != null:
 			_detonate_mine(c, null, res)
+		elif cell.feature_id != MCF.FEATURE_CORPSE_WALL:
+			cell.clear_feature()
 		# Юнит, оказавшийся на загоревшейся клетке, сгорает мгновенно (§6.5).
 		# Щитоносец (#50) и огнемётчик (#2) невосприимчивы к огню.
+		# Косметике тоже конец: кровь, ошмётки, гильзы и отпечатки с этой клетки исчезают.
+		# Пламя прошло по земле — под ним не остаётся ни лужи, ни латуни.
+		_fx(res, {"fx": "burn", "cells": [c]})
 		if cell.occupant != null and cell.occupant.is_alive() and not is_fireproof(cell.occupant):
 			var burned := cell.occupant
 			# res здесь только ради кровавой косметики — _kill сам в deaths не пишет,
@@ -7469,6 +7501,20 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 	for mc: Vector2i in driven:
 		var mcell := state.grid.cell(mc)
 		if mcell == null:
+			continue
+		# Станция дронов под гусеницей ломается: это ящик с пультом на полу, а не укрытие.
+		# Считается по ПОЛНОМУ следу, ровно как мина и по той же причине: станция на чистом
+		# полу, через которую машина лишь ПРОЕХАЛА, в crush_cells не попадает, и зачистка
+		# следа ниже её бы не тронула — танк проезжал по ней бесплатно.
+		# Дрон с этой станции остаётся в воздухе, но управление теряет сам (operator_controls
+		# не находит станции на клетке) — отдельно сбивать его незачем.
+		if mcell.feature_id == MCF.FEATURE_DRONE_STATION:
+			mcell.station_operator_id = -1
+			mcell.clear_feature()
+			notify_cell_changed(mc)
+			_fx(res, {"fx": "debris", "at": NOWHERE, "cells": [mc]})
+			res.log("The %s crushes a drone station at (%d, %d)!" % [
+				VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id), mc.x, mc.y])
 			continue
 		if mcell.feature_id != MCF.FEATURE_MINE and mcell.feature_id != MCF.FEATURE_AV_MINE:
 			continue

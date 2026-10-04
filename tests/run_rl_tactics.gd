@@ -128,6 +128,116 @@ func _initialize() -> void:
 	var enc := Obs.encode(r, 0, 10, tac)
 	ck(enc["threat"].size() == st.grid.width * st.grid.height, "obs carries the threat layer")
 
+	# --- the station-reach feature ("rh"): the leash, at the moment the CELL is chosen ---
+	# A station tethers its drone to DRONE_LEASH cells and pins the operator beside it, so
+	# one planted out of the enemy's reach costs the operator the rest of the game. "lf"
+	# above cannot answer this: there the actor is the drone, already in the air, and the
+	# station's cell was settled long before. Absent on every other kind of candidate.
+	var rm := MapData.new(60, 9)
+	for y in 9:
+		for x in 60:
+			rm.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	rm.set_spawn(Vector2i(3, 4), "drone_operator", MCF.Owner.PLAYER_1)
+	rm.set_spawn(Vector2i(19, 4), "light_infantry", MCF.Owner.PLAYER_2)
+	var rst := rm.build_state(5)
+	var rr := GameActionResolver.new(rst)
+	rr.fog_mode = MCF.Fog.OFF
+	rr.fog_enabled = false
+	while rst.active_player() != MCF.Owner.PLAYER_1:
+		rr.resolve(EndTurnIntent.new())
+	var rop: UnitInstance = rst.grid.cell(Vector2i(3, 4)).occupant
+	var rtac := Obs.tactics(rr, MCF.Owner.PLAYER_1)
+	# (4,4) is 15 from the enemy — the drone just reaches, with no slack.
+	var edge: Dictionary = Obs.describe(rst, UseItemIntent.new(rop.id, Vector2i(4, 4)), rtac)
+	# (2,4) is 17 — one step too far, and the drone never gets there.
+	var over: Dictionary = Obs.describe(rst, UseItemIntent.new(rop.id, Vector2i(2, 4)), rtac)
+	ck(float(edge.get("rh", 0.0)) > 0.0,
+			"a station right on the leash still reads as reachable (%s)" % str(edge.get("rh", "absent")))
+	ck(float(over.get("rh", -1.0)) == 0.0,
+			"and past the leash it reads as out of reach (%s)" % str(over.get("rh", "absent")))
+	ck(float(edge["rh"]) < 0.5, "reaching with no slack is near the bottom of the scale")
+	ck(not Obs.describe(rst, MoveIntent.new(rop.id, Vector2i(4, 5)), rtac).has("rh"),
+			"a plain move carries no reach feature at all")
+	# Fog is respected: an enemy in reach but WALLED OUT OF SIGHT promises nothing, or the
+	# feature would leak knowledge the team has not earned. Same cell, same 15 cells of
+	# distance — only the seeing differs, so fog off must still read as reachable.
+	var wm := MapData.new(60, 9)
+	for y in 9:
+		for x in 60:
+			wm.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	for c: Vector2i in [Vector2i(18, 3), Vector2i(18, 4), Vector2i(18, 5), Vector2i(19, 3),
+			Vector2i(19, 5), Vector2i(20, 3), Vector2i(20, 4), Vector2i(20, 5)]:
+		wm.set_cell(c, MCF.FLOOR_NORMAL, 0.0, false, MCF.FEATURE_WALL)
+	wm.set_spawn(Vector2i(3, 4), "drone_operator", MCF.Owner.PLAYER_1)
+	wm.set_spawn(Vector2i(19, 4), "light_infantry", MCF.Owner.PLAYER_2)
+	var wst := wm.build_state(5)
+	var wr := GameActionResolver.new(wst)
+	wr.fog_mode = MCF.Fog.OFF
+	wr.fog_enabled = false
+	while wst.active_player() != MCF.Owner.PLAYER_1:
+		wr.resolve(EndTurnIntent.new())
+	var wop: UnitInstance = wst.grid.cell(Vector2i(3, 4)).occupant
+	var seen: Dictionary = Obs.describe(wst, UseItemIntent.new(wop.id, Vector2i(4, 4)),
+			Obs.tactics(wr, MCF.Owner.PLAYER_1))
+	ck(float(seen.get("rh", 0.0)) > 0.0,
+			"with fog off the walled enemy is still counted (%s)" % str(seen.get("rh", "absent")))
+	wr.fog_mode = MCF.Fog.STANDARD
+	wr.fog_enabled = true
+	var unseen: Dictionary = Obs.describe(wst, UseItemIntent.new(wop.id, Vector2i(4, 4)),
+			Obs.tactics(wr, MCF.Owner.PLAYER_1))
+	ck(float(unseen.get("rh", -1.0)) == 0.0,
+			"an enemy out of sight promises no reach (%s)" % str(unseen.get("rh", "absent")))
+
+	# --- the enemy drone-station threat layer ---
+	# A drone flies DRONE_LEASH from its station and detonates over an area, so anything
+	# inside that sum can be wiped in one enemy turn. The layer only counts stations the
+	# side can SEE and that have a live operator beside them (a station with nobody on the
+	# console answers to nothing), and it never scares the side that owns it.
+	var tm := MapData.new(50, 12)
+	for y in 12:
+		for x in 50:
+			tm.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	tm.set_cell(Vector2i(25, 6), MCF.FLOOR_NORMAL, 0.0, false, MCF.FEATURE_DRONE_STATION)
+	tm.set_spawn(Vector2i(26, 6), "drone_operator", MCF.Owner.PLAYER_2)
+	tm.set_spawn(Vector2i(3, 6), "light_infantry", MCF.Owner.PLAYER_1)
+	var tst := tm.build_state(9)
+	var tr := GameActionResolver.new(tst)
+	tr.fog_mode = MCF.Fog.OFF
+	tr.fog_enabled = false
+	tst.grid.cell(Vector2i(25, 6)).feature_owner = MCF.Owner.PLAYER_2
+	var tw := tst.grid.width
+	var reach: int = MCF.DRONE_LEASH + MCF.ANTI_TANK_BLAST_RADIUS
+	var dlay := Obs.drone_threat(tr, MCF.Owner.PLAYER_1)
+	ck(dlay[6 * tw + 25] == 1.0, "the station's own cell is full danger (%f)" % dlay[6 * tw + 25])
+	ck(dlay[6 * tw + 25 + reach] > 0.0, "the rim of the radius is still danger (%f)"
+			% dlay[6 * tw + 25 + reach])
+	ck(dlay[6 * tw + 25 + reach + 1] == 0.0, "one cell past it is clear (%f)"
+			% dlay[6 * tw + 25 + reach + 1])
+	ck(dlay[6 * tw + 25 + 5] > dlay[6 * tw + 25 + 12],
+			"and danger falls off with distance, so close is not the same as barely inside")
+	ck(Obs.drone_threat(tr, MCF.Owner.PLAYER_2)[6 * tw + 25] == 0.0,
+			"a side is not frightened by its own station")
+	var top: UnitInstance = tst.grid.cell(Vector2i(26, 6)).occupant
+	tr._kill(top)
+	ck(Obs.drone_threat(tr, MCF.Owner.PLAYER_1)[6 * tw + 25] == 0.0,
+			"with the operator dead the console is dead and so is the threat")
+
+	# --- a vehicle is worth its surviving components, and both callers agree ---
+	var vm := MapData.new(20, 10)
+	for y in 10:
+		for x in 20:
+			vm.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	vm.set_spawn(Vector2i(4, 4), "tank", MCF.Owner.PLAYER_1, Vector2i(1, 0))
+	var vst := vm.build_state(9)
+	var vtank: Vehicle = vst.all_vehicles()[0]
+	var whole := Obs.vehicle_worth(vtank)
+	vtank.components[MCF.COMP_GUN] = 0
+	var hurt := Obs.vehicle_worth(vtank)
+	ck(hurt < whole, "a knocked-out gun costs the tank part of its worth (%.1f -> %.1f)"
+			% [whole, hurt])
+	ck(absf(Obs.army_value(vst, MCF.Owner.PLAYER_1) - hurt) < 0.01,
+			"and army_value counts it exactly the same way")
+
 	# --- army builder ---
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 5

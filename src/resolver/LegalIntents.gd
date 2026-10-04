@@ -85,8 +85,12 @@ static func _for_unit(r: GameActionResolver, u: UnitInstance, out: Array) -> voi
 		if u.remaining_ap > 0:
 			for seat: int in r.seat_options(sveh):
 				out.append(VehicleSeatIntent.new(u.id, seat))
-			for st: Vector2i in r.stations_near(u):
-				out.append(SpawnDroneIntent.new(u.id, st))
+			# Дрон поднимает только оператор (§3.12) — из кресла тоже. Станция встаёт в
+			# пустое кресло (batch 13 S8), и сосед по борту оказывался рядом с ней: любому
+			# пассажиру перечислялся запуск, который резолвер затем отклоняет.
+			if u.stats.special_ability_id == MCF.ABILITY_DRONE_OPERATOR:
+				for st: Vector2i in r.stations_near(u):
+					out.append(SpawnDroneIntent.new(u.id, st))
 			for c: Vector2i in r.station_pickup_cells(u):
 				out.append(PickUpStationIntent.new(u.id, c))
 		var seat_c := r.seat_cell_of(u)
