@@ -1179,7 +1179,9 @@ func _resolve_flame(shooter: UnitInstance, target_coord: Vector2i) -> ActionResu
 	for c: Vector2i in flame_cells(shooter.coord, step):
 		var cell := state.grid.cell(c)
 		var occ: UnitInstance = cell.occupant
-		if occ != null and occ.is_alive():
+		# Над космосом струя проходит, но никого не жжёт (editor-rework): пламени без
+		# воздуха нет. Дальше, на полу за пробоиной, — жжёт как обычно.
+		if occ != null and occ.is_alive() and not cell.is_space:
 			_kill_burnt(occ)  # огнемёт — крови нет
 			killed_names.append(occ.stats.display_name)
 			result.deaths.append(occ.id)
@@ -1302,6 +1304,10 @@ func _flame_walk(origin: Vector2i, dir: Vector2i, count: int, out: Array) -> int
 ## правило лежало в одном из них, струя оставляла за собой нетронутые мешки и гильзы
 ## на горящем полу. Теперь путь поджога один, и правило у него одно.
 func _ignite(cell: GridCell, owner: int, res: ActionResult = null) -> void:
+	# В вакууме гореть нечему (editor-rework): ни струя, ни расползание, ни что-либо ещё
+	# космос не поджигают — поджог у клетки один, и правило у него одно.
+	if cell.is_space:
+		return
 	cell.on_fire = true
 	cell.fire_owner = owner
 	var c := cell.coord

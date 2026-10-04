@@ -4778,6 +4778,8 @@ func _draw() -> void:
 			if su.stats.special_ability_id == MCF.ABILITY_FLAMETHROWER:
 				# Предпросмотр струи 6×1 в направлении наведённой клетки.
 				for jc in _flame_jet_preview(su.coord, shov):
+					if state.grid.cell(jc).is_space:
+						continue   # над космосом струя проходит, не поджигая (editor-rework)
 					draw_rect(Rect2(_cell_origin(jc), Vector2(CELL, CELL)), Color(1, 0.4, 0.05, 0.34))
 			elif su.stats.special_ability_id == MCF.ABILITY_ANTI_TANK:
 				# Предпросмотр радиуса взрыва (3x3) вокруг наведённой клетки.
