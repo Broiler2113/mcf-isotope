@@ -1245,18 +1245,43 @@ func _best_blast_path(state: GameState, r: GameActionResolver, u: UnitInstance) 
 ## Станция ещё в руках — развернуть её: развёртывание само поднимает дрон (#77). Без этого
 ## ИИ не ставил станцию НИКОГДА (UseItem он не выбирал вовсе), и на карте дронов восемь его
 ## операторов всю партию ходили пехотой — обучение шло против соперника без дронов.
+## Станция не просто «ставится»: она держит дрон на поводке DRONE_LEASH клеток и
+## ПРИКОВЫВАЕТ к себе самого оператора — шаг в сторону, и дрон теряет управление
+## (operator_controls, см. досрочный return в _candidates), а поднимать станцию обратно
+## ИИ не умеет вовсе. Поэтому станция, поставленная там, откуда дрон ни до кого не
+## дотянется, не «пропадает зря» — она вычитает оператора из боя до конца партии.
+##
+## Раньше здесь не было ни одной проверки расстояния, и клетка бралась первой из
+## station_place_cells (то есть по порядку обхода соседей): оператор разворачивал станцию
+## на первом же ходу у точки высадки и оставался там навсегда, даже когда враг был в
+## сорока клетках. Теперь станция ставится, только когда дрон с неё РЕАЛЬНО достаёт до
+## врага, и из доступных клеток берётся ближайшая к нему.
 func _best_drone_launch(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
 	if u.stats.special_ability_id != MCF.ABILITY_DRONE_OPERATOR or u.remaining_ap <= 0:
 		return {}
 	if r.active_drone_of(u) != null:
 		return {}
-	if r.deployed_station_of(u) == Vector2i(-1, -1):
+	var enemy := _nearest_enemy(state, u.coord, false, r)
+	if enemy == null:
+		return {}
+	var station := r.deployed_station_of(u)
+	if station == Vector2i(-1, -1):
 		if u.held_item_id != MCF.ITEM_DRONE_STATION or r.can_use_item(u) != "":
 			return {}
-		var cells: Array = r.station_place_cells(u)
-		if cells.is_empty():
-			return {}
-		return {"score": SCORE_SHOOT_BASE * 0.6, "intent": UseItemIntent.new(u.id, cells[0])}
+		var best := Vector2i(-1, -1)
+		var best_d := MCF.DRONE_LEASH + 1
+		for c: Vector2i in r.station_place_cells(u):
+			var d := Combat.distance(c, enemy.coord)
+			if d < best_d:
+				best_d = d
+				best = c
+		if best == Vector2i(-1, -1):
+			return {}   # до врага с любой доступной клетки дрон не дотянется — идём дальше
+		return {"score": SCORE_SHOOT_BASE * 0.6, "intent": UseItemIntent.new(u.id, best)}
+	# Станция уже стоит: поднимать дрон есть смысл, только если он кого-то достанет.
+	# Иначе подъём лишь приковал бы оператора к станции ради пустого облёта.
+	if Combat.distance(station, enemy.coord) > MCF.DRONE_LEASH:
+		return {}
 	return {"score": SCORE_SHOOT_BASE * 0.6, "intent": SpawnDroneIntent.new(u.id)}
 
 ## Посадка ИИ в свою свободную машину рядом (item 17): не щитоносец, без трупов на руках,

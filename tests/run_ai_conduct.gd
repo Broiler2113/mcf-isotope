@@ -36,10 +36,12 @@ func _initialize() -> void:
 	_plan_keeps_the_tank_lane_clear()
 	_anti_tank_goes_for_the_armour()
 	_operator_deploys_flies_and_detonates()
+	_operator_walks_before_it_plants()
 
 	if fails.is_empty():
 		print("ai conduct: no wasted shots, no crushed allies, every tank moves,"
-				+ " no ping-pong, clear tank lanes, anti-tank picks armour, drones fly")
+				+ " no ping-pong, clear tank lanes, anti-tank picks armour, drones fly,"
+				+ " stations go down within reach")
 		quit(0)
 		return
 	printerr("ai conduct: %d failure(s)" % fails.size())
@@ -496,3 +498,47 @@ func _operator_deploys_flies_and_detonates() -> void:
 	ck(kinds.has("drone_move"), "HARD flies the drone it launched (%s)" % [kinds])
 	ck(kinds.has("drone_det"), "…and detonates it over the enemy the same turn (%s)" % [kinds])
 	ck(not foe_alive, "the enemy under the drone is dead")
+
+## 5. НЕ СТАВИТ СТАНЦИЮ В ПУСТОТУ. Станция держит дрон на поводке DRONE_LEASH (15) и
+##    приковывает к себе оператора: отойти от неё — потерять управление дроном, а
+##    поднимать её обратно ИИ не умеет. Жалоба игрока: оператор разворачивал станцию у
+##    точки высадки, когда до врага было сорок клеток, и выпадал из боя до конца партии.
+##    Проверяем обратное: пока дрон ни до кого не дотянется, оператор ИДЁТ ВПЕРЁД.
+##    (Что в пределах поводка он её ставит — прогон _operator_deploys_flies_and_detonates.)
+func _operator_walks_before_it_plants() -> void:
+	var m := MapData.new(60, 9)
+	for y in 9:
+		for x in 60:
+			m.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	m.set_spawn(Vector2i(3, 4), "drone_operator", MCF.Owner.PLAYER_1)
+	# 47 клеток — втрое дальше поводка, за прогон столько не пройти.
+	m.set_spawn(Vector2i(50, 4), "light_infantry", MCF.Owner.PLAYER_2)
+	GameConfig.civilians_enabled = false
+	var state := m.build_state(7)
+	var r := GameActionResolver.new(state)
+	r.fog_enabled = false
+	while state.active_player() != MCF.Owner.PLAYER_1:
+		r.resolve(EndTurnIntent.new())
+	var op: UnitInstance = state.grid.cell(Vector2i(3, 4)).occupant
+	var start_x := op.coord.x
+	var ai := AIController.new(MCF.Owner.PLAYER_1, AIController.Difficulty.HARD)
+	ai.intent_ready.connect(_on_intent)
+	var kinds: Array = []
+	for _i in 6:
+		_pending = null
+		ai.begin_turn(state)
+		if _pending == null or _pending is EndTurnIntent:
+			r.resolve(EndTurnIntent.new())
+			while state.active_player() != MCF.Owner.PLAYER_1:
+				r.resolve(EndTurnIntent.new())
+			continue
+		kinds.append(str(IntentCodec.encode(_pending).get("t", "")))
+		if not r.resolve(_pending).ok:
+			ai.notify_intent_denied(state)
+	ck(not kinds.has("item"),
+			"no station is planted 47 cells from the enemy (%s)" % [kinds])
+	ck(not kinds.has("spawn_drone"), "and no drone is launched there either (%s)" % [kinds])
+	ck(op.coord.x > start_x,
+			"the operator advances instead (x %d -> %d)" % [start_x, op.coord.x])
+	ck(Combat.distance(op.coord, Vector2i(50, 4)) > MCF.DRONE_LEASH,
+			"and the run really did stay out of reach throughout")
