@@ -5059,9 +5059,16 @@ func station_near(operator: UnitInstance) -> Vector2i:
 
 ## ВСЕ свои станции вплотную к оператору (item 17). Их может быть несколько, и с
 ## какой поднимать дрон — решает игрок, а не порядок обхода соседей.
+##
+## НЕ оператор — пустой список. Проверка стоит ЗДЕСЬ, а не у звавших: её делали все четыре
+## вызова (обе кнопки в Main, _resolve_spawn_drone и пеший перечислитель) и ровно один —
+## пассажир челнока в LegalIntents — забыл. Политика RL честно выбирала «поднять дрон»
+## тяжёлым пехотинцем из кресла, резолвер отвечал «Only an operator can launch a drone», и
+## так до конца хода: жадная оценка переспрашивает один и тот же отказ, пока среда не
+## оборвёт ход на восьмом (отсюда отказы кратные восьми в eval_games.jsonl у tactical-2).
 func stations_near(operator: UnitInstance) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
-	if operator == null:
+	if operator == null or operator.stats.special_ability_id != MCF.ABILITY_DRONE_OPERATOR:
 		return out
 	for n in state.grid.neighbors(operator.coord):
 		var cell := state.grid.cell(n)

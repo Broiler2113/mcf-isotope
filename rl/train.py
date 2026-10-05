@@ -976,6 +976,9 @@ class Trainer:
                     value_diff=info["value_diff"],
                     rounds=info["round"], steps=info.get("steps"),
                     illegal=info.get("illegal"),
+                    # WHAT was refused, not just how many: the enumerator is meant to be
+                    # exact, so a non-empty column is a bug report with the reason in it.
+                    illegal_kinds=info.get("illegal_kinds") or None,
                     # Своих, сгоревших от расползания огня: смерть, которой можно
                     # избежать с гарантией, поэтому её видно отдельной колонкой.
                     fire_losses=info.get("fire_losses"),
