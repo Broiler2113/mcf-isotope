@@ -72,6 +72,28 @@ static func reset_vision_log() -> void:
 	look_changes.clear()
 	look_log_base = look_version
 
+## Снимок всех общих журналов (вида, обзора, проходимости, отката) и возврат к нему. Нужен
+## тем, кто строит ЧЕРНОВУЮ сетку рядом с настоящей доской (предпросмотр редактора, вид
+## «было» в бою): Grid.new объявляет журналы оборванными, а держатели кэшей настоящей
+## доски тогда пересобирали бы всё. Packed-массивы — копиями: статический массив правится
+## на месте, и снимок-ссылка опустел бы вместе с ним (0.9.2, «правки не видны на холсте»).
+static func logs_snapshot() -> Array:
+	return [look_version, look_changes.duplicate(), look_log_base,
+			vision_version, vision_changes.duplicate(), vision_log_base,
+			walk_version, feature_version, journaling, journal]
+
+static func logs_restore(s: Array) -> void:
+	look_version = s[0]
+	look_changes = s[1]
+	look_log_base = s[2]
+	vision_version = s[3]
+	vision_changes = s[4]
+	vision_log_base = s[5]
+	walk_version = s[6]
+	feature_version = s[7]
+	journaling = s[8]
+	journal = s[9]
+
 ## Журнал ВИДА клеток — пол, высота, огонь, космос, объект, насыпь, сварка: всё, из чего
 ## экран боя собирает дальний план (Main, LOD) и ИИ — карту проходимости рельефа
 ## (AIController._walk_mask). Устроен как журнал обзора: пары (x, y), по паре на единицу

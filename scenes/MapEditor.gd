@@ -1173,8 +1173,8 @@ func _draw() -> void:
 		else:
 			draw_circle(o + Vector2(CELL, CELL) * 0.5, CELL * 0.32, owner_color(s["owner"]))
 			if cs >= 14.0:
-				draw_string(font, o + Vector2(CELL * 0.22, CELL * 0.62), Sprites.unit_tag(s["stats_id"]),
-						HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color.WHITE)
+				draw_string(font, o + Vector2(0, CELL * 0.5 + 5), Sprites.unit_tag(s["stats_id"]),
+						HORIZONTAL_ALIGNMENT_CENTER, CELL, 14, Color.WHITE)
 	if show_zones:
 		_draw_zone_numbers(font)
 	_draw_symmetry_axes()
@@ -1449,7 +1449,7 @@ func _build_preview() -> void:
 		var k := Vector2i(c.x >> 5, c.y >> 5)
 		var b: Array = blocks.get(k, [c, c])
 		blocks[k] = [Vector2i(mini(b[0].x, c.x), mini(b[0].y, c.y)), Vector2i(maxi(b[1].x, c.x), maxi(b[1].y, c.y))]
-	var saved := _quiet_logs()
+	var saved := GridCell.logs_snapshot()   # черновик не должен задеть журналы карты
 	var tiles := {}   # кусок -> [плитки черновика, его угол на карте]
 	for k: Vector2i in blocks:
 		var bb := Rect2i(blocks[k][0], blocks[k][1] - blocks[k][0] + Vector2i.ONE).grow(PREVIEW_MARGIN) \
@@ -1476,7 +1476,7 @@ func _build_preview() -> void:
 		_pv.append([c, Rect2(slot, Vector2(res, res)), e[1], e[2]])
 	_pv_floor = ImageTexture.create_from_image(fimg)
 	_pv_feat = ImageTexture.create_from_image(oimg)
-	_restore_logs(saved)
+	GridCell.logs_restore(saved)
 
 ## Клетка черновика — как _write пишет клетку зеркала карты.
 func _set_scratch(g: Grid, at: Vector2i, t: Array) -> void:
@@ -1488,29 +1488,6 @@ func _set_scratch(g: Grid, at: Vector2i, t: Array) -> void:
 		if t.size() > 5 and int(t[5]) >= 0:
 			g.furniture_turn[at] = [String(t[3]), int(t[5])]
 	gc.cover_height = float(t[1])
-
-## Сетка-черновик и её клетки пишут в ОБЩИЕ журналы вида и обзора (Grid.new объявляет их
-## оборванными), а по журналу вида плиточный кэш самой карты решает, что пересобрать:
-## без снимка каждый сдвиг курсора пересобирал бы все плитки карты.
-## Журналы — КОПИЯМИ: статический Packed-массив правится на месте, и снимок-ссылка
-## опустел бы вместе с ним (Grid.new чистит журнал). Тогда правки, сделанные до
-## предпросмотра, выпадали из журнала, и холст их не показывал, а миникарта — да (0.9.2).
-func _quiet_logs() -> Array:
-	return [GridCell.look_version, GridCell.look_changes.duplicate(), GridCell.look_log_base,
-			GridCell.vision_version, GridCell.vision_changes.duplicate(), GridCell.vision_log_base,
-			GridCell.walk_version, GridCell.feature_version, GridCell.journaling, GridCell.journal]
-
-func _restore_logs(s: Array) -> void:
-	GridCell.look_version = s[0]
-	GridCell.look_changes = s[1]
-	GridCell.look_log_base = s[2]
-	GridCell.vision_version = s[3]
-	GridCell.vision_changes = s[4]
-	GridCell.vision_log_base = s[5]
-	GridCell.walk_version = s[6]
-	GridCell.feature_version = s[7]
-	GridCell.journaling = s[8]
-	GridCell.journal = s[9]
 
 ## Узор сверх потолка черновика — картинками палитры, только видимая часть: вставка всей
 ## карты 500×500 не рисует четверть миллиона клеток.
