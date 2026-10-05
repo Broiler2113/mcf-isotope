@@ -31,6 +31,7 @@ const T_BUILD_WALL := "build_wall"
 const T_CORPSE_UP := "corpse_up"
 const T_CANCEL_SHOT := "cancel_shot"
 const T_STATION_UP := "station_up"
+const T_CARRY := "carry"
 const T_CORPSE_DOWN := "corpse_down"
 const T_VEH_BOARD := "veh_board"
 const T_VEH_OUT := "veh_out"
@@ -90,6 +91,8 @@ static func encode(intent: Intent) -> Dictionary:
 	if intent is PickUpStationIntent:
 		return {"t": T_STATION_UP, "a": intent.actor_id,
 			"x": intent.coord.x, "y": intent.coord.y}
+	if intent is CarryIntent:
+		return {"t": T_CARRY, "a": intent.actor_id, "x": intent.coord.x, "y": intent.coord.y}
 	if intent is MoveHeldIntent:
 		return {"t": T_MOVE_HELD, "a": intent.actor_id, "x": intent.to.x, "y": intent.to.y}
 	if intent is UseItemIntent:
@@ -189,6 +192,7 @@ static func decode(d: Dictionary) -> Intent:
 		T_RELEASE: return ReleaseIntent.new(a)
 		T_CANCEL_SHOT: return CancelShotIntent.new(a)
 		T_STATION_UP: return PickUpStationIntent.new(a, coord)
+		T_CARRY: return CarryIntent.new(a, coord)
 		T_MOVE_HELD: return MoveHeldIntent.new(a, coord)
 		T_ITEM: return UseItemIntent.new(a, coord)
 		T_PUSH: return PushIntent.new(a, int(d.get("tid", -1)))

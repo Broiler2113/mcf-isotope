@@ -256,6 +256,9 @@ var feature_durability: int = 0:
 		if feature_durability != v:
 			if journaling: _journal()
 			feature_durability = v
+			# Побитая мебель рисуется с трещинами прямо в плитке (§3.15): кусок рельефа
+			# должен узнать, что клетку пора перерисовать.
+			log_look_change(coord.x, coord.y)
 ## Счётчик трупов на клетке — 5 образуют стену из трупов (§3.7).
 var corpse_count: int = 0:
 	set(v):
@@ -328,8 +331,9 @@ func set_feature(id: String, owner: int = -1) -> void:
 	feature_id = id
 	feature_owner = owner
 	feature_durability = MCF.feature_durability(id)
-	if MCF.FEATURE_HEIGHT.has(id):
-		cover_height = MCF.FEATURE_HEIGHT[id]
+	var fh := MCF.feature_height(id)
+	if fh >= 0.0:
+		cover_height = fh
 
 ## Добавить кучу вынутой земли (§3.7): растёт по 0.5 м за уровень, до 2 м (уровень 4).
 ## Возвращает false, если куча уже максимальной высоты. На уровне 4 работает как стена.

@@ -72,7 +72,9 @@ const CIV_MAX := 1000
 ## «где-то здесь», а перебор всех 60 000 клеток поля 250×250 — секунды на каждую попытку.
 const CAND_MAX := 6000
 
-enum Phase {STRUCTURE, SPACE, ZONES, DRESSING, CIVILIANS}
+## FURNITURE — последней в перечне: номер фазы входит в зерно её потока, и новая фаза не
+## должна сдвигать номера прежних (иначе все карты прежних зёрен перекроились бы).
+enum Phase {STRUCTURE, SPACE, ZONES, DRESSING, CIVILIANS, FURNITURE}
 
 const N4 := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 const DIRS8 := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1),
@@ -131,7 +133,8 @@ var _rep_fold: Array[bool] = []
 static func default_options() -> Dictionary:
 	return {"style": Style.TOWN, "size": 1, "density": 1, "seed": 1, "zones": 2, "units": 10,
 			"width": 80, "height": 60, "symmetric": false,
-			"space": true, "flammable": true, "obstacles": true, "civilians": 2}
+			"space": true, "flammable": true, "obstacles": true, "civilians": 2,
+			"furniture": MapFurnish.DEFAULT_DENSITY, "furniture_damage": 0}
 
 ## Уровень мирных по настройке: число 0…4 или прежнее true/false.
 ## Будут ли на карте мирные: число с ползунка лобби (item 11), а без него — уровень.
@@ -238,6 +241,10 @@ func _build(options: Dictionary, dim: Vector2i, need: int, tight: bool) -> void:
 	# быть связаны пешком — главная часть теперь та, где стоит первая зона.
 	if not _anchors.is_empty():
 		_join_pockets(_anchors[0])
+	# Мебель (§3.15) — после всех проломов: двери и проходы уже окончательные, и
+	# обстановка их обходит сама. Своим потоком: «Off» не трогает ни одной клетки.
+	_phase(Phase.FURNITURE)
+	MapFurnish.run(self)
 	_phase(Phase.CIVILIANS)
 	if civ_wanted(opt):
 		_civilians()
@@ -265,7 +272,7 @@ func _ground(c: Vector2i, floor_type: int = MCF.FLOOR_NORMAL) -> void:
 
 ## Объект на клетку: высота — из таблицы объектов, пол под ним прежний.
 func _put(c: Vector2i, feature: String) -> void:
-	m.set_cell(c, m.get_floor(c), float(MCF.FEATURE_HEIGHT.get(feature, 0.0)), false, feature)
+	m.set_cell(c, m.get_floor(c), maxf(0.0, MCF.feature_height(feature)), false, feature)
 
 ## Пустота за постройками: космос, а без космоса — сплошная скала; бункер вырыт в грунте.
 func _void(c: Vector2i) -> void:
@@ -771,7 +778,10 @@ func _dress_station() -> void:
 					Vector2i(inner.end.x - 3, inner.position.y + 2),
 					Vector2i(inner.position.x + 2, inner.end.y - 3), inner.end - Vector2i(3, 3)]:
 				_try_put(p, MCF.FEATURE_WALL)
-		# Ящики кучками по 1–3; на деревянной палубе часть из них — дощатые, 2 м.
+		# Ящики кучками по 1–3; на деревянной палубе часть из них — дощатые, 2 м. Когда
+		# комнаты обставлены мебелью (§3.15), куч мешков в них нет — ящики там свои; числа
+		# при этом тянутся те же, чтобы всё прочее на карте легло как без мебели.
+		var furnished := int(opt.get("furniture", 0)) > 0
 		for n in roundi(inner.get_area() * 0.07 * dens):
 			var c := Vector2i(_rng.randi_range(inner.position.x, inner.end.x - 1),
 					_rng.randi_range(inner.position.y, inner.end.y - 1))
@@ -780,7 +790,8 @@ func _dress_station() -> void:
 			if wooden[ri] and _rng.randf() < 0.5:
 				crate = MCF.FEATURE_WOOD_WALL
 			for k in _rng.randi_range(1, 3):
-				_try_put(c + dir * k, crate)
+				if not furnished:
+					_try_put(c + dir * k, crate)
 	# Баррикады в коридорах — мешки, через них перелезают.
 	for y in h:
 		for x in w:

@@ -44,7 +44,7 @@ enum Mode {NONE, MENU, MOVE, SHOOT, GRAB, ITEM, PUSH, DRONE_FLY, BUILD, BUILD_WA
 	CORPSE_DROP, WELD, MOVE_HELD, MINE, DISARM,
 	GROUP_MENU, GROUP_MOVE, GROUP_LASER,
 	VEH_MENU, VEH_MOVE, VEH_TURN, VEH_CANNON, VEH_DISEMBARK, VEH_SEAT, VEH_BOARD_SEAT,
-	DRAW, ERASE, RULER, BOARD_PICK}
+	DRAW, ERASE, RULER, BOARD_PICK, CARRY_FURN, PUT_FURN}
 
 ## Линейка (item 11): два конца и клетка под курсором. Инструмент чисто зрительский —
 ## состояния не трогает, по сети не ходит, в повтор не пишется.
@@ -1418,6 +1418,15 @@ func _handle_click(coord: Vector2i) -> void:
 				_select(occupant)
 				return
 			_back_to_menu()
+		Mode.CARRY_FURN, Mode.PUT_FURN:
+			if item_cells.has(coord):
+				_submit(CarryIntent.new(selected_id, coord) if mode == Mode.CARRY_FURN
+						else UseItemIntent.new(selected_id, coord))
+				return
+			if _is_own_active(occupant):
+				_select(occupant)
+				return
+			_back_to_menu()
 		Mode.DPMG_FIRE:
 			if occupant != null and target_ids.has(occupant.id):
 				_submit(DPMGFireIntent.new(selected_id, rsp_active, occupant.id, -1))
@@ -2624,6 +2633,45 @@ func _wall_commit() -> void:
 	if _wall_cells.size() != MCF.LDF_WALL_LENGTH:
 		return
 	_submit(BuildWallIntent.new(selected_id, _wall_cells.duplicate()))
+
+## Что из мебели стоит вплотную к бойцу: есть ли переносное и сколько ОД просит слом
+## (одна цифра или «1–3», если рядом разное).
+func _adjacent_furniture(u: UnitInstance) -> Dictionary:
+	var out := {"carry": false, "any": false, "ap": ""}
+	if u == null or u.is_drone:
+		return out
+	var lo := 99
+	var hi := 0
+	for n in state.grid.neighbors(u.coord):
+		var fid: String = state.grid.cell(n).feature_id
+		if not Furniture.is_furniture(fid):
+			continue
+		out["any"] = true
+		out["carry"] = out["carry"] or Furniture.carriable(fid)
+		lo = mini(lo, Furniture.break_ap(fid))
+		hi = maxi(hi, Furniture.break_ap(fid))
+	out["ap"] = str(lo) if lo == hi else "%d–%d" % [lo, hi]
+	return out
+
+## Выбор клетки для действия с мебелью: что подсветить, решает режим.
+func _enter_furniture(m: int) -> void:
+	var u := _selected_unit()
+	if u == null:
+		return
+	match m:
+		Mode.CARRY_FURN:
+			item_cells = resolver.furniture_carry_cells(u)
+		Mode.PUT_FURN:
+			item_cells = resolver.furniture_put_cells(u)
+		_:
+			item_cells = resolver.furniture_smash_cells(u)
+	if item_cells.is_empty():
+		return
+	mode = m
+	reach = null
+	target_ids = []
+	_menu.hide()
+	queue_redraw()
 
 func _enter_break() -> void:
 	var u := _selected_unit()
@@ -4614,6 +4662,7 @@ func _lod_texture_averages() -> Dictionary:
 	var names: Array = ["floor", "floor_space", "floor_wall", "floor_cover", "fire",
 			"floor_grass", "floor_destroyed", "floor_epicenter"]
 	names.append_array(FEATURE_TAGS.keys())
+	names.append_array(Furniture.ids())   # мебель на дальнем плане — цветом своей плитки
 	for n: String in names:
 		# Окружение карты (item 24): дальний план того же цвета, что и плитки вблизи.
 		var tex := Sprites.texture_of(TerrainTiles.env_name(n, state.env))
@@ -4921,6 +4970,11 @@ func _draw() -> void:
 	if mode == Mode.BREAK:
 		for coord in item_cells:
 			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(0.9, 0.3, 0.2, 0.30))
+
+	if mode == Mode.CARRY_FURN or mode == Mode.PUT_FURN:
+		var fcol := Color(0.35, 0.6, 0.95, 0.32) if mode == Mode.CARRY_FURN else Color(0.4, 0.85, 0.5, 0.32)
+		for coord in item_cells:
+			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), fcol)
 
 	if mode == Mode.MINE:
 		var mhov := _pos_to_cell(get_global_mouse_position())
@@ -7320,6 +7374,22 @@ func _open_menu(unit: UnitInstance) -> void:
 		if not resolver.pushable_target_ids(unit).is_empty():
 			_act_btn(vb, "Shield Push", _enter_push, unit.remaining_ap > 0)
 
+		# Мебель (§3.15): кнопка — только когда рядом есть то, что она умеет. Тяжёлую мебель
+		# волокут из «Grab», как мешки; здесь — унести в руках, поставить и разломать.
+		var near_furn := _adjacent_furniture(unit)
+		if near_furn["carry"]:
+			_act_btn(vb, "Carry Furniture (1 AP)", _enter_furniture.bind(Mode.CARRY_FURN),
+					not resolver.furniture_carry_cells(unit).is_empty(),
+					"Hands full or no AP left")
+		if Furniture.is_furniture(unit.held_item_id):
+			_act_btn(vb, "Put Down %s (free)" % Furniture.name_of(unit.held_item_id),
+					_enter_furniture.bind(Mode.PUT_FURN),
+					not resolver.furniture_put_cells(unit).is_empty(), "No free cell beside you")
+		if near_furn["any"]:
+			_act_btn(vb, "Break Furniture (%s AP)" % near_furn["ap"],
+					_enter_furniture.bind(Mode.BREAK),
+					not resolver.furniture_smash_cells(unit).is_empty(), "Not enough AP")
+
 		if unit.held_item_id != "" and MCF.ITEM_NAMES.has(unit.held_item_id):
 			_act_btn(vb, MCF.ITEM_NAMES.get(unit.held_item_id, "Item"), _enter_item,
 					unit.remaining_ap > 0 and resolver.can_use_item(unit) == "")
@@ -7824,6 +7894,8 @@ func _refresh_info() -> void:
 	var bonus := ""
 	if u.stats.target_defense_penalty > 0:
 		bonus = "  (−%d to target defense)" % u.stats.target_defense_penalty
+	if Furniture.is_furniture(u.held_item_id):
+		bonus += "  — carrying a %s" % Furniture.name_of(u.held_item_id).to_lower()
 	_info_label.text = "%s - range %s, RoF %d, armor %d+, speed %d%s" % [
 		u.stats.display_name, range_text,
 		u.rate_of_fire(), u.armor(), u.speed(), bonus,

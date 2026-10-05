@@ -119,7 +119,8 @@ func _check(overrides: Dictionary) -> void:
 			var f := m.get_feature(c)
 			if f != "":
 				used[f] = true
-				if not MCF.FEATURE_HEIGHT.has(f) or not is_equal_approx(m.get_cover(c), MCF.FEATURE_HEIGHT[f]):
+				# Высота — по общей таблице объектов: укрепления и мебель (§3.15).
+				if MCF.feature_height(f) < 0.0 or not is_equal_approx(m.get_cover(c), MCF.feature_height(f)):
 					ck(false, tag + ": %s at %s has height %.1f" % [f, c, m.get_cover(c)])
 			var z := m.get_zone(c)
 			if z < 0:
@@ -263,7 +264,9 @@ func _symmetric(m: MapData, o: Dictionary, zones: Dictionary, tag: String) -> vo
 func _bunker_is_an_underground_station() -> void:
 	for seed in [3, 77, 1234]:
 		for size in 3:
-			var o := {"size": size, "seed": seed, "space": false}
+			# Рельеф сравнивается без мебели: её бункер и станция ставят каждый своё
+			# (казармы и арсеналы против кают и контор, §20.2) — так и задумано.
+			var o := {"size": size, "seed": seed, "space": false, "furniture": 0}
 			o["style"] = MapGen.Style.STATION
 			var sm := MapGen.generate(o)
 			ck(sm.env == "station", "a station map is tagged station (%s)" % sm.env)

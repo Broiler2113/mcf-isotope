@@ -599,7 +599,23 @@ static func glass_bullet_save(feature_id: String) -> int:
 static func feature_durability(feature_id: String) -> int:
 	if feature_id == FEATURE_DOT or feature_id == FEATURE_DOT_OPEN:
 		return DOT_DURABILITY
-	return 0
+	return Furniture.durability_of(feature_id)
+
+## Подпись объекта: укрепления — из FEATURE_NAMES, мебель — из Furniture (§3.15).
+static func feature_name(feature_id: String, fallback: String = "") -> String:
+	if FEATURE_NAMES.has(feature_id):
+		return FEATURE_NAMES[feature_id]
+	if Furniture.is_furniture(feature_id):
+		return Furniture.name_of(feature_id)
+	return fallback
+
+## Высота объекта (§3.7, §3.15); -1 — у объекта своей высоты нет.
+static func feature_height(feature_id: String) -> float:
+	if FEATURE_HEIGHT.has(feature_id):
+		return FEATURE_HEIGHT[feature_id]
+	if Furniture.is_furniture(feature_id):
+		return Furniture.height_of(feature_id)
+	return -1.0
 
 ## Имя стороны для журнала и HUD. Игрок — по своей букве, группа нейтралов —
 ## по своему римскому номеру, общий нейтральный слот — просто «Neutral».
