@@ -24,6 +24,7 @@ extends SceneTree
 ## выделен группой; меряются _process и _draw экрана на 240 кадрах.
 
 const EXPECTED := "res://tests/bench/expected.txt"
+const TS = preload("res://tests/TestSupport.gd")
 const ROSTER := ["light_infantry", "heavy_infantry", "machinegunner", "sniper", "assault",
 		"marksman", "anti_tank", "flamethrower", "engineer", "miner", "shield_bearer",
 		"commander", "drone_operator", "sapper"]
@@ -235,17 +236,19 @@ func _run_scene(name: String, cfg: Dictionary) -> Dictionary:
 	# Сохранение и загрузка: та же доска после круга через файл.
 	var ts := Time.get_ticks_usec()
 	var saved := JSON.stringify(StateCodec.encode(hs))
-	var back := GameState.new(1, 1)
+	# Состояние под размер доски: restore_into раскладывает клетки в готовую сетку.
+	var back := GameState.new(hs.grid.width, hs.grid.height)
 	StateCodec.restore_into(back, JSON.parse_string(saved))
 	var t_save := Time.get_ticks_usec() - ts
-	var save_ok := back.digest_hash() == hs.digest_hash()
+	# Полная подпись (юниты, машины, КАЖДАЯ непустая клетка, очередь), а не сетевая.
+	var save_ok := TS.digest(back) == TS.digest(hs)
 	# Повтор с начала: стартовая доска + все действия с их бросками.
 	var tr := Time.get_ticks_usec()
 	var player := ReplayPlayer.new({"start": start, "rules": rules, "opening": [], "steps": steps,
 			"meta": {}})
 	player.seek(player.step_count())
 	var t_replay := Time.get_ticks_usec() - tr
-	var replay_ok := player.state != null and player.state.digest_hash() == hs.digest_hash()
+	var replay_ok := player.state != null and TS.digest(player.state) == TS.digest(hs)
 	var alive := [0, 0, 0]
 	for u: UnitInstance in hs.all_units():
 		if u.is_alive():
