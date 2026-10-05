@@ -263,6 +263,14 @@ static func base_of(fid: String) -> String:
 static func tint_of(fid: String) -> Color:
 	return DEFS[fid].get("tint", Color(0, 0, 0, 0)) if DEFS.has(fid) else Color(0, 0, 0, 0)
 
+## Все цвета предмета: базовый и его варианты (у предмета без вариантов — он один).
+static func colours_of(fid: String) -> Array:
+	var base := base_of(fid)
+	var out: Array = [base]
+	for v: Array in VARIANTS.get(base, []):
+		out.append("%s_%s" % [base, v[0]])
+	return out
+
 ## Случайный цветовой вариант базового fid (или он сам). Без вариантов поток не трогаем.
 static func variant(fid: String, rng: RandomNumberGenerator) -> String:
 	var vs: Array = VARIANTS.get(fid, [])

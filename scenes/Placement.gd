@@ -1329,6 +1329,9 @@ func _draw() -> void:
 	_tile_layer.position = pan
 	_tile_layer.scale = Vector2(zoom, zoom)
 	_tile_layer.cells = Rect2i(vx0, vy0, vx1 - vx0, vy1 - vy0)
+	# Сетка — в слое плиток, между полом и объектами: стену или стол в несколько клеток
+	# она не режет на куски.
+	_tile_layer.grid_color = Color(0.25, 0.27, 0.32)
 	_tile_layer.queue_redraw()
 	# Подсветка зоны развёртывания активной стороны — только клетки самой зоны.
 	var zone_col := Color(_side_color(active_side), 0.10)
@@ -1338,16 +1341,6 @@ func _draw() -> void:
 		var zcell := _tile_grid.cell_fast(zc.x, zc.y)
 		if not zcell.is_space and zcell.cover_height < MCF.WALL_HEIGHT:
 			draw_rect(Rect2(_cell_origin(zc), Vector2(CELL, CELL)), zone_col)
-	# Сетка — линиями по строкам и столбцам экрана, а не контуром каждой клетки.
-	var grid_col := Color(0.25, 0.27, 0.32)
-	var top := ORIGIN.y + vy0 * CELL
-	var bottom := ORIGIN.y + (vy1 + 1) * CELL
-	var left := ORIGIN.x + vx0 * CELL
-	var right := ORIGIN.x + (vx1 + 1) * CELL
-	for x in range(vx0, vx1 + 2):
-		draw_line(Vector2(ORIGIN.x + x * CELL, top), Vector2(ORIGIN.x + x * CELL, bottom), grid_col, 1.0)
-	for y in range(vy0, vy1 + 2):
-		draw_line(Vector2(left, ORIGIN.y + y * CELL), Vector2(right, ORIGIN.y + y * CELL), grid_col, 1.0)
 	# Контур своей зоны (gore batch): тонкая линия цвета стороны по её границе — поверх
 	# сетки, чтобы зону было видно и там, где заливка теряется на пёстром полу.
 	var edge_col := Color(_side_color(active_side), 0.9)

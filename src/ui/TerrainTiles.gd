@@ -71,10 +71,24 @@ var _frame: int = 0
 var _tiles: Dictionary = {}
 var _sheets: Dictionary = {}
 
+## Где клетка (0,0) этой сетки лежит на настоящей карте. Не ноль только у черновика
+## (scratch): хеши вариантов плиток и поворотов считаются от настоящих клеток, и
+## предпросмотр выбирает ту же картинку, что ляжет на карту.
+var origin := Vector2i.ZERO
+
 func _init(grid: Grid, p_env: String = "") -> void:
 	_grid = grid
 	env = p_env
 	_look_ver = GridCell.look_version
+
+## Плитки для сетки-черновика grid (предпросмотр редактора), чья клетка (0,0) лежит на
+## карте в at: те же кэши картинок, что у этих плиток, — ничего не грузится заново.
+func scratch(grid: Grid, at: Vector2i) -> TerrainTiles:
+	var t := TerrainTiles.new(grid, env)
+	t._tiles = _tiles
+	t._sheets = _sheets
+	t.origin = at
+	return t
 
 ## Имя картинки с учётом окружения: «wall» на станции — «wall_station», если такая есть.
 static func env_name(name: String, p_env: String) -> String:
@@ -268,7 +282,7 @@ func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> voi
 	var full := Rect2i(0, 0, res, res)
 	var floors := _tile(_floor_name(cell, c), res)
 	if not floors.is_empty():
-		img.blit_rect(floors[variant_of(c, floors.size())], full, at)
+		img.blit_rect(floors[variant_of(c + origin, floors.size())], full, at)
 	else:
 		img.fill_rect(Rect2i(at, Vector2i(res, res)), Color(0.14, 0.15, 0.18))
 	if cell.on_fire:
@@ -281,7 +295,7 @@ func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> voi
 	if fid == MCF.FEATURE_WALL and env == "bunker" and _buried(c):
 		var rock := _tile("bedrock", res)
 		if not rock.is_empty():
-			feat.blit_rect(rock[variant_of(c, rock.size())], full, at)
+			feat.blit_rect(rock[variant_of(c + origin, rock.size())], full, at)
 			return
 	# Станция дронов — как мина: в плитки НЕ запекается, потому что видимость у неё своя
 	# у каждой стороны (туман). Её рисует поклеточный проход экрана боя.
@@ -299,12 +313,12 @@ func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> voi
 	var sheets := _sheet(name, res)
 	if not sheets.is_empty():
 		var mask := mask_at(_grid, c, fid)
-		feat.blit_rect(sheets[variant_of(c, sheets.size())],
+		feat.blit_rect(sheets[variant_of(c + origin, sheets.size())],
 				Rect2i((mask % 4) * res, (mask / 4) * res, res, res), at)
 	else:
 		var singles := _tile(name, res)
 		if not singles.is_empty():
-			feat.blit_rect(singles[variant_of(c, singles.size())], full, at)
+			feat.blit_rect(singles[variant_of(c + origin, singles.size())], full, at)
 	if cell.airlock_welded:
 		feat.blend_rect(_weld_overlay(res), full, at)
 
@@ -348,7 +362,7 @@ const _CHAIRS := {"chair": true, "armchair": true}
 ## того же вида, взятой в системе предмета (верх = спинка), и повёрнутый вместе с ним; у
 ## одиночной — сама плитка, повёрнутая к стене.
 func _furniture_image(c: Vector2i, fid: String, res: int) -> Image:
-	var k := furniture_turn(_grid, c, fid)
+	var k := furniture_turn(_grid, c, fid, origin)
 	if not Furniture.joins(fid):
 		return _turned(fid, res, k)
 	var mask := 0
@@ -404,11 +418,11 @@ const _MASK_BITS := [Sprites.AUTOTILE_N, Sprites.AUTOTILE_E, Sprites.AUTOTILE_S,
 static func _fid_at(grid: Grid, q: Vector2i) -> String:
 	return grid.cell_fast(q.x, q.y).feature_id if grid.in_bounds(q) else ""
 
-static func furniture_turn(grid: Grid, c: Vector2i, fid: String) -> int:
+static func furniture_turn(grid: Grid, c: Vector2i, fid: String, at: Vector2i = Vector2i.ZERO) -> int:
 	if Furniture.is_whole(fid):
 		return _piece_turn(grid, c, fid)
 	if Furniture.joins(fid):
-		return _run_turn(grid, c, fid)
+		return _run_turn(grid, c, fid, at)
 	# Стул смотрит на стол, стол — на свой стул (место, где сидят, — низ плитки).
 	var kind := Furniture.base_of(fid)
 	var faces: Dictionary = _TABLES if _CHAIRS.has(kind) else (_CHAIRS if _TABLES.has(kind) else {})
@@ -421,7 +435,7 @@ static func furniture_turn(grid: Grid, c: Vector2i, fid: String) -> int:
 		var n: Vector2i = c + _TURN_DIRS[k]
 		if not grid.in_bounds(n) or grid.cell_fast(n.x, n.y).is_wall():
 			return k
-	return variant_of(c, 4)
+	return variant_of(c + at, 4)
 
 ## Цельный предмет поворачивается целиком: к стене той стороной, что ему положена (кровать
 ## — изголовьем, т.е. короткой; диван, стол-бюро — длинной), и по возможности стороной,
@@ -448,8 +462,14 @@ static func _piece_turn(grid: Grid, c: Vector2i, fid: String) -> int:
 	var back := Furniture.back_of(fid)
 	var best := -1
 	var best_score := -1000000000
+	var short_side: int = mini(mini(side[0], side[1]), mini(side[2], side[3]))
+	var long_side: int = maxi(maxi(side[0], side[1]), maxi(side[2], side[3]))
 	for k in 4:
 		if walled[k] == 0:
+			continue
+		# Изголовье — только с короткой стороны, спинка — только с длинной: кровать, что
+		# стоит вдоль стены, иначе легла бы к ней боком, с подушками во всю длину.
+		if (back == "short" and side[k] != short_side) or (back == "long" and side[k] != long_side):
 			continue
 		var score: int = walled[k] * 10 + (1000 if walled[k] == side[k] else 0)
 		if back == "short":
@@ -472,7 +492,7 @@ static func _piece_turn(grid: Grid, c: Vector2i, fid: String) -> int:
 ## Секции ряда (стойка, стеллаж) поворачиваются согласно ряду: ось ряда задаёт пару
 ## поворотов, стена решает, какой из двух; угол ряда — по стене; одиночная секция — как
 ## одиночный предмет. Так у всего ряда одна «спинка», даже если конец упёрся в стену.
-static func _run_turn(grid: Grid, c: Vector2i, fid: String) -> int:
+static func _run_turn(grid: Grid, c: Vector2i, fid: String, at: Vector2i = Vector2i.ZERO) -> int:
 	var same := [false, false, false, false]
 	var wall := [false, false, false, false]
 	for k in 4:
@@ -488,7 +508,7 @@ static func _run_turn(grid: Grid, c: Vector2i, fid: String) -> int:
 	for k in 4:
 		if wall[k]:
 			return k
-	return variant_of(c, 4)
+	return variant_of(c + at, 4)
 
 ## Плитка мебели в разрешении res, повёрнутая на k четвертей (кэш по трём ключам).
 func _turned(name: String, res: int, k: int) -> Image:
@@ -580,9 +600,9 @@ func draw_feature_tile(ci: CanvasItem, fid: String, c: Vector2i, rect: Rect2) ->
 	var name: String = env_name(Sprites.ALIASES.get(fid, fid), env)
 	var sheet := Sprites.texture_of(name + Sprites.AUTOTILE_SUFFIX)
 	if sheet != null:
-		Sprites.draw_autotile(ci, sheet, rect, mask_at(_grid, c, fid), variant_of(c, 64))
+		Sprites.draw_autotile(ci, sheet, rect, mask_at(_grid, c, fid), variant_of(c + origin, 64))
 	else:
-		Sprites.draw_tile(ci, name, rect, variant_of(c, 64))
+		Sprites.draw_tile(ci, name, rect, variant_of(c + origin, 64))
 
 var _furn_tex: Dictionary = {}   # Image -> ImageTexture для отдельной отрисовки мебели
 func _furniture_tex(img: Image) -> ImageTexture:
@@ -599,15 +619,37 @@ class Layer extends Node2D:
 	var cells := Rect2i()
 	var origin := Vector2.ZERO
 	var cell_size := 40.0
+	## Сетка клеток (прозрачная — нет) и её толщина в точках слоя.
+	var grid_color := Color(0, 0, 0, 0)
+	var grid_width := 1.0
 	func _init() -> void:
 		show_behind_parent = true
 	func _draw() -> void:
 		if tiles == null:
 			return
 		var res := TerrainTiles.prepare(self, cell_size)
-		for features in [false, true]:
-			tiles.draw(self, origin, cell_size, cells.position.x, cells.position.y,
-					cells.end.x, cells.end.y, features, res)
+		tiles.draw(self, origin, cell_size, cells.position.x, cells.position.y,
+				cells.end.x, cells.end.y, false, res)
+		TerrainTiles.draw_grid(self, origin, cell_size, cells.position.x, cells.position.y,
+				cells.end.x, cells.end.y, grid_color, grid_width)
+		tiles.draw(self, origin, cell_size, cells.position.x, cells.position.y,
+				cells.end.x, cells.end.y, true, res)
+
+## Сетка клеток [x0..x1]×[y0..y1] — линиями по строкам и столбцам. Её рисуют МЕЖДУ полом
+## и объектами: на полу клетки видны, а стену, стол или кровать в несколько клеток линия
+## не режет на куски. col прозрачный — сетки нет.
+static func draw_grid(ci: CanvasItem, origin: Vector2, cell: float, x0: int, y0: int, x1: int, y1: int,
+		col: Color, width: float) -> void:
+	if col.a <= 0.0:
+		return
+	var pts := PackedVector2Array()
+	for x in range(x0, x1 + 2):
+		pts.append(origin + Vector2(x * cell, y0 * cell))
+		pts.append(origin + Vector2(x * cell, (y1 + 1) * cell))
+	for y in range(y0, y1 + 2):
+		pts.append(origin + Vector2(x0 * cell, y * cell))
+		pts.append(origin + Vector2((x1 + 1) * cell, y * cell))
+	ci.draw_multiline(pts, col, width)
 
 ## Разрешение кусков и фильтрация для слоя ci (его scale — зум панорамы): по тому, сколько
 ## точек экрана приходится на клетку. Ужатая плитка сглаживается, растянутая — нет.

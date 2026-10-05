@@ -847,9 +847,9 @@ func _joined_detail(fid: String, x: int, y: int, lo: Vector2i, hi: Vector2i,
 				return Color8(196, 160, 40)
 		"sofa":
 			if n and y <= lo.y + 6:
-				return _shade(_m(FABRIC), 0.75)   # спинка
+				return _shade(_m(FABRIC), 0.66 if y < lo.y + 6 else 0.5)   # спинка и шов под ней
 			if (w and x <= lo.x + 4) or (e and x >= hi.x - 4):
-				return _shade(_m(FABRIC), 0.85)   # подлокотник
+				return _shade(_m(FABRIC), 0.76 if x != lo.x + 4 and x != hi.x - 4 else 0.58)   # подлокотник
 		"desk":
 			if w and x >= lo.x + 4 and x <= lo.x + 12 and y >= lo.y + 4 and y <= lo.y + 10:
 				return Color8(222, 220, 210)  # бумаги

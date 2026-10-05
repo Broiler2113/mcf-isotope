@@ -904,9 +904,10 @@ func _near_room(c: Vector2i) -> bool:
 			return true
 	return false
 
-func _outdoor_put(c: Vector2i, fid: String, need_wall: bool) -> void:
+func _outdoor_put(c: Vector2i, base: String, need_wall: bool) -> void:
 	if not _outdoor_ok(c):
 		return
+	var fid := Furniture.variant(base, rng)
 	var wd := Vector2i.ZERO
 	if need_wall:
 		# К стене спиной, и напротив — две свободные клетки: проход не сужается до одной.
@@ -931,8 +932,8 @@ func _outdoor_put(c: Vector2i, fid: String, need_wall: bool) -> void:
 			cells.append(q)
 		for q in cells:
 			for d: Vector2i in N4:
-				if not cells.has(q + d) and m.get_feature(q + d) == fid:
-					return   # вплотную к такому же — срослись бы
+				if not cells.has(q + d) and Furniture.base_of(m.get_feature(q + d)) == base:
+					return   # вплотную к такому же (любого цвета) — срослись бы или слиплись
 	var done: Array[Vector2i] = []
 	for q in cells:
 		if not _ring_ok_map(q):
