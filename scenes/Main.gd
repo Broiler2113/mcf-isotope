@@ -478,6 +478,7 @@ func _ready() -> void:
 	# со следующей партии, перезапускать игру не нужно.
 	Sprites.reload_overrides()
 	_build_state()
+	_furniture_look = TerrainTiles.new(state.grid, state.env).freeze_furniture()
 	# Край поля для косметики (batch 12 #6): гильзы, брызги и осколки отскакивают от него.
 	_fx.bounds = Vector2(state.grid.width, state.grid.height)
 	# Частицы останавливаются о стены (item 7), а не «проваливаются» в них.
@@ -4434,6 +4435,9 @@ var _lod_fog_stale := false
 var _lod_tex_avg: Dictionary = {}  # имя картинки-замены -> её средний цвет
 var _tiles: TerrainTiles = null     # ближний план рельефа кусками-плитками
 var _tiles_grid: Array = []      # [доска, туман]: под туманом укрепления не запекаются
+## Вид мебели, снятый с доски в начале партии (TerrainTiles.furniture_look): в бою мебель
+## заново не срастается. Живёт здесь, а не в плитках, — их пересоздаёт смена доски и тумана.
+var _furniture_look: Dictionary = {}
 
 ## Держит слой дальнего плана в согласии с доской. far — рисует ли им этот кадр. Слой
 ## заводится при первом отъезде и дальше правится и вблизи: правка стоит столько, сколько
@@ -4464,6 +4468,7 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, remembered: Dictiona
 		var tkey: Array = [grid.get_instance_id(), fog_on]
 		if _tiles == null or _tiles_grid != tkey:
 			_tiles = TerrainTiles.new(grid, state.env)
+			_tiles.furniture_look = _furniture_look
 			if fog_on:
 				for hf: String in FOG_HIDDEN_FEATURES:
 					_tiles.skip_features[hf] = true
