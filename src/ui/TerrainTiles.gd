@@ -76,6 +76,17 @@ var _sheets: Dictionary = {}
 ## предпросмотр выбирает ту же картинку, что ляжет на карту.
 var origin := Vector2i.ZERO
 
+## Мебель в бою заново НЕ срастается (просьба игрока): вид каждой клетки — стык, внутренние
+## углы и поворот — снимается с доски один раз за партию (freeze_furniture), и дальше
+## клетка рисуется так, как её собрали генератор или редактор, что бы ни стало с соседями:
+## полкровати под гусеницами так и остаётся половиной, ряд стойки с выбитой секцией — двумя
+## обрубками, а снесённая стена не разворачивает шкаф. Предмет, которого в снимке нет
+## (приволокли, поставили), стоит сам по себе и запоминает вид, с которым лёг. null —
+## снимка нет: редактор и расстановка срастаются вживую. Словарь общий у всех плиток
+## партии (Main пересоздаёт их при смене доски и тумана), поэтому ни пересинхронизация, ни
+## перемотка повтора вид не сбрасывают.
+var furniture_look: Variant = null   # Vector2i -> [fid, mask, inner, k]
+
 func _init(grid: Grid, p_env: String = "") -> void:
 	_grid = grid
 	env = p_env
@@ -195,8 +206,9 @@ func _touch(c: Vector2i) -> void:
 			_dirty[Vector2i(n.x / C, n.y / C)] = true
 			# Поворот цельного предмета зависит от всех его клеток: перемена у одной (или
 			# стена, снесённая у её бока) перерисовывает весь предмет, а не кусок с краю.
+			# В бою вид заморожен (furniture_look) — соседям перерисовываться не с чего.
 			var nf := _grid.cell_fast(n.x, n.y).feature_id
-			if Furniture.is_whole(nf):
+			if furniture_look == null and Furniture.is_whole(nf):
 				for p in Furniture.piece_cells(func(q: Vector2i) -> String: return _fid_at(_grid, q), n):
 					_dirty[Vector2i(p.x / C, p.y / C)] = true
 
@@ -362,21 +374,20 @@ const _CHAIRS := {"chair": true, "armchair": true}
 ## того же вида, взятой в системе предмета (верх = спинка), и повёрнутый вместе с ним; у
 ## одиночной — сама плитка, повёрнутая к стене.
 func _furniture_image(c: Vector2i, fid: String, res: int) -> Image:
-	var k := furniture_turn(_grid, c, fid, origin)
+	var look: Array
+	if furniture_look == null:
+		look = _live_look(c, fid)
+	else:
+		var snap: Array = furniture_look.get(c, [])
+		if snap.is_empty() or snap[0] != fid:
+			snap = [fid, 0, 0, _single_turn(_grid, c, fid, origin)]
+			furniture_look[c] = snap
+		look = snap.slice(1)
+	var mask: int = look[0]
+	var inner: int = look[1]
+	var k: int = look[2]
 	if not Furniture.joins(fid):
 		return _turned(fid, res, k)
-	var mask := 0
-	for l in 4:
-		var n: Vector2i = c + _TURN_DIRS[(l + k) % 4]
-		if _grid.in_bounds(n) and _grid.cell_fast(n.x, n.y).feature_id == fid:
-			mask |= _MASK_BITS[l]
-	# Внутренние углы (Г-образная стойка, диван углом): обе стороны срослись, а клетки по
-	# диагонали нет — в этом углу тело должно отступить, как у соседей, иначе ступенька.
-	var inner := 0
-	for l in 4:
-		if mask & _MASK_BITS[l] and mask & _MASK_BITS[(l + 1) % 4] \
-				and _fid_at(_grid, c + _TURN_DIRS[(l + k) % 4] + _TURN_DIRS[(l + 1 + k) % 4]) != fid:
-			inner |= 1 << l
 	var key := "%s@%d@m%d@%d@i%d" % [fid, res, mask, k, inner]
 	if _tiles.has(key):
 		var hit: Array = _tiles[key]
@@ -392,6 +403,35 @@ func _furniture_image(c: Vector2i, fid: String, res: int) -> Image:
 		img.rotate_90(CLOCKWISE)
 	_tiles[key] = [img]
 	return img
+
+## Вид клетки мебели по живой доске: [маска стыка, внутренние углы, поворот].
+func _live_look(c: Vector2i, fid: String) -> Array:
+	var k := furniture_turn(_grid, c, fid, origin)
+	if not Furniture.joins(fid):
+		return [0, 0, k]
+	var mask := 0
+	for l in 4:
+		var n: Vector2i = c + _TURN_DIRS[(l + k) % 4]
+		if _grid.in_bounds(n) and _grid.cell_fast(n.x, n.y).feature_id == fid:
+			mask |= _MASK_BITS[l]
+	# Внутренние углы (Г-образная стойка, диван углом): обе стороны срослись, а клетки по
+	# диагонали нет — в этом углу тело должно отступить, как у соседей, иначе ступенька.
+	var inner := 0
+	for l in 4:
+		if mask & _MASK_BITS[l] and mask & _MASK_BITS[(l + 1) % 4] \
+				and _fid_at(_grid, c + _TURN_DIRS[(l + k) % 4] + _TURN_DIRS[(l + 1 + k) % 4]) != fid:
+			inner |= 1 << l
+	return [mask, inner, k]
+
+## Снимок вида всей мебели доски для furniture_look.
+func freeze_furniture() -> Dictionary:
+	var out := {}
+	for y in _grid.height:
+		for x in _grid.width:
+			var fid := _grid.cell_fast(x, y).feature_id
+			if Furniture.is_furniture(fid):
+				out[Vector2i(x, y)] = [fid] + _live_look(Vector2i(x, y), fid)
+	return out
 
 ## Вырезать внутренние углы: квадрат с поле открытой стороны (gen_textures M = 3 точки
 ## из 32) — прозрачный, по его краю — тёмная кромка, как у соседей. Угол l — между
@@ -423,6 +463,11 @@ static func furniture_turn(grid: Grid, c: Vector2i, fid: String, at: Vector2i = 
 		return _piece_turn(grid, c, fid)
 	if Furniture.joins(fid):
 		return _run_turn(grid, c, fid, at)
+	return _single_turn(grid, c, fid, at)
+
+## Поворот предмета, стоящего самого по себе (и многоклеточного, что приволокли в бою:
+## он ни с кем не срастается).
+static func _single_turn(grid: Grid, c: Vector2i, fid: String, at: Vector2i) -> int:
 	# Стул смотрит на стол, стол — на свой стул (место, где сидят, — низ плитки).
 	var kind := Furniture.base_of(fid)
 	var faces: Dictionary = _TABLES if _CHAIRS.has(kind) else (_CHAIRS if _TABLES.has(kind) else {})

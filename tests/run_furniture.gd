@@ -34,6 +34,7 @@ func _initialize() -> void:
 	_actions()
 	_weapons()
 	_save_undo_net()
+	_frozen_look()
 	_generation()
 	_ai_plays_furnished()
 	_start_screen()
@@ -365,6 +366,35 @@ func _save_undo_net() -> void:
 
 # --- Генератор ---------------------------------------------------------------------------
 
+## В бою мебель заново не срастается: снимок вида (freeze_furniture) держит обрубки ряда и
+## полкровати такими, какими их собрал генератор, а живые плитки (редактор) срастаются.
+func _frozen_look() -> void:
+	var bed := [Vector2i(6, 4), Vector2i(7, 4), Vector2i(6, 5), Vector2i(7, 5)]
+	var cells := {Vector2i(2, 8): "kitchen_counter", Vector2i(3, 8): "kitchen_counter",
+			Vector2i(4, 8): "kitchen_counter"}
+	for c in bed:
+		cells[c] = "bed"
+	var st := _board(cells, [[Vector2i(0, 0), "light_infantry", 0], [Vector2i(19, 11), "light_infantry", 1]])
+	var game := TerrainTiles.new(st.grid)
+	game.furniture_look = game.freeze_furniture()
+	var img := func(t: TerrainTiles, c: Vector2i) -> PackedByteArray:
+		return t._furniture_image(c, st.grid.cell(c).feature_id, 32).get_data()
+	var before := {}
+	for c: Vector2i in [Vector2i(2, 8), Vector2i(4, 8), Vector2i(6, 4), Vector2i(7, 4)]:
+		before[c] = img.call(game, c)
+	for c: Vector2i in [Vector2i(3, 8), Vector2i(6, 5), Vector2i(7, 5)]:
+		st.grid.cell(c).clear_feature()
+	var live := TerrainTiles.new(st.grid)
+	ck(img.call(game, Vector2i(2, 8)) == before[Vector2i(2, 8)] and img.call(game, Vector2i(4, 8)) == before[Vector2i(4, 8)],
+			"in battle the counter ends keep their joined look after the middle is smashed")
+	ck(img.call(game, Vector2i(6, 4)) == before[Vector2i(6, 4)] and img.call(game, Vector2i(7, 4)) == before[Vector2i(7, 4)],
+			"half a bed stays half a bed")
+	ck(img.call(live, Vector2i(2, 8)) != before[Vector2i(2, 8)], "while live tiles (editor) re-join the lone segment")
+	st.grid.cell(Vector2i(5, 8)).set_feature("kitchen_counter")
+	img.call(game, Vector2i(5, 8))
+	ck(game.furniture_look[Vector2i(5, 8)][1] == 0 and img.call(game, Vector2i(4, 8)) == before[Vector2i(4, 8)],
+			"a segment that arrives in battle joins nothing, and its neighbour doesn't change")
+
 func _gen(style: int, lv: int, seed: int, extra: Dictionary = {}) -> MapData:
 	var o := {"style": style, "size": 2, "seed": seed, "furniture": lv, "civilians": 0}
 	o.merge(extra, true)
@@ -620,6 +650,7 @@ func _menu_texts() -> PackedStringArray:
 
 func _screen_checks() -> void:
 	var st: GameState = _main.state
+	ck(_main._furniture_look.has(Vector2i(4, 4)), "the battle screen freezes the furniture look at the start")
 	while st.active_player() != 0:
 		_main._on_intent_ready(EndTurnIntent.new())
 	var near := st.grid.cell(Vector2i(3, 4)).occupant
