@@ -36,6 +36,7 @@ func _run() -> void:
 	_symmetry()
 	_selection()
 	_stamps()
+	_preview()
 	_picker_units_zones()
 	_resize_clear()
 	_files_and_generator()
@@ -255,6 +256,67 @@ func _stamps() -> void:
 	_key(KEY_H)
 	_key(KEY_ESCAPE)
 	ck(ed._float.is_empty(), "Esc drops the stamp")
+
+# --- Предпросмотр под курсором ---
+## Плитка под курсором у каждого инструмента. Прежде любой инструмент, кроме кисти и
+## ластика, падал на присваивании нетипизированного массива при каждой отрисовке.
+func _preview() -> void:
+	_fresh("station")
+	ed._select_brush(MCF.FEATURE_WALL)
+	ed._hover = Vector2i(10, 10)
+	for t: int in [0, 2, 3, 4]:   # кисть, линия, прямоугольник, заливка
+		ed._select_tool(t)
+		ed._build_preview()
+		ck(ed._pv.size() == 1 and ed._pv[0][0] == Vector2i(10, 10) and ed._pv[0][3],
+				"tool %d shows the wall tile under the cursor" % t)
+	for t: int in [1, 5, 6]:   # ластик, выделение, пипетка
+		ed._select_tool(t)
+		ed._build_preview()
+		ck(ed._pv.is_empty() and ed._pv_thumbs.is_empty(), "tool %d draws no tile ghost" % t)
+	ed._select_tool(0)
+	ed._set_brush_size(3)
+	ed._build_preview()
+	ck(ed._pv.size() == 9 and ed._pv_tint.a == 0.5, "a size-3 brush shows nine tiles at half opacity")
+	ed._set_brush_size(1)
+	ed._select_tool(2)
+	ed._drag_start = Vector2i(3, 3)
+	ed._drag_cur = Vector2i(7, 3)
+	ed._build_preview()
+	ck(ed._pv.size() == 5, "a line being dragged shows its five tiles")
+	ed._drag_cur = Vector2i(35, 27)
+	ed._build_preview()
+	ck(ed._pv.size() == ed.line_cells(Vector2i(3, 3), Vector2i(35, 27)).size() and ed._pv_thumbs.is_empty(),
+			"a long diagonal line still previews in real tiles (%d)" % ed._pv.size())
+	ed._drag_start = Vector2i(-1, -1)
+	ed._select_tool(0)
+	ed._select_brush("floor")
+	ed._build_preview()
+	ck(ed._pv.is_empty(), "floor over floor changes nothing, so nothing is drawn")
+	# Узор в руке — плитками; черновик не трогает журналы вида, по которым живёт кэш карты.
+	var ver := GridCell.look_version
+	var base := GridCell.look_log_base
+	ed._pick_stamp("house")
+	ed._build_preview()
+	var walls := 0
+	for e: Array in ed._pv:
+		walls += 1 if e[3] else 0
+	ck(walls == 22 and ed._pv_tint.a == 0.75, "the house stamp shows its 22 wall, window and door tiles (%d)" % walls)
+	ck(GridCell.look_version == ver and GridCell.look_log_base == base,
+			"building a preview leaves the map's tile cache alone")
+	_key(KEY_ESCAPE)
+	# Цвета мебели: кнопка на предмет, цвета — строкой под кистью.
+	ck(ed._brush_buttons.has("bed") and not ed._brush_buttons.has("bed_red"),
+			"colour variants are not separate palette buttons")
+	ed._select_brush("bed_red")
+	ck(ed._colour_row.visible and ed._colour_row.get_child_count() == 1 + Furniture.colours_of("bed").size()
+			and (ed._brush_buttons["bed"] as Button).button_pressed,
+			"a coloured bed lights the Bed button and shows the colour row")
+	_drag(Vector2i(4, 4), Vector2i(4, 4))
+	ed._select_brush("chair")
+	ck(not ed._colour_row.visible, "a piece with one colour hides the row")
+	_key(KEY_I)
+	_press(Vector2i(4, 4))
+	ck(ed.brush == "bed_red", "the eyedropper picks the colour too")
 
 # --- Пипетка, нейтралы, зоны ---
 func _picker_units_zones() -> void:

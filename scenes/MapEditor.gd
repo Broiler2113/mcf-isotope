@@ -116,6 +116,8 @@ var _mini_tex: ImageTexture = null
 var _mini_stale := false
 ## Спавны по клеткам — для отрисовки и пипетки без прохода по всему списку.
 var _spawn_at: Dictionary = {}
+## Счётчик правок карты: предпросмотр под курсором пересобирается, когда карта менялась.
+var _map_ver := 0
 
 # --- Откат ---
 var _undo_stack: Array = []
@@ -152,6 +154,9 @@ var _brush_buttons: Dictionary = {}
 var _palette_box: VBoxContainer
 var _current_icon: TextureRect
 var _current_label: Label
+var _colour_row: HBoxContainer
+var _colour_base := ""
+var _colour_group := ButtonGroup.new()
 var _more_zones := false
 var _mini_rect: TextureRect
 var _mini_view: Control
@@ -214,6 +219,7 @@ func _map_replaced() -> void:
 	_zone_centers_dirty = true
 	_selection = Rect2i()
 	_float = {}
+	_map_ver += 1
 	_refresh_palette()
 	_layout_minimap()
 	_refresh_status()
@@ -307,6 +313,7 @@ func _write(i: int, t: Array) -> void:
 		return
 	if _act.has("cells") and not _act["cells"].has(i):
 		_act["cells"][i] = _tuple(i)
+	_map_ver += 1
 	map.floor_type[i] = fl
 	map.cover_height[i] = cover
 	map.is_space[i] = 1 if sp else 0
@@ -498,12 +505,20 @@ func _erase_cell(c: Vector2i) -> void:
 
 func _brush_cell(c: Vector2i, mask: int) -> void:
 	var i := c.y * map.width + c.x
-	var t := _tuple(i)
+	if brush.begins_with("unit:"):
+		_set_spawn(c, brush.substr(5), MCF.Owner.NEUTRAL)
+	elif brush == "space":
+		_clear_spawn(c)
+	_write(i, _brushed(_tuple(i), mask))
+
+## Какой станет клетка t (кортеж _tuple) под кистью в отражении mask — без записи: этим же
+## рисуется предпросмотр под курсором.
+func _brushed(t: Array, mask: int) -> Array:
+	t = t.duplicate()
 	if brush.begins_with("zone:"):
 		t[4] = _mirror_owner(int(brush.substr(5)), mask)
 	elif brush.begins_with("unit:"):
 		t[2] = false
-		_set_spawn(c, brush.substr(5), MCF.Owner.NEUTRAL)
 	else:
 		match brush:
 			"floor":
@@ -516,7 +531,6 @@ func _brush_cell(c: Vector2i, mask: int) -> void:
 				t[2] = true
 				t[3] = ""
 				t[1] = 0.0
-				_clear_spawn(c)
 			"clear_object":
 				t[3] = ""
 				t[1] = 0.0
@@ -524,7 +538,7 @@ func _brush_cell(c: Vector2i, mask: int) -> void:
 				t[3] = brush
 				t[1] = maxf(0.0, MCF.feature_height(brush))
 				t[2] = false
-	_write(i, t)
+	return t
 
 ## Кисть с большим радиусом: ВСЕ клетки отрезка от прошлой до текущей — быстрый мазок
 ## мышью не оставляет пропусков.
@@ -870,9 +884,7 @@ func _release(c: Vector2i) -> void:
 			if _drag_start != Vector2i(-1, -1):
 				_begin()
 				var cells: Array = []
-				var shape: Array[Vector2i] = line_cells(_drag_start, _drag_cur) if tool == Tool.LINE \
-						else rect_cells(_drag_start, _drag_cur, rect_filled)
-				for p: Vector2i in shape:
+				for p: Vector2i in _drag_shape():
 					if tool == Tool.LINE:
 						cells.append_array(_brush_cells(p))
 					else:
@@ -956,6 +968,9 @@ func _shortcut(e: InputEventKey) -> bool:
 			for t: Dictionary in TOOLS:
 				if e.keycode == t["key"]:
 					_select_tool(t["tool"])
+					# R поворачивает только узор в руке; мебель сама встаёт спинкой к стене.
+					if e.keycode == KEY_R and Furniture.is_furniture(brush):
+						_flash("R is the Rectangle tool — furniture turns to the wall (chairs to their table) by itself")
 					return true
 			return false
 	queue_redraw()
@@ -1032,6 +1047,9 @@ func _draw() -> void:
 	_layer.position = pan
 	_layer.scale = Vector2(zoom, zoom)
 	_layer.cells = Rect2i(x0, y0, x1 - x0, y1 - y0)
+	# Сетка — в слое плиток, между полом и объектами: поперёк стены или кровати её нет.
+	_layer.grid_color = Color(0, 0, 0, 0.28) if show_grid and cs >= 8.0 else Color(0, 0, 0, 0)
+	_layer.grid_width = 1.0 / zoom
 	_layer.queue_redraw()
 	if _zone_stale:
 		_zone_tex.update(_zone_img)
@@ -1046,16 +1064,6 @@ func _draw() -> void:
 	var full := Rect2(Vector2.ZERO, Vector2(w, h) * CELL)
 	if show_zones:
 		draw_texture_rect(_zone_tex, full, false)
-	# Сетка — линиями по видимому окну, только пока клетка крупнее восьми точек.
-	if show_grid and cs >= 8.0:
-		var pts := PackedVector2Array()
-		for x in range(x0, x1 + 2):
-			pts.append(Vector2(x * CELL, y0 * CELL))
-			pts.append(Vector2(x * CELL, (y1 + 1) * CELL))
-		for y in range(y0, y1 + 2):
-			pts.append(Vector2(x0 * CELL, y * CELL))
-			pts.append(Vector2((x1 + 1) * CELL, y * CELL))
-		draw_multiline(pts, Color(0, 0, 0, 0.28), 1.0 / zoom)
 	draw_rect(full, Color(0.85, 0.85, 0.85, 0.6), false, 2.0 / zoom)
 	# Нейтральные бойцы — картинкой своей фракции, иначе кружком с меткой.
 	var font := ThemeDB.fallback_font
@@ -1114,17 +1122,19 @@ func _draw_symmetry_axes() -> void:
 
 func _draw_overlays() -> void:
 	var accent := Ui.accent_color()
-	var cellv := Vector2(CELL, CELL)
-	# Линия или прямоугольник в процессе.
+	# То, что ляжет на карту: кисть под курсором, тянущаяся линия или прямоугольник, узор в руке.
+	_draw_preview()
+	# Линия или прямоугольник в процессе — рамкой (и у каждого отражения).
 	if _drag_start != Vector2i(-1, -1) and tool in [Tool.LINE, Tool.RECT]:
-		var shape: Array[Vector2i] = line_cells(_drag_start, _drag_cur) if tool == Tool.LINE \
-				else rect_cells(_drag_start, _drag_cur, rect_filled)
-		var cells: Array = []
-		for p: Vector2i in shape:
-			cells.append_array(_brush_cells(p) if tool == Tool.LINE else [p])
+		var r := Rect2i(_drag_start, Vector2i.ONE).merge(Rect2i(_drag_cur, Vector2i.ONE))
+		if tool == Tool.LINE:
+			r = r.grow_individual((brush_size - 1) / 2, (brush_size - 1) / 2, brush_size / 2, brush_size / 2)
 		for mask: int in _sym_masks():
-			for c: Vector2i in cells:
-				draw_rect(Rect2(Vector2(_mirror(c, mask)) * CELL, cellv), Color(accent, 0.35))
+			var a0 := _mirror(r.position, mask)
+			var a1 := _mirror(r.end - Vector2i.ONE, mask)
+			var lo := Vector2i(mini(a0.x, a1.x), mini(a0.y, a1.y))
+			var hi := Vector2i(maxi(a0.x, a1.x), maxi(a0.y, a1.y)) + Vector2i.ONE
+			_dashed_rect(Rect2(Vector2(lo) * CELL, Vector2(hi - lo) * CELL), Color(accent, 0.8 if mask == 0 else 0.4))
 	# Рамка выделения в процессе и готовая.
 	if tool == Tool.SELECT and _drag_start != Vector2i(-1, -1) and not _float_moving:
 		var a := Vector2(mini(_drag_start.x, _drag_cur.x), mini(_drag_start.y, _drag_cur.y)) * CELL
@@ -1134,26 +1144,17 @@ func _draw_overlays() -> void:
 		draw_rect(Rect2(Vector2(_selection.position) * CELL, Vector2(_selection.size) * CELL),
 				Color(accent, 0.12))
 		_dashed_rect(Rect2(Vector2(_selection.position) * CELL, Vector2(_selection.size) * CELL), accent)
-	# Узор в руке — полупрозрачно под курсором, со всеми отражениями.
+	# Узор в руке — рамкой каждого отражения.
 	if not _float.is_empty() and map.in_bounds(_hover):
-		var at := _hover - _float_grab
-		for mask: int in _sym_masks():
-			var q := _float
-			if mask & 1:
-				q = MapPresets.flipped(q, true)
-			if mask & 2:
-				q = MapPresets.flipped(q, false)
-			var pos := at
-			if mask & 1:
-				pos.x = map.width - at.x - int(q["w"])
-			if mask & 2:
-				pos.y = map.height - at.y - int(q["h"])
-			_draw_pattern(q, pos, accent)
+		for e: Array in _pattern_places():
+			var q: Dictionary = e[0]
+			_dashed_rect(Rect2(Vector2(e[1]) * CELL, Vector2(int(q["w"]), int(q["h"])) * CELL), accent)
 		return
 	# Курсор: кисть нужного размера (и её отражения).
 	if map.in_bounds(_hover) and _drag_start == Vector2i(-1, -1):
-		var cells: Array[Vector2i] = _brush_cells(_hover) if tool in [Tool.BRUSH, Tool.ERASER] \
-				else [_hover] as Array[Vector2i]
+		var cells: Array[Vector2i] = [_hover]
+		if tool in [Tool.BRUSH, Tool.ERASER, Tool.LINE]:
+			cells = _brush_cells(_hover)
 		for mask: int in _sym_masks():
 			var col := Color(1, 1, 1, 0.8 if mask == 0 else 0.4)
 			var mn := Vector2i(1 << 30, 1 << 30)
@@ -1172,23 +1173,270 @@ func _dashed_rect(r: Rect2, col: Color) -> void:
 	draw_dashed_line(r.end, Vector2(r.position.x, r.end.y), col, wdt, dash)
 	draw_dashed_line(Vector2(r.position.x, r.end.y), r.position, col, wdt, dash)
 
-func _draw_pattern(p: Dictionary, at: Vector2i, accent: Color) -> void:
+## Узор в руке и все его отражения: [узор, левый верхний угол]. Перенос выделения кладётся
+## без отражений (_drop_float) — и показывается так же.
+func _pattern_places() -> Array:
+	var out: Array = []
+	var at := _hover - _float_grab
+	for mask: int in ([0] if _float_moving else _sym_masks()):
+		var q := _float
+		if mask & 1:
+			q = MapPresets.flipped(q, true)
+		if mask & 2:
+			q = MapPresets.flipped(q, false)
+		var pos := at
+		if mask & 1:
+			pos.x = map.width - at.x - int(q["w"])
+		if mask & 2:
+			pos.y = map.height - at.y - int(q["h"])
+		out.append([q, pos])
+	return out
+
+## Клетки линии или прямоугольника, что тянут сейчас.
+func _drag_shape() -> Array[Vector2i]:
+	if tool == Tool.LINE:
+		return line_cells(_drag_start, _drag_cur)
+	return rect_cells(_drag_start, _drag_cur, rect_filled)
+
+# --- Предпросмотр ---
+# Под курсором — ровно то, что ляжет на карту, ТЕМИ ЖЕ плитками: клетки рисует сам
+# TerrainTiles на сетке-черновике (кусок карты вокруг с наложенными клетками). Поэтому
+# стены срастаются с соседними, дверь встаёт по стене, мебель срастается в один предмет и
+# поворачивается к стене — как после щелчка. Пол рисуется там, где он меняется (или где
+# объект убирают), объект — где меняется. Собирается заново, только когда сменилось
+# что-то из _preview_key (курсор, кисть, карта…), а не каждый кадр.
+
+## Кисть — вполпрозрачности (так просил владелец); узор крупнее, его — плотнее.
+const GHOST := Color(1, 1, 1, 0.5)
+const GHOST_PATTERN := Color(1, 1, 1, 0.75)
+## Поле карты вокруг клеток предпросмотра в черновике: соседи для автотайла и поворота
+## мебели (цельный предмет поворачивается по всем своим клеткам).
+const PREVIEW_MARGIN := 3
+## Потолки точного предпросмотра: клеток узора и изменённых клеток. Больше — картинками
+## палитры, без автотайла: сборка идёт на каждый сдвиг курсора на клетку и стоит ~30 мкс
+## (мебель ~90 мкс) на клетку; 450 — кисть 15×15 с отражением на две стороны, ~15 мс.
+const PREVIEW_MAX_CELLS := 2500
+const PREVIEW_MAX_EXACT := 450
+
+var _pv_key := ""
+var _pv_src: Dictionary = {}
+var _pv_tint := GHOST
+## Точные клетки: [клетка карты, кусок атласа, рисовать пол, рисовать объект].
+var _pv: Array = []
+var _pv_floor: ImageTexture = null
+var _pv_feat: ImageTexture = null
+## Картинки поверх: бойцы узора, кисть зоны или бойца, черновик сверх потолка. [клетка, картинка].
+var _pv_thumbs: Array = []
+## Узоры сверх потолка — рисуются картинками палитры по видимой части (_draw_pattern).
+var _pv_patterns: Array = []
+
+func _preview_key() -> String:
+	return "%d|%s|%d|%s|%s|%s|%s|%d|%d|%s|%d|%s" % [tool, brush, brush_size, _hover, _drag_start,
+			_drag_cur, rect_filled, symmetry, _map_ver, _env, TerrainTiles.res_for(cell_size()),
+			_float_moving]
+
+func _draw_preview() -> void:
+	var key := _preview_key()
+	if key != _pv_key or not is_same(_float, _pv_src):
+		_pv_key = key
+		_pv_src = _float
+		_build_preview()
+	var cellv := Vector2(CELL, CELL)
+	for e: Array in _pv_patterns:
+		_draw_pattern(e[0], e[1])
+	for e: Array in _pv:
+		var r := Rect2(Vector2(e[0]) * CELL, cellv)
+		if e[2]:
+			draw_texture_rect_region(_pv_floor, r, e[1], _pv_tint)
+		if e[3]:
+			draw_texture_rect_region(_pv_feat, r, e[1], _pv_tint)
+	for e: Array in _pv_thumbs:
+		draw_texture_rect(e[1], Rect2(Vector2(e[0]) * CELL, cellv), false, _pv_tint)
+
+## Клетки под курсором, на которые ляжет кисть (без отражений); пусто — кисти нет.
+func _preview_base() -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	if _drag_start != Vector2i(-1, -1):
+		if tool in [Tool.LINE, Tool.RECT]:
+			for p: Vector2i in _drag_shape():
+				if tool == Tool.LINE:
+					out.append_array(_brush_cells(p))
+				else:
+					out.append(p)
+	elif map.in_bounds(_hover):
+		if tool in [Tool.BRUSH, Tool.LINE]:
+			out = _brush_cells(_hover)
+		elif tool in [Tool.RECT, Tool.FILL]:
+			out.append(_hover)
+	return out
+
+func _build_preview() -> void:
+	_pv.clear()
+	_pv_thumbs.clear()
+	_pv_patterns.clear()
+	_pv_floor = null
+	_pv_feat = null
+	_pv_tint = GHOST_PATTERN if not _float.is_empty() else GHOST
+	# Клетка -> кортеж, каким она станет, со всеми отражениями (одним набором: у оси
+	# отражения срастаются друг с другом, как и на карте).
+	var cells := {}
+	if not _float.is_empty():
+		if not map.in_bounds(_hover):
+			return
+		for e: Array in _pattern_places():
+			var q: Dictionary = e[0]
+			var pos: Vector2i = e[1]
+			var w: int = q["w"]
+			for sp: Array in q["spawns"]:
+				var c := pos + Vector2i(int(sp[0]), int(sp[1]))
+				if map.in_bounds(c):
+					_pv_thumbs.append([c, _ghost("unit:" + String(sp[2]))])
+			if w * int(q["h"]) > PREVIEW_MAX_CELLS:
+				_pv_patterns.append(e)
+				continue
+			for y in int(q["h"]):
+				for x in w:
+					var cell: Variant = q["cells"][y * w + x]
+					var c := pos + Vector2i(x, y)
+					if cell != null and map.in_bounds(c):
+						cells[c] = cell   # следующее отражение ложится поверх, как в _place_pattern
+	else:
+		var base := _preview_base()
+		if base.size() * _sym_masks().size() > PREVIEW_MAX_CELLS * 4:
+			return   # прямоугольник в полкарты — только рамка (_draw_overlays)
+		var flat := brush.begins_with("zone:") or brush.begins_with("unit:")
+		for mask: int in _sym_masks():
+			for c: Vector2i in base:
+				var m := _mirror(c, mask)
+				if not map.in_bounds(m) or cells.has(m):
+					continue   # первое отражение выигрывает, как в _paint_cells
+				if flat:
+					# Зона и боец — не плитки: их картинка палитры (цвет зоны, фигурка).
+					cells[m] = null
+					_pv_thumbs.append([m, _ghost(brush)])
+				else:
+					cells[m] = _brushed(_tuple(m.y * map.width + m.x), mask)
+	# Что на самом деле меняется: пол (или объект убирают) — и объект.
+	var changed: Array = []   # [клетка, пол?, объект?]
+	for c: Vector2i in cells:
+		if cells[c] == null:
+			continue
+		var t: Array = cells[c]
+		var i := c.y * map.width + c.x
+		var sp := bool(t[2])
+		var feat := "" if sp else String(t[3])
+		var feat_new := feat != "" and feat != map.feature_id[i]
+		var ground_new := int(t[0]) != map.floor_type[i] or sp != (map.is_space[i] != 0) \
+				or (feat == "" and map.feature_id[i] != "")
+		if ground_new or feat_new:
+			changed.append([c, ground_new, feat_new])
+	if changed.is_empty():
+		return
+	var res := TerrainTiles.res_for(cell_size())
+	if changed.size() > PREVIEW_MAX_EXACT:
+		# Слишком много для черновика — картинками палитры, без автотайла.
+		for e: Array in changed:
+			var t: Array = cells[e[0]]
+			if e[1]:
+				_pv_thumbs.append([e[0], _ghost("space" if bool(t[2]) else
+						("grass" if int(t[0]) == MCF.FLOOR_GRASS else "floor"))])
+			if e[2]:
+				_pv_thumbs.append([e[0], _ghost(String(t[3]))])
+		return
+	# Черновик — по куску 32×32 на занятый кусок карты: длинная косая линия не тянет за
+	# собой сетку во всю свою рамку. Соседи берутся из ВСЕХ клеток предпросмотра.
+	var blocks := {}   # кусок -> [мин, макс] изменённых клеток в нём
+	for e: Array in changed:
+		var c: Vector2i = e[0]
+		var k := Vector2i(c.x >> 5, c.y >> 5)
+		var b: Array = blocks.get(k, [c, c])
+		blocks[k] = [Vector2i(mini(b[0].x, c.x), mini(b[0].y, c.y)), Vector2i(maxi(b[1].x, c.x), maxi(b[1].y, c.y))]
+	var saved := _quiet_logs()
+	var tiles := {}   # кусок -> [плитки черновика, его угол на карте]
+	for k: Vector2i in blocks:
+		var bb := Rect2i(blocks[k][0], blocks[k][1] - blocks[k][0] + Vector2i.ONE).grow(PREVIEW_MARGIN) \
+				.intersection(Rect2i(Vector2i.ZERO, Vector2i(map.width, map.height)))
+		var g := Grid.new(bb.size.x, bb.size.y)
+		for y in bb.size.y:
+			for x in bb.size.x:
+				var c := bb.position + Vector2i(x, y)
+				var t: Variant = cells.get(c)
+				_set_scratch(g.cell_fast(x, y), t if t != null else _tuple(c.y * map.width + c.x))
+		tiles[k] = [_tiles.scratch(g, bb.position), bb.position]
+	# Все клетки — в один атлас по 64 в ряд: две текстуры на весь предпросмотр.
+	var size := Vector2i(mini(changed.size(), 64), (changed.size() + 63) / 64) * res
+	var fimg := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
+	var oimg := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
+	for n in changed.size():
+		var e: Array = changed[n]
+		var c: Vector2i = e[0]
+		var tt: Array = tiles[Vector2i(c.x >> 5, c.y >> 5)]
+		var slot := Vector2i(n % 64, n / 64) * res
+		(tt[0] as TerrainTiles)._paint(fimg, oimg, c - tt[1], slot, res)
+		_pv.append([c, Rect2(slot, Vector2(res, res)), e[1], e[2]])
+	_pv_floor = ImageTexture.create_from_image(fimg)
+	_pv_feat = ImageTexture.create_from_image(oimg)
+	_restore_logs(saved)
+
+## Клетка черновика — как _write пишет клетку зеркала карты.
+func _set_scratch(gc: GridCell, t: Array) -> void:
+	gc.floor_type = int(t[0])
+	gc.is_space = bool(t[2])
+	if String(t[3]) != "":
+		gc.set_feature(String(t[3]))
+	gc.cover_height = float(t[1])
+
+## Сетка-черновик и её клетки пишут в ОБЩИЕ журналы вида и обзора (Grid.new объявляет их
+## оборванными), а по журналу вида плиточный кэш самой карты решает, что пересобрать:
+## без снимка каждый сдвиг курсора пересобирал бы все плитки карты.
+func _quiet_logs() -> Array:
+	return [GridCell.look_version, GridCell.look_changes, GridCell.look_log_base,
+			GridCell.vision_version, GridCell.vision_changes, GridCell.vision_log_base,
+			GridCell.walk_version, GridCell.feature_version, GridCell.journaling, GridCell.journal]
+
+func _restore_logs(s: Array) -> void:
+	GridCell.look_version = s[0]
+	GridCell.look_changes = s[1]
+	GridCell.look_log_base = s[2]
+	GridCell.vision_version = s[3]
+	GridCell.vision_changes = s[4]
+	GridCell.vision_log_base = s[5]
+	GridCell.walk_version = s[6]
+	GridCell.feature_version = s[7]
+	GridCell.journaling = s[8]
+	GridCell.journal = s[9]
+
+## Узор сверх потолка черновика — картинками палитры, только видимая часть: вставка всей
+## карты 500×500 не рисует четверть миллиона клеток.
+func _draw_pattern(p: Dictionary, at: Vector2i) -> void:
 	var w: int = p["w"]
-	for y in int(p["h"]):
-		for x in w:
+	var vis0 := cell_at(Vector2.ZERO) - at
+	var vis1 := cell_at(get_viewport_rect().size) - at
+	for y in range(maxi(0, vis0.y), mini(int(p["h"]), vis1.y + 1)):
+		for x in range(maxi(0, vis0.x), mini(w, vis1.x + 1)):
 			var cell: Variant = p["cells"][y * w + x]
 			if cell == null:
 				continue
 			var t: Array = cell
-			var col := Color(0.85, 0.85, 0.85, 0.35)
-			if bool(t[2]):
-				col = Color(0.05, 0.05, 0.12, 0.6)
-			elif float(t[1]) >= MCF.WALL_HEIGHT:
-				col = Color(0.25, 0.25, 0.28, 0.75)
-			elif String(t[3]) != "":
-				col = Color(0.75, 0.62, 0.35, 0.7)
-			draw_rect(Rect2(Vector2(at + Vector2i(x, y)) * CELL, Vector2(CELL, CELL)), col)
-	_dashed_rect(Rect2(Vector2(at) * CELL, Vector2(w, int(p["h"])) * CELL), accent)
+			var r := Rect2(Vector2(at + Vector2i(x, y)) * CELL, Vector2(CELL, CELL))
+			var ground := "space" if bool(t[2]) else ("grass" if int(t[0]) == MCF.FLOOR_GRASS else "floor")
+			draw_texture_rect(_ghost(ground), r, false, _pv_tint)
+			if String(t[3]) != "" and not bool(t[2]):
+				draw_texture_rect(_ghost(String(t[3])), r, false, _pv_tint)
+
+## Картинка палитры для предпросмотра без черновика: мебель — своей одиночной плиткой,
+## прочее — как на кнопке. Кэш по окружению: пресет меняет наряд.
+var _ghost_cache: Dictionary = {}
+func _ghost(id: String) -> Texture2D:
+	var key := _env + "|" + id
+	var t: Texture2D = _ghost_cache.get(key)
+	if t == null:
+		if Furniture.is_furniture(id):
+			t = Sprites.texture_of(id)
+		if t == null:
+			t = _thumb(id)
+		_ghost_cache[key] = t
+	return t
 
 # ============================================================================
 # Интерфейс
@@ -1428,6 +1676,12 @@ func _build_palette() -> void:
 	_current_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_current_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	cur.add_child(_current_label)
+	# Цвета выбранного предмета мебели — строкой образцов под кистью (палитра держит по
+	# кнопке на предмет, а не на каждый цвет).
+	_colour_row = HBoxContainer.new()
+	_colour_row.add_theme_constant_override("separation", 4)
+	_colour_row.visible = false
+	outer.add_child(_colour_row)
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -1452,7 +1706,7 @@ func _refresh_palette() -> void:
 	for cat: String in Furniture.CATEGORIES:
 		var items: Array = []
 		for fid: String in Furniture.ids():
-			if Furniture.DEFS[fid]["cat"] == cat:
+			if Furniture.DEFS[fid]["cat"] == cat and Furniture.base_of(fid) == fid:
 				items.append([fid, "%s %.1f" % [Furniture.name_of(fid), Furniture.height_of(fid)],
 						_furniture_hint(fid)])
 		_palette_group("Furniture: %s" % Furniture.CATEGORY_NAMES[cat], items)
@@ -1502,7 +1756,8 @@ func _palette_group(title: String, items: Array, columns: int = 2) -> void:
 		b.button_group = _brush_group
 		b.focus_mode = Control.FOCUS_NONE
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		b.clip_text = true
+		# Длинное имя («Examination Table 1.0») — в две строки, а не обрезком.
+		b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		b.add_theme_font_size_override("font_size", 11)
 		b.add_theme_constant_override("icon_max_width", 22)
 		b.custom_minimum_size = Vector2(100, 30)
@@ -1661,17 +1916,57 @@ func _select_brush(id: String) -> void:
 	_refresh_status()
 
 func _mark_brush_button() -> void:
-	if _brush_buttons.has(brush):
-		(_brush_buttons[brush] as Button).button_pressed = true
+	# Цветной вариант мебели — на кнопке своего предмета.
+	var key := Furniture.base_of(brush) if Furniture.is_furniture(brush) else brush
+	if _brush_buttons.has(key):
+		(_brush_buttons[key] as Button).button_pressed = true
 	if _current_icon != null:
 		_current_icon.texture = _thumb(brush)
 		_current_label.text = _brush_name(brush)
+	_refresh_colours()
+
+## Строка цветов под кистью: образец на каждый цвет выбранного предмета. Пересобирается,
+## только когда сменился сам предмет, — щелчок по образцу не разбирает строку, в которой
+## нажат.
+func _refresh_colours() -> void:
+	if _colour_row == null:
+		return
+	var ids: Array = Furniture.colours_of(brush) if Furniture.is_furniture(brush) else []
+	var base: String = ids[0] if ids.size() > 1 else ""
+	if base != _colour_base:
+		_colour_base = base
+		for c in _colour_row.get_children():
+			_colour_row.remove_child(c)
+			c.queue_free()
+		if base != "":
+			var lbl := Label.new()
+			lbl.text = "Colour"
+			lbl.add_theme_font_size_override("font_size", 11)
+			_colour_row.add_child(lbl)
+			for fid: String in ids:
+				var b := Button.new()
+				b.icon = _ghost(fid)
+				b.expand_icon = true
+				b.custom_minimum_size = Vector2(30, 30)
+				b.toggle_mode = true
+				b.button_group = _colour_group
+				b.focus_mode = Control.FOCUS_NONE
+				b.tooltip_text = Furniture.name_of(fid)
+				_tight(b)
+				b.pressed.connect(_select_brush.bind(fid))
+				b.set_meta("fid", fid)
+				_colour_row.add_child(b)
+	_colour_row.visible = base != ""
+	for c in _colour_row.get_children():
+		if c is Button:
+			(c as Button).set_pressed_no_signal(c.get_meta("fid") == brush)
 
 func _set_brush_size(n: int) -> void:
 	brush_size = clampi(n, 1, 15)
 	if _size_slider != null:
 		_size_slider.set_value_no_signal(brush_size)
 		_size_value.text = str(brush_size)
+	_refresh_status()
 	queue_redraw()
 
 func _brush_name(id: String) -> String:
@@ -1700,8 +1995,10 @@ static func _furniture_hint(fid: String) -> String:
 	var cover := "wall-height" if Furniture.blocks_move(fid) \
 			else ("cover −%d" % Furniture.cover_penalty(float(d["h"])) if Furniture.cover_penalty(float(d["h"])) > 0
 			else "climbable, no cover")
-	return "%s — %.1f m, %s, %s\n%s, durability %d, breaks for %d AP" % [Furniture.name_of(fid),
-			float(d["h"]), d["mat"], cover, move[0].to_upper() + move.substr(1), int(d["dur"]), int(d["ap"])]
+	var colours := Furniture.colours_of(fid).size()
+	return "%s — %.1f m, %s, %s\n%s, durability %d, breaks for %d AP%s" % [Furniture.name_of(fid),
+			float(d["h"]), d["mat"], cover, move[0].to_upper() + move.substr(1), int(d["dur"]), int(d["ap"]),
+			"\n%d colours — pick one under the brush name" % colours if colours > 1 else ""]
 
 # --- Строка состояния и заголовок ---
 

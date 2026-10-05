@@ -101,8 +101,18 @@ Yours wins. Changes are picked up when a battle or the map editor opens.
 -- Furniture (drawn from above, back of the piece at the TOP; the game turns it to the wall) --
   chair.png
   armchair.png
+  armchair_blue.png
+  armchair_green.png
+  armchair_brown.png
   sofa.png
+  sofa_red.png
+  sofa_green.png
+  sofa_brown.png
   bed.png
+  bed_red.png
+  bed_green.png
+  bed_grey.png
+  bed_yellow.png
   nightstand.png
   desk.png
   dining_table.png
@@ -113,31 +123,58 @@ Yours wins. Changes are picked up when a battle or the map editor opens.
   cabinet.png
   kitchen_counter.png
   refrigerator.png
+  potted_plant.png
+  tv_stand.png
+  stove.png
+  piano.png
+  piano_white.png
+  bunk_bed.png
+  bunk_bed_green.png
   office_desk.png
   conference_table.png
   filing_cabinet.png
   locker.png
+  locker_blue.png
+  locker_grey.png
   reception_desk.png
   display_shelf.png
   checkout_counter.png
   vending_machine.png
+  vending_machine_blue.png
+  vending_machine_green.png
+  water_cooler.png
   workbench.png
   tool_cabinet.png
+  tool_cabinet_blue.png
+  tool_cabinet_green.png
   storage_shelf.png
   server_rack.png
   industrial_cabinet.png
   pallet.png
   crate.png
   barrel.png
+  barrel_red.png
+  barrel_yellow.png
+  barrel_green.png
   equipment_cart.png
   generator.png
+  generator_red.png
+  generator_green.png
+  generator_grey.png
   toolbox.png
   ammo_crate.png
   machinery.png
   exam_table.png
+  washing_machine.png
+  fuel_tank.png
+  fuel_tank_red.png
   bench.png
   trash_bin.png
+  trash_bin_grey.png
+  trash_bin_blue.png
   dumpster.png
+  dumpster_blue.png
+  dumpster_red.png
   park_table.png
   street_cabinet.png
 

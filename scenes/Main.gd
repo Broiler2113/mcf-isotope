@@ -4395,6 +4395,7 @@ class LodLayer extends Node2D:
 	var far := true
 	var tiles: TerrainTiles = null
 	var near_cells := Rect2i()   # видимые клетки ближнего плана
+	var grid_col := Color(0, 0, 0, 0)   # сетка клеток; прозрачная — не рисуется
 	func _draw() -> void:
 		if not far:
 			if tiles == null:
@@ -4405,6 +4406,9 @@ class LodLayer extends Node2D:
 					false, res)
 			if fog_on and fog != null:
 				draw_texture_rect(fog, rect, false)
+			# Сетка — под объектами: стену, стол или кровать в несколько клеток она не режет.
+			TerrainTiles.draw_grid(self, rect.position, float(CELL), r.position.x, r.position.y,
+					r.end.x, r.end.y, grid_col, 1.0)
 			tiles.draw(self, rect.position, float(CELL), r.position.x, r.position.y, r.end.x, r.end.y,
 					true, res)
 			return
@@ -4749,20 +4753,9 @@ func _draw() -> void:
 				var dh: float = grid.cell(dc).cover_height
 				draw_string(font, _cell_origin(dc) + label_off, HEIGHT_LABELS.get(dh, "%.1fm" % dh),
 					HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.95, 0.85, 0.6))
-		# Сетка — линиями по строкам и столбцам экрана, а не контуром каждой клетки: на
-		# отъезде это тысячи прямоугольников за кадр против сотни линий.
-		var top := ORIGIN.y + vy0 * CELL
-		var bottom := ORIGIN.y + (vy1 + 1) * CELL
-		var left := ORIGIN.x + vx0 * CELL
-		var right := ORIGIN.x + (vx1 + 1) * CELL
-		# На дальнем отъезде линии сливаются в серую пелену поверх плиток — не рисуем.
-		if zoom >= 0.3:
-			for x in range(vx0, vx1 + 2):
-				var lx: float = ORIGIN.x + x * CELL
-				draw_line(Vector2(lx, top), Vector2(lx, bottom), grid_col, 1.0)
-			for y in range(vy0, vy1 + 2):
-				var ly: float = ORIGIN.y + y * CELL
-				draw_line(Vector2(left, ly), Vector2(right, ly), grid_col, 1.0)
+		# Сетку рисует слой плиток (_lod) между полом и объектами — линиями по строкам и
+		# столбцам видимых клеток. На дальнем отъезде линии сливаются в серую пелену — нет.
+		_lod.grid_col = grid_col if zoom >= 0.3 else Color(0, 0, 0, 0)
 
 	if mode == Mode.MOVE and reach != null:
 		_draw_move_preview()

@@ -80,10 +80,14 @@ const RECIPES := {
 		{"f": "bookshelf", "at": "wall", "n": [1, 2]},
 		{"f": "cabinet", "at": "wall", "p": 0.5},
 		{"f": "dresser", "at": "wall", "p": 0.3},
+		{"f": "tv_stand", "at": "wall", "p": 0.5},
+		{"f": "potted_plant", "at": "corner", "n": [1, 2], "p": 0.5},
+		{"f": "piano", "at": "wall", "p": 0.15},
 	],
 	"kitchen": [
 		{"f": "kitchen_counter", "at": "row", "n": [2, 4]},
 		{"f": "refrigerator", "at": "wall"},
+		{"f": "stove", "at": "wall", "p": 0.7},
 		{"f": "dining_table", "at": "center", "then": [{"f": "chair", "at": "around", "n": [2, 4]}]},
 		{"f": "cabinet", "at": "wall", "p": 0.5},
 		{"f": "trash_bin", "at": "corner", "p": 0.6},
@@ -98,6 +102,8 @@ const RECIPES := {
 		{"f": "dining_table", "at": "grid", "n": [2, 5], "then": [{"f": "chair", "at": "around", "n": [2, 4]}]},
 		{"f": "kitchen_counter", "at": "row", "n": [2, 4]},
 		{"f": "refrigerator", "at": "wall", "p": 0.7},
+		{"f": "stove", "at": "wall", "p": 0.6},
+		{"f": "potted_plant", "at": "corner", "p": 0.4},
 		{"f": "checkout_counter", "at": "free", "p": 0.6},
 		{"f": "trash_bin", "at": "corner", "p": 0.4},
 	],
@@ -108,6 +114,8 @@ const RECIPES := {
 		{"f": "reception_desk", "at": "free", "p": 0.2},
 		{"f": "trash_bin", "at": "corner", "p": 0.5},
 		{"f": "armchair", "at": "free", "p": 0.2},
+		{"f": "potted_plant", "at": "corner", "p": 0.4},
+		{"f": "water_cooler", "at": "wall", "p": 0.3},
 	],
 	"command": [
 		{"f": "conference_table", "at": "center", "then": [{"f": "chair", "at": "around", "n": [3, 4]}]},
@@ -115,6 +123,7 @@ const RECIPES := {
 		{"f": "filing_cabinet", "at": "wall", "n": [1, 2]},
 		{"f": "office_desk", "at": "wall", "n": [1, 2], "then": [{"f": "chair", "at": "front"}]},
 		{"f": "bookshelf", "at": "wall", "p": 0.3},
+		{"f": "water_cooler", "at": "wall", "p": 0.3},
 	],
 	"storage": [
 		{"f": "storage_shelf", "at": "aisles"},
@@ -159,6 +168,7 @@ const RECIPES := {
 		{"f": "locker", "at": "wall", "p": 0.4},
 		{"f": "equipment_cart", "at": "free", "p": 0.5},
 		{"f": "filing_cabinet", "at": "wall", "p": 0.3},
+		{"f": "water_cooler", "at": "wall", "p": 0.3},
 	],
 	"utility": [
 		{"f": "generator", "at": "corner", "p": 0.8},
@@ -167,14 +177,19 @@ const RECIPES := {
 		{"f": "barrel", "at": "free", "n": [1, 2]},
 		{"f": "crate", "at": "free", "p": 0.5},
 		{"f": "toolbox", "at": "free", "p": 0.3},
+		{"f": "washing_machine", "at": "wall", "p": 0.3},
+		{"f": "fuel_tank", "at": "center", "p": 0.3, "big": true},
 	],
 	"barracks": [
 		{"f": "bed", "at": "row", "n": [2, 5]},
+		{"f": "bunk_bed", "at": "row", "n": [1, 3], "p": 0.5},
 		{"f": "locker", "at": "row", "n": [2, 4]},
 		{"f": "dining_table", "at": "center", "p": 0.4, "then": [{"f": "chair", "at": "around", "n": [2, 3]}]},
 		{"f": "ammo_crate", "at": "free", "p": 0.3},
 		{"f": "bench", "at": "free", "p": 0.3},
 		{"f": "wardrobe", "at": "wall", "p": 0.2},
+		{"f": "tv_stand", "at": "wall", "p": 0.2},
+		{"f": "washing_machine", "at": "wall", "p": 0.2},
 	],
 	"armory": [
 		{"f": "storage_shelf", "at": "aisles", "p": 0.6},
@@ -190,12 +205,14 @@ const RECIPES := {
 		{"f": "barrel", "at": "free", "n": [1, 2]},
 		{"f": "industrial_cabinet", "at": "wall", "p": 0.5},
 		{"f": "generator", "at": "corner", "p": 0.4},
+		{"f": "fuel_tank", "at": "center", "p": 0.3, "big": true},
 	],
 	"shop": [
 		{"f": "display_shelf", "at": "aisles"},
 		{"f": "checkout_counter", "at": "free"},
 		{"f": "trash_bin", "at": "corner", "p": 0.5},
 		{"f": "vending_machine", "at": "wall", "p": 0.3},
+		{"f": "potted_plant", "at": "corner", "p": 0.3},
 	],
 	"hut": [
 		{"f": "bed", "at": "corner", "p": 0.8},
@@ -392,7 +409,7 @@ func _furnish_room(cells: Array[Vector2i], main: bool, count: int, r: Rect2i) ->
 	var extra := roundi(free * CLUTTER_SHARE[level])
 	var pool: Array = CLUTTER.get(_style_key(), CLUTTER["town"])
 	for k in extra:
-		var fid: String = pool[rng.randi_range(0, pool.size() - 1)]
+		var fid := Furniture.variant(pool[rng.randi_range(0, pool.size() - 1)], rng)
 		_budget = maxi(_budget, 1)
 		_place_one(fid, "free", {})
 
@@ -437,7 +454,7 @@ func _run_step(step: Dictionary, anchor: Dictionary) -> Array:
 		return got
 	var n_raw: Variant = step.get("n", 1)
 	var n: int = rng.randi_range(int(n_raw[0]), int(n_raw[1])) if n_raw is Array else int(n_raw)
-	var fid: String = step["f"]
+	var fid := Furniture.variant(step["f"], rng)   # цвет — один на шаг: ряд коек одного цвета
 	var rule: String = step["at"]
 	var subs: Array = step.get("then", [])
 	match rule:
@@ -887,9 +904,10 @@ func _near_room(c: Vector2i) -> bool:
 			return true
 	return false
 
-func _outdoor_put(c: Vector2i, fid: String, need_wall: bool) -> void:
+func _outdoor_put(c: Vector2i, base: String, need_wall: bool) -> void:
 	if not _outdoor_ok(c):
 		return
+	var fid := Furniture.variant(base, rng)
 	var wd := Vector2i.ZERO
 	if need_wall:
 		# К стене спиной, и напротив — две свободные клетки: проход не сужается до одной.
@@ -914,8 +932,8 @@ func _outdoor_put(c: Vector2i, fid: String, need_wall: bool) -> void:
 			cells.append(q)
 		for q in cells:
 			for d: Vector2i in N4:
-				if not cells.has(q + d) and m.get_feature(q + d) == fid:
-					return   # вплотную к такому же — срослись бы
+				if not cells.has(q + d) and Furniture.base_of(m.get_feature(q + d)) == base:
+					return   # вплотную к такому же (любого цвета) — срослись бы или слиплись
 	var done: Array[Vector2i] = []
 	for q in cells:
 		if not _ring_ok_map(q):
