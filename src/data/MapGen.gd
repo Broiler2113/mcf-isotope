@@ -96,8 +96,8 @@ const K_DHALL := 6
 ## важности (на малой карте лишние отпадают); hall — вид пола своего коридора; extra —
 ## чем заполнять лишние комнаты.
 const DEPARTMENTS := {
-	"bridge": {"front": "command", "rooms": ["captain", "hidden_storage", "office"], "hall": MCF.Look.CARPET_BLUE,
-		"extra": ["office", "storage"]},
+	"bridge": {"front": "command", "rooms": ["captain", "hidden_storage", "server_room", "office"],
+		"hall": MCF.Look.CARPET_BLUE, "extra": ["office", "server_room"]},
 	"service": {"front": "lounge", "rooms": ["kitchen", "mess", "restroom", "quarters", "quarters", "laundry",
 		"quarters", "quarters"], "hall": MCF.Look.TILE, "extra": ["quarters", "storage"]},
 	"engineering": {"front": "reception", "rooms": ["power", "water", "air", "dock", "supply"], "hall": MCF.Look.PLATE,
@@ -122,6 +122,32 @@ const DEPT_ORDER := ["bridge", "service", "engineering", "medical", "security", 
 ## Без второго жилого и второго производства: «производство дальше всех от жилого» должно
 ## читаться однозначно; жилые каюты больших станций — в «прочих» отсеках (misc).
 const DEPT_EXTRA := ["misc", "supply", "research", "misc", "medical", "engineering", "security"]
+## Акцент отдела (0.9.3): цвет, которым размечены его стены и двери. Жилой блок,
+## производство и «прочее» игрок цветом не называл — они остаются серыми.
+const DEPT_ACCENT := {
+	"bridge": MCF.Accent.COMMAND,
+	"security": MCF.Accent.SECURITY,
+	"medical": MCF.Accent.MEDICAL,
+	"research": MCF.Accent.SCIENCE,
+	"engineering": MCF.Accent.ENGINEERING,
+	"supply": MCF.Accent.CARGO,
+}
+## Акцент по НАЗНАЧЕНИЮ комнаты. Он ГЛАВНЕЕ отдела: игрок просил красить «всё, что
+## относится к…», а не отделы целиком, — поэтому серверная и на мостике белая, а склад
+## остаётся оранжевым, в чьём бы отсеке ни стоял. Цвет отдела достаётся всему прочему:
+## его коридору, приёмной, кабинетам.
+const KIND_ACCENT := {
+	"command": MCF.Accent.COMMAND, "captain": MCF.Accent.COMMAND,
+	"server_room": MCF.Accent.CONTROL, "comms": MCF.Accent.CONTROL,
+	"armory": MCF.Accent.SECURITY, "cell": MCF.Accent.SECURITY, "briefing": MCF.Accent.SECURITY,
+	"ward": MCF.Accent.MEDICAL, "surgery": MCF.Accent.MEDICAL,
+	"laboratory": MCF.Accent.SCIENCE, "testing_range": MCF.Accent.SCIENCE,
+	"power": MCF.Accent.ENGINEERING, "water": MCF.Accent.ENGINEERING, "air": MCF.Accent.ENGINEERING,
+	"utility": MCF.Accent.ENGINEERING, "recycling": MCF.Accent.ENGINEERING,
+	"machine_shop": MCF.Accent.ENGINEERING, "workshop": MCF.Accent.ENGINEERING,
+	"warehouse": MCF.Accent.CARGO, "dock": MCF.Accent.CARGO, "storage": MCF.Accent.CARGO,
+	"supply": MCF.Accent.CARGO,
+}
 ## Комнаты, которым нужен выход прямо в космос: причал и испытательный полигон.
 const HULL_KINDS := {"dock": true, "testing_range": true}
 ## Комнаты, которые нельзя отдать под технические (их отдел без них — не отдел).
@@ -173,8 +199,12 @@ var _rep_fold: Array[bool] = []
 ## Назначение каждой комнаты (0.9.2): прямоугольник из _rooms → вид помещения (у станции —
 ## комната отдела, у города — здание, у поля — хижина/руина). По нему мебель и вид пола.
 var _room_kind: Dictionary = {}
-## Вид пола коридоров станции: отдела — свой, техтуннели — решётка.
+## Вид пола коридоров станции: отдела — свой, техтуннели — решётка (и то не всякий).
 var _hall_look: PackedByteArray
+## Акцент службы по клеткам (0.9.3); читается только на стенах и дверях.
+var _accent: PackedByteArray
+## Клетки космоса, где лежат решётчатые мостки от станции к панелям (MCF.Look.GRILL).
+var _grill: Array[Vector2i] = []
 ## Клетки стены, где прорубить шлюз наружу: причалы, полигон, выходы техтуннелей к панелям.
 var _space_doors: Array[Vector2i] = []
 ## Клетки космоса, где висят солнечные панели (вид, MCF.Look.SOLAR).
@@ -583,6 +613,7 @@ func _mirror_spawns() -> void:
 func _station() -> void:
 	_k = _bytes()
 	_hall_look = _bytes()
+	_accent = _bytes()
 	var di := clampi(int(opt["density"]), 0, 2)
 	var sector_min: int = [15, 12, 10][di]
 	# Хотя бы один коридор на любом поле: отсек не больше, чем влезает два поперёк самой
@@ -607,11 +638,13 @@ func _station() -> void:
 		_department(kept[k], depts[k])
 		_dept_sectors.append([kept[k], depts[k]])
 	_maintenance_rooms()
+	_accent_rooms()
 	if _sym > 0:
 		for y in h:
 			for x in w:
 				_k[y * w + x] = _k[_src_index(x, y)]
 				_hall_look[y * w + x] = _hall_look[_src_index(x, y)]
+				_accent[y * w + x] = _accent[_src_index(x, y)]
 		_rooms = _mirror_rects(_rooms)
 	# Обшивка: всякая пустота, касающаяся пола хотя бы углом, становится стеной.
 	for y in h:
@@ -630,8 +663,13 @@ func _station() -> void:
 					_ground(c)
 					if _hall_look[y * w + x] != 0:
 						m.set_look(y * w + x, _hall_look[y * w + x])
+					# Проём — тоже стена отдела: шлюз встанет сюда в _seal_doors, и рама
+					# у него будет цвета службы (TerrainTiles), как и полоса на стенах.
+					if _k[y * w + x] == K_DOOR:
+						m.set_accent(y * w + x, _accent[y * w + x])
 				K_WALL:
 					_put(c, MCF.FEATURE_WALL)
+					m.set_accent(y * w + x, _accent[y * w + x])
 				_:
 					_void(c)
 	for y in h:
@@ -675,6 +713,10 @@ func _station() -> void:
 			cand.sort()
 			_put(cand[cand.size() / 2], MCF.FEATURE_AIRLOCK)
 	if bool(opt["space"]) and _style == Style.STATION:
+		# Мостки от шлюза к панелям и сами панели: и то и другое — вид на клетке КОСМОСА.
+		for c in _grill:
+			if _in(c) and m.get_space(c):
+				m.set_look(c.y * w + c.x, MCF.Look.GRILL)
 		for c in _solar:
 			if _in(c) and m.get_space(c):
 				m.set_look(c.y * w + c.x, MCF.Look.SOLAR)
@@ -760,9 +802,11 @@ func _sector_on_hull(s: Rect2i) -> bool:
 ## стена, коридор отдела, стена, задние комнаты. Всё внутреннее — только в коридор отдела;
 ## задние комнаты, упёршиеся в техтуннель, получают и дверь туда.
 func _department(s: Rect2i, dept: String) -> void:
+	var accent: int = DEPT_ACCENT.get(dept, MCF.Accent.NONE)
 	for y in range(s.position.y, s.end.y):
 		for x in range(s.position.x, s.end.x):
 			_k[y * w + x] = K_WALL if _on_edge(s, Vector2i(x, y)) else K_ROOM
+			_accent[y * w + x] = accent
 	var spec: Dictionary = DEPARTMENTS.get(dept, DEPARTMENTS["misc"])
 	var f := _front_side(s)
 	var L := s.size.x - 2 if f % 2 == 0 else s.size.y - 2
@@ -1058,6 +1102,30 @@ func _maintenance_rooms() -> void:
 		if best.size != Vector2i.ZERO:
 			_room_kind[best] = "recycling"
 
+## Акценты по назначению комнаты (0.9.3) — поверх цвета отдела. Отдел красит свой коридор
+## и всё, у чего своего цвета нет; комната с ясной службой перебивает его: серверная белая
+## и на мостике, склад оранжевый и в медотсеке, щитовая жёлтая везде. Красятся стены
+## комнаты (её кайма) — пол ни при чём.
+func _accent_rooms() -> void:
+	for r: Rect2i in _room_kind:
+		var accent: int = KIND_ACCENT.get(_room_kind[r], MCF.Accent.NONE)
+		if accent == MCF.Accent.NONE:
+			continue
+		for c in _edge_cells(r):
+			if _in(c):
+				_accent[c.y * w + c.x] = accent
+
+## Стены комнат, которые обязаны остаться глухими (тайник капитана): ни окна, ни внешнего
+## шлюза. Ключи — клетки, чтобы проверка на обшивке стоила поиск по словарю.
+func _sealed_room_walls() -> Dictionary:
+	var out := {}
+	for r: Rect2i in _room_kind:
+		if _room_kind[r] != "hidden_storage":
+			continue
+		for c in _edge_cells(r):
+			out[c] = true
+	return out
+
 ## Клетка стены комнаты, за которой техтуннель (середина такого куска), или (−1, −1).
 func _maint_wall(r: Rect2i) -> Vector2i:
 	var cells: Array[Vector2i] = []
@@ -1077,7 +1145,12 @@ func _maint_wall(r: Rect2i) -> Vector2i:
 	return Vector2i(-1, -1)
 
 ## Выходы техтуннелей наружу (0.9.2): туннель, упёршийся в обшивку, за которой пустота на
-## несколько клеток, получает шлюз — а в пустоте за ним висят солнечные панели.
+## несколько клеток, получает шлюз — а за ним наружу уходят решётчатые мостки, и на них
+## стоят солнечные панели (0.9.3).
+##
+## Мостки начинаются ВПЛОТНУЮ к обшивке (k = 1) и идут одной полосой: решётка держится за
+## станцию, а не висит сама по себе в пустоте. Панели — по обе стороны от мостка, так что
+## до любой из них можно дойти по решётке.
 func _maintenance_exits() -> void:
 	var dirs := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 	var used: Array[Vector2i] = []
@@ -1107,18 +1180,32 @@ func _maintenance_exits() -> void:
 				used.append(wall)
 				_space_doors.append(wall)
 				var side := Vector2i(d.y, d.x)
-				for k in range(2, 5):
-					for t in range(-2, 3):
+				for k in range(1, 5):
+					_grill.append(wall + d * k)            # мостки от самой обшивки
+					if k == 1:
+						continue
+					for t: int in [-2, -1, 1, 2]:
 						_solar.append(wall + d * k + side * t)
 ## Делит кусок коридором, пока обе стороны не меньше `mn`. Листья — отсеки.
+##
+## Ширина прохода (0.9.3, по просьбе игрока): ГЛАВНЫЙ коридор — всегда три клетки, по нему
+## станция и читается; узкими бывают только технические туннели — клетка, изредка две.
+## Прежде главные коридоры выходили и по две клетки, и отличить их от техтуннеля было
+## нечем. Решётчатый пол (MCF.Look.GRATE) — тоже примета техтуннеля, и теперь не всякого:
+## он достаётся примерно трети, остальные идут по обычному полу станции, иначе решётка
+## лезет из каждой щели и перестаёт что-либо значить.
+const MAINT_WIDE_CHANCE := 0.25
+const MAINT_GRATE_CHANCE := 0.35
+
 func _split_sectors(r: Rect2i, mn: int, depth: int, out: Array[Rect2i]) -> void:
-	var hall_w := 2
+	var tech := depth >= 2
 	var width_roll := _rng.randf()
-	if depth == 0:
-		hall_w = 3 if width_roll < 0.5 else 2
-	elif depth >= 2:
-		hall_w = 1   # технический туннель (0.9.2) — всегда в клетку
-	var hall_k := K_HALL if depth < 2 else K_MAINT
+	var grate_roll := _rng.randf()
+	var hall_w := 3
+	if tech:
+		hall_w = 2 if width_roll < MAINT_WIDE_CHANCE else 1
+	var hall_k := K_HALL if not tech else K_MAINT
+	var hall_look := MCF.Look.GRATE if tech and grate_roll < MAINT_GRATE_CHANCE else 0
 	var can_x := r.size.x >= mn * 2 + hall_w
 	var can_y := r.size.y >= mn * 2 + hall_w
 	# Иногда средний кусок не делится дальше — отсек выходит большим, в нём больше комнат.
@@ -1134,8 +1221,8 @@ func _split_sectors(r: Rect2i, mn: int, depth: int, out: Array[Rect2i]) -> void:
 		for y in range(r.position.y, r.end.y):
 			for x in range(r.position.x + cut, r.position.x + cut + hall_w):
 				_k[y * w + x] = hall_k
-				if hall_k == K_MAINT:
-					_hall_look[y * w + x] = MCF.Look.GRATE
+				if hall_look != 0:
+					_hall_look[y * w + x] = hall_look
 		_split_sectors(Rect2i(r.position.x, r.position.y, cut, r.size.y), mn, depth + 1, out)
 		_split_sectors(Rect2i(r.position.x + cut + hall_w, r.position.y,
 				r.size.x - cut - hall_w, r.size.y), mn, depth + 1, out)
@@ -1144,8 +1231,8 @@ func _split_sectors(r: Rect2i, mn: int, depth: int, out: Array[Rect2i]) -> void:
 		for y in range(r.position.y + cut, r.position.y + cut + hall_w):
 			for x in range(r.position.x, r.end.x):
 				_k[y * w + x] = hall_k
-				if hall_k == K_MAINT:
-					_hall_look[y * w + x] = MCF.Look.GRATE
+				if hall_look != 0:
+					_hall_look[y * w + x] = hall_look
 		_split_sectors(Rect2i(r.position.x, r.position.y, r.size.x, cut), mn, depth + 1, out)
 		_split_sectors(Rect2i(r.position.x, r.position.y + cut + hall_w, r.size.x,
 				r.size.y - cut - hall_w), mn, depth + 1, out)
@@ -1209,7 +1296,13 @@ func _vented(r: Rect2i) -> bool:
 ## залах, ящики, баррикады в коридорах.
 func _dress_station() -> void:
 	# Шлюзы в проёмах уже стоят (_seal_doors); здесь — обшивка: окна и выходы наружу.
+	# В стену ТАЙНИКА не режется ни то ни другое: вход у него ровно один — из каюты
+	# капитана, — и люк наружу (или окно) выдавал бы его с первого взгляда. Прежде такой
+	# шлюз изредка выпадал и открывал в тайник второй вход, прямо из космоса.
+	var sealed := _sealed_room_walls()
 	for c in _hull():
+		if sealed.has(c):
+			continue
 		var roll := _rng.randf()
 		if roll < 0.025 and not _near_feature(c, MCF.FEATURE_AIRLOCK):
 			_put(c, MCF.FEATURE_AIRLOCK)

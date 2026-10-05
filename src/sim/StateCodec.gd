@@ -57,12 +57,16 @@ static func encode(state: GameState) -> Dictionary:
 		"decor": _encode_decor(state.grid),
 	}
 
-## Только вид (0.9.2): пол комнат и повороты мебели, заданные в редакторе. Правилам не
-## нужны, но без них загруженная партия выглядела бы иначе, чем сохранённая.
+## Только вид (0.9.2): пол комнат, акцент службы на стенах (0.9.3) и повороты мебели,
+## заданные в редакторе. Правилам не нужны, но без них загруженная партия выглядела бы
+## иначе, чем сохранённая.
 static func _encode_decor(grid: Grid) -> Dictionary:
 	var out := {}
 	if grid.floor_look.size() == grid.width * grid.height and grid.floor_look.count(0) < grid.floor_look.size():
 		out["floor"] = MapData.rle(grid.floor_look)
+	if grid.wall_accent.size() == grid.width * grid.height \
+			and grid.wall_accent.count(0) < grid.wall_accent.size():
+		out["accent"] = MapData.rle(grid.wall_accent)
 	var turns: Array = []
 	for c: Vector2i in grid.furniture_turn:
 		var rec: Array = grid.furniture_turn[c]
@@ -248,6 +252,7 @@ static func restore_into(gs: GameState, d: Dictionary) -> void:
 		var dec: Dictionary = d["decor"]
 		var n := gs.grid.width * gs.grid.height
 		gs.grid.floor_look = MapData.unrle(dec["floor"], n) if dec.has("floor") else PackedByteArray()
+		gs.grid.wall_accent = MapData.unrle(dec["accent"], n) if dec.has("accent") else PackedByteArray()
 		gs.grid.furniture_turn.clear()
 		for t: Array in dec.get("turn", []):
 			gs.grid.furniture_turn[Vector2i(int(t[0]), int(t[1]))] = [str(t[2]), int(t[3])]

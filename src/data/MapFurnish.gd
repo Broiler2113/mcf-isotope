@@ -373,9 +373,11 @@ const FLOOR_BY_KIND := {
 	"living_room": [MCF.Look.WOOD, MCF.Look.PARQUET, MCF.Look.CARPET_RED],
 	"command": [MCF.Look.CARPET_BLUE, MCF.Look.PLATE], "captain": [MCF.Look.PARQUET, MCF.Look.CARPET_RED],
 	"office": [MCF.Look.CARPET_BLUE, MCF.Look.PARQUET, MCF.Look.LINO],
-	"utility": [MCF.Look.PLATE, MCF.Look.GRATE], "recycling": [MCF.Look.GRATE, MCF.Look.PLATE],
-	"water": [MCF.Look.PLATE, MCF.Look.GRATE], "power": [MCF.Look.PLATE, MCF.Look.GRATE],
-	"air": [MCF.Look.GRATE, MCF.Look.PLATE], "server_room": [MCF.Look.PLATE, MCF.Look.GRATE],
+	# Решётка (GRATE) из комнат убрана (0.9.3): её носят ТОЛЬКО технические туннели, и то
+	# не все. Здесь она лезла в каждую щитовую и серверную, и примета туннеля размывалась.
+	"utility": [MCF.Look.PLATE], "recycling": [MCF.Look.PLATE, MCF.Look.LINO],
+	"water": [MCF.Look.PLATE], "power": [MCF.Look.PLATE],
+	"air": [MCF.Look.PLATE], "server_room": [MCF.Look.PLATE, MCF.Look.LINO],
 	"shop": [MCF.Look.TILE, MCF.Look.LINO, MCF.Look.WOOD],
 	"restaurant": [MCF.Look.CHECKER, MCF.Look.WOOD, MCF.Look.PARQUET],
 	"barracks": [MCF.Look.LINO, MCF.Look.PLATE, MCF.Look.WOOD], "mining": [MCF.Look.PLATE],

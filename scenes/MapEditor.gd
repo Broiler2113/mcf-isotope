@@ -58,7 +58,11 @@ const SYM_NAMES := ["Off", "Left / Right", "Top / Bottom", "Four quarters"]
 
 const TERRAIN := [["floor", "Floor"], ["grass", "Grass"], ["space", "Space"]]
 ## Виды пола (0.9.2): кисть «floor:N» кладёт пол окружения с видом MCF.FLOOR_LOOKS[N].
-const FLOOR_LOOK_BRUSHES := [1, 2, 3, 4, 5, 6, 7, 8, 9]
+## Панели и решётка (10, 11) — виды КОСМОСА: своего пола у них нет, они висят снаружи
+## станции, и кисть кладёт их на космос (см. _brush_cell).
+const FLOOR_LOOK_BRUSHES := [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+## Виды, которые кисть кладёт на КОСМОС, а не на пол.
+const SPACE_LOOK_BRUSHES := {MCF.Look.SOLAR: true, MCF.Look.GRILL: true}
 const WALLS := [
 	[MCF.FEATURE_WALL, "Wall"], [MCF.FEATURE_WOOD_WALL, "Wood wall"],
 	[MCF.FEATURE_SOIL, "Soil"], [MCF.FEATURE_GLASS, "Glass"],
@@ -182,6 +186,7 @@ func _ready() -> void:
 	else:
 		map = MapData.new(DEFAULT_SIZE.x, DEFAULT_SIZE.y)
 		MapPresets.prefill(map, "town")
+	_build_sky()
 	_build_ui()
 	_map_replaced()
 	if pan == Vector2.ZERO:
@@ -293,6 +298,8 @@ static func map_color(m: MapData, i: int, env: String) -> Color:
 		col = Color(0.03, 0.03, 0.07)
 		if tone != null and m.get_look(i) == MCF.Look.SOLAR:
 			col = tone
+		elif m.get_look(i) == MCF.Look.GRILL:
+			col = Color(0.26, 0.28, 0.30)   # мостки: сталь поверх пустоты (0.9.3)
 	elif Furniture.is_furniture(feat):
 		# Мебель (§3.15) — свой тёплый тон, высокая темнее: план комнат читается сразу.
 		col = Color(0.40, 0.30, 0.22) if m.cover_height[i] >= MCF.WALL_HEIGHT \
@@ -310,7 +317,9 @@ static func map_color(m: MapData, i: int, env: String) -> Color:
 		# траве миникарта не показывала вовсе.
 		col = Color(0.28, 0.45, 0.2) if m.floor_type[i] == MCF.FLOOR_GRASS \
 				else FLOOR_TONE.get(env, Color(0.28, 0.28, 0.28))
-		if tone != null and m.floor_type[i] != MCF.FLOOR_GRASS:
+		# Настил поверх пола (решётка) прозрачен — его средний цвет тоном не берём.
+		if tone != null and m.floor_type[i] != MCF.FLOOR_GRASS \
+				and not MCF.FLOOR_OVERLAY_LOOKS.has(m.get_look(i)):
 			col = tone
 		if feat == MCF.FEATURE_TRENCH:
 			col = Color(0.2, 0.16, 0.12)
@@ -569,9 +578,10 @@ func _brushed(t: Array, mask: int) -> Array:
 	elif brush.begins_with("unit:"):
 		t[2] = false
 	elif brush.begins_with("floor:"):
+		var lk := int(brush.substr(6))
 		t[0] = MCF.FLOOR_NORMAL
-		t[2] = false
-		t = _with_look(t, int(brush.substr(6)))
+		t[2] = SPACE_LOOK_BRUSHES.has(lk)
+		t = _with_look(t, lk)
 	else:
 		match brush:
 			"floor":
@@ -902,11 +912,26 @@ func pick_at(c: Vector2i) -> void:
 # Ввод
 # ============================================================================
 
+## Небо за холстом (0.9.3): клетка космоса ничего не рисует, и под ней виден параллакс
+## звёзд — ровно то, что игрок увидит в бою. Здесь оно есть всегда: редактор начинает
+## с пустой карты, то есть со сплошного космоса, и «пусто» обязано читаться как пусто.
+var _sky: Starfield = null
+
+func _build_sky() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = -10
+	add_child(layer)
+	_sky = Starfield.new()
+	_sky.drift = false
+	layer.add_child(_sky)
+
 func _process(delta: float) -> void:
 	# Куски плиток собираются по нескольку за кадр: пока бюджет кадра выбран до дна,
 	# перерисовываемся, иначе часть карты осталась бы в грубом разрешении до первого жеста.
 	if _tiles != null and _tiles._built >= TerrainTiles.BUILDS_PER_FRAME:
 		queue_redraw()
+	if _sky != null:
+		_sky.camera = pan
 	if _modal != null:
 		return
 	var focus := get_viewport().gui_get_focus_owner()

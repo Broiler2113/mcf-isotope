@@ -43,6 +43,19 @@ Yours wins. Changes are picked up when a battle or the map editor opens.
   door_asteroid.png
   door_open_asteroid.png
 
+-- Room floors (what a room is for decides which one it gets) --
+  floor_wood.png
+  floor_parquet.png
+  floor_tile.png
+  floor_checker.png
+  floor_carpet_red.png
+  floor_carpet_blue.png
+  floor_lino.png
+  floor_plate.png
+  floor_grate.png
+  floor_solar.png
+  floor_grill.png
+
 -- Combat decoration (cosmetic only, never affects the rules) --
   glass_shard.png
   shell_casing.png
@@ -235,8 +248,10 @@ neighbours are ignored on purpose: 16 tiles are enough for corridors and rooms.
    to test without touching the project, then move them into res://textures to
    ship them. Open the project once in the Godot editor so it imports them.
 3. Vehicles are drawn nose-up over their whole footprint (tank 3x3, shuttle 2x2).
-4. Floors: floor, floor_grass, floor_wall (under a wall), floor_space,
-   floor_cover, floor_destroyed, floor_epicenter, fire.
+4. Floors: floor, floor_grass, floor_wall (under a wall), floor_cover,
+   floor_destroyed, floor_epicenter, fire.
+   Space draws NO tile at all - the parallax starfield behind the board shows
+   through it. Drop floor_space.png in user://textures to get a tile back.
 5. Missing files fall back to the built-in vector look, so you can replace the
    game piece by piece.
 

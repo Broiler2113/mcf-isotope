@@ -513,6 +513,7 @@ func _ready() -> void:
 		# Ростер (и из лобби, и из демо-пути через default_duel) уже несёт верный вид
 		# слотов, поэтому синхронизация не нужна и только мешала.
 		_build_controllers()
+	_build_sky()
 	_build_ui()
 	Ui.theme_canvas_layers()  # HUD lives on a CanvasLayer; pull in the Steam skin.
 	# Связь налажена во вкладке Multiplayer главного меню (#54) — подхватываем её.
@@ -533,6 +534,8 @@ func _process(delta: float) -> void:
 	# Не двигаем камеру, пока игрок печатает в текстовом поле (например, IP хоста).
 	_reposition_hud_grip()
 	_refresh_clocks()
+	if _sky != null:
+		_sky.camera = pan   # параллакс за доской едет вслед за панорамой (0.9.3)
 	var focused := get_viewport().gui_get_focus_owner()
 	if focused is LineEdit:
 		return
@@ -4657,7 +4660,9 @@ static func _rgba32(c: Color) -> int:
 
 const LOD_FLOOR := Color(0.14, 0.15, 0.18)
 const LOD_WALL := Color(0.35, 0.3, 0.25)
-const LOD_SPACE := Color(0.03, 0.02, 0.08)
+## Космос на дальнем плане (0.9.3) — ПРОЗРАЧНЫЙ: клетки космоса не рисуются вовсе, и
+## сквозь них виден параллакс звёзд за доской, как и вблизи.
+const LOD_SPACE := Color(0, 0, 0, 0)
 
 ## Цвет клетки на дальнем плане — то же, что рисует поклеточный проход, сведённое к одному
 ## пикселю: пол (или средний цвет его картинки-замены), трава, копоть, укрытие, огонь.
@@ -4676,7 +4681,9 @@ func _lod_color(cell: GridCell) -> Color:
 	var floor_name := "floor"
 	var look := state.grid.look_at(cell.coord.x, cell.coord.y) if not state.grid.floor_look.is_empty() else 0
 	if cell.is_space:
-		floor_name = "floor_solar" if look == MCF.Look.SOLAR else "floor_space"
+		# Космоса как плитки больше нет (0.9.3): остаются только панели, всё прочее —
+		# пустое место, сквозь которое видно параллакс.
+		floor_name = "floor_solar" if look == MCF.Look.SOLAR else ""
 	elif is_wall:
 		floor_name = "floor_wall"
 	elif damage == FxDecals.DAMAGE_EPICENTER:
@@ -4685,7 +4692,7 @@ func _lod_color(cell: GridCell) -> Color:
 		floor_name = "floor_destroyed"
 	elif cell.floor_type == MCF.FLOOR_GRASS:
 		floor_name = "floor_grass"
-	elif look > 0 and look < MCF.FLOOR_LOOKS.size():
+	elif look > 0 and look < MCF.FLOOR_LOOKS.size() and not MCF.FLOOR_OVERLAY_LOOKS.has(look):
 		floor_name = MCF.FLOOR_LOOKS[look]
 	var col: Color
 	if _lod_tex_avg.has(floor_name):
@@ -5967,6 +5974,26 @@ func _reposition_hud_grip() -> void:
 	if _replay_bar != null:
 		_replay_bar.position = Vector2((vp.x - _replay_bar.size.x) * 0.5,
 				vp.y - _replay_bar.size.y - 14.0)
+
+# --- Небо за доской (0.9.3) ---
+## Клетки космоса больше не рисуются плиткой — их попросту нет, — и в прорехах доски
+## видно параллакс звёзд, тот же, что в главном меню. Слои живут на СВОЁМ CanvasLayer под
+## всем остальным: доска рисуется в _draw() этого узла, и подложить что-то под неё иначе
+## нельзя. Панораму доски слои забирают долями (Starfield.DEPTH) — отсюда глубина.
+##
+## Карте без космоса небо не нужно: под бункером звёзд нет, и за краем поля должна быть
+## та же чернота, что и раньше.
+var _sky: Starfield = null
+
+func _build_sky() -> void:
+	if state == null or not state.grid.cells_flat().any(func(c: GridCell) -> bool: return c.is_space):
+		return
+	var layer := CanvasLayer.new()
+	layer.layer = -10
+	add_child(layer)
+	_sky = Starfield.new()
+	_sky.drift = false   # за доской фон ведёт камера, а не время: бой — не заставка
+	layer.add_child(_sky)
 
 # --- UI ---
 func _build_ui() -> void:

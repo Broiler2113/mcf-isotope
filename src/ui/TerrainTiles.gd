@@ -293,11 +293,21 @@ func _evict() -> void:
 func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> void:
 	var cell := _grid.cell_fast(c.x, c.y)
 	var full := Rect2i(0, 0, res, res)
-	var floors := _tile(_floor_name(cell, c), res)
+	var fname := _floor_name(cell, c)
+	var floors := _tile(fname, res) if fname != "" else []
 	if not floors.is_empty():
 		img.blit_rect(floors[variant_of(c + origin, floors.size())], full, at)
-	else:
+	elif fname != "":
 		img.fill_rect(Rect2i(at, Vector2i(res, res)), Color(0.14, 0.15, 0.18))
+	# Пустое имя — у клетки нет пола вовсе (космос, 0.9.3): она остаётся прозрачной, и
+	# сквозь неё виден параллакс звёзд за доской (Starfield). Прежде там лежала плитка
+	# floor_space — звёздное небо, нарезанное на квадраты и повторяющееся клетка в клетку.
+	# Настил (решётка) — поверх всего этого: пол свой, прутья сверху, между ними насквозь.
+	var over := _floor_overlay_name(cell, c)
+	if over != "":
+		var ov := _tile(over, res)
+		if not ov.is_empty():
+			img.blend_rect(ov[variant_of(c + origin, ov.size())], full, at)
 	if cell.on_fire:
 		var fire := _tile("fire", res)
 		if not fire.is_empty():
@@ -324,6 +334,7 @@ func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> voi
 		if cell.airlock_welded:
 			feat.blend_rect(_weld_overlay(res), full, at)
 		return
+	var accent := _accent_of(c)
 	var name := tile_name(cell)
 	if Furniture.is_furniture(fid):
 		var fimg := _furniture_image(c, fid, res)
@@ -339,6 +350,9 @@ func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> voi
 				Rect2i((mask % 4) * res, (mask / 4) * res, res, res), at)
 		if NOTCHED.has(FAMILY.get(fid, fid)):
 			_fill_notches(feat, c, fid, mask, at, res)
+		# Полоса службы (0.9.3): цветная линия вдоль стены отдела.
+		if accent != MCF.Accent.NONE and FAMILY.get(fid, fid) == "wall":
+			feat.blend_rect(_accent_overlay(accent, _accent_mask(c, accent), res), full, at)
 		# ДОТ, потерявший прочность, трескается прямо в плитке (0.9.2) — раньше была лишь
 		# красная чёрточка в углу клетки.
 		if (fid == MCF.FEATURE_DOT or fid == MCF.FEATURE_DOT_OPEN) and cell.feature_durability > 0 \
@@ -389,7 +403,8 @@ func _door_image(grid: Grid, c: Vector2i, cell: GridCell, res: int, closed := fa
 	var v := variant_of(c + origin, 3)
 	var walls := _sheet("wall", res)
 	var wv := variant_of(c + origin, walls.size()) if not walls.is_empty() else 0
-	var key := "door@%d@%d@%s@%d@%d" % [res, mask, open, v, wv]
+	var accent := _accent_of(c)
+	var key := "door@%d@%d@%s@%d@%d@%d" % [res, mask, open, v, wv, accent]
 	if _tiles.has(key):
 		var hit: Array = _tiles[key]
 		return hit[0] if not hit.is_empty() else null
@@ -399,6 +414,88 @@ func _door_image(grid: Grid, c: Vector2i, cell: GridCell, res: int, closed := fa
 	var doors := _tile("door_open" if open else "door", res)
 	if not doors.is_empty():
 		img.blend_rect(doors[v % doors.size()], Rect2i(0, 0, res, res), Vector2i.ZERO)
+	if accent != MCF.Accent.NONE:
+		_tint_door_frame(img, accent, res)
+	_tiles[key] = [img]
+	return img
+
+## Рама двери в цвет службы (0.9.3). Красится именно РАМА — кайма клетки, — а не полотно:
+## по ней дверь отдела видно и закрытой, и распахнутой, а рисунок самой двери (люк, окошко,
+## штурвал) остаётся читаемым. Тон сохраняется: цвет подмешивается к пикселю, а не кладётся
+## плашкой, поэтому фаска и тень на раме никуда не деваются.
+const ACCENT_DOOR_MIX := 0.72
+
+func _tint_door_frame(img: Image, accent: int, res: int) -> void:
+	var col: Color = MCF.ACCENT_COLORS[accent]
+	# Толщина рамы та же, что у картинки двери (gen_textures: 2 точки из 32, у тяжёлой — 3).
+	var fw := maxi(1, roundi(res * (3.0 if env == "bunker" or env == "asteroid" else 2.0) / 32.0))
+	for y in res:
+		for x in res:
+			if x >= fw and x < res - fw and y >= fw and y < res - fw:
+				continue
+			var p := img.get_pixel(x, y)
+			if p.a <= 0.0:
+				continue
+			# Яркость пикселя рамы задаёт яркость цвета: светлая фаска — светлее, тень — темнее.
+			var k := clampf((p.r + p.g + p.b) / 3.0 * 1.9, 0.35, 1.35)
+			img.set_pixel(x, y, p.lerp(Color(col.r * k, col.g * k, col.b * k, p.a), ACCENT_DOOR_MIX))
+
+## Акцент службы на клетке (0.9.3); 0 — его нет.
+func _accent_of(c: Vector2i) -> int:
+	if _grid.wall_accent.is_empty():
+		return MCF.Accent.NONE
+	var a := _grid.accent_at(c.x, c.y)
+	return a if a > 0 and a < MCF.ACCENT_COLORS.size() else MCF.Accent.NONE
+
+## Маска полосы: соседи-стены (и шлюзы) ТОГО ЖЕ цвета. Полоса сворачивает за угол вместе
+## со стеной и обрывается там, где кончается отдел.
+func _accent_mask(c: Vector2i, accent: int) -> int:
+	var mask := 0
+	var dirs := [[Vector2i(0, -1), Sprites.AUTOTILE_N], [Vector2i(1, 0), Sprites.AUTOTILE_E],
+			[Vector2i(0, 1), Sprites.AUTOTILE_S], [Vector2i(-1, 0), Sprites.AUTOTILE_W]]
+	for d in dirs:
+		var n: Vector2i = c + d[0]
+		if n.x < 0 or n.y < 0 or n.x >= _grid.width or n.y >= _grid.height:
+			continue
+		var nf := _grid.cell_fast(n.x, n.y).feature_id
+		if nf != "" and FAMILY.get(nf, nf) == "wall" and _accent_of(n) == accent:
+			mask |= int(d[1])
+	return mask
+
+## Полоса службы по стене: линия вдоль стены с загибами к соседям той же службы. Клетка
+## со стеной сама по себе (маска 0) получает просто пятно — красить нечего.
+func _accent_overlay(accent: int, mask: int, res: int) -> Image:
+	var key := "accent@%d@%d@%d" % [accent, mask, res]
+	if _tiles.has(key):
+		return _tiles[key][0]
+	var img := Image.create(res, res, false, Image.FORMAT_RGBA8)
+	var col: Color = MCF.ACCENT_COLORS[accent]
+	var half := maxi(1, roundi(res * 3.0 / 32.0))
+	var lo := res / 2 - half
+	var hi := res / 2 + half
+	var band := Color(col.r, col.g, col.b, 0.92)
+	var rim := Color(col.r * 0.42, col.g * 0.42, col.b * 0.42, 0.95)
+	# Полоса — центральный квадрат плюс «рукав» к каждому соседу той же службы; рукав
+	# продолжается ЗА край плитки, поэтому на стыке двух клеток полоса идёт без шва.
+	var inside := func(x: int, y: int) -> bool:
+		var across_x: bool = x >= lo and x <= hi
+		var across_y: bool = y >= lo and y <= hi
+		if across_x and across_y:
+			return true
+		if across_x and ((y < lo and mask & int(Sprites.AUTOTILE_N) != 0)
+				or (y > hi and mask & int(Sprites.AUTOTILE_S) != 0)):
+			return true
+		return across_y and ((x < lo and mask & int(Sprites.AUTOTILE_W) != 0)
+				or (x > hi and mask & int(Sprites.AUTOTILE_E) != 0))
+	for y in res:
+		for x in res:
+			if not inside.call(x, y):
+				continue
+			# Кромка — там, где полоса кончается ПОПЕРЁК себя; вдоль неё кромки нет, иначе
+			# прямой участок получил бы поперечные перекладины.
+			var edge: bool = not inside.call(x - 1, y) or not inside.call(x + 1, y) \
+					or not inside.call(x, y - 1) or not inside.call(x, y + 1)
+			img.set_pixel(x, y, rim if edge else band)
 	_tiles[key] = [img]
 	return img
 
@@ -921,11 +1018,17 @@ func _buried(c: Vector2i) -> bool:
 				return false
 	return true
 
+## Имя плитки пола клетки, или «» — если пола нет вовсе и клетка остаётся прозрачной.
+## Пустую строку отдаёт только КОСМОС (0.9.3): за доской плывёт параллакс звёзд, и своя
+## плитка космосу не нужна — он и есть отсутствие плитки. Подложенная игроком картинка
+## floor_space рисуется по-прежнему: раз её положили, значит, её и хотят видеть.
 func _floor_name(cell: GridCell, c: Vector2i) -> String:
 	var look := _grid.look_at(c.x, c.y) if not _grid.floor_look.is_empty() else 0
 	if cell.is_space:
 		# Солнечные панели у станции (0.9.2) — вид поверх звёзд; клетка остаётся космосом.
-		return "floor_solar" if look == MCF.Look.SOLAR else "floor_space"
+		if look == MCF.Look.SOLAR:
+			return "floor_solar"
+		return "floor_space" if Sprites.has_user_override("floor_space") else ""
 	var dmg := int(_damaged.get(c, 0))
 	if dmg == FxDecals.DAMAGE_EPICENTER:
 		return "floor_epicenter"
@@ -934,9 +1037,23 @@ func _floor_name(cell: GridCell, c: Vector2i) -> String:
 	if cell.floor_type == MCF.FLOOR_GRASS:
 		return "floor_grass"
 	# Пол комнаты (0.9.2): дерево, плитка, ковёр — вид, правила те же.
-	if look > 0 and look < MCF.FLOOR_LOOKS.size() and look != MCF.Look.SOLAR:
+	if look > 0 and look < MCF.FLOOR_LOOKS.size() and look != MCF.Look.SOLAR \
+			and not MCF.FLOOR_OVERLAY_LOOKS.has(look):
 		return MCF.FLOOR_LOOKS[look]
 	return "floor"
+
+## Настил ПОВЕРХ пола клетки (решётка, 0.9.3) или «» — настила нет. Решётка прозрачна
+## между прутьями, поэтому она не заменяет пол: в космосе под ней звёзды, в помещении — его
+## собственный пол.
+func _floor_overlay_name(cell: GridCell, c: Vector2i) -> String:
+	if _grid.floor_look.is_empty():
+		return ""
+	var look := _grid.look_at(c.x, c.y)
+	if not MCF.FLOOR_OVERLAY_LOOKS.has(look):
+		return ""
+	if not cell.is_space and int(_damaged.get(c, 0)) != 0:
+		return ""   # пол разворочен взрывом — решётке на нём не устоять
+	return MCF.FLOOR_LOOKS[look]
 
 ## Имя картинки объекта: id с учётом подмен (ЛДФ, ДПМГ) и состояния шлюза — открытый
 ## шлюз (высота ниже стены) рисуется разъехавшимися створками.

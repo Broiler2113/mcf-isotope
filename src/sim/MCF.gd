@@ -347,11 +347,32 @@ const FLOOR_GRASS := 2
 ## Вид пола (0.9.2): дерево, плитка, ковёр… — по клетке (MapData.floor_look), независимо от
 ## правил: горит ли пол, решает floor_type. 0 — пол окружения. Индекс — номер картинки.
 ## «Солнечные панели» кладутся на клетки КОСМОСА у станции: вид поверх звёзд, не пол.
+## «Решётка» (GRILL, 0.9.3) — настил, ПРОЗРАЧНЫЙ между прутьями: сквозь него видно то, что
+## на клетке и так есть (в космосе — параллакс звёзд). Поэтому он не заменяет пол, а
+## ложится ПОВЕРХ него (FLOOR_OVERLAY_LOOKS). Новые виды дописываются только в КОНЕЦ:
+## номер вида лежит в сохранённой карте, и перестановка переписала бы все старые карты.
 const FLOOR_LOOKS := ["", "floor_wood", "floor_parquet", "floor_tile", "floor_checker",
-		"floor_carpet_red", "floor_carpet_blue", "floor_lino", "floor_plate", "floor_grate", "floor_solar"]
+		"floor_carpet_red", "floor_carpet_blue", "floor_lino", "floor_plate", "floor_grate", "floor_solar",
+		"floor_grill"]
 const FLOOR_LOOK_NAMES := ["Floor", "Wood floor", "Parquet", "Tiles", "Checker tiles", "Red carpet",
-		"Blue carpet", "Linoleum", "Steel plate", "Grating", "Solar panels"]
-enum Look {DEFAULT, WOOD, PARQUET, TILE, CHECKER, CARPET_RED, CARPET_BLUE, LINO, PLATE, GRATE, SOLAR}
+		"Blue carpet", "Linoleum", "Steel plate", "Grating", "Solar panels", "Grill walkway"]
+enum Look {DEFAULT, WOOD, PARQUET, TILE, CHECKER, CARPET_RED, CARPET_BLUE, LINO, PLATE, GRATE, SOLAR,
+		GRILL}
+## Виды, которые кладутся ПОВЕРХ пола клетки, а не вместо него.
+const FLOOR_OVERLAY_LOOKS := {Look.GRILL: true}
+
+## Акцент службы (0.9.3): цветная полоса по стенам отдела и рама двери в тот же цвет — как
+## на настоящей станции, где по коридору видно, куда ты зашёл. Только станция и бункер; всё,
+## чего игрок не называл (жилой блок, производство, прочее), остаётся без цвета.
+## Номер акцента лежит в карте (MapData.wall_accent), поэтому список только растёт.
+enum Accent {NONE, COMMAND, CONTROL, SECURITY, MEDICAL, SCIENCE, ENGINEERING, CARGO}
+const ACCENT_NAMES := ["None", "Command", "Control", "Security", "Medical", "Science",
+		"Engineering", "Cargo"]
+## Синий — командный, белый — пульты и связь, красный — охрана, зелёный — медицина,
+## фиолетовый — наука, жёлтый — инженерный, оранжевый — грузовой.
+const ACCENT_COLORS := [Color(0, 0, 0, 0), Color8(54, 110, 214), Color8(228, 232, 238),
+		Color8(198, 48, 44), Color8(46, 166, 88), Color8(144, 72, 196), Color8(226, 184, 44),
+		Color8(226, 122, 36)]
 
 ## Порог d6 для розжига от СОСЕДНЕЙ горящей клетки: клетка загорается на «need и выше»,
 ## то есть шанс равен (7 − need)/6. Таблица взята из #14 один в один:

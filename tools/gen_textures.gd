@@ -1130,10 +1130,18 @@ func _fill_material(img: Image, r: Rect2i, base: Color, round: bool) -> void:
 ## ленте три варианта, клетка берёт свой по хешу: двери одного здания чуть разные.
 ## Станция — сдвижной люк с окошком и лампой, бункер и астероид — гермодверь со штурвалом,
 ## город — филёнчатая деревянная дверь, поле — дощатая.
-const DOOR_X0 := 6
-const DOOR_X1 := 25
-const DOOR_Y0 := 3
-const DOOR_Y1 := 29
+##
+## Дверь занимает КЛЕТКУ ЦЕЛИКОМ (0.9.3, по просьбе игрока): рама вплотную к краям плитки,
+## полотно — всё, что внутри неё. Прежде полотно было узкой панелью посреди клетки (x 6…25,
+## y 3…29), и по бокам в проёме просвечивала стена — дверь читалась как картинка на стене,
+## а не как сама стена. Толщина рамы — единственное, что отличает тяжёлую гермодверь от
+## лёгкой двери; всё внутреннее считается от размера полотна, а не от прежних координат.
+const DOOR_FRAME := 2
+const DOOR_FRAME_HEAVY := 3
+
+## Толщина рамы двери по окружению.
+func _door_frame_w(style: String) -> int:
+	return DOOR_FRAME_HEAVY if (style == "bunker" or style == "asteroid") else DOOR_FRAME
 
 func _doors_all() -> void:
 	for style: String in ["station", "bunker", "asteroid", "town", "field"]:
@@ -1156,50 +1164,54 @@ func _door_front(style: String, open: bool, v: int) -> Image:
 		"asteroid": frame = Color8(116, 98, 82)
 		"town": frame = [Color8(200, 194, 180), Color8(150, 112, 78), Color8(176, 170, 156)][v]
 		_: frame = Color8(110, 82, 52)
-	var heavy := style == "bunker" or style == "asteroid"
-	var fw := 3 if heavy else 2   # толщина рамы
-	# Рама с фаской: свет сверху-слева, тень снизу-справа; порог — темнее.
-	for y in range(DOOR_Y0 - fw, DOOR_Y1 + 2):
-		for x in range(DOOR_X0 - fw, DOOR_X1 + fw + 1):
-			if x >= DOOR_X0 and x <= DOOR_X1 and y >= DOOR_Y0 and y <= DOOR_Y1:
+	var fw := _door_frame_w(style)
+	var x1 := T - 1 - fw
+	var y1 := T - 1 - fw
+	# Рама с фаской по самому краю клетки: свет сверху-слева, тень снизу-справа.
+	for y in T:
+		for x in T:
+			if x >= fw and x <= x1 and y >= fw and y <= y1:
 				continue
 			var c := _shade(frame, 0.88 + 0.16 * _fbm(x, y, 401))
-			if x == DOOR_X0 - fw or y == DOOR_Y0 - fw:
+			if x == 0 or y == 0:
 				c = _shade(c, 1.2)
-			elif x == DOOR_X1 + fw or y == DOOR_Y1 + 1:
+			elif x == T - 1 or y == T - 1:
 				c = _shade(c, 0.55)
 			img.set_pixel(x, y, c)
 	if style == "station":
-		# Жёлто-чёрные полосы над люком и лампа: красная — закрыто, зелёная — открыто.
-		for x in range(DOOR_X0 - fw, DOOR_X1 + fw + 1):
+		# Жёлто-чёрные полосы по верхней перекладине и лампа: красная — закрыто, зелёная —
+		# открыто. Раньше и то и другое лежало ВНЕ двери, на стене; теперь — на самой раме.
+		for x in T:
 			if v != 2:
-				img.set_pixel(x, DOOR_Y0 - 2, Color8(198, 166, 40) if posmod(x, 4) < 2 else Color8(30, 28, 24))
+				img.set_pixel(x, 1, Color8(198, 166, 40) if posmod(x, 4) < 2 else Color8(30, 28, 24))
 		var lamp := Color8(90, 210, 110) if open else Color8(220, 70, 50)
-		img.set_pixel(DOOR_X1 + 2, DOOR_Y0 + 2, lamp)
-		img.set_pixel(DOOR_X1 + 2, DOOR_Y0 + 3, _shade(lamp, 0.7))
-	for y in range(DOOR_Y0, DOOR_Y1 + 1):
-		for x in range(DOOR_X0, DOOR_X1 + 1):
+		img.set_pixel(T - 2, fw + 1, lamp)
+		img.set_pixel(T - 2, fw + 2, _shade(lamp, 0.7))
+	for y in range(fw, y1 + 1):
+		for x in range(fw, x1 + 1):
 			img.set_pixel(x, y, _door_open_px(style, x, y, v) if open else _door_leaf_px(style, x, y, v))
 	return img
 
 ## Проём открытой двери: темнота внутри, у пола — полоска света с той стороны; у петли —
 ## край распахнутого полотна (у сдвижного люка и гермодвери — их кромка у рамы).
 func _door_open_px(style: String, x: int, y: int, v: int) -> Color:
-	var t := float(y - DOOR_Y0) / float(DOOR_Y1 - DOOR_Y0)
+	var fw := _door_frame_w(style)
+	var y1 := T - 1 - fw
+	var t := float(y - fw) / float(y1 - fw)
 	var c := Color(0.05 + 0.06 * t, 0.05 + 0.055 * t, 0.06 + 0.05 * t)
-	if y >= DOOR_Y1 - 2:
-		c = Color(0.2, 0.19, 0.17).lerp(Color(0.32, 0.3, 0.27), float(y - (DOOR_Y1 - 2)) / 2.0)
+	if y >= y1 - 2:
+		c = Color(0.2, 0.19, 0.17).lerp(Color(0.32, 0.3, 0.27), float(y - (y1 - 2)) / 2.0)
 	match style:
 		"station":
-			if x >= DOOR_X1 - 1:   # створка уехала в стену: видна её кромка
+			if x >= T - 1 - fw - 1:   # створка уехала в стену: видна её кромка
 				return _shade(Color8(120, 126, 134), 0.8)
 		"bunker", "asteroid":
-			if y <= DOOR_Y0 + 3:   # гермодверь поднята: снизу видна её кромка с полосами
+			if y <= fw + 3:   # гермодверь поднята: снизу видна её кромка с полосами
 				return Color8(198, 166, 40) if posmod(x + y, 6) < 3 else Color8(30, 28, 24)
 		_:
 			# Деревянное полотно распахнуто внутрь — узкая трапеция у левой петли.
-			var w := 4 - (y - DOOR_Y0) / 12
-			if x <= DOOR_X0 + w:
+			var lw := 4 - (y - fw) / 12
+			if x <= fw + lw:
 				return _shade(_door_wood(style, v), 0.75 + 0.1 * _h(x, y, 402))
 	return c
 
@@ -1210,10 +1222,11 @@ func _door_wood(style: String, v: int) -> Color:
 
 ## Закрытое полотно.
 func _door_leaf_px(style: String, x: int, y: int, v: int) -> Color:
-	var lx := x - DOOR_X0
-	var ly := y - DOOR_Y0
-	var w := DOOR_X1 - DOOR_X0
-	var h := DOOR_Y1 - DOOR_Y0
+	var fw := _door_frame_w(style)
+	var lx := x - fw
+	var ly := y - fw
+	var w := T - 1 - fw * 2
+	var h := T - 1 - fw * 2
 	match style:
 		"station":
 			var c := _shade([Color8(100, 106, 114), Color8(92, 100, 112), Color8(74, 86, 104)][v],
@@ -1222,13 +1235,16 @@ func _door_leaf_px(style: String, x: int, y: int, v: int) -> Color:
 				return _shade(c, 0.55)   # шов двух створок
 			if v == 2 and absi(lx - ly * w / h) <= 0:
 				return _shade(c, 0.55)   # косой шов
-			if v == 0 and lx >= 6 and lx <= 13 and ly >= 4 and ly <= 8:
-				return Color8(60, 110, 150) if ly > 4 else Color8(140, 190, 220)   # окошко
-			if v == 1 and Vector2(lx - w / 2.0, ly - 7).length() < 4.0:
-				return Color8(140, 190, 220) if Vector2(lx - w / 2.0, ly - 7).length() < 2.5 else STEEL_DARK
-			if v == 1 and (ly == 14 or ly == 20):
+			# Детали полотна считаются от его размера: полотно теперь во всю клетку, и
+			# прежние абсолютные координаты увели бы окошко и полосы вбок.
+			if v == 0 and absi(lx - w / 2) <= 4 and ly >= h / 5 and ly <= h / 5 + 4:
+				return Color8(60, 110, 150) if ly > h / 5 else Color8(140, 190, 220)   # окошко
+			var eye := Vector2(lx - w / 2.0, ly - h / 4.0).length()
+			if v == 1 and eye < 4.0:
+				return Color8(140, 190, 220) if eye < 2.5 else STEEL_DARK
+			if v == 1 and (ly == h / 2 or ly == h * 3 / 4):
 				return _shade(c, 0.65)
-			if v == 2 and ly >= 12 and ly <= 14:
+			if v == 2 and ly >= h / 2 - 1 and ly <= h / 2 + 1:
 				return Color8(198, 166, 40) if posmod(lx + ly, 4) < 2 else Color8(30, 28, 24)
 			if lx == 0 or ly == 0:
 				return _shade(c, 1.15)
@@ -1292,6 +1308,7 @@ func _floor_looks() -> void:
 	_strip("floor_lino", _floor_lino)
 	_strip("floor_plate", _floor_plate)
 	_strip("floor_grate", _floor_grate)
+	_strip("floor_grill", _floor_grill)
 	_strip("floor_solar", _floor_solar)
 
 ## Доски поперёк клетки: ряды по 8 точек, стыки досок в каждом ряду — свои, волокно вдоль.
@@ -1388,10 +1405,30 @@ func _floor_grate(x: int, y: int, v: int) -> Color:
 		return c
 	return _shade(Color8(22, 24, 28), 0.8 + 0.4 * _fbm(x, y, 572))
 
-## Солнечная панель снаружи станции: синие ячейки в серебряной раме поверх звёзд.
+## Решётчатый настил снаружи станции (0.9.3): ПРОЗРАЧНЫЙ, кроме стальных прутьев — сквозь
+## ячейки видно то, что под ним (в космосе — звёзды). Шаг 8 точек по обеим осям, так что
+## прутья сходятся с каймой солнечной панели (_floor_solar) и мостки переходят в панели
+## одной решёткой.
+const GRILL_STEP := 8
+const GRILL_BAR := 2
+
+func _grill_bar(x: int, y: int, v: int) -> Color:
+	var c := _shade(Color8(104, 110, 116), 0.9 + 0.14 * _fbm(x, y, 591 + v))
+	if x % GRILL_STEP == 0 or y % GRILL_STEP == 0:
+		c = _shade(c, 1.2)      # светлая кромка прута
+	elif x % GRILL_STEP == GRILL_BAR - 1 or y % GRILL_STEP == GRILL_BAR - 1:
+		c = _shade(c, 0.62)     # тень под ним
+	return c
+
+func _floor_grill(x: int, y: int, v: int) -> Color:
+	if x % GRILL_STEP < GRILL_BAR or y % GRILL_STEP < GRILL_BAR:
+		return _grill_bar(x, y, v)
+	return Color(0, 0, 0, 0)
+
+## Солнечная панель снаружи станции: синие ячейки в серебряной раме на решётчатом настиле.
 func _floor_solar(x: int, y: int, v: int) -> Color:
 	if x <= 1 or y <= 1:
-		return _starfield(x, y, v)   # просвет между панелями
+		return _grill_bar(x, y, v)   # панель стоит НА решётке — её прут по краю
 	if x == 2 or y == 2 or x == T - 1 or y == T - 1:
 		return Color8(176, 180, 186)
 	var c := _shade(Color8(36, 58, 120), 0.86 + 0.18 * _fbm(x, y, 581 + v))
