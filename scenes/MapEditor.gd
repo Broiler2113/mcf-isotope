@@ -265,13 +265,34 @@ const FLOOR_TONE := {"station": Color(0.22, 0.24, 0.27), "town": Color(0.3, 0.29
 		"field": Color(0.36, 0.3, 0.22), "bunker": Color(0.25, 0.25, 0.24),
 		"asteroid": Color(0.33, 0.28, 0.24)}
 
+## Тон пола комнаты (MCF.FLOOR_LOOKS) — средний цвет его плитки, как на холсте и на
+## дальнем плане боя. Считается один раз; без картинок (headless) — пусто, тон окружения.
+static var _look_tone: Array = []
+
+static func look_tone(look: int) -> Variant:
+	if _look_tone.is_empty():
+		for n: String in MCF.FLOOR_LOOKS:
+			var tex := Sprites.texture_of(n) if n != "" else null
+			var img := tex.get_image() if tex != null else null
+			if img == null or img.is_empty():
+				_look_tone.append(null)
+				continue
+			if img.is_compressed():
+				img.decompress()
+			img.resize(1, 1, Image.INTERPOLATE_BILINEAR)
+			_look_tone.append(img.get_pixel(0, 0))
+	return _look_tone[look] if look > 0 and look < _look_tone.size() else null
+
 ## Цвет клетки на миникарте и в превью открываемой карты: окружение задаёт тон стен и
 ## пола, зона подмешивается поверх.
 static func map_color(m: MapData, i: int, env: String) -> Color:
 	var col: Color
 	var feat: String = m.feature_id[i]
+	var tone: Variant = look_tone(m.get_look(i))
 	if m.is_space[i] != 0:
 		col = Color(0.03, 0.03, 0.07)
+		if tone != null and m.get_look(i) == MCF.Look.SOLAR:
+			col = tone
 	elif Furniture.is_furniture(feat):
 		# Мебель (§3.15) — свой тёплый тон, высокая темнее: план комнат читается сразу.
 		col = Color(0.40, 0.30, 0.22) if m.cover_height[i] >= MCF.WALL_HEIGHT \
@@ -289,6 +310,8 @@ static func map_color(m: MapData, i: int, env: String) -> Color:
 		# траве миникарта не показывала вовсе.
 		col = Color(0.28, 0.45, 0.2) if m.floor_type[i] == MCF.FLOOR_GRASS \
 				else FLOOR_TONE.get(env, Color(0.28, 0.28, 0.28))
+		if tone != null and m.floor_type[i] != MCF.FLOOR_GRASS:
+			col = tone
 		if feat == MCF.FEATURE_TRENCH:
 			col = Color(0.2, 0.16, 0.12)
 		elif feat != "":

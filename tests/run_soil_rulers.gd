@@ -87,7 +87,10 @@ func _initialize() -> void:
 	ck(at_need == Combat.hit_number(7, at.fire_range()) and at_need >= 1 and at_need <= 6,
 			"the anti-tank charge shows its own roll (%d+)" % at_need)
 	ck(r2.aim_need(st2.grid.cell(Vector2i(2, 8)).occupant, Vector2i(5, 8)) == 0, "the flame jet needs no roll")
-	ck(r2.aim_need(li, Vector2i(10, 8)) == 0, "a window breaks without a roll")
+	# 0.9.2: окно — обычная очередь, и в стекло надо попасть (раньше било без броска).
+	var pane_need := r2.aim_need(li, Vector2i(10, 8))
+	ck(pane_need == r2.pane_hit_need(li, Vector2i(10, 8)) and pane_need >= 1 and pane_need <= 6,
+			"a window takes a roll to hit (%d+)" % pane_need)
 	ck(r2.aim_need(li, front.coord, front) == r2.hit_need_for(li, front), "a rifle shows hit_need_for")
 
 	# --- a move animates as a walk and stays undoable ---

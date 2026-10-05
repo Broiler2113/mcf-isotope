@@ -3059,6 +3059,7 @@ func _capture_opening_view() -> void:
 			b.cover_height = a.cover_height
 			b.airlock_welded = a.airlock_welded
 	g.furniture_turn = src.furniture_turn.duplicate(true)
+	g.floor_look = src.floor_look.duplicate()   # полы комнат (0.9.2) — и в «было» тоже
 	GridCell.logs_restore(saved)
 	_before_grid = g
 	_before_tiles = TerrainTiles.new(g, state.env)
@@ -4673,8 +4674,9 @@ func _lod_color(cell: GridCell) -> Color:
 		if cell.cover_height == 0.0 and not cell.is_space and cell.floor_type != MCF.FLOOR_GRASS:
 			return LOD_FLOOR
 	var floor_name := "floor"
+	var look := state.grid.look_at(cell.coord.x, cell.coord.y) if not state.grid.floor_look.is_empty() else 0
 	if cell.is_space:
-		floor_name = "floor_space"
+		floor_name = "floor_solar" if look == MCF.Look.SOLAR else "floor_space"
 	elif is_wall:
 		floor_name = "floor_wall"
 	elif damage == FxDecals.DAMAGE_EPICENTER:
@@ -4683,6 +4685,8 @@ func _lod_color(cell: GridCell) -> Color:
 		floor_name = "floor_destroyed"
 	elif cell.floor_type == MCF.FLOOR_GRASS:
 		floor_name = "floor_grass"
+	elif look > 0 and look < MCF.FLOOR_LOOKS.size():
+		floor_name = MCF.FLOOR_LOOKS[look]
 	var col: Color
 	if _lod_tex_avg.has(floor_name):
 		col = _lod_tex_avg[floor_name]
@@ -4729,11 +4733,14 @@ func _lod_texture_averages() -> Dictionary:
 	var out := {}
 	var names: Array = ["floor", "floor_space", "floor_wall", "floor_cover", "fire",
 			"floor_grass", "floor_destroyed", "floor_epicenter"]
+	names.append_array(MCF.FLOOR_LOOKS.slice(1))   # полы комнат (0.9.2) — как на холсте
 	names.append_array(FEATURE_TAGS.keys())
 	names.append_array(Furniture.ids())   # мебель на дальнем плане — цветом своей плитки
 	for n: String in names:
+		# Шлюз с 0.9.2 рисуется дверью в раме, и файл у неё — "door".
+		var base: String = "door" if n == MCF.FEATURE_AIRLOCK else n
 		# Окружение карты (item 24): дальний план того же цвета, что и плитки вблизи.
-		var tex := Sprites.texture_of(TerrainTiles.env_name(n, state.env))
+		var tex := Sprites.texture_of(TerrainTiles.env_name(base, state.env))
 		if tex == null:
 			continue
 		var img := tex.get_image()
