@@ -5146,15 +5146,7 @@ func _draw() -> void:
 				var hfid: String = _hc[hk]["feature_id"]
 				if hfid != "" and _cell_on_screen(hk.x, hk.y):
 					_tiles.draw_feature_tile(self, hfid, hk, Rect2(_cell_origin(hk), fcell_size))
-		for dk: String in [MCF.FEATURE_DOT, MCF.FEATURE_DOT_OPEN]:
-			for dcell: Vector2i in resolver._feature_cells(dk):
-				var ddur := grid.cell(dcell).feature_durability
-				if _hold_visual.get("cells", {}).has(dcell):
-					ddur = int(_hold_visual["cells"][dcell]["feature_durability"])
-				if ddur > 0 and ddur < MCF.feature_durability(dk) and _cell_on_screen(dcell.x, dcell.y):
-					var o := _cell_origin(dcell)
-					draw_line(o + Vector2(CELL - 12, 8), o + Vector2(CELL - 6, 16),
-						Color(0.9, 0.25, 0.2), 2.0)
+		# Побитый ДОТ трескается в самой плитке (TerrainTiles._pillbox_crack, 0.9.2).
 	else:
 		# На дальнем плане объекты — в текстуре рельефа, кроме мин: их видимость своя у
 		# каждой стороны (item 45). Мин на карте единицы — точкой в цвет тега.

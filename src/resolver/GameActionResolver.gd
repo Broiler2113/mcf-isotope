@@ -1130,12 +1130,9 @@ func _blast_destroy_terrain(c: Vector2i, res: ActionResult = null,
 		return
 	var cell := state.grid.cell(c)
 	var fid := cell.feature_id
-	# Мебель разрыв бьёт по прочности (§3.15): лёгкое разлетается сразу, тяжёлое — со
-	# второго-третьего разрыва.
+	# Мебель любой разрыв сносит целиком (§3.15, 0.9.2) — и сейф, и станок.
 	if Furniture.is_furniture(fid):
-		cell.feature_durability -= Furniture.BLAST_DAMAGE
-		if cell.feature_durability <= 0:
-			_destroy_furniture(cell, res)
+		_destroy_furniture(cell, res)
 		return
 	if cell.feature_durability > 0:
 		return
@@ -6051,6 +6048,13 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 			killed_names.append(u.stats.display_name)
 		details.append(det)
 
+	# Мебель осколочная сносит, как и любой разрыв (0.9.2): раньше она была единственным
+	# взрывом, после которого стол оставался стоять.
+	var smashed: Array = []
+	for fc: Vector2i in area:
+		if state.grid.in_bounds(fc) and Furniture.is_furniture(state.grid.cell(fc).feature_id):
+			smashed.append_array(furniture_piece(fc))
+			_destroy_furniture(state.grid.cell(fc), result)
 	# Осколки не сносят укрепления (#44): единственное, что бьётся, — стекло, и оно
 	# «защищается» как обычный юнит с бронёй 5+ и тем же штрафом −1 на оба кубика.
 	for gc: Vector2i in area:
@@ -6090,7 +6094,9 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 	})
 	result.log("%s throws a frag grenade at (%d, %d)" % [
 		thrower.stats.display_name, center.x, center.y])
-	if killed_names.is_empty() and broken_glass.is_empty():
+	if not smashed.is_empty():
+		result.log("Furniture blown apart (%d cell%s)" % [smashed.size(), "" if smashed.size() == 1 else "s"])
+	if killed_names.is_empty() and broken_glass.is_empty() and smashed.is_empty():
 		result.log("… nobody hit")
 	else:
 		for n in killed_names:

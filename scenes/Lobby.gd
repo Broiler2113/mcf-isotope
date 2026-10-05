@@ -87,7 +87,6 @@ var _gen_space: CheckBox
 var _gen_fire: CheckBox
 var _gen_obstacles: CheckBox
 var _gen_furniture: OptionButton
-var _gen_wear: OptionButton
 var _gen_seed: SpinBox
 var _gen_info: Label
 ## Собранная карта и настройки, из которых она собрана: пока они те же — не пересобираем.
@@ -824,18 +823,10 @@ func _build_generator(box: VBoxContainer) -> void:
 	# Мебель (§3.15) — отдельно от «Obstacles»: обстановка комнат, а не укрепления.
 	_gen_furniture = _opt(MapFurnish.DENSITY_NAMES, int(defaults.get("furniture", MapFurnish.DEFAULT_DENSITY)))
 	_gen_furniture.tooltip_text = "How furnished the rooms are: beds, desks, shelves, counters, crates. Furniture is cover you can climb onto, carry, drag or smash — full-height shelves block sight like walls. Doors and walkways always stay clear."
-	var wear_names: Array = []
-	for n: String in MapFurnish.DAMAGE_NAMES:
-		wear_names.append("%s wear" % n if n != "None" else "No wear")
-	_gen_wear = _opt(wear_names, int(defaults.get("furniture_damage", 0)))
-	_gen_wear.tooltip_text = "Some furniture missing, smashed, cracked or pushed out of place."
-	var furn := HBoxContainer.new()
-	furn.add_theme_constant_override("separation", 6)
-	for o: OptionButton in [_gen_furniture, _gen_wear]:
-		o.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		o.item_selected.connect(func(_i: int) -> void: _on_gen_changed())
-		furn.add_child(o)
-	_row(_gen_box, "Furniture:", furn)
+	# Износа мебели больше нет (0.9.2: игрок попросил убрать механику).
+	_gen_furniture.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_gen_furniture.item_selected.connect(func(_i: int) -> void: _on_gen_changed())
+	_row(_gen_box, "Furniture:", _gen_furniture)
 	# Мирные случайной карты: точное число, до 1000 (готовые карты — галочка «Civilians»).
 	var civ0 := GameConfig.civilian_count
 	if civ0 < 0 or civ0 >= GameConfig.CIVILIANS_MAX:
@@ -925,7 +916,7 @@ func _gen_options() -> Dictionary:
 			"symmetric": _gen_sym.button_pressed,
 			"space": _gen_space.button_pressed,
 			"flammable": _gen_fire.button_pressed, "obstacles": _gen_obstacles.button_pressed,
-			"furniture": _gen_furniture.selected, "furniture_damage": _gen_wear.selected,
+			"furniture": _gen_furniture.selected,
 			"civilian_count": _civ_count()}
 
 ## Сколько мирных в партии: ноль без галочки, число ползунка у случайной карты, иначе все,

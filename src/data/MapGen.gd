@@ -134,7 +134,7 @@ static func default_options() -> Dictionary:
 	return {"style": Style.TOWN, "size": 1, "density": 1, "seed": 1, "zones": 2, "units": 10,
 			"width": 80, "height": 60, "symmetric": false,
 			"space": true, "flammable": true, "obstacles": true, "civilians": 2,
-			"furniture": MapFurnish.DEFAULT_DENSITY, "furniture_damage": 0}
+			"furniture": MapFurnish.DEFAULT_DENSITY}
 
 ## Уровень мирных по настройке: число 0…4 или прежнее true/false.
 ## Будут ли на карте мирные: число с ползунка лобби (item 11), а без него — уровень.

@@ -330,6 +330,14 @@ func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> voi
 				Rect2i((mask % 4) * res, (mask / 4) * res, res, res), at)
 		if NOTCHED.has(FAMILY.get(fid, fid)):
 			_fill_notches(feat, c, fid, mask, at, res)
+		# ДОТ, потерявший прочность, трескается прямо в плитке (0.9.2) — раньше была лишь
+		# красная чёрточка в углу клетки.
+		if (fid == MCF.FEATURE_DOT or fid == MCF.FEATURE_DOT_OPEN) and cell.feature_durability > 0 \
+				and cell.feature_durability < MCF.feature_durability(fid):
+			# Вариант — так, чтобы соседи по ряду и столбцу всегда трескались по-разному.
+			var cv := c + origin
+			feat.blend_rect(_pillbox_crack(res, posmod(cv.x * 2 + cv.y, 3), fid == MCF.FEATURE_DOT_OPEN),
+					full, at)
 	else:
 		var singles := _tile(name, res)
 		if not singles.is_empty():
@@ -816,6 +824,60 @@ func _crack_overlay(res: int) -> Image:
 		for t in steps + 1:
 			var p := a.lerp(b, float(t) / steps)
 			img.set_pixel(clampi(int(p.x), 0, res - 1), clampi(int(p.y), 0, res - 1), ink)
+	_tiles[key] = [img]
+	return img
+
+## Трещины в бетоне ДОТа: ломаные с отростками, тёмный излом и светлый скол под ним.
+## У амбразуры они идут от углов щели вверх и вниз, а края щели выщерблены — щель
+## (строки 13–18 плитки) остаётся щелью, трещины её не перечёркивают. Точки — в системе
+## плитки 32×32; v — вариант по клетке, чтобы стена ДОТа не трескалась под копирку.
+const _CRACKS := [
+	[[Vector2(4, 3), Vector2(9, 8), Vector2(8, 13), Vector2(14, 17), Vector2(13, 22), Vector2(18, 27)],
+		[Vector2(9, 8), Vector2(15, 7), Vector2(19, 10)], [Vector2(14, 17), Vector2(21, 16)]],
+	[[Vector2(28, 4), Vector2(23, 9), Vector2(24, 14), Vector2(18, 18), Vector2(19, 24), Vector2(15, 29)],
+		[Vector2(23, 9), Vector2(17, 8)], [Vector2(18, 18), Vector2(12, 21), Vector2(10, 26)]],
+	[[Vector2(5, 28), Vector2(10, 22), Vector2(9, 17), Vector2(15, 13), Vector2(21, 14), Vector2(27, 8)],
+		[Vector2(15, 13), Vector2(14, 7), Vector2(17, 3)], [Vector2(21, 14), Vector2(24, 20)]],
+]
+const _SLIT_CRACKS := [
+	[[Vector2(10, 13), Vector2(8, 9), Vector2(11, 5), Vector2(9, 1)], [Vector2(22, 13), Vector2(24, 9), Vector2(21, 6)],
+		[Vector2(14, 18), Vector2(12, 22), Vector2(15, 26), Vector2(13, 30)]],
+	[[Vector2(20, 13), Vector2(22, 8), Vector2(19, 4)], [Vector2(6, 18), Vector2(4, 23), Vector2(7, 28)],
+		[Vector2(24, 18), Vector2(26, 23), Vector2(23, 27)]],
+	[[Vector2(13, 13), Vector2(15, 9), Vector2(12, 6), Vector2(14, 2)], [Vector2(19, 18), Vector2(21, 23), Vector2(18, 29)],
+		[Vector2(5, 13), Vector2(3, 9)]],
+]
+
+func _pillbox_crack(res: int, v: int, slit: bool) -> Image:
+	var key := "pcrack@%d@%d@%s" % [res, v, slit]
+	if _tiles.has(key):
+		return _tiles[key][0]
+	var img := Image.create(res, res, false, Image.FORMAT_RGBA8)
+	var k := res / 32.0
+	var ink := Color(0.07, 0.07, 0.06, 0.92)
+	var chip := Color(0.86, 0.85, 0.8, 0.45)
+	var lines: Array = (_SLIT_CRACKS if slit else _CRACKS)[v % 3]
+	for pts: Array in lines:
+		for i in pts.size() - 1:
+			var a: Vector2 = pts[i] * k
+			var b: Vector2 = pts[i + 1] * k
+			var steps := maxi(2, int(a.distance_to(b) * 1.5))
+			for t in steps + 1:
+				var p := a.lerp(b, float(t) / steps)
+				var x := clampi(int(p.x), 0, res - 1)
+				var y := clampi(int(p.y), 0, res - 1)
+				if slit and y > int(13 * k) and y < int(18 * k):
+					continue   # в самой щели — темнота, трещине там нечего делать
+				if x + 1 < res and y + 1 < res and img.get_pixel(x + 1, y + 1).a == 0.0:
+					img.set_pixel(x + 1, y + 1, chip)
+				img.set_pixel(x, y, ink)
+	if slit:
+		# Выщербленные края щели: по паре сколов сверху и снизу.
+		for e: Vector2i in [Vector2i(9, 13), Vector2i(10, 13), Vector2i(22, 12), Vector2i(14, 18), Vector2i(15, 19),
+				Vector2i(24, 18)]:
+			var q := Vector2i(int(e.x * k), int(e.y * k))
+			if q.x < res and q.y < res:
+				img.set_pixel(q.x, q.y, ink)
 	_tiles[key] = [img]
 	return img
 

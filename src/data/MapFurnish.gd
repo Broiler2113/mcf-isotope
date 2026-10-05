@@ -25,8 +25,6 @@ const DENSITY_NAMES := ["Off", "Sparse", "Normal", "Dense", "Very dense"]
 const DENSITY_SHARE := [0.0, 0.15, 0.32, 0.48, 0.62]
 ## Мелочь второго прохода (ящики, урны, тележки) — доля от того же.
 const CLUTTER_SHARE := [0.0, 0.03, 0.05, 0.07, 0.09]
-const DAMAGE_NAMES := ["None", "Light", "Heavy"]
-const DAMAGE_SHARE := [0.0, 0.12, 0.30]
 const DEFAULT_DENSITY := 2
 
 const N4: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
@@ -313,10 +311,8 @@ func _furnish() -> void:
 		for ci in comps.size():
 			_furnish_room(comps[ci], ci == main, comps.size(), r)
 	_outdoor_clutter()
-	_wear()
 	if g._sym > 0:
 		g._mirror()
-		_mirror_damage()
 
 # --- Помещения ---------------------------------------------------------------------------
 
@@ -957,84 +953,3 @@ func _outdoor_ok(c: Vector2i) -> bool:
 		if m.get_feature(q) == MCF.FEATURE_AIRLOCK:
 			return false
 	return true
-
-# --- Износ -------------------------------------------------------------------------------
-
-## Износ (None/Light/Heavy): часть мебели пропала, разбита в щепки, побита (прочность
-## ниже табличной — в MapData.feature_dur) или сдвинута на соседнюю клетку. Цельный предмет
-## пропадает или бьётся целиком; сдвигается только одноклеточное (то, что можно взять в
-## руки) и только туда, где это не рвёт проход. Ничто не освобождает клетку, от которой
-## уже не дойти до пола.
-func _wear() -> void:
-	var dmg := clampi(int(g.opt.get("furniture_damage", 0)), 0, DAMAGE_NAMES.size() - 1)
-	if dmg == 0:
-		return
-	for piece: Dictionary in placed:
-		if rng.randf() >= DAMAGE_SHARE[dmg]:
-			continue
-		var cells: Array = piece["cells"]
-		var fid: String = piece["fid"]
-		if m.get_feature(cells[0]) != fid:
-			continue
-		var roll := rng.randf()
-		var dur := Furniture.durability_of(fid)
-		if roll < 0.3 or (roll < 0.5 and dur <= 1):
-			if _piece_touches_open(cells):
-				for c: Vector2i in cells:
-					g._ground(c, m.get_floor(c))
-		elif roll < 0.75 and dur >= 2:
-			var left := rng.randi_range(1, dur - 1)
-			for c: Vector2i in cells:
-				m.set_feature_damage(c, left)
-		elif not Furniture.joins(fid) and Furniture.mobility_of(fid) != Furniture.Mobility.FIXED:
-			_displace(piece)   # сдвигается только то, что в одну клетку
-
-func _displace(piece: Dictionary) -> void:
-	var c: Vector2i = piece["cells"][0]
-	var fid: String = piece["fid"]
-	var floor_t := m.get_floor(c)
-	for d: Vector2i in _shuffled(N4):
-		var q: Vector2i = c + d
-		if not g._clear(q) or _no_go[q.y * w + q.x] != 0 or g._indoor[q.y * w + q.x] != g._indoor[c.y * w + c.x] \
-				or g._in_f(q) != g._in_f(c):
-			continue
-		# Сдвиг не должен перекрыть проход: клетка-цель проверяется кольцом по карте —
-		# уже без самого предмета на старом месте.
-		g._ground(c, floor_t)
-		if _ring_ok_map(q):
-			g._put(q, fid)
-			if _touches_open(c):
-				piece["cells"] = [q]
-				return
-			g._ground(q, m.get_floor(q))   # старое место осталось бы замурованным
-		g._put(c, fid)
-		return
-
-## Есть ли у клетки свободный проходимый сосед — освободившись, она не станет закутком.
-func _touches_open(c: Vector2i) -> bool:
-	for d: Vector2i in N4:
-		if _walk_free(c + d):
-			return true
-	return false
-
-## То же для целого предмета: хоть одна его клетка выходит на свободный пол (сам предмет
-## связен, поэтому, освободившись, выйдет весь).
-func _piece_touches_open(cells: Array) -> bool:
-	for c: Vector2i in cells:
-		for d: Vector2i in N4:
-			if not cells.has(c + d) and _walk_free(c + d):
-				return true
-	return false
-
-## Зеркало побитой мебели: MapGen._mirror() копирует клетки, но не прочность.
-func _mirror_damage() -> void:
-	for y in h:
-		for x in w:
-			var i := y * w + x
-			var s := g._src_index(x, y)
-			if s == i:
-				continue
-			if m.feature_dur.has(s):
-				m.feature_dur[i] = [m.feature_id[i], int(m.feature_dur[s][1])]
-			else:
-				m.feature_dur.erase(i)
