@@ -37,6 +37,8 @@ var feature_dur: Dictionary = {}
 ## четверти оборота по часовой (0 — спинкой вверх). Как и прочность, действует, только
 ## пока на клетке тот же предмет. Нет записи — предмет поворачивается сам (к стене).
 var feature_turn: Dictionary = {}
+## Вид пола по клеткам (MCF.FLOOR_LOOKS, 0.9.2). Пусто — у карты нигде нет особого пола.
+var floor_look: PackedByteArray = PackedByteArray()
 
 func _init(p_width: int = 16, p_height: int = 12) -> void:
 	resize(p_width, p_height)
@@ -61,6 +63,7 @@ func resize(p_width: int, p_height: int) -> void:
 	spawns = []
 	feature_dur = {}
 	feature_turn = {}
+	floor_look = PackedByteArray()
 
 ## Изменить размер, СОХРАНИВ содержимое (batch 13 #14): клетки в пересечении старого и
 ## нового поля остаются как были, новые — космос, спавны за краем отбрасываются. Раньше
@@ -76,6 +79,7 @@ func resize_keep(p_width: int, p_height: int) -> void:
 	var old_spawns := spawns
 	var old_dur := feature_dur
 	var old_turn := feature_turn
+	var old_look := floor_look
 	resize(p_width, p_height)
 	fill_all_space()
 	for y in mini(old_h, height):
@@ -91,6 +95,8 @@ func resize_keep(p_width: int, p_height: int) -> void:
 				feature_dur[dst] = old_dur[src]
 			if old_turn.has(src):
 				feature_turn[dst] = old_turn[src]
+			if old_look.size() > src and old_look[src] != 0:
+				set_look(dst, old_look[src])
 	for s in old_spawns:
 		if in_bounds(s["coord"]):
 			spawns.append(s)
@@ -164,6 +170,8 @@ func zone_cells(owner: int) -> Array:
 
 ## Перенести рельеф карты на существующую сетку такого же размера.
 func apply_to_grid(grid: Grid) -> void:
+	grid.floor_look = floor_look.duplicate() if floor_look.size() == grid.width * grid.height \
+			and grid.width == width else PackedByteArray()
 	grid.furniture_turn.clear()
 	for i: int in feature_turn:
 		if i < feature_id.size() and str(feature_turn[i][0]) == feature_id[i]:
@@ -194,6 +202,44 @@ func set_feature_damage(coord: Vector2i, dur: int) -> void:
 		feature_dur.erase(i)
 	else:
 		feature_dur[i] = [fid, maxi(1, dur)]
+
+func get_look(i: int) -> int:
+	return floor_look[i] if i < floor_look.size() else 0
+
+func set_look(i: int, v: int) -> void:
+	if floor_look.is_empty():
+		if v == 0:
+			return
+		floor_look.resize(width * height)
+	floor_look[i] = v
+
+## Вид пола — сжатием «значение, сколько подряд»: комнаты — прямоугольники, и строка карты
+## 250 клеток пишется парой-тройкой чисел.
+static func rle(b: PackedByteArray) -> Array:
+	var out: Array = []
+	var i := 0
+	while i < b.size():
+		var v := b[i]
+		var n := 1
+		while i + n < b.size() and b[i + n] == v:
+			n += 1
+		out.append(v)
+		out.append(n)
+		i += n
+	return out
+
+static func unrle(a: Array, size: int) -> PackedByteArray:
+	var out := PackedByteArray()
+	out.resize(size)
+	var i := 0
+	for k in range(0, a.size() - 1, 2):
+		var v := int(a[k])
+		for _n in int(a[k + 1]):
+			if i >= size:
+				return out
+			out[i] = v
+			i += 1
+	return out
 
 ## Поворот, заданный руками, или −1 (нет записи / на клетке уже другой предмет).
 func get_turn(i: int) -> int:
@@ -363,6 +409,8 @@ func to_dict() -> Dictionary:
 			turn_out[str(i)] = feature_turn[i]
 	if not turn_out.is_empty():
 		out["feature_turn"] = turn_out
+	if floor_look.size() > 0 and floor_look.count(0) < floor_look.size():
+		out["floor_look"] = rle(floor_look)
 	return out
 
 static func from_dict(d: Dictionary) -> MapData:
@@ -393,6 +441,8 @@ static func from_dict(d: Dictionary) -> MapData:
 		var rec: Array = ft2[k]
 		if int(k) < n and rec.size() == 2:
 			m.feature_turn[int(k)] = [str(rec[0]), int(rec[1]) % 4]
+	if d.has("floor_look"):
+		m.floor_look = unrle(d["floor_look"], n)
 	var zo: Array = d.get("zone_owner", [])
 	for i in n:
 		if i < zo.size():

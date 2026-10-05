@@ -57,6 +57,8 @@ enum Sym { OFF, X, Y, QUAD }
 const SYM_NAMES := ["Off", "Left / Right", "Top / Bottom", "Four quarters"]
 
 const TERRAIN := [["floor", "Floor"], ["grass", "Grass"], ["space", "Space"]]
+## Виды пола (0.9.2): кисть «floor:N» кладёт пол окружения с видом MCF.FLOOR_LOOKS[N].
+const FLOOR_LOOK_BRUSHES := [1, 2, 3, 4, 5, 6, 7, 8, 9]
 const WALLS := [
 	[MCF.FEATURE_WALL, "Wall"], [MCF.FEATURE_WOOD_WALL, "Wood wall"],
 	[MCF.FEATURE_SOIL, "Soil"], [MCF.FEATURE_GLASS, "Glass"],
@@ -300,10 +302,11 @@ static func map_color(m: MapData, i: int, env: String) -> Color:
 # Правка клеток с записью отката
 # ============================================================================
 
-## Клетка карты кортежем: [пол, высота, космос, объект, зона, поворот мебели (−1 — сам)].
+## Клетка карты кортежем: [пол, высота, космос, объект, зона, поворот мебели (−1 — сам),
+## вид пола (MCF.FLOOR_LOOKS, 0 — пол окружения)].
 func _tuple(i: int) -> Array:
 	return [int(map.floor_type[i]), float(map.cover_height[i]), map.is_space[i] != 0,
-			String(map.feature_id[i]), int(map.zone_owner[i]), map.get_turn(i)]
+			String(map.feature_id[i]), int(map.zone_owner[i]), map.get_turn(i), map.get_look(i)]
 
 ## Записать клетку: в карту, в зеркало плиток, в миникарту и слой зон.
 func _write(i: int, t: Array) -> void:
@@ -313,9 +316,11 @@ func _write(i: int, t: Array) -> void:
 	var feat := String(t[3])
 	var zone := int(t[4])
 	var turn := int(t[5]) if t.size() > 5 and Furniture.is_furniture(feat) else -1
+	var look := int(t[6]) if t.size() > 6 else 0
 	# Клетка уже такая — ни записи, ни отката: повторный мазок по тем же клеткам бесплатен.
 	if map.floor_type[i] == fl and map.cover_height[i] == cover and (map.is_space[i] != 0) == sp \
-			and map.feature_id[i] == feat and map.zone_owner[i] == zone and map.get_turn(i) == turn:
+			and map.feature_id[i] == feat and map.zone_owner[i] == zone and map.get_turn(i) == turn \
+			and map.get_look(i) == look:
 		return
 	if _act.has("cells") and not _act["cells"].has(i):
 		_act["cells"][i] = _tuple(i)
@@ -328,8 +333,15 @@ func _write(i: int, t: Array) -> void:
 	map.zone_owner[i] = zone
 	var turn_changed := map.get_turn(i) != turn
 	map.set_turn(i, turn)
+	var look_changed := map.get_look(i) != look
+	map.set_look(i, look)
 	var x := i % map.width
 	var y := i / map.width
+	if look_changed:
+		if _grid.floor_look.is_empty():
+			_grid.floor_look.resize(map.width * map.height)
+		_grid.floor_look[i] = look
+		GridCell.log_look_change(x, y)
 	if turn_changed:
 		if turn >= 0:
 			_grid.furniture_turn[Vector2i(x, y)] = [feat, turn]
@@ -533,18 +545,25 @@ func _brushed(t: Array, mask: int) -> Array:
 		t[4] = _mirror_owner(int(brush.substr(5)), mask)
 	elif brush.begins_with("unit:"):
 		t[2] = false
+	elif brush.begins_with("floor:"):
+		t[0] = MCF.FLOOR_NORMAL
+		t[2] = false
+		t = _with_look(t, int(brush.substr(6)))
 	else:
 		match brush:
 			"floor":
 				t[0] = MCF.FLOOR_NORMAL
 				t[2] = false
+				t = _with_look(t, 0)
 			"grass":
 				t[0] = MCF.FLOOR_GRASS
 				t[2] = false
+				t = _with_look(t, 0)
 			"space":
 				t[2] = true
 				t[3] = ""
 				t[1] = 0.0
+				t = _with_look(t, 0)
 			"clear_object":
 				t[3] = ""
 				t[1] = 0.0
@@ -555,6 +574,13 @@ func _brushed(t: Array, mask: int) -> Array:
 				if t.size() < 6:
 					t.append(-1)
 				t[5] = mirror_turn(brush_turn, mask) if Furniture.is_furniture(brush) else -1
+	return t
+
+## Кортеж с видом пола (7-й элемент дописывается, если его нет).
+static func _with_look(t: Array, look: int) -> Array:
+	while t.size() < 7:
+		t.append(-1 if t.size() == 5 else 0)
+	t[6] = look
 	return t
 
 ## Поворот в отражении симметрии: по X меняются восток и запад, по Y — север и юг.
@@ -646,7 +672,8 @@ func _flood(start: Vector2i, erase: bool) -> void:
 			continue
 		seen[i] = 1
 		if map.floor_type[i] != target[0] or map.cover_height[i] != target[1] \
-				or (map.is_space[i] != 0) != target[2] or map.feature_id[i] != target[3]:
+				or (map.is_space[i] != 0) != target[2] or map.feature_id[i] != target[3] \
+				or map.get_look(i) != target[6]:
 			continue
 		var x := i % w
 		var y := i / w
@@ -843,6 +870,8 @@ func pick_at(c: Vector2i) -> void:
 		_select_brush("space")
 	elif map.floor_type[i] == MCF.FLOOR_GRASS:
 		_select_brush("grass")
+	elif map.get_look(i) > 0:
+		_select_brush("floor:%d" % map.get_look(i))
 	else:
 		_select_brush("floor")
 
@@ -1488,6 +1517,10 @@ func _set_scratch(g: Grid, at: Vector2i, t: Array) -> void:
 		if t.size() > 5 and int(t[5]) >= 0:
 			g.furniture_turn[at] = [String(t[3]), int(t[5])]
 	gc.cover_height = float(t[1])
+	if t.size() > 6 and int(t[6]) != 0:
+		if g.floor_look.is_empty():
+			g.floor_look.resize(g.width * g.height)
+		g.floor_look[at.y * g.width + at.x] = int(t[6])
 
 ## Узор сверх потолка черновика — картинками палитры, только видимая часть: вставка всей
 ## карты 500×500 не рисует четверть миллиона клеток.
@@ -1789,7 +1822,10 @@ func _refresh_palette() -> void:
 		_palette_box.remove_child(c)
 		c.queue_free()
 	_brush_buttons.clear()
-	_palette_group("Terrain", TERRAIN)
+	var terrain: Array = TERRAIN.duplicate()
+	for lk: int in FLOOR_LOOK_BRUSHES:
+		terrain.append(["floor:%d" % lk, MCF.FLOOR_LOOK_NAMES[lk]])
+	_palette_group("Terrain", terrain)
 	_palette_group("Walls & doors", WALLS)
 	_palette_group("Objects", OBJECTS)
 	# Мебель (§3.15) — по разделам, а в разделе по высоте (0.9.2): высота решает, укрытие
@@ -2094,6 +2130,8 @@ func _brush_name(id: String) -> String:
 		return "No zone" if n < 0 else "Zone %d" % (n + 1)
 	if id.begins_with("unit:"):
 		return "%s (neutral)" % id.substr(5).capitalize()
+	if id.begins_with("floor:"):
+		return MCF.FLOOR_LOOK_NAMES[clampi(int(id.substr(6)), 0, MCF.FLOOR_LOOK_NAMES.size() - 1)]
 	for group: Array in [TERRAIN, WALLS, OBJECTS]:
 		for it: Array in group:
 			if it[0] == id:
@@ -2151,7 +2189,8 @@ func _refresh_status() -> void:
 
 func _describe(c: Vector2i) -> String:
 	var i := c.y * map.width + c.x
-	var s := "Space" if map.is_space[i] != 0 else ("Grass" if map.floor_type[i] == MCF.FLOOR_GRASS else "Floor")
+	var s: String = "Space" if map.is_space[i] != 0 else ("Grass" if map.floor_type[i] == MCF.FLOOR_GRASS
+			else MCF.FLOOR_LOOK_NAMES[clampi(map.get_look(i), 0, MCF.FLOOR_LOOK_NAMES.size() - 1)])
 	if map.feature_id[i] != "":
 		s += " + " + _brush_name(map.feature_id[i])
 	if map.zone_owner[i] >= 0:
@@ -2185,6 +2224,8 @@ func _thumb(id: String) -> Texture2D:
 		return _stamp_thumb(MapPresets.stamp(id.substr(6)))
 	var name: String = {"floor": "floor", "grass": "floor_grass", "space": "floor_space"}.get(id,
 			Sprites.ALIASES.get(id, id))
+	if id.begins_with("floor:"):
+		name = MCF.FLOOR_LOOKS[clampi(int(id.substr(6)), 0, MCF.FLOOR_LOOKS.size() - 1)]
 	if id == "clear_object":
 		name = "floor"
 	elif id == MCF.FEATURE_AIRLOCK:

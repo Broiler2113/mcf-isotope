@@ -30,7 +30,9 @@ func _events(res: ActionResult, kind: String) -> Array:
 func _initialize() -> void:
 	_window_burst()
 	_through_panes()
-	print("batch 0.9.2: windows take a chosen burst; every pane on the line is hit, saves, shatters in order" if fails == 0
+	_departments()
+	_towns()
+	print("batch 0.9.2: glass, departments, districts, floors and toilets all hold" if fails == 0
 			else "batch 0.9.2: %d failure(s)" % fails)
 	quit(1 if fails > 0 else 0)
 
@@ -126,3 +128,95 @@ func _through_panes() -> void:
 				return
 	ck(seen_two and seen_lost,
 			"bullets reach the second pane only through the first, and the target only through both (60 seeds)")
+
+## Станция и бункер по отделам (замысел игрока): внутренние комнаты медотсека и охраны не
+## выходят в главный коридор; производство — дальше всех от жилого; переработка отходов
+## есть всегда; причал — шлюзом прямо в космос; тайник — только из каюты капитана.
+func _departments() -> void:
+	var inner := {"ward": true, "surgery": true, "briefing": true, "armory": true, "cell": true}
+	var hall_breaks := 0
+	var far_breaks := 0
+	var no_recycling := 0
+	var docks := 0
+	var docks_open := 0
+	var hidden_bad := 0
+	var toilets := 0
+	var looks := 0
+	var maps := 0
+	for style: int in [MapGen.Style.STATION, MapGen.Style.BUNKER]:
+		for seed: int in [11, 23, 57, 101]:
+			for size: int in [1, 2, 3]:
+				var g := MapGen.build({"style": style, "size": size, "seed": seed, "civilians": 0})
+				var m := g.m
+				maps += 1
+				if not g._room_kind.values().has("recycling"):
+					no_recycling += 1
+				for r: Rect2i in g._room_kind:
+					var kind: String = g._room_kind[r]
+					for c in g._edge_cells(r):
+						if m.get_feature(c) != MCF.FEATURE_AIRLOCK:
+							continue
+						var out := c + g._outward(r, c)
+						if inner.has(kind) and g._kind(out.x, out.y) == MapGen.K_HALL:
+							hall_breaks += 1
+						if kind == "hidden_storage":
+							var into := ""
+							for q: Rect2i in g._room_kind:
+								if q != r and q.has_point(out) and g._room_kind[q] == "captain":
+									into = "captain"
+							if into != "captain":
+								hidden_bad += 1
+					if kind == "dock" and style == MapGen.Style.STATION:
+						docks += 1
+						for c in g._edge_cells(r):
+							var o2 := c + g._outward(r, c)
+							if m.get_feature(c) == MCF.FEATURE_AIRLOCK and g._in(o2) and m.get_space(o2):
+								docks_open += 1
+								break
+				var service := Vector2(-1, -1)
+				var prod := Vector2(-1, -1)
+				for e: Array in g._dept_sectors:
+					if e[1] == "service":
+						service = Vector2((e[0] as Rect2i).get_center())
+					elif e[1] == "production":
+						prod = Vector2((e[0] as Rect2i).get_center())
+				if service.x >= 0 and prod.x >= 0:
+					for e: Array in g._dept_sectors:
+						if e[1] != "production" and e[1] != "service" \
+								and Vector2((e[0] as Rect2i).get_center()).distance_to(service) > prod.distance_to(service) + 0.01:
+							far_breaks += 1
+							break
+				for i in m.width * m.height:
+					if m.feature_id[i] == "toilet":
+						toilets += 1
+					if m.get_look(i) != 0:
+						looks += 1
+	ck(hall_breaks == 0, "no ward, surgery, briefing room, armory or cell opens onto a main corridor (%d)" % hall_breaks)
+	ck(far_breaks == 0, "production is the department farthest from the service department (%d maps broke it)" % far_breaks)
+	ck(no_recycling == 0, "every station and bunker has a waste recycling room (%d of %d lack it)" % [no_recycling, maps])
+	ck(docks > 0 and docks_open == docks, "station docks open straight into space (%d of %d)" % [docks_open, docks])
+	ck(hidden_bad == 0, "the hidden storage opens only into the captain's quarters (%d)" % hidden_bad)
+	ck(toilets > 0 and looks > 0, "stations and bunkers get toilets (%d) and room floors (%d cells)" % [toilets, looks])
+
+## Город по районам: жилые дома с санузлами (унитаз в маленькой комнате), промзона, центр.
+func _towns() -> void:
+	var kinds := {}
+	var toilets := 0
+	var looks := 0
+	for seed: int in [5, 9, 13]:
+		var g := MapGen.build({"style": MapGen.Style.TOWN, "size": 3, "seed": seed, "civilians": 0})
+		for r: Rect2i in g._room_kind:
+			kinds[g._room_kind[r]] = true
+		for i in g.m.width * g.m.height:
+			if g.m.feature_id[i] == "toilet":
+				toilets += 1
+			if g.m.get_look(i) != 0:
+				looks += 1
+	ck(kinds.has("house") and (kinds.has("warehouse") or kinds.has("factory") or kinds.has("garage"))
+			and (kinds.has("shop") or kinds.has("office") or kinds.has("restaurant")),
+			"a Huge town has homes, an industrial zone and a commercial centre (%s)" % str(kinds.keys()))
+	ck(toilets > 0, "town bathrooms get toilets (%d)" % toilets)
+	ck(looks > 0, "town rooms get wood, tile and carpet floors (%d cells)" % looks)
+	var g2 := MapGen.build({"style": MapGen.Style.STATION, "size": 2, "seed": 3, "civilians": 0})
+	var back := MapData.from_dict(g2.m.to_dict())
+	ck(back.floor_look == g2.m.floor_look, "floor looks survive save and load")

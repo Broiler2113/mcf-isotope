@@ -922,8 +922,10 @@ func _buried(c: Vector2i) -> bool:
 	return true
 
 func _floor_name(cell: GridCell, c: Vector2i) -> String:
+	var look := _grid.look_at(c.x, c.y) if not _grid.floor_look.is_empty() else 0
 	if cell.is_space:
-		return "floor_space"
+		# Солнечные панели у станции (0.9.2) — вид поверх звёзд; клетка остаётся космосом.
+		return "floor_solar" if look == MCF.Look.SOLAR else "floor_space"
 	var dmg := int(_damaged.get(c, 0))
 	if dmg == FxDecals.DAMAGE_EPICENTER:
 		return "floor_epicenter"
@@ -931,6 +933,9 @@ func _floor_name(cell: GridCell, c: Vector2i) -> String:
 		return "floor_destroyed"
 	if cell.floor_type == MCF.FLOOR_GRASS:
 		return "floor_grass"
+	# Пол комнаты (0.9.2): дерево, плитка, ковёр — вид, правила те же.
+	if look > 0 and look < MCF.FLOOR_LOOKS.size() and look != MCF.Look.SOLAR:
+		return MCF.FLOOR_LOOKS[look]
 	return "floor"
 
 ## Имя картинки объекта: id с учётом подмен (ЛДФ, ДПМГ) и состояния шлюза — открытый

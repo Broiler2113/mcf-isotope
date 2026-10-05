@@ -116,6 +116,7 @@ const RECIPES := {
 		{"f": "water_cooler", "at": "wall", "p": 0.3},
 	],
 	"command": [
+		{"f": "console", "at": "wall", "n": [2, 5], "then": [{"f": "chair", "at": "front"}]},
 		{"f": "conference_table", "at": "center", "then": [{"f": "chair", "at": "around", "n": [3, 4]}]},
 		{"f": "server_rack", "at": "wall", "n": [1, 2]},
 		{"f": "filing_cabinet", "at": "wall", "n": [1, 2]},
@@ -226,6 +227,119 @@ const RECIPES := {
 		{"f": "chair", "at": "free", "p": 0.4},
 		{"f": "cabinet", "at": "wall", "p": 0.2},
 	],
+	# --- 0.9.2: отделы станции, санузлы, здания города ---------------------------------
+	"reception": [
+		{"f": "reception_desk", "at": "row", "n": [2, 3]},
+		{"f": "chair", "at": "free", "n": [1, 3]},
+		{"f": "potted_plant", "at": "corner", "p": 0.6},
+		{"f": "water_cooler", "at": "wall", "p": 0.4},
+		{"f": "trash_bin", "at": "corner", "p": 0.4},
+	],
+	"surgery": [
+		{"f": "exam_table", "at": "center"},
+		{"f": "cabinet", "at": "wall", "n": [1, 2]},
+		{"f": "sink", "at": "wall", "p": 0.7},
+		{"f": "equipment_cart", "at": "free"},
+		{"f": "locker", "at": "wall", "p": 0.4},
+	],
+	"briefing": [
+		{"f": "conference_table", "at": "center", "then": [{"f": "chair", "at": "around", "n": [3, 4]}]},
+		{"f": "filing_cabinet", "at": "wall", "p": 0.5},
+		{"f": "water_cooler", "at": "wall", "p": 0.3},
+		{"f": "potted_plant", "at": "corner", "p": 0.3},
+	],
+	"cell": [
+		{"f": "toilet", "at": "wall"},
+		{"f": "bed", "at": "corner", "p": 0.7},
+	],
+	"laboratory": [
+		{"f": "workbench", "at": "row", "n": [1, 3]},
+		{"f": "console", "at": "wall", "p": 0.6, "then": [{"f": "chair", "at": "front"}]},
+		{"f": "sink", "at": "wall", "p": 0.6},
+		{"f": "equipment_cart", "at": "free"},
+		{"f": "cabinet", "at": "wall", "p": 0.5},
+		{"f": "server_rack", "at": "wall", "p": 0.3},
+	],
+	"assembly": [
+		{"f": "workbench", "at": "row", "n": [2, 3]},
+		{"f": "machinery", "at": "center", "p": 0.6, "big": true},
+		{"f": "tool_cabinet", "at": "wall"},
+		{"f": "equipment_cart", "at": "free", "p": 0.6},
+		{"f": "toolbox", "at": "free", "p": 0.5},
+	],
+	"testing_range": [
+		{"f": "target", "at": "free", "n": [2, 4]},
+		{"f": "ammo_crate", "at": "free", "p": 0.5},
+		{"f": "crate", "at": "free", "p": 0.4},
+	],
+	"machine_shop": [
+		{"f": "machinery", "at": "center", "big": true},
+		{"f": "machinery", "at": "center", "p": 0.5, "big": true},
+		{"f": "workbench", "at": "row", "n": [1, 2]},
+		{"f": "tool_cabinet", "at": "wall"},
+		{"f": "barrel", "at": "free", "p": 0.5},
+		{"f": "toolbox", "at": "free", "p": 0.5},
+	],
+	"dock": [
+		{"f": "pallet", "at": "free", "n": [2, 4]},
+		{"f": "crate", "at": "free", "n": [2, 5]},
+		{"f": "barrel", "at": "free", "n": [1, 3]},
+		{"f": "equipment_cart", "at": "free", "p": 0.6},
+		{"f": "fuel_tank", "at": "center", "p": 0.3, "big": true},
+	],
+	"restroom": [
+		{"f": "toilet", "at": "wall", "n": [1, 3]},
+		{"f": "sink", "at": "wall", "n": [1, 2]},
+		{"f": "trash_bin", "at": "corner", "p": 0.4},
+	],
+	"bathroom": [
+		{"f": "toilet", "at": "wall"},
+		{"f": "sink", "at": "wall", "p": 0.8},
+		{"f": "cabinet", "at": "wall", "p": 0.3},
+	],
+	"laundry": [
+		{"f": "washing_machine", "at": "wall", "n": [2, 4]},
+		{"f": "cabinet", "at": "wall", "p": 0.5},
+		{"f": "trash_bin", "at": "corner", "p": 0.3},
+	],
+	"captain": [
+		{"f": "bed", "at": "corner", "then": [{"f": "nightstand", "at": "next", "p": 0.8}]},
+		{"f": "desk", "at": "wall", "p": 0.9, "then": [{"f": "chair", "at": "front"}]},
+		{"f": "wardrobe", "at": "wall"},
+		{"f": "bookshelf", "at": "wall", "p": 0.5},
+		{"f": "armchair", "at": "free", "p": 0.4},
+		{"f": "potted_plant", "at": "corner", "p": 0.3},
+	],
+	"hidden_storage": [
+		{"f": "crate", "at": "free", "n": [2, 4]},
+		{"f": "ammo_crate", "at": "free", "p": 0.6},
+		{"f": "storage_shelf", "at": "aisles", "p": 0.5},
+		{"f": "barrel", "at": "free", "p": 0.4},
+	],
+	"recycling": [
+		{"f": "dumpster", "at": "wall", "n": [1, 2]},
+		{"f": "machinery", "at": "center", "p": 0.6, "big": true},
+		{"f": "barrel", "at": "free", "n": [1, 3]},
+		{"f": "trash_bin", "at": "corner", "n": [1, 2]},
+	],
+	"water": [
+		{"f": "fuel_tank", "at": "center", "big": true},
+		{"f": "fuel_tank", "at": "center", "p": 0.5, "big": true},
+		{"f": "industrial_cabinet", "at": "wall"},
+		{"f": "barrel", "at": "free", "n": [1, 2]},
+	],
+	"power": [
+		{"f": "generator", "at": "corner", "n": [1, 2]},
+		{"f": "console", "at": "wall", "p": 0.7, "then": [{"f": "chair", "at": "front"}]},
+		{"f": "server_rack", "at": "wall", "n": [1, 2]},
+		{"f": "industrial_cabinet", "at": "wall", "p": 0.5},
+	],
+	"air": [
+		{"f": "vent_fan", "at": "free", "n": [2, 4]},
+		{"f": "industrial_cabinet", "at": "wall"},
+		{"f": "generator", "at": "corner", "p": 0.3},
+		{"f": "tool_cabinet", "at": "wall", "p": 0.3},
+	],
 	"generic_room": [
 		{"f": "cabinet", "at": "wall"},
 		{"f": "chair", "at": "free"},
@@ -233,6 +347,41 @@ const RECIPES := {
 		{"f": "dining_table", "at": "center", "p": 0.3, "then": [{"f": "chair", "at": "around", "n": [1, 2]}]},
 	],
 }
+
+## Назначения, у которых нет своего рецепта, — обставляются чужим (0.9.2).
+const RECIPE_ALIAS := {"ward": "medical", "supply": "storage", "quarters": "bedroom", "mess": "dining_room",
+		"lounge": "living_room"}
+
+## Вид пола по назначению помещения (0.9.2): варианты, комната берёт свой по хешу. Пусто —
+## пол окружения. Горючий пол (доски) всегда выглядит деревом — вид не спорит с правилами.
+const FLOOR_BY_KIND := {
+	"reception": [MCF.Look.LINO, MCF.Look.TILE, MCF.Look.CARPET_BLUE],
+	"ward": [MCF.Look.LINO, MCF.Look.TILE], "medical": [MCF.Look.LINO, MCF.Look.TILE],
+	"surgery": [MCF.Look.TILE, MCF.Look.LINO],
+	"briefing": [MCF.Look.CARPET_BLUE, MCF.Look.LINO], "armory": [MCF.Look.PLATE],
+	"laboratory": [MCF.Look.LINO, MCF.Look.TILE], "assembly": [MCF.Look.PLATE],
+	"testing_range": [MCF.Look.PLATE], "machine_shop": [MCF.Look.PLATE], "workshop": [MCF.Look.PLATE],
+	"warehouse": [MCF.Look.PLATE, MCF.Look.DEFAULT], "dock": [MCF.Look.PLATE],
+	"storage": [MCF.Look.PLATE, MCF.Look.DEFAULT], "supply": [MCF.Look.PLATE, MCF.Look.DEFAULT],
+	"quarters": [MCF.Look.CARPET_RED, MCF.Look.CARPET_BLUE, MCF.Look.WOOD],
+	"bedroom": [MCF.Look.CARPET_RED, MCF.Look.CARPET_BLUE, MCF.Look.WOOD, MCF.Look.PARQUET],
+	"kitchen": [MCF.Look.CHECKER, MCF.Look.TILE], "mess": [MCF.Look.CHECKER, MCF.Look.TILE, MCF.Look.WOOD],
+	"dining_room": [MCF.Look.CHECKER, MCF.Look.WOOD, MCF.Look.TILE],
+	"restroom": [MCF.Look.TILE, MCF.Look.CHECKER], "bathroom": [MCF.Look.TILE, MCF.Look.CHECKER],
+	"laundry": [MCF.Look.TILE, MCF.Look.LINO],
+	"lounge": [MCF.Look.WOOD, MCF.Look.PARQUET, MCF.Look.CARPET_RED],
+	"living_room": [MCF.Look.WOOD, MCF.Look.PARQUET, MCF.Look.CARPET_RED],
+	"command": [MCF.Look.CARPET_BLUE, MCF.Look.PLATE], "captain": [MCF.Look.PARQUET, MCF.Look.CARPET_RED],
+	"office": [MCF.Look.CARPET_BLUE, MCF.Look.PARQUET, MCF.Look.LINO],
+	"utility": [MCF.Look.PLATE, MCF.Look.GRATE], "recycling": [MCF.Look.GRATE, MCF.Look.PLATE],
+	"water": [MCF.Look.PLATE, MCF.Look.GRATE], "power": [MCF.Look.PLATE, MCF.Look.GRATE],
+	"air": [MCF.Look.GRATE, MCF.Look.PLATE], "server_room": [MCF.Look.PLATE, MCF.Look.GRATE],
+	"shop": [MCF.Look.TILE, MCF.Look.LINO, MCF.Look.WOOD],
+	"restaurant": [MCF.Look.CHECKER, MCF.Look.WOOD, MCF.Look.PARQUET],
+	"barracks": [MCF.Look.LINO, MCF.Look.PLATE, MCF.Look.WOOD], "mining": [MCF.Look.PLATE],
+	"hut": [MCF.Look.WOOD], "garage": [MCF.Look.DEFAULT, MCF.Look.PLATE],
+}
+const WOODEN_LOOKS := [MCF.Look.WOOD, MCF.Look.PARQUET]
 
 ## Мелочь второго прохода по стилю.
 const CLUTTER := {
@@ -266,10 +415,9 @@ var _cand_corner: Array[Vector2i] = []
 var _cand_center: Array[Vector2i] = []
 
 ## Обставить карту генератора g. Поток случайных чисел — уже выставленный фазой.
+## Пол комнат кладётся всегда (0.9.2); мебель — если её плотность не «Off».
 static func run(gen: MapGen) -> void:
 	var lv := clampi(int(gen.opt.get("furniture", DEFAULT_DENSITY)), 0, DENSITY_NAMES.size() - 1)
-	if lv == 0:
-		return
 	var f := MapFurnish.new()
 	f.g = gen
 	f.m = gen.m
@@ -310,7 +458,8 @@ func _furnish() -> void:
 				main = ci
 		for ci in comps.size():
 			_furnish_room(comps[ci], ci == main, comps.size(), r)
-	_outdoor_clutter()
+	if level > 0:
+		_outdoor_clutter()
 	if g._sym > 0:
 		g._mirror()
 
@@ -369,6 +518,11 @@ func _furnish_room(cells: Array[Vector2i], main: bool, count: int, r: Rect2i) ->
 			# (дом, обрезанный вакуумом, бывает доступен только через него).
 			if g._door[q.y * w + q.x] != 0 or _walk_free(q):
 				_entries[c] = true
+	# Назначение — до мебели: по нему и пол (0.9.2), и он нужен, даже если мебели нет.
+	var arch := _archetype(r, main, count)
+	_paint_floor(cells, arch, r)
+	if level <= 0:
+		return
 	_cand_all = []
 	for c in cells:
 		if _base_ok(c):
@@ -396,8 +550,7 @@ func _furnish_room(cells: Array[Vector2i], main: bool, count: int, r: Rect2i) ->
 		var da := Vector2(a).distance_squared_to(mid)
 		var db := Vector2(b).distance_squared_to(mid)
 		return da < db or (da == db and (a.y < b.y or (a.y == b.y and a.x < b.x))))
-	var arch := _archetype(r, main, count)
-	for step: Dictionary in RECIPES.get(arch, RECIPES["generic_room"]):
+	for step: Dictionary in RECIPES.get(RECIPE_ALIAS.get(arch, arch), RECIPES["generic_room"]):
 		if _budget <= 0:
 			break
 		_run_step(step, {})
@@ -412,6 +565,10 @@ func _furnish_room(cells: Array[Vector2i], main: bool, count: int, r: Rect2i) ->
 ## Назначение помещения: поле — хижина или руина; прочее — по таблице ROOMS. В доме
 ## с перегородкой большая половина — общая комната, меньшая — спальня или кухня.
 func _archetype(r: Rect2i, main: bool, count: int) -> String:
+	# Назначение, данное генератором (0.9.2): комната отдела станции — как есть; здание
+	# города — по своей части (самая большая — главное помещение).
+	if g._room_kind.has(r):
+		return _part_of(String(g._room_kind[r]), main, r)
 	var style := _style_key()
 	if style == "field":
 		return "hut" if _has_door(r) else "ruin"
@@ -429,6 +586,49 @@ func _archetype(r: Rect2i, main: bool, count: int) -> String:
 		if roll < 0:
 			return o[0]
 	return "generic_room"
+
+## Часть здания города (0.9.2): главное помещение — по виду здания, маленькая (до 8 клеток
+## пола) — санузел, остальные — по виду здания. У станции вид комнаты уже окончательный.
+func _part_of(kind: String, main: bool, r: Rect2i) -> String:
+	var parts: Dictionary = {
+		"house": ["living_room", ["bedroom", "kitchen", "bedroom"]],
+		"apartments": ["living_room", ["bedroom", "kitchen"]],
+		"shop": ["shop", ["storage", "office"]],
+		"office": ["office", ["office", "kitchen"]],
+		"restaurant": ["restaurant", ["kitchen", "storage"]],
+		"warehouse": ["warehouse", ["office", "storage"]],
+		"factory": ["workshop", ["office", "storage"]],
+		"garage": ["garage", ["storage", "office"]],
+		"mining": ["mining", ["storage", "office"]],
+		"police": ["briefing", ["cell", "armory", "office"]],
+		"clinic": ["medical", ["reception", "surgery"]],
+	}
+	if not parts.has(kind):
+		return kind
+	if main:
+		return parts[kind][0]
+	if _area <= 8:
+		return "bathroom"
+	var rest: Array = parts[kind][1]
+	_part_n += 1
+	return rest[(_part_n + r.position.x + r.position.y) % rest.size()]
+
+var _part_n := 0
+
+## Пол помещения по его назначению (0.9.2). Вид — по хешу комнаты, без случайных чисел
+## генератора: пол не сдвигает ни одной прочей клетки карты.
+func _paint_floor(cells: Array[Vector2i], arch: String, r: Rect2i) -> void:
+	var looks: Array = FLOOR_BY_KIND.get(arch, [])
+	var h := absi((r.position.x * 73856093) ^ (r.position.y * 19349663) ^ (r.size.x * 83492791))
+	for c in cells:
+		var i := c.y * w + c.x
+		var look := 0
+		if m.floor_type[i] == MCF.FLOOR_FLAMMABLE:
+			look = WOODEN_LOOKS[h % WOODEN_LOOKS.size()]   # доски — и на вид дерево
+		elif not looks.is_empty():
+			look = looks[h % looks.size()]
+		if look != 0:
+			m.set_look(i, look)
 
 func _style_key() -> String:
 	return env if env in ["station", "bunker", "town", "asteroid", "field"] else "town"

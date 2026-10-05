@@ -217,7 +217,7 @@ static func capture(m: MapData, r: Rect2i) -> Dictionary:
 		for x in r.size.x:
 			var i := (r.position.y + y) * m.width + r.position.x + x
 			p["cells"][y * r.size.x + x] = [int(m.floor_type[i]), float(m.cover_height[i]),
-					m.is_space[i] != 0, String(m.feature_id[i]), int(m.zone_owner[i]), m.get_turn(i)]
+					m.is_space[i] != 0, String(m.feature_id[i]), int(m.zone_owner[i]), m.get_turn(i), m.get_look(i)]
 	for s: Dictionary in m.spawns:
 		var c: Vector2i = s["coord"]
 		if r.has_point(c):
