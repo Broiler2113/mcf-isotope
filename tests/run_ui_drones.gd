@@ -29,7 +29,13 @@ func _initialize() -> void:
 	ck(r.shootable_window_cells(li).has(Vector2i(8, 5)), "window is offered as a target")
 	var res := r.resolve(ShootIntent.new(li.id, -1, -1, Vector2i(8, 5)))
 	ck(res.ok and st.grid.cell(Vector2i(8, 5)).feature_id == "", "window shot out (%s)" % res.reason)
-	ck(res.fx.any(func(e): return e["fx"] == "shards"), "shards fly")
+	# 0.9.2: осколки летят сразу после бросков стекла — они в его событии броска.
+	var shards := false
+	for e: Dictionary in res.dice_events:
+		if e.get("kind", "") == "glass":
+			for x: Dictionary in e["fx"]:
+				shards = shards or x["fx"] == "shards"
+	ck(shards, "shards fly")
 	# Tank over glass.
 	f = field([[Vector2i(4, 5), "light_infantry", 0], [Vector2i(5, 4), "tank", 0], [Vector2i(25, 10), "light_infantry", 1]], [Vector2i(10, 5)])
 	st = f["s"]; r = f["r"]

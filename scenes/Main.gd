@@ -1344,6 +1344,14 @@ func _handle_click(coord: Vector2i) -> void:
 						_submit(ShootIntent.new(sid2, -1, -1, coord, comp)),
 						[], _selected_unit().coord)
 					return
+				# Окно — обычная очередь (0.9.2): сколько пуль, выбирает игрок.
+				var wsh := _selected_unit()
+				if MCF.is_glass(state.grid.cell(coord).feature_id) and wsh != null:
+					var avail: int = wsh.action_state.remaining_shots if _pending_shoot(wsh) else wsh.rate_of_fire()
+					if avail > 1:
+						_open_shot_picker(String(MCF.feature_name(state.grid.cell(coord).feature_id, "window")),
+								avail, func(n: int) -> Intent: return ShootIntent.new(selected_id, -1, n, coord))
+						return
 				_submit(ShootIntent.new(selected_id, -1, -1, coord))
 				return
 			if _is_own_active(occupant):
@@ -3733,6 +3741,13 @@ func _play_dice(events: Array) -> void:
 				continue
 			_dice.play(step["faces"], step["manual"], step["prompt"], step.get("speed", 1.0) * _pace())
 			await _dice.finished
+		# Стекло осыпается сразу после своих бросков (0.9.2) — до бросков по цели за ним.
+		if ev.get("kind", "") == "glass" and bool(ev.get("broke", false)):
+			_hold_visual.get("cells", {}).erase(ev["cell"])
+			_fx.apply(ev["fx"])
+			queue_redraw()
+			if _pace() < 8.0 and not _fast_playback:
+				await get_tree().create_timer(GLASS_BREAK_PAUSE / _pace()).timeout
 	await _await_walks()
 	_walk_cells.clear()
 	_walk_offset.clear()
@@ -3746,6 +3761,9 @@ func _play_dice(events: Array) -> void:
 		_playing_slot = -1
 		_refresh_status()
 	queue_redraw()
+
+## Пауза, чтобы осыпавшееся стекло было видно до бросков по цели за ним (секунды).
+const GLASS_BREAK_PAUSE := 0.35
 
 ## Дождаться всех идущих переходов — но не дольше, чем они могут длиться. Переход ведёт
 ## счётчик _walks_running; если он почему-то не вернулся к нулю (корутина оборвалась),
@@ -3862,16 +3880,35 @@ func _good_for_viewer(success: bool, roller: int) -> bool:
 func _dice_steps(ev: Dictionary) -> Array:
 	var steps: Array = []
 	match ev["kind"]:
+		"glass":
+			# Стекло на пути очереди (0.9.2): стрелок бросает попадание в стекло, стекло —
+			# спасбросок за каждую попавшую пулю; осыпается оно после этих бросков.
+			var g_own := int(ev.get("shooter_owner", -1))
+			var g_faces: Array = []
+			for h: Dictionary in ev["hits"]:
+				g_faces.append({"value": h["roll"], "good": _good_for_viewer(h["hit"], g_own),
+					"tag": "Glass %d+" % int(ev["need"])})
+			var g_manual := _owner_is_local_human(g_own)
+			var g_name := String(ev["name"]).to_lower()
+			steps.append({"faces": g_faces, "manual": g_manual, "roller": g_own,
+				"speed": FAST_ROLL_SPEED if int(ev["need"]) <= 1 else 1.0,
+				"prompt": ("Your shot — roll to hit the %s (need %d+)" if g_manual
+						else "To hit the %s (need %d+)") % [g_name, int(ev["need"])]})
+			if not (ev["saves"] as Array).is_empty():
+				var s_faces: Array = []
+				for sv: Dictionary in ev["saves"]:
+					s_faces.append({"value": sv["roll"], "good": _good_for_viewer(not sv["held"], g_own),
+						"tag": "Holds %d+" % int(ev["save"])})
+				steps.append({"faces": s_faces, "manual": false, "roller": MCF.Owner.NEUTRAL,
+					"prompt": "The %s holds on %d+" % [g_name, int(ev["save"])]})
 		"attack":
+			# Ни одна пуля не прошла стёкла — бросать по цели нечего.
+			if (ev["shots"] as Array).is_empty():
+				return steps
 			# Сначала ВСЕ броски попадания разом, затем ВСЕ броски пробитии разом (§3.5).
 			var hit_faces: Array = []
 			var pen_faces: Array = []
 			for det in ev["shots"]:
-				# Пуля, застрявшая в стекле, до броска на попадание не дошла (#29):
-				# её hit_roll — служебный 0, и рисовать его кубиком нельзя (item 2:
-				# «нельзя выкинуть 0»). Факт застревания уже виден в журнале.
-				if det.get("stopped_by_glass", false):
-					continue
 				var s_own := int(ev.get("shooter_owner", -1))
 				var d_own := int(ev.get("def_owner", -1))
 				hit_faces.append({"value": det["hit_roll"],
@@ -7563,20 +7600,25 @@ func _has_action_button(vb: VBoxContainer) -> bool:
 	return false
 
 func _open_picker(target: UnitInstance, available: int) -> void:
+	_open_shot_picker(target.stats.display_name, available,
+			func(n: int) -> Intent: return ShootIntent.new(selected_id, target.id, n))
+
+## Сколько пуль выпустить (по бойцу или по окну): make(n) строит намерение, n = −1 — все.
+func _open_shot_picker(what: String, available: int, make: Callable) -> void:
 	_menu.hide()
 	for c in _picker.get_children():
 		c.queue_free()
-	var vb := _scroll_menu(_picker, "Shots at %s" % target.stats.display_name)
+	var vb := _scroll_menu(_picker, "Shots at %s" % what)
 	var row := HBoxContainer.new()
 	vb.add_child(row)
 	for n in range(1, available + 1):
 		var b := Button.new()
 		b.text = str(n)
-		b.pressed.connect(_submit.bind(ShootIntent.new(selected_id, target.id, n)))
+		b.pressed.connect(func() -> void: _submit(make.call(n)))
 		row.add_child(b)
 	var all_btn := Button.new()
 	all_btn.text = "All (%d)" % available
-	all_btn.pressed.connect(_submit.bind(ShootIntent.new(selected_id, target.id, -1)))
+	all_btn.pressed.connect(func() -> void: _submit(make.call(-1)))
 	vb.add_child(all_btn)
 	_anchor_menu(_picker)
 	_picker.show()

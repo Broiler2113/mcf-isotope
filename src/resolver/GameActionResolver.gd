@@ -625,7 +625,7 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 		var window_reason := can_shoot_window(shooter, intent.target_cell)
 		if window_reason != "":
 			return ActionResult.fail(window_reason)
-		return _recoiled(_resolve_shoot_window(shooter, intent.target_cell), shooter, intent.target_cell)
+		return _recoiled(_resolve_shoot_window(shooter, intent.target_cell, intent.shots), shooter, intent.target_cell)
 
 	var target := state.get_unit(intent.target_id)
 	var reason := can_shoot(shooter, target)
@@ -709,67 +709,30 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 	var shot_details: Array = []
 	var hits := 0
 	var killed := false
-	var fired := 0
-	# Стёкла между стрелком и целью (#29). Каждая пуля пробивает КАЖДОЕ отдельным
-	# броском — оттого из очереди в четыре пули сквозь одно стекло проходят обычно две.
+	var fired := want
+	# Отчёт заводится ДО очереди: стёкла на линии пишут в него свои броски и осыпаются
+	# по ходу (0.9.2), а не после неё.
+	var result := ActionResult.new()
+	result.ok = true
+	# Стёкла между стрелком и целью (#29, 0.9.2): очередь проходит их по одному — попасть
+	# в стекло, стекло держит, разбилось, — и до цели долетает лишь то, что прошло все.
+	# Ноль стёкол — ни одного лишнего кубика: поток случайности прежних партий цел.
 	var glass_cells := _glass_cells_on_line(shooter.coord, target.coord)
-	var panes := glass_cells.size()
-	# Стекло, сквозь которое прошла хоть одна пуля, разбивается (item 4). Копим здесь,
-	# бьём после очереди — чтобы порядок бросков на пробитие не сбился на полпути.
-	var shattered: Dictionary = {}
-	var stopped_by_glass := 0
-	if panes > 0:
+	var arriving := want
+	if not glass_cells.is_empty():
 		hit_mods.append({"label": "Glass on the line", "delta": 0})
-	# Очередь отстреливается ЦЕЛИКОМ: ровно один кубик на каждую заказанную пулю (#96).
+		arriving = _through_glass(shooter, glass_cells, want, result)
+	# Очередь отстреливается ЦЕЛИКОМ: ровно один кубик на каждую долетевшую пулю (#96).
 	# Пули уходят разом, поэтому смерть цели на первой из них очередь НЕ обрывает.
 	# Раньше обрывала — а вместе с ней обнулялся и action_state, так что остаток
 	# оплаченной одним ОД очереди пропадал, и вместо четырёх бросков игрок видел один.
-	for _i in want:
-		fired += 1
-		# Стекло проверяется ДО броска на попадание: застрявшая в нём пуля до цели
-		# не долетает, и бросать за неё «попал/не попал» не за что.
-		var glass_rolls: Array = []
-		var pierced := true
-		for pane_i in panes:
-			var g_roll := state.dice.roll_d6()
-			glass_rolls.append(g_roll)
-			# У обычного стекла бросок решает, ПРОБИЛА ли его пуля (4+ — прошла).
-			# У бронированного тот же бросок читается наоборот: 4+ — стекло УСТОЯЛО и
-			# пуля в нём завязла. Порог совпал случайно, поэтому считаем их порознь:
-			# сравняй их в одну строку, и правка одного молча поменяет другое.
-			var gcell_i := state.grid.cell(glass_cells[pane_i])
-			# Стекло держит пулю как броня (MCF.glass_bullet_save): обычное на 5+, бронестекло
-			# на 4+; не устояло — пуля прошла, и стекло осыпалось.
-			var hold: int = MCF.glass_bullet_save(gcell_i.feature_id) if gcell_i != null \
-					else MCF.GLASS_BULLET_SAVE
-			var through: bool = g_roll < hold
-			if not through:
-				pierced = false
-				break
-			# Пуля прошла сквозь это стекло — значит оно пробито и осыплется (item 4).
-			shattered[glass_cells[pane_i]] = true
-		if not pierced:
-			stopped_by_glass += 1
-			shot_details.append({
-				"hit_roll": 0, "need": need, "hit": false,
-				"def_roll": 0, "armor": parry_need, "parried": true,
-				"glass_rolls": glass_rolls, "glass_need": MCF.GLASS_BULLET_SAVE,
-				"stopped_by_glass": true,
-			})
-			continue
+	for _i in arriving:
 		var hit_roll := state.dice.roll_d6()
 		var is_hit := hit_roll >= need
 		var det := {
 			"hit_roll": hit_roll, "need": need, "hit": is_hit,
 			"def_roll": 0, "armor": parry_need, "parried": true,
 		}
-		# Поля стекла кладутся ТОЛЬКО когда стекло на линии есть. Иначе они попали бы
-		# в каждый выстрел каждой партии — и в след регрессии, и в раскладку кубика в
-		# UI, — притом что рассказывать им было бы не о чем.
-		if panes > 0:
-			det["glass_rolls"] = glass_rolls
-			det["glass_need"] = MCF.GLASS_BULLET_SAVE
-			det["stopped_by_glass"] = false
 		if is_hit:
 			hits += 1
 			var def_roll := state.dice.roll_d6()  # цель парирует броском на защиту (§3.5)
@@ -782,21 +745,8 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 	shooter.action_state.remaining_shots -= fired
 	if killed or shooter.action_state.remaining_shots <= 0:
 		shooter.action_state = null
-	# Отчёт собирается ДО смерти: _kill складывает в него описание крови (#21.4), а
-	# сама смерть обязана случиться РАНЬШЕ невесомости — _apply_zero_g отбрасывает
-	# только живых, и переставь её местами, труп в космосе начал бы улетать.
-	var result := ActionResult.new()
-	result.ok = true
-	# Осыпаем пробитые стёкла (item 4): пуля прошла — рама больше не держит. Осколки
-	# летят прочь от стрелка. Снос — повод активации нейтралов вокруг клетки (§3.1a).
-	for gc: Vector2i in shattered:
-		var gcell := state.grid.cell(gc)
-		if gcell != null and MCF.is_glass(gcell.feature_id):
-			gcell.clear_feature()
-			notify_cell_changed(gc)
-			_fx(result, {"fx": "shards", "at": gc, "from": shooter.coord})
-			# После осыпания стекла клетка становится РАЗРУШЕННЫМ полом (item 7).
-			_fx(result, {"fx": "debris", "at": NOWHERE, "cells": [gc]})
+	# Смерть — РАНЬШЕ невесомости: _apply_zero_g отбрасывает только живых, и переставь
+	# их местами, труп в космосе начал бы улетать.
 	if killed and target.is_drone:
 		# Сбитый дрон падает и рвётся под собой (batch ui-drones): тот же взрыв, что и
 		# подрыв оператором, — по клетке, над которой он висел.
@@ -841,10 +791,9 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 	var summary := "%s → %s: %d shots, %d hits (need %d+)" % [
 		shooter.stats.display_name, target.stats.display_name, fired, hits, need
 	]
+	if arriving < fired:
+		summary += " — %d of %d got through the glass" % [arriving, fired]
 	result.log(summary)
-	if stopped_by_glass > 0:
-		result.log("… %d of %d stopped by the glass (it holds on %d+)" % [
-			stopped_by_glass, fired, MCF.GLASS_BULLET_SAVE])
 	if killed:
 		result.log("%s killed!" % target.stats.display_name)
 		result.deaths.append(target.id)
@@ -1866,9 +1815,9 @@ func aim_need(shooter: UnitInstance, cell: Vector2i, target: UnitInstance = null
 		MCF.ABILITY_ASSAULT:
 			return Combat.hit_number(Combat.distance(shooter.coord, cell), shooter.fire_range())
 	if target == null:
-		# Окно: у стрелка броска нет — каждую пулю держит спасбросок стекла (glass_bullet_save).
+		# Окно: попасть в стекло (0.9.2) — по дальности, как в цель, без укрытия.
 		if state.grid.in_bounds(cell) and MCF.is_glass(state.grid.cell(cell).feature_id):
-			return 0
+			return pane_hit_need(shooter, cell)
 		return Combat.hit_number(Combat.distance(shooter.coord, cell), shooter.fire_range())
 	return hit_need_for(shooter, target)
 
@@ -6431,7 +6380,8 @@ func _glass_cells_on_line(from_coord: Vector2i, to_coord: Vector2i) -> Array[Vec
 	var x := from_coord.x + sx
 	var y := from_coord.y + sy
 	while x != to_coord.x or y != to_coord.y:
-		if grid.cell_fast(x, y).feature_id == MCF.FEATURE_GLASS:
+		# И обычное, и бронестекло: раньше бронестекло на линии пуля не замечала вовсе.
+		if MCF.is_glass(grid.cell_fast(x, y).feature_id):
 			out.append(Vector2i(x, y))
 		x += sx
 		y += sy
@@ -6771,7 +6721,8 @@ func can_shoot_window(shooter: UnitInstance, cell: Vector2i) -> String:
 		return "Firing line is blocked"
 	if Combat.hit_number(Combat.distance(shooter.coord, cell), shooter.fire_range()) >= 7:
 		return "Too far"
-	if shooter.remaining_ap <= 0:
+	var pending := shooter.action_state != null and shooter.action_state.is_pending()
+	if shooter.remaining_ap <= 0 and not pending:
 		return "Unit has no AP left"
 	return ""
 
@@ -6787,41 +6738,97 @@ func shootable_window_cells(shooter: UnitInstance) -> Array:
 				out.append(c)
 	return out
 
-## Выстрел по окну: 1 ОД, очередь целиком. Обычное стекло бьётся сразу; бронестекло
-## держит каждую пулю на 4+ (как и пробивая его по пути к цели, §29).
-func _resolve_shoot_window(shooter: UnitInstance, cell: Vector2i) -> ActionResult:
-	shooter.remaining_ap -= 1
-	shooter.action_state = null
+## Выстрел по окну (0.9.2): обычная очередь — игрок сам выбирает, сколько пуль (остаток
+## оплаченной очереди можно дострелить потом, как по бойцу), и обычный порядок: попасть в
+## окно, окно держит каждую попавшую пулю спасброском, прошла хоть одна — окно осыпается.
+## Стёкла перед окном пули проходят тем же порядком (_through_glass).
+func _resolve_shoot_window(shooter: UnitInstance, cell: Vector2i, shots: int = -1) -> ActionResult:
+	var pending := shooter.action_state != null and shooter.action_state.is_pending()
+	if not pending:
+		shooter.remaining_ap -= 1
+		shooter.action_state = ActionState.new()
+		shooter.action_state.remaining_shots = maxi(1, shooter.rate_of_fire())
+	shooter.action_state.target_id = ActionState.WINDOW
+	var available: int = shooter.action_state.remaining_shots
+	var want: int = available if shots < 0 else clampi(shots, 1, available)
 	var result := ActionResult.success()
 	var gc := state.grid.cell(cell)
-	var fired := maxi(1, shooter.rate_of_fire())
-	# Окно держит каждую пулю спасброском (обычное 5+, бронестекло 4+), а не бьётся от
-	# первой же — как раньше обычное стекло.
-	var hold_need := MCF.glass_bullet_save(gc.feature_id)
-	var broke := false
-	for _i in fired:
-		if broke:
-			break
-		var r := state.dice.roll_d6()
-		result.dice_events.append({"kind": "check",
-			"actor": MCF.feature_name(gc.feature_id, "Glass"),
-			"roll": r, "need": hold_need, "ok": r >= hold_need})
-		broke = r < hold_need
+	var what := String(MCF.feature_name(gc.feature_id, "glass")).to_lower()
+	var panes := _glass_cells_on_line(shooter.coord, cell)
+	panes.append(cell)
+	result.log("%s fires %d at the %s at (%d, %d)" % [shooter.stats.display_name, want, what, cell.x, cell.y])
+	_through_glass(shooter, panes, want, result)
+	shooter.action_state.remaining_shots -= want
+	if shooter.action_state.remaining_shots <= 0:
+		shooter.action_state = null
 	_fx_lane(result, shooter.coord, cell, shooter.owner)
-	_fx(result, {"fx": "casings", "at": shooter.coord, "toward": cell, "count": fired})
+	_fx(result, {"fx": "casings", "at": shooter.coord, "toward": cell, "count": want})
 	_fx(result, {"fx": "tracer", "at": shooter.coord, "from": [shooter.coord.x, shooter.coord.y],
-		"to": [cell.x, cell.y], "count": fired})
-	if broke:
-		gc.clear_feature()
-		notify_cell_changed(cell)
-		_fx(result, {"fx": "shards", "at": cell, "from": shooter.coord})
-		_fx(result, {"fx": "debris", "at": NOWHERE, "cells": [cell]})
-		result.log("%s shoots out the window at (%d, %d)" % [shooter.stats.display_name, cell.x, cell.y])
-	else:
-		result.log("%s fires at the %s at (%d, %d) — it holds" % [
-			shooter.stats.display_name,
-			String(MCF.feature_name(gc.feature_id, "glass")).to_lower(), cell.x, cell.y])
+		"to": [cell.x, cell.y], "count": want})
+	if MCF.is_glass(gc.feature_id):
+		result.log("… the %s holds" % what)
+	if shooter.action_state != null:
+		result.log("… shots remaining in burst: %d" % shooter.action_state.remaining_shots)
 	return result
+
+## Сколько выбросить, чтобы пуля этого стрелка попала в стекло в клетке cell: по дальности
+## до стекла, как в цель, но без укрытия (у стекла его нет); огонь на линии мешает так же.
+func pane_hit_need(shooter: UnitInstance, cell: Vector2i) -> int:
+	var dist := Combat.distance(shooter.coord, cell)
+	var is_sniper := shooter.stats.special_ability_id == MCF.ABILITY_SNIPER
+	var need := Combat.sniper_hit_number(dist) if is_sniper \
+			else Combat.hit_number(dist, shooter.fire_range())
+	if not is_sniper and _fire_between(shooter.coord, cell):
+		need += MCF.FIRE_SHOOT_PENALTY
+	return clampi(need, 1, 7)
+
+## Очередь сквозь стёкла (0.9.2, правило игрока). Стёкла — по порядку от стрелка; у
+## каждого: 1) летящие пули бросают попадание в стекло (pane_hit_need) — промах ушёл в
+## раму и стену и дальше не летит; 2) стекло держит каждую попавшую пулю спасброском
+## (обычное 5+, бронестекло 4+); 3) хоть одна пуля прошла — стекло осыпается (осколки —
+## в событии броска, их показывают сразу после него); 4) прошедшие летят дальше — к
+## следующему стеклу или к цели. Возвращает, сколько пуль вышло из последнего стекла.
+## Пули очереди летят разом, поэтому все они встречают стекло целым.
+func _through_glass(shooter: UnitInstance, panes: Array[Vector2i], bullets: int, res: ActionResult) -> int:
+	for pc: Vector2i in panes:
+		if bullets <= 0:
+			break
+		var gcell := state.grid.cell(pc)
+		if gcell == null or not MCF.is_glass(gcell.feature_id):
+			continue
+		var need := pane_hit_need(shooter, pc)
+		var save := MCF.glass_bullet_save(gcell.feature_id)
+		var hits: Array = []
+		var landed := 0
+		for _i in bullets:
+			var r := state.dice.roll_d6()
+			hits.append({"roll": r, "hit": r >= need})
+			if r >= need:
+				landed += 1
+		var saves: Array = []
+		var through := 0
+		for _i in landed:
+			var r := state.dice.roll_d6()
+			saves.append({"roll": r, "held": r >= save})
+			if r < save:
+				through += 1
+		var name := String(MCF.feature_name(gcell.feature_id, "Glass"))
+		var ev := {"kind": "glass", "name": name, "cell": pc, "need": need, "save": save,
+			"hits": hits, "saves": saves, "broke": through > 0, "fx": [],
+			"shooter_owner": shooter.owner}
+		res.dice_events.append(ev)
+		res.log("… %s at (%d, %d): %d of %d hit it (need %d+), %d got through (it holds on %d+)" % [
+			name, pc.x, pc.y, landed, bullets, need, through, save])
+		if through > 0:
+			# Стекло видно целым, пока крутятся его кубики, — осыпается после них.
+			_capture_visual_hold(res, [pc])
+			gcell.clear_feature()
+			notify_cell_changed(pc)
+			ev["fx"] = [{"fx": "shards", "at": pc, "from": shooter.coord},
+					{"fx": "debris", "at": NOWHERE, "cells": [pc]}]
+			res.log("… the %s shatters" % name.to_lower())
+		bullets = through
+	return bullets
 
 func _is_anti_tank(u: UnitInstance) -> bool:
 	return u != null and u.stats.special_ability_id == MCF.ABILITY_ANTI_TANK
