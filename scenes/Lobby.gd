@@ -706,7 +706,9 @@ func _build_map(parent: VBoxContainer) -> void:
 		_build_generator(box)
 
 	_map_preview = TextureRect.new()
-	_map_preview.custom_minimum_size = Vector2(360, 260)
+	# Превью растёт вместе с окном (EXPAND_FILL); нижняя граница скромнее, иначе на 150 %
+	# окно лобби выходило на 13 точек за экран (0.9.2, проверка «всё влезает»).
+	_map_preview.custom_minimum_size = Vector2(300, 240)
 	_map_preview.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_map_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_map_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED

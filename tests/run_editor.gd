@@ -472,8 +472,12 @@ func _furniture() -> void:
 	_fresh("town")
 	ck(ed._brush_buttons.has("bed") and ed._brush_buttons.has("storage_shelf"),
 			"the palette has furniture buttons")
-	ck(String((ed._brush_buttons["wardrobe"] as Button).text) == "Wardrobe 1.5",
-			"a furniture button shows name and height (%s)" % (ed._brush_buttons["wardrobe"] as Button).text)
+	# 0.9.2: высота — подзаголовком раздела, кнопка — просто имя.
+	var wb: Button = ed._brush_buttons["wardrobe"]
+	var grid := wb.get_parent()
+	var head: Node = grid.get_parent().get_child(grid.get_index() - 1)
+	ck(wb.text == "Wardrobe" and head is Label and (head as Label).text.contains("1.5"),
+			"furniture sits under its height heading (%s / %s)" % [wb.text, (head as Label).text if head is Label else "?"])
 	ck(String((ed._brush_buttons["wardrobe"] as Button).tooltip_text).contains("durability 3"),
 			"and its tooltip the rest")
 	ed._select_brush("bed")

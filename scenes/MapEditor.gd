@@ -1752,7 +1752,8 @@ func _build_toolbar() -> void:
 	var p := _strip(0, 0, 0, 1, Rect2(0, MENU_H, TOOLBAR_W, -STATUS_H))
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 4)
-	p.add_child(col)
+	col.alignment = BoxContainer.ALIGNMENT_BEGIN
+	p.add_child(SteamChrome.pad(col, 7, 6))
 	for t: Dictionary in TOOLS:
 		var b := Button.new()
 		b.icon = _tool_icon(t["tool"])
@@ -1771,7 +1772,9 @@ func _build_palette() -> void:
 	var p := _strip(1, 0, 1, 1, Rect2(-PALETTE_W, MENU_H, 0, -STATUS_H))
 	var outer := VBoxContainer.new()
 	outer.add_theme_constant_override("separation", 6)
-	p.add_child(outer)
+	# Поля внутри панели (0.9.2): у панели набора своих полей нет, и значок текущей кисти
+	# прилипал к рамке, а на крупной мебели (мусорный бак) вылезал за неё.
+	p.add_child(SteamChrome.pad(outer, 6, 6))
 	# Текущая кисть — крупно, сверху: что сейчас ляжет на карту.
 	var cur := HBoxContainer.new()
 	cur.add_theme_constant_override("separation", 8)
@@ -1812,14 +1815,22 @@ func _refresh_palette() -> void:
 	_palette_group("Terrain", TERRAIN)
 	_palette_group("Walls & doors", WALLS)
 	_palette_group("Objects", OBJECTS)
-	# Мебель (§3.15) — по разделам; на кнопке имя и высота, в подсказке всё остальное.
+	# Мебель (§3.15) — по разделам, а в разделе по высоте (0.9.2): высота решает, укрытие
+	# это или стена, и подписью «Стол 1.0» на каждой кнопке её искать было неудобно.
 	for cat: String in Furniture.CATEGORIES:
-		var items: Array = []
+		var by_h := {}
 		for fid: String in Furniture.ids():
 			if Furniture.DEFS[fid]["cat"] == cat and Furniture.base_of(fid) == fid:
-				items.append([fid, "%s %.1f" % [Furniture.name_of(fid), Furniture.height_of(fid)],
-						_furniture_hint(fid)])
-		_palette_group("Furniture: %s" % Furniture.CATEGORY_NAMES[cat], items)
+				var hh := Furniture.height_of(fid)
+				if not by_h.has(hh):
+					by_h[hh] = []
+				by_h[hh].append([fid, Furniture.name_of(fid), _furniture_hint(fid)])
+		var heights := by_h.keys()
+		heights.sort()
+		var sections: Array = []
+		for hh: float in heights:
+			sections.append([HEIGHT_NAMES.get(hh, "%.1f m" % hh), by_h[hh]])
+		_palette_group("Furniture: %s" % Furniture.CATEGORY_NAMES[cat], [], 2, sections)
 	var units: Array = []
 	for id: String in NEUTRAL_UNIT_IDS:
 		units.append(["unit:" + id, id.capitalize()])
@@ -1848,14 +1859,32 @@ func _tight(b: Button) -> void:
 	for st: String in _tight_styles:
 		b.add_theme_stylebox_override(st, _tight_styles[st])
 
-func _palette_group(title: String, items: Array, columns: int = 2) -> void:
+## Подзаголовки высот мебели в палитре.
+const HEIGHT_NAMES := {0.5: "Low — 0.5 m", 1.0: "Waist — 1 m", 1.5: "Chest — 1.5 m",
+		2.0: "Tall — 2 m, blocks sight"}
+
+## Группа палитры: items — кнопки одной сеткой; sections — [[подзаголовок, items], …]
+## (мебель по высоте), каждая своей сеткой под своей подписью.
+func _palette_group(title: String, items: Array, columns: int = 2, sections: Array = []) -> void:
 	var box := SteamChrome.group_box(title)
 	_palette_box.add_child(box)
+	if sections.is_empty():
+		sections = [["", items]]
+	for sec: Array in sections:
+		if String(sec[0]) != "":
+			var sub := Label.new()
+			sub.text = sec[0]
+			sub.add_theme_font_size_override("font_size", 11)
+			sub.add_theme_color_override("font_color", Ui.text_accent_color())
+			box.body.add_child(sub)
+		_palette_grid(box.body, sec[1], columns)
+
+func _palette_grid(parent: Control, items: Array, columns: int) -> void:
 	var grid := GridContainer.new()
 	grid.columns = columns
 	grid.add_theme_constant_override("h_separation", 4)
 	grid.add_theme_constant_override("v_separation", 4)
-	box.body.add_child(grid)
+	parent.add_child(grid)
 	for it: Array in items:
 		var id: String = it[0]
 		var b := Button.new()
@@ -1868,7 +1897,7 @@ func _palette_group(title: String, items: Array, columns: int = 2) -> void:
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		# Длинное имя («Examination Table 1.0») — в две строки, а не обрезком.
 		b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		b.add_theme_font_size_override("font_size", 11)
+		b.add_theme_font_size_override("font_size", 12)
 		b.add_theme_constant_override("icon_max_width", 22)
 		b.custom_minimum_size = Vector2(100, 30)
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1936,7 +1965,7 @@ func _zone_group() -> void:
 func _build_status_bar() -> void:
 	var p := _strip(0, 1, 1, 1, Rect2(0, -STATUS_H, 0, 0))
 	var row := HBoxContainer.new()
-	p.add_child(row)
+	p.add_child(SteamChrome.pad(row, 8, 0))
 	_status_label = Label.new()
 	_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_status_label.clip_text = true
