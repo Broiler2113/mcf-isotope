@@ -326,12 +326,17 @@ func _components(r: Rect2i) -> Array:
 			out.append(cells)
 	return out
 
+## Пол помещения — всё, по чему внутри ходят: голый пол, но и мешки, окоп, ящики ниже
+## стены, что поставило убранство. Мебель встаёт только на голый пол (_base_ok), но
+## проход обязан сохраниться и к мешкам: их тоже нельзя замуровать.
 func _room_floor(c: Vector2i, r: Rect2i) -> bool:
 	if not r.has_point(c) or not g._in(c):
 		return false
 	var i := c.y * w + c.x
-	return g._indoor[i] != 0 and m.is_space[i] == 0 and m.feature_id[i] == "" \
-			and m.cover_height[i] <= 0.0
+	var f: String = m.feature_id[i]
+	return g._indoor[i] != 0 and m.is_space[i] == 0 and m.cover_height[i] < MCF.WALL_HEIGHT \
+			and f != MCF.FEATURE_HEDGEHOG and f != MCF.FEATURE_DRONE_STATION \
+			and f != MCF.FEATURE_AIRLOCK and not Furniture.is_furniture(f)
 
 func _furnish_room(cells: Array[Vector2i], main: bool, count: int, r: Rect2i) -> void:
 	_room = {}
@@ -339,18 +344,17 @@ func _furnish_room(cells: Array[Vector2i], main: bool, count: int, r: Rect2i) ->
 		_room[c] = true
 	_rect = r
 	_area = cells.size()
-	# Входы: клетки помещения, от которых шаг ведёт в дверь, шлюз или на пол снаружи
-	# (у руин дверей нет — только проломы). Сюда мебель не встаёт никогда.
+	# Входы: клетки помещения, от которых шаг ведёт наружу (у руин дверей нет — только
+	# проломы). Сюда мебель не встаёт никогда.
 	_entries = {}
 	for c in cells:
 		for d: Vector2i in N4:
 			var q: Vector2i = c + d
 			if _room.has(q) or not g._in(q):
 				continue
-			var qi := q.y * w + q.x
-			if g._door[qi] != 0 or m.feature_id[qi] == MCF.FEATURE_AIRLOCK \
-					or (m.cover_height[qi] < MCF.WALL_HEIGHT and m.is_space[qi] == 0
-						and m.feature_id[qi] == ""):
+			# Вход — шаг наружу на что угодно проходимое: дверь, шлюз, пол, пролом в космос
+			# (дом, обрезанный вакуумом, бывает доступен только через него).
+			if g._door[q.y * w + q.x] != 0 or _walk_free(q):
 				_entries[c] = true
 	_cand_all = []
 	for c in cells:
@@ -566,7 +570,7 @@ func _base_ok(c: Vector2i) -> bool:
 	if not _room.has(c) or _entries.has(c):
 		return false
 	var i := c.y * w + c.x
-	return m.feature_id[i] == "" and _no_go[i] == 0
+	return m.feature_id[i] == "" and m.cover_height[i] <= 0.0 and _no_go[i] == 0
 
 func _ok(fid: String, c: Vector2i) -> bool:
 	if not _base_ok(c):
@@ -643,11 +647,37 @@ func _reconnects(c: Vector2i) -> bool:
 			queue.append(q)
 	return false
 
+## То же кольцо, но по всей карте, а не по помещению: снаружи (сквер, улица, коридор,
+## поле) и при сдвиге износом. Проходима любая клетка ниже стены, кроме мебели, ежа и
+## станции; шлюз — проход. Здесь кольцо — единственная проверка: не прошло — не ставим.
+func _ring_ok_map(c: Vector2i) -> bool:
+	var f := 0
+	var l := 0
+	var prev := _walk_free(c + RING[6])
+	for k in range(0, 8, 2):
+		var side := _walk_free(c + RING[k])
+		if side:
+			f += 1
+			if prev and _walk_free(c + RING[(k + 7) % 8]):
+				l += 1
+		prev = side
+	return f <= 1 or (f < 4 and l >= f - 1) or l >= 3
+
+func _walk_free(c: Vector2i) -> bool:
+	if not g._in(c):
+		return false
+	var i := c.y * w + c.x
+	var fid: String = m.feature_id[i]
+	if fid == MCF.FEATURE_AIRLOCK:
+		return true
+	return m.cover_height[i] < MCF.WALL_HEIGHT and fid != MCF.FEATURE_HEDGEHOG \
+			and fid != MCF.FEATURE_DRONE_STATION and not Furniture.is_furniture(fid)
+
 func _free(c: Vector2i) -> bool:
 	if not _room.has(c):
 		return false
 	var i := c.y * w + c.x
-	return m.feature_id[i] == "" and m.cover_height[i] < MCF.WALL_HEIGHT
+	return not Furniture.is_furniture(m.feature_id[i]) and m.cover_height[i] < MCF.WALL_HEIGHT
 
 ## Сторона, с которой у клетки стена (первая по часовой с севера); ZERO — стены рядом нет.
 func _wall_dir(c: Vector2i) -> Vector2i:
@@ -750,6 +780,8 @@ func _outdoor_put(c: Vector2i, fid: String, need_wall: bool) -> void:
 				break
 		if wd == Vector2i.ZERO or not g._clear(c - wd) or not g._clear(c - wd * 2):
 			return
+	if not _ring_ok_map(c):
+		return
 	g._put(c, fid)
 	placed.append(c)
 
@@ -770,7 +802,10 @@ func _wear() -> void:
 			continue
 		var roll := rng.randf()
 		if roll < 0.3 or (roll < 0.5 and Furniture.durability_of(fid) <= 1):
-			g._ground(c, m.get_floor(c))        # пропал или разбит в щепки
+			# Пропал или разбит в щепки — но не в закутке, из которого освободившуюся
+			# клетку уже не достать: такой предмет просто остаётся.
+			if _touches_open(c):
+				g._ground(c, m.get_floor(c))
 		elif roll < 0.75 and Furniture.durability_of(fid) >= 2:
 			m.set_feature_damage(c, rng.randi_range(1, Furniture.durability_of(fid) - 1))
 		elif Furniture.mobility_of(fid) != Furniture.Mobility.FIXED:
@@ -780,21 +815,27 @@ func _displace(c: Vector2i, fid: String) -> void:
 	var floor_t := m.get_floor(c)
 	for d: Vector2i in _shuffled(N4):
 		var q: Vector2i = c + d
-		if not g._clear(q) or g._near_door(q) or g._zone[q.y * w + q.x] >= 0 \
-				or g._keep[q.y * w + q.x] != 0 or g._in_f(q) != g._in_f(c):
+		if not g._clear(q) or _no_go[q.y * w + q.x] != 0 or g._indoor[q.y * w + q.x] != g._indoor[c.y * w + c.x] \
+				or g._in_f(q) != g._in_f(c):
 			continue
-		# Сдвиг не должен перекрыть проход: клетка-цель проверяется тем же кольцом.
-		_room = {}
-		for p: Vector2i in RING:
-			_room[q + p] = true
-		_room[q] = true
-		_room[c] = true
+		# Сдвиг не должен перекрыть проход: клетка-цель проверяется кольцом по карте —
+		# уже без самого предмета на старом месте.
 		g._ground(c, floor_t)
-		if _ring_one_arc(q):
+		if _ring_ok_map(q):
 			g._put(q, fid)
-			return
+			if _touches_open(c):
+				placed[placed.find(c)] = q
+				return
+			g._ground(q, m.get_floor(q))   # старое место осталось бы замурованным
 		g._put(c, fid)
 		return
+
+## Есть ли у клетки свободный проходимый сосед — освободившись, она не станет закутком.
+func _touches_open(c: Vector2i) -> bool:
+	for d: Vector2i in N4:
+		if _walk_free(c + d):
+			return true
+	return false
 
 ## Зеркало побитой мебели: MapGen._mirror() копирует клетки, но не прочность.
 func _mirror_damage() -> void:

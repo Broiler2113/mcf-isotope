@@ -39,6 +39,7 @@ func _run() -> void:
 	_picker_units_zones()
 	_resize_clear()
 	_files_and_generator()
+	_furniture()
 	_session()
 	DirAccess.remove_absolute(ProjectSettings.globalize_path("%s/%s.json" % [MapData.MAPS_DIR, SAVE_NAME]))
 	ed.queue_free()
@@ -325,3 +326,29 @@ func _session() -> void:
 			"back from Play This Map: the same map, name, view and unsaved mark")
 	ck(MapHandoff.editor_session.is_empty(), "the session is used once")
 	again.free()
+
+## Мебель (§3.15) в палитре: кнопки с именем и высотой, мазок ставит предмет с его высотой,
+## пипетка его узнаёт, карта с ним сохраняется и открывается.
+func _furniture() -> void:
+	_fresh("town")
+	ck(ed._brush_buttons.has("bed") and ed._brush_buttons.has("storage_shelf"),
+			"the palette has furniture buttons")
+	ck(String((ed._brush_buttons["wardrobe"] as Button).text) == "Wardrobe 1.5",
+			"a furniture button shows name and height (%s)" % (ed._brush_buttons["wardrobe"] as Button).text)
+	ck(String((ed._brush_buttons["wardrobe"] as Button).tooltip_text).contains("durability 3"),
+			"and its tooltip the rest")
+	ed._select_brush("bed")
+	ed.brush_size = 1
+	_drag(Vector2i(6, 6), Vector2i(6, 6))
+	ck(_feat(Vector2i(6, 6)) == "bed" and ed.map.get_cover(Vector2i(6, 6)) == 0.5, "painting places a bed at 0.5 m")
+	ck(ed._brush_name("bed") == "Bed — 0.5 m", "the brush label names it with its height")
+	ed._select_brush("floor")
+	ed.pick_at(Vector2i(6, 6))
+	ck(ed.brush == "bed", "the eyedropper picks furniture up as a brush")
+	var back := MapData.from_dict(JSON.parse_string(JSON.stringify(ed.map.to_dict())))
+	ck(back.get_feature(Vector2i(6, 6)) == "bed" and back.get_cover(Vector2i(6, 6)) == 0.5,
+			"a map with furniture saves and loads")
+	_key(KEY_E)
+	_drag(Vector2i(6, 6), Vector2i(6, 6))
+	ck(_feat(Vector2i(6, 6)) == "", "the eraser removes it")
+	_key(KEY_B)
