@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://ctxea0t7ywa67"
-path="res://.godot/imported/airlock_open_town.png-fc55d4b20846bdbcad67b0c23346fb91.ctex"
+uid="uid://svml1j2wt3l6"
+path="res://.godot/imported/door_open_asteroid.png-415d11dccce34f6f61db84eb9accd352.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://textures/airlock_open_town.png"
-dest_files=["res://.godot/imported/airlock_open_town.png-fc55d4b20846bdbcad67b0c23346fb91.ctex"]
+source_file="res://textures/door_open_asteroid.png"
+dest_files=["res://.godot/imported/door_open_asteroid.png-415d11dccce34f6f61db84eb9accd352.ctex"]
 
 [params]
 

@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://boor4kt6mafd3"
-path="res://.godot/imported/airlock_autotile.png-f479877d06e245214ab1c6bddee6d75c.ctex"
+uid="uid://dwlt82rwa83ah"
+path="res://.godot/imported/door.png-6bba13150eb8ba972a9fef3861be8872.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://textures/airlock_autotile.png"
-dest_files=["res://.godot/imported/airlock_autotile.png-f479877d06e245214ab1c6bddee6d75c.ctex"]
+source_file="res://textures/door.png"
+dest_files=["res://.godot/imported/door.png-6bba13150eb8ba972a9fef3861be8872.ctex"]
 
 [params]
 

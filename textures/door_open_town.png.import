@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://b7vvx7ajegsbf"
-path="res://.godot/imported/airlock.png-b8c9667b40789f741d4d05e3031d59ea.ctex"
+uid="uid://cnxu02ahtr8b8"
+path="res://.godot/imported/door_open_town.png-1cc90289f6d930af14c9f5d4a191d468.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://textures/airlock.png"
-dest_files=["res://.godot/imported/airlock.png-b8c9667b40789f741d4d05e3031d59ea.ctex"]
+source_file="res://textures/door_open_town.png"
+dest_files=["res://.godot/imported/door_open_town.png-1cc90289f6d930af14c9f5d4a191d468.ctex"]
 
 [params]
 

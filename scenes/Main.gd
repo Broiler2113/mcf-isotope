@@ -5191,7 +5191,7 @@ func _draw() -> void:
 					var as_wall := wcell.is_wall()
 					if wcell.feature_id == MCF.FEATURE_AIRLOCK and not as_wall:
 						_tiles.draw_feature_tile(self, MCF.FEATURE_AIRLOCK, wc,
-								Rect2(_cell_origin(wc), fcell_size))
+								Rect2(_cell_origin(wc), fcell_size), true)
 						as_wall = true
 					if as_wall:
 						draw_rect(Rect2(_cell_origin(wc), fcell_size), UNSEEN_WALL_COL)

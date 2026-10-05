@@ -315,6 +315,15 @@ func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> voi
 	if fid == "" or fid == MCF.FEATURE_MINE or fid == MCF.FEATURE_AV_MINE \
 			or fid == MCF.FEATURE_DRONE_STATION or skip_features.has(fid):
 		return
+	# Дверь и шлюз (0.9.2) — «спереди»: плитка стены окружения по маске соседей, поверх —
+	# дверь в раме, закрытая или распахнутая. Стоит так в стене любого направления.
+	if fid == MCF.FEATURE_AIRLOCK:
+		var dimg := _door_image(_grid, c, cell, res)
+		if dimg != null:
+			feat.blend_rect(dimg, full, at)
+		if cell.airlock_welded:
+			feat.blend_rect(_weld_overlay(res), full, at)
+		return
 	var name := tile_name(cell)
 	if Furniture.is_furniture(fid):
 		var fimg := _furniture_image(c, fid, res)
@@ -371,6 +380,27 @@ func _fill_notches(feat: Image, c: Vector2i, fid: String, mask: int, at: Vector2
 		var bottom := l == 1 or l == 2
 		feat.blit_rect(patch, Rect2i(Vector2i.ZERO, Vector2i(p, p)),
 				at + Vector2i(res - p if right else 0, res - p if bottom else 0))
+
+## Клетка двери целиком: стена окружения (лист «wall» по маске семейства) и дверь спереди
+## поверх неё. Кэш — по маске, состоянию, варианту и разрешению.
+func _door_image(grid: Grid, c: Vector2i, cell: GridCell, res: int, closed := false) -> Image:
+	var mask := mask_at(grid, c, MCF.FEATURE_AIRLOCK)
+	var open := cell.cover_height < MCF.WALL_HEIGHT and not closed
+	var v := variant_of(c + origin, 3)
+	var walls := _sheet("wall", res)
+	var wv := variant_of(c + origin, walls.size()) if not walls.is_empty() else 0
+	var key := "door@%d@%d@%s@%d@%d" % [res, mask, open, v, wv]
+	if _tiles.has(key):
+		var hit: Array = _tiles[key]
+		return hit[0] if not hit.is_empty() else null
+	var img := Image.create(res, res, false, Image.FORMAT_RGBA8)
+	if not walls.is_empty():
+		img.blit_rect(walls[wv], Rect2i((mask % 4) * res, (mask / 4) * res, res, res), Vector2i.ZERO)
+	var doors := _tile("door_open" if open else "door", res)
+	if not doors.is_empty():
+		img.blend_rect(doors[v % doors.size()], Rect2i(0, 0, res, res), Vector2i.ZERO)
+	_tiles[key] = [img]
+	return img
 
 ## Заваренный шлюз: поверх створок — крест из стальных полос с оранжевыми швами по
 ## концам и посередине. Рисуется кодом, в res×res, один раз на разрешение.
@@ -906,10 +936,7 @@ func _floor_name(cell: GridCell, c: Vector2i) -> String:
 ## Имя картинки объекта: id с учётом подмен (ЛДФ, ДПМГ) и состояния шлюза — открытый
 ## шлюз (высота ниже стены) рисуется разъехавшимися створками.
 static func tile_name(cell: GridCell) -> String:
-	var fid := cell.feature_id
-	if fid == MCF.FEATURE_AIRLOCK and cell.cover_height < MCF.WALL_HEIGHT:
-		return "airlock_open"
-	return Sprites.ALIASES.get(fid, fid)
+	return Sprites.ALIASES.get(cell.feature_id, cell.feature_id)
 
 ## Маска автотайла: соседи по четырём сторонам из того же семейства (Sprites.AUTOTILE_*).
 static func mask_at(grid: Grid, c: Vector2i, fid: String) -> int:
@@ -927,7 +954,13 @@ static func mask_at(grid: Grid, c: Vector2i, fid: String) -> int:
 	return mask
 
 ## Плитка объекта для отдельной отрисовки поверх куска (снимок «до взрыва» на время броска).
-func draw_feature_tile(ci: CanvasItem, fid: String, c: Vector2i, rect: Rect2) -> void:
+## closed — дверь нарисовать закрытой, как бы ни стояла (под туманом её помнят закрытой).
+func draw_feature_tile(ci: CanvasItem, fid: String, c: Vector2i, rect: Rect2, closed := false) -> void:
+	if fid == MCF.FEATURE_AIRLOCK and _grid.in_bounds(c):
+		var dimg := _door_image(_grid, c, _grid.cell_fast(c.x, c.y), TerrainTiles.T, closed)
+		if dimg != null:
+			ci.draw_texture_rect(_furniture_tex(dimg), rect, false)
+		return
 	if Furniture.is_furniture(fid):
 		var img := _furniture_image(c, fid, TerrainTiles.T)
 		if img != null:

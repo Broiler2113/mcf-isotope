@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://vg56my1fmsge"
-path="res://.godot/imported/airlock_field.png-861f079905cfd24543898c83c3eb3083.ctex"
+uid="uid://djra6wt53xwpu"
+path="res://.godot/imported/door_open_bunker.png-951b6707477142b8f64cad2c123427a7.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://textures/airlock_field.png"
-dest_files=["res://.godot/imported/airlock_field.png-861f079905cfd24543898c83c3eb3083.ctex"]
+source_file="res://textures/door_open_bunker.png"
+dest_files=["res://.godot/imported/door_open_bunker.png-951b6707477142b8f64cad2c123427a7.ctex"]
 
 [params]
 

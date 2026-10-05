@@ -32,7 +32,16 @@ Yours wins. Changes are picked up when a battle or the map editor opens.
   wall_field.png
   wall_asteroid.png
   bedrock.png
-  airlock_open.png
+  door_station.png
+  door_open_station.png
+  door_bunker.png
+  door_open_bunker.png
+  door_town.png
+  door_open_town.png
+  door_field.png
+  door_open_field.png
+  door_asteroid.png
+  door_open_asteroid.png
 
 -- Combat decoration (cosmetic only, never affects the rules) --
   glass_shard.png
@@ -50,7 +59,8 @@ Yours wins. Changes are picked up when a battle or the map editor opens.
   glass.png
   ldf.png
   corpse_wall.png
-  airlock.png
+  door.png
+  door_open.png
   dpmg.png
   dot.png
   wood_wall.png

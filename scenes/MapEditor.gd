@@ -2187,6 +2187,8 @@ func _thumb(id: String) -> Texture2D:
 			Sprites.ALIASES.get(id, id))
 	if id == "clear_object":
 		name = "floor"
+	elif id == MCF.FEATURE_AIRLOCK:
+		name = "door"   # дверь спереди (0.9.2) — своя картинка окружения, без листа автотайла
 	var full := TerrainTiles.env_name(name, env)
 	var sheet := Sprites.texture_of(full + Sprites.AUTOTILE_SUFFIX)
 	if sheet != null:

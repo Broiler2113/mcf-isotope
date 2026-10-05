@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cjp62ojnoqisb"
-path="res://.godot/imported/airlock_town_autotile.png-fce45bb6a868524b889c93e467e125ae.ctex"
+uid="uid://bdmryyhnoh7ce"
+path="res://.godot/imported/door_bunker.png-464fc1cb3e083ee5167880908b29455e.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://textures/airlock_town_autotile.png"
-dest_files=["res://.godot/imported/airlock_town_autotile.png-fce45bb6a868524b889c93e467e125ae.ctex"]
+source_file="res://textures/door_bunker.png"
+dest_files=["res://.godot/imported/door_bunker.png-464fc1cb3e083ee5167880908b29455e.ctex"]
 
 [params]
 
