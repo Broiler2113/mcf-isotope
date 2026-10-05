@@ -179,6 +179,12 @@ func _touch(c: Vector2i) -> void:
 			if n.x < 0 or n.y < 0 or n.x >= _grid.width or n.y >= _grid.height:
 				continue
 			_dirty[Vector2i(n.x / C, n.y / C)] = true
+			# Поворот цельного предмета зависит от всех его клеток: перемена у одной (или
+			# стена, снесённая у её бока) перерисовывает весь предмет, а не кусок с краю.
+			var nf := _grid.cell_fast(n.x, n.y).feature_id
+			if Furniture.is_whole(nf):
+				for p in Furniture.piece_cells(func(q: Vector2i) -> String: return _fid_at(_grid, q), n):
+					_dirty[Vector2i(p.x / C, p.y / C)] = true
 
 ## Вывести куски слоя features=false (пол) или true (объекты), покрывающие клетки
 ## [x0..x1]×[y0..y1]; origin — угол доски, cell — размер клетки на холсте, res — нужное
@@ -284,9 +290,9 @@ func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> voi
 		return
 	var name := tile_name(cell)
 	if Furniture.is_furniture(fid):
-		var turned := _turned(name, res, furniture_turn(_grid, c, fid))
-		if turned != null:
-			feat.blit_rect(turned, full, at)
+		var fimg := _furniture_image(c, fid, res)
+		if fimg != null:
+			feat.blit_rect(fimg, full, at)
 			if cell.feature_durability < Furniture.durability_of(fid):
 				feat.blend_rect(_crack_overlay(res), full, at)
 		return
@@ -338,7 +344,42 @@ const _TABLES := {"dining_table": true, "desk": true, "office_desk": true,
 		"reception_desk": true, "workbench": true, "checkout_counter": true}
 const _CHAIRS := {"chair": true, "armchair": true}
 
+## Плитка мебели в клетке c: у многоклеточной — кусок листа автотайла по маске соседей
+## того же вида, взятой в системе предмета (верх = спинка), и повёрнутый вместе с ним; у
+## одиночной — сама плитка, повёрнутая к стене.
+func _furniture_image(c: Vector2i, fid: String, res: int) -> Image:
+	var k := furniture_turn(_grid, c, fid)
+	if not Furniture.joins(fid):
+		return _turned(fid, res, k)
+	var mask := 0
+	for l in 4:
+		var n: Vector2i = c + _TURN_DIRS[(l + k) % 4]
+		if _grid.in_bounds(n) and _grid.cell_fast(n.x, n.y).feature_id == fid:
+			mask |= _MASK_BITS[l]
+	var key := "%s@%d@m%d@%d" % [fid, res, mask, k]
+	if _tiles.has(key):
+		var hit: Array = _tiles[key]
+		return hit[0] if not hit.is_empty() else null
+	var sheets := _sheet(fid, res)
+	if sheets.is_empty():
+		_tiles[key] = []
+		return _turned(fid, res, k)
+	var img: Image = (sheets[0] as Image).get_region(Rect2i((mask % 4) * res, (mask / 4) * res, res, res))
+	for i in k:
+		img.rotate_90(CLOCKWISE)
+	_tiles[key] = [img]
+	return img
+
+const _MASK_BITS := [Sprites.AUTOTILE_N, Sprites.AUTOTILE_E, Sprites.AUTOTILE_S, Sprites.AUTOTILE_W]
+
+static func _fid_at(grid: Grid, q: Vector2i) -> String:
+	return grid.cell_fast(q.x, q.y).feature_id if grid.in_bounds(q) else ""
+
 static func furniture_turn(grid: Grid, c: Vector2i, fid: String) -> int:
+	if Furniture.is_whole(fid):
+		return _piece_turn(grid, c, fid)
+	if Furniture.joins(fid):
+		return _run_turn(grid, c, fid)
 	# Стул смотрит на стол, стол — на свой стул (место, где сидят, — низ плитки).
 	var faces: Dictionary = _TABLES if fid == "chair" or fid == "armchair" \
 			else (_CHAIRS if _TABLES.has(fid) else {})
@@ -350,6 +391,73 @@ static func furniture_turn(grid: Grid, c: Vector2i, fid: String) -> int:
 	for k in 4:
 		var n: Vector2i = c + _TURN_DIRS[k]
 		if not grid.in_bounds(n) or grid.cell_fast(n.x, n.y).is_wall():
+			return k
+	return variant_of(c, 4)
+
+## Цельный предмет поворачивается целиком: к стене той стороной, что ему положена (кровать
+## — изголовьем, т.е. короткой; диван, стол-бюро — длинной), и по возможности стороной,
+## что вся у стены. Без стены — стол-бюро лицом к стулу, остальное — длинной осью поперёк
+## «спинки». Считается по всем клеткам предмета, поэтому у всех его клеток один поворот.
+static func _piece_turn(grid: Grid, c: Vector2i, fid: String) -> int:
+	var cells := Furniture.piece_cells(func(q: Vector2i) -> String: return _fid_at(grid, q), c)
+	var mine := {}
+	for p in cells:
+		mine[p] = true
+	var side := [0, 0, 0, 0]
+	var walled := [0, 0, 0, 0]
+	var chair := [0, 0, 0, 0]
+	for p in cells:
+		for k in 4:
+			var q: Vector2i = p + _TURN_DIRS[k]
+			if mine.has(q):
+				continue
+			side[k] += 1
+			if not grid.in_bounds(q) or grid.cell_fast(q.x, q.y).is_wall():
+				walled[k] += 1
+			elif _CHAIRS.has(grid.cell_fast(q.x, q.y).feature_id):
+				chair[k] += 1
+	var back := Furniture.back_of(fid)
+	var best := -1
+	var best_score := -1000000000
+	for k in 4:
+		if walled[k] == 0:
+			continue
+		var score: int = walled[k] * 10 + (1000 if walled[k] == side[k] else 0)
+		if back == "short":
+			score -= side[k] * 100
+		elif back == "long":
+			score += side[k] * 100
+		if score > best_score:
+			best_score = score
+			best = k
+	if best >= 0 and back != "":
+		return best
+	for k in 4:
+		if chair[k] > 0 and _TABLES.has(fid):
+			return (k + 2) % 4
+	var horizontal: bool = side[0] >= side[1]   # ширина по северу ≥ высоты по востоку
+	if back == "short":
+		return 1 if horizontal else 0
+	return 0 if horizontal else 1
+
+## Секции ряда (стойка, стеллаж) поворачиваются согласно ряду: ось ряда задаёт пару
+## поворотов, стена решает, какой из двух; угол ряда — по стене; одиночная секция — как
+## одиночный предмет. Так у всего ряда одна «спинка», даже если конец упёрся в стену.
+static func _run_turn(grid: Grid, c: Vector2i, fid: String) -> int:
+	var same := [false, false, false, false]
+	var wall := [false, false, false, false]
+	for k in 4:
+		var q: Vector2i = c + _TURN_DIRS[k]
+		same[k] = _fid_at(grid, q) == fid
+		wall[k] = not grid.in_bounds(q) or grid.cell_fast(q.x, q.y).is_wall()
+	var across: bool = same[1] or same[3]   # сосед восток/запад — ряд лежит по горизонтали
+	var down: bool = same[0] or same[2]
+	if across and not down:
+		return 2 if wall[2] and not wall[0] else 0
+	if down and not across:
+		return 3 if wall[3] and not wall[1] else 1
+	for k in 4:
+		if wall[k]:
 			return k
 	return variant_of(c, 4)
 
@@ -436,7 +544,7 @@ static func mask_at(grid: Grid, c: Vector2i, fid: String) -> int:
 ## Плитка объекта для отдельной отрисовки поверх куска (снимок «до взрыва» на время броска).
 func draw_feature_tile(ci: CanvasItem, fid: String, c: Vector2i, rect: Rect2) -> void:
 	if Furniture.is_furniture(fid):
-		var img := _turned(fid, TerrainTiles.T, furniture_turn(_grid, c, fid))
+		var img := _furniture_image(c, fid, TerrainTiles.T)
 		if img != null:
 			ci.draw_texture_rect(_furniture_tex(img), rect, false)
 		return

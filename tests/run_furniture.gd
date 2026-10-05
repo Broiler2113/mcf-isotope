@@ -67,6 +67,12 @@ func _table() -> void:
 			ck(float(d["h"]) <= 0.5, "portable %s is a low piece" % fid)
 		ck(Furniture.blocks_move(fid) == (float(d["h"]) >= MCF.WALL_HEIGHT), "%s blocks movement iff wall-height" % fid)
 		ck(FileAccess.file_exists("res://textures/%s.png" % fid), "%s has a texture" % fid)
+		if Furniture.joins(fid):
+			ck(FileAccess.file_exists("res://textures/%s_autotile.png" % fid), "%s has an autotile sheet" % fid)
+			ck(not Furniture.carriable(fid), "multi-cell %s is not carried by hand" % fid)
+		if Furniture.is_whole(fid):
+			ck(not (d["sizes"] as Array).is_empty() and str(d["back"]) in ["long", "short", ""],
+					"%s has footprints and a back rule" % fid)
 		ck(not (d["rooms"] as Array).is_empty(), "%s has room preferences" % fid)
 		ck(not MCF.FEATURE_HEIGHT.has(fid) and not MCF.FEATURE_NAMES.has(fid), "%s doesn't clash with a fortification id" % fid)
 	for arch: String in MapFurnish.RECIPES:
@@ -85,6 +91,9 @@ func _table() -> void:
 		ck(Furniture.durability_of(fid) == want[fid], "%s durability default %d" % [fid, want[fid]])
 	ck(MCF.feature_name("bed") == "Bed" and MCF.feature_height("wardrobe") == 1.5,
 			"names and heights reach the shared helpers")
+	ck(Furniture.is_whole("bed") and Furniture.is_whole("dining_table") and Furniture.joins("kitchen_counter")
+			and not Furniture.is_whole("kitchen_counter") and not Furniture.joins("chair"),
+			"beds and tables are whole pieces, counters are runs, chairs are single")
 
 # --- Клетка: высота, проход, обзор, укрытие ----------------------------------------------
 
@@ -202,6 +211,62 @@ func _actions() -> void:
 	ck(st.grid.cell(Vector2i(5, 4)).feature_id == "" and st.grid.cell(Vector2i(5, 4)).cover_height == 0.0 \
 			and st.grid.cell(Vector2i(5, 4)).floor_type == MCF.FLOOR_FLAMMABLE, "leaving bare floor behind")
 	ck(r.breakable_cells(u).is_empty(), "furniture never shows up as a fortification to demolish")
+	_multi_cell()
+
+## Многоклеточное: кровать 2×2 — один предмет (ломается, гибнет и сдвигается целиком),
+## стойка из трёх секций — три секции.
+func _multi_cell() -> void:
+	var bed := [Vector2i(6, 4), Vector2i(7, 4), Vector2i(6, 5), Vector2i(7, 5)]
+	var cells := {Vector2i(2, 8): "kitchen_counter", Vector2i(3, 8): "kitchen_counter",
+			Vector2i(4, 8): "kitchen_counter", Vector2i(10, 2): "workbench", Vector2i(11, 2): "workbench"}
+	for c in bed:
+		cells[c] = "bed"
+	var st := _board(cells, [[Vector2i(5, 5), "light_infantry", 0], [Vector2i(3, 7), "light_infantry", 0],
+			[Vector2i(10, 3), "light_infantry", 0], [Vector2i(18, 10), "light_infantry", 1]])
+	var r := GameActionResolver.new(st)
+	r.fog_enabled = false
+	ck(r.furniture_piece(Vector2i(7, 5)).size() == 4, "the 2×2 bed is one piece of four cells")
+	ck(r.furniture_piece(Vector2i(3, 8)).size() == 1, "a counter segment is its own piece")
+	var u := st.grid.cell(Vector2i(5, 5)).occupant
+	ck(r.can_carry_furniture(u, Vector2i(6, 5)) != "", "a bed can't be picked up")
+	ck(not r.draggable_cells(u).has(Vector2i(6, 5)) and not r.grabbable_cell(Vector2i(6, 5)),
+			"nor grabbed — a multi-cell bed is not offered to Grab")
+	var res := r.resolve(DragIntent.new(u.id, Vector2i(6, 5), Vector2i(6, 6)))
+	ck(not res.ok and res.reason.begins_with("Too big"), "dragging it is refused (%s)" % res.reason)
+	ck(st.grid.cell(Vector2i(6, 5)).feature_id == "bed" and st.grid.cell(Vector2i(6, 6)).feature_id == "",
+			"and it stays put")
+	st.grid.cell(Vector2i(7, 4)).feature_durability = 1
+	u.remaining_ap = 2
+	res = r.resolve(BreakIntent.new(u.id, Vector2i(6, 5)))
+	ck(res.ok and u.remaining_ap == 0, "smashing the bed costs its 2 AP once")
+	var gone := true
+	for c in bed:
+		gone = gone and st.grid.cell(c).feature_id == ""
+	ck(gone, "and takes the whole bed, not one corner")
+	var cook := st.grid.cell(Vector2i(3, 7)).occupant
+	cook.remaining_ap = 2
+	ck(r.resolve(BreakIntent.new(cook.id, Vector2i(3, 8))).ok, "a counter segment can be smashed")
+	ck(st.grid.cell(Vector2i(3, 8)).feature_id == "" and st.grid.cell(Vector2i(2, 8)).feature_id == "kitchen_counter"
+			and st.grid.cell(Vector2i(4, 8)).feature_id == "kitchen_counter", "leaving the other segments standing")
+	var smith := st.grid.cell(Vector2i(10, 3)).occupant
+	res = r.resolve(DragIntent.new(smith.id, Vector2i(11, 2), Vector2i(11, 3)))
+	ck(not res.ok and st.grid.cell(Vector2i(11, 2)).feature_id == "workbench",
+			"a workbench segment joined to its run can't be dragged off (%s)" % res.reason)
+	smith.remaining_ap = 3
+	ck(r.resolve(BreakIntent.new(smith.id, Vector2i(10, 2))).ok, "smash one segment of the pair…")
+	ck(r.grabbable_cell(Vector2i(11, 2)) and r.draggable_cells(smith).has(Vector2i(11, 2)),
+			"…and the lone one left is a single cell again, so it can be grabbed")
+	res = r.resolve(DragIntent.new(smith.id, Vector2i(11, 2), Vector2i(11, 3)))
+	ck(res.ok and st.grid.cell(Vector2i(11, 3)).feature_id == "workbench", "and dragged (%s)" % res.reason)
+	# Разрыв по углу кровати — и кровати нет целиком.
+	var s2 := _board({Vector2i(8, 5): "bed", Vector2i(8, 6): "bed", Vector2i(12, 5): "bed", Vector2i(12, 6): "bed"},
+			[[Vector2i(1, 1), "light_infantry", 0], [Vector2i(18, 10), "light_infantry", 1]])
+	var r2 := GameActionResolver.new(s2)
+	var blast := ActionResult.success([])
+	r2._blast(Vector2i(9, 4), blast, [Vector2i(8, 5)])
+	ck(s2.grid.cell(Vector2i(8, 5)).feature_id == "" and s2.grid.cell(Vector2i(8, 6)).feature_id == "",
+			"a blast that wrecks one end of a bed wrecks the bed")
+	ck(s2.grid.cell(Vector2i(12, 5)).feature_id == "bed", "the other bed is untouched")
 
 # --- Оружие ------------------------------------------------------------------------------
 
@@ -326,10 +391,17 @@ func _generation() -> void:
 		var again := _gen(style, 2, 41)
 		ck(again.feature_id == on.feature_id and again.feature_dur == on.feature_dur,
 				"%s: the same seed builds the same furniture" % name)
-		# «Off» и «Normal» — одна и та же карта, кроме мебели.
+		# «Off» и «Normal» — одна и та же карта, кроме мебели. Единственное, что мебель
+		# убирает, — кучи мешков (и дощатые ящики) внутри комнат станции и бункера: там
+		# теперь своя обстановка.
 		var other := 0
+		var roomy := style == MapGen.Style.STATION or style == MapGen.Style.BUNKER
 		for i in on.feature_id.size():
 			var fon: String = on.feature_id[i]
+			var foff: String = off.feature_id[i]
+			if roomy and (foff == MCF.FEATURE_SANDBAGS or foff == MCF.FEATURE_WOOD_WALL) \
+					and (fon == "" or Furniture.is_furniture(fon)):
+				continue
 			if Furniture.is_furniture(fon):
 				if off.feature_id[i] != "" or off.cover_height[i] != 0.0:
 					other += 1
@@ -348,6 +420,11 @@ func _generation() -> void:
 			if Furniture.is_furniture(f) and st.grid.cell(Vector2i(i % on.width, i / on.width)).cover_height != Furniture.height_of(f):
 				wrong += 1
 		ck(wrong == 0, "%s: every piece stands at its table height in the battle" % name)
+		var bad_shapes := _piece_problems(on, st)
+		ck(bad_shapes.is_empty(), "%s: every bed/table/sofa is one clean footprint with one orientation %s" % [name, str(bad_shapes)])
+		var noobs := _gen(style, 2, 41, {"obstacles": false})
+		ck(style == MapGen.Style.FIELD or _count(noobs) >= 10,
+				"%s: furniture appears with Obstacles off (%d pieces)" % [name, _count(noobs)])
 	var sparse := _count(_gen(MapGen.Style.STATION, 1, 7))
 	var normal := _count(_gen(MapGen.Style.STATION, 2, 7))
 	var dense := _count(_gen(MapGen.Style.STATION, 4, 7))
@@ -378,6 +455,38 @@ func _generation() -> void:
 				bad += 1
 				print("     walkway broken: style %d seed %d" % [style, seed])
 	ck(bad == 0, "15 very dense, worn, some mirrored maps keep every walkway and doorway (%d broken)" % bad)
+
+## Каждый цельный предмет на карте — ровно один из своих следов (прямоугольник нужных
+## размеров, ничего не срослось), и у всех его клеток один поворот плитки.
+func _piece_problems(m: MapData, st: GameState) -> Array:
+	var out: Array = []
+	var seen := {}
+	var fid_at := func(q: Vector2i) -> String: return m.get_feature(q)
+	for i in m.feature_id.size():
+		var c := Vector2i(i % m.width, i / m.width)
+		var f: String = m.feature_id[i]
+		if seen.has(c) or not Furniture.is_whole(f):
+			continue
+		var cells := Furniture.piece_cells(fid_at, c)
+		var lo := c
+		var hi := c
+		for p in cells:
+			seen[p] = true
+			lo = Vector2i(mini(lo.x, p.x), mini(lo.y, p.y))
+			hi = Vector2i(maxi(hi.x, p.x), maxi(hi.y, p.y))
+		var dims := hi - lo + Vector2i.ONE
+		var fits := false
+		for sz: Array in Furniture.sizes_of(f):
+			fits = fits or dims == Vector2i(sz[0], sz[1]) or dims == Vector2i(sz[1], sz[0])
+		if not fits or dims.x * dims.y != cells.size():
+			out.append("%s %s %s" % [f, lo, dims])
+			continue
+		var turn := TerrainTiles.furniture_turn(st.grid, cells[0], f)
+		for p in cells:
+			if TerrainTiles.furniture_turn(st.grid, p, f) != turn:
+				out.append("%s at %s turned unevenly" % [f, lo])
+				break
+	return out
 
 func _no_furniture_at_doors(m: MapData) -> bool:
 	for y in m.height:

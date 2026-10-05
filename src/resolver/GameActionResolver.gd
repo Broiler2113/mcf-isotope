@@ -562,7 +562,7 @@ func dragged_cell_of(unit: UnitInstance) -> Vector2i:
 		return UnitInstance.NOT_DRAGGING
 	if not state.grid.in_bounds(unit.dragging) \
 			or Combat.distance(unit.coord, unit.dragging) > 1 \
-			or not is_draggable_feature(state.grid.cell(unit.dragging).feature_id):
+			or not grabbable_cell(unit.dragging):
 		unit.dragging = UnitInstance.NOT_DRAGGING
 	return unit.dragging
 
@@ -1404,7 +1404,10 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i, aimed: String = "") ->
 				if destroyed:
 					if cell.is_wall():
 						blasted.append(c)
-					cell.clear_feature()
+					if Furniture.is_furniture(was):
+						_destroy_furniture(cell, result)   # цельный предмет — целиком
+					else:
+						cell.clear_feature()
 					result.log("Beam destroys %s at (%d, %d)" % [
 						MCF.feature_name(was, was), c.x, c.y])
 					# Стена из трупов рассыпается вдоль траектории луча (таблица §3.13).
@@ -3193,13 +3196,21 @@ func _resolve_smash_furniture(actor: UnitInstance, coord: Vector2i) -> ActionRes
 	_destroy_furniture(cell, res)
 	return res
 
-## Снести предмет мебели с клетки: пол остаётся, высота сбрасывается в ноль (clear_feature),
-## журнал вида и обзора узнаёт об этом через сеттеры клетки. Щепки — той же косметикой
-## «разрушенный пол», что и у снесённых укреплений.
+## Снести предмет мебели: пол остаётся, высота сбрасывается в ноль (clear_feature), журнал
+## вида и обзора узнаёт об этом через сеттеры клетки. Цельный многоклеточный предмет
+## (кровать, стол, станок) гибнет целиком — полкровати не бывает. Щепки — той же
+## косметикой «разрушенный пол», что и у снесённых укреплений.
 func _destroy_furniture(cell: GridCell, res: ActionResult) -> void:
-	cell.clear_feature()
-	notify_cell_changed(cell.coord)
-	_fx(res, {"fx": "debris", "at": NOWHERE, "cells": [cell.coord]})
+	var cells := furniture_piece(cell.coord)
+	for c: Vector2i in cells:
+		state.grid.cell(c).clear_feature()
+		notify_cell_changed(c)
+	_fx(res, {"fx": "debris", "at": NOWHERE, "cells": cells})
+
+## Клетки предмета мебели, которому принадлежит c (у секций и одиночных — одна клетка).
+func furniture_piece(c: Vector2i) -> Array[Vector2i]:
+	return Furniture.piece_cells(func(q: Vector2i) -> String:
+		return state.grid.cell(q).feature_id if state.grid.in_bounds(q) else "", c)
 
 ## Соседняя мебель, которую боец может разломать прямо сейчас (для UI).
 func furniture_smash_cells(actor: UnitInstance) -> Array:
@@ -5610,6 +5621,22 @@ const DRAGGABLE_FEATURES := [
 static func is_draggable_feature(fid: String) -> bool:
 	return DRAGGABLE_FEATURES.has(fid) or Furniture.draggable(fid)
 
+## Можно ли взять в руки (волочь) объект на этой клетке: вид волочится, и это не часть
+## многоклеточного — ни клетка кровати 2×2 или стола, ни секция, приросшая к ряду (§3.15).
+## Одиночная секция или одноклеточный предмет — пожалуйста.
+func grabbable_cell(c: Vector2i) -> bool:
+	if not state.grid.in_bounds(c):
+		return false
+	var fid := state.grid.cell(c).feature_id
+	if not is_draggable_feature(fid):
+		return false
+	if Furniture.joins(fid):
+		for d: Vector2i in Furniture.N4:
+			var q: Vector2i = c + d
+			if state.grid.in_bounds(q) and state.grid.cell(q).feature_id == fid:
+				return false
+	return true
+
 func _resolve_drag(intent: DragIntent) -> ActionResult:
 	var actor := state.get_unit(intent.actor_id)
 	var err := _validate_actor(actor)
@@ -5621,6 +5648,9 @@ func _resolve_drag(intent: DragIntent) -> ActionResult:
 		return ActionResult.fail("Cell out of bounds")
 	if Combat.distance(actor.coord, src) != 1:
 		return ActionResult.fail("Object not in an adjacent cell")
+	# Многоклеточное (кровать 2×2, стол, секция в ряду стойки) руками не берут (§3.15).
+	if is_draggable_feature(state.grid.cell(src).feature_id) and not grabbable_cell(src):
+		return ActionResult.fail("Too big to move — it's part of a larger piece")
 	if Combat.distance(actor.coord, dst) != 1:
 		return ActionResult.fail("Can only drag to an adjacent cell")
 	var src_cell := state.grid.cell(src)
@@ -5690,8 +5720,7 @@ func _resolve_drag(intent: DragIntent) -> ActionResult:
 func draggable_cells(actor: UnitInstance) -> Array:
 	var out: Array = []
 	for n in state.grid.neighbors(actor.coord):
-		var cell := state.grid.cell(n)
-		if is_draggable_feature(cell.feature_id):
+		if grabbable_cell(n):
 			out.append(n)
 	return out
 

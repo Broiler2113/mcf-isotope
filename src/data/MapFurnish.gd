@@ -235,8 +235,8 @@ var w := 0
 var h := 0
 var level := 0
 var env := "town"
-## Клетки, занятые мебелью этого прохода, и сама мебель в порядке постановки (для износа).
-var placed: Array[Vector2i] = []
+## Поставленные предметы в порядке постановки — {"fid", "cells"} (для износа).
+var placed: Array = []
 ## Текущее помещение: его клетки (индекс -> true), входы и сколько ещё можно поставить.
 var _room: Dictionary = {}
 var _entries: Dictionary = {}
@@ -387,14 +387,14 @@ func _furnish_room(cells: Array[Vector2i], main: bool, count: int, r: Rect2i) ->
 	for step: Dictionary in RECIPES.get(arch, RECIPES["generic_room"]):
 		if _budget <= 0:
 			break
-		_run_step(step, Vector2i(-1, -1))
+		_run_step(step, {})
 	# Мелочь второго прохода — поверх рецепта, своей долей.
 	var extra := roundi(free * CLUTTER_SHARE[level])
 	var pool: Array = CLUTTER.get(_style_key(), CLUTTER["town"])
 	for k in extra:
 		var fid: String = pool[rng.randi_range(0, pool.size() - 1)]
 		_budget = maxi(_budget, 1)
-		_place_one(fid, "free", Vector2i(-1, -1))
+		_place_one(fid, "free", {})
 
 ## Назначение помещения: поле — хижина или руина; прочее — по таблице ROOMS. В доме
 ## с перегородкой большая половина — общая комната, меньшая — спальня или кухня.
@@ -427,9 +427,10 @@ func _has_door(r: Rect2i) -> bool:
 				return true
 	return false
 
-## Шаг рецепта: сколько предметов, где — и что приставить к каждому.
-func _run_step(step: Dictionary, anchor: Vector2i) -> Array[Vector2i]:
-	var got: Array[Vector2i] = []
+## Шаг рецепта: сколько предметов, где — и что приставить к каждому. Предмет здесь —
+## {"cells": клетки, "back": сторона стены за ним (ZERO — посреди комнаты)}.
+func _run_step(step: Dictionary, anchor: Dictionary) -> Array:
+	var got: Array = []
 	if rng.randf() >= float(step.get("p", 1.0)):
 		return got
 	if bool(step.get("big", false)) and _area < 40:
@@ -438,57 +439,73 @@ func _run_step(step: Dictionary, anchor: Vector2i) -> Array[Vector2i]:
 	var n: int = rng.randi_range(int(n_raw[0]), int(n_raw[1])) if n_raw is Array else int(n_raw)
 	var fid: String = step["f"]
 	var rule: String = step["at"]
+	var subs: Array = step.get("then", [])
 	match rule:
 		"row":
 			got = _place_row(fid, n)
 		"aisles":
 			got = _place_aisles(fid)
 		"grid":
-			got = _place_grid(fid, n)
+			var around := false
+			for sub: Dictionary in subs:
+				around = around or sub["at"] == "around"
+			got = _place_grid(fid, n, around)
 		_:
 			for k in n:
 				if _budget <= 0:
 					break
-				var c := _place_one(fid, rule, anchor)
-				if c != Vector2i(-1, -1):
-					got.append(c)
-	for c in got:
-		for sub: Dictionary in step.get("then", []):
+				var piece := _place_one(fid, rule, anchor)
+				if not piece.is_empty():
+					got.append(piece)
+	for piece: Dictionary in got:
+		for sub: Dictionary in subs:
 			if _budget <= 0:
 				break
-			_run_step(sub, c)
+			_run_step(sub, piece)
 	return got
 
-## Один предмет по правилу места; (-1, -1) — места не нашлось.
-func _place_one(fid: String, rule: String, anchor: Vector2i) -> Vector2i:
+## Один предмет по правилу места; {} — места не нашлось.
+func _place_one(fid: String, rule: String, anchor: Dictionary) -> Dictionary:
 	if _budget <= 0:
-		return Vector2i(-1, -1)
+		return {}
 	for c in _cells_for(rule, anchor):
-		if _try(fid, c):
-			return c
-	return Vector2i(-1, -1)
+		for shape: Dictionary in _shapes_at(fid, rule, c):
+			if _try_piece(fid, shape):
+				return shape
+	return {}
 
 ## Кандидаты под правило, в порядке предпочтения:
 ##   corner — угол (стены с двух соседних сторон); wall — спиной к стене; center — ближе
-##   к середине помещения, не у стены; free — где угодно; next — рядом с якорем (лучше у
-##   стены); front — перед якорем, со стороны, противоположной его стене; around — со всех
-##   четырёх сторон якоря.
-func _cells_for(rule: String, anchor: Vector2i) -> Array[Vector2i]:
+##   к середине помещения, не у стены; free — где угодно; next — рядом с якорем, у его
+##   изголовья вдоль стены (тумбочка у кровати); front — перед якорем, со стороны,
+##   противоположной его стене (стул к столу-бюро); around — по всему периметру якоря
+##   (стулья вокруг обеденного стола).
+func _cells_for(rule: String, anchor: Dictionary) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
 	match rule:
-		"next", "around":
-			var walls: Array[Vector2i] = []
+		"next", "around", "front":
+			var cells: Array = anchor.get("cells", [])
+			var back: Vector2i = anchor.get("back", Vector2i.ZERO)
+			var mine := {}
+			for p: Vector2i in cells:
+				mine[p] = true
+			var first: Array[Vector2i] = []
 			var rest: Array[Vector2i] = []
-			for d: Vector2i in _shuffled(N4):
-				var c: Vector2i = anchor + d
-				if _room.has(c):
-					(walls if _wall_dir(c) != Vector2i.ZERO and rule == "next" else rest).append(c)
-			out = walls + rest
-		"front":
-			var wd := _wall_dir(anchor)
-			var c: Vector2i = anchor - wd if wd != Vector2i.ZERO else anchor + Vector2i(0, 1)
-			if _room.has(c):
-				out.append(c)
+			for p: Vector2i in cells:
+				if rule == "front":
+					var f: Vector2i = p - back if back != Vector2i.ZERO else p + Vector2i(0, 1)
+					if not mine.has(f) and _room.has(f):
+						first.append(f)
+					continue
+				for d: Vector2i in N4:
+					var q: Vector2i = p + d
+					if mine.has(q) or not _room.has(q) or first.has(q) or rest.has(q):
+						continue
+					# Тумбочка — у изголовья: сбоку от клетки, что стоит у стены, и сама у стены.
+					var head := back != Vector2i.ZERO and d != back and d != -back \
+							and _is_wallish(p + back)
+					(first if rule == "next" and head and _wall_dir(q) != Vector2i.ZERO else rest).append(q)
+			out = _shuffled(first) + _shuffled(rest)
 		"corner":
 			out = _cand_corner
 		"wall":
@@ -499,32 +516,98 @@ func _cells_for(rule: String, anchor: Vector2i) -> Array[Vector2i]:
 			out = _cand_all
 	return out
 
-## Ряд вдоль одной стены: несколько соседних клеток с той же стеной за спиной.
-func _place_row(fid: String, n: int) -> Array[Vector2i]:
-	var got: Array[Vector2i] = []
-	for start in _cells_for("wall", Vector2i(-1, -1)):
+## Формы предмета с якорной клеткой c. Одиночный — сама клетка. Цельный — каждый его след
+## [ширина вдоль стены, глубина от стены]: у стены — спинкой к ней, якорь в одном из углов
+## (в обе стороны вдоль стены); посреди комнаты — вокруг якоря, длинной осью вдоль длинной
+## стороны помещения.
+func _shapes_at(fid: String, rule: String, c: Vector2i) -> Array:
+	if not Furniture.is_whole(fid):
+		return [{"cells": [c], "back": _wall_dir(c)}]
+	var out: Array = []
+	var sizes: Array = Furniture.sizes_of(fid).duplicate()
+	sizes = sizes.slice(0, sizes.size())
+	for i in range(sizes.size() - 1, 0, -1):
+		var j := rng.randi_range(0, i)
+		var t: Variant = sizes[i]
+		sizes[i] = sizes[j]
+		sizes[j] = t
+	var dv := _wall_dir(c)
+	var against := Furniture.back_of(fid) != "" and dv != Vector2i.ZERO \
+			and rule in ["wall", "corner", "row", "next", "front", "free"]
+	for sz: Array in sizes:
+		var sw: int = sz[0]
+		var sd: int = sz[1]
+		if against:
+			var along := Vector2i(dv.y, dv.x)
+			for sgn: int in ([1, -1] if rng.randf() < 0.5 else [-1, 1]):
+				var cells: Array[Vector2i] = []
+				for i in sw:
+					for j in sd:
+						cells.append(c + along * sgn * i - dv * j)
+				out.append({"cells": cells, "back": dv})
+		else:
+			var dims: Array = [Vector2i(sw, sd), Vector2i(sd, sw)]
+			if _rect.size.y > _rect.size.x:
+				dims.reverse()
+			for dm: Vector2i in dims:
+				var start := c - Vector2i((dm.x - 1) / 2, (dm.y - 1) / 2)
+				var cells: Array[Vector2i] = []
+				for j in dm.y:
+					for i in dm.x:
+						cells.append(start + Vector2i(i, j))
+				out.append({"cells": cells, "back": Vector2i.ZERO})
+				if dm.x == dm.y:
+					break
+	return out
+
+## Ряд вдоль одной стены. Секции (стойка, шкафчики) — сплошным рядом, срастаясь в одну;
+## цельные предметы (кровати в казарме) — через клетку, чтобы не срослись друг с другом.
+func _place_row(fid: String, n: int) -> Array:
+	var got: Array = []
+	var whole := Furniture.is_whole(fid)
+	for start in _cells_for("wall", {}):
 		if _budget <= 0 or not _ok(fid, start):
 			continue
 		var wd := _wall_dir(start)
 		var along := Vector2i(wd.y, wd.x)
-		var run: Array[Vector2i] = [start]
-		for sgn: int in [1, -1]:
-			var c := start + along * sgn
-			while run.size() < n and _room.has(c) and _wall_dir(c) == wd and _ok(fid, c):
-				run.append(c)
-				c += along * sgn
-		for c in run:
-			if _budget > 0 and _try(fid, c):
-				got.append(c)
+		if not whole:
+			var run: Array[Vector2i] = [start]
+			for sgn: int in [1, -1]:
+				var c := start + along * sgn
+				while run.size() < n and _room.has(c) and _wall_dir(c) == wd and _ok(fid, c):
+					run.append(c)
+					c += along * sgn
+			for c in run:
+				var one := {"cells": [c], "back": wd}
+				if _budget > 0 and _try_piece(fid, one):
+					got.append(one)
+		else:
+			var sz: Array = Furniture.sizes_of(fid)[0]
+			var stride: int = int(sz[0]) + 1
+			for sgn: int in [1, -1]:
+				var c := start
+				while got.size() < n and _budget > 0 and _room.has(c) and _wall_dir(c) == wd:
+					var placed_one := false
+					for shape: Dictionary in _shapes_at(fid, "row", c):
+						var cells: Array = shape["cells"]
+						var tail: Vector2i = cells[cells.size() - 1] - c
+						if (tail.x * along.x + tail.y * along.y) * sgn < 0 and int(sz[0]) > 1:
+							continue   # ряд растёт в одну сторону
+						if _try_piece(fid, shape):
+							got.append(shape)
+							placed_one = true
+							break
+					c += along * sgn * (stride if placed_one else 1)
+				if not got.is_empty():
+					break
 		if not got.is_empty():
 			return got
 	return got
 
 ## Стеллажи рядами вдоль длинной стороны помещения: ряд через два (проход в две клетки),
-## концы рядов свободны — поперечный проход. Сколько встанет — решают бюджет и проверка
-## прохода.
-func _place_aisles(fid: String) -> Array[Vector2i]:
-	var got: Array[Vector2i] = []
+## концы рядов свободны — поперечный проход. Секции срастаются в сплошной стеллаж.
+func _place_aisles(fid: String) -> Array:
+	var got: Array = []
 	var lo := Vector2i(1 << 20, 1 << 20)
 	var hi := Vector2i(-1, -1)
 	for c: Vector2i in _room:
@@ -541,26 +624,40 @@ func _place_aisles(fid: String) -> Array[Vector2i]:
 			if _budget <= 0:
 				return got
 			var c := Vector2i(lo.x + t, lo.y + k) if horizontal else Vector2i(lo.x + k, lo.y + t)
-			if _room.has(c) and _try(fid, c):
-				got.append(c)
+			var one := {"cells": [c], "back": Vector2i.ZERO}
+			if _room.has(c) and _try_piece(fid, one):
+				got.append(one)
 	return got
 
-## Столы и рабочие места сеткой с шагом 3 — между ними проходы, у каждого место для стула.
-func _place_grid(fid: String, n: int) -> Array[Vector2i]:
-	var got: Array[Vector2i] = []
+## Столы и рабочие места сеткой: между ними проходы, у каждого место для стула (за столом-
+## бюро — ряд стульев, вокруг обеденного — кольцо). Шаг — по самому следу предмета.
+func _place_grid(fid: String, n: int, around: bool) -> Array:
+	var got: Array = []
 	var lo := Vector2i(1 << 20, 1 << 20)
 	for c: Vector2i in _room:
 		lo = Vector2i(mini(lo.x, c.x), mini(lo.y, c.y))
+	var sz: Array = Furniture.sizes_of(fid)[rng.randi_range(0, Furniture.sizes_of(fid).size() - 1)]
+	var dm := Vector2i(int(sz[0]), int(sz[1]))
+	if not Furniture.is_whole(fid):
+		dm = Vector2i.ONE
+	var period := Vector2i(dm.x + 3, dm.y + 3) if around else Vector2i(dm.x + 1, dm.y + 2)
+	var origin := lo + (Vector2i(2, 2) if around else Vector2i(1, 1))
 	var spots: Array[Vector2i] = []
 	for c: Vector2i in _room:
-		if (c.x - lo.x) % 3 == 1 and (c.y - lo.y) % 3 == 1:
+		var d := c - origin
+		if d.x >= 0 and d.y >= 0 and d.x % period.x == 0 and d.y % period.y == 0:
 			spots.append(c)
 	spots.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return a.y < b.y or (a.y == b.y and a.x < b.x))
 	for c in spots:
 		if got.size() >= n or _budget <= 0:
 			break
-		if _try(fid, c):
-			got.append(c)
+		var cells: Array[Vector2i] = []
+		for j in dm.y:
+			for i in dm.x:
+				cells.append(c + Vector2i(i, j))
+		var shape := {"cells": cells, "back": Vector2i.ZERO}
+		if _try_piece(fid, shape):
+			got.append(shape)
 	return got
 
 # --- Проверки места ----------------------------------------------------------------------
@@ -582,18 +679,48 @@ func _ok(fid: String, c: Vector2i) -> bool:
 				return false
 	return true
 
-## Поставить, если место годится и проход не рвётся.
-func _try(fid: String, c: Vector2i) -> bool:
-	if _budget <= 0 or not _free(c) or not _ok(fid, c) or not _keeps_passage(c):
+## Поставить предмет, если все его клетки годятся и проход не рвётся. Клетки ставятся по
+## одной, каждая с проверкой прохода (уже стоящие клетки предмета для неё — стена); не
+## прошла одна — снимаются все. Цельный предмет не встаёт вплотную к другому того же вида:
+## иначе они срослись бы в один.
+func _try_piece(fid: String, shape: Dictionary) -> bool:
+	if _budget <= 0:
 		return false
-	g._put(c, fid)
-	placed.append(c)
-	_budget -= 1
+	var cells: Array = shape["cells"]
+	var mine := {}
+	for c: Vector2i in cells:
+		mine[c] = true
+		if not _free(c) or not _ok(fid, c):
+			return false
+	# Крупное не жмётся к крупному: кровать, стол, диван, стойка, стеллаж не встают вплотную
+	# друг к другу (и цельный предмет — к такому же, иначе они срослись бы в один). Рядом с
+	# ними — только мелочь, что для того и ставится: стул, тумбочка, урна, ящик.
+	var big := Furniture.joins(fid) or not Furniture.carriable(fid)
+	for c: Vector2i in cells:
+		for d: Vector2i in N4:
+			var q: Vector2i = c + d
+			if mine.has(q):
+				continue
+			var fq := m.get_feature(q)
+			if not Furniture.is_furniture(fq):
+				continue
+			if fq == fid and Furniture.is_whole(fid):
+				return false
+			if big and fq != fid and (Furniture.is_whole(fid) or Furniture.is_whole(fq)) \
+					and not Furniture.carriable(fq):
+				return false
+	var done: Array[Vector2i] = []
+	for c: Vector2i in cells:
+		if not _keeps_passage(c):
+			for u in done:
+				g._ground(u, m.get_floor(u))
+			return false
+		g._put(c, fid)
+		done.append(c)
+	placed.append({"fid": fid, "cells": done})
+	_budget -= cells.size()
 	return true
 
-## Не отрежет ли клетка c, став непроходимой, часть свободного пола от входов. Сначала
-## дёшево: если свободные соседи по сторонам связаны друг с другом через углы кольца, c
-## ничего не разрывает. Иначе — обход всего свободного пола помещения от входов.
 func _keeps_passage(c: Vector2i) -> bool:
 	return _ring_one_arc(c) or _reconnects(c)
 
@@ -761,57 +888,92 @@ func _near_room(c: Vector2i) -> bool:
 	return false
 
 func _outdoor_put(c: Vector2i, fid: String, need_wall: bool) -> void:
-	if not g._in(c):
+	if not _outdoor_ok(c):
 		return
-	var i := c.y * w + c.x
-	if m.is_space[i] != 0 or m.feature_id[i] != "" or m.cover_height[i] > 0.0 \
-			or g._zone[i] >= 0 or g._keep[i] != 0 or g._indoor[i] != 0 or g._near_door(c):
-		return
-	for d: Vector2i in RING:
-		var q := c + d
-		if m.get_feature(q) == MCF.FEATURE_AIRLOCK or Furniture.is_furniture(m.get_feature(q)):
-			return
+	var wd := Vector2i.ZERO
 	if need_wall:
 		# К стене спиной, и напротив — две свободные клетки: проход не сужается до одной.
-		var wd := Vector2i.ZERO
 		for d: Vector2i in N4:
 			if m.get_cover(c + d) >= MCF.WALL_HEIGHT:
 				wd = d
 				break
 		if wd == Vector2i.ZERO or not g._clear(c - wd) or not g._clear(c - wd * 2):
 			return
-	if not _ring_ok_map(c):
-		return
-	g._put(c, fid)
-	placed.append(c)
+	# Скамья, стол в сквере, бак — цельные предметы в две-три клетки: вдоль стены, а в
+	# сквере — по случайной оси.
+	var cells: Array[Vector2i] = [c]
+	if Furniture.is_whole(fid):
+		var sz: Array = Furniture.sizes_of(fid)[rng.randi_range(0, Furniture.sizes_of(fid).size() - 1)]
+		var along := Vector2i(wd.y, wd.x) if wd != Vector2i.ZERO \
+				else (Vector2i(1, 0) if rng.randf() < 0.5 else Vector2i(0, 1))
+		for i in range(1, int(sz[0])):
+			var q: Vector2i = c + along * i
+			if not _outdoor_ok(q) or (need_wall and (m.get_cover(q + wd) < MCF.WALL_HEIGHT
+					or not g._clear(q - wd) or not g._clear(q - wd * 2))):
+				return
+			cells.append(q)
+		for q in cells:
+			for d: Vector2i in N4:
+				if not cells.has(q + d) and m.get_feature(q + d) == fid:
+					return   # вплотную к такому же — срослись бы
+	var done: Array[Vector2i] = []
+	for q in cells:
+		if not _ring_ok_map(q):
+			for u in done:
+				g._ground(u, m.get_floor(u))
+			return
+		g._put(q, fid)
+		done.append(q)
+	placed.append({"fid": fid, "cells": done})
+
+## Клетка снаружи, куда вообще можно что-то поставить.
+func _outdoor_ok(c: Vector2i) -> bool:
+	if not g._in(c):
+		return false
+	var i := c.y * w + c.x
+	if m.is_space[i] != 0 or m.feature_id[i] != "" or m.cover_height[i] > 0.0 \
+			or g._zone[i] >= 0 or g._keep[i] != 0 or g._indoor[i] != 0 or g._near_door(c):
+		return false
+	for d: Vector2i in RING:
+		var q := c + d
+		if m.get_feature(q) == MCF.FEATURE_AIRLOCK:
+			return false
+	return true
 
 # --- Износ -------------------------------------------------------------------------------
 
 ## Износ (None/Light/Heavy): часть мебели пропала, разбита в щепки, побита (прочность
-## ниже табличной — в MapData.feature_dur) или сдвинута на соседнюю клетку. Сдвигается
-## только то, что вообще двигается, и только туда, где это не рвёт проход.
+## ниже табличной — в MapData.feature_dur) или сдвинута на соседнюю клетку. Цельный предмет
+## пропадает или бьётся целиком; сдвигается только одноклеточное (то, что можно взять в
+## руки) и только туда, где это не рвёт проход. Ничто не освобождает клетку, от которой
+## уже не дойти до пола.
 func _wear() -> void:
 	var dmg := clampi(int(g.opt.get("furniture_damage", 0)), 0, DAMAGE_NAMES.size() - 1)
 	if dmg == 0:
 		return
-	for c in placed:
+	for piece: Dictionary in placed:
 		if rng.randf() >= DAMAGE_SHARE[dmg]:
 			continue
-		var fid := m.get_feature(c)
-		if not Furniture.is_furniture(fid):
+		var cells: Array = piece["cells"]
+		var fid: String = piece["fid"]
+		if m.get_feature(cells[0]) != fid:
 			continue
 		var roll := rng.randf()
-		if roll < 0.3 or (roll < 0.5 and Furniture.durability_of(fid) <= 1):
-			# Пропал или разбит в щепки — но не в закутке, из которого освободившуюся
-			# клетку уже не достать: такой предмет просто остаётся.
-			if _touches_open(c):
-				g._ground(c, m.get_floor(c))
-		elif roll < 0.75 and Furniture.durability_of(fid) >= 2:
-			m.set_feature_damage(c, rng.randi_range(1, Furniture.durability_of(fid) - 1))
-		elif Furniture.mobility_of(fid) != Furniture.Mobility.FIXED:
-			_displace(c, fid)
+		var dur := Furniture.durability_of(fid)
+		if roll < 0.3 or (roll < 0.5 and dur <= 1):
+			if _piece_touches_open(cells):
+				for c: Vector2i in cells:
+					g._ground(c, m.get_floor(c))
+		elif roll < 0.75 and dur >= 2:
+			var left := rng.randi_range(1, dur - 1)
+			for c: Vector2i in cells:
+				m.set_feature_damage(c, left)
+		elif not Furniture.joins(fid) and Furniture.mobility_of(fid) != Furniture.Mobility.FIXED:
+			_displace(piece)   # сдвигается только то, что в одну клетку
 
-func _displace(c: Vector2i, fid: String) -> void:
+func _displace(piece: Dictionary) -> void:
+	var c: Vector2i = piece["cells"][0]
+	var fid: String = piece["fid"]
 	var floor_t := m.get_floor(c)
 	for d: Vector2i in _shuffled(N4):
 		var q: Vector2i = c + d
@@ -824,7 +986,7 @@ func _displace(c: Vector2i, fid: String) -> void:
 		if _ring_ok_map(q):
 			g._put(q, fid)
 			if _touches_open(c):
-				placed[placed.find(c)] = q
+				piece["cells"] = [q]
 				return
 			g._ground(q, m.get_floor(q))   # старое место осталось бы замурованным
 		g._put(c, fid)
@@ -835,6 +997,15 @@ func _touches_open(c: Vector2i) -> bool:
 	for d: Vector2i in N4:
 		if _walk_free(c + d):
 			return true
+	return false
+
+## То же для целого предмета: хоть одна его клетка выходит на свободный пол (сам предмет
+## связен, поэтому, освободившись, выйдет весь).
+func _piece_touches_open(cells: Array) -> bool:
+	for c: Vector2i in cells:
+		for d: Vector2i in N4:
+			if not cells.has(c + d) and _walk_free(c + d):
+				return true
 	return false
 
 ## Зеркало побитой мебели: MapGen._mirror() копирует клетки, но не прочность.

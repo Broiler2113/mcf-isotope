@@ -1693,11 +1693,15 @@ static func _furniture_hint(fid: String) -> String:
 	var d: Dictionary = Furniture.def_of(fid)
 	var move: String = {"portable": "carried by hand", "drag": "dragged",
 			"fixed": "immovable"}[Furniture.mobility_name(fid)]
+	if Furniture.joins(fid):
+		# Соседние клетки того же вида срастаются в один предмет — а такой не берут в руки.
+		move = "joins neighbours into one piece; " + ("dragged only as a single cell"
+				if Furniture.draggable(fid) else "immovable")
 	var cover := "wall-height" if Furniture.blocks_move(fid) \
 			else ("cover −%d" % Furniture.cover_penalty(float(d["h"])) if Furniture.cover_penalty(float(d["h"])) > 0
 			else "climbable, no cover")
 	return "%s — %.1f m, %s, %s\n%s, durability %d, breaks for %d AP" % [Furniture.name_of(fid),
-			float(d["h"]), d["mat"], cover, move.capitalize(), int(d["dur"]), int(d["ap"])]
+			float(d["h"]), d["mat"], cover, move[0].to_upper() + move.substr(1), int(d["dur"]), int(d["ap"])]
 
 # --- Строка состояния и заголовок ---
 

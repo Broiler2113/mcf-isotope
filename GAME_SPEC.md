@@ -705,7 +705,11 @@ Escaping an **allied** captor is free and needs no roll (#37). Escaping an enemy
 
 ### 8.3 Drag
 
-`DRAGGABLE_FEATURES = [sandbags, hedgehog, dirt_pile]`, plus corpses.
+`DRAGGABLE_FEATURES = [sandbags, hedgehog, dirt_pile]`, plus corpses — and every *heavy*
+single-cell piece of furniture (`GameActionResolver.grabbable_cell`, §9.9), which keeps its
+durability on the way. Nothing that is part of a multi-cell structure (a bed, a table, a
+segment joined to its counter or shelf) can be grabbed; portable furniture is carried,
+not dragged (§9.9).
 
 - Corpses pile up; at `CORPSE_WALL_COUNT = 5` the stack becomes a **corpse wall**.
 - Stacking table: `{ sandbags: { sandbags → sandbag_wall, hedgehog → hedgehog_sandbags } }`.
@@ -910,6 +914,110 @@ strips 1 durability (§7.3). A marksman firing down a **clean line** arrives wit
 10, so one shot cracks the pillbox and a second levels it; a beam that spent potential on
 obstacles first arrives with less than 10 and cannot crack it at all (§7.3). A cracked
 pillbox is drawn with a **red notch** in the corner of its tile.
+
+### 9.9 Furniture (§3.15)
+
+Furniture is an ordinary **cell feature** — `GridCell.feature_id` is the piece's id, its
+height is `cover_height`, its durability `feature_durability`. There is no second grid,
+no node per piece and no separate save path: movement, sight, cover, the undo journal,
+`StateCodec`, the network, replays and the tile chunks all see furniture the way they
+see sandbags.
+
+**Multi-cell pieces.** A cell still holds one object, so a large piece is several cells of
+the same id that join up by autotiling (`join` in the table):
+- *whole* pieces — bed (1×2, 2×2), sofa (2×1, 3×1), desk and office desk (2×1), dining
+  table (2×1 to 3×2), conference table (3×2, 4×2), wardrobe, dresser, generator, machinery
+  (2×2, 3×2), examination table, bench, park table, dumpster. The piece is the group of
+  same-id cells joined side to side (`Furniture.piece_cells`): it is smashed, wrecked and
+  drawn **as one**. No shared id is stored, so the generator never puts two whole pieces
+  of the same kind side by side (they would read as one).
+- *runs* — kitchen counter, reception and checkout counters, bookshelf, display shelf,
+  filing cabinets, lockers, workbench, storage shelving, server racks, industrial
+  cabinets. Each cell is a segment; neighbouring segments join into one long counter or
+  shelf, and a segment is smashed or burnt on its own.
+Every cell keeps its own height and durability.
+
+**The table** is `src/data/Furniture.gd` (`DEFS`, 41 types in four palette groups —
+*Home*, *Office & shop*, *Industrial*, *Outdoor*). Each row gives name, height class,
+material, durability, mobility (`PORTABLE` / `HEAVY` / `FIXED`), AP to smash, preferred
+rooms, preferred spot (`wall`, `corner`, `center`, `free`) and whether the generator uses
+it. A new piece is a new row plus, optionally, `textures/<id>.png`.
+
+| Height | Pieces (examples) | Movement | Shooting past it (cell next to the target) |
+|---|---|---|---|
+| 0.5 m | chair, nightstand, coffee table, crate, pallet, toolbox, trash bin, bed, bench | climb, 2 points | no modifier |
+| 1.0 m | desk, dining/conference table, counters, filing cabinet, locker, workbench, barrel, ammo crate | climb, 3 | −2 (the ordinary `COVER_MOD`) |
+| 1.5 m | wardrobe, bookshelf, refrigerator, server rack, industrial cabinet, generator, dumpster | climb, 4 | **−3** |
+| 2.0 m | storage shelf, vending machine, machinery | wall: impassable, blocks sight and fire | — |
+
+The −3 lives in `Furniture.COVER_MOD` and applies **only** when the covering cell holds
+furniture (`cover_effect_from`). `MCF.COVER_MOD` still knows only 1.0 m, so a bare 1.5 m
+terrain step, a dirt pile or any other object gives exactly what it gave before.
+Movement costs and wall behaviour are not furniture rules at all — they come from
+`cover_height` through `CLIMB_COST` and `WALL_HEIGHT`. `blocks_move` in the table is
+derived (height ≥ 2.0), and a test holds it to that.
+
+**Mobility.**
+- *Portable* (chair, nightstand, coffee table, crate, pallet, toolbox, trash bin — all
+  durability 1, so a carried piece has no damage to remember): **Carry Furniture** picks
+  an adjacent piece into the hands (`CarryIntent`, 1 AP — like folding a drone station);
+  hands must be empty (no item, corpse or captive), and shield bearers, borgs, drones and
+  seated passengers can't. **Put Down** sets it on an adjacent empty cell for free
+  (`UseItemIntent` with the piece in `held_item_id`); never onto another object, a body,
+  a hull or open space. A carrier who dies loses the piece.
+- *Heavy* single-cell pieces (armchair, cabinet, refrigerator, barrel, a lone locker or
+  shelf segment, …) drag exactly like sandbags (§8): **Grab** → the piece, then a cell; it
+  stays in tow while the dragger walks (−3 move). Its durability travels with it.
+  **Nothing that is part of a multi-cell structure can be grabbed** — not a cell of a bed
+  or a table, not a segment joined to its run (`grabbable_cell`; refused with *"Too big to
+  move"*). A segment left alone (its neighbours smashed) is a single cell again and can be.
+- *Fixed* (built-in counters, server rack, generator, machinery, vending machine, street
+  cabinet, park table) cannot be carried or dragged.
+Nothing ever moves furniture by walking into it.
+
+**Smashing.** Any soldier — not just a miner or engineer — can **Break Furniture** in an
+adjacent cell (`BreakIntent`, the same intent and cell clear as demolition): 1 AP for
+ordinary pieces, 2 for large, 3 for heavy industrial (`ap` in the table) — once for the
+whole bed or table, per segment of a run. The floor stays; the cells drop to height 0 and
+leave debris decals. The AI does not smash,
+carry or drag furniture (§17 is unchanged; it walks, climbs and takes cover over it like
+over any other object).
+
+**Weapons** converge on the same durability:
+- every **explosion** whose area touches a piece takes `Furniture.BLAST_DAMAGE` (2) off it
+  — a chair or desk goes with one blast, a wardrobe with two, a generator with three.
+  Furniture does **not** absorb a direct hit the way a pillbox does (`_pillbox_absorbs`
+  skips it): the blast happens in full.
+- the **laser** burns through a piece for its current durability in potential (a chair 1,
+  a wardrobe 3, a generator 5) and carries on, or stops in it if it can't pay.
+- **fire**: wood, fabric and plastic catch like a wooden wall (3/6) and burn away with
+  the cell; metal never catches from spreading fire (`FIRE_NEVER`), and a flame jet
+  scorches the cell but leaves the metal piece standing.
+- **tracks** flatten furniture like every other object under a hull.
+- ordinary bullets do not damage furniture — the game has no bullet-versus-object damage
+  outside armoured glass, and none was invented.
+
+When an explosion or the laser destroys any cell of a *whole* piece, the whole piece goes
+(`_destroy_furniture`); fire and tracks take cells one by one, as they do with everything.
+A damaged cell (durability below the table's) is drawn with cracks baked into its tile.
+
+**Drawing.** Pieces are baked into the `TerrainTiles` chunks like walls (so they are known
+under fog, as the plan of a building is). The art is drawn from above with the back of
+the piece at the top. A single piece turns so its back faces the first adjacent wall, a
+chair faces its table. A multi-cell piece uses a 4×4 autotile sheet
+(`<id>_autotile.png`) drawn in the piece's own frame: the tile is chosen by the same-id
+neighbours *in that frame* and then turned with the piece — a whole piece turns as one
+(a bed with its head, i.e. its short side, to a wall; a sofa or desk with its long side;
+a table along its long axis), a run follows its row and its wall. A change to any cell
+of a whole piece re-bakes the whole piece, so its cells never disagree.
+Changing durability now writes the cell into the look log, so a cracked piece re-bakes.
+Far-zoom colours, map previews and the editor minimap use the pieces' own tones.
+
+**Saving.** `feature_id`, `cover_height` and `feature_durability` already went through
+`GridCell.image()` (undo), `StateCodec` (save, resync) and replays. `MapData` gained a
+sparse `feature_dur` — `{cell: [id, durability]}`, written as `feature_durability` only
+when a map has damaged furniture, applied only while the same id stands on the cell, so
+an ordinary map saves byte for byte as before.
 
 ---
 
@@ -2159,8 +2267,10 @@ MainMenu → Setup → Placement → Main (battle)
   options (brush size, *Filled*, Symmetry) and **Play** on the same strip. An icon
   toolbar on the left: **Brush, Eraser, Line, Rectangle, Fill, Select, Eyedropper,
   Stamp** (keys B E L R F M I T). A palette on the right shows the **real tile
-  thumbnails** of the map's preset: Terrain, Walls & doors, Objects, Neutral units,
-  Deployment zones (1–8, *More zones* for all 26) and Stamps. Status bar and a
+  thumbnails** of the map's preset: Terrain, Walls & doors, Objects, four **Furniture**
+  groups (each button shows the piece's name and height, its tooltip material,
+  durability, mobility and AP to smash — §9.9), Neutral units, Deployment zones (1–8,
+  *More zones* for all 26) and Stamps. Status bar and a
   **minimap** (click or drag to move the view) at the bottom.
 
   - **The canvas is the battle's own renderer.** `TerrainTiles` chunks on a `Grid` kept
@@ -2289,8 +2399,53 @@ without scrolling.
 | Density | Sparse / Normal / Dense: rooms, houses, clutter. |
 | Layout | *Symmetrical* (off by default) — see below. |
 | Mechanics | *Space* (vacuum only — doors are airlocks either way, below), *Flammable*, *Obstacles* — each can be switched off on its own. |
+| Furniture | Off / Sparse / **Normal** / Dense / Very dense — how furnished the rooms are, independent of *Obstacles* — and *No / Light / Heavy wear* (below). |
 | Civilians | The lobby's *Civilians* slider, 0–200: how many neutrals the generator places (it is also the cap at match start, §14). |
 | Seed | The same seed and settings always build the byte-identical map. *Reroll* draws a new seed; *Save as Map* writes `user://maps/random-<style>-<seed>.json` (never over an existing file), after which it is an ordinary map — in the list and in the editor. |
+
+**Furnishing (§9.9).** A last generator phase, `Phase.FURNITURE` with its own random
+stream (added after the others, so every older seed builds the same structure, and *Off*
+builds the byte-identical map), runs `MapFurnish` after the final pocket-join, when doors
+and breaches are final. Each room rectangle is split into its connected pieces of floor
+(a house partition makes two) and every piece gets a purpose from the style and its size:
+*station* quarters, offices, storage, workshops, medical, command, server and utility
+rooms, mess halls; *bunker* barracks, armouries, command, workshops; *town* bedrooms,
+living rooms, kitchens, offices, shops, restaurants, garages, warehouses (in a split
+house the bigger half is the living space); *asteroid* mining rooms, workshops, storage,
+quarters; *field* huts and ruins only, so far less furniture. A purpose is a **recipe**
+— a bed in a corner with a nightstand beside it, a desk against a wall with its chair in
+front, a table in the middle with chairs around, counters in a row along one wall,
+storage shelves in parallel rows with two-cell aisles and free ends, desks or dining
+tables on a three-cell grid. The density sets how much of a room's free floor the recipe
+may use (~15 / 32 / 48 / 62 %); a light clutter pass then drops crates, bins, carts and
+toolboxes, and outside the rooms benches, park tables and bins go into parks, bins,
+dumpsters and street cabinets against house walls on wide streets, crates and carts
+against the walls of wide station halls, crates and barrels around field huts.
+
+Large pieces use their footprints: a bed goes in a corner head-first against the wall, a
+sofa or desk lies along it, tables and machinery stand in the middle along the room's long
+axis, beds in a barracks line one wall with a cell between them, desks and tables sit on a
+grid sized to their footprint with room for their chairs. Big pieces never touch each
+other — only the small things meant to go with them (chairs, nightstands, bins, crates)
+stand right beside a bed, table, sofa, counter or shelf. Furnishing does not depend on
+*Obstacles*; when a station or bunker is furnished, the sandbag "crate piles" that
+*Obstacles* used to drop inside its rooms are left out (the random stream is consumed the
+same way, so nothing else moves) — halls, streets and parks keep their obstacles.
+
+Walkways are kept **by construction**, not repaired afterwards: nothing stands within a
+cell of a door or airlock, in a deployment zone or on a cell the generator keeps clear,
+nothing tall (≥ 1.5 m) stands in front of a window, and a piece is placed only if every
+free cell of its room stays connected to the room's ways out **even counting all
+furniture as solid** (though everything below 2 m can be climbed). A cheap test of the
+eight neighbours settles most placements; otherwise a search from one side of the cell
+must find the others. Outside rooms the same neighbour test is the only gate. On a
+symmetrical map the source half is furnished and mirrored; a room straddling the axis
+stays empty.
+
+*Wear* (Light ≈12 %, Heavy ≈30 % of pieces): a piece is missing or smashed (whole pieces
+entirely), cracked (durability below the table's — saved in `MapData.feature_dur`), or a
+single-cell piece is pushed onto a neighbouring cell — but never in a way that seals a
+cell off.
 
 **Every map has an environment (team-session batch, item 24).** `MapData.env` —
 `station`, `bunker`, `town`, `field` or `asteroid` — is set by the generator (from the
@@ -3028,6 +3183,7 @@ number appears elsewhere in this document it is because the source comments cite
 | 103 | One unit per cell is enforced by the board itself — `Grid.place` and `move_occupant` refuse to overwrite an occupant and report failure, so no two soldiers, civilians or AI units can ever share a tile (§2.2); hovering a green move tile draws the **cheapest actual route** to it out of the Dijkstra tree, and every green tile is labelled with what standing there costs out of the movement total (§18.3); a marksman's laser no longer reaches a man in a trench from a tile that is not one, at any range including adjacent (§6.6, §7.3); NPC civilians and the army are driven by **one brain** — the second, cell-at-a-time civilian AI is deleted and a civilian is now an `AIController` with the Neutral owner, so it plans, fragments its movement, fires partial bursts and hauls corpses by the army's rules (§14, §17); the AI uses fragmented movement and partial bursts — `move_credit` is a spendable budget, a step costs score, and a burst orders `ceil(1/p)` bullets instead of the whole magazine (§17.3); an anti-tank sapper cut off by a wall **blasts through it** instead of shuffling along it (§17.3, §7.1); the AI and civilians pick up bodies that block the road and **stack them aside into piles**, the fifth forming a corpse wall (§17.3, §8.4); at least 80% of an army must act each turn and **every** civilian must, enforced by a second forced pass over whoever the plan left idle (§17.2); Player 1 can be an AI too, so AI-vs-AI matches run from Setup or a mid-battle toggle (§17.4); and the camera zooms out to 0.12 so a 60×40 board fits on one screen (§18.4) |
 | 104 | The map editor can be left the way it was entered: the **"To Demo Game"** button is gone, replaced by **"Main Menu"**, which clears `MapHandoff.pending` and returns to `MainMenu.tscn` instead of dumping the designer into a demo battle on the built-in roster (§19) |
 | 105 | A marksman firing **from** a trench is as boxed in as a marksman firing **into** one: the laser cannot climb out of the ditch any more than it could drop into it, so from the trench floor the only reachable target is one lying in the **same continuous run** of trench, along a straight line with no gap — a bend or a break means the beam hits the earth wall. The trench is now symmetric cover against the beam instead of a firing position that ignored its own walls (§6.6, §7.3) |
+| 121 | **Furniture** (§9.9, §20.2) — 41 pieces as ordinary cell features in `src/data/Furniture.gd`, multi-cell beds, tables, sofas, desks, machinery (whole pieces) and counters, shelving, lockers (runs) joined by autotiling: heights 0.5/1/1.5/2 m through `cover_height` (climbed by the usual costs, 2 m is a wall), a furniture-only −3 cover at 1.5 m, carrying portable pieces (`CarryIntent`, put down free via `UseItemIntent`), dragging heavy single-cell ones through Grab (nothing that is part of a multi-cell structure can be grabbed), any soldier smashing furniture for 1–3 AP via `BreakIntent`, blasts/laser/fire/tracks by durability and material; baked into the tile chunks turned to the wall, cracked when damaged; editor palette groups; `MapData.feature_dur` for damaged pieces. Random maps gain a FURNITURE phase (`MapFurnish`): room purposes per style, recipe placement, clutter, wear, walkways kept by construction; lobby *Furniture* (Off…Very dense, default Normal, independent of *Obstacles*; furnished station/bunker rooms skip the obstacle crate piles) and *wear*. Tests: `tests/run_furniture.gd`, editor checks in `run_editor.gd`; the perf bench pins furniture Off and now compares the full board after save/load and replay. |
 | 120 | Performance only, no rule changed — the general optimization audit (§27.22): a reproducible benchmark and behaviour harness `tests/bench/run_bench.gd` (small/medium/large Hard-vs-Hard MapGen matches through the net layer, save/load and replay, plus a battle-screen render mode; `run_all.sh` checks the small and medium hashes); `all_units()`/`all_vehicles()` return a cached read-only list (`remove_unit`/`remove_vehicle`); the clock rebuilds its text once a second; group membership in `_draw` is a set; `digest_hash` builds the identical string with `str()` (−20 %). The HUD grip, vehicle lookups, the "!" check, the dice queue, AI temporaries and FX RNG were measured and left unchanged. |
 | 119 | Editor rework and UI audit — the map editor is rebuilt "like Paint": menu bar, icon toolbar, a palette of real tile thumbnails, minimap and status bar; the canvas draws the battle's own tile chunks; undo stores per-cell deltas; symmetry (L/R, T/B, quarters, zones handed to the matching player), select / move / copy / paste with rotate and flip, room and building stamps, eyedropper, New Map from the random generator, and Play This Map returns to the same map (§19). Map presets (Station, Town, Field, Bunker, Asteroid) set the tileset and pre-fill a new map (§20). Nothing burns in vacuum (§10). UI audit at 75/100/150 %: main-menu sub-pages, purchase panel, battle sidebar and lobby dialogs are framed in group boxes, main buttons stay on screen, the lobby puts slots and map first when its columns wrap. Tests: `run_editor` (new, 55 checks), `run_fire` (vacuum), `run_batch13` ported. |
 | 118 | Playtest batch (20 items + 2) — **Unready** on the purchase screen: only the host starts the battle (`go`), a guest's unready is a request the host confirms (`unready_req` → `unready`), and a ready army is locked until unready (§19); **Fullscreen** in Settings → Display, saved in `settings.cfg`; the **Real** clock starts with the battle scene — network games used to count from app launch, so it also ran on across matches; **double-click** on a shuttle passenger selects the shuttle, and the driver's seat has a thin outline (§16.7); a **welded airlock** gets steel straps and weld beads baked into its tile; decals are no longer wiped by undo/redo or by a network resync (the restored host decals were cleared right after loading), laser marks and the new **tank track marks** travel in the decal snapshot, and the casing/laser caps rise to 8000/2000; Godot's ENet timeout is relaxed to 20–90 s so a short stall no longer hands a friend's army to the AI (§22.4); running over own/allied units and blowing a drone up next to them ask first; the **Match Over** window lists kills per unit and vehicle with run-overs (`GameState.kills`, part of the undo snapshot and `StateCodec`, not the digest); under standard fog, hidden walls get a much darker veil, corpses stay visible, and trenches, sandbags, dirt piles and hedgehogs are drawn only where seen now (§11); **Undo drawing** (button or Ctrl+Z while drawing) restores the touched raster tiles and is mirrored to every peer; bodies killed by fire, flame or laser are drawn burnt (`UnitInstance.burnt`); breached civilians are ruthless and grab every body within reach without ever dropping one (§14); the turn line and the initiative window agree — Prev/Next skip slots with nobody alive, the line follows the neutral group being played, and the window scrolls and leaves out wiped-out groups. Golden trace re-baselined: civilians now shoot instead of dodging, which shifts the dice stream. |

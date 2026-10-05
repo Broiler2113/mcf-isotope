@@ -778,7 +778,10 @@ func _dress_station() -> void:
 					Vector2i(inner.end.x - 3, inner.position.y + 2),
 					Vector2i(inner.position.x + 2, inner.end.y - 3), inner.end - Vector2i(3, 3)]:
 				_try_put(p, MCF.FEATURE_WALL)
-		# Ящики кучками по 1–3; на деревянной палубе часть из них — дощатые, 2 м.
+		# Ящики кучками по 1–3; на деревянной палубе часть из них — дощатые, 2 м. Когда
+		# комнаты обставлены мебелью (§3.15), куч мешков в них нет — ящики там свои; числа
+		# при этом тянутся те же, чтобы всё прочее на карте легло как без мебели.
+		var furnished := int(opt.get("furniture", 0)) > 0
 		for n in roundi(inner.get_area() * 0.07 * dens):
 			var c := Vector2i(_rng.randi_range(inner.position.x, inner.end.x - 1),
 					_rng.randi_range(inner.position.y, inner.end.y - 1))
@@ -787,7 +790,8 @@ func _dress_station() -> void:
 			if wooden[ri] and _rng.randf() < 0.5:
 				crate = MCF.FEATURE_WOOD_WALL
 			for k in _rng.randi_range(1, 3):
-				_try_put(c + dir * k, crate)
+				if not furnished:
+					_try_put(c + dir * k, crate)
 	# Баррикады в коридорах — мешки, через них перелезают.
 	for y in h:
 		for x in w:

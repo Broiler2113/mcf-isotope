@@ -21,13 +21,28 @@ extends RefCounted
 ##   rooms — в каких комнатах генератор его ставит (архетипы MapFurnish);
 ##   at    — как встаёт: "wall" спиной к стене, "corner" в угол, "center" посреди
 ##           комнаты, "free" куда угодно;
-##   gen   — ставит ли его генератор случайных карт.
-## Размер следа у всех 1×1 (FOOTPRINT): клетка держит один объект, и многоклеточная
-## мебель потребовала бы общего id на клетки — без неё шкаф не разорвётся пополам.
+##   gen   — ставит ли его генератор случайных карт;
+##   join  — многоклеточность (по умолчанию нет — предмет в одну клетку):
+##           "run"   — секции: стойка, стеллаж, шкафчики, верстак. Каждая клетка — своя
+##                     секция, соседние того же вида срастаются плиткой (автотайл) в одну
+##                     длинную стойку; сломать, сдвинуть, сжечь можно одну секцию;
+##           "whole" — цельный предмет: кровать 1×2 и 2×2, стол 3×2, диван 3×1, станок
+##                     2×2. Предмет — все соседние по сторонам клетки того же вида: он
+##                     ломается, гибнет и сдвигается ЦЕЛИКОМ, полкровати не бывает;
+##   sizes — следы цельного предмета [ширина вдоль стены, глубина от стены];
+##   back  — чем встаёт к стене: "long" — длинной стороной (диван, стол-бюро), "short" —
+##           короткой (кровать изголовьем), "" — посреди комнаты (обеденный стол, станок).
+## У каждой клетки предмета своя высота и прочность (это всё та же клетка-объект), а общего
+## id нет: предмет — это связная группа клеток одного вида (piece_cells). Поэтому
+## генератор никогда не ставит два цельных предмета одного вида вплотную — иначе две
+## кровати срослись бы в одну.
 
 enum Mobility {PORTABLE, HEAVY, FIXED}
 
-const FOOTPRINT := Vector2i(1, 1)
+const N4: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
+## Сколько клеток самое большее у одного цельного предмета (4×2 стол) — и предохранитель
+## обхода, если в редакторе намазали поле кроватей.
+const PIECE_CAP := 16
 
 const CATEGORIES := ["residential", "office", "industrial", "public"]
 const CATEGORY_NAMES := {"residential": "Home", "office": "Office & shop",
@@ -56,81 +71,81 @@ const DEFS := {
 	"armchair": {"name": "Armchair", "cat": "residential", "h": 0.5, "mat": "fabric", "dur": 2,
 		"mob": Mobility.HEAVY, "ap": 1, "at": "free", "gen": true,
 		"rooms": ["living_room", "office", "command"]},
-	"sofa": {"name": "Sofa", "cat": "residential", "h": 1.0, "mat": "fabric", "dur": 2,
+	"sofa": {"join": "whole", "sizes": [[2, 1], [3, 1]], "back": "long", "name": "Sofa", "cat": "residential", "h": 1.0, "mat": "fabric", "dur": 2,
 		"mob": Mobility.HEAVY, "ap": 2, "at": "wall", "gen": true,
 		"rooms": ["living_room"]},
-	"bed": {"name": "Bed", "cat": "residential", "h": 0.5, "mat": "wood", "dur": 2,
+	"bed": {"join": "whole", "sizes": [[1, 2], [2, 2]], "back": "short", "name": "Bed", "cat": "residential", "h": 0.5, "mat": "wood", "dur": 2,
 		"mob": Mobility.HEAVY, "ap": 2, "at": "corner", "gen": true,
 		"rooms": ["bedroom", "medical", "barracks", "hut"]},
 	"nightstand": {"name": "Nightstand", "cat": "residential", "h": 0.5, "mat": "wood", "dur": 1,
 		"mob": Mobility.PORTABLE, "ap": 1, "at": "wall", "gen": true,
 		"rooms": ["bedroom"]},
-	"desk": {"name": "Desk", "cat": "residential", "h": 1.0, "mat": "wood", "dur": 2,
+	"desk": {"join": "whole", "sizes": [[2, 1]], "back": "long", "name": "Desk", "cat": "residential", "h": 1.0, "mat": "wood", "dur": 2,
 		"mob": Mobility.HEAVY, "ap": 1, "at": "wall", "gen": true,
 		"rooms": ["bedroom", "office"]},
-	"dining_table": {"name": "Dining Table", "cat": "residential", "h": 1.0, "mat": "wood",
+	"dining_table": {"join": "whole", "sizes": [[2, 1], [2, 2], [3, 2]], "back": "", "name": "Dining Table", "cat": "residential", "h": 1.0, "mat": "wood",
 		"dur": 2, "mob": Mobility.HEAVY, "ap": 2, "at": "center", "gen": true,
 		"rooms": ["kitchen", "dining_room", "restaurant", "hut"]},
 	"coffee_table": {"name": "Coffee Table", "cat": "residential", "h": 0.5, "mat": "wood",
 		"dur": 1, "mob": Mobility.PORTABLE, "ap": 1, "at": "center", "gen": true,
 		"rooms": ["living_room"]},
-	"wardrobe": {"name": "Wardrobe", "cat": "residential", "h": 1.5, "mat": "wood", "dur": 3,
+	"wardrobe": {"join": "whole", "sizes": [[2, 1]], "back": "long", "name": "Wardrobe", "cat": "residential", "h": 1.5, "mat": "wood", "dur": 3,
 		"mob": Mobility.HEAVY, "ap": 2, "at": "wall", "gen": true,
 		"rooms": ["bedroom", "barracks"]},
-	"dresser": {"name": "Dresser", "cat": "residential", "h": 1.0, "mat": "wood", "dur": 2,
+	"dresser": {"join": "whole", "sizes": [[1, 1], [2, 1]], "back": "long", "name": "Dresser", "cat": "residential", "h": 1.0, "mat": "wood", "dur": 2,
 		"mob": Mobility.HEAVY, "ap": 1, "at": "wall", "gen": true,
 		"rooms": ["bedroom", "living_room"]},
-	"bookshelf": {"name": "Bookshelf", "cat": "residential", "h": 1.5, "mat": "wood", "dur": 2,
+	"bookshelf": {"join": "run", "name": "Bookshelf", "cat": "residential", "h": 1.5, "mat": "wood", "dur": 2,
 		"mob": Mobility.HEAVY, "ap": 2, "at": "wall", "gen": true,
 		"rooms": ["living_room", "office", "bedroom", "command"]},
 	"cabinet": {"name": "Cabinet", "cat": "residential", "h": 1.0, "mat": "wood", "dur": 2,
 		"mob": Mobility.HEAVY, "ap": 1, "at": "wall", "gen": true,
 		"rooms": ["kitchen", "medical", "living_room", "generic_room", "utility"]},
-	"kitchen_counter": {"name": "Kitchen Counter", "cat": "residential", "h": 1.0, "mat": "wood",
+	"kitchen_counter": {"join": "run", "name": "Kitchen Counter", "cat": "residential", "h": 1.0, "mat": "wood",
 		"dur": 3, "mob": Mobility.FIXED, "ap": 2, "at": "wall", "gen": true,
 		"rooms": ["kitchen", "dining_room", "restaurant"]},
 	"refrigerator": {"name": "Refrigerator", "cat": "residential", "h": 1.5, "mat": "metal",
 		"dur": 3, "mob": Mobility.HEAVY, "ap": 2, "at": "wall", "gen": true,
 		"rooms": ["kitchen", "restaurant"]},
 	# --- Контора и лавка ------------------------------------------------------------------
-	"office_desk": {"name": "Office Desk", "cat": "office", "h": 1.0, "mat": "metal", "dur": 2,
+	"office_desk": {"join": "whole", "sizes": [[2, 1]], "back": "long", "name": "Office Desk", "cat": "office", "h": 1.0, "mat": "metal", "dur": 2,
 		"mob": Mobility.HEAVY, "ap": 1, "at": "free", "gen": true,
 		"rooms": ["office", "command"]},
-	"conference_table": {"name": "Conference Table", "cat": "office", "h": 1.0, "mat": "wood",
+	"conference_table": {"join": "whole", "sizes": [[3, 2], [4, 2]], "back": "", "name": "Conference Table", "cat": "office", "h": 1.0, "mat": "wood",
 		"dur": 3, "mob": Mobility.HEAVY, "ap": 2, "at": "center", "gen": true,
 		"rooms": ["command", "office"]},
-	"filing_cabinet": {"name": "Filing Cabinet", "cat": "office", "h": 1.0, "mat": "metal",
+	"filing_cabinet": {"join": "run", "name": "Filing Cabinet", "cat": "office", "h": 1.0, "mat": "metal",
 		"dur": 2, "mob": Mobility.HEAVY, "ap": 1, "at": "wall", "gen": true,
 		"rooms": ["office", "command", "medical"]},
-	"locker": {"name": "Locker", "cat": "office", "h": 1.0, "mat": "metal", "dur": 3,
+	"locker": {"join": "run", "name": "Locker", "cat": "office", "h": 1.0, "mat": "metal", "dur": 3,
 		"mob": Mobility.HEAVY, "ap": 2, "at": "wall", "gen": true,
 		"rooms": ["barracks", "medical", "garage", "armory"]},
-	"reception_desk": {"name": "Reception Desk", "cat": "office", "h": 1.0, "mat": "wood",
+	"reception_desk": {"join": "run", "name": "Reception Desk", "cat": "office", "h": 1.0, "mat": "wood",
 		"dur": 3, "mob": Mobility.FIXED, "ap": 2, "at": "free", "gen": true,
 		"rooms": ["office", "medical"]},
-	"display_shelf": {"name": "Display Shelf", "cat": "office", "h": 1.5, "mat": "wood",
+	"display_shelf": {"join": "run", "name": "Display Shelf", "cat": "office", "h": 1.5, "mat": "wood",
 		"dur": 2, "mob": Mobility.HEAVY, "ap": 2, "at": "wall", "gen": true,
 		"rooms": ["shop"]},
-	"checkout_counter": {"name": "Checkout Counter", "cat": "office", "h": 1.0, "mat": "wood",
+	"checkout_counter": {"join": "run", "name": "Checkout Counter", "cat": "office", "h": 1.0, "mat": "wood",
 		"dur": 3, "mob": Mobility.FIXED, "ap": 2, "at": "free", "gen": true,
 		"rooms": ["shop", "restaurant"]},
 	"vending_machine": {"name": "Vending Machine", "cat": "office", "h": 2.0, "mat": "metal",
 		"dur": 4, "mob": Mobility.FIXED, "ap": 3, "at": "wall", "gen": true,
 		"rooms": ["dining_room", "shop", "generic_room"]},
 	# --- Промышленное ---------------------------------------------------------------------
-	"workbench": {"name": "Workbench", "cat": "industrial", "h": 1.0, "mat": "wood", "dur": 3,
+	"workbench": {"join": "run", "name": "Workbench", "cat": "industrial", "h": 1.0, "mat": "wood", "dur": 3,
 		"mob": Mobility.HEAVY, "ap": 2, "at": "wall", "gen": true,
 		"rooms": ["workshop", "garage", "mining"]},
 	"tool_cabinet": {"name": "Tool Cabinet", "cat": "industrial", "h": 1.0, "mat": "metal",
 		"dur": 2, "mob": Mobility.HEAVY, "ap": 1, "at": "wall", "gen": true,
 		"rooms": ["workshop", "garage", "utility"]},
-	"storage_shelf": {"name": "Storage Shelf", "cat": "industrial", "h": 2.0, "mat": "metal",
+	"storage_shelf": {"join": "run", "name": "Storage Shelf", "cat": "industrial", "h": 2.0, "mat": "metal",
 		"dur": 3, "mob": Mobility.HEAVY, "ap": 2, "at": "free", "gen": true,
 		"rooms": ["storage", "warehouse", "armory"]},
-	"server_rack": {"name": "Server Rack", "cat": "industrial", "h": 1.5, "mat": "metal",
+	"server_rack": {"join": "run", "name": "Server Rack", "cat": "industrial", "h": 1.5, "mat": "metal",
 		"dur": 4, "mob": Mobility.FIXED, "ap": 3, "at": "free", "gen": true,
 		"rooms": ["server_room", "command"]},
-	"industrial_cabinet": {"name": "Industrial Cabinet", "cat": "industrial", "h": 1.5,
+	"industrial_cabinet": {"join": "run", "name": "Industrial Cabinet", "cat": "industrial", "h": 1.5,
 		"mat": "metal", "dur": 4, "mob": Mobility.FIXED, "ap": 3, "at": "wall", "gen": true,
 		"rooms": ["utility", "server_room", "workshop", "mining"]},
 	"pallet": {"name": "Pallet", "cat": "industrial", "h": 0.5, "mat": "wood", "dur": 1,
@@ -145,7 +160,7 @@ const DEFS := {
 	"equipment_cart": {"name": "Equipment Cart", "cat": "industrial", "h": 1.0, "mat": "metal",
 		"dur": 2, "mob": Mobility.HEAVY, "ap": 1, "at": "free", "gen": true,
 		"rooms": ["workshop", "medical", "mining", "server_room"]},
-	"generator": {"name": "Generator", "cat": "industrial", "h": 1.5, "mat": "metal", "dur": 5,
+	"generator": {"join": "whole", "sizes": [[2, 1]], "back": "long", "name": "Generator", "cat": "industrial", "h": 1.5, "mat": "metal", "dur": 5,
 		"mob": Mobility.FIXED, "ap": 3, "at": "corner", "gen": true,
 		"rooms": ["utility", "server_room", "mining"]},
 	"toolbox": {"name": "Toolbox", "cat": "industrial", "h": 0.5, "mat": "metal", "dur": 1,
@@ -154,23 +169,23 @@ const DEFS := {
 	"ammo_crate": {"name": "Ammo Crate", "cat": "industrial", "h": 1.0, "mat": "metal", "dur": 3,
 		"mob": Mobility.HEAVY, "ap": 2, "at": "free", "gen": true,
 		"rooms": ["armory", "barracks"]},
-	"machinery": {"name": "Machinery", "cat": "industrial", "h": 2.0, "mat": "metal", "dur": 4,
+	"machinery": {"join": "whole", "sizes": [[2, 2], [3, 2]], "back": "", "name": "Machinery", "cat": "industrial", "h": 2.0, "mat": "metal", "dur": 4,
 		"mob": Mobility.FIXED, "ap": 3, "at": "center", "gen": true,
 		"rooms": ["workshop", "mining", "garage"]},
-	"exam_table": {"name": "Examination Table", "cat": "industrial", "h": 1.0, "mat": "metal",
+	"exam_table": {"join": "whole", "sizes": [[1, 2]], "back": "short", "name": "Examination Table", "cat": "industrial", "h": 1.0, "mat": "metal",
 		"dur": 2, "mob": Mobility.HEAVY, "ap": 1, "at": "center", "gen": true,
 		"rooms": ["medical"]},
 	# --- Улица ----------------------------------------------------------------------------
-	"bench": {"name": "Bench", "cat": "public", "h": 0.5, "mat": "wood", "dur": 2,
+	"bench": {"join": "whole", "sizes": [[2, 1], [3, 1]], "back": "long", "name": "Bench", "cat": "public", "h": 0.5, "mat": "wood", "dur": 2,
 		"mob": Mobility.HEAVY, "ap": 1, "at": "free", "gen": true,
 		"rooms": ["outdoor", "barracks"]},
 	"trash_bin": {"name": "Trash Bin", "cat": "public", "h": 0.5, "mat": "plastic", "dur": 1,
 		"mob": Mobility.PORTABLE, "ap": 1, "at": "corner", "gen": true,
 		"rooms": ["outdoor", "kitchen", "office", "shop", "restaurant", "dining_room"]},
-	"dumpster": {"name": "Dumpster", "cat": "public", "h": 1.5, "mat": "metal", "dur": 4,
+	"dumpster": {"join": "whole", "sizes": [[2, 1]], "back": "long", "name": "Dumpster", "cat": "public", "h": 1.5, "mat": "metal", "dur": 4,
 		"mob": Mobility.HEAVY, "ap": 2, "at": "wall", "gen": true,
 		"rooms": ["outdoor"]},
-	"park_table": {"name": "Park Table", "cat": "public", "h": 1.0, "mat": "wood", "dur": 2,
+	"park_table": {"join": "whole", "sizes": [[2, 1]], "back": "", "name": "Park Table", "cat": "public", "h": 1.0, "mat": "wood", "dur": 2,
 		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true,
 		"rooms": ["outdoor"]},
 	"street_cabinet": {"name": "Street Cabinet", "cat": "public", "h": 1.5, "mat": "metal",
@@ -218,6 +233,40 @@ static func blocks_move(fid: String) -> bool:
 ## Штраф попадания от мебели высотой h (см. COVER_MOD).
 static func cover_penalty(h: float) -> int:
 	return int(COVER_MOD.get(h, 0))
+
+## Срастается ли с соседями того же вида (секции или цельный предмет).
+static func joins(fid: String) -> bool:
+	return DEFS.has(fid) and str(DEFS[fid].get("join", "")) != ""
+
+## Цельный многоклеточный предмет (кровать, стол…), а не секция.
+static func is_whole(fid: String) -> bool:
+	return DEFS.has(fid) and str(DEFS[fid].get("join", "")) == "whole"
+
+static func sizes_of(fid: String) -> Array:
+	return DEFS[fid].get("sizes", [[1, 1]]) if DEFS.has(fid) else [[1, 1]]
+
+static func back_of(fid: String) -> String:
+	return str(DEFS[fid].get("back", "")) if DEFS.has(fid) else ""
+
+## Клетки предмета, которому принадлежит c: у цельного — вся связная по сторонам группа
+## клеток того же вида (не больше PIECE_CAP), у прочих — одна клетка. fid_at(клетка) —
+## id объекта на клетке, "" за краем доски. Порядок — обход от c, одинаковый у всех пиров.
+static func piece_cells(fid_at: Callable, c: Vector2i) -> Array[Vector2i]:
+	var out: Array[Vector2i] = [c]
+	var fid: String = fid_at.call(c)
+	if not is_whole(fid):
+		return out
+	var seen := {c: true}
+	var k := 0
+	while k < out.size() and out.size() < PIECE_CAP:
+		var p := out[k]
+		k += 1
+		for d: Vector2i in N4:
+			var q: Vector2i = p + d
+			if not seen.has(q) and fid_at.call(q) == fid:
+				seen[q] = true
+				out.append(q)
+	return out
 
 static func mobility_name(fid: String) -> String:
 	match mobility_of(fid):
