@@ -356,7 +356,14 @@ func _furniture_image(c: Vector2i, fid: String, res: int) -> Image:
 		var n: Vector2i = c + _TURN_DIRS[(l + k) % 4]
 		if _grid.in_bounds(n) and _grid.cell_fast(n.x, n.y).feature_id == fid:
 			mask |= _MASK_BITS[l]
-	var key := "%s@%d@m%d@%d" % [fid, res, mask, k]
+	# Внутренние углы (Г-образная стойка, диван углом): обе стороны срослись, а клетки по
+	# диагонали нет — в этом углу тело должно отступить, как у соседей, иначе ступенька.
+	var inner := 0
+	for l in 4:
+		if mask & _MASK_BITS[l] and mask & _MASK_BITS[(l + 1) % 4] \
+				and _fid_at(_grid, c + _TURN_DIRS[(l + k) % 4] + _TURN_DIRS[(l + 1 + k) % 4]) != fid:
+			inner |= 1 << l
+	var key := "%s@%d@m%d@%d@i%d" % [fid, res, mask, k, inner]
 	if _tiles.has(key):
 		var hit: Array = _tiles[key]
 		return hit[0] if not hit.is_empty() else null
@@ -365,10 +372,32 @@ func _furniture_image(c: Vector2i, fid: String, res: int) -> Image:
 		_tiles[key] = []
 		return _turned(fid, res, k)
 	var img: Image = (sheets[0] as Image).get_region(Rect2i((mask % 4) * res, (mask / 4) * res, res, res))
+	if inner != 0:
+		_carve_inner(img, inner, res)
 	for i in k:
 		img.rotate_90(CLOCKWISE)
 	_tiles[key] = [img]
 	return img
+
+## Вырезать внутренние углы: квадрат с поле открытой стороны (gen_textures M = 3 точки
+## из 32) — прозрачный, по его краю — тёмная кромка, как у соседей. Угол l — между
+## сторонами l и l+1 (СВ, ЮВ, ЮЗ, СЗ).
+func _carve_inner(img: Image, inner: int, res: int) -> void:
+	var mm := maxi(1, roundi(3.0 * res / 32.0))
+	for l in 4:
+		if inner & (1 << l) == 0:
+			continue
+		var right := l == 0 or l == 1
+		var bottom := l == 1 or l == 2
+		for dy in mm + 1:
+			for dx in mm + 1:
+				var x := res - 1 - dx if right else dx
+				var y := res - 1 - dy if bottom else dy
+				if dx < mm and dy < mm:
+					img.set_pixel(x, y, Color(0, 0, 0, 0))
+				else:
+					var p := img.get_pixel(x, y)
+					img.set_pixel(x, y, Color(p.r * 0.5, p.g * 0.5, p.b * 0.5, p.a))
 
 const _MASK_BITS := [Sprites.AUTOTILE_N, Sprites.AUTOTILE_E, Sprites.AUTOTILE_S, Sprites.AUTOTILE_W]
 
@@ -381,12 +410,12 @@ static func furniture_turn(grid: Grid, c: Vector2i, fid: String) -> int:
 	if Furniture.joins(fid):
 		return _run_turn(grid, c, fid)
 	# Стул смотрит на стол, стол — на свой стул (место, где сидят, — низ плитки).
-	var faces: Dictionary = _TABLES if fid == "chair" or fid == "armchair" \
-			else (_CHAIRS if _TABLES.has(fid) else {})
+	var kind := Furniture.base_of(fid)
+	var faces: Dictionary = _TABLES if _CHAIRS.has(kind) else (_CHAIRS if _TABLES.has(kind) else {})
 	if not faces.is_empty():
 		for k in 4:
 			var n: Vector2i = c + _TURN_DIRS[k]
-			if grid.in_bounds(n) and faces.has(grid.cell_fast(n.x, n.y).feature_id):
+			if grid.in_bounds(n) and faces.has(Furniture.base_of(grid.cell_fast(n.x, n.y).feature_id)):
 				return (k + 2) % 4
 	for k in 4:
 		var n: Vector2i = c + _TURN_DIRS[k]
@@ -414,7 +443,7 @@ static func _piece_turn(grid: Grid, c: Vector2i, fid: String) -> int:
 			side[k] += 1
 			if not grid.in_bounds(q) or grid.cell_fast(q.x, q.y).is_wall():
 				walled[k] += 1
-			elif _CHAIRS.has(grid.cell_fast(q.x, q.y).feature_id):
+			elif _CHAIRS.has(Furniture.base_of(grid.cell_fast(q.x, q.y).feature_id)):
 				chair[k] += 1
 	var back := Furniture.back_of(fid)
 	var best := -1
@@ -433,7 +462,7 @@ static func _piece_turn(grid: Grid, c: Vector2i, fid: String) -> int:
 	if best >= 0 and back != "":
 		return best
 	for k in 4:
-		if chair[k] > 0 and _TABLES.has(fid):
+		if chair[k] > 0 and _TABLES.has(Furniture.base_of(fid)):
 			return (k + 2) % 4
 	var horizontal: bool = side[0] >= side[1]   # ширина по северу ≥ высоты по востоку
 	if back == "short":

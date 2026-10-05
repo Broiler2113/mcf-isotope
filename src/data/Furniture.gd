@@ -6,7 +6,7 @@ extends RefCounted
 ## feature_durability. Ни своей сетки, ни узлов на предмет: движение, обзор, укрытие,
 ## сохранение, откат, сеть и повтор работают через ту же клетку, что и мешки со стенами.
 ##
-## Новый предмет = новая строка в DEFS (и, по желанию, плитка textures/<id>.png из
+## Новый предмет = новая строка в _BASE (цвета — в VARIANTS) (и, по желанию, плитка textures/<id>.png из
 ## tools/gen_textures.gd). Резолвер, редактор и генератор берут всё отсюда.
 ##
 ## Поля строки:
@@ -62,7 +62,8 @@ const COVER_MOD := {1.0: 2, 1.5: 3}
 ## второго, генератор переживает два.
 const BLAST_DAMAGE := 2
 
-const DEFS := {
+## Строки таблицы без цветовых вариантов; DEFS = они же плюс варианты (VARIANTS).
+const _BASE := {
 	# --- Жильё -------------------------------------------------------------------------
 	"chair": {"name": "Chair", "cat": "residential", "h": 0.5, "mat": "wood", "dur": 1,
 		"mob": Mobility.PORTABLE, "ap": 1, "at": "free", "gen": true,
@@ -191,7 +192,84 @@ const DEFS := {
 	"street_cabinet": {"name": "Street Cabinet", "cat": "public", "h": 1.5, "mat": "metal",
 		"dur": 3, "mob": Mobility.FIXED, "ap": 2, "at": "wall", "gen": true,
 		"rooms": ["outdoor"]},
+	# --- Добавлено позже ------------------------------------------------------------------
+	"potted_plant": {"name": "Potted Plant", "cat": "residential", "h": 0.5, "mat": "plastic", "dur": 1,
+		"mob": Mobility.PORTABLE, "ap": 1, "at": "corner", "gen": true,
+		"rooms": ["living_room", "office", "command", "shop", "restaurant"]},
+	"tv_stand": {"name": "TV Stand", "cat": "residential", "h": 1.0, "mat": "wood", "dur": 1,
+		"mob": Mobility.HEAVY, "ap": 1, "at": "wall", "gen": true,
+		"rooms": ["living_room", "barracks", "bedroom"]},
+	"stove": {"name": "Stove", "cat": "residential", "h": 1.0, "mat": "metal", "dur": 3,
+		"mob": Mobility.HEAVY, "ap": 2, "at": "wall", "gen": true,
+		"rooms": ["kitchen", "restaurant"]},
+	"piano": {"join": "whole", "sizes": [[2, 1]], "back": "long", "name": "Piano", "cat": "residential", "h": 1.0, "mat": "wood", "dur": 3,
+		"mob": Mobility.HEAVY, "ap": 2, "at": "wall", "gen": true,
+		"rooms": ["living_room", "restaurant"]},
+	"bunk_bed": {"join": "whole", "sizes": [[1, 2]], "back": "short", "name": "Bunk Bed", "cat": "residential", "h": 1.5, "mat": "metal", "dur": 3,
+		"mob": Mobility.HEAVY, "ap": 2, "at": "corner", "gen": true,
+		"rooms": ["barracks"]},
+	"water_cooler": {"name": "Water Cooler", "cat": "office", "h": 1.5, "mat": "plastic", "dur": 1,
+		"mob": Mobility.HEAVY, "ap": 1, "at": "wall", "gen": true,
+		"rooms": ["office", "command", "medical"]},
+	"washing_machine": {"name": "Washing Machine", "cat": "industrial", "h": 1.0, "mat": "metal", "dur": 2,
+		"mob": Mobility.HEAVY, "ap": 1, "at": "wall", "gen": true,
+		"rooms": ["utility", "barracks"]},
+	"fuel_tank": {"join": "whole", "sizes": [[2, 2]], "back": "", "name": "Fuel Tank", "cat": "industrial", "h": 2.0, "mat": "metal", "dur": 5,
+		"mob": Mobility.FIXED, "ap": 3, "at": "center", "gen": true,
+		"rooms": ["utility", "mining"]},
 }
+
+## Цветовые варианты: та же строка таблицы (правила те же), свой id и своя плитка, где
+## основной цвет заменён. Генератор ставит базовый id и сам выбирает вариант (variant) —
+## один на шаг рецепта, так что ряд коек в казарме одного цвета. Разноцветные соседи не
+## срастаются: это два разных предмета.
+const VARIANTS := {
+	"bed": [["red", Color8(150, 58, 52)], ["green", Color8(70, 112, 72)], ["grey", Color8(120, 122, 126)],
+		["yellow", Color8(186, 156, 70)]],
+	"bunk_bed": [["green", Color8(70, 100, 66)]],
+	"sofa": [["red", Color8(140, 62, 56)], ["green", Color8(74, 108, 78)], ["brown", Color8(120, 86, 58)]],
+	"armchair": [["blue", Color8(76, 96, 140)], ["green", Color8(74, 108, 78)], ["brown", Color8(120, 86, 58)]],
+	"generator": [["red", Color8(170, 52, 44)], ["green", Color8(72, 112, 70)], ["grey", Color8(120, 126, 132)]],
+	"locker": [["blue", Color8(64, 88, 128)], ["grey", Color8(118, 124, 132)]],
+	"tool_cabinet": [["blue", Color8(46, 82, 150)], ["green", Color8(62, 110, 70)]],
+	"barrel": [["red", Color8(160, 48, 42)], ["yellow", Color8(196, 160, 40)], ["green", Color8(66, 108, 70)]],
+	"vending_machine": [["blue", Color8(44, 84, 160)], ["green", Color8(50, 124, 76)]],
+	"dumpster": [["blue", Color8(52, 80, 130)], ["red", Color8(140, 52, 44)]],
+	"trash_bin": [["grey", Color8(110, 114, 118)], ["blue", Color8(58, 88, 140)]],
+	"fuel_tank": [["red", Color8(160, 54, 46)]],
+	"piano": [["white", Color8(222, 220, 214)]],
+}
+
+static var DEFS: Dictionary = _with_variants()
+
+static func _with_variants() -> Dictionary:
+	var out := {}
+	for fid: String in _BASE:
+		out[fid] = _BASE[fid]
+		for v: Array in VARIANTS.get(fid, []):
+			var d: Dictionary = (_BASE[fid] as Dictionary).duplicate(true)
+			d["name"] = "%s (%s)" % [_BASE[fid]["name"], str(v[0]).capitalize()]
+			d["base"] = fid
+			d["tint"] = v[1]
+			d["gen"] = false
+			out["%s_%s" % [fid, v[0]]] = d
+	return out
+
+## Базовый id варианта («bed_red» → «bed»); у базового — он сам.
+static func base_of(fid: String) -> String:
+	return str(DEFS[fid].get("base", fid)) if DEFS.has(fid) else fid
+
+## Основной цвет варианта; прозрачный — у базового предмета.
+static func tint_of(fid: String) -> Color:
+	return DEFS[fid].get("tint", Color(0, 0, 0, 0)) if DEFS.has(fid) else Color(0, 0, 0, 0)
+
+## Случайный цветовой вариант базового fid (или он сам). Без вариантов поток не трогаем.
+static func variant(fid: String, rng: RandomNumberGenerator) -> String:
+	var vs: Array = VARIANTS.get(fid, [])
+	if vs.is_empty():
+		return fid
+	var k := rng.randi_range(0, vs.size())
+	return fid if k == 0 else "%s_%s" % [fid, vs[k - 1][0]]
 
 static func is_furniture(fid: String) -> bool:
 	return DEFS.has(fid)

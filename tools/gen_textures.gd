@@ -697,8 +697,18 @@ const SCREEN := Color8(70, 170, 190)
 const LAMP_RED := Color8(220, 70, 50)
 const LAMP_GREEN := Color8(90, 210, 110)
 
+## Основной цвет цветового варианта, пока рисуется вариант (Furniture.VARIANTS).
+var _tint := Color(0, 0, 0, 0)
+
+## Основной цвет предмета: у варианта — его, у базового — c.
+func _m(c: Color) -> Color:
+	return _tint if _tint.a > 0.0 else c
+
 func _furniture_all() -> void:
-	for fid: String in Furniture.ids():
+	for id: String in Furniture.ids():
+		# Вариант рисуется как базовый предмет, только основной цвет (_m) — свой.
+		_tint = Furniture.tint_of(id)
+		var fid := Furniture.base_of(id)
 		if Furniture.joins(fid):
 			# Многоклеточное: лист автотайла 4×4 (маска соседей того же вида, N1 E2 S4 W8),
 			# плюс одиночная плитка = маска 0 — для миниатюр и одной клетки.
@@ -706,10 +716,11 @@ func _furniture_all() -> void:
 			for mask in 16:
 				sheet.blit_rect(_joined_tile(fid, mask), Rect2i(0, 0, T, T),
 						Vector2i((mask % 4) * T, (mask / 4) * T))
-			_save(fid + Sprites.AUTOTILE_SUFFIX, sheet)
-			_save(fid, _joined_tile(fid, 0))
+			_save(id + Sprites.AUTOTILE_SUFFIX, sheet)
+			_save(id, _joined_tile(fid, 0))
 		else:
-			_save(fid, _furniture(fid))
+			_save(id, _furniture(fid))
+	_tint = Color(0, 0, 0, 0)
 
 # --- Многоклеточная мебель: плитка секции по маске соседей ---------------------------
 ## Плитка рисуется в «своей» системе координат предмета: спинка (изголовье, стена) —
@@ -726,22 +737,25 @@ func _joined_tile(fid: String, mask: int) -> Image:
 	var w := mask & Sprites.AUTOTILE_W == 0
 	var lo := Vector2i(M if w else 0, M if n else 0)
 	var hi := Vector2i(T - 1 - (M if e else 0), T - 1 - (M if s else 0))
-	var round := fid in ["dining_table", "conference_table", "bed", "sofa", "exam_table"]
+	var round := fid in ["dining_table", "conference_table", "bed", "sofa", "exam_table", "bunk_bed", "fuel_tank"]
 	var base: Color = _joined_base(fid)
 	var lift := int(Furniture.height_of(fid) * 2.0)
+	# Тело для проверки кромки: со сросшихся сторон оно продолжается за край плитки — иначе
+	# крайний ряд точек считался бы кромкой и между клетками предмета темнел бы шов.
+	var blo := Vector2i(lo.x if w else -T, lo.y if n else -T)
+	var bhi := Vector2i(hi.x if e else 2 * T, hi.y if s else 2 * T)
 	for y in T:
 		for x in T:
-			var inside := _in_body(x, y, lo, hi, n, e, s, w, round)
+			var inside := _in_body(x, y, blo, bhi, n, e, s, w, round)
 			if not inside:
-				if _in_body(x - lift, y - lift, lo, hi, n, e, s, w, round):
+				if _in_body(x - lift, y - lift, blo, bhi, n, e, s, w, round):
 					img.set_pixel(x, y, Color(0, 0, 0, 0.38))
 				continue
 			var c := _shade(base, 0.9 + 0.18 * _fbm(x, y, 311))
-			var edge := (w and x == lo.x) or (e and x == hi.x) or (n and y == lo.y) or (s and y == hi.y) \
-					or not _in_body(x - 1, y, lo, hi, n, e, s, w, round) \
-					or not _in_body(x + 1, y, lo, hi, n, e, s, w, round) \
-					or not _in_body(x, y - 1, lo, hi, n, e, s, w, round) \
-					or not _in_body(x, y + 1, lo, hi, n, e, s, w, round)
+			var edge := not _in_body(x - 1, y, blo, bhi, n, e, s, w, round) \
+					or not _in_body(x + 1, y, blo, bhi, n, e, s, w, round) \
+					or not _in_body(x, y - 1, blo, bhi, n, e, s, w, round) \
+					or not _in_body(x, y + 1, blo, bhi, n, e, s, w, round)
 			if edge:
 				c = _shade(base, 0.45)
 			elif (w and x == lo.x + 1) or (n and y == lo.y + 1):
@@ -774,7 +788,10 @@ func _in_body(x: int, y: int, lo: Vector2i, hi: Vector2i, n: bool, e: bool, s: b
 func _joined_base(fid: String) -> Color:
 	match fid:
 		"bed": return Color8(92, 64, 40)
-		"sofa": return FABRIC
+		"sofa": return _m(FABRIC)
+		"piano": return _m(Color8(34, 32, 34))
+		"bunk_bed": return STEEL_DARK
+		"fuel_tank": return _m(Color8(176, 178, 170))
 		"desk", "dining_table", "workbench", "bench", "park_table", "dresser", "reception_desk", "checkout_counter":
 			return WOOD
 		"conference_table", "wardrobe", "bookshelf": return WOOD_DARK
@@ -782,14 +799,14 @@ func _joined_base(fid: String) -> Color:
 		"office_desk": return Color8(150, 150, 146)
 		"kitchen_counter": return Color8(176, 172, 160)
 		"filing_cabinet": return STEEL
-		"locker": return OLIVE
+		"locker": return _m(OLIVE)
 		"storage_shelf": return STEEL_DARK
 		"server_rack": return Color8(36, 38, 44)
 		"industrial_cabinet": return Color8(84, 96, 88)
-		"generator": return Color8(196, 160, 40)
+		"generator": return _m(Color8(196, 160, 40))
 		"machinery": return Color8(82, 88, 96)
 		"exam_table": return STEEL
-		"dumpster": return Color8(54, 96, 70)
+		"dumpster": return _m(Color8(54, 96, 70))
 	return WOOD
 
 ## Детали секции: null — оставить тело. lo/hi — края тела, n/e/s/w — открытые стороны.
@@ -797,20 +814,42 @@ func _joined_detail(fid: String, x: int, y: int, lo: Vector2i, hi: Vector2i,
 		n: bool, e: bool, s: bool, w: bool) -> Variant:
 	match fid:
 		"bed":
-			if x <= lo.x + 1 or x >= hi.x - 1 or (n and y <= lo.y + 1) or (s and y >= hi.y - 1):
-				return null   # деревянная рама
+			if (w and x <= lo.x + 1) or (e and x >= hi.x - 1) or (n and y <= lo.y + 1) or (s and y >= hi.y - 1):
+				return null   # деревянная рама — только по наружным сторонам
 			if n and y <= lo.y + 8 and x >= 6 and x <= 25:
 				return Color8(234, 232, 224) if y >= lo.y + 3 else LINEN   # подушка у изголовья
 			if n and y <= lo.y + 11:
 				return LINEN
-			return _shade(Color8(84, 104, 136), 0.92 + 0.12 * _fbm(x, y, 321))   # одеяло
+			return _shade(_m(Color8(84, 104, 136)), 0.92 + 0.12 * _fbm(x, y, 321))   # одеяло
+		"bunk_bed":
+			if (w and x <= lo.x + 1) or (e and x >= hi.x - 1) or (n and y <= lo.y + 1) or (s and y >= hi.y - 1):
+				return null   # стальная рама
+			if n and y <= lo.y + 7 and x >= 7 and x <= 24:
+				return Color8(234, 232, 224)
+			if (y - lo.y) % 14 == 13:
+				return STEEL   # перекладина верхнего яруса
+			return _shade(_m(Color8(92, 100, 64)), 0.92 + 0.12 * _fbm(x, y, 322))   # армейское одеяло
+		"piano":
+			if n and y <= lo.y + 9:
+				return _shade(_m(Color8(34, 32, 34)), 0.7)   # корпус над клавиатурой
+			if y >= lo.y + 10 and y <= lo.y + 17:
+				var k := x % 4
+				if k == 0:
+					return Color8(90, 90, 90)
+				return Color8(16, 16, 18) if (y <= lo.y + 13 and k == 2 and (x / 4) % 7 != 2 and (x / 4) % 7 != 6) else Color8(236, 234, 226)
+		"fuel_tank":
+			var cx := (lo.x + hi.x) * 0.5 if (w and e) else (float(T) if w else 0.0)
+			var cy := (lo.y + hi.y) * 0.5 if (n and s) else (float(T) if n else 0.0)
+			var r := Vector2(x - cx, y - cy).length()
+			if absf(r - 22.0) < 1.0 or absf(r - 10.0) < 1.0:
+				return _shade(_m(Color8(176, 178, 170)), 0.7)   # обручи и люк
+			if r < 3.0:
+				return Color8(196, 160, 40)
 		"sofa":
 			if n and y <= lo.y + 6:
-				return _shade(FABRIC, 0.75)   # спинка
+				return _shade(_m(FABRIC), 0.75)   # спинка
 			if (w and x <= lo.x + 4) or (e and x >= hi.x - 4):
-				return _shade(FABRIC, 0.85)   # подлокотник
-			if (not w and x == 0) or (not e and x == T - 1):
-				return _shade(FABRIC, 0.6)    # шов между подушками
+				return _shade(_m(FABRIC), 0.85)   # подлокотник
 		"desk":
 			if w and x >= lo.x + 4 and x <= lo.x + 12 and y >= lo.y + 4 and y <= lo.y + 10:
 				return Color8(222, 220, 210)  # бумаги
@@ -831,8 +870,6 @@ func _joined_detail(fid: String, x: int, y: int, lo: Vector2i, hi: Vector2i,
 				return _shade(WOOD_DARK, 0.6)
 			if (x == 13 or x == 18) and y == (lo.y + hi.y) / 2:
 				return Color8(210, 190, 120)
-			if (not w and x == 0) or (not e and x == T - 1):
-				return _shade(WOOD_DARK, 0.55)
 		"dresser":
 			if y == (lo.y + hi.y) / 2:
 				return _shade(WOOD, 0.6)
@@ -852,10 +889,10 @@ func _joined_detail(fid: String, x: int, y: int, lo: Vector2i, hi: Vector2i,
 					or Vector2(x, y).distance_to(Vector2(hi.x - 9, lo.y + 13)) < 3.0):
 				return Color8(40, 40, 44)   # конфорки
 		"filing_cabinet", "locker", "industrial_cabinet":
-			if (not w and x == 0) or (not e and x == T - 1) or x == 15:
-				return _shade(_joined_base(fid), 0.6)   # швы дверец
+			if x == 15:
+				return _shade(_joined_base(fid), 0.6)   # шов дверец
 			if fid == "locker" and (y == lo.y + 4 or y == lo.y + 6) and x % 16 >= 4 and x % 16 <= 10:
-				return _shade(OLIVE, 0.6)   # жалюзи
+				return _shade(_m(OLIVE), 0.6)   # жалюзи
 			if fid == "filing_cabinet" and (y == lo.y + 6 or y == lo.y + 12):
 				return STEEL_DARK
 			if fid == "industrial_cabinet" and n and y >= lo.y + 3 and y <= lo.y + 6 and x % 16 >= 4 and x % 16 <= 9:
@@ -906,7 +943,7 @@ func _joined_detail(fid: String, x: int, y: int, lo: Vector2i, hi: Vector2i,
 				return WOOD_DARK          # лавки вдоль стола
 		"dumpster":
 			if x == 15 or x == 16:
-				return _shade(Color8(54, 96, 70), 0.6)
+				return _shade(_m(Color8(54, 96, 70)), 0.6)
 	return null
 
 func _furniture(fid: String) -> Image:
@@ -940,8 +977,9 @@ func _furniture_ops(fid: String) -> Array:
 		"chair":
 			return [["box", Rect2i(9, 8, 14, 16), WOOD], ["box", Rect2i(9, 6, 14, 5), WOOD_DARK]]
 		"armchair":
-			return [["round", Rect2i(5, 6, 22, 21), FABRIC_RED], ["box", Rect2i(5, 6, 22, 6), _shade(FABRIC_RED, 0.75)],
-					["box", Rect2i(5, 10, 4, 17), _shade(FABRIC_RED, 0.85)], ["box", Rect2i(23, 10, 4, 17), _shade(FABRIC_RED, 0.85)]]
+			var fr := _m(FABRIC_RED)
+			return [["round", Rect2i(5, 6, 22, 21), fr], ["box", Rect2i(5, 6, 22, 6), _shade(fr, 0.75)],
+					["box", Rect2i(5, 10, 4, 17), _shade(fr, 0.85)], ["box", Rect2i(23, 10, 4, 17), _shade(fr, 0.85)]]
 		"sofa":
 			return [["round", Rect2i(1, 7, 30, 19), FABRIC], ["box", Rect2i(1, 7, 30, 6), _shade(FABRIC, 0.75)],
 					["rect", Rect2i(15, 13, 1, 12), _shade(FABRIC, 0.7)],
@@ -1002,15 +1040,16 @@ func _furniture_ops(fid: String) -> Array:
 			return [["box", Rect2i(1, 6, 30, 12), Color8(160, 128, 90)], ["box", Rect2i(20, 7, 8, 7), Color8(52, 54, 60)],
 					["rect", Rect2i(22, 8, 4, 2), LAMP_GREEN], ["rect", Rect2i(4, 9, 12, 2), Color8(60, 60, 64)]]
 		"vending_machine":
-			return [["box", Rect2i(4, 1, 24, 20), Color8(176, 48, 44)], ["rect", Rect2i(6, 3, 13, 15), Color8(40, 46, 60)],
+			return [["box", Rect2i(4, 1, 24, 20), _m(Color8(176, 48, 44))], ["rect", Rect2i(6, 3, 13, 15), Color8(40, 46, 60)],
 					["rect", Rect2i(7, 4, 3, 3), Color8(220, 200, 80)], ["rect", Rect2i(11, 4, 3, 3), Color8(80, 190, 120)],
 					["rect", Rect2i(15, 4, 3, 3), Color8(90, 140, 230)], ["rect", Rect2i(21, 6, 4, 3), SCREEN]]
 		"workbench":
 			return [["box", Rect2i(1, 4, 30, 15), WOOD], ["box", Rect2i(4, 6, 6, 5), STEEL_DARK],
 					["rect", Rect2i(14, 9, 9, 2), STEEL], ["rect", Rect2i(24, 7, 3, 7), Color8(200, 160, 40)]]
 		"tool_cabinet":
-			return [["box", Rect2i(5, 3, 22, 15), Color8(170, 40, 36)], ["rect", Rect2i(7, 7, 18, 1), _shade(Color8(170, 40, 36), 0.55)],
-					["rect", Rect2i(7, 11, 18, 1), _shade(Color8(170, 40, 36), 0.55)], ["rect", Rect2i(7, 14, 18, 1), _shade(Color8(170, 40, 36), 0.55)]]
+			var tc := _m(Color8(170, 40, 36))
+			return [["box", Rect2i(5, 3, 22, 15), tc], ["rect", Rect2i(7, 7, 18, 1), _shade(tc, 0.55)],
+					["rect", Rect2i(7, 11, 18, 1), _shade(tc, 0.55)], ["rect", Rect2i(7, 14, 18, 1), _shade(tc, 0.55)]]
 		"storage_shelf":
 			return [["box", Rect2i(0, 6, 32, 20), STEEL_DARK], ["box", Rect2i(2, 8, 9, 7), Color8(160, 128, 84)],
 					["box", Rect2i(12, 8, 8, 7), Color8(140, 110, 72)], ["box", Rect2i(21, 8, 9, 7), Color8(160, 128, 84)],
@@ -1031,7 +1070,8 @@ func _furniture_ops(fid: String) -> Array:
 			return [["box", Rect2i(6, 6, 20, 20), Color8(150, 112, 66)], ["rect", Rect2i(8, 8, 16, 1), Color8(104, 74, 42)],
 					["rect", Rect2i(8, 23, 16, 1), Color8(104, 74, 42)], ["rect", Rect2i(15, 8, 2, 16), Color8(104, 74, 42)]]
 		"barrel":
-			return [["round", Rect2i(7, 7, 18, 18), Color8(52, 92, 132)], ["round", Rect2i(11, 11, 10, 10), _shade(Color8(52, 92, 132), 0.75)],
+			var bc := _m(Color8(52, 92, 132))
+			return [["round", Rect2i(7, 7, 18, 18), bc], ["round", Rect2i(11, 11, 10, 10), _shade(bc, 0.75)],
 					["dot", Vector2i(13, 13), Color8(200, 200, 200)]]
 		"equipment_cart":
 			return [["box", Rect2i(6, 4, 20, 22), STEEL], ["box", Rect2i(9, 7, 7, 6), Color8(220, 180, 50)],
@@ -1058,7 +1098,23 @@ func _furniture_ops(fid: String) -> Array:
 			return [["box", Rect2i(1, 10, 30, 12), WOOD], ["rect", Rect2i(1, 14, 30, 1), WOOD_DARK],
 					["rect", Rect2i(1, 18, 30, 1), WOOD_DARK]]
 		"trash_bin":
-			return [["round", Rect2i(9, 9, 14, 14), GREEN_PLASTIC], ["round", Rect2i(12, 12, 8, 8), _shade(GREEN_PLASTIC, 0.6)]]
+			return [["round", Rect2i(9, 9, 14, 14), _m(GREEN_PLASTIC)], ["round", Rect2i(12, 12, 8, 8), _shade(_m(GREEN_PLASTIC), 0.6)]]
+		"potted_plant":
+			return [["round", Rect2i(10, 14, 12, 12), Color8(150, 82, 52)], ["round", Rect2i(6, 4, 20, 18), Color8(64, 118, 60)],
+					["round", Rect2i(10, 7, 9, 8), Color8(92, 150, 78)], ["dot", Vector2i(20, 13), Color8(40, 84, 40)]]
+		"tv_stand":
+			return [["box", Rect2i(2, 6, 28, 12), WOOD_DARK], ["box", Rect2i(5, 3, 22, 5), Color8(24, 24, 28)],
+					["rect", Rect2i(6, 4, 20, 2), Color8(60, 80, 110)], ["rect", Rect2i(6, 13, 20, 1), _shade(WOOD_DARK, 0.6)]]
+		"stove":
+			return [["box", Rect2i(4, 2, 24, 22), WHITE_METAL], ["round", Rect2i(7, 5, 7, 7), Color8(40, 40, 44)],
+					["round", Rect2i(18, 5, 7, 7), Color8(40, 40, 44)], ["round", Rect2i(7, 14, 7, 7), Color8(40, 40, 44)],
+					["round", Rect2i(18, 14, 7, 7), Color8(40, 40, 44)], ["dot", Vector2i(10, 8), LAMP_RED]]
+		"water_cooler":
+			return [["box", Rect2i(9, 8, 14, 16), WHITE_METAL], ["round", Rect2i(10, 3, 12, 12), Color8(120, 180, 230)],
+					["round", Rect2i(13, 6, 6, 6), Color8(170, 215, 245)], ["dot", Vector2i(13, 20), LAMP_RED], ["dot", Vector2i(18, 20), Color8(70, 120, 220)]]
+		"washing_machine":
+			return [["box", Rect2i(4, 3, 24, 24), WHITE_METAL], ["round", Rect2i(8, 9, 16, 16), Color8(60, 64, 70)],
+					["round", Rect2i(11, 12, 10, 10), Color8(130, 170, 200)], ["rect", Rect2i(6, 5, 8, 2), STEEL_DARK]]
 		"dumpster":
 			return [["box", Rect2i(1, 4, 30, 22), Color8(54, 96, 70)], ["rect", Rect2i(15, 6, 2, 18), _shade(Color8(54, 96, 70), 0.6)],
 					["rect", Rect2i(3, 6, 2, 18), _shade(Color8(54, 96, 70), 1.2)]]

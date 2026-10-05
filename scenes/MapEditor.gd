@@ -870,9 +870,7 @@ func _release(c: Vector2i) -> void:
 			if _drag_start != Vector2i(-1, -1):
 				_begin()
 				var cells: Array = []
-				var shape: Array[Vector2i] = line_cells(_drag_start, _drag_cur) if tool == Tool.LINE \
-						else rect_cells(_drag_start, _drag_cur, rect_filled)
-				for p: Vector2i in shape:
+				for p: Vector2i in _drag_shape():
 					if tool == Tool.LINE:
 						cells.append_array(_brush_cells(p))
 					else:
@@ -1117,14 +1115,16 @@ func _draw_overlays() -> void:
 	var cellv := Vector2(CELL, CELL)
 	# Линия или прямоугольник в процессе.
 	if _drag_start != Vector2i(-1, -1) and tool in [Tool.LINE, Tool.RECT]:
-		var shape: Array[Vector2i] = line_cells(_drag_start, _drag_cur) if tool == Tool.LINE \
-				else rect_cells(_drag_start, _drag_cur, rect_filled)
-		var cells: Array = []
-		for p: Vector2i in shape:
-			cells.append_array(_brush_cells(p) if tool == Tool.LINE else [p])
+		var cells: Array[Vector2i] = []
+		for p: Vector2i in _drag_shape():
+			if tool == Tool.LINE:
+				cells.append_array(_brush_cells(p))
+			else:
+				cells.append(p)
+		var tex := _ghost(brush)
 		for mask: int in _sym_masks():
 			for c: Vector2i in cells:
-				draw_rect(Rect2(Vector2(_mirror(c, mask)) * CELL, cellv), Color(accent, 0.35))
+				draw_texture_rect(tex, Rect2(Vector2(_mirror(c, mask)) * CELL, cellv), false, GHOST)
 	# Рамка выделения в процессе и готовая.
 	if tool == Tool.SELECT and _drag_start != Vector2i(-1, -1) and not _float_moving:
 		var a := Vector2(mini(_drag_start.x, _drag_cur.x), mini(_drag_start.y, _drag_cur.y)) * CELL
@@ -1150,11 +1150,18 @@ func _draw_overlays() -> void:
 				pos.y = map.height - at.y - int(q["h"])
 			_draw_pattern(q, pos, accent)
 		return
-	# Курсор: кисть нужного размера (и её отражения).
+	# Курсор: кисть нужного размера (и её отражения) — с плиткой кисти вполпрозрачности.
 	if map.in_bounds(_hover) and _drag_start == Vector2i(-1, -1):
-		var cells: Array[Vector2i] = _brush_cells(_hover) if tool in [Tool.BRUSH, Tool.ERASER] \
-				else [_hover] as Array[Vector2i]
+		var cells: Array[Vector2i] = [_hover]
+		if tool in [Tool.BRUSH, Tool.ERASER]:
+			cells = _brush_cells(_hover)
+		var ghost: Texture2D = _ghost(brush) if tool in [Tool.BRUSH, Tool.LINE, Tool.RECT, Tool.FILL] else null
 		for mask: int in _sym_masks():
+			if ghost != null:
+				for c: Vector2i in cells:
+					var gm := _mirror(c, mask)
+					if map.in_bounds(gm):
+						draw_texture_rect(ghost, Rect2(Vector2(gm) * CELL, cellv), false, GHOST)
 			var col := Color(1, 1, 1, 0.8 if mask == 0 else 0.4)
 			var mn := Vector2i(1 << 30, 1 << 30)
 			var mx := Vector2i(-(1 << 30), -(1 << 30))
@@ -1172,23 +1179,49 @@ func _dashed_rect(r: Rect2, col: Color) -> void:
 	draw_dashed_line(r.end, Vector2(r.position.x, r.end.y), col, wdt, dash)
 	draw_dashed_line(Vector2(r.position.x, r.end.y), r.position, col, wdt, dash)
 
+## Узор в руке — настоящими плитками (пол, поверх объект, бойцы), чуть прозрачно; только
+## видимая часть, чтобы вставка всей карты 500×500 не рисовала четверть миллиона клеток.
 func _draw_pattern(p: Dictionary, at: Vector2i, accent: Color) -> void:
 	var w: int = p["w"]
-	for y in int(p["h"]):
-		for x in w:
+	var vis0 := cell_at(Vector2.ZERO) - at
+	var vis1 := cell_at(get_viewport_rect().size) - at
+	var tint := Color(1, 1, 1, 0.75)
+	for y in range(maxi(0, vis0.y), mini(int(p["h"]), vis1.y + 1)):
+		for x in range(maxi(0, vis0.x), mini(w, vis1.x + 1)):
 			var cell: Variant = p["cells"][y * w + x]
 			if cell == null:
 				continue
 			var t: Array = cell
-			var col := Color(0.85, 0.85, 0.85, 0.35)
-			if bool(t[2]):
-				col = Color(0.05, 0.05, 0.12, 0.6)
-			elif float(t[1]) >= MCF.WALL_HEIGHT:
-				col = Color(0.25, 0.25, 0.28, 0.75)
-			elif String(t[3]) != "":
-				col = Color(0.75, 0.62, 0.35, 0.7)
-			draw_rect(Rect2(Vector2(at + Vector2i(x, y)) * CELL, Vector2(CELL, CELL)), col)
+			var r := Rect2(Vector2(at + Vector2i(x, y)) * CELL, Vector2(CELL, CELL))
+			var ground := "space" if bool(t[2]) else ("grass" if int(t[0]) == MCF.FLOOR_GRASS else "floor")
+			draw_texture_rect(_ghost(ground), r, false, tint)
+			if String(t[3]) != "" and not bool(t[2]):
+				draw_texture_rect(_ghost(String(t[3])), r, false, tint)
+	for sp: Array in p["spawns"]:
+		draw_texture_rect(_ghost("unit:" + String(sp[2])),
+				Rect2(Vector2(at + Vector2i(int(sp[0]), int(sp[1]))) * CELL, Vector2(CELL, CELL)), false, tint)
 	_dashed_rect(Rect2(Vector2(at) * CELL, Vector2(w, int(p["h"])) * CELL), accent)
+
+## Клетки линии или прямоугольника, что тянут сейчас.
+func _drag_shape() -> Array[Vector2i]:
+	if tool == Tool.LINE:
+		return line_cells(_drag_start, _drag_cur)
+	return rect_cells(_drag_start, _drag_cur, rect_filled)
+
+## Плитка для предпросмотра (кисть под курсором, узор в руке): мебель — своей одиночной
+## плиткой, прочее — картинкой палитры. Кэш по окружению: пресет меняет наряд.
+const GHOST := Color(1, 1, 1, 0.5)
+var _ghost_cache: Dictionary = {}
+func _ghost(id: String) -> Texture2D:
+	var key := _env + "|" + id
+	var t: Texture2D = _ghost_cache.get(key)
+	if t == null:
+		if Furniture.is_furniture(id):
+			t = Sprites.texture_of(id)
+		if t == null:
+			t = _thumb(id)
+		_ghost_cache[key] = t
+	return t
 
 # ============================================================================
 # Интерфейс
