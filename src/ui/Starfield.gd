@@ -31,6 +31,17 @@ const SEED := 20260907
 ## Куда «летит» камера. Наклонный дрейф читается как движение; строго горизонтальный
 ## выглядит как едущая лента.
 const DRIFT := Vector2(-1.0, 0.34)
+## Доля панорамы доски, которую забирает слой (0.9.3): дальний почти стоит, ближний почти
+## едет вместе с картой. Порядок — как у LAYERS, от дальнего к ближнему.
+const DEPTH := [0.05, 0.12, 0.26]
+
+## Параллакс за ДОСКОЙ боя (0.9.3): клетки космоса больше не рисуются плиткой, и в
+## прорехах видно это небо — то же, что в главном меню. Оно сдвигается вслед за панорамой
+## доски, отсюда и глубина. В меню доски нет, и слои просто дрейфуют сами.
+##
+## camera — панорама доски в точках экрана (Main.pan); drift — плывёт ли фон сам по себе.
+var camera: Vector2 = Vector2.ZERO
+var drift: bool = true
 
 ## Оттенки звёзд: холодный белый, голубоватый, тёплый. Разноцветное небо живее
 ## одноцветного, но разброс намеренно маленький — это фон, а не витраж.
@@ -40,25 +51,31 @@ const TINTS := [
 
 var _layers: Array = []
 var _viewport_size: Vector2 = Vector2.ZERO
+## Подложка и небо: их размер выставляется в _fit() ЧИСЛОМ, а не привязками. Привязки
+## меряются по родителю-Control, а за доской боя слои висят на голом CanvasLayer — там
+## прямоугольник родителя нулевой, подложка схлопывалась в точку, и сквозь звёзды
+## просвечивал серый фон окна.
+var _solid: ColorRect = null
+var _base: TextureRect = null
 
 func _ready() -> void:
-	set_anchors_preset(Control.PRESET_FULL_RECT)
+	# Размер — числом в _fit(), не привязками: за доской боя слои висят на голом
+	# CanvasLayer, где привязки мерить не по чему (см. _solid).
+	set_anchors_preset(Control.PRESET_TOP_LEFT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	# Гарантированно ЧЁРНАЯ подложка (item 1): сплошной ColorRect под всем. Прежде фон
 	# рисовался только градиент-текстурой, и если она не растягивалась на весь экран,
 	# сквозь неё просвечивал серый clear-color окна — отсюда «параллакс не чёрный».
-	var solid := ColorRect.new()
-	solid.color = Color(0, 0, 0)
-	solid.set_anchors_preset(Control.PRESET_FULL_RECT)
-	solid.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(solid)
-	var base := TextureRect.new()
-	base.texture = _sky_gradient()
-	base.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	base.stretch_mode = TextureRect.STRETCH_SCALE
-	base.set_anchors_preset(Control.PRESET_FULL_RECT)
-	base.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(base)
+	_solid = ColorRect.new()
+	_solid.color = Color(0, 0, 0)
+	_solid.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_solid)
+	_base = TextureRect.new()
+	_base.texture = _sky_gradient()
+	_base.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_base.stretch_mode = TextureRect.STRETCH_SCALE
+	_base.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_base)
 
 	var rng := RandomNumberGenerator.new()
 	rng.seed = SEED
@@ -80,19 +97,31 @@ func _process(delta: float) -> void:
 	if get_viewport_rect().size != _viewport_size:
 		_fit()
 	var dir := DRIFT.normalized()
-	for layer: Dictionary in _layers:
-		var offset: Vector2 = layer["offset"] + dir * float(layer["speed"]) * delta
+	for i in _layers.size():
+		var layer: Dictionary = _layers[i]
+		var offset: Vector2 = layer["offset"]
+		if drift:
+			offset += dir * float(layer["speed"]) * delta
 		# Смещение живёт внутри одной плитки: сдвиг на целую плитку неотличим от нуля,
 		# а без сворачивания координата за долгую сессию доросла бы до потери точности.
-		layer["offset"] = Vector2(fposmod(offset.x, float(TILE)),
-				fposmod(offset.y, float(TILE)))
+		var wrapped := Vector2(fposmod(offset.x, float(TILE)), fposmod(offset.y, float(TILE)))
+		layer["offset"] = wrapped
+		# Панорама доски входит сюда долей DEPTH — тоже свёрнутой по плитке, иначе на
+		# большой карте прямоугольник уехал бы за пределы экрана и слой пропал бы.
+		var par := camera * float(DEPTH[i] if i < DEPTH.size() else 0.0)
 		var rect: TextureRect = layer["rect"]
-		rect.position = Vector2(layer["offset"]) - Vector2(TILE, TILE)
+		rect.position = Vector2(fposmod(wrapped.x + par.x, float(TILE)),
+				fposmod(wrapped.y + par.y, float(TILE))) - Vector2(TILE, TILE)
 
 ## Подогнать слои под окно. Каждый на плитку больше экрана с каждой стороны — запас
 ## под сдвиг, иначе у края появлялась бы пустая полоса.
 func _fit() -> void:
 	_viewport_size = get_viewport_rect().size
+	size = _viewport_size
+	if _solid != null:
+		_solid.size = _viewport_size
+	if _base != null:
+		_base.size = _viewport_size
 	for layer: Dictionary in _layers:
 		(layer["rect"] as TextureRect).size = _viewport_size + Vector2(TILE, TILE) * 2.0
 

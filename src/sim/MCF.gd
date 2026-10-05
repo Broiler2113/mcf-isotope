@@ -226,6 +226,15 @@ const FEATURE_ARMOR_GLASS := "armor_glass"
 ## Что нужно бронестеклу, чтобы выдержать.
 const ARMOR_GLASS_HOLD_NEED := 4
 
+## ГРАНИЦА МИРА (0.9.3) — кайма по краю поля за десятью клетками, на которые можно выйти
+## (MapGen.BORDER). Стена в 2 м, и её НЕТ ни в одном списке разрушимого: ни кирка, ни
+## взрыв, ни огонь, ни луч её не берут, обойти её тоже нельзя. Так за картой остаётся
+## продолжение мира, а не обрыв, но уйти от боя дальше десяти клеток не выйдет.
+##
+## Своей плитки у неё нет нигде, кроме бункера («boundary_bunker» — тот же грунт): пол и
+## вакуум под ней сохраняются, и за станцией видны звёзды, за городом и полем — трава.
+const FEATURE_BOUNDARY := "boundary"
+
 ## Высота укрытия каждого объекта (§3.7). 2 = полноценная стена.
 const FEATURE_HEIGHT := {
 	FEATURE_DRONE_STATION: 1.0,
@@ -250,6 +259,7 @@ const FEATURE_HEIGHT := {
 	FEATURE_HEDGEHOG_SANDBAGS: 2.0,
 	FEATURE_ARMOR_WALL: 2.0,
 	FEATURE_ARMOR_GLASS: 2.0,
+	FEATURE_BOUNDARY: 2.0,
 }
 
 const FEATURE_NAMES := {
@@ -274,6 +284,7 @@ const FEATURE_NAMES := {
 	FEATURE_HEDGEHOG_SANDBAGS: "Hedgehog on Sandbags",
 	FEATURE_ARMOR_WALL: "Armored Wall",
 	FEATURE_ARMOR_GLASS: "Armored Glass",
+	FEATURE_BOUNDARY: "Edge of the World",
 }
 
 # --- ДПМГ: стационарный пулемёт (§3.7) ---
@@ -347,11 +358,32 @@ const FLOOR_GRASS := 2
 ## Вид пола (0.9.2): дерево, плитка, ковёр… — по клетке (MapData.floor_look), независимо от
 ## правил: горит ли пол, решает floor_type. 0 — пол окружения. Индекс — номер картинки.
 ## «Солнечные панели» кладутся на клетки КОСМОСА у станции: вид поверх звёзд, не пол.
+## «Решётка» (GRILL, 0.9.3) — настил, ПРОЗРАЧНЫЙ между прутьями: сквозь него видно то, что
+## на клетке и так есть (в космосе — параллакс звёзд). Поэтому он не заменяет пол, а
+## ложится ПОВЕРХ него (FLOOR_OVERLAY_LOOKS). Новые виды дописываются только в КОНЕЦ:
+## номер вида лежит в сохранённой карте, и перестановка переписала бы все старые карты.
 const FLOOR_LOOKS := ["", "floor_wood", "floor_parquet", "floor_tile", "floor_checker",
-		"floor_carpet_red", "floor_carpet_blue", "floor_lino", "floor_plate", "floor_grate", "floor_solar"]
+		"floor_carpet_red", "floor_carpet_blue", "floor_lino", "floor_plate", "floor_grate", "floor_solar",
+		"floor_grill"]
 const FLOOR_LOOK_NAMES := ["Floor", "Wood floor", "Parquet", "Tiles", "Checker tiles", "Red carpet",
-		"Blue carpet", "Linoleum", "Steel plate", "Grating", "Solar panels"]
-enum Look {DEFAULT, WOOD, PARQUET, TILE, CHECKER, CARPET_RED, CARPET_BLUE, LINO, PLATE, GRATE, SOLAR}
+		"Blue carpet", "Linoleum", "Steel plate", "Grating", "Solar panels", "Grill walkway"]
+enum Look {DEFAULT, WOOD, PARQUET, TILE, CHECKER, CARPET_RED, CARPET_BLUE, LINO, PLATE, GRATE, SOLAR,
+		GRILL}
+## Виды, которые кладутся ПОВЕРХ пола клетки, а не вместо него.
+const FLOOR_OVERLAY_LOOKS := {Look.GRILL: true}
+
+## Акцент службы (0.9.3): цветная полоса по стенам отдела и рама двери в тот же цвет — как
+## на настоящей станции, где по коридору видно, куда ты зашёл. Только станция и бункер; всё,
+## чего игрок не называл (жилой блок, производство, прочее), остаётся без цвета.
+## Номер акцента лежит в карте (MapData.wall_accent), поэтому список только растёт.
+enum Accent {NONE, COMMAND, CONTROL, SECURITY, MEDICAL, SCIENCE, ENGINEERING, CARGO}
+const ACCENT_NAMES := ["None", "Command", "Control", "Security", "Medical", "Science",
+		"Engineering", "Cargo"]
+## Синий — командный, белый — пульты и связь, красный — охрана, зелёный — медицина,
+## фиолетовый — наука, жёлтый — инженерный, оранжевый — грузовой.
+const ACCENT_COLORS := [Color(0, 0, 0, 0), Color8(54, 110, 214), Color8(228, 232, 238),
+		Color8(198, 48, 44), Color8(46, 166, 88), Color8(144, 72, 196), Color8(226, 184, 44),
+		Color8(226, 122, 36)]
 
 ## Порог d6 для розжига от СОСЕДНЕЙ горящей клетки: клетка загорается на «need и выше»,
 ## то есть шанс равен (7 − need)/6. Таблица взята из #14 один в один:
@@ -385,6 +417,8 @@ const FIRE_NEED_BY_FEATURE := {
 	# А бронестекло горит как обычное: от огня его броня не спасает (оно её и не для
 	# того носит — только против пуль).
 	FEATURE_ARMOR_GLASS: FIRE_NEED_GLASS,
+	# Граница мира не горит — как и всё прочее, огонь по ней не проходит.
+	FEATURE_BOUNDARY: FIRE_NEVER,
 }
 
 ## Пожаротушительная граната (#19): квадрат 5×5 — радиус 2 по Чебышёву от эпицентра.

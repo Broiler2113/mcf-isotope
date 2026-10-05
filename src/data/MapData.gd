@@ -39,6 +39,10 @@ var feature_dur: Dictionary = {}
 var feature_turn: Dictionary = {}
 ## Вид пола по клеткам (MCF.FLOOR_LOOKS, 0.9.2). Пусто — у карты нигде нет особого пола.
 var floor_look: PackedByteArray = PackedByteArray()
+## Акцент службы по клеткам (MCF.Accent, 0.9.3): цветная полоса на стене и рама двери.
+## Читается ТОЛЬКО на стенах и шлюзах — на полу его никто не рисует. Как и вид пола, это
+## чистая косметика: на правила не влияет и в состояние боя не входит. Пусто — акцентов нет.
+var wall_accent: PackedByteArray = PackedByteArray()
 
 func _init(p_width: int = 16, p_height: int = 12) -> void:
 	resize(p_width, p_height)
@@ -64,6 +68,7 @@ func resize(p_width: int, p_height: int) -> void:
 	feature_dur = {}
 	feature_turn = {}
 	floor_look = PackedByteArray()
+	wall_accent = PackedByteArray()
 
 ## Изменить размер, СОХРАНИВ содержимое (batch 13 #14): клетки в пересечении старого и
 ## нового поля остаются как были, новые — космос, спавны за краем отбрасываются. Раньше
@@ -80,6 +85,7 @@ func resize_keep(p_width: int, p_height: int) -> void:
 	var old_dur := feature_dur
 	var old_turn := feature_turn
 	var old_look := floor_look
+	var old_accent := wall_accent
 	resize(p_width, p_height)
 	fill_all_space()
 	for y in mini(old_h, height):
@@ -97,6 +103,8 @@ func resize_keep(p_width: int, p_height: int) -> void:
 				feature_turn[dst] = old_turn[src]
 			if old_look.size() > src and old_look[src] != 0:
 				set_look(dst, old_look[src])
+			if old_accent.size() > src and old_accent[src] != 0:
+				set_accent(dst, old_accent[src])
 	for s in old_spawns:
 		if in_bounds(s["coord"]):
 			spawns.append(s)
@@ -172,6 +180,8 @@ func zone_cells(owner: int) -> Array:
 func apply_to_grid(grid: Grid) -> void:
 	grid.floor_look = floor_look.duplicate() if floor_look.size() == grid.width * grid.height \
 			and grid.width == width else PackedByteArray()
+	grid.wall_accent = wall_accent.duplicate() if wall_accent.size() == grid.width * grid.height \
+			and grid.width == width else PackedByteArray()
 	grid.furniture_turn.clear()
 	for i: int in feature_turn:
 		if i < feature_id.size() and str(feature_turn[i][0]) == feature_id[i]:
@@ -212,6 +222,16 @@ func set_look(i: int, v: int) -> void:
 			return
 		floor_look.resize(width * height)
 	floor_look[i] = v
+
+func get_accent(i: int) -> int:
+	return wall_accent[i] if i < wall_accent.size() else 0
+
+func set_accent(i: int, v: int) -> void:
+	if wall_accent.is_empty():
+		if v == 0:
+			return
+		wall_accent.resize(width * height)
+	wall_accent[i] = v
 
 ## Вид пола — сжатием «значение, сколько подряд»: комнаты — прямоугольники, и строка карты
 ## 250 клеток пишется парой-тройкой чисел.
@@ -411,6 +431,8 @@ func to_dict() -> Dictionary:
 		out["feature_turn"] = turn_out
 	if floor_look.size() > 0 and floor_look.count(0) < floor_look.size():
 		out["floor_look"] = rle(floor_look)
+	if wall_accent.size() > 0 and wall_accent.count(0) < wall_accent.size():
+		out["wall_accent"] = rle(wall_accent)
 	return out
 
 static func from_dict(d: Dictionary) -> MapData:
@@ -443,6 +465,8 @@ static func from_dict(d: Dictionary) -> MapData:
 			m.feature_turn[int(k)] = [str(rec[0]), int(rec[1]) % 4]
 	if d.has("floor_look"):
 		m.floor_look = unrle(d["floor_look"], n)
+	if d.has("wall_accent"):
+		m.wall_accent = unrle(d["wall_accent"], n)
 	var zo: Array = d.get("zone_owner", [])
 	for i in n:
 		if i < zo.size():

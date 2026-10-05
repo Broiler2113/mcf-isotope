@@ -26,10 +26,16 @@ var _cells: Array[GridCell] = []
 var furniture_turn: Dictionary = {}
 ## Вид пола по клеткам (MapData.floor_look) — тоже только для отрисовки. Пусто — нет.
 var floor_look: PackedByteArray = PackedByteArray()
+## Акцент службы по клеткам (MapData.wall_accent) — тоже только для отрисовки.
+var wall_accent: PackedByteArray = PackedByteArray()
 
 func look_at(x: int, y: int) -> int:
 	var i := y * width + x
 	return floor_look[i] if i < floor_look.size() else 0
+
+func accent_at(x: int, y: int) -> int:
+	var i := y * width + x
+	return wall_accent[i] if i < wall_accent.size() else 0
 
 func _init(p_width: int, p_height: int) -> void:
 	width = p_width

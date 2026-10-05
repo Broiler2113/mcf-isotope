@@ -485,7 +485,13 @@ func _generation() -> void:
 		for seed: int in [301, 302, 303]:
 			var o := {"symmetric": seed == 303, "size": 1 + seed % 2}
 			var packed := _gen(style, 4, seed, o)
-			var bare := _gen(style, 0, seed, o)
+			# «Та же карта без мебели» делается ИЗ НЕЁ ЖЕ, а не вторым прогоном генератора
+			# с furniture = 0. Прогон с выключенной мебелью — это ДРУГАЯ карта: в
+			# обставленных комнатах генератор не раскладывает куч ящиков (§20.2), а
+			# изменившееся расположение ящиков меняет и проломы (_join_pockets) — вплоть до
+			# того, что в одной карте на клетке шлюз, а в другой стена. Сравнение двух таких
+			# карт показывало «проход перекрыт» там, где никакая мебель ни при чём.
+			var bare := _strip_furniture(packed)
 			if _cut_off(bare, packed) > 0 or not _no_furniture_at_doors(packed):
 				bad += 1
 				print("     walkway broken: style %d seed %d" % [style, seed])
@@ -533,6 +539,16 @@ func _no_furniture_at_doors(m: MapData) -> bool:
 					if Furniture.is_furniture(m.get_feature(Vector2i(x + dx, y + dy))):
 						return false
 	return true
+
+## Та же карта, с которой снята вся мебель: рельеф клетка в клетку тот же, и разница в
+## проходимости может быть только от мебели.
+func _strip_furniture(m: MapData) -> MapData:
+	var out := MapData.from_dict(m.to_dict())
+	for i in out.feature_id.size():
+		if Furniture.is_furniture(out.feature_id[i]):
+			out.set_cell(Vector2i(i % out.width, i / out.width), out.floor_type[i], 0.0,
+					out.is_space[i] != 0, "")
+	return out
 
 ## Сколько клеток свободного пола, достижимых на карте без мебели, становятся
 ## недостижимыми, если всю мебель считать стеной. Источник — первая клетка зоны.

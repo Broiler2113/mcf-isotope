@@ -20,6 +20,12 @@ const FONT_BASE := "res://interface_textures/ui_font"
 const FONT_EXTS := ["ttf", "otf"]
 const SLICE := 6          # 9-slice border, matches the 32px generated chrome
 const FONT_FALLBACKS := ["Tahoma", "Verdana", "Geneva", "DejaVu Sans", "Arial", "Helvetica"]
+## Знаковый шрифт — вторая очередь запасных (см. _font). Интерфейс рисует ✓, ✕, ▶, ◀, ▴, ▾,
+## →, •, ⚠, ⟳, ░: в тексте этих знаков нет ни у Handjet, ни у Tahoma с Arial. Здесь перечислены
+## шрифты, где они есть: на Windows — Segoe UI Symbol, на macOS — Apple Symbols, на Linux —
+## DejaVu Sans и Noto.
+const SYMBOL_FALLBACKS := ["Segoe UI Symbol", "Segoe UI", "Apple Symbols", "DejaVu Sans",
+		"Noto Sans Symbols 2", "Symbola", "Arial Unicode MS"]
 ## Шрифт игры (0.9.2): слегка пиксельный Handjet (SIL OFL, fonts/OFL.txt). Файл — тот же
 ## Handjet с увеличенным на 16 % кеглем (меньше unitsPerEm): при прежних размерах (13 и
 ## т. д.) строчные такой же высоты, как у прежнего Tahoma, и раскладка окон не поехала.
@@ -446,12 +452,25 @@ func _font() -> Font:
 	# Пиксельный шрифт — без хинтинга и дробных позиций: штрихи остаются на сетке.
 	game.hinting = TextServer.HINTING_NONE
 	game.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_DISABLED
-	game.fallbacks = [sf]   # чего в Handjet нет (✓ и пр.) — системным шрифтом
+	# Чего в Handjet нет — системным шрифтом, и ДВУМЯ очередями. SystemFont берёт ПЕРВОЕ
+	# найденное имя из списка, а не перебирает их по глифу: на Windows это Tahoma, и ✓, ✕,
+	# ▶, ⚠, ⟳ в ней просто отсутствуют — на их месте пустые квадраты. У нас на Linux первой
+	# в списке оказывалась DejaVu Sans, где эти знаки есть, поэтому мы ничего не замечали.
+	# Поэтому за текстовым шрифтом идёт отдельный ЗНАКОВЫЙ.
+	game.fallbacks = [sf, _symbol_font()]
 	# Пробел у Handjet узкий — слова слипались («Turn-basedtactics»); чуть шире.
 	var fv := FontVariation.new()
 	fv.base_font = game
 	fv.spacing_space = 2
 	return fv
+
+## Вторая очередь запасных: шрифт со знаками (см. SYMBOL_FALLBACKS). allow_system_fallback
+## оставлен включённым — если в системе нет и этих, пусть движок ищет сам.
+func _symbol_font() -> SystemFont:
+	var sym := SystemFont.new()
+	sym.font_names = PackedStringArray(SYMBOL_FALLBACKS)
+	sym.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_AUTO
+	return sym
 
 ## Жирное начертание шрифта игры: у Handjet настоящая ось веса, а не обводка.
 var _bold_cache: FontVariation = null

@@ -150,6 +150,8 @@ func _ready() -> void:
 	# по нему же его бросит бой (MapHandoff.dice_seed).
 	if not networked():
 		_shared_seed = randi() & 0x7FFFFFFF
+	_build_sky()
+	_home_view.call_deferred()
 	_build_ui()
 	set_process(true)
 	_refresh_labels()
@@ -715,6 +717,35 @@ func _neutral_at(coord: Vector2i) -> int:
 	return -1
 
 # --- Ввод ---
+## Небо за доской (0.9.3): клетки космоса не рисуются, и в прорехах виден параллакс
+## звёзд — тот же, что в главном меню и в бою. Карте без космоса оно не нужно.
+var _sky: Starfield = null
+
+## Камера на свою зону развёртывания (0.9.3). Раньше экран открывался в углу доски, и
+## углом карты был её угол; теперь там кайма — десяток клеток пустой земли или космоса.
+func _home_view() -> void:
+	var cells: Array = map.zone_cells(active_side)
+	var centre := Vector2.ZERO
+	if cells.is_empty():
+		centre = Vector2(map.width, map.height) * 0.5
+	else:
+		for c: Vector2i in cells:
+			centre += Vector2(c)
+		centre /= float(cells.size())
+	pan = get_viewport_rect().size * 0.5 - zoom * (_cell_origin(Vector2i(centre)) \
+			+ Vector2(CELL, CELL) * 0.5)
+	queue_redraw()
+
+func _build_sky() -> void:
+	if map == null or not map.is_space.has(1):
+		return
+	var layer := CanvasLayer.new()
+	layer.layer = -10
+	add_child(layer)
+	_sky = Starfield.new()
+	_sky.drift = false
+	layer.add_child(_sky)
+
 func _process(delta: float) -> void:
 	# Строка состояния — рамкой набора; пустая рамка без сообщения ни к чему.
 	if _status != null:
@@ -1327,6 +1358,8 @@ func _draw() -> void:
 		_tile_grid = g
 		add_child(_tile_layer)
 	_tile_layer.position = pan
+	if _sky != null:
+		_sky.camera = pan   # параллакс за доской (0.9.3) — см. Main._build_sky
 	_tile_layer.scale = Vector2(zoom, zoom)
 	_tile_layer.cells = Rect2i(vx0, vy0, vx1 - vx0, vy1 - vy0)
 	# Сетка — в слое плиток, между полом и объектами: стену или стол в несколько клеток

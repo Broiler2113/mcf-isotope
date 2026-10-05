@@ -97,7 +97,10 @@ func _check_random(lobby: Node, opt: OptionButton, paths: Array) -> void:
 	ck(lobby._gen_box.visible, "picking 'Random map' shows the generator settings")
 	lobby._gen_seed.value = 4242  # лобби бросает зерно само — для повторяемости задаём своё
 	var a: MapData = lobby._selected_map()
-	ck(a.width == MapGen.SIZES[1].x, "the default random map is Medium (%d wide)" % a.width)
+	# Размер в лобби — ИГРОВОЙ карты; поле вокруг неё шире на кайму (0.9.3).
+	ck(MapGen.map_size(a) == MapGen.SIZES[1],
+			"the default random map is Medium (%s inside a %dx%d field)"
+			% [str(MapGen.map_size(a)), a.width, a.height])
 	ck(lobby._map_zone_count() == lobby.roster.slots.size(),
 			"one zone per slot: %d zone(s), %d slot(s)" % [lobby._map_zone_count(), lobby.roster.slots.size()])
 	ck(lobby._selected_map() == a, "the same settings don't rebuild the map on every read")
@@ -161,7 +164,8 @@ func _check_bunker_custom_symmetric(lobby: Node) -> void:
 	lobby._gen_w.value = 64
 	lobby._gen_h.value = 40
 	var c: MapData = lobby._selected_map()
-	ck(c.width == 64 and c.height == 40, "a custom 64×40 map is 64×40 (%dx%d)" % [c.width, c.height])
+	ck(MapGen.map_size(c) == Vector2i(64, 40), "a custom 64×40 map is 64×40 (%s)"
+			% str(MapGen.map_size(c)))
 	var vacuum := false
 	for i in c.width * c.height:
 		vacuum = vacuum or c.is_space[i] != 0
@@ -181,7 +185,8 @@ func _check_bunker_custom_symmetric(lobby: Node) -> void:
 	lobby._gen_h.value = 250
 	ck(lobby._gen_timer.time_left > 0.0, "a 250×250 map waits for the clicks to settle before redrawing")
 	var big: MapData = lobby._selected_map()
-	ck(big.width == 250 and big.height == 250, "reading the map builds the 250×250 one right away")
+	ck(MapGen.map_size(big) == Vector2i(250, 250),
+			"reading the map builds the 250×250 one right away (%s)" % str(MapGen.map_size(big)))
 	lobby._gen_sym.button_pressed = false
 	size.select(1)
 	size.item_selected.emit(1)

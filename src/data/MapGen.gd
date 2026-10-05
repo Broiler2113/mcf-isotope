@@ -44,6 +44,17 @@ const SIZE_NAMES := ["Small", "Medium", "Large", "Huge", "Giant", "Colossal"]
 ## следующий за последним готовым размером (== SIZES.size()).
 const SIZE_CUSTOM := 6
 const MIN_DIM := 16
+## Кайма вокруг карты (0.9.3, по просьбе игрока). Поле шире заказанного на BORDER клеток в
+## каждую сторону: у бункера это грунт, который копают, у города и поля — трава, у станции
+## и астероида — космос. За ней ещё BORDER_RIM клеток того же вида, но уже НЕПРОХОДИМЫХ и
+## неразрушимых (MCF.FEATURE_BOUNDARY): мир не обрывается по краю доски, а дальше десяти
+## клеток от карты ни боец, ни машина не уйдут.
+##
+## Кайма одинакова у ВСЕХ стилей и не зависит от настроек: от неё зависит размер поля, а
+## бункер и станция одного зерна обязаны совпадать клетка в клетку (run_mapgen).
+const BORDER := 10
+const BORDER_RIM := 2
+const BORDER_ALL := BORDER + BORDER_RIM
 const DENSITY_NAMES := ["Sparse", "Normal", "Dense"]
 const DENSITY_MULT := [0.55, 1.0, 1.6]
 const SEED_MAX := 9999999
@@ -96,8 +107,8 @@ const K_DHALL := 6
 ## важности (на малой карте лишние отпадают); hall — вид пола своего коридора; extra —
 ## чем заполнять лишние комнаты.
 const DEPARTMENTS := {
-	"bridge": {"front": "command", "rooms": ["captain", "hidden_storage", "office"], "hall": MCF.Look.CARPET_BLUE,
-		"extra": ["office", "storage"]},
+	"bridge": {"front": "command", "rooms": ["captain", "hidden_storage", "server_room", "office"],
+		"hall": MCF.Look.CARPET_BLUE, "extra": ["office", "server_room"]},
 	"service": {"front": "lounge", "rooms": ["kitchen", "mess", "restroom", "quarters", "quarters", "laundry",
 		"quarters", "quarters"], "hall": MCF.Look.TILE, "extra": ["quarters", "storage"]},
 	"engineering": {"front": "reception", "rooms": ["power", "water", "air", "dock", "supply"], "hall": MCF.Look.PLATE,
@@ -122,6 +133,32 @@ const DEPT_ORDER := ["bridge", "service", "engineering", "medical", "security", 
 ## Без второго жилого и второго производства: «производство дальше всех от жилого» должно
 ## читаться однозначно; жилые каюты больших станций — в «прочих» отсеках (misc).
 const DEPT_EXTRA := ["misc", "supply", "research", "misc", "medical", "engineering", "security"]
+## Акцент отдела (0.9.3): цвет, которым размечены его стены и двери. Жилой блок,
+## производство и «прочее» игрок цветом не называл — они остаются серыми.
+const DEPT_ACCENT := {
+	"bridge": MCF.Accent.COMMAND,
+	"security": MCF.Accent.SECURITY,
+	"medical": MCF.Accent.MEDICAL,
+	"research": MCF.Accent.SCIENCE,
+	"engineering": MCF.Accent.ENGINEERING,
+	"supply": MCF.Accent.CARGO,
+}
+## Акцент по НАЗНАЧЕНИЮ комнаты. Он ГЛАВНЕЕ отдела: игрок просил красить «всё, что
+## относится к…», а не отделы целиком, — поэтому серверная и на мостике белая, а склад
+## остаётся оранжевым, в чьём бы отсеке ни стоял. Цвет отдела достаётся всему прочему:
+## его коридору, приёмной, кабинетам.
+const KIND_ACCENT := {
+	"command": MCF.Accent.COMMAND, "captain": MCF.Accent.COMMAND,
+	"server_room": MCF.Accent.CONTROL, "comms": MCF.Accent.CONTROL,
+	"armory": MCF.Accent.SECURITY, "cell": MCF.Accent.SECURITY, "briefing": MCF.Accent.SECURITY,
+	"ward": MCF.Accent.MEDICAL, "surgery": MCF.Accent.MEDICAL,
+	"laboratory": MCF.Accent.SCIENCE, "testing_range": MCF.Accent.SCIENCE,
+	"power": MCF.Accent.ENGINEERING, "water": MCF.Accent.ENGINEERING, "air": MCF.Accent.ENGINEERING,
+	"utility": MCF.Accent.ENGINEERING, "recycling": MCF.Accent.ENGINEERING,
+	"machine_shop": MCF.Accent.ENGINEERING, "workshop": MCF.Accent.ENGINEERING,
+	"warehouse": MCF.Accent.CARGO, "dock": MCF.Accent.CARGO, "storage": MCF.Accent.CARGO,
+	"supply": MCF.Accent.CARGO,
+}
 ## Комнаты, которым нужен выход прямо в космос: причал и испытательный полигон.
 const HULL_KINDS := {"dock": true, "testing_range": true}
 ## Комнаты, которые нельзя отдать под технические (их отдел без них — не отдел).
@@ -149,6 +186,9 @@ var _parks: Array[Rect2i] = []
 var _street: PackedByteArray
 var _k: PackedByteArray
 var _room_min := 6                # сторона самой маленькой комнаты станции, со стенами
+## Игровая карта внутри поля: всё, что снаружи, — кайма (BORDER_ALL). Зоны, украшения,
+## мирные и сама застройка живут только здесь.
+var _core := Rect2i()
 ## Номер зоны клетки (-1 — не зона) и якорь каждой зоны.
 var _zone: PackedInt32Array
 var _anchors: Array[Vector2i] = []
@@ -173,8 +213,12 @@ var _rep_fold: Array[bool] = []
 ## Назначение каждой комнаты (0.9.2): прямоугольник из _rooms → вид помещения (у станции —
 ## комната отдела, у города — здание, у поля — хижина/руина). По нему мебель и вид пола.
 var _room_kind: Dictionary = {}
-## Вид пола коридоров станции: отдела — свой, техтуннели — решётка.
+## Вид пола коридоров станции: отдела — свой, техтуннели — решётка (и то не всякий).
 var _hall_look: PackedByteArray
+## Акцент службы по клеткам (0.9.3); читается только на стенах и дверях.
+var _accent: PackedByteArray
+## Клетки космоса, где лежат решётчатые мостки от станции к панелям (MCF.Look.GRILL).
+var _grill: Array[Vector2i] = []
 ## Клетки стены, где прорубить шлюз наружу: причалы, полигон, выходы техтуннелей к панелям.
 var _space_doors: Array[Vector2i] = []
 ## Клетки космоса, где висят солнечные панели (вид, MCF.Look.SOLAR).
@@ -204,6 +248,11 @@ static func civ_level(options: Dictionary) -> int:
 ## Сколько клеток нужно зоне, чтобы в неё встал отряд из `units` бойцов.
 static func zone_need(units: int) -> int:
 	return maxi(ZONE_MIN, units * CELLS_PER_UNIT)
+
+## Размер ИГРОВОЙ карты готового поля: поле шире её на кайму с каждой стороны (BORDER_ALL).
+## Лобби называет игроку именно его — «Colossal 250×250» — а не ширину доски.
+static func map_size(m: MapData) -> Vector2i:
+	return Vector2i(maxi(1, m.width - BORDER_ALL * 2), maxi(1, m.height - BORDER_ALL * 2))
 
 ## Размер поля по настройкам: готовый пункт списка или свой (SIZE_CUSTOM). У своего
 ## потолка нет — только нижняя граница MIN_DIM; MAX_DIM ограничивает лишь авто-рост поля,
@@ -243,8 +292,10 @@ func _build(options: Dictionary, dim: Vector2i, need: int, tight: bool) -> void:
 	opt = options
 	_need = need
 	_tight = tight
-	w = dim.x
-	h = dim.y
+	# Заказан размер ИГРОВОЙ карты; поле вокруг неё шире на кайму с каждой стороны.
+	_core = Rect2i(BORDER_ALL, BORDER_ALL, dim.x, dim.y)
+	w = dim.x + BORDER_ALL * 2
+	h = dim.y + BORDER_ALL * 2
 	dens = DENSITY_MULT[clampi(int(opt["density"]), 0, DENSITY_MULT.size() - 1)]
 	_style = int(opt["style"])
 	var n := clampi(int(opt["zones"]), 2, MCF.MAX_PLAYERS)
@@ -282,6 +333,7 @@ func _build(options: Dictionary, dim: Vector2i, need: int, tight: bool) -> void:
 		else:
 			_open_space()
 	_mirror()
+	_border_rim()
 	_phase(Phase.ZONES)
 	_zones(n)
 	_phase(Phase.DRESSING)
@@ -347,15 +399,21 @@ func _space(c: Vector2i) -> void:
 	_door[c.y * w + c.x] = 0
 
 ## Чистый пол: не космос, без объекта и укрытия — тут можно и встать, и расставиться.
+## Кайма (0.9.3) чистой не считается НИГДЕ: ни зона, ни житель, ни ящик за карту не выходят —
+## туда можно только зайти ногами. Поэтому проверка на _core стоит здесь, в одном месте, а
+## не у каждого, кто спрашивает про свободную клетку.
 func _clear(c: Vector2i) -> bool:
-	return _in(c) and not m.get_space(c) and m.get_feature(c) == "" and m.get_cover(c) <= 0.0
+	return _core.has_point(c) and not m.get_space(c) and m.get_feature(c) == "" \
+			and m.get_cover(c) <= 0.0
 
 ## То же, что _clear, для всего поля разом.
 func _clear_mask() -> PackedByteArray:
 	var out := _bytes()
-	for i in w * h:
-		if m.is_space[i] == 0 and m.feature_id[i] == "" and m.cover_height[i] <= 0.0:
-			out[i] = 1
+	for y in range(_core.position.y, _core.end.y):
+		for x in range(_core.position.x, _core.end.x):
+			var i := y * w + x
+			if m.is_space[i] == 0 and m.feature_id[i] == "" and m.cover_height[i] <= 0.0:
+				out[i] = 1
 	return out
 
 ## Проходима ли клетка пешком на пустой доске — то же, что GridCell.walkable_terrain():
@@ -457,8 +515,10 @@ func _outward(r: Rect2i, c: Vector2i) -> Vector2i:
 		return Vector2i(-1, 0)
 	return Vector2i(1, 0)
 
+## Случайная клетка ИГРОВОЙ карты (кайма не в счёт): margin — отступ от её края.
 func _random_cell(margin: int = 1) -> Vector2i:
-	return Vector2i(_rng.randi_range(margin, w - 1 - margin), _rng.randi_range(margin, h - 1 - margin))
+	return Vector2i(_rng.randi_range(_core.position.x + margin, _core.end.x - 1 - margin),
+			_rng.randi_range(_core.position.y + margin, _core.end.y - 1 - margin))
 
 # --- Симметрия ---------------------------------------------------------------------------
 ## Преобразований в группе симметрии: 1, 2 (зеркало) или 4 (четверти).
@@ -583,20 +643,22 @@ func _mirror_spawns() -> void:
 func _station() -> void:
 	_k = _bytes()
 	_hall_look = _bytes()
+	_accent = _bytes()
 	var di := clampi(int(opt["density"]), 0, 2)
 	var sector_min: int = [15, 12, 10][di]
 	# Хотя бы один коридор на любом поле: отсек не больше, чем влезает два поперёк самой
 	# длинной стороны (иначе маленькая станция была бы одним отсеком без коридоров).
-	sector_min = mini(sector_min, (maxi(w, h) - 5) / 2)
+	sector_min = mini(sector_min, (maxi(_core.size.x, _core.size.y) - 5) / 2)
 	_room_min = [7, 6, 5][di]
 	var sectors: Array[Rect2i] = []
-	_split_sectors(Rect2i(1, 1, w - 2, h - 2), sector_min, 0, sectors)
+	_split_sectors(_core.grow(-1), sector_min, 0, sectors)
 	# Пустые отсеки — у краёв чаще, но не больше пятой части: на карте из шести отсеков,
 	# где все у края, прежний бросок «каждому по 20%» оставлял от станции скелет коридоров.
 	var empty_left := sectors.size() / 5
 	var kept: Array[Rect2i] = []
 	for s in sectors:
-		var edge := s.position.x <= 1 or s.position.y <= 1 or s.end.x >= w - 1 or s.end.y >= h - 1
+		var edge := s.position.x <= _core.position.x + 1 or s.position.y <= _core.position.y + 1 \
+				or s.end.x >= _core.end.x - 1 or s.end.y >= _core.end.y - 1
 		var empty_roll := _rng.randf()
 		if empty_left > 0 and empty_roll < (0.25 if edge else 0.08):
 			empty_left -= 1
@@ -607,11 +669,13 @@ func _station() -> void:
 		_department(kept[k], depts[k])
 		_dept_sectors.append([kept[k], depts[k]])
 	_maintenance_rooms()
+	_accent_rooms()
 	if _sym > 0:
 		for y in h:
 			for x in w:
 				_k[y * w + x] = _k[_src_index(x, y)]
 				_hall_look[y * w + x] = _hall_look[_src_index(x, y)]
+				_accent[y * w + x] = _accent[_src_index(x, y)]
 		_rooms = _mirror_rects(_rooms)
 	# Обшивка: всякая пустота, касающаяся пола хотя бы углом, становится стеной.
 	for y in h:
@@ -630,8 +694,13 @@ func _station() -> void:
 					_ground(c)
 					if _hall_look[y * w + x] != 0:
 						m.set_look(y * w + x, _hall_look[y * w + x])
+					# Проём — тоже стена отдела: шлюз встанет сюда в _seal_doors, и рама
+					# у него будет цвета службы (TerrainTiles), как и полоса на стенах.
+					if _k[y * w + x] == K_DOOR:
+						m.set_accent(y * w + x, _accent[y * w + x])
 				K_WALL:
 					_put(c, MCF.FEATURE_WALL)
+					m.set_accent(y * w + x, _accent[y * w + x])
 				_:
 					_void(c)
 	for y in h:
@@ -675,6 +744,10 @@ func _station() -> void:
 			cand.sort()
 			_put(cand[cand.size() / 2], MCF.FEATURE_AIRLOCK)
 	if bool(opt["space"]) and _style == Style.STATION:
+		# Мостки от шлюза к панелям и сами панели: и то и другое — вид на клетке КОСМОСА.
+		for c in _grill:
+			if _in(c) and m.get_space(c):
+				m.set_look(c.y * w + c.x, MCF.Look.GRILL)
 		for c in _solar:
 			if _in(c) and m.get_space(c):
 				m.set_look(c.y * w + c.x, MCF.Look.SOLAR)
@@ -760,9 +833,11 @@ func _sector_on_hull(s: Rect2i) -> bool:
 ## стена, коридор отдела, стена, задние комнаты. Всё внутреннее — только в коридор отдела;
 ## задние комнаты, упёршиеся в техтуннель, получают и дверь туда.
 func _department(s: Rect2i, dept: String) -> void:
+	var accent: int = DEPT_ACCENT.get(dept, MCF.Accent.NONE)
 	for y in range(s.position.y, s.end.y):
 		for x in range(s.position.x, s.end.x):
 			_k[y * w + x] = K_WALL if _on_edge(s, Vector2i(x, y)) else K_ROOM
+			_accent[y * w + x] = accent
 	var spec: Dictionary = DEPARTMENTS.get(dept, DEPARTMENTS["misc"])
 	var f := _front_side(s)
 	var L := s.size.x - 2 if f % 2 == 0 else s.size.y - 2
@@ -844,7 +919,11 @@ func _assign_rooms(s: Rect2i, f: int, rooms: Array, spec: Dictionary, lc: Callab
 		if best >= 0:
 			plan[rooms.find(free[best])] = kind
 			free.remove_at(best)
-			kinds.erase(kind)
+		# Нет ни одной комнаты у пустоты — значит в этом отсеке причала (или полигона) не
+		# будет вовсе: оба живут выходом НАРУЖУ, и вглубь станции их ставить нельзя. Прежде
+		# такой причал всё равно получал комнату — обычным перебором ниже — и оказывался
+		# запертым посреди коридоров, без шлюза и без смысла.
+		kinds.erase(kind)
 	# Камеры — в самые маленькие, прочее — по важности в самые большие.
 	free.sort_custom(func(a: Array, b: Array) -> bool:
 		return (a[0] as Rect2i).get_area() > (b[0] as Rect2i).get_area())
@@ -1058,6 +1137,30 @@ func _maintenance_rooms() -> void:
 		if best.size != Vector2i.ZERO:
 			_room_kind[best] = "recycling"
 
+## Акценты по назначению комнаты (0.9.3) — поверх цвета отдела. Отдел красит свой коридор
+## и всё, у чего своего цвета нет; комната с ясной службой перебивает его: серверная белая
+## и на мостике, склад оранжевый и в медотсеке, щитовая жёлтая везде. Красятся стены
+## комнаты (её кайма) — пол ни при чём.
+func _accent_rooms() -> void:
+	for r: Rect2i in _room_kind:
+		var accent: int = KIND_ACCENT.get(_room_kind[r], MCF.Accent.NONE)
+		if accent == MCF.Accent.NONE:
+			continue
+		for c in _edge_cells(r):
+			if _in(c):
+				_accent[c.y * w + c.x] = accent
+
+## Стены комнат, которые обязаны остаться глухими (тайник капитана): ни окна, ни внешнего
+## шлюза. Ключи — клетки, чтобы проверка на обшивке стоила поиск по словарю.
+func _sealed_room_walls() -> Dictionary:
+	var out := {}
+	for r: Rect2i in _room_kind:
+		if _room_kind[r] != "hidden_storage":
+			continue
+		for c in _edge_cells(r):
+			out[c] = true
+	return out
+
 ## Клетка стены комнаты, за которой техтуннель (середина такого куска), или (−1, −1).
 func _maint_wall(r: Rect2i) -> Vector2i:
 	var cells: Array[Vector2i] = []
@@ -1077,7 +1180,12 @@ func _maint_wall(r: Rect2i) -> Vector2i:
 	return Vector2i(-1, -1)
 
 ## Выходы техтуннелей наружу (0.9.2): туннель, упёршийся в обшивку, за которой пустота на
-## несколько клеток, получает шлюз — а в пустоте за ним висят солнечные панели.
+## несколько клеток, получает шлюз — а за ним наружу уходят решётчатые мостки, и на них
+## стоят солнечные панели (0.9.3).
+##
+## Мостки начинаются ВПЛОТНУЮ к обшивке (k = 1) и идут одной полосой: решётка держится за
+## станцию, а не висит сама по себе в пустоте. Панели — по обе стороны от мостка, так что
+## до любой из них можно дойти по решётке.
 func _maintenance_exits() -> void:
 	var dirs := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 	var used: Array[Vector2i] = []
@@ -1107,18 +1215,36 @@ func _maintenance_exits() -> void:
 				used.append(wall)
 				_space_doors.append(wall)
 				var side := Vector2i(d.y, d.x)
-				for k in range(2, 5):
-					for t in range(-2, 3):
+				for k in range(1, 5):
+					_grill.append(wall + d * k)            # мостки от самой обшивки
+					if k == 1:
+						continue
+					for t: int in [-2, -1, 1, 2]:
 						_solar.append(wall + d * k + side * t)
 ## Делит кусок коридором, пока обе стороны не меньше `mn`. Листья — отсеки.
+##
+## Ширина прохода (0.9.3, по просьбе игрока). Станцию насквозь режет ОДИН главный ход в три
+## клетки — по нему она и читается. Все прочие коридоры — две: широкий коридор нужен там,
+## где по нему и правда ходят, а не «огромные коридоры без смысла» в каждом отсеке. Узкими
+## остаются технические туннели — клетка, изредка две.
+##
+## Решётчатый пол (MCF.Look.GRATE) — тоже примета техтуннеля, и не всякого: он достаётся
+## примерно трети, остальные идут по обычному полу станции, иначе решётка лезет из каждой
+## щели и перестаёт что-либо значить.
+const MAINT_WIDE_CHANCE := 0.25
+const MAINT_GRATE_CHANCE := 0.35
+
 func _split_sectors(r: Rect2i, mn: int, depth: int, out: Array[Rect2i]) -> void:
-	var hall_w := 2
+	var tech := depth >= 2
 	var width_roll := _rng.randf()
-	if depth == 0:
-		hall_w = 3 if width_roll < 0.5 else 2
-	elif depth >= 2:
-		hall_w = 1   # технический туннель (0.9.2) — всегда в клетку
-	var hall_k := K_HALL if depth < 2 else K_MAINT
+	var grate_roll := _rng.randf()
+	var hall_w := 3
+	if tech:
+		hall_w = 2 if width_roll < MAINT_WIDE_CHANCE else 1
+	elif depth > 0:
+		hall_w = 2
+	var hall_k := K_HALL if not tech else K_MAINT
+	var hall_look := MCF.Look.GRATE if tech and grate_roll < MAINT_GRATE_CHANCE else 0
 	var can_x := r.size.x >= mn * 2 + hall_w
 	var can_y := r.size.y >= mn * 2 + hall_w
 	# Иногда средний кусок не делится дальше — отсек выходит большим, в нём больше комнат.
@@ -1134,8 +1260,8 @@ func _split_sectors(r: Rect2i, mn: int, depth: int, out: Array[Rect2i]) -> void:
 		for y in range(r.position.y, r.end.y):
 			for x in range(r.position.x + cut, r.position.x + cut + hall_w):
 				_k[y * w + x] = hall_k
-				if hall_k == K_MAINT:
-					_hall_look[y * w + x] = MCF.Look.GRATE
+				if hall_look != 0:
+					_hall_look[y * w + x] = hall_look
 		_split_sectors(Rect2i(r.position.x, r.position.y, cut, r.size.y), mn, depth + 1, out)
 		_split_sectors(Rect2i(r.position.x + cut + hall_w, r.position.y,
 				r.size.x - cut - hall_w, r.size.y), mn, depth + 1, out)
@@ -1144,8 +1270,8 @@ func _split_sectors(r: Rect2i, mn: int, depth: int, out: Array[Rect2i]) -> void:
 		for y in range(r.position.y + cut, r.position.y + cut + hall_w):
 			for x in range(r.position.x, r.end.x):
 				_k[y * w + x] = hall_k
-				if hall_k == K_MAINT:
-					_hall_look[y * w + x] = MCF.Look.GRATE
+				if hall_look != 0:
+					_hall_look[y * w + x] = hall_look
 		_split_sectors(Rect2i(r.position.x, r.position.y, r.size.x, cut), mn, depth + 1, out)
 		_split_sectors(Rect2i(r.position.x, r.position.y + cut + hall_w, r.size.x,
 				r.size.y - cut - hall_w), mn, depth + 1, out)
@@ -1209,7 +1335,13 @@ func _vented(r: Rect2i) -> bool:
 ## залах, ящики, баррикады в коридорах.
 func _dress_station() -> void:
 	# Шлюзы в проёмах уже стоят (_seal_doors); здесь — обшивка: окна и выходы наружу.
+	# В стену ТАЙНИКА не режется ни то ни другое: вход у него ровно один — из каюты
+	# капитана, — и люк наружу (или окно) выдавал бы его с первого взгляда. Прежде такой
+	# шлюз изредка выпадал и открывал в тайник второй вход, прямо из космоса.
+	var sealed := _sealed_room_walls()
 	for c in _hull():
+		if sealed.has(c):
+			continue
 		var roll := _rng.randf()
 		if roll < 0.025 and not _near_feature(c, MCF.FEATURE_AIRLOCK):
 			_put(c, MCF.FEATURE_AIRLOCK)
@@ -1285,25 +1417,29 @@ func _hull() -> Array[Vector2i]:
 ## горючке, дерево), дворы и скверы. Большой квартал режется проулком на два дома.
 func _town() -> void:
 	var lawn := MCF.FLOOR_GRASS if bool(opt["flammable"]) else MCF.FLOOR_NORMAL
+	# Газон кладётся на ВСЁ поле — он же и кайма вокруг города (0.9.3): за последней улицей
+	# трава просто продолжается ещё на BORDER клеток.
 	for y in h:
 		for x in w:
 			_ground(Vector2i(x, y), lawn)
-	var xs := _street_lines(w)
-	var ys := _street_lines(h)
+	var ox := _core.position.x
+	var oy := _core.position.y
+	var xs := _street_lines(_core.size.x)
+	var ys := _street_lines(_core.size.y)
 	for s in xs:
-		for y in h:
-			for x in range(s.x, s.x + s.y):
+		for y in range(oy, _core.end.y):
+			for x in range(ox + s.x, ox + s.x + s.y):
 				_ground(Vector2i(x, y))
 				_street[y * w + x] = 1
 	for s in ys:
-		for y in range(s.x, s.x + s.y):
-			for x in w:
+		for y in range(oy + s.x, oy + s.x + s.y):
+			for x in range(ox, _core.end.x):
 				_ground(Vector2i(x, y))
 				_street[y * w + x] = 1
 	_pick_districts()
-	for gx in _gaps(xs, w):
-		for gy in _gaps(ys, h):
-			_block(Rect2i(gx.x, gy.x, gx.y - gx.x, gy.y - gy.x))
+	for gx in _gaps(xs, _core.size.x):
+		for gy in _gaps(ys, _core.size.y):
+			_block(Rect2i(ox + gx.x, oy + gy.x, gx.y - gx.x, gy.y - gy.x))
 
 # --- Районы города (0.9.2) ---------------------------------------------------------------
 ## Город делится на районы: у одного края — промзона (склады, цеха, гаражи; на астероиде —
@@ -1315,16 +1451,21 @@ var _civic_left := 0
 
 func _pick_districts() -> void:
 	_industrial_side = _rng.randi_range(0, 3)
-	_civic_left = 0 if w * h < 1600 else (1 if w * h < 4000 else 2)
+	var area := _core.size.x * _core.size.y
+	_civic_left = 0 if area < 1600 else (1 if area < 4000 else 2)
 
 func _district(b: Rect2i) -> String:
-	var c := Vector2(b.get_center())
-	var big := w * h >= 900
-	var edge: float = [c.y / h, 1.0 - c.x / w, 1.0 - c.y / h, c.x / w][_industrial_side]
+	# Район меряется по ГОРОДУ, а не по всему полю: кайма вокруг него (0.9.3) не должна
+	# сдвигать промзону к середине, а центр — размывать.
+	var c := Vector2(b.get_center() - _core.position)
+	var cw := float(_core.size.x)
+	var chh := float(_core.size.y)
+	var big := _core.size.x * _core.size.y >= 900
+	var edge: float = [c.y / chh, 1.0 - c.x / cw, 1.0 - c.y / chh, c.x / cw][_industrial_side]
 	if big and edge < 0.22:
 		return "industrial"
-	var mid := Vector2(w * 0.5, h * 0.5)
-	if (c - mid).length() < minf(w, h) * 0.22:
+	var mid := Vector2(cw * 0.5, chh * 0.5)
+	if (c - mid).length() < minf(cw, chh) * 0.22:
 		if _civic_left > 0:
 			_civic_left -= 1
 			return "civic"
@@ -1531,7 +1672,7 @@ func _front_door(r: Rect2i, floor_type: int) -> void:
 func _dress_town() -> void:
 	if not bool(opt["obstacles"]):
 		return
-	var area := float(w * h)
+	var area := float(_core.size.x * _core.size.y)
 	# Только свободная мостовая: улицы в зонах и у дверей берегутся (_keep).
 	var paving: Array[Vector2i] = []
 	for y in h:
@@ -1587,9 +1728,11 @@ func _field() -> void:
 	noise.frequency = 0.09
 	for y in h:
 		for x in w:
-			var grass := noise.get_noise_2d(x, y) > -0.2
+			# Кайма (0.9.3) — ровное травяное поле без пятен и построек: за картой мир
+			# продолжается, но воевать там негде.
+			var grass := not _core.has_point(Vector2i(x, y)) or noise.get_noise_2d(x, y) > -0.2
 			_ground(Vector2i(x, y), MCF.FLOOR_GRASS if fire and grass else MCF.FLOOR_NORMAL)
-	var area := float(w * h)
+	var area := float(_core.size.x * _core.size.y)
 	for n in maxi(1, roundi(area / 380.0 * dens)):
 		_ruin()
 	for n in maxi(1, roundi(area / 650.0 * dens)):
@@ -1601,7 +1744,8 @@ func _field() -> void:
 func _ruin() -> void:
 	var rw := _rng.randi_range(5, 9)
 	var rh := _rng.randi_range(5, 8)
-	var r := Rect2i(_rng.randi_range(1, w - rw - 1), _rng.randi_range(1, h - rh - 1), rw, rh)
+	var r := Rect2i(_rng.randi_range(_core.position.x + 1, _core.end.x - rw - 1),
+			_rng.randi_range(_core.position.y + 1, _core.end.y - rh - 1), rw, rh)
 	var keep_p := _rng.randf_range(0.45, 0.7)
 	var edge := _edge_cells(r)
 	var rolls: Array[float] = []
@@ -1629,7 +1773,8 @@ func _ruin() -> void:
 func _hut() -> void:
 	var rw := _rng.randi_range(5, 7)
 	var rh := _rng.randi_range(5, 6)
-	var r := Rect2i(_rng.randi_range(2, w - rw - 2), _rng.randi_range(2, h - rh - 2), rw, rh)
+	var r := Rect2i(_rng.randi_range(_core.position.x + 2, _core.end.x - rw - 2),
+			_rng.randi_range(_core.position.y + 2, _core.end.y - rh - 2), rw, rh)
 	var wooden := _rng.randf() < 0.4 and bool(opt["flammable"])
 	var door_side := _rng.randi_range(0, 3)
 	var window_roll := _rng.randi_range(0, 9999)
@@ -1696,7 +1841,7 @@ func _fence() -> void:
 func _dress_field() -> void:
 	if not bool(opt["obstacles"]):
 		return
-	var area := float(w * h)
+	var area := float(_core.size.x * _core.size.y)
 	# Нитки окопов — главная черта поля. Их число и длина растут с плотностью: на редкой
 	# карте это пара линий у складок местности, на плотной — сплошная система позиций.
 	for n in roundi(area / 420.0 * dens):
@@ -1788,11 +1933,13 @@ func _asteroid() -> void:
 	var noise := FastNoiseLite.new()
 	noise.seed = _rng.randi()
 	noise.frequency = 0.06
-	var half := Vector2((w - 1) * 0.5, (h - 1) * 0.5)
+	var half := Vector2(_core.size) * 0.5
+	var mid := Vector2(_core.position) + half - Vector2(0.5, 0.5)
 	for y in h:
 		for x in w:
-			# Эллипс по размеру поля: остров вписан в доску, сколько бы её ни вытянули.
-			var d := Vector2((x - half.x) / half.x, (y - half.y) / half.y).length()
+			# Эллипс по размеру КАРТЫ: остров вписан в неё, сколько бы её ни вытянули, а
+			# кайма вокруг (0.9.3) остаётся открытым космосом.
+			var d := Vector2((x - mid.x) / half.x, (y - mid.y) / half.y).length()
 			if d > 0.88 + 0.14 * noise.get_noise_2d(x, y):
 				_void(Vector2i(x, y))
 	# Дверь, за которой теперь скала (космос выключен), — уже не дверь: заделываем. Комнату
@@ -1811,7 +1958,7 @@ func _asteroid() -> void:
 		if not through:
 			_put(c, MCF.FEATURE_WALL)
 	# Пара кратеров внутри — каменный остров, а не ровная площадка.
-	for n in 1 + roundi(w * h / 1600.0):
+	for n in 1 + roundi(_core.size.x * _core.size.y / 1600.0):
 		var c := _random_cell(6)
 		var rad := _rng.randf_range(1.4, 2.4)
 		for dy in range(-3, 4):
@@ -1831,13 +1978,31 @@ func _open_space() -> void:
 			if float(edge) < 1.2 + 2.6 * noise.get_noise_2d(x, y):
 				_space(Vector2i(x, y))
 	var per := 800.0 if _style == Style.TOWN else 450.0
-	for n in 1 + roundi(w * h / per):
+	for n in 1 + roundi(_core.size.x * _core.size.y / per):
 		var c := _random_cell(4)
 		var rad := _rng.randf_range(1.5, 2.8)
 		for dy in range(-3, 4):
 			for dx in range(-3, 4):
 				if Vector2(dx, dy).length() + noise.get_noise_2d(c.x + dx, c.y + dy) <= rad:
 					_space(c + Vector2i(dx, dy))
+
+## Непроходимая кайма по краю поля (0.9.3). Внутри — BORDER клеток, куда можно выйти:
+## грунт бункера копают, по траве города и поля ходят, в космосе станции летают. Снаружи —
+## BORDER_RIM клеток того же вида, но в них уже не войти и там ничего не сломать: это
+## MCF.FEATURE_BOUNDARY, стена в 2 м, которой нет ни в одном списке разрушимого.
+##
+## Пол и вакуум клетки сохраняются — меняется только объект на ней. Поэтому за каймой
+## бункера видно грунт (у объекта есть плитка «boundary_bunker»), а за каймой станции,
+## города и поля — звёзды или трава: своей плитки у объекта там нет, и он не рисуется
+## вовсе. Так граница ЧИТАЕТСЯ как продолжение мира, а не как стена вокруг доски.
+func _border_rim() -> void:
+	var inner := _core.grow(BORDER)
+	for y in h:
+		for x in w:
+			var c := Vector2i(x, y)
+			if inner.has_point(c):
+				continue
+			m.set_cell(c, m.get_floor(c), MCF.WALL_HEIGHT, m.get_space(c), MCF.FEATURE_BOUNDARY)
 
 # --- Связность -----------------------------------------------------------------------------
 ## Всё, по чему можно ходить, — одна часть. Пол, отрезанный от остального (дом, чья
@@ -1928,7 +2093,10 @@ func _join_pockets(from: Vector2i) -> void:
 			var k := _neighbours(i, n, nb)
 			for t in k:
 				var j := nb[t]
-				if walk[j] == 0 and dist[j] > level + 1:
+				# Сквозь границу мира (0.9.3) пролом не идёт: её не пробить ничем, и
+				# закуток, до которого иначе не добраться, вскрывается в другую сторону.
+				if walk[j] == 0 and dist[j] > level + 1 \
+						and m.feature_id[j] != MCF.FEATURE_BOUNDARY:
 					dist[j] = level + 1
 					par[j] = i
 					nxt.append(j)
@@ -2347,7 +2515,8 @@ func _fold_prefix(cells: Array, limit: int, zone: int) -> int:
 ## CIV_MAX на карту; при симметрии — в исходной части, остальные — её отражения.
 func _civilians() -> void:
 	var lv := civ_level(opt)
-	var want := mini(CIV_CAP[lv], maxi(CIV_MIN[lv], roundi(w * h / 160.0 * dens * CIV_MULT[lv])))
+	var want := mini(CIV_CAP[lv], maxi(CIV_MIN[lv],
+			roundi(_core.size.x * _core.size.y / 160.0 * dens * CIV_MULT[lv])))
 	# Точное число с ползунка лобби (item 11) важнее уровня.
 	if int(opt.get("civilian_count", -1)) >= 0:
 		want = mini(int(opt["civilian_count"]), CIV_MAX)

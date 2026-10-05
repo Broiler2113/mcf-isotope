@@ -57,9 +57,6 @@ const SPLATTER_RANGE := 1.5
 ## Разорван взрывом или раздавлен (blast): брызги кольцом вдвое гуще и дальше, плюс ошмётки.
 const GIBS_MIN := 4
 const GIBS_MAX := 7
-## Кровавые следы: прошёл по луже — ещё столько клеток оставляет отпечатки.
-const BLOODY_STEPS := 6
-
 ## Потолок осевших частиц. Косметика не должна расти бесконечно: длинный бой на
 ## большой карте иначе набирает десятки тысяч точек, и отрисовка начинает стоить
 ## дороже самой игры. Старые вытесняются, как в кольцевом буфере. Поднят до 1500
@@ -94,8 +91,8 @@ var floor_damage: Dictionary = {}
 var damage_version: int = 0
 ## Осевшая статика: [{kind, pos: Vector2 (в клетках), rot: float, scale: float}].
 var props: Array = []
-## Кровь и ошмётки — отдельно от props и БЕЗ вытеснения по ходу боя. Та же мысль, что
-## развела props и prints, доведённая до конца: во что поле превратилось к концу партии —
+## Кровь и ошмётки — отдельно от props и БЕЗ вытеснения по ходу боя. Во что поле
+## превратилось к концу партии —
 ## это и есть картина боя, и смотреть на неё игрок хочет целиком. Гильзы и осколки
 ## остаются в props под прежним потолком: их на порядок больше, а ценности в старых нет.
 ##
@@ -103,13 +100,82 @@ var props: Array = []
 ## бесконечного роста в патологическом случае, а не подчищает поле.
 const GORE_CAP := 60000
 const GORE_KINDS := {"blood_pool": true, "blood_drop": true, "gib": true}
+
+## Размер частицы в долях клетки и запасной цвет, когда картинки-замены нет. Таблица
+## живёт ЗДЕСЬ, а не в экране боя: по ней рисует и летящую частицу экран, и осевшую —
+## TerrainTiles, когда запекает её в пол куска (0.9.3).
+const LOOK := {
+	"shard": [0.24, Color(0.72, 0.88, 0.95, 0.85)],
+	"casing": [0.11, Color(0.85, 0.72, 0.28, 0.9)],
+	# Гильза противотанкиста (item 24): оранжевая и вдвое крупнее пистолетной (0.11 → 0.22).
+	"shell_casing": [0.22, Color(1.0, 0.55, 0.1, 0.95)],
+	"blood_drop": [0.2, Color(0.6, 0.04, 0.04, 0.9)],
+	"blood_pool": [0.95, Color(0.42, 0.03, 0.03, 0.8)],
+	# Ошмётки после взрыва: тёмно-красные куски, крупнее капли.
+	"gib": [0.24, Color(0.42, 0.05, 0.06, 0.95)],
+}
+const TEXTURE := {
+	"shard": "glass_shard", "casing": "shell_casing",
+	# Отдельное имя картинки, чтобы крупная оранжевая гильза при желании подменялась
+	# своим png; без него сработает запасной оранжевый четырёхугольник из LOOK.
+	"shell_casing": "shell_casing_big",
+	"blood_drop": "blood_splatter", "blood_pool": "blood_pool",
+}
+
+## --- Осевшая косметика запекается в доску (0.9.3, по просьбе игрока) ---
+## Кровь, гильзы и осколки ни с чем не взаимодействуют и никуда не денутся, поэтому
+## рисовать их по точке за кадр — чистый убыток: к середине боя их десятки тысяч, и
+## каждый кадр проходил по всему списку со словарными обращениями на каждую частицу.
+## Теперь они ЧАСТЬ КАРТИНКИ КУСКА доски: TerrainTiles впечатывает их в пол один раз,
+## при сборке куска, и дальше кадр о них вообще не знает.
+##
+## Отсюда — указатель «в каком куске что лежит» (by_chunk) и список кусков, которые надо
+## пересобрать. Сторона куска обязана совпадать с TerrainTiles.C.
+const DECAL_CHUNK := 16
+var by_chunk: Dictionary = {}       # Vector2i -> Array[Dictionary]
+## Куски, где косметика прибавилась с прошлого опроса.
+var decal_dirty: Dictionary = {}
+## Растёт на любое ИЗЪЯТИЕ осевшего (пожар, вытеснение, загрузка). Добавлением такое не
+## поправить, поэтому TerrainTiles по смене этого числа выбрасывает все куски разом.
+var decal_reset: int = 0
+
+## Насколько частица может вылезти за свою клетку (см. TerrainTiles.DECAL_BLEED): у самой
+## границы куска её видно и в соседнем, и пересобрать надо оба.
+const DECAL_BLEED := 2
+
+## Осевшая частица: в список и в указатель куска.
+func _settle(list: Array, p: Dictionary) -> void:
+	list.append(p)
+	var pos: Vector2 = p["pos"]
+	var cell := Vector2i(floori(pos.x), floori(pos.y))
+	var cc := cell / DECAL_CHUNK
+	if not by_chunk.has(cc):
+		by_chunk[cc] = []
+	(by_chunk[cc] as Array).append(p)
+	decal_dirty[cc] = true
+	# Соседние куски — только те, до которых частица и правда дотягивается.
+	var lo := (cell - Vector2i(DECAL_BLEED, DECAL_BLEED)) / DECAL_CHUNK
+	var hi := (cell + Vector2i(DECAL_BLEED, DECAL_BLEED)) / DECAL_CHUNK
+	for y in range(lo.y, hi.y + 1):
+		for x in range(lo.x, hi.x + 1):
+			decal_dirty[Vector2i(x, y)] = true
+
+## Указатель — заново по спискам. Зовётся там, где осевшее УБЫЛО: дешевле пересобрать
+## его целиком, чем искать выбывших, а случается это редко (пожар, потолок, загрузка).
+func _reindex() -> void:
+	by_chunk.clear()
+	for list: Array in [gore, props]:
+		for p: Dictionary in list:
+			var pos: Vector2 = p["pos"]
+			var cc := Vector2i(floori(pos.x) / DECAL_CHUNK, floori(pos.y) / DECAL_CHUNK)
+			if not by_chunk.has(cc):
+				by_chunk[cc] = []
+			(by_chunk[cc] as Array).append(p)
+	decal_dirty.clear()
+	decal_reset += 1
 var gore: Array = []
-## Кровавые отпечатки ног — отдельно от props со своим потолком, чтобы длинные цепочки
-## следов не вытесняли лужи. Те же поля, что у props.
-var prints: Array = []
-## Клетки с лужей крови (по ним считаются следы) и id бойца -> сколько клеток ещё следить.
-var pool_cells: Dictionary = {}
-var bloody: Dictionary = {}
+## Кровавых отпечатков ног больше нет (0.9.3, по просьбе игрока), а с ними и учёта «кто в
+## чём испачкался». Кровь остаётся лужами и брызгами там, где пролилась.
 ## Ещё летящие: то же плюс from/to и таймер. По приземлении переезжают в props.
 var flying: Array = []
 ## Отрезки лазерного следа (item 11): [{from: Vector2, to: Vector2}] в клетках.
@@ -171,9 +237,9 @@ func clear() -> void:
 	damage_version += 1
 	props.clear()
 	gore.clear()
-	prints.clear()
-	pool_cells.clear()
-	bloody.clear()
+	by_chunk.clear()
+	decal_dirty.clear()
+	decal_reset += 1
 	flying.clear()
 	laser_lines.clear()
 	track_marks.clear()
@@ -221,8 +287,6 @@ func _apply(events: Array, lanes_only: bool) -> void:
 				_casings(ev)
 			"blood":
 				_blood(ev)
-			"steps":
-				_steps(ev)
 			"burn":
 				_burn(ev)
 			"laser":
@@ -387,12 +451,11 @@ func _blood(ev: Dictionary) -> void:
 			_trim()
 		return
 	var pool_rng := _rng_for("pool", at, 0, _seq)
-	gore.append({
+	_settle(gore, {
 		"kind": "blood_pool", "pos": Vector2(at) + Vector2(0.5, 0.5),
 		"rot": pool_rng.randf_range(0.0, TAU),
 		"scale": pool_rng.randf_range(1.0, 1.3) * (1.25 if blast else 1.0),
 	})
-	pool_cells[at] = true
 	var away := _away(at, from)
 	# Подтёки вокруг главной лужи: по ходу брызг (кольцом при взрыве).
 	for i in pool_rng.randi_range(2, 3) + (3 if blast else 0):
@@ -401,10 +464,8 @@ func _blood(ev: Dictionary) -> void:
 		pos = _clip_solid(Vector2(at) + Vector2(0.5, 0.5), pos, at)
 		if _space(Vector2i(floori(pos.x), floori(pos.y))):
 			continue   # подтёк не ложится на вакуум
-		gore.append({"kind": "blood_pool", "pos": pos, "rot": pool_rng.randf_range(0.0, TAU),
+		_settle(gore, {"kind": "blood_pool", "pos": pos, "rot": pool_rng.randf_range(0.0, TAU),
 				"scale": pool_rng.randf_range(0.35, 0.6), "origin": at})
-		if blast:
-			pool_cells[Vector2i(floori(pos.x), floori(pos.y))] = true
 	var fan := PI if blast else 0.9
 	var reach := 1.6 if blast else 1.0
 	var drops_rng := _rng_for("splatter_n", at, 0, _seq)
@@ -432,9 +493,7 @@ func _burn(ev: Dictionary) -> void:
 		return
 	props = _swept(props, hit)
 	gore = _swept(gore, hit)
-	prints = _swept(prints, hit)
-	for c: Vector2i in hit:
-		pool_cells.erase(c)
+	_reindex()
 
 static func _swept(list: Array, hit: Dictionary) -> Array:
 	var kept: Array = []
@@ -447,31 +506,6 @@ static func _swept(list: Array, hit: Dictionary) -> Array:
 
 func _space(c: Vector2i) -> bool:
 	return space_at.is_valid() and bool(space_at.call(c))
-
-## Шаги бойца (gore batch): наступил в лужу — следующие BLOODY_STEPS клеток оставляет
-## отпечатки, всё бледнее. Чистая косметика: только из описания хода, без кубиков.
-func _steps(ev: Dictionary) -> void:
-	var id := int(ev.get("unit", -1))
-	var prev: Vector2i = ev.get("from", Vector2i.ZERO)
-	if pool_cells.has(prev):
-		bloody[id] = BLOODY_STEPS
-	for c: Vector2i in ev.get("path", []):
-		var left := int(bloody.get(id, 0))
-		if left > 0:
-			var dir := Vector2(c - prev)
-			prints.append({"kind": "footprint", "pos": Vector2(c) + Vector2(0.5, 0.5),
-					"rot": dir.angle(), "scale": float(left) / BLOODY_STEPS, "origin": c})
-			left -= 1
-			if left > 0:
-				bloody[id] = left
-			else:
-				bloody.erase(id)
-		if pool_cells.has(c):
-			bloody[id] = BLOODY_STEPS
-		prev = c
-	# Отпечатки — тоже кровь, и живут столько же: вытесняются лишь на аварийном потолке.
-	if prints.size() > GORE_CAP:
-		prints = prints.slice(prints.size() - GORE_CAP)
 
 ## Направление «прочь от источника». Источник совпал с целью (взрыв под ногами,
 ## смерть без стрелка) — веер уходит во все стороны, и базовый угол берётся вверх.
@@ -593,9 +627,9 @@ func advance(delta: float) -> bool:
 			"origin": f.get("origin", Vector2i(floori(f["to"].x), floori(f["to"].y))),
 		}
 		if GORE_KINDS.has(str(f["kind"])):
-			gore.append(settled_prop)
+			_settle(gore, settled_prop)
 		else:
-			props.append(settled_prop)
+			_settle(props, settled_prop)
 	if not landed.is_empty():
 		_trim()
 	return true
@@ -620,14 +654,23 @@ static func flight_rot(f: Dictionary) -> float:
 	var k: float = clampf(float(f["t"]) / maxf(0.001, float(f["dur"])), 0.0, 1.0)
 	return float(f["rot0"]) + float(f["rot1"]) * k
 
+## Запас сверх потолка, при котором вытеснение ещё не запускается (0.9.3). Вытеснение
+## перебирает указатель кусков заново и выбрасывает все запечённые картинки, поэтому
+## делать это на каждую осевшую гильзу нельзя: перевалив за потолок, бой пересобирал бы
+## доску на каждое действие. С запасом это случается раз на SLACK частиц.
+const TRIM_SLACK := 400
+
 func _trim() -> void:
 	var over := props.size() - PROPS_CAP
+	var gore_over := gore.size() - GORE_CAP
+	if over <= TRIM_SLACK and gore_over <= TRIM_SLACK:
+		return
 	if over > 0:
 		props = props.slice(over)
 	# Кровь вытесняется только на аварийном потолке — см. GORE_CAP.
-	var gore_over := gore.size() - GORE_CAP
 	if gore_over > 0:
 		gore = gore.slice(gore_over)
+	_reindex()
 
 # --- Сохранение косметики (M12, item 42) ---
 ## Осевшая косметика — часть того, КАК выглядит бой, поэтому сохранение везёт её с
@@ -653,16 +696,6 @@ func to_dict() -> Dictionary:
 		if f["kind"] == "blood_drop" and _space(Vector2i(floori(to.x), floori(to.y))):
 			continue
 		settled.append([str(f["kind"]), to.x, to.y, float(f["rot0"]) + float(f["rot1"]), float(f["scale"])])
-	var steps: Array = []
-	for p: Dictionary in prints:
-		var pos: Vector2 = p["pos"]
-		steps.append([pos.x, pos.y, float(p["rot"]), float(p["scale"])])
-	var pools: Array = []
-	for c: Vector2i in pool_cells:
-		pools.append([c.x, c.y])
-	var feet: Array = []
-	for id in bloody:
-		feet.append([int(id), int(bloody[id])])
 	# Следы лазера (playtest-20): без них снимок пересинхронизации стирал гостю все подпалины.
 	var lasers: Array = []
 	for seg: Dictionary in laser_lines:
@@ -674,8 +707,9 @@ func to_dict() -> Dictionary:
 		var ta: Vector2 = seg["from"]
 		var tb: Vector2 = seg["to"]
 		tracks.append([ta.x, ta.y, tb.x, tb.y])
-	return {"damage": damage, "props": settled, "prints": steps, "pools": pools, "bloody": feet,
-			"lasers": lasers, "tracks": tracks}
+	# Ключи «prints», «pools», «bloody» больше не пишутся (0.9.3): отпечатков ног нет.
+	# Старые сохранения с ними читаются — лишние ключи просто никто не спрашивает.
+	return {"damage": damage, "props": settled, "lasers": lasers, "tracks": tracks}
 
 func from_dict(d: Dictionary) -> void:
 	clear()
@@ -693,17 +727,7 @@ func from_dict(d: Dictionary) -> void:
 			else:
 				props.append(loaded)
 	_trim()
-	for e in d.get("prints", []):
-		if e is Array and (e as Array).size() >= 4:
-			var pos := Vector2(float(e[0]), float(e[1]))
-			prints.append({"kind": "footprint", "pos": pos, "rot": float(e[2]),
-					"scale": float(e[3]), "origin": Vector2i(floori(pos.x), floori(pos.y))})
-	for e in d.get("pools", []):
-		if e is Array and (e as Array).size() >= 2:
-			pool_cells[Vector2i(int(e[0]), int(e[1]))] = true
-	for e in d.get("bloody", []):
-		if e is Array and (e as Array).size() >= 2:
-			bloody[int(e[0])] = int(e[1])
+	_reindex()
 	for e in d.get("lasers", []):
 		if e is Array and (e as Array).size() >= 4:
 			laser_lines.append({"from": Vector2(float(e[0]), float(e[1])),

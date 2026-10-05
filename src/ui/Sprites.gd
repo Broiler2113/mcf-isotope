@@ -16,6 +16,9 @@ extends RefCounted
 ## Кэш «имя → текстура». Заполняется один раз, дальше только чтение.
 static var _overrides: Dictionary = {}
 static var _overrides_loaded := false
+## Имена, картинку которых подложил САМ ИГРОК (user://textures). Нужно там, где
+## поставочная картинка больше не рисуется (космос, 0.9.3), а своя — должна.
+static var _user_overrides: Dictionary = {}
 ## Имена, для которых замены нет: одна проверка вместо двух поисков и to_lower() —
 ## на большой карте это тысячи вызовов за кадр (пол, укрытие, огонь каждой клетки).
 static var _misses: Dictionary = {}
@@ -45,8 +48,17 @@ const MANIFEST := [
 	["Map environments (a <tile>_<environment> file beats the plain one on that map)", [
 		"floor_station", "floor_bunker", "floor_town", "floor_field", "floor_asteroid",
 		"wall_station", "wall_bunker", "wall_town", "wall_field", "wall_asteroid",
-		"bedrock", "door_station", "door_open_station", "door_bunker", "door_open_bunker",
+		"bedrock", "boundary_bunker",
+		"door_station", "door_open_station", "door_bunker", "door_open_bunker",
 		"door_town", "door_open_town", "door_field", "door_open_field", "door_asteroid", "door_open_asteroid",
+	]],
+	["Room floors (what a room is for decides which one it gets)", [
+		"floor_wood", "floor_parquet", "floor_tile", "floor_checker", "floor_carpet_red",
+		"floor_carpet_blue", "floor_lino", "floor_plate", "floor_grate",
+		# Снаружи станции: панели и решётчатые мостки под ними. Решётка прозрачна между
+		# прутьями — своя картинка тоже должна быть с прозрачностью, иначе звёзд за ней
+		# не будет видно.
+		"floor_solar", "floor_grill",
 	]],
 	["Combat decoration (cosmetic only, never affects the rules)", [
 		"glass_shard", "shell_casing", "blood_pool", "blood_splatter",
@@ -89,6 +101,7 @@ const AUTOTILE_W := 8
 static func reload_overrides() -> void:
 	_overrides.clear()
 	_misses.clear()
+	_user_overrides.clear()
 	_overrides_loaded = true
 	DirAccess.make_dir_recursive_absolute(USER_DIR)
 	_write_manifest()
@@ -101,6 +114,7 @@ static func ensure_overrides() -> void:
 		reload_overrides()
 
 static func _scan_override_dir(dir_path: String) -> void:
+	var from_user := dir_path == USER_DIR
 	var d := DirAccess.open(dir_path)
 	if d == null:
 		return
@@ -125,6 +139,8 @@ static func _scan_override_dir(dir_path: String) -> void:
 				var tex := _load_texture_at(dir_path + "/" + base_name)
 				if tex != null:
 					_overrides[key] = tex
+					if from_user:
+						_user_overrides[key] = true
 		fname = d.get_next()
 	d.list_dir_end()
 
@@ -159,6 +175,11 @@ static func texture_of(name: String) -> Texture2D:
 static func has_override(name: String) -> bool:
 	ensure_overrides()
 	return _overrides.has(ALIASES.get(name, name).to_lower())
+
+## Картинку под этим именем положил сам игрок (user://textures), а не игра.
+static func has_user_override(name: String) -> bool:
+	ensure_overrides()
+	return _user_overrides.has(ALIASES.get(name, name).to_lower())
 
 ## Имя с учётом стороны: сначала ищем «boec_nova», потом общее «boec» (#55, batch 17).
 ## Пустая строка — картинки нет ни в каком виде, рисуем вектор как раньше.
@@ -362,8 +383,10 @@ static func _manifest_text() -> String:
 		"   to test without touching the project, then move them into res://textures to",
 		"   ship them. Open the project once in the Godot editor so it imports them.",
 		"3. Vehicles are drawn nose-up over their whole footprint (tank 3x3, shuttle 2x2).",
-		"4. Floors: floor, floor_grass, floor_wall (under a wall), floor_space,",
-		"   floor_cover, floor_destroyed, floor_epicenter, fire.",
+		"4. Floors: floor, floor_grass, floor_wall (under a wall), floor_cover,",
+		"   floor_destroyed, floor_epicenter, fire.",
+		"   Space draws NO tile at all - the parallax starfield behind the board shows",
+		"   through it. Drop floor_space.png in user://textures to get a tile back.",
 		"5. Missing files fall back to the built-in vector look, so you can replace the",
 		"   game piece by piece.",
 		"",
