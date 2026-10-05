@@ -11,12 +11,15 @@ func ck(cond: bool, what: String) -> void:
 
 func _initialize() -> void:
 	_corridors_and_grating()
+	_border()
 	_accents()
 	_grill_and_panels()
 	_doors_fill_the_tile()
 	_space_has_no_tile()
+	_corpse_pile_gets_cleared()
 	if fails.is_empty():
-		print("batch 0.9.3: accents, grill, corridors, doors and empty space all hold")
+		print("batch 0.9.3: accents, grill, corridors, doors, the border, empty space"
+				+ " and corpse-pile clearing all hold")
 	else:
 		print("batch 0.9.3: %d failure(s)" % fails.size())
 	quit(1 if not fails.is_empty() else 0)
@@ -35,6 +38,8 @@ func _maps() -> Array:
 ## длинный, поперёк — это и есть ширина, поэтому берём наименьший пробег каждого вида.
 func _corridors_and_grating() -> void:
 	var main_bad := 0
+	var main_runs := 0
+	var main_wide := 0
 	var tech_bad := 0
 	var tech_wide := 0
 	var tech_runs := 0
@@ -56,8 +61,12 @@ func _corridors_and_grating() -> void:
 						run += 1
 						continue
 					# Пробег кончился: короткий (не длиннее 3) — это поперечник прохода.
-					if kind == MapGen.K_HALL and run > 0 and run < 4 and run != 3:
-						main_bad += 1
+					if kind == MapGen.K_HALL and run > 0 and run < 4:
+						main_runs += 1
+						if run < 2:
+							main_bad += 1
+						elif run == 3:
+							main_wide += 1
 					elif kind == MapGen.K_MAINT and run > 0 and run < 4:
 						tech_runs += 1
 						if run > 2:
@@ -77,7 +86,13 @@ func _corridors_and_grating() -> void:
 				grate_tech += 1
 			else:
 				grate_elsewhere += 1
-	ck(main_bad == 0, "every main corridor is 3 cells wide (%d narrower ones)" % main_bad)
+	ck(main_bad == 0 and main_runs > 0,
+			"no main corridor is narrower than 2 cells (%d of %d)" % [main_bad, main_runs])
+	# Считаем поперечники, а не коридоры: главный ход тянется через всю карту, поэтому
+	# трёхклеточных сечений у него много. Важно, что есть и те и другие.
+	ck(main_wide > 0 and main_runs - main_wide > 0,
+			"a 3-wide main drag and 2-wide corridors besides it (%d of %d sections)"
+			% [main_wide, main_runs])
 	ck(tech_bad == 0 and tech_runs > 0, "tech tunnels are 1 or 2 cells wide (%d of %d broke it)"
 			% [tech_bad, tech_runs])
 	ck(tech_wide > 0 and tech_wide * 3 < tech_runs,
@@ -104,13 +119,38 @@ func _accents() -> void:
 			var fid: String = m.feature_id[i]
 			if fid != MCF.FEATURE_WALL and fid != MCF.FEATURE_AIRLOCK and fid != MCF.FEATURE_GLASS:
 				off_wall += 1
+		# Какие службы вправе претендовать на клетку: все комнаты, чья кайма её задевает.
+		# Общая стена двух цветных комнат — одна, и цвет у неё может быть любой из двух.
+		var claims := {}
+		for r: Rect2i in g._room_kind:
+			var a: int = MapGen.KIND_ACCENT.get(g._room_kind[r], MCF.Accent.NONE)
+			if a == MCF.Accent.NONE:
+				continue
+			for c in g._edge_cells(r):
+				var key := c.y * m.width + c.x
+				if not claims.has(key):
+					claims[key] = {}
+				claims[key][a] = true
 		for r: Rect2i in g._room_kind:
 			if g._room_kind[r] != "armory":
 				continue
 			armories += 1
+			var own_red := 0
 			for c in g._edge_cells(r):
-				if m.get_accent(c.y * m.width + c.x) != MCF.Accent.SECURITY:
-					armory_bad += 1
+				# Кайма прямоугольника комнаты — не обязательно стена: у комнаты, вплотную
+				# примыкающей к коридору отдела, в неё попадает и пол коридора. Цвет живёт
+				# на стенах, их и спрашиваем.
+				var fid: String = m.get_feature(c)
+				if fid != MCF.FEATURE_WALL and fid != MCF.FEATURE_AIRLOCK and fid != MCF.FEATURE_GLASS:
+					continue
+				var got := m.get_accent(c.y * m.width + c.x)
+				if got == MCF.Accent.SECURITY:
+					own_red += 1
+					continue
+				if not (claims.get(c.y * m.width + c.x, {}) as Dictionary).has(got):
+					armory_bad += 1   # цвет, на который эту стену не заявляла ни одна комната
+			if own_red == 0:
+				armory_bad += 1
 	var want: Array[int] = [MCF.Accent.COMMAND, MCF.Accent.CONTROL, MCF.Accent.SECURITY,
 			MCF.Accent.MEDICAL, MCF.Accent.SCIENCE, MCF.Accent.ENGINEERING, MCF.Accent.CARGO]
 	var missing: Array[String] = []
@@ -120,7 +160,8 @@ func _accents() -> void:
 	ck(missing.is_empty(), "every service gets its colour somewhere (missing: %s)" % str(missing))
 	ck(off_wall == 0, "the accent sits on walls, windows and airlocks only (%d loose cells)" % off_wall)
 	ck(armories > 0 and armory_bad == 0,
-			"an armoury is red wherever it stands, department or not (%d walls broke it)" % armory_bad)
+			"an armoury is red wherever it stands; a wall it shares with another service may take"
+			+ " that one's colour, nothing else (%d broke it)" % armory_bad)
 	var g2 := MapGen.build({"style": MapGen.Style.STATION, "size": 2, "seed": 3, "civilians": 0})
 	var back := MapData.from_dict(g2.m.to_dict())
 	ck(back.wall_accent == g2.m.wall_accent, "accents survive save and load")
@@ -226,3 +267,188 @@ func _space_has_no_tile() -> void:
 			"the grill is an overlay, so the stars show through its bars")
 	ck(t._floor_name(g.cell(Vector2i(1, 1)), Vector2i(1, 1)) == "floor",
 			"solid floor is unaffected")
+
+## Кайма вокруг карты (0.9.3): BORDER клеток своего вида в каждую сторону, за ними
+## BORDER_RIM клеток границы мира — туда не войти и там ничего не сломать.
+func _border() -> void:
+	var cases := [
+		[MapGen.Style.BUNKER, false, "soil"],
+		[MapGen.Style.STATION, true, "space"],
+		[MapGen.Style.ASTEROID, true, "space"],
+		[MapGen.Style.TOWN, false, "grass"],
+		[MapGen.Style.FIELD, false, "grass"],
+	]
+	var size_bad := 0
+	var rim_bad := 0
+	var ring_bad: Array[String] = []
+	var zone_outside := 0
+	var spawn_outside := 0
+	var walk_rim := 0
+	var breakable := 0
+	for case: Array in cases:
+		for seed: int in [5, 41, 96]:
+			var dim: Vector2i = MapGen.SIZES[1]
+			var g := MapGen.build({"style": case[0], "size": 1, "seed": seed, "civilians": 2,
+					"space": case[1], "zones": 2})
+			var m: MapData = g.m
+			if m.width != dim.x + MapGen.BORDER_ALL * 2 or m.height != dim.y + MapGen.BORDER_ALL * 2:
+				size_bad += 1
+			var core := Rect2i(MapGen.BORDER_ALL, MapGen.BORDER_ALL, dim.x, dim.y)
+			var reach := core.grow(MapGen.BORDER)
+			var want: String = case[2]
+			for i in m.width * m.height:
+				var c := Vector2i(i % m.width, i / m.width)
+				if not reach.has_point(c):
+					# Граница мира: её объект и ничего больше.
+					if m.feature_id[i] != MCF.FEATURE_BOUNDARY:
+						rim_bad += 1
+					continue
+				if core.has_point(c):
+					continue
+				# Кольцо, куда можно выйти: у каждого стиля свой вид.
+				var ok := false
+				match want:
+					"soil":
+						ok = m.feature_id[i] == MCF.FEATURE_SOIL
+					"space":
+						ok = m.is_space[i] != 0
+					_:
+						ok = m.feature_id[i] == "" and m.is_space[i] == 0
+				if not ok and ring_bad.size() < 4:
+					ring_bad.append("%s at %s: feature=%s space=%s" % [want, str(c),
+							m.feature_id[i], str(m.is_space[i] != 0)])
+				if m.zone_owner[i] >= 0:
+					zone_outside += 1
+			for sp: Dictionary in m.spawns:
+				if not core.has_point(sp["coord"] as Vector2i):
+					spawn_outside += 1
+			# По-настоящему: собрать сетку и спросить правила движения и слома.
+			var grid := Grid.new(m.width, m.height)
+			m.apply_to_grid(grid)
+			for x in m.width:
+				for y: int in [0, m.height - 1]:
+					if not grid.blocks_walk(Vector2i(x, y)):
+						walk_rim += 1
+			var probe := Vector2i(0, m.height / 2)
+			if GameActionResolver.BREAKABLE.has(grid.cell(probe).feature_id):
+				breakable += 1
+	ck(size_bad == 0, "every style gets a %d-cell border around the map it asked for (%d wrong)"
+			% [MapGen.BORDER_ALL, size_bad])
+	ck(rim_bad == 0, "past the %d walkable cells the world's edge takes over (%d cells broke it)"
+			% [MapGen.BORDER, rim_bad])
+	ck(ring_bad.is_empty(), "the ring you can reach is soil, grass or space by style (%s)"
+			% str(ring_bad))
+	ck(zone_outside == 0, "no deployment zone reaches outside the map (%d cells)" % zone_outside)
+	ck(spawn_outside == 0, "nobody starts outside the map, civilians included (%d)" % spawn_outside)
+	ck(walk_rim == 0, "the world's edge is impassable for everyone (%d open cells)" % walk_rim)
+	ck(breakable == 0, "and no miner can demolish it (%d)" % breakable)
+
+## Завал из тел на единственном проходе (0.9.3). Носильщик с полными руками упирался в
+## кучу и стоял так до конца боя: взять ещё тело он не может, а класть соглашался только
+## когда рядом нет врага. Теперь он освобождает руки и разбирает завал по телу.
+func _corpse_pile_gets_cleared() -> void:
+	var w := 34
+	var h := 5
+	var m := MapData.new(w, h)
+	for y in h:
+		for x in w:
+			# Коридор в одну клетку по середине, всё остальное — стены.
+			var wall: bool = y != 2
+			m.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 2.0 if wall else 0.0, false,
+					MCF.FEATURE_WALL if wall else "")
+	m.set_spawn(Vector2i(1, 2), "light_infantry", 0)
+	m.set_spawn(Vector2i(32, 2), "light_infantry", 1)
+	GameConfig.civilians_enabled = false
+	var st := m.build_state(5)
+	var r := GameActionResolver.new(st)
+	r.fog_mode = MCF.Fog.OFF
+	r.fog_enabled = false
+	while st.active_player() != 0:
+		r.resolve(EndTurnIntent.new())
+	# Завал ровно на дороге, и руки у бойца заняты.
+	var pile := Vector2i(4, 2)
+	st.grid.cell(pile).corpse_count = 3
+	var me: UnitInstance = null
+	for u: UnitInstance in st.all_units():
+		if u.owner == 0:
+			me = u
+	me.carried_corpses = 1
+	ck(st.grid.blocks_walk(pile), "a pile of bodies blocks the corridor to begin with")
+	var ai := AIController.new(0, AIController.Difficulty.NORMAL)
+	var pending: Array = []
+	ai.intent_ready.connect(func(i: Intent) -> void: pending.append(i))
+	var drops := 0
+	var picks := 0
+	var actions := 0
+	while st.turns.round_number <= 10 and actions < 400:
+		if st.active_player() != 0:
+			r.resolve(EndTurnIntent.new())
+			continue
+		pending.clear()
+		ai.begin_turn(st)
+		if pending.is_empty():
+			r.resolve(EndTurnIntent.new())
+			continue
+		var intent: Intent = pending[0]
+		if intent is DropCorpseIntent:
+			drops += 1
+		elif intent is PickUpCorpseIntent:
+			picks += 1
+		actions += 1
+		var res := r.resolve(intent)
+		if not res.ok:
+			ai.notify_intent_denied(st)
+	var left: int = r.corpses_at(pile)
+	_civilian_clears_too()
+	ck(drops > 0, "the carrier puts its own body down to free its hands (%d drops)" % drops)
+	ck(picks > 0, "and takes bodies out of the pile (%d pick-ups)" % picks)
+	ck(left < 3, "the pile in the corridor actually shrinks (3 bodies -> %d)" % left)
+	ck(left == 0 or not st.grid.blocks_walk(pile) or me.coord.x > 1,
+			"and the carrier is no longer stuck where it started (at %s)" % str(me.coord))
+
+## То же самое за НЕЙТРАЛА (0.9.3). Житель тащит тела как щит и по своей воле их не
+## кладёт — поэтому перед завалом он застревал ровно так же. Единственное исключение —
+## завал на дороге: ради него руки освобождаются. Спрашиваем сам набор ходов жителя:
+## ход нейтрала проводит резолвер целым кругом, и гонять ради одной проверки целую
+## партию тут не за чем.
+func _civilian_clears_too() -> void:
+	var w := 34
+	var h := 5
+	var m := MapData.new(w, h)
+	for y in h:
+		for x in w:
+			var wall: bool = y != 2
+			m.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 2.0 if wall else 0.0, false,
+					MCF.FEATURE_WALL if wall else "")
+	m.set_spawn(Vector2i(3, 2), "civilian", MCF.Owner.NEUTRAL)
+	m.set_spawn(Vector2i(32, 2), "light_infantry", 0)
+	GameConfig.civilians_enabled = true
+	var st := m.build_state(5)
+	var r := GameActionResolver.new(st)
+	r.fog_mode = MCF.Fog.OFF
+	r.fog_enabled = false
+	st.grid.cell(Vector2i(4, 2)).corpse_count = 2
+	var civ: UnitInstance = null
+	for u: UnitInstance in st.all_units():
+		if MCF.is_neutral(u.owner):
+			civ = u
+	if civ == null:
+		ck(false, "the civilian scenario actually places a civilian")
+		return
+	civ.civilian_active = true   # «вскрытый» житель: иначе он просто стоит (§3.10)
+	var ai := AIController.new(civ.owner, AIController.Difficulty.NORMAL)
+	ai._r = r   # обычно его ставит begin_turn; здесь спрашиваем генераторы напрямую
+	civ.carried_corpses = 1
+	var full := ai._neutral_candidates(st, r, civ)
+	var frees_hands := false
+	for cand: Dictionary in full:
+		if cand["intent"] is DropCorpseIntent:
+			frees_hands = true
+	civ.carried_corpses = 0
+	var empty_handed := ai._neutral_candidates(st, r, civ)
+	var digs := false
+	for cand: Dictionary in empty_handed:
+		if cand["intent"] is PickUpCorpseIntent:
+			digs = true
+	ck(frees_hands, "a civilian with full hands puts its shield down to dig through a pile")
+	ck(digs, "and with free hands it takes a body out of the pile blocking its way")

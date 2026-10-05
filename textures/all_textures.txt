@@ -32,6 +32,7 @@ Yours wins. Changes are picked up when a battle or the map editor opens.
   wall_field.png
   wall_asteroid.png
   bedrock.png
+  boundary_bunker.png
   door_station.png
   door_open_station.png
   door_bunker.png

@@ -540,14 +540,14 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 	_fx_steps(moved_res, unit, origin, path, intent.target)
 	return moved_res
 
-## Шаги по клеткам для косметики (кровавые следы): маршрут до точки остановки включительно.
+## Шаги по клеткам: маршрут до точки остановки включительно. Кровавых отпечатков ног
+## здесь больше нет (0.9.3) — осталась только сама анимация хода.
 func _fx_steps(res: ActionResult, unit: UnitInstance, origin: Vector2i, path: Array, stop: Vector2i) -> void:
 	var cut: Array = []
 	for c: Vector2i in path:
 		cut.append(c)
 		if c == stop:
 			break
-	_fx(res, {"fx": "steps", "unit": unit.id, "from": origin, "path": cut})
 	# Боец идёт по клеткам на экране, а не появляется в конце (batch soil-rulers): то же
 	# событие «walk», каким уже ходят жители и летают дроны, и «hold», который до начала
 	# анимации держит его рисунок в стартовой клетке.
@@ -1438,9 +1438,10 @@ func _laser_trace(from_coord: Vector2i, step: Vector2i) -> Array:
 		# Броневая плита гасит луч, сколько бы потенциала в нём ни оставалось (веха 14.1):
 		# прожечь её нельзя, обойти — тем более. В LASER_COST её нет намеренно — там
 		# отсутствие означало бы «пролетаем насквозь бесплатно», а тут всё наоборот.
-		if cell.feature_id == MCF.FEATURE_ARMOR_WALL:
+		# Граница мира (0.9.3) гасит луч так же: прожечь край поля нельзя.
+		if cell.feature_id == MCF.FEATURE_ARMOR_WALL or cell.feature_id == MCF.FEATURE_BOUNDARY:
 			rec["kind"] = "terrain"
-			rec["label"] = MCF.FEATURE_NAMES[MCF.FEATURE_ARMOR_WALL]
+			rec["label"] = MCF.FEATURE_NAMES[cell.feature_id]
 			rec["stop"] = true
 			out.append(rec)
 			break

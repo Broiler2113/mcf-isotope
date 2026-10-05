@@ -527,6 +527,9 @@ func _ready() -> void:
 		_open_match()
 	_refresh_status()
 	set_process(true)
+	# Камера — на свои войска, а не в угол доски: с каймой вокруг карты (0.9.3) угол поля
+	# это десяток клеток пустого грунта, травы или космоса.
+	_center_on_side.call_deferred(my_owner if networked else state.active_player(), true)
 	queue_redraw()
 
 # --- Панорама камеры по WASD ---
@@ -4345,10 +4348,14 @@ func _ensure_visible(coord: Vector2i) -> void:
 ## Камера к войскам стороны (item 10): плавно ставит в центр экрана середину её бойцов и
 ## машин, зум не трогает. В командной игре на панели есть кнопка на себя и на каждого
 ## союзника — найти своих на большой карте одним щелчком.
-func _center_on_side(side: int) -> void:
+func _center_on_side(side: int, instant: bool = false) -> void:
 	var view := get_viewport_rect().size
 	var centre := _cell_origin(_home_focus(side)) + Vector2(CELL, CELL) * 0.5
 	_kill_pan_tween()
+	if instant:
+		# Начало боя: прыжком, доводить нечего — камеру ещё никто не двигал.
+		_set_pan(view * 0.5 - zoom * centre)
+		return
 	_pan_tween = create_tween()
 	_pan_tween.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	_pan_tween.tween_method(_set_pan, pan, view * 0.5 - zoom * centre, ENSURE_VISIBLE_TWEEN)
@@ -4538,6 +4545,7 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, remembered: Dictiona
 			_tiles_grid = tkey
 			_lod.tiles = _tiles
 		_tiles.sync(_fx.floor_damage, _fx.damage_version)
+		_tiles.sync_decals(_fx)
 		_lod.near_cells = Rect2i(_cull_x0, _cull_y0, _cull_x1 - _cull_x0, _cull_y1 - _cull_y0) \
 				.intersection(Rect2i(0, 0, gw - 1, gh - 1))
 		_lod.queue_redraw()
@@ -4580,6 +4588,7 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, remembered: Dictiona
 				_lod_damaged = _fx.floor_damage.duplicate()
 				_lod_terrain_stale = true
 		_lod_look_ver = GridCell.look_version
+		_lod_sync_decals(grid)
 	# Туман: целиком — при смене доски, зрителя или режима; иначе только клетки, чья
 	# видимость сменилась (take_vis_changes; null — «сменилось всё»).
 	if fog_on:
@@ -4724,6 +4733,10 @@ func _lod_feature_color(cell: GridCell) -> Color:
 	if fid == "" or fid == MCF.FEATURE_MINE or fid == MCF.FEATURE_AV_MINE \
 			or fid == MCF.FEATURE_DRONE_STATION:
 		return Color(0, 0, 0, 0)
+	# Граница мира (0.9.3): в бункере — плитка грунта, в прочих окружениях плитки нет, и
+	# на дальнем плане её тоже не видно — там виден пол клетки.
+	if fid == MCF.FEATURE_BOUNDARY:
+		return _lod_tex_avg.get("boundary", Color(0, 0, 0, 0))
 	if _lod_tex_avg.has(fid):
 		return _lod_tex_avg[fid]
 	if fid == MCF.FEATURE_LDF:
@@ -4734,12 +4747,54 @@ func _lod_feature_color(cell: GridCell) -> Color:
 		return Color(0.45, 0.6, 0.75, 0.55)
 	return Color(0.6, 0.6, 0.7, 0.45)
 
+## Осевшая косметика на ДАЛЬНЕМ плане (0.9.3). Вблизи кровь и гильзы запечены в плитки
+## куска (TerrainTiles._bake_decals), а здесь клетка — один пиксель, и запекать нечего:
+## цвет частицы просто подмешивается в пиксель её клетки. Так на отъезде по-прежнему
+## видно, где шёл бой, — а это главное, зачем кровь на карте и нужна.
+##
+## Новое подмешивается по мере появления: списки косметики только растут, пока что-то не
+## УБЫЛО (пожар, потолок, загрузка) — а это и есть FxDecals.decal_reset, по которому
+## дальний план собирается заново.
+var _lod_decal_reset := -1
+var _lod_decal_done := 0
+
+func _lod_sync_decals(grid: Grid) -> void:
+	if _lod_terrain == null:
+		return
+	if _lod_decal_reset != _fx.decal_reset:
+		_lod_decal_reset = _fx.decal_reset
+		_lod_decal_done = 0
+		_lod_build_terrain()
+		_lod.terrain = null
+	var total: int = _fx.gore.size() + _fx.props.size()
+	if _lod_decal_done >= total:
+		return
+	var i := 0
+	for list: Array in [_fx.gore, _fx.props]:
+		for p: Dictionary in list:
+			i += 1
+			if i <= _lod_decal_done:
+				continue
+			var pos: Vector2 = p["pos"]
+			var c := Vector2i(floori(pos.x), floori(pos.y))
+			if not grid.in_bounds(c):
+				continue
+			var look: Array = FxDecals.LOOK.get(str(p["kind"]), [])
+			if look.is_empty():
+				continue
+			var col: Color = look[1]
+			# Доля клетки, которую частица закрывает, — она же и вес подмешивания.
+			var cover: float = clampf(float(look[0]) * float(p["scale"]), 0.08, 1.0) * col.a
+			_lod_terrain.set_pixel(c.x, c.y, _lod_terrain.get_pixel(c.x, c.y).lerp(col, cover))
+	_lod_decal_done = total
+	_lod_terrain_stale = true
+
 ## Средние цвета картинок-замен пола и объектов (#55): на дальнем плане картинка — это
 ## её цвет. Считается раз на сборку рельефа.
 func _lod_texture_averages() -> Dictionary:
 	var out := {}
 	var names: Array = ["floor", "floor_space", "floor_wall", "floor_cover", "fire",
-			"floor_grass", "floor_destroyed", "floor_epicenter"]
+			"floor_grass", "floor_destroyed", "floor_epicenter", "boundary"]
 	names.append_array(MCF.FLOOR_LOOKS.slice(1))   # полы комнат (0.9.2) — как на холсте
 	names.append_array(FEATURE_TAGS.keys())
 	names.append_array(Furniture.ids())   # мебель на дальнем плане — цветом своей плитки
@@ -5658,20 +5713,12 @@ func _draw_fx_props(visible: Dictionary) -> void:
 		var tail: Vector2 = tf.lerp(tt, maxf(0.0, k - 0.25))
 		draw_line(tail, head, Color(1.0, 0.95, 0.5, 0.9), 2.0)
 		draw_circle(head, 2.5, Color(1.0, 1.0, 0.7, 0.95))
-	if _fx.props.is_empty() and _fx.gore.is_empty() and _fx.flying.is_empty() \
-			and _fx.prints.is_empty():
+	# ОСЕВШЕЙ косметики здесь больше нет (0.9.3): кровь, гильзы и осколки впечатаны в
+	# картинку куска доски (TerrainTiles._bake_decals) и кадру ничего не стоят. Осталось
+	# только то, что ещё в воздухе, — его и правда надо двигать каждый кадр.
+	if _fx.flying.is_empty():
 		return
 	var fog_on: bool = resolver.fog_enabled
-	for prop: Dictionary in _fx.prints:
-		_draw_fx_one(prop["kind"], prop["pos"], prop["rot"], prop["scale"], visible, fog_on,
-				prop["origin"])
-	# Кровь — первым слоем: гильзы и осколки ложатся ПОВЕРХ лужи, а не тонут под ней.
-	for prop: Dictionary in _fx.gore:
-		_draw_fx_one(prop["kind"], prop["pos"], prop["rot"], prop["scale"], visible, fog_on,
-				prop.get("origin", Vector2i(-1, -1)))
-	for prop: Dictionary in _fx.props:
-		_draw_fx_one(prop["kind"], prop["pos"], prop["rot"], prop["scale"], visible, fog_on,
-				prop.get("origin", Vector2i(-1, -1)))
 	for f: Dictionary in _fx.flying:
 		_draw_fx_one(f["kind"], FxDecals.flight_pos(f), FxDecals.flight_rot(f),
 				f["scale"], visible, fog_on, f.get("origin", Vector2i(-1, -1)))
@@ -5713,26 +5760,10 @@ func _draw_fx_lanes(visible: Dictionary) -> void:
 		for d: Vector2 in [Vector2.LEFT, Vector2.RIGHT, Vector2.UP, Vector2.DOWN]:
 			draw_line(b + d * rr * 0.55, b + d * rr * 1.45, tcol, 2.0)
 
-## Размер частицы в долях клетки и запасной цвет, когда картинки-замены нет.
-const FX_LOOK := {
-	"shard": [0.24, Color(0.72, 0.88, 0.95, 0.85)],
-	"casing": [0.11, Color(0.85, 0.72, 0.28, 0.9)],
-	# Гильза противотанкиста (item 24): оранжевая и вдвое крупнее пистолетной (0.11 → 0.22).
-	"shell_casing": [0.22, Color(1.0, 0.55, 0.1, 0.95)],
-	"blood_drop": [0.2, Color(0.6, 0.04, 0.04, 0.9)],
-	"blood_pool": [0.95, Color(0.42, 0.03, 0.03, 0.8)],
-	# Ошмётки после взрыва: тёмно-красные куски, крупнее капли.
-	"gib": [0.24, Color(0.42, 0.05, 0.06, 0.95)],
-	# Кровавый след: пара отпечатков; scale — насколько ещё свежий (1 → бледнее).
-	"footprint": [0.34, Color(0.45, 0.03, 0.03, 0.75)],
-}
-const FX_TEXTURE := {
-	"shard": "glass_shard", "casing": "shell_casing",
-	# Отдельное имя картинки, чтобы крупная оранжевая гильза при желании подменялась
-	# своим png; без него сработает запасной оранжевый четырёхугольник из FX_LOOK.
-	"shell_casing": "shell_casing_big",
-	"blood_drop": "blood_splatter", "blood_pool": "blood_pool",
-}
+## Вид частиц переехал в FxDecals.LOOK / TEXTURE (0.9.3): по той же таблице осевшую
+## косметику запекает в доску TerrainTiles, и двум копиям разойтись теперь негде.
+const FX_LOOK := FxDecals.LOOK
+const FX_TEXTURE := FxDecals.TEXTURE
 
 ## origin — клетка, откуда частица вылетела (разбитое окно): видел, как оно разбилось, —
 ## видишь и все его осколки, даже долетевшие в туман (item 7).
@@ -5751,19 +5782,6 @@ func _draw_fx_one(kind: String, cell_pos: Vector2, rot: float, scale: float,
 		return
 	var look: Array = FX_LOOK.get(kind, [0.12, Color(0.8, 0.8, 0.8, 0.8)])
 	var center := ORIGIN + cell_pos * CELL
-	if kind == "footprint":
-		# Два отпечатка по бокам хода, носком вперёд; бледнеют к концу следа.
-		var col: Color = look[1]
-		col.a *= clampf(scale, 0.25, 1.0)
-		var len_px: float = float(look[0]) * CELL * 0.5
-		var side := Vector2(0, CELL * 0.1).rotated(rot)
-		var fwd := Vector2(CELL * 0.12, 0).rotated(rot)
-		for k in [-1.0, 1.0]:
-			draw_set_transform(pan + (center + side * k + fwd * k) * zoom, rot,
-					Vector2(zoom, zoom * 0.45))
-			draw_circle(Vector2.ZERO, len_px * 0.5, col)
-		draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
-		return
 	var half: float = float(look[0]) * CELL * float(scale) * 0.5
 	var rect := Rect2(center - Vector2(half, half), Vector2(half, half) * 2.0)
 	if Sprites.draw_texture_override_rect(self, FX_TEXTURE.get(kind, kind), rect,

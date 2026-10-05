@@ -304,6 +304,11 @@ static func map_color(m: MapData, i: int, env: String) -> Color:
 		# Мебель (§3.15) — свой тёплый тон, высокая темнее: план комнат читается сразу.
 		col = Color(0.40, 0.30, 0.22) if m.cover_height[i] >= MCF.WALL_HEIGHT \
 				else Color(0.55, 0.42, 0.28)
+	elif feat == MCF.FEATURE_BOUNDARY:
+		# Граница мира (0.9.3) — не стена, а край карты: на миникарте показываем то, что
+		# под ней (грунт бункера, трава, космос), чуть притушив.
+		col = (Color(0.03, 0.03, 0.07) if m.is_space[i] != 0
+				else FLOOR_TONE.get(env, Color(0.28, 0.28, 0.28))).darkened(0.35)
 	elif m.cover_height[i] >= MCF.WALL_HEIGHT:
 		col = WALL_TONE.get(env, Color(0.45, 0.42, 0.38))
 		if MCF.is_glass(feat):

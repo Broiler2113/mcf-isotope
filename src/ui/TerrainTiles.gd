@@ -47,6 +47,9 @@ const FAMILY := {
 	"wall": "wall", "wood_wall": "wall", "glass": "wall", "armor_wall": "wall",
 	"armor_glass": "wall", "dot": "wall", "dot_open": "wall", "bru": "wall",
 	"airlock": "wall", "corpse_wall": "wall", "soil": "wall",
+	# Граница мира (0.9.3): в бункере она — тот же грунт, и стыковаться должна с ним.
+	# В прочих окружениях плитки у неё нет и семейство ни на что не влияет.
+	"boundary": "wall",
 	"sandbags": "bags", "sandbag_wall": "bags", "hedgehog_sandbags": "bags", "rsp": "bags",
 	"trench": "trench",
 }
@@ -65,6 +68,10 @@ var _built := 0
 var _look_ver: int = -1
 var _damage_ver: int = -1
 var _damaged: Dictionary = {}
+## Осевшая косметика по кускам (FxDecals.by_chunk) — кровь, гильзы, осколки, впечатанные
+## в пол куска (0.9.3). Пусто — слоя нет (редактор, расстановка до боя).
+var decals: Dictionary = {}
+var _decal_reset: int = -1
 var _frame: int = 0
 ## Варианты плиток: "имя@res" -> Array[Image] (res×res); листы: "имя@res" -> Array[Image]
 ## (4res×4res). Пустой массив — картинки нет.
@@ -178,6 +185,22 @@ func _load(name: String) -> Image:
 
 ## Подтянуть журнал вида и копоть взрывов: пометить грязными куски тронутых клеток и
 ## их соседей.
+## Подтянуть осевшую косметику (0.9.3): куски, где она прибавилась, — пересобрать; если
+## её откуда-то УБРАЛИ (пожар, потолок, загрузка), выбросить все куски разом.
+func sync_decals(fx: FxDecals) -> void:
+	decals = fx.by_chunk
+	if _decal_reset != fx.decal_reset:
+		_decal_reset = fx.decal_reset
+		_chunks.clear()
+		_bytes = 0
+		fx.decal_dirty.clear()
+		return
+	if fx.decal_dirty.is_empty():
+		return
+	for cc: Vector2i in fx.decal_dirty:
+		_dirty[cc] = true
+	fx.decal_dirty.clear()
+
 func sync(fx_damage: Dictionary, damage_version: int) -> void:
 	if _look_ver < GridCell.look_log_base:
 		_chunks.clear()   # журнал оборвался — дешевле собрать заново, чем разбирать
@@ -272,10 +295,104 @@ func _build(cc: Vector2i, res: int) -> void:
 		for x in w:
 			_paint(floor_img, feat_img, Vector2i(cc.x * C + x, cc.y * C + y),
 					Vector2i(x * res, y * res), res)
+	_bake_decals(floor_img, cc, res)
 	var bytes := w * h * res * res * 4 * 2
 	_chunks[Vector3i(cc.x, cc.y, res)] = {"floor": ImageTexture.create_from_image(floor_img),
 			"feat": ImageTexture.create_from_image(feat_img), "used": _frame, "bytes": bytes}
 	_bytes += bytes
+
+
+# =====================================================================================
+#  Осевшая косметика, впечатанная в пол (0.9.3)
+# =====================================================================================
+## Кровь, гильзы и осколки ни с чем не взаимодействуют и никуда не исчезают — значит им
+## не место в поклеточном проходе экрана. Здесь они ложатся в картинку куска ОДИН раз, при
+## его сборке, и кадр о них больше не знает. До этого экран боя шёл по всему списку каждый
+## кадр: к середине партии там десятки тысяч словарей, и на каждый — обращения по ключам,
+## проверка тумана и отдельный примитив; лужа и отпечаток к тому же сбивали пакетную
+## отрисовку своим draw_set_transform.
+##
+## Раз косметика стала частью картинки доски, туман прячет её ровно так же, как рельеф под
+## ней: увиденная кровь остаётся на запомненной клетке. Это та же договорённость, по
+## которой уже живут стены и мебель.
+## Насколько далеко частица может вылезти за свою клетку: самая крупная — лужа (0.95
+## клетки) с запасом на масштаб. Ради неё куску приходится смотреть и в СОСЕДНИЕ куски:
+## лужа у самой границы иначе обрезалась бы ровно по шву, и доска шла бы в клетку через
+## каждые 16 клеток.
+const DECAL_BLEED := 1.5
+
+func _bake_decals(img: Image, cc: Vector2i, res: int) -> void:
+	var origin := Vector2(cc * C)
+	var list: Array = []
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var near: Variant = decals.get(cc + Vector2i(dx, dy))
+			if near == null:
+				continue
+			if dx == 0 and dy == 0:
+				list.append_array(near as Array)
+				continue
+			# От соседа берём только то, что и правда дотягивается до этого куска.
+			for d: Dictionary in near:
+				var p: Vector2 = (d["pos"] as Vector2) - origin
+				if p.x > -DECAL_BLEED and p.y > -DECAL_BLEED \
+						and p.x < C + DECAL_BLEED and p.y < C + DECAL_BLEED:
+					list.append(d)
+	if list.is_empty():
+		return
+	for d: Dictionary in list:
+		var kind := str(d["kind"])
+		var look: Array = FxDecals.LOOK.get(kind, [])
+		if look.is_empty():
+			continue
+		var pos: Vector2 = (d["pos"] as Vector2) - origin
+		# Частица не оседает на стене (экран её и не рисовал): клетку-стену пропускаем.
+		var cell := Vector2i(cc * C) + Vector2i(floori(pos.x), floori(pos.y))
+		if not _grid.in_bounds(cell) or _grid.cell_fast(cell.x, cell.y).cover_height >= MCF.WALL_HEIGHT:
+			continue
+		var px := maxi(1, roundi(float(look[0]) * float(d["scale"]) * res))
+		var sprite := _decal_sprite(kind, px, float(d["rot"]), look)
+		if sprite == null:
+			continue
+		var at := Vector2i(roundi(pos.x * res) - px / 2, roundi(pos.y * res) - px / 2)
+		img.blend_rect(sprite, Rect2i(0, 0, px, px), at)
+
+## Картинка одной частицы размером px и под своим углом. Углов берём ANGLES штук: на
+## четырёх-одиннадцати точках разницы между соседними уже не видно, а кэш не разрастается.
+## Своя картинка игрока (glass_shard, blood_pool…) берётся как есть; без неё частица
+## рисуется тем же, чем её рисовал экран: лужа — сплющенным кругом, прочее — четырёхугольником.
+const DECAL_ANGLES := 8
+
+func _decal_sprite(kind: String, px: int, rot: float, look: Array) -> Image:
+	var step := posmod(roundi(rot / TAU * DECAL_ANGLES), DECAL_ANGLES)
+	var key := "decal@%s@%d@%d" % [kind, px, step]
+	if _tiles.has(key):
+		var hit: Array = _tiles[key]
+		return hit[0] if not hit.is_empty() else null
+	var img := Image.create(px, px, false, Image.FORMAT_RGBA8)
+	var a := float(step) / DECAL_ANGLES * TAU
+	var src := _load(FxDecals.TEXTURE.get(kind, ""))
+	var half := px * 0.5
+	var col: Color = look[1]
+	for y in px:
+		for x in px:
+			# Точка картинки — в системе самой частицы: поворачиваем назад.
+			var v := Vector2(x + 0.5 - half, y + 0.5 - half).rotated(-a)
+			var c := Color(0, 0, 0, 0)
+			if src != null:
+				var sx := int((v.x / px + 0.5) * src.get_width())
+				var sy := int((v.y / px + 0.5) * src.get_height())
+				if sx >= 0 and sy >= 0 and sx < src.get_width() and sy < src.get_height():
+					c = src.get_pixel(sx, sy)
+			elif kind == "blood_pool":
+				if Vector2(v.x, v.y / 0.62).length() <= half:
+					c = col
+			elif absf(v.x) <= half and absf(v.y) <= half * 0.45:
+				c = col
+			if c.a > 0.0:
+				img.set_pixel(x, y, c)
+	_tiles[key] = [img]
+	return img
 
 func _evict() -> void:
 	if _bytes <= MEMORY_BUDGET:

@@ -48,7 +48,8 @@ const MANIFEST := [
 	["Map environments (a <tile>_<environment> file beats the plain one on that map)", [
 		"floor_station", "floor_bunker", "floor_town", "floor_field", "floor_asteroid",
 		"wall_station", "wall_bunker", "wall_town", "wall_field", "wall_asteroid",
-		"bedrock", "door_station", "door_open_station", "door_bunker", "door_open_bunker",
+		"bedrock", "boundary_bunker",
+		"door_station", "door_open_station", "door_bunker", "door_open_bunker",
 		"door_town", "door_open_town", "door_field", "door_open_field", "door_asteroid", "door_open_asteroid",
 	]],
 	["Room floors (what a room is for decides which one it gets)", [

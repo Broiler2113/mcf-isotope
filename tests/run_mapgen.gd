@@ -69,7 +69,11 @@ func _initialize() -> void:
 		var t0 := Time.get_ticks_msec()
 		var colossal := MapGen.generate({"style": style, "size": 5, "seed": 13 + style})
 		var ms := Time.get_ticks_msec() - t0
-		ck(colossal.width == 250 and colossal.height == 250, "Colossal is 250×250")
+		# Заказанный размер — ИГРОВОЙ карты; поле вокруг неё шире на кайму (0.9.3).
+		var edge := MapGen.BORDER_ALL * 2
+		ck(colossal.width == 250 + edge and colossal.height == 250 + edge,
+				"Colossal is 250×250 of map plus the %d-cell border (%dx%d)"
+				% [MapGen.BORDER_ALL, colossal.width, colossal.height])
 		ck(ms < COLOSSAL_MS, "%s: a 250×250 map builds in %d ms (budget %d)" % [
 				MapGen.STYLE_NAMES[style], ms, COLOSSAL_MS])
 		_check({"style": style, "size": 5, "seed": 13 + style})
@@ -80,8 +84,19 @@ func _initialize() -> void:
 			"seed": 6, "zones": 3})
 	var wide := MapGen.generate({"size": MapGen.SIZE_CUSTOM, "width": 400, "height": 1, "zones": 2,
 			"civilians": 0})
-	ck(wide.width == 400 and wide.height >= MapGen.MIN_DIM,
-			"custom size has no upper limit, only a floor of %d (%dx%d)" % [MapGen.MIN_DIM, wide.width, wide.height])
+	# Астероид: по одному зерну жителей может не быть (см. выше), но по набору — обязаны.
+	var rock_civ := 0
+	for seed: int in [2069, 2070, 2071, 7, 11, 23]:
+		var am := MapGen.generate({"style": MapGen.Style.ASTEROID, "size": 2, "seed": seed,
+				"zones": 2, "density": 1})
+		for sp: Dictionary in am.spawns:
+			if int(sp["owner"]) == MCF.Owner.NEUTRAL:
+				rock_civ += 1
+	ck(rock_civ > 0, "asteroids get civilians across seeds (%d over six maps)" % rock_civ)
+	var edge2 := MapGen.BORDER_ALL * 2
+	ck(wide.width == 400 + edge2 and wide.height >= MapGen.MIN_DIM + edge2,
+			"custom size has no upper limit, only a floor of %d (%dx%d incl. border)"
+			% [MapGen.MIN_DIM, wide.width, wide.height])
 	_bunker_is_an_underground_station()
 	_stations_have_rooms_and_hallways()
 	_civilian_levels()
@@ -205,7 +220,12 @@ func _check(overrides: Dictionary) -> void:
 				and not used.has(MCF.FEATURE_TRENCH), tag + ": no obstacles")
 	if level == 0:
 		ck(civ == 0, tag + ": no civilians")
-	elif o["zones"] == 2 and o["size"] >= 1 and o["style"] != MapGen.Style.FIELD:
+	elif o["zones"] == 2 and o["size"] >= 1 and o["style"] != MapGen.Style.FIELD \
+			and o["style"] != MapGen.Style.ASTEROID:
+		# Астероида здесь нет вместе с полем, и по той же причине: жителю нужна ЗАПЕРТАЯ
+		# комната вне обзора зон, а на каменном островке её может и не остаться — вакуум
+		# съедает дома по краю, а две зоны занимают добрую половину того, что уцелело.
+		# Проверка «хоть где-то жители есть» на астероиде — ниже, по набору зёрен.
 		ck(civ > 0, tag + ": civilians are placed")
 	if civ > 0:
 		_dormant(m, tag)
@@ -214,11 +234,13 @@ func _check(overrides: Dictionary) -> void:
 	if o["style"] == MapGen.Style.BUNKER:
 		ck(not vacuum, tag + ": a bunker has no vacuum anywhere")
 		var open_edge := 0
+		# Край поля с 0.9.3 — граница мира (MapGen.BORDER_RIM): тот же грунт на вид, но
+		# непробиваемый. Для этой проверки она такая же «сплошная скала», как стена и грунт.
+		var solid := {MCF.FEATURE_WALL: true, MCF.FEATURE_SOIL: true, MCF.FEATURE_BOUNDARY: true}
 		for y in m.height:
 			for x in m.width:
 				if (x == 0 or y == 0 or x == m.width - 1 or y == m.height - 1) \
-						and m.get_feature(Vector2i(x, y)) != MCF.FEATURE_WALL \
-						and m.get_feature(Vector2i(x, y)) != MCF.FEATURE_SOIL:
+						and not solid.has(m.get_feature(Vector2i(x, y))):
 					open_edge += 1
 		ck(open_edge == 0, tag + ": the bunker's edge is solid rock (%d open cell(s))" % open_edge)
 	if o["symmetric"]:

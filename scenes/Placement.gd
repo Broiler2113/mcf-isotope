@@ -151,6 +151,7 @@ func _ready() -> void:
 	if not networked():
 		_shared_seed = randi() & 0x7FFFFFFF
 	_build_sky()
+	_home_view.call_deferred()
 	_build_ui()
 	set_process(true)
 	_refresh_labels()
@@ -719,6 +720,21 @@ func _neutral_at(coord: Vector2i) -> int:
 ## Небо за доской (0.9.3): клетки космоса не рисуются, и в прорехах виден параллакс
 ## звёзд — тот же, что в главном меню и в бою. Карте без космоса оно не нужно.
 var _sky: Starfield = null
+
+## Камера на свою зону развёртывания (0.9.3). Раньше экран открывался в углу доски, и
+## углом карты был её угол; теперь там кайма — десяток клеток пустой земли или космоса.
+func _home_view() -> void:
+	var cells: Array = map.zone_cells(active_side)
+	var centre := Vector2.ZERO
+	if cells.is_empty():
+		centre = Vector2(map.width, map.height) * 0.5
+	else:
+		for c: Vector2i in cells:
+			centre += Vector2(c)
+		centre /= float(cells.size())
+	pan = get_viewport_rect().size * 0.5 - zoom * (_cell_origin(Vector2i(centre)) \
+			+ Vector2(CELL, CELL) * 0.5)
+	queue_redraw()
 
 func _build_sky() -> void:
 	if map == null or not map.is_space.has(1):

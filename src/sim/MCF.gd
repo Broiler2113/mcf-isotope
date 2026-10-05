@@ -226,6 +226,15 @@ const FEATURE_ARMOR_GLASS := "armor_glass"
 ## Что нужно бронестеклу, чтобы выдержать.
 const ARMOR_GLASS_HOLD_NEED := 4
 
+## ГРАНИЦА МИРА (0.9.3) — кайма по краю поля за десятью клетками, на которые можно выйти
+## (MapGen.BORDER). Стена в 2 м, и её НЕТ ни в одном списке разрушимого: ни кирка, ни
+## взрыв, ни огонь, ни луч её не берут, обойти её тоже нельзя. Так за картой остаётся
+## продолжение мира, а не обрыв, но уйти от боя дальше десяти клеток не выйдет.
+##
+## Своей плитки у неё нет нигде, кроме бункера («boundary_bunker» — тот же грунт): пол и
+## вакуум под ней сохраняются, и за станцией видны звёзды, за городом и полем — трава.
+const FEATURE_BOUNDARY := "boundary"
+
 ## Высота укрытия каждого объекта (§3.7). 2 = полноценная стена.
 const FEATURE_HEIGHT := {
 	FEATURE_DRONE_STATION: 1.0,
@@ -250,6 +259,7 @@ const FEATURE_HEIGHT := {
 	FEATURE_HEDGEHOG_SANDBAGS: 2.0,
 	FEATURE_ARMOR_WALL: 2.0,
 	FEATURE_ARMOR_GLASS: 2.0,
+	FEATURE_BOUNDARY: 2.0,
 }
 
 const FEATURE_NAMES := {
@@ -274,6 +284,7 @@ const FEATURE_NAMES := {
 	FEATURE_HEDGEHOG_SANDBAGS: "Hedgehog on Sandbags",
 	FEATURE_ARMOR_WALL: "Armored Wall",
 	FEATURE_ARMOR_GLASS: "Armored Glass",
+	FEATURE_BOUNDARY: "Edge of the World",
 }
 
 # --- ДПМГ: стационарный пулемёт (§3.7) ---
@@ -406,6 +417,8 @@ const FIRE_NEED_BY_FEATURE := {
 	# А бронестекло горит как обычное: от огня его броня не спасает (оно её и не для
 	# того носит — только против пуль).
 	FEATURE_ARMOR_GLASS: FIRE_NEED_GLASS,
+	# Граница мира не горит — как и всё прочее, огонь по ней не проходит.
+	FEATURE_BOUNDARY: FIRE_NEVER,
 }
 
 ## Пожаротушительная граната (#19): квадрат 5×5 — радиус 2 по Чебышёву от эпицентра.

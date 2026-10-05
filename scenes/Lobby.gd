@@ -950,16 +950,18 @@ func _zone_summary(map: MapData) -> String:
 	var units := int(o["units"])
 	var cells: int = sizes.values().min()
 	var text := "%d deployment zones, %d cells each" % [sizes.size(), cells]
+	# Размеры в подписи — ИГРОВОЙ карты, без каймы вокруг неё (0.9.3): игрок заказывал её.
+	var made := MapGen.map_size(map)
 	if cells < MapGen.zone_need(units):
 		return text + " — too tight for %d units each even at %d×%d; fewer players or units will fit." % [
-				units, map.width, map.height]
+				units, made.x, made.y]
 	text += " — room for %d units each." % units
 	var dim := MapGen.dims_of(o)
-	if map.width > dim.x or map.height > dim.y:
-		text += " Map enlarged to %d×%d so they fit." % [map.width, map.height]
+	if made.x > dim.x or made.y > dim.y:
+		text += " Map enlarged to %d×%d so they fit." % [made.x, made.y]
 	# Своему размеру потолка нет (MapGen.dims_of) — зато есть цена: замер 500×500 — ~3 с на
 	# постройку и ~0,4 ГБ памяти в бою, 1000×1000 — ~15 с и ~1,3 ГБ.
-	if map.width * map.height > MapGen.MAX_DIM.x * MapGen.MAX_DIM.y:
+	if made.x * made.y > MapGen.MAX_DIM.x * MapGen.MAX_DIM.y:
 		text += " Beyond 250×250 building takes seconds (≈15 s at 1000×1000) and a battle needs a lot of memory (≈1.3 GB at 1000×1000)."
 	return text
 

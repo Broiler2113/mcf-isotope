@@ -40,6 +40,10 @@ const SCORE_STEP_COST := 0.35
 ## Складирование трупов (#103). Тело в руках — щит, тело на земле — стена: пять тел на
 ## клетке превращаются в укрытие. Обе операции дешевле выстрела, но дороже шага.
 const SCORE_CORPSE_DROP_BASE := 30.0
+## Разбор завала из тел (0.9.3): и «освободить руки», и «вынуть тело из прохода» идут с
+## этим весом. Он выше обычного хода, но НИЖЕ выстрела (SCORE_SHOOT_BASE): стрелять по
+## тому, кто на виду, всё равно важнее, чем копаться в трупах.
+const SCORE_CORPSE_CLEAR_BASE := 72.0
 ## Подрыв преграды противотанкистом (#103): между сносом стены шахтёром и захватом —
 ## заряд ценнее кирки, потому что расчищает не клетку, а целый проём 3×3.
 const SCORE_BLAST_PATH := 44.0
@@ -654,13 +658,23 @@ func _candidates(state: GameState, r: GameActionResolver, u: UnitInstance) -> Ar
 func _neutral_candidates(state: GameState, r: GameActionResolver, u: UnitInstance) -> Array:
 	var out: Array = []
 	# Труп рядом — подобрать, и прежде всего прочего (playtest-20): житель тащит тела на
-	# себе как щит и НИКОГДА их не кладёт (_best_corpse_drop он не спрашивает вовсе).
+	# себе как щит и по своей воле их не кладёт.
 	if u.remaining_ap > 0 and u.carried_corpses < MCF.CORPSE_CARRY_MAX and u.borg_id == -1 \
 			and u.stats.special_ability_id != MCF.ABILITY_SHIELD_BEARER:
 		for n: Vector2i in state.grid.neighbors(u.coord):
 			if r.has_corpse(n) and state.grid.vehicle_at(n) == -1:
 				out.append({"score": SCORE_SHOOT_BASE + 50.0, "intent": PickUpCorpseIntent.new(u.id, n)})
 				break
+	# ...кроме одного случая (0.9.3): завал из тел на единственной дороге. С полными
+	# руками житель не мог взять из кучи ни тела и вставал перед ней намертво — ровно так
+	# же, как солдат. Класть он соглашается только ради этого: руки освобождаются, куча
+	# разбирается по телу, и дорога открывается.
+	if u.carried_corpses > 0 and u.borg_id == -1 \
+			and _corpse_blocking_step(state, u, _enemy_distance_field(state, false, r)) \
+					!= Vector2i(-1, -1):
+		var clear := _best_corpse_drop(state, r, u)
+		if not clear.is_empty():
+			out.append(clear)
 	var shoot := _best_shoot(state, r, u)
 	if not shoot.is_empty():
 		out.append(shoot)
@@ -728,20 +742,39 @@ func _best_corpse_grab(state: GameState, r: GameActionResolver, u: UnitInstance)
 		if not in_the_way and not enemy_near:
 			continue
 		var score := SCORE_CORPSE_BASE + (12.0 if in_the_way else 0.0)
-		# Труп-«жилец» держит клетку целиком (occupant != null), поэтому убрать именно
-		# его — расчистка прохода, а не мародёрство (#103). Куча corpse_count дороги не
-		# перекрывает, пока не дорастёт до стены, и торопиться с ней незачем.
+		# Тело, перекрывшее дорогу, вынимается первым: это расчистка прохода для всей
+		# роты, а не мародёрство (#103). Куча из пяти разбирается так же, по телу за раз,
+		# — других рук у бойца нет.
 		if _corpse_blocks_cell(state, n):
 			score += 10.0
+			if in_the_way:
+				score = SCORE_CORPSE_CLEAR_BASE
 		if best.is_empty() or score > best["score"]:
 			best = {"score": score, "intent": PickUpCorpseIntent.new(u.id, n)}
 	return best
 
-## Труп, который ЗАНИМАЕТ клетку и потому непроходим (§3.6). Лежащая куча тел (до
-## пяти) проходима, а вот павший на месте боец остаётся жильцом клетки.
+## Клетка непроходима ИЗ-ЗА ТЕЛ (§3.6). Тут раньше была ошибка, из-за которой ИИ и
+## жители намертво вставали перед кучей трупов: считалось, что непроходим только павший
+## на месте боец (occupant), а лежащая куча «дороги не перекрывает». На деле
+## Grid.blocks_walk отказывает при ЛЮБОМ теле на клетке — и одном, и пяти, — так что
+## куча и есть стена, которую надо разобрать руками.
 func _corpse_blocks_cell(state: GameState, coord: Vector2i) -> bool:
 	var c := state.grid.cell(coord)
-	return c != null and c.occupant != null and c.occupant.status == MCF.Status.CORPSE
+	if c == null:
+		return false
+	if c.corpse_count > 0:
+		return true
+	return c.occupant != null and c.occupant.status == MCF.Status.CORPSE
+
+## Соседняя клетка, которую перекрыли тела и которая СТОИТ НА ДОРОГЕ: шаг по ней был бы
+## ближе к врагу, но пройти нельзя. (−1, −1) — такой нет. По ней и решается, разбирать
+## ли завал: дальние кучи ИИ не трогает, у него есть дела поважнее.
+func _corpse_blocking_step(state: GameState, u: UnitInstance, field: GeoField) -> Vector2i:
+	var start_geo := field.at(u.coord)
+	for n: Vector2i in state.grid.neighbors(u.coord):
+		if field.at(n) < start_geo and _corpse_blocks_cell(state, n):
+			return n
+	return Vector2i(-1, -1)
 
 ## Разгрузка тел (#103): «муравьиная» половина работы с трупами.
 ##
@@ -756,12 +789,21 @@ func _corpse_blocks_cell(state: GameState, coord: Vector2i) -> bool:
 func _best_corpse_drop(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
 	if u.carried_corpses <= 0:
 		return {}
-	var enemy := _nearest_enemy(state, u.coord, false, r)
-	# Пока враг близко, тело работает щитом (+1 к защите) — не выбрасываем.
-	if enemy != null and Combat.distance(u.coord, enemy.coord) <= CORPSE_GRAB_ENEMY_RANGE:
-		return {}
 	var field := _enemy_distance_field(state, false, r)
 	var start_geo: int = int(field.at(u.coord))
+	# Завал на дороге (0.9.3). Носильщик с полными руками не может взять из кучи ни тела
+	# — и прежде просто упирался в неё до конца боя, потому что класть он соглашался
+	# только когда врага нет рядом, а завалы случаются как раз в бою. Теперь руки
+	# освобождаются первым делом: класть БЕСПЛАТНО, так что щит теряется лишь на миг —
+	# следующим действием из завала вынимается тело, и проход расчищается по одному.
+	var blocked := _corpse_blocking_step(state, u, field)
+	var clearing := blocked != Vector2i(-1, -1)
+	var enemy := _nearest_enemy(state, u.coord, false, r)
+	# Пока враг близко, тело работает щитом (+1 к защите) — не выбрасываем. Разбор
+	# завала — исключение: стоять перед кучей под огнём хуже, чем остаться без щита.
+	if not clearing and enemy != null \
+			and Combat.distance(u.coord, enemy.coord) <= CORPSE_GRAB_ENEMY_RANGE:
+		return {}
 	var best: Dictionary = {}
 	for n: Vector2i in state.grid.neighbors(u.coord):
 		var cell := state.grid.cell(n)
@@ -773,10 +815,16 @@ func _best_corpse_drop(state: GameState, r: GameActionResolver, u: UnitInstance)
 		# Не заваливаем СВОЮ дорогу: клетка, которая ближе к врагу, нужна для прохода.
 		if int(field.at(n)) < start_geo:
 			continue
+		if clearing and n == blocked:
+			continue   # в разбираемый завал тело обратно не кладём
 		# Растить начатую кучу выгоднее, чем начинать новую: она ближе к стене.
 		var score := SCORE_CORPSE_DROP_BASE + float(here) * 6.0
 		if here == MCF.CORPSE_WALL_COUNT - 1:
 			score += 14.0  # этим телом куча становится укрытием
+		if clearing:
+			# Руки нужны сейчас же; и чем пустее клетка, тем меньше шансов завалить ею
+			# что-то ещё, поэтому здесь растить кучу, наоборот, незачем.
+			score = SCORE_CORPSE_CLEAR_BASE - float(here) * 4.0
 		if best.is_empty() or score > best["score"]:
 			best = {"score": score, "intent": DropCorpseIntent.new(u.id, n)}
 	return best

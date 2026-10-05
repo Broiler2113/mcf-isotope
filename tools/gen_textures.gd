@@ -70,6 +70,10 @@ func _initialize() -> void:
 	_sheet("wall_asteroid", _dark_brick, Color8(108, 60, 48), 3)
 	_sheet("wood_wall", _timber, Color8(104, 72, 44), 3)
 	_sheet("soil", _packed_soil, Color8(58, 42, 28), 2)
+	# Граница мира (0.9.3) — только для бункера: тот же грунт, что и в кайме, чтобы
+	# непробиваемый край читался как «земля просто продолжается». У станции, города и
+	# поля своей плитки у неё НЕТ намеренно: там видно пол клетки — звёзды или траву.
+	_sheet("boundary_bunker", _packed_soil, Color8(58, 42, 28), 2)
 	_sheet("armor_wall", _armor_plate, Color8(58, 64, 72), 3)
 	_sheet("glass", _glass_block, Color8(150, 180, 196), 2)
 	_sheet("armor_glass", _armor_glass, Color8(96, 126, 160), 2)

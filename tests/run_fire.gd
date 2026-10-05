@@ -86,7 +86,7 @@ func _fire_eats_the_cell() -> void:
 
 func _decals_at(fx: FxDecals, c: Vector2i) -> int:
 	var n := 0
-	for list: Array in [fx.props, fx.gore, fx.prints]:
+	for list: Array in [fx.props, fx.gore]:
 		for p: Dictionary in list:
 			var pos: Vector2 = p["pos"]
 			if Vector2i(floori(pos.x), floori(pos.y)) == c:
