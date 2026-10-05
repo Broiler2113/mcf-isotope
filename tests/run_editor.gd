@@ -41,6 +41,7 @@ func _run() -> void:
 	_resize_clear()
 	_files_and_generator()
 	_furniture()
+	_batch092()
 	_session()
 	DirAccess.remove_absolute(ProjectSettings.globalize_path("%s/%s.json" % [MapData.MAPS_DIR, SAVE_NAME]))
 	ed.queue_free()
@@ -157,7 +158,7 @@ func _brush_and_undo() -> void:
 func _shapes_and_fill() -> void:
 	_fresh("town")
 	ed._select_brush(MCF.FEATURE_WALL)
-	_key(KEY_R)
+	_key(KEY_U)
 	ed.rect_filled = false
 	_drag(Vector2i(4, 4), Vector2i(14, 12))
 	ck(_feat(Vector2i(4, 8)) == MCF.FEATURE_WALL and _feat(Vector2i(9, 8)) == "", "Rectangle: an outline")
@@ -168,7 +169,7 @@ func _shapes_and_fill() -> void:
 	ck(ed.map.get_floor(Vector2i(9, 8)) == MCF.FLOOR_GRASS and ed.map.get_floor(Vector2i(2, 2)) != MCF.FLOOR_GRASS,
 			"Fill stays inside the walls")
 	ed._select_brush(MCF.FEATURE_SANDBAGS)
-	_key(KEY_R)
+	_key(KEY_U)
 	ed.rect_filled = true
 	_drag(Vector2i(20, 4), Vector2i(23, 6))
 	ck(_feat(Vector2i(21, 5)) == MCF.FEATURE_SANDBAGS, "Rectangle + Filled: a solid block")
@@ -391,12 +392,92 @@ func _session() -> void:
 
 ## Мебель (§3.15) в палитре: кнопки с именем и высотой, мазок ставит предмет с его высотой,
 ## пипетка его узнаёт, карта с ним сохраняется и открывается.
+# --- 0.9.2: холст = миникарта, круг, поворот мебели, клавиши ---
+func _batch092() -> void:
+	# Предпросмотр под курсором строит черновую сетку; её Grid.new чистил журнал вида, а
+	# снимок журнала был ссылкой — правка после предпросмотра не доходила до плиток холста.
+	_fresh("field", 48, 32)
+	ed._select_brush(MCF.FEATURE_WALL)
+	_key(KEY_B)
+	ed._tiles.sync({}, 0)
+	ed._hover = Vector2i(10, 10)
+	ed._build_preview()
+	_drag(Vector2i(20, 20), Vector2i(20, 20))
+	ed._tiles.sync({}, 0)
+	ck(ed._tiles._dirty.has(Vector2i(20 / TerrainTiles.C, 20 / TerrainTiles.C)),
+			"a wall painted after the cursor preview reaches the canvas tiles (not only the minimap)")
+	var gi: int = 20 * ed.map.width + 3
+	ed.map.feature_id[gi] = MCF.FEATURE_TRENCH
+	ck(ed.map_color(ed.map, gi, "field") != ed.map_color(ed.map, gi + 1, "field"),
+			"the minimap shows a trench dug in grass")
+	# Круг: контур, вписанный в протянутую рамку.
+	_key(KEY_C)
+	ed.rect_filled = false
+	_drag(Vector2i(5, 5), Vector2i(13, 13))
+	ck(_feat(Vector2i(9, 5)) == MCF.FEATURE_WALL and _feat(Vector2i(9, 9)) == ""
+			and _feat(Vector2i(5, 5)) == "" and _feat(Vector2i(5, 9)) == MCF.FEATURE_WALL,
+			"Circle (C): a round outline inside the dragged box")
+	ed.rect_filled = true
+	_drag(Vector2i(30, 5), Vector2i(36, 11))
+	ck(_feat(Vector2i(33, 8)) == MCF.FEATURE_WALL and _feat(Vector2i(30, 5)) == "", "Circle + Filled: a disc")
+	# R поворачивает кисть мебели, поворот пишется в карту и переживает сохранение.
+	_fresh("town")
+	ed._select_brush("sofa")
+	_key(KEY_B)
+	_key(KEY_R)
+	var first: int = ed.brush_turn
+	_key(KEY_R)
+	ck(first >= 0 and ed.brush_turn == (first + 1) % 4, "R turns the furniture brush a quarter at a time")
+	ed.brush_turn = 2
+	_drag(Vector2i(10, 10), Vector2i(12, 10))
+	var si: int = 10 * ed.map.width + 11
+	ck(ed.map.feature_id[si] == "sofa" and ed.map.get_turn(si) == 2, "the turn is stored with the piece")
+	var back := MapData.from_dict(ed.map.to_dict())
+	var g := Grid.new(back.width, back.height)
+	back.apply_to_grid(g)
+	ck(back.get_turn(si) == 2 and TerrainTiles.furniture_turn(g, Vector2i(11, 10), "sofa") == 2,
+			"a saved map keeps the turn, and the tiles draw it")
+	_key(KEY_R, false, true)
+	ck(ed.brush_turn == -1, "Shift+R: back to turning by itself")
+	# Щелчок Select по предмету выделяет его целиком; R поворачивает на месте.
+	_key(KEY_M)
+	_drag(Vector2i(11, 10), Vector2i(11, 10))
+	ck(ed._selection.size == Vector2i(3, 1), "a click with Select picks the whole sofa")
+	var undo_n: int = ed._undo_stack.size()
+	_key(KEY_R)
+	ck(ed._selection.size == Vector2i(1, 3) and _feat(Vector2i(11, 9)) == "sofa" and _feat(Vector2i(11, 11)) == "sofa"
+			and _feat(Vector2i(10, 10)) == "" and ed.map.get_turn(9 * ed.map.width + 11) == 3,
+			"R turns the selected piece in place — footprint and back together")
+	ck(ed._undo_stack.size() == undo_n + 1, "…as one undo step")
+	ed.undo()
+	ck(_feat(Vector2i(10, 10)) == "sofa" and ed.map.get_turn(si) == 2, "undo puts it back")
+	# + / − приближают и отдаляют; Esc без дела выходит (спросив, если не сохранено).
+	var z0: float = ed.zoom
+	_key(KEY_EQUAL)
+	var z1: float = ed.zoom
+	_key(KEY_MINUS)
+	ck(z1 > z0 and is_equal_approx(ed.zoom, z0), "+ zooms in, − zooms out")
+	ed._selection = Rect2i()
+	ed._dirty = true
+	_key(KEY_ESCAPE)
+	ck(ed._modal != null, "Esc with nothing to cancel asks before leaving an unsaved map")
+	ed._close_modal()
+	var file_items: Array = []
+	var fm: PopupMenu = ed._menus["File"]
+	for k in fm.item_count:
+		file_items.append(fm.get_item_text(k))
+	ck(not " ".join(file_items).contains("Save As"), "Save As is gone, Save stays")
+
 func _furniture() -> void:
 	_fresh("town")
 	ck(ed._brush_buttons.has("bed") and ed._brush_buttons.has("storage_shelf"),
 			"the palette has furniture buttons")
-	ck(String((ed._brush_buttons["wardrobe"] as Button).text) == "Wardrobe 1.5",
-			"a furniture button shows name and height (%s)" % (ed._brush_buttons["wardrobe"] as Button).text)
+	# 0.9.2: высота — подзаголовком раздела, кнопка — просто имя.
+	var wb: Button = ed._brush_buttons["wardrobe"]
+	var grid := wb.get_parent()
+	var head: Node = grid.get_parent().get_child(grid.get_index() - 1)
+	ck(wb.text == "Wardrobe" and head is Label and (head as Label).text.contains("1.5"),
+			"furniture sits under its height heading (%s / %s)" % [wb.text, (head as Label).text if head is Label else "?"])
 	ck(String((ed._brush_buttons["wardrobe"] as Button).tooltip_text).contains("durability 3"),
 			"and its tooltip the rest")
 	ed._select_brush("bed")

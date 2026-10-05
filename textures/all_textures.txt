@@ -32,7 +32,16 @@ Yours wins. Changes are picked up when a battle or the map editor opens.
   wall_field.png
   wall_asteroid.png
   bedrock.png
-  airlock_open.png
+  door_station.png
+  door_open_station.png
+  door_bunker.png
+  door_open_bunker.png
+  door_town.png
+  door_open_town.png
+  door_field.png
+  door_open_field.png
+  door_asteroid.png
+  door_open_asteroid.png
 
 -- Combat decoration (cosmetic only, never affects the rules) --
   glass_shard.png
@@ -50,7 +59,8 @@ Yours wins. Changes are picked up when a battle or the map editor opens.
   glass.png
   ldf.png
   corpse_wall.png
-  airlock.png
+  door.png
+  door_open.png
   dpmg.png
   dot.png
   wood_wall.png
@@ -130,6 +140,8 @@ Yours wins. Changes are picked up when a battle or the map editor opens.
   piano_white.png
   bunk_bed.png
   bunk_bed_green.png
+  toilet.png
+  sink.png
   office_desk.png
   conference_table.png
   filing_cabinet.png
@@ -143,6 +155,7 @@ Yours wins. Changes are picked up when a battle or the map editor opens.
   vending_machine_blue.png
   vending_machine_green.png
   water_cooler.png
+  console.png
   workbench.png
   tool_cabinet.png
   tool_cabinet_blue.png
@@ -168,6 +181,8 @@ Yours wins. Changes are picked up when a battle or the map editor opens.
   washing_machine.png
   fuel_tank.png
   fuel_tank_red.png
+  target.png
+  vent_fan.png
   bench.png
   trash_bin.png
   trash_bin_grey.png

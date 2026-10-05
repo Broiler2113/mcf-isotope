@@ -367,10 +367,25 @@ var _pause_btn: Button = null
 ## остаётся смотреть на поле, сохранить и уйти в меню.
 var _match_over: bool = false
 var _victory_overlay: Control = null
-## Доска, какой она была в начале боя — картинка по пикселю на клетку (см.
-## _board_thumbnail). Снимается один раз, на открытии матча; в конце по ней видно, во
-## что бой превратил карту.
-var _opening_board: Image = null
+## «Было / стало» (0.9.2): кнопка в правом меню подменяет доску тем, какой она была в
+## самом начале боя, — рельеф, объекты, бойцы и машины на стартовых местах, — а второе
+## нажатие (или щелчок по полю) возвращает настоящую. Снимок — копия клеток на черновой
+## сетке (её плитки рисуются слоем ПОВЕРХ доски) и список стартовых мест. Только показ:
+## на состояние, сеть и повтор не влияет.
+var _before_grid: Grid = null
+var _before_tiles: TerrainTiles = null
+var _before_units: Array = []      # [stats_id, owner, coord]
+var _before_vehicles: Array = []   # [type_id, owner, origin, size, facing]
+var _before_on := false
+var _before_layer: BeforeLayer = null
+var _before_btn: Button = null
+var _before_note: Label = null
+
+class BeforeLayer extends Node2D:
+	var host: Node = null
+	func _draw() -> void:
+		if host != null:
+			host._draw_before(self)
 
 ## Какой слот отыгрывается ПРЯМО СЕЙЧАС, когда это не active_player (item 6).
 ##
@@ -598,7 +613,7 @@ func _build_state() -> void:
 ## нейтральной стороны нет, её ход проводит сам резолвер.
 func _open_match() -> void:
 	_begin_recording()
-	_opening_board = _board_thumbnail()
+	_capture_opening_view()
 	state.log.add("— Initiative this match: %s —" % state.turns.order_names())
 	# Открывающий слот мирных играется ВНЕ потока намерений, но кубики бросает —
 	# поэтому под запись он уходит через сам регистратор (см. ReplayRecorder).
@@ -1213,6 +1228,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		_handle_click(_pos_to_cell(get_global_mouse_position()))
 
 func _handle_click(coord: Vector2i) -> void:
+	# Пока показана стартовая доска, щелчок по полю лишь возвращает настоящую: приказ по
+	# невидимой сейчас доске был бы ловушкой.
+	if _before_on:
+		_toggle_before()
+		return
 	if not state.grid.in_bounds(coord):
 		_deselect()
 		return
@@ -1344,6 +1364,14 @@ func _handle_click(coord: Vector2i) -> void:
 						_submit(ShootIntent.new(sid2, -1, -1, coord, comp)),
 						[], _selected_unit().coord)
 					return
+				# Окно — обычная очередь (0.9.2): сколько пуль, выбирает игрок.
+				var wsh := _selected_unit()
+				if MCF.is_glass(state.grid.cell(coord).feature_id) and wsh != null:
+					var avail: int = wsh.action_state.remaining_shots if _pending_shoot(wsh) else wsh.rate_of_fire()
+					if avail > 1:
+						_open_shot_picker(String(MCF.feature_name(state.grid.cell(coord).feature_id, "window")),
+								avail, func(n: int) -> Intent: return ShootIntent.new(selected_id, -1, n, coord))
+						return
 				_submit(ShootIntent.new(selected_id, -1, -1, coord))
 				return
 			if _is_own_active(occupant):
@@ -3012,96 +3040,105 @@ func _declare_match_over(title: String) -> void:
 
 ## Окно исхода в общем стиле SteamChrome (batch 13 #9). «Look at the Board» убирает окно,
 ## но доску не размораживает: посмотреть на поле можно, играть дальше — нет.
-## Доска одной картинкой, по пикселю на клетку: та же палитра, что у дальнего плана
-## (_lod_color / _lod_feature_color), плюс точки живых бойцов и машин цветом их стороны.
-## По ней видно и застройку, и расстановку — то есть ровно то, что бой и меняет.
-func _board_thumbnail() -> Image:
-	var grid := state.grid
-	var img := Image.create(grid.width, grid.height, false, Image.FORMAT_RGBA8)
-	for y in grid.height:
-		for x in grid.width:
-			var cell := grid.cell_fast(x, y)
-			var col := _lod_color(cell)
-			var fc := _lod_feature_color(cell)
-			if fc.a > 0.0:
-				col = col.blend(fc)
-			img.set_pixel(x, y, col)
+## Снимок доски в начале боя для «было / стало». Черновая сетка — в тихом окне журналов
+## (GridCell.logs_snapshot): Grid.new иначе заставил бы туман, ИИ и плитки боя пересчитать
+## всё. Мебель рисуется тем же замороженным видом, что и в бою.
+func _capture_opening_view() -> void:
+	var src := state.grid
+	var saved := GridCell.logs_snapshot()
+	var g := Grid.new(src.width, src.height)
+	for y in src.height:
+		for x in src.width:
+			var a := src.cell_fast(x, y)
+			var b := g.cell_fast(x, y)
+			b.floor_type = a.floor_type
+			b.is_space = a.is_space
+			if a.feature_id != "":
+				b.set_feature(a.feature_id)
+				b.feature_durability = a.feature_durability
+			b.cover_height = a.cover_height
+			b.airlock_welded = a.airlock_welded
+	g.furniture_turn = src.furniture_turn.duplicate(true)
+	g.floor_look = src.floor_look.duplicate()   # полы комнат (0.9.2) — и в «было» тоже
+	GridCell.logs_restore(saved)
+	_before_grid = g
+	_before_tiles = TerrainTiles.new(g, state.env)
+	_before_tiles.furniture_look = _furniture_look
+	_before_units.clear()
 	for u: UnitInstance in state.all_units():
-		if not u.is_alive() or u.is_drone or not grid.in_bounds(u.coord):
-			continue
-		img.set_pixel(u.coord.x, u.coord.y, _side_color(u.owner))
+		if u.is_alive() and src.in_bounds(u.coord):
+			_before_units.append([u.stats.id, u.owner, u.coord])
+	_before_vehicles.clear()
 	for veh: Vehicle in state.all_vehicles():
-		if not veh.alive():
-			continue
-		for c: Vector2i in veh.footprint():
-			if grid.in_bounds(c):
-				img.set_pixel(c.x, c.y, _side_color(veh.owner).lightened(0.3))
-	return img
+		if not veh.wrecked:
+			_before_vehicles.append([veh.type_id, veh.owner, veh.origin, veh.size, veh.facing])
 
-## «Было / стало» в конце боя: две картинки доски рядом, до первого хода и после
-## последнего. Масштаб — целым числом, чтобы клетки остались квадратными и считались
-## глазом, и с фильтрацией NEAREST: это карта, а не фотография.
-func _show_board_comparison() -> void:
-	if _opening_board == null:
+func _toggle_before() -> void:
+	if _before_grid == null:
 		return
-	var before := _opening_board
-	var after := _board_thumbnail()
-	var overlay := Control.new()
-	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
-	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
-	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.72)
-	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-	dim.mouse_filter = Control.MOUSE_FILTER_STOP
-	overlay.add_child(dim)
-	var center := CenterContainer.new()
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
-	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	overlay.add_child(center)
-	var panel := PanelContainer.new()
-	SteamChrome.apply_panel(panel)
-	center.add_child(panel)
-	var frame := VBoxContainer.new()
-	frame.add_theme_constant_override("separation", 0)
-	panel.add_child(frame)
-	frame.add_child(SteamChrome.header_bar("Before and After"))
-	var body := VBoxContainer.new()
-	body.add_theme_constant_override("separation", 10)
-	frame.add_child(SteamChrome.pad(body, 16, 14))
-	var pair := HBoxContainer.new()
-	pair.add_theme_constant_override("separation", 16)
-	body.add_child(pair)
-	# Обе картинки одного размера — масштаб считаем по одной.
-	var zoom: int = maxi(1, mini(int(520.0 / maxf(1.0, float(before.get_width()))),
-			int(420.0 / maxf(1.0, float(before.get_height())))))
-	for pane: Array in [["At the first move", before], ["At the last", after]]:
-		var col := VBoxContainer.new()
-		col.add_theme_constant_override("separation", 6)
-		var cap := Label.new()
-		cap.text = String(pane[0])
-		col.add_child(cap)
-		var tr := TextureRect.new()
-		tr.texture = ImageTexture.create_from_image(pane[1] as Image)
-		tr.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-		tr.custom_minimum_size = Vector2((pane[1] as Image).get_width() * zoom,
-				(pane[1] as Image).get_height() * zoom)
-		col.add_child(tr)
-		pair.add_child(col)
-	var note := Label.new()
-	note.text = "Walls knocked through, floors burned and scarred, and who was left standing where."
-	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	note.custom_minimum_size = Vector2(420, 0)
-	body.add_child(note)
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_END
-	body.add_child(row)
-	var shut := Button.new()
-	shut.text = "Close"
-	shut.custom_minimum_size = Vector2(120, 34)
-	shut.pressed.connect(overlay.queue_free)
-	row.add_child(shut)
-	_ui_layer.add_child(overlay)
-	Ui.theme_canvas_layers()
+	_before_on = not _before_on
+	if _before_btn != null:
+		_before_btn.set_pressed_no_signal(_before_on)
+	if _before_on:
+		if _before_layer == null:
+			_before_layer = BeforeLayer.new()
+			_before_layer.host = self
+			_before_layer.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+			add_child(_before_layer)
+		if _before_note == null:
+			_before_note = Label.new()
+			_before_note.text = "The battlefield as it was at the start  ·  press Before / After or click the map to return"
+			_before_note.add_theme_color_override("font_color", Ui.text_accent_color() if Ui != null else Color.WHITE)
+			_before_note.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+			_before_note.add_theme_constant_override("outline_size", 4)
+			_before_note.position = Vector2(16, 8)
+			_ui_layer.add_child(_before_note)
+	if _before_layer != null:
+		_before_layer.visible = _before_on
+	if _before_note != null:
+		_before_note.visible = _before_on
+	queue_redraw()
+
+## Слой «было»: рельеф стартовой доски плитками и стартовые места поверх. Слой — дочерний
+## узел над самим экраном боя, поэтому закрывает и бойцов, и следы, и туман.
+func _draw_before(ci: Node2D) -> void:
+	var g := _before_grid
+	if g == null or _before_tiles == null:
+		return
+	ci.position = pan
+	ci.scale = Vector2(zoom, zoom)
+	var vp := get_viewport_rect().size
+	var x0 := clampi(floori((-pan.x / zoom - ORIGIN.x) / CELL), 0, g.width - 1)
+	var y0 := clampi(floori((-pan.y / zoom - ORIGIN.y) / CELL), 0, g.height - 1)
+	var x1 := clampi(ceili(((vp.x - pan.x) / zoom - ORIGIN.x) / CELL), 0, g.width - 1)
+	var y1 := clampi(ceili(((vp.y - pan.y) / zoom - ORIGIN.y) / CELL), 0, g.height - 1)
+	var res := TerrainTiles.prepare(ci, float(CELL))
+	_before_tiles.draw(ci, ORIGIN, float(CELL), x0, y0, x1, y1, false, res)
+	TerrainTiles.draw_grid(ci, ORIGIN, float(CELL), x0, y0, x1, y1, Color(0, 0, 0, 0.28), 1.0 / zoom)
+	_before_tiles.draw(ci, ORIGIN, float(CELL), x0, y0, x1, y1, true, res)
+	# Картинки бойцов и машин — в системе самого слоя (у него уже pan и zoom).
+	Sprites.set_base_transform(Vector2.ZERO, Vector2.ONE)
+	var font := ThemeDB.fallback_font
+	for v: Array in _before_vehicles:
+		var org := ORIGIN + Vector2(v[2]) * CELL
+		var vsize := Vector2(v[3]) * CELL
+		var col := _side_color(int(v[1]))
+		var key := Sprites.resolve(String(v[0]))
+		if key == "" or not Sprites.draw_texture_override_rect(ci, key, Rect2(org, vsize), _facing_degrees(v[4])):
+			ci.draw_rect(Rect2(org + Vector2(3, 3), vsize - Vector2(6, 6)), col.darkened(0.35))
+		ci.draw_rect(Rect2(org + Vector2(2, 2), vsize - Vector2(4, 4)), col, false, 2.0)
+		ci.draw_string(font, org + Vector2(8, 18), String(VehicleDB.get_vehicle(String(v[0])).get("name", v[0])),
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 14, _ink(col.darkened(0.35)))
+	for u: Array in _before_units:
+		var o := ORIGIN + Vector2(u[2]) * CELL
+		var col := _side_color(int(u[1]))
+		var key := Sprites.resolve(String(u[0]), _owner_suffix(int(u[1])))
+		ci.draw_arc(o + Vector2(CELL, CELL) * 0.5, CELL * 0.46, 0.0, TAU, 24, col, 2.0)
+		if key == "" or not Sprites.draw_texture_override(ci, key, o, CELL):
+			ci.draw_circle(o + Vector2(CELL, CELL) * 0.5, CELL * 0.32, col)
+			ci.draw_string(font, o + Vector2(0, CELL * 0.5 + 5), Sprites.unit_tag(String(u[0])),
+					HORIZONTAL_ALIGNMENT_CENTER, CELL, 14, Color.WHITE)
+	Sprites.set_base_transform(pan, Vector2(zoom, zoom))
 
 ## Разбор партии обученной политикой (item: «play vs latest»). Прогоняет записанный матч
 ## и на каждом решении обеих сторон спрашивает политику, что сделала бы она и во что
@@ -3258,12 +3295,6 @@ func _show_victory(title: String) -> void:
 		study.custom_minimum_size = Vector2(130, 34)
 		study.pressed.connect(_show_match_analysis)
 		row.add_child(study)
-	if _opening_board != null:
-		var compare := Button.new()
-		compare.text = "Before / After"
-		compare.custom_minimum_size = Vector2(130, 34)
-		compare.pressed.connect(_show_board_comparison)
-		row.add_child(compare)
 	var close := Button.new()
 	close.text = "Look at the Board"
 	close.custom_minimum_size = Vector2(130, 34)
@@ -3733,6 +3764,13 @@ func _play_dice(events: Array) -> void:
 				continue
 			_dice.play(step["faces"], step["manual"], step["prompt"], step.get("speed", 1.0) * _pace())
 			await _dice.finished
+		# Стекло осыпается сразу после своих бросков (0.9.2) — до бросков по цели за ним.
+		if ev.get("kind", "") == "glass" and bool(ev.get("broke", false)):
+			_hold_visual.get("cells", {}).erase(ev["cell"])
+			_fx.apply(ev["fx"])
+			queue_redraw()
+			if _pace() < 8.0 and not _fast_playback:
+				await get_tree().create_timer(GLASS_BREAK_PAUSE / _pace()).timeout
 	await _await_walks()
 	_walk_cells.clear()
 	_walk_offset.clear()
@@ -3746,6 +3784,9 @@ func _play_dice(events: Array) -> void:
 		_playing_slot = -1
 		_refresh_status()
 	queue_redraw()
+
+## Пауза, чтобы осыпавшееся стекло было видно до бросков по цели за ним (секунды).
+const GLASS_BREAK_PAUSE := 0.35
 
 ## Дождаться всех идущих переходов — но не дольше, чем они могут длиться. Переход ведёт
 ## счётчик _walks_running; если он почему-то не вернулся к нулю (корутина оборвалась),
@@ -3862,16 +3903,35 @@ func _good_for_viewer(success: bool, roller: int) -> bool:
 func _dice_steps(ev: Dictionary) -> Array:
 	var steps: Array = []
 	match ev["kind"]:
+		"glass":
+			# Стекло на пути очереди (0.9.2): стрелок бросает попадание в стекло, стекло —
+			# спасбросок за каждую попавшую пулю; осыпается оно после этих бросков.
+			var g_own := int(ev.get("shooter_owner", -1))
+			var g_faces: Array = []
+			for h: Dictionary in ev["hits"]:
+				g_faces.append({"value": h["roll"], "good": _good_for_viewer(h["hit"], g_own),
+					"tag": "Glass %d+" % int(ev["need"])})
+			var g_manual := _owner_is_local_human(g_own)
+			var g_name := String(ev["name"]).to_lower()
+			steps.append({"faces": g_faces, "manual": g_manual, "roller": g_own,
+				"speed": FAST_ROLL_SPEED if int(ev["need"]) <= 1 else 1.0,
+				"prompt": ("Your shot — roll to hit the %s (need %d+)" if g_manual
+						else "To hit the %s (need %d+)") % [g_name, int(ev["need"])]})
+			if not (ev["saves"] as Array).is_empty():
+				var s_faces: Array = []
+				for sv: Dictionary in ev["saves"]:
+					s_faces.append({"value": sv["roll"], "good": _good_for_viewer(not sv["held"], g_own),
+						"tag": "Holds %d+" % int(ev["save"])})
+				steps.append({"faces": s_faces, "manual": false, "roller": MCF.Owner.NEUTRAL,
+					"prompt": "The %s holds on %d+" % [g_name, int(ev["save"])]})
 		"attack":
+			# Ни одна пуля не прошла стёкла — бросать по цели нечего.
+			if (ev["shots"] as Array).is_empty():
+				return steps
 			# Сначала ВСЕ броски попадания разом, затем ВСЕ броски пробитии разом (§3.5).
 			var hit_faces: Array = []
 			var pen_faces: Array = []
 			for det in ev["shots"]:
-				# Пуля, застрявшая в стекле, до броска на попадание не дошла (#29):
-				# её hit_roll — служебный 0, и рисовать его кубиком нельзя (item 2:
-				# «нельзя выкинуть 0»). Факт застревания уже виден в журнале.
-				if det.get("stopped_by_glass", false):
-					continue
 				var s_own := int(ev.get("shooter_owner", -1))
 				var d_own := int(ev.get("def_owner", -1))
 				hit_faces.append({"value": det["hit_roll"],
@@ -4614,8 +4674,9 @@ func _lod_color(cell: GridCell) -> Color:
 		if cell.cover_height == 0.0 and not cell.is_space and cell.floor_type != MCF.FLOOR_GRASS:
 			return LOD_FLOOR
 	var floor_name := "floor"
+	var look := state.grid.look_at(cell.coord.x, cell.coord.y) if not state.grid.floor_look.is_empty() else 0
 	if cell.is_space:
-		floor_name = "floor_space"
+		floor_name = "floor_solar" if look == MCF.Look.SOLAR else "floor_space"
 	elif is_wall:
 		floor_name = "floor_wall"
 	elif damage == FxDecals.DAMAGE_EPICENTER:
@@ -4624,6 +4685,8 @@ func _lod_color(cell: GridCell) -> Color:
 		floor_name = "floor_destroyed"
 	elif cell.floor_type == MCF.FLOOR_GRASS:
 		floor_name = "floor_grass"
+	elif look > 0 and look < MCF.FLOOR_LOOKS.size():
+		floor_name = MCF.FLOOR_LOOKS[look]
 	var col: Color
 	if _lod_tex_avg.has(floor_name):
 		col = _lod_tex_avg[floor_name]
@@ -4670,11 +4733,14 @@ func _lod_texture_averages() -> Dictionary:
 	var out := {}
 	var names: Array = ["floor", "floor_space", "floor_wall", "floor_cover", "fire",
 			"floor_grass", "floor_destroyed", "floor_epicenter"]
+	names.append_array(MCF.FLOOR_LOOKS.slice(1))   # полы комнат (0.9.2) — как на холсте
 	names.append_array(FEATURE_TAGS.keys())
 	names.append_array(Furniture.ids())   # мебель на дальнем плане — цветом своей плитки
 	for n: String in names:
+		# Шлюз с 0.9.2 рисуется дверью в раме, и файл у неё — "door".
+		var base: String = "door" if n == MCF.FEATURE_AIRLOCK else n
 		# Окружение карты (item 24): дальний план того же цвета, что и плитки вблизи.
-		var tex := Sprites.texture_of(TerrainTiles.env_name(n, state.env))
+		var tex := Sprites.texture_of(TerrainTiles.env_name(base, state.env))
 		if tex == null:
 			continue
 		var img := tex.get_image()
@@ -4704,6 +4770,8 @@ func _pile_cells() -> Array[Vector2i]:
 func _draw() -> void:
 	if state == null:
 		return
+	if _before_on and _before_layer != null:
+		_before_layer.queue_redraw()   # слой «было» идёт за панорамой и зумом
 	# Панорама + масштаб «камеры»: всё поле рисуется в локальных координатах.
 	draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
 	# То же преобразование — слою замены спрайтов: повёрнутая картинка (танк по фронту,
@@ -5130,7 +5198,7 @@ func _draw() -> void:
 					var as_wall := wcell.is_wall()
 					if wcell.feature_id == MCF.FEATURE_AIRLOCK and not as_wall:
 						_tiles.draw_feature_tile(self, MCF.FEATURE_AIRLOCK, wc,
-								Rect2(_cell_origin(wc), fcell_size))
+								Rect2(_cell_origin(wc), fcell_size), true)
 						as_wall = true
 					if as_wall:
 						draw_rect(Rect2(_cell_origin(wc), fcell_size), UNSEEN_WALL_COL)
@@ -5146,15 +5214,7 @@ func _draw() -> void:
 				var hfid: String = _hc[hk]["feature_id"]
 				if hfid != "" and _cell_on_screen(hk.x, hk.y):
 					_tiles.draw_feature_tile(self, hfid, hk, Rect2(_cell_origin(hk), fcell_size))
-		for dk: String in [MCF.FEATURE_DOT, MCF.FEATURE_DOT_OPEN]:
-			for dcell: Vector2i in resolver._feature_cells(dk):
-				var ddur := grid.cell(dcell).feature_durability
-				if _hold_visual.get("cells", {}).has(dcell):
-					ddur = int(_hold_visual["cells"][dcell]["feature_durability"])
-				if ddur > 0 and ddur < MCF.feature_durability(dk) and _cell_on_screen(dcell.x, dcell.y):
-					var o := _cell_origin(dcell)
-					draw_line(o + Vector2(CELL - 12, 8), o + Vector2(CELL - 6, 16),
-						Color(0.9, 0.25, 0.2), 2.0)
+		# Побитый ДОТ трескается в самой плитке (TerrainTiles._pillbox_crack, 0.9.2).
 	else:
 		# На дальнем плане объекты — в текстуре рельефа, кроме мин: их видимость своя у
 		# каждой стороны (item 45). Мин на карте единицы — точкой в цвет тега.
@@ -6002,7 +6062,12 @@ func _build_ui() -> void:
 	# «Возврат в меню» — единая кнопка: в сети уводит из партии, в одиночке — в главное меню.
 	match_box.add_child(_button_row([_save_btn, _compact_button("Return to Menu", _to_lobby)]))
 	# Настройки (items 17/23): размер интерфейса и акцент — не выходя из боя.
-	match_box.add_child(_compact_button("Settings", func() -> void: SettingsWindow.open(self)))
+	# «Было / стало» (0.9.2) — рядом: доска, какой она была в начале боя, и обратно.
+	_before_btn = _compact_button("Before / After", _toggle_before)
+	_before_btn.toggle_mode = true
+	_before_btn.tooltip_text = "Show the battlefield as it was at the start (press again to come back)."
+	match_box.add_child(_button_row([_compact_button("Settings", func() -> void: SettingsWindow.open(self)),
+			_before_btn]))
 
 	var tools_box := _hud_group(vbox, "Tools")
 	_multi_btn = CheckBox.new()
@@ -7571,20 +7636,25 @@ func _has_action_button(vb: VBoxContainer) -> bool:
 	return false
 
 func _open_picker(target: UnitInstance, available: int) -> void:
+	_open_shot_picker(target.stats.display_name, available,
+			func(n: int) -> Intent: return ShootIntent.new(selected_id, target.id, n))
+
+## Сколько пуль выпустить (по бойцу или по окну): make(n) строит намерение, n = −1 — все.
+func _open_shot_picker(what: String, available: int, make: Callable) -> void:
 	_menu.hide()
 	for c in _picker.get_children():
 		c.queue_free()
-	var vb := _scroll_menu(_picker, "Shots at %s" % target.stats.display_name)
+	var vb := _scroll_menu(_picker, "Shots at %s" % what)
 	var row := HBoxContainer.new()
 	vb.add_child(row)
 	for n in range(1, available + 1):
 		var b := Button.new()
 		b.text = str(n)
-		b.pressed.connect(_submit.bind(ShootIntent.new(selected_id, target.id, n)))
+		b.pressed.connect(func() -> void: _submit(make.call(n)))
 		row.add_child(b)
 	var all_btn := Button.new()
 	all_btn.text = "All (%d)" % available
-	all_btn.pressed.connect(_submit.bind(ShootIntent.new(selected_id, target.id, -1)))
+	all_btn.pressed.connect(func() -> void: _submit(make.call(-1)))
 	vb.add_child(all_btn)
 	_anchor_menu(_picker)
 	_picker.show()

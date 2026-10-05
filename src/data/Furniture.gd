@@ -57,10 +57,8 @@ const FLAMMABLE := {"wood": true, "fabric": true, "plastic": true}
 ## 0.5 м не мешает стрелку вовсе; 2.0 м — стена, сквозь неё не стреляют.
 const COVER_MOD := {1.0: 2, 1.5: 3}
 
-## Сколько прочности снимает мебели разрыв, задевший её клетку (граната, заряд, снаряд,
-## дрон, мина). Стул, стол и тумбочка разлетаются с одного взрыва, шкаф и верстак — со
-## второго, генератор переживает два.
-const BLAST_DAMAGE := 2
+## Разрыв (заряд, снаряд, дрон, мина, осколочная граната) сносит любую мебель в своей зоне
+## целиком, какой бы прочной она ни была (0.9.2: игрок просил, чтобы исключений не было).
 
 ## Строки таблицы без цветовых вариантов; DEFS = они же плюс варианты (VARIANTS).
 const _BASE := {
@@ -216,7 +214,23 @@ const _BASE := {
 		"rooms": ["utility", "barracks"]},
 	"fuel_tank": {"join": "whole", "sizes": [[2, 2]], "back": "", "name": "Fuel Tank", "cat": "industrial", "h": 2.0, "mat": "metal", "dur": 5,
 		"mob": Mobility.FIXED, "ap": 3, "at": "center", "gen": true,
-		"rooms": ["utility", "mining"]},
+		"rooms": ["utility", "mining", "water", "dock"]},
+	# --- 0.9.2: санузлы, мостик, полигон, вентиляция ---------------------------------------
+	"toilet": {"name": "Toilet", "cat": "residential", "h": 0.5, "mat": "plastic", "dur": 1,
+		"mob": Mobility.FIXED, "ap": 1, "at": "wall", "gen": true,
+		"rooms": ["restroom", "bathroom", "cell"]},
+	"sink": {"name": "Sink", "cat": "residential", "h": 1.0, "mat": "metal", "dur": 1,
+		"mob": Mobility.FIXED, "ap": 1, "at": "wall", "gen": true,
+		"rooms": ["restroom", "bathroom", "kitchen", "laboratory", "surgery"]},
+	"console": {"name": "Console", "cat": "office", "h": 1.0, "mat": "metal", "dur": 3,
+		"mob": Mobility.FIXED, "ap": 2, "at": "wall", "gen": true,
+		"rooms": ["command", "power", "laboratory"]},
+	"target": {"name": "Practice Target", "cat": "industrial", "h": 1.5, "mat": "wood", "dur": 1,
+		"mob": Mobility.HEAVY, "ap": 1, "at": "free", "gen": true,
+		"rooms": ["testing_range"]},
+	"vent_fan": {"name": "Vent Fan", "cat": "industrial", "h": 0.5, "mat": "metal", "dur": 2,
+		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true,
+		"rooms": ["air", "utility"]},
 }
 
 ## Цветовые варианты: та же строка таблицы (правила те же), свой id и своя плитка, где

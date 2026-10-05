@@ -21,7 +21,7 @@ for script in tests/check_scripts.gd tests/run_codec.gd tests/run_headless.gd \
               tests/run_incremental.gd tests/run_fog_viewer.gd tests/run_group_move.gd tests/run_team_session.gd \
               tests/run_ui_drones.gd tests/run_rl_tactics.gd tests/run_match_analysis.gd tests/run_soil_rulers.gd tests/run_batch_zones.gd tests/run_borg_corpses.gd tests/run_mp_perf.gd \
               tests/run_playtest20.gd tests/run_playtest20_screen.gd tests/run_editor.gd \
-              tests/run_furniture.gd; do
+              tests/run_furniture.gd tests/run_batch092.gd; do
   echo "=== $script ==="
   # shellcheck disable=SC2086
   "$GODOT" --headless --script "res://$script" $EXTRA

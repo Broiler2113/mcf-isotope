@@ -54,7 +54,22 @@ static func encode(state: GameState) -> Dictionary:
 		"env": state.env,
 		"fx_seq": state.fx_seq,
 		"kills": state.kills.duplicate(true),
+		"decor": _encode_decor(state.grid),
 	}
+
+## Только вид (0.9.2): пол комнат и повороты мебели, заданные в редакторе. Правилам не
+## нужны, но без них загруженная партия выглядела бы иначе, чем сохранённая.
+static func _encode_decor(grid: Grid) -> Dictionary:
+	var out := {}
+	if grid.floor_look.size() == grid.width * grid.height and grid.floor_look.count(0) < grid.floor_look.size():
+		out["floor"] = MapData.rle(grid.floor_look)
+	var turns: Array = []
+	for c: Vector2i in grid.furniture_turn:
+		var rec: Array = grid.furniture_turn[c]
+		turns.append([c.x, c.y, rec[0], rec[1]])
+	if not turns.is_empty():
+		out["turn"] = turns
+	return out
 
 static func _encode_unit(u: UnitInstance) -> Dictionary:
 	var rec := {
@@ -229,6 +244,13 @@ static func restore_into(gs: GameState, d: Dictionary) -> void:
 	gs.turns.initiative_rolled = bool(turns.get("rolled", true))
 	gs.revealed_mines = _decode_mines(d.get("mines", []))
 	gs.env = str(d.get("env", gs.env))
+	if d.has("decor"):
+		var dec: Dictionary = d["decor"]
+		var n := gs.grid.width * gs.grid.height
+		gs.grid.floor_look = MapData.unrle(dec["floor"], n) if dec.has("floor") else PackedByteArray()
+		gs.grid.furniture_turn.clear()
+		for t: Array in dec.get("turn", []):
+			gs.grid.furniture_turn[Vector2i(int(t[0]), int(t[1]))] = [str(t[2]), int(t[3])]
 	gs.fx_seq = int(d.get("fx_seq", gs.fx_seq))
 
 ## Ключи JSON — строки, числа — дробные: обратно в {id: [убито, раздавлено]}.

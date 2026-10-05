@@ -344,6 +344,14 @@ const FIRE_SHOOT_PENALTY := 1     # стрельба через горящую �
 const FLOOR_NORMAL := 0
 const FLOOR_FLAMMABLE := 1
 const FLOOR_GRASS := 2
+## Вид пола (0.9.2): дерево, плитка, ковёр… — по клетке (MapData.floor_look), независимо от
+## правил: горит ли пол, решает floor_type. 0 — пол окружения. Индекс — номер картинки.
+## «Солнечные панели» кладутся на клетки КОСМОСА у станции: вид поверх звёзд, не пол.
+const FLOOR_LOOKS := ["", "floor_wood", "floor_parquet", "floor_tile", "floor_checker",
+		"floor_carpet_red", "floor_carpet_blue", "floor_lino", "floor_plate", "floor_grate", "floor_solar"]
+const FLOOR_LOOK_NAMES := ["Floor", "Wood floor", "Parquet", "Tiles", "Checker tiles", "Red carpet",
+		"Blue carpet", "Linoleum", "Steel plate", "Grating", "Solar panels"]
+enum Look {DEFAULT, WOOD, PARQUET, TILE, CHECKER, CARPET_RED, CARPET_BLUE, LINO, PLATE, GRATE, SOLAR}
 
 ## Порог d6 для розжига от СОСЕДНЕЙ горящей клетки: клетка загорается на «need и выше»,
 ## то есть шанс равен (7 − need)/6. Таблица взята из #14 один в один:

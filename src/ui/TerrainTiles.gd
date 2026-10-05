@@ -207,9 +207,10 @@ func _touch(c: Vector2i) -> void:
 			# Поворот цельного предмета зависит от всех его клеток: перемена у одной (или
 			# стена, снесённая у её бока) перерисовывает весь предмет, а не кусок с краю.
 			# В бою вид заморожен (furniture_look) — соседям перерисовываться не с чего.
+			# Ряд с поворотами (Г-стойка) тоже решает спинку по всем клеткам (_path_look).
 			var nf := _grid.cell_fast(n.x, n.y).feature_id
-			if furniture_look == null and Furniture.is_whole(nf):
-				for p in Furniture.piece_cells(func(q: Vector2i) -> String: return _fid_at(_grid, q), n):
+			if furniture_look == null and Furniture.joins(nf):
+				for p in group_cells(_grid, n, nf):
 					_dirty[Vector2i(p.x / C, p.y / C)] = true
 
 ## Вывести куски слоя features=false (пол) или true (объекты), покрывающие клетки
@@ -314,6 +315,15 @@ func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> voi
 	if fid == "" or fid == MCF.FEATURE_MINE or fid == MCF.FEATURE_AV_MINE \
 			or fid == MCF.FEATURE_DRONE_STATION or skip_features.has(fid):
 		return
+	# Дверь и шлюз (0.9.2) — «спереди»: плитка стены окружения по маске соседей, поверх —
+	# дверь в раме, закрытая или распахнутая. Стоит так в стене любого направления.
+	if fid == MCF.FEATURE_AIRLOCK:
+		var dimg := _door_image(_grid, c, cell, res)
+		if dimg != null:
+			feat.blend_rect(dimg, full, at)
+		if cell.airlock_welded:
+			feat.blend_rect(_weld_overlay(res), full, at)
+		return
 	var name := tile_name(cell)
 	if Furniture.is_furniture(fid):
 		var fimg := _furniture_image(c, fid, res)
@@ -327,12 +337,70 @@ func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> voi
 		var mask := mask_at(_grid, c, fid)
 		feat.blit_rect(sheets[variant_of(c + origin, sheets.size())],
 				Rect2i((mask % 4) * res, (mask / 4) * res, res, res), at)
+		if NOTCHED.has(FAMILY.get(fid, fid)):
+			_fill_notches(feat, c, fid, mask, at, res)
+		# ДОТ, потерявший прочность, трескается прямо в плитке (0.9.2) — раньше была лишь
+		# красная чёрточка в углу клетки.
+		if (fid == MCF.FEATURE_DOT or fid == MCF.FEATURE_DOT_OPEN) and cell.feature_durability > 0 \
+				and cell.feature_durability < MCF.feature_durability(fid):
+			# Вариант — так, чтобы соседи по ряду и столбцу всегда трескались по-разному.
+			var cv := c + origin
+			feat.blend_rect(_pillbox_crack(res, posmod(cv.x * 2 + cv.y, 3), fid == MCF.FEATURE_DOT_OPEN),
+					full, at)
 	else:
 		var singles := _tile(name, res)
 		if not singles.is_empty():
 			feat.blit_rect(singles[variant_of(c + origin, singles.size())], full, at)
 	if cell.airlock_welded:
 		feat.blend_rect(_weld_overlay(res), full, at)
+
+## Семейства, у листа которых в углу между двумя сросшимися сторонами вырезан «внутренний
+## угол» (окоп, мешки). Лист про диагональ не знает, поэтому в сплошном поле окопа или
+## мешков на каждом стыке четырёх клеток светилась дырка в землю (0.9.2). Если диагональ
+## тоже своя, угол заделывается телом из середины той же плитки.
+const NOTCHED := {"trench": true, "bags": true}
+const _CORNER_DIAG := [Vector2i(1, -1), Vector2i(1, 1), Vector2i(-1, 1), Vector2i(-1, -1)]
+
+func _fill_notches(feat: Image, c: Vector2i, fid: String, mask: int, at: Vector2i, res: int) -> void:
+	var fam: String = FAMILY.get(fid, fid)
+	var p := maxi(2, ceili(7.0 * res / 32.0))
+	var patch: Image = null
+	for l in 4:
+		if mask & _MASK_BITS[l] == 0 or mask & _MASK_BITS[(l + 1) % 4] == 0:
+			continue
+		var q: Vector2i = c + _CORNER_DIAG[l]
+		if not _grid.in_bounds(q):
+			continue
+		var qf := _grid.cell_fast(q.x, q.y).feature_id
+		if qf == "" or FAMILY.get(qf, qf) != fam:
+			continue
+		if patch == null:
+			patch = feat.get_region(Rect2i(at + Vector2i(res / 2 - p / 2, res / 2 - p / 2), Vector2i(p, p)))
+		var right := l == 0 or l == 1
+		var bottom := l == 1 or l == 2
+		feat.blit_rect(patch, Rect2i(Vector2i.ZERO, Vector2i(p, p)),
+				at + Vector2i(res - p if right else 0, res - p if bottom else 0))
+
+## Клетка двери целиком: стена окружения (лист «wall» по маске семейства) и дверь спереди
+## поверх неё. Кэш — по маске, состоянию, варианту и разрешению.
+func _door_image(grid: Grid, c: Vector2i, cell: GridCell, res: int, closed := false) -> Image:
+	var mask := mask_at(grid, c, MCF.FEATURE_AIRLOCK)
+	var open := cell.cover_height < MCF.WALL_HEIGHT and not closed
+	var v := variant_of(c + origin, 3)
+	var walls := _sheet("wall", res)
+	var wv := variant_of(c + origin, walls.size()) if not walls.is_empty() else 0
+	var key := "door@%d@%d@%s@%d@%d" % [res, mask, open, v, wv]
+	if _tiles.has(key):
+		var hit: Array = _tiles[key]
+		return hit[0] if not hit.is_empty() else null
+	var img := Image.create(res, res, false, Image.FORMAT_RGBA8)
+	if not walls.is_empty():
+		img.blit_rect(walls[wv], Rect2i((mask % 4) * res, (mask / 4) * res, res, res), Vector2i.ZERO)
+	var doors := _tile("door_open" if open else "door", res)
+	if not doors.is_empty():
+		img.blend_rect(doors[v % doors.size()], Rect2i(0, 0, res, res), Vector2i.ZERO)
+	_tiles[key] = [img]
+	return img
 
 ## Заваренный шлюз: поверх створок — крест из стальных полос с оранжевыми швами по
 ## концам и посередине. Рисуется кодом, в res×res, один раз на разрешение.
@@ -380,15 +448,16 @@ func _furniture_image(c: Vector2i, fid: String, res: int) -> Image:
 	else:
 		var snap: Array = furniture_look.get(c, [])
 		if snap.is_empty() or snap[0] != fid:
-			snap = [fid, 0, 0, _single_turn(_grid, c, fid, origin)]
+			snap = [fid, 0, 0, _single_turn(_grid, c, fid, origin), 0]
 			furniture_look[c] = snap
 		look = snap.slice(1)
 	var mask: int = look[0]
 	var inner: int = look[1]
 	var k: int = look[2]
+	var corner: int = look[3] if look.size() > 3 else 0
 	if not Furniture.joins(fid):
 		return _turned(fid, res, k)
-	var key := "%s@%d@m%d@%d@i%d" % [fid, res, mask, k, inner]
+	var key := "%s@%d@m%d@%d@i%d@c%d" % [fid, res, mask, k, inner, corner]
 	if _tiles.has(key):
 		var hit: Array = _tiles[key]
 		return hit[0] if not hit.is_empty() else null
@@ -396,7 +465,11 @@ func _furniture_image(c: Vector2i, fid: String, res: int) -> Image:
 	if sheets.is_empty():
 		_tiles[key] = []
 		return _turned(fid, res, k)
-	var img: Image = (sheets[0] as Image).get_region(Rect2i((mask % 4) * res, (mask / 4) * res, res, res))
+	var img: Image
+	if corner != 0:
+		img = _corner_tile(sheets[0], corner, res)
+	else:
+		img = (sheets[0] as Image).get_region(Rect2i((mask % 4) * res, (mask / 4) * res, res, res))
 	if inner != 0:
 		_carve_inner(img, inner, res)
 	for i in k:
@@ -404,11 +477,47 @@ func _furniture_image(c: Vector2i, fid: String, res: int) -> Image:
 	_tiles[key] = [img]
 	return img
 
-## Вид клетки мебели по живой доске: [маска стыка, внутренние углы, поворот].
+## Угол Г-образного предмета (диван углом, стойка буквой Г или кольцом), 0.9.2. Лист
+## рисует спинку только сверху, поэтому угол, у которого спинка (или фасад) идёт по ДВУМ
+## открытым сторонам, собирается из двух плиток листа «на ус»: у северной кромки — плитка
+## со спинкой сверху, у восточной — она же, повёрнутая спинкой на восток. Своя система:
+## открыты север и восток, срослись юг и запад; поворот — потом, как у всех.
+## corner: 1 — спинка по обеим сторонам (наружный угол), 2 — фасад по обеим.
+func _corner_tile(sheet: Image, corner: int, res: int) -> Image:
+	# Берём СРЕДНИЕ секции (открыта одна сторона): у них нет торцевых деталей —
+	# подлокотника, монитора, кассы, — и ус не режет их пополам.
+	var only_n := Sprites.AUTOTILE_E | Sprites.AUTOTILE_S | Sprites.AUTOTILE_W
+	var only_s := Sprites.AUTOTILE_N | Sprites.AUTOTILE_E | Sprites.AUTOTILE_W
+	var a: Image
+	var b: Image
+	if corner == 1:
+		a = _sheet_cell(sheet, only_n, res, 0)   # спинка на север
+		b = _sheet_cell(sheet, only_n, res, 1)   # она же на восток
+	else:
+		a = _sheet_cell(sheet, only_s, res, 2)   # фасад на север
+		b = _sheet_cell(sheet, only_s, res, 3)   # он же на восток
+	for y in res:
+		for x in res:
+			if x + y > res - 1:
+				a.set_pixel(x, y, b.get_pixel(x, y))
+	return a
+
+## Плитка листа по маске, повёрнутая на k четвертей по часовой.
+func _sheet_cell(sheet: Image, mask: int, res: int, k: int) -> Image:
+	var img := sheet.get_region(Rect2i((mask % 4) * res, (mask / 4) * res, res, res))
+	for i in k:
+		img.rotate_90(CLOCKWISE)
+	return img
+
+## Вид клетки мебели по живой доске: [маска стыка, внутренние углы, поворот, угол].
 func _live_look(c: Vector2i, fid: String) -> Array:
+	if Furniture.joins(fid):
+		var bent := _path_look(_grid, c, fid)
+		if not bent.is_empty():
+			return bent
 	var k := furniture_turn(_grid, c, fid, origin)
 	if not Furniture.joins(fid):
-		return [0, 0, k]
+		return [0, 0, k, 0]
 	var mask := 0
 	for l in 4:
 		var n: Vector2i = c + _TURN_DIRS[(l + k) % 4]
@@ -421,7 +530,7 @@ func _live_look(c: Vector2i, fid: String) -> Array:
 		if mask & _MASK_BITS[l] and mask & _MASK_BITS[(l + 1) % 4] \
 				and _fid_at(_grid, c + _TURN_DIRS[(l + k) % 4] + _TURN_DIRS[(l + 1 + k) % 4]) != fid:
 			inner |= 1 << l
-	return [mask, inner, k]
+	return [mask, inner, k, 0]
 
 ## Снимок вида всей мебели доски для furniture_look.
 func freeze_furniture() -> Dictionary:
@@ -455,10 +564,168 @@ func _carve_inner(img: Image, inner: int, res: int) -> void:
 
 const _MASK_BITS := [Sprites.AUTOTILE_N, Sprites.AUTOTILE_E, Sprites.AUTOTILE_S, Sprites.AUTOTILE_W]
 
+## Сколько клеток самое большее у ряда (стойки, стеллажа), который разбирается как
+## «линия с поворотами»: длиннее — рисуется по-старому, секциями.
+const PATH_CAP := 96
+
+## Клетки «предмета» для вида: цельный — piece_cells, ряд — все связные клетки того же вида.
+static func group_cells(grid: Grid, c: Vector2i, fid: String) -> Array[Vector2i]:
+	if Furniture.is_whole(fid):
+		return Furniture.piece_cells(func(q: Vector2i) -> String: return _fid_at(grid, q), c)
+	var out: Array[Vector2i] = [c]
+	var seen := {c: true}
+	var i := 0
+	while i < out.size() and out.size() <= PATH_CAP:
+		for d: Vector2i in _TURN_DIRS:
+			var q: Vector2i = out[i] + d
+			if not seen.has(q) and _fid_at(grid, q) == fid:
+				seen[q] = true
+				out.append(q)
+		i += 1
+	return out
+
+## Предмет-«линия» шириной в клетку, у которой есть поворот (Г, П, кольцо): у всех её
+## клеток спинка смотрит в ОДНУ сторону линии — к стенам, а без стен наружу, — и на
+## углах заворачивает (угловая плитка «на ус», _corner_tile). Пусто — предмет не такой
+## (прямой ряд, блок 2×2, развилка): тогда работает прежний поворот по клеткам. Раньше
+## каждая клетка Г-стойки поворачивалась сама, и спинка рвалась на углах (0.9.2).
+static func _path_look(grid: Grid, c: Vector2i, fid: String) -> Array:
+	var cells := group_cells(grid, c, fid)
+	if cells.size() < 3 or cells.size() > PATH_CAP:
+		return []
+	var mine := {}
+	for p in cells:
+		mine[p] = true
+	# Соседи каждой клетки по сторонам (номера направлений 0..3: С, В, Ю, З).
+	var nb := {}
+	var corners := 0
+	var ends: Array[Vector2i] = []
+	for p in cells:
+		var ds: Array[int] = []
+		for d in 4:
+			if mine.has(p + _TURN_DIRS[d]):
+				ds.append(d)
+		if ds.size() > 2:
+			return []
+		if ds.size() == 2 and (ds[0] + ds[1]) % 2 == 1:
+			# Угол; если и диагональ своя — это блок 2×2, а не линия.
+			if mine.has(p + _TURN_DIRS[ds[0]] + _TURN_DIRS[ds[1]]):
+				return []
+			corners += 1
+		if ds.size() == 1:
+			ends.append(p)
+		nb[p] = ds
+	if corners == 0 or (ends.size() != 0 and ends.size() != 2):
+		return []
+	# Обход линии от конца (у кольца — с любой клетки): направление входа и выхода.
+	var start: Vector2i = ends[0] if not ends.is_empty() else cells[0]
+	var order: Array[Vector2i] = [start]
+	var seen := {start: true}
+	while true:
+		var cur: Vector2i = order[order.size() - 1]
+		var moved := false
+		for d: int in nb[cur]:
+			var q: Vector2i = cur + _TURN_DIRS[d]
+			if not seen.has(q):
+				seen[q] = true
+				order.append(q)
+				moved = true
+				break
+		if not moved:
+			break
+	if order.size() != cells.size():
+		return []
+	var ring := ends.is_empty()
+	var n := order.size()
+	# Для каждой клетки — куда идём (dir) и на какую сторону поворачиваем (turn: +1 вправо).
+	var dir_of := {}
+	var score := [0, 0]   # стены слева / справа по ходу
+	var turns := 0        # правые минус левые
+	var manual := _manual_turn(grid, c, fid)
+	var want := [0, 0]
+	for i in n:
+		var p: Vector2i = order[i]
+		var din := -1
+		var dout := -1
+		if i > 0 or ring:
+			din = _dir_index(p - order[(i - 1 + n) % n])
+		if i < n - 1 or ring:
+			dout = _dir_index(order[(i + 1) % n] - p)
+		if din < 0:
+			din = dout
+		if dout < 0:
+			dout = din
+		dir_of[p] = [din, dout]
+		if dout == (din + 1) % 4:
+			turns += 1
+		elif dout == (din + 3) % 4:
+			turns -= 1
+		var sides := _open_sides(din, dout)
+		for side in 2:
+			for o: int in sides[side]:
+				var q: Vector2i = p + _TURN_DIRS[o]
+				if not grid.in_bounds(q) or grid.cell_fast(q.x, q.y).is_wall():
+					score[side] += 1
+				var rec: Variant = grid.furniture_turn.get(p)
+				if rec != null and str(rec[0]) == fid and int(rec[1]) == o and din == dout:
+					want[side] += 1
+	var back_side: int
+	if manual >= 0 and want[0] != want[1]:
+		back_side = 0 if want[0] > want[1] else 1
+	elif score[0] != score[1]:
+		back_side = 0 if score[0] > score[1] else 1
+	else:
+		back_side = 0 if turns >= 0 else 1   # без стен — наружу: при правых поворотах снаружи левая сторона
+	var din2: int = dir_of[c][0]
+	var dout2: int = dir_of[c][1]
+	var own: Array = _open_sides(din2, dout2)
+	if din2 != dout2:
+		# Угол: обе открытые стороны снаружи поворота.
+		var outer := 0 if dout2 == (din2 + 1) % 4 else 1
+		var o1: int = own[outer][0]
+		var o2: int = own[outer][1]
+		var k := o1 if o2 == (o1 + 1) % 4 else o2
+		return [Sprites.AUTOTILE_S | Sprites.AUTOTILE_W, 1 << 2, k, 1 if outer == back_side else 2]
+	var back: int = own[back_side][0]
+	var mask := 0
+	for d: int in nb[c]:
+		mask |= _MASK_BITS[(d - back + 4) % 4]
+	return [mask, 0, back, 0]
+
+## Открытые стороны клетки линии слева и справа по ходу: [слева[], справа[]].
+static func _open_sides(din: int, dout: int) -> Array:
+	if din == dout:
+		return [[(din + 3) % 4], [(din + 1) % 4]]
+	# Угол: открыты сторона «прямо» (din) и сторона, противоположная выходу.
+	var a := din
+	var b := (dout + 2) % 4
+	if dout == (din + 1) % 4:
+		return [[a, b], []]   # поворот направо — обе открытые стороны слева
+	return [[], [a, b]]
+
+static func _dir_index(d: Vector2i) -> int:
+	return _TURN_DIRS.find(d)
+
+## Поворот, заданный руками (Grid.furniture_turn): у цельного предмета — любой его клетки.
+static func _manual_turn(grid: Grid, c: Vector2i, fid: String) -> int:
+	if grid.furniture_turn.is_empty():
+		return -1
+	var cells: Array[Vector2i] = [c]
+	if Furniture.is_whole(fid):
+		cells = Furniture.piece_cells(func(q: Vector2i) -> String: return _fid_at(grid, q), c)
+	for p in cells:
+		var rec: Variant = grid.furniture_turn.get(p)
+		if rec != null and str(rec[0]) == fid:
+			return int(rec[1])
+	return -1
+
 static func _fid_at(grid: Grid, q: Vector2i) -> String:
 	return grid.cell_fast(q.x, q.y).feature_id if grid.in_bounds(q) else ""
 
 static func furniture_turn(grid: Grid, c: Vector2i, fid: String, at: Vector2i = Vector2i.ZERO) -> int:
+	var manual := _manual_turn(grid, c, fid)
+	if manual >= 0:
+		return manual
 	if Furniture.is_whole(fid):
 		return _piece_turn(grid, c, fid)
 	if Furniture.joins(fid):
@@ -590,6 +857,60 @@ func _crack_overlay(res: int) -> Image:
 	_tiles[key] = [img]
 	return img
 
+## Трещины в бетоне ДОТа: ломаные с отростками, тёмный излом и светлый скол под ним.
+## У амбразуры они идут от углов щели вверх и вниз, а края щели выщерблены — щель
+## (строки 13–18 плитки) остаётся щелью, трещины её не перечёркивают. Точки — в системе
+## плитки 32×32; v — вариант по клетке, чтобы стена ДОТа не трескалась под копирку.
+const _CRACKS := [
+	[[Vector2(4, 3), Vector2(9, 8), Vector2(8, 13), Vector2(14, 17), Vector2(13, 22), Vector2(18, 27)],
+		[Vector2(9, 8), Vector2(15, 7), Vector2(19, 10)], [Vector2(14, 17), Vector2(21, 16)]],
+	[[Vector2(28, 4), Vector2(23, 9), Vector2(24, 14), Vector2(18, 18), Vector2(19, 24), Vector2(15, 29)],
+		[Vector2(23, 9), Vector2(17, 8)], [Vector2(18, 18), Vector2(12, 21), Vector2(10, 26)]],
+	[[Vector2(5, 28), Vector2(10, 22), Vector2(9, 17), Vector2(15, 13), Vector2(21, 14), Vector2(27, 8)],
+		[Vector2(15, 13), Vector2(14, 7), Vector2(17, 3)], [Vector2(21, 14), Vector2(24, 20)]],
+]
+const _SLIT_CRACKS := [
+	[[Vector2(10, 13), Vector2(8, 9), Vector2(11, 5), Vector2(9, 1)], [Vector2(22, 13), Vector2(24, 9), Vector2(21, 6)],
+		[Vector2(14, 18), Vector2(12, 22), Vector2(15, 26), Vector2(13, 30)]],
+	[[Vector2(20, 13), Vector2(22, 8), Vector2(19, 4)], [Vector2(6, 18), Vector2(4, 23), Vector2(7, 28)],
+		[Vector2(24, 18), Vector2(26, 23), Vector2(23, 27)]],
+	[[Vector2(13, 13), Vector2(15, 9), Vector2(12, 6), Vector2(14, 2)], [Vector2(19, 18), Vector2(21, 23), Vector2(18, 29)],
+		[Vector2(5, 13), Vector2(3, 9)]],
+]
+
+func _pillbox_crack(res: int, v: int, slit: bool) -> Image:
+	var key := "pcrack@%d@%d@%s" % [res, v, slit]
+	if _tiles.has(key):
+		return _tiles[key][0]
+	var img := Image.create(res, res, false, Image.FORMAT_RGBA8)
+	var k := res / 32.0
+	var ink := Color(0.07, 0.07, 0.06, 0.92)
+	var chip := Color(0.86, 0.85, 0.8, 0.45)
+	var lines: Array = (_SLIT_CRACKS if slit else _CRACKS)[v % 3]
+	for pts: Array in lines:
+		for i in pts.size() - 1:
+			var a: Vector2 = pts[i] * k
+			var b: Vector2 = pts[i + 1] * k
+			var steps := maxi(2, int(a.distance_to(b) * 1.5))
+			for t in steps + 1:
+				var p := a.lerp(b, float(t) / steps)
+				var x := clampi(int(p.x), 0, res - 1)
+				var y := clampi(int(p.y), 0, res - 1)
+				if slit and y > int(13 * k) and y < int(18 * k):
+					continue   # в самой щели — темнота, трещине там нечего делать
+				if x + 1 < res and y + 1 < res and img.get_pixel(x + 1, y + 1).a == 0.0:
+					img.set_pixel(x + 1, y + 1, chip)
+				img.set_pixel(x, y, ink)
+	if slit:
+		# Выщербленные края щели: по паре сколов сверху и снизу.
+		for e: Vector2i in [Vector2i(9, 13), Vector2i(10, 13), Vector2i(22, 12), Vector2i(14, 18), Vector2i(15, 19),
+				Vector2i(24, 18)]:
+			var q := Vector2i(int(e.x * k), int(e.y * k))
+			if q.x < res and q.y < res:
+				img.set_pixel(q.x, q.y, ink)
+	_tiles[key] = [img]
+	return img
+
 func _buried(c: Vector2i) -> bool:
 	for dy in range(-1, 2):
 		for dx in range(-1, 2):
@@ -601,8 +922,10 @@ func _buried(c: Vector2i) -> bool:
 	return true
 
 func _floor_name(cell: GridCell, c: Vector2i) -> String:
+	var look := _grid.look_at(c.x, c.y) if not _grid.floor_look.is_empty() else 0
 	if cell.is_space:
-		return "floor_space"
+		# Солнечные панели у станции (0.9.2) — вид поверх звёзд; клетка остаётся космосом.
+		return "floor_solar" if look == MCF.Look.SOLAR else "floor_space"
 	var dmg := int(_damaged.get(c, 0))
 	if dmg == FxDecals.DAMAGE_EPICENTER:
 		return "floor_epicenter"
@@ -610,15 +933,15 @@ func _floor_name(cell: GridCell, c: Vector2i) -> String:
 		return "floor_destroyed"
 	if cell.floor_type == MCF.FLOOR_GRASS:
 		return "floor_grass"
+	# Пол комнаты (0.9.2): дерево, плитка, ковёр — вид, правила те же.
+	if look > 0 and look < MCF.FLOOR_LOOKS.size() and look != MCF.Look.SOLAR:
+		return MCF.FLOOR_LOOKS[look]
 	return "floor"
 
 ## Имя картинки объекта: id с учётом подмен (ЛДФ, ДПМГ) и состояния шлюза — открытый
 ## шлюз (высота ниже стены) рисуется разъехавшимися створками.
 static func tile_name(cell: GridCell) -> String:
-	var fid := cell.feature_id
-	if fid == MCF.FEATURE_AIRLOCK and cell.cover_height < MCF.WALL_HEIGHT:
-		return "airlock_open"
-	return Sprites.ALIASES.get(fid, fid)
+	return Sprites.ALIASES.get(cell.feature_id, cell.feature_id)
 
 ## Маска автотайла: соседи по четырём сторонам из того же семейства (Sprites.AUTOTILE_*).
 static func mask_at(grid: Grid, c: Vector2i, fid: String) -> int:
@@ -636,7 +959,13 @@ static func mask_at(grid: Grid, c: Vector2i, fid: String) -> int:
 	return mask
 
 ## Плитка объекта для отдельной отрисовки поверх куска (снимок «до взрыва» на время броска).
-func draw_feature_tile(ci: CanvasItem, fid: String, c: Vector2i, rect: Rect2) -> void:
+## closed — дверь нарисовать закрытой, как бы ни стояла (под туманом её помнят закрытой).
+func draw_feature_tile(ci: CanvasItem, fid: String, c: Vector2i, rect: Rect2, closed := false) -> void:
+	if fid == MCF.FEATURE_AIRLOCK and _grid.in_bounds(c):
+		var dimg := _door_image(_grid, c, _grid.cell_fast(c.x, c.y), TerrainTiles.T, closed)
+		if dimg != null:
+			ci.draw_texture_rect(_furniture_tex(dimg), rect, false)
+		return
 	if Furniture.is_furniture(fid):
 		var img := _furniture_image(c, fid, TerrainTiles.T)
 		if img != null:

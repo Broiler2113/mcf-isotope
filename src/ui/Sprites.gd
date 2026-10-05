@@ -45,14 +45,15 @@ const MANIFEST := [
 	["Map environments (a <tile>_<environment> file beats the plain one on that map)", [
 		"floor_station", "floor_bunker", "floor_town", "floor_field", "floor_asteroid",
 		"wall_station", "wall_bunker", "wall_town", "wall_field", "wall_asteroid",
-		"bedrock", "airlock_open",
+		"bedrock", "door_station", "door_open_station", "door_bunker", "door_open_bunker",
+		"door_town", "door_open_town", "door_field", "door_open_field", "door_asteroid", "door_open_asteroid",
 	]],
 	["Combat decoration (cosmetic only, never affects the rules)", [
 		"glass_shard", "shell_casing", "blood_pool", "blood_splatter",
 	]],
 	["Terrain features (one per object on a tile)", [
 		"drone_station", "sandbags", "hedgehog", "dirt_pile", "trench",
-		"wall", "glass", "ldf", "corpse_wall", "airlock",
+		"wall", "glass", "ldf", "corpse_wall", "door", "door_open",
 		"dpmg", "dot", "wood_wall", "sandbag_wall", "hedgehog_sandbags", "mine", "soil",
 	]],
 	["Soldiers (add a faction suffix for a faction-specific look, see below)", [

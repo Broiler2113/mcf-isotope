@@ -938,8 +938,9 @@ the same id that join up by autotiling (`join` in the table):
   shelf, and a segment is smashed or burnt on its own.
 Every cell keeps its own height and durability.
 
-**The table** is `src/data/Furniture.gd` (`_BASE`, 49 types in four palette groups —
-*Home*, *Office & shop*, *Industrial*, *Outdoor*). Each row gives name, height class,
+**The table** is `src/data/Furniture.gd` (`_BASE`, 54 types in four palette groups —
+*Home*, *Office & shop*, *Industrial*, *Outdoor*; 0.9.2 added toilet, sink, console,
+practice target and vent fan). Each row gives name, height class,
 material, durability, mobility (`PORTABLE` / `HEAVY` / `FIXED`), AP to smash, preferred
 rooms, preferred spot (`wall`, `corner`, `center`, `free`) and whether the generator uses
 it. A new piece is a new row plus, optionally, `textures/<id>.png`.
@@ -995,10 +996,11 @@ carry or drag furniture (§17 is unchanged; it walks, climbs and takes cover ove
 over any other object).
 
 **Weapons** converge on the same durability:
-- every **explosion** whose area touches a piece takes `Furniture.BLAST_DAMAGE` (2) off it
-  — a chair or desk goes with one blast, a wardrobe with two, a generator with three.
-  Furniture does **not** absorb a direct hit the way a pillbox does (`_pillbox_absorbs`
-  skips it): the blast happens in full.
+- every **explosion** whose area touches a piece **destroys it whole**, whatever its
+  durability (0.9.2 — there used to be survivors: a generator outlasted two blasts and a
+  frag grenade never touched furniture at all). Frag grenades included: furniture in
+  their X goes. Furniture does **not** absorb a direct hit the way a pillbox does
+  (`_pillbox_absorbs` skips it): the blast happens in full.
 - the **laser** burns through a piece for its current durability in potential (a chair 1,
   a wardrobe 3, a generator 5) and carries on, or stops in it if it can't pay.
 - **fire**: wood, fabric and plastic catch like a wooden wall (3/6) and burn away with
@@ -1537,12 +1539,32 @@ takes it out whole. Its splash immunity lives in one place — it is simply abse
 `_blast_destroy_terrain`'s destructible list.
 
 **Armored glass** is ordinary glass in every respect — you see through it, shoot
-through it, a beam passes it, and it burns away when the tile ignites — save for one
-roll. Every shot **at or through** it rolls a d6: on **4+** the pane holds, the bullet
-stops dead and the glass survives; below that the shot passes and the pane shatters as
-ordinary glass does. A blast rolls the same single die rather than ordinary glass's two
-against 6+. Everywhere the rules treat glass as special they now ask `MCF.is_glass()`,
-so both kinds travel together.
+through it, a beam passes it, and it burns away when the tile ignites — save for its
+save: against bullets it holds on **4+** where ordinary glass holds on 5+ (§16.2d). A
+blast rolls a single die against 4+ rather than ordinary glass's two against 6+.
+Everywhere the rules treat glass as special they ask `MCF.is_glass()`, so both kinds
+travel together.
+
+### 16.2d Shooting at and through glass (0.9.2)
+
+**At a window.** Shooting a window is an ordinary burst: 1 AP starts it, the player picks
+how many bullets to fire (1 … rate of fire, or All), and the rest of the burst can be fired
+later without AP — at the window again or at anyone else (`ActionState.WINDOW`). Each
+bullet rolls **to hit the window** like a shot at a target (`pane_hit_need`: the distance
+table, the sniper's own ladder, fire on the line −1; no cover), the window **saves**
+against every bullet that hit it (ordinary 5+, armored 4+), and if at least one bullet got
+through, the window shatters.
+
+**Through glass.** When glass stands between the shooter and the target, the burst meets
+the panes **one by one, from the shooter**: (1) the bullets still flying roll to hit the
+pane — a miss hits the frame or the wall around it and is gone; (2) the pane saves against
+each bullet that hit it; (3) if one got through, the pane shatters — its dice show first,
+then the shards fly, before anything further is rolled; (4) only the bullets that got
+through fly on, to the next pane or to the target, where the usual to-hit and defence
+rolls follow. Bullets of one burst fly together, so they all meet each pane intact. Both
+kinds of glass count (armored glass on the line used to be skipped). The dice show each
+pane as its own step (`"kind": "glass"` events); a burst that dies in the glass shows no
+target roll at all. The laser and blasts keep their own glass rules.
 
 ### 16.3 Movement
 
@@ -2282,18 +2304,25 @@ MainMenu → Setup → Placement → Main (battle)
   BRU black-monolith special case (§18.6). Same tags, same colours, same heights — what
   you deploy onto is what you fight on.
 - **Map Editor** (rebuilt in editor-rework, laid out "like Paint" at the owner's choice).
-  Menu bar on top — **File** (New, Open, Save, Save As, Play This Map, Exit), **Edit**
+  Menu bar on top — **File** (New, Open, Save, Play This Map, Exit; *Save As* is gone —
+  an untitled map asks for its name on the first Save), **Edit**
   (Undo, Redo, Cut, Copy, Paste, Delete, Select All, Rotate / Flip pasted, Clear Map;
   items with nothing to do are greyed out), **View** (zoom, Fit Map, Grid, Deployment
   Zones, Minimap, Keyboard Shortcuts) and **Map** (Resize, Preset) — with the tool
   options (brush size, *Filled*, Symmetry) and **Play** on the same strip. An icon
-  toolbar on the left: **Brush, Eraser, Line, Rectangle, Fill, Select, Eyedropper,
-  Stamp** (keys B E L R F M I T). A palette on the right shows the **real tile
-  thumbnails** of the map's preset: Terrain, Walls & doors, Objects, four **Furniture**
-  groups (each button shows the piece's name and height, its tooltip material,
-  durability, mobility and AP to smash — §9.9), Neutral units, Deployment zones (1–8,
-  *More zones* for all 26) and Stamps. Status bar and a
-  **minimap** (click or drag to move the view) at the bottom.
+  toolbar on the left (chunky 12×12 pixel-art icons): **Brush, Eraser, Line, Rectangle,
+  Circle, Fill, Select, Eyedropper, Stamp** (keys B E L U C F M I T; 0.9.2 moved Rectangle
+  to U and added Circle — a circle or oval inscribed in the dragged box, *Filled* for a
+  disc). **R** turns things: what is being placed, the selection in place (a click with
+  Select picks a whole furniture piece or run), or the furniture brush a quarter at a time
+  (Shift+R — back to turning to the wall by itself); a turned piece keeps its turn in the
+  map (`MapData.feature_turn`). **+ / −** zoom, **Esc** cancels and, with nothing to
+  cancel, leaves the editor (asking first if the map is unsaved). A palette on the right
+  shows the **real tile thumbnails** of the map's preset: Terrain (with the room floors),
+  Walls & doors, Objects, four **Furniture** groups, each split by height (Low 0.5 m,
+  Waist 1 m, Chest 1.5 m, Tall 2 m; the tooltip gives material, durability, mobility and
+  AP to smash — §9.9), Neutral units, Deployment zones (1–8, *More zones* for all 26) and
+  Stamps. Status bar and a **minimap** (click or drag to move the view) at the bottom.
 
   - **The canvas is the battle's own renderer.** `TerrainTiles` chunks on a `Grid` kept
     in step with `MapData` cell by cell; GridCell's look log marks the touched chunks
@@ -2421,7 +2450,7 @@ without scrolling.
 | Density | Sparse / Normal / Dense: rooms, houses, clutter. |
 | Layout | *Symmetrical* (off by default) — see below. |
 | Mechanics | *Space* (vacuum only — doors are airlocks either way, below), *Flammable*, *Obstacles* — each can be switched off on its own. |
-| Furniture | Off / Sparse / **Normal** / Dense / Very dense — how furnished the rooms are, independent of *Obstacles* — and *No / Light / Heavy wear* (below). |
+| Furniture | Off / Sparse / **Normal** / Dense / Very dense — how furnished the rooms are, independent of *Obstacles*. (The *wear* option is gone since 0.9.2.) |
 | Civilians | The lobby's *Civilians* slider, 0–200: how many neutrals the generator places (it is also the cap at match start, §14). |
 | Seed | The same seed and settings always build the byte-identical map. *Reroll* draws a new seed; *Save as Map* writes `user://maps/random-<style>-<seed>.json` (never over an existing file), after which it is an ordinary map — in the list and in the editor. |
 
@@ -2464,10 +2493,8 @@ must find the others. Outside rooms the same neighbour test is the only gate. On
 symmetrical map the source half is furnished and mirrored; a room straddling the axis
 stays empty.
 
-*Wear* (Light ≈12 %, Heavy ≈30 % of pieces): a piece is missing or smashed (whole pieces
-entirely), cracked (durability below the table's — saved in `MapData.feature_dur`), or a
-single-cell piece is pushed onto a neighbouring cell — but never in a way that seals a
-cell off.
+*Wear* was removed in 0.9.2 at the owner's request: generated furniture is always whole
+(an old saved option is ignored).
 
 **Every map has an environment (team-session batch, item 24).** `MapData.env` —
 `station`, `bunker`, `town`, `field` or `asteroid` — is set by the generator (from the
@@ -2478,18 +2505,36 @@ metal bulkheads and deck plate on stations, poured concrete in bunkers, brick on
 in towns, brick on regolith on asteroids, board-formed concrete and dirt in the field.
 
 **Styles.**
-- *Station* — a facility of sectors and hallways. The footprint is split recursively
-  (BSP) and **every split line is a hallway** — 2–3 wide at the top level, 1–2 deeper —
-  running the full length of its piece, so each hallway ends on the one above it and the
-  network is connected by construction. Each sector is divided into rooms that share
-  walls; every dividing wall has a door (sometimes two), and every sector has at least one
-  door onto a hallway (roughly every other room facing a hallway gets one), so every room
-  is reachable. A new dividing wall never ends against an existing door. Up to a fifth of
-  the sectors — edge ones more often — are left empty: open space the hallways pass as
-  windowed tubes. Every map, even Small, gets at least one hallway. Outside the hull is
-  space, or solid rock with Space off. With Space on, about one room in 40 is vented
-  (zero-G), and the hull gets windows and a few exterior airlocks. Obstacles: pillars in
-  big halls, stacks of crates (wooden 2 m crates on plank decks), sandbags in hallways.
+- *Station* — a facility of **departments** (0.9.2, the owner's design). The footprint is
+  split recursively (BSP) and every split line is a passage running the full length of
+  its piece, so the network is connected by construction: the top two levels are **main
+  corridors** (2–3 wide), deeper lines are 1-wide **maintenance tunnels** (grating floor)
+  that weave between the departments. Each sector becomes one department, by priority and
+  map size — *Bridge*, *Service*, *Engineering*, *Medical*, *Security*, *Supply*,
+  *Production*, *Research*, then *Misc* and repeats on big maps (`MapGen.DEPARTMENTS`,
+  `DEPT_ORDER`). The bridge takes the sector nearest the middle, Service one of the three
+  next to it, Production the sector **farthest from Service**, and Engineering, Supply
+  and Research prefer sectors on the hull. Inside a department: a **reception** (on the
+  bridge the command centre, in Service a lounge) opens onto the main corridor; behind it
+  runs the department's own corridor, and every other room opens only onto that corridor
+  (back doors only to maintenance tunnels) — so no inner room of Medical or Security, or
+  of anyone else, opens onto a main corridor. Rooms by department: Service — kitchen,
+  mess, restroom, quarters, laundry; Medical — ward, surgery, supply storage, restroom;
+  Security — briefing room, armory, holding cells; Research — testing range, laboratory,
+  assembly workshop, supply storage; Production — machine shops, assembly, warehouse,
+  dock; Supply — warehouse, dock, storage; Engineering — power distribution, water
+  processing, air exhaust, dock, supply storage; Bridge — command centre with consoles,
+  captain's quarters and a **hidden storage** whose only door is into the captain's
+  quarters. Small maps build only the first departments, with fewer rooms. A **dock** and
+  the **testing range** take the biggest room on the hull and get a 2–3-cell airlock
+  straight into space (in a bunker, or with Space off, the dock stays a sealed cargo bay).
+  Maintenance: a few rooms against a tunnel become utility rooms with a door only into
+  the tunnel — always a **waste recycling** room — and tunnels ending at the hull get an
+  airlock out to a field of **solar panels** (a floor look on space cells). Up to a fifth
+  of the sectors — edge ones more often — are left empty: open space the corridors pass
+  as windowed tubes. With Space on, about one room in 40 is vented (zero-G), and the hull
+  gets windows and a few exterior airlocks. Obstacles: pillars in big halls, stacks of
+  crates (wooden 2 m crates on plank decks), sandbags in main corridors.
 - *Asteroid* (team-session batch) — a little island in space with a town on it: a
   ragged ellipse of rock and regolith, a town of the chosen *Density* built inside it,
   craters of dirt piles, and vacuum all around (Space on, Flammable off by default).
@@ -2498,8 +2543,14 @@ in towns, brick on regolith on asteroids, board-formed concrete and dirt in the 
   the rooms and hallways is solid rock, never vacuum (no vented room, no hull), so the
   Space toggle does nothing here. With Space off, a bunker and a station of the same seed
   are the byte-identical map.
-- *Town* — a jittered street grid. Blocks become brick or wooden houses (doors, glass
-  windows, a partition in big ones) or grass lots. Obstacles: barricades across streets
+- *Town* — a jittered street grid in **districts** (0.9.2): an industrial edge
+  (warehouses, factories, garages — on the asteroid, mining sheds; one big building per
+  block, few windows), a commercial centre (shops, offices, restaurants with shop windows),
+  one or two civic buildings on big maps (police station, clinic) and homes everywhere
+  else (houses, apartment blocks). The building's kind picks its rooms (`MapFurnish._part_of`:
+  the biggest is the main room, a room of ≤ 8 cells is a bathroom), and most buildings
+  get a small corner **bathroom** with a toilet. Blocks become brick or wooden buildings
+  (doors, glass windows, a partition in big ones) or grass lots. Obstacles: barricades across streets
   with one gap, hedgehogs on the paving, trenches and sandbag nests in the lots. With
   Space on, the town stands on a platform with a ragged edge and holes.
 - *Field* — grass in patches, ruins, rock outcrops, and huts: small 5–7 × 5–6 houses
@@ -2508,6 +2559,14 @@ in towns, brick on regolith on asteroids, board-formed concrete and dirt in the 
   Obstacles: trenches, hedgehog belts (every other cell, so they can be jumped), horseshoe
   sandbag nests, and wooden fences when Flammable is on. Space adds chasms and a ragged
   edge.
+
+**Room floors (0.9.2).** Every room gets a floor by its purpose — wood, parquet, tiles,
+checker tiles, red or blue carpet, linoleum, steel plate, grating (`MapFurnish.FLOOR_BY_KIND`,
+picked by a hash of the room, never from the generator's random streams). The look is
+**display only** (`MapData.floor_look`, `Grid.floor_look`, `MCF.FLOOR_LOOKS`): fire still
+asks `floor_type`, and plank floors always look like wood. It is saved with maps
+(`floor_look`, run-length) and games (`StateCodec` `decor`), mirrored with the map, and
+painted in the editor from the Terrain group. Floors are laid even with Furniture *Off*.
 
 **Every door is an airlock.** Every doorway of every room, house and hut — whatever the
 Space toggle — gets an airlock (`MapGen._seal_doors`, run right after the structure and
@@ -2614,6 +2673,12 @@ maps.
   (`SteamChrome.group_box`), and one **accent colour** for checks, radios, progress fills,
   selections and status text. Accent pieces are drawn at runtime from `Ui.PALETTES`
   (eight colours), so changing the accent needs no files.
+- **Font (0.9.2).** The whole game — UI, the dice, labels drawn on the board
+  (`ThemeDB.fallback_font`) — uses **Handjet**, a slightly pixelated font (SIL OFL,
+  `fonts/OFL.txt`). `fonts/handjet_ui.ttf` is Handjet with a smaller `unitsPerEm`, so text
+  at the old sizes has the old x-height; spaces are 2 px wider. The bold Courier that status
+  lines and value boxes used is gone: they are bold Handjet in the accent colour
+  (`Ui.bold_font`). A `ui_font.ttf` dropped by the player still overrides it.
 - **Main-menu background (item 35):** `Starfield` replaces the flat `ColorRect` with a
   gradient sky and three star layers drifting at 5 / 13 / 28 px per second — the *speed
   difference* is the whole parallax. Each layer is one 512-px tile tiled across the
@@ -2648,7 +2713,24 @@ maps.
   sheets stacked); the variant is a hash of the cell, so neighbours differ and the same
   cell always looks the same. Autotiling joins **families**, not just one id (walls,
   glass, airlocks, pillboxes, LDF blocks and corpse walls join each other; sandbags join sandbags;
-  trenches join trenches). The generator takes about a minute.
+  trenches join trenches; a sandbag or trench cell whose diagonal is the same family
+  fills its corner notch — no holes where four cells meet). The generator takes about a
+  minute (`-- --furniture`, `-- --doors`, `-- --floors` regenerate just those).
+- **Doors seen from the front (0.9.2).** An airlock or door is drawn as the wall of its
+  environment (the wall sheet, by the wall family's mask) with a door **seen from the
+  front** over it — the same face in walls of any direction: a sliding hatch with a window
+  and a red/green lamp on stations, a blast door with a wheel in bunkers and on asteroids,
+  a panelled wooden door in towns, a plank door in fields; three variants each, chosen by
+  cell, and an open state (a dark doorway with the leaf at the hinge, or the door's edge).
+  Files: `door[_open]_<env>.png`. Under fog a remembered door is drawn closed.
+- **Damage you can see (0.9.2).** A pillbox (plain or with embrasures) that lost
+  durability shows cracks in its own tile — three crack patterns so neighbours differ, and
+  on the embrasure they run from the slit's corners and chip its edges without crossing it.
+- **Furniture corners (0.9.2).** A one-cell-wide furniture shape with a turn — an L sofa,
+  an L counter, a ring of reception desks, a U of shelves — keeps one back side along its
+  whole length (to the walls, without walls outward) and mitres its corners from two
+  straight sections (`TerrainTiles._path_look`, `_corner_tile`), so the back no longer
+  breaks at the corner.
 - **Wall autotiling (batch 17, item 12).** A feature may ship a 4×4 sheet
   `<feature>_autotile.png`; `Sprites.draw_feature` picks the tile from the four
   orthogonal neighbours carrying the same feature id (`N·1 + E·2 + S·4 + W·8`, column =
@@ -3205,6 +3287,7 @@ number appears elsewhere in this document it is because the source comments cite
 | 103 | One unit per cell is enforced by the board itself — `Grid.place` and `move_occupant` refuse to overwrite an occupant and report failure, so no two soldiers, civilians or AI units can ever share a tile (§2.2); hovering a green move tile draws the **cheapest actual route** to it out of the Dijkstra tree, and every green tile is labelled with what standing there costs out of the movement total (§18.3); a marksman's laser no longer reaches a man in a trench from a tile that is not one, at any range including adjacent (§6.6, §7.3); NPC civilians and the army are driven by **one brain** — the second, cell-at-a-time civilian AI is deleted and a civilian is now an `AIController` with the Neutral owner, so it plans, fragments its movement, fires partial bursts and hauls corpses by the army's rules (§14, §17); the AI uses fragmented movement and partial bursts — `move_credit` is a spendable budget, a step costs score, and a burst orders `ceil(1/p)` bullets instead of the whole magazine (§17.3); an anti-tank sapper cut off by a wall **blasts through it** instead of shuffling along it (§17.3, §7.1); the AI and civilians pick up bodies that block the road and **stack them aside into piles**, the fifth forming a corpse wall (§17.3, §8.4); at least 80% of an army must act each turn and **every** civilian must, enforced by a second forced pass over whoever the plan left idle (§17.2); Player 1 can be an AI too, so AI-vs-AI matches run from Setup or a mid-battle toggle (§17.4); and the camera zooms out to 0.12 so a 60×40 board fits on one screen (§18.4) |
 | 104 | The map editor can be left the way it was entered: the **"To Demo Game"** button is gone, replaced by **"Main Menu"**, which clears `MapHandoff.pending` and returns to `MainMenu.tscn` instead of dumping the designer into a demo battle on the built-in roster (§19) |
 | 105 | A marksman firing **from** a trench is as boxed in as a marksman firing **into** one: the laser cannot climb out of the ditch any more than it could drop into it, so from the trench floor the only reachable target is one lying in the **same continuous run** of trench, along a straight line with no gap — a bend or a break means the beam hits the earth wall. The trench is now symmetric cover against the beam instead of a firing position that ignored its own walls (§6.6, §7.3) |
+| 124 | **Release 0.9.2** (issues-fix-4) — **Glass** (§16.2d): window shots are a normal burst with a chosen bullet count, and glass on the line is crossed pane by pane (hit the pane, it saves, it shatters, survivors fly on; misses are lost; armored glass counts). **Before / After** is a toggle in the battle sidebar that shows the opening board (terrain, room floors, units, vehicles) over the live one (`Main._capture_opening_view`, `BeforeLayer`); the end-of-battle comparison is gone. **Editor**: edits after the cursor preview no longer vanish from the canvas — the preview's log snapshot aliased the live packed arrays (`GridCell.logs_snapshot` copies them); the minimap shows objects on grass; New Map no longer reads freed fields after the "lose changes" confirm; Circle tool (C), Rectangle on U, + / − zoom, Esc to leave, Save As removed, R turns furniture (brush, selection, saved `feature_turn`), furniture palette by height, room-floor brushes, chunkier icons, padded panels. **Furniture**: wear removed; every blast (frag grenades too) destroys any piece; L/ring shapes keep one back and mitre their corners; sandbag/trench fields have no corner holes; new toilet, sink, console, practice target, vent fan. **Look**: Handjet font everywhere, mono status text gone (bold accent Handjet); doors and airlocks seen from the front; cracked pillbox tiles. **Maps**: stations and bunkers by department, towns by district, room floors by purpose (display-only `floor_look`), toilets, solar panels (§20.2). Tests: `tests/run_batch092.gd`, editor checks in `run_editor.gd`. |
 | 123 | **Furniture doesn't re-join in battle** (§9.9) — the battle screen snapshots each furniture cell's joins, inner corners and turn when the match opens (`TerrainTiles.freeze_furniture`, `Main._furniture_look`) and draws from the snapshot: smashed, burnt or flattened cells leave their neighbours as they were (half a bed stays half a bed), a blown wall doesn't turn the furniture beside it, and a piece dragged to a new cell joins nothing. Generator, editor and deployment screen still join live. Rules unchanged. Tests: frozen-look checks in `run_furniture.gd`. |
 | 122 | **Furniture and editor polish** (§9.9) — 8 new pieces (potted plant, TV stand, stove, piano, bunk bed, water cooler, washing machine, fuel tank) and colour variants (`Furniture.VARIANTS`) that keep the base piece's rules; random maps and street clutter pick a colour once per recipe step; different colours never join. Joined tiles have no seam between cells, and L-shaped pieces cut their inner corners. Editor: fixed the typed-array error that broke every tool but Brush and Eraser (R → Rectangle tool hit the same error, and the game paused in the debugger). The preview under the cursor is now drawn by `TerrainTiles` on a scratch grid (`TerrainTiles.scratch`, with `origin` for the variant hashes). That gives the brush, line, rectangle, fill, stamps and pastes exactly the tiles they will place: walls join their neighbours, doors turn with the wall, furniture joins and turns to the wall. Brush previews draw at 50 %, patterns at 75 %, and oversized pastes fall back to palette pictures. The palette has one button per piece, a *Colour* row under the brush name, and wrapped labels. The cell grid in the battle screen, deployment screen and editor is now drawn between the floor and the objects (`TerrainTiles.draw_grid`): it shows on floors and no longer cuts across walls or multi-cell furniture. A whole piece puts its headboard only on a short side and a sofa or desk back only on a long side; with no wall there, it takes the default turn instead of turning sideways to the wall. |
 | 121 | **Furniture** (§9.9, §20.2) — 41 pieces as ordinary cell features in `src/data/Furniture.gd`, multi-cell beds, tables, sofas, desks, machinery (whole pieces) and counters, shelving, lockers (runs) joined by autotiling: heights 0.5/1/1.5/2 m through `cover_height` (climbed by the usual costs, 2 m is a wall), a furniture-only −3 cover at 1.5 m, carrying portable pieces (`CarryIntent`, put down free via `UseItemIntent`), dragging heavy single-cell ones through Grab (nothing that is part of a multi-cell structure can be grabbed), any soldier smashing furniture for 1–3 AP via `BreakIntent`, blasts/laser/fire/tracks by durability and material; baked into the tile chunks turned to the wall, cracked when damaged; editor palette groups; `MapData.feature_dur` for damaged pieces. Random maps gain a FURNITURE phase (`MapFurnish`): room purposes per style, recipe placement, clutter, wear, walkways kept by construction; lobby *Furniture* (Off…Very dense, default Normal, independent of *Obstacles*; furnished station/bunker rooms skip the obstacle crate piles) and *wear*. Tests: `tests/run_furniture.gd`, editor checks in `run_editor.gd`; the perf bench pins furniture Off and now compares the full board after save/load and replay. |

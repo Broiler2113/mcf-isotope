@@ -281,12 +281,16 @@ func _weapons() -> void:
 	var res := ActionResult.success([])
 	r._blast(Vector2i(8, 5), res)
 	ck(st.grid.cell(Vector2i(8, 5)).feature_id == "", "a blast blows the chair at its centre away")
-	ck(st.grid.cell(Vector2i(9, 5)).feature_id == "", "and the desk beside it (2 durability)")
-	ck(st.grid.cell(Vector2i(8, 6)).feature_id == "generator" and st.grid.cell(Vector2i(8, 6)).feature_durability == 3,
-			"the generator survives one blast, down to 3")
-	r._blast(Vector2i(8, 5), res)
-	r._blast(Vector2i(8, 5), res)
-	ck(st.grid.cell(Vector2i(8, 6)).feature_id == "", "and goes with the third")
+	ck(st.grid.cell(Vector2i(9, 5)).feature_id == "", "and the desk beside it")
+	ck(st.grid.cell(Vector2i(8, 6)).feature_id == "", "a blast takes even the generator (durability 4) in one go (0.9.2)")
+	# Осколочная граната тоже сносит мебель (раньше — нет).
+	st.grid.cell(Vector2i(13, 3)).set_feature("wardrobe")
+	var thrower := st.grid.cell(Vector2i(18, 1)).occupant
+	var fr := r._explode_frag(thrower, Vector2i(12, 2))
+	ck(st.grid.cell(Vector2i(12, 2)).feature_id == "" and st.grid.cell(Vector2i(13, 3)).feature_id == ""
+			and st.grid.cell(Vector2i(13, 2)).feature_id == "server_rack",
+			"a frag grenade blows away furniture in its X (crate, wardrobe) and spares the side cells")
+	ck(fr.ok, "frag result ok")
 	# Луч: стул за 1, шкаф за 3 — оба сгорают, луч летит дальше.
 	var mk := st.grid.cell(Vector2i(1, 9)).occupant
 	var plan := r.laser_preview(mk, Vector2i(10, 9))
@@ -459,10 +463,11 @@ func _generation() -> void:
 	var normal := _count(_gen(MapGen.Style.STATION, 2, 7))
 	var dense := _count(_gen(MapGen.Style.STATION, 4, 7))
 	ck(sparse < normal and normal < dense, "density grows Sparse %d < Normal %d < Very dense %d" % [sparse, normal, dense])
-	var worn := _gen(MapGen.Style.BUNKER, 3, 9, {"furniture_damage": 2})
+	# Износа нет (0.9.2): старый ключ настроек ничего не меняет, побитой мебели не бывает.
+	var old_key := _gen(MapGen.Style.BUNKER, 3, 9, {"furniture_damage": 2})
 	var clean := _gen(MapGen.Style.BUNKER, 3, 9)
-	ck(not worn.feature_dur.is_empty() and _count(worn) < _count(clean),
-			"heavy wear leaves dents (%d) and gaps (%d of %d)" % [worn.feature_dur.size(), _count(worn), _count(clean)])
+	ck(old_key.feature_dur.is_empty() and old_key.to_dict() == clean.to_dict(),
+			"no furniture wear: generated furniture is whole, an old 'wear' setting changes nothing")
 	var sym := _gen(MapGen.Style.STATION, 3, 13, {"symmetric": true})
 	var asym := 0
 	for y in sym.height:
@@ -478,13 +483,13 @@ func _generation() -> void:
 	var bad := 0
 	for style in 5:
 		for seed: int in [301, 302, 303]:
-			var o := {"furniture_damage": seed % 3, "symmetric": seed == 303, "size": 1 + seed % 2}
+			var o := {"symmetric": seed == 303, "size": 1 + seed % 2}
 			var packed := _gen(style, 4, seed, o)
 			var bare := _gen(style, 0, seed, o)
 			if _cut_off(bare, packed) > 0 or not _no_furniture_at_doors(packed):
 				bad += 1
 				print("     walkway broken: style %d seed %d" % [style, seed])
-	ck(bad == 0, "15 very dense, worn, some mirrored maps keep every walkway and doorway (%d broken)" % bad)
+	ck(bad == 0, "15 very dense, some mirrored maps keep every walkway and doorway (%d broken)" % bad)
 
 ## Каждый цельный предмет на карте — ровно один из своих следов (прямоугольник нужных
 ## размеров, ничего не срослось), и у всех его клеток один поворот плитки.

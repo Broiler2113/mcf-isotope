@@ -20,6 +20,10 @@ const FONT_BASE := "res://interface_textures/ui_font"
 const FONT_EXTS := ["ttf", "otf"]
 const SLICE := 6          # 9-slice border, matches the 32px generated chrome
 const FONT_FALLBACKS := ["Tahoma", "Verdana", "Geneva", "DejaVu Sans", "Arial", "Helvetica"]
+## Шрифт игры (0.9.2): слегка пиксельный Handjet (SIL OFL, fonts/OFL.txt). Файл — тот же
+## Handjet с увеличенным на 16 % кеглем (меньше unitsPerEm): при прежних размерах (13 и
+## т. д.) строчные такой же высоты, как у прежнего Tahoma, и раскладка окон не поехала.
+const GAME_FONT := "res://fonts/handjet_ui.ttf"
 
 # --- palette (gunmetal-gray "2003 Steam" skin) -----------------------
 # item 8: серые части меню сделаны заметно темнее (примерно на четверть). Один и тот
@@ -232,8 +236,12 @@ func _build() -> Theme:
 	var t := Theme.new()
 	var font := _font()
 	_ui_font = font
+	_bold_cache = null
 	t.default_font = font
 	t.default_font_size = 13
+	# Строки, что рисуются прямо на холсте (номера зон, метки бойцов), берут шрифт
+	# движка по умолчанию — пусть и это будет шрифт игры.
+	ThemeDB.fallback_font = font
 
 	# ---- Label -------------------------------------------------------
 	t.set_color("font_color", "Label", TEXT)
@@ -432,7 +440,36 @@ func _font() -> Font:
 	var sf := SystemFont.new()
 	sf.font_names = PackedStringArray(FONT_FALLBACKS)
 	sf.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_AUTO
-	return sf
+	var game := load(GAME_FONT) as FontFile if ResourceLoader.exists(GAME_FONT) else null
+	if game == null:
+		return sf
+	# Пиксельный шрифт — без хинтинга и дробных позиций: штрихи остаются на сетке.
+	game.hinting = TextServer.HINTING_NONE
+	game.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_DISABLED
+	game.fallbacks = [sf]   # чего в Handjet нет (✓ и пр.) — системным шрифтом
+	# Пробел у Handjet узкий — слова слипались («Turn-basedtactics»); чуть шире.
+	var fv := FontVariation.new()
+	fv.base_font = game
+	fv.spacing_space = 2
+	return fv
+
+## Жирное начертание шрифта игры: у Handjet настоящая ось веса, а не обводка.
+var _bold_cache: FontVariation = null
+func bold_font() -> Font:
+	if _bold_cache == null:
+		_bold_cache = FontVariation.new()
+		var base := get_ui_font()
+		if base is FontVariation and (base as FontVariation).base_font is FontFile:
+			# Жирный Handjet по оси веса; буквам — точку воздуха, иначе они сливаются.
+			var ts := TextServerManager.get_primary_interface()
+			_bold_cache.base_font = (base as FontVariation).base_font
+			_bold_cache.variation_opentype = {ts.name_to_tag("wght"): 650}
+			_bold_cache.spacing_space = 2
+			_bold_cache.spacing_glyph = 1
+		else:
+			_bold_cache.base_font = base
+			_bold_cache.variation_embolden = 0.55
+	return _bold_cache
 
 var _tex_cache: Dictionary = {}
 var _ui_font: Font = null
@@ -634,21 +671,17 @@ func _bevel(img: Image, body: Color, tl: Color, br: Color) -> void:
 # =====================================================================
 #  Готовые оформления элементов набора
 # =====================================================================
-var _mono: SystemFont = null
-
+## Бывший моноширинный Courier (строки состояния, окошки значений) убран из игры по
+## просьбе игрока (0.9.2): там теперь жирный шрифт игры цветом акцента.
 func mono_font() -> Font:
-	if _mono == null:
-		_mono = SystemFont.new()
-		_mono.font_names = PackedStringArray(["Courier New", "DejaVu Sans Mono", "Liberation Mono", "monospace"])
-		_mono.font_weight = 700
-	return _mono
+	return bold_font()
 
 ## Окошко значения у ползунка (.slider-value): утопленное, жирный моноширинный шрифт.
 func style_value_box(lbl: Label) -> void:
 	lbl.add_theme_stylebox_override("normal", _sb("panel_sunken", 6, 3))
 	lbl.add_theme_font_override("font", mono_font())
 	lbl.add_theme_font_size_override("font_size", 12)
-	lbl.add_theme_color_override("font_color", Color("#d0d0d0"))
+	lbl.add_theme_color_override("font_color", _pal["text"])
 
 ## То же окошко, но в него можно ВПЕЧАТАТЬ число (batch ui-drones): Enter или уход фокуса
 ## ставят ползунок на введённое значение (в его пределах и с его шагом). Понимает «12»,
@@ -660,7 +693,7 @@ func slider_entry(s: Range, fmt: Callable, on_commit: Callable = Callable()) -> 
 		e.add_theme_stylebox_override(st, _sb("panel_sunken", 6, 3))
 	e.add_theme_font_override("font", mono_font())
 	e.add_theme_font_size_override("font_size", 12)
-	e.add_theme_color_override("font_color", Color("#d0d0d0"))
+	e.add_theme_color_override("font_color", _pal["text"])
 	e.alignment = HORIZONTAL_ALIGNMENT_CENTER
 	e.select_all_on_focus = true
 	e.context_menu_enabled = false

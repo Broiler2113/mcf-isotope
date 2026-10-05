@@ -35,6 +35,18 @@ func _initialize() -> void:
 		print("furniture textures written to %s in %d ms" % [OUT, Time.get_ticks_msec() - t0])
 		quit()
 		return
+	# `-- --floors` — только виды пола комнат (0.9.2).
+	if "--floors" in OS.get_cmdline_user_args():
+		_floor_looks()
+		print("floor looks written to %s in %d ms" % [OUT, Time.get_ticks_msec() - t0])
+		quit()
+		return
+	# `-- --doors` — только двери (0.9.2), остальное байт в байт.
+	if "--doors" in OS.get_cmdline_user_args():
+		_doors_all()
+		print("door textures written to %s in %d ms" % [OUT, Time.get_ticks_msec() - t0])
+		quit()
+		return
 	# --- Пол: общий и по окружениям (item 24) ---
 	_strip("floor", _steel_deck)
 	_strip("floor_station", _steel_deck)
@@ -47,6 +59,7 @@ func _initialize() -> void:
 	_strip("floor_destroyed", _rubble)
 	_strip("floor_epicenter", _scorch)
 	_strip("bedrock", _bedrock)
+	_floor_looks()
 	_save("fire", _fire())
 	# --- Стены и прочие стыкующиеся объекты ---
 	_sheet("wall", _board_concrete, Color8(128, 126, 120), 3)
@@ -64,15 +77,8 @@ func _initialize() -> void:
 	_sheet("dot_open", _embrasure, Color8(110, 110, 104), 3)
 	_sheet("ldf", _monolith, Color8(40, 40, 44), 3)
 	_sheet("corpse_wall", _flesh_pile, Color8(96, 44, 38), 2)
-	_sheet("airlock", _blast_door, Color8(150, 130, 60), 3)
-	_sheet("airlock_open", _blast_door_open, Color8(150, 130, 60), 3)
-	# Город и поле (gore batch): вместо гермодвери — обычная тяжёлая дверь в бетонной раме,
-	# закрытая и распахнутая. Правила те же (это всё тот же шлюз), меняется только вид;
-	# TerrainTiles берёт «airlock_<окружение>» сам. Астероид остаётся с гермодверью.
-	_sheet("airlock_town", _door.bind(false, _street), Color8(96, 92, 86), 0)
-	_sheet("airlock_open_town", _door.bind(true, _street), Color8(96, 92, 86), 0)
-	_sheet("airlock_field", _door.bind(false, _dirt), Color8(96, 92, 86), 0)
-	_sheet("airlock_open_field", _door.bind(true, _dirt), Color8(96, 92, 86), 0)
+	# Двери и шлюзы (0.9.2) — «спереди», поверх стены окружения: _doors_all.
+	_doors_all()
 	_sheet("sandbags", _sandbag, Color8(160, 142, 100), 2, 5)
 	_sheet("sandbag_wall", _sandbag, Color8(150, 132, 92), 2, 2)
 	# Окоп — без кромки и отступа: он врезан В землю, свою тень рисует сам (_trench).
@@ -463,27 +469,6 @@ func _flesh_pile(x: int, y: int, v: int, _mask: int) -> Color:
 
 ## Гермодверь шлюза: стальная плита с жёлто-чёрной полосой поперёк прохода. В
 ## горизонтальной стене (соседи слева/справа) проход вертикальный, и наоборот.
-func _blast_door(x: int, y: int, _v: int, mask: int) -> Color:
-	var horiz := mask & (2 | 8) != 0 or mask & (1 | 4) == 0
-	var a := x if horiz else y   # вдоль стены
-	var b := y if horiz else x   # поперёк — по проходу
-	var c := _shade(Color8(92, 94, 98), 0.86 + 0.16 * _fbm(x, y, 201, 3))
-	if b >= 12 and b <= 19:
-		c = Color8(198, 166, 40) if posmod(a + b, 8) < 4 else Color8(30, 28, 24)
-	elif b == 11 or b == 20:
-		c = _shade(c, 0.5)
-	if a % 16 == 0:
-		c = _shade(c, 0.6)
-	return c
-
-## Открытый шлюз: створки ушли в стену — посередине пол прохода, по краям рамы.
-func _blast_door_open(x: int, y: int, v: int, mask: int) -> Color:
-	var horiz := mask & (2 | 8) != 0 or mask & (1 | 4) == 0
-	var a := x if horiz else y
-	if a >= 5 and a <= 26:
-		return _steel_deck(x, y, v)
-	return _shade(_blast_door(x, y, v, mask), 0.85)
-
 ## Мешки с песком: ряды мешков 11×6 вразбежку с тёмными складками.
 func _sandbag(x: int, y: int, v: int, _mask: int) -> Color:
 	var row := y / 6
@@ -542,49 +527,6 @@ func _trench(x: int, y: int, v: int, mask: int) -> Color:
 			return _shade(Color8(98, 76, 52), 0.9 + 0.2 * _fbm(x, y, 224) - 0.1 * k)
 	if _h(x + v * T, y, 225) > 0.97:
 		c = _shade(c, 1.35)   # камешки на дне
-	return c
-
-## Дверь города и поля (gore batch): бетонная рама по концам проёма, порог — пол
-## окружения, полотно — тяжёлые тёмные доски с двумя стальными полосами и ручкой.
-## Открытая — полотно повёрнуто на петле вдоль рамы, проход свободен.
-func _door(x: int, y: int, v: int, mask: int, open: bool, floor_fn: Callable) -> Color:
-	var horiz := mask & (2 | 8) != 0 or mask & (1 | 4) == 0
-	var a := x if horiz else y   # вдоль стены
-	var b := y if horiz else x   # поперёк — по проходу
-	var c: Color = floor_fn.call(x, y, v)
-	# Рама: бетонные косяки на всю толщину стены, с фаской.
-	if a <= 3 or a >= T - 4:
-		var post := _shade(Color8(124, 120, 112), 0.85 + 0.2 * _fbm(x, y, 271))
-		if a == 0 or a == T - 1:
-			post = _shade(post, 0.55)
-		elif a == 3 or a == T - 4:
-			post = _shade(post, 0.75)
-		return post
-	if not open:
-		if b >= 12 and b <= 19:
-			return _door_leaf(a, b, x, y)
-		if a >= 23 and a <= 24 and (b == 10 or b == 11 or b == 20 or b == 21):
-			return Color8(150, 146, 132)   # ручка с обеих сторон
-		if b == 11 or b == 20:
-			return _shade(c, 0.6)   # тень полотна на пороге
-		return c
-	# Открыто: полотно стоит вдоль левого косяка, распахнутое внутрь (вниз по проходу).
-	if a >= 4 and a <= 7 and b >= 16 and b <= T - 3:
-		return _door_leaf(b, a, x, y)
-	if a == 8 and b >= 17 and b <= T - 2:
-		return _shade(c, 0.6)
-	return c
-
-func _door_leaf(along: int, across: int, x: int, y: int) -> Color:
-	# Цельная тёмная плита: волокно вдоль полотна, две стальные полосы поперёк,
-	# светлая верхняя кромка и тёмная нижняя — читается как толщина двери.
-	var c := _shade(Color8(76, 52, 34), 0.82 + 0.24 * _tn(x, y, 2, 281, 16))
-	if along == 10 or along == 11 or along == 20 or along == 21:
-		c = _shade(Color8(88, 90, 94), 0.9 + 0.15 * _h(x, y, 282))
-	if across == 12:
-		c = _shade(c, 1.3)
-	elif across == 19:
-		c = _shade(c, 0.6)
 	return c
 
 # =====================================================================================
@@ -1124,6 +1066,26 @@ func _furniture_ops(fid: String) -> Array:
 		"street_cabinet":
 			return [["box", Rect2i(6, 4, 20, 13), Color8(110, 120, 112)], ["rect", Rect2i(8, 7, 7, 1), _shade(Color8(110, 120, 112), 0.6)],
 					["rect", Rect2i(19, 8, 4, 4), Color8(220, 190, 60)]]
+		# --- 0.9.2 ---
+		"toilet":
+			var porcelain := Color8(226, 228, 224)
+			return [["box", Rect2i(9, 2, 14, 7), porcelain], ["round", Rect2i(9, 8, 14, 17), porcelain],
+					["round", Rect2i(12, 11, 8, 10), Color8(150, 186, 196)], ["rect", Rect2i(14, 4, 4, 1), STEEL]]
+		"sink":
+			return [["box", Rect2i(5, 2, 22, 14), Color8(206, 208, 206)], ["round", Rect2i(9, 5, 14, 9), Color8(150, 176, 186)],
+					["dot", Vector2i(16, 3), STEEL_DARK], ["dot", Vector2i(16, 9), STEEL_DARK]]
+		"console":
+			return [["box", Rect2i(2, 2, 28, 15), Color8(64, 68, 76)], ["rect", Rect2i(5, 4, 22, 6), SCREEN],
+					["rect", Rect2i(6, 5, 8, 1), Color8(170, 230, 240)], ["rect", Rect2i(5, 12, 3, 2), LAMP_GREEN],
+					["rect", Rect2i(10, 12, 3, 2), LAMP_RED], ["rect", Rect2i(15, 12, 12, 2), Color8(150, 150, 140)]]
+		"target":
+			return [["box", Rect2i(14, 20, 4, 9), WOOD_DARK], ["round", Rect2i(7, 3, 18, 18), Color8(230, 226, 214)],
+					["round", Rect2i(10, 6, 12, 12), LAMP_RED], ["round", Rect2i(13, 9, 6, 6), Color8(230, 226, 214)],
+					["round", Rect2i(15, 11, 2, 2), LAMP_RED]]
+		"vent_fan":
+			return [["box", Rect2i(3, 3, 26, 26), STEEL], ["round", Rect2i(6, 6, 20, 20), STEEL_DARK],
+					["rect", Rect2i(15, 7, 2, 18), Color8(150, 154, 160)], ["rect", Rect2i(7, 15, 18, 2), Color8(150, 154, 160)],
+					["round", Rect2i(13, 13, 6, 6), Color8(176, 180, 186)]]
 	return [["box", Rect2i(6, 6, 20, 20), WOOD]]
 
 func _in_shape(kind: String, r: Rect2i, x: int, y: int) -> bool:
@@ -1158,3 +1120,283 @@ func _fill_material(img: Image, r: Rect2i, base: Color, round: bool) -> void:
 			elif not _in_shape(kind, r, x - 2, y) or not _in_shape(kind, r, x, y - 2):
 				c = _shade(base, 1.22)
 			img.set_pixel(x, y, c)
+
+# =====================================================================================
+#  Двери и шлюзы «спереди» (0.9.2)
+# =====================================================================================
+## Дверь рисуется так, как её видно спереди, — прямоугольник проёма в раме, — и кладётся
+## поверх плитки стены окружения (TerrainTiles), так что стоит в стене любого направления.
+## Фон прозрачный. «door_<окружение>» — закрытая, «door_open_<окружение>» — открытая; в
+## ленте три варианта, клетка берёт свой по хешу: двери одного здания чуть разные.
+## Станция — сдвижной люк с окошком и лампой, бункер и астероид — гермодверь со штурвалом,
+## город — филёнчатая деревянная дверь, поле — дощатая.
+const DOOR_X0 := 6
+const DOOR_X1 := 25
+const DOOR_Y0 := 3
+const DOOR_Y1 := 29
+
+func _doors_all() -> void:
+	for style: String in ["station", "bunker", "asteroid", "town", "field"]:
+		for open: bool in [false, true]:
+			var img := Image.create(T * 3, T, false, Image.FORMAT_RGBA8)
+			for v in 3:
+				var one := _door_front(style, open, v)
+				img.blit_rect(one, Rect2i(0, 0, T, T), Vector2i(v * T, 0))
+			var name := "door_open" if open else "door"
+			_save("%s_%s" % [name, style], img)
+			if style == "station":
+				_save(name, img)   # без окружения — станционный люк
+
+func _door_front(style: String, open: bool, v: int) -> Image:
+	var img := Image.create(T, T, false, Image.FORMAT_RGBA8)
+	var frame: Color
+	match style:
+		"station": frame = [Color8(150, 154, 160), Color8(132, 138, 148), Color8(120, 128, 140)][v]
+		"bunker": frame = Color8(108, 108, 100)
+		"asteroid": frame = Color8(116, 98, 82)
+		"town": frame = [Color8(200, 194, 180), Color8(150, 112, 78), Color8(176, 170, 156)][v]
+		_: frame = Color8(110, 82, 52)
+	var heavy := style == "bunker" or style == "asteroid"
+	var fw := 3 if heavy else 2   # толщина рамы
+	# Рама с фаской: свет сверху-слева, тень снизу-справа; порог — темнее.
+	for y in range(DOOR_Y0 - fw, DOOR_Y1 + 2):
+		for x in range(DOOR_X0 - fw, DOOR_X1 + fw + 1):
+			if x >= DOOR_X0 and x <= DOOR_X1 and y >= DOOR_Y0 and y <= DOOR_Y1:
+				continue
+			var c := _shade(frame, 0.88 + 0.16 * _fbm(x, y, 401))
+			if x == DOOR_X0 - fw or y == DOOR_Y0 - fw:
+				c = _shade(c, 1.2)
+			elif x == DOOR_X1 + fw or y == DOOR_Y1 + 1:
+				c = _shade(c, 0.55)
+			img.set_pixel(x, y, c)
+	if style == "station":
+		# Жёлто-чёрные полосы над люком и лампа: красная — закрыто, зелёная — открыто.
+		for x in range(DOOR_X0 - fw, DOOR_X1 + fw + 1):
+			if v != 2:
+				img.set_pixel(x, DOOR_Y0 - 2, Color8(198, 166, 40) if posmod(x, 4) < 2 else Color8(30, 28, 24))
+		var lamp := Color8(90, 210, 110) if open else Color8(220, 70, 50)
+		img.set_pixel(DOOR_X1 + 2, DOOR_Y0 + 2, lamp)
+		img.set_pixel(DOOR_X1 + 2, DOOR_Y0 + 3, _shade(lamp, 0.7))
+	for y in range(DOOR_Y0, DOOR_Y1 + 1):
+		for x in range(DOOR_X0, DOOR_X1 + 1):
+			img.set_pixel(x, y, _door_open_px(style, x, y, v) if open else _door_leaf_px(style, x, y, v))
+	return img
+
+## Проём открытой двери: темнота внутри, у пола — полоска света с той стороны; у петли —
+## край распахнутого полотна (у сдвижного люка и гермодвери — их кромка у рамы).
+func _door_open_px(style: String, x: int, y: int, v: int) -> Color:
+	var t := float(y - DOOR_Y0) / float(DOOR_Y1 - DOOR_Y0)
+	var c := Color(0.05 + 0.06 * t, 0.05 + 0.055 * t, 0.06 + 0.05 * t)
+	if y >= DOOR_Y1 - 2:
+		c = Color(0.2, 0.19, 0.17).lerp(Color(0.32, 0.3, 0.27), float(y - (DOOR_Y1 - 2)) / 2.0)
+	match style:
+		"station":
+			if x >= DOOR_X1 - 1:   # створка уехала в стену: видна её кромка
+				return _shade(Color8(120, 126, 134), 0.8)
+		"bunker", "asteroid":
+			if y <= DOOR_Y0 + 3:   # гермодверь поднята: снизу видна её кромка с полосами
+				return Color8(198, 166, 40) if posmod(x + y, 6) < 3 else Color8(30, 28, 24)
+		_:
+			# Деревянное полотно распахнуто внутрь — узкая трапеция у левой петли.
+			var w := 4 - (y - DOOR_Y0) / 12
+			if x <= DOOR_X0 + w:
+				return _shade(_door_wood(style, v), 0.75 + 0.1 * _h(x, y, 402))
+	return c
+
+func _door_wood(style: String, v: int) -> Color:
+	if style == "town":
+		return [Color8(118, 74, 42), Color8(52, 84, 60), Color8(120, 52, 40)][v]
+	return [Color8(112, 84, 54), Color8(116, 112, 104), Color8(98, 74, 48)][v]
+
+## Закрытое полотно.
+func _door_leaf_px(style: String, x: int, y: int, v: int) -> Color:
+	var lx := x - DOOR_X0
+	var ly := y - DOOR_Y0
+	var w := DOOR_X1 - DOOR_X0
+	var h := DOOR_Y1 - DOOR_Y0
+	match style:
+		"station":
+			var c := _shade([Color8(100, 106, 114), Color8(92, 100, 112), Color8(74, 86, 104)][v],
+					0.9 + 0.12 * _fbm(x, y, 403))
+			if v == 0 and lx == w / 2:
+				return _shade(c, 0.55)   # шов двух створок
+			if v == 2 and absi(lx - ly * w / h) <= 0:
+				return _shade(c, 0.55)   # косой шов
+			if v == 0 and lx >= 6 and lx <= 13 and ly >= 4 and ly <= 8:
+				return Color8(60, 110, 150) if ly > 4 else Color8(140, 190, 220)   # окошко
+			if v == 1 and Vector2(lx - w / 2.0, ly - 7).length() < 4.0:
+				return Color8(140, 190, 220) if Vector2(lx - w / 2.0, ly - 7).length() < 2.5 else STEEL_DARK
+			if v == 1 and (ly == 14 or ly == 20):
+				return _shade(c, 0.65)
+			if v == 2 and ly >= 12 and ly <= 14:
+				return Color8(198, 166, 40) if posmod(lx + ly, 4) < 2 else Color8(30, 28, 24)
+			if lx == 0 or ly == 0:
+				return _shade(c, 1.15)
+			return c
+		"bunker", "asteroid":
+			var base := Color8(96, 100, 92) if style == "bunker" else Color8(124, 92, 66)
+			var c := _shade(base, 0.86 + 0.18 * _fbm(x, y, 404))
+			if lx <= 1 or lx >= w - 1 or ly <= 1 or ly >= h - 1:
+				c = _shade(c, 0.7 if (lx <= 1 or ly <= 1) else 0.5)
+				if (lx + ly) % 4 == 0:
+					c = _shade(base, 1.25)   # заклёпки по кромке
+				return c
+			if v == 1 and (lx == 5 or lx == w - 5) and ly >= 3 and ly <= h - 3:
+				return STEEL_DARK   # засовы
+			if v == 2 and ly >= h / 2 + 5 and ly <= h / 2 + 7:
+				return Color8(198, 166, 40) if posmod(lx + ly, 4) < 2 else Color8(30, 28, 24)
+			var d := Vector2(lx - w / 2.0, ly - h / 2.0 + (2 if v == 2 else 0)).length()
+			if v != 1 and (absf(d - 5.0) < 0.8 or (d < 5.0 and (absi(lx - w / 2) == 0 or absi(ly - h / 2 + (2 if v == 2 else 0)) == 0))):
+				return Color8(176, 150, 60)   # штурвал
+			return c
+		"town":
+			var c := _shade(_door_wood(style, v), 0.86 + 0.18 * _tn(x, y, 2, 405, 12))
+			if v == 1 and lx >= 5 and lx <= w - 5 and ly >= 3 and ly <= 9:
+				return Color8(150, 190, 210) if not (lx == w / 2 or ly == 6) else _shade(c, 0.6)   # окошко с переплётом
+			var panel := (lx >= 3 and lx <= w / 2 - 2 or lx >= w / 2 + 2 and lx <= w - 3) \
+					and (ly >= 3 and ly <= h / 2 - 2 or ly >= h / 2 + 2 and ly <= h - 3)
+			if v != 1 and panel:
+				var edge := lx == 3 or lx == w / 2 + 2 or ly == 3 or ly == h / 2 + 2
+				c = _shade(c, 0.78 if edge else 0.92)
+			if v == 2 and ly == h / 2 + 4 and lx >= w / 2 - 3 and lx <= w / 2 + 3:
+				return Color8(180, 160, 90)   # прорезь для писем
+			if lx == w - 4 and ly == h / 2:
+				return Color8(214, 184, 90)   # ручка
+			return c
+		_:
+			# Поле: вертикальные доски, у первой двери — Z-распорка, кольцо вместо ручки.
+			var c := _shade(_door_wood(style, v), 0.82 + 0.22 * _tn(x, y, 2, 406, 16))
+			if lx % 5 == 4:
+				c = _shade(c, 0.6)   # щели между досками
+			if (ly == 4 or ly == h - 4) or (v == 0 and absi(lx - (h - 4 - ly) * w / (h - 8)) <= 0 and ly > 4 and ly < h - 4):
+				c = _shade(Color8(90, 66, 42), 0.95)   # распорки
+			if v == 2 and lx >= 6 and lx <= w - 6 and ly >= 7 and ly <= 11:
+				return Color8(40, 44, 50)   # окошко
+			if Vector2(lx - (w - 4), ly - h / 2).length() > 0.8 and Vector2(lx - (w - 4), ly - h / 2).length() < 2.0:
+				return STEEL_DARK
+			return c
+
+# =====================================================================================
+#  Виды пола комнат (0.9.2)
+# =====================================================================================
+## Полы комнат по их назначению: доски, паркет, плитка, шахматка, ковры, линолеум, рифлёная
+## сталь, решётка — и солнечные панели в космосе у станции. Все бесшовные: рисунок кратен
+## 32 точкам, и соседние клетки комнаты сливаются в один пол.
+func _floor_looks() -> void:
+	_strip("floor_wood", _floor_wood)
+	_strip("floor_parquet", _floor_parquet)
+	_strip("floor_tile", _floor_tile)
+	_strip("floor_checker", _floor_checker)
+	_strip("floor_carpet_red", _floor_carpet.bind(Color8(128, 40, 42)))
+	_strip("floor_carpet_blue", _floor_carpet.bind(Color8(44, 62, 112)))
+	_strip("floor_lino", _floor_lino)
+	_strip("floor_plate", _floor_plate)
+	_strip("floor_grate", _floor_grate)
+	_strip("floor_solar", _floor_solar)
+
+## Доски поперёк клетки: ряды по 8 точек, стыки досок в каждом ряду — свои, волокно вдоль.
+func _floor_wood(x: int, y: int, v: int) -> Color:
+	var row := y / 8
+	var joint := (row * 13 + 5) % 32
+	var c := _shade(Color8(148, 104, 62), 0.86 + 0.12 * _h(row, (x + 32 - joint) / 32, 501)
+			+ 0.12 * _tn(x, y, 2, 502 + v, 16))
+	if y % 8 == 7:
+		return _shade(c, 0.62)   # щель между рядами
+	if x == joint:
+		return _shade(c, 0.7)    # торец доски
+	if _h(x + v * T, y, 503) > 0.985:
+		c = _shade(c, 0.78)      # сучок
+	return c
+
+## Паркет «ёлочкой» попроще — квадраты 8×8, планки в них то вдоль, то поперёк.
+func _floor_parquet(x: int, y: int, v: int) -> Color:
+	var bx := x / 8
+	var by := y / 8
+	var along := (bx + by) % 2 == 0
+	var lx := x % 8
+	var ly := y % 8
+	var c := _shade(Color8(104, 66, 38), 0.86 + 0.18 * _tn(x, y, 4, 511 + v, 4 if along else 16))
+	if (along and ly % 4 == 3) or (not along and lx % 4 == 3):
+		c = _shade(c, 0.72)
+	if lx == 7 or ly == 7:
+		c = _shade(c, 0.66)
+	return c
+
+## Кафель 8×8 с серой затиркой, у каждой плитки — свой оттенок.
+func _floor_tile(x: int, y: int, v: int) -> Color:
+	if x % 8 == 7 or y % 8 == 7:
+		return Color8(150, 152, 150)
+	var k := 0.94 + 0.08 * _h(x / 8 + v * 4, y / 8, 521) + 0.04 * _fbm(x, y, 522)
+	var c := _shade(Color8(214, 216, 212), k)
+	if x % 8 == 0 or y % 8 == 0:
+		c = _shade(c, 1.04)
+	return c
+
+## Шахматка кухни и закусочной: чёрно-белые плитки 8×8.
+func _floor_checker(x: int, y: int, v: int) -> Color:
+	var dark := (x / 8 + y / 8) % 2 == 1
+	var c := Color8(46, 46, 50) if dark else Color8(220, 218, 210)
+	c = _shade(c, 0.95 + 0.08 * _fbm(x, y, 531 + v))
+	if x % 8 == 7 or y % 8 == 7:
+		c = _shade(c, 0.85)
+	return c
+
+## Ковёр: ворс шумом и ромбовая решётка узора с шагом 16.
+func _floor_carpet(x: int, y: int, v: int, base: Color) -> Color:
+	var c := _shade(base, 0.9 + 0.16 * _fbm(x, y, 541 + v) + 0.06 * _h(x, y, 542))
+	var dx := absi((x % 16) - 8)
+	var dy := absi((y % 16) - 8)
+	if dx + dy == 7:
+		c = _shade(c, 1.22)
+	elif dx + dy == 0:
+		c = Color8(196, 170, 96)
+	return c
+
+## Линолеум: бледный, в крапинку, со швом раз в 16 точек.
+func _floor_lino(x: int, y: int, v: int) -> Color:
+	var c := _shade(Color8(170, 186, 172), 0.94 + 0.08 * _fbm(x, y, 551 + v))
+	var r := _h(x + v * T, y, 552)
+	if r > 0.94:
+		c = _shade(c, 0.82)
+	elif r > 0.9:
+		c = _shade(c, 1.1)
+	if x % 16 == 15:
+		c = _shade(c, 0.9)
+	return c
+
+## Рифлёная сталь: ромбики-насечки ёлочкой через 8 точек.
+func _floor_plate(x: int, y: int, v: int) -> Color:
+	var c := _shade(Color8(126, 130, 134), 0.88 + 0.12 * _fbm(x, y, 561 + v))
+	var cx := x % 8
+	var cy := y % 8
+	var flip := (x / 8 + y / 8) % 2 == 0
+	var d := (cx - cy) if flip else (cx + cy - 7)
+	if absi(d) <= 0 and cx > 1 and cx < 6:
+		c = _shade(c, 1.28)
+	elif absi(d) == 1 and cx > 1 and cx < 6:
+		c = _shade(c, 0.78)
+	return c
+
+## Решётка технических туннелей: полосы стали и тёмные ячейки под ними.
+func _floor_grate(x: int, y: int, v: int) -> Color:
+	var bar_x := x % 8 <= 1
+	var bar_y := y % 16 <= 1
+	if bar_x or bar_y:
+		var c := _shade(Color8(104, 110, 116), 0.9 + 0.14 * _fbm(x, y, 571 + v))
+		if (bar_x and x % 8 == 0) or (bar_y and y % 16 == 0):
+			c = _shade(c, 1.2)
+		return c
+	return _shade(Color8(22, 24, 28), 0.8 + 0.4 * _fbm(x, y, 572))
+
+## Солнечная панель снаружи станции: синие ячейки в серебряной раме поверх звёзд.
+func _floor_solar(x: int, y: int, v: int) -> Color:
+	if x <= 1 or y <= 1:
+		return _starfield(x, y, v)   # просвет между панелями
+	if x == 2 or y == 2 or x == T - 1 or y == T - 1:
+		return Color8(176, 180, 186)
+	var c := _shade(Color8(36, 58, 120), 0.86 + 0.18 * _fbm(x, y, 581 + v))
+	if (x - 2) % 6 == 0 or (y - 2) % 6 == 0:
+		c = Color8(150, 164, 190)
+	elif (x + y) % 11 == 0:
+		c = _shade(c, 1.35)   # блик
+	return c

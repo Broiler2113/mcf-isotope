@@ -21,6 +21,15 @@ const N4: Array[Vector2i] = [
 var width: int
 var height: int
 var _cells: Array[GridCell] = []
+## Повороты мебели, заданные в редакторе (MapData.feature_turn): клетка → [id, k]. Только
+## для отрисовки (TerrainTiles): правилам поворот предмета не важен.
+var furniture_turn: Dictionary = {}
+## Вид пола по клеткам (MapData.floor_look) — тоже только для отрисовки. Пусто — нет.
+var floor_look: PackedByteArray = PackedByteArray()
+
+func look_at(x: int, y: int) -> int:
+	var i := y * width + x
+	return floor_look[i] if i < floor_look.size() else 0
 
 func _init(p_width: int, p_height: int) -> void:
 	width = p_width
