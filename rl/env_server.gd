@@ -217,6 +217,12 @@ var _norm: float = 1.0
 var _last_diff: float = 0.0
 var _done: bool = true
 var _illegal: int = 0
+## Отказы резолвера по видам: "<вид>: <причина>" -> сколько раз. Перечислитель ТОЧЕН
+## (tests/run_legal_intents.gd), поэтому любая запись здесь — баг, и счётчика без причины
+## мало: tactical-2 за ночь набрал 202 отказа в оценочных партиях, а чем именно — нельзя
+## было узнать, не читая логи Godot на машине, где идёт обучение. Едет в info вместе с
+## счётчиком, то есть попадает в eval_games.jsonl и в CSV на панели.
+var _illegal_kinds: Dictionary = {}
 var _steps: int = 0
 var _result: String = ""
 var _out: StreamPeerTCP = null   ## канал ответов (--reply-port), иначе stdout
@@ -409,6 +415,7 @@ func _reset(req: Dictionary) -> Dictionary:
 	_last_diff = _value_diff()
 	_done = false
 	_illegal = 0
+	_illegal_kinds = {}
 	_steps = 0
 	_result = ""
 	_by = ""
@@ -566,6 +573,8 @@ func _step(req: Dictionary) -> Dictionary:
 		# В лог среды — что именно и почему: счётчик в eval_games.jsonl говорит лишь «было».
 		printerr("REFUSED r%d %s %s: %s" % [state.turns.round_number, _actor_label(intent),
 				JSON.stringify(IntentCodec.encode(intent)), res.reason])
+		var why := "%s/%s: %s" % [_actor_label(intent), _kind_of(intent), res.reason]
+		_illegal_kinds[why] = int(_illegal_kinds.get(why, 0)) + 1
 		_illegal += 1
 		if acting == side:
 			reward += _turn_penalty
@@ -893,6 +902,7 @@ func _response(reward: float, is_reset: bool) -> Dictionary:
 		_last_phi = phi
 	var resp := {"ok": true, "reward": reward, "done": _done, "acting": acting_now,
 			"info": {"round": state.turns.round_number, "steps": _steps, "illegal": _illegal,
+					"illegal_kinds": _illegal_kinds,
 				"value_diff": diff / _norm, "fire_losses": _fire_losses,
 				"shots": _shots, "shots_hit": _shots_hit}}
 	if _done:
