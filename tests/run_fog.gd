@@ -407,13 +407,13 @@ func _tanks_block_enemy_sight_only() -> void:
 	st.grid.set_vehicle_footprint(tank.id, tank.footprint())
 	ck(r.team_visible_coords(0).has(behind), "once the tank drives off the line, the rifleman is visible")
 	st.grid.clear_vehicle_footprint(tank.id, tank.footprint())
-	st.vehicles.erase(tank.id)
+	st.remove_vehicle(tank.id)
 
 	for kind: String in ["shuttle", "borg"]:
 		var veh: Vehicle = st.spawn_vehicle(kind, Vector2i(10, 5) if kind == "borg" else Vector2i(10, 4), 1)
 		ck(r.team_visible_coords(0).has(behind), "an enemy %s does not block sight" % kind)
 		st.grid.clear_vehicle_footprint(veh.id, veh.footprint())
-		st.vehicles.erase(veh.id)
+		st.remove_vehicle(veh.id)
 		UnitInstance.vision_epoch += 1
 
 func _big_map_sight_is_fast() -> void:

@@ -212,7 +212,16 @@ var dig_dirt_a: Vector2i = Vector2i(-1, -1)
 var rsp_active: Vector2i = Vector2i(-1, -1)
 ## RTS-выделение группы (#18): id выбранных юнитов и состояние рамки выделения ЛКМ.
 ## Рамка задаётся экранными точками; протяжка > BOX_DRAG_THRESHOLD включает режим рамки.
-var _group_ids: Array[int] = []
+var _group_ids: Array[int] = []:
+	set(v):
+		_group_ids = v
+		_group_set = {}
+		for id in v:
+			_group_set[id] = true
+## Те же id, что в _group_ids, — множеством (perf pass #5): _draw спрашивает «в группе ли»
+## у каждого бойца на экране, а Array.has() линеен по размеру группы. Сеттер выше держит
+## их согласованными; на месте _group_ids не правится нигде — только присваивается.
+var _group_set: Dictionary = {}
 ## Групповое движение «тактическое»: каждый встаёт в укрытие у точки приказа.
 var _group_tactical: bool = false
 ## Раскладка под курсором считается заново, только когда сменились точка или доска.
@@ -319,6 +328,7 @@ var _clock_label: Label = null
 var _real_start_ms: int = Time.get_ticks_msec()
 var _real_stop_ms: int = -1   # −1 = секундомер ещё идёт
 var _clock_shown := ""
+var _clock_key := Vector2i(-1, -1)
 var _turn_neighbors_label: Label
 var _draw_btn: Button
 var _erase_btn: Button
@@ -5359,7 +5369,7 @@ func _draw() -> void:
 			if unit.neutral_group > 0:
 				_draw_group_badge(corner, unit.neutral_group, font)
 		# Кольцо принадлежности к RTS-группе (#18).
-		if has_group and _group_ids.has(unit.id):
+		if has_group and _group_set.has(unit.id):
 			draw_arc(center, CELL * 0.46, 0, TAU, 32, Color(0.4, 1.0, 0.5), 2.5)
 		if unit.is_held():
 			draw_arc(center, CELL * 0.48, 0, TAU, 32, Color(0.8, 0.3, 1.0), 3.0)
@@ -7752,9 +7762,14 @@ func _refresh_clocks() -> void:
 	if _clock_label == null or state == null:
 		return
 	var now: int = _real_stop_ms if _real_stop_ms >= 0 else Time.get_ticks_msec()
+	# Строки собираем, только когда сменилась показанная секунда или раунд (perf pass #3):
+	# иначе три новые строки на каждый кадр ради надписи, что меняется раз в секунду.
+	var key := Vector2i(state.turns.round_number, maxi(0, now - _real_start_ms) / 1000)
+	if key == _clock_key:
+		return
+	_clock_key = key
 	var text := "In-game %s   |   Real %s" % [
-			_clock_text(state.turns.round_number * IN_GAME_SECONDS_PER_ROUND),
-			_clock_text(maxi(0, now - _real_start_ms) / 1000)]
+			_clock_text(key.x * IN_GAME_SECONDS_PER_ROUND), _clock_text(key.y)]
 	if text != _clock_shown:
 		_clock_shown = text
 		_clock_label.text = text
