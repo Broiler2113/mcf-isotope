@@ -40,12 +40,13 @@ const PALETTE_W := 280.0
 const STATUS_H := 26.0
 const MINI_MAX := 120.0
 
-enum Tool { BRUSH, ERASER, LINE, RECT, FILL, SELECT, PICK, STAMP }
+enum Tool { BRUSH, ERASER, LINE, RECT, FILL, SELECT, PICK, STAMP, CIRCLE }
 const TOOLS := [
 	{"tool": Tool.BRUSH, "name": "Brush", "key": KEY_B, "hint": "Paint with the chosen tile. Drag to draw."},
 	{"tool": Tool.ERASER, "name": "Eraser", "key": KEY_E, "hint": "Clear cells back to the preset's empty ground, removing units and zones."},
 	{"tool": Tool.LINE, "name": "Line", "key": KEY_L, "hint": "Drag a straight line of the chosen tile."},
-	{"tool": Tool.RECT, "name": "Rectangle", "key": KEY_R, "hint": "Drag a rectangle. Tick Filled for a solid one."},
+	{"tool": Tool.RECT, "name": "Rectangle", "key": KEY_U, "hint": "Drag a rectangle. Tick Filled for a solid one."},
+	{"tool": Tool.CIRCLE, "name": "Circle", "key": KEY_C, "hint": "Drag a box and get the circle (or oval) inside it. Tick Filled for a solid one."},
 	{"tool": Tool.FILL, "name": "Fill", "key": KEY_F, "hint": "Flood a connected area of identical cells."},
 	{"tool": Tool.SELECT, "name": "Select", "key": KEY_M, "hint": "Drag to select. Drag the selection to move it; Ctrl+C / Ctrl+X / Ctrl+V / Delete."},
 	{"tool": Tool.PICK, "name": "Eyedropper", "key": KEY_I, "hint": "Click a cell to pick its tile, unit or zone (Alt+click works with any tool)."},
@@ -87,6 +88,8 @@ var _prev_tool: int = Tool.BRUSH
 var brush := MCF.FEATURE_WALL
 var brush_size := 1
 var rect_filled := false
+## Поворот мебели под кистью (R, 0.9.2): −1 — сам (к стене), 0..3 — четверти по часовой.
+var brush_turn := -1
 var symmetry: int = Sym.OFF
 var stamp_id := "small_room"
 
@@ -279,12 +282,13 @@ static func map_color(m: MapData, i: int, env: String) -> Color:
 			col = Color(0.8, 0.65, 0.25)
 		elif feat == MCF.FEATURE_WOOD_WALL:
 			col = Color(0.55, 0.38, 0.2)
-	elif m.floor_type[i] == MCF.FLOOR_GRASS:
-		col = Color(0.28, 0.45, 0.2)
 	else:
-		col = FLOOR_TONE.get(env, Color(0.28, 0.28, 0.28))
+		# Объект виден и на траве: раньше трава проверялась первой, и окоп, мешки, ежи на
+		# траве миникарта не показывала вовсе.
+		col = Color(0.28, 0.45, 0.2) if m.floor_type[i] == MCF.FLOOR_GRASS \
+				else FLOOR_TONE.get(env, Color(0.28, 0.28, 0.28))
 		if feat == MCF.FEATURE_TRENCH:
-			col = col.darkened(0.35)
+			col = Color(0.2, 0.16, 0.12)
 		elif feat != "":
 			col = Color(0.62, 0.55, 0.35)
 	var zo: int = m.zone_owner[i]
@@ -296,9 +300,10 @@ static func map_color(m: MapData, i: int, env: String) -> Color:
 # Правка клеток с записью отката
 # ============================================================================
 
+## Клетка карты кортежем: [пол, высота, космос, объект, зона, поворот мебели (−1 — сам)].
 func _tuple(i: int) -> Array:
 	return [int(map.floor_type[i]), float(map.cover_height[i]), map.is_space[i] != 0,
-			String(map.feature_id[i]), int(map.zone_owner[i])]
+			String(map.feature_id[i]), int(map.zone_owner[i]), map.get_turn(i)]
 
 ## Записать клетку: в карту, в зеркало плиток, в миникарту и слой зон.
 func _write(i: int, t: Array) -> void:
@@ -307,9 +312,10 @@ func _write(i: int, t: Array) -> void:
 	var sp := bool(t[2])
 	var feat := String(t[3])
 	var zone := int(t[4])
+	var turn := int(t[5]) if t.size() > 5 and Furniture.is_furniture(feat) else -1
 	# Клетка уже такая — ни записи, ни отката: повторный мазок по тем же клеткам бесплатен.
 	if map.floor_type[i] == fl and map.cover_height[i] == cover and (map.is_space[i] != 0) == sp \
-			and map.feature_id[i] == feat and map.zone_owner[i] == zone:
+			and map.feature_id[i] == feat and map.zone_owner[i] == zone and map.get_turn(i) == turn:
 		return
 	if _act.has("cells") and not _act["cells"].has(i):
 		_act["cells"][i] = _tuple(i)
@@ -320,8 +326,16 @@ func _write(i: int, t: Array) -> void:
 	map.feature_id[i] = feat
 	var zone_changed := zone != map.zone_owner[i]
 	map.zone_owner[i] = zone
+	var turn_changed := map.get_turn(i) != turn
+	map.set_turn(i, turn)
 	var x := i % map.width
 	var y := i / map.width
+	if turn_changed:
+		if turn >= 0:
+			_grid.furniture_turn[Vector2i(x, y)] = [feat, turn]
+		else:
+			_grid.furniture_turn.erase(Vector2i(x, y))
+		GridCell.log_look_change(x, y)   # поворот — тоже вид: кусок плиток пересобрать
 	# Зеркало плиток — только изменившиеся поля: у каждого сеттера GridCell свой журнал, и
 	# лишний вызов на заливке в четверть миллиона клеток стоил больше самой правки.
 	var gc := _grid.cell_fast(x, y)
@@ -538,7 +552,20 @@ func _brushed(t: Array, mask: int) -> Array:
 				t[3] = brush
 				t[1] = maxf(0.0, MCF.feature_height(brush))
 				t[2] = false
+				if t.size() < 6:
+					t.append(-1)
+				t[5] = mirror_turn(brush_turn, mask) if Furniture.is_furniture(brush) else -1
 	return t
+
+## Поворот в отражении симметрии: по X меняются восток и запад, по Y — север и юг.
+static func mirror_turn(k: int, mask: int) -> int:
+	if k < 0:
+		return k
+	if mask & 1 and k % 2 == 1:
+		k = 4 - k
+	if mask & 2 and k % 2 == 0:
+		k = 2 - k
+	return k
 
 ## Кисть с большим радиусом: ВСЕ клетки отрезка от прошлой до текущей — быстрый мазок
 ## мышью не оставляет пропусков.
@@ -577,6 +604,26 @@ static func rect_cells(a: Vector2i, b: Vector2i, filled: bool) -> Array[Vector2i
 	for y in range(mini(a.y, b.y), maxi(a.y, b.y) + 1):
 		for x in range(mini(a.x, b.x), maxi(a.x, b.x) + 1):
 			if filled or x == a.x or x == b.x or y == a.y or y == b.y:
+				cells.append(Vector2i(x, y))
+	return cells
+
+## Круг (овал), вписанный в прямоугольник a–b. Контур — клетки круга, у которых хоть
+## один сосед по стороне снаружи: линия без дыр и без двойной толщины.
+static func ellipse_cells(a: Vector2i, b: Vector2i, filled: bool) -> Array[Vector2i]:
+	var lo := Vector2i(mini(a.x, b.x), mini(a.y, b.y))
+	var hi := Vector2i(maxi(a.x, b.x), maxi(a.y, b.y))
+	var c := (Vector2(lo) + Vector2(hi)) * 0.5
+	var r := (Vector2(hi - lo) + Vector2.ONE) * 0.5
+	var inside := func(x: int, y: int) -> bool:
+		var d := Vector2((x - c.x) / r.x, (y - c.y) / r.y)
+		return d.length_squared() <= 1.0
+	var cells: Array[Vector2i] = []
+	for y in range(lo.y, hi.y + 1):
+		for x in range(lo.x, hi.x + 1):
+			if not inside.call(x, y):
+				continue
+			if filled or not (inside.call(x + 1, y) and inside.call(x - 1, y)
+					and inside.call(x, y + 1) and inside.call(x, y - 1)):
 				cells.append(Vector2i(x, y))
 	return cells
 
@@ -641,7 +688,7 @@ func _stamp_once(p: Dictionary, at: Vector2i, mask: int) -> void:
 			var i := c.y * map.width + c.x
 			var t: Array = (cell as Array).duplicate()
 			t[4] = map.zone_owner[i] if int(t[4]) == MapPresets.KEEP else _mirror_owner(int(t[4]), mask)
-			_write(i, t)
+			_write(i, t)   # узор уже отражён целиком (_place_pattern), поворот — вместе с ним
 			_clear_spawn(c)
 	for s: Array in p["spawns"]:
 		var c := at + Vector2i(int(s[0]), int(s[1]))
@@ -721,6 +768,41 @@ func _drop_float(at_cursor: Vector2i) -> void:
 		_float_moving = false
 	queue_redraw()
 
+## R (0.9.2): поворачивает то, что сейчас «в руке». Узор (вставка, перенос, заготовка) —
+## на четверть; выделение без узора — вместе с содержимым на месте; кисть мебели —
+## следующий поворот (Shift+R — снова «сам, к стене»).
+func rotate_key(back_to_auto: bool = false) -> void:
+	if not _float.is_empty():
+		rotate_float()
+	elif tool == Tool.SELECT and _has_selection():
+		rotate_selection()
+	elif Furniture.is_furniture(brush):
+		if back_to_auto:
+			brush_turn = -1
+		elif brush_turn < 0:
+			brush_turn = (maxi(0, _pv_auto_turn) + 1) % 4
+		else:
+			brush_turn = (brush_turn + 1) % 4
+		_flash("%s faces %s" % [_brush_name(brush), turn_name(brush_turn)])
+		_refresh_status()
+	else:
+		_flash("R turns furniture, a selection or what you are placing")
+
+static func turn_name(k: int) -> String:
+	return "the nearest wall (auto)" if k < 0 else ["up", "right", "down", "left"][k % 4]
+
+## Повернуть выделение на месте (вокруг его середины), одной записью отката: предмет
+## мебели разворачивается целиком — и следом, и спинкой.
+func rotate_selection() -> void:
+	if not _has_selection():
+		return
+	var center := _selection.position + _selection.size / 2
+	_lift_selection(center)
+	_float = MapPresets.rotated(_float)
+	_float_grab = Vector2i(int(_float["w"]) / 2, int(_float["h"]) / 2)
+	_drop_float(center)
+	_flash("Rotated the selection")
+
 func rotate_float() -> void:
 	if _float.is_empty():
 		return
@@ -756,6 +838,7 @@ func pick_at(c: Vector2i) -> void:
 		_select_brush("unit:" + String(_spawn_at[c]["stats_id"]))
 	elif map.feature_id[i] != "":
 		_select_brush(String(map.feature_id[i]))
+		brush_turn = map.get_turn(i)
 	elif map.is_space[i] != 0:
 		_select_brush("space")
 	elif map.floor_type[i] == MCF.FLOOR_GRASS:
@@ -842,7 +925,7 @@ func _press(c: Vector2i, alt: bool) -> void:
 			_begin()
 			_stroke_last = Vector2i(-1, -1)
 			_stroke_to(c, tool == Tool.ERASER)
-		Tool.LINE, Tool.RECT:
+		Tool.LINE, Tool.RECT, Tool.CIRCLE:
 			_drag_start = c
 			_drag_cur = c
 		Tool.FILL:
@@ -870,7 +953,7 @@ func _drag_to(c: Vector2i) -> void:
 		Tool.BRUSH, Tool.ERASER:
 			if not _act.is_empty():
 				_stroke_to(c, tool == Tool.ERASER)
-		Tool.LINE, Tool.RECT, Tool.SELECT:
+		Tool.LINE, Tool.RECT, Tool.CIRCLE, Tool.SELECT:
 			if _drag_start != Vector2i(-1, -1) and c != _drag_cur:
 				_drag_cur = c
 				queue_redraw()
@@ -880,7 +963,7 @@ func _release(c: Vector2i) -> void:
 		Tool.BRUSH, Tool.ERASER:
 			_commit()
 			_stroke_last = Vector2i(-1, -1)
-		Tool.LINE, Tool.RECT:
+		Tool.LINE, Tool.RECT, Tool.CIRCLE:
 			if _drag_start != Vector2i(-1, -1):
 				_begin()
 				var cells: Array = []
@@ -897,6 +980,13 @@ func _release(c: Vector2i) -> void:
 			elif _drag_start != Vector2i(-1, -1):
 				var r := Rect2i(Vector2i(mini(_drag_start.x, _drag_cur.x), mini(_drag_start.y, _drag_cur.y)),
 						(_drag_start - _drag_cur).abs() + Vector2i.ONE)
+				# Щелчок без протяжки по мебели выделяет весь предмет (или ряд) — его можно
+				# сразу повернуть R или перенести (0.9.2).
+				if _drag_start == _drag_cur and map.in_bounds(c) \
+						and Furniture.is_furniture(map.get_feature(_drag_start)):
+					var fid := map.get_feature(_drag_start)
+					for p: Vector2i in TerrainTiles.group_cells(_grid, _drag_start, fid):
+						r = r.merge(Rect2i(p, Vector2i.ONE))
 				_selection = r.intersection(Rect2i(Vector2i.ZERO, Vector2i(map.width, map.height)))
 	_drag_start = Vector2i(-1, -1)
 	_drag_cur = Vector2i(-1, -1)
@@ -918,20 +1008,25 @@ func _shortcut(e: InputEventKey) -> bool:
 			KEY_X: cut_selection()
 			KEY_V: paste()
 			KEY_A: select_all()
-			KEY_S:
-				if e.shift_pressed: _save_as_dialog()
-				else: save()
+			KEY_S: save()
 			KEY_N: _new_map_dialog()
 			KEY_O: _open_dialog()
 			KEY_0: fit_view()
 			_: return false
 		queue_redraw()
 		return true
+	if e.keycode == KEY_R:
+		rotate_key(e.shift_pressed)
+		queue_redraw()
+		return true
+	if e.keycode in [KEY_EQUAL, KEY_PLUS, KEY_KP_ADD]:
+		zoom_in()
+		return true
+	if e.keycode in [KEY_MINUS, KEY_KP_SUBTRACT]:
+		zoom_out()
+		return true
 	if not _float.is_empty():
 		match e.keycode:
-			KEY_R:
-				rotate_float()
-				return true
 			KEY_H:
 				flip_float(true)
 				return true
@@ -949,8 +1044,10 @@ func _shortcut(e: InputEventKey) -> bool:
 				_float_moving = false
 			elif _drag_start != Vector2i(-1, -1):
 				_drag_start = Vector2i(-1, -1)
-			else:
+			elif _has_selection():
 				_selection = Rect2i()
+			else:
+				exit_to_menu()   # нечего отменять — Esc выходит из редактора (спросив, если не сохранено)
 		KEY_DELETE, KEY_BACKSPACE:
 			delete_selection()
 		KEY_BRACKETLEFT:
@@ -968,9 +1065,6 @@ func _shortcut(e: InputEventKey) -> bool:
 			for t: Dictionary in TOOLS:
 				if e.keycode == t["key"]:
 					_select_tool(t["tool"])
-					# R поворачивает только узор в руке; мебель сама встаёт спинкой к стене.
-					if e.keycode == KEY_R and Furniture.is_furniture(brush):
-						_flash("R is the Rectangle tool — furniture turns to the wall (chairs to their table) by itself")
 					return true
 			return false
 	queue_redraw()
@@ -1125,7 +1219,7 @@ func _draw_overlays() -> void:
 	# То, что ляжет на карту: кисть под курсором, тянущаяся линия или прямоугольник, узор в руке.
 	_draw_preview()
 	# Линия или прямоугольник в процессе — рамкой (и у каждого отражения).
-	if _drag_start != Vector2i(-1, -1) and tool in [Tool.LINE, Tool.RECT]:
+	if _drag_start != Vector2i(-1, -1) and tool in [Tool.LINE, Tool.RECT, Tool.CIRCLE]:
 		var r := Rect2i(_drag_start, Vector2i.ONE).merge(Rect2i(_drag_cur, Vector2i.ONE))
 		if tool == Tool.LINE:
 			r = r.grow_individual((brush_size - 1) / 2, (brush_size - 1) / 2, brush_size / 2, brush_size / 2)
@@ -1196,6 +1290,8 @@ func _pattern_places() -> Array:
 func _drag_shape() -> Array[Vector2i]:
 	if tool == Tool.LINE:
 		return line_cells(_drag_start, _drag_cur)
+	if tool == Tool.CIRCLE:
+		return ellipse_cells(_drag_start, _drag_cur, rect_filled)
 	return rect_cells(_drag_start, _drag_cur, rect_filled)
 
 # --- Предпросмотр ---
@@ -1219,6 +1315,8 @@ const PREVIEW_MAX_CELLS := 2500
 const PREVIEW_MAX_EXACT := 450
 
 var _pv_key := ""
+## Куда сам повернулся бы предмет под курсором (для первого R: «следующий от этого»).
+var _pv_auto_turn := -1
 var _pv_src: Dictionary = {}
 var _pv_tint := GHOST
 ## Точные клетки: [клетка карты, кусок атласа, рисовать пол, рисовать объект].
@@ -1231,9 +1329,9 @@ var _pv_thumbs: Array = []
 var _pv_patterns: Array = []
 
 func _preview_key() -> String:
-	return "%d|%s|%d|%s|%s|%s|%s|%d|%d|%s|%d|%s" % [tool, brush, brush_size, _hover, _drag_start,
+	return "%d|%s|%d|%s|%s|%s|%s|%d|%d|%s|%d|%s|%d" % [tool, brush, brush_size, _hover, _drag_start,
 			_drag_cur, rect_filled, symmetry, _map_ver, _env, TerrainTiles.res_for(cell_size()),
-			_float_moving]
+			_float_moving, brush_turn]
 
 func _draw_preview() -> void:
 	var key := _preview_key()
@@ -1257,7 +1355,7 @@ func _draw_preview() -> void:
 func _preview_base() -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
 	if _drag_start != Vector2i(-1, -1):
-		if tool in [Tool.LINE, Tool.RECT]:
+		if tool in [Tool.LINE, Tool.RECT, Tool.CIRCLE]:
 			for p: Vector2i in _drag_shape():
 				if tool == Tool.LINE:
 					out.append_array(_brush_cells(p))
@@ -1266,7 +1364,7 @@ func _preview_base() -> Array[Vector2i]:
 	elif map.in_bounds(_hover):
 		if tool in [Tool.BRUSH, Tool.LINE]:
 			out = _brush_cells(_hover)
-		elif tool in [Tool.RECT, Tool.FILL]:
+		elif tool in [Tool.RECT, Tool.CIRCLE, Tool.FILL]:
 			out.append(_hover)
 	return out
 
@@ -1361,8 +1459,10 @@ func _build_preview() -> void:
 			for x in bb.size.x:
 				var c := bb.position + Vector2i(x, y)
 				var t: Variant = cells.get(c)
-				_set_scratch(g.cell_fast(x, y), t if t != null else _tuple(c.y * map.width + c.x))
+				_set_scratch(g, Vector2i(x, y), t if t != null else _tuple(c.y * map.width + c.x))
 		tiles[k] = [_tiles.scratch(g, bb.position), bb.position]
+		if Furniture.is_furniture(brush) and bb.has_point(_hover):
+			_pv_auto_turn = TerrainTiles.furniture_turn(g, _hover - bb.position, brush, bb.position)
 	# Все клетки — в один атлас по 64 в ряд: две текстуры на весь предпросмотр.
 	var size := Vector2i(mini(changed.size(), 64), (changed.size() + 63) / 64) * res
 	var fimg := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
@@ -1379,19 +1479,25 @@ func _build_preview() -> void:
 	_restore_logs(saved)
 
 ## Клетка черновика — как _write пишет клетку зеркала карты.
-func _set_scratch(gc: GridCell, t: Array) -> void:
+func _set_scratch(g: Grid, at: Vector2i, t: Array) -> void:
+	var gc := g.cell_fast(at.x, at.y)
 	gc.floor_type = int(t[0])
 	gc.is_space = bool(t[2])
 	if String(t[3]) != "":
 		gc.set_feature(String(t[3]))
+		if t.size() > 5 and int(t[5]) >= 0:
+			g.furniture_turn[at] = [String(t[3]), int(t[5])]
 	gc.cover_height = float(t[1])
 
 ## Сетка-черновик и её клетки пишут в ОБЩИЕ журналы вида и обзора (Grid.new объявляет их
 ## оборванными), а по журналу вида плиточный кэш самой карты решает, что пересобрать:
 ## без снимка каждый сдвиг курсора пересобирал бы все плитки карты.
+## Журналы — КОПИЯМИ: статический Packed-массив правится на месте, и снимок-ссылка
+## опустел бы вместе с ним (Grid.new чистит журнал). Тогда правки, сделанные до
+## предпросмотра, выпадали из журнала, и холст их не показывал, а миникарта — да (0.9.2).
 func _quiet_logs() -> Array:
-	return [GridCell.look_version, GridCell.look_changes, GridCell.look_log_base,
-			GridCell.vision_version, GridCell.vision_changes, GridCell.vision_log_base,
+	return [GridCell.look_version, GridCell.look_changes.duplicate(), GridCell.look_log_base,
+			GridCell.vision_version, GridCell.vision_changes.duplicate(), GridCell.vision_log_base,
 			GridCell.walk_version, GridCell.feature_version, GridCell.journaling, GridCell.journal]
 
 func _restore_logs(s: Array) -> void:
@@ -1475,16 +1581,16 @@ func _build_menu_bar() -> void:
 	bar.add_child(row)
 	for spec in [
 		["File", [["New…  (Ctrl+N)", _new_map_dialog], ["Open…  (Ctrl+O)", _open_dialog],
-			["Save  (Ctrl+S)", save], ["Save As…  (Ctrl+Shift+S)", _save_as_dialog], [],
+			["Save  (Ctrl+S)", save], [],
 			["Play This Map  (F5)", play], [], ["Exit to Main Menu", exit_to_menu]]],
 		["Edit", [["Undo  (Ctrl+Z)", undo], ["Redo  (Ctrl+Y)", redo], [],
 			["Cut  (Ctrl+X)", cut_selection], ["Copy  (Ctrl+C)", copy_selection],
 			["Paste  (Ctrl+V)", paste], ["Delete  (Del)", delete_selection], [],
 			["Select All  (Ctrl+A)", select_all],
-			["Rotate Pasted  (R)", rotate_float], ["Flip Pasted Horizontally  (H)", flip_float.bind(true)],
+			["Rotate  (R)", rotate_key], ["Flip Pasted Horizontally  (H)", flip_float.bind(true)],
 			["Flip Pasted Vertically  (V)", flip_float.bind(false)], [],
 			["Clear Map…", _clear_dialog]]],
-		["View", [["Zoom In  (wheel)", zoom_in], ["Zoom Out  (wheel)", zoom_out],
+		["View", [["Zoom In  (+)", zoom_in], ["Zoom Out  (−)", zoom_out],
 			["Fit Map  (Ctrl+0)", fit_view], [],
 			["check:grid", "Grid  (G)"], ["check:zones", "Deployment Zones"], ["check:mini", "Minimap"], [],
 			["Keyboard Shortcuts…  (F1)", _shortcuts_dialog]]],
@@ -1587,7 +1693,10 @@ func _refresh_edit_menu(pm: PopupMenu) -> void:
 			off = not _has_selection()
 		elif t.begins_with("Paste"):
 			off = _clipboard.is_empty()
-		elif t.begins_with("Rotate") or t.begins_with("Flip"):
+		elif t.begins_with("Rotate"):
+			off = _float.is_empty() and not (tool == Tool.SELECT and _has_selection()) \
+					and not Furniture.is_furniture(brush)
+		elif t.begins_with("Flip"):
 			off = _float.is_empty()
 		pm.set_item_disabled(i, off)
 
@@ -1647,6 +1756,7 @@ func _build_toolbar() -> void:
 	for t: Dictionary in TOOLS:
 		var b := Button.new()
 		b.icon = _tool_icon(t["tool"])
+		b.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST   # крупный пиксель при любом масштабе
 		b.toggle_mode = true
 		b.button_group = _tool_group
 		b.focus_mode = Control.FOCUS_NONE
@@ -1909,6 +2019,9 @@ func _select_tool(t: int, keep_float: bool = false) -> void:
 	queue_redraw()
 
 func _select_brush(id: String) -> void:
+	# Другой предмет — поворот снова «сам»; цветной вариант того же предмета его сохраняет.
+	if Furniture.base_of(id) != Furniture.base_of(brush):
+		brush_turn = -1
 	brush = id
 	if tool in [Tool.ERASER, Tool.SELECT, Tool.PICK, Tool.STAMP]:
 		_select_tool(Tool.BRUSH)
@@ -2005,13 +2118,18 @@ static func _furniture_hint(fid: String) -> String:
 func _refresh_status() -> void:
 	if _status_label == null or map == null:
 		return
-	var tname: String = TOOLS[tool]["name"]
+	var tname := ""
+	for t: Dictionary in TOOLS:
+		if t["tool"] == tool:
+			tname = t["name"]
 	var what := _brush_name(brush)
 	if tool == Tool.STAMP:
 		what = MapPresets.STAMPS[maxi(0, MapPresets.STAMPS.map(func(s): return s["id"]).find(stamp_id))]["name"]
 	var parts: Array[String] = ["%s · %s" % [tname, what]]
 	if tool in [Tool.BRUSH, Tool.ERASER, Tool.LINE]:
 		parts[0] += " · size %d" % brush_size
+	if Furniture.is_furniture(brush) and tool != Tool.STAMP:
+		parts[0] += " · faces %s (R)" % turn_name(brush_turn)
 	parts.append("%d×%d %s" % [map.width, map.height, MapPresets.name_of(_env)])
 	if map.in_bounds(_hover):
 		parts.append("(%d, %d) %s" % [_hover.x, _hover.y, _describe(_hover)])
@@ -2113,52 +2231,58 @@ func _stamp_thumb(p: Dictionary) -> ImageTexture:
 			img.set_pixel(ox + x, oy + y, col)
 	return ImageTexture.create_from_image(img)
 
-## Значки инструментов рисуются кодом пиксель-артом: шрифт набора символов не держит, а
-## отдельные картинки пришлось бы искать в папке замен.
+## Значки инструментов — пиксель-арт 12×12, увеличенный вдвое без сглаживания: крупный
+## «пиксель» (0.9.2: «сделать кнопки инструментов пиксельнее»). # — штрих, + — полутон,
+## a — цвет акцента.
+const TOOL_ART := {
+	Tool.BRUSH: [
+		"..........##", ".........#++", "........#++#", ".......#++#.",
+		"......#++#..", ".....#++#...", "....#++#....", "...#++#.....",
+		"..#a+#......", "..aa#.......", ".aaa........", "aa.........."],
+	Tool.ERASER: [
+		"............", "......####..", ".....#++++#.", "....#++++#..",
+		"...#++++#...", "..####+#....", ".#...##.....", ".#..##......",
+		"..###.......", "............", ".##########.", "............"],
+	Tool.LINE: [
+		"..........aa", "..........aa", ".........##.", "........##..",
+		".......##...", "......##....", ".....##.....", "....##......",
+		"...##.......", "..##........", "aa..........", "aa.........."],
+	Tool.RECT: [
+		"............", ".##########.", ".#........#.", ".#........#.",
+		".#........#.", ".#........#.", ".#........#.", ".#........#.",
+		".#........#.", ".##########.", "............", "............"],
+	Tool.CIRCLE: [
+		"....####....", "..##....##..", ".#........#.", ".#........#.",
+		"#..........#", "#..........#", "#..........#", "#..........#",
+		".#........#.", ".#........#.", "..##....##..", "....####...."],
+	Tool.FILL: [
+		"....##......", "...#..#.....", "..#....#....", ".########...",
+		".#++++++#a..", ".#++++++#a..", "..#++++#.aa.", "...####..aa.",
+		"............", "............", "............", "............"],
+	Tool.SELECT: [
+		"##.##.##.##.", "#..........#", "............", "#..........#",
+		"#..........#", "............", "#..........#", "#..........#",
+		"............", "#..........#", ".##.##.##.##", "............"],
+	Tool.PICK: [
+		".........aa.", "........aaaa", ".......#aaa.", "......#+#a..",
+		".....#+#....", "....#+#.....", "...#+#......", "..#+#.......",
+		".#+#........", ".##.........", "a...........", "............"],
+	Tool.STAMP: [
+		"....####....", "....####....", ".....##.....", ".....##.....",
+		"..########..", "..########..", "..########..", "............",
+		".aaaaaaaaaa.", ".aaaaaaaaaa.", "............", "............"],
+}
+
 func _tool_icon(t: int) -> ImageTexture:
-	var img := Image.create(22, 22, false, Image.FORMAT_RGBA8)
-	var ink := Color(0.88, 0.88, 0.88)
-	var dim := Color(0.55, 0.55, 0.58)
-	var acc := Ui.accent_color()
-	match t:
-		Tool.BRUSH:
-			for k in 11:
-				img.fill_rect(Rect2i(5 + k, 15 - k, 3, 3), ink)
-			img.fill_rect(Rect2i(3, 17, 3, 2), acc)
-		Tool.ERASER:
-			for k in 8:
-				img.fill_rect(Rect2i(4 + k, 12 - k, 7, 5), ink if k > 3 else dim)
-			img.fill_rect(Rect2i(3, 18, 16, 1), dim)
-		Tool.LINE:
-			for k in 15:
-				img.fill_rect(Rect2i(3 + k, 17 - k, 2, 2), ink)
-			img.fill_rect(Rect2i(2, 17, 3, 3), acc)
-			img.fill_rect(Rect2i(17, 2, 3, 3), acc)
-		Tool.RECT:
-			for r: Rect2i in [Rect2i(3, 4, 16, 2), Rect2i(3, 16, 16, 2), Rect2i(3, 4, 2, 14), Rect2i(17, 4, 2, 14)]:
-				img.fill_rect(r, ink)
-		Tool.FILL:
-			for k in 8:
-				img.fill_rect(Rect2i(5 + k / 2, 6 + k, 10 - k, 1), ink)
-			img.fill_rect(Rect2i(4, 6, 12, 2), ink)
-			img.fill_rect(Rect2i(16, 9, 2, 6), acc)
-			img.fill_rect(Rect2i(15, 15, 4, 3), acc)
-		Tool.SELECT:
-			for x in range(3, 19, 4):
-				img.fill_rect(Rect2i(x, 3, 2, 2), ink)
-				img.fill_rect(Rect2i(x, 17, 2, 2), ink)
-			for y in range(3, 19, 4):
-				img.fill_rect(Rect2i(3, y, 2, 2), ink)
-				img.fill_rect(Rect2i(17, y, 2, 2), ink)
-		Tool.PICK:
-			for k in 9:
-				img.fill_rect(Rect2i(4 + k, 16 - k, 2, 2), ink)
-			img.fill_rect(Rect2i(13, 4, 5, 5), acc)
-			img.fill_rect(Rect2i(3, 17, 2, 2), acc)
-		Tool.STAMP:
-			img.fill_rect(Rect2i(8, 3, 6, 7), ink)
-			img.fill_rect(Rect2i(4, 10, 14, 4), ink)
-			img.fill_rect(Rect2i(3, 16, 16, 3), acc)
+	var art: Array = TOOL_ART.get(t, [])
+	var img := Image.create(24, 24, false, Image.FORMAT_RGBA8)
+	var cols := {"#": Color(0.9, 0.9, 0.9), "+": Color(0.55, 0.55, 0.58), "a": Ui.accent_color()}
+	for y in art.size():
+		var row: String = art[y]
+		for x in row.length():
+			var ch := row[x]
+			if cols.has(ch):
+				img.fill_rect(Rect2i(x * 2, y * 2, 2, 2), cols[ch])
 	return ImageTexture.create_from_image(img)
 
 # ============================================================================
@@ -2167,7 +2291,7 @@ func _tool_icon(t: int) -> ImageTexture:
 
 func save() -> void:
 	if map_name == "":
-		_save_as_dialog()
+		_name_dialog()   # безымянная карта: имя спрашиваем один раз, при первом сохранении
 		return
 	_save_named(map_name)
 
@@ -2411,7 +2535,10 @@ func _new_map_dialog() -> void:
 		if gen.button_pressed:
 			o = {"density": dens.selected, "zones": int(players.value), "seed": int(seed.value),
 					"symmetric": sym.button_pressed, "civilians": 2 if civ.button_pressed else 0}
-		var go := func() -> void: create_map(nm, env, Vector2i(int(w.value), int(h.value)), o)
+		# Размер — сейчас, а не в замыкании: подтверждение «потерять правки» срабатывает уже
+		# после того, как это окно закрыто и его поля освобождены (0.9.2: Nil 'value').
+		var size := Vector2i(int(w.value), int(h.value))
+		var go := func() -> void: create_map(nm, env, size, o)
 		if _dirty:
 			_confirm("New Map", "You have unsaved changes. Start a new map and lose them?", "New Map", go)
 			return false
@@ -2485,7 +2612,9 @@ func open_map(fname: String) -> bool:
 	_flash("Opened %s" % fname.get_basename())
 	return true
 
-func _save_as_dialog() -> void:
+## Имя для первого сохранения. «Сохранить как» больше нет (0.9.2): оно делало то же, что
+## «Сохранить»; копию под другим именем даёт New + Paste или переименование файла.
+func _name_dialog() -> void:
 	var body := VBoxContainer.new()
 	var name_edit := LineEdit.new()
 	name_edit.text = map_name
@@ -2504,7 +2633,7 @@ func _save_as_dialog() -> void:
 	name_edit.text_submitted.connect(func(_t: String) -> void:
 		if do_save.call() == true:
 			_close_modal())
-	_dialog("Save Map As", body, [["Cancel", null], ["Save", do_save]])
+	_dialog("Save Map", body, [["Cancel", null], ["Save", do_save]])
 	name_edit.grab_focus.call_deferred()
 
 func _resize_dialog() -> void:
@@ -2530,20 +2659,23 @@ func _shortcuts_dialog() -> void:
 	grid.add_theme_constant_override("h_separation", 24)
 	grid.add_theme_constant_override("v_separation", 4)
 	var rows := [
-		["B / E / L / R / F", "Brush, Eraser, Line, Rectangle, Fill"],
+		["B / E / L / F", "Brush, Eraser, Line, Fill"],
+		["U / C", "Rectangle, Circle"],
 		["M / I / T", "Select, Eyedropper, Stamp"],
 		["Alt + click", "Pick the tile under the cursor"],
 		["[  ]", "Brush size"],
-		["R / H / V", "Rotate / flip what you are placing"],
+		["R", "Turn furniture, the selection, or what you are placing"],
+		["Shift+R", "Furniture turns to the wall by itself again"],
+		["H / V", "Flip what you are placing"],
 		["Ctrl+Z / Ctrl+Y", "Undo / redo"],
 		["Ctrl+C / X / V", "Copy, cut, paste the selection"],
 		["Delete", "Clear the selection"],
 		["Ctrl+A", "Select the whole map"],
-		["Esc", "Cancel placing, drop the selection"],
-		["Ctrl+S / Ctrl+Shift+S", "Save / save as"],
+		["Esc", "Cancel placing, drop the selection, then leave the editor"],
+		["Ctrl+S", "Save"],
 		["Ctrl+N / Ctrl+O", "New map / open"],
 		["WASD, arrows, right-drag", "Pan"],
-		["Wheel / Ctrl+0", "Zoom / fit the map"],
+		["Wheel, + / −, Ctrl+0", "Zoom / fit the map"],
 		["G", "Grid on or off"],
 		["F5", "Play this map"],
 	]

@@ -19,10 +19,7 @@ static var _bold_font: FontVariation = null
 # panel full of headers doesn't rebuild the variation each time.
 static func _bold() -> FontVariation:
 	if _bold_font == null and Ui != null:
-		var fv := FontVariation.new()
-		fv.base_font = Ui.get_ui_font()
-		fv.variation_embolden = 0.55
-		_bold_font = fv
+		_bold_font = Ui.bold_font() as FontVariation
 	return _bold_font
 
 # Opaque gunmetal body (with the baked chrome border) so a panel frames its

@@ -33,6 +33,10 @@ var env: String = ""
 ## [id объекта, прочность]. Запись действует, только пока на клетке тот же объект, так что
 ## перекрашенная в редакторе клетка старую прочность не наследует. Пусто почти всегда.
 var feature_dur: Dictionary = {}
+## Поворот мебели, заданный руками в редакторе (R, 0.9.2): индекс → [id объекта, k], k —
+## четверти оборота по часовой (0 — спинкой вверх). Как и прочность, действует, только
+## пока на клетке тот же предмет. Нет записи — предмет поворачивается сам (к стене).
+var feature_turn: Dictionary = {}
 
 func _init(p_width: int = 16, p_height: int = 12) -> void:
 	resize(p_width, p_height)
@@ -56,6 +60,7 @@ func resize(p_width: int, p_height: int) -> void:
 		zone_owner[i] = -1
 	spawns = []
 	feature_dur = {}
+	feature_turn = {}
 
 ## Изменить размер, СОХРАНИВ содержимое (batch 13 #14): клетки в пересечении старого и
 ## нового поля остаются как были, новые — космос, спавны за краем отбрасываются. Раньше
@@ -70,6 +75,7 @@ func resize_keep(p_width: int, p_height: int) -> void:
 	var old_zone := zone_owner
 	var old_spawns := spawns
 	var old_dur := feature_dur
+	var old_turn := feature_turn
 	resize(p_width, p_height)
 	fill_all_space()
 	for y in mini(old_h, height):
@@ -83,6 +89,8 @@ func resize_keep(p_width: int, p_height: int) -> void:
 			zone_owner[dst] = old_zone[src]
 			if old_dur.has(src):
 				feature_dur[dst] = old_dur[src]
+			if old_turn.has(src):
+				feature_turn[dst] = old_turn[src]
 	for s in old_spawns:
 		if in_bounds(s["coord"]):
 			spawns.append(s)
@@ -156,6 +164,10 @@ func zone_cells(owner: int) -> Array:
 
 ## Перенести рельеф карты на существующую сетку такого же размера.
 func apply_to_grid(grid: Grid) -> void:
+	grid.furniture_turn.clear()
+	for i: int in feature_turn:
+		if i < feature_id.size() and str(feature_turn[i][0]) == feature_id[i]:
+			grid.furniture_turn[Vector2i(i % width, i / width)] = feature_turn[i].duplicate()
 	for y in mini(height, grid.height):
 		for x in mini(width, grid.width):
 			var coord := Vector2i(x, y)
@@ -182,6 +194,19 @@ func set_feature_damage(coord: Vector2i, dur: int) -> void:
 		feature_dur.erase(i)
 	else:
 		feature_dur[i] = [fid, maxi(1, dur)]
+
+## Поворот, заданный руками, или −1 (нет записи / на клетке уже другой предмет).
+func get_turn(i: int) -> int:
+	var rec: Variant = feature_turn.get(i)
+	if rec != null and str(rec[0]) == feature_id[i]:
+		return int(rec[1])
+	return -1
+
+func set_turn(i: int, k: int) -> void:
+	if k < 0 or feature_id[i] == "":
+		feature_turn.erase(i)
+	else:
+		feature_turn[i] = [feature_id[i], k % 4]
 
 func get_feature_damage(coord: Vector2i) -> int:
 	var i := _index(coord)
@@ -332,6 +357,12 @@ func to_dict() -> Dictionary:
 			dur_out[str(i)] = feature_dur[i]
 	if not dur_out.is_empty():
 		out["feature_durability"] = dur_out
+	var turn_out := {}
+	for i: int in feature_turn:
+		if get_turn(i) >= 0:
+			turn_out[str(i)] = feature_turn[i]
+	if not turn_out.is_empty():
+		out["feature_turn"] = turn_out
 	return out
 
 static func from_dict(d: Dictionary) -> MapData:
@@ -357,6 +388,11 @@ static func from_dict(d: Dictionary) -> MapData:
 		var rec: Array = fd[k]
 		if int(k) < n and rec.size() == 2:
 			m.feature_dur[int(k)] = [str(rec[0]), int(rec[1])]
+	var ft2: Dictionary = d.get("feature_turn", {})
+	for k: String in ft2:
+		var rec: Array = ft2[k]
+		if int(k) < n and rec.size() == 2:
+			m.feature_turn[int(k)] = [str(rec[0]), int(rec[1]) % 4]
 	var zo: Array = d.get("zone_owner", [])
 	for i in n:
 		if i < zo.size():

@@ -180,7 +180,7 @@ static func rotated(p: Dictionary) -> Dictionary:
 	var out := pattern(h, w)
 	for y in h:
 		for x in w:
-			out["cells"][x * h + (h - 1 - y)] = p["cells"][y * w + x]
+			out["cells"][x * h + (h - 1 - y)] = _turned_cell(p["cells"][y * w + x], [1, 2, 3, 0])
 	for s: Array in p["spawns"]:
 		out["spawns"].append([h - 1 - int(s[1]), int(s[0]), s[2], s[3]])
 	return out
@@ -194,11 +194,21 @@ static func flipped(p: Dictionary, horizontal: bool) -> Dictionary:
 		for x in w:
 			var nx := w - 1 - x if horizontal else x
 			var ny := y if horizontal else h - 1 - y
-			out["cells"][ny * w + nx] = p["cells"][y * w + x]
+			out["cells"][ny * w + nx] = _turned_cell(p["cells"][y * w + x],
+					[0, 3, 2, 1] if horizontal else [2, 1, 0, 3])
 	for s: Array in p["spawns"]:
 		out["spawns"].append([w - 1 - int(s[0]) if horizontal else int(s[0]),
 				int(s[1]) if horizontal else h - 1 - int(s[1]), s[2], s[3]])
 	return out
+
+## Клетка узора с поворотом мебели (6-й элемент, 0.9.2), переставленным по таблице map
+## (k → map[k]). Без поворота клетка та же самая.
+static func _turned_cell(cell: Variant, map: Array) -> Variant:
+	if cell == null or (cell as Array).size() < 6 or int(cell[5]) < 0:
+		return cell
+	var t: Array = (cell as Array).duplicate()
+	t[5] = map[int(t[5]) % 4]
+	return t
 
 ## Вырезать узор из карты: прямоугольник r целиком, со спавнами и зонами.
 static func capture(m: MapData, r: Rect2i) -> Dictionary:
@@ -207,7 +217,7 @@ static func capture(m: MapData, r: Rect2i) -> Dictionary:
 		for x in r.size.x:
 			var i := (r.position.y + y) * m.width + r.position.x + x
 			p["cells"][y * r.size.x + x] = [int(m.floor_type[i]), float(m.cover_height[i]),
-					m.is_space[i] != 0, String(m.feature_id[i]), int(m.zone_owner[i])]
+					m.is_space[i] != 0, String(m.feature_id[i]), int(m.zone_owner[i]), m.get_turn(i)]
 	for s: Dictionary in m.spawns:
 		var c: Vector2i = s["coord"]
 		if r.has_point(c):
