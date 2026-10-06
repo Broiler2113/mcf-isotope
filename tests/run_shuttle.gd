@@ -248,7 +248,12 @@ func _only_the_operator_launches_from_a_seat() -> void:
 	ck(r.resolve(VehicleBoardIntent.new(sn.id, sh.id, 2)).ok,
 			"the sniper takes the seat next to the station")
 	r.resolve(EndTurnIntent.new()); r.resolve(EndTurnIntent.new())
-	ck(r.stations_near(sn).has(Vector2i(4, 4)), "the sniper really does sit next to the station")
+	# Соседство проверяется ПО КЛЕТКЕ, а не через stations_near: с 0.9.4 тот честно отвечает
+	# пустым списком всякому, кто не оператор дронов (запрет перенесён к источнику), и как
+	# «что рядом со мной стоит» его больше не спросить.
+	ck(Combat.distance(sn.coord, Vector2i(4, 4)) == 1,
+			"the sniper really does sit next to the station")
+	ck(r.stations_near(sn).is_empty(), "but a non-operator is shown no station at all")
 	ck(sn.remaining_ap > 0, "and has the AP that opens the seated branch")
 	var for_sniper := 0
 	var for_operator := 0

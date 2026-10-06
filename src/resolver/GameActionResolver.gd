@@ -6233,16 +6233,19 @@ func play_civilian_slots() -> ActionResult:
 	# Каждый нейтральный слот играется не больше раза за передачу хода (batch 14): когда
 	# обе армии перебиты, очередь состоит из одних жителей, и без этой памяти круг
 	# 0 → 1 → 2 → 0 … не кончался никогда — бой зависал на первом же EndTurn.
+	# Память ведётся по ВЛАДЕЛЬЦУ, а не по индексу в очереди (0.9.4): независимая армия
+	# встаёт в очередь прямо во время передачи хода, и вставка СДВИГАЕТ индексы — по индексу
+	# цикл обрывался на полпути и оставлял активным слот, за который играть некому.
 	var played: Dictionary = {}
 	# Независимая армия (0.9.4) ходит здесь же: командира у неё нет, её ход ведёт резолвер
 	# ровно так же, как ход жителей, — и значит он одинаков у хоста и клиента без единого
 	# сетевого сообщения.
 	while MCF.is_npc_side(state.active_player()):
-		var slot := state.turns.active_index
+		var slot := state.active_player()
 		if played.has(slot):
 			break
 		played[slot] = true
-		var res := advance_civilians(state.active_player())
+		var res := advance_civilians(slot)
 		out.log_lines.append_array(res.log_lines)
 		# Метка «сейчас ходит вот этот слот» (item 6): по ней экран подсвечивает нейтральную
 		# группу в списке инициативы, пока её ход отыгрывается. Своего active_player у неё в
@@ -6254,8 +6257,8 @@ func play_civilian_slots() -> ActionResult:
 		out.fx.append_array(res.fx)
 		out.deaths.append_array(res.deaths)
 		state.turns.end_turn(state.all_units())
-		if state.turns.active_index == slot:
-			break
+		if state.active_player() == slot:
+			break   # играть больше некому — очередь стоит на месте
 	return out
 
 ## Пленник, чьего захватчика больше нет, отпускается сам.
@@ -6578,6 +6581,16 @@ func _land_army(p: Dictionary, res: ActionResult) -> void:
 	var slot := MCF.independent_slot(random_events.armies + 1)
 	if not MCF.is_independent(slot):
 		return
+	# Больше ARMY_MAX армий на карту не приходит (0.9.4): событие может выпасть и десять
+	# раз подряд, а десять ничьих сторон в очереди — это уже не «событие», а другая игра.
+	# Выпавшее сверх потолка событие просто проходит мимо, как и прежние «ничего».
+	var alive := 0
+	for s_id: int in state.turns.round_order:
+		if MCF.is_independent(s_id) and state.turns.playable(s_id, state.all_units()):
+			alive += 1
+	if alive >= ARMY_MAX:
+		res.log("Unknown forces hold off — the field is crowded enough")
+		return
 	var spots := _army_spawn_cells(p)
 	if spots.is_empty():
 		res.log("Unknown forces turn back — nowhere to land on that edge")
@@ -6613,6 +6626,8 @@ func _land_army(p: Dictionary, res: ActionResult) -> void:
 
 ## Предохранитель набора: больше этого числа бойцов независимая армия не получает.
 const ARMY_UNIT_CAP := 60
+## И больше этого числа ЖИВЫХ независимых армий на карте не бывает.
+const ARMY_MAX := 2
 
 var _army_stats_cache: Dictionary = {}
 
