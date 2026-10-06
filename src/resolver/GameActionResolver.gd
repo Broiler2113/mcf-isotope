@@ -475,7 +475,7 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 			var bcell := state.grid.cell(mine)
 			bcell.clear_feature()
 			notify_cell_changed(mine)
-			_fx(bres, {"fx": "debris", "at": NOWHERE, "cells": [mine]})
+			_fx(bres, {"fx": "debris", "at": NOWHERE, "cells": [mine], "blast": true})
 			bres.log("The borg rolls over an anti-vehicle mine at (%d, %d)!" % [mine.x, mine.y])
 			_sync_borg(unit)
 			var bveh := state.get_vehicle(unit.borg_id)
@@ -522,7 +522,9 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 		var drop: Vector2i = origin if path.size() < 2 else path[path.size() - 2]
 		if _valid_carry_drop(intent.carry_drop, intent.target):
 			drop = intent.carry_drop
+		var carried_from := carried.coord
 		state.grid.move_occupant(carried.coord, drop)
+		_carried_slide = [carried, carried_from, drop]
 		lines.append("  ↳ carrying %s → (%d, %d)" % [carried.stats.display_name, drop.x, drop.y])
 
 	# Волочимый объект переезжает на предпоследнюю клетку пути — как пленник (#34).
@@ -538,6 +540,10 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 
 	var moved_res := ActionResult.success(lines)
 	_fx_steps(moved_res, unit, origin, path, intent.target)
+	# Пленник переезжает вместе с носильщиком — и так же плавно (0.9.4).
+	if not _carried_slide.is_empty():
+		_slide_fx(_carried_slide[0], _carried_slide[1], _carried_slide[2], moved_res)
+		_carried_slide = []
 	return moved_res
 
 ## Шаги по клеткам: маршрут до точки остановки включительно. Кровавых отпечатков ног
@@ -555,6 +561,43 @@ func _fx_steps(res: ActionResult, unit: UnitInstance, origin: Vector2i, path: Ar
 		res.dice_events.append({"kind": "hold", "units": {unit.id: origin}})
 		res.dice_events.append({"kind": "walk", "unit": unit.id, "from": origin,
 				"path": cut, "soldier": true})
+
+## ЛЮБОЕ перемещение юнита — ПЛАВНОЕ (0.9.4). Игрок жаловался, что «only half of all
+## possible movements actually are» смещения: пеший ход уже шёл по клеткам (_fx_steps), а
+## отбрасывание в невесомости, толчок щитом, перестановка пленника и волочение трупа
+## перескакивали мгновенно. Клетка меняется как и раньше — экран получает те же события
+## «hold» (держать рисунок в старой клетке) и «walk» (вести по клеткам), какими уже
+## идёт пеший ход.
+##
+## Путь — прямая по Чебышёву от старой клетки к новой: все эти смещения идут по прямой и
+## не дальше нескольких клеток, так что обходить препятствия тут нечего.
+func _slide_fx(unit: UnitInstance, from: Vector2i, to: Vector2i, res: ActionResult) -> void:
+	if res == null or unit == null or from == to:
+		return
+	var path: Array[Vector2i] = []
+	var p := from
+	while p != to and path.size() < SLIDE_PATH_CAP:
+		p += Vector2i(signi(to.x - p.x), signi(to.y - p.y))
+		path.append(p)
+	if path.is_empty():
+		return
+	res.dice_events.append({"kind": "hold", "units": {unit.id: from}})
+	res.dice_events.append({"kind": "walk", "unit": unit.id, "from": from, "path": path,
+			"soldier": true})
+
+## Предохранитель длины такого смещения: дальше любого отбрасывания и толчка.
+const SLIDE_PATH_CAP := 16
+## Пленник, переехавший вместе с носильщиком: [юнит, откуда, куда] — показать его переезд
+## после самого хода носильщика. Живёт ровно внутри одного resolve().
+var _carried_slide: Array = []
+
+## Переставить юнита и показать это плавно (0.9.4).
+func _slide(unit: UnitInstance, to: Vector2i, res: ActionResult) -> void:
+	var from := unit.coord
+	if from == to:
+		return
+	state.grid.move_occupant(from, to)
+	_slide_fx(unit, from, to, res)
 
 ## Клетка волочимого объекта, если юнит и правда его тащит и объект ещё рядом (#34).
 func dragged_cell_of(unit: UnitInstance) -> Vector2i:
@@ -766,7 +809,7 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 		_kill(target, result, shooter.coord)  # труп остаётся на клетке, но не перекрывает ЛОС
 
 	# Невесомость (§3.11): отдача стрелка и отбрасывание цели (кроме противотанкиста).
-	_apply_zero_g(shooter, target)
+	_apply_zero_g(shooter, target, result)
 
 	# Гильза на каждый ушедший выстрел (#21.3), вылетают за спину стрелка.
 	if fired > 0:
@@ -1043,7 +1086,8 @@ func _blast(center: Vector2i, res: ActionResult = null, cells: Array[Vector2i] =
 	# Побитый пол по ВСЕЙ зоне, эпицентр — отдельной текстурой (#21.1). Мина просит
 	# ОБЫЧНЫЙ щебень без эпицентра (item 13): передаёт at=NOWHERE, и ни одна клетка не
 	# совпадёт с «эпицентром», значит вся зона осядет рядовым разрушением.
-	_fx(res, {"fx": "debris", "at": center if epicenter_debris else NOWHERE, "cells": area})
+	_fx(res, {"fx": "debris", "at": center if epicenter_debris else NOWHERE, "cells": area,
+			"blast": true})
 	return killed_names
 
 ## Прямое попадание в прочное укрепление (ДОТ, §3.7): бетонная коробка принимает удар
@@ -1657,7 +1701,7 @@ func _resolve_assault(shooter: UnitInstance, target: UnitInstance) -> ActionResu
 			break  # цель уцелела — пробитие останавливается
 	if not any_kill:
 		result.log("… target survived")
-	_apply_zero_g(shooter, target)  # невесомость (§3.11)
+	_apply_zero_g(shooter, target, result)  # невесомость (§3.11)
 	return result
 
 # --- Толчок щитом (§3.14) ---
@@ -1682,6 +1726,8 @@ func _resolve_push(intent: PushIntent) -> ActionResult:
 	var roll := state.dice.roll_d6()
 	var survived := roll >= need
 	var pushed := false
+	var push_from := target.coord
+	var push_to := target.coord
 	if not survived:
 		_kill(target)
 	else:
@@ -1689,10 +1735,14 @@ func _resolve_push(intent: PushIntent) -> ActionResult:
 		if state.grid.in_bounds(back) and not state.grid.cell(back).is_wall() \
 				and state.grid.cell(back).occupant == null:
 			state.grid.move_occupant(target.coord, back)
+			push_to = back
 			pushed = true
 
 	var result := ActionResult.new()
 	result.ok = true
+	# Толчок виден как толчок (0.9.4): цель отъезжает на клетку плавно, а не телепортируется.
+	if pushed:
+		_slide_fx(target, push_from, push_to, result)
 	result.dice_events.append({
 		"kind": "check", "actor": target.stats.display_name,
 		"roll": roll, "need": need, "ok": survived,
@@ -2022,7 +2072,7 @@ func _blast_armor_wall(center: Vector2i, res: ActionResult) -> void:
 		return
 	cell.clear_feature()
 	notify_cell_changed(center)
-	_fx(res, {"fx": "debris", "at": center, "cells": [center]})
+	_fx(res, {"fx": "debris", "at": center, "cells": [center], "blast": true})
 	res.log("Armored Wall at (%d, %d) is blown apart." % [center.x, center.y])
 
 ## Дорожка «кто в кого» (issue 8: «add visual clues that would tell the player who is
@@ -3517,7 +3567,9 @@ static func _rebuild_blockers(grid: Grid) -> void:
 		var row := y * gw
 		for x in gw:
 			var cell := grid.cell_fast(x, y)
-			if cell.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(cell.feature_id):
+			# Ровно то же условие, что у поправки по журналу (_patch_blockers) — одним
+			# вопросом к клетке, чтобы газ (0.9.4) не выпал из холодной сборки таблицы.
+			if cell.blocks_sight():
 				_blockers[row + x] = 1
 				_blockers_t[x * gh + y] = 1
 ## Потолок кеша: за длинный бой в нём оседает по записи на каждую позицию, где кто-то
@@ -4556,12 +4608,19 @@ func advance_civilians(owner: int = MCF.Owner.NEUTRAL) -> ActionResult:
 	# слоту активационной группы (§15). Ведём только его бойцов, чужих групп не трогаем.
 	var awake := 0
 	var idx := _sight_index()
+	# Независимая армия (0.9.4) не спит и не «вскрывается»: она пришла воевать и готова
+	# с первого же своего хода. Всё прочее у неё как у жителей — тот же мозг, тот же
+	# отыгрыш внутри передачи хода.
+	var raiders := MCF.is_independent(owner)
 	for u in state.all_units():
-		if u.owner != owner or not _is_civilian(u) or not u.is_alive() or u.is_held():
+		if u.owner != owner or not u.is_alive() or u.is_held():
 			continue
-		_update_breached(u, idx)
-		if not u.civilian_active:
-			continue
+		if not raiders:
+			if not _is_civilian(u):
+				continue
+			_update_breached(u, idx)
+			if not u.civilian_active:
+				continue
 		# Слот жителей может прийтись до границы раунда — свою активацию житель всегда
 		# начинает с полным запасом (иначе он простоял бы весь первый слот партии).
 		if u.remaining_ap <= 0 and u.move_credit <= 0:
@@ -4629,7 +4688,8 @@ func advance_civilians(owner: int = MCF.Owner.NEUTRAL) -> ActionResult:
 	if not moved_from.is_empty():
 		res.dice_events.push_front({"kind": "hold", "units": moved_from})
 	if not acted.is_empty():
-		res.log_lines.push_front("— Civilians take their turn (%d active) —" % acted.size())
+		res.log_lines.push_front("— %s take their turn (%d active) —" % [
+			MCF.owner_name(owner) if raiders else "Civilians", acted.size()])
 	return res
 
 ## Клетки, по которым житель пройдёт, если приказ — движение; иначе пусто. Нужно ровно
@@ -4821,27 +4881,27 @@ func update_airlocks() -> void:
 ## стоящих в клетке-космосе, и только если позади свободно на всю дистанцию.
 ## Пассажир челнока (batch 13) пристёгнут к креслу: его не отбрасывает ни отдачей, ни
 ## попаданием — иначе он вылетал бы из корпуса, оставаясь «на борту» с занятым креслом.
-func _apply_zero_g(shooter: UnitInstance, target: UnitInstance) -> void:
+func _apply_zero_g(shooter: UnitInstance, target: UnitInstance, res: ActionResult = null) -> void:
 	# Стрелка отбрасывает назад (от цели).
-	_recoil_shooter(shooter, target.coord)
+	_recoil_shooter(shooter, target.coord, res)
 	# Цель отбрасывает дальше (от стрелка).
 	if target.is_alive() and target.aboard_vehicle_id == -1 \
 			and state.grid.cell(target.coord).is_space:
 		var away := _step_toward(shooter.coord, target.coord)
-		_knockback(target, away, MCF.ZEROG_TARGET_KNOCKBACK)
+		_knockback(target, away, MCF.ZEROG_TARGET_KNOCKBACK, res)
 
 ## Отдача стрелка в невесомости: на клетку назад, прочь от точки прицела, — если позади
 ## свободно. Общая для всех выстрелов (batch group-zones): раньше её получали только
 ## винтовка и штурмовик, а заряд ПТ, струя, лазер и выстрел по окну стрелка не двигали.
-func _recoil_shooter(shooter: UnitInstance, aim: Vector2i) -> void:
+func _recoil_shooter(shooter: UnitInstance, aim: Vector2i, res: ActionResult = null) -> void:
 	if shooter.is_alive() and shooter.aboard_vehicle_id == -1 \
 			and state.grid.in_bounds(shooter.coord) and state.grid.cell(shooter.coord).is_space:
-		_knockback(shooter, _step_toward(aim, shooter.coord), MCF.ZEROG_SHOOTER_KNOCKBACK)
+		_knockback(shooter, _step_toward(aim, shooter.coord), MCF.ZEROG_SHOOTER_KNOCKBACK, res)
 
 ## Результат спецвыстрела с отдачей стрелка (если выстрел состоялся).
 func _recoiled(result: ActionResult, shooter: UnitInstance, aim: Vector2i) -> ActionResult:
 	if result.ok:
-		_recoil_shooter(shooter, aim)
+		_recoil_shooter(shooter, aim, result)
 	return result
 
 ## Машина, корпус которой занимает клетку: по следу на сетке, а борг — по своей клетке
@@ -4856,7 +4916,7 @@ func vehicle_covering(c: Vector2i) -> Vehicle:
 	return null
 
 ## Сдвиг юнита на dist клеток по step, но только если ВСЕ клетки свободны (иначе нет).
-func _knockback(unit: UnitInstance, step: Vector2i, dist: int) -> void:
+func _knockback(unit: UnitInstance, step: Vector2i, dist: int, res: ActionResult = null) -> void:
 	if step == Vector2i.ZERO:
 		return
 	var dest := unit.coord
@@ -4865,7 +4925,7 @@ func _knockback(unit: UnitInstance, step: Vector2i, dist: int) -> void:
 		if not state.grid.in_bounds(next) or state.grid.is_occupied_or_wall(next):
 			return  # позади не свободно — отбрасывания нет
 		dest = next
-	state.grid.move_occupant(unit.coord, dest)
+	_slide(unit, dest, res)
 
 # --- Дроны (§3.12) ---
 func _resolve_spawn_drone(intent: SpawnDroneIntent) -> ActionResult:
@@ -5059,9 +5119,16 @@ func station_near(operator: UnitInstance) -> Vector2i:
 
 ## ВСЕ свои станции вплотную к оператору (item 17). Их может быть несколько, и с
 ## какой поднимать дрон — решает игрок, а не порядок обхода соседей.
+##
+## НЕ оператор — пустой список. Проверка стоит ЗДЕСЬ, а не у звавших: её делали все четыре
+## вызова (обе кнопки в Main, _resolve_spawn_drone и пеший перечислитель) и ровно один —
+## пассажир челнока в LegalIntents — забыл. Политика RL честно выбирала «поднять дрон»
+## тяжёлым пехотинцем из кресла, резолвер отвечал «Only an operator can launch a drone», и
+## так до конца хода: жадная оценка переспрашивает один и тот же отказ, пока среда не
+## оборвёт ход на восьмом (отсюда отказы кратные восьми в eval_games.jsonl у tactical-2).
 func stations_near(operator: UnitInstance) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
-	if operator == null:
+	if operator == null or operator.stats.special_ability_id != MCF.ABILITY_DRONE_OPERATOR:
 		return out
 	for n in state.grid.neighbors(operator.coord):
 		var cell := state.grid.cell(n)
@@ -5511,10 +5578,12 @@ func _resolve_move_held(intent: MoveHeldIntent) -> ActionResult:
 		return ActionResult.fail("Unit is not holding anyone")
 	if not _valid_carry_drop(intent.to, actor.coord):
 		return ActionResult.fail("Cell is occupied or not adjacent to the carrier")
+	var held_from := carried.coord
 	state.grid.move_occupant(carried.coord, intent.to)
 	update_airlocks()
 	var res := ActionResult.new()
 	res.ok = true
+	_slide_fx(carried, held_from, intent.to, res)
 	res.log("%s shifts %s → (%d, %d)" % [
 		actor.stats.display_name, carried.stats.display_name, intent.to.x, intent.to.y])
 	# Переставленный на горящую клетку пленник сгорает — как и любой, кто туда попал.
@@ -5625,8 +5694,10 @@ func _resolve_drag(intent: DragIntent) -> ActionResult:
 		state.grid.move_occupant(src, dst)
 		# Постройка на горящей клетке/перенос груза на неё тушит пламя (#82).
 		_extinguish_cell(dst_cell)
-		return ActionResult.success(["%s dragged a corpse → (%d, %d) [AP: %d]" % [
+		var drag_res := ActionResult.success(["%s dragged a corpse → (%d, %d) [AP: %d]" % [
 			actor.stats.display_name, dst.x, dst.y, actor.remaining_ap]])
+		_slide_fx(corpse, src, dst, drag_res)   # тело переезжает плавно (0.9.4)
+		return drag_res
 
 	# Лёгкий объект (мешки/ёж/куча земли) — тащить может любой юнит (#30).
 	if is_draggable_feature(src_cell.feature_id):
@@ -6037,7 +6108,7 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 
 	# Осколочная не рушит укрепления, поэтому щебень кладём только там, где реально
 	# что-то разлетелось: под самим взрывом и под лопнувшими стёклами (#21.1).
-	_fx(result, {"fx": "debris", "at": center, "cells": [center] + broken_glass})
+	_fx(result, {"fx": "debris", "at": center, "cells": [center] + broken_glass, "blast": true})
 	result.dice_events.append({
 		"kind": "grenade", "item": MCF.ITEM_FRAG,
 		"thrower": thrower.stats.display_name, "center": center, "targets": details,
@@ -6162,13 +6233,19 @@ func play_civilian_slots() -> ActionResult:
 	# Каждый нейтральный слот играется не больше раза за передачу хода (batch 14): когда
 	# обе армии перебиты, очередь состоит из одних жителей, и без этой памяти круг
 	# 0 → 1 → 2 → 0 … не кончался никогда — бой зависал на первом же EndTurn.
+	# Память ведётся по ВЛАДЕЛЬЦУ, а не по индексу в очереди (0.9.4): независимая армия
+	# встаёт в очередь прямо во время передачи хода, и вставка СДВИГАЕТ индексы — по индексу
+	# цикл обрывался на полпути и оставлял активным слот, за который играть некому.
 	var played: Dictionary = {}
-	while MCF.is_neutral(state.active_player()):
-		var slot := state.turns.active_index
+	# Независимая армия (0.9.4) ходит здесь же: командира у неё нет, её ход ведёт резолвер
+	# ровно так же, как ход жителей, — и значит он одинаков у хоста и клиента без единого
+	# сетевого сообщения.
+	while MCF.is_npc_side(state.active_player()):
+		var slot := state.active_player()
 		if played.has(slot):
 			break
 		played[slot] = true
-		var res := advance_civilians(state.active_player())
+		var res := advance_civilians(slot)
 		out.log_lines.append_array(res.log_lines)
 		# Метка «сейчас ходит вот этот слот» (item 6): по ней экран подсвечивает нейтральную
 		# группу в списке инициативы, пока её ход отыгрывается. Своего active_player у неё в
@@ -6180,8 +6257,8 @@ func play_civilian_slots() -> ActionResult:
 		out.fx.append_array(res.fx)
 		out.deaths.append_array(res.deaths)
 		state.turns.end_turn(state.all_units())
-		if state.turns.active_index == slot:
-			break
+		if state.active_player() == slot:
+			break   # играть больше некому — очередь стоит на месте
 	return out
 
 ## Пленник, чьего захватчика больше нет, отпускается сам.
@@ -6217,6 +6294,13 @@ func _resolve_end_turn(intent: EndTurnIntent = null) -> ActionResult:
 		return ActionResult.fail("Not your turn")
 	var prev := state.active_player()
 	_free_orphaned_captives()
+	# Объявленное событие падает в КОНЦЕ раунда (0.9.4) — то есть в ту самую передачу хода,
+	# которой раунд кончается, и ДО того, как end_turn() начнёт новый: иначе «конец раунда
+	# N» пришёлся бы на уже восстановленные ОД и раунд N + 1.
+	var round_res := ActionResult.new()
+	round_res.ok = true
+	if _handoff_closes_round():
+		land_random_events(round_res)
 	state.turns.end_turn(state.all_units())
 	var civ := play_civilian_slots()
 	# Огонь ползёт в начале хода той стороны, которая его устроила (#45). Дошедшее до
@@ -6238,9 +6322,14 @@ func _resolve_end_turn(intent: EndTurnIntent = null) -> ActionResult:
 			MCF.owner_name(prev), MCF.owner_name(state.active_player()), state.turns.round_number
 		]
 	]
+	# Журнал события идёт ПЕРВЫМ: по времени оно и случилось раньше хода жителей и огня.
+	lines.append_array(round_res.log_lines)
 	lines.append_array(civ.log_lines)
 	lines.append_array(fire_res.log_lines)
 	var out := ActionResult.success(lines)
+	out.dice_events.append_array(round_res.dice_events)
+	out.fx.append_array(round_res.fx)
+	out.deaths.append_array(round_res.deaths)
 	# Броски жителей едут вместе с передачей хода: UI отыграет их анимацией, а смерти
 	# покажет только после кубика защиты — как и в любом другом обмене выстрелами (#96).
 	out.dice_events = civ.dice_events
@@ -6255,29 +6344,343 @@ func _resolve_end_turn(intent: EndTurnIntent = null) -> ActionResult:
 	_maybe_random_event(out)
 	return out
 
-## Разыграть случайное событие на очередном ходу, если оно «созрело» (§1.5, item 61).
-## Всё — «случится ли», «какое», «куда бьёт» — берётся из DiceService, чтобы хост и
-## клиент разыграли одно и то же. Пока эффекты условны (заглушки).
+## Кончится ли раунд ЭТОЙ передачей хода (0.9.4). Прямо — если после активного слота
+## играющих больше нет; а ещё — если все оставшиеся играющие слоты ничьи (жители,
+## независимые армии): их ход резолвер отыграет здесь же, внутри этой самой передачи
+## (play_civilian_slots), и границу раунда перейдёт тоже он. Без второго условия события
+## на карте с жителями не падали бы вовсе: раунд всегда кончался «внутри» передачи.
+func _handoff_closes_round() -> bool:
+	var units := state.all_units()
+	if state.turns.closes_round(units):
+		return true
+	var order := state.turns.round_order
+	for i in range(state.turns.active_index + 1, order.size()):
+		var slot: int = order[i]
+		if state.turns.playable(slot, units) and not MCF.is_npc_side(slot):
+			return false
+	return true
+
+# =====================================================================================
+#  Случайные события (0.9.4, спека «Random Event System»)
+# =====================================================================================
+## Событие не падает в тот же миг, когда выпало: СНАЧАЛА ОБЪЯВЛЕНИЕ, потом удар в конце
+## СЛЕДУЮЩЕГО раунда (RandomEvents.WARNING_ROUNDS). Параметры (где зона, с какого края
+## армия) катаются при объявлении, исход по клеткам — при падении; оба порядка жёстко
+## зафиксированы, поэтому хост и клиент прокатывают один поток d6 и сходятся.
+##
+## Выключенные события (или пустая очередь) не бросают НИ ОДНОГО кубика — поток случайности
+## старых партий цел.
+
+## Обстрел: сторона зоны в клетках и порог попадания по клетке (4+ на d6 — ровно половина).
+##
+## Зона НЕ бывает во всю карту, хотя спека это допускала: на поле 250×250 это 70 000
+## бросков d6 за одно событие — и столько же чисел в журнале кубиков, который хост
+## отправляет гостю и пишет повтор. Батарея накрывает квадрат, а не планету.
+const BARRAGE_SIDE_MIN := 3
+const BARRAGE_SIDE_MAX := 16
+const BARRAGE_HIT_MIN := 4
+## Газ: сторона облака (не больше GAS_SIDE_MAX и не больше трети карты) и сколько раундов
+## он стоит. Спасброска нет: каждый раунд свой бросок, 1–2 — смерть.
+const GAS_SIDE_MIN := 3
+const GAS_SIDE_MAX := 14
+const GAS_ROUNDS := 3
+const GAS_SURVIVE_MIN := 3
+## Независимая армия: длина участка края, на котором она высаживается, и во сколько раз
+## её сила отличается от средней армии игрока.
+const ARMY_SEGMENT_MIN := 4
+const ARMY_SEGMENT_MAX := 10
+const ARMY_STRENGTH := 1.0
+## Из кого набирается независимая армия: боевые профессии. Мирных, командиров и операторов
+## дронов в ней нет — командовать ей некем, а станций у неё не бывает.
+const ARMY_ROSTER := ["light_infantry", "heavy_infantry", "assault", "machinegunner",
+		"sniper", "marksman", "anti_tank", "flamethrower", "shield_bearer", "engineer",
+		"miner", "sapper"]
+## Если у игроков вообще нечего мерить (нулевая цена), армия приходит такой.
+const ARMY_FALLBACK_UNITS := 6
+
+## Случайный индекс 0..n−1 ШИРОКИМ броском: пять d6 дают 7776 значений, и на любой
+## стороне карты (до 270 клеток) перекос остатка — меньше процента. Обычный _rand_index
+## берёт три кубика (216 значений) и для размеров карты уже не годится.
+func _rand_wide(n: int) -> int:
+	if n <= 1:
+		return 0
+	var v := 0
+	for _i in 5:
+		v = v * 6 + (state.dice.roll_d6() - 1)
+	return v % n
+
+## ОБЪЯВЛЕНИЕ. Зовётся в конце каждой передачи хода, как и раньше: «созрело ли», «какое» —
+## всё внутри roll_event через DiceService.
 func _maybe_random_event(res: ActionResult) -> void:
 	if random_events == null:
 		return
-	# Единая точка (item 11): «созрело ли», «обязательно ли», «какое» — всё внутри
-	# roll_event через DiceService, чтобы хост и клиент разыграли одно и то же.
 	var id := random_events.roll_event(state.dice)
 	if id == "":
 		return
-	res.log("⚠ Random event — %s" % RandomEvents.event_name(id))
+	var params := _roll_event_params(id)
+	var entry := random_events.announce(id, params, state.turns.round_number)
+	res.log("⚠ %s — %s, landing at the end of round %d" % [
+		RandomEvents.event_name(id), _event_where(id, params), int(entry["land"])])
+
+## Параметры события — катаются ОДИН раз, при объявлении, и дальше не меняются.
+func _roll_event_params(id: String) -> Dictionary:
+	var gw := state.grid.width
+	var gh := state.grid.height
 	match id:
 		RandomEvents.MORTAR:
-			# Единственная заглушка с реальным эффектом: взрыв в клетке, выбранной кубиком.
-			var center := Vector2i(_rand_index(state.grid.width), _rand_index(state.grid.height))
-			var killed := _blast(center, res)
-			var tail := "" if killed.is_empty() else " — " + ", ".join(killed) + " killed"
-			res.log("Mortar shell lands at (%d, %d)%s" % [center.x, center.y, tail])
-		RandomEvents.TREMOR:
-			res.log("The ground shakes underfoot. (placeholder — effect pending spec)")
+			var bw := BARRAGE_SIDE_MIN + _rand_wide(mini(BARRAGE_SIDE_MAX, gw) - BARRAGE_SIDE_MIN + 1)
+			var bh := BARRAGE_SIDE_MIN + _rand_wide(mini(BARRAGE_SIDE_MAX, gh) - BARRAGE_SIDE_MIN + 1)
+			bw = mini(bw, gw)
+			bh = mini(bh, gh)
+			return {"x": _rand_wide(gw - bw + 1), "y": _rand_wide(gh - bh + 1), "w": bw, "h": bh}
 		RandomEvents.GAS:
-			res.log("A gas cloud drifts across the battlefield. (placeholder — effect pending spec)")
+			var side_w := clampi(gw / 3, GAS_SIDE_MIN, GAS_SIDE_MAX)
+			var side_h := clampi(gh / 3, GAS_SIDE_MIN, GAS_SIDE_MAX)
+			var cw := mini(gw, GAS_SIDE_MIN + _rand_wide(maxi(1, side_w - GAS_SIDE_MIN + 1)))
+			var ch := mini(gh, GAS_SIDE_MIN + _rand_wide(maxi(1, side_h - GAS_SIDE_MIN + 1)))
+			return {"x": _rand_wide(gw - cw + 1), "y": _rand_wide(gh - ch + 1), "w": cw, "h": ch,
+					"rounds": GAS_ROUNDS}
+		RandomEvents.ARMY:
+			var edge := _rand_wide(4)                      # 0 С, 1 В, 2 Ю, 3 З
+			var along := gw if edge % 2 == 0 else gh
+			var seg := mini(along, ARMY_SEGMENT_MIN + _rand_wide(ARMY_SEGMENT_MAX - ARMY_SEGMENT_MIN + 1))
+			return {"edge": edge, "from": _rand_wide(along - seg + 1), "len": seg}
+	return {}
+
+## Где именно — строкой для журнала и подсказки на карте.
+func _event_where(id: String, p: Dictionary) -> String:
+	if id == RandomEvents.ARMY:
+		var names := ["north", "east", "south", "west"]
+		return "unknown forces approaching from the %s edge" % names[int(p.get("edge", 0)) % 4]
+	return "zone (%d, %d) %d×%d" % [int(p.get("x", 0)), int(p.get("y", 0)),
+			int(p.get("w", 0)), int(p.get("h", 0))]
+
+## ПАДЕНИЕ. Зовётся в КОНЦЕ раунда — до его границы (пополнения ОД и прибавки номера),
+## чтобы «конец раунда N» значил именно его.
+##
+## Порядок: сперва травит стоящий газ (он был на доске весь этот раунд), потом падает
+## объявленное — в порядке очереди. Порядок фиксирован, значит одинаков у хоста и клиента.
+func land_random_events(res: ActionResult) -> void:
+	if random_events == null:
+		return
+	_gas_tick(res)
+	for e: Dictionary in random_events.take_landing(state.turns.round_number):
+		var p: Dictionary = e["params"]
+		match str(e["id"]):
+			RandomEvents.MORTAR:
+				_land_barrage(p, res)
+			RandomEvents.GAS:
+				_land_gas(p, res)
+			RandomEvents.ARMY:
+				_land_army(p, res)
+	_sync_gas()
+
+## Обстрел: зона делится на столбцы по клетке, столбцы идут с запада на восток, клетки в
+## столбце — с севера на юг. По клетке один d6: 1–3 мимо, 4–6 разрушена. Столбец за
+## столбцом — то же самое, что независимые 1/2 на клетку, зато порядок бросков (и порядок
+## разрывов на экране) задан жёстко.
+func _land_barrage(p: Dictionary, res: ActionResult) -> void:
+	var x0 := int(p.get("x", 0))
+	var y0 := int(p.get("y", 0))
+	var bw := int(p.get("w", 0))
+	var bh := int(p.get("h", 0))
+	var hit: Array[Vector2i] = []
+	var killed: Array[String] = []
+	for x in range(x0, x0 + bw):
+		for y in range(y0, y0 + bh):
+			if state.dice.roll_d6() < BARRAGE_HIT_MIN:
+				continue
+			var c := Vector2i(x, y)
+			if not state.grid.in_bounds(c):
+				continue
+			hit.append(c)
+			killed.append_array(_destroy_cell(c, res))
+	if not hit.is_empty():
+		# Один пакет косметики на весь обстрел, а не событие на клетку: клетки в нём идут
+		# в том же порядке, в каком разрешались, — экран так и показывает разрывы.
+		_fx(res, {"fx": "debris", "at": NOWHERE, "cells": hit, "blast": true})
+	var tail := "" if killed.is_empty() else " — " + ", ".join(killed) + " killed"
+	res.log("Artillery Barrage hits zone (%d, %d) %d×%d: %d of %d cells destroyed%s" % [
+		x0, y0, bw, bh, hit.size(), bw * bh, tail])
+
+## Разрушить ОДНУ клетку (обстрел). Не взрыв: ни осколочного поля, ни радиуса — что было
+## на клетке, то и снесло, а кто на ней стоял, тот погиб (решение по открытому вопросу
+## спеки: разрушенная клетка с живым бойцом на ней читалась бы странно). Снос рельефа —
+## тем же кодом, что у взрыва (_blast_destroy_terrain), чтобы правила были одни.
+func _destroy_cell(c: Vector2i, res: ActionResult) -> Array[String]:
+	var names: Array[String] = []
+	var cell := state.grid.cell(c)
+	if cell == null:
+		return names
+	var occ := cell.occupant
+	if occ != null and occ.is_alive():
+		_kill(occ, res, c, true)
+		names.append(occ.stats.display_name)
+		if res != null:
+			res.deaths.append(occ.id)
+	# Машина под разрывом теряет корпус — ту же единицу прочности, что от заряда ПТ.
+	var veh := vehicle_covering(c)
+	if veh != null and veh.alive():
+		_damage_component(veh, MCF.COMP_HULL, MCF.ANTI_TANK_VEHICLE_DAMAGE, "barrage", res)
+	_blast_destroy_terrain(c, res, c)
+	notify_cell_changed(c)
+	return names
+
+## Газ встал: облако становится активным, но травить начнёт с конца СЛЕДУЮЩЕГО раунда —
+## в этот раунд его на доске ещё не было.
+func _land_gas(p: Dictionary, res: ActionResult) -> void:
+	var cl := random_events.add_cloud(int(p.get("x", 0)), int(p.get("y", 0)),
+			int(p.get("w", 0)), int(p.get("h", 0)), int(p.get("rounds", GAS_ROUNDS)))
+	res.log("Gas Cloud settles over zone (%d, %d) %d×%d for %d round(s)" % [
+		int(cl["x"]), int(cl["y"]), int(cl["w"]), int(cl["h"]), int(cl["left"])])
+
+## Газ травит и выдыхается: по бойцу один d6 в порядке id (лок-степ), 1–2 — смерть.
+## Техника и те, кто внутри неё, газом не берутся: корпус герметичен.
+func _gas_tick(res: ActionResult) -> void:
+	if random_events.clouds.is_empty():
+		return
+	var ids: Array = []
+	for u: UnitInstance in state.all_units():
+		if u.is_alive() and u.aboard_vehicle_id == -1 and u.borg_id == -1 \
+				and random_events.cloud_at(u.coord):
+			ids.append(u.id)
+	ids.sort()
+	for id: int in ids:
+		var u := state.get_unit(id)
+		if u == null or not u.is_alive():
+			continue
+		var roll := state.dice.roll_d6()
+		res.dice_events.append({"kind": "check", "actor": u.stats.display_name,
+			"roll": roll, "need": GAS_SURVIVE_MIN, "ok": roll >= GAS_SURVIVE_MIN,
+			"roller": u.owner})
+		if roll >= GAS_SURVIVE_MIN:
+			res.log("%s holds their breath in the gas (roll %d)" % [u.stats.display_name, roll])
+			continue
+		_kill(u, res, u.coord)
+		res.deaths.append(u.id)
+		res.log("%s chokes in the gas (roll %d, needed %d+)" % [
+			u.stats.display_name, roll, GAS_SURVIVE_MIN])
+	random_events.age_clouds()
+
+## Клетки облаков — на доску (и снять те, где газа больше нет). Проход по всей сетке: он
+## случается от силы несколько раз за партию, зато всегда верен — и после загрузки, и
+## после отката хода, когда списка «что было отмечено» уже нет.
+func _sync_gas() -> void:
+	if random_events == null:
+		return
+	var grid := state.grid
+	for y in grid.height:
+		for x in grid.width:
+			grid.cell_fast(x, y).gas = random_events.cloud_at(Vector2i(x, y))
+
+## Независимая армия (0.9.4): у края карты высаживается ничья сила, враждебная всем.
+## Сила — по средней армии ЖИВЫХ игроков (по цене закупки); слот встаёт в случайное место
+## очереди инициативы, и ходит армия сама — её ход ведёт резолвер, как ход жителей.
+func _land_army(p: Dictionary, res: ActionResult) -> void:
+	var budget := _army_budget()
+	var slot := MCF.independent_slot(random_events.armies + 1)
+	if not MCF.is_independent(slot):
+		return
+	# Больше ARMY_MAX армий на карту не приходит (0.9.4): событие может выпасть и десять
+	# раз подряд, а десять ничьих сторон в очереди — это уже не «событие», а другая игра.
+	# Выпавшее сверх потолка событие просто проходит мимо, как и прежние «ничего».
+	var alive := 0
+	for s_id: int in state.turns.round_order:
+		if MCF.is_independent(s_id) and state.turns.playable(s_id, state.all_units()):
+			alive += 1
+	if alive >= ARMY_MAX:
+		res.log("Unknown forces hold off — the field is crowded enough")
+		return
+	var spots := _army_spawn_cells(p)
+	if spots.is_empty():
+		res.log("Unknown forces turn back — nowhere to land on that edge")
+		return
+	var spent := 0
+	var placed := 0
+	var guard := 0
+	while guard < ARMY_UNIT_CAP and placed < spots.size():
+		guard += 1
+		var sid: String = ARMY_ROSTER[_rand_wide(ARMY_ROSTER.size())]
+		var stats: UnitStats = _army_stats(sid)
+		if stats == null:
+			continue
+		if budget > 0 and spent + stats.cost > budget and placed > 0:
+			break
+		if budget <= 0 and placed >= ARMY_FALLBACK_UNITS:
+			break
+		state.spawn_unit(stats, spots[placed], slot)
+		spent += stats.cost
+		placed += 1
+	if placed == 0:
+		res.log("Unknown forces turn back — nowhere to land on that edge")
+		return
+	random_events.armies += 1
+	# Слот — в СЛУЧАЙНОЕ место очереди. События падают в конце раунда, активный слот уже
+	# обошёл круг, поэтому вставка не может ни пропустить, ни повторить чей-то ход.
+	var at := _rand_wide(state.turns.round_order.size() + 1)
+	state.turns.insert_slot(slot, at)
+	var names := ["north", "east", "south", "west"]
+	res.log("— %s land on the %s edge: %d fighters, hostile to everyone —" % [
+		MCF.owner_name(slot), names[int(p.get("edge", 0)) % 4], placed])
+	notify_cell_changed(spots[0])
+
+## Предохранитель набора: больше этого числа бойцов независимая армия не получает.
+const ARMY_UNIT_CAP := 60
+## И больше этого числа ЖИВЫХ независимых армий на карте не бывает.
+const ARMY_MAX := 2
+
+var _army_stats_cache: Dictionary = {}
+
+func _army_stats(id: String) -> UnitStats:
+	if _army_stats_cache.has(id):
+		return _army_stats_cache[id]
+	var path := "res://src/data/units/%s.tres" % id
+	var st: UnitStats = load(path) if ResourceLoader.exists(path) else null
+	_army_stats_cache[id] = st
+	return st
+
+## Средняя армия живого игрока в очках закупки — по ней и мерится независимая.
+## Независимые армии в среднее не входят. Нечего мерить — ноль, и армия приходит
+## фиксированной (ARMY_FALLBACK_UNITS бойцов).
+func _army_budget() -> int:
+	var cost := {}
+	for u: UnitInstance in state.all_units():
+		if not u.is_alive() or u.is_drone or not MCF.is_player(u.owner):
+			continue
+		cost[u.owner] = int(cost.get(u.owner, 0)) + u.stats.cost
+	if cost.is_empty():
+		return 0
+	var total := 0
+	for own: int in cost:
+		total += int(cost[own])
+	return roundi(float(total) / float(cost.size()) * ARMY_STRENGTH)
+
+## Свободные клетки участка края, на который высаживается армия: сперва по самому краю,
+## потом глубже внутрь карты. Порядок строгий — он же порядок расстановки.
+func _army_spawn_cells(p: Dictionary) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	var gw := state.grid.width
+	var gh := state.grid.height
+	var edge := int(p.get("edge", 0)) % 4
+	var from := int(p.get("from", 0))
+	var seg := int(p.get("len", ARMY_SEGMENT_MIN))
+	var depth := maxi(2, seg)
+	for d in depth:
+		for k in seg:
+			var c: Vector2i
+			match edge:
+				0: c = Vector2i(from + k, d)
+				1: c = Vector2i(gw - 1 - d, from + k)
+				2: c = Vector2i(from + k, gh - 1 - d)
+				_: c = Vector2i(d, from + k)
+			if not state.grid.in_bounds(c):
+				continue
+			var cell := state.grid.cell(c)
+			if cell == null or not cell.walkable_terrain() or cell.occupant != null \
+					or cell.vehicle_id != -1 or cell.is_space:
+				continue
+			out.append(c)
+	return out
 
 # --- Запросы легальности (для подсветки целей в UI) ---
 ## allow_embrasure=false — стрелок не может работать через амбразуру ДОТа: заряд
@@ -6311,8 +6714,14 @@ func los_blocked(from_coord: Vector2i, to_coord: Vector2i, allow_embrasure: bool
 	var x := from_coord.x + sx
 	var y := from_coord.y + sy
 	var d := 1
+	# Газ (0.9.4) держит и взгляд, и выстрел — как стена. Спрашивается он ТОЛЬКО когда газ
+	# на карте вообще есть: эта функция зовётся десятки тысяч раз за один расчёт плана ИИ.
+	# Концы линии, как и прежде, не проверяются: боец на самом краю облака видит и виден.
+	var any_gas := GridCell.gassed > 0
 	while x != to_coord.x or y != to_coord.y:
 		var cell := grid.cell_fast(x, y)
+		if any_gas and cell.gas:
+			return true
 		if cell.cover_height >= MCF.WALL_HEIGHT:
 			# Ёж поверх мешков — решётчатая стена: с соседней клетки сквозь неё стреляют.
 			# ДОТ с амбразурами (#86): боец, прижавшийся к стене вплотную, стреляет

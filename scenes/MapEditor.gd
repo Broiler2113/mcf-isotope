@@ -43,7 +43,7 @@ const MINI_MAX := 120.0
 enum Tool { BRUSH, ERASER, LINE, RECT, FILL, SELECT, PICK, STAMP, CIRCLE }
 const TOOLS := [
 	{"tool": Tool.BRUSH, "name": "Brush", "key": KEY_B, "hint": "Paint with the chosen tile. Drag to draw."},
-	{"tool": Tool.ERASER, "name": "Eraser", "key": KEY_E, "hint": "Clear cells back to the preset's empty ground, removing units and zones."},
+	{"tool": Tool.ERASER, "name": "Eraser", "key": KEY_E, "hint": "Take off the top thing: the object on a cell first (the floor under it stays), then a unit, then the cell goes back to the preset's empty ground."},
 	{"tool": Tool.LINE, "name": "Line", "key": KEY_L, "hint": "Drag a straight line of the chosen tile."},
 	{"tool": Tool.RECT, "name": "Rectangle", "key": KEY_U, "hint": "Drag a rectangle. Tick Filled for a solid one."},
 	{"tool": Tool.CIRCLE, "name": "Circle", "key": KEY_C, "hint": "Drag a box and get the circle (or oval) inside it. Tick Filled for a solid one."},
@@ -560,8 +560,23 @@ func _paint_cells(cells: Array, erase: bool) -> void:
 				_brush_cell(m, mask)
 	queue_redraw()
 
+## Ластик снимает ВЕРХНЕЕ (0.9.4): сперва объект на клетке — и ТОЛЬКО его, не трогая пол
+## под ним («deleting a wall in the map editor shouldn\'t also delete the floor beneath it»),
+## а снятая стена оставляет и материал (вид клетки), чтобы на её место легла такая же.
+## Нет объекта — убирается боец; нет и его — клетка возвращается к пустой земле пресета
+## (пол, вид, зона). Прежде один щелчок сносил сразу всё.
 func _erase_cell(c: Vector2i) -> void:
 	var i := c.y * map.width + c.x
+	if map.feature_id[i] != "":
+		var t := _tuple(i)
+		t[3] = ""
+		t[1] = 0.0
+		t[5] = -1
+		_write(i, t)
+		return
+	if _spawn_at.has(c):
+		_clear_spawn(c)
+		return
 	var b := MapPresets.blank_cell(_env)
 	_write(i, [b[0], b[1], b[2], b[3], -1])
 	_clear_spawn(c)
@@ -587,6 +602,12 @@ func _brushed(t: Array, mask: int) -> Array:
 		t[0] = MCF.FLOOR_NORMAL
 		t[2] = SPACE_LOOK_BRUSHES.has(lk)
 		t = _with_look(t, lk)
+	elif brush.begins_with("wallmat:"):
+		# Стена с материалом (0.9.4): объект — обычная стена, вид клетки называет облик.
+		t[3] = MCF.FEATURE_WALL
+		t[1] = MCF.WALL_HEIGHT
+		t[2] = false
+		t = _with_look(t, MCF.wall_look(int(brush.substr(8))))
 	else:
 		match brush:
 			"floor":
@@ -836,6 +857,9 @@ func _drop_float(at_cursor: Vector2i) -> void:
 ## R (0.9.2): поворачивает то, что сейчас «в руке». Узор (вставка, перенос, заготовка) —
 ## на четверть; выделение без узора — вместе с содержимым на месте; кисть мебели —
 ## следующий поворот (Shift+R — снова «сам, к стене»).
+##
+## 0.9.4: а если в руке НЕ мебель (ластик, пипетка, кисть стены), R разворачивает предмет
+## ПОД КУРСОРОМ — стоящий на карте диван больше не нужно выделять или класть заново.
 func rotate_key(back_to_auto: bool = false) -> void:
 	if not _float.is_empty():
 		rotate_float()
@@ -850,8 +874,39 @@ func rotate_key(back_to_auto: bool = false) -> void:
 			brush_turn = (brush_turn + 1) % 4
 		_flash("%s faces %s" % [_brush_name(brush), turn_name(brush_turn)])
 		_refresh_status()
+	elif _rotate_hovered(back_to_auto):
+		pass   # под курсором стоит предмет — развернули ЕГО (0.9.4)
 	else:
-		_flash("R turns furniture, a selection or what you are placing")
+		_flash("R turns the piece under the cursor, a selection, or the furniture brush")
+
+## R НАД УЖЕ ПОСТАВЛЕННЫМ предметом (0.9.4) разворачивает ЕГО, а не кисть: игрок жаловался,
+## что «object orientation calculation in the map editor is extremely clunky» — развернуть
+## стоящий диван можно было только выделением или перекладкой заново. Цельный предмет
+## (кровать, стол) поворачивается ЦЕЛИКОМ, одной записью отката. Shift+R возвращает клетке
+## поворот «сам, к стене». false — под курсором не мебель, и R работает как прежде.
+func _rotate_hovered(back_to_auto: bool) -> bool:
+	if not map.in_bounds(_hover):
+		return false
+	var i := _hover.y * map.width + _hover.x
+	var fid := String(map.feature_id[i])
+	if not Furniture.is_furniture(fid):
+		return false
+	var cells := Furniture.piece_cells(func(q: Vector2i) -> String:
+		return String(map.feature_id[q.y * map.width + q.x]) if map.in_bounds(q) else "", _hover)
+	var k := -1
+	if not back_to_auto:
+		var now := map.get_turn(i)
+		k = (TerrainTiles.furniture_turn(_grid, _hover, fid) + 1) % 4 if now < 0 else (now + 1) % 4
+	_begin()
+	for q in cells:
+		var qi := q.y * map.width + q.x
+		var t := _tuple(qi)
+		t[5] = k
+		_write(qi, t)
+	_commit()
+	_flash("%s faces %s" % [_brush_name(fid), turn_name(k)])
+	queue_redraw()
+	return true
 
 static func turn_name(k: int) -> String:
 	return "the nearest wall (auto)" if k < 0 else ["up", "right", "down", "left"][k % 4]
@@ -902,6 +957,10 @@ func pick_at(c: Vector2i) -> void:
 	if _spawn_at.has(c) and MCF.is_neutral(int(_spawn_at[c]["owner"])):
 		_select_brush("unit:" + String(_spawn_at[c]["stats_id"]))
 	elif map.feature_id[i] != "":
+		# Стена с материалом (0.9.4) берётся вместе с ним — пипетка даёт ту же стену.
+		if map.feature_id[i] == MCF.FEATURE_WALL and MCF.wall_look_tile(map.get_look(i)) != "":
+			_select_brush("wallmat:%d" % (map.get_look(i) - MCF.WALL_LOOK_BASE))
+			return
 		_select_brush(String(map.feature_id[i]))
 		brush_turn = map.get_turn(i)
 	elif map.is_space[i] != 0:
@@ -1879,7 +1938,11 @@ func _refresh_palette() -> void:
 	for lk: int in FLOOR_LOOK_BRUSHES:
 		terrain.append(["floor:%d" % lk, MCF.FLOOR_LOOK_NAMES[lk]])
 	_palette_group("Terrain", terrain)
-	_palette_group("Walls & doors", WALLS)
+	# Материалы стены (0.9.4): та же стена, другой облик — кисть «wallmat:N».
+	var walls: Array = WALLS.duplicate()
+	for mi in MCF.WALL_LOOKS.size():
+		walls.append(["wallmat:%d" % mi, MCF.WALL_LOOK_NAMES[mi]])
+	_palette_group("Walls & doors", walls)
 	_palette_group("Objects", OBJECTS)
 	# Мебель (§3.15) — по разделам, а в разделе по высоте (0.9.2): высота решает, укрытие
 	# это или стена, и подписью «Стол 1.0» на каждой кнопке её искать было неудобно.
@@ -2185,6 +2248,8 @@ func _brush_name(id: String) -> String:
 		return "%s (neutral)" % id.substr(5).capitalize()
 	if id.begins_with("floor:"):
 		return MCF.FLOOR_LOOK_NAMES[clampi(int(id.substr(6)), 0, MCF.FLOOR_LOOK_NAMES.size() - 1)]
+	if id.begins_with("wallmat:"):
+		return MCF.WALL_LOOK_NAMES[clampi(int(id.substr(8)), 0, MCF.WALL_LOOK_NAMES.size() - 1)]
 	for group: Array in [TERRAIN, WALLS, OBJECTS]:
 		for it: Array in group:
 			if it[0] == id:
@@ -2279,6 +2344,8 @@ func _thumb(id: String) -> Texture2D:
 			Sprites.ALIASES.get(id, id))
 	if id.begins_with("floor:"):
 		name = MCF.FLOOR_LOOKS[clampi(int(id.substr(6)), 0, MCF.FLOOR_LOOKS.size() - 1)]
+	if id.begins_with("wallmat:"):
+		name = MCF.WALL_LOOKS[clampi(int(id.substr(8)), 0, MCF.WALL_LOOKS.size() - 1)]
 	if id == "clear_object":
 		name = "floor"
 	elif id == MCF.FEATURE_AIRLOCK:

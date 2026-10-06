@@ -205,6 +205,20 @@ const LANE_DUR := 3.0
 ## Больше десятка дорожек на экране — уже каша: держим последние.
 const LANE_CAP := 12
 
+## ВСПЫШКА ВЗРЫВА (0.9.4): «explosions should turn tiles into fire for a second as an
+## effect (it should be purely cosmetic)». Клетки разрыва на секунду рисуются огнём и
+## гаснут. Настоящего пожара тут нет ни на одну клетку: GridCell.on_fire не трогается,
+## резолвер об этом не знает, в сохранение и в снимок гостю это не едет — чистая
+## декорация, как дорожки и трассеры.
+##
+## [{cells: Array[Vector2i], t: float}].
+var flashes: Array = []
+const FLASH_DUR := 1.0
+## Полную силу вспышка держит эту долю времени, потом гаснет.
+const FLASH_HOLD := 0.35
+## Больше нескольких разрывов разом на экране не бывает — держим последние.
+const FLASH_CAP := 12
+
 ## Порядковый номер разобранного события — «соль» к зерну частиц (issue 7).
 ##
 ## Зерно собиралось из вида, клетки и номера частицы, и этого не хватало: пулемётчик,
@@ -245,6 +259,7 @@ func clear() -> void:
 	track_marks.clear()
 	tracers.clear()
 	lanes.clear()
+	flashes.clear()
 	_event_seq = 0
 
 ## Пуля-трассер (item 16): короткий полёт от стрелка к цели. По одному следу на выстрел,
@@ -312,6 +327,13 @@ func _lane(ev: Dictionary) -> void:
 	if lanes.size() > LANE_CAP:
 		lanes = lanes.slice(lanes.size() - LANE_CAP)
 
+## Насколько ярко рисовать вспышку взрыва: держится FLASH_HOLD, затем гаснет.
+static func flash_alpha(flash: Dictionary) -> float:
+	var t := float(flash["t"]) / FLASH_DUR
+	if t <= FLASH_HOLD:
+		return 1.0
+	return clampf(1.0 - (t - FLASH_HOLD) / maxf(0.001, 1.0 - FLASH_HOLD), 0.0, 1.0)
+
 ## Насколько ярко рисовать дорожку: полная сила, пока держится, потом гаснет.
 static func lane_alpha(lane: Dictionary) -> float:
 	var t := float(lane["t"])
@@ -332,6 +354,17 @@ func _debris(ev: Dictionary) -> void:
 		var level: int = DAMAGE_EPICENTER if c == epicenter else DAMAGE_RUBBLE
 		floor_damage[c] = maxi(int(floor_damage.get(c, DAMAGE_NONE)), level)
 	damage_version += 1
+	# Разрыв — ещё и вспышка огня на секунду (0.9.4). Только у НАСТОЯЩЕГО взрыва («blast»):
+	# щебень под гусеницей танка, под снесённой лучом стеной или под разбитым окном его не
+	# ставит — там ничего не рвалось.
+	if bool(ev.get("blast", false)):
+		var cells: Array[Vector2i] = []
+		for c: Vector2i in ev.get("cells", []):
+			cells.append(c)
+		if not cells.is_empty():
+			flashes.append({"cells": cells, "t": 0.0})
+			if flashes.size() > FLASH_CAP:
+				flashes = flashes.slice(flashes.size() - FLASH_CAP)
 
 ## 21.2 — осколки стекла: 2..5 штук, летят ПРОТИВ направления удара, у каждого свои
 ## скорость и вращение.
@@ -600,6 +633,13 @@ func advance(delta: float) -> bool:
 			lanes[i]["t"] = float(lanes[i]["t"]) + delta
 			if float(lanes[i]["t"]) >= LANE_DUR:
 				lanes.remove_at(i)
+	# Вспышки взрывов (0.9.4): гаснут по времени, отработавшие убираем.
+	var flashes_active := not flashes.is_empty()
+	if flashes_active:
+		for i in range(flashes.size() - 1, -1, -1):
+			flashes[i]["t"] = float(flashes[i]["t"]) + delta
+			if float(flashes[i]["t"]) >= FLASH_DUR:
+				flashes.remove_at(i)
 	# Пули-трассеры (item 16): двигаем время, отработавшие убираем.
 	var tracers_active := not tracers.is_empty()
 	if tracers_active:
@@ -608,7 +648,7 @@ func advance(delta: float) -> bool:
 			if float(tracers[i]["t"]) >= float(tracers[i]["dur"]):
 				tracers.remove_at(i)
 	if flying.is_empty():
-		return tracers_active or lanes_active
+		return tracers_active or lanes_active or flashes_active
 	var landed: Array = []
 	for i in range(flying.size() - 1, -1, -1):
 		var f: Dictionary = flying[i]

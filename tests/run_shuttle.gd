@@ -204,6 +204,21 @@ func _station_in_a_seat() -> void:
 	r.resolve(VehicleBoardIntent.new(li.id, sh.id, Vehicle.DRIVER_SEAT))
 	var sn2 := _u(st, Vector2i(3, 5))
 	ck(not r.resolve(VehicleBoardIntent.new(sn2.id, sh.id, 0)).ok, "cannot board a station seat")
+	# Пассажир-НЕ-оператор вплотную к станции: дрон ему не поднять, и ПРЕДЛАГАТЬ это нельзя.
+	# Пеший перечислитель спрашивал про способность, а ветка «пассажир челнока» — нет, и
+	# политика RL жала «поднять дрон» тяжёлым пехотинцем до конца хода (отказы кратные 8).
+	ck(Combat.distance(li.coord, Vector2i(4, 4)) == 1, "the non-operator sits next to the station")
+	ck(r.stations_near(li).is_empty(), "a non-operator sees no station to launch from")
+	ck(not r.resolve(SpawnDroneIntent.new(li.id, Vector2i(4, 4))).ok, "and launching is refused")
+	if st.active_player() == li.owner:
+		var offered := 0
+		for it: Intent in LegalIntents.enumerate(r, li.owner):
+			if it is SpawnDroneIntent:
+				var who := st.get_unit(it.actor_id)
+				ck(who != null and who.stats.special_ability_id == MCF.ABILITY_DRONE_OPERATOR,
+						"only a drone operator is offered a launch")
+				offered += 1
+		ck(offered > 0, "the seated operator is still offered one (%d)" % offered)
 	var mv := r.resolve(VehicleMoveIntent.new(sh.id, Vector2i(0, 1), 2))
 	ck(mv.ok, "shuttle moves with a station aboard: " + mv.reason)
 	ck(st.grid.cell(Vector2i(4, 6)).feature_id == MCF.FEATURE_DRONE_STATION
@@ -233,7 +248,12 @@ func _only_the_operator_launches_from_a_seat() -> void:
 	ck(r.resolve(VehicleBoardIntent.new(sn.id, sh.id, 2)).ok,
 			"the sniper takes the seat next to the station")
 	r.resolve(EndTurnIntent.new()); r.resolve(EndTurnIntent.new())
-	ck(r.stations_near(sn).has(Vector2i(4, 4)), "the sniper really does sit next to the station")
+	# Соседство проверяется ПО КЛЕТКЕ, а не через stations_near: с 0.9.4 тот честно отвечает
+	# пустым списком всякому, кто не оператор дронов (запрет перенесён к источнику), и как
+	# «что рядом со мной стоит» его больше не спросить.
+	ck(Combat.distance(sn.coord, Vector2i(4, 4)) == 1,
+			"the sniper really does sit next to the station")
+	ck(r.stations_near(sn).is_empty(), "but a non-operator is shown no station at all")
 	ck(sn.remaining_ap > 0, "and has the AP that opens the seated branch")
 	var for_sniper := 0
 	var for_operator := 0

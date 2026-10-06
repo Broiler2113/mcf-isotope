@@ -372,6 +372,26 @@ enum Look {DEFAULT, WOOD, PARQUET, TILE, CHECKER, CARPET_RED, CARPET_BLUE, LINO,
 ## Виды, которые кладутся ПОВЕРХ пола клетки, а не вместо него.
 const FLOOR_OVERLAY_LOOKS := {Look.GRILL: true}
 
+## МАТЕРИАЛ СТЕНЫ (0.9.4) — чистый вид, как и вид пола: правила у всех стен одни, разный
+## только облик. Городу он нужен, чтобы дома не стояли под одну гребёнку.
+##
+## Номера начинаются ЗА таблицей полов намеренно: материал лежит в том же байте клетки
+## (MapData.floor_look), а всё, что рисует пол, уже отбрасывает значения вне своей таблицы.
+## Так стене не нужен второй массив на всю карту, и снесённая стена не оставляет под собой
+## «кирпичный пол». Новые материалы дописываются только в КОНЕЦ — номер лежит в карте.
+const WALL_LOOK_BASE := 32
+const WALL_LOOKS := ["wall_brick", "wall_stucco", "wall_block"]
+const WALL_LOOK_NAMES := ["Brick wall", "Stucco wall", "Cinder block wall"]
+
+## Имя плитки материала стены по виду клетки; "" — обычная стена окружения.
+static func wall_look_tile(look: int) -> String:
+	var k := look - WALL_LOOK_BASE
+	return WALL_LOOKS[k] if k >= 0 and k < WALL_LOOKS.size() else ""
+
+## Вид клетки для материала стены по его номеру (0 — первый материал).
+static func wall_look(index: int) -> int:
+	return WALL_LOOK_BASE + clampi(index, 0, WALL_LOOKS.size() - 1)
+
 ## Акцент службы (0.9.3): цветная полоса по стенам отдела и рама двери в тот же цвет — как
 ## на настоящей станции, где по коридору видно, куда ты зашёл. Только станция и бункер; всё,
 ## чего игрок не называл (жилой блок, производство, прочее), остаётся без цвета.
@@ -563,6 +583,17 @@ const NEUTRAL_GROUP_BASE := 100
 ## Больше ста групп не бывает: нумерация римская и кончается на C (100).
 const MAX_NEUTRAL_GROUPS := 100
 
+## НЕЗАВИСИМЫЕ АРМИИ (0.9.4, случайное событие «Independent Army»): ничья сила, пришедшая
+## с края карты. Своя полоса номеров — ЗА нейтралами: такая армия воюет со всеми, но она
+## не мирный житель (не спит, не хватает трупы, в подсчёт мирных не входит), поэтому
+## is_neutral() о ней отвечает «нет».
+##
+## Именно поэтому is_neutral ОГРАНИЧЕН сверху: раньше он проверял только «>= 100», и
+## владелец 200 молча читался бы как группа жителей — во всей игре, от поведения ИИ до
+## подписи в журнале.
+const INDEPENDENT_BASE := 200
+const MAX_INDEPENDENT := 100
+
 ## Игроки зовутся латинскими буквами по порядку слотов: A, B, C, ... Z.
 const PLAYER_LETTERS := "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
@@ -580,9 +611,29 @@ const TEAM_NAMES := [
 static func is_player(owner: int) -> bool:
 	return owner >= 0 and owner < MAX_PLAYERS
 
-## Владелец — нейтральная сторона? Общий слот и любая активированная группа.
+## Владелец — нейтральная сторона? Общий слот и любая активированная группа (но НЕ
+## независимая армия: у неё своя полоса номеров выше, см. INDEPENDENT_BASE).
 static func is_neutral(owner: int) -> bool:
-	return owner == Owner.NEUTRAL or owner >= NEUTRAL_GROUP_BASE
+	return owner == Owner.NEUTRAL \
+			or (owner >= NEUTRAL_GROUP_BASE and owner < NEUTRAL_GROUP_BASE + MAX_NEUTRAL_GROUPS)
+
+## Владелец — независимая армия (0.9.4)?
+static func is_independent(owner: int) -> bool:
+	return owner >= INDEPENDENT_BASE and owner < INDEPENDENT_BASE + MAX_INDEPENDENT
+
+## Номер независимой армии (1..100) по её слоту, или 0, если это не она.
+static func independent_index(owner: int) -> int:
+	return owner - INDEPENDENT_BASE + 1 if is_independent(owner) else 0
+
+## Слот независимой армии по её номеру (1 → первая).
+static func independent_slot(index: int) -> int:
+	return INDEPENDENT_BASE + index - 1
+
+## Сторона БЕЗ КОМАНДИРА: её ход ведёт сам резолвер, а не контроллер игрока или штаб ИИ, и
+## враждебна она всем (жители — всем игрокам, независимая армия — вообще всем). По этому
+## вопросу ИИ выбирает «беспощадную» манеру, а передача хода отыгрывает слот на месте.
+static func is_npc_side(owner: int) -> bool:
+	return is_neutral(owner) or is_independent(owner)
 
 ## Номер группы нейтралов (1..100) по её слоту, или 0, если это не группа.
 static func neutral_group_index(owner: int) -> int:
@@ -664,6 +715,8 @@ static func feature_height(feature_id: String) -> float:
 static func owner_name(owner: int) -> String:
 	if is_player(owner):
 		return "Player %s" % PLAYER_LETTERS[owner]
+	if is_independent(owner):
+		return "Raiders %s" % roman(independent_index(owner))
 	if owner >= NEUTRAL_GROUP_BASE:
 		return "Neutral %s" % roman(neutral_group_index(owner))
 	return "Neutral"

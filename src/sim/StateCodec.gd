@@ -194,6 +194,10 @@ static func apply_rules(resolver: GameActionResolver, d: Dictionary) -> void:
 				bool(cfg.get("mandatory", false)), int(cfg.get("interval", 3)), weights)
 	if resolver.random_events != null and d.has("events"):
 		resolver.random_events.restore(d["events"])
+		# Газ на клетках — ВЫВОДИМОЕ состояние (0.9.4): в файл он не пишется, а
+		# восстанавливается из списка облаков. Иначе загруженная партия знала бы про
+		# облако, а доска о нём — нет, и сквозь газ было бы видно.
+		resolver._sync_gas()
 
 # --- Чтение -----------------------------------------------------------------
 

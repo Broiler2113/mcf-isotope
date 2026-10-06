@@ -118,7 +118,7 @@ const _BASE := {
 		"rooms": ["office", "command", "medical"]},
 	"locker": {"join": "run", "name": "Locker", "cat": "office", "h": 1.0, "mat": "metal", "dur": 3,
 		"mob": Mobility.HEAVY, "ap": 2, "at": "wall", "gen": true,
-		"rooms": ["barracks", "medical", "garage", "armory"]},
+		"rooms": ["barracks", "medical", "garage", "armory", "changing"]},
 	"reception_desk": {"join": "run", "name": "Reception Desk", "cat": "office", "h": 1.0, "mat": "wood",
 		"dur": 3, "mob": Mobility.FIXED, "ap": 2, "at": "free", "gen": true,
 		"rooms": ["office", "medical"]},
@@ -173,11 +173,11 @@ const _BASE := {
 		"rooms": ["workshop", "mining", "garage"]},
 	"exam_table": {"join": "whole", "sizes": [[1, 2]], "back": "short", "name": "Examination Table", "cat": "industrial", "h": 1.0, "mat": "metal",
 		"dur": 2, "mob": Mobility.HEAVY, "ap": 1, "at": "center", "gen": true,
-		"rooms": ["medical"]},
+		"rooms": ["medical", "morgue", "virology", "surgery"]},
 	# --- Улица ----------------------------------------------------------------------------
 	"bench": {"join": "whole", "sizes": [[2, 1], [3, 1]], "back": "long", "name": "Bench", "cat": "public", "h": 0.5, "mat": "wood", "dur": 2,
 		"mob": Mobility.HEAVY, "ap": 1, "at": "free", "gen": true,
-		"rooms": ["outdoor", "barracks"]},
+		"rooms": ["outdoor", "barracks", "changing"]},
 	"trash_bin": {"name": "Trash Bin", "cat": "public", "h": 0.5, "mat": "plastic", "dur": 1,
 		"mob": Mobility.PORTABLE, "ap": 1, "at": "corner", "gen": true,
 		"rooms": ["outdoor", "kitchen", "office", "shop", "restaurant", "dining_room"]},
@@ -221,7 +221,7 @@ const _BASE := {
 		"rooms": ["restroom", "bathroom", "cell"]},
 	"sink": {"name": "Sink", "cat": "residential", "h": 1.0, "mat": "metal", "dur": 1,
 		"mob": Mobility.FIXED, "ap": 1, "at": "wall", "gen": true,
-		"rooms": ["restroom", "bathroom", "kitchen", "laboratory", "surgery"]},
+		"rooms": ["restroom", "bathroom", "kitchen", "laboratory", "surgery", "virology", "morgue", "changing"]},
 	"console": {"name": "Console", "cat": "office", "h": 1.0, "mat": "metal", "dur": 3,
 		"mob": Mobility.FIXED, "ap": 2, "at": "wall", "gen": true,
 		"rooms": ["command", "power", "laboratory"]},
@@ -231,6 +231,39 @@ const _BASE := {
 	"vent_fan": {"name": "Vent Fan", "cat": "industrial", "h": 0.5, "mat": "metal", "dur": 2,
 		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true,
 		"rooms": ["air", "utility"]},
+	# --- 0.9.4: столы не только деревянные, морг и вирусология, снаряжение техтуннелей ----
+	## «New types of tables are needed — options other than just wooden ones»: стальной
+	## стол (цех, лаборатория, морг) и пластиковый (столовая, раздевалка, улица).
+	"steel_table": {"join": "whole", "sizes": [[2, 1], [2, 2]], "back": "", "name": "Steel Table",
+		"cat": "industrial", "h": 1.0, "mat": "metal", "dur": 3, "mob": Mobility.HEAVY, "ap": 2,
+		"at": "center", "gen": true,
+		"rooms": ["workshop", "machine_shop", "laboratory", "virology", "morgue", "garage", "mess",
+			"assembly"]},
+	"plastic_table": {"join": "whole", "sizes": [[2, 1]], "back": "", "name": "Plastic Table",
+		"cat": "public", "h": 1.0, "mat": "plastic", "dur": 1, "mob": Mobility.HEAVY, "ap": 1,
+		"at": "center", "gen": true,
+		"rooms": ["mess", "dining_room", "restaurant", "changing", "outdoor", "cell"]},
+	"lab_bench": {"join": "run", "name": "Lab Bench", "cat": "industrial", "h": 1.0, "mat": "metal",
+		"dur": 3, "mob": Mobility.FIXED, "ap": 2, "at": "wall", "gen": true,
+		"rooms": ["laboratory", "virology", "surgery", "morgue"]},
+	## Морг: ряд выдвижных ячеек вдоль стены — секции срастаются в одну стенку ячеек.
+	"morgue_drawers": {"join": "run", "name": "Morgue Drawers", "cat": "industrial", "h": 1.5,
+		"mat": "metal", "dur": 4, "mob": Mobility.FIXED, "ap": 3, "at": "wall", "gen": true,
+		"rooms": ["morgue"]},
+	"biohazard_cabinet": {"join": "run", "name": "Biohazard Cabinet", "cat": "industrial", "h": 1.5,
+		"mat": "metal", "dur": 3, "mob": Mobility.FIXED, "ap": 2, "at": "wall", "gen": true,
+		"rooms": ["virology", "laboratory"]},
+	"specimen_fridge": {"name": "Specimen Fridge", "cat": "industrial", "h": 1.5, "mat": "metal",
+		"dur": 3, "mob": Mobility.HEAVY, "ap": 2, "at": "wall", "gen": true,
+		"rooms": ["virology", "morgue", "laboratory"]},
+	## Хозяйство техтуннелей и щитовых (игрок просил «gas canisters, utility lockers,
+	## water buckets»): баллон и ведро. Шкафчик для них уже есть — locker.
+	"gas_canister": {"name": "Gas Canister", "cat": "industrial", "h": 1.0, "mat": "metal", "dur": 2,
+		"mob": Mobility.HEAVY, "ap": 1, "at": "wall", "gen": true,
+		"rooms": ["utility", "power", "water", "air", "workshop", "garage", "mining", "recycling"]},
+	"water_bucket": {"name": "Water Bucket", "cat": "industrial", "h": 0.5, "mat": "plastic", "dur": 1,
+		"mob": Mobility.PORTABLE, "ap": 1, "at": "free", "gen": true,
+		"rooms": ["utility", "water", "air", "restroom", "changing", "recycling", "laundry"]},
 }
 
 ## Цветовые варианты: та же строка таблицы (правила те же), свой id и своя плитка, где
@@ -252,6 +285,10 @@ const VARIANTS := {
 	"trash_bin": [["grey", Color8(110, 114, 118)], ["blue", Color8(58, 88, 140)]],
 	"fuel_tank": [["red", Color8(160, 54, 46)]],
 	"piano": [["white", Color8(222, 220, 214)]],
+	"gas_canister": [["red", Color8(166, 50, 42)], ["yellow", Color8(198, 162, 44)],
+		["green", Color8(62, 112, 72)]],
+	"plastic_table": [["blue", Color8(66, 96, 140)], ["white", Color8(212, 210, 202)]],
+	"water_bucket": [["blue", Color8(58, 96, 150)]],
 }
 
 static var DEFS: Dictionary = _with_variants()

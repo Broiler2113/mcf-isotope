@@ -139,6 +139,8 @@ func _tile(name: String, res: int) -> Array:
 		return _tiles[key]
 	var out: Array = []
 	var img := _load(env_name(name, env))
+	if img == null:
+		img = _atlas_part(name, Sprites.ATLAS_TURN_ROW, 1, 1)   # атлас: первый поворот
 	if img != null:
 		var h := img.get_height()
 		var n := maxi(1, img.get_width() / h) if img.get_width() % h == 0 else 1
@@ -158,6 +160,8 @@ func _sheet(name: String, res: int) -> Array:
 		return _sheets[key]
 	var out: Array = []
 	var img := _load(env_name(name, env) + Sprites.AUTOTILE_SUFFIX)
+	if img == null:
+		img = _atlas_part(name, 0, 4, 4)   # атлас (0.9.4): первые четыре строки — тот же лист
 	if img != null:
 		var w := img.get_width()
 		var n := maxi(1, img.get_height() / w)
@@ -169,6 +173,19 @@ func _sheet(name: String, res: int) -> Array:
 			out.append(part)
 	_sheets[key] = out
 	return out
+
+## Кусок атласа объекта (0.9.4): cols×rows плиток, начиная со строки row0. null — атласа
+## нет. Атлас — один файл на объект: строки 0..3 — автотайл, строка 4 — четыре поворота
+## (см. Sprites.ATLAS_SUFFIX). Сторона плитки берётся из самого файла, поэтому атлас может
+## быть нарисован в любом разрешении — лишь бы он был 4 плитки в ширину.
+func _atlas_part(name: String, row0: int, rows: int, cols: int) -> Image:
+	var img := _load(env_name(name, env) + Sprites.ATLAS_SUFFIX)
+	if img == null:
+		return null
+	var t := img.get_width() / 4
+	if t <= 0 or img.get_height() < (row0 + rows) * t:
+		return null
+	return img.get_region(Rect2i(0, row0 * t, cols * t, rows * t))
 
 func _load(name: String) -> Image:
 	var tex := Sprites.texture_of(name)
@@ -453,6 +470,13 @@ func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> voi
 		return
 	var accent := _accent_of(c)
 	var name := tile_name(cell)
+	# Материал стены (0.9.4): вид клетки может назвать кирпич, штукатурку или шлакоблок —
+	# правила те же, плитка другая. Семейство автотайла остаётся «wall», поэтому дом из
+	# кирпича стыкуется с бетонным соседом без шва.
+	if fid == MCF.FEATURE_WALL and not _grid.floor_look.is_empty():
+		var wl := MCF.wall_look_tile(_grid.look_at(c.x, c.y))
+		if wl != "":
+			name = wl
 	if Furniture.is_furniture(fid):
 		var fimg := _furniture_image(c, fid, res)
 		if fimg != null:
@@ -468,7 +492,10 @@ func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> voi
 		if NOTCHED.has(FAMILY.get(fid, fid)):
 			_fill_notches(feat, c, fid, mask, at, res)
 		# Полоса службы (0.9.3): цветная линия вдоль стены отдела.
-		if accent != MCF.Accent.NONE and FAMILY.get(fid, fid) == "wall":
+		# ПО СТЕКЛУ ПОЛОСА НЕ ИДЁТ (0.9.4, просьба игрока): окно — это окно, а не крашеная
+		# стена, и полоса на нём читалась мазком поперёк витрины. Соседи-окна её тоже не
+		# продолжают (_accent_mask), поэтому у рамы полоса аккуратно обрывается.
+		if accent != MCF.Accent.NONE and FAMILY.get(fid, fid) == "wall" and not MCF.is_glass(fid):
 			feat.blend_rect(_accent_overlay(accent, _accent_mask(c, accent), res), full, at)
 		# ДОТ, потерявший прочность, трескается прямо в плитке (0.9.2) — раньше была лишь
 		# красная чёрточка в углу клетки.
@@ -517,9 +544,14 @@ func _fill_notches(feat: Image, c: Vector2i, fid: String, mask: int, at: Vector2
 func _door_image(grid: Grid, c: Vector2i, cell: GridCell, res: int, closed := false) -> Image:
 	var mask := mask_at(grid, c, MCF.FEATURE_AIRLOCK)
 	var open := cell.cover_height < MCF.WALL_HEIGHT and not closed
-	var v := variant_of(c + origin, 3)
+	# Вариант картинки — по ОДНОЙ клетке на всю створку (0.9.4): широкий шлюз обшивки
+	# (2–3 клетки) и пара шлюзов, вставших рядом, обязаны выглядеть одним люком, а не
+	# набором разных. Раньше вариант брался от самой клетки, и соседние створки выходили
+	# из разного металла с разным рисунком.
+	var anchor := _door_anchor(grid, c)
+	var v := variant_of(anchor + origin, 3)
 	var walls := _sheet("wall", res)
-	var wv := variant_of(c + origin, walls.size()) if not walls.is_empty() else 0
+	var wv := variant_of(anchor + origin, walls.size()) if not walls.is_empty() else 0
 	var accent := _accent_of(c)
 	var key := "door@%d@%d@%s@%d@%d@%d" % [res, mask, open, v, wv, accent]
 	if _tiles.has(key):
@@ -535,6 +567,33 @@ func _door_image(grid: Grid, c: Vector2i, cell: GridCell, res: int, closed := fa
 		_tint_door_frame(img, accent, res)
 	_tiles[key] = [img]
 	return img
+
+## Сколько клеток шлюза самое большее считается ОДНОЙ створкой: тройной шлюз причала с
+## запасом, и предохранитель обхода, если шлюзами замазали пол-карты.
+const DOOR_GROUP_CAP := 6
+
+## Клетка, от которой берётся вид всей створки: самая северо-западная в связной группе
+## шлюзов (обход по сторонам, не дальше DOOR_GROUP_CAP клеток). У одиночного шлюза это он
+## сам, поэтому ничего не меняется там, где и менять нечего.
+func _door_anchor(grid: Grid, c: Vector2i) -> Vector2i:
+	var best := c
+	var seen := {c: true}
+	var queue: Array[Vector2i] = [c]
+	var i := 0
+	while i < queue.size() and queue.size() < DOOR_GROUP_CAP:
+		var p := queue[i]
+		i += 1
+		for d: Vector2i in _TURN_DIRS:
+			var q: Vector2i = p + d
+			if seen.has(q) or not grid.in_bounds(q):
+				continue
+			if grid.cell_fast(q.x, q.y).feature_id != MCF.FEATURE_AIRLOCK:
+				continue
+			seen[q] = true
+			queue.append(q)
+			if q.y < best.y or (q.y == best.y and q.x < best.x):
+				best = q
+	return best
 
 ## Рама двери в цвет службы (0.9.3). Красится именно РАМА — кайма клетки, — а не полотно:
 ## по ней дверь отдела видно и закрытой, и распахнутой, а рисунок самой двери (люк, окошко,
@@ -575,7 +634,8 @@ func _accent_mask(c: Vector2i, accent: int) -> int:
 		if n.x < 0 or n.y < 0 or n.x >= _grid.width or n.y >= _grid.height:
 			continue
 		var nf := _grid.cell_fast(n.x, n.y).feature_id
-		if nf != "" and FAMILY.get(nf, nf) == "wall" and _accent_of(n) == accent:
+		if nf != "" and FAMILY.get(nf, nf) == "wall" and not MCF.is_glass(nf) \
+				and _accent_of(n) == accent:
 			mask |= int(d[1])
 	return mask
 
@@ -1037,11 +1097,21 @@ static func _run_turn(grid: Grid, c: Vector2i, fid: String, at: Vector2i = Vecto
 	return variant_of(c + at, 4)
 
 ## Плитка мебели в разрешении res, повёрнутая на k четвертей (кэш по трём ключам).
+## Атлас объекта (0.9.4) несёт ЧЕТЫРЕ направления готовыми: если он есть, берём нужное
+## как нарисовано — художник мог развернуть предмет вручную, а не просто повернуть плитку.
 func _turned(name: String, res: int, k: int) -> Image:
 	var key := "%s@%d@%d" % [name, res, k]
 	if _tiles.has(key):
 		var hit: Array = _tiles[key]
 		return hit[0] if not hit.is_empty() else null
+	var facing := _atlas_part(name, Sprites.ATLAS_TURN_ROW, 1, 4)
+	if facing != null:
+		var t := facing.get_height()
+		var one := facing.get_region(Rect2i((k % 4) * t, 0, t, t))
+		if t != res:
+			one.resize(res, res, Image.INTERPOLATE_LANCZOS)
+		_tiles[key] = [one]
+		return one
 	var base := _tile(name, res)
 	if base.is_empty():
 		_tiles[key] = []

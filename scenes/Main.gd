@@ -5313,6 +5313,8 @@ func _draw() -> void:
 	#
 	# Косметика поверх пола, но ПОД телами и бойцами (#21): лужи, осколки, гильзы.
 	_draw_fx_props(visible)
+	# Случайные события (0.9.4): объявленные зоны с отсчётом и стоящий газ.
+	_draw_random_events(font)
 
 	# Труп существует в ДВУХ видах: погибший на месте боец — это occupant клетки со
 	# статусом CORPSE, а положенный из рук (#6) — безымянная куча cell.corpse_count.
@@ -5687,6 +5689,7 @@ func _draw_laser_preview(shooter: UnitInstance, aim: Vector2i) -> void:
 ## векторные примитивы, как и всё остальное в этой игре.
 func _draw_fx_props(visible: Dictionary) -> void:
 	_draw_fx_lanes(visible)
+	_draw_fx_flashes(visible)
 	# Колея танка (playtest-20): еле заметные тёмные полосы, под туманом не видна.
 	var tfog: bool = resolver.fog_enabled
 	for seg: Dictionary in _fx.track_marks:
@@ -5722,6 +5725,79 @@ func _draw_fx_props(visible: Dictionary) -> void:
 	for f: Dictionary in _fx.flying:
 		_draw_fx_one(f["kind"], FxDecals.flight_pos(f), FxDecals.flight_rot(f),
 				f["scale"], visible, fog_on, f.get("origin", Vector2i(-1, -1)))
+
+## СЛУЧАЙНЫЕ СОБЫТИЯ НА КАРТЕ (0.9.4). Объявленное событие игрок обязан ВИДЕТЬ — в этом
+## весь смысл предупреждения за раунд: заштрихованная зона с подписью, сколько раундов до
+## удара, и подсвеченный участок края там, откуда придёт независимая армия. Стоящий газ
+## рисуется своей зелёной пеленой с остатком раундов.
+##
+## Туман войны тут не при чём: предупреждение объявлено ВСЕМ (его слышат по радио), а газ
+## виден любому, кто смотрит на поле.
+const EVENT_COLORS := {
+	"mortar": Color(0.95, 0.45, 0.15, 1.0),
+	"gas": Color(0.55, 0.85, 0.35, 1.0),
+	"army": Color(0.85, 0.35, 0.75, 1.0),
+}
+
+func _draw_random_events(font: Font) -> void:
+	if resolver == null or resolver.random_events == null:
+		return
+	var ev: RandomEvents = resolver.random_events
+	for cl: Dictionary in ev.clouds:
+		var rect := Rect2(ORIGIN + Vector2(int(cl["x"]), int(cl["y"])) * CELL,
+				Vector2(int(cl["w"]), int(cl["h"])) * CELL)
+		var col: Color = EVENT_COLORS["gas"]
+		draw_rect(rect, Color(col.r, col.g, col.b, 0.22))
+		draw_rect(rect, Color(col.r, col.g, col.b, 0.8), false, 2.0)
+		draw_string(font, rect.position + Vector2(4, 16), "GAS %d" % int(cl["left"]),
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(col.r, col.g, col.b, 0.95))
+	for e: Dictionary in ev.pending:
+		var id := str(e["id"])
+		var p: Dictionary = e["params"]
+		var left: int = maxi(0, int(e["land"]) - state.turns.round_number + 1)
+		var col: Color = EVENT_COLORS.get(id, Color(1, 1, 1, 1))
+		var rect := Rect2()
+		if id == RandomEvents.ARMY:
+			var seg := int(p.get("len", 1))
+			var from := int(p.get("from", 0))
+			var gw := state.grid.width
+			var gh := state.grid.height
+			match int(p.get("edge", 0)) % 4:
+				0: rect = Rect2(ORIGIN + Vector2(from, 0) * CELL, Vector2(seg, 2) * CELL)
+				1: rect = Rect2(ORIGIN + Vector2(gw - 2, from) * CELL, Vector2(2, seg) * CELL)
+				2: rect = Rect2(ORIGIN + Vector2(from, gh - 2) * CELL, Vector2(seg, 2) * CELL)
+				_: rect = Rect2(ORIGIN + Vector2(0, from) * CELL, Vector2(2, seg) * CELL)
+		else:
+			rect = Rect2(ORIGIN + Vector2(int(p.get("x", 0)), int(p.get("y", 0))) * CELL,
+					Vector2(int(p.get("w", 1)), int(p.get("h", 1))) * CELL)
+		draw_rect(rect, Color(col.r, col.g, col.b, 0.14))
+		draw_rect(rect, Color(col.r, col.g, col.b, 0.85), false, 2.0)
+		var label := "%s · %d" % [RandomEvents.event_name(id).to_upper(), left]
+		draw_string(font, rect.position + Vector2(4, 16), label,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(col.r, col.g, col.b, 0.95))
+
+## ВСПЫШКА ВЗРЫВА (0.9.4): клетки разрыва на секунду горят и гаснут. Чистая косметика —
+## пламенем это не становится ни на одну клетку: ни резолвер, ни правила огня об этих
+## клетках не знают, и на следующий ход от вспышки не остаётся ничего, кроме обычного
+## щебня. Рисуется плиткой огня (как и настоящий пожар), а без неё — оранжевой заливкой.
+## Туман войны вспышка не протекает: чего команда не видит, того ей и не показывают.
+func _draw_fx_flashes(visible: Dictionary) -> void:
+	if _fx.flashes.is_empty():
+		return
+	var fog_on: bool = resolver.fog_enabled
+	for flash: Dictionary in _fx.flashes:
+		var a := FxDecals.flash_alpha(flash)
+		if a <= 0.0:
+			continue
+		for c: Vector2i in flash["cells"]:
+			if not _cell_on_screen(c.x, c.y) or (fog_on and not visible.has(c)):
+				continue
+			var rect := Rect2(ORIGIN + Vector2(c) * CELL, Vector2(CELL, CELL))
+			if not Sprites.draw_texture_override_rect(self, "fire", rect, 0.0,
+					Color(1, 1, 1, a)):
+				draw_rect(rect, Color(1.0, 0.45, 0.08, 0.55 * a))
+				draw_rect(Rect2(rect.position + Vector2(CELL, CELL) * 0.25,
+						Vector2(CELL, CELL) * 0.5), Color(1.0, 0.86, 0.35, 0.7 * a))
 
 ## Дорожки боя (issue 8): «кто в кого стреляет». Трассер живёт 0.16 с — увидеть его
 ## можно, разобрать перестрелку нельзя, особенно в ход ИИ, когда за один заход стреляют
@@ -6668,7 +6744,7 @@ func _refresh_initiative_overlay() -> void:
 			continue
 		# Вырезанная группа жителей больше не ходит (end_turn её пропускает) — в списке ей
 		# не место (playtest-20): иначе десятки мёртвых групп вытесняли живые.
-		if MCF.is_neutral(slot) and int(rec["alive"]) == 0:
+		if MCF.is_npc_side(slot) and int(rec["alive"]) == 0:
 			continue
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 8)

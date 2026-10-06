@@ -1377,6 +1377,80 @@ replay it through the ordinary dice pipeline (§18.5):
 
 ---
 
+## 14a. Random Events (0.9.4)
+
+Three events, all **telegraphed one round before they land**. The host turns them on in the
+lobby and sets the interval, the mandatory flag and a weight per event; everything about an
+event — whether it happens, which one, where it lands, who it kills — comes out of
+`DiceService`, so host and client roll the same stream and resolve the same event in the
+same place. **Events off (or nothing pending) rolls no dice at all**, so old matches are
+untouched.
+
+| Event | Id | What it does |
+|---|---|---|
+| Artillery Barrage | `mortar` (id kept for saved weights and old messages) | A rolled rectangle is shelled: each cell has a 1/2 chance to be destroyed |
+| Gas Cloud | `gas` | A static zone stands for 3 rounds, chokes units inside it and blocks sight and fire |
+| Independent Army | `army` | Raiders land on a map edge, hostile to everyone, outside the win condition |
+
+**Telegraph, then land.** `_maybe_random_event` runs at the end of every handoff, exactly
+as before, but it no longer resolves anything: it rolls the event's **parameters** at once,
+puts `{id, params, announced, land = announced + 1}` on `RandomEvents.pending` and logs
+what is coming and when. `land_random_events` runs at the **end of round `land`** — in the
+handoff that closes the round, *before* `TurnManager.end_turn` refills AP and bumps the
+round number (`_handoff_closes_round`, which also counts the civilian and raider slots the
+resolver plays inside that same handoff). So every side gets one full turn to react.
+Several events can be pending at once; each lands on its own round, in queue order.
+Parameters are rolled at announcement, per-cell outcomes at landing; both orders are fixed.
+
+**Barrage.** The zone is 3..16 cells on a side, anywhere fully inside the board. Resolution
+walks columns west to east, cells north to south, one d6 per cell: 1–3 miss, 4–6 destroy.
+A destroyed cell loses whatever stood on it (the same terrain code an explosion uses) and
+**kills the occupant**; a vehicle over it takes one hull point. There is no blast radius
+and no chain reaction. The zone is deliberately **not** allowed to cover the whole map: on
+a 250×250 board that would be ~70 000 d6 in one event — and the same number of integers in
+the dice log the host ships to the guest and the replay keeps.
+
+**Gas.** Side 3..14 cells (and never more than a third of the board), 3 rounds. At the end
+of each round every living unit standing in a cloud rolls a d6 and **dies on 1–2**; crews
+inside vehicles and borg pilots are exempt (sealed hull). Gas lives on the board as
+`GridCell.gas`, which `blocks_sight()` reports like a wall — that one property is what puts
+gas into the sight sweep, the fog of war, the blocker tables and `los_blocked` by the same
+route walls take, so no check can forget about it. Endpoints are not tested, so two units
+on the edge of a cloud still see each other; a line **through** gas is blocked. Gas is
+derived state: it is never saved, it is rebuilt from the cloud list on load (`_sync_gas`).
+
+**Independent army.** Owners `200..299` (`MCF.INDEPENDENT_BASE`, "Raiders I"). The army
+lands on a rolled edge segment, its strength matched to the **average living player army by
+purchase cost**, drawn from the combat professions (no civilians, commanders or drone
+operators). Its slot goes into `round_order` at a rolled position; because events land at
+the end of a round the active index has already wrapped, so the insertion can neither skip
+nor repeat a turn. **The resolver plays its turn itself**, inside the handoff, exactly as it
+plays civilian slots — same AI brain with "everyone is an enemy" targeting, which makes it
+deterministic on both peers without a single network message. Raiders are hostile to
+players, civilians and each other; they are not a player side, so the victory check
+(`Main._winning_team`, which walks `Roster.player_ids()`) ignores them entirely.
+
+**`is_neutral` is bounded now.** It used to be `owner == NEUTRAL or owner >= 100`, which
+would have read owner 200 as a civilian group across the whole game. It is now
+`100..199`, and `MCF.is_npc_side()` is the question "nobody commands this side, the
+resolver plays it" — civilians **or** raiders — which is what the AI's ruthless style and
+the handoff loop ask.
+
+**Feedback.** The log names the event, the round it lands on and the zone or edge; the
+battle screen shades every pending zone with a round countdown and draws active clouds with
+their remaining rounds (`Main._draw_random_events`). Landing reuses the usual plumbing:
+`deaths`, `fx` and `dice_events` ("check" rolls for gas), so deaths, the debris pass and the
+cosmetic fire flash all behave like any other attack.
+
+**Networking.** `NetHandoff.PROTOCOL` (2 since 0.9.4) rides in every rules message; a guest
+whose version differs is refused in the lobby with a plain explanation instead of desyncing
+mid-battle. RL training keeps the roster but zeroes the `army` weight: a third side with no
+player number breaks both the observation and the reward.
+
+Covered by `tests/run_random_events.gd`.
+
+---
+
 ## 15. Items & Grenades (§3.6)
 
 A unit's `held_item_id` is seeded from its stats' `default_item_id` at spawn. **The item

@@ -571,7 +571,7 @@ func _candidates(state: GameState, r: GameActionResolver, u: UnitInstance) -> Ar
 		return out
 
 	# Нейтрал (§3/§4 «Нейтралы») беспощаден (playtest-20): стрелять или бежать на врага.
-	if MCF.is_neutral(owner):
+	if MCF.is_npc_side(owner):
 		return _neutral_candidates(state, r, u)
 
 	var shoot := _best_shoot(state, r, u)
@@ -859,7 +859,7 @@ func _unit_value(u: UnitInstance) -> float:
 	# Нейтрал при прочих равных бьёт по самому ДОРОГОМУ (§4.3). Цена цели весит у него
 	# заметно сильнее, чем у обычной армии, — поэтому разрыв ценностей между дорогой и
 	# дешёвой целью у нейтрала шире, и выбор смещается к дорогой явнее.
-	if MCF.is_neutral(owner):
+	if MCF.is_npc_side(owner):
 		v += float(u.stats.cost) * 0.1
 	return v
 
@@ -1197,7 +1197,7 @@ func _best_board(state: GameState, r: GameActionResolver, u: UnitInstance) -> Di
 		return {}
 	# Нейтралам тоже разрешено садиться в технику (item 6) — в любую свободную рядом,
 	# своей у них нет. Армейский ИИ садится только в СВОЮ.
-	var neutral := MCF.is_neutral(owner)
+	var neutral := MCF.is_npc_side(owner)
 	# На ПЕРВОМ ходу заполнить пустые танки — приоритет (item 6): экипаж важнее прочего,
 	# поэтому оценка посадки в свою машину взлетает выше стрельбы/движения.
 	var first_turn := state.turns.round_number <= 1
@@ -1447,7 +1447,7 @@ func _best_move(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dic
 	# План старше жадности: если штаб назначил бойцу клетку, идём туда. У особой манеры
 	# (style) свой выбор клетки — штабной план её бы перекрыл.
 	# Нейтралу план штаба ни к чему: он бежит прямо на ближайшего врага (playtest-20).
-	var neutral := MCF.is_neutral(owner)
+	var neutral := MCF.is_npc_side(owner)
 	if style == Style.STANDARD and not neutral:
 		var planned := _plan_move(state, u)
 		if not planned.is_empty():

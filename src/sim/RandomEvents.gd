@@ -1,27 +1,44 @@
 class_name RandomEvents
 extends RefCounted
 
-## Каркас случайных событий (§1.5 лобби, item 61). Хост в лобби включает события,
-## задаёт «обязательное событие каждый ход» / «сколько ходов между событиями» и веса-доли
-## по каждому событию. РЕАЛЬНЫХ спеков эффектов пока нет — поэтому здесь ровно три
-## ЗАГЛУШКИ (Mortar, Tremor, Gas): они объявляются в журнале и наносят условный,
-## полностью детерминированный эффект.
+## Случайные события (§1.5 лобби, item 61; спека «Random Event System», 0.9.4). Хост в
+## лобби включает события, задаёт «обязательное событие каждый ход» / «сколько ходов между
+## событиями» и веса-доли по каждому событию.
+##
+## Событий три, и ни одно не падает в тот же миг, когда выпало: СНАЧАЛА ОБЪЯВЛЕНИЕ, потом
+## удар. Выпавшее событие сразу прокатывает свои параметры (куда ляжет зона, с какого края
+## придут), объявляется в журнале и на карте — и ложится в очередь на КОНЕЦ СЛЕДУЮЩЕГО
+## РАУНДА. Значит у каждой стороны есть полный ход, чтобы уйти с зоны или встретить гостей.
+##
+##   • «Artillery Barrage» (id на диске остался mortar) — прямоугольную зону накрывает
+##     обстрел: каждая клетка с вероятностью 1/2 разрушена;
+##   • «Gas Cloud» — зона стоит несколько раундов, травит всех внутри и держит взгляд;
+##   • «Independent Army» — у края карты появляется ничья армия, враждебная всем.
 ##
 ## Главный инвариант — лок-степ (§2.3): и «случится ли событие», и «какое именно», и куда
 ## оно бьёт, берётся ТОЛЬКО из DiceService. Хост и клиент прокатывают один и тот же поток
 ## d6, значит выберут одно и то же событие в одном и том же месте. Ни одного постороннего
 ## RNG здесь быть не должно.
+##
+## ПАРАМЕТРЫ катаются при ОБЪЯВЛЕНИИ, исход по клеткам (куда попал снаряд, кто задохнулся) —
+## при ПАДЕНИИ. Оба порядка зафиксированы, поэтому хост и клиент сходятся и на том, и на
+## другом. Само содержимое очереди и облаков входит в снимок состояния (snapshot), так что
+## откат хода и загрузка сохранения возвращают и предупреждения, и стоящий газ.
 
 const MORTAR := "mortar"
-const TREMOR := "tremor"
 const GAS := "gas"
+const ARMY := "army"
 
 ## Реестр известных событий: id -> человекочитаемое имя. Порядок фиксирован — по нему
 ## взвешенный выбор обходит события, поэтому у хоста и клиента он совпадает.
+##
+## Прежний «Tremor» убран (своего эффекта у него так и не появилось). Старые сохранённые
+## веса с ключом "tremor" читаются как раньше: _pick обходит ТОЛЬКО реестр, и незнакомый
+## ключ просто не участвует.
 const REGISTRY := [
-	[MORTAR, "Mortar Strike"],
-	[TREMOR, "Tremor"],
+	[MORTAR, "Artillery Barrage"],
 	[GAS, "Gas Cloud"],
+	[ARMY, "Independent Army"],
 ]
 
 static func event_name(id: String) -> String:
@@ -32,16 +49,24 @@ static func event_name(id: String) -> String:
 
 ## Веса по умолчанию, если хост включил события, но не тронул доли: все три поровну.
 static func default_weights() -> Dictionary:
-	return {MORTAR: 1, TREMOR: 1, GAS: 1}
+	return {MORTAR: 1, GAS: 1, ARMY: 1}
 
 
 ## Состояние розыгрыша событий на весь матч. Живёт на резолвере и входит в снимок
-## состояния, чтобы откат хода не «терял» отсчёт ходов до следующего события.
+## состояния, чтобы откат хода не «потерял» ни отсчёт ходов до следующего события, ни
+## объявленное, но ещё не упавшее.
 var enabled: bool = false
 var mandatory: bool = false        # событие ОБЯЗАТЕЛЬНО каждый ход
 var interval: int = 3              # иначе — раз в столько ходов
 var weights: Dictionary = {}       # id -> вес-доля (item 1.5)
 var turns_since: int = 0           # ходов прошло с прошлого события
+## Объявленные события в очереди: [{"id", "params", "announced": раунд, "land": раунд}].
+## Их может быть несколько сразу (обязательный режим с коротким интервалом).
+var pending: Array = []
+## Стоящие газовые облака: [{"x", "y", "w", "h", "left": раундов осталось}].
+var clouds: Array = []
+## Сколько независимых армий уже пришло — по этому числу новая получает свой слот.
+var armies: int = 0
 
 func _init(cfg_enabled := false, cfg_mandatory := false, cfg_interval := 3,
 		cfg_weights: Dictionary = {}) -> void:
@@ -50,8 +75,7 @@ func _init(cfg_enabled := false, cfg_mandatory := false, cfg_interval := 3,
 	interval = maxi(1, cfg_interval)
 	weights = cfg_weights.duplicate() if not cfg_weights.is_empty() else default_weights()
 
-## d6, на котором и ниже ничего не происходит на «созревшем» ходу, когда режим НЕ
-## обязательный (item 11): 1–2 из шести ≈ треть — заметный, но не доминирующий шанс тишины.
+## Бросок «а случится ли вообще» в необязательном режиме: событие проходит на 3+.
 const NOTHING_ON := 2
 
 ## Пора ли разыгрывать событие на очередном ходу. Частоту задаёт ТОЛЬКО интервал —
@@ -78,11 +102,15 @@ func roll_event(dice: DiceService) -> String:
 			return ""
 	return _pick(dice)
 
+## Сумма весов — только по ИЗВЕСТНЫМ событиям (0.9.4). Прежде она считала все ключи, и
+## вес выбывшего «tremor» из старых настроек съедал свою долю розыгрыша: событие выпадало
+## «никакое» и ход проходил впустую. Незнакомый ключ теперь не влияет ни на что.
 func _total_weight() -> int:
 	var t := 0
-	for id in weights:
-		if int(weights[id]) > 0:
-			t += int(weights[id])
+	for pair in REGISTRY:
+		var w := int(weights.get(pair[0], 0))
+		if w > 0:
+			t += w
 	return t
 
 ## Взвешенно выбрать событие ЧЕРЕЗ DiceService (лок-степ). Возвращает id или "".
@@ -107,10 +135,70 @@ func _pick(dice: DiceService) -> String:
 		pick -= w
 	return ""
 
-## Снимок/восстановление для отката хода (счётчик ходов обязан переживать undo).
+# --- Очередь объявленных событий -------------------------------------------------------
+
+## Через сколько раундов после объявления событие падает. Единица означает «в конце
+## СЛЕДУЮЩЕГО раунда»: у всех сторон есть полный ход на то, чтобы отреагировать.
+const WARNING_ROUNDS := 1
+
+## Объявить событие: параметры уже прокатаны, падение — в конце раунда round_number + 1.
+func announce(id: String, params: Dictionary, round_number: int) -> Dictionary:
+	var entry := {"id": id, "params": params, "announced": round_number,
+			"land": round_number + WARNING_ROUNDS}
+	pending.append(entry)
+	return entry
+
+## Что падает в конце раунда round_number — в порядке очереди. Записи при этом СНИМАЮТСЯ
+## с очереди: вызывающий их тут же и разыгрывает.
+func take_landing(round_number: int) -> Array:
+	var out: Array = []
+	var left: Array = []
+	for e: Dictionary in pending:
+		if int(e["land"]) <= round_number:
+			out.append(e)
+		else:
+			left.append(e)
+	pending = left
+	return out
+
+## Поставить газовое облако (при падении события).
+func add_cloud(x: int, y: int, w: int, h: int, rounds: int) -> Dictionary:
+	var cloud := {"x": x, "y": y, "w": w, "h": h, "left": rounds}
+	clouds.append(cloud)
+	return cloud
+
+## Отсчитать газу раунд: у всех облаков минус один, выдохшиеся убрать.
+func age_clouds() -> void:
+	var left: Array = []
+	for c: Dictionary in clouds:
+		c["left"] = int(c["left"]) - 1
+		if int(c["left"]) > 0:
+			left.append(c)
+	clouds = left
+
+## Лежит ли клетка в каком-нибудь облаке. Поклеточную проверку в бою делает НЕ это (там
+## маска, см. GameActionResolver._gas_mask): здесь — для журнала, тестов и подсказок.
+func cloud_at(c: Vector2i) -> bool:
+	for cl: Dictionary in clouds:
+		if c.x >= int(cl["x"]) and c.y >= int(cl["y"]) \
+				and c.x < int(cl["x"]) + int(cl["w"]) and c.y < int(cl["y"]) + int(cl["h"]):
+			return true
+	return false
+
+## Снимок/восстановление для отката хода (счётчик ходов, очередь объявленного и стоящий
+## газ обязаны переживать undo и загрузку). Всё — числа и строки: снимок уезжает через
+## JSON в файл сохранения и гостю по сети, поэтому ни Vector2i, ни Rect2i тут нет.
 func snapshot() -> Dictionary:
+	var pend: Array = []
+	for e: Dictionary in pending:
+		pend.append({"id": e["id"], "params": (e["params"] as Dictionary).duplicate(),
+				"announced": e["announced"], "land": e["land"]})
+	var cl: Array = []
+	for c: Dictionary in clouds:
+		cl.append(c.duplicate())
 	return {"enabled": enabled, "mandatory": mandatory, "interval": interval,
-			"weights": weights.duplicate(), "turns_since": turns_since}
+			"weights": weights.duplicate(), "turns_since": turns_since,
+			"pending": pend, "clouds": cl, "armies": armies}
 
 func restore(d: Dictionary) -> void:
 	enabled = d.get("enabled", false)
@@ -118,6 +206,15 @@ func restore(d: Dictionary) -> void:
 	interval = d.get("interval", 3)
 	weights = (d.get("weights", {}) as Dictionary).duplicate()
 	turns_since = d.get("turns_since", 0)
+	pending = []
+	for e: Dictionary in d.get("pending", []):
+		pending.append({"id": str(e.get("id", "")),
+				"params": (e.get("params", {}) as Dictionary).duplicate(),
+				"announced": int(e.get("announced", 0)), "land": int(e.get("land", 0))})
+	clouds = []
+	for c: Dictionary in d.get("clouds", []):
+		clouds.append((c as Dictionary).duplicate())
+	armies = int(d.get("armies", 0))
 
 static func from_config() -> RandomEvents:
 	var w: Dictionary = GameConfig.random_events_weights

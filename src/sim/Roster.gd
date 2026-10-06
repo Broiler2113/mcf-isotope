@@ -46,6 +46,9 @@ static func faction_key(index: int) -> String:
 
 ## Цвет нейтральной стороны и её групп — один на всех: нейтралы не команда, они фон.
 const NEUTRAL_COLOR := Color(0.80, 0.80, 0.55)
+## Независимая армия (0.9.4): ржаво-оранжевая, чтобы её не путали ни с игроком, ни с
+## серыми жителями.
+const INDEPENDENT_COLOR := Color8(196, 104, 40)
 
 class Slot extends RefCounted:
 	var id: int = -1
@@ -224,12 +227,17 @@ func name_of(owner: int) -> String:
 func color_of(owner: int) -> Color:
 	if MCF.is_neutral(owner):
 		return NEUTRAL_COLOR
+	# Независимая армия (0.9.4) — своя, ничья сторона: у неё нет слота в ростере, и цвет
+	# ей нужен свой, не белый «не знаю кто».
+	if MCF.is_independent(owner):
+		return INDEPENDENT_COLOR
 	var s := slot(owner)
 	return s.color if s != null else Color.WHITE
 
 ## Суффикс картинок стороны (batch 17, item 13): «_nova» и т. п.; нейтралы — «_neutral».
 func faction_suffix_of(owner: int) -> String:
-	if MCF.is_neutral(owner):
+	# Своих картинок у независимой армии нет — берёт нейтральные (0.9.4).
+	if MCF.is_npc_side(owner):
 		return "_neutral"
 	var s := slot(owner)
 	return "_" + faction_key(s.color_index() if s != null else owner)

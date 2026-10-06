@@ -106,24 +106,31 @@ const K_DHALL := 6
 ## коридора (приёмная, у мостика — командный пункт, у жилого — кают-компания); rooms — по
 ## важности (на малой карте лишние отпадают); hall — вид пола своего коридора; extra —
 ## чем заполнять лишние комнаты.
+## Раздевалка (0.9.4) есть у КАЖДОГО отдела — игрок просил «each department needs its own
+## small changing rooms», — и стоит в списке сразу после самого нужного: на тесной карте
+## отпадают комнаты с конца списка, и раздевалка не должна улетать первой.
 const DEPARTMENTS := {
-	"bridge": {"front": "command", "rooms": ["captain", "hidden_storage", "server_room", "office"],
+	"bridge": {"front": "command", "rooms": ["captain", "hidden_storage", "changing", "server_room", "office"],
 		"hall": MCF.Look.CARPET_BLUE, "extra": ["office", "server_room"]},
-	"service": {"front": "lounge", "rooms": ["kitchen", "mess", "restroom", "quarters", "quarters", "laundry",
-		"quarters", "quarters"], "hall": MCF.Look.TILE, "extra": ["quarters", "storage"]},
-	"engineering": {"front": "reception", "rooms": ["power", "water", "air", "dock", "supply"], "hall": MCF.Look.PLATE,
-		"extra": ["utility", "storage"]},
-	"medical": {"front": "reception", "rooms": ["ward", "surgery", "supply", "restroom"], "hall": MCF.Look.LINO,
-		"extra": ["office", "ward"]},
-	"security": {"front": "reception", "rooms": ["briefing", "armory", "cell", "cell", "cell"], "hall": 0,
-		"extra": ["office", "cell"]},
-	"supply": {"front": "reception", "rooms": ["warehouse", "dock", "storage"], "hall": MCF.Look.PLATE,
+	"service": {"front": "lounge", "rooms": ["kitchen", "mess", "restroom", "quarters", "changing", "quarters",
+		"laundry", "quarters", "quarters"], "hall": MCF.Look.TILE, "extra": ["quarters", "storage"]},
+	"engineering": {"front": "reception", "rooms": ["power", "water", "air", "changing", "dock", "supply"],
+		"hall": MCF.Look.PLATE, "extra": ["utility", "storage"]},
+	# Морг и вирусология (0.9.4) — в медотсеке; оба вперёд склада, но после палаты с операционной.
+	"medical": {"front": "reception", "rooms": ["ward", "surgery", "morgue", "virology", "changing", "supply",
+		"restroom"], "hall": MCF.Look.LINO, "extra": ["office", "ward"]},
+	# Карцер (0.9.4) — отдельная камера-одиночка сверх общих камер.
+	"security": {"front": "reception", "rooms": ["briefing", "armory", "changing", "cell", "cell", "solitary",
+		"cell"], "hall": 0, "extra": ["office", "cell"]},
+	"supply": {"front": "reception", "rooms": ["warehouse", "dock", "changing", "storage"], "hall": MCF.Look.PLATE,
 		"extra": ["storage", "office"]},
-	"production": {"front": "reception", "rooms": ["machine_shop", "assembly", "warehouse", "dock", "machine_shop"],
-		"hall": MCF.Look.PLATE, "extra": ["storage", "workshop"]},
-	"research": {"front": "reception", "rooms": ["testing_range", "laboratory", "assembly", "supply"],
+	"production": {"front": "reception", "rooms": ["machine_shop", "assembly", "changing", "warehouse", "dock",
+		"machine_shop"], "hall": MCF.Look.PLATE, "extra": ["storage", "workshop"]},
+	# Полигон у лабораторий стоит ОТДЕЛЬНО от станции (0.9.4, _annex): в списке комнат его
+	# больше нет — он пристраивается снаружи и соединяется коротким коридором.
+	"research": {"front": "reception", "rooms": ["laboratory", "changing", "assembly", "supply"],
 		"hall": MCF.Look.LINO, "extra": ["laboratory", "office"]},
-	"misc": {"front": "lounge", "rooms": ["storage", "quarters", "office", "server_room"], "hall": 0,
+	"misc": {"front": "lounge", "rooms": ["storage", "quarters", "changing", "office", "server_room"], "hall": 0,
 		"extra": ["storage", "quarters"]},
 }
 ## Порядок важности: на карте с N отсеками строятся первые N (мостик, жилой, инженерный…).
@@ -152,6 +159,8 @@ const KIND_ACCENT := {
 	"server_room": MCF.Accent.CONTROL, "comms": MCF.Accent.CONTROL,
 	"armory": MCF.Accent.SECURITY, "cell": MCF.Accent.SECURITY, "briefing": MCF.Accent.SECURITY,
 	"ward": MCF.Accent.MEDICAL, "surgery": MCF.Accent.MEDICAL,
+	"morgue": MCF.Accent.MEDICAL, "virology": MCF.Accent.MEDICAL,
+	"solitary": MCF.Accent.SECURITY,
 	"laboratory": MCF.Accent.SCIENCE, "testing_range": MCF.Accent.SCIENCE,
 	"power": MCF.Accent.ENGINEERING, "water": MCF.Accent.ENGINEERING, "air": MCF.Accent.ENGINEERING,
 	"utility": MCF.Accent.ENGINEERING, "recycling": MCF.Accent.ENGINEERING,
@@ -163,7 +172,15 @@ const KIND_ACCENT := {
 const HULL_KINDS := {"dock": true, "testing_range": true}
 ## Комнаты, которые нельзя отдать под технические (их отдел без них — не отдел).
 const KEY_KINDS := {"reception": true, "command": true, "lounge": true, "captain": true, "hidden_storage": true,
-		"dock": true, "testing_range": true, "ward": true, "briefing": true, "kitchen": true}
+		"dock": true, "testing_range": true, "ward": true, "briefing": true, "kitchen": true,
+		# Раздевалка, морг, вирусология и камеры — тоже лицо отдела: под техничку их не отдают.
+		"changing": true, "morgue": true, "virology": true, "cell": true, "solitary": true}
+
+## Комнаты, в стенах которых НЕ РЕЖУТСЯ ни окна, ни внешние шлюзы (0.9.4). Санузел с
+## видом в космос — ровно то, на что жаловался игрок («windows shouldn\'t generate in
+## bathrooms»); карцер и раздевалка по той же причине глухие, а тайник был таким и раньше.
+const NO_WINDOW_KINDS := {"hidden_storage": true, "restroom": true, "bathroom": true,
+		"changing": true, "cell": true, "solitary": true, "morgue": true}
 
 var opt: Dictionary
 var m: MapData
@@ -225,11 +242,28 @@ var _space_doors: Array[Vector2i] = []
 var _solar: Array[Vector2i] = []
 ## Отделы станции: [отсек, отдел] — для проверок (run_batch092).
 var _dept_sectors: Array = []
+## Проёмы, которым шлюз ставится НАСИЛЬНО (0.9.4): устья техтуннелей бывают в две клетки
+## шириной, и обычная проверка «стены по бокам» (_is_doorway) их не признаёт.
+var _forced_doors: Dictionary = {}
+## Пристройки снаружи станции (0.9.4): их комнаты не отдаются под технические.
+var _annex_rects: Dictionary = {}
+
+## Чем бывают пристройки-протуберанцы (0.9.4). Всё это модули, которым снаружи самое
+## место: причал, воздух, вода, реактор, узел связи, склад.
+const PROTRUSION_KINDS := ["dock", "air", "water", "power", "server_room", "storage"]
+## Чем бывают чуланы, висящие на техтуннеле (0.9.4), и насколько тесной должна быть
+## комната, чтобы её отдали под такой чулан (клеток пола).
+const MAINT_KINDS := ["utility", "water", "air", "power", "storage", "utility"]
+const MAINT_ROOM_MAX := 24
+## Обвод станции (0.9.4): суперэллипс по игровой карте. Показатель 3 даёт «прямоугольник
+## со скруглёнными углами» — ровно то, что просил игрок, а не круг.
+const HULL_POWER := 3.0
+const HULL_MARGIN := 1.06
 
 static func default_options() -> Dictionary:
 	return {"style": Style.TOWN, "size": 1, "density": 1, "seed": 1, "zones": 2, "units": 10,
 			"width": 80, "height": 60, "symmetric": false,
-			"space": true, "flammable": true, "obstacles": true, "civilians": 2,
+			"space": true, "flammable": true, "obstacles": true, "civilians": 0,
 			"furniture": MapFurnish.DEFAULT_DENSITY}
 
 ## Уровень мирных по настройке: число 0…4 или прежнее true/false.
@@ -655,11 +689,20 @@ func _station() -> void:
 	# Пустые отсеки — у краёв чаще, но не больше пятой части: на карте из шести отсеков,
 	# где все у края, прежний бросок «каждому по 20%» оставлял от станции скелет коридоров.
 	var empty_left := sectors.size() / 5
+	# Скруглённый силуэт (0.9.4): отсек, вылезающий за обвод станции, отдаётся пустоте —
+	# углы срезаются, и прямоугольник во всю карту превращается в сглаженную по углам
+	# фигуру. Отсеков должно быть на это достаточно: на карте из трёх-четырёх срезать углы
+	# нечем, да и незаметно.
+	var round_off := sectors.size() >= 6
+	var round_left := sectors.size() / 3
 	var kept: Array[Rect2i] = []
 	for s in sectors:
 		var edge := s.position.x <= _core.position.x + 1 or s.position.y <= _core.position.y + 1 \
 				or s.end.x >= _core.end.x - 1 or s.end.y >= _core.end.y - 1
 		var empty_roll := _rng.randf()
+		if round_off and round_left > 0 and _outside_hull(s):
+			round_left -= 1
+			continue
 		if empty_left > 0 and empty_roll < (0.25 if edge else 0.08):
 			empty_left -= 1
 			continue
@@ -668,6 +711,15 @@ func _station() -> void:
 	for k in kept.size():
 		_department(kept[k], depts[k])
 		_dept_sectors.append([kept[k], depts[k]])
+	# Полигон (0.9.4) — ОТДЕЛЬНО от станции, коротким коридором: «the research department\'s
+	# testing range should be separate from the rest of the station but connected by a small
+	# corridor». Заодно пристройки-протуберанцы: станция обрастает модулями снаружи, а не
+	# стоит глухим кирпичом.
+	if depts.has("research"):
+		_annex("testing_range", _rng.randi_range(5, 7), _rng.randi_range(7, 10))
+	for n in 1 + int(_core.size.x * _core.size.y / 2600):
+		_annex(PROTRUSION_KINDS[_rng.randi_range(0, PROTRUSION_KINDS.size() - 1)],
+				_rng.randi_range(4, 6), _rng.randi_range(4, 6))
 	_maintenance_rooms()
 	_accent_rooms()
 	if _sym > 0:
@@ -683,6 +735,7 @@ func _station() -> void:
 			if _k[y * w + x] == K_VOID and _touches_floor(x, y):
 				_k[y * w + x] = K_WALL
 	_maintenance_exits()
+	_maintenance_mouths()
 	for y in h:
 		for x in w:
 			var c := Vector2i(x, y)
@@ -705,8 +758,9 @@ func _station() -> void:
 					_void(c)
 	for y in h:
 		for x in w:
-			if _k[y * w + x] == K_DOOR and _is_doorway(x, y):
-				_mark_door(Vector2i(x, y))
+			var dc := Vector2i(x, y)
+			if _k[y * w + x] == K_DOOR and (_is_doorway(x, y) or _forced_doors.has(dc)):
+				_mark_door(dc)
 	# Выходы наружу: причалы и полигон — широким шлюзом, техтуннели — шлюзом к панелям.
 	# Только в открытый космос: в бункере и без космоса за стеной скала, и причал остаётся
 	# запертым грузовым отсеком (шлюз в камень был бы дверью в никуда).
@@ -816,6 +870,22 @@ func _assign_departments(kept: Array[Rect2i]) -> Array[String]:
 				best = pool[_rng.randi_range(0, pool.size() - 1)]
 			_:
 				best = free[_rng.randi_range(0, free.size() - 1)]
+		# ОДИН ОТДЕЛ — ОДИН КУСОК СТАНЦИИ (0.9.4). На большой станции отсеков хватает с
+		# избытком, и отдел повторяется (DEPT_EXTRA); прежде второй такой же отсек выпадал
+		# где угодно — медотсек оказывался зажат посреди производства, ровно то, на что
+		# жаловался игрок. Повтор берёт отсек, БЛИЖАЙШИЙ к уже отданному этому же отделу.
+		var twin := -1
+		for k in out.size():
+			if out[k] == d:
+				twin = k
+				break
+		if twin >= 0:
+			var at := Vector2(kept[twin].get_center())
+			var near: int = free[0]
+			for k in free:
+				if dist.call(k, at) < dist.call(near, at):
+					near = k
+			best = near
 		take.call(best, d)
 	return out
 
@@ -889,8 +959,10 @@ func _department(s: Rect2i, dept: String) -> void:
 	for p: Array in front_parts:
 		rooms.append([_local_rect(s, f, p[0], p[1], 0, fd), 0, p[0], p[1]])
 	if back > 0:
+		# Камеры (0.9.4) — ТЕСНЫЕ: у охраны задний ряд режется полосами в три-четыре клетки,
+		# «prison cells should be very small and contain a bed». Прочие отделы — как было.
 		var cells_small := dept == "security"
-		for p: Array in _cut_strip(lc, 0, L, fd + 2 + cw, D, 3 if cells_small else 4, 8):
+		for p: Array in _cut_strip(lc, 0, L, fd + 2 + cw, D, 3, 4 if cells_small else 8):
 			rooms.append([_local_rect(s, f, p[0], p[1], fd + 2 + cw, D), 1, p[0], p[1]])
 	_assign_rooms(s, f, rooms, spec, lc, fd, cw, back, D)
 	# Коридор отдела в торцах — дверь в техтуннель (в главный коридор — только приёмная).
@@ -1104,17 +1176,130 @@ func _reception_door(s: Rect2i, f: int, u0: int, u1: int, lc: Callable) -> void:
 				_kset(c, K_DOOR)
 				return
 
+## Отсек ВЫЛЕЗ за обвод станции (0.9.4): его дальний от середины угол лежит снаружи
+## суперэллипса. Считается по углу, а не по центру: отсек, лишь задевший обвод, станция
+## сохраняет — иначе срезалась бы половина застройки.
+func _outside_hull(s: Rect2i) -> bool:
+	var mid := Vector2(_core.position) + Vector2(_core.size) * 0.5
+	var half := Vector2(_core.size) * 0.5
+	var far := Vector2(
+			float(s.position.x) if absf(s.position.x - mid.x) > absf(s.end.x - 1 - mid.x) else float(s.end.x - 1),
+			float(s.position.y) if absf(s.position.y - mid.y) > absf(s.end.y - 1 - mid.y) else float(s.end.y - 1))
+	var dx := absf(far.x - mid.x) / maxf(1.0, half.x)
+	var dy := absf(far.y - mid.y) / maxf(1.0, half.y)
+	return pow(dx, HULL_POWER) + pow(dy, HULL_POWER) > HULL_MARGIN
+
+## ПРИСТРОЙКА (0.9.4): комната ЗА обшивкой, соединённая со станцией узким коридором.
+## Так стоит полигон лабораторий (игрок просил вынести его из станции) и так же станция
+## обрастает модулями — причалом, воздухом, реактором, — а не остаётся глухим кирпичом.
+##
+## Садится на любой коридор, за которым сразу пустота, и строится ЦЕЛИКОМ в пустоте внутри
+## игровой карты: ни одна клетка станции при этом не трогается. false — места не нашлось
+## (тесная карта, застройка вплотную к краю), и тогда пристройки просто нет.
+func _annex(kind: String, rw: int, rh: int) -> bool:
+	var mounts: Array = []
+	for y in range(_core.position.y, _core.end.y):
+		for x in range(_core.position.x, _core.end.x):
+			var k := _k[y * w + x]
+			if k != K_HALL and k != K_MAINT:
+				continue
+			var c := Vector2i(x, y)
+			if not _in_f(c):
+				continue   # на зеркальной карте пристройка растёт в исходной части
+			for d: Vector2i in N4:
+				if _kind(c.x + d.x, c.y + d.y) == K_VOID:
+					mounts.append([c, d])
+	if mounts.is_empty():
+		return false
+	# Обход в случайном порядке — чтобы пристройка не садилась всегда на первый коридор.
+	var start := _rng.randi_range(0, mounts.size() - 1)
+	var link := _rng.randi_range(2, 4)
+	for i in mounts.size():
+		var m_at: Array = mounts[(start + i) % mounts.size()]
+		if _try_annex(m_at[0], m_at[1], kind, rw, rh, link):
+			return true
+	return false
+
+func _try_annex(c: Vector2i, d: Vector2i, kind: String, rw: int, rh: int, link: int) -> bool:
+	var side := Vector2i(d.y, d.x)
+	var half := rw / 2
+	link = maxi(2, link)
+	# Расклад вдоль d от коридора станции: 1 — дверь наружу, 2..link — коридорчик,
+	# link+1 — ближняя стена комнаты (в ней дверь), link+2.. — сама комната.
+	# Стена комнаты обязана начинаться СРАЗУ за коридорчиком, иначе она встаёт на его
+	# последнюю клетку, и дверь открывается в стену.
+	var a := c + d * (link + 2) - side * half
+	var b := c + d * (link + 1 + rh) + side * (rw - 1 - half)
+	var room := Rect2i(Vector2i(mini(a.x, b.x), mini(a.y, b.y)),
+			Vector2i(absi(b.x - a.x) + 1, absi(b.y - a.y) + 1)).grow(1)
+	var need: Array[Vector2i] = []
+	for k in range(1, link + 1):
+		need.append(c + d * k)
+		need.append(c + d * k + side)      # бока коридора станут обшивкой — тоже должны быть пусты
+		need.append(c + d * k - side)
+	need.append_array(_rect_cells(room))
+	for q in need:
+		if not _core.has_point(q) or _kind(q.x, q.y) != K_VOID:
+			return false
+	# Дверь в станцию, коридор, комната, дверь в комнату.
+	_kset(c + d, K_DOOR)
+	_forced_doors[c + d] = true
+	# Связка — СВОЙ коридорчик (K_DHALL), а не техтуннель: на вид это короткий переход в
+	# пристройку, и считать его шириной техтуннеля (проверка 0.9.3) было бы неверно.
+	for k in range(2, link + 1):
+		_kset(c + d * k, K_DHALL)
+	for q in _rect_cells(room):
+		_kset(q, K_WALL if _on_edge(room, q) else K_ROOM)
+	var door := c + d * (link + 1)
+	_kset(door, K_DOOR)
+	_forced_doors[door] = true
+	_rooms.append(room)
+	_room_kind[room] = kind
+	_annex_rects[room] = true
+	return true
+
+## УСТЬЯ ТЕХТУННЕЛЕЙ (0.9.4): «tech tunnels should have airlocks on both ends». Устье —
+## клетка туннеля, за которой начинается ШИРОКИЙ коридор (главный или коридор отдела);
+## таких у туннеля ровно два, по концам. Туннель с туннелем стыкуется без дверей: это одна
+## и та же служебная сеть.
+##
+## Шлюз ставится насильно (_forced_doors): у двухклеточного туннеля в устье стоят две
+## клетки рядом, и обычная проверка проёма (стены по бокам) их не признаёт.
+func _maintenance_mouths() -> void:
+	var mouths: Array[Vector2i] = []
+	for y in h:
+		for x in w:
+			if _k[y * w + x] != K_MAINT:
+				continue
+			for d: Vector2i in N4:
+				var k := _kind(x + d.x, y + d.y)
+				if k == K_HALL or k == K_DHALL:
+					mouths.append(Vector2i(x, y))
+					break
+	for c in mouths:
+		_kset(c, K_DOOR)
+		_forced_doors[c] = true
+		# В устье теперь дверь, а не настил: решётка — примета САМОГО туннеля (0.9.3), и под
+		# створкой шлюза ей делать нечего.
+		_hall_look[c.y * w + c.x] = 0
+
 ## Технические комнаты (0.9.2): пара задних комнат, упёршихся в техтуннель, отходит под
 ## техслужбы — дверь у них только в туннель. Первая — переработка отходов (обязательна на
 ## любой станции; туннелей нет — ею становится маленькая комната инженерного).
 func _maintenance_rooms() -> void:
 	var cands: Array[Rect2i] = []
 	for r in _rooms:
-		if KEY_KINDS.has(_room_kind.get(r, "")) or not _in_f(r.get_center()):
+		if KEY_KINDS.has(_room_kind.get(r, "")) or not _in_f(r.get_center()) or _annex_rects.has(r):
+			continue
+		# Только ТЕСНАЯ комната (0.9.4): кладовка со щитками — это чулан, а не зал. Так отдел
+		# не теряет под служебную сеть большую комнату, и его планировка остаётся цельной.
+		if r.grow(-1).get_area() > MAINT_ROOM_MAX:
 			continue
 		if _maint_wall(r) != Vector2i(-1, -1):
 			cands.append(r)
-	var want := maxi(1, _rooms.size() / 14)
+	# Чуланов по туннелям стало больше и они разные (0.9.4): игрок просил, чтобы туннели
+	# были «more branching and varied» и несли «small rooms featuring technical equipment».
+	var want := maxi(1, _rooms.size() / 9)
 	var placed := 0
 	for r in cands:
 		if placed >= want:
@@ -1124,7 +1309,9 @@ func _maintenance_rooms() -> void:
 			if _kind(c.x, c.y) == K_DOOR:
 				_kset(c, K_WALL)
 		_kset(_maint_wall(r), K_DOOR)
-		_room_kind[r] = "recycling" if placed == 0 else "utility"
+		# Первой — переработка (она обязательна), дальше по кругу: щитовая, вода, воздух,
+		# реактор, кладовая.
+		_room_kind[r] = "recycling" if placed == 0 else MAINT_KINDS[(placed - 1) % MAINT_KINDS.size()]
 		placed += 1
 	if placed == 0:
 		# Ни одного туннеля рядом с комнатами — переработка в самой маленькой некл. комнате.
@@ -1150,12 +1337,13 @@ func _accent_rooms() -> void:
 			if _in(c):
 				_accent[c.y * w + c.x] = accent
 
-## Стены комнат, которые обязаны остаться глухими (тайник капитана): ни окна, ни внешнего
-## шлюза. Ключи — клетки, чтобы проверка на обшивке стоила поиск по словарю.
+## Стены комнат, которые обязаны остаться глухими (тайник капитана, санузел, раздевалка,
+## камеры, морг — NO_WINDOW_KINDS): ни окна, ни внешнего шлюза. Ключи — клетки, чтобы
+## проверка на обшивке стоила поиск по словарю.
 func _sealed_room_walls() -> Dictionary:
 	var out := {}
 	for r: Rect2i in _room_kind:
-		if _room_kind[r] != "hidden_storage":
+		if not NO_WINDOW_KINDS.has(_room_kind[r]):
 			continue
 		for c in _edge_cells(r):
 			out[c] = true
@@ -1193,21 +1381,22 @@ func _maintenance_exits() -> void:
 		for x in w:
 			if _k[y * w + x] != K_MAINT or not _in_f(Vector2i(x, y)):
 				continue
+			if used.size() >= SOLAR_EXITS_MAX:
+				return
 			for d: Vector2i in dirs:
 				var wall := Vector2i(x, y) + d
 				if _kind(wall.x, wall.y) != K_WALL:
 					continue
-				var room := true
-				for k in range(1, 5):
-					var q := wall + d * k
-					if not _in(q) or _kind(q.x, q.y) != K_VOID:
-						room = false
-						break
-				if not room:
+				# ТОЛЬКО НАРУЖНАЯ ОБШИВКА (0.9.4): пустота за стеной обязана тянуться до края
+				# игровой карты. Прежде хватало четырёх пустых клеток — и этому условию
+				# отвечал ПУСТОЙ ОТСЕК внутри станции: мостки с панелями вырастали в дырке
+				# посреди станции, хотя игрок просил держать их «only on the station's outer
+				# hull».
+				if not _looks_outside(wall, d):
 					continue
 				var near := false
 				for u in used:
-					if u.distance_to(wall) < 8.0:
+					if u.distance_to(wall) < SOLAR_EXIT_GAP:
 						near = true
 						break
 				if near:
@@ -1215,12 +1404,26 @@ func _maintenance_exits() -> void:
 				used.append(wall)
 				_space_doors.append(wall)
 				var side := Vector2i(d.y, d.x)
-				for k in range(1, 5):
+				# Мостки — три клетки от обшивки, панели — по одной с каждой стороны у двух
+				# дальних клеток: четыре панели на выход вместо прежних двенадцати
+				# («solar panels should spawn in smaller numbers»).
+				for k in range(1, 4):
 					_grill.append(wall + d * k)            # мостки от самой обшивки
 					if k == 1:
 						continue
-					for t: int in [-2, -1, 1, 2]:
+					for t: int in [-1, 1]:
 						_solar.append(wall + d * k + side * t)
+				break
+## Пустота за клеткой обшивки тянется НАРУЖУ до края игровой карты (0.9.4): по этому луч
+## и отличает настоящий борт станции от пустого отсека внутри неё.
+func _looks_outside(wall: Vector2i, d: Vector2i) -> bool:
+	var q := wall + d
+	while _core.has_point(q):
+		if _kind(q.x, q.y) != K_VOID:
+			return false
+		q += d
+	return true
+
 ## Делит кусок коридором, пока обе стороны не меньше `mn`. Листья — отсеки.
 ##
 ## Ширина прохода (0.9.3, по просьбе игрока). Станцию насквозь режет ОДИН главный ход в три
@@ -1233,6 +1436,12 @@ func _maintenance_exits() -> void:
 ## щели и перестаёт что-либо значить.
 const MAINT_WIDE_CHANCE := 0.25
 const MAINT_GRATE_CHANCE := 0.35
+## Мельче этого кусок станции техтуннелем не делится (0.9.4).
+const MAINT_SPLIT_MIN := 9
+## Сколько самое большее выходов техтуннелей наружу с панелями бывает на станции (0.9.4) и
+## как далеко они стоят друг от друга.
+const SOLAR_EXITS_MAX := 3
+const SOLAR_EXIT_GAP := 10.0
 
 func _split_sectors(r: Rect2i, mn: int, depth: int, out: Array[Rect2i]) -> void:
 	var tech := depth >= 2
@@ -1255,6 +1464,11 @@ func _split_sectors(r: Rect2i, mn: int, depth: int, out: Array[Rect2i]) -> void:
 		out.append(r)
 		return
 	var along_x := can_x and (not can_y or split_roll < float(r.size.x) / float(r.size.x + r.size.y))
+	# Чем глубже, тем мельче кусок, который ещё стоит делить (0.9.4): техтуннели от этого
+	# ВЕТВЯТСЯ — «technical tunnels should be more branching and varied», — а отсеки отделов
+	# остаются жилыми: ниже MAINT_SPLIT_MIN деление не идёт, иначе отдел выродился бы в одну
+	# комнату.
+	var mn_next := mn if depth < 1 else maxi(MAINT_SPLIT_MIN, mn * 4 / 5)
 	if along_x:
 		var cut := _rng.randi_range(mn, r.size.x - mn - hall_w)
 		for y in range(r.position.y, r.end.y):
@@ -1262,9 +1476,9 @@ func _split_sectors(r: Rect2i, mn: int, depth: int, out: Array[Rect2i]) -> void:
 				_k[y * w + x] = hall_k
 				if hall_look != 0:
 					_hall_look[y * w + x] = hall_look
-		_split_sectors(Rect2i(r.position.x, r.position.y, cut, r.size.y), mn, depth + 1, out)
+		_split_sectors(Rect2i(r.position.x, r.position.y, cut, r.size.y), mn_next, depth + 1, out)
 		_split_sectors(Rect2i(r.position.x + cut + hall_w, r.position.y,
-				r.size.x - cut - hall_w, r.size.y), mn, depth + 1, out)
+				r.size.x - cut - hall_w, r.size.y), mn_next, depth + 1, out)
 	else:
 		var cut := _rng.randi_range(mn, r.size.y - mn - hall_w)
 		for y in range(r.position.y + cut, r.position.y + cut + hall_w):
@@ -1272,9 +1486,9 @@ func _split_sectors(r: Rect2i, mn: int, depth: int, out: Array[Rect2i]) -> void:
 				_k[y * w + x] = hall_k
 				if hall_look != 0:
 					_hall_look[y * w + x] = hall_look
-		_split_sectors(Rect2i(r.position.x, r.position.y, r.size.x, cut), mn, depth + 1, out)
+		_split_sectors(Rect2i(r.position.x, r.position.y, r.size.x, cut), mn_next, depth + 1, out)
 		_split_sectors(Rect2i(r.position.x, r.position.y + cut + hall_w, r.size.x,
-				r.size.y - cut - hall_w), mn, depth + 1, out)
+				r.size.y - cut - hall_w), mn_next, depth + 1, out)
 
 ## Двери не ставятся вплотную друг к другу — двойной проём читается как дыра в стене.
 func _door_ok(c: Vector2i) -> bool:
@@ -1465,10 +1679,17 @@ func _district(b: Rect2i) -> String:
 	if big and edge < 0.22:
 		return "industrial"
 	var mid := Vector2(cw * 0.5, chh * 0.5)
-	if (c - mid).length() < minf(cw, chh) * 0.22:
+	# Деловой центр (0.9.4) стал шире: прежней доли 0.22 на средней карте хватало на
+	# один-два квартала, и лавки с конторами почти не появлялись отдельными зданиями —
+	# ровно то, о чём просил игрок («shops and offices as separate buildings»).
+	if (c - mid).length() < minf(cw, chh) * 0.34:
 		if _civic_left > 0:
 			_civic_left -= 1
 			return "civic"
+		return "commercial"
+	# И ещё: отдельная лавка или контора нет-нет да встанет прямо в жилом квартале, как в
+	# настоящем городе на углу улицы.
+	if _rng.randf() < 0.14:
 		return "commercial"
 	return "residential"
 
@@ -1547,6 +1768,22 @@ func _house(lot: Rect2i, district: String = "residential") -> void:
 	var fire := bool(opt["flammable"])
 	var wall := MCF.FEATURE_WOOD_WALL if fire and wooden else MCF.FEATURE_WALL
 	var floor_type := MCF.FLOOR_FLAMMABLE if fire and planks else MCF.FLOOR_NORMAL
+	# МАТЕРИАЛ СТЕНЫ (0.9.4): у каждого дома свой — кирпич, штукатурка, шлакоблок или бетон
+	# окружения, — чтобы улица не стояла под одну гребёнку («multiple different wall types on
+	# town maps»). Это ЧИСТЫЙ ВИД: правила у всех одни (MCF.WALL_LOOKS). Промзона кладётся из
+	# блоков, деловой центр — штукатурка и кирпич, жильё — кирпич.
+	var mat := -1
+	if wall == MCF.FEATURE_WALL:
+		var mat_roll := _rng.randf()
+		match district:
+			"industrial":
+				mat = 2 if mat_roll < 0.7 else -1
+			"commercial":
+				mat = 1 if mat_roll < 0.45 else (0 if mat_roll < 0.8 else -1)
+			"civic":
+				mat = 1 if mat_roll < 0.6 else -1
+			_:
+				mat = 0 if mat_roll < 0.55 else (1 if mat_roll < 0.8 else -1)
 	_rooms.append(house)
 	_room_kind[house] = kind
 	for y in range(house.position.y, house.end.y):
@@ -1554,6 +1791,8 @@ func _house(lot: Rect2i, district: String = "residential") -> void:
 			var c := Vector2i(x, y)
 			if _on_edge(house, c):
 				_put(c, wall)
+				if mat >= 0:
+					m.set_look(y * w + x, MCF.wall_look(mat))
 			else:
 				_ground(c, floor_type)
 				_indoor[y * w + x] = 1
@@ -1569,14 +1808,14 @@ func _house(lot: Rect2i, district: String = "residential") -> void:
 	for c in _edge_cells(house):
 		if _rng.randf() < glass_p and not _is_corner(house, c) and not _near_door(c):
 			_put(c, MCF.FEATURE_GLASS)
-	_partition(house, wall)
+	_partition(house, wall, mat)
 	# Санузел (0.9.2): в жилом доме, лавке, конторе, закусочной, участке, клинике — тесная
 	# комнатка в углу с дверью внутрь дома. После перегородки — чтобы она его не разрезала.
 	if district != "industrial" or kind == "garage":
-		_bathroom(house, wall)
+		_bathroom(house, wall, mat)
 
 ## Перегородка в большом доме — внутренняя стена с одним проходом.
-func _partition(house: Rect2i, wall: String) -> void:
+func _partition(house: Rect2i, wall: String, mat: int = -1) -> void:
 	var inner := house.grow(-1)
 	var part_roll := _rng.randf()
 	var at_roll := _rng.randf()
@@ -1599,11 +1838,13 @@ func _partition(house: Rect2i, wall: String) -> void:
 		# Перегородка не упирается во входную дверь — у двери она просто обрывается.
 		if c != gap and not _near_door(c):
 			_put(c, wall)
+			if mat >= 0:
+				m.set_look(c.y * w + c.x, MCF.wall_look(mat))
 	_mark_door(gap)
 
 ## Санузел в углу дома: внутренности 2×2 (в большом доме 2×3), Г-образная стенка с дверью.
 ## Только если угол свободен: не у входной двери, не на перегородке.
-func _bathroom(house: Rect2i, wall: String) -> void:
+func _bathroom(house: Rect2i, wall: String, mat: int = -1) -> void:
 	var inner := house.grow(-1)
 	if inner.size.x < 6 or inner.size.y < 6:
 		return
@@ -1635,8 +1876,18 @@ func _bathroom(house: Rect2i, wall: String) -> void:
 			continue
 		for c in walls:
 			_put(c, wall)
+			if mat >= 0:
+				m.set_look(c.y * w + c.x, MCF.wall_look(mat))
 		_ground(door, m.get_floor(door))
 		_mark_door(door)
+		# ОКНАМ В САНУЗЛЕ НЕ МЕСТО (0.9.4, просьба игрока). Стёкла в наружной стене дома
+		# прорезаются ДО санузла (комнатка выгораживается последней, чтобы перегородка её не
+		# разрезала), поэтому те, что попали в его стены, заделываются обратно стеной.
+		for c in _edge_cells(room.grow(1)):
+			if MCF.is_glass(m.get_feature(c)):
+				_put(c, wall)
+				if mat >= 0:
+					m.set_look(c.y * w + c.x, MCF.wall_look(mat))
 		return
 
 func _rect_cells(r: Rect2i) -> Array[Vector2i]:
@@ -1935,12 +2186,39 @@ func _asteroid() -> void:
 	noise.frequency = 0.06
 	var half := Vector2(_core.size) * 0.5
 	var mid := Vector2(_core.position) + half - Vector2(0.5, 0.5)
+	# Сперва РАЗМЕТКА, потом пустота (0.9.4). Прежде край острова прорезался прямо по
+	# клеткам, и дом, на который он пришёлся, оставался половиной дома с комнатами,
+	# обрубленными по стене, — «asteroid maps generate weirdly and rooms get cut on edges».
+	# Теперь здание либо целиком на острове, либо его нет вовсе: задетый край дом уносит с
+	# собой, и обвод получается чистым.
+	var kill := _bytes()
 	for y in h:
 		for x in w:
 			# Эллипс по размеру КАРТЫ: остров вписан в неё, сколько бы её ни вытянули, а
 			# кайма вокруг (0.9.3) остаётся открытым космосом.
 			var d := Vector2((x - mid.x) / half.x, (y - mid.y) / half.y).length()
 			if d > 0.88 + 0.14 * noise.get_noise_2d(x, y):
+				kill[y * w + x] = 1
+	var kept_rooms: Array[Rect2i] = []
+	for r in _rooms:
+		var cut := false
+		for c in _rect_cells(r):
+			if not _in(c) or kill[c.y * w + c.x] != 0:
+				cut = true
+				break
+		if not cut:
+			kept_rooms.append(r)
+			continue
+		for c in _rect_cells(r):
+			if _in(c):
+				kill[c.y * w + c.x] = 1
+				_room_mask[c.y * w + c.x] = 0
+				_indoor[c.y * w + c.x] = 0
+		_room_kind.erase(r)
+	_rooms = kept_rooms
+	for y in h:
+		for x in w:
+			if kill[y * w + x] != 0:
 				_void(Vector2i(x, y))
 	# Дверь, за которой теперь скала (космос выключен), — уже не дверь: заделываем. Комнату
 	# за ней, если она отрезана, вскроет _join_pockets — как и любой другой закуток.

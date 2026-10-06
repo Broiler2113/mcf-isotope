@@ -20,7 +20,10 @@ static var map_path: String = ""
 ## Случайная карта берёт число с ползунка генератора (до 1000), готовая — всех своих
 ## (галочка «Civilians») или никого.
 const CIVILIANS_MAX := 1000
-const CIVILIANS_DEFAULT := 200
+## Ноль по умолчанию (0.9.4, просьба игрока: «the starting number of neutrals when
+## generating a map should be 0»). Мирные — отдельная забава, и партия начинается без них;
+## галочка и ползунок лобби тоже стоят на нуле, пока игрок их не тронет.
+const CIVILIANS_DEFAULT := 0
 static var civilian_count: int = CIVILIANS_DEFAULT
 ## Прежний флаг «мирные есть» — теперь лишь взгляд на ползунок.
 static var civilians_enabled: bool:

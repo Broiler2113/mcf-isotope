@@ -357,6 +357,14 @@ func _on_client_message(msg: Dictionary) -> void:
 		return
 	if str(msg.get("k", "")) != NetHandoff.K_SETUP:
 		return
+	# Сборки хоста и гостя обязаны совпадать (0.9.4): лок-степ держится на том, что
+	# правила у обоих одни. Разошлись — честно отказываемся здесь, а не разъезжаемся
+	# посреди боя.
+	var clash := NetHandoff.protocol_mismatch(msg)
+	if clash != "":
+		_status.text = clash
+		NetHandoff.discard()
+		return
 	NetHandoff.apply_setup(msg)
 	# Буфер входящих переедет с сессией — Placement заберёт его своим attach().
 	NetHandoff.session.detach()
