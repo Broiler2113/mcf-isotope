@@ -480,7 +480,7 @@ func _unit_value(u: UnitInstance) -> float:
 			v += 3.0
 	# Нейтрал бьёт по самому ДОРОГОМУ (§4.3): цена цели весит сильнее, чем у армии.
 	# Дубль правила из AIController._unit_value — обе оценки обязаны совпадать.
-	if MCF.is_neutral(owner):
+	if MCF.is_npc_side(owner):
 		v += float(u.stats.cost) * 0.1
 	return v
 

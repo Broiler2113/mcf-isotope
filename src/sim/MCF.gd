@@ -583,6 +583,17 @@ const NEUTRAL_GROUP_BASE := 100
 ## Больше ста групп не бывает: нумерация римская и кончается на C (100).
 const MAX_NEUTRAL_GROUPS := 100
 
+## НЕЗАВИСИМЫЕ АРМИИ (0.9.4, случайное событие «Independent Army»): ничья сила, пришедшая
+## с края карты. Своя полоса номеров — ЗА нейтралами: такая армия воюет со всеми, но она
+## не мирный житель (не спит, не хватает трупы, в подсчёт мирных не входит), поэтому
+## is_neutral() о ней отвечает «нет».
+##
+## Именно поэтому is_neutral ОГРАНИЧЕН сверху: раньше он проверял только «>= 100», и
+## владелец 200 молча читался бы как группа жителей — во всей игре, от поведения ИИ до
+## подписи в журнале.
+const INDEPENDENT_BASE := 200
+const MAX_INDEPENDENT := 100
+
 ## Игроки зовутся латинскими буквами по порядку слотов: A, B, C, ... Z.
 const PLAYER_LETTERS := "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
@@ -600,9 +611,29 @@ const TEAM_NAMES := [
 static func is_player(owner: int) -> bool:
 	return owner >= 0 and owner < MAX_PLAYERS
 
-## Владелец — нейтральная сторона? Общий слот и любая активированная группа.
+## Владелец — нейтральная сторона? Общий слот и любая активированная группа (но НЕ
+## независимая армия: у неё своя полоса номеров выше, см. INDEPENDENT_BASE).
 static func is_neutral(owner: int) -> bool:
-	return owner == Owner.NEUTRAL or owner >= NEUTRAL_GROUP_BASE
+	return owner == Owner.NEUTRAL \
+			or (owner >= NEUTRAL_GROUP_BASE and owner < NEUTRAL_GROUP_BASE + MAX_NEUTRAL_GROUPS)
+
+## Владелец — независимая армия (0.9.4)?
+static func is_independent(owner: int) -> bool:
+	return owner >= INDEPENDENT_BASE and owner < INDEPENDENT_BASE + MAX_INDEPENDENT
+
+## Номер независимой армии (1..100) по её слоту, или 0, если это не она.
+static func independent_index(owner: int) -> int:
+	return owner - INDEPENDENT_BASE + 1 if is_independent(owner) else 0
+
+## Слот независимой армии по её номеру (1 → первая).
+static func independent_slot(index: int) -> int:
+	return INDEPENDENT_BASE + index - 1
+
+## Сторона БЕЗ КОМАНДИРА: её ход ведёт сам резолвер, а не контроллер игрока или штаб ИИ, и
+## враждебна она всем (жители — всем игрокам, независимая армия — вообще всем). По этому
+## вопросу ИИ выбирает «беспощадную» манеру, а передача хода отыгрывает слот на месте.
+static func is_npc_side(owner: int) -> bool:
+	return is_neutral(owner) or is_independent(owner)
 
 ## Номер группы нейтралов (1..100) по её слоту, или 0, если это не группа.
 static func neutral_group_index(owner: int) -> int:
@@ -684,6 +715,8 @@ static func feature_height(feature_id: String) -> float:
 static func owner_name(owner: int) -> String:
 	if is_player(owner):
 		return "Player %s" % PLAYER_LETTERS[owner]
+	if is_independent(owner):
+		return "Raiders %s" % roman(independent_index(owner))
 	if owner >= NEUTRAL_GROUP_BASE:
 		return "Neutral %s" % roman(neutral_group_index(owner))
 	return "Neutral"

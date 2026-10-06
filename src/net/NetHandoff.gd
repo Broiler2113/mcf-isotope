@@ -69,9 +69,21 @@ const K_LOBBY_MAP := "lobby_map"
 ## Все правила партии одним словарём (batch 12 #9/#10): раньше по сети ехали лишь
 ## карта, бюджет, мирные и туман, а зеркальная расстановка, личные бюджеты слотов,
 ## видимость чужой расстановки и события оставались у гостя по умолчанию.
+## ВЕРСИЯ ПРАВИЛ ПО СЕТИ (0.9.4). Лок-степ держится на том, что обе стороны прокатывают
+## ОДИН поток кубиков одними и теми же правилами: гость не бросает сам, он повторяет
+## броски хоста. Значит хост и гость разных сборок — это не «немного разные партии», а
+## гарантированный рассинхрон, который вылезет только посреди боя.
+##
+## Поднимать ЭТО число нужно всякий раз, когда меняется порядок или число бросков:
+##   1 — 0.9.3 и раньше (счёт отсюда ведётся задним числом);
+##   2 — 0.9.4: случайные события объявляются и падают раундом позже, у них свои броски
+##       параметров, обстрела и газа; реестр событий стал другим.
+const PROTOCOL := 2
+
 static func encode_rules() -> Dictionary:
 	var roster := GameConfig.active_roster()
 	return {
+		"pv": PROTOCOL,
 		"b": GameConfig.budget, "c": GameConfig.civilians_enabled, "f": GameConfig.fog_mode,
 		"cn": GameConfig.civilian_count, "ais": GameConfig.ai_speed,
 		"pm": GameConfig.placement_mode, "lv": GameConfig.live_placement_visible,
@@ -118,6 +130,19 @@ static func encode_setup(map: MapData) -> Dictionary:
 	msg["k"] = K_SETUP
 	msg["m"] = map.to_dict()
 	return msg
+
+## Версия правил хоста из любого его сообщения; 1 — старая сборка, которая её не слала.
+static func protocol_of(msg: Dictionary) -> int:
+	return int(msg.get("pv", 1))
+
+## Сборки расходятся? Тогда партию начинать нельзя (0.9.4): смотри PROTOCOL.
+static func protocol_mismatch(msg: Dictionary) -> String:
+	var theirs := protocol_of(msg)
+	if theirs == PROTOCOL:
+		return ""
+	return ("The host runs a different version of the game (rules v%d, yours v%d). "
+			+ "A match between them would drift apart mid-battle. Update both sides.") % [
+			theirs, PROTOCOL]
 
 ## Клиент принимает условия хоста целиком: он ничего не выбирает сам (#99).
 static func apply_setup(msg: Dictionary) -> void:

@@ -155,6 +155,17 @@ func neighbor_slot(slot: int, dir: int, all_units: Array = []) -> int:
 			return round_order[i]
 	return -1
 
+## ЗАМКНЁТСЯ ли круг этой передачей хода (0.9.4). Нужно случайным событиям: они падают в
+## КОНЦЕ раунда — то есть в ту передачу, которой раунд и кончается, но ДО того, как
+## end_turn() начнёт новый (восстановит ОД и прибавит номер раунда).
+func closes_round(all_units: Array) -> bool:
+	return _next_playable_from(active_index + 1, all_units) >= round_order.size()
+
+## Играет ли слот прямо сейчас — тем же правилом, каким его пропускает end_turn():
+## не выбит и есть хоть один живой юнит.
+func playable(slot: int, all_units: Array) -> bool:
+	return _has_living(all_units, slot)
+
 ## Передать ход следующему ИГРАЮЩЕМУ слоту (пустые слоты пропускаются).
 ## Возвращает true, если круг замкнулся и начался НОВЫЙ раунд — тогда же
 ## восстанавливаются ОД.

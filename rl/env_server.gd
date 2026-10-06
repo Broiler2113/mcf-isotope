@@ -389,7 +389,12 @@ func _reset(req: Dictionary) -> Dictionary:
 	# бы не «карта про танки», а карта, где у соперника есть лишний манёвр.
 	resolver.disembark_enabled = bool(req.get("disembark", true))
 	if bool(req.get("random_events", false)):
-		resolver.random_events = RandomEvents.new(true)
+		# Обучение БЕЗ независимых армий (0.9.4): третья сторона со своим слотом в очереди
+		# ломает и наблюдение (у неё нет номера игрока), и награду — а учить тут нужно бой
+		# двух армий. Обстрел и газ остаются: это обстановка, а не новая сторона.
+		var w := RandomEvents.default_weights()
+		w[RandomEvents.ARMY] = 0
+		resolver.random_events = RandomEvents.new(true, false, 3, w)
 	resolver.update_airlocks()
 	# Экипажи — ДО начала записи: машина появляется на поле уже с экипажем, как в
 	# настоящей партии (там технику покупают вместе с ним). Раньше посадка шла после

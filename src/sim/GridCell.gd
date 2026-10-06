@@ -132,7 +132,7 @@ func _journal() -> void:
 func image() -> Array:
 	return [floor_type, cover_height, on_fire, fire_owner, fire_suppressed_until, is_space,
 			occupant, vehicle_id, feature_id, station_operator_id, feature_owner,
-			feature_durability, corpse_count, dirt_level, airlock_welded]
+			feature_durability, corpse_count, dirt_level, airlock_welded, gas]
 
 ## Вернуть клетке снятый image() — через сеттеры, чтобы версии и кеши узнали о правке.
 ## Высота идёт раньше объекта: сеттер feature_id смотрит на неё (стекло в стене).
@@ -152,6 +152,8 @@ func apply_image(im: Array) -> void:
 	corpse_count = im[12]
 	dirt_level = im[13]
 	airlock_welded = im[14]
+	if im.size() > 15:
+		gas = im[15]
 
 var coord: Vector2i
 var floor_type: int = 0:
@@ -195,6 +197,28 @@ var on_fire: bool = false:
 		burning += 1 if v else -1
 		log_look_change(coord.x, coord.y)
 		walk_version += 1   # маршрут обходит огонь (#1) — см. заголовок файла
+## ГАЗ (0.9.4, случайное событие «Gas Cloud»): клетка затянута газом. Он держит взгляд и
+## линию огня, как стена, и травит всех, кто в нём стоит.
+##
+## Это НЕ свойство рельефа: газ ставит и снимает само событие (RandomEvents.clouds), а
+## клеткой он лежит ради единственного — чтобы обзор, туман войны и линия огня узнали о
+## нём ТЕМ ЖЕ путём, каким узнают о стене (blocks_sight), и ни одна проверка не осталась в
+## стороне. В сохранение газ не пишется: он выводится из облаков при загрузке.
+##
+## Счётчик, как у огня, считается только В СТОРОНУ ЗАВЫШЕНИЯ: он нужен ровно для того,
+## чтобы los_blocked (десятки тысяч вызовов за расчёт плана ИИ) не проверял газ там, где
+## его на карте нет вовсе.
+static var gassed: int = 0
+var gas: bool = false:
+	set(v):
+		if gas == v:
+			return
+		if journaling: _journal()
+		gas = v
+		gassed += 1 if v else -1
+		log_look_change(coord.x, coord.y)
+		log_vision_change(coord.x, coord.y)   # газ держит взгляд — кеш обзора обязан узнать
+
 ## Сторона, устроившая пожар: огонь расползается только на её ходу (#45). -1 = ничей.
 var fire_owner: int = -1:
 	set(v):
@@ -319,7 +343,7 @@ func is_wall() -> bool:
 ## закрытый шлюз, у которого высота стенная, — кроме стекла: сквозь него видно (#29).
 ## Живые юниты, трупы и корпуса машин лучу не мешают.
 func blocks_sight() -> bool:
-	return cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(feature_id)
+	return gas or (cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(feature_id))
 
 ## Шлюз, который сам разъедется перед подошедшим бойцом (#100). Пока рядом никого нет,
 ## створки закрыты и cover_height читается как стена — но для ПЛАНИРОВАНИЯ пути это

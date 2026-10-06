@@ -3567,7 +3567,9 @@ static func _rebuild_blockers(grid: Grid) -> void:
 		var row := y * gw
 		for x in gw:
 			var cell := grid.cell_fast(x, y)
-			if cell.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(cell.feature_id):
+			# Ровно то же условие, что у поправки по журналу (_patch_blockers) — одним
+			# вопросом к клетке, чтобы газ (0.9.4) не выпал из холодной сборки таблицы.
+			if cell.blocks_sight():
 				_blockers[row + x] = 1
 				_blockers_t[x * gh + y] = 1
 ## Потолок кеша: за длинный бой в нём оседает по записи на каждую позицию, где кто-то
@@ -4606,12 +4608,19 @@ func advance_civilians(owner: int = MCF.Owner.NEUTRAL) -> ActionResult:
 	# слоту активационной группы (§15). Ведём только его бойцов, чужих групп не трогаем.
 	var awake := 0
 	var idx := _sight_index()
+	# Независимая армия (0.9.4) не спит и не «вскрывается»: она пришла воевать и готова
+	# с первого же своего хода. Всё прочее у неё как у жителей — тот же мозг, тот же
+	# отыгрыш внутри передачи хода.
+	var raiders := MCF.is_independent(owner)
 	for u in state.all_units():
-		if u.owner != owner or not _is_civilian(u) or not u.is_alive() or u.is_held():
+		if u.owner != owner or not u.is_alive() or u.is_held():
 			continue
-		_update_breached(u, idx)
-		if not u.civilian_active:
-			continue
+		if not raiders:
+			if not _is_civilian(u):
+				continue
+			_update_breached(u, idx)
+			if not u.civilian_active:
+				continue
 		# Слот жителей может прийтись до границы раунда — свою активацию житель всегда
 		# начинает с полным запасом (иначе он простоял бы весь первый слот партии).
 		if u.remaining_ap <= 0 and u.move_credit <= 0:
@@ -4679,7 +4688,8 @@ func advance_civilians(owner: int = MCF.Owner.NEUTRAL) -> ActionResult:
 	if not moved_from.is_empty():
 		res.dice_events.push_front({"kind": "hold", "units": moved_from})
 	if not acted.is_empty():
-		res.log_lines.push_front("— Civilians take their turn (%d active) —" % acted.size())
+		res.log_lines.push_front("— %s take their turn (%d active) —" % [
+			MCF.owner_name(owner) if raiders else "Civilians", acted.size()])
 	return res
 
 ## Клетки, по которым житель пройдёт, если приказ — движение; иначе пусто. Нужно ровно
@@ -6224,7 +6234,10 @@ func play_civilian_slots() -> ActionResult:
 	# обе армии перебиты, очередь состоит из одних жителей, и без этой памяти круг
 	# 0 → 1 → 2 → 0 … не кончался никогда — бой зависал на первом же EndTurn.
 	var played: Dictionary = {}
-	while MCF.is_neutral(state.active_player()):
+	# Независимая армия (0.9.4) ходит здесь же: командира у неё нет, её ход ведёт резолвер
+	# ровно так же, как ход жителей, — и значит он одинаков у хоста и клиента без единого
+	# сетевого сообщения.
+	while MCF.is_npc_side(state.active_player()):
 		var slot := state.turns.active_index
 		if played.has(slot):
 			break
@@ -6278,6 +6291,13 @@ func _resolve_end_turn(intent: EndTurnIntent = null) -> ActionResult:
 		return ActionResult.fail("Not your turn")
 	var prev := state.active_player()
 	_free_orphaned_captives()
+	# Объявленное событие падает в КОНЦЕ раунда (0.9.4) — то есть в ту самую передачу хода,
+	# которой раунд кончается, и ДО того, как end_turn() начнёт новый: иначе «конец раунда
+	# N» пришёлся бы на уже восстановленные ОД и раунд N + 1.
+	var round_res := ActionResult.new()
+	round_res.ok = true
+	if _handoff_closes_round():
+		land_random_events(round_res)
 	state.turns.end_turn(state.all_units())
 	var civ := play_civilian_slots()
 	# Огонь ползёт в начале хода той стороны, которая его устроила (#45). Дошедшее до
@@ -6299,9 +6319,14 @@ func _resolve_end_turn(intent: EndTurnIntent = null) -> ActionResult:
 			MCF.owner_name(prev), MCF.owner_name(state.active_player()), state.turns.round_number
 		]
 	]
+	# Журнал события идёт ПЕРВЫМ: по времени оно и случилось раньше хода жителей и огня.
+	lines.append_array(round_res.log_lines)
 	lines.append_array(civ.log_lines)
 	lines.append_array(fire_res.log_lines)
 	var out := ActionResult.success(lines)
+	out.dice_events.append_array(round_res.dice_events)
+	out.fx.append_array(round_res.fx)
+	out.deaths.append_array(round_res.deaths)
 	# Броски жителей едут вместе с передачей хода: UI отыграет их анимацией, а смерти
 	# покажет только после кубика защиты — как и в любом другом обмене выстрелами (#96).
 	out.dice_events = civ.dice_events
@@ -6316,29 +6341,331 @@ func _resolve_end_turn(intent: EndTurnIntent = null) -> ActionResult:
 	_maybe_random_event(out)
 	return out
 
-## Разыграть случайное событие на очередном ходу, если оно «созрело» (§1.5, item 61).
-## Всё — «случится ли», «какое», «куда бьёт» — берётся из DiceService, чтобы хост и
-## клиент разыграли одно и то же. Пока эффекты условны (заглушки).
+## Кончится ли раунд ЭТОЙ передачей хода (0.9.4). Прямо — если после активного слота
+## играющих больше нет; а ещё — если все оставшиеся играющие слоты ничьи (жители,
+## независимые армии): их ход резолвер отыграет здесь же, внутри этой самой передачи
+## (play_civilian_slots), и границу раунда перейдёт тоже он. Без второго условия события
+## на карте с жителями не падали бы вовсе: раунд всегда кончался «внутри» передачи.
+func _handoff_closes_round() -> bool:
+	var units := state.all_units()
+	if state.turns.closes_round(units):
+		return true
+	var order := state.turns.round_order
+	for i in range(state.turns.active_index + 1, order.size()):
+		var slot: int = order[i]
+		if state.turns.playable(slot, units) and not MCF.is_npc_side(slot):
+			return false
+	return true
+
+# =====================================================================================
+#  Случайные события (0.9.4, спека «Random Event System»)
+# =====================================================================================
+## Событие не падает в тот же миг, когда выпало: СНАЧАЛА ОБЪЯВЛЕНИЕ, потом удар в конце
+## СЛЕДУЮЩЕГО раунда (RandomEvents.WARNING_ROUNDS). Параметры (где зона, с какого края
+## армия) катаются при объявлении, исход по клеткам — при падении; оба порядка жёстко
+## зафиксированы, поэтому хост и клиент прокатывают один поток d6 и сходятся.
+##
+## Выключенные события (или пустая очередь) не бросают НИ ОДНОГО кубика — поток случайности
+## старых партий цел.
+
+## Обстрел: сторона зоны в клетках и порог попадания по клетке (4+ на d6 — ровно половина).
+##
+## Зона НЕ бывает во всю карту, хотя спека это допускала: на поле 250×250 это 70 000
+## бросков d6 за одно событие — и столько же чисел в журнале кубиков, который хост
+## отправляет гостю и пишет повтор. Батарея накрывает квадрат, а не планету.
+const BARRAGE_SIDE_MIN := 3
+const BARRAGE_SIDE_MAX := 16
+const BARRAGE_HIT_MIN := 4
+## Газ: сторона облака (не больше GAS_SIDE_MAX и не больше трети карты) и сколько раундов
+## он стоит. Спасброска нет: каждый раунд свой бросок, 1–2 — смерть.
+const GAS_SIDE_MIN := 3
+const GAS_SIDE_MAX := 14
+const GAS_ROUNDS := 3
+const GAS_SURVIVE_MIN := 3
+## Независимая армия: длина участка края, на котором она высаживается, и во сколько раз
+## её сила отличается от средней армии игрока.
+const ARMY_SEGMENT_MIN := 4
+const ARMY_SEGMENT_MAX := 10
+const ARMY_STRENGTH := 1.0
+## Из кого набирается независимая армия: боевые профессии. Мирных, командиров и операторов
+## дронов в ней нет — командовать ей некем, а станций у неё не бывает.
+const ARMY_ROSTER := ["light_infantry", "heavy_infantry", "assault", "machinegunner",
+		"sniper", "marksman", "anti_tank", "flamethrower", "shield_bearer", "engineer",
+		"miner", "sapper"]
+## Если у игроков вообще нечего мерить (нулевая цена), армия приходит такой.
+const ARMY_FALLBACK_UNITS := 6
+
+## Случайный индекс 0..n−1 ШИРОКИМ броском: пять d6 дают 7776 значений, и на любой
+## стороне карты (до 270 клеток) перекос остатка — меньше процента. Обычный _rand_index
+## берёт три кубика (216 значений) и для размеров карты уже не годится.
+func _rand_wide(n: int) -> int:
+	if n <= 1:
+		return 0
+	var v := 0
+	for _i in 5:
+		v = v * 6 + (state.dice.roll_d6() - 1)
+	return v % n
+
+## ОБЪЯВЛЕНИЕ. Зовётся в конце каждой передачи хода, как и раньше: «созрело ли», «какое» —
+## всё внутри roll_event через DiceService.
 func _maybe_random_event(res: ActionResult) -> void:
 	if random_events == null:
 		return
-	# Единая точка (item 11): «созрело ли», «обязательно ли», «какое» — всё внутри
-	# roll_event через DiceService, чтобы хост и клиент разыграли одно и то же.
 	var id := random_events.roll_event(state.dice)
 	if id == "":
 		return
-	res.log("⚠ Random event — %s" % RandomEvents.event_name(id))
+	var params := _roll_event_params(id)
+	var entry := random_events.announce(id, params, state.turns.round_number)
+	res.log("⚠ %s — %s, landing at the end of round %d" % [
+		RandomEvents.event_name(id), _event_where(id, params), int(entry["land"])])
+
+## Параметры события — катаются ОДИН раз, при объявлении, и дальше не меняются.
+func _roll_event_params(id: String) -> Dictionary:
+	var gw := state.grid.width
+	var gh := state.grid.height
 	match id:
 		RandomEvents.MORTAR:
-			# Единственная заглушка с реальным эффектом: взрыв в клетке, выбранной кубиком.
-			var center := Vector2i(_rand_index(state.grid.width), _rand_index(state.grid.height))
-			var killed := _blast(center, res)
-			var tail := "" if killed.is_empty() else " — " + ", ".join(killed) + " killed"
-			res.log("Mortar shell lands at (%d, %d)%s" % [center.x, center.y, tail])
-		RandomEvents.TREMOR:
-			res.log("The ground shakes underfoot. (placeholder — effect pending spec)")
+			var bw := BARRAGE_SIDE_MIN + _rand_wide(mini(BARRAGE_SIDE_MAX, gw) - BARRAGE_SIDE_MIN + 1)
+			var bh := BARRAGE_SIDE_MIN + _rand_wide(mini(BARRAGE_SIDE_MAX, gh) - BARRAGE_SIDE_MIN + 1)
+			bw = mini(bw, gw)
+			bh = mini(bh, gh)
+			return {"x": _rand_wide(gw - bw + 1), "y": _rand_wide(gh - bh + 1), "w": bw, "h": bh}
 		RandomEvents.GAS:
-			res.log("A gas cloud drifts across the battlefield. (placeholder — effect pending spec)")
+			var side_w := clampi(gw / 3, GAS_SIDE_MIN, GAS_SIDE_MAX)
+			var side_h := clampi(gh / 3, GAS_SIDE_MIN, GAS_SIDE_MAX)
+			var cw := mini(gw, GAS_SIDE_MIN + _rand_wide(maxi(1, side_w - GAS_SIDE_MIN + 1)))
+			var ch := mini(gh, GAS_SIDE_MIN + _rand_wide(maxi(1, side_h - GAS_SIDE_MIN + 1)))
+			return {"x": _rand_wide(gw - cw + 1), "y": _rand_wide(gh - ch + 1), "w": cw, "h": ch,
+					"rounds": GAS_ROUNDS}
+		RandomEvents.ARMY:
+			var edge := _rand_wide(4)                      # 0 С, 1 В, 2 Ю, 3 З
+			var along := gw if edge % 2 == 0 else gh
+			var seg := mini(along, ARMY_SEGMENT_MIN + _rand_wide(ARMY_SEGMENT_MAX - ARMY_SEGMENT_MIN + 1))
+			return {"edge": edge, "from": _rand_wide(along - seg + 1), "len": seg}
+	return {}
+
+## Где именно — строкой для журнала и подсказки на карте.
+func _event_where(id: String, p: Dictionary) -> String:
+	if id == RandomEvents.ARMY:
+		var names := ["north", "east", "south", "west"]
+		return "unknown forces approaching from the %s edge" % names[int(p.get("edge", 0)) % 4]
+	return "zone (%d, %d) %d×%d" % [int(p.get("x", 0)), int(p.get("y", 0)),
+			int(p.get("w", 0)), int(p.get("h", 0))]
+
+## ПАДЕНИЕ. Зовётся в КОНЦЕ раунда — до его границы (пополнения ОД и прибавки номера),
+## чтобы «конец раунда N» значил именно его.
+##
+## Порядок: сперва травит стоящий газ (он был на доске весь этот раунд), потом падает
+## объявленное — в порядке очереди. Порядок фиксирован, значит одинаков у хоста и клиента.
+func land_random_events(res: ActionResult) -> void:
+	if random_events == null:
+		return
+	_gas_tick(res)
+	for e: Dictionary in random_events.take_landing(state.turns.round_number):
+		var p: Dictionary = e["params"]
+		match str(e["id"]):
+			RandomEvents.MORTAR:
+				_land_barrage(p, res)
+			RandomEvents.GAS:
+				_land_gas(p, res)
+			RandomEvents.ARMY:
+				_land_army(p, res)
+	_sync_gas()
+
+## Обстрел: зона делится на столбцы по клетке, столбцы идут с запада на восток, клетки в
+## столбце — с севера на юг. По клетке один d6: 1–3 мимо, 4–6 разрушена. Столбец за
+## столбцом — то же самое, что независимые 1/2 на клетку, зато порядок бросков (и порядок
+## разрывов на экране) задан жёстко.
+func _land_barrage(p: Dictionary, res: ActionResult) -> void:
+	var x0 := int(p.get("x", 0))
+	var y0 := int(p.get("y", 0))
+	var bw := int(p.get("w", 0))
+	var bh := int(p.get("h", 0))
+	var hit: Array[Vector2i] = []
+	var killed: Array[String] = []
+	for x in range(x0, x0 + bw):
+		for y in range(y0, y0 + bh):
+			if state.dice.roll_d6() < BARRAGE_HIT_MIN:
+				continue
+			var c := Vector2i(x, y)
+			if not state.grid.in_bounds(c):
+				continue
+			hit.append(c)
+			killed.append_array(_destroy_cell(c, res))
+	if not hit.is_empty():
+		# Один пакет косметики на весь обстрел, а не событие на клетку: клетки в нём идут
+		# в том же порядке, в каком разрешались, — экран так и показывает разрывы.
+		_fx(res, {"fx": "debris", "at": NOWHERE, "cells": hit, "blast": true})
+	var tail := "" if killed.is_empty() else " — " + ", ".join(killed) + " killed"
+	res.log("Artillery Barrage hits zone (%d, %d) %d×%d: %d of %d cells destroyed%s" % [
+		x0, y0, bw, bh, hit.size(), bw * bh, tail])
+
+## Разрушить ОДНУ клетку (обстрел). Не взрыв: ни осколочного поля, ни радиуса — что было
+## на клетке, то и снесло, а кто на ней стоял, тот погиб (решение по открытому вопросу
+## спеки: разрушенная клетка с живым бойцом на ней читалась бы странно). Снос рельефа —
+## тем же кодом, что у взрыва (_blast_destroy_terrain), чтобы правила были одни.
+func _destroy_cell(c: Vector2i, res: ActionResult) -> Array[String]:
+	var names: Array[String] = []
+	var cell := state.grid.cell(c)
+	if cell == null:
+		return names
+	var occ := cell.occupant
+	if occ != null and occ.is_alive():
+		_kill(occ, res, c, true)
+		names.append(occ.stats.display_name)
+		if res != null:
+			res.deaths.append(occ.id)
+	# Машина под разрывом теряет корпус — ту же единицу прочности, что от заряда ПТ.
+	var veh := vehicle_covering(c)
+	if veh != null and veh.alive():
+		_damage_component(veh, MCF.COMP_HULL, MCF.ANTI_TANK_VEHICLE_DAMAGE, "barrage", res)
+	_blast_destroy_terrain(c, res, c)
+	notify_cell_changed(c)
+	return names
+
+## Газ встал: облако становится активным, но травить начнёт с конца СЛЕДУЮЩЕГО раунда —
+## в этот раунд его на доске ещё не было.
+func _land_gas(p: Dictionary, res: ActionResult) -> void:
+	var cl := random_events.add_cloud(int(p.get("x", 0)), int(p.get("y", 0)),
+			int(p.get("w", 0)), int(p.get("h", 0)), int(p.get("rounds", GAS_ROUNDS)))
+	res.log("Gas Cloud settles over zone (%d, %d) %d×%d for %d round(s)" % [
+		int(cl["x"]), int(cl["y"]), int(cl["w"]), int(cl["h"]), int(cl["left"])])
+
+## Газ травит и выдыхается: по бойцу один d6 в порядке id (лок-степ), 1–2 — смерть.
+## Техника и те, кто внутри неё, газом не берутся: корпус герметичен.
+func _gas_tick(res: ActionResult) -> void:
+	if random_events.clouds.is_empty():
+		return
+	var ids: Array = []
+	for u: UnitInstance in state.all_units():
+		if u.is_alive() and u.aboard_vehicle_id == -1 and u.borg_id == -1 \
+				and random_events.cloud_at(u.coord):
+			ids.append(u.id)
+	ids.sort()
+	for id: int in ids:
+		var u := state.get_unit(id)
+		if u == null or not u.is_alive():
+			continue
+		var roll := state.dice.roll_d6()
+		res.dice_events.append({"kind": "check", "actor": u.stats.display_name,
+			"roll": roll, "need": GAS_SURVIVE_MIN, "ok": roll >= GAS_SURVIVE_MIN,
+			"roller": u.owner})
+		if roll >= GAS_SURVIVE_MIN:
+			res.log("%s holds their breath in the gas (roll %d)" % [u.stats.display_name, roll])
+			continue
+		_kill(u, res, u.coord)
+		res.deaths.append(u.id)
+		res.log("%s chokes in the gas (roll %d, needed %d+)" % [
+			u.stats.display_name, roll, GAS_SURVIVE_MIN])
+	random_events.age_clouds()
+
+## Клетки облаков — на доску (и снять те, где газа больше нет). Проход по всей сетке: он
+## случается от силы несколько раз за партию, зато всегда верен — и после загрузки, и
+## после отката хода, когда списка «что было отмечено» уже нет.
+func _sync_gas() -> void:
+	if random_events == null:
+		return
+	var grid := state.grid
+	for y in grid.height:
+		for x in grid.width:
+			grid.cell_fast(x, y).gas = random_events.cloud_at(Vector2i(x, y))
+
+## Независимая армия (0.9.4): у края карты высаживается ничья сила, враждебная всем.
+## Сила — по средней армии ЖИВЫХ игроков (по цене закупки); слот встаёт в случайное место
+## очереди инициативы, и ходит армия сама — её ход ведёт резолвер, как ход жителей.
+func _land_army(p: Dictionary, res: ActionResult) -> void:
+	var budget := _army_budget()
+	var slot := MCF.independent_slot(random_events.armies + 1)
+	if not MCF.is_independent(slot):
+		return
+	var spots := _army_spawn_cells(p)
+	if spots.is_empty():
+		res.log("Unknown forces turn back — nowhere to land on that edge")
+		return
+	var spent := 0
+	var placed := 0
+	var guard := 0
+	while guard < ARMY_UNIT_CAP and placed < spots.size():
+		guard += 1
+		var sid: String = ARMY_ROSTER[_rand_wide(ARMY_ROSTER.size())]
+		var stats: UnitStats = _army_stats(sid)
+		if stats == null:
+			continue
+		if budget > 0 and spent + stats.cost > budget and placed > 0:
+			break
+		if budget <= 0 and placed >= ARMY_FALLBACK_UNITS:
+			break
+		state.spawn_unit(stats, spots[placed], slot)
+		spent += stats.cost
+		placed += 1
+	if placed == 0:
+		res.log("Unknown forces turn back — nowhere to land on that edge")
+		return
+	random_events.armies += 1
+	# Слот — в СЛУЧАЙНОЕ место очереди. События падают в конце раунда, активный слот уже
+	# обошёл круг, поэтому вставка не может ни пропустить, ни повторить чей-то ход.
+	var at := _rand_wide(state.turns.round_order.size() + 1)
+	state.turns.insert_slot(slot, at)
+	var names := ["north", "east", "south", "west"]
+	res.log("— %s land on the %s edge: %d fighters, hostile to everyone —" % [
+		MCF.owner_name(slot), names[int(p.get("edge", 0)) % 4], placed])
+	notify_cell_changed(spots[0])
+
+## Предохранитель набора: больше этого числа бойцов независимая армия не получает.
+const ARMY_UNIT_CAP := 60
+
+var _army_stats_cache: Dictionary = {}
+
+func _army_stats(id: String) -> UnitStats:
+	if _army_stats_cache.has(id):
+		return _army_stats_cache[id]
+	var path := "res://src/data/units/%s.tres" % id
+	var st: UnitStats = load(path) if ResourceLoader.exists(path) else null
+	_army_stats_cache[id] = st
+	return st
+
+## Средняя армия живого игрока в очках закупки — по ней и мерится независимая.
+## Независимые армии в среднее не входят. Нечего мерить — ноль, и армия приходит
+## фиксированной (ARMY_FALLBACK_UNITS бойцов).
+func _army_budget() -> int:
+	var cost := {}
+	for u: UnitInstance in state.all_units():
+		if not u.is_alive() or u.is_drone or not MCF.is_player(u.owner):
+			continue
+		cost[u.owner] = int(cost.get(u.owner, 0)) + u.stats.cost
+	if cost.is_empty():
+		return 0
+	var total := 0
+	for own: int in cost:
+		total += int(cost[own])
+	return roundi(float(total) / float(cost.size()) * ARMY_STRENGTH)
+
+## Свободные клетки участка края, на который высаживается армия: сперва по самому краю,
+## потом глубже внутрь карты. Порядок строгий — он же порядок расстановки.
+func _army_spawn_cells(p: Dictionary) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	var gw := state.grid.width
+	var gh := state.grid.height
+	var edge := int(p.get("edge", 0)) % 4
+	var from := int(p.get("from", 0))
+	var seg := int(p.get("len", ARMY_SEGMENT_MIN))
+	var depth := maxi(2, seg)
+	for d in depth:
+		for k in seg:
+			var c: Vector2i
+			match edge:
+				0: c = Vector2i(from + k, d)
+				1: c = Vector2i(gw - 1 - d, from + k)
+				2: c = Vector2i(from + k, gh - 1 - d)
+				_: c = Vector2i(d, from + k)
+			if not state.grid.in_bounds(c):
+				continue
+			var cell := state.grid.cell(c)
+			if cell == null or not cell.walkable_terrain() or cell.occupant != null \
+					or cell.vehicle_id != -1 or cell.is_space:
+				continue
+			out.append(c)
+	return out
 
 # --- Запросы легальности (для подсветки целей в UI) ---
 ## allow_embrasure=false — стрелок не может работать через амбразуру ДОТа: заряд
@@ -6372,8 +6699,14 @@ func los_blocked(from_coord: Vector2i, to_coord: Vector2i, allow_embrasure: bool
 	var x := from_coord.x + sx
 	var y := from_coord.y + sy
 	var d := 1
+	# Газ (0.9.4) держит и взгляд, и выстрел — как стена. Спрашивается он ТОЛЬКО когда газ
+	# на карте вообще есть: эта функция зовётся десятки тысяч раз за один расчёт плана ИИ.
+	# Концы линии, как и прежде, не проверяются: боец на самом краю облака видит и виден.
+	var any_gas := GridCell.gassed > 0
 	while x != to_coord.x or y != to_coord.y:
 		var cell := grid.cell_fast(x, y)
+		if any_gas and cell.gas:
+			return true
 		if cell.cover_height >= MCF.WALL_HEIGHT:
 			# Ёж поверх мешков — решётчатая стена: с соседней клетки сквозь неё стреляют.
 			# ДОТ с амбразурами (#86): боец, прижавшийся к стене вплотную, стреляет
