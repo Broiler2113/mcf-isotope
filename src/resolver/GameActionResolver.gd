@@ -475,7 +475,7 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 			var bcell := state.grid.cell(mine)
 			bcell.clear_feature()
 			notify_cell_changed(mine)
-			_fx(bres, {"fx": "debris", "at": NOWHERE, "cells": [mine]})
+			_fx(bres, {"fx": "debris", "at": NOWHERE, "cells": [mine], "blast": true})
 			bres.log("The borg rolls over an anti-vehicle mine at (%d, %d)!" % [mine.x, mine.y])
 			_sync_borg(unit)
 			var bveh := state.get_vehicle(unit.borg_id)
@@ -522,7 +522,9 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 		var drop: Vector2i = origin if path.size() < 2 else path[path.size() - 2]
 		if _valid_carry_drop(intent.carry_drop, intent.target):
 			drop = intent.carry_drop
+		var carried_from := carried.coord
 		state.grid.move_occupant(carried.coord, drop)
+		_carried_slide = [carried, carried_from, drop]
 		lines.append("  ↳ carrying %s → (%d, %d)" % [carried.stats.display_name, drop.x, drop.y])
 
 	# Волочимый объект переезжает на предпоследнюю клетку пути — как пленник (#34).
@@ -538,6 +540,10 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 
 	var moved_res := ActionResult.success(lines)
 	_fx_steps(moved_res, unit, origin, path, intent.target)
+	# Пленник переезжает вместе с носильщиком — и так же плавно (0.9.4).
+	if not _carried_slide.is_empty():
+		_slide_fx(_carried_slide[0], _carried_slide[1], _carried_slide[2], moved_res)
+		_carried_slide = []
 	return moved_res
 
 ## Шаги по клеткам: маршрут до точки остановки включительно. Кровавых отпечатков ног
@@ -555,6 +561,43 @@ func _fx_steps(res: ActionResult, unit: UnitInstance, origin: Vector2i, path: Ar
 		res.dice_events.append({"kind": "hold", "units": {unit.id: origin}})
 		res.dice_events.append({"kind": "walk", "unit": unit.id, "from": origin,
 				"path": cut, "soldier": true})
+
+## ЛЮБОЕ перемещение юнита — ПЛАВНОЕ (0.9.4). Игрок жаловался, что «only half of all
+## possible movements actually are» смещения: пеший ход уже шёл по клеткам (_fx_steps), а
+## отбрасывание в невесомости, толчок щитом, перестановка пленника и волочение трупа
+## перескакивали мгновенно. Клетка меняется как и раньше — экран получает те же события
+## «hold» (держать рисунок в старой клетке) и «walk» (вести по клеткам), какими уже
+## идёт пеший ход.
+##
+## Путь — прямая по Чебышёву от старой клетки к новой: все эти смещения идут по прямой и
+## не дальше нескольких клеток, так что обходить препятствия тут нечего.
+func _slide_fx(unit: UnitInstance, from: Vector2i, to: Vector2i, res: ActionResult) -> void:
+	if res == null or unit == null or from == to:
+		return
+	var path: Array[Vector2i] = []
+	var p := from
+	while p != to and path.size() < SLIDE_PATH_CAP:
+		p += Vector2i(signi(to.x - p.x), signi(to.y - p.y))
+		path.append(p)
+	if path.is_empty():
+		return
+	res.dice_events.append({"kind": "hold", "units": {unit.id: from}})
+	res.dice_events.append({"kind": "walk", "unit": unit.id, "from": from, "path": path,
+			"soldier": true})
+
+## Предохранитель длины такого смещения: дальше любого отбрасывания и толчка.
+const SLIDE_PATH_CAP := 16
+## Пленник, переехавший вместе с носильщиком: [юнит, откуда, куда] — показать его переезд
+## после самого хода носильщика. Живёт ровно внутри одного resolve().
+var _carried_slide: Array = []
+
+## Переставить юнита и показать это плавно (0.9.4).
+func _slide(unit: UnitInstance, to: Vector2i, res: ActionResult) -> void:
+	var from := unit.coord
+	if from == to:
+		return
+	state.grid.move_occupant(from, to)
+	_slide_fx(unit, from, to, res)
 
 ## Клетка волочимого объекта, если юнит и правда его тащит и объект ещё рядом (#34).
 func dragged_cell_of(unit: UnitInstance) -> Vector2i:
@@ -766,7 +809,7 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 		_kill(target, result, shooter.coord)  # труп остаётся на клетке, но не перекрывает ЛОС
 
 	# Невесомость (§3.11): отдача стрелка и отбрасывание цели (кроме противотанкиста).
-	_apply_zero_g(shooter, target)
+	_apply_zero_g(shooter, target, result)
 
 	# Гильза на каждый ушедший выстрел (#21.3), вылетают за спину стрелка.
 	if fired > 0:
@@ -1043,7 +1086,8 @@ func _blast(center: Vector2i, res: ActionResult = null, cells: Array[Vector2i] =
 	# Побитый пол по ВСЕЙ зоне, эпицентр — отдельной текстурой (#21.1). Мина просит
 	# ОБЫЧНЫЙ щебень без эпицентра (item 13): передаёт at=NOWHERE, и ни одна клетка не
 	# совпадёт с «эпицентром», значит вся зона осядет рядовым разрушением.
-	_fx(res, {"fx": "debris", "at": center if epicenter_debris else NOWHERE, "cells": area})
+	_fx(res, {"fx": "debris", "at": center if epicenter_debris else NOWHERE, "cells": area,
+			"blast": true})
 	return killed_names
 
 ## Прямое попадание в прочное укрепление (ДОТ, §3.7): бетонная коробка принимает удар
@@ -1657,7 +1701,7 @@ func _resolve_assault(shooter: UnitInstance, target: UnitInstance) -> ActionResu
 			break  # цель уцелела — пробитие останавливается
 	if not any_kill:
 		result.log("… target survived")
-	_apply_zero_g(shooter, target)  # невесомость (§3.11)
+	_apply_zero_g(shooter, target, result)  # невесомость (§3.11)
 	return result
 
 # --- Толчок щитом (§3.14) ---
@@ -1682,6 +1726,8 @@ func _resolve_push(intent: PushIntent) -> ActionResult:
 	var roll := state.dice.roll_d6()
 	var survived := roll >= need
 	var pushed := false
+	var push_from := target.coord
+	var push_to := target.coord
 	if not survived:
 		_kill(target)
 	else:
@@ -1689,10 +1735,14 @@ func _resolve_push(intent: PushIntent) -> ActionResult:
 		if state.grid.in_bounds(back) and not state.grid.cell(back).is_wall() \
 				and state.grid.cell(back).occupant == null:
 			state.grid.move_occupant(target.coord, back)
+			push_to = back
 			pushed = true
 
 	var result := ActionResult.new()
 	result.ok = true
+	# Толчок виден как толчок (0.9.4): цель отъезжает на клетку плавно, а не телепортируется.
+	if pushed:
+		_slide_fx(target, push_from, push_to, result)
 	result.dice_events.append({
 		"kind": "check", "actor": target.stats.display_name,
 		"roll": roll, "need": need, "ok": survived,
@@ -2022,7 +2072,7 @@ func _blast_armor_wall(center: Vector2i, res: ActionResult) -> void:
 		return
 	cell.clear_feature()
 	notify_cell_changed(center)
-	_fx(res, {"fx": "debris", "at": center, "cells": [center]})
+	_fx(res, {"fx": "debris", "at": center, "cells": [center], "blast": true})
 	res.log("Armored Wall at (%d, %d) is blown apart." % [center.x, center.y])
 
 ## Дорожка «кто в кого» (issue 8: «add visual clues that would tell the player who is
@@ -4821,27 +4871,27 @@ func update_airlocks() -> void:
 ## стоящих в клетке-космосе, и только если позади свободно на всю дистанцию.
 ## Пассажир челнока (batch 13) пристёгнут к креслу: его не отбрасывает ни отдачей, ни
 ## попаданием — иначе он вылетал бы из корпуса, оставаясь «на борту» с занятым креслом.
-func _apply_zero_g(shooter: UnitInstance, target: UnitInstance) -> void:
+func _apply_zero_g(shooter: UnitInstance, target: UnitInstance, res: ActionResult = null) -> void:
 	# Стрелка отбрасывает назад (от цели).
-	_recoil_shooter(shooter, target.coord)
+	_recoil_shooter(shooter, target.coord, res)
 	# Цель отбрасывает дальше (от стрелка).
 	if target.is_alive() and target.aboard_vehicle_id == -1 \
 			and state.grid.cell(target.coord).is_space:
 		var away := _step_toward(shooter.coord, target.coord)
-		_knockback(target, away, MCF.ZEROG_TARGET_KNOCKBACK)
+		_knockback(target, away, MCF.ZEROG_TARGET_KNOCKBACK, res)
 
 ## Отдача стрелка в невесомости: на клетку назад, прочь от точки прицела, — если позади
 ## свободно. Общая для всех выстрелов (batch group-zones): раньше её получали только
 ## винтовка и штурмовик, а заряд ПТ, струя, лазер и выстрел по окну стрелка не двигали.
-func _recoil_shooter(shooter: UnitInstance, aim: Vector2i) -> void:
+func _recoil_shooter(shooter: UnitInstance, aim: Vector2i, res: ActionResult = null) -> void:
 	if shooter.is_alive() and shooter.aboard_vehicle_id == -1 \
 			and state.grid.in_bounds(shooter.coord) and state.grid.cell(shooter.coord).is_space:
-		_knockback(shooter, _step_toward(aim, shooter.coord), MCF.ZEROG_SHOOTER_KNOCKBACK)
+		_knockback(shooter, _step_toward(aim, shooter.coord), MCF.ZEROG_SHOOTER_KNOCKBACK, res)
 
 ## Результат спецвыстрела с отдачей стрелка (если выстрел состоялся).
 func _recoiled(result: ActionResult, shooter: UnitInstance, aim: Vector2i) -> ActionResult:
 	if result.ok:
-		_recoil_shooter(shooter, aim)
+		_recoil_shooter(shooter, aim, result)
 	return result
 
 ## Машина, корпус которой занимает клетку: по следу на сетке, а борг — по своей клетке
@@ -4856,7 +4906,7 @@ func vehicle_covering(c: Vector2i) -> Vehicle:
 	return null
 
 ## Сдвиг юнита на dist клеток по step, но только если ВСЕ клетки свободны (иначе нет).
-func _knockback(unit: UnitInstance, step: Vector2i, dist: int) -> void:
+func _knockback(unit: UnitInstance, step: Vector2i, dist: int, res: ActionResult = null) -> void:
 	if step == Vector2i.ZERO:
 		return
 	var dest := unit.coord
@@ -4865,7 +4915,7 @@ func _knockback(unit: UnitInstance, step: Vector2i, dist: int) -> void:
 		if not state.grid.in_bounds(next) or state.grid.is_occupied_or_wall(next):
 			return  # позади не свободно — отбрасывания нет
 		dest = next
-	state.grid.move_occupant(unit.coord, dest)
+	_slide(unit, dest, res)
 
 # --- Дроны (§3.12) ---
 func _resolve_spawn_drone(intent: SpawnDroneIntent) -> ActionResult:
@@ -5518,10 +5568,12 @@ func _resolve_move_held(intent: MoveHeldIntent) -> ActionResult:
 		return ActionResult.fail("Unit is not holding anyone")
 	if not _valid_carry_drop(intent.to, actor.coord):
 		return ActionResult.fail("Cell is occupied or not adjacent to the carrier")
+	var held_from := carried.coord
 	state.grid.move_occupant(carried.coord, intent.to)
 	update_airlocks()
 	var res := ActionResult.new()
 	res.ok = true
+	_slide_fx(carried, held_from, intent.to, res)
 	res.log("%s shifts %s → (%d, %d)" % [
 		actor.stats.display_name, carried.stats.display_name, intent.to.x, intent.to.y])
 	# Переставленный на горящую клетку пленник сгорает — как и любой, кто туда попал.
@@ -5632,8 +5684,10 @@ func _resolve_drag(intent: DragIntent) -> ActionResult:
 		state.grid.move_occupant(src, dst)
 		# Постройка на горящей клетке/перенос груза на неё тушит пламя (#82).
 		_extinguish_cell(dst_cell)
-		return ActionResult.success(["%s dragged a corpse → (%d, %d) [AP: %d]" % [
+		var drag_res := ActionResult.success(["%s dragged a corpse → (%d, %d) [AP: %d]" % [
 			actor.stats.display_name, dst.x, dst.y, actor.remaining_ap]])
+		_slide_fx(corpse, src, dst, drag_res)   # тело переезжает плавно (0.9.4)
+		return drag_res
 
 	# Лёгкий объект (мешки/ёж/куча земли) — тащить может любой юнит (#30).
 	if is_draggable_feature(src_cell.feature_id):
@@ -6044,7 +6098,7 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 
 	# Осколочная не рушит укрепления, поэтому щебень кладём только там, где реально
 	# что-то разлетелось: под самим взрывом и под лопнувшими стёклами (#21.1).
-	_fx(result, {"fx": "debris", "at": center, "cells": [center] + broken_glass})
+	_fx(result, {"fx": "debris", "at": center, "cells": [center] + broken_glass, "blast": true})
 	result.dice_events.append({
 		"kind": "grenade", "item": MCF.ITEM_FRAG,
 		"thrower": thrower.stats.display_name, "center": center, "targets": details,

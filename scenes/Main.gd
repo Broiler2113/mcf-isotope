@@ -5687,6 +5687,7 @@ func _draw_laser_preview(shooter: UnitInstance, aim: Vector2i) -> void:
 ## векторные примитивы, как и всё остальное в этой игре.
 func _draw_fx_props(visible: Dictionary) -> void:
 	_draw_fx_lanes(visible)
+	_draw_fx_flashes(visible)
 	# Колея танка (playtest-20): еле заметные тёмные полосы, под туманом не видна.
 	var tfog: bool = resolver.fog_enabled
 	for seg: Dictionary in _fx.track_marks:
@@ -5722,6 +5723,29 @@ func _draw_fx_props(visible: Dictionary) -> void:
 	for f: Dictionary in _fx.flying:
 		_draw_fx_one(f["kind"], FxDecals.flight_pos(f), FxDecals.flight_rot(f),
 				f["scale"], visible, fog_on, f.get("origin", Vector2i(-1, -1)))
+
+## ВСПЫШКА ВЗРЫВА (0.9.4): клетки разрыва на секунду горят и гаснут. Чистая косметика —
+## пламенем это не становится ни на одну клетку: ни резолвер, ни правила огня об этих
+## клетках не знают, и на следующий ход от вспышки не остаётся ничего, кроме обычного
+## щебня. Рисуется плиткой огня (как и настоящий пожар), а без неё — оранжевой заливкой.
+## Туман войны вспышка не протекает: чего команда не видит, того ей и не показывают.
+func _draw_fx_flashes(visible: Dictionary) -> void:
+	if _fx.flashes.is_empty():
+		return
+	var fog_on: bool = resolver.fog_enabled
+	for flash: Dictionary in _fx.flashes:
+		var a := FxDecals.flash_alpha(flash)
+		if a <= 0.0:
+			continue
+		for c: Vector2i in flash["cells"]:
+			if not _cell_on_screen(c.x, c.y) or (fog_on and not visible.has(c)):
+				continue
+			var rect := Rect2(ORIGIN + Vector2(c) * CELL, Vector2(CELL, CELL))
+			if not Sprites.draw_texture_override_rect(self, "fire", rect, 0.0,
+					Color(1, 1, 1, a)):
+				draw_rect(rect, Color(1.0, 0.45, 0.08, 0.55 * a))
+				draw_rect(Rect2(rect.position + Vector2(CELL, CELL) * 0.25,
+						Vector2(CELL, CELL) * 0.5), Color(1.0, 0.86, 0.35, 0.7 * a))
 
 ## Дорожки боя (issue 8): «кто в кого стреляет». Трассер живёт 0.16 с — увидеть его
 ## можно, разобрать перестрелку нельзя, особенно в ход ИИ, когда за один заход стреляют

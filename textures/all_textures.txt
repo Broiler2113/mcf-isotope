@@ -44,6 +44,11 @@ Yours wins. Changes are picked up when a battle or the map editor opens.
   door_asteroid.png
   door_open_asteroid.png
 
+-- Wall materials (a town building picks one; same rules as a wall, different look) --
+  wall_brick.png
+  wall_stucco.png
+  wall_block.png
+
 -- Room floors (what a room is for decides which one it gets) --
   floor_wood.png
   floor_parquet.png
@@ -197,6 +202,17 @@ Yours wins. Changes are picked up when a battle or the map editor opens.
   fuel_tank_red.png
   target.png
   vent_fan.png
+  steel_table.png
+  lab_bench.png
+  morgue_drawers.png
+  biohazard_cabinet.png
+  specimen_fridge.png
+  gas_canister.png
+  gas_canister_red.png
+  gas_canister_yellow.png
+  gas_canister_green.png
+  water_bucket.png
+  water_bucket_blue.png
   bench.png
   trash_bin.png
   trash_bin_grey.png
@@ -206,6 +222,9 @@ Yours wins. Changes are picked up when a battle or the map editor opens.
   dumpster_red.png
   park_table.png
   street_cabinet.png
+  plastic_table.png
+  plastic_table_blue.png
+  plastic_table_white.png
 
 == Factions ==
 Sides are factions, not colours. Soldiers accept a faction suffix:
@@ -241,6 +260,19 @@ and picks tile index = N*1 + E*2 + S*4 + W*8; column = index % 4, row = index / 
 Each tile is square; the sheet is 4 tiles wide and 4 tall (e.g. 128x128 for 32px
 tiles). If a sheet exists it wins over the plain <feature>.png. Diagonal
 neighbours are ignored on purpose: 16 tiles are enough for corridors and rooms.
+
+== One atlas per object ==
+Everything one object needs may instead ship as a single <name>_atlas.png,
+4 tiles wide and 5 tall (e.g. 128x160 for 32px tiles):
+  rows 0..3   the 16 autotile tiles, same layout as above;
+  row 4       the four facings of the single sprite: up, right, down, left.
+A facing drawn in row 4 is used as it is, so a piece of furniture can be drawn
+properly for each direction instead of being rotated by the game.
+A plain <name>.png or <name>_autotile.png still wins over the atlas; the atlas
+fills in whatever has no file of its own, and empty cells in it stay empty.
+Ready-to-repaint atlases for every shipped object:
+  godot --headless --script res://tools/gen_textures.gd -- --templates
+They land in res://textures/templates/ (source material; the game never reads it).
 
 == Preparing a graphical update ==
 1. Author every sprite as a square PNG with transparency (64x64 or 128x128).

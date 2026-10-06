@@ -25,6 +25,9 @@ extends SceneTree
 const T := 32
 const VARIANTS := 6
 const OUT := "res://textures/"
+## Заготовки под перерисовку (0.9.4) — отдельная папка: это не плитки игры, а исходники
+## для художника. Игра их не читает.
+const TEMPLATES := "res://textures/templates/"
 
 func _initialize() -> void:
 	var t0 := Time.get_ticks_msec()
@@ -45,6 +48,13 @@ func _initialize() -> void:
 	if "--doors" in OS.get_cmdline_user_args():
 		_doors_all()
 		print("door textures written to %s in %d ms" % [OUT, Time.get_ticks_msec() - t0])
+		quit()
+		return
+	# `-- --templates` — ЗАГОТОВКИ под перерисовку (0.9.4): по файлу на объект, в котором
+	# собрано всё его хозяйство (автотайл и повороты). Ничего в res://textures не меняет.
+	if "--templates" in OS.get_cmdline_user_args():
+		_templates_all()
+		print("templates written to %s in %d ms" % [TEMPLATES, Time.get_ticks_msec() - t0])
 		quit()
 		return
 	# --- Пол: общий и по окружениям (item 24) ---
@@ -69,6 +79,10 @@ func _initialize() -> void:
 	_sheet("wall_town", _dark_brick, Color8(108, 60, 48), 3)
 	_sheet("wall_asteroid", _dark_brick, Color8(108, 60, 48), 3)
 	_sheet("wood_wall", _timber, Color8(104, 72, 44), 3)
+	# Материалы стен (0.9.4): тот же объект, другой облик — город ставит дома из разного.
+	_sheet("wall_brick", _red_brick, Color8(150, 76, 56), 3)
+	_sheet("wall_stucco", _stucco, Color8(176, 166, 148), 3)
+	_sheet("wall_block", _cinder_block, Color8(112, 112, 106), 3)
 	_sheet("soil", _packed_soil, Color8(58, 42, 28), 2)
 	# Граница мира (0.9.3) — только для бункера: тот же грунт, что и в кайме, чтобы
 	# непробиваемый край читался как «земля просто продолжается». У станции, города и
@@ -442,22 +456,66 @@ func _armor_plate(x: int, y: int, v: int, _mask: int) -> Color:
 		c = _shade(c, 1.5)
 	return _shade(c, 0.94 + 0.1 * _fbm(x, y, 172 + v))
 
-## Стеклоблоки: сетка 16 px, толстые светлые швы, блик в каждом блоке.
-func _glass_block(x: int, y: int, _v: int, _mask: int) -> Color:
-	var gx := x % 8
-	var gy := y % 8
-	if gx == 0 or gy == 0:
-		return Color(0.72, 0.76, 0.78, 0.95)
-	var c := Color(0.55, 0.7, 0.8, 0.62)
-	if gx + gy < 5:
-		c = c.lerp(Color(1, 1, 1, 0.8), 0.5)
+## ОКНО — ОДНО СПЛОШНОЕ СТЕКЛО (0.9.4, просьба игрока: «single, unbroken panes rather than
+## grids of squares»). Прежде плитка рисовала стеклоблоки сеткой 8 px: каждая клетка окна
+## читалась как решётка из квадратиков, а ряд окон — как клетчатая стена.
+##
+## Теперь в плитке нет ни одного шва: ровное голубоватое полотно с мягкой бесшовной рябью
+## и еле заметным уклоном яркости по высоте (свет сверху). Рама берётся не отсюда — её
+## рисует кромка листа (_sheet: контур и фаска только там, где соседа-стекла нет), так что
+## ряд окон выходит одной длинной витриной с рамой лишь по краям.
+func _glass_block(x: int, y: int, v: int, _mask: int) -> Color:
+	# Рябь считается на торе (_fbm), поэтому у соседних клеток она продолжается без стыка.
+	var ripple := 0.94 + 0.12 * _fbm(x, y, 181 + v)
+	var top := 1.06 - 0.12 * (float(y) / float(T - 1))
+	var k := ripple * top
+	return Color(clampf(0.52 * k, 0, 1), clampf(0.67 * k, 0, 1), clampf(0.78 * k, 0, 1), 0.60)
+
+## Бронестекло: то же сплошное полотно, но с армирующей проволокой по ДИАГОНАЛИ. Шаг 8 px
+## делит плитку нацело по обеим осям, поэтому проволока идёт сквозь всю витрину насквозь,
+## не разбивая её на квадратики: сетка — примета брони, а не «окно из кубиков».
+func _armor_glass(x: int, y: int, v: int, mask: int) -> Color:
+	var c := _glass_block(x, y, v, mask)
+	c = Color(c.r * 0.82, c.g * 0.88, c.b, minf(1.0, c.a + 0.16))
+	if posmod(x + y, 8) == 0 or posmod(x - y, 8) == 0:
+		return Color(minf(1.0, c.r * 1.3), minf(1.0, c.g * 1.3), minf(1.0, c.b * 1.25),
+				minf(1.0, c.a + 0.3))
 	return c
 
-func _armor_glass(x: int, y: int, v: int, mask: int) -> Color:
-	if x % 16 <= 1:
-		return _armor_plate(x, y, v, mask)
-	var c := _glass_block(x, y, v, mask)
-	return Color(c.r * 0.7, c.g * 0.82, c.b, minf(1.0, c.a + 0.15))
+# --- Материалы стен города (0.9.4, MCF.WALL_LOOKS) --------------------------------------
+# Правила у них те же, что у обычной стены, — разный только облик, чтобы дома на одной
+# улице не стояли под одну гребёнку.
+
+## Красный кирпич: ложковая перевязка 8×4, светлый раствор, тон у каждого кирпича свой.
+func _red_brick(x: int, y: int, v: int, _mask: int) -> Color:
+	var row := y / 4
+	var off := 4 if row % 2 == 1 else 0
+	var bx := posmod(x + off, T) / 8
+	if y % 4 == 3 or posmod(x + off, 8) == 7:
+		return _shade(Color8(188, 180, 168), 0.9 + 0.16 * _h(x, y, 191))
+	var straddles := off != 0 and bx == 3
+	var tone := _h(bx, row, 192 if straddles else 192 + v * 31)
+	var c := Color8(138, 62, 46).lerp(Color8(176, 94, 64), tone)
+	return _shade(c, 0.9 + 0.18 * _tn(x, y, 16, 193))
+
+## Штукатурка: светлая тёплая масса, подтёки, редкие сколы до кирпича.
+func _stucco(x: int, y: int, v: int, _mask: int) -> Color:
+	var c := _shade(Color8(196, 186, 166), 0.86 + 0.22 * _fbm(x, y, 201 + v))
+	if _tn(x, y, 4, 202, 16) > 0.78:
+		c = _shade(c, 0.93)                      # подтёк
+	if _h(x + v * T, y, 203) > 0.991:
+		c = Color8(146, 92, 72)                  # скол до кирпича
+	return c
+
+## Шлакоблок: крупные блоки 16×8 с глубоким швом и зернистой поверхностью.
+func _cinder_block(x: int, y: int, v: int, _mask: int) -> Color:
+	var row := y / 8
+	var off := 8 if row % 2 == 1 else 0
+	if y % 8 == 7 or posmod(x + off, 16) == 15:
+		return _shade(Color8(84, 84, 80), 0.92 + 0.16 * _h(x, y, 211))
+	var tone := _h(posmod(x + off, T) / 16, row, 212 + v * 17)
+	var c := Color8(124, 124, 118).lerp(Color8(152, 150, 142), tone)
+	return _shade(c, 0.88 + 0.2 * _fbm(x, y, 213))
 
 ## ЛДФ (batch ui-drones) — резиновый чёрный монолит: матовая сплошная масса без швов и
 ## прожилок, мягкий отблеск, как у резины, и едва заметная зернистость поверхности.
@@ -683,7 +741,8 @@ func _joined_tile(fid: String, mask: int) -> Image:
 	var w := mask & Sprites.AUTOTILE_W == 0
 	var lo := Vector2i(M if w else 0, M if n else 0)
 	var hi := Vector2i(T - 1 - (M if e else 0), T - 1 - (M if s else 0))
-	var round := fid in ["dining_table", "conference_table", "bed", "sofa", "exam_table", "bunk_bed", "fuel_tank"]
+	var round := fid in ["dining_table", "conference_table", "bed", "sofa", "exam_table", "bunk_bed", "fuel_tank",
+			"plastic_table"]
 	var base: Color = _joined_base(fid)
 	var lift := int(Furniture.height_of(fid) * 2.0)
 	# Тело для проверки кромки: со сросшихся сторон оно продолжается за край плитки — иначе
@@ -753,6 +812,9 @@ func _joined_base(fid: String) -> Color:
 		"machinery": return Color8(82, 88, 96)
 		"exam_table": return STEEL
 		"dumpster": return _m(Color8(54, 96, 70))
+		"steel_table", "lab_bench", "morgue_drawers": return STEEL
+		"biohazard_cabinet": return Color8(118, 126, 124)
+		"plastic_table": return _m(Color8(212, 210, 202))
 	return WOOD
 
 ## Детали секции: null — оставить тело. lo/hi — края тела, n/e/s/w — открытые стороны.
@@ -890,6 +952,41 @@ func _joined_detail(fid: String, x: int, y: int, lo: Vector2i, hi: Vector2i,
 		"dumpster":
 			if x == 15 or x == 16:
 				return _shade(_m(Color8(54, 96, 70)), 0.6)
+		# --- 0.9.4 ---
+		"steel_table":
+			# Стальная столешница: слабый блик вдоль и шов посередине.
+			if y == (lo.y + hi.y) / 2:
+				return _shade(STEEL, 0.78)
+			return _shade(STEEL, 0.98 + 0.1 * _fbm(x, y, 351))
+		"plastic_table":
+			if y == (lo.y + hi.y) / 2:
+				return _shade(_m(Color8(212, 210, 202)), 0.82)
+			return _m(Color8(212, 210, 202))
+		"lab_bench":
+			# Белая столешница, по ней — раковина и подставки.
+			if n and y <= lo.y + 3:
+				return Color8(176, 182, 186)
+			if (x % 8 == 3 or x % 8 == 4) and y >= lo.y + 6 and y <= lo.y + 11:
+				return Color8(140, 176, 186)   # мойка
+			return Color8(222, 224, 220)
+		"morgue_drawers":
+			# Стенка выдвижных ячеек: ряды дверец с ручками.
+			var dy := (y - lo.y) % 10
+			if dy == 0 or dy == 9:
+				return STEEL_DARK
+			if x % 8 == 0:
+				return STEEL_DARK
+			if dy == 5 and x % 8 >= 2 and x % 8 <= 5:
+				return Color8(196, 200, 204)   # ручка
+			return _shade(Color8(170, 176, 180), 0.97 + 0.08 * _fbm(x, y, 352))
+		"biohazard_cabinet":
+			if n and y <= lo.y + 2:
+				return STEEL_DARK
+			if y >= lo.y + 5 and y <= lo.y + 16 and x % 10 >= 1 and x % 10 <= 8:
+				return Color8(150, 186, 196)   # стекло шкафа
+			if (x + y) % 9 == 0 and y > lo.y + 17:
+				return Color8(214, 186, 44)    # знак биологической опасности
+			return Color8(118, 126, 124)
 	return null
 
 func _furniture(fid: String) -> Image:
@@ -1090,6 +1187,21 @@ func _furniture_ops(fid: String) -> Array:
 			return [["box", Rect2i(3, 3, 26, 26), STEEL], ["round", Rect2i(6, 6, 20, 20), STEEL_DARK],
 					["rect", Rect2i(15, 7, 2, 18), Color8(150, 154, 160)], ["rect", Rect2i(7, 15, 18, 2), Color8(150, 154, 160)],
 					["round", Rect2i(13, 13, 6, 6), Color8(176, 180, 186)]]
+		# --- 0.9.4 ---
+		"gas_canister":
+			# Баллон: тело под цвет газа, стальной колпак и вентиль сверху.
+			var body := _m(Color8(166, 50, 42))
+			return [["round", Rect2i(8, 8, 16, 20), body], ["round", Rect2i(11, 11, 10, 12), _shade(body, 0.8)],
+					["box", Rect2i(13, 3, 6, 7), STEEL], ["rect", Rect2i(12, 5, 8, 1), Color8(176, 180, 186)],
+					["dot", Vector2i(16, 4), LAMP_RED]]
+		"water_bucket":
+			var pail := _m(Color8(96, 120, 150))
+			return [["round", Rect2i(10, 12, 12, 13), pail], ["round", Rect2i(12, 14, 8, 8), Color8(96, 140, 170)],
+					["rect", Rect2i(10, 10, 12, 1), STEEL]]
+		"specimen_fridge":
+			return [["box", Rect2i(4, 2, 24, 25), WHITE_METAL], ["box", Rect2i(7, 5, 18, 13), Color8(140, 186, 196)],
+					["rect", Rect2i(8, 7, 7, 1), Color8(220, 236, 240)], ["rect", Rect2i(7, 21, 18, 2), STEEL_DARK],
+					["dot", Vector2i(24, 20), LAMP_GREEN]]
 	return [["box", Rect2i(6, 6, 20, 20), WOOD]]
 
 func _in_shape(kind: String, r: Rect2i, x: int, y: int) -> bool:
@@ -1441,3 +1553,103 @@ func _floor_solar(x: int, y: int, v: int) -> Color:
 	elif (x + y) % 11 == 0:
 		c = _shade(c, 1.35)   # блик
 	return c
+
+# =====================================================================================
+#  Заготовки под перерисовку (0.9.4)
+# =====================================================================================
+## Игрок просил «templates that allow for easy manual texture replacement later», и чтобы
+## «autotiling data and object directional sprites for a single item» лежали В ОДНОМ атласе.
+##
+## Формат атласа `<имя>_atlas.png` — 4 плитки в ширину, 5 в высоту (у плитки сторона T):
+##   строки 0..3 — те же 16 плиток автотайла, что и в `<имя>_autotile.png`
+##                 (индекс = N·1 + E·2 + S·4 + W·8, колонка = индекс % 4, строка = индекс / 4);
+##   строка 4    — ЧЕТЫРЕ направления одиночного спрайта: вверх, вправо, вниз, влево.
+## Атлас читается игрой наравне с отдельными файлами (Sprites.ATLAS_SUFFIX): положил один
+## файл — заменил объект целиком, и автотайл, и повороты. Чего в атласе нет (объект без
+## автотайла), то в нём просто прозрачно.
+##
+## Здесь заготовки СОБИРАЮТСЯ ИЗ УЖЕ НАРИСОВАННЫХ плиток res://textures: обход папки, а не
+## второй список имён, — иначе список пришлось бы держать в двух местах и он бы разъехался.
+const ATLAS_ROWS := 5
+## Строка поворотов в атласе (с нуля).
+const ATLAS_TURN_ROW := 4
+
+func _templates_all() -> void:
+	DirAccess.make_dir_recursive_absolute(TEMPLATES)
+	var names := {}
+	var d := DirAccess.open(OUT)
+	if d == null:
+		print("no %s" % OUT)
+		return
+	d.list_dir_begin()
+	var fname := d.get_next()
+	while fname != "":
+		if not d.current_is_dir() and fname.get_extension().to_lower() == "png":
+			var base := fname.get_basename()
+			if base.ends_with("_autotile"):
+				base = base.substr(0, base.length() - 9)
+			names[base] = true
+		fname = d.get_next()
+	d.list_dir_end()
+	var written := 0
+	for base: String in names:
+		if _template_one(base):
+			written += 1
+	var f := FileAccess.open(TEMPLATES + "README.txt", FileAccess.WRITE)
+	if f != null:
+		f.store_string(_templates_readme())
+		f.close()
+	print("%d templates" % written)
+
+## Один атлас. false — собирать нечего (ни автотайла, ни квадратной плитки).
+func _template_one(base: String) -> bool:
+	var sheet := _load_png(OUT + base + "_autotile.png")
+	var single := _load_png(OUT + base + ".png")
+	if sheet == null and single == null:
+		return false
+	var img := Image.create(T * 4, T * ATLAS_ROWS, false, Image.FORMAT_RGBA8)
+	if sheet != null and sheet.get_width() == T * 4:
+		# Вариант 0 листа — первые четыре строки.
+		img.blit_rect(sheet, Rect2i(0, 0, T * 4, mini(T * 4, sheet.get_height())), Vector2i.ZERO)
+	# Строка поворотов: вариант 0 одиночной плитки, повёрнутый на четверть, пол-оборота и
+	# три четверти. Объект, который игра поворачивает сама (мебель), получает готовые
+	# четыре вида — художник правит каждый отдельно, если ему мало простого поворота.
+	if single != null and single.get_height() == T and single.get_width() >= T:
+		for k in 4:
+			var turned := single.get_region(Rect2i(0, 0, T, T))
+			for _i in k:
+				turned.rotate_90(CLOCKWISE)
+			img.blit_rect(turned, Rect2i(0, 0, T, T), Vector2i(k * T, ATLAS_TURN_ROW * T))
+	img.save_png(TEMPLATES + base + "_atlas.png")
+	return true
+
+func _load_png(path: String) -> Image:
+	if not FileAccess.file_exists(path):
+		return null
+	var img := Image.new()
+	if img.load(path) != OK:
+		return null
+	img.convert(Image.FORMAT_RGBA8)
+	return img
+
+func _templates_readme() -> String:
+	return """MCF TACTICS -- TEXTURE TEMPLATES
+
+One file per object: <name>_atlas.png, %d x %d pixels (tile side %d).
+
+  rows 0..3  the 16 autotile tiles. Index = N*1 + E*2 + S*4 + W*8,
+             column = index %% 4, row = index / 4:
+               row 0:  0 alone    1 N        2 E        3 N+E
+               row 1:  4 S        5 N+S      6 E+S      7 N+E+S
+               row 2:  8 W        9 N+W     10 E+W     11 N+E+W
+               row 3: 12 S+W     13 N+S+W   14 E+S+W   15 all four
+  row 4      the four facings of the single sprite: up, right, down, left.
+             Furniture is drawn with its back UP; the game turns it to the wall,
+             but a facing drawn here is used as it is, without rotating.
+
+Repaint the cells you care about, keep the size, and drop the file into
+user://textures with the SAME name. An atlas replaces both <name>.png and
+<name>_autotile.png for that object; empty cells in it stay empty.
+
+These files are source material, not game data: the game never reads this folder.
+""" % [T * 4, T * ATLAS_ROWS, T]

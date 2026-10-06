@@ -26,6 +26,8 @@ const DENSITY_SHARE := [0.0, 0.15, 0.32, 0.48, 0.62]
 ## Мелочь второго прохода (ящики, урны, тележки) — доля от того же.
 const CLUTTER_SHARE := [0.0, 0.03, 0.05, 0.07, 0.09]
 const DEFAULT_DENSITY := 2
+## Сколько раз подряд прогоняется рецепт помещения, пока бюджет не выбран (0.9.4).
+const RECIPE_PASSES := 3
 
 const N4: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
 ## Кольцо восьми соседей по часовой, с севера; чётные — по сторонам, нечётные — углы.
@@ -161,7 +163,9 @@ const RECIPES := {
 		{"f": "equipment_cart", "at": "free", "p": 0.3},
 	],
 	"medical": [
-		{"f": "bed", "at": "row", "n": [2, 4]},
+		# Койки палаты — ОДНИМ стандартом (0.9.4): ряд у стены, все 1×2, у каждой тумбочка.
+		{"f": "bed", "at": "row", "n": [2, 4], "sz": [1, 2],
+			"then": [{"f": "nightstand", "at": "next", "p": 0.6}]},
 		{"f": "exam_table", "at": "center"},
 		{"f": "cabinet", "at": "wall", "n": [1, 2]},
 		{"f": "locker", "at": "wall", "p": 0.4},
@@ -172,6 +176,9 @@ const RECIPES := {
 	"utility": [
 		{"f": "generator", "at": "corner", "p": 0.8},
 		{"f": "industrial_cabinet", "at": "wall", "n": [1, 2]},
+		{"f": "locker", "at": "row", "n": [1, 3], "p": 0.6},
+		{"f": "gas_canister", "at": "wall", "n": [1, 3], "p": 0.8},
+		{"f": "water_bucket", "at": "free", "p": 0.5},
 		{"f": "tool_cabinet", "at": "wall", "p": 0.5},
 		{"f": "barrel", "at": "free", "n": [1, 2]},
 		{"f": "crate", "at": "free", "p": 0.5},
@@ -229,7 +236,9 @@ const RECIPES := {
 	],
 	# --- 0.9.2: отделы станции, санузлы, здания города ---------------------------------
 	"reception": [
-		{"f": "reception_desk", "at": "row", "n": [2, 3]},
+		# Стойка регистрации — В УГЛУ (0.9.4, просьба игрока): ряд секций начинается от угла
+		# и идёт вдоль стены, так что у всех приёмных отделов она стоит одинаково.
+		{"f": "reception_desk", "at": "corner_row", "n": [2, 3]},
 		{"f": "chair", "at": "free", "n": [1, 3]},
 		{"f": "potted_plant", "at": "corner", "p": 0.6},
 		{"f": "water_cooler", "at": "wall", "p": 0.4},
@@ -248,12 +257,20 @@ const RECIPES := {
 		{"f": "water_cooler", "at": "wall", "p": 0.3},
 		{"f": "potted_plant", "at": "corner", "p": 0.3},
 	],
+	# Камера (0.9.4) — ОДНА И ТА ЖЕ планировка во всех камерах станции, как игрок и просил:
+	# койка в углу (всегда 1×2, "sz"), параша у стены. Больше в камеру ничего не ставится —
+	# она на то и камера.
 	"cell": [
+		{"f": "bed", "at": "corner", "sz": [1, 2]},
 		{"f": "toilet", "at": "wall"},
-		{"f": "bed", "at": "corner", "p": 0.7},
+	],
+	## Карцер (0.9.4): отдельная камера-одиночка — только койка, ни параши, ни окна.
+	"solitary": [
+		{"f": "bed", "at": "corner", "sz": [1, 2]},
 	],
 	"laboratory": [
-		{"f": "workbench", "at": "row", "n": [1, 3]},
+		{"f": "lab_bench", "at": "row", "n": [2, 3]},
+		{"f": "biohazard_cabinet", "at": "wall", "p": 0.4},
 		{"f": "console", "at": "wall", "p": 0.6, "then": [{"f": "chair", "at": "front"}]},
 		{"f": "sink", "at": "wall", "p": 0.6},
 		{"f": "equipment_cart", "at": "free"},
@@ -318,18 +335,21 @@ const RECIPES := {
 	],
 	"recycling": [
 		{"f": "dumpster", "at": "wall", "n": [1, 2]},
+		{"f": "water_bucket", "at": "free", "n": [1, 2], "p": 0.6},
 		{"f": "machinery", "at": "center", "p": 0.6, "big": true},
 		{"f": "barrel", "at": "free", "n": [1, 3]},
 		{"f": "trash_bin", "at": "corner", "n": [1, 2]},
 	],
 	"water": [
 		{"f": "fuel_tank", "at": "center", "big": true},
+		{"f": "water_bucket", "at": "free", "n": [1, 3], "p": 0.8},
 		{"f": "fuel_tank", "at": "center", "p": 0.5, "big": true},
 		{"f": "industrial_cabinet", "at": "wall"},
 		{"f": "barrel", "at": "free", "n": [1, 2]},
 	],
 	"power": [
 		{"f": "generator", "at": "corner", "n": [1, 2]},
+		{"f": "gas_canister", "at": "wall", "n": [1, 2], "p": 0.6},
 		{"f": "console", "at": "wall", "p": 0.7, "then": [{"f": "chair", "at": "front"}]},
 		{"f": "server_rack", "at": "wall", "n": [1, 2]},
 		{"f": "industrial_cabinet", "at": "wall", "p": 0.5},
@@ -337,8 +357,33 @@ const RECIPES := {
 	"air": [
 		{"f": "vent_fan", "at": "free", "n": [2, 4]},
 		{"f": "industrial_cabinet", "at": "wall"},
+		{"f": "gas_canister", "at": "wall", "n": [1, 2], "p": 0.7},
 		{"f": "generator", "at": "corner", "p": 0.3},
 		{"f": "tool_cabinet", "at": "wall", "p": 0.3},
+	],
+	# --- 0.9.4: морг и вирусология медотсека, раздевалка отдела ---------------------------
+	"morgue": [
+		{"f": "morgue_drawers", "at": "row", "n": [3, 6]},
+		{"f": "exam_table", "at": "center", "n": [1, 2]},
+		{"f": "lab_bench", "at": "row", "n": [1, 2], "p": 0.7},
+		{"f": "specimen_fridge", "at": "wall", "p": 0.6},
+		{"f": "sink", "at": "wall", "p": 0.6},
+	],
+	"virology": [
+		{"f": "biohazard_cabinet", "at": "row", "n": [2, 4]},
+		{"f": "lab_bench", "at": "row", "n": [1, 3]},
+		{"f": "specimen_fridge", "at": "wall", "p": 0.8},
+		{"f": "steel_table", "at": "center", "p": 0.6, "then": [{"f": "chair", "at": "front"}]},
+		{"f": "sink", "at": "wall", "p": 0.6},
+		{"f": "equipment_cart", "at": "free", "p": 0.5},
+	],
+	## Раздевалка (0.9.4): шкафчики рядами и лавка — у каждого отдела своя, небольшая.
+	"changing": [
+		{"f": "locker", "at": "row", "n": [3, 6]},
+		{"f": "bench", "at": "free", "n": [1, 2]},
+		{"f": "locker", "at": "row", "n": [2, 4], "p": 0.6},
+		{"f": "water_bucket", "at": "free", "p": 0.3},
+		{"f": "trash_bin", "at": "corner", "p": 0.4},
 	],
 	"generic_room": [
 		{"f": "cabinet", "at": "wall"},
@@ -368,6 +413,9 @@ const FLOOR_BY_KIND := {
 	"kitchen": [MCF.Look.CHECKER, MCF.Look.TILE], "mess": [MCF.Look.CHECKER, MCF.Look.TILE, MCF.Look.WOOD],
 	"dining_room": [MCF.Look.CHECKER, MCF.Look.WOOD, MCF.Look.TILE],
 	"restroom": [MCF.Look.TILE, MCF.Look.CHECKER], "bathroom": [MCF.Look.TILE, MCF.Look.CHECKER],
+	"morgue": [MCF.Look.TILE], "virology": [MCF.Look.TILE, MCF.Look.LINO],
+	"changing": [MCF.Look.LINO, MCF.Look.TILE], "solitary": [MCF.Look.PLATE],
+	"cell": [MCF.Look.PLATE],
 	"laundry": [MCF.Look.TILE, MCF.Look.LINO],
 	"lounge": [MCF.Look.WOOD, MCF.Look.PARQUET, MCF.Look.CARPET_RED],
 	"living_room": [MCF.Look.WOOD, MCF.Look.PARQUET, MCF.Look.CARPET_RED],
@@ -384,6 +432,15 @@ const FLOOR_BY_KIND := {
 	"hut": [MCF.Look.WOOD], "garage": [MCF.Look.DEFAULT, MCF.Look.PLATE],
 }
 const WOODEN_LOOKS := [MCF.Look.WOOD, MCF.Look.PARQUET]
+
+## Где уместна МЕЛОЧЬ второго прохода (0.9.4). Прежде она сыпалась в любое помещение, и
+## выходило ровно то, на что жаловался игрок: «empty rooms containing just a couple of
+## random, purposeless items» — ящик и урна посреди пустой каюты. Теперь случайная мелочь
+## ложится только туда, где брошенное добро и должно лежать: склады, цеха, гаражи, доки,
+## шахты, руины. Прочие комнаты обставляет ТОЛЬКО их рецепт.
+const CLUTTER_ROOMS := {"storage": true, "warehouse": true, "supply": true, "workshop": true,
+		"machine_shop": true, "assembly": true, "garage": true, "dock": true, "mining": true,
+		"ruin": true, "utility": true, "recycling": true, "hidden_storage": true, "hut": true}
 
 ## Мелочь второго прохода по стилю.
 const CLUTTER := {
@@ -415,6 +472,8 @@ var _cand_all: Array[Vector2i] = []
 var _cand_wall: Array[Vector2i] = []
 var _cand_corner: Array[Vector2i] = []
 var _cand_center: Array[Vector2i] = []
+## Закреплённый след предмета текущего шага ([ширина, глубина]); пусто — как в таблице.
+var _pin_size: Array = []
 
 ## Обставить карту генератора g. Поток случайных чисел — уже выставленный фазой.
 ## Пол комнат кладётся всегда (0.9.2); мебель — если её плотность не «Off».
@@ -552,17 +611,28 @@ func _furnish_room(cells: Array[Vector2i], main: bool, count: int, r: Rect2i) ->
 		var da := Vector2(a).distance_squared_to(mid)
 		var db := Vector2(b).distance_squared_to(mid)
 		return da < db or (da == db and (a.y < b.y or (a.y == b.y and a.x < b.x))))
-	for step: Dictionary in RECIPES.get(RECIPE_ALIAS.get(arch, arch), RECIPES["generic_room"]):
-		if _budget <= 0:
+	# Рецепт прогоняется, ПОКА есть бюджет и пока он хоть что-то ставит (0.9.4). Прежде он
+	# шёл один раз, и в большой комнате оставалось пусто: кровать с тумбочкой посреди зала
+	# на двадцать клеток. Теперь большая спальня получает вторую койку и второй шкаф, а
+	# маленькая обставляется как раньше — на втором проходе ей просто некуда ставить.
+	var recipe: Array = RECIPES.get(RECIPE_ALIAS.get(arch, arch), RECIPES["generic_room"])
+	for pass_n in RECIPE_PASSES:
+		var before := _budget
+		for step: Dictionary in recipe:
+			if _budget <= 0:
+				break
+			_run_step(step, {})
+		if _budget <= 0 or _budget == before:
 			break
-		_run_step(step, {})
-	# Мелочь второго прохода — поверх рецепта, своей долей.
-	var extra := roundi(free * CLUTTER_SHARE[level])
-	var pool: Array = CLUTTER.get(_style_key(), CLUTTER["town"])
-	for k in extra:
-		var fid := Furniture.variant(pool[rng.randi_range(0, pool.size() - 1)], rng)
-		_budget = maxi(_budget, 1)
-		_place_one(fid, "free", {})
+	# Мелочь второго прохода — поверх рецепта, своей долей, и только в «складских»
+	# помещениях (CLUTTER_ROOMS): в каюте и кабинете случайному ящику делать нечего.
+	if CLUTTER_ROOMS.has(RECIPE_ALIAS.get(arch, arch)):
+		var extra := roundi(free * CLUTTER_SHARE[level])
+		var pool: Array = CLUTTER.get(_style_key(), CLUTTER["town"])
+		for k in extra:
+			var fid := Furniture.variant(pool[rng.randi_range(0, pool.size() - 1)], rng)
+			_budget = maxi(_budget, 1)
+			_place_one(fid, "free", {})
 
 ## Назначение помещения: поле — хижина или руина; прочее — по таблице ROOMS. В доме
 ## с перегородкой большая половина — общая комната, меньшая — спальня или кухня.
@@ -655,9 +725,14 @@ func _run_step(step: Dictionary, anchor: Dictionary) -> Array:
 	var fid := Furniture.variant(step["f"], rng)   # цвет — один на шаг: ряд коек одного цвета
 	var rule: String = step["at"]
 	var subs: Array = step.get("then", [])
+	# «sz» (0.9.4) закрепляет след предмета: все койки палаты и камеры — 1×2, а не «какая
+	# выпадет». Это и есть стандартная планировка, которую просил игрок.
+	_pin_size = step.get("sz", [])
 	match rule:
 		"row":
 			got = _place_row(fid, n)
+		"corner_row":
+			got = _place_row(fid, n, true)
 		"aisles":
 			got = _place_aisles(fid)
 		"grid":
@@ -672,6 +747,7 @@ func _run_step(step: Dictionary, anchor: Dictionary) -> Array:
 				var piece := _place_one(fid, rule, anchor)
 				if not piece.is_empty():
 					got.append(piece)
+	_pin_size = []
 	for piece: Dictionary in got:
 		for sub: Dictionary in subs:
 			if _budget <= 0:
@@ -739,7 +815,7 @@ func _shapes_at(fid: String, rule: String, c: Vector2i) -> Array:
 	if not Furniture.is_whole(fid):
 		return [{"cells": [c], "back": _wall_dir(c)}]
 	var out: Array = []
-	var sizes: Array = Furniture.sizes_of(fid).duplicate()
+	var sizes: Array = [_pin_size] if not _pin_size.is_empty() else Furniture.sizes_of(fid).duplicate()
 	sizes = sizes.slice(0, sizes.size())
 	for i in range(sizes.size() - 1, 0, -1):
 		var j := rng.randi_range(0, i)
@@ -777,10 +853,15 @@ func _shapes_at(fid: String, rule: String, c: Vector2i) -> Array:
 
 ## Ряд вдоль одной стены. Секции (стойка, шкафчики) — сплошным рядом, срастаясь в одну;
 ## цельные предметы (кровати в казарме) — через клетку, чтобы не срослись друг с другом.
-func _place_row(fid: String, n: int) -> Array:
+## from_corner (0.9.4): ряд начинается ИМЕННО с угла (стойка регистрации в приёмной), а
+## если углов в помещении нет — как обычно, от любой клетки у стены.
+func _place_row(fid: String, n: int, from_corner := false) -> Array:
 	var got: Array = []
 	var whole := Furniture.is_whole(fid)
-	for start in _cells_for("wall", {}):
+	var starts := _cells_for("wall", {})
+	if from_corner and not _cand_corner.is_empty():
+		starts = _cand_corner + starts
+	for start in starts:
 		if _budget <= 0 or not _ok(fid, start):
 			continue
 		var wd := _wall_dir(start)
@@ -797,7 +878,7 @@ func _place_row(fid: String, n: int) -> Array:
 				if _budget > 0 and _try_piece(fid, one):
 					got.append(one)
 		else:
-			var sz: Array = Furniture.sizes_of(fid)[0]
+			var sz: Array = _pin_size if not _pin_size.is_empty() else Furniture.sizes_of(fid)[0]
 			var stride: int = int(sz[0]) + 1
 			for sgn: int in [1, -1]:
 				var c := start
@@ -851,7 +932,8 @@ func _place_grid(fid: String, n: int, around: bool) -> Array:
 	var lo := Vector2i(1 << 20, 1 << 20)
 	for c: Vector2i in _room:
 		lo = Vector2i(mini(lo.x, c.x), mini(lo.y, c.y))
-	var sz: Array = Furniture.sizes_of(fid)[rng.randi_range(0, Furniture.sizes_of(fid).size() - 1)]
+	var sz: Array = _pin_size if not _pin_size.is_empty() \
+			else Furniture.sizes_of(fid)[rng.randi_range(0, Furniture.sizes_of(fid).size() - 1)]
 	var dm := Vector2i(int(sz[0]), int(sz[1]))
 	if not Furniture.is_whole(fid):
 		dm = Vector2i.ONE

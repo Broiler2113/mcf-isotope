@@ -52,6 +52,9 @@ const MANIFEST := [
 		"door_station", "door_open_station", "door_bunker", "door_open_bunker",
 		"door_town", "door_open_town", "door_field", "door_open_field", "door_asteroid", "door_open_asteroid",
 	]],
+	["Wall materials (a town building picks one; same rules as a wall, different look)", [
+		"wall_brick", "wall_stucco", "wall_block",
+	]],
 	["Room floors (what a room is for decides which one it gets)", [
 		"floor_wood", "floor_parquet", "floor_tile", "floor_checker", "floor_carpet_red",
 		"floor_carpet_blue", "floor_lino", "floor_plate", "floor_grate",
@@ -94,6 +97,19 @@ const AUTOTILE_N := 1
 const AUTOTILE_E := 2
 const AUTOTILE_S := 4
 const AUTOTILE_W := 8
+
+## АТЛАС ОБЪЕКТА (0.9.4): всё хозяйство одного объекта в ОДНОМ файле «<имя>_atlas.png» —
+## 4 плитки в ширину, 5 в высоту. Строки 0..3 — те же 16 плиток автотайла, строка 4 —
+## четыре направления одиночного спрайта (вверх, вправо, вниз, влево).
+##
+## Зачем: игрок просил, чтобы «autotiling data and object directional sprites for a single
+## item» лежали вместе, — тогда объект заменяется ОДНИМ файлом, а не тремя. Отдельные
+## «<имя>.png» и «<имя>_autotile.png» по-прежнему читаются и ВАЖНЕЕ атласа: атлас берётся
+## там, где своего файла нет. Заготовки под перерисовку кладёт
+## `godot --headless --script res://tools/gen_textures.gd -- --templates`.
+const ATLAS_SUFFIX := "_atlas"
+const ATLAS_ROWS := 5
+const ATLAS_TURN_ROW := 4
 
 # --- Загрузка ---
 ## Перечитать папки текстур с нуля. Зовётся при входе в бой/редактор, чтобы
@@ -266,6 +282,10 @@ static func draw_feature(ci: CanvasItem, name: String, rect: Rect2, same: Callab
 	var key: String = ALIASES.get(name, name)
 	var sheet: Texture2D = _overrides.get(key + AUTOTILE_SUFFIX)
 	if sheet == null:
+		# Атлас (0.9.4) несёт тот же лист в строках 0..3: draw_autotile считает вариант по
+		# высоте, и у атласа (5 строк на 4 плитки) вариант выходит один — ровно эти строки.
+		sheet = _overrides.get(key + ATLAS_SUFFIX)
+	if sheet == null:
 		return draw_tile(ci, key, rect, variant)
 	var mask := 0
 	if same.call(0, -1):
@@ -294,9 +314,16 @@ static func draw_autotile(ci: CanvasItem, sheet: Texture2D, rect: Rect2, mask: i
 ## машин бывают неквадратными, и лентой их читать нельзя. false — картинки нет.
 static func draw_tile(ci: CanvasItem, name: String, rect: Rect2, variant: int = 0) -> bool:
 	ensure_overrides()
-	var tex: Texture2D = _overrides.get(ALIASES.get(name, name))
+	var key: String = ALIASES.get(name, name)
+	var tex: Texture2D = _overrides.get(key)
 	if tex == null:
-		return false
+		# Из атласа (0.9.4) — первое из четырёх направлений: «как объект нарисован».
+		var atlas: Texture2D = _overrides.get(key + ATLAS_SUFFIX)
+		if atlas == null:
+			return false
+		var t := atlas.get_width() / 4.0
+		ci.draw_texture_rect_region(atlas, rect, Rect2(0, ATLAS_TURN_ROW * t, t, t))
+		return true
 	var h := tex.get_height()
 	var n := tex.get_width() / h if tex.get_width() % h == 0 else 1
 	ci.draw_texture_rect_region(tex, rect, Rect2((variant % maxi(1, n)) * h, 0, h, h))
@@ -375,6 +402,19 @@ static func _manifest_text() -> String:
 		"Each tile is square; the sheet is 4 tiles wide and 4 tall (e.g. 128x128 for 32px",
 		"tiles). If a sheet exists it wins over the plain <feature>.png. Diagonal",
 		"neighbours are ignored on purpose: 16 tiles are enough for corridors and rooms.",
+		"",
+		"== One atlas per object ==",
+		"Everything one object needs may instead ship as a single <name>_atlas.png,",
+		"4 tiles wide and 5 tall (e.g. 128x160 for 32px tiles):",
+		"  rows 0..3   the 16 autotile tiles, same layout as above;",
+		"  row 4       the four facings of the single sprite: up, right, down, left.",
+		"A facing drawn in row 4 is used as it is, so a piece of furniture can be drawn",
+		"properly for each direction instead of being rotated by the game.",
+		"A plain <name>.png or <name>_autotile.png still wins over the atlas; the atlas",
+		"fills in whatever has no file of its own, and empty cells in it stay empty.",
+		"Ready-to-repaint atlases for every shipped object:",
+		"  godot --headless --script res://tools/gen_textures.gd -- --templates",
+		"They land in res://textures/templates/ (source material; the game never reads it).",
 		"",
 		"== Preparing a graphical update ==",
 		"1. Author every sprite as a square PNG with transparency (64x64 or 128x128).",

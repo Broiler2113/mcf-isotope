@@ -87,8 +87,10 @@ func _initialize() -> void:
 	# Астероид: по одному зерну жителей может не быть (см. выше), но по набору — обязаны.
 	var rock_civ := 0
 	for seed: int in [2069, 2070, 2071, 7, 11, 23]:
+		# Мирных по умолчанию больше нет (0.9.4) — уровень задаётся прямо здесь: проверяется,
+		# что астероид их РАЗМЕЩАЕТ, а не что они есть без спроса.
 		var am := MapGen.generate({"style": MapGen.Style.ASTEROID, "size": 2, "seed": seed,
-				"zones": 2, "density": 1})
+				"zones": 2, "density": 1, "civilians": 2})
 		for sp: Dictionary in am.spawns:
 			if int(sp["owner"]) == MCF.Owner.NEUTRAL:
 				rock_civ += 1
