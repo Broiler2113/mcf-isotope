@@ -1337,12 +1337,13 @@ func _accent_rooms() -> void:
 			if _in(c):
 				_accent[c.y * w + c.x] = accent
 
-## Стены комнат, которые обязаны остаться глухими (тайник капитана): ни окна, ни внешнего
-## шлюза. Ключи — клетки, чтобы проверка на обшивке стоила поиск по словарю.
+## Стены комнат, которые обязаны остаться глухими (тайник капитана, санузел, раздевалка,
+## камеры, морг — NO_WINDOW_KINDS): ни окна, ни внешнего шлюза. Ключи — клетки, чтобы
+## проверка на обшивке стоила поиск по словарю.
 func _sealed_room_walls() -> Dictionary:
 	var out := {}
 	for r: Rect2i in _room_kind:
-		if _room_kind[r] != "hidden_storage":
+		if not NO_WINDOW_KINDS.has(_room_kind[r]):
 			continue
 		for c in _edge_cells(r):
 			out[c] = true
