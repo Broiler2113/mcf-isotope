@@ -67,9 +67,11 @@ func _table() -> void:
 			ck(int(d["dur"]) == 1, "portable %s has durability 1 (nothing to remember while carried)" % fid)
 			ck(float(d["h"]) <= 0.5, "portable %s is a low piece" % fid)
 		ck(Furniture.blocks_move(fid) == (float(d["h"]) >= MCF.WALL_HEIGHT), "%s blocks movement iff wall-height" % fid)
-		ck(FileAccess.file_exists("res://textures/%s.png" % fid), "%s has a texture" % fid)
+		# Через Sprites, а не по пути на диске (item 5): текстуры разложены по папкам,
+		# и важно ровно одно — что игра находит картинку по имени предмета.
+		ck(Sprites.has_override(fid), "%s has a texture" % fid)
 		if Furniture.joins(fid):
-			ck(FileAccess.file_exists("res://textures/%s_autotile.png" % fid), "%s has an autotile sheet" % fid)
+			ck(Sprites.has_override(fid + Sprites.AUTOTILE_SUFFIX), "%s has an autotile sheet" % fid)
 			ck(not Furniture.carriable(fid), "multi-cell %s is not carried by hand" % fid)
 		if Furniture.is_whole(fid):
 			ck(not (d["sizes"] as Array).is_empty() and str(d["back"]) in ["long", "short", ""],

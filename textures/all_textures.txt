@@ -10,6 +10,23 @@ Images are stretched to the tile, so square art looks best.
 Two folders are scanned: res://textures (shipped) and user://textures (yours).
 Yours wins. Changes are picked up when a battle or the map editor opens.
 
+== Folders ==
+SUBFOLDERS ARE SCANNED TOO, and only the FILE NAME matters -- never the folder.
+The shipped art is sorted one folder per object, inside a section:
+
+  textures/walls/wall_station/wall_station.png            the tile itself
+  textures/walls/wall_station/wall_station_autotile.png   its 16-tile sheet
+  textures/walls/wall_station/sample.png                  the marked-up template
+
+Sections: floors, walls, doors, features, furniture, decals.
+Sort yours the same way or drop files straight into user://textures -- both work.
+
+== sample.png ==
+Every object folder carries one: its own art with every tile boxed in magenta, and,
+for a 16-tile sheet, white bars on the sides where that tile has a neighbour.
+Open it, paint over the art, save the result under the object's name, done.
+Samples are never loaded into the game -- a file called sample is skipped.
+
 -- Floors (the tile itself) --
   floor.png
   floor_space.png
@@ -247,7 +264,9 @@ and wall_<env>.png over the plain floor.png / wall.png when such a file exists.
 == Autotiling walls ==
 Any terrain feature may ship as a 4x4 tile sheet named <feature>_autotile.png
 (wall_autotile.png, glass_autotile.png, wood_wall_autotile.png, ...).
-Several sheets may be stacked top to bottom as variants (256x1536 = 6 variants).
+A sheet is 16 tiles and nothing more (128x128 for 32px tiles) -- that is the whole
+format. More 4x4 sheets MAY be stacked below it as variants if you want the surface
+to vary, but one is enough and that is what the game ships.
 The game looks at the four orthogonal neighbours of the same FAMILY (walls, glass,
 airlocks, bunkers and corpse walls join each other; sandbag pieces join each other)
 and picks tile index = N*1 + E*2 + S*4 + W*8; column = index % 4, row = index / 4:
@@ -270,9 +289,8 @@ A facing drawn in row 4 is used as it is, so a piece of furniture can be drawn
 properly for each direction instead of being rotated by the game.
 A plain <name>.png or <name>_autotile.png still wins over the atlas; the atlas
 fills in whatever has no file of its own, and empty cells in it stay empty.
-Ready-to-repaint atlases for every shipped object:
-  godot --headless --script res://tools/gen_textures.gd -- --templates
-They land in res://textures/templates/ (source material; the game never reads it).
+Each shipped object already carries its own sample.png; an atlas is only for
+replacing autotile and facings with a single file of your own.
 
 == Preparing a graphical update ==
 1. Author every sprite as a square PNG with transparency (64x64 or 128x128).

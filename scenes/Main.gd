@@ -514,6 +514,7 @@ func _ready() -> void:
 		# слотов, поэтому синхронизация не нужна и только мешала.
 		_build_controllers()
 	_build_sky()
+	_build_ground()
 	_build_ui()
 	Ui.theme_canvas_layers()  # HUD lives on a CanvasLayer; pull in the Steam skin.
 	# Связь налажена во вкладке Multiplayer главного меню (#54) — подхватываем её.
@@ -539,6 +540,7 @@ func _process(delta: float) -> void:
 	_refresh_clocks()
 	if _sky != null:
 		_sky.camera = pan   # параллакс за доской едет вслед за панорамой (0.9.3)
+	_fit_ground()
 	var focused := get_viewport().gui_get_focus_owner()
 	if focused is LineEdit:
 		return
@@ -2824,7 +2826,12 @@ func _submit(intent: Intent) -> void:
 		return   # запись только смотрят: подавать за неё намерения некому
 	if networked and state.active_player() != my_owner:
 		return
-	var ctrl: LocalHumanController = controllers[state.active_player()]
+	# Ход ведёт машина — намерения игрока не принимаются (item 8). Между шагами ИИ
+	# _animating опущен, поэтому кнопка «конец хода» в этот момент доходила сюда и
+	# роняла партию на присваивании AIController в переменную человека.
+	var ctrl := controllers[state.active_player()] as LocalHumanController
+	if ctrl == null:
+		return
 	ctrl.submit(intent)
 
 func _on_intent_ready(intent: Intent) -> void:
@@ -3704,6 +3711,11 @@ func _play_dice(events: Array) -> void:
 			_set_veh_offset(ev, 1.0)
 	queue_redraw()  # (состояние уже применено; кадр обновится после анимации)
 	for ev in events:
+		# Игрок вышел из партии прямо посреди показа (item 10): смена сцены уже забрала
+		# узел, get_tree() ниже вернул бы null. Обрываем показ — показывать некому.
+		if not is_inside_tree():
+			_animating = false
+			return
 		if ev.get("kind", "") == "hold":
 			continue
 		if ev.get("kind", "") == "slot":
@@ -3801,7 +3813,9 @@ const WALK_WAIT_LIMIT_MS := 6000
 
 func _await_walks() -> void:
 	var t0 := Time.get_ticks_msec()
-	while _walks_running > 0:
+	# is_inside_tree(): выход из партии посреди перехода забирает узел, и process_frame
+	# ниже ждать уже негде (item 10).
+	while _walks_running > 0 and is_inside_tree():
 		if Time.get_ticks_msec() - t0 > WALK_WAIT_LIMIT_MS:
 			push_warning("walk animation did not finish in %d ms (%d running) - continuing"
 					% [WALK_WAIT_LIMIT_MS, _walks_running])
@@ -3827,7 +3841,7 @@ func _play_veh_walk(ev: Dictionary) -> void:
 	var steps := maxi(1, int(ev.get("steps", 1)))
 	var dur_ms := SOLDIER_WALK_STEP_DELAY * steps / _pace() * 1000.0
 	var t0 := Time.get_ticks_msec()
-	while true:
+	while is_inside_tree():
 		var k := minf(1.0, float(Time.get_ticks_msec() - t0) / maxf(1.0, dur_ms))
 		_set_veh_offset(ev, 1.0 - k)
 		queue_redraw()
@@ -3858,7 +3872,7 @@ func _play_walk(ev: Dictionary) -> void:
 	for cell: Vector2i in ev["path"]:
 		var t0 := Time.get_ticks_msec()
 		var delta := Vector2(cell - prev) * CELL
-		while true:
+		while is_inside_tree():
 			var k := minf(1.0, float(Time.get_ticks_msec() - t0) / maxf(1.0, step_ms))
 			_walk_offset[id] = delta * k
 			queue_redraw()
@@ -6079,6 +6093,102 @@ func _reposition_hud_grip() -> void:
 ## та же чернота, что и раньше.
 var _sky: Starfield = null
 
+# --- Земля за краем доски (item 7) ---
+## За каймой карты (10 клеток грунта или травы) экран кончался чернотой, и доска читалась
+## как вырезанный из мира прямоугольник. Теперь та же земля продолжается до краёв экрана —
+## обоями: один клочок местности, собранный из вариантов плитки пола вперемешку, с редкими
+## проплешинами. Это чистый фон под доской: ни клеток, ни правил, ходить там негде.
+##
+## Картой без космоса дело и ограничивается — на станции за бортом звёзды (_build_sky).
+const GROUND_TILES := 16        # сторона клочка обоев в клетках
+const GROUND_PATCH_CHANCE := 0.07
+
+var _ground: TextureRect = null
+
+func _build_ground() -> void:
+	if state == null or state.grid.cells_flat().any(func(c: GridCell) -> bool: return c.is_space):
+		return
+	var tex := _ground_wallpaper()
+	if tex == null:
+		return
+	var layer := CanvasLayer.new()
+	layer.layer = -10
+	add_child(layer)
+	_ground = TextureRect.new()
+	_ground.texture = tex
+	_ground.stretch_mode = TextureRect.STRETCH_TILE
+	_ground.texture_repeat = CanvasItem.TEXTURE_REPEAT_ENABLED
+	_ground.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	_ground.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(_ground)
+	_fit_ground()
+
+## Клочок местности GROUND_TILES×GROUND_TILES: вариант плитки на клетку берётся хешем
+## координаты — тем же приёмом, что и на самой доске, поэтому рисунок не выстраивается в
+## сетку, — а на проплешины ложится вторая плитка (земля среди травы, грунт среди мостовой).
+func _ground_wallpaper() -> ImageTexture:
+	var base := _ground_image(_ground_floor_name())
+	if base == null:
+		return null
+	var patch := _ground_image(_ground_patch_name())
+	var t := base.get_height()
+	var vars_n := maxi(1, base.get_width() / t)
+	var img := Image.create(GROUND_TILES * t, GROUND_TILES * t, false, Image.FORMAT_RGBA8)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = GROUND_TILES * 7919 + t
+	for y in GROUND_TILES:
+		for x in GROUND_TILES:
+			var src := base
+			var n := vars_n
+			if patch != null and rng.randf() < GROUND_PATCH_CHANCE:
+				src = patch
+				n = maxi(1, patch.get_width() / patch.get_height())
+			var v := TerrainTiles.variant_of(Vector2i(x, y), n)
+			img.blit_rect(src, Rect2i(v * t, 0, t, t), Vector2i(x * t, y * t))
+	return ImageTexture.create_from_image(img)
+
+func _ground_image(name: String) -> Image:
+	var tex := Sprites.texture_of(name)
+	if tex == null:
+		return null
+	var img := tex.get_image()
+	if img == null:
+		return null
+	img = img.duplicate()
+	if img.is_compressed():
+		img.decompress()
+	img.convert(Image.FORMAT_RGBA8)
+	return img
+
+## Чем залит экран и чем идут проплешины — по окружению карты.
+func _ground_floor_name() -> String:
+	match state.env:
+		"field": return "floor_grass"
+		"bunker": return "bedrock"
+		"": return "floor"
+	return TerrainTiles.env_name("floor", state.env)
+
+func _ground_patch_name() -> String:
+	match state.env:
+		"field": return "floor_field"
+		"bunker": return ""
+	return "floor_field"
+
+## Обои держатся за ДОСКУ, а не за экран: клочок стоит там же, где стояла бы клетка карты,
+## поэтому при панораме и зуме земля едет вместе с полем, без скольжения.
+func _fit_ground() -> void:
+	if _ground == null:
+		return
+	var period := float(GROUND_TILES * CELL) * zoom
+	if period <= 0.0:
+		return
+	var vp := get_viewport_rect().size
+	var at := pan + ORIGIN * zoom
+	var s := zoom * float(CELL) / float(_ground.texture.get_height() / GROUND_TILES)
+	_ground.scale = Vector2(s, s)
+	_ground.position = Vector2(fposmod(at.x, period), fposmod(at.y, period)) - Vector2(period, period)
+	_ground.size = (vp + Vector2(period, period) * 2.0) / s
+
 func _build_sky() -> void:
 	if state == null or not state.grid.cells_flat().any(func(c: GridCell) -> bool: return c.is_space):
 		return
@@ -6673,24 +6783,43 @@ func _toggle_initiative_overlay() -> void:
 func _to_lobby() -> void:
 	_to_menu()
 
-## Свод «живых/мёртвых» по каждому владельцу-слоту (item 20). owner -> {alive, dead}.
+const _EMPTY_COUNT := {"alive": 0, "dead": 0, "veh": 0, "veh_dead": 0}
+
+## Свод по каждому владельцу-слоту (item 20, переделан в item 1):
+## owner -> {alive, dead, veh, veh_dead}.
+##
+## ЖИВЫЕ считаются по доске, ПАВШИЕ — из state.deaths, а не по трупам на поле. Трупы
+## выбывают из партии (поднял щитом, сложил в кучу, задвинул под кресло), и счёт
+## «мёртвых» по ним полз назад — отсюда и шли прыгающие числа.
+## Пленный (HELD) — живой: он ранен не больше, чем до захвата, и вернётся в строй.
+## Дрон не в своде вовсе: ни бойцом, ни машиной — это расходная техника станции.
 func _army_counts() -> Dictionary:
 	var out: Dictionary = {}
 	for u: UnitInstance in state.all_units():
-		# Дрон — техника станции, а не боец: в свод не идёт (станция — клетка карты).
-		if u.is_drone:
+		if u.is_drone or u.status == MCF.Status.CORPSE:
 			continue
-		var rec: Dictionary = out.get(u.owner, {"alive": 0, "dead": 0})
-		if u.is_alive():
-			rec["alive"] += 1
-		else:
-			rec["dead"] += 1
+		var rec: Dictionary = out.get(u.owner, _EMPTY_COUNT.duplicate())
+		rec["alive"] += 1
 		out[u.owner] = rec
+	for owner: Variant in state.deaths:
+		var rec: Dictionary = out.get(int(owner), _EMPTY_COUNT.duplicate())
+		rec["dead"] = int(state.deaths[owner])
+		out[int(owner)] = rec
+	for v: Vehicle in state.all_vehicles():
+		var rec: Dictionary = out.get(v.owner, _EMPTY_COUNT.duplicate())
+		if v.alive():
+			rec["veh"] += 1
+		else:
+			rec["veh_dead"] += 1
+		out[v.owner] = rec
 	return out
 
 func _count_str(counts: Dictionary, owner: int) -> String:
-	var rec: Dictionary = counts.get(owner, {"alive": 0, "dead": 0})
-	return "%d alive / %d dead" % [rec["alive"], rec["dead"]]
+	var rec: Dictionary = counts.get(owner, _EMPTY_COUNT)
+	var s := "%d alive / %d dead" % [rec["alive"], rec["dead"]]
+	if int(rec["veh"]) + int(rec["veh_dead"]) > 0:
+		s += "   ·   %d vehicles / %d destroyed" % [rec["veh"], rec["veh_dead"]]
+	return s
 
 ## Компактная сводка для боковой панели (item 20): текущий ход и команда, номер раунда,
 ## кто ходит непосредственно до и после ПРОСМАТРИВАЮЩЕГО игрока.
@@ -6716,9 +6845,13 @@ func _refresh_initiative() -> void:
 	# Живой счёт по каждому слоту очереди (item 20) — компактно, полный разбор в оверлее.
 	var counts := _army_counts()
 	for slot: int in tm.round_order:
-		var rec: Dictionary = counts.get(slot, {"alive": 0, "dead": 0})
-		lines.append("%s: %d/%d" % [_side_label(slot), rec["alive"],
-				rec["alive"] + rec["dead"]])
+		var rec: Dictionary = counts.get(slot, _EMPTY_COUNT)
+		# Живые / павшие (item 1) — раньше здесь стояло «живые/всего», и две строки одного
+		# окна считали по-разному. Машины приписываются сзади, только если они есть.
+		var line := "%s: %d live, %d dead" % [_side_label(slot), rec["alive"], rec["dead"]]
+		if int(rec["veh"]) + int(rec["veh_dead"]) > 0:
+			line += " (%d veh, %d wrecked)" % [rec["veh"], rec["veh_dead"]]
+		lines.append(line)
 	_init_label.text = "\n".join(lines)
 
 ## Полный разбор инициативы для оверлея (item 49): каждый слот по порядку со своим цветом,
@@ -6732,7 +6865,7 @@ func _refresh_initiative_overlay() -> void:
 	var counts := _army_counts()
 	var tm := state.turns
 	for slot: int in tm.round_order:
-		var rec: Dictionary = counts.get(slot, {"alive": 0, "dead": 0})
+		var rec: Dictionary = counts.get(slot, _EMPTY_COUNT)
 		# Слот, в котором НИКОГО НЕ БЫЛО (ни живых, ни павших), в очереди не показываем
 		# (item 2). Берётся он так: общий нейтральный слот («Neutral», без номера) держит
 		# спящих жителей, но стоит кварталу проснуться — §15 переводит весь кластер в
@@ -6740,7 +6873,7 @@ func _refresh_initiative_overlay() -> void:
 		# навсегда. Из очереди он не вычёркивается намеренно — по ней читается история
 		# партии, — но показывать «Neutral — 0 alive / 0 dead» в каждом раунде незачем.
 		# Слот с павшими (все жители погибли) — другое дело: это уже история, она остаётся.
-		if int(rec["alive"]) == 0 and int(rec["dead"]) == 0:
+		if int(rec["alive"]) == 0 and int(rec["dead"]) == 0 and int(rec["veh"]) == 0:
 			continue
 		# Вырезанная группа жителей больше не ходит (end_turn её пропускает) — в списке ей
 		# не место (playtest-20): иначе десятки мёртвых групп вытесняли живые.

@@ -36,6 +36,11 @@ func _maps() -> Array:
 ## Ширина прохода: пробеги одного вида поперёк его направления. Главный коридор — ровно 3
 ## клетки, технический туннель — 1, изредка 2. Меряем в обе стороны: пробег ВДОЛЬ коридора
 ## длинный, поперёк — это и есть ширина, поэтому берём наименьший пробег каждого вида.
+##
+## Короткий пробег — ещё не поперечник: так же читается и ТУПИКОВЫЙ ОТРОСТОК в пару клеток
+## (0.9.4: срез бесхозных проходов оставляет такие у обвода станции). Поперечник отличается
+## тем, что проход ПРОДОЛЖАЕТСЯ вбок: у средней клетки пробега соседи с обеих сторон того же
+## вида. У отростка с одной стороны стена — его и не считаем.
 func _corridors_and_grating() -> void:
 	var main_bad := 0
 	var main_runs := 0
@@ -60,14 +65,15 @@ func _corridors_and_grating() -> void:
 					if k == kind and (k == MapGen.K_HALL or k == MapGen.K_MAINT):
 						run += 1
 						continue
-					# Пробег кончился: короткий (не длиннее 3) — это поперечник прохода.
-					if kind == MapGen.K_HALL and run > 0 and run < 4:
+					# Пробег кончился: короткий (не длиннее 3) и сквозной — это поперечник.
+					var mid_ok := run > 0 and run < 4 and _crosses(g, axis, a, b - run + run / 2, kind)
+					if kind == MapGen.K_HALL and mid_ok:
 						main_runs += 1
 						if run < 2:
 							main_bad += 1
 						elif run == 3:
 							main_wide += 1
-					elif kind == MapGen.K_MAINT and run > 0 and run < 4:
+					elif kind == MapGen.K_MAINT and mid_ok:
 						tech_runs += 1
 						if run > 2:
 							tech_bad += 1
@@ -101,6 +107,13 @@ func _corridors_and_grating() -> void:
 			% grate_elsewhere)
 	ck(grate_tech > 0 and grate_tech * 2 < tech_cells,
 			"and not even in every tech tunnel (%d of %d cells)" % [grate_tech, tech_cells])
+
+## Проход и правда идёт вбок от этой клетки (а не упирается в стену): проверка «это
+## поперечник, а не тупик».
+func _crosses(g: MapGen, axis: int, a: int, b: int, kind: int) -> bool:
+	var c := Vector2i(b, a) if axis == 0 else Vector2i(a, b)
+	var d := Vector2i(0, 1) if axis == 0 else Vector2i(1, 0)
+	return g._kind(c.x + d.x, c.y + d.y) == kind and g._kind(c.x - d.x, c.y - d.y) == kind
 
 ## Акценты: каждая служба встречается, цвет лежит ТОЛЬКО на стенах и шлюзах, переживает
 ## сохранение, и у комнаты со своей службой он её, а не отдела.

@@ -2118,6 +2118,10 @@ func _kill(u: UnitInstance, res: ActionResult = null, from_coord: Vector2i = NOW
 	# вырваться, потому что _resolve_release ищет живого захватчика.
 	var captive := held_unit_of(u)
 	u.kill()
+	# Единственная точка, где боец погибает, — здесь же ведём счёт павших по сторонам
+	# (item 1). Дрон в своде не участвует: это техника станции, не боец.
+	if not u.is_drone:
+		state.deaths[u.owner] = int(state.deaths.get(u.owner, 0)) + 1
 	# Погибший пассажир челнока (batch 13 S10): выбывает из экипажа, но кресло держит
 	# его тело, пока снаружи его не вытащат.
 	var seat_veh := seated_vehicle_of(u)
@@ -6422,24 +6426,87 @@ func _maybe_random_event(res: ActionResult) -> void:
 	res.log("⚠ %s — %s, landing at the end of round %d" % [
 		RandomEvents.event_name(id), _event_where(id, params), int(entry["land"])])
 
+## Полезный участок карты — рамка по всем клеткам, которые НЕ космос и не голая земля
+## за краем застройки (item 6). Событиям незачем падать в пустоту: на станции край карты —
+## это вакуум, и газ там травил только самого себя. Считается по доске, без кубиков,
+## значит у хоста и клиента совпадает.
+## ponytail: проход по всей сетке, зато всегда верен; событий за партию единицы.
+func _useful_rect() -> Rect2i:
+	var grid := state.grid
+	var lo := Vector2i(grid.width, grid.height)
+	var hi := Vector2i(-1, -1)
+	for y in grid.height:
+		for x in grid.width:
+			var c := grid.cell_fast(x, y)
+			if c.is_space or not c.walkable_terrain():
+				continue
+			lo.x = mini(lo.x, x)
+			lo.y = mini(lo.y, y)
+			hi.x = maxi(hi.x, x)
+			hi.y = maxi(hi.y, y)
+	if hi.x < lo.x:
+		return Rect2i(0, 0, grid.width, grid.height)   # проходимого нет вовсе — вся карта
+	return Rect2i(lo, hi - lo + Vector2i.ONE)
+
+## Зона w×h внутри полезного участка: угол катается по рамке, а не по всей карте.
+func _zone_in(area: Rect2i, w: int, h: int) -> Dictionary:
+	var zw := mini(w, area.size.x)
+	var zh := mini(h, area.size.y)
+	return {"x": area.position.x + _rand_wide(area.size.x - zw + 1),
+			"y": area.position.y + _rand_wide(area.size.y - zh + 1), "w": zw, "h": zh}
+
+## Доля обстрелов, которые ищут скопление бойцов, а не случайное место (item 6): 4 из 6.
+const BARRAGE_SEEK_ON := 4
+
+## Центр самого плотного скопления бойцов — куда и ляжет наводящийся обстрел. Плотность
+## меряется в окне того же размера, что и зона огня. Vector2i(-1,-1) — мерить нечего.
+## ponytail: O(n²) по бойцам (их десятки), хватает с запасом; сетка-хеш — если не хватит.
+func _densest_spot(w: int, h: int) -> Vector2i:
+	var pts: Array[Vector2i] = []
+	for u: UnitInstance in state.all_units():
+		if u.is_alive() and not u.is_drone and state.grid.in_bounds(u.coord):
+			pts.append(u.coord)
+	if pts.is_empty():
+		return Vector2i(-1, -1)
+	var best := pts[0]
+	var best_n := -1
+	for p: Vector2i in pts:
+		var n := 0
+		for q: Vector2i in pts:
+			if absi(q.x - p.x) * 2 <= w and absi(q.y - p.y) * 2 <= h:
+				n += 1
+		if n > best_n:
+			best_n = n
+			best = p
+	return best
+
 ## Параметры события — катаются ОДИН раз, при объявлении, и дальше не меняются.
 func _roll_event_params(id: String) -> Dictionary:
 	var gw := state.grid.width
 	var gh := state.grid.height
+	var area := _useful_rect()
 	match id:
 		RandomEvents.MORTAR:
 			var bw := BARRAGE_SIDE_MIN + _rand_wide(mini(BARRAGE_SIDE_MAX, gw) - BARRAGE_SIDE_MIN + 1)
 			var bh := BARRAGE_SIDE_MIN + _rand_wide(mini(BARRAGE_SIDE_MAX, gh) - BARRAGE_SIDE_MIN + 1)
 			bw = mini(bw, gw)
 			bh = mini(bh, gh)
-			return {"x": _rand_wide(gw - bw + 1), "y": _rand_wide(gh - bh + 1), "w": bw, "h": bh}
+			# Батарея чаще бьёт по скоплению, чем в чистое поле (item 6), но не всегда:
+			# предсказуемый обстрел перестал бы быть событием. Бросок — из общего потока.
+			var seek := state.dice.roll_d6() <= BARRAGE_SEEK_ON
+			var aim := _densest_spot(bw, bh) if seek else Vector2i(-1, -1)
+			if aim.x < 0:
+				return _zone_in(area, bw, bh)
+			return {"x": clampi(aim.x - bw / 2, 0, maxi(0, gw - bw)),
+					"y": clampi(aim.y - bh / 2, 0, maxi(0, gh - bh)), "w": bw, "h": bh}
 		RandomEvents.GAS:
 			var side_w := clampi(gw / 3, GAS_SIDE_MIN, GAS_SIDE_MAX)
 			var side_h := clampi(gh / 3, GAS_SIDE_MIN, GAS_SIDE_MAX)
 			var cw := mini(gw, GAS_SIDE_MIN + _rand_wide(maxi(1, side_w - GAS_SIDE_MIN + 1)))
 			var ch := mini(gh, GAS_SIDE_MIN + _rand_wide(maxi(1, side_h - GAS_SIDE_MIN + 1)))
-			return {"x": _rand_wide(gw - cw + 1), "y": _rand_wide(gh - ch + 1), "w": cw, "h": ch,
-					"rounds": GAS_ROUNDS}
+			var z := _zone_in(area, cw, ch)
+			z["rounds"] = GAS_ROUNDS
+			return z
 		RandomEvents.ARMY:
 			var edge := _rand_wide(4)                      # 0 С, 1 В, 2 Ю, 3 З
 			var along := gw if edge % 2 == 0 else gh
@@ -6664,8 +6731,14 @@ func _army_spawn_cells(p: Dictionary) -> Array[Vector2i]:
 	var edge := int(p.get("edge", 0)) % 4
 	var from := int(p.get("from", 0))
 	var seg := int(p.get("len", ARMY_SEGMENT_MIN))
-	var depth := maxi(2, seg)
+	# Идём вглубь, пока не наберём, на что высаживаться (item 6). Прежде вглубь смотрели
+	# ровно на длину участка — и на станции, где у края один вакуум, а жилое начинается
+	# клеток через двадцать, армия не находила НИ ОДНОЙ клетки и всегда «поворачивала
+	# назад». Отсюда и «армии не приходят, особенно на космических картах».
+	var depth := gh if edge % 2 == 0 else gw
 	for d in depth:
+		if out.size() >= ARMY_UNIT_CAP:
+			break
 		for k in seg:
 			var c: Vector2i
 			match edge:

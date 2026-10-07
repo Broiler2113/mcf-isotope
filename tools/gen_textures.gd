@@ -25,9 +25,6 @@ extends SceneTree
 const T := 32
 const VARIANTS := 6
 const OUT := "res://textures/"
-## Заготовки под перерисовку (0.9.4) — отдельная папка: это не плитки игры, а исходники
-## для художника. Игра их не читает.
-const TEMPLATES := "res://textures/templates/"
 
 func _initialize() -> void:
 	var t0 := Time.get_ticks_msec()
@@ -48,13 +45,6 @@ func _initialize() -> void:
 	if "--doors" in OS.get_cmdline_user_args():
 		_doors_all()
 		print("door textures written to %s in %d ms" % [OUT, Time.get_ticks_msec() - t0])
-		quit()
-		return
-	# `-- --templates` — ЗАГОТОВКИ под перерисовку (0.9.4): по файлу на объект, в котором
-	# собрано всё его хозяйство (автотайл и повороты). Ничего в res://textures не меняет.
-	if "--templates" in OS.get_cmdline_user_args():
-		_templates_all()
-		print("templates written to %s in %d ms" % [TEMPLATES, Time.get_ticks_msec() - t0])
 		quit()
 		return
 	# --- Пол: общий и по окружениям (item 24) ---
@@ -172,8 +162,77 @@ func _inner(x: int, y: int, margin: float) -> float:
 	var d := float(mini(mini(x, y), mini(T - 1 - x, T - 1 - y)))
 	return clampf((d - 1.0) / margin, 0.0, 1.0)
 
+## КУДА ложится файл (item 5). Текстуры разложены по папкам: папка-раздел, в ней папка
+## объекта, в ней — всё его хозяйство и образец. Игра читает папки насквозь и берёт имя
+## ФАЙЛА, а не папки, поэтому раскладка — чистая опрятность: тот же файл, положенный в
+## user://textures как попало, работает по-прежнему.
+func _path_of(name: String) -> String:
+	var base := name
+	if base.ends_with(Sprites.AUTOTILE_SUFFIX):
+		base = base.substr(0, base.length() - Sprites.AUTOTILE_SUFFIX.length())
+	return "%s%s/%s/%s.png" % [OUT, _section_of(base), base, name]
+
+func _section_of(base: String) -> String:
+	if Furniture.ids().has(base):
+		return "furniture"
+	if base.begins_with("floor"):
+		return "floors"
+	if base.begins_with("door"):
+		return "doors"
+	if base.begins_with("wall") or base in ["wood_wall", "armor_wall", "corpse_wall",
+			"sandbag_wall", "glass", "armor_glass", "bedrock", "boundary_bunker", "soil"]:
+		return "walls"
+	if base in ["blood_pool", "blood_splatter", "glass_shard", "shell_casing", "fire"]:
+		return "decals"
+	return "features"
+
 func _save(name: String, img: Image) -> void:
-	img.save_png(OUT + name + ".png")
+	var path := _path_of(name)
+	DirAccess.make_dir_recursive_absolute(path.get_base_dir())
+	img.save_png(path)
+	# Образец для объекта БЕЗ автотайла — та же картинка с разметкой по плиткам. У объекта
+	# с листом образец свой (его пишет _sheet), и переписывать его нечем: лист сохраняется
+	# первым, поэтому проверка на файл здесь честная.
+	if not name.ends_with(Sprites.AUTOTILE_SUFFIX) \
+			and not FileAccess.file_exists(_path_of(name + Sprites.AUTOTILE_SUFFIX)):
+		_write_sample(name, _grid_marks(img, false))
+
+## Образец рядом с плиткой (item 5): та же картинка с разметкой — розовая сетка по границам
+## плиток, а у листа автотайла ещё и белые метки сторон, с которых у плитки ЕСТЬ сосед. По
+## нему видно, что рисовать в каждой клетке, не читая документации. Игра образцы не читает.
+func _grid_marks(src: Image, autotile: bool) -> Image:
+	var img := Image.create(src.get_width(), src.get_height(), false, Image.FORMAT_RGBA8)
+	img.blit_rect(src, Rect2i(0, 0, src.get_width(), src.get_height()), Vector2i.ZERO)
+	var line := Color(1.0, 0.0, 0.85, 0.85)
+	var tick := Color(1.0, 1.0, 1.0, 0.9)
+	var cols := maxi(1, img.get_width() / T)
+	var rows := maxi(1, img.get_height() / T)
+	for r in rows:
+		for c in cols:
+			var ox := c * T
+			var oy := r * T
+			for k in T:
+				img.set_pixel(ox + k, oy, line)
+				img.set_pixel(ox, oy + k, line)
+			if not autotile:
+				continue
+			# Метка стороны = сосед той же породы с этой стороны (N1 E2 S4 W8).
+			var mask := r * 4 + c
+			for side in 4:
+				if mask & (1 << side) == 0:
+					continue
+				for k in range(T / 3, T - T / 3):
+					match side:
+						0: img.set_pixel(ox + k, oy + 2, tick)
+						1: img.set_pixel(ox + T - 3, oy + k, tick)
+						2: img.set_pixel(ox + k, oy + T - 3, tick)
+						_: img.set_pixel(ox + 2, oy + k, tick)
+	return img
+
+func _write_sample(name: String, img: Image) -> void:
+	var path := _path_of(name).get_base_dir() + "/sample.png"
+	DirAccess.make_dir_recursive_absolute(path.get_base_dir())
+	img.save_png(path)
 
 ## Лента вариантов: fn(x, y, v) → цвет пикселя варианта v.
 func _strip(name: String, fn: Callable) -> void:
@@ -188,12 +247,16 @@ func _strip(name: String, fn: Callable) -> void:
 ## свободных сторонах (мешки, окоп), и тяжёлая брутальная кромка там, где соседа того же
 ## семейства нет: тёмный контур, светлая фаска сверху-слева, глубокая тень снизу-справа.
 ## edge — тон контура; bevel — толщина фаски.
+## Лист — РОВНО ШЕСТНАДЦАТЬ плиток, 4×4 (item 5). Прежде их было столько же на каждый из
+## шести вариантов, девяносто шесть штук в файле: «individual objects shouldn't require a
+## bizarre autotiling system with 80+ tiles». Разнообразие осталось там, где оно и видно, —
+## в ленте вариантов одиночной плитки; стыкующаяся кромка у всех вариантов одна и та же.
 func _sheet(name: String, fn: Callable, edge: Color, bevel: int, inset: int = 0) -> void:
-	var img := Image.create(T * 4, T * 4 * VARIANTS, false, Image.FORMAT_RGBA8)
-	for v in VARIANTS:
-		for mask in 16:
-			_tile(img, (mask % 4) * T, (v * 4 + mask / 4) * T, mask, v, fn, edge, bevel, inset)
-	_save(name + "_autotile", img)
+	var img := Image.create(T * 4, T * 4, false, Image.FORMAT_RGBA8)
+	for mask in 16:
+		_tile(img, (mask % 4) * T, (mask / 4) * T, mask, 0, fn, edge, bevel, inset)
+	_save(name + Sprites.AUTOTILE_SUFFIX, img)
+	_write_sample(name, _grid_marks(img, true))
 	# Одиночная плитка (маска 0, лента вариантов) — для превью и простых подмен.
 	var single := Image.create(T * VARIANTS, T, false, Image.FORMAT_RGBA8)
 	for v in VARIANTS:
@@ -721,6 +784,7 @@ func _furniture_all() -> void:
 				sheet.blit_rect(_joined_tile(fid, mask), Rect2i(0, 0, T, T),
 						Vector2i((mask % 4) * T, (mask / 4) * T))
 			_save(id + Sprites.AUTOTILE_SUFFIX, sheet)
+			_write_sample(id, _grid_marks(sheet, true))
 			_save(id, _joined_tile(fid, 0))
 		else:
 			_save(id, _furniture(fid))
@@ -1554,102 +1618,3 @@ func _floor_solar(x: int, y: int, v: int) -> Color:
 		c = _shade(c, 1.35)   # блик
 	return c
 
-# =====================================================================================
-#  Заготовки под перерисовку (0.9.4)
-# =====================================================================================
-## Игрок просил «templates that allow for easy manual texture replacement later», и чтобы
-## «autotiling data and object directional sprites for a single item» лежали В ОДНОМ атласе.
-##
-## Формат атласа `<имя>_atlas.png` — 4 плитки в ширину, 5 в высоту (у плитки сторона T):
-##   строки 0..3 — те же 16 плиток автотайла, что и в `<имя>_autotile.png`
-##                 (индекс = N·1 + E·2 + S·4 + W·8, колонка = индекс % 4, строка = индекс / 4);
-##   строка 4    — ЧЕТЫРЕ направления одиночного спрайта: вверх, вправо, вниз, влево.
-## Атлас читается игрой наравне с отдельными файлами (Sprites.ATLAS_SUFFIX): положил один
-## файл — заменил объект целиком, и автотайл, и повороты. Чего в атласе нет (объект без
-## автотайла), то в нём просто прозрачно.
-##
-## Здесь заготовки СОБИРАЮТСЯ ИЗ УЖЕ НАРИСОВАННЫХ плиток res://textures: обход папки, а не
-## второй список имён, — иначе список пришлось бы держать в двух местах и он бы разъехался.
-const ATLAS_ROWS := 5
-## Строка поворотов в атласе (с нуля).
-const ATLAS_TURN_ROW := 4
-
-func _templates_all() -> void:
-	DirAccess.make_dir_recursive_absolute(TEMPLATES)
-	var names := {}
-	var d := DirAccess.open(OUT)
-	if d == null:
-		print("no %s" % OUT)
-		return
-	d.list_dir_begin()
-	var fname := d.get_next()
-	while fname != "":
-		if not d.current_is_dir() and fname.get_extension().to_lower() == "png":
-			var base := fname.get_basename()
-			if base.ends_with("_autotile"):
-				base = base.substr(0, base.length() - 9)
-			names[base] = true
-		fname = d.get_next()
-	d.list_dir_end()
-	var written := 0
-	for base: String in names:
-		if _template_one(base):
-			written += 1
-	var f := FileAccess.open(TEMPLATES + "README.txt", FileAccess.WRITE)
-	if f != null:
-		f.store_string(_templates_readme())
-		f.close()
-	print("%d templates" % written)
-
-## Один атлас. false — собирать нечего (ни автотайла, ни квадратной плитки).
-func _template_one(base: String) -> bool:
-	var sheet := _load_png(OUT + base + "_autotile.png")
-	var single := _load_png(OUT + base + ".png")
-	if sheet == null and single == null:
-		return false
-	var img := Image.create(T * 4, T * ATLAS_ROWS, false, Image.FORMAT_RGBA8)
-	if sheet != null and sheet.get_width() == T * 4:
-		# Вариант 0 листа — первые четыре строки.
-		img.blit_rect(sheet, Rect2i(0, 0, T * 4, mini(T * 4, sheet.get_height())), Vector2i.ZERO)
-	# Строка поворотов: вариант 0 одиночной плитки, повёрнутый на четверть, пол-оборота и
-	# три четверти. Объект, который игра поворачивает сама (мебель), получает готовые
-	# четыре вида — художник правит каждый отдельно, если ему мало простого поворота.
-	if single != null and single.get_height() == T and single.get_width() >= T:
-		for k in 4:
-			var turned := single.get_region(Rect2i(0, 0, T, T))
-			for _i in k:
-				turned.rotate_90(CLOCKWISE)
-			img.blit_rect(turned, Rect2i(0, 0, T, T), Vector2i(k * T, ATLAS_TURN_ROW * T))
-	img.save_png(TEMPLATES + base + "_atlas.png")
-	return true
-
-func _load_png(path: String) -> Image:
-	if not FileAccess.file_exists(path):
-		return null
-	var img := Image.new()
-	if img.load(path) != OK:
-		return null
-	img.convert(Image.FORMAT_RGBA8)
-	return img
-
-func _templates_readme() -> String:
-	return """MCF TACTICS -- TEXTURE TEMPLATES
-
-One file per object: <name>_atlas.png, %d x %d pixels (tile side %d).
-
-  rows 0..3  the 16 autotile tiles. Index = N*1 + E*2 + S*4 + W*8,
-             column = index %% 4, row = index / 4:
-               row 0:  0 alone    1 N        2 E        3 N+E
-               row 1:  4 S        5 N+S      6 E+S      7 N+E+S
-               row 2:  8 W        9 N+W     10 E+W     11 N+E+W
-               row 3: 12 S+W     13 N+S+W   14 E+S+W   15 all four
-  row 4      the four facings of the single sprite: up, right, down, left.
-             Furniture is drawn with its back UP; the game turns it to the wall,
-             but a facing drawn here is used as it is, without rotating.
-
-Repaint the cells you care about, keep the size, and drop the file into
-user://textures with the SAME name. An atlas replaces both <name>.png and
-<name>_autotile.png for that object; empty cells in it stay empty.
-
-These files are source material, not game data: the game never reads this folder.
-""" % [T * 4, T * ATLAS_ROWS, T]
