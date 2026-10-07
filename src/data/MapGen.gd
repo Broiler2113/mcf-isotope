@@ -688,7 +688,11 @@ func _station() -> void:
 	_split_sectors(_core.grow(-1), sector_min, 0, sectors)
 	# Пустые отсеки — у краёв чаще, но не больше пятой части: на карте из шести отсеков,
 	# где все у края, прежний бросок «каждому по 20%» оставлял от станции скелет коридоров.
-	var empty_left := sectors.size() / 5
+	#
+	# И не больше EMPTY_SECTORS_MAX штук на карту (item 3): доля от числа отсеков хороша на
+	# маленькой станции, а на большой отсеков под сотню — и дырок выходило два десятка
+	# («on larger maps there's just too many of them»). Станция от размера дырявее не станет.
+	var empty_left := mini(EMPTY_SECTORS_MAX, sectors.size() / 5)
 	# Скруглённый силуэт (0.9.4): отсек, вылезающий за обвод станции, отдаётся пустоте —
 	# углы срезаются, и прямоугольник во всю карту превращается в сглаженную по углам
 	# фигуру. Отсеков должно быть на это достаточно: на карте из трёх-четырёх срезать углы
@@ -707,6 +711,7 @@ func _station() -> void:
 			empty_left -= 1
 			continue
 		kept.append(s)
+	_prune_orphan_halls(kept)
 	var depts := _assign_departments(kept)
 	for k in kept.size():
 		_department(kept[k], depts[k])
@@ -1273,15 +1278,50 @@ func _maintenance_mouths() -> void:
 				continue
 			for d: Vector2i in N4:
 				var k := _kind(x + d.x, y + d.y)
-				if k == K_HALL or k == K_DHALL:
-					mouths.append(Vector2i(x, y))
-					break
+				if k != K_HALL and k != K_DHALL:
+					continue
+				# Устье — это ПРОХОД: за ним туннель должен продолжаться. Тупиковая клетка
+				# у обшивки (её оставил после себя срез бесхозных проходов, item 2) шлюза не
+				# получает — иначе створка открывалась бы в глухую стену.
+				var back := _kind(x - d.x, y - d.y)
+				if back != K_MAINT and back != K_ROOM and back != K_DOOR:
+					continue
+				mouths.append(Vector2i(x, y))
+				break
 	for c in mouths:
 		_kset(c, K_DOOR)
 		_forced_doors[c] = true
 		# В устье теперь дверь, а не настил: решётка — примета САМОГО туннеля (0.9.3), и под
 		# створкой шлюза ей делать нечего.
 		_hall_look[c.y * w + c.x] = 0
+
+## Проходы, которым некого обслуживать (item 2, item 3). Коридоры и техтуннели режут
+## станцию ЦЕЛИКОМ и до того, как часть отсеков отдаётся пустоте: проход через выброшенный
+## отсек оставался висеть и уходил из станции прямо в космос ниткой в клетку шириной.
+## Оставляем клетку прохода, если рядом ОСТАВЛЕННЫЙ отсек (grow(3): проход идёт по его
+## кайме) или если она упирается в комнату, дверь или переход к пристройке. Остальное —
+## обратно в пустоту; связность потом восстановит _join_pockets.
+func _prune_orphan_halls(kept: Array[Rect2i]) -> void:
+	var near_kept := _bytes()
+	for s: Rect2i in kept:
+		var g := s.grow(3)
+		for y in range(maxi(0, g.position.y), mini(h, g.end.y)):
+			for x in range(maxi(0, g.position.x), mini(w, g.end.x)):
+				near_kept[y * w + x] = 1
+	for y in h:
+		for x in w:
+			var k := _k[y * w + x]
+			if (k != K_HALL and k != K_MAINT) or near_kept[y * w + x] != 0:
+				continue
+			var serves := false
+			for d: Vector2i in DIRS8:
+				var nk := _kind(x + d.x, y + d.y)
+				if nk == K_ROOM or nk == K_DOOR or nk == K_DHALL:
+					serves = true
+					break
+			if not serves:
+				_k[y * w + x] = K_VOID
+				_hall_look[y * w + x] = 0
 
 ## Технические комнаты (0.9.2): пара задних комнат, упёршихся в техтуннель, отходит под
 ## техслужбы — дверь у них только в туннель. Первая — переработка отходов (обязательна на
@@ -1377,11 +1417,18 @@ func _maint_wall(r: Rect2i) -> Vector2i:
 func _maintenance_exits() -> void:
 	var dirs := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 	var used: Array[Vector2i] = []
+	# Наружу служебная сеть выходит РЕДКО (item 2): «tech tunnels … should branch out into
+	# space very rarely». Чаще всего станция обходится без мостков вовсе, изредка выход
+	# один, совсем редко — два.
+	var roll := _rng.randf()
+	var limit := 0 if roll < SOLAR_EXIT_NONE else (1 if roll < SOLAR_EXIT_ONE else SOLAR_EXITS_MAX)
+	if limit == 0:
+		return
 	for y in h:
 		for x in w:
 			if _k[y * w + x] != K_MAINT or not _in_f(Vector2i(x, y)):
 				continue
-			if used.size() >= SOLAR_EXITS_MAX:
+			if used.size() >= limit:
 				return
 			for d: Vector2i in dirs:
 				var wall := Vector2i(x, y) + d
@@ -1404,15 +1451,19 @@ func _maintenance_exits() -> void:
 				used.append(wall)
 				_space_doors.append(wall)
 				var side := Vector2i(d.y, d.x)
-				# Мостки — три клетки от обшивки, панели — по одной с каждой стороны у двух
-				# дальних клеток: четыре панели на выход вместо прежних двенадцати
-				# («solar panels should spawn in smaller numbers»).
-				for k in range(1, 4):
+				# Мостки — своей длины у каждого выхода, панели по обе стороны — своего
+				# размера (item 4: «make solar panels vary in size»). Панель шириной pw
+				# вдоль мостка и глубиной pd от него: от одинокой клетки до площадки 3×2.
+				var span := _rng.randi_range(SOLAR_WALK_MIN, SOLAR_WALK_MAX)
+				for k in range(1, span + 1):
 					_grill.append(wall + d * k)            # мостки от самой обшивки
-					if k == 1:
-						continue
-					for t: int in [-1, 1]:
-						_solar.append(wall + d * k + side * t)
+				for t: int in [-1, 1]:
+					var pw := _rng.randi_range(1, mini(SOLAR_PANEL_MAX, span - 1))
+					var pd := _rng.randi_range(1, SOLAR_PANEL_DEPTH)
+					var at := _rng.randi_range(2, maxi(2, span - pw + 1))
+					for a in pw:
+						for b in range(1, pd + 1):
+							_solar.append(wall + d * (at + a) + side * (t * b))
 				break
 ## Пустота за клеткой обшивки тянется НАРУЖУ до края игровой карты (0.9.4): по этому луч
 ## и отличает настоящий борт станции от пустого отсека внутри неё.
@@ -1439,9 +1490,18 @@ const MAINT_GRATE_CHANCE := 0.35
 ## Мельче этого кусок станции техтуннелем не делится (0.9.4).
 const MAINT_SPLIT_MIN := 9
 ## Сколько самое большее выходов техтуннелей наружу с панелями бывает на станции (0.9.4) и
-## как далеко они стоят друг от друга.
-const SOLAR_EXITS_MAX := 3
+## как далеко они стоят друг от друга. Сам выход — редкость (item 2): доли броска ниже.
+const SOLAR_EXITS_MAX := 2
 const SOLAR_EXIT_GAP := 10.0
+const SOLAR_EXIT_NONE := 0.62   # станция вообще без мостков
+const SOLAR_EXIT_ONE := 0.94    # ниже этого — один выход, выше — SOLAR_EXITS_MAX
+## Мостки и панели на них разного размера (item 4): длина мостка и предельная площадка.
+const SOLAR_WALK_MIN := 3
+const SOLAR_WALK_MAX := 6
+const SOLAR_PANEL_MAX := 3
+const SOLAR_PANEL_DEPTH := 2
+## Самое большее пустых отсеков на станцию (item 3) — сколько бы их ни было всего.
+const EMPTY_SECTORS_MAX := 3
 
 func _split_sectors(r: Rect2i, mn: int, depth: int, out: Array[Rect2i]) -> void:
 	var tech := depth >= 2
@@ -1773,7 +1833,11 @@ func _house(lot: Rect2i, district: String = "residential") -> void:
 	# town maps»). Это ЧИСТЫЙ ВИД: правила у всех одни (MCF.WALL_LOOKS). Промзона кладётся из
 	# блоков, деловой центр — штукатурка и кирпич, жильё — кирпич.
 	var mat := -1
-	if wall == MCF.FEATURE_WALL:
+	if wall == MCF.FEATURE_WALL and _style == Style.ASTEROID:
+		# Постройки на астероиде — из обшивки станции (item 11): кирпичный квартал посреди
+		# вакуума читался как кусок города, случайно оказавшийся в космосе.
+		mat = MCF.WALL_LOOK_STATION
+	elif wall == MCF.FEATURE_WALL:
 		var mat_roll := _rng.randf()
 		match district:
 			"industrial":
@@ -1796,6 +1860,8 @@ func _house(lot: Rect2i, district: String = "residential") -> void:
 			else:
 				_ground(c, floor_type)
 				_indoor[y * w + x] = 1
+				if _style == Style.ASTEROID:
+					m.set_look(y * w + x, MCF.Look.PLATE)   # пол модуля — палуба, а не паркет
 	for i in (2 if house.get_area() >= 64 else 1):
 		_front_door(house, floor_type)
 	# Окна — стекло в стене, но не в углу и не у двери. Лавки и конторы — витринами,

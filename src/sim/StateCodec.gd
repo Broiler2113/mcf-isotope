@@ -54,6 +54,7 @@ static func encode(state: GameState) -> Dictionary:
 		"env": state.env,
 		"fx_seq": state.fx_seq,
 		"kills": state.kills.duplicate(true),
+		"deaths": state.deaths.duplicate(true),
 		"decor": _encode_decor(state.grid),
 	}
 
@@ -245,6 +246,7 @@ static func restore_into(gs: GameState, d: Dictionary) -> void:
 		"next_vehicle_id": int(d.get("next_vehicle_id", Vehicle.ID_BASE)),
 		"combat_started": bool(d.get("combat_started", false)),
 		"kills": _decode_kills(d.get("kills", {})),
+		"deaths": _decode_deaths(d.get("deaths", {})),
 	}
 	# roster и revealed_mines в снимок НЕ кладём намеренно: restore() умеет только
 	# их изменяемую часть (кто выбит), а из файла приходит весь состав целиком.
@@ -270,6 +272,14 @@ static func _decode_kills(raw: Variant) -> Dictionary:
 			var v: Variant = raw[k]
 			if v is Array and (v as Array).size() >= 2:
 				out[int(k)] = [int(v[0]), int(v[1])]
+	return out
+
+## Ключи JSON — строки, числа — дробные: обратно в {владелец: павших}.
+static func _decode_deaths(raw: Variant) -> Dictionary:
+	var out := {}
+	if raw is Dictionary:
+		for k in raw:
+			out[int(k)] = int(raw[k])
 	return out
 
 static func _decode_unit(raw: Dictionary) -> Dictionary:

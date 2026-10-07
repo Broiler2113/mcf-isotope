@@ -41,6 +41,11 @@ var fx_seq: int = 0
 ## раздавлено]. В подпись доски не входит — на правила не влияет; в снимок отката входит,
 ## чтобы отменённый наезд вернул и счёт.
 var kills: Dictionary = {}
+## Павшие по сторонам (item 1): владелец -> сколько его бойцов погибло за партию.
+## Считать трупы на доске нельзя: тело уходит из партии, когда его подняли щитом,
+## сложили в кучу или задвинули под кресло (remove_unit) — и счёт «мёртвых» полз
+## обратно. Ледж растёт только вперёд; откат возвращает его вместе с доской.
+var deaths: Dictionary = {}
 ## Окружение карты (item 24) — вид плиток пола и стен; правил не касается.
 var env: String = "town"
 
@@ -225,11 +230,13 @@ func snapshot(with_cells: bool = true) -> Dictionary:
 		"next_id": _next_id, "next_vehicle_id": _next_vehicle_id,
 		"combat_started": combat_started,
 		"kills": kills.duplicate(true),
+		"deaths": deaths.duplicate(true),
 	}
 
 ## Откатить состояние к ранее взятому снимку (см. snapshot()).
 func restore(snap: Dictionary) -> void:
 	kills = (snap.get("kills", {}) as Dictionary).duplicate(true)
+	deaths = (snap.get("deaths", {}) as Dictionary).duplicate(true)
 	units.clear()
 	_units_dirty = true
 	for rec: Dictionary in snap["units"]:

@@ -27,6 +27,8 @@ const SUPPORTED_IMG := ["png", "jpg", "jpeg", "webp", "bmp", "tga", "svg"]
 
 const USER_DIR := "user://textures"
 const RES_DIR := "res://textures"
+## Насколько глубоко обходятся подпапки с картинками (раздел → объект → файл).
+const SCAN_DEPTH_MAX := 3
 const MANIFEST_FILE := "user://textures/TEXTURE_NAMES.txt"
 const RES_MANIFEST_FILE := "res://textures/all_textures.txt"
 
@@ -129,14 +131,26 @@ static func ensure_overrides() -> void:
 	if not _overrides_loaded:
 		reload_overrides()
 
-static func _scan_override_dir(dir_path: String) -> void:
-	var from_user := dir_path == USER_DIR
+## Папка с картинками — С ПОДПАПКАМИ (item 5). Поставочные текстуры разложены по разделам
+## и по объекту (textures/walls/wall_station/…), и тот же порядок можно завести у себя;
+## имя файла при этом остаётся ключом, так что картинка, брошенная прямо в user://textures,
+## работает ровно как раньше. Образцы разметки (sample.png) в игру не идут — это пояснение
+## для художника, а не плитка.
+static func _scan_override_dir(dir_path: String, depth: int = 0) -> void:
+	var from_user := dir_path.begins_with(USER_DIR)
 	var d := DirAccess.open(dir_path)
 	if d == null:
 		return
 	d.list_dir_begin()
 	var fname := d.get_next()
 	while fname != "":
+		if d.current_is_dir() and not fname.begins_with(".") and depth < SCAN_DEPTH_MAX:
+			_scan_override_dir(dir_path + "/" + fname, depth + 1)
+			fname = d.get_next()
+			continue
+		if fname.get_basename().to_lower() == "sample":
+			fname = d.get_next()
+			continue
 		# В СОБРАННОЙ игре картинка из res:// лежит уже импортированной, а рядом с ней
 		# указатель «имя.png.remap». Снимаем суффикс — дальше всё как с обычным файлом
 		# (загрузку разводит _load_texture_at). Без этого поставочные текстуры (танк,
@@ -356,6 +370,23 @@ static func _manifest_text() -> String:
 		"Two folders are scanned: res://textures (shipped) and user://textures (yours).",
 		"Yours wins. Changes are picked up when a battle or the map editor opens.",
 		"",
+		"== Folders ==",
+		"SUBFOLDERS ARE SCANNED TOO, and only the FILE NAME matters -- never the folder.",
+		"The shipped art is sorted one folder per object, inside a section:",
+		"",
+		"  textures/walls/wall_station/wall_station.png            the tile itself",
+		"  textures/walls/wall_station/wall_station_autotile.png   its 16-tile sheet",
+		"  textures/walls/wall_station/sample.png                  the marked-up template",
+		"",
+		"Sections: floors, walls, doors, features, furniture, decals.",
+		"Sort yours the same way or drop files straight into user://textures -- both work.",
+		"",
+		"== sample.png ==",
+		"Every object folder carries one: its own art with every tile boxed in magenta, and,",
+		"for a 16-tile sheet, white bars on the sides where that tile has a neighbour.",
+		"Open it, paint over the art, save the result under the object\'s name, done.",
+		"Samples are never loaded into the game -- a file called sample is skipped.",
+		"",
 	]
 	for group in MANIFEST:
 		lines.append("-- %s --" % group[0])
@@ -389,7 +420,9 @@ static func _manifest_text() -> String:
 		"== Autotiling walls ==",
 		"Any terrain feature may ship as a 4x4 tile sheet named <feature>_autotile.png",
 		"(wall_autotile.png, glass_autotile.png, wood_wall_autotile.png, ...).",
-		"Several sheets may be stacked top to bottom as variants (256x1536 = 6 variants).",
+		"A sheet is 16 tiles and nothing more (128x128 for 32px tiles) -- that is the whole",
+		"format. More 4x4 sheets MAY be stacked below it as variants if you want the surface",
+		"to vary, but one is enough and that is what the game ships.",
 		"The game looks at the four orthogonal neighbours of the same FAMILY (walls, glass,",
 		"airlocks, bunkers and corpse walls join each other; sandbag pieces join each other)",
 		"and picks tile index = N*1 + E*2 + S*4 + W*8; column = index % 4, row = index / 4:",
@@ -412,9 +445,8 @@ static func _manifest_text() -> String:
 		"properly for each direction instead of being rotated by the game.",
 		"A plain <name>.png or <name>_autotile.png still wins over the atlas; the atlas",
 		"fills in whatever has no file of its own, and empty cells in it stay empty.",
-		"Ready-to-repaint atlases for every shipped object:",
-		"  godot --headless --script res://tools/gen_textures.gd -- --templates",
-		"They land in res://textures/templates/ (source material; the game never reads it).",
+		"Each shipped object already carries its own sample.png; an atlas is only for",
+		"replacing autotile and facings with a single file of your own.",
 		"",
 		"== Preparing a graphical update ==",
 		"1. Author every sprite as a square PNG with transparency (64x64 or 128x128).",

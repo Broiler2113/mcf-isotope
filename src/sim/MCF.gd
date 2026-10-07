@@ -380,8 +380,11 @@ const FLOOR_OVERLAY_LOOKS := {Look.GRILL: true}
 ## Так стене не нужен второй массив на всю карту, и снесённая стена не оставляет под собой
 ## «кирпичный пол». Новые материалы дописываются только в КОНЕЦ — номер лежит в карте.
 const WALL_LOOK_BASE := 32
-const WALL_LOOKS := ["wall_brick", "wall_stucco", "wall_block"]
-const WALL_LOOK_NAMES := ["Brick wall", "Stucco wall", "Cinder block wall"]
+const WALL_LOOKS := ["wall_brick", "wall_stucco", "wall_block", "wall_station"]
+const WALL_LOOK_NAMES := ["Brick wall", "Stucco wall", "Cinder block wall", "Station wall"]
+## Обшивка станции как материал стены (item 11): ею кладутся постройки на астероиде —
+## посреди вакуума жилой модуль делают из того же, из чего станцию, а не из кирпича.
+const WALL_LOOK_STATION := 3
 
 ## Имя плитки материала стены по виду клетки; "" — обычная стена окружения.
 static func wall_look_tile(look: int) -> String:

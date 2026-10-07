@@ -10,6 +10,9 @@ older draft of this document. Section markers like *(§3.x)* refer to the origin
 rulebook paragraphs a mechanic derives from; markers like *(#42)* refer to numbered
 development tasks (see §26).
 
+For the game **as a game** — premise, flow, and the rules a player needs, without
+implementation detail or development history — see **`CONCEPT.md`**.
+
 ---
 
 ## 1. Architecture & Guiding Principles
@@ -1392,6 +1395,19 @@ untouched.
 | Gas Cloud | `gas` | A static zone stands for 3 rounds, chokes units inside it and blocks sight and fire |
 | Independent Army | `army` | Raiders land on a map edge, hostile to everyone, outside the win condition |
 
+**Where an event lands (0.9.4, issues-fix-10).** Zones are rolled inside `_useful_rect()` —
+the bounding box of every walkable, non-space cell — instead of inside the whole board. On a
+station the board's edge is vacuum and a zone rolled there poisoned nothing; the rectangle now
+always overlaps the inhabited plot. The barrage additionally **aims**: one d6 out of the shared
+stream, and on `BARRAGE_SEEK_ON` (4 of 6) the zone is centred on `_densest_spot()`, the soldier
+with the most other soldiers inside a zone-sized window, whoever owns them; the other third
+still falls at random so a barrage stays weather rather than a sniper.
+
+**Raiders land where there is ground to land on.** `_army_spawn_cells` walks inward from the
+chosen edge across the **whole map depth** (it used to stop after the segment's own length) and
+breaks once it has `ARMY_UNIT_CAP` cells. On a station, where the first twenty cells off the
+edge are vacuum, the old search found nothing and the event always logged "nowhere to land".
+
 **Telegraph, then land.** `_maybe_random_event` runs at the end of every handoff, exactly
 as before, but it no longer resolves anything: it rolls the event's **parameters** at once,
 puts `{id, params, announced, land = announced + 1}` on `RandomEvents.pending` and logs
@@ -2261,6 +2277,16 @@ instead of appearing at its destination.
 A movable, resizable side panel (`HUD_START_SIZE = (330, 430)`) with a universal base
 action menu shared by all units.
 
+**Live and dead, counted straight (0.9.4, issues-fix-10).** The turn line and the initiative
+window read one source, `_army_counts()`, and it counts **living soldiers from the board and
+casualties from `GameState.deaths`** — a per-owner ledger incremented in `_kill` and carried
+through `snapshot`/`restore` and `StateCodec`. Corpses could not be the source: a body leaves
+the match the moment somebody picks it up as a shield, stacks it into a pile or shoves it under
+a seat (`remove_unit`), so the "dead" column used to walk backwards while the player watched.
+A **held** unit is counted alive — it is a prisoner, not a casualty — and a **drone** counts in
+neither column: it is station hardware. Each slot also carries its **vehicles**: alive and
+wrecked, from `GameState.all_vehicles()`.
+
 **Save Game is a button again (batch 13 #3).** It sits beside *Return to Menu* in the side
 panel (Ctrl+S still works) and is hidden while watching a replay. **The pause button just
 says Pause / Resume (batch 13 #10)** — the "(AI vs AI)" suffix is gone; the button still
@@ -2613,15 +2639,36 @@ in towns, brick on regolith on asteroids, board-formed concrete and dirt in the 
   panels** down both sides (0.9.3; both are floor looks on space cells, and the walkway
   starts at the hull so the array always hangs off the station rather than floating).
   The hidden storage never gets a window or an exterior airlock cut into it — its one door
-  is still the captain's. Up to a fifth
-  of the sectors — edge ones more often — are left empty: open space the corridors pass
-  as windowed tubes. With Space on, about one room in 40 is vented (zero-G), and the hull
+  is still the captain's.
+
+  **Empty sectors are capped (0.9.4, issues-fix-10).** Up to a fifth of the sectors —
+  edge ones more often — are left empty, but never more than `EMPTY_SECTORS_MAX` (3) on a
+  map: a share works on a station of six sectors and riddles one of eighty, which is what
+  the owner saw as "a lot of weird hollow spaces … on larger maps there's just too many".
+
+  **And the corridors that served them are cut back.** Sectors are carved by corridors
+  *before* any of them is given up, so a proposed corridor kept running through a sector
+  that was then dropped — on screen, a one-cell thread leaving the station and crossing
+  open space to the edge of the map. `_prune_orphan_halls` (run right after the sectors are
+  chosen, before departments are laid out) returns every `K_HALL`/`K_MAINT` cell to the void
+  unless it lies within 3 of a **kept** sector or touches a room, a door or an annex link;
+  `_join_pockets` reconnects whatever that isolates. Tech tunnels therefore stay inside the
+  station, which is what the owner asked for.
+
+  **A walkway into space is rare.** `_maintenance_exits` rolls once: most stations get
+  none, about a third get one, and one in sixteen gets `SOLAR_EXITS_MAX` (2) — "tech
+  tunnels … should branch out into space very rarely". The walkway itself is 3–6 cells
+  long and the panels on either side are rolled per exit, from a single cell up to a 3×2
+  array, so no two arrays look alike (item 4). With Space on, about one room in 40 is vented (zero-G), and the hull
   gets windows and a few exterior airlocks. Obstacles: pillars in big halls, stacks of
   crates (wooden 2 m crates on plank decks), sandbags in main corridors.
 - *Asteroid* (team-session batch) — a little island in space with a town on it: a
   ragged ellipse of rock and regolith, a town of the chosen *Density* built inside it,
   craters of dirt piles, and vacuum all around (Space on, Flammable off by default).
-  Doors whose far side ends up in rock are sealed into walls.
+  Doors whose far side ends up in rock are sealed into walls. Its buildings are **plated
+  like a station** (0.9.4, issues-fix-10): every wall takes the `wall_station` material
+  (`MCF.WALL_LOOK_STATION`) and the floors inside are deck plate, instead of the brick and
+  stucco of a town — a brick terrace in hard vacuum read as a town that had got lost.
 - *Bunker* — the same station from the same seed, dug underground: everything outside
   the rooms and hallways is solid rock, never vacuum (no vented room, no hull), so the
   Space toggle does nothing here. With Space off, a bunker and a station of the same seed
@@ -2795,7 +2842,33 @@ maps.
   at the old sizes has the old x-height; spaces are 2 px wider. The bold Courier that status
   lines and value boxes used is gone: they are bold Handjet in the accent colour
   (`Ui.bold_font`). A `ui_font.ttf` dropped by the player still overrides it.
-- **Space is empty (0.9.3).** A space cell draws **no tile at all** — `TerrainTiles` leaves
+- **Textures live in folders (0.9.4, issues-fix-10).** `res://textures` is sorted
+`<section>/<object>/<file>` — sections `floors`, `walls`, `doors`, `features`, `furniture`,
+`decals` — and `Sprites._scan_override_dir` recurses (depth ≤ `SCAN_DEPTH_MAX`). **Only the
+file name is the key**, never the folder, so a file dropped straight into `user://textures`
+works exactly as before and a player may sort their own art the same way or not at all.
+Two rules follow from the layout:
+
+- **An autotile sheet is 16 tiles and nothing else** — one 4×4 block (128×128 at 32 px).
+  Shipped sheets used to stack six variants, 96 tiles in one file, which is what the owner
+  meant by "a bizarre autotiling system with 80+ tiles". Variety now comes from the variant
+  strip of the plain tile. The loader still accepts stacked sheets, so an artist who wants
+  per-cell variation can add 4×4 blocks below.
+- **Every object folder carries a `sample.png`** — that object's own art with each tile boxed
+  in magenta and, on a sheet, white bars on the sides where that tile has a neighbour. It is
+  the template to paint over; the loader skips any file named `sample`. The old
+  `textures/templates/` atlas dump is gone with its `--templates` mode: the sample sits next
+  to the art it describes.
+
+**Ground past the edge of the board (0.9.4, issues-fix-10).** A map without any space cell
+gets `_build_ground()`: a wallpaper of `GROUND_TILES` × `GROUND_TILES` cells, floor variants
+picked per cell by the same position hash the board uses, with `GROUND_PATCH_CHANCE` of them
+laid from a second floor (soil through grass, dirt through pavement). It sits on a
+`CanvasLayer` under everything and is pinned to the **board**, not the window — origin, zoom
+and all — so the ten cells of border ground run on to the edges of the screen instead of
+ending in black. Station and asteroid maps keep the `Starfield` instead.
+
+**Space is empty (0.9.3).** A space cell draws **no tile at all** — `TerrainTiles` leaves
   it transparent — and behind the board sits the same `Starfield` parallax as the main menu,
   on a `CanvasLayer` under everything, following the camera: the far layer takes 5 % of the
   pan, the near one 26 %, and that difference is the depth. The far view does the same (its
@@ -3430,6 +3503,7 @@ glass are stamped into the terrain chunk once (`TerrainTiles._bake_decals`) inst
 redrawn every frame — at ~12k decals that was ~75 ms a frame and is now nothing. They follow
 the same fog rules as the terrain they sit on. Bloody footprints are gone with the rest of
 the per-step bookkeeping. **Service accents** (§20.2): on stations and in bunkers the walls and door frames of a service carry its colour — command blue, control/comms white, security red, medical green, science purple, engineering yellow, cargo orange, everything else grey; a room's own purpose beats its department (`MapGen.KIND_ACCENT`), the colour is a per-cell display-only byte (`MapData.wall_accent`, `MCF.Accent`) drawn as a line that runs along the wall and as a tinted door frame. **Corridors**: main ones are always 3 cells wide, maintenance tunnels 1 (2 about a quarter of the time), and grating is laid in roughly a third of the tunnels and in no room at all. **Grill walkway** (`MCF.Look.GRILL`): a floor look that is transparent between its bars and lies *over* a cell instead of replacing it; it runs from a hull airlock out into space with solar panels down both sides, and it is paintable in the editor. **Space draws no tile** — the `Starfield` parallax behind the board shows through it, following the camera (far layer 5 %, near 26 %); `floor_space.png` dropped by the player still wins. **Doors fill the whole cell** instead of a narrow panel in the middle of it. **Windows**: a symbol fallback font (✓ ✕ ▶ ⚠ are in neither Handjet nor Tahoma) and an explicit `stretch/aspect=expand` so a non-16:9 window is not letterboxed. Also: the hidden storage can no longer get an exterior airlock cut into it. **A border around every map** (§20.2): 10 cells in every direction that can be reached — diggable soil in a bunker, grass around a town or field, open space around a station or asteroid — and 2 more that cannot (`MCF.FEATURE_BOUNDARY`, in no destructible list, opaque to the laser), so the world keeps going past the battlefield but nothing walks off it. Lobby sizes now name the map, not the field. Also: `default_clear_color` was never applied — project.godot comments must start with `;`, and the `#` ones silently dropped the setting, so the window had been Godot grey instead of black all along. Tests: `tests/run_batch093.gd`. |
+| 126 | **Issues-fix-10** (0.9.4) — **The alive/dead tally stops walking backwards** (§18.6): casualties come from the new `GameState.deaths` ledger instead of from corpses on the board (a body leaves the match when it is carried, piled or seated), a held unit counts alive, a drone counts in neither column, and every slot also lists its vehicles, alive and wrecked. **Two crashes on the AI's turn** (§18): clicking End Turn between AI steps assigned an `AIController` to a `LocalHumanController` variable — `_submit` now casts and bails out when the turn is not a local human's; and leaving the match mid-animation left the coroutines calling `get_tree()` on a node already out of the tree — the event loop, the walk loops, `_await_walks` and the dice roller all check `is_inside_tree()`. **Maps** (§20.2): corridors left serving a dropped sector are cut back (`_prune_orphan_halls`), so tech tunnels no longer trail out of the station into space; empty sectors are capped at 3 per map; a walkway into space is rare (none, usually) and its solar array is rolled per exit from one cell up to 3×2; asteroid buildings are plated like a station. **Random events** (§14a): gas and barrage zones are rolled inside the walkable plot, the barrage aims at the densest knot of soldiers two times in three, and raiders search the whole map depth for a landing instead of the edge strip — on a station they used to find nothing and turn back every time. **Textures** (§21): `res://textures` is sorted `<section>/<object>/`, the loader recurses, an autotile sheet is a single 4×4 block instead of six stacked variants, and every object folder carries a marked-up `sample.png` (the `templates/` dump and its `--templates` mode are gone). **Ground past the board** (§21): a map without vacuum tiles its own floor behind the board, pinned to the grid, so the border ground runs to the edge of the screen. Also `CONCEPT.md`: the game described as a game, without implementation or history. Tests: `tests/run_batch094.gd`; the 0.9.3 corridor-width check now ignores dead-end stubs. |
 | 123 | **Furniture doesn't re-join in battle** (§9.9) — the battle screen snapshots each furniture cell's joins, inner corners and turn when the match opens (`TerrainTiles.freeze_furniture`, `Main._furniture_look`) and draws from the snapshot: smashed, burnt or flattened cells leave their neighbours as they were (half a bed stays half a bed), a blown wall doesn't turn the furniture beside it, and a piece dragged to a new cell joins nothing. Generator, editor and deployment screen still join live. Rules unchanged. Tests: frozen-look checks in `run_furniture.gd`. |
 | 122 | **Furniture and editor polish** (§9.9) — 8 new pieces (potted plant, TV stand, stove, piano, bunk bed, water cooler, washing machine, fuel tank) and colour variants (`Furniture.VARIANTS`) that keep the base piece's rules; random maps and street clutter pick a colour once per recipe step; different colours never join. Joined tiles have no seam between cells, and L-shaped pieces cut their inner corners. Editor: fixed the typed-array error that broke every tool but Brush and Eraser (R → Rectangle tool hit the same error, and the game paused in the debugger). The preview under the cursor is now drawn by `TerrainTiles` on a scratch grid (`TerrainTiles.scratch`, with `origin` for the variant hashes). That gives the brush, line, rectangle, fill, stamps and pastes exactly the tiles they will place: walls join their neighbours, doors turn with the wall, furniture joins and turns to the wall. Brush previews draw at 50 %, patterns at 75 %, and oversized pastes fall back to palette pictures. The palette has one button per piece, a *Colour* row under the brush name, and wrapped labels. The cell grid in the battle screen, deployment screen and editor is now drawn between the floor and the objects (`TerrainTiles.draw_grid`): it shows on floors and no longer cuts across walls or multi-cell furniture. A whole piece puts its headboard only on a short side and a sofa or desk back only on a long side; with no wall there, it takes the default turn instead of turning sideways to the wall. |
 | 121 | **Furniture** (§9.9, §20.2) — 41 pieces as ordinary cell features in `src/data/Furniture.gd`, multi-cell beds, tables, sofas, desks, machinery (whole pieces) and counters, shelving, lockers (runs) joined by autotiling: heights 0.5/1/1.5/2 m through `cover_height` (climbed by the usual costs, 2 m is a wall), a furniture-only −3 cover at 1.5 m, carrying portable pieces (`CarryIntent`, put down free via `UseItemIntent`), dragging heavy single-cell ones through Grab (nothing that is part of a multi-cell structure can be grabbed), any soldier smashing furniture for 1–3 AP via `BreakIntent`, blasts/laser/fire/tracks by durability and material; baked into the tile chunks turned to the wall, cracked when damaged; editor palette groups; `MapData.feature_dur` for damaged pieces. Random maps gain a FURNITURE phase (`MapFurnish`): room purposes per style, recipe placement, clutter, wear, walkways kept by construction; lobby *Furniture* (Off…Very dense, default Normal, independent of *Obstacles*; furnished station/bunker rooms skip the obstacle crate piles) and *wear*. Tests: `tests/run_furniture.gd`, editor checks in `run_editor.gd`; the perf bench pins furniture Off and now compares the full board after save/load and replay. |

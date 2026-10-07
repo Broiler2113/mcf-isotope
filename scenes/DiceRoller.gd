@@ -108,6 +108,9 @@ func play(dice: Array, manual: bool = false, prompt: String = "", speed: float =
 		return
 	var steps := maxi(1, int(round(SPIN_STEPS / rate)))
 	for spin in steps:
+		# Выход из партии посреди броска забирает узел вместе со сценой (item 10).
+		if not is_inside_tree():
+			return
 		var t := float(spin) / steps   # 0 → 1: кувырок затухает
 		for i in dies.size():
 			var dv := dies[i]
@@ -133,6 +136,8 @@ func play(dice: Array, manual: bool = false, prompt: String = "", speed: float =
 		dv.good = bool(dice[i]["good"])
 		dv.tag = str(dice[i]["tag"])
 		dv.queue_redraw()
+	if not is_inside_tree():
+		return
 	await get_tree().create_timer(LAND_PAUSE / rate).timeout
 	if my_gen != _generation:
 		finished.emit()
