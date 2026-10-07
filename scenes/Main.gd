@@ -928,7 +928,9 @@ func _replay_loop() -> void:
 			continue
 		await _show_result(replay.play_next())
 		_refresh_replay_bar()
-		if not _replay_playing:
+		# _show_result мог увести узел из дерева (выход из повтора) — тогда таймер ниже
+		# упал бы на get_tree() == null (item 10).
+		if not _replay_playing or not is_inside_tree():
 			break
 		await get_tree().create_timer(REPLAY_STEP_DELAY / _replay_speed).timeout
 	_replay_playing = false
@@ -2938,6 +2940,10 @@ func _on_intent_ready(intent: Intent) -> void:
 ## за считаные кадры, и вместо хода видно только мгновенный итог; с паузой бойцы
 ## заметно ходят ОДИН ЗА ДРУГИМ. Пауза же не даёт кадру «залипнуть» на расчётах.
 func _queue_ai_step(ctrl: PlayerController) -> void:
+	# Выход из партии во время хода ИИ (item 10): узел уже вне дерева, get_tree() вернул
+	# бы null прямо на этом create_timer. Планировать нечего — некому ходить.
+	if not is_inside_tree():
+		return
 	await get_tree().create_timer(AI_STEP_DELAY / GameConfig.ai_speed).timeout
 	# Пауза (item 4) держится здесь, в единственной точке, откуда ИИ вообще получает
 	# ход. Снятие паузы само зовёт _kick_if_ai(), и бой продолжается с того же места.
@@ -3750,6 +3756,11 @@ func _play_dice(events: Array) -> void:
 				await _await_walks()
 			continue
 		await _await_walks()
+		# Выход из партии во время ожидания перехода (item 10): узел ушёл из дерева, и
+		# любой get_tree() ниже (пауза точки AP, таймер стекла) упал бы на null.
+		if not is_inside_tree():
+			_animating = false
+			return
 		if ev.get("kind", "") == "ap":
 			_ap_display[int(ev["unit"])] = int(ev["left"])
 			queue_redraw()
@@ -3794,7 +3805,7 @@ func _play_dice(events: Array) -> void:
 			_hold_visual.get("cells", {}).erase(ev["cell"])
 			_fx.apply(ev["fx"])
 			queue_redraw()
-			if _pace() < 8.0 and not _fast_playback:
+			if _pace() < 8.0 and not _fast_playback and is_inside_tree():
 				await get_tree().create_timer(GLASS_BREAK_PAUSE / _pace()).timeout
 	await _await_walks()
 	_walk_cells.clear()
