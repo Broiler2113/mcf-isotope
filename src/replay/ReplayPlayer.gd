@@ -90,18 +90,20 @@ func _rebuild(frame: Dictionary) -> void:
 ## Ключевой кадр, не позже шага i. Кадр, привязанный к шагу s, снят ПОСЛЕ него,
 ## то есть описывает позицию s+1.
 func _frame_at_or_before(i: int) -> Dictionary:
-	var best := {"at": 0, "state": data.get("start", {}),
-			"rules": data.get("rules", {}), "open": data.get("opening", [])}
 	var list := steps()
-	for s in list.size():
-		if s + 1 > i:
-			break
+	# The nearest frame is the last one at or before the target. Search back from
+	# there: a late seek visits only the gap since that frame, rather than every
+	# earlier action. No index/cache is needed, so legacy and edited data still work.
+	var s := mini(i, list.size()) - 1
+	while s >= 0:
 		var step: Dictionary = list[s]
 		if step.has("k"):
 			var kf: Dictionary = step["k"]
-			best = {"at": s + 1, "state": kf.get("state", {}),
+			return {"at": s + 1, "state": kf.get("state", {}),
 					"rules": kf.get("rules", {}), "open": []}
-	return best
+		s -= 1
+	return {"at": 0, "state": data.get("start", {}),
+			"rules": data.get("rules", {}), "open": data.get("opening", [])}
 
 ## Подпись текущей позиции для полосы управления.
 func position_text() -> String:
