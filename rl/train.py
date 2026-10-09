@@ -26,6 +26,7 @@ import gc
 import json
 import os
 import random
+import secrets
 import shutil
 import signal
 import subprocess
@@ -135,6 +136,10 @@ DEFAULTS = dict(
     eval_nofog_games=0,
     eval_seed=900_000, eval_full_every=0,  # 0: full suite at every eval
     heldout_eval_maps=[], heldout_eval_games=0, heldout_round_cap=40,
+    discount_unit="decision", canvas_size=64, adaptive_curriculum=False,
+    demonstrations="", demonstration_coef=0.0, demonstration_batch=8,
+    promotion_every=0, promotion_games=80, promotion_seed=73000000,
+    promotion_maps=[], promotion_max_stall=0.05,
     preflight=True, pool_archive_size=3,
 )
 
@@ -166,7 +171,7 @@ def load_config(path: str | None) -> dict:
     # resolves it against the project root instead; the evaluations were correct by luck,
     # not by construction, and the same config would have failed the instant anything on
     # the Python side tried to open the file.
-    for key in ("maps", "eval_maps", "drill_eval_maps", "heldout_eval_maps"):
+    for key in ("maps", "eval_maps", "drill_eval_maps", "heldout_eval_maps", "promotion_maps"):
         if not cfg.get(key):
             continue
         # "gen:<style>:<size>:<units>:<tanks>" is a map the env builds per episode (MapGen);
@@ -192,6 +197,16 @@ def load_config(path: str | None) -> dict:
         raise ValueError("random_event_share must be in [0, 1] and random_event_interval positive")
     if not np.isfinite(cfg["hazard_coef"]) or cfg["hazard_coef"] < 0:
         raise ValueError("hazard_coef must be finite and nonnegative")
+    if int(cfg["promotion_every"]) < 0 or int(cfg["promotion_games"]) < 40 or int(cfg["promotion_games"]) % 2:
+        raise ValueError("promotion interval must be nonnegative; games must be even and at least 40")
+    if cfg["discount_unit"] not in ("decision", "round"):
+        raise ValueError("discount_unit must be decision or round")
+    if not 64 <= int(cfg["canvas_size"]) <= 256:
+        raise ValueError("canvas_size must be between 64 and 256")
+    if not 0 <= float(cfg["demonstration_coef"]) <= 1:
+        raise ValueError("demonstration_coef must be in [0, 1]")
+    if int(cfg["demonstration_batch"]) < 1:
+        raise ValueError("demonstration_batch must be positive")
     return with_defaults(cfg)
 
 
@@ -210,7 +225,7 @@ def preflight_config(cfg: dict, env: GodotEnv) -> list[dict]:
     Generated `any` maps exercise every style at the configured upper army size.
     This catches protocol, rules, canvas and feature incompatibilities in one place.
     """
-    maps = list(dict.fromkeys(m for key in ("maps", "eval_maps", "drill_eval_maps", "heldout_eval_maps")
+    maps = list(dict.fromkeys(m for key in ("maps", "eval_maps", "drill_eval_maps", "heldout_eval_maps", "promotion_maps")
                              for m in cfg.get(key, [])))
     cases = []
     for mp in maps:
@@ -229,7 +244,7 @@ def preflight_config(cfg: dict, env: GodotEnv) -> list[dict]:
         ec = EpisodeConfig(map_path=mp, seed=int(cfg["seed"]) * 1000, opponent=HARD,
                            max_actors=cfg["max_actors"], max_candidates=cfg["max_candidates"],
                            fog=FOGS[cfg["fog"]], round_cap=cfg["round_cap"],
-                           disembark=disembark_allowed(cfg, mp))
+                           disembark=disembark_allowed(cfg, mp), canvas_size=int(cfg["canvas_size"]))
         r = env.reset(ec)
         if r.get("done") or not r.get("legal"):
             raise ValueError(f"preflight: {mp} has no playable opening")
@@ -308,6 +323,8 @@ class Step:
     value: float
     reward: float = 0.0
     done: bool = False
+    discount: float | None = None
+    trace_discount: float | None = None
 
     @property
     def nbytes(self) -> int:
@@ -338,8 +355,10 @@ def collate(steps: list[Step], device):
             torch.from_numpy(mask).to(device))
 
 
-def encode(resp: dict, canvas: int = CANVAS) -> tuple[Sparse, np.ndarray, Sparse, np.ndarray]:
+def encode(resp: dict, canvas: int | None = None) -> tuple[Sparse, np.ndarray, Sparse, np.ndarray]:
     obs = resp["obs"]
+    if canvas is None:
+        canvas = max(CANVAS, ((max(obs["w"], obs["h"]) + 15) // 16) * 16)
     g = Sparse(grid_tensor(obs, canvas))
     f = flat_vector(obs)
     c, cells = candidate_rows(obs, resp["legal"], canvas)
@@ -347,10 +366,28 @@ def encode(resp: dict, canvas: int = CANVAS) -> tuple[Sparse, np.ndarray, Sparse
 
 
 def choose(net: PolicyNet, encoded: list, device, greedy=False):
-    steps = [Step(g, f, c, cl, 0, 0.0, 0.0) for g, f, c, cl in encoded]
-    batch = collate(steps, device)
-    a, lp, v = net.act(*batch, greedy=greedy)
-    return a.cpu().numpy(), lp.cpu().numpy(), v.cpu().numpy()
+    # Padding a small board to another board's size changes adaptive pooling and
+    # its policy. Bucket by canvas so batched decisions match single-state serving.
+    groups = defaultdict(list)
+    for i, enc in enumerate(encoded):
+        groups[enc[0].shape].append(i)
+    actions = np.empty(len(encoded), dtype=np.int64)
+    logps, values = np.empty(len(encoded)), np.empty(len(encoded))
+    for indices in groups.values():
+        steps = [Step(*encoded[i], 0, 0.0, 0.0) for i in indices]
+        a, lp, v = net.act(*collate(steps, device), greedy=greedy)
+        actions[indices], logps[indices], values[indices] = a.cpu().numpy(), lp.cpu().numpy(), v.cpu().numpy()
+    return actions, logps, values
+
+
+def canvas_batches(steps, batch_size):
+    groups = defaultdict(list)
+    for i in np.random.permutation(len(steps)):
+        groups[steps[i].grid.shape].append(i)
+    batches = [np.asarray(v[k:k + batch_size]) for v in groups.values()
+               for k in range(0, len(v), batch_size)]
+    np.random.shuffle(batches)
+    return batches
 
 
 # --- trainer ---------------------------------------------------------------------------
@@ -415,6 +452,8 @@ class Trainer:
         self._last_status = 0.0
         self.last_eval: dict = {}
         self.champion_score = (-1.0, -1e30)
+        self.promotion_attempts = 0
+        self.curriculum_scores = {}
         # Live, shrinkable copy of the configured cap, plus the memory the process costs
         # with no rollout held (measured after each update drops the buffer).
         self.rollout_budget_mb = float(self.cfg["rollout_budget_mb"]) or float("inf")
@@ -423,6 +462,10 @@ class Trainer:
         self._resource_check_at = 0.0
         self._resource_restart = False
         self.resource_cleanup = {}
+        from demonstrations import ReplayDataset
+        demo_root = self.cfg["demonstrations"]
+        self.demonstrations = ReplayDataset(os.path.join(PROJECT, demo_root), seed=self.cfg["seed"]) if demo_root else None
+        self.demo_holdout = ReplayDataset(os.path.join(PROJECT, demo_root), "holdout", self.cfg["seed"] + 1) if demo_root else None
 
     def has_eval_history(self) -> bool:
         p = os.path.join(self.run_dir, "eval_log.jsonl")
@@ -448,6 +491,7 @@ class Trainer:
                     parent=self.parent, rng=self.rng.getstate(),
                     episode_seed=self.episode_seed, branch=os.path.basename(self.run_dir),
                     pfsp=self.pfsp, champion_score=self.champion_score, saved_at=time.time(),
+                    promotion_attempts=self.promotion_attempts, curriculum_scores=self.curriculum_scores,
                     torch_rng=torch.get_rng_state(), numpy_rng=np.random.get_state())
         if self.device == "mps":
             state["mps_rng"] = torch.mps.get_rng_state()
@@ -644,12 +688,19 @@ class Trainer:
         self.rng.setstate(ck["rng"])
         self.episode_seed = ck.get("episode_seed", self.episode_seed)
         self.pfsp = dict(ck.get("pfsp") or {})
+        self.promotion_attempts = int(ck.get("promotion_attempts", 0))
+        self.curriculum_scores = dict(ck.get("curriculum_scores", {}))
         self.champion_score = tuple(ck.get("champion_score", (-1.0, -1e30)))
         if keep_cfg and any(self.cfg.get(k) != ck["cfg"].get(k) for k in
                             ("eval_maps", "eval_seed", "eval_games", "fog", "round_cap")):
             self.champion_score = (-1.0, -1e30)
         for g in self.opt.param_groups:
             g["lr"] = self.cfg["lr"]
+        if keep_cfg and (self.cfg["discount_unit"] != ck["cfg"].get("discount_unit", "decision")
+                         or self.cfg["gamma"] != ck["cfg"].get("gamma", .99)):
+            self.net.value.apply(lambda module: module.reset_parameters() if isinstance(module, torch.nn.Linear) else None)
+            self.opt = torch.optim.Adam(self.net.parameters(), lr=self.cfg["lr"], eps=1e-5)
+            print("[train] new return horizon: preserved policy; reset value head and optimizer", flush=True)
         self.sync_act_net()
         if "torch_rng" in ck:
             torch.set_rng_state(ck["torch_rng"].cpu())
@@ -672,7 +723,9 @@ class Trainer:
         archive = ([older[i] for i in np.linspace(0, len(older) - 1,
                     min(count, len(older)), dtype=int)] if older and count else [])
         champions = sorted(glob.glob(os.path.join(self.run_dir, "champion_*.pt")))[-1:]
-        return list(dict.fromkeys(recent + archive + champions))
+        best = os.path.join(self.run_dir, "best.pt")
+        seeds = sorted(glob.glob(os.path.join(self.run_dir, "seed_*.pt")))
+        return list(dict.fromkeys(recent + archive + champions + seeds + ([best] if os.path.exists(best) else [])))
 
     def pool_net(self, path: str) -> PolicyNet:
         if path == "self" and path not in self.pool_cache:
@@ -737,7 +790,15 @@ class Trainer:
         """Weighted draw when map_weights is set, else the fixed rotation (8.2.2)."""
         maps = self.cfg["maps"]
         if self.cfg.get("map_weights"):
-            return self.rng.choices(range(len(maps)), weights=self.cfg["map_weights"])[0]
+            weights = list(self.cfg["map_weights"])
+            if self.cfg["adaptive_curriculum"]:
+                # Learn difficulty only from TRAINING games vs HARD. Held-out maps
+                # and promotion seeds never become practice examples.
+                for i, mp in enumerate(maps):
+                    if map_name(mp) in self.curriculum_scores:
+                        score = self.curriculum_scores[map_name(mp)]
+                        weights[i] *= .5 + 2 * (1 - score)
+            return self.rng.choices(range(len(maps)), weights=weights)[0]
         return (self.matches_done // self.cfg["map_rotate_matches"]) % len(maps)
 
     def _save_rollout_replay(self, env, result: str, info: dict) -> None:
@@ -772,7 +833,7 @@ class Trainer:
                                    result=result, by=info.get("by", ""),
                                    value_diff=info.get("value_diff"),
                                    rounds=info.get("round"), steps=info.get("steps"),
-                                   illegal=info.get("illegal"),
+                                   illegal=info.get("illegal", 0), fog=env.cfg.fog,
                                    fire_losses=info.get("fire_losses"),
                                    map=env.cfg.map_path,
                                    side=env.cfg.side, seed=env.cfg.seed,
@@ -820,7 +881,8 @@ class Trainer:
             max_candidates=self.cfg["max_candidates"], max_actors=self.cfg["max_actors"],
             opponent_style=style, shaping_scale=self.shaping_scale(),
             potential_coef=float(self.cfg["potential_coef"]), army=army,
-            gamma=float(self.cfg["gamma"]),
+            gamma=float(self.cfg["gamma"]), discount_unit=self.cfg["discount_unit"],
+            canvas_size=int(self.cfg["canvas_size"]),
         )
         return cfg, label
 
@@ -988,6 +1050,10 @@ class Trainer:
                 # used to be credited to the trainee's NEXT decision instead.
                 if buf and not buf[-1].done:
                     buf[-1].reward += r["reward"]
+                    if cfg["discount_unit"] == "round":
+                        elapsed = int(r["info"].get("discount_steps", 0))
+                        buf[-1].discount = (1.0 if buf[-1].discount is None else buf[-1].discount) * cfg["gamma"] ** elapsed
+                        buf[-1].trace_discount = (1.0 if buf[-1].trace_discount is None else buf[-1].trace_discount) * (cfg["gamma"] * cfg["lam"]) ** elapsed
                 if r["done"]:
                     if buf:
                         buf[-1].done = True
@@ -1009,6 +1075,11 @@ class Trainer:
                     stats["aim"].append((map_name(env.cfg.map_path),
                                          info.get("shots", 0), info.get("shots_hit", 0)))
                     illegal += info["illegal"]
+                    if env.label.startswith("ai:"):
+                        name = map_name(env.cfg.map_path)
+                        score = 1.0 if res == "win" else 0.0 if res == "loss" else .5
+                        prev = self.curriculum_scores.get(name, .5)
+                        self.curriculum_scores[name] = .9 * prev + .1 * score
                     self.matches_done += 1
                     # Save BEFORE any reset: the recording lives in the env and a reset
                     # discards it.
@@ -1022,6 +1093,20 @@ class Trainer:
                     offered=offered, accepted=accepted, timings=dict(timings),
                     illegal=illegal, seconds=dt, steps=taken)
         return buffers, info
+
+    @staticmethod
+    def advantages(buf, bootstrap, gamma, lam):
+        adv = np.zeros(len(buf), dtype=np.float32)
+        gae, next_v = 0.0, bootstrap
+        for t in reversed(range(len(buf))):
+            s = buf[t]
+            nonterm = 0.0 if s.done else 1.0
+            discount = gamma if s.discount is None else s.discount
+            trace = gamma * lam if s.trace_discount is None else s.trace_discount
+            delta = s.reward + discount * next_v * nonterm - s.value
+            gae = delta + trace * nonterm * gae
+            adv[t], next_v = gae, s.value
+        return adv
 
     # -- PPO update --
     def ppo_update(self, buffers: list[list[Step]]) -> dict:
@@ -1042,16 +1127,7 @@ class Trainer:
                 raise RuntimeError("rollout ended before the opponent response completed")
         flat_steps, advs, rets = [], [], []
         for i, buf in enumerate(buffers):
-            adv = np.zeros(len(buf), dtype=np.float32)
-            gae = 0.0
-            next_v = last_vals[i]
-            for t in reversed(range(len(buf))):
-                s = buf[t]
-                nonterm = 0.0 if s.done else 1.0
-                delta = s.reward + gamma * next_v * nonterm - s.value
-                gae = delta + gamma * lam * nonterm * gae
-                adv[t] = gae
-                next_v = s.value
+            adv = self.advantages(buf, last_vals[i], gamma, lam)
             for t, s in enumerate(buf):
                 flat_steps.append(s)
                 advs.append(adv[t])
@@ -1068,19 +1144,18 @@ class Trainer:
         out = defaultdict(list)
         stopped_at = cfg["epochs"]
         torch.set_num_threads(self.update_threads)
-        total_mb = cfg["epochs"] * ((N + mb - 1) // mb)
+        sizes = Counter(s.grid.shape for s in flat_steps)
+        total_mb = cfg["epochs"] * sum((count + mb - 1) // mb for count in sizes.values())
         done_mb = 0
         self.write_status("running", "PPO update", 0, total_mb)
         for epoch in range(cfg["epochs"]):
             epoch_kl = []
-            order = np.random.permutation(N)
-            for start in range(0, N, mb):
+            for idx in canvas_batches(flat_steps, mb):
                 # The update is minutes on a CPU; without this the heartbeat went silent
                 # for all of it and the dashboard called a healthy run stale.
                 if time.time() - self._last_status > 3:
                     self.write_status("running", "PPO update", done_mb, total_mb)
                 done_mb += 1
-                idx = order[start:start + mb]
                 steps = [flat_steps[k] for k in idx]
                 grid, flat, cand, cells, mask = collate(steps, self.device)
                 actions = torch.tensor([s.action for s in steps], device=self.device)
@@ -1097,6 +1172,16 @@ class Trainer:
                 pg = -torch.min(ratio * adv, ratio.clamp(1 - cfg["clip"], 1 + cfg["clip"]) * adv).mean()
                 vloss = F.mse_loss(value, ret)
                 loss = pg + cfg["vf_coef"] * vloss - cfg["ent_coef"] * entropy
+                # Human actions are supervised labels, never passed off as on-policy
+                # PPO experience. Keep the auxiliary loss small and under the same KL brake.
+                demo = self.demonstrations.sample(cfg["demonstration_batch"]) if (
+                    self.demonstrations is not None and cfg["demonstration_coef"] > 0) else []
+                if demo:
+                    demo_logits, _ = self.net(*collate(demo, self.device))
+                    demo_targets = torch.tensor([s.action for s in demo], device=self.device)
+                    bc = F.cross_entropy(demo_logits, demo_targets)
+                    loss = loss + cfg["demonstration_coef"] * bc
+                    out["demonstration_loss"].append(float(bc.detach()))
                 self.opt.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.net.parameters(), cfg["max_grad_norm"])
@@ -1118,6 +1203,9 @@ class Trainer:
                 # Let cache cleanup release these before the next progress heartbeat.
                 del grid, flat, cand, cells, mask, logits, value, logp_all, logp, probs
                 del entropy, logratio, ratio, pg, vloss, loss, actions, old_logp, adv, ret
+                if demo:
+                    del demo_logits, demo_targets, bc
+                del demo
             # One epoch is the granularity: checking per minibatch would abandon an update
             # halfway through a shuffle and bias which samples ever get used.
             if self._resource_restart or (cfg["target_kl"] and float(np.mean(epoch_kl)) > cfg["target_kl"]):
@@ -1135,11 +1223,12 @@ class Trainer:
                  keep: int = 0, net: PolicyNet | None = None,
                  maps: list[str] | None = None, log_games: bool = True,
                  fogs: list[int] | None = None, suite: str = "main",
-                 round_cap: int | None = None) -> dict:
+                 round_cap: int | None = None, opponent_net: PolicyNet | None = None,
+                 seed_base: int | None = None) -> dict:
         """Game k gets seed_base + k // 2 and side k % 2, whichever env plays it; an env
         starts its next game the moment it finishes one instead of waiting for the slowest
         game of a batch."""
-        opponent = SCRIPTED
+        opponent = "champion" if opponent_net is not None else SCRIPTED
         net = net or self.act_net
         envs = self.envs.envs
         results, diffs, rounds = [], [], []
@@ -1155,7 +1244,8 @@ class Trainer:
         # evaluation to one map keeps the number comparable across a pool change, which is
         # the only way to answer "did adding those maps help?".
         eval_maps = maps or self.cfg.get("eval_maps") or self.cfg["maps"]
-        seed_base = int(self.cfg["eval_seed"]) + (1_000_000 if suite == "heldout" else 0)
+        if seed_base is None:
+            seed_base = int(self.cfg["eval_seed"]) + (1_000_000 if suite == "heldout" else 0)
         game_of: dict[int, int] = {}
         inflight: set[int] = set()
         started = 0
@@ -1166,17 +1256,18 @@ class Trainer:
             started += 1
             envs[i].cfg = EpisodeConfig(
                 map_path=eval_maps[(k // 2) % len(eval_maps)], seed=seed_base + k // 2,
-                side=k % 2, opponent=HARD,
+                side=k % 2, opponent=EXTERNAL if opponent_net is not None else HARD,
                 round_cap=round_cap if round_cap is not None else self.cfg["round_cap"],
                 max_steps=self.cfg.get("max_steps", 3000),
                 civilians=self.cfg["civilians"], random_events=(suite == "events"
+                or (suite == "promotion" and (k // (4 * len(eval_maps))) % 2 == 1)
                 or bool(self.cfg["eval_random_events"])),
                 random_event_interval=int(self.cfg["random_event_interval"]),
                 fog=fogs[k % len(fogs)] if fogs else FOGS[self.cfg["fog"]],
                 friendly_fire=self.cfg["friendly_fire"],
                 disembark=disembark_allowed(self.cfg, eval_maps[(k // 2) % len(eval_maps)]),
                 max_candidates=self.cfg["max_candidates"],
-                max_actors=self.cfg["max_actors"],
+                max_actors=self.cfg["max_actors"], canvas_size=int(self.cfg["canvas_size"]),
                 # Пишем КАЖДУЮ партию оценки, а не первые `keep`. Признак записи
                 # задаётся на reset'е, а кто победил — известно только в конце, так
                 # что «сохранять все победы» невозможно, если не включить запись
@@ -1226,7 +1317,7 @@ class Trainer:
                     game=k + 1, result=results[-1], by=info.get("by", ""),
                     value_diff=info["value_diff"],
                     rounds=info["round"], steps=info.get("steps"),
-                    illegal=info.get("illegal"),
+                    illegal=info.get("illegal", 0), fog=envs[i].cfg.fog,
                     decoding="stop_continue_mass_v1", random_events=envs[i].cfg.random_events,
                     hazard_exposure=info.get("tac", {}).get("hazard_exposure", 0.0),
                     # WHAT was refused, not just how many: the enumerator is meant to be
@@ -1287,10 +1378,16 @@ class Trainer:
                 if started < games:
                     start(i)
             if todo:
-                a, _, _ = choose(net, [encode(envs[i].last) for i in todo], "cpu", greedy=True)
-                for q, i in enumerate(todo):
-                    envs[i].send({"cmd": "step", "action": int(a[q])})
-                    inflight.add(i)
+                groups = defaultdict(list)
+                for i in todo:
+                    is_opponent = opponent_net is not None and envs[i].last["acting"] != envs[i].cfg.side
+                    groups[is_opponent].append(i)
+                for is_opponent, indices in groups.items():
+                    acting_net = opponent_net if is_opponent else net
+                    a, _, _ = choose(acting_net, [encode(envs[i].last) for i in indices], "cpu", greedy=True)
+                    for q, i in enumerate(indices):
+                        envs[i].send({"cmd": "step", "action": int(a[q])})
+                        inflight.add(i)
         for env in self.envs.envs:
             env.last = None   # evaluation episodes are over; training resets next collect
         wins = sum(r == "win" for r in results)
@@ -1316,11 +1413,50 @@ class Trainer:
                     drawrate=draws / max(1, len(results)), value_diff=float(np.mean(diffs)),
                     rounds=float(np.mean(rounds)),
                     stallrate=outcomes["draw_steps"] / max(1, len(results)),
-                    outcomes=dict(outcomes))
+                    outcomes=dict(outcomes), per_game=per_game)
+
+    def run_promotion(self):
+        from selection import promotion_decision
+        best = os.path.join(self.run_dir, "best.pt")
+        if not os.path.exists(best):
+            raise RuntimeError("promotion requires a preserved best.pt baseline; fork this run first")
+        prior = torch.load(best, map_location="cpu", weights_only=False)
+        opponent = PolicyNet()
+        load_compat(opponent, prior["model"])
+        opponent.eval()
+        cfg = self.cfg
+        maps = cfg["promotion_maps"] or cfg["heldout_eval_maps"] or cfg["eval_maps"]
+        self.promotion_attempts += 1
+        attempt = self.promotion_attempts
+        self.save()  # persist the seed/alpha allocation even if evaluation is interrupted
+        seed = int(cfg["promotion_seed"]) + attempt * 100000
+        result = self.evaluate(cfg["promotion_games"], maps=maps, opponent_net=opponent,
+                               suite="promotion", seed_base=seed, round_cap=cfg["heldout_round_cap"],
+                               fogs=[FOGS["off"]] * (2 * len(maps)) + [FOGS[cfg["fog"]]] * (2 * len(maps)))
+        # Fresh pairs each attempt; alpha spending bounds the chance of EVER
+        # promoting an equal/weaker model through repeated tests at <= 5%.
+        confidence = 1 - .05 / (max(1, attempt) * (max(1, attempt) + 1))
+        decision = promotion_decision(result["per_game"], cfg["promotion_max_stall"], confidence)
+        decision.update(step=self.global_step, update=self.update, seed=seed,
+                        baseline_step=prior["global_step"], time=time.time())
+        if decision["promote"]:
+            torch.save(self.state_dict(), best + ".tmp")
+            os.replace(best + ".tmp", best)
+            self.pool_cache.pop(best, None)
+        with open(os.path.join(self.run_dir, "promotion_log.jsonl"), "a") as f:
+            f.write(json.dumps(decision) + "\n")
+        with open(os.path.join(self.run_dir, "promotion.json.tmp"), "w") as f:
+            json.dump(decision, f, indent=2)
+        os.replace(os.path.join(self.run_dir, "promotion.json.tmp"), os.path.join(self.run_dir, "promotion.json"))
+        print("[promotion] " + json.dumps(decision), flush=True)
+        self.writer.add_scalar("selection/score", decision.get("score", 0), self.global_step)
+        self.writer.add_scalar("selection/lower_bound", decision.get("lower_bound", 0), self.global_step)
 
     # -- main loop --
     def train(self):
         cfg = self.cfg
+        if cfg["promotion_every"] and not os.path.exists(os.path.join(self.run_dir, "best.pt")):
+            self.save("best.pt")
         # shaping_decay_start: -1 means "from the update this config was first applied":
         # a fork of a run thousands of updates in must decay from where it starts, not
         # find its bonuses already gone. Anchored once, before config.yaml is written, so a
@@ -1384,6 +1520,13 @@ class Trainer:
                     # fills once and the gallery freezes on the first few episodes of the
                     # run, which is a subtler version of the problem this fixes.
                     self._replay_maps.clear()
+                if cfg["promotion_every"] and self.update % cfg["promotion_every"] == 0:
+                    self.save()
+                    try:
+                        self.run_promotion()
+                    except EnvDied as e:
+                        print(f"[promotion] aborted without changing best.pt: {e}", flush=True)
+                        self.envs.rebuild()
                 # Evaluate on schedule, but also whenever this branch has no win rate at
                 # all yet. eval_every is tens of updates and an update can take minutes,
                 # so a fresh run used to show a blank "win vs HARD" for hours
@@ -1546,7 +1689,7 @@ class Trainer:
         else:
             row.update({f"{k}_{opp}": v for k, v in r.items()})
             score = (r["winrate"], r["value_diff"])
-            if r["games"] >= 10 and score > self.champion_score:
+            if not self.cfg["promotion_every"] and r["games"] >= 10 and score > self.champion_score:
                 self.champion_score = score
                 path = os.path.join(self.run_dir, f"champion_{self.global_step:09d}.pt")
                 torch.save(self.state_dict(), path + ".tmp")
@@ -1619,6 +1762,21 @@ class Trainer:
             except EnvDied as e:
                 row["events_error"] = str(e)
                 self.envs.rebuild()
+        if full and self.demo_holdout is not None:
+            nll, agreement = [], []
+            with torch.no_grad():
+                for _ in range(8):
+                    examples = self.demo_holdout.sample(8)
+                    if not examples:
+                        break
+                    logits, _ = self.act_net(*collate(examples, "cpu"))
+                    target = torch.tensor([s.action for s in examples])
+                    nll.append(float(F.cross_entropy(logits, target)))
+                    agreement.append(float((logits.argmax(1) == target).float().mean()))
+            if nll:
+                row["imitation_holdout"] = dict(nll=float(np.mean(nll)), agreement=float(np.mean(agreement)))
+                self.writer.add_scalar("eval/imitation_holdout_nll", row["imitation_holdout"]["nll"], self.global_step)
+                self.writer.add_scalar("eval/imitation_holdout_agreement", row["imitation_holdout"]["agreement"], self.global_step)
         row["seconds"] = time.perf_counter() - started_at
         row["full_suite"] = full
         self.writer.add_scalar("speed/eval_secs", row["seconds"], self.global_step)
@@ -1926,6 +2084,12 @@ def cmd_fork(a):
     t = Trainer(rd, cfg, pick_device(cfg))
     t.load(a.checkpoint, keep_cfg=True)
     t.parent = os.path.abspath(a.checkpoint)
+    shutil.copy2(a.checkpoint, os.path.join(rd, "best.pt"))
+    t.promotion_attempts = 0
+    source_pool = sorted(glob.glob(os.path.join(os.path.dirname(a.checkpoint), "ckpt_*.pt")))
+    if source_pool:
+        for n, i in enumerate(np.linspace(0, len(source_pool) - 1, min(3, len(source_pool)), dtype=int)):
+            shutil.copy2(source_pool[i], os.path.join(rd, f"seed_{n}.pt"))
     t.champion_score = (-1.0, -1e30)  # the new branch needs its own measured champion
     t.save()
     print(f"[fork] {a.branch} <- {a.checkpoint} (step {t.global_step})")
@@ -1988,6 +2152,42 @@ def cmd_eval(a):
         print(json.dumps(r))
     finally:
         t.envs.close()
+
+
+
+def cmd_compare(a):
+    """Read-only paired checkpoint tournament; never changes a training branch."""
+    import tempfile
+    from selection import promotion_decision
+    cfg = load_config(a.config)
+    if a.games < 2 or a.games % 2:
+        raise ValueError("comparison games must be positive side pairs")
+    refresh_class_cache(cfg["godot"])
+    torch.set_num_threads(int(cfg["torch_threads"] or 4))
+    challenger = torch.load(a.checkpoint, map_location="cpu", weights_only=False)
+    prior = torch.load(a.opponent, map_location="cpu", weights_only=False)
+    with tempfile.TemporaryDirectory(prefix="isotope-compare-") as work:
+        t = Trainer(work, cfg, "cpu")
+        load_compat(t.net, challenger["model"])
+        opponent = PolicyNet().eval()
+        load_compat(opponent, prior["model"])
+        t.global_step = challenger.get("global_step", 0)
+        t.envs = VecEnv(cfg["n_envs"], cfg["godot"], log_dir=os.path.join(work, "envlogs"))
+        try:
+            maps = cfg["promotion_maps"] or cfg["heldout_eval_maps"] or cfg["maps"]
+            result = t.evaluate(a.games, maps=maps, opponent_net=opponent, suite="promotion",
+                                seed_base=a.seed, round_cap=cfg["heldout_round_cap"],
+                                fogs=[FOGS["off"]] * (2 * len(maps)) + [FOGS[cfg["fog"]]] * (2 * len(maps)))
+            result["comparison"] = promotion_decision(result["per_game"], cfg["promotion_max_stall"])
+            result.update(checkpoint=os.path.abspath(a.checkpoint), opponent=os.path.abspath(a.opponent),
+                          seed=a.seed, code=t.code, diagnostic_only=True)
+            report = json.dumps(result, indent=2)
+            if a.output:
+                Path(a.output).write_text(report + "\n")
+            print(report)
+        finally:
+            t.envs.close()
+            t.writer.close()
 
 
 def cmd_export(a):
@@ -2158,6 +2358,12 @@ def main():
     s = sp.add_parser("status"); s.add_argument("branch", nargs="?"); s.set_defaults(fn=cmd_status)
     s = sp.add_parser("eval"); s.add_argument("checkpoint"); s.add_argument("--games", type=int, default=10)
     s.add_argument("--record"); s.set_defaults(fn=cmd_eval)
+    s = sp.add_parser("compare")
+    s.add_argument("checkpoint"); s.add_argument("opponent")
+    s.add_argument("--config", default=os.path.join(PROJECT, "rl/config/league.yaml"))
+    s.add_argument("--games", type=int, default=160)
+    s.add_argument("--seed", type=int, default=secrets.randbelow(100000000) + 500000000)
+    s.add_argument("--output"); s.set_defaults(fn=cmd_compare)
     s = sp.add_parser("export"); s.add_argument("checkpoint"); s.add_argument("out"); s.set_defaults(fn=cmd_export)
     s = sp.add_parser("play"); s.add_argument("checkpoint"); s.add_argument("--port", type=int, default=7791)
     s.add_argument("--godot", default="godot"); s.set_defaults(fn=cmd_play)

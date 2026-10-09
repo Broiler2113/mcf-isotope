@@ -4,6 +4,7 @@
 set -euo pipefail
 PARENT="${1:-tactical-2}"
 NEXT="${2:-tactical-3}"
+CONFIG="${3:-rl/config/tactical.yaml}"
 MODE=fork
 if [ "$NEXT" = --resume ]; then MODE=resume; NEXT="$PARENT"; fi
 PROJECT_DIR="$(git rev-parse --show-toplevel)"
@@ -58,11 +59,11 @@ git merge --ff-only origin/main
 [ ! -f rl/.env ] || { set -a; . rl/.env; set +a; }
 RL_PY="${VENV:-$HOME/.venvs/mcf-rl}/bin/python"
 export PATH="$HOME/.local/bin:$PATH"
-"$RL_PY" rl/train.py preflight rl/config/tactical.yaml
+"$RL_PY" rl/train.py preflight "$CONFIG"
 if [ "$MODE" = resume ]; then
   bash rl/run.sh resume "$NEXT"
 else
-  bash rl/run.sh fork "$PARENT/latest.pt" "$NEXT" rl/config/tactical.yaml
+  bash rl/run.sh fork "$PARENT/latest.pt" "$NEXT" "$CONFIG"
 fi
 rm -f "rl/runs/$NEXT/SUPERVISOR_OFF"
 bash rl/run.sh supervise "$NEXT"

@@ -705,6 +705,8 @@ func _flush_replay() -> void:
 		return
 	if resolver != null:
 		resolver.replay_recorder = null
+	if net != null:
+		net.recorder = null
 	var path := recorder.save(str(_match_meta().get("map", "match")))
 	if path != "":
 		print("replay saved: ", path)
@@ -995,6 +997,7 @@ func _make_side(side: int) -> void:
 func _ai_controller_for(side: int, difficulty: int) -> PlayerController:
 	if difficulty == AIController.Difficulty.LEARNED:
 		var learned := LearnedController.new(side)
+		learned.bind_match(resolver)
 		learned.fallback_engaged.connect(func(reason: String) -> void:
 			state.log.add("— %s: learned AI unavailable (%s) — AI - Hard takes the seat —" % [
 				MCF.owner_name(side), reason])
@@ -3520,6 +3523,10 @@ func _on_peer_ready(is_host: bool) -> void:
 		mine = MCF.Owner.PLAYER_1 if is_host else MCF.Owner.PLAYER_2
 	my_owner = mine
 	net = NetGame.new(state, resolver, is_host, my_owner)
+	if is_host:
+		recorder = ReplayRecorder.new()
+		recorder.begin(state, resolver, _match_meta().merged({"network": true}))
+		net.recorder = recorder
 	net.outgoing.connect(func(msg: Dictionary) -> void: session.send(msg))
 	net.action_applied.connect(_on_net_applied)
 	net.denied.connect(func(reason: String) -> void:

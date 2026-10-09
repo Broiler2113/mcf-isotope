@@ -20,7 +20,6 @@ import torch  # noqa: E402
 
 from model import PolicyNet, load_compat  # noqa: E402
 from train import choose, encode  # noqa: E402
-from features import CANVAS  # noqa: E402
 
 
 def answer(net, req: dict, sample: bool = False) -> dict:
@@ -28,11 +27,8 @@ def answer(net, req: dict, sample: bool = False) -> dict:
         return {"ok": True, "protocol": 2}
     if not req.get("legal"):
         raise ValueError("policy request contains no legal actions")
-    # Adaptive pooling makes the torch network spatially flexible. Keep every tile
-    # and use the SAME stride for grid and candidate indices. Training stays 64x64.
-    obs = req["obs"]
-    canvas = max(CANVAS, int(obs["w"]), int(obs["h"]))
-    enc = [encode(req, canvas=canvas)]
+    # Use the same spatial buckets and index stride as training, including large maps.
+    enc = [encode(req)]
     act, _, val = choose(net, enc, "cpu", greedy=not sample)
     return {"action": int(act[0]), "value": float(val[0])}
 
