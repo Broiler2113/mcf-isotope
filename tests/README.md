@@ -185,6 +185,12 @@ and needs `NetworkSession.DEFAULT_PORT` free.
 
 ## Scope
 
+**`run_replay_seek.gd`** compares frame selection with the original forward scan at
+every boundary, including old recordings without frames and recordings edited in
+place. It also seeks a recorded match forwards and backwards and compares its full
+board and rules with replaying from the beginning. `-- --bench` measures frame lookup
+in a 60,000-action recording; timings are informational, never a pass/fail threshold.
+
 None of these runs is evidence that the game *plays* correctly. They are evidence
 that it does not crash, does not deadlock the AI, and does not desync. Play the
 real game as well.
