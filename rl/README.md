@@ -10,7 +10,7 @@ src/resolver/LegalIntents.gd      legal_intents(side): every intent the resolver
 rl/ObsEncoder.gd                  fog-limited observation, candidate descriptions              (§3)
 rl/env_server.gd                  headless Godot env, JSON lines over stdin/stdout             (§1, §5.1)
 rl/mcf_env.py                     bridge + vectorised envs                                    (§9.1)
-rl/features.py                    64x64x72 grid tensor, flat vector, per-candidate rows       (§3.1, Q2)
+rl/features.py                    64x64x90 training grid, flat vector, per-candidate rows     (§3.1, Q2)
 rl/model.py                       CNN + candidate scorer + value head                         (§4, §5.2, Q6)
 rl/train.py                       PPO, checkpoints, resume/fork, TensorBoard, eval, replays   (§6, §8, §9, §10)
 rl/dashboard.py                   rlm.mindcontrolfactor.com — stats, controls, spreadsheet    (§11)
@@ -214,9 +214,101 @@ its parent on its first step.
 | opponents | `train.py` | phase `league`: HARD styles + past checkpoints, prioritised toward those that beat it (PFSP) |
 | measuring | dashboard **Tactics** page | drill win rates vs HARD, per unit type: action share, hit rate, kills, losses; exposure at end of turn; 2-3 AP moves |
 
-A generated map is written `gen:<style|any>:<size index>:<units>:<tanks>` in `maps:`; units and tanks may be ranges (`60-200`), drawn per episode. Generated maps stay within the 64×64 canvas (an army that would grow the map past it is cut back).
+A generated map is written `gen:<style|any>:<size index>:<units>:<tanks>` in `maps:`; units and tanks may be ranges (`60-200`), drawn per episode. Generated maps stay within the 64×64 training canvas, including the full playable border and rim. Cores are limited to 40 cells per dimension; armies that force further growth are reduced. No tiles are cropped from an observation.
 Cost: an env step on the company-scale town map is ~1.5× the pre-tactical one (threat maps,
 the larger move list, the ordering) — fewer samples per hour, each one far more informative.
+
+## Training reliability and measurement
+
+On the machine that runs training, deploy a published update from inside its checkout:
+
+```bash
+git fetch origin main
+git show origin/main:rl/tools/deploy_rlm.sh > /tmp/isotope-deploy-rlm.sh
+bash /tmp/isotope-deploy-rlm.sh tactical-2 tactical-3
+```
+
+The helper checks for local conflicts, gracefully checkpoints and stops the old run,
+preserves a separate checkpoint backup, fast-forwards the checkout, checks every map,
+forks into the new branch, verifies that training advances, starts its supervisor and
+restarts the dashboard. It keeps the source branch and checkpoints. If a check fails,
+it stops with the reason; it does not delete training data or force a Git reset.
+
+Each stored transition runs from one learner decision to the next, including all
+intervening pool-opponent actions. Collection drains those responses before PPO, even
+when the rollout memory limit is reached. The value bootstrap always comes from the
+next learner state. Position shaping uses `potential_coef * (gamma * Phi(next) - Phi(now))`
+at that same boundary, with zero potential at terminal states. A frozen self opponent is
+copied once per rollout. The new component identity, component health/presence, vehicle
+crew and AP inputs are appended; loading an older checkpoint zero-initializes their
+weights and expands Adam state, retaining its original outputs on identical inputs.
+
+Run the compatibility check before a migration (it also runs automatically at startup):
+
+```bash
+python rl/train.py preflight rl/config/tactical.yaml
+python rl/test_rl.py
+python rl/test_training_fixes.py
+```
+
+Preflight resets every configured map and every generated style at the upper configured
+army size, then encodes its opening. It checks actual game rules, candidate generation
+and policy dimensions together. Training writes the checked dimensions to `preflight.json`.
+This sampling does not prove every possible procedural seed will succeed.
+
+The tactical preset checks the main benchmark every 25 updates and runs the additional
+fog, drill and held-out suites every 100 updates, plus the first evaluation of a branch.
+`eval_seed` stays fixed across checkpoints; each map/seed is played from both sides.
+Held-out generated scenarios use separate seeds and a 40-round cap. Main game rows stay
+in `eval_games.jsonl`; other suites have `eval_<suite>_games.jsonl`, so dashboard main
+win rates remain comparable. `eval/rout_winrate_hard` separates annihilation wins from
+`eval/value_winrate_hard`. Longer games still have the configured `max_steps` limit.
+
+The league retains recent checkpoints, a spread of older milestones and the best
+measured main-benchmark policy. Champion selection requires at least ten games and
+uses win rate, then value difference; a small fixed benchmark can overfit, so inspect
+the separate held-out results. Milestones keep the first saved checkpoint in each
+crossed step interval; saving at an exact multiple is unnecessary.
+
+`speed/*` records collection, update, evaluation, encoding, inference, socket wait,
+receive/JSON, legal-enumeration and observation costs. Wait time overlaps work in other
+environment processes; these values are diagnostics, not additive CPU timings.
+`actions/<map>/<kind>_{offered,chosen,accepted}` distinguishes candidate availability,
+policy selection and resolver acceptance. Accepted attacks need not hit: use the
+existing per-map hit-rate and tactical counters for combat effectiveness.
+
+Compare performance settings in isolated temporary runs:
+
+```bash
+python rl/benchmark.py rl/config/tactical.yaml --checkpoint rl/runs/<branch>/latest.pt \
+  --variant '{"epochs":2,"lr":0.00004}' \
+  --variant '{"epochs":3,"lr":0.00004}' --output /tmp/rl-benchmark.json
+```
+
+Variants accept config overrides such as `torch_threads`, `minibatch`, `n_envs` and
+`gamma`. Weights and initial seeds are held equal, but asynchronous scheduling can
+change the sample sequence. The temporary pool uses the current policy; it does not
+copy the source branch's opponent archive. The report measures collection plus PPO,
+excluding evaluations. It cannot establish long-term playing strength. Compare longer
+forks on the same evaluation suites for learning per hour. The updated tactical preset
+tries three epochs, learning rate 0.00004 and more tank/sniper practice; these are
+starting hypotheses, not measured quality gains. Gamma remains 0.99; a higher discount
+is an explicit experiment rather than an untested default change.
+The action-bonus decay starts at update zero, so a mature fork does not receive fresh
+bonuses for shooting or driving after those bonuses have already decayed away.
+
+For a rules upgrade, fork the saved model into a new branch and retain the old branch
+for comparison. Checkpoint compatibility preserves weights, not identical behavior
+under changed game rules or reward definitions. Editing these files does not update an
+already running trainer; use the new code when starting the intended fork.
+
+“Play vs latest” serves the checkpoint using policy code from the same checkout as the
+launched game. Torch inference accepts larger boards through the fully convolutional
+trunk and adaptive pooling, while candidate indices use the matching canvas stride.
+This avoids the former connection closure on maps wider than 64; large-board playing
+strength still depends on training coverage. Server errors are returned explicitly to
+the game instead of closing the socket without an explanation. The socket regression
+also drives the real Godot learned controller on a 74×62 board without fallback.
 
 ## Maps in the pool
 

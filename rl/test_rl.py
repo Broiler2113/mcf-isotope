@@ -257,7 +257,7 @@ def test_old_checkpoint_grows():
     from features import CAND_DIM, CANVAS, FLAT_DIM, N_CHANNELS
     from model import PolicyNet, load_compat
     torch.manual_seed(0)
-    old_ch, old_cand = 72, CAND_DIM - 9
+    old_ch, old_cand = 72, ft.F_COMPONENT - 9
 
     class OldNet(PolicyNet):
         """The network as it was: a narrower first conv and candidate layer, no trunk."""

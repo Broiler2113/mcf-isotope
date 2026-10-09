@@ -53,12 +53,13 @@ maps:
   - rl/maps/drill_sniper_lanes.json
   # Generated every episode: random style, terrain and a random army of random size, the
   # same for both sides. Small 28x20 -> 10-30 a side, medium 38x28 -> 25-80, large
-  # 50x38 -> 60-200 (64x64 is the network's canvas; an army that would make the generator
-  # grow past it is cut back by a quarter until it fits).
+  # The full 24-cell border is included in the 64x64 canvas: large cores are limited
+  # to 40x38. Armies that force a larger board are reduced until the whole board fits.
   - gen:any:0:10-30:0-1
   - gen:any:1:25-80:0-2
   - gen:any:2:60-200:1-4
-map_weights: [3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2.5, 2.5, 2.5]
+# Extra practice on the weakest measured tasks, while retaining every other skill.
+map_weights: [3, 2, 1, 1, 1, 2, 1, 1, 1, 2, 2.5, 2, 1.5]
 eval_maps:
   - rl/maps/town_50x50_s25.json
 drill_eval_maps:
@@ -69,6 +70,17 @@ drill_eval_maps:
   - rl/maps/drill_crossfire.json
   - rl/maps/drill_sniper_lanes.json
 drill_eval_games: 4           # both sides x fog on/off
+eval_seed: 900000            # repeat the same seed with both sides across checkpoints
+eval_full_every: 100         # main check every 25; fog/drills/heldout every 100
+heldout_eval_maps:
+  - gen:0:0:16:1
+  - gen:1:0:16:1
+  - gen:2:0:16:1
+  - gen:3:0:16:1
+  - gen:4:0:16:1
+heldout_eval_games: 20        # each style, both sides, both fog settings
+heldout_round_cap: 40
+preflight: true
 sealed_crew_maps:
   - town_tank
 
@@ -83,11 +95,12 @@ army_shuffle: 0.3
 potential_coef: 0.5
 shaping_decay_updates: 400
 shaping_floor: 0.0
-shaping_decay_start: -1      # from the update the fork starts at
+shaping_decay_start: 0       # mature forks keep action bonuses off; fresh runs fade from zero
 
 phase: league
 pool_ai_fraction: 0.5
 pool_size: 8
+pool_archive_size: 3         # spread across older milestones, plus best measured policy
 opponent_styles: [0.4, 0.2, 0.2, 0.2]   # standard, rush, turtle, flank
 pfsp_power: 2.0
 pfsp_floor: 0.05
@@ -102,9 +115,9 @@ random_events: false
 fog: standard
 friendly_fire: true
 rollout_steps: 384
-epochs: 4
+epochs: 3                   # audited run hit its KL brake before epoch 4 in 94% of updates
 minibatch: 32
-lr: 0.00005
+lr: 0.00004                 # conservative trial; verify learning per hour after a fork
 gamma: 0.99
 lam: 0.95
 clip: 0.2

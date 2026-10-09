@@ -55,6 +55,7 @@ class EpisodeConfig:
     opponent_style: int = 0      # AIController.Style for the HARD opponent: 0 standard, 1 rush, 2 turtle, 3 flank
     shaping_scale: float = 1.0   # multiplies the per-action bonuses (R_SHOT, R_VEHICLE); decays in training
     potential_coef: float = 0.0  # weight of the position potential (env_server._phi); 0 = off
+    gamma: float = 0.99         # discount per learner decision, including opponent reply
     army: str = ""               # "" as on the map, "shuffle" = mirrored type swap (fixed maps)
 
     def to_cmd(self) -> dict:
@@ -66,7 +67,7 @@ class EpisodeConfig:
             "disembark": self.disembark, "record": self.record,
             "max_candidates": self.max_candidates, "max_actors": self.max_actors,
             "opponent_style": self.opponent_style, "shaping_scale": self.shaping_scale,
-            "potential_coef": self.potential_coef, "army": self.army,
+            "potential_coef": self.potential_coef, "army": self.army, "gamma": self.gamma,
         }
 
 
@@ -262,6 +263,12 @@ class GodotEnv:
             else:
                 self.proc.kill()
         except Exception:
+            pass
+        if self.proc.stdin is not None:
+            self.proc.stdin.close()
+        try:
+            self.proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
             pass
         self.proc = None
 

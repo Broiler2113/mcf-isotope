@@ -1563,6 +1563,18 @@ def page_branch(b: str) -> None:
             chart(sc, ["speed/update_secs"], "seconds per PPO update")
             explain("update_secs")
         chart(sc, ["speed/matches_done"], "matches completed (flat = episodes never end)")
+        if "speed/train_steps_per_sec" in sc:
+            chart(sc, ["speed/train_steps_per_sec"], "learner steps per second, collection + PPO")
+            with st.expander("Training time breakdown"):
+                chart(sc, ["speed/collect_secs", "speed/update_secs", "speed/eval_secs"],
+                      "seconds per collection, update or evaluation")
+                chart(sc, ["speed/encode_secs", "speed/inference_secs",
+                           "speed/opponent_inference_secs", "speed/wait_secs", "speed/receive_secs"],
+                      "collection time by operation")
+                chart(sc, ["speed/env_legal_ms", "speed/env_obs_ms"],
+                      "milliseconds per environment reply")
+                st.caption("Environment processes run concurrently. Socket wait overlaps their work; "
+                           "these timings should not be added to estimate total CPU time.")
 
         with st.expander("Glossary — every metric in plain English"):
             glossary()
@@ -1831,6 +1843,34 @@ def page_tactics(b: str) -> None:
                 for t in drills]
         st.dataframe(renderable(pd.DataFrame(rows)), width="stretch", hide_index=True)
         chart(sc, drills, "drill win rate vs HARD", pct=True, names=names)
+    if "eval/heldout_winrate" in sc:
+        st.markdown("#### Held-out scenarios")
+        chart(sc, ["eval/heldout_winrate", "eval/heldout_rout_winrate", "eval/heldout_value_winrate"],
+              "held-out wins by outcome", pct=True,
+              names={"eval/heldout_winrate": "all wins",
+                     "eval/heldout_rout_winrate": "annihilation wins",
+                     "eval/heldout_value_winrate": "wins at the round cap"})
+        st.caption("Separate seeds and longer matches check whether gains on the main benchmark "
+                   "transfer to other scenarios. These games run with the full evaluation suite.")
+    action_maps = sorted({t.split("/")[1] for t in sc if t.startswith("actions/")})
+    if action_maps:
+        with st.expander("Available, selected and accepted actions"):
+            mp = st.selectbox("Scenario", action_maps, key="action_coverage_map")
+            pre = f"actions/{mp}/"
+            kinds = sorted(t[len(pre):-len("_offered")] for t in sc
+                           if t.startswith(pre) and t.endswith("_offered"))
+            latest_step = max(int(sc[t].iloc[-1, 0]) for t in sc if t.startswith(pre))
+            rows = []
+            for kind in kinds:
+                row = {"action": kind}
+                for metric in ("offered", "chosen", "accepted"):
+                    tag = pre + kind + "_" + metric
+                    row[metric] = (int(sc[tag].iloc[-1, 1]) if tag in sc
+                                   and int(sc[tag].iloc[-1, 0]) == latest_step else 0)
+                rows.append(row)
+            st.dataframe(renderable(pd.DataFrame(rows)), width="stretch", hide_index=True)
+            st.caption("Counts from the latest update for this scenario. Offered counts decision points containing "
+                       "that action. Accepted means the game allowed it; attacks can still miss.")
     if tac:
         st.divider()
         st.markdown("#### How it uses its army (training games)")
