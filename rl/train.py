@@ -248,6 +248,11 @@ def preflight_config(cfg: dict, env: GodotEnv) -> list[dict]:
         r = env.reset(ec)
         if r.get("done") or not r.get("legal"):
             raise ValueError(f"preflight: {mp} has no playable opening")
+        if is_generated(mp):
+            parts = mp.split(":")
+            if int(parts[2]) >= 3 and int(parts[4]) > 0 and not any(
+                    v["own"] == 0 and v["alive"] for v in r["obs"]["vehicles"]):
+                raise ValueError(f"preflight: {mp} omitted the requested own tank")
         encode(r)
         rows.append(dict(map=mp, width=r["obs"]["w"], height=r["obs"]["h"],
                          candidates=len(r["legal"])))
@@ -2015,27 +2020,28 @@ def pick_device(cfg: dict) -> str:
 
 
 def device_matches_cpu(dev: str) -> bool:
-    """One forward + backward of PolicyNet on `dev` against the CPU: logits, value and the
-    first conv's gradient must agree."""
+    """Check both platoon and Giant paths before selecting a GPU backend."""
     try:
         torch.manual_seed(0)
         cpu_net = PolicyNet()
         dev_net = copy.deepcopy(cpu_net).to(dev)
-        B, N = 3, 7
-        batch = (torch.rand(B, N_CHANNELS, CANVAS, CANVAS), torch.rand(B, FLAT_DIM),
-                 torch.rand(B, N, CAND_DIM), torch.randint(-1, CANVAS * CANVAS, (B, N, 2)),
-                 torch.rand(B, N) < 0.8)
-        batch[4][:, 0] = True
-        got = []
-        for net, d in ((cpu_net, "cpu"), (dev_net, dev)):
-            logits, value = net(*(t.to(d) for t in batch))
-            (torch.log_softmax(logits, 1)[:, 0].sum() + value.sum()).backward()
-            got.append((logits.detach().cpu()[batch[4]], value.detach().cpu(),
-                        net.conv[0].weight.grad.cpu()))
-        ok = all(torch.allclose(a, b, atol=1e-3, rtol=1e-3) for a, b in zip(*got))
-        if not ok:
-            print(f"[train] {dev} disagrees with the CPU on the policy net; updating on cpu", flush=True)
-        return ok
+        for canvas in (CANVAS, 160):
+            B, N = (3, 7) if canvas == CANVAS else (1, 7)
+            batch = (torch.rand(B, N_CHANNELS, canvas, canvas), torch.rand(B, FLAT_DIM),
+                     torch.rand(B, N, CAND_DIM), torch.randint(-1, canvas * canvas, (B, N, 2)),
+                     torch.rand(B, N) < 0.8)
+            batch[4][:, 0] = True
+            got = []
+            for net, d in ((cpu_net, "cpu"), (dev_net, dev)):
+                net.zero_grad(set_to_none=True)
+                logits, value = net(*(t.to(d) for t in batch))
+                (torch.log_softmax(logits, 1)[:, 0].sum() + value.sum()).backward()
+                got.append((logits.detach().cpu()[batch[4]], value.detach().cpu(),
+                            net.conv[0].weight.grad.cpu()))
+            if not all(torch.allclose(a, b, atol=1e-3, rtol=1e-3) for a, b in zip(*got)):
+                print(f"[train] {dev} disagrees with CPU on {canvas}x{canvas}; updating on cpu", flush=True)
+                return False
+        return True
     except Exception as e:  # noqa: BLE001 - any backend failure means "don't use it"
         print(f"[train] {dev} failed its self-check ({type(e).__name__}: {e}); updating on cpu", flush=True)
         return False

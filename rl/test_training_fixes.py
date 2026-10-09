@@ -178,6 +178,7 @@ class FixTests(unittest.TestCase):
         grid = torch.rand(1, ft.N_CHANNELS, 64, 64)
         flat = torch.rand(1, ft.FLAT_DIM)
         candidates = torch.rand(1, 3, ft.CAND_DIM)
+        candidates[:, :, ft.F_VEH_CRUSH:] = 0  # no visible vehicle lane in old observations
         cells = torch.zeros(1, 3, 2, dtype=torch.long)
         mask = torch.ones(1, 3, dtype=torch.bool)
         args_old = (grid[:, :78], flat, candidates[:, :, :ft.F_COMPONENT], cells, mask)

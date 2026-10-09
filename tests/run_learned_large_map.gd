@@ -1,5 +1,5 @@
 extends SceneTree
-## Live learned-controller regression on a board wider than the training canvas.
+## Live learned-controller regression on a full Giant board.
 ## Started by rl/test_training_fixes.py with a real policy server.
 
 func _initialize() -> void:
@@ -7,11 +7,11 @@ func _initialize() -> void:
 		printerr("large-map regression needs MCF_RL_POLICY")
 		quit(1)
 		return
-	var m := MapData.new(74, 62)
+	var m := MapData.new(149, 119)
 	for y in m.height:
 		for x in m.width:
 			m.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
-	m.set_spawn(Vector2i(70, 55), "light_infantry", 0)
+	m.set_spawn(Vector2i(145, 115), "light_infantry", 0)
 	m.set_spawn(Vector2i(5, 5), "light_infantry", 1)
 	GameConfig.civilians_enabled = false
 	var state := m.build_state(7)

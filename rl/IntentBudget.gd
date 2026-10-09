@@ -80,8 +80,16 @@ static func actor_subset(r: GameActionResolver, acting: int, max_actors: int,
 	var foes := _foe_cells(r, acting)
 	var hazards := Obs.hazards(r)
 	var endangered: Array = []
+	var vehicle_response: Array = []
 	var hot: Array = []
 	var cold: Array = []
+	var visible_vehicles: Array[Vector2i] = []
+	var visible: Dictionary = r.team_visible_coords(acting) if r.fog_enabled else {}
+	for veh: Vehicle in state.all_vehicles():
+		if veh.alive() and Obs.rel_owner(r, acting, veh.owner) == 1:
+			for c: Vector2i in veh.footprint():
+				if not r.fog_enabled or visible.has(c):
+					visible_vehicles.append(c)
 	for id: int in ready:
 		var u := state.get_unit(id)
 		var danger := false
@@ -90,9 +98,12 @@ static func actor_subset(r: GameActionResolver, acting: int, max_actors: int,
 			danger = hazards["gas"][i] + hazards["gas_warning"][i] + hazards["artillery_warning"][i] > 0.0
 		if danger:
 			endangered.append(id)
+		elif u.stats.special_ability_id == MCF.ABILITY_ANTI_TANK \
+				and _nearest(visible_vehicles, u.coord) <= int(u.fire_range()) + 4:
+			vehicle_response.append(id)
 		else:
 			(hot if in_contact(u, foes) else cold).append(id)
-	ready = endangered + hot + cold
+	ready = endangered + vehicle_response + hot + cold
 	var out := {}
 	# Машины и пилоты боргов — целиком, даже если их одних больше потолка: потолок стоит
 	# ради цены перечисления пехоты, а техники на карте единицы.
@@ -105,6 +116,33 @@ static func actor_subset(r: GameActionResolver, acting: int, max_actors: int,
 		out[key] = true
 		infantry_count += 1
 	return out
+
+
+## A company-sized army must actually spend part of its turn. A policy trained on
+## platoons can otherwise put most of the softmax mass on EndTurn at its first
+## decision on a 100+ soldier board. Apply the same legal gate in training and play.
+## Keep EndTurn when no useful action exists, so an obstructed army cannot deadlock.
+static func keep_large_army_active(list: Array, state: GameState, side: int) -> Array:
+	var troops := 0
+	var remaining := 0.0
+	var capacity := 0.0
+	for u: UnitInstance in state.all_units():
+		if u.owner != side or not u.is_alive() or u.is_drone or u.aboard_vehicle_id != -1:
+			continue
+		troops += 1
+		capacity += float(u.max_ap())
+		remaining += float(u.remaining_ap)
+	if troops < 64 or capacity <= 0.0 or remaining / capacity <= 0.50:
+		return list
+	var useful := false
+	for intent: Intent in list:
+		if intent is MoveIntent or intent is ShootIntent or intent is VehicleCannonIntent \
+				or intent is VehicleMoveIntent or intent is DroneMoveIntent:
+			useful = true
+			break
+	if not useful:
+		return list
+	return list.filter(func(intent: Intent) -> bool: return not intent is EndTurnIntent)
 
 
 ## Может ли юнит сделать хоть что-то, кроме конца хода (дёшево, без перечисления).
@@ -277,9 +315,10 @@ static func cap(list: Array, max_candidates: int, rng: RandomNumberGenerator,
 	if r != null:
 		var foes := _visible_foes(r, side)
 		var hazards := Obs.hazards(r)
+		var vehicle_risk := Obs.vehicle_crush_threat(r, side)
 		for key: String in order:
 			if key.ends_with(":move") and buckets[key].size() > 4:
-				buckets[key] = _tactical_order(buckets[key], r, side, foes, hazards)
+				buckets[key] = _tactical_order(buckets[key], r, side, foes, hazards, vehicle_risk)
 	var round_index := 0
 	while kept.size() < max_candidates:
 		var took := false
@@ -319,15 +358,22 @@ static func _visible_foes(r: GameActionResolver, side: int) -> Array[Vector2i]:
 	return foes
 
 static func _tactical_order(moves: Array, r: GameActionResolver, side: int,
-		all_foes: Array[Vector2i] = [], hazards: Dictionary = {}) -> Array:
+		all_foes: Array[Vector2i] = [], hazards: Dictionary = {},
+		vehicle_risk: PackedFloat32Array = PackedFloat32Array()) -> Array:
 	var state := r.state
 	var grid := state.grid
 	var gw := grid.width
 	var threat := r.fire_cover(side, true)
 	if hazards.is_empty():
 		hazards = Obs.hazards(r)
+	if vehicle_risk.is_empty():
+		vehicle_risk = Obs.vehicle_crush_threat(r, side)
 	var foes: Array[Vector2i] = all_foes.duplicate() if not all_foes.is_empty() \
 			else _visible_foes(r, side)
+	# With no visible contact on a Giant board, keep some moves that advance
+	# beyond deployment instead of filling the budget with random local shuffles.
+	if foes.is_empty() and maxi(grid.width, grid.height) >= 100:
+		foes.append(Vector2i(grid.width / 2, grid.height / 2))
 	var actor := state.get_unit(moves[0].actor_id)
 	# Сближение меряем до шести ближайших к бойцу врагов, а не до всех: дальше его хода
 	# остальные на выбор клетки не влияют, а перебор «каждая клетка × каждый враг» на
@@ -354,11 +400,13 @@ static func _tactical_order(moves: Array, r: GameActionResolver, side: int,
 		# Public event warnings must survive candidate pruning, even under fog.
 		if actor != null and actor.borg_id == -1:
 			sc -= 6.0 * (hazards["gas"][ci] + hazards["gas_warning"][ci])
-		sc -= 6.0 * hazards["artillery_warning"][ci]
+			sc -= 6.0 * hazards["artillery_warning"][ci]
+			sc -= 8.0 * vehicle_risk[ci]
 		if grid.cell_fast(c.x, c.y).has_cover():
 			sc += 1.0
 		if not foes.is_empty():
-			sc += 0.15 * float(d0 - _nearest(foes, c))
+			sc += (0.30 if maxi(grid.width, grid.height) >= 100 else 0.15) \
+				* float(d0 - _nearest(foes, c))
 		keys.append(int(round((1000.0 - sc) * 100.0)) * 65536 + i)
 	keys.sort()
 	var out: Array = []

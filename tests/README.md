@@ -207,3 +207,5 @@ that it does not crash, does not deadlock the AI, and does not desync. Play the
 real game as well.
 
 `run_rl_learning.gd` verifies round-clock discounting across a pool response, live public hazards without omniscience, and network-recorded replay determinism. `rl/test_learning_environment.py` covers spatial batches, demonstration imports/updates, checkpoint migration, paired model selection, and real head-to-head protocol routing.
+
+`run_rl_giant_defense.gd` checks that a visible tank's drive lane reaches the policy, anti-tank soldiers survive actor sampling, large armies must spend AP before ending, and hidden or disabled tanks create no drive-lane signal.
