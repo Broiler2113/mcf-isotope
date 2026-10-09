@@ -367,8 +367,11 @@ more cores loses more to lockstep.
   `ckpt_<step>.pt.json` — the same minus weights, what the dashboard's table reads.
 - `rl/runs/<branch>/status.json` — heartbeat, written every update and every few seconds
   inside a rollout: state (`running` | `paused` | `stopped` | `crashed`), pid, step,
-  activity and progress, the latest evaluation, memory (trainer / envs / free), disk, and
-  on a crash the error and traceback.
+  activity and progress, completed training win/loss/draw counts, the current evaluation's
+  partial counts, the latest completed main evaluation, memory (trainer / envs / free),
+  disk, and on a crash the error and traceback. Training outcome counts start at zero on
+  a new fork or when an older checkpoint is first resumed; older match results cannot be
+  recovered from a total match count.
 - `rl/runs/<branch>/STOP`, `PAUSE` — flag files; `run.sh stop` / `pause` write them.
 - `rl/runs/<branch>/tb/` — TensorBoard: `ppo/*`, `train/winrate_vs_ai`, `train/winrate_vs_pool`,
   `train/drawrate`, `train/match_rounds`, `train/value_diff_end`, `train/illegal_per_match`,
@@ -381,8 +384,12 @@ more cores loses more to lockstep.
   with `*_<opponent>` columns (win/loss/draw/stall rates, value diff, rounds, and the
   outcome counts), against HARD. Each recorded replay has a `.mcfr.json` sidecar (branch, step,
   opponent, result, value diff, rounds, map) for the gallery. A branch evaluates every
-  `eval_every` updates **and** whenever this file is still empty, so the dashboard's win
-  rates are never blank for long.
+  `eval_every` updates **and** whenever this file is still empty. The dashboard shows each
+  evaluation game's partial win/loss/draw count while the suite runs, then the main HARD
+  result as soon as those games finish; the full suite can take much longer on Giant maps.
+  It can derive partial counts from `eval_games.jsonl` even for a trainer that started
+  before live tally support was added, so refreshing only the dashboard does not disturb
+  an evaluation already in progress.
 - `rl/runs/<branch>/eval_games.jsonl` — one line per evaluation **game**: result, value
   diff, rounds, steps, illegal count, seed, side, map. What the Evaluations page drills
   into; an aggregate hides whether a 0% win rate was honest losses or stalls.

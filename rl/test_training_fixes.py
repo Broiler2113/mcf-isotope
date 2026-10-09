@@ -135,6 +135,13 @@ class FixTests(unittest.TestCase):
                           value_diff=.2, rounds=20, stallrate=0, rout_winrate=.1,
                           value_winrate=.5, illegal=0, outcomes={}, by_map={"drill": .5})
             t.has_eval_history = lambda: True
+            early = []
+            original_status = t.write_status
+            def capture_status(state, activity="", *args, **kwargs):
+                if activity == "main evaluation complete":
+                    early.append(t.last_eval.copy())
+                original_status(state, activity, *args, **kwargs)
+            t.write_status = capture_status
             try:
                 with patch.object(t, "evaluate", return_value=result) as evaluate:
                     t.update = 25
@@ -150,6 +157,31 @@ class FixTests(unittest.TestCase):
                     call = evaluate.call_args_list[-1]
                     self.assertEqual(call.kwargs["round_cap"], 40)
                     self.assertEqual(call.kwargs["maps"], ["heldout", "heldout"])
+                    self.assertEqual(early[-1]["winrate_hard"], .6)
+                    self.assertNotIn("heldout", early[-1])
+            finally:
+                t.writer.close()
+
+    def test_training_outcomes_survive_resume_and_old_checkpoint(self):
+        with tempfile.TemporaryDirectory() as d:
+            t = train.Trainer(d, train.with_defaults({}))
+            try:
+                for result in ("win", "loss", "draw_cap", "draw_steps"):
+                    t.record_training_outcome(result)
+                self.assertEqual(t.train_outcomes, {"win": 1, "loss": 1, "draw": 2})
+                saved = t.save()
+                resumed = train.Trainer(d, train.with_defaults({}))
+                try:
+                    resumed.load(saved)
+                    self.assertEqual(resumed.train_outcomes, t.train_outcomes)
+                    old = t.state_dict()
+                    del old["train_outcomes"]
+                    old_path = os.path.join(d, "old.pt")
+                    torch.save(old, old_path)
+                    resumed.load(old_path)
+                    self.assertEqual(resumed.train_outcomes, {"win": 0, "loss": 0, "draw": 0})
+                finally:
+                    resumed.writer.close()
             finally:
                 t.writer.close()
 
