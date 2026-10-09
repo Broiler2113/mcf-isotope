@@ -52,7 +52,8 @@ static func _free(m: MapData, c: Vector2i, taken: Dictionary) -> bool:
 
 ## Расставить по зонам одинаковый для всех сторон состав: `units` бойцов и до `tanks_max`
 ## танков (каждый со своим экипажем). Возвращает false, если зона не вместила армию.
-static func populate(m: MapData, rng: RandomNumberGenerator, units: int, tanks_max: int) -> bool:
+static func populate(m: MapData, rng: RandomNumberGenerator, units: int,
+		tanks_max: int, tanks_min: int = 0) -> bool:
 	var sides: Array[int] = [MCF.Owner.PLAYER_1, MCF.Owner.PLAYER_2]
 	var comp: Array[String] = []
 	for i in units:
@@ -61,6 +62,7 @@ static func populate(m: MapData, rng: RandomNumberGenerator, units: int, tanks_m
 	for i in tanks_max:
 		if rng.randf() < 0.45:
 			tanks += 1
+	tanks = maxi(tanks, mini(tanks_min, tanks_max))
 	m.spawns = m.spawns.filter(func(s: Dictionary) -> bool: return not MCF.is_player(int(s["owner"])))
 	var taken := {}
 	for s: Dictionary in m.spawns:

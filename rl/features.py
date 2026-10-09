@@ -1,7 +1,7 @@
 """Observation and candidate featurisation (spec Section 3, 4).
 
 The env server ships a fog-limited observation (rl/ObsEncoder.gd) as dense per-tile
-arrays plus entity lists; this module turns it into the fixed 64x64xC grid tensor, the
+arrays plus entity lists; this module turns it into a padded spatial grid tensor, the
 flat feature vector, and one feature row per legal intent (the candidate the policy
 scores). Every index below is fixed: changing the layout means retraining.
 """
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
-CANVAS = 64  # spec 3.1 / Q2: pad every pool map to 64x64, mask the rest
+CANVAS = 64  # minimum canvas; larger boards use 16-cell buckets
 
 N_FEATURES = 20
 N_UNIT_TYPES = 16
@@ -65,7 +65,8 @@ C_VEH_AP = C_VEH_CREW + 1
 C_GAS = C_VEH_AP + 1
 C_GAS_WARNING = C_GAS + 1
 C_ARTILLERY_WARNING = C_GAS_WARNING + 1
-N_CHANNELS = C_ARTILLERY_WARNING + 1
+C_VEH_CRUSH = C_ARTILLERY_WARNING + 1
+N_CHANNELS = C_VEH_CRUSH + 1
 
 FLAT_DIM = 20
 
@@ -102,7 +103,11 @@ F_REACH = F_PRED + 2
 F_COMPONENT = F_REACH + 1
 F_COMPONENT_HEALTH = F_COMPONENT + len(VEH_COMPONENTS)
 F_HAZARD = F_COMPONENT_HEALTH + 2
-CAND_DIM = F_HAZARD + 6  # actor/target: active gas, pending gas, pending artillery
+F_VEH_CRUSH = F_HAZARD + 6
+F_ADVANCE = F_VEH_CRUSH + 2
+F_SPACING = F_ADVANCE + 1
+F_COUNTER_TANK = F_SPACING + 1
+CAND_DIM = F_COUNTER_TANK + 1
 
 
 def grid_tensor(obs: dict, canvas: int = CANVAS) -> np.ndarray:
@@ -133,9 +138,11 @@ def grid_tensor(obs: dict, canvas: int = CANVAS) -> np.ndarray:
     g[C_DIRT][sl] = dirt / 2.0
     g[C_VEH_FOOT][sl] = veh
     for key, channel in (("gas", C_GAS), ("gas_warning", C_GAS_WARNING),
-                         ("artillery_warning", C_ARTILLERY_WARNING)):
+                         ("artillery_warning", C_ARTILLERY_WARNING),
+                         ("vcrush", C_VEH_CRUSH)):
         if key in obs:
-            g[channel][sl] = np.asarray(obs[key], dtype=np.float32).reshape(h, w)
+            scale = 4.0 if key == "vcrush" else 1.0
+            g[channel][sl] = np.asarray(obs[key], dtype=np.float32).reshape(h, w) / scale
     # Quarters of an expected hit on the wire (ObsEncoder._quarters); six hits a turn is
     # already "certain death", so the channel saturates there.
     if "threat" in obs:
@@ -251,6 +258,27 @@ def candidate_rows(obs: dict, legal: list[dict], canvas: int = CANVAS) -> tuple[
     rows = np.zeros((n, CAND_DIM), dtype=np.float32)
     cells = np.full((n, 2), -1, dtype=np.int64)
     vehicles = {v["id"]: v for v in obs.get("vehicles", []) if "id" in v}
+    hostile_vehicles = [v for v in obs.get("vehicles", []) if v["own"] == 1 and v.get("alive", 1)]
+    giant = max(w, h) >= 100
+    goals = ([(u["x"], u["y"]) for u in obs["units"]
+              if u["own"] == 1 and not u.get("aboard", 0)
+              and 0 <= u["x"] < w and 0 <= u["y"] < h] +
+             [(v["x"] + v["w"] // 2, v["y"] + v["h"] // 2)
+              for v in obs.get("vehicles", []) if v["own"] == 1 and v.get("alive", 1)])
+    if not goals:
+        goals = [(w // 2, h // 2)]
+    own_cells = {(u["x"], u["y"]) for u in obs["units"]
+                 if u["own"] == 0 and not u.get("aboard", 0)}
+
+    def near_allies(x, y):
+        return sum((x + dx, y + dy) in own_cells for dy in range(-2, 3)
+                   for dx in range(-2, 3))
+
+    actor_goals = {}
+
+    def goal_distance(x, y, nearby):
+        return min(max(abs(x - gx), abs(y - gy)) for gx, gy in nearby)
+
     for i, c in enumerate(legal):
         wire = c["i"]
         k = KIND_INDEX.get(wire.get("t", ""), 0)
@@ -305,6 +333,20 @@ def candidate_rows(obs: dict, legal: list[dict], canvas: int = CANVAS) -> tuple[
             rows[i, F_PRED + 1] = min(float(c.get("er", 0)), 6.0) / 6.0
         rows[i, F_REACH] = float(c.get("rh", 0.0))
         rows[i, F_HAZARD:F_HAZARD + 6] = c.get("hazard", [0.0] * 6)
+        rows[i, F_VEH_CRUSH:F_VEH_CRUSH + 2] = c.get("vc", [0.0, 0.0])
+        if giant and wire.get("t") == "move" and ax >= 0 and tx >= 0:
+            if (ax, ay) not in actor_goals:
+                actor_goals[(ax, ay)] = sorted(goals, key=lambda g: max(abs(ax - g[0]), abs(ay - g[1])))[:8]
+            nearby = actor_goals[(ax, ay)]
+            rows[i, F_ADVANCE] = np.clip((goal_distance(ax, ay, nearby) -
+                                         goal_distance(tx, ty, nearby)) / 8.0, -1, 1)
+            rows[i, F_SPACING] = np.clip((near_allies(ax, ay) - near_allies(tx, ty)) / 10.0, -1, 1)
+        if wire.get("t") in ("shoot", "veh_cannon") and tx >= 0:
+            on_hostile_hull = any(v["x"] <= tx < v["x"] + v["w"] and
+                                  v["y"] <= ty < v["y"] + v["h"] for v in hostile_vehicles)
+            if on_hostile_hull and not any(max(abs(tx - ux), abs(ty - uy)) <= 2
+                                           for ux, uy in own_cells):
+                rows[i, F_COUNTER_TANK] = 1.25 if wire.get("cm") in ("tracks_l", "tracks_r") else 1.0
         apc = int(c.get("apc", 0))
         if apc:
             rows[i, F_TAC + 3] = apc / 3.0

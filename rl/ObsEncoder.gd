@@ -83,9 +83,60 @@ static func tactics(r: GameActionResolver, side: int, memory: RefCounted = null)
 	return {"r": r, "side": side, "w": r.state.grid.width,
 			"threat": r.fire_cover(side, true), "cover": r.fire_cover(side, false),
 			"fnext": fc["fire"], "ereach": fc["reach"],
+			"vcrush": vehicle_crush_threat(r, side),
 			"lastseen": memory.layer(r, side) if memory != null else PackedInt32Array(),
 			"dthreat": drone_threat(r, side),
 			"reach": {}, "vt": {}, "hazards": hazards(r)}
+
+## Cells a visible, driveable enemy vehicle could sweep next turn. This is an
+## intentionally conservative lane forecast: the opponent will get fresh AP, and a
+## tank may turn before driving. Only visible vehicles and known terrain contribute.
+## In particular, hidden occupants never shorten a lane and reveal their location.
+static func vehicle_crush_threat(r: GameActionResolver, side: int) -> PackedFloat32Array:
+	var grid := r.state.grid
+	var out := PackedFloat32Array()
+	out.resize(grid.width * grid.height)
+	var visible: Dictionary = r.team_visible_coords(side) if r.fog_enabled else {}
+	for veh: Vehicle in r.state.all_vehicles():
+		if not veh.alive() or veh.is_borg() or not veh.can_drive() \
+				or veh.living_crew_count() == 0 or rel_owner(r, side, veh.owner) != 1:
+			continue
+		var seen := not r.fog_enabled
+		for fc: Vector2i in veh.footprint():
+			if visible.has(fc):
+				seen = true
+				break
+		if not seen:
+			continue
+		var dirs: Array[Vector2i] = [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT]
+		if veh.facing == Vector2i.ZERO:
+			dirs.append_array([Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1)])
+		elif not dirs.has(veh.facing):
+			dirs.append(veh.facing)
+			dirs.append(-veh.facing)
+		var per_ap := MCF.SHUTTLE_CELLS_PER_AP if veh.facing == Vector2i.ZERO \
+				else int(VehicleDB.get_vehicle(veh.type_id).get("speed", 0))
+		for dir: Vector2i in dirs:
+			var straight := veh.facing == Vector2i.ZERO or dir == veh.facing or dir == -veh.facing
+			var reach := mini(48, per_ap * (3 if straight else 2))
+			var weight := 1.0 if straight else 0.5
+			for step in range(1, reach + 1):
+				var footprint := veh.footprint_from(veh.origin + dir * step)
+				var blocked := false
+				for c: Vector2i in footprint:
+					if not grid.in_bounds(c):
+						blocked = true
+						break
+					if (not r.fog_enabled or r.team_knows(side, c)) and grid.cell(c).is_space \
+							and veh.type_id == "tank":
+						blocked = true
+						break
+				if blocked:
+					break
+				for c: Vector2i in footprint:
+					var i := c.y * grid.width + c.x
+					out[i] = maxf(out[i], weight)
+	return out
 
 ## Event rectangles are announced publicly, including under fog. Never expose
 ## future dice outcomes or a hidden unit through these layers. 1 = due this round,
@@ -296,6 +347,7 @@ static func encode(r: GameActionResolver, side: int, round_cap: int, tac: Dictio
 		"combat_started": 1 if state.combat_started else 0,
 		"threat": _quarters(tac["threat"]), "fcover": _quarters(tac["cover"]),
 		"fnext": _quarters(tac["fnext"]), "ereach": _quarters(tac["ereach"]),
+		"vcrush": _quarters(tac["vcrush"]),
 		"dthreat": _quarters(tac["dthreat"]),
 		"lastseen": tac["lastseen"],
 		"gas": tac["hazards"]["gas"], "gas_warning": tac["hazards"]["gas_warning"],
@@ -397,7 +449,14 @@ static func describe(state: GameState, intent: Intent, tac: Dictionary = {}) -> 
 	if not tac.is_empty():
 		var at := Vector2i(int(d["ax"]), int(d["ay"]))
 		d["hazard"] = _hazard_at(tac, at) + _hazard_at(tac, tgt)
+		d["vc"] = [_vehicle_risk_at(tac, at), _vehicle_risk_at(tac, tgt)]
 	return d
+
+static func _vehicle_risk_at(tac: Dictionary, at: Vector2i) -> float:
+	var r: GameActionResolver = tac["r"]
+	if not r.state.grid.in_bounds(at):
+		return 0.0
+	return tac["vcrush"][at.y * int(tac["w"]) + at.x]
 
 static func _hazard_at(tac: Dictionary, at: Vector2i) -> Array:
 	var r: GameActionResolver = tac["r"]

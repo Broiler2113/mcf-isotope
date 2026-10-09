@@ -15,11 +15,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from features import CAND_DIM, CANVAS, FLAT_DIM, N_CHANNELS, F_KIND, KIND_INDEX
+from features import (CAND_DIM, CANVAS, FLAT_DIM, N_CHANNELS, F_KIND,
+                      F_VEH_CRUSH, F_ADVANCE, F_SPACING, F_COUNTER_TANK, KIND_INDEX)
 
 FMAP = 32
 EMB = 256
 RES_DILATIONS = (2, 4, 8, 16)
+SPATIAL_LIMIT = 96  # keep Giant-board convolutions affordable on the Mac
 
 
 def greedy_action(logits, cand, mask):
@@ -71,14 +73,17 @@ class PolicyNet(nn.Module):
             self.res.append(blk)
 
     def embed(self, grid: torch.Tensor, flat: torch.Tensor):
-        fm = self.conv(grid)                                   # B, F, 64, 64
+        if max(grid.shape[-2:]) > SPATIAL_LIMIT:
+            grid = F.interpolate(grid, size=(SPATIAL_LIMIT, SPATIAL_LIMIT),
+                                 mode="bilinear", align_corners=False)
+        fm = self.conv(grid)
         for blk in self.res:
             fm = F.relu(fm + blk(fm))
         pooled = self.pool(fm).flatten(1)                      # B, F*16
         s = self.state(torch.cat([pooled, self.flat(flat)], dim=1))
         return fm, s
 
-    def scores(self, fm, s, cand, cells, mask):
+    def scores(self, fm, s, cand, cells, mask, source_width=None):
         """cand: B,N,CAND_DIM; cells: B,N,2 (canvas index or -1); mask: B,N bool.
 
         Each candidate is scored from cat([its row, fm at the actor, fm at the target,
@@ -89,6 +94,13 @@ class PolicyNet(nn.Module):
         B, N, _ = cand.shape
         b, k = mask.nonzero(as_tuple=True)                     # K real candidates
         c = cells[b, k]                                        # K, 2
+        if source_width is not None and source_width != fm.shape[-1]:
+            # Candidate indices refer to the full observation. Gather from the
+            # corresponding cell after the large-map feature grid is compressed.
+            valid = c >= 0
+            x = (c.clamp(min=0) % source_width) * fm.shape[-1] // source_width
+            y = (c.clamp(min=0) // source_width) * fm.shape[-2] // source_width
+            c = (y * fm.shape[-1] + x).masked_fill(~valid, -1)
         flat_fm = fm.flatten(2).transpose(1, 2)                # B, 4096, F
         a = flat_fm[b, c[:, 0].clamp(min=0)] * (c[:, 0:1] >= 0)
         t = flat_fm[b, c[:, 1].clamp(min=0)] * (c[:, 1:2] >= 0)
@@ -97,11 +109,30 @@ class PolicyNet(nn.Module):
         h = torch.cat([cand[b, k], a, t], dim=1) @ first.weight[:, :d].T
         h = h + (s @ first.weight[:, d:].T + first.bias)[b]
         out = self.cand[1:](h).squeeze(-1)
+        # Fixed tactical priors remain active for older checkpoints whose newly
+        # appended input weights are zero. The safety term sees visible vehicle
+        # lanes; progress and spacing terms apply to Giant boards. PPO and live
+        # play use these same logits.
+        if cand.shape[2] >= F_VEH_CRUSH + 2:
+            move = cand[b, k, F_KIND + KIND_INDEX["move"]] > .5
+            risk_here = cand[b, k, F_VEH_CRUSH]
+            risk_there = cand[b, k, F_VEH_CRUSH + 1]
+            out = out + move.to(out.dtype) * (2.0 * (risk_here - risk_there) - 3.0 * risk_there)
+            if cand.shape[2] >= F_SPACING + 1:
+                # Large-board progress and dispersion start useful even with a
+                # checkpoint that has only ever seen platoon-sized maps.
+                out = out + move.to(out.dtype) * (cand[b, k, F_ADVANCE] +
+                                                  .5 * cand[b, k, F_SPACING])
+            if cand.shape[2] >= F_COUNTER_TANK + 1:
+                # Give a clean shot at a visible tank a chance against hundreds
+                # of near-identical movement candidates. A shot whose blast is
+                # close to friendly infantry gets no fixed boost.
+                out = out + 2.0 * cand[b, k, F_COUNTER_TANK]
         return torch.full((B, N), -1e9, dtype=out.dtype, device=out.device).index_put((b, k), out)
 
     def forward(self, grid, flat, cand, cells, mask):
         fm, s = self.embed(grid, flat)
-        return self.scores(fm, s, cand, cells, mask), self.value(s).squeeze(-1)
+        return self.scores(fm, s, cand, cells, mask, grid.shape[-1]), self.value(s).squeeze(-1)
 
     @torch.no_grad()
     def act(self, grid, flat, cand, cells, mask, greedy: bool = False):

@@ -58,7 +58,7 @@ class ArmyEventTests(unittest.TestCase):
         self.assertEqual(grid[ft.C_GAS, ay, ax], 1)
         self.assertEqual(grid[ft.C_GAS_WARNING, ty, tx], .5)
         self.assertEqual(grid[ft.C_ARTILLERY_WARNING, ty, tx], 1)
-        np.testing.assert_array_equal(rows[0, ft.F_HAZARD:], move["hazard"])
+        np.testing.assert_array_equal(rows[0, ft.F_HAZARD:ft.F_VEH_CRUSH], move["hazard"])
         self.assertEqual(ft.grid_tensor(fake_obs())[ft.C_GAS:].sum(), 0)
 
     def test_previous_checkpoint_and_adam_keep_logits_with_new_features(self):
@@ -68,6 +68,9 @@ class ArmyEventTests(unittest.TestCase):
         opt_old = torch.optim.Adam(old.parameters(), lr=1e-4)
         grid, flat = torch.rand(1, ft.N_CHANNELS, 64, 64), torch.rand(1, ft.FLAT_DIM)
         cand = torch.rand(1, 4, ft.CAND_DIM)
+        # A pre-vehicle-threat observation supplies zero for the newly appended
+        # fields; the fixed safety prior is intentionally active only at risk.
+        cand[:, :, ft.F_VEH_CRUSH:] = 0
         cells, mask = torch.zeros(1, 4, 2, dtype=torch.long), torch.ones(1, 4, dtype=torch.bool)
         args = (grid[:, :ft.C_GAS], flat, cand[:, :, :ft.F_HAZARD], cells, mask)
         logits, value = old(*args)

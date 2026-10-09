@@ -12,7 +12,8 @@ import numpy as np
 import torch
 import train
 from demonstrations import import_replay, ReplayDataset, read_chunk
-from features import Sparse, N_CHANNELS, CAND_DIM
+from features import (Sparse, N_CHANNELS, CAND_DIM, C_VEH_CRUSH, F_VEH_CRUSH,
+                      F_ADVANCE, F_SPACING, F_COUNTER_TANK, candidate_rows, grid_tensor)
 from mcf_env import PROJECT, VecEnv
 from model import PolicyNet
 from selection import promotion_decision
@@ -51,6 +52,72 @@ class LearningTests(unittest.TestCase):
         self.assertEqual(sorted(int(i) for b in batches for i in b), list(range(4)))
         for b in batches:
             self.assertEqual(len({samples[i].grid.shape for i in b}), 1)
+
+    def test_vehicle_lane_reaches_policy_and_safe_move_prior(self):
+        obs = fake_obs()
+        obs["vcrush"] = [0] * (obs["w"] * obs["h"])
+        obs["vcrush"][7 * obs["w"] + 5] = 4
+        legal = [legal_move(5, 7, 6, 7), legal_move(5, 7, 5, 8)]
+        legal[0]["vc"] = [1, 0]
+        legal[1]["vc"] = [1, 1]
+        rows, cells = candidate_rows(obs, legal)
+        self.assertEqual(rows[0, F_VEH_CRUSH], 1)
+        self.assertEqual(rows[1, F_VEH_CRUSH + 1], 1)
+        grid = grid_tensor(obs)
+        yy = (64 - obs["h"]) // 2 + 7
+        xx = (64 - obs["w"]) // 2 + 5
+        self.assertEqual(grid[C_VEH_CRUSH, yy, xx], 1)
+        net = PolicyNet().eval()
+        with torch.no_grad():
+            for p in net.parameters():
+                p.zero_()
+            scores, _ = net(torch.from_numpy(grid[None]), torch.zeros(1, 20),
+                            torch.from_numpy(rows[None]), torch.from_numpy(cells[None]),
+                            torch.ones(1, 2, dtype=torch.bool))
+        self.assertGreater(scores[0, 0].item(), scores[0, 1].item() + 2)
+
+    def test_giant_board_uses_bounded_feature_grid_and_valid_cells(self):
+        net = PolicyNet()
+        grid = torch.rand(1, N_CHANNELS, 160, 160)
+        flat = torch.zeros(1, 20)
+        cand = torch.zeros(1, 2, CAND_DIM)
+        cells = torch.tensor([[[159 * 160 + 159, 0], [159 * 160 + 80, 80]]])
+        mask = torch.ones(1, 2, dtype=torch.bool)
+        fmap, _ = net.embed(grid, flat)
+        self.assertEqual(tuple(fmap.shape[-2:]), (96, 96))
+        scores, value = net(grid, flat, cand, cells, mask)
+        self.assertTrue(torch.isfinite(scores).all())
+        (scores.sum() + value.sum()).backward()
+        self.assertIsNotNone(net.conv[0].weight.grad)
+
+    def test_giant_moves_approach_contact_and_leave_dense_clumps(self):
+        obs = dict(w=149, h=119, units=[dict(x=x, y=20, own=0) for x in range(11, 17)] +
+                   [dict(x=125, y=20, own=1)], vehicles=[])
+        toward = legal_move(15, 20, 23, 20)
+        away = legal_move(15, 20, 7, 20)
+        rows, _ = candidate_rows(obs, [toward, away])
+        self.assertGreater(rows[0, F_ADVANCE], 0)
+        self.assertLess(rows[1, F_ADVANCE], 0)
+        self.assertGreater(rows[0, F_SPACING], 0)
+        obs["units"].append(dict(x=-9999, y=-9999, own=1, aboard=1))
+        rows_with_crew, _ = candidate_rows(obs, [toward])
+        self.assertEqual(rows_with_crew[0, F_ADVANCE], rows[0, F_ADVANCE])
+        small = dict(obs, w=80, h=60)
+        rows_small, _ = candidate_rows(small, [toward])
+        self.assertEqual(rows_small[0, F_ADVANCE], 0)
+
+    def test_clean_track_shot_prior_disappears_near_allies(self):
+        obs = dict(w=32, h=24, units=[dict(x=2, y=2, own=0)], vehicles=[
+            dict(id=9, x=15, y=10, w=3, h=3, own=1, alive=1, type=0,
+                 comps=dict(hull=[8, 8]), fx=1, fy=0, wrecked=0)])
+        shot = dict(i=dict(t="shoot", a=1, tid=-1, cx=16, cy=11,
+                           cm="tracks_l", s=1), ax=2, ay=2, tx=16, ty=11,
+                    at=4, tt=-1)
+        clean, _ = candidate_rows(obs, [shot])
+        self.assertEqual(clean[0, F_COUNTER_TANK], 1.25)
+        obs["units"].append(dict(x=16, y=12, own=0))
+        crowded, _ = candidate_rows(obs, [shot])
+        self.assertEqual(crowded[0, F_COUNTER_TANK], 0)
 
     def test_human_examples_change_policy_without_fake_ppo_ratios(self):
         with tempfile.TemporaryDirectory() as d:

@@ -526,7 +526,10 @@ func _gen_map(spec: String, arng: RandomNumberGenerator) -> MapData:
 			units = maxi(4, units * 3 / 4)
 			tanks = tanks * 3 / 4
 			continue
-		if m != null and ArmyBuilder.populate(m, arng, units, tanks):
+		# On Huge/Giant scenarios a requested tank must actually be present: an
+		# empty roll teaches nothing about the player's common armor threat.
+		if m != null and ArmyBuilder.populate(m, arng, units, tanks,
+				1 if size >= 3 and tanks > 0 else 0):
 			return m
 	return null
 
@@ -1013,9 +1016,10 @@ func _response(reward: float, is_reset: bool) -> Dictionary:
 		return resp
 	var acting := state.active_player()
 	var t0 := Time.get_ticks_usec()
-	_legal = IntentBudget.cap(IntentBudget.drop_blind_shots(_drop_looping(resolver.legal_intents(
-			acting, IntentBudget.actor_subset(resolver, acting, max_actors, _cap_rng))),
-			resolver, acting), max_candidates, _cap_rng, resolver, acting)
+	_legal = IntentBudget.cap(IntentBudget.keep_large_army_active(IntentBudget.drop_blind_shots(
+			_drop_looping(resolver.legal_intents(acting,
+			IntentBudget.actor_subset(resolver, acting, max_actors, _cap_rng))),
+			resolver, acting), state, acting), max_candidates, _cap_rng, resolver, acting)
 	var t1 := Time.get_ticks_usec()
 	if not _memory.has(acting):
 		_memory[acting] = EnemyMemory.new()
@@ -1091,6 +1095,7 @@ func _phi(tac: Dictionary) -> float:
 	var threat: PackedFloat32Array = tac["threat"]
 	var fnext: PackedFloat32Array = tac["fnext"]
 	var cover: PackedFloat32Array = tac["cover"]
+	var vehicle_crush: PackedFloat32Array = tac["vcrush"]
 	var w: int = tac["w"]
 	var mine := 0.0
 	var theirs := 0.0
@@ -1102,6 +1107,9 @@ func _phi(tac: Dictionary) -> float:
 		var k := 0.5 if state.grid.cell(u.coord).has_cover() else 1.0
 		if rel == 0:
 			mine += float(u.stats.cost) * (minf(threat[i], 3.0) + 0.5 * minf(fnext[i], 3.0)) * k
+			# Cover does not stop a tank. Escaping its visible drive lane (or
+			# disabling a track) is valuable before the first casualty occurs.
+			mine += float(u.stats.cost) * 2.0 * vehicle_crush[i]
 		elif rel == 1 and resolver.is_visible_to_team(side, u):
 			theirs += float(u.stats.cost) * minf(cover[i], 3.0) * k
 	return (theirs - mine) / _norm / 3.0

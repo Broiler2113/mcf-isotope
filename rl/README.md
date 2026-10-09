@@ -41,10 +41,13 @@ The profile changes the learning problem in these ways:
   longer shrinks the strategic horizon simply because it needs more actions. Rollout
   boundaries still bootstrap from the value head; they are not terminal states.
 - **Longer games and broader boards:** 40-round training, 60-round held-out tests,
-  24,000-action safety cap, generated boards up to 96x96. Encoding expands in 16-tile
+  24,000-action safety cap, generated Giant boards up to 149x119 and armies of
+  120–200 soldiers per side. Encoding expands in 16-tile
   buckets and PPO/inference group equal canvas sizes so padding cannot change a
-  position's policy between training and serving. Existing 64x64 checkpoints load.
-- **Curriculum and league:** all five environments, small/medium/large armies,
+  position's policy between training and serving. The network compresses boards
+  above 96 to a 96×96 feature grid before its costly convolutions; candidate
+  coordinates still address the correct position. Existing 64x64 checkpoints load.
+- **Curriculum and league:** all five environments, small/medium/Giant armies,
   every tactical drill, 50% fog, 35% hazard games; 70% historical-policy opponents and
   30% HARD styles. Training losses against HARD increase that scenario's sampling
   weight, with a nonzero floor for practiced skills. Forks preserve up to three
@@ -59,7 +62,7 @@ The profile changes the learning problem in these ways:
   rather than pretending historical human moves are on-policy PPO samples.
 - **Model selection:** `best.pt` starts as the preserved parent. Every 1,000 updates,
   the challenger plays 160 games against it: fresh map seeds, mirrored starting sides,
-  five environments, two army sizes, fog on/off, and hazards on/off. A one-sided
+  five environments, including Giant armies, fog on/off, and hazards on/off. A one-sided
   Hoeffding lower bound on the mean paired score must exceed 50%, with no illegal
   actions and at most 5% action-cap stalls. Alpha spending across attempts limits
   repeated-test false promotions; the counter/seed allocation survives restart.
@@ -71,8 +74,24 @@ The profile changes the learning problem in these ways:
   frequent fixed-map evaluations, sparse replay shards with a one-shard memory cache,
   and one importer worker at a time. Existing resource monitoring, checkpoint
   retention, and supervisor recycling stay in effect. `config/league_gpu.yaml`
-  provides an optional CUDA/16-worker profile; benchmark the actual remote machine
+  provides an optional CUDA/8-worker profile; benchmark the actual remote machine
   before choosing its worker count. No remote machine is provisioned by these scripts.
+- **Vehicle defense:** visible enemy tanks now produce a drive-lane danger layer for
+  the policy, movement candidates, and position reward. Anti-tank soldiers near a
+  visible vehicle are offered before idle infantry. On armies of at least 64 soldiers,
+  End Turn stays unavailable while more than half their on-board AP remains and a
+  move or attack is legal. A clean track shot at a visible tank receives a small
+  priority; shots with friendly infantry near the blast receive no such priority.
+  These safeguards also apply when serving older checkpoints;
+  they reduce premature passes, while the new weights still need training to learn
+  good counterattacks and spacing.
+- **Positioning on Giant boards:** candidate moves expose progress toward visible
+  enemies (or the map center before contact) and local friendly crowding. A small
+  fixed movement prior favors closing distance and leaving dense clumps, and a
+  stronger fixed penalty avoids entering a visible tank lane. The policy can override
+  these priors through its learned scores; they are used identically in PPO and play.
+  Generated Huge/Giant scenarios requesting tanks now always place at least one per
+  side, so armor defense is practiced instead of disappearing in a random zero roll.
 
 Changing the discount clock changes the value target. On such a fork/load, policy
 weights are preserved but the value head and optimizer are reset deliberately. The
@@ -86,7 +105,11 @@ preflights the new maps, forks training, and starts the supervisor/dashboard:
 cd /Users/28azverev/mcf-isotope
 git fetch origin
 git show origin/main:rl/tools/deploy_rlm.sh > /tmp/isotope-rlm-learning-update.sh
-bash /tmp/isotope-rlm-learning-update.sh tactical-4 tactical-5 rl/config/league.yaml
+if [ -f rl/runs/tactical-5/latest.pt ]; then
+  bash /tmp/isotope-rlm-learning-update.sh tactical-5 tactical-6 rl/config/league.yaml
+else
+  bash /tmp/isotope-rlm-learning-update.sh tactical-4 tactical-5 rl/config/league.yaml
+fi
 ```
 
 Use the actual source branch if it has changed. The script refuses to overwrite an
@@ -403,7 +426,7 @@ logits. Live play and evaluation use the stopping rule described below.
 | opponents | `train.py` | phase `league`: HARD styles + past checkpoints, prioritised toward those that beat it (PFSP) |
 | measuring | dashboard **Tactics** page | drill win rates vs HARD, per unit type: action share, hit rate, kills, losses; exposure at end of turn; 2-3 AP moves |
 
-A generated map is written `gen:<style|any>:<size index>:<units>:<tanks>` in `maps:`; units and tanks may be ranges (`60-200`), drawn per episode. Generated maps stay within the 64×64 training canvas, including the full playable border and rim. Cores are limited to 40 cells per dimension; armies that force further growth are reduced. No tiles are cropped from an observation.
+A generated map is written `gen:<style|any>:<size index>:<units>:<tanks>` in `maps:`; units and tanks may be ranges (`60-200`), drawn per episode. The map must fit the configured `canvas_size`, including its border. `tactical.yaml` retains its old small canvas; `league.yaml` uses 160 so Giant maps keep their full 125×95 playable core and 12-cell border. No tiles are cropped from an observation.
 Cost: an env step on the company-scale town map is ~1.5× the pre-tactical one (threat maps,
 the larger move list, the ordering) — fewer samples per hour, each one far more informative.
 
