@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import copy
 import glob
+import gc
 import json
 import os
 import random
@@ -31,6 +32,7 @@ import subprocess
 import sys
 import time
 import traceback
+from pathlib import Path
 from collections import Counter, OrderedDict, defaultdict
 from dataclasses import dataclass
 
@@ -48,6 +50,7 @@ from features import (CAND_DIM, CANVAS, FLAT_DIM, N_CHANNELS, Sparse, candidate_
 from mcf_env import (EXTERNAL, HARD, PROJECT, EnvDied, GodotEnv,  # noqa: E402
                      EpisodeConfig, VecEnv, refresh_class_cache)
 from model import OnnxWrapper, PolicyNet, load_compat  # noqa: E402
+from resources import trim_owned_logs  # noqa: E402
 
 RUNS = os.path.join(PROJECT, "rl", "runs")
 # Never shrink the rollout below this under memory pressure: a handful of transitions
@@ -95,6 +98,9 @@ DEFAULTS = dict(
     # "stopped: disk floor" in the morning and a branch that died at 4am taking its last
     # checkpoint with it.
     disk_floor_mb=1536,
+    disk_cleanup_trigger_mb=1024, log_max_mb=64,
+    memory_cleanup_free_mb=1024, gpu_cache_max_mb=1024,
+    gpu_memory_restart_mb=6144, resource_check_seconds=10,
     rollout_budget_mb=0,      # >0: end a rollout early once the buffer reaches this
     # --- tactical env (config/tactical.yaml); every default keeps the old behaviour ---
     # Per-map sampling weights, same order as `maps`. Empty = the old fixed rotation.
@@ -131,6 +137,10 @@ DEFAULTS = dict(
 )
 
 STYLE_NAMES = ["standard", "rush", "turtle", "flank"]
+
+
+class ResourceRecycle(RuntimeError):
+    """Resume the same checkpoint in a fresh process to release Metal/framework memory."""
 
 
 def map_name(path: str) -> str:
@@ -404,6 +414,9 @@ class Trainer:
         self.rollout_budget_mb = float(self.cfg["rollout_budget_mb"]) or float("inf")
         self._base_mb = 0.0
         self._disk = (0.0, 0.0)          # (measured at, MB)
+        self._resource_check_at = 0.0
+        self._resource_restart = False
+        self.resource_cleanup = {}
 
     def has_eval_history(self) -> bool:
         p = os.path.join(self.run_dir, "eval_log.jsonl")
@@ -423,12 +436,16 @@ class Trainer:
 
     # -- checkpoints (9.5) --
     def state_dict(self) -> dict:
-        return dict(model=self.net.state_dict(), opt=self.opt.state_dict(), cfg=self.cfg,
+        state = dict(model=self.net.state_dict(), opt=self.opt.state_dict(), cfg=self.cfg,
                     global_step=self.global_step, update=self.update,
                     matches_done=self.matches_done, map_idx=self.map_idx,
                     parent=self.parent, rng=self.rng.getstate(),
                     episode_seed=self.episode_seed, branch=os.path.basename(self.run_dir),
-                    pfsp=self.pfsp, champion_score=self.champion_score, saved_at=time.time())
+                    pfsp=self.pfsp, champion_score=self.champion_score, saved_at=time.time(),
+                    torch_rng=torch.get_rng_state(), numpy_rng=np.random.get_state())
+        if self.device == "mps":
+            state["mps_rng"] = torch.mps.get_rng_state()
+        return state
 
     def save(self, tag: str | None = None) -> str:
         path = os.path.join(self.run_dir, f"ckpt_{self.global_step:09d}.pt" if tag is None else tag)
@@ -440,7 +457,8 @@ class Trainer:
         torch.save(sd, latest + ".tmp")
         os.replace(latest + ".tmp", latest)
         # Sidecar for the dashboard (11.4): everything but the weights, readable without torch.
-        meta = {k: v for k, v in sd.items() if k not in ("model", "opt", "rng")}
+        meta = {k: v for k, v in sd.items()
+                if k not in ("model", "opt", "rng", "torch_rng", "numpy_rng", "mps_rng")}
         with open(path + ".json", "w") as f:
             json.dump(meta, f)
         self.prune()
@@ -505,17 +523,107 @@ class Trainer:
         Carries memory and disk too. When the OS kills the run there is no exception to
         catch and no traceback to write — the last heartbeat before the kill is the only
         evidence, so it has to say what the run was costing at that moment."""
+        self.maintain_resources()
         st = dict(state=state, pid=os.getpid(), step=self.global_step, update=self.update,
                   matches=self.matches_done, phase=self.cfg["phase"], stage=self.cfg["stage"],
                   activity=activity, done=done, total=total, time=time.time(),
                   next_eval_update=self.next_eval_update(), eval=self.last_eval,
                   disk_mb=self.disk_mb(), disk_free_mb=round(free_mb(self.run_dir)),
-                  code=self.code, **mem_report(), **extra)
+                  code=self.code, resource_cleanup=self.resource_cleanup,
+                  memory_restart_pending=self._resource_restart,
+                  **mem_report(), **self.gpu_memory(), **extra)
         self._last_status = time.time()
         tmp = os.path.join(self.run_dir, "status.json.tmp")
         with open(tmp, "w") as f:
             json.dump(st, f)
         os.replace(tmp, os.path.join(self.run_dir, "status.json"))
+
+    def gpu_memory(self) -> dict:
+        """Track Metal allocations separately; RSS misses much of its cached memory."""
+        if self.device != "mps":
+            return {}
+        try:
+            live = torch.mps.current_allocated_memory() / 2**20
+            driver = torch.mps.driver_allocated_memory() / 2**20
+            return dict(gpu_live_mb=round(live, 1), gpu_driver_mb=round(driver, 1),
+                        gpu_cache_mb=round(max(0.0, driver - live), 1))
+        except (RuntimeError, AttributeError):
+            return {}
+
+    def watch_waiting_resources(self) -> None:
+        self.maintain_resources()
+        if self._resource_restart:
+            raise ResourceRecycle("memory pressure while waiting for an environment response")
+
+    def maintain_resources(self, force: bool = False) -> None:
+        """Run between decisions/minibatches; restart only after a completed update.
+
+        Free unused allocator caches before asking for a process recycle. Checkpoint,
+        optimizer and RNG state survive a recycle; the supervisor resumes this branch.
+        """
+        now = time.monotonic()
+        if not force and now - self._resource_check_at < self.cfg["resource_check_seconds"]:
+            return
+        self._resource_check_at = now
+        disk = free_mb(self.run_dir)
+        trigger = max(self.cfg["disk_cleanup_trigger_mb"], self.cfg["disk_floor_mb"])
+        parent = Path(self.run_dir).parent
+        # Test/benchmark runs under /tmp must not scan unrelated sibling directories.
+        runs = parent if parent.resolve() == Path(RUNS).resolve() else Path(self.run_dir)
+        cleaned = trim_owned_logs(runs, max_mb=self.cfg["log_max_mb"],
+                                  pressure=disk < trigger,
+                                  home=Path.home() if runs == parent else None)
+        if cleaned["reclaimed_mb"]:
+            print(f"[resources] reclaimed {cleaned['reclaimed_mb']:.1f} MB from "
+                  f"{cleaned['files']} diagnostic logs", flush=True)
+            self._disk = (0.0, 0.0)
+        memory = mem_report()
+        gpu = self.gpu_memory()
+        low = memory.get("free_mb", float("inf")) < self.cfg["memory_cleanup_free_mb"]
+        cached = gpu.get("gpu_cache_mb", 0) > self.cfg["gpu_cache_max_mb"]
+        if low or cached:
+            gc.collect()
+            # Preserve all opponents serving an in-flight game, including checkpoints
+            # that retention may already have removed from disk.
+            live = {e.label.split(":", 1)[1] for e in (self.envs.envs if self.envs else [])
+                    if e.label.startswith("pool:")}
+            for path in list(self.pool_cache):
+                if path != "self" and path not in live:
+                    del self.pool_cache[path]
+            if self.device == "mps":
+                try:
+                    torch.mps.synchronize()
+                    torch.mps.empty_cache()
+                except RuntimeError as e:
+                    cleaned["errors"].append(f"Metal cache cleanup: {e}")
+                    self._resource_restart = True
+                    print("[resources] Metal cache cleanup failed; saving for automatic resume", flush=True)
+            elif str(self.device).startswith("cuda"):
+                torch.cuda.empty_cache()
+            after = self.gpu_memory()
+            reclaimed = max(0, gpu.get("gpu_driver_mb", 0) - after.get("gpu_driver_mb", 0))
+            if reclaimed or low:
+                print(f"[resources] cleared unused memory: GPU reclaimed {reclaimed:.1f} MB; "
+                      f"system available {mem_report().get('free_mb', 0):.0f} MB", flush=True)
+            gpu = after
+            cleaned["gpu_reclaimed_mb"] = round(reclaimed, 1)
+        cap = float(self.cfg["gpu_memory_restart_mb"])
+        if cap > 0 and gpu.get("gpu_driver_mb", 0) >= cap and not self._resource_restart:
+            self._resource_restart = True
+            print(f"[resources] Metal driver still holds {gpu['gpu_driver_mb']:.0f} MB "
+                  f"after cleanup; checkpointing after this update for automatic resume", flush=True)
+        after_memory = mem_report() if low or cached else memory
+        limit = float(self.cfg["mem_limit_mb"])
+        if (after_memory.get("free_mb", float("inf")) < self.cfg["memory_cleanup_free_mb"]
+                and limit > 0 and after_memory.get("total_mb", 0) >= limit
+                and not self._resource_restart):
+            self._resource_restart = True
+            print(f"[resources] system has {after_memory['free_mb']:.0f} MB available and "
+                  f"trainer/envs hold {after_memory['total_mb']:.0f} MB after cleanup; "
+                  "saving for automatic resume", flush=True)
+        cleaned["checked_at"] = time.time()
+        cleaned["disk_free_mb"] = round(free_mb(self.run_dir), 1)
+        self.resource_cleanup = cleaned
 
     def load(self, path: str, keep_cfg: bool = False):
         ck = torch.load(path, map_location=self.device, weights_only=False)
@@ -537,6 +645,12 @@ class Trainer:
         for g in self.opt.param_groups:
             g["lr"] = self.cfg["lr"]
         self.sync_act_net()
+        if "torch_rng" in ck:
+            torch.set_rng_state(ck["torch_rng"].cpu())
+        if "numpy_rng" in ck:
+            np.random.set_state(ck["numpy_rng"])
+        if self.device == "mps" and "mps_rng" in ck:
+            torch.mps.set_rng_state(ck["mps_rng"].cpu())
 
     def sync_act_net(self) -> None:
         if self.act_net is not self.net:
@@ -781,6 +895,8 @@ class Trainer:
                                   env_maps=[map_name(e.cfg.map_path)
                                             for e in envs if e.cfg],
                                   rounds=[int(e.last["info"]["round"]) for e in envs if e.last])
+                if self._resource_restart:
+                    raise ResourceRecycle("allocator memory could not be released during collection")
             if (taken < T * n and not capped) or responding():
                 collecting = taken < T * n and not capped
                 waiting = [i for i in range(n) if i not in inflight
@@ -987,9 +1103,13 @@ class Trainer:
                     out["entropy"].append(entropy.item())
                     out["approx_kl"].append(kl)
                     out["clipfrac"].append(((ratio - 1).abs() > cfg["clip"]).float().mean().item())
+                self.opt.zero_grad(set_to_none=True)
+                # Let cache cleanup release these before the next progress heartbeat.
+                del grid, flat, cand, cells, mask, logits, value, logp_all, logp, probs
+                del entropy, logratio, ratio, pg, vloss, loss, actions, old_logp, adv, ret
             # One epoch is the granularity: checking per minibatch would abandon an update
             # halfway through a shuffle and bias which samples ever get used.
-            if cfg["target_kl"] and float(np.mean(epoch_kl)) > cfg["target_kl"]:
+            if self._resource_restart or (cfg["target_kl"] and float(np.mean(epoch_kl)) > cfg["target_kl"]):
                 stopped_at = epoch + 1
                 break
         self.sync_act_net()
@@ -1071,6 +1191,8 @@ class Trainer:
                                  for j in sorted(inflight) if envs[j].last],
                     eval_steps=[int(envs[j].last["info"].get("steps", 0))
                                 for j in sorted(inflight) if envs[j].last])
+                if self._resource_restart:
+                    raise ResourceRecycle("allocator memory could not be released during evaluation")
             todo = []
             for i in self.envs.wait_any(sorted(inflight)):
                 inflight.discard(i)
@@ -1194,6 +1316,7 @@ class Trainer:
         self.write_status("running", f"starting {cfg['n_envs']} Godot envs", 0, 0)
         self.envs = VecEnv(cfg["n_envs"], cfg["godot"],
                            log_dir=os.path.join(self.run_dir, "envlogs"))
+        self.envs.on_wait = self.watch_waiting_resources
         stop_flag = os.path.join(self.run_dir, "STOP")
 
         def on_signal(signum, frame):
@@ -1235,6 +1358,9 @@ class Trainer:
                 self._base_mb = mem_report().get("total_mb", 0.0)
                 self.log(info, losses, time.time() - t0)
                 self.write_status("running", "update done", 0, 0)
+                if self._resource_restart:
+                    self.stop_reason = "" if self.stop_requested or os.path.exists(stop_flag) else "memory"
+                    break
                 if self.update % cfg["checkpoint_every"] == 0:
                     path = self.save()
                     print(f"[train] checkpoint {path}", flush=True)
@@ -1264,14 +1390,28 @@ class Trainer:
                     break
                 if self.over_memory_budget() or self.under_disk_floor():
                     break
+        except ResourceRecycle as e:
+            self.stop_reason = "" if self.stop_requested or os.path.exists(stop_flag) else "memory"
+            print(f"[resources] {e}; saving checkpoint for automatic resume", flush=True)
         except (KeyboardInterrupt, SystemExit):
             raise                        # an asked-for stop, not a crash
         except BaseException as e:       # noqa: BLE001 - the reason must survive to disk
-            crash = dict(error=f"{type(e).__name__}: {e}",
-                         traceback="".join(traceback.format_exc())[-4000:],
-                         crashed_at=time.time(), crashed_update=self.update)
-            print("[train] CRASHED: " + crash["error"] + "\n" + crash["traceback"], flush=True)
-            raise
+            if isinstance(e, RuntimeError) and "out of memory" in str(e).lower():
+                print(f"[resources] {e}; releasing failed-update buffers and saving for automatic resume", flush=True)
+                # Tracebacks retain the failed minibatch's GPU tensors. Release them
+                # before saving; a completed checkpoint remains available if saving fails.
+                e.__traceback__ = None
+                buffers = None
+                self.opt.zero_grad(set_to_none=True)
+                self._resource_restart = True
+                self.stop_reason = "" if self.stop_requested or os.path.exists(stop_flag) else "memory"
+                self.maintain_resources(force=True)
+            else:
+                crash = dict(error=f"{type(e).__name__}: {e}",
+                             traceback="".join(traceback.format_exc())[-4000:],
+                             crashed_at=time.time(), crashed_update=self.update)
+                print("[train] CRASHED: " + crash["error"] + "\n" + crash["traceback"], flush=True)
+                raise
         finally:
             try:
                 path = self.save()
@@ -1312,10 +1452,8 @@ class Trainer:
         floor = float(self.cfg["disk_floor_mb"])
         if floor <= 0:
             return False
-        # Godot mirrors each env's stdout — which IS the JSON protocol — into a log file
-        # at ~1.1 GB/hr across six envs. They are redirected into run_dir/envlogs (see
-        # mcf_env.GodotEnv.start), but redirecting does not make them smaller; bound them
-        # here, on the tick that already asks about disk, BEFORE deciding to give up.
+        self.maintain_resources(force=True)
+        # Env logs have a tighter cap than the human-readable trainer diagnostics.
         reclaimed = self.envs.trim_logs() if getattr(self, "envs", None) else 0
         if reclaimed:
             print(f"[train] trimmed {reclaimed} MB of Godot env logs", flush=True)
@@ -1487,6 +1625,8 @@ class Trainer:
         for k in ("rss_mb", "envs_mb", "free_mb"):
             if k in mem:
                 w.add_scalar(f"mem/{k}", mem[k], s)
+        for k, v in self.gpu_memory().items():
+            w.add_scalar(f"mem/{k}", v, s)
         w.add_scalar("mem/run_dir_mb", self.disk_mb(), s)
         for k, v in losses.items():
             w.add_scalar(f"ppo/{k}", v, s)

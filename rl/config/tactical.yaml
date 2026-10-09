@@ -141,3 +141,11 @@ keep_replay_sets: 6
 rollout_budget_mb: 2048
 mem_limit_mb: 6144
 disk_floor_mb: 400
+# RAM/GPU caches are separate from disk space. Release idle allocations at 1 GiB
+# available or 1 GiB cached; recycle the checkpointed process if Metal stays >6 GiB.
+memory_cleanup_free_mb: 1024
+gpu_cache_max_mb: 1024
+gpu_memory_restart_mb: 6144
+resource_check_seconds: 10
+disk_cleanup_trigger_mb: 1024
+log_max_mb: 64
