@@ -436,6 +436,36 @@ def live_card(b: str) -> None:
         f'<span class="rlm-sub">no progress recorded yet · heartbeat {age}</span></div>',
         unsafe_allow_html=True)
 
+    outcomes = s.get("train_outcomes") or {}
+    wins = int(outcomes.get("win", 0))
+    losses = int(outcomes.get("loss", 0))
+    draws = int(outcomes.get("draw", 0))
+    if "train_outcomes" in s:
+        st.caption(f"Training games completed since outcome tracking began: "
+                   f"{wins} wins · {losses} losses · {draws} draws. "
+                   "These include all training opponents; games still in progress are excluded.")
+    live = s.get("eval_live") or {}
+    if live and str(s.get("activity", "")).startswith("evaluating"):
+        st.caption(f"Evaluation in progress ({live.get('suite', 'main')} vs "
+                   f"{str(live.get('opponent', 'HARD')).upper()}): "
+                   f"{live.get('completed', 0)}/{live.get('games', 0)} games · "
+                   f"{live.get('win', 0)} wins · {live.get('loss', 0)} losses · "
+                   f"{live.get('draw', 0)} draws. These are partial results.")
+    elif str(s.get("activity", "")).startswith("evaluating"):
+        # Older trainers already write each evaluation game, even though their
+        # heartbeat has no live tally. A dashboard-only restart can expose their
+        # completed results without interrupting a long Giant-map evaluation.
+        live = recent_eval_game_counts(b, s.get("step"))
+        if live:
+            st.caption(f"Most recent evaluation games at this step "
+                       f"({live['suite']} vs {live['opponent']}): "
+                       f"{live['completed']} completed · {live['win']} wins · "
+                       f"{live['loss']} losses · {live['draw']} draws. "
+                       "The evaluation may still be in progress.")
+        else:
+            st.caption("Evaluation is running; no game has finished at this step yet, "
+                       "so there are no wins or losses to count.")
+
     if behind:
         st.caption(f"This run trains on the game rules of `{code}`; {behind} newer commit"
                    f"{'s change' if behind > 1 else ' changes'} the game or the env. Pull on "
@@ -481,8 +511,8 @@ def live_card(b: str) -> None:
         nxt = s.get("next_eval_update")
         st.caption("No evaluation yet — win rates appear after the first one"
                    + (f" (update {nxt}; currently at {s.get('update', 0)})." if nxt else ".")
-                   + " A run now evaluates on its first update too, so this should not stay"
-                     " blank for long; lower `eval_every` to see it sooner.")
+                   + " The live evaluation counts above appear as games finish; the rate"
+                     " appears when the main evaluation completes.")
     else:
         st.caption(f"Win / loss / draw: average of the last {len(recent) or 1} evaluations. "
                    f"Newest alone: {pct(ev.get('winrate_hard'))} won, "
@@ -589,6 +619,27 @@ def eval_games(branch: str) -> pd.DataFrame:
         if not keep.empty:
             df = keep
     return df
+
+
+def recent_eval_game_counts(branch: str, step: int | None) -> dict:
+    """Latest per-game tally at this checkpoint, including pre-upgrade trainers."""
+    if step is None:
+        return {}
+    games = eval_games(branch)
+    if games.empty or not {"step", "suite", "opponent", "result", "game"} <= set(games):
+        return {}
+    games = games[games["step"] == step]
+    if games.empty:
+        return {}
+    last = games.iloc[-1]
+    games = games[(games["suite"] == last["suite"])
+                  & (games["opponent"] == last["opponent"])]
+    games = games.drop_duplicates("game", keep="last")
+    result = games["result"].fillna("").astype(str)
+    return dict(suite=str(last["suite"]), opponent=str(last["opponent"]).upper(),
+                completed=len(games), win=int((result == "win").sum()),
+                loss=int((result == "loss").sum()),
+                draw=int(result.str.startswith("draw").sum()))
 
 
 def long_evals(branch: str) -> pd.DataFrame:

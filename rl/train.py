@@ -436,6 +436,10 @@ class Trainer:
         self.global_step = 0
         self.update = 0
         self.matches_done = 0
+        # Counts completed training games only. Older checkpoints lack this field;
+        # their historical result split cannot be reconstructed from matches_done.
+        self.train_outcomes = {"win": 0, "loss": 0, "draw": 0}
+        self.eval_live: dict = {}
         self.map_idx = 0
         # Maps that already have a rollout replay in the current checkpoint window.
         self._replay_maps: set[str] = set()
@@ -480,6 +484,10 @@ class Trainer:
         n = max(1, int(self.cfg["eval_every"]))
         return self.update + (n - self.update % n)
 
+    def record_training_outcome(self, result: str) -> None:
+        key = result if result in ("win", "loss") else "draw"
+        self.train_outcomes[key] += 1
+
     def disk_mb(self) -> float:
         """Walking the run directory on every 3-second heartbeat would be silly; once a
         minute is plenty for a number that moves when a checkpoint lands."""
@@ -492,7 +500,8 @@ class Trainer:
     def state_dict(self) -> dict:
         state = dict(model=self.net.state_dict(), opt=self.opt.state_dict(), cfg=self.cfg,
                     global_step=self.global_step, update=self.update,
-                    matches_done=self.matches_done, map_idx=self.map_idx,
+                    matches_done=self.matches_done, train_outcomes=self.train_outcomes,
+                    map_idx=self.map_idx,
                     parent=self.parent, rng=self.rng.getstate(),
                     episode_seed=self.episode_seed, branch=os.path.basename(self.run_dir),
                     pfsp=self.pfsp, champion_score=self.champion_score, saved_at=time.time(),
@@ -580,7 +589,9 @@ class Trainer:
         evidence, so it has to say what the run was costing at that moment."""
         self.maintain_resources()
         st = dict(state=state, pid=os.getpid(), step=self.global_step, update=self.update,
-                  matches=self.matches_done, phase=self.cfg["phase"], stage=self.cfg["stage"],
+                  matches=self.matches_done, train_outcomes=self.train_outcomes.copy(),
+                  eval_live=self.eval_live.copy(),
+                  phase=self.cfg["phase"], stage=self.cfg["stage"],
                   activity=activity, done=done, total=total, time=time.time(),
                   next_eval_update=self.next_eval_update(), eval=self.last_eval,
                   disk_mb=self.disk_mb(), disk_free_mb=round(free_mb(self.run_dir)),
@@ -688,6 +699,8 @@ class Trainer:
         self.global_step = ck["global_step"]
         self.update = ck["update"]
         self.matches_done = ck["matches_done"]
+        self.train_outcomes = {k: int(ck.get("train_outcomes", {}).get(k, 0))
+                               for k in ("win", "loss", "draw")}
         self.map_idx = ck["map_idx"] % max(1, len(self.cfg["maps"]))
         self.parent = ck.get("parent")
         self.rng.setstate(ck["rng"])
@@ -1086,6 +1099,7 @@ class Trainer:
                         prev = self.curriculum_scores.get(name, .5)
                         self.curriculum_scores[name] = .9 * prev + .1 * score
                     self.matches_done += 1
+                    self.record_training_outcome(res)
                     # Save BEFORE any reset: the recording lives in the env and a reset
                     # discards it.
                     if env.cfg is not None and env.cfg.record:
@@ -1284,6 +1298,8 @@ class Trainer:
             inflight.add(i)
 
         torch.set_num_threads(self.act_threads)
+        self.eval_live = {"suite": suite, "opponent": opponent, "games": games,
+                          "completed": 0, "win": 0, "loss": 0, "draw": 0}
         self.write_status("running", f"evaluating vs {opponent}", 0, games)
         for i in range(min(len(envs), games)):
             start(i)
@@ -1311,6 +1327,12 @@ class Trainer:
                     continue
                 info = r["info"]
                 results.append(info.get("result", "draw"))
+                outcome = results[-1] if results[-1] in ("win", "loss") else "draw"
+                self.eval_live[outcome] += 1
+                self.eval_live["completed"] = len(results)
+                print(f"[eval] {suite} vs {opponent} {len(results)}/{games}: "
+                      f"W/L/D={self.eval_live['win']}/{self.eval_live['loss']}/"
+                      f"{self.eval_live['draw']}", flush=True)
                 diffs.append(info["value_diff"])
                 rounds.append(info["round"])
                 k = game_of[i]
@@ -1395,6 +1417,7 @@ class Trainer:
                         inflight.add(i)
         for env in self.envs.envs:
             env.last = None   # evaluation episodes are over; training resets next collect
+        self.eval_live = {}
         wins = sum(r == "win" for r in results)
         draws = sum(r.startswith("draw") for r in results)
         # How the games ended, not just how many were won. An untrained greedy policy
@@ -1693,6 +1716,10 @@ class Trainer:
             self.envs.rebuild()
         else:
             row.update({f"{k}_{opp}": v for k, v in r.items()})
+            # Publish the headline result before the first full suite's drills and
+            # Giant held-out games, which can take a long time on a Mac.
+            self.last_eval = row.copy()
+            self.write_status("running", "main evaluation complete", r["games"], r["games"])
             score = (r["winrate"], r["value_diff"])
             if not self.cfg["promotion_every"] and r["games"] >= 10 and score > self.champion_score:
                 self.champion_score = score
@@ -1790,6 +1817,8 @@ class Trainer:
         with open(os.path.join(self.run_dir, "eval_log.jsonl"), "a") as f:
             f.write(json.dumps(row) + "\n")
         self.prune()
+        self.eval_live = {}
+        self.write_status("running", "evaluation complete", 0, 0)
 
     def log(self, info: dict, losses: dict, update_secs: float):
         st = info["stats"]
@@ -1907,7 +1936,9 @@ class Trainer:
         w.add_scalar("train/phase", 0 if self.cfg["phase"] == "A" else 1, s)
         w.flush()
         wr = f"{np.mean(st['win']):.2f}" if st["win"] else "-"
+        outcomes = self.train_outcomes
         print(f"[train] upd={self.update} step={s} matches={self.matches_done} win={wr} "
+              f"W/L/D={outcomes['win']}/{outcomes['loss']}/{outcomes['draw']} "
               f"pl={losses['policy_loss']:+.3f} vl={losses['value_loss']:.3f} "
               f"ent={losses['entropy']:.2f} kl={losses['approx_kl']:.4f} "
               f"hit={self._aim_text(st)} "
@@ -2090,6 +2121,7 @@ def cmd_fork(a):
     t = Trainer(rd, cfg, pick_device(cfg))
     t.load(a.checkpoint, keep_cfg=True)
     t.parent = os.path.abspath(a.checkpoint)
+    t.train_outcomes = {"win": 0, "loss": 0, "draw": 0}
     shutil.copy2(a.checkpoint, os.path.join(rd, "best.pt"))
     t.promotion_attempts = 0
     source_pool = sorted(glob.glob(os.path.join(os.path.dirname(a.checkpoint), "ckpt_*.pt")))
