@@ -20,21 +20,8 @@ LOG="$HERE/runs/supervisor-$BRANCH.log"
 TUNNEL_URL="${TUNNEL_URL:-}"
 say() { echo "$(date '+%F %T') $*" >> "$LOG"; }
 say "supervising $BRANCH"
+MEMORY_RETRY=10
 while true; do
-  # Godot mirrors stdout - which for the env servers IS the JSON protocol - into
-  # app_userdata/.../logs/godot.log, at ~1.5 GB/hr with four envs. Two attempts to turn
-  # that off through project.godot did nothing (the second used the correct
-  # section-stripped key and still had no effect, so the setting appears not to apply to
-  # `--script` runs). Truncating on a timer is crude but certain, and the file holds
-  # nothing the trainer has not already consumed.
-  LOGF="$HOME/Library/Application Support/Godot/app_userdata/MCF Isotope/logs/godot.log"
-  if [ -f "$LOGF" ] && [ "$(wc -c < "$LOGF")" -gt 209715200 ]; then
-    : > "$LOGF"
-    say "truncated godot.log (was >200MB)"
-  fi
-  find "$HOME/Library/Application Support/Godot/app_userdata/MCF Isotope/logs" \
-       -name 'godot2*.log' -delete 2>/dev/null
-
   # --- tunnel watchdog -----------------------------------------------------------
   #
   # Checking that cloudflared is RUNNING is not enough, and that is the whole point of
@@ -79,6 +66,10 @@ while true; do
   fi
 
   [ -f "$HERE/runs/$BRANCH/SUPERVISOR_OFF" ] && { sleep 60; continue; }
+  # Keep diagnostic files bounded even while the trainer is stopped. Memory
+  # cleanup belongs to the live process; deleting logs cannot release RAM.
+  RL_RESOURCE_PY="${VENV:-$HOME/.venvs/mcf-rl}/bin/python"
+  "$RL_RESOURCE_PY" "$HERE/resources.py" >> "$LOG" 2>&1
   # A STOP still lying in the run directory is the operator's: never resume over it, even
   # if the trainer recorded a resource reason on its way out (a stop that landed while
   # the disk sat under its floor once came back as "disk" and was resumed).
@@ -108,12 +99,23 @@ PY
       say "verdict=$verdict -> resuming"
       bash "$HERE/run.sh" resume "$BRANCH" "$CFG" >> "$LOG" 2>&1
       sleep 180 ;;                       # let it boot before judging again
-    resource:*)
+    resource:memory)
+      # A fresh process releases Metal graph/allocator memory that empty_cache
+      # cannot. Resume promptly once, then back off if the machine still cannot fit.
+      say "verdict=$verdict -> resuming in ${MEMORY_RETRY}s (checkpoint preserved)"
+      sleep "$MEMORY_RETRY"
+      [ -f "$HERE/runs/$BRANCH/SUPERVISOR_OFF" ] && continue
+      [ -f "$HERE/runs/$BRANCH/STOP" ] && continue
+      bash "$HERE/run.sh" resume "$BRANCH" "$CFG" >> "$LOG" 2>&1
+      MEMORY_RETRY=$(( MEMORY_RETRY < 300 ? MEMORY_RETRY * 2 : 600 ))
+      sleep 10 ;;
+    resource:disk)
       # Space or memory. Back off so a machine that genuinely has neither is not thrashed,
       # and so the log reads as "retrying every 10 min", not a loop.
       say "verdict=$verdict -> resuming (resource stop)"
       bash "$HERE/run.sh" resume "$BRANCH" "$CFG" >> "$LOG" 2>&1
       sleep "${RESOURCE_BACKOFF:-600}" ;;
-    *) sleep 60 ;;
+    ok) MEMORY_RETRY=10; sleep 30 ;;
+    *) sleep 30 ;;
   esac
 done

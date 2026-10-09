@@ -497,6 +497,13 @@ def live_card(b: str) -> None:
         st.caption(f"machine: {s['free_mb']:.0f} MB free ({s.get('machine_pct', 0):.0f}% used)"
                    + (f" · envs {s['envs_mb']:.0f} MB · trainer {s['rss_mb']:.0f} MB"
                       if "envs_mb" in s else ""))
+    if s.get("gpu_driver_mb") is not None:
+        st.caption(f"Metal GPU: {s['gpu_driver_mb']:.0f} MB held by the driver · "
+                   f"{s.get('gpu_live_mb', 0):.0f} MB in tensors · "
+                   f"{s.get('gpu_cache_mb', 0):.0f} MB in caches/frameworks")
+    if s.get("memory_restart_pending"):
+        st.caption("Unused memory could not be released fully. Saving the current update "
+                   "and automatically resuming from its checkpoint in a fresh process.")
 
     act = s.get("activity", "")
     if state == "running" and act:

@@ -111,6 +111,44 @@ newest N — never fewer than the Phase B pool draws from — plus every `milest
 step as a permanent lineage record; `keep_replay_sets` does the same for recorded games.
 `run.sh` rotates `runs/<name>.log` past `LOG_MAX_MB` (64 by default).
 
+The resource monitor checks every ten seconds, including during collection and
+evaluation. With less than 1024 MiB of available RAM, or more than 1024 MiB of GPU
+cache/framework allocations, it runs garbage collection and releases unused Metal
+allocator memory. Models, Adam state and opponents serving ongoing games stay intact.
+`mem/gpu_live_mb`, `mem/gpu_driver_mb` and `mem/gpu_cache_mb` expose allocations that
+ordinary process RSS does not capture; these figures overlap and must not be added.
+If available RAM stays below 1024 MiB and the trainer plus environments exceed
+`mem_limit_mb` after cleanup, the same checkpointed recycle releases their memory too.
+
+Some Metal framework/compiled-graph allocations survive `empty_cache()`. If the driver
+still holds 6144 MiB, the trainer schedules a process recycle: it finishes an active PPO
+epoch, saves the model/optimizer/counters/RNG checkpoint, and exits with reason `memory`.
+The supervisor resumes that same branch after ten seconds, with increasing backoff for
+repeated resource failures. Unapplied rollouts or an evaluation may be interrupted;
+training resumes from the last completed update. No manual model restart is needed.
+`memory_cleanup_free_mb`, `gpu_cache_max_mb` and `gpu_memory_restart_mb` set these limits.
+
+Disk space is a separate limit. At 1024 MiB free, diagnostic logs are trimmed to their
+last 64 KiB; ordinary maintenance caps each at 64 MiB. Only known RLM/Godot/tunnel logs
+are eligible. Checkpoints, evaluation histories, replays and unrelated Mac files are
+preserved. Sparse holes are excluded from reclaimed-space measurements, and active
+appenders keep their file handles. If the volume remains below `disk_floor_mb` because
+other applications consumed it, training still checkpoints and stops safely. This
+cannot reclaim 15 GiB of disk from an RLM directory containing only hundreds of MiB.
+macOS manages swap files; releasing memory reduces pressure without deleting OS files.
+
+To install a resource-only update while retaining the same training branch and config,
+run on the training Mac from its checkout:
+
+```bash
+git fetch origin main
+git show origin/main:rl/tools/deploy_rlm.sh > /tmp/isotope-deploy-rlm.sh
+bash /tmp/isotope-deploy-rlm.sh tactical-3 --resume
+```
+
+The helper preserves a backup, stops the old supervisor, resumes the checkpoint with
+the new runtime, starts the updated supervisor and verifies training advances.
+
 **Crashes.** An exception inside `train()` writes `state: crashed` with the message and
 traceback into `status.json`, after a final checkpoint; the dashboard prints both. A
 process the kernel killed writes nothing, so the dashboard reads the *last heartbeat*
