@@ -2,7 +2,7 @@
 """Serve a checkpoint's policy to the running game (train.py play, LearnedController.gd).
 
 JSON lines over TCP on 127.0.0.1: request {"obs": ..., "legal": [...]} -> {"action": k}.
-One request at a time; greedy by default (`--sample` draws from the policy instead).
+Greedy stop/continue decoding by default (`--sample` draws from the original policy).
 """
 from __future__ import annotations
 

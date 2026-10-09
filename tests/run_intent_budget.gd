@@ -106,6 +106,14 @@ func _initialize() -> void:
 		var sub := Budget.actor_subset(r, side, always + hot.size(), rng)
 		for id: int in hot:
 			ck(sub.has(id), "a unit with a target is drawn before idle ones (try %d)" % i)
+	# Machines reserved outside the infantry budget must never consume every seat.
+	for i in 18:
+		state.spawn_vehicle("shuttle", Vector2i(1, 1), side)
+	var infantry_drawn := 0
+	for key: Variant in Budget.actor_subset(r, side, 2, rng):
+		if key is int and key != drone.id:
+			infantry_drawn += 1
+	ck(infantry_drawn == 2, "18 reserved vehicles still leave both infantry seats")
 	_finish()
 
 func _finish() -> void:

@@ -75,6 +75,8 @@ DEFAULTS = dict(
     phase="A", pool_ai_fraction=0.15, pool_size=6,
     round_cap=10, max_steps=3000, max_candidates=0, max_actors=0,
     civilians=False, random_events=False, fog="standard", friendly_fire=True,
+    random_event_share=0.35, random_event_interval=6, hazard_coef=0.5,
+    eval_random_events=False, event_eval_games=0,
     rollout_steps=256, epochs=4, minibatch=32, lr=3e-4, gamma=0.99, lam=0.95, clip=0.2,
     ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5, total_steps=20_000_000,
     # Stop an update early once the policy has moved this far (mean KL over an epoch).
@@ -186,6 +188,10 @@ def load_config(path: str | None) -> dict:
         raise ValueError("eval_full_every must be a multiple of eval_every")
     if not 0 < cfg["gamma"] <= 1 or not 0 <= cfg["lam"] <= 1:
         raise ValueError("gamma must be in (0, 1] and lam in [0, 1]")
+    if not 0 <= cfg["random_event_share"] <= 1 or int(cfg["random_event_interval"]) < 1:
+        raise ValueError("random_event_share must be in [0, 1] and random_event_interval positive")
+    if not np.isfinite(cfg["hazard_coef"]) or cfg["hazard_coef"] < 0:
+        raise ValueError("hazard_coef must be finite and nonnegative")
     return with_defaults(cfg)
 
 
@@ -805,7 +811,10 @@ class Trainer:
         cfg = EpisodeConfig(
             map_path=maps[self.map_idx], seed=self.episode_seed,
             side=self.episode_seed % 2, opponent=opp, round_cap=self.cfg["round_cap"], max_steps=self.cfg.get("max_steps", 3000),
-            civilians=self.cfg["civilians"], random_events=self.cfg["random_events"],
+            civilians=self.cfg["civilians"], random_events=bool(self.cfg["random_events"])
+            and self.rng.random() < float(self.cfg["random_event_share"]),
+            random_event_interval=int(self.cfg["random_event_interval"]),
+            hazard_coef=float(self.cfg["hazard_coef"]),
             fog=fog, friendly_fire=self.cfg["friendly_fire"], record=record,
             disembark=disembark_allowed(self.cfg, maps[self.map_idx]),
             max_candidates=self.cfg["max_candidates"], max_actors=self.cfg["max_actors"],
@@ -967,6 +976,8 @@ class Trainer:
                     continue
                 stats["legal_ms"].append(r["info"].get("legal_ms", 0.0))
                 stats["obs_ms"].append(r["info"].get("obs_ms", 0.0))
+                stats["hazard_reward"].append(r["info"].get("hazard_reward", 0.0))
+                stats["event_enabled"].append(float(r["info"].get("random_events", False)))
                 if i in selected:
                     mp, kind = selected.pop(i)
                     if r["info"].get("action_ok", False):
@@ -1158,7 +1169,9 @@ class Trainer:
                 side=k % 2, opponent=HARD,
                 round_cap=round_cap if round_cap is not None else self.cfg["round_cap"],
                 max_steps=self.cfg.get("max_steps", 3000),
-                civilians=self.cfg["civilians"], random_events=self.cfg["random_events"],
+                civilians=self.cfg["civilians"], random_events=(suite == "events"
+                or bool(self.cfg["eval_random_events"])),
+                random_event_interval=int(self.cfg["random_event_interval"]),
                 fog=fogs[k % len(fogs)] if fogs else FOGS[self.cfg["fog"]],
                 friendly_fire=self.cfg["friendly_fire"],
                 disembark=disembark_allowed(self.cfg, eval_maps[(k // 2) % len(eval_maps)]),
@@ -1214,6 +1227,8 @@ class Trainer:
                     value_diff=info["value_diff"],
                     rounds=info["round"], steps=info.get("steps"),
                     illegal=info.get("illegal"),
+                    decoding="stop_continue_mass_v1", random_events=envs[i].cfg.random_events,
+                    hazard_exposure=info.get("tac", {}).get("hazard_exposure", 0.0),
                     # WHAT was refused, not just how many: the enumerator is meant to be
                     # exact, so a non-empty column is a bug report with the reason in it.
                     illegal_kinds=info.get("illegal_kinds") or None,
@@ -1295,6 +1310,7 @@ class Trainer:
                     value_winrate=sum(r["result"] == "win" and r["by"] == "value"
                                       for r in per_game) / max(1, len(results)),
                     illegal=sum(r.get("illegal") or 0 for r in per_game),
+                    hazard_exposure=float(np.mean([r["hazard_exposure"] for r in per_game])) if per_game else 0.0,
                     by_map={m: float(np.mean(v)) for m, v in by_map.items()},
                     lossrate=outcomes["loss"] / max(1, len(results)),
                     drawrate=draws / max(1, len(results)), value_diff=float(np.mean(diffs)),
@@ -1595,6 +1611,14 @@ class Trainer:
             except EnvDied as e:
                 row["heldout_error"] = str(e)
                 self.envs.rebuild()
+        if full and self.cfg["event_eval_games"] > 0:
+            try:
+                row["events"] = self.evaluate(self.cfg["event_eval_games"], suite="events")
+                for k in ("winrate", "rout_winrate", "value_winrate", "illegal", "hazard_exposure"):
+                    self.writer.add_scalar(f"eval/events_{k}", row["events"][k], self.global_step)
+            except EnvDied as e:
+                row["events_error"] = str(e)
+                self.envs.rebuild()
         row["seconds"] = time.perf_counter() - started_at
         row["full_suite"] = full
         self.writer.add_scalar("speed/eval_secs", row["seconds"], self.global_step)
@@ -1617,6 +1641,9 @@ class Trainer:
         if st["obs_ms"]:
             w.add_scalar("speed/env_obs_ms", float(np.mean(st["obs_ms"])), s)
         w.add_scalar("speed/matches_done", self.matches_done, s)
+        if st["hazard_reward"]:
+            w.add_scalar("train/hazard_reward", float(np.mean(st["hazard_reward"])), s)
+            w.add_scalar("train/event_decision_share", float(np.mean(st["event_enabled"])), s)
         if st["legal_ms"]:
             # Where a slow step actually goes: on company-sized maps the legal-intent
             # enumerator is most of it, and max_actors is the knob that moves this number.
@@ -1740,6 +1767,7 @@ class Trainer:
             n = len(tacs)
             pre = f"tac/{stem}/"
             w.add_scalar(pre + "exposure", float(np.mean([t.get("exposure", 0.0) for t in tacs])), s)
+            w.add_scalar(pre + "hazard_exposure", float(np.mean([t.get("hazard_exposure", 0.0) for t in tacs])), s)
             w.add_scalar(pre + "multi_ap_per_game", sum(t.get("multi_ap", 0) for t in tacs) / n, s)
             act, shots, hits, kills, lost, fielded = (Counter() for _ in range(6))
             for t in tacs:

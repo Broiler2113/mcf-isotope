@@ -78,21 +78,32 @@ static func actor_subset(r: GameActionResolver, acting: int, max_actors: int,
 	shuffle(ready, rng)
 	shuffle(spent, rng)
 	var foes := _foe_cells(r, acting)
-	if not foes.is_empty():
-		var hot: Array = []
-		var cold: Array = []
-		for id: int in ready:
-			(hot if in_contact(state.get_unit(id), foes) else cold).append(id)
-		ready = hot + cold
+	var hazards := Obs.hazards(r)
+	var endangered: Array = []
+	var hot: Array = []
+	var cold: Array = []
+	for id: int in ready:
+		var u := state.get_unit(id)
+		var danger := false
+		if state.grid.in_bounds(u.coord) and u.aboard_vehicle_id == -1:
+			var i := u.coord.y * state.grid.width + u.coord.x
+			danger = hazards["gas"][i] + hazards["gas_warning"][i] + hazards["artillery_warning"][i] > 0.0
+		if danger:
+			endangered.append(id)
+		else:
+			(hot if in_contact(u, foes) else cold).append(id)
+	ready = endangered + hot + cold
 	var out := {}
 	# Машины и пилоты боргов — целиком, даже если их одних больше потолка: потолок стоит
 	# ради цены перечисления пехоты, а техники на карте единицы.
 	for key: Variant in always:
 		out[key] = true
+	var infantry_count := 0
 	for key: Variant in ready + spent:
-		if out.size() >= max_actors:
+		if infantry_count >= max_actors:
 			break
 		out[key] = true
+		infantry_count += 1
 	return out
 
 
@@ -265,9 +276,10 @@ static func cap(list: Array, max_candidates: int, rng: RandomNumberGenerator,
 			buckets[key] = hit + rest
 	if r != null:
 		var foes := _visible_foes(r, side)
+		var hazards := Obs.hazards(r)
 		for key: String in order:
 			if key.ends_with(":move") and buckets[key].size() > 4:
-				buckets[key] = _tactical_order(buckets[key], r, side, foes)
+				buckets[key] = _tactical_order(buckets[key], r, side, foes, hazards)
 	var round_index := 0
 	while kept.size() < max_candidates:
 		var took := false
@@ -307,11 +319,13 @@ static func _visible_foes(r: GameActionResolver, side: int) -> Array[Vector2i]:
 	return foes
 
 static func _tactical_order(moves: Array, r: GameActionResolver, side: int,
-		all_foes: Array[Vector2i] = []) -> Array:
+		all_foes: Array[Vector2i] = [], hazards: Dictionary = {}) -> Array:
 	var state := r.state
 	var grid := state.grid
 	var gw := grid.width
 	var threat := r.fire_cover(side, true)
+	if hazards.is_empty():
+		hazards = Obs.hazards(r)
 	var foes: Array[Vector2i] = all_foes.duplicate() if not all_foes.is_empty() \
 			else _visible_foes(r, side)
 	var actor := state.get_unit(moves[0].actor_id)
@@ -336,6 +350,11 @@ static func _tactical_order(moves: Array, r: GameActionResolver, side: int,
 	for i in moves.size():
 		var c: Vector2i = moves[i].target
 		var sc := -1.5 * minf(threat[c.y * gw + c.x], 4.0)
+		var ci := c.y * gw + c.x
+		# Public event warnings must survive candidate pruning, even under fog.
+		if actor != null and actor.borg_id == -1:
+			sc -= 6.0 * (hazards["gas"][ci] + hazards["gas_warning"][ci])
+		sc -= 6.0 * hazards["artillery_warning"][ci]
 		if grid.cell_fast(c.x, c.y).has_cover():
 			sc += 1.0
 		if not foes.is_empty():

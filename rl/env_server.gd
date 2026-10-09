@@ -289,6 +289,9 @@ var _potential_coef: float = 0.0
 var _last_phi: float = 0.0
 var _gamma: float = 0.99
 var _potential_pending: bool = false
+var _hazard_coef: float = 0.0
+var _last_hazard_phi: float = 0.0
+var _hazard_exposure: Array[float] = []
 var _action_ok: bool = true
 ## Метрики партии со стороны обучаемого: по родам войск — действия, выстрелы и попадания,
 ## убийства и потери; ходы за 2-3 ОД; доля армии под огнём в конце хода. Уходят в info.tac
@@ -383,6 +386,9 @@ func _reset(req: Dictionary) -> Dictionary:
 	max_actors = int(req.get("max_actors", 0))
 	_shaping_scale = float(req.get("shaping_scale", 1.0))
 	_potential_coef = float(req.get("potential_coef", 0.0))
+	_hazard_coef = maxf(0.0, float(req.get("hazard_coef", 0.0)))
+	_last_hazard_phi = 0.0
+	_hazard_exposure = []
 	_gamma = clampf(float(req.get("gamma", 0.99)), 0.0, 1.0)
 	_potential_pending = false
 	_cap_rng.seed = seed_value
@@ -399,7 +405,11 @@ func _reset(req: Dictionary) -> Dictionary:
 		# двух армий. Обстрел и газ остаются: это обстановка, а не новая сторона.
 		var w := RandomEvents.default_weights()
 		w[RandomEvents.ARMY] = 0
-		resolver.random_events = RandomEvents.new(true, false, 3, w)
+		resolver.random_events = RandomEvents.new(true, false,
+				maxi(1, int(req.get("random_event_interval", 6))), w)
+	else:
+		# Resolver defaults come from the game lobby; the training request is authoritative.
+		resolver.random_events = RandomEvents.new(false)
 	resolver.update_airlocks()
 	# Экипажи — ДО начала записи: машина появляется на поле уже с экипажем, как в
 	# настоящей партии (там технику покупают вместе с ним). Раньше посадка шла после
@@ -471,6 +481,7 @@ func _reset(req: Dictionary) -> Dictionary:
 	_advance()
 	# Scripted opening moves precede the first learner decision and its potential.
 	_last_phi = _phi(Obs.tactics(resolver, side)) if _potential_coef > 0.0 and not _done else 0.0
+	_last_hazard_phi = _hazard_phi(Obs.hazards(resolver)) if _hazard_coef > 0.0 and not _done else 0.0
 	return _response(0.0, true)
 
 ## Карта из генератора: "gen:<стиль|any>:<размер>:<бойцов>:<танков>". Стиль — номер
@@ -585,6 +596,7 @@ func _step(req: Dictionary) -> Dictionary:
 	var who := _actor_label(intent) if acting == side else ""
 	if acting == side and intent is EndTurnIntent:
 		_exposure.append(_exposed_share())
+		_hazard_exposure.append(-_hazard_phi(Obs.hazards(resolver)))
 	var res := resolver.resolve(intent)
 	_action_ok = res.ok
 	_note_fire(res)
@@ -953,20 +965,27 @@ func _response(reward: float, is_reset: bool) -> Dictionary:
 	_last_diff = diff
 	var acting_now := state.active_player()
 	var potential_reward := 0.0
-	if _potential_coef > 0.0 and not is_reset and (_done or acting_now == side):
+	var hazard_reward := 0.0
+	if not is_reset and (_done or acting_now == side):
 		# One discounted potential difference per LEARNER transition. Pool actions
 		# belong to that transition; discounting each of them changes the objective.
-		var tac_side := Obs.tactics(resolver, side)
-		var phi := 0.0 if _done else _phi(tac_side)
+		var phi := 0.0 if _done or _potential_coef <= 0.0 else _phi(Obs.tactics(resolver, side))
+		var hazard_phi := 0.0 if _done or _hazard_coef <= 0.0 else _hazard_phi(Obs.hazards(resolver))
 		if _potential_pending:
 			potential_reward = _potential_coef * (_gamma * phi - _last_phi)
-			reward += potential_reward
+			hazard_reward = _hazard_coef * (_gamma * hazard_phi - _last_hazard_phi)
+			reward += potential_reward + hazard_reward
 		_last_phi = phi
+		_last_hazard_phi = hazard_phi
 		_potential_pending = false
 	var resp := {"ok": true, "reward": reward, "done": _done, "acting": acting_now,
 			"info": {"round": state.turns.round_number, "steps": _steps, "illegal": _illegal,
 				"action_ok": _action_ok,
 				"potential": _last_phi, "potential_reward": potential_reward,
+				"hazard_potential": _last_hazard_phi, "hazard_reward": hazard_reward,
+				"random_events": resolver.random_events.enabled,
+				"event_pending": resolver.random_events.pending.size(),
+				"gas_clouds": resolver.random_events.clouds.size(),
 					"illegal_kinds": _illegal_kinds,
 				"value_diff": diff / _norm, "fire_losses": _fire_losses,
 				"shots": _shots, "shots_hit": _shots_hit}}
@@ -1078,6 +1097,36 @@ func _phi(tac: Dictionary) -> float:
 			theirs += float(u.stats.cost) * minf(cover[i], 3.0) * k
 	return (theirs - mine) / _norm / 3.0
 
+## Expected own value at risk from PUBLIC warnings and active gas. Gas cannot
+## harm sealed crew/borg pilots; artillery is checked across a vehicle's full
+## footprint. One discounted difference per learner transition gives credit for
+## escaping, charges re-entry, and avoids a repeatable per-move escape bonus.
+func _hazard_phi(hz: Dictionary) -> float:
+	if resolver.random_events == null or (resolver.random_events.pending.is_empty()
+			and resolver.random_events.clouds.is_empty()):
+		return 0.0
+	var risk := 0.0
+	var grid := state.grid
+	for u: UnitInstance in state.all_units():
+		if u.owner != side or not u.is_alive() or u.is_drone or not grid.in_bounds(u.coord):
+			continue
+		if u.aboard_vehicle_id != -1 or u.borg_id != -1:
+			continue
+		var i := u.coord.y * grid.width + u.coord.x
+		var gas := maxf(hz["gas"][i], hz["gas_warning"][i]) / 3.0
+		var artillery: float = hz["artillery_warning"][i] * 0.5
+		risk += float(u.stats.cost) * minf(1.0, gas + artillery)
+	for veh: Vehicle in state.all_vehicles():
+		if veh.owner != side or not veh.alive():
+			continue
+		var exposed := 0.0
+		for c: Vector2i in veh.footprint():
+			if grid.in_bounds(c):
+				exposed += hz["artillery_warning"][c.y * grid.width + c.x] * 0.5
+		var hull := maxi(1, veh.component(MCF.COMP_HULL))
+		risk += Obs.vehicle_worth(veh) * minf(1.0, exposed / float(hull))
+	return -risk / _norm
+
 ## Доля стоимости армии обучаемого, стоящей под огнём видимого врага без укрытия.
 func _exposed_share() -> float:
 	var tac := Obs.tactics(resolver, side)
@@ -1122,6 +1171,10 @@ func _tac_summary() -> Dictionary:
 	var out := _tac.duplicate(true)
 	out["lost"] = lost
 	out["exposure"] = exp / float(_exposure.size()) if not _exposure.is_empty() else 0.0
+	var danger := 0.0
+	for e: float in _hazard_exposure:
+		danger += e
+	out["hazard_exposure"] = danger / float(_hazard_exposure.size()) if not _hazard_exposure.is_empty() else 0.0
 	return out
 
 func _save_replay(path: String) -> Dictionary:
