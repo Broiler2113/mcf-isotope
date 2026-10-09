@@ -172,6 +172,7 @@ func _on_fallback_intent(intent: Intent) -> void:
 # --- Связь с сервером политики (JSON-строки по TCP) ---
 
 func _connect() -> bool:
+	_rx = ""
 	var addr := OS.get_environment(ENV_VAR)
 	if addr == "":
 		_last_error = "%s is not set" % ENV_VAR
@@ -224,6 +225,9 @@ func _ask(req: Dictionary) -> Dictionary:
 				_rx = _rx.substr(nl + 1)
 				var parsed: Variant = JSON.parse_string(text)
 				if typeof(parsed) == TYPE_DICTIONARY:
+					if parsed.has("error"):
+						_last_error = "policy error: " + str(parsed["error"])
+						return {}
 					return parsed
 				_last_error = "policy sent something that is not JSON"
 				return {}

@@ -58,7 +58,11 @@ C_LASTSEEN = 76        # a hidden enemy was last seen here, fading with age (fog
 # enemy turn. 1 at the station, fading to 0 at the rim. Without it the policy read a
 # station as ordinary floor furniture and walked whole squads into its radius.
 C_DRONE_THREAT = 77
-N_CHANNELS = 78
+VEH_COMPONENTS = ["hull", "tower", "tracks_l", "tracks_r", "gun"]
+C_VEH_COMPONENT = 78   # component health, then presence (missing != destroyed)
+C_VEH_CREW = C_VEH_COMPONENT + 2 * len(VEH_COMPONENTS)
+C_VEH_AP = C_VEH_CREW + 1
+N_CHANNELS = C_VEH_AP + 1
 
 FLAT_DIM = 20
 
@@ -92,14 +96,18 @@ F_PRED = F_TAC + 5     # next-turn enemy fire at target, enemies that can reach 
 # checkpoint keeps its exact behaviour. F_DRONE's leash fraction is a different question:
 # there the actor is the drone itself, already airborne.
 F_REACH = F_PRED + 2
-CAND_DIM = F_REACH + 1
+F_COMPONENT = F_REACH + 1
+F_COMPONENT_HEALTH = F_COMPONENT + len(VEH_COMPONENTS)
+CAND_DIM = F_COMPONENT_HEALTH + 2  # health fraction + component known
 
 
-def grid_tensor(obs: dict) -> np.ndarray:
+def grid_tensor(obs: dict, canvas: int = CANVAS) -> np.ndarray:
     w, h = obs["w"], obs["h"]
-    g = np.zeros((N_CHANNELS, CANVAS, CANVAS), dtype=np.float32)
-    ox = (CANVAS - w) // 2
-    oy = (CANVAS - h) // 2
+    if not (0 < w <= canvas and 0 < h <= canvas):
+        raise ValueError(f"map {w}x{h} exceeds policy canvas {canvas}x{canvas}")
+    g = np.zeros((N_CHANNELS, canvas, canvas), dtype=np.float32)
+    ox = (canvas - w) // 2
+    oy = (canvas - h) // 2
     def plane(key):
         return np.asarray(obs[key], dtype=np.int32).reshape(h, w)
     floor = plane("floor"); feat = plane("feat"); fown = plane("feat_own")
@@ -162,6 +170,13 @@ def grid_tensor(obs: dict) -> np.ndarray:
                     g[C_VEH_FX, cy, cx] = v["fx"]
                     g[C_VEH_FY, cy, cx] = v["fy"]
                     g[C_VEH_WRECK, cy, cx] = v["wrecked"]
+                    for j, comp in enumerate(VEH_COMPONENTS):
+                        if comp in v["comps"]:
+                            hp, maximum = v["comps"][comp]
+                            g[C_VEH_COMPONENT + j, cy, cx] = hp / max(1, maximum)
+                            g[C_VEH_COMPONENT + len(VEH_COMPONENTS) + j, cy, cx] = 1.0
+                    g[C_VEH_CREW, cy, cx] = v.get("crew", 0) / max(1, v.get("cap", 1))
+                    g[C_VEH_AP, cy, cx] = min(v.get("ap", 0), 16) / 16.0
     return g
 
 
@@ -218,15 +233,16 @@ def flat_vector(obs: dict) -> np.ndarray:
     return f
 
 
-def candidate_rows(obs: dict, legal: list[dict]) -> tuple[np.ndarray, np.ndarray]:
+def candidate_rows(obs: dict, legal: list[dict], canvas: int = CANVAS) -> tuple[np.ndarray, np.ndarray]:
     """Per-candidate feature rows plus the canvas cell index of actor and target
     (for gathering the CNN feature map; -1 when off-board)."""
     w, h = obs["w"], obs["h"]
-    ox = (CANVAS - w) // 2
-    oy = (CANVAS - h) // 2
+    ox = (canvas - w) // 2
+    oy = (canvas - h) // 2
     n = len(legal)
     rows = np.zeros((n, CAND_DIM), dtype=np.float32)
     cells = np.full((n, 2), -1, dtype=np.int64)
+    vehicles = {v["id"]: v for v in obs.get("vehicles", []) if "id" in v}
     for i, c in enumerate(legal):
         wire = c["i"]
         k = KIND_INDEX.get(wire.get("t", ""), 0)
@@ -238,11 +254,11 @@ def candidate_rows(obs: dict, legal: list[dict]) -> tuple[np.ndarray, np.ndarray
         g = F_GEOM
         if ax >= 0:
             rows[i, g] = ax / w; rows[i, g + 1] = ay / h
-            cells[i, 0] = (ay + oy) * CANVAS + (ax + ox)
+            cells[i, 0] = (ay + oy) * canvas + (ax + ox)
         if tx >= 0:
             rows[i, g + 2] = tx / w; rows[i, g + 3] = ty / h
             rows[i, g + 7] = 1.0
-            cells[i, 1] = (ty + oy) * CANVAS + (tx + ox)
+            cells[i, 1] = (ty + oy) * canvas + (tx + ox)
             if ax >= 0:
                 dx, dy = tx - ax, ty - ay
                 rows[i, g + 4] = dx / 32.0; rows[i, g + 5] = dy / 32.0
@@ -259,6 +275,14 @@ def candidate_rows(obs: dict, legal: list[dict]) -> tuple[np.ndarray, np.ndarray
             rows[i, m + 3] = float(s) / 16.0     # seat index / vehicle steps
         rows[i, m + 2] = float(wire.get("av", 0))
         rows[i, m + 4] = 1.0 if wire.get("cm", "") else 0.0
+        comp = wire.get("cm", "")
+        if comp in VEH_COMPONENTS:
+            rows[i, F_COMPONENT + VEH_COMPONENTS.index(comp)] = 1.0
+            vehicle = vehicles.get(wire.get("v"), {})
+            if comp in vehicle.get("comps", {}):
+                hp, maximum = vehicle["comps"][comp]
+                rows[i, F_COMPONENT_HEALTH] = hp / max(1, maximum)
+                rows[i, F_COMPONENT_HEALTH + 1] = 1.0
         fid = wire.get("f", "")
         if fid in BUILD_FEATURES:
             rows[i, m + 5 + BUILD_FEATURES.index(fid)] = 1.0

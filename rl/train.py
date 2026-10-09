@@ -45,7 +45,7 @@ from torch.utils.tensorboard import SummaryWriter  # noqa: E402
 
 from features import (CAND_DIM, CANVAS, FLAT_DIM, N_CHANNELS, Sparse, candidate_rows,  # noqa: E402
                       flat_vector, grid_tensor)
-from mcf_env import (EXTERNAL, HARD, PROJECT, EnvDied,  # noqa: E402
+from mcf_env import (EXTERNAL, HARD, PROJECT, EnvDied, GodotEnv,  # noqa: E402
                      EpisodeConfig, VecEnv, refresh_class_cache)
 from model import OnnxWrapper, PolicyNet, load_compat  # noqa: E402
 
@@ -125,6 +125,9 @@ DEFAULTS = dict(
     # Extra evaluation games vs HARD with fog OFF on eval_maps (eval/*_hard_nofog). The main
     # evaluation keeps `fog`, so its history stays comparable.
     eval_nofog_games=0,
+    eval_seed=900_000, eval_full_every=0,  # 0: full suite at every eval
+    heldout_eval_maps=[], heldout_eval_games=0, heldout_round_cap=40,
+    preflight=True, pool_archive_size=3,
 )
 
 STYLE_NAMES = ["standard", "rush", "turtle", "flank"]
@@ -151,7 +154,7 @@ def load_config(path: str | None) -> dict:
     # resolves it against the project root instead; the evaluations were correct by luck,
     # not by construction, and the same config would have failed the instant anything on
     # the Python side tried to open the file.
-    for key in ("maps", "eval_maps", "drill_eval_maps"):
+    for key in ("maps", "eval_maps", "drill_eval_maps", "heldout_eval_maps"):
         if not cfg.get(key):
             continue
         # "gen:<style>:<size>:<units>:<tanks>" is a map the env builds per episode (MapGen);
@@ -163,6 +166,16 @@ def load_config(path: str | None) -> dict:
                 sys.exit(f"map not found ({key}): {m}")
     if cfg.get("map_weights") and len(cfg["map_weights"]) != len(cfg["maps"]):
         sys.exit("map_weights must have one weight per map")
+    weights = cfg.get("map_weights") or []
+    if weights and (any(not np.isfinite(w) or w < 0 for w in weights) or sum(weights) <= 0):
+        raise ValueError("map_weights must be finite, nonnegative, and have a positive sum")
+    for key in ("n_envs", "rollout_steps", "epochs", "minibatch", "checkpoint_every", "eval_every"):
+        if int(cfg[key]) <= 0:
+            raise ValueError(f"{key} must be positive")
+    if cfg["eval_full_every"] and cfg["eval_full_every"] % cfg["eval_every"]:
+        raise ValueError("eval_full_every must be a multiple of eval_every")
+    if not 0 < cfg["gamma"] <= 1 or not 0 <= cfg["lam"] <= 1:
+        raise ValueError("gamma must be in (0, 1] and lam in [0, 1]")
     return with_defaults(cfg)
 
 
@@ -173,6 +186,42 @@ def with_defaults(cfg: dict) -> dict:
     for k in RETIRED_KEYS:
         out.pop(k, None)
     return out
+
+
+def preflight_config(cfg: dict, env: GodotEnv) -> list[dict]:
+    """Reset and encode every configured scenario before any optimizer update.
+
+    Generated `any` maps exercise every style at the configured upper army size.
+    This catches protocol, rules, canvas and feature incompatibilities in one place.
+    """
+    maps = list(dict.fromkeys(m for key in ("maps", "eval_maps", "drill_eval_maps", "heldout_eval_maps")
+                             for m in cfg.get(key, [])))
+    cases = []
+    for mp in maps:
+        if not is_generated(mp):
+            cases.append(mp)
+            continue
+        parts = mp.split(":")
+        if len(parts) != 5 or parts[1] not in ("any", "0", "1", "2", "3", "4"):
+            raise ValueError(f"invalid generated map specification: {mp}")
+        for style in range(5) if parts[1] == "any" else [int(parts[1])]:
+            cases.append(":".join(["gen", str(style), parts[2],
+                                   parts[3].split("-")[-1], parts[4].split("-")[-1]]))
+    rows = []
+    for mp in cases:
+        print(f"[preflight] {mp}", flush=True)
+        ec = EpisodeConfig(map_path=mp, seed=int(cfg["seed"]) * 1000, opponent=HARD,
+                           max_actors=cfg["max_actors"], max_candidates=cfg["max_candidates"],
+                           fog=FOGS[cfg["fog"]], round_cap=cfg["round_cap"],
+                           disembark=disembark_allowed(cfg, mp))
+        r = env.reset(ec)
+        if r.get("done") or not r.get("legal"):
+            raise ValueError(f"preflight: {mp} has no playable opening")
+        encode(r)
+        rows.append(dict(map=mp, width=r["obs"]["w"], height=r["obs"]["h"],
+                         candidates=len(r["legal"])))
+    env.last = None
+    return rows
 
 
 def mem_report() -> dict:
@@ -254,7 +303,10 @@ def collate(steps: list[Step], device):
     which is the whole point: the rollout itself never holds a dense grid (see Sparse)."""
     B = len(steps)
     n = max(s.cand.shape[0] for s in steps)
-    grid = np.zeros((B, N_CHANNELS, CANVAS, CANVAS), dtype=np.float32)
+    shape = steps[0].grid.shape
+    if any(s.grid.shape != shape for s in steps):
+        raise ValueError("batch mixes different policy canvas sizes")
+    grid = np.zeros((B, *shape), dtype=np.float32)
     cand = np.zeros((B, n, CAND_DIM), dtype=np.float32)
     cells = np.full((B, n, 2), -1, dtype=np.int64)
     mask = np.zeros((B, n), dtype=bool)
@@ -270,11 +322,11 @@ def collate(steps: list[Step], device):
             torch.from_numpy(mask).to(device))
 
 
-def encode(resp: dict) -> tuple[Sparse, np.ndarray, Sparse, np.ndarray]:
+def encode(resp: dict, canvas: int = CANVAS) -> tuple[Sparse, np.ndarray, Sparse, np.ndarray]:
     obs = resp["obs"]
-    g = Sparse(grid_tensor(obs))
+    g = Sparse(grid_tensor(obs, canvas))
     f = flat_vector(obs)
-    c, cells = candidate_rows(obs, resp["legal"])
+    c, cells = candidate_rows(obs, resp["legal"], canvas)
     return g, f, Sparse(c), cells.astype(np.int32)
 
 
@@ -346,6 +398,7 @@ class Trainer:
         self.pfsp: dict[str, list[int]] = {}
         self._last_status = 0.0
         self.last_eval: dict = {}
+        self.champion_score = (-1.0, -1e30)
         # Live, shrinkable copy of the configured cap, plus the memory the process costs
         # with no rollout held (measured after each update drops the buffer).
         self.rollout_budget_mb = float(self.cfg["rollout_budget_mb"]) or float("inf")
@@ -375,7 +428,7 @@ class Trainer:
                     matches_done=self.matches_done, map_idx=self.map_idx,
                     parent=self.parent, rng=self.rng.getstate(),
                     episode_seed=self.episode_seed, branch=os.path.basename(self.run_dir),
-                    pfsp=self.pfsp, saved_at=time.time())
+                    pfsp=self.pfsp, champion_score=self.champion_score, saved_at=time.time())
 
     def save(self, tag: str | None = None) -> str:
         path = os.path.join(self.run_dir, f"ckpt_{self.global_step:09d}.pt" if tag is None else tag)
@@ -408,12 +461,22 @@ class Trainer:
             keep_n = max(keep_n, self.cfg["pool_size"] + 1)
             every = int(self.cfg["milestone_every"])
             cks = sorted(glob.glob(os.path.join(self.run_dir, "ckpt_*.pt")))
+            # First saved checkpoint in each crossed interval. Exact divisibility
+            # almost never happens with variable rollout lengths.
+            milestones = {}
+            for path in cks:
+                try:
+                    bucket = int(os.path.basename(path)[5:-3]) // every if every > 0 else 0
+                    if bucket > 0:
+                        milestones.setdefault(bucket, path)
+                except ValueError:
+                    pass
             for path in cks[:-keep_n]:
                 try:
                     step = int(os.path.basename(path)[5:-3])
                 except ValueError:
                     continue
-                if every > 0 and step % every == 0:
+                if path in milestones.values():
                     continue
                 for p in (path, path + ".json"):
                     try:
@@ -467,6 +530,10 @@ class Trainer:
         self.rng.setstate(ck["rng"])
         self.episode_seed = ck.get("episode_seed", self.episode_seed)
         self.pfsp = dict(ck.get("pfsp") or {})
+        self.champion_score = tuple(ck.get("champion_score", (-1.0, -1e30)))
+        if keep_cfg and any(self.cfg.get(k) != ck["cfg"].get(k) for k in
+                            ("eval_maps", "eval_seed", "eval_games", "fog", "round_cap")):
+            self.champion_score = (-1.0, -1e30)
         for g in self.opt.param_groups:
             g["lr"] = self.cfg["lr"]
         self.sync_act_net()
@@ -478,10 +545,17 @@ class Trainer:
     # -- opponents (8.2) --
     def pool_checkpoints(self) -> list[str]:
         cks = sorted(glob.glob(os.path.join(self.run_dir, "ckpt_*.pt")))
-        return cks[-self.cfg["pool_size"]:]
+        size = max(0, int(self.cfg["pool_size"]))
+        recent = cks[-size:] if size else []
+        older = cks[:-size] if size else cks
+        count = max(0, int(self.cfg.get("pool_archive_size", 0)))
+        archive = ([older[i] for i in np.linspace(0, len(older) - 1,
+                    min(count, len(older)), dtype=int)] if older and count else [])
+        champions = sorted(glob.glob(os.path.join(self.run_dir, "champion_*.pt")))[-1:]
+        return list(dict.fromkeys(recent + archive + champions))
 
     def pool_net(self, path: str) -> PolicyNet:
-        if path == "self":
+        if path == "self" and path not in self.pool_cache:
             net = copy.deepcopy(self.act_net).eval()
             self.pool_cache["self"] = net
             return net
@@ -495,7 +569,7 @@ class Trainer:
             live = {e.label.split(":", 1)[1] for e in (self.envs.envs if self.envs else [])
                     if e.label.startswith("pool:")}
             for old in [k for k in self.pool_cache if k not in live and k != path]:
-                if len(self.pool_cache) <= self.cfg["pool_size"] + 1:
+                if len(self.pool_cache) <= self.cfg["pool_size"] + self.cfg.get("pool_archive_size", 0) + 2:
                     break
                 del self.pool_cache[old]
         self.pool_cache.move_to_end(path)
@@ -623,6 +697,7 @@ class Trainer:
             max_candidates=self.cfg["max_candidates"], max_actors=self.cfg["max_actors"],
             opponent_style=style, shaping_scale=self.shaping_scale(),
             potential_coef=float(self.cfg["potential_coef"]), army=army,
+            gamma=float(self.cfg["gamma"]),
         )
         return cfg, label
 
@@ -648,6 +723,10 @@ class Trainer:
         # map basename, which is what the dashboard and the eval rows already use.
         usage_units_map: dict[str, Counter] = defaultdict(Counter)
         usage_kinds_map: dict[str, Counter] = defaultdict(Counter)
+        offered: dict[str, Counter] = defaultdict(Counter)
+        accepted: dict[str, Counter] = defaultdict(Counter)
+        selected: dict[int, tuple[str, str]] = {}
+        timings = Counter()
         illegal = 0
         inflight: dict[int, str] = {}          # env -> "reset" | "step" awaiting its reply
         bad_resets = [0] * n
@@ -671,7 +750,15 @@ class Trainer:
         self.write_status("running", "collecting rollout", 0, T * n)
         taken = 0
         capped = False
-        while (taken < T * n and not capped) or inflight:
+        def responding() -> bool:
+            # Finish every learner transition before PPO, including the entire pool
+            # response. No new learner actions are needed while draining this tail.
+            return any(buf and not buf[-1].done and envs[i].last is not None
+                       and not envs[i].last.get("done", False)
+                       and envs[i].last["acting"] != envs[i].cfg.side
+                       for i, buf in enumerate(buffers))
+
+        while (taken < T * n and not capped) or inflight or responding():
             if not capped and budget > 0 and buf_bytes > budget:
                 # A map whose decision points carry thousands of candidates makes the
                 # per-step cost unpredictable. Cutting the rollout short costs this
@@ -694,13 +781,20 @@ class Trainer:
                                   env_maps=[map_name(e.cfg.map_path)
                                             for e in envs if e.cfg],
                                   rounds=[int(e.last["info"]["round"]) for e in envs if e.last])
-            if taken < T * n and not capped:
-                waiting = [i for i in range(n) if i not in inflight]
-                trainee = [i for i in waiting if envs[i].last["acting"] == envs[i].cfg.side]
+            if (taken < T * n and not capped) or responding():
+                collecting = taken < T * n and not capped
+                waiting = [i for i in range(n) if i not in inflight
+                           and envs[i].last is not None and not envs[i].last["done"]]
+                trainee = [i for i in waiting if collecting
+                           and envs[i].last["acting"] == envs[i].cfg.side]
                 actions = {}
                 if trainee:
+                    ts = time.perf_counter()
                     enc = [encode(envs[i].last) for i in trainee]
+                    timings["encode_secs"] += time.perf_counter() - ts
+                    ts = time.perf_counter()
                     a, lp, v = choose(self.act_net, enc, "cpu")
+                    timings["inference_secs"] += time.perf_counter() - ts
                     for j, i in enumerate(trainee):
                         g, f, c, cl = enc[j]
                         step = Step(g, f, c, cl, int(a[j]), float(lp[j]), float(v[j]))
@@ -709,6 +803,8 @@ class Trainer:
                         actions[i] = int(a[j])
                         legal = envs[i].last["legal"][int(a[j])]
                         mp = map_name(envs[i].cfg.map_path) if envs[i].cfg else "?"
+                        offered[mp].update({c["i"]["t"] for c in envs[i].last["legal"]})
+                        selected[i] = (mp, legal["i"]["t"])
                         usage_kinds[legal["i"]["t"]] += 1
                         usage_kinds_map[mp][legal["i"]["t"]] += 1
                         at = legal.get("at", -1)
@@ -719,18 +815,29 @@ class Trainer:
                 # Phase B: opponent decision points served by a frozen pool member.
                 by_net = defaultdict(list)
                 for i in waiting:
-                    if i not in actions:
+                    if envs[i].last["acting"] != envs[i].cfg.side and (
+                            collecting or (buffers[i] and not buffers[i][-1].done)):
                         by_net[envs[i].label.split(":", 1)[1]].append(i)
                 for path, idxs in by_net.items():
-                    a, _, _ = choose(self.pool_net(path), [encode(envs[i].last) for i in idxs], "cpu")
+                    ts = time.perf_counter()
+                    enc = [encode(envs[i].last) for i in idxs]
+                    timings["encode_secs"] += time.perf_counter() - ts
+                    ts = time.perf_counter()
+                    a, _, _ = choose(self.pool_net(path), enc, "cpu")
+                    timings["opponent_inference_secs"] += time.perf_counter() - ts
                     for j, i in enumerate(idxs):
                         actions[i] = int(a[j])
                 for i, act in actions.items():
                     envs[i].send({"cmd": "step", "action": act})
                     inflight[i] = "step"
-            for i in self.envs.wait_any(list(inflight)):
+            ts = time.perf_counter()
+            ready = self.envs.wait_any(list(inflight)) if inflight else []
+            timings["wait_secs"] += time.perf_counter() - ts
+            for i in ready:
                 env = envs[i]
+                ts = time.perf_counter()
                 r = env.last = env.recv()
+                timings["receive_secs"] += time.perf_counter() - ts
                 if inflight.pop(i) == "reset":
                     if r["done"]:
                         # A reset that comes back already over (a degenerate map) gets a new
@@ -743,6 +850,11 @@ class Trainer:
                         bad_resets[i] = 0
                     continue
                 stats["legal_ms"].append(r["info"].get("legal_ms", 0.0))
+                stats["obs_ms"].append(r["info"].get("obs_ms", 0.0))
+                if i in selected:
+                    mp, kind = selected.pop(i)
+                    if r["info"].get("action_ok", False):
+                        accepted[mp][kind] += 1
                 buf = buffers[i]
                 # Every reward belongs to the trainee's latest decision in this episode —
                 # the ones that arrive over a pool opponent's moves (Phase B) included; those
@@ -780,6 +892,7 @@ class Trainer:
         dt = time.time() - t0
         info = dict(stats=stats, usage_units=usage_units, usage_kinds=usage_kinds,
                     usage_units_map=usage_units_map, usage_kinds_map=usage_kinds_map,
+                    offered=offered, accepted=accepted, timings=dict(timings),
                     illegal=illegal, seconds=dt, steps=taken)
         return buffers, info
 
@@ -799,7 +912,7 @@ class Trainer:
                 _, _, v = choose(self.act_net, enc, "cpu")
                 last_vals.append(float(v[0]))
             else:
-                last_vals.append(float(buffers[i][-1].value))
+                raise RuntimeError("rollout ended before the opponent response completed")
         flat_steps, advs, rets = [], [], []
         for i, buf in enumerate(buffers):
             adv = np.zeros(len(buf), dtype=np.float32)
@@ -890,8 +1003,9 @@ class Trainer:
     def evaluate(self, games: int, record_dir: str | None = None,
                  keep: int = 0, net: PolicyNet | None = None,
                  maps: list[str] | None = None, log_games: bool = True,
-                 fogs: list[int] | None = None) -> dict:
-        """Game k always gets seed_base + k and side k % 2, whichever env plays it; an env
+                 fogs: list[int] | None = None, suite: str = "main",
+                 round_cap: int | None = None) -> dict:
+        """Game k gets seed_base + k // 2 and side k % 2, whichever env plays it; an env
         starts its next game the moment it finishes one instead of waiting for the slowest
         game of a batch."""
         opponent = SCRIPTED
@@ -910,7 +1024,7 @@ class Trainer:
         # evaluation to one map keeps the number comparable across a pool change, which is
         # the only way to answer "did adding those maps help?".
         eval_maps = maps or self.cfg.get("eval_maps") or self.cfg["maps"]
-        seed_base = 900_000 + self.update * 100
+        seed_base = int(self.cfg["eval_seed"]) + (1_000_000 if suite == "heldout" else 0)
         game_of: dict[int, int] = {}
         inflight: set[int] = set()
         started = 0
@@ -920,12 +1034,14 @@ class Trainer:
             k = game_of[i] = started
             started += 1
             envs[i].cfg = EpisodeConfig(
-                map_path=eval_maps[k % len(eval_maps)], seed=seed_base + k,
-                side=k % 2, opponent=HARD, round_cap=self.cfg["round_cap"], max_steps=self.cfg.get("max_steps", 3000),
+                map_path=eval_maps[(k // 2) % len(eval_maps)], seed=seed_base + k // 2,
+                side=k % 2, opponent=HARD,
+                round_cap=round_cap if round_cap is not None else self.cfg["round_cap"],
+                max_steps=self.cfg.get("max_steps", 3000),
                 civilians=self.cfg["civilians"], random_events=self.cfg["random_events"],
                 fog=fogs[k % len(fogs)] if fogs else FOGS[self.cfg["fog"]],
                 friendly_fire=self.cfg["friendly_fire"],
-                disembark=disembark_allowed(self.cfg, eval_maps[k % len(eval_maps)]),
+                disembark=disembark_allowed(self.cfg, eval_maps[(k // 2) % len(eval_maps)]),
                 max_candidates=self.cfg["max_candidates"],
                 max_actors=self.cfg["max_actors"],
                 # Пишем КАЖДУЮ партию оценки, а не первые `keep`. Признак записи
@@ -971,7 +1087,7 @@ class Trainer:
                 # row per game means the dashboard can show that a 0% win rate was
                 # four honest losses and four stalls, not eight of the same thing.
                 row = dict(
-                    step=self.global_step, update=self.update, opponent=opponent,
+                    step=self.global_step, update=self.update, opponent=opponent, suite=suite,
                     game=k + 1, result=results[-1], by=info.get("by", ""),
                     value_diff=info["value_diff"],
                     rounds=info["round"], steps=info.get("steps"),
@@ -989,7 +1105,8 @@ class Trainer:
                 # evaluation should show its results filling in, and if it dies
                 # halfway the games it did play are already on disk.
                 if log_games:
-                    with open(os.path.join(self.run_dir, "eval_games.jsonl"), "a") as f:
+                    filename = "eval_games.jsonl" if suite == "main" else f"eval_{suite}_games.jsonl"
+                    with open(os.path.join(self.run_dir, filename), "a") as f:
                         f.write(json.dumps(row) + "\n")
                 print(f"[eval]   vs {opponent} game {k + 1}/{games}: "
                       f"{row['result']}"
@@ -1051,6 +1168,11 @@ class Trainer:
         for row in per_game:
             by_map[row["map"]].append(1.0 if row["result"] == "win" else 0.0)
         return dict(games=len(results), winrate=wins / max(1, len(results)),
+                    rout_winrate=sum(r["result"] == "win" and r["by"] == "rout"
+                                     for r in per_game) / max(1, len(results)),
+                    value_winrate=sum(r["result"] == "win" and r["by"] == "value"
+                                      for r in per_game) / max(1, len(results)),
+                    illegal=sum(r.get("illegal") or 0 for r in per_game),
                     by_map={m: float(np.mean(v)) for m, v in by_map.items()},
                     lossrate=outcomes["loss"] / max(1, len(results)),
                     drawrate=draws / max(1, len(results)), value_diff=float(np.mean(diffs)),
@@ -1089,6 +1211,11 @@ class Trainer:
               f"step={self.global_step} update={self.update}", flush=True)
         crash: dict = {}
         try:
+            if cfg["preflight"]:
+                self.write_status("running", "checking map and policy compatibility", 0, 0)
+                checked = preflight_config(cfg, self.envs.envs[0])
+                with open(os.path.join(self.run_dir, "preflight.json"), "w") as f:
+                    json.dump(checked, f, indent=2)
             while self.global_step < cfg["total_steps"] and not self.stop_requested:
                 if self.wait_while_paused():
                     break
@@ -1248,6 +1375,9 @@ class Trainer:
         """Greedy games vs HARD, every time. An eval that dies with its Godot env
         must not take the run with it — the win rate is a diagnostic, not the training
         signal, so a failed one is logged as such and training carries on."""
+        started_at = time.perf_counter()
+        full_every = int(self.cfg["eval_full_every"])
+        full = full_every <= 0 or self.update % full_every == 0 or not self.has_eval_history()
         rec = os.path.join(self.run_dir, "replays", f"checkpoint_{self.global_step:09d}")
         row = {"step": self.global_step, "update": self.update, "time": time.time(),
                "phase": self.cfg["phase"], "stage": self.cfg["stage"]}
@@ -1261,7 +1391,17 @@ class Trainer:
             self.envs.rebuild()
         else:
             row.update({f"{k}_{opp}": v for k, v in r.items()})
-            for k in ("winrate", "lossrate", "drawrate", "value_diff", "rounds", "stallrate"):
+            score = (r["winrate"], r["value_diff"])
+            if r["games"] >= 10 and score > self.champion_score:
+                self.champion_score = score
+                path = os.path.join(self.run_dir, f"champion_{self.global_step:09d}.pt")
+                torch.save(self.state_dict(), path + ".tmp")
+                os.replace(path + ".tmp", path)
+                for old in glob.glob(os.path.join(self.run_dir, "champion_*.pt")):
+                    if old != path:
+                        os.remove(old)
+            for k in ("winrate", "lossrate", "drawrate", "value_diff", "rounds", "stallrate",
+                      "rout_winrate", "value_winrate", "illegal"):
                 self.writer.add_scalar(f"eval/{k}_{opp}", r[k], self.global_step)
             print(f"[eval] step={self.global_step} vs {opp}: win {r['winrate']:.2f} "
                   f"draw {r['drawrate']:.2f} diff {r['value_diff']:+.2f} "
@@ -1270,9 +1410,9 @@ class Trainer:
         # the tank, breach the wall...). Played vs standard HARD like the main eval, with
         # both sides of each drill (game k plays side k % 2), and scored per drill.
         nofog = int(self.cfg.get("eval_nofog_games") or 0)
-        if nofog > 0:
+        if full and nofog > 0:
             try:
-                r2 = self.evaluate(nofog, log_games=False, fogs=[FOGS["off"]])
+                r2 = self.evaluate(nofog, fogs=[FOGS["off"]], suite="nofog")
             except EnvDied as e:
                 print(f"[eval] fog-off eval aborted: {e}", flush=True)
                 self.envs.rebuild()
@@ -1282,16 +1422,17 @@ class Trainer:
                     self.writer.add_scalar(f"eval/{k}_{opp}_nofog", r2[k], self.global_step)
                 print(f"[eval] fog off: win {r2['winrate']:.2f} diff {r2['value_diff']:+.2f}", flush=True)
         drills = list(self.cfg.get("drill_eval_maps") or [])
-        if drills:
+        if full and drills:
             per = max(1, int(self.cfg["drill_eval_games"]))
-            order = [m for m in drills for _ in range(per)]
+            per = max(2, per + per % 2)
+            order = [m for m in drills for _ in range(per // 2)]
             # With 4 games a drill (the default in tactical.yaml) each drill is played from
             # both sides (game k plays side k % 2) AND both in fog and with fog off: games
             # 0-1 in fog, 2-3 without. Fog is keyed on k // 2 so it never coincides with side.
             fogs = [FOGS["off"] if ((k % per) // 2) % 2 == 1 else FOGS[self.cfg["fog"]]
-                    for k in range(len(order))]
+                    for k in range(2 * len(order))]
             try:
-                d = self.evaluate(len(order), maps=order, log_games=False, fogs=fogs)
+                d = self.evaluate(2 * len(order), maps=order, fogs=fogs, suite="drills")
             except EnvDied as e:
                 print(f"[eval] drills aborted: {e}", flush=True)
                 self.envs.rebuild()
@@ -1304,6 +1445,21 @@ class Trainer:
                 print(f"[eval] drills: win {d['winrate']:.2f} " +
                       " ".join(f"{os.path.splitext(m)[0]}={v:.2f}" for m, v in sorted(d["by_map"].items())),
                       flush=True)
+        if full and self.cfg["heldout_eval_maps"] and self.cfg["heldout_eval_games"] > 0:
+            try:
+                row["heldout"] = self.evaluate(
+                    self.cfg["heldout_eval_games"],
+                    maps=[m for m in self.cfg["heldout_eval_maps"] for _ in range(2)],
+                    suite="heldout", round_cap=self.cfg["heldout_round_cap"],
+                    fogs=[FOGS[self.cfg["fog"]]] * 2 + [FOGS["off"]] * 2)
+                for k in ("winrate", "rout_winrate", "value_winrate", "illegal"):
+                    self.writer.add_scalar(f"eval/heldout_{k}", row["heldout"][k], self.global_step)
+            except EnvDied as e:
+                row["heldout_error"] = str(e)
+                self.envs.rebuild()
+        row["seconds"] = time.perf_counter() - started_at
+        row["full_suite"] = full
+        self.writer.add_scalar("speed/eval_secs", row["seconds"], self.global_step)
         self.writer.flush()
         self.last_eval = row
         with open(os.path.join(self.run_dir, "eval_log.jsonl"), "a") as f:
@@ -1316,6 +1472,12 @@ class Trainer:
         steps = info.get("steps") or self.cfg["rollout_steps"] * self.cfg["n_envs"]
         w.add_scalar("speed/env_steps_per_sec", steps / max(1e-6, info["seconds"]), s)
         w.add_scalar("speed/update_secs", update_secs, s)
+        w.add_scalar("speed/collect_secs", info["seconds"], s)
+        w.add_scalar("speed/train_steps_per_sec", steps / max(1e-6, info["seconds"] + update_secs), s)
+        for k, v in info.get("timings", {}).items():
+            w.add_scalar(f"speed/{k}", v, s)
+        if st["obs_ms"]:
+            w.add_scalar("speed/env_obs_ms", float(np.mean(st["obs_ms"])), s)
         w.add_scalar("speed/matches_done", self.matches_done, s)
         if st["legal_ms"]:
             # Where a slow step actually goes: on company-sized maps the legal-intent
@@ -1390,6 +1552,12 @@ class Trainer:
             tot = max(1, sum(counter.values()))
             for k, c in counter.items():
                 w.add_scalar(f"usage_map/{stem}/kind_{k}", c / tot, s)
+            for k, count in info.get("offered", {}).get(mp, {}).items():
+                chosen = counter[k]
+                w.add_scalar(f"actions/{stem}/{k}_offered", count, s)
+                w.add_scalar(f"actions/{stem}/{k}_chosen", chosen, s)
+                w.add_scalar(f"actions/{stem}/{k}_accepted",
+                             info.get("accepted", {}).get(mp, {}).get(k, 0), s)
         for mp, counter in info.get("usage_units_map", {}).items():
             stem = os.path.splitext(mp)[0]
             tot = max(1, sum(counter.values()))
@@ -1570,6 +1738,17 @@ def cmd_resume(a):
     t.train()
 
 
+def cmd_preflight(a):
+    cfg = load_config(a.config)
+    refresh_class_cache(cfg["godot"])
+    env = GodotEnv(cfg["godot"])
+    try:
+        rows = preflight_config(cfg, env)
+        print(json.dumps(rows, indent=2))
+    finally:
+        env.close()
+
+
 def cmd_fork(a):
     rd = run_dir_for(a.branch)
     if os.path.exists(rd):
@@ -1579,6 +1758,7 @@ def cmd_fork(a):
     t = Trainer(rd, cfg, pick_device(cfg))
     t.load(a.checkpoint, keep_cfg=True)
     t.parent = os.path.abspath(a.checkpoint)
+    t.champion_score = (-1.0, -1e30)  # the new branch needs its own measured champion
     t.save()
     print(f"[fork] {a.branch} <- {a.checkpoint} (step {t.global_step})")
     t.train()
@@ -1752,7 +1932,14 @@ def cmd_play(a):
         sys.exit(f"ports {a.port}-{a.port + 19} are all taken — stop old policy servers "
                  f"(pkill -f policy_server.py)")
 
-    srv = subprocess.Popen([sys.executable, os.path.join(PROJECT, "rl", "policy_server.py"),
+    # Serve with the same observation/features code as the game being launched.
+    # The training checkout can be weeks older than that game.
+    try:
+        game = latest_game_dir()
+    except Exception as e:
+        sys.exit(f"could not get the newest game from GitHub: {e}")
+    refresh_class_cache(a.godot, game)
+    srv = subprocess.Popen([sys.executable, os.path.join(game, "rl", "policy_server.py"),
                             a.checkpoint, "--port", str(port)])
     try:
         # Wait for it to actually listen, and fail loudly if it never does.
@@ -1779,20 +1966,21 @@ def cmd_play(a):
                    MCF_RL_MAX_CANDIDATES=str(cfg["max_candidates"]),
                    MCF_RL_ROUND_CAP=str(cfg["round_cap"]),
                    MCF_RL_MODEL_LABEL=label)
-        try:
-            game = latest_game_dir()
-        except Exception as e:  # noqa: BLE001
-            sys.exit(f"could not get the newest game from GitHub: {e}")
-        refresh_class_cache(a.godot, game)
         print(f"[play] game: {game_version(game)}", flush=True)
         subprocess.call([a.godot, "--path", game, "--", "--vs-latest"], env=env)
     finally:
         srv.terminate()
+        try:
+            srv.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            srv.kill()
+            srv.wait()
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = p.add_subparsers(dest="cmd", required=True)
+    s = sp.add_parser("preflight"); s.add_argument("config"); s.set_defaults(fn=cmd_preflight)
     s = sp.add_parser("start"); s.add_argument("config"); s.add_argument("--branch", required=True); s.set_defaults(fn=cmd_start)
     s = sp.add_parser("resume"); s.add_argument("branch"); s.add_argument("--config"); s.set_defaults(fn=cmd_resume)
     s = sp.add_parser("fork"); s.add_argument("checkpoint"); s.add_argument("--branch", required=True); s.add_argument("--config"); s.set_defaults(fn=cmd_fork)

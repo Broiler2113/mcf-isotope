@@ -287,6 +287,9 @@ var _shaping_scale: float = 1.0
 ## Вес позиционной награды (_phi). Ноль — выключена (как было до tactical env).
 var _potential_coef: float = 0.0
 var _last_phi: float = 0.0
+var _gamma: float = 0.99
+var _potential_pending: bool = false
+var _action_ok: bool = true
 ## Метрики партии со стороны обучаемого: по родам войск — действия, выстрелы и попадания,
 ## убийства и потери; ходы за 2-3 ОД; доля армии под огнём в конце хода. Уходят в info.tac
 ## на последнем шаге, тренер раскладывает их по картам на панели.
@@ -380,6 +383,8 @@ func _reset(req: Dictionary) -> Dictionary:
 	max_actors = int(req.get("max_actors", 0))
 	_shaping_scale = float(req.get("shaping_scale", 1.0))
 	_potential_coef = float(req.get("potential_coef", 0.0))
+	_gamma = clampf(float(req.get("gamma", 0.99)), 0.0, 1.0)
+	_potential_pending = false
 	_cap_rng.seed = seed_value
 	resolver = GameActionResolver.new(state)
 	resolver.fog_mode = int(req.get("fog", MCF.Fog.STANDARD))
@@ -463,8 +468,9 @@ func _reset(req: Dictionary) -> Dictionary:
 			_bump("fielded", u.stats.id)
 	_exposure = []
 	_memory = {}
-	_last_phi = _phi(Obs.tactics(resolver, side)) if _potential_coef > 0.0 else 0.0
 	_advance()
+	# Scripted opening moves precede the first learner decision and its potential.
+	_last_phi = _phi(Obs.tactics(resolver, side)) if _potential_coef > 0.0 and not _done else 0.0
 	return _response(0.0, true)
 
 ## Карта из генератора: "gen:<стиль|any>:<размер>:<бойцов>:<танков>". Стиль — номер
@@ -482,12 +488,20 @@ func _gen_map(spec: String, arng: RandomNumberGenerator) -> MapData:
 	var p := spec.split(":")
 	var style_s := p[1] if p.size() > 1 else "any"
 	var size := int(p[2]) if p.size() > 2 else 0
+	if size < 0 or size >= MapGen.SIZES.size():
+		return null
+	# Reserve the complete playable border and rim. Do not crop observations or
+	# keep retrying a base size that can never fit the policy's canvas.
+	var core_limit := GEN_CANVAS - 2 * MapGen.BORDER_ALL
+	var dim: Vector2i = MapGen.SIZES[size]
+	dim = Vector2i(mini(dim.x, core_limit), mini(dim.y, core_limit))
 	var units := _pick_range(p[3] if p.size() > 3 else "12", arng)
 	var tanks := _pick_range(p[4] if p.size() > 4 else "0", arng)
 	for attempt in 8:
 		var style := arng.randi_range(0, MapGen.STYLE_NAMES.size() - 1) if style_s == "any" \
 				else int(style_s)
-		var opts := {"style": style, "size": size, "density": arng.randi_range(0, 2),
+		var opts := {"style": style, "size": MapGen.SIZE_CUSTOM,
+				"width": dim.x, "height": dim.y, "density": arng.randi_range(0, 2),
 				"seed": arng.randi_range(1, MapGen.SEED_MAX), "zones": 2,
 				"units": units + tanks * (ArmyBuilder.TANK_CREW + 9),
 				"symmetric": arng.randf() < 0.5, "civilians": 0, "civilian_count": 0}
@@ -553,6 +567,8 @@ func _step(req: Dictionary) -> Dictionary:
 		return {"ok": false, "error": "action %d out of range (%d legal)" % [k, _legal.size()]}
 	var intent: Intent = _legal[k]
 	var acting := state.active_player()
+	if acting == side:
+		_potential_pending = true
 	var reward := 0.0
 	# ОД актёра ДО действия — по ним и только по ним решается, было ли действие
 	# бесплатным. Список «бесплатных видов» хардкодить нельзя: он меняется с правилами,
@@ -570,6 +586,7 @@ func _step(req: Dictionary) -> Dictionary:
 	if acting == side and intent is EndTurnIntent:
 		_exposure.append(_exposed_share())
 	var res := resolver.resolve(intent)
+	_action_ok = res.ok
 	_note_fire(res)
 	_steps += 1
 	if acting == side:
@@ -935,16 +952,21 @@ func _response(reward: float, is_reset: bool) -> Dictionary:
 	reward += (diff - _last_diff) / _norm
 	_last_diff = diff
 	var acting_now := state.active_player()
-	if _potential_coef > 0.0 and not is_reset:
-		# Потенциал позиции (Ng et al.): платится РАЗНОСТЬ Φ, поэтому оптимальная политика
-		# от неё не меняется — она лишь подсказывает раньше, что позиция стала лучше.
-		# На конце партии Φ = 0, как того требует теорема.
+	var potential_reward := 0.0
+	if _potential_coef > 0.0 and not is_reset and (_done or acting_now == side):
+		# One discounted potential difference per LEARNER transition. Pool actions
+		# belong to that transition; discounting each of them changes the objective.
 		var tac_side := Obs.tactics(resolver, side)
 		var phi := 0.0 if _done else _phi(tac_side)
-		reward += _potential_coef * (phi - _last_phi)
+		if _potential_pending:
+			potential_reward = _potential_coef * (_gamma * phi - _last_phi)
+			reward += potential_reward
 		_last_phi = phi
+		_potential_pending = false
 	var resp := {"ok": true, "reward": reward, "done": _done, "acting": acting_now,
 			"info": {"round": state.turns.round_number, "steps": _steps, "illegal": _illegal,
+				"action_ok": _action_ok,
+				"potential": _last_phi, "potential_reward": potential_reward,
 					"illegal_kinds": _illegal_kinds,
 				"value_diff": diff / _norm, "fire_losses": _fire_losses,
 				"shots": _shots, "shots_hit": _shots_hit}}
