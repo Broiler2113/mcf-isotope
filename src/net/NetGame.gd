@@ -46,6 +46,8 @@ var opening_civilians: ActionResult = ActionResult.success()
 ## restored_fx и кладёт поверх доски — после пересинхронизации поле выглядит как у хоста.
 var fx_snapshot: Callable = Callable()
 var restored_fx: Dictionary = {}
+## Shares the existing host dice log; never starts a second recording stream.
+var recorder: ReplayRecorder = null
 
 ## p_my_owner — сторона, за которую играет ЭТА машина. −1 означает старую дуэльную
 ## раскладку «хост — первый, гость — второй»; лобби на N игроков передаёт номер явно.
@@ -137,6 +139,8 @@ func announce_initiative() -> void:
 	state.dice.begin_record()
 	opening_civilians = resolver.play_civilian_slots()
 	msg["r"] = state.dice.take_log()
+	if recorder != null:
+		recorder.opening = msg["r"].duplicate()
 	state.dice.record_enabled = false
 	outgoing.emit(msg)
 	initiative_synced.emit()
@@ -163,6 +167,8 @@ func _host_resolve_and_send(intent: Intent) -> void:
 	var rolls := state.dice.take_log()
 	state.dice.record_enabled = false
 	if result.ok:
+		if recorder != null:
+			recorder.on_resolved(intent, rolls)
 		# Подпись доски ПОСЛЕ действия (batch 14): гость сверит с ней свою.
 		outgoing.emit({"k": K_ACTION, "i": IntentCodec.encode(intent), "r": rolls,
 			"h": state.digest_hash()})

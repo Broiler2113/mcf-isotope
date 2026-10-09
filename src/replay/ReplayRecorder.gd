@@ -15,9 +15,8 @@ extends RefCounted
 ## НАЗАД — это восстановление ближайшего кадра и быстрый прогон вперёд. Без них
 ## шаг назад на третьем часу боя переигрывал бы партию с начала.
 ##
-## Запись включается только в НЕсетевой партии: в сетевой поток бросков уже
-## записывает хост (state.dice.begin_record в NetGame), и второй писатель отобрал бы
-## у него журнал.
+## Network matches share the host dice log through NetGame.on_resolved;
+## offline matches use the resolver hook. Only one component starts the dice log.
 
 const SCHEMA := 1
 const KEYFRAME_ROUNDS := 5

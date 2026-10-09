@@ -1383,6 +1383,19 @@ def controls(b: str, s: dict, key: str = "") -> None:
                  help="opens the game on the lobby with this branch's newest checkpoint "
                       "as your AI - Learned opponent"):
         play_vs(os.path.join(b, "latest.pt"))
+    if os.path.exists(os.path.join(RUNS, b, "best.pt")):
+        if st.button("Play vs selected model", key=f"best{key}{b}",
+                     help="Preserved baseline until a challenger passes the broad head-to-head test"):
+            play_vs(os.path.join(b, "best.pt"))
+        selection = os.path.join(RUNS, b, "promotion.json")
+        if os.path.exists(selection):
+            try:
+                with open(selection) as f:
+                    result = json.load(f)
+                st.caption(f"Last selection test: {result.get('score', 0):.0%} score across "
+                           f"{result.get('games', 0)} games · {result.get('reason', '')}")
+            except (OSError, ValueError):
+                pass
 
 
 def page_overview() -> None:
@@ -1769,6 +1782,51 @@ def page_evaluations(b: str) -> None:
 
 def page_replays() -> None:
     st.header("Replays")
+    with st.expander("Teach RLM from human games"):
+        st.caption("Upload .mcfr matches. Valid games supply human action examples to branches "
+                   "with replay learning enabled. Entire matches are held out for testing automatically.")
+        uploaded = st.file_uploader("Human match replay", type=["mcfr"], accept_multiple_files=True)
+        if uploaded and st.button("Validate and add replays"):
+            root = os.path.join(PROJECT, "rl", "demonstrations")
+            queue = os.path.join(root, "uploads")
+            os.makedirs(queue, exist_ok=True)
+            for replay in uploaded:
+                data = replay.getvalue()
+                if len(data) > 50 * 1024**2:
+                    st.error(f"{replay.name}: maximum file size is 50 MB")
+                    continue
+                digest = hashlib.sha256(data).hexdigest()
+                path = os.path.join(queue, digest + ".mcfr")
+                with open(path + ".tmp", "wb") as f:
+                    f.write(data)
+                os.replace(path + ".tmp", path)
+                try:
+                    os.unlink(path + ".status.json")
+                except FileNotFoundError:
+                    pass
+                st.success(f"{replay.name}: queued for validation")
+            # A filesystem lock in the worker serializes imports across browser
+            # sessions. Large uploads cannot launch a dozen Godot instances at once.
+            with open(os.path.join(queue, "worker.log"), "a") as log:
+                subprocess.Popen([sys.executable, os.path.join(PROJECT, "rl", "demonstrations.py"),
+                                  "worker", "--dataset", root], stdout=log,
+                                 stderr=subprocess.STDOUT, start_new_session=True)
+        root = os.path.join(PROJECT, "rl", "demonstrations")
+        imported = []
+        for path in sorted(glob.glob(os.path.join(root, "*", "manifest.json"))):
+            try:
+                with open(path) as f:
+                    m = json.load(f)
+                imported.append({k: m.get(k) for k in ("source", "samples", "split")})
+            except (OSError, ValueError):
+                pass
+        if imported:
+            st.dataframe(imported, hide_index=True)
+        if st.button("Refresh replay imports"):
+            st.rerun()
+        for log_path in sorted(glob.glob(os.path.join(root, "uploads", "*.status.json")))[-5:]:
+            with open(log_path) as f:
+                st.code(f.read()[-1500:], language="text")
     df = replays(replay_stamp())
     if df.empty:
         st.info("no replays yet — the trainer records a few per evaluation")

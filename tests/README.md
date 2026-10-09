@@ -205,3 +205,5 @@ replays and fallback intents are forwarded exactly once.
 None of these runs is evidence that the game *plays* correctly. They are evidence
 that it does not crash, does not deadlock the AI, and does not desync. Play the
 real game as well.
+
+`run_rl_learning.gd` verifies round-clock discounting across a pool response, live public hazards without omniscience, and network-recorded replay determinism. `rl/test_learning_environment.py` covers spatial batches, demonstration imports/updates, checkpoint migration, paired model selection, and real head-to-head protocol routing.

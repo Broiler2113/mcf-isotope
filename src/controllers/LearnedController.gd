@@ -62,7 +62,11 @@ signal fallback_engaged(reason: String)
 var _peer: StreamPeerTCP = null
 var _fallback: AIController = null
 var _resolver: GameActionResolver = null
+var _match_resolver: WeakRef = null
 var _rx := ""
+
+func bind_match(r: GameActionResolver) -> void:
+	_match_resolver = weakref(r)
 
 func _init(p_owner: int) -> void:
 	super(p_owner)
@@ -120,6 +124,11 @@ func _decide(state: GameState) -> Dictionary:
 		_resolver.fog_mode = GameConfig.fog_mode
 		_resolver.friendly_fire_enabled = GameConfig.friendly_fire
 		_resolver.omniscient_side = -1
+	if _match_resolver != null:
+		var live: GameActionResolver = _match_resolver.get_ref()
+		if live != null and live.state == state:
+			_resolver.random_events = live.random_events
+			_resolver.disembark_enabled = live.disembark_enabled
 	# Тот же бюджет намерений, что и в обучении. Иначе в настоящей партии сеть увидит
 	# 8000+ кандидатов там, где училась на 512, и выберет argmax по совсем другому
 	# множеству: обучение и бой обязаны показывать политике список одной формы.

@@ -288,6 +288,9 @@ var _shaping_scale: float = 1.0
 var _potential_coef: float = 0.0
 var _last_phi: float = 0.0
 var _gamma: float = 0.99
+var _discount_unit := "decision"
+var _learner_round := 0
+var _canvas_size := 64
 var _potential_pending: bool = false
 var _hazard_coef: float = 0.0
 var _last_hazard_phi: float = 0.0
@@ -356,6 +359,8 @@ func _emit(resp: Dictionary) -> void:
 # --- Эпизод -------------------------------------------------------------------------
 
 func _reset(req: Dictionary) -> Dictionary:
+	_canvas_size = clampi(int(req.get("canvas_size", 64)), 64, 256)
+	_discount_unit = str(req.get("discount_unit", "decision"))
 	var path := str(req.get("map", ""))
 	var seed_value := int(req.get("seed", 1))
 	# Свой поток жребия для карты и армии: от сида эпизода, но не тот, что у кубиков.
@@ -503,7 +508,7 @@ func _gen_map(spec: String, arng: RandomNumberGenerator) -> MapData:
 		return null
 	# Reserve the complete playable border and rim. Do not crop observations or
 	# keep retrying a base size that can never fit the policy's canvas.
-	var core_limit := GEN_CANVAS - 2 * MapGen.BORDER_ALL
+	var core_limit := _canvas_size - 2 * MapGen.BORDER_ALL
 	var dim: Vector2i = MapGen.SIZES[size]
 	dim = Vector2i(mini(dim.x, core_limit), mini(dim.y, core_limit))
 	var units := _pick_range(p[3] if p.size() > 3 else "12", arng)
@@ -517,7 +522,7 @@ func _gen_map(spec: String, arng: RandomNumberGenerator) -> MapData:
 				"units": units + tanks * (ArmyBuilder.TANK_CREW + 9),
 				"symmetric": arng.randf() < 0.5, "civilians": 0, "civilian_count": 0}
 		var m := MapGen.generate(opts)
-		if m != null and (m.width > GEN_CANVAS or m.height > GEN_CANVAS):
+		if m != null and (m.width > _canvas_size or m.height > _canvas_size):
 			units = maxi(4, units * 3 / 4)
 			tanks = tanks * 3 / 4
 			continue
@@ -580,6 +585,7 @@ func _step(req: Dictionary) -> Dictionary:
 	var acting := state.active_player()
 	if acting == side:
 		_potential_pending = true
+		_learner_round = state.turns.round_number
 	var reward := 0.0
 	# ОД актёра ДО действия — по ним и только по ним решается, было ли действие
 	# бесплатным. Список «бесплатных видов» хардкодить нельзя: он меняется с правилами,
@@ -966,21 +972,24 @@ func _response(reward: float, is_reset: bool) -> Dictionary:
 	var acting_now := state.active_player()
 	var potential_reward := 0.0
 	var hazard_reward := 0.0
+	var discount_steps := 0
 	if not is_reset and (_done or acting_now == side):
 		# One discounted potential difference per LEARNER transition. Pool actions
 		# belong to that transition; discounting each of them changes the objective.
 		var phi := 0.0 if _done or _potential_coef <= 0.0 else _phi(Obs.tactics(resolver, side))
 		var hazard_phi := 0.0 if _done or _hazard_coef <= 0.0 else _hazard_phi(Obs.hazards(resolver))
 		if _potential_pending:
-			potential_reward = _potential_coef * (_gamma * phi - _last_phi)
-			hazard_reward = _hazard_coef * (_gamma * hazard_phi - _last_hazard_phi)
+			discount_steps = maxi(0, state.turns.round_number - _learner_round) if _discount_unit == "round" else 1
+			var discount := pow(_gamma, discount_steps)
+			potential_reward = _potential_coef * (discount * phi - _last_phi)
+			hazard_reward = _hazard_coef * (discount * hazard_phi - _last_hazard_phi)
 			reward += potential_reward + hazard_reward
 		_last_phi = phi
 		_last_hazard_phi = hazard_phi
 		_potential_pending = false
 	var resp := {"ok": true, "reward": reward, "done": _done, "acting": acting_now,
 			"info": {"round": state.turns.round_number, "steps": _steps, "illegal": _illegal,
-				"action_ok": _action_ok,
+				"action_ok": _action_ok, "discount_steps": discount_steps,
 				"potential": _last_phi, "potential_reward": potential_reward,
 				"hazard_potential": _last_hazard_phi, "hazard_reward": hazard_reward,
 				"random_events": resolver.random_events.enabled,

@@ -57,7 +57,9 @@ class EpisodeConfig:
     opponent_style: int = 0      # AIController.Style for the HARD opponent: 0 standard, 1 rush, 2 turtle, 3 flank
     shaping_scale: float = 1.0   # multiplies the per-action bonuses (R_SHOT, R_VEHICLE); decays in training
     potential_coef: float = 0.0  # weight of the position potential (env_server._phi); 0 = off
-    gamma: float = 0.99         # discount per learner decision, including opponent reply
+    gamma: float = 0.99         # per decision or completed round, selected below
+    discount_unit: str = "decision"  # round keeps long multi-unit turns on one clock
+    canvas_size: int = 64
     army: str = ""               # "" as on the map, "shuffle" = mirrored type swap (fixed maps)
 
     def to_cmd(self) -> dict:
@@ -71,6 +73,7 @@ class EpisodeConfig:
             "max_candidates": self.max_candidates, "max_actors": self.max_actors,
             "opponent_style": self.opponent_style, "shaping_scale": self.shaping_scale,
             "potential_coef": self.potential_coef, "army": self.army, "gamma": self.gamma,
+            "discount_unit": self.discount_unit, "canvas_size": self.canvas_size,
         }
 
 

@@ -10,7 +10,7 @@ src/resolver/LegalIntents.gd      legal_intents(side): every intent the resolver
 rl/ObsEncoder.gd                  fog-limited observation, candidate descriptions              (§3)
 rl/env_server.gd                  headless Godot env, JSON lines over stdin/stdout             (§1, §5.1)
 rl/mcf_env.py                     bridge + vectorised envs                                    (§9.1)
-rl/features.py                    64x64x93 training grid, flat vector, per-candidate rows     (§3.1, Q2)
+rl/features.py                    variable-size training grid, flat vector, per-candidate rows     (§3.1, Q2)
 rl/model.py                       CNN + candidate scorer + value head                         (§4, §5.2, Q6)
 rl/train.py                       PPO, checkpoints, resume/fork, TensorBoard, eval, replays   (§6, §8, §9, §10)
 rl/dashboard.py                   rlm.mindcontrolfactor.com — stats, controls, spreadsheet    (§11)
@@ -23,6 +23,157 @@ tests/run_legal_intents.gd        exactness: every enumerated intent resolves OK
 tests/run_learned_controller.gd   fallback path (always) and live path (with MCF_RL_POLICY)
 rl/test_rl.py                     `~/.venvs/mcf-rl/bin/python rl/test_rl.py` — head, storage, timeouts
 ```
+
+## Training toward stronger human play
+
+`config/league.yaml` is the Mac development profile. Fork an existing checkpoint;
+keep `config/tactical.yaml` as the previous experiment. This is a measured development
+path, not evidence that the current model is superhuman. The live audit on 2026-10-09
+still showed tactical-4 near 15M decisions, good results on the small fixed HARD test,
+and no representative human-match rating. Training-step counts cannot establish strength.
+
+The profile changes the learning problem in these ways:
+
+- **Round clock:** `discount_unit: round`, `gamma: 0.97`, `lam: 0.95`. Actions within
+  one round use discount and trace factors of 1. A learner transition crossing a round
+  uses gamma and gamma*lambda once, including an entire frozen opponent response.
+  Position/hazard potential rewards use the identical discount. A 200-unit turn no
+  longer shrinks the strategic horizon simply because it needs more actions. Rollout
+  boundaries still bootstrap from the value head; they are not terminal states.
+- **Longer games and broader boards:** 40-round training, 60-round held-out tests,
+  24,000-action safety cap, generated boards up to 96x96. Encoding expands in 16-tile
+  buckets and PPO/inference group equal canvas sizes so padding cannot change a
+  position's policy between training and serving. Existing 64x64 checkpoints load.
+- **Curriculum and league:** all five environments, small/medium/large armies,
+  every tactical drill, 50% fog, 35% hazard games; 70% historical-policy opponents and
+  30% HARD styles. Training losses against HARD increase that scenario's sampling
+  weight, with a nonzero floor for practiced skills. Forks preserve up to three
+  source checkpoints as permanent opponents in addition to the source baseline.
+- **Human demonstrations:** authenticated dashboard uploads under Replays, validated
+  through the real resolver and recorded dice. Online matches now record on the host,
+  sharing the network dice stream. The importer constructs player-visible observations
+  before each action, including each side's last-seen memory, and matches demonstrated
+  actions against the legal enumerator. Unsupported actions are counted/skipped; any
+  replay/dice divergence rejects the whole import. No future dice enter model inputs.
+  Imitation uses a small separate cross-entropy loss (`demonstration_coef: 0.02`),
+  rather than pretending historical human moves are on-policy PPO samples.
+- **Model selection:** `best.pt` starts as the preserved parent. Every 1,000 updates,
+  the challenger plays 160 games against it: fresh map seeds, mirrored starting sides,
+  five environments, two army sizes, fog on/off, and hazards on/off. A one-sided
+  Hoeffding lower bound on the mean paired score must exceed 50%, with no illegal
+  actions and at most 5% action-cap stalls. Alpha spending across attempts limits
+  repeated-test false promotions; the counter/seed allocation survives restart.
+  The bound is conservative and may need more games to detect modest improvements.
+  These are tests against a model, not a human skill certificate. Per-game records,
+  seeds, results and reasons are saved under `eval_promotion_games.jsonl`,
+  `promotion_log.jsonl`, and `promotion.json`.
+- **Compute and memory:** two PPO epochs, smaller minibatches on the Mac, fewer
+  frequent fixed-map evaluations, sparse replay shards with a one-shard memory cache,
+  and one importer worker at a time. Existing resource monitoring, checkpoint
+  retention, and supervisor recycling stay in effect. `config/league_gpu.yaml`
+  provides an optional CUDA/16-worker profile; benchmark the actual remote machine
+  before choosing its worker count. No remote machine is provisioned by these scripts.
+
+Changing the discount clock changes the value target. On such a fork/load, policy
+weights are preserved but the value head and optimizer are reset deliberately. The
+first updates must relearn value calibration. Resuming that new run does not reset
+them again. The baseline file retains the complete original model for comparisons.
+
+The following upgrades the Mac checkout, preserves a checkpoint, stops the old branch,
+preflights the new maps, forks training, and starts the supervisor/dashboard:
+
+```bash
+cd /Users/28azverev/mcf-isotope
+git fetch origin
+git show origin/main:rl/tools/deploy_rlm.sh > /tmp/isotope-rlm-learning-update.sh
+bash /tmp/isotope-rlm-learning-update.sh tactical-4 tactical-5 rl/config/league.yaml
+```
+
+Use the actual source branch if it has changed. The script refuses to overwrite an
+existing destination or tracked local edits. It prints success only after learning
+advances beyond the preserved checkpoint. A GitHub release tag is not required: the
+trainer and Play launch from source. Both online players need updated game code to
+use the network recording changes consistently.
+
+For a checkout already at this code revision:
+
+```bash
+bash rl/run.sh fork tactical-4/latest.pt tactical-5 rl/config/league.yaml
+bash rl/run.sh supervise tactical-5
+```
+
+Run one main trainer on the Mac. The second example does not stop an existing trainer;
+use the upgrade script or stop it first. **Play vs latest** remains the experimental
+checkpoint. **Play vs selected model** uses `best.pt`, initially the original baseline
+and subsequently only models that passed selection.
+
+### Human replay data
+
+Use **Replays → Teach RLM from human games → Validate and add replays**, or:
+
+```bash
+~/.venvs/mcf-rl/bin/python rl/demonstrations.py import /path/to/match.mcfr --dataset rl/demonstrations
+```
+
+Use good players' varied matches; a winner's every action is not necessarily good.
+Completed and partial human games can supply action labels. There is intentionally
+no outcome-based value label for an abandoned match. AI training replays are rejected.
+The content hash deduplicates uploads and assigns entire matches to train (90%) or
+holdout (10%); a one-match upload may consequently be held out. Only training matches
+enter optimizer updates; full evaluations report held-out action agreement and loss.
+Long matches are sampled throughout both players' decisions, while every replay
+action is still validated. Each import caps intermediate data at 128 MB and requires
+at least 1.5 GB of free space. Imports are atomic, size/time bounded, and serialized across
+browser sessions. Sparse shards use NumPy with `allow_pickle=False`. Corrupt or
+incompatible replays remain outside the training set with an explicit rejection reason.
+Manifests preserve the importing code revision and feature dimensions; after game-rule
+changes, revalidate original replays before reusing a historical dataset.
+
+### How to judge whether the rebuild helps
+
+Compare the preserved policy and new fork on the same paired scenarios, and track
+results per environment, army size, fog and hazard setting. Distinguish annihilation
+wins from material advantages at the round cap. Track illegal intents, stalled games,
+unit participation, and hazard exposure alongside win rate. The frequent fixed HARD
+chart remains a historical diagnostic; it no longer chooses the new profile's best model.
+
+`rl/benchmark.py` compares throughput and PPO stability from identical checkpoints:
+
+```bash
+~/.venvs/mcf-rl/bin/python rl/benchmark.py rl/config/league.yaml \
+  --checkpoint rl/runs/tactical-5/latest.pt --updates 5 \
+  --variant '{"n_envs":2}' --variant '{"n_envs":4}' \
+  --output /tmp/rlm-throughput.json
+```
+
+A standalone comparison can run on the Mac or a remote worker without changing either
+checkpoint or promoting anything:
+
+```bash
+~/.venvs/mcf-rl/bin/python rl/train.py compare \
+  rl/runs/tactical-5/latest.pt rl/runs/tactical-5/best.pt \
+  --config rl/config/league.yaml --games 160 --seed 510001234 \
+  --output /tmp/rlm-comparison.json
+```
+
+Use fresh seeds for subsequent development comparisons. The same seed is useful for
+reproducing a report, not a new independent test. Avoid competing with the main Mac
+trainer for CPU/memory when running a long comparison.
+
+Throughput tests do not measure playing strength. Promotion tests likewise do not
+replace a human evaluation: collect a varied human opponent pool and at least a few
+hundred side-balanced matches across intended game settings before making a claim
+about reliably beating people. Hold out players/matches when measuring imitation;
+action agreement alone is not a win-rate estimate.
+
+The playing controller remains a policy with tactical features and enemy memory.
+Spending the allowed minute per turn on search is a separate strength experiment:
+first calibrate the longer-horizon value head, then compare a bounded planner against
+this policy on the same tests. Fog requires beliefs about hidden positions, and dice
+must be sampled independently of the real match RNG. Enabling an unvalidated planner
+by default would not establish a faster route to strong play. A recurrent/belief model
+and hierarchical whole-army planning remain possible research upgrades if measured
+failures justify their extra training cost.
 
 ## Setup (laptop = trainer + dashboard; the site is a tunnel to it)
 
