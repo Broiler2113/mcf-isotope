@@ -85,7 +85,37 @@ static func tactics(r: GameActionResolver, side: int, memory: RefCounted = null)
 			"fnext": fc["fire"], "ereach": fc["reach"],
 			"lastseen": memory.layer(r, side) if memory != null else PackedInt32Array(),
 			"dthreat": drone_threat(r, side),
-			"reach": {}, "vt": {}}
+			"reach": {}, "vt": {}, "hazards": hazards(r)}
+
+## Event rectangles are announced publicly, including under fog. Never expose
+## future dice outcomes or a hidden unit through these layers. 1 = due this round,
+## 1/2 = due next round; active gas has its own channel.
+static func hazards(r: GameActionResolver) -> Dictionary:
+	var grid := r.state.grid
+	var out := {}
+	for key: String in ["gas", "gas_warning", "artillery_warning"]:
+		var layer := PackedFloat32Array()
+		layer.resize(grid.width * grid.height)
+		out[key] = layer
+	var events := r.random_events
+	if events == null:
+		return out
+	for cloud: Dictionary in events.clouds:
+		_hazard_rect(out["gas"], grid, cloud, 1.0)
+	for event: Dictionary in events.pending:
+		var key := "gas_warning" if event["id"] == RandomEvents.GAS else "artillery_warning"
+		if event["id"] != RandomEvents.GAS and event["id"] != RandomEvents.MORTAR:
+			continue
+		var wait := maxi(0, int(event["land"]) - r.state.turns.round_number)
+		_hazard_rect(out[key], grid, event["params"], 1.0 / float(wait + 1))
+	return out
+
+static func _hazard_rect(layer: PackedFloat32Array, grid: Grid, rect: Dictionary, risk: float) -> void:
+	var x0 := int(rect.get("x", 0))
+	var y0 := int(rect.get("y", 0))
+	for y in range(maxi(0, y0), mini(grid.height, y0 + int(rect.get("h", 0)))):
+		for x in range(maxi(0, x0), mini(grid.width, x0 + int(rect.get("w", 0)))):
+			layer[y * grid.width + x] = maxf(layer[y * grid.width + x], risk)
 
 ## Угроза вражеского дрона (§3.12). Дрон не уходит от своей станции дальше DRONE_LEASH
 ## и рвётся по площади ANTI_TANK_BLAST_RADIUS — значит всё, что ближе их суммы к ЧУЖОЙ
@@ -268,6 +298,8 @@ static func encode(r: GameActionResolver, side: int, round_cap: int, tac: Dictio
 		"fnext": _quarters(tac["fnext"]), "ereach": _quarters(tac["ereach"]),
 		"dthreat": _quarters(tac["dthreat"]),
 		"lastseen": tac["lastseen"],
+		"gas": tac["hazards"]["gas"], "gas_warning": tac["hazards"]["gas_warning"],
+		"artillery_warning": tac["hazards"]["artillery_warning"],
 	}
 
 ## Подпись кандидата для сети: провод IntentCodec плюс координаты актёра/цели, чтобы
@@ -362,7 +394,18 @@ static func describe(state: GameState, intent: Intent, tac: Dictionary = {}) -> 
 			d["rh"] = snappedf(_station_reach(tac["r"], int(tac["side"]), at), 0.01)
 	if not tac.is_empty() and state.grid.in_bounds(tgt):
 		_describe_tactics(state, intent, tgt, d, tac)
+	if not tac.is_empty():
+		var at := Vector2i(int(d["ax"]), int(d["ay"]))
+		d["hazard"] = _hazard_at(tac, at) + _hazard_at(tac, tgt)
 	return d
+
+static func _hazard_at(tac: Dictionary, at: Vector2i) -> Array:
+	var r: GameActionResolver = tac["r"]
+	if not r.state.grid.in_bounds(at):
+		return [0.0, 0.0, 0.0]
+	var i := at.y * int(tac["w"]) + at.x
+	var hz: Dictionary = tac["hazards"]
+	return [hz["gas"][i], hz["gas_warning"][i], hz["artillery_warning"][i]]
 
 ## Кандидат выбирает МЕСТО под станцию дронов: либо разворачивает её из рук, либо
 ## поднимает дрон с уже стоящей. Прочих намерений поводок не касается.

@@ -1905,8 +1905,14 @@ def page_tactics(b: str) -> None:
         with c2:
             chart(sc, [pre + "multi_ap_per_game"], "2-3 AP moves per game")
             st.caption("Long manoeuvres in one order — flanks, retreats, rushes to cover.")
+        if pre + "hazard_exposure" in sc:
+            chart(sc, [pre + "hazard_exposure"], "army value at risk from gas and artillery, end of turn", pct=True)
+            st.caption("Public warnings and active gas; lower exposure means safer positions when passing the turn.")
         chart(sc, [pre + f"act_{k}" for k in kinds], "share of actions by unit type", pct=True,
               names={pre + f"act_{k}": k for k in kinds})
+    if "eval/events_winrate" in sc:
+        chart(sc, ["eval/events_winrate"], "win rate vs HARD with occasional hazards", pct=True)
+        chart(sc, ["eval/events_hazard_exposure"], "hazard exposure in evaluation", pct=True)
     if any(t.startswith("train/winrate_fog_") or t.endswith("_nofog") for t in sc):
         st.divider()
         st.markdown("#### Fog of war on and off")

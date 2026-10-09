@@ -62,7 +62,10 @@ VEH_COMPONENTS = ["hull", "tower", "tracks_l", "tracks_r", "gun"]
 C_VEH_COMPONENT = 78   # component health, then presence (missing != destroyed)
 C_VEH_CREW = C_VEH_COMPONENT + 2 * len(VEH_COMPONENTS)
 C_VEH_AP = C_VEH_CREW + 1
-N_CHANNELS = C_VEH_AP + 1
+C_GAS = C_VEH_AP + 1
+C_GAS_WARNING = C_GAS + 1
+C_ARTILLERY_WARNING = C_GAS_WARNING + 1
+N_CHANNELS = C_ARTILLERY_WARNING + 1
 
 FLAT_DIM = 20
 
@@ -98,7 +101,8 @@ F_PRED = F_TAC + 5     # next-turn enemy fire at target, enemies that can reach 
 F_REACH = F_PRED + 2
 F_COMPONENT = F_REACH + 1
 F_COMPONENT_HEALTH = F_COMPONENT + len(VEH_COMPONENTS)
-CAND_DIM = F_COMPONENT_HEALTH + 2  # health fraction + component known
+F_HAZARD = F_COMPONENT_HEALTH + 2
+CAND_DIM = F_HAZARD + 6  # actor/target: active gas, pending gas, pending artillery
 
 
 def grid_tensor(obs: dict, canvas: int = CANVAS) -> np.ndarray:
@@ -128,6 +132,10 @@ def grid_tensor(obs: dict, canvas: int = CANVAS) -> np.ndarray:
     g[C_CORPSE][sl] = corpse / 5.0
     g[C_DIRT][sl] = dirt / 2.0
     g[C_VEH_FOOT][sl] = veh
+    for key, channel in (("gas", C_GAS), ("gas_warning", C_GAS_WARNING),
+                         ("artillery_warning", C_ARTILLERY_WARNING)):
+        if key in obs:
+            g[channel][sl] = np.asarray(obs[key], dtype=np.float32).reshape(h, w)
     # Quarters of an expected hit on the wire (ObsEncoder._quarters); six hits a turn is
     # already "certain death", so the channel saturates there.
     if "threat" in obs:
@@ -296,6 +304,7 @@ def candidate_rows(obs: dict, legal: list[dict], canvas: int = CANVAS) -> tuple[
             rows[i, F_PRED] = min(float(c["tn"]), 6.0) / 6.0
             rows[i, F_PRED + 1] = min(float(c.get("er", 0)), 6.0) / 6.0
         rows[i, F_REACH] = float(c.get("rh", 0.0))
+        rows[i, F_HAZARD:F_HAZARD + 6] = c.get("hazard", [0.0] * 6)
         apc = int(c.get("apc", 0))
         if apc:
             rows[i, F_TAC + 3] = apc / 3.0

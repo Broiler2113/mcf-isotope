@@ -15,11 +15,27 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from features import CAND_DIM, CANVAS, FLAT_DIM, N_CHANNELS
+from features import CAND_DIM, CANVAS, FLAT_DIM, N_CHANNELS, F_KIND, KIND_INDEX
 
 FMAP = 32
 EMB = 256
 RES_DILATIONS = (2, 4, 8, 16)
+
+
+def greedy_action(logits, cand, mask):
+    """Choose stop/continue by policy mass, then the best action in that branch.
+
+    A single end-turn competes with hundreds of individually similar moves. Flat
+    argmax can end a turn at 1% stop probability; sampling during PPO would keep
+    acting 99% of the time. Preserve deliberate passes when stopping has >=50%
+    of the mass, including the case where no other legal action exists.
+    """
+    stop = mask & (cand[..., F_KIND + KIND_INDEX["end"]] > .5)
+    act = mask & ~stop
+    stop_scores = logits.masked_fill(~stop, -torch.inf)
+    act_scores = logits.masked_fill(~act, -torch.inf)
+    ending = torch.logsumexp(stop_scores, 1) >= torch.logsumexp(act_scores, 1)
+    return torch.where(ending, stop_scores.argmax(1), act_scores.argmax(1))
 
 
 class PolicyNet(nn.Module):
@@ -92,7 +108,7 @@ class PolicyNet(nn.Module):
         logits, value = self.forward(grid, flat, cand, cells, mask)
         logp = F.log_softmax(logits, dim=1)
         if greedy:
-            action = logits.argmax(dim=1)
+            action = greedy_action(logits, cand, mask)
         else:
             action = torch.multinomial(logp.exp(), 1).squeeze(1)
         return action, logp.gather(1, action.unsqueeze(1)).squeeze(1), value

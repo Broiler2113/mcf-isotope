@@ -10,7 +10,7 @@ src/resolver/LegalIntents.gd      legal_intents(side): every intent the resolver
 rl/ObsEncoder.gd                  fog-limited observation, candidate descriptions              (§3)
 rl/env_server.gd                  headless Godot env, JSON lines over stdin/stdout             (§1, §5.1)
 rl/mcf_env.py                     bridge + vectorised envs                                    (§9.1)
-rl/features.py                    64x64x90 training grid, flat vector, per-candidate rows     (§3.1, Q2)
+rl/features.py                    64x64x93 training grid, flat vector, per-candidate rows     (§3.1, Q2)
 rl/model.py                       CNN + candidate scorer + value head                         (§4, §5.2, Q6)
 rl/train.py                       PPO, checkpoints, resume/fork, TensorBoard, eval, replays   (§6, §8, §9, §10)
 rl/dashboard.py                   rlm.mindcontrolfactor.com — stats, controls, spreadsheet    (§11)
@@ -235,8 +235,8 @@ and its own past checkpoints (phase `league`). Evaluation is unchanged: standard
 
 The environment that teaches play rather than a win rate against one bot. Fork the best run
 onto it — `python rl/train.py fork rl/runs/<branch>/latest.pt --branch tactical-1 --config
-rl/config/tactical.yaml`; the checkpoint grows into the new network and plays exactly like
-its parent on its first step.
+rl/config/tactical.yaml`; new inputs start with zero weights, preserving the parent's
+logits. Live play and evaluation use the stopping rule described below.
 
 | piece | where | what it does |
 | --- | --- | --- |
@@ -257,6 +257,38 @@ Cost: an env step on the company-scale town map is ~1.5× the pre-tactical one (
 the larger move list, the ordering) — fewer samples per hour, each one far more informative.
 
 ## Training reliability and measurement
+
+Live play and evaluation first choose **stop or continue** by the policy's combined
+probability, then take the highest-scoring action in the chosen branch. Ending a turn
+requires at least 50% stopping probability, or no other legal action. Flat argmax used
+to pass at under 2% stopping probability when hundreds of individually similar moves
+split the remaining mass. PPO and league opponents still sample the original policy;
+its training likelihoods are unchanged. Evaluation games record
+`decoding: stop_continue_mass_v1`; compare results across decoding versions cautiously.
+Reserved vehicles/drones/borg pilots no longer consume infantry sampling seats.
+
+The tactical preset enables artillery/gas in 35% of training episodes
+(`random_events`, `random_event_share`). Every six player handoffs, normal game dice
+give a 2/3 chance of an announcement, followed by the game's full warning period.
+Independent armies stay disabled in the two-player training environment. Public
+artillery warnings, pending gas and active gas are separate grid channels and six
+actor/destination candidate inputs, visible under fog just like the game's warnings.
+The move cap retains safe escape destinations alongside random alternatives.
+
+`hazard_coef` rewards reducing own army value at risk, using
+`hazard_coef * (gamma * Phi(next) - Phi(now))` once per learner transition, including
+opponent replies. Phi is negative expected loss in public danger zones; terminal Phi
+is zero. Leaving danger pays and re-entry costs. This avoids a repeatable per-move
+escape bonus. Sealed vehicles/crew ignore gas, and artillery risk checks the whole
+vehicle footprint. This is training credit; older checkpoints need further training
+to use the new hazard inputs.
+
+The main HARD evaluation keeps events off (`eval_random_events: false`). A separate
+six-game fixed-seed event suite runs at full evaluations (`event_eval_games`), saved
+in `eval_events_games.jsonl`. The Tactics page shows event win rate and end-turn
+danger exposure. New event settings require the updated config: fork with
+`bash /tmp/isotope-deploy-rlm.sh tactical-3 tactical-4` to retain tactical-3 as a
+baseline, or resume with an explicitly edited branch config.
 
 On the machine that runs training, deploy a published update from inside its checkout:
 
@@ -287,6 +319,7 @@ Run the compatibility check before a migration (it also runs automatically at st
 python rl/train.py preflight rl/config/tactical.yaml
 python rl/test_rl.py
 python rl/test_training_fixes.py
+python rl/test_army_events.py
 ```
 
 Preflight resets every configured map and every generated style at the upper configured

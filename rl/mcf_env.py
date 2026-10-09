@@ -42,6 +42,8 @@ class EpisodeConfig:
     max_steps: int = 3000        # env steps (both sides) before the episode is called a draw
     civilians: bool = False
     random_events: bool = False
+    random_event_interval: int = 6  # player handoffs, with the game's 2/3 event chance
+    hazard_coef: float = 0.0       # discounted potential for public event danger
     fog: int = FOG_STANDARD
     friendly_fire: bool = True
     # Экипажи заперты в корпусах. Для карт, весь смысл которых — воевать техникой
@@ -63,6 +65,7 @@ class EpisodeConfig:
             "cmd": "reset", "map": self.map_path, "seed": self.seed, "side": self.side,
             "opponent": self.opponent, "round_cap": self.round_cap, "max_steps": self.max_steps,
             "civilians": self.civilians, "random_events": self.random_events,
+            "random_event_interval": self.random_event_interval, "hazard_coef": self.hazard_coef,
             "fog": self.fog, "friendly_fire": self.friendly_fire,
             "disembark": self.disembark, "record": self.record,
             "max_candidates": self.max_candidates, "max_actors": self.max_actors,
