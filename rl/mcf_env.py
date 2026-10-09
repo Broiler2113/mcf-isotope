@@ -365,6 +365,9 @@ class VecEnv:
             for s in readable:
                 self.envs[socks[s]]._fill()
             if not readable:
+                on_wait = getattr(self, "on_wait", None)
+                if on_wait is not None:
+                    on_wait()
                 now = time.monotonic()
                 for i in idxs:
                     e = self.envs[i]

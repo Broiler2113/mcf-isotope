@@ -2,6 +2,7 @@
 import os
 import json
 import signal
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -283,6 +284,27 @@ esac
             saved = torch.load(Path(d) / "latest.pt", weights_only=False)
             for k, v in before.items():
                 torch.testing.assert_close(v, saved["model"][k], rtol=0, atol=0)
+
+    def test_waiting_env_still_runs_the_memory_watchdog(self):
+        import time
+        from mcf_env import VecEnv
+        from train import ResourceRecycle
+        ours, peer = socket.socketpair()
+        v = VecEnv.__new__(VecEnv)
+        v.envs = [SimpleNamespace(sock=ours, has_reply=lambda: False, sent_at=time.monotonic())]
+        called = []
+        def pressure():
+            called.append(True)
+            raise ResourceRecycle("low memory")
+        v.on_wait = pressure
+        try:
+            with patch("mcf_env.select.select", return_value=([], [], [])):
+                with self.assertRaises(ResourceRecycle):
+                    v.wait_any([0])
+            self.assertEqual(called, [True])
+        finally:
+            ours.close()
+            peer.close()
 
 
 if __name__ == "__main__":

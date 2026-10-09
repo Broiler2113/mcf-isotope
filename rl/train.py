@@ -550,6 +550,11 @@ class Trainer:
         except (RuntimeError, AttributeError):
             return {}
 
+    def watch_waiting_resources(self) -> None:
+        self.maintain_resources()
+        if self._resource_restart:
+            raise ResourceRecycle("memory pressure while waiting for an environment response")
+
     def maintain_resources(self, force: bool = False) -> None:
         """Run between decisions/minibatches; restart only after a completed update.
 
@@ -1311,6 +1316,7 @@ class Trainer:
         self.write_status("running", f"starting {cfg['n_envs']} Godot envs", 0, 0)
         self.envs = VecEnv(cfg["n_envs"], cfg["godot"],
                            log_dir=os.path.join(self.run_dir, "envlogs"))
+        self.envs.on_wait = self.watch_waiting_resources
         stop_flag = os.path.join(self.run_dir, "STOP")
 
         def on_signal(signum, frame):
