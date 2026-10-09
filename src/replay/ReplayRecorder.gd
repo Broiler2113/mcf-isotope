@@ -32,7 +32,15 @@ var opening: Array = []
 var steps: Array = []
 
 var _state: GameState = null
-var _resolver: GameActionResolver = null
+## The resolver owns its recording hook. Keep the return link weak, otherwise
+## resolver -> recorder -> resolver retains the entire board after a match/episode.
+## The battle screen or env server owns the live resolver throughout recording.
+var _resolver_ref: WeakRef = null
+var _resolver: GameActionResolver:
+	get:
+		return _resolver_ref.get_ref() if _resolver_ref != null else null
+	set(value):
+		_resolver_ref = weakref(value) if value != null else null
 var _next_keyframe_round: int = 1 + KEYFRAME_ROUNDS
 
 ## Начать запись. Вызывается сразу после сборки состояния, ДО первого действия.

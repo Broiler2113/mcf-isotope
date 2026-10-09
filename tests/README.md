@@ -197,6 +197,11 @@ particles, unsupported kinds, eviction and replay resets, and checks that neithe
 simulation state nor particle data changes. `-- --bench` measures adding one particle
 after 68,000 have settled. Particle amounts, limits and blend order remain the same.
 
+**`run_match_lifetime.gd`** observes destruction through weak references after repeated
+recorded matches and learned-AI fallback sessions close. It catches callback/reference
+cycles that retain the match's board, while also checking that recorded data still
+replays and fallback intents are forwarded exactly once.
+
 None of these runs is evidence that the game *plays* correctly. They are evidence
 that it does not crash, does not deadlock the AI, and does not desync. Play the
 real game as well.

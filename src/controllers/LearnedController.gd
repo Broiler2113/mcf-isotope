@@ -160,9 +160,14 @@ func _decide(state: GameState) -> Dictionary:
 
 func _engage_fallback(state: GameState, reason: String) -> void:
 	_fallback = AIController.new(owner, AIController.Difficulty.HARD)
-	_fallback.intent_ready.connect(func(i: Intent) -> void: intent_ready.emit(i))
+	# A lambda capturing this RefCounted controller creates a cycle through the
+	# owned fallback. A method Callable forwards the same signal without retaining us.
+	_fallback.intent_ready.connect(_on_fallback_intent)
 	fallback_engaged.emit(reason)
 	_fallback.begin_turn(state)
+
+func _on_fallback_intent(intent: Intent) -> void:
+	intent_ready.emit(intent)
 
 # --- Связь с сервером политики (JSON-строки по TCP) ---
 

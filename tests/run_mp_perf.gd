@@ -98,7 +98,8 @@ func _fx_identical_on_every_peer() -> void:
 	gfx._event_seq = 777
 	host.action_applied.connect(func(_i, r: ActionResult) -> void: hfx.apply(r.fx))
 	guest.action_applied.connect(func(_i, r: ActionResult) -> void: gfx.apply(r.fx))
-	host.outgoing.connect(func(msg: Dictionary) -> void: guest.receive(msg))
+	# Method forwarding avoids retaining both RefCounted peers through opposing lambdas.
+	host.outgoing.connect(guest.receive)
 	var resyncs := [0]
 	guest.outgoing.connect(func(msg: Dictionary) -> void:
 		resyncs[0] += 1
