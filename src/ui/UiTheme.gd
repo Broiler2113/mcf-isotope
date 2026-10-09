@@ -170,10 +170,15 @@ func palette() -> Dictionary:
 ## заканчивалось «Parse Error» уже готовой сцены боя. Очередь живёт в автозагрузке, а не
 ## в меню: уйди игрок из меню на середине — прогрев доведётся до конца.
 var _warm: Array = []
+var _warm_resources: Dictionary = {}
 
 func warm_up(paths: Array) -> void:
+	# Headless simulations never switch visible scenes; compiling them in the
+	# background only adds work and can still be running when a short test exits.
+	if DisplayServer.get_name() == "headless":
+		return
 	for p: String in paths:
-		if not _warm.has(p):
+		if not _warm.has(p) and not _warm_resources.has(p):
 			_warm.append(p)
 	set_process(true)
 
@@ -185,13 +190,27 @@ func _process(_delta: float) -> void:
 	match ResourceLoader.load_threaded_get_status(p):
 		ResourceLoader.THREAD_LOAD_INVALID_RESOURCE:
 			if ResourceLoader.has_cached(p):
+				_warm_resources[p] = ResourceLoader.load(p)
 				_warm.pop_front()      # уже загружена обычным путём
 			else:
 				ResourceLoader.load_threaded_request(p)
 		ResourceLoader.THREAD_LOAD_IN_PROGRESS:
 			pass
+		ResourceLoader.THREAD_LOAD_LOADED:
+			_warm_resources[p] = ResourceLoader.load_threaded_get(p)
+			_warm.pop_front()
 		_:
 			_warm.pop_front()
+
+func _exit_tree() -> void:
+	# Finish an active request before the engine tears down script resources.
+	# Waiting happens only on exit, never while the player is using the menu.
+	for p: String in _warm:
+		var status := ResourceLoader.load_threaded_get_status(p)
+		if status == ResourceLoader.THREAD_LOAD_IN_PROGRESS \
+				or status == ResourceLoader.THREAD_LOAD_LOADED:
+			ResourceLoader.load_threaded_get(p)
+	_warm.clear()
 
 func rebuild_theme() -> void:
 	if DisplayServer.get_name() == "headless":

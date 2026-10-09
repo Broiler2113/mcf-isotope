@@ -191,6 +191,12 @@ place. It also seeks a recorded match forwards and backwards and compares its fu
 board and rules with replaying from the beginning. `-- --bench` measures frame lookup
 in a 60,000-action recording; timings are informational, never a pass/fail threshold.
 
+**`run_decal_sync.gd`** compares the far-map image byte for byte with the original
+decal traversal. It covers mixed gore/props additions, idle updates, off-board
+particles, unsupported kinds, eviction and replay resets, and checks that neither
+simulation state nor particle data changes. `-- --bench` measures adding one particle
+after 68,000 have settled. Particle amounts, limits and blend order remain the same.
+
 None of these runs is evidence that the game *plays* correctly. They are evidence
 that it does not crash, does not deadlock the AI, and does not desync. Play the
 real game as well.

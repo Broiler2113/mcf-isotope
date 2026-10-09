@@ -4783,12 +4783,17 @@ func _lod_sync_decals(grid: Grid) -> void:
 	var total: int = _fx.gore.size() + _fx.props.size()
 	if _lod_decal_done >= total:
 		return
-	var i := 0
+	# Jump directly to the unconsumed suffix of the same flattened gore/props
+	# sequence. Visiting every older particle just to skip it made each new decal
+	# increasingly expensive over a long match. Keep list and blend order exact.
+	var skip := _lod_decal_done
 	for list: Array in [_fx.gore, _fx.props]:
-		for p: Dictionary in list:
+		var first := mini(skip, list.size())
+		skip -= first
+		var i := first
+		while i < list.size():
+			var p: Dictionary = list[i]
 			i += 1
-			if i <= _lod_decal_done:
-				continue
 			var pos: Vector2 = p["pos"]
 			var c := Vector2i(floori(pos.x), floori(pos.y))
 			if not grid.in_bounds(c):
