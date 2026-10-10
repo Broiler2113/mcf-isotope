@@ -48,6 +48,7 @@ const Obs = preload("res://rl/ObsEncoder.gd")
 ## порядок по-прежнему жребий, и вызовы rng те же, что и раньше.
 static func actor_subset(r: GameActionResolver, acting: int, max_actors: int,
 		rng: RandomNumberGenerator) -> Dictionary:
+	var sight_limited := r.visibility_limited()
 	if max_actors <= 0:
 		return {}
 	var state := r.state
@@ -84,11 +85,11 @@ static func actor_subset(r: GameActionResolver, acting: int, max_actors: int,
 	var hot: Array = []
 	var cold: Array = []
 	var visible_vehicles: Array[Vector2i] = []
-	var visible: Dictionary = r.team_visible_coords(acting) if r.fog_enabled else {}
+	var visible: Dictionary = r.team_visible_coords(acting) if sight_limited else {}
 	for veh: Vehicle in state.all_vehicles():
 		if veh.alive() and Obs.rel_owner(r, acting, veh.owner) == 1:
 			for c: Vector2i in veh.footprint():
-				if not r.fog_enabled or visible.has(c):
+				if not sight_limited or visible.has(c):
 					visible_vehicles.append(c)
 	for id: int in ready:
 		var u := state.get_unit(id)
@@ -167,12 +168,13 @@ static func can_act(r: GameActionResolver, u: UnitInstance, captors: Dictionary)
 
 ## Клетки ВИДИМЫХ врагов стороны: бойцы (_visible_foes) и след каждой машины. Туман честен.
 static func _foe_cells(r: GameActionResolver, side: int) -> Array[Vector2i]:
+	var sight_limited := r.visibility_limited()
 	var out := _visible_foes(r, side)
-	var visible: Dictionary = r.team_visible_coords(side) if r.fog_enabled else {}
+	var visible: Dictionary = r.team_visible_coords(side) if sight_limited else {}
 	for veh: Vehicle in r.state.all_vehicles():
 		if veh.alive() and Obs.rel_owner(r, side, veh.owner) == 1:
 			for c: Vector2i in veh.footprint():
-				if not r.fog_enabled or visible.has(c):
+				if not sight_limited or visible.has(c):
 					out.append(c)
 	return out
 
@@ -201,8 +203,9 @@ static func in_contact(u: UnitInstance, foes: Array[Vector2i]) -> bool:
 ## Невидимые враги не в счёт:
 ## иначе награда за «выстрел по врагу» подсказывала бы, где в тумане кто-то стоит.
 static func hostile_zone(r: GameActionResolver, side: int) -> Dictionary:
+	var sight_limited := r.visibility_limited()
 	var zone := {}
-	var visible: Dictionary = r.team_visible_coords(side) if r.fog_enabled else {}
+	var visible: Dictionary = r.team_visible_coords(side) if sight_limited else {}
 	var cells: Array = []
 	for u: UnitInstance in r.state.all_units():
 		if u.is_alive() and Obs.rel_owner(r, side, u.owner) == 1:
@@ -211,7 +214,7 @@ static func hostile_zone(r: GameActionResolver, side: int) -> Dictionary:
 		if veh.alive() and Obs.rel_owner(r, side, veh.owner) == 1:
 			cells.append_array(veh.footprint())
 	for c: Vector2i in cells:
-		if r.fog_enabled and not visible.has(c):
+		if sight_limited and not visible.has(c):
 			continue
 		for dy in range(-1, 2):
 			for dx in range(-1, 2):

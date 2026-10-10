@@ -216,3 +216,5 @@ real game as well.
 - `run_ground_backdrop.gd`: camera setter synchronization; run under a renderer for pixel coverage checks.
 - `run_net_spectators.sh`: host plus two spectators through lobby, deployment, and live battle, including private spectator drawings.
 - `run_net_kick.sh`: host kicks a seated guest, reopens the seat, and guest returns to the menu.
+
+`run_followup098.gd` checks off-grid decal strokes/undo/rotation, corpse snapping, contextual material controls, town border roads, gas contact and fog-off visibility, one-player-turn event warnings and nonoverlapping barrages.

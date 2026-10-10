@@ -36,7 +36,9 @@ func _check(style: int, flammable: bool, space: bool) -> void:
 				rim = c
 			var grass_type := m.get_floor(c) == MCF.FLOOR_GRASS
 			var grass_look := m.get_look(y * m.width + x) == MCF.Look.GRASS
-			if not grass_type and not grass_look:
+			var road := style == MapGen.Style.TOWN and core.grow(MapGen.BORDER).has_point(c) \
+					and m.get_floor(c) == MCF.FLOOR_NORMAL and m.get_look(y * m.width + x) == 0
+			if not grass_type and not grass_look and not road:
 				failures.append("%s: outer tile %s is not grass" % [tag, str(c)])
 				return
 			if not flammable and grass_type:

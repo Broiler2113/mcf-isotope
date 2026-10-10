@@ -131,23 +131,12 @@ func _warning_then_landing() -> void:
 	var res: ActionResult = resolver.resolve(EndTurnIntent.new(-1))
 	ck(resolver.random_events.pending.size() == 1, "a handoff announces exactly one event")
 	var entry: Dictionary = resolver.random_events.pending[0]
-	ck(int(entry["land"]) == int(entry["announced"]) + 1,
-			"it lands one round after the warning")
 	var said := " ".join(res.log_lines)
-	ck(said.contains("Artillery Barrage") and said.contains("landing at the end of round"),
-			"the log says what is coming and when")
-	ck(not said.contains("destroyed"), "and nothing is destroyed on the turn it is announced")
-	# Крутим передачи хода, пока раунд не перевалит за land: событие обязано упасть ровно
-	# в конце своего раунда, а не раньше и не позже.
-	var landed_round := -1
-	for _i in 30:
-		var r: ActionResult = resolver.resolve(EndTurnIntent.new(-1))
-		if " ".join(r.log_lines).contains("hits zone"):
-			landed_round = state.turns.round_number
-			break
-	ck(landed_round == int(entry["land"]) + 1 or landed_round == int(entry["land"]),
-			"the barrage resolves at the end of the round it was promised (round %d, promised %d)"
-			% [landed_round, int(entry["land"])])
+	ck(said.contains("Artillery Barrage") and said.contains("next player ends their turn"),
+			"the warning names the next player end-turn deadline")
+	ck(not said.contains("destroyed"), "announcement does not land immediately")
+	var next := resolver.resolve(EndTurnIntent.new(-1))
+	ck(" ".join(next.log_lines).contains("hits zone"), "the very next handoff resolves the warning")
 	ck(round0 == 1, "the match started in round 1")
 
 func _barrage() -> void:

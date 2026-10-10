@@ -34,7 +34,7 @@ static func bake(source: Texture2D) -> ImageTexture:
 	# A legacy horizontal gas strip remains usable: take its first square tile.
 	base = base.get_region(Rect2i(0, 0, mini(base.get_width(), base.get_height()), base.get_height()))
 	var side := TILE * PATTERN / 2
-	base.resize(side, side, Image.INTERPOLATE_LANCZOS)
+	base.resize(side, side, Image.INTERPOLATE_NEAREST)
 	var atlas := Image.create(TILE * 4, TILE * 4 * PATTERN * PATTERN, false, Image.FORMAT_RGBA8)
 	for variant in PATTERN * PATTERN:
 		for mask in 16:

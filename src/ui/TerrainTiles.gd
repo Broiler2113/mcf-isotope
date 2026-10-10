@@ -72,6 +72,8 @@ var _damaged: Dictionary = {}
 ## в пол куска (0.9.3). Пусто — слоя нет (редактор, расстановка до боя).
 var decals: Dictionary = {}
 var map_decals: Dictionary = {}
+var bake_map_decals := false
+var _map_decal_bleed := 1.5
 var ground_lines: Dictionary = {}
 var _ground_version := -1
 var _decal_reset: int = -1
@@ -281,8 +283,43 @@ func draw(ci: CanvasItem, origin: Vector2, cell: float, x0: int, y0: int, x1: in
 			var cells := Vector2(mini(C, _grid.width - cx * C), mini(C, _grid.height - cy * C))
 			ci.draw_texture_rect(chunk["feat" if features else "floor"],
 					Rect2(origin + Vector2(cx * C, cy * C) * cell, cells * cell), false)
+	if not features:
+		draw_map_decals(ci, origin, cell, Rect2(Vector2(x0, y0), Vector2(x1 - x0 + 1, y1 - y0 + 1)))
 	if features:
 		_evict()
+
+## Authored decals retain their floating-point position at every zoom level.
+## Draw between floor and features so newly built walls cover them.
+func draw_map_decals(ci: CanvasItem, origin: Vector2, cell: float, view: Rect2) -> void:
+	for cy in range(floori((view.position.y - _map_decal_bleed) / C), floori((view.end.y + _map_decal_bleed) / C) + 1):
+		for cx in range(floori((view.position.x - _map_decal_bleed) / C), floori((view.end.x + _map_decal_bleed) / C) + 1):
+			for d: Dictionary in map_decals.get(Vector2i(cx, cy), []):
+				var pos: Vector2 = d["pos"]
+				if view.grow(_map_decal_bleed).has_point(pos):
+					draw_decal(ci, str(d["kind"]), origin + pos * cell, cell * float(d["scale"]), float(d["rot"]))
+
+static func draw_decal(ci: CanvasItem, kind: String, pos: Vector2, size: float, rot: float, alpha := 1.0) -> void:
+	var art := "corpse" if kind == "corpse" else str(FxDecals.TEXTURE.get(kind, ""))
+	if kind == "corpse" and not Sprites.has_override(art):
+		art = Sprites.resolve("light_infantry", "_neutral")
+	var tex := Sprites.texture_of(art) if art != "" else null
+	if kind == "corpse" and tex == null:
+		ci.draw_circle(pos, size * 0.34, Color(0.55, 0.14, 0.14, alpha * 0.7), true, -1.0, true)
+		var arm := Vector2(size * 0.18, 0).rotated(rot)
+		ci.draw_line(pos - arm, pos + arm, Color(0.18, 0.05, 0.05, alpha), maxf(1.0, size * 0.06), true)
+		return
+	var look: Array = FxDecals.LOOK.get(kind, [0.95, Color.WHITE])
+	size *= float(look[0])
+	if tex == null:
+		var color: Color = look[1]
+		color.a *= alpha
+		ci.draw_circle(pos, size * 0.5, color, true, -1.0, true)
+		return
+	var points := PackedVector2Array()
+	var uv := PackedVector2Array([Vector2.ZERO, Vector2.RIGHT, Vector2.ONE, Vector2.DOWN])
+	for p: Vector2 in uv:
+		points.append(pos + ((p - Vector2.ONE * 0.5) * size).rotated(rot))
+	ci.draw_polygon(points, PackedColorArray([Color(1, 1, 1, alpha)]), uv, tex)
 
 ## Какой кусок вывести: в нужном разрешении (собрав его, если бюджет кадра позволяет), а
 ## иначе — уже собранный в другом. Грязный кусок выбрасывается во всех разрешениях.
@@ -353,7 +390,8 @@ func _bake_decals(img: Image, cc: Vector2i, res: int) -> void:
 		for dx in range(-1, 2):
 			var chunk := cc + Vector2i(dx, dy)
 			var near: Array = decals.get(chunk, []).duplicate()
-			near.append_array(map_decals.get(chunk, []))
+			if bake_map_decals:
+				near.append_array(map_decals.get(chunk, []))
 			if near == null:
 				continue
 			if dx == 0 and dy == 0:
@@ -1359,16 +1397,19 @@ static func prepare(ci: CanvasItem, cell_size: float) -> int:
 			else CanvasItem.TEXTURE_FILTER_LINEAR
 	return res
 
-## Static editor decals share the floor bake, beneath every wall and object.
+## Index authored decals separately from floor pixels, beneath walls and objects.
 func set_map_decals() -> void:
 	map_decals.clear()
+	_map_decal_bleed = 1.5
 	for d: Array in _grid.map_decals:
 		var pos := Vector2(float(d[1]), float(d[2]))
+		_map_decal_bleed = maxf(_map_decal_bleed, float(d[4]))
 		var cc := Vector2i(floori(pos.x / C), floori(pos.y / C))
 		if not map_decals.has(cc): map_decals[cc] = []
 		map_decals[cc].append({"kind": str(d[0]), "pos": pos, "rot": float(d[3]), "scale": float(d[4])})
-	_chunks.clear()
-	_bytes = 0
+	if bake_map_decals:
+		_chunks.clear()
+		_bytes = 0
 
 func _index_ground_lines(fx: FxDecals) -> void:
 	for cc: Vector2i in ground_lines: _dirty[cc] = true
@@ -1407,6 +1448,7 @@ static func map_preview(map: MapData, tints: Dictionary = {}, bands: Dictionary 
 	var grid := Grid.new(map.width, map.height)
 	map.apply_to_grid(grid)
 	var tiles := TerrainTiles.new(grid, map.environment())
+	tiles.bake_map_decals = true
 	var res := clampi(1024 / maxi(map.width, map.height), 2, 16)
 	var img := Image.create(map.width * res, map.height * res, false, Image.FORMAT_RGBA8)
 	img.fill(Color(0.025, 0.035, 0.055))
