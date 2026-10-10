@@ -75,9 +75,9 @@ func _corridors_and_grating() -> void:
 							main_wide += 1
 					elif kind == MapGen.K_MAINT and mid_ok:
 						tech_runs += 1
-						if run > 2:
+						if run > 1:
 							tech_bad += 1
-						elif run == 2:
+						if run == 2:
 							tech_wide += 1
 					kind = k
 					run = 1 if (k == MapGen.K_HALL or k == MapGen.K_MAINT) else 0
@@ -99,10 +99,10 @@ func _corridors_and_grating() -> void:
 	ck(main_wide > 0 and main_runs - main_wide > 0,
 			"a 3-wide main drag and 2-wide corridors besides it (%d of %d sections)"
 			% [main_wide, main_runs])
-	ck(tech_bad == 0 and tech_runs > 0, "tech tunnels are 1 or 2 cells wide (%d of %d broke it)"
+	ck(tech_bad == 0 and tech_runs > 0, "tech tunnels are one cell wide (%d of %d broke it)"
 			% [tech_bad, tech_runs])
-	ck(tech_wide > 0 and tech_wide * 3 < tech_runs,
-			"2-cell tech tunnels are the exception, not the rule (%d of %d)" % [tech_wide, tech_runs])
+	ck(tech_wide == 0,
+			"2-cell tech tunnels are no longer generated (%d of %d)" % [tech_wide, tech_runs])
 	ck(grate_elsewhere == 0, "grating is laid in tech tunnels and nowhere else (%d cells elsewhere)"
 			% grate_elsewhere)
 	ck(grate_tech > 0 and grate_tech * 2 < tech_cells,

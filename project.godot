@@ -10,6 +10,8 @@ config_version=5
 
 [application]
 
+config/version="0.9.8"
+
 config/name="MCF Isotope"
 run/main_scene="res://scenes/MainMenu.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")

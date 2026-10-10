@@ -322,7 +322,8 @@ func _stations_have_rooms_and_hallways() -> void:
 					if k == MapGen.K_HALL:
 						halls += 1
 				var tag := "%s %s seed %d" % [MapGen.STYLE_NAMES[style], MapGen.SIZE_NAMES[size], seed]
-				ck(g._rooms.size() >= dim.x * dim.y / 140,
+				# Single-cell service tunnels shift room partitions; allow one room per 150 cells.
+				ck(g._rooms.size() >= dim.x * dim.y / 150,
 						tag + ": %d rooms on %d cells" % [g._rooms.size(), dim.x * dim.y])
 				ck(halls >= dim.x * dim.y / 25,
 						tag + ": hallways are %d of %d cells" % [halls, dim.x * dim.y])

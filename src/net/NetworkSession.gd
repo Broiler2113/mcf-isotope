@@ -32,6 +32,7 @@ var _listening: bool = false
 ## Подключённые гости в порядке подключения (только у хоста). По этому порядку
 ## лобби раздаёт слоты, поэтому список именно упорядоченный, а не множество.
 var peers: Array[int] = []
+var spectators: Array[int] = []
 
 func start_host(port: int = DEFAULT_PORT) -> int:
 	if not is_inside_tree():
@@ -42,7 +43,7 @@ func start_host(port: int = DEFAULT_PORT) -> int:
 	# Партия рассчитана на 26 игроков (§7 «Лобби»), значит хост принимает 25 гостей.
 	# Раньше здесь стояла жёсткая единица — «ровно один клиент», — и третий игрок
 	# упирался не в правила, а в транспорт.
-	var err := _peer.create_server(port, MCF.MAX_PLAYERS - 1)
+	var err := _peer.create_server(port, MCF.MAX_PLAYERS + 15)
 	if err != OK:
 		return err
 	_is_host = true
@@ -100,15 +101,33 @@ func close() -> void:
 
 # --- Транспорт сообщений ---
 func send(msg: Dictionary) -> void:
-	if _peer != null:
-		_relay.rpc(msg)
+	if _peer == null: return
+	if str(msg.get("k", "")) == "draw" and spectators.has(my_peer_id()):
+		for id in spectators:
+			if id != my_peer_id(): _relay.rpc_id(id, msg)
+		return
+	_relay.rpc(msg)
+
+func kick(id: int) -> void:
+	if not _is_host or _peer == null or id <= 1: return
+	_peer.disconnect_peer(id)
+	if peers.has(id): _on_peer_disconnected(id)
 
 @rpc("any_peer", "call_remote", "reliable")
 func _relay(msg: Dictionary) -> void:
 	# Кто прислал (batch 12 #8): лобби хоста должно знать, чей это запрос, а сцене
 	# боя — чей это бросок. Ключ служебный, с подчёркиванием, чтобы не спутать с полями
 	# самих сообщений.
-	msg["_from"] = multiplayer.get_remote_sender_id()
+	var sender := multiplayer.get_remote_sender_id()
+	var kind := str(msg.get("k", ""))
+	if spectators.has(sender):
+		if kind == "draw":
+			if not spectators.has(my_peer_id()): return
+		elif kind not in ["lobby_req", "resync", "setup_req", "live_req"]:
+			return
+	if not _is_host and kind in ["action", "init", "state", "setup", "load", "lobby", "lobby_map", "go", "side_ai", "match_over", "ai_speed", "slot_ai", "unready"] and sender != 1:
+		return
+	msg["_from"] = sender
 	if _listening:
 		message.emit(msg)
 	else:
@@ -145,6 +164,7 @@ func _on_connection_failed() -> void:
 	disconnected.emit()
 
 func _on_peer_disconnected(id: int = 0) -> void:
+	if _is_host and not peers.has(id): return
 	peers.erase(id)
 	peer_left.emit(id)
 	# У хоста «связь потеряна» — это когда ушёл ПОСЛЕДНИЙ гость (batch 12 #15): один

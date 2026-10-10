@@ -183,6 +183,7 @@ var laser_lines: Array = []
 ## Следы гусениц танка (playtest-20): [{from, to}] в клетках, кусками не длиннее клетки —
 ## туман прячет их поклеточно, как и прочие следы, и чужой танк не выдаёт себя колеёй.
 var track_marks: Array = []
+var ground_version := 0
 const TRACKS_CAP := 6000
 ## Летящие пули-трассеры (item 16): [{from, to, t, dur}] в клетках. Живут доли секунды,
 ## по истечении исчезают. Не оседают — это мгновенный полёт снаряда от стрелка к цели.
@@ -257,6 +258,7 @@ func clear() -> void:
 	flying.clear()
 	laser_lines.clear()
 	track_marks.clear()
+	ground_version += 1
 	tracers.clear()
 	lanes.clear()
 	flashes.clear()
@@ -408,6 +410,7 @@ func _laser(ev: Dictionary) -> void:
 	# Луч при этом летит как раньше — делится только СЛЕД, по клеткам под ним.
 	for run: Array in _ground_runs(a, b):
 		laser_lines.append({"from": run[0], "to": run[1]})
+	ground_version += 1
 	# Не копим бесконечно — держим последние отрезки, как и осевшие частицы.
 	if laser_lines.size() > LASER_CAP:
 		laser_lines = laser_lines.slice(laser_lines.size() - LASER_CAP)
@@ -441,6 +444,7 @@ func _tracks(ev: Dictionary) -> void:
 			for i in n:
 				track_marks.append({"from": ra.lerp(rb, float(i) / n),
 						"to": ra.lerp(rb, float(i + 1) / n)})
+	ground_version += 1
 	if track_marks.size() > TRACKS_CAP:
 		track_marks = track_marks.slice(track_marks.size() - TRACKS_CAP)
 

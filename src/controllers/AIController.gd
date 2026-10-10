@@ -335,6 +335,8 @@ func _sorted_rows(rows: Array) -> Array:
 ## Попытки на бойца ограничены: тот, кому и правда некуда деться (заперт в комнате без
 ## инструмента), отпускается, иначе ход ИИ крутился бы вокруг него вечно.
 func _forced_action(state: GameState, r: GameActionResolver, row: Dictionary) -> Dictionary:
+	if MCF.is_npc_side(owner):
+		return {}  # A neutral may hold its position; activity is not a goal by itself.
 	var key := _row_key(row)
 	var tries: int = int(_forced_tries.get(key, 0))
 	if tries >= FORCED_TRIES_PER_UNIT:
@@ -651,13 +653,20 @@ func _candidates(state: GameState, r: GameActionResolver, u: UnitInstance) -> Ar
 
 # --- Нейтралы: беспощадные (playtest-20) ---
 
-## Ход вскрытого нейтрала. Раньше у него был строгий порядок «выживание → урон»: сойти
-## со створа, к укрытию, отступить — и лишь потом стрелять. По просьбе владельца жители
-## теперь беспощадны: ни страха, ни раздумий — подбирают труп, если он рядом, стреляют,
-## если есть в кого, иначе бегут на ближайшего врага. В огонь всё же не лезут: это не атака.
+## Armed neutrals fire first, or stop at a firing position with AP left to shoot.
+## With no shot available they clear corpses and approach their nearest enemy.
 func _neutral_candidates(state: GameState, r: GameActionResolver, u: UnitInstance) -> Array:
 	var out: Array = []
-	# Труп рядом — подобрать, и прежде всего прочего (playtest-20): житель тащит тела на
+	var shot := _best_shoot(state, r, u)
+	var vehicle_shot := _best_vehicle_shot(state, r, u)
+	if not shot.is_empty(): out.append(shot)
+	if not vehicle_shot.is_empty(): out.append(vehicle_shot)
+	if not out.is_empty():
+		return out
+	var firing_move := _neutral_firing_move(state, r, u)
+	if not firing_move.is_empty():
+		return [firing_move]
+	# Без доступного выстрела подбираем труп рядом: житель тащит тела на
 	# себе как щит и по своей воле их не кладёт.
 	if u.remaining_ap > 0 and u.carried_corpses < MCF.CORPSE_CARRY_MAX and u.borg_id == -1 \
 			and u.stats.special_ability_id != MCF.ABILITY_SHIELD_BEARER:
@@ -675,17 +684,45 @@ func _neutral_candidates(state: GameState, r: GameActionResolver, u: UnitInstanc
 		var clear := _best_corpse_drop(state, r, u)
 		if not clear.is_empty():
 			out.append(clear)
-	var shoot := _best_shoot(state, r, u)
-	if not shoot.is_empty():
-		out.append(shoot)
-	var veh_shot := _best_vehicle_shot(state, r, u)
-	if not veh_shot.is_empty():
-		out.append(veh_shot)
 	if u.remaining_ap > 0 or u.move_credit > 0:
 		var mv := _best_move(state, r, u)
 		if not mv.is_empty():
 			out.append(mv)
 	return out
+
+## Stop at a reachable firing position while retaining the AP for the shot.
+## This reads the public target set and does not move actors during planning.
+func _neutral_firing_move(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
+	var move_ap := 0 if u.move_credit > 0 else 1
+	if u.remaining_ap < move_ap + _shoot_ap_cost(u):
+		return {}
+	var targets: Array = []
+	for enemy: UnitInstance in _enemies_of(state):
+		if state.grid.in_bounds(enemy.coord) and r.is_visible_to_team(owner, enemy):
+			targets.append(enemy)
+	if targets.is_empty(): return {}
+	var reach := r.reachable_for(u, _move_budget(u))
+	var positions := reach.cost.keys()
+	positions.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		if reach.cost[a] != reach.cost[b]: return reach.cost[a] < reach.cost[b]
+		return a.y < b.y or (a.y == b.y and a.x < b.x))
+	var ability := u.stats.special_ability_id
+	for coord: Vector2i in positions:
+		if coord == u.coord or (_avoids_fire(u) and _fire_near(state, coord)): continue
+		for target: UnitInstance in targets:
+			if not Combat.is_on_firing_line(coord, target.coord): continue
+			if r.gas_blocks_line(coord, target.coord) or r.trench_protected(coord, target, r._fires_flat_beam(u)): continue
+			var dist := Combat.distance(coord, target.coord)
+			if ability == MCF.ABILITY_FLAMETHROWER:
+				if dist > MCF.FLAME_JET_LENGTH or r._wall_between(coord, target.coord): continue
+			elif ability != MCF.ABILITY_MARKSMAN:
+				if Combat.hit_number(dist, u.fire_range()) > 6: continue
+				if r.los_blocked(coord, target.coord, not r._is_anti_tank(u), true, not r._is_anti_tank(u)): continue
+				var blocker := r.first_unit_on_line(coord, target.coord)
+				if blocker != null and blocker.id != u.id: continue
+			var score := SCORE_SHOOT_BASE - float(reach.cost[coord]) * 2.0
+			return {"score": score, "intent": MoveIntent.new(u.id, coord)}
+	return {}
 
 ## Запас клеток, который боец может пройти ПРЯМО СЕЙЧАС (§3.2, #103). Недоеденный
 ## кредит прошлого движения тратится ПЕРВЫМ и без ОД — точно так же считает резолвер

@@ -81,6 +81,9 @@ const SETTINGS_PATH := "user://settings.cfg"
 var theme: Theme
 var accent_name := "green"
 var ui_scale := 1.0
+signal board_settings_changed
+var grid_visible := true
+var grid_opacity := 0.32
 var fullscreen := false
 var _pal: Dictionary = PALETTES["green"]
 
@@ -116,6 +119,8 @@ func _load_settings() -> void:
 		_set_palette(a)
 	ui_scale = clampf(float(cf.get_value("ui", "scale", 1.0)), UI_SCALE_MIN, UI_SCALE_MAX)
 	fullscreen = bool(cf.get_value("display", "fullscreen", false))
+	grid_visible = bool(cf.get_value("board", "grid_visible", true))
+	grid_opacity = clampf(float(cf.get_value("board", "grid_opacity", 0.32)), 0.0, 1.0)
 
 func _save_settings() -> void:
 	var cf := ConfigFile.new()
@@ -123,7 +128,18 @@ func _save_settings() -> void:
 	cf.set_value("ui", "accent", accent_name)
 	cf.set_value("ui", "scale", ui_scale)
 	cf.set_value("display", "fullscreen", fullscreen)
+	cf.set_value("board", "grid_visible", grid_visible)
+	cf.set_value("board", "grid_opacity", grid_opacity)
 	cf.save(SETTINGS_PATH)
+
+func set_grid(visible: bool, opacity: float) -> void:
+	grid_visible = visible
+	grid_opacity = clampf(opacity, 0.0, 1.0)
+	_save_settings()
+	board_settings_changed.emit()
+
+func grid_color() -> Color:
+	return Color(0, 0, 0, grid_opacity if grid_visible else 0.0)
 
 func _set_palette(name: String) -> void:
 	accent_name = name

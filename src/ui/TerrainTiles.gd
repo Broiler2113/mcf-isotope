@@ -51,7 +51,7 @@ const FAMILY := {
 	# В прочих окружениях плитки у неё нет и семейство ни на что не влияет.
 	"boundary": "wall",
 	"sandbags": "bags", "sandbag_wall": "bags", "hedgehog_sandbags": "bags", "rsp": "bags",
-	"trench": "trench",
+	"trench": "trench", "dirt_pile": "dirt",
 }
 
 var _grid: Grid
@@ -71,6 +71,9 @@ var _damaged: Dictionary = {}
 ## Осевшая косметика по кускам (FxDecals.by_chunk) — кровь, гильзы, осколки, впечатанные
 ## в пол куска (0.9.3). Пусто — слоя нет (редактор, расстановка до боя).
 var decals: Dictionary = {}
+var map_decals: Dictionary = {}
+var ground_lines: Dictionary = {}
+var _ground_version := -1
 var _decal_reset: int = -1
 var _frame: int = 0
 ## Варианты плиток: "имя@res" -> Array[Image] (res×res); листы: "имя@res" -> Array[Image]
@@ -98,6 +101,7 @@ func _init(grid: Grid, p_env: String = "") -> void:
 	_grid = grid
 	env = p_env
 	_look_ver = GridCell.look_version
+	set_map_decals()
 
 ## Плитки для сетки-черновика grid (предпросмотр редактора), чья клетка (0,0) лежит на
 ## карте в at: те же кэши картинок, что у этих плиток, — ничего не грузится заново.
@@ -206,6 +210,9 @@ func _load(name: String) -> Image:
 ## её откуда-то УБРАЛИ (пожар, потолок, загрузка), выбросить все куски разом.
 func sync_decals(fx: FxDecals) -> void:
 	decals = fx.by_chunk
+	if _ground_version != fx.ground_version:
+		_ground_version = fx.ground_version
+		_index_ground_lines(fx)
 	if _decal_reset != fx.decal_reset:
 		_decal_reset = fx.decal_reset
 		_chunks.clear()
@@ -312,6 +319,7 @@ func _build(cc: Vector2i, res: int) -> void:
 		for x in w:
 			_paint(floor_img, feat_img, Vector2i(cc.x * C + x, cc.y * C + y),
 					Vector2i(x * res, y * res), res)
+	_bake_ground_lines(floor_img, cc, res)
 	_bake_decals(floor_img, cc, res)
 	var bytes := w * h * res * res * 4 * 2
 	_chunks[Vector3i(cc.x, cc.y, res)] = {"floor": ImageTexture.create_from_image(floor_img),
@@ -343,7 +351,9 @@ func _bake_decals(img: Image, cc: Vector2i, res: int) -> void:
 	var list: Array = []
 	for dy in range(-1, 2):
 		for dx in range(-1, 2):
-			var near: Variant = decals.get(cc + Vector2i(dx, dy))
+			var chunk := cc + Vector2i(dx, dy)
+			var near: Array = decals.get(chunk, []).duplicate()
+			near.append_array(map_decals.get(chunk, []))
 			if near == null:
 				continue
 			if dx == 0 and dy == 0:
@@ -359,7 +369,7 @@ func _bake_decals(img: Image, cc: Vector2i, res: int) -> void:
 		return
 	for d: Dictionary in list:
 		var kind := str(d["kind"])
-		var look: Array = FxDecals.LOOK.get(kind, [])
+		var look: Array = [0.95, Color(0.8, 0.1, 0.1, 0.5)] if kind == "corpse" else FxDecals.LOOK.get(kind, [])
 		if look.is_empty():
 			continue
 		var pos: Vector2 = (d["pos"] as Vector2) - origin
@@ -388,7 +398,10 @@ func _decal_sprite(kind: String, px: int, rot: float, look: Array) -> Image:
 		return hit[0] if not hit.is_empty() else null
 	var img := Image.create(px, px, false, Image.FORMAT_RGBA8)
 	var a := float(step) / DECAL_ANGLES * TAU
-	var src := _load(FxDecals.TEXTURE.get(kind, ""))
+	var art := "corpse" if kind == "corpse" else str(FxDecals.TEXTURE.get(kind, ""))
+	if kind == "corpse" and not Sprites.has_override(art):
+		art = Sprites.resolve("light_infantry", "_neutral")
+	var src := _load(art) if art != "" else null
 	var half := px * 0.5
 	var col: Color = look[1]
 	for y in px:
@@ -401,6 +414,8 @@ func _decal_sprite(kind: String, px: int, rot: float, look: Array) -> Image:
 				var sy := int((v.y / px + 0.5) * src.get_height())
 				if sx >= 0 and sy >= 0 and sx < src.get_width() and sy < src.get_height():
 					c = src.get_pixel(sx, sy)
+			elif kind == "corpse":
+				if v.length() <= half * 0.72: c = col
 			elif kind == "blood_pool":
 				if Vector2(v.x, v.y / 0.62).length() <= half:
 					c = col
@@ -469,7 +484,7 @@ func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> voi
 			feat.blend_rect(_weld_overlay(res), full, at)
 		return
 	var accent := _accent_of(c)
-	var name := tile_name(cell)
+	var name := "soil" if fid == MCF.FEATURE_DIRT_PILE else tile_name(cell)
 	# Материал стены (0.9.4): вид клетки может назвать кирпич, штукатурку или шлакоблок —
 	# правила те же, плитка другая. Семейство автотайла остаётся «wall», поэтому дом из
 	# кирпича стыкуется с бетонным соседом без шва.
@@ -541,6 +556,8 @@ func _fill_notches(feat: Image, c: Vector2i, fid: String, mask: int, at: Vector2
 
 ## Клетка двери целиком: стена окружения (лист «wall» по маске семейства) и дверь спереди
 ## поверх неё. Кэш — по маске, состоянию, варианту и разрешению.
+const DOOR_MATERIALS := ["station", "town", "field", "bunker", "asteroid"]
+
 func _door_image(grid: Grid, c: Vector2i, cell: GridCell, res: int, closed := false) -> Image:
 	var mask := mask_at(grid, c, MCF.FEATURE_AIRLOCK)
 	var open := cell.cover_height < MCF.WALL_HEIGHT and not closed
@@ -549,18 +566,22 @@ func _door_image(grid: Grid, c: Vector2i, cell: GridCell, res: int, closed := fa
 	# набором разных. Раньше вариант брался от самой клетки, и соседние створки выходили
 	# из разного металла с разным рисунком.
 	var anchor := _door_anchor(grid, c)
-	var v := variant_of(anchor + origin, 3)
+	var look := clampi(grid.door_at(c.x, c.y), 0, DOOR_MATERIALS.size() * 3)
+	var v := (look - 1) % 3 if look > 0 else variant_of(anchor + origin, 3)
 	var walls := _sheet("wall", res)
 	var wv := variant_of(anchor + origin, walls.size()) if not walls.is_empty() else 0
 	var accent := _accent_of(c)
-	var key := "door@%d@%d@%s@%d@%d@%d" % [res, mask, open, v, wv, accent]
+	var key := "door@%d@%d@%s@%d@%d@%d" % [res, mask, open, v, wv, accent] + "@%d" % look
 	if _tiles.has(key):
 		var hit: Array = _tiles[key]
 		return hit[0] if not hit.is_empty() else null
 	var img := Image.create(res, res, false, Image.FORMAT_RGBA8)
 	if not walls.is_empty():
 		img.blit_rect(walls[wv], Rect2i((mask % 4) * res, (mask / 4) * res, res, res), Vector2i.ZERO)
-	var doors := _tile("door_open" if open else "door", res)
+	var door_name := "door_open" if open else "door"
+	if look > 0:
+		door_name += "_" + DOOR_MATERIALS[(look - 1) / 3]
+	var doors := _tile(door_name, res)
 	if not doors.is_empty():
 		img.blend_rect(doors[v % doors.size()], Rect2i(0, 0, res, res), Vector2i.ZERO)
 	if accent != MCF.Accent.NONE:
@@ -568,19 +589,23 @@ func _door_image(grid: Grid, c: Vector2i, cell: GridCell, res: int, closed := fa
 	_tiles[key] = [img]
 	return img
 
-## Сколько клеток шлюза самое большее считается ОДНОЙ створкой: тройной шлюз причала с
-## запасом, и предохранитель обхода, если шлюзами замазали пол-карты.
-const DOOR_GROUP_CAP := 6
+## Cache the anchor for the entire connected door group. A capped search picked
+## different variants at opposite ends of a wide airlock.
+var _door_anchors: Dictionary = {}
+var _door_anchor_version := -1
+var _door_anchor_grid := 0
 
-## Клетка, от которой берётся вид всей створки: самая северо-западная в связной группе
-## шлюзов (обход по сторонам, не дальше DOOR_GROUP_CAP клеток). У одиночного шлюза это он
-## сам, поэтому ничего не меняется там, где и менять нечего.
 func _door_anchor(grid: Grid, c: Vector2i) -> Vector2i:
+	if _door_anchor_version != GridCell.look_version or _door_anchor_grid != grid.get_instance_id():
+		_door_anchors.clear()
+		_door_anchor_version = GridCell.look_version
+		_door_anchor_grid = grid.get_instance_id()
+	if _door_anchors.has(c): return _door_anchors[c]
 	var best := c
 	var seen := {c: true}
 	var queue: Array[Vector2i] = [c]
 	var i := 0
-	while i < queue.size() and queue.size() < DOOR_GROUP_CAP:
+	while i < queue.size():
 		var p := queue[i]
 		i += 1
 		for d: Vector2i in _TURN_DIRS:
@@ -593,6 +618,7 @@ func _door_anchor(grid: Grid, c: Vector2i) -> Vector2i:
 			queue.append(q)
 			if q.y < best.y or (q.y == best.y and q.x < best.x):
 				best = q
+	for cell: Vector2i in queue: _door_anchors[cell] = best
 	return best
 
 ## Рама двери в цвет службы (0.9.3). Красится именно РАМА — кайма клетки, — а не полотно:
@@ -676,7 +702,7 @@ func _accent_overlay(accent: int, mask: int, res: int) -> Image:
 	_tiles[key] = [img]
 	return img
 
-## Заваренный шлюз: поверх створок — крест из стальных полос с оранжевыми швами по
+## Заваренный шлюз: поверх створок — крест из стальных полос по
 ## концам и посередине. Рисуется кодом, в res×res, один раз на разрешение.
 func _weld_overlay(res: int) -> Image:
 	var key := "weld@%d" % res
@@ -686,7 +712,6 @@ func _weld_overlay(res: int) -> Image:
 	var w := maxi(1, res / 8)
 	var steel := Color(0.36, 0.37, 0.40)
 	var edge := Color(0.62, 0.63, 0.66)
-	var bead := Color(1.0, 0.58, 0.16)
 	for y in res:
 		for x in res:
 			var d1 := absi(x - y)
@@ -694,11 +719,6 @@ func _weld_overlay(res: int) -> Image:
 			var d := mini(d1, d2)
 			if d <= w:
 				img.set_pixel(x, y, edge if d == w else steel)
-	# Швы: квадратики у четырёх углов и в центре креста.
-	var b := maxi(1, res / 10)
-	for p: Vector2i in [Vector2i(b, b), Vector2i(res - 1 - b, b), Vector2i(b, res - 1 - b),
-			Vector2i(res - 1 - b, res - 1 - b), Vector2i(res / 2, res / 2)]:
-		img.fill_rect(Rect2i(p - Vector2i(b, b) / 2, Vector2i(b + 1, b + 1)), bead)
 	_tiles[key] = [img]
 	return img
 
@@ -1245,7 +1265,7 @@ func _floor_overlay_name(cell: GridCell, c: Vector2i) -> String:
 ## Имя картинки объекта: id с учётом подмен (ЛДФ, ДПМГ) и состояния шлюза — открытый
 ## шлюз (высота ниже стены) рисуется разъехавшимися створками.
 static func tile_name(cell: GridCell) -> String:
-	return Sprites.ALIASES.get(cell.feature_id, cell.feature_id)
+	return "soil" if cell.feature_id == MCF.FEATURE_DIRT_PILE else Sprites.ALIASES.get(cell.feature_id, cell.feature_id)
 
 ## Маска автотайла: соседи по четырём сторонам из того же семейства (Sprites.AUTOTILE_*).
 static func mask_at(grid: Grid, c: Vector2i, fid: String) -> int:
@@ -1275,7 +1295,7 @@ func draw_feature_tile(ci: CanvasItem, fid: String, c: Vector2i, rect: Rect2, cl
 		if img != null:
 			ci.draw_texture_rect(_furniture_tex(img), rect, false)
 		return
-	var name: String = env_name(Sprites.ALIASES.get(fid, fid), env)
+	var name: String = env_name("soil" if fid == MCF.FEATURE_DIRT_PILE else Sprites.ALIASES.get(fid, fid), env)
 	var sheet := Sprites.texture_of(name + Sprites.AUTOTILE_SUFFIX)
 	if sheet != null:
 		Sprites.draw_autotile(ci, sheet, rect, mask_at(_grid, c, fid), variant_of(c + origin, 64))
@@ -1338,3 +1358,85 @@ static func prepare(ci: CanvasItem, cell_size: float) -> int:
 	ci.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST if px >= float(res) \
 			else CanvasItem.TEXTURE_FILTER_LINEAR
 	return res
+
+## Static editor decals share the floor bake, beneath every wall and object.
+func set_map_decals() -> void:
+	map_decals.clear()
+	for d: Array in _grid.map_decals:
+		var pos := Vector2(float(d[1]), float(d[2]))
+		var cc := Vector2i(floori(pos.x / C), floori(pos.y / C))
+		if not map_decals.has(cc): map_decals[cc] = []
+		map_decals[cc].append({"kind": str(d[0]), "pos": pos, "rot": float(d[3]), "scale": float(d[4])})
+	_chunks.clear()
+	_bytes = 0
+
+func _index_ground_lines(fx: FxDecals) -> void:
+	for cc: Vector2i in ground_lines: _dirty[cc] = true
+	ground_lines.clear()
+	for kind in 2:
+		var lines: Array = fx.track_marks if kind == 0 else fx.laser_lines
+		for seg: Dictionary in lines:
+			var a: Vector2 = seg["from"]
+			var b: Vector2 = seg["to"]
+			var lo := (a.min(b) - Vector2.ONE * 0.15) / C
+			var hi := (a.max(b) + Vector2.ONE * 0.15) / C
+			for y in range(floori(lo.y), floori(hi.y) + 1):
+				for x in range(floori(lo.x), floori(hi.x) + 1):
+					var cc := Vector2i(x, y)
+					if not ground_lines.has(cc): ground_lines[cc] = []
+					ground_lines[cc].append([a, b, kind])
+					_dirty[cc] = true
+
+func _bake_ground_lines(img: Image, cc: Vector2i, res: int) -> void:
+	for line: Array in ground_lines.get(cc, []):
+		var a: Vector2 = (line[0] - Vector2(cc * C)) * res
+		var b: Vector2 = (line[1] - Vector2(cc * C)) * res
+		var radius := maxf(0.5, res * (0.11 if int(line[2]) == 0 else 0.04))
+		var ink := Color(0.1, 0.08, 0.05, 0.2) if int(line[2]) == 0 else Color(0, 0, 0, 0.4)
+		var lo := a.min(b) - Vector2.ONE * radius
+		var hi := a.max(b) + Vector2.ONE * radius
+		for y in range(maxi(0, floori(lo.y)), mini(img.get_height(), ceili(hi.y))):
+			for x in range(maxi(0, floori(lo.x)), mini(img.get_width(), ceili(hi.x))):
+				var p := Vector2(x + 0.5, y + 0.5)
+				if p.distance_to(Geometry2D.get_closest_point_to_segment(p, a, b)) <= radius:
+					img.set_pixel(x, y, img.get_pixel(x, y).blend(ink))
+
+## Render the actual game tiles for menus and preset previews, without a scene or simulation.
+static func map_preview(map: MapData, tints: Dictionary = {}, bands: Dictionary = {}) -> ImageTexture:
+	var saved := GridCell.logs_snapshot()
+	var grid := Grid.new(map.width, map.height)
+	map.apply_to_grid(grid)
+	var tiles := TerrainTiles.new(grid, map.environment())
+	var res := clampi(1024 / maxi(map.width, map.height), 2, 16)
+	var img := Image.create(map.width * res, map.height * res, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0.025, 0.035, 0.055))
+	for cy in ceili(float(map.height) / C):
+		for cx in ceili(float(map.width) / C):
+			var cc := Vector2i(cx, cy)
+			tiles._build(cc, res)
+			var chunk: Dictionary = tiles._chunks[Vector3i(cx, cy, res)]
+			var floor_img: Image = chunk["floor"].get_image()
+			var feat_img: Image = chunk["feat"].get_image()
+			var rect := Rect2i(Vector2i.ZERO, floor_img.get_size())
+			img.blend_rect(floor_img, rect, cc * C * res)
+			img.blend_rect(feat_img, rect, cc * C * res)
+			tiles._chunks.clear()
+	for y in map.height:
+		for x in map.width:
+			var tint: Color = tints.get(map.get_zone(Vector2i(x, y)), Color.TRANSPARENT)
+			if tint.a == 0:
+				for band: Vector2i in bands:
+					if x >= band.x and x < band.y: tint = bands[band]; break
+			if tint.a > 0:
+				for py in res:
+					for px in res:
+						var p := Vector2i(x * res + px, y * res + py)
+						img.set_pixelv(p, img.get_pixelv(p).lerp(tint, 0.18))
+	# Keep map-authored civilians visible in the textured preview.
+	for spawn: Dictionary in map.spawns:
+		if not MCF.is_neutral(int(spawn["owner"])): continue
+		var coord: Vector2i = spawn["coord"]
+		img.fill_rect(Rect2i(coord * res + Vector2i.ONE * (res / 4),
+			Vector2i.ONE * maxi(1, res / 2)), Roster.NEUTRAL_COLOR)
+	GridCell.logs_restore(saved)
+	return ImageTexture.create_from_image(img)

@@ -28,6 +28,12 @@ var furniture_turn: Dictionary = {}
 var floor_look: PackedByteArray = PackedByteArray()
 ## Акцент службы по клеткам (MapData.wall_accent) — тоже только для отрисовки.
 var wall_accent: PackedByteArray = PackedByteArray()
+var map_decals: Array = []
+var door_look: PackedByteArray = PackedByteArray()
+
+func door_at(x: int, y: int) -> int:
+	var i := y * width + x
+	return door_look[i] if i < door_look.size() else 0
 
 func look_at(x: int, y: int) -> int:
 	var i := y * width + x

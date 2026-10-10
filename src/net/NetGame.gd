@@ -56,7 +56,7 @@ func _init(p_state: GameState, p_resolver: GameActionResolver, p_is_host: bool,
 	state = p_state
 	resolver = p_resolver
 	is_host = p_is_host
-	if MCF.is_player(p_my_owner):
+	if MCF.is_player(p_my_owner) or p_my_owner == -2:
 		my_owner = p_my_owner
 	else:
 		my_owner = MCF.Owner.PLAYER_1 if is_host else MCF.Owner.PLAYER_2
@@ -75,9 +75,15 @@ func remote_owners() -> Array[int]:
 
 ## Локальный игрок подал намерение (через свой LocalHumanController).
 func submit_local(intent: Intent) -> void:
+	if my_owner == -2: return
 	if is_host:
 		_host_resolve_and_send(intent)
 	else:
+		if intent is EndTurnIntent:
+			if _end_turn_pending: return
+			_end_turn_pending = true
+		if intent is EndTurnIntent or intent is UndoIntent or intent is RedoIntent:
+			intent.requester = my_owner
 		outgoing.emit({"k": K_INTENT, "i": IntentCodec.encode(intent)})
 
 ## Пришло сообщение от второй стороны.
@@ -90,7 +96,7 @@ func receive(msg: Dictionary) -> void:
 		K_INTENT:
 			if is_host:
 				var it := _decode(msg)
-				if it != null:
+				if it != null and _authorized(it, int(msg.get("_from", -1))):
 					_host_resolve_and_send(it)
 		K_ACTION:
 			if not is_host:
@@ -111,6 +117,10 @@ func receive(msg: Dictionary) -> void:
 				_client_restore(msg)
 		K_DENIED:
 			if not is_host:
+				if int(msg.get("p", -1)) == my_owner:
+					_end_turn_pending = false
+					denied.emit(str(msg.get("reason", "")))
+					return
 				var actor := state.get_unit(int(msg.get("a", -1)))
 				if actor != null and actor.owner == my_owner:
 					denied.emit(str(msg.get("reason", "")))
@@ -173,14 +183,17 @@ func _host_resolve_and_send(intent: Intent) -> void:
 		outgoing.emit({"k": K_ACTION, "i": IntentCodec.encode(intent), "r": rolls,
 			"h": state.digest_hash()})
 	else:
-		outgoing.emit({"k": K_DENIED, "a": intent.actor_id, "reason": result.reason})
+		outgoing.emit({"k": K_DENIED, "a": intent.actor_id, "reason": result.reason,
+			"p": intent.requester if intent is EndTurnIntent else -1})
 	action_applied.emit(intent, result)
 
 # --- Клиент: воспроизведение с присланными бросками ---
 ## Просьба о снимке уже ушла — до его прихода новые расхождения не считаем.
 var _resync_pending: bool = false
+var _end_turn_pending := false
 
 func _client_apply(intent: Intent, rolls: Array, expected: int = 0) -> void:
+	if intent is EndTurnIntent and intent.requester == my_owner: _end_turn_pending = false
 	state.dice.feed_scripted(rolls)
 	var result := _resolve_showing_ap(intent)
 	# Сверка с хостом (batch 14): действие, которое у хоста прошло, а у нас отвергнуто,
@@ -197,6 +210,7 @@ func _client_apply(intent: Intent, rolls: Array, expected: int = 0) -> void:
 	action_applied.emit(intent, result)
 
 func _client_restore(msg: Dictionary) -> void:
+	_end_turn_pending = false
 	var data: Variant = msg.get("s")
 	if not (data is Dictionary):
 		return
@@ -220,3 +234,18 @@ func _resolve_showing_ap(intent: Intent) -> ActionResult:
 		result.dice_events.append({"kind": "ap", "unit": actor.id,
 				"from": before, "left": actor.remaining_ap})
 	return result
+
+## Authenticate the sending peer, not a side number supplied in its payload.
+func _authorized(intent: Intent, peer: int) -> bool:
+	if peer == -1: return true # In-process test/legacy transport; ENet always supplies _from.
+	var side := state.roster.side_of_peer(peer)
+	if side < 0: return false
+	if intent is EndTurnIntent or intent is UndoIntent or intent is RedoIntent:
+		return intent.requester == side
+	var actor := state.get_unit(intent.actor_id)
+	if actor == null or actor.owner != side: return false
+	if intent is GroupMoveIntent:
+		for id in intent.unit_ids:
+			var unit := state.get_unit(id)
+			if unit == null or unit.owner != side: return false
+	return true

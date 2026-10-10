@@ -4713,7 +4713,12 @@ func advance_civilians(owner: int = MCF.Owner.NEUTRAL) -> ActionResult:
 				"kind": "walk", "unit": actor.id, "from": from, "path": route,
 			})
 		_ap_event(res, actor, ap_before)
-		res.dice_events.append_array(sub.dice_events)
+		for event: Dictionary in sub.dice_events:
+			# The neutral turn already supplies this walk, at neutral playback speed.
+			# Appending the resolver walk again rewinds the unit to the same start.
+			if not route.is_empty() and event.get("kind", "") == "walk" and int(event.get("unit", -1)) == actor.id:
+				continue
+			res.dice_events.append(event)
 		res.log_lines.append_array(sub.log_lines)
 		res.deaths.append_array(sub.deaths)
 		# Косметика жителя — ТА ЖЕ, что у любого другого стрелка (item 5): дорожка «кто в
