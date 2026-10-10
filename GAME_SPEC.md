@@ -1409,15 +1409,12 @@ chosen edge across the **whole map depth** (it used to stop after the segment's 
 breaks once it has `ARMY_UNIT_CAP` cells. On a station, where the first twenty cells off the
 edge are vacuum, the old search found nothing and the event always logged "nowhere to land".
 
-**Telegraph, then land.** `_maybe_random_event` runs at the end of every handoff, exactly
-as before, but it no longer resolves anything: it rolls the event's **parameters** at once,
-puts `{id, params, announced, land = announced + 1}` on `RandomEvents.pending` and logs
-what is coming and when. `land_random_events` runs at the **end of round `land`** — in the
-handoff that closes the round, *before* `TurnManager.end_turn` refills AP and bumps the
-round number (`_handoff_closes_round`, which also counts the civilian and raider slots the
-resolver plays inside that same handoff). So every side gets one full turn to react.
-Several events can be pending at once; each lands on its own round, in queue order.
+**Telegraph, then land.** A handoff announces an event and its zone. The event resolves
+when the next player ends their turn, before AP refresh, even if the round is not over.
+The warning displays **1 TURN**. Loading an older pending warning uses the same deadline.
 Parameters are rolled at announcement, per-cell outcomes at landing; both orders are fixed.
+Gas aging remains tied to round boundaries. Pending artillery zones cannot overlap:
+a blocked target moves to the nearest free rectangle, or is skipped if no rectangle fits.
 
 **Barrage.** The zone is 3..16 cells on a side, anywhere fully inside the board. Resolution
 walks columns west to east, cells north to south, one d6 per cell: 1–3 miss, 4–6 destroy.
@@ -1428,13 +1425,17 @@ a 250×250 board that would be ~70 000 d6 in one event — and the same number o
 the dice log the host ships to the guest and the replay keeps.
 
 **Gas.** Side 3..14 cells (and never more than a third of the board), 3 rounds. At the end
-of each round every living unit standing in a cloud rolls a d6 and **dies on 1–2**; crews
+of each round every living unit standing in a cloud rolls a d6 and **dies on 1–2**.
+Movement also rolls immediately at the first gas tile touched (once per movement action),
+including when the destination is beyond the cloud. A failed roll stops the unit on that
+first tile. Newly arriving gas immediately checks soldiers already in its footprint; crews
 inside vehicles and borg pilots are exempt (sealed hull). Gas lives on the board as
 `GridCell.gas`, which `blocks_sight()` reports like a wall — that one property is what puts
 gas into the sight sweep, the fog of war, the blocker tables and `los_blocked` by the same
 route walls take. Gas blocks sight **into, out of, and through** a cloud, including
 the observer and target cells; a unit still knows its own position. Allied units remain
-visible by team communication. Gas also blocks aimed fire with fog disabled, including
+visible by team communication. Gas conceals enemy units and obstructs vision even with fog disabled, without making
+ordinary walls generate fog in that mode. Gas also blocks aimed fire, including
 marksman and flamethrower targeting. Walls, windows (including armored glass), soil and
 vacuum cannot contain gas; terrain changes update the footprint immediately. Gas is
 derived state: it is never saved, it is rebuilt from the cloud list on load (`_sync_gas`).

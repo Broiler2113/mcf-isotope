@@ -4614,6 +4614,8 @@ class LodLayer extends Node2D:
 		texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 		if terrain != null:
 			draw_texture_rect(terrain, rect, false)
+		if tiles != null:
+			tiles.draw_map_decals(self, rect.position, float(CELL), Rect2(Vector2.ZERO, rect.size / CELL))
 		if fog_on and fog != null:
 			draw_texture_rect(fog, rect, false)
 		if features != null:
@@ -4659,19 +4661,19 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, remembered: Dictiona
 		_lod.fog_on = fog_on
 		_lod.far = far
 		_lod.queue_redraw()
+	var tiles_key: Array = [grid.get_instance_id(), fog_on]
+	if _tiles == null or _tiles_grid != tiles_key:
+		_tiles = TerrainTiles.new(grid, state.env)
+		_tiles.furniture_look = _furniture_look
+		if fog_on:
+			for hf: String in FOG_HIDDEN_FEATURES:
+				_tiles.skip_features[hf] = true
+		_tiles_grid = tiles_key
+		_lod.tiles = _tiles
 	if not far:
 		# Ближний план: плитки рельефа кусками (TerrainTiles). Набор кусков зависит от
 		# того, что на экране, поэтому слой перерисовывается вместе с кадром — это лишь
 		# несколько текстур, клетки внутри них не трогаются.
-		var tkey: Array = [grid.get_instance_id(), fog_on]
-		if _tiles == null or _tiles_grid != tkey:
-			_tiles = TerrainTiles.new(grid, state.env)
-			_tiles.furniture_look = _furniture_look
-			if fog_on:
-				for hf: String in FOG_HIDDEN_FEATURES:
-					_tiles.skip_features[hf] = true
-			_tiles_grid = tkey
-			_lod.tiles = _tiles
 		_tiles.sync(_fx.floor_damage, _fx.damage_version)
 		_tiles.sync_decals(_fx)
 		_lod.near_cells = Rect2i(_cull_x0, _cull_y0, _cull_x1 - _cull_x0, _cull_y1 - _cull_y0) \
@@ -4985,7 +4987,7 @@ func _draw() -> void:
 	# берётся всегда — резолвер отдаёт его из кеша, пока обстановка не изменилась.
 	# А вот САМА заливка тумана при выключенном тумане не нужна ни на одной клетке:
 	# флаг гасит 2500 лишних обращений к словарю за кадр.
-	var fog_on: bool = _view_resolver().fog_enabled
+	var fog_on: bool = _view_resolver().visibility_limited()
 	var viewer := _viewing_side()
 	var visible := _view_resolver().team_visible_coords(viewer)
 	# Разведанное, но не просматриваемое сейчас (item 46): в СТАНДАРТНОМ тумане там
@@ -5391,7 +5393,7 @@ func _draw() -> void:
 		#
 		# Створка шлюза заодно возвращается к ЗАКРЫТОМУ виду: открывшийся в темноте шлюз
 		# рассказывал о чужом ходе ровно то, что туман и прячет.
-		if _view_resolver().fog_enabled and _view_resolver().fog_mode == MCF.Fog.STANDARD:
+		if _view_resolver().visibility_limited() and _view_resolver().fog_mode == MCF.Fog.STANDARD:
 			for wy in range(vy0, vy1 + 1):
 				for wx in range(vx0, vx1 + 1):
 					var wc := Vector2i(wx, wy)
@@ -5637,7 +5639,8 @@ func _draw() -> void:
 			continue
 		# Туман войны (§3.9): чужой юнит виден, только если его клетку видит команда.
 		var uown := unit.owner
-		if uown != viewer and fog_on and not visible.has(at):
+		if uown != viewer and not state.roster.are_allies(viewer, uown) and fog_on \
+				and (state.grid.cell(at).gas or not visible.has(at)):
 			continue
 		# Смерть в текущем действии показываем лишь ПОСЛЕ анимации броска (#46):
 		# пока крутится кубик, погибший рисуется как живой юнит.
@@ -5859,7 +5862,7 @@ func _draw_fx_props(visible: Dictionary) -> void:
 	# только то, что ещё в воздухе, — его и правда надо двигать каждый кадр.
 	if _fx.flying.is_empty():
 		return
-	var fog_on: bool = _view_resolver().fog_enabled
+	var fog_on: bool = _view_resolver().visibility_limited()
 	for f: Dictionary in _fx.flying:
 		_draw_fx_one(f["kind"], FxDecals.flight_pos(f), FxDecals.flight_rot(f),
 				f["scale"], visible, fog_on, f.get("origin", Vector2i(-1, -1)))
@@ -5873,7 +5876,7 @@ func _draw_fx_props(visible: Dictionary) -> void:
 ## виден любому, кто смотрит на поле.
 const EVENT_COLORS := {
 	"mortar": Color(0.95, 0.45, 0.15, 1.0),
-	"gas": Color(0.55, 0.85, 0.35, 1.0),
+	"gas": Color(0.95, 0.95, 0.95, 1.0),
 	"army": Color(0.85, 0.35, 0.75, 1.0),
 }
 
@@ -5892,11 +5895,11 @@ func _draw_random_events(font: Font) -> void:
 		var tw := font.get_string_size(tag, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
 		draw_rect(Rect2(rect.position + Vector2(2, 2), Vector2(tw + 8, 18)), Color(0, 0, 0, 0.55))
 		draw_string(font, rect.position + Vector2(6, 16), tag,
-				HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0.8, 1.0, 0.6, 1.0))
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0.95, 0.95, 0.95, 1.0))
 	for e: Dictionary in ev.pending:
 		var id := str(e["id"])
 		var p: Dictionary = e["params"]
-		var left: int = maxi(0, int(e["land"]) - state.turns.round_number + 1)
+		var left: int = 1
 		var col: Color = EVENT_COLORS.get(id, Color(1, 1, 1, 1))
 		var rect := Rect2()
 		if id == RandomEvents.ARMY:
@@ -5914,16 +5917,22 @@ func _draw_random_events(font: Font) -> void:
 					Vector2(int(p.get("w", 1)), int(p.get("h", 1))) * CELL)
 		draw_rect(rect, Color(col.r, col.g, col.b, 0.14))
 		draw_rect(rect, Color(col.r, col.g, col.b, 0.85), false, 2.0)
-		var label := "%s · %d" % [RandomEvents.event_name(id).to_upper(), left]
+		var label := "%s · %d TURN" % [RandomEvents.event_name(id).to_upper(), left]
 		draw_string(font, rect.position + Vector2(4, 16), label,
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(col.r, col.g, col.b, 0.95))
 
 ## Connected gas tiles fade only at exposed edges, with a lighter pass over units.
 ## Cull to the viewport and draw overlapping clouds only once per cell.
+var _gas_canvas_texture: CanvasTexture
+
 func _draw_gas_tiles(alpha: float, fill: bool) -> void:
 	if resolver == null or resolver.random_events == null or resolver.random_events.clouds.is_empty():
 		return
 	var tex := GasTiles.texture()
+	if tex != null and (_gas_canvas_texture == null or _gas_canvas_texture.diffuse_texture != tex):
+		_gas_canvas_texture = CanvasTexture.new()
+		_gas_canvas_texture.diffuse_texture = tex
+		_gas_canvas_texture.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	var drawn := {}
 	for cl: Dictionary in resolver.random_events.clouds:
 		var x0 := maxi(_cull_x0, int(cl["x"]))
@@ -5939,9 +5948,9 @@ func _draw_gas_tiles(alpha: float, fill: bool) -> void:
 				var cell_rect := Rect2(ORIGIN + Vector2(x, y) * CELL, Vector2(CELL, CELL))
 				if tex != null:
 					var src := GasTiles.source_rect(tex, coord, GasTiles.mask_at(state.grid, coord))
-					draw_texture_rect_region(tex, cell_rect, src, Color(1, 1, 1, alpha))
+					draw_texture_rect_region(_gas_canvas_texture, cell_rect, src, Color(1, 1, 1, alpha))
 				elif fill:
-					draw_rect(cell_rect, Color(0.55, 0.7, 0.28, 0.36))
+					draw_rect(cell_rect, Color(0.9, 0.9, 0.9, 0.36))
 
 ## ВСПЫШКА ВЗРЫВА (0.9.4): клетки разрыва на секунду горят и гаснут. Чистая косметика —
 ## пламенем это не становится ни на одну клетку: ни резолвер, ни правила огня об этих
@@ -5951,7 +5960,7 @@ func _draw_gas_tiles(alpha: float, fill: bool) -> void:
 func _draw_fx_flashes(visible: Dictionary) -> void:
 	if _fx.flashes.is_empty():
 		return
-	var fog_on: bool = _view_resolver().fog_enabled
+	var fog_on: bool = _view_resolver().visibility_limited()
 	for flash: Dictionary in _fx.flashes:
 		var a := FxDecals.flash_alpha(flash)
 		if a <= 0.0:
@@ -5976,7 +5985,7 @@ func _draw_fx_flashes(visible: Dictionary) -> void:
 func _draw_fx_lanes(visible: Dictionary) -> void:
 	if _fx.lanes.is_empty():
 		return
-	var fog_on: bool = _view_resolver().fog_enabled
+	var fog_on: bool = _view_resolver().visibility_limited()
 	for lane: Dictionary in _fx.lanes:
 		var la := FxDecals.lane_alpha(lane)
 		if la <= 0.0:
@@ -8376,10 +8385,10 @@ func _clear_hint_cell() -> void:
 		queue_redraw()
 
 func _cell_seen_now(c: Vector2i, seen: Dictionary) -> bool:
-	return not _view_resolver().fog_enabled or seen.has(c)
+	return not _view_resolver().visibility_limited() or seen.has(c)
 
 func _result_is_audible(res: ActionResult) -> bool:
-	if res == null or not _view_resolver().fog_enabled or res.actor_owner == -1:
+	if res == null or not _view_resolver().visibility_limited() or res.actor_owner == -1:
 		return true
 	var viewer := _viewing_side()
 	if res.actor_owner == viewer or state.roster.are_allies(res.actor_owner, viewer):

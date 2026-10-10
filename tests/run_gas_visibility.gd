@@ -59,7 +59,7 @@ func _coverage() -> void:
 			"save/load rebuilds the same gas footprint")
 
 func _visibility() -> void:
-	for fog in [MCF.Fog.STANDARD, MCF.Fog.REALISTIC]:
+	for fog in [MCF.Fog.OFF, MCF.Fog.STANDARD, MCF.Fog.REALISTIC]:
 		var m := MapData.blank_arena(12, 12)
 		m.set_spawn(Vector2i(2, 5), "light_infantry", 0)
 		m.set_spawn(Vector2i(8, 5), "light_infantry", 1)

@@ -81,7 +81,8 @@ const K_LOBBY_MAP := "lobby_map"
 ##   2 — 0.9.4: случайные события объявляются и падают раундом позже, у них свои броски
 ##       параметров, обстрела и газа; реестр событий стал другим.
 ##   3 — 0.9.8: neutral firing decisions and spectator roles.
-const PROTOCOL := 3
+##   4 — gas contact rolls and one-player-turn random-event warnings.
+const PROTOCOL := 4
 
 static func encode_rules() -> Dictionary:
 	var roster := GameConfig.active_roster()

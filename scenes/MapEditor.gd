@@ -51,7 +51,7 @@ const TOOLS := [
 	{"tool": Tool.FILL, "name": "Fill", "key": KEY_F, "hint": "Flood a connected area of identical cells."},
 	{"tool": Tool.SELECT, "name": "Select", "key": KEY_M, "hint": "Drag to select. Drag the selection to move it; Ctrl+C / Ctrl+X / Ctrl+V / Delete."},
 	{"tool": Tool.PICK, "name": "Eyedropper", "key": KEY_I, "hint": "Click a cell to pick its tile, unit or zone (Alt+click works with any tool)."},
-	{"tool": Tool.STAMP, "name": "Stamp", "key": KEY_T, "hint": "Place the chosen room or building. R rotates, H / V flip."},
+	{"tool": Tool.STAMP, "name": "Presets", "key": KEY_T, "hint": "Place the chosen room or building. R rotates, H / V flip."},
 ]
 
 enum Sym { OFF, X, Y, QUAD }
@@ -676,6 +676,8 @@ func _brushed(t: Array, mask: int) -> Array:
 				if t.size() < 6:
 					t.append(-1)
 				t[5] = mirror_turn(brush_turn, mask) if Furniture.is_furniture(brush) else -1
+	if _wall_brush(): t[7] = brush_accent
+	if brush == MCF.FEATURE_AIRLOCK: t[8] = brush_door
 	return t
 
 ## Кортеж с видом пола (7-й элемент дописывается, если его нет).
@@ -909,11 +911,22 @@ func _drop_float(at_cursor: Vector2i) -> void:
 ##
 ## 0.9.4: а если в руке НЕ мебель (ластик, пипетка, кисть стены), R разворачивает предмет
 ## ПОД КУРСОРОМ — стоящий на карте диван больше не нужно выделять или класть заново.
+var decal_rotation := 0.0
+var _decal_painting := false
+var _decal_last := Vector2.INF
+var _accent_opt: OptionButton
+var _door_opt: OptionButton
+var brush_accent := 0
+var brush_door := 0
+
 func rotate_key(back_to_auto: bool = false) -> void:
 	if not _float.is_empty():
 		rotate_float()
 	elif tool == Tool.SELECT and _has_selection():
 		rotate_selection()
+	elif brush.begins_with("decal:"):
+		decal_rotation = 0.0 if back_to_auto else fposmod(decal_rotation + PI / 2, TAU)
+		queue_redraw()
 	elif Furniture.is_furniture(brush):
 		if back_to_auto:
 			brush_turn = -1
@@ -1006,6 +1019,8 @@ func pick_at(c: Vector2i) -> void:
 	if _spawn_at.has(c) and MCF.is_neutral(int(_spawn_at[c]["owner"])):
 		_select_brush("unit:" + String(_spawn_at[c]["stats_id"]))
 	elif map.feature_id[i] != "":
+		brush_accent = map.get_accent(i)
+		brush_door = map.get_door(i)
 		# Стена с материалом (0.9.4) берётся вместе с ним — пипетка даёт ту же стену.
 		if map.feature_id[i] == MCF.FEATURE_WALL and MCF.wall_look_tile(map.get_look(i)) != "":
 			_select_brush("wallmat:%d" % (map.get_look(i) - MCF.WALL_LOOK_BASE))
@@ -1111,6 +1126,15 @@ func _unhandled_input(event: InputEvent) -> void:
 			pan += event.relative
 			queue_redraw()
 			return
+		if brush.begins_with("decal:") and tool == Tool.BRUSH:
+			queue_redraw()
+			if _decal_painting:
+				if (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
+					_paint_decal((event.position - pan) / cell_size())
+				else:
+					_decal_painting = false
+					_commit()
+			return
 		var hc := cell_at(event.position)
 		if hc != _hover:
 			_hover = hc
@@ -1127,19 +1151,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			_release(c)
 
 func _press(c: Vector2i, alt: bool, screen := Vector2.INF) -> void:
-	if brush.begins_with("decal:") and tool == Tool.BRUSH and map.in_bounds(c):
+	if brush.begins_with("decal:") and tool == Tool.BRUSH and map.in_bounds(c) and not alt:
 		_begin()
+		_decal_painting = true
+		_decal_last = Vector2.INF
 		var pointer := get_viewport().get_mouse_position() if screen == Vector2.INF else screen
-		var pos := (pointer - pan) / cell_size()
-		var kind := brush.substr(6)
-		if kind == "erase":
-			map.decals = map.decals.filter(func(d: Array) -> bool:
-				return Vector2(float(d[1]), float(d[2])).distance_to(pos) > float(brush_size) * 0.5)
-		else:
-			map.decals.append([kind, pos.x, pos.y, PI / 2 if kind == "corpse" else 0.0, float(brush_size)])
-		_sync_editor_decals()
-		_commit()
-		queue_redraw()
+		_paint_decal((pointer - pan) / cell_size())
 		return
 	if not _float.is_empty() and not _float_moving:
 		_drop_float(c)
@@ -1175,7 +1192,23 @@ func _press(c: Vector2i, alt: bool, screen := Vector2.INF) -> void:
 			_drop_float(c)
 	queue_redraw()
 
+func _paint_decal(pos: Vector2) -> void:
+	if not map.in_bounds(Vector2i(pos.floor())): return
+	var kind := brush.substr(6)
+	if kind == "corpse": pos = pos.floor() + Vector2.ONE * 0.5
+	var spacing := 0.5 if kind == "corpse" else maxf(0.08, brush_size * 0.15)
+	if _decal_last != Vector2.INF and pos.distance_to(_decal_last) < spacing: return
+	if kind == "erase":
+		map.decals = map.decals.filter(func(d: Array) -> bool:
+			return Vector2(float(d[1]), float(d[2])).distance_to(pos) > float(brush_size) * 0.5)
+	else:
+		map.decals.append([kind, pos.x, pos.y, decal_rotation, float(brush_size)])
+	_decal_last = pos
+	_sync_editor_decals()
+	queue_redraw()
+
 func _drag_to(c: Vector2i) -> void:
+	if _decal_painting: return
 	match tool:
 		Tool.BRUSH, Tool.ERASER:
 			if not _act.is_empty():
@@ -1186,6 +1219,7 @@ func _drag_to(c: Vector2i) -> void:
 				queue_redraw()
 
 func _release(c: Vector2i) -> void:
+	_decal_painting = false
 	match tool:
 		Tool.BRUSH, Tool.ERASER:
 			_commit()
@@ -1569,10 +1603,12 @@ func _preview_key() -> String:
 func _draw_preview() -> void:
 	if brush.begins_with("decal:") and tool == Tool.BRUSH:
 		var pos := (get_viewport().get_mouse_position() - pan) / cell_size()
-		var tex := _thumb(brush)
-		if tex != null:
-			var size := Vector2.ONE * CELL * brush_size
-			draw_texture_rect(tex, Rect2(pos * CELL - size * 0.5, size), false, Color(1, 1, 1, 0.5))
+		var kind := brush.substr(6)
+		if kind == "corpse": pos = pos.floor() + Vector2.ONE * 0.5
+		if kind == "erase":
+			draw_circle(pos * CELL, CELL * brush_size * 0.5, Color(1, 1, 1, 0.4), false, 1.0, true)
+		else:
+			TerrainTiles.draw_decal(self, kind, pos * CELL, CELL * brush_size, decal_rotation, 0.5)
 		return
 	var key := _preview_key()
 	if key != _pv_key or not is_same(_float, _pv_src):
@@ -1887,7 +1923,7 @@ func _build_menu_bar() -> void:
 	for n: String in SYM_NAMES:
 		_sym_opt.add_item(n)
 	_sym_opt.focus_mode = Control.FOCUS_NONE
-	_sym_opt.tooltip_text = "Mirror every stroke, stamp and paste. Mirrored zones go to the matching player."
+	_sym_opt.tooltip_text = "Mirror every stroke, preset and paste. Mirrored zones go to the matching player."
 	_sym_opt.item_selected.connect(func(i: int) -> void:
 		symmetry = i
 		_refresh_status()
@@ -2026,22 +2062,30 @@ func _build_palette() -> void:
 	_colour_row.add_theme_constant_override("separation", 4)
 	_colour_row.visible = false
 	outer.add_child(_colour_row)
-	var decor := OptionButton.new()
-	decor.add_item("Wall accent…")
+	_accent_opt = OptionButton.new()
+	_accent_opt.tooltip_text = "Wall accent"
 	for i in MCF.ACCENT_COLORS.size():
-		decor.add_icon_item(_swatch(MCF.ACCENT_COLORS[i]), MCF.ACCENT_NAMES[i])
-	decor.item_selected.connect(func(i: int) -> void:
-		if i > 0: _select_brush("accent:%d" % (i - 1)))
-	outer.add_child(decor)
-	var doors := OptionButton.new()
-	doors.add_item("Door texture…")
-	doors.add_item("Automatic")
+		_accent_opt.add_icon_item(_swatch(MCF.ACCENT_COLORS[i]), "Accent · " + MCF.ACCENT_NAMES[i])
+	_accent_opt.item_selected.connect(func(i: int) -> void:
+		brush_accent = i
+		_pv_key = ""
+		queue_redraw())
+	outer.add_child(_accent_opt)
+	_door_opt = OptionButton.new()
+	_door_opt.tooltip_text = "Door texture"
+	_door_opt.add_icon_item(_door_thumb(0), "Automatic")
 	for material: String in TerrainTiles.DOOR_MATERIALS:
 		for variant in 3:
-			doors.add_item("%s · %d" % [material.capitalize(), variant + 1])
-	doors.item_selected.connect(func(i: int) -> void:
-		if i > 0: _select_brush("door:%d" % (i - 1)))
-	outer.add_child(doors)
+			var look := TerrainTiles.DOOR_MATERIALS.find(material) * 3 + variant + 1
+			_door_opt.add_icon_item(_door_thumb(look), "%s · %d" % [material.capitalize(), variant + 1])
+	_door_opt.add_theme_constant_override("icon_max_width", 24)
+	_door_opt.item_selected.connect(func(i: int) -> void:
+		brush_door = i
+		if brush.begins_with("door:"): brush = MCF.FEATURE_AIRLOCK
+		_pv_key = ""
+		_mark_brush_button()
+		queue_redraw())
+	outer.add_child(_door_opt)
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -2094,7 +2138,9 @@ func _refresh_palette() -> void:
 	var stamps: Array = []
 	for s: Dictionary in MapPresets.STAMPS:
 		stamps.append(["stamp:" + String(s["id"]), s["name"], s["hint"]])
-	_palette_group("Stamps", stamps)
+	for name: String in RoomPresets.names():
+		stamps.append(["preset:" + name, name, "Place this saved room or structure; R rotates."])
+	_palette_group("Presets", stamps)
 	_mark_brush_button()
 
 ## Кнопки палитры — с узкими полями, иначе в две колонки не влезают названия.
@@ -2158,7 +2204,9 @@ func _palette_grid(parent: Control, items: Array, columns: int) -> void:
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_tight(b)
 		b.tooltip_text = it[2] if it.size() > 2 else it[1]
-		if id.begins_with("stamp:"):
+		if id.begins_with("preset:"):
+			b.pressed.connect(_pick_custom_preset.bind(id.substr(7)))
+		elif id.begins_with("stamp:"):
 			b.pressed.connect(_pick_stamp.bind(id.substr(6)))
 		else:
 			b.pressed.connect(_select_brush.bind(id))
@@ -2288,6 +2336,9 @@ func _layout_minimap() -> void:
 # --- Выбор инструмента и кисти ---
 
 func _select_tool(t: int, keep_float: bool = false) -> void:
+	if _decal_painting:
+		_decal_painting = false
+		_commit()
 	if t != Tool.PICK:
 		_prev_tool = t
 	if t != tool and not keep_float and not _float_moving:
@@ -2299,6 +2350,7 @@ func _select_tool(t: int, keep_float: bool = false) -> void:
 		_float_grab = Vector2i(int(_float["w"]) / 2, int(_float["h"]) / 2)
 	if _tool_buttons.has(t):
 		(_tool_buttons[t] as Button).button_pressed = true
+	_refresh_material_controls()
 	_refresh_status()
 	queue_redraw()
 
@@ -2321,6 +2373,19 @@ func _mark_brush_button() -> void:
 		_current_icon.texture = _thumb(brush)
 		_current_label.text = _brush_name(brush)
 	_refresh_colours()
+	_refresh_material_controls()
+
+func _refresh_material_controls() -> void:
+	var painting := tool in [Tool.BRUSH, Tool.LINE, Tool.RECT, Tool.CIRCLE, Tool.FILL]
+	if _accent_opt != null:
+		_accent_opt.visible = painting and _wall_brush()
+		_accent_opt.select(brush_accent)
+	if _door_opt != null:
+		_door_opt.visible = painting and (brush == MCF.FEATURE_AIRLOCK or brush.begins_with("door:"))
+		_door_opt.select(int(brush.substr(5)) if brush.begins_with("door:") else brush_door)
+
+func _wall_brush() -> bool:
+	return brush.begins_with("wallmat:") or brush in [MCF.FEATURE_WALL, MCF.FEATURE_WOOD_WALL, MCF.FEATURE_ARMOR_WALL, MCF.FEATURE_GLASS, MCF.FEATURE_ARMOR_GLASS, MCF.FEATURE_SOIL]
 
 ## Строка цветов под кистью: образец на каждый цвет выбранного предмета. Пересобирается,
 ## только когда сменился сам предмет, — щелчок по образцу не разбирает строку, в которой
@@ -2461,7 +2526,8 @@ func _mark_dirty() -> void:
 ## Картинка кисти — та же плитка, что ляжет на карту, в окружении пресета.
 func _thumb(id: String) -> Texture2D:
 	if id.begins_with("accent:"): return _swatch(MCF.ACCENT_COLORS[clampi(int(id.substr(7)), 0, MCF.ACCENT_COLORS.size() - 1)])
-	if id.begins_with("door:"): return Sprites.texture_of("door_" + _env)
+	if id.begins_with("door:"): return _door_thumb(int(id.substr(5)))
+	if id == MCF.FEATURE_AIRLOCK: return _door_thumb(brush_door)
 	if id.begins_with("decal:"): return Sprites.texture_of("blood_splatter" if id == "decal:blood_drop" else id.substr(6))
 	var env := _env
 	if id.begins_with("unit:"):
@@ -2470,6 +2536,9 @@ func _thumb(id: String) -> Texture2D:
 	if id.begins_with("zone:"):
 		var n := int(id.substr(5))
 		return _swatch(owner_color(n) if n >= 0 else Color(0.2, 0.2, 0.2))
+	if id.begins_with("preset:"):
+		var data: Dictionary = RoomPresets.read_preset(id.substr(7))
+		return _stamp_thumb(data["pattern"]) if not data.is_empty() else null
 	if id.begins_with("stamp:"):
 		return _stamp_thumb(MapPresets.stamp(id.substr(6)))
 	var name: String = {"floor": "floor", "grass": "floor_grass", "space": "floor_space"}.get(id,
@@ -2498,6 +2567,22 @@ func _thumb(id: String) -> Texture2D:
 		at.region = Rect2(0, 0, h, h)
 		return at
 	return _swatch(Color(0.5, 0.5, 0.5))
+
+func _door_thumb(look: int) -> Texture2D:
+	var material := _env if look == 0 else str(TerrainTiles.DOOR_MATERIALS[(look - 1) / 3])
+	var tex := Sprites.texture_of("door_" + material)
+	if tex == null: return null
+	var at := AtlasTexture.new()
+	at.atlas = tex
+	var side := tex.get_height()
+	at.region = Rect2((0 if look == 0 else (look - 1) % 3) * side, 0, side, side)
+	return at
+
+func _pick_custom_preset(name: String) -> void:
+	var data: Dictionary = RoomPresets.read_preset(name)
+	if data.is_empty(): return
+	_clipboard = data["pattern"].duplicate(true)
+	paste()
 
 func _swatch(c: Color) -> ImageTexture:
 	var img := Image.create(16, 16, false, Image.FORMAT_RGBA8)
@@ -2964,7 +3049,7 @@ func _shortcuts_dialog() -> void:
 	var rows := [
 		["B / E / L / F", "Brush, Eraser, Line, Fill"],
 		["U / C", "Rectangle, Circle"],
-		["M / I / T", "Select, Eyedropper, Stamp"],
+		["M / I / T", "Select, Eyedropper, Presets"],
 		["Alt + click", "Pick the tile under the cursor"],
 		["[  ]", "Brush size"],
 		["R", "Turn furniture, the selection, or what you are placing"],
@@ -3029,6 +3114,7 @@ func _save_room_dialog() -> void:
 	_dialog("Save Selection as Preset", body, [["Cancel", null], ["Save", func() -> void:
 		var pattern := MapPresets.capture(map, _selection)
 		if RoomPresets.save_preset(name_edit.text, pattern, _env):
+			_refresh_palette()
 			_flash("Preset saved. Find it under Presets → Manage Rooms & Structures.")
 		else: _flash("Could not save preset; use a non-empty name.")]])
 
@@ -3058,6 +3144,7 @@ func _room_manager() -> void:
 	refresh.call()
 	_dialog("Room & Structure Presets", body, [["Close", null], ["Delete", func() -> void:
 		if pick.selected >= 0: RoomPresets.remove_preset(names[pick.selected])
+		_refresh_palette()
 		_room_manager.call_deferred()], ["Place / Edit", func() -> void:
 		var data: Dictionary = selected.call()
 		if not data.is_empty():

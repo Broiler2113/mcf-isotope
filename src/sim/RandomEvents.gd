@@ -5,10 +5,8 @@ extends RefCounted
 ## лобби включает события, задаёт «обязательное событие каждый ход» / «сколько ходов между
 ## событиями» и веса-доли по каждому событию.
 ##
-## Событий три, и ни одно не падает в тот же миг, когда выпало: СНАЧАЛА ОБЪЯВЛЕНИЕ, потом
-## удар. Выпавшее событие сразу прокатывает свои параметры (куда ляжет зона, с какого края
-## придут), объявляется в журнале и на карте — и ложится в очередь на КОНЕЦ СЛЕДУЮЩЕГО
-## РАУНДА. Значит у каждой стороны есть полный ход, чтобы уйти с зоны или встретить гостей.
+## Each event announces its zone first and resolves when the next player ends
+## their turn. Gas lifetime and repeated exposure still advance once per round.
 ##
 ##   • «Artillery Barrage» (id на диске остался mortar) — прямоугольную зону накрывает
 ##     обстрел: каждая клетка с вероятностью 1/2 разрушена;
@@ -137,28 +135,16 @@ func _pick(dice: DiceService) -> String:
 
 # --- Очередь объявленных событий -------------------------------------------------------
 
-## Через сколько раундов после объявления событие падает. Единица означает «в конце
-## СЛЕДУЮЩЕГО раунда»: у всех сторон есть полный ход на то, чтобы отреагировать.
-const WARNING_ROUNDS := 1
-
-## Объявить событие: параметры уже прокатаны, падение — в конце раунда round_number + 1.
+## Warnings last exactly one player turn. Round metadata remains in snapshots
+## for compatibility; old pending warnings also resolve on the next end-turn.
 func announce(id: String, params: Dictionary, round_number: int) -> Dictionary:
-	var entry := {"id": id, "params": params, "announced": round_number,
-			"land": round_number + WARNING_ROUNDS}
+	var entry := {"id": id, "params": params, "announced": round_number, "land": round_number}
 	pending.append(entry)
 	return entry
 
-## Что падает в конце раунда round_number — в порядке очереди. Записи при этом СНИМАЮТСЯ
-## с очереди: вызывающий их тут же и разыгрывает.
-func take_landing(round_number: int) -> Array:
-	var out: Array = []
-	var left: Array = []
-	for e: Dictionary in pending:
-		if int(e["land"]) <= round_number:
-			out.append(e)
-		else:
-			left.append(e)
-	pending = left
+func take_landing(_round_number: int) -> Array:
+	var out := pending
+	pending = []
 	return out
 
 ## Поставить газовое облако (при падении события).

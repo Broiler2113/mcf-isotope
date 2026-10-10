@@ -93,15 +93,16 @@ static func tactics(r: GameActionResolver, side: int, memory: RefCounted = null)
 ## tank may turn before driving. Only visible vehicles and known terrain contribute.
 ## In particular, hidden occupants never shorten a lane and reveal their location.
 static func vehicle_crush_threat(r: GameActionResolver, side: int) -> PackedFloat32Array:
+	var sight_limited := r.visibility_limited()
 	var grid := r.state.grid
 	var out := PackedFloat32Array()
 	out.resize(grid.width * grid.height)
-	var visible: Dictionary = r.team_visible_coords(side) if r.fog_enabled else {}
+	var visible: Dictionary = r.team_visible_coords(side) if sight_limited else {}
 	for veh: Vehicle in r.state.all_vehicles():
 		if not veh.alive() or veh.is_borg() or not veh.can_drive() \
 				or veh.living_crew_count() == 0 or rel_owner(r, side, veh.owner) != 1:
 			continue
-		var seen := not r.fog_enabled
+		var seen := not sight_limited
 		for fc: Vector2i in veh.footprint():
 			if visible.has(fc):
 				seen = true
@@ -127,7 +128,7 @@ static func vehicle_crush_threat(r: GameActionResolver, side: int) -> PackedFloa
 					if not grid.in_bounds(c):
 						blocked = true
 						break
-					if (not r.fog_enabled or r.team_knows(side, c)) and grid.cell(c).is_space \
+					if (not sight_limited or r.team_knows(side, c)) and grid.cell(c).is_space \
 							and veh.type_id == "tank":
 						blocked = true
 						break
@@ -139,8 +140,7 @@ static func vehicle_crush_threat(r: GameActionResolver, side: int) -> PackedFloa
 	return out
 
 ## Event rectangles are announced publicly, including under fog. Never expose
-## future dice outcomes or a hidden unit through these layers. 1 = due this round,
-## 1/2 = due next round; active gas has its own channel.
+## future dice outcomes or a hidden unit through these layers. All warnings resolve at the next player end-turn; active gas has its own channel.
 static func hazards(r: GameActionResolver) -> Dictionary:
 	var grid := r.state.grid
 	var out := {}
@@ -157,8 +157,7 @@ static func hazards(r: GameActionResolver) -> Dictionary:
 		var key := "gas_warning" if event["id"] == RandomEvents.GAS else "artillery_warning"
 		if event["id"] != RandomEvents.GAS and event["id"] != RandomEvents.MORTAR:
 			continue
-		var wait := maxi(0, int(event["land"]) - r.state.turns.round_number)
-		_hazard_rect(out[key], grid, event["params"], 1.0 / float(wait + 1))
+		_hazard_rect(out[key], grid, event["params"], 1.0)
 	return out
 
 static func _hazard_rect(layer: PackedFloat32Array, grid: Grid, rect: Dictionary, risk: float) -> void:
@@ -180,6 +179,7 @@ static func _hazard_rect(layer: PackedFloat32Array, grid: Grid, rect: Dictionary
 ## Значение: 1 у самой станции и плавно к нулю на краю радиуса, чтобы «впритирку» и
 ## «в эпицентре» не читались одинаково.
 static func drone_threat(r: GameActionResolver, side: int) -> PackedFloat32Array:
+	var sight_limited := r.visibility_limited()
 	var grid := r.state.grid
 	var out := PackedFloat32Array()
 	out.resize(grid.width * grid.height)
@@ -193,7 +193,7 @@ static func drone_threat(r: GameActionResolver, side: int) -> PackedFloat32Array
 				continue
 			if rel_owner(r, side, cell.feature_owner) != 1:
 				continue
-			if r.fog_enabled and not visible.has(Vector2i(x, y)):
+			if sight_limited and not visible.has(Vector2i(x, y)):
 				continue
 			if not _station_is_manned(r, Vector2i(x, y), cell.feature_owner):
 				continue
@@ -230,6 +230,7 @@ static func _quarters(a: PackedFloat32Array) -> PackedInt32Array:
 	return out
 
 static func encode(r: GameActionResolver, side: int, round_cap: int, tac: Dictionary = {}) -> Dictionary:
+	var sight_limited := r.visibility_limited()
 	if tac.is_empty():
 		tac = tactics(r, side)
 	var state := r.state
@@ -254,7 +255,7 @@ static func encode(r: GameActionResolver, side: int, round_cap: int, tac: Dictio
 			var i := y * w + x
 			var c := Vector2i(x, y)
 			var cell := grid.cell_fast(x, y)
-			var sees := not r.fog_enabled or visible.has(c)
+			var sees := not sight_limited or visible.has(c)
 			var knows := sees or r.team_knows(side, c)
 			fog_a[i] = 2 if sees else (1 if knows else 0)
 			if not knows:
@@ -311,7 +312,7 @@ static func encode(r: GameActionResolver, side: int, round_cap: int, tac: Dictio
 		var veh: Vehicle = state.vehicles[vid]
 		var own := rel_owner(r, side, veh.owner)
 		if own != 0:
-			var seen := not r.fog_enabled
+			var seen := not sight_limited
 			for fc: Vector2i in veh.footprint():
 				if visible.has(fc):
 					seen = true
@@ -342,7 +343,7 @@ static func encode(r: GameActionResolver, side: int, round_cap: int, tac: Dictio
 		"units": units, "vehicles": vehicles,
 		"round": state.turns.round_number, "round_cap": round_cap,
 		"slot": state.turns.active_index, "slots": state.turns.round_order.size(),
-		"fog_mode": r.fog_mode if r.fog_enabled else MCF.Fog.OFF,
+		"fog_mode": r.fog_mode,
 		"my_value": my_value, "enemy_value": enemy_value,
 		"combat_started": 1 if state.combat_started else 0,
 		"threat": _quarters(tac["threat"]), "fcover": _quarters(tac["cover"]),
@@ -481,11 +482,12 @@ static func _is_station_choice(state: GameState, intent: Intent) -> bool:
 ## спрашивать о том, чего команда не видит, политике нельзя. Дроны в расчёт не идут — за
 ## ними не охотятся станцией.
 static func _station_reach(r: GameActionResolver, side: int, at: Vector2i) -> float:
+	var sight_limited := r.visibility_limited()
 	var best := -1
 	for u: UnitInstance in r.state.all_units():
 		if not u.is_alive() or u.is_drone or rel_owner(r, side, u.owner) != 1:
 			continue
-		if r.fog_enabled and not r.is_visible_to_team(side, u):
+		if sight_limited and not r.is_visible_to_team(side, u):
 			continue
 		var dist := Combat.distance(at, u.coord)
 		if best < 0 or dist < best:

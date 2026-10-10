@@ -24,8 +24,10 @@ atlas uses a cached automatic bake; legacy horizontal strips use the first tile.
 
 ## Source generation
 
-The smoke source was created with the built-in image generation tool. The production
-atlas is assembled deterministically by `GasTiles.bake`, which scales and masks that
-source. Prompt:
+The white smoke source was edited with the built-in image-generation tool, using
+this game's previous gas texture as its reference and preserving transparency.
+`GasTiles.bake` uses nearest-neighbor sampling for the pixelated atlas; the battle
+renderer uses a nearest-filtered CanvasTexture without changing unit rendering.
+Final source: `textures/effects/gas/gas.png`. Edit prompt:
 
-> Use case: stylized-concept. Asset type: production seamless square game texture for a top-down pixel-art tactical game, poisonous gas cloud interior. Generate a square texture consisting entirely of softly swirling muted olive-green and pale yellow-green translucent smoky vapor, seen directly from above. Seamlessly tileable in both axes: all opposite edges must match, with evenly distributed density and no central subject. Broad gentle curling wisps and cloudy bands, subtle dithered pixel-art shading, small restrained 1990s strategy-game palette. Flat top-down, no 3D cloud horizon, no objects, no text, no symbols, no borders, no grid, no isolated circular puff, no holes shaped like branches, no black outlines. This fills connected gas regions; code will soften only the outer perimeter of the cloud. Keep medium-to-low contrast so soldiers remain legible beneath it. Transparent background with genuinely translucent smoke throughout the square, vapor extending through all four image edges. One texture only, no sprite sheet, no presentation mockup.
+> Edit this gas texture for a top-down pixel-art tactics game. Preserve its seamless cloudy density pattern and transparent wisps, but change the entire palette to white and neutral light gray only, with no green/yellow. Render much chunkier visible square pixels, roughly a 64-by-64 logical pixel grid enlarged cleanly, a restrained four-tone white/gray palette with varied transparency. Flat top-down smoke texture filling the square, no lighting perspective, no objects, no text, no border. This is a repeating terrain overlay, not a cloud icon. Keep alpha transparency in the gaps. Crisp nearest-neighbor pixel edges, no blur or photographic grain.

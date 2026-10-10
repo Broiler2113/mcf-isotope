@@ -1707,14 +1707,16 @@ func _town() -> void:
 	var xs := _street_lines(_core.size.x)
 	var ys := _street_lines(_core.size.y)
 	for s in xs:
-		for y in range(oy, _core.end.y):
+		for y in range(oy - BORDER, _core.end.y + BORDER):
 			for x in range(ox + s.x, ox + s.x + s.y):
 				_ground(Vector2i(x, y))
+				m.set_look(y * w + x, 0)
 				_street[y * w + x] = 1
 	for s in ys:
 		for y in range(oy + s.x, oy + s.x + s.y):
-			for x in range(ox, _core.end.x):
+			for x in range(ox - BORDER, _core.end.x + BORDER):
 				_ground(Vector2i(x, y))
+				m.set_look(y * w + x, 0)
 				_street[y * w + x] = 1
 	_pick_districts()
 	for gx in _gaps(xs, _core.size.x):
