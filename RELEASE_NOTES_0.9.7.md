@@ -18,4 +18,6 @@
 
 Training changes take effect for a local trainer when that trainer is updated or resumed using the documented deployment helper. This release does not itself restart a running training process or establish human-level playing strength.
 
+The small deterministic AI battle signature was refreshed for the expanded demolition choices. Medium and large battle signatures remain unchanged.
+
 **Full changelog:** https://github.com/Broiler2113/mcf-isotope/compare/v0.9.6...v0.9.7
