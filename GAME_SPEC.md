@@ -2496,7 +2496,7 @@ and back; `ReplayFile` puts it on disk as gzip-compressed JSON.
 | File | Where | Holds |
 |---|---|---|
 | `.mcfs` — saved game | `user://saves` | one board snapshot + the rules of the match + the cosmetic decals |
-| `.mcfr` — replay | `user://replays` | the starting snapshot, the opening civilian slot's dice, then every intent with its own dice, plus a full keyframe every 5 rounds |
+| `.mcfr` — replay | `user://replays` | the starting snapshot, the opening civilian slot's dice, then every intent with its own dice, plus compressed checkpoints every 48 actions and each player handoff, and labeled bookmarks |
 
 **Why a replay is only intents and dice.** The whole architecture pays off here:
 `GameActionResolver.resolve()` is the only mutation point and `DiceService` is the only
@@ -2522,6 +2522,25 @@ is what makes it safe: there is nobody to submit an intent. Stepping forward res
 next recorded intent; stepping *back*, or any seek, rebuilds the board from the nearest
 keyframe and fast-forwards, because the resolver is not reversible. Play/pause and
 1×/2×/4×/8× sit on a bar at the bottom of the screen.
+
+The replay bar includes a scrollable **Bookmarks** list and previous/next bookmark
+buttons. Entries identify round starts, player turns, and random-event announcements
+and landings; selecting one uses the same seek path as the slider. Slider dragging
+commits its destination on release, avoiding repeated full seeks while scrubbing.
+
+Replay schema 2 stores these bookmarks and compact checkpoints in the same compressed
+JSON file. Checkpoints include settled visual effects, so jumping does not erase
+blood, tracks or floor damage. Turns without recorded undo/redo skip undo-history
+allocation; turns containing undo keep the original history and use turn-boundary
+checkpoints. No live match rules change. The viewer's bounded catch-up work targets
+short seeks even with hundreds of soldiers.
+
+Old `.mcfr` files are upgraded on first open: one silent pass collects bookmarks and
+denser checkpoints, then safely replaces the original file. That first pass can take
+longer than a normal seek. Later opens skip it. An invalid replay or a failed write
+never replaces the original; failed writes retain the upgrade for the current session.
+Saved games (`.mcfs`) do not receive bookmarks.
+
 
 **Loading a save with role reassignment (item 42).** A `.mcfs` opens in the lobby, which
 lists each saved army by unit count and lets the host rebind every slot — Player, AI, or

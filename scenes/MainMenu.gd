@@ -81,7 +81,7 @@ func _ready() -> void:
 		push_error("Lobby.gd does not compile — re-import the project (godot --headless --import)")
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--replay="):
-			var data := ReplayFile.read(arg.trim_prefix("--replay="))
+			var data := ReplayFile.read_replay(arg.trim_prefix("--replay="))
 			if not data.is_empty():
 				print("Opening replay from the command line: %s" % arg.trim_prefix("--replay="))
 				SaveHandoff.pending_replay = data
@@ -319,7 +319,7 @@ func _on_game_activated(idx: int) -> void:
 func _on_replay_activated(idx: int) -> void:
 	if idx < 0 or idx >= _replay_names.size():
 		return
-	var data := ReplayFile.read(ReplayFile.path_for(ReplayFile.REPLAY_DIR, _replay_names[idx]))
+	var data := ReplayFile.read_replay(ReplayFile.path_for(ReplayFile.REPLAY_DIR, _replay_names[idx]))
 	if data.is_empty():
 		return
 	SaveHandoff.pending_replay = data

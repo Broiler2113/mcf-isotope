@@ -9,7 +9,7 @@ extends RefCounted
 ## Перемотка вперёд — просто следующее намерение. Перемотка НАЗАД устроена иначе:
 ## резолвер необратим, поэтому доска пересобирается из ближайшего ключевого кадра и
 ## быстро догоняется вперёд. Отсюда и требование к записи держать кадры (см.
-## ReplayRecorder.KEYFRAME_ROUNDS).
+## ReplayCheckpoint.ACTION_INTERVAL).
 
 var data: Dictionary = {}
 var state: GameState = null
@@ -22,9 +22,29 @@ var opening_result: ActionResult = null
 ## (item 9): seek() собирает её из фаст-форварда, а UI применяет к своему слою, чтобы
 ## после прыжка по таймлайну следы боя не пропадали.
 var seek_fx: Array = []
+var seek_decals: Dictionary = {}
+var _undo_turns: Array[Vector2i] = []
+var last_seek_actions := 0
 
 func _init(p_data: Dictionary) -> void:
 	data = p_data
+	var start := 0
+	var has_undo := false
+	var list := steps()
+	for i in list.size():
+		var kind := str(list[i].get("i", {}).get("t", ""))
+		has_undo = has_undo or kind in [IntentCodec.T_UNDO, IntentCodec.T_REDO]
+		if kind == IntentCodec.T_END or i == list.size() - 1:
+			if has_undo:
+				_undo_turns.append(Vector2i(start, i + 1))
+			start = i + 1
+			has_undo = false
+
+func _needs_undo(at: int) -> bool:
+	for span: Vector2i in _undo_turns:
+		if at >= span.x and at < span.y:
+			return true
+	return false
 
 func steps() -> Array:
 	return data.get("steps", [])
@@ -46,12 +66,14 @@ func seek(target: int) -> void:
 	# Косметику пересобираем ВСЕГДА с ближайшего ключевого кадра до цели (item 9), чтобы
 	# после прыжка по таймлайну кровь/гильзы/разрушенный пол были на месте, а не исчезали.
 	seek_fx = []
+	last_seek_actions = 0
 	var frame := _frame_at_or_before(want)
 	_rebuild(frame)
 	if opening_result != null:
 		seek_fx.append_array(opening_result.fx)
 	while index < want:
 		var r := play_next()
+		last_seek_actions += 1
 		if r != null:
 			seek_fx.append_array(r.fx)
 
@@ -62,6 +84,7 @@ func play_next() -> ActionResult:
 	if not has_next():
 		return null
 	var step: Dictionary = steps()[index]
+	resolver.track_undo_history = _needs_undo(index)
 	var intent := IntentCodec.decode(step.get("i", {}))
 	index += 1
 	if intent == null:
@@ -78,6 +101,8 @@ func _rebuild(frame: Dictionary) -> void:
 	if state == null:
 		state = GameState.new(16, 12)
 	resolver = GameActionResolver.new(state)
+	resolver.track_undo_history = _needs_undo(int(frame.get("at", 0)))
+	seek_decals = frame.get("fx", {})
 	StateCodec.apply_rules(resolver, frame.get("rules", {}))
 	resolver.update_airlocks()
 	index = int(frame.get("at", 0))
@@ -98,10 +123,14 @@ func _frame_at_or_before(i: int) -> Dictionary:
 	var s := mini(i, list.size()) - 1
 	while s >= 0:
 		var step: Dictionary = list[s]
-		if step.has("k"):
-			var kf: Dictionary = step["k"]
-			return {"at": s + 1, "state": kf.get("state", {}),
-					"rules": kf.get("rules", {}), "open": []}
+		if step.has("k") and not (_needs_undo(s) and bool(step["k"].get("mid_turn", false))):
+			var kf := ReplayCheckpoint.unpack(step["k"])
+			if not kf.is_empty():
+				var found := {"at": s + 1, "state": kf.get("state", {}),
+						"rules": kf.get("rules", {}), "open": []}
+				if kf.has("fx"):
+					found["fx"] = kf.fx
+				return found
 		s -= 1
 	var first := {"at": 0, "state": data.get("start", {}),
 			"rules": data.get("rules", {}), "open": data.get("opening", [])}

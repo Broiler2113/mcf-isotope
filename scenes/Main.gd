@@ -474,6 +474,11 @@ var _replay_speed_btn: Button = null
 ## Таймлайн перемотки записи (item 7) и флаг «обновляем программно, не сейкаем».
 var _replay_slider: HSlider = null
 var _replay_slider_syncing: bool = false
+var _replay_bookmarks: ItemList
+var _replay_dragging := false
+var _replay_seek_timer: Timer
+var _replay_seek_target := 0
+var _replay_skip_animations := false
 var _save_btn: Button = null
 ## Пауза между действиями при автопроигрывании — делится на выбранную скорость.
 const REPLAY_STEP_DELAY := 0.5
@@ -887,7 +892,9 @@ func _take_replay_state() -> void:
 	# таймлайну кровь, гильзы и разрушенный пол остаются на доске, а не пропадают.
 	_fx.clear()
 	if replay != null:
+		_fx.from_dict(replay.seek_decals)
 		_fx.apply(replay.seek_fx)
+		_fx.advance(10.0)
 	selected_id = -1
 	selected_vehicle_id = -1
 	mode = Mode.NONE
@@ -941,9 +948,19 @@ func _replay_step() -> void:
 ## (см. ReplayPlayer.seek). Показывать промежуточные броски при этом нельзя: их сотни,
 ## и перемотка превратилась бы в ещё один просмотр.
 func _replay_seek(target: int) -> void:
-	if replay == null or _animating:
+	if replay == null:
 		return
 	_replay_playing = false
+	if _animating:
+		# Keep the latest destination and finish the current presentation promptly.
+		# Never replace the board while an old animation coroutine still owns it.
+		_replay_seek_target = target
+		_replay_skip_animations = true
+		_replay_seek_timer.start(0.02)
+		return
+	_replay_skip_animations = false
+	if _replay_seek_timer != null:
+		_replay_seek_timer.stop()
 	replay.seek(target)
 	_take_replay_state()
 	_refresh_replay_bar()
@@ -982,6 +999,17 @@ func _refresh_replay_bar() -> void:
 	if _replay_bar == null or replay == null:
 		return
 	_replay_label.text = replay.position_text()
+	if _replay_bookmarks != null:
+		var entries: Array = replay.data.get("bookmarks", [])
+		var nearest := -1
+		for i in entries.size():
+			if int(entries[i].index) <= replay.index:
+				nearest = i
+			else:
+				break
+		if nearest >= 0 and not _replay_bookmarks.is_selected(nearest):
+			_replay_bookmarks.select(nearest)
+			_replay_bookmarks.ensure_current_is_visible()
 	_replay_play_btn.text = "❚❚" if _replay_playing else "▶"
 	_replay_speed_btn.text = "%dx" % int(_replay_speed)
 	# Таймлайн (item 7) отражает позицию, не вызывая seek: обновляем под флагом.
@@ -3789,6 +3817,8 @@ func _play_dice(events: Array) -> void:
 		if not is_inside_tree():
 			_animating = false
 			return
+		if replay != null and _replay_skip_animations:
+			break
 		if ev.get("kind", "") == "hold":
 			continue
 		if ev.get("kind", "") == "slot":
@@ -3831,6 +3861,8 @@ func _play_dice(events: Array) -> void:
 					(NEUTRAL_AP_DOT_DELAY if _fast_playback else AP_DOT_DELAY) / _pace()).timeout
 			continue
 		for step in _dice_steps(ev):
+			if replay != null and _replay_skip_animations:
+				break
 			# Ручной бросок ждёт нажатия только у защитника-человека; мирные (NEUTRAL)
 			# и ИИ кидают защиту автоматически, но анимация всё же видна (#64).
 			# В сети (batch 12 #14) нажатия ждут ВСЕ: свой бросок — кнопкой, чужой — пока
@@ -3924,6 +3956,8 @@ func _play_veh_walk(ev: Dictionary) -> void:
 	var dur_ms := SOLDIER_WALK_STEP_DELAY * steps / _pace() * 1000.0
 	var t0 := Time.get_ticks_msec()
 	while is_inside_tree():
+		if replay != null and _replay_skip_animations:
+			break
 		var k := minf(1.0, float(Time.get_ticks_msec() - t0) / maxf(1.0, dur_ms))
 		_set_veh_offset(ev, 1.0 - k)
 		queue_redraw()
@@ -3959,9 +3993,13 @@ func _play_walk(ev: Dictionary) -> void:
 	var prev: Vector2i = ev["from"]
 	_walk_cells[id] = prev
 	for cell: Vector2i in ev["path"]:
+		if replay != null and _replay_skip_animations:
+			break
 		var t0 := Time.get_ticks_msec()
 		var delta := Vector2(cell - prev) * CELL
 		while is_inside_tree():
+			if replay != null and _replay_skip_animations:
+				break
 			if _walk_jobs.get(id, -1) != serial:
 				return
 			var k := minf(1.0, float(Time.get_ticks_msec() - t0) / maxf(1.0, step_ms))
@@ -6683,6 +6721,12 @@ func _build_replay_bar() -> void:
 	_replay_speed_btn = _replay_btn("1x", _replay_cycle_speed)
 	row.add_child(_replay_speed_btn)
 	row.add_child(_replay_btn("▶▶|", func() -> void: _replay_seek(replay.step_count())))
+	var previous := _replay_btn("‹ Mark", func() -> void: _replay_bookmark_jump(-1))
+	previous.tooltip_text = "Previous bookmark"
+	row.add_child(previous)
+	var following := _replay_btn("Mark ›", func() -> void: _replay_bookmark_jump(1))
+	following.tooltip_text = "Next bookmark"
+	row.add_child(following)
 	_replay_label = Label.new()
 	_replay_label.add_theme_font_size_override("font_size", 12)
 	_replay_label.custom_minimum_size = Vector2(180, 0)
@@ -6714,7 +6758,31 @@ func _build_replay_bar() -> void:
 	_replay_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_replay_slider(_replay_slider)  # чёрная дорожка под ползунком (item 7)
 	_replay_slider.value_changed.connect(_on_replay_slider)
+	_replay_slider.drag_started.connect(func() -> void:
+		_replay_dragging = true
+		_replay_playing = false
+		_replay_seek_timer.stop())
+	_replay_slider.drag_ended.connect(func(changed: bool) -> void:
+		_replay_dragging = false
+		if changed: _replay_seek(int(_replay_slider.value)))
 	slider_wrap.add_child(_replay_slider)
+	_replay_seek_timer = Timer.new()
+	_replay_seek_timer.one_shot = true
+	_replay_seek_timer.wait_time = 0.12
+	_replay_seek_timer.timeout.connect(func() -> void: _replay_seek(_replay_seek_target))
+	panel.add_child(_replay_seek_timer)
+	var marks := VBoxContainer.new()
+	marks.custom_minimum_size.x = 270
+	marks.add_child(SteamChrome.header_bar("Bookmarks"))
+	_replay_bookmarks = ItemList.new()
+	_replay_bookmarks.custom_minimum_size = Vector2(270, 100)
+	_replay_bookmarks.add_theme_font_size_override("font_size", 12)
+	_replay_bookmarks.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	for entry: Dictionary in replay.data.get("bookmarks", []):
+		_replay_bookmarks.add_item(str(entry.label))
+	_replay_bookmarks.item_selected.connect(_on_replay_bookmark)
+	marks.add_child(_replay_bookmarks)
+	slider_wrap.add_child(marks)
 	_replay_bar = panel
 	_ui_layer.add_child(_replay_bar)
 	_refresh_replay_bar()
@@ -6724,7 +6792,19 @@ func _build_replay_bar() -> void:
 func _on_replay_slider(value: float) -> void:
 	if _replay_slider_syncing or replay == null:
 		return
-	_replay_seek(int(round(value)))
+	_replay_playing = false
+	_replay_seek_target = int(round(value))
+	if not _replay_dragging:
+		_replay_seek_timer.start(0.12)
+
+func _on_replay_bookmark(row: int) -> void:
+	var entries: Array = replay.data.get("bookmarks", [])
+	if row >= 0 and row < entries.size():
+		_replay_seek(int(entries[row].index))
+
+func _replay_bookmark_jump(direction: int) -> void:
+	_replay_seek(ReplayBookmarks.neighbor(replay.data.get("bookmarks", []),
+			replay.index, direction, replay.step_count()))
 
 func _replay_btn(text: String, handler: Callable) -> Button:
 	var b := Button.new()

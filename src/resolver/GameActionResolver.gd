@@ -54,6 +54,9 @@ var random_events: RandomEvents = null
 ## и знать про запись ему незачем, он лишь зовёт on_resolved. null — записи нет, и
 ## тогда ни одной лишней строчки не выполняется.
 var replay_recorder: RefCounted = null
+## Viewers with no recorded undo/redo need no per-action copies of every soldier.
+## Live games retain their existing undo behavior.
+var track_undo_history: bool = true
 
 func _init(p_state: GameState) -> void:
 	state = p_state
@@ -119,14 +122,15 @@ func _undoable_side(side: int) -> bool:
 func resolve(intent: Intent) -> ActionResult:
 	if intent == null:
 		return ActionResult.fail("No intent")
-	if intent is UndoIntent:
-		return _resolve_undo(intent)
-	if intent is RedoIntent:
-		return _resolve_redo(intent)
+	if intent is UndoIntent or intent is RedoIntent:
+		var undone := _resolve_undo(intent) if intent is UndoIntent else _resolve_redo(intent)
+		if undone.ok and replay_recorder != null and not state.dice.record_enabled:
+			replay_recorder.on_resolved(intent, [], undone)
+		return undone
 	_resolve_depth += 1
 	var top := _resolve_depth == 1
 	var turn_before := _turn_key()
-	var undoable := top and _undoable_side(state.active_player())
+	var undoable := top and track_undo_history and _undoable_side(state.active_player())
 	# Снимок для отката — без клеток: их прежний вид собирает журнал GridCell по ходу
 	# действия, ровно для тронутых. Копия всей доски 250×250 стоила ~250 мс на щелчок.
 	var pre_snap: Dictionary = state.snapshot(false) if undoable else {}
@@ -176,7 +180,7 @@ func resolve(intent: Intent) -> ActionResult:
 		var rolls := state.dice.take_log()
 		state.dice.record_enabled = false
 		if result.ok:
-			replay_recorder.on_resolved(intent, rolls)
+			replay_recorder.on_resolved(intent, rolls, result)
 	_resolve_depth -= 1
 	if top:
 		GridCell.journaling = false

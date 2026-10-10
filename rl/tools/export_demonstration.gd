@@ -15,7 +15,7 @@ func _initialize() -> void:
 		return
 	var data: Variant = JSON.parse_string(f.get_as_text())
 	f.close()
-	if not data is Dictionary or data.get("kind", "") != "replay" or int(data.get("schema", 0)) != 1:
+	if not data is Dictionary or data.get("kind", "") != "replay" or int(data.get("schema", 0)) not in [1, ReplayRecorder.SCHEMA]:
 		_fail("unsupported replay format")
 		return
 	if data.get("meta", {}).get("rl", false):

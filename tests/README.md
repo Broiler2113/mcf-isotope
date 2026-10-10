@@ -188,7 +188,9 @@ and needs `NetworkSession.DEFAULT_PORT` free.
 **`run_replay_seek.gd`** compares frame selection with the original forward scan at
 every boundary, including old recordings without frames and recordings edited in
 place. It also seeks a recorded match forwards and backwards and compares its full
-board and rules with replaying from the beginning. `-- --bench` measures frame lookup
+board and rules with replaying from the beginning. It covers dense checkpoints on a
+149×119 board, undo/redo recordings, settled effects, and the maximum action gap.
+`-- --bench` measures frame lookup
 in a 60,000-action recording; timings are informational, never a pass/fail threshold.
 
 **`run_decal_sync.gd`** compares the far-map image byte for byte with the original
@@ -222,3 +224,12 @@ real game as well.
 `run_random_events.gd` also checks round-opening warnings (including the first round),
 multiplayer notifications, neutral slots around the round boundary, interval counting,
 and replay seeking across openings that consume no dice.
+
+**`run_replay_bookmarks.gd`** checks opening/round/player-turn/event indices, excluded
+combat logs, shared event-prefix matching, lazy migration and second-load reuse,
+failed writes, navigation boundaries, and identical UI jumps from bookmarks/slider.
+
+For an end-to-end large-match seek benchmark, run
+`godot --headless --script res://tests/bench/run_replay_seek_bench.gd`.
+It reports actual seek times and catch-up counts on a 149×119 map with 400 soldiers;
+wall-clock timing is informational rather than a hardware-dependent test assertion.
