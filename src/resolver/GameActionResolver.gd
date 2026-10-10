@@ -7740,8 +7740,10 @@ func _exit_borg(unit: UnitInstance, veh: Vehicle, target: Vector2i) -> ActionRes
 	state.grid.place(unit, target)
 	# Вне борга у бойца снова его собственный потолок ОД.
 	unit.remaining_ap = mini(unit.remaining_ap, unit.max_ap())
-	return ActionResult.success(["%s climbs out of the borg [AP: %d]" % [
+	var res := ActionResult.success(["%s climbs out of the borg [AP: %d]" % [
 		unit.stats.display_name, unit.remaining_ap]])
+	_gas_on_arrival(unit, res)
+	return res
 
 ## Борг следует за своим оператором: любое перемещение бойца (ход, отброс, перенос)
 ## переносит и машину. Зовётся после каждого разрешённого намерения.

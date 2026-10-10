@@ -60,6 +60,17 @@ func _gas_walk() -> void:
 	r._land_gas({"x": 2, "y": 5, "w": 1, "h": 1}, res)
 	ck(u.is_alive() and s.dice.scripted_remaining() == 0, "gas appearing on a stationary soldier checks immediately")
 
+	var borg_state := _arena()
+	var borg_resolver := GameActionResolver.new(borg_state)
+	var pilot := borg_state.grid.cell(Vector2i(2, 5)).occupant
+	var borg := borg_state.spawn_vehicle("borg", Vector2i(3, 5), 0)
+	ck(borg_resolver.resolve(VehicleBoardIntent.new(pilot.id, borg.id)).ok, "gas fixture boards a borg")
+	borg_resolver.random_events.add_cloud(4, 5, 1, 1, 3)
+	borg_resolver._sync_gas()
+	borg_state.dice.feed_scripted([1])
+	var exit_result := borg_resolver.resolve(VehicleDisembarkIntent.new(pilot.id, Vector2i(4, 5)))
+	ck(exit_result.ok and not pilot.is_alive(), "leaving a sealed borg into gas checks exposure")
+
 func _gas_visibility() -> void:
 	var s := _arena()
 	var r := GameActionResolver.new(s)
@@ -140,6 +151,14 @@ func _editor() -> void:
 	e._press(Vector2i(6, 6), false, e.pan + Vector2(6.13, 6.78) * e.cell_size())
 	e._release(Vector2i(6, 6))
 	ck(Vector2(e.map.decals.back()[1], e.map.decals.back()[2]) == Vector2(6.5, 6.5), "corpse snaps to cell center")
+	e._select_brush("decal:blood_drop")
+	e._press(Vector2i(7, 7), false, e.pan + Vector2(7.2, 7.2) * e.cell_size())
+	var count: int = e.map.decals.size()
+	var motion := InputEventMouseMotion.new()
+	motion.position = e.pan + Vector2(7.8, 7.8) * e.cell_size()
+	motion.button_mask = 0
+	e._unhandled_input(motion)
+	ck(e.map.decals.size() == count and not e._decal_painting, "releasing over the UI cannot leave decal painting stuck on")
 	e._select_brush(MCF.FEATURE_WALL)
 	ck(e._accent_opt.visible and not e._door_opt.visible, "wall shows only accent options")
 	e.brush_accent = 3
@@ -149,6 +168,8 @@ func _editor() -> void:
 	e.brush_door = 8
 	ck(e._brushed([0, 0, false, "", -1], 0)[8] == 8, "door painting uses selected texture")
 	ck(e._door_thumb(7).region != e._door_thumb(8).region, "door preview displays selected sprite variant")
+	e._select_tool(e.Tool.SELECT)
+	ck(not e._accent_opt.visible and not e._door_opt.visible, "selection tool hides irrelevant material options")
 	e._select_brush("floor")
 	ck(not e._accent_opt.visible and not e._door_opt.visible, "other brushes hide wall and door options")
 	e.queue_free()

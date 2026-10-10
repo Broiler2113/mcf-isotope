@@ -1129,7 +1129,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		if brush.begins_with("decal:") and tool == Tool.BRUSH:
 			queue_redraw()
 			if _decal_painting:
-				_paint_decal((event.position - pan) / cell_size())
+				if (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
+					_paint_decal((event.position - pan) / cell_size())
+				else:
+					_decal_painting = false
+					_commit()
 			return
 		var hc := cell_at(event.position)
 		if hc != _hover:
@@ -1147,7 +1151,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_release(c)
 
 func _press(c: Vector2i, alt: bool, screen := Vector2.INF) -> void:
-	if brush.begins_with("decal:") and tool == Tool.BRUSH and map.in_bounds(c):
+	if brush.begins_with("decal:") and tool == Tool.BRUSH and map.in_bounds(c) and not alt:
 		_begin()
 		_decal_painting = true
 		_decal_last = Vector2.INF
@@ -1919,7 +1923,7 @@ func _build_menu_bar() -> void:
 	for n: String in SYM_NAMES:
 		_sym_opt.add_item(n)
 	_sym_opt.focus_mode = Control.FOCUS_NONE
-	_sym_opt.tooltip_text = "Mirror every stroke, stamp and paste. Mirrored zones go to the matching player."
+	_sym_opt.tooltip_text = "Mirror every stroke, preset and paste. Mirrored zones go to the matching player."
 	_sym_opt.item_selected.connect(func(i: int) -> void:
 		symmetry = i
 		_refresh_status()
@@ -2332,6 +2336,9 @@ func _layout_minimap() -> void:
 # --- Выбор инструмента и кисти ---
 
 func _select_tool(t: int, keep_float: bool = false) -> void:
+	if _decal_painting:
+		_decal_painting = false
+		_commit()
 	if t != Tool.PICK:
 		_prev_tool = t
 	if t != tool and not keep_float and not _float_moving:
@@ -2343,6 +2350,7 @@ func _select_tool(t: int, keep_float: bool = false) -> void:
 		_float_grab = Vector2i(int(_float["w"]) / 2, int(_float["h"]) / 2)
 	if _tool_buttons.has(t):
 		(_tool_buttons[t] as Button).button_pressed = true
+	_refresh_material_controls()
 	_refresh_status()
 	queue_redraw()
 
@@ -2365,11 +2373,15 @@ func _mark_brush_button() -> void:
 		_current_icon.texture = _thumb(brush)
 		_current_label.text = _brush_name(brush)
 	_refresh_colours()
+	_refresh_material_controls()
+
+func _refresh_material_controls() -> void:
+	var painting := tool in [Tool.BRUSH, Tool.LINE, Tool.RECT, Tool.CIRCLE, Tool.FILL]
 	if _accent_opt != null:
-		_accent_opt.visible = _wall_brush()
+		_accent_opt.visible = painting and _wall_brush()
 		_accent_opt.select(brush_accent)
 	if _door_opt != null:
-		_door_opt.visible = brush == MCF.FEATURE_AIRLOCK or brush.begins_with("door:")
+		_door_opt.visible = painting and (brush == MCF.FEATURE_AIRLOCK or brush.begins_with("door:"))
 		_door_opt.select(int(brush.substr(5)) if brush.begins_with("door:") else brush_door)
 
 func _wall_brush() -> bool:
