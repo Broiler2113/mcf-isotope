@@ -233,3 +233,5 @@ For an end-to-end large-match seek benchmark, run
 `godot --headless --script res://tests/bench/run_replay_seek_bench.gd`.
 It reports actual seek times and catch-up counts on a 149×119 map with 400 soldiers;
 wall-clock timing is informational rather than a hardware-dependent test assertion.
+
+`rl/test_evaluation_scheduling.py` checks whole-suite time limits, Stop/Pause during socket waits, champion preservation, partial-game log retention, promotion retry tallies, and real Godot collection/PPO after an evaluation timeout.

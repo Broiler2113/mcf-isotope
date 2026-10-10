@@ -36,6 +36,7 @@ import traceback
 from pathlib import Path
 from collections import Counter, OrderedDict, defaultdict
 from dataclasses import dataclass
+from contextlib import contextmanager
 
 import numpy as np
 import yaml
@@ -140,10 +141,15 @@ DEFAULTS = dict(
     demonstrations="", demonstration_coef=0.0, demonstration_batch=8,
     promotion_every=0, promotion_games=80, promotion_seed=73000000,
     promotion_maps=[], promotion_max_stall=0.05,
+    eval_budget_seconds=300, promotion_budget_seconds=900,
     preflight=True, pool_archive_size=3,
 )
 
 STYLE_NAMES = ["standard", "rush", "turtle", "flank"]
+
+
+class EvaluationInterrupted(RuntimeError):
+    """An unfinished evaluation is not a result and must never promote a model."""
 
 
 class ResourceRecycle(RuntimeError):
@@ -199,6 +205,9 @@ def load_config(path: str | None) -> dict:
         raise ValueError("hazard_coef must be finite and nonnegative")
     if int(cfg["promotion_every"]) < 0 or int(cfg["promotion_games"]) < 40 or int(cfg["promotion_games"]) % 2:
         raise ValueError("promotion interval must be nonnegative; games must be even and at least 40")
+    for key in ("eval_budget_seconds", "promotion_budget_seconds"):
+        if not np.isfinite(cfg[key]) or cfg[key] < 0:
+            raise ValueError(f"{key} must be finite and nonnegative (0 disables the deadline)")
     if cfg["discount_unit"] not in ("decision", "round"):
         raise ValueError("discount_unit must be decision or round")
     if not 64 <= int(cfg["canvas_size"]) <= 256:
@@ -1237,8 +1246,58 @@ class Trainer:
         res["epochs_run"] = float(stopped_at)
         return res
 
+    def control_requested(self) -> bool:
+        return bool(self.stop_requested or any(
+            os.path.exists(os.path.join(self.run_dir, name)) for name in ("STOP", "PAUSE")))
+
+    def check_evaluation(self) -> None:
+        if self.control_requested():
+            raise EvaluationInterrupted("stop/pause requested")
+        deadline = getattr(self, "_evaluation_deadline", None)
+        if deadline is not None and time.monotonic() >= deadline:
+            raise EvaluationInterrupted("evaluation time budget reached; returning to training")
+
+    @contextmanager
+    def evaluation_window(self, seconds):
+        previous = getattr(self, "_evaluation_deadline", None)
+        own = time.monotonic() + seconds if seconds > 0 else None
+        self._evaluation_deadline = min(previous, own) if previous is not None and own is not None else previous or own
+        old_wait = getattr(self.envs, "on_wait", None)
+        def waiting():
+            self.check_evaluation()
+            if old_wait is not None:
+                old_wait()
+        if self.envs is not None:
+            self.envs.on_wait = waiting
+        try:
+            self.check_evaluation()
+            yield
+        finally:
+            if self.envs is not None:
+                self.envs.on_wait = old_wait
+            self._evaluation_deadline = previous
+
+    def evaluation_interrupted(self, suite, error):
+        live = self.eval_live.copy()
+        row = dict(time=time.time(), step=self.global_step, update=self.update,
+                   suite=suite, reason=str(error), completed=live.get("completed", 0),
+                   games=live.get("games", 0), incomplete=True)
+        with open(os.path.join(self.run_dir, "eval_interruptions.jsonl"), "a") as f:
+            f.write(json.dumps(row) + "\n")
+        print(f"[eval] {suite} interrupted: {error}; completed games retained, no partial score published", flush=True)
+        # Discard pending replies before training sends any more commands.
+        self.envs.rebuild()
+        self.eval_live = {}
+        self.write_status("running", "evaluation interrupted; resuming training")
+
     # -- evaluation (10.3): greedy, fixed seeds, not training data --
-    def evaluate(self, games: int, record_dir: str | None = None,
+    def evaluate(self, *args, **kwargs) -> dict:
+        suite = kwargs.get("suite", "main")
+        budget = self.cfg["promotion_budget_seconds" if suite == "promotion" else "eval_budget_seconds"]
+        with self.evaluation_window(budget):
+            return self._evaluate(*args, **kwargs)
+
+    def _evaluate(self, games: int, record_dir: str | None = None,
                  keep: int = 0, net: PolicyNet | None = None,
                  maps: list[str] | None = None, log_games: bool = True,
                  fogs: list[int] | None = None, suite: str = "main",
@@ -1303,7 +1362,9 @@ class Trainer:
         self.write_status("running", f"evaluating vs {opponent}", 0, games)
         for i in range(min(len(envs), games)):
             start(i)
+        eval_started = time.monotonic()
         while inflight:
+            self.check_evaluation()
             # A company-scale game runs for many minutes; without a heartbeat in here the
             # dashboard sees nothing move and calls the run stale. The same tick bounds the
             # env logs, since an evaluation runs between updates and so between the
@@ -1312,6 +1373,9 @@ class Trainer:
                 self.envs.trim_logs()
                 self.write_status(
                     "running", f"evaluating vs {opponent}", len(results), games,
+                    eval_elapsed_seconds=round(time.monotonic() - eval_started),
+                    eval_budget_remaining_seconds=(max(0, round(self._evaluation_deadline - time.monotonic()))
+                        if self._evaluation_deadline is not None else None),
                     eval_rounds=[int(envs[j].last["info"]["round"])
                                  for j in sorted(inflight) if envs[j].last],
                     eval_steps=[int(envs[j].last["info"].get("steps", 0))
@@ -1444,6 +1508,13 @@ class Trainer:
                     outcomes=dict(outcomes), per_game=per_game)
 
     def run_promotion(self):
+        try:
+            with self.evaluation_window(self.cfg["promotion_budget_seconds"]):
+                return self._run_promotion()
+        except EvaluationInterrupted as error:
+            self.evaluation_interrupted("promotion", error)
+
+    def _run_promotion(self):
         from selection import promotion_decision
         best = os.path.join(self.run_dir, "best.pt")
         if not os.path.exists(best):
@@ -1520,6 +1591,8 @@ class Trainer:
                 with open(os.path.join(self.run_dir, "preflight.json"), "w") as f:
                     json.dump(checked, f, indent=2)
             while self.global_step < cfg["total_steps"] and not self.stop_requested:
+                if os.path.exists(stop_flag):
+                    break
                 if self.wait_while_paused():
                     break
                 try:
@@ -1548,6 +1621,10 @@ class Trainer:
                     # fills once and the gallery freezes on the first few episodes of the
                     # run, which is a subtler version of the problem this fixes.
                     self._replay_maps.clear()
+                if self.stop_requested or os.path.exists(stop_flag):
+                    break
+                if os.path.exists(os.path.join(self.run_dir, "PAUSE")):
+                    continue
                 if cfg["promotion_every"] and self.update % cfg["promotion_every"] == 0:
                     self.save()
                     try:
@@ -1560,7 +1637,7 @@ class Trainer:
                 # so a fresh run used to show a blank "win vs HARD" for hours
                 # and read as broken (§11.2). The second clause also rescues a branch
                 # trained before this rule existed: it evaluates on its next update.
-                if self.update % cfg["eval_every"] == 0 or not self.has_eval_history():
+                elif self.update % cfg["eval_every"] == 0 or not self.has_eval_history():
                     try:
                         self.run_eval()
                     except EnvDied as e:
@@ -1697,6 +1774,20 @@ class Trainer:
         return True
 
     def run_eval(self):
+        self._completed_main_eval = None
+        try:
+            # One budget for the WHOLE suite, not a new budget for each subtest.
+            with self.evaluation_window(self.cfg["eval_budget_seconds"]):
+                return self._run_eval()
+        except EvaluationInterrupted as error:
+            # A completed main test remains valid even if optional drills time out.
+            if self._completed_main_eval is not None:
+                row = dict(self._completed_main_eval, full_suite=False, interrupted=str(error))
+                with open(os.path.join(self.run_dir, "eval_log.jsonl"), "a") as f:
+                    f.write(json.dumps(row) + "\n")
+            self.evaluation_interrupted("diagnostic", error)
+
+    def _run_eval(self):
         """Greedy games vs HARD, every time. An eval that dies with its Godot env
         must not take the run with it — the win rate is a diagnostic, not the training
         signal, so a failed one is logged as such and training carries on."""
@@ -1719,6 +1810,7 @@ class Trainer:
             # Publish the headline result before the first full suite's drills and
             # Giant held-out games, which can take a long time on a Mac.
             self.last_eval = row.copy()
+            self._completed_main_eval = row.copy()
             self.write_status("running", "main evaluation complete", r["games"], r["games"])
             score = (r["winrate"], r["value_diff"])
             if not self.cfg["promotion_every"] and r["games"] >= 10 and score > self.champion_score:
@@ -2198,6 +2290,10 @@ def cmd_compare(a):
     import tempfile
     from selection import promotion_decision
     cfg = load_config(a.config)
+    # Explicit offline comparisons may run to completion without blocking training.
+    cfg["promotion_budget_seconds"] = a.time_limit
+    if not np.isfinite(a.time_limit) or a.time_limit < 0:
+        raise ValueError("time limit must be finite and nonnegative")
     if a.games < 2 or a.games % 2:
         raise ValueError("comparison games must be positive side pairs")
     refresh_class_cache(cfg["godot"])
@@ -2401,6 +2497,7 @@ def main():
     s.add_argument("--config", default=os.path.join(PROJECT, "rl/config/league.yaml"))
     s.add_argument("--games", type=int, default=160)
     s.add_argument("--seed", type=int, default=secrets.randbelow(100000000) + 500000000)
+    s.add_argument("--time-limit", type=float, default=0, help="seconds; 0 allows a complete offline tournament")
     s.add_argument("--output"); s.set_defaults(fn=cmd_compare)
     s = sp.add_parser("export"); s.add_argument("checkpoint"); s.add_argument("out"); s.set_defaults(fn=cmd_export)
     s = sp.add_parser("play"); s.add_argument("checkpoint"); s.add_argument("--port", type=int, default=7791)

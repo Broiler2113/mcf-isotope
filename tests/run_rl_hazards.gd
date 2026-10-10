@@ -42,7 +42,7 @@ func _initialize() -> void:
 	resolver.random_events.announce(RandomEvents.MORTAR,
 			{"x": 24, "y": 15, "w": 2, "h": 2}, state.turns.round_number)
 	var hz := Obs.hazards(resolver)
-	ck(hz["artillery_warning"][15 * 30 + 24] == 0.5, "public warning survives fog")
+	ck(hz["artillery_warning"][15 * 30 + 24] == 1.0, "one-turn public warning survives fog")
 	ck(hz["gas"][15 * 30 + 24] == 0.0, "artillery is separate from gas")
 	resolver.random_events.pending = []
 	for kind: String in ["active_gas", RandomEvents.GAS, RandomEvents.MORTAR]:
