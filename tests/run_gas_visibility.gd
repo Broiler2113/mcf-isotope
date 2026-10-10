@@ -45,6 +45,13 @@ func _coverage() -> void:
 	c.cover_height = MCF.WALL_HEIGHT
 	r.notify_cell_changed(c.coord)
 	ck(not c.gas and not GasTiles.at(state.grid, c.coord), "building a window removes gas immediately")
+	var door := state.grid.cell(Vector2i(7, 4))
+	var visitor := state.spawn_unit(load("res://src/data/units/light_infantry.tres"), Vector2i(7, 3), 0)
+	r.update_airlocks()
+	ck(door.cover_height == 0.0 and door.gas, "opening an airlock admits surrounding gas")
+	state.grid.move_occupant(visitor.coord, Vector2i(13, 10))
+	r.update_airlocks()
+	ck(door.cover_height == MCF.WALL_HEIGHT and not door.gas, "closing an airlock clears its gas")
 	var restored := StateCodec.decode(StateCodec.encode(state))
 	var rr := GameActionResolver.new(restored)
 	StateCodec.apply_rules(rr, StateCodec.encode_rules(r))

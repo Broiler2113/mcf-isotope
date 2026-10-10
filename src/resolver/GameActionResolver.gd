@@ -4883,6 +4883,7 @@ func update_airlocks() -> void:
 		# Заваренный инженером шлюз не открывается ни для кого (#99).
 		if cell.airlock_welded:
 			cell.cover_height = MCF.WALL_HEIGHT
+			cell.gas = false
 			continue
 		# Тело в проёме держит створки (batch 13 #4): шлюз не закроется, пока труп не
 		# вытащат. Проверяется САМА клетка шлюза — труп рядом, за порогом, дверям не мешает.
@@ -4904,6 +4905,8 @@ func update_airlocks() -> void:
 			y += 1
 		var was_closed := cell.cover_height >= MCF.WALL_HEIGHT
 		cell.cover_height = 0.0 if open else MCF.WALL_HEIGHT
+		if not open:
+			cell.gas = false
 		# Открывшийся шлюз — повод активации соседних нейтралов (§3.1a): именно так в
 		# примере из задания игрок «вскрывает комнату», подойдя к её двери.
 		if open and was_closed:
