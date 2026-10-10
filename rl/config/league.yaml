@@ -159,3 +159,8 @@ promotion_maps:
 - gen:2:4:140:2
 - gen:3:4:140:2
 - gen:4:4:140:2
+
+# Wall-clock limits keep diagnostics from stopping learning for hours.
+# Incomplete tests retain individual games but never promote a model.
+eval_budget_seconds: 300
+promotion_budget_seconds: 900

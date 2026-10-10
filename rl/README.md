@@ -652,3 +652,29 @@ civilians on load.
 - Search, neutral RL. The dashboard (§11) is in; not in it: pausing a branch while you play
   it (§11.6 — the run keeps training), folding a live match back into training, the
   come-from-behind outstanding rule (needs a per-turn diff trace the eval doesn't record).
+
+### Evaluation time limits
+
+Training pauses while a synchronous evaluation runs; its progress counter counts
+**completed games**, not training minibatches. On Giant maps, two active games can
+keep advancing for hours without changing that counter. The dashboard shows their
+rounds/action counts and the remaining evaluation budget.
+
+`eval_budget_seconds` (300 by default) bounds the entire diagnostic suite, including
+optional drills and held-out maps. `promotion_budget_seconds` (900) bounds a champion
+challenge. Promotion updates skip the separate diagnostic suite. Stop/Pause requests
+are checked between evaluation actions and while waiting for environment replies;
+controls no longer wait for the whole tournament. Bounds are cooperative, so a single
+inference or blocking replay write can finish before cancellation is observed.
+
+A timed-out test retains completed games in its JSONL log and records the interruption
+in `eval_interruptions.jsonl`. It publishes no partial aggregate or promotion. A main
+HARD test completed before optional tests timed out keeps its valid result. Training
+continues from unchanged weights, and the champion remains intact. A strict time
+budget can prevent a full Giant-map promotion from finishing on a Mac; it does not
+prove a candidate stronger or weaker. For a complete tournament on separate hardware,
+`train.py compare ... --time-limit 0` permits an unlimited offline comparison (the
+CLI default), without blocking a training process. Set a positive value to bound it.
+
+Run `python rl/test_evaluation_scheduling.py` to check deadlines, cancellation, safe
+champion retention, result persistence, and dashboard tallies across promotion retries.

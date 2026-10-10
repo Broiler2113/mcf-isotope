@@ -463,8 +463,8 @@ def live_card(b: str) -> None:
                        f"{live['loss']} losses · {live['draw']} draws. "
                        "The evaluation may still be in progress.")
         else:
-            st.caption("Evaluation is running; no game has finished at this step yet, "
-                       "so there are no wins or losses to count.")
+            st.caption("Evaluation is running; completed-game details are unavailable from this trainer, "
+                       "so the win/loss tally cannot be reconstructed yet.")
 
     if behind:
         st.caption(f"This run trains on the game rules of `{code}`; {behind} newer commit"
@@ -537,6 +537,12 @@ def live_card(b: str) -> None:
 
     act = s.get("activity", "")
     if state == "running" and act:
+        if act.startswith("evaluating"):
+            st.caption("Learning is paused while these evaluation games run. The counter counts finished games; "
+                       "rounds and action steps below show progress inside unfinished games.")
+            if s.get("eval_budget_remaining_seconds") is not None:
+                st.caption(f"Evaluation time remaining: {s['eval_budget_remaining_seconds']}s. "
+                           "An incomplete test returns to training without promoting a model.")
         if s.get("total"):
             st.progress(min(1.0, s["done"] / s["total"]),
                         text=f"{act}: {s['done']}/{s['total']}"
@@ -625,15 +631,23 @@ def recent_eval_game_counts(branch: str, step: int | None) -> dict:
     """Latest per-game tally at this checkpoint, including pre-upgrade trainers."""
     if step is None:
         return {}
-    games = eval_games(branch)
+    frames = [jsonl(path) for path in sorted(glob.glob(os.path.join(RUNS, branch, "eval*games.jsonl")))]
+    frames = [frame for frame in frames if not frame.empty]
+    games = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     if games.empty or not {"step", "suite", "opponent", "result", "game"} <= set(games):
         return {}
     games = games[games["step"] == step]
+    if "time" in games:
+        games = games.sort_values("time")
     if games.empty:
         return {}
     last = games.iloc[-1]
     games = games[(games["suite"] == last["suite"])
                   & (games["opponent"] == last["opponent"])]
+    if "seed" in games and pd.notna(last.get("seed")):
+        # Retries at one checkpoint use fresh seed pairs. Never mix their results.
+        attempt = games["seed"] - (games["game"] - 1) // 2
+        games = games[attempt == last["seed"] - (last["game"] - 1) // 2]
     games = games.drop_duplicates("game", keep="last")
     result = games["result"].fillna("").astype(str)
     return dict(suite=str(last["suite"]), opponent=str(last["opponent"]).upper(),
