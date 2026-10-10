@@ -13,6 +13,8 @@ func ck(ok: bool, message: String) -> void:
 func _initialize() -> void:
 	_frame_boundaries()
 	_recorded_match()
+	_dense_checkpoints()
+	_recorded_undo()
 	if "--bench" in OS.get_cmdline_user_args():
 		_bench()
 	for message in fails:
@@ -91,6 +93,69 @@ func _recorded_match() -> void:
 		ck(StateCodec.encode_rules(fast.resolver) == StateCodec.encode_rules(from_start.resolver),
 				"seek to %d changed the match rules" % target)
 		ck(fast.index == target, "seek stopped at the wrong action")
+
+func _dense_checkpoints() -> void:
+	var map := MapData.blank_arena(149, 119)
+	for owner in 2:
+		for i in 100:
+			map.set_spawn(Vector2i(3 + i % 20 * 3, 3 + i / 20 * 3 + owner * 60), "light_infantry", owner)
+	var state := map.build_state(9603)
+	state.turns.round_order.assign([0, 1])
+	state.turns.active_index = 0
+	var resolver := GameActionResolver.new(state)
+	resolver.fog_enabled = false
+	var recorder := ReplayRecorder.new()
+	recorder.begin(state, resolver)
+	resolver.replay_recorder = recorder
+	for unit: UnitInstance in state.all_units():
+		if unit.owner != 0: continue
+		for offset in [Vector2i.RIGHT, Vector2i.LEFT]:
+			ck(resolver.resolve(MoveIntent.new(unit.id, unit.coord + offset)).ok, "large-map recording move")
+	resolver.resolve(EndTurnIntent.new(0))
+	var data := recorder.to_dict()
+	# Exercise the real disk representation, including packed checkpoint strings.
+	data = JSON.parse_string(JSON.stringify(data))
+	var plain := data.duplicate(true)
+	for step: Dictionary in plain.steps: step.erase("k")
+	var fast := ReplayPlayer.new(data)
+	var reference := ReplayPlayer.new(plain)
+	for target in [0, 1, 47, 48, 49, 199, 200, 201, 80]:
+		fast.seek(target)
+		reference.seek(target)
+		ck(TS.digest(fast.state) == TS.digest(reference.state), "dense checkpoint preserves large-map state at %d" % target)
+		ck(fast.last_seek_actions < ReplayCheckpoint.ACTION_INTERVAL, "seek work is bounded at %d" % target)
+		ck(not fast.resolver.track_undo_history, "undo-free replay avoids copying an army for every action")
+	var fx := ReplayCheckpoint.effects(state)
+	fx.apply([{"fx": "debris", "at": Vector2i(8, 8), "cells": [Vector2i(8, 8)]}])
+	var packed := ReplayCheckpoint.pack(state, resolver, fx, false)
+	var unpacked := ReplayCheckpoint.unpack(packed)
+	ck(not fx.floor_damage.is_empty() and unpacked.fx == fx.to_dict(), "checkpoint preserves permanent floor damage and decals")
+
+func _recorded_undo() -> void:
+	var map := MapData.blank_arena(24, 20)
+	map.set_spawn(Vector2i(2, 2), "light_infantry", 0)
+	map.set_spawn(Vector2i(21, 17), "engineer", 1)
+	var state := map.build_state(9604)
+	state.turns.round_order.assign([0, 1])
+	state.turns.active_index = 0
+	var resolver := GameActionResolver.new(state)
+	var recorder := ReplayRecorder.new()
+	recorder.begin(state, resolver)
+	resolver.replay_recorder = recorder
+	var unit: UnitInstance = state.all_units()[0]
+	resolver.resolve(MoveIntent.new(unit.id, Vector2i(3, 2)))
+	# A mid-turn checkpoint cannot restore the undo stack: the viewer must skip it.
+	recorder.steps[0]["k"] = ReplayCheckpoint.pack(state, resolver, ReplayCheckpoint.effects(state), true)
+	resolver.resolve(UndoIntent.new(0))
+	resolver.resolve(RedoIntent.new(0))
+	resolver.resolve(EndTurnIntent.new(0))
+	ck(recorder.steps.size() == 4, "offline undo and redo are recorded")
+	var data := recorder.to_dict()
+	var replay := ReplayPlayer.new(data)
+	for target in [4, 2, 3, 1, 4]:
+		replay.seek(target)
+		ck(replay.state.dice.fallback_rolls == 0, "undo replay consumes only recorded dice")
+		ck(replay.state.get_unit(unit.id).coord == (Vector2i(2, 2) if target == 2 else Vector2i(3, 2)), "undo/redo survives seeking at %d" % target)
 
 func _bench() -> void:
 	var steps: Array = []

@@ -27,13 +27,31 @@ const KIND_REPLAY := "replay"
 
 static func write(path: String, data: Dictionary) -> bool:
 	DirAccess.make_dir_recursive_absolute(path.get_base_dir())
-	var f := FileAccess.open_compressed(path, FileAccess.WRITE, COMPRESSION)
+	var temporary := "%s.%d-%d.tmp" % [path, OS.get_process_id(), Time.get_ticks_usec()]
+	var f := FileAccess.open_compressed(temporary, FileAccess.WRITE, COMPRESSION)
 	if f == null:
 		return false
-	f.store_string(JSON.stringify(data))
+	var contents := JSON.stringify(data)
+	f.store_string(contents)
+	f.flush()
+	var ok := f.get_error() == OK
 	f.close()
+	# Compressed streams can report a full disk only when their final chunk closes.
+	# Verify the temporary stream before replacing an existing replay/save.
+	var check := FileAccess.open_compressed(temporary, FileAccess.READ, COMPRESSION) if ok else null
+	ok = check != null and check.get_as_text() == contents
+	if check != null:
+		check.close()
+	if not ok or DirAccess.rename_absolute(temporary, path) != OK:
+		DirAccess.remove_absolute(temporary)
+		return false
 	_write_note(path, describe(data))
 	return true
+
+## Viewing an old replay upgrades it once; save-game reads remain unchanged.
+static func read_replay(path: String) -> Dictionary:
+	var data := read(path)
+	return ReplayMigration.upgrade(data, path)
 
 ## Подпись файла для списков меню — из маленького соседнего файла «<путь>.note».
 ##

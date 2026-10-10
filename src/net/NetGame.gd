@@ -152,6 +152,7 @@ func announce_initiative() -> void:
 	if recorder != null:
 		recorder.opening = msg["r"].duplicate()
 		recorder.opening_processed = true
+		recorder.observe_opening(opening_civilians)
 	state.dice.record_enabled = false
 	outgoing.emit(msg)
 	initiative_synced.emit()
@@ -179,7 +180,7 @@ func _host_resolve_and_send(intent: Intent) -> void:
 	state.dice.record_enabled = false
 	if result.ok:
 		if recorder != null:
-			recorder.on_resolved(intent, rolls)
+			recorder.on_resolved(intent, rolls, result)
 		# Подпись доски ПОСЛЕ действия (batch 14): гость сверит с ней свою.
 		outgoing.emit({"k": K_ACTION, "i": IntentCodec.encode(intent), "r": rolls,
 			"h": state.digest_hash()})
