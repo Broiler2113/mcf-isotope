@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://r5iap8gwdb6f"
-path="res://.godot/imported/gas.png-4366e9c9db001804e86d2e13b0d4dcda.ctex"
+uid="uid://ck2mbgn00t7jg"
+path="res://.godot/imported/gas_autotile.png-e46bb99c11bbb999d7d22f3e94d8702e.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://textures/effects/gas/gas.png"
-dest_files=["res://.godot/imported/gas.png-4366e9c9db001804e86d2e13b0d4dcda.ctex"]
+source_file="res://textures/effects/gas/gas_autotile.png"
+dest_files=["res://.godot/imported/gas_autotile.png-e46bb99c11bbb999d7d22f3e94d8702e.ctex"]
 
 [params]
 
@@ -31,10 +31,10 @@ process/channel_remap/red=0
 process/channel_remap/green=1
 process/channel_remap/blue=2
 process/channel_remap/alpha=3
-process/fix_alpha_border=true
+process/fix_alpha_border=false
 process/premult_alpha=false
 process/normal_map_invert_y=false
 process/hdr_as_srgb=false
 process/hdr_clamp_exposure=false
-process/size_limit=128
+process/size_limit=0
 detect_3d/compress_to=1

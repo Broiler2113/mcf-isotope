@@ -207,8 +207,8 @@ func _gas() -> void:
 	var right := Vector2i(int(cl["x"]) + int(cl["w"]) + 1, int(cl["y"]))
 	if state.grid.in_bounds(left) and state.grid.in_bounds(right):
 		ck(resolver.los_blocked(left, right), "a line THROUGH the gas is blocked")
-		ck(not resolver.los_blocked(inside, inside + Vector2i(1, 0)),
-				"but two neighbours inside it still see each other (endpoints are not tested)")
+		ck(resolver.los_blocked(inside, inside + Vector2i(1, 0)),
+				"gas also obscures neighbouring endpoints inside the cloud")
 		# Обзор (туман войны, развед мин) перекрывается газом так же, как стеной —
 		# _vision_blocked читал только стену и пропускал газ (0.9.5).
 		ck(resolver._vision_blocked(left, right), "gas blocks vision/fog, not only the firing line")
