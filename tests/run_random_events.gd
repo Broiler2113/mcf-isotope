@@ -209,6 +209,27 @@ func _gas() -> void:
 		ck(resolver.los_blocked(left, right), "a line THROUGH the gas is blocked")
 		ck(not resolver.los_blocked(inside, inside + Vector2i(1, 0)),
 				"but two neighbours inside it still see each other (endpoints are not tested)")
+		# Обзор (туман войны, развед мин) перекрывается газом так же, как стеной —
+		# _vision_blocked читал только стену и пропускал газ (0.9.5).
+		ck(resolver._vision_blocked(left, right), "gas blocks vision/fog, not only the firing line")
+	# Exercise the actual team-visibility cache as a cloud arrives and dissipates.
+	var arena := MapData.blank_arena(12, 12)
+	arena.set_spawn(Vector2i(2, 5), "light_infantry", MCF.Owner.PLAYER_1)
+	arena.set_spawn(Vector2i(8, 5), "light_infantry", MCF.Owner.PLAYER_2)
+	var fog_state := arena.build_state(61)
+	var fog_resolver := GameActionResolver.new(fog_state)
+	fog_resolver.fog_mode = MCF.Fog.STANDARD
+	var target := Vector2i(8, 5)
+	ck(fog_resolver.team_visible_coords(MCF.Owner.PLAYER_1).has(target),
+			"a soldier across an empty arena starts visible")
+	fog_resolver.random_events.add_cloud(5, 4, 2, 3, 2)
+	fog_resolver._sync_gas()
+	ck(not fog_resolver.team_visible_coords(MCF.Owner.PLAYER_1).has(target),
+			"a fresh gas cloud hides the soldier behind it")
+	fog_resolver.random_events.clouds.clear()
+	fog_resolver._sync_gas()
+	ck(fog_resolver.team_visible_coords(MCF.Owner.PLAYER_1).has(target),
+			"visibility returns when the cloud clears")
 	# Газ травит: боец, поставленный в облако, рискует каждым раундом. По шести зёрнам
 	# кто-нибудь да задохнётся — иначе облако было бы безобидным.
 	var choked := 0

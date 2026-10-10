@@ -2578,9 +2578,13 @@ func bru_cells_connected(cells: Array) -> bool:
 ## Ломать может шахтёр (стены/стёкла/ЛДФ) и инженер (свои постройки, сетка).
 const BREAKABLE := [
 	MCF.FEATURE_WALL, MCF.FEATURE_SOIL, MCF.FEATURE_GLASS, MCF.FEATURE_AIRLOCK, MCF.FEATURE_LDF,
+	MCF.FEATURE_WOOD_WALL, MCF.FEATURE_ARMOR_WALL, MCF.FEATURE_ARMOR_GLASS,
 	MCF.FEATURE_CORPSE_WALL, MCF.FEATURE_DOT, MCF.FEATURE_DOT_OPEN,
 	MCF.FEATURE_SANDBAG_WALL, MCF.FEATURE_HEDGEHOG_SANDBAGS, MCF.FEATURE_HEDGEHOG,
 ]
+
+func _is_breakable_fortification(cell: GridCell) -> bool:
+	return BREAKABLE.has(cell.feature_id) or (cell.feature_id == "" and cell.is_wall())
 
 ## Есть ли в соседней клетке что-то, что этот боец может снести (для ИИ и подсветки).
 func can_break_cell(actor: UnitInstance, coord: Vector2i) -> bool:
@@ -2592,10 +2596,7 @@ func can_break_cell(actor: UnitInstance, coord: Vector2i) -> bool:
 	if not state.grid.in_bounds(coord) or Combat.distance(actor.coord, coord) != 1:
 		return false
 	var cell := state.grid.cell(coord)
-	# Броневую плиту киркой не взять (веха 14.1): её берёт только прямой взрыв.
-	if cell.feature_id == MCF.FEATURE_ARMOR_WALL:
-		return false
-	return BREAKABLE.has(cell.feature_id) or (cell.feature_id == "" and cell.is_wall())
+	return _is_breakable_fortification(cell)
 
 func _resolve_break(intent: BreakIntent) -> ActionResult:
 	var actor := state.get_unit(intent.actor_id)
@@ -2612,9 +2613,7 @@ func _resolve_break(intent: BreakIntent) -> ActionResult:
 	if not state.grid.in_bounds(intent.target) or Combat.distance(actor.coord, intent.target) != 1:
 		return ActionResult.fail("Can only demolish in an adjacent cell")
 	var cell := state.grid.cell(intent.target)
-	var breakable: bool = BREAKABLE.has(cell.feature_id) \
-			or (cell.feature_id == "" and cell.is_wall())
-	if not breakable:
+	if not _is_breakable_fortification(cell):
 		return ActionResult.fail("Nothing to demolish")
 	if actor.remaining_ap < MCF.BREAK_COST:
 		return ActionResult.fail("Need %d AP" % MCF.BREAK_COST)
@@ -3318,7 +3317,7 @@ func breakable_cells(actor: UnitInstance) -> Array:
 		return out
 	for n in state.grid.neighbors(actor.coord):
 		var cell := state.grid.cell(n)
-		if BREAKABLE.has(cell.feature_id) or (cell.feature_id == "" and cell.is_wall()):
+		if _is_breakable_fortification(cell):
 			out.append(n)
 	return out
 
@@ -3474,7 +3473,7 @@ func _vision_blocked(a: Vector2i, b: Vector2i, viewer: int = -1) -> bool:
 		# стоит здесь дёшево: до него доходят только клетки, уже опознанные как стена.
 		# Живые обзор не перекрывают, машины — тоже, КРОМЕ вражеского танка: его корпус
 		# закрывает обзор противнику (не своим). Стена и закрытый шлюз — GridCell.blocks_sight().
-		if cell.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(cell.feature_id):
+		if cell.gas or (cell.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(cell.feature_id)):
 			return true
 		if not tanks.is_empty() and tanks.has(cy * grid.width + cx):
 			return true

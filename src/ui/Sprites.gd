@@ -68,6 +68,9 @@ const MANIFEST := [
 	["Combat decoration (cosmetic only, never affects the rules)", [
 		"glass_shard", "shell_casing", "blood_pool", "blood_splatter",
 	]],
+	["Event effect art (the gas rules are separate from its texture)", [
+		"gas",
+	]],
 	["Terrain features (one per object on a tile)", [
 		"drone_station", "sandbags", "hedgehog", "dirt_pile", "trench",
 		"wall", "glass", "ldf", "corpse_wall", "door", "door_open",
@@ -378,7 +381,7 @@ static func _manifest_text() -> String:
 		"  textures/walls/wall_station/wall_station_autotile.png   its 16-tile sheet",
 		"  textures/walls/wall_station/sample.png                  the marked-up template",
 		"",
-		"Sections: floors, walls, doors, features, furniture, decals.",
+		"Sections: floors, walls, doors, features, furniture, decals, effects.",
 		"Sort yours the same way or drop files straight into user://textures -- both work.",
 		"",
 		"== sample.png ==",

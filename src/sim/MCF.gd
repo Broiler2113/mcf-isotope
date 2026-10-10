@@ -214,9 +214,8 @@ const FEATURE_SANDBAG_WALL := "sandbag_wall"
 const FEATURE_HEDGEHOG_SANDBAGS := "hedgehog_sandbags"
 
 ## БРОНИРОВАННАЯ СТЕНА. Снаружи — обычная стена: те же 2 м, так же держит движение,
-## обзор и линию огня. Разница в том, ЧЕМ её берут: ничем, кроме ПРЯМОГО ВЗРЫВА в неё.
-## Кирка шахтёра, огонь, гусеница танка, осколки соседнего разрыва и луч марксмана её
-## не трогают — заряд противотанкиста или снаряд, легший ИМЕННО В НЕЁ, сносит целиком.
+## обзор и линию огня. Её сносят шахтёр/инженер вблизи или прямой взрыв.
+## Огонь, гусеница танка, осколки соседнего разрыва и луч марксмана её не трогают.
 const FEATURE_ARMOR_WALL := "armor_wall"
 ## БРОНИРОВАННОЕ СТЕКЛО. Во всём остальном — обычное стекло (сквозь него видно, сквозь
 ## него стреляют, оно так же выгорает в пожаре); отличается ровно одним: на каждый
@@ -364,11 +363,12 @@ const FLOOR_GRASS := 2
 ## номер вида лежит в сохранённой карте, и перестановка переписала бы все старые карты.
 const FLOOR_LOOKS := ["", "floor_wood", "floor_parquet", "floor_tile", "floor_checker",
 		"floor_carpet_red", "floor_carpet_blue", "floor_lino", "floor_plate", "floor_grate", "floor_solar",
-		"floor_grill"]
+		"floor_grill", "floor_grass"]
 const FLOOR_LOOK_NAMES := ["Floor", "Wood floor", "Parquet", "Tiles", "Checker tiles", "Red carpet",
-		"Blue carpet", "Linoleum", "Steel plate", "Grating", "Solar panels", "Grill walkway"]
+		"Blue carpet", "Linoleum", "Steel plate", "Grating", "Solar panels", "Grill walkway",
+		"Grass"]
 enum Look {DEFAULT, WOOD, PARQUET, TILE, CHECKER, CARPET_RED, CARPET_BLUE, LINO, PLATE, GRATE, SOLAR,
-		GRILL}
+		GRILL, GRASS}
 ## Виды, которые кладутся ПОВЕРХ пола клетки, а не вместо него.
 const FLOOR_OVERLAY_LOOKS := {Look.GRILL: true}
 

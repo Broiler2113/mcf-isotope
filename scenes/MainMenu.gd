@@ -105,7 +105,7 @@ func _ready() -> void:
 	center.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(center)
 
-	# Окно по набору интерфейса (item 23): шапка, вкладки, ряд кнопок справа внизу.
+	# Окно по набору интерфейса (item 23): вкладки и ряд кнопок справа внизу.
 	var panel := PanelContainer.new()
 	panel.custom_minimum_size = Vector2(480, 0)
 	SteamChrome.apply_panel(panel)
@@ -113,7 +113,6 @@ func _ready() -> void:
 	var frame := VBoxContainer.new()
 	frame.add_theme_constant_override("separation", 0)
 	panel.add_child(frame)
-	frame.add_child(SteamChrome.header_bar("MCF Isotope"))
 
 	# Середина окна прокручивается, если оно не влезает по высоте (крупный интерфейс,
 	# item 23): шапка и кнопки внизу всегда на экране.
@@ -150,14 +149,6 @@ func _ready() -> void:
 	title.add_theme_font_size_override("font_size", 44)
 	title_row.add_child(title)
 	_hero.append(title_row)
-
-	var subtitle := Label.new()
-	subtitle.text = "Turn-based tactics"
-	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	subtitle.add_theme_font_size_override("font_size", 16)
-	subtitle.modulate = Color(0.7, 0.72, 0.78)
-	vbox.add_child(subtitle)
-	_hero.append(subtitle)
 
 	var hero_sep := HSeparator.new()
 	vbox.add_child(hero_sep)

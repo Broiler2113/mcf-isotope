@@ -18,7 +18,7 @@ The shipped art is sorted one folder per object, inside a section:
   textures/walls/wall_station/wall_station_autotile.png   its 16-tile sheet
   textures/walls/wall_station/sample.png                  the marked-up template
 
-Sections: floors, walls, doors, features, furniture, decals.
+Sections: floors, walls, doors, features, furniture, decals, effects.
 Sort yours the same way or drop files straight into user://textures -- both work.
 
 == sample.png ==
@@ -84,6 +84,9 @@ Samples are never loaded into the game -- a file called sample is skipped.
   shell_casing.png
   blood_pool.png
   blood_splatter.png
+
+-- Event effect art (the gas rules are separate from its texture) --
+  gas.png
 
 -- Terrain features (one per object on a tile) --
   drone_station.png
