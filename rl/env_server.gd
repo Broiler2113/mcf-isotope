@@ -432,7 +432,7 @@ func _reset(req: Dictionary) -> Dictionary:
 		resolver.replay_recorder = recorder
 		recorder.capture_opening()
 	else:
-		resolver.play_civilian_slots()
+		resolver.open_match()
 	brains.clear()
 	if opponent >= 0:
 		for pid: int in state.roster.player_ids():

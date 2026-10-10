@@ -1383,7 +1383,7 @@ replay it through the ordinary dice pipeline (§18.5):
 
 ## 14a. Random Events (0.9.4)
 
-Three events, all **telegraphed one round before they land**. The host turns them on in the
+Three events, all **announced at round opening with one player turn to react**. The host turns them on in the
 lobby and sets the interval, the mandatory flag and a weight per event; everything about an
 event — whether it happens, which one, where it lands, who it kills — comes out of
 `DiceService`, so host and client roll the same stream and resolve the same event in the
@@ -1409,7 +1409,9 @@ chosen edge across the **whole map depth** (it used to stop after the segment's 
 breaks once it has `ARMY_UNIT_CAP` cells. On a station, where the first twenty cells off the
 edge are vacuum, the old search found nothing and the event always logged "nowhere to land".
 
-**Telegraph, then land.** A handoff announces an event and its zone. The event resolves
+**Telegraph, then land.** Events are rolled and announced at the beginning of a round,
+including the first round. The configured interval counts rounds; ordinary player
+handoffs do not advance it. The event resolves
 when the next player ends their turn, before AP refresh, even if the round is not over.
 The warning displays **1 TURN**. Loading an older pending warning uses the same deadline.
 Parameters are rolled at announcement, per-cell outcomes at landing; both orders are fixed.

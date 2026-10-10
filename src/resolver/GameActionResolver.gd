@@ -6328,6 +6328,13 @@ func capturable_target_ids(actor: UnitInstance) -> Array:
 	return out
 
 # --- Передача хода (§3.3) ---
+## Opening is shared by local games, networking, training and replay capture.
+## Announce before the first player can act, after automatic neutral slots finish.
+func open_match() -> ActionResult:
+	var out := play_civilian_slots()
+	_maybe_random_event(out)
+	return out
+
 ## Отыграть слот мирных, если сейчас их очередь по инициативе (#42, #53).
 ## Контроллера у нейтральной стороны нет: свой ход она проводит здесь и сразу
 ## передаёт дальше, поэтому наружу активным игроком всегда виден P1 или P2.
@@ -6400,10 +6407,10 @@ func _resolve_end_turn(intent: EndTurnIntent = null) -> ActionResult:
 			and intent.requester != state.active_player():
 		return ActionResult.fail("Not your turn")
 	var prev := state.active_player()
+	var previous_round := state.turns.round_number
 	_free_orphaned_captives()
-	# Объявленное событие падает в КОНЦЕ раунда (0.9.4) — то есть в ту самую передачу хода,
-	# которой раунд кончается, и ДО того, как end_turn() начнёт новый: иначе «конец раунда
-	# N» пришёлся бы на уже восстановленные ОД и раунд N + 1.
+	# Pending warnings land at this player end-turn; standing gas ages only
+	# when the handoff also closes a round, before AP refresh.
 	var round_res := ActionResult.new()
 	round_res.ok = true
 	land_random_events(round_res, _handoff_closes_round())
@@ -6445,9 +6452,10 @@ func _resolve_end_turn(intent: EndTurnIntent = null) -> ActionResult:
 	out.deaths.append_array(fire_res.deaths)
 	out.fire_deaths.append_array(fire_res.fire_deaths)
 	out.fx.append_array(fire_res.fx)
-	# Случайное событие на новый ход (item 61). Выключено по умолчанию — тогда ни одного
-	# кубика не бросается и поток случайности старых партий цел.
-	_maybe_random_event(out)
+	# A new round can also begin inside the automatic neutral slots.
+	# Ordinary player handoffs must neither announce nor advance the event interval.
+	if state.turns.round_number > previous_round:
+		_maybe_random_event(out)
 	return out
 
 ## Кончится ли раунд ЭТОЙ передачей хода (0.9.4). Прямо — если после активного слота
@@ -6515,11 +6523,14 @@ func _rand_wide(n: int) -> int:
 		v = v * 6 + (state.dice.roll_d6() - 1)
 	return v % n
 
-## ОБЪЯВЛЕНИЕ. Зовётся в конце каждой передачи хода, как и раньше: «созрело ли», «какое» —
-## всё внутри roll_event через DiceService.
+## Announce only at match opening or the beginning of a new round.
+## Interval/probability and all event parameters use the shared dice stream.
 func _maybe_random_event(res: ActionResult) -> void:
-	if random_events == null:
+	if random_events == null or not random_events.enabled:
 		return
+	if random_events.last_checked_round >= state.turns.round_number:
+		return
+	random_events.last_checked_round = state.turns.round_number
 	var id := random_events.roll_event(state.dice)
 	if id == "":
 		return

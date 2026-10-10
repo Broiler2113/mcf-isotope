@@ -83,9 +83,10 @@ func _rebuild(frame: Dictionary) -> void:
 	index = int(frame.get("at", 0))
 	opening_result = null
 	var open: Array = frame.get("open", [])
-	if not open.is_empty():
+	if bool(frame.get("opening_processed", false)) or not open.is_empty():
 		state.dice.feed_scripted(open)
-		opening_result = resolver.play_civilian_slots()
+		opening_result = resolver.open_match() if bool(frame.get("opening_processed", false)) \
+				else resolver.play_civilian_slots()
 
 ## Ключевой кадр, не позже шага i. Кадр, привязанный к шагу s, снят ПОСЛЕ него,
 ## то есть описывает позицию s+1.
@@ -102,8 +103,11 @@ func _frame_at_or_before(i: int) -> Dictionary:
 			return {"at": s + 1, "state": kf.get("state", {}),
 					"rules": kf.get("rules", {}), "open": []}
 		s -= 1
-	return {"at": 0, "state": data.get("start", {}),
+	var first := {"at": 0, "state": data.get("start", {}),
 			"rules": data.get("rules", {}), "open": data.get("opening", [])}
+	if bool(data.get("opening_processed", false)):
+		first["opening_processed"] = true
+	return first
 
 ## Подпись текущей позиции для полосы управления.
 func position_text() -> String:
