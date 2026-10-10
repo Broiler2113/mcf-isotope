@@ -339,6 +339,10 @@ func _init(p_coord: Vector2i) -> void:
 func is_wall() -> bool:
 	return cover_height >= MCF.WALL_HEIGHT
 
+## Gas occupies open terrain, never solid walls, windows, soil or vacuum.
+func can_hold_gas() -> bool:
+	return not is_space and cover_height < MCF.WALL_HEIGHT and not MCF.is_glass(feature_id)
+
 ## Перекрывает ли клетка ОБЗОР (batch 13 #1): стена в полный рост — в том числе
 ## закрытый шлюз, у которого высота стенная, — кроме стекла: сквозь него видно (#29).
 ## Живые юниты, трупы и корпуса машин лучу не мешают.

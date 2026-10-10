@@ -1432,9 +1432,14 @@ of each round every living unit standing in a cloud rolls a d6 and **dies on 1â€
 inside vehicles and borg pilots are exempt (sealed hull). Gas lives on the board as
 `GridCell.gas`, which `blocks_sight()` reports like a wall â€” that one property is what puts
 gas into the sight sweep, the fog of war, the blocker tables and `los_blocked` by the same
-route walls take, so no check can forget about it. Endpoints are not tested, so two units
-on the edge of a cloud still see each other; a line **through** gas is blocked. Gas is
+route walls take. Gas blocks sight **into, out of, and through** a cloud, including
+the observer and target cells; a unit still knows its own position. Allied units remain
+visible by team communication. Gas also blocks aimed fire with fog disabled, including
+marksman and flamethrower targeting. Walls, windows (including armored glass), soil and
+vacuum cannot contain gas; terrain changes update the footprint immediately. Gas is
 derived state: it is never saved, it is rebuilt from the cloud list on load (`_sync_gas`).
+Its texture joins adjacent gas cells, fades at exposed edges, and overlapping clouds
+are drawn once per cell. The supplied autotile atlas is baked ahead of play.
 
 **Independent army.** Owners `200..299` (`MCF.INDEPENDENT_BASE`, "Raiders I"). The army
 lands on a rolled edge segment, its strength matched to the **average living player army by

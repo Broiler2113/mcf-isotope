@@ -322,7 +322,7 @@ func _fire_ease(shooter: UnitInstance, from: Vector2i, target: UnitInstance,
 	if target != null and _r.trench_protected(from, target, marksman):
 		return -1.0
 	# Стены и корпуса машин линию рвут; людей игнорируем — их разбирает _lane_conflicts.
-	if not marksman and _r.los_blocked(from, to_coord, true, true):
+	if _r.gas_blocks_line(from, to_coord) or (not marksman and _r.los_blocked(from, to_coord, true, true)):
 		return -1.0
 	# Выстрел, который заведомо парируется (щитоносец издалека, #69) — не выстрел.
 	if target != null and _r.shot_is_futile(shooter, target):
@@ -383,6 +383,8 @@ func _build_exposure() -> void:
 	var gw := grid.width
 	var gh := grid.height
 	for e: UnitInstance in _threats:
+		if grid.cell(e.coord).gas:
+			continue
 		var marksman := e.stats.special_ability_id == MCF.ABILITY_MARKSMAN
 		var rng: float = e.fire_range()
 		for dir: Vector2i in Grid.N8:
@@ -395,6 +397,8 @@ func _build_exposure() -> void:
 				if not marksman and Combat.hit_number(d, rng) >= 7:
 					break  # дальше по лучу только дальше — попадания уже не будет
 				var c := Vector2i(x, y)
+				if grid.cell_fast(x, y).gas:
+					break
 				_exposure[c] = int(_exposure.get(c, 0)) + 1
 				if not marksman:
 					# Преграда НА этой клетке рвёт луч для всех следующих: для них она

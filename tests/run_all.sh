@@ -22,8 +22,8 @@ for script in tests/check_scripts.gd tests/run_codec.gd tests/run_headless.gd \
               tests/run_ui_drones.gd tests/run_rl_tactics.gd tests/run_match_analysis.gd tests/run_soil_rulers.gd tests/run_batch_zones.gd tests/run_borg_corpses.gd tests/run_mp_perf.gd \
               tests/run_playtest20.gd tests/run_playtest20_screen.gd tests/run_editor.gd \
               tests/run_furniture.gd tests/run_batch092.gd tests/run_batch093.gd \
-              tests/run_random_events.gd tests/run_demolish_materials.gd \
-              tests/run_outer_grass.gd tests/run_batch094.gd tests/run_replay_seek.gd \
+              tests/run_random_events.gd tests/run_gas_visibility.gd tests/run_demolish_materials.gd \
+              tests/run_outer_grass.gd tests/run_ground_backdrop.gd tests/run_batch094.gd tests/run_replay_seek.gd \
               tests/run_decal_sync.gd tests/run_match_lifetime.gd tests/run_rl_learning.gd \
               tests/run_rl_giant_defense.gd; do
   echo "=== $script ==="

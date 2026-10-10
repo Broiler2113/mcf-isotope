@@ -1622,6 +1622,8 @@ func can_laser_cell(shooter: UnitInstance, cell: Vector2i) -> String:
 		return "Pick a direction to fire in"
 	if shooter.remaining_ap < MCF.MARKSMAN_AP_COST:
 		return "Laser needs %d AP" % MCF.MARKSMAN_AP_COST
+	if gas_blocks_line(shooter.coord, cell):
+		return "Gas blocks line of sight"
 	return ""
 
 ## Клетки, через которые пройдёт луч, если целиться в aim (для предпросмотра в UI).
@@ -3444,6 +3446,8 @@ func sight_of(unit: UnitInstance) -> int:
 func _vision_blocked(a: Vector2i, b: Vector2i, viewer: int = -1) -> bool:
 	if _line_off_board(a, b):
 		return true
+	if a != b and (state.grid.cell_fast(a.x, a.y).gas or state.grid.cell_fast(b.x, b.y).gas):
+		return true
 	var sig := _tank_sig(viewer)
 	var tanks: PackedInt32Array = _tank_sig_cells[sig] if sig != 0 else PackedInt32Array()
 	var dx: int = absi(b.x - a.x)
@@ -3556,10 +3560,12 @@ static var _blockers: PackedByteArray = PackedByteArray()
 ## Та же таблица, транспонированная (x·высота + y): в ней сплошняком лежат столбцы сетки,
 ## по которым обход ищет стены октантов |dx| ≥ |dy| (_sweep). Правится вместе с основной.
 static var _blockers_t: PackedByteArray = PackedByteArray()
+static var _sight_gas: Dictionary = {}
 
 ## Пересобрать таблицу блокировщиков по текущему рельефу. Условие — в точности то,
 ## что проверяет луч: стена (высота 2), но не стекло; корпус машины луч не рвёт.
 static func _rebuild_blockers(grid: Grid) -> void:
+	_sight_gas.clear()
 	var gw := grid.width
 	var gh := grid.height
 	_blockers.resize(gw * gh)
@@ -3572,6 +3578,8 @@ static func _rebuild_blockers(grid: Grid) -> void:
 			var cell := grid.cell_fast(x, y)
 			# Ровно то же условие, что у поправки по журналу (_patch_blockers) — одним
 			# вопросом к клетке, чтобы газ (0.9.4) не выпал из холодной сборки таблицы.
+			if cell.gas:
+				_sight_gas[row + x] = true
 			if cell.blocks_sight():
 				_blockers[row + x] = 1
 				_blockers_t[x * gh + y] = 1
@@ -3625,6 +3633,11 @@ static func _patch_blockers(grid: Grid, from_version: int) -> void:
 	while i < changes.size():
 		var c := grid.cell(Vector2i(changes[i], changes[i + 1]))
 		if c != null:
+			var idx := c.coord.y * gw + c.coord.x
+			if c.gas:
+				_sight_gas[idx] = true
+			else:
+				_sight_gas.erase(idx)
 			var b := 1 if c.blocks_sight() else 0
 			_blockers[c.coord.y * gw + c.coord.x] = b
 			_blockers_t[c.coord.x * grid.height + c.coord.y] = b
@@ -3751,9 +3764,26 @@ func _seen_from(coord: Vector2i, r: int, viewer: int = -1) -> PackedInt32Array:
 	var same: Variant = _reuse_under(key, viewer)
 	if same != null:
 		return same
+	var origin := coord.y * gw + coord.x
+	if grid.cell_fast(coord.x, coord.y).gas:
+		var own := PackedInt32Array([origin])
+		_store_seen(key, own, own)
+		return own
 	var masks := _tank_masks_of(sig, gh)
 	var res := _sweep(coord.x, coord.y, r, masks[0], gw, gh, masks[1])
-	_store_seen(key, res[0], res[1])
+	# A wall face is visible; a gas-filled cell conceals its occupants. Keep the
+	# sweep and its incremental invalidation, filtering only while gas exists.
+	if not _sight_gas.is_empty():
+		var clear := PackedInt32Array()
+		var cells := grid.cells_flat()
+		for i: int in res[0]:
+			if not cells[i].gas:
+				clear.append(i)
+		res[0] = clear
+	# Gas arriving on the observer must invalidate an otherwise unchanged view.
+	var sens: PackedInt32Array = res[1]
+	sens.insert(sens.bsearch(origin), origin)
+	_store_seen(key, res[0], sens)
 	return res[0]
 
 ## Вражеский танк переехал, сменил хозяина или сгорел — номер набора танков у стороны
@@ -4392,6 +4422,11 @@ func _update_breached(civ: UnitInstance, idx: Dictionary = {}) -> void:
 ## фронт пробуждения; его разбирает _wake_and_group на верхнем уровне resolve(). Зовётся
 ## из путей записи резолвера (_ignite, снос рельефа взрывом, стройка, окоп, открытие шлюза).
 func notify_cell_changed(coord: Vector2i) -> void:
+	# Construction/destruction inside a cloud immediately updates its footprint.
+	if random_events != null and not random_events.clouds.is_empty():
+		var changed := state.grid.cell(coord)
+		if changed != null:
+			changed.gas = changed.can_hold_gas() and random_events.cloud_at(coord)
 	for dy in range(-1, 2):
 		for dx in range(-1, 2):
 			if dx == 0 and dy == 0:
@@ -6608,6 +6643,7 @@ func _gas_tick(res: ActionResult) -> void:
 	var ids: Array = []
 	for u: UnitInstance in state.all_units():
 		if u.is_alive() and u.aboard_vehicle_id == -1 and u.borg_id == -1 \
+				and state.grid.cell(u.coord) != null and state.grid.cell(u.coord).can_hold_gas() \
 				and random_events.cloud_at(u.coord):
 			ids.append(u.id)
 	ids.sort()
@@ -6637,7 +6673,8 @@ func _sync_gas() -> void:
 	var grid := state.grid
 	for y in grid.height:
 		for x in grid.width:
-			grid.cell_fast(x, y).gas = random_events.cloud_at(Vector2i(x, y))
+			var cell := grid.cell_fast(x, y)
+			cell.gas = cell.can_hold_gas() and random_events.cloud_at(Vector2i(x, y))
 
 ## Независимая армия (0.9.4): у края карты высаживается ничья сила, враждебная всем.
 ## Сила — по средней армии ЖИВЫХ игроков (по цене закупки); слот встаёт в случайное место
@@ -6754,6 +6791,31 @@ func _army_spawn_cells(p: Dictionary) -> Array[Vector2i]:
 			out.append(c)
 	return out
 
+## Gas obscures aim even for weapons that can penetrate solid cover. Include
+## both endpoints and support arbitrary sight directions without allocating a ray.
+func gas_blocks_line(a: Vector2i, b: Vector2i) -> bool:
+	if GridCell.gassed <= 0 or a == b or _line_off_board(a, b):
+		return false
+	var dx := absi(b.x - a.x)
+	var dy := absi(b.y - a.y)
+	var sx := 1 if a.x < b.x else -1
+	var sy := 1 if a.y < b.y else -1
+	var err := dx - dy
+	var c := a
+	while true:
+		if state.grid.cell_fast(c.x, c.y).gas:
+			return true
+		if c == b:
+			return false
+		var e2 := 2 * err
+		if e2 > -dy:
+			err -= dy
+			c.x += sx
+		if e2 < dx:
+			err += dx
+			c.y += sy
+	return false
+
 # --- Запросы легальности (для подсветки целей в UI) ---
 ## allow_embrasure=false — стрелок не может работать через амбразуру ДОТа: заряд
 ## противотанкиста в узкую щель не пролезает (#86).
@@ -6788,8 +6850,11 @@ func los_blocked(from_coord: Vector2i, to_coord: Vector2i, allow_embrasure: bool
 	var d := 1
 	# Газ (0.9.4) держит и взгляд, и выстрел — как стена. Спрашивается он ТОЛЬКО когда газ
 	# на карте вообще есть: эта функция зовётся десятки тысяч раз за один расчёт плана ИИ.
-	# Концы линии, как и прежде, не проверяются: боец на самом краю облака видит и виден.
+	# Gas also obscures either endpoint, unlike a wall face or a firing embrasure.
 	var any_gas := GridCell.gassed > 0
+	if any_gas and (grid.cell_fast(from_coord.x, from_coord.y).gas \
+			or grid.cell_fast(to_coord.x, to_coord.y).gas):
+		return true
 	while x != to_coord.x or y != to_coord.y:
 		var cell := grid.cell_fast(x, y)
 		if any_gas and cell.gas:
@@ -6978,6 +7043,8 @@ func fire_cover(viewer: int, hostile: bool) -> PackedFloat32Array:
 	var out := PackedFloat32Array()
 	out.resize(w * grid.height)
 	for u: UnitInstance in shooters:
+		if grid.cell(u.coord).gas:
+			continue
 		var ability: String = u.stats.special_ability_id
 		var pierce := ability == MCF.ABILITY_MARKSMAN
 		var sniper := ability == MCF.ABILITY_SNIPER
@@ -6992,7 +7059,7 @@ func fire_cover(viewer: int, hostile: bool) -> PackedFloat32Array:
 				if dist > reach or not grid.in_bounds(c):
 					break
 				var cell := grid.cell_fast(c.x, c.y)
-				if not pierce and (cell.blocks_sight() or cell.vehicle_id != -1):
+				if cell.gas or (not pierce and (cell.blocks_sight() or cell.vehicle_id != -1)):
 					break
 				var need := 1 if pierce else (Combat.sniper_hit_number(dist) if sniper
 						else Combat.hit_number(dist, u.fire_range()))
@@ -7094,6 +7161,8 @@ func _forecast_unit(u: UnitInstance) -> Array:
 		var max_d := MCF.FLAME_JET_LENGTH if ability == MCF.ABILITY_FLAMETHROWER else 1 << 20
 		var rof := float(maxi(1, u.rate_of_fire()))
 		for from: Vector2i in spots:
+			if grid.cell(from).gas:
+				continue
 			for d: Vector2i in DIR8:
 				var c: Vector2i = from
 				var dist := 0
@@ -7103,7 +7172,7 @@ func _forecast_unit(u: UnitInstance) -> Array:
 					if dist > max_d or not grid.in_bounds(c):
 						break
 					var cell := grid.cell_fast(c.x, c.y)
-					if not pierce and (cell.blocks_sight() or cell.vehicle_id != -1):
+					if cell.gas or (not pierce and (cell.blocks_sight() or cell.vehicle_id != -1)):
 						break
 					var need := 1 if pierce else (Combat.sniper_hit_number(dist) if sniper
 							else Combat.hit_number(dist, u.fire_range()))
@@ -7155,6 +7224,8 @@ func can_shoot(shooter: UnitInstance, target: UnitInstance) -> String:
 	if trench_protected(shooter.coord, target, _fires_flat_beam(shooter)):
 		return _trench_block_reason(shooter)
 
+	if gas_blocks_line(shooter.coord, target.coord):
+		return "Gas blocks line of sight"
 	var dist := Combat.distance(shooter.coord, target.coord)
 	match shooter.stats.special_ability_id:
 		MCF.ABILITY_MARKSMAN:
@@ -7433,6 +7504,8 @@ func can_flame_cell(shooter: UnitInstance, cell: Vector2i) -> String:
 		return "Target not on the firing line"
 	if Combat.distance(shooter.coord, cell) > MCF.FLAME_JET_LENGTH:
 		return "Too far for the flame jet"
+	if gas_blocks_line(shooter.coord, cell):
+		return "Gas blocks line of sight"
 	return ""
 
 ## Пустые клетки пола, по которым огнемётчик может пустить струю (для подсветки в UI).

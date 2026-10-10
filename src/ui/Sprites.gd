@@ -423,6 +423,7 @@ static func _manifest_text() -> String:
 		"== Autotiling walls ==",
 		"Any terrain feature may ship as a 4x4 tile sheet named <feature>_autotile.png",
 		"(wall_autotile.png, glass_autotile.png, wood_wall_autotile.png, ...).",
+		"Gas also accepts gas_autotile.png; see textures/effects/gas/README.md.",
 		"A sheet is 16 tiles and nothing more (128x128 for 32px tiles) -- that is the whole",
 		"format. More 4x4 sheets MAY be stacked below it as variants if you want the surface",
 		"to vary, but one is enough and that is what the game ships.",

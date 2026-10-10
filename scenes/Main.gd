@@ -5789,7 +5789,7 @@ func _draw_random_events(font: Font) -> void:
 	if resolver == null or resolver.random_events == null:
 		return
 	var ev: RandomEvents = resolver.random_events
-	_draw_gas_tiles(0.75, true)
+	_draw_gas_tiles(0.65, true)
 	for cl: Dictionary in ev.clouds:
 		var rect := Rect2(ORIGIN + Vector2(int(cl["x"]), int(cl["y"])) * CELL,
 				Vector2(int(cl["w"]), int(cl["h"])) * CELL)
@@ -5826,16 +5826,13 @@ func _draw_random_events(font: Font) -> void:
 		draw_string(font, rect.position + Vector2(4, 16), label,
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(col.r, col.g, col.b, 0.95))
 
-## Gas is a pixel-art strip of 32x32 variants. Draw only the gassed cells inside the
-## viewport: a cloud can overlap void or soil, which should never show gas. The
-## second, much lighter pass goes in front of soldiers and vehicles.
+## Connected gas tiles fade only at exposed edges, with a lighter pass over units.
+## Cull to the viewport and draw overlapping clouds only once per cell.
 func _draw_gas_tiles(alpha: float, fill: bool) -> void:
 	if resolver == null or resolver.random_events == null or resolver.random_events.clouds.is_empty():
 		return
-	var tex := Sprites.texture_of("gas")
-	var variants := 1
-	if tex != null and tex.get_height() > 0 and tex.get_width() % tex.get_height() == 0:
-		variants = maxi(1, tex.get_width() / tex.get_height())
+	var tex := GasTiles.texture()
+	var drawn := {}
 	for cl: Dictionary in resolver.random_events.clouds:
 		var x0 := maxi(_cull_x0, int(cl["x"]))
 		var x1 := mini(_cull_x1, int(cl["x"]) + int(cl["w"]) - 1)
@@ -5843,15 +5840,13 @@ func _draw_gas_tiles(alpha: float, fill: bool) -> void:
 		var y1 := mini(_cull_y1, int(cl["y"]) + int(cl["h"]) - 1)
 		for y in range(y0, y1 + 1):
 			for x in range(x0, x1 + 1):
-				if not state.grid.in_bounds(Vector2i(x, y)) or not state.grid.cell_fast(x, y).gas:
+				var coord := Vector2i(x, y)
+				if drawn.has(coord) or not GasTiles.at(state.grid, coord):
 					continue
+				drawn[coord] = true
 				var cell_rect := Rect2(ORIGIN + Vector2(x, y) * CELL, Vector2(CELL, CELL))
-				if fill:
-					draw_rect(cell_rect, Color(0.18, 0.25, 0.1, 0.42))
 				if tex != null:
-					var variant := TerrainTiles.variant_of(Vector2i(x, y), variants)
-					var src := Rect2(variant * tex.get_height(), 0,
-							tex.get_height(), tex.get_height())
+					var src := GasTiles.source_rect(tex, coord, GasTiles.mask_at(state.grid, coord))
 					draw_texture_rect_region(tex, cell_rect, src, Color(1, 1, 1, alpha))
 				elif fill:
 					draw_rect(cell_rect, Color(0.55, 0.7, 0.28, 0.36))
@@ -6155,8 +6150,8 @@ func _reposition_hud_grip() -> void:
 ## всем остальным: доска рисуется в _draw() этого узла, и подложить что-то под неё иначе
 ## нельзя. Панораму доски слои забирают долями (Starfield.DEPTH) — отсюда глубина.
 ##
-## Карте без космоса небо не нужно: под бункером звёзд нет, и за краем поля должна быть
-## та же чернота, что и раньше.
+## Карте без космоса небо не нужно. За краем города и поля рисуется земля;
+## если на самой карте есть космос, звёзды остаются видны в этих клетках.
 var _sky: Starfield = null
 
 # --- Земля за краем доски (item 7) ---
@@ -6165,14 +6160,18 @@ var _sky: Starfield = null
 ## обоями из вариантов плитки пола. У города и поля обои целиком травяные, без серых
 ## проплешин. Это чистый фон под доской: ни клеток, ни правил, ходить там негде.
 ##
-## Картой без космоса дело и ограничивается — на станции за бортом звёзды (_build_sky).
+## Город и поле получают траву даже при наличии клеток космоса; на станции за бортом
+## остаются звёзды (_build_sky). Фон не рисуется внутри прямоугольника самой доски.
 const GROUND_TILES := 16        # сторона клочка обоев в клетках
 const GROUND_PATCH_CHANCE := 0.07
 
-var _ground: TextureRect = null
+var _ground: GroundBackdrop = null
 
 func _build_ground() -> void:
-	if state == null or state.grid.cells_flat().any(func(c: GridCell) -> bool: return c.is_space):
+	if state == null:
+		return
+	if state.env not in ["field", "town"] \
+			and state.grid.cells_flat().any(func(c: GridCell) -> bool: return c.is_space):
 		return
 	var tex := _ground_wallpaper()
 	if tex == null:
@@ -6180,12 +6179,8 @@ func _build_ground() -> void:
 	var layer := CanvasLayer.new()
 	layer.layer = -10
 	add_child(layer)
-	_ground = TextureRect.new()
+	_ground = GroundBackdrop.new()
 	_ground.texture = tex
-	_ground.stretch_mode = TextureRect.STRETCH_TILE
-	_ground.texture_repeat = CanvasItem.TEXTURE_REPEAT_ENABLED
-	_ground.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	_ground.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(_ground)
 	_fit_ground()
 
@@ -6245,15 +6240,10 @@ func _ground_patch_name() -> String:
 func _fit_ground() -> void:
 	if _ground == null:
 		return
-	var period := float(GROUND_TILES * CELL) * zoom
-	if period <= 0.0:
-		return
-	var vp := get_viewport_rect().size
-	var at := pan + ORIGIN * zoom
-	var s := zoom * float(CELL) / float(_ground.texture.get_height() / GROUND_TILES)
-	_ground.scale = Vector2(s, s)
-	_ground.position = Vector2(fposmod(at.x, period), fposmod(at.y, period)) - Vector2(period, period)
-	_ground.size = (vp + Vector2(period, period) * 2.0) / s
+	var tile_pixels := float(_ground.texture.get_height()) / GROUND_TILES
+	_ground.fit_view(pan + ORIGIN * zoom, zoom * float(CELL) / tile_pixels,
+			Vector2(state.grid.width, state.grid.height) * tile_pixels,
+			get_viewport_rect().size)
 
 func _build_sky() -> void:
 	if state == null or not state.grid.cells_flat().any(func(c: GridCell) -> bool: return c.is_space):
