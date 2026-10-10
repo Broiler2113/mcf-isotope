@@ -928,7 +928,9 @@ func _replay_loop() -> void:
 			continue
 		await _show_result(replay.play_next())
 		_refresh_replay_bar()
-		if not _replay_playing:
+		# _show_result мог увести узел из дерева (выход из повтора) — тогда таймер ниже
+		# упал бы на get_tree() == null (item 10).
+		if not _replay_playing or not is_inside_tree():
 			break
 		await get_tree().create_timer(REPLAY_STEP_DELAY / _replay_speed).timeout
 	_replay_playing = false
@@ -2938,6 +2940,10 @@ func _on_intent_ready(intent: Intent) -> void:
 ## за считаные кадры, и вместо хода видно только мгновенный итог; с паузой бойцы
 ## заметно ходят ОДИН ЗА ДРУГИМ. Пауза же не даёт кадру «залипнуть» на расчётах.
 func _queue_ai_step(ctrl: PlayerController) -> void:
+	# Выход из партии во время хода ИИ (item 10): узел уже вне дерева, get_tree() вернул
+	# бы null прямо на этом create_timer. Планировать нечего — некому ходить.
+	if not is_inside_tree():
+		return
 	await get_tree().create_timer(AI_STEP_DELAY / GameConfig.ai_speed).timeout
 	# Пауза (item 4) держится здесь, в единственной точке, откуда ИИ вообще получает
 	# ход. Снятие паузы само зовёт _kick_if_ai(), и бой продолжается с того же места.
@@ -3750,6 +3756,11 @@ func _play_dice(events: Array) -> void:
 				await _await_walks()
 			continue
 		await _await_walks()
+		# Выход из партии во время ожидания перехода (item 10): узел ушёл из дерева, и
+		# любой get_tree() ниже (пауза точки AP, таймер стекла) упал бы на null.
+		if not is_inside_tree():
+			_animating = false
+			return
 		if ev.get("kind", "") == "ap":
 			_ap_display[int(ev["unit"])] = int(ev["left"])
 			queue_redraw()
@@ -3794,7 +3805,7 @@ func _play_dice(events: Array) -> void:
 			_hold_visual.get("cells", {}).erase(ev["cell"])
 			_fx.apply(ev["fx"])
 			queue_redraw()
-			if _pace() < 8.0 and not _fast_playback:
+			if _pace() < 8.0 and not _fast_playback and is_inside_tree():
 				await get_tree().create_timer(GLASS_BREAK_PAUSE / _pace()).timeout
 	await _await_walks()
 	_walk_cells.clear()
@@ -4665,13 +4676,17 @@ func _lod_build_terrain() -> void:
 	for c: GridCell in grid.cells_flat():
 		var u: int
 		var h := c.cover_height
+		var grass := c.floor_type == MCF.FLOOR_GRASS or (not grid.floor_look.is_empty()
+				and grid.look_at(c.coord.x, c.coord.y) == MCF.Look.GRASS)
 		if plain and not c.on_fire and (h == 0.0 or h >= MCF.WALL_HEIGHT):
-			if h >= MCF.WALL_HEIGHT:
+			if h >= MCF.WALL_HEIGHT and c.feature_id != MCF.FEATURE_BOUNDARY:
 				u = wall_u
 			elif c.is_space:
 				u = space_u
-			elif c.floor_type == MCF.FLOOR_GRASS:
+			elif grass:
 				u = grass_u
+			elif h >= MCF.WALL_HEIGHT:
+				u = wall_u
 			else:
 				u = floor_u
 		else:
@@ -4698,18 +4713,20 @@ const LOD_SPACE := Color(0, 0, 0, 0)
 ## пикселю: пол (или средний цвет его картинки-замены), трава, копоть, укрытие, огонь.
 ## Объект клетки — отдельным слоем поверх тумана (_lod_feature_color).
 func _lod_color(cell: GridCell) -> Color:
-	var is_wall := cell.cover_height >= MCF.WALL_HEIGHT
+	var is_wall := cell.cover_height >= MCF.WALL_HEIGHT \
+			and (cell.feature_id != MCF.FEATURE_BOUNDARY or state.env == "bunker")
 	var damage: int = 0
 	if not _fx.floor_damage.is_empty():
 		damage = int(_fx.floor_damage.get(cell.coord, 0))
+	var look := state.grid.look_at(cell.coord.x, cell.coord.y) if not state.grid.floor_look.is_empty() else 0
 	# Почти вся карта — голый пол или голая стена без картинок-замен: цвет готов.
 	if damage == 0 and not cell.on_fire and _lod_tex_avg.is_empty():
 		if is_wall:
 			return LOD_WALL
-		if cell.cover_height == 0.0 and not cell.is_space and cell.floor_type != MCF.FLOOR_GRASS:
+		if cell.cover_height == 0.0 and not cell.is_space \
+				and cell.floor_type != MCF.FLOOR_GRASS and look != MCF.Look.GRASS:
 			return LOD_FLOOR
 	var floor_name := "floor"
-	var look := state.grid.look_at(cell.coord.x, cell.coord.y) if not state.grid.floor_look.is_empty() else 0
 	if cell.is_space:
 		# Космоса как плитки больше нет (0.9.3): остаются только панели, всё прочее —
 		# пустое место, сквозь которое видно параллакс.
@@ -4733,13 +4750,14 @@ func _lod_color(cell: GridCell) -> Color:
 			col = LOD_SPACE
 		if is_wall:
 			col = LOD_WALL
-		if not is_wall and not cell.is_space and cell.floor_type == MCF.FLOOR_GRASS:
+		if not is_wall and not cell.is_space \
+				and (cell.floor_type == MCF.FLOOR_GRASS or look == MCF.Look.GRASS):
 			col = col.blend(GRASS_TINT)
 		if damage != 0 and not cell.is_space:
 			col = col.blend(SCORCH_EPICENTER if damage == FxDecals.DAMAGE_EPICENTER
 					else SCORCH_RUBBLE)
 	var h := cell.cover_height
-	if h > 0.0 and not is_wall:
+	if h > 0.0 and not is_wall and cell.feature_id != MCF.FEATURE_BOUNDARY:
 		col = col.blend(_lod_tex_avg.get("floor_cover", Color(0.5, 0.45, 0.2, 0.12 + 0.12 * h)))
 	if cell.on_fire:
 		col = col.blend(_lod_tex_avg.get("fire", Color(1.0, 0.4, 0.05, 0.4)))
@@ -5596,6 +5614,8 @@ func _draw() -> void:
 		draw_set_transform(pan + _walk_offset.get(d["unit"].id, Vector2.ZERO) * zoom, 0.0, Vector2(zoom, zoom))
 		_draw_drone(d["unit"], d["at"])
 	draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
+	# A thin second pass puts wisps in front of occupants without hiding their sprites.
+	_draw_gas_tiles(0.2, false)
 
 	# Рамка выделения (#18): сетка-выровненный зелёный прямоугольник поверх поля.
 	if _box_dragging:
@@ -5769,14 +5789,18 @@ func _draw_random_events(font: Font) -> void:
 	if resolver == null or resolver.random_events == null:
 		return
 	var ev: RandomEvents = resolver.random_events
+	_draw_gas_tiles(0.75, true)
 	for cl: Dictionary in ev.clouds:
 		var rect := Rect2(ORIGIN + Vector2(int(cl["x"]), int(cl["y"])) * CELL,
 				Vector2(int(cl["w"]), int(cl["h"])) * CELL)
 		var col: Color = EVENT_COLORS["gas"]
-		draw_rect(rect, Color(col.r, col.g, col.b, 0.22))
-		draw_rect(rect, Color(col.r, col.g, col.b, 0.8), false, 2.0)
-		draw_string(font, rect.position + Vector2(4, 16), "GAS %d" % int(cl["left"]),
-				HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(col.r, col.g, col.b, 0.95))
+		# The outlined zone and its timer remain visible even under fog of war.
+		draw_rect(rect, Color(col.r, col.g, col.b, 1.0), false, 3.0)
+		var tag := "GAS %d" % int(cl["left"])
+		var tw := font.get_string_size(tag, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
+		draw_rect(Rect2(rect.position + Vector2(2, 2), Vector2(tw + 8, 18)), Color(0, 0, 0, 0.55))
+		draw_string(font, rect.position + Vector2(6, 16), tag,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0.8, 1.0, 0.6, 1.0))
 	for e: Dictionary in ev.pending:
 		var id := str(e["id"])
 		var p: Dictionary = e["params"]
@@ -5801,6 +5825,36 @@ func _draw_random_events(font: Font) -> void:
 		var label := "%s · %d" % [RandomEvents.event_name(id).to_upper(), left]
 		draw_string(font, rect.position + Vector2(4, 16), label,
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(col.r, col.g, col.b, 0.95))
+
+## Gas is a pixel-art strip of 32x32 variants. Draw only the gassed cells inside the
+## viewport: a cloud can overlap void or soil, which should never show gas. The
+## second, much lighter pass goes in front of soldiers and vehicles.
+func _draw_gas_tiles(alpha: float, fill: bool) -> void:
+	if resolver == null or resolver.random_events == null or resolver.random_events.clouds.is_empty():
+		return
+	var tex := Sprites.texture_of("gas")
+	var variants := 1
+	if tex != null and tex.get_height() > 0 and tex.get_width() % tex.get_height() == 0:
+		variants = maxi(1, tex.get_width() / tex.get_height())
+	for cl: Dictionary in resolver.random_events.clouds:
+		var x0 := maxi(_cull_x0, int(cl["x"]))
+		var x1 := mini(_cull_x1, int(cl["x"]) + int(cl["w"]) - 1)
+		var y0 := maxi(_cull_y0, int(cl["y"]))
+		var y1 := mini(_cull_y1, int(cl["y"]) + int(cl["h"]) - 1)
+		for y in range(y0, y1 + 1):
+			for x in range(x0, x1 + 1):
+				if not state.grid.in_bounds(Vector2i(x, y)) or not state.grid.cell_fast(x, y).gas:
+					continue
+				var cell_rect := Rect2(ORIGIN + Vector2(x, y) * CELL, Vector2(CELL, CELL))
+				if fill:
+					draw_rect(cell_rect, Color(0.18, 0.25, 0.1, 0.42))
+				if tex != null:
+					var variant := TerrainTiles.variant_of(Vector2i(x, y), variants)
+					var src := Rect2(variant * tex.get_height(), 0,
+							tex.get_height(), tex.get_height())
+					draw_texture_rect_region(tex, cell_rect, src, Color(1, 1, 1, alpha))
+				elif fill:
+					draw_rect(cell_rect, Color(0.55, 0.7, 0.28, 0.36))
 
 ## ВСПЫШКА ВЗРЫВА (0.9.4): клетки разрыва на секунду горят и гаснут. Чистая косметика —
 ## пламенем это не становится ни на одну клетку: ни резолвер, ни правила огня об этих
@@ -6108,8 +6162,8 @@ var _sky: Starfield = null
 # --- Земля за краем доски (item 7) ---
 ## За каймой карты (10 клеток грунта или травы) экран кончался чернотой, и доска читалась
 ## как вырезанный из мира прямоугольник. Теперь та же земля продолжается до краёв экрана —
-## обоями: один клочок местности, собранный из вариантов плитки пола вперемешку, с редкими
-## проплешинами. Это чистый фон под доской: ни клеток, ни правил, ходить там негде.
+## обоями из вариантов плитки пола. У города и поля обои целиком травяные, без серых
+## проплешин. Это чистый фон под доской: ни клеток, ни правил, ходить там негде.
 ##
 ## Картой без космоса дело и ограничивается — на станции за бортом звёзды (_build_sky).
 const GROUND_TILES := 16        # сторона клочка обоев в клетках
@@ -6137,7 +6191,7 @@ func _build_ground() -> void:
 
 ## Клочок местности GROUND_TILES×GROUND_TILES: вариант плитки на клетку берётся хешем
 ## координаты — тем же приёмом, что и на самой доске, поэтому рисунок не выстраивается в
-## сетку, — а на проплешины ложится вторая плитка (земля среди травы, грунт среди мостовой).
+## сетку. Дополнительная плитка нужна только окружениям, где допустимы проплешины.
 func _ground_wallpaper() -> ImageTexture:
 	var base := _ground_image(_ground_floor_name())
 	if base == null:
@@ -6175,14 +6229,14 @@ func _ground_image(name: String) -> Image:
 ## Чем залит экран и чем идут проплешины — по окружению карты.
 func _ground_floor_name() -> String:
 	match state.env:
-		"field": return "floor_grass"
+		"field", "town": return "floor_grass"
 		"bunker": return "bedrock"
 		"": return "floor"
 	return TerrainTiles.env_name("floor", state.env)
 
 func _ground_patch_name() -> String:
 	match state.env:
-		"field": return "floor_field"
+		"field", "town": return ""
 		"bunker": return ""
 	return "floor_field"
 

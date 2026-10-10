@@ -1695,7 +1695,12 @@ func _town() -> void:
 	# трава просто продолжается ещё на BORDER клеток.
 	for y in h:
 		for x in w:
-			_ground(Vector2i(x, y), lawn)
+			var c := Vector2i(x, y)
+			_ground(c, lawn)
+			# The border is grass visually even with flammable terrain disabled.
+			# A floor look changes art without making a nonflammable cell burn.
+			if lawn != MCF.FLOOR_GRASS and not _core.has_point(c):
+				m.set_look(y * w + x, MCF.Look.GRASS)
 	var ox := _core.position.x
 	var oy := _core.position.y
 	var xs := _street_lines(_core.size.x)
@@ -2047,8 +2052,12 @@ func _field() -> void:
 		for x in w:
 			# Кайма (0.9.3) — ровное травяное поле без пятен и построек: за картой мир
 			# продолжается, но воевать там негде.
-			var grass := not _core.has_point(Vector2i(x, y)) or noise.get_noise_2d(x, y) > -0.2
-			_ground(Vector2i(x, y), MCF.FLOOR_GRASS if fire and grass else MCF.FLOOR_NORMAL)
+			var c := Vector2i(x, y)
+			var outside := not _core.has_point(c)
+			var grass := outside or noise.get_noise_2d(x, y) > -0.2
+			_ground(c, MCF.FLOOR_GRASS if fire and grass else MCF.FLOOR_NORMAL)
+			if outside and not fire:
+				m.set_look(y * w + x, MCF.Look.GRASS)
 	var area := float(_core.size.x * _core.size.y)
 	for n in maxi(1, roundi(area / 380.0 * dens)):
 		_ruin()

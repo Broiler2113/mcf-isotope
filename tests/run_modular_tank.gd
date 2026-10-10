@@ -528,14 +528,14 @@ func _armored_materials() -> void:
 		r.resolve(ShootIntent.new(gunner.id, -1, -1, beside))
 	ck(state.grid.cell(wall).feature_id == MCF.FEATURE_ARMOR_WALL,
 			"eight blasts going off right beside it leave it standing")
-	# Кирка — тоже.
+	# Manual demolition is the exception to the wall's blast/ram protection.
 	var miner: UnitInstance = null
 	for u: UnitInstance in state.living_units_of(MCF.Owner.PLAYER_1):
 		if u.stats.special_ability_id == MCF.ABILITY_MINER:
 			miner = u
 	if miner != null:
 		state.grid.place(miner, wall + Vector2i(-1, 0))
-		ck(not r.can_break_cell(miner, wall), "and a miner cannot demolish it")
+		ck(r.can_break_cell(miner, wall), "and a miner can demolish it from next door")
 	# Гусеница — тоже: для машины это край поля.
 	var entry := VehicleRules.cell_entry(state, wall, -1)
 	ck(not bool(entry["ok"]), "and a vehicle cannot ram through it")

@@ -853,10 +853,11 @@ sealed without spending an engineer's whole turn building a fresh wall.
 
 ### 9.5 Demolition (`BREAKABLE`)
 
-Wall, Glass, Airlock, BRU, Corpse Wall, **both pillbox variants**, Sandbag Wall,
-Hedgehog+Sandbags, Hedgehog, and nameless terrain walls. **Miner or Engineer**, 1 AP
-each — demolition ignores durability, so a pillbox falls to one miner action even though
-it soaks two shells.
+Wall (including brick, stucco, cinder block and station looks), Wooden Wall, Soil,
+Glass, Armored Wall, Armored Glass, Airlock, BRU, Corpse Wall, **both pillbox variants**,
+Sandbag Wall, Hedgehog+Sandbags, Hedgehog, and nameless terrain walls. The world
+boundary is excluded. **Miner or Engineer**, 1 AP each — demolition ignores durability,
+so a pillbox falls to one miner action even though it soaks two shells.
 
 ### 9.6 Digging
 
@@ -1621,12 +1622,10 @@ Two materials that look like their ordinary counterparts and are placed from the
 editor like them.
 
 **Armored wall** is a wall in every visible respect — 2 m, blocks movement, sight and
-fire. What makes it armoured is what *cannot* remove it: not a miner's pick, not fire,
-not a tank's tracks (it stops vehicles outright rather than being flattened), not the
-splinters of a blast next door, and not a marksman's beam, which dies on it whatever
-potential is left. Exactly one thing destroys it: an explosion landing **on** it, which
-takes it out whole. Its splash immunity lives in one place — it is simply absent from
-`_blast_destroy_terrain`'s destructible list.
+fire. A miner or engineer can demolish it from an adjacent cell, and an explosion
+landing **on** it takes it out whole. Fire, a tank's tracks, the splinters of a blast
+next door, and a marksman's beam cannot remove it. Its splash immunity lives in one
+place — it is simply absent from `_blast_destroy_terrain`'s destructible list.
 
 **Armored glass** is ordinary glass in every respect — you see through it, shoot
 through it, a beam passes it, and it burns away when the tile ignites — save for its
