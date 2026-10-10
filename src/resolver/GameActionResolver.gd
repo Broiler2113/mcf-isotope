@@ -460,8 +460,8 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 	var gas_res := ActionResult.success([])
 	var walk_origin := origin
 	var walk_path := path
-	var first_fire := _fire_on_path(unit, path)
-	if unit.borg_id == -1:
+	if unit.borg_id == -1 and GridCell.gassed > 0:
+		var first_fire := _fire_on_path(unit, path)
 		for step: Vector2i in path:
 			if step == mine or step == first_fire: break
 			if state.grid.cell(step).gas:
@@ -3560,6 +3560,7 @@ func _vision_blocked(a: Vector2i, b: Vector2i, viewer: int = -1) -> bool:
 ## sight index so checking this never scans the whole board per target.
 func visibility_limited() -> bool:
 	if fog_enabled: return true
+	if GridCell.gassed <= 0: return false
 	_sync_seen()
 	return not _sight_gas.is_empty()
 
