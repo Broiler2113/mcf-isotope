@@ -1,3 +1,3 @@
 small actions=176 board=729376809 trace=1534406891 alive=0/4/7 fx=690474027 guest_same=true resyncs=0 save=true replay=true
-medium actions=570 board=3725342969 trace=523716560 alive=23/37/7 fx=3634581915 guest_same=true resyncs=0 save=true replay=true
-large actions=1554 board=1092412065 trace=3935965891 alive=147/146/26 fx=3807126482 guest_same=true resyncs=0 save=true replay=true
+medium actions=646 board=2792917095 trace=3509504899 alive=23/27/9 fx=2027214813 guest_same=true resyncs=0 save=true replay=true
+large actions=1508 board=5625002 trace=2990605440 alive=139/143/29 fx=812174437 guest_same=true resyncs=0 save=true replay=true

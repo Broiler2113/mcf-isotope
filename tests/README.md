@@ -209,3 +209,10 @@ real game as well.
 `run_rl_learning.gd` verifies round-clock discounting across a pool response, live public hazards without omniscience, and network-recorded replay determinism. `rl/test_learning_environment.py` covers spatial batches, demonstration imports/updates, checkpoint migration, paired model selection, and real head-to-head protocol routing.
 
 `run_rl_giant_defense.gd` checks that a visible tank's drive lane reaches the policy, anti-tank soldiers survive actor sampling, large armies must spend AP before ending, and hidden or disabled tanks create no drive-lane signal.
+
+### 0.9.8
+
+- `run_batch098.gd`: neutral shooting priority, tunnel width/sealing, persistent editor door/accent/decal data, room presets, map expansion, original-board and clock save/load, replay walk endpoints, defense speeds, spectator authority, dirt autotiling, and track layering.
+- `run_ground_backdrop.gd`: camera setter synchronization; run under a renderer for pixel coverage checks.
+- `run_net_spectators.sh`: host plus two spectators through lobby, deployment, and live battle, including private spectator drawings.
+- `run_net_kick.sh`: host kicks a seated guest, reopens the seat, and guest returns to the menu.

@@ -21,6 +21,7 @@ extends Node2D
 ## заготовок. Его можно повернуть (R) и отразить (H/V), и ставится он с той же
 ## симметрией, что и мазок кисти.
 
+const RoomPresets = preload("res://src/data/RoomPresetStore.gd")
 const SteamChrome = preload("res://src/ui/SteamChrome.gd")
 
 const CELL := 40.0
@@ -100,8 +101,18 @@ var symmetry: int = Sym.OFF
 var stamp_id := "small_room"
 
 # --- Вид ---
-var pan := Vector2.ZERO
-var zoom := 1.0
+var pan := Vector2.ZERO:
+	set(value):
+		pan = value
+		if is_inside_tree():
+			_fit_background()
+			_sync_camera_layer()
+var zoom := 1.0:
+	set(value):
+		zoom = value
+		if is_inside_tree():
+			_fit_background()
+			_sync_camera_layer()
 var show_grid := true
 var show_zones := true
 var _mouse_panning := false
@@ -172,6 +183,7 @@ var _mini_view: Control
 var _menus: Dictionary = {}
 
 func _ready() -> void:
+	Ui.board_settings_changed.connect(queue_redraw)
 	Sprites.reload_overrides()
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	# Вернулись из пробной партии — та же карта, имя, взгляд и несохранённые правки.
@@ -202,6 +214,7 @@ func _ready() -> void:
 ## Карта заменена целиком (новая, открытая, размер, очистка, откат снимка).
 func _map_replaced() -> void:
 	_env = map.environment()
+	_sync_background()
 	_grid = Grid.new(map.width, map.height)
 	map.apply_to_grid(_grid)
 	_tiles = TerrainTiles.new(_grid, _env)
@@ -238,6 +251,7 @@ func _map_replaced() -> void:
 ## Окружение сменилось — плитки и палитра в новом наряде, клетки те же.
 func _env_changed() -> void:
 	_env = map.environment()
+	_sync_background()
 	_tiles = TerrainTiles.new(_grid, _env)
 	_layer.tiles = _tiles
 	for i in map.width * map.height:
@@ -343,7 +357,7 @@ static func map_color(m: MapData, i: int, env: String) -> Color:
 ## вид пола (MCF.FLOOR_LOOKS, 0 — пол окружения)].
 func _tuple(i: int) -> Array:
 	return [int(map.floor_type[i]), float(map.cover_height[i]), map.is_space[i] != 0,
-			String(map.feature_id[i]), int(map.zone_owner[i]), map.get_turn(i), map.get_look(i)]
+			String(map.feature_id[i]), int(map.zone_owner[i]), map.get_turn(i), map.get_look(i), map.get_accent(i), map.get_door(i)]
 
 ## Записать клетку: в карту, в зеркало плиток, в миникарту и слой зон.
 func _write(i: int, t: Array) -> void:
@@ -354,10 +368,12 @@ func _write(i: int, t: Array) -> void:
 	var zone := int(t[4])
 	var turn := int(t[5]) if t.size() > 5 and Furniture.is_furniture(feat) else -1
 	var look := int(t[6]) if t.size() > 6 else 0
+	var accent := int(t[7]) if t.size() > 7 else 0
+	var door := int(t[8]) if t.size() > 8 else 0
 	# Клетка уже такая — ни записи, ни отката: повторный мазок по тем же клеткам бесплатен.
 	if map.floor_type[i] == fl and map.cover_height[i] == cover and (map.is_space[i] != 0) == sp \
 			and map.feature_id[i] == feat and map.zone_owner[i] == zone and map.get_turn(i) == turn \
-			and map.get_look(i) == look:
+			and map.get_look(i) == look and map.get_accent(i) == accent and map.get_door(i) == door:
 		return
 	if _act.has("cells") and not _act["cells"].has(i):
 		_act["cells"][i] = _tuple(i)
@@ -372,8 +388,15 @@ func _write(i: int, t: Array) -> void:
 	map.set_turn(i, turn)
 	var look_changed := map.get_look(i) != look
 	map.set_look(i, look)
+	var decor_changed := map.get_accent(i) != accent or map.get_door(i) != door
+	map.set_accent(i, accent)
+	map.set_door(i, door)
 	var x := i % map.width
 	var y := i / map.width
+	if decor_changed:
+		_grid.wall_accent = map.wall_accent.duplicate()
+		_grid.door_look = map.door_look.duplicate()
+		GridCell.log_look_change(x, y)
 	if look_changed:
 		if _grid.floor_look.is_empty():
 			_grid.floor_look.resize(map.width * map.height)
@@ -407,7 +430,7 @@ func _write(i: int, t: Array) -> void:
 	_mini_stale = true
 
 func _begin() -> void:
-	_act = {"cells": {}, "spawns": null}
+	_act = {"cells": {}, "spawns": null, "decals": map.decals.duplicate(true)}
 
 ## Спавны трогает действие — запомнить их «до» (один раз за действие).
 func _touch_spawns() -> void:
@@ -424,6 +447,8 @@ func _commit() -> void:
 	if _act.is_empty():
 		return
 	var entry := {"cells": {}, "spawns": null}
+	if _act.get("decals", map.decals) != map.decals:
+		entry["decals"] = [_act["decals"], map.decals.duplicate(true)]
 	for i: int in _act["cells"]:
 		var before: Array = _act["cells"][i]
 		var after := _tuple(i)
@@ -432,7 +457,7 @@ func _commit() -> void:
 	if _act["spawns"] != null:
 		entry["spawns"] = [_act["spawns"], _spawns_copy()]
 	_act = {}
-	if entry["cells"].is_empty() and entry["spawns"] == null:
+	if entry["cells"].is_empty() and entry["spawns"] == null and not entry.has("decals"):
 		return
 	_push(entry)
 
@@ -457,6 +482,9 @@ func _apply_entry(entry: Dictionary, forward: bool) -> void:
 		map.env = entry["env"][k]
 		_env_changed()
 		return
+	if entry.has("decals"):
+		map.decals = entry["decals"][k].duplicate(true)
+		_sync_editor_decals()
 	for i: int in entry["cells"]:
 		_write(i, entry["cells"][i][k])
 	if entry["spawns"] != null:
@@ -566,6 +594,12 @@ func _paint_cells(cells: Array, erase: bool) -> void:
 ## Нет объекта — убирается боец; нет и его — клетка возвращается к пустой земле пресета
 ## (пол, вид, зона). Прежде один щелчок сносил сразу всё.
 func _erase_cell(c: Vector2i) -> void:
+	if not map.decals.is_empty():
+		var kept := map.decals.filter(func(d: Array) -> bool:
+			return Vector2i(floori(float(d[1])), floori(float(d[2]))) != c)
+		if kept.size() != map.decals.size():
+			map.decals = kept
+			_sync_editor_decals()
 	var i := c.y * map.width + c.x
 	if map.feature_id[i] != "":
 		var t := _tuple(i)
@@ -593,7 +627,16 @@ func _brush_cell(c: Vector2i, mask: int) -> void:
 ## рисуется предпросмотр под курсором.
 func _brushed(t: Array, mask: int) -> Array:
 	t = t.duplicate()
-	if brush.begins_with("zone:"):
+	while t.size() < 9:
+		t.append(-1 if t.size() == 5 else 0)
+	if brush.begins_with("accent:"):
+		t[7] = int(brush.substr(7))
+	elif brush.begins_with("door:"):
+		t[3] = MCF.FEATURE_AIRLOCK
+		t[1] = MCF.WALL_HEIGHT
+		t[2] = false
+		t[8] = int(brush.substr(5))
+	elif brush.begins_with("zone:"):
 		t[4] = _mirror_owner(int(brush.substr(5)), mask)
 	elif brush.begins_with("unit:"):
 		t[2] = false
@@ -780,6 +823,12 @@ func _stamp_once(p: Dictionary, at: Vector2i, mask: int) -> void:
 		var c := at + Vector2i(int(s[0]), int(s[1]))
 		if map.in_bounds(c):
 			_set_spawn(c, String(s[2]), _mirror_owner(int(s[3]), mask))
+
+	for d: Array in p.get("decals", []):
+		var pos := Vector2(float(d[1]), float(d[2])) + Vector2(at)
+		if Rect2(0, 0, map.width, map.height).has_point(pos):
+			map.decals.append([d[0], pos.x, pos.y, d[3], d[4]])
+	_sync_editor_decals()
 
 func copy_selection() -> void:
 	if not _has_selection():
@@ -980,6 +1029,28 @@ func pick_at(c: Vector2i) -> void:
 ## звёзд — ровно то, что игрок увидит в бою. Здесь оно есть всегда: редактор начинает
 ## с пустой карты, то есть со сплошного космоса, и «пусто» обязано читаться как пусто.
 var _sky: Starfield = null
+var _ground: GroundBackdrop = null
+
+func _sync_background() -> void:
+	if not is_inside_tree():
+		return
+	if _ground == null:
+		_ground = GroundBackdrop.new()
+		_ground.z_index = -20
+		add_child(_ground)
+	_ground.texture = GroundBackdrop.wallpaper(_env) if _env in ["town", "field", "bunker"] else null
+	_ground.visible = _ground.texture != null
+	_fit_background()
+
+func _fit_background() -> void:
+	if _sky != null:
+		_sky.camera = pan
+	if _ground == null or _ground.texture == null or map == null:
+		return
+	var pixels := float(_ground.texture.get_height()) / GroundBackdrop.GROUND_TILES
+	_ground.fit_view(pan, zoom * CELL / pixels, Vector2(map.width, map.height) * pixels,
+			get_viewport_rect().size)
+
 
 func _build_sky() -> void:
 	var layer := CanvasLayer.new()
@@ -1017,8 +1088,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
+		var viewport := get_viewport()
 		if _shortcut(event):
-			get_viewport().set_input_as_handled()
+			viewport.set_input_as_handled()
 		return
 	if event is InputEventMouseButton and event.button_index in [MOUSE_BUTTON_MIDDLE, MOUSE_BUTTON_RIGHT]:
 		_mouse_panning = event.pressed
@@ -1050,11 +1122,25 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		var c := cell_at(event.position)
 		if event.pressed:
-			_press(c, event.alt_pressed)
+			_press(c, event.alt_pressed, event.position)
 		else:
 			_release(c)
 
-func _press(c: Vector2i, alt: bool) -> void:
+func _press(c: Vector2i, alt: bool, screen := Vector2.INF) -> void:
+	if brush.begins_with("decal:") and tool == Tool.BRUSH and map.in_bounds(c):
+		_begin()
+		var pointer := get_viewport().get_mouse_position() if screen == Vector2.INF else screen
+		var pos := (pointer - pan) / cell_size()
+		var kind := brush.substr(6)
+		if kind == "erase":
+			map.decals = map.decals.filter(func(d: Array) -> bool:
+				return Vector2(float(d[1]), float(d[2])).distance_to(pos) > float(brush_size) * 0.5)
+		else:
+			map.decals.append([kind, pos.x, pos.y, PI / 2 if kind == "corpse" else 0.0, float(brush_size)])
+		_sync_editor_decals()
+		_commit()
+		queue_redraw()
+		return
 	if not _float.is_empty() and not _float_moving:
 		_drop_float(c)
 		return
@@ -1283,7 +1369,7 @@ func _draw() -> void:
 	_layer.scale = Vector2(zoom, zoom)
 	_layer.cells = Rect2i(x0, y0, x1 - x0, y1 - y0)
 	# Сетка — в слое плиток, между полом и объектами: поперёк стены или кровати её нет.
-	_layer.grid_color = Color(0, 0, 0, 0.28) if show_grid and cs >= 8.0 else Color(0, 0, 0, 0)
+	_layer.grid_color = Ui.grid_color() if show_grid and cs >= 8.0 else Color(0, 0, 0, 0)
 	_layer.grid_width = 1.0 / zoom
 	_layer.queue_redraw()
 	if _zone_stale:
@@ -1302,6 +1388,12 @@ func _draw() -> void:
 	draw_rect(full, Color(0.85, 0.85, 0.85, 0.6), false, 2.0 / zoom)
 	# Нейтральные бойцы — картинкой своей фракции, иначе кружком с меткой.
 	var font := ThemeDB.fallback_font
+	if cs >= 18:
+		for y in range(y0, y1 + 1):
+			for x in range(x0, x1 + 1):
+				var i := y * w + x
+				if map.feature_id[i] == MCF.FEATURE_DIRT_PILE:
+					draw_string(font, Vector2(x * CELL + 3, (y + 1) * CELL - 3), "%.1f" % map.cover_height[i], HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.95, 0.85, 0.6))
 	for c: Vector2i in _spawn_at:
 		if c.x < x0 or c.x > x1 or c.y < y0 or c.y > y1:
 			continue
@@ -1475,6 +1567,13 @@ func _preview_key() -> String:
 			_float_moving, brush_turn]
 
 func _draw_preview() -> void:
+	if brush.begins_with("decal:") and tool == Tool.BRUSH:
+		var pos := (get_viewport().get_mouse_position() - pan) / cell_size()
+		var tex := _thumb(brush)
+		if tex != null:
+			var size := Vector2.ONE * CELL * brush_size
+			draw_texture_rect(tex, Rect2(pos * CELL - size * 0.5, size), false, Color(1, 1, 1, 0.5))
+		return
 	var key := _preview_key()
 	if key != _pv_key or not is_same(_float, _pv_src):
 		_pv_key = key
@@ -1634,6 +1733,15 @@ func _set_scratch(g: Grid, at: Vector2i, t: Array) -> void:
 			g.floor_look.resize(g.width * g.height)
 		g.floor_look[at.y * g.width + at.x] = int(t[6])
 
+	if t.size() > 7 and int(t[7]) != 0:
+		if g.wall_accent.is_empty():
+			g.wall_accent.resize(g.width * g.height)
+		g.wall_accent[at.y * g.width + at.x] = int(t[7])
+	if t.size() > 8 and int(t[8]) != 0:
+		if g.door_look.is_empty():
+			g.door_look.resize(g.width * g.height)
+		g.door_look[at.y * g.width + at.x] = int(t[8])
+
 ## Узор сверх потолка черновика — картинками палитры, только видимая часть: вставка всей
 ## карты 500×500 не рисует четверть миллиона клеток.
 func _draw_pattern(p: Dictionary, at: Vector2i) -> void:
@@ -1716,6 +1824,7 @@ func _build_menu_bar() -> void:
 			["Fit Map  (Ctrl+0)", fit_view], [],
 			["check:grid", "Grid  (G)"], ["check:zones", "Deployment Zones"], ["check:mini", "Minimap"], [],
 			["Keyboard Shortcuts…  (F1)", _shortcuts_dialog]]],
+		["Presets", [["Save Selection…", _save_room_dialog], ["Manage Rooms & Structures…", _room_manager]]],
 		["Map", [["Resize…", _resize_dialog], [], ["label", "Preset"]] + _preset_items()],
 	]:
 		var mb := MenuButton.new()
@@ -1917,6 +2026,22 @@ func _build_palette() -> void:
 	_colour_row.add_theme_constant_override("separation", 4)
 	_colour_row.visible = false
 	outer.add_child(_colour_row)
+	var decor := OptionButton.new()
+	decor.add_item("Wall accent…")
+	for i in MCF.ACCENT_COLORS.size():
+		decor.add_icon_item(_swatch(MCF.ACCENT_COLORS[i]), MCF.ACCENT_NAMES[i])
+	decor.item_selected.connect(func(i: int) -> void:
+		if i > 0: _select_brush("accent:%d" % (i - 1)))
+	outer.add_child(decor)
+	var doors := OptionButton.new()
+	doors.add_item("Door texture…")
+	doors.add_item("Automatic")
+	for material: String in TerrainTiles.DOOR_MATERIALS:
+		for variant in 3:
+			doors.add_item("%s · %d" % [material.capitalize(), variant + 1])
+	doors.item_selected.connect(func(i: int) -> void:
+		if i > 0: _select_brush("door:%d" % (i - 1)))
+	outer.add_child(doors)
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -1934,6 +2059,7 @@ func _refresh_palette() -> void:
 		_palette_box.remove_child(c)
 		c.queue_free()
 	_brush_buttons.clear()
+	_palette_group("Decals · click anywhere", [["decal:blood_pool", "Blood pool"], ["decal:blood_drop", "Blood drop"], ["decal:corpse", "Corpse"], ["decal:erase", "Erase decals"]])
 	var terrain: Array = TERRAIN.duplicate()
 	for lk: int in FLOOR_LOOK_BRUSHES:
 		terrain.append(["floor:%d" % lk, MCF.FLOOR_LOOK_NAMES[lk]])
@@ -2241,6 +2367,9 @@ func _set_brush_size(n: int) -> void:
 	queue_redraw()
 
 func _brush_name(id: String) -> String:
+	if id.begins_with("decal:"): return id.substr(6).replace("_", " ").capitalize()
+	if id.begins_with("accent:"): return MCF.ACCENT_NAMES[int(id.substr(7))] + " wall accent"
+	if id.begins_with("door:"): return "Door texture %s" % id.substr(5)
 	if id.begins_with("zone:"):
 		var n := int(id.substr(5))
 		return "No zone" if n < 0 else "Zone %d" % (n + 1)
@@ -2331,6 +2460,9 @@ func _mark_dirty() -> void:
 
 ## Картинка кисти — та же плитка, что ляжет на карту, в окружении пресета.
 func _thumb(id: String) -> Texture2D:
+	if id.begins_with("accent:"): return _swatch(MCF.ACCENT_COLORS[clampi(int(id.substr(7)), 0, MCF.ACCENT_COLORS.size() - 1)])
+	if id.begins_with("door:"): return Sprites.texture_of("door_" + _env)
+	if id.begins_with("decal:"): return Sprites.texture_of("blood_splatter" if id == "decal:blood_drop" else id.substr(6))
 	var env := _env
 	if id.begins_with("unit:"):
 		var key := Sprites.resolve(id.substr(5), "_neutral")
@@ -2648,6 +2780,7 @@ func _new_map_dialog() -> void:
 	x.text = "×"
 	size_row.add_child(x)
 	size_row.add_child(h)
+	_size_presets(body, w, h)
 	_field_row(body, "Size", size_row)
 	var start := SteamChrome.group_box("Start from")
 	body.add_child(start)
@@ -2810,6 +2943,7 @@ func _resize_dialog() -> void:
 	body.add_theme_constant_override("separation", 10)
 	var w := _spin(map.width, 8, MAX_DIM)
 	var h := _spin(map.height, 8, MAX_DIM)
+	_size_presets(body, w, h)
 	_field_row(body, "Width", w)
 	_field_row(body, "Height", h)
 	var hint := Label.new()
@@ -2861,3 +2995,77 @@ func _shortcuts_dialog() -> void:
 func _clear_dialog() -> void:
 	_confirm("Clear Map", "Erase everything and start again from the %s preset's ground? You can undo this."
 			% MapPresets.name_of(map.environment()), "Clear", clear_map)
+
+func _size_presets(body: Container, w: SpinBox, h: SpinBox) -> void:
+	var choice := OptionButton.new()
+	for label: String in ["Custom", "Small · 52 × 44", "Medium · 74 × 62", "Large · 104 × 84", "Giant · 149 × 119"]:
+		choice.add_item(label)
+	var sizes := [Vector2i.ZERO, Vector2i(52, 44), Vector2i(74, 62), Vector2i(104, 84), Vector2i(149, 119)]
+	choice.item_selected.connect(func(i: int) -> void:
+		if i > 0:
+			w.value = sizes[i].x
+			h.value = sizes[i].y
+			choice.select(i))
+	w.value_changed.connect(func(_v: float) -> void: choice.select(0))
+	h.value_changed.connect(func(_v: float) -> void: choice.select(0))
+	_field_row(body, "Size preset", choice)
+
+func _sync_editor_decals() -> void:
+	_grid.map_decals = map.decals.duplicate(true)
+	_tiles.set_map_decals()
+
+func _save_room_dialog() -> void:
+	if not _has_selection():
+		_flash("Select the room or structure first.")
+		return
+	var body := VBoxContainer.new()
+	var name_edit := LineEdit.new()
+	name_edit.placeholder_text = "Room or structure name"
+	body.add_child(name_edit)
+	var hint := Label.new()
+	hint.text = "An existing name updates that preset. Map cells stay unchanged."
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.add_child(hint)
+	_dialog("Save Selection as Preset", body, [["Cancel", null], ["Save", func() -> void:
+		var pattern := MapPresets.capture(map, _selection)
+		if RoomPresets.save_preset(name_edit.text, pattern, _env):
+			_flash("Preset saved. Find it under Presets → Manage Rooms & Structures.")
+		else: _flash("Could not save preset; use a non-empty name.")]])
+
+func _room_manager() -> void:
+	var body := VBoxContainer.new()
+	var names: Array = RoomPresets.names()
+	var pick := OptionButton.new()
+	for name: String in names: pick.add_item(name)
+	body.add_child(pick)
+	var preview := TextureRect.new()
+	preview.custom_minimum_size = Vector2(400, 250)
+	preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	preview.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	body.add_child(preview)
+	var note := Label.new()
+	note.text = "Place a preset, edit its cells, then select it and save under the same name to update it." if not names.is_empty() else "No custom presets yet. Select a room, then use Presets → Save Selection."
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.add_child(note)
+	var selected := func() -> Dictionary:
+		return RoomPresets.read_preset(names[pick.selected]) if pick.selected >= 0 else {}
+	var refresh := func(_i: int = 0) -> void:
+		var data: Dictionary = selected.call()
+		if not data.is_empty():
+			preview.texture = TerrainTiles.map_preview(RoomPresets.to_map(data["pattern"], str(data.get("env", "station"))))
+	pick.item_selected.connect(refresh)
+	refresh.call()
+	_dialog("Room & Structure Presets", body, [["Close", null], ["Delete", func() -> void:
+		if pick.selected >= 0: RoomPresets.remove_preset(names[pick.selected])
+		_room_manager.call_deferred()], ["Place / Edit", func() -> void:
+		var data: Dictionary = selected.call()
+		if not data.is_empty():
+			_clipboard = data["pattern"].duplicate(true)
+			paste()]], 460.0)
+
+func _sync_camera_layer() -> void:
+	if _layer != null:
+		_layer.position = pan
+		_layer.scale = Vector2(zoom, zoom)
+	queue_redraw()

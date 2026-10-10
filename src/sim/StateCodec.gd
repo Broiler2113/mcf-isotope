@@ -62,12 +62,14 @@ static func encode(state: GameState) -> Dictionary:
 ## заданные в редакторе. Правилам не нужны, но без них загруженная партия выглядела бы
 ## иначе, чем сохранённая.
 static func _encode_decor(grid: Grid) -> Dictionary:
-	var out := {}
+	var out := {"decals": grid.map_decals.duplicate(true)}
 	if grid.floor_look.size() == grid.width * grid.height and grid.floor_look.count(0) < grid.floor_look.size():
 		out["floor"] = MapData.rle(grid.floor_look)
 	if grid.wall_accent.size() == grid.width * grid.height \
 			and grid.wall_accent.count(0) < grid.wall_accent.size():
 		out["accent"] = MapData.rle(grid.wall_accent)
+	if not grid.door_look.is_empty():
+		out["door"] = MapData.rle(grid.door_look)
 	var turns: Array = []
 	for c: Vector2i in grid.furniture_turn:
 		var rec: Array = grid.furniture_turn[c]
@@ -256,8 +258,10 @@ static func restore_into(gs: GameState, d: Dictionary) -> void:
 	gs.env = str(d.get("env", gs.env))
 	if d.has("decor"):
 		var dec: Dictionary = d["decor"]
+		gs.grid.map_decals = dec.get("decals", []).duplicate(true)
 		var n := gs.grid.width * gs.grid.height
 		gs.grid.floor_look = MapData.unrle(dec["floor"], n) if dec.has("floor") else PackedByteArray()
+		gs.grid.door_look = MapData.unrle(dec["door"], n) if dec.has("door") else PackedByteArray()
 		gs.grid.wall_accent = MapData.unrle(dec["accent"], n) if dec.has("accent") else PackedByteArray()
 		gs.grid.furniture_turn.clear()
 		for t: Array in dec.get("turn", []):

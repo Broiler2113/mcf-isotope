@@ -80,7 +80,9 @@ func _initialize() -> void:
 			var m = current_scene
 			ck(not m._match_over, "no victory on the host")
 			for l in m.state.log.lines:
-				if str(l).find("[denied]") >= 0: _denied += 1
+				if str(l).find("[denied]") >= 0:
+					_denied += 1
+					printerr(l)
 			ck(_denied == 0, "no denied actions on the host (%d)" % _denied)
 			print("[host-t] digest ", load("res://tests/TestSupport.gd").digest(m.state).hash()))
 	step("hold", func() -> bool: return _step_t > 4.0)

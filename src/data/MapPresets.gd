@@ -183,6 +183,9 @@ static func rotated(p: Dictionary) -> Dictionary:
 			out["cells"][x * h + (h - 1 - y)] = _turned_cell(p["cells"][y * w + x], [1, 2, 3, 0])
 	for s: Array in p["spawns"]:
 		out["spawns"].append([h - 1 - int(s[1]), int(s[0]), s[2], s[3]])
+	out["decals"] = []
+	for d: Array in p.get("decals", []):
+		out["decals"].append([d[0], h - float(d[2]), float(d[1]), float(d[3]) + PI / 2, d[4]])
 	return out
 
 ## Отражение: по горизонтали (x → w−1−x) или по вертикали (y → h−1−y).
@@ -199,6 +202,10 @@ static func flipped(p: Dictionary, horizontal: bool) -> Dictionary:
 	for s: Array in p["spawns"]:
 		out["spawns"].append([w - 1 - int(s[0]) if horizontal else int(s[0]),
 				int(s[1]) if horizontal else h - 1 - int(s[1]), s[2], s[3]])
+	out["decals"] = []
+	for d: Array in p.get("decals", []):
+		out["decals"].append([d[0], w - float(d[1]) if horizontal else d[1],
+			h - float(d[2]) if not horizontal else d[2], PI - float(d[3]) if horizontal else -float(d[3]), d[4]])
 	return out
 
 ## Клетка узора с поворотом мебели (6-й элемент, 0.9.2), переставленным по таблице map
@@ -217,9 +224,13 @@ static func capture(m: MapData, r: Rect2i) -> Dictionary:
 		for x in r.size.x:
 			var i := (r.position.y + y) * m.width + r.position.x + x
 			p["cells"][y * r.size.x + x] = [int(m.floor_type[i]), float(m.cover_height[i]),
-					m.is_space[i] != 0, String(m.feature_id[i]), int(m.zone_owner[i]), m.get_turn(i), m.get_look(i)]
+					m.is_space[i] != 0, String(m.feature_id[i]), int(m.zone_owner[i]), m.get_turn(i), m.get_look(i), m.get_accent(i), m.get_door(i)]
 	for s: Dictionary in m.spawns:
 		var c: Vector2i = s["coord"]
 		if r.has_point(c):
 			p["spawns"].append([c.x - r.position.x, c.y - r.position.y, s["stats_id"], int(s["owner"])])
+	p["decals"] = []
+	for d: Array in m.decals:
+		if Rect2(r).has_point(Vector2(float(d[1]), float(d[2]))):
+			p["decals"].append([d[0], float(d[1]) - r.position.x, float(d[2]) - r.position.y, d[3], d[4]])
 	return p

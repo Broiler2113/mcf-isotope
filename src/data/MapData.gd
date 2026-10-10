@@ -43,6 +43,10 @@ var floor_look: PackedByteArray = PackedByteArray()
 ## Читается ТОЛЬКО на стенах и шлюзах — на полу его никто не рисует. Как и вид пола, это
 ## чистая косметика: на правила не влияет и в состояние боя не входит. Пусто — акцентов нет.
 var wall_accent: PackedByteArray = PackedByteArray()
+## Explicit door artwork: 0 follows environment; other values select material and variant.
+var door_look: PackedByteArray = PackedByteArray()
+## Cosmetic ground decals, JSON records [kind, x, y, rotation, scale].
+var decals: Array = []
 
 func _init(p_width: int = 16, p_height: int = 12) -> void:
 	resize(p_width, p_height)
@@ -69,6 +73,8 @@ func resize(p_width: int, p_height: int) -> void:
 	feature_turn = {}
 	floor_look = PackedByteArray()
 	wall_accent = PackedByteArray()
+	door_look = PackedByteArray()
+	decals = []
 
 ## Изменить размер, СОХРАНИВ содержимое (batch 13 #14): клетки в пересечении старого и
 ## нового поля остаются как были, новые — космос, спавны за краем отбрасываются. Раньше
@@ -86,6 +92,8 @@ func resize_keep(p_width: int, p_height: int) -> void:
 	var old_turn := feature_turn
 	var old_look := floor_look
 	var old_accent := wall_accent
+	var old_door := door_look
+	var old_decals := decals
 	resize(p_width, p_height)
 	fill_all_space()
 	for y in mini(old_h, height):
@@ -105,6 +113,11 @@ func resize_keep(p_width: int, p_height: int) -> void:
 				set_look(dst, old_look[src])
 			if old_accent.size() > src and old_accent[src] != 0:
 				set_accent(dst, old_accent[src])
+			if old_door.size() > src and old_door[src] != 0:
+				set_door(dst, old_door[src])
+	for d: Array in old_decals:
+		if float(d[1]) >= 0 and float(d[2]) >= 0 and float(d[1]) < width and float(d[2]) < height:
+			decals.append(d.duplicate())
 	for s in old_spawns:
 		if in_bounds(s["coord"]):
 			spawns.append(s)
@@ -180,6 +193,8 @@ func zone_cells(owner: int) -> Array:
 func apply_to_grid(grid: Grid) -> void:
 	grid.floor_look = floor_look.duplicate() if floor_look.size() == grid.width * grid.height \
 			and grid.width == width else PackedByteArray()
+	grid.map_decals = decals.duplicate(true)
+	grid.door_look = door_look.duplicate()
 	grid.wall_accent = wall_accent.duplicate() if wall_accent.size() == grid.width * grid.height \
 			and grid.width == width else PackedByteArray()
 	grid.furniture_turn.clear()
@@ -222,6 +237,16 @@ func set_look(i: int, v: int) -> void:
 			return
 		floor_look.resize(width * height)
 	floor_look[i] = v
+
+func get_door(i: int) -> int:
+	return door_look[i] if i < door_look.size() else 0
+
+func set_door(i: int, v: int) -> void:
+	if door_look.is_empty():
+		if v == 0:
+			return
+		door_look.resize(width * height)
+	door_look[i] = v
 
 func get_accent(i: int) -> int:
 	return wall_accent[i] if i < wall_accent.size() else 0
@@ -433,6 +458,10 @@ func to_dict() -> Dictionary:
 		out["floor_look"] = rle(floor_look)
 	if wall_accent.size() > 0 and wall_accent.count(0) < wall_accent.size():
 		out["wall_accent"] = rle(wall_accent)
+	if not door_look.is_empty():
+		out["door_look"] = rle(door_look)
+	if not decals.is_empty():
+		out["decals"] = decals.duplicate(true)
 	return out
 
 static func from_dict(d: Dictionary) -> MapData:
@@ -458,6 +487,10 @@ static func from_dict(d: Dictionary) -> MapData:
 		var rec: Array = fd[k]
 		if int(k) < n and rec.size() == 2:
 			m.feature_dur[int(k)] = [str(rec[0]), int(rec[1])]
+	for record in d.get("decals", []):
+		if record is Array and record.size() == 5 and str(record[0]) in ["blood_pool", "blood_drop", "corpse"]:
+			if float(record[1]) >= 0 and float(record[2]) >= 0 and float(record[1]) < m.width and float(record[2]) < m.height:
+				m.decals.append([str(record[0]), float(record[1]), float(record[2]), float(record[3]), clampf(float(record[4]), 0.1, 4.0)])
 	var ft2: Dictionary = d.get("feature_turn", {})
 	for k: String in ft2:
 		var rec: Array = ft2[k]
@@ -467,6 +500,8 @@ static func from_dict(d: Dictionary) -> MapData:
 		m.floor_look = unrle(d["floor_look"], n)
 	if d.has("wall_accent"):
 		m.wall_accent = unrle(d["wall_accent"], n)
+	if d.has("door_look"):
+		m.door_look = unrle(d["door_look"], n)
 	var zo: Array = d.get("zone_owner", [])
 	for i in n:
 		if i < zo.size():

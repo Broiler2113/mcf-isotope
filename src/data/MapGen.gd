@@ -1285,7 +1285,9 @@ func _maintenance_mouths() -> void:
 				# получает — иначе створка открывалась бы в глухую стену.
 				var back := _kind(x - d.x, y - d.y)
 				if back != K_MAINT and back != K_ROOM and back != K_DOOR:
-					continue
+					_kset(Vector2i(x, y), K_WALL)
+					_hall_look[y * w + x] = 0
+					break
 				mouths.append(Vector2i(x, y))
 				break
 	for c in mouths:
@@ -1480,12 +1482,11 @@ func _looks_outside(wall: Vector2i, d: Vector2i) -> bool:
 ## Ширина прохода (0.9.3, по просьбе игрока). Станцию насквозь режет ОДИН главный ход в три
 ## клетки — по нему она и читается. Все прочие коридоры — две: широкий коридор нужен там,
 ## где по нему и правда ходят, а не «огромные коридоры без смысла» в каждом отсеке. Узкими
-## остаются технические туннели — клетка, изредка две.
+## остаются технические туннели — строго одна клетка.
 ##
 ## Решётчатый пол (MCF.Look.GRATE) — тоже примета техтуннеля, и не всякого: он достаётся
 ## примерно трети, остальные идут по обычному полу станции, иначе решётка лезет из каждой
 ## щели и перестаёт что-либо значить.
-const MAINT_WIDE_CHANCE := 0.25
 const MAINT_GRATE_CHANCE := 0.35
 ## Мельче этого кусок станции техтуннелем не делится (0.9.4).
 const MAINT_SPLIT_MIN := 9
@@ -1505,11 +1506,11 @@ const EMPTY_SECTORS_MAX := 3
 
 func _split_sectors(r: Rect2i, mn: int, depth: int, out: Array[Rect2i]) -> void:
 	var tech := depth >= 2
-	var width_roll := _rng.randf()
+	_rng.randf()  # Preserve the generator RNG sequence.
 	var grate_roll := _rng.randf()
 	var hall_w := 3
 	if tech:
-		hall_w = 2 if width_roll < MAINT_WIDE_CHANCE else 1
+		hall_w = 1
 	elif depth > 0:
 		hall_w = 2
 	var hall_k := K_HALL if not tech else K_MAINT

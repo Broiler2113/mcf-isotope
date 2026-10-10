@@ -11,6 +11,7 @@ extends RefCounted
 
 static var session: NetworkSession = null
 static var is_host: bool = false
+static var spectators: Array[int] = []
 
 ## Объявление матча: хост → клиент (#99).
 const K_SETUP := "setup"
@@ -51,6 +52,7 @@ static func my_side_hint(r: Roster) -> int:
 static func discard() -> void:
 	lobby_map = null
 	chat_history = []
+	spectators.clear()
 	if session != null:
 		session.close()
 		session.queue_free()
@@ -78,12 +80,13 @@ const K_LOBBY_MAP := "lobby_map"
 ##   1 — 0.9.3 и раньше (счёт отсюда ведётся задним числом);
 ##   2 — 0.9.4: случайные события объявляются и падают раундом позже, у них свои броски
 ##       параметров, обстрела и газа; реестр событий стал другим.
-const PROTOCOL := 2
+##   3 — 0.9.8: neutral firing decisions and spectator roles.
+const PROTOCOL := 3
 
 static func encode_rules() -> Dictionary:
 	var roster := GameConfig.active_roster()
 	return {
-		"pv": PROTOCOL,
+		"pv": PROTOCOL, "spectators": spectators.duplicate(),
 		"b": GameConfig.budget, "c": GameConfig.civilians_enabled, "f": GameConfig.fog_mode,
 		"cn": GameConfig.civilian_count, "ais": GameConfig.ai_speed,
 		"pm": GameConfig.placement_mode, "lv": GameConfig.live_placement_visible,
@@ -96,6 +99,10 @@ static func encode_rules() -> Dictionary:
 	}
 
 static func apply_rules(msg: Dictionary) -> void:
+	spectators.clear()
+	for id in msg.get("spectators", []):
+		if int(id) > 1: spectators.append(int(id))
+	if session != null: session.spectators = spectators.duplicate()
 	GameConfig.budget = int(msg.get("b", GameConfig.DEFAULT_BUDGET))
 	GameConfig.civilians_enabled = bool(msg.get("c", true))
 	GameConfig.civilian_count = int(msg.get("cn", GameConfig.civilian_count))

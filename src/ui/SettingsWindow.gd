@@ -153,6 +153,29 @@ func _build() -> void:
 	Ui.style_status(status)
 	acc_box.body.add_child(status)
 
+	var grid_box := SteamChrome.group_box("Map grid")
+	page.add_child(grid_box)
+	var grid_toggle := CheckBox.new()
+	grid_toggle.text = "Show grid"
+	grid_toggle.button_pressed = Ui.grid_visible
+	grid_box.body.add_child(grid_toggle)
+	var grid_row := HBoxContainer.new()
+	grid_box.body.add_child(grid_row)
+	var opacity := HSlider.new()
+	opacity.min_value = 0
+	opacity.max_value = 100
+	opacity.step = 1
+	opacity.value = Ui.grid_opacity * 100.0
+	opacity.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	grid_row.add_child(opacity)
+	var amount := Label.new()
+	amount.text = "Opacity: %d%%" % opacity.value
+	grid_row.add_child(amount)
+	grid_toggle.toggled.connect(func(on: bool) -> void: Ui.set_grid(on, opacity.value / 100.0))
+	opacity.value_changed.connect(func(value: float) -> void:
+		amount.text = "Opacity: %d%%" % value
+		Ui.set_grid(grid_toggle.button_pressed, value / 100.0))
+
 	# --- Кнопки справа внизу, как у окна набора ---
 	var bottom := HBoxContainer.new()
 	bottom.alignment = BoxContainer.ALIGNMENT_END
@@ -162,6 +185,7 @@ func _build() -> void:
 	reset.text = "Defaults"
 	reset.custom_minimum_size = Vector2(100, 0)
 	reset.pressed.connect(func() -> void:
+		Ui.set_grid(true, 0.32)
 		Ui.set_ui_scale(1.0)
 		Ui.set_accent("green")
 		Ui.set_fullscreen(false)

@@ -106,6 +106,7 @@ const K_UNREADY := "unready"
 const K_GO := "go"
 var _net: NetworkSession = null
 var _net_is_host: bool = false
+var _spectator := false
 var _my_side: int = MCF.Owner.PLAYER_1
 var _my_ready: bool = false
 ## Просьба снять готовность ушла хосту, ответа ещё нет: армию трогать пока нельзя.
@@ -132,6 +133,7 @@ var _chat_win: PanelContainer = null
 var _tile_grid: Grid = null
 
 func _ready() -> void:
+	Ui.board_settings_changed.connect(queue_redraw)
 	budget = GameConfig.budget
 	roster = GameConfig.active_roster()
 	for side in _sides():
@@ -174,10 +176,14 @@ func _adopt_network() -> void:
 	# Своя сторона — слот с моим сетевым номером (batch 12 #8/#11); у хоста он 1.
 	# Старая дуэльная раскладка «хост — первый, гость — второй» остаётся запасной.
 	var mine := roster.side_of_peer(_net.my_peer_id())
-	if mine < 0:
+	_spectator = _net.spectators.has(_net.my_peer_id())
+	if _spectator:
+		mine = -2
+		_my_ready = true
+	elif mine < 0:
 		mine = MCF.Owner.PLAYER_1 if _net_is_host else MCF.Owner.PLAYER_2
 	_my_side = mine
-	active_side = _my_side
+	active_side = roster.player_ids()[0] if _spectator else _my_side
 	# Зерно назначает хост — оно едет вместе с его ростером.
 	if _net_is_host:
 		_shared_seed = randi() & 0x7FFFFFFF
@@ -391,13 +397,14 @@ func _ready_names() -> String:
 
 ## Гость в зеркальной партии: сам ничего не ставит (batch 12 #12).
 func _mirrored_guest() -> bool:
-	return networked() and not _net_is_host \
+	return networked() and not _net_is_host and not _spectator \
 			and GameConfig.placement_mode == GameConfig.Placement.MIRRORED
 
 ## Стороны, которые расставляет ЭТА машина (batch 12 #15): свою и — у хоста — все
 ## ИИ-слоты, ведь больше их набрать некому. В зеркальном режиме ИИ получают отражение
 ## армии хоста, а не свою закупку.
 func _host_sides() -> Array[int]:
+	if _spectator: return []
 	var out: Array[int] = [_my_side]
 	if networked() and _net_is_host:
 		for side in _sides():
@@ -448,12 +455,14 @@ func _ready_locked() -> bool:
 
 ## Кнопка в сетевой партии: Ready, а у готового — Unready (playtest-20).
 func _on_net_flow() -> void:
+	if _spectator: return
 	if _my_ready:
 		_on_net_unready()
 	else:
 		_on_net_ready()
 
 func _on_net_unready() -> void:
+	if _spectator: return
 	if not _my_ready or _unready_pending or _mirrored_guest():
 		return
 	var sides: Array = [_my_side]
@@ -506,6 +515,7 @@ func _placed_facing_or_zero(rec: Dictionary) -> Vector2i:
 	return Vector2i.ZERO
 
 func _on_net_ready() -> void:
+	if _spectator: return
 	if _my_ready:
 		return
 	# Хост ставит и за ИИ (batch 12 #15): пока не обойдены все его стороны, кнопка
@@ -1283,6 +1293,7 @@ func _toggle_eraser(on: bool) -> void:
 	queue_redraw()
 
 func _click_cell(coord: Vector2i) -> void:
+	if _spectator: return
 	# Клик по своему расставленному юниту — снять и вернуть очки.
 	var idx := _placed_at(coord)
 	if idx != -1:
@@ -1364,7 +1375,7 @@ func _draw() -> void:
 	_tile_layer.cells = Rect2i(vx0, vy0, vx1 - vx0, vy1 - vy0)
 	# Сетка — в слое плиток, между полом и объектами: стену или стол в несколько клеток
 	# она не режет на куски.
-	_tile_layer.grid_color = Color(0.25, 0.27, 0.32)
+	_tile_layer.grid_color = Ui.grid_color()
 	_tile_layer.queue_redraw()
 	# Подсветка зоны развёртывания активной стороны — только клетки самой зоны.
 	var zone_col := Color(_side_color(active_side), 0.10)
@@ -1639,7 +1650,7 @@ func _on_pick_unit(id: String) -> void:
 	_status.text = ""
 
 func _refresh_labels() -> void:
-	_phase_label.text = "Deploying: %s" % _side_label(active_side)
+	_phase_label.text = "Spectating deployment" if _spectator else "Deploying: %s" % _side_label(active_side)
 	_phase_label.modulate = _side_color(active_side)
 	var count := 0
 	for p in placed:
@@ -1662,7 +1673,7 @@ func _refresh_labels() -> void:
 		else:
 			_flow_btn.text = "Ready"
 		# Гость зеркальной партии готов только когда пришла формация хоста (#12).
-		_flow_btn.disabled = _unready_pending or (_mirrored_guest()
+		_flow_btn.disabled = _spectator or _unready_pending or (_mirrored_guest()
 				and (_my_ready or not _remote_units.has(_my_side)))
 	else:
 		var sides := _sides()

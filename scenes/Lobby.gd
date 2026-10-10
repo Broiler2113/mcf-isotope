@@ -163,6 +163,8 @@ func _on_host_peer_joined(id: int) -> void:
 ## Ушедшего гостя подменяет ИИ высокой сложности (batch 13 #2): партия остаётся
 ## готовой к старту, а его место — занятым. Хост волен переключить слот обратно.
 func _on_host_peer_left(id: int) -> void:
+	NetHandoff.spectators.erase(id)
+	if NetHandoff.session != null: NetHandoff.session.spectators.erase(id)
 	var side := roster.side_of_peer(id)
 	if side >= 0:
 		var s: Roster.Slot = roster.slots[side]
@@ -177,7 +179,7 @@ func _on_host_peer_left(id: int) -> void:
 ## Посадить пришедшего в первый открытый слот; если открытых нет — добавить новый.
 ## Слот меняется на «Player» с буквой стороны, и это видят все (batch 12 #8).
 func _seat_peer(id: int) -> void:
-	if roster.side_of_peer(id) >= 0:
+	if roster.side_of_peer(id) >= 0 or NetHandoff.spectators.has(id):
 		return
 	var target: Roster.Slot = null
 	# Слот, который хост уже выставил в «Player», но за которым никто не сидит, — это
@@ -196,6 +198,7 @@ func _seat_peer(id: int) -> void:
 	if target == null:
 		var nid := roster.add_slot(Roster.SlotKind.OPEN)
 		if nid < 0:
+			_make_spectator(id)
 			return  # мест нет — гость останется зрителем лобби
 		_assign_color(nid, _first_free_color())
 		roster.slots[nid].budget = GameConfig.DEFAULT_BUDGET
@@ -251,6 +254,19 @@ func _on_host_message(msg: Dictionary) -> void:
 		_refresh_host_status()
 		_lobby_changed()
 		_send_lobby_map()
+		return
+	if str(msg.get("op", "")) == "spectate":
+		_make_spectator(from)
+		_lobby_changed()
+		return
+	if NetHandoff.spectators.has(from) and str(msg.get("op", "")) == "slot":
+		var want := int(msg.get("s", -1))
+		if want >= 0 and want < roster.slots.size() and roster.slots[want].kind == Roster.SlotKind.OPEN:
+			NetHandoff.spectators.erase(from)
+			NetHandoff.session.spectators.erase(from)
+			roster.slots[want].kind = Roster.SlotKind.HUMAN
+			roster.slots[want].peer_id = from
+			_lobby_changed()
 		return
 	var side := roster.side_of_peer(from)
 	if side < 0:
@@ -1075,7 +1091,18 @@ func _on_load_save() -> void:
 	# Ростер файла становится основой: слоты, цвета и команды в нём уже те, что были в
 	# бою. Хост дальше правит их как обычно — это и есть переназначение ролей.
 	roster = Roster.from_dict(saved.get("roster", {}))
-	_refresh_slots()
+	# Saved peer IDs belong to the old session; never restore them as connected people.
+	var host_seated := false
+	for slot: Roster.Slot in roster.slots:
+		slot.peer_id = -1
+		if slot.kind == Roster.SlotKind.HUMAN:
+			if not host_seated:
+				slot.peer_id = 1 if _is_host_net else -1
+				host_seated = true
+			elif _is_host_net: slot.kind = Roster.SlotKind.OPEN
+	if _is_host_net:
+		for id in NetHandoff.session.peers: _seat_peer(id)
+	_lobby_changed()
 	_status.text = "Loaded %s — %d armies on the board." % [name, _save_armies.size()]
 
 func _on_clear_save() -> void:
@@ -1116,6 +1143,12 @@ func _build_slots(parent: VBoxContainer) -> void:
 
 func _build_personal(parent: VBoxContainer) -> void:
 	var box := _titled(parent, "Personal Setup")
+	if _is_client:
+		var watch := Button.new()
+		watch.text = "Watch as Spectator"
+		watch.pressed.connect(func() -> void:
+			NetHandoff.session.send({"k": NetHandoff.K_LOBBY_REQ, "op": "spectate"}))
+		box.add_child(watch)
 	var color_opt := OptionButton.new()
 	for i in Roster.PALETTE.size():
 		color_opt.add_item(Roster.color_name(i), i)  # имена цветов (item 3)
@@ -1169,6 +1202,17 @@ func _refresh_slots() -> void:
 	_slots_box.add_child(_slot_header())
 	for s: Roster.Slot in roster.slots:
 		_slots_box.add_child(_slot_row(s))
+	for id in NetHandoff.spectators:
+		var row := HBoxContainer.new()
+		var label := Label.new()
+		label.text = "Spectator %d%s" % [id, " (you)" if NetHandoff.session != null and id == NetHandoff.session.my_peer_id() else ""]
+		row.add_child(label)
+		if _is_host_net:
+			var kick := Button.new()
+			kick.text = "✕"
+			kick.pressed.connect(func() -> void: NetHandoff.session.kick(id))
+			row.add_child(kick)
+		_slots_box.add_child(row)
 	if _gen_players != null:
 		_gen_players.set_value_no_signal(roster.slots.size())
 	# Зоны в превью окрашены цветами слотов — смена цвета или зоны видна сразу.
@@ -1185,7 +1229,7 @@ func _slot_row(s: Roster.Slot) -> Control:
 	var kind := OptionButton.new()
 	for pair in [[Roster.SlotKind.OPEN, "Open"], [Roster.SlotKind.CLOSED, "Closed"],
 			[Roster.SlotKind.HUMAN, "Player"], [-10, "AI - Easy"], [-11, "AI - Medium"],
-			[-12, "AI - Hard"], [-13, "AI - Learned"]]:
+			[-12, "AI - Hard"], [-13, "AI - Learned"], [-14, "Spectator"]]:
 		kind.add_item(str(pair[1]))
 	kind.select(_kind_index(s))
 	kind.item_selected.connect(_on_slot_kind.bind(s.id))
@@ -1302,7 +1346,7 @@ func _slot_row(s: Roster.Slot) -> Control:
 
 	# Удаление слота (item 4): «✕» справа. Нельзя убрать последние два — партии нужен
 	# хотя бы дуэт. Хост правит список, клиент только смотрит.
-	if not _is_client and roster.slots.size() > 2:
+	if not _is_client and s.peer_id != 1 and (roster.slots.size() > 2 or s.peer_id > 1):
 		var del := Button.new()
 		del.text = "✕"
 		del.pressed.connect(_on_remove_slot.bind(s.id))
@@ -1477,10 +1521,14 @@ func _on_add_slot() -> void:
 	_lobby_changed()
 
 func _on_remove_slot(slot_id: int) -> void:
-	# Слот с живым гостем не убирают — сперва он должен уйти (batch 12 #8).
+	# Kick a seated guest; retain the open seat so another player can join.
 	var s: Roster.Slot = roster.slots[slot_id]
 	if s.kind == Roster.SlotKind.HUMAN and s.peer_id > 1:
-		_status.text = "%s is sitting in that slot — it can't be removed." % s.display_name
+		var peer := s.peer_id
+		s.kind = Roster.SlotKind.OPEN
+		s.peer_id = -1
+		NetHandoff.session.kick(peer)
+		_lobby_changed()
 		return
 	roster.remove_slot(slot_id)
 	_lobby_changed()
@@ -1499,6 +1547,11 @@ func _first_free_color() -> int:
 
 func _on_slot_kind(index: int, slot_id: int) -> void:
 	var s := roster.slots[slot_id] as Roster.Slot
+	if index == 7:
+		if s.peer_id > 1: _make_spectator(s.peer_id)
+		else: _status.text = "Only a connected guest can become a spectator."
+		_lobby_changed()
+		return
 	# Слот сидящего гостя хост не переназначает (batch 12 #8): игрока не выкинешь
 	# щелчком по списку — только отключением.
 	if s.kind == Roster.SlotKind.HUMAN and s.peer_id > 1 and index != 2:
@@ -1689,32 +1742,7 @@ func _zone_tints() -> Dictionary:
 ## развёртывания цветами слотов. Рисуем по клеткам в Image — без отдельного вьюпорта,
 ## зато детерминированно и без сцены.
 func _render_map_texture(map: MapData, tints: Dictionary = {}, bands: Dictionary = {}) -> ImageTexture:
-	# Масштаб по размеру карты (batch 14): большая карта рисуется по пикселю на
-	# клетку, а не по 36 на каждую — превью всё равно ужимается в 260×180.
-	var sc: int = clampi(int(600 / maxi(1, maxi(map.width, map.height))), 1, 6)
-	var w := maxi(1, map.width) * sc
-	var h := maxi(1, map.height) * sc
-	var img := Image.create(w, h, false, Image.FORMAT_RGB8)
-	for y in map.height:
-		for x in map.width:
-			var coord := Vector2i(x, y)
-			var col := _cell_color(map, coord)
-			var zone := map.get_zone(coord)
-			if zone >= 0:
-				col = col.lerp(tints.get(zone, Color(0.85, 0.85, 0.85)), 0.4)
-			else:
-				for band: Vector2i in bands:
-					if x >= band.x and x < band.y:
-						col = col.lerp(bands[band], 0.3)
-						break
-			img.fill_rect(Rect2i(x * sc, y * sc, sc, sc), col)
-	# Нейтралы карты — жёлтые точки поверх (item 41: превью включает нейтралов).
-	for s in map.spawns:
-		if MCF.is_neutral(int(s["owner"])):
-			var c: Vector2i = s["coord"]
-			img.fill_rect(Rect2i(c.x * sc + 1, c.y * sc + 1, maxi(1, sc - 2), maxi(1, sc - 2)),
-					Roster.NEUTRAL_COLOR)
-	return ImageTexture.create_from_image(img)
+	return TerrainTiles.map_preview(map, tints, bands)
 
 func _cell_color(map: MapData, coord: Vector2i) -> Color:
 	if map.get_space(coord):
@@ -1806,3 +1834,12 @@ func _on_back() -> void:
 	if NetHandoff.session != null:
 		NetHandoff.discard()
 	get_tree().change_scene_to_file(MENU_SCENE)
+
+func _make_spectator(peer: int) -> void:
+	if peer <= 1 or NetHandoff.session == null or not NetHandoff.session.peers.has(peer): return
+	var side := roster.side_of_peer(peer)
+	if side >= 0:
+		roster.slots[side].kind = Roster.SlotKind.OPEN
+		roster.slots[side].peer_id = -1
+	if not NetHandoff.spectators.has(peer): NetHandoff.spectators.append(peer)
+	NetHandoff.session.spectators = NetHandoff.spectators.duplicate()

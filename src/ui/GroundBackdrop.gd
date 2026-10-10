@@ -48,3 +48,65 @@ func _draw_patch(rect: Rect2) -> void:
 		# Source coordinates share the board origin, so clipped pieces stay aligned
 		# while panning/resizing. Repeat sampling handles UVs outside the texture.
 		draw_texture_rect_region(texture, rect, rect, Color.WHITE, false, false)
+
+const GROUND_TILES := 16
+const GROUND_PATCH_CHANCE := 0.07
+
+static func wallpaper(env: String) -> ImageTexture:
+	var base := _ground_image(_ground_floor_name(env))
+	if env == "bunker":
+		# Continue the soil WALL using its fully connected tile, not a floor or
+		# the standalone wall sprite with a dark outline around every tile.
+		var soil := _ground_image("soil_autotile")
+		if soil != null:
+			var tile := soil.get_width() / 4
+			var variants := maxi(1, soil.get_height() / (tile * 4))
+			base = Image.create(tile * variants, tile, false, Image.FORMAT_RGBA8)
+			for v in variants:
+				base.blit_rect(soil, Rect2i(tile * 3, (v * 4 + 3) * tile, tile, tile),
+						Vector2i(v * tile, 0))
+	if base == null:
+		return null
+	var patch := _ground_image(_ground_patch_name(env))
+	var t := base.get_height()
+	var vars_n := maxi(1, base.get_width() / t)
+	var img := Image.create(GROUND_TILES * t, GROUND_TILES * t, false, Image.FORMAT_RGBA8)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = GROUND_TILES * 7919 + t
+	for y in GROUND_TILES:
+		for x in GROUND_TILES:
+			var src := base
+			var n := vars_n
+			if patch != null and rng.randf() < GROUND_PATCH_CHANCE:
+				src = patch
+				n = maxi(1, patch.get_width() / patch.get_height())
+			var v := TerrainTiles.variant_of(Vector2i(x, y), n)
+			img.blit_rect(src, Rect2i(v * t, 0, t, t), Vector2i(x * t, y * t))
+	return ImageTexture.create_from_image(img)
+
+static func _ground_image(name: String) -> Image:
+	var tex := Sprites.texture_of(name)
+	if tex == null:
+		return null
+	var img := tex.get_image()
+	if img == null:
+		return null
+	img = img.duplicate()
+	if img.is_compressed():
+		img.decompress()
+	img.convert(Image.FORMAT_RGBA8)
+	return img
+
+## Чем залит экран и чем идут проплешины — по окружению карты.
+static func _ground_floor_name(env: String) -> String:
+	match env:
+		"field", "town": return "floor_grass"
+		"bunker": return "soil"
+		"": return "floor"
+	return TerrainTiles.env_name("floor", env)
+
+static func _ground_patch_name(env: String) -> String:
+	match env:
+		"field", "town": return ""
+		"bunker": return ""
+	return "floor_field"

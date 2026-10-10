@@ -166,6 +166,11 @@ func _ready() -> void:
 	pages.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	pages.tabs_visible = false
 	vbox.add_child(pages)
+	var version := Label.new()
+	version.text = "v%s" % ProjectSettings.get_setting("application/config/version", "dev")
+	version.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	version.add_theme_font_size_override("font_size", 12)
+	frame.add_child(SteamChrome.pad(version, 12, 6))
 	_pages = pages
 	pages.add_child(_build_home_page())
 	pages.add_child(_page_with_back(_build_multi_tab(), "Multiplayer"))

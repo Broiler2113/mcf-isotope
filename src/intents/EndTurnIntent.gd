@@ -11,9 +11,8 @@ extends Intent
 ## намерение. Клиент мог завершить ЧУЖОЙ ход — а это ещё и слот мирных, и
 ## распространение огня. Заполненный requester резолвер сверяет с текущей стороной.
 ##
-## Дыру это закрывает не до конца: поле проставляет сам отправитель, и переписанный
-## клиент напишет туда что угодно. Честная защита требует знать НОМЕР ПИРА,
-## приславшего пакет, а ретранслятор его не передаёт (см. NetworkSession._relay).
+## NetworkSession supplies the authenticated sender. NetGame checks this requester
+## against that peer’s roster seat before the resolver checks the active turn.
 var requester: int = -1
 
 func _init(p_requester: int = -1) -> void:

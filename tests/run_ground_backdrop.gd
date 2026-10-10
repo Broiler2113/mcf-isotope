@@ -56,6 +56,8 @@ func _check(env: String, space: bool) -> void:
 			var actual_tile: Image = battle._ground.texture.get_image().get_region(Rect2i(0, 0, tile, tile))
 			ck(expected_tile.get_data() == actual_tile.get_data(), "bunker repeats the connected soil WALL tile")
 		var texture_id: int = battle._ground.texture.get_instance_id()
+		battle._lod = battle.LodLayer.new()
+		battle.add_child(battle._lod)
 		# Hide the sky for pixel checks: the uncovered board should show clear black.
 		if battle._sky != null:
 			battle._sky.hide()
@@ -63,7 +65,8 @@ func _check(env: String, space: bool) -> void:
 				Vector3(500, 400, 0.02), Vector3(-10, -10, 4.0)]:
 			battle.pan = Vector2(camera.x, camera.y)
 			battle.zoom = camera.z
-			battle._fit_ground()
+			ck(battle._lod.position == battle.pan and battle._lod.scale == Vector2.ONE * battle.zoom, tag + ": board and ground move in the same frame")
+			# Camera setters must synchronize immediately, without a later process frame.
 			ck(battle._ground.texture.get_instance_id() == texture_id,
 					tag + ": camera reuses its baked texture")
 			if outdoor and DisplayServer.get_name() != "headless":
