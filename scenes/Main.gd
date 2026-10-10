@@ -6160,8 +6160,8 @@ var _sky: Starfield = null
 ## обоями из вариантов плитки пола. У города и поля обои целиком травяные, без серых
 ## проплешин. Это чистый фон под доской: ни клеток, ни правил, ходить там негде.
 ##
-## Город и поле получают траву даже при наличии клеток космоса; на станции за бортом
-## остаются звёзды (_build_sky). Фон не рисуется внутри прямоугольника самой доски.
+## Город и поле получают траву, бункер — грунт, даже при наличии клеток космоса.
+## На станции за бортом остаются звёзды (_build_sky). Фон не рисуется внутри доски.
 const GROUND_TILES := 16        # сторона клочка обоев в клетках
 const GROUND_PATCH_CHANCE := 0.07
 
@@ -6170,7 +6170,7 @@ var _ground: GroundBackdrop = null
 func _build_ground() -> void:
 	if state == null:
 		return
-	if state.env not in ["field", "town"] \
+	if state.env not in ["field", "town", "bunker"] \
 			and state.grid.cells_flat().any(func(c: GridCell) -> bool: return c.is_space):
 		return
 	var tex := _ground_wallpaper()
@@ -6189,6 +6189,17 @@ func _build_ground() -> void:
 ## сетку. Дополнительная плитка нужна только окружениям, где допустимы проплешины.
 func _ground_wallpaper() -> ImageTexture:
 	var base := _ground_image(_ground_floor_name())
+	if state.env == "bunker":
+		# Continue the soil WALL using its fully connected tile, not a floor or
+		# the standalone wall sprite with a dark outline around every tile.
+		var soil := _ground_image("soil_autotile")
+		if soil != null:
+			var tile := soil.get_width() / 4
+			var variants := maxi(1, soil.get_height() / (tile * 4))
+			base = Image.create(tile * variants, tile, false, Image.FORMAT_RGBA8)
+			for v in variants:
+				base.blit_rect(soil, Rect2i(tile * 3, (v * 4 + 3) * tile, tile, tile),
+						Vector2i(v * tile, 0))
 	if base == null:
 		return null
 	var patch := _ground_image(_ground_patch_name())
@@ -6225,7 +6236,7 @@ func _ground_image(name: String) -> Image:
 func _ground_floor_name() -> String:
 	match state.env:
 		"field", "town": return "floor_grass"
-		"bunker": return "bedrock"
+		"bunker": return "soil"
 		"": return "floor"
 	return TerrainTiles.env_name("floor", state.env)
 

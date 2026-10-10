@@ -17,7 +17,7 @@ func _run() -> void:
 		for space in [false, true]:
 			await _check(env, space)
 	if failures.is_empty():
-		print("ground backdrop: outdoor grass, space, camera, bounds and state checks passed")
+		print("ground backdrop: grass/soil, space, camera, bounds and state checks passed")
 	else:
 		for failure in failures:
 			printerr(failure)
@@ -38,7 +38,7 @@ func _check(env: String, space: bool) -> void:
 	var tag := "%s space=%s" % [env, space]
 	battle._build_sky()
 	battle._build_ground()
-	var outdoor := env in ["field", "town"]
+	var outdoor := env in ["field", "town", "bunker"]
 	var expected := outdoor or not space
 	ck((battle._ground != null) == expected, tag + ": backdrop exists")
 	ck((battle._sky != null) == space, tag + ": space retains its sky")
@@ -48,6 +48,13 @@ func _check(env: String, space: bool) -> void:
 		ck(not VehicleRules.cell_entry(battle.state, outside, -1)["ok"],
 				tag + ": vehicles cannot enter cosmetic ground")
 	if battle._ground != null:
+		if env == "bunker":
+			ck(battle._ground_floor_name() == "soil", "bunker uses soil wall art")
+			var sheet: Image = battle._ground_image("soil_autotile")
+			var tile := sheet.get_width() / 4
+			var expected_tile := sheet.get_region(Rect2i(tile * 3, tile * 3, tile, tile))
+			var actual_tile: Image = battle._ground.texture.get_image().get_region(Rect2i(0, 0, tile, tile))
+			ck(expected_tile.get_data() == actual_tile.get_data(), "bunker repeats the connected soil WALL tile")
 		var texture_id: int = battle._ground.texture.get_instance_id()
 		# Hide the sky for pixel checks: the uncovered board should show clear black.
 		if battle._sky != null:
@@ -87,7 +94,7 @@ func _check_pixels(viewport: SubViewport, battle: Variant, tag: String) -> void:
 					ck(false, tag + ": wallpaper covers the board at " + str(p))
 					return
 			else:
-				if actual.g <= actual.r or actual.g <= actual.b:
+				if battle.state.env != "bunker" and (actual.g <= actual.r or actual.g <= actual.b):
 					ck(false, tag + ": uncovered/non-grass pixel at " + str(p))
 					return
 				# Check the board-relative phase away from sampling boundaries.
