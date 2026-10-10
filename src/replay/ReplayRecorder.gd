@@ -28,6 +28,7 @@ var meta: Dictionary = {}
 var start: Dictionary = {}
 var start_rules: Dictionary = {}
 var opening: Array = []
+var opening_processed: bool = false
 var steps: Array = []
 
 var _state: GameState = null
@@ -51,6 +52,7 @@ func begin(state: GameState, resolver: GameActionResolver, p_meta: Dictionary = 
 	start_rules = StateCodec.encode_rules(resolver)
 	steps.clear()
 	opening.clear()
+	opening_processed = false
 	_next_keyframe_round = state.turns.round_number + KEYFRAME_ROUNDS
 
 ## Отыграть открывающий слот мирных под запись бросков. Резолвер на это время
@@ -62,8 +64,9 @@ func capture_opening() -> ActionResult:
 		return ActionResult.success()
 	_resolver.replay_recorder = null
 	_state.dice.begin_record()
-	var res := _resolver.play_civilian_slots()
+	var res := _resolver.open_match()
 	opening = _state.dice.take_log()
+	opening_processed = true
 	_state.dice.record_enabled = false
 	_resolver.replay_recorder = self
 	return res
@@ -96,6 +99,7 @@ func to_dict() -> Dictionary:
 		"start": start,
 		"rules": start_rules,
 		"opening": opening,
+		"opening_processed": opening_processed,
 		"steps": steps,
 	}
 

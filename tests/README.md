@@ -218,3 +218,7 @@ real game as well.
 - `run_net_kick.sh`: host kicks a seated guest, reopens the seat, and guest returns to the menu.
 
 `run_followup098.gd` checks off-grid decal strokes/undo/rotation, corpse snapping, contextual material controls, town border roads, gas contact and fog-off visibility, one-player-turn event warnings and nonoverlapping barrages.
+
+`run_random_events.gd` also checks round-opening warnings (including the first round),
+multiplayer notifications, neutral slots around the round boundary, interval counting,
+and replay seeking across openings that consume no dice.

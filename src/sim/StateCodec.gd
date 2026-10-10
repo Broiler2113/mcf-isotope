@@ -197,6 +197,10 @@ static func apply_rules(resolver: GameActionResolver, d: Dictionary) -> void:
 				bool(cfg.get("mandatory", false)), int(cfg.get("interval", 3)), weights)
 	if resolver.random_events != null and d.has("events"):
 		resolver.random_events.restore(d["events"])
+		# Old saves have already started their round; reopening must not roll a
+		# second warning or shorten the saved interval.
+		if not d["events"].has("last_checked_round"):
+			resolver.random_events.last_checked_round = resolver.state.turns.round_number
 		# Газ на клетках — ВЫВОДИМОЕ состояние (0.9.4): в файл он не пишется, а
 		# восстанавливается из списка облаков. Иначе загруженная партия знала бы про
 		# облако, а доска о нём — нет, и сквозь газ было бы видно.

@@ -596,14 +596,14 @@ func _build_config(parent: VBoxContainer) -> void:
 	_events_check.button_pressed = GameConfig.random_events_enabled
 	ev_box.add_child(_events_check)
 	_events_mand = CheckBox.new()
-	_events_mand.text = "Mandatory (a due turn always fires one)"
+	_events_mand.text = "Mandatory (a due round always fires one)"
 	_events_mand.button_pressed = GameConfig.random_events_mandatory
 	ev_box.add_child(_events_mand)
 	_events_interval = SpinBox.new()
 	_events_interval.min_value = 1
 	_events_interval.max_value = 20
 	_events_interval.value = GameConfig.random_events_interval
-	_row(ev_box, "Turns between events:", _events_interval)
+	_row(ev_box, "Rounds between events:", _events_interval)
 	# Пул событий — в ОТДЕЛЬНОМ окне (item 3), а не длинным списком прямо в конфиге.
 	var cur_weights: Dictionary = GameConfig.random_events_weights
 	if cur_weights.is_empty():

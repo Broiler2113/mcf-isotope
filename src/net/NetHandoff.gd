@@ -82,7 +82,8 @@ const K_LOBBY_MAP := "lobby_map"
 ##       параметров, обстрела и газа; реестр событий стал другим.
 ##   3 — 0.9.8: neutral firing decisions and spectator roles.
 ##   4 — gas contact rolls and one-player-turn random-event warnings.
-const PROTOCOL := 4
+##   5 — event warnings at round opening, including the first round.
+const PROTOCOL := 5
 
 static func encode_rules() -> Dictionary:
 	var roster := GameConfig.active_roster()

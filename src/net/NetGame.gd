@@ -147,10 +147,11 @@ func announce_initiative() -> void:
 	var msg := {"k": K_INIT, "o": state.turns.round_order.duplicate(),
 			"a": state.turns.active_index, "n": state.turns.round_number}
 	state.dice.begin_record()
-	opening_civilians = resolver.play_civilian_slots()
+	opening_civilians = resolver.open_match()
 	msg["r"] = state.dice.take_log()
 	if recorder != null:
 		recorder.opening = msg["r"].duplicate()
+		recorder.opening_processed = true
 	state.dice.record_enabled = false
 	outgoing.emit(msg)
 	initiative_synced.emit()
@@ -167,7 +168,7 @@ func _client_adopt_initiative(msg: Dictionary) -> void:
 	state.turns.round_number = maxi(int(msg.get("n", 1)), 1)
 	state.turns.initiative_rolled = true
 	state.dice.feed_scripted(msg.get("r", []))
-	opening_civilians = resolver.play_civilian_slots()
+	opening_civilians = resolver.open_match()
 	initiative_synced.emit()
 
 # --- Хост: авторитетный резолв + рассылка ---

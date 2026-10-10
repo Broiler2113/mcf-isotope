@@ -1,11 +1,7 @@
 extends SceneTree
-## Случайные события 0.9.4: предупреждение за раунд, обстрел, газ и независимая армия.
-##
-## Проверяется ровно то, на чём держится система: событие объявляется и падает РАУНДОМ
-## ПОЗЖЕ, параметры катаются при объявлении, исход — при падении, всё из общего потока
-## кубиков (значит хост и клиент сходятся), выключенные события не тратят ни одного
-## кубика, снимок состояния возвращает и очередь, и стоящий газ, а независимая армия
-## получает свой слот в очереди, воюет со всеми и на победу не влияет.
+## Random events: warnings at round opening, one player turn before landing.
+## Dice, interval counters, pending zones and standing gas must stay deterministic
+## across local play, save/restore, replays and network peers.
 
 const TS = preload("res://tests/TestSupport.gd")
 
@@ -24,6 +20,9 @@ func _initialize() -> void:
 	_owner_ranges()
 	_no_dice_when_off()
 	_warning_then_landing()
+	_round_opening()
+	_opening_replay()
+	_opening_network()
 	_barrage()
 	_gas()
 	_army()
@@ -37,8 +36,7 @@ func _initialize() -> void:
 
 # --- Подмостки ---------------------------------------------------------------------------
 
-## Партия с включёнными событиями: интервал 1 и обязательный режим — событие на каждой
-## передаче хода, иначе проверять пришлось бы по десятку ходов.
+## Mandatory events every round, to keep scheduling fixtures short.
 func _match(weights: Dictionary, seed_value: int = 4242) -> Array:
 	var state := TS.build_map().build_state(seed_value)
 	var resolver := GameActionResolver.new(state)
@@ -128,8 +126,8 @@ func _warning_then_landing() -> void:
 	var state: GameState = pair[0]
 	var resolver: GameActionResolver = pair[1]
 	var round0 := state.turns.round_number
-	var res: ActionResult = resolver.resolve(EndTurnIntent.new(-1))
-	ck(resolver.random_events.pending.size() == 1, "a handoff announces exactly one event")
+	var res := resolver.open_match()
+	ck(resolver.random_events.pending.size() == 1, "first round opening announces exactly one event")
 	var entry: Dictionary = resolver.random_events.pending[0]
 	var said := " ".join(res.log_lines)
 	ck(said.contains("Artillery Barrage") and said.contains("next player ends their turn"),
@@ -138,6 +136,95 @@ func _warning_then_landing() -> void:
 	var next := resolver.resolve(EndTurnIntent.new(-1))
 	ck(" ".join(next.log_lines).contains("hits zone"), "the very next handoff resolves the warning")
 	ck(round0 == 1, "the match started in round 1")
+
+## A three-player round must not tick the interval on its two ordinary handoffs.
+## Neutral slots at either end must not swallow or duplicate the opening warning.
+func _round_opening() -> void:
+	for order in [[0, 1, 2], [0, 1, MCF.Owner.NEUTRAL], [MCF.Owner.NEUTRAL, 0, 1]]:
+		var m := MapData.blank_arena(30, 24)
+		m.set_spawn(Vector2i(2, 2), "light_infantry", 0)
+		m.set_spawn(Vector2i(27, 21), "light_infantry", 1)
+		m.set_spawn(Vector2i(2, 21), "civilian" if MCF.Owner.NEUTRAL in order else "light_infantry", order[2] if order[0] == 0 else order[0])
+		var s := m.build_state(81)
+		s.turns.round_order.assign(order)
+		s.turns.active_index = 0
+		var r := GameActionResolver.new(s)
+		r.random_events = RandomEvents.new(true, true, 2, {RandomEvents.GAS: 1})
+		r.open_match()
+		ck(r.random_events.turns_since == 1 and r.random_events.pending.is_empty(), "opening counts one round toward interval (%s)" % [order])
+		var transitions := 0
+		while s.turns.round_number == 1 and transitions < 4:
+			var result := r.resolve(EndTurnIntent.new(-1))
+			transitions += 1
+			if s.turns.round_number == 1:
+				ck(r.random_events.turns_since == 1 and r.random_events.pending.is_empty(), "mid-round handoff does not tick interval or warn")
+			else:
+				ck(r.random_events.pending.size() == 1 and " ".join(result.log_lines).contains("Gas Cloud"), "round two announces once, including neutral wrap (%s)" % [order])
+		ck(s.turns.round_number == 2, "fixture reaches round two")
+		# Do not let a large random gas zone kill the fixture's next player.
+		r.random_events.pending.clear()
+		r.resolve(EndTurnIntent.new(-1))
+		ck(r.random_events.pending.is_empty(), "second player receives no new warning mid-round")
+
+func _opening_replay() -> void:
+	# A due interval > 1 changes the counter at opening without rolling any dice.
+	# Replays must still reproduce that opening, including after seeking backward.
+	var m := MapData.blank_arena(24, 20)
+	m.set_spawn(Vector2i(2, 2), "light_infantry", 0)
+	m.set_spawn(Vector2i(21, 17), "light_infantry", 1)
+	var s := m.build_state(9)
+	s.turns.round_order.assign([0, 1])
+	s.turns.active_index = 0
+	var r := GameActionResolver.new(s)
+	r.random_events = RandomEvents.new(true, true, 3, {RandomEvents.GAS: 1})
+	var rec := ReplayRecorder.new()
+	rec.begin(s, r)
+	rec.capture_opening()
+	ck(rec.opening.is_empty() and r.random_events.turns_since == 1, "opening records a no-dice interval tick")
+	for _i in 4:
+		r.resolve(EndTurnIntent.new(-1))
+	ck(r.random_events.pending.size() == 1, "third round opens with the due warning")
+	var saved := r.random_events.snapshot()
+	var restored := RandomEvents.new()
+	restored.restore(saved)
+	ck(restored.snapshot() == saved, "save restores round interval and pending warning")
+	var resumed := GameActionResolver.new(StateCodec.decode(StateCodec.encode(s)))
+	StateCodec.apply_rules(resumed, StateCodec.encode_rules(r))
+	resumed.open_match()
+	ck(resumed.random_events.snapshot() == saved, "reopening a saved round does not reroll its warning")
+	var old_rules := StateCodec.encode_rules(r)
+	old_rules["events"].erase("last_checked_round")
+	StateCodec.apply_rules(resumed, old_rules)
+	var before_open := resumed.random_events.snapshot()
+	resumed.open_match()
+	ck(resumed.random_events.snapshot() == before_open, "old saves also avoid an extra opening warning")
+	var player := ReplayPlayer.new(rec.to_dict())
+	player.seek(4)
+	ck(player.resolver.random_events.snapshot() == saved, "replay reproduces no-dice opening and later warning")
+	player.seek(0)
+	ck(player.resolver.random_events.turns_since == 1 and player.resolver.random_events.pending.is_empty(), "backward seek restores opening counter without a warning")
+	player.seek(4)
+	ck(player.resolver.random_events.snapshot() == saved, "forward seek reproduces warning again")
+
+func _opening_network() -> void:
+	for interval in [1, 3]:
+		var m := MapData.blank_arena(24, 20)
+		m.set_spawn(Vector2i(2, 2), "light_infantry", 0)
+		m.set_spawn(Vector2i(21, 17), "light_infantry", 1)
+		var hs := m.build_state(91)
+		var cs := m.build_state(123)
+		var hr := GameActionResolver.new(hs)
+		var cr := GameActionResolver.new(cs)
+		hr.random_events = RandomEvents.new(true, true, interval, {RandomEvents.GAS: 1})
+		cr.random_events = RandomEvents.new(true, true, interval, {RandomEvents.GAS: 1})
+		var host := NetGame.new(hs, hr, true)
+		var client := NetGame.new(cs, cr, false)
+		host.outgoing.connect(client.receive)
+		host.announce_initiative()
+		ck(hr.random_events.snapshot() == cr.random_events.snapshot(), "host and guest agree on round-one warning/counter (interval %d)" % interval)
+		ck(cs.dice.fallback_rolls == 0, "guest opening consumes only host dice")
+		ck(host.opening_civilians.log_lines == client.opening_civilians.log_lines, "both players receive the same opening notification")
+		host.outgoing.disconnect(client.receive)
 
 func _barrage() -> void:
 	# Зона всегда на доске, и бьёт примерно половину клеток в ней.

@@ -113,7 +113,7 @@ max_candidates: 512
 civilians: false
 random_events: true
 random_event_share: 0.35     # occasional hazard games; retain clean combat practice
-random_event_interval: 6    # handoffs; event chance 2/3 each interval, full warning turn
+random_event_interval: 6    # rounds; event chance 2/3 each interval, one player turn warning
 hazard_coef: 0.5            # discounted public-danger potential; escaping pays, re-entry costs
 eval_random_events: false   # retain the main HARD benchmark without events
 event_eval_games: 6         # separate pinned-seed hazard suite at full evaluations

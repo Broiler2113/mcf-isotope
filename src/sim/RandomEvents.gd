@@ -5,6 +5,7 @@ extends RefCounted
 ## лобби включает события, задаёт «обязательное событие каждый ход» / «сколько ходов между
 ## событиями» и веса-доли по каждому событию.
 ##
+## Event intervals count rounds, with announcements at round opening.
 ## Each event announces its zone first and resolves when the next player ends
 ## their turn. Gas lifetime and repeated exposure still advance once per round.
 ##
@@ -54,10 +55,11 @@ static func default_weights() -> Dictionary:
 ## состояния, чтобы откат хода не «потерял» ни отсчёт ходов до следующего события, ни
 ## объявленное, но ещё не упавшее.
 var enabled: bool = false
-var mandatory: bool = false        # событие ОБЯЗАТЕЛЬНО каждый ход
-var interval: int = 3              # иначе — раз в столько ходов
+var mandatory: bool = false        # guarantee an event on each due round
+var interval: int = 3              # rounds between event checks
 var weights: Dictionary = {}       # id -> вес-доля (item 1.5)
-var turns_since: int = 0           # ходов прошло с прошлого события
+var last_checked_round: int = 0    # prevents another roll when reopening a saved round
+var turns_since: int = 0           # rounds since last event check; saved key kept for compatibility
 ## Объявленные события в очереди: [{"id", "params", "announced": раунд, "land": раунд}].
 ## Их может быть несколько сразу (обязательный режим с коротким интервалом).
 var pending: Array = []
@@ -184,6 +186,7 @@ func snapshot() -> Dictionary:
 		cl.append(c.duplicate())
 	return {"enabled": enabled, "mandatory": mandatory, "interval": interval,
 			"weights": weights.duplicate(), "turns_since": turns_since,
+			"last_checked_round": last_checked_round,
 			"pending": pend, "clouds": cl, "armies": armies}
 
 func restore(d: Dictionary) -> void:
@@ -192,6 +195,7 @@ func restore(d: Dictionary) -> void:
 	interval = d.get("interval", 3)
 	weights = (d.get("weights", {}) as Dictionary).duplicate()
 	turns_since = d.get("turns_since", 0)
+	last_checked_round = int(d.get("last_checked_round", 0))
 	pending = []
 	for e: Dictionary in d.get("pending", []):
 		pending.append({"id": str(e.get("id", "")),
