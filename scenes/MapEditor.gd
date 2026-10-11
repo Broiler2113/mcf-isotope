@@ -175,9 +175,8 @@ var _brush_buttons: Dictionary = {}
 var _palette_box: VBoxContainer
 var _current_icon: TextureRect
 var _current_label: Label
-var _colour_row: HBoxContainer
-var _colour_base := ""
-var _colour_group := ButtonGroup.new()
+var _variant_popup: PopupPanel
+var _variant_box: HFlowContainer
 var _more_zones := false
 var _mini_rect: TextureRect
 var _mini_view: Control
@@ -938,8 +937,6 @@ func _drop_float(at_cursor: Vector2i) -> void:
 var decal_rotation := 0.0
 var _decal_painting := false
 var _decal_last := Vector2.INF
-var _accent_opt: OptionButton
-var _door_opt: OptionButton
 var brush_accent := 0
 var brush_door := 0
 
@@ -2100,36 +2097,16 @@ func _build_palette() -> void:
 	_current_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_current_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	cur.add_child(_current_label)
-	# Цвета выбранного предмета мебели — строкой образцов под кистью (палитра держит по
-	# кнопке на предмет, а не на каждый цвет).
-	_colour_row = HBoxContainer.new()
-	_colour_row.add_theme_constant_override("separation", 4)
-	_colour_row.visible = false
-	outer.add_child(_colour_row)
-	_accent_opt = OptionButton.new()
-	_accent_opt.tooltip_text = "Wall accent"
-	for i in MCF.ACCENT_COLORS.size():
-		_accent_opt.add_icon_item(_swatch(MCF.ACCENT_COLORS[i]), "Accent · " + MCF.ACCENT_NAMES[i])
-	_accent_opt.item_selected.connect(func(i: int) -> void:
-		brush_accent = i
-		_pv_key = ""
-		queue_redraw())
-	outer.add_child(_accent_opt)
-	_door_opt = OptionButton.new()
-	_door_opt.tooltip_text = "Door texture"
-	_door_opt.add_icon_item(_door_thumb(0), "Automatic")
-	for material: String in TerrainTiles.DOOR_MATERIALS:
-		for variant in 3:
-			var look := TerrainTiles.DOOR_MATERIALS.find(material) * 3 + variant + 1
-			_door_opt.add_icon_item(_door_thumb(look), "%s · %d" % [material.capitalize(), variant + 1])
-	_door_opt.add_theme_constant_override("icon_max_width", 24)
-	_door_opt.item_selected.connect(func(i: int) -> void:
-		brush_door = i
-		if brush.begins_with("door:"): brush = MCF.FEATURE_AIRLOCK
-		_pv_key = ""
-		_mark_brush_button()
-		queue_redraw())
-	outer.add_child(_door_opt)
+	# Variants (colours, door textures, wall accents) open in a small popup beside the
+	# palette button that was clicked (0.11) instead of rows at the top of the palette.
+	_variant_popup = PopupPanel.new()
+	_variant_popup.theme = Ui.theme
+	_variant_box = HFlowContainer.new()
+	_variant_box.add_theme_constant_override("h_separation", 4)
+	_variant_box.add_theme_constant_override("v_separation", 4)
+	_variant_box.custom_minimum_size = Vector2(150, 0)
+	_variant_popup.add_child(_variant_box)
+	add_child(_variant_popup)
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -2264,6 +2241,7 @@ func _palette_grid(parent: Control, items: Array, columns: int) -> void:
 			b.pressed.connect(_pick_stamp.bind(id.substr(6)))
 		else:
 			b.pressed.connect(_select_brush.bind(id))
+			b.pressed.connect(_open_variants.bind(b))
 		grid.add_child(b)
 		_brush_buttons[id] = b
 
@@ -2404,7 +2382,7 @@ func _select_tool(t: int, keep_float: bool = false) -> void:
 		_float_grab = Vector2i(int(_float["w"]) / 2, int(_float["h"]) / 2)
 	if _tool_buttons.has(t):
 		(_tool_buttons[t] as Button).button_pressed = true
-	_refresh_material_controls()
+	_refresh_variants()
 	_refresh_status()
 	queue_redraw()
 
@@ -2426,56 +2404,83 @@ func _mark_brush_button() -> void:
 	if _current_icon != null:
 		_current_icon.texture = _thumb(brush)
 		_current_label.text = _brush_name(brush)
-	_refresh_colours()
-	_refresh_material_controls()
-
-func _refresh_material_controls() -> void:
-	var painting := tool in [Tool.BRUSH, Tool.LINE, Tool.RECT, Tool.CIRCLE, Tool.FILL]
-	if _accent_opt != null:
-		_accent_opt.visible = painting and _wall_brush()
-		_accent_opt.select(brush_accent)
-	if _door_opt != null:
-		_door_opt.visible = painting and (brush == MCF.FEATURE_AIRLOCK or brush.begins_with("door:"))
-		_door_opt.select(int(brush.substr(5)) if brush.begins_with("door:") else brush_door)
+	_refresh_variants()
 
 func _wall_brush() -> bool:
 	return brush.begins_with("wallmat:") or brush in [MCF.FEATURE_WALL, MCF.FEATURE_WOOD_WALL, MCF.FEATURE_ARMOR_WALL, MCF.FEATURE_GLASS, MCF.FEATURE_ARMOR_GLASS, MCF.FEATURE_SOIL]
 
-## Строка цветов под кистью: образец на каждый цвет выбранного предмета. Пересобирается,
-## только когда сменился сам предмет, — щелчок по образцу не разбирает строку, в которой
-## нажат.
-func _refresh_colours() -> void:
-	if _colour_row == null:
-		return
+## The current brush's variants (0.11): furniture colours, door textures or wall accents.
+## Each entry: [icon, tooltip, action, selected].
+func _variant_entries() -> Array:
+	var out: Array = []
 	var ids: Array = Furniture.colours_of(brush) if Furniture.is_furniture(brush) else []
-	var base: String = ids[0] if ids.size() > 1 else ""
-	if base != _colour_base:
-		_colour_base = base
-		for c in _colour_row.get_children():
-			_colour_row.remove_child(c)
-			c.queue_free()
-		if base != "":
-			var lbl := Label.new()
-			lbl.text = "Colour"
-			lbl.add_theme_font_size_override("font_size", 11)
-			_colour_row.add_child(lbl)
-			for fid: String in ids:
-				var b := Button.new()
-				b.icon = _ghost(fid)
-				b.expand_icon = true
-				b.custom_minimum_size = Vector2(30, 30)
-				b.toggle_mode = true
-				b.button_group = _colour_group
-				b.focus_mode = Control.FOCUS_NONE
-				b.tooltip_text = Furniture.name_of(fid)
-				_tight(b)
-				b.pressed.connect(_select_brush.bind(fid))
-				b.set_meta("fid", fid)
-				_colour_row.add_child(b)
-	_colour_row.visible = base != ""
-	for c in _colour_row.get_children():
-		if c is Button:
-			(c as Button).set_pressed_no_signal(c.get_meta("fid") == brush)
+	if ids.size() > 1:
+		for fid: String in ids:
+			out.append([_ghost(fid), Furniture.name_of(fid), _select_brush.bind(fid), fid == brush])
+	elif brush == MCF.FEATURE_AIRLOCK or brush.begins_with("door:"):
+		var current := int(brush.substr(5)) if brush.begins_with("door:") else brush_door
+		out.append([_door_thumb(0), "Automatic door texture", _set_door.bind(0), current == 0])
+		for material: String in TerrainTiles.DOOR_MATERIALS:
+			for v in 3:
+				var look := TerrainTiles.DOOR_MATERIALS.find(material) * 3 + v + 1
+				out.append([_door_thumb(look), "%s · %d" % [material.capitalize(), v + 1], _set_door.bind(look), current == look])
+	elif _wall_brush():
+		for i in MCF.ACCENT_COLORS.size():
+			out.append([_swatch(MCF.ACCENT_COLORS[i]), "Accent · " + MCF.ACCENT_NAMES[i], _set_accent.bind(i), brush_accent == i])
+	return out
+
+func _set_door(look: int) -> void:
+	brush_door = look
+	if brush.begins_with("door:"): brush = MCF.FEATURE_AIRLOCK
+	_pv_key = ""
+	_mark_brush_button()
+	queue_redraw()
+
+func _set_accent(i: int) -> void:
+	brush_accent = i
+	_pv_key = ""
+	_refresh_variants()
+	queue_redraw()
+
+## Open the variant strip right beside the palette button that was clicked.
+func _open_variants(anchor: Control) -> void:
+	if _variant_popup == null: return
+	var entries := _variant_entries()
+	if entries.is_empty():
+		_variant_popup.hide()
+		return
+	_fill_variants(entries)
+	# Beside the button: to its right if there is room, otherwise to its left (the palette
+	# sits at the right edge of the screen).
+	var want := _variant_popup.get_contents_minimum_size() + Vector2(8, 8)
+	var at := anchor.get_screen_position() + Vector2(anchor.size.x + 4.0, 0.0)
+	if at.x + want.x > get_viewport_rect().size.x:
+		at.x = anchor.get_screen_position().x - want.x - 4.0
+	_variant_popup.popup(Rect2i(Vector2i(at), Vector2i.ZERO))
+
+func _refresh_variants() -> void:
+	if _variant_popup == null or not _variant_popup.visible: return
+	var entries := _variant_entries()
+	if entries.is_empty(): _variant_popup.hide()
+	else: _fill_variants(entries)
+
+func _fill_variants(entries: Array) -> void:
+	for c in _variant_box.get_children():
+		_variant_box.remove_child(c)
+		c.queue_free()
+	for e: Array in entries:
+		var b := Button.new()
+		b.icon = e[0]
+		b.expand_icon = true
+		b.custom_minimum_size = Vector2(34, 34)
+		b.toggle_mode = true
+		b.button_pressed = e[3]
+		b.focus_mode = Control.FOCUS_NONE
+		b.tooltip_text = e[1]
+		_tight(b)
+		b.pressed.connect(e[2])
+		_variant_box.add_child(b)
+	_variant_popup.reset_size()
 
 func _set_brush_size(n: int) -> void:
 	brush_size = clampi(n, 1, 15)

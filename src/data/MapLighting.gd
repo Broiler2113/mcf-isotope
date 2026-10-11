@@ -155,7 +155,8 @@ func _floor_kind(c: Vector2i, outdoors: bool) -> String:
 			"town": return "streetlight" if (c.x + c.y) % 3 else "bollard_light"
 			"field", "asteroid": return "floodlight"
 		return "work_light"
-	if map.env == "town": return "floor_lamp" if (c.x + c.y) % 2 else "desk_lamp"
+	# Houses and huts get household lamps, never street-style posts (0.11 playtest).
+	if map.env in ["town", "field"]: return "floor_lamp" if (c.x + c.y) % 2 else "desk_lamp"
 	return "work_light"
 
 func _wall_near(c: Vector2i) -> Vector2i:
