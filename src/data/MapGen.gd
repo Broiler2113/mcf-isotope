@@ -307,10 +307,6 @@ static func generate(options: Dictionary) -> MapData:
 static func build(options: Dictionary) -> MapGen:
 	var o := default_options()
 	o.merge(options, true)
-	# Vacuum follows the map kind (0.11: the lobby toggle is gone): stations and asteroids
-	# float in space, towns, fields and bunkers never get holes into it.
-	if not o.has("space"):
-		o["space"] = STYLE_SPACE[clampi(int(o["style"]), 0, STYLE_SPACE.size() - 1)]
 	var dim := dims_of(o)
 	var need := zone_need(int(o["units"]))
 	var g: MapGen = null
@@ -328,6 +324,10 @@ static func build(options: Dictionary) -> MapGen:
 
 func _build(options: Dictionary, dim: Vector2i, need: int, tight: bool) -> void:
 	opt = options
+	# Vacuum follows the map kind (0.11: the lobby toggle is gone): stations and asteroids
+	# float in space, towns, fields and bunkers never get holes into it.
+	if not opt.has("space"):
+		opt["space"] = STYLE_SPACE[clampi(int(opt.get("style", 0)), 0, STYLE_SPACE.size() - 1)]
 	_need = need
 	_tight = tight
 	# Заказан размер ИГРОВОЙ карты; поле вокруг неё шире на кайму с каждой стороны.

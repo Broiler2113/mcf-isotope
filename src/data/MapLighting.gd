@@ -18,6 +18,10 @@ var _opaque := PackedByteArray()
 var _mountable := PackedByteArray()
 var _bare := PackedByteArray()
 var _open := PackedByteArray()
+## Chebyshev distance (capped at SPACING_CAP + 1) to the nearest wall lamp, kept up to date
+## as lamps are placed: the spacing rule becomes one lookup instead of an area scan.
+var _lamp_dist := PackedByteArray()
+const SPACING_CAP := 5
 static var SEARCH_OFFSETS: Array[Vector2i] = _search_offsets()
 static func _search_offsets() -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
@@ -38,6 +42,10 @@ func _index_geometry() -> void:
 	_mountable.resize(n)
 	_bare.resize(n)
 	_open.resize(n)
+	_lamp_dist.resize(n)
+	_lamp_dist.fill(SPACING_CAP + 1)
+	for fi: int in map.fixtures:
+		_mark_lamp(Vector2i(fi % g.w, fi / g.w))
 	for i in n:
 		var fid := map.feature_id[i]
 		var height := map.cover_height[i]
@@ -86,8 +94,9 @@ func _populate() -> void:
 				if coverage[i] >= want: continue
 			# Freestanding lamps only indoors (0.11): out on open ground they were free
 			# cover nobody asked for. Town streets keep their streetlights above.
+			if g._indoor[i] == 0: continue
 			var floor_pos := _floor_near(c)
-			if floor_pos != Vector2i(-1, -1) and g._indoor[floor_pos.y * g.w + floor_pos.x] != 0:
+			if floor_pos != Vector2i(-1, -1):
 				_place(floor_pos, _floor_kind(floor_pos, false), 0)
 	_airlock_beacons()
 
@@ -135,10 +144,14 @@ func _airlock_beacons() -> void:
 
 ## No wall lamp already within r tiles (Chebyshev).
 func _spaced(c: Vector2i, r: int) -> bool:
-	for y in range(maxi(0, c.y - r), mini(g.h, c.y + r + 1)):
-		for x in range(maxi(0, c.x - r), mini(g.w, c.x + r + 1)):
-			if map.fixtures.has(y * g.w + x): return false
-	return true
+	return _lamp_dist[c.y * g.w + c.x] > r
+
+func _mark_lamp(c: Vector2i) -> void:
+	for y in range(maxi(0, c.y - SPACING_CAP), mini(g.h, c.y + SPACING_CAP + 1)):
+		for x in range(maxi(0, c.x - SPACING_CAP), mini(g.w, c.x + SPACING_CAP + 1)):
+			var d := maxi(absi(x - c.x), absi(y - c.y))
+			var i := y * g.w + x
+			if d < _lamp_dist[i]: _lamp_dist[i] = d
 
 func _wall_kind(c: Vector2i) -> String:
 	var n := posmod(c.x * 11 + c.y * 7, 3)
@@ -177,17 +190,17 @@ func _floor_near(c: Vector2i) -> Vector2i:
 		var value := -float(delta.length_squared()) * 0.03
 		if value <= score: break # coverage is non-negative: no later cell can win.
 		var q := c + delta
-		if not _floor_ok(q) or not _line_clear(q, c): continue
+		if not _floor_ok(q, true) or not _line_clear(q, c): continue
 		value -= coverage[q.y * g.w + q.x]
 		if value > score:
 			score = value
 			best = q
 	return best
 
-func _floor_ok(c: Vector2i) -> bool:
+func _floor_ok(c: Vector2i, indoor := false) -> bool:
 	if not _eligible(c): return false
 	var i := c.y * g.w + c.x
-	if _bare[i] == 0: return false
+	if _bare[i] == 0 or (indoor and g._indoor[i] == 0): return false
 	if g._zone[i] >= 0 or g._keep[i] != 0 or g._street[i] != 0: return false
 	# Leave doors, one-tile passages and their approaches clear.
 	var free := 0
@@ -215,10 +228,11 @@ func _place(c: Vector2i, id: String, turn: int) -> void:
 	var i := c.y * g.w + c.x
 	if Furniture.is_wall_light(id):
 		map.fixtures[i] = [id, Furniture.durability_of(id), turn]
+		_mark_lamp(c)
 	else:
+		# A standing lamp is furniture: it takes the floor but never blocks light.
 		map.feature_id[i] = id
 		map.cover_height[i] = Furniture.height_of(id)
-		_opaque[i] = 1
 		_bare[i] = 0
 		_open[i] = 0
 	_illuminate(c, id, turn)

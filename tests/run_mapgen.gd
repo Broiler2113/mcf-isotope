@@ -209,7 +209,7 @@ func _check(overrides: Dictionary) -> void:
 	for i in m.width * m.height:
 		floors[m.floor_type[i]] = true
 		vacuum = vacuum or m.is_space[i] != 0
-	if not o["space"]:
+	if not bool(o.get("space", MapGen.STYLE_SPACE[int(o.get("style", 0))])):
 		ck(not vacuum, tag + ": no vacuum without Space")
 	# Двери — шлюзы, с космосом и без. От Medium и выше у станции всегда есть комнаты с
 	# дверями; на Small, порезанном на четверти для восьмерых, четверть 13×9 — это зал без
