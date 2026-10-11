@@ -1388,14 +1388,9 @@ func _handle_click(coord: Vector2i) -> void:
 				return
 			_back_to_menu()
 		Mode.SHOOT:
-			# Клик МИМО траектории начатой очереди снимает её (#12). Раньше такой клик
-			# либо молча уходил в никуда, либо (по #5) переводил остаток очереди на
-			# новую цель — в том числе стоящую совсем в другой стороне. Перенос по #5
-			# остаётся, но только вдоль ТОГО ЖЕ луча: остаток очереди летит туда, куда
-			# уже направлено оружие, а не разворачивается на месте.
-			if _shot_off_trajectory(coord):
-				_submit(CancelShotIntent.new(selected_id))
-				return
+			# The rest of a paid burst may go at ANY valid target (0.11; it was tied to
+			# the first firing line by #12). A click on nothing simply leaves shoot mode
+			# below — it no longer throws the remaining bullets away.
 			if occupant != null and target_ids.has(occupant.id):
 				_begin_shoot(occupant)
 				return
@@ -2118,31 +2113,10 @@ func _veh_enter_disembark(unit_id: int) -> void:
 func _pending_shoot(u: UnitInstance) -> bool:
 	return u.action_state != null and u.action_state.is_pending()
 
-## Лежит ли клик ВНЕ траектории начатой очереди (#12). Траектория — луч от стрелка
-## через клетку текущей цели: любая клетка на нём (хоть ближе цели, хоть дальше)
-## считается «по стволу». Без начатой очереди траектории нет, и отменять нечего.
-func _shot_off_trajectory(coord: Vector2i) -> bool:
-	var u := _selected_unit()
-	if u == null or not _pending_shoot(u) or coord == u.coord:
-		return false
-	var t := state.get_unit(u.action_state.target_id)
-	if t == null or t.coord == u.coord:
-		return false
-	var aim := t.coord - u.coord
-	var click := coord - u.coord
-	# Один и тот же луч = совпадающие направления единичного шага. Для восьми
-	# направлений сетки этого достаточно: знаки задают луч однозначно.
-	return Vector2i(signi(click.x), signi(click.y)) != Vector2i(signi(aim.x), signi(aim.y)) \
-			or not Combat.is_on_firing_line(u.coord, coord)
-
-## Есть ли НЕЗАВЕРШЁННАЯ стрельба, цель которой ещё МОЖНО достреливать (#45).
-## Устаревшая привязка (цель мертва/скрыта/сошла с линии) не должна блокировать
-## возможность начать новую стрельбу оставшимися ОД.
+## A burst with bullets left (0.11): they may go at any valid target, so the Shoot
+## button stays available even when the first target is dead or out of sight.
 func _valid_pending_shoot(u: UnitInstance) -> bool:
-	if not _pending_shoot(u):
-		return false
-	var t := state.get_unit(u.action_state.target_id)
-	return t != null and resolver.can_shoot(u, t) == ""
+	return _pending_shoot(u) and u.action_state.remaining_shots > 0
 
 func _enter_move() -> void:
 	var u := _selected_unit()
@@ -2169,9 +2143,6 @@ func _enter_shoot() -> void:
 	reach = null
 	item_cells = []
 	_melee_veh_ids = []
-	# Устаревшую привязку burst'а сбрасываем, чтобы можно было начать новую стрельбу (#45).
-	if _pending_shoot(u) and not _valid_pending_shoot(u):
-		u.action_state = null
 	# И при незавершённой очереди, и при свежей стрельбе показываем ВСЕ доступные
 	# цели: остаток очереди можно дострелить по другой цели (#5).
 	if _valid_pending_shoot(u) or u.remaining_ap > 0:
@@ -7938,8 +7909,9 @@ func _open_menu(unit: UnitInstance) -> void:
 		seat_lbl.add_theme_font_size_override("font_size", 11)
 		vb.add_child(seat_lbl)
 		var pshoot := "Shoot"
+		# The rest of a burst is still just "Shoot" (0.11).
 		if _valid_pending_shoot(unit):
-			pshoot = "Finish Burst"
+			pshoot = "Shoot"
 		elif unit.stats.special_ability_id == MCF.ABILITY_MARKSMAN:
 			pshoot = "Laser (2 AP)"
 		elif unit.stats.special_ability_id == MCF.ABILITY_FLAMETHROWER:
@@ -7977,8 +7949,9 @@ func _open_menu(unit: UnitInstance) -> void:
 
 		# Стрельба — тоже всегда присутствует; гаснет, когда не хватает ОД на выстрел.
 		var shoot_text := "Shoot"
+		# The rest of a burst is still just "Shoot" (0.11).
 		if _valid_pending_shoot(unit):
-			shoot_text = "Finish Burst"
+			shoot_text = "Shoot"
 		elif unit.stats.special_ability_id == MCF.ABILITY_MARKSMAN:
 			shoot_text = "Laser (2 AP)"
 		elif unit.stats.special_ability_id == MCF.ABILITY_MINER \
