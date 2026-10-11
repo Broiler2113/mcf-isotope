@@ -485,6 +485,8 @@ func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> voi
 	if tiles.is_empty(): return
 	var picture: Image = tiles[0].duplicate()
 	for k in int(fixture[2]): picture.rotate_90(CLOCKWISE)
+	var ftint := _grid.tint_at(c.x, c.y)
+	if ftint > 0: picture = tint_lamp(picture, Furniture.light_color_of(str(fixture[0]), ftint))
 	feat.blend_rect(picture, Rect2i(0, 0, res, res), at)
 	if int(fixture[1]) < Furniture.durability_of(str(fixture[0])):
 		feat.blend_rect(_crack_overlay(res), Rect2i(0, 0, res, res), at)
@@ -544,6 +546,8 @@ func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int
 			name = wl
 	if Furniture.is_furniture(fid):
 		var fimg := _furniture_image(c, fid, res)
+		if fimg != null and _grid.tint_at(c.x, c.y) > 0 and Furniture.emits_light(fid):
+			fimg = tint_lamp(fimg, Furniture.light_color_of(fid, _grid.tint_at(c.x, c.y)))
 		if fimg != null:
 			feat.blit_rect(fimg, full, at)
 			if cell.feature_durability < Furniture.durability_of(fid):
@@ -1192,6 +1196,21 @@ func _turned(name: String, res: int, k: int) -> Image:
 	_tiles[key] = [img]
 	return img
 
+## A lamp's glass takes its light colour (0.11): bright, unsaturated pixels — the bulb,
+## the shade's glow — are recoloured; the metal body keeps its own colours.
+static func tint_lamp(src: Image, colour: Color) -> Image:
+	var img: Image = src.duplicate()
+	for y in img.get_height():
+		for x in img.get_width():
+			var p := img.get_pixel(x, y)
+			if p.a <= 0.0: continue
+			var hi := maxf(p.r, maxf(p.g, p.b))
+			var lo := minf(p.r, minf(p.g, p.b))
+			if hi < 0.62 or (hi - lo) / hi > 0.3: continue
+			var k := clampf((hi - 0.62) / 0.3, 0.0, 1.0)
+			img.set_pixel(x, y, p.lerp(Color(colour.r * hi, colour.g * hi, colour.b * hi, p.a), 0.35 + 0.6 * k))
+	return img
+
 ## Трещины по побитой мебели: два тёмных излома поперёк плитки.
 func _crack_overlay(res: int) -> Image:
 	var key := "crack@%d" % res
@@ -1455,7 +1474,8 @@ func _bake_ground_lines(img: Image, cc: Vector2i, res: int) -> void:
 					img.set_pixel(x, y, img.get_pixel(x, y).blend(ink))
 
 ## Render the actual game tiles for menus and preset previews, without a scene or simulation.
-static func map_preview(map: MapData, tints: Dictionary = {}, bands: Dictionary = {}) -> ImageTexture:
+static func map_preview(map: MapData, tints: Dictionary = {}, bands: Dictionary = {},
+		army_colors: Dictionary = {}) -> ImageTexture:
 	var saved := GridCell.logs_snapshot()
 	var grid := Grid.new(map.width, map.height)
 	map.apply_to_grid(grid)
@@ -1487,10 +1507,13 @@ static func map_preview(map: MapData, tints: Dictionary = {}, bands: Dictionary 
 						var p := Vector2i(x * res + px, y * res + py)
 						img.set_pixelv(p, img.get_pixelv(p).lerp(tint, 0.18))
 	# Keep map-authored civilians visible in the textured preview.
+	# A saved battlefield (0.11) also shows where each army stands, in its slot colour.
 	for spawn: Dictionary in map.spawns:
-		if not MCF.is_neutral(int(spawn["owner"])): continue
+		var owner := int(spawn["owner"])
+		var colour: Variant = Roster.NEUTRAL_COLOR if MCF.is_neutral(owner) else army_colors.get(owner)
+		if colour == null: continue
 		var coord: Vector2i = spawn["coord"]
 		img.fill_rect(Rect2i(coord * res + Vector2i.ONE * (res / 4),
-			Vector2i.ONE * maxi(1, res / 2)), Roster.NEUTRAL_COLOR)
+			Vector2i.ONE * maxi(1, res / 2)), colour)
 	GridCell.logs_restore(saved)
 	return ImageTexture.create_from_image(img)

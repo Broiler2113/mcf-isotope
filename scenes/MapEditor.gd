@@ -113,7 +113,10 @@ var zoom := 1.0:
 		if is_inside_tree():
 			_fit_background()
 			_sync_camera_layer()
-var _lighting_preview := true
+## The editor's own lighting switch (0.11): independent of the battle setting, toggled by
+## the top-bar button, View menu or editor_lighting (Shift+L). Starts as the setting is.
+var _lighting_preview := false
+var _lighting_btn: Button
 var show_grid := true
 var show_zones := true
 var _mouse_panning := false
@@ -183,6 +186,7 @@ var _mini_view: Control
 var _menus: Dictionary = {}
 
 func _ready() -> void:
+	_lighting_preview = Ui.dynamic_lighting
 	Keybinds.changed.connect(_refresh_shortcut_labels)
 	Ui.board_settings_changed.connect(queue_redraw)
 	Ui.board_settings_changed.connect(_sync_lighting)
@@ -359,7 +363,7 @@ static func map_color(m: MapData, i: int, env: String) -> Color:
 ## вид пола (MCF.FLOOR_LOOKS, 0 — пол окружения)].
 func _tuple(i: int) -> Array:
 	return [int(map.floor_type[i]), float(map.cover_height[i]), map.is_space[i] != 0,
-			String(map.feature_id[i]), int(map.zone_owner[i]), map.get_turn(i), map.get_look(i), map.get_accent(i), map.get_door(i), map.fixtures.get(i, []).duplicate()]
+			String(map.feature_id[i]), int(map.zone_owner[i]), map.get_turn(i), map.get_look(i), map.get_accent(i), map.get_door(i), map.fixtures.get(i, []).duplicate(), map.get_tint(i)]
 
 ## Записать клетку: в карту, в зеркало плиток, в миникарту и слой зон.
 func _write(i: int, t: Array) -> void:
@@ -373,11 +377,13 @@ func _write(i: int, t: Array) -> void:
 	var accent := int(t[7]) if t.size() > 7 else 0
 	var door := int(t[8]) if t.size() > 8 else 0
 	var fixture := MapData.valid_fixture(t[9]) if t.size() > 9 and cover >= MCF.WALL_HEIGHT and not MCF.is_glass(feat) and feat != MCF.FEATURE_AIRLOCK else []
+	# A light colour belongs to a lamp: a cell with no lamp left keeps none (0.11).
+	var tint := int(t[10]) if t.size() > 10 and (not fixture.is_empty() or Furniture.emits_light(feat)) else 0
 	# Клетка уже такая — ни записи, ни отката: повторный мазок по тем же клеткам бесплатен.
 	if map.floor_type[i] == fl and map.cover_height[i] == cover and (map.is_space[i] != 0) == sp \
 			and map.feature_id[i] == feat and map.zone_owner[i] == zone and map.get_turn(i) == turn \
 			and map.get_look(i) == look and map.get_accent(i) == accent and map.get_door(i) == door \
-			and map.fixtures.get(i, []) == fixture:
+			and map.fixtures.get(i, []) == fixture and map.get_tint(i) == tint:
 		return
 	if _act.has("cells") and not _act["cells"].has(i):
 		_act["cells"][i] = _tuple(i)
@@ -394,14 +400,16 @@ func _write(i: int, t: Array) -> void:
 	map.set_turn(i, turn)
 	var look_changed := map.get_look(i) != look
 	map.set_look(i, look)
-	var decor_changed := map.get_accent(i) != accent or map.get_door(i) != door
+	var decor_changed := map.get_accent(i) != accent or map.get_door(i) != door or map.get_tint(i) != tint
 	map.set_accent(i, accent)
 	map.set_door(i, door)
+	map.set_tint(i, tint)
 	var x := i % map.width
 	var y := i / map.width
 	if decor_changed:
 		_grid.wall_accent = map.wall_accent.duplicate()
 		_grid.door_look = map.door_look.duplicate()
+		_grid.light_tint = map.light_tint.duplicate()
 		GridCell.log_look_change(x, y)
 	if look_changed:
 		if _grid.floor_look.is_empty():
@@ -1108,7 +1116,7 @@ func _build_sky() -> void:
 var _lighting: LightManager
 
 func _sync_lighting() -> void:
-	if not (Ui.dynamic_lighting and _lighting_preview):
+	if not _lighting_preview:
 		if is_instance_valid(_lighting):
 			_lighting.free()
 			_lighting = null
@@ -1155,6 +1163,18 @@ func _unhandled_input(event: InputEvent) -> void:
 		if _shortcut(event):
 			viewport.set_input_as_handled()
 		return
+	# Right-click (a two-finger click on a Mac touchpad) or Ctrl+click on a lamp opens its
+	# colour menu (0.11); a right-drag still pans.
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed \
+			and event.ctrl_pressed and _open_light_menu(event.position):
+		get_viewport().set_input_as_handled()
+		return
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
+		if event.pressed:
+			_right_press = event.position
+		elif event.position.distance_to(_right_press) < 6.0 and _open_light_menu(event.position):
+			_mouse_panning = false
+			return
 	if event is InputEventMouseButton and event.button_index in [MOUSE_BUTTON_MIDDLE, MOUSE_BUTTON_RIGHT]:
 		_mouse_panning = event.pressed
 		return
@@ -1336,6 +1356,9 @@ func _shortcut(e: InputEventKey) -> bool:
 			commands[id].call()
 			queue_redraw()
 			return true
+	if Keybinds.matches(e, "editor_lighting"):
+		_toggle_lighting()
+		return true
 	if Keybinds.matches(e, "editor_grid"):
 		show_grid = not show_grid
 		_refresh_menu_checks()
@@ -1810,6 +1833,10 @@ func _set_scratch(g: Grid, at: Vector2i, t: Array) -> void:
 		if g.door_look.is_empty():
 			g.door_look.resize(g.width * g.height)
 		g.door_look[at.y * g.width + at.x] = int(t[8])
+	if t.size() > 10 and int(t[10]) != 0:
+		if g.light_tint.is_empty():
+			g.light_tint.resize(g.width * g.height)
+		g.light_tint[at.y * g.width + at.x] = int(t[10])
 
 ## Узор сверх потолка черновика — картинками палитры, только видимая часть: вставка всей
 ## карты 500×500 не рисует четверть миллиона клеток.
@@ -1892,7 +1919,7 @@ func _build_menu_bar() -> void:
 			["Clear Map…", _clear_dialog]]],
 		["View", [["Zoom In", zoom_in, "editor_zoom_in"], ["Zoom Out", zoom_out, "editor_zoom_out"],
 			["Fit Map", fit_view, "editor_fit"], [],
-			["check:lighting", "Lighting Preview"], ["check:grid", "Grid", "editor_grid"], ["check:zones", "Deployment Zones"], ["check:mini", "Minimap"], [],
+			["check:lighting", "Lighting", "editor_lighting"], ["check:grid", "Grid", "editor_grid"], ["check:zones", "Deployment Zones"], ["check:mini", "Minimap"], [],
 			["Keyboard Shortcuts…", _shortcuts_dialog, "editor_help"]]],
 		["Presets", [["Save Selection…", _save_room_dialog], ["Manage Rooms & Structures…", _room_manager],
 			["Open Presets Folder", func() -> void: OS.shell_open(ProjectSettings.globalize_path(RoomPresets.DIR))]]],
@@ -1968,6 +1995,15 @@ func _build_menu_bar() -> void:
 		_refresh_status()
 		queue_redraw())
 	row.add_child(_sym_opt)
+	row.add_child(VSeparator.new())
+	_lighting_btn = Button.new()
+	_lighting_btn.text = "Lighting"
+	_lighting_btn.toggle_mode = true
+	_lighting_btn.focus_mode = Control.FOCUS_NONE
+	_lighting_btn.tooltip_text = "Preview dynamic lighting on this map (%s)" % Keybinds.label("editor_lighting")
+	_lighting_btn.toggled.connect(func(on: bool) -> void:
+		if on != _lighting_preview: _toggle_lighting())
+	row.add_child(_lighting_btn)
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(spacer)
@@ -1983,6 +2019,7 @@ func _build_menu_bar() -> void:
 	play_btn.pressed.connect(play)
 	row.add_child(play_btn)
 	_set_brush_size(brush_size)
+	_lighting_btn.set_pressed_no_signal(_lighting_preview)
 	_refresh_menu_checks()
 
 ## Пункты «Правки», которым сейчас нечего делать, гаснут: откат без истории, вставка без
@@ -2012,6 +2049,48 @@ func _preset_items() -> Array:
 		out.append(["radio:" + String(MapPresets.IDS[i]), MapPresets.NAMES[i]])
 	return out
 
+var _right_press := Vector2(-1000, -1000)
+var _light_menu: PopupMenu = null
+
+## The lamp under the mouse — a standing light or one mounted on the wall — gets a small
+## colour menu right where it was clicked. false: no lamp there.
+func _open_light_menu(screen: Vector2) -> bool:
+	if map == null: return false
+	var c := Vector2i(((screen - pan) / cell_size()).floor())
+	if not map.in_bounds(c): return false
+	var i := c.y * map.width + c.x
+	if not map.fixtures.has(i) and not Furniture.emits_light(map.feature_id[i]): return false
+	if _light_menu == null:
+		_light_menu = PopupMenu.new()
+		_light_menu.theme = Ui.theme
+		_light_menu.id_pressed.connect(func(id: int) -> void: _set_light_tint(int(_light_menu.get_meta("cell")), id))
+		add_child(_light_menu)
+	_light_menu.clear()
+	for t in Furniture.LIGHT_TINTS.size():
+		var swatch_colour: Color = Furniture.LIGHT_TINTS[t][1] if t > 0 \
+				else Furniture.light_color_of(map.fixtures[i][0] if map.fixtures.has(i) else map.feature_id[i], 0)
+		_light_menu.add_radio_check_item("Light colour · %s" % Furniture.LIGHT_TINTS[t][0], t)
+		_light_menu.set_item_icon(t, _swatch(swatch_colour))
+		_light_menu.set_item_checked(t, map.get_tint(i) == t)
+	_light_menu.set_meta("cell", i)
+	_light_menu.popup(Rect2i(Vector2i(get_screen_transform() * screen), Vector2i.ZERO))
+	return true
+
+func _set_light_tint(i: int, tint: int) -> void:
+	var t := _tuple(i)
+	t[10] = tint
+	_begin()
+	_write(i, t)
+	_commit()
+	_sync_lighting()
+	queue_redraw()
+
+func _toggle_lighting() -> void:
+	_lighting_preview = not _lighting_preview
+	if _lighting_btn != null: _lighting_btn.set_pressed_no_signal(_lighting_preview)
+	_sync_lighting()
+	_refresh_menu_checks()
+
 func _menu_action(a: Variant) -> void:
 	if a is Callable:
 		if (a as Callable).is_valid():
@@ -2019,8 +2098,7 @@ func _menu_action(a: Variant) -> void:
 	elif a is String:
 		var s: String = a
 		if s == "check:lighting":
-			_lighting_preview = not _lighting_preview
-			_sync_lighting()
+			_toggle_lighting()
 		elif s == "check:grid":
 			show_grid = not show_grid
 		elif s == "check:zones":
@@ -2037,8 +2115,9 @@ func _refresh_menu_checks() -> void:
 		return
 	var v: PopupMenu = _menus["View"]
 	for i in v.item_count:
+		if v.get_item_text(i).begins_with("Lighting"):
+			v.set_item_checked(i, _lighting_preview)
 		match v.get_item_text(i):
-			"Lighting Preview": v.set_item_checked(i, _lighting_preview)
 			"Grid  (G)": v.set_item_checked(i, show_grid)
 			"Deployment Zones": v.set_item_checked(i, show_zones)
 			"Minimap": v.set_item_checked(i, _mini_rect == null or _mini_rect.get_parent().visible)

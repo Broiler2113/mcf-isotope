@@ -475,5 +475,18 @@ static func for_room(room: String) -> Array:
 static func is_wall_light(id: String) -> bool:
 	return DEFS.get(id, {}).get("mount", "") == "wall"
 
+## Light colours a map maker can give any lamp (0.11, editor right-click). Index 0 keeps
+## the lamp's own colour. Display only: the colour of the glow and of the lamp's glass.
+const LIGHT_TINTS := [["Lamp's own", Color(0, 0, 0, 0)], ["Warm", Color(1.0, 0.74, 0.42)],
+		["White", Color(1.0, 1.0, 1.0)], ["Cool", Color(0.72, 0.86, 1.0)], ["Red", Color(1.0, 0.22, 0.16)],
+		["Amber", Color(1.0, 0.58, 0.12)], ["Green", Color(0.32, 1.0, 0.42)], ["Blue", Color(0.32, 0.52, 1.0)],
+		["Purple", Color(0.74, 0.38, 1.0)]]
+
+## The light colour of a lamp with this tint (0 = its own colour from DEFS).
+static func light_color_of(id: String, tint: int) -> Color:
+	if tint > 0 and tint < LIGHT_TINTS.size():
+		return LIGHT_TINTS[tint][1]
+	return DEFS.get(id, {}).get("light_color", Color.WHITE)
+
 static func emits_light(id: String) -> bool:
 	return bool(DEFS.get(id, {}).get("emits_light", false))

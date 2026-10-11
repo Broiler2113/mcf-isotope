@@ -17,6 +17,8 @@ func run() -> void:
 	_impossible_rolls()
 	await _enter_rolls()
 	_shared_folders()
+	_save_preview()
+	await _light_colours()
 	print("batch 0.11: %d failure(s)" % fails.size())
 	quit(1 if not fails.is_empty() else 0)
 
@@ -141,3 +143,67 @@ func _shared_folders() -> void:
 	ck(GameFolders.adopt_user_data() == 0 and not FileAccess.file_exists(ReplayFile.SAVE_DIR.path_join("zz-legacy.mcfs")),
 			"only once: a save deleted from the shared folder does not come back")
 	DirAccess.remove_absolute(legacy)
+
+## A loaded save previews its own battlefield in the lobby, armies included.
+func _save_preview() -> void:
+	var m := MapData.blank_arena(14, 10)
+	m.set_spawn(Vector2i(2, 2), "light_infantry", 0)
+	m.set_spawn(Vector2i(11, 7), "light_infantry", 1)
+	m.set_cell(Vector2i(6, 4), MCF.FLOOR_NORMAL, MCF.WALL_HEIGHT, false, MCF.FEATURE_WALL)
+	var s := m.build_state(3)
+	var back := MapData.from_grid(StateCodec.decode(StateCodec.encode(s)).grid, s.env)
+	ck(back.width == 14 and back.get_feature(Vector2i(6, 4)) == MCF.FEATURE_WALL, "a saved board converts back into a map")
+	var lobby: Node = load("res://scenes/Lobby.gd").new()
+	var preview: MapData = lobby._saved_battlefield(StateCodec.encode(s))
+	ck(preview != null and preview.spawns.size() == 2, "the preview carries every living soldier (%d)" % (preview.spawns.size() if preview != null else -1))
+	lobby.free()
+
+## A lamp's colour is chosen in the editor (right-click or Ctrl+click) and carries into the
+## battle: the glow takes the colour, and so does the lamp's glass.
+func _light_colours() -> void:
+	var ed: Node = load("res://scenes/MapEditor.tscn").instantiate()
+	root.add_child(ed)
+	for i in 5: await process_frame
+	var c := Vector2i(5, 5)
+	var i: int = c.y * ed.map.width + c.x
+	var t: Array = ed._tuple(i)
+	t[3] = "floor_lamp"
+	t[1] = Furniture.height_of("floor_lamp")
+	ed._begin()
+	ed._write(i, t)
+	ed._commit()
+	var screen: Vector2 = ed.pan + (Vector2(c) + Vector2(0.5, 0.5)) * ed.cell_size()
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.pressed = true
+	click.ctrl_pressed = true
+	click.position = screen
+	ed._unhandled_input(click)
+	ck(ed._light_menu != null and ed._light_menu.visible and ed._light_menu.item_count == Furniture.LIGHT_TINTS.size(),
+			"Ctrl+click on a lamp opens its colour menu (Mac habit)")
+	ed._light_menu.hide()
+	for pressed in [true, false]:
+		var right := InputEventMouseButton.new()
+		right.button_index = MOUSE_BUTTON_RIGHT
+		right.pressed = pressed
+		right.position = screen
+		ed._unhandled_input(right)
+	ck(ed._light_menu.visible, "a right-click (two-finger click) opens it too")
+	ed._light_menu.id_pressed.emit(4)   # Red
+	ck(ed.map.get_tint(i) == 4 and ed._grid.tint_at(c.x, c.y) == 4, "the chosen colour is stored on the map")
+	var occ := LightOccluders.new()
+	occ.sync(ed._grid)
+	ck(occ.sources[c][0].color == Furniture.LIGHT_TINTS[4][1], "the glow takes the colour")
+	var back := MapData.from_dict(ed.map.to_dict())
+	ck(back.get_tint(i) == 4, "it survives saving the map")
+	var g := Grid.new(back.width, back.height)
+	back.apply_to_grid(g)
+	ck(g.tint_at(c.x, c.y) == 4, "and reaches the battle board")
+	var white := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+	white.fill(Color(0.95, 0.95, 0.95))
+	var red := TerrainTiles.tint_lamp(white, Furniture.LIGHT_TINTS[4][1]).get_pixel(1, 1)
+	ck(red.r > 0.8 and red.g < 0.5, "a white lamp's glass turns red with its light")
+	ed.undo()
+	ck(ed.map.get_tint(i) == 0, "undo puts the colour back")
+	ed.queue_free()
+	await process_frame

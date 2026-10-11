@@ -73,6 +73,7 @@ const DEFINITIONS: Array = [
 	{"id": "editor_smaller", "label": "Smaller brush", "keys": [KEY_BRACKETLEFT], "contexts": ["*"], "section": "editor"},
 	{"id": "editor_larger", "label": "Larger brush", "keys": [KEY_BRACKETRIGHT], "contexts": ["*"], "section": "editor"},
 	{"id": "editor_grid", "label": "Toggle grid", "keys": [KEY_G], "contexts": ["*"], "section": "editor"},
+	{"id": "editor_lighting", "label": "Lighting on / off", "keys": [KEY_MASK_SHIFT | KEY_L], "contexts": ["*"], "section": "editor"},
 	{"id": "editor_play", "label": "Play map", "keys": [KEY_F5], "contexts": ["*"], "section": "editor"},
 	{"id": "editor_help", "label": "Keyboard shortcuts", "keys": [KEY_F1], "contexts": ["*"], "section": "editor"},
 	{"id": "editor_pan_up", "label": "Pan up", "keys": [KEY_W, KEY_UP], "contexts": ["*"], "section": "editor"},

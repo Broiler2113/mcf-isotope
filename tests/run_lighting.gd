@@ -134,12 +134,17 @@ func _editor() -> void:
 	ck(is_equal_approx(editor._pv_tint.a, 0.5), "floor preview is half opaque")
 	var ui := root.get_node("Ui")
 	ck(not ui.dynamic_lighting and editor._lighting == null, "lighting defaults off and creates no renderer")
-	ui.dynamic_lighting = true
-	editor._sync_lighting()
-	ck(is_instance_valid(editor._lighting), "editor can enable lighting live")
+	var key := InputEventKey.new()
+	key.pressed = true
+	key.keycode = KEY_L
+	key.shift_pressed = true
+	editor._input(key)
+	ck(is_instance_valid(editor._lighting) and editor._lighting_btn.button_pressed, "Shift+L turns editor lighting on, even with the battle setting off")
+	editor._lighting_btn.toggled.emit(false)
+	ck(editor._lighting == null and not editor._lighting_btn.button_pressed, "the Lighting button turns it off again")
 	editor._menu_action("check:lighting")
-	ck(editor._lighting == null, "editor preview toggle tears lighting down")
-	ui.dynamic_lighting = false
+	ck(is_instance_valid(editor._lighting), "the View menu entry toggles it too")
+	editor._menu_action("check:lighting")
 	editor._dirty = false
 	current_scene = editor
 	var event := InputEventKey.new()

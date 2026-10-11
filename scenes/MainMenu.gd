@@ -259,12 +259,6 @@ func _build_files_tab() -> Control:
 	page.name = "Saves & Replays"
 	page.add_theme_constant_override("separation", 8)
 
-	var hint := Label.new()
-	hint.text = "Continue a saved match, or watch a recorded one. To hand a saved army to a different player, open the save in the multiplayer lobby instead."
-	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint.add_theme_font_size_override("font_size", 12)
-	hint.modulate = Color(0.72, 0.74, 0.8)
-	page.add_child(hint)
 
 	var games := SteamChrome.group_box("Saved games")
 	page.add_child(games)
@@ -366,12 +360,6 @@ func _build_multi_tab() -> Control:
 	page.name = "Multiplayer"
 	page.add_theme_constant_override("separation", 10)
 
-	var hint := Label.new()
-	hint.text = "Play over the internet through the Isotope lobby server, or directly over a LAN. The host picks the map and the point budget; everyone then buys and deploys their own squad."
-	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint.add_theme_font_size_override("font_size", 13)
-	hint.modulate = Color(0.72, 0.74, 0.8)
-	page.add_child(hint)
 
 	var lobbies := SteamChrome.group_box("Lobbies")
 	page.add_child(lobbies)

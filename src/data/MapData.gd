@@ -77,6 +77,7 @@ func resize(p_width: int, p_height: int) -> void:
 	floor_look = PackedByteArray()
 	wall_accent = PackedByteArray()
 	door_look = PackedByteArray()
+	light_tint = PackedByteArray()
 	decals = []
 	fixtures = {}
 
@@ -96,6 +97,7 @@ func resize_keep(p_width: int, p_height: int) -> void:
 	var old_turn := feature_turn
 	var old_look := floor_look
 	var old_accent := wall_accent
+	var old_tint := light_tint
 	var old_door := door_look
 	var old_decals := decals
 	var old_fixtures := fixtures
@@ -117,6 +119,8 @@ func resize_keep(p_width: int, p_height: int) -> void:
 				feature_turn[dst] = old_turn[src]
 			if old_look.size() > src and old_look[src] != 0:
 				set_look(dst, old_look[src])
+			if old_tint.size() > src and old_tint[src] != 0:
+				set_tint(dst, old_tint[src])
 			if old_accent.size() > src and old_accent[src] != 0:
 				set_accent(dst, old_accent[src])
 			if old_door.size() > src and old_door[src] != 0:
@@ -203,6 +207,8 @@ func apply_to_grid(grid: Grid) -> void:
 			and grid.width == width else PackedByteArray()
 	grid.map_decals = decals.duplicate(true)
 	grid.door_look = door_look.duplicate()
+	grid.light_tint = light_tint.duplicate() if light_tint.size() == grid.width * grid.height \
+			and grid.width == width else PackedByteArray()
 	grid.wall_accent = wall_accent.duplicate() if wall_accent.size() == grid.width * grid.height \
 			and grid.width == width else PackedByteArray()
 	grid.furniture_turn.clear()
@@ -225,6 +231,29 @@ func apply_to_grid(grid: Grid) -> void:
 			else:
 				c.cover_height = cover_height[i]
 			c.fixture = fixtures.get(i, []) if c.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(fid) and fid != MCF.FEATURE_AIRLOCK else []
+
+## The inverse of apply_to_grid (0.11): a board as a map, e.g. a saved battlefield for
+## the lobby preview. Units are not cells; callers add them as spawns.
+static func from_grid(grid: Grid, p_env: String = "") -> MapData:
+	var m := MapData.new(grid.width, grid.height)
+	m.env = p_env
+	for y in grid.height:
+		for x in grid.width:
+			var c := grid.cell_fast(x, y)
+			var i := y * grid.width + x
+			m.floor_type[i] = c.floor_type
+			m.cover_height[i] = c.cover_height
+			m.is_space[i] = 1 if c.is_space else 0
+			m.feature_id[i] = c.feature_id
+			if not c.fixture.is_empty(): m.fixtures[i] = c.fixture.duplicate()
+	m.floor_look = grid.floor_look.duplicate()
+	m.wall_accent = grid.wall_accent.duplicate()
+	m.door_look = grid.door_look.duplicate()
+	m.light_tint = grid.light_tint.duplicate()
+	m.decals = grid.map_decals.duplicate(true)
+	for c: Vector2i in grid.furniture_turn:
+		m.feature_turn[c.y * grid.width + c.x] = (grid.furniture_turn[c] as Array).duplicate()
+	return m
 
 ## Прочность предмета на клетке ниже табличной (§3.15); dur ≥ табличной снимает запись.
 func set_feature_damage(coord: Vector2i, dur: int) -> void:
@@ -256,6 +285,19 @@ func set_door(i: int, v: int) -> void:
 			return
 		door_look.resize(width * height)
 	door_look[i] = v
+
+## Light colour per cell (0.11, Furniture.LIGHT_TINTS; 0 = the lamp's own) — display only.
+var light_tint: PackedByteArray = PackedByteArray()
+
+func get_tint(i: int) -> int:
+	return light_tint[i] if i < light_tint.size() else 0
+
+func set_tint(i: int, v: int) -> void:
+	if light_tint.is_empty():
+		if v == 0:
+			return
+		light_tint.resize(width * height)
+	light_tint[i] = v
 
 func get_accent(i: int) -> int:
 	return wall_accent[i] if i < wall_accent.size() else 0
@@ -467,6 +509,8 @@ func to_dict() -> Dictionary:
 		out["floor_look"] = rle(floor_look)
 	if wall_accent.size() > 0 and wall_accent.count(0) < wall_accent.size():
 		out["wall_accent"] = rle(wall_accent)
+	if light_tint.size() > 0 and light_tint.count(0) < light_tint.size():
+		out["light_tint"] = rle(light_tint)
 	if not door_look.is_empty():
 		out["door_look"] = rle(door_look)
 	if not decals.is_empty():
@@ -518,6 +562,8 @@ static func from_dict(d: Dictionary) -> MapData:
 		m.floor_look = unrle(d["floor_look"], n)
 	if d.has("wall_accent"):
 		m.wall_accent = unrle(d["wall_accent"], n)
+	if d.has("light_tint"):
+		m.light_tint = unrle(d["light_tint"], n)
 	if d.has("door_look"):
 		m.door_look = unrle(d["door_look"], n)
 	var zo: Array = d.get("zone_owner", [])

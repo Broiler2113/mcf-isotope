@@ -94,11 +94,6 @@ func _build() -> void:
 	_scale_slider.gui_input.connect(func(e: InputEvent) -> void:
 		if e is InputEventKey and e.pressed:
 			_apply_scale.call_deferred())
-	var hint := Label.new()
-	hint.text = "Grows or shrinks every window, button and text together."
-	hint.add_theme_font_size_override("font_size", 11)
-	hint.add_theme_color_override("font_color", Color("#8a8a8a"))
-	size_box.body.add_child(hint)
 
 	# --- Экран ---
 	var disp_box := SteamChrome.group_box("Display")

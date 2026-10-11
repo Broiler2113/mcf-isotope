@@ -984,6 +984,7 @@ func _random_map() -> MapData:
 		_gen_map = MapGen.generate(options)
 		_gen_key = key
 		_gen_info.text = _zone_summary(_gen_map)
+		_gen_info.visible = _gen_info.text != ""
 	return _gen_map
 
 ## Сколько места у каждой стороны. Зоны случайной карты одного размера — его и пишем,
@@ -998,20 +999,16 @@ func _zone_summary(map: MapData) -> String:
 	var o := _gen_options()
 	var units := int(o["units"])
 	var cells: int = sizes.values().min()
-	var text := "%d deployment zones, %d cells each" % [sizes.size(), cells]
-	# Размеры в подписи — ИГРОВОЙ карты, без каймы вокруг неё (0.9.3): игрок заказывал её.
+	# Only problems are worth a line (0.11): the normal "N zones, room for X" is gone.
+	var text := ""
 	var made := MapGen.map_size(map)
 	if cells < MapGen.zone_need(units):
-		return text + " — too tight for %d units each even at %d×%d; fewer players or units will fit." % [
+		return "Deployment zones are too tight for %d units each even at %d×%d; fewer players or units will fit." % [
 				units, made.x, made.y]
-	text += " — room for %d units each." % units
-	var dim := MapGen.dims_of(o)
-	if made.x > dim.x or made.y > dim.y:
-		text += " Map enlarged to %d×%d so they fit." % [made.x, made.y]
 	# Своему размеру потолка нет (MapGen.dims_of) — зато есть цена: замер 500×500 — ~3 с на
 	# постройку и ~0,4 ГБ памяти в бою, 1000×1000 — ~15 с и ~1,3 ГБ.
 	if made.x * made.y > MapGen.MAX_DIM.x * MapGen.MAX_DIM.y:
-		text += " Beyond 250×250 building takes seconds (≈15 s at 1000×1000) and a battle needs a lot of memory (≈1.3 GB at 1000×1000)."
+		text = "Beyond 250×250 building takes seconds (≈15 s at 1000×1000) and a battle needs a lot of memory (≈1.3 GB at 1000×1000)."
 	return text
 
 ## «Players» случайной карты: слотов становится ровно столько. Новые — в одиночке ИИ
@@ -1095,12 +1092,6 @@ func _build_load(parent: VBoxContainer) -> void:
 	clear_btn.text = "Clear"
 	clear_btn.pressed.connect(_on_clear_save)
 	row.add_child(clear_btn)
-	var note := Label.new()
-	note.text = "Loading a save skips deployment: the armies are already on the board. Assign each of them to a player or an AI in the slot list."
-	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	note.add_theme_font_size_override("font_size", 11)
-	note.modulate = Color(0.75, 0.78, 0.85)
-	box.add_child(note)
 
 func _on_load_save() -> void:
 	if _save_opt == null or _save_names.is_empty():
@@ -1113,6 +1104,7 @@ func _on_load_save() -> void:
 	var saved: Dictionary = data.get("state", {})
 	_save = data
 	_save_armies = _count_armies(saved)
+	_save_map = _saved_battlefield(saved)
 	# Ростер файла становится основой: слоты, цвета и команды в нём уже те, что были в
 	# бою. Хост дальше правит их как обычно — это и есть переназначение ролей.
 	roster = Roster.from_dict(saved.get("roster", {}))
@@ -1128,11 +1120,25 @@ func _on_load_save() -> void:
 	if _is_host_net:
 		for id in NetHandoff.session.peers: _seat_peer(id)
 	_lobby_changed()
-	_status.text = "Loaded %s — %d armies on the board." % [name, _save_armies.size()]
+	_status.text = "Loaded %s" % name
+
+## The saved board as a map for the preview, every living soldier where they stand (0.11).
+var _save_map: MapData = null
+func _saved_battlefield(saved: Dictionary) -> MapData:
+	var gs := StateCodec.decode(saved)
+	if gs == null or gs.grid == null:
+		return null
+	var m := MapData.from_grid(gs.grid, gs.env)
+	for u: UnitInstance in gs.all_units():
+		if u.is_alive() and gs.grid.in_bounds(u.coord):
+			m.spawns.append({"coord": u.coord, "stats_id": u.stats.id, "owner": u.owner})
+	return m
 
 func _on_clear_save() -> void:
 	_save = {}
 	_save_armies = {}
+	_save_map = null
+	_lobby_changed()
 	_status.text = "Saved game cleared — the match will start from deployment."
 
 ## Живые юниты по сторонам прямо из файла: разбирать его в GameState ради счётчика
@@ -1664,6 +1670,8 @@ func _selected_map() -> MapData:
 	# У гостя своего списка нет — карта та, что прислал хост (batch 12 #8).
 	if _is_client:
 		return _client_map if _client_map != null else MapData.blank_arena()
+	if not _save.is_empty() and _save_map != null:
+		return _save_map
 	var path: String = _map_paths[_map_opt.selected] if _map_opt != null else ""
 	if path == RANDOM_MAP:
 		return _random_map()
@@ -1767,7 +1775,10 @@ func _zone_tints() -> Dictionary:
 ## развёртывания цветами слотов. Рисуем по клеткам в Image — без отдельного вьюпорта,
 ## зато детерминированно и без сцены.
 func _render_map_texture(map: MapData, tints: Dictionary = {}, bands: Dictionary = {}) -> ImageTexture:
-	return TerrainTiles.map_preview(map, tints, bands)
+	var armies := {}
+	for s: Roster.Slot in roster.slots:
+		armies[s.id] = roster.color_of(s.id)
+	return TerrainTiles.map_preview(map, tints, bands, armies)
 
 func _cell_color(map: MapData, coord: Vector2i) -> Color:
 	if map.get_space(coord):

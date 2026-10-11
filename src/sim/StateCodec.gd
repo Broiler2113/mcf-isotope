@@ -70,6 +70,8 @@ static func _encode_decor(grid: Grid) -> Dictionary:
 		out["accent"] = MapData.rle(grid.wall_accent)
 	if not grid.door_look.is_empty():
 		out["door"] = MapData.rle(grid.door_look)
+	if grid.light_tint.count(0) < grid.light_tint.size():
+		out["tint"] = MapData.rle(grid.light_tint)
 	var turns: Array = []
 	for c: Vector2i in grid.furniture_turn:
 		var rec: Array = grid.furniture_turn[c]
@@ -267,6 +269,7 @@ static func restore_into(gs: GameState, d: Dictionary) -> void:
 		var n := gs.grid.width * gs.grid.height
 		gs.grid.floor_look = MapData.unrle(dec["floor"], n) if dec.has("floor") else PackedByteArray()
 		gs.grid.door_look = MapData.unrle(dec["door"], n) if dec.has("door") else PackedByteArray()
+		gs.grid.light_tint = MapData.unrle(dec["tint"], n) if dec.has("tint") else PackedByteArray()
 		gs.grid.wall_accent = MapData.unrle(dec["accent"], n) if dec.has("accent") else PackedByteArray()
 		gs.grid.furniture_turn.clear()
 		for t: Array in dec.get("turn", []):
