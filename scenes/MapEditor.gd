@@ -2248,8 +2248,7 @@ func _refresh_palette() -> void:
 	_palette_group("Neutral units", units, 1)
 	_zone_group()
 	var stamps: Array = []
-	for s: Dictionary in MapPresets.STAMPS:
-		stamps.append(["stamp:" + String(s["id"]), s["name"], s["hint"]])
+	RoomPresets.seed_builtins()
 	for name: String in RoomPresets.names():
 		stamps.append(["preset:" + name, name, "Place this saved room or structure; R rotates."])
 	_palette_group("Presets", stamps)
@@ -3256,7 +3255,7 @@ func _room_manager() -> void:
 	preview.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	body.add_child(preview)
 	var note := Label.new()
-	note.text = "Place a preset, edit its cells, then select it and save under the same name to update it." if not names.is_empty() else "No custom presets yet. Select a room, then use Presets → Save Selection."
+	note.text = "Place a preset, edit its cells, then select it and save under the same name to update it." if not names.is_empty() else "No presets. Select a room, then use Presets → Save Selection."
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.add_child(note)
 	var selected := func() -> Dictionary:
@@ -3267,6 +3266,19 @@ func _room_manager() -> void:
 			preview.texture = TerrainTiles.map_preview(RoomPresets.to_map(data["pattern"], str(data.get("env", "station"))))
 	pick.item_selected.connect(refresh)
 	refresh.call()
+	var rename_row := HBoxContainer.new()
+	var new_name := LineEdit.new()
+	new_name.placeholder_text = "New name"
+	new_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rename_row.add_child(new_name)
+	var rename := Button.new()
+	rename.text = "Rename"
+	rename.pressed.connect(func() -> void:
+		if pick.selected >= 0 and RoomPresets.rename_preset(names[pick.selected], new_name.text.strip_edges()):
+			_refresh_palette()
+			_room_manager.call_deferred())
+	rename_row.add_child(rename)
+	body.add_child(rename_row)
 	_dialog("Room & Structure Presets", body, [["Close", null], ["Delete", func() -> void:
 		if pick.selected >= 0: RoomPresets.remove_preset(names[pick.selected])
 		_refresh_palette()

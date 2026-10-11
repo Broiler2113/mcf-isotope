@@ -19,6 +19,7 @@ func run() -> void:
 	_shared_folders()
 	_save_preview()
 	await _light_colours()
+	_builtin_presets()
 	print("batch 0.11: %d failure(s)" % fails.size())
 	quit(1 if not fails.is_empty() else 0)
 
@@ -207,3 +208,17 @@ func _light_colours() -> void:
 	ck(ed.map.get_tint(i) == 0, "undo puts the colour back")
 	ed.queue_free()
 	await process_frame
+
+## The built-in rooms are ordinary preset files: listed, renamable, deletable for good.
+func _builtin_presets() -> void:
+	var store := load("res://src/data/RoomPresetStore.gd")
+	var marker: String = store.DIR.path_join(store.SEEDED_MARKER)
+	DirAccess.remove_absolute(marker)
+	store.remove_preset("Corridor")
+	store.seed_builtins()
+	ck(store.names().has("Small room") and store.names().has("Hedgehog row"), "built-in rooms are preset files")
+	ck(store.rename_preset("Corridor", "zz Hall") and store.names().has("zz Hall") and not store.names().has("Corridor"),
+			"a built-in can be renamed")
+	store.remove_preset("zz Hall")
+	ck(store.seed_builtins() == 0 and not store.names().has("Corridor"), "a deleted built-in stays deleted")
+	store.save_preset("Corridor", MapPresets.stamp("corridor"), "station")
