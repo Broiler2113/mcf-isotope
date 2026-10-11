@@ -387,7 +387,7 @@ var _victory_overlay: Control = null
 var _opening_state: Dictionary = {}
 var _before_grid: Grid = null
 var _before_tiles: TerrainTiles = null
-var _before_units: Array = []      # [stats_id, owner, coord]
+var _before_units: Array = []      # [stats_id, owner, coord, UnitInstance of the opening board]
 var _before_vehicles: Array = []   # [type_id, owner, origin, size, facing]
 var _before_on := false
 var _before_layer: BeforeLayer = null
@@ -3235,7 +3235,7 @@ func _capture_opening_view() -> void:
 	_before_units.clear()
 	for u: UnitInstance in opening.all_units():
 		if u.is_alive() and src.in_bounds(u.coord):
-			_before_units.append([u.stats.id, u.owner, u.coord])
+			_before_units.append([u.stats.id, u.owner, u.coord, u])
 	_before_vehicles.clear()
 	for veh: Vehicle in opening.all_vehicles():
 		if not veh.wrecked:
@@ -3297,15 +3297,20 @@ func _draw_before(ci: Node2D) -> void:
 		ci.draw_rect(Rect2(org + Vector2(2, 2), vsize - Vector2(4, 4)), col, false, 2.0)
 		ci.draw_string(font, org + Vector2(8, 18), String(VehicleDB.get_vehicle(String(v[0])).get("name", v[0])),
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 14, _ink(col.darkened(0.35)))
+	# Units exactly as the battle draws them (0.11): faction sprite, or the side-coloured
+	# disc with its outline and role tag — no extra ring.
+	var details := zoom >= UNIT_DETAIL_ZOOM
 	for u: Array in _before_units:
+		var unit: UnitInstance = u[3]
 		var o := ORIGIN + Vector2(u[2]) * CELL
-		var col := _side_color(int(u[1]))
-		var key := Sprites.resolve(String(u[0]), _owner_suffix(int(u[1])))
-		ci.draw_arc(o + Vector2(CELL, CELL) * 0.5, CELL * 0.46, 0.0, TAU, 24, col, 2.0)
-		if key == "" or not Sprites.draw_texture_override(ci, key, o, CELL):
-			ci.draw_circle(o + Vector2(CELL, CELL) * 0.5, CELL * 0.32, col)
-			ci.draw_string(font, o + Vector2(0, CELL * 0.5 + 5), Sprites.unit_tag(String(u[0])),
-					HORIZONTAL_ALIGNMENT_CENTER, CELL, 14, Color.WHITE)
+		var c := o + Vector2(CELL, CELL) * 0.5
+		var skey := _sprite_key(unit)
+		if skey == "" or not Sprites.draw_texture_override(ci, skey, o, CELL):
+			var col := _side_color(int(u[1]))
+			ci.draw_circle(c, CELL * 0.34, col)
+			if details:
+				ci.draw_arc(c, CELL * 0.34, 0, TAU, 20, col.darkened(0.45), 1.5)
+				_tag_line(unit).draw(ci.get_canvas_item(), c + Vector2(-9, 5 - 16 * 0.8), _ink(col))
 	Sprites.set_base_transform(pan, Vector2(zoom, zoom))
 
 ## Разбор партии обученной политикой (item: «play vs latest»). Прогоняет записанный матч
