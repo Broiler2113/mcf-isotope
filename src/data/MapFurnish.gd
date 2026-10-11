@@ -521,6 +521,7 @@ func _furnish() -> void:
 			_furnish_room(comps[ci], ci == main, comps.size(), r)
 	if level > 0:
 		_outdoor_clutter()
+		MapLighting.populate(g)
 	if g._sym > 0:
 		g._mirror()
 

@@ -361,7 +361,7 @@ static func _write_manifest() -> void:
 
 static func _manifest_text() -> String:
 	var lines: Array[String] = [
-		"MCF TACTICS -- TEXTURE REPLACEMENT",
+		"MCF ISOTOPE -- TEXTURE REPLACEMENT",
 		"",
 		"Drop an image in this folder named after any entry below and it replaces",
 		"that sprite everywhere in the game. Delete the file to get the original back.",

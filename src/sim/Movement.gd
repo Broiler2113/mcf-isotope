@@ -80,6 +80,8 @@ static func reachable_for(grid: Grid, unit: UnitInstance, budget: int,
 static func reachable(grid: Grid, start: Vector2i, budget: int,
 		avoid_fire: bool = false, avoid_cells: Dictionary = {},
 		free_cells: Dictionary = {}) -> Reachability:
+	# Embarked tank crew has an off-board coordinate, not a walkable origin.
+	if not grid.in_bounds(start): return Reachability.new()
 	var gid := grid.get_instance_id()
 	if _cache_version != GridCell.walk_version or _cache_grid != gid:
 		_cache.clear()

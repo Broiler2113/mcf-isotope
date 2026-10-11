@@ -11,7 +11,7 @@ extends Node
 ## пропускает broadcast).
 
 const DISCOVERY_PORT := 8643
-const MAGIC := "MCF_TACTICS_LOBBY_V1"
+const MAGIC := "MCF_ISOTOPE_LOBBY_V1"
 ## Как часто хост объявляет о себе и как быстро протухает найденный сервер.
 const BEACON_INTERVAL := 1.0
 const ENTRY_TTL := 3.5

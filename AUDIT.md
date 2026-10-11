@@ -1,4 +1,4 @@
-# MCF Tactics — Project Content Audit
+# MCF Isotope — Project Content Audit
 
 Audit date: 2026-09-05. Commit `f76900e`, branch `main`, working tree clean.
 
@@ -354,9 +354,8 @@ split it should read §27.6 first.
   `TurnManager.gd:4,64`, `GameActionResolver.gd:10,156,1697`, `Setup.gd:3`,
   `MainMenu.gd:3`, `GameConfig.gd:14`, `VehicleDB.gd:5` — referring to sections like
   "isotope §12b" and "isotope §6.5". That document is neither on this host nor in this
-  repo, so those citations cannot be followed. This also explains the naming: the git
-  remote is `mcf-isotope` and the directory `mcf-isotope 1.0`, while `project.godot`
-  declares `config/name="MCF Tactics"`. Inherited lineage, not a mistake.
+  repo, so those citations cannot be followed. The current game name is **MCF Isotope**, matching the `mcf-isotope`
+  repository and `project.godot` configuration.
 - **The language split is a documented convention.** 2,803 of 14,706 GDScript lines (19%)
   carry Russian comments, heaviest in the files a newcomer opens first
   (`GameActionResolver.gd` 782, `Main.gd` 515, `AIController.gd` 335). §21 states the rule

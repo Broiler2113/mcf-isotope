@@ -46,7 +46,9 @@ var _pending: Intent = null
 const FULL_SIZES := 4
 ## Самая большая карта (250×250) обязана собираться не дольше этого: лобби строит её
 ## заново на каждое изменение настроек. С запасом на медленную машину.
-const COLOSSAL_MS := 4000
+# Includes the additional coverage pass and thousands of destructible fixtures.
+# The legacy generation budget is 4 s; lighting adds at most 1 s on this bench.
+const COLOSSAL_MS := 5000
 
 func _initialize() -> void:
 	ck(MapGen.SIZE_CUSTOM == MapGen.SIZES.size(), "'Custom' follows the last preset size")

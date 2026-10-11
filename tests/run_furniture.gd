@@ -409,7 +409,7 @@ func _gen(style: int, lv: int, seed: int, extra: Dictionary = {}) -> MapData:
 func _count(m: MapData) -> int:
 	var n := 0
 	for f in m.feature_id:
-		if Furniture.is_furniture(f):
+		if Furniture.is_furniture(f) and Furniture.DEFS[f].cat != "lighting" and f != "lamp":
 			n += 1
 	return n
 
@@ -667,7 +667,7 @@ func _menu_texts() -> PackedStringArray:
 		if n.is_queued_for_deletion():
 			continue
 		if n is Button and (n as Button).visible:
-			out.append((n as Button).text)
+			out.append((n as Button).text.get_slice("  [", 0))
 		stack.append_array(n.get_children())
 	return out
 

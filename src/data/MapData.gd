@@ -47,6 +47,8 @@ var wall_accent: PackedByteArray = PackedByteArray()
 var door_look: PackedByteArray = PackedByteArray()
 ## Cosmetic ground decals, JSON records [kind, x, y, rotation, scale].
 var decals: Array = []
+## Index -> [fixture id, durability, quarter turns]. Separate from the wall beneath it.
+var fixtures: Dictionary = {}
 
 func _init(p_width: int = 16, p_height: int = 12) -> void:
 	resize(p_width, p_height)
@@ -75,6 +77,7 @@ func resize(p_width: int, p_height: int) -> void:
 	wall_accent = PackedByteArray()
 	door_look = PackedByteArray()
 	decals = []
+	fixtures = {}
 
 ## Изменить размер, СОХРАНИВ содержимое (batch 13 #14): клетки в пересечении старого и
 ## нового поля остаются как были, новые — космос, спавны за краем отбрасываются. Раньше
@@ -94,6 +97,7 @@ func resize_keep(p_width: int, p_height: int) -> void:
 	var old_accent := wall_accent
 	var old_door := door_look
 	var old_decals := decals
+	var old_fixtures := fixtures
 	resize(p_width, p_height)
 	fill_all_space()
 	for y in mini(old_h, height):
@@ -104,6 +108,7 @@ func resize_keep(p_width: int, p_height: int) -> void:
 			cover_height[dst] = old_cover[src]
 			is_space[dst] = old_space[src]
 			feature_id[dst] = old_feat[src]
+			if old_fixtures.has(src): fixtures[dst] = old_fixtures[src].duplicate()
 			zone_owner[dst] = old_zone[src]
 			if old_dur.has(src):
 				feature_dur[dst] = old_dur[src]
@@ -142,6 +147,8 @@ func set_cell(coord: Vector2i, p_floor: int, p_cover: float, p_space: bool, p_fe
 	cover_height[i] = p_cover
 	is_space[i] = 1 if p_space else 0
 	feature_id[i] = p_feature
+	if p_cover < MCF.WALL_HEIGHT or MCF.is_glass(p_feature) or p_feature == MCF.FEATURE_AIRLOCK:
+		fixtures.erase(i)
 
 func get_feature(coord: Vector2i) -> String:
 	return feature_id[_index(coord)] if in_bounds(coord) else ""
@@ -216,6 +223,7 @@ func apply_to_grid(grid: Grid) -> void:
 					c.feature_durability = clampi(int(dmg[1]), 1, c.feature_durability)
 			else:
 				c.cover_height = cover_height[i]
+			c.fixture = fixtures.get(i, []) if c.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(fid) and fid != MCF.FEATURE_AIRLOCK else []
 
 ## Прочность предмета на клетке ниже табличной (§3.15); dur ≥ табличной снимает запись.
 func set_feature_damage(coord: Vector2i, dur: int) -> void:
@@ -462,6 +470,10 @@ func to_dict() -> Dictionary:
 		out["door_look"] = rle(door_look)
 	if not decals.is_empty():
 		out["decals"] = decals.duplicate(true)
+	if not fixtures.is_empty():
+		var records := {}
+		for i: int in fixtures: records[str(i)] = fixtures[i].duplicate()
+		out["fixtures"] = records
 	return out
 
 static func from_dict(d: Dictionary) -> MapData:
@@ -482,6 +494,11 @@ static func from_dict(d: Dictionary) -> MapData:
 		if i < fi.size():
 			m.feature_id[i] = str(fi[i])
 	m.env = str(d.get("env", ""))
+	for key in d.get("fixtures", {}):
+		var i := int(key)
+		var record := valid_fixture(d.fixtures[key])
+		if i >= 0 and i < n and m.cover_height[i] >= MCF.WALL_HEIGHT and not record.is_empty():
+			m.fixtures[i] = record
 	var fd: Dictionary = d.get("feature_durability", {})
 	for k: String in fd:
 		var rec: Array = fd[k]
@@ -572,3 +589,8 @@ static func path_for(name: String) -> String:
 	if FileAccess.file_exists(bundled):
 		return bundled
 	return user_path
+
+static func valid_fixture(raw: Variant) -> Array:
+	if not raw is Array or raw.size() != 3 or not Furniture.is_wall_light(str(raw[0])):
+		return []
+	return [str(raw[0]), clampi(int(raw[1]), 1, Furniture.durability_of(str(raw[0]))), posmod(int(raw[2]), 4)]

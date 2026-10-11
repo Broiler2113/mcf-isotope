@@ -683,6 +683,11 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 	if shooter.owner != state.active_player():
 		return ActionResult.fail("It's the other player's turn")
 
+	if intent.target_id < 0 and intent.component == "fixture":
+		var reason := can_shoot_fixture(shooter, intent.target_cell)
+		if reason != "": return ActionResult.fail(reason)
+		return _recoiled(_resolve_shoot_fixture(shooter, intent.target_cell, intent.shots), shooter, intent.target_cell)
+
 	# Противотанкист может бить по пустой клетке пола (§3.14) — взрыв в её центре.
 	if intent.target_id < 0 and shooter.stats.special_ability_id == MCF.ABILITY_ANTI_TANK:
 		var ground_reason := can_blast_cell(shooter, intent.target_cell)
@@ -1165,6 +1170,7 @@ func _blast_destroy_terrain(c: Vector2i, res: ActionResult = null,
 	if not state.grid.in_bounds(c):
 		return
 	var cell := state.grid.cell(c)
+	cell.fixture = []
 	var fid := cell.feature_id
 	# Мебель любой разрыв сносит целиком (§3.15, 0.9.2) — и сейф, и станок.
 	if Furniture.is_furniture(fid):
@@ -2989,7 +2995,7 @@ func move_tier_budgets(unit: UnitInstance) -> Array[int]:
 
 func can_move(unit: UnitInstance) -> bool:
 	return unit != null and unit.is_alive() and unit.aboard_vehicle_id == -1 \
-			and not unit.is_held() and (unit.remaining_ap > 0 or unit.move_credit > 0)
+			and not unit.is_held() and state.grid.in_bounds(unit.coord) and (unit.remaining_ap > 0 or unit.move_credit > 0)
 
 ## Достижимая клетка, ближайшая к dest (при равенстве — дешевле по ходу); `taken` —
 ## клетки, уже разобранные другими юнитами группы. Своя клетка, если идти некуда.
@@ -9337,3 +9343,75 @@ func vehicle_disembark_cells(veh: Vehicle, unit_id: int = -1) -> Array:
 			if not state.grid.is_occupied_or_wall(n):
 				out.append(n)
 	return out
+
+# Mounted lamps are separately targetable. Shooting one does not damage its wall.
+func fixture_at(c: Vector2i) -> String:
+	if not state.grid.in_bounds(c): return ""
+	var cell := state.grid.cell(c)
+	if not cell.fixture.is_empty(): return str(cell.fixture[0])
+	return cell.feature_id if Furniture.emits_light(cell.feature_id) else ""
+
+func can_shoot_fixture(shooter: UnitInstance, c: Vector2i) -> String:
+	if shooter == null or not shooter.is_alive() or shooter.is_drone or shooter.captor_id >= 0:
+		return "Unit cannot fire"
+	if shooter.stats.special_ability_id in [MCF.ABILITY_ANTI_TANK, MCF.ABILITY_FLAMETHROWER,
+			MCF.ABILITY_MARKSMAN, MCF.ABILITY_ASSAULT, MCF.ABILITY_MINER, MCF.ABILITY_SHIELD_BEARER]:
+		return "Use this unit's normal attack"
+	if fixture_at(c) == "": return "No light fixture there"
+	if not Combat.is_on_firing_line(shooter.coord, c): return "Target not on the firing line"
+	if fog_enabled and not team_visible_coords(shooter.owner).has(c): return "Target not visible"
+	if los_blocked(shooter.coord, c, true, true, true): return "Firing line is blocked"
+	if pane_hit_need(shooter, c) > 6: return "Too far"
+	if shooter.remaining_ap <= 0 and not (shooter.action_state != null and shooter.action_state.is_pending()):
+		return "Unit has no AP left"
+	return ""
+
+func shootable_fixture_cells(shooter: UnitInstance) -> Array:
+	var out: Array = []
+	var reach := int(shooter.fire_range())
+	for direction: Vector2i in [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT,
+			Vector2i(-1, -1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(1, 1)]:
+		for distance in range(1, reach + 1):
+			var c := shooter.coord + direction * distance
+			if not state.grid.in_bounds(c): break
+			if fixture_at(c) != "" and can_shoot_fixture(shooter, c) == "": out.append(c)
+	return out
+
+func _resolve_shoot_fixture(shooter: UnitInstance, c: Vector2i, shots: int) -> ActionResult:
+	if shooter.action_state == null or not shooter.action_state.is_pending():
+		shooter.remaining_ap -= 1
+		shooter.action_state = ActionState.new()
+		shooter.action_state.remaining_shots = maxi(1, shooter.rate_of_fire())
+	shooter.action_state.target_id = ActionState.WINDOW
+	var want := shooter.action_state.remaining_shots if shots < 0 else clampi(shots, 1, shooter.action_state.remaining_shots)
+	var result := ActionResult.success()
+	var cell := state.grid.cell(c)
+	var id := fixture_at(c)
+	var label: String = Furniture.DEFS[id].name
+	var bullets := _through_glass(shooter, _glass_cells_on_line(shooter.coord, c), want, result)
+	var need := pane_hit_need(shooter, c)
+	var hits: Array = []
+	var damage := 0
+	for i in bullets:
+		var roll := state.dice.roll_d6()
+		hits.append({"roll": roll, "hit": roll >= need})
+		if roll >= need: damage += 1
+	result.dice_events.append({"kind": "fixture", "name": label, "cell": c, "need": need,
+		"hits": hits, "saves": [], "shooter_owner": shooter.owner})
+	if damage > 0:
+		if not cell.fixture.is_empty():
+			var hp := int(cell.fixture[1]) - damage
+			cell.fixture = [id, hp, cell.fixture[2]] if hp > 0 else []
+		else:
+			cell.feature_durability -= damage
+			if cell.feature_durability <= 0: _destroy_furniture(cell, result)
+	result.log("%s fires %d at %s (%d, %d): %d hits%s" % [shooter.stats.display_name, want,
+		label, c.x, c.y, damage, " — light destroyed" if fixture_at(c) == "" else ""])
+	shooter.action_state.remaining_shots -= want
+	if shooter.action_state.remaining_shots <= 0: shooter.action_state = null
+	_fx_lane(result, shooter.coord, c, shooter.owner)
+	_fx(result, {"fx": "casings", "at": shooter.coord, "toward": c, "count": want})
+	_fx(result, {"fx": "tracer", "at": shooter.coord, "from": [shooter.coord.x, shooter.coord.y],
+		"to": [c.x, c.y], "count": want})
+	notify_cell_changed(c)
+	return result

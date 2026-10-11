@@ -140,6 +140,7 @@ static func _encode_cells(grid: Grid) -> Array:
 		if c.corpse_count != 0: rec["corpses"] = c.corpse_count
 		if c.dirt_level != 0: rec["dirt"] = c.dirt_level
 		if c.airlock_welded: rec["welded"] = true
+		if not c.fixture.is_empty(): rec["fixture"] = c.fixture.duplicate()
 		if rec.is_empty():
 			continue
 		rec["i"] = i
@@ -399,6 +400,7 @@ static func _decode_cells(sparse: Array, count: int) -> Array:
 		rec["corpse_count"] = int(raw.get("corpses", 0))
 		rec["dirt_level"] = int(raw.get("dirt", 0))
 		rec["airlock_welded"] = bool(raw.get("welded", false))
+		rec["fixture"] = MapData.valid_fixture(raw.get("fixture", []))
 	return out
 
 static func _default_cell() -> Dictionary:

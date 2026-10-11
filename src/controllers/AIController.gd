@@ -248,7 +248,7 @@ func _row_key(row: Dictionary) -> String:
 ## частоты и хватает: челнок виден именно между ходами.
 func _remember_positions(state: GameState) -> void:
 	for u: UnitInstance in state.living_units_of(owner):
-		if u.is_drone or u.aboard_vehicle_id != -1:
+		if u.is_drone or u.aboard_vehicle_id != -1 or not state.grid.in_bounds(u.coord):
 			continue
 		_push_recent("u%d" % u.id, u.coord)
 	for veh: Vehicle in state.all_vehicles():
@@ -281,7 +281,7 @@ func _backtrack_penalty(key: String, coord: Vector2i) -> float:
 func _idle_rows(state: GameState) -> Array:
 	var live: Array = []
 	for u: UnitInstance in state.living_units_of(owner):
-		if u.is_drone or u.aboard_vehicle_id != -1:
+		if u.is_drone or u.aboard_vehicle_id != -1 or not state.grid.in_bounds(u.coord):
 			continue
 		if not _can_command(u):
 			continue
@@ -345,7 +345,7 @@ func _forced_action(state: GameState, r: GameActionResolver, row: Dictionary) ->
 	if row["vehicle"]:
 		return _forced_vehicle_action(state, r, state.get_vehicle(row["id"]), key)
 	var u := state.get_unit(row["id"])
-	if u == null or not u.is_alive() or u.is_held():
+	if u == null or not u.is_alive() or u.is_held() or not state.grid.in_bounds(u.coord):
 		return {}
 	# Боец стоит здесь ПРЯМО СЕЙЧАС (item 1). Записываем это до выбора хода: вторая
 	# принудительная попытка в том же ходу иначе вернула бы его ровно туда, откуда

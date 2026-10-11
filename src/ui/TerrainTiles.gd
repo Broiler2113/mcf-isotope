@@ -478,6 +478,18 @@ func _evict() -> void:
 ## Клетка в картинки куска: пол и огонь — в слой пола, объект (автотайл по семейству) —
 ## в слой объектов. at — угол клетки в картинке, res — точек на клетку.
 func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> void:
+	_paint_terrain(img, feat, c, at, res)
+	var fixture := _grid.cell_fast(c.x, c.y).fixture
+	if fixture.is_empty(): return
+	var tiles := _tile(str(fixture[0]), res)
+	if tiles.is_empty(): return
+	var picture: Image = tiles[0].duplicate()
+	for k in int(fixture[2]): picture.rotate_90(CLOCKWISE)
+	feat.blend_rect(picture, Rect2i(0, 0, res, res), at)
+	if int(fixture[1]) < Furniture.durability_of(str(fixture[0])):
+		feat.blend_rect(_crack_overlay(res), Rect2i(0, 0, res, res), at)
+
+func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> void:
 	var cell := _grid.cell_fast(c.x, c.y)
 	var full := Rect2i(0, 0, res, res)
 	var fname := _floor_name(cell, c)
