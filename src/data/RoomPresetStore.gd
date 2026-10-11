@@ -1,7 +1,7 @@
 extends RefCounted
 
 ## Reusable editor selections use the same cell tuples as the clipboard.
-const DIR := "user://room_presets"
+static var DIR := GameFolders.dir(GameFolders.PRESETS)
 
 static func _path(name: String) -> String:
 	return DIR.path_join(name.strip_edges().validate_filename() + ".json")

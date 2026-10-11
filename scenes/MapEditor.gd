@@ -1881,6 +1881,7 @@ func _build_menu_bar() -> void:
 	for spec in [
 		["File", [["New…", _new_map_dialog, "editor_new"], ["Open…", _open_dialog, "editor_open"],
 			["Save", save, "editor_save"], [],
+			["Open Maps Folder", func() -> void: OS.shell_open(ProjectSettings.globalize_path(MapData.MAPS_DIR))], [],
 			["Play This Map", play, "editor_play"], [], ["Exit to Main Menu", exit_to_menu]]],
 		["Edit", [["Undo", undo, "editor_undo"], ["Redo", redo, "editor_redo"], [],
 			["Cut", cut_selection, "editor_cut"], ["Copy", copy_selection, "editor_copy"],
@@ -1893,7 +1894,8 @@ func _build_menu_bar() -> void:
 			["Fit Map", fit_view, "editor_fit"], [],
 			["check:lighting", "Lighting Preview"], ["check:grid", "Grid", "editor_grid"], ["check:zones", "Deployment Zones"], ["check:mini", "Minimap"], [],
 			["Keyboard Shortcuts…", _shortcuts_dialog, "editor_help"]]],
-		["Presets", [["Save Selection…", _save_room_dialog], ["Manage Rooms & Structures…", _room_manager]]],
+		["Presets", [["Save Selection…", _save_room_dialog], ["Manage Rooms & Structures…", _room_manager],
+			["Open Presets Folder", func() -> void: OS.shell_open(ProjectSettings.globalize_path(RoomPresets.DIR))]]],
 		["Map", [["Resize…", _resize_dialog], [], ["label", "Preset"]] + _preset_items()],
 	]:
 		var mb := MenuButton.new()

@@ -6,7 +6,8 @@ extends RefCounted
 ## встроенным редактором карт (scenes/MapEditor.tscn). Слой симуляции строит из
 ## MapData готовый GameState через build_state().
 
-const MAPS_DIR := "user://maps"
+## Editor maps: plain files in the shared "Isotope Data/Maps" folder (GameFolders, 0.11).
+static var MAPS_DIR := GameFolders.dir(GameFolders.MAPS)
 ## Карты, поставляемые с игрой (#57). Только чтение: редактор всегда сохраняет в
 ## user://, поэтому правка встроенной карты создаёт пользовательскую копию, которая
 ## перекрывает оригинал по имени. Сам файл в res:// при этом остаётся нетронутым.
@@ -573,7 +574,7 @@ static func list_maps() -> PackedStringArray:
 		if dir == null:
 			continue
 		for name in dir.get_files():
-			if name.ends_with(".json") and not seen.has(name):
+			if name.get_extension().to_lower() == "json" and not seen.has(name):
 				seen[name] = true
 				out.append(name)
 	out.sort()

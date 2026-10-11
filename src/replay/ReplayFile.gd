@@ -12,8 +12,9 @@ extends RefCounted
 ## текстовом виде повтор часовой партии разошёлся бы на десятки мегабайт. Читать файл
 ## обязан тот же режим, каким он записан, — отсюда одна пара функций на оба формата.
 
-const REPLAY_DIR := "user://replays"
-const SAVE_DIR := "user://saves"
+## Plain files in the shared "Isotope Data" folder (GameFolders, 0.11).
+static var REPLAY_DIR := GameFolders.dir(GameFolders.REPLAYS)
+static var SAVE_DIR := GameFolders.dir(GameFolders.SAVES)
 const REPLAY_EXT := "mcfr"
 const SAVE_EXT := "mcfs"
 const COMPRESSION := FileAccess.COMPRESSION_GZIP
@@ -61,8 +62,13 @@ static func read_replay(path: String) -> Dictionary:
 ## старых файлов она создаётся при первом чтении, дальше — только маленький текст.
 const NOTE_EXT := ".note"
 
+## Captions are cached in the user folder, keyed by path and modification time, so the
+## shared folders hold only the files themselves (0.11).
+static func _note_path(path: String) -> String:
+	return "user://note_cache".path_join("%s-%d%s" % [path.md5_text(), FileAccess.get_modified_time(path), NOTE_EXT])
+
 static func note_for(path: String) -> String:
-	var np := path + NOTE_EXT
+	var np := _note_path(path)
 	if FileAccess.file_exists(np):
 		var nf := FileAccess.open(np, FileAccess.READ)
 		if nf != null:
@@ -74,7 +80,8 @@ static func note_for(path: String) -> String:
 	return note
 
 static func _write_note(path: String, note: String) -> void:
-	var nf := FileAccess.open(path + NOTE_EXT, FileAccess.WRITE)
+	DirAccess.make_dir_recursive_absolute("user://note_cache")
+	var nf := FileAccess.open(_note_path(path), FileAccess.WRITE)
 	if nf != null:
 		nf.store_string(note)
 		nf.close()
@@ -100,7 +107,7 @@ static func list_files(dir: String, ext: String) -> PackedStringArray:
 	if d == null:
 		return out
 	for name in d.get_files():
-		if name.ends_with("." + ext):
+		if name.get_extension().to_lower() == ext:
 			out.append(name)
 	out.sort()
 	out.reverse()   # имена начинаются с даты — свежее сверху

@@ -56,6 +56,10 @@ func _ready() -> void:
 	var imported := UserDataMigrationScript.migrate_legacy()
 	if imported > 0:
 		print("Imported %d file(s) from the previous user data folder." % imported)
+	# 0.11: saves, replays, maps and presets moved into the shared "Isotope Data" folder.
+	var adopted := GameFolders.adopt_user_data()
+	if adopted > 0:
+		print("Moved %d file(s) into %s." % [adopted, GameFolders.root()])
 	# Уходя в меню, старую сессию не тащим — начинаем с чистого листа.
 	NetHandoff.discard()
 	# И недоигранный файл тоже: в меню приходят, чтобы начать заново (M12).
@@ -262,6 +266,7 @@ func _build_files_tab() -> Control:
 	_game_list.custom_minimum_size = Vector2(0, 96)
 	_game_list.item_activated.connect(_on_game_activated)
 	games.body.add_child(_game_list)
+	games.body.add_child(_folder_button(ReplayFile.SAVE_DIR))
 
 	var replays := SteamChrome.group_box("Replays")
 	page.add_child(replays)
@@ -269,9 +274,23 @@ func _build_files_tab() -> Control:
 	_replay_list.custom_minimum_size = Vector2(0, 96)
 	_replay_list.item_activated.connect(_on_replay_activated)
 	replays.body.add_child(_replay_list)
+	replays.body.add_child(_folder_button(ReplayFile.REPLAY_DIR))
 
 	_refresh_files()
+	# Files copied into the folders while the game runs show up as soon as it is back in
+	# focus — no import step (0.11).
+	if not get_window().focus_entered.is_connected(_refresh_files):
+		get_window().focus_entered.connect(_refresh_files)
 	return page
+
+## "Open folder" — the plain folder where these files live, to share or drop files in.
+func _folder_button(dir: String) -> Button:
+	var b := Button.new()
+	b.text = "Open folder"
+	b.tooltip_text = dir
+	b.size_flags_horizontal = Control.SIZE_SHRINK_END
+	b.pressed.connect(func() -> void: OS.shell_open(ProjectSettings.globalize_path(dir)))
+	return b
 
 ## Наполнить оба списка. Каждый файл читается ради подписи — они маленькие и сжатые,
 ## а список без «карта, раунд, когда» бесполезен: имена в нём различаются только временем.
@@ -306,11 +325,17 @@ func _fill_notes(list: ItemList, names: PackedStringArray, dir: String) -> void:
 		if note != "":
 			list.set_item_text(i, "%s  —  %s" % [names[i].get_basename(), note])
 
+func _mark_unreadable(list: ItemList, idx: int, name: String) -> void:
+	if is_instance_valid(list) and idx < list.item_count:
+		list.set_item_text(idx, "%s  —  can't be opened (damaged, or not a %s file)" % [name.get_basename(),
+				"saved game" if list == _game_list else "replay"])
+
 func _on_game_activated(idx: int) -> void:
 	if idx < 0 or idx >= _game_names.size():
 		return
 	var data := ReplayFile.read(ReplayFile.path_for(ReplayFile.SAVE_DIR, _game_names[idx]))
-	if data.is_empty():
+	if data.is_empty() or str(data.get("kind", "")) != ReplayFile.KIND_SAVE:
+		_mark_unreadable(_game_list, idx, _game_names[idx])
 		return
 	SaveHandoff.pending_save = data
 	MapHandoff.pending = null
@@ -320,7 +345,8 @@ func _on_replay_activated(idx: int) -> void:
 	if idx < 0 or idx >= _replay_names.size():
 		return
 	var data := ReplayFile.read_replay(ReplayFile.path_for(ReplayFile.REPLAY_DIR, _replay_names[idx]))
-	if data.is_empty():
+	if data.is_empty() or str(data.get("kind", "")) != ReplayFile.KIND_REPLAY:
+		_mark_unreadable(_replay_list, idx, _replay_names[idx])
 		return
 	SaveHandoff.pending_replay = data
 	MapHandoff.pending = null

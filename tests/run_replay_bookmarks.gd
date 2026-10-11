@@ -33,9 +33,10 @@ func _run() -> void:
 	ck(recorder.bookmarks.any(func(e): return e.index == 0 and e.label == "Gas Cloud incoming - round 1"), "opening event is bookmarked at zero")
 	ck(recorder.bookmarks.any(func(e): return e.index == 0 and e.label == "Player A's turn - round 1"), "opening player's turn is bookmarked")
 	resolver.resolve(EndTurnIntent.new(0))
-	ck(recorder.bookmarks.any(func(e): return e.index == 1 and e.label == "Gas Cloud lands - round 1"), "gas landing is bookmarked after its action")
+	ck(not recorder.bookmarks.any(func(e): return e.label.begins_with("Gas Cloud lands")), "the warning waits for the end of the round (0.11)")
 	ck(recorder.bookmarks.any(func(e): return e.index == 1 and e.label == "Player B's turn - round 1"), "next player's turn has its own bookmark")
 	resolver.resolve(EndTurnIntent.new(1))
+	ck(recorder.bookmarks.any(func(e): return e.index == 2 and e.label == "Gas Cloud lands - round 2"), "gas landing is bookmarked after the action that closes the round")
 	ck(recorder.bookmarks.any(func(e): return e.index == 2 and e.label == "Round 2 begins"), "round bookmark uses completed-step index")
 	var labels: Array = []
 	ReplayBookmarks.append(labels, 12, 7, 0, 7, 0, [

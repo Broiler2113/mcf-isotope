@@ -16,6 +16,7 @@ func run() -> void:
 	await _burst_button()
 	_impossible_rolls()
 	await _enter_rolls()
+	_shared_folders()
 	print("batch 0.11: %d failure(s)" % fails.size())
 	quit(1 if not fails.is_empty() else 0)
 
@@ -109,3 +110,34 @@ func _enter_rolls() -> void:
 	for i in 3: await process_frame
 	ck(pressed[0], "Enter rolls the dice")
 	roller.queue_free()
+
+## Saves, replays, maps and presets are plain files in "Isotope Data"; whatever is put
+## there by hand is listed, with no caption files left beside it.
+func _shared_folders() -> void:
+	var root := GameFolders.root()
+	ck(DirAccess.dir_exists_absolute(root) and root.ends_with(GameFolders.ROOT_NAME), "the shared folder exists: " + root)
+	ck(ReplayFile.SAVE_DIR == root.path_join("Saves") and ReplayFile.REPLAY_DIR == root.path_join("Replays")
+			and MapData.MAPS_DIR == root.path_join("Maps"), "saves, replays and maps have their own folders")
+	var save := {"kind": ReplayFile.KIND_SAVE, "meta": {"map": "Dropped", "round": 3}}
+	var dropped := ReplayFile.SAVE_DIR.path_join("zz-friend-shared.MCFS")
+	ck(ReplayFile.write(dropped, save), "a save file can be written into the folder")
+	ck(ReplayFile.saves().has("zz-friend-shared.MCFS"), "a dropped save is listed, whatever the case of its extension")
+	ck(ReplayFile.note_for(dropped).contains("Dropped"), "its caption is read")
+	ck(not FileAccess.file_exists(dropped + ".note"), "no caption file is left in the shared folder")
+	DirAccess.remove_absolute(dropped)
+	var map := MapData.blank_arena(12, 10)
+	var map_path := MapData.MAPS_DIR.path_join("zz-friend-map.json")
+	ck(map.save_to(map_path), "a map can be written into the folder")
+	ck(MapData.list_maps().has("zz-friend-map.json") and MapData.load_from(MapData.path_for("zz-friend-map.json")) != null,
+			"a dropped map is listed and loads")
+	DirAccess.remove_absolute(map_path)
+	DirAccess.remove_absolute(GameFolders.ADOPTED_MARKER)
+	DirAccess.make_dir_recursive_absolute("user://saves")
+	var legacy := "user://saves/zz-legacy.mcfs"
+	ReplayFile.write(legacy, save)
+	ck(GameFolders.adopt_user_data() >= 1 and FileAccess.file_exists(ReplayFile.SAVE_DIR.path_join("zz-legacy.mcfs")),
+			"saves from before 0.11 are copied into the shared folder")
+	DirAccess.remove_absolute(ReplayFile.SAVE_DIR.path_join("zz-legacy.mcfs"))
+	ck(GameFolders.adopt_user_data() == 0 and not FileAccess.file_exists(ReplayFile.SAVE_DIR.path_join("zz-legacy.mcfs")),
+			"only once: a save deleted from the shared folder does not come back")
+	DirAccess.remove_absolute(legacy)
