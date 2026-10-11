@@ -3047,7 +3047,14 @@ func _on_intent_ready(intent: Intent) -> void:
 			})
 		_hold_visual = result.visual_hold  # item 22: держим «до взрыва», пока крутится кубик
 		queue_redraw()
-		await _play_dice(result.dice_events)
+		var mover: PlayerController = controllers.get(state.active_player())
+		if mover != null and mover.is_local_human() and replay == null and _walks_only(result.dice_events):
+			# Your own soldiers just walking (0.11): the walk plays on its own and the screen
+			# stays live — select another unit and give it orders while this one moves.
+			_ap_display.erase(ap_actor.id if ap_actor != null else -1)
+			_play_walks_free(result.dice_events)
+		else:
+			await _play_dice(result.dice_events)
 		_pending_death_ids.clear()
 		_hold_visual = {}
 		queue_redraw()
@@ -3643,7 +3650,12 @@ func _show_net_action(intent: Intent, result: ActionResult) -> void:
 			_pending_death_ids[id] = true
 		_hold_visual = result.visual_hold
 		queue_redraw()
-		await _play_dice(result.dice_events)
+		var walker := state.get_unit(intent.actor_id) if intent != null else null
+		var own_ctrl: PlayerController = controllers.get(walker.owner) if walker != null else null
+		if own_ctrl != null and own_ctrl.is_local_human() and _walks_only(result.dice_events):
+			_play_walks_free(result.dice_events)   # your own soldier walking: stay live (0.11)
+		else:
+			await _play_dice(result.dice_events)
 		_pending_death_ids.clear()
 		_hold_visual = {}
 	if not result.fx.is_empty():
@@ -4076,6 +4088,7 @@ func _play_walk(ev: Dictionary) -> void:
 			if replay != null and _replay_skip_animations:
 				break
 			if _walk_jobs.get(id, -1) != serial:
+				_walks_running = maxi(0, _walks_running - 1)   # a newer walk took this unit over
 				return
 			var k := minf(1.0, float(Time.get_ticks_msec() - t0) / maxf(1.0, step_ms))
 			_walk_offset[id] = delta * k
@@ -4087,12 +4100,39 @@ func _play_walk(ev: Dictionary) -> void:
 		_walk_cells[id] = cell
 		_walk_offset.erase(id)
 	if _walk_jobs.get(id, -1) != serial:
+		_walks_running = maxi(0, _walks_running - 1)
 		return
 	_walk_jobs.erase(id)
 	# Keep the visual endpoint until the whole action has finished.
 	_walk_offset.erase(id)
 	_walks_running = maxi(0, _walks_running - 1)
 	queue_redraw()
+
+## Only soldiers walking — no dice, deaths, mines, gas or vehicles (0.11).
+func _walks_only(events: Array) -> bool:
+	var walked := false
+	for ev: Dictionary in events:
+		match str(ev.get("kind", "")):
+			"walk":
+				if not ev.get("soldier", false): return false
+				walked = true
+			"hold", "ap": pass
+			_: return false
+	return walked
+
+func _play_walks_free(events: Array) -> void:
+	for ev: Dictionary in events:
+		if str(ev.get("kind", "")) == "walk":
+			_free_walk(ev)
+
+func _free_walk(ev: Dictionary) -> void:
+	var id := int(ev["unit"])
+	await _play_walk(ev)
+	# The unit was ordered on again, or a blocking show took over: they own the drawing.
+	if not _walk_jobs.has(id) and not _animating and is_inside_tree():
+		_walk_cells.erase(id)
+		_walk_offset.erase(id)
+		queue_redraw()
 
 ## Клетка, на которой юнит рисуется ПРЯМО СЕЙЧАС: обычно его настоящая координата,
 ## а во время проигрывания перехода — промежуточная клетка маршрута.

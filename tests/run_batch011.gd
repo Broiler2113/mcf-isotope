@@ -20,6 +20,7 @@ func run() -> void:
 	_save_preview()
 	await _light_colours()
 	_builtin_presets()
+	await _move_while_walking()
 	print("batch 0.11: %d failure(s)" % fails.size())
 	quit(1 if not fails.is_empty() else 0)
 
@@ -222,3 +223,37 @@ func _builtin_presets() -> void:
 	store.remove_preset("zz Hall")
 	ck(store.seed_builtins() == 0 and not store.names().has("Corridor"), "a deleted built-in stays deleted")
 	store.save_preset("Corridor", MapPresets.stamp("corridor"), "station")
+
+## While one of your soldiers walks, the next can already be ordered (0.11).
+func _move_while_walking() -> void:
+	var m := MapData.blank_arena(24, 16)
+	m.set_spawn(Vector2i(2, 3), "light_infantry", 0)
+	m.set_spawn(Vector2i(2, 9), "light_infantry", 0)
+	m.set_spawn(Vector2i(21, 12), "light_infantry", 1)
+	MapHandoff.pending = m
+	GameConfig.fog_mode = MCF.Fog.OFF
+	GameConfig.roster = Roster.default_duel(false)
+	var main: Node = load("res://scenes/Main.tscn").instantiate()
+	root.add_child(main)
+	for i in 10: await process_frame
+	var st: GameState = main.state
+	while st.active_player() != 0:
+		main._on_intent_ready(EndTurnIntent.new())
+		for i in 5: await process_frame
+	var a := st.grid.cell(Vector2i(2, 3)).occupant
+	var b := st.grid.cell(Vector2i(2, 9)).occupant
+	main._on_intent_ready(MoveIntent.new(a.id, Vector2i(6, 3)))
+	await process_frame
+	ck(not main._animating and main._walk_jobs.has(a.id), "a plain move animates without locking the screen")
+	main._on_intent_ready(MoveIntent.new(b.id, Vector2i(6, 9)))
+	await process_frame
+	ck(b.coord == Vector2i(6, 9) and main._walk_jobs.has(a.id) and main._walk_jobs.has(b.id),
+			"a second soldier is ordered while the first still walks")
+	var waited := 0
+	while main._walks_running > 0 and waited < 600:
+		await process_frame
+		waited += 1
+	await process_frame
+	ck(main._walks_running == 0 and main._walk_cells.is_empty(), "both walks finish and nobody is left drawn mid-way")
+	main.queue_free()
+	await process_frame
