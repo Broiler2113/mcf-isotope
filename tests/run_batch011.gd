@@ -21,6 +21,7 @@ func run() -> void:
 	await _light_colours()
 	_builtin_presets()
 	await _move_while_walking()
+	_piece_pictures()
 	print("batch 0.11: %d failure(s)" % fails.size())
 	quit(1 if not fails.is_empty() else 0)
 
@@ -257,3 +258,27 @@ func _move_while_walking() -> void:
 	ck(main._walks_running == 0 and main._walk_cells.is_empty(), "both walks finish and nobody is left drawn mid-way")
 	main.queue_free()
 	await process_frame
+
+## A fixed-size piece is one picture: each cell shows its part, turned with the piece (0.11).
+func _piece_pictures() -> void:
+	var g := Grid.new(8, 6)
+	for c: Vector2i in [Vector2i(1, 1), Vector2i(2, 1)]: g.cell(c).set_feature("piano")
+	for c: Vector2i in [Vector2i(5, 1), Vector2i(5, 2)]:
+		g.cell(c).set_feature("piano")
+		g.furniture_turn[c] = ["piano", 1]
+	var t := TerrainTiles.new(g, "station")
+	var piece: Image = Sprites.texture_of("piano_piece").get_image()
+	piece.convert(Image.FORMAT_RGBA8)
+	var part := func(img: Image, at: Vector2i) -> PackedByteArray:
+		return img.get_region(Rect2i(at * 32, Vector2i(32, 32))).get_data()
+	ck(t._furniture_image(Vector2i(1, 1), "piano", 32).get_data() == part.call(piece, Vector2i(0, 0))
+			and t._furniture_image(Vector2i(2, 1), "piano", 32).get_data() == part.call(piece, Vector2i(1, 0)),
+			"a piano shows its own picture across both cells")
+	var turned: Image = piece.duplicate()
+	turned.rotate_90(CLOCKWISE)
+	ck(t._furniture_image(Vector2i(5, 2), "piano", 32).get_data() == part.call(turned, Vector2i(0, 1)),
+			"a turned piano shows the turned picture")
+	g.cell(Vector2i(2, 1)).clear_feature()
+	var lone := TerrainTiles.new(g, "station")
+	ck(lone._furniture_image(Vector2i(1, 1), "piano", 32).get_data() != part.call(piece, Vector2i(0, 0)),
+			"half a piano falls back to the sheet")

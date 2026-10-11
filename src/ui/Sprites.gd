@@ -398,6 +398,8 @@ static func _manifest_text() -> String:
 		lines.append("")
 	# Мебель (§3.15) — из её таблицы, чтобы новый предмет попадал в справку сам.
 	lines.append("-- Furniture (drawn from above, back of the piece at the TOP; the game turns it to the wall) --")
+	lines.append("A fixed-size piece (piano, wardrobe, dumpster...) also takes <name>_piece.png: the whole")
+	lines.append("piece as ONE picture, as many tiles wide and tall as the piece, back at the top.")
 	for fid: String in Furniture.ids():
 		lines.append("  %s.png" % fid)
 	lines.append("")
