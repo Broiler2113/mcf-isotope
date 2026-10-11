@@ -1,0 +1,22 @@
+# MCF Isotope internet relay and lobby list (tools/relay/isotope_relay.py).
+# Install: copy isotope_relay.py to /opt/isotope-relay/, this file to
+# /etc/systemd/system/, then: systemctl daemon-reload && systemctl enable --now isotope-relay
+# and open the port: ufw allow 8650/tcp
+[Unit]
+Description=MCF Isotope relay and lobby list
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/isotope-relay/isotope_relay.py --port 8650
+DynamicUser=yes
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

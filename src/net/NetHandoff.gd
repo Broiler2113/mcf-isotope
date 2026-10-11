@@ -12,6 +12,11 @@ extends RefCounted
 static var session: NetworkSession = null
 static var is_host: bool = false
 static var spectators: Array[int] = []
+## Internet games (0.11): the listing name and relay room code of the hosted game, and
+## whether the host lets guests watch.
+static var room_name := ""
+static var room_code := ""
+static var allow_spectators := true
 
 ## Объявление матча: хост → клиент (#99).
 const K_SETUP := "setup"
@@ -53,6 +58,9 @@ static func discard() -> void:
 	lobby_map = null
 	chat_history = []
 	spectators.clear()
+	room_name = ""
+	room_code = ""
+	allow_spectators = true
 	if session != null:
 		session.close()
 		session.queue_free()
@@ -83,7 +91,8 @@ const K_LOBBY_MAP := "lobby_map"
 ##   3 — 0.9.8: neutral firing decisions and spectator roles.
 ##   4 — gas contact rolls and one-player-turn random-event warnings.
 ##   5 — event warnings at round opening, including the first round.
-const PROTOCOL := 5
+##   6 — 0.11: warnings land at round end, fog-off gas, internet relay play.
+const PROTOCOL := 6
 
 static func encode_rules() -> Dictionary:
 	var roster := GameConfig.active_roster()

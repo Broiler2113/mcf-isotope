@@ -29,10 +29,16 @@ var _mp_host_btn: Button
 var _mp_join_btn: Button
 var _mp_cancel_btn: Button
 var _session: NetworkSession = null
-## Автопоиск LAN (item 38): узел-обозреватель и список найденных серверов.
-var _lan: LanDiscovery = null
-var _lan_list: ItemList
-var _lan_servers: Array = []
+## Internet lobbies (0.11): the relay's list of open games, refreshed while the page shows.
+var _lobby_list: ItemList
+var _lobby_rooms: Array = []
+var _lobby_probe: RelayLink = null
+var _lobby_timer := 0.0
+var _mp_server: LineEdit
+var _mp_password: LineEdit
+var _mp_room_name: LineEdit
+var _mp_online_btn: Button
+var _mp_join_online_btn: Button
 static var _vs_latest_done := false
 var _lobby_broken := false
 ## Страницы меню. Полоса вкладок у контейнера скрыта: ходим по ним кнопками самого меню.
@@ -353,54 +359,87 @@ func _on_replay_activated(idx: int) -> void:
 	get_tree().change_scene_to_file(MAIN_SCENE)
 
 # --- Вкладка мультиплеера ---
+## Internet first (0.11): open games from the Isotope lobby server, hosting one, and the
+## direct IP connection for a LAN or a VPN underneath.
 func _build_multi_tab() -> Control:
 	var page := VBoxContainer.new()
 	page.name = "Multiplayer"
 	page.add_theme_constant_override("separation", 10)
 
 	var hint := Label.new()
-	hint.text = "Peer-to-peer over LAN. One side hosts, the other joins by IP.\nThe host picks the map and the point budget; both sides then buy and deploy their own squad."
+	hint.text = "Play over the internet through the Isotope lobby server, or directly over a LAN. The host picks the map and the point budget; everyone then buys and deploys their own squad."
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.add_theme_font_size_override("font_size", 13)
 	hint.modulate = Color(0.72, 0.74, 0.8)
 	page.add_child(hint)
 
-	var direct := SteamChrome.group_box("Direct connection")
+	var lobbies := SteamChrome.group_box("Lobbies")
+	page.add_child(lobbies)
+	_lobby_list = ItemList.new()
+	_lobby_list.custom_minimum_size = Vector2(0, 120)
+	_lobby_list.item_activated.connect(func(_i: int) -> void: _join_online())
+	lobbies.body.add_child(_lobby_list)
+	var join_row := HBoxContainer.new()
+	join_row.add_theme_constant_override("separation", 10)
+	lobbies.body.add_child(join_row)
+	_mp_password = LineEdit.new()
+	_mp_password.placeholder_text = "Password (if the game has one)"
+	_mp_password.secret = true
+	_mp_password.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	join_row.add_child(_mp_password)
+	var refresh := _menu_button("Refresh", _refresh_lobbies)
+	join_row.add_child(refresh)
+	_mp_join_online_btn = _menu_button("Join", _join_online)
+	join_row.add_child(_mp_join_online_btn)
+
+	var host_box := SteamChrome.group_box("Host an online game")
+	page.add_child(host_box)
+	var host_row := HBoxContainer.new()
+	host_row.add_theme_constant_override("separation", 10)
+	host_box.body.add_child(host_row)
+	_mp_room_name = LineEdit.new()
+	_mp_room_name.placeholder_text = "Game name"
+	_mp_room_name.text = _net_setting("room_name", "Isotope game")
+	_mp_room_name.max_length = 40
+	_mp_room_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	host_row.add_child(_mp_room_name)
+	_mp_online_btn = _menu_button("Host Online", _host_online)
+	host_row.add_child(_mp_online_btn)
+	var host_hint := Label.new()
+	host_hint.text = "The password field above, if filled, locks your game."
+	host_hint.add_theme_font_size_override("font_size", 11)
+	host_hint.modulate = Color(0.6, 0.62, 0.68)
+	host_box.body.add_child(host_hint)
+
+	var direct := SteamChrome.group_box("Direct connection (LAN or VPN)")
 	page.add_child(direct)
 	var ip_row := HBoxContainer.new()
 	ip_row.add_theme_constant_override("separation", 10)
 	direct.body.add_child(ip_row)
-	var ip_lbl := Label.new()
-	ip_lbl.text = "Host IP"
-	ip_lbl.add_theme_color_override("font_color", Color("#b0b0b0"))
-	ip_row.add_child(ip_lbl)
 	_mp_ip = LineEdit.new()
 	_mp_ip.placeholder_text = "Host IP"
 	_mp_ip.text = "127.0.0.1"
 	_mp_ip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	ip_row.add_child(_mp_ip)
-	var btn_row := HBoxContainer.new()
-	btn_row.add_theme_constant_override("separation", 10)
-	direct.body.add_child(btn_row)
-	_mp_host_btn = _menu_button("Host Game", _host_game)
-	_mp_host_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	btn_row.add_child(_mp_host_btn)
-	_mp_join_btn = _menu_button("Join Game", _join_game)
-	_mp_join_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	btn_row.add_child(_mp_join_btn)
+	_mp_host_btn = _menu_button("Host", _host_game)
+	ip_row.add_child(_mp_host_btn)
+	_mp_join_btn = _menu_button("Join by IP", _join_game)
+	ip_row.add_child(_mp_join_btn)
 
-	# Автопоиск серверов в локальной сети (item 38). Хост объявляет о себе, а этот
-	# список наполняется найденными хостами; клик по строке подключается напрямую.
-	var lan_box := SteamChrome.group_box("LAN games")
-	page.add_child(lan_box)
-	_lan_list = ItemList.new()
-	_lan_list.custom_minimum_size = Vector2(0, 80)
-	_lan_list.item_activated.connect(_on_lan_pick)
-	lan_box.body.add_child(_lan_list)
-	_lan = LanDiscovery.new()
-	get_tree().root.add_child.call_deferred(_lan)
-	_lan.servers_changed.connect(_on_lan_servers)
-	_lan.start_listening.call_deferred()
+	var server_row := HBoxContainer.new()
+	server_row.add_theme_constant_override("separation", 10)
+	page.add_child(server_row)
+	var server_lbl := Label.new()
+	server_lbl.text = "Lobby server"
+	server_lbl.add_theme_font_size_override("font_size", 11)
+	server_lbl.modulate = Color(0.6, 0.62, 0.68)
+	server_row.add_child(server_lbl)
+	_mp_server = LineEdit.new()
+	_mp_server.text = _net_setting("server", RelayLink.DEFAULT_SERVER)
+	_mp_server.placeholder_text = RelayLink.DEFAULT_SERVER
+	_mp_server.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_mp_server.text_submitted.connect(func(_t: String) -> void: _refresh_lobbies())
+	server_row.add_child(_mp_server)
 
 	_mp_cancel_btn = _menu_button("Cancel", _cancel_net)
 	_mp_cancel_btn.hide()
@@ -413,15 +452,106 @@ func _build_multi_tab() -> Control:
 	page.add_child(_mp_status)
 	return page
 
+func _net_setting(key: String, fallback: String) -> String:
+	var cf := ConfigFile.new()
+	cf.load("user://settings.cfg")
+	return str(cf.get_value("net", key, fallback))
+
+func _save_net_setting(key: String, value: String) -> void:
+	var cf := ConfigFile.new()
+	cf.load("user://settings.cfg")
+	cf.set_value("net", key, value)
+	cf.save("user://settings.cfg")
+
+func _server() -> String:
+	var s := _mp_server.text.strip_edges() if _mp_server != null else ""
+	if s == "": s = RelayLink.DEFAULT_SERVER
+	_save_net_setting("server", s)
+	return s
+
+## Ask the lobby server for its open games on a short-lived connection of its own.
+func _refresh_lobbies() -> void:
+	if _lobby_list == null or _lobby_probe != null: return
+	_lobby_timer = 0.0
+	_lobby_probe = RelayLink.new()
+	if _lobby_probe.connect_to(_server()) != OK:
+		_lobby_probe = null
+		return
+	_lobby_probe.rooms.connect(func(list: Array) -> void:
+		_show_lobbies(list)
+		_lobby_probe.close()
+		_lobby_probe = null)
+	_lobby_probe.failed.connect(func(reason: String) -> void:
+		_show_lobbies([], reason)
+		_lobby_probe = null)
+	_lobby_probe.list_rooms()
+
+func _show_lobbies(list: Array, error: String = "") -> void:
+	if _lobby_list == null: return
+	var chosen := ""
+	var sel := _lobby_list.get_selected_items()
+	if not sel.is_empty() and sel[0] < _lobby_rooms.size(): chosen = str(_lobby_rooms[sel[0]].get("room", ""))
+	_lobby_rooms = list
+	_lobby_list.clear()
+	if list.is_empty():
+		_lobby_list.add_item(error if error != "" else "No open games right now — host one below.")
+		_lobby_list.set_item_disabled(0, true)
+		return
+	for r: Dictionary in list:
+		var same := int(r.get("protocol", NetHandoff.PROTOCOL)) == NetHandoff.PROTOCOL
+		var battle := str(r.get("status", "")) == "In battle"
+		var text := "%s · %s · %d/%d%s%s" % [str(r.get("name", "Game")), str(r.get("map", "?")),
+				int(r.get("players", 1)), int(r.get("max_players", 2)),
+				" · in battle" if battle else "", " · password" if bool(r.get("locked", false)) else ""]
+		if not same: text += "  ·  version %s" % str(r.get("version", "?"))
+		_lobby_list.add_item(text)
+		var i := _lobby_list.item_count - 1
+		_lobby_list.set_item_disabled(i, not same or battle)
+		_lobby_list.set_item_tooltip(i, text)
+		if str(r.get("room", "")) == chosen: _lobby_list.select(i)
+
+func _process(delta: float) -> void:
+	if _lobby_probe != null:
+		_lobby_probe.poll(delta)
+	if _lobby_list != null and _lobby_list.is_visible_in_tree() and _session == null:
+		_lobby_timer += delta
+		if _lobby_timer >= 5.0: _refresh_lobbies()
+
+func _host_online() -> void:
+	if _session != null: return
+	var room_name := _mp_room_name.text.strip_edges()
+	if room_name == "": room_name = "Isotope game"
+	_save_net_setting("room_name", room_name)
+	_start_session()
+	NetHandoff.room_name = room_name
+	_session.relay_room.connect(func(code: String) -> void:
+		NetHandoff.room_code = code
+		_go_lobby(true))
+	var err := _session.start_relay_host(_server(), {"name": room_name, "map": "—", "players": 1,
+			"max_players": 2, "status": "In lobby", "version": str(ProjectSettings.get_setting("application/config/version", "")),
+			"protocol": NetHandoff.PROTOCOL, "password": _mp_password.text})
+	if err == OK: _set_waiting("Opening your game on the lobby server...")
+	else: _fail_net("Could not reach the lobby server (error %d)." % err)
+
+func _join_online() -> void:
+	if _session != null or _lobby_list == null: return
+	var sel := _lobby_list.get_selected_items()
+	if sel.is_empty() or sel[0] >= _lobby_rooms.size():
+		_mp_status.text = "Pick a game in the list first."
+		return
+	var r: Dictionary = _lobby_rooms[sel[0]]
+	_start_session()
+	var err := _session.start_relay_client(_server(), str(r.get("room", "")), _mp_password.text)
+	if err == OK: _set_waiting("Joining %s..." % str(r.get("name", "the game")))
+	else: _fail_net("Could not reach the lobby server (error %d)." % err)
+
 func _host_game() -> void:
 	if _session != null:
 		return
 	_start_session()
 	var err := _session.start_host(NetworkSession.DEFAULT_PORT)
 	if err == OK:
-		# item 10: хост открывает лобби СРАЗУ, не дожидаясь подключения. Объявление в
-		# локальной сети (item 38) продолжит уже само лобби — иначе, уйдя с меню, мы бы
-		# сняли маяк и клиенты перестали бы нас находить.
+		# item 10: хост открывает лобби СРАЗУ, не дожидаясь подключения.
 		_go_lobby(true)
 	else:
 		_fail_net("Could not host (error %d). Is the port already in use?" % err)
@@ -439,32 +569,6 @@ func _join_game() -> void:
 	else:
 		_fail_net("Could not connect (error %d)." % err)
 
-## Обозреватель LAN живёт под /root — снимаем его при уходе из меню, чтобы не копить
-## сироты и не держать порт открытым в бою.
-func _exit_tree() -> void:
-	if _lan != null:
-		_lan.stop()
-		_lan.queue_free()
-		_lan = null
-
-## Найденные в сети серверы обновились (item 38) — перерисовываем список.
-func _on_lan_servers(servers: Array) -> void:
-	_lan_servers = servers
-	if _lan_list == null:
-		return
-	_lan_list.clear()
-	for info: Dictionary in servers:
-		_lan_list.add_item("%s @ %s (%d)" % [
-			str(info.get("name", "Game")), str(info.get("ip", "?")),
-			int(info.get("players", 0))])
-
-## Клик по найденному серверу — подключаемся к его IP напрямую (item 38).
-func _on_lan_pick(index: int) -> void:
-	if index < 0 or index >= _lan_servers.size() or _session != null:
-		return
-	_mp_ip.text = str((_lan_servers[index] as Dictionary).get("ip", "127.0.0.1"))
-	_join_game()
-
 ## Сессия живёт под /root с постоянным именем — так её путь одинаков у обеих
 ## сторон (RPC ходит по пути) и переживает смену сцены на бой.
 func _start_session() -> void:
@@ -476,8 +580,7 @@ func _start_session() -> void:
 
 func _set_waiting(text: String) -> void:
 	_mp_status.text = text
-	_mp_host_btn.hide()
-	_mp_join_btn.hide()
+	for b: Button in [_mp_host_btn, _mp_join_btn, _mp_online_btn, _mp_join_online_btn]: b.disabled = true
 	_mp_cancel_btn.show()
 
 func _fail_net(text: String) -> void:
@@ -493,12 +596,11 @@ func _drop_session() -> void:
 		_session.close()
 		_session.queue_free()
 		_session = null
-	_mp_host_btn.show()
-	_mp_join_btn.show()
+	for b: Button in [_mp_host_btn, _mp_join_btn, _mp_online_btn, _mp_join_online_btn]: b.disabled = false
 	_mp_cancel_btn.hide()
 
 func _on_net_lost() -> void:
-	_fail_net("Connection lost.")
+	_fail_net(_session.last_error if _session != null and _session.last_error != "" else "Connection lost.")
 
 ## Связь есть — начинается обычная партия, просто на двоих (#99). Хост уходит на тот
 ## же экран подготовки, что и в одиночке: выбирает карту, бюджет очков, мирных и туман.

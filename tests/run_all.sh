@@ -48,6 +48,7 @@ echo "=== tests/run_net_match.sh ==="
 bash tests/run_net_match.sh || fail=1
 bash tests/run_net_spectators.sh || fail=1
 bash tests/run_net_kick.sh || fail=1
+bash tests/run_net_relay.sh || fail=1
 
 if [ $fail -ne 0 ]; then
   echo "regression run FAILED"

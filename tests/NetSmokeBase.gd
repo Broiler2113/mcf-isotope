@@ -100,7 +100,24 @@ func _start_net_now(host: bool) -> void:
 	ses.name = NetworkSession.NODE_NAME
 	root.add_child(ses)
 	var err: int
-	if host:
+	# MCF_TEST_RELAY=host:port runs the same match through the internet relay (0.11).
+	var relay := OS.get_environment("MCF_TEST_RELAY")
+	var code_file := "/tmp/mcf_relay_room_%s" % OS.get_environment("MCF_TEST_RELAY_TAG")
+	if relay != "" and host:
+		DirAccess.remove_absolute(code_file)
+		ses.relay_room.connect(func(code: String) -> void:
+			var f := FileAccess.open(code_file, FileAccess.WRITE)
+			f.store_string(code)
+			f.close())
+		err = ses.start_relay_host(relay, {"name": "smoke", "map": "test", "protocol": NetHandoff.PROTOCOL})
+	elif relay != "":
+		var waited := 0
+		while not FileAccess.file_exists(code_file) and waited < 200:
+			OS.delay_msec(50)
+			waited += 1
+		var code := FileAccess.get_file_as_string(code_file).strip_edges()
+		err = ses.start_relay_client(relay, code)
+	elif host:
 		err = ses.start_host(NetworkSession.DEFAULT_PORT)
 	else:
 		err = ses.start_client("127.0.0.1", NetworkSession.DEFAULT_PORT)

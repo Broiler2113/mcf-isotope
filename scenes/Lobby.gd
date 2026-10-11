@@ -107,7 +107,6 @@ var _is_host_net: bool = false
 var _is_solo: bool = false
 ## Маяк локальной сети хоста (item 10): пока хост сидит в лобби, он продолжает
 ## объявлять партию — иначе клиенты перестали бы его находить.
-var _lan_adv: LanDiscovery = null
 ## Гость уже попросил хоста повторить объявление матча (batch 13 #11) — один раз.
 var _setup_requested: bool = false
 
@@ -146,10 +145,10 @@ func _ready() -> void:
 		_refresh_host_status()
 		_lobby_changed()
 		_send_lobby_map()
-		_lan_adv = LanDiscovery.new()
-		get_tree().root.add_child.call_deferred(_lan_adv)
-		_lan_adv.start_advertising.call_deferred({
-			"name": "MCF Isotope", "players": 1, "port": NetworkSession.DEFAULT_PORT})
+		if ses.is_relay():
+			# The room on the lobby server dies with the connection to it.
+			ses.disconnected.connect(func() -> void:
+				_status.text = "Lost the lobby server: %s Your game is no longer listed." % ses.last_error)
 
 # --- Хост: рассадка гостей и рассылка снимка (batch 12 #8) --------------------------
 func _on_host_peer_joined(id: int) -> void:
@@ -210,19 +209,37 @@ func _refresh_host_status() -> void:
 	if _status == null or NetHandoff.session == null:
 		return
 	var n := NetHandoff.session.peers.size()
+	var where := ""
+	if NetHandoff.session.is_relay():
+		where = " Listed online as \"%s\" (code %s)." % [NetHandoff.room_name, NetHandoff.session.relay_code()]
 	if n == 0:
-		_status.text = "Hosting — waiting for players to join. You can also add AI slots and start now."
+		_status.text = "Hosting — waiting for players to join. You can also add AI slots and start now." + where
 	else:
 		_status.text = "Hosting — %d player%s connected. Start when everyone is seated." % [
-			n, "" if n == 1 else "s"]
+			n, "" if n == 1 else "s"] + where
 
 ## Любое изменение лобби у хоста: перерисовать и разослать гостям.
+## The host's entry in the internet Lobbies list follows the lobby (0.11).
+func _update_listing(status: String = "In lobby") -> void:
+	if not _is_host_net or NetHandoff.session == null or not NetHandoff.session.is_relay():
+		return
+	var humans := 1
+	for s: Roster.Slot in roster.slots:
+		if s.kind == Roster.SlotKind.HUMAN and s.peer_id > 1: humans += 1
+	var seats := 0
+	for s: Roster.Slot in roster.slots:
+		if s.kind == Roster.SlotKind.HUMAN or s.kind == Roster.SlotKind.OPEN: seats += 1
+	var map_name := "Random map" if _is_random() else (_map_opt.get_item_text(_map_opt.selected) if _map_opt != null and _map_opt.selected >= 0 else "—")
+	NetHandoff.session.update_listing({"name": NetHandoff.room_name, "map": map_name,
+			"players": humans, "max_players": maxi(seats, humans), "status": status})
+
 func _lobby_changed() -> void:
 	# Случайная карта держит по зоне на слот: слот добавили или убрали — карта
 	# пересобирается (тем же зерном), и гостям уезжает новая.
 	var regen := _is_random() and _gen_key != str(_gen_options())
 	_refresh_slots()  # пересоберёт карту и превью сам — через _selected_map()
 	_broadcast_lobby()
+	_update_listing()
 	if regen:
 		_send_lobby_map()
 
@@ -338,10 +355,7 @@ func _apply_lobby_map(msg: Dictionary) -> void:
 	_refresh_slots()
 
 func _exit_tree() -> void:
-	if _lan_adv != null:
-		_lan_adv.stop()
-		_lan_adv.queue_free()
-		_lan_adv = null
+	pass
 
 func _on_client_message(msg: Dictionary) -> void:
 	if _chat != null and _chat.receive(msg):
@@ -537,6 +551,21 @@ func _build_config(parent: VBoxContainer) -> void:
 	_army_opt = _opt(["Host Decides", "Players Pick"], GameConfig.army_select_mode)
 	_army_opt.item_selected.connect(func(_i: int) -> void: _refresh_personal_enabled())
 	_row(box, "Army Select:", _army_opt)
+
+	# The host decides whether guests may watch (0.11). Off also sends current spectators away.
+	if _is_host_net:
+		var watch := CheckBox.new()
+		watch.text = "Allow spectators"
+		watch.button_pressed = NetHandoff.allow_spectators
+		watch.toggled.connect(func(on: bool) -> void:
+			NetHandoff.allow_spectators = on
+			if not on:
+				for id: int in NetHandoff.spectators.duplicate():
+					NetHandoff.session.kick(id)
+				NetHandoff.spectators.clear()
+				NetHandoff.session.spectators.clear()
+			_lobby_changed())
+		_row(box, "Spectators:", watch)
 
 	# Командный режим (item 4): тумблер. Пока выключен — «дружественный огонь» и колонка
 	# команд в слотах скрыты. Включение перерисовывает слоты, чтобы показать колонку.
@@ -1823,6 +1852,7 @@ func _on_start() -> void:
 		var shared: MapData = _selected_map()
 		if net_host:
 			NetHandoff.session.send(NetHandoff.encode_setup(shared))
+			_update_listing("In battle")
 		NetHandoff.lobby_map = shared
 	get_tree().change_scene_to_file(PLACEMENT_SCENE)
 
@@ -1833,6 +1863,12 @@ func _on_back() -> void:
 
 func _make_spectator(peer: int) -> void:
 	if peer <= 1 or NetHandoff.session == null or not NetHandoff.session.peers.has(peer): return
+	# The host turned spectators off (0.11): a guest without a seat is turned away.
+	if not NetHandoff.allow_spectators:
+		if roster.side_of_peer(peer) < 0:
+			NetHandoff.session.kick(peer)
+			_status.text = "A guest was turned away: the game is full and spectators are off."
+		return
 	var side := roster.side_of_peer(peer)
 	if side >= 0:
 		roster.slots[side].kind = Roster.SlotKind.OPEN
