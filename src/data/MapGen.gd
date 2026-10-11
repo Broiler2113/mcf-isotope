@@ -263,7 +263,7 @@ const HULL_MARGIN := 1.06
 static func default_options() -> Dictionary:
 	return {"style": Style.TOWN, "size": 1, "density": 1, "seed": 1, "zones": 2, "units": 10,
 			"width": 80, "height": 60, "symmetric": false,
-			"space": true, "flammable": true, "obstacles": true, "civilians": 0,
+			"flammable": true, "obstacles": true, "civilians": 0,
 			"furniture": MapFurnish.DEFAULT_DENSITY}
 
 ## Уровень мирных по настройке: число 0…4 или прежнее true/false.
@@ -307,6 +307,10 @@ static func generate(options: Dictionary) -> MapData:
 static func build(options: Dictionary) -> MapGen:
 	var o := default_options()
 	o.merge(options, true)
+	# Vacuum follows the map kind (0.11: the lobby toggle is gone): stations and asteroids
+	# float in space, towns, fields and bunkers never get holes into it.
+	if not o.has("space"):
+		o["space"] = STYLE_SPACE[clampi(int(o["style"]), 0, STYLE_SPACE.size() - 1)]
 	var dim := dims_of(o)
 	var need := zone_need(int(o["units"]))
 	var g: MapGen = null

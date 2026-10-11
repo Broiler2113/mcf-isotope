@@ -104,7 +104,7 @@ func on_resolved(intent: Intent, rolls: Array, result: ActionResult = null) -> v
 	var at := steps.size() + 1
 	var step := {"i": wire, "r": rolls.duplicate()}
 	_observe(at, result)
-	if _state != null and (intent is EndTurnIntent or at - _checkpoint_at >= ReplayCheckpoint.ACTION_INTERVAL):
+	if _state != null and ReplayCheckpoint.due(_state, at - _checkpoint_at, intent is EndTurnIntent):
 		step["k"] = ReplayCheckpoint.pack(_state, _resolver, _fx, not intent is EndTurnIntent)
 		_checkpoint_at = at
 	steps.append(step)

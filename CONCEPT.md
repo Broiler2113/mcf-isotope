@@ -289,9 +289,8 @@ anybody's victory.
 ## 13. Random events
 
 Switch them on and the map itself gets a turn. An event is announced at the start of
-a round, with the zone drawn on the board, and lands when the next player ends their
-turn — so whoever moves first has exactly one turn to get out of the way, or to push
-somebody into it.
+a round, with the zone drawn on the board, and lands when the round ends — so every
+player has exactly one turn to get out of the way, or to push somebody into it.
 
 - **Artillery barrage** — a rectangle is shelled; about half the cells in it are
   destroyed outright, with whoever stood on them. It usually aims at the thickest

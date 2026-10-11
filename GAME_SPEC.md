@@ -1383,7 +1383,7 @@ replay it through the ordinary dice pipeline (§18.5):
 
 ## 14a. Random Events (0.9.4)
 
-Three events, all **announced at round opening with one player turn to react**. The host turns them on in the
+Three events, all **announced at round opening and landing when that round ends** — every player gets one turn to react (0.11). The host turns them on in the
 lobby and sets the interval, the mandatory flag and a weight per event; everything about an
 event — whether it happens, which one, where it lands, who it kills — comes out of
 `DiceService`, so host and client roll the same stream and resolve the same event in the
@@ -1412,8 +1412,9 @@ edge are vacuum, the old search found nothing and the event always logged "nowhe
 **Telegraph, then land.** Events are rolled and announced at the beginning of a round,
 including the first round. The configured interval counts rounds; ordinary player
 handoffs do not advance it. The event resolves
-when the next player ends their turn, before AP refresh, even if the round is not over.
-The warning displays **1 TURN**. Loading an older pending warning uses the same deadline.
+when the round closes, before AP refresh (0.11; 0.9.8.1–0.10 landed it after the FIRST
+player's turn, so the second player could never dodge). The warning displays **END OF ROUND**.
+Loading an older pending warning uses the same deadline.
 Parameters are rolled at announcement, per-cell outcomes at landing; both orders are fixed.
 Gas aging remains tied to round boundaries. Pending artillery zones cannot overlap:
 a blocked target moves to the nearest free rectangle, or is skipped if no rectangle fits.

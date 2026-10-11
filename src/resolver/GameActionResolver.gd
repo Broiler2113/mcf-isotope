@@ -3574,20 +3574,6 @@ func visibility_limited() -> bool:
 	_sync_seen()
 	return not _sight_gas.is_empty()
 
-var _gas_masks_version := -1
-var _gas_masks_grid := 0
-var _gas_masks_cache: Array = []
-func _gas_masks() -> Array:
-	var grid := state.grid
-	if _gas_masks_version != GridCell.vision_version or _gas_masks_grid != grid.get_instance_id():
-		var mask := PackedByteArray()
-		mask.resize(grid.width * grid.height)
-		for i: int in _sight_gas: mask[i] = 1
-		_gas_masks_cache = [mask, _transpose(mask, grid.width, grid.height)]
-		_gas_masks_version = GridCell.vision_version
-		_gas_masks_grid = grid.get_instance_id()
-	return _gas_masks_cache
-
 func team_sees(owner: int, coord: Vector2i) -> bool:
 	if not state.grid.in_bounds(coord): return false
 	if state.grid.cell(coord).gas: return false
@@ -3808,7 +3794,7 @@ static func _tank_masks_of(sig: int, gh: int) -> Array:
 	_tank_masks[sig] = pair
 	return pair
 
-func _seen_from(coord: Vector2i, r: int, viewer: int = -1, gas_only: bool = false) -> PackedInt32Array:
+func _seen_from(coord: Vector2i, r: int, viewer: int = -1) -> PackedInt32Array:
 	# Смотрящий вне поля (сидит в машине, coord = OFFBOARD) не видит ничего: лучи из
 	# такой точки уходят за край сетки. Вызывающие сидящих и так пропускают — это
 	# страховка на будущих вызывающих (issue 2).
@@ -3823,13 +3809,13 @@ func _seen_from(coord: Vector2i, r: int, viewer: int = -1, gas_only: bool = fals
 	# перебирать четыре миллиона несуществующих клеток ради этого — нет. Обрезка
 	# идёт до ключа кеша, поэтому все «безграничные» бойцы делят одну запись.
 	r = mini(r, maxi(gw, gh))
-	var sig := -1 if gas_only else _tank_sig(viewer)
+	var sig := _tank_sig(viewer)
 	var key := Vector4i(coord.x, coord.y, r, sig)
 	var hit: Variant = _seen_cache.get(key)
 	if hit != null:
 		_touch_seen(key, hit)
 		return hit
-	var same: Variant = null if gas_only else _reuse_under(key, viewer)
+	var same: Variant = _reuse_under(key, viewer)
 	if same != null:
 		return same
 	var origin := coord.y * gw + coord.x
@@ -3837,7 +3823,7 @@ func _seen_from(coord: Vector2i, r: int, viewer: int = -1, gas_only: bool = fals
 		var own := PackedInt32Array([origin])
 		_store_seen(key, own, own)
 		return own
-	var masks := _gas_masks() if gas_only else _tank_masks_of(sig, gh)
+	var masks := _tank_masks_of(sig, gh)
 	var res := _sweep(coord.x, coord.y, r, masks[0], gw, gh, masks[1])
 	# A wall face is visible; a gas-filled cell conceals its occupants. Keep the
 	# sweep and its incremental invalidation, filtering only while gas exists.
@@ -4136,19 +4122,19 @@ static func _transpose(blk: PackedByteArray, gw: int, gh: int) -> PackedByteArra
 ## спрашивают на каждом пересчёте тумана, а на карте 250×250 это девять обзоров по
 ## десятку тысяч клеток. Чувствительные клетки записи — объединение чувствительных клеток
 ## следа, так что журнал обзора выкидывает её ровно тогда же, когда любую из частей.
-func _vehicle_seen(veh: Vehicle, gas_only: bool = false) -> PackedInt32Array:
+func _vehicle_seen(veh: Vehicle) -> PackedInt32Array:
 	var cells := veh.footprint()
 	if cells.size() == 1:
-		return _seen_from(cells[0], MCF.SIGHT_UNLIMITED, veh.owner, gas_only)
+		return _seen_from(cells[0], MCF.SIGHT_UNLIMITED, veh.owner)
 	_sync_seen()
 	var grid := state.grid
-	var sig := -1 if gas_only else _tank_sig(veh.owner)
+	var sig := _tank_sig(veh.owner)
 	var key := Vector4i(veh.origin.x, veh.origin.y, -1 - (veh.size.x * 1024 + veh.size.y), sig)
 	var hit: Variant = _seen_cache.get(key)
 	if hit != null:
 		_touch_seen(key, hit)
 		return hit
-	var same: Variant = null if gas_only else _reuse_under(key, veh.owner)
+	var same: Variant = _reuse_under(key, veh.owner)
 	if same != null:
 		return same
 	var r := mini(MCF.SIGHT_UNLIMITED, maxi(grid.width, grid.height))
@@ -4157,7 +4143,7 @@ func _vehicle_seen(veh: Vehicle, gas_only: bool = false) -> PackedInt32Array:
 	var out := PackedInt32Array()
 	var sens := PackedInt32Array()
 	for c: Vector2i in cells:
-		for i: int in _seen_from(c, MCF.SIGHT_UNLIMITED, veh.owner, gas_only):
+		for i: int in _seen_from(c, MCF.SIGHT_UNLIMITED, veh.owner):
 			if mark[i] & 1 == 0:
 				mark[i] = mark[i] | 1
 				out.append(i)
@@ -4245,6 +4231,7 @@ func team_visible_coords(owner: int) -> Dictionary:
 		_vis_epoch.clear()
 		_vis_vv.clear()
 		_vis_log.clear()   # всё видимое собирается заново — перерисовывать всё
+		_vis_hidden.clear()
 		_vis_grid = gid
 		_vis_mode = mode
 	if mode == 0:
@@ -4259,6 +4246,8 @@ func team_visible_coords(owner: int) -> Dictionary:
 		_vis_epoch[owner] = UnitInstance.vision_epoch
 		_vis_vv[owner] = GridCell.vision_version
 		return full
+	if mode == 2:
+		return _gas_only_view(owner)
 
 	var out: Dictionary = _vis_set.get(owner, {})
 	var gw := state.grid.width
@@ -4286,7 +4275,7 @@ func team_visible_coords(owner: int) -> Dictionary:
 		if u.aboard_vehicle_id != -1:
 			continue
 		live[u.id] = true
-		var fresh := _seen_from(u.coord, MCF.SIGHT_UNLIMITED if mode == 2 else sight_of(u), u.owner, mode == 2)
+		var fresh := _seen_from(u.coord, sight_of(u), u.owner)
 		var was: Variant = seen.get(u.id)
 		# Обзор этого бойца не изменился — его вклад уже в счётчиках, и трогать нечего.
 		# На обычном ходу так отсеиваются 99 бойцов из 100.
@@ -4308,7 +4297,7 @@ func team_visible_coords(owner: int) -> Dictionary:
 			continue
 		var vkey := -1 - veh.id
 		live[vkey] = true
-		var vfresh := _vehicle_seen(veh, mode == 2)
+		var vfresh := _vehicle_seen(veh)
 		var vwas: Variant = seen.get(vkey)
 		if vwas != null and vwas == vfresh:
 			continue
@@ -4330,6 +4319,39 @@ func team_visible_coords(owner: int) -> Dictionary:
 	_vis_epoch[owner] = UnitInstance.vision_epoch
 	_vis_vv[owner] = GridCell.vision_version
 	explored[owner] = memory
+	return out
+
+## Fog off with gas on the board (0.11): everything is visible except the gassed cells
+## themselves. Shots across a cloud are still refused (gas_blocks_line). Hiding what lay
+## BEHIND a cloud took a whole-board sweep per soldier: ~10 s per action on Colossal.
+var _vis_hidden: Dictionary = {}   # owner -> {flat index: true}
+func _gas_only_view(owner: int) -> Dictionary:
+	_sync_seen()
+	var grid := state.grid
+	var gw := grid.width
+	var out: Dictionary = _vis_set.get(owner, {})
+	var was: Dictionary = _vis_hidden.get(owner, {})
+	if out.is_empty():
+		was = {}
+		for y in grid.height:
+			for x in gw:
+				out[Vector2i(x, y)] = true
+	var log: Variant = _vis_log.get(owner)
+	var now: Dictionary = _sight_gas.duplicate()
+	for i: int in was:
+		if not now.has(i):
+			out[Vector2i(i % gw, i / gw)] = true
+			if log != null:
+				log.append(i)
+	for i: int in now:
+		if not was.has(i):
+			out.erase(Vector2i(i % gw, i / gw))
+			if log != null:
+				log.append(i)
+	_vis_hidden[owner] = now
+	_vis_set[owner] = out
+	_vis_epoch[owner] = UnitInstance.vision_epoch
+	_vis_vv[owner] = GridCell.vision_version
 	return out
 
 ## Вклад одного обзора в счётчики стороны. Сначала ПРИБАВЛЯЕТСЯ новый обзор, потом
@@ -6424,7 +6446,10 @@ func _resolve_end_turn(intent: EndTurnIntent = null) -> ActionResult:
 	# when the handoff also closes a round, before AP refresh.
 	var round_res := ActionResult.new()
 	round_res.ok = true
-	land_random_events(round_res, _handoff_closes_round())
+	# Warnings land when the round closes (0.11): announced at its opening, so every
+	# player gets exactly one turn to react — not only whoever moves first.
+	if _handoff_closes_round():
+		land_random_events(round_res)
 	state.turns.end_turn(state.all_units())
 	var civ := play_civilian_slots()
 	# Огонь ползёт в начале хода той стороны, которая его устроила (#45). Дошедшее до
@@ -6488,8 +6513,8 @@ func _handoff_closes_round() -> bool:
 # =====================================================================================
 #  Случайные события (0.9.4, спека «Random Event System»)
 # =====================================================================================
-## Событие не падает в тот же миг, когда выпало: СНАЧАЛА ОБЪЯВЛЕНИЕ, потом удар в конце
-## следующего хода игрока. Параметры (где зона, с какого края
+## Событие не падает в тот же миг, когда выпало: СНАЧАЛА ОБЪЯВЛЕНИЕ в начале раунда, потом
+## удар в конце того же раунда — у каждого игрока ровно один ход (0.11). Параметры (где зона, с какого края
 ## армия) катаются при объявлении, исход по клеткам — при падении; оба порядка жёстко
 ## зафиксированы, поэтому хост и клиент прокатывают один поток d6 и сходятся.
 ##
@@ -6549,7 +6574,7 @@ func _maybe_random_event(res: ActionResult) -> void:
 	if params.is_empty():
 		return
 	random_events.announce(id, params, state.turns.round_number)
-	res.log("⚠ %s — %s, landing when the next player ends their turn" % [
+	res.log("⚠ %s — %s, landing at the end of this round" % [
 		RandomEvents.event_name(id), _event_where(id, params)])
 
 ## Полезный участок карты — рамка по всем клеткам, которые НЕ космос и не голая земля
@@ -6680,11 +6705,10 @@ func _event_where(id: String, p: Dictionary) -> String:
 ##
 ## Порядок: сперва травит стоящий газ (он был на доске весь этот раунд), потом падает
 ## объявленное — в порядке очереди. Порядок фиксирован, значит одинаков у хоста и клиента.
-func land_random_events(res: ActionResult, round_ends: bool = true) -> void:
+func land_random_events(res: ActionResult) -> void:
 	if random_events == null:
 		return
-	if round_ends:
-		_gas_tick(res)
+	_gas_tick(res)
 	for e: Dictionary in random_events.take_landing(state.turns.round_number):
 		var p: Dictionary = e["params"]
 		match str(e["id"]):
@@ -9348,7 +9372,9 @@ func fixture_at(c: Vector2i) -> String:
 	if not state.grid.in_bounds(c): return ""
 	var cell := state.grid.cell(c)
 	if not cell.fixture.is_empty(): return str(cell.fixture[0])
-	return cell.feature_id if Furniture.emits_light(cell.feature_id) else ""
+	# Only actual lamps are shot out as lights; a glowing rack or vending machine is
+	# ordinary furniture (it only glows on screen).
+	return cell.feature_id if Furniture.DEFS.get(cell.feature_id, {}).get("cat", "") == "lighting" else ""
 
 func can_shoot_fixture(shooter: UnitInstance, c: Vector2i) -> String:
 	if shooter == null or not shooter.is_alive() or shooter.is_drone or shooter.captor_id >= 0:

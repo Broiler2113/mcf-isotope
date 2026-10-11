@@ -124,7 +124,8 @@ func _generation() -> void:
 				if map.feature_id[i] == "streetlight": streets += 1
 		for i: int in map.fixtures:
 			ck(map.cover_height[i] >= 2 and not MCF.is_glass(map.feature_id[i]), "generated wall fixture has an opaque support")
-		ck(floor_count + map.fixtures.size() > 5, "%s map receives distributed lighting" % map.env)
+		# Open ground stays dark (0.11): small field and asteroid maps only light their buildings.
+		ck(floor_count + map.fixtures.size() > (0 if map.env in ["field", "asteroid"] else 5), "%s map receives distributed lighting" % map.env)
 		if map.env == "town": ck(streets > 0, "town generation includes streetlights")
 		print("Generated %s: %d floor lights, %d wall lights, %.2fs" % [map.env, floor_count, map.fixtures.size(), (Time.get_ticks_msec() - started) / 1000.0])
 

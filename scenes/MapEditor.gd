@@ -1120,7 +1120,7 @@ func _sync_lighting() -> void:
 	if not is_instance_valid(_lighting):
 		_lighting = LightManager.new()
 		add_child(_lighting)
-	_lighting.update_view(_grid, pan, zoom, CELL)
+	_lighting.update_view(_grid, pan, zoom, Vector2.ZERO, CELL, _env, {}, false, null, _layer)
 
 func _process(delta: float) -> void:
 	# Куски плиток собираются по нескольку за кадр: пока бюджет кадра выбран до дна,

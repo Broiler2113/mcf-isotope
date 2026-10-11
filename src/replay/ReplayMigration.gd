@@ -38,7 +38,7 @@ static func upgrade(data: Dictionary, path: String = "") -> Dictionary:
 		ReplayCheckpoint.apply_effects(fx, result)
 		var step: Dictionary = player.steps()[player.index - 1]
 		var handoff := str(step.get("i", {}).get("t", "")) == IntentCodec.T_END
-		if handoff or player.index - frame_at >= ReplayCheckpoint.ACTION_INTERVAL:
+		if ReplayCheckpoint.due(player.state, player.index - frame_at, handoff):
 			frames[player.index - 1] = ReplayCheckpoint.pack(player.state, player.resolver, fx, not handoff)
 			frame_at = player.index
 	# Commit only a complete scan. Do not duplicate the whole replay in memory.

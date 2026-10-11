@@ -60,6 +60,13 @@ func _ready() -> void:
 	vbox.add_child(_roll_btn)
 	hide()
 
+## Enter (rebindable) presses Roll while the button is up — before any focused button
+## (End Turn, say) can take the key.
+func _input(event: InputEvent) -> void:
+	if _roll_btn.visible and Keybinds.matches(event, "game_roll"):
+		get_viewport().set_input_as_handled()
+		_roll_btn.pressed.emit()
+
 ## Чужой бросок дождался нажатия у своего хозяина (batch 12 #14): крутим.
 func release() -> void:
 	_released.emit()
@@ -97,6 +104,7 @@ func play(dice: Array, manual: bool = false, prompt: String = "", speed: float =
 		_prompt.text = prompt
 		_prompt.show()
 	if manual:
+		_roll_btn.text = "Roll  [%s]" % Keybinds.label("game_roll") if Keybinds.label("game_roll") != "" else "Roll"
 		_roll_btn.show()
 		await _roll_btn.pressed
 		_roll_btn.hide()

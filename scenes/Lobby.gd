@@ -83,7 +83,6 @@ var _gen_h: SpinBox
 var _gen_sym: CheckBox
 ## Большую карту пересобираем, когда щелчки по настройкам стихнут, а не на каждый.
 var _gen_timer: Timer
-var _gen_space: CheckBox
 var _gen_fire: CheckBox
 var _gen_obstacles: CheckBox
 var _gen_furniture: OptionButton
@@ -837,8 +836,6 @@ func _build_generator(box: VBoxContainer) -> void:
 	_row(_gen_box, "Layout:", _gen_sym)
 	var mech := HFlowContainer.new()
 	mech.add_theme_constant_override("h_separation", 10)
-	_gen_space = _gen_check(mech, "Space",
-			"Vacuum you can fight in (zero-G): vented rooms and hull windows on stations, a ragged edge and holes in towns and fields. A bunker is underground and never has vacuum. Every door is an airlock either way.")
 	_gen_fire = _gen_check(mech, "Flammable",
 			"Grass, plank floors, wooden walls and fences — ground that fire spreads over.")
 	_gen_obstacles = _gen_check(mech, "Obstacles",
@@ -911,7 +908,6 @@ func _dim_spin(value: int) -> SpinBox:
 func _apply_style_defaults(style: int) -> void:
 	if style < 0 or style >= MapGen.STYLE_SPACE.size():
 		return
-	_gen_space.set_pressed_no_signal(MapGen.STYLE_SPACE[style])
 	_gen_fire.set_pressed_no_signal(MapGen.STYLE_FLAMMABLE[style])
 
 func _gen_check(parent: Control, text: String, tip: String) -> CheckBox:
@@ -938,7 +934,7 @@ func _gen_options() -> Dictionary:
 			"zones": maxi(2, roster.slots.size()), "units": int(_gen_units.value),
 			"width": int(_gen_w.value), "height": int(_gen_h.value),
 			"symmetric": _gen_sym.button_pressed,
-			"space": _gen_space.button_pressed,
+			"space": MapGen.STYLE_SPACE[clampi(_gen_style.selected, 0, MapGen.STYLE_SPACE.size() - 1)],
 			"flammable": _gen_fire.button_pressed, "obstacles": _gen_obstacles.button_pressed,
 			"furniture": _gen_furniture.selected,
 			"civilian_count": _civ_count()}

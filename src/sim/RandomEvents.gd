@@ -6,8 +6,8 @@ extends RefCounted
 ## событиями» и веса-доли по каждому событию.
 ##
 ## Event intervals count rounds, with announcements at round opening.
-## Each event announces its zone first and resolves when the next player ends
-## their turn. Gas lifetime and repeated exposure still advance once per round.
+## Each event announces its zone at a round's opening and resolves when that round
+## ends, so every player gets one turn to react (0.11). Gas lifetime and repeated exposure still advance once per round.
 ##
 ##   • «Artillery Barrage» (id на диске остался mortar) — прямоугольную зону накрывает
 ##     обстрел: каждая клетка с вероятностью 1/2 разрушена;
@@ -137,8 +137,8 @@ func _pick(dice: DiceService) -> String:
 
 # --- Очередь объявленных событий -------------------------------------------------------
 
-## Warnings last exactly one player turn. Round metadata remains in snapshots
-## for compatibility; old pending warnings also resolve on the next end-turn.
+## A warning lands when its round closes. Round metadata stays in snapshots for
+## compatibility; pending warnings from older saves land at the next round end.
 func announce(id: String, params: Dictionary, round_number: int) -> Dictionary:
 	var entry := {"id": id, "params": params, "announced": round_number, "land": round_number}
 	pending.append(entry)

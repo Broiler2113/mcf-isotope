@@ -597,12 +597,12 @@ func _sync_lighting() -> void:
 		_lighting = LightManager.new()
 		add_child(_lighting)
 	if _before_on and _before_grid != null:
-		_lighting.update_view(_before_grid, pan + ORIGIN * zoom + position, zoom, CELL)
+		_lighting.update_view(_before_grid, pan, zoom, ORIGIN, CELL, state.env, {}, false, null, _lod)
 	else:
 		var view := _view_resolver()
 		var limited := view.visibility_limited()
-		_lighting.update_view(state.grid, pan + ORIGIN * zoom + position, zoom, CELL,
-			view.team_visible_coords(_viewing_side()) if limited else {}, limited, _fx)
+		_lighting.update_view(state.grid, pan, zoom, ORIGIN, CELL, state.env,
+			view.team_visible_coords(_viewing_side()) if limited else {}, limited, _fx, _lod)
 
 func _process(delta: float) -> void:
 	_advance_group_preview()
@@ -3967,7 +3967,7 @@ func _play_dice(events: Array) -> void:
 			# В сети (batch 12 #14) нажатия ждут ВСЕ: свой бросок — кнопкой, чужой — пока
 			# его хозяин не нажмёт у себя. Броски ИИ и мирных крутятся сами.
 			var roller := int(step.get("roller", MCF.Owner.NEUTRAL))
-			var remote_human: bool = networked and not bool(step["manual"]) \
+			var remote_human: bool = networked and not bool(step["manual"]) and not step.get("auto", false) \
 					and state.roster != null and state.roster.is_networked_human(roller)
 			if networked and (bool(step["manual"]) or remote_human):
 				var seq := _roll_seq
@@ -4160,7 +4160,7 @@ func _dice_steps(ev: Dictionary) -> Array:
 			var g_own := int(ev.get("shooter_owner", -1))
 			var g_faces: Array = []
 			for h: Dictionary in ev["hits"]:
-				g_faces.append({"value": h["roll"], "good": _good_for_viewer(h["hit"], g_own),
+				g_faces.append({"value": h["roll"], "good": _good_for_viewer(h["hit"], g_own), "need": int(ev["need"]),
 					"tag": ("Light %d+" if ev["kind"] == "fixture" else "Glass %d+") % int(ev["need"])})
 			var g_manual := _owner_is_local_human(g_own)
 			var g_name := String(ev["name"]).to_lower()
@@ -4172,7 +4172,7 @@ func _dice_steps(ev: Dictionary) -> Array:
 				var s_faces: Array = []
 				for sv: Dictionary in ev["saves"]:
 					s_faces.append({"value": sv["roll"], "good": _good_for_viewer(not sv["held"], g_own),
-						"tag": "Holds %d+" % int(ev["save"])})
+						"need": int(ev["save"]), "tag": "Holds %d+" % int(ev["save"])})
 				steps.append({"faces": s_faces, "manual": false, "roller": MCF.Owner.NEUTRAL,
 					"speed": FAST_ROLL_SPEED if int(ev["save"]) > 6 else 1.0,
 					"prompt": "The %s holds on %d+" % [g_name, int(ev["save"])]})
@@ -4186,12 +4186,12 @@ func _dice_steps(ev: Dictionary) -> Array:
 			for det in ev["shots"]:
 				var s_own := int(ev.get("shooter_owner", -1))
 				var d_own := int(ev.get("def_owner", -1))
-				hit_faces.append({"value": det["hit_roll"],
+				hit_faces.append({"value": det["hit_roll"], "need": int(det["need"]),
 					"good": _good_for_viewer(det["hit"], s_own), "tag": "Hit %d+" % det["need"]})
 				if det["hit"]:
 					# Зелёный — то, что хорошо для СМОТРЯЩЕГО (batch ui-drones): своя защита не
 					# выдержала — красный, вражеская — зелёный.
-					pen_faces.append({"value": det["def_roll"],
+					pen_faces.append({"value": det["def_roll"], "need": int(det["armor"]),
 						"good": _good_for_viewer(det["parried"], d_own), "tag": "Pen %d+" % det["armor"]})
 			# Разбивка бонусов/штрафов к попаданию и защите (#49): показываем в подсказке.
 			var hit_note := _mods_text("To-hit", ev.get("hit_mods", []))
@@ -4228,7 +4228,7 @@ func _dice_steps(ev: Dictionary) -> Array:
 			resist["roller"] = int(ev.get("def_owner", MCF.Owner.NEUTRAL))
 			steps.append(resist)
 		"check":
-			var chk := _step({"value": ev["roll"],
+			var chk := _step({"value": ev["roll"], "need": int(ev["need"]),
 				"good": _good_for_viewer(ev["ok"], int(ev.get("roller", -1))), "tag": "%d+" % ev["need"]})
 			chk["speed"] = FAST_ROLL_SPEED if int(ev["need"]) <= 1 else 1.0
 			steps.append(chk)
@@ -4239,7 +4239,7 @@ func _dice_steps(ev: Dictionary) -> Array:
 				if det["epicenter"] and det["rolls"].is_empty():
 					continue  # эпицентр: автосмерть без броска
 				for r in det["rolls"]:
-					frag_faces.append({"value": r,
+					frag_faces.append({"value": r, "need": int(det["need"]),
 						"good": _good_for_viewer(r >= det["need"], int(det.get("owner", -1))),
 						"tag": "R%d+" % det["need"]})
 			if not frag_faces.is_empty():
@@ -4262,7 +4262,23 @@ func _dice_steps(ev: Dictionary) -> Array:
 				steps.append({"faces": frag_faces, "manual": manual, "speed": _defense_roll_speed(ev["targets"], "need"),
 					"prompt": DEFENSE_PROMPT + _need_text(ev["targets"], "need"),
 					"roller": roller})
+	for step: Dictionary in steps:
+		if _impossible(step["faces"]):
+			# Nothing to decide: no Roll button here, and no peer waits for one either.
+			step["manual"] = false
+			step["auto"] = true
+			step["speed"] = FAST_ROLL_SPEED
+			step["prompt"] = (str(step.get("prompt", "")) + "\n").lstrip("\n") + "Cannot succeed — needs 7+"
 	return steps
+
+## Every die of the step needs more than 6 (0.11): an automatic failure, never a prompt.
+func _impossible(faces: Array) -> bool:
+	if faces.is_empty():
+		return false
+	for f: Dictionary in faces:
+		if int(f.get("need", 0)) <= 6:
+			return false
+	return true
 
 ## «(need 4+)» по списку записей с полем-порогом (batch 12 #14); при разных порогах —
 ## все через запятую. Пусто, если порогов нет или все заведомо проходят.
@@ -5250,6 +5266,20 @@ func _draw() -> void:
 		# Клетки пола под спецудар (противотанкист — взрыв, огнемётчик — струя).
 		for coord in item_cells:
 			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(0.9, 0.5, 0.1, 0.16))
+		# Anti-tank (0.11): the roll to hit is written on EVERY cell it can blast, not only
+		# the hovered one, so spots can be compared before the shell is spent.
+		var at_unit := _selected_unit()
+		if mode == Mode.SHOOT and at_unit != null and at_unit.stats.special_ability_id == MCF.ABILITY_ANTI_TANK \
+				and zoom >= MOVE_LABEL_MIN_ZOOM:
+			var at_hover := _pos_to_cell(get_global_mouse_position())
+			for coord in item_cells:
+				if coord == at_hover or not _cell_on_screen(coord.x, coord.y):
+					continue
+				var an: int = resolver.aim_need(at_unit, coord)
+				var at := "auto" if an <= 0 else ("%d+" % an if an <= 6 else "—")
+				var ap := _cell_origin(coord) + Vector2(CELL * 0.08, CELL * 0.62)
+				draw_string_outline(font, ap, at, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, 3, Color(0, 0, 0, 0.85))
+				draw_string(font, ap, at, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1, 0.92, 0.5, 0.9))
 		# Соседние вражеские машины под удар шахтёра (item 15) — обводим их след.
 		for mvid in _melee_veh_ids:
 			var mveh: Vehicle = state.get_vehicle(mvid)
@@ -5282,7 +5312,9 @@ func _draw() -> void:
 				var ctxt := "auto" if cneed <= 0 else ("%d+" % cneed if cneed <= 6 else "—")
 				# Окно: бросает не стрелок, а стекло — его спасбросок против каждой пули.
 				var gfid := state.grid.cell(shov).feature_id
-				if MCF.is_glass(gfid) and su.stats.special_ability_id != MCF.ABILITY_MARKSMAN:
+				# A shell or a flame jet does not roll per bullet against the pane: no "glass N+".
+				if MCF.is_glass(gfid) and not su.stats.special_ability_id in [MCF.ABILITY_MARKSMAN, MCF.ABILITY_ANTI_TANK,
+						MCF.ABILITY_FLAMETHROWER]:
 					ctxt = "glass %d+" % MCF.glass_bullet_save(gfid)
 				var ctp := _cell_origin(shov) + Vector2(CELL * 0.8, CELL * 0.2)
 				draw_string_outline(font, ctp, ctxt, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, 4, Color(0, 0, 0, 0.9))
@@ -6057,7 +6089,6 @@ func _draw_random_events(font: Font) -> void:
 	for e: Dictionary in ev.pending:
 		var id := str(e["id"])
 		var p: Dictionary = e["params"]
-		var left: int = 1
 		var col: Color = EVENT_COLORS.get(id, Color(1, 1, 1, 1))
 		var rect := Rect2()
 		if id == RandomEvents.ARMY:
@@ -6075,7 +6106,7 @@ func _draw_random_events(font: Font) -> void:
 					Vector2(int(p.get("w", 1)), int(p.get("h", 1))) * CELL)
 		draw_rect(rect, Color(col.r, col.g, col.b, 0.14))
 		draw_rect(rect, Color(col.r, col.g, col.b, 0.85), false, 2.0)
-		var label := "%s · %d TURN" % [RandomEvents.event_name(id).to_upper(), left]
+		var label := "%s · END OF ROUND" % RandomEvents.event_name(id).to_upper()
 		draw_string(font, rect.position + Vector2(4, 16), label,
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(col.r, col.g, col.b, 0.95))
 

@@ -74,7 +74,9 @@ func _visibility() -> void:
 			r.random_events.add_cloud(cloud.x, cloud.y, 1, 1, 3)
 			r._sync_gas()
 			if cloud.y == 5:
-				ck(not r.team_visible_coords(0).has(target), "warm team cache hides enemy into/out of/through gas")
+				# Fog off (0.11) hides only the gassed cells; with fog, gas is a curtain.
+				var hides: bool = fog != MCF.Fog.OFF or cloud == target
+				ck(r.team_visible_coords(0).has(target) != hides, "warm team cache hides enemy into/out of/through gas")
 				ck(r.los_blocked(origin, target, true, true, true), "gas blocks firing line including endpoints")
 			var seen := r._seen_from(origin, 12, 0)
 			for y in 12:

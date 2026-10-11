@@ -81,9 +81,18 @@ func _gas_visibility() -> void:
 	ck(r.is_visible_to_team(0, enemy), "fog off ignores ordinary walls")
 	r.random_events.add_cloud(5, 1, 2, 10, 3)
 	r._sync_gas()
-	ck(not r.is_visible_to_team(0, enemy), "gas blocks distant enemies with fog off")
+	# Fog off (0.11): what stands behind a cloud is seen but cannot be shot through it.
+	ck(r.is_visible_to_team(0, enemy) and r.can_shoot(own, enemy) == "Gas blocks line of sight",
+		"fog off: an enemy behind gas is visible but not shootable")
+	r.random_events.clouds.clear()
+	r.random_events.add_cloud(12, 5, 1, 1, 3)
+	r._sync_gas()
+	ck(not r.is_visible_to_team(0, enemy), "fog off: an enemy inside gas is hidden")
 	var obs := preload("res://rl/ObsEncoder.gd").encode(r, 0, 20)
-	ck(not obs["units"].any(func(u: Dictionary) -> bool: return int(u["own"]) == 1), "RLM observation cannot see enemy soldiers through gas")
+	ck(not obs["units"].any(func(u: Dictionary) -> bool: return int(u["own"]) == 1), "RLM observation cannot see enemy soldiers inside gas")
+	r.random_events.clouds.clear()
+	r.random_events.add_cloud(5, 1, 2, 10, 3)
+	r._sync_gas()
 	ck(r.team_sees(0, Vector2i(2, 10)), "gas mode retains unlimited range elsewhere")
 	r.random_events.clouds.clear()
 	r.random_events.add_cloud(2, 5, 1, 1, 3)
@@ -115,7 +124,10 @@ func _warning() -> void:
 	var round_before := s.turns.round_number
 	var result := r.resolve(EndTurnIntent.new(-1))
 	ck(s.turns.round_number == round_before, "fixture ends first player's turn, not the round")
-	ck(r.random_events.pending.is_empty() and r.random_events.clouds.size() == 1, "warning lands on next end-turn even mid-round and after restore")
+	ck(r.random_events.pending.size() == 1 and r.random_events.clouds.is_empty(), "mid-round handoff leaves the warning pending: the second player still gets to react")
+	result = r.resolve(EndTurnIntent.new(-1))
+	ck(s.turns.round_number == round_before + 1, "second handoff closes the round")
+	ck(r.random_events.pending.is_empty() and r.random_events.clouds.size() == 1, "warning lands when the round closes, also after restore")
 	ck(result.dice_events.any(func(e: Dictionary) -> bool: return e.get("kind") == "check"), "event check survives end-turn result merging")
 	ck(int(r.random_events.clouds[0]["left"]) == 3, "new gas keeps full lifetime")
 

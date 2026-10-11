@@ -43,7 +43,8 @@ func _index_geometry() -> void:
 		var height := map.cover_height[i]
 		var glass := MCF.is_glass(fid)
 		var furniture := Furniture.is_furniture(fid)
-		_opaque[i] = int(height > 0 and not glass and fid != MCF.FEATURE_TRENCH)
+		# Only structure stops light (LightOccluders.blocks_light): furniture never does.
+		_opaque[i] = int(height >= MCF.WALL_HEIGHT and not glass and not furniture)
 		_mountable[i] = int(height >= MCF.WALL_HEIGHT and not glass and not furniture and fid != MCF.FEATURE_AIRLOCK)
 		_bare[i] = int(map.is_space[i] == 0 and height == 0 and fid == "")
 		_open[i] = int(map.is_space[i] == 0 and height < MCF.WALL_HEIGHT and not furniture and fid not in [MCF.FEATURE_DRONE_STATION, MCF.FEATURE_HEDGEHOG])
@@ -63,7 +64,7 @@ func _populate() -> void:
 				var c := Vector2i(x, y)
 				var i := y * g.w + x
 				if not _eligible(c) or g._street[i] != 0 or g._indoor[i] != 0: continue
-				if (x + y) % 9 != 0 or coverage[i] > 0.28: continue
+				if (x + y) % 6 != 0 or coverage[i] > 0.45: continue
 				for direction: Vector2i in N4:
 					var n := c + direction
 					if g._street[n.y * g.w + n.x] != 0 and _floor_ok(c):
@@ -75,17 +76,69 @@ func _populate() -> void:
 		for x in g.w:
 			var c := Vector2i(x, y)
 			var i := y * g.w + x
-			if not _eligible(c) or map.is_space[i] != 0 or map.cover_height[i] > 0 or coverage[i] >= 0.18: continue
+			var want := _target(i)
+			if not _eligible(c) or map.is_space[i] != 0 or map.cover_height[i] > 0 or coverage[i] >= want: continue
 			var wall := _wall_near(c)
-			if wall != Vector2i(-1, -1):
-				var id := _wall_kind(c)
+			# Spacing: a hut or corridor gets a few lamps, not one on every wall tile.
+			if wall != Vector2i(-1, -1) and _spaced(wall, 3 if g._indoor[i] != 0 else 5):
+				var id := _wall_kind(c) if want > MAINT_TARGET else "bulkhead_lamp"
 				_place(wall, id, _facing(wall, c))
-				if coverage[i] >= 0.18: continue
+				if coverage[i] >= want: continue
+			# Freestanding lamps only indoors (0.11): out on open ground they were free
+			# cover nobody asked for. Town streets keep their streetlights above.
 			var floor_pos := _floor_near(c)
-			if floor_pos != Vector2i(-1, -1):
-				var outdoors := g._indoor[floor_pos.y * g.w + floor_pos.x] == 0
-				var id := _floor_kind(floor_pos, outdoors)
-				_place(floor_pos, id, 0)
+			if floor_pos != Vector2i(-1, -1) and g._indoor[floor_pos.y * g.w + floor_pos.x] != 0:
+				_place(floor_pos, _floor_kind(floor_pos, false), 0)
+	_airlock_beacons()
+
+## How much light a tile should end up with (0.11). Rooms are lit, corridors dimmer and
+## service tunnels mostly dark: pools of light, not a flat floodlit board. Outside, only
+## walls carry lamps and open ground stays night.
+const ROOM_TARGET := 0.4
+const HALL_TARGET := 0.25
+const MAINT_TARGET := 0.06
+const OUTDOOR_TARGET := 0.1
+
+## The renderer's light curve (LightManager shader): 1 - smoothstep(0, 1, d / range).
+static func falloff(t: float) -> float:
+	var k := clampf(t, 0.0, 1.0)
+	return 1.0 - k * k * (3.0 - 2.0 * k)
+func _target(i: int) -> float:
+	if g._k.size() == g.w * g.h:
+		match g._k[i]:
+			MapGen.K_MAINT: return MAINT_TARGET
+			MapGen.K_HALL, MapGen.K_DHALL: return HALL_TARGET
+	if g._indoor[i] != 0: return ROOM_TARGET
+	# Town streets have streetlights and the moon; lamps on the outside of buildings only
+	# threw long diagonal shadows across the street (0.11 playtest).
+	return 0.0 if map.env in ["town", "field"] else OUTDOOR_TARGET
+
+## Amber service indicators beside about a third of the airlocks — small coloured pools
+## that mark the doors in the dark. Deterministic per cell, like every other choice here.
+func _airlock_beacons() -> void:
+	if map.env == "town" or map.env == "field": return
+	for i in map.feature_id.size():
+		if map.feature_id[i] != MCF.FEATURE_AIRLOCK or posmod(i * 7919, 3) != 0: continue
+		var door := Vector2i(i % g.w, i / g.w)
+		for side: Vector2i in N4:
+			var wall := door + side
+			if not _eligible(wall): continue
+			var wi := wall.y * g.w + wall.x
+			if _mountable[wi] == 0 or map.fixtures.has(wi): continue
+			# Face the floor next to the wall, on the same side as the door's open tiles.
+			for d: Vector2i in N4:
+				var f := wall + d
+				if _eligible(f) and _bare[f.y * g.w + f.x] != 0:
+					_place(wall, "wall_beacon", _facing(wall, f))
+					break
+			break
+
+## No wall lamp already within r tiles (Chebyshev).
+func _spaced(c: Vector2i, r: int) -> bool:
+	for y in range(maxi(0, c.y - r), mini(g.h, c.y + r + 1)):
+		for x in range(maxi(0, c.x - r), mini(g.w, c.x + r + 1)):
+			if map.fixtures.has(y * g.w + x): return false
+	return true
 
 func _wall_kind(c: Vector2i) -> String:
 	var n := posmod(c.x * 11 + c.y * 7, 3)
@@ -185,8 +238,7 @@ func _illuminate(c: Vector2i, id: String, turn: int = 0) -> void:
 			var q := Vector2i(x, y)
 			var d := (Vector2(q) + Vector2.ONE * 0.5 - origin).length() / radius
 			if d >= 1 or not _line_clear(ray_start, q): continue
-			# Matches the radial texture's color * alpha falloff.
-			coverage[y * g.w + x] += float(def.light_energy) * (1 - d) * (1 - d)
+			coverage[y * g.w + x] += float(def.light_energy) * falloff(d)
 
 func _line_clear(a: Vector2i, b: Vector2i) -> bool:
 	var dx := absi(b.x - a.x)
