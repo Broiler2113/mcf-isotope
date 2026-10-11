@@ -43,15 +43,15 @@ const MINI_MAX := 120.0
 
 enum Tool { BRUSH, ERASER, LINE, RECT, FILL, SELECT, PICK, STAMP, CIRCLE }
 const TOOLS := [
-	{"tool": Tool.BRUSH, "name": "Brush", "key": KEY_B, "hint": "Paint with the chosen tile. Drag to draw."},
-	{"tool": Tool.ERASER, "name": "Eraser", "key": KEY_E, "hint": "Take off the top thing: the object on a cell first (the floor under it stays), then a unit, then the cell goes back to the preset's empty ground."},
-	{"tool": Tool.LINE, "name": "Line", "key": KEY_L, "hint": "Drag a straight line of the chosen tile."},
-	{"tool": Tool.RECT, "name": "Rectangle", "key": KEY_U, "hint": "Drag a rectangle. Tick Filled for a solid one."},
-	{"tool": Tool.CIRCLE, "name": "Circle", "key": KEY_C, "hint": "Drag a box and get the circle (or oval) inside it. Tick Filled for a solid one."},
-	{"tool": Tool.FILL, "name": "Fill", "key": KEY_F, "hint": "Flood a connected area of identical cells."},
-	{"tool": Tool.SELECT, "name": "Select", "key": KEY_M, "hint": "Drag to select. Drag the selection to move it; Ctrl+C / Ctrl+X / Ctrl+V / Delete."},
-	{"tool": Tool.PICK, "name": "Eyedropper", "key": KEY_I, "hint": "Click a cell to pick its tile, unit or zone (Alt+click works with any tool)."},
-	{"tool": Tool.STAMP, "name": "Presets", "key": KEY_T, "hint": "Place the chosen room or building. R rotates, H / V flip."},
+	{"tool": Tool.BRUSH, "name": "Brush", "action": "editor_brush", "hint": "Paint with the chosen tile. Drag to draw."},
+	{"tool": Tool.ERASER, "name": "Eraser", "action": "editor_eraser", "hint": "Take off the top thing: the object on a cell first (the floor under it stays), then a unit, then the cell goes back to the preset's empty ground."},
+	{"tool": Tool.LINE, "name": "Line", "action": "editor_line", "hint": "Drag a straight line of the chosen tile."},
+	{"tool": Tool.RECT, "name": "Rectangle", "action": "editor_rect", "hint": "Drag a rectangle. Tick Filled for a solid one."},
+	{"tool": Tool.CIRCLE, "name": "Circle", "action": "editor_circle", "hint": "Drag a box and get the circle (or oval) inside it. Tick Filled for a solid one."},
+	{"tool": Tool.FILL, "name": "Fill", "action": "editor_fill", "hint": "Flood a connected area of identical cells."},
+	{"tool": Tool.SELECT, "name": "Select", "action": "editor_select", "hint": "Drag to select. Drag the selection to move it. See Edit for copy, cut, paste and delete shortcuts."},
+	{"tool": Tool.PICK, "name": "Eyedropper", "action": "editor_pick", "hint": "Click a cell to pick its tile, unit or zone (Alt+click works with any tool)."},
+	{"tool": Tool.STAMP, "name": "Presets", "action": "editor_stamp", "hint": "Place the chosen room or building. See Edit for rotate and flip shortcuts."},
 ]
 
 enum Sym { OFF, X, Y, QUAD }
@@ -183,6 +183,7 @@ var _mini_view: Control
 var _menus: Dictionary = {}
 
 func _ready() -> void:
+	Keybinds.changed.connect(_refresh_shortcut_labels)
 	Ui.board_settings_changed.connect(queue_redraw)
 	Sprites.reload_overrides()
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
@@ -1082,23 +1083,24 @@ func _process(delta: float) -> void:
 		queue_redraw()
 	if _sky != null:
 		_sky.camera = pan
-	if _modal != null:
+	if _modal != null or Keybinds.modal_open() or _menu_popup_open():
 		return
 	var focus := get_viewport().gui_get_focus_owner()
-	if focus is LineEdit or focus is SpinBox or Input.is_key_pressed(KEY_CTRL):
+	if focus is LineEdit or focus is TextEdit or focus is SpinBox:
 		return
 	var dir := Vector2.ZERO
-	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP): dir.y += 1
-	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN): dir.y -= 1
-	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT): dir.x += 1
-	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT): dir.x -= 1
+	if Keybinds.down("editor_pan_up"): dir.y += 1
+	if Keybinds.down("editor_pan_down"): dir.y -= 1
+	if Keybinds.down("editor_pan_left"): dir.x += 1
+	if Keybinds.down("editor_pan_right"): dir.x -= 1
 	if dir != Vector2.ZERO:
 		pan += dir.normalized() * PAN_SPEED * delta
 		queue_redraw()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if Keybinds.modal_open(): return
 	if _modal != null:
-		if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+		if event is InputEventKey and event.pressed and Keybinds.matches(event, "editor_cancel"):
 			_close_modal()
 			get_viewport().set_input_as_handled()
 		return
@@ -1255,81 +1257,62 @@ func _release(c: Vector2i) -> void:
 	queue_redraw()
 
 ## Клавиши. true — нажатие разобрано.
+func _menu_popup_open() -> bool:
+	for menu: PopupMenu in _menus.values():
+		if menu.visible: return true
+	return false
+
+func _input(event: InputEvent) -> void:
+	if Keybinds.modal_open() or _menu_popup_open() or not event is InputEventKey or not event.pressed or event.echo: return
+	if _modal != null:
+		if Keybinds.matches(event, "editor_cancel"):
+			_close_modal()
+			get_viewport().set_input_as_handled()
+	elif _shortcut(event): get_viewport().set_input_as_handled()
+
 func _shortcut(e: InputEventKey) -> bool:
-	var focus := get_viewport().gui_get_focus_owner()
-	if focus is LineEdit or focus is SpinBox:
-		return false
-	if e.ctrl_pressed:
-		match e.keycode:
-			KEY_Z:
-				if e.shift_pressed: redo()
-				else: undo()
-			KEY_Y: redo()
-			KEY_C: copy_selection()
-			KEY_X: cut_selection()
-			KEY_V: paste()
-			KEY_A: select_all()
-			KEY_S: save()
-			KEY_N: _new_map_dialog()
-			KEY_O: _open_dialog()
-			KEY_0: fit_view()
-			_: return false
+	if Keybinds.typing(get_viewport()) or Keybinds.modal_open() or _menu_popup_open() or _modal != null: return false
+	var commands := {
+		"editor_undo": undo, "editor_redo": redo, "editor_copy": copy_selection,
+		"editor_cut": cut_selection, "editor_paste": paste, "editor_select_all": select_all,
+		"editor_save": save, "editor_new": _new_map_dialog, "editor_open": _open_dialog,
+		"editor_fit": fit_view, "editor_rotate": rotate_key.bind(false),
+		"editor_rotate_auto": rotate_key.bind(true), "editor_zoom_in": zoom_in,
+		"editor_zoom_out": zoom_out, "editor_delete": delete_selection,
+		"editor_smaller": _set_brush_size.bind(brush_size - 1),
+		"editor_larger": _set_brush_size.bind(brush_size + 1),
+		"editor_play": play, "editor_help": _shortcuts_dialog, "editor_cancel": _cancel_tool,
+	}
+	for id: String in commands:
+		if Keybinds.matches(e, id):
+			commands[id].call()
+			queue_redraw()
+			return true
+	if Keybinds.matches(e, "editor_grid"):
+		show_grid = not show_grid
+		_refresh_menu_checks()
 		queue_redraw()
-		return true
-	if e.keycode == KEY_R:
-		rotate_key(e.shift_pressed)
-		queue_redraw()
-		return true
-	if e.keycode in [KEY_EQUAL, KEY_PLUS, KEY_KP_ADD]:
-		zoom_in()
-		return true
-	if e.keycode in [KEY_MINUS, KEY_KP_SUBTRACT]:
-		zoom_out()
 		return true
 	if not _float.is_empty():
-		match e.keycode:
-			KEY_H:
-				flip_float(true)
-				return true
-			KEY_V:
-				flip_float(false)
-				return true
-	match e.keycode:
-		KEY_ESCAPE:
-			if not _float.is_empty():
-				if _float_moving:
-					_commit()   # перенос отменён — то, что подняли, уже стёрто; кладём обратно
-					undo()
-					_redo_stack.clear()
-				_float = {}
-				_float_moving = false
-			elif _drag_start != Vector2i(-1, -1):
-				_drag_start = Vector2i(-1, -1)
-			elif _has_selection():
-				_selection = Rect2i()
-			else:
-				exit_to_menu()   # нечего отменять — Esc выходит из редактора (спросив, если не сохранено)
-		KEY_DELETE, KEY_BACKSPACE:
-			delete_selection()
-		KEY_BRACKETLEFT:
-			_set_brush_size(brush_size - 1)
-		KEY_BRACKETRIGHT:
-			_set_brush_size(brush_size + 1)
-		KEY_G:
-			show_grid = not show_grid
-			_refresh_menu_checks()
-		KEY_F5:
-			play()
-		KEY_F1:
-			_shortcuts_dialog()
-		_:
-			for t: Dictionary in TOOLS:
-				if e.keycode == t["key"]:
-					_select_tool(t["tool"])
-					return true
-			return false
-	queue_redraw()
-	return true
+		if Keybinds.matches(e, "editor_flip_h"): flip_float(true); return true
+		if Keybinds.matches(e, "editor_flip_v"): flip_float(false); return true
+	for entry: Dictionary in TOOLS:
+		if Keybinds.matches(e, entry.action):
+			_select_tool(entry.tool)
+			return true
+	return false
+
+func _cancel_tool() -> void:
+	if not _float.is_empty():
+		if _float_moving:
+			_commit()
+			undo()
+			_redo_stack.clear()
+		_float = {}
+		_float_moving = false
+	elif _drag_start != Vector2i(-1, -1): _drag_start = Vector2i(-1, -1)
+	elif _has_selection(): _selection = Rect2i()
+	else: exit_to_menu()
 
 # ============================================================================
 # Вид
@@ -1846,20 +1829,20 @@ func _build_menu_bar() -> void:
 	row.add_theme_constant_override("separation", 4)
 	bar.add_child(row)
 	for spec in [
-		["File", [["New…  (Ctrl+N)", _new_map_dialog], ["Open…  (Ctrl+O)", _open_dialog],
-			["Save  (Ctrl+S)", save], [],
-			["Play This Map  (F5)", play], [], ["Exit to Main Menu", exit_to_menu]]],
-		["Edit", [["Undo  (Ctrl+Z)", undo], ["Redo  (Ctrl+Y)", redo], [],
-			["Cut  (Ctrl+X)", cut_selection], ["Copy  (Ctrl+C)", copy_selection],
-			["Paste  (Ctrl+V)", paste], ["Delete  (Del)", delete_selection], [],
-			["Select All  (Ctrl+A)", select_all],
-			["Rotate  (R)", rotate_key], ["Flip Pasted Horizontally  (H)", flip_float.bind(true)],
-			["Flip Pasted Vertically  (V)", flip_float.bind(false)], [],
+		["File", [["New…", _new_map_dialog, "editor_new"], ["Open…", _open_dialog, "editor_open"],
+			["Save", save, "editor_save"], [],
+			["Play This Map", play, "editor_play"], [], ["Exit to Main Menu", exit_to_menu]]],
+		["Edit", [["Undo", undo, "editor_undo"], ["Redo", redo, "editor_redo"], [],
+			["Cut", cut_selection, "editor_cut"], ["Copy", copy_selection, "editor_copy"],
+			["Paste", paste, "editor_paste"], ["Delete", delete_selection, "editor_delete"], [],
+			["Select All", select_all, "editor_select_all"],
+			["Rotate", rotate_key, "editor_rotate"], ["Flip Pasted Horizontally", flip_float.bind(true), "editor_flip_h"],
+			["Flip Pasted Vertically", flip_float.bind(false), "editor_flip_v"], [],
 			["Clear Map…", _clear_dialog]]],
-		["View", [["Zoom In  (+)", zoom_in], ["Zoom Out  (−)", zoom_out],
-			["Fit Map  (Ctrl+0)", fit_view], [],
-			["check:grid", "Grid  (G)"], ["check:zones", "Deployment Zones"], ["check:mini", "Minimap"], [],
-			["Keyboard Shortcuts…  (F1)", _shortcuts_dialog]]],
+		["View", [["Zoom In", zoom_in, "editor_zoom_in"], ["Zoom Out", zoom_out, "editor_zoom_out"],
+			["Fit Map", fit_view, "editor_fit"], [],
+			["check:grid", "Grid", "editor_grid"], ["check:zones", "Deployment Zones"], ["check:mini", "Minimap"], [],
+			["Keyboard Shortcuts…", _shortcuts_dialog, "editor_help"]]],
 		["Presets", [["Save Selection…", _save_room_dialog], ["Manage Rooms & Structures…", _room_manager]]],
 		["Map", [["Resize…", _resize_dialog], [], ["label", "Preset"]] + _preset_items()],
 	]:
@@ -1885,6 +1868,10 @@ func _build_menu_bar() -> void:
 			else:
 				pm.add_item(item[0])
 				actions.append(item[1])
+			if item.size() >= 3 and String(item[2]).begins_with("editor_"):
+				var title: String = item[1] if String(item[0]).begins_with("check:") else item[0]
+				pm.set_item_metadata(pm.item_count - 1, {"title": title, "key_action": item[2]})
+				pm.set_item_text(pm.item_count - 1, "%s  (%s)" % [title, Keybinds.label(item[2])])
 		pm.index_pressed.connect(func(idx: int) -> void: _menu_action(actions[idx]))
 		if spec[0] == "Edit":
 			pm.about_to_popup.connect(_refresh_edit_menu.bind(pm))
@@ -2030,7 +2017,7 @@ func _build_toolbar() -> void:
 		b.focus_mode = Control.FOCUS_NONE
 		b.custom_minimum_size = Vector2(34, 34)
 		b.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		b.tooltip_text = "%s  (%s)\n%s" % [t["name"], OS.get_keycode_string(t["key"]), t["hint"]]
+		b.tooltip_text = "%s  (%s)\n%s" % [t["name"], Keybinds.label(t["action"]), t["hint"]]
 		b.pressed.connect(_select_tool.bind(t["tool"]))
 		col.add_child(b)
 		_tool_buttons[t["tool"]] = b
@@ -2485,7 +2472,7 @@ func _refresh_status() -> void:
 	if tool in [Tool.BRUSH, Tool.ERASER, Tool.LINE]:
 		parts[0] += " · size %d" % brush_size
 	if Furniture.is_furniture(brush) and tool != Tool.STAMP:
-		parts[0] += " · faces %s (R)" % turn_name(brush_turn)
+		parts[0] += " · faces %s (%s)" % [turn_name(brush_turn), Keybinds.label("editor_rotate")]
 	parts.append("%d×%d %s" % [map.width, map.height, MapPresets.name_of(_env)])
 	if map.in_bounds(_hover):
 		parts.append("(%d, %d) %s" % [_hover.x, _hover.y, _describe(_hover)])
@@ -3042,40 +3029,21 @@ func _resize_dialog() -> void:
 		fit_view()]])
 
 func _shortcuts_dialog() -> void:
-	var grid := GridContainer.new()
-	grid.columns = 2
-	grid.add_theme_constant_override("h_separation", 24)
-	grid.add_theme_constant_override("v_separation", 4)
-	var rows := [
-		["B / E / L / F", "Brush, Eraser, Line, Fill"],
-		["U / C", "Rectangle, Circle"],
-		["M / I / T", "Select, Eyedropper, Presets"],
-		["Alt + click", "Pick the tile under the cursor"],
-		["[  ]", "Brush size"],
-		["R", "Turn furniture, the selection, or what you are placing"],
-		["Shift+R", "Furniture turns to the wall by itself again"],
-		["H / V", "Flip what you are placing"],
-		["Ctrl+Z / Ctrl+Y", "Undo / redo"],
-		["Ctrl+C / X / V", "Copy, cut, paste the selection"],
-		["Delete", "Clear the selection"],
-		["Ctrl+A", "Select the whole map"],
-		["Esc", "Cancel placing, drop the selection, then leave the editor"],
-		["Ctrl+S", "Save"],
-		["Ctrl+N / Ctrl+O", "New map / open"],
-		["WASD, arrows, right-drag", "Pan"],
-		["Wheel, + / −, Ctrl+0", "Zoom / fit the map"],
-		["G", "Grid on or off"],
-		["F5", "Play this map"],
-	]
-	for r: Array in rows:
-		var k := Label.new()
-		k.text = r[0]
-		k.add_theme_color_override("font_color", Ui.text_accent_color())
-		grid.add_child(k)
-		var d := Label.new()
-		d.text = r[1]
-		grid.add_child(d)
-	_dialog("Keyboard Shortcuts", grid, [["Close", null]], 460.0)
+	var window := SettingsWindow.open(self)
+	window.show_keybinds(true)
+
+func _refresh_shortcut_labels() -> void:
+	for entry: Dictionary in TOOLS:
+		if _tool_buttons.has(entry.tool):
+			_tool_buttons[entry.tool].tooltip_text = "%s (%s)\n%s" % [entry.name, Keybinds.label(entry.action), entry.hint]
+	for menu: PopupMenu in _menus.values():
+		for index in menu.item_count:
+			var meta: Variant = menu.get_item_metadata(index)
+			if meta is Dictionary and meta.has("key_action"):
+				menu.set_item_text(index, "%s  (%s)" % [meta.title, Keybinds.label(meta.key_action)])
+	if _size_slider != null:
+		_size_slider.tooltip_text = "Brush size (%s / %s)" % [Keybinds.label("editor_smaller"), Keybinds.label("editor_larger")]
+	_refresh_status()
 
 func _clear_dialog() -> void:
 	_confirm("Clear Map", "Erase everything and start again from the %s preset's ground? You can undo this."

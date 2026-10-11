@@ -508,6 +508,7 @@ var _net_playing: bool = false
 var _net_status: Label
 
 func _ready() -> void:
+	Keybinds.changed.connect(_refresh_menu_hotkeys)
 	_spectator = NetHandoff.session != null and NetHandoff.spectators.has(NetHandoff.session.my_peer_id())
 	Ui.board_settings_changed.connect(queue_redraw)
 	p1_is_ai = GameConfig.p1_is_ai
@@ -567,13 +568,13 @@ func _process(delta: float) -> void:
 		_sky.camera = pan   # параллакс за доской едет вслед за панорамой (0.9.3)
 	_fit_ground()
 	var focused := get_viewport().gui_get_focus_owner()
-	if focused is LineEdit:
+	if focused is LineEdit or focused is TextEdit or Keybinds.modal_open() or _quit_dialog.visible:
 		return
 	var dir := Vector2.ZERO
-	if Input.is_key_pressed(KEY_W): dir.y += 1
-	if Input.is_key_pressed(KEY_S): dir.y -= 1
-	if Input.is_key_pressed(KEY_A): dir.x += 1
-	if Input.is_key_pressed(KEY_D): dir.x -= 1
+	if Keybinds.down("game_pan_up"): dir.y += 1
+	if Keybinds.down("game_pan_down"): dir.y -= 1
+	if Keybinds.down("game_pan_left"): dir.x += 1
+	if Keybinds.down("game_pan_right"): dir.x -= 1
 	if dir != Vector2.ZERO:
 		_kill_pan_tween()  # ручная панорама важнее плавного доводки камеры (item 52)
 		pan += dir.normalized() * PAN_SPEED * delta
@@ -756,6 +757,7 @@ func _save_game() -> void:
 ## Модальное окошко ввода имени сохранения (item 19).
 func _prompt_save_name() -> void:
 	var layer := CanvasLayer.new()
+	layer.add_to_group("shortcut_modal")
 	layer.layer = 80
 	add_child(layer)
 	var dim := ColorRect.new()
@@ -1101,33 +1103,9 @@ func _refresh_omniscience() -> void:
 
 # --- Ввод по сетке ---
 func _unhandled_input(event: InputEvent) -> void:
-	# Esc — контекстная отмена (#54): сначала снимает выбранное действие, затем
-	# снятие выделения, и только на «пустом» состоянии открывает выход в меню.
-	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
-		_escape_pressed()
-		get_viewport().set_input_as_handled()
-		return
-	# «1» — показать/скрыть оверлей инициативы (item 16: не Tab, его легко задеть и
-	# полупрозрачный оверлей потом молча съедал все клики по полю — отсюда item 17
-	# «нельзя выделить юниты»).
-	if event is InputEventKey and event.pressed and not event.echo \
-			and (event.keycode == KEY_1 or event.keycode == KEY_KP_1):
-		_toggle_initiative_overlay()
-		get_viewport().set_input_as_handled()
-		return
-	# «P» — пауза боя ИИ против ИИ (item 4). Работает и во время анимации: пауза держит
-	# только СЛЕДУЮЩИЙ шаг машины, а начатое доигрывается до конца.
-	if event is InputEventKey and event.pressed and not event.echo \
-			and event.keycode == KEY_P and not event.ctrl_pressed:
-		_toggle_pause()
-		get_viewport().set_input_as_handled()
-		return
-	# Ctrl+S — сохранить партию (item 6/19); кнопка Save в правом меню тоже есть (batch 13 #3).
-	if event is InputEventKey and event.pressed and not event.echo \
-			and event.keycode == KEY_S and event.ctrl_pressed:
-		if replay == null:
-			_save_game()
-		get_viewport().set_input_as_handled()
+	if Keybinds.modal_open(): return
+	if event is InputEventKey:
+		if _handle_shortcut(event): get_viewport().set_input_as_handled()
 		return
 	# Ввод над всплывающим меню принадлежит меню (#8): не панорамируем, не зумим
 	# и не кликаем по полю под ним. Прокрутку колесом уже получил сам ScrollContainer;
@@ -1176,16 +1154,6 @@ func _unhandled_input(event: InputEvent) -> void:
 			_refresh_ruler_button()
 			queue_redraw()
 			return
-		if event is InputEventKey and event.pressed and not event.echo \
-				and event.keycode == KEY_BACKSPACE:
-			if _ruler_a != Vector2i(-1, -1):
-				_ruler_a = Vector2i(-1, -1)
-			elif not _rulers.is_empty():
-				_rulers.pop_back()
-			_refresh_ruler_button()
-			queue_redraw()
-			get_viewport().set_input_as_handled()
-			return
 		if event is InputEventMouseMotion:
 			var hov := _pos_to_cell(get_global_mouse_position())
 			if hov != _ruler_hover:
@@ -1210,13 +1178,6 @@ func _unhandled_input(event: InputEvent) -> void:
 			else:
 				queue_redraw()
 			return
-		if event is InputEventKey and event.pressed and not event.echo:
-			if event.keycode == KEY_BACKSPACE:
-				_wall_undo()
-				return
-			if event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
-				_wall_commit()
-				return
 	# Рисование аннотаций (item 51): тянем штрих левой кнопкой; отпускание фиксирует его
 	# и, в сетевой партии, рассылает. Симуляции это не касается — чистый клиентский слой.
 	if mode == Mode.DRAW:
@@ -1230,11 +1191,6 @@ func _unhandled_input(event: InputEvent) -> void:
 				_stroke_drawing = false
 				_stroke_commit()
 				_draw_record_end(_draw_author())
-			return
-		if event is InputEventKey and event.pressed and not event.echo \
-				and event.keycode == KEY_Z and event.ctrl_pressed:
-			_undo_my_drawing()
-			get_viewport().set_input_as_handled()
 			return
 		if event is InputEventMouseMotion:
 			if _stroke_drawing:
@@ -1253,11 +1209,6 @@ func _unhandled_input(event: InputEvent) -> void:
 				_stroke_drawing = false
 				_erase_commit()
 				_draw_record_end(_draw_author())
-			return
-		if event is InputEventKey and event.pressed and not event.echo \
-				and event.keycode == KEY_Z and event.ctrl_pressed:
-			_undo_my_drawing()
-			get_viewport().set_input_as_handled()
 			return
 		if event is InputEventMouseMotion:
 			if _stroke_drawing:
@@ -1727,6 +1678,8 @@ func _can_control(unit_owner: int) -> bool:
 
 # --- Выбор и меню действий ---
 func _select(unit: UnitInstance) -> void:
+	_group_ids.clear()
+	_regroup_ids.clear()
 	selected_id = unit.id
 	# Выбор пехотинца снимает выбор машины (#97). Без этого selected_vehicle_id оставался
 	# от ранее выбранного танка, и _back_to_menu() после действия солдата открывал меню
@@ -1776,6 +1729,17 @@ func _back_to_menu() -> void:
 ## Контекстная отмена по Esc (#54). Приоритет: закрыть диалог → отменить рисование
 ## ЛДФ → выйти из под-режима действия в меню (unchoose) → снять выделение → выход.
 func _escape_pressed() -> void:
+	if _picker.visible and not _animating:
+		_picker.hide()
+		if selected_vehicle_id != -1:
+			mode = Mode.VEH_MENU
+			_open_vehicle_menu(_selected_vehicle())
+		elif not _group_ids.is_empty():
+			mode = Mode.GROUP_MENU
+			_open_group_menu()
+		else:
+			_back_to_menu()
+		return
 	if _quit_dialog.visible:
 		_quit_dialog.hide()
 		return
@@ -1839,6 +1803,8 @@ func _selected_vehicle() -> Vehicle:
 	return state.get_vehicle(selected_vehicle_id) if selected_vehicle_id != -1 else null
 
 func _select_vehicle(veh: Vehicle) -> void:
+	_group_ids.clear()
+	_regroup_ids.clear()
 	selected_id = -1
 	selected_vehicle_id = veh.id
 	veh_move_targets = {}
@@ -1864,6 +1830,7 @@ func _veh_back_to_menu() -> void:
 		_deselect()
 
 func _open_vehicle_menu(veh: Vehicle) -> void:
+	_menu_actions.clear()
 	_picker.hide()
 	_clear_hint_cell()
 	for c in _menu.get_children():
@@ -1880,12 +1847,14 @@ func _open_vehicle_menu(veh: Vehicle) -> void:
 		move_btn.text = "Move (%d left)" % veh_credit if veh_credit > 0 else "Move"
 		move_btn.pressed.connect(_veh_enter_move)
 		vb.add_child(move_btn)
+		_register_menu_action(move_btn, "action_move")
 
 	if acting and veh.facing != Vector2i.ZERO:
 		var turn_btn := Button.new()
 		turn_btn.text = "Turn (%d AP)" % VehicleRules.TURN_COST
 		turn_btn.pressed.connect(_veh_enter_turn)
 		vb.add_child(turn_btn)
+		_register_menu_action(turn_btn, "action_tactical")
 
 	var gun: Dictionary = spec.get("weapons", {}).get("main_gun", {})
 	if acting and not gun.is_empty() and resolver.vehicle_ap(veh) >= int(gun.get("ap_cost", 1)) \
@@ -1894,6 +1863,7 @@ func _open_vehicle_menu(veh: Vehicle) -> void:
 		cannon_btn.text = "Fire Cannon (%d AP)" % int(gun.get("ap_cost", 1))
 		cannon_btn.pressed.connect(_veh_enter_cannon)
 		vb.add_child(cannon_btn)
+		_register_menu_action(cannon_btn, "action_shoot")
 
 	# Посадка соседней пехоты.
 	if _can_control(veh.owner):
@@ -1905,6 +1875,7 @@ func _open_vehicle_menu(veh: Vehicle) -> void:
 			board_btn.text = "Board: %s" % u.stats.display_name
 			board_btn.pressed.connect(_veh_board.bind(uid))
 			vb.add_child(board_btn)
+			_register_menu_action(board_btn, "action_board")
 
 	# Высадка экипажа. Из челнока — бесплатно и через свой борт (batch 13 S7).
 	if _can_control(veh.owner) and not veh.occupants.is_empty():
@@ -1916,6 +1887,7 @@ func _open_vehicle_menu(veh: Vehicle) -> void:
 			dis_btn.text = "%s: %s" % ["Exit (free)" if veh.seated() else "Disembark", u.stats.display_name]
 			dis_btn.pressed.connect(_veh_enter_disembark.bind(uid))
 			vb.add_child(dis_btn)
+			_register_menu_action(dis_btn, "action_exit")
 	# Тела в креслах челнока (batch 13 S10): напоминание, кто держит место.
 	if veh.seated():
 		for i in veh.seats.size():
@@ -2004,6 +1976,7 @@ func _veh_board(unit_id: int) -> void:
 ## Посадка бойца в машину (batch 14): в танк — сразу; в челнок — ВСЕГДА через выбор
 ## кресла, чтобы игрок сам решал, садиться за руль или нет (кресло водителя подписано).
 func _board_into(unit_id: int, veh: Vehicle) -> void:
+	_picker.hide()
 	if not veh.seated():
 		_submit(VehicleBoardIntent.new(unit_id, veh.id))
 		return
@@ -2391,6 +2364,8 @@ func _set_group(ids: Array[int]) -> void:
 ## Меню действий для выделенной группы (#19). Пока в нём одно действие — движение;
 ## остальные приказы отдаются юнитам по отдельности.
 func _open_group_menu() -> void:
+	_menu_actions.clear()
+	_picker.hide()
 	for c in _menu.get_children():
 		c.queue_free()
 	var vb := _scroll_menu(_menu, "%d units selected" % _group_ids.size())
@@ -2399,12 +2374,14 @@ func _open_group_menu() -> void:
 	move_btn.text = "Move"
 	move_btn.pressed.connect(_enter_group_move.bind(false))
 	vb.add_child(move_btn)
+	_register_menu_action(move_btn, "action_move")
 
 	var tac_btn := Button.new()
 	tac_btn.text = "Tactical Move"
 	tac_btn.tooltip_text = "Each unit takes the best cover near the clicked cell"
 	tac_btn.pressed.connect(_enter_group_move.bind(true))
 	vb.add_child(tac_btn)
+	_register_menu_action(tac_btn, "action_tactical")
 
 	# Залп лазеров (item 12): все выделенные марксманы бьют в одну сторону.
 	if not _group_marksmen().is_empty():
@@ -2416,6 +2393,7 @@ func _open_group_menu() -> void:
 			_menu.hide()
 			queue_redraw())
 		vb.add_child(volley)
+		_register_menu_action(volley, "action_volley")
 
 	# Массовая посадка (item 5): если рядом с выделенными есть машина, в которую хоть
 	# кто-то из них может сесть, предлагаем усадить всех разом.
@@ -2428,6 +2406,7 @@ func _open_group_menu() -> void:
 		else:
 			board_btn.pressed.connect(_enter_board_pick.bind(gvs, true))
 		vb.add_child(board_btn)
+		_register_menu_action(board_btn, "action_board")
 
 	var cancel_btn := Button.new()
 	cancel_btn.text = "Cancel"
@@ -2567,6 +2546,19 @@ func _enter_board_pick(vehicles: Array, group: bool) -> void:
 	for v: Vehicle in vehicles:
 		item_cells.append_array(_veh_cells(v))
 	_menu.hide()
+	for child in _picker.get_children(): child.queue_free()
+	var vb := _scroll_menu(_picker, "Board Which Vehicle?")
+	for vehicle: Vehicle in vehicles:
+		var button := Button.new()
+		button.text = "%s at (%d, %d)" % [VehicleDB.get_vehicle(vehicle.type_id).get("name", vehicle.type_id), vehicle.origin.x, vehicle.origin.y]
+		button.pressed.connect(func() -> void:
+			_picker.hide()
+			if group: _group_embark(vehicle.id)
+			else: _board_into(selected_id, vehicle))
+		vb.add_child(button)
+	_number_picker()
+	_anchor_menu(_picker)
+	_picker.show()
 	queue_redraw()
 
 ## Клетки машины на поле: след на сетке, а у борга — его клетка.
@@ -3004,7 +2996,8 @@ func _on_intent_ready(intent: Intent) -> void:
 		_deselect()
 		_queue_ai_step(active_ctrl)
 		return
-	_after_action()
+	if not _select_spawned_drone(intent, result):
+		_after_action()
 
 ## Следующий шаг ИИ — через короткую паузу (#52). Без неё вся армия отрабатывает
 ## за считаные кадры, и вместо хода видно только мгновенный итог; с паузой бойцы
@@ -3255,6 +3248,7 @@ func _show_match_analysis() -> void:
 		_toast_analysis("The recording could not be opened: " + analyst.error)
 		return
 	var overlay := Control.new()
+	overlay.add_to_group("shortcut_modal")
 	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
 	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	var dim := ColorRect.new()
@@ -3358,6 +3352,7 @@ func _show_victory(title: String) -> void:
 	if _victory_overlay != null:
 		_victory_overlay.queue_free()
 	var overlay := Control.new()
+	overlay.add_to_group("shortcut_modal")
 	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
 	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	var dim := ColorRect.new()
@@ -3582,7 +3577,8 @@ func _show_net_action(intent: Intent, result: ActionResult) -> void:
 	queue_redraw()
 	if _check_match_over():
 		return
-	_after_action()
+	if not _select_spawned_drone(intent, result):
+		_after_action()
 
 ## Подхватить связь, налаженную во вкладке Multiplayer главного меню (#54).
 ## Своих кнопок Host/Join у боя больше нет: сюда приезжает уже готовая сессия.
@@ -6494,7 +6490,8 @@ func _build_ui() -> void:
 	_erase_btn = _compact_button("Erase", _enter_erase)
 	draw_box.add_child(_button_row([_draw_btn, _erase_btn]))
 	var undo_draw := _compact_button("Undo drawing", _undo_my_drawing)
-	undo_draw.tooltip_text = "Take back your last stroke or erase (Ctrl+Z while drawing)."
+	undo_draw.tooltip_text = "Take back your last stroke or erase (%s while drawing)." % Keybinds.label("game_undo")
+	_undo_draw_shortcut_btn = undo_draw
 	draw_box.add_child(undo_draw)
 	var draw_lbl := Label.new()
 	draw_lbl.text = "Draw brush"
@@ -6876,6 +6873,7 @@ func _build_chat_panel() -> void:
 ## и центрированная рамка SteamChrome с заголовком, текстом и кнопками.
 func _build_quit_dialog() -> void:
 	var overlay := Control.new()
+	overlay.add_to_group("shortcut_modal")
 	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
 	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	overlay.hide()
@@ -6935,7 +6933,7 @@ func _build_initiative_overlay() -> void:
 	var dim := ColorRect.new()
 	# Полупрозрачный оверлей (item 6): доску за инициативой видно, но затемнение
 	# ЗАМЕТНОЕ — чтобы игрок сразу понимал, что оверлей открыт и потому клики по полю
-	# сейчас не проходят (item 17). Клик по фону закрывает, как и «1»/Esc.
+	# сейчас не проходят (item 17). Клик по фону закрывает, как и клавиша инициативы или Esc.
 	dim.color = Color(0, 0, 0, 0.45)
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	dim.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -7591,6 +7589,7 @@ func _lethal_fire_step(u: UnitInstance, dst: Vector2i) -> Vector2i:
 func _confirm_dialog(title: String, message: String, ok_text: String,
 		on_ok: Callable) -> void:
 	var overlay := Control.new()
+	overlay.add_to_group("shortcut_modal")
 	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
 	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	var dim := ColorRect.new()
@@ -7786,6 +7785,7 @@ func _side_color(side: int) -> Color:
 	return state.roster.color_of(side)
 
 func _open_menu(unit: UnitInstance) -> void:
+	_menu_actions.clear()
 	_picker.hide()
 	_clear_hint_cell()
 	for c in _menu.get_children():
@@ -7805,6 +7805,7 @@ func _open_menu(unit: UnitInstance) -> void:
 					else ("Fly (%d left)" % unit.move_credit if unit.move_credit > 0 else "Fly")
 			fly_btn.pressed.connect(_enter_drone_fly)
 			vb.add_child(fly_btn)
+			_register_menu_action(fly_btn, "action_move")
 		if controllable:
 			var det_btn := Button.new()
 			det_btn.text = "Detonate"
@@ -7820,6 +7821,7 @@ func _open_menu(unit: UnitInstance) -> void:
 				det_btn.pressed.connect(func() -> void:
 					_confirm_blast(unit, unit.coord, DroneDetonateIntent.new(unit.id)))
 			vb.add_child(det_btn)
+			_register_menu_action(det_btn, "action_shoot")
 	elif unit.is_held():
 		# Удерживаемый юнит может только пытаться освободиться (§3.4).
 		if unit.remaining_ap > 0:
@@ -7827,6 +7829,7 @@ func _open_menu(unit: UnitInstance) -> void:
 			release_btn.text = "Break Free (4+)"
 			release_btn.pressed.connect(_submit.bind(ReleaseIntent.new(unit.id)))
 			vb.add_child(release_btn)
+			_register_menu_action(release_btn, "action_shoot")
 	elif _is_passenger(unit):
 		# Пассажир челнока (batch 13): стреляет со своего кресла, бросает гранаты, ставит
 		# станцию в соседнее кресло, пересаживается (1 ОД) и выходит (бесплатно).
@@ -7845,33 +7848,33 @@ func _open_menu(unit: UnitInstance) -> void:
 		if unit.fire_range() > 0.0:
 			_act_btn(vb, pshoot, _enter_shoot,
 					_valid_pending_shoot(unit) or unit.remaining_ap >= _shoot_ap_cost(unit),
-					"Laser needs both AP — don't move first" if _is_marksman(unit) else "No action points left")
+					"Laser needs both AP — don't move first" if _is_marksman(unit) else "No action points left", "action_shoot")
 		if unit.held_item_id != "" and MCF.ITEM_NAMES.has(unit.held_item_id):
 			_act_btn(vb, MCF.ITEM_NAMES.get(unit.held_item_id, "Item"), _enter_item,
 					unit.remaining_ap > 0 and resolver.can_use_item(unit) == ""
 					and not (unit.held_item_id == MCF.ITEM_DRONE_STATION
-						and resolver.station_place_cells(unit).is_empty()))
+						and resolver.station_place_cells(unit).is_empty()), "No action points left", "action_item")
 		var pstations := resolver.stations_near(unit)
 		if unit.stats.special_ability_id == MCF.ABILITY_DRONE_OPERATOR \
 				and not pstations.is_empty():
-			_act_btn(vb, "Launch Drone", _submit.bind(SpawnDroneIntent.new(unit.id, pstations[0])),
-					unit.remaining_ap > 0)
+			_act_btn(vb, "Launch Drone", (_open_station_picker.bind(pstations) if pstations.size() > 1 else _submit.bind(SpawnDroneIntent.new(unit.id, pstations[0]))),
+					unit.remaining_ap > 0, "No action points left", "action_launch")
 		var pfold := resolver.station_pickup_cells(unit)
 		if not pfold.is_empty():
 			_act_btn(vb, "Pack Up Drone Station",
-					_submit.bind(PickUpStationIntent.new(unit.id, pfold[0])), unit.remaining_ap > 0)
+					_submit.bind(PickUpStationIntent.new(unit.id, pfold[0])), unit.remaining_ap > 0, "No action points left", "action_pack")
 		if not resolver.seat_options(pveh).is_empty():
-			_act_btn(vb, "Change Seat (1 AP)", _enter_seat_switch, unit.remaining_ap > 0)
+			_act_btn(vb, "Change Seat (1 AP)", _enter_seat_switch, unit.remaining_ap > 0, "No action points left", "action_seat")
 		_act_btn(vb, "Exit Shuttle (free)", _enter_passenger_exit,
-				not resolver.vehicle_disembark_cells(pveh, unit.id).is_empty(), "No free cell beside your seat")
+				not resolver.vehicle_disembark_cells(pveh, unit.id).is_empty(), "No free cell beside your seat", "action_move")
 	else:
 		# Движение — универсальное действие: кнопка есть всегда, гаснет без ОД и кредита
 		# движения (item 27). Накопленный остаток тратится первым, в любой момент хода (#32).
 		var move_text := "Move (%d left)" % unit.move_credit if unit.move_credit > 0 else "Move"
-		_act_btn(vb, move_text, _enter_move, unit.remaining_ap > 0 or unit.move_credit > 0)
+		_act_btn(vb, move_text, _enter_move, unit.remaining_ap > 0 or unit.move_credit > 0, "No action points left", "action_move")
 		# Оператор борга (batch 13): вылезти наружу — 1 ОД, машина остаётся на клетке.
 		if unit.borg_id != -1:
-			_act_btn(vb, "Exit Borg (1 AP)", _enter_borg_exit, unit.remaining_ap > 0)
+			_act_btn(vb, "Exit Borg (1 AP)", _enter_borg_exit, unit.remaining_ap > 0, "No action points left", "action_exit")
 
 		# Стрельба — тоже всегда присутствует; гаснет, когда не хватает ОД на выстрел.
 		var shoot_text := "Shoot"
@@ -7886,7 +7889,7 @@ func _open_menu(unit: UnitInstance) -> void:
 			shoot_text = "Flame"
 		_act_btn(vb, shoot_text, _enter_shoot,
 				_valid_pending_shoot(unit) or unit.remaining_ap >= _shoot_ap_cost(unit),
-				"Laser needs both AP — don't move first" if _is_marksman(unit) else "No action points left")
+				"Laser needs both AP — don't move first" if _is_marksman(unit) else "No action points left", "action_shoot")
 
 		# Переложить пленника на другую соседнюю клетку — бесплатно (#100). Кнопка
 		# появляется, только пока кого-то держим, и ОД не требует: носильщик просто
@@ -7896,15 +7899,16 @@ func _open_menu(unit: UnitInstance) -> void:
 			shift_btn.text = "Shift Captive (free)"
 			shift_btn.pressed.connect(_enter_move_held)
 			vb.add_child(shift_btn)
+			_register_menu_action(shift_btn, "action_shift")
 
 		# Одна кнопка на всё, что можно взять руками (#50): боец, труп, мешки, ёж, куча земли.
 		if not resolver.capturable_target_ids(unit).is_empty() \
 				or not resolver.draggable_cells(unit).is_empty() \
 				or not resolver.corpse_pickup_cells(unit).is_empty():
-			_act_btn(vb, "Grab", _enter_grab, unit.remaining_ap > 0)
+			_act_btn(vb, "Grab", _enter_grab, unit.remaining_ap > 0, "No action points left", "action_grab")
 
 		if not resolver.pushable_target_ids(unit).is_empty():
-			_act_btn(vb, "Shield Push", _enter_push, unit.remaining_ap > 0)
+			_act_btn(vb, "Shield Push", _enter_push, unit.remaining_ap > 0, "No action points left", "action_push")
 
 		# Мебель (§3.15): кнопка — только когда рядом есть то, что она умеет. Тяжёлую мебель
 		# волокут из «Grab», как мешки; здесь — унести в руках, поставить и разломать.
@@ -7912,19 +7916,19 @@ func _open_menu(unit: UnitInstance) -> void:
 		if near_furn["carry"]:
 			_act_btn(vb, "Carry Furniture (1 AP)", _enter_furniture.bind(Mode.CARRY_FURN),
 					not resolver.furniture_carry_cells(unit).is_empty(),
-					"Hands full or no AP left")
+					"Hands full or no AP left", "action_carry")
 		if Furniture.is_furniture(unit.held_item_id):
 			_act_btn(vb, "Put Down %s (free)" % Furniture.name_of(unit.held_item_id),
 					_enter_furniture.bind(Mode.PUT_FURN),
-					not resolver.furniture_put_cells(unit).is_empty(), "No free cell beside you")
+					not resolver.furniture_put_cells(unit).is_empty(), "No free cell beside you", "action_put")
 		if near_furn["any"]:
 			_act_btn(vb, "Break Furniture (%s AP)" % near_furn["ap"],
 					_enter_furniture.bind(Mode.BREAK),
-					not resolver.furniture_smash_cells(unit).is_empty(), "Not enough AP")
+					not resolver.furniture_smash_cells(unit).is_empty(), "Not enough AP", "action_break")
 
 		if unit.held_item_id != "" and MCF.ITEM_NAMES.has(unit.held_item_id):
 			_act_btn(vb, MCF.ITEM_NAMES.get(unit.held_item_id, "Item"), _enter_item,
-					unit.remaining_ap > 0 and resolver.can_use_item(unit) == "")
+					unit.remaining_ap > 0 and resolver.can_use_item(unit) == "", "No action points left", "action_item")
 
 		# Оператор дронов: запуск дрона со стоящей рядом станции (§3.12).
 		var stations := resolver.stations_near(unit)
@@ -7933,11 +7937,11 @@ func _open_menu(unit: UnitInstance) -> void:
 			if stations.size() > 1:
 				# Станций рядом несколько — выбирает игрок, а не порядок обхода (item 17).
 				_act_btn(vb, "Launch Drone (%d stations)…" % stations.size(),
-						_open_station_picker.bind(stations), unit.remaining_ap > 0)
+						_open_station_picker.bind(stations), unit.remaining_ap > 0, "No action points left", "action_launch")
 			else:
 				_act_btn(vb, "Launch Drone",
 						_submit.bind(SpawnDroneIntent.new(unit.id, stations[0])),
-						unit.remaining_ap > 0)
+						unit.remaining_ap > 0, "No action points left", "action_launch")
 
 		# Свернуть свою станцию обратно в предмет (item 16).
 		var foldable := resolver.station_pickup_cells(unit)
@@ -7947,6 +7951,7 @@ func _open_menu(unit: UnitInstance) -> void:
 			fold_btn.pressed.connect(_submit.bind(
 					PickUpStationIntent.new(unit.id, foldable[0])))
 			vb.add_child(fold_btn)
+			_register_menu_action(fold_btn, "action_pack")
 
 		# Инженер: постройка укреплений (§3.7). Кнопка остаётся на месте весь ход (item 27) —
 		# гаснет, когда не хватает ОД, а не исчезает; появляется, только если строить есть где.
@@ -7965,14 +7970,14 @@ func _open_menu(unit: UnitInstance) -> void:
 				if feat == MCF.FEATURE_LDF:
 					# ЛДФ — цепочка из 6 клеток, «рисуется» вручную (§3.7).
 					_act_btn(vb, "Build: LDF wall (%d tiles, %d AP)" % [MCF.LDF_WALL_LENGTH, cost],
-							_enter_build_wall, can_afford, "Needs %d AP" % cost)
+							_enter_build_wall, can_afford, "Needs %d AP" % cost, "action_build")
 				else:
 					var label := "Build: %s (%d AP)" % [MCF.FEATURE_NAMES[feat], cost]
 					if unit.borg_id != -1 and MCF.BORG_BATCH_FEATURES.has(feat):
 						var left: int = int(unit.build_credits.get(feat, 0))
 						label = "Build: %s (%s)" % [MCF.FEATURE_NAMES[feat],
 								("%d left in batch" % left) if left > 0 else "1 AP for %d" % MCF.BORG_BUILD_BATCH]
-					_act_btn(vb, label, _enter_build.bind(feat), can_afford, "Needs %d AP" % cost)
+					_act_btn(vb, label, _enter_build.bind(feat), can_afford, "Needs %d AP" % cost, "action_build")
 
 		# Инженер: заварить соседний шлюз (#99).
 		if not resolver.weldable_cells(unit).is_empty():
@@ -7980,10 +7985,11 @@ func _open_menu(unit: UnitInstance) -> void:
 			weld_btn.text = "Weld Airlock (%d AP)" % GameActionResolver.WELD_AIRLOCK_AP
 			weld_btn.pressed.connect(_enter_weld)
 			vb.add_child(weld_btn)
+			_register_menu_action(weld_btn, "action_weld")
 
 		# Инженер/шахтёр: слом укреплений (§3.7).
 		if not resolver.breakable_cells(unit).is_empty():
-			_act_btn(vb, "Demolish Fortification", _enter_break, unit.remaining_ap > 0)
+			_act_btn(vb, "Demolish Fortification", _enter_break, unit.remaining_ap > 0, "No action points left", "action_demolish")
 
 		# Инженер чинит свою машину (веха «Modular tank system», §8): одно очко узлу
 		# за 1 ОД. Кнопка на каждую машину рядом — их редко больше одной, а выбирать
@@ -7999,6 +8005,7 @@ func _open_menu(unit: UnitInstance) -> void:
 					_submit(RepairVehicleIntent.new(uid, target_veh.id, comp)),
 					resolver.repairable_components(state.get_unit(uid), target_veh)))
 			vb.add_child(fix_btn)
+			_register_menu_action(fix_btn, "action_repair")
 
 		# Отдельной кнопки «подобрать труп» больше нет (#7): тело поднимается из режима
 		# «рука» кликом по клетке, как и всё остальное, что можно взять.
@@ -8009,17 +8016,18 @@ func _open_menu(unit: UnitInstance) -> void:
 					unit.carried_corpses, MCF.CORPSE_CARRY_MAX]
 			drop_btn.pressed.connect(_enter_corpse_drop)
 			vb.add_child(drop_btn)
+			_register_menu_action(drop_btn, "action_drop")
 
 		# ДПМГ (§3.7): стрельба из своего пулемёта рядом.
 		var own_rsp := resolver.rsp_cells(unit, true)
 		if not own_rsp.is_empty():
-			_act_btn(vb, "Fire DPMG", _enter_rsp_fire.bind(own_rsp[0]), unit.remaining_ap > 0)
+			_act_btn(vb, "Fire DPMG", _enter_rsp_fire.bind(own_rsp[0]), unit.remaining_ap > 0, "No action points left", "action_dpmg")
 		# Отобрать вражеский ДПМГ (по правилу захвата).
 		var foe_rsp := resolver.rsp_cells(unit, false)
 		if not foe_rsp.is_empty():
 			_act_btn(vb, "Seize DPMG",
 					_submit.bind(DPMGFireIntent.new(unit.id, foe_rsp[0], -1, -1)),
-					unit.remaining_ap > 0)
+					unit.remaining_ap > 0, "No action points left", "action_seize")
 
 		# Сапёр (item 45): мины и их поиск.
 		if unit.stats.special_ability_id == MCF.ABILITY_SAPPER:
@@ -8027,22 +8035,22 @@ func _open_menu(unit: UnitInstance) -> void:
 				var mine_text := "Lay Mine" if unit.mine_credits <= 0 \
 					else "Lay Mine (%d left)" % unit.mine_credits
 				_act_btn(vb, mine_text, _enter_mine.bind(false),
-						unit.remaining_ap > 0 or unit.mine_credits > 0)
+						unit.remaining_ap > 0 or unit.mine_credits > 0, "No action points left", "action_mine")
 				# Противотанковая мина (item 13) — тот же кредит на серию, другая мина.
 				_act_btn(vb, "Lay Anti-Vehicle Mine", _enter_mine.bind(true),
-						unit.remaining_ap > 0 or unit.mine_credits > 0)
+						unit.remaining_ap > 0 or unit.mine_credits > 0, "No action points left", "action_av_mine")
 			_act_btn(vb, "Sweep for Mines (%d tiles)" % MCF.MINE_REVEAL_RADIUS,
-					_submit.bind(RevealMinesIntent.new(unit.id)), unit.remaining_ap > 0)
+					_submit.bind(RevealMinesIntent.new(unit.id)), unit.remaining_ap > 0, "No action points left", "action_sweep")
 			# Обезвредить подсвеченную чужую мину рядом (item 13).
 			if not resolver.disarmable_mine_cells(unit).is_empty():
-				_act_btn(vb, "Disarm Mine", _enter_disarm, unit.remaining_ap > 0)
+				_act_btn(vb, "Disarm Mine", _enter_disarm, unit.remaining_ap > 0, "No action points left", "action_disarm")
 
 		# Копка окопа (§3.7): пехота 3 окопа / инженер 6 за 1 ОД.
 		if not resolver.diggable_cells(unit).is_empty():
 			var dig_text := "Dig Trench" if unit.dig_credits <= 0 \
 				else "Dig Trench (%d free)" % unit.dig_credits
 			_act_btn(vb, dig_text, _enter_dig,
-					unit.remaining_ap > 0 or unit.dig_credits > 0)
+					unit.remaining_ap > 0 or unit.dig_credits > 0, "No action points left", "action_dig")
 
 		# Посадка в стоящую рядом технику (свою или вражескую). Машин рядом несколько —
 		# одна кнопка, а какую именно, игрок выбирает щелчком по полю (batch borg-corpses):
@@ -8053,20 +8061,20 @@ func _open_menu(unit: UnitInstance) -> void:
 			for bv: Vehicle in boardable:
 				any_free = any_free or bv.seated() or bv.is_borg()
 			_act_btn(vb, "Board… (%d vehicles)" % boardable.size(),
-					_enter_board_pick.bind(boardable, false), unit.remaining_ap > 0 or any_free)
+					_enter_board_pick.bind(boardable, false), unit.remaining_ap > 0 or any_free, "No action points left", "action_board")
 		for veh: Vehicle in (boardable if boardable.size() == 1 else []):
 			var vname: String = VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)
 			var seat_text := "Board %s" % vname if veh.owner == unit.owner \
 				else "Storm %s" % vname
 			_act_btn(vb, seat_text, _board_into.bind(unit.id, veh),
-					unit.remaining_ap > 0 or veh.seated() or veh.is_borg())  # бесплатно (batch 17)
+					unit.remaining_ap > 0 or veh.seated() or veh.is_borg(), "No action points left", "action_board")  # бесплатно (batch 17)
 
 		# Вытащить труп из машины, чтобы освободить место (item 18).
 		for vid: int in resolver.unloadable_corpse_vehicle_ids(unit):
 			var uveh: Vehicle = state.get_vehicle(vid)
 			if uveh != null:
 				_act_btn(vb, "Pull Corpse from %s" % VehicleDB.get_vehicle(uveh.type_id).get("name", uveh.type_id),
-						_submit.bind(VehicleUnloadCorpseIntent.new(unit.id, vid)), unit.remaining_ap > 0)
+						_submit.bind(VehicleUnloadCorpseIntent.new(unit.id, vid)), unit.remaining_ap > 0, "No action points left", "action_pull")
 
 	# Выдохшемуся юниту меню не нужно (#97): когда ОД кончились и ни одного действия не
 	# набралось, панель с одной кнопкой Cancel только загораживает поле. Выделение при
@@ -8088,7 +8096,7 @@ func _open_menu(unit: UnitInstance) -> void:
 ## строк, а то и скрывалось целиком. Теперь недоступное сейчас действие остаётся
 ## кнопкой, но выключенной, с подсказкой-причиной — набор пунктов не «мигает» весь ход.
 func _act_btn(vb: VBoxContainer, text: String, cb: Callable,
-		enabled: bool, reason := "No action points left") -> void:
+		enabled: bool, reason := "No action points left", key := "") -> void:
 	var b := Button.new()
 	b.text = text
 	b.disabled = not enabled
@@ -8097,6 +8105,7 @@ func _act_btn(vb: VBoxContainer, text: String, cb: Callable,
 	else:
 		b.tooltip_text = reason
 	vb.add_child(b)
+	if not key.is_empty(): _register_menu_action(b, key)
 
 func _has_action_button(vb: VBoxContainer) -> bool:
 	for c in vb.get_children():
@@ -8125,6 +8134,7 @@ func _open_shot_picker(what: String, available: int, make: Callable) -> void:
 	all_btn.text = "All (%d)" % available
 	all_btn.pressed.connect(func() -> void: _submit(make.call(-1)))
 	vb.add_child(all_btn)
+	_number_picker()
 	_anchor_menu(_picker)
 	_picker.show()
 
@@ -8167,6 +8177,7 @@ func _open_component_picker(veh: Vehicle, title: String, on_pick: Callable,
 			_clear_hint_cell()
 			on_pick.call(comp))
 		vb.add_child(b)
+	_number_picker()
 	_anchor_menu(_picker)
 	_picker.show()
 
@@ -8210,6 +8221,7 @@ func _open_station_picker(stations: Array) -> void:
 		b.pressed.connect(_submit.bind(SpawnDroneIntent.new(selected_id, st)))
 		_hint_cell(b, st)
 		vb.add_child(b)
+	_number_picker()
 	_anchor_menu(_picker)
 	_picker.show()
 
@@ -8301,7 +8313,7 @@ func _on_end_turn_pressed() -> void:
 ## Откат (#47). Отменяет даже мельчайшие шаги: если сейчас рисуется ЛДФ-стена —
 ## снимает последнюю выложенную клетку; иначе восстанавливает состояние из стека.
 func _on_undo_pressed() -> void:
-	if _animating or not _my_turn():
+	if replay != null or _animating or not _my_turn():
 		return
 	# Незакоммиченное рисование ЛДФ-стены: убираем последнюю клетку (как Backspace).
 	if not _wall_cells.is_empty():
@@ -8313,7 +8325,7 @@ func _on_undo_pressed() -> void:
 
 ## Повтор отменённого действия (#38): зеркало Undo.
 func _on_redo_pressed() -> void:
-	if _animating or not _my_turn() or not resolver.can_redo():
+	if replay != null or _animating or not _my_turn() or not resolver.can_redo():
 		return
 	_submit(RedoIntent.new(state.active_player()))
 
@@ -8517,3 +8529,175 @@ func _sync_camera_layers() -> void:
 			layer.position = pan
 			layer.scale = Vector2(zoom, zoom)
 	queue_redraw()
+
+
+func _select_spawned_drone(intent: Intent, result: ActionResult) -> bool:
+	if replay != null or not result.ok or not intent is SpawnDroneIntent or _spectator:
+		return false
+	var drone := state.get_unit(result.spawned_unit_id)
+	if not _is_own_active(drone) or not _owner_is_local_human(drone.owner): return false
+	_select(drone)
+	return true
+
+# Shortcuts activate the actual offered buttons; there is no second availability list.
+var _menu_actions: Dictionary = {}
+var _undo_draw_shortcut_btn: Button
+var _number_choices: Array[Button] = []
+var _number_page := 0
+
+func _register_menu_action(button: Button, id: String) -> void:
+	button.set_meta("action_label", button.text)
+	if not _menu_actions.has(id): _menu_actions[id] = {"buttons": [], "code": 0}
+	_menu_actions[id].buttons.append(button)
+	_refresh_menu_hotkeys()
+
+func _refresh_menu_hotkeys() -> void:
+	if is_instance_valid(_undo_draw_shortcut_btn):
+		_undo_draw_shortcut_btn.tooltip_text = "Take back your last stroke or erase (%s while drawing)." % Keybinds.label("game_undo")
+	var reserved: Array = []
+	for id: String in _menu_actions: reserved.append_array(Keybinds.codes(id))
+	for entry: Dictionary in Keybinds.DEFINITIONS:
+		if entry.section == "game" and entry.contexts.has("*"):
+			reserved.append_array(Keybinds.codes(entry.id))
+	var used: Array = []
+	for id: String in _menu_actions:
+		var code: int = Keybinds.codes(id)[0]
+		if used.has(code):
+			code = 0
+			for letter in range(KEY_A, KEY_Z + 1):
+				if not reserved.has(letter) and not used.has(letter):
+					code = letter
+					break
+		used.append(code)
+		_menu_actions[id].code = code
+		for button: Button in _menu_actions[id].buttons:
+			if not is_instance_valid(button): continue
+			button.text = str(button.get_meta("action_label"))
+			if code != 0: button.text += "  [%s]" % Keybinds.key_event(code).as_text()
+
+func _activate_menu_action(id: String) -> void:
+	var buttons: Array = _menu_actions[id].buttons
+	var enabled := buttons.filter(func(b: Button) -> bool: return is_instance_valid(b) and not b.disabled)
+	if enabled.is_empty(): return
+	if buttons.size() == 1:
+		buttons[0].pressed.emit()
+		return
+	_menu.hide()
+	for child in _picker.get_children(): child.queue_free()
+	var vb := _scroll_menu(_picker, Keybinds.definition(id).label)
+	for source: Button in buttons:
+		var button := Button.new()
+		button.text = str(source.get_meta("action_label"))
+		button.disabled = source.disabled
+		button.tooltip_text = source.tooltip_text
+		button.pressed.connect(func() -> void:
+			_picker.hide()
+			if is_instance_valid(source) and not source.disabled: source.pressed.emit())
+		vb.add_child(button)
+	_number_picker()
+	_anchor_menu(_picker)
+	_picker.show()
+
+func _collect_picker_buttons(node: Node) -> void:
+	if node.is_queued_for_deletion(): return
+	if node is Button and node.text != "Cancel": _number_choices.append(node)
+	for child in node.get_children(): _collect_picker_buttons(child)
+
+func _number_picker() -> void:
+	_number_choices.clear()
+	_number_page = 0
+	_collect_picker_buttons(_picker)
+	for button: Button in _number_choices: button.set_meta("choice_label", button.text)
+	if _number_choices.size() > 9:
+		var row := HBoxContainer.new()
+		_number_choices[0].get_parent().add_child(row)
+		for direction in [-1, 1]:
+			var button := Button.new()
+			button.text = "Previous choices" if direction < 0 else "Next choices"
+			button.tooltip_text = Keybinds.label("picker_previous" if direction < 0 else "picker_next")
+			button.pressed.connect(_change_choice_page.bind(direction))
+			row.add_child(button)
+	_refresh_choice_labels()
+
+func _change_choice_page(direction: int) -> void:
+	_number_page = clampi(_number_page + direction, 0, maxi(0, (_number_choices.size() - 1) / 9))
+	_refresh_choice_labels()
+
+func _refresh_choice_labels() -> void:
+	for i in _number_choices.size():
+		var button := _number_choices[i]
+		if not is_instance_valid(button): continue
+		button.visible = i / 9 == _number_page
+		button.text = "%d. %s" % [i % 9 + 1, button.get_meta("choice_label")]
+
+# _input precedes GUI focus traversal: Tab and replay Space/arrows must not activate
+# a previously focused HUD button. Text fields and modal windows retain their input.
+func _input(event: InputEvent) -> void:
+	if event is InputEventKey and _handle_shortcut(event):
+		get_viewport().set_input_as_handled()
+
+func _handle_shortcut(event: InputEventKey) -> bool:
+	if not event.pressed or event.echo or Keybinds.typing(get_viewport()): return false
+	if _quit_dialog != null and _quit_dialog.visible:
+		if Keybinds.matches(event, "game_cancel"):
+			_quit_dialog.hide()
+			return true
+		return false
+	if Keybinds.modal_open(): return false
+	if Keybinds.matches(event, "game_cancel"):
+		if _init_overlay != null and _init_overlay.visible: _init_overlay.hide()
+		else: _escape_pressed()
+		return true
+	if Keybinds.matches(event, "game_initiative"):
+		_toggle_initiative_overlay()
+		return true
+	if _init_overlay != null and _init_overlay.visible: return false
+	if Keybinds.matches(event, "game_pause_ai"):
+		_toggle_pause()
+		return true
+	if replay != null:
+		if Keybinds.matches(event, "replay_play_pause"): _replay_toggle(); return true
+		if Keybinds.matches(event, "replay_forward"): _replay_step(); return true
+		if Keybinds.matches(event, "replay_back"): _replay_seek(replay.index - 1); return true
+	else:
+		if Keybinds.matches(event, "game_save"): _save_game(); return true
+		if Keybinds.matches(event, "game_undo"):
+			if not _animating:
+				if mode in [Mode.DRAW, Mode.ERASE]: _undo_my_drawing()
+				else: _on_undo_pressed()
+			return true
+		if Keybinds.matches(event, "game_redo"):
+			if mode not in [Mode.DRAW, Mode.ERASE]: _on_redo_pressed()
+			return true
+	if Keybinds.matches(event, "game_remove_point"):
+		if mode == Mode.RULER:
+			if _ruler_a != Vector2i(-1, -1): _ruler_a = Vector2i(-1, -1)
+			elif not _rulers.is_empty(): _rulers.pop_back()
+			_refresh_ruler_button()
+			queue_redraw()
+			return true
+		if mode == Mode.BUILD_WALL and not _animating: _wall_undo(); return true
+	if mode == Mode.BUILD_WALL and not _animating and Keybinds.matches(event, "game_confirm_wall"):
+		_wall_commit()
+		return true
+	if _animating or replay != null or not _my_turn() or _match_over: return false
+	if _picker != null and _picker.visible:
+		if Keybinds.matches(event, "picker_previous"): _change_choice_page(-1); return true
+		if Keybinds.matches(event, "picker_next"): _change_choice_page(1); return true
+		if not event.ctrl_pressed and not event.alt_pressed and not event.shift_pressed and not event.meta_pressed:
+			var number := -1
+			if event.keycode >= KEY_1 and event.keycode <= KEY_9: number = event.keycode - KEY_1
+			if event.keycode >= KEY_KP_1 and event.keycode <= KEY_KP_9: number = event.keycode - KEY_KP_1
+			if number >= 0:
+				var index := _number_page * 9 + number
+				if index < _number_choices.size():
+					var button := _number_choices[index]
+					if is_instance_valid(button) and button.is_visible_in_tree() and not button.disabled: button.pressed.emit()
+				return true
+		return false
+	if _menu == null or not _menu.visible: return false
+	for id: String in _menu_actions:
+		if event.get_keycode_with_modifiers() == _menu_actions[id].code:
+			_activate_menu_action(id)
+			return true
+	return false
