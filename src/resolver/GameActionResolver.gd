@@ -5062,8 +5062,10 @@ func _resolve_spawn_drone(intent: SpawnDroneIntent) -> ActionResult:
 	if drone == null:
 		return ActionResult.fail("Nowhere to place the drone")
 	operator.remaining_ap -= 1
-	return ActionResult.success(["%s launches a drone at (%d, %d)" % [
+	var result := ActionResult.success(["%s launches a drone at (%d, %d)" % [
 		operator.stats.display_name, drone.coord.x, drone.coord.y]])
+	result.spawned_unit_id = drone.id
+	return result
 
 func _resolve_drone_move(intent: DroneMoveIntent) -> ActionResult:
 	var drone := state.get_unit(intent.actor_id)

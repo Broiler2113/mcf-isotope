@@ -4,6 +4,8 @@ extends RefCounted
 ## Итог обработки Intent'а резолвером. Возвращается контроллеру и публикуется в лог.
 
 var ok: bool = false
+## Local presentation hint, recomputed by every peer when a drone launches.
+var spawned_unit_id: int = -1
 ## Причина отказа (для нелегальных намерений).
 var reason: String = ""
 ## Строки боевого лога для UI (§2.2, п.4).

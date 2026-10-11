@@ -235,3 +235,12 @@ It reports actual seek times and catch-up counts on a 149×119 map with 400 sold
 wall-clock timing is informational rather than a hardware-dependent test assertion.
 
 `rl/test_evaluation_scheduling.py` checks whole-suite time limits, Stop/Pause during socket waits, champion preservation, partial-game log retention, promotion retry tallies, and real Godot collection/PPO after an evaluation timeout.
+
+### Action hotkeys and keybinding settings
+
+`godot --headless --script res://tests/run_hotkeys.gd` exercises the shared menu
+buttons and context bindings, disabled/absent actions, collision fallback, numbered
+choices (including pages and keypad digits), real build/repair/boarding/station
+pickers, drone selection for local/network owners, undo/redo and drawing isolation,
+replay transport, Tab with GUI focus, editor rebinding, persistence and conflicts.
+The Keybinds tab uses separate In-game shortcuts and Map editor shortcuts pages.

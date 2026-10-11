@@ -13,6 +13,11 @@ var _scale_slider: HSlider
 var _scale_value: LineEdit
 var _accent_opt: OptionButton
 var _body: Control = null
+var _capture_action := ""
+var _key_buttons: Dictionary = {}
+var _key_message: Label
+var _tabs: TabContainer
+var _key_sections: TabContainer
 
 static func open(host: Node) -> SettingsWindow:
 	var w := SettingsWindow.new()
@@ -21,6 +26,8 @@ static func open(host: Node) -> SettingsWindow:
 
 func _ready() -> void:
 	layer = 90
+	add_to_group("shortcut_modal")
+	Keybinds.changed.connect(_refresh_keys)
 	_build()
 
 func _build() -> void:
@@ -50,6 +57,7 @@ func _build() -> void:
 	col.add_child(SteamChrome.header_bar("Settings"))
 
 	var tabs := TabContainer.new()
+	_tabs = tabs
 	col.add_child(SteamChrome.pad(tabs, 8, 8))
 	var page := VBoxContainer.new()
 	page.add_theme_constant_override("separation", 18)
@@ -176,6 +184,8 @@ func _build() -> void:
 		amount.text = "Opacity: %d%%" % value
 		Ui.set_grid(grid_toggle.button_pressed, value / 100.0))
 
+	_build_keybinds(tabs)
+
 	# --- Кнопки справа внизу, как у окна набора ---
 	var bottom := HBoxContainer.new()
 	bottom.alignment = BoxContainer.ALIGNMENT_END
@@ -185,6 +195,10 @@ func _build() -> void:
 	reset.text = "Defaults"
 	reset.custom_minimum_size = Vector2(100, 0)
 	reset.pressed.connect(func() -> void:
+		if tabs.current_tab == 1:
+			_capture_action = ""
+			_key_message.text = Keybinds.reset_defaults()
+			return
 		Ui.set_grid(true, 0.32)
 		Ui.set_ui_scale(1.0)
 		Ui.set_accent("green")
@@ -201,7 +215,73 @@ func _build() -> void:
 func _apply_scale() -> void:
 	Ui.set_ui_scale(_scale_slider.value / 100.0)
 
-func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+func _build_keybinds(tabs: TabContainer) -> void:
+	_key_buttons.clear()
+	var page := VBoxContainer.new()
+	page.name = "Keybinds"
+	tabs.add_child(page)
+	_key_message = Label.new()
+	_key_message.text = "Choose a shortcut, then press a key. Escape cancels."
+	_key_message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_key_message.custom_minimum_size.x = 450
+	page.add_child(_key_message)
+	var sections := TabContainer.new()
+	_key_sections = sections
+	page.add_child(sections)
+	for section in ["game", "editor"]:
+		var scroll := ScrollContainer.new()
+		scroll.name = "In-game shortcuts" if section == "game" else "Map editor shortcuts"
+		scroll.custom_minimum_size = Vector2(490, 350)
+		scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		sections.add_child(scroll)
+		var box := SteamChrome.group_box("Actions" if section == "game" else "Tools and commands")
+		box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		scroll.add_child(box)
+		for entry: Dictionary in Keybinds.DEFINITIONS:
+			if entry.section != section: continue
+			var row := HBoxContainer.new()
+			box.body.add_child(row)
+			var title := Label.new()
+			title.text = entry.label
+			title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			row.add_child(title)
+			var button := Button.new()
+			button.custom_minimum_size.x = 155
+			button.pressed.connect(func() -> void:
+				_capture_action = entry.id
+				_key_message.text = "Press a key for %s. Escape cancels." % entry.label
+				_refresh_keys())
+			row.add_child(button)
+			_key_buttons[entry.id] = button
+	_refresh_keys()
+
+func show_keybinds(editor := false) -> void:
+	_tabs.current_tab = 1
+	_key_sections.current_tab = 1 if editor else 0
+
+func _refresh_keys() -> void:
+	for id: String in _key_buttons:
+		var button: Button = _key_buttons[id]
+		if is_instance_valid(button):
+			button.text = "Press a key…" if id == _capture_action else Keybinds.label(id)
+
+func _input(event: InputEvent) -> void:
+	if not event is InputEventKey or not event.pressed or event.echo: return
+	if not _capture_action.is_empty():
+		get_viewport().set_input_as_handled()
+		if event.keycode == KEY_ESCAPE:
+			_capture_action = ""
+			_key_message.text = "Rebinding cancelled."
+		else:
+			var error := Keybinds.rebind(_capture_action, event)
+			if error.is_empty():
+				_capture_action = ""
+				_key_message.text = "Shortcut saved."
+			else:
+				_key_message.text = error
+		_refresh_keys()
+	elif event.keycode == KEY_ESCAPE:
 		get_viewport().set_input_as_handled()
 		queue_free()
