@@ -93,6 +93,16 @@ func _gas_visibility() -> void:
 	r.random_events.clouds.clear()
 	r._sync_gas()
 	ck(r.is_visible_to_team(0, enemy), "dissipating gas restores fog-off visibility through walls")
+	# The scripted AI ignores fog; a cloud elsewhere must not blind it (0.10.1).
+	r.fog_enabled = true
+	r.omniscient_side = 1
+	r.random_events.add_cloud(7, 1, 1, 1, 3)
+	r._sync_gas()
+	ck(r.is_visible_to_team(1, own), "fog-ignoring AI still sees soldiers outside gas")
+	r.random_events.clouds.clear()
+	r.random_events.add_cloud(2, 5, 1, 1, 3)
+	r._sync_gas()
+	ck(not r.is_visible_to_team(1, own), "fog-ignoring AI cannot see into gas")
 
 func _warning() -> void:
 	var s := _arena()

@@ -150,6 +150,24 @@ func _battle() -> void:
 	guest.receive({"k": NetGame.K_DENIED, "a": -1, "p": 1, "reason": "Not your turn"})
 	guest.submit_local(EndTurnIntent.new())
 	ck(messages.size() == 2, "host rejection releases the pending end-turn request")
+	# Vehicle orders carry the vehicle's id, not a soldier's (0.10.1).
+	var tm := MapData.blank_arena(16, 12)
+	tm.set_spawn(Vector2i(3, 3), "tank", 0, Vector2i(1, 0))
+	tm.set_spawn(Vector2i(11, 7), "tank", 1, Vector2i(-1, 0))
+	var ts := tm.build_state(5)
+	ts.roster.slots[0].peer_id = 1
+	ts.roster.slots[1].peer_id = 77
+	var tnet := NetGame.new(ts, GameActionResolver.new(ts), true)
+	var mine: Vehicle = null
+	var theirs: Vehicle = null
+	for v: Vehicle in ts.all_vehicles():
+		if v.owner == 1: mine = v
+		else: theirs = v
+	ck(tnet._authorized(VehicleMoveIntent.new(mine.id, Vector2i(-1, 0)), 77)
+			and tnet._authorized(VehicleTurnIntent.new(mine.id, Vector2i(0, 1)), 77)
+			and tnet._authorized(VehicleCannonIntent.new(mine.id, Vector2i(3, 3)), 77),
+		"guest can drive, turn and fire its own tank")
+	ck(not tnet._authorized(VehicleMoveIntent.new(theirs.id, Vector2i(1, 0)), 77), "guest cannot drive the host's tank")
 
 	battle.queue_free()
 	await process_frame

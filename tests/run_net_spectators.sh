@@ -12,5 +12,5 @@ fail=0
 wait "$host_pid" || fail=1
 wait "$a_pid" || fail=1
 wait "$b_pid" || fail=1
-rg 'net smoke|FAIL|SCRIPT ERROR' /tmp/mcf_spectator_{host,a,b}.log
+grep -E 'net smoke|FAIL|SCRIPT ERROR' /tmp/mcf_spectator_{host,a,b}.log
 exit "$fail"

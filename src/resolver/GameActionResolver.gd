@@ -3599,10 +3599,9 @@ func is_visible_to_team(owner: int, target: UnitInstance) -> bool:
 	if owner == target.owner or state.roster.are_allies(owner, target.owner): return true
 	if not state.grid.in_bounds(target.coord): return false
 	if state.grid.cell(target.coord).gas: return false
-	if owner == omniscient_side and not visibility_limited(): return true
-	if owner == omniscient_side and fog_enabled:
-		_sync_seen()
-		if _sight_gas.is_empty(): return true
+	# The scripted AI ignores fog: one cloud anywhere must not blind it to the whole
+	# board. It still can't see into gas (above) or shoot through it (can_shoot).
+	if owner == omniscient_side: return true
 	return team_sees(owner, target.coord)
 
 # --- Туман войны: обзор одного бойца ------------------------------------------------

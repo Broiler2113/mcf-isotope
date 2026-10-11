@@ -244,7 +244,9 @@ func _authorized(intent: Intent, peer: int) -> bool:
 	if side < 0: return false
 	if intent is EndTurnIntent or intent is UndoIntent or intent is RedoIntent:
 		return intent.requester == side
-	var actor := state.get_unit(intent.actor_id)
+	# Tank/shuttle drive, turn and cannon orders carry the VEHICLE id (Vehicle.ID_BASE+).
+	var actor: Variant = state.get_unit(intent.actor_id)
+	if actor == null: actor = state.get_vehicle(intent.actor_id)
 	if actor == null or actor.owner != side: return false
 	if intent is GroupMoveIntent:
 		for id in intent.unit_ids:
