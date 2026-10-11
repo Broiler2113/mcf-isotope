@@ -13,6 +13,7 @@ fail=0
 for pair in "asym" "town" "unready"; do
   echo "=== relay match: $pair ==="
   export MCF_TEST_RELAY="127.0.0.1:$PORT" MCF_TEST_RELAY_TAG="$pair"
+  rm -f "/tmp/mcf_relay_room_$pair"   # a stale code from an earlier run would send the guest to a dead room
   "$GODOT" --headless --script "res://tests/net_host_$pair.gd" > "/tmp/mcf_relay_host_$pair.log" 2>&1 &
   hpid=$!
   "$GODOT" --headless --script "res://tests/net_guest_$pair.gd" > "/tmp/mcf_relay_guest_$pair.log" 2>&1
