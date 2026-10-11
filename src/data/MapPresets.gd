@@ -46,6 +46,7 @@ static func prefill(m: MapData, env: String) -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = w * 7919 + h * 104729 + index_of(env)
 	m.spawns = []
+	m.fixtures.clear()
 	m.zone_owner.fill(-1)
 	for i in w * h:
 		m.floor_type[i] = MCF.FLOOR_NORMAL
@@ -211,10 +212,10 @@ static func flipped(p: Dictionary, horizontal: bool) -> Dictionary:
 ## Клетка узора с поворотом мебели (6-й элемент, 0.9.2), переставленным по таблице map
 ## (k → map[k]). Без поворота клетка та же самая.
 static func _turned_cell(cell: Variant, map: Array) -> Variant:
-	if cell == null or (cell as Array).size() < 6 or int(cell[5]) < 0:
-		return cell
-	var t: Array = (cell as Array).duplicate()
-	t[5] = map[int(t[5]) % 4]
+	if cell == null: return cell
+	var t: Array = (cell as Array).duplicate(true)
+	if t.size() > 5 and int(t[5]) >= 0: t[5] = map[int(t[5]) % 4]
+	if t.size() > 9 and not (t[9] as Array).is_empty(): t[9][2] = map[int(t[9][2]) % 4]
 	return t
 
 ## Вырезать узор из карты: прямоугольник r целиком, со спавнами и зонами.
@@ -224,7 +225,7 @@ static func capture(m: MapData, r: Rect2i) -> Dictionary:
 		for x in r.size.x:
 			var i := (r.position.y + y) * m.width + r.position.x + x
 			p["cells"][y * r.size.x + x] = [int(m.floor_type[i]), float(m.cover_height[i]),
-					m.is_space[i] != 0, String(m.feature_id[i]), int(m.zone_owner[i]), m.get_turn(i), m.get_look(i), m.get_accent(i), m.get_door(i)]
+					m.is_space[i] != 0, String(m.feature_id[i]), int(m.zone_owner[i]), m.get_turn(i), m.get_look(i), m.get_accent(i), m.get_door(i), m.fixtures.get(i, []).duplicate()]
 	for s: Dictionary in m.spawns:
 		var c: Vector2i = s["coord"]
 		if r.has_point(c):

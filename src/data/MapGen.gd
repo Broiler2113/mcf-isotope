@@ -594,6 +594,15 @@ func _mirror() -> void:
 			m.cover_height[i] = m.cover_height[s]
 			m.is_space[i] = m.is_space[s]
 			m.feature_id[i] = m.feature_id[s]
+			if m.fixtures.has(s):
+				var record: Array = m.fixtures[s].duplicate()
+				var mask := (1 if x != s % w else 0) | (2 if y != s / w else 0)
+				var k := int(record[2])
+				if mask & 1 and k % 2 == 1: k = 4 - k
+				if mask & 2 and k % 2 == 0: k = 2 - k
+				record[2] = k
+				m.fixtures[i] = record
+			else: m.fixtures.erase(i)
 			_indoor[i] = _indoor[s]
 			_door[i] = _door[s]
 			_street[i] = _street[s]

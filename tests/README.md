@@ -244,3 +244,18 @@ choices (including pages and keypad digits), real build/repair/boarding/station
 pickers, drone selection for local/network owners, undo/redo and drawing isolation,
 replay transport, Tab with GUI focus, editor rebinding, persistence and conflicts.
 The Keybinds tab uses separate In-game shortcuts and Map editor shortcuts pages.
+
+### Dynamic lighting and group previews
+
+`run_lighting.gd` covers incremental light/occluder updates, glass transmission,
+hidden-source filtering, local-only rendering, flash timing, the off-by-default
+setting, editor preview/exit, and cooperative group previews with identical orders.
+`run_light_fixtures.gd` covers mounted/freestanding lights, shooting, support loss,
+explosions, save/map/replay round trips, presets, editor layering and generation.
+
+`xvfb-run -a godot --script tests/render_lighting.gd` requires an actual Compatibility
+renderer. It compares rendered shadows before/after demolition, ambient restoration,
+and 16 versus 80 overlapping light sources. Headless simulation tests cannot verify
+GPU pixels. Images are written to `/tmp/isotope-lighting-*.png` for inspection.
+
+`tests/bench/run_group_preview_bench.gd` reports cooperative preview costs for 20, 100, and 200 selected soldiers on a giant map. `tests/bench/run_lighting_coverage.gd` reports generated lighting coverage and generation time on small and giant maps. Timing is hardware-dependent; these are informational benchmarks. Colossal generation now allows 5 seconds (the prior 4-second budget plus 1 second for the fixture coverage pass).

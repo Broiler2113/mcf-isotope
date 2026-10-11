@@ -37,60 +37,87 @@ const VIRTUAL_DIST := 6
 ## как и у одиночного бойца. Дальше своей зоны (move_tier_budgets) никто не идёт.
 static func plan(r: GameActionResolver, ids: Array[int], dest: Vector2i,
 		tactical: bool = false, max_tier: int = 0) -> Array:
+	var job := Job.new(r, ids, dest, tactical, max_tier)
+	job.advance()
+	return [job.out_ids, job.out_targets]
+
+## A UI job advances on the main thread between frames. No simulation mutation or worker races.
+class Job:
+	extends RefCounted
+	var r: GameActionResolver
+	var dest: Vector2i
+	var tactical: bool
+	var max_tier: int
 	var out_ids: Array[int] = []
 	var out_targets: Array[Vector2i] = []
-	var grid := r.state.grid
 	var movers: Array[UnitInstance] = []
-	for id in ids:
-		var u := r.state.get_unit(id)
-		if r.can_move(u):
-			movers.append(u)
-	if movers.is_empty() or not grid.in_bounds(dest):
-		return [out_ids, out_targets]
-	# Шаги до точки нужны только там, куда отряд дойдёт: дальше любого бойца на его запас
-	# хода волну не пускаем.
-	var pw := grid.width + 2
-	var at_movers := PackedInt32Array()
-	var reach_extra := 0
-	for u: UnitInstance in movers:
-		at_movers.append((u.coord.y + 1) * pw + u.coord.x + 1)
-		reach_extra = maxi(reach_extra, budget_for(r, u, max_tier))
-	var geo := AIController.wave(grid, PackedInt32Array([(dest.y + 1) * pw + dest.x + 1]), {},
-			at_movers, reach_extra)
-	# Первым ходит ближний к цели: он и освобождает дорогу тем, кто за ним.
-	movers.sort_custom(func(a: UnitInstance, b: UnitInstance) -> bool:
-		return _less([_approach(geo, a.coord, dest), _d2(a.coord, dest), a.id],
-				[_approach(geo, b.coord, dest), _d2(b.coord, dest), b.id]))
-	var threats: Array = _threats(r, movers[0].owner, dest) if tactical else []
-	var exposure: Dictionary = {}   # клетка -> оценка открытости (те же враги на весь план)
-	var claimed: Dictionary = {}    # куда уже встали шедшие раньше
-	var vacated: Dictionary = {}    # откуда они ушли
-	for u: UnitInstance in movers:
-		var fireproof := r.is_fireproof(u)
-		var cands: Array = [u.coord]
-		for c: Vector2i in r.reachable_for(u, budget_for(r, u, max_tier), claimed, vacated).cost:
-			if fireproof or not grid.cell(c).on_fire:   # в огонь приказом не заводим
-				cands.append(c)
-		var from := u.coord
-		var place := func(c: Vector2i) -> Array:
-			return [_approach(geo, c, dest), _d2(c, dest), _d2(c, from)]
-		var best := _argmin(cands, place)
-		if tactical:
-			# Укрытие ищется вокруг клетки, куда боец встал бы обычным приказом: так он не
-			# уходит в сторону от точки и не теряет больше TACTICAL_RADIUS шагов хода.
-			var natural := best
-			var cover := func(c: Vector2i) -> Array:
-				if not exposure.has(c):
-					exposure[c] = _exposure(grid, c, threats)
-				return [exposure[c]] + place.call(c)
-			best = _argmin(cands.filter(func(c: Vector2i) -> bool:
-				return Combat.distance(c, natural) <= TACTICAL_RADIUS), cover)
-		if best != u.coord:
-			out_ids.append(u.id)
-			out_targets.append(best)
-			vacated[u.coord] = true
-			claimed[best] = true
-	return [out_ids, out_targets]
+	var grid: Grid
+	var geo: GeoField
+	var threats: Array = []
+	var exposure: Dictionary = {}
+	var claimed: Dictionary = {}
+	var vacated: Dictionary = {}
+	var cursor := 0
+	var done := false
+	func _init(resolver: GameActionResolver, ids: Array[int], target: Vector2i, cover: bool, tier: int) -> void:
+		r = resolver
+		dest = target
+		tactical = cover
+		max_tier = tier
+		grid = r.state.grid
+		for id in ids:
+			var u := r.state.get_unit(id)
+			if r.can_move(u):
+				movers.append(u)
+		if movers.is_empty() or not grid.in_bounds(dest):
+			done = true
+			return
+		# Шаги до точки нужны только там, куда отряд дойдёт: дальше любого бойца на его запас
+		# хода волну не пускаем.
+		var pw := grid.width + 2
+		var at_movers := PackedInt32Array()
+		var reach_extra := 0
+		for u: UnitInstance in movers:
+			at_movers.append((u.coord.y + 1) * pw + u.coord.x + 1)
+			reach_extra = maxi(reach_extra, GroupMovePlanner.budget_for(r, u, max_tier))
+		geo = AIController.wave(grid, PackedInt32Array([(dest.y + 1) * pw + dest.x + 1]), {},
+				at_movers, reach_extra)
+		# Первым ходит ближний к цели: он и освобождает дорогу тем, кто за ним.
+		movers.sort_custom(func(a: UnitInstance, b: UnitInstance) -> bool:
+			return GroupMovePlanner._less([GroupMovePlanner._approach(geo, a.coord, dest), GroupMovePlanner._d2(a.coord, dest), a.id],
+					[GroupMovePlanner._approach(geo, b.coord, dest), GroupMovePlanner._d2(b.coord, dest), b.id]))
+		threats = GroupMovePlanner._threats(r, movers[0].owner, dest) if tactical else []
+	func advance(deadline: int = 0) -> void:
+		if done: return
+		while cursor < movers.size():
+			var u := movers[cursor]
+			cursor += 1
+			var fireproof := r.is_fireproof(u)
+			var cands: Array = [u.coord]
+			for c: Vector2i in r.reachable_for(u, GroupMovePlanner.budget_for(r, u, max_tier), claimed, vacated).cost:
+				if fireproof or not grid.cell(c).on_fire:   # в огонь приказом не заводим
+					cands.append(c)
+			var from := u.coord
+			var place := func(c: Vector2i) -> Array:
+				return [GroupMovePlanner._approach(geo, c, dest), GroupMovePlanner._d2(c, dest), GroupMovePlanner._d2(c, from)]
+			var best := GroupMovePlanner._argmin(cands, place)
+			if tactical:
+				# Укрытие ищется вокруг клетки, куда боец встал бы обычным приказом: так он не
+				# уходит в сторону от точки и не теряет больше TACTICAL_RADIUS шагов хода.
+				var natural := best
+				var cover := func(c: Vector2i) -> Array:
+					if not exposure.has(c):
+						exposure[c] = GroupMovePlanner._exposure(grid, c, threats)
+					return [exposure[c]] + place.call(c)
+				best = GroupMovePlanner._argmin(cands.filter(func(c: Vector2i) -> bool:
+					return Combat.distance(c, natural) <= TACTICAL_RADIUS), cover)
+			if best != u.coord:
+				out_ids.append(u.id)
+				out_targets.append(best)
+				vacated[u.coord] = true
+				claimed[best] = true
+			if deadline > 0 and Time.get_ticks_usec() >= deadline: break
+		done = cursor >= movers.size()
 
 ## Запас хода бойца в пределах зоны max_tier (меньше ОД — его последняя зона).
 static func budget_for(r: GameActionResolver, u: UnitInstance, max_tier: int) -> int:

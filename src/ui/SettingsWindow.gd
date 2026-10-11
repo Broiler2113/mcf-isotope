@@ -108,6 +108,12 @@ func _build() -> void:
 	fs.button_pressed = Ui.fullscreen
 	fs.toggled.connect(Ui.set_fullscreen)
 	disp_box.body.add_child(fs)
+	var lighting := CheckBox.new()
+	lighting.text = "Dynamic lighting and shadows"
+	lighting.tooltip_text = "Dark ambient lighting with destructible lamps, fire and effect lights. Visual only."
+	lighting.button_pressed = Ui.dynamic_lighting
+	lighting.toggled.connect(Ui.set_dynamic_lighting)
+	disp_box.body.add_child(lighting)
 
 	# --- Акцент (item 23) ---
 	var acc_box := SteamChrome.group_box("Accent colour")
@@ -199,6 +205,7 @@ func _build() -> void:
 			_capture_action = ""
 			_key_message.text = Keybinds.reset_defaults()
 			return
+		Ui.set_dynamic_lighting(false)
 		Ui.set_grid(true, 0.32)
 		Ui.set_ui_scale(1.0)
 		Ui.set_accent("green")

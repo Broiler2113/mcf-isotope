@@ -45,6 +45,7 @@ const DEFINITIONS: Array = [
 	{"id": "action_repair", "label": "Repair vehicle", "keys": [KEY_Y], "contexts": ["engineer"], "section": "game"},
 	{"id": "action_launch", "label": "Launch drone", "keys": [KEY_N], "contexts": ["operator", "passenger"], "section": "game"},
 	{"id": "action_pack", "label": "Pack up drone station", "keys": [KEY_V], "contexts": ["operator", "passenger"], "section": "game"},
+	{"id": "game_multiselect", "label": "Toggle multiselect (outside passenger menus)", "keys": [KEY_Z], "contexts": ["infantry", "sapper", "engineer", "operator", "miner", "drone", "held", "group", "vehicle"], "section": "game"},
 	{"id": "action_seat", "label": "Change seat", "keys": [KEY_Z], "contexts": ["passenger"], "section": "game"},
 	{"id": "action_tactical", "label": "Tactical move / vehicle turn", "keys": [KEY_T], "contexts": ["group", "vehicle"], "section": "game"},
 	{"id": "action_volley", "label": "Laser volley", "keys": [KEY_L], "contexts": ["group"], "section": "game"},

@@ -1,4 +1,4 @@
-# MCF Tactics — Full Game Specification
+# MCF Isotope — Full Game Specification
 
 A turn-based tactical skirmish game built in **Godot 4.7 / GDScript**, adapting the
 tabletop wargame *Mind Control Factor (MCF)*.

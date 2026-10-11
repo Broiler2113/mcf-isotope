@@ -113,6 +113,7 @@ var zoom := 1.0:
 		if is_inside_tree():
 			_fit_background()
 			_sync_camera_layer()
+var _lighting_preview := true
 var show_grid := true
 var show_zones := true
 var _mouse_panning := false
@@ -185,6 +186,7 @@ var _menus: Dictionary = {}
 func _ready() -> void:
 	Keybinds.changed.connect(_refresh_shortcut_labels)
 	Ui.board_settings_changed.connect(queue_redraw)
+	Ui.board_settings_changed.connect(_sync_lighting)
 	Sprites.reload_overrides()
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	# Вернулись из пробной партии — та же карта, имя, взгляд и несохранённые правки.
@@ -358,7 +360,7 @@ static func map_color(m: MapData, i: int, env: String) -> Color:
 ## вид пола (MCF.FLOOR_LOOKS, 0 — пол окружения)].
 func _tuple(i: int) -> Array:
 	return [int(map.floor_type[i]), float(map.cover_height[i]), map.is_space[i] != 0,
-			String(map.feature_id[i]), int(map.zone_owner[i]), map.get_turn(i), map.get_look(i), map.get_accent(i), map.get_door(i)]
+			String(map.feature_id[i]), int(map.zone_owner[i]), map.get_turn(i), map.get_look(i), map.get_accent(i), map.get_door(i), map.fixtures.get(i, []).duplicate()]
 
 ## Записать клетку: в карту, в зеркало плиток, в миникарту и слой зон.
 func _write(i: int, t: Array) -> void:
@@ -371,10 +373,12 @@ func _write(i: int, t: Array) -> void:
 	var look := int(t[6]) if t.size() > 6 else 0
 	var accent := int(t[7]) if t.size() > 7 else 0
 	var door := int(t[8]) if t.size() > 8 else 0
+	var fixture := MapData.valid_fixture(t[9]) if t.size() > 9 and cover >= MCF.WALL_HEIGHT and not MCF.is_glass(feat) and feat != MCF.FEATURE_AIRLOCK else []
 	# Клетка уже такая — ни записи, ни отката: повторный мазок по тем же клеткам бесплатен.
 	if map.floor_type[i] == fl and map.cover_height[i] == cover and (map.is_space[i] != 0) == sp \
 			and map.feature_id[i] == feat and map.zone_owner[i] == zone and map.get_turn(i) == turn \
-			and map.get_look(i) == look and map.get_accent(i) == accent and map.get_door(i) == door:
+			and map.get_look(i) == look and map.get_accent(i) == accent and map.get_door(i) == door \
+			and map.fixtures.get(i, []) == fixture:
 		return
 	if _act.has("cells") and not _act["cells"].has(i):
 		_act["cells"][i] = _tuple(i)
@@ -383,6 +387,8 @@ func _write(i: int, t: Array) -> void:
 	map.cover_height[i] = cover
 	map.is_space[i] = 1 if sp else 0
 	map.feature_id[i] = feat
+	if fixture.is_empty(): map.fixtures.erase(i)
+	else: map.fixtures[i] = fixture
 	var zone_changed := zone != map.zone_owner[i]
 	map.zone_owner[i] = zone
 	var turn_changed := map.get_turn(i) != turn
@@ -423,6 +429,7 @@ func _write(i: int, t: Array) -> void:
 			gc.clear_feature()
 	if gc.cover_height != cover:
 		gc.cover_height = cover
+	gc.fixture = fixture
 	if zone_changed:
 		_zone_img.set_pixel(x, y, _zone_color(int(t[4])))
 		_zone_stale = true
@@ -584,6 +591,11 @@ func _paint_cells(cells: Array, erase: bool) -> void:
 					continue
 				done[m] = true
 			if erase:
+				if tool == Tool.SELECT and map.fixtures.has(m.y * map.width + m.x):
+					var i := m.y * map.width + m.x
+					var t := _tuple(i)
+					t[9] = []
+					_write(i, t)
 				_erase_cell(m)
 			else:
 				_brush_cell(m, mask)
@@ -602,6 +614,11 @@ func _erase_cell(c: Vector2i) -> void:
 			map.decals = kept
 			_sync_editor_decals()
 	var i := c.y * map.width + c.x
+	if map.fixtures.has(i):
+		var t := _tuple(i)
+		t[9] = []
+		_write(i, t)
+		return
 	if map.feature_id[i] != "":
 		var t := _tuple(i)
 		t[3] = ""
@@ -630,6 +647,11 @@ func _brushed(t: Array, mask: int) -> Array:
 	t = t.duplicate()
 	while t.size() < 9:
 		t.append(-1 if t.size() == 5 else 0)
+	if t.size() < 10: t.append([])
+	if Furniture.is_wall_light(brush):
+		if float(t[1]) >= MCF.WALL_HEIGHT and not MCF.is_glass(str(t[3])) and str(t[3]) != MCF.FEATURE_AIRLOCK:
+			t[9] = [brush, Furniture.durability_of(brush), mirror_turn(maxi(0, brush_turn), mask)]
+		return t
 	if brush.begins_with("accent:"):
 		t[7] = int(brush.substr(7))
 	elif brush.begins_with("door:"):
@@ -679,6 +701,7 @@ func _brushed(t: Array, mask: int) -> Array:
 				t[5] = mirror_turn(brush_turn, mask) if Furniture.is_furniture(brush) else -1
 	if _wall_brush(): t[7] = brush_accent
 	if brush == MCF.FEATURE_AIRLOCK: t[8] = brush_door
+	if float(t[1]) < MCF.WALL_HEIGHT or str(t[3]) == MCF.FEATURE_AIRLOCK or MCF.is_glass(str(t[3])): t[9] = []
 	return t
 
 ## Кортеж с видом пола (7-й элемент дописывается, если его нет).
@@ -951,6 +974,15 @@ func _rotate_hovered(back_to_auto: bool) -> bool:
 	if not map.in_bounds(_hover):
 		return false
 	var i := _hover.y * map.width + _hover.x
+	if map.fixtures.has(i):
+		_begin()
+		var t := _tuple(i)
+		t[9] = t[9].duplicate()
+		t[9][2] = 0 if back_to_auto else (int(t[9][2]) + 1) % 4
+		_write(i, t)
+		_commit()
+		queue_redraw()
+		return true
 	var fid := String(map.feature_id[i])
 	if not Furniture.is_furniture(fid):
 		return false
@@ -1076,6 +1108,20 @@ func _build_sky() -> void:
 	_sky.drift = false
 	layer.add_child(_sky)
 
+var _lighting: LightManager
+
+func _sync_lighting() -> void:
+	if not (Ui.dynamic_lighting and _lighting_preview):
+		if is_instance_valid(_lighting):
+			_lighting.free()
+			_lighting = null
+		return
+	if _grid == null: return
+	if not is_instance_valid(_lighting):
+		_lighting = LightManager.new()
+		add_child(_lighting)
+	_lighting.update_view(_grid, pan, zoom, CELL)
+
 func _process(delta: float) -> void:
 	# Куски плиток собираются по нескольку за кадр: пока бюджет кадра выбран до дна,
 	# перерисовываемся, иначе часть карты осталась бы в грубом разрешении до первого жеста.
@@ -1084,9 +1130,11 @@ func _process(delta: float) -> void:
 	if _sky != null:
 		_sky.camera = pan
 	if _modal != null or Keybinds.modal_open() or _menu_popup_open():
+		_sync_lighting()
 		return
 	var focus := get_viewport().gui_get_focus_owner()
 	if focus is LineEdit or focus is TextEdit or focus is SpinBox:
+		_sync_lighting()
 		return
 	var dir := Vector2.ZERO
 	if Keybinds.down("editor_pan_up"): dir.y += 1
@@ -1096,6 +1144,7 @@ func _process(delta: float) -> void:
 	if dir != Vector2.ZERO:
 		pan += dir.normalized() * PAN_SPEED * delta
 		queue_redraw()
+	_sync_lighting()
 
 func _unhandled_input(event: InputEvent) -> void:
 	if Keybinds.modal_open(): return
@@ -1264,11 +1313,13 @@ func _menu_popup_open() -> bool:
 
 func _input(event: InputEvent) -> void:
 	if Keybinds.modal_open() or _menu_popup_open() or not event is InputEventKey or not event.pressed or event.echo: return
+	# A shortcut can leave the scene immediately. Capture the viewport first.
+	var viewport := get_viewport()
 	if _modal != null:
 		if Keybinds.matches(event, "editor_cancel"):
+			viewport.set_input_as_handled()
 			_close_modal()
-			get_viewport().set_input_as_handled()
-	elif _shortcut(event): get_viewport().set_input_as_handled()
+	elif _shortcut(event) and is_instance_valid(viewport): viewport.set_input_as_handled()
 
 func _shortcut(e: InputEventKey) -> bool:
 	if Keybinds.typing(get_viewport()) or Keybinds.modal_open() or _menu_popup_open() or _modal != null: return false
@@ -1682,8 +1733,9 @@ func _build_preview() -> void:
 		var i := c.y * map.width + c.x
 		var sp := bool(t[2])
 		var feat := "" if sp else String(t[3])
-		var feat_new := feat != "" and feat != map.feature_id[i]
+		var feat_new: bool = (feat != "" and feat != map.feature_id[i]) or (t.size() > 9 and t[9] != map.fixtures.get(i, []))
 		var ground_new := int(t[0]) != map.floor_type[i] or sp != (map.is_space[i] != 0) \
+				or (int(t[6]) if t.size() > 6 else 0) != map.get_look(i) or brush.begins_with("floor:") \
 				or (feat == "" and map.feature_id[i] != "")
 		if ground_new or feat_new:
 			changed.append([c, ground_new, feat_new])
@@ -1747,6 +1799,7 @@ func _set_scratch(g: Grid, at: Vector2i, t: Array) -> void:
 		if t.size() > 5 and int(t[5]) >= 0:
 			g.furniture_turn[at] = [String(t[3]), int(t[5])]
 	gc.cover_height = float(t[1])
+	gc.fixture = t[9] if t.size() > 9 else []
 	if t.size() > 6 and int(t[6]) != 0:
 		if g.floor_look.is_empty():
 			g.floor_look.resize(g.width * g.height)
@@ -1841,7 +1894,7 @@ func _build_menu_bar() -> void:
 			["Clear Map…", _clear_dialog]]],
 		["View", [["Zoom In", zoom_in, "editor_zoom_in"], ["Zoom Out", zoom_out, "editor_zoom_out"],
 			["Fit Map", fit_view, "editor_fit"], [],
-			["check:grid", "Grid", "editor_grid"], ["check:zones", "Deployment Zones"], ["check:mini", "Minimap"], [],
+			["check:lighting", "Lighting Preview"], ["check:grid", "Grid", "editor_grid"], ["check:zones", "Deployment Zones"], ["check:mini", "Minimap"], [],
 			["Keyboard Shortcuts…", _shortcuts_dialog, "editor_help"]]],
 		["Presets", [["Save Selection…", _save_room_dialog], ["Manage Rooms & Structures…", _room_manager]]],
 		["Map", [["Resize…", _resize_dialog], [], ["label", "Preset"]] + _preset_items()],
@@ -1966,7 +2019,10 @@ func _menu_action(a: Variant) -> void:
 			(a as Callable).call()
 	elif a is String:
 		var s: String = a
-		if s == "check:grid":
+		if s == "check:lighting":
+			_lighting_preview = not _lighting_preview
+			_sync_lighting()
+		elif s == "check:grid":
 			show_grid = not show_grid
 		elif s == "check:zones":
 			show_zones = not show_zones
@@ -1983,6 +2039,7 @@ func _refresh_menu_checks() -> void:
 	var v: PopupMenu = _menus["View"]
 	for i in v.item_count:
 		match v.get_item_text(i):
+			"Lighting Preview": v.set_item_checked(i, _lighting_preview)
 			"Grid  (G)": v.set_item_checked(i, show_grid)
 			"Deployment Zones": v.set_item_checked(i, show_zones)
 			"Minimap": v.set_item_checked(i, _mini_rect == null or _mini_rect.get_parent().visible)
@@ -2104,6 +2161,16 @@ func _refresh_palette() -> void:
 	# Мебель (§3.15) — по разделам, а в разделе по высоте (0.9.2): высота решает, укрытие
 	# это или стена, и подписью «Стол 1.0» на каждой кнопке её искать было неудобно.
 	for cat: String in Furniture.CATEGORIES:
+		if cat == "lighting":
+			var wall_items: Array = []
+			var floor_items: Array = []
+			for fid: String in Furniture.ids():
+				if Furniture.DEFS[fid].cat != "lighting": continue
+				var item := [fid, Furniture.name_of(fid), _furniture_hint(fid)]
+				if Furniture.is_wall_light(fid): wall_items.append(item)
+				else: floor_items.append(item)
+			_palette_group("Lighting", [], 2, [["Wall-mounted · place on solid walls", wall_items], ["Freestanding", floor_items]])
+			continue
 		var by_h := {}
 		for fid: String in Furniture.ids():
 			if Furniture.DEFS[fid]["cat"] == cat and Furniture.base_of(fid) == fid:
@@ -2442,6 +2509,8 @@ func _brush_name(id: String) -> String:
 ## Подсказка кнопки мебели: высота, материал, прочность, подвижность, цена слома.
 static func _furniture_hint(fid: String) -> String:
 	var d: Dictionary = Furniture.def_of(fid)
+	if Furniture.is_wall_light(fid):
+		return "%s — attaches to a solid wall; R rotates\nShoot to destroy · durability %d\nLight strength %.2f · range %.1f tiles" % [Furniture.name_of(fid), int(d.dur), float(d.light_energy), float(d.light_range)]
 	var move: String = {"portable": "carried by hand", "drag": "dragged",
 			"fixed": "immovable"}[Furniture.mobility_name(fid)]
 	if Furniture.joins(fid):
@@ -2452,9 +2521,11 @@ static func _furniture_hint(fid: String) -> String:
 			else ("cover −%d" % Furniture.cover_penalty(float(d["h"])) if Furniture.cover_penalty(float(d["h"])) > 0
 			else "climbable, no cover")
 	var colours := Furniture.colours_of(fid).size()
-	return "%s — %.1f m, %s, %s\n%s, durability %d, breaks for %d AP%s" % [Furniture.name_of(fid),
+	var hint := "%s — %.1f m, %s, %s\n%s, durability %d, breaks for %d AP%s" % [Furniture.name_of(fid),
 			float(d["h"]), d["mat"], cover, move[0].to_upper() + move.substr(1), int(d["dur"]), int(d["ap"]),
 			"\n%d colours — pick one under the brush name" % colours if colours > 1 else ""]
+	if Furniture.emits_light(fid): hint += "\nLight strength %.2f · range %.1f tiles" % [float(d.light_energy), float(d.light_range)]
+	return hint
 
 # --- Строка состояния и заголовок ---
 

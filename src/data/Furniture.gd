@@ -6,6 +6,10 @@ extends RefCounted
 ## feature_durability. Ни своей сетки, ни узлов на предмет: движение, обзор, укрытие,
 ## сохранение, откат, сеть и повтор работают через ту же клетку, что и мешки со стенами.
 ##
+## Mounted lights are the exception: GridCell.fixture stores their id, durability
+## and facing independently of the supporting wall. Their definitions use mount="wall".
+## emits_light/light_color/light_range/light_energy describe client rendering only.
+##
 ## Новый предмет = новая строка в _BASE (цвета — в VARIANTS) (и, по желанию, плитка textures/<id>.png из
 ## tools/gen_textures.gd). Резолвер, редактор и генератор берут всё отсюда.
 ##
@@ -44,9 +48,9 @@ const N4: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Ve
 ## обхода, если в редакторе намазали поле кроватей.
 const PIECE_CAP := 16
 
-const CATEGORIES := ["residential", "office", "industrial", "public"]
+const CATEGORIES := ["residential", "office", "industrial", "public", "lighting"]
 const CATEGORY_NAMES := {"residential": "Home", "office": "Office & shop",
-		"industrial": "Industrial", "public": "Outdoor"}
+		"industrial": "Industrial", "public": "Outdoor", "lighting": "Lighting"}
 
 const FLAMMABLE := {"wood": true, "fabric": true, "plastic": true}
 
@@ -62,6 +66,43 @@ const COVER_MOD := {1.0: 2, 1.5: 3}
 
 ## Строки таблицы без цветовых вариантов; DEFS = они же плюс варианты (VARIANTS).
 const _BASE := {
+	"wall_lamp": {"name": "Wall Lamp", "cat": "lighting", "h": 0.5, "mat": "metal", "dur": 1,
+		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "wall",
+		"emits_light": true, "light_color": Color(1.0, 0.98, 0.94), "light_range": 6.5, "light_energy": 0.9},
+	"wall_strip": {"name": "Wall Strip Light", "cat": "lighting", "h": 0.5, "mat": "metal", "dur": 2,
+		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "wall",
+		"emits_light": true, "light_color": Color(1.0, 0.98, 0.94), "light_range": 8.0, "light_energy": 1.15},
+	"bulkhead_lamp": {"name": "Bulkhead Light", "cat": "lighting", "h": 0.5, "mat": "metal", "dur": 2,
+		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "wall",
+		"emits_light": true, "light_color": Color(1.0, 0.98, 0.94), "light_range": 6.0, "light_energy": 0.85},
+	"wall_beacon": {"name": "Service Indicator", "cat": "lighting", "h": 0.5, "mat": "metal", "dur": 1,
+		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "wall",
+		"emits_light": true, "light_color": Color(1.0, 0.98, 0.94), "light_range": 3.0, "light_energy": 0.3},
+	"ceiling_lamp": {"name": "Wall-top Flood Lamp", "cat": "lighting", "h": 0.5, "mat": "metal", "dur": 2,
+		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "wall",
+		"emits_light": true, "light_color": Color(1.0, 0.98, 0.94), "light_range": 9.0, "light_energy": 1.3},
+	"streetlight": {"name": "Streetlight", "cat": "lighting", "h": 1.0, "mat": "metal", "dur": 3,
+		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "floor",
+		"emits_light": true, "light_color": Color(1.0, 0.98, 0.94), "light_range": 11.0, "light_energy": 1.45},
+	"floodlight": {"name": "Floodlight", "cat": "lighting", "h": 1.0, "mat": "metal", "dur": 3,
+		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "floor",
+		"emits_light": true, "light_color": Color(1.0, 0.98, 0.94), "light_range": 13.0, "light_energy": 1.7},
+	"bollard_light": {"name": "Bollard Light", "cat": "lighting", "h": 0.5, "mat": "metal", "dur": 2,
+		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "floor",
+		"emits_light": true, "light_color": Color(1.0, 0.98, 0.94), "light_range": 5.5, "light_energy": 0.65},
+	"work_light": {"name": "Work Light", "cat": "lighting", "h": 0.5, "mat": "metal", "dur": 2,
+		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "floor",
+		"emits_light": true, "light_color": Color(1.0, 0.98, 0.94), "light_range": 8.0, "light_energy": 1.05},
+	"floor_lamp": {"name": "Floor Lamp", "cat": "lighting", "h": 0.5, "mat": "metal", "dur": 1,
+		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "floor",
+		"emits_light": true, "light_color": Color(1.0, 0.98, 0.94), "light_range": 6.0, "light_energy": 0.8},
+	"desk_lamp": {"name": "Desk with Lamp", "cat": "lighting", "h": 1.0, "mat": "metal", "dur": 2,
+		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "floor",
+		"emits_light": true, "light_color": Color(1.0, 0.98, 0.94), "light_range": 4.5, "light_energy": 0.55},
+
+	"lamp": {"name": "Lamp", "cat": "lighting", "h": 0.5, "mat": "metal", "dur": 1,
+		"mob": Mobility.FIXED, "ap": 1, "at": "wall", "gen": true, "rooms": ["utility", "outdoor"],
+		"emits_light": true, "light_color": Color(1.0, 0.98, 0.91), "light_range": 7.0, "light_energy": 0.95},
 	# --- Жильё -------------------------------------------------------------------------
 	"chair": {"name": "Chair", "cat": "residential", "h": 0.5, "mat": "wood", "dur": 1,
 		"mob": Mobility.PORTABLE, "ap": 1, "at": "free", "gen": true,
@@ -141,7 +182,7 @@ const _BASE := {
 	"storage_shelf": {"join": "run", "name": "Storage Shelf", "cat": "industrial", "h": 2.0, "mat": "metal",
 		"dur": 3, "mob": Mobility.HEAVY, "ap": 2, "at": "free", "gen": true,
 		"rooms": ["storage", "warehouse", "armory"]},
-	"server_rack": {"join": "run", "name": "Server Rack", "cat": "industrial", "h": 1.5, "mat": "metal",
+	"server_rack": {"emits_light": true, "light_color": Color(0.65, 0.80, 1.0), "light_range": 4.0, "light_energy": 0.50, "join": "run", "name": "Server Rack", "cat": "industrial", "h": 1.5, "mat": "metal",
 		"dur": 4, "mob": Mobility.FIXED, "ap": 3, "at": "free", "gen": true,
 		"rooms": ["server_room", "command"]},
 	"industrial_cabinet": {"join": "run", "name": "Industrial Cabinet", "cat": "industrial", "h": 1.5,
@@ -159,7 +200,7 @@ const _BASE := {
 	"equipment_cart": {"name": "Equipment Cart", "cat": "industrial", "h": 1.0, "mat": "metal",
 		"dur": 2, "mob": Mobility.HEAVY, "ap": 1, "at": "free", "gen": true,
 		"rooms": ["workshop", "medical", "mining", "server_room"]},
-	"generator": {"join": "whole", "sizes": [[2, 1]], "back": "long", "name": "Generator", "cat": "industrial", "h": 1.5, "mat": "metal", "dur": 5,
+	"generator": {"emits_light": true, "light_color": Color(0.65, 0.80, 1.0), "light_range": 4.0, "light_energy": 0.50, "join": "whole", "sizes": [[2, 1]], "back": "long", "name": "Generator", "cat": "industrial", "h": 1.5, "mat": "metal", "dur": 5,
 		"mob": Mobility.FIXED, "ap": 3, "at": "corner", "gen": true,
 		"rooms": ["utility", "server_room", "mining"]},
 	"toolbox": {"name": "Toolbox", "cat": "industrial", "h": 0.5, "mat": "metal", "dur": 1,
@@ -168,7 +209,7 @@ const _BASE := {
 	"ammo_crate": {"name": "Ammo Crate", "cat": "industrial", "h": 1.0, "mat": "metal", "dur": 3,
 		"mob": Mobility.HEAVY, "ap": 2, "at": "free", "gen": true,
 		"rooms": ["armory", "barracks"]},
-	"machinery": {"join": "whole", "sizes": [[2, 2], [3, 2]], "back": "", "name": "Machinery", "cat": "industrial", "h": 2.0, "mat": "metal", "dur": 4,
+	"machinery": {"emits_light": true, "light_color": Color(0.65, 0.80, 1.0), "light_range": 4.0, "light_energy": 0.50, "join": "whole", "sizes": [[2, 2], [3, 2]], "back": "", "name": "Machinery", "cat": "industrial", "h": 2.0, "mat": "metal", "dur": 4,
 		"mob": Mobility.FIXED, "ap": 3, "at": "center", "gen": true,
 		"rooms": ["workshop", "mining", "garage"]},
 	"exam_table": {"join": "whole", "sizes": [[1, 2]], "back": "short", "name": "Examination Table", "cat": "industrial", "h": 1.0, "mat": "metal",
@@ -429,3 +470,10 @@ static func for_room(room: String) -> Array:
 		if bool(DEFS[fid]["gen"]) and (DEFS[fid]["rooms"] as Array).has(room):
 			out.append(fid)
 	return out
+
+## Wall fixtures occupy their own destructible layer; the supporting wall stays intact.
+static func is_wall_light(id: String) -> bool:
+	return DEFS.get(id, {}).get("mount", "") == "wall"
+
+static func emits_light(id: String) -> bool:
+	return bool(DEFS.get(id, {}).get("emits_light", false))

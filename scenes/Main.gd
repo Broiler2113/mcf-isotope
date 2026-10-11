@@ -437,8 +437,6 @@ var _chat_toggle_btn: Button
 var _chat_moved: bool = false
 var _log_moved: bool = false
 ## Состояние перетаскивания панелей (item 8).
-var _panel_drag: Control = null
-var _panel_drag_off: Vector2 = Vector2.ZERO
 var _menu: PanelContainer
 var _picker: PanelContainer
 ## Клетка под наведённой кнопкой выбора («Station at (45, 32)» и подобные). Пока мышь на
@@ -511,6 +509,7 @@ func _ready() -> void:
 	Keybinds.changed.connect(_refresh_menu_hotkeys)
 	_spectator = NetHandoff.session != null and NetHandoff.spectators.has(NetHandoff.session.my_peer_id())
 	Ui.board_settings_changed.connect(queue_redraw)
+	Ui.board_settings_changed.connect(_sync_lighting)
 	p1_is_ai = GameConfig.p1_is_ai
 	p2_is_ai = GameConfig.p2_is_ai
 	ai_difficulty = GameConfig.ai_difficulty
@@ -559,7 +558,54 @@ func _ready() -> void:
 	queue_redraw()
 
 # --- Панорама камеры по WASD ---
+var _group_zone_layer: Node2D
+var _group_zone_draw_key: Array = []
+var _group_mouse_cell := Vector2i(-1, -1)
+var _group_preview: GroupMovePreview
+var _group_order_pending := Vector2i(-1, -1)
+var _group_order_signature: Array = []
+
+func _advance_group_preview() -> void:
+	if mode != Mode.GROUP_MOVE or _animating:
+		if is_instance_valid(_group_zone_layer): _group_zone_layer.hide()
+		_group_preview = null
+		_group_order_pending = Vector2i(-1, -1)
+		return
+	if _group_order_pending != Vector2i(-1, -1) and _group_order_signature != GroupMovePreview.key(resolver, _group_ids):
+		_group_order_pending = Vector2i(-1, -1)
+	if _group_preview == null: _group_preview = GroupMovePreview.new()
+	var dest := _group_order_pending if _group_order_pending != Vector2i(-1, -1) else _pos_to_cell(get_global_mouse_position())
+	var prior: Array = [_group_preview.revision, _group_preview.target, _group_preview.job.done if _group_preview.job != null else false]
+	var ready := _group_preview.sync(resolver, _group_ids, dest, _group_tactical)
+	if ready and _group_order_pending != Vector2i(-1, -1):
+		var plan := _group_preview.plan()
+		_group_order_pending = Vector2i(-1, -1)
+		_commit_group_plan(plan)
+	elif prior != [_group_preview.revision, _group_preview.target, ready]:
+		queue_redraw()
+
+var _lighting: LightManager
+
+func _sync_lighting() -> void:
+	if not (Ui.dynamic_lighting):
+		if is_instance_valid(_lighting):
+			_lighting.free()
+			_lighting = null
+		return
+	if state == null or state.grid == null: return
+	if not is_instance_valid(_lighting):
+		_lighting = LightManager.new()
+		add_child(_lighting)
+	if _before_on and _before_grid != null:
+		_lighting.update_view(_before_grid, pan + ORIGIN * zoom + position, zoom, CELL)
+	else:
+		var view := _view_resolver()
+		var limited := view.visibility_limited()
+		_lighting.update_view(state.grid, pan + ORIGIN * zoom + position, zoom, CELL,
+			view.team_visible_coords(_viewing_side()) if limited else {}, limited, _fx)
+
 func _process(delta: float) -> void:
+	_advance_group_preview()
 	_update_screen_shake()
 	# Не двигаем камеру, пока игрок печатает в текстовом поле (например, IP хоста).
 	_reposition_hud_grip()
@@ -569,6 +615,7 @@ func _process(delta: float) -> void:
 	_fit_ground()
 	var focused := get_viewport().gui_get_focus_owner()
 	if focused is LineEdit or focused is TextEdit or Keybinds.modal_open() or _quit_dialog.visible:
+		_sync_lighting()
 		return
 	var dir := Vector2.ZERO
 	if Keybinds.down("game_pan_up"): dir.y += 1
@@ -583,6 +630,7 @@ func _process(delta: float) -> void:
 	# засыпает и кадры снова ничего не стоят.
 	if _fx.advance(delta):
 		queue_redraw()
+	_sync_lighting()
 
 func _update_screen_shake() -> void:
 	var age := 1.0
@@ -1222,7 +1270,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	# выделения не ломаем — перерисовываем только при отпущенной ЛКМ.
 	if mode == Mode.GROUP_MOVE and event is InputEventMouseMotion \
 			and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) == 0:
-		queue_redraw()
+		var cell := _pos_to_cell(get_global_mouse_position())
+		if cell != _group_mouse_cell:
+			_group_mouse_cell = cell
+			queue_redraw()
 		return
 	# Рамка выделения (RTS, #18): в нейтральных режимах ЛКМ тянет прямоугольник,
 	# отпускание выделяет всех своих активных юнитов внутри. Короткая протяжка — обычный
@@ -1347,6 +1398,15 @@ func _handle_click(coord: Vector2i) -> void:
 				return
 			if occupant != null and target_ids.has(occupant.id):
 				_begin_shoot(occupant)
+				return
+			if item_cells.has(coord) and resolver.can_shoot_fixture(_selected_unit(), coord) == "":
+				var shooter := _selected_unit()
+				var count: int = shooter.action_state.remaining_shots if _pending_shoot(shooter) else shooter.rate_of_fire()
+				var sid := selected_id
+				if count > 1:
+					_open_shot_picker(Furniture.DEFS[resolver.fixture_at(coord)].name, count,
+						func(n: int) -> Intent: return ShootIntent.new(sid, -1, n, coord, "fixture"))
+				else: _submit(ShootIntent.new(sid, -1, -1, coord, "fixture"))
 				return
 			# Шахтёр (item 15): клик по соседней вражеской машине — удар ломом по корпусу.
 			if not _melee_veh_ids.is_empty():
@@ -2126,8 +2186,9 @@ func _enter_shoot() -> void:
 		elif u.stats.special_ability_id == MCF.ABILITY_MINER:
 			_melee_veh_ids = resolver.meleeable_vehicle_ids(u)
 		# Обычный стрелок может разбить окно (batch ui-drones) — клик по стеклу.
-		elif u.remaining_ap > 0 and not _is_marksman(u):
+		elif (u.remaining_ap > 0 or _pending_shoot(u)) and not _is_marksman(u):
 			item_cells = resolver.shootable_window_cells(u)
+			item_cells.append_array(resolver.shootable_fixture_cells(u))
 	else:
 		target_ids = []
 	_menu.hide()
@@ -2591,8 +2652,16 @@ func _group_move_to(dest: Vector2i) -> void:
 	#
 	# Та же раскладка, что и в предпросмотре (§18.3): игрок получает ровно те клетки,
 	# кружки которых он видел под курсором.
-	var plan := _group_plan(dest)
-	_regroup_ids = _group_ids.duplicate()  # после хода отряд выделяется снова
+	# Keep the UI responsive even when a click arrives before the preview is ready.
+	if _group_preview == null or _group_preview.target != dest or _group_preview.job == null \
+			or not _group_preview.job.done or _group_preview.signature != GroupMovePreview.key(resolver, _group_ids):
+		_group_order_pending = dest
+		_group_order_signature = GroupMovePreview.key(resolver, _group_ids)
+		return
+	_commit_group_plan(_group_preview.plan())
+
+func _commit_group_plan(plan: Array) -> void:
+	_regroup_ids = _group_ids.duplicate()
 	_set_group([])
 	queue_redraw()
 	if not plan[0].is_empty():
@@ -2660,6 +2729,39 @@ func _enter_push() -> void:
 	target_ids = resolver.pushable_target_ids(u)
 	_menu.hide()
 	queue_redraw()
+
+
+func _open_build_picker() -> void:
+	var unit := _selected_unit()
+	if unit == null or unit.stats.special_ability_id != MCF.ABILITY_ENGINEER: return
+	for child in _picker.get_children(): child.queue_free()
+	var vb := _scroll_menu(_picker, "Build fortification")
+	for feat in [MCF.FEATURE_SANDBAGS, MCF.FEATURE_WALL, MCF.FEATURE_DOT,
+			MCF.FEATURE_DOT_OPEN, MCF.FEATURE_GLASS, MCF.FEATURE_AIRLOCK,
+			MCF.FEATURE_LDF, MCF.FEATURE_DPMG, MCF.FEATURE_HEDGEHOG]:
+		# Инженер в борге строит партиями (batch 13 B7): цену и остаток даёт резолвер.
+		var cost: int = resolver.build_cost_for(unit, feat)
+		if resolver.buildable_cells(unit, feat).is_empty():
+			continue
+		# ЛДФ — одна на всю игру (#40): скрываем кнопку, если уже израсходована.
+		if feat == MCF.FEATURE_LDF and unit.ldf_wall_used:
+			continue
+		var can_afford := unit.remaining_ap >= cost or int(unit.build_credits.get(feat, 0)) > 0
+		if feat == MCF.FEATURE_LDF:
+			# ЛДФ — цепочка из 6 клеток, «рисуется» вручную (§3.7).
+			_act_btn(vb, "Build: LDF wall (%d tiles, %d AP)" % [MCF.LDF_WALL_LENGTH, cost],
+					_enter_build_wall, can_afford, "Needs %d AP" % cost)
+		else:
+			var label := "Build: %s (%d AP)" % [MCF.FEATURE_NAMES[feat], cost]
+			if unit.borg_id != -1 and MCF.BORG_BATCH_FEATURES.has(feat):
+				var left: int = int(unit.build_credits.get(feat, 0))
+				label = "Build: %s (%s)" % [MCF.FEATURE_NAMES[feat],
+						("%d left in batch" % left) if left > 0 else "1 AP for %d" % MCF.BORG_BUILD_BATCH]
+			_act_btn(vb, label, _enter_build.bind(feat), can_afford, "Needs %d AP" % cost)
+	_number_picker()
+	_menu.hide()
+	_anchor_menu(_picker)
+	_picker.show()
 
 func _enter_build(feature_id: String) -> void:
 	var u := _selected_unit()
@@ -3149,6 +3251,7 @@ func _capture_opening_view() -> void:
 				b.feature_durability = a.feature_durability
 			b.cover_height = a.cover_height
 			b.airlock_welded = a.airlock_welded
+			b.fixture = a.fixture
 	g.furniture_turn = src.furniture_turn.duplicate(true)
 	g.wall_accent = src.wall_accent.duplicate()
 	g.door_look = src.door_look.duplicate()
@@ -4051,14 +4154,14 @@ func _good_for_viewer(success: bool, roller: int) -> bool:
 func _dice_steps(ev: Dictionary) -> Array:
 	var steps: Array = []
 	match ev["kind"]:
-		"glass":
+		"glass", "fixture":
 			# Стекло на пути очереди (0.9.2): стрелок бросает попадание в стекло, стекло —
 			# спасбросок за каждую попавшую пулю; осыпается оно после этих бросков.
 			var g_own := int(ev.get("shooter_owner", -1))
 			var g_faces: Array = []
 			for h: Dictionary in ev["hits"]:
 				g_faces.append({"value": h["roll"], "good": _good_for_viewer(h["hit"], g_own),
-					"tag": "Glass %d+" % int(ev["need"])})
+					"tag": ("Light %d+" if ev["kind"] == "fixture" else "Glass %d+") % int(ev["need"])})
 			var g_manual := _owner_is_local_human(g_own)
 			var g_name := String(ev["name"]).to_lower()
 			steps.append({"faces": g_faces, "manual": g_manual, "roller": g_own,
@@ -4369,24 +4472,45 @@ func _drone_path_to(dr: UnitInstance, hover: Vector2i) -> Array[Vector2i]:
 		_drone_path = resolver.drone_route_to(dr, hover)
 	return _drone_path
 
-func _draw_zone_cells(tier_at: Dictionary, label_at: Dictionary, on_path: Dictionary = {}) -> void:
+func _draw_cached_group_zone(zone: Dictionary) -> void:
+	if not is_instance_valid(_group_zone_layer):
+		_group_zone_layer = Node2D.new()
+		_group_zone_layer.show_behind_parent = true
+		add_child(_group_zone_layer)
+		_group_zone_layer.draw.connect(func() -> void:
+			if _group_preview != null and _group_preview.zone_ready:
+				_draw_zone_cells(_group_preview.zone.tier, _group_preview.zone.label, {}, _group_zone_layer))
+	_group_zone_layer.visible = not zone.tier.is_empty()
+	_group_zone_layer.position = pan
+	_group_zone_layer.scale = Vector2(zoom, zoom)
+	var key := [_group_preview.get_instance_id() if _group_preview != null else 0, _group_preview.revision if _group_preview != null else -1,
+		_pos_to_cell(Vector2.ZERO), _pos_to_cell(get_viewport_rect().size), zoom >= MOVE_LABEL_MIN_ZOOM]
+	if key != _group_zone_draw_key:
+		_group_zone_draw_key = key
+		_group_zone_layer.queue_redraw()
+
+func _draw_zone_cells(tier_at: Dictionary, label_at: Dictionary, on_path: Dictionary = {}, canvas: Node2D = null) -> void:
+	var painter := self if canvas == null else canvas
 	var font := ThemeDB.fallback_font
 	var cvec := Vector2(CELL, CELL)
 	var half := cvec * 0.5
-	var hover := _pos_to_cell(get_global_mouse_position())
+	var hover := _pos_to_cell(get_global_mouse_position()) if canvas == null else Vector2i(-1, -1)
 	var labels: bool = zoom >= MOVE_LABEL_MIN_ZOOM
+	var top := _pos_to_cell(Vector2.ZERO) - Vector2i.ONE
+	var bottom := _pos_to_cell(get_viewport_rect().size) + Vector2i.ONE
 	for c: Vector2i in tier_at:
+		if c.x < top.x or c.y < top.y or c.x > bottom.x or c.y > bottom.y: continue
 		var origin := _cell_origin(c)
 		var k: int = tier_at[c]
-		draw_rect(Rect2(origin, cvec), MOVE_TIER_COLS[k][1 if c == hover or on_path.has(c) else 0])
+		painter.draw_rect(Rect2(origin, cvec), MOVE_TIER_COLS[k][1 if c == hover or on_path.has(c) else 0])
 		for d: Vector2i in GameActionResolver.DIR4:
 			if tier_at.has(c + d) and int(tier_at[c + d]) <= k:
 				continue
 			var a := origin + half + (Vector2(d) + Vector2(-d.y, d.x)) * half
 			var b := origin + half + (Vector2(d) - Vector2(-d.y, d.x)) * half
-			draw_line(a, b, MOVE_TIER_COLS[k][2], 2.0)
+			painter.draw_line(a, b, MOVE_TIER_COLS[k][2], 2.0)
 		if labels and label_at.has(c):
-			draw_string(font, origin + Vector2(4, 13), label_at[c],
+			painter.draw_string(font, origin + Vector2(4, 13), label_at[c],
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.92, 0.95, 0.9, 0.85))
 
 ## Зоны хода по цене клеток (техника, дрон): заливка по зоне (1/2/3 ОД — зелёная,
@@ -5085,15 +5209,15 @@ func _draw() -> void:
 		# Как у одиночного бойца (batch group-zones): зелёная/оранжевая/красная зоны с
 		# контуром и ценой клетки; под курсором — путь каждого бойца в цвет его зоны,
 		# кружок места и сколько ОД он потратит.
-		var gz := _group_zone()
-		_draw_zone_cells(gz["tier"], gz["label"])
+		var gz: Dictionary = _group_preview.zone if _group_preview != null and _group_preview.zone_ready else {"tier": {}, "label": {}, "reach": {}}
+		_draw_cached_group_zone(gz)
 		var ghov := _pos_to_cell(get_global_mouse_position())
 		if state.grid.in_bounds(ghov):
 			draw_rect(Rect2(_cell_origin(ghov), Vector2(CELL, CELL)), Color(0.95, 0.85, 0.2, 0.20))
 			var half := Vector2(CELL, CELL) * 0.5
 			# Тактический приказ — голубые кружки, обычный — жёлтые.
 			var dot := Color(0.35, 0.85, 1.0, 0.85) if _group_tactical else Color(1.0, 0.9, 0.25, 0.85)
-			var plan := _group_plan(ghov)
+			var plan: Array = _group_preview.plan() if _group_preview != null and _group_preview.target == ghov else [[], []]
 			var reaches: Dictionary = gz["reach"]
 			for i in plan[0].size():
 				var gid: int = plan[0][i]
@@ -6388,7 +6512,7 @@ func _build_ui() -> void:
 	var frame := VBoxContainer.new()
 	frame.add_theme_constant_override("separation", 0)
 	panel.add_child(frame)
-	frame.add_child(SteamChrome.header_bar("MCF Tactics"))
+	frame.add_child(SteamChrome.header_bar("MCF Isotope"))
 	var body := ScrollContainer.new()
 	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -7474,49 +7598,7 @@ func _set_panel_collapsed(panel: Control, body: Control, btn: Button,
 ## и расти им некуда, кроме как вверх. Меняется минимальный размер тела (body), панель
 ## подстраивается под него.
 func _resize_grip(panel: Control, body: Control, grow_x: float, on_start: Callable) -> Control:
-	# Три косые черты — рисуем сами: стрелочных глифов в системном шрифте может не быть.
-	var grip := Control.new()
-	grip.custom_minimum_size = Vector2(16, 16)
-	grip.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	grip.draw.connect(func() -> void:
-		var col := Color("#b0b0b0")
-		for i in 3:
-			var k := 4.0 + i * 4.0
-			if grow_x < 0.0:
-				grip.draw_line(Vector2(0, 16 - k), Vector2(k, 16), col, 1.5)
-			else:
-				grip.draw_line(Vector2(16 - k, 16), Vector2(16, 16 - k), col, 1.5))
-	grip.tooltip_text = "Drag to resize"
-	grip.mouse_filter = Control.MOUSE_FILTER_STOP
-	grip.mouse_default_cursor_shape = Control.CURSOR_FDIAGSIZE if grow_x < 0.0 \
-			else Control.CURSOR_BDIAGSIZE
-	var state := {"on": false, "from": Vector2.ZERO, "size": Vector2.ZERO, "bottom": 0.0,
-			"right": 0.0}
-	grip.gui_input.connect(func(e: InputEvent) -> void:
-		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
-			state["on"] = e.pressed
-			if e.pressed:
-				on_start.call()
-				state["from"] = e.global_position
-				state["size"] = body.custom_minimum_size
-				state["bottom"] = panel.position.y + panel.size.y
-				state["right"] = panel.position.x + panel.size.x
-			grip.accept_event()
-		elif e is InputEventMouseMotion and state["on"]:
-			var d: Vector2 = e.global_position - state["from"]
-			var vp := get_viewport_rect().size
-			var sz: Vector2 = state["size"] + Vector2(d.x * grow_x, -d.y)
-			sz.x = clampf(sz.x, 220.0, vp.x * 0.6)
-			sz.y = clampf(sz.y, 60.0, vp.y * 0.7)
-			body.custom_minimum_size = sz
-			panel.reset_size()
-			# Нижняя кромка (и та боковая, от которой растём) — на месте.
-			var bottom: float = state["bottom"]
-			panel.position.y = clampf(bottom - panel.size.y, 0.0, vp.y - panel.size.y)
-			if grow_x < 0.0:
-				panel.position.x = clampf(float(state["right"]) - panel.size.x, 0.0, vp.x - panel.size.x)
-			grip.accept_event())
-	return grip
+	return PanelInteraction.resize_grip(panel, body, grow_x, on_start)
 
 ## Полоса прокрутки журнала и чата (item 19): прокрутка включена, а ширину полосе даёт
 ## тема (UiTheme: поля стиля полосы), так что её можно взять мышью и тащить.
@@ -7526,21 +7608,7 @@ func _style_panel_scroll(rtl: RichTextLabel) -> void:
 ## Сделать панель перетаскиваемой за её шапку (item 8). on_move помечает панель как
 ## сдвинутую вручную, чтобы _reposition_hud_grip перестал возвращать её в угол.
 func _make_panel_draggable(panel: Control, header: Control, on_move: Callable) -> void:
-	header.mouse_filter = Control.MOUSE_FILTER_STOP
-	header.gui_input.connect(func(e: InputEvent) -> void:
-		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
-			if e.pressed:
-				_panel_drag = panel
-				_panel_drag_off = panel.global_position - e.global_position
-				on_move.call()
-			elif _panel_drag == panel:
-				_panel_drag = null
-		elif e is InputEventMouseMotion and _panel_drag == panel:
-			var vp := get_viewport_rect().size
-			var p: Vector2 = e.global_position + _panel_drag_off
-			p.x = clampf(p.x, 0.0, maxf(0.0, vp.x - panel.size.x))
-			p.y = clampf(p.y, 0.0, maxf(0.0, vp.y - panel.size.y))
-			panel.position = p)
+	PanelInteraction.draggable(panel, header, on_move)
 
 func _replay_chat_history() -> void:
 	if _chat_log == null:
@@ -7956,29 +8024,7 @@ func _open_menu(unit: UnitInstance) -> void:
 		# Инженер: постройка укреплений (§3.7). Кнопка остаётся на месте весь ход (item 27) —
 		# гаснет, когда не хватает ОД, а не исчезает; появляется, только если строить есть где.
 		if unit.stats.special_ability_id == MCF.ABILITY_ENGINEER:
-			for feat in [MCF.FEATURE_SANDBAGS, MCF.FEATURE_WALL, MCF.FEATURE_DOT,
-					MCF.FEATURE_DOT_OPEN, MCF.FEATURE_GLASS, MCF.FEATURE_AIRLOCK,
-					MCF.FEATURE_LDF, MCF.FEATURE_DPMG, MCF.FEATURE_HEDGEHOG]:
-				# Инженер в борге строит партиями (batch 13 B7): цену и остаток даёт резолвер.
-				var cost: int = resolver.build_cost_for(unit, feat)
-				if resolver.buildable_cells(unit, feat).is_empty():
-					continue
-				# ЛДФ — одна на всю игру (#40): скрываем кнопку, если уже израсходована.
-				if feat == MCF.FEATURE_LDF and unit.ldf_wall_used:
-					continue
-				var can_afford := unit.remaining_ap >= cost
-				if feat == MCF.FEATURE_LDF:
-					# ЛДФ — цепочка из 6 клеток, «рисуется» вручную (§3.7).
-					_act_btn(vb, "Build: LDF wall (%d tiles, %d AP)" % [MCF.LDF_WALL_LENGTH, cost],
-							_enter_build_wall, can_afford, "Needs %d AP" % cost, "action_build")
-				else:
-					var label := "Build: %s (%d AP)" % [MCF.FEATURE_NAMES[feat], cost]
-					if unit.borg_id != -1 and MCF.BORG_BATCH_FEATURES.has(feat):
-						var left: int = int(unit.build_credits.get(feat, 0))
-						label = "Build: %s (%s)" % [MCF.FEATURE_NAMES[feat],
-								("%d left in batch" % left) if left > 0 else "1 AP for %d" % MCF.BORG_BUILD_BATCH]
-					_act_btn(vb, label, _enter_build.bind(feat), can_afford, "Needs %d AP" % cost, "action_build")
-
+			_act_btn(vb, "Build…", _open_build_picker, true, "", "action_build")
 		# Инженер: заварить соседний шлюз (#99).
 		if not resolver.weldable_cells(unit).is_empty():
 			var weld_btn := Button.new()
@@ -8633,8 +8679,9 @@ func _refresh_choice_labels() -> void:
 # _input precedes GUI focus traversal: Tab and replay Space/arrows must not activate
 # a previously focused HUD button. Text fields and modal windows retain their input.
 func _input(event: InputEvent) -> void:
-	if event is InputEventKey and _handle_shortcut(event):
-		get_viewport().set_input_as_handled()
+	var viewport := get_viewport()
+	if event is InputEventKey and _handle_shortcut(event) and is_instance_valid(viewport):
+		viewport.set_input_as_handled()
 
 func _handle_shortcut(event: InputEventKey) -> bool:
 	if not event.pressed or event.echo or Keybinds.typing(get_viewport()): return false
@@ -8681,6 +8728,10 @@ func _handle_shortcut(event: InputEventKey) -> bool:
 		_wall_commit()
 		return true
 	if _animating or replay != null or not _my_turn() or _match_over: return false
+	if Keybinds.matches(event, "game_multiselect") and not (_menu.visible and _menu_actions.has("action_seat")):
+		if _multi_btn != null and not _multi_btn.disabled:
+			_multi_btn.button_pressed = not _multi_btn.button_pressed
+		return true
 	if _picker != null and _picker.visible:
 		if Keybinds.matches(event, "picker_previous"): _change_choice_page(-1); return true
 		if Keybinds.matches(event, "picker_next"): _change_choice_page(1); return true

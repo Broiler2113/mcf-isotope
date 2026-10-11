@@ -150,7 +150,7 @@ func _ready() -> void:
 		_lan_adv = LanDiscovery.new()
 		get_tree().root.add_child.call_deferred(_lan_adv)
 		_lan_adv.start_advertising.call_deferred({
-			"name": "MCF Tactics", "players": 1, "port": NetworkSession.DEFAULT_PORT})
+			"name": "MCF Isotope", "players": 1, "port": NetworkSession.DEFAULT_PORT})
 
 # --- Хост: рассадка гостей и рассылка снимка (batch 12 #8) --------------------------
 func _on_host_peer_joined(id: int) -> void:

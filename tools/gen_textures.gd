@@ -28,6 +28,11 @@ const OUT := "res://textures/"
 
 func _initialize() -> void:
 	var t0 := Time.get_ticks_msec()
+	if "--lamps" in OS.get_cmdline_user_args():
+		for id: String in Furniture.ids():
+			if Furniture.DEFS[id].cat == "lighting" or id == "lamp": _save(id, _furniture(id))
+		quit()
+		return
 	# `-- --furniture` — только мебель (§3.15): прочие плитки не трогаем, их файлы
 	# остаются байт в байт.
 	if "--furniture" in OS.get_cmdline_user_args():
@@ -1081,6 +1086,54 @@ func _furniture(fid: String) -> Image:
 ## ["dot", точка, цвет].
 func _furniture_ops(fid: String) -> Array:
 	match fid:
+		"lamp":
+			return [["box", Rect2i(7, 6, 18, 20), Color8(66, 72, 78)],
+				["box", Rect2i(9, 8, 14, 15), Color8(190, 195, 178)],
+				["rect", Rect2i(11, 10, 10, 11), Color8(235, 236, 212)],
+				["rect", Rect2i(9, 14, 14, 2), Color8(78, 83, 88)],
+				["dot", Vector2i(9, 7), Color8(152, 157, 160)],
+				["dot", Vector2i(22, 24), Color8(152, 157, 160)]]
+		"wall_lamp":
+			var light := Color8(222, 225, 211)
+			return [["box", Rect2i(5, 4, 22, 12), STEEL_DARK], ["box", Rect2i(7, 6, 18, 8), light],
+				["rect", Rect2i(10, 6, 2, 8), STEEL], ["rect", Rect2i(20, 6, 2, 8), STEEL],
+				["dot", Vector2i(6, 5), Color8(145, 148, 149)]]
+		"bulkhead_lamp":
+			return [["round", Rect2i(5, 3, 22, 15), STEEL_DARK], ["round", Rect2i(8, 5, 16, 11), Color8(215, 220, 208)],
+				["rect", Rect2i(8, 9, 16, 2), STEEL], ["rect", Rect2i(12, 5, 2, 11), STEEL],
+				["rect", Rect2i(19, 5, 2, 11), STEEL], ["dot", Vector2i(6, 10), Color8(147, 149, 148)]]
+		"wall_strip":
+			return [["box", Rect2i(2, 5, 28, 9), STEEL_DARK], ["rect", Rect2i(5, 7, 22, 4), Color8(231, 233, 220)],
+				["rect", Rect2i(3, 6, 2, 6), STEEL], ["rect", Rect2i(27, 6, 2, 6), STEEL]]
+		"wall_beacon":
+			return [["box", Rect2i(11, 4, 10, 13), STEEL_DARK], ["round", Rect2i(13, 6, 6, 8), Color8(197, 214, 214)],
+				["rect", Rect2i(13, 15, 6, 2), STEEL]]
+		"ceiling_lamp":
+			return [["box", Rect2i(5, 8, 22, 16), STEEL_DARK], ["box", Rect2i(7, 10, 18, 12), Color8(213, 217, 206)],
+				["rect", Rect2i(8, 14, 16, 2), STEEL], ["rect", Rect2i(15, 10, 2, 12), STEEL]]
+		"streetlight":
+			return [["box", Rect2i(11, 23, 10, 6), STEEL_DARK], ["box", Rect2i(14, 6, 4, 20), STEEL],
+				["box", Rect2i(8, 3, 16, 9), STEEL_DARK], ["rect", Rect2i(10, 5, 12, 4), Color8(233, 231, 210)],
+				["dot", Vector2i(12, 25), Color8(148, 151, 148)]]
+		"floodlight":
+			return [["box", Rect2i(5, 25, 22, 3), STEEL_DARK], ["box", Rect2i(14, 9, 4, 17), STEEL],
+				["box", Rect2i(2, 3, 13, 12), STEEL_DARK], ["box", Rect2i(17, 3, 13, 12), STEEL_DARK],
+				["rect", Rect2i(4, 5, 9, 7), Color8(231, 233, 222)], ["rect", Rect2i(19, 5, 9, 7), Color8(231, 233, 222)]]
+		"bollard_light":
+			return [["round", Rect2i(10, 7, 12, 21), STEEL_DARK], ["box", Rect2i(11, 9, 10, 8), Color8(222, 225, 211)],
+				["rect", Rect2i(10, 16, 12, 3), STEEL], ["rect", Rect2i(13, 20, 6, 5), STEEL]]
+		"work_light":
+			return [["box", Rect2i(5, 24, 22, 3), STEEL_DARK], ["box", Rect2i(14, 12, 4, 13), STEEL],
+				["box", Rect2i(5, 4, 22, 15), Color8(134, 121, 76)], ["box", Rect2i(8, 7, 16, 9), Color8(225, 227, 212)],
+				["rect", Rect2i(14, 7, 2, 9), STEEL]]
+		"floor_lamp":
+			return [["round", Rect2i(9, 23, 14, 6), WOOD_DARK], ["box", Rect2i(14, 10, 4, 16), STEEL],
+				["round", Rect2i(6, 4, 20, 13), Color8(208, 206, 186)], ["rect", Rect2i(9, 15, 14, 2), WOOD_DARK]]
+		"desk_lamp":
+			return [["box", Rect2i(3, 6, 26, 20), WOOD], ["rect", Rect2i(6, 14, 10, 8), Color8(211, 210, 199)],
+				["round", Rect2i(20, 19, 6, 4), STEEL_DARK], ["rect", Rect2i(22, 10, 2, 10), STEEL],
+				["box", Rect2i(16, 8, 10, 6), Color8(204, 212, 192)]]
+
 		"chair":
 			return [["box", Rect2i(9, 8, 14, 16), WOOD], ["box", Rect2i(9, 6, 14, 5), WOOD_DARK]]
 		"armchair":

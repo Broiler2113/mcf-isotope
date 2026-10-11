@@ -1,4 +1,4 @@
-MCF TACTICS -- TEXTURE REPLACEMENT
+MCF ISOTOPE -- TEXTURE REPLACEMENT
 
 Drop an image in this folder named after any entry below and it replaces
 that sprite everywhere in the game. Delete the file to get the original back.
@@ -245,6 +245,18 @@ Samples are never loaded into the game -- a file called sample is skipped.
   plastic_table.png
   plastic_table_blue.png
   plastic_table_white.png
+  wall_lamp.png
+  wall_strip.png
+  bulkhead_lamp.png
+  wall_beacon.png
+  ceiling_lamp.png
+  streetlight.png
+  floodlight.png
+  bollard_light.png
+  work_light.png
+  floor_lamp.png
+  desk_lamp.png
+  lamp.png
 
 == Factions ==
 Sides are factions, not colours. Soldiers accept a faction suffix:

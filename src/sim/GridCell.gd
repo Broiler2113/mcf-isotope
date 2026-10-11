@@ -132,7 +132,7 @@ func _journal() -> void:
 func image() -> Array:
 	return [floor_type, cover_height, on_fire, fire_owner, fire_suppressed_until, is_space,
 			occupant, vehicle_id, feature_id, station_operator_id, feature_owner,
-			feature_durability, corpse_count, dirt_level, airlock_welded, gas]
+			feature_durability, corpse_count, dirt_level, airlock_welded, gas, fixture.duplicate()]
 
 ## Вернуть клетке снятый image() — через сеттеры, чтобы версии и кеши узнали о правке.
 ## Высота идёт раньше объекта: сеттер feature_id смотрит на неё (стекло в стене).
@@ -154,6 +154,15 @@ func apply_image(im: Array) -> void:
 	airlock_welded = im[14]
 	if im.size() > 15:
 		gas = im[15]
+	fixture = im[16] if im.size() > 16 else []
+
+## [furniture id, remaining durability, clockwise quarter turns], or empty.
+var fixture: Array = []:
+	set(v):
+		if fixture == v: return
+		if journaling: _journal()
+		fixture = v.duplicate()
+		log_look_change(coord.x, coord.y)
 
 var coord: Vector2i
 var floor_type: int = 0:
@@ -175,6 +184,7 @@ var cover_height: float = 0.0:
 		# лучей) ради изменения, которого этот кеш не видит.
 		var was_wall := cover_height >= MCF.WALL_HEIGHT
 		cover_height = v
+		if v < MCF.WALL_HEIGHT and not fixture.is_empty(): fixture = []
 		walk_version += 1
 		log_look_change(coord.x, coord.y)
 		if was_wall != (v >= MCF.WALL_HEIGHT):
@@ -277,6 +287,7 @@ var feature_id: String = "":
 		# сеттер высоты этого не заметит. Ловим переход здесь.
 		var saw_through := MCF.is_glass(feature_id)
 		feature_id = v
+		if (MCF.is_glass(v) or v == MCF.FEATURE_AIRLOCK) and not fixture.is_empty(): fixture = []
 		walk_version += 1
 		feature_version += 1
 		log_look_change(coord.x, coord.y)

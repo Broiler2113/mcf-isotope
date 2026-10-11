@@ -98,6 +98,12 @@ func _menus() -> void:
 	var engineer: UnitInstance = board.state.grid.cell(Vector2i(8, 6)).occupant
 	board._select(engineer)
 	ck(board._menu_actions.has("action_build"), "engineer offers Build")
+	var multi_before: bool = board._multi_btn.button_pressed
+	press(KEY_Z)
+	ck(board._multi_btn.button_pressed != multi_before, "Z enables existing multiselect")
+	press(KEY_Z)
+	ck(board._multi_btn.button_pressed == multi_before, "Z toggles multiselect back off")
+	board._select(engineer)
 	press(KEY_N)
 	ck(board._picker.visible and board._number_choices.size() > 1, "N opens available build choices")
 	var first: Button = board._number_choices[0]
@@ -149,6 +155,11 @@ func _menus() -> void:
 	ck(board.resolver.resolve(VehicleBoardIntent.new(rider.id, shuttle.id, Vehicle.DRIVER_SEAT)).ok, "fixture boards shuttle")
 	board._select(rider)
 	ck(board._menu_actions.has("action_seat"), "passenger offers seat change on Z")
+	var passenger_multi: bool = board._multi_btn.button_pressed
+	press(KEY_Z)
+	ck(board._multi_btn.button_pressed == passenger_multi, "passenger Z keeps Change Seat instead of toggling multiselect")
+	press(KEY_ESCAPE)
+	board._select(rider)
 	press(KEY_M)
 	ck(board.mode == board.Mode.VEH_DISEMBARK, "passenger M selects exit")
 	# Runtime collision fallback is displayed and invokes the correct second callback.

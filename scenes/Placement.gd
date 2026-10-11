@@ -134,6 +134,7 @@ var _tile_grid: Grid = null
 
 func _ready() -> void:
 	Ui.board_settings_changed.connect(queue_redraw)
+	Ui.board_settings_changed.connect(_sync_lighting)
 	budget = GameConfig.budget
 	roster = GameConfig.active_roster()
 	for side in _sides():
@@ -730,6 +731,22 @@ func _neutral_at(coord: Vector2i) -> int:
 ## Небо за доской (0.9.3): клетки космоса не рисуются, и в прорехах виден параллакс
 ## звёзд — тот же, что в главном меню и в бою. Карте без космоса оно не нужно.
 var _sky: Starfield = null
+var _ground: GroundBackdrop = null
+
+func _fit_ground() -> void:
+	if map == null: return
+	if _ground == null:
+		_ground = GroundBackdrop.new()
+		_ground.z_index = -20
+		add_child(_ground)
+		var env := map.environment()
+		_ground.texture = GroundBackdrop.wallpaper(env) if env in ["town", "field", "bunker"] else null
+		_ground.visible = _ground.texture != null
+	if _ground.texture == null: return
+	var pixels := float(_ground.texture.get_height()) / GroundBackdrop.GROUND_TILES
+	_ground.fit_view(pan + ORIGIN * zoom, zoom * CELL / pixels,
+		Vector2(map.width, map.height) * pixels, get_viewport_rect().size)
+
 
 ## Камера на свою зону развёртывания (0.9.3). Раньше экран открывался в углу доски, и
 ## углом карты был её угол; теперь там кайма — десяток клеток пустой земли или космоса.
@@ -756,7 +773,22 @@ func _build_sky() -> void:
 	_sky.drift = false
 	layer.add_child(_sky)
 
+var _lighting: LightManager
+
+func _sync_lighting() -> void:
+	if not (Ui.dynamic_lighting):
+		if is_instance_valid(_lighting):
+			_lighting.free()
+			_lighting = null
+		return
+	if _tile_grid == null: return
+	if not is_instance_valid(_lighting):
+		_lighting = LightManager.new()
+		add_child(_lighting)
+	_lighting.update_view(_tile_grid, pan + ORIGIN * zoom, zoom, CELL)
+
 func _process(delta: float) -> void:
+	_fit_ground()
 	# Строка состояния — рамкой набора; пустая рамка без сообщения ни к чему.
 	if _status != null:
 		_status.visible = _status.text != ""
@@ -767,7 +799,9 @@ func _process(delta: float) -> void:
 	if Input.is_key_pressed(KEY_D): dir.x -= 1
 	if dir != Vector2.ZERO:
 		pan += dir.normalized() * PAN_SPEED * delta
+		_fit_ground()
 		queue_redraw()
+	_sync_lighting()
 
 ## Четыре направления фронта — для бесплатного поворота танка на закупке (item 21).
 ## Диагонали убраны (item 2): танк смотрит только по сторонам света.
@@ -1339,6 +1373,7 @@ func _pos_to_cell(pos: Vector2) -> Vector2i:
 func _draw() -> void:
 	if map == null:
 		return
+	_fit_ground()
 	draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
 	Sprites.set_base_transform(pan, Vector2(zoom, zoom))
 	var font := ThemeDB.fallback_font
@@ -1527,12 +1562,7 @@ func _build_ui() -> void:
 
 	var units_group := SteamChrome.group_box_compact("Infantry")
 	vbox.add_child(units_group)
-	var hint := Label.new()
-	hint.text = "Pick a unit, then click or drag in your zone. Click a deployed unit to refund it. Hover a tank and press R (Q/E) to turn it. WASD or right-drag pans, the wheel zooms."
-	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint.add_theme_font_size_override("font_size", 11)
-	hint.add_theme_color_override("font_color", Color("#8a8a8a"))
-	units_group.body.add_child(hint)
+
 	_palette = VBoxContainer.new()
 	_palette.add_theme_constant_override("separation", 3)
 	units_group.body.add_child(_palette)
@@ -1591,22 +1621,34 @@ func _build_ui() -> void:
 	# а история та же, что увидит бой (NetHandoff.chat_history).
 	var chat_win := PanelContainer.new()
 	SteamChrome.apply_panel(chat_win)
-	chat_win.anchor_top = 1.0
-	chat_win.anchor_bottom = 1.0
-	chat_win.offset_left = 20
-	chat_win.offset_right = 400
-	chat_win.offset_top = -230
-	chat_win.offset_bottom = -20
+	chat_win.self_modulate = Color(1, 1, 1, 0.5)
+	chat_win.position = Vector2(20, maxf(0, get_viewport_rect().size.y - 230))
 	var cframe := VBoxContainer.new()
 	cframe.add_theme_constant_override("separation", 0)
 	chat_win.add_child(cframe)
-	cframe.add_child(SteamChrome.header_bar("Chat"))
+	var chat_tools := HBoxContainer.new()
+	var header := SteamChrome.header_bar("Chat", chat_tools)
+	header.self_modulate = Color(1, 1, 1, 0.5)
+	cframe.add_child(header)
+	PanelInteraction.draggable(chat_win, header, func() -> void: pass)
 	_chat = ChatBox.new(_side_label, func() -> int:
 		return _my_side if networked() else active_side)
-	_chat.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_chat.add_theme_constant_override("separation", 4)
+	_chat._log.custom_minimum_size = Vector2(260, 120)
+	_chat._log.add_theme_font_size_override("normal_font_size", 11)
+	_chat._log.add_theme_font_size_override("bold_font_size", 11)
+	_chat._log.scroll_active = true
 	var cpad := SteamChrome.pad(_chat, 8, 8)
-	cpad.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	cframe.add_child(cpad)
+	var toggle := Button.new()
+	toggle.text = "▾"
+	toggle.pressed.connect(func() -> void:
+		cpad.visible = not cpad.visible
+		toggle.text = "▾" if cpad.visible else "▸"
+		chat_win.reset_size())
+	chat_tools.add_child(PanelInteraction.resize_grip(chat_win, _chat._log, 1.0,
+		func() -> void: cpad.show(); toggle.text = "▾"))
+	chat_tools.add_child(toggle)
 	_ui.add_child(chat_win)
 	_chat_win = chat_win
 

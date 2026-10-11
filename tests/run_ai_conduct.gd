@@ -32,6 +32,7 @@ func _initialize() -> void:
 	_no_impossible_shots_and_no_pingpong()
 	_cover_can_make_a_shot_impossible()
 	_tanks_spare_their_own()
+	_crew_stays_in_the_vehicle()
 	_every_tank_gets_moving()
 	_plan_keeps_the_tank_lane_clear()
 	_anti_tank_goes_for_the_armour()
@@ -542,3 +543,20 @@ func _operator_walks_before_it_plants() -> void:
 			"the operator advances instead (x %d -> %d)" % [start_x, op.coord.x])
 	ck(Combat.distance(op.coord, Vector2i(50, 4)) > MCF.DRONE_LEASH,
 			"and the run really did stay out of reach throughout")
+
+func _crew_stays_in_the_vehicle() -> void:
+	var sc := _tank_scenario(20, 12, [{"coord": Vector2i(17, 9), "id": "light_infantry", "owner": MCF.Owner.PLAYER_2}])
+	var state: GameState = sc.state
+	var r: GameActionResolver = sc.resolver
+	var tank: Vehicle = sc.vehicle
+	var crew := state.get_unit(tank.occupants[0])
+	ck(crew != null and not state.grid.in_bounds(crew.coord), "embarked tank crew is represented off-board")
+	if crew == null: return
+	ck(not r.can_move(crew), "tank crew cannot be offered an infantry move")
+	ck(r.reachable_for(crew, 8).cost.is_empty(), "off-board crew has no infantry reachability")
+	# Old snapshots or stale queued rows can outlive the aboard flag.
+	crew.aboard_vehicle_id = -1
+	var ai := AIController.new(crew.owner, AIController.Difficulty.HARD)
+	for row: Dictionary in ai._idle_rows(state):
+		ck(row.vehicle or row.id != crew.id, "idle fallback excludes embarked tank crew")
+	ck(ai._forced_action(state, r, {"id": crew.id, "vehicle": false}).is_empty(), "stale infantry row cannot route an off-board crew member")
