@@ -37,6 +37,11 @@ static func root() -> String:
 	var candidate := base.path_join(ROOT_NAME)
 	_root = candidate if _writable(candidate) else OS.get_user_data_dir().path_join(ROOT_NAME)
 	DirAccess.make_dir_recursive_absolute(_root)
+	# Running from source the folder sits inside the project (0.11.1): without .gdignore the
+	# Godot editor rescans every save and replay on each run and an export could pack them.
+	if not OS.has_feature("template") and not FileAccess.file_exists(_root.path_join(".gdignore")):
+		var f := FileAccess.open(_root.path_join(".gdignore"), FileAccess.WRITE)
+		if f != null: f.close()
 	return _root
 
 static func dir(kind: String) -> String:

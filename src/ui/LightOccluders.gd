@@ -52,20 +52,23 @@ func _read(cell: GridCell, grid: Grid) -> void:
 	var emitters: Array = []
 	var def: Dictionary = Furniture.DEFS.get(cell.feature_id, {})
 	if def.get("emits_light", false):
-		emitters.append(_emitter("fixture", def, Vector2.ZERO, Furniture.light_color_of(cell.feature_id, tint)))
+		emitters.append(_emitter("fixture", def, Vector2.ZERO, cell.feature_id, tint))
 	for lamp: Array in cell.lamps:
 		# A wall lamp shines from the face it hangs on, just out into its own side (0.11:
 		# every wall lamp, the wall-top flood lamp too, lights one side only).
 		var lamp_def: Dictionary = Furniture.DEFS.get(str(lamp[0]), {})
 		emitters.append(_emitter("mounted", lamp_def, Vector2(Furniture.N4[int(lamp[2])]) * 0.55,
-				Furniture.light_color_of(str(lamp[0]), int(lamp[3]))))
+				str(lamp[0]), int(lamp[3])))
 	if cell.on_fire:
 		emitters.append({"kind": "fire", "color": Color(1.0, 0.55, 0.2), "range": 4.5,
 				"energy": 0.95, "offset": Vector2.ZERO})
 	if emitters.is_empty(): sources.erase(c)
 	else: sources[c] = emitters
 
-static func _emitter(kind: String, def: Dictionary, offset: Vector2, color: Color) -> Dictionary:
-	return {"kind": kind, "color": color,
-			"range": float(def.get("light_range", 6.0)), "energy": float(def.get("light_energy", 0.85)),
+## The tint's brightness (0.11.1) scales the glow, and its reach with the square root —
+## a 200 % lamp is twice as bright and reaches ~1.4× as far.
+static func _emitter(kind: String, def: Dictionary, offset: Vector2, id: String, tint: int) -> Dictionary:
+	var k := Furniture.light_scale_of(tint)
+	return {"kind": kind, "color": Furniture.light_color_of(id, tint),
+			"range": float(def.get("light_range", 6.0)) * sqrt(k), "energy": float(def.get("light_energy", 0.85)) * k,
 			"offset": offset}

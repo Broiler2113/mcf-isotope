@@ -1120,7 +1120,9 @@ func _ai_controller_for(side: int, difficulty: int) -> PlayerController:
 				MCF.owner_name(side), reason])
 			_refresh_status())
 		return learned
-	return AIController.new(side, difficulty)
+	var ai := AIController.new(side, difficulty)
+	ai.bind_match(resolver)   # announced event zones (0.11.1)
+	return ai
 
 ## Кто видит поле насквозь. ИИ знает позиции всех юнитов сквозь туман (#43): его прицел
 ## легален и по скрытым.
@@ -3832,6 +3834,7 @@ func _take_side_as_ai(side: int) -> void:
 		if old != null and old.intent_ready.is_connected(_on_intent_ready):
 			old.intent_ready.disconnect(_on_intent_ready)
 		var ai := AIController.new(side, slot.ai_difficulty)
+		ai.bind_match(resolver)
 		ai.intent_ready.connect(_on_intent_ready)
 		controllers[side] = ai
 	_refresh_omniscience()
@@ -5223,11 +5226,13 @@ func _draw() -> void:
 	# Дальний план (большие карты): рельеф, объекты и туман — текстурами слоя под нами.
 	var far := zoom < LOD_ZOOM
 	_lod_sync(far, viewer, visible, remembered, fog_on)
+	if _heightmap and zoom >= HEIGHTMAP_MIN_ZOOM:
+		_draw_heights(font, visible, fog_on, vx0, vy0, vx1, vy1)
 	if not far:
 		# Пол, объекты, огонь и туман вблизи рисует слой под нами плитками (TerrainTiles,
 		# _lod_sync): здесь остаются подписи высоты насыпей — у кучи земли она бывает
 		# разной, и картинкой её не прочесть. Мелким шрифтом их не разглядеть на отъезде.
-		if zoom >= HEIGHT_LABEL_ZOOM:
+		if zoom >= HEIGHT_LABEL_ZOOM and not _heightmap:   # the heightmap labels them too
 			for dc: Vector2i in resolver._feature_cells(MCF.FEATURE_DIRT_PILE):
 				if not _cell_on_screen(dc.x, dc.y):
 					continue
@@ -5343,9 +5348,9 @@ func _draw() -> void:
 				var ctxt := "auto" if cneed <= 0 else ("%d+" % cneed if cneed <= 6 else "—")
 				# Окно: бросает не стрелок, а стекло — его спасбросок против каждой пули.
 				var gfid := state.grid.cell(shov).feature_id
-				# A shell or a flame jet does not roll per bullet against the pane: no "glass N+".
-				if MCF.is_glass(gfid) and not su.stats.special_ability_id in [MCF.ABILITY_MARKSMAN, MCF.ABILITY_ANTI_TANK,
-						MCF.ABILITY_FLAMETHROWER]:
+				# Only an anti-tank shell skips the pane's "glass N+" (0.11.1, user rule): it does
+				# not roll per bullet against the glass; everyone else sees the pane's save.
+				if MCF.is_glass(gfid) and su.stats.special_ability_id != MCF.ABILITY_ANTI_TANK:
 					ctxt = "glass %d+" % MCF.glass_bullet_save(gfid)
 				var ctp := _cell_origin(shov) + Vector2(CELL * 0.8, CELL * 0.2)
 				draw_string_outline(font, ctp, ctxt, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, 4, Color(0, 0, 0, 0.9))
@@ -6645,6 +6650,13 @@ func _build_ui() -> void:
 	# Линейка (item 11) — зрительский инструмент, ничего не меняющий на доске.
 	_ruler_btn = _compact_button("Ruler", _enter_ruler)
 	tools_box.add_child(_ruler_btn)
+	_height_btn = CheckBox.new()
+	_height_btn.text = "Heightmap"
+	_height_btn.tooltip_text = "Show the height of every cover tile (%s)" % Keybinds.label("game_heightmap")
+	_height_btn.add_theme_font_size_override("font_size", 12)
+	_height_btn.button_pressed = _heightmap
+	_height_btn.toggled.connect(_toggle_heightmap)
+	tools_box.add_child(_height_btn)
 	# Камера к своим (item 10): «Me» всегда, а в командной игре — и к каждому союзнику.
 	tools_box.add_child(_camera_row())
 	if _spectator: _build_spectator_controls(tools_box)
@@ -8633,6 +8645,28 @@ func _build_spectator_controls(parent: Container) -> void:
 		queue_redraw())
 	parent.add_child(pov)
 
+## Heightmap mode (0.11.1): the height of every cover tile written on it as a number.
+## Under fog only what the viewer sees now is labelled — no hint of a hidden sandbag.
+const HEIGHTMAP_MIN_ZOOM := 0.35
+var _heightmap := false
+var _height_btn: CheckBox = null
+
+func _toggle_heightmap(on: bool) -> void:
+	_heightmap = on
+	if _height_btn != null: _height_btn.set_pressed_no_signal(on)
+	queue_redraw()
+
+func _draw_heights(font: Font, visible: Dictionary, fog_on: bool, x0: int, y0: int, x1: int, y1: int) -> void:
+	var grid := state.grid
+	for y in range(y0, y1 + 1):
+		for x in range(x0, x1 + 1):
+			var cell := grid.cell_fast(x, y)
+			var t := TerrainTiles.height_text(cell.cover_height, cell.is_space)
+			if t == "" or (fog_on and not visible.has(cell.coord)):
+				continue
+			TerrainTiles.draw_height_text(self, font, _cell_origin(cell.coord), CELL, t,
+					cell.cover_height >= MCF.WALL_HEIGHT and not Furniture.is_furniture(cell.feature_id))
+
 func _sync_camera_layers() -> void:
 	for layer in [_lod, _before_layer]:
 		if layer != null:
@@ -8765,6 +8799,9 @@ func _handle_shortcut(event: InputEventKey) -> bool:
 	if _init_overlay != null and _init_overlay.visible: return false
 	if Keybinds.matches(event, "game_pause_ai"):
 		_toggle_pause()
+		return true
+	if Keybinds.matches(event, "game_heightmap"):
+		_toggle_heightmap(not _heightmap)
 		return true
 	if replay != null:
 		if Keybinds.matches(event, "replay_play_pause"): _replay_toggle(); return true

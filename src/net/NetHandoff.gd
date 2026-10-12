@@ -92,7 +92,8 @@ const K_LOBBY_MAP := "lobby_map"
 ##   4 — gas contact rolls and one-player-turn random-event warnings.
 ##   5 — event warnings at round opening, including the first round.
 ##   6 — 0.11: warnings land at round end, fog-off gas, internet relay play.
-const PROTOCOL := 6
+##   7 — 0.11.1: frag grenades roll for lamps, gas hides behind it with fog off, lamp brightness.
+const PROTOCOL := 7
 
 static func encode_rules() -> Dictionary:
 	var roster := GameConfig.active_roster()

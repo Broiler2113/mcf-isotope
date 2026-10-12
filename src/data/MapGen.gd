@@ -1477,10 +1477,12 @@ func _maintenance_exits() -> void:
 				var span := _rng.randi_range(SOLAR_WALK_MIN, SOLAR_WALK_MAX)
 				for k in range(1, span + 1):
 					_grill.append(wall + d * k)            # мостки от самой обшивки
+				# Both sides of one walkway carry the SAME panel, mirrored (0.11.1: "solar
+				# panels should be even"); the size still differs from exit to exit.
+				var pw := _rng.randi_range(1, mini(SOLAR_PANEL_MAX, span - 1))
+				var pd := _rng.randi_range(1, SOLAR_PANEL_DEPTH)
+				var at := _rng.randi_range(2, maxi(2, span - pw + 1))
 				for t: int in [-1, 1]:
-					var pw := _rng.randi_range(1, mini(SOLAR_PANEL_MAX, span - 1))
-					var pd := _rng.randi_range(1, SOLAR_PANEL_DEPTH)
-					var at := _rng.randi_range(2, maxi(2, span - pw + 1))
 					for a in pw:
 						for b in range(1, pd + 1):
 							_solar.append(wall + d * (at + a) + side * (t * b))

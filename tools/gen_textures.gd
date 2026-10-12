@@ -34,6 +34,12 @@ func _initialize() -> void:
 		print("floor looks written to %s in %d ms" % [OUT, Time.get_ticks_msec() - t0])
 		quit()
 		return
+	# `-- --solar` — только солнечные панели (0.11.1).
+	if "--solar" in OS.get_cmdline_user_args():
+		_strip("floor_solar", _floor_solar)
+		print("solar panels written to %s in %d ms" % [OUT, Time.get_ticks_msec() - t0])
+		quit()
+		return
 	# `-- --doors` — только двери (0.9.2), остальное байт в байт.
 	if "--doors" in OS.get_cmdline_user_args():
 		_doors_all()
@@ -810,15 +816,12 @@ func _door_front(style: String, open: bool, v: int) -> Image:
 			img.set_pixel(x, y, _door_open_px(style, x, y, v) if open else _door_leaf_px(style, x, y, v))
 	return img
 
-## Проём открытой двери: темнота внутри, у пола — полоска света с той стороны; у петли —
-## край распахнутого полотна (у сдвижного люка и гермодвери — их кромка у рамы).
+## Проём открытой двери: ПРОЗРАЧНЫЙ (0.11.1, просьба игрока) — сквозь него виден пол
+## клетки; у петли — край распахнутого полотна (у сдвижного люка и гермодвери — их кромка
+## у рамы).
 func _door_open_px(style: String, x: int, y: int, v: int) -> Color:
 	var fw := _door_frame_w(style)
-	var y1 := T - 1 - fw
-	var t := float(y - fw) / float(y1 - fw)
-	var c := Color(0.05 + 0.06 * t, 0.05 + 0.055 * t, 0.06 + 0.05 * t)
-	if y >= y1 - 2:
-		c = Color(0.2, 0.19, 0.17).lerp(Color(0.32, 0.3, 0.27), float(y - (y1 - 2)) / 2.0)
+	var c := Color(0, 0, 0, 0)
 	match style:
 		"station":
 			if x >= T - 1 - fw - 1:   # створка уехала в стену: видна её кромка
@@ -1044,13 +1047,16 @@ func _floor_grill(x: int, y: int, v: int) -> Color:
 	return Color(0, 0, 0, 0)
 
 ## Солнечная панель снаружи станции: синие ячейки в серебряной раме на решётчатом настиле.
+## Ровная (0.11.1, «solar panels should be even»): рама на 2 и T-2, внутри 4×4 ячейки по
+## 6 точек, швы на 9/16/23; прут решётки по краю клетки (0, 1, T-1) — зазор между
+## соседними панелями одинаковый со всех сторон. Прежде последний ряд ячеек был уже прочих.
 func _floor_solar(x: int, y: int, v: int) -> Color:
-	if x <= 1 or y <= 1:
+	if x <= 1 or y <= 1 or x == T - 1 or y == T - 1:
 		return _grill_bar(x, y, v)   # панель стоит НА решётке — её прут по краю
-	if x == 2 or y == 2 or x == T - 1 or y == T - 1:
+	if x == 2 or y == 2 or x == T - 2 or y == T - 2:
 		return Color8(176, 180, 186)
 	var c := _shade(Color8(36, 58, 120), 0.86 + 0.18 * _fbm(x, y, 581 + v))
-	if (x - 2) % 6 == 0 or (y - 2) % 6 == 0:
+	if (x - 2) % 7 == 0 or (y - 2) % 7 == 0:
 		c = Color8(150, 164, 190)
 	elif (x + y) % 11 == 0:
 		c = _shade(c, 1.35)   # блик

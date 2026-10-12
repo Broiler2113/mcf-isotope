@@ -117,6 +117,9 @@ var zoom := 1.0:
 ## the top-bar button, View menu or editor_lighting (Shift+L). Starts as the setting is.
 var _lighting_preview := false
 var _lighting_btn: Button
+## Heightmap view (0.11.1): TerrainTiles.HEIGHT_SCALE over the tiles, View menu / Shift+H.
+var _heightmap := false
+var _height_btn: Button = null
 var show_grid := true
 var show_zones := true
 var _mouse_panning := false
@@ -1413,6 +1416,9 @@ func _shortcut(e: InputEventKey) -> bool:
 	if Keybinds.matches(e, "editor_lighting"):
 		_toggle_lighting()
 		return true
+	if Keybinds.matches(e, "editor_heightmap"):
+		_toggle_heightmap()
+		return true
 	if Keybinds.matches(e, "editor_grid"):
 		show_grid = not show_grid
 		_refresh_menu_checks()
@@ -1530,7 +1536,15 @@ func _draw() -> void:
 	draw_rect(full, Color(0.85, 0.85, 0.85, 0.6), false, 2.0 / zoom)
 	# Нейтральные бойцы — картинкой своей фракции, иначе кружком с меткой.
 	var font := ThemeDB.fallback_font
-	if cs >= 18:
+	if _heightmap and cs >= 10:
+		for y in range(y0, y1 + 1):
+			for x in range(x0, x1 + 1):
+				var i := y * w + x
+				var ht := TerrainTiles.height_text(map.cover_height[i], map.get_space(Vector2i(x, y)))
+				if ht != "":
+					TerrainTiles.draw_height_text(self, font, Vector2(x, y) * CELL, CELL, ht,
+							map.cover_height[i] >= MCF.WALL_HEIGHT and not Furniture.is_furniture(map.feature_id[i]))
+	elif cs >= 18:
 		for y in range(y0, y1 + 1):
 			for x in range(x0, x1 + 1):
 				var i := y * w + x
@@ -2003,7 +2017,7 @@ func _build_menu_bar() -> void:
 			["Clear Map…", _clear_dialog]]],
 		["View", [["Zoom In", zoom_in, "editor_zoom_in"], ["Zoom Out", zoom_out, "editor_zoom_out"],
 			["Fit Map", fit_view, "editor_fit"], [],
-			["check:lighting", "Lighting", "editor_lighting"], ["check:grid", "Grid", "editor_grid"], ["check:zones", "Deployment Zones"], ["check:mini", "Minimap"], [],
+			["check:lighting", "Lighting", "editor_lighting"], ["check:heightmap", "Heightmap", "editor_heightmap"], ["check:grid", "Grid", "editor_grid"], ["check:zones", "Deployment Zones"], ["check:mini", "Minimap"], [],
 			["Keyboard Shortcuts…", _shortcuts_dialog, "editor_help"]]],
 		["Presets", [["Save Selection…", _save_room_dialog], ["Manage Rooms & Structures…", _room_manager],
 			["Open Presets Folder", func() -> void: OS.shell_open(ProjectSettings.globalize_path(RoomPresets.DIR))]]],
@@ -2088,6 +2102,14 @@ func _build_menu_bar() -> void:
 	_lighting_btn.toggled.connect(func(on: bool) -> void:
 		if on != _lighting_preview: _toggle_lighting())
 	row.add_child(_lighting_btn)
+	_height_btn = Button.new()
+	_height_btn.text = "Heightmap"
+	_height_btn.toggle_mode = true
+	_height_btn.focus_mode = Control.FOCUS_NONE
+	_height_btn.tooltip_text = "Show the height of every cover tile (%s)" % Keybinds.label("editor_heightmap")
+	_height_btn.toggled.connect(func(on: bool) -> void:
+		if on != _heightmap: _toggle_heightmap())
+	row.add_child(_height_btn)
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(spacer)
@@ -2148,7 +2170,14 @@ func _open_light_menu(screen: Vector2) -> bool:
 		_light_menu = PopupMenu.new()
 		_light_menu.theme = Ui.theme
 		_light_menu.id_pressed.connect(func(id: int) -> void:
-			_set_light_tint(int(_light_menu.get_meta("cell")), int(_light_menu.get_meta("side")), id))
+			var was := int(_light_menu.get_meta("tint"))
+			var tint := id
+			if id >= LIGHT_LEVEL_ID:
+				tint = Furniture.make_tint(Furniture.tint_colour(was), id - LIGHT_LEVEL_ID)
+			elif id != LIGHT_REMOVE:
+				tint = Furniture.make_tint(id, Furniture.tint_level(was))
+			_light_menu.set_meta("tint", tint)
+			_set_light_tint(int(_light_menu.get_meta("cell")), int(_light_menu.get_meta("side")), tint))
 		add_child(_light_menu)
 	_light_menu.clear()
 	# A wall lamp: the one on the face nearest the click (a wall can carry one per side).
@@ -2168,18 +2197,28 @@ func _open_light_menu(screen: Vector2) -> bool:
 		_light_menu.add_radio_check_item("Light colour · %s" % Furniture.LIGHT_TINTS[t][0], t)
 		var at := _light_menu.get_item_index(t)
 		_light_menu.set_item_icon(at, _swatch(swatch_colour))
-		_light_menu.set_item_checked(at, current == t)
+		_light_menu.set_item_checked(at, Furniture.tint_colour(current) == t)
+	# Brightness (0.11.1): listed dimmest first; "100 %" is the lamp as designed.
+	_light_menu.add_separator()
+	var levels := range(Furniture.LIGHT_LEVELS.size())
+	levels.sort_custom(func(a: int, b: int) -> bool: return Furniture.LIGHT_LEVELS[a][1] < Furniture.LIGHT_LEVELS[b][1])
+	for l: int in levels:
+		_light_menu.add_radio_check_item("Intensity · %s" % Furniture.LIGHT_LEVELS[l][0], LIGHT_LEVEL_ID + l)
+		_light_menu.set_item_checked(_light_menu.get_item_index(LIGHT_LEVEL_ID + l), Furniture.tint_level(current) == l)
 	if side >= 0:
 		_light_menu.add_separator()
 		_light_menu.add_item("Remove this lamp", LIGHT_REMOVE)
 	_light_menu.set_meta("cell", i)
 	_light_menu.set_meta("side", side)
+	_light_menu.set_meta("tint", current)
 	_light_menu.popup(Rect2i(Vector2i(get_screen_transform() * screen), Vector2i.ZERO))
 	return true
 
 const LIGHT_REMOVE := 100
+const LIGHT_LEVEL_ID := 200
 
 ## side >= 0: the wall lamp on that side (LIGHT_REMOVE takes it down); -1: the standing lamp.
+## tint: the whole tint byte (Furniture.make_tint: colour and brightness).
 func _set_light_tint(i: int, side: int, tint: int) -> void:
 	var t := _tuple(i)
 	if side < 0:
@@ -2197,6 +2236,12 @@ func _set_light_tint(i: int, side: int, tint: int) -> void:
 	_sync_lighting()
 	queue_redraw()
 
+func _toggle_heightmap() -> void:
+	_heightmap = not _heightmap
+	if _height_btn != null: _height_btn.set_pressed_no_signal(_heightmap)
+	_refresh_menu_checks()
+	queue_redraw()
+
 func _toggle_lighting() -> void:
 	_lighting_preview = not _lighting_preview
 	if _lighting_btn != null: _lighting_btn.set_pressed_no_signal(_lighting_preview)
@@ -2211,6 +2256,8 @@ func _menu_action(a: Variant) -> void:
 		var s: String = a
 		if s == "check:lighting":
 			_toggle_lighting()
+		elif s == "check:heightmap":
+			_toggle_heightmap()
 		elif s == "check:grid":
 			show_grid = not show_grid
 		elif s == "check:zones":
@@ -2229,6 +2276,8 @@ func _refresh_menu_checks() -> void:
 	for i in v.item_count:
 		if v.get_item_text(i).begins_with("Lighting"):
 			v.set_item_checked(i, _lighting_preview)
+		if v.get_item_text(i).begins_with("Heightmap"):
+			v.set_item_checked(i, _heightmap)
 		match v.get_item_text(i):
 			"Grid  (G)": v.set_item_checked(i, show_grid)
 			"Deployment Zones": v.set_item_checked(i, show_zones)
