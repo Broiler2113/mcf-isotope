@@ -568,11 +568,15 @@ func _on_net_ready() -> void:
 
 ## Отправить свою расстановку «вживую» (batch 12 #15) — если хост это разрешил.
 func _send_live() -> void:
-	if not networked() or _net == null or _my_ready or not GameConfig.live_placement_visible:
+	# Зеркальный хост шлёт и под туманом: отражение — армия самого гостя, секрета в ней
+	# нет, а чужие отражения у получателя всё равно не рисуются (_army_hidden).
+	var mirror_host := _mirrors_live() and _net_is_host
+	if not networked() or _net == null or _my_ready \
+			or not (GameConfig.live_placement_visible or mirror_host):
 		return
 	var mine := _host_sides()
 	# Зеркальный хост шлёт и отражения (batch 13 #13): гость видит свою армию живьём.
-	if _mirrors_live() and _net_is_host:
+	if mirror_host:
 		mine = _sides()
 	_net.send({"k": K_LIVE, "u": _encode_roster(mine), "sides": mine})
 
@@ -1438,16 +1442,22 @@ func _draw() -> void:
 		if _placed_here(int(side)):
 			continue
 		for e in _remote_units[side]:
+			if _army_hidden(int(e["o"])):
+				continue
 			_draw_token(Vector2i(int(e["x"]), int(e["y"])), int(e["o"]), str(e["id"]), font)
 	for side in _live_units:
 		if _remote_units.has(side) or _placed_here(int(side)):
 			continue
 		for e in _live_units[side]:
+			if _army_hidden(int(e["o"])):
+				continue
 			var c := Vector2i(int(e["x"]), int(e["y"]))
 			_draw_token(c, int(e["o"]), str(e["id"]), font)
 			draw_rect(Rect2(_cell_origin(c), Vector2(CELL, CELL)), Color(0, 0, 0, 0.35))
 	# Расставленные юниты.
 	for p in placed:
+		if _army_hidden(int(p["owner"])):
+			continue
 		_draw_token(p["coord"], int(p["owner"]), p["stats_id"], font)
 		# Стрелка фронта танка (item 21): показывает, куда он смотрит, — крутится клавишей R.
 		# Якорь в НИЖНЕМ ЛЕВОМ углу следа (item 3): раньше стрелка шла из центра и
@@ -1474,6 +1484,17 @@ func _draw() -> void:
 				col = Color(0.35, 0.85, 0.5, 0.35) if _footprint_placeable(brush_unit, sc, active_side) \
 					else Color(0.9, 0.3, 0.2, 0.25)
 			draw_rect(Rect2(_cell_origin(sc), Vector2(CELL, CELL)), col)
+
+## Чужую, не союзную армию на расстановке видно, только пока тумана нет и включена
+## «Live placement visibility» (issues-12 #1). Иначе её не видно вовсе — ни присланной
+## готовой (раньше она всплывала по «Ready» даже при выключенной галочке), ни
+## собираемой, ни поставленной раньше за этим же экраном (хот-сит).
+func _army_hidden(owner: int) -> bool:
+	if _spectator or not MCF.is_player(owner):
+		return false
+	if GameConfig.fog_mode == MCF.Fog.OFF and GameConfig.live_placement_visible:
+		return false
+	return not roster.are_allies(active_side, owner)
 
 func _draw_token(coord: Vector2i, owner: int, stats_id: String, font: Font) -> void:
 	# Техника (#10) рисуется прямоугольником по всему следу.

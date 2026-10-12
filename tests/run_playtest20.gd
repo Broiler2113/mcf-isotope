@@ -169,11 +169,5 @@ func _initialize() -> void:
 	var fb := Image.create(32, 32, false, Image.FORMAT_RGBA8)
 	tt._paint(b, fb, Vector2i(1, 1), Vector2i.ZERO, 32)
 	ck(fa.get_data() != fb.get_data(), "a welded airlock tile differs from a plain one")
-	tt.skip_features[MCF.FEATURE_SANDBAGS] = true
-	cell.clear_feature()
-	cell.set_feature(MCF.FEATURE_SANDBAGS, -1)
-	var fc := Image.create(32, 32, false, Image.FORMAT_RGBA8)
-	tt._paint(Image.create(32, 32, false, Image.FORMAT_RGBA8), fc, Vector2i(1, 1), Vector2i.ZERO, 32)
-	ck(fc.is_invisible(), "skipped field works are not baked")
 	print("pt20: %d failure(s)" % fails)
 	quit(1 if fails else 0)

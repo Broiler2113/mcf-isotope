@@ -130,10 +130,10 @@ func _process(_d: float) -> bool:
 	ck(not _main._canvas(0, 0).is_empty(), "stroke drawn")
 	_main._undo_my_drawing()
 	ck(_main._canvas(0, 0).is_empty(), "undo drawing removes it")
-	# --- fog keeps field works out of the baked tiles
-	_main._lod_sync(false, 0, r.team_visible_coords(0), {}, true)
-	ck(_main._tiles.skip_features.has(MCF.FEATURE_SANDBAGS) and _main._tiles.skip_features.has(MCF.FEATURE_TRENCH),
-			"under fog, sandbags/trenches are drawn per visible cell, not baked")
+	# --- fog draws the board as the viewer remembers it (issues-12 #16, replaces the
+	# per-visible-cell field works of playtest-20)
+	_main._lod_sync(false, 0, r.team_visible_coords(0), true)
+	ck(_main._tiles._grid != _main.state.grid, "under fog the tiles come from the remembered board")
 	_main.queue_free()
 	if fails.is_empty():
 		print("main pt20: all hold")

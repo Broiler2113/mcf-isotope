@@ -93,7 +93,9 @@ const K_LOBBY_MAP := "lobby_map"
 ##   5 — event warnings at round opening, including the first round.
 ##   6 — 0.11: warnings land at round end, fog-off gas, internet relay play.
 ##   7 — 0.11.1: frag grenades roll for lamps, gas hides behind it with fog off, lamp brightness.
-const PROTOCOL := 7
+##   8 — 0.11.2: any own station packs up (docked drone with it), barrage skips sleeping
+##       civilians, raiders enter bunkers by a hallway.
+const PROTOCOL := 8
 
 static func encode_rules() -> Dictionary:
 	var roster := GameConfig.active_roster()

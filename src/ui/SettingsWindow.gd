@@ -126,6 +126,16 @@ func _build() -> void:
 		dark_label.text = "Darkness: %d%%" % value
 		Ui.set_light_darkness(value / 100.0))
 
+	# --- Игра ---
+	var game_box := SteamChrome.group_box("Gameplay")
+	page.add_child(game_box)
+	var autoroll := CheckBox.new()
+	autoroll.text = "Autoroll dice"
+	autoroll.tooltip_text = "Your rolls start on their own: no Roll button, no Enter to confirm."
+	autoroll.button_pressed = Ui.autoroll_dice
+	autoroll.toggled.connect(Ui.set_autoroll_dice)
+	game_box.body.add_child(autoroll)
+
 	# --- Акцент (item 23) ---
 	var acc_box := SteamChrome.group_box("Accent colour")
 	page.add_child(acc_box)
@@ -222,6 +232,7 @@ func _build() -> void:
 		Ui.set_ui_scale(1.0)
 		Ui.set_accent("green")
 		Ui.set_fullscreen(false)
+		Ui.set_autoroll_dice(false)
 		_build.call_deferred())
 	bottom.add_child(reset)
 	var close := Button.new()

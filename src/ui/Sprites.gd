@@ -318,6 +318,19 @@ static func draw_feature(ci: CanvasItem, name: String, rect: Rect2, same: Callab
 
 ## Лист автотайла может нести несколько вариантов столбиком (4 × 4N плиток): плитки
 ## квадратные, число вариантов — высота на ширину.
+## Та же картинка с фильтрацией NEAREST (issues-12 #12). Плитки рельефа выводит слой с
+## NEAREST, а отдельные плитки поверх поля (укрепления под туманом, станция дронов) —
+## узел боя с линейной фильтрацией, и 32-пиксельная плитка на нём расплывалась.
+static var _nearest: Dictionary = {}
+static func nearest(tex: Texture2D) -> Texture2D:
+	var ct: CanvasTexture = _nearest.get(tex)
+	if ct == null:
+		ct = CanvasTexture.new()
+		ct.diffuse_texture = tex
+		ct.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		_nearest[tex] = ct
+	return ct
+
 static func draw_autotile(ci: CanvasItem, sheet: Texture2D, rect: Rect2, mask: int,
 		variant: int = 0) -> void:
 	var tw := sheet.get_width() / 4.0
@@ -329,10 +342,13 @@ static func draw_autotile(ci: CanvasItem, sheet: Texture2D, rect: Rect2, mask: i
 ## Плитка рельефа: картинка может быть лентой вариантов N×1 (ширина кратна высоте) —
 ## рисуется вариант variant % N. Только для плиток пола и объектов: спрайты бойцов и
 ## машин бывают неквадратными, и лентой их читать нельзя. false — картинки нет.
-static func draw_tile(ci: CanvasItem, name: String, rect: Rect2, variant: int = 0) -> bool:
+static func draw_tile(ci: CanvasItem, name: String, rect: Rect2, variant: int = 0,
+		sharp := false) -> bool:
 	ensure_overrides()
 	var key: String = ALIASES.get(name, name)
 	var tex: Texture2D = _overrides.get(key)
+	if tex != null and sharp:
+		tex = nearest(tex)
 	if tex == null:
 		# Из атласа (0.9.4) — первое из четырёх направлений: «как объект нарисован».
 		var atlas: Texture2D = _overrides.get(key + ATLAS_SUFFIX)

@@ -5320,6 +5320,8 @@ func unit_missing_equipment(u: UnitInstance) -> bool:
 func can_pick_up_station(operator: UnitInstance, coord: Vector2i) -> String:
 	if operator == null or not operator.is_alive():
 		return "Unit unavailable"
+	if operator.stats.special_ability_id != MCF.ABILITY_DRONE_OPERATOR:
+		return "Only a drone operator packs up a station"
 	if operator.remaining_ap <= 0:
 		return "Unit has no AP left"
 	if operator.held_item_id != "":
@@ -5331,10 +5333,16 @@ func can_pick_up_station(operator: UnitInstance, coord: Vector2i) -> String:
 	var cell := state.grid.cell(coord)
 	if cell.feature_id != MCF.FEATURE_DRONE_STATION:
 		return "No station there"
-	if cell.station_operator_id != operator.id:
+	# Любую СВОЮ станцию рядом (issues-12 #3/#14), а не только поставленную этим же
+	# оператором: метка оператора теряется (челнок, редактор), и станцию было не убрать.
+	if cell.feature_owner != operator.owner:
 		return "That station is not yours"
-	if active_drone_of(operator) != null:
-		return "Land the drone first"
+	# Дрон, сидящий на станции, сворачивается вместе с ней; улетевший — сперва вернуть.
+	# Раньше требовалось «посадить» дрон, а посадки в игре нет: станция с живым дроном
+	# не сворачивалась никогда.
+	for d in state.all_units():
+		if d.is_drone and d.is_alive() and d.home_station == coord and d.coord != coord:
+			return "Fly the drone back onto the station first"
 	return ""
 
 ## Свои станции рядом, которые можно свернуть прямо сейчас — для подсветки в UI.
@@ -5358,6 +5366,11 @@ func _resolve_pickup_station(intent: PickUpStationIntent) -> ActionResult:
 	var cell := state.grid.cell(intent.coord)
 	cell.station_operator_id = -1
 	cell.clear_feature()
+	var docked := false
+	for d in state.all_units():
+		if d.is_drone and d.is_alive() and d.home_station == intent.coord:
+			state.remove_unit(d.id)
+			docked = true
 	# Станция стояла в кресле челнока (batch 13 S8) — кресло снова свободно.
 	var svid := state.grid.vehicle_at(intent.coord)
 	if svid != -1:
@@ -5368,8 +5381,9 @@ func _resolve_pickup_station(intent: PickUpStationIntent) -> ActionResult:
 					sveh.seats[i] = -1
 	operator.remaining_ap -= 1
 	operator.held_item_id = MCF.ITEM_DRONE_STATION
-	return ActionResult.success(["%s folds the drone station at (%d, %d) back up [AP: %d]" % [
-		operator.stats.display_name, intent.coord.x, intent.coord.y, operator.remaining_ap]])
+	return ActionResult.success(["%s folds the drone station at (%d, %d) back up%s [AP: %d]" % [
+		operator.stats.display_name, intent.coord.x, intent.coord.y,
+		" with its drone" if docked else "", operator.remaining_ap]])
 
 ## Живой дрон этого оператора (или null).
 func active_drone_of(operator: UnitInstance) -> UnitInstance:
@@ -6636,7 +6650,10 @@ const BARRAGE_SEEK_ON := 4
 func _densest_spot(w: int, h: int) -> Vector2i:
 	var pts: Array[Vector2i] = []
 	for u: UnitInstance in state.all_units():
-		if u.is_alive() and not u.is_drone and state.grid.in_bounds(u.coord):
+		# Спящие жители (общий слот мирных) — не цель (issues-12 #9): батарея наводится
+		# на бойцов и на ПРОСНУВШИЕСЯ группы, а не на мирный квартал, где никто не воюет.
+		if u.is_alive() and not u.is_drone and u.owner != MCF.Owner.NEUTRAL \
+				and state.grid.in_bounds(u.coord):
 			pts.append(u.coord)
 	if pts.is_empty():
 		return Vector2i(-1, -1)
@@ -6683,7 +6700,15 @@ func _roll_event_params(id: String) -> Dictionary:
 			var edge := _rand_wide(4)                      # 0 С, 1 В, 2 Ю, 3 З
 			var along := gw if edge % 2 == 0 else gh
 			var seg := mini(along, ARMY_SEGMENT_MIN + _rand_wide(ARMY_SEGMENT_MAX - ARMY_SEGMENT_MIN + 1))
-			return {"edge": edge, "from": _rand_wide(along - seg + 1), "len": seg}
+			var army := {"edge": edge, "from": _rand_wide(along - seg + 1), "len": seg}
+			# В бункере за краем — толща грунта (issues-12 #13): армия входит в САМ бункер,
+			# с конца коридора, ближайшего к объявленному участку края.
+			if state.env == "bunker":
+				var entry := _hallway_entry(army)
+				if entry.x >= 0:
+					army["hx"] = entry.x
+					army["hy"] = entry.y
+			return army
 	return {}
 
 ## Keep simultaneous warnings distinct. Stable nearest-fit search uses no extra dice.
@@ -6717,6 +6742,8 @@ func _free_barrage_zone(preferred: Dictionary, area: Rect2i) -> Dictionary:
 ## Где именно — строкой для журнала и подсказки на карте.
 func _event_where(id: String, p: Dictionary) -> String:
 	if id == RandomEvents.ARMY:
+		if p.has("hx"):
+			return "unknown forces tunnelling into the hallway at (%d, %d)" % [int(p["hx"]), int(p["hy"])]
 		var names := ["north", "east", "south", "west"]
 		return "unknown forces approaching from the %s edge" % names[int(p.get("edge", 0)) % 4]
 	return "zone (%d, %d) %d×%d" % [int(p.get("x", 0)), int(p.get("y", 0)),
@@ -6902,8 +6929,12 @@ func _land_army(p: Dictionary, res: ActionResult) -> void:
 	var at := _rand_wide(state.turns.round_order.size() + 1)
 	state.turns.insert_slot(slot, at)
 	var names := ["north", "east", "south", "west"]
-	res.log("— %s land on the %s edge: %d fighters, hostile to everyone —" % [
-		MCF.owner_name(slot), names[int(p.get("edge", 0)) % 4], placed])
+	if p.has("hx"):
+		res.log("— %s break into the hallway at (%d, %d): %d fighters, hostile to everyone —" % [
+			MCF.owner_name(slot), int(p["hx"]), int(p["hy"]), placed])
+	else:
+		res.log("— %s land on the %s edge: %d fighters, hostile to everyone —" % [
+			MCF.owner_name(slot), names[int(p.get("edge", 0)) % 4], placed])
 	notify_cell_changed(spots[0])
 
 ## Предохранитель набора: больше этого числа бойцов независимая армия не получает.
@@ -6940,6 +6971,8 @@ func _army_budget() -> int:
 ## Свободные клетки участка края, на который высаживается армия: сперва по самому краю,
 ## потом глубже внутрь карты. Порядок строгий — он же порядок расстановки.
 func _army_spawn_cells(p: Dictionary) -> Array[Vector2i]:
+	if p.has("hx"):
+		return _hallway_spawn_cells(Vector2i(int(p["hx"]), int(p["hy"])))
 	var out: Array[Vector2i] = []
 	var gw := state.grid.width
 	var gh := state.grid.height
@@ -6968,6 +7001,102 @@ func _army_spawn_cells(p: Dictionary) -> Array[Vector2i]:
 					or cell.vehicle_id != -1 or cell.is_space:
 				continue
 			out.append(c)
+	return out
+
+## Клетка, по которой можно пройти и на которой можно стоять: не стена, не вакуум.
+func _open_floor(c: Vector2i) -> bool:
+	var cell := state.grid.cell(c)
+	return cell != null and cell.walkable_terrain() and not cell.is_space
+
+## Концы коридоров (issues-12 #13): клетка прохода шириной до 3, упёршаяся в стену, за
+## которой такой же узкий проход тянется ещё HALL_MIN_RUN клеток. Комнату (шире 3, или
+## узкую, но короткую — кладовку, санузел) и дверной проём (за ним снова пол) правило не
+## ловит; дверь сбоку проход не расширяет — это вход в комнату. Обход по строкам —
+## порядок у всех пиров один. Проходимость — одной маской: на 274×274 поклеточные
+## запросы к сетке стоили секунду.
+const HALL_MIN_RUN := 7
+func hallway_ends() -> Array[Vector2i]:
+	var w := state.grid.width
+	var h := state.grid.height
+	var open := PackedByteArray()   # 0 — не пройти, 1 — пол, 2 — дверь
+	open.resize(w * h)
+	var i := 0
+	for cell: GridCell in state.grid.cells_flat():
+		if cell.walkable_terrain() and not cell.is_space:
+			open[i] = 2 if cell.feature_id == MCF.FEATURE_AIRLOCK else 1
+		i += 1
+	var at := func(x: int, y: int) -> int:
+		return open[y * w + x] if x >= 0 and y >= 0 and x < w and y < h else 0
+	# Ширина прохода через (x, y) поперёк направления d, до 4.
+	var across := func(x: int, y: int, d: Vector2i) -> int:
+		var n := 1
+		for s: Vector2i in [Vector2i(d.y, d.x), Vector2i(-d.y, -d.x)]:
+			var q := Vector2i(x, y) + s
+			while n <= 4 and at.call(q.x, q.y) == 1:
+				n += 1
+				q += s
+		return n
+	var out: Array[Vector2i] = []
+	for y in h:
+		for x in w:
+			if open[y * w + x] == 0:
+				continue
+			for d: Vector2i in Grid.N4:
+				if at.call(x + d.x, y + d.y) != 0 or across.call(x, y, d) > 3:
+					continue
+				var run := true
+				for k in range(1, HALL_MIN_RUN + 1):
+					var bx := x - d.x * k
+					var by := y - d.y * k
+					if at.call(bx, by) == 0 or across.call(bx, by, d) > 3:
+						run = false
+						break
+				if run:
+					out.append(Vector2i(x, y))
+					break
+	return out
+
+## Конец коридора, ближайший к середине объявленного участка края; (-1,-1) — коридоров нет.
+## ponytail: полный обход доски на объявление события (их за партию единицы).
+func _hallway_entry(p: Dictionary) -> Vector2i:
+	var gw := state.grid.width
+	var gh := state.grid.height
+	var mid := int(p.get("from", 0)) + int(p.get("len", 1)) / 2
+	var anchor: Vector2i
+	match int(p.get("edge", 0)) % 4:
+		0: anchor = Vector2i(mid, 0)
+		1: anchor = Vector2i(gw - 1, mid)
+		2: anchor = Vector2i(mid, gh - 1)
+		_: anchor = Vector2i(0, mid)
+	var best := Vector2i(-1, -1)
+	var best_d := -1
+	for c: Vector2i in hallway_ends():
+		var dd := c.distance_squared_to(anchor)
+		if best_d < 0 or dd < best_d:
+			best = c
+			best_d = dd
+	return best
+
+## Куда встают бойцы, вошедшие с конца коридора: разлив от него по проходимому полу —
+## сперва сам коридор, дальше вглубь. Занятые клетки разлив проходит, но не берёт.
+func _hallway_spawn_cells(entry: Vector2i) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	if not _open_floor(entry):
+		return out
+	var seen := {entry: true}
+	var queue: Array[Vector2i] = [entry]
+	var i := 0
+	while i < queue.size() and out.size() < ARMY_UNIT_CAP:
+		var c := queue[i]
+		i += 1
+		var cell := state.grid.cell(c)
+		if cell.occupant == null and cell.vehicle_id == -1 and not cell.blocks_move():
+			out.append(c)
+		for d: Vector2i in Grid.N4:
+			var n := c + d
+			if not seen.has(n) and _open_floor(n):
+				seen[n] = true
+				queue.append(n)
 	return out
 
 ## Gas obscures aim even for weapons that can penetrate solid cover. Include
@@ -7931,14 +8060,6 @@ func _shuttle_budget(veh: Vehicle) -> int:
 		return 0
 	return veh.move_credit + d.remaining_ap * MCF.SHUTTLE_CELLS_PER_AP
 
-## Оператор, чья станция стоит в кресле этой машины (первый оператор на борту).
-func _station_operator_aboard(veh: Vehicle) -> int:
-	for uid in veh.occupants:
-		var u := state.get_unit(uid)
-		if u != null and u.is_alive() and u.stats.special_ability_id == MCF.ABILITY_DRONE_OPERATOR:
-			return u.id
-	return -1
-
 ## Кресла, в которые юнит может сесть/пересесть (для UI): индексы свободных мест.
 func seat_options(veh: Vehicle) -> Array[int]:
 	if not _seated(veh):
@@ -8505,6 +8626,7 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 	var riders: Array = []
 	var station_seats: Array[int] = []
 	var station_from: Dictionary = {}  # seat -> прежняя клетка станции (для дронов)
+	var station_op: Dictionary = {}    # seat -> оператор, развернувший станцию (едет с ней)
 	if seated:
 		for i in veh.seats.size():
 			var sid: int = veh.seats[i]
@@ -8512,7 +8634,9 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 				station_seats.append(i)
 				station_from[i] = veh.seat_cell(i)
 				var sc := state.grid.cell(veh.seat_cell(i))
+				station_op[i] = sc.station_operator_id
 				if sc.feature_id == MCF.FEATURE_DRONE_STATION:
+					sc.station_operator_id = -1
 					sc.feature_id = ""
 					sc.cover_height = 0.0
 			elif sid >= 0:
@@ -8651,8 +8775,9 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 		var new_c := veh.seat_cell(si)
 		var nc := state.grid.cell(new_c)
 		nc.set_feature(MCF.FEATURE_DRONE_STATION, veh.owner)
-		if driver != null:
-			nc.station_operator_id = _station_operator_aboard(veh)
+		# Метка оператора едет со станцией (issues-12 #14). Раньше её переписывали на
+		# «любого оператора на борту» или -1 — и хозяин больше не мог свернуть станцию.
+		nc.station_operator_id = int(station_op.get(si, -1))
 		# Дроны этой станции (batch 14): привязь переезжает вместе с ней, а дрон, сидевший
 		# на станции, летит с челноком — раньше он оставался висеть над пустым полом.
 		var old_c: Vector2i = station_from[si]
