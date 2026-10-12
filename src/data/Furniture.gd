@@ -6,8 +6,8 @@ extends RefCounted
 ## feature_durability. Ни своей сетки, ни узлов на предмет: движение, обзор, укрытие,
 ## сохранение, откат, сеть и повтор работают через ту же клетку, что и мешки со стенами.
 ##
-## Mounted lights are the exception: GridCell.fixture stores their id, durability
-## and facing independently of the supporting wall. Their definitions use mount="wall".
+## Mounted lights are the exception: GridCell.lamps stores them independently of the
+## supporting wall, one per side, each with its id, durability, side and tint. Their definitions use mount="wall".
 ## emits_light/light_color/light_range/light_energy describe client rendering only.
 ##
 ## Новый предмет = новая строка в _BASE (цвета — в VARIANTS) (и, по желанию, плитка textures/<id>.png из
@@ -78,7 +78,7 @@ const _BASE := {
 	"wall_beacon": {"name": "Service Indicator", "cat": "lighting", "h": 0.5, "mat": "metal", "dur": 1,
 		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "wall",
 		"emits_light": true, "light_color": Color(1.0, 0.55, 0.15), "light_range": 2.5, "light_energy": 0.45},
-	"ceiling_lamp": {"name": "Wall-top Flood Lamp", "cat": "lighting", "h": 0.5, "mat": "metal", "dur": 2,
+	"ceiling_lamp": {"name": "Wall Flood Lamp", "cat": "lighting", "h": 0.5, "mat": "metal", "dur": 2,
 		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "wall",
 		"emits_light": true, "light_color": Color(0.95, 0.97, 1.0), "light_range": 8.0, "light_energy": 0.95},
 	"streetlight": {"name": "Streetlight", "cat": "lighting", "h": 1.0, "mat": "metal", "dur": 3,

@@ -53,12 +53,12 @@ func _read(cell: GridCell, grid: Grid) -> void:
 	var def: Dictionary = Furniture.DEFS.get(cell.feature_id, {})
 	if def.get("emits_light", false):
 		emitters.append(_emitter("fixture", def, Vector2.ZERO, Furniture.light_color_of(cell.feature_id, tint)))
-	if not cell.fixture.is_empty():
-		var fixture_def: Dictionary = Furniture.DEFS.get(str(cell.fixture[0]), {})
-		# A wall lamp shines from the face of its wall, half a cell out into the room.
-		var offset := Vector2.ZERO if str(cell.fixture[0]) == "ceiling_lamp" \
-				else Vector2(Furniture.N4[int(cell.fixture[2])]) * 0.55
-		emitters.append(_emitter("mounted", fixture_def, offset, Furniture.light_color_of(str(cell.fixture[0]), tint)))
+	for lamp: Array in cell.lamps:
+		# A wall lamp shines from the face it hangs on, just out into its own side (0.11:
+		# every wall lamp, the wall-top flood lamp too, lights one side only).
+		var lamp_def: Dictionary = Furniture.DEFS.get(str(lamp[0]), {})
+		emitters.append(_emitter("mounted", lamp_def, Vector2(Furniture.N4[int(lamp[2])]) * 0.55,
+				Furniture.light_color_of(str(lamp[0]), int(lamp[3]))))
 	if cell.on_fire:
 		emitters.append({"kind": "fire", "color": Color(1.0, 0.55, 0.2), "range": 4.5,
 				"energy": 0.95, "offset": Vector2.ZERO})

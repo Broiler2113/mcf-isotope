@@ -201,9 +201,13 @@ gone. Only the frame around the world cannot be touched. The AI does this to cle
 own path.
 
 **Lights** hang on walls or stand on the floor — lamps, strips, streetlights,
-floodlights. A wall lamp can be shot off its wall without harming the wall; a
-standing one is furniture like any other. Lighting itself is a display option: it
-changes how dark the board looks, never what anyone can see.
+floodlights. A wall lamp hangs on one face of its wall and lights only that side; a
+wall can carry one lamp per side. It can be shot off without harming the wall, but only
+by someone on its side — the lamp on the far face is out of reach. A blast that hits the
+wall tile takes every lamp on it, whichever side. A standing lamp is furniture like any
+other. Generated stations never put a lamp on the hull's outside; asteroid surfaces do
+get lit. Lighting itself is a display option: it changes how dark the board looks, never
+what anyone can see.
 
 **Airlocks** open for anyone alive standing within one cell and close behind them. An
 engineer can weld one shut for good, which is how a corridor gets sealed.

@@ -45,7 +45,8 @@ func _index_geometry() -> void:
 	_lamp_dist.resize(n)
 	_lamp_dist.fill(SPACING_CAP + 1)
 	for fi: int in map.fixtures:
-		_mark_lamp(Vector2i(fi % g.w, fi / g.w))
+		for lamp: Array in map.fixtures[fi]:
+			_mark_lamp(Vector2i(fi % g.w, fi / g.w) + N4[int(lamp[2])])
 	for i in n:
 		var fid := map.feature_id[i]
 		var height := map.cover_height[i]
@@ -86,11 +87,11 @@ func _populate() -> void:
 			var i := y * g.w + x
 			var want := _target(i)
 			if not _eligible(c) or map.is_space[i] != 0 or map.cover_height[i] > 0 or coverage[i] >= want: continue
-			var wall := _wall_near(c)
+			var mount := _wall_near(c)
 			# Spacing: a hut or corridor gets a few lamps, not one on every wall tile.
-			if wall != Vector2i(-1, -1) and _spaced(wall, 3 if g._indoor[i] != 0 else 5):
+			if not mount.is_empty() and _spaced(mount[0] + N4[mount[1]], 3 if g._indoor[i] != 0 else 5):
 				var id := _wall_kind(c) if want > MAINT_TARGET else "bulkhead_lamp"
-				_place(wall, id, _facing(wall, c))
+				_place(mount[0], id, mount[1])
 				if coverage[i] >= want: continue
 			# Freestanding lamps only indoors (0.11): out on open ground they were free
 			# cover nobody asked for. Town streets keep their streetlights above.
@@ -119,8 +120,9 @@ func _target(i: int) -> float:
 			MapGen.K_HALL, MapGen.K_DHALL: return HALL_TARGET
 	if g._indoor[i] != 0: return ROOM_TARGET
 	# Town streets have streetlights and the moon; lamps on the outside of buildings only
-	# threw long diagonal shadows across the street (0.11 playtest).
-	return 0.0 if map.env in ["town", "field"] else OUTDOOR_TARGET
+	# threw long diagonal shadows across the street (0.11 playtest). A station's outside is
+	# the hull and space: nothing out there gets a lamp. An asteroid's surface does.
+	return 0.0 if map.env in ["town", "field", "station"] else OUTDOOR_TARGET
 
 ## Amber service indicators beside about a third of the airlocks — small coloured pools
 ## that mark the doors in the dark. Deterministic per cell, like every other choice here.
@@ -133,12 +135,13 @@ func _airlock_beacons() -> void:
 			var wall := door + side
 			if not _eligible(wall): continue
 			var wi := wall.y * g.w + wall.x
-			if _mountable[wi] == 0 or map.fixtures.has(wi): continue
-			# Face the floor next to the wall, on the same side as the door's open tiles.
-			for d: Vector2i in N4:
-				var f := wall + d
-				if _eligible(f) and _bare[f.y * g.w + f.x] != 0:
-					_place(wall, "wall_beacon", _facing(wall, f))
+			if _mountable[wi] == 0: continue
+			# Hang it on a free face over bare floor that wants light.
+			for k in 4:
+				var f: Vector2i = wall + N4[k]
+				if _eligible(f) and _bare[f.y * g.w + f.x] != 0 and _face_ok(f) \
+						and MapData.lamp_on(map.fixtures.get(wi, []), k).is_empty():
+					_place(wall, "wall_beacon", k)
 					break
 			break
 
@@ -172,15 +175,39 @@ func _floor_kind(c: Vector2i, outdoors: bool) -> String:
 	if map.env in ["town", "field"]: return "floor_lamp" if (c.x + c.y) % 2 else "desk_lamp"
 	return "work_light"
 
-func _wall_near(c: Vector2i) -> Vector2i:
+## The nearest wall with a free face towards c: [wall, side], or [] (0.11: one lamp per side).
+func _wall_near(c: Vector2i) -> Array:
 	# Nearest first; equal-distance order matches the original row-major scan.
 	for delta: Vector2i in SEARCH_OFFSETS:
 		var q := c + delta
-		if not _eligible(q): continue
-		var i := q.y * g.w + q.x
-		if _mountable[i] == 0 or map.fixtures.has(i): continue
-		if _line_clear(q, c): return q
-	return Vector2i(-1, -1)
+		if not _eligible(q) or _mountable[q.y * g.w + q.x] == 0: continue
+		var side := _free_face(q, c)
+		if side >= 0: return [q, side]
+	return []
+
+## The face of wall q a lamp can hang on to light c: the floor in front of it wants light,
+## nothing hangs there yet, and c lies on that side, in sight of it. -1: none. The most
+## square-on face wins, so a lamp never ends up on a face pressed against the next wall.
+func _free_face(q: Vector2i, c: Vector2i) -> int:
+	var lamps: Array = map.fixtures.get(q.y * g.w + q.x, [])
+	var best := -1
+	var best_dot := 0
+	for k in 4:
+		var n: Vector2i = N4[k]
+		var d := (c.x - q.x) * n.x + (c.y - q.y) * n.y
+		var f := q + n
+		if d <= best_dot or not _face_ok(f) or not MapData.lamp_on(lamps, k).is_empty(): continue
+		if not _line_clear(f, c): continue
+		best = k
+		best_dot = d
+	return best
+
+## Floor in front of a wall lamp: open, not vacuum, and somewhere lamps belong — never the
+## outside of a station (0.11: nothing lights up space there).
+func _face_ok(f: Vector2i) -> bool:
+	if not _eligible(f): return false
+	var i := f.y * g.w + f.x
+	return _opaque[i] == 0 and map.is_space[i] == 0 and _target(i) > 0.0
 
 func _floor_near(c: Vector2i) -> Vector2i:
 	# Prefer a fixture slightly into the unlit region, to avoid one at every edge.
@@ -227,8 +254,8 @@ func _floor_ok(c: Vector2i, indoor := false) -> bool:
 func _place(c: Vector2i, id: String, turn: int) -> void:
 	var i := c.y * g.w + c.x
 	if Furniture.is_wall_light(id):
-		map.fixtures[i] = [id, Furniture.durability_of(id), turn]
-		_mark_lamp(c)
+		map.fixtures[i] = MapData.with_lamp(map.fixtures.get(i, []), [id, Furniture.durability_of(id), turn, 0])
+		_mark_lamp(c + N4[turn])
 	else:
 		# A standing lamp is furniture: it takes the floor but never blocks light.
 		map.feature_id[i] = id
@@ -241,7 +268,7 @@ func _illuminate(c: Vector2i, id: String, turn: int = 0) -> void:
 	if _opaque.is_empty(): _index_geometry()
 	var def: Dictionary = Furniture.DEFS[id]
 	var origin := Vector2(c) + Vector2.ONE * 0.5
-	if Furniture.is_wall_light(id) and id != "ceiling_lamp":
+	if Furniture.is_wall_light(id):
 		origin += Vector2(N4[turn]) * 0.55
 	var ray_start := Vector2i(origin.floor())
 	var radius := float(def.light_range)
@@ -273,8 +300,3 @@ func _line_clear(a: Vector2i, b: Vector2i) -> bool:
 		if c == b: break
 		if _opaque[c.y * g.w + c.x] != 0: return false
 	return true
-
-static func _facing(wall: Vector2i, target: Vector2i) -> int:
-	var d := target - wall
-	if absi(d.x) > absi(d.y): return 1 if d.x > 0 else 3
-	return 2 if d.y > 0 else 0

@@ -479,17 +479,20 @@ func _evict() -> void:
 ## в слой объектов. at — угол клетки в картинке, res — точек на клетку.
 func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> void:
 	_paint_terrain(img, feat, c, at, res)
-	var fixture := _grid.cell_fast(c.x, c.y).fixture
-	if fixture.is_empty(): return
-	var tiles := _tile(str(fixture[0]), res)
-	if tiles.is_empty(): return
-	var picture: Image = tiles[0].duplicate()
-	for k in int(fixture[2]): picture.rotate_90(CLOCKWISE)
-	var ftint := _grid.tint_at(c.x, c.y)
-	if ftint > 0: picture = tint_lamp(picture, Furniture.light_color_of(str(fixture[0]), ftint))
-	feat.blend_rect(picture, Rect2i(0, 0, res, res), at)
-	if int(fixture[1]) < Furniture.durability_of(str(fixture[0])):
-		feat.blend_rect(_crack_overlay(res), Rect2i(0, 0, res, res), at)
+	# Each wall lamp hangs on the half of the wall tile facing its own side (0.11).
+	for lamp: Array in _grid.cell_fast(c.x, c.y).lamps:
+		var id := str(lamp[0])
+		var tiles := _tile(id, res)
+		if tiles.is_empty(): continue
+		var side := int(lamp[2])
+		var picture: Image = tiles[0].duplicate()
+		for k in side: picture.rotate_90(CLOCKWISE)
+		if int(lamp[3]) > 0: picture = tint_lamp(picture, Furniture.light_color_of(id, int(lamp[3])))
+		feat.blend_rect(picture, Rect2i(0, 0, res, res), at)
+		if int(lamp[1]) < Furniture.durability_of(id):
+			var half: Rect2i = [Rect2i(0, 0, res, res / 2), Rect2i(res / 2, 0, res - res / 2, res),
+					Rect2i(0, res / 2, res, res - res / 2), Rect2i(0, 0, res / 2, res)][side]
+			feat.blend_rect(_crack_overlay(res), half, at + half.position)
 
 func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> void:
 	var cell := _grid.cell_fast(c.x, c.y)

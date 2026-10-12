@@ -683,10 +683,14 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 	if shooter.owner != state.active_player():
 		return ActionResult.fail("It's the other player's turn")
 
-	if intent.target_id < 0 and intent.component == "fixture":
-		var reason := can_shoot_fixture(shooter, intent.target_cell)
+	if intent.target_id < 0 and intent.component.begins_with("fixture"):
+		# "fixture:<side>" names one wall lamp; plain "fixture" is a standing lamp, or the
+		# wall lamp facing the shooter (0.10 replays).
+		var side := int(intent.component.get_slice(":", 1)) if intent.component.contains(":") \
+				else facing_lamp_side(shooter, intent.target_cell)
+		var reason := can_shoot_fixture(shooter, intent.target_cell, side)
 		if reason != "": return ActionResult.fail(reason)
-		return _recoiled(_resolve_shoot_fixture(shooter, intent.target_cell, intent.shots), shooter, intent.target_cell)
+		return _recoiled(_resolve_shoot_fixture(shooter, intent.target_cell, side, intent.shots), shooter, intent.target_cell)
 
 	# Противотанкист может бить по пустой клетке пола (§3.14) — взрыв в её центре.
 	if intent.target_id < 0 and shooter.stats.special_ability_id == MCF.ABILITY_ANTI_TANK:
@@ -1170,7 +1174,7 @@ func _blast_destroy_terrain(c: Vector2i, res: ActionResult = null,
 	if not state.grid.in_bounds(c):
 		return
 	var cell := state.grid.cell(c)
-	cell.fixture = []
+	cell.lamps = []   # a blast takes the whole wall tile: every lamp on it, from either side
 	var fid := cell.feature_id
 	# Мебель любой разрыв сносит целиком (§3.15, 0.9.2) — и сейф, и станок.
 	if Furniture.is_furniture(fid):
@@ -9368,21 +9372,54 @@ func vehicle_disembark_cells(veh: Vehicle, unit_id: int = -1) -> Array:
 	return out
 
 # Mounted lamps are separately targetable. Shooting one does not damage its wall.
-func fixture_at(c: Vector2i) -> String:
+## The light on c: with side >= 0 the wall lamp hanging on that side; with side < 0 a
+## standing lamp. "" — none.
+func fixture_at(c: Vector2i, side: int = -1) -> String:
 	if not state.grid.in_bounds(c): return ""
 	var cell := state.grid.cell(c)
-	if not cell.fixture.is_empty(): return str(cell.fixture[0])
+	if side >= 0:
+		var rec := MapData.lamp_on(cell.lamps, side)
+		return str(rec[0]) if not rec.is_empty() else ""
 	# Only actual lamps are shot out as lights; a glowing rack or vending machine is
 	# ordinary furniture (it only glows on screen).
 	return cell.feature_id if Furniture.DEFS.get(cell.feature_id, {}).get("cat", "") == "lighting" else ""
 
-func can_shoot_fixture(shooter: UnitInstance, c: Vector2i) -> String:
+## A wall lamp hangs on one face of its wall: only someone on that side can see it (0.11).
+static func faces_lamp(c: Vector2i, side: int, from: Vector2i) -> bool:
+	var n: Vector2i = Furniture.N4[side]
+	return (from.x - c.x) * n.x + (from.y - c.y) * n.y > 0
+
+## The side of the wall lamp on c that faces the shooter most squarely, -1 if none does.
+func facing_lamp_side(shooter: UnitInstance, c: Vector2i) -> int:
+	if shooter == null or not state.grid.in_bounds(c): return -1
+	var best := -1
+	var best_dot := 0
+	for rec: Array in state.grid.cell(c).lamps:
+		var n: Vector2i = Furniture.N4[int(rec[2])]
+		var d := (shooter.coord.x - c.x) * n.x + (shooter.coord.y - c.y) * n.y
+		if d > best_dot:
+			best_dot = d
+			best = int(rec[2])
+	return best
+
+## Sides of the wall lamps on c this unit could shoot at.
+func shootable_lamp_sides(shooter: UnitInstance, c: Vector2i) -> Array[int]:
+	var out: Array[int] = []
+	if not state.grid.in_bounds(c): return out
+	for rec: Array in state.grid.cell(c).lamps:
+		if can_shoot_fixture(shooter, c, int(rec[2])) == "": out.append(int(rec[2]))
+	return out
+
+func can_shoot_fixture(shooter: UnitInstance, c: Vector2i, side: int = -1) -> String:
 	if shooter == null or not shooter.is_alive() or shooter.is_drone or shooter.captor_id >= 0:
 		return "Unit cannot fire"
 	if shooter.stats.special_ability_id in [MCF.ABILITY_ANTI_TANK, MCF.ABILITY_FLAMETHROWER,
 			MCF.ABILITY_MARKSMAN, MCF.ABILITY_ASSAULT, MCF.ABILITY_MINER, MCF.ABILITY_SHIELD_BEARER]:
 		return "Use this unit's normal attack"
-	if fixture_at(c) == "": return "No light fixture there"
+	if side < 0 and not state.grid.cell(c).lamps.is_empty() and fixture_at(c) == "":
+		return "The lamp is on the other side of the wall"
+	if fixture_at(c, side) == "": return "No light fixture there"
+	if side >= 0 and not faces_lamp(c, side, shooter.coord): return "The lamp is on the other side of the wall"
 	if not Combat.is_on_firing_line(shooter.coord, c): return "Target not on the firing line"
 	if fog_enabled and not team_visible_coords(shooter.owner).has(c): return "Target not visible"
 	if los_blocked(shooter.coord, c, true, true, true): return "Firing line is blocked"
@@ -9399,10 +9436,11 @@ func shootable_fixture_cells(shooter: UnitInstance) -> Array:
 		for distance in range(1, reach + 1):
 			var c := shooter.coord + direction * distance
 			if not state.grid.in_bounds(c): break
-			if fixture_at(c) != "" and can_shoot_fixture(shooter, c) == "": out.append(c)
+			if (fixture_at(c) != "" and can_shoot_fixture(shooter, c) == "") \
+					or not shootable_lamp_sides(shooter, c).is_empty(): out.append(c)
 	return out
 
-func _resolve_shoot_fixture(shooter: UnitInstance, c: Vector2i, shots: int) -> ActionResult:
+func _resolve_shoot_fixture(shooter: UnitInstance, c: Vector2i, side: int, shots: int) -> ActionResult:
 	if shooter.action_state == null or not shooter.action_state.is_pending():
 		shooter.remaining_ap -= 1
 		shooter.action_state = ActionState.new()
@@ -9411,7 +9449,7 @@ func _resolve_shoot_fixture(shooter: UnitInstance, c: Vector2i, shots: int) -> A
 	var want := shooter.action_state.remaining_shots if shots < 0 else clampi(shots, 1, shooter.action_state.remaining_shots)
 	var result := ActionResult.success()
 	var cell := state.grid.cell(c)
-	var id := fixture_at(c)
+	var id := fixture_at(c, side)
 	var label: String = Furniture.DEFS[id].name
 	var bullets := _through_glass(shooter, _glass_cells_on_line(shooter.coord, c), want, result)
 	var need := pane_hit_need(shooter, c)
@@ -9424,14 +9462,15 @@ func _resolve_shoot_fixture(shooter: UnitInstance, c: Vector2i, shots: int) -> A
 	result.dice_events.append({"kind": "fixture", "name": label, "cell": c, "need": need,
 		"hits": hits, "saves": [], "shooter_owner": shooter.owner})
 	if damage > 0:
-		if not cell.fixture.is_empty():
-			var hp := int(cell.fixture[1]) - damage
-			cell.fixture = [id, hp, cell.fixture[2]] if hp > 0 else []
+		if side >= 0:
+			var rec := MapData.lamp_on(cell.lamps, side).duplicate()
+			rec[1] = int(rec[1]) - damage
+			cell.lamps = MapData.with_lamp(cell.lamps, rec) if int(rec[1]) > 0 else MapData.without_lamp(cell.lamps, side)
 		else:
 			cell.feature_durability -= damage
 			if cell.feature_durability <= 0: _destroy_furniture(cell, result)
 	result.log("%s fires %d at %s (%d, %d): %d hits%s" % [shooter.stats.display_name, want,
-		label, c.x, c.y, damage, " — light destroyed" if fixture_at(c) == "" else ""])
+		label, c.x, c.y, damage, " — light destroyed" if fixture_at(c, side) == "" else ""])
 	shooter.action_state.remaining_shots -= want
 	if shooter.action_state.remaining_shots <= 0: shooter.action_state = null
 	_fx_lane(result, shooter.coord, c, shooter.owner)

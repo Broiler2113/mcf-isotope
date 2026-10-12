@@ -111,7 +111,7 @@ func resize_keep(p_width: int, p_height: int) -> void:
 			cover_height[dst] = old_cover[src]
 			is_space[dst] = old_space[src]
 			feature_id[dst] = old_feat[src]
-			if old_fixtures.has(src): fixtures[dst] = old_fixtures[src].duplicate()
+			if old_fixtures.has(src): fixtures[dst] = old_fixtures[src].duplicate(true)
 			zone_owner[dst] = old_zone[src]
 			if old_dur.has(src):
 				feature_dur[dst] = old_dur[src]
@@ -230,7 +230,7 @@ func apply_to_grid(grid: Grid) -> void:
 					c.feature_durability = clampi(int(dmg[1]), 1, c.feature_durability)
 			else:
 				c.cover_height = cover_height[i]
-			c.fixture = fixtures.get(i, []) if c.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(fid) and fid != MCF.FEATURE_AIRLOCK else []
+			c.lamps = fixtures.get(i, []) if c.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(fid) and fid != MCF.FEATURE_AIRLOCK else []
 
 ## The inverse of apply_to_grid (0.11): a board as a map, e.g. a saved battlefield for
 ## the lobby preview. Units are not cells; callers add them as spawns.
@@ -245,7 +245,7 @@ static func from_grid(grid: Grid, p_env: String = "") -> MapData:
 			m.cover_height[i] = c.cover_height
 			m.is_space[i] = 1 if c.is_space else 0
 			m.feature_id[i] = c.feature_id
-			if not c.fixture.is_empty(): m.fixtures[i] = c.fixture.duplicate()
+			if not c.lamps.is_empty(): m.fixtures[i] = c.lamps.duplicate(true)
 	m.floor_look = grid.floor_look.duplicate()
 	m.wall_accent = grid.wall_accent.duplicate()
 	m.door_look = grid.door_look.duplicate()
@@ -517,7 +517,7 @@ func to_dict() -> Dictionary:
 		out["decals"] = decals.duplicate(true)
 	if not fixtures.is_empty():
 		var records := {}
-		for i: int in fixtures: records[str(i)] = fixtures[i].duplicate()
+		for i: int in fixtures: records[str(i)] = fixtures[i].duplicate(true)
 		out["fixtures"] = records
 	return out
 
@@ -541,9 +541,9 @@ static func from_dict(d: Dictionary) -> MapData:
 	m.env = str(d.get("env", ""))
 	for key in d.get("fixtures", {}):
 		var i := int(key)
-		var record := valid_fixture(d.fixtures[key])
-		if i >= 0 and i < n and m.cover_height[i] >= MCF.WALL_HEIGHT and not record.is_empty():
-			m.fixtures[i] = record
+		var lamps := valid_lamps(d.fixtures[key])
+		if i >= 0 and i < n and m.cover_height[i] >= MCF.WALL_HEIGHT and not lamps.is_empty():
+			m.fixtures[i] = lamps
 	var fd: Dictionary = d.get("feature_durability", {})
 	for k: String in fd:
 		var rec: Array = fd[k]
@@ -637,7 +637,34 @@ static func path_for(name: String) -> String:
 		return bundled
 	return user_path
 
-static func valid_fixture(raw: Variant) -> Array:
-	if not raw is Array or raw.size() != 3 or not Furniture.is_wall_light(str(raw[0])):
-		return []
-	return [str(raw[0]), clampi(int(raw[1]), 1, Furniture.durability_of(str(raw[0]))), posmod(int(raw[2]), 4)]
+## The wall lamps of one cell, cleaned: at most one per side, each [id, durability, side,
+## tint], ordered by side (0.11). Also reads 0.10's single record [id, durability, side].
+static func valid_lamps(raw: Variant) -> Array:
+	var out: Array = []
+	if not raw is Array or raw.is_empty(): return out
+	var records: Array = [raw] if raw[0] is String else raw
+	for r: Variant in records:
+		if not r is Array or r.size() < 3 or not Furniture.is_wall_light(str(r[0])): continue
+		var id := str(r[0])
+		var tint := clampi(int(r[3]), 0, Furniture.LIGHT_TINTS.size() - 1) if r.size() > 3 else 0
+		out = with_lamp(out, [id, clampi(int(r[1]), 1, Furniture.durability_of(id)), posmod(int(r[2]), 4), tint])
+	return out
+
+## lamps with rec hung on its side, replacing whatever hung there.
+static func with_lamp(lamps: Array, rec: Array) -> Array:
+	var out := without_lamp(lamps, int(rec[2]))
+	out.append(rec.duplicate())
+	out.sort_custom(func(a: Array, b: Array) -> bool: return int(a[2]) < int(b[2]))
+	return out
+
+static func without_lamp(lamps: Array, side: int) -> Array:
+	var out: Array = []
+	for r: Array in lamps:
+		if int(r[2]) != side: out.append(r.duplicate())
+	return out
+
+## The lamp hanging on that side, or [].
+static func lamp_on(lamps: Array, side: int) -> Array:
+	for r: Array in lamps:
+		if int(r[2]) == side: return r
+	return []

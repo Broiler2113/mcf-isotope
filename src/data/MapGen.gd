@@ -599,13 +599,18 @@ func _mirror() -> void:
 			m.is_space[i] = m.is_space[s]
 			m.feature_id[i] = m.feature_id[s]
 			if m.fixtures.has(s):
-				var record: Array = m.fixtures[s].duplicate()
+				# Each lamp keeps its side through the mirror: a lamp on the east face of the
+				# source wall hangs on the west face of the mirrored one.
 				var mask := (1 if x != s % w else 0) | (2 if y != s / w else 0)
-				var k := int(record[2])
-				if mask & 1 and k % 2 == 1: k = 4 - k
-				if mask & 2 and k % 2 == 0: k = 2 - k
-				record[2] = k
-				m.fixtures[i] = record
+				var lamps: Array = []
+				for record: Array in m.fixtures[s]:
+					var k := int(record[2])
+					if mask & 1 and k % 2 == 1: k = 4 - k
+					if mask & 2 and k % 2 == 0: k = 2 - k
+					var turned := record.duplicate()
+					turned[2] = k
+					lamps = MapData.with_lamp(lamps, turned)
+				m.fixtures[i] = lamps
 			else: m.fixtures.erase(i)
 			_indoor[i] = _indoor[s]
 			_door[i] = _door[s]

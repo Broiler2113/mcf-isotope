@@ -1394,14 +1394,16 @@ func _handle_click(coord: Vector2i) -> void:
 			if occupant != null and target_ids.has(occupant.id):
 				_begin_shoot(occupant)
 				return
-			if item_cells.has(coord) and resolver.can_shoot_fixture(_selected_unit(), coord) == "":
+			var lamp_side := _lamp_side_under_mouse(_selected_unit(), coord)
+			if item_cells.has(coord) and (lamp_side >= 0 or resolver.can_shoot_fixture(_selected_unit(), coord) == ""):
 				var shooter := _selected_unit()
 				var count: int = shooter.action_state.remaining_shots if _pending_shoot(shooter) else shooter.rate_of_fire()
 				var sid := selected_id
+				var component := "fixture:%d" % lamp_side if lamp_side >= 0 else "fixture"
 				if count > 1:
-					_open_shot_picker(Furniture.DEFS[resolver.fixture_at(coord)].name, count,
-						func(n: int) -> Intent: return ShootIntent.new(sid, -1, n, coord, "fixture"))
-				else: _submit(ShootIntent.new(sid, -1, -1, coord, "fixture"))
+					_open_shot_picker(Furniture.DEFS[resolver.fixture_at(coord, lamp_side)].name, count,
+						func(n: int) -> Intent: return ShootIntent.new(sid, -1, n, coord, component))
+				else: _submit(ShootIntent.new(sid, -1, -1, coord, component))
 				return
 			# Шахтёр (item 15): клик по соседней вражеской машине — удар ломом по корпусу.
 			if not _melee_veh_ids.is_empty():
@@ -3229,7 +3231,7 @@ func _capture_opening_view() -> void:
 				b.feature_durability = a.feature_durability
 			b.cover_height = a.cover_height
 			b.airlock_welded = a.airlock_welded
-			b.fixture = a.fixture
+			b.lamps = a.lamps
 	g.furniture_turn = src.furniture_turn.duplicate(true)
 	g.wall_accent = src.wall_accent.duplicate()
 	g.door_look = src.door_look.duplicate()
@@ -4365,6 +4367,19 @@ func _cell_origin(coord: Vector2i) -> Vector2:
 ## CanvasLayer, который не участвует в трансформе рисования.
 func _cell_screen(coord: Vector2i) -> Vector2:
 	return pan + zoom * _cell_origin(coord)
+
+## Of the wall lamps on coord this unit can shoot, the one on the face nearest the mouse
+## (two can face a unit standing diagonally off a corner). -1: none.
+func _lamp_side_under_mouse(shooter: UnitInstance, coord: Vector2i) -> int:
+	var sides := resolver.shootable_lamp_sides(shooter, coord)
+	if sides.is_empty(): return -1
+	var f := ((get_global_mouse_position() - pan) / zoom - ORIGIN) / CELL - Vector2(coord)
+	var best := sides[0]
+	for side: int in sides:
+		var face := Vector2(0.5, 0.5) + Vector2(Furniture.N4[side]) * 0.5
+		var best_face := Vector2(0.5, 0.5) + Vector2(Furniture.N4[best]) * 0.5
+		if f.distance_to(face) < f.distance_to(best_face): best = side
+	return best
 
 func _pos_to_cell(pos: Vector2) -> Vector2i:
 	var local := (pos - pan) / zoom - ORIGIN

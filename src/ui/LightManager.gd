@@ -7,9 +7,10 @@ extends Node2D
 ## screen — is redrawn when the view, the walls or the lights change, never otherwise.
 ## Every light is one instance of a single MultiMesh quad (one draw call for all of
 ## them); its shader marches from the lamp towards the texel through a wall mask that
-## has one texel per cell and linear filtering, so shadow edges come out soft. A wall's
-## face towards the lamp is lit; furniture under 2 m, glass and open doors let light
-## through; a lamp always lights its own tile. The map starts from the ambient colour and
+## has one texel per cell, read exactly; five rays across the lamp's width and a blur
+## soften the edges. A wall's face towards the lamp is lit, its far face is not; furniture
+## under 2 m, glass and open doors let light through; a lamp always lights its own tile,
+## and a wall lamp only its own side of the wall. The map starts from the ambient colour and
 ## the finished texture MULTIPLIES the terrain layer only — tokens, labels and previews
 ## stay readable. The cost follows the screen, not the number of lamps or the map size.
 ##
@@ -61,7 +62,10 @@ const SHADER := """
 shader_type canvas_item;
 render_mode blend_add, unshaded;
 
-uniform sampler2D walls : filter_linear, repeat_disable;
+// One texel per cell, read exactly: a ray is stopped by a wall cell or it is not. The
+// softness comes from the area light below and the composite blur, never from blending
+// the mask — blended reads let light seep a cell deep behind every wall (0.11).
+uniform sampler2D walls : filter_nearest, repeat_disable;
 uniform vec2 board;          // board size in cells
 
 varying vec2 local;
@@ -72,6 +76,10 @@ void vertex() {
 	local = VERTEX;            // quad spans [-1, 1]
 	light = INSTANCE_CUSTOM;
 	tint = COLOR;
+}
+
+float wall_at(vec2 q) {
+	return texture(walls, q / board).r;
 }
 
 void fragment() {
@@ -85,40 +93,58 @@ void fragment() {
 		// Broad soft disk: bright most of the way, easing out at the rim. MapLighting
 		// spaces lamps with this exact curve (MapLighting.falloff).
 		float fall = 1.0 - smoothstep(0.0, 1.0, d / r);
-		float tr = 1.0;
-		// The lamp's own tile and the wall face it hangs on are never in its shadow.
-		if (d > 0.85) {
-			vec2 own = floor(p) + 0.5;
-			vec2 src = floor(lp) + 0.5;
-			vec2 dir = (p - lp) / d;
-			vec2 side = vec2(-dir.y, dir.x);
-			// An area light, not a point: five rays from across the lamp's width give
-			// wide soft penumbrae instead of hard diagonal wedges behind wall corners.
-			float spread = clamp(r * 0.07, 0.3, 0.8);
-			float sum = 0.0;
-			for (int k = -2; k <= 2; k++) {
-				vec2 o = lp + side * (float(k) * spread);
-				vec2 to = p - o;
-				float len = length(to);
-				vec2 st = to / max(len, 0.0001);
-				float t = 1.0;
-				for (int i = 0; i < 40; i++) {
-					float along = 0.6 + float(i) * 0.45;
-					if (along >= len) break;
-					vec2 q = o + st * along;
-					vec2 off = abs(q - own);
-					if (max(off.x, off.y) < 1.0) break;
-					vec2 near = abs(q - src);
-					if (max(near.x, near.y) < 1.0) continue;
-					t *= 1.0 - texture(walls, q / board).r;
-					if (t < 0.02) break;
+		vec2 own = floor(p);
+		vec2 src = floor(lp);
+		vec2 dir = (p - lp) / max(d, 0.0001);
+		vec2 side = vec2(-dir.y, dir.x);
+		// An area light, not a point: five rays from across the lamp's width give wide soft
+		// penumbrae instead of hard diagonal wedges behind wall corners. Each ray starts on
+		// the lamp's side of any wall: a lamp on a wall never shines from behind it.
+		float spread = clamp(r * 0.07, 0.3, 0.8);
+		float sum = 0.0;
+		for (int k = -2; k <= 2; k++) {
+			float want = abs(float(k)) * spread;
+			vec2 sd = side * sign(float(k));
+			float reach = 0.0;
+			for (int j = 1; j <= 8; j++) {
+				float a = float(j) * 0.2;
+				if (a > want) {
+					if (wall_at(lp + sd * want) < 0.5) reach = want;
+					break;
 				}
-				sum += t;
+				if (wall_at(lp + sd * a) > 0.5) break;
+				reach = a;
 			}
-			tr = sum / 5.0;
+			vec2 o = lp + sd * reach;
+			vec2 to = p - o;
+			float len = length(to);
+			vec2 st = to / max(len, 0.0001);
+			float t = 1.0;
+			for (int i = 0; i < 48; i++) {
+				float along = 0.25 + float(i) * 0.35;
+				if (along >= len) break;
+				vec2 q = o + st * along;
+				vec2 cq = floor(q);
+				if (cq == own) break;         // reached the target's own cell
+				if (cq == src) continue;      // the lamp's own cell never shades it
+				t *= 1.0 - wall_at(q);
+				if (t < 0.02) break;
+			}
+			sum += t;
+		}
+		float tr = sum / 5.0;
+		// A wall is lit on the face towards the light only: texels more than about half a
+		// cell into the wall, measured back along the ray, stay dark — so the far face of a
+		// wall (and of the wall a lamp hangs on) never lights up.
+		float face = 1.0;
+		if (wall_at(p) > 0.5) {
+			vec2 b = -dir;
+			float tx = b.x > 0.0 ? (own.x + 1.0 - p.x) / b.x : (b.x < 0.0 ? (p.x - own.x) / -b.x : 1e9);
+			float ty = b.y > 0.0 ? (own.y + 1.0 - p.y) / b.y : (b.y < 0.0 ? (p.y - own.y) / -b.y : 1e9);
+			face = 1.0 - smoothstep(0.3, 0.55, min(tx, ty));
 		}
 		float glow = smoothstep(0.9, 0.0, d) * 0.55;
-		COLOR = vec4(tint.rgb * light.w * (fall * tr + glow), 1.0);
+		COLOR = vec4(tint.rgb * light.w * (fall + glow) * tr * face, 1.0);
 	}
 }
 """

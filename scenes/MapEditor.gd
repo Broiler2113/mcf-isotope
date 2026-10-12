@@ -363,7 +363,7 @@ static func map_color(m: MapData, i: int, env: String) -> Color:
 ## вид пола (MCF.FLOOR_LOOKS, 0 — пол окружения)].
 func _tuple(i: int) -> Array:
 	return [int(map.floor_type[i]), float(map.cover_height[i]), map.is_space[i] != 0,
-			String(map.feature_id[i]), int(map.zone_owner[i]), map.get_turn(i), map.get_look(i), map.get_accent(i), map.get_door(i), map.fixtures.get(i, []).duplicate(), map.get_tint(i)]
+			String(map.feature_id[i]), int(map.zone_owner[i]), map.get_turn(i), map.get_look(i), map.get_accent(i), map.get_door(i), map.fixtures.get(i, []).duplicate(true), map.get_tint(i)]
 
 ## Записать клетку: в карту, в зеркало плиток, в миникарту и слой зон.
 func _write(i: int, t: Array) -> void:
@@ -376,9 +376,9 @@ func _write(i: int, t: Array) -> void:
 	var look := int(t[6]) if t.size() > 6 else 0
 	var accent := int(t[7]) if t.size() > 7 else 0
 	var door := int(t[8]) if t.size() > 8 else 0
-	var fixture := MapData.valid_fixture(t[9]) if t.size() > 9 and cover >= MCF.WALL_HEIGHT and not MCF.is_glass(feat) and feat != MCF.FEATURE_AIRLOCK else []
-	# A light colour belongs to a lamp: a cell with no lamp left keeps none (0.11).
-	var tint := int(t[10]) if t.size() > 10 and (not fixture.is_empty() or Furniture.emits_light(feat)) else 0
+	var fixture := MapData.valid_lamps(t[9]) if t.size() > 9 and cover >= MCF.WALL_HEIGHT and not MCF.is_glass(feat) and feat != MCF.FEATURE_AIRLOCK else []
+	# The cell's light colour belongs to a standing lamp (0.11); wall lamps carry their own.
+	var tint := int(t[10]) if t.size() > 10 and Furniture.emits_light(feat) else 0
 	# Клетка уже такая — ни записи, ни отката: повторный мазок по тем же клеткам бесплатен.
 	if map.floor_type[i] == fl and map.cover_height[i] == cover and (map.is_space[i] != 0) == sp \
 			and map.feature_id[i] == feat and map.zone_owner[i] == zone and map.get_turn(i) == turn \
@@ -436,7 +436,7 @@ func _write(i: int, t: Array) -> void:
 			gc.clear_feature()
 	if gc.cover_height != cover:
 		gc.cover_height = cover
-	gc.fixture = fixture
+	gc.lamps = fixture
 	if zone_changed:
 		_zone_img.set_pixel(x, y, _zone_color(int(t[4])))
 		_zone_stale = true
@@ -646,18 +646,24 @@ func _brush_cell(c: Vector2i, mask: int) -> void:
 		_set_spawn(c, brush.substr(5), MCF.Owner.NEUTRAL)
 	elif brush == "space":
 		_clear_spawn(c)
-	_write(i, _brushed(_tuple(i), mask))
+	_write(i, _brushed(_tuple(i), mask, i))
 
 ## Какой станет клетка t (кортеж _tuple) под кистью в отражении mask — без записи: этим же
 ## рисуется предпросмотр под курсором.
-func _brushed(t: Array, mask: int) -> Array:
+func _brushed(t: Array, mask: int, i: int = -1) -> Array:
 	t = t.duplicate()
 	while t.size() < 9:
 		t.append(-1 if t.size() == 5 else 0)
 	if t.size() < 10: t.append([])
 	if Furniture.is_wall_light(brush):
 		if float(t[1]) >= MCF.WALL_HEIGHT and not MCF.is_glass(str(t[3])) and str(t[3]) != MCF.FEATURE_AIRLOCK:
-			t[9] = [brush, Furniture.durability_of(brush), mirror_turn(maxi(0, brush_turn), mask)]
+			# One lamp per side (0.11): the brush hangs it on the side R picked (or the
+			# wall's open side), and lamps on the other sides stay.
+			var side := mirror_turn(brush_turn, mask) if brush_turn >= 0 else _auto_lamp_side(i)
+			var lamps := MapData.valid_lamps(t[9])
+			var old := MapData.lamp_on(lamps, side)
+			var tint := int(old[3]) if not old.is_empty() and str(old[0]) == brush else 0
+			t[9] = MapData.with_lamp(lamps, [brush, Furniture.durability_of(brush), side, tint])
 		return t
 	if brush.begins_with("accent:"):
 		t[7] = int(brush.substr(7))
@@ -956,6 +962,12 @@ func rotate_key(back_to_auto: bool = false) -> void:
 	elif brush.begins_with("decal:"):
 		decal_rotation = 0.0 if back_to_auto else fposmod(decal_rotation + PI / 2, TAU)
 		queue_redraw()
+	elif Furniture.is_wall_light(brush):
+		brush_turn = -1 if back_to_auto else (brush_turn + 1) % 4
+		_flash("%s goes on the %s" % [_brush_name(brush),
+				"open side of the wall (auto)" if brush_turn < 0 else SIDE_NAMES[brush_turn] + " side of the wall"])
+		_refresh_status()
+		queue_redraw()
 	elif Furniture.is_furniture(brush):
 		if back_to_auto:
 			brush_turn = -1
@@ -980,12 +992,23 @@ func _rotate_hovered(back_to_auto: bool) -> bool:
 		return false
 	var i := _hover.y * map.width + _hover.x
 	if map.fixtures.has(i):
+		# The lamp nearest the cursor moves to the next free side of its wall.
+		var side := _hover_lamp_side(i)
+		var lamps: Array = map.fixtures[i]
+		var rec := MapData.lamp_on(lamps, side).duplicate()
+		var to := _auto_lamp_side(i) if back_to_auto else -1
+		for step in range(1, 4):
+			if to >= 0: break
+			if MapData.lamp_on(lamps, (side + step) % 4).is_empty(): to = (side + step) % 4
+		if to < 0 or to == side or not MapData.lamp_on(lamps, to).is_empty(): return true
+		rec[2] = to
 		_begin()
 		var t := _tuple(i)
-		t[9] = t[9].duplicate()
-		t[9][2] = 0 if back_to_auto else (int(t[9][2]) + 1) % 4
+		t[9] = MapData.with_lamp(MapData.without_lamp(lamps, side), rec)
 		_write(i, t)
 		_commit()
+		_flash("%s moved to the %s side" % [Furniture.DEFS[str(rec[0])].name, SIDE_NAMES[to]])
+		_sync_lighting()
 		queue_redraw()
 		return true
 	var fid := String(map.feature_id[i])
@@ -1007,6 +1030,37 @@ func _rotate_hovered(back_to_auto: bool) -> bool:
 	_flash("%s faces %s" % [_brush_name(fid), turn_name(k)])
 	queue_redraw()
 	return true
+
+const SIDE_NAMES := ["top", "right", "bottom", "left"]
+
+## The side a lamp brush picks by itself: the first open face of the wall without a lamp,
+## so a lamp painted along a corridor wall hangs into the corridor.
+func _auto_lamp_side(i: int) -> int:
+	if i < 0 or map == null: return 2
+	var c := Vector2i(i % map.width, i / map.width)
+	var lamps: Array = map.fixtures.get(i, [])
+	var fallback := -1
+	for k in 4:
+		var q: Vector2i = c + Furniture.N4[k]
+		if not map.in_bounds(q): continue
+		var qi := q.y * map.width + q.x
+		if map.cover_height[qi] >= MCF.WALL_HEIGHT or map.is_space[qi] != 0: continue
+		if MapData.lamp_on(lamps, k).is_empty(): return k
+		if fallback < 0: fallback = k
+	return fallback if fallback >= 0 else 2
+
+## Of the lamps on wall cell i, the one on the face nearest the mouse; -1: none.
+func _hover_lamp_side(i: int) -> int:
+	var lamps: Array = map.fixtures.get(i, [])
+	if lamps.is_empty(): return -1
+	var c := Vector2i(i % map.width, i / map.width)
+	var f := (get_viewport().get_mouse_position() - pan) / cell_size() - Vector2(c)
+	var best := int(lamps[0][2])
+	for rec: Array in lamps:
+		var face := Vector2(0.5, 0.5) + Vector2(Furniture.N4[int(rec[2])]) * 0.5
+		if f.distance_to(face) < f.distance_to(Vector2(0.5, 0.5) + Vector2(Furniture.N4[best]) * 0.5):
+			best = int(rec[2])
+	return best
 
 static func turn_name(k: int) -> String:
 	return "the nearest wall (auto)" if k < 0 else ["up", "right", "down", "left"][k % 4]
@@ -1499,8 +1553,38 @@ func _draw() -> void:
 	if show_zones:
 		_draw_zone_numbers(font)
 	_draw_symmetry_axes()
+	if cs >= 8.0: _draw_lamp_sides(Rect2i(x0, y0, x1 - x0 + 1, y1 - y0 + 1))
 	_draw_overlays()
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+## Which side of its wall every lamp is on (0.11): a bar of its light colour along that face
+## and an arrow pointing where it shines. The lamp brush shows the same mark under the cursor.
+func _draw_lamp_sides(view: Rect2i) -> void:
+	for i: int in map.fixtures:
+		var c := Vector2i(i % map.width, i / map.width)
+		if not view.has_point(c): continue
+		for lamp: Array in map.fixtures[i]:
+			_draw_lamp_mark(c, int(lamp[2]), Furniture.light_color_of(str(lamp[0]), int(lamp[3])), 1.0)
+	if tool == Tool.BRUSH and Furniture.is_wall_light(brush) and map.in_bounds(_hover):
+		var hi := _hover.y * map.width + _hover.x
+		if map.cover_height[hi] >= MCF.WALL_HEIGHT and not MCF.is_glass(map.feature_id[hi]) \
+				and map.feature_id[hi] != MCF.FEATURE_AIRLOCK:
+			var side := brush_turn if brush_turn >= 0 else _auto_lamp_side(hi)
+			_draw_lamp_mark(_hover, side, Ui.accent_color(), 0.5 + 0.4 * absf(sin(Time.get_ticks_msec() * 0.006)))
+			queue_redraw()   # the brush mark pulses
+
+func _draw_lamp_mark(c: Vector2i, side: int, colour: Color, alpha: float) -> void:
+	var n := Vector2(Furniture.N4[side])
+	var t := Vector2(-n.y, n.x)
+	var mid := (Vector2(c) + Vector2(0.5, 0.5) + n * 0.5) * CELL
+	var bar := CELL * 0.36
+	var ink := Color(0.05, 0.05, 0.06, 0.8 * alpha)
+	draw_line(mid - t * bar, mid + t * bar, ink, CELL * 0.16)
+	draw_line(mid - t * bar, mid + t * bar, Color(colour, alpha), CELL * 0.09)
+	var tip := mid + n * CELL * 0.3
+	var arrow := PackedVector2Array([mid + n * CELL * 0.06 - t * CELL * 0.14, tip, mid + n * CELL * 0.06 + t * CELL * 0.14])
+	draw_colored_polygon(arrow, Color(colour, 0.85 * alpha))
+	draw_polyline(arrow + PackedVector2Array([arrow[0]]), ink, maxf(1.0, CELL * 0.03))
 
 ## Номер зоны крупно в её середине — какая из цветных областей кому достанется.
 func _draw_zone_numbers(font: Font) -> void:
@@ -1743,7 +1827,7 @@ func _build_preview() -> void:
 					cells[m] = null
 					_pv_thumbs.append([m, _ghost(brush)])
 				else:
-					cells[m] = _brushed(_tuple(m.y * map.width + m.x), mask)
+					cells[m] = _brushed(_tuple(m.y * map.width + m.x), mask, m.y * map.width + m.x)
 	# Что на самом деле меняется: пол (или объект убирают) — и объект.
 	var changed: Array = []   # [клетка, пол?, объект?]
 	for c: Vector2i in cells:
@@ -1819,7 +1903,7 @@ func _set_scratch(g: Grid, at: Vector2i, t: Array) -> void:
 		if t.size() > 5 and int(t[5]) >= 0:
 			g.furniture_turn[at] = [String(t[3]), int(t[5])]
 	gc.cover_height = float(t[1])
-	gc.fixture = t[9] if t.size() > 9 else []
+	gc.lamps = t[9] if t.size() > 9 else []
 	if t.size() > 6 and int(t[6]) != 0:
 		if g.floor_look.is_empty():
 			g.floor_look.resize(g.width * g.height)
@@ -2063,22 +2147,50 @@ func _open_light_menu(screen: Vector2) -> bool:
 	if _light_menu == null:
 		_light_menu = PopupMenu.new()
 		_light_menu.theme = Ui.theme
-		_light_menu.id_pressed.connect(func(id: int) -> void: _set_light_tint(int(_light_menu.get_meta("cell")), id))
+		_light_menu.id_pressed.connect(func(id: int) -> void:
+			_set_light_tint(int(_light_menu.get_meta("cell")), int(_light_menu.get_meta("side")), id))
 		add_child(_light_menu)
 	_light_menu.clear()
+	# A wall lamp: the one on the face nearest the click (a wall can carry one per side).
+	var side := -1
+	var f := (screen - pan) / cell_size() - Vector2(c)
+	for lamp: Array in map.fixtures.get(i, []):
+		var face := Vector2(0.5, 0.5) + Vector2(Furniture.N4[int(lamp[2])]) * 0.5
+		if side < 0 or f.distance_to(face) < f.distance_to(Vector2(0.5, 0.5) + Vector2(Furniture.N4[side]) * 0.5):
+			side = int(lamp[2])
+	var lamp := MapData.lamp_on(map.fixtures.get(i, []), side) if side >= 0 else []
+	var id := str(lamp[0]) if side >= 0 else map.feature_id[i]
+	var current := int(lamp[3]) if side >= 0 else map.get_tint(i)
+	if side >= 0:
+		_light_menu.add_separator("%s · %s side" % [Furniture.DEFS[id].name, SIDE_NAMES[side]])
 	for t in Furniture.LIGHT_TINTS.size():
-		var swatch_colour: Color = Furniture.LIGHT_TINTS[t][1] if t > 0 \
-				else Furniture.light_color_of(map.fixtures[i][0] if map.fixtures.has(i) else map.feature_id[i], 0)
+		var swatch_colour: Color = Furniture.LIGHT_TINTS[t][1] if t > 0 else Furniture.light_color_of(id, 0)
 		_light_menu.add_radio_check_item("Light colour · %s" % Furniture.LIGHT_TINTS[t][0], t)
-		_light_menu.set_item_icon(t, _swatch(swatch_colour))
-		_light_menu.set_item_checked(t, map.get_tint(i) == t)
+		var at := _light_menu.get_item_index(t)
+		_light_menu.set_item_icon(at, _swatch(swatch_colour))
+		_light_menu.set_item_checked(at, current == t)
+	if side >= 0:
+		_light_menu.add_separator()
+		_light_menu.add_item("Remove this lamp", LIGHT_REMOVE)
 	_light_menu.set_meta("cell", i)
+	_light_menu.set_meta("side", side)
 	_light_menu.popup(Rect2i(Vector2i(get_screen_transform() * screen), Vector2i.ZERO))
 	return true
 
-func _set_light_tint(i: int, tint: int) -> void:
+const LIGHT_REMOVE := 100
+
+## side >= 0: the wall lamp on that side (LIGHT_REMOVE takes it down); -1: the standing lamp.
+func _set_light_tint(i: int, side: int, tint: int) -> void:
 	var t := _tuple(i)
-	t[10] = tint
+	if side < 0:
+		t[10] = tint
+	elif tint == LIGHT_REMOVE:
+		t[9] = MapData.without_lamp(t[9], side)
+	else:
+		var rec := MapData.lamp_on(t[9], side).duplicate()
+		if rec.is_empty(): return
+		rec[3] = tint
+		t[9] = MapData.with_lamp(t[9], rec)
 	_begin()
 	_write(i, t)
 	_commit()
@@ -2627,7 +2739,10 @@ func _refresh_status() -> void:
 	var parts: Array[String] = ["%s · %s" % [tname, what]]
 	if tool in [Tool.BRUSH, Tool.ERASER, Tool.LINE]:
 		parts[0] += " · size %d" % brush_size
-	if Furniture.is_furniture(brush) and tool != Tool.STAMP:
+	if Furniture.is_wall_light(brush) and tool != Tool.STAMP:
+		parts[0] += " · %s (%s)" % ["open side of the wall" if brush_turn < 0 else SIDE_NAMES[brush_turn] + " side of the wall",
+				Keybinds.label("editor_rotate")]
+	elif Furniture.is_furniture(brush) and tool != Tool.STAMP:
 		parts[0] += " · faces %s (%s)" % [turn_name(brush_turn), Keybinds.label("editor_rotate")]
 	parts.append("%d×%d %s" % [map.width, map.height, MapPresets.name_of(_env)])
 	if map.in_bounds(_hover):
@@ -2648,6 +2763,8 @@ func _describe(c: Vector2i) -> String:
 			else MCF.FLOOR_LOOK_NAMES[clampi(map.get_look(i), 0, MCF.FLOOR_LOOK_NAMES.size() - 1)])
 	if map.feature_id[i] != "":
 		s += " + " + _brush_name(map.feature_id[i])
+	for lamp: Array in map.fixtures.get(i, []):
+		s += " · %s on the %s side" % [Furniture.DEFS[str(lamp[0])].name, SIDE_NAMES[int(lamp[2])]]
 	if map.zone_owner[i] >= 0:
 		s += " · Zone %d" % (map.zone_owner[i] + 1)
 	if _spawn_at.has(c):

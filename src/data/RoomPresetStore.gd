@@ -81,8 +81,8 @@ static func to_map(p: Dictionary, env: String) -> MapData:
 		if t.size() > 7: m.set_accent(i, int(t[7]))
 		if t.size() > 8: m.set_door(i, int(t[8]))
 		if t.size() > 9:
-			var fixture := MapData.valid_fixture(t[9])
-			if not fixture.is_empty() and m.cover_height[i] >= MCF.WALL_HEIGHT: m.fixtures[i] = fixture
+			var lamps := MapData.valid_lamps(t[9])
+			if not lamps.is_empty() and m.cover_height[i] >= MCF.WALL_HEIGHT: m.fixtures[i] = lamps
 		if t.size() > 10: m.set_tint(i, int(t[10]))
 	for spawn: Array in p.get("spawns", []):
 		m.set_spawn(Vector2i(int(spawn[0]), int(spawn[1])), str(spawn[2]), int(spawn[3]))
