@@ -4,6 +4,15 @@ extends RefCounted
 ## Dense checkpoints stay compact in memory and inside the existing compressed JSON.
 ## Payloads contain only plain state data; bytes_to_var does not allow objects.
 const ACTION_INTERVAL := 48
+
+## Is a checkpoint due after `since` actions? Every handoff on ordinary boards; on a huge
+## board one pack costs ~200 ms (Colossal), so handoffs closer than cells/2048 actions apart
+## and the plain interval stretch with the board. Seeking replays at most that many actions.
+static func due(state: GameState, since: int, handoff: bool) -> bool:
+	var cells := state.grid.width * state.grid.height
+	if since >= maxi(ACTION_INTERVAL, cells / 1024):
+		return true
+	return handoff and since >= cells / 2048
 const MAX_BYTES := 64 * 1024 * 1024
 
 static func pack(state: GameState, resolver: GameActionResolver, fx: FxDecals, mid_turn: bool) -> Dictionary:

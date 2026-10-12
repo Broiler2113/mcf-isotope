@@ -309,12 +309,19 @@ func _preview() -> void:
 	ck(ed._brush_buttons.has("bed") and not ed._brush_buttons.has("bed_red"),
 			"colour variants are not separate palette buttons")
 	ed._select_brush("bed_red")
-	ck(ed._colour_row.visible and ed._colour_row.get_child_count() == 1 + Furniture.colours_of("bed").size()
+	ed._open_variants(ed._brush_buttons["bed"])
+	ck(ed._variant_popup.visible and ed._variant_box.get_child_count() == Furniture.colours_of("bed").size()
 			and (ed._brush_buttons["bed"] as Button).button_pressed,
-			"a coloured bed lights the Bed button and shows the colour row")
+			"a coloured bed lights the Bed button and opens its colours beside it")
+	var bed_rect: Rect2 = (ed._brush_buttons["bed"] as Button).get_global_rect()
+	var bx: float = ed._brush_buttons["bed"].get_screen_position().x
+	ck(ed._variant_popup.position.x >= int(bx + bed_rect.size.x) or ed._variant_popup.position.x + ed._variant_popup.size.x <= int(bx),
+			"the colour popup sits beside the palette button, not over it or at the top")
+	ed._variant_popup.hide()
 	_drag(Vector2i(4, 4), Vector2i(4, 4))
 	ed._select_brush("chair")
-	ck(not ed._colour_row.visible, "a piece with one colour hides the row")
+	ed._open_variants(ed._brush_buttons["chair"])
+	ck(not ed._variant_popup.visible, "a piece with one colour opens no popup")
 	_key(KEY_I)
 	_press(Vector2i(4, 4))
 	ck(ed.brush == "bed_red", "the eyedropper picks the colour too")

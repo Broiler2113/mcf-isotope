@@ -218,7 +218,7 @@ func snapshot(with_cells: bool = true) -> Dictionary:
 			"feature_owner": c.feature_owner, "feature_durability": c.feature_durability,
 			"station_operator_id": c.station_operator_id,
 			"corpse_count": c.corpse_count, "dirt_level": c.dirt_level,
-			"airlock_welded": c.airlock_welded, "fixture": c.fixture.duplicate(),
+			"airlock_welded": c.airlock_welded, "fixture": c.lamps.duplicate(true),
 		})
 	return {
 		"units": us, "vehicles": vs, "cells": cs,
@@ -320,7 +320,7 @@ func restore(snap: Dictionary) -> void:
 		c.corpse_count = rec["corpse_count"]
 		c.dirt_level = rec["dirt_level"]
 		c.airlock_welded = rec["airlock_welded"]
-		c.fixture = rec.get("fixture", [])
+		c.lamps = rec.get("fixture", [])
 	turns.active_index = snap["active_index"]
 	turns.round_number = snap["round_number"]
 	# Порядок инициативы теперь ИЗМЕНЯЕМ по ходу боя: группы нейтралов встают в

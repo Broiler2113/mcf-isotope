@@ -83,6 +83,8 @@ var accent_name := "green"
 var ui_scale := 1.0
 signal board_settings_changed
 var dynamic_lighting := false
+## How dark unlit ground is with dynamic lighting on: 0 = daylight, 1 = pitch black.
+var light_darkness := 0.75
 var grid_visible := true
 var grid_opacity := 0.32
 var fullscreen := false
@@ -121,6 +123,7 @@ func _load_settings() -> void:
 	ui_scale = clampf(float(cf.get_value("ui", "scale", 1.0)), UI_SCALE_MIN, UI_SCALE_MAX)
 	fullscreen = bool(cf.get_value("display", "fullscreen", false))
 	dynamic_lighting = bool(cf.get_value("board", "dynamic_lighting", false))
+	light_darkness = clampf(float(cf.get_value("board", "light_darkness", 0.75)), 0.0, 1.0)
 	grid_visible = bool(cf.get_value("board", "grid_visible", true))
 	grid_opacity = clampf(float(cf.get_value("board", "grid_opacity", 0.32)), 0.0, 1.0)
 
@@ -131,6 +134,7 @@ func _save_settings() -> void:
 	cf.set_value("ui", "scale", ui_scale)
 	cf.set_value("display", "fullscreen", fullscreen)
 	cf.set_value("board", "dynamic_lighting", dynamic_lighting)
+	cf.set_value("board", "light_darkness", light_darkness)
 	cf.set_value("board", "grid_visible", grid_visible)
 	cf.set_value("board", "grid_opacity", grid_opacity)
 	cf.save(SETTINGS_PATH)
@@ -143,6 +147,11 @@ func set_grid(visible: bool, opacity: float) -> void:
 
 func set_dynamic_lighting(enabled: bool) -> void:
 	dynamic_lighting = enabled
+	_save_settings()
+	board_settings_changed.emit()
+
+func set_light_darkness(value: float) -> void:
+	light_darkness = clampf(value, 0.0, 1.0)
 	_save_settings()
 	board_settings_changed.emit()
 

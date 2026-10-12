@@ -12,3 +12,7 @@ graphify-out/*
 !graphify-out/rebuild.py
 !graphify-out/.gd_extract.py
 !graphify-out/vis-network.min.js
+
+# Saves, replays, maps and presets when running from source (GameFolders)
+/Isotope Data/
+__pycache__/

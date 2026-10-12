@@ -9,5 +9,5 @@ guest_pid=$!
 fail=0
 wait "$host_pid" || fail=1
 wait "$guest_pid" || fail=1
-rg 'net smoke|FAIL|SCRIPT ERROR' /tmp/mcf_kick_{host,guest}.log
+grep -E 'net smoke|FAIL|SCRIPT ERROR' /tmp/mcf_kick_{host,guest}.log
 exit "$fail"

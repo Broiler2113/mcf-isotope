@@ -141,10 +141,11 @@ func _initialize() -> void:
 	# --- replay/save notes let the menu list files without reading them ---
 	var path := "user://_tmp_note_test.mcfr"
 	ReplayFile.write(path, {"meta": {"map": "town", "round": 4, "steps": 120}})
-	ck(FileAccess.file_exists(path + ReplayFile.NOTE_EXT), "writing a replay also writes its note")
+	ck(FileAccess.file_exists(ReplayFile._note_path(path)) and not FileAccess.file_exists(path + ReplayFile.NOTE_EXT),
+			"writing a replay caches its note outside the shared folder (0.11)")
 	ck(ReplayFile.note_for(path) == "town · round 4 · 120 actions", "the note is the menu caption (%s)" % ReplayFile.note_for(path))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(ReplayFile._note_path(path)))
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
-	DirAccess.remove_absolute(ProjectSettings.globalize_path(path + ReplayFile.NOTE_EXT))
 
 	print("batch zones: %d failure(s)" % fails)
 	quit(1 if fails else 0)

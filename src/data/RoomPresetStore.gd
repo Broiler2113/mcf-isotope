@@ -1,7 +1,7 @@
 extends RefCounted
 
 ## Reusable editor selections use the same cell tuples as the clipboard.
-const DIR := "user://room_presets"
+static var DIR := GameFolders.dir(GameFolders.PRESETS)
 
 static func _path(name: String) -> String:
 	return DIR.path_join(name.strip_edges().validate_filename() + ".json")
@@ -39,6 +39,31 @@ static func read_preset(name: String) -> Dictionary:
 static func remove_preset(name: String) -> Error:
 	return DirAccess.remove_absolute(_path(name))
 
+static func rename_preset(old_name: String, new_name: String) -> bool:
+	if new_name.strip_edges().is_empty() or FileAccess.file_exists(_path(new_name)): return false
+	return DirAccess.rename_absolute(_path(old_name), _path(new_name)) == OK
+
+## The editor's built-in rooms and structures become ordinary preset files once (0.11), so
+## they can be edited, renamed or deleted like any other — and a deleted one stays gone.
+## Kept inside the folder itself: a fresh install folder gets the built-ins again.
+const SEEDED_MARKER := ".builtins-seeded"
+const SEED_ENV := {"small_room": "station", "large_room": "station", "corridor": "station",
+		"house": "town", "pillbox": "field", "sandbag_nest": "field", "trench": "field", "hedgehogs": "field"}
+
+static func seed_builtins() -> int:
+	var marker := DIR.path_join(SEEDED_MARKER)
+	if FileAccess.file_exists(marker): return 0
+	DirAccess.make_dir_recursive_absolute(DIR)
+	var n := 0
+	for s: Dictionary in MapPresets.STAMPS:
+		if not FileAccess.file_exists(_path(str(s["name"]))) \
+				and save_preset(str(s["name"]), MapPresets.stamp(str(s["id"])), str(SEED_ENV.get(s["id"], "station"))):
+			n += 1
+	var f := FileAccess.open(marker, FileAccess.WRITE)
+	if f != null:
+		f.close()
+	return n
+
 static func to_map(p: Dictionary, env: String) -> MapData:
 	var m := MapData.new(int(p["w"]), int(p["h"]))
 	m.env = env
@@ -56,8 +81,9 @@ static func to_map(p: Dictionary, env: String) -> MapData:
 		if t.size() > 7: m.set_accent(i, int(t[7]))
 		if t.size() > 8: m.set_door(i, int(t[8]))
 		if t.size() > 9:
-			var fixture := MapData.valid_fixture(t[9])
-			if not fixture.is_empty() and m.cover_height[i] >= MCF.WALL_HEIGHT: m.fixtures[i] = fixture
+			var lamps := MapData.valid_lamps(t[9])
+			if not lamps.is_empty() and m.cover_height[i] >= MCF.WALL_HEIGHT: m.fixtures[i] = lamps
+		if t.size() > 10: m.set_tint(i, int(t[10]))
 	for spawn: Array in p.get("spawns", []):
 		m.set_spawn(Vector2i(int(spawn[0]), int(spawn[1])), str(spawn[2]), int(spawn[3]))
 	m.decals = p.get("decals", []).duplicate(true)

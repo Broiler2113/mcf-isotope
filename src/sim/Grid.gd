@@ -29,6 +29,12 @@ var floor_look: PackedByteArray = PackedByteArray()
 ## Акцент службы по клеткам (MapData.wall_accent) — тоже только для отрисовки.
 var wall_accent: PackedByteArray = PackedByteArray()
 var map_decals: Array = []
+## Light colour per cell (MapData.light_tint) — display only.
+var light_tint: PackedByteArray = PackedByteArray()
+
+func tint_at(x: int, y: int) -> int:
+	var i := y * width + x
+	return light_tint[i] if i < light_tint.size() else 0
 var door_look: PackedByteArray = PackedByteArray()
 
 func door_at(x: int, y: int) -> int:

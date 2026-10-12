@@ -6,7 +6,8 @@ extends RefCounted
 ## встроенным редактором карт (scenes/MapEditor.tscn). Слой симуляции строит из
 ## MapData готовый GameState через build_state().
 
-const MAPS_DIR := "user://maps"
+## Editor maps: plain files in the shared "Isotope Data/Maps" folder (GameFolders, 0.11).
+static var MAPS_DIR := GameFolders.dir(GameFolders.MAPS)
 ## Карты, поставляемые с игрой (#57). Только чтение: редактор всегда сохраняет в
 ## user://, поэтому правка встроенной карты создаёт пользовательскую копию, которая
 ## перекрывает оригинал по имени. Сам файл в res:// при этом остаётся нетронутым.
@@ -76,6 +77,7 @@ func resize(p_width: int, p_height: int) -> void:
 	floor_look = PackedByteArray()
 	wall_accent = PackedByteArray()
 	door_look = PackedByteArray()
+	light_tint = PackedByteArray()
 	decals = []
 	fixtures = {}
 
@@ -95,6 +97,7 @@ func resize_keep(p_width: int, p_height: int) -> void:
 	var old_turn := feature_turn
 	var old_look := floor_look
 	var old_accent := wall_accent
+	var old_tint := light_tint
 	var old_door := door_look
 	var old_decals := decals
 	var old_fixtures := fixtures
@@ -108,7 +111,7 @@ func resize_keep(p_width: int, p_height: int) -> void:
 			cover_height[dst] = old_cover[src]
 			is_space[dst] = old_space[src]
 			feature_id[dst] = old_feat[src]
-			if old_fixtures.has(src): fixtures[dst] = old_fixtures[src].duplicate()
+			if old_fixtures.has(src): fixtures[dst] = old_fixtures[src].duplicate(true)
 			zone_owner[dst] = old_zone[src]
 			if old_dur.has(src):
 				feature_dur[dst] = old_dur[src]
@@ -116,6 +119,8 @@ func resize_keep(p_width: int, p_height: int) -> void:
 				feature_turn[dst] = old_turn[src]
 			if old_look.size() > src and old_look[src] != 0:
 				set_look(dst, old_look[src])
+			if old_tint.size() > src and old_tint[src] != 0:
+				set_tint(dst, old_tint[src])
 			if old_accent.size() > src and old_accent[src] != 0:
 				set_accent(dst, old_accent[src])
 			if old_door.size() > src and old_door[src] != 0:
@@ -202,6 +207,8 @@ func apply_to_grid(grid: Grid) -> void:
 			and grid.width == width else PackedByteArray()
 	grid.map_decals = decals.duplicate(true)
 	grid.door_look = door_look.duplicate()
+	grid.light_tint = light_tint.duplicate() if light_tint.size() == grid.width * grid.height \
+			and grid.width == width else PackedByteArray()
 	grid.wall_accent = wall_accent.duplicate() if wall_accent.size() == grid.width * grid.height \
 			and grid.width == width else PackedByteArray()
 	grid.furniture_turn.clear()
@@ -223,7 +230,30 @@ func apply_to_grid(grid: Grid) -> void:
 					c.feature_durability = clampi(int(dmg[1]), 1, c.feature_durability)
 			else:
 				c.cover_height = cover_height[i]
-			c.fixture = fixtures.get(i, []) if c.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(fid) and fid != MCF.FEATURE_AIRLOCK else []
+			c.lamps = fixtures.get(i, []) if c.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(fid) and fid != MCF.FEATURE_AIRLOCK else []
+
+## The inverse of apply_to_grid (0.11): a board as a map, e.g. a saved battlefield for
+## the lobby preview. Units are not cells; callers add them as spawns.
+static func from_grid(grid: Grid, p_env: String = "") -> MapData:
+	var m := MapData.new(grid.width, grid.height)
+	m.env = p_env
+	for y in grid.height:
+		for x in grid.width:
+			var c := grid.cell_fast(x, y)
+			var i := y * grid.width + x
+			m.floor_type[i] = c.floor_type
+			m.cover_height[i] = c.cover_height
+			m.is_space[i] = 1 if c.is_space else 0
+			m.feature_id[i] = c.feature_id
+			if not c.lamps.is_empty(): m.fixtures[i] = c.lamps.duplicate(true)
+	m.floor_look = grid.floor_look.duplicate()
+	m.wall_accent = grid.wall_accent.duplicate()
+	m.door_look = grid.door_look.duplicate()
+	m.light_tint = grid.light_tint.duplicate()
+	m.decals = grid.map_decals.duplicate(true)
+	for c: Vector2i in grid.furniture_turn:
+		m.feature_turn[c.y * grid.width + c.x] = (grid.furniture_turn[c] as Array).duplicate()
+	return m
 
 ## Прочность предмета на клетке ниже табличной (§3.15); dur ≥ табличной снимает запись.
 func set_feature_damage(coord: Vector2i, dur: int) -> void:
@@ -255,6 +285,19 @@ func set_door(i: int, v: int) -> void:
 			return
 		door_look.resize(width * height)
 	door_look[i] = v
+
+## Light colour per cell (0.11, Furniture.LIGHT_TINTS; 0 = the lamp's own) — display only.
+var light_tint: PackedByteArray = PackedByteArray()
+
+func get_tint(i: int) -> int:
+	return light_tint[i] if i < light_tint.size() else 0
+
+func set_tint(i: int, v: int) -> void:
+	if light_tint.is_empty():
+		if v == 0:
+			return
+		light_tint.resize(width * height)
+	light_tint[i] = v
 
 func get_accent(i: int) -> int:
 	return wall_accent[i] if i < wall_accent.size() else 0
@@ -466,13 +509,15 @@ func to_dict() -> Dictionary:
 		out["floor_look"] = rle(floor_look)
 	if wall_accent.size() > 0 and wall_accent.count(0) < wall_accent.size():
 		out["wall_accent"] = rle(wall_accent)
+	if light_tint.size() > 0 and light_tint.count(0) < light_tint.size():
+		out["light_tint"] = rle(light_tint)
 	if not door_look.is_empty():
 		out["door_look"] = rle(door_look)
 	if not decals.is_empty():
 		out["decals"] = decals.duplicate(true)
 	if not fixtures.is_empty():
 		var records := {}
-		for i: int in fixtures: records[str(i)] = fixtures[i].duplicate()
+		for i: int in fixtures: records[str(i)] = fixtures[i].duplicate(true)
 		out["fixtures"] = records
 	return out
 
@@ -496,9 +541,9 @@ static func from_dict(d: Dictionary) -> MapData:
 	m.env = str(d.get("env", ""))
 	for key in d.get("fixtures", {}):
 		var i := int(key)
-		var record := valid_fixture(d.fixtures[key])
-		if i >= 0 and i < n and m.cover_height[i] >= MCF.WALL_HEIGHT and not record.is_empty():
-			m.fixtures[i] = record
+		var lamps := valid_lamps(d.fixtures[key])
+		if i >= 0 and i < n and m.cover_height[i] >= MCF.WALL_HEIGHT and not lamps.is_empty():
+			m.fixtures[i] = lamps
 	var fd: Dictionary = d.get("feature_durability", {})
 	for k: String in fd:
 		var rec: Array = fd[k]
@@ -517,6 +562,8 @@ static func from_dict(d: Dictionary) -> MapData:
 		m.floor_look = unrle(d["floor_look"], n)
 	if d.has("wall_accent"):
 		m.wall_accent = unrle(d["wall_accent"], n)
+	if d.has("light_tint"):
+		m.light_tint = unrle(d["light_tint"], n)
 	if d.has("door_look"):
 		m.door_look = unrle(d["door_look"], n)
 	var zo: Array = d.get("zone_owner", [])
@@ -573,7 +620,7 @@ static func list_maps() -> PackedStringArray:
 		if dir == null:
 			continue
 		for name in dir.get_files():
-			if name.ends_with(".json") and not seen.has(name):
+			if name.get_extension().to_lower() == "json" and not seen.has(name):
 				seen[name] = true
 				out.append(name)
 	out.sort()
@@ -590,7 +637,34 @@ static func path_for(name: String) -> String:
 		return bundled
 	return user_path
 
-static func valid_fixture(raw: Variant) -> Array:
-	if not raw is Array or raw.size() != 3 or not Furniture.is_wall_light(str(raw[0])):
-		return []
-	return [str(raw[0]), clampi(int(raw[1]), 1, Furniture.durability_of(str(raw[0]))), posmod(int(raw[2]), 4)]
+## The wall lamps of one cell, cleaned: at most one per side, each [id, durability, side,
+## tint], ordered by side (0.11). Also reads 0.10's single record [id, durability, side].
+static func valid_lamps(raw: Variant) -> Array:
+	var out: Array = []
+	if not raw is Array or raw.is_empty(): return out
+	var records: Array = [raw] if raw[0] is String else raw
+	for r: Variant in records:
+		if not r is Array or r.size() < 3 or not Furniture.is_wall_light(str(r[0])): continue
+		var id := str(r[0])
+		var tint := clampi(int(r[3]), 0, Furniture.LIGHT_TINTS.size() - 1) if r.size() > 3 else 0
+		out = with_lamp(out, [id, clampi(int(r[1]), 1, Furniture.durability_of(id)), posmod(int(r[2]), 4), tint])
+	return out
+
+## lamps with rec hung on its side, replacing whatever hung there.
+static func with_lamp(lamps: Array, rec: Array) -> Array:
+	var out := without_lamp(lamps, int(rec[2]))
+	out.append(rec.duplicate())
+	out.sort_custom(func(a: Array, b: Array) -> bool: return int(a[2]) < int(b[2]))
+	return out
+
+static func without_lamp(lamps: Array, side: int) -> Array:
+	var out: Array = []
+	for r: Array in lamps:
+		if int(r[2]) != side: out.append(r.duplicate())
+	return out
+
+## The lamp hanging on that side, or [].
+static func lamp_on(lamps: Array, side: int) -> Array:
+	for r: Array in lamps:
+		if int(r[2]) == side: return r
+	return []

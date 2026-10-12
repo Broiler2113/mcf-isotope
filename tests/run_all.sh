@@ -25,7 +25,7 @@ for script in tests/check_scripts.gd tests/run_codec.gd tests/run_headless.gd \
               tests/run_random_events.gd tests/run_gas_visibility.gd tests/run_demolish_materials.gd \
               tests/run_outer_grass.gd tests/run_ground_backdrop.gd tests/run_batch094.gd tests/run_replay_seek.gd tests/run_replay_bookmarks.gd \
               tests/run_decal_sync.gd tests/run_match_lifetime.gd tests/run_rl_learning.gd \
-              tests/run_rl_giant_defense.gd tests/run_batch098.gd tests/run_followup098.gd; do
+              tests/run_rl_giant_defense.gd tests/run_batch098.gd tests/run_followup098.gd tests/run_batch011.gd; do
   echo "=== $script ==="
   # shellcheck disable=SC2086
   "$GODOT" --headless --script "res://$script" $EXTRA
@@ -48,6 +48,7 @@ echo "=== tests/run_net_match.sh ==="
 bash tests/run_net_match.sh || fail=1
 bash tests/run_net_spectators.sh || fail=1
 bash tests/run_net_kick.sh || fail=1
+bash tests/run_net_relay.sh || fail=1
 
 if [ $fail -ne 0 ]; then
   echo "regression run FAILED"

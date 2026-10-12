@@ -785,7 +785,7 @@ func _sync_lighting() -> void:
 	if not is_instance_valid(_lighting):
 		_lighting = LightManager.new()
 		add_child(_lighting)
-	_lighting.update_view(_tile_grid, pan + ORIGIN * zoom, zoom, CELL)
+	_lighting.update_view(_tile_grid, pan, zoom, ORIGIN, CELL, map.environment(), {}, false, null, _tile_layer)
 
 func _process(delta: float) -> void:
 	_fit_ground()

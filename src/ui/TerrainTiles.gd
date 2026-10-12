@@ -479,15 +479,20 @@ func _evict() -> void:
 ## в слой объектов. at — угол клетки в картинке, res — точек на клетку.
 func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> void:
 	_paint_terrain(img, feat, c, at, res)
-	var fixture := _grid.cell_fast(c.x, c.y).fixture
-	if fixture.is_empty(): return
-	var tiles := _tile(str(fixture[0]), res)
-	if tiles.is_empty(): return
-	var picture: Image = tiles[0].duplicate()
-	for k in int(fixture[2]): picture.rotate_90(CLOCKWISE)
-	feat.blend_rect(picture, Rect2i(0, 0, res, res), at)
-	if int(fixture[1]) < Furniture.durability_of(str(fixture[0])):
-		feat.blend_rect(_crack_overlay(res), Rect2i(0, 0, res, res), at)
+	# Each wall lamp hangs on the half of the wall tile facing its own side (0.11).
+	for lamp: Array in _grid.cell_fast(c.x, c.y).lamps:
+		var id := str(lamp[0])
+		var tiles := _tile(id, res)
+		if tiles.is_empty(): continue
+		var side := int(lamp[2])
+		var picture: Image = tiles[0].duplicate()
+		for k in side: picture.rotate_90(CLOCKWISE)
+		if int(lamp[3]) > 0: picture = tint_lamp(picture, Furniture.light_color_of(id, int(lamp[3])))
+		feat.blend_rect(picture, Rect2i(0, 0, res, res), at)
+		if int(lamp[1]) < Furniture.durability_of(id):
+			var half: Rect2i = [Rect2i(0, 0, res, res / 2), Rect2i(res / 2, 0, res - res / 2, res),
+					Rect2i(0, res / 2, res, res - res / 2), Rect2i(0, 0, res / 2, res)][side]
+			feat.blend_rect(_crack_overlay(res), half, at + half.position)
 
 func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> void:
 	var cell := _grid.cell_fast(c.x, c.y)
@@ -544,6 +549,8 @@ func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int
 			name = wl
 	if Furniture.is_furniture(fid):
 		var fimg := _furniture_image(c, fid, res)
+		if fimg != null and _grid.tint_at(c.x, c.y) > 0 and Furniture.emits_light(fid):
+			fimg = tint_lamp(fimg, Furniture.light_color_of(fid, _grid.tint_at(c.x, c.y)))
 		if fimg != null:
 			feat.blit_rect(fimg, full, at)
 			if cell.feature_durability < Furniture.durability_of(fid):
@@ -801,6 +808,9 @@ func _furniture_image(c: Vector2i, fid: String, res: int) -> Image:
 	var corner: int = look[3] if look.size() > 3 else 0
 	if not Furniture.joins(fid):
 		return _turned(fid, res, k)
+	var piece := _piece_image(c, fid, res, k)
+	if piece != null:
+		return piece
 	var key := "%s@%d@m%d@%d@i%d@c%d" % [fid, res, mask, k, inner, corner]
 	if _tiles.has(key):
 		var hit: Array = _tiles[key]
@@ -819,6 +829,49 @@ func _furniture_image(c: Vector2i, fid: String, res: int) -> Image:
 	for i in k:
 		img.rotate_90(CLOCKWISE)
 	_tiles[key] = [img]
+	return img
+
+## A fixed-size piece (piano, wardrobe, desk, dumpster...) is ONE picture,
+## "<id>_piece.png", sized to the whole piece with its back edge at the top (0.11). Each
+## cell shows its part of that picture, turned with the piece. null — not such a piece, no
+## picture, or the painted cells are not that exact shape (then the sheet or icon is used).
+func _piece_image(c: Vector2i, fid: String, res: int, k: int) -> Image:
+	if not Furniture.is_whole(fid):
+		return null
+	var sizes: Array = Furniture.sizes_of(fid)
+	if sizes.size() != 1:
+		return null
+	var w0 := int(sizes[0][0])
+	var h0 := int(sizes[0][1])
+	var turned := _piece_turned(fid, res, k, w0, h0)
+	if turned == null:
+		return null
+	var cells := Furniture.piece_cells(func(q: Vector2i) -> String: return _fid_at(_grid, q), c)
+	if cells.size() != w0 * h0:
+		return null
+	var lo := cells[0]
+	var hi := cells[0]
+	for q: Vector2i in cells:
+		lo = Vector2i(mini(lo.x, q.x), mini(lo.y, q.y))
+		hi = Vector2i(maxi(hi.x, q.x), maxi(hi.y, q.y))
+	if hi - lo + Vector2i.ONE != Vector2i(turned.get_width() / res, turned.get_height() / res):
+		return null
+	return turned.get_region(Rect2i((c - lo) * res, Vector2i(res, res)))
+
+func _piece_turned(fid: String, res: int, k: int, w0: int, h0: int) -> Image:
+	var key := "%s@piece@%d@%d" % [fid, res, k % 4]
+	if _tiles.has(key):
+		var hit: Array = _tiles[key]
+		return hit[0] if not hit.is_empty() else null
+	var img := _load(env_name(fid, env) + "_piece")
+	if img == null:
+		img = _load(fid + "_piece")
+	if img != null:
+		if img.get_width() != w0 * res or img.get_height() != h0 * res:
+			img.resize(w0 * res, h0 * res, Image.INTERPOLATE_LANCZOS)
+		for i in k % 4:
+			img.rotate_90(CLOCKWISE)
+	_tiles[key] = [img] if img != null else []
 	return img
 
 ## Угол Г-образного предмета (диван углом, стойка буквой Г или кольцом), 0.9.2. Лист
@@ -1192,6 +1245,21 @@ func _turned(name: String, res: int, k: int) -> Image:
 	_tiles[key] = [img]
 	return img
 
+## A lamp's glass takes its light colour (0.11): bright, unsaturated pixels — the bulb,
+## the shade's glow — are recoloured; the metal body keeps its own colours.
+static func tint_lamp(src: Image, colour: Color) -> Image:
+	var img: Image = src.duplicate()
+	for y in img.get_height():
+		for x in img.get_width():
+			var p := img.get_pixel(x, y)
+			if p.a <= 0.0: continue
+			var hi := maxf(p.r, maxf(p.g, p.b))
+			var lo := minf(p.r, minf(p.g, p.b))
+			if hi < 0.62 or (hi - lo) / hi > 0.3: continue
+			var k := clampf((hi - 0.62) / 0.3, 0.0, 1.0)
+			img.set_pixel(x, y, p.lerp(Color(colour.r * hi, colour.g * hi, colour.b * hi, p.a), 0.35 + 0.6 * k))
+	return img
+
 ## Трещины по побитой мебели: два тёмных излома поперёк плитки.
 func _crack_overlay(res: int) -> Image:
 	var key := "crack@%d" % res
@@ -1455,7 +1523,8 @@ func _bake_ground_lines(img: Image, cc: Vector2i, res: int) -> void:
 					img.set_pixel(x, y, img.get_pixel(x, y).blend(ink))
 
 ## Render the actual game tiles for menus and preset previews, without a scene or simulation.
-static func map_preview(map: MapData, tints: Dictionary = {}, bands: Dictionary = {}) -> ImageTexture:
+static func map_preview(map: MapData, tints: Dictionary = {}, bands: Dictionary = {},
+		army_colors: Dictionary = {}) -> ImageTexture:
 	var saved := GridCell.logs_snapshot()
 	var grid := Grid.new(map.width, map.height)
 	map.apply_to_grid(grid)
@@ -1487,10 +1556,13 @@ static func map_preview(map: MapData, tints: Dictionary = {}, bands: Dictionary 
 						var p := Vector2i(x * res + px, y * res + py)
 						img.set_pixelv(p, img.get_pixelv(p).lerp(tint, 0.18))
 	# Keep map-authored civilians visible in the textured preview.
+	# A saved battlefield (0.11) also shows where each army stands, in its slot colour.
 	for spawn: Dictionary in map.spawns:
-		if not MCF.is_neutral(int(spawn["owner"])): continue
+		var owner := int(spawn["owner"])
+		var colour: Variant = Roster.NEUTRAL_COLOR if MCF.is_neutral(owner) else army_colors.get(owner)
+		if colour == null: continue
 		var coord: Vector2i = spawn["coord"]
 		img.fill_rect(Rect2i(coord * res + Vector2i.ONE * (res / 4),
-			Vector2i.ONE * maxi(1, res / 2)), Roster.NEUTRAL_COLOR)
+			Vector2i.ONE * maxi(1, res / 2)), colour)
 	GridCell.logs_restore(saved)
 	return ImageTexture.create_from_image(img)

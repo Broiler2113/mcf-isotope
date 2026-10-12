@@ -15,6 +15,8 @@ signal disconnected()
 ## слоты. peer_ready/disconnected остались — они общие «связь есть/нет».
 signal peer_joined(id: int)
 signal peer_left(id: int)
+## Internet play (0.11): the relay gave the host its room code.
+signal relay_room(code: String)
 
 const DEFAULT_PORT := 8642
 ## Постоянное имя узла в дереве. RPC доставляется по ПУТИ узла, поэтому сессия
@@ -33,6 +35,66 @@ var _listening: bool = false
 ## лобби раздаёт слоты, поэтому список именно упорядоченный, а не множество.
 var peers: Array[int] = []
 var spectators: Array[int] = []
+## Internet play through the Isotope relay (0.11) instead of a direct ENet connection. The
+## host's game is still the authority; the relay forwards the same messages.
+var _link: RelayLink = null
+## Why the last connection failed, in words for the menu.
+var last_error := ""
+
+func start_relay_host(address: String, info: Dictionary) -> int:
+	_link = RelayLink.new()
+	var err := _link.connect_to(address)
+	if err != OK:
+		_link = null
+		return err
+	_is_host = true
+	_wire_link()
+	_link.host(info)
+	return OK
+
+func start_relay_client(address: String, code: String, password: String = "") -> int:
+	_link = RelayLink.new()
+	var err := _link.connect_to(address)
+	if err != OK:
+		_link = null
+		return err
+	_is_host = false
+	_wire_link()
+	_link.join(code, password, NetHandoff.PROTOCOL)
+	return OK
+
+func is_relay() -> bool:
+	return _link != null
+
+func relay_code() -> String:
+	return _link.room if _link != null else ""
+
+## The host keeps its entry in the Lobbies list current (players, map, status).
+func update_listing(info: Dictionary) -> void:
+	if _link != null and _is_host:
+		_link.update(info)
+
+func _wire_link() -> void:
+	_link.welcomed.connect(func(_id: int, code: String) -> void:
+		if _is_host: relay_room.emit(code)
+		else: _on_connected_to_server())
+	_link.failed.connect(_on_link_lost)
+	_link.closed.connect(_on_link_lost)
+	_link.peer_added.connect(_on_peer_connected)
+	_link.peer_removed.connect(_on_peer_disconnected)
+	_link.data.connect(func(from: int, payload: PackedByteArray) -> void:
+		var msg: Variant = bytes_to_var(payload)
+		if msg is Dictionary: _deliver(msg, from))
+
+func _on_link_lost(reason: String) -> void:
+	last_error = reason
+	_link = null
+	peers.clear()
+	disconnected.emit()
+
+func _process(delta: float) -> void:
+	if _link != null:
+		_link.poll(delta)
 
 func start_host(port: int = DEFAULT_PORT) -> int:
 	if not is_inside_tree():
@@ -68,7 +130,7 @@ func start_client(ip: String, port: int = DEFAULT_PORT) -> int:
 	return OK
 
 func is_active() -> bool:
-	return _peer != null
+	return _peer != null or _link != null
 
 func is_host() -> bool:
 	return _is_host
@@ -76,6 +138,8 @@ func is_host() -> bool:
 ## Свой сетевой номер: у хоста всегда 1 (так устроен ENet в Godot), у гостя — выданный
 ## при подключении. По нему ростер лобби знает, чей это слот (batch 12 #8).
 func my_peer_id() -> int:
+	if _link != null:
+		return _link.my_id if _link.my_id > 0 else (1 if _is_host else -1)
 	if _peer == null or not is_inside_tree():
 		return 1 if _is_host else -1
 	return multiplayer.get_unique_id()
@@ -94,6 +158,9 @@ func detach() -> void:
 	_listening = false
 
 func close() -> void:
+	if _link != null:
+		_link.close()
+		_link = null
 	if _peer != null:
 		_peer.close()
 		_peer = null
@@ -101,6 +168,14 @@ func close() -> void:
 
 # --- Транспорт сообщений ---
 func send(msg: Dictionary) -> void:
+	if _link != null:
+		var payload := var_to_bytes(msg)
+		if str(msg.get("k", "")) == "draw" and spectators.has(my_peer_id()):
+			for id in spectators:
+				if id != my_peer_id(): _link.send_to(id, payload)
+		else:
+			_link.send_to(0, payload)
+		return
 	if _peer == null: return
 	if str(msg.get("k", "")) == "draw" and spectators.has(my_peer_id()):
 		for id in spectators:
@@ -109,16 +184,25 @@ func send(msg: Dictionary) -> void:
 	_relay.rpc(msg)
 
 func kick(id: int) -> void:
-	if not _is_host or _peer == null or id <= 1: return
-	_peer.disconnect_peer(id)
+	if not _is_host or id <= 1: return
+	if _link != null:
+		_link.kick(id)
+	elif _peer != null:
+		_peer.disconnect_peer(id)
+	else:
+		return
 	if peers.has(id): _on_peer_disconnected(id)
 
 @rpc("any_peer", "call_remote", "reliable")
 func _relay(msg: Dictionary) -> void:
+	_deliver(msg, multiplayer.get_remote_sender_id())
+
+## One path for ENet and the internet relay: the sender's number is the transport's own,
+## never a field of the message.
+func _deliver(msg: Dictionary, sender: int) -> void:
 	# Кто прислал (batch 12 #8): лобби хоста должно знать, чей это запрос, а сцене
 	# боя — чей это бросок. Ключ служебный, с подчёркиванием, чтобы не спутать с полями
 	# самих сообщений.
-	var sender := multiplayer.get_remote_sender_id()
 	var kind := str(msg.get("k", ""))
 	if spectators.has(sender):
 		if kind == "draw":

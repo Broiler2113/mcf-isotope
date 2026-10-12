@@ -105,8 +105,9 @@ func _check_random(lobby: Node, opt: OptionButton, paths: Array) -> void:
 			"one zone per slot: %d zone(s), %d slot(s)" % [lobby._map_zone_count(), lobby.roster.slots.size()])
 	ck(lobby._selected_map() == a, "the same settings don't rebuild the map on every read")
 	ck(lobby._map_preview.texture != null, "the random map has a preview")
-	ck(str(lobby._gen_info.text).contains("2 deployment zones"),
-			"the generator reports the zones (%s)" % lobby._gen_info.text)
+	# 0.11: the readout only speaks up about a problem; a map that fits says nothing.
+	ck(str(lobby._gen_info.text) == "" and not lobby._gen_info.visible,
+			"a map whose zones fit shows no readout (%s)" % lobby._gen_info.text)
 	lobby._on_add_slot()
 	var b: MapData = lobby._selected_map()
 	ck(b != a and lobby._map_zone_count() == 3, "a new slot rebuilds the map with a zone for it")
@@ -124,7 +125,7 @@ func _check_random(lobby: Node, opt: OptionButton, paths: Array) -> void:
 			cells[z] = int(cells.get(z, 0)) + 1
 	ck(cells.size() == 4 and cells.values().min() >= MapGen.zone_need(40),
 			"every zone fits 40 units (%s cells, %d needed)" % [cells.values(), MapGen.zone_need(40)])
-	ck(str(lobby._gen_info.text).contains("room for 40 units"), "the readout says so (%s)" % lobby._gen_info.text)
+	ck(str(lobby._gen_info.text) == "", "and the readout stays quiet (%s)" % lobby._gen_info.text)
 	lobby._gen_players.value = 2
 	ck(lobby.roster.slots.size() == 2, "'Players: 2' drops the extra slots")
 	lobby._commit_config()

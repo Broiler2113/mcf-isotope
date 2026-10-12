@@ -263,7 +263,7 @@ const HULL_MARGIN := 1.06
 static func default_options() -> Dictionary:
 	return {"style": Style.TOWN, "size": 1, "density": 1, "seed": 1, "zones": 2, "units": 10,
 			"width": 80, "height": 60, "symmetric": false,
-			"space": true, "flammable": true, "obstacles": true, "civilians": 0,
+			"flammable": true, "obstacles": true, "civilians": 0,
 			"furniture": MapFurnish.DEFAULT_DENSITY}
 
 ## Уровень мирных по настройке: число 0…4 или прежнее true/false.
@@ -324,6 +324,10 @@ static func build(options: Dictionary) -> MapGen:
 
 func _build(options: Dictionary, dim: Vector2i, need: int, tight: bool) -> void:
 	opt = options
+	# Vacuum follows the map kind (0.11: the lobby toggle is gone): stations and asteroids
+	# float in space, towns, fields and bunkers never get holes into it.
+	if not opt.has("space"):
+		opt["space"] = STYLE_SPACE[clampi(int(opt.get("style", 0)), 0, STYLE_SPACE.size() - 1)]
 	_need = need
 	_tight = tight
 	# Заказан размер ИГРОВОЙ карты; поле вокруг неё шире на кайму с каждой стороны.
@@ -595,13 +599,18 @@ func _mirror() -> void:
 			m.is_space[i] = m.is_space[s]
 			m.feature_id[i] = m.feature_id[s]
 			if m.fixtures.has(s):
-				var record: Array = m.fixtures[s].duplicate()
+				# Each lamp keeps its side through the mirror: a lamp on the east face of the
+				# source wall hangs on the west face of the mirrored one.
 				var mask := (1 if x != s % w else 0) | (2 if y != s / w else 0)
-				var k := int(record[2])
-				if mask & 1 and k % 2 == 1: k = 4 - k
-				if mask & 2 and k % 2 == 0: k = 2 - k
-				record[2] = k
-				m.fixtures[i] = record
+				var lamps: Array = []
+				for record: Array in m.fixtures[s]:
+					var k := int(record[2])
+					if mask & 1 and k % 2 == 1: k = 4 - k
+					if mask & 2 and k % 2 == 0: k = 2 - k
+					var turned := record.duplicate()
+					turned[2] = k
+					lamps = MapData.with_lamp(lamps, turned)
+				m.fixtures[i] = lamps
 			else: m.fixtures.erase(i)
 			_indoor[i] = _indoor[s]
 			_door[i] = _door[s]

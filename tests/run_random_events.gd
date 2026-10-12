@@ -1,5 +1,5 @@
 extends SceneTree
-## Random events: warnings at round opening, one player turn before landing.
+## Random events: warnings at round opening, landing when that round closes.
 ## Dice, interval counters, pending zones and standing gas must stay deterministic
 ## across local play, save/restore, replays and network peers.
 
@@ -130,11 +130,20 @@ func _warning_then_landing() -> void:
 	ck(resolver.random_events.pending.size() == 1, "first round opening announces exactly one event")
 	var entry: Dictionary = resolver.random_events.pending[0]
 	var said := " ".join(res.log_lines)
-	ck(said.contains("Artillery Barrage") and said.contains("next player ends their turn"),
-			"the warning names the next player end-turn deadline")
+	ck(said.contains("Artillery Barrage") and said.contains("end of this round"),
+			"the warning names the end-of-round deadline")
 	ck(not said.contains("destroyed"), "announcement does not land immediately")
-	var next := resolver.resolve(EndTurnIntent.new(-1))
-	ck(" ".join(next.log_lines).contains("hits zone"), "the very next handoff resolves the warning")
+	var landed := false
+	var handoffs := 0
+	while state.turns.round_number == round0 and handoffs < 6:
+		var next := resolver.resolve(EndTurnIntent.new(-1))
+		handoffs += 1
+		var hit := " ".join(next.log_lines).contains("hits zone")
+		if state.turns.round_number == round0:
+			ck(not hit, "a mid-round handoff does not land the warning")
+		else:
+			landed = hit
+	ck(landed and handoffs >= 2, "the warning lands when the round closes, after every player's turn")
 	ck(round0 == 1, "the match started in round 1")
 
 ## A three-player round must not tick the interval on its two ordinary handoffs.
@@ -349,7 +358,11 @@ func _army() -> void:
 	var resolver: GameActionResolver = pair[1]
 	var order_before := state.turns.round_order.size()
 	var p: Dictionary = _announce(state, resolver, RandomEvents.ARMY)["params"]
-	_until(resolver, func() -> bool: return resolver.random_events.armies > 0)
+	# Land it directly: at a round boundary their fresh slot may act in the same
+	# handoff (0.11), and the edge is checked before their first step.
+	var landing := ActionResult.new()
+	landing.ok = true
+	resolver.land_random_events(landing)
 	ck(resolver.random_events.armies == 1, "the army lands once")
 	var slot := MCF.independent_slot(1)
 	var mine: Array = []

@@ -17,8 +17,8 @@ func _initialize() -> void:
 				if Furniture.emits_light(cell.feature_id):
 					plan._illuminate(cell.coord, cell.feature_id)
 					sources += 1
-				if not cell.fixture.is_empty():
-					plan._illuminate(cell.coord, str(cell.fixture[0]), int(cell.fixture[2]))
+				for lamp: Array in cell.lamps:
+					plan._illuminate(cell.coord, str(lamp[0]), int(lamp[2]))
 					sources += 1
 			var total := 0
 			var lit := 0

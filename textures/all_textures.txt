@@ -148,6 +148,8 @@ Samples are never loaded into the game -- a file called sample is skipped.
   corpse.png
 
 -- Furniture (drawn from above, back of the piece at the TOP; the game turns it to the wall) --
+A fixed-size piece (piano, wardrobe, dumpster...) also takes <name>_piece.png: the whole
+piece as ONE picture, as many tiles wide and tall as the piece, back at the top.
   chair.png
   armchair.png
   armchair_blue.png

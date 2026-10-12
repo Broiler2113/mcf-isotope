@@ -94,11 +94,6 @@ func _build() -> void:
 	_scale_slider.gui_input.connect(func(e: InputEvent) -> void:
 		if e is InputEventKey and e.pressed:
 			_apply_scale.call_deferred())
-	var hint := Label.new()
-	hint.text = "Grows or shrinks every window, button and text together."
-	hint.add_theme_font_size_override("font_size", 11)
-	hint.add_theme_color_override("font_color", Color("#8a8a8a"))
-	size_box.body.add_child(hint)
 
 	# --- Экран ---
 	var disp_box := SteamChrome.group_box("Display")
@@ -110,10 +105,26 @@ func _build() -> void:
 	disp_box.body.add_child(fs)
 	var lighting := CheckBox.new()
 	lighting.text = "Dynamic lighting and shadows"
-	lighting.tooltip_text = "Dark ambient lighting with destructible lamps, fire and effect lights. Visual only."
+	lighting.tooltip_text = "Soft lights and shadows from lamps, fire, explosions and muzzle flashes. Walls stop light; low furniture, glass and open doors don't. Visual only: it never changes what anyone can see."
 	lighting.button_pressed = Ui.dynamic_lighting
 	lighting.toggled.connect(Ui.set_dynamic_lighting)
 	disp_box.body.add_child(lighting)
+	var dark_row := HBoxContainer.new()
+	disp_box.body.add_child(dark_row)
+	var dark := HSlider.new()
+	dark.min_value = 0
+	dark.max_value = 100
+	dark.step = 5
+	dark.value = Ui.light_darkness * 100.0
+	dark.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	dark.tooltip_text = "How dark unlit ground is: 0% is daylight, 100% is pitch black."
+	dark_row.add_child(dark)
+	var dark_label := Label.new()
+	dark_label.text = "Darkness: %d%%" % dark.value
+	dark_row.add_child(dark_label)
+	dark.value_changed.connect(func(value: float) -> void:
+		dark_label.text = "Darkness: %d%%" % value
+		Ui.set_light_darkness(value / 100.0))
 
 	# --- Акцент (item 23) ---
 	var acc_box := SteamChrome.group_box("Accent colour")
@@ -206,6 +217,7 @@ func _build() -> void:
 			_key_message.text = Keybinds.reset_defaults()
 			return
 		Ui.set_dynamic_lighting(false)
+		Ui.set_light_darkness(0.75)
 		Ui.set_grid(true, 0.32)
 		Ui.set_ui_scale(1.0)
 		Ui.set_accent("green")

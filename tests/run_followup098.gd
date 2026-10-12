@@ -81,9 +81,18 @@ func _gas_visibility() -> void:
 	ck(r.is_visible_to_team(0, enemy), "fog off ignores ordinary walls")
 	r.random_events.add_cloud(5, 1, 2, 10, 3)
 	r._sync_gas()
-	ck(not r.is_visible_to_team(0, enemy), "gas blocks distant enemies with fog off")
+	# Fog off (0.11): what stands behind a cloud is seen but cannot be shot through it.
+	ck(r.is_visible_to_team(0, enemy) and r.can_shoot(own, enemy) == "Gas blocks line of sight",
+		"fog off: an enemy behind gas is visible but not shootable")
+	r.random_events.clouds.clear()
+	r.random_events.add_cloud(12, 5, 1, 1, 3)
+	r._sync_gas()
+	ck(not r.is_visible_to_team(0, enemy), "fog off: an enemy inside gas is hidden")
 	var obs := preload("res://rl/ObsEncoder.gd").encode(r, 0, 20)
-	ck(not obs["units"].any(func(u: Dictionary) -> bool: return int(u["own"]) == 1), "RLM observation cannot see enemy soldiers through gas")
+	ck(not obs["units"].any(func(u: Dictionary) -> bool: return int(u["own"]) == 1), "RLM observation cannot see enemy soldiers inside gas")
+	r.random_events.clouds.clear()
+	r.random_events.add_cloud(5, 1, 2, 10, 3)
+	r._sync_gas()
 	ck(r.team_sees(0, Vector2i(2, 10)), "gas mode retains unlimited range elsewhere")
 	r.random_events.clouds.clear()
 	r.random_events.add_cloud(2, 5, 1, 1, 3)
@@ -93,6 +102,16 @@ func _gas_visibility() -> void:
 	r.random_events.clouds.clear()
 	r._sync_gas()
 	ck(r.is_visible_to_team(0, enemy), "dissipating gas restores fog-off visibility through walls")
+	# The scripted AI ignores fog; a cloud elsewhere must not blind it (0.10.1).
+	r.fog_enabled = true
+	r.omniscient_side = 1
+	r.random_events.add_cloud(7, 1, 1, 1, 3)
+	r._sync_gas()
+	ck(r.is_visible_to_team(1, own), "fog-ignoring AI still sees soldiers outside gas")
+	r.random_events.clouds.clear()
+	r.random_events.add_cloud(2, 5, 1, 1, 3)
+	r._sync_gas()
+	ck(not r.is_visible_to_team(1, own), "fog-ignoring AI cannot see into gas")
 
 func _warning() -> void:
 	var s := _arena()
@@ -105,7 +124,10 @@ func _warning() -> void:
 	var round_before := s.turns.round_number
 	var result := r.resolve(EndTurnIntent.new(-1))
 	ck(s.turns.round_number == round_before, "fixture ends first player's turn, not the round")
-	ck(r.random_events.pending.is_empty() and r.random_events.clouds.size() == 1, "warning lands on next end-turn even mid-round and after restore")
+	ck(r.random_events.pending.size() == 1 and r.random_events.clouds.is_empty(), "mid-round handoff leaves the warning pending: the second player still gets to react")
+	result = r.resolve(EndTurnIntent.new(-1))
+	ck(s.turns.round_number == round_before + 1, "second handoff closes the round")
+	ck(r.random_events.pending.is_empty() and r.random_events.clouds.size() == 1, "warning lands when the round closes, also after restore")
 	ck(result.dice_events.any(func(e: Dictionary) -> bool: return e.get("kind") == "check"), "event check survives end-turn result merging")
 	ck(int(r.random_events.clouds[0]["left"]) == 3, "new gas keeps full lifetime")
 
@@ -160,17 +182,17 @@ func _editor() -> void:
 	e._unhandled_input(motion)
 	ck(e.map.decals.size() == count and not e._decal_painting, "releasing over the UI cannot leave decal painting stuck on")
 	e._select_brush(MCF.FEATURE_WALL)
-	ck(e._accent_opt.visible and not e._door_opt.visible, "wall shows only accent options")
-	e.brush_accent = 3
+	var wall_entries: Array = e._variant_entries()
+	ck(wall_entries.size() == MCF.ACCENT_COLORS.size(), "wall offers only accent options")
+	wall_entries[3][2].call()
 	ck(e._brushed([0, 0, false, "", -1], 0)[7] == 3, "wall painting uses chosen accent")
 	e._select_brush(MCF.FEATURE_AIRLOCK)
-	ck(not e._accent_opt.visible and e._door_opt.visible, "door shows only texture options")
-	e.brush_door = 8
+	var door_entries: Array = e._variant_entries()
+	ck(door_entries.size() == 1 + TerrainTiles.DOOR_MATERIALS.size() * 3, "door offers only texture options")
+	door_entries[8][2].call()
 	ck(e._brushed([0, 0, false, "", -1], 0)[8] == 8, "door painting uses selected texture")
 	ck(e._door_thumb(7).region != e._door_thumb(8).region, "door preview displays selected sprite variant")
-	e._select_tool(e.Tool.SELECT)
-	ck(not e._accent_opt.visible and not e._door_opt.visible, "selection tool hides irrelevant material options")
 	e._select_brush("floor")
-	ck(not e._accent_opt.visible and not e._door_opt.visible, "other brushes hide wall and door options")
+	ck(e._variant_entries().is_empty(), "other brushes offer no wall or door options")
 	e.queue_free()
 	await process_frame

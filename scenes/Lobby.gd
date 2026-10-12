@@ -83,7 +83,6 @@ var _gen_h: SpinBox
 var _gen_sym: CheckBox
 ## Большую карту пересобираем, когда щелчки по настройкам стихнут, а не на каждый.
 var _gen_timer: Timer
-var _gen_space: CheckBox
 var _gen_fire: CheckBox
 var _gen_obstacles: CheckBox
 var _gen_furniture: OptionButton
@@ -108,7 +107,6 @@ var _is_host_net: bool = false
 var _is_solo: bool = false
 ## Маяк локальной сети хоста (item 10): пока хост сидит в лобби, он продолжает
 ## объявлять партию — иначе клиенты перестали бы его находить.
-var _lan_adv: LanDiscovery = null
 ## Гость уже попросил хоста повторить объявление матча (batch 13 #11) — один раз.
 var _setup_requested: bool = false
 
@@ -147,10 +145,10 @@ func _ready() -> void:
 		_refresh_host_status()
 		_lobby_changed()
 		_send_lobby_map()
-		_lan_adv = LanDiscovery.new()
-		get_tree().root.add_child.call_deferred(_lan_adv)
-		_lan_adv.start_advertising.call_deferred({
-			"name": "MCF Isotope", "players": 1, "port": NetworkSession.DEFAULT_PORT})
+		if ses.is_relay():
+			# The room on the lobby server dies with the connection to it.
+			ses.disconnected.connect(func() -> void:
+				_status.text = "Lost the lobby server: %s Your game is no longer listed." % ses.last_error)
 
 # --- Хост: рассадка гостей и рассылка снимка (batch 12 #8) --------------------------
 func _on_host_peer_joined(id: int) -> void:
@@ -211,19 +209,37 @@ func _refresh_host_status() -> void:
 	if _status == null or NetHandoff.session == null:
 		return
 	var n := NetHandoff.session.peers.size()
+	var where := ""
+	if NetHandoff.session.is_relay():
+		where = " Listed online as \"%s\" (code %s)." % [NetHandoff.room_name, NetHandoff.session.relay_code()]
 	if n == 0:
-		_status.text = "Hosting — waiting for players to join. You can also add AI slots and start now."
+		_status.text = "Hosting — waiting for players to join. You can also add AI slots and start now." + where
 	else:
 		_status.text = "Hosting — %d player%s connected. Start when everyone is seated." % [
-			n, "" if n == 1 else "s"]
+			n, "" if n == 1 else "s"] + where
 
 ## Любое изменение лобби у хоста: перерисовать и разослать гостям.
+## The host's entry in the internet Lobbies list follows the lobby (0.11).
+func _update_listing(status: String = "In lobby") -> void:
+	if not _is_host_net or NetHandoff.session == null or not NetHandoff.session.is_relay():
+		return
+	var humans := 1
+	for s: Roster.Slot in roster.slots:
+		if s.kind == Roster.SlotKind.HUMAN and s.peer_id > 1: humans += 1
+	var seats := 0
+	for s: Roster.Slot in roster.slots:
+		if s.kind == Roster.SlotKind.HUMAN or s.kind == Roster.SlotKind.OPEN: seats += 1
+	var map_name := "Random map" if _is_random() else (_map_opt.get_item_text(_map_opt.selected) if _map_opt != null and _map_opt.selected >= 0 else "—")
+	NetHandoff.session.update_listing({"name": NetHandoff.room_name, "map": map_name,
+			"players": humans, "max_players": maxi(seats, humans), "status": status})
+
 func _lobby_changed() -> void:
 	# Случайная карта держит по зоне на слот: слот добавили или убрали — карта
 	# пересобирается (тем же зерном), и гостям уезжает новая.
 	var regen := _is_random() and _gen_key != str(_gen_options())
 	_refresh_slots()  # пересоберёт карту и превью сам — через _selected_map()
 	_broadcast_lobby()
+	_update_listing()
 	if regen:
 		_send_lobby_map()
 
@@ -339,10 +355,7 @@ func _apply_lobby_map(msg: Dictionary) -> void:
 	_refresh_slots()
 
 func _exit_tree() -> void:
-	if _lan_adv != null:
-		_lan_adv.stop()
-		_lan_adv.queue_free()
-		_lan_adv = null
+	pass
 
 func _on_client_message(msg: Dictionary) -> void:
 	if _chat != null and _chat.receive(msg):
@@ -538,6 +551,21 @@ func _build_config(parent: VBoxContainer) -> void:
 	_army_opt = _opt(["Host Decides", "Players Pick"], GameConfig.army_select_mode)
 	_army_opt.item_selected.connect(func(_i: int) -> void: _refresh_personal_enabled())
 	_row(box, "Army Select:", _army_opt)
+
+	# The host decides whether guests may watch (0.11). Off also sends current spectators away.
+	if _is_host_net:
+		var watch := CheckBox.new()
+		watch.text = "Allow spectators"
+		watch.button_pressed = NetHandoff.allow_spectators
+		watch.toggled.connect(func(on: bool) -> void:
+			NetHandoff.allow_spectators = on
+			if not on:
+				for id: int in NetHandoff.spectators.duplicate():
+					NetHandoff.session.kick(id)
+				NetHandoff.spectators.clear()
+				NetHandoff.session.spectators.clear()
+			_lobby_changed())
+		_row(box, "Spectators:", watch)
 
 	# Командный режим (item 4): тумблер. Пока выключен — «дружественный огонь» и колонка
 	# команд в слотах скрыты. Включение перерисовывает слоты, чтобы показать колонку.
@@ -837,8 +865,6 @@ func _build_generator(box: VBoxContainer) -> void:
 	_row(_gen_box, "Layout:", _gen_sym)
 	var mech := HFlowContainer.new()
 	mech.add_theme_constant_override("h_separation", 10)
-	_gen_space = _gen_check(mech, "Space",
-			"Vacuum you can fight in (zero-G): vented rooms and hull windows on stations, a ragged edge and holes in towns and fields. A bunker is underground and never has vacuum. Every door is an airlock either way.")
 	_gen_fire = _gen_check(mech, "Flammable",
 			"Grass, plank floors, wooden walls and fences — ground that fire spreads over.")
 	_gen_obstacles = _gen_check(mech, "Obstacles",
@@ -911,7 +937,6 @@ func _dim_spin(value: int) -> SpinBox:
 func _apply_style_defaults(style: int) -> void:
 	if style < 0 or style >= MapGen.STYLE_SPACE.size():
 		return
-	_gen_space.set_pressed_no_signal(MapGen.STYLE_SPACE[style])
 	_gen_fire.set_pressed_no_signal(MapGen.STYLE_FLAMMABLE[style])
 
 func _gen_check(parent: Control, text: String, tip: String) -> CheckBox:
@@ -938,7 +963,7 @@ func _gen_options() -> Dictionary:
 			"zones": maxi(2, roster.slots.size()), "units": int(_gen_units.value),
 			"width": int(_gen_w.value), "height": int(_gen_h.value),
 			"symmetric": _gen_sym.button_pressed,
-			"space": _gen_space.button_pressed,
+			"space": MapGen.STYLE_SPACE[clampi(_gen_style.selected, 0, MapGen.STYLE_SPACE.size() - 1)],
 			"flammable": _gen_fire.button_pressed, "obstacles": _gen_obstacles.button_pressed,
 			"furniture": _gen_furniture.selected,
 			"civilian_count": _civ_count()}
@@ -959,6 +984,7 @@ func _random_map() -> MapData:
 		_gen_map = MapGen.generate(options)
 		_gen_key = key
 		_gen_info.text = _zone_summary(_gen_map)
+		_gen_info.visible = _gen_info.text != ""
 	return _gen_map
 
 ## Сколько места у каждой стороны. Зоны случайной карты одного размера — его и пишем,
@@ -973,20 +999,16 @@ func _zone_summary(map: MapData) -> String:
 	var o := _gen_options()
 	var units := int(o["units"])
 	var cells: int = sizes.values().min()
-	var text := "%d deployment zones, %d cells each" % [sizes.size(), cells]
-	# Размеры в подписи — ИГРОВОЙ карты, без каймы вокруг неё (0.9.3): игрок заказывал её.
+	# Only problems are worth a line (0.11): the normal "N zones, room for X" is gone.
+	var text := ""
 	var made := MapGen.map_size(map)
 	if cells < MapGen.zone_need(units):
-		return text + " — too tight for %d units each even at %d×%d; fewer players or units will fit." % [
+		return "Deployment zones are too tight for %d units each even at %d×%d; fewer players or units will fit." % [
 				units, made.x, made.y]
-	text += " — room for %d units each." % units
-	var dim := MapGen.dims_of(o)
-	if made.x > dim.x or made.y > dim.y:
-		text += " Map enlarged to %d×%d so they fit." % [made.x, made.y]
 	# Своему размеру потолка нет (MapGen.dims_of) — зато есть цена: замер 500×500 — ~3 с на
 	# постройку и ~0,4 ГБ памяти в бою, 1000×1000 — ~15 с и ~1,3 ГБ.
 	if made.x * made.y > MapGen.MAX_DIM.x * MapGen.MAX_DIM.y:
-		text += " Beyond 250×250 building takes seconds (≈15 s at 1000×1000) and a battle needs a lot of memory (≈1.3 GB at 1000×1000)."
+		text = "Beyond 250×250 building takes seconds (≈15 s at 1000×1000) and a battle needs a lot of memory (≈1.3 GB at 1000×1000)."
 	return text
 
 ## «Players» случайной карты: слотов становится ровно столько. Новые — в одиночке ИИ
@@ -1070,12 +1092,6 @@ func _build_load(parent: VBoxContainer) -> void:
 	clear_btn.text = "Clear"
 	clear_btn.pressed.connect(_on_clear_save)
 	row.add_child(clear_btn)
-	var note := Label.new()
-	note.text = "Loading a save skips deployment: the armies are already on the board. Assign each of them to a player or an AI in the slot list."
-	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	note.add_theme_font_size_override("font_size", 11)
-	note.modulate = Color(0.75, 0.78, 0.85)
-	box.add_child(note)
 
 func _on_load_save() -> void:
 	if _save_opt == null or _save_names.is_empty():
@@ -1088,6 +1104,7 @@ func _on_load_save() -> void:
 	var saved: Dictionary = data.get("state", {})
 	_save = data
 	_save_armies = _count_armies(saved)
+	_save_map = _saved_battlefield(saved)
 	# Ростер файла становится основой: слоты, цвета и команды в нём уже те, что были в
 	# бою. Хост дальше правит их как обычно — это и есть переназначение ролей.
 	roster = Roster.from_dict(saved.get("roster", {}))
@@ -1103,11 +1120,25 @@ func _on_load_save() -> void:
 	if _is_host_net:
 		for id in NetHandoff.session.peers: _seat_peer(id)
 	_lobby_changed()
-	_status.text = "Loaded %s — %d armies on the board." % [name, _save_armies.size()]
+	_status.text = "Loaded %s" % name
+
+## The saved board as a map for the preview, every living soldier where they stand (0.11).
+var _save_map: MapData = null
+func _saved_battlefield(saved: Dictionary) -> MapData:
+	var gs := StateCodec.decode(saved)
+	if gs == null or gs.grid == null:
+		return null
+	var m := MapData.from_grid(gs.grid, gs.env)
+	for u: UnitInstance in gs.all_units():
+		if u.is_alive() and gs.grid.in_bounds(u.coord):
+			m.spawns.append({"coord": u.coord, "stats_id": u.stats.id, "owner": u.owner})
+	return m
 
 func _on_clear_save() -> void:
 	_save = {}
 	_save_armies = {}
+	_save_map = null
+	_lobby_changed()
 	_status.text = "Saved game cleared — the match will start from deployment."
 
 ## Живые юниты по сторонам прямо из файла: разбирать его в GameState ради счётчика
@@ -1639,6 +1670,8 @@ func _selected_map() -> MapData:
 	# У гостя своего списка нет — карта та, что прислал хост (batch 12 #8).
 	if _is_client:
 		return _client_map if _client_map != null else MapData.blank_arena()
+	if not _save.is_empty() and _save_map != null:
+		return _save_map
 	var path: String = _map_paths[_map_opt.selected] if _map_opt != null else ""
 	if path == RANDOM_MAP:
 		return _random_map()
@@ -1742,7 +1775,10 @@ func _zone_tints() -> Dictionary:
 ## развёртывания цветами слотов. Рисуем по клеткам в Image — без отдельного вьюпорта,
 ## зато детерминированно и без сцены.
 func _render_map_texture(map: MapData, tints: Dictionary = {}, bands: Dictionary = {}) -> ImageTexture:
-	return TerrainTiles.map_preview(map, tints, bands)
+	var armies := {}
+	for s: Roster.Slot in roster.slots:
+		armies[s.id] = roster.color_of(s.id)
+	return TerrainTiles.map_preview(map, tints, bands, armies)
 
 func _cell_color(map: MapData, coord: Vector2i) -> Color:
 	if map.get_space(coord):
@@ -1827,6 +1863,7 @@ func _on_start() -> void:
 		var shared: MapData = _selected_map()
 		if net_host:
 			NetHandoff.session.send(NetHandoff.encode_setup(shared))
+			_update_listing("In battle")
 		NetHandoff.lobby_map = shared
 	get_tree().change_scene_to_file(PLACEMENT_SCENE)
 
@@ -1837,6 +1874,12 @@ func _on_back() -> void:
 
 func _make_spectator(peer: int) -> void:
 	if peer <= 1 or NetHandoff.session == null or not NetHandoff.session.peers.has(peer): return
+	# The host turned spectators off (0.11): a guest without a seat is turned away.
+	if not NetHandoff.allow_spectators:
+		if roster.side_of_peer(peer) < 0:
+			NetHandoff.session.kick(peer)
+			_status.text = "A guest was turned away: the game is full and spectators are off."
+		return
 	var side := roster.side_of_peer(peer)
 	if side >= 0:
 		roster.slots[side].kind = Roster.SlotKind.OPEN

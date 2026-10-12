@@ -1,254 +1,401 @@
 class_name LightManager
-extends CanvasLayer
+extends Node2D
 
-## Lighting-only viewport: engine PointLight2D + LightOccluder2D do all shadow work.
-## Each receiver has a unique light mask within its canvas. Additional canvases
-## accommodate more sources, so a giant battlefield is not one 16-light object.
-## The final multiply layer changes appearance only, below the existing HUD.
-const MASKS_PER_CANVAS := 20
-const AMBIENT := Color(0.22, 0.23, 0.25, 1.0)
-var geometry := LightOccluders.new()
-var lights: Dictionary = {}
-var batches: Array[Dictionary] = []
-var viewport: SubViewport
-var ambient: ColorRect
-var overlay: Sprite2D
-var radial: GradientTexture2D
-var white: ImageTexture
-var receiver_material: CanvasItemMaterial
-var polygon: OccluderPolygon2D
-var _geometry_key: Array = []
-var _known_shapes: Dictionary = {}
-var _clock := 0.0
-var _next_canvas_layer := 1
-var _cell_size := 32.0
-var _grid_bounds := Rect2i()
+## Soft 2D lighting in the spirit of Space Station 14 (0.11 rework).
+##
+## A small light map in CELL space — a few texels per cell, and only for the cells on
+## screen — is redrawn when the view, the walls or the lights change, never otherwise.
+## Every light is one instance of a single MultiMesh quad (one draw call for all of
+## them); its shader marches from the lamp towards the texel through a wall mask that
+## has one texel per cell, read exactly; five rays across the lamp's width and a blur
+## soften the edges. A wall tile that light reaches is lit whole and evenly, while the floor
+## behind it stays dark; furniture under 2 m, glass and open doors let light through; a
+## lamp always lights its own tile, and a wall lamp only its own side of the wall. The map starts from the ambient colour and
+## the finished texture MULTIPLIES the terrain layer only — tokens, labels and previews
+## stay readable. The cost follows the screen, not the number of lamps or the map size.
+##
+## Usage: add as a child of the board scene, then every frame
+##   update_view(grid, pan, zoom, origin, cell, env, visible, limited, fx, after_layer)
+## pan/zoom/origin describe the terrain layer's transform (position = pan, scale = zoom,
+## board's top-left at `origin` in its local space).
+
+const MAX_RANGE := 16.0
+## Texels per cell bounds; the actual density follows the on-screen cell size.
+const MIN_TEXELS := 1
+const MAX_TEXELS := 12
+const SCREEN_PX_PER_TEXEL := 2.0
+## The light map covers whole chunks around the screen, so panning inside them is free.
+const CHUNK := 12
+## Darkness 0..1 maps to the light level of unlit ground.
+const AMBIENT_BRIGHT := 1.0
+const AMBIENT_DARK := 0.06
+
+## Space cells read the mask's green channel and stay at full brightness: stars are not lit.
+const SPACE_SHADER := """
+shader_type canvas_item;
+render_mode blend_add, unshaded;
+uniform sampler2D walls : filter_nearest, repeat_disable;
+uniform vec2 board;
+uniform vec4 view;           // first cell and size of the light map, in cells
+void fragment() {
+	float space = texture(walls, (view.xy + UV * view.zw) / board).g;
+	COLOR = vec4(vec3(space), 1.0);
+}
+"""
+
+## Final multiply over the terrain, with a small 5-tap blur so pools have no seams.
+const COMPOSITE_SHADER := """
+shader_type canvas_item;
+render_mode blend_mul, unshaded;
+void fragment() {
+	vec2 o = TEXTURE_PIXEL_SIZE * 0.85;
+	vec3 c = texture(TEXTURE, UV).rgb * 0.36;
+	c += texture(TEXTURE, UV + vec2(o.x, o.y)).rgb * 0.16;
+	c += texture(TEXTURE, UV + vec2(-o.x, o.y)).rgb * 0.16;
+	c += texture(TEXTURE, UV + vec2(o.x, -o.y)).rgb * 0.16;
+	c += texture(TEXTURE, UV + vec2(-o.x, -o.y)).rgb * 0.16;
+	COLOR = vec4(c, 1.0);
+}
+"""
+
+const SHADER := """
+shader_type canvas_item;
+render_mode blend_add, unshaded;
+
+// One texel per cell, read exactly: a ray is stopped by a wall cell or it is not. The
+// softness comes from the area light below and the composite blur, never from blending
+// the mask — blended reads let light seep a cell deep behind every wall (0.11).
+uniform sampler2D walls : filter_nearest, repeat_disable;
+uniform vec2 board;          // board size in cells
+
+varying vec2 local;
+varying vec4 light;          // x, y (cells), radius, energy
+varying vec4 tint;
+
+void vertex() {
+	local = VERTEX;            // quad spans [-1, 1]
+	light = INSTANCE_CUSTOM;
+	tint = COLOR;
+}
+
+float wall_at(vec2 q) {
+	return texture(walls, q / board).r;
+}
+
+void fragment() {
+	vec2 lp = light.xy;
+	float r = light.z;
+	vec2 p = lp + local * r;
+	float d = length(p - lp);
+	if (d >= r) {
+		COLOR = vec4(0.0);
+	} else {
+		// Broad soft disk: bright most of the way, easing out at the rim. MapLighting
+		// spaces lamps with this exact curve (MapLighting.falloff).
+		float fall = 1.0 - smoothstep(0.0, 1.0, d / r);
+		vec2 own = floor(p);
+		vec2 src = floor(lp);
+		// A wall tile is lit whole and evenly once light reaches any face of it: every ray
+		// aims at the point of the tile nearest its origin, so no texel inside the wall is
+		// shaded by the wall tiles next to it (0.11 playtest: "black spots in the middle").
+		// The floor behind the wall is a different tile and stays in its shadow.
+		bool solid = wall_at(p) > 0.5;
+		vec2 dir = (p - lp) / max(d, 0.0001);
+		vec2 side = vec2(-dir.y, dir.x);
+		// An area light, not a point: five rays from across the lamp's width give wide soft
+		// penumbrae instead of hard diagonal wedges behind wall corners. Each ray starts on
+		// the lamp's side of any wall: a lamp on a wall never shines from behind it.
+		float spread = clamp(r * 0.07, 0.3, 0.8);
+		float sum = 0.0;
+		for (int k = -2; k <= 2; k++) {
+			float want = abs(float(k)) * spread;
+			vec2 sd = side * sign(float(k));
+			float reach = 0.0;
+			for (int j = 1; j <= 8; j++) {
+				float a = float(j) * 0.2;
+				if (a > want) {
+					if (wall_at(lp + sd * want) < 0.5) reach = want;
+					break;
+				}
+				if (wall_at(lp + sd * a) > 0.5) break;
+				reach = a;
+			}
+			vec2 o = lp + sd * reach;
+			vec2 aim = solid ? clamp(o, own + 0.02, own + 0.98) : p;
+			vec2 to = aim - o;
+			float len = length(to);
+			vec2 st = to / max(len, 0.0001);
+			float t = 1.0;
+			for (int i = 0; i < 48; i++) {
+				float along = 0.25 + float(i) * 0.35;
+				if (along >= len) break;
+				vec2 q = o + st * along;
+				vec2 cq = floor(q);
+				if (cq == own) break;         // reached the target's own cell
+				if (cq == src) continue;      // the lamp's own cell never shades it
+				t *= 1.0 - wall_at(q);
+				if (t < 0.02) break;
+			}
+			sum += t;
+		}
+		float tr = sum / 5.0;
+		float glow = smoothstep(0.9, 0.0, d) * 0.55;
+		COLOR = vec4(tint.rgb * light.w * (fall + glow) * tr, 1.0);
+	}
+}
+"""
+
+var occluders := LightOccluders.new()
+var ambient := Color(0.24, 0.25, 0.28)
+## Debug / test counters.
+var redraws := 0
+var last_instances := 0
+
+var _vp: SubViewport
+var _base: ColorRect
+var _space: ColorRect
+var _space_mat: ShaderMaterial
+var _space_env := false
+var _mmi: MultiMeshInstance2D
+var _mesh: MultiMesh
+var _mat: ShaderMaterial
+var _out: Sprite2D
+var _shade: Node2D
+var _walls_img: Image
+var _walls_tex: ImageTexture
+var _walls_key: Array = []
+var _key: Array = []
+var _static_key: Array = []
+var _static: Array = []
+var _fires: Array = []
+var _uploaded: Array = []   # [cell, light] — filtered by the viewer's sight every frame
+var _cell := 32.0
+var _origin := Vector2.ZERO
 
 func _ready() -> void:
-	layer = 0
-	viewport = SubViewport.new()
-	viewport.world_2d = World2D.new()
-	viewport.disable_3d = true
-	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	add_child(viewport)
-	ambient = ColorRect.new()
-	ambient.color = AMBIENT
-	ambient.light_mask = 0
-	viewport.add_child(ambient)
-	var gradient := Gradient.new()
-	gradient.set_color(0, Color.WHITE)
-	gradient.set_color(1, Color(0, 0, 0, 0))
-	radial = GradientTexture2D.new()
-	radial.gradient = gradient
-	radial.width = 256
-	radial.height = 256
-	radial.fill = GradientTexture2D.FILL_RADIAL
-	radial.fill_from = Vector2(0.5, 0.5)
-	radial.fill_to = Vector2(1.0, 0.5)
-	var image := Image.create(1, 1, false, Image.FORMAT_RGBA8)
-	image.fill(Color.WHITE)
-	white = ImageTexture.create_from_image(image)
-	receiver_material = CanvasItemMaterial.new()
-	receiver_material.light_mode = CanvasItemMaterial.LIGHT_MODE_NORMAL
-	receiver_material.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
-	overlay = Sprite2D.new()
-	overlay.centered = false
-	overlay.texture = viewport.get_texture()
-	var multiply := CanvasItemMaterial.new()
-	multiply.blend_mode = CanvasItemMaterial.BLEND_MODE_MUL
-	multiply.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
-	overlay.material = multiply
-	add_child(overlay)
+	show_behind_parent = true
+	_vp = SubViewport.new()
+	_vp.disable_3d = true
+	_vp.transparent_bg = false
+	_vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	_vp.canvas_item_default_texture_filter = Viewport.DEFAULT_CANVAS_ITEM_TEXTURE_FILTER_LINEAR
+	add_child(_vp)
+	_base = ColorRect.new()
+	_vp.add_child(_base)
+	_space = ColorRect.new()
+	_space_mat = ShaderMaterial.new()
+	var space_shader := Shader.new()
+	space_shader.code = SPACE_SHADER
+	_space_mat.shader = space_shader
+	_space.material = _space_mat
+	_vp.add_child(_space)
+	_mesh = MultiMesh.new()
+	_mesh.transform_format = MultiMesh.TRANSFORM_2D
+	_mesh.use_colors = true
+	_mesh.use_custom_data = true
+	var quad := QuadMesh.new()
+	quad.size = Vector2(2, 2)
+	_mesh.mesh = quad
+	_mmi = MultiMeshInstance2D.new()
+	_mmi.multimesh = _mesh
+	_mat = ShaderMaterial.new()
+	var shader := Shader.new()
+	shader.code = SHADER
+	_mat.shader = shader
+	_mmi.material = _mat
+	_vp.add_child(_mmi)
+	var mul := CanvasItemMaterial.new()
+	mul.blend_mode = CanvasItemMaterial.BLEND_MODE_MUL
+	mul.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
+	_out = Sprite2D.new()
+	_out.centered = false
+	_out.texture = _vp.get_texture()
+	_out.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	var composite := ShaderMaterial.new()
+	var composite_shader := Shader.new()
+	composite_shader.code = COMPOSITE_SHADER
+	composite.shader = composite_shader
+	_out.material = composite
+	add_child(_out)
+	_shade = _Shade.new()
+	_shade.material = mul
+	add_child(_shade)
 
-func update_view(grid: Grid, offset: Vector2, zoom: float, cell_size: float,
-		visible_cells: Dictionary = {}, limited: bool = false, fx: FxDecals = null) -> void:
-	if viewport == null: return
-	_clock = float(Time.get_ticks_msec()) / 1000.0
-	_cell_size = cell_size
-	_grid_bounds = Rect2i(0, 0, grid.width, grid.height)
-	var size := Vector2i(get_viewport().get_visible_rect().size).max(Vector2i.ONE)
-	viewport.size = size
-	ambient.size = Vector2(size)
-	geometry.sync(grid)
-	# Hidden geometry must not reveal itself through shadows on visible ground.
-	var visibility_key := [grid.get_instance_id(), limited, hash(visible_cells) if limited else 0, cell_size]
-	var full := geometry.full_sync or visibility_key != _geometry_key
-	if full:
-		_geometry_key = visibility_key
-		_known_shapes.clear()
-		for c: Vector2i in geometry.shapes:
-			if not limited or visible_cells.has(c): _known_shapes[c] = true
-		polygon = OccluderPolygon2D.new()
-		polygon.polygon = PackedVector2Array([Vector2.ZERO, Vector2(cell_size, 0),
-			Vector2(cell_size, cell_size), Vector2(0, cell_size)])
-		for batch in batches: _sync_occluders(batch)
-	elif not geometry.changed.is_empty():
-		for c: Vector2i in geometry.changed:
-			if geometry.shapes.has(c) and (not limited or visible_cells.has(c)): _known_shapes[c] = true
-			else: _known_shapes.erase(c)
-		for batch in batches: _sync_occluders(batch, geometry.changed)
-	var wanted: Dictionary = {}
-	for c: Vector2i in geometry.sources:
-		if limited and not visible_cells.has(c): continue
-		for source: Dictionary in geometry.sources[c]:
-			var energy: float = source.energy
-			if source.kind == "fire": energy *= 0.94 + 0.06 * sin(_clock * 11.0 + c.x * 3 + c.y)
-			_request(wanted, "%s:%d:%d" % [source.kind, c.x, c.y], Vector2(c) + Vector2.ONE * 0.5 + Vector2(source.get("offset", Vector2.ZERO)),
-				float(source.range), source.color, energy, offset, zoom, size)
+## Ambient light level from the player's darkness setting (0 = daylight, 1 = pitch black)
+## and the map: space and underground maps read cool, the outdoors moonlit.
+static func ambient_for(env: String, darkness: float) -> Color:
+	var v := lerpf(AMBIENT_BRIGHT, AMBIENT_DARK, clampf(darkness, 0.0, 1.0))
+	match env:
+		"town", "field":
+			# Open sky: moonlight lifts unlit ground so gaps between lamps read as night,
+			# not as stains.
+			var m := minf(1.0, v * 1.55)
+			return Color(m * 0.9, m * 0.95, m * 1.08).clamp()
+		"bunker":
+			return Color(v * 1.02, v * 0.98, v * 0.92).clamp()
+	return Color(v * 0.95, v * 0.98, v * 1.04).clamp()
+
+func update_view(grid: Grid, pan: Vector2, zoom: float, origin: Vector2, cell_size: float,
+		env: String = "", visible_cells: Dictionary = {}, limited: bool = false,
+		fx: FxDecals = null, after_layer: Node = null, darkness: float = -1.0) -> void:
+	if _vp == null or grid == null: return
+	if after_layer != null and is_instance_valid(after_layer) and after_layer.get_parent() == get_parent() \
+			and get_index() < after_layer.get_index():
+		get_parent().move_child(self, after_layer.get_index())
+	position = pan
+	scale = Vector2(zoom, zoom)
+	_cell = cell_size
+	_origin = origin
+	if darkness < 0.0:
+		var ui := get_node_or_null("/root/Ui")
+		darkness = float(ui.light_darkness) if ui != null else 0.75
+	ambient = ambient_for(env, darkness)
+	_space_env = env in ["station", "asteroid"]
+	occluders.sync(grid)
+	_sync_walls(grid)
+	# Cells on screen (+1 for filtering), clamped to the board.
+	var screen := get_viewport_rect().size
+	var tl := ((Vector2.ZERO - pan) / zoom - origin) / cell_size
+	var br := ((screen - pan) / zoom - origin) / cell_size
+	var lo := Vector2i((Vector2(tl) / CHUNK).floor()) * CHUNK - Vector2i.ONE * CHUNK
+	var hi := Vector2i((Vector2(br) / CHUNK).ceil()) * CHUNK + Vector2i.ONE * CHUNK
+	var view := Rect2i(lo, hi - lo).intersection(Rect2i(0, 0, grid.width, grid.height))
+	if view.size.x <= 0 or view.size.y <= 0:
+		_out.visible = false
+		_shade.set_view(Rect2(), Rect2(origin, Vector2(grid.width, grid.height) * cell_size), _outside(),
+				Rect2((Vector2.ZERO - pan) / zoom, screen / zoom))
+		return
+	_out.visible = true
+	var texels := clampi(int(cell_size * zoom / SCREEN_PX_PER_TEXEL), MIN_TEXELS, MAX_TEXELS)
+	# Keep the map within a sane texture size however far out the camera is.
+	while texels > MIN_TEXELS and view.size.x * view.size.y * texels * texels > 1_500_000:
+		texels -= 1
+	# Lights: static ones from the index (rebuilt only when the view's reach, the index or
+	# — under fog — the sight counters change), plus flashes and muzzle fire from effects.
+	var reach := view.grow(int(MAX_RANGE))
+	var skey := [reach, occluders.revision]
+	if skey != _static_key:
+		_static_key = skey
+		_static = []
+		_fires = []
+		for c: Vector2i in occluders.sources:
+			if not reach.has_point(c): continue
+			for src: Dictionary in occluders.sources[c]:
+				var entry := [Vector2(c) + Vector2.ONE * 0.5 + Vector2(src.offset), minf(float(src.range), MAX_RANGE),
+						float(src.energy), src.color]
+				if src.kind == "fire": _fires.append([c, entry])
+				else: _static.append(entry)
+	var lights := 0
+	var dynamic: Array = []
+	for f: Array in _fires:
+		# Fire on a cell the viewer cannot see would give the burning away.
+		if not limited or visible_cells.has(f[0]):
+			var cell: Vector2i = f[0]
+			var fire: Array = f[1].duplicate()
+			fire[2] = float(fire[2]) * (0.9 + 0.1 * sin(Time.get_ticks_msec() * 0.009 + cell.x * 1.7 + cell.y * 2.3))
+			dynamic.append(fire)
 	if fx != null:
-		for i in fx.flashes.size():
-			var flash: Dictionary = fx.flashes[i]
-			var alpha := FxDecals.flash_alpha(flash)
+		for flash: Dictionary in fx.flashes:
+			var a := FxDecals.flash_alpha(flash)
+			if a <= 0.0: continue
 			for c: Vector2i in flash.cells:
 				if limited and not visible_cells.has(c): continue
-				_request(wanted, "flash:%d:%d:%d" % [i, c.x, c.y], Vector2(c) + Vector2.ONE * 0.5,
-					3.0, Color(1.0, 0.65, 0.30), alpha, offset, zoom, size)
-		for i in fx.lanes.size():
-			var lane: Dictionary = fx.lanes[i]
-			var c := Vector2(lane.from)
-			if limited and not visible_cells.has(Vector2i(c.floor())): continue
-			var energy := maxf(0.0, 1.0 - float(lane.t) / 0.12)
-			if energy > 0:
-				_request(wanted, "muzzle:%d" % i, c, 2.0, Color(1.0, 0.83, 0.48), energy, offset, zoom, size)
-	for key: String in lights.keys():
-		if not wanted.has(key): _remove_light(key)
-	for i in range(batches.size() - 1, -1, -1):
-		if batches[i].used.is_empty():
-			batches[i].canvas.free()
-			batches.remove_at(i)
-	var transform := Transform2D(0.0, Vector2(zoom, zoom), 0.0, offset)
-	for batch in batches: batch.canvas.transform = transform
+				if not reach.has_point(c): continue
+				dynamic.append([Vector2(c) + Vector2.ONE * 0.5, 4.0, 1.6 * a, Color(1.0, 0.7, 0.35)])
+		for lane: Dictionary in fx.lanes:
+			var e := maxf(0.0, 1.0 - float(lane.t) / 0.12)
+			if e <= 0.0: continue
+			var from := Vector2(lane.from)
+			if limited and not visible_cells.has(Vector2i(from.floor())): continue
+			dynamic.append([from, 2.5, 1.2 * e, Color(1.0, 0.85, 0.5)])
+	var key := [view, texels, skey, _walls_key, ambient, hash(dynamic) if not dynamic.is_empty() else 0]
+	_out.position = origin + Vector2(view.position) * cell_size
+	_out.scale = Vector2.ONE * cell_size / float(texels)
+	_shade.set_view(Rect2(_out.position, Vector2(view.size) * cell_size),
+			Rect2(origin, Vector2(grid.width, grid.height) * cell_size), _outside(),
+			Rect2((Vector2.ZERO - pan) / zoom, screen / zoom))
+	if key == _key: return
+	_key = key
+	var size := view.size * texels
+	if _vp.size != size: _vp.size = size
+	_base.size = Vector2(size)
+	_base.color = ambient
+	_space.size = Vector2(size)
+	_space_mat.set_shader_parameter("walls", _walls_tex)
+	_space_mat.set_shader_parameter("board", Vector2(grid.width, grid.height))
+	_space_mat.set_shader_parameter("view", Vector4(view.position.x, view.position.y, view.size.x, view.size.y))
+	_mat.set_shader_parameter("walls", _walls_tex)
+	_mat.set_shader_parameter("board", Vector2(grid.width, grid.height))
+	# Static lamps are uploaded once per view/texel/index change; each later redraw only
+	# rewrites the few dynamic lights after them (fire flicker, flashes, muzzle fire).
+	var t := float(texels)
+	var upload := [view, texels, skey]
+	if upload != _uploaded or _static.size() + dynamic.size() > _mesh.instance_count:
+		_uploaded = upload
+		_mesh.instance_count = _static.size() + maxi(64, dynamic.size() * 2)
+		for i in _static.size():
+			_put(i, _static[i], view, t)
+	for i in dynamic.size():
+		_put(_static.size() + i, dynamic[i], view, t)
+	_mesh.visible_instance_count = _static.size() + dynamic.size()
+	lights = _mesh.visible_instance_count
+	last_instances = lights
+	redraws += 1
+	_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
 
-func _request(wanted: Dictionary, key: String, at: Vector2, radius: float, color: Color,
-		energy: float, offset: Vector2, zoom: float, size: Vector2i) -> void:
-	if energy <= 0.0: return
-	var centre := at * _cell_size
-	var extent := radius * _cell_size
-	var screen := Rect2(offset + (centre - Vector2.ONE * extent) * zoom,
-		Vector2.ONE * extent * 2.0 * zoom)
-	if not screen.intersects(Rect2(Vector2.ZERO, Vector2(size))): return
-	wanted[key] = true
-	if not lights.has(key): _add_light(key)
-	var record: Dictionary = lights[key]
-	var cell := Vector2i(at.floor())
-	var r := ceili(radius) + 1
-	var region := Rect2i(cell - Vector2i(r, r), Vector2i.ONE * (2 * r + 1)).intersection(_grid_bounds)
-	if record.get("cell") != cell or record.get("region") != region:
-		_clear_shadow_mask(record)
-		record.cell = cell
-		record.region = region
-		_add_shadow_mask(record)
-	var light: PointLight2D = record.light
-	light.position = centre
-	light.texture_scale = extent * 2.0 / radial.width
-	light.color = color
-	light.energy = energy
-	record.receiver.position = centre
-	record.receiver.scale = Vector2.ONE * extent * 2.0
+func _put(i: int, l: Array, view: Rect2i, t: float) -> void:
+	var at: Vector2 = l[0]
+	var radius: float = l[1]
+	_mesh.set_instance_transform_2d(i, Transform2D(0.0, Vector2(radius, radius) * t, 0.0,
+			(at - Vector2(view.position)) * t))
+	_mesh.set_instance_custom_data(i, Color(at.x, at.y, radius, l[2]))
+	_mesh.set_instance_color(i, l[3])
 
-func _add_light(key: String) -> void:
-	var chosen: Dictionary = {}
-	var slot := 0
-	for batch in batches:
-		if batch.used.size() < MASKS_PER_CANVAS:
-			chosen = batch
-			break
-	if chosen.is_empty():
-		var canvas := CanvasLayer.new()
-		canvas.layer = _next_canvas_layer
-		_next_canvas_layer += 1
-		viewport.add_child(canvas)
-		var darkness := CanvasModulate.new()
-		darkness.color = Color(0, 0, 0, 1)
-		canvas.add_child(darkness)
-		chosen = {"canvas": canvas, "used": {}, "occluders": {}, "members": {}}
-		batches.append(chosen)
-	while chosen.used.has(slot): slot += 1
-	chosen.used[slot] = true
-	var light := PointLight2D.new()
-	light.texture = radial
-	light.range_layer_min = chosen.canvas.layer
-	light.range_layer_max = chosen.canvas.layer
-	light.range_item_cull_mask = 1 << slot
-	light.shadow_item_cull_mask = 1 << slot
-	light.shadow_enabled = true
-	light.shadow_filter = Light2D.SHADOW_FILTER_PCF5
-	chosen.canvas.add_child(light)
-	var receiver := Sprite2D.new()
-	receiver.texture = white
-	receiver.material = receiver_material
-	receiver.light_mask = 1 << slot
-	chosen.canvas.add_child(receiver)
-	lights[key] = {"light": light, "receiver": receiver, "batch": chosen, "slot": slot}
-	chosen.members[key] = true
+## Space backdrops (stars) are never darkened; grass and soil share the ambient.
+func _outside() -> Color:
+	return Color.WHITE if _space_env else ambient
 
-func _remove_light(key: String) -> void:
-	var record: Dictionary = lights[key]
-	_clear_shadow_mask(record)
-	record.batch.members.erase(key)
-	record.light.free()
-	record.receiver.free()
-	record.batch.used.erase(record.slot)
-	lights.erase(key)
-
-# Each canvas keeps only geometry within its lights' finite ranges. A giant map
-# does not allocate its entire wall grid once for every group of twenty lights.
-func _set_occluder(batch: Dictionary, c: Vector2i, mask: int) -> void:
-	if mask == 0:
-		if batch.occluders.has(c):
-			batch.occluders[c].free()
-			batch.occluders.erase(c)
+## The wall mask: one RG8 texel per cell — red 255 where light stops, green 255 for space. Rebuilt in full only for
+## a new board; otherwise exactly the cells the look journal reported.
+func _sync_walls(grid: Grid) -> void:
+	var wkey := [grid.get_instance_id(), grid.width, grid.height]
+	if _walls_img == null or wkey != _walls_key.slice(0, 3) or occluders.full_sync:
+		var data := PackedByteArray()
+		data.resize(grid.width * grid.height * 2)
+		for i: int in occluders.shapes: data[i * 2] = 255
+		var cells := grid.cells_flat()
+		for i in cells.size():
+			if cells[i].is_space: data[i * 2 + 1] = 255
+		_walls_img = Image.create_from_data(grid.width, grid.height, false, Image.FORMAT_RG8, data)
+		_walls_tex = ImageTexture.create_from_image(_walls_img)
+		_walls_key = wkey + [occluders.revision]
 		return
-	if not batch.occluders.has(c):
-		var node := LightOccluder2D.new()
-		batch.canvas.add_child(node)
-		batch.occluders[c] = node
-	var node: LightOccluder2D = batch.occluders[c]
-	node.occluder = polygon
-	node.occluder_light_mask = mask
-	node.position = Vector2(c) * _cell_size
+	if occluders.changed.is_empty(): return
+	for c: Vector2i in occluders.changed:
+		_walls_img.set_pixel(c.x, c.y, Color(1.0 if occluders.shapes.has(c.y * grid.width + c.x) else 0.0,
+				1.0 if grid.cell(c).is_space else 0.0, 0.0))
+	_walls_tex.update(_walls_img)
+	_walls_key = wkey + [occluders.revision]
 
-func _clear_shadow_mask(record: Dictionary) -> void:
-	if not record.has("region"): return
-	var rect: Rect2i = record.region
-	var batch: Dictionary = record.batch
-	for y in range(rect.position.y, rect.end.y):
-		for x in range(rect.position.x, rect.end.x):
-			var c := Vector2i(x, y)
-			if batch.occluders.has(c):
-				_set_occluder(batch, c, batch.occluders[c].occluder_light_mask & ~(1 << record.slot))
-
-func _add_shadow_mask(record: Dictionary) -> void:
-	if not record.has("region"): return
-	var rect: Rect2i = record.region
-	var batch: Dictionary = record.batch
-	for y in range(rect.position.y, rect.end.y):
-		for x in range(rect.position.x, rect.end.x):
-			var c := Vector2i(x, y)
-			if c == record.cell or not _known_shapes.has(c): continue
-			var mask := 0
-			if batch.occluders.has(c): mask = batch.occluders[c].occluder_light_mask
-			_set_occluder(batch, c, mask | (1 << record.slot))
-
-func _sync_occluders(batch: Dictionary, changed: Dictionary = {}) -> void:
-	# Full rebuild changes visibility or scale; ordinary construction/destruction
-	# only touches the cells supplied by LightOccluders' incremental journal.
-	if changed.is_empty():
-		var touched: Dictionary = batch.occluders.duplicate()
-		for key: String in batch.members:
-			var record: Dictionary = lights[key]
-			if not record.has("region"): continue
-			var rect: Rect2i = record.region
-			for y in range(rect.position.y, rect.end.y):
-				for x in range(rect.position.x, rect.end.x):
-					var c := Vector2i(x, y)
-					if _known_shapes.has(c): touched[c] = true
-		changed = touched
-	for c: Vector2i in changed:
-		var mask := 0
-		if _known_shapes.has(c):
-			for key: String in batch.members:
-				var record: Dictionary = lights[key]
-				if record.has("region") and record.region.has_point(c) and record.cell != c:
-					mask |= 1 << record.slot
-		_set_occluder(batch, c, mask)
+## Ambient around the light map: the rest of the screen (backdrop and off-screen board) is
+## multiplied by the same ambient level so the edge of the light map never shows.
+class _Shade extends Node2D:
+	var lit := Rect2()
+	var colour := Color.WHITE
+	var view := Rect2()
+	func set_view(p_lit: Rect2, _board: Rect2, p_colour: Color, p_view: Rect2) -> void:
+		if p_lit == lit and p_colour == colour and p_view == view: return
+		lit = p_lit
+		colour = p_colour
+		view = p_view
+		queue_redraw()
+	func _draw() -> void:
+		var v := view.grow(64.0)
+		if lit.size == Vector2.ZERO:
+			draw_rect(v, colour)
+			return
+		# Four bands around the lit rectangle.
+		draw_rect(Rect2(v.position, Vector2(v.size.x, maxf(0.0, lit.position.y - v.position.y))), colour)
+		draw_rect(Rect2(Vector2(v.position.x, lit.end.y), Vector2(v.size.x, maxf(0.0, v.end.y - lit.end.y))), colour)
+		draw_rect(Rect2(Vector2(v.position.x, lit.position.y), Vector2(maxf(0.0, lit.position.x - v.position.x), lit.size.y)), colour)
+		draw_rect(Rect2(Vector2(lit.end.x, lit.position.y), Vector2(maxf(0.0, v.end.x - lit.end.x), lit.size.y)), colour)

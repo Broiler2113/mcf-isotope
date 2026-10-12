@@ -195,8 +195,19 @@ Engineers and miners rewrite the map while the battle is on.
 | Mines | Sapper | Hidden until stepped on; a sweeper reveals them for his own side |
 | Drone station | Drone operator | Launches drones; deploying it launches the first |
 
-Miners and engineers also **demolish**: one action, and a wall, a window, an airlock,
-a pillbox or a corpse wall is simply gone. The AI does this to clear its own path.
+Miners and engineers also **demolish**: one action, and a wall of any material
+(armoured plate included), a window, an airlock, a pillbox or a corpse wall is simply
+gone. Only the frame around the world cannot be touched. The AI does this to clear its
+own path.
+
+**Lights** hang on walls or stand on the floor — lamps, strips, streetlights,
+floodlights. A wall lamp hangs on one face of its wall and lights only that side; a
+wall can carry one lamp per side. It can be shot off without harming the wall, but only
+by someone on its side — the lamp on the far face is out of reach. A blast that hits the
+wall tile takes every lamp on it, whichever side. A standing lamp is furniture like any
+other. Generated stations never put a lamp on the hull's outside; asteroid surfaces do
+get lit. Lighting itself is a display option: it changes how dark the board looks, never
+what anyone can see.
 
 **Airlocks** open for anyone alive standing within one cell and close behind them. An
 engineer can weld one shut for good, which is how a corridor gets sealed.
@@ -211,9 +222,12 @@ in it, and makes shooting through it harder. A flamethrower starts it on purpose
 blast starts it by accident. The extinguisher grenade and the engineer's deployable
 wall put it out.
 
-**Gas** arrives as a random event, settles over a block of the map for a few rounds,
-and makes everyone inside roll each round to hold their breath. Vehicle crews are
-sealed in and safe.
+**Gas** arrives as a random event and settles over a block of open floor for a few
+rounds; walls, windows, soil and vacuum stay clear of it. A soldier rolls to hold his
+breath when the cloud lands on him, when he steps into it (once per move, at the first
+gassed cell), and again at the end of every round he spends inside. Gas is also a
+curtain: nobody sees into, out of or through it, and nobody shoots across it. Vehicle
+crews are sealed in and safe.
 
 **Vacuum** is not poison — it is the absence of the floor. A depressurised
 compartment, a hull breach, the open space outside the station: soldiers can cross
@@ -232,6 +246,7 @@ An enemy you cannot see cannot be shot. A tank is therefore a mobile wall for th
 other side and a window for yours, and a drone sent over a roof is a pair of eyes.
 
 Fog can be turned off entirely, which turns the game into a pure positional duel.
+Gas still hides whoever stands in it, and what lies behind it, even then.
 
 ---
 
@@ -277,9 +292,9 @@ anybody's victory.
 
 ## 13. Random events
 
-Switch them on and the map itself gets a turn. Events are announced one round before
-they land, with the zone drawn on the board — so there is always exactly one round to
-get out of the way, or to push somebody into it.
+Switch them on and the map itself gets a turn. An event is announced at the start of
+a round, with the zone drawn on the board, and lands when the round ends — so every
+player has exactly one turn to get out of the way, or to push somebody into it.
 
 - **Artillery barrage** — a rectangle is shelled; about half the cells in it are
   destroyed outright, with whoever stood on them. It usually aims at the thickest
@@ -309,9 +324,9 @@ rather than a cut-out rectangle. Maps can be mirrored for strict symmetry, seede
 exact reproduction, and filled with furniture and civilians to taste.
 
 **Authored.** The map editor works like a paint program: brushes, lines, rectangles,
-fills, selection, copy and paste, stamps for ready-made rooms and bunkers, symmetry
-modes that paint every mirrored copy at once, and the generator available as a
-starting point. A preset decides which tileset the map is drawn with.
+fills, selection, copy and paste, presets for ready-made rooms and structures (and
+your own, saved from a selection), symmetry modes that paint every mirrored copy at
+once, decorative blood and bodies, and the generator available as a starting point.
 
 ---
 
@@ -322,8 +337,10 @@ starting point. A preset decides which tileset the map is drawn with.
   the players watching.
 - **Over a network** — a lobby for up to eight slots, teams, factions, colours and a
   chat, with the host setting up the match and everyone watching the same board.
+  Extra guests can join as **spectators**: free camera, any side's point of view,
+  their own drawings, no say in the battle.
 - **Replays** — every local match records itself and plays back at your pace,
-  with scrubbing and a speed control.
+  with scrubbing, a speed control and bookmarks for every round, turn and event.
 - **Saves** — a match can be saved mid-battle and resumed with the same roles.
 
 The AI is honest about what it does: it plans a whole turn at a time, forms up,

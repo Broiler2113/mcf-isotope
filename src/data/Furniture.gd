@@ -6,8 +6,8 @@ extends RefCounted
 ## feature_durability. Ни своей сетки, ни узлов на предмет: движение, обзор, укрытие,
 ## сохранение, откат, сеть и повтор работают через ту же клетку, что и мешки со стенами.
 ##
-## Mounted lights are the exception: GridCell.fixture stores their id, durability
-## and facing independently of the supporting wall. Their definitions use mount="wall".
+## Mounted lights are the exception: GridCell.lamps stores them independently of the
+## supporting wall, one per side, each with its id, durability, side and tint. Their definitions use mount="wall".
 ## emits_light/light_color/light_range/light_energy describe client rendering only.
 ##
 ## Новый предмет = новая строка в _BASE (цвета — в VARIANTS) (и, по желанию, плитка textures/<id>.png из
@@ -68,41 +68,41 @@ const COVER_MOD := {1.0: 2, 1.5: 3}
 const _BASE := {
 	"wall_lamp": {"name": "Wall Lamp", "cat": "lighting", "h": 0.5, "mat": "metal", "dur": 1,
 		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "wall",
-		"emits_light": true, "light_color": Color(1.0, 0.98, 0.94), "light_range": 6.5, "light_energy": 0.9},
+		"emits_light": true, "light_color": Color(1.0, 0.78, 0.5), "light_range": 6.0, "light_energy": 0.8},
 	"wall_strip": {"name": "Wall Strip Light", "cat": "lighting", "h": 0.5, "mat": "metal", "dur": 2,
 		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "wall",
-		"emits_light": true, "light_color": Color(1.0, 0.98, 0.94), "light_range": 8.0, "light_energy": 1.15},
+		"emits_light": true, "light_color": Color(0.86, 0.95, 1.0), "light_range": 7.0, "light_energy": 0.85},
 	"bulkhead_lamp": {"name": "Bulkhead Light", "cat": "lighting", "h": 0.5, "mat": "metal", "dur": 2,
 		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "wall",
-		"emits_light": true, "light_color": Color(1.0, 0.98, 0.94), "light_range": 6.0, "light_energy": 0.85},
+		"emits_light": true, "light_color": Color(1.0, 0.86, 0.66), "light_range": 5.5, "light_energy": 0.75},
 	"wall_beacon": {"name": "Service Indicator", "cat": "lighting", "h": 0.5, "mat": "metal", "dur": 1,
 		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "wall",
-		"emits_light": true, "light_color": Color(1.0, 0.98, 0.94), "light_range": 3.0, "light_energy": 0.3},
-	"ceiling_lamp": {"name": "Wall-top Flood Lamp", "cat": "lighting", "h": 0.5, "mat": "metal", "dur": 2,
+		"emits_light": true, "light_color": Color(1.0, 0.55, 0.15), "light_range": 2.5, "light_energy": 0.45},
+	"ceiling_lamp": {"name": "Wall Flood Lamp", "cat": "lighting", "h": 0.5, "mat": "metal", "dur": 2,
 		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "wall",
-		"emits_light": true, "light_color": Color(1.0, 0.98, 0.94), "light_range": 9.0, "light_energy": 1.3},
+		"emits_light": true, "light_color": Color(0.95, 0.97, 1.0), "light_range": 8.0, "light_energy": 0.95},
 	"streetlight": {"name": "Streetlight", "cat": "lighting", "h": 1.0, "mat": "metal", "dur": 3,
 		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "floor",
-		"emits_light": true, "light_color": Color(1.0, 0.98, 0.94), "light_range": 11.0, "light_energy": 1.45},
+		"emits_light": true, "light_color": Color(1.0, 0.66, 0.3), "light_range": 9.0, "light_energy": 1.0},
 	"floodlight": {"name": "Floodlight", "cat": "lighting", "h": 1.0, "mat": "metal", "dur": 3,
 		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "floor",
-		"emits_light": true, "light_color": Color(1.0, 0.98, 0.94), "light_range": 13.0, "light_energy": 1.7},
+		"emits_light": true, "light_color": Color(0.92, 0.96, 1.0), "light_range": 11.0, "light_energy": 1.05},
 	"bollard_light": {"name": "Bollard Light", "cat": "lighting", "h": 0.5, "mat": "metal", "dur": 2,
 		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "floor",
-		"emits_light": true, "light_color": Color(1.0, 0.98, 0.94), "light_range": 5.5, "light_energy": 0.65},
+		"emits_light": true, "light_color": Color(0.9, 0.95, 1.0), "light_range": 4.5, "light_energy": 0.55},
 	"work_light": {"name": "Work Light", "cat": "lighting", "h": 0.5, "mat": "metal", "dur": 2,
 		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "floor",
-		"emits_light": true, "light_color": Color(1.0, 0.98, 0.94), "light_range": 8.0, "light_energy": 1.05},
+		"emits_light": true, "light_color": Color(1.0, 0.84, 0.6), "light_range": 7.0, "light_energy": 0.8},
 	"floor_lamp": {"name": "Floor Lamp", "cat": "lighting", "h": 0.5, "mat": "metal", "dur": 1,
 		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "floor",
-		"emits_light": true, "light_color": Color(1.0, 0.98, 0.94), "light_range": 6.0, "light_energy": 0.8},
+		"emits_light": true, "light_color": Color(1.0, 0.74, 0.45), "light_range": 5.0, "light_energy": 0.7},
 	"desk_lamp": {"name": "Desk with Lamp", "cat": "lighting", "h": 1.0, "mat": "metal", "dur": 2,
 		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "floor",
-		"emits_light": true, "light_color": Color(1.0, 0.98, 0.94), "light_range": 4.5, "light_energy": 0.55},
+		"emits_light": true, "light_color": Color(1.0, 0.8, 0.52), "light_range": 3.5, "light_energy": 0.55},
 
 	"lamp": {"name": "Lamp", "cat": "lighting", "h": 0.5, "mat": "metal", "dur": 1,
 		"mob": Mobility.FIXED, "ap": 1, "at": "wall", "gen": true, "rooms": ["utility", "outdoor"],
-		"emits_light": true, "light_color": Color(1.0, 0.98, 0.91), "light_range": 7.0, "light_energy": 0.95},
+		"emits_light": true, "light_color": Color(1.0, 0.78, 0.5), "light_range": 6.0, "light_energy": 0.75},
 	# --- Жильё -------------------------------------------------------------------------
 	"chair": {"name": "Chair", "cat": "residential", "h": 0.5, "mat": "wood", "dur": 1,
 		"mob": Mobility.PORTABLE, "ap": 1, "at": "free", "gen": true,
@@ -169,7 +169,7 @@ const _BASE := {
 	"checkout_counter": {"join": "run", "name": "Checkout Counter", "cat": "office", "h": 1.0, "mat": "wood",
 		"dur": 3, "mob": Mobility.FIXED, "ap": 2, "at": "free", "gen": true,
 		"rooms": ["shop", "restaurant"]},
-	"vending_machine": {"name": "Vending Machine", "cat": "office", "h": 2.0, "mat": "metal",
+	"vending_machine": {"emits_light": true, "light_color": Color(0.6, 0.85, 1.0), "light_range": 3.0, "light_energy": 0.5, "name": "Vending Machine", "cat": "office", "h": 2.0, "mat": "metal",
 		"dur": 4, "mob": Mobility.FIXED, "ap": 3, "at": "wall", "gen": true,
 		"rooms": ["dining_room", "shop", "generic_room"]},
 	# --- Промышленное ---------------------------------------------------------------------
@@ -182,7 +182,7 @@ const _BASE := {
 	"storage_shelf": {"join": "run", "name": "Storage Shelf", "cat": "industrial", "h": 2.0, "mat": "metal",
 		"dur": 3, "mob": Mobility.HEAVY, "ap": 2, "at": "free", "gen": true,
 		"rooms": ["storage", "warehouse", "armory"]},
-	"server_rack": {"emits_light": true, "light_color": Color(0.65, 0.80, 1.0), "light_range": 4.0, "light_energy": 0.50, "join": "run", "name": "Server Rack", "cat": "industrial", "h": 1.5, "mat": "metal",
+	"server_rack": {"emits_light": true, "light_color": Color(0.45, 0.75, 1.0), "light_range": 3.0, "light_energy": 0.45, "join": "run", "name": "Server Rack", "cat": "industrial", "h": 1.5, "mat": "metal",
 		"dur": 4, "mob": Mobility.FIXED, "ap": 3, "at": "free", "gen": true,
 		"rooms": ["server_room", "command"]},
 	"industrial_cabinet": {"join": "run", "name": "Industrial Cabinet", "cat": "industrial", "h": 1.5,
@@ -200,7 +200,7 @@ const _BASE := {
 	"equipment_cart": {"name": "Equipment Cart", "cat": "industrial", "h": 1.0, "mat": "metal",
 		"dur": 2, "mob": Mobility.HEAVY, "ap": 1, "at": "free", "gen": true,
 		"rooms": ["workshop", "medical", "mining", "server_room"]},
-	"generator": {"emits_light": true, "light_color": Color(0.65, 0.80, 1.0), "light_range": 4.0, "light_energy": 0.50, "join": "whole", "sizes": [[2, 1]], "back": "long", "name": "Generator", "cat": "industrial", "h": 1.5, "mat": "metal", "dur": 5,
+	"generator": {"emits_light": true, "light_color": Color(0.55, 0.85, 1.0), "light_range": 3.5, "light_energy": 0.45, "join": "whole", "sizes": [[2, 1]], "back": "long", "name": "Generator", "cat": "industrial", "h": 1.5, "mat": "metal", "dur": 5,
 		"mob": Mobility.FIXED, "ap": 3, "at": "corner", "gen": true,
 		"rooms": ["utility", "server_room", "mining"]},
 	"toolbox": {"name": "Toolbox", "cat": "industrial", "h": 0.5, "mat": "metal", "dur": 1,
@@ -209,7 +209,7 @@ const _BASE := {
 	"ammo_crate": {"name": "Ammo Crate", "cat": "industrial", "h": 1.0, "mat": "metal", "dur": 3,
 		"mob": Mobility.HEAVY, "ap": 2, "at": "free", "gen": true,
 		"rooms": ["armory", "barracks"]},
-	"machinery": {"emits_light": true, "light_color": Color(0.65, 0.80, 1.0), "light_range": 4.0, "light_energy": 0.50, "join": "whole", "sizes": [[2, 2], [3, 2]], "back": "", "name": "Machinery", "cat": "industrial", "h": 2.0, "mat": "metal", "dur": 4,
+	"machinery": {"emits_light": true, "light_color": Color(1.0, 0.75, 0.4), "light_range": 3.5, "light_energy": 0.4, "join": "whole", "sizes": [[2, 2], [3, 2]], "back": "", "name": "Machinery", "cat": "industrial", "h": 2.0, "mat": "metal", "dur": 4,
 		"mob": Mobility.FIXED, "ap": 3, "at": "center", "gen": true,
 		"rooms": ["workshop", "mining", "garage"]},
 	"exam_table": {"join": "whole", "sizes": [[1, 2]], "back": "short", "name": "Examination Table", "cat": "industrial", "h": 1.0, "mat": "metal",
@@ -235,7 +235,7 @@ const _BASE := {
 	"potted_plant": {"name": "Potted Plant", "cat": "residential", "h": 0.5, "mat": "plastic", "dur": 1,
 		"mob": Mobility.PORTABLE, "ap": 1, "at": "corner", "gen": true,
 		"rooms": ["living_room", "office", "command", "shop", "restaurant"]},
-	"tv_stand": {"name": "TV Stand", "cat": "residential", "h": 1.0, "mat": "wood", "dur": 1,
+	"tv_stand": {"emits_light": true, "light_color": Color(0.55, 0.7, 1.0), "light_range": 2.5, "light_energy": 0.35, "name": "TV Stand", "cat": "residential", "h": 1.0, "mat": "wood", "dur": 1,
 		"mob": Mobility.HEAVY, "ap": 1, "at": "wall", "gen": true,
 		"rooms": ["living_room", "barracks", "bedroom"]},
 	"stove": {"name": "Stove", "cat": "residential", "h": 1.0, "mat": "metal", "dur": 3,
@@ -263,7 +263,7 @@ const _BASE := {
 	"sink": {"name": "Sink", "cat": "residential", "h": 1.0, "mat": "metal", "dur": 1,
 		"mob": Mobility.FIXED, "ap": 1, "at": "wall", "gen": true,
 		"rooms": ["restroom", "bathroom", "kitchen", "laboratory", "surgery", "virology", "morgue", "changing"]},
-	"console": {"name": "Console", "cat": "office", "h": 1.0, "mat": "metal", "dur": 3,
+	"console": {"emits_light": true, "light_color": Color(0.45, 1.0, 0.7), "light_range": 2.5, "light_energy": 0.45, "name": "Console", "cat": "office", "h": 1.0, "mat": "metal", "dur": 3,
 		"mob": Mobility.FIXED, "ap": 2, "at": "wall", "gen": true,
 		"rooms": ["command", "power", "laboratory"]},
 	"target": {"name": "Practice Target", "cat": "industrial", "h": 1.5, "mat": "wood", "dur": 1,
@@ -294,7 +294,7 @@ const _BASE := {
 	"biohazard_cabinet": {"join": "run", "name": "Biohazard Cabinet", "cat": "industrial", "h": 1.5,
 		"mat": "metal", "dur": 3, "mob": Mobility.FIXED, "ap": 2, "at": "wall", "gen": true,
 		"rooms": ["virology", "laboratory"]},
-	"specimen_fridge": {"name": "Specimen Fridge", "cat": "industrial", "h": 1.5, "mat": "metal",
+	"specimen_fridge": {"emits_light": true, "light_color": Color(0.7, 0.9, 1.0), "light_range": 2.0, "light_energy": 0.3, "name": "Specimen Fridge", "cat": "industrial", "h": 1.5, "mat": "metal",
 		"dur": 3, "mob": Mobility.HEAVY, "ap": 2, "at": "wall", "gen": true,
 		"rooms": ["virology", "morgue", "laboratory"]},
 	## Хозяйство техтуннелей и щитовых (игрок просил «gas canisters, utility lockers,
@@ -474,6 +474,19 @@ static func for_room(room: String) -> Array:
 ## Wall fixtures occupy their own destructible layer; the supporting wall stays intact.
 static func is_wall_light(id: String) -> bool:
 	return DEFS.get(id, {}).get("mount", "") == "wall"
+
+## Light colours a map maker can give any lamp (0.11, editor right-click). Index 0 keeps
+## the lamp's own colour. Display only: the colour of the glow and of the lamp's glass.
+const LIGHT_TINTS := [["Lamp's own", Color(0, 0, 0, 0)], ["Warm", Color(1.0, 0.74, 0.42)],
+		["White", Color(1.0, 1.0, 1.0)], ["Cool", Color(0.72, 0.86, 1.0)], ["Red", Color(1.0, 0.22, 0.16)],
+		["Amber", Color(1.0, 0.58, 0.12)], ["Green", Color(0.32, 1.0, 0.42)], ["Blue", Color(0.32, 0.52, 1.0)],
+		["Purple", Color(0.74, 0.38, 1.0)]]
+
+## The light colour of a lamp with this tint (0 = its own colour from DEFS).
+static func light_color_of(id: String, tint: int) -> Color:
+	if tint > 0 and tint < LIGHT_TINTS.size():
+		return LIGHT_TINTS[tint][1]
+	return DEFS.get(id, {}).get("light_color", Color.WHITE)
 
 static func emits_light(id: String) -> bool:
 	return bool(DEFS.get(id, {}).get("emits_light", false))

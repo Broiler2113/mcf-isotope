@@ -387,7 +387,7 @@ var _victory_overlay: Control = null
 var _opening_state: Dictionary = {}
 var _before_grid: Grid = null
 var _before_tiles: TerrainTiles = null
-var _before_units: Array = []      # [stats_id, owner, coord]
+var _before_units: Array = []      # [stats_id, owner, coord, UnitInstance of the opening board]
 var _before_vehicles: Array = []   # [type_id, owner, origin, size, facing]
 var _before_on := false
 var _before_layer: BeforeLayer = null
@@ -597,12 +597,12 @@ func _sync_lighting() -> void:
 		_lighting = LightManager.new()
 		add_child(_lighting)
 	if _before_on and _before_grid != null:
-		_lighting.update_view(_before_grid, pan + ORIGIN * zoom + position, zoom, CELL)
+		_lighting.update_view(_before_grid, pan, zoom, ORIGIN, CELL, state.env, {}, false, null, _lod)
 	else:
 		var view := _view_resolver()
 		var limited := view.visibility_limited()
-		_lighting.update_view(state.grid, pan + ORIGIN * zoom + position, zoom, CELL,
-			view.team_visible_coords(_viewing_side()) if limited else {}, limited, _fx)
+		_lighting.update_view(state.grid, pan, zoom, ORIGIN, CELL, state.env,
+			view.team_visible_coords(_viewing_side()) if limited else {}, limited, _fx, _lod)
 
 func _process(delta: float) -> void:
 	_advance_group_preview()
@@ -1388,25 +1388,22 @@ func _handle_click(coord: Vector2i) -> void:
 				return
 			_back_to_menu()
 		Mode.SHOOT:
-			# Клик МИМО траектории начатой очереди снимает её (#12). Раньше такой клик
-			# либо молча уходил в никуда, либо (по #5) переводил остаток очереди на
-			# новую цель — в том числе стоящую совсем в другой стороне. Перенос по #5
-			# остаётся, но только вдоль ТОГО ЖЕ луча: остаток очереди летит туда, куда
-			# уже направлено оружие, а не разворачивается на месте.
-			if _shot_off_trajectory(coord):
-				_submit(CancelShotIntent.new(selected_id))
-				return
+			# The rest of a paid burst may go at ANY valid target (0.11; it was tied to
+			# the first firing line by #12). A click on nothing simply leaves shoot mode
+			# below — it no longer throws the remaining bullets away.
 			if occupant != null and target_ids.has(occupant.id):
 				_begin_shoot(occupant)
 				return
-			if item_cells.has(coord) and resolver.can_shoot_fixture(_selected_unit(), coord) == "":
+			var lamp_side := _lamp_side_under_mouse(_selected_unit(), coord)
+			if item_cells.has(coord) and (lamp_side >= 0 or resolver.can_shoot_fixture(_selected_unit(), coord) == ""):
 				var shooter := _selected_unit()
 				var count: int = shooter.action_state.remaining_shots if _pending_shoot(shooter) else shooter.rate_of_fire()
 				var sid := selected_id
+				var component := "fixture:%d" % lamp_side if lamp_side >= 0 else "fixture"
 				if count > 1:
-					_open_shot_picker(Furniture.DEFS[resolver.fixture_at(coord)].name, count,
-						func(n: int) -> Intent: return ShootIntent.new(sid, -1, n, coord, "fixture"))
-				else: _submit(ShootIntent.new(sid, -1, -1, coord, "fixture"))
+					_open_shot_picker(Furniture.DEFS[resolver.fixture_at(coord, lamp_side)].name, count,
+						func(n: int) -> Intent: return ShootIntent.new(sid, -1, n, coord, component))
+				else: _submit(ShootIntent.new(sid, -1, -1, coord, component))
 				return
 			# Шахтёр (item 15): клик по соседней вражеской машине — удар ломом по корпусу.
 			if not _melee_veh_ids.is_empty():
@@ -2118,31 +2115,10 @@ func _veh_enter_disembark(unit_id: int) -> void:
 func _pending_shoot(u: UnitInstance) -> bool:
 	return u.action_state != null and u.action_state.is_pending()
 
-## Лежит ли клик ВНЕ траектории начатой очереди (#12). Траектория — луч от стрелка
-## через клетку текущей цели: любая клетка на нём (хоть ближе цели, хоть дальше)
-## считается «по стволу». Без начатой очереди траектории нет, и отменять нечего.
-func _shot_off_trajectory(coord: Vector2i) -> bool:
-	var u := _selected_unit()
-	if u == null or not _pending_shoot(u) or coord == u.coord:
-		return false
-	var t := state.get_unit(u.action_state.target_id)
-	if t == null or t.coord == u.coord:
-		return false
-	var aim := t.coord - u.coord
-	var click := coord - u.coord
-	# Один и тот же луч = совпадающие направления единичного шага. Для восьми
-	# направлений сетки этого достаточно: знаки задают луч однозначно.
-	return Vector2i(signi(click.x), signi(click.y)) != Vector2i(signi(aim.x), signi(aim.y)) \
-			or not Combat.is_on_firing_line(u.coord, coord)
-
-## Есть ли НЕЗАВЕРШЁННАЯ стрельба, цель которой ещё МОЖНО достреливать (#45).
-## Устаревшая привязка (цель мертва/скрыта/сошла с линии) не должна блокировать
-## возможность начать новую стрельбу оставшимися ОД.
+## A burst with bullets left (0.11): they may go at any valid target, so the Shoot
+## button stays available even when the first target is dead or out of sight.
 func _valid_pending_shoot(u: UnitInstance) -> bool:
-	if not _pending_shoot(u):
-		return false
-	var t := state.get_unit(u.action_state.target_id)
-	return t != null and resolver.can_shoot(u, t) == ""
+	return _pending_shoot(u) and u.action_state.remaining_shots > 0
 
 func _enter_move() -> void:
 	var u := _selected_unit()
@@ -2169,9 +2145,6 @@ func _enter_shoot() -> void:
 	reach = null
 	item_cells = []
 	_melee_veh_ids = []
-	# Устаревшую привязку burst'а сбрасываем, чтобы можно было начать новую стрельбу (#45).
-	if _pending_shoot(u) and not _valid_pending_shoot(u):
-		u.action_state = null
 	# И при незавершённой очереди, и при свежей стрельбе показываем ВСЕ доступные
 	# цели: остаток очереди можно дострелить по другой цели (#5).
 	if _valid_pending_shoot(u) or u.remaining_ap > 0:
@@ -3076,7 +3049,14 @@ func _on_intent_ready(intent: Intent) -> void:
 			})
 		_hold_visual = result.visual_hold  # item 22: держим «до взрыва», пока крутится кубик
 		queue_redraw()
-		await _play_dice(result.dice_events)
+		var mover: PlayerController = controllers.get(state.active_player())
+		if mover != null and mover.is_local_human() and replay == null and _walks_only(result.dice_events):
+			# Your own soldiers just walking (0.11): the walk plays on its own and the screen
+			# stays live — select another unit and give it orders while this one moves.
+			_ap_display.erase(ap_actor.id if ap_actor != null else -1)
+			_play_walks_free(result.dice_events)
+		else:
+			await _play_dice(result.dice_events)
 		_pending_death_ids.clear()
 		_hold_visual = {}
 		queue_redraw()
@@ -3251,7 +3231,7 @@ func _capture_opening_view() -> void:
 				b.feature_durability = a.feature_durability
 			b.cover_height = a.cover_height
 			b.airlock_welded = a.airlock_welded
-			b.fixture = a.fixture
+			b.lamps = a.lamps
 	g.furniture_turn = src.furniture_turn.duplicate(true)
 	g.wall_accent = src.wall_accent.duplicate()
 	g.door_look = src.door_look.duplicate()
@@ -3264,7 +3244,7 @@ func _capture_opening_view() -> void:
 	_before_units.clear()
 	for u: UnitInstance in opening.all_units():
 		if u.is_alive() and src.in_bounds(u.coord):
-			_before_units.append([u.stats.id, u.owner, u.coord])
+			_before_units.append([u.stats.id, u.owner, u.coord, u])
 	_before_vehicles.clear()
 	for veh: Vehicle in opening.all_vehicles():
 		if not veh.wrecked:
@@ -3326,15 +3306,20 @@ func _draw_before(ci: Node2D) -> void:
 		ci.draw_rect(Rect2(org + Vector2(2, 2), vsize - Vector2(4, 4)), col, false, 2.0)
 		ci.draw_string(font, org + Vector2(8, 18), String(VehicleDB.get_vehicle(String(v[0])).get("name", v[0])),
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 14, _ink(col.darkened(0.35)))
+	# Units exactly as the battle draws them (0.11): faction sprite, or the side-coloured
+	# disc with its outline and role tag — no extra ring.
+	var details := zoom >= UNIT_DETAIL_ZOOM
 	for u: Array in _before_units:
+		var unit: UnitInstance = u[3]
 		var o := ORIGIN + Vector2(u[2]) * CELL
-		var col := _side_color(int(u[1]))
-		var key := Sprites.resolve(String(u[0]), _owner_suffix(int(u[1])))
-		ci.draw_arc(o + Vector2(CELL, CELL) * 0.5, CELL * 0.46, 0.0, TAU, 24, col, 2.0)
-		if key == "" or not Sprites.draw_texture_override(ci, key, o, CELL):
-			ci.draw_circle(o + Vector2(CELL, CELL) * 0.5, CELL * 0.32, col)
-			ci.draw_string(font, o + Vector2(0, CELL * 0.5 + 5), Sprites.unit_tag(String(u[0])),
-					HORIZONTAL_ALIGNMENT_CENTER, CELL, 14, Color.WHITE)
+		var c := o + Vector2(CELL, CELL) * 0.5
+		var skey := _sprite_key(unit)
+		if skey == "" or not Sprites.draw_texture_override(ci, skey, o, CELL):
+			var col := _side_color(int(u[1]))
+			ci.draw_circle(c, CELL * 0.34, col)
+			if details:
+				ci.draw_arc(c, CELL * 0.34, 0, TAU, 20, col.darkened(0.45), 1.5)
+				_tag_line(unit).draw(ci.get_canvas_item(), c + Vector2(-9, 5 - 16 * 0.8), _ink(col))
 	Sprites.set_base_transform(pan, Vector2(zoom, zoom))
 
 ## Разбор партии обученной политикой (item: «play vs latest»). Прогоняет записанный матч
@@ -3667,7 +3652,12 @@ func _show_net_action(intent: Intent, result: ActionResult) -> void:
 			_pending_death_ids[id] = true
 		_hold_visual = result.visual_hold
 		queue_redraw()
-		await _play_dice(result.dice_events)
+		var walker := state.get_unit(intent.actor_id) if intent != null else null
+		var own_ctrl: PlayerController = controllers.get(walker.owner) if walker != null else null
+		if own_ctrl != null and own_ctrl.is_local_human() and _walks_only(result.dice_events):
+			_play_walks_free(result.dice_events)   # your own soldier walking: stay live (0.11)
+		else:
+			await _play_dice(result.dice_events)
 		_pending_death_ids.clear()
 		_hold_visual = {}
 	if not result.fx.is_empty():
@@ -3967,7 +3957,7 @@ func _play_dice(events: Array) -> void:
 			# В сети (batch 12 #14) нажатия ждут ВСЕ: свой бросок — кнопкой, чужой — пока
 			# его хозяин не нажмёт у себя. Броски ИИ и мирных крутятся сами.
 			var roller := int(step.get("roller", MCF.Owner.NEUTRAL))
-			var remote_human: bool = networked and not bool(step["manual"]) \
+			var remote_human: bool = networked and not bool(step["manual"]) and not step.get("auto", false) \
 					and state.roster != null and state.roster.is_networked_human(roller)
 			if networked and (bool(step["manual"]) or remote_human):
 				var seq := _roll_seq
@@ -4100,6 +4090,7 @@ func _play_walk(ev: Dictionary) -> void:
 			if replay != null and _replay_skip_animations:
 				break
 			if _walk_jobs.get(id, -1) != serial:
+				_walks_running = maxi(0, _walks_running - 1)   # a newer walk took this unit over
 				return
 			var k := minf(1.0, float(Time.get_ticks_msec() - t0) / maxf(1.0, step_ms))
 			_walk_offset[id] = delta * k
@@ -4111,12 +4102,39 @@ func _play_walk(ev: Dictionary) -> void:
 		_walk_cells[id] = cell
 		_walk_offset.erase(id)
 	if _walk_jobs.get(id, -1) != serial:
+		_walks_running = maxi(0, _walks_running - 1)
 		return
 	_walk_jobs.erase(id)
 	# Keep the visual endpoint until the whole action has finished.
 	_walk_offset.erase(id)
 	_walks_running = maxi(0, _walks_running - 1)
 	queue_redraw()
+
+## Only soldiers walking — no dice, deaths, mines, gas or vehicles (0.11).
+func _walks_only(events: Array) -> bool:
+	var walked := false
+	for ev: Dictionary in events:
+		match str(ev.get("kind", "")):
+			"walk":
+				if not ev.get("soldier", false): return false
+				walked = true
+			"hold", "ap": pass
+			_: return false
+	return walked
+
+func _play_walks_free(events: Array) -> void:
+	for ev: Dictionary in events:
+		if str(ev.get("kind", "")) == "walk":
+			_free_walk(ev)
+
+func _free_walk(ev: Dictionary) -> void:
+	var id := int(ev["unit"])
+	await _play_walk(ev)
+	# The unit was ordered on again, or a blocking show took over: they own the drawing.
+	if not _walk_jobs.has(id) and not _animating and is_inside_tree():
+		_walk_cells.erase(id)
+		_walk_offset.erase(id)
+		queue_redraw()
 
 ## Клетка, на которой юнит рисуется ПРЯМО СЕЙЧАС: обычно его настоящая координата,
 ## а во время проигрывания перехода — промежуточная клетка маршрута.
@@ -4160,7 +4178,7 @@ func _dice_steps(ev: Dictionary) -> Array:
 			var g_own := int(ev.get("shooter_owner", -1))
 			var g_faces: Array = []
 			for h: Dictionary in ev["hits"]:
-				g_faces.append({"value": h["roll"], "good": _good_for_viewer(h["hit"], g_own),
+				g_faces.append({"value": h["roll"], "good": _good_for_viewer(h["hit"], g_own), "need": int(ev["need"]),
 					"tag": ("Light %d+" if ev["kind"] == "fixture" else "Glass %d+") % int(ev["need"])})
 			var g_manual := _owner_is_local_human(g_own)
 			var g_name := String(ev["name"]).to_lower()
@@ -4172,7 +4190,7 @@ func _dice_steps(ev: Dictionary) -> Array:
 				var s_faces: Array = []
 				for sv: Dictionary in ev["saves"]:
 					s_faces.append({"value": sv["roll"], "good": _good_for_viewer(not sv["held"], g_own),
-						"tag": "Holds %d+" % int(ev["save"])})
+						"need": int(ev["save"]), "tag": "Holds %d+" % int(ev["save"])})
 				steps.append({"faces": s_faces, "manual": false, "roller": MCF.Owner.NEUTRAL,
 					"speed": FAST_ROLL_SPEED if int(ev["save"]) > 6 else 1.0,
 					"prompt": "The %s holds on %d+" % [g_name, int(ev["save"])]})
@@ -4186,12 +4204,12 @@ func _dice_steps(ev: Dictionary) -> Array:
 			for det in ev["shots"]:
 				var s_own := int(ev.get("shooter_owner", -1))
 				var d_own := int(ev.get("def_owner", -1))
-				hit_faces.append({"value": det["hit_roll"],
+				hit_faces.append({"value": det["hit_roll"], "need": int(det["need"]),
 					"good": _good_for_viewer(det["hit"], s_own), "tag": "Hit %d+" % det["need"]})
 				if det["hit"]:
 					# Зелёный — то, что хорошо для СМОТРЯЩЕГО (batch ui-drones): своя защита не
 					# выдержала — красный, вражеская — зелёный.
-					pen_faces.append({"value": det["def_roll"],
+					pen_faces.append({"value": det["def_roll"], "need": int(det["armor"]),
 						"good": _good_for_viewer(det["parried"], d_own), "tag": "Pen %d+" % det["armor"]})
 			# Разбивка бонусов/штрафов к попаданию и защите (#49): показываем в подсказке.
 			var hit_note := _mods_text("To-hit", ev.get("hit_mods", []))
@@ -4228,7 +4246,7 @@ func _dice_steps(ev: Dictionary) -> Array:
 			resist["roller"] = int(ev.get("def_owner", MCF.Owner.NEUTRAL))
 			steps.append(resist)
 		"check":
-			var chk := _step({"value": ev["roll"],
+			var chk := _step({"value": ev["roll"], "need": int(ev["need"]),
 				"good": _good_for_viewer(ev["ok"], int(ev.get("roller", -1))), "tag": "%d+" % ev["need"]})
 			chk["speed"] = FAST_ROLL_SPEED if int(ev["need"]) <= 1 else 1.0
 			steps.append(chk)
@@ -4239,7 +4257,7 @@ func _dice_steps(ev: Dictionary) -> Array:
 				if det["epicenter"] and det["rolls"].is_empty():
 					continue  # эпицентр: автосмерть без броска
 				for r in det["rolls"]:
-					frag_faces.append({"value": r,
+					frag_faces.append({"value": r, "need": int(det["need"]),
 						"good": _good_for_viewer(r >= det["need"], int(det.get("owner", -1))),
 						"tag": "R%d+" % det["need"]})
 			if not frag_faces.is_empty():
@@ -4262,7 +4280,23 @@ func _dice_steps(ev: Dictionary) -> Array:
 				steps.append({"faces": frag_faces, "manual": manual, "speed": _defense_roll_speed(ev["targets"], "need"),
 					"prompt": DEFENSE_PROMPT + _need_text(ev["targets"], "need"),
 					"roller": roller})
+	for step: Dictionary in steps:
+		if _impossible(step["faces"]):
+			# Nothing to decide: no Roll button here, and no peer waits for one either.
+			step["manual"] = false
+			step["auto"] = true
+			step["speed"] = FAST_ROLL_SPEED
+			step["prompt"] = (str(step.get("prompt", "")) + "\n").lstrip("\n") + "Cannot succeed — needs 7+"
 	return steps
+
+## Every die of the step needs more than 6 (0.11): an automatic failure, never a prompt.
+func _impossible(faces: Array) -> bool:
+	if faces.is_empty():
+		return false
+	for f: Dictionary in faces:
+		if int(f.get("need", 0)) <= 6:
+			return false
+	return true
 
 ## «(need 4+)» по списку записей с полем-порогом (batch 12 #14); при разных порогах —
 ## все через запятую. Пусто, если порогов нет или все заведомо проходят.
@@ -4333,6 +4367,19 @@ func _cell_origin(coord: Vector2i) -> Vector2:
 ## CanvasLayer, который не участвует в трансформе рисования.
 func _cell_screen(coord: Vector2i) -> Vector2:
 	return pan + zoom * _cell_origin(coord)
+
+## Of the wall lamps on coord this unit can shoot, the one on the face nearest the mouse
+## (two can face a unit standing diagonally off a corner). -1: none.
+func _lamp_side_under_mouse(shooter: UnitInstance, coord: Vector2i) -> int:
+	var sides := resolver.shootable_lamp_sides(shooter, coord)
+	if sides.is_empty(): return -1
+	var f := ((get_global_mouse_position() - pan) / zoom - ORIGIN) / CELL - Vector2(coord)
+	var best := sides[0]
+	for side: int in sides:
+		var face := Vector2(0.5, 0.5) + Vector2(Furniture.N4[side]) * 0.5
+		var best_face := Vector2(0.5, 0.5) + Vector2(Furniture.N4[best]) * 0.5
+		if f.distance_to(face) < f.distance_to(best_face): best = side
+	return best
 
 func _pos_to_cell(pos: Vector2) -> Vector2i:
 	var local := (pos - pan) / zoom - ORIGIN
@@ -5250,6 +5297,20 @@ func _draw() -> void:
 		# Клетки пола под спецудар (противотанкист — взрыв, огнемётчик — струя).
 		for coord in item_cells:
 			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(0.9, 0.5, 0.1, 0.16))
+		# Anti-tank (0.11): the roll to hit is written on EVERY cell it can blast, not only
+		# the hovered one, so spots can be compared before the shell is spent.
+		var at_unit := _selected_unit()
+		if mode == Mode.SHOOT and at_unit != null and at_unit.stats.special_ability_id == MCF.ABILITY_ANTI_TANK \
+				and zoom >= MOVE_LABEL_MIN_ZOOM:
+			var at_hover := _pos_to_cell(get_global_mouse_position())
+			for coord in item_cells:
+				if coord == at_hover or not _cell_on_screen(coord.x, coord.y):
+					continue
+				var an: int = resolver.aim_need(at_unit, coord)
+				var at := "auto" if an <= 0 else ("%d+" % an if an <= 6 else "—")
+				var ap := _cell_origin(coord) + Vector2(CELL * 0.08, CELL * 0.62)
+				draw_string_outline(font, ap, at, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, 3, Color(0, 0, 0, 0.85))
+				draw_string(font, ap, at, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1, 0.92, 0.5, 0.9))
 		# Соседние вражеские машины под удар шахтёра (item 15) — обводим их след.
 		for mvid in _melee_veh_ids:
 			var mveh: Vehicle = state.get_vehicle(mvid)
@@ -5282,7 +5343,9 @@ func _draw() -> void:
 				var ctxt := "auto" if cneed <= 0 else ("%d+" % cneed if cneed <= 6 else "—")
 				# Окно: бросает не стрелок, а стекло — его спасбросок против каждой пули.
 				var gfid := state.grid.cell(shov).feature_id
-				if MCF.is_glass(gfid) and su.stats.special_ability_id != MCF.ABILITY_MARKSMAN:
+				# A shell or a flame jet does not roll per bullet against the pane: no "glass N+".
+				if MCF.is_glass(gfid) and not su.stats.special_ability_id in [MCF.ABILITY_MARKSMAN, MCF.ABILITY_ANTI_TANK,
+						MCF.ABILITY_FLAMETHROWER]:
 					ctxt = "glass %d+" % MCF.glass_bullet_save(gfid)
 				var ctp := _cell_origin(shov) + Vector2(CELL * 0.8, CELL * 0.2)
 				draw_string_outline(font, ctp, ctxt, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, 4, Color(0, 0, 0, 0.9))
@@ -6057,7 +6120,6 @@ func _draw_random_events(font: Font) -> void:
 	for e: Dictionary in ev.pending:
 		var id := str(e["id"])
 		var p: Dictionary = e["params"]
-		var left: int = 1
 		var col: Color = EVENT_COLORS.get(id, Color(1, 1, 1, 1))
 		var rect := Rect2()
 		if id == RandomEvents.ARMY:
@@ -6075,7 +6137,7 @@ func _draw_random_events(font: Font) -> void:
 					Vector2(int(p.get("w", 1)), int(p.get("h", 1))) * CELL)
 		draw_rect(rect, Color(col.r, col.g, col.b, 0.14))
 		draw_rect(rect, Color(col.r, col.g, col.b, 0.85), false, 2.0)
-		var label := "%s · %d TURN" % [RandomEvents.event_name(id).to_upper(), left]
+		var label := "%s · END OF ROUND" % RandomEvents.event_name(id).to_upper()
 		draw_string(font, rect.position + Vector2(4, 16), label,
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(col.r, col.g, col.b, 0.95))
 
@@ -7907,8 +7969,9 @@ func _open_menu(unit: UnitInstance) -> void:
 		seat_lbl.add_theme_font_size_override("font_size", 11)
 		vb.add_child(seat_lbl)
 		var pshoot := "Shoot"
+		# The rest of a burst is still just "Shoot" (0.11).
 		if _valid_pending_shoot(unit):
-			pshoot = "Finish Burst"
+			pshoot = "Shoot"
 		elif unit.stats.special_ability_id == MCF.ABILITY_MARKSMAN:
 			pshoot = "Laser (2 AP)"
 		elif unit.stats.special_ability_id == MCF.ABILITY_FLAMETHROWER:
@@ -7946,8 +8009,9 @@ func _open_menu(unit: UnitInstance) -> void:
 
 		# Стрельба — тоже всегда присутствует; гаснет, когда не хватает ОД на выстрел.
 		var shoot_text := "Shoot"
+		# The rest of a burst is still just "Shoot" (0.11).
 		if _valid_pending_shoot(unit):
-			shoot_text = "Finish Burst"
+			shoot_text = "Shoot"
 		elif unit.stats.special_ability_id == MCF.ABILITY_MARKSMAN:
 			shoot_text = "Laser (2 AP)"
 		elif unit.stats.special_ability_id == MCF.ABILITY_MINER \
