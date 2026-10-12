@@ -8,9 +8,9 @@ extends Node2D
 ## Every light is one instance of a single MultiMesh quad (one draw call for all of
 ## them); its shader marches from the lamp towards the texel through a wall mask that
 ## has one texel per cell, read exactly; five rays across the lamp's width and a blur
-## soften the edges. A wall's face towards the lamp is lit, its far face is not; furniture
-## under 2 m, glass and open doors let light through; a lamp always lights its own tile,
-## and a wall lamp only its own side of the wall. The map starts from the ambient colour and
+## soften the edges. A wall tile that light reaches is lit whole and evenly, while the floor
+## behind it stays dark; furniture under 2 m, glass and open doors let light through; a
+## lamp always lights its own tile, and a wall lamp only its own side of the wall. The map starts from the ambient colour and
 ## the finished texture MULTIPLIES the terrain layer only — tokens, labels and previews
 ## stay readable. The cost follows the screen, not the number of lamps or the map size.
 ##
@@ -95,6 +95,11 @@ void fragment() {
 		float fall = 1.0 - smoothstep(0.0, 1.0, d / r);
 		vec2 own = floor(p);
 		vec2 src = floor(lp);
+		// A wall tile is lit whole and evenly once light reaches any face of it: every ray
+		// aims at the point of the tile nearest its origin, so no texel inside the wall is
+		// shaded by the wall tiles next to it (0.11 playtest: "black spots in the middle").
+		// The floor behind the wall is a different tile and stays in its shadow.
+		bool solid = wall_at(p) > 0.5;
 		vec2 dir = (p - lp) / max(d, 0.0001);
 		vec2 side = vec2(-dir.y, dir.x);
 		// An area light, not a point: five rays from across the lamp's width give wide soft
@@ -116,7 +121,8 @@ void fragment() {
 				reach = a;
 			}
 			vec2 o = lp + sd * reach;
-			vec2 to = p - o;
+			vec2 aim = solid ? clamp(o, own + 0.02, own + 0.98) : p;
+			vec2 to = aim - o;
 			float len = length(to);
 			vec2 st = to / max(len, 0.0001);
 			float t = 1.0;
@@ -133,18 +139,8 @@ void fragment() {
 			sum += t;
 		}
 		float tr = sum / 5.0;
-		// A wall is lit on the face towards the light only: texels more than about half a
-		// cell into the wall, measured back along the ray, stay dark — so the far face of a
-		// wall (and of the wall a lamp hangs on) never lights up.
-		float face = 1.0;
-		if (wall_at(p) > 0.5) {
-			vec2 b = -dir;
-			float tx = b.x > 0.0 ? (own.x + 1.0 - p.x) / b.x : (b.x < 0.0 ? (p.x - own.x) / -b.x : 1e9);
-			float ty = b.y > 0.0 ? (own.y + 1.0 - p.y) / b.y : (b.y < 0.0 ? (p.y - own.y) / -b.y : 1e9);
-			face = 1.0 - smoothstep(0.3, 0.55, min(tx, ty));
-		}
 		float glow = smoothstep(0.9, 0.0, d) * 0.55;
-		COLOR = vec4(tint.rgb * light.w * (fall + glow) * tr * face, 1.0);
+		COLOR = vec4(tint.rgb * light.w * (fall + glow) * tr, 1.0);
 	}
 }
 """
