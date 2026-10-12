@@ -88,6 +88,8 @@ var light_darkness := 0.75
 var grid_visible := true
 var grid_opacity := 0.32
 var fullscreen := false
+## Autoroll dice (issues-12 #11): your own rolls start by themselves, no Roll/Enter press.
+var autoroll_dice := false
 var _pal: Dictionary = PALETTES["green"]
 
 var _accent := ACCENT
@@ -126,6 +128,7 @@ func _load_settings() -> void:
 	light_darkness = clampf(float(cf.get_value("board", "light_darkness", 0.75)), 0.0, 1.0)
 	grid_visible = bool(cf.get_value("board", "grid_visible", true))
 	grid_opacity = clampf(float(cf.get_value("board", "grid_opacity", 0.32)), 0.0, 1.0)
+	autoroll_dice = bool(cf.get_value("game", "autoroll_dice", false))
 
 func _save_settings() -> void:
 	var cf := ConfigFile.new()
@@ -137,6 +140,7 @@ func _save_settings() -> void:
 	cf.set_value("board", "light_darkness", light_darkness)
 	cf.set_value("board", "grid_visible", grid_visible)
 	cf.set_value("board", "grid_opacity", grid_opacity)
+	cf.set_value("game", "autoroll_dice", autoroll_dice)
 	cf.save(SETTINGS_PATH)
 
 func set_grid(visible: bool, opacity: float) -> void:
@@ -144,6 +148,10 @@ func set_grid(visible: bool, opacity: float) -> void:
 	grid_opacity = clampf(opacity, 0.0, 1.0)
 	_save_settings()
 	board_settings_changed.emit()
+
+func set_autoroll_dice(on: bool) -> void:
+	autoroll_dice = on
+	_save_settings()
 
 func set_dynamic_lighting(enabled: bool) -> void:
 	dynamic_lighting = enabled

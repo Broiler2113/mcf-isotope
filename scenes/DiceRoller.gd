@@ -104,7 +104,13 @@ func play(dice: Array, manual: bool = false, prompt: String = "", speed: float =
 	if prompt != "":
 		_prompt.text = prompt
 		_prompt.show()
-	if manual:
+	var ui := get_node_or_null("/root/Ui")
+	if manual and ui != null and ui.autoroll_dice:
+		# Автобросок (issues-12 #11): кнопки нет, кубики катятся сами — кадром позже, чтобы
+		# сцена боя, ждущая «rolled» сразу после play(), успела на него подписаться.
+		await get_tree().process_frame
+		rolled.emit()
+	elif manual:
 		var kb := get_node_or_null("/root/Keybinds")
 		var key: String = kb.label("game_roll") if kb != null else ""
 		_roll_btn.text = "Roll  [%s]" % key if key != "" else "Roll"

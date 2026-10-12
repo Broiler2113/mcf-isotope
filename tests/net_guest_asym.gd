@@ -30,7 +30,7 @@ func _initialize() -> void:
 			pl.brush_unit = "light_infantry"
 			pl._click_cell(Vector2i(17, 5))
 			ck(pl._side_unit_count(2) == 1, "guest placed a unit"))
-	step("host's live/ready units visible, then ready", func() -> bool:
+	step("host's ready armies arrive (hidden: fog is on), then ready", func() -> bool:
 		var pl = current_scene
 		if not pl._live_units.is_empty():
 			_live_seen = true
@@ -39,6 +39,8 @@ func _initialize() -> void:
 			var pl = current_scene
 			ck(pl._remote_units[0].size() == 3 and pl._remote_units[1].size() == 1,
 				"host's and AI's armies arrived")
+			ck(pl._army_hidden(0) and pl._army_hidden(1) and not pl._army_hidden(2),
+				"under fog the other armies are not drawn (issues-12 #1)")
 			pl._on_net_ready())
 	step("battle up", func() -> bool: return scene_is("Main.gd") and current_scene.net != null,
 		func() -> void:
@@ -71,7 +73,7 @@ func _initialize() -> void:
 		func() -> void:
 			var m = current_scene
 			print("[guest] digest ", TS_digest(m.state))
-			ck(_live_seen, "guest saw the host's placement live"))
+			ck(not _live_seen, "under fog the host's placement never streams live (issues-12 #1)"))
 	# Жребий инициативы (batch 14): гость может отыграть своё раньше хоста — тогда он
 	# обязан остаться на связи и жать Roll, пока хост доигрывает свой ход.
 	step("stay online while the host finishes", func() -> bool:

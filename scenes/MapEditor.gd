@@ -1540,7 +1540,8 @@ func _draw() -> void:
 		for y in range(y0, y1 + 1):
 			for x in range(x0, x1 + 1):
 				var i := y * w + x
-				var ht := TerrainTiles.height_text(map.cover_height[i], map.get_space(Vector2i(x, y)))
+				var ht := TerrainTiles.height_text(map.cover_height[i], map.get_space(Vector2i(x, y)),
+						map.feature_id[i])
 				if ht != "":
 					TerrainTiles.draw_height_text(self, font, Vector2(x, y) * CELL, CELL, ht,
 							map.cover_height[i] >= MCF.WALL_HEIGHT and not Furniture.is_furniture(map.feature_id[i]))

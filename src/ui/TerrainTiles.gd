@@ -55,9 +55,6 @@ const FAMILY := {
 }
 
 var _grid: Grid
-## Объекты, которые НЕ запекаются в куски (playtest-20): экран боя прячет полевые
-## укрепления под туманом и рисует их сам там, где их видят сейчас.
-var skip_features: Dictionary = {}
 ## Окружение карты (item 24): плитка «<имя>_<окружение>» важнее общей.
 var env: String = ""
 var _chunks: Dictionary = {}     # Vector3i(cx, cy, res) -> {"floor", "feat": ImageTexture, "used": int, "bytes": int}
@@ -527,7 +524,7 @@ func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int
 	# Станция дронов — как мина: в плитки НЕ запекается, потому что видимость у неё своя
 	# у каждой стороны (туман). Её рисует поклеточный проход экрана боя.
 	if fid == "" or fid == MCF.FEATURE_MINE or fid == MCF.FEATURE_AV_MINE \
-			or fid == MCF.FEATURE_DRONE_STATION or skip_features.has(fid):
+			or fid == MCF.FEATURE_DRONE_STATION:
 		return
 	# Дверь и шлюз (0.9.2) — «спереди»: плитка стены окружения по маске соседей, поверх —
 	# дверь в раме, закрытая или распахнутая. Стоит так в стене любого направления.
@@ -1407,19 +1404,19 @@ func draw_feature_tile(ci: CanvasItem, fid: String, c: Vector2i, rect: Rect2, cl
 	if fid == MCF.FEATURE_AIRLOCK and _grid.in_bounds(c):
 		var dimg := _door_image(_grid, c, _grid.cell_fast(c.x, c.y), TerrainTiles.T, closed)
 		if dimg != null:
-			ci.draw_texture_rect(_furniture_tex(dimg), rect, false)
+			ci.draw_texture_rect(Sprites.nearest(_furniture_tex(dimg)), rect, false)
 		return
 	if Furniture.is_furniture(fid):
 		var img := _furniture_image(c, fid, TerrainTiles.T)
 		if img != null:
-			ci.draw_texture_rect(_furniture_tex(img), rect, false)
+			ci.draw_texture_rect(Sprites.nearest(_furniture_tex(img)), rect, false)
 		return
 	var name: String = env_name("soil" if fid == MCF.FEATURE_DIRT_PILE else Sprites.ALIASES.get(fid, fid), env)
 	var sheet := Sprites.texture_of(name + Sprites.AUTOTILE_SUFFIX)
 	if sheet != null:
-		Sprites.draw_autotile(ci, sheet, rect, mask_at(_grid, c, fid), variant_of(c + origin, 64))
+		Sprites.draw_autotile(ci, Sprites.nearest(sheet), rect, mask_at(_grid, c, fid), variant_of(c + origin, 64))
 	else:
-		Sprites.draw_tile(ci, name, rect, variant_of(c + origin, 64))
+		Sprites.draw_tile(ci, name, rect, variant_of(c + origin, 64), true)
 
 var _furn_tex: Dictionary = {}   # Image -> ImageTexture для отдельной отрисовки мебели
 func _furniture_tex(img: Image) -> ImageTexture:
@@ -1593,7 +1590,11 @@ static func map_preview(map: MapData, tints: Dictionary = {}, bands: Dictionary 
 
 ## Heightmap mode (0.11.1): the height of a cover tile as a plain number — "0.5", "1",
 ## "1.5", "2". Empty for open ground and space.
-static func height_text(cell_height: float, space := false) -> String:
+static func height_text(cell_height: float, space := false, feature_id := "") -> String:
+	# Окоп — яма, а не укрытие над полом (issues-12 #12): высота у него нулевая, и на
+	# карте высот его не было видно вовсе.
+	if feature_id == MCF.FEATURE_TRENCH and not space:
+		return "-2"
 	if space or cell_height <= 0.0:
 		return ""
 	var tenths := roundi(cell_height * 10.0)

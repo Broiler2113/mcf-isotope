@@ -322,6 +322,13 @@ const HUD_WIDTH_MIN := 180.0
 const HUD_WIDTH_MAX := 460.0
 ## Толщина кисти рисования (пиксели линии) и радиус ластика (в клетках), item 6.
 var _draw_brush: int = 3
+## Цвет кисти (issues-12 #8). Первый образец — цвет своей стороны (по умолчанию); он
+## хранится прозрачным и разворачивается в цвет стороны при каждом штрихе.
+const DRAW_COLOURS := [Color(0, 0, 0, 0), Color("#f2f2f2"), Color("#1c1c1c"), Color("#e04545"),
+		Color("#f08c28"), Color("#f2d335"), Color("#4cc764"), Color("#3cc8e0"), Color("#4a78f0"),
+		Color("#c25be0")]
+var _draw_colour := Color(0, 0, 0, 0)
+var _side_swatch: Button = null
 var _erase_brush: int = 1
 var _status_label: Label
 ## Часы боя. Их двое, и считают они разное.
@@ -601,7 +608,10 @@ func _sync_lighting() -> void:
 	else:
 		var view := _view_resolver()
 		var limited := view.visibility_limited()
-		_lighting.update_view(state.grid, pan, zoom, ORIGIN, CELL, state.env,
+		# Под туманом тени — от доски, какой её помнит зритель (issues-12 #4): стена,
+		# выросшая в темноте, не должна выдавать себя новой тенью.
+		var lit_grid := _shown_grid if limited and _shown_grid != null else state.grid
+		_lighting.update_view(lit_grid, pan, zoom, ORIGIN, CELL, state.env,
 			view.team_visible_coords(_viewing_side()) if limited else {}, limited, _fx, _lod)
 
 func _process(delta: float) -> void:
@@ -864,6 +874,15 @@ func _do_save_game(chosen_name: String) -> void:
 	else:
 		state.log.add("[denied] Could not write the save file.")
 	_refresh_status()
+
+## Сетевая партия сохраняется сама, когда из неё уходит игрок (issues-12 #15): у каждого
+## оставшегося — файл в папке сохранений, и партию можно продолжить с того же места,
+## пока ушедшего ещё не подменил ИИ. Одно имя на карту и раунд: свежий уход перезаписывает.
+func _autosave() -> void:
+	if _spectator or replay != null or state == null:
+		return
+	_do_save_game("autosave %s round %d" % [str(_match_meta().get("map", "match")),
+			state.turns.round_number])
 
 func _save_payload() -> Dictionary:
 	var meta := _match_meta()
@@ -1210,26 +1229,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				_ruler_hover = hov
 				queue_redraw()
 			return
-	if _animating:
-		return
-	# Рисование ЛДФ-стены: тянем цепочку клеток левой кнопкой; Backspace — отмена
-	# последней/выход, Enter — подтвердить, когда набрано 6 клеток (§3.7).
-	if mode == Mode.BUILD_WALL:
-		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
-			if event.pressed:
-				_wall_drawing = true
-				_wall_try_add(_pos_to_cell(get_global_mouse_position()))
-			else:
-				_wall_drawing = false
-			return
-		if event is InputEventMouseMotion:
-			if _wall_drawing:
-				_wall_try_add(_pos_to_cell(get_global_mouse_position()))
-			else:
-				queue_redraw()
-			return
 	# Рисование аннотаций (item 51): тянем штрих левой кнопкой; отпускание фиксирует его
-	# и, в сетевой партии, рассылает. Симуляции это не касается — чистый клиентский слой.
+	# и, в сетевой партии, рассылает. Симуляции это не касается — чистый клиентский слой,
+	# поэтому и идёт ДО запрета на время анимации (issues-12 #6): в чужой ход анимации
+	# идут почти без перерыва, и нажатия/отпускания кисти терялись через раз.
 	if mode == Mode.DRAW:
 		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
@@ -1264,6 +1267,24 @@ func _unhandled_input(event: InputEvent) -> void:
 			if _stroke_drawing:
 				_erase_at(_draw_world_pos())
 			queue_redraw()  # кружок ластика под курсором
+			return
+	if _animating:
+		return
+	# Рисование ЛДФ-стены: тянем цепочку клеток левой кнопкой; Backspace — отмена
+	# последней/выход, Enter — подтвердить, когда набрано 6 клеток (§3.7).
+	if mode == Mode.BUILD_WALL:
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed:
+				_wall_drawing = true
+				_wall_try_add(_pos_to_cell(get_global_mouse_position()))
+			else:
+				_wall_drawing = false
+			return
+		if event is InputEventMouseMotion:
+			if _wall_drawing:
+				_wall_try_add(_pos_to_cell(get_global_mouse_position()))
+			else:
+				queue_redraw()
 			return
 	if HOVER_PREVIEW_MODES.has(mode) and event is InputEventMouseMotion:
 		queue_redraw()  # обновляем предпросмотр радиуса/струи/окопа под курсором
@@ -1693,11 +1714,19 @@ func _handle_click(coord: Vector2i) -> void:
 			# пассажир (batch 13), первый клик берёт его, повторный — саму машину.
 			var cveh := resolver.controllable_vehicle_at(coord, state.active_player())
 			if cveh != null and _can_control(cveh.owner):
-				var rider := _unit_at(coord)
-				if rider != null and rider.is_alive() and rider.aboard_vehicle_id == cveh.id \
-						and rider.owner == state.active_player() and selected_id != rider.id \
-						and not _click_double:
-					_select(rider)
+				# Кликами по очереди: свой дрон над корпусом (issues-12 #7: его было не
+				# выбрать — клик брал машину), пассажир в кресле, и лишь затем машина.
+				var aboard: Array[UnitInstance] = []
+				for su: UnitInstance in _stack_at(coord):
+					if su.is_alive() and su.owner == state.active_player() \
+							and (su.is_drone or su.aboard_vehicle_id == cveh.id):
+						aboard.append(su)
+				var at := -1
+				for i in aboard.size():
+					if aboard[i].id == selected_id:
+						at = i
+				if not _click_double and at + 1 < aboard.size():
+					_select(aboard[at + 1])
 					return
 				_select_vehicle(cveh)
 				return
@@ -1760,9 +1789,10 @@ func _deselect() -> void:
 	veh_move_targets = {}
 	veh_disembark_id = -1
 	_group_ids = []
-	# Линейка — инструмент смотрящего, а не приказ бойцу (batch ui-drones): чужой ход,
-	# действие ИИ или конец хода её не выключают, только Esc или сама кнопка.
-	if mode != Mode.RULER:
+	# Линейка, кисть и ластик — инструменты смотрящего, а не приказ бойцу (batch ui-drones,
+	# issues-12 #6): чужой ход, действие ИИ или конец хода их не выключают, только Esc или
+	# сама кнопка. Кисть и ластик раньше гасли на каждом чужом действии — посреди штриха.
+	if mode not in [Mode.RULER, Mode.DRAW, Mode.ERASE]:
 		mode = Mode.NONE
 	reach = null
 	target_ids = []
@@ -1806,8 +1836,6 @@ func _escape_pressed() -> void:
 	if mode == Mode.RULER:
 		_exit_ruler()
 		return
-	if _animating:
-		return
 	# Выход из режима рисования/стирания аннотаций (item 14/51): бросаем незавершённый штрих.
 	if mode == Mode.DRAW or mode == Mode.ERASE:
 		# Недотянутый штрих уже на холсте — доводим его, как при отпускании кнопки: иначе
@@ -1822,6 +1850,8 @@ func _escape_pressed() -> void:
 		_cur_stroke = []
 		mode = Mode.NONE
 		queue_redraw()
+		return
+	if _animating:
 		return
 	# Отмена незакоммиченного рисования ЛДФ-стены.
 	if mode == Mode.BUILD_WALL:
@@ -2224,6 +2254,16 @@ func _enter_item() -> void:
 		item_cells = resolver.grenade_target_cells(u)
 	_menu.hide()
 	queue_redraw()
+
+## Почему дрон сейчас не слушается (issues-12 #10) — та же проверка, что operator_controls.
+func _drone_idle_reason(drone: UnitInstance) -> String:
+	var op := state.get_unit(drone.operator_id)
+	if op == null or not op.is_alive():
+		return "Its operator is dead"
+	var home := state.grid.cell(drone.home_station)
+	if home == null or home.feature_id != MCF.FEATURE_DRONE_STATION:
+		return "Its station is gone"
+	return "The operator must stand next to the station"
 
 ## Дрон завис над стеной (#96/#99) — единственный его ход отсюда бесплатен и ведёт
 ## обратно на клетку захода.
@@ -3003,7 +3043,9 @@ func _on_intent_ready(intent: Intent) -> void:
 	var ap_before := ap_actor.remaining_ap if ap_actor != null else 0
 	var result := resolver.resolve(intent)
 	if not result.ok:
-		state.log.add("[denied] " + result.reason)
+		# Отказ невидимому чужому бойцу или машине в журнал не идёт (issues-12 #5).
+		if _result_is_audible(result):
+			state.log.add("[denied] " + result.reason)
 		# Отказ на ходу ИИ раньше просто обрывал цепочку: следующий шаг никто не
 		# заказывал. Пока поле было кликабельным (#60), это выглядело как «ИИ отдал
 		# ход игроку»; теперь ввод закрыт, и обрыв означал бы намертво зависший ход.
@@ -3058,7 +3100,7 @@ func _on_intent_ready(intent: Intent) -> void:
 			_ap_display.erase(ap_actor.id if ap_actor != null else -1)
 			_play_walks_free(result.dice_events)
 		else:
-			await _play_dice(result.dice_events)
+			await _play_dice(result.dice_events, not _result_is_audible(result))
 		_pending_death_ids.clear()
 		_hold_visual = {}
 		queue_redraw()
@@ -3605,7 +3647,8 @@ func _on_net_applied(intent: Intent, result: ActionResult) -> void:
 	_picker.hide()
 	_clear_hint_cell()
 	if not result.ok:
-		state.log.add("[denied] " + result.reason)
+		if _result_is_audible(result):   # issues-12 #5
+			state.log.add("[denied] " + result.reason)
 		# Отказ ИИ-стороне на хосте (batch 12 #15): снять актёра с очереди и вести дальше,
 		# иначе ИИ подал бы то же намерение снова.
 		var denied_ctrl: PlayerController = controllers.get(state.active_player())
@@ -3659,7 +3702,7 @@ func _show_net_action(intent: Intent, result: ActionResult) -> void:
 		if own_ctrl != null and own_ctrl.is_local_human() and _walks_only(result.dice_events):
 			_play_walks_free(result.dice_events)   # your own soldier walking: stay live (0.11)
 		else:
-			await _play_dice(result.dice_events)
+			await _play_dice(result.dice_events, not _result_is_audible(result))
 		_pending_death_ids.clear()
 		_hold_visual = {}
 	if not result.fx.is_empty():
@@ -3791,6 +3834,7 @@ func _on_net_disconnected() -> void:
 		return
 	if _net_status != null:
 		_net_status.text = "Connection lost"
+	_autosave()
 	networked = false
 	net = null
 	# Хост остался один (batch 13 #2): ушедшие уже подменены ИИ в _on_peer_left, а
@@ -3812,6 +3856,7 @@ func _on_peer_left(id: int) -> void:
 	var side := state.roster.side_of_peer(id)
 	if side < 0:
 		return
+	_autosave()
 	_take_side_as_ai(side)
 	if session != null:
 		session.send({"k": K_SIDE_AI, "side": side, "ai": AIController.Difficulty.HARD})
@@ -3849,6 +3894,7 @@ func _apply_side_ai(msg: Dictionary) -> void:
 	var slot := state.roster.slot(side)
 	if slot == null:
 		return
+	_autosave()
 	slot.kind = Roster.SlotKind.AI
 	slot.ai_difficulty = int(msg.get("ai", AIController.Difficulty.HARD))
 	slot.peer_id = -1
@@ -3884,7 +3930,9 @@ const RESIST_PROMPT := "You are grabbed — click Roll to resist"
 
 ## Проиграть все броски результата по одному. Броски попадания идут автоматически,
 ## броски защиты ждут ручного нажатия «Roll» защищающимся игроком (§3.5).
-func _play_dice(events: Array) -> void:
+## hidden — действие чужого бойца, которого зритель не видит (issues-12 #4): его броски
+## не показываются вовсе, а свою защиту игрок катит без чужих подробностей.
+func _play_dice(events: Array, hidden := false) -> void:
 	_animating = true
 	var fast_before := _fast_playback
 	# Точки ОД отматываем к тому, что было ДО хода: дальше события гасят их по одной.
@@ -3962,6 +4010,14 @@ func _play_dice(events: Array) -> void:
 			var roller := int(step.get("roller", MCF.Owner.NEUTRAL))
 			var remote_human: bool = networked and not bool(step["manual"]) and not step.get("auto", false) \
 					and state.roster != null and state.roster.is_networked_human(roller)
+			if hidden:
+				if not bool(step["manual"]):
+					if remote_human:
+						_roll_seq += 1   # счёт бросков общий у всех пиров — шаг занимает номер
+					continue
+				# Осталась только последняя строка — «бросай защиту (нужно N+)».
+				var lines := str(step["prompt"]).split("\n")
+				step["prompt"] = lines[lines.size() - 1]
 			if networked and (bool(step["manual"]) or remote_human):
 				var seq := _roll_seq
 				_roll_seq += 1
@@ -4039,9 +4095,21 @@ func _set_veh_offset(ev: Dictionary, k: float) -> void:
 		return
 	var off := Vector2(Vector2i(ev["from"]) - veh.origin) * CELL * k
 	_veh_offset[veh.id] = off
+	for u: UnitInstance in _veh_riders(veh):
+		_walk_offset[u.id] = off
+
+## Кто летит вместе с челноком: пассажиры в креслах и дрон, сидящий на станции в кресле
+## (issues-12 #7) — раньше дрон и станция оказывались в конце пути раньше машины.
+func _veh_riders(veh: Vehicle) -> Array[UnitInstance]:
+	var out: Array[UnitInstance] = []
+	var fp := veh.footprint()
 	for u: UnitInstance in state.all_units():
-		if u.aboard_vehicle_id == veh.id and state.grid.in_bounds(u.coord):
-			_walk_offset[u.id] = off
+		if not state.grid.in_bounds(u.coord):
+			continue
+		if u.aboard_vehicle_id == veh.id \
+				or (u.is_drone and u.is_alive() and u.coord == u.home_station and fp.has(u.coord)):
+			out.append(u)
+	return out
 
 func _play_veh_walk(ev: Dictionary) -> void:
 	var steps := maxi(1, int(ev.get("steps", 1)))
@@ -4059,9 +4127,8 @@ func _play_veh_walk(ev: Dictionary) -> void:
 	var veh := state.get_vehicle(int(ev["vehicle"]))
 	if veh != null:
 		_veh_offset.erase(veh.id)
-		for u: UnitInstance in state.all_units():
-			if u.aboard_vehicle_id == veh.id:
-				_walk_offset.erase(u.id)
+		for u: UnitInstance in _veh_riders(veh):
+			_walk_offset.erase(u.id)
 	queue_redraw()
 
 ## Проиграть один пеший переход по клеткам (#96). Юнит УЖЕ стоит в конце маршрута —
@@ -4776,18 +4843,14 @@ func _viewing_side() -> int:
 const LOD_ZOOM := 0.0
 ## Ниже этого зума подписи высоты насыпей не рисуются — шрифт всё равно не прочесть.
 const HEIGHT_LABEL_ZOOM := 0.6
-const FOG_COL := Color(0.02, 0.02, 0.04, 0.55)
-## Стена, которой сейчас не видно (обычный туман): серая пелена в половину силы. План
-## здания игрок помнит и стену видит — но не то, что у неё творится.
-## Темнее, чем была (playtest-20: светло-серая пелена читалась как ещё видимая стена).
-const UNSEEN_WALL_COL := Color(0.07, 0.07, 0.09, 0.72)
-## Полевые укрепления видны только там, где их видят СЕЙЧАС (playtest-20): из плиток они
-## исключены (TerrainTiles.skip_features) и рисуются поклеточно, как станция дронов.
-const FOG_HIDDEN_FEATURES := [MCF.FEATURE_TRENCH, MCF.FEATURE_SANDBAGS, MCF.FEATURE_SANDBAG_WALL,
-		MCF.FEATURE_HEDGEHOG, MCF.FEATURE_HEDGEHOG_SANDBAGS, MCF.FEATURE_DIRT_PILE]
+## Обычный туман (issues-12 #16) — серая пелена поверх ВСЕГО, что сейчас не видно: карта
+## под ней видна целиком, со стенами и мебелью, но такой, какой зритель её помнит
+## (_board_memory), а бойцы и машины вне обзора не рисуются. Реалистичный — чёрная
+## пелена: вне обзора не видно ничего, ни стен, ни мебели.
+const FOG_COL := Color(0.12, 0.12, 0.14, 0.62)
 
-## Порядок слоёв — как у поклеточного прохода: рельеф, над ним туман, над туманом объекты
-## (их поклеточный проход тоже рисует поверх пелены — и на неразведанных клетках).
+## Порядок слоёв: рельеф, сетка, объекты и ПОВЕРХ всего — туман (issues-12 #16). Прежде
+## туман лежал между полом и объектами, и стены с мебелью светили сквозь пелену.
 ##
 ## Вблизи (far = false) тот же слой выводит рельеф кусками-плитками TerrainTiles и туман
 ## поверх них: пиксельным плиткам нужна фильтрация NEAREST, а она у узла одна на всё, что
@@ -4811,23 +4874,23 @@ class LodLayer extends Node2D:
 			texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 			tiles.draw(self, rect.position, float(CELL), r.position.x, r.position.y, r.end.x, r.end.y,
 					false, res)
-			if fog_on and fog != null:
-				draw_texture_rect(fog, rect, false)
 			# Сетка — под объектами: стену, стол или кровать в несколько клеток она не режет.
 			TerrainTiles.draw_grid(self, rect.position, float(CELL), r.position.x, r.position.y,
 					r.end.x, r.end.y, grid_col, 1.0)
 			tiles.draw(self, rect.position, float(CELL), r.position.x, r.position.y, r.end.x, r.end.y,
 					true, res)
+			if fog_on and fog != null:
+				draw_texture_rect(fog, rect, false)
 			return
 		texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 		if terrain != null:
 			draw_texture_rect(terrain, rect, false)
 		if tiles != null:
 			tiles.draw_map_decals(self, rect.position, float(CELL), Rect2(Vector2.ZERO, rect.size / CELL))
-		if fog_on and fog != null:
-			draw_texture_rect(fog, rect, false)
 		if features != null:
 			draw_texture_rect(features, rect, false)
+		if fog_on and fog != null:
+			draw_texture_rect(fog, rect, false)
 
 var _lod: LodLayer = null
 var _lod_terrain: Image = null
@@ -4847,12 +4910,119 @@ var _tiles_grid: Array = []      # [доска, туман]: под тумано
 ## заново не срастается. Живёт здесь, а не в плитках, — их пересоздаёт смена доски и тумана.
 var _furniture_look: Dictionary = {}
 
+## Доска «как её помнит зритель» (issues-12 #4). Под туманом рельеф и объекты рисуются
+## не с живой доски, а с её копии, где клетка обновляется, только пока зритель её видит:
+## стена, построенная или снесённая в темноте, не появляется и не пропадает, пока туда
+## не заглянешь. Копия — своя у каждого зрителя (в хот-сите их несколько); людям она
+## снимается сразу, чтобы первый ход одного не утёк другому.
+var _fog_mem: Dictionary = {}       # viewer -> Grid
+var _fog_mem_grid: Grid = null      # живая доска, с которой сняты копии
+var _fog_mem_viewer: int = -999     # чья копия обновлялась последней
+var _fog_mem_look: int = -1         # до какой GridCell.look_version копия доведена
+var _shown_grid: Grid = null        # что рисуется в этом кадре: живая доска или копия
+## Щебень и воронки (FxDecals.floor_damage) — тоже вид доски: зритель помнит их такими,
+## какими видел. viewer -> {клетка: урон}; версия растёт на каждую правку любой из них.
+var _fog_mem_dmg: Dictionary = {}
+var _fog_mem_dmg_seen: int = -1     # до какой _fx.damage_version доведена память
+var _fog_mem_dmg_ver: int = 0
+
+func _board_memory(viewer: int, visible: Dictionary, vis_changed: Variant) -> Grid:
+	var grid := state.grid
+	if _fog_mem_grid != grid:
+		_fog_mem = {}
+		_fog_mem_grid = grid
+		_fog_mem_viewer = -999
+		_fog_mem_dmg = {}
+		for side: int in state.roster.player_ids():
+			var pc: PlayerController = controllers.get(side)
+			if side == viewer or (pc != null and pc.is_local_human()):
+				_fog_mem[side] = _clone_board(grid)
+				_fog_mem_dmg[side] = _fx.floor_damage.duplicate()
+	var mem: Grid = _fog_mem.get(viewer)
+	if mem == null:
+		mem = _clone_board(grid)
+		_fog_mem[viewer] = mem
+		_fog_mem_dmg[viewer] = _fx.floor_damage.duplicate()
+	var dmg: Dictionary = _fog_mem_dmg[viewer]
+	var dmg_all := viewer != _fog_mem_viewer or vis_changed == null \
+			or _fog_mem_dmg_seen != _fx.damage_version
+	var dmg_cells: Variant = visible if dmg_all else vis_changed
+	for k: Variant in dmg_cells:
+		var dc: Vector2i = k if k is Vector2i else Vector2i(int(k) % grid.width, int(k) / grid.width)
+		if not visible.has(dc):
+			continue
+		var live: Variant = _fx.floor_damage.get(dc)
+		if live == null:
+			if dmg.erase(dc):
+				_fog_mem_dmg_ver += 1
+		elif dmg.get(dc) != live:
+			dmg[dc] = live
+			_fog_mem_dmg_ver += 1
+	if viewer != _fog_mem_viewer:
+		_fog_mem_dmg_ver += 1
+	_fog_mem_dmg_seen = _fx.damage_version
+	var journaling := GridCell.journaling
+	GridCell.journaling = false
+	if viewer != _fog_mem_viewer or vis_changed == null or _fog_mem_look < GridCell.look_log_base:
+		for c: Vector2i in visible:
+			_copy_look(mem.cell_fast(c.x, c.y), grid.cell_fast(c.x, c.y))
+	else:
+		var ch := GridCell.look_changes
+		var i: int = (_fog_mem_look - GridCell.look_log_base) * 2
+		while i < ch.size():
+			var c := Vector2i(ch[i], ch[i + 1])
+			if visible.has(c):
+				_copy_look(mem.cell_fast(c.x, c.y), grid.cell_fast(c.x, c.y))
+			i += 2
+		for k: int in vis_changed:
+			var c := Vector2i(k % grid.width, k / grid.width)
+			if visible.has(c):
+				_copy_look(mem.cell_fast(c.x, c.y), grid.cell_fast(c.x, c.y))
+	GridCell.journaling = journaling
+	_fog_mem_viewer = viewer
+	# Свои же записи в копию журнал тоже отметил — их пропускаем, а плитки по ним
+	# перерисуют клетки копии.
+	_fog_mem_look = GridCell.look_version
+	return mem
+
+## Копия доски для памяти зрителя. Grid.new объявляет журналы оборванными — их состояние
+## возвращается, иначе кэши настоящей доски пересобирались бы целиком.
+## ponytail: полная копия, ~0.6 с на 274×274 один раз на местного игрока; если станет
+## мешать — память только из клеток, сменившихся вне обзора.
+static func _clone_board(src: Grid) -> Grid:
+	var logs := GridCell.logs_snapshot()
+	GridCell.journaling = false
+	var g := Grid.new(src.width, src.height)
+	for c: GridCell in src.cells_flat():
+		_copy_look(g.cell_fast(c.coord.x, c.coord.y), c)
+	g.furniture_turn = src.furniture_turn
+	g.floor_look = src.floor_look
+	g.wall_accent = src.wall_accent
+	g.map_decals = src.map_decals
+	g.light_tint = src.light_tint
+	g.door_look = src.door_look
+	GridCell.logs_restore(logs)
+	return g
+
+## Только то, из чего собирается вид клетки. Высота — раньше объекта (сеттер объекта
+## смотрит на неё), лампы — последними (высота и объект их сбрасывают).
+static func _copy_look(dst: GridCell, src: GridCell) -> void:
+	dst.floor_type = src.floor_type
+	dst.is_space = src.is_space
+	dst.cover_height = src.cover_height
+	dst.feature_id = src.feature_id
+	dst.feature_owner = src.feature_owner
+	dst.feature_durability = src.feature_durability
+	dst.dirt_level = src.dirt_level
+	dst.airlock_welded = src.airlock_welded
+	dst.on_fire = src.on_fire
+	dst.lamps = src.lamps
+
 ## Держит слой дальнего плана в согласии с доской. far — рисует ли им этот кадр. Слой
 ## заводится при первом отъезде и дальше правится и вблизи: правка стоит столько, сколько
 ## клеток сменилось, а новый отъезд обходится без сборки заново. Выгрузка текстур на
 ## видеокарту — только когда слой на экране.
-func _lod_sync(far: bool, viewer: int, visible: Dictionary, remembered: Dictionary,
-		fog_on: bool) -> void:
+func _lod_sync(far: bool, viewer: int, visible: Dictionary, fog_on: bool) -> void:
 	if _lod == null:
 		_lod = LodLayer.new()
 		_lod.show_behind_parent = true
@@ -4869,20 +5039,27 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, remembered: Dictiona
 		_lod.fog_on = fog_on
 		_lod.far = far
 		_lod.queue_redraw()
-	var tiles_key: Array = [grid.get_instance_id(), fog_on]
+	# Под туманом рельеф и объекты рисуются с доски, какой её помнит зритель (issues-12 #4).
+	var vis_changed: Variant = []
+	var shown := grid
+	if fog_on:
+		vis_changed = _view_resolver().take_vis_changes(viewer)
+		shown = _board_memory(viewer, visible, vis_changed)
+	_shown_grid = shown
+	var tiles_key: Array = [shown.get_instance_id(), fog_on]
 	if _tiles == null or _tiles_grid != tiles_key:
-		_tiles = TerrainTiles.new(grid, state.env)
+		_tiles = TerrainTiles.new(shown, state.env)
 		_tiles.furniture_look = _furniture_look
-		if fog_on:
-			for hf: String in FOG_HIDDEN_FEATURES:
-				_tiles.skip_features[hf] = true
 		_tiles_grid = tiles_key
 		_lod.tiles = _tiles
 	if not far:
 		# Ближний план: плитки рельефа кусками (TerrainTiles). Набор кусков зависит от
 		# того, что на экране, поэтому слой перерисовывается вместе с кадром — это лишь
 		# несколько текстур, клетки внутри них не трогаются.
-		_tiles.sync(_fx.floor_damage, _fx.damage_version)
+		if fog_on:
+			_tiles.sync(_fog_mem_dmg.get(viewer, {}), _fog_mem_dmg_ver)
+		else:
+			_tiles.sync(_fx.floor_damage, _fx.damage_version)
 		_tiles.sync_decals(_fx)
 		_lod.near_cells = Rect2i(_cull_x0, _cull_y0, _cull_x1 - _cull_x0, _cull_y1 - _cull_y0) \
 				.intersection(Rect2i(0, 0, gw - 1, gh - 1))
@@ -4892,7 +5069,7 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, remembered: Dictiona
 	if far or _lod_terrain != null:
 		# Рельеф: целиком — на новой доске или оборванном журнале; иначе только клетки, что
 		# с прошлого раза записал журнал вида, и те, где сменилась копоть взрывов.
-		var tkey := [grid.get_instance_id()]
+		var tkey := [shown.get_instance_id()]
 		if tkey != _lod_terrain_key or _lod_terrain == null or _lod_look_ver < GridCell.look_log_base:
 			_lod_terrain_key = tkey
 			_lod_build_terrain()
@@ -4908,7 +5085,7 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, remembered: Dictiona
 					var x := ch[i]
 					var y := ch[i + 1]
 					if x < gw and y < gh:
-						var lc := grid.cell_fast(x, y)
+						var lc := shown.cell_fast(x, y)
 						_lod_terrain.set_pixel(x, y, _lod_color(lc))
 						_lod_features.set_pixel(x, y, _lod_feature_color(lc))
 					i += 2
@@ -4918,10 +5095,10 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, remembered: Dictiona
 				# клетки (перемотка повтора её стирает), и нынешние.
 				for c: Vector2i in _lod_damaged:
 					if grid.in_bounds(c):
-						_lod_terrain.set_pixel(c.x, c.y, _lod_color(grid.cell(c)))
+						_lod_terrain.set_pixel(c.x, c.y, _lod_color(shown.cell(c)))
 				for c: Vector2i in _fx.floor_damage:
 					if grid.in_bounds(c):
-						_lod_terrain.set_pixel(c.x, c.y, _lod_color(grid.cell(c)))
+						_lod_terrain.set_pixel(c.x, c.y, _lod_color(shown.cell(c)))
 				_lod_damage_ver = _fx.damage_version
 				_lod_damaged = _fx.floor_damage.duplicate()
 				_lod_terrain_stale = true
@@ -4932,21 +5109,19 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, remembered: Dictiona
 	if fog_on:
 		var view := _view_resolver()
 		var fkey := [grid.get_instance_id(), view.get_instance_id(), viewer, view.fog_mode]
-		var changed: Variant = view.take_vis_changes(viewer)
+		var changed: Variant = vis_changed
+		var hidden_col := FOG_COL if view.fog_mode == MCF.Fog.STANDARD else UNKNOWN_COL
 		if fkey != _lod_fog_key or _lod_fog == null or changed == null:
 			_lod_fog_key = fkey
 			_lod_fog = Image.create(gw, gh, false, Image.FORMAT_RGBA8)
-			_lod_fog.fill(UNKNOWN_COL)
-			for c: Vector2i in remembered:
-				_lod_fog.set_pixel(c.x, c.y, FOG_COL)
+			_lod_fog.fill(hidden_col)
 			for c: Vector2i in visible:
 				_lod_fog.set_pixel(c.x, c.y, Color(0, 0, 0, 0))
 			_lod.fog = null
 		elif not (changed as Array).is_empty():
 			for i: int in changed:
 				var c := Vector2i(i % gw, i / gw)
-				_lod_fog.set_pixel(c.x, c.y, Color(0, 0, 0, 0) if visible.has(c)
-						else (FOG_COL if remembered.has(c) else UNKNOWN_COL))
+				_lod_fog.set_pixel(c.x, c.y, Color(0, 0, 0, 0) if visible.has(c) else hidden_col)
 			_lod_fog_stale = true
 	if far:
 		if _lod.terrain == null:
@@ -4969,7 +5144,7 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, remembered: Dictiona
 ## голая стена (почти вся карта) берут готовый цвет, не заходя в _lod_color().
 func _lod_build_terrain() -> void:
 	_lod_tex_avg = _lod_texture_averages()
-	var grid := state.grid
+	var grid := _shown_grid if _shown_grid != null else state.grid
 	var bytes := PackedByteArray()
 	bytes.resize(grid.width * grid.height * 4)
 	var fbytes := PackedByteArray()
@@ -5198,10 +5373,6 @@ func _draw() -> void:
 	var fog_on: bool = _view_resolver().visibility_limited()
 	var viewer := _viewing_side()
 	var visible := _view_resolver().team_visible_coords(viewer)
-	# Разведанное, но не просматриваемое сейчас (item 46): в СТАНДАРТНОМ тумане там
-	# по-прежнему виден рельеф, в РЕАЛИСТИЧНОМ — ничего.
-	var remembered: Dictionary = _view_resolver().explored.get(viewer, {}) \
-			if _view_resolver().fog_mode == MCF.Fog.STANDARD else {}
 	# Локальные копии полей и констант: тело цикла выполняется до 2500 раз за кадр,
 	# и каждое обращение к свойству узла/автозагрузки там заметно.
 	var grid := state.grid
@@ -5225,9 +5396,7 @@ func _draw() -> void:
 	_cull_y0 = _tl.y - 1; _cull_y1 = _br.y + 1
 	# Дальний план (большие карты): рельеф, объекты и туман — текстурами слоя под нами.
 	var far := zoom < LOD_ZOOM
-	_lod_sync(far, viewer, visible, remembered, fog_on)
-	if _heightmap and zoom >= HEIGHTMAP_MIN_ZOOM:
-		_draw_heights(font, visible, fog_on, vx0, vy0, vx1, vy1)
+	_lod_sync(far, viewer, visible, fog_on)
 	if not far:
 		# Пол, объекты, огонь и туман вблизи рисует слой под нами плитками (TerrainTiles,
 		# _lod_sync): здесь остаются подписи высоты насыпей — у кучи земли она бывает
@@ -5605,34 +5774,23 @@ func _draw() -> void:
 		# исключена ровно за этим: запечённая, она светила бы сквозь пелену и выдавала
 		# чужого оператора вернее, чем он сам.
 		for sc: Vector2i in resolver._feature_cells(MCF.FEATURE_DRONE_STATION):
-			if _cell_on_screen(sc.x, sc.y) and _cell_seen_now(sc, visible):
+			# Станцию в кресле челнока рисует сам корпус (issues-12 #7).
+			if _cell_on_screen(sc.x, sc.y) and _cell_seen_now(sc, visible) \
+					and grid.cell_fast(sc.x, sc.y).vehicle_id == -1:
 				_tiles.draw_feature_tile(self, MCF.FEATURE_DRONE_STATION, sc,
 						Rect2(_cell_origin(sc), fcell_size))
-		if not _tiles.skip_features.is_empty():
-			for hf: String in FOG_HIDDEN_FEATURES:
-				for hc: Vector2i in resolver._feature_cells(hf):
-					if _cell_on_screen(hc.x, hc.y) and visible.has(hc):
-						_tiles.draw_feature_tile(self, hf, hc, Rect2(_cell_origin(hc), fcell_size))
-		# Пелена ПОВЕРХ объектов. Статика живёт в плитках, а плитки рисуются над общим
-		# туманом (так задумано: план здания игрок знает и в темноте), поэтому то, что
-		# должно меркнуть вместе с клеткой, меркнет здесь, отдельным проходом.
-		#
-		# Створка шлюза заодно возвращается к ЗАКРЫТОМУ виду: открывшийся в темноте шлюз
-		# рассказывал о чужом ходе ровно то, что туман и прячет.
+		# Створка шлюза вне обзора — ЗАКРЫТА: открывшийся в темноте шлюз рассказывал о чужом
+		# ходе ровно то, что туман и прячет. Рисуется поверх слоя плиток, поэтому и пелену
+		# над ней кладём сами (обычный туман; в реалистичном клетку и так закрывает чёрное).
 		if _view_resolver().visibility_limited() and _view_resolver().fog_mode == MCF.Fog.STANDARD:
-			for wy in range(vy0, vy1 + 1):
-				for wx in range(vx0, vx1 + 1):
-					var wc := Vector2i(wx, wy)
-					if visible.has(wc):
-						continue
-					var wcell := grid.cell_fast(wx, wy)
-					var as_wall := wcell.is_wall()
-					if wcell.feature_id == MCF.FEATURE_AIRLOCK and not as_wall:
-						_tiles.draw_feature_tile(self, MCF.FEATURE_AIRLOCK, wc,
-								Rect2(_cell_origin(wc), fcell_size), true)
-						as_wall = true
-					if as_wall:
-						draw_rect(Rect2(_cell_origin(wc), fcell_size), UNSEEN_WALL_COL)
+			for ac: Vector2i in resolver._feature_cells(MCF.FEATURE_AIRLOCK):
+				if not _cell_on_screen(ac.x, ac.y) or visible.has(ac):
+					continue
+				var acell := _shown_grid.cell_fast(ac.x, ac.y)
+				if acell.feature_id == MCF.FEATURE_AIRLOCK and not acell.is_wall():
+					_tiles.draw_feature_tile(self, MCF.FEATURE_AIRLOCK, ac,
+							Rect2(_cell_origin(ac), fcell_size), true)
+					draw_rect(Rect2(_cell_origin(ac), fcell_size), FOG_COL)
 		for mk: String in [MCF.FEATURE_MINE, MCF.FEATURE_AV_MINE]:
 			for mc: Vector2i in resolver._feature_cells(mk):
 				if _cell_on_screen(mc.x, mc.y) and resolver.mine_visible_to(viewer, mc):
@@ -5658,6 +5816,10 @@ func _draw() -> void:
 			if _cell_on_screen(sc.x, sc.y) and _cell_seen_now(sc, visible):
 				draw_rect(Rect2(_cell_origin(sc) + Vector2(CELL * 0.25, CELL * 0.25),
 						Vector2(CELL * 0.5, CELL * 0.5)), Color(0.5, 0.8, 0.95))
+	# Карта высот — поверх объектов (issues-12 #12): под туманом окопы, мешки и насыпи
+	# рисуются этим же проходом и закрывали свои числа.
+	if _heightmap and zoom >= HEIGHTMAP_MIN_ZOOM:
+		_draw_heights(font, visible, fog_on, vx0, vy0, vx1, vy1)
 
 	if state.grid.in_bounds(_inspected_station) and grid.cell(_inspected_station).feature_id == MCF.FEATURE_DRONE_STATION \
 			and _cell_seen_now(_inspected_station, visible):
@@ -5697,6 +5859,8 @@ func _draw() -> void:
 	# Труп существует в ДВУХ видах: погибший на месте боец — это occupant клетки со
 	# статусом CORPSE, а положенный из рук (#6) — безымянная куча cell.corpse_count.
 	# Кучи не рисовались вовсе: тело давало +1 к защите, но на карте его не было.
+	# Реалистичный туман прячет вне обзора всё (issues-12 #16) — и тела тоже.
+	var blackout: bool = fog_on and _view_resolver().fog_mode == MCF.Fog.REALISTIC
 	for unit: UnitInstance in state.all_units():
 		# Самые дешёвые отсевы — первыми (batch mp-perf): на большой карте почти все юниты
 		# живы или за краем экрана, и вызовы функций на каждого стоили больше самой отрисовки.
@@ -5718,13 +5882,13 @@ func _draw() -> void:
 		# счётчик врал: сверху «x2», а под ним ещё один невидимый труп-occupant.
 		if state.grid.cell(unit.coord).corpse_count > 0:
 			continue
-		if not _cell_on_screen(unit.coord.x, unit.coord.y):
+		if not _cell_on_screen(unit.coord.x, unit.coord.y) or (blackout and not visible.has(uc)):
 			continue
 		_draw_corpse(unit.coord, 1, unit)
 
 	# Кучи трупов — по списку куч и только в видимом окне (item 5), а не по всей сетке.
 	for pile_coord: Vector2i in _pile_cells():
-		if not _cell_on_screen(pile_coord.x, pile_coord.y):
+		if not _cell_on_screen(pile_coord.x, pile_coord.y) or (blackout and not visible.has(pile_coord)):
 			continue
 		var pile_cell := state.grid.cell(pile_coord)
 		if pile_cell == null or pile_cell.corpse_count <= 0:
@@ -5812,6 +5976,14 @@ func _draw() -> void:
 			var vap: int = 0 if veh.seated() else maxi(0, veh.ap)
 			for i in vap:
 				draw_circle(org + Vector2(vsize.x - 8 - i * 8, 8), 3, Color(1, 1, 0.4))
+			# Станция в кресле (issues-12 #7) — поверх корпуса и в полёте вместе с ним; под
+			# корпусом её не было видно, а в переезде она прыгала в конец пути раньше машины.
+			if veh.seated():
+				for si in veh.seats.size():
+					var stc := veh.seat_cell(si)
+					if veh.seats[si] == Vehicle.SEAT_STATION and _cell_seen_now(stc, visible):
+						_tiles.draw_feature_tile(self, MCF.FEATURE_DRONE_STATION, stc,
+								Rect2(_cell_origin(stc), Vector2(CELL, CELL)))
 
 	draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
 	# Выбор машины для посадки — поверх корпусов, иначе подсветку закрывала сама машина.
@@ -6127,7 +6299,10 @@ func _draw_random_events(font: Font) -> void:
 		var p: Dictionary = e["params"]
 		var col: Color = EVENT_COLORS.get(id, Color(1, 1, 1, 1))
 		var rect := Rect2()
-		if id == RandomEvents.ARMY:
+		if id == RandomEvents.ARMY and p.has("hx"):
+			# Вход в бункер с конца коридора (issues-12 #13).
+			rect = Rect2(ORIGIN + Vector2(int(p["hx"]) - 1, int(p["hy"]) - 1) * CELL, Vector2(3, 3) * CELL)
+		elif id == RandomEvents.ARMY:
 			var seg := int(p.get("len", 1))
 			var from := int(p.get("from", 0))
 			var gw := state.grid.width
@@ -6230,7 +6405,10 @@ func _draw_fx_lanes(visible: Dictionary) -> void:
 			draw_line(a, b, Color(col.r, col.g, col.b, 0.80 * la), wide)
 			# Кольцо у стрелка — «отсюда стреляли».
 			draw_arc(a, CELL * 0.46, 0.0, TAU, 24, Color(col.r, col.g, col.b, 0.85 * la), 2.0)
-		# Прицел у цели рисуется ВСЕГДА: «по этому месту работают» игрок вправе видеть.
+		# Прицел у цели — «по этому месту работают» игрок вправе видеть, но только там, куда
+		# сам смотрит: прицел в темноте выдавал чужую стрельбу по туману (issues-12 #4).
+		if not shooter_seen and not visible.has(Vector2i(floori(to_cell.x), floori(to_cell.y))):
+			continue
 		var rr := CELL * 0.40
 		var tcol := Color(col.r, col.g, col.b, 0.95 * la)
 		draw_arc(b, rr, 0.0, TAU, 28, tcol, 2.5)
@@ -6687,6 +6865,7 @@ func _build_ui() -> void:
 	_draw_btn = _compact_button("Draw", _enter_draw)
 	_erase_btn = _compact_button("Erase", _enter_erase)
 	draw_box.add_child(_button_row([_draw_btn, _erase_btn]))
+	draw_box.add_child(_colour_row())
 	var undo_draw := _compact_button("Undo drawing", _undo_my_drawing)
 	undo_draw.tooltip_text = "Take back your last stroke or erase (%s while drawing)." % Keybinds.label("game_undo")
 	_undo_draw_shortcut_btn = undo_draw
@@ -7416,6 +7595,40 @@ func _erase_commit() -> void:
 func _erase_radius() -> float:
 	return (float(_erase_brush) + 1.0) * (CELL * 0.35)
 
+func _brush_colour() -> Color:
+	return _side_color(_draw_author()) if _draw_colour.a <= 0.0 else _draw_colour
+
+## Ряд образцов цвета кисти (issues-12 #8). Щелчок по образцу выбирает цвет и сразу
+## включает кисть.
+func _colour_row() -> HFlowContainer:
+	var row := HFlowContainer.new()
+	row.add_theme_constant_override("h_separation", 3)
+	row.add_theme_constant_override("v_separation", 3)
+	var group := ButtonGroup.new()
+	for col: Color in DRAW_COLOURS:
+		var b := Button.new()
+		b.toggle_mode = true
+		b.button_group = group
+		b.focus_mode = Control.FOCUS_NONE
+		b.custom_minimum_size = Vector2(18, 18)
+		b.tooltip_text = "Your side's colour" if col.a <= 0.0 else "Draw in this colour"
+		for st: String in ["normal", "hover", "pressed", "hover_pressed"]:
+			var sb := StyleBoxFlat.new()
+			sb.bg_color = Color(0.5, 0.5, 0.5) if col.a <= 0.0 else col
+			var on := st.ends_with("pressed")
+			sb.set_border_width_all(2 if on else 1)
+			sb.border_color = Color.WHITE if on else Color(0, 0, 0, 0.7)
+			b.add_theme_stylebox_override(st, sb)
+		b.button_pressed = col == _draw_colour
+		b.pressed.connect(func() -> void:
+			_draw_colour = col
+			if mode != Mode.DRAW:
+				_enter_draw())
+		if col.a <= 0.0:
+			_side_swatch = b
+		row.add_child(b)
+	return row
+
 ## Радиус кисти: ползунок задаёт толщину линии, как и раньше.
 static func _paint_radius(width: int) -> float:
 	return maxf(1.5, float(width) * 0.5)
@@ -7445,7 +7658,7 @@ func _stroke_add(pos: Vector2) -> void:
 		return
 	var last: Vector2 = _cur_stroke[-1] if not _cur_stroke.is_empty() else pos
 	var me := _draw_author()
-	_canvas(me, _draw_scope()).stroke(last, pos, _paint_radius(_draw_brush), _side_color(me))
+	_canvas(me, _draw_scope()).stroke(last, pos, _paint_radius(_draw_brush), _brush_colour())
 	_cur_stroke.append(pos)
 	queue_redraw()
 
@@ -7453,8 +7666,11 @@ func _stroke_commit() -> void:
 	if _cur_stroke.is_empty():
 		return
 	if networked and session != null:
-		session.send({"k": K_DRAW, "a": _draw_author(), "s": _draw_scope(),
-			"c": _flat_points(_cur_stroke), "w": _draw_brush})
+		var msg := {"k": K_DRAW, "a": _draw_author(), "s": _draw_scope(),
+			"c": _flat_points(_cur_stroke), "w": _draw_brush}
+		if _draw_colour.a > 0.0:
+			msg["col"] = _draw_colour.to_html(false)
+		session.send(msg)
 	_cur_stroke = []
 
 ## Пришедший чужой штрих, ход ластика или «очистить свои» (item 51/15). Область видимости
@@ -7493,7 +7709,8 @@ func _on_remote_stroke(msg: Dictionary) -> void:
 		var scope := int(msg.get("s", DrawScope.TEAM))
 		var canvas := _canvas(author, scope)
 		var rad := _paint_radius(int(msg.get("w", 3)))
-		var col := _side_color(author)
+		var col := Color.html(str(msg["col"])) if Color.html_is_valid(str(msg.get("col", ""))) \
+				else _side_color(author)
 		_draw_record_begin(author, scope)
 		for k in pts.size():
 			canvas.stroke(pts[maxi(0, k - 1)], pts[k], rad, col)
@@ -7625,8 +7842,16 @@ func _draw_annotations() -> void:
 	# Кружок кисти/ластика под курсором — видно, какой толщины след ляжет (item 15).
 	if mode == Mode.DRAW or mode == Mode.ERASE:
 		var r := _paint_radius(_draw_brush) if mode == Mode.DRAW else _erase_radius()
-		var col := _side_color(_draw_author()) if mode == Mode.DRAW else Color(1, 1, 1, 0.8)
+		var col := _brush_colour() if mode == Mode.DRAW else Color(1, 1, 1, 0.8)
 		draw_arc(_draw_world_pos(), r, 0.0, TAU, 32, col, 1.5)
+	# Образец «цвет стороны» следует за автором: в горячем кресле он меняется с ходом, а в
+	# сети сторона известна лишь после подключения — позже, чем строится панель.
+	if _side_swatch != null:
+		var sc := _side_color(_draw_author())
+		for st: String in ["normal", "hover", "pressed", "hover_pressed"]:
+			var sb := _side_swatch.get_theme_stylebox(st) as StyleBoxFlat
+			if sb != null and sb.bg_color != sc:
+				sb.bg_color = sc
 
 # --- Чат (item 50) ---
 
@@ -7936,19 +8161,22 @@ func _open_menu(unit: UnitInstance) -> void:
 
 	if unit.is_drone:
 		# Дрон (§3.12): летать (если оператор у станции) и подрыв.
+		# Кнопки есть всегда (issues-12 #10): без них меню без единой кнопки закрывалось, и
+		# выбранный дрон выглядел намертво зависшим — теперь видно, ЧТО ему мешает.
 		var controllable: bool = resolver.operator_controls(unit)
+		var why := "" if controllable else _drone_idle_reason(unit)
 		if not controllable:
 			var warn := Label.new()
-			warn.text = "Operator not at the station"
+			warn.text = why
 			vb.add_child(warn)
-		if controllable and (unit.remaining_ap > 0 or unit.move_credit > 0 or _drone_on_wall(unit)):
-			var fly_btn := Button.new()
-			fly_btn.text = "Descend" if _drone_on_wall(unit) \
-					else ("Fly (%d left)" % unit.move_credit if unit.move_credit > 0 else "Fly")
-			fly_btn.pressed.connect(_enter_drone_fly)
-			vb.add_child(fly_btn)
-			_register_menu_action(fly_btn, "action_move")
-		if controllable:
+		_act_btn(vb, "Descend" if _drone_on_wall(unit)
+				else ("Fly (%d left)" % unit.move_credit if unit.move_credit > 0 else "Fly"),
+				_enter_drone_fly,
+				controllable and (unit.remaining_ap > 0 or unit.move_credit > 0 or _drone_on_wall(unit)),
+				why if not controllable else "Drone has no AP left", "action_move")
+		if not controllable:
+			_act_btn(vb, "Detonate", Callable(), false, why, "action_shoot")
+		else:
 			var det_btn := Button.new()
 			det_btn.text = "Detonate"
 			# Подрыв дрона узел не разыгрывает (§4): игрок указывает, и туда и приходится.
@@ -8004,8 +8232,8 @@ func _open_menu(unit: UnitInstance) -> void:
 					unit.remaining_ap > 0, "No action points left", "action_launch")
 		var pfold := resolver.station_pickup_cells(unit)
 		if not pfold.is_empty():
-			_act_btn(vb, "Pack Up Drone Station",
-					_submit.bind(PickUpStationIntent.new(unit.id, pfold[0])), unit.remaining_ap > 0, "No action points left", "action_pack")
+			_act_btn(vb, "Pack Up Drone Station", _pack_station_action(unit, pfold),
+					unit.remaining_ap > 0, "No action points left", "action_pack")
 		if not resolver.seat_options(pveh).is_empty():
 			_act_btn(vb, "Change Seat (1 AP)", _enter_seat_switch, unit.remaining_ap > 0, "No action points left", "action_seat")
 		_act_btn(vb, "Exit Shuttle (free)", _enter_passenger_exit,
@@ -8091,9 +8319,9 @@ func _open_menu(unit: UnitInstance) -> void:
 		var foldable := resolver.station_pickup_cells(unit)
 		if not foldable.is_empty():
 			var fold_btn := Button.new()
-			fold_btn.text = "Pack Up Drone Station"
-			fold_btn.pressed.connect(_submit.bind(
-					PickUpStationIntent.new(unit.id, foldable[0])))
+			fold_btn.text = "Pack Up Drone Station" if foldable.size() == 1 \
+					else "Pack Up Drone Station (%d)…" % foldable.size()
+			fold_btn.pressed.connect(_pack_station_action(unit, foldable))
 			vb.add_child(fold_btn)
 			_register_menu_action(fold_btn, "action_pack")
 
@@ -8332,15 +8560,25 @@ func _vehicle_at_cell(coord: Vector2i) -> Vehicle:
 ## Выбор станции для запуска дрона (item 17). Клеток немного (максимум восемь
 ## соседей), поэтому список — просто кнопки с координатами; подсветка на доске
 ## показывает те же клетки, что и кнопки.
-func _open_station_picker(stations: Array) -> void:
+## Свернуть станцию: одна рядом — сразу, несколько — игрок выбирает какую (issues-12 #3).
+func _pack_station_action(unit: UnitInstance, cells: Array[Vector2i]) -> Callable:
+	if cells.size() == 1:
+		return _submit.bind(PickUpStationIntent.new(unit.id, cells[0]))
+	var uid := unit.id
+	return _open_station_picker.bind(cells, "Pack Up Which Station?",
+			func(st: Vector2i) -> Intent: return PickUpStationIntent.new(uid, st))
+
+func _open_station_picker(stations: Array, title := "Launch From Which Station?",
+		make := Callable()) -> void:
 	_menu.hide()
 	for c in _picker.get_children():
 		c.queue_free()
-	var vb := _scroll_menu(_picker, "Launch From Which Station?")
+	var vb := _scroll_menu(_picker, title)
 	for st: Vector2i in stations:
 		var b := Button.new()
 		b.text = "Station at (%d, %d)" % [st.x, st.y]
-		b.pressed.connect(_submit.bind(SpawnDroneIntent.new(selected_id, st)))
+		b.pressed.connect(_submit.bind(make.call(st) if make.is_valid()
+				else SpawnDroneIntent.new(selected_id, st)))
 		_hint_cell(b, st)
 		vb.add_child(b)
 	_number_picker()
@@ -8607,8 +8845,20 @@ func _result_is_audible(res: ActionResult) -> bool:
 	var viewer := _viewing_side()
 	if res.actor_owner == viewer or state.roster.are_allies(res.actor_owner, viewer):
 		return true
+	# Свои, убитые ЭТИМ действием, ещё видели стрелка, когда он стрелял: без них
+	# последний боец стороны умирал бы под скрытыми кубиками.
+	var revived: Array[UnitInstance] = []
+	for id: int in res.deaths:
+		var u := state.get_unit(id)
+		if u != null and u.status == MCF.Status.CORPSE \
+				and (u.owner == viewer or state.roster.are_allies(u.owner, viewer)):
+			u.status = MCF.Status.ALIVE
+			revived.append(u)
 	var seen := _view_resolver().team_visible_coords(viewer)
-	return seen.has(res.actor_from) or seen.has(res.actor_to)
+	var audible := seen.has(res.actor_from) or seen.has(res.actor_to)
+	for u in revived:
+		u.status = MCF.Status.CORPSE
+	return audible
 
 func _on_log_line(text: String) -> void:
 	if _log_label != null:
@@ -8661,7 +8911,7 @@ func _draw_heights(font: Font, visible: Dictionary, fog_on: bool, x0: int, y0: i
 	for y in range(y0, y1 + 1):
 		for x in range(x0, x1 + 1):
 			var cell := grid.cell_fast(x, y)
-			var t := TerrainTiles.height_text(cell.cover_height, cell.is_space)
+			var t := TerrainTiles.height_text(cell.cover_height, cell.is_space, cell.feature_id)
 			if t == "" or (fog_on and not visible.has(cell.coord)):
 				continue
 			TerrainTiles.draw_height_text(self, font, _cell_origin(cell.coord), CELL, t,

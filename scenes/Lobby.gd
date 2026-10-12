@@ -324,6 +324,7 @@ func _apply_lobby_snapshot(msg: Dictionary) -> void:
 		_ff_check.button_pressed = GameConfig.friendly_fire
 		_ff_check.visible = _team_mode
 		_live_check.button_pressed = GameConfig.live_placement_visible
+		_sync_live_check()
 		_civ_check.set_pressed_no_signal(GameConfig.civilian_count > 0)
 		_events_check.button_pressed = GameConfig.random_events_enabled
 		_events_mand.button_pressed = GameConfig.random_events_mandatory
@@ -594,6 +595,8 @@ func _build_config(parent: VBoxContainer) -> void:
 	_live_check.text = "Live placement visibility"
 	_live_check.button_pressed = GameConfig.live_placement_visible
 	box.add_child(_live_check)
+	_fog_opt.item_selected.connect(func(_i: int) -> void: _sync_live_check())
+	_sync_live_check()
 
 	# «Disable neutrals» (item 2): выключает мирных/нейтралов на карте. Инвертируем
 	# GameConfig.civilians_enabled — галочка «выключить» удобнее, чем «включить».
@@ -670,6 +673,14 @@ func _build_config(parent: VBoxContainer) -> void:
 			elif c is SpinBox:
 				(c as SpinBox).editable = false
 			(c as Control).mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+## Под туманом чужой армии на расстановке не видно вовсе (issues-12 #1): галочка «живой»
+## расстановки снята и заперта; без тумана — обычный тумблер.
+func _sync_live_check() -> void:
+	var fog := _fog_opt.selected != MCF.Fog.OFF
+	if fog:
+		_live_check.set_pressed_no_signal(false)
+	_live_check.disabled = fog or _is_client
 
 ## Строка «подпись — ползунок — число» (как slider-row в наборе интерфейса). fmt — как
 ## показать значение в окошке справа.
