@@ -185,6 +185,72 @@ func begin_turn(state: GameState) -> void:
 		return
 	intent_ready.emit(_decide(state))
 
+# --- Announced events (0.11.1): HARD gets out of the way -----------------------------
+
+## The match's own resolver. Announced artillery and gas zones live on it; the resolver a
+## decision builds for itself starts with an empty event queue.
+var _match: WeakRef = null
+## Rectangles that will hurt anyone standing in them at the end of this round: announced
+## barrages and gas clouds, and gas already on the board. Refreshed every decision.
+var _danger: Array[Rect2i] = []
+
+func bind_match(r: GameActionResolver) -> void:
+	_match = weakref(r)
+
+func _sync_danger() -> void:
+	_danger.clear()
+	if difficulty != Difficulty.HARD or _match == null:
+		return
+	var live: GameActionResolver = _match.get_ref()
+	if live == null or live.random_events == null:
+		return
+	for e: Dictionary in live.random_events.pending:
+		if str(e["id"]) in [RandomEvents.MORTAR, RandomEvents.GAS]:
+			var p: Dictionary = e["params"]
+			_danger.append(Rect2i(int(p.get("x", 0)), int(p.get("y", 0)), int(p.get("w", 0)), int(p.get("h", 0))))
+	for cl: Dictionary in live.random_events.clouds:
+		_danger.append(Rect2i(int(cl["x"]), int(cl["y"]), int(cl["w"]), int(cl["h"])))
+
+## How deep inside the danger a cell is: 0 = safe, otherwise the fewest steps to leave
+## every zone it lies in (summed over overlapping zones).
+func _danger_depth(c: Vector2i) -> int:
+	var depth := 0
+	for z: Rect2i in _danger:
+		if z.has_point(c):
+			depth += mini(mini(c.x - z.position.x, z.end.x - 1 - c.x), mini(c.y - z.position.y, z.end.y - 1 - c.y)) + 1
+	return depth
+
+## A soldier standing in an announced zone walks out before anything else: a barrage
+## kills on 4+, gas on 1–2. With no safe cell in reach it still gets as close to the edge
+## as it can, so next turn it is out.
+const SCORE_FLEE_EVENT := 300.0
+
+func _flee_events(state: GameState, u: UnitInstance) -> Dictionary:
+	if _danger.is_empty():
+		return {}
+	var here := _danger_depth(u.coord)
+	if here == 0:
+		return {}
+	var reach := _r.reachable_for(u, _move_budget(u))
+	var dodge := _avoids_fire(u)
+	var best: Dictionary = {}
+	for coord: Vector2i in reach.cost:
+		var d := _danger_depth(coord)
+		if d >= here or (dodge and _fire_near(state, coord)):
+			continue
+		var score := SCORE_FLEE_EVENT - d * 20.0 - float(reach.cost[coord]) * SCORE_STEP_COST \
+				+ _cover_bonus(state, coord)
+		if best.is_empty() or score > best["score"]:
+			best = {"score": score, "intent": MoveIntent.new(u.id, coord)}
+	return best
+
+## Ordinary moves never end inside an announced zone (HARD).
+func _in_danger(c: Vector2i) -> bool:
+	for z: Rect2i in _danger:
+		if z.has_point(c):
+			return true
+	return false
+
 ## Резолвер отказал текущему актёру (#60). Повторять тот же расчёт бессмысленно —
 ## он снова выдаст то же намерение и ход зациклится, — поэтому актёр снимается с
 ## очереди и ИИ переходит к следующему бойцу.
@@ -204,6 +270,7 @@ func _decide(state: GameState) -> Intent:
 	var r := GameActionResolver.new(state)
 	r.omniscient_side = owner  # ИИ знает позиции всех сквозь туман (#43)
 	_r = r
+	_sync_danger()
 	_sync_turn(state, r)
 	# Доигрываем текущего актёра; когда ходов у него не осталось — берём следующего.
 	# Очередь только укорачивается, поэтому цикл конечен.
@@ -630,6 +697,9 @@ func _candidates(state: GameState, r: GameActionResolver, u: UnitInstance) -> Ar
 
 	# Ходы доступны и на одном кредите движения, без ОД (#103, §3.2).
 	if u.remaining_ap > 0 or u.move_credit > 0:
+		var flee_event := _flee_events(state, u)
+		if not flee_event.is_empty():
+			out.append(flee_event)
 		var flee := _flee_fire(state, u)
 		if not flee.is_empty():
 			out.append(flee)
@@ -1462,14 +1532,14 @@ func _plan_move(state: GameState, u: UnitInstance) -> Dictionary:
 	# она осталась, но входить в неё — гарантированная смерть. Тогда план не
 	# исполняется целиком, а доигрывается шагом «в сторону цели» ниже.
 	if reach.can_reach(dest) and not state.grid.blocks_walk(dest) \
-			and not (dodge and _fire_near(state, dest)):
+			and not (dodge and _fire_near(state, dest)) and not _in_danger(dest):
 		return {"score": SCORE_MOVE_BASE + SCORE_PLAN_BONUS,
 			"intent": MoveIntent.new(u.id, dest)}
 	# Не дотягиваемся — шагаем в сторону назначения, но только если это правда ближе.
 	var here := Combat.distance(u.coord, dest)
 	var best: Dictionary = {}
 	for coord: Vector2i in reach.cost:
-		if dodge and _fire_near(state, coord):
+		if (dodge and _fire_near(state, coord)) or _in_danger(coord):
 			continue
 		var gain := float(here - Combat.distance(coord, dest))
 		if gain <= 0.0:
@@ -1526,9 +1596,12 @@ func _best_move(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dic
 		threat = r.fire_cover(owner, true)
 		threat_k = 6.0 if style == Style.FLANK else 10.0
 	var gw := grid.width
+	var avoid := not _danger.is_empty()
 	for coord: Vector2i in cost:
 		if dodge and _fire_near(state, coord):
 			continue  # держим дистанцию минимум в 1 клетку от огня (#48)
+		if avoid and _in_danger(coord):
+			continue  # announced barrage / gas (0.11.1, HARD only)
 		var score: float
 		if use_geo:
 			var new_geo: int = field.at(coord)
@@ -1743,7 +1816,7 @@ func _flee_fire(state: GameState, u: UnitInstance) -> Dictionary:
 	var reach := _r.reachable_for(u, _move_budget(u))
 	var best: Dictionary = {}
 	for coord: Vector2i in reach.cost:
-		if coord == u.coord or _fire_near(state, coord):
+		if coord == u.coord or _fire_near(state, coord) or _in_danger(coord):
 			continue
 		var score: float = SCORE_CAPTURE_BASE + 20.0 - float(reach.cost[coord])
 		if best.is_empty() or score > best["score"]:

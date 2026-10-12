@@ -286,7 +286,7 @@ func set_door(i: int, v: int) -> void:
 		door_look.resize(width * height)
 	door_look[i] = v
 
-## Light colour per cell (0.11, Furniture.LIGHT_TINTS; 0 = the lamp's own) — display only.
+## Light colour and brightness per cell (Furniture.make_tint; 0 = the lamp as designed) — display only.
 var light_tint: PackedByteArray = PackedByteArray()
 
 func get_tint(i: int) -> int:
@@ -646,7 +646,7 @@ static func valid_lamps(raw: Variant) -> Array:
 	for r: Variant in records:
 		if not r is Array or r.size() < 3 or not Furniture.is_wall_light(str(r[0])): continue
 		var id := str(r[0])
-		var tint := clampi(int(r[3]), 0, Furniture.LIGHT_TINTS.size() - 1) if r.size() > 3 else 0
+		var tint := Furniture.clean_tint(clampi(int(r[3]), 0, 255)) if r.size() > 3 else 0
 		out = with_lamp(out, [id, clampi(int(r[1]), 1, Furniture.durability_of(id)), posmod(int(r[2]), 4), tint])
 	return out
 

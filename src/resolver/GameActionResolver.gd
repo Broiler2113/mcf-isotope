@@ -1174,11 +1174,13 @@ func _blast_destroy_terrain(c: Vector2i, res: ActionResult = null,
 	if not state.grid.in_bounds(c):
 		return
 	var cell := state.grid.cell(c)
-	cell.lamps = []   # a blast takes the whole wall tile: every lamp on it, from either side
+	for lamp: Array in cell.lamps:   # a blast takes the whole wall tile: every lamp on it, from either side
+		_lamp_shards(res, c, from_coord, int(lamp[2]))
+	cell.lamps = []
 	var fid := cell.feature_id
 	# Мебель любой разрыв сносит целиком (§3.15, 0.9.2) — и сейф, и станок.
 	if Furniture.is_furniture(fid):
-		_destroy_furniture(cell, res)
+		_destroy_furniture(cell, res, from_coord)
 		return
 	if cell.feature_durability > 0:
 		return
@@ -3256,12 +3258,22 @@ func _resolve_smash_furniture(actor: UnitInstance, coord: Vector2i) -> ActionRes
 ## вида и обзора узнаёт об этом через сеттеры клетки. Цельный многоклеточный предмет
 ## (кровать, стол, станок) гибнет целиком — полкровати не бывает. Щепки — той же
 ## косметикой «разрушенный пол», что и у снесённых укреплений.
-func _destroy_furniture(cell: GridCell, res: ActionResult) -> void:
+func _destroy_furniture(cell: GridCell, res: ActionResult, from: Vector2i = NOWHERE) -> void:
 	var cells := furniture_piece(cell.coord)
+	if Furniture.DEFS.get(cell.feature_id, {}).get("cat", "") == "lighting":
+		_lamp_shards(res, cell.coord, from)
 	for c: Vector2i in cells:
 		state.grid.cell(c).clear_feature()
 		notify_cell_changed(c)
 	_fx(res, {"fx": "debris", "at": NOWHERE, "cells": cells})
+
+## A lamp breaks like a window (0.11.1): its glass flies off as the same shards, away
+## from whatever hit it. A wall lamp (side >= 0) sheds them onto the floor of its own side.
+func _lamp_shards(res: ActionResult, c: Vector2i, from: Vector2i, side: int = -1) -> void:
+	if res == null: return
+	var at := c + Furniture.N4[side] if side >= 0 else c
+	if not state.grid.in_bounds(at): at = c
+	_fx(res, {"fx": "shards", "at": at, "from": from if from != NOWHERE else c})
 
 ## Клетки предмета мебели, которому принадлежит c (у секций и одиночных — одна клетка).
 func furniture_piece(c: Vector2i) -> Array[Vector2i]:
@@ -3578,6 +3590,20 @@ func visibility_limited() -> bool:
 	_sync_seen()
 	return not _sight_gas.is_empty()
 
+var _gas_masks_version := -1
+var _gas_masks_grid := 0
+var _gas_masks_cache: Array = []
+func _gas_masks() -> Array:
+	var grid := state.grid
+	if _gas_masks_version != GridCell.vision_version or _gas_masks_grid != grid.get_instance_id():
+		var mask := PackedByteArray()
+		mask.resize(grid.width * grid.height)
+		for i: int in _sight_gas: mask[i] = 1
+		_gas_masks_cache = [mask, _transpose(mask, grid.width, grid.height)]
+		_gas_masks_version = GridCell.vision_version
+		_gas_masks_grid = grid.get_instance_id()
+	return _gas_masks_cache
+
 func team_sees(owner: int, coord: Vector2i) -> bool:
 	if not state.grid.in_bounds(coord): return false
 	if state.grid.cell(coord).gas: return false
@@ -3798,7 +3824,7 @@ static func _tank_masks_of(sig: int, gh: int) -> Array:
 	_tank_masks[sig] = pair
 	return pair
 
-func _seen_from(coord: Vector2i, r: int, viewer: int = -1) -> PackedInt32Array:
+func _seen_from(coord: Vector2i, r: int, viewer: int = -1, gas_only: bool = false) -> PackedInt32Array:
 	# Смотрящий вне поля (сидит в машине, coord = OFFBOARD) не видит ничего: лучи из
 	# такой точки уходят за край сетки. Вызывающие сидящих и так пропускают — это
 	# страховка на будущих вызывающих (issue 2).
@@ -3813,13 +3839,13 @@ func _seen_from(coord: Vector2i, r: int, viewer: int = -1) -> PackedInt32Array:
 	# перебирать четыре миллиона несуществующих клеток ради этого — нет. Обрезка
 	# идёт до ключа кеша, поэтому все «безграничные» бойцы делят одну запись.
 	r = mini(r, maxi(gw, gh))
-	var sig := _tank_sig(viewer)
+	var sig := -1 if gas_only else _tank_sig(viewer)
 	var key := Vector4i(coord.x, coord.y, r, sig)
 	var hit: Variant = _seen_cache.get(key)
 	if hit != null:
 		_touch_seen(key, hit)
 		return hit
-	var same: Variant = _reuse_under(key, viewer)
+	var same: Variant = null if gas_only else _reuse_under(key, viewer)
 	if same != null:
 		return same
 	var origin := coord.y * gw + coord.x
@@ -3827,7 +3853,7 @@ func _seen_from(coord: Vector2i, r: int, viewer: int = -1) -> PackedInt32Array:
 		var own := PackedInt32Array([origin])
 		_store_seen(key, own, own)
 		return own
-	var masks := _tank_masks_of(sig, gh)
+	var masks := _gas_masks() if gas_only else _tank_masks_of(sig, gh)
 	var res := _sweep(coord.x, coord.y, r, masks[0], gw, gh, masks[1])
 	# A wall face is visible; a gas-filled cell conceals its occupants. Keep the
 	# sweep and its incremental invalidation, filtering only while gas exists.
@@ -4126,19 +4152,19 @@ static func _transpose(blk: PackedByteArray, gw: int, gh: int) -> PackedByteArra
 ## спрашивают на каждом пересчёте тумана, а на карте 250×250 это девять обзоров по
 ## десятку тысяч клеток. Чувствительные клетки записи — объединение чувствительных клеток
 ## следа, так что журнал обзора выкидывает её ровно тогда же, когда любую из частей.
-func _vehicle_seen(veh: Vehicle) -> PackedInt32Array:
+func _vehicle_seen(veh: Vehicle, gas_only: bool = false) -> PackedInt32Array:
 	var cells := veh.footprint()
 	if cells.size() == 1:
-		return _seen_from(cells[0], MCF.SIGHT_UNLIMITED, veh.owner)
+		return _seen_from(cells[0], MCF.SIGHT_UNLIMITED, veh.owner, gas_only)
 	_sync_seen()
 	var grid := state.grid
-	var sig := _tank_sig(veh.owner)
+	var sig := -1 if gas_only else _tank_sig(veh.owner)
 	var key := Vector4i(veh.origin.x, veh.origin.y, -1 - (veh.size.x * 1024 + veh.size.y), sig)
 	var hit: Variant = _seen_cache.get(key)
 	if hit != null:
 		_touch_seen(key, hit)
 		return hit
-	var same: Variant = _reuse_under(key, veh.owner)
+	var same: Variant = null if gas_only else _reuse_under(key, veh.owner)
 	if same != null:
 		return same
 	var r := mini(MCF.SIGHT_UNLIMITED, maxi(grid.width, grid.height))
@@ -4147,7 +4173,7 @@ func _vehicle_seen(veh: Vehicle) -> PackedInt32Array:
 	var out := PackedInt32Array()
 	var sens := PackedInt32Array()
 	for c: Vector2i in cells:
-		for i: int in _seen_from(c, MCF.SIGHT_UNLIMITED, veh.owner):
+		for i: int in _seen_from(c, MCF.SIGHT_UNLIMITED, veh.owner, gas_only):
 			if mark[i] & 1 == 0:
 				mark[i] = mark[i] | 1
 				out.append(i)
@@ -4235,7 +4261,6 @@ func team_visible_coords(owner: int) -> Dictionary:
 		_vis_epoch.clear()
 		_vis_vv.clear()
 		_vis_log.clear()   # всё видимое собирается заново — перерисовывать всё
-		_vis_hidden.clear()
 		_vis_grid = gid
 		_vis_mode = mode
 	if mode == 0:
@@ -4250,8 +4275,6 @@ func team_visible_coords(owner: int) -> Dictionary:
 		_vis_epoch[owner] = UnitInstance.vision_epoch
 		_vis_vv[owner] = GridCell.vision_version
 		return full
-	if mode == 2:
-		return _gas_only_view(owner)
 
 	var out: Dictionary = _vis_set.get(owner, {})
 	var gw := state.grid.width
@@ -4323,39 +4346,6 @@ func team_visible_coords(owner: int) -> Dictionary:
 	_vis_epoch[owner] = UnitInstance.vision_epoch
 	_vis_vv[owner] = GridCell.vision_version
 	explored[owner] = memory
-	return out
-
-## Fog off with gas on the board (0.11): everything is visible except the gassed cells
-## themselves. Shots across a cloud are still refused (gas_blocks_line). Hiding what lay
-## BEHIND a cloud took a whole-board sweep per soldier: ~10 s per action on Colossal.
-var _vis_hidden: Dictionary = {}   # owner -> {flat index: true}
-func _gas_only_view(owner: int) -> Dictionary:
-	_sync_seen()
-	var grid := state.grid
-	var gw := grid.width
-	var out: Dictionary = _vis_set.get(owner, {})
-	var was: Dictionary = _vis_hidden.get(owner, {})
-	if out.is_empty():
-		was = {}
-		for y in grid.height:
-			for x in gw:
-				out[Vector2i(x, y)] = true
-	var log: Variant = _vis_log.get(owner)
-	var now: Dictionary = _sight_gas.duplicate()
-	for i: int in was:
-		if not now.has(i):
-			out[Vector2i(i % gw, i / gw)] = true
-			if log != null:
-				log.append(i)
-	for i: int in now:
-		if not was.has(i):
-			out.erase(Vector2i(i % gw, i / gw))
-			if log != null:
-				log.append(i)
-	_vis_hidden[owner] = now
-	_vis_set[owner] = out
-	_vis_epoch[owner] = UnitInstance.vision_epoch
-	_vis_vv[owner] = GridCell.vision_version
 	return out
 
 ## Вклад одного обзора в счётчики стороны. Сначала ПРИБАВЛЯЕТСЯ новый обзор, потом
@@ -6217,9 +6207,36 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 	# взрывом, после которого стол оставался стоять.
 	var smashed: Array = []
 	for fc: Vector2i in area:
-		if state.grid.in_bounds(fc) and Furniture.is_furniture(state.grid.cell(fc).feature_id):
+		if state.grid.in_bounds(fc) and Furniture.is_furniture(state.grid.cell(fc).feature_id) \
+				and fixture_at(fc) == "":   # lamps roll below, like glass (0.11.1)
 			smashed.append_array(furniture_piece(fc))
-			_destroy_furniture(state.grid.cell(fc), result)
+			_destroy_furniture(state.grid.cell(fc), result, center)
+	# Lamps in the blast defend like ordinary glass (0.11.1): two dice against 6+, both
+	# must hold. A standing lamp anywhere in the area; a wall lamp only on the face that
+	# looks at the blast (the wall shields the other side).
+	for lc: Vector2i in area:
+		if not state.grid.in_bounds(lc): continue
+		var lcell := state.grid.cell(lc)
+		var lamps: Array = [] if fixture_at(lc) == "" else [-1]
+		for lamp: Array in lcell.lamps:
+			if faces_lamp(lc, int(lamp[2]), center): lamps.append(int(lamp[2]))
+		for side: int in lamps:
+			var lid := fixture_at(lc, side)
+			var ldet := {"name": Furniture.DEFS[lid].name, "coord": lc, "owner": lcell.feature_owner,
+				"epicenter": false, "armor": GLASS_ARMOR, "need": GLASS_ARMOR + 1, "rolls": [], "survived": true}
+			for _i in 2:
+				var lr := state.dice.roll_d6()
+				ldet["rolls"].append(lr)
+				if lr < GLASS_ARMOR + 1: ldet["survived"] = false
+			if not ldet["survived"]:
+				if side >= 0:
+					_lamp_shards(result, lc, center, side)
+					lcell.lamps = MapData.without_lamp(lcell.lamps, side)
+					notify_cell_changed(lc)
+				else:
+					smashed.append_array(furniture_piece(lc))
+					_destroy_furniture(lcell, result, center)
+			details.append(ldet)
 	# Осколки не сносят укрепления (#44): единственное, что бьётся, — стекло, и оно
 	# «защищается» как обычный юнит с бронёй 5+ и тем же штрафом −1 на оба кубика.
 	for gc: Vector2i in area:
@@ -9466,9 +9483,10 @@ func _resolve_shoot_fixture(shooter: UnitInstance, c: Vector2i, side: int, shots
 			var rec := MapData.lamp_on(cell.lamps, side).duplicate()
 			rec[1] = int(rec[1]) - damage
 			cell.lamps = MapData.with_lamp(cell.lamps, rec) if int(rec[1]) > 0 else MapData.without_lamp(cell.lamps, side)
+			if int(rec[1]) <= 0: _lamp_shards(result, c, shooter.coord, side)
 		else:
 			cell.feature_durability -= damage
-			if cell.feature_durability <= 0: _destroy_furniture(cell, result)
+			if cell.feature_durability <= 0: _destroy_furniture(cell, result, shooter.coord)
 	result.log("%s fires %d at %s (%d, %d): %d hits%s" % [shooter.stats.display_name, want,
 		label, c.x, c.y, damage, " — light destroyed" if fixture_at(c, side) == "" else ""])
 	shooter.action_state.remaining_shots -= want

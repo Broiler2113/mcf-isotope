@@ -81,9 +81,9 @@ func _gas_visibility() -> void:
 	ck(r.is_visible_to_team(0, enemy), "fog off ignores ordinary walls")
 	r.random_events.add_cloud(5, 1, 2, 10, 3)
 	r._sync_gas()
-	# Fog off (0.11): what stands behind a cloud is seen but cannot be shot through it.
-	ck(r.is_visible_to_team(0, enemy) and r.can_shoot(own, enemy) == "Gas blocks line of sight",
-		"fog off: an enemy behind gas is visible but not shootable")
+	# Fog off (0.11.1, user rule; 0.11 showed it): gas hides what stands behind it too.
+	ck(not r.is_visible_to_team(0, enemy) and r.can_shoot(own, enemy) != "",
+		"fog off: an enemy behind gas is hidden and cannot be shot")
 	r.random_events.clouds.clear()
 	r.random_events.add_cloud(12, 5, 1, 1, 3)
 	r._sync_gas()

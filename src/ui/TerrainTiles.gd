@@ -487,7 +487,7 @@ func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> voi
 		var side := int(lamp[2])
 		var picture: Image = tiles[0].duplicate()
 		for k in side: picture.rotate_90(CLOCKWISE)
-		if int(lamp[3]) > 0: picture = tint_lamp(picture, Furniture.light_color_of(id, int(lamp[3])))
+		if Furniture.tint_colour(int(lamp[3])) > 0: picture = tint_lamp(picture, Furniture.light_color_of(id, int(lamp[3])))
 		feat.blend_rect(picture, Rect2i(0, 0, res, res), at)
 		if int(lamp[1]) < Furniture.durability_of(id):
 			var half: Rect2i = [Rect2i(0, 0, res, res / 2), Rect2i(res / 2, 0, res - res / 2, res),
@@ -549,7 +549,7 @@ func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int
 			name = wl
 	if Furniture.is_furniture(fid):
 		var fimg := _furniture_image(c, fid, res)
-		if fimg != null and _grid.tint_at(c.x, c.y) > 0 and Furniture.emits_light(fid):
+		if fimg != null and Furniture.tint_colour(_grid.tint_at(c.x, c.y)) > 0 and Furniture.emits_light(fid):
 			fimg = tint_lamp(fimg, Furniture.light_color_of(fid, _grid.tint_at(c.x, c.y)))
 		if fimg != null:
 			feat.blit_rect(fimg, full, at)
@@ -633,7 +633,8 @@ func _door_image(grid: Grid, c: Vector2i, cell: GridCell, res: int, closed := fa
 		var hit: Array = _tiles[key]
 		return hit[0] if not hit.is_empty() else null
 	var img := Image.create(res, res, false, Image.FORMAT_RGBA8)
-	if not walls.is_empty():
+	# An open doorway is see-through (0.11.1): no wall behind it, the cell's floor shows.
+	if not walls.is_empty() and not open:
 		img.blit_rect(walls[wv], Rect2i((mask % 4) * res, (mask / 4) * res, res, res), Vector2i.ZERO)
 	var door_name := "door_open" if open else "door"
 	if look > 0:
@@ -1544,17 +1545,40 @@ static func map_preview(map: MapData, tints: Dictionary = {}, bands: Dictionary 
 			img.blend_rect(floor_img, rect, cc * C * res)
 			img.blend_rect(feat_img, rect, cc * C * res)
 			tiles._chunks.clear()
+	# Deployment zones in their faction colour (0.11.1: Conclave-NOVA red, Purifiers
+	# yellow must read at a glance): a clear wash and a thin solid outline.
+	var zone_of := PackedColorArray()
+	zone_of.resize(map.width * map.height)
 	for y in map.height:
 		for x in map.width:
 			var tint: Color = tints.get(map.get_zone(Vector2i(x, y)), Color.TRANSPARENT)
 			if tint.a == 0:
 				for band: Vector2i in bands:
 					if x >= band.x and x < band.y: tint = bands[band]; break
-			if tint.a > 0:
-				for py in res:
-					for px in res:
-						var p := Vector2i(x * res + px, y * res + py)
-						img.set_pixelv(p, img.get_pixelv(p).lerp(tint, 0.18))
+			zone_of[y * map.width + x] = tint
+	var overlay := Image.create(map.width, map.height, false, Image.FORMAT_RGBA8)
+	for i in zone_of.size():
+		if zone_of[i].a > 0:
+			overlay.set_pixel(i % map.width, i / map.width, Color(zone_of[i], 0.35))
+	overlay.resize(map.width * res, map.height * res, Image.INTERPOLATE_NEAREST)
+	img.blend_rect(overlay, Rect2i(Vector2i.ZERO, overlay.get_size()), Vector2i.ZERO)
+	# The rim is a thin line on the zone's own side of each border edge (user: "much thinner").
+	var lw := maxi(1, res / 8)
+	for y in map.height:
+		for x in map.width:
+			var tint := zone_of[y * map.width + x]
+			if tint.a == 0: continue
+			for d: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				var n := Vector2i(x, y) + d
+				if n.x >= 0 and n.y >= 0 and n.x < map.width and n.y < map.height \
+						and zone_of[n.y * map.width + n.x] == tint:
+					continue
+				var o := Vector2i(x, y) * res
+				var edge := Rect2i(o + Vector2i(res - lw, 0), Vector2i(lw, res)) if d.x > 0 \
+						else (Rect2i(o, Vector2i(lw, res)) if d.x < 0 \
+						else (Rect2i(o + Vector2i(0, res - lw), Vector2i(res, lw)) if d.y > 0 \
+						else Rect2i(o, Vector2i(res, lw))))
+				img.fill_rect(edge, Color(tint, 1.0))
 	# Keep map-authored civilians visible in the textured preview.
 	# A saved battlefield (0.11) also shows where each army stands, in its slot colour.
 	for spawn: Dictionary in map.spawns:
@@ -1566,3 +1590,22 @@ static func map_preview(map: MapData, tints: Dictionary = {}, bands: Dictionary 
 			Vector2i.ONE * maxi(1, res / 2)), colour)
 	GridCell.logs_restore(saved)
 	return ImageTexture.create_from_image(img)
+
+## Heightmap mode (0.11.1): the height of a cover tile as a plain number — "0.5", "1",
+## "1.5", "2". Empty for open ground and space.
+static func height_text(cell_height: float, space := false) -> String:
+	if space or cell_height <= 0.0:
+		return ""
+	var tenths := roundi(cell_height * 10.0)
+	return str(tenths / 10) if tenths % 10 == 0 else "%d.%d" % [tenths / 10, tenths % 10]
+
+## One label, centred on the cell (at is the cell's top-left corner, side its size). Full
+## 2 m walls are drawn dimmer so the low cover between them stands out.
+static func draw_height_text(ci: CanvasItem, font: Font, at: Vector2, side: float, text: String,
+		wall := false) -> void:
+	var fs := maxi(8, int(side * 0.36))
+	var pos := at + Vector2(0, side * 0.5 + fs * 0.35)
+	ci.draw_string_outline(font, pos, text, HORIZONTAL_ALIGNMENT_CENTER, side, fs, 3,
+			Color(0, 0, 0, 0.5 if wall else 0.9))
+	ci.draw_string(font, pos, text, HORIZONTAL_ALIGNMENT_CENTER, side, fs,
+			Color(0.8, 0.8, 0.8, 0.55) if wall else Color(1, 0.95, 0.6))

@@ -482,10 +482,38 @@ const LIGHT_TINTS := [["Lamp's own", Color(0, 0, 0, 0)], ["Warm", Color(1.0, 0.7
 		["Amber", Color(1.0, 0.58, 0.12)], ["Green", Color(0.32, 1.0, 0.42)], ["Blue", Color(0.32, 0.52, 1.0)],
 		["Purple", Color(0.74, 0.38, 1.0)]]
 
+## Brightness a map maker can give any lamp (0.11.1, the same right-click menu): a
+## multiplier on the lamp's own strength. Index 0 is the lamp as designed.
+const LIGHT_LEVELS := [["100 %", 1.0], ["25 %", 0.25], ["50 %", 0.5], ["75 %", 0.75],
+		["150 %", 1.5], ["200 %", 2.0], ["300 %", 3.0]]
+
+## A lamp's tint byte (MapData.light_tint, the wall-lamp record's 4th field) holds both
+## choices: the low four bits are the colour (LIGHT_TINTS), the high four the brightness
+## (LIGHT_LEVELS). A 0.11 byte is just a colour, so old maps read unchanged.
+static func tint_colour(tint: int) -> int:
+	return tint & 0x0F
+
+static func tint_level(tint: int) -> int:
+	return (tint >> 4) & 0x0F
+
+static func make_tint(colour: int, level: int) -> int:
+	return (level << 4) | colour
+
+## Anything unknown falls back to the lamp's own colour / normal brightness.
+static func clean_tint(tint: int) -> int:
+	var c := tint_colour(tint)
+	var l := tint_level(tint)
+	return make_tint(c if c < LIGHT_TINTS.size() else 0, l if l < LIGHT_LEVELS.size() else 0)
+
+static func light_scale_of(tint: int) -> float:
+	var l := tint_level(tint)
+	return float(LIGHT_LEVELS[l][1]) if l < LIGHT_LEVELS.size() else 1.0
+
 ## The light colour of a lamp with this tint (0 = its own colour from DEFS).
 static func light_color_of(id: String, tint: int) -> Color:
-	if tint > 0 and tint < LIGHT_TINTS.size():
-		return LIGHT_TINTS[tint][1]
+	var c := tint_colour(tint)
+	if c > 0 and c < LIGHT_TINTS.size():
+		return LIGHT_TINTS[c][1]
 	return DEFS.get(id, {}).get("light_color", Color.WHITE)
 
 static func emits_light(id: String) -> bool:

@@ -170,6 +170,8 @@ func _decide(state: GameState) -> Dictionary:
 
 func _engage_fallback(state: GameState, reason: String) -> void:
 	_fallback = AIController.new(owner, AIController.Difficulty.HARD)
+	if _match_resolver != null and _match_resolver.get_ref() != null:
+		_fallback.bind_match(_match_resolver.get_ref())
 	# A lambda capturing this RefCounted controller creates a cycle through the
 	# owned fallback. A method Callable forwards the same signal without retaining us.
 	_fallback.intent_ready.connect(_on_fallback_intent)
