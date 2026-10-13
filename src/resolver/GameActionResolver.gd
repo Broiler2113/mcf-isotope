@@ -3499,6 +3499,11 @@ func _ortho4(coord: Vector2i) -> Array[Vector2i]:
 ## Явно прописанный в статах sight_range при этом уважается: если однажды понадобится
 ## близорукий юнит, менять здесь ничего не придётся.
 func sight_of(unit: UnitInstance) -> int:
+	# Дрон над стеной (0.11.3, просьба игрока) не видит ничего, кроме своей клетки: он
+	# в толще стены, и обзор закрыт во все стороны. Обход окна радиуса 0 — одна клетка.
+	if unit.is_drone and state.grid.in_bounds(unit.coord) \
+			and state.grid.cell_fast(unit.coord.x, unit.coord.y).blocks_sight():
+		return 0
 	var s: int = unit.stats.sight_range
 	return s if s > 0 else MCF.SIGHT_UNLIMITED
 
@@ -3509,10 +3514,10 @@ func sight_of(unit: UnitInstance) -> int:
 ## клетку в радиусе обзора каждого бойца, то есть тысячи массивов на один пересчёт.
 ## Порядок обхода и условие обрыва буква в букву те же, что были у _ray_cells;
 ## сама она удалена — других вызывающих у неё не осталось.
-func _vision_blocked(a: Vector2i, b: Vector2i, viewer: int = -1) -> bool:
+func _vision_blocked(a: Vector2i, b: Vector2i, viewer: int = -1, through_gas: bool = false) -> bool:
 	if _line_off_board(a, b):
 		return true
-	if a != b and (state.grid.cell_fast(a.x, a.y).gas or state.grid.cell_fast(b.x, b.y).gas):
+	if not through_gas and a != b and (state.grid.cell_fast(a.x, a.y).gas or state.grid.cell_fast(b.x, b.y).gas):
 		return true
 	var sig := _tank_sig(viewer)
 	var tanks: PackedInt32Array = _tank_sig_cells[sig] if sig != 0 else PackedInt32Array()
@@ -3543,11 +3548,47 @@ func _vision_blocked(a: Vector2i, b: Vector2i, viewer: int = -1) -> bool:
 		# стоит здесь дёшево: до него доходят только клетки, уже опознанные как стена.
 		# Живые обзор не перекрывают, машины — тоже, КРОМЕ вражеского танка: его корпус
 		# закрывает обзор противнику (не своим). Стена и закрытый шлюз — GridCell.blocks_sight().
-		if cell.gas or (cell.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(cell.feature_id)):
+		if (cell.gas and not through_gas) \
+				or (cell.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(cell.feature_id)):
 			return true
 		if not tanks.is_empty() and tanks.has(cy * grid.width + cx):
 			return true
 	return false
+
+## Газовые клетки, которые команда видит (0.11.3: «gas shouldn't be visible in any fog of
+## war»). Сам газ непрозрачен — что в нём, не видно, — но облако видно там, куда дотянулся
+## бы взгляд, будь газ прозрачным: стены и вражеские танки закрывают его как обычно. Кеш —
+## до первого шага или правки рельефа (газ — тоже правка обзора).
+## ponytail: луч на каждую пару «клетка газа × глаз», с выходом на первом увидевшем;
+## если облака станут огромными, считать проходом _sweep по маске без газа.
+var _gas_seen: Dictionary = {}   # owner -> [vision_epoch, vision_version, {Vector2i: true}]
+func team_sees_gas(owner: int) -> Dictionary:
+	var hit: Array = _gas_seen.get(owner, [])
+	if not hit.is_empty() and hit[0] == UnitInstance.vision_epoch and hit[1] == GridCell.vision_version:
+		return hit[2]
+	_sync_seen()
+	var out := {}
+	if not _sight_gas.is_empty():
+		var gw := state.grid.width
+		var sides := _vision_sides(owner)
+		var eyes: Array = []   # [клетка, дальность по Чебышёву]
+		for u in state.all_units():
+			if u.is_alive() and sides.has(u.owner) and u.aboard_vehicle_id == -1:
+				eyes.append([u.coord, sight_of(u)])
+		for veh: Vehicle in state.all_vehicles():
+			if not veh.wrecked and sides.has(veh.owner) and not veh.occupants.is_empty():
+				for c: Vector2i in veh.footprint():
+					eyes.append([c, MCF.SIGHT_UNLIMITED])
+		for i: int in _sight_gas:
+			var g := Vector2i(i % gw, i / gw)
+			for e: Array in eyes:
+				var at: Vector2i = e[0]
+				if maxi(absi(at.x - g.x), absi(at.y - g.y)) <= int(e[1]) \
+						and not _vision_blocked(at, g, owner, true):
+					out[g] = true
+					break
+	_gas_seen[owner] = [UnitInstance.vision_epoch, GridCell.vision_version, out]
+	return out
 
 ## Видит ли команда владельца эту клетку (общая видимость, §3.9).
 ##

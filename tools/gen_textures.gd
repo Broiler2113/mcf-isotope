@@ -40,6 +40,12 @@ func _initialize() -> void:
 		print("solar panels written to %s in %d ms" % [OUT, Time.get_ticks_msec() - t0])
 		quit()
 		return
+	# `-- --wood` — только деревянная стена (0.11.3).
+	if "--wood" in OS.get_cmdline_user_args():
+		_sheet("wood_wall", _timber, Color8(104, 72, 44), 3)
+		print("wood wall written to %s in %d ms" % [OUT, Time.get_ticks_msec() - t0])
+		quit()
+		return
 	# `-- --doors` — только двери (0.9.2), остальное байт в байт.
 	if "--doors" in OS.get_cmdline_user_args():
 		_doors_all()
@@ -498,15 +504,13 @@ func _dark_brick(x: int, y: int, v: int, _mask: int) -> Color:
 	var c := Color8(96, 50, 40).lerp(Color8(122, 70, 54), tone)
 	return _shade(c, 0.88 + 0.2 * _tn(x, y, 16, 153))
 
-## Тяжёлый брус: вертикальные доски по 16 px, волокно, сучки у вариантов.
+## Тяжёлый брус: вертикальные доски по 8 px, волокно; без сучков (0.11.3).
 func _timber(x: int, y: int, v: int, _mask: int) -> Color:
 	var plank := x / 8
 	var c := _shade(Color8(102, 70, 42), 0.78 + 0.32 * _tn(x, y, 8, 161 + plank, 2))
 	if x % 8 == 7:
 		c = _shade(c, 0.55)
-	var knot := Vector2(4 + plank * 8, 8 + _h(plank, v, 162) * 16)
-	if Vector2(x, y).distance_to(knot) < 1.6 and _h(plank, v, 163) > 0.5 and _inner(x, y, 2.0) > 0.0:
-		c = _shade(c, 0.6)
+	# Сучков больше нет (0.11.3): тёмная точка на доске читалась как дыра в стене.
 	return c
 
 ## Броня: тёмная сталь, раскосы и двойные ряды заклёпок.

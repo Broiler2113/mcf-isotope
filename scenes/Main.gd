@@ -87,6 +87,8 @@ var _hide_all_draw: bool = false    # скрыть все (batch 17, item 10)
 const K_CHAT := "chat"
 ## Выпадающий темп ИИ на панели (item 5).
 var _ai_speed_opt: OptionButton = null
+## Строка темпа целиком: видна при ИИ в составе или налётчиках на поле (0.11.3).
+var _ai_speed_row: Control = null
 ## Игрок уже подтвердил выстрел по своим (item 13) — повторный клик идёт без вопроса.
 var _beam_confirmed := false
 const K_DRAW := "draw"
@@ -396,6 +398,9 @@ var _before_grid: Grid = null
 var _before_tiles: TerrainTiles = null
 var _before_units: Array = []      # [stats_id, owner, coord, UnitInstance of the opening board]
 var _before_vehicles: Array = []   # [type_id, owner, origin, size, facing]
+## Что каждая сторона видела в начале боя (0.11.3): под туманом «было» показывает чужих
+## только там, где их видели, — иначе стартовая доска выдавала расстановку противника.
+var _before_seen: Dictionary = {}  # side -> {Vector2i: true}
 var _before_on := false
 var _before_layer: BeforeLayer = null
 var _before_btn: Button = null
@@ -3164,6 +3169,15 @@ func _toggle_pause() -> void:
 	if not _paused:
 		_kick_if_ai()
 
+## Строка темпа ИИ видна, пока есть кем его менять: ИИ в составе или налётчики на поле.
+func _refresh_ai_speed_row() -> void:
+	if _ai_speed_row == null or state == null or state.roster == null:
+		return
+	_ai_speed_row.visible = state.roster.slots.any(
+			func(sl: Roster.Slot) -> bool: return sl.kind == Roster.SlotKind.AI) \
+			or state.all_units().any(
+			func(u: UnitInstance) -> bool: return MCF.is_independent(u.owner) and u.is_alive())
+
 ## Кнопка паузы видна только там, где пауза имеет смысл, и всегда говорит, что сделает.
 func _refresh_pause_button() -> void:
 	if _pause_btn == null:
@@ -3293,6 +3307,29 @@ func _capture_opening_view() -> void:
 	for veh: Vehicle in opening.all_vehicles():
 		if not veh.wrecked:
 			_before_vehicles.append([veh.type_id, veh.owner, veh.origin, veh.size, veh.facing])
+	_before_seen.clear()
+	if resolver != null and resolver.fog_enabled and state.roster != null:
+		var vr := resolver
+		if opening != state:
+			# Загруженная партия: обзор стартовой доски считает свой резолвер. Кеш обзора
+			# общий, но привязан к сетке — живой резолвер просто пересоберёт его.
+			if opening.roster == null:
+				opening.roster = state.roster
+			vr = GameActionResolver.new(opening)
+			vr.fog_mode = resolver.fog_mode
+		for side: int in state.roster.player_ids():
+			_before_seen[side] = vr.team_visible_coords(side).duplicate()
+
+## Показывать ли на «было» бойца или машину стороны owner на клетках cells зрителю viewer:
+## без тумана — всегда; свои и союзники — всегда; чужие — если их клетку видели в начале.
+func _before_known(owner: int, cells: Array, viewer: int) -> bool:
+	if not _view_resolver().fog_enabled or state.roster.are_allies(viewer, owner):
+		return true
+	var seen: Dictionary = _before_seen.get(viewer, {})
+	for c: Vector2i in cells:
+		if seen.has(c):
+			return true
+	return false
 
 func _toggle_before() -> void:
 	if _before_grid == null:
@@ -3337,10 +3374,18 @@ func _draw_before(ci: Node2D) -> void:
 	_before_tiles.draw(ci, ORIGIN, float(CELL), x0, y0, x1, y1, false, res)
 	TerrainTiles.draw_grid(ci, ORIGIN, float(CELL), x0, y0, x1, y1, Ui.grid_color(), 1.0 / zoom)
 	_before_tiles.draw(ci, ORIGIN, float(CELL), x0, y0, x1, y1, true, res)
+	# Туман (0.11.3): на «было» та же завеса, что и в бою, — открыто только то, что видно
+	# сейчас (обычный туман — серая вуаль, реалистичный — чернота). Текстура та же, что у
+	# дальнего плана: её держит в согласии с обзором _lod_sync на каждом кадре боя.
+	var viewer := _viewing_side()
+	if _view_resolver().fog_enabled and _lod != null and _lod.fog != null:
+		ci.draw_texture_rect(_lod.fog, Rect2(ORIGIN, Vector2(g.width, g.height) * CELL), false)
 	# Картинки бойцов и машин — в системе самого слоя (у него уже pan и zoom).
 	Sprites.set_base_transform(Vector2.ZERO, Vector2.ONE)
 	var font := ThemeDB.fallback_font
 	for v: Array in _before_vehicles:
+		if not _before_known(int(v[1]), Vehicle.footprint_at(v[2], v[3]), viewer):
+			continue
 		var org := ORIGIN + Vector2(v[2]) * CELL
 		var vsize := Vector2(v[3]) * CELL
 		var col := _side_color(int(v[1]))
@@ -3354,6 +3399,8 @@ func _draw_before(ci: Node2D) -> void:
 	# disc with its outline and role tag — no extra ring.
 	var details := zoom >= UNIT_DETAIL_ZOOM
 	for u: Array in _before_units:
+		if not _before_known(int(u[1]), [u[2]], viewer):
+			continue
 		var unit: UnitInstance = u[3]
 		var o := ORIGIN + Vector2(u[2]) * CELL
 		var c := o + Vector2(CELL, CELL) * 0.5
@@ -4925,6 +4972,10 @@ var _shown_grid: Grid = null        # что рисуется в этом кад
 var _fog_mem_dmg: Dictionary = {}
 var _fog_mem_dmg_seen: int = -1     # до какой _fx.damage_version доведена память
 var _fog_mem_dmg_ver: int = 0
+## Косметика и тела — тоже как их видел зритель (0.11.3): гильза, осколки, лазерный след,
+## кровь и труп, появившиеся в темноте, не видны, пока туда не посмотрят.
+var _fog_mem_fx: Dictionary = {}       # viewer -> DecalMemory
+var _fog_mem_corpses: Dictionary = {}  # viewer -> {клетка: [павший или null, сколько тел]}
 
 func _board_memory(viewer: int, visible: Dictionary, vis_changed: Variant) -> Grid:
 	var grid := state.grid
@@ -4933,16 +4984,22 @@ func _board_memory(viewer: int, visible: Dictionary, vis_changed: Variant) -> Gr
 		_fog_mem_grid = grid
 		_fog_mem_viewer = -999
 		_fog_mem_dmg = {}
+		_fog_mem_fx = {}
+		_fog_mem_corpses = {}
 		for side: int in state.roster.player_ids():
 			var pc: PlayerController = controllers.get(side)
 			if side == viewer or (pc != null and pc.is_local_human()):
 				_fog_mem[side] = _clone_board(grid)
 				_fog_mem_dmg[side] = _fx.floor_damage.duplicate()
+				_fog_mem_fx[side] = DecalMemory.new(_fx)
+				_fog_mem_corpses[side] = _corpse_map()
 	var mem: Grid = _fog_mem.get(viewer)
 	if mem == null:
 		mem = _clone_board(grid)
 		_fog_mem[viewer] = mem
 		_fog_mem_dmg[viewer] = _fx.floor_damage.duplicate()
+		_fog_mem_fx[viewer] = DecalMemory.new(_fx)
+		_fog_mem_corpses[viewer] = _corpse_map()
 	var dmg: Dictionary = _fog_mem_dmg[viewer]
 	var dmg_all := viewer != _fog_mem_viewer or vis_changed == null \
 			or _fog_mem_dmg_seen != _fx.damage_version
@@ -5042,10 +5099,22 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, fog_on: bool) -> voi
 	# Под туманом рельеф и объекты рисуются с доски, какой её помнит зритель (issues-12 #4).
 	var vis_changed: Variant = []
 	var shown := grid
+	var decals: FxDecals = _fx
+	var dmem: DecalMemory = null
 	if fog_on:
 		vis_changed = _view_resolver().take_vis_changes(viewer)
+		var switched := viewer != _fog_mem_viewer
 		shown = _board_memory(viewer, visible, vis_changed)
+		# Косметика — по той же памяти (0.11.3): новый зритель сверяется целиком.
+		dmem = _fog_mem_fx[viewer]
+		dmem.update(_fx, visible, null if switched else vis_changed, gw)
+		_fx.decal_dirty.clear()   # живой слой под туманом плиткам не отдаётся
+		decals = dmem.view
 	_shown_grid = shown
+	# Щебень и воронки дальнего плана — тоже из памяти зрителя: раньше отъезд показывал
+	# взрывы, случившиеся в темноте (0.11.3).
+	_lod_damage_src = _fog_mem_dmg.get(viewer, {}) if fog_on else _fx.floor_damage
+	var dmg_ver: int = _fog_mem_dmg_ver if fog_on else _fx.damage_version
 	var tiles_key: Array = [shown.get_instance_id(), fog_on]
 	if _tiles == null or _tiles_grid != tiles_key:
 		_tiles = TerrainTiles.new(shown, state.env)
@@ -5060,7 +5129,7 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, fog_on: bool) -> voi
 			_tiles.sync(_fog_mem_dmg.get(viewer, {}), _fog_mem_dmg_ver)
 		else:
 			_tiles.sync(_fx.floor_damage, _fx.damage_version)
-		_tiles.sync_decals(_fx)
+		_tiles.sync_decals(decals)
 		_lod.near_cells = Rect2i(_cull_x0, _cull_y0, _cull_x1 - _cull_x0, _cull_y1 - _cull_y0) \
 				.intersection(Rect2i(0, 0, gw - 1, gh - 1))
 		_lod.queue_redraw()
@@ -5073,8 +5142,8 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, fog_on: bool) -> voi
 		if tkey != _lod_terrain_key or _lod_terrain == null or _lod_look_ver < GridCell.look_log_base:
 			_lod_terrain_key = tkey
 			_lod_build_terrain()
-			_lod_damage_ver = _fx.damage_version
-			_lod_damaged = _fx.floor_damage.duplicate()
+			_lod_damage_ver = dmg_ver
+			_lod_damaged = _lod_damage_src.duplicate()
 			_lod.terrain = null
 			_lod.features = null
 		else:
@@ -5090,20 +5159,20 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, fog_on: bool) -> voi
 						_lod_features.set_pixel(x, y, _lod_feature_color(lc))
 					i += 2
 				_lod_terrain_stale = true
-			if _lod_damage_ver != _fx.damage_version:
+			if _lod_damage_ver != dmg_ver:
 				# Копоть живёт в косметике, а не в клетках: перекрашиваем и прежние побитые
 				# клетки (перемотка повтора её стирает), и нынешние.
 				for c: Vector2i in _lod_damaged:
 					if grid.in_bounds(c):
 						_lod_terrain.set_pixel(c.x, c.y, _lod_color(shown.cell(c)))
-				for c: Vector2i in _fx.floor_damage:
+				for c: Vector2i in _lod_damage_src:
 					if grid.in_bounds(c):
 						_lod_terrain.set_pixel(c.x, c.y, _lod_color(shown.cell(c)))
-				_lod_damage_ver = _fx.damage_version
-				_lod_damaged = _fx.floor_damage.duplicate()
+				_lod_damage_ver = dmg_ver
+				_lod_damaged = _lod_damage_src.duplicate()
 				_lod_terrain_stale = true
 		_lod_look_ver = GridCell.look_version
-		_lod_sync_decals(grid)
+		_lod_sync_decals(grid, dmem, shown)
 	# Туман: целиком — при смене доски, зрителя или режима; иначе только клетки, чья
 	# видимость сменилась (take_vis_changes; null — «сменилось всё»).
 	if fog_on:
@@ -5149,7 +5218,7 @@ func _lod_build_terrain() -> void:
 	bytes.resize(grid.width * grid.height * 4)
 	var fbytes := PackedByteArray()
 	fbytes.resize(grid.width * grid.height * 4)   # нули — прозрачно: объекта нет
-	var plain := _lod_tex_avg.is_empty() and _fx.floor_damage.is_empty()
+	var plain := _lod_tex_avg.is_empty() and _lod_damage_src.is_empty()
 	var floor_u := _rgba32(LOD_FLOOR)
 	var wall_u := _rgba32(LOD_WALL)
 	var space_u := _rgba32(LOD_SPACE)
@@ -5198,8 +5267,8 @@ func _lod_color(cell: GridCell) -> Color:
 	var is_wall := cell.cover_height >= MCF.WALL_HEIGHT \
 			and (cell.feature_id != MCF.FEATURE_BOUNDARY or state.env == "bunker")
 	var damage: int = 0
-	if not _fx.floor_damage.is_empty():
-		damage = int(_fx.floor_damage.get(cell.coord, 0))
+	if not _lod_damage_src.is_empty():
+		damage = int(_lod_damage_src.get(cell.coord, 0))
 	var look := state.grid.look_at(cell.coord.x, cell.coord.y) if not state.grid.floor_look.is_empty() else 0
 	# Почти вся карта — голый пол или голая стена без картинок-замен: цвет готов.
 	if damage == 0 and not cell.on_fire and _lod_tex_avg.is_empty():
@@ -5278,10 +5347,29 @@ func _lod_feature_color(cell: GridCell) -> Color:
 ## дальний план собирается заново.
 var _lod_decal_reset := -1
 var _lod_decal_done := 0
+## Картинка рельефа, в которую подмешана косметика: пересобранная картинка — без неё.
+var _lod_decal_img := 0
+## Щебень дальнего плана: живой (без тумана) или память зрителя (_lod_sync).
+var _lod_damage_src: Dictionary = {}
 
-func _lod_sync_decals(grid: Grid) -> void:
+func _lod_sync_decals(grid: Grid, dmem: DecalMemory = null, shown: Grid = null) -> void:
 	if _lod_terrain == null:
 		return
+	var fresh := _lod_decal_img != _lod_terrain.get_instance_id()
+	_lod_decal_img = _lod_terrain.get_instance_id()
+	if dmem != null:
+		# Под туманом — запомненная косметика зрителя (0.11.3). Она может и УБЫТЬ (зритель
+		# увидел, что лужа сгорела), поэтому правка — кусками: клетки куска заново по
+		# рельефу, и сверху то, что в куске помнится.
+		var chunks: Variant = dmem.view.by_chunk if fresh else dmem.lod_dirty
+		for cc: Vector2i in chunks:
+			_lod_recolor_chunk(cc, grid, shown, dmem.view)
+		dmem.lod_dirty.clear()
+		_lod_decal_reset = -1   # к живому слою — потом с нуля
+		_lod_terrain_stale = true
+		return
+	if fresh:
+		_lod_decal_done = 0
 	if _lod_decal_reset != _fx.decal_reset:
 		_lod_decal_reset = _fx.decal_reset
 		_lod_decal_done = 0
@@ -5315,6 +5403,24 @@ func _lod_sync_decals(grid: Grid) -> void:
 	_lod_decal_done = total
 	_lod_terrain_stale = true
 
+## Кусок дальнего плана заново: рельеф клеток куска и подмешанная поверх косметика.
+func _lod_recolor_chunk(cc: Vector2i, grid: Grid, shown: Grid, fx: FxDecals) -> void:
+	var c0 := cc * FxDecals.DECAL_CHUNK
+	for y in range(maxi(0, c0.y), mini(grid.height, c0.y + FxDecals.DECAL_CHUNK)):
+		for x in range(maxi(0, c0.x), mini(grid.width, c0.x + FxDecals.DECAL_CHUNK)):
+			_lod_terrain.set_pixel(x, y, _lod_color(shown.cell_fast(x, y)))
+	for p: Dictionary in fx.by_chunk.get(cc, []):
+		var pos: Vector2 = p["pos"]
+		var c := Vector2i(floori(pos.x), floori(pos.y))
+		if not grid.in_bounds(c):
+			continue
+		var look: Array = FxDecals.LOOK.get(str(p["kind"]), [])
+		if look.is_empty():
+			continue
+		var col: Color = look[1]
+		var cover: float = clampf(float(look[0]) * float(p["scale"]), 0.08, 1.0) * col.a
+		_lod_terrain.set_pixel(c.x, c.y, _lod_terrain.get_pixel(c.x, c.y).lerp(col, cover))
+
 ## Средние цвета картинок-замен пола и объектов (#55): на дальнем плане картинка — это
 ## её цвет. Считается раз на сборку рельефа.
 func _lod_texture_averages() -> Dictionary:
@@ -5338,6 +5444,27 @@ func _lod_texture_averages() -> Dictionary:
 			img.decompress()
 		img.resize(1, 1, Image.INTERPOLATE_BILINEAR)
 		out[n] = img.get_pixel(0, 0)
+	return out
+
+## Тела на поле сейчас: клетка -> [павший на месте или null, сколько тел]. Смерти, ещё не
+## доигранные броском (#46), сюда не входят — они пока рисуются живыми. Куча (#98) и
+## павший на её клетке — один стек с общим числом, без картинки павшего.
+func _corpse_map() -> Dictionary:
+	var out := {}
+	for unit: UnitInstance in state.all_units():
+		if unit.status != MCF.Status.CORPSE or _pending_death_ids.has(unit.id):
+			continue
+		# Раздавленный гусеницами труп вычищается из клетки (occupant = null), но сам
+		# UnitInstance остаётся в списке — без этой проверки он всплывал бы призраком.
+		var cell := state.grid.cell(unit.coord)
+		if cell == null or cell.occupant != unit:
+			continue
+		out[unit.coord] = [unit, 1]
+	for pc: Vector2i in _pile_cells():
+		var pile := state.grid.cell(pc)
+		if pile == null or pile.corpse_count <= 0:
+			continue
+		out[pc] = [null, pile.corpse_count + (1 if out.has(pc) else 0)]
 	return out
 
 ## Клетки с кучами тел (cell.corpse_count > 0). Кучи рисуются отдельным проходом, и
@@ -5861,46 +5988,25 @@ func _draw() -> void:
 	# Кучи не рисовались вовсе: тело давало +1 к защите, но на карте его не было.
 	# Реалистичный туман прячет вне обзора всё (issues-12 #16) — и тела тоже.
 	var blackout: bool = fog_on and _view_resolver().fog_mode == MCF.Fog.REALISTIC
-	for unit: UnitInstance in state.all_units():
-		# Самые дешёвые отсевы — первыми (batch mp-perf): на большой карте почти все юниты
-		# живы или за краем экрана, и вызовы функций на каждого стоили больше самой отрисовки.
-		if unit.status != MCF.Status.CORPSE:
+	# Обычный туман (0.11.3): тела — как их видел зритель. Упавший в темноте не виден,
+	# пока туда не посмотрят; унесённый в темноте лежит, пока туда не посмотрят. Прежнее
+	# правило playtest-20 «тела видны и под туманом» этим заменено.
+	var corpses := _corpse_map()
+	if fog_on and not blackout and _fog_mem_corpses.has(viewer):
+		var cmem: Dictionary = _fog_mem_corpses[viewer]
+		for c: Vector2i in corpses:
+			if visible.has(c):
+				cmem[c] = corpses[c]
+		for c: Vector2i in cmem.keys():
+			if visible.has(c) and not corpses.has(c):
+				cmem.erase(c)
+		corpses = cmem
+	for c: Vector2i in corpses:
+		if c.x < vx0 or c.x > vx1 or c.y < vy0 or c.y > vy1 or not _cell_on_screen(c.x, c.y) \
+				or (blackout and not visible.has(c)):
 			continue
-		var uc := unit.coord
-		if uc.x < vx0 or uc.x > vx1 or uc.y < vy0 or uc.y > vy1:
-			continue
-		if _pending_death_ids.has(unit.id):
-			continue
-		# Трупы видны и под туманом (playtest-20): тело никуда не уходит, и поле боя
-		# должно его показывать.
-		# Раздавленный гусеницами труп вычищается из клетки (occupant = null), но сам
-		# UnitInstance остаётся в списке — без этой проверки он всплывал бы призраком.
-		if state.grid.cell(unit.coord) == null or state.grid.cell(unit.coord).occupant != unit:
-			continue
-		# На клетке может лежать и куча — тогда её рисует проход ниже, одним стеком с
-		# общим числом (#98). Без этого два вида трупа накладывались друг на друга и
-		# счётчик врал: сверху «x2», а под ним ещё один невидимый труп-occupant.
-		if state.grid.cell(unit.coord).corpse_count > 0:
-			continue
-		if not _cell_on_screen(unit.coord.x, unit.coord.y) or (blackout and not visible.has(uc)):
-			continue
-		_draw_corpse(unit.coord, 1, unit)
-
-	# Кучи трупов — по списку куч и только в видимом окне (item 5), а не по всей сетке.
-	for pile_coord: Vector2i in _pile_cells():
-		if not _cell_on_screen(pile_coord.x, pile_coord.y) or (blackout and not visible.has(pile_coord)):
-			continue
-		var pile_cell := state.grid.cell(pile_coord)
-		if pile_cell == null or pile_cell.corpse_count <= 0:
-			continue
-		# Павший на месте боец — такое же тело в стеке. Пока его смерть не доиграна
-		# (#46), он показан живым, поэтому в счёт стека не идёт.
-		var stack := pile_cell.corpse_count
-		var pile_occ: UnitInstance = pile_cell.occupant
-		if pile_occ != null and pile_occ.status == MCF.Status.CORPSE \
-				and not _pending_death_ids.has(pile_occ.id):
-			stack += 1
-		_draw_corpse(pile_coord, stack)
+		var e: Array = corpses[c]
+		_draw_corpse(c, int(e[1]), e[0])
 
 	# Корпуса машин (§техника): прямоугольник по всему следу, цвет владельца.
 	for veh: Vehicle in state.all_vehicles():
@@ -6244,10 +6350,15 @@ func _draw_laser_preview(shooter: UnitInstance, aim: Vector2i) -> void:
 func _draw_fx_props(visible: Dictionary) -> void:
 	_draw_fx_lanes(visible)
 	_draw_fx_flashes(visible)
-	# Пули-трассеры (item 16): жёлтый штрих летит от стрелка к цели.
+	# Пули-трассеры (item 16): жёлтый штрих летит от стрелка к цели. Под туманом —
+	# только там, где голова пули в обзоре (0.11.3): трассер из темноты выдавал стрелка.
+	var tr_fog: bool = _view_resolver().visibility_limited()
 	for tr: Dictionary in _fx.tracers:
 		var k: float = clampf(float(tr["t"]) / maxf(0.001, float(tr["dur"])), 0.0, 1.0)
 		if k <= 0.0:
+			continue
+		var head_cell: Vector2 = Vector2(tr["from"]).lerp(Vector2(tr["to"]), k)
+		if tr_fog and not visible.has(Vector2i(floori(head_cell.x), floori(head_cell.y))):
 			continue
 		var tf: Vector2 = ORIGIN + Vector2(tr["from"]) * CELL
 		var tt: Vector2 = ORIGIN + Vector2(tr["to"]) * CELL
@@ -6270,8 +6381,8 @@ func _draw_fx_props(visible: Dictionary) -> void:
 ## удара, и подсвеченный участок края там, откуда придёт независимая армия. Стоящий газ
 ## рисуется своей зелёной пеленой с остатком раундов.
 ##
-## Туман войны тут не при чём: предупреждение объявлено ВСЕМ (его слышат по радио), а газ
-## виден любому, кто смотрит на поле.
+## Туман войны тут не при чём: предупреждение объявлено ВСЕМ (его слышат по радио). Сам
+## газ под туманом виден лишь там, куда смотрят (0.11.3, _draw_gas_tiles).
 const EVENT_COLORS := {
 	"mortar": Color(0.95, 0.45, 0.15, 1.0),
 	"gas": Color(0.95, 0.95, 0.95, 1.0),
@@ -6334,6 +6445,11 @@ func _draw_gas_tiles(alpha: float, fill: bool) -> void:
 		_gas_canvas_texture.diffuse_texture = tex
 		_gas_canvas_texture.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	var drawn := {}
+	# Туман войны (0.11.3): газ виден только там, куда смотрят (Resolver.team_sees_gas —
+	# в обзор сама газовая клетка не входит: газ прячет то, что внутри). Без тумана газ
+	# виден весь, как и раньше. Рамка и счётчик зоны — объявленное событие, они остаются.
+	var view := _view_resolver()
+	var seen: Dictionary = view.team_sees_gas(_viewing_side()) if view.fog_enabled else {}
 	for cl: Dictionary in resolver.random_events.clouds:
 		var x0 := maxi(_cull_x0, int(cl["x"]))
 		var x1 := mini(_cull_x1, int(cl["x"]) + int(cl["w"]) - 1)
@@ -6345,6 +6461,8 @@ func _draw_gas_tiles(alpha: float, fill: bool) -> void:
 				if drawn.has(coord) or not GasTiles.at(state.grid, coord):
 					continue
 				drawn[coord] = true
+				if view.fog_enabled and not seen.has(coord):
+					continue
 				var cell_rect := Rect2(ORIGIN + Vector2(x, y) * CELL, Vector2(CELL, CELL))
 				if tex != null:
 					var src := GasTiles.source_rect(tex, coord, GasTiles.mask_at(state.grid, coord))
@@ -6838,11 +6956,13 @@ func _build_ui() -> void:
 	# Камера к своим (item 10): «Me» всегда, а в командной игре — и к каждому союзнику.
 	tools_box.add_child(_camera_row())
 	if _spectator: _build_spectator_controls(tools_box)
-	# Темп ИИ (item 5): видно, если в партии есть ИИ, а менять может хост (или игрок в
-	# одиночной партии) — гостям скорость приходит от хоста.
-	if state != null and state.roster != null and state.roster.slots.any(
-			func(sl: Roster.Slot) -> bool: return sl.kind == Roster.SlotKind.AI):
+	# Темп ИИ (item 5): видно, если в партии есть ИИ или пришли налётчики (0.11.3: их
+	# ход идёт с тем же темпом), а менять может хост (или игрок в одиночной партии) —
+	# гостям скорость приходит от хоста. Строка строится всегда: налётчики появляются
+	# посреди боя, и показывает её _refresh_ai_speed_row.
+	if state != null and state.roster != null:
 		var sp_row := HBoxContainer.new()
+		_ai_speed_row = sp_row
 		var sp_lbl := Label.new()
 		sp_lbl.text = "AI speed"
 		sp_lbl.add_theme_font_size_override("font_size", 11)
@@ -6855,11 +6975,12 @@ func _build_ui() -> void:
 		_ai_speed_opt.add_theme_font_size_override("font_size", 12)
 		# Панель строится ДО подключения сети (_adopt_network) — роль берём из передачи лобби.
 		_ai_speed_opt.disabled = NetHandoff.session != null and not NetHandoff.is_host
-		_ai_speed_opt.tooltip_text = "How fast AI sides play. Only the host can change it."
+		_ai_speed_opt.tooltip_text = "How fast AI sides and raiders play. Only the host can change it."
 		_ai_speed_opt.item_selected.connect(func(i: int) -> void:
 			_set_ai_speed(GameConfig.AI_SPEEDS[i], true))
 		sp_row.add_child(_ai_speed_opt)
 		match_box.add_child(sp_row)
+		_refresh_ai_speed_row()
 	# Рисование и стирание (item 6/51) с размерами кистей.
 	var draw_box := _hud_group(vbox, "Drawing")
 	_draw_btn = _compact_button("Draw", _enter_draw)
@@ -8020,6 +8141,9 @@ func _hsep() -> HSeparator:
 ## Темп показа (item 5): ход стороны, которую ведёт ИИ, идёт с выставленной хостом
 ## скоростью — и пауза между его действиями, и шаги, и кубики.
 func _pace() -> float:
+	# Ход налётчиков (0.11.3) — тоже с темпом ИИ: их ведёт тот же мозг, что и армию ИИ.
+	if MCF.is_independent(_playing_slot):
+		return GameConfig.ai_speed
 	if state == null or state.roster == null or not state.roster.is_ai(state.active_player()):
 		return 1.0
 	return GameConfig.ai_speed
@@ -8765,6 +8889,7 @@ func _refresh_status() -> void:
 	# человек, и наоборот. Дешевле сверять её здесь, на каждом обновлении строки хода,
 	# чем помнить про кнопку в каждой точке, где меняется ростер.
 	_refresh_pause_button()
+	_refresh_ai_speed_row()
 	if _status_label != null:
 		_status_label.text = "Turn: %s   |   Round: %d" % [
 			_side_label(_turn_now()), state.turns.round_number]
