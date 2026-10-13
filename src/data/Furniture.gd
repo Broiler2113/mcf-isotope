@@ -340,7 +340,8 @@ static func _with_variants() -> Dictionary:
 		out[fid] = _BASE[fid]
 		for v: Array in VARIANTS.get(fid, []):
 			var d: Dictionary = (_BASE[fid] as Dictionary).duplicate(true)
-			d["name"] = "%s (%s)" % [_BASE[fid]["name"], str(v[0]).capitalize()]
+			# id варианта остаётся «grey» (плитки, сохранения), подпись — по-американски.
+			d["name"] = "%s (%s)" % [_BASE[fid]["name"], str(v[0]).replace("grey", "gray").capitalize()]
 			d["base"] = fid
 			d["tint"] = v[1]
 			d["gen"] = false

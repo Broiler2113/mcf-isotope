@@ -58,9 +58,13 @@ var replay_recorder: RefCounted = null
 ## Live games retain their existing undo behavior.
 var track_undo_history: bool = true
 
+## Режим партии (0.12): Annihilation / Capture & Hold / Holdout — его состояние.
+var mode: MatchMode = null
+
 func _init(p_state: GameState) -> void:
 	state = p_state
 	random_events = RandomEvents.from_config()
+	mode = MatchMode.from_config()
 
 ## Сколько окопов роется за 1 ОД: обычная пехота — 3, инженер — 6 (§3.7).
 const DIG_TRENCHES_NORMAL := 3
@@ -174,6 +178,11 @@ func resolve(intent: Intent) -> ActionResult:
 	# Только на верхнем уровне: под-resolve хода жителей (depth>1) кварталов не будит.
 	if top and result.ok:
 		_wake_and_group(result)
+	# Holdout (0.12, решение владельца): волна выбита — следующая идёт сразу, не дожидаясь
+	# своих двух раундов. Броски места высадки — броски этого действия (запись, сеть).
+	var wave_called := top and result.ok and _maybe_wave_cleared(result)
+	if top and result.ok and mode.bounty_unit >= 0:
+		_check_bounty(result, actor_owner)
 	# Броски забираем ПОСЛЕ пробуждения кварталов: жребий места в очереди — такой же
 	# бросок этого действия, и без него повтор поставил бы группу в другое место.
 	if recording:
@@ -190,7 +199,7 @@ func resolve(intent: Intent) -> ActionResult:
 	if top and result.ok:
 		# Новое действие обрывает откатанную ветку — повторять больше нечего (#38).
 		_redo_stack.clear()
-		if _turn_key() != turn_before or _is_irreversible(intent, result):
+		if _turn_key() != turn_before or _is_irreversible(intent, result) or wave_called:
 			_undo_stack.clear()
 		elif undoable:
 			_undo_stack.append(pre_snap)
@@ -941,7 +950,7 @@ func _resolve_anti_tank(shooter: UnitInstance, center: Vector2i, aimed: String =
 	else:
 		# Бросок на попадание (#7): промах НЕ отменяет взрыв — заряд ложится ближе.
 		var dist := Combat.distance(shooter.coord, center)
-		var need := Combat.hit_number(dist, shooter.fire_range())
+		var need := hit_need(dist, shooter.fire_range())
 		var roll := state.dice.roll_d6()
 		var on_target := roll >= need
 		landing = _shortfall_landing(shooter.coord, center, roll, need)
@@ -1008,13 +1017,40 @@ func _shortfall_landing(from_coord: Vector2i, target: Vector2i, roll: int, need:
 ##
 ## Обходим не армию, а клетки взрыва: их не больше 6×9, и жильца каждой отдаёт сама
 ## сетка. На переборе целей ИИ это разница между сотней проверок и сотней тысяч.
+## То же для главной пушки танка (0.12, самосохранение ИИ): все шесть исходов броска на
+## точность — где ляжет снаряд (недолёт той же формулой, _shortfall_landing) и кого
+## накроет ромб взрыва. Свои в машине не в счёт: корпус их держит.
+func cannon_shot_endangers_own(veh: Vehicle, target: Vector2i) -> bool:
+	if veh == null:
+		return false
+	var port := cannon_port(veh, target)
+	if port == Vector2i(-1, -1):
+		return false
+	var gun: Dictionary = VehicleDB.get_vehicle(veh.type_id).get("weapons", {}).get("main_gun", {})
+	var need := hit_need(Combat.distance(port, target),
+			float(int(gun.get("range", MCF.CANNON_RANGE))))
+	for roll in range(1, 7):
+		var landing := _shortfall_landing(port, target, roll, need)
+		var area := cannon_blast_cells(veh, landing)
+		area.append(landing)
+		for c: Vector2i in area:
+			var cell := state.grid.cell(c)
+			if cell == null or cell.occupant == null or not cell.occupant.is_alive():
+				continue
+			var occ: UnitInstance = cell.occupant
+			if occ.aboard_vehicle_id != -1:
+				continue
+			if occ.owner == veh.owner or state.roster.are_allies(veh.owner, occ.owner):
+				return true
+	return false
+
 func anti_tank_shot_endangers_own(shooter: UnitInstance, center: Vector2i) -> bool:
 	if shooter == null or not _is_anti_tank(shooter):
 		return false
 	# Выстрел под себя (#11) — гарантированное самоубийство, кубик там не бросается.
 	if center == shooter.coord:
 		return true
-	var need := Combat.hit_number(
+	var need := hit_need(
 		Combat.distance(shooter.coord, center), shooter.fire_range())
 	# Клетка -> лежит ли она в ЭПИЦЕНТРЕ хоть одного из шести исходов: в эпицентре не
 	# спасают ни окоп (#30), ни щит (§3.14), по соседней клетке — спасают оба.
@@ -1678,7 +1714,7 @@ func can_laser_cell(shooter: UnitInstance, cell: Vector2i) -> String:
 	if shooter.remaining_ap < MCF.MARKSMAN_AP_COST:
 		return "Laser needs %d AP" % MCF.MARKSMAN_AP_COST
 	if gas_blocks_line(shooter.coord, cell):
-		return "Gas blocks line of sight"
+		return obscured_line_reason(shooter.coord, cell)
 	return ""
 
 ## Клетки, через которые пройдёт луч, если целиться в aim (для предпросмотра в UI).
@@ -1719,7 +1755,7 @@ func _resolve_assault(shooter: UnitInstance, target: UnitInstance) -> ActionResu
 	result.ok = true
 	var any_kill := false
 	for t in chain:
-		var need := Combat.hit_number(Combat.distance(shooter.coord, t.coord), shooter.fire_range())
+		var need := hit_need(Combat.distance(shooter.coord, t.coord), shooter.fire_range())
 		var parry_need: int = t.armor() + MCF.ASSAULT_DEFENSE_PENALTY - _corpse_shield_bonus(t)
 		var shot_details: Array = []
 		var hits := 0
@@ -1874,8 +1910,8 @@ func hit_need_for(shooter: UnitInstance, target: UnitInstance, mods: Array = [])
 	# Снайпер считается по своей лестнице (§5), остальные — по общей формуле (§3.5).
 	# Раньше снайпер шёл по общей, и она мазала на каждой полосе: при дальности 40
 	# давала 3+ там, где нужно автопопадание, и 3+/4+/5+/6 там, где нужно 2+/3+/4+/5+.
-	var need := Combat.sniper_hit_number(dist) if is_sniper \
-			else Combat.hit_number(dist, shooter.fire_range())
+	var need := sniper_need(dist) if is_sniper \
+			else hit_need(dist, shooter.fire_range())
 	if is_sniper and need == 1:
 		# Автопопадание — именно АВТО: оно и раньше выставлялось ПОСЛЕ укрытия и
 		# перекрывало его, и это сохранено. Снимает автопопадание только укрепление
@@ -1906,7 +1942,7 @@ func cannon_aim_need(veh: Vehicle, cell: Vector2i) -> int:
 	if port == Vector2i(-1, -1):
 		return 7
 	var gun: Dictionary = VehicleDB.get_vehicle(veh.type_id).get("weapons", {}).get("main_gun", {})
-	return Combat.hit_number(Combat.distance(port, cell), float(int(gun.get("range", MCF.CANNON_RANGE))))
+	return hit_need(Combat.distance(port, cell), float(int(gun.get("range", MCF.CANNON_RANGE))))
 
 ## Сколько выбросить, целясь в клетку (для подписи прицела): та же формула, что бросит
 ## сам выстрел этого стрелка. 0 — броска нет (лазер, струя, ПТ себе под ноги),
@@ -1920,14 +1956,14 @@ func aim_need(shooter: UnitInstance, cell: Vector2i, target: UnitInstance = null
 		MCF.ABILITY_ANTI_TANK:
 			if cell == shooter.coord:
 				return 0
-			return Combat.hit_number(Combat.distance(shooter.coord, cell), shooter.fire_range())
+			return hit_need(Combat.distance(shooter.coord, cell), shooter.fire_range())
 		MCF.ABILITY_ASSAULT:
-			return Combat.hit_number(Combat.distance(shooter.coord, cell), shooter.fire_range())
+			return hit_need(Combat.distance(shooter.coord, cell), shooter.fire_range())
 	if target == null:
 		# Окно: попасть в стекло (0.9.2) — по дальности, как в цель, без укрытия.
 		if state.grid.in_bounds(cell) and MCF.is_glass(state.grid.cell(cell).feature_id):
 			return pane_hit_need(shooter, cell)
-		return Combat.hit_number(Combat.distance(shooter.coord, cell), shooter.fire_range())
+		return hit_need(Combat.distance(shooter.coord, cell), shooter.fire_range())
 	return hit_need_for(shooter, target)
 
 func _shield_blocks_shot(shooter: UnitInstance, target: UnitInstance) -> bool:
@@ -2043,7 +2079,7 @@ func _resolve_pickup_corpse(intent: PickUpCorpseIntent) -> ActionResult:
 		cell.occupant = null
 	unit.remaining_ap -= 1
 	unit.carried_corpses += 1
-	return ActionResult.success(["%s picks up a corpse — carrying %d (+%d defence) [AP: %d]" % [
+	return ActionResult.success(["%s picks up a corpse — carrying %d (+%d defense) [AP: %d]" % [
 		unit.stats.display_name, unit.carried_corpses, unit.carried_corpses, unit.remaining_ap]])
 
 ## Кладёт один несомый труп на свою/соседнюю проходимую клетку (бесплатно).
@@ -2935,8 +2971,15 @@ func _resolve_reveal_mines(intent: RevealMinesIntent) -> ActionResult:
 func _detonate_mine(coord: Vector2i, victim: UnitInstance, res: ActionResult) -> void:
 	var cell := state.grid.cell(coord)
 	var owner_name := MCF.owner_name(cell.feature_owner)
+	var old := cell.feature_owner == OLD_MINE_OWNER
 	cell.clear_feature()
-	res.log("A mine laid by %s goes off at (%d, %d)!" % [owner_name, coord.x, coord.y])
+	if old:
+		res.log("An old mine goes off at (%d, %d)!" % [coord.x, coord.y])
+		if victim != null:
+			res.dice_events.append({"kind": "check", "actor": "Old mine", "roll": _old_mine_roll,
+				"need": OLD_MINE_GOES_OFF, "ok": true, "roller": victim.owner})
+	else:
+		res.log("A mine laid by %s goes off at (%d, %d)!" % [owner_name, coord.x, coord.y])
 	# Через общий _blast: щитоносец, прикрытие союзником и снос объектов на клетке
 	# должны работать здесь ровно так же, как у противотанкиста, а не «почти так же».
 	var area: Array[Vector2i] = [coord]
@@ -3165,6 +3208,12 @@ func _mine_on_path(unit: UnitInstance, path: Array) -> Vector2i:
 		# мина (FEATURE_AV_MINE) пехоту не трогает — под ней сюда просто не попадёт.
 		if cell == null or cell.feature_id != MCF.FEATURE_MINE:
 			continue
+		# Старая мина (событие Old Minefield, 0.12) срабатывает не всегда. Не сработала —
+		# ни строки в журнале: о том, что она здесь, никто не узнаёт.
+		if cell.feature_owner == OLD_MINE_OWNER:
+			_old_mine_roll = state.dice.roll_d6()
+			if _old_mine_roll < OLD_MINE_GOES_OFF:
+				continue
 		return step
 	return NOWHERE
 
@@ -3517,7 +3566,7 @@ func sight_of(unit: UnitInstance) -> int:
 func _vision_blocked(a: Vector2i, b: Vector2i, viewer: int = -1, through_gas: bool = false) -> bool:
 	if _line_off_board(a, b):
 		return true
-	if not through_gas and a != b and (state.grid.cell_fast(a.x, a.y).gas or state.grid.cell_fast(b.x, b.y).gas):
+	if not through_gas and a != b and (state.grid.cell_fast(a.x, a.y).obscured() or state.grid.cell_fast(b.x, b.y).obscured()):
 		return true
 	var sig := _tank_sig(viewer)
 	var tanks: PackedInt32Array = _tank_sig_cells[sig] if sig != 0 else PackedInt32Array()
@@ -3548,7 +3597,7 @@ func _vision_blocked(a: Vector2i, b: Vector2i, viewer: int = -1, through_gas: bo
 		# стоит здесь дёшево: до него доходят только клетки, уже опознанные как стена.
 		# Живые обзор не перекрывают, машины — тоже, КРОМЕ вражеского танка: его корпус
 		# закрывает обзор противнику (не своим). Стена и закрытый шлюз — GridCell.blocks_sight().
-		if (cell.gas and not through_gas) \
+		if (cell.obscured() and not through_gas) \
 				or (cell.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(cell.feature_id)):
 			return true
 		if not tanks.is_empty() and tanks.has(cy * grid.width + cx):
@@ -3627,7 +3676,7 @@ func team_sees_gas(owner: int) -> Dictionary:
 ## sight index so checking this never scans the whole board per target.
 func visibility_limited() -> bool:
 	if fog_enabled: return true
-	if GridCell.gassed <= 0: return false
+	if GridCell.obscurants() <= 0: return false
 	_sync_seen()
 	return not _sight_gas.is_empty()
 
@@ -3647,7 +3696,7 @@ func _gas_masks() -> Array:
 
 func team_sees(owner: int, coord: Vector2i) -> bool:
 	if not state.grid.in_bounds(coord): return false
-	if state.grid.cell(coord).gas: return false
+	if state.grid.cell(coord).obscured(): return false
 	if not visibility_limited(): return true
 	return team_visible_coords(owner).has(coord)
 
@@ -3655,7 +3704,7 @@ func team_sees(owner: int, coord: Vector2i) -> bool:
 func is_visible_to_team(owner: int, target: UnitInstance) -> bool:
 	if owner == target.owner or state.roster.are_allies(owner, target.owner): return true
 	if not state.grid.in_bounds(target.coord): return false
-	if state.grid.cell(target.coord).gas: return false
+	if state.grid.cell(target.coord).obscured(): return false
 	# The scripted AI ignores fog: one cloud anywhere must not blind it to the whole
 	# board. It still can't see into gas (above) or shoot through it (can_shoot).
 	if owner == omniscient_side: return true
@@ -3703,7 +3752,7 @@ static func _rebuild_blockers(grid: Grid) -> void:
 			var cell := grid.cell_fast(x, y)
 			# Ровно то же условие, что у поправки по журналу (_patch_blockers) — одним
 			# вопросом к клетке, чтобы газ (0.9.4) не выпал из холодной сборки таблицы.
-			if cell.gas:
+			if cell.obscured():
 				_sight_gas[row + x] = true
 			if cell.blocks_sight():
 				_blockers[row + x] = 1
@@ -3759,7 +3808,7 @@ static func _patch_blockers(grid: Grid, from_version: int) -> void:
 		var c := grid.cell(Vector2i(changes[i], changes[i + 1]))
 		if c != null:
 			var idx := c.coord.y * gw + c.coord.x
-			if c.gas:
+			if c.obscured():
 				_sight_gas[idx] = true
 			else:
 				_sight_gas.erase(idx)
@@ -3890,7 +3939,7 @@ func _seen_from(coord: Vector2i, r: int, viewer: int = -1, gas_only: bool = fals
 	if same != null:
 		return same
 	var origin := coord.y * gw + coord.x
-	if grid.cell_fast(coord.x, coord.y).gas:
+	if grid.cell_fast(coord.x, coord.y).obscured():
 		var own := PackedInt32Array([origin])
 		_store_seen(key, own, own)
 		return own
@@ -3902,7 +3951,7 @@ func _seen_from(coord: Vector2i, r: int, viewer: int = -1, gas_only: bool = fals
 		var clear := PackedInt32Array()
 		var cells := grid.cells_flat()
 		for i: int in res[0]:
-			if not cells[i].gas:
+			if not cells[i].obscured():
 				clear.append(i)
 		res[0] = clear
 	# Gas arriving on the observer must invalidate an otherwise unchanged view.
@@ -4549,10 +4598,11 @@ func _update_breached(civ: UnitInstance, idx: Dictionary = {}) -> void:
 ## из путей записи резолвера (_ignite, снос рельефа взрывом, стройка, окоп, открытие шлюза).
 func notify_cell_changed(coord: Vector2i) -> void:
 	# Construction/destruction inside a cloud immediately updates its footprint.
-	if random_events != null and not random_events.clouds.is_empty():
+	if random_events != null and (not random_events.clouds.is_empty() or not random_events.smoke.is_empty()):
 		var changed := state.grid.cell(coord)
 		if changed != null:
 			changed.gas = changed.can_hold_gas() and random_events.cloud_at(coord)
+			changed.smoke = changed.can_hold_gas() and random_events.smoke_at(coord)
 	for dy in range(-1, 2):
 		for dx in range(-1, 2):
 			if dx == 0 and dy == 0:
@@ -4796,7 +4846,14 @@ func advance_civilians(owner: int = MCF.Owner.NEUTRAL) -> ActionResult:
 	# Мозг заводится ПОД ВЛАДЕЛЬЦА слота: для группы её слот и есть owner, иначе
 	# _enemies_of посчитал бы своих же за врагов. Кэш держит один мозг на слот.
 	if _civ_brain == null or _civ_brain.owner != owner:
-		_civ_brain = AIController.new(owner, AIController.Difficulty.NORMAL)
+		# Налётчики (0.12): ИИ в игре всегда HARD, у налётчиков — личность Aggressor. Мирные
+		# остаются при своём простом мозге.
+		if raiders:
+			_civ_brain = AIController.new(owner, AIController.Difficulty.HARD)
+			_civ_brain.style = AIPersonality.AGGRESSOR
+			_civ_brain.bind_match(self)
+		else:
+			_civ_brain = AIController.new(owner, AIController.Difficulty.NORMAL)
 	# Item 23: живой, «в порядке очереди» отыгрыш вместо «телепорт + перемотка». В res
 	# первым уходит событие hold — оно ПРИКАЛЫВАЕТ каждого будущего ходока к ИСХОДНОЙ
 	# клетке, чтобы Main не показал их сразу в конечных позициях, пока идёт анимация.
@@ -5015,6 +5072,7 @@ func update_airlocks() -> void:
 		if cell.airlock_welded:
 			cell.cover_height = MCF.WALL_HEIGHT
 			cell.gas = false
+			cell.smoke = false
 			continue
 		# Тело в проёме держит створки (batch 13 #4): шлюз не закроется, пока труп не
 		# вытащат. Проверяется САМА клетка шлюза — труп рядом, за порогом, дверям не мешает.
@@ -5038,6 +5096,7 @@ func update_airlocks() -> void:
 		cell.cover_height = 0.0 if open else MCF.WALL_HEIGHT
 		if not open:
 			cell.gas = false
+			cell.smoke = false
 		# Открывшийся шлюз — повод активации соседних нейтралов (§3.1a): именно так в
 		# примере из задания игрок «вскрывает комнату», подойдя к её двери.
 		if open and was_closed:
@@ -5992,7 +6051,7 @@ func rsp_targets(actor: UnitInstance, dpmg_coord: Vector2i) -> Array:
 			continue
 		if los_blocked(dpmg_coord, u.coord):
 			continue
-		if Combat.hit_number(Combat.distance(dpmg_coord, u.coord), MCF.DPMG_RANGE) >= 7:
+		if hit_need(Combat.distance(dpmg_coord, u.coord), MCF.DPMG_RANGE) >= 7:
 			continue
 		out.append(u.id)
 	return out
@@ -6031,7 +6090,7 @@ func _resolve_dpmg(intent: DPMGFireIntent) -> ActionResult:
 		return ActionResult.fail("Firing line is blocked")
 	if trench_protected(intent.dpmg_coord, target):
 		return ActionResult.fail("Target is below the trench line")
-	var need := Combat.hit_number(Combat.distance(intent.dpmg_coord, target.coord), MCF.DPMG_RANGE)
+	var need := hit_need(Combat.distance(intent.dpmg_coord, target.coord), MCF.DPMG_RANGE)
 	if need >= 7:
 		return ActionResult.fail("Too far for the DPMG")
 
@@ -6162,13 +6221,16 @@ func _resolve_use_item(intent: UseItemIntent) -> ActionResult:
 	if Combat.distance(actor.coord, intent.target) > MCF.GRENADE_RANGE:
 		return ActionResult.fail("Too far to throw (max %d)" % MCF.GRENADE_RANGE)
 	# Гранаты бросаются только ортогонально (#4).
-	if item_id == MCF.ITEM_FRAG and actor.coord.x != intent.target.x and actor.coord.y != intent.target.y:
+	if (item_id == MCF.ITEM_FRAG or item_id == MCF.ITEM_SMOKE) \
+			and actor.coord.x != intent.target.x and actor.coord.y != intent.target.y:
 		return ActionResult.fail("Grenades can only be thrown in straight lines")
 	actor.remaining_ap -= 1
 	actor.held_item_id = ""  # предмет расходуется в любом исходе
 
 	if item_id == MCF.ITEM_FRAG:
 		return _throw_frag(actor, intent.target)
+	elif item_id == MCF.ITEM_SMOKE:
+		return _throw_smoke(actor, intent.target)
 	elif item_id == MCF.ITEM_EXTINGUISHER:
 		return _extinguish(actor, intent.target)
 	return ActionResult.fail("Unknown item: %s" % item_id)
@@ -6180,7 +6242,7 @@ func _resolve_use_item(intent: UseItemIntent) -> ActionResult:
 ## Взрывается там, где легла, задевая и своих.
 func _throw_frag(thrower: UnitInstance, aim: Vector2i) -> ActionResult:
 	var dist := Combat.distance(thrower.coord, aim)
-	var need := Combat.hit_number(dist, float(MCF.GRENADE_RANGE))
+	var need := hit_need(dist, float(MCF.GRENADE_RANGE))
 	var roll := state.dice.roll_d6()
 	var on_target := roll >= need
 	var landing := aim
@@ -6200,6 +6262,41 @@ func _throw_frag(thrower: UnitInstance, aim: Vector2i) -> ActionResult:
 	else:
 		result.log("Roll %d (need %d+): short throw, grenade landed at (%d, %d)." % [
 			roll, need, landing.x, landing.y])
+	return result
+
+## Дымовая (0.12): тот же бросок на точность и тот же недолёт, что у осколочной; где легла —
+## облако 3×3 (в пределах поля), которое держит взгляд и прицельный огонь до конца
+## следующего раунда и никому не вредит. Облака живут рядом с газом (RandomEvents.smoke).
+func _throw_smoke(thrower: UnitInstance, aim: Vector2i) -> ActionResult:
+	var dist := Combat.distance(thrower.coord, aim)
+	var need := hit_need(dist, float(MCF.GRENADE_RANGE))
+	var roll := state.dice.roll_d6()
+	var on_target := roll >= need
+	var landing := aim
+	if not on_target:
+		var land_index: int = clampi(dist - (need - roll), 0, dist)
+		var path := _throw_path(thrower.coord, aim)
+		landing = thrower.coord if land_index <= 0 else path[land_index - 1]
+	if random_events == null:
+		random_events = RandomEvents.new(false)
+	var r := MCF.SMOKE_RADIUS
+	var x0 := maxi(0, landing.x - r)
+	var y0 := maxi(0, landing.y - r)
+	var x1 := mini(state.grid.width - 1, landing.x + r)
+	var y1 := mini(state.grid.height - 1, landing.y + r)
+	random_events.add_smoke(x0, y0, x1 - x0 + 1, y1 - y0 + 1, MCF.SMOKE_ROUNDS)
+	_sync_gas()
+	var result := ActionResult.success()
+	result.dice_events.push_front({
+		"kind": "check", "actor": thrower.stats.display_name,
+		"roll": roll, "need": need, "ok": on_target,
+	})
+	if on_target:
+		result.log("%s throws a smoke grenade: smoke at (%d, %d) (roll %d, need %d+)." % [
+			thrower.stats.display_name, landing.x, landing.y, roll, need])
+	else:
+		result.log("%s throws a smoke grenade short: smoke at (%d, %d) (roll %d, need %d+)." % [
+			thrower.stats.display_name, landing.x, landing.y, roll, need])
 	return result
 
 ## Упорядоченный путь клеток от a к b (без a, включая b), длиной = дистанция Чебышёва.
@@ -6350,6 +6447,8 @@ func blast_cells_for_item(item_id: String, center: Vector2i) -> Array[Vector2i]:
 	match item_id:
 		MCF.ITEM_FRAG:
 			return MCF.blast_x(center)
+		MCF.ITEM_SMOKE:
+			return MCF.blast_square(center, MCF.SMOKE_RADIUS)
 		MCF.ITEM_EXTINGUISHER:
 			# Пожаротушительная (#19) кроет ПОЛНЫЙ квадрат 5×5, а не «косой крест»
 			# осколочной: она не поражает, а гасит, и дырам в зоне взяться неоткуда.
@@ -6442,6 +6541,7 @@ func capturable_target_ids(actor: UnitInstance) -> Array:
 func open_match() -> ActionResult:
 	var out := play_civilian_slots()
 	_maybe_random_event(out)
+	_mode_round_start(out)
 	return out
 
 ## Отыграть слот мирных, если сейчас их очередь по инициативе (#42, #53).
@@ -6526,6 +6626,7 @@ func _resolve_end_turn(intent: EndTurnIntent = null) -> ActionResult:
 	# player gets exactly one turn to react — not only whoever moves first.
 	if _handoff_closes_round():
 		land_random_events(round_res)
+		_mode_round_end(round_res)
 	state.turns.end_turn(state.all_units())
 	var civ := play_civilian_slots()
 	# Огонь ползёт в начале хода той стороны, которая его устроила (#45). Дошедшее до
@@ -6544,7 +6645,8 @@ func _resolve_end_turn(intent: EndTurnIntent = null) -> ActionResult:
 		veh.move_credit = 0  # недокатанные клетки через ход не переносятся (#97)
 	var lines: Array[String] = [
 		"— %s ended their turn. %s to move (round %d) —" % [
-			MCF.owner_name(prev), MCF.owner_name(state.active_player()), state.turns.round_number
+			state.roster.name_of(prev), state.roster.name_of(state.active_player()),
+			state.turns.round_number
 		]
 	]
 	# Журнал события идёт ПЕРВЫМ: по времени оно и случилось раньше хода жителей и огня.
@@ -6568,6 +6670,7 @@ func _resolve_end_turn(intent: EndTurnIntent = null) -> ActionResult:
 	# Ordinary player handoffs must neither announce nor advance the event interval.
 	if state.turns.round_number > previous_round:
 		_maybe_random_event(out)
+		_mode_round_start(out)
 	return out
 
 ## Кончится ли раунд ЭТОЙ передачей хода (0.9.4). Прямо — если после активного слота
@@ -6643,8 +6746,15 @@ func _maybe_random_event(res: ActionResult) -> void:
 	if random_events.last_checked_round >= state.turns.round_number:
 		return
 	random_events.last_checked_round = state.turns.round_number
-	var id := random_events.roll_event(state.dice)
+	var id := random_events.roll_event(state.dice, _events_allowed)
 	if id == "":
+		return
+	# Мгновенные события (0.12): мины уже лежат, метка уже стоит — объявлять нечего.
+	if id == RandomEvents.MINEFIELD:
+		_start_minefield(res)
+		return
+	if id == RandomEvents.BOUNTY:
+		_start_bounty(res)
 		return
 	var params := _roll_event_params(id)
 	if params.is_empty():
@@ -6750,6 +6860,25 @@ func _roll_event_params(id: String) -> Dictionary:
 					army["hx"] = entry.x
 					army["hy"] = entry.y
 			return army
+		RandomEvents.FIRE:
+			var spots := _burnable_cells(area)
+			if spots.is_empty():
+				return {}
+			return _rect_around(spots[_rand_wide(spots.size())], FIRE_SIDE)
+		RandomEvents.EMP:
+			var targets := _emp_targets()
+			if targets.is_empty():
+				return {}
+			return _rect_around(targets[_rand_wide(targets.size())], EMP_SIDE)
+		RandomEvents.DUST:
+			return {"rounds": DUST_ROUNDS}
+		RandomEvents.COLLAPSE:
+			var walls := _collapse_walls()
+			if walls.is_empty():
+				return {}
+			return _rect_around(walls[_rand_wide(walls.size())], COLLAPSE_SIDE)
+		RandomEvents.REINFORCE:
+			return _reinforce_target()
 	return {}
 
 ## Keep simultaneous warnings distinct. Stable nearest-fit search uses no extra dice.
@@ -6782,9 +6911,17 @@ func _free_barrage_zone(preferred: Dictionary, area: Rect2i) -> Dictionary:
 
 ## Где именно — строкой для журнала и подсказки на карте.
 func _event_where(id: String, p: Dictionary) -> String:
+	if id == RandomEvents.DUST:
+		return "across the whole battlefield"
+	if id == RandomEvents.REINFORCE:
+		var names_r := ["north", "east", "south", "west"]
+		var whom := state.roster.name_of(int(p.get("side", -1)))
+		if p.has("hx"):
+			return "%s's reinforcements entering the hallway at (%d, %d)" % [whom, int(p["hx"]), int(p["hy"])]
+		return "%s's reinforcements approaching from the %s edge" % [whom, names_r[int(p.get("edge", 0)) % 4]]
 	if id == RandomEvents.ARMY:
 		if p.has("hx"):
-			return "unknown forces tunnelling into the hallway at (%d, %d)" % [int(p["hx"]), int(p["hy"])]
+			return "unknown forces tunneling into the hallway at (%d, %d)" % [int(p["hx"]), int(p["hy"])]
 		var names := ["north", "east", "south", "west"]
 		return "unknown forces approaching from the %s edge" % names[int(p.get("edge", 0)) % 4]
 	return "zone (%d, %d) %d×%d" % [int(p.get("x", 0)), int(p.get("y", 0)),
@@ -6798,6 +6935,15 @@ func land_random_events(res: ActionResult) -> void:
 	if random_events == null:
 		return
 	_gas_tick(res)
+	# Дым дымовых гранат стоит до конца следующего раунда (0.12).
+	if not random_events.smoke.is_empty():
+		random_events.age_smoke()
+	# Пожар события своего хода не имеет — он расползается раз в раунд, здесь (0.12).
+	advance_fire(EVENT_FIRE_OWNER, res)
+	if random_events.dust_left > 0:
+		random_events.dust_left -= 1
+		if random_events.dust_left == 0:
+			res.log("The dust storm blows over")
 	for e: Dictionary in random_events.take_landing(state.turns.round_number):
 		var p: Dictionary = e["params"]
 		match str(e["id"]):
@@ -6807,6 +6953,18 @@ func land_random_events(res: ActionResult) -> void:
 				_land_gas(p, res)
 			RandomEvents.ARMY:
 				_land_army(p, res)
+			RandomEvents.FIRE:
+				_land_fire(p, res)
+			RandomEvents.EMP:
+				_land_emp(p, res)
+			RandomEvents.DUST:
+				random_events.dust_left = int(p.get("rounds", DUST_ROUNDS))
+				res.log("A dust storm sweeps the battlefield: for %d rounds every shot beyond %d cells needs one more" % [
+						random_events.dust_left, DUST_CLEAR])
+			RandomEvents.COLLAPSE:
+				_land_collapse(p, res)
+			RandomEvents.REINFORCE:
+				_land_reinforce(p, res)
 	_sync_gas()
 
 ## Обстрел: зона делится на столбцы по клетке, столбцы идут с запада на восток, клетки в
@@ -6922,6 +7080,7 @@ func _sync_gas() -> void:
 		for x in grid.width:
 			var cell := grid.cell_fast(x, y)
 			cell.gas = cell.can_hold_gas() and random_events.cloud_at(Vector2i(x, y))
+			cell.smoke = cell.can_hold_gas() and random_events.smoke_at(Vector2i(x, y))
 
 ## Независимая армия (0.9.4): у края карты высаживается ничья сила, враждебная всем.
 ## Сила — по средней армии ЖИВЫХ игроков (по цене закупки); слот встаёт в случайное место
@@ -7143,7 +7302,7 @@ func _hallway_spawn_cells(entry: Vector2i) -> Array[Vector2i]:
 ## Gas obscures aim even for weapons that can penetrate solid cover. Include
 ## both endpoints and support arbitrary sight directions without allocating a ray.
 func gas_blocks_line(a: Vector2i, b: Vector2i) -> bool:
-	if GridCell.gassed <= 0 or a == b or _line_off_board(a, b):
+	if GridCell.obscurants() <= 0 or a == b or _line_off_board(a, b):
 		return false
 	var dx := absi(b.x - a.x)
 	var dy := absi(b.y - a.y)
@@ -7152,7 +7311,7 @@ func gas_blocks_line(a: Vector2i, b: Vector2i) -> bool:
 	var err := dx - dy
 	var c := a
 	while true:
-		if state.grid.cell_fast(c.x, c.y).gas:
+		if state.grid.cell_fast(c.x, c.y).obscured():
 			return true
 		if c == b:
 			return false
@@ -7164,6 +7323,33 @@ func gas_blocks_line(a: Vector2i, b: Vector2i) -> bool:
 			err += dx
 			c.y += sy
 	return false
+
+## Отказ по застилающему линию облаку — с правильным названием (0.12): дым дымовой гранаты
+## или газ. Сама проверка — gas_blocks_line; здесь только слово для журнала.
+func obscured_line_reason(a: Vector2i, b: Vector2i) -> String:
+	var dx := absi(b.x - a.x)
+	var dy := absi(b.y - a.y)
+	var sx := 1 if a.x < b.x else -1
+	var sy := 1 if a.y < b.y else -1
+	var err := dx - dy
+	var c := a
+	var smoke := false
+	while true:
+		if state.grid.in_bounds(c):
+			var cell := state.grid.cell_fast(c.x, c.y)
+			if cell.gas:
+				return "Gas blocks line of sight"
+			smoke = smoke or cell.smoke
+		if c == b:
+			break
+		var e2 := 2 * err
+		if e2 > -dy:
+			err -= dy
+			c.x += sx
+		if e2 < dx:
+			err += dx
+			c.y += sy
+	return "Smoke blocks line of sight" if smoke else "Gas blocks line of sight"
 
 # --- Запросы легальности (для подсветки целей в UI) ---
 ## allow_embrasure=false — стрелок не может работать через амбразуру ДОТа: заряд
@@ -7200,13 +7386,13 @@ func los_blocked(from_coord: Vector2i, to_coord: Vector2i, allow_embrasure: bool
 	# Газ (0.9.4) держит и взгляд, и выстрел — как стена. Спрашивается он ТОЛЬКО когда газ
 	# на карте вообще есть: эта функция зовётся десятки тысяч раз за один расчёт плана ИИ.
 	# Gas also obscures either endpoint, unlike a wall face or a firing embrasure.
-	var any_gas := GridCell.gassed > 0
-	if any_gas and (grid.cell_fast(from_coord.x, from_coord.y).gas \
-			or grid.cell_fast(to_coord.x, to_coord.y).gas):
+	var any_gas := GridCell.obscurants() > 0
+	if any_gas and (grid.cell_fast(from_coord.x, from_coord.y).obscured() \
+			or grid.cell_fast(to_coord.x, to_coord.y).obscured()):
 		return true
 	while x != to_coord.x or y != to_coord.y:
 		var cell := grid.cell_fast(x, y)
-		if any_gas and cell.gas:
+		if any_gas and cell.obscured():
 			return true
 		if cell.cover_height >= MCF.WALL_HEIGHT:
 			# Ёж поверх мешков — решётчатая стена: с соседней клетки сквозь неё стреляют.
@@ -7392,7 +7578,7 @@ func fire_cover(viewer: int, hostile: bool) -> PackedFloat32Array:
 	var out := PackedFloat32Array()
 	out.resize(w * grid.height)
 	for u: UnitInstance in shooters:
-		if grid.cell(u.coord).gas:
+		if grid.cell(u.coord).obscured():
 			continue
 		var ability: String = u.stats.special_ability_id
 		var pierce := ability == MCF.ABILITY_MARKSMAN
@@ -7408,10 +7594,10 @@ func fire_cover(viewer: int, hostile: bool) -> PackedFloat32Array:
 				if dist > reach or not grid.in_bounds(c):
 					break
 				var cell := grid.cell_fast(c.x, c.y)
-				if cell.gas or (not pierce and (cell.blocks_sight() or cell.vehicle_id != -1)):
+				if cell.obscured() or (not pierce and (cell.blocks_sight() or cell.vehicle_id != -1)):
 					break
-				var need := 1 if pierce else (Combat.sniper_hit_number(dist) if sniper
-						else Combat.hit_number(dist, u.fire_range()))
+				var need := 1 if pierce else (sniper_need(dist) if sniper
+						else hit_need(dist, u.fire_range()))
 				if need >= 7:
 					break
 				out[c.y * w + c.x] += rof * float(7 - need) / 6.0
@@ -7510,7 +7696,7 @@ func _forecast_unit(u: UnitInstance) -> Array:
 		var max_d := MCF.FLAME_JET_LENGTH if ability == MCF.ABILITY_FLAMETHROWER else 1 << 20
 		var rof := float(maxi(1, u.rate_of_fire()))
 		for from: Vector2i in spots:
-			if grid.cell(from).gas:
+			if grid.cell(from).obscured():
 				continue
 			for d: Vector2i in DIR8:
 				var c: Vector2i = from
@@ -7521,10 +7707,10 @@ func _forecast_unit(u: UnitInstance) -> Array:
 					if dist > max_d or not grid.in_bounds(c):
 						break
 					var cell := grid.cell_fast(c.x, c.y)
-					if cell.gas or (not pierce and (cell.blocks_sight() or cell.vehicle_id != -1)):
+					if cell.obscured() or (not pierce and (cell.blocks_sight() or cell.vehicle_id != -1)):
 						break
-					var need := 1 if pierce else (Combat.sniper_hit_number(dist) if sniper
-							else Combat.hit_number(dist, u.fire_range()))
+					var need := 1 if pierce else (sniper_need(dist) if sniper
+							else hit_need(dist, u.fire_range()))
 					if need >= 7:
 						break
 					var i := c.y * w + c.x
@@ -7565,7 +7751,7 @@ func can_shoot(shooter: UnitInstance, target: UnitInstance) -> String:
 	# Свой всегда виден, поэтому проверку тумана войны он проходит сам собой.
 	# Туман войны (§3.9): скрытого противника нельзя выбрать целью.
 	if gas_blocks_line(shooter.coord, target.coord):
-		return "Gas blocks line of sight"
+		return obscured_line_reason(shooter.coord, target.coord)
 	if not is_visible_to_team(shooter.owner, target):
 		return "Target not visible"
 	if not Combat.is_on_firing_line(shooter.coord, target.coord):
@@ -7601,7 +7787,7 @@ func can_shoot(shooter: UnitInstance, target: UnitInstance) -> String:
 	if first_unit_on_line(shooter.coord, target.coord,
 			shooter if not friendly_fire_enabled else null) != null:
 		return "Another unit is in the way"
-	if Combat.hit_number(dist, shooter.fire_range()) >= 7:
+	if hit_need(dist, shooter.fire_range()) >= 7:
 		return "Too far"
 	return ""
 
@@ -7621,7 +7807,7 @@ func can_shoot_window(shooter: UnitInstance, cell: Vector2i) -> String:
 		return "Target not visible"
 	if los_blocked(shooter.coord, cell, true, true, true):
 		return "Firing line is blocked"
-	if Combat.hit_number(Combat.distance(shooter.coord, cell), shooter.fire_range()) >= 7:
+	if hit_need(Combat.distance(shooter.coord, cell), shooter.fire_range()) >= 7:
 		return "Too far"
 	var pending := shooter.action_state != null and shooter.action_state.is_pending()
 	if shooter.remaining_ap <= 0 and not pending:
@@ -7678,8 +7864,8 @@ func _resolve_shoot_window(shooter: UnitInstance, cell: Vector2i, shots: int = -
 func pane_hit_need(shooter: UnitInstance, cell: Vector2i) -> int:
 	var dist := Combat.distance(shooter.coord, cell)
 	var is_sniper := shooter.stats.special_ability_id == MCF.ABILITY_SNIPER
-	var need := Combat.sniper_hit_number(dist) if is_sniper \
-			else Combat.hit_number(dist, shooter.fire_range())
+	var need := sniper_need(dist) if is_sniper \
+			else hit_need(dist, shooter.fire_range())
 	if not is_sniper and _fire_between(shooter.coord, cell):
 		need += MCF.FIRE_SHOOT_PENALTY
 	return clampi(need, 1, 7)
@@ -7809,7 +7995,7 @@ func can_blast_cell(shooter: UnitInstance, cell: Vector2i) -> String:
 	# Заряд противотанкиста в амбразуру не пролезает (#86).
 	if los_blocked(shooter.coord, cell, false):
 		return "Firing line is blocked"
-	if Combat.hit_number(Combat.distance(shooter.coord, cell), shooter.fire_range()) >= 7:
+	if hit_need(Combat.distance(shooter.coord, cell), shooter.fire_range()) >= 7:
 		return "Too far"
 	return ""
 
@@ -7854,7 +8040,7 @@ func can_flame_cell(shooter: UnitInstance, cell: Vector2i) -> String:
 	if Combat.distance(shooter.coord, cell) > MCF.FLAME_JET_LENGTH:
 		return "Too far for the flame jet"
 	if gas_blocks_line(shooter.coord, cell):
-		return "Gas blocks line of sight"
+		return obscured_line_reason(shooter.coord, cell)
 	return ""
 
 ## Пустые клетки пола, по которым огнемётчик может пустить струю (для подсветки в UI).
@@ -8139,7 +8325,7 @@ func _shuttle_passengers_hit(veh: Vehicle, center: Vector2i, in_area: Dictionary
 			if res != null:
 				res.deaths.append(u.id)
 			if res != null:
-				res.log("%s (passenger) fails the defence roll (%d, need %d+) — killed." % [
+				res.log("%s (passenger) fails the defense roll (%d, need %d+) — killed." % [
 					u.stats.display_name, roll, need])
 		elif res != null:
 			res.log("%s (passenger) holds on (roll %d, need %d+)." % [u.stats.display_name, roll, need])
@@ -8922,7 +9108,7 @@ func _resolve_vehicle_cannon(intent: VehicleCannonIntent) -> ActionResult:
 	res.ok = true
 	# Бросок на точность (#56): при промахе снаряд ложится с недолётом, но всё равно
 	# взрывается на месте (как граната/противотанкист).
-	var need := Combat.hit_number(dist, float(int(gun.get("range", MCF.CANNON_RANGE))))
+	var need := hit_need(dist, float(int(gun.get("range", MCF.CANNON_RANGE))))
 	var roll := state.dice.roll_d6()
 	var on_target := roll >= need
 	# Недолёт считается ТОЙ ЖЕ формулой, что у противотанкиста (#22): своя, прежняя
@@ -9252,7 +9438,7 @@ func _tank_crew_hit(veh: Vehicle, res: ActionResult) -> void:
 		_kill(crew)
 		veh.occupants.remove_at(idx)
 		veh.corpse_slots.append(crew.stats.display_name)
-		res.log("%s (crew) is killed (roll %d, need %d+ with +1 armour)." % [
+		res.log("%s (crew) is killed (roll %d, need %d+ with +1 armor)." % [
 			crew.stats.display_name, roll, need])
 	else:
 		res.log("%s (crew) shrugs off the hit (roll %d, need %d+)." % [
@@ -9663,3 +9849,677 @@ func _resolve_shoot_fixture(shooter: UnitInstance, c: Vector2i, side: int, shots
 		"to": [c.x, c.y], "count": want})
 	notify_cell_changed(c)
 	return result
+
+# =====================================================================================
+#  Режимы партии (0.12): Capture & Hold и Holdout
+# =====================================================================================
+## Всё, что меняет доску, идёт здесь через общий поток кубиков (лок-степ): зоны считаются
+## из карты чистой функцией, волны катаются теми же кубиками, что и независимая армия.
+
+## Подготовить режим к партии: зоны и счёт (Capture & Hold), сторона волн и мерило их силы
+## (Holdout). map — карта партии; без неё (демо, тесты) зоны встают по центру.
+func prepare_mode(map: MapData) -> void:
+	mode.scores = {}
+	mode.holders = []
+	mode.bounty_unit = -1
+	if mode.is_capture():
+		var sides: Array = []
+		for side: int in state.roster.player_ids():
+			sides.append(side)
+			mode.scores[MatchMode.team_key(state.roster, side)] = 0
+		if map != null:
+			mode.zones = MatchMode.zones_for(map, mode.zone_count, sides, state.grid)
+		else:
+			var m := MapData.new(state.grid.width, state.grid.height)
+			mode.zones = MatchMode._fallback_zones(m, mode.zone_count)
+		for i in mode.zones.size():
+			mode.holders.append("")
+	elif mode.is_holdout():
+		if mode.wave_side < 0:
+			mode.wave_side = state.roster.waves_side()
+		mode.wave = 0
+		mode.wave_spawned = 0
+		mode.pending_wave = {}
+		mode.next_wave_round = state.turns.round_number
+		var value := 0
+		for u: UnitInstance in state.all_units():
+			if u.is_alive() and not u.is_drone and MCF.is_player(u.owner) and u.owner != mode.wave_side:
+				value += u.stats.cost
+		mode.defender_value = value
+
+## Живые бойцы волн Holdout (дроны не в счёт).
+func wave_fighters_left() -> int:
+	var n := 0
+	for u: UnitInstance in state.all_units():
+		if u.owner == mode.wave_side and u.is_alive() and not u.is_drone:
+			n += 1
+	return n
+
+## Сколько волн Holdout отбито: пришедшие, кроме той, что ещё на поле.
+func waves_beaten() -> int:
+	return maxi(0, mode.wave - (1 if wave_fighters_left() > 0 else 0))
+
+## Есть ли у стороны армия: живой боец (в машине тоже), дроны — не армия.
+func side_has_army(side: int) -> bool:
+	for u: UnitInstance in state.all_units():
+		if u.owner == side and u.is_alive() and not u.is_drone:
+			return true
+	return false
+
+## Исход партии по правилам режима: {"over": bool, "winner": ключ команды ("" — ничья
+## или нет исхода), "reason": "rout" | "points" | "held" | "overrun" | "draw"}.
+func match_outcome() -> Dictionary:
+	var alive := {}
+	for side: int in state.roster.player_ids():
+		if state.turns.is_eliminated(side) or not side_has_army(side):
+			continue
+		alive[MatchMode.team_key(state.roster, side)] = true
+	if mode.is_holdout() and mode.wave_side >= 0:
+		var waves := MatchMode.team_key(state.roster, mode.wave_side)
+		var defenders := ""
+		for k: String in alive:
+			if k != waves:
+				defenders = k
+				break
+		if defenders == "":
+			return {"over": true, "winner": waves, "reason": "overrun"}
+		if not mode.endless() and mode.wave >= mode.waves_total and mode.pending_wave.is_empty() \
+				and not alive.has(waves):
+			return {"over": true, "winner": defenders, "reason": "held"}
+		return {"over": false, "winner": "", "reason": ""}
+	if mode.is_capture():
+		var best := ""
+		var best_pts := -1
+		var tie := false
+		for k: String in mode.scores:
+			var pts := int(mode.scores[k])
+			if pts < mode.target:
+				continue
+			if pts > best_pts:
+				best = k
+				best_pts = pts
+				tie = false
+			elif pts == best_pts:
+				tie = true
+		if best != "" and not tie:
+			return {"over": true, "winner": best, "reason": "points"}
+	if alive.size() >= 2:
+		return {"over": false, "winner": "", "reason": ""}
+	if alive.is_empty():
+		return {"over": true, "winner": "", "reason": "draw"}
+	return {"over": true, "winner": alive.keys()[0], "reason": "rout"}
+
+## Сколько бойцов каждой команды стоит в зоне i ПРЯМО СЕЙЧАС: ключ команды → число.
+## Боец в зоне — живой, не дрон, не пленник; машина с живым экипажем, чей корпус задевает
+## зону, — ещё один (экипаж танка вынесен за карту и сам по себе не считается).
+func zone_counts(i: int) -> Dictionary:
+	var out := {}
+	var rect := mode.zone_rect(i)
+	for u: UnitInstance in state.all_units():
+		if not u.is_alive() or u.is_drone or u.is_held() or not MCF.is_player(u.owner):
+			continue
+		if not state.grid.in_bounds(u.coord) or not rect.has_point(u.coord):
+			continue
+		var k := MatchMode.team_key(state.roster, u.owner)
+		out[k] = int(out.get(k, 0)) + 1
+	for veh: Vehicle in state.all_vehicles():
+		if not veh.alive() or veh.living_crew_count() <= 0 or not MCF.is_player(veh.owner):
+			continue
+		for fc: Vector2i in veh.footprint():
+			if rect.has_point(fc):
+				var vk := MatchMode.team_key(state.roster, veh.owner)
+				out[vk] = int(out.get(vk, 0)) + 1
+				break
+	return out
+
+## Кто держит зону по числу бойцов: ключ команды или "" (никого / поровну).
+static func zone_holder(counts: Dictionary) -> String:
+	var best := ""
+	var best_n := 0
+	var tie := false
+	for k: String in counts:
+		var n := int(counts[k])
+		if n > best_n:
+			best = k
+			best_n = n
+			tie = false
+		elif n == best_n and n > 0:
+			tie = true
+	return "" if tie else best
+
+func _mode_round_end(res: ActionResult) -> void:
+	if mode.is_capture():
+		_score_zones(res)
+		if mode.bounty_unit >= 0 and state.turns.round_number >= mode.bounty_until:
+			mode.bounty_unit = -1
+			res.log("The bounty expires unclaimed")
+	elif mode.is_holdout() and not mode.pending_wave.is_empty():
+		_land_wave(res)
+
+func _mode_round_start(res: ActionResult) -> void:
+	if mode.is_holdout():
+		_maybe_announce_wave(res)
+
+## Конец раунда в Capture & Hold: каждая удержанная зона — очко её команде.
+func _score_zones(res: ActionResult) -> void:
+	var parts: Array[String] = []
+	for i in mode.zones.size():
+		var holder := zone_holder(zone_counts(i))
+		while mode.holders.size() <= i:
+			mode.holders.append("")
+		mode.holders[i] = holder
+		if holder == "":
+			parts.append("%s contested" % mode.zone_name(i) if not zone_counts(i).is_empty()
+					else "%s empty" % mode.zone_name(i))
+			continue
+		mode.scores[holder] = int(mode.scores.get(holder, 0)) + 1
+		parts.append("%s → %s" % [mode.zone_name(i), team_label(holder)])
+	var board: Array[String] = []
+	for k: String in mode.scores:
+		board.append("%s %d" % [team_label(k), int(mode.scores[k])])
+	res.log("Round %d score: %s. Points: %s (to %d)" % [state.turns.round_number,
+			", ".join(parts), ", ".join(board), mode.target])
+
+## Подпись команды по ключу: имя стороны, а у команды из нескольких — «Team 2 (A, B)».
+func team_label(key: String) -> String:
+	var sides := team_sides(key)
+	if sides.size() == 1:
+		return state.roster.name_of(sides[0])
+	var names: Array[String] = []
+	for s: int in sides:
+		names.append(state.roster.name_of(s))
+	return "Team %d (%s)" % [int(key.substr(1)) + 1, ", ".join(names)]
+
+## Стороны команды по ключу (MatchMode.team_key).
+func team_sides(key: String) -> Array[int]:
+	var out: Array[int] = []
+	for side: int in state.roster.player_ids():
+		if MatchMode.team_key(state.roster, side) == key:
+			out.append(side)
+	return out
+
+## Начало раунда в Holdout: пора — объявить следующую волну (где высадится — сразу,
+## приходит в конце раунда, как и независимая армия: у защитников ровно один ход).
+func _maybe_announce_wave(res: ActionResult) -> void:
+	if _waves_remain() and state.turns.round_number >= mode.next_wave_round:
+		_announce_wave(res)
+
+## Будет ли ещё волна, и не объявлена ли она уже.
+func _waves_remain() -> bool:
+	return mode.wave_side >= 0 and mode.pending_wave.is_empty() \
+			and (mode.endless() or mode.wave < mode.waves_total)
+
+## Последний боец волны пал — следующая объявляется сейчас же и приходит в конце этого
+## раунда (волны идут раз в два раунда ИЛИ сразу за выбитой — что раньше). true — объявили.
+func _maybe_wave_cleared(res: ActionResult) -> bool:
+	if not mode.is_holdout() or mode.wave <= 0 or not _waves_remain() or wave_fighters_left() > 0:
+		return false
+	_announce_wave(res)
+	return not mode.pending_wave.is_empty()
+
+func _announce_wave(res: ActionResult) -> void:
+	var p := _roll_wave_params()
+	if p.is_empty():
+		return
+	mode.pending_wave = p
+	var k := mode.wave + 1
+	var label := "Wave %d" % k if mode.endless() else "Wave %d of %d" % [k, mode.waves_total]
+	if not mode.endless() and k == mode.waves_total:
+		label += " (final)"
+	res.log("⚠ %s — %s, landing at the end of this round" % [label, _event_where(RandomEvents.ARMY, p)])
+
+## Участок высадки армии или волны в клетках: полоса глубиной 2 у края, а в бункере —
+## квадрат 3×3 у конца коридора. Его рисует бой и видит обучаемая политика.
+func army_landing_rect(p: Dictionary) -> Rect2i:
+	if p.has("hx"):
+		return Rect2i(int(p["hx"]) - 1, int(p["hy"]) - 1, 3, 3)
+	var seg := int(p.get("len", 1))
+	var from := int(p.get("from", 0))
+	var gw := state.grid.width
+	var gh := state.grid.height
+	match int(p.get("edge", 0)) % 4:
+		0: return Rect2i(from, 0, seg, 2)
+		1: return Rect2i(gw - 2, from, 2, seg)
+		2: return Rect2i(from, gh - 2, seg, 2)
+	return Rect2i(0, from, 2, seg)
+
+## Где высадится волна: из трёх бросков края — тот, что дальше всего от защитников.
+## Волна, упавшая прямо в окопы, — не штурм, а лотерея; и кубики те же у всех пиров.
+const WAVE_EDGE_ROLLS := 3
+func _roll_wave_params() -> Dictionary:
+	var defenders: Array[Vector2i] = []
+	for u: UnitInstance in state.all_units():
+		if u.is_alive() and MCF.is_player(u.owner) and u.owner != mode.wave_side \
+				and state.grid.in_bounds(u.coord):
+			defenders.append(u.coord)
+	var best := {}
+	var best_d := -1
+	for _k in WAVE_EDGE_ROLLS:
+		var p := _roll_event_params(RandomEvents.ARMY)
+		if p.is_empty():
+			continue
+		var spots := _army_spawn_cells(p)
+		if spots.is_empty():
+			continue
+		var d := 1 << 20
+		for c: Vector2i in defenders:
+			d = mini(d, Combat.distance(c, spots[0]))
+		if d > best_d:
+			best_d = d
+			best = p
+	return best
+
+## Высадка объявленной волны: та же раскладка по краю (или из конца коридора в бункере),
+## что у независимой армии, но за сторону волн и по нарастающему бюджету.
+func _land_wave(res: ActionResult) -> void:
+	var p := mode.pending_wave
+	mode.pending_wave = {}
+	var k := mode.wave + 1
+	var spots := _army_spawn_cells(p)
+	var placed := _spawn_budget(spots, mode.wave_budget(k), mode.wave_side)
+	mode.wave = k
+	mode.wave_spawned += placed
+	# Слот волн обязан стоять в очереди: лобби ставит его туда с начала боя, а тем, кто
+	# собирает ростер позже (среда RL, инструменты), — место в конце круга.
+	state.turns.insert_slot(mode.wave_side, state.turns.round_order.size())
+	mode.next_wave_round = state.turns.round_number + MatchMode.WAVE_EVERY
+	var label := "Wave %d" % k if mode.endless() else "Wave %d of %d" % [k, mode.waves_total]
+	if placed == 0:
+		res.log("%s finds nowhere to land" % label)
+		return
+	res.log("— %s lands: %d fighters —" % [label, placed])
+	notify_cell_changed(spots[0])
+
+
+# =====================================================================================
+#  События 0.12: пожар, ЭМИ, пыльная буря, обрушение, подкрепление, награда, старые мины
+# =====================================================================================
+
+## Пожар события: свой «поджигатель», которого нет в очереди ходов — его огонь расползается
+## раз в раунд, в land_random_events, а не на чьём-то ходу.
+const EVENT_FIRE_OWNER := -2
+## Владелец старых мин: ничей — их не видит никто, пока сапёр не подсветит.
+const OLD_MINE_OWNER := -2
+const FIRE_SIDE := 3
+const EMP_SIDE := 7
+const COLLAPSE_SIDE := 3
+## Обрушение: d6 на бойца в зоне, ниже этого — завален.
+const COLLAPSE_SURVIVE_MIN := 3
+const DUST_ROUNDS := 2
+## Пыльная буря: дальше стольких клеток выстрелу нужно на одно больше.
+const DUST_CLEAR := 3
+const BOUNTY_ROUNDS := 3
+## Старая мина рвётся на d6 не ниже этого (треть шагов); кладётся на клетку поля на 5+.
+const OLD_MINE_GOES_OFF := 5
+const MINEFIELD_LAY_ON := 5
+const MINEFIELD_RADIUS := 4
+const MINEFIELD_MAX := 10
+## Подкрепление: приходит, если слабейшая сторона отстаёт на эту долю от сильнейшей, и
+## привозит такую долю разницы.
+const REINFORCE_GAP := 0.2
+const REINFORCE_SHARE := 0.5
+## Стены, которые рушатся: обычные, деревянные и стекло (не броня, не грунт бункера).
+const COLLAPSIBLE := [MCF.FEATURE_WALL, MCF.FEATURE_WOOD_WALL, MCF.FEATURE_GLASS]
+
+var _old_mine_roll := 0
+
+## Нужный бросок с поправкой на пыльную бурю. Все выстрелы резолвера считаются через неё.
+func hit_need(dist: int, fire_range: float) -> int:
+	return _dusty(Combat.hit_number(dist, fire_range), dist)
+
+func sniper_need(dist: int) -> int:
+	return _dusty(Combat.sniper_hit_number(dist), dist)
+
+func _dusty(need: int, dist: int) -> int:
+	if random_events != null and random_events.dust_left > 0 and dist > DUST_CLEAR:
+		return mini(7, need + 1)
+	return need
+
+## Какие события возможны здесь и сейчас: карта (буря — город и поле, мины — астероид,
+## город и поле), режим (награда — только Capture & Hold) и сама доска (есть стены, есть
+## отстающая сторона, есть где лечь минам).
+func _events_allowed() -> Dictionary:
+	var ok := {RandomEvents.MORTAR: true, RandomEvents.GAS: true, RandomEvents.ARMY: true}
+	if not _emp_targets().is_empty():
+		ok[RandomEvents.EMP] = true
+	if not _burnable_cells(_useful_rect()).is_empty():
+		ok[RandomEvents.FIRE] = true
+	if state.env in ["town", "field"] and random_events.dust_left <= 0:
+		ok[RandomEvents.DUST] = true
+	if not _collapse_walls().is_empty():
+		ok[RandomEvents.COLLAPSE] = true
+	if not _reinforce_target().is_empty():
+		ok[RandomEvents.REINFORCE] = true
+	if mode.is_capture() and mode.bounty_unit < 0 and _bounty_pick() != null:
+		ok[RandomEvents.BOUNTY] = true
+	if state.env in ["asteroid", "town", "field"] and not _minefield_cells().is_empty():
+		ok[RandomEvents.MINEFIELD] = true
+	return ok
+
+## Куда бьёт ЭМИ (владелец, 0.12: «по технике»): в центр машины — сперва машины с живым
+## экипажем, иначе любые уцелевшие; техники нет — в дроны и станции дронов. Пусто — ЭМИ
+## бить не во что, и событие не выпадает. Порядок — по id и по строкам: у пиров одинаков.
+func _emp_targets() -> Array[Vector2i]:
+	var crewed: Array[Vector2i] = []
+	var empty: Array[Vector2i] = []
+	var ids: Array = state.vehicles.keys()
+	ids.sort()
+	for vid: int in ids:
+		var veh: Vehicle = state.vehicles[vid]
+		if not veh.alive():
+			continue
+		if veh.living_crew_count() > 0:
+			crewed.append(veh.center())
+		else:
+			empty.append(veh.center())
+	if not crewed.is_empty():
+		return crewed
+	if not empty.is_empty():
+		return empty
+	var gear: Array[Vector2i] = []
+	for u: UnitInstance in state.all_units():
+		if u.is_alive() and u.is_drone and state.grid.in_bounds(u.coord):
+			gear.append(u.coord)
+	gear.append_array(_feature_cells(MCF.FEATURE_DRONE_STATION))
+	return gear
+
+## Квадрат side×side вокруг клетки, прижатый к карте.
+func _rect_around(c: Vector2i, side: int) -> Dictionary:
+	var gw := state.grid.width
+	var gh := state.grid.height
+	var w := mini(side, gw)
+	var h := mini(side, gh)
+	return {"x": clampi(c.x - side / 2, 0, gw - w), "y": clampi(c.y - side / 2, 0, gh - h), "w": w, "h": h}
+
+## Клетки участка, которые могут заняться огнём (порядок — по строкам).
+func _burnable_cells(area: Rect2i) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	for y in range(area.position.y, area.end.y):
+		for x in range(area.position.x, area.end.x):
+			var cell := state.grid.cell_fast(x, y)
+			if not cell.is_space and not cell.on_fire and cell.walkable_terrain() \
+					and not _fire_blocked(cell) and fire_need(cell) <= 6:
+				out.append(Vector2i(x, y))
+	return out
+
+## Стены построек, у которых хоть с одной стороны пол, — что может рухнуть.
+func _collapse_walls() -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	for y in state.grid.height:
+		for x in state.grid.width:
+			var cell := state.grid.cell_fast(x, y)
+			if not COLLAPSIBLE.has(cell.feature_id):
+				continue
+			for n: Vector2i in _ortho4(Vector2i(x, y)):
+				var nc := state.grid.cell(n)
+				if nc != null and not nc.is_space and nc.walkable_terrain():
+					out.append(Vector2i(x, y))
+					break
+	return out
+
+## Пожар: в зоне загорается всё, что может гореть; кто стоял там — сгорает (объявлено за
+## раунд). Дальше огонь расползается раз в раунд, как любой другой.
+func _land_fire(p: Dictionary, res: ActionResult) -> void:
+	var rect := Rect2i(int(p.get("x", 0)), int(p.get("y", 0)), int(p.get("w", 0)), int(p.get("h", 0)))
+	var lit := 0
+	var burned: Array[String] = []
+	for c: Vector2i in _burnable_cells(rect):
+		var cell := state.grid.cell(c)
+		_ignite(cell, EVENT_FIRE_OWNER, res)
+		lit += 1
+		var occ := cell.occupant
+		if occ != null and occ.is_alive() and not is_fireproof(occ):
+			_kill_burnt(occ)
+			res.fire_deaths.append(occ.id)
+			burned.append(occ.stats.display_name)
+		notify_cell_changed(c)
+	var tail := "" if burned.is_empty() else " — " + ", ".join(burned) + " burned"
+	res.log("Fire breaks out in zone (%d, %d) %d×%d: %d cell(s) ablaze%s" % [
+		rect.position.x, rect.position.y, rect.size.x, rect.size.y, lit, tail])
+
+## ЭМИ: дроны падают, станции дронов и ЛДФ выгорают, у машин страдает пушка.
+func _land_emp(p: Dictionary, res: ActionResult) -> void:
+	var rect := Rect2i(int(p.get("x", 0)), int(p.get("y", 0)), int(p.get("w", 0)), int(p.get("h", 0)))
+	var fried: Array[String] = []
+	var ids: Array = state.units.keys()
+	ids.sort()
+	for id: int in ids:
+		var u := state.get_unit(id)
+		if u != null and u.is_alive() and u.is_drone and rect.has_point(u.coord):
+			_kill(u, res, u.coord)
+			res.deaths.append(u.id)
+			fried.append("a drone")
+	for y in range(rect.position.y, rect.end.y):
+		for x in range(rect.position.x, rect.end.x):
+			var c := Vector2i(x, y)
+			var cell := state.grid.cell(c)
+			if cell == null:
+				continue
+			if cell.feature_id == MCF.FEATURE_DRONE_STATION or cell.feature_id == MCF.FEATURE_LDF:
+				fried.append("a drone station" if cell.feature_id == MCF.FEATURE_DRONE_STATION else "an LDF wall")
+				cell.clear_feature()
+				notify_cell_changed(c)
+	for veh: Vehicle in state.all_vehicles():
+		if not veh.alive() or not veh.has_component(MCF.COMP_GUN):
+			continue
+		for fc: Vector2i in veh.footprint():
+			if rect.has_point(fc):
+				_damage_component(veh, MCF.COMP_GUN, 1, "emp", res)
+				fried.append("a vehicle gun")
+				break
+	res.log("EMP Burst over zone (%d, %d) %d×%d: %s" % [rect.position.x, rect.position.y,
+		rect.size.x, rect.size.y, ", ".join(fried) if not fried.is_empty() else "nothing electronic was caught"])
+
+## Обрушение: стены построек в зоне рушатся в обломки; каждый в зоне бросает d6 —
+## ниже COLLAPSE_SURVIVE_MIN, и его завалило.
+func _land_collapse(p: Dictionary, res: ActionResult) -> void:
+	var rect := Rect2i(int(p.get("x", 0)), int(p.get("y", 0)), int(p.get("w", 0)), int(p.get("h", 0)))
+	var fell: Array[Vector2i] = []
+	for x in range(rect.position.x, rect.end.x):
+		for y in range(rect.position.y, rect.end.y):
+			var c := Vector2i(x, y)
+			var cell := state.grid.cell(c)
+			if cell == null or not COLLAPSIBLE.has(cell.feature_id):
+				continue
+			cell.feature_durability = 0
+			_blast_destroy_terrain(c, res, c)
+			notify_cell_changed(c)
+			fell.append(c)
+	if not fell.is_empty():
+		_fx(res, {"fx": "debris", "at": NOWHERE, "cells": fell, "blast": true})
+	res.log("Structural collapse at zone (%d, %d) %d×%d: %d wall section(s) come down" % [
+		rect.position.x, rect.position.y, rect.size.x, rect.size.y, fell.size()])
+	var ids: Array = state.units.keys()
+	ids.sort()
+	for id: int in ids:
+		var u := state.get_unit(id)
+		if u == null or not u.is_alive() or u.is_drone or u.aboard_vehicle_id != -1 \
+				or not rect.has_point(u.coord):
+			continue
+		var roll := state.dice.roll_d6()
+		res.dice_events.append({"kind": "check", "actor": u.stats.display_name,
+			"roll": roll, "need": COLLAPSE_SURVIVE_MIN, "ok": roll >= COLLAPSE_SURVIVE_MIN,
+			"roller": u.owner})
+		if roll >= COLLAPSE_SURVIVE_MIN:
+			res.log("%s dodges the falling debris (roll %d)" % [u.stats.display_name, roll])
+			continue
+		_kill(u, res, u.coord)
+		res.deaths.append(u.id)
+		res.log("%s is crushed by the collapse (roll %d, needed %d+)" % [
+			u.stats.display_name, roll, COLLAPSE_SURVIVE_MIN])
+
+## Кому подкрепление: слабейшей по стоимости бойцов стороне, если она отстаёт от сильнейшей
+## хотя бы на REINFORCE_GAP. Высадка — у ближайшего к её бойцам края (в бункере — из конца
+## коридора). Пусто — подкреплять некого. Без кубиков: решает доска.
+func _reinforce_target() -> Dictionary:
+	var value := {}
+	var sum := {}
+	var cnt := {}
+	for u: UnitInstance in state.all_units():
+		if not u.is_alive() or u.is_drone or not MCF.is_player(u.owner):
+			continue
+		if mode.is_holdout() and u.owner == mode.wave_side:
+			continue
+		value[u.owner] = int(value.get(u.owner, 0)) + u.stats.cost
+		if state.grid.in_bounds(u.coord):
+			sum[u.owner] = (sum.get(u.owner, Vector2i.ZERO) as Vector2i) + u.coord
+			cnt[u.owner] = int(cnt.get(u.owner, 0)) + 1
+	if value.size() < 2:
+		return {}
+	var sides: Array = value.keys()
+	sides.sort()
+	var weak: int = sides[0]
+	var strong: int = sides[0]
+	for s: int in sides:
+		if int(value[s]) < int(value[weak]):
+			weak = s
+		if int(value[s]) > int(value[strong]):
+			strong = s
+	var gap := int(value[strong]) - int(value[weak])
+	if float(gap) < float(value[strong]) * REINFORCE_GAP:
+		return {}
+	var gw := state.grid.width
+	var gh := state.grid.height
+	var c := Vector2i(gw / 2, gh / 2)
+	if int(cnt.get(weak, 0)) > 0:
+		c = (sum[weak] as Vector2i) / int(cnt[weak])
+	var d := [c.y, gw - 1 - c.x, gh - 1 - c.y, c.x]
+	var edge := 0
+	for i in 4:
+		if int(d[i]) < int(d[edge]):
+			edge = i
+	var along := gw if edge % 2 == 0 else gh
+	var seg := mini(along, ARMY_SEGMENT_MIN + 2)
+	var pos := c.x if edge % 2 == 0 else c.y
+	var p := {"side": weak, "budget": maxi(1, int(float(gap) * REINFORCE_SHARE)),
+			"edge": edge, "from": clampi(pos - seg / 2, 0, along - seg), "len": seg}
+	if state.env == "bunker":
+		var entry := _hallway_entry(p)
+		if entry.x >= 0:
+			p["hx"] = entry.x
+			p["hy"] = entry.y
+	return p
+
+func _land_reinforce(p: Dictionary, res: ActionResult) -> void:
+	var side := int(p.get("side", -1))
+	if not side_has_army(side):
+		res.log("Reinforcements turn back — nobody is left to reinforce")
+		return
+	var spots := _army_spawn_cells(p)
+	var placed := _spawn_budget(spots, int(p.get("budget", 1)), side)
+	if placed == 0:
+		res.log("Reinforcements find nowhere to land")
+		return
+	res.log("— Reinforcements reach %s: %d fighters —" % [state.roster.name_of(side), placed])
+	notify_cell_changed(spots[0])
+
+## Высадить бойцов из ARMY_ROSTER на клетки spots, пока хватает бюджета (первый — всегда).
+## Кубики выбирают тип; порядок клеток задан. Возвращает, сколько встало.
+func _spawn_budget(spots: Array[Vector2i], budget: int, owner: int) -> int:
+	var spent := 0
+	var placed := 0
+	var guard := 0
+	while guard < ARMY_UNIT_CAP and placed < spots.size():
+		guard += 1
+		var sid: String = ARMY_ROSTER[_rand_wide(ARMY_ROSTER.size())]
+		var stats: UnitStats = _army_stats(sid)
+		if stats == null:
+			continue
+		if spent + stats.cost > budget and placed > 0:
+			break
+		state.spawn_unit(stats, spots[placed], owner)
+		spent += stats.cost
+		placed += 1
+	return placed
+
+## Награда (только Capture & Hold): самый дорогой боец команды, что ведёт по очкам (при
+## равенстве очков — по стоимости армии). Убивший его враг получает BOUNTY_POINTS.
+func _bounty_pick() -> UnitInstance:
+	var team_val := {}
+	for u: UnitInstance in state.all_units():
+		if u.is_alive() and not u.is_drone and MCF.is_player(u.owner):
+			var k := MatchMode.team_key(state.roster, u.owner)
+			team_val[k] = int(team_val.get(k, 0)) + u.stats.cost
+	var keys: Array = team_val.keys()
+	if keys.size() < 2:
+		return null
+	keys.sort()
+	var lead: String = keys[0]
+	for k: String in keys:
+		var pk := int(mode.scores.get(k, 0))
+		var pl := int(mode.scores.get(lead, 0))
+		if pk > pl or (pk == pl and int(team_val[k]) > int(team_val[lead])):
+			lead = k
+	var best: UnitInstance = null
+	for u: UnitInstance in state.all_units():
+		if not u.is_alive() or u.is_drone or u.is_held() or not state.grid.in_bounds(u.coord) \
+				or not MCF.is_player(u.owner) or MatchMode.team_key(state.roster, u.owner) != lead:
+			continue
+		if best == null or u.stats.cost > best.stats.cost or (u.stats.cost == best.stats.cost and u.id < best.id):
+			best = u
+	return best
+
+func _start_bounty(res: ActionResult) -> void:
+	var u := _bounty_pick()
+	if u == null:
+		return
+	mode.bounty_unit = u.id
+	mode.bounty_side = u.owner
+	mode.bounty_until = state.turns.round_number + BOUNTY_ROUNDS - 1
+	res.log("⚠ Bounty — %s's %s is marked: kill it within %d rounds for %d points" % [
+		state.roster.name_of(u.owner), u.stats.display_name, BOUNTY_ROUNDS, MatchMode.BOUNTY_POINTS])
+
+## Цель награды пала: убил враг — его команде очки; иначе (огонь, событие, свои) — сгорела.
+func _check_bounty(res: ActionResult, killer: int) -> void:
+	var u := state.get_unit(mode.bounty_unit)
+	if u != null and u.is_alive():
+		return
+	mode.bounty_unit = -1
+	if killer >= 0 and MCF.is_player(killer) and not state.roster.are_allies(killer, mode.bounty_side):
+		var k := MatchMode.team_key(state.roster, killer)
+		mode.scores[k] = int(mode.scores.get(k, 0)) + MatchMode.BOUNTY_POINTS
+		res.log("Bounty claimed — %s scores %d points" % [team_label(k), MatchMode.BOUNTY_POINTS])
+	else:
+		res.log("The bounty lapses — its target fell, but not to an enemy")
+
+## Где могут лечь старые мины: под открытым небом. На астероиде — его вакуумная поверхность,
+## в городе и в поле — трава и дорога (не пол домов: у него своя отделка или деревянный
+## настил). Клетка пустая: без объекта, бойца, машины, огня и тел.
+func _minefield_cells() -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	var grid := state.grid
+	var w := grid.width
+	var looks := grid.floor_look.size() == w * grid.height
+	var astro := state.env == "asteroid"
+	for y in grid.height:
+		for x in w:
+			var c := grid.cell_fast(x, y)
+			if c.feature_id != "" or c.occupant != null or c.vehicle_id != -1 or c.on_fire \
+					or c.corpse_count > 0 or not c.walkable_terrain():
+				continue
+			if astro:
+				if not c.is_space:
+					continue
+			elif c.is_space or c.floor_type == MCF.FLOOR_FLAMMABLE or (looks and grid.floor_look[y * w + x] != 0):
+				continue
+			out.append(Vector2i(x, y))
+	return out
+
+## Старое минное поле: случается сразу, в начале раунда. Где — не говорится никому.
+func _start_minefield(res: ActionResult) -> void:
+	var cells := _minefield_cells()
+	if cells.is_empty():
+		return
+	var centre: Vector2i = cells[_rand_wide(cells.size())]
+	var placed := 0
+	for c: Vector2i in cells:
+		if placed >= MINEFIELD_MAX:
+			break
+		if absi(c.x - centre.x) > MINEFIELD_RADIUS or absi(c.y - centre.y) > MINEFIELD_RADIUS:
+			continue
+		if state.dice.roll_d6() < MINEFIELD_LAY_ON:
+			continue
+		state.grid.cell(c).set_feature(MCF.FEATURE_MINE, OLD_MINE_OWNER)
+		notify_cell_changed(c)
+		placed += 1
+	res.log("⚠ Old Minefield — scouts report forgotten mines somewhere on the map. Watch your step.")

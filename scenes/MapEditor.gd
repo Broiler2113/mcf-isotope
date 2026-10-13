@@ -2019,7 +2019,9 @@ func _build_menu_bar() -> void:
 		["View", [["Zoom In", zoom_in, "editor_zoom_in"], ["Zoom Out", zoom_out, "editor_zoom_out"],
 			["Fit Map", fit_view, "editor_fit"], [],
 			["check:lighting", "Lighting", "editor_lighting"], ["check:heightmap", "Heightmap", "editor_heightmap"], ["check:grid", "Grid", "editor_grid"], ["check:zones", "Deployment Zones"], ["check:mini", "Minimap"], [],
-			["Keyboard Shortcuts…", _shortcuts_dialog, "editor_help"]]],
+			["Keyboard Shortcuts…", _shortcuts_dialog, "editor_help"],
+			["Manual", func() -> void: ManualWindow.toggle(self), "editor_manual"],
+			["Report a Bug…", func() -> void: BugReportWindow.open(self)]]],
 		["Presets", [["Save Selection…", _save_room_dialog], ["Manage Rooms & Structures…", _room_manager],
 			["Open Presets Folder", func() -> void: OS.shell_open(ProjectSettings.globalize_path(RoomPresets.DIR))]]],
 		["Map", [["Resize…", _resize_dialog], [], ["label", "Preset"]] + _preset_items()],
@@ -2195,7 +2197,7 @@ func _open_light_menu(screen: Vector2) -> bool:
 		_light_menu.add_separator("%s · %s side" % [Furniture.DEFS[id].name, SIDE_NAMES[side]])
 	for t in Furniture.LIGHT_TINTS.size():
 		var swatch_colour: Color = Furniture.LIGHT_TINTS[t][1] if t > 0 else Furniture.light_color_of(id, 0)
-		_light_menu.add_radio_check_item("Light colour · %s" % Furniture.LIGHT_TINTS[t][0], t)
+		_light_menu.add_radio_check_item("Light color · %s" % Furniture.LIGHT_TINTS[t][0], t)
 		var at := _light_menu.get_item_index(t)
 		_light_menu.set_item_icon(at, _swatch(swatch_colour))
 		_light_menu.set_item_checked(at, Furniture.tint_colour(current) == t)
@@ -2762,7 +2764,7 @@ static func _furniture_hint(fid: String) -> String:
 			"fixed": "immovable"}[Furniture.mobility_name(fid)]
 	if Furniture.joins(fid):
 		# Соседние клетки того же вида срастаются в один предмет — а такой не берут в руки.
-		move = "joins neighbours into one piece; " + ("dragged only as a single cell"
+		move = "joins neighbors into one piece; " + ("dragged only as a single cell"
 				if Furniture.draggable(fid) else "immovable")
 	var cover := "wall-height" if Furniture.blocks_move(fid) \
 			else ("cover −%d" % Furniture.cover_penalty(float(d["h"])) if Furniture.cover_penalty(float(d["h"])) > 0
@@ -2770,7 +2772,7 @@ static func _furniture_hint(fid: String) -> String:
 	var colours := Furniture.colours_of(fid).size()
 	var hint := "%s — %.1f m, %s, %s\n%s, durability %d, breaks for %d AP%s" % [Furniture.name_of(fid),
 			float(d["h"]), d["mat"], cover, move[0].to_upper() + move.substr(1), int(d["dur"]), int(d["ap"]),
-			"\n%d colours — pick one under the brush name" % colours if colours > 1 else ""]
+			"\n%d colors — pick one under the brush name" % colours if colours > 1 else ""]
 	if Furniture.emits_light(fid): hint += "\nLight strength %.2f · range %.1f tiles" % [float(d.light_energy), float(d.light_range)]
 	return hint
 

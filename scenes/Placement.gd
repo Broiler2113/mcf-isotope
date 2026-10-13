@@ -203,16 +203,17 @@ func _on_peer_left(id: int) -> void:
 	var slot := roster.slot(side)
 	slot.kind = Roster.SlotKind.AI
 	slot.ai_difficulty = AIController.Difficulty.HARD
+	slot.ai_style = AIPersonality.TACTICIAN
 	slot.peer_id = -1
 	_live_units.erase(side)
 	if _net != null:
-		_net.send({"k": K_SLOT_AI, "side": side, "ai": slot.ai_difficulty})
+		_net.send({"k": K_SLOT_AI, "side": side, "ai": slot.ai_difficulty, "st": slot.ai_style})
 	if _ready_sides.has(side) and _remote_units.has(side):
-		_status.text = "%s left — a Hard AI takes over their army." % roster.name_of(side)
+		_status.text = "%s left — a Tactician AI takes over their army." % roster.name_of(side)
 	else:
 		_ready_sides.erase(side)
 		_remote_units.erase(side)
-		_status.text = "%s left — deploy an army for the Hard AI that takes their place." % roster.name_of(side)
+		_status.text = "%s left — deploy an army for the Tactician AI that takes their place." % roster.name_of(side)
 		if _my_ready and GameConfig.placement_mode != GameConfig.Placement.MIRRORED:
 			# Своё уже сдано, а за ушедшего никто не ставил: возвращаем кнопку и ведём
 			# хоста по его новой стороне. Отправленные раньше стороны переслать не страшно —
@@ -234,10 +235,11 @@ func _apply_slot_ai(msg: Dictionary) -> void:
 		return
 	slot.kind = Roster.SlotKind.AI
 	slot.ai_difficulty = int(msg.get("ai", AIController.Difficulty.HARD))
+	slot.ai_style = int(msg.get("st", AIPersonality.TACTICIAN))
 	slot.peer_id = -1
 	_live_units.erase(side)
 	if _status != null:
-		_status.text = "%s left — a Hard AI takes that side." % roster.name_of(side)
+		_status.text = "%s left — a Tactician AI takes that side." % roster.name_of(side)
 	_refresh_labels()
 	queue_redraw()
 
@@ -660,6 +662,10 @@ func _map_defines_zones() -> bool:
 ## Стороны партии в порядке расстановки.
 func _sides() -> Array[int]:
 	var ids := roster.player_ids()
+	# Волны Holdout (0.12) армию не ставят: их бойцы приходят с края уже в бою.
+	var waves := roster.waves_side()
+	if waves >= 0:
+		ids.erase(waves)
 	return ids if not ids.is_empty() else [MCF.Owner.PLAYER_1, MCF.Owner.PLAYER_2]
 
 ## Карта со своей разметкой играется по ней; иначе — старое правило половинок:
@@ -1433,6 +1439,18 @@ func _draw() -> void:
 		if maxf(a.x, b.x) < vx0 or minf(a.x, b.x) > vx1 + 1 or maxf(a.y, b.y) < vy0 or minf(a.y, b.y) > vy1 + 1:
 			continue
 		draw_line(ORIGIN + a * CELL, ORIGIN + b * CELL, edge_col, 2.0)
+	# Зоны Capture & Hold (0.12) — ровно те, что встанут в бою: армию ставят с прицелом на них.
+	var md := _objective_mode()
+	for i in md.zones.size():
+		var zr := md.zone_rect(i)
+		var rect := Rect2(ORIGIN + Vector2(zr.position) * CELL, Vector2(zr.size) * CELL)
+		draw_rect(rect, Color(0.86, 0.88, 0.92, 0.10))
+		draw_rect(rect, Color(0.86, 0.88, 0.92, 0.9), false, 3.0)
+		var tag := md.zone_name(i).to_upper()
+		var tw := font.get_string_size(tag, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
+		draw_rect(Rect2(rect.position + Vector2(2, 2), Vector2(tw + 8, 18)), Color(0, 0, 0, 0.55))
+		draw_string(font, rect.position + Vector2(6, 16), tag, HORIZONTAL_ALIGNMENT_LEFT, -1, 13,
+				Color(0.86, 0.88, 0.92))
 	# Сохранённые мирные.
 	for s in preserved_neutral:
 		_draw_token(s["coord"], MCF.Owner.NEUTRAL, s["stats_id"], font)
@@ -1828,6 +1846,16 @@ func _start_battle() -> void:
 	if networked():
 		_hand_session_to_battle()
 	get_tree().change_scene_to_file(MAIN_SCENE)
+
+## Режим партии с зонами Capture & Hold, посчитанными по этой карте (раз на экран: карта
+## на расстановке не меняется). Не Capture & Hold — зон нет.
+var _objectives: MatchMode = null
+func _objective_mode() -> MatchMode:
+	if _objectives == null:
+		_objectives = MatchMode.from_config()
+		if _objectives.is_capture():
+			_objectives.zones = MatchMode.zones_for(map, _objectives.zone_count, roster.player_ids(), _tile_grid)
+	return _objectives
 
 func _sort_spawns() -> void:
 	map.spawns.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:

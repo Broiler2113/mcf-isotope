@@ -11,16 +11,16 @@ initiative Neutral → Player B → Player A
     ok=true
     log: Sniper → Sniper: 1 shots, 0 hits (need 4+)
     dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:0,hit_mods:[],killed:false,kind:attack,need:4,shooter:Sniper,shooter_owner:1,shots:[{armor:6,def_roll:0,hit:false,hit_roll:3,need:4,parried:true}],target:Sniper}
-[r1 s3 p1] MoveIntent(a=1 dx=-999 dy=-999 t=move x=21 y=3)
+[r1 s3 p1] MoveIntent(a=1 dx=-999 dy=-999 t=move x=21 y=10)
     ok=true
-    log: Light Infantry: move → (21, 3) [AP: 1]
+    log: Light Infantry: move → (21, 10) [AP: 1]
     dice: {kind:hold,units:{1:(30, 4)}}
-    dice: {from:(30, 4),kind:walk,path:[(29, 4),(28, 4),(27, 4),(26, 4),(25, 4),(23, 4),(22, 4),(21, 3)],soldier:true,unit:1}
+    dice: {from:(30, 4),kind:walk,path:[(29, 4),(28, 4),(27, 4),(26, 5),(25, 6),(24, 7),(23, 8),(22, 9),(21, 10)],soldier:true,unit:1}
 [r1 s3 p1] MoveIntent(a=1 dx=-999 dy=-999 t=move x=12 y=1)
     ok=true
     log: Light Infantry: move → (12, 1) [AP: 0]
-    dice: {kind:hold,units:{1:(21, 3)}}
-    dice: {from:(21, 3),kind:walk,path:[(20, 3),(19, 4),(18, 5),(17, 6),(16, 5),(15, 4),(14, 3),(13, 2),(12, 1)],soldier:true,unit:1}
+    dice: {kind:hold,units:{1:(21, 10)}}
+    dice: {from:(21, 10),kind:walk,path:[(20, 9),(19, 8),(18, 7),(17, 6),(16, 5),(15, 4),(14, 3),(13, 2),(12, 1)],soldier:true,unit:1}
 [r1 s3 p1] MoveIntent(a=3 dx=-999 dy=-999 t=move x=21 y=7)
     ok=true
     log: Light Infantry: move → (21, 7) [AP: 1]
@@ -31,148 +31,146 @@ initiative Neutral → Player B → Player A
     log: Light Infantry: move → (12, 2) [AP: 0]
     dice: {kind:hold,units:{3:(21, 7)}}
     dice: {from:(21, 7),kind:walk,path:[(20, 6),(19, 6),(18, 6),(17, 6),(16, 5),(15, 4),(14, 3),(13, 2),(12, 2)],soldier:true,unit:3}
-[r1 s3 p1] MoveIntent(a=5 dx=-999 dy=-999 t=move x=24 y=10)
+[r1 s3 p1] MoveIntent(a=5 dx=-999 dy=-999 t=move x=24 y=5)
     ok=true
-    log: Heavy Infantry: move → (24, 10) [AP: 1]
+    log: Heavy Infantry: move → (24, 5) [AP: 1]
     dice: {kind:hold,units:{5:(30, 8)}}
-    dice: {from:(30, 8),kind:walk,path:[(29, 7),(28, 7),(27, 7),(26, 8),(25, 9),(24, 10)],soldier:true,unit:5}
+    dice: {from:(30, 8),kind:walk,path:[(29, 7),(28, 6),(27, 5),(26, 5),(25, 5),(24, 5)],soldier:true,unit:5}
 [r1 s3 p1] MoveIntent(a=5 dx=-999 dy=-999 t=move x=18 y=5)
     ok=true
     log: Heavy Infantry: move → (18, 5) [AP: 0]
-    dice: {kind:hold,units:{5:(24, 10)}}
-    dice: {from:(24, 10),kind:walk,path:[(23, 9),(22, 8),(21, 7),(20, 6),(19, 5),(18, 5)],soldier:true,unit:5}
+    dice: {kind:hold,units:{5:(24, 5)}}
+    dice: {from:(24, 5),kind:walk,path:[(23, 5),(22, 5),(21, 5),(20, 5),(19, 5),(18, 5)],soldier:true,unit:5}
 [r1 s3 p1] ShootIntent(a=11 cm= cx=-999 cy=-999 s=-1 t=shoot tid=19)
     ok=true
     log: Anti-Tank: roll 6 (need 3+) — direct hit at (22, 22)!
     log: Civilian destroyed!
     dice: {actor:Anti-Tank,kind:check,need:3,ok:true,roll:6}
     deaths: [19]
-[r1 s3 p1] MoveIntent(a=11 dx=-999 dy=-999 t=move x=24 y=13)
+[r1 s3 p1] MoveIntent(a=11 dx=-999 dy=-999 t=move x=24 y=10)
     ok=true
-    log: Anti-Tank: move → (24, 13) [AP: 0]
+    log: Anti-Tank: move → (24, 10) [AP: 0]
     dice: {kind:hold,units:{11:(30, 14)}}
-    dice: {from:(30, 14),kind:walk,path:[(29, 14),(28, 14),(27, 13),(26, 13),(25, 13),(24, 13)],soldier:true,unit:11}
-[r1 s3 p1] MoveIntent(a=13 dx=-999 dy=-999 t=move x=24 y=12)
+    dice: {from:(30, 14),kind:walk,path:[(29, 14),(28, 14),(27, 13),(26, 12),(25, 11),(24, 10)],soldier:true,unit:11}
+[r1 s3 p1] MoveIntent(a=13 dx=-999 dy=-999 t=move x=24 y=13)
     ok=true
-    log: Engineer: move → (24, 12) [AP: 1]
+    log: Engineer: move → (24, 13) [AP: 1]
     dice: {kind:hold,units:{13:(30, 16)}}
-    dice: {from:(30, 16),kind:walk,path:[(29, 15),(28, 14),(27, 13),(26, 12),(25, 12),(24, 12)],soldier:true,unit:13}
-[r1 s3 p1] MoveIntent(a=13 dx=-999 dy=-999 t=move x=18 y=6)
+    dice: {from:(30, 16),kind:walk,path:[(29, 15),(28, 14),(27, 13),(26, 13),(25, 13),(24, 13)],soldier:true,unit:13}
+[r1 s3 p1] MoveIntent(a=13 dx=-999 dy=-999 t=move x=18 y=7)
     ok=true
-    log: Engineer: move → (18, 6) [AP: 0]
-    dice: {kind:hold,units:{13:(24, 12)}}
-    dice: {from:(24, 12),kind:walk,path:[(23, 11),(22, 10),(21, 9),(20, 8),(19, 7),(18, 6)],soldier:true,unit:13}
-[r1 s3 p1] MoveIntent(a=15 dx=-999 dy=-999 t=move x=24 y=14)
+    log: Engineer: move → (18, 7) [AP: 0]
+    dice: {kind:hold,units:{13:(24, 13)}}
+    dice: {from:(24, 13),kind:walk,path:[(23, 12),(22, 11),(21, 10),(20, 9),(19, 8),(18, 7)],soldier:true,unit:13}
+[r1 s3 p1] MoveIntent(a=15 dx=-999 dy=-999 t=move x=24 y=23)
     ok=true
-    log: Flamethrower: move → (24, 14) [AP: 1]
+    log: Flamethrower: move → (24, 23) [AP: 1]
     dice: {kind:hold,units:{15:(30, 18)}}
-    dice: {from:(30, 18),kind:walk,path:[(29, 17),(28, 16),(27, 15),(26, 14),(25, 14),(24, 14)],soldier:true,unit:15}
-[r1 s3 p1] MoveIntent(a=15 dx=-999 dy=-999 t=move x=18 y=8)
+    dice: {from:(30, 18),kind:walk,path:[(29, 18),(28, 19),(27, 20),(26, 21),(25, 22),(24, 23)],soldier:true,unit:15}
+[r1 s3 p1] MoveIntent(a=15 dx=-999 dy=-999 t=move x=18 y=19)
     ok=true
-    log: Flamethrower: move → (18, 8) [AP: 0]
-    dice: {kind:hold,units:{15:(24, 14)}}
-    dice: {from:(24, 14),kind:walk,path:[(23, 13),(22, 12),(21, 11),(20, 10),(19, 9),(18, 8)],soldier:true,unit:15}
-[r1 s3 p1] MoveIntent(a=7 dx=-999 dy=-999 t=move x=25 y=8)
+    log: Flamethrower: move → (18, 19) [AP: 0]
+    dice: {kind:hold,units:{15:(24, 23)}}
+    dice: {from:(24, 23),kind:walk,path:[(23, 22),(22, 21),(21, 20),(20, 19),(19, 19),(18, 19)],soldier:true,unit:15}
+[r1 s3 p1] MoveIntent(a=7 dx=-999 dy=-999 t=move x=25 y=4)
     ok=true
-    log: Machinegunner: move → (25, 8) [AP: 1]
+    log: Machinegunner: move → (25, 4) [AP: 1]
     dice: {kind:hold,units:{7:(30, 10)}}
-    dice: {from:(30, 10),kind:walk,path:[(29, 9),(29, 8),(28, 7),(27, 7),(26, 7),(25, 8)],soldier:true,unit:7}
+    dice: {from:(30, 10),kind:walk,path:[(29, 9),(29, 8),(28, 7),(27, 6),(26, 5),(25, 4)],soldier:true,unit:7}
 [r1 s3 p1] MoveIntent(a=7 dx=-999 dy=-999 t=move x=19 y=4)
     ok=true
     log: Machinegunner: move → (19, 4) [AP: 0]
     log: — Neutral group III joins the fight (1 unit) —
-    dice: {kind:hold,units:{7:(25, 8)}}
-    dice: {from:(25, 8),kind:walk,path:[(24, 7),(23, 6),(22, 5),(21, 4),(20, 4),(19, 4)],soldier:true,unit:7}
+    dice: {kind:hold,units:{7:(25, 4)}}
+    dice: {from:(25, 4),kind:walk,path:[(23, 4),(22, 4),(21, 4),(20, 4),(19, 4)],soldier:true,unit:7}
 [r1 s4 p1] EndTurnIntent(q=-1 t=end)
     ok=true
     log: — Player B ended their turn. Player A to move (round 1) —
-[r1 s5 p0] MoveIntent(a=0 dx=-999 dy=-999 t=move x=11 y=1)
+[r1 s5 p0] ShootIntent(a=8 cm= cx=-999 cy=-999 s=-1 t=shoot tid=9)
     ok=true
-    log: Light Infantry: move → (11, 1) [AP: 1]
+    log: Sniper → Sniper: 1 shots, 0 hits (need 4+)
+    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:1,hit_mods:[],killed:false,kind:attack,need:4,shooter:Sniper,shooter_owner:0,shots:[{armor:6,def_roll:0,hit:false,hit_roll:2,need:4,parried:true}],target:Sniper}
+[r1 s5 p0] ShootIntent(a=8 cm= cx=-999 cy=-999 s=-1 t=shoot tid=9)
+    ok=true
+    log: Sniper → Sniper: 1 shots, 0 hits (need 4+)
+    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:1,hit_mods:[],killed:false,kind:attack,need:4,shooter:Sniper,shooter_owner:0,shots:[{armor:6,def_roll:0,hit:false,hit_roll:2,need:4,parried:true}],target:Sniper}
+[r1 s5 p0] MoveIntent(a=10 dx=-999 dy=-999 t=move x=4 y=19)
+    ok=true
+    log: Anti-Tank: move → (4, 19) [AP: 1]
+    dice: {kind:hold,units:{10:(3, 14)}}
+    dice: {from:(3, 14),kind:walk,path:[(3, 15),(4, 16),(4, 17),(4, 18),(4, 19)],soldier:true,unit:10}
+[r1 s5 p0] ShootIntent(a=10 cm= cx=-999 cy=-999 s=-1 t=shoot tid=15)
+    ok=true
+    log: Anti-Tank: roll 3 (need 5+) — missed, charge fell short at (12, 19).
+    log: … nobody destroyed
+    dice: {actor:Anti-Tank,kind:check,need:5,ok:false,roll:3}
+[r1 s5 p0] MoveIntent(a=10 dx=-999 dy=-999 t=move x=5 y=18)
+    ok=true
+    log: Anti-Tank: move → (5, 18) [AP: 0]
+    dice: {kind:hold,units:{10:(4, 19)}}
+    dice: {from:(4, 19),kind:walk,path:[(5, 18)],soldier:true,unit:10}
+[r1 s5 p0] MoveIntent(a=0 dx=-999 dy=-999 t=move x=11 y=2)
+    ok=true
+    log: Light Infantry: move → (11, 2) [AP: 1]
     dice: {kind:hold,units:{0:(3, 4)}}
-    dice: {from:(3, 4),kind:walk,path:[(4, 3),(5, 2),(6, 1),(7, 1),(8, 1),(9, 1),(10, 1),(11, 1)],soldier:true,unit:0}
+    dice: {from:(3, 4),kind:walk,path:[(4, 3),(5, 3),(6, 3),(7, 3),(8, 3),(9, 3),(10, 3),(11, 2)],soldier:true,unit:0}
 [r1 s5 p0] ShootIntent(a=0 cm= cx=-999 cy=-999 s=2 t=shoot tid=1)
     ok=true
     log: Light Infantry → Light Infantry: 2 shots, 2 hits (need 1+)
     log: Light Infantry killed!
-    dice: {armor:4,def_mods:[],def_owner:1,hit_mods:[],killed:true,kind:attack,need:1,shooter:Light Infantry,shooter_owner:0,shots:[{armor:4,def_roll:2,hit:true,hit_roll:2,need:1,parried:false},{armor:4,def_roll:1,hit:true,hit_roll:3,need:1,parried:false}],target:Light Infantry}
+    dice: {armor:4,def_mods:[],def_owner:1,hit_mods:[],killed:true,kind:attack,need:1,shooter:Light Infantry,shooter_owner:0,shots:[{armor:4,def_roll:2,hit:true,hit_roll:1,need:1,parried:false},{armor:4,def_roll:1,hit:true,hit_roll:5,need:1,parried:false}],target:Light Infantry}
     deaths: [1]
-[r1 s5 p0] MoveIntent(a=2 dx=-999 dy=-999 t=move x=11 y=2)
+[r1 s5 p0] MoveIntent(a=2 dx=-999 dy=-999 t=move x=11 y=1)
     ok=true
-    log: Light Infantry: move → (11, 2) [AP: 1]
+    log: Light Infantry: move → (11, 1) [AP: 1]
     dice: {kind:hold,units:{2:(3, 6)}}
-    dice: {from:(3, 6),kind:walk,path:[(4, 5),(5, 5),(6, 5),(7, 5),(8, 5),(10, 3),(11, 2)],soldier:true,unit:2}
+    dice: {from:(3, 6),kind:walk,path:[(4, 5),(5, 4),(6, 3),(7, 2),(8, 1),(9, 1),(10, 1),(11, 1)],soldier:true,unit:2}
 [r1 s5 p0] ShootIntent(a=2 cm= cx=-999 cy=-999 s=2 t=shoot tid=3)
     ok=true
     log: Light Infantry → Light Infantry: 2 shots, 2 hits (need 1+)
     log: Light Infantry killed!
-    dice: {armor:4,def_mods:[],def_owner:1,hit_mods:[],killed:true,kind:attack,need:1,shooter:Light Infantry,shooter_owner:0,shots:[{armor:4,def_roll:5,hit:true,hit_roll:2,need:1,parried:true},{armor:4,def_roll:3,hit:true,hit_roll:1,need:1,parried:false}],target:Light Infantry}
+    dice: {armor:4,def_mods:[],def_owner:1,hit_mods:[],killed:true,kind:attack,need:1,shooter:Light Infantry,shooter_owner:0,shots:[{armor:4,def_roll:4,hit:true,hit_roll:3,need:1,parried:true},{armor:4,def_roll:3,hit:true,hit_roll:1,need:1,parried:false}],target:Light Infantry}
     deaths: [3]
-[r1 s5 p0] MoveIntent(a=2 dx=-999 dy=-999 t=move x=12 y=3)
+[r1 s5 p0] MoveIntent(a=4 dx=-999 dy=-999 t=move x=8 y=5)
     ok=true
-    log: Light Infantry: move → (12, 3) [AP: 0]
-    dice: {kind:hold,units:{2:(11, 2)}}
-    dice: {from:(11, 2),kind:walk,path:[(12, 3)],soldier:true,unit:2}
-[r1 s5 p0] ShootIntent(a=8 cm= cx=-999 cy=-999 s=-1 t=shoot tid=9)
-    ok=true
-    log: Sniper → Sniper: 1 shots, 1 hits (need 4+)
-    log: Sniper killed!
-    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:1,hit_mods:[],killed:true,kind:attack,need:4,shooter:Sniper,shooter_owner:0,shots:[{armor:6,def_roll:1,hit:true,hit_roll:4,need:4,parried:false}],target:Sniper}
-    deaths: [9]
-[r1 s5 p0] ShootIntent(a=8 cm= cx=-999 cy=-999 s=-1 t=shoot tid=16)
-    ok=true
-    log: Sniper → Civilian: 1 shots, 1 hits (need 1+)
-    log: Civilian killed!
-    dice: {armor:7,def_mods:[{delta:2,label:Shooter penetration}],def_owner:101,hit_mods:[{delta:0,label:Sniper auto-hit}],killed:true,kind:attack,need:1,shooter:Sniper,shooter_owner:0,shots:[{armor:7,def_roll:4,hit:true,hit_roll:3,need:1,parried:false}],target:Civilian}
-    deaths: [16]
-[r1 s5 p0] MoveIntent(a=10 dx=-999 dy=-999 t=move x=8 y=15)
-    ok=true
-    log: Anti-Tank: move → (8, 15) [AP: 1]
-    dice: {kind:hold,units:{10:(3, 14)}}
-    dice: {from:(3, 14),kind:walk,path:[(4, 14),(5, 14),(6, 14),(7, 14),(8, 15)],soldier:true,unit:10}
-[r1 s5 p0] ShootIntent(a=10 cm= cx=-999 cy=-999 s=-1 t=shoot tid=5)
-    ok=true
-    log: Anti-Tank: roll 4 (need 4+) — direct hit at (18, 5)!
-    log: Heavy Infantry destroyed!
-    log: Machinegunner destroyed!
-    log: Engineer destroyed!
-    dice: {actor:Anti-Tank,kind:check,need:4,ok:true,roll:4}
-    deaths: [5, 7, 13]
-[r1 s5 p0] MoveIntent(a=10 dx=-999 dy=-999 t=move x=9 y=14)
-    ok=true
-    log: Anti-Tank: move → (9, 14) [AP: 0]
-    dice: {kind:hold,units:{10:(8, 15)}}
-    dice: {from:(8, 15),kind:walk,path:[(9, 14)],soldier:true,unit:10}
-[r1 s5 p0] MoveIntent(a=4 dx=-999 dy=-999 t=move x=9 y=5)
-    ok=true
-    log: Heavy Infantry: move → (9, 5) [AP: 1]
+    log: Heavy Infantry: move → (8, 5) [AP: 1]
     dice: {kind:hold,units:{4:(3, 8)}}
-    dice: {from:(3, 8),kind:walk,path:[(4, 7),(5, 6),(6, 5),(7, 5),(8, 5),(9, 5)],soldier:true,unit:4}
-[r1 s5 p0] MoveIntent(a=4 dx=-999 dy=-999 t=move x=15 y=5)
+    dice: {from:(3, 8),kind:walk,path:[(4, 7),(5, 6),(6, 5),(7, 5),(8, 5)],soldier:true,unit:4}
+[r1 s5 p0] MoveIntent(a=4 dx=-999 dy=-999 t=move x=9 y=6)
     ok=true
-    log: Heavy Infantry: move → (15, 5) [AP: 0]
-    dice: {kind:hold,units:{4:(9, 5)}}
-    dice: {from:(9, 5),kind:walk,path:[(10, 5),(11, 5),(12, 5),(13, 5),(14, 5),(15, 5)],soldier:true,unit:4}
-[r1 s5 p0] MoveIntent(a=12 dx=-999 dy=-999 t=move x=8 y=10)
+    log: Heavy Infantry: move → (9, 6) [AP: 1]
+    dice: {kind:hold,units:{4:(8, 5)}}
+    dice: {from:(8, 5),kind:walk,path:[(9, 6)],soldier:true,unit:4}
+[r1 s5 p0] MoveIntent(a=4 dx=-999 dy=-999 t=move x=8 y=5)
     ok=true
-    log: Engineer: move → (8, 10) [AP: 1]
+    log: Heavy Infantry: move → (8, 5) [AP: 0]
+    dice: {kind:hold,units:{4:(9, 6)}}
+    dice: {from:(9, 6),kind:walk,path:[(8, 5)],soldier:true,unit:4}
+[r1 s5 p0] MoveIntent(a=4 dx=-999 dy=-999 t=move x=13 y=4)
+    ok=true
+    log: Heavy Infantry: move → (13, 4) [AP: 0]
+    dice: {kind:hold,units:{4:(8, 5)}}
+    dice: {from:(8, 5),kind:walk,path:[(9, 5),(10, 4),(11, 4),(12, 4),(13, 4)],soldier:true,unit:4}
+[r1 s5 p0] MoveIntent(a=12 dx=-999 dy=-999 t=move x=6 y=10)
+    ok=true
+    log: Engineer: move → (6, 10) [AP: 1]
     dice: {kind:hold,units:{12:(3, 16)}}
-    dice: {from:(3, 16),kind:walk,path:[(4, 15),(5, 14),(6, 13),(6, 12),(7, 11),(8, 10)],soldier:true,unit:12}
-[r1 s5 p0] MoveIntent(a=12 dx=-999 dy=-999 t=move x=14 y=4)
+    dice: {from:(3, 16),kind:walk,path:[(4, 15),(5, 14),(6, 13),(6, 12),(6, 11),(6, 10)],soldier:true,unit:12}
+[r1 s5 p0] MoveIntent(a=12 dx=-999 dy=-999 t=move x=12 y=15)
     ok=true
-    log: Engineer: move → (14, 4) [AP: 0]
-    dice: {kind:hold,units:{12:(8, 10)}}
-    dice: {from:(8, 10),kind:walk,path:[(9, 9),(10, 8),(11, 7),(12, 6),(13, 5),(14, 4)],soldier:true,unit:12}
-[r1 s5 p0] MoveIntent(a=14 dx=-999 dy=-999 t=move x=9 y=13)
+    log: Engineer: move → (12, 15) [AP: 0]
+    dice: {kind:hold,units:{12:(6, 10)}}
+    dice: {from:(6, 10),kind:walk,path:[(7, 10),(8, 11),(9, 12),(10, 13),(11, 14),(12, 15)],soldier:true,unit:12}
+[r1 s5 p0] MoveIntent(a=14 dx=-999 dy=-999 t=move x=9 y=19)
     ok=true
-    log: Flamethrower: move → (9, 13) [AP: 1]
+    log: Flamethrower: move → (9, 19) [AP: 1]
     dice: {kind:hold,units:{14:(3, 18)}}
-    dice: {from:(3, 18),kind:walk,path:[(4, 17),(5, 16),(6, 15),(7, 14),(8, 13),(9, 13)],soldier:true,unit:14}
-[r1 s5 p0] MoveIntent(a=14 dx=-999 dy=-999 t=move x=15 y=7)
+    dice: {from:(3, 18),kind:walk,path:[(4, 18),(5, 19),(6, 19),(7, 19),(8, 19),(9, 19)],soldier:true,unit:14}
+[r1 s5 p0] MoveIntent(a=14 dx=-999 dy=-999 t=move x=15 y=17)
     ok=true
-    log: Flamethrower: move → (15, 7) [AP: 0]
-    dice: {kind:hold,units:{14:(9, 13)}}
-    dice: {from:(9, 13),kind:walk,path:[(10, 12),(11, 11),(12, 10),(13, 9),(14, 8),(15, 7)],soldier:true,unit:14}
+    log: Flamethrower: move → (15, 17) [AP: 0]
+    dice: {kind:hold,units:{14:(9, 19)}}
+    dice: {from:(9, 19),kind:walk,path:[(10, 18),(11, 17),(12, 17),(13, 17),(14, 17),(15, 17)],soldier:true,unit:14}
 [r1 s5 p0] MoveIntent(a=6 dx=-999 dy=-999 t=move x=8 y=4)
     ok=true
     log: Machinegunner: move → (8, 4) [AP: 1]
@@ -182,476 +180,672 @@ initiative Neutral → Player B → Player A
     ok=true
     log: Machinegunner: move → (14, 5) [AP: 0]
     dice: {kind:hold,units:{6:(8, 4)}}
-    dice: {from:(8, 4),kind:walk,path:[(10, 4),(11, 4),(12, 4),(13, 4),(14, 5)],soldier:true,unit:6}
+    dice: {from:(8, 4),kind:walk,path:[(10, 4),(11, 4),(12, 4),(13, 5),(14, 5)],soldier:true,unit:6}
 [r1 s5 p0] EndTurnIntent(q=-1 t=end)
     ok=true
     log: — Player A ended their turn. Player B to move (round 2) —
     log: — Civilians take their turn (1 active) —
-    log: Civilian: move → (18, 20) [AP: 1]
-    log: Civilian → Flamethrower: 1 shots, 0 hits (need 6+)
-    log: Civilian: move → (23, 14) [AP: 0]
+    log: Civilian: move → (18, 21) [AP: 1]
+    log: Civilian → Flamethrower: 1 shots, 1 hits (need 1+)
+    log: Civilian: move → (18, 20) [AP: 0]
+    log: — Civilians take their turn (1 active) —
+    log: Civilian → Sniper: 1 shots, 0 hits (need 5+)
+    log: Civilian → Sniper: 1 shots, 0 hits (need 5+)
     dice: {kind:slot,owner:102}
     dice: {kind:hold,units:{18:(19, 22)}}
     dice: {coord:(19, 22),kind:focus,unit:18}
-    dice: {from:(19, 22),kind:walk,path:[(18, 21),(18, 20)],unit:18}
+    dice: {from:(19, 22),kind:walk,path:[(18, 21)],unit:18}
     dice: {from:2,kind:ap,left:1,unit:18}
     dice: {kind:hold,units:{18:(19, 22)}}
-    dice: {coord:(18, 20),kind:focus,unit:18}
+    dice: {coord:(18, 21),kind:focus,unit:18}
     dice: {from:1,kind:ap,left:0,unit:18}
-    dice: {armor:3,def_mods:[],def_owner:1,hit_mods:[],killed:false,kind:attack,need:6,shooter:Civilian,shooter_owner:102,shots:[{armor:3,def_roll:0,hit:false,hit_roll:1,need:6,parried:true}],target:Flamethrower}
-    dice: {coord:(18, 20),kind:focus,unit:18}
-    dice: {from:(18, 20),kind:walk,path:[(18, 19),(19, 18),(20, 17),(21, 16),(22, 15),(23, 14)],unit:18}
-    dice: {kind:hold,units:{18:(18, 20)}}
-[r2 s4 p1] ShootIntent(a=15 cm= cx=-999 cy=-999 s=-1 t=shoot tid=4)
+    dice: {armor:3,def_mods:[],def_owner:1,hit_mods:[],killed:false,kind:attack,need:1,shooter:Civilian,shooter_owner:102,shots:[{armor:3,def_roll:4,hit:true,hit_roll:4,need:1,parried:true}],target:Flamethrower}
+    dice: {coord:(18, 21),kind:focus,unit:18}
+    dice: {from:(18, 21),kind:walk,path:[(18, 20)],unit:18}
+    dice: {kind:hold,units:{18:(18, 21)}}
+    dice: {kind:slot,owner:101}
+    dice: {coord:(13, 22),kind:focus,unit:16}
+    dice: {from:2,kind:ap,left:1,unit:16}
+    dice: {armor:4,def_mods:[],def_owner:0,hit_mods:[],killed:false,kind:attack,need:5,shooter:Civilian,shooter_owner:101,shots:[{armor:4,def_roll:0,hit:false,hit_roll:1,need:5,parried:true}],target:Sniper}
+    dice: {coord:(13, 22),kind:focus,unit:16}
+    dice: {from:1,kind:ap,left:0,unit:16}
+    dice: {armor:4,def_mods:[],def_owner:0,hit_mods:[],killed:false,kind:attack,need:5,shooter:Civilian,shooter_owner:101,shots:[{armor:4,def_roll:0,hit:false,hit_roll:2,need:5,parried:true}],target:Sniper}
+[r2 s4 p1] BreakIntent(a=13 t=break x=17 y=8)
     ok=true
-    log: Flamethrower: flame jet
-    log: Heavy Infantry burned!
-    log: Engineer burned!
-    deaths: [4, 12]
-[r2 s4 p1] MoveIntent(a=15 dx=-999 dy=-999 t=move x=14 y=6)
+    log: Engineer demolishes: Wall at (17, 8) [AP: 1]
+[r2 s4 p1] MoveIntent(a=13 dx=-999 dy=-999 t=move x=15 y=6)
     ok=true
-    log: Flamethrower: move → (14, 6) [AP: 0]
-    dice: {kind:hold,units:{15:(18, 8)}}
-    dice: {from:(18, 8),kind:walk,path:[(17, 7),(16, 6),(15, 6),(14, 6)],soldier:true,unit:15}
-[r2 s4 p1] MoveIntent(a=11 dx=-999 dy=-999 t=move x=19 y=9)
+    log: Engineer: move → (15, 6) [AP: 0]
+    dice: {kind:hold,units:{13:(18, 7)}}
+    dice: {from:(18, 7),kind:walk,path:[(17, 6),(16, 6),(15, 6)],soldier:true,unit:13}
+[r2 s4 p1] UseItemIntent(a=5 t=item x=13 y=5)
     ok=true
-    log: Anti-Tank: move → (19, 9) [AP: 1]
-    dice: {kind:hold,units:{11:(24, 13)}}
-    dice: {from:(24, 13),kind:walk,path:[(23, 12),(22, 11),(21, 10),(20, 9),(19, 9)],soldier:true,unit:11}
-[r2 s4 p1] ShootIntent(a=11 cm= cx=-999 cy=-999 s=-1 t=shoot tid=0)
+    log: Heavy Infantry throws a smoke grenade: smoke at (13, 5) (roll 3, need 3+).
+    dice: {actor:Heavy Infantry,kind:check,need:3,ok:true,roll:3}
+[r2 s4 p1] MoveIntent(a=5 dx=-999 dy=-999 t=move x=12 y=3)
     ok=true
-    log: Anti-Tank: roll 2 (need 3+) — missed, charge fell short at (14, 4).
-    log: Machinegunner destroyed!
-    dice: {actor:Anti-Tank,kind:check,need:3,ok:false,roll:2}
-    deaths: [6]
-[r2 s4 p1] EndTurnIntent(q=-1 t=end)
+    log: Heavy Infantry: move → (12, 3) [AP: 0]
+    dice: {kind:hold,units:{5:(18, 5)}}
+    dice: {from:(18, 5),kind:walk,path:[(17, 6),(16, 5),(15, 4),(14, 3),(13, 3),(12, 3)],soldier:true,unit:5}
+[r2 s4 p1] ShootIntent(a=9 cm= cx=-999 cy=-999 s=-1 t=shoot tid=8)
     ok=true
-    log: — Player B ended their turn. Player A to move (round 2) —
-[r2 s5 p0] ShootIntent(a=0 cm= cx=-999 cy=-999 s=2 t=shoot tid=11)
+    log: Sniper → Sniper: 1 shots, 1 hits (need 4+)
+    log: Sniper killed!
+    dice: {armor:6,def_mods:[{delta:2,label:Shooter penetration}],def_owner:0,hit_mods:[],killed:true,kind:attack,need:4,shooter:Sniper,shooter_owner:1,shots:[{armor:6,def_roll:3,hit:true,hit_roll:4,need:4,parried:false}],target:Sniper}
+    deaths: [8]
+[r2 s4 p1] MoveIntent(a=9 dx=-999 dy=-999 t=move x=28 y=18)
     ok=true
-    log: Light Infantry → Anti-Tank: 2 shots, 0 hits (need 5+)
-    dice: {armor:4,def_mods:[],def_owner:1,hit_mods:[{delta:1,label:Fire on the line}],killed:false,kind:attack,need:5,shooter:Light Infantry,shooter_owner:0,shots:[{armor:4,def_roll:0,hit:false,hit_roll:3,need:5,parried:true},{armor:4,def_roll:0,hit:false,hit_roll:4,need:5,parried:true}],target:Anti-Tank}
-[r2 s5 p0] ShootIntent(a=0 cm= cx=-999 cy=-999 s=2 t=shoot tid=11)
+    log: Sniper: move → (28, 18) [AP: 0]
+    dice: {kind:hold,units:{9:(30, 12)}}
+    dice: {from:(30, 12),kind:walk,path:[(29, 13),(28, 14),(28, 15),(28, 16),(28, 17),(28, 18)],soldier:true,unit:9}
+[r2 s4 p1] MoveIntent(a=7 dx=-999 dy=-999 t=move x=15 y=4)
     ok=true
-    log: Light Infantry → Anti-Tank: 2 shots, 1 hits (need 5+)
-    dice: {armor:4,def_mods:[],def_owner:1,hit_mods:[{delta:1,label:Fire on the line}],killed:false,kind:attack,need:5,shooter:Light Infantry,shooter_owner:0,shots:[{armor:4,def_roll:0,hit:false,hit_roll:3,need:5,parried:true},{armor:4,def_roll:5,hit:true,hit_roll:6,need:5,parried:true}],target:Anti-Tank}
-[r2 s5 p0] ShootIntent(a=14 cm= cx=-999 cy=-999 s=-1 t=shoot tid=15)
+    log: Machinegunner: move → (15, 4) [AP: 1]
+    dice: {kind:hold,units:{7:(19, 4)}}
+    dice: {from:(19, 4),kind:walk,path:[(18, 5),(17, 6),(16, 5),(15, 4)],soldier:true,unit:7}
+[r2 s4 p1] CaptureIntent(a=7 t=capture tid=6)
     ok=true
-    log: Flamethrower: flame jet
-    log: Flamethrower burned!
-    deaths: [15]
-[r2 s5 p0] PickUpCorpseIntent(a=14 t=corpse_up x=14 y=6)
+    log: Machinegunner captured Machinegunner!
+    dice: {a_roll:6,attacker:Machinegunner,attacker_wins:true,d_roll:5,def_owner:0,defender:Machinegunner,kind:opposed}
+[r2 s4 p1] MoveIntent(a=7 dx=-999 dy=-999 t=move x=12 y=4)
     ok=true
-    log: Flamethrower picks up a corpse — carrying 1 (+1 defence) [AP: 0]
-[r2 s5 p0] MoveIntent(a=8 dx=-999 dy=-999 t=move x=9 y=11)
-    ok=true
-    log: Sniper: move → (9, 11) [AP: 1]
-    dice: {kind:hold,units:{8:(3, 12)}}
-    dice: {from:(3, 12),kind:walk,path:[(4, 13),(5, 14),(6, 13),(7, 12),(8, 11),(9, 11)],soldier:true,unit:8}
-[r2 s5 p0] MoveIntent(a=8 dx=-999 dy=-999 t=move x=15 y=8)
-    ok=true
-    log: Sniper: move → (15, 8) [AP: 0]
-    dice: {kind:hold,units:{8:(9, 11)}}
-    dice: {from:(9, 11),kind:walk,path:[(10, 10),(11, 9),(12, 8),(13, 8),(14, 8),(15, 8)],soldier:true,unit:8}
-[r2 s5 p0] MoveIntent(a=10 dx=-999 dy=-999 t=move x=14 y=8)
-    ok=true
-    log: Anti-Tank: move → (14, 8) [AP: 1]
-    dice: {kind:hold,units:{10:(9, 14)}}
-    dice: {from:(9, 14),kind:walk,path:[(9, 13),(10, 12),(11, 11),(12, 10),(13, 9),(14, 8)],soldier:true,unit:10}
-[r2 s5 p0] MoveIntent(a=10 dx=-999 dy=-999 t=move x=19 y=8)
-    ok=true
-    log: Anti-Tank: move → (19, 8) [AP: 0]
-    dice: {kind:hold,units:{10:(14, 8)}}
-    dice: {from:(14, 8),kind:walk,path:[(14, 7),(15, 6),(16, 5),(17, 6),(18, 7),(19, 8)],soldier:true,unit:10}
-[r2 s5 p0] MoveIntent(a=2 dx=-999 dy=-999 t=move x=14 y=1)
-    ok=true
-    log: Light Infantry: move → (14, 1) [AP: 1]
-    dice: {kind:hold,units:{2:(12, 3)}}
-    dice: {from:(12, 3),kind:walk,path:[(13, 2),(14, 1)],soldier:true,unit:2}
-[r2 s5 p0] MoveIntent(a=2 dx=-999 dy=-999 t=move x=19 y=7)
-    ok=true
-    log: Light Infantry: move → (19, 7) [AP: 1]
-    dice: {kind:hold,units:{2:(14, 1)}}
-    dice: {from:(14, 1),kind:walk,path:[(14, 2),(14, 3),(15, 4),(16, 5),(17, 6),(18, 7),(19, 7)],soldier:true,unit:2}
-[r2 s5 p0] PickUpCorpseIntent(a=2 t=corpse_up x=18 y=6)
-    ok=true
-    log: Light Infantry picks up a corpse — carrying 1 (+1 defence) [AP: 0]
-[r2 s5 p0] EndTurnIntent(q=-1 t=end)
-    ok=true
-    log: — Player A ended their turn. Player A to move (round 3) —
-    log: — Civilians take their turn (1 active) —
-    log: Civilian: move → (23, 13) [AP: 1]
-    log: Civilian → Anti-Tank: 1 shots, 1 hits (need 2+)
-    log: Anti-Tank killed!
-    log: Civilian: move → (20, 9) [AP: 0]
-    dice: {kind:slot,owner:102}
-    dice: {kind:hold,units:{18:(23, 14)}}
-    dice: {coord:(23, 14),kind:focus,unit:18}
-    dice: {from:(23, 14),kind:walk,path:[(23, 13)],unit:18}
-    dice: {from:2,kind:ap,left:1,unit:18}
-    dice: {kind:hold,units:{18:(23, 14)}}
-    dice: {coord:(23, 13),kind:focus,unit:18}
-    dice: {from:1,kind:ap,left:0,unit:18}
-    dice: {armor:4,def_mods:[],def_owner:1,hit_mods:[],killed:true,kind:attack,need:2,shooter:Civilian,shooter_owner:102,shots:[{armor:4,def_roll:1,hit:true,hit_roll:6,need:2,parried:false}],target:Anti-Tank}
-    dice: {coord:(23, 13),kind:focus,unit:18}
-    dice: {from:(23, 13),kind:walk,path:[(22, 12),(21, 11),(20, 10),(20, 9)],unit:18}
-    dice: {kind:hold,units:{18:(23, 13)}}
-    deaths: [11]
-[r3 s5 p0] DropCorpseIntent(a=2 t=corpse_down x=18 y=6)
-    ok=true
-    log: Light Infantry drops a corpse (1/5) at (18, 6)
-[r3 s5 p0] DropCorpseIntent(a=14 t=corpse_down x=14 y=6)
-    ok=true
-    log: Flamethrower drops a corpse (1/5) at (14, 6)
-[r3 s5 p0] MoveIntent(a=0 dx=-999 dy=-999 t=move x=11 y=0)
-    ok=true
-    log: Light Infantry: move → (11, 0) [AP: 1]
-    dice: {kind:hold,units:{0:(11, 1)}}
-    dice: {from:(11, 1),kind:walk,path:[(11, 0)],soldier:true,unit:0}
-[r3 s5 p0] MoveIntent(a=0 dx=-999 dy=-999 t=move x=12 y=0)
-    ok=true
-    log: Light Infantry: move → (12, 0) [AP: 1]
-    dice: {kind:hold,units:{0:(11, 0)}}
-    dice: {from:(11, 0),kind:walk,path:[(12, 0)],soldier:true,unit:0}
-[r3 s5 p0] MoveIntent(a=8 dx=-999 dy=-999 t=move x=14 y=9)
-    ok=true
-    log: Sniper: move → (14, 9) [AP: 1]
-    dice: {kind:hold,units:{8:(15, 8)}}
-    dice: {from:(15, 8),kind:walk,path:[(14, 9)],soldier:true,unit:8}
-[r3 s5 p0] MoveIntent(a=10 dx=-999 dy=-999 t=move x=19 y=6)
-    ok=true
-    log: Anti-Tank: move → (19, 6) [AP: 1]
-    dice: {kind:hold,units:{10:(19, 8)}}
-    dice: {from:(19, 8),kind:walk,path:[(18, 7),(19, 6)],soldier:true,unit:10}
-[r3 s5 p0] EndTurnIntent(q=-1 t=end)
-    ok=true
-    log: — Player A ended their turn. Player A to move (round 4) —
-    log: — Civilians take their turn (1 active) —
-    log: Civilian: move → (19, 8) [AP: 1]
-    log: Civilian → Light Infantry: 1 shots, 1 hits (need 1+)
-    dice: {kind:slot,owner:102}
-    dice: {kind:hold,units:{18:(20, 9)}}
-    dice: {coord:(20, 9),kind:focus,unit:18}
-    dice: {from:(20, 9),kind:walk,path:[(19, 8)],unit:18}
-    dice: {from:2,kind:ap,left:1,unit:18}
-    dice: {kind:hold,units:{18:(20, 9)}}
-    dice: {coord:(19, 8),kind:focus,unit:18}
-    dice: {from:1,kind:ap,left:0,unit:18}
-    dice: {armor:4,def_mods:[],def_owner:0,hit_mods:[],killed:false,kind:attack,need:1,shooter:Civilian,shooter_owner:102,shots:[{armor:4,def_roll:4,hit:true,hit_roll:3,need:1,parried:true}],target:Light Infantry}
-[r4 s5 p0] MoveIntent(a=0 dx=-999 dy=-999 t=move x=13 y=0)
-    ok=true
-    log: Light Infantry: move → (13, 0) [AP: 1]
-    dice: {kind:hold,units:{0:(12, 0)}}
-    dice: {from:(12, 0),kind:walk,path:[(13, 0)],soldier:true,unit:0}
-[r4 s5 p0] ShootIntent(a=2 cm= cx=-999 cy=-999 s=2 t=shoot tid=18)
-    ok=true
-    log: Light Infantry → Civilian: 2 shots, 2 hits (need 1+)
-    dice: {armor:5,def_mods:[],def_owner:102,hit_mods:[],killed:false,kind:attack,need:1,shooter:Light Infantry,shooter_owner:0,shots:[{armor:5,def_roll:5,hit:true,hit_roll:5,need:1,parried:true},{armor:5,def_roll:5,hit:true,hit_roll:5,need:1,parried:true}],target:Civilian}
-[r4 s5 p0] ShootIntent(a=2 cm= cx=-999 cy=-999 s=2 t=shoot tid=18)
-    ok=true
-    log: Light Infantry → Civilian: 2 shots, 2 hits (need 1+)
-    dice: {armor:5,def_mods:[],def_owner:102,hit_mods:[],killed:false,kind:attack,need:1,shooter:Light Infantry,shooter_owner:0,shots:[{armor:5,def_roll:6,hit:true,hit_roll:3,need:1,parried:true},{armor:5,def_roll:6,hit:true,hit_roll:2,need:1,parried:true}],target:Civilian}
-[r4 s5 p0] MoveIntent(a=10 dx=-999 dy=-999 t=move x=20 y=5)
-    ok=true
-    log: Anti-Tank: move → (20, 5) [AP: 1]
-    dice: {kind:hold,units:{10:(19, 6)}}
-    dice: {from:(19, 6),kind:walk,path:[(20, 5)],soldier:true,unit:10}
-[r4 s5 p0] MoveIntent(a=8 dx=-999 dy=-999 t=move x=13 y=9)
-    ok=true
-    log: Sniper: move → (13, 9) [AP: 1]
-    dice: {kind:hold,units:{8:(14, 9)}}
-    dice: {from:(14, 9),kind:walk,path:[(13, 9)],soldier:true,unit:8}
-[r4 s5 p0] MoveIntent(a=8 dx=-999 dy=-999 t=move x=14 y=9)
-    ok=true
-    log: Sniper: move → (14, 9) [AP: 1]
-    dice: {kind:hold,units:{8:(13, 9)}}
-    dice: {from:(13, 9),kind:walk,path:[(14, 9)],soldier:true,unit:8}
-[r4 s5 p0] MoveIntent(a=8 dx=-999 dy=-999 t=move x=13 y=9)
-    ok=true
-    log: Sniper: move → (13, 9) [AP: 1]
-    dice: {kind:hold,units:{8:(14, 9)}}
-    dice: {from:(14, 9),kind:walk,path:[(13, 9)],soldier:true,unit:8}
-[r4 s5 p0] MoveIntent(a=8 dx=-999 dy=-999 t=move x=14 y=9)
-    ok=true
-    log: Sniper: move → (14, 9) [AP: 1]
-    dice: {kind:hold,units:{8:(13, 9)}}
-    dice: {from:(13, 9),kind:walk,path:[(14, 9)],soldier:true,unit:8}
-[r4 s5 p0] MoveIntent(a=14 dx=-999 dy=-999 t=move x=15 y=6)
-    ok=true
-    log: Flamethrower: move → (15, 6) [AP: 1]
-    dice: {kind:hold,units:{14:(15, 7)}}
-    dice: {from:(15, 7),kind:walk,path:[(15, 6)],soldier:true,unit:14}
-[r4 s5 p0] MoveIntent(a=14 dx=-999 dy=-999 t=move x=15 y=7)
-    ok=true
-    log: Flamethrower: move → (15, 7) [AP: 1]
-    dice: {kind:hold,units:{14:(15, 6)}}
-    dice: {from:(15, 6),kind:walk,path:[(15, 7)],soldier:true,unit:14}
-[r4 s5 p0] MoveIntent(a=14 dx=-999 dy=-999 t=move x=15 y=6)
-    ok=true
-    log: Flamethrower: move → (15, 6) [AP: 1]
-    dice: {kind:hold,units:{14:(15, 7)}}
-    dice: {from:(15, 7),kind:walk,path:[(15, 6)],soldier:true,unit:14}
-[r4 s5 p0] MoveIntent(a=14 dx=-999 dy=-999 t=move x=15 y=7)
-    ok=true
-    log: Flamethrower: move → (15, 7) [AP: 1]
-    dice: {kind:hold,units:{14:(15, 6)}}
-    dice: {from:(15, 6),kind:walk,path:[(15, 7)],soldier:true,unit:14}
-[r4 s5 p0] EndTurnIntent(q=-1 t=end)
-    ok=true
-    log: — Player A ended their turn. Player A to move (round 5) —
-    log: — Civilians take their turn (1 active) —
-    log: Civilian → Light Infantry: 1 shots, 1 hits (need 1+)
-    log: Light Infantry killed!
-    log: Civilian picks up a corpse — carrying 1 (+1 defence) [AP: 0]
-    dice: {kind:slot,owner:102}
-    dice: {coord:(19, 8),kind:focus,unit:18}
-    dice: {from:2,kind:ap,left:1,unit:18}
-    dice: {armor:4,def_mods:[],def_owner:0,hit_mods:[],killed:true,kind:attack,need:1,shooter:Civilian,shooter_owner:102,shots:[{armor:4,def_roll:1,hit:true,hit_roll:4,need:1,parried:false}],target:Light Infantry}
-    dice: {coord:(19, 8),kind:focus,unit:18}
-    dice: {from:1,kind:ap,left:0,unit:18}
-    deaths: [2]
-[r5 s5 p0] MoveIntent(a=0 dx=-999 dy=-999 t=move x=14 y=0)
-    ok=true
-    log: Light Infantry: move → (14, 0) [AP: 1]
-    dice: {kind:hold,units:{0:(13, 0)}}
-    dice: {from:(13, 0),kind:walk,path:[(14, 0)],soldier:true,unit:0}
-[r5 s5 p0] MoveIntent(a=8 dx=-999 dy=-999 t=move x=15 y=9)
-    ok=true
-    log: Sniper: move → (15, 9) [AP: 1]
-    dice: {kind:hold,units:{8:(14, 9)}}
-    dice: {from:(14, 9),kind:walk,path:[(15, 9)],soldier:true,unit:8}
-[r5 s5 p0] MoveIntent(a=10 dx=-999 dy=-999 t=move x=20 y=4)
-    ok=true
-    log: Anti-Tank: move → (20, 4) [AP: 1]
-    dice: {kind:hold,units:{10:(20, 5)}}
-    dice: {from:(20, 5),kind:walk,path:[(20, 4)],soldier:true,unit:10}
-[r5 s5 p0] MoveIntent(a=10 dx=-999 dy=-999 t=move x=20 y=5)
-    ok=true
-    log: Anti-Tank: move → (20, 5) [AP: 1]
-    dice: {kind:hold,units:{10:(20, 4)}}
-    dice: {from:(20, 4),kind:walk,path:[(20, 5)],soldier:true,unit:10}
-[r5 s5 p0] MoveIntent(a=10 dx=-999 dy=-999 t=move x=20 y=4)
-    ok=true
-    log: Anti-Tank: move → (20, 4) [AP: 1]
-    dice: {kind:hold,units:{10:(20, 5)}}
-    dice: {from:(20, 5),kind:walk,path:[(20, 4)],soldier:true,unit:10}
-[r5 s5 p0] MoveIntent(a=10 dx=-999 dy=-999 t=move x=20 y=5)
-    ok=true
-    log: Anti-Tank: move → (20, 5) [AP: 1]
-    dice: {kind:hold,units:{10:(20, 4)}}
-    dice: {from:(20, 4),kind:walk,path:[(20, 5)],soldier:true,unit:10}
-[r5 s5 p0] MoveIntent(a=14 dx=-999 dy=-999 t=move x=15 y=6)
-    ok=true
-    log: Flamethrower: move → (15, 6) [AP: 1]
-    dice: {kind:hold,units:{14:(15, 7)}}
-    dice: {from:(15, 7),kind:walk,path:[(15, 6)],soldier:true,unit:14}
-[r5 s5 p0] MoveIntent(a=14 dx=-999 dy=-999 t=move x=15 y=7)
-    ok=true
-    log: Flamethrower: move → (15, 7) [AP: 1]
-    dice: {kind:hold,units:{14:(15, 6)}}
-    dice: {from:(15, 6),kind:walk,path:[(15, 7)],soldier:true,unit:14}
-[r5 s5 p0] MoveIntent(a=14 dx=-999 dy=-999 t=move x=15 y=6)
-    ok=true
-    log: Flamethrower: move → (15, 6) [AP: 1]
-    dice: {kind:hold,units:{14:(15, 7)}}
-    dice: {from:(15, 7),kind:walk,path:[(15, 6)],soldier:true,unit:14}
-[r5 s5 p0] MoveIntent(a=14 dx=-999 dy=-999 t=move x=15 y=7)
-    ok=true
-    log: Flamethrower: move → (15, 7) [AP: 1]
-    dice: {kind:hold,units:{14:(15, 6)}}
-    dice: {from:(15, 6),kind:walk,path:[(15, 7)],soldier:true,unit:14}
-[r5 s5 p0] EndTurnIntent(q=-1 t=end)
-    ok=true
-    log: — Player A ended their turn. Player A to move (round 6) —
-    log: — Civilians take their turn (1 active) —
-    log: Civilian: move → (19, 7) [AP: 1]
-    log: Civilian → Flamethrower: 1 shots, 0 hits (need 3+)
-    log: Civilian: move → (19, 6) [AP: 0]
-    dice: {kind:slot,owner:102}
-    dice: {kind:hold,units:{18:(19, 8)}}
-    dice: {coord:(19, 8),kind:focus,unit:18}
-    dice: {from:(19, 8),kind:walk,path:[(19, 7)],unit:18}
-    dice: {from:2,kind:ap,left:1,unit:18}
-    dice: {kind:hold,units:{18:(19, 8)}}
-    dice: {coord:(19, 7),kind:focus,unit:18}
-    dice: {from:1,kind:ap,left:0,unit:18}
-    dice: {armor:3,def_mods:[],def_owner:0,hit_mods:[{delta:1,label:Fire on the line}],killed:false,kind:attack,need:3,shooter:Civilian,shooter_owner:102,shots:[{armor:3,def_roll:0,hit:false,hit_roll:2,need:3,parried:true}],target:Flamethrower}
-    dice: {coord:(19, 7),kind:focus,unit:18}
-    dice: {from:(19, 7),kind:walk,path:[(19, 6)],unit:18}
-    dice: {kind:hold,units:{18:(19, 7)}}
-[r6 s5 p0] MoveIntent(a=0 dx=-999 dy=-999 t=move x=15 y=0)
-    ok=true
-    log: Light Infantry: move → (15, 0) [AP: 1]
-    dice: {kind:hold,units:{0:(14, 0)}}
-    dice: {from:(14, 0),kind:walk,path:[(15, 0)],soldier:true,unit:0}
-[r6 s5 p0] MoveIntent(a=8 dx=-999 dy=-999 t=move x=14 y=10)
-    ok=true
-    log: Sniper: move → (14, 10) [AP: 1]
-    dice: {kind:hold,units:{8:(15, 9)}}
-    dice: {from:(15, 9),kind:walk,path:[(14, 10)],soldier:true,unit:8}
-[r6 s5 p0] MoveIntent(a=10 dx=-999 dy=-999 t=move x=20 y=4)
-    ok=true
-    log: Anti-Tank: move → (20, 4) [AP: 1]
-    dice: {kind:hold,units:{10:(20, 5)}}
-    dice: {from:(20, 5),kind:walk,path:[(20, 4)],soldier:true,unit:10}
-[r6 s5 p0] MoveIntent(a=14 dx=-999 dy=-999 t=move x=15 y=6)
-    ok=true
-    log: Flamethrower: move → (15, 6) [AP: 1]
-    dice: {kind:hold,units:{14:(15, 7)}}
-    dice: {from:(15, 7),kind:walk,path:[(15, 6)],soldier:true,unit:14}
-[r6 s5 p0] ShootIntent(a=14 cm= cx=-999 cy=-999 s=-1 t=shoot tid=18)
+    log: Machinegunner: move → (12, 4) [AP: 0]
+    log:   ↳ carrying Machinegunner → (13, 3)
+    dice: {kind:hold,units:{7:(15, 4)}}
+    dice: {from:(15, 4),kind:walk,path:[(14, 3),(13, 3),(12, 4)],soldier:true,unit:7}
+    dice: {kind:hold,units:{6:(14, 5)}}
+    dice: {from:(14, 5),kind:walk,path:[(13, 4),(13, 3)],soldier:true,unit:6}
+[r2 s4 p1] ShootIntent(a=15 cm= cx=-999 cy=-999 s=-1 t=shoot tid=18)
     ok=true
     log: Flamethrower: flame jet
     log: Civilian burned!
     deaths: [18]
-[r6 s5 p0] MoveIntent(a=14 dx=-999 dy=-999 t=move x=15 y=7)
+[r2 s4 p1] PickUpCorpseIntent(a=15 t=corpse_up x=18 y=20)
     ok=true
-    log: Flamethrower: move → (15, 7) [AP: 0]
-    dice: {kind:hold,units:{14:(15, 6)}}
-    dice: {from:(15, 6),kind:walk,path:[(15, 7)],soldier:true,unit:14}
-[r6 s5 p0] MoveIntent(a=14 dx=-999 dy=-999 t=move x=15 y=6)
+    log: Flamethrower picks up a corpse — carrying 1 (+1 defense) [AP: 0]
+[r2 s4 p1] MoveIntent(a=11 dx=-999 dy=-999 t=move x=20 y=10)
     ok=true
-    log: Flamethrower: move → (15, 6) [AP: 0]
-    dice: {kind:hold,units:{14:(15, 7)}}
-    dice: {from:(15, 7),kind:walk,path:[(15, 6)],soldier:true,unit:14}
-[r6 s5 p0] MoveIntent(a=14 dx=-999 dy=-999 t=move x=15 y=7)
+    log: Anti-Tank: move → (20, 10) [AP: 1]
+    dice: {kind:hold,units:{11:(24, 10)}}
+    dice: {from:(24, 10),kind:walk,path:[(23, 10),(22, 10),(21, 10),(20, 10)],soldier:true,unit:11}
+[r2 s4 p1] MoveIntent(a=11 dx=-999 dy=-999 t=move x=18 y=11)
     ok=true
-    log: Flamethrower: move → (15, 7) [AP: 0]
-    dice: {kind:hold,units:{14:(15, 6)}}
-    dice: {from:(15, 6),kind:walk,path:[(15, 7)],soldier:true,unit:14}
-[r6 s5 p0] EndTurnIntent(q=-1 t=end)
+    log: Anti-Tank: move → (18, 11) [AP: 1]
+    dice: {kind:hold,units:{11:(20, 10)}}
+    dice: {from:(20, 10),kind:walk,path:[(19, 10),(18, 11)],soldier:true,unit:11}
+[r2 s4 p1] MoveIntent(a=11 dx=-999 dy=-999 t=move x=20 y=10)
+    ok=true
+    log: Anti-Tank: move → (20, 10) [AP: 0]
+    dice: {kind:hold,units:{11:(18, 11)}}
+    dice: {from:(18, 11),kind:walk,path:[(19, 10),(20, 10)],soldier:true,unit:11}
+[r2 s4 p1] MoveIntent(a=11 dx=-999 dy=-999 t=move x=16 y=13)
+    ok=true
+    log: Anti-Tank: move → (16, 13) [AP: 0]
+    log: — Neutral group IV joins the fight (1 unit) —
+    dice: {kind:hold,units:{11:(20, 10)}}
+    dice: {from:(20, 10),kind:walk,path:[(19, 10),(18, 11),(17, 12),(16, 13)],soldier:true,unit:11}
+[r2 s4 p1] EndTurnIntent(q=-1 t=end)
+    ok=true
+    log: — Player B ended their turn. Player A to move (round 2) —
+    log: — Civilians take their turn (1 active) —
+    log: Civilian → Anti-Tank: 1 shots, 0 hits (need 5+)
+    log: Civilian → Anti-Tank: 1 shots, 0 hits (need 5+)
+    dice: {kind:slot,owner:103}
+    dice: {coord:(16, 22),kind:focus,unit:17}
+    dice: {from:2,kind:ap,left:1,unit:17}
+    dice: {armor:4,def_mods:[],def_owner:1,hit_mods:[],killed:false,kind:attack,need:5,shooter:Civilian,shooter_owner:103,shots:[{armor:4,def_roll:0,hit:false,hit_roll:3,need:5,parried:true}],target:Anti-Tank}
+    dice: {coord:(16, 22),kind:focus,unit:17}
+    dice: {from:1,kind:ap,left:0,unit:17}
+    dice: {armor:4,def_mods:[],def_owner:1,hit_mods:[],killed:false,kind:attack,need:5,shooter:Civilian,shooter_owner:103,shots:[{armor:4,def_roll:0,hit:false,hit_roll:3,need:5,parried:true}],target:Anti-Tank}
+[r2 s6 p0] MoveIntent(a=12 dx=-999 dy=-999 t=move x=18 y=11)
+    ok=true
+    log: Engineer: move → (18, 11) [AP: 1]
+    dice: {kind:hold,units:{12:(12, 15)}}
+    dice: {from:(12, 15),kind:walk,path:[(13, 14),(14, 13),(15, 12),(16, 12),(17, 12),(18, 11)],soldier:true,unit:12}
+[r2 s6 p0] ShootIntent(a=12 cm= cx=-999 cy=-999 s=-1 t=shoot tid=11)
+    ok=true
+    log: Engineer → Anti-Tank: 1 shots, 1 hits (need 1+)
+    dice: {armor:4,def_mods:[],def_owner:1,hit_mods:[],killed:false,kind:attack,need:1,shooter:Engineer,shooter_owner:0,shots:[{armor:4,def_roll:4,hit:true,hit_roll:1,need:1,parried:true}],target:Anti-Tank}
+[r2 s6 p0] MoveIntent(a=10 dx=-999 dy=-999 t=move x=8 y=13)
+    ok=true
+    log: Anti-Tank: move → (8, 13) [AP: 1]
+    dice: {kind:hold,units:{10:(5, 18)}}
+    dice: {from:(5, 18),kind:walk,path:[(5, 17),(5, 16),(6, 15),(7, 14),(8, 13)],soldier:true,unit:10}
+[r2 s6 p0] ShootIntent(a=10 cm= cx=-999 cy=-999 s=-1 t=shoot tid=11)
+    ok=true
+    log: Anti-Tank: roll 1 (need 3+) — missed, charge fell short at (10, 13).
+    log: … nobody destroyed
+    dice: {actor:Anti-Tank,kind:check,need:3,ok:false,roll:1}
+[r2 s6 p0] MoveIntent(a=10 dx=-999 dy=-999 t=move x=9 y=12)
+    ok=true
+    log: Anti-Tank: move → (9, 12) [AP: 0]
+    dice: {kind:hold,units:{10:(8, 13)}}
+    dice: {from:(8, 13),kind:walk,path:[(9, 12)],soldier:true,unit:10}
+[r2 s6 p0] PickUpCorpseIntent(a=2 t=corpse_up x=12 y=2)
+    ok=true
+    log: Light Infantry picks up a corpse — carrying 1 (+1 defense) [AP: 1]
+[r2 s6 p0] MoveIntent(a=2 dx=-999 dy=-999 t=move x=16 y=5)
+    ok=true
+    log: Light Infantry: move → (16, 5) [AP: 0]
+    dice: {kind:hold,units:{2:(11, 1)}}
+    dice: {from:(11, 1),kind:walk,path:[(12, 2),(13, 2),(14, 3),(15, 4),(16, 5)],soldier:true,unit:2}
+[r2 s6 p0] MoveIntent(a=14 dx=-999 dy=-999 t=move x=14 y=15)
+    ok=true
+    log: Flamethrower: move → (14, 15) [AP: 1]
+    dice: {kind:hold,units:{14:(15, 17)}}
+    dice: {from:(15, 17),kind:walk,path:[(14, 16),(14, 15)],soldier:true,unit:14}
+[r2 s6 p0] ShootIntent(a=14 cm= cx=-999 cy=-999 s=-1 t=shoot tid=15)
+    ok=true
+    log: Flamethrower: flame jet
+    log: Flamethrower burned!
+    deaths: [15]
+[r2 s6 p0] MoveIntent(a=14 dx=-999 dy=-999 t=move x=17 y=12)
+    ok=true
+    log: Flamethrower: move → (17, 12) [AP: 0]
+    dice: {kind:hold,units:{14:(14, 15)}}
+    dice: {from:(14, 15),kind:walk,path:[(14, 14),(15, 13),(16, 12),(17, 12)],soldier:true,unit:14}
+[r2 s6 p0] CaptureIntent(a=4 t=capture tid=7)
+    ok=true
+    log: Heavy Infantry failed to capture Machinegunner (1 vs 2)
+    dice: {a_roll:1,attacker:Heavy Infantry,attacker_wins:false,d_roll:2,def_owner:1,defender:Machinegunner,kind:opposed}
+[r2 s6 p0] CaptureIntent(a=4 t=capture tid=7)
+    ok=true
+    log: Heavy Infantry failed to capture Machinegunner (1 vs 6)
+    dice: {a_roll:1,attacker:Heavy Infantry,attacker_wins:false,d_roll:6,def_owner:1,defender:Machinegunner,kind:opposed}
+[r2 s6 p0] ShootIntent(a=0 cm= cx=-999 cy=-999 s=2 t=shoot tid=5)
+    ok=true
+    log: Light Infantry → Heavy Infantry: 2 shots, 2 hits (need 1+)
+    dice: {armor:3,def_mods:[],def_owner:1,hit_mods:[],killed:false,kind:attack,need:1,shooter:Light Infantry,shooter_owner:0,shots:[{armor:3,def_roll:5,hit:true,hit_roll:1,need:1,parried:true},{armor:3,def_roll:5,hit:true,hit_roll:2,need:1,parried:true}],target:Heavy Infantry}
+[r2 s6 p0] ShootIntent(a=0 cm= cx=-999 cy=-999 s=2 t=shoot tid=5)
+    ok=true
+    log: Light Infantry → Heavy Infantry: 2 shots, 2 hits (need 1+)
+    log: Heavy Infantry killed!
+    dice: {armor:3,def_mods:[],def_owner:1,hit_mods:[],killed:true,kind:attack,need:1,shooter:Light Infantry,shooter_owner:0,shots:[{armor:3,def_roll:1,hit:true,hit_roll:1,need:1,parried:false},{armor:3,def_roll:2,hit:true,hit_roll:2,need:1,parried:false}],target:Heavy Infantry}
+    deaths: [5]
+[r2 s6 p0] EndTurnIntent(q=-1 t=end)
+    ok=true
+    log: — Player A ended their turn. Player B to move (round 3) —
+    log: — Civilians take their turn (1 active) —
+    log: Civilian: move → (12, 22) [AP: 1]
+    log: Civilian: move → (11, 22) [AP: 1]
+    log: Civilian: move → (10, 22) [AP: 1]
+    log: Civilian: move → (9, 21) [AP: 1]
+    log: Civilian → Anti-Tank: 1 shots, 0 hits (need 5+)
+    log: Civilian: move → (13, 16) [AP: 0]
+    dice: {kind:slot,owner:101}
+    dice: {kind:hold,units:{16:(13, 22)}}
+    dice: {coord:(13, 22),kind:focus,unit:16}
+    dice: {from:(13, 22),kind:walk,path:[(12, 22)],unit:16}
+    dice: {from:2,kind:ap,left:1,unit:16}
+    dice: {kind:hold,units:{16:(13, 22)}}
+    dice: {coord:(12, 22),kind:focus,unit:16}
+    dice: {from:(12, 22),kind:walk,path:[(11, 22)],unit:16}
+    dice: {kind:hold,units:{16:(12, 22)}}
+    dice: {coord:(11, 22),kind:focus,unit:16}
+    dice: {from:(11, 22),kind:walk,path:[(10, 22)],unit:16}
+    dice: {kind:hold,units:{16:(11, 22)}}
+    dice: {coord:(10, 22),kind:focus,unit:16}
+    dice: {from:(10, 22),kind:walk,path:[(9, 21)],unit:16}
+    dice: {kind:hold,units:{16:(10, 22)}}
+    dice: {coord:(9, 21),kind:focus,unit:16}
+    dice: {from:1,kind:ap,left:0,unit:16}
+    dice: {armor:4,def_mods:[],def_owner:0,hit_mods:[],killed:false,kind:attack,need:5,shooter:Civilian,shooter_owner:101,shots:[{armor:4,def_roll:0,hit:false,hit_roll:3,need:5,parried:true}],target:Anti-Tank}
+    dice: {coord:(9, 21),kind:focus,unit:16}
+    dice: {from:(9, 21),kind:walk,path:[(9, 20),(10, 19),(11, 18),(12, 17),(13, 16)],unit:16}
+    dice: {kind:hold,units:{16:(9, 21)}}
+[r3 s4 p1] MoveIntent(a=9 dx=-999 dy=-999 t=move x=23 y=12)
+    ok=true
+    log: Sniper: move → (23, 12) [AP: 1]
+    dice: {kind:hold,units:{9:(28, 18)}}
+    dice: {from:(28, 18),kind:walk,path:[(27, 17),(26, 16),(25, 15),(24, 14),(23, 13),(23, 12)],soldier:true,unit:9}
+[r3 s4 p1] ShootIntent(a=9 cm= cx=-999 cy=-999 s=-1 t=shoot tid=14)
+    ok=true
+    log: Sniper → Flamethrower: 1 shots, 1 hits (need 1+)
+    log: Flamethrower killed!
+    dice: {armor:5,def_mods:[{delta:2,label:Shooter penetration}],def_owner:0,hit_mods:[{delta:0,label:Sniper auto-hit}],killed:true,kind:attack,need:1,shooter:Sniper,shooter_owner:1,shots:[{armor:5,def_roll:1,hit:true,hit_roll:6,need:1,parried:false}],target:Flamethrower}
+    deaths: [14]
+[r3 s4 p1] ShootIntent(a=11 cm= cx=-999 cy=-999 s=-1 t=shoot tid=12)
+    ok=true
+    log: Anti-Tank: roll 1 (need 1+) — direct hit at (18, 11)!
+    log: Engineer destroyed!
+    dice: {actor:Anti-Tank,kind:check,need:1,ok:true,roll:1}
+    deaths: [12]
+[r3 s4 p1] ShootIntent(a=11 cm= cx=-999 cy=-999 s=-1 t=shoot tid=16)
+    ok=true
+    log: Anti-Tank: roll 1 (need 1+) — direct hit at (13, 16)!
+    log: Civilian destroyed!
+    dice: {actor:Anti-Tank,kind:check,need:1,ok:true,roll:1}
+    deaths: [16]
+[r3 s4 p1] ShootIntent(a=13 cm= cx=-999 cy=-999 s=-1 t=shoot tid=10)
+    ok=true
+    log: Engineer → Anti-Tank: 1 shots, 0 hits (need 3+)
+    dice: {armor:4,def_mods:[],def_owner:0,hit_mods:[],killed:false,kind:attack,need:3,shooter:Engineer,shooter_owner:1,shots:[{armor:4,def_roll:0,hit:false,hit_roll:1,need:3,parried:true}],target:Anti-Tank}
+[r3 s4 p1] ShootIntent(a=13 cm= cx=-999 cy=-999 s=-1 t=shoot tid=10)
+    ok=true
+    log: Engineer → Anti-Tank: 1 shots, 1 hits (need 3+)
+    log: Anti-Tank killed!
+    dice: {armor:4,def_mods:[],def_owner:0,hit_mods:[],killed:true,kind:attack,need:3,shooter:Engineer,shooter_owner:1,shots:[{armor:4,def_roll:2,hit:true,hit_roll:3,need:3,parried:false}],target:Anti-Tank}
+    deaths: [10]
+[r3 s4 p1] CaptureIntent(a=7 t=capture tid=4)
+    ok=true
+    log: Machinegunner captured Heavy Infantry!
+    dice: {a_roll:6,attacker:Machinegunner,attacker_wins:true,d_roll:1,def_owner:0,defender:Heavy Infantry,kind:opposed}
+[r3 s4 p1] PickUpCorpseIntent(a=7 t=corpse_up x=12 y=3)
+    ok=true
+    log: Machinegunner picks up a corpse — carrying 1 (+1 defense) [AP: 0]
+[r3 s4 p1] MoveIntent(a=7 dx=-999 dy=-999 t=move x=13 y=2)
+    ok=true
+    log: Machinegunner: move → (13, 2) [AP: 0]
+    log:   ↳ carrying Heavy Infantry → (12, 3)
+    dice: {kind:hold,units:{7:(12, 4)}}
+    dice: {from:(12, 4),kind:walk,path:[(12, 3),(13, 2)],soldier:true,unit:7}
+    dice: {kind:hold,units:{4:(13, 4)}}
+    dice: {from:(13, 4),kind:walk,path:[(12, 3)],soldier:true,unit:4}
+[r3 s4 p1] DropCorpseIntent(a=7 t=corpse_down x=13 y=1)
+    ok=true
+    log: Machinegunner drops a corpse (1/5) at (13, 1)
+[r3 s4 p1] MoveIntent(a=7 dx=-999 dy=-999 t=move x=12 y=2)
+    ok=true
+    log: Machinegunner: move → (12, 2) [AP: 0]
+    log:   ↳ carrying Heavy Infantry → (13, 2)
+    dice: {kind:hold,units:{7:(13, 2)}}
+    dice: {from:(13, 2),kind:walk,path:[(12, 2)],soldier:true,unit:7}
+    dice: {kind:hold,units:{4:(12, 3)}}
+    dice: {from:(12, 3),kind:walk,path:[(13, 2)],soldier:true,unit:4}
+[r3 s4 p1] EndTurnIntent(q=-1 t=end)
+    ok=true
+    log: — Player B ended their turn. Player A to move (round 3) —
+    log: — Civilians take their turn (1 active) —
+    log: Civilian → Anti-Tank: 1 shots, 0 hits (need 6+)
+    log: Civilian → Anti-Tank: 1 shots, 0 hits (need 6+)
+    dice: {kind:slot,owner:103}
+    dice: {coord:(16, 22),kind:focus,unit:17}
+    dice: {from:2,kind:ap,left:1,unit:17}
+    dice: {armor:4,def_mods:[],def_owner:1,hit_mods:[{delta:1,label:Fire on the line}],killed:false,kind:attack,need:6,shooter:Civilian,shooter_owner:103,shots:[{armor:4,def_roll:0,hit:false,hit_roll:3,need:6,parried:true}],target:Anti-Tank}
+    dice: {coord:(16, 22),kind:focus,unit:17}
+    dice: {from:1,kind:ap,left:0,unit:17}
+    dice: {armor:4,def_mods:[],def_owner:1,hit_mods:[{delta:1,label:Fire on the line}],killed:false,kind:attack,need:6,shooter:Civilian,shooter_owner:103,shots:[{armor:4,def_roll:0,hit:false,hit_roll:5,need:6,parried:true}],target:Anti-Tank}
+[r3 s6 p0] ShootIntent(a=2 cm= cx=-999 cy=-999 s=2 t=shoot tid=13)
+    ok=true
+    log: Light Infantry → Engineer: 2 shots, 2 hits (need 1+)
+    log: Engineer killed!
+    dice: {armor:4,def_mods:[],def_owner:1,hit_mods:[],killed:true,kind:attack,need:1,shooter:Light Infantry,shooter_owner:0,shots:[{armor:4,def_roll:1,hit:true,hit_roll:6,need:1,parried:false},{armor:4,def_roll:2,hit:true,hit_roll:3,need:1,parried:false}],target:Engineer}
+    deaths: [13]
+[r3 s6 p0] ShootIntent(a=2 cm= cx=-999 cy=-999 s=2 t=shoot tid=9)
+    ok=true
+    log: Light Infantry → Sniper: 2 shots, 1 hits (need 4+)
+    dice: {armor:4,def_mods:[],def_owner:1,hit_mods:[],killed:false,kind:attack,need:4,shooter:Light Infantry,shooter_owner:0,shots:[{armor:4,def_roll:5,hit:true,hit_roll:4,need:4,parried:true},{armor:4,def_roll:0,hit:false,hit_roll:2,need:4,parried:true}],target:Sniper}
+[r3 s6 p0] ShootIntent(a=0 cm= cx=-999 cy=-999 s=2 t=shoot tid=7)
+    ok=true
+    log: Heavy Infantry is free — Machinegunner is dead.
+    log: Light Infantry → Machinegunner: 2 shots, 2 hits (need 1+)
+    log: Machinegunner killed!
+    dice: {armor:3,def_mods:[],def_owner:1,hit_mods:[],killed:true,kind:attack,need:1,shooter:Light Infantry,shooter_owner:0,shots:[{armor:3,def_roll:1,hit:true,hit_roll:5,need:1,parried:false},{armor:3,def_roll:2,hit:true,hit_roll:4,need:1,parried:false}],target:Machinegunner}
+    deaths: [7]
+[r3 s6 p0] MoveIntent(a=0 dx=-999 dy=-999 t=move x=12 y=9)
+    ok=true
+    log: Light Infantry: move → (12, 9) [AP: 0]
+    dice: {kind:hold,units:{0:(11, 2)}}
+    dice: {from:(11, 2),kind:walk,path:[(11, 3),(11, 4),(11, 5),(11, 6),(11, 7),(11, 8),(12, 9)],soldier:true,unit:0}
+[r3 s6 p0] MoveIntent(a=0 dx=-999 dy=-999 t=move x=14 y=10)
+    ok=true
+    log: Light Infantry: move → (14, 10) [AP: 0]
+    dice: {kind:hold,units:{0:(12, 9)}}
+    dice: {from:(12, 9),kind:walk,path:[(13, 9),(14, 10)],soldier:true,unit:0}
+[r3 s6 p0] MoveIntent(a=4 dx=-999 dy=-999 t=move x=18 y=8)
+    ok=true
+    log: Heavy Infantry: move → (18, 8) [AP: 1]
+    dice: {kind:hold,units:{4:(13, 2)}}
+    dice: {from:(13, 2),kind:walk,path:[(14, 3),(14, 4),(15, 5),(16, 6),(17, 7),(18, 8)],soldier:true,unit:4}
+[r3 s6 p0] MoveIntent(a=4 dx=-999 dy=-999 t=move x=21 y=11)
+    ok=true
+    log: Heavy Infantry: move → (21, 11) [AP: 0]
+    dice: {kind:hold,units:{4:(18, 8)}}
+    dice: {from:(18, 8),kind:walk,path:[(19, 9),(20, 10),(21, 11)],soldier:true,unit:4}
+[r3 s6 p0] MoveIntent(a=4 dx=-999 dy=-999 t=move x=22 y=11)
+    ok=true
+    log: Heavy Infantry: move → (22, 11) [AP: 0]
+    dice: {kind:hold,units:{4:(21, 11)}}
+    dice: {from:(21, 11),kind:walk,path:[(22, 11)],soldier:true,unit:4}
+[r3 s6 p0] MoveIntent(a=4 dx=-999 dy=-999 t=move x=23 y=11)
+    ok=true
+    log: Heavy Infantry: move → (23, 11) [AP: 0]
+    dice: {kind:hold,units:{4:(22, 11)}}
+    dice: {from:(22, 11),kind:walk,path:[(23, 11)],soldier:true,unit:4}
+[r3 s6 p0] MoveIntent(a=4 dx=-999 dy=-999 t=move x=24 y=11)
+    ok=true
+    log: Heavy Infantry: move → (24, 11) [AP: 0]
+    dice: {kind:hold,units:{4:(23, 11)}}
+    dice: {from:(23, 11),kind:walk,path:[(24, 11)],soldier:true,unit:4}
+[r3 s6 p0] EndTurnIntent(q=-1 t=end)
+    ok=true
+    log: — Player A ended their turn. Player B to move (round 4) —
+[r4 s4 p1] ShootIntent(a=11 cm= cx=-999 cy=-999 s=-1 t=shoot tid=2)
+    ok=true
+    log: Anti-Tank: roll 6 (need 3+) — direct hit at (16, 5)!
+    log: Light Infantry destroyed!
+    dice: {actor:Anti-Tank,kind:check,need:3,ok:true,roll:6}
+    deaths: [2]
+[r4 s4 p1] PickUpCorpseIntent(a=11 t=corpse_up x=17 y=12)
+    ok=true
+    log: Anti-Tank picks up a corpse — carrying 1 (+1 defense) [AP: 0]
+[r4 s4 p1] ShootIntent(a=9 cm= cx=-999 cy=-999 s=-1 t=shoot tid=4)
+    ok=true
+    log: Sniper → Heavy Infantry: 1 shots, 1 hits (need 1+)
+    dice: {armor:5,def_mods:[{delta:2,label:Shooter penetration}],def_owner:0,hit_mods:[{delta:0,label:Sniper auto-hit}],killed:false,kind:attack,need:1,shooter:Sniper,shooter_owner:1,shots:[{armor:5,def_roll:6,hit:true,hit_roll:4,need:1,parried:true}],target:Heavy Infantry}
+[r4 s4 p1] ShootIntent(a=9 cm= cx=-999 cy=-999 s=-1 t=shoot tid=4)
+    ok=true
+    log: Sniper → Heavy Infantry: 1 shots, 1 hits (need 1+)
+    dice: {armor:5,def_mods:[{delta:2,label:Shooter penetration}],def_owner:0,hit_mods:[{delta:0,label:Sniper auto-hit}],killed:false,kind:attack,need:1,shooter:Sniper,shooter_owner:1,shots:[{armor:5,def_roll:6,hit:true,hit_roll:1,need:1,parried:true}],target:Heavy Infantry}
+[r4 s4 p1] EndTurnIntent(q=-1 t=end)
+    ok=true
+    log: — Player B ended their turn. Player A to move (round 4) —
+[r4 s6 p0] MoveIntent(a=0 dx=-999 dy=-999 t=move x=16 y=12)
+    ok=true
+    log: Light Infantry: move → (16, 12) [AP: 1]
+    dice: {kind:hold,units:{0:(14, 10)}}
+    dice: {from:(14, 10),kind:walk,path:[(15, 11),(16, 12)],soldier:true,unit:0}
+[r4 s6 p0] ShootIntent(a=0 cm= cx=-999 cy=-999 s=2 t=shoot tid=11)
+    ok=true
+    log: Light Infantry → Anti-Tank: 2 shots, 2 hits (need 1+)
+    log: Anti-Tank killed!
+    dice: {armor:3,def_mods:[{delta:1,label:Corpse shield}],def_owner:1,hit_mods:[],killed:true,kind:attack,need:1,shooter:Light Infantry,shooter_owner:0,shots:[{armor:3,def_roll:2,hit:true,hit_roll:3,need:1,parried:false},{armor:3,def_roll:4,hit:true,hit_roll:5,need:1,parried:true}],target:Anti-Tank}
+    deaths: [11]
+[r4 s6 p0] MoveIntent(a=0 dx=-999 dy=-999 t=move x=21 y=11)
+    ok=true
+    log: Light Infantry: move → (21, 11) [AP: 0]
+    dice: {kind:hold,units:{0:(16, 12)}}
+    dice: {from:(16, 12),kind:walk,path:[(17, 12),(18, 12),(19, 11),(20, 11),(21, 11)],soldier:true,unit:0}
+[r4 s6 p0] MoveIntent(a=0 dx=-999 dy=-999 t=move x=19 y=9)
+    ok=true
+    log: Light Infantry: move → (19, 9) [AP: 0]
+    dice: {kind:hold,units:{0:(21, 11)}}
+    dice: {from:(21, 11),kind:walk,path:[(20, 10),(19, 9)],soldier:true,unit:0}
+[r4 s6 p0] ShootIntent(a=4 cm= cx=-999 cy=-999 s=2 t=shoot tid=9)
+    ok=true
+    log: Heavy Infantry → Sniper: 2 shots, 2 hits (need 1+)
+    log: … shots remaining in burst: 1
+    dice: {armor:4,def_mods:[],def_owner:1,hit_mods:[],killed:false,kind:attack,need:1,shooter:Heavy Infantry,shooter_owner:0,shots:[{armor:4,def_roll:4,hit:true,hit_roll:6,need:1,parried:true},{armor:4,def_roll:5,hit:true,hit_roll:5,need:1,parried:true}],target:Sniper}
+[r4 s6 p0] ShootIntent(a=4 cm= cx=-999 cy=-999 s=-1 t=shoot tid=9)
+    ok=true
+    log: Heavy Infantry → Sniper: 1 shots, 1 hits (need 1+)
+    log: Sniper killed!
+    dice: {armor:4,def_mods:[],def_owner:1,hit_mods:[],killed:true,kind:attack,need:1,shooter:Heavy Infantry,shooter_owner:0,shots:[{armor:4,def_roll:3,hit:true,hit_roll:3,need:1,parried:false}],target:Sniper}
+    deaths: [9]
+[r4 s6 p0] MoveIntent(a=4 dx=-999 dy=-999 t=move x=20 y=9)
+    ok=true
+    log: Heavy Infantry: move → (20, 9) [AP: 0]
+    dice: {kind:hold,units:{4:(24, 11)}}
+    dice: {from:(24, 11),kind:walk,path:[(23, 10),(22, 9),(21, 9),(20, 9)],soldier:true,unit:4}
+[r4 s6 p0] MoveIntent(a=6 dx=-999 dy=-999 t=move x=18 y=9)
+    ok=true
+    log: Machinegunner: move → (18, 9) [AP: 1]
+    dice: {kind:hold,units:{6:(13, 3)}}
+    dice: {from:(13, 3),kind:walk,path:[(14, 4),(15, 5),(16, 6),(16, 7),(17, 8),(18, 9)],soldier:true,unit:6}
+[r4 s6 p0] EndTurnIntent(q=-1 t=end)
+    ok=true
+    log: — Player A ended their turn. Player A to move (round 5) —
+[r5 s6 p0] MoveIntent(a=0 dx=-999 dy=-999 t=move x=18 y=8)
+    ok=true
+    log: Light Infantry: move → (18, 8) [AP: 1]
+    dice: {kind:hold,units:{0:(19, 9)}}
+    dice: {from:(19, 9),kind:walk,path:[(18, 8)],soldier:true,unit:0}
+[r5 s6 p0] MoveIntent(a=0 dx=-999 dy=-999 t=move x=19 y=9)
+    ok=true
+    log: Light Infantry: move → (19, 9) [AP: 1]
+    dice: {kind:hold,units:{0:(18, 8)}}
+    dice: {from:(18, 8),kind:walk,path:[(19, 9)],soldier:true,unit:0}
+[r5 s6 p0] MoveIntent(a=0 dx=-999 dy=-999 t=move x=18 y=8)
+    ok=true
+    log: Light Infantry: move → (18, 8) [AP: 1]
+    dice: {kind:hold,units:{0:(19, 9)}}
+    dice: {from:(19, 9),kind:walk,path:[(18, 8)],soldier:true,unit:0}
+[r5 s6 p0] MoveIntent(a=0 dx=-999 dy=-999 t=move x=19 y=9)
+    ok=true
+    log: Light Infantry: move → (19, 9) [AP: 1]
+    dice: {kind:hold,units:{0:(18, 8)}}
+    dice: {from:(18, 8),kind:walk,path:[(19, 9)],soldier:true,unit:0}
+[r5 s6 p0] MoveIntent(a=4 dx=-999 dy=-999 t=move x=19 y=8)
+    ok=true
+    log: Heavy Infantry: move → (19, 8) [AP: 1]
+    dice: {kind:hold,units:{4:(20, 9)}}
+    dice: {from:(20, 9),kind:walk,path:[(19, 8)],soldier:true,unit:4}
+[r5 s6 p0] MoveIntent(a=4 dx=-999 dy=-999 t=move x=20 y=9)
+    ok=true
+    log: Heavy Infantry: move → (20, 9) [AP: 1]
+    dice: {kind:hold,units:{4:(19, 8)}}
+    dice: {from:(19, 8),kind:walk,path:[(20, 9)],soldier:true,unit:4}
+[r5 s6 p0] MoveIntent(a=4 dx=-999 dy=-999 t=move x=19 y=8)
+    ok=true
+    log: Heavy Infantry: move → (19, 8) [AP: 1]
+    dice: {kind:hold,units:{4:(20, 9)}}
+    dice: {from:(20, 9),kind:walk,path:[(19, 8)],soldier:true,unit:4}
+[r5 s6 p0] MoveIntent(a=4 dx=-999 dy=-999 t=move x=20 y=9)
+    ok=true
+    log: Heavy Infantry: move → (20, 9) [AP: 1]
+    dice: {kind:hold,units:{4:(19, 8)}}
+    dice: {from:(19, 8),kind:walk,path:[(20, 9)],soldier:true,unit:4}
+[r5 s6 p0] MoveIntent(a=6 dx=-999 dy=-999 t=move x=17 y=8)
+    ok=true
+    log: Machinegunner: move → (17, 8) [AP: 1]
+    dice: {kind:hold,units:{6:(18, 9)}}
+    dice: {from:(18, 9),kind:walk,path:[(17, 8)],soldier:true,unit:6}
+[r5 s6 p0] MoveIntent(a=6 dx=-999 dy=-999 t=move x=18 y=9)
+    ok=true
+    log: Machinegunner: move → (18, 9) [AP: 1]
+    dice: {kind:hold,units:{6:(17, 8)}}
+    dice: {from:(17, 8),kind:walk,path:[(18, 9)],soldier:true,unit:6}
+[r5 s6 p0] MoveIntent(a=6 dx=-999 dy=-999 t=move x=17 y=8)
+    ok=true
+    log: Machinegunner: move → (17, 8) [AP: 1]
+    dice: {kind:hold,units:{6:(18, 9)}}
+    dice: {from:(18, 9),kind:walk,path:[(17, 8)],soldier:true,unit:6}
+[r5 s6 p0] MoveIntent(a=6 dx=-999 dy=-999 t=move x=18 y=9)
+    ok=true
+    log: Machinegunner: move → (18, 9) [AP: 1]
+    dice: {kind:hold,units:{6:(17, 8)}}
+    dice: {from:(17, 8),kind:walk,path:[(18, 9)],soldier:true,unit:6}
+[r5 s6 p0] EndTurnIntent(q=-1 t=end)
+    ok=true
+    log: — Player A ended their turn. Player A to move (round 6) —
+[r6 s6 p0] MoveIntent(a=0 dx=-999 dy=-999 t=move x=18 y=8)
+    ok=true
+    log: Light Infantry: move → (18, 8) [AP: 1]
+    dice: {kind:hold,units:{0:(19, 9)}}
+    dice: {from:(19, 9),kind:walk,path:[(18, 8)],soldier:true,unit:0}
+[r6 s6 p0] MoveIntent(a=0 dx=-999 dy=-999 t=move x=19 y=9)
+    ok=true
+    log: Light Infantry: move → (19, 9) [AP: 1]
+    dice: {kind:hold,units:{0:(18, 8)}}
+    dice: {from:(18, 8),kind:walk,path:[(19, 9)],soldier:true,unit:0}
+[r6 s6 p0] MoveIntent(a=0 dx=-999 dy=-999 t=move x=18 y=8)
+    ok=true
+    log: Light Infantry: move → (18, 8) [AP: 1]
+    dice: {kind:hold,units:{0:(19, 9)}}
+    dice: {from:(19, 9),kind:walk,path:[(18, 8)],soldier:true,unit:0}
+[r6 s6 p0] MoveIntent(a=0 dx=-999 dy=-999 t=move x=19 y=9)
+    ok=true
+    log: Light Infantry: move → (19, 9) [AP: 1]
+    dice: {kind:hold,units:{0:(18, 8)}}
+    dice: {from:(18, 8),kind:walk,path:[(19, 9)],soldier:true,unit:0}
+[r6 s6 p0] MoveIntent(a=4 dx=-999 dy=-999 t=move x=19 y=8)
+    ok=true
+    log: Heavy Infantry: move → (19, 8) [AP: 1]
+    dice: {kind:hold,units:{4:(20, 9)}}
+    dice: {from:(20, 9),kind:walk,path:[(19, 8)],soldier:true,unit:4}
+[r6 s6 p0] MoveIntent(a=4 dx=-999 dy=-999 t=move x=20 y=9)
+    ok=true
+    log: Heavy Infantry: move → (20, 9) [AP: 1]
+    dice: {kind:hold,units:{4:(19, 8)}}
+    dice: {from:(19, 8),kind:walk,path:[(20, 9)],soldier:true,unit:4}
+[r6 s6 p0] MoveIntent(a=4 dx=-999 dy=-999 t=move x=19 y=8)
+    ok=true
+    log: Heavy Infantry: move → (19, 8) [AP: 1]
+    dice: {kind:hold,units:{4:(20, 9)}}
+    dice: {from:(20, 9),kind:walk,path:[(19, 8)],soldier:true,unit:4}
+[r6 s6 p0] MoveIntent(a=4 dx=-999 dy=-999 t=move x=20 y=9)
+    ok=true
+    log: Heavy Infantry: move → (20, 9) [AP: 1]
+    dice: {kind:hold,units:{4:(19, 8)}}
+    dice: {from:(19, 8),kind:walk,path:[(20, 9)],soldier:true,unit:4}
+[r6 s6 p0] MoveIntent(a=6 dx=-999 dy=-999 t=move x=17 y=8)
+    ok=true
+    log: Machinegunner: move → (17, 8) [AP: 1]
+    dice: {kind:hold,units:{6:(18, 9)}}
+    dice: {from:(18, 9),kind:walk,path:[(17, 8)],soldier:true,unit:6}
+[r6 s6 p0] MoveIntent(a=6 dx=-999 dy=-999 t=move x=18 y=9)
+    ok=true
+    log: Machinegunner: move → (18, 9) [AP: 1]
+    dice: {kind:hold,units:{6:(17, 8)}}
+    dice: {from:(17, 8),kind:walk,path:[(18, 9)],soldier:true,unit:6}
+[r6 s6 p0] MoveIntent(a=6 dx=-999 dy=-999 t=move x=17 y=8)
+    ok=true
+    log: Machinegunner: move → (17, 8) [AP: 1]
+    dice: {kind:hold,units:{6:(18, 9)}}
+    dice: {from:(18, 9),kind:walk,path:[(17, 8)],soldier:true,unit:6}
+[r6 s6 p0] MoveIntent(a=6 dx=-999 dy=-999 t=move x=18 y=9)
+    ok=true
+    log: Machinegunner: move → (18, 9) [AP: 1]
+    dice: {kind:hold,units:{6:(17, 8)}}
+    dice: {from:(17, 8),kind:walk,path:[(18, 9)],soldier:true,unit:6}
+[r6 s6 p0] EndTurnIntent(q=-1 t=end)
     ok=true
     log: — Player A ended their turn. Player A to move (round 7) —
-actions 93
+actions 131
 --- digest ---
-U 0 (15, 0) 0/45 st0 ap2 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
+U 0 (19, 9) 0/45 st0 ap2 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
 U 1 (12, 1) 1/45 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 3 (12, 2) 1/45 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 4 (15, 5) 0/60 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 5 (18, 5) 1/60 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 6 (14, 5) 0/65 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 7 (19, 4) 1/65 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 8 (14, 10) 0/60 st0 ap2 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 9 (30, 12) 1/60 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 10 (20, 4) 0/80 st0 ap2 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 11 (19, 9) 1/80 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 12 (14, 4) 0/60 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 14 (15, 7) 0/100 st0 ap2 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 16 (13, 22) 101/30 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ1
-U 17 (16, 22) 26/30 st0 ap2 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
-U 18 (19, 6) 102/30 st1 ap0 mc7 cap-1 cor0 veh-1 drg(-9999, -9999) civ1
+U 2 (16, 5) 0/45 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
+U 4 (20, 9) 0/60 st0 ap2 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
+U 6 (18, 9) 0/65 st0 ap2 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
+U 7 (12, 2) 1/65 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
+U 8 (3, 12) 0/60 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
+U 9 (23, 12) 1/60 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
+U 10 (9, 12) 0/80 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
+U 11 (16, 13) 1/80 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
+U 12 (18, 11) 0/60 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
+U 13 (15, 6) 1/60 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
+U 15 (18, 19) 1/100 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0
+U 16 (13, 16) 101/30 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ1
+U 17 (16, 22) 103/30 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ1
 U 19 (22, 22) 100/30 st1 ap0 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ1
-C 7,0 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 8,0 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 9,0 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 10,0 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 11,0 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 12,0 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 13,0 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
 C 17,0 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
-C 7,1 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 8,1 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 9,1 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 10,1 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 11,1 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 12,1 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 13,1 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 13,1 f= h=0.0 fire0 dur0 dirt0 corp1 weld0
 C 17,1 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
-C 7,2 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 8,2 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 9,2 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 10,2 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 11,2 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 12,2 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
 C 17,2 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
-C 7,3 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 8,3 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 9,3 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 10,3 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 11,3 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 12,3 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 13,3 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
 C 17,3 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
-C 8,4 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 9,4 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 10,4 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 11,4 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 12,4 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 13,4 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 14,4 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 9,4 f=hedgehog h=1.0 fire0 dur0 dirt0 corp0 weld0
 C 24,4 f=hedgehog h=1.0 fire0 dur0 dirt0 corp0 weld0
-C 9,5 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 10,5 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 11,5 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 12,5 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 13,5 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 14,5 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 15,5 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 16,5 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 17,5 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 18,5 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 20,5 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 9,6 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 10,6 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 11,6 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 12,6 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 13,6 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 14,6 f= h=0.0 fire1 dur0 dirt0 corp1 weld0
-C 15,6 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 16,6 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 17,6 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 18,6 f= h=0.0 fire1 dur0 dirt0 corp1 weld0
-C 19,6 f= h=0.0 fire1 dur0 dirt0 corp1 weld0
-C 20,6 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 21,6 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 22,6 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 11,7 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 12,7 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 13,7 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 14,7 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 15,7 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 16,7 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 17,7 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 18,7 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 16,5 f= h=0.0 fire0 dur0 dirt0 corp1 weld0
 C 5,8 f=sandbags h=1.0 fire0 dur0 dirt0 corp0 weld0
-C 11,8 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 12,8 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 13,8 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 14,8 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 15,8 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
-C 17,8 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
 C 28,8 f=sandbags h=1.0 fire0 dur0 dirt0 corp0 weld0
 C 5,9 f=sandbags h=1.0 fire0 dur0 dirt0 corp0 weld0
-C 13,9 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
 C 17,9 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
 C 28,9 f=sandbags h=1.0 fire0 dur0 dirt0 corp0 weld0
 C 5,10 f=sandbags h=1.0 fire0 dur0 dirt0 corp0 weld0
-C 17,10 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
 C 28,10 f=sandbags h=1.0 fire0 dur0 dirt0 corp0 weld0
 C 5,11 f=sandbags h=1.0 fire0 dur0 dirt0 corp0 weld0
-C 17,11 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
 C 28,11 f=sandbags h=1.0 fire0 dur0 dirt0 corp0 weld0
 C 5,12 f=sandbags h=1.0 fire0 dur0 dirt0 corp0 weld0
 C 28,12 f=sandbags h=1.0 fire0 dur0 dirt0 corp0 weld0
 C 5,13 f=sandbags h=1.0 fire0 dur0 dirt0 corp0 weld0
+C 15,13 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 16,13 f= h=0.0 fire1 dur0 dirt0 corp1 weld0
 C 17,13 f=glass h=2.0 fire0 dur0 dirt0 corp0 weld0
 C 28,13 f=sandbags h=1.0 fire0 dur0 dirt0 corp0 weld0
+C 12,14 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 13,14 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 14,14 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 15,14 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 16,14 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
 C 17,14 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
-C 17,15 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
-C 17,16 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
-C 17,17 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
+C 18,14 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 12,15 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 13,15 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 14,15 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 15,15 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 16,15 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 17,15 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 18,15 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 19,15 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 12,16 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 14,16 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 15,16 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 16,16 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 17,16 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 18,16 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 12,17 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 13,17 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 14,17 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 15,17 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 16,17 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 17,17 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 18,17 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 19,17 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 20,17 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 21,17 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 12,18 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 13,18 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 14,18 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 15,18 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 16,18 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 17,18 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 18,18 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 19,18 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 20,18 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 21,18 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 22,18 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 14,19 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 15,19 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 16,19 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 17,19 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 18,19 f= h=0.0 fire1 dur0 dirt0 corp1 weld0
+C 19,19 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 20,19 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 21,19 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 22,19 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
 C 3,20 f=trench h=0.0 fire0 dur0 dirt0 corp0 weld0
 C 4,20 f=trench h=0.0 fire0 dur0 dirt0 corp0 weld0
 C 5,20 f=trench h=0.0 fire0 dur0 dirt0 corp0 weld0
 C 6,20 f=trench h=0.0 fire0 dur0 dirt0 corp0 weld0
-C 17,20 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
+C 16,20 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 17,20 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 18,20 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 19,20 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 20,20 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 21,20 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 22,20 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
 C 27,20 f=trench h=0.0 fire0 dur0 dirt0 corp0 weld0
 C 28,20 f=trench h=0.0 fire0 dur0 dirt0 corp0 weld0
 C 29,20 f=trench h=0.0 fire0 dur0 dirt0 corp0 weld0
 C 30,20 f=trench h=0.0 fire0 dur0 dirt0 corp0 weld0
-C 17,21 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
-C 17,22 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
-C 17,23 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
-C 17,24 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
+C 17,21 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 18,21 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 19,21 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 20,21 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 21,21 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 22,21 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 23,21 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 24,21 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 16,22 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 17,22 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 18,22 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 19,22 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 20,22 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 21,22 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 22,22 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 23,22 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 17,23 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 18,23 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 19,23 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 21,23 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 22,23 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 17,24 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 18,24 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 19,24 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 21,24 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
 C 17,25 f=wall h=2.0 fire0 dur0 dirt0 corp0 weld0
-T round7 slot5 order[100, 26, 102, 101, 1, 0]
+C 18,25 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 19,25 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+C 20,25 f= h=0.0 fire1 dur0 dirt0 corp0 weld0
+T round7 slot6 order[100, 26, 102, 101, 1, 103, 0]

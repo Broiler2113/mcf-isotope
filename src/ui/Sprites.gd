@@ -82,7 +82,7 @@ const MANIFEST := [
 		"light_infantry", "machinegunner", "marksman", "miner", "sapper",
 		"shield_bearer", "sniper",
 	]],
-	["Faction portraits (shown in the lobby instead of the colour square)", [
+	["Faction portraits (shown in the lobby instead of the color square)", [
 		"faction_nova", "faction_purifiers", "faction_prometheus", "faction_alliance",
 		"faction_league", "faction_martian", "faction_saints", "faction_nkj",
 	]],
@@ -402,7 +402,7 @@ static func _manifest_text() -> String:
 		"",
 		"== sample.png ==",
 		"Every object folder carries one: its own art with every tile boxed in magenta, and,",
-		"for a 16-tile sheet, white bars on the sides where that tile has a neighbour.",
+		"for a 16-tile sheet, white bars on the sides where that tile has a neighbor.",
 		"Open it, paint over the art, save the result under the object\'s name, done.",
 		"Samples are never loaded into the game -- a file called sample is skipped.",
 		"",
@@ -421,7 +421,7 @@ static func _manifest_text() -> String:
 	lines.append("")
 	lines.append_array([
 		"== Factions ==",
-		"Sides are factions, not colours. Soldiers accept a faction suffix:",
+		"Sides are factions, not colors. Soldiers accept a faction suffix:",
 		"  light_infantry_nova.png, light_infantry_purifiers.png, ... light_infantry_neutral.png",
 		"Suffixes: " + ", ".join(Roster.FACTION_KEYS) + ", neutral.",
 		"A plain light_infantry.png is used for any faction that has no suffixed file.",
@@ -445,7 +445,7 @@ static func _manifest_text() -> String:
 		"A sheet is 16 tiles and nothing more (128x128 for 32px tiles) -- that is the whole",
 		"format. More 4x4 sheets MAY be stacked below it as variants if you want the surface",
 		"to vary, but one is enough and that is what the game ships.",
-		"The game looks at the four orthogonal neighbours of the same FAMILY (walls, glass,",
+		"The game looks at the four orthogonal neighbors of the same FAMILY (walls, glass,",
 		"airlocks, bunkers and corpse walls join each other; sandbag pieces join each other)",
 		"and picks tile index = N*1 + E*2 + S*4 + W*8; column = index % 4, row = index / 4:",
 		"",
@@ -456,7 +456,7 @@ static func _manifest_text() -> String:
 		"",
 		"Each tile is square; the sheet is 4 tiles wide and 4 tall (e.g. 128x128 for 32px",
 		"tiles). If a sheet exists it wins over the plain <feature>.png. Diagonal",
-		"neighbours are ignored on purpose: 16 tiles are enough for corridors and rooms.",
+		"neighbors are ignored on purpose: 16 tiles are enough for corridors and rooms.",
 		"",
 		"== One atlas per object ==",
 		"Everything one object needs may instead ship as a single <name>_atlas.png,",

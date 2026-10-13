@@ -14,6 +14,9 @@ extends RefCounted
 ## он взялся.
 
 enum SlotKind {OPEN, CLOSED, HUMAN, AI}
+## Роли слотов (0.12): обычный игрок или волны Holdout.
+const ROLE_NORMAL := 0
+const ROLE_WAVES := 1
 
 ## Фракции (batch 17, item 13). Сторона выбирает не цвет, а ФРАКЦИЮ из лора MCF; цвет,
 ## имя и ключ файлов текстур идут тремя параллельными списками в одном порядке. Первые
@@ -60,7 +63,16 @@ class Slot extends RefCounted:
 	## Номер команды или −1 «сам за себя». Командный режим — это просто партия,
 	## в которой хотя бы у одного слота team >= 0.
 	var team: int = -1
-	var ai_difficulty: int = 1
+	## Сила ИИ: HARD (с 0.12 — единственный уровень скриптового ИИ) или LEARNED (модель).
+	var ai_difficulty: int = 2
+	## Личность ИИ (0.12, AIPersonality): Tactician / Aggressor / Fortifier.
+	var ai_style: int = 0
+
+	## Подпись слота ИИ: «AI - Tactician», «AI - Learned».
+	func ai_label() -> String:
+		if ai_difficulty == 3:
+			return "AI - Learned"
+		return "AI - " + AIPersonality.name_of(ai_style)
 	## Личный бюджет очков. 0 = безлимит (та же условность, что у GameConfig.budget).
 	var budget: int = 0
 	## Пир, который ведёт этот слот в сетевой партии; −1 — местный или никто.
@@ -72,6 +84,9 @@ class Slot extends RefCounted:
 	## расставляет отряд. −1 = «зона с моим же номером» (поведение по умолчанию).
 	## Позволяет посадить любого игрока в любую нарисованную зону.
 	var deploy_zone: int = -1
+	## Роль слота (0.12): ROLE_NORMAL — обычный игрок; ROLE_WAVES — волны Holdout (своей
+	## армии не покупает и не расставляет, её бойцы приходят волнами с края карты).
+	var role: int = 0
 	## Ограничение состава ЛИЧНО для этого игрока (item 2): id юнита -> разрешён ли.
 	## Пустой словарь = разрешено всё. Заполняет лобби, применяет экран расстановки.
 	var allowed_units: Dictionary = {}
@@ -131,13 +146,54 @@ func remove_slot(id: int) -> void:
 		slots[i].id = i
 		slots[i].display_name = MCF.owner_name(i)
 
+## Holdout (0.12): все игроки — одна команда, волны — последний слот и своя команда.
+## Повторный вызов второго слота волн не заводит. ai — личность (0..2) или 3, модель.
+## false — места под волны нет (ростер полон).
+func set_waves(ai: int) -> bool:
+	strip_waves()
+	if slots.size() >= MCF.MAX_PLAYERS:
+		return false
+	for s: Slot in slots:
+		s.team = 0
+	var id := add_slot(SlotKind.AI, 1)
+	var w: Slot = slots[id]
+	w.role = ROLE_WAVES
+	w.display_name = "Waves"
+	w.ai_difficulty = 3 if ai >= AIPersonality.NAMES.size() else 2
+	w.ai_style = clampi(ai, 0, AIPersonality.NAMES.size() - 1)
+	for i in PALETTE.size():
+		var taken := false
+		for s: Slot in slots:
+			if s != w and s.color_index() == i:
+				taken = true
+				break
+		if not taken:
+			w.color = PALETTE[i]
+			break
+	return true
+
+## Убрать слот волн (возврат из Holdout в лобби, смена режима).
+func strip_waves() -> void:
+	for i in range(slots.size() - 1, -1, -1):
+		if (slots[i] as Slot).role == ROLE_WAVES:
+			slots.remove_at(i)
+	for i in slots.size():
+		slots[i].id = i
+
+## Слот волн Holdout или −1.
+func waves_side() -> int:
+	for s: Slot in slots:
+		if s.role == ROLE_WAVES:
+			return s.id
+	return -1
+
 ## Партия на двоих без команд — ровно то, чем игра была до этого шага. Служит
 ## значением по умолчанию везде, где ростер ещё не собран лобби.
-static func default_duel(p2_is_ai: bool = false, difficulty: int = 1) -> Roster:
+static func default_duel(p2_is_ai: bool = false, style: int = 0) -> Roster:
 	var r := Roster.new()
 	r.add_slot(SlotKind.HUMAN)
 	r.add_slot(SlotKind.AI if p2_is_ai else SlotKind.HUMAN)
-	r.slots[1].ai_difficulty = difficulty
+	r.slots[1].ai_style = style
 	return r
 
 ## Ростер под уже готовую доску: слоты 0..max(ids), присутствующие — играющие,
@@ -291,7 +347,7 @@ func to_dict() -> Dictionary:
 		out.append({
 			"id": s.id, "kind": s.kind, "name": s.display_name,
 			"color": [s.color.r, s.color.g, s.color.b], "team": s.team,
-			"ai": s.ai_difficulty, "budget": s.budget, "peer": s.peer_id,
+			"ai": s.ai_difficulty, "st": s.ai_style, "role": s.role, "budget": s.budget, "peer": s.peer_id,
 			"dead": s.eliminated,
 			# Зона и личный список юнитов раньше по сети не ехали (batch 12 #8/#9): гость
 			# расставлялся не там и покупал не то, что разрешил хост.
@@ -313,7 +369,10 @@ static func from_dict(d: Dictionary) -> Roster:
 			s.color = Color(float(col[0]), float(col[1]), float(col[2]))
 		else:
 			s.color = Color.from_string(str(col), s.color)  # старые файлы: html
-		s.ai_difficulty = int(rec.get("ai", 1))
+		# Уровни сложности (0.12) ушли: прежние Easy/Normal/Hard читаются как HARD-Tactician.
+		s.ai_difficulty = 3 if int(rec.get("ai", 2)) == 3 else 2
+		s.ai_style = clampi(int(rec.get("st", 0)), 0, AIPersonality.NAMES.size() - 1)
+		s.role = int(rec.get("role", 0))
 		s.budget = int(rec.get("budget", 0))
 		s.peer_id = int(rec.get("peer", -1))
 		s.eliminated = bool(rec.get("dead", false))

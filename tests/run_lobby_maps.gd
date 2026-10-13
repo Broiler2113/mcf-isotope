@@ -9,7 +9,7 @@ extends SceneTree
 ## который никто не проверял. Этот прогон закрывает саму ЦЕПОЧКУ, а не одну её причину:
 ##
 ##   1. карта, сохранённая в user://maps (так пишет редактор), попадает в MapData.list_maps();
-##   2. карта, поставляемая в res://maps, попадает туда же;
+##   2. карта, поставляемая в res://src/data/maps, попадает туда же;
 ##   3. КАЖДОЕ имя из list_maps() есть в выпадающем списке лобби, и путь рядом с ним
 ##      указывает на существующий файл, который читается как карта;
 ##   4. строка «Random map» собирает карту с зоной на каждый слот, пересобирает её при
@@ -44,7 +44,7 @@ func _check() -> void:
 	var names := MapData.list_maps()
 	ck(names.has(PROBE), "a map saved in user://maps is listed (list_maps: %s)" % [names])
 	ck(_bundled_names().all(func(n: String) -> bool: return names.has(n)),
-			"every map shipped in res://maps is listed (bundled: %s, listed: %s)" % [
+			"every map shipped in res://src/data/maps is listed (bundled: %s, listed: %s)" % [
 				_bundled_names(), names])
 
 	var lobby: Node = _lobby

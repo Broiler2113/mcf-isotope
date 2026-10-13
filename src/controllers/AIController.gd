@@ -108,15 +108,15 @@ const MINE_FIELD_CAP := 12
 const SCORE_VEHICLE_FIRING_LINE := 18.0
 
 var difficulty: int = Difficulty.NORMAL
-## Манера HARD для обучения RL (rl/env_server, «opponent_style»): чтобы политика училась
-## воевать, а не вскрывать привычки одного бота. STANDARD — обычный HARD (штабной план,
-## и именно им идёт оценка). Остальные заменяют план штаба своим выбором клетки хода:
-##   RUSH   — сближение любой ценой, укрытие почти не важно;
-##   TURTLE — держит укрытия и не входит в простреливаемые клетки, пока враг виден;
-##   FLANK  — сближается в обход простреливаемых линий (resolver.fire_cover).
-## Стрельба, техника, дроны — общие для всех манер.
+## Личность (0.12, AIPersonality): STANDARD — Tactician, RUSH — Aggressor, TURTLE —
+## Fortifier. Номера прежние нарочно: обучение RL зовёт манеры HARD по номеру
+## (opponent_styles), и конфиги на ноутбуке владельца обязаны работать после обновления.
+## FLANK — четвёртая, ТОЛЬКО для обучения: сближается в обход простреливаемых линий
+## (resolver.fire_cover) без штабного плана, как и раньше; в игре её не выбрать.
 enum Style {STANDARD, RUSH, TURTLE, FLANK}
 var style: int = Style.STANDARD
+## Ручки личности на текущее решение (AIPersonality.profile): цели, гранаты, окопы, мины.
+var _prof: Dictionary = AIPersonality.profile(AIPersonality.TACTICIAN)
 
 ## Кэш мультиисточниковых геополей расстояний: ключ "vis"/"all", значение —
 ## Dictionary{Vector2i -> шаги до ближайшего врага}. Позволяет ИИ обходить стены и
@@ -197,6 +197,88 @@ var _danger: Array[Rect2i] = []
 func bind_match(r: GameActionResolver) -> void:
 	_match = weakref(r)
 
+## Режим партии (0.12) — с резолвера САМОЙ партии: у резолвера решения он свой, пустой.
+func _match_mode() -> MatchMode:
+	if _match == null:
+		return null
+	var live: GameActionResolver = _match.get_ref()
+	return live.mode if live != null else null
+
+## Сколько врагов в пределах этого числа клеток от зоны могут оспорить её к концу раунда.
+const ZONE_THREAT_RADIUS := 8
+
+## Сближение в Holdout: защитники — четверть обычного, волны — в полтора раза.
+const HOLDOUT_HOLD := 0.25
+const HOLDOUT_WAVE_PUSH := 1.5
+
+## Цель с наградой за голову стреляется охотнее прочих.
+const SCORE_BOUNTY := 30.0
+
+## Больше стольких бойцов штаб в одну зону не шлёт.
+const ZONE_MAX_SENT := 6
+
+## Цели Capture & Hold для штаба. В каждую зону — столько бойцов, чтобы перевесить врагов
+## в ней и рядом (лишний в зоне очков не даёт), и шлются БЛИЖАЙШИЕ по пути: каждый боец —
+## не больше чем в одну зону, остальные воюют как обычно. Иначе к нужной зоне тянуло бы
+## всю армию разом, а окопавшегося — никуда (окоп и укрытие перевешивали шаг к зоне).
+## Враги видны ИИ сквозь туман (#43) — как и для огня.
+func _set_zone_objectives(state: GameState, md: MatchMode) -> void:
+	var live: GameActionResolver = _match.get_ref()
+	var us := MatchMode.team_key(state.roster, owner)
+	var w := state.grid.width
+	var zone_of := {}
+	var caps: Array = []
+	var need: Array = []
+	var fields: Array = []
+	var foes: Array = []
+	for e: UnitInstance in state.all_units():
+		if e.is_alive() and not e.is_drone and MCF.is_player(e.owner) \
+				and not state.roster.are_allies(owner, e.owner) and state.grid.in_bounds(e.coord):
+			foes.append(e.coord)
+	for i in md.zones.size():
+		var rect := md.zone_rect(i)
+		var counts := live.zone_counts(i)
+		var ours := int(counts.get(us, 0))
+		var theirs := 0
+		for k: String in counts:
+			if k != us:
+				theirs = maxi(theirs, int(counts[k]))
+		var near := 0
+		var grown := rect.grow(ZONE_THREAT_RADIUS)
+		for c: Vector2i in foes:
+			if grown.has_point(c):
+				near += 1
+		var cap := clampi(maxi(theirs, near) + 1, 1, ZONE_MAX_SENT)
+		caps.append(cap)
+		need.append(maxi(0, cap - ours))
+		var seeds := PackedInt32Array()
+		for y in range(rect.position.y, rect.end.y):
+			for x in range(rect.position.x, rect.end.x):
+				var c := Vector2i(x, y)
+				if not state.grid.in_bounds(c) or state.grid.blocks_walk(c):
+					continue
+				zone_of[c] = i
+				seeds.append((y + 1) * (w + 2) + x + 1)
+		fields.append(wave(state.grid, seeds, {}) if int(need[i]) > 0 and not seeds.is_empty() else null)
+	var rows: Array = []   # [шагов до зоны, id бойца, номер зоны]
+	for u: UnitInstance in state.living_units_of(owner):
+		if u.is_drone or u.is_held() or u.aboard_vehicle_id != -1 or zone_of.has(u.coord):
+			continue
+		for i in fields.size():
+			var f: GeoField = fields[i]
+			if f != null and f.at(u.coord) < GeoField.FAR:
+				rows.append([f.at(u.coord), u.id, i])
+	rows.sort_custom(func(x: Array, y: Array) -> bool:
+		return x[0] < y[0] or (x[0] == y[0] and (x[1] < y[1] or (x[1] == y[1] and x[2] < y[2]))))
+	var sent := {}
+	for row: Array in rows:
+		var zi: int = row[2]
+		if sent.has(row[1]) or int(need[zi]) <= 0:
+			continue
+		need[zi] = int(need[zi]) - 1
+		sent[row[1]] = fields[zi]
+	_planner.set_objectives(sent, zone_of, caps)
+
 func _sync_danger() -> void:
 	_danger.clear()
 	if difficulty != Difficulty.HARD or _match == null:
@@ -205,7 +287,7 @@ func _sync_danger() -> void:
 	if live == null or live.random_events == null:
 		return
 	for e: Dictionary in live.random_events.pending:
-		if str(e["id"]) in [RandomEvents.MORTAR, RandomEvents.GAS]:
+		if str(e["id"]) in [RandomEvents.MORTAR, RandomEvents.GAS, RandomEvents.FIRE, RandomEvents.COLLAPSE]:
 			var p: Dictionary = e["params"]
 			_danger.append(Rect2i(int(p.get("x", 0)), int(p.get("y", 0)), int(p.get("w", 0)), int(p.get("h", 0))))
 	for cl: Dictionary in live.random_events.clouds:
@@ -270,6 +352,8 @@ func _decide(state: GameState) -> Intent:
 	var r := GameActionResolver.new(state)
 	r.omniscient_side = owner  # ИИ знает позиции всех сквозь туман (#43)
 	_r = r
+	_prof = AIPersonality.profile(style if style != Style.FLANK else Style.STANDARD,
+			state.turns.round_number)
 	_sync_danger()
 	_sync_turn(state, r)
 	# Доигрываем текущего актёра; когда ходов у него не осталось — берём следующего.
@@ -281,6 +365,8 @@ func _decide(state: GameState) -> Intent:
 			best = _forced_action(state, r, row)
 		if not best.is_empty():
 			_acted[_row_key(row)] = true
+			if best.get("sweep", false):
+				_swept_token = _turn_token
 			return best["intent"]
 		_queue.pop_front()
 		if _queue.is_empty() and not _forced_pass:
@@ -402,7 +488,7 @@ func _sorted_rows(rows: Array) -> Array:
 ## Попытки на бойца ограничены: тот, кому и правда некуда деться (заперт в комнате без
 ## инструмента), отпускается, иначе ход ИИ крутился бы вокруг него вечно.
 func _forced_action(state: GameState, r: GameActionResolver, row: Dictionary) -> Dictionary:
-	if MCF.is_npc_side(owner):
+	if MCF.is_neutral(owner):
 		return {}  # A neutral may hold its position; activity is not a goal by itself.
 	var key := _row_key(row)
 	var tries: int = int(_forced_tries.get(key, 0))
@@ -525,6 +611,16 @@ func _sync_turn(state: GameState, r: GameActionResolver) -> void:
 	# Сперва штаб раскладывает ход целиком (#100), и только потом бойцы начинают
 	# исполнять. Геополе считается тут же и переиспользуется планом.
 	_planner.owner = owner
+	_planner.style = style if style != Style.FLANK else Style.STANDARD
+	_planner.clear_objectives()
+	var md := _match_mode()
+	_planner.advance_scale = 1.0
+	if md != null and md.is_capture() and not md.zones.is_empty() and not MCF.is_npc_side(owner):
+		_set_zone_objectives(state, md)
+	elif md != null and md.is_holdout() and MCF.is_player(owner):
+		# Защитник не выходит навстречу волне, а встречает её с подготовленных позиций;
+		# волна, наоборот, обязана дойти до них.
+		_planner.advance_scale = HOLDOUT_WAVE_PUSH if owner == md.wave_side else HOLDOUT_HOLD
 	_planner.plan(state, r, _enemy_distance_field(state, false, r), _vehicle_queue(state, r))
 	# Копия, а не сам массив: очередь исполнения вычерпывается pop_front'ом, и по
 	# ссылке она стирала бы САМ ПЛАН — а он нужен целиком до конца хода (отладка,
@@ -537,6 +633,17 @@ func _sync_turn(state: GameState, r: GameActionResolver) -> void:
 		if u.aboard_vehicle_id != -1 and r.seated_vehicle_of(u) != null:
 			_queue.append({"id": u.id, "vehicle": false})
 	_queue.append_array(_unqueued_drones(state))
+	# Сапёр с зачисткой — первым (0.12): прочёсывать надо до того, как армия пошла вперёд.
+	if _sweep_needed(state):
+		for i in _queue.size():
+			var row: Dictionary = _queue[i]
+			if row["vehicle"]:
+				continue
+			var sap := state.get_unit(int(row["id"]))
+			if sap != null and sap.stats.special_ability_id == MCF.ABILITY_SAPPER and sap.remaining_ap > 0:
+				_queue.remove_at(i)
+				_queue.push_front(row)
+				break
 
 ## Свои дроны, ещё не стоявшие в очереди этого хода. Планировщик дронов не расставляет
 ## («летает по своей геометрии»), а больше их в очередь не ставил никто: _drone_action не
@@ -640,12 +747,33 @@ func _candidates(state: GameState, r: GameActionResolver, u: UnitInstance) -> Ar
 		return out
 
 	# Нейтрал (§3/§4 «Нейтралы») беспощаден (playtest-20): стрелять или бежать на врага.
-	if MCF.is_npc_side(owner):
+	# Независимая армия (налётчики) с 0.12 — обычная армия HARD (личность Aggressor): у неё
+	# есть и укрытия, и штабной план, и самосохранение.
+	if MCF.is_neutral(owner):
 		return _neutral_candidates(state, r, u)
+
+	var sweep := _best_sweep(state, r, u)
+	if not sweep.is_empty():
+		out.append(sweep)
 
 	var shoot := _best_shoot(state, r, u)
 	if not shoot.is_empty():
 		out.append(shoot)
+
+	# Осколочная граната (0.12): HARD её не бросал НИКОГДА — пулемётчик носил её весь бой.
+	var frag := _best_frag(state, r, u)
+	if not frag.is_empty():
+		out.append(frag)
+
+	# Дымовая (0.12, тяжёлая пехота): завеса между своими и стволами противника.
+	var smoke := _best_smoke(state, r, u)
+	if not smoke.is_empty():
+		out.append(smoke)
+
+	# Окоп под собой и мешки перед собой (0.12, Fortifier): позиция, которую держат.
+	var fortify := _best_fortify(state, r, u)
+	if not fortify.is_empty():
+		out.append(fortify)
 
 	# Противотанкист — единственный, кто вообще может пробить броню (#61).
 	var veh_shot := _best_vehicle_shot(state, r, u)
@@ -1090,17 +1218,35 @@ func _best_shoot(state: GameState, r: GameActionResolver, u: UnitInstance) -> Di
 		# исключение для снайпера живут в резолвере.
 		if r.shot_is_futile(u, t):
 			continue
+		# Самосохранение (0.12): луч марксмана летит сквозь тела, струя огнемёта жжёт всех
+		# на своих клетках и поджигает пол, а пожар ползёт к соседям в начале НАШЕГО же
+		# следующего хода — раньше, чем свои успеют отойти. Своих под этим не держим.
+		if _hurts_own(state, r, u, t.coord):
+			continue
+		# Сбитый дрон взрывается (радиус 1): рядом со своим его не сбиваем — свой отойдёт
+		# (штаб считает клетки у вражеского дрона смертельными), и тогда собьём.
+		if t.is_drone and _friend_near(state, t.coord, MCF.ANTI_TANK_BLAST_RADIUS):
+			continue
 		# Противотанкист бьёт ВЗРЫВОМ (§3.14), и промах кладёт заряд недолётом (#7):
 		# по цели в двух шагах он подрывает сам себя. Резолвер считает все шесть
 		# исходов кубика и отвечает, накроет ли своих (issue 3).
 		if r.anti_tank_shot_endangers_own(u, t.coord):
 			continue
 		var dist := Combat.distance(u.coord, t.coord)
-		var hit_need := Combat.hit_number(dist, u.fire_range())
+		# Через резолвер: в пыльную бурю (0.12) дальний выстрел труднее.
+		var hit_need := r.hit_need(dist, u.fire_range())
+		if hit_need >= 7:
+			continue
 		var ease := float(7 - hit_need)  # чем меньше нужное число, тем выше
 		var score := SCORE_SHOOT_BASE + _unit_value(t) + ease * 2.0
+		# Награда за голову (0.12, Capture & Hold): два очка — как пара удержанных зон.
+		var md := _match_mode()
+		if md != null and md.bounty_unit == t.id:
+			score += SCORE_BOUNTY
 		if _pref_hard():
 			score += ease  # на «сложном» сильнее любит гарантированные попадания
+		# Aggressor бьёт по ближайшему: тот, кто вот-вот дотянется, опаснее дорогого вдали.
+		score += float(_prof.get("near_target", 0.0)) * float(maxi(0, 12 - dist))
 		if best.is_empty() or score > best["score"]:
 			best = {"score": score, "intent": ShootIntent.new(u.id, t.id, _shots_for(r, u, t))}
 	return best
@@ -1443,7 +1589,7 @@ func _best_mine(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dic
 			own_av += 1
 	var enemy_veh := _enemy_vehicle_count(state)
 	var lay_av := enemy_veh > 0 and own_av < enemy_veh
-	if not lay_av and own_mines >= MINE_FIELD_CAP and not free_credit:
+	if not lay_av and own_mines >= int(_prof.get("mine_cap", MINE_FIELD_CAP)) and not free_credit:
 		return {}
 	var field := _enemy_distance_field(state, false, r)
 	if not field.has(u.coord):
@@ -1464,7 +1610,7 @@ func _best_mine(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dic
 			continue
 		if geo > my_geo:
 			continue  # за спиной — врагу туда идти незачем
-		var score := SCORE_MINE_BASE
+		var score := SCORE_MINE_BASE + float(_prof.get("mine_bonus", 0.0))
 		if free_credit:
 			score += SCORE_MINE_FREE_BONUS
 		# Узкое место: чем меньше проходимых соседей, тем плотнее мина закрывает проход.
@@ -1500,6 +1646,319 @@ func _best_mine(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dic
 		return {}
 	return {"score": best_score, "intent": PlaceMineIntent.new(u.id, best_cell, lay_av)}
 
+## Заденет ли выстрел u в сторону aim своих: луч марксмана (сквозь тела) и струя огнемёта
+## (клетки струи + ортогональные соседи подожжённых клеток — туда огонь доползёт в начале
+## нашего следующего хода). Огнеупорному соседу пожар не страшен; в струе гибнет и он.
+func _hurts_own(state: GameState, r: GameActionResolver, u: UnitInstance, aim: Vector2i) -> bool:
+	var ability := u.stats.special_ability_id
+	if ability == MCF.ABILITY_MARKSMAN:
+		for c: Vector2i in r.laser_path(u, aim):
+			if _friend_at(state, c):
+				return true
+		return false
+	if ability != MCF.ABILITY_FLAMETHROWER:
+		return false
+	var jet := r.flame_cells(u.coord, r._step_toward(u.coord, aim))
+	for c: Vector2i in jet:
+		if _friend_at(state, c):
+			return true
+	for c: Vector2i in jet:
+		for n: Vector2i in [c + Vector2i(1, 0), c + Vector2i(-1, 0), c + Vector2i(0, 1), c + Vector2i(0, -1)]:
+			var o := _friend_unit_at(state, n)
+			if o != null and o.id != u.id and not MCF.ability_is_fireproof(o.stats.special_ability_id):
+				return true
+	return false
+
+func _friend_at(state: GameState, c: Vector2i) -> bool:
+	return _friend_unit_at(state, c) != null
+
+func _friend_near(state: GameState, c: Vector2i, radius: int) -> bool:
+	for dy in range(-radius, radius + 1):
+		for dx in range(-radius, radius + 1):
+			var o := _friend_unit_at(state, c + Vector2i(dx, dy))
+			if o != null and not o.is_drone:
+				return true
+	return false
+
+func _friend_unit_at(state: GameState, c: Vector2i) -> UnitInstance:
+	var cell := state.grid.cell(c)
+	if cell == null or cell.occupant == null or not cell.occupant.is_alive():
+		return null
+	var o: UnitInstance = cell.occupant
+	if o.owner == owner or (state.roster != null and state.roster.are_allies(owner, o.owner)):
+		return o
+	return null
+
+# --- Зачистка мин (0.12, самосохранение) ---
+## Сапёр прочёсывает местность (радиус MINE_REVEAL_RADIUS) В НАЧАЛЕ хода, пока армия не
+## пошла вперёд: найденные мины маршруты обходят сами (reachable_for). Раньше ИИ не
+## прочёсывал никогда и терял бойцов на минах, о которых человек бы догадался. Без
+## подглядывания: повод — у противника есть сапёр или его мины уже рвались на поле.
+var _swept_token := -1
+## Противник привёл сапёра (видели в составе хоть раз за бой). Его мины переживают его
+## самого, поэтому прочёсывать продолжаем и после его гибели.
+var _enemy_had_sapper := false
+
+func _sweep_needed(state: GameState) -> bool:
+	if _enemy_had_sapper:
+		return true
+	for e: UnitInstance in state.all_units():
+		if e.owner != owner and e.stats.special_ability_id == MCF.ABILITY_SAPPER \
+				and not state.roster.are_allies(owner, e.owner):
+			_enemy_had_sapper = true
+			return true
+	return false
+
+func _best_sweep(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
+	if u.stats.special_ability_id != MCF.ABILITY_SAPPER or u.remaining_ap <= 0:
+		return {}
+	if _swept_token == _turn_token or not _sweep_needed(state):
+		return {}
+	var enemy := _nearest_enemy(state, u.coord, false, r)
+	if enemy == null or Combat.distance(u.coord, enemy.coord) > MCF.MINE_REVEAL_RADIUS + 10:
+		return {}
+	return {"score": SCORE_SHOOT_BASE + 60.0, "intent": RevealMinesIntent.new(u.id), "sweep": true}
+
+# --- Гранаты (0.12) ---
+## Осколочная (§3.6): бросок по прямой до 12 клеток, «косой крест» из пяти клеток; в
+## эпицентре — смерть (кроме щитоносца), прочие кидают два кубика защиты, и выживает
+## только тот, кто парировал оба. Промах ложится НЕДОЛЁТОМ вдоль линии броска — значит,
+## плохой бросок может накрыть своих. Поэтому оценивается не «куда целимся», а все шесть
+## исходов кубика точности: где граната ляжет и кого там заденет.
+##
+## Цель гранаты — то, чего пулей не взять: кучка врагов или боец в окопе (окоп прячет от
+## выстрела с дистанции, но не от взрыва). Бросок есть смысл делать, только если в среднем
+## он убивает не меньше grenade_min врагов (у личности свой порог) и не грозит своим.
+const SCORE_FRAG_PER_KILL := 16.0
+## Своего погибшего при неудачном броске оцениваем вот во столько раз дороже чужого.
+const FRAG_OWN_WEIGHT := 3.0
+
+func _best_frag(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
+	if u.held_item_id != MCF.ITEM_FRAG or u.remaining_ap <= 0 or r.can_use_item(u) != "":
+		return {}
+	var occupants := {}   # Vector2i -> UnitInstance (живые на поле)
+	var any_enemy := false
+	for o: UnitInstance in state.all_units():
+		if not o.is_alive() or not state.grid.in_bounds(o.coord) or o.aboard_vehicle_id != -1:
+			continue
+		occupants[o.coord] = o
+		if o.owner != owner and not CivilianAI.is_npc(o) \
+				and Combat.distance(o.coord, u.coord) <= MCF.GRENADE_RANGE + 1:
+			any_enemy = true
+	if not any_enemy:
+		return {}
+	var min_kills := float(_prof.get("grenade_min", 0.9))
+	var best: Dictionary = {}
+	for aim: Vector2i in r.grenade_target_cells(u):
+		var dist := Combat.distance(u.coord, aim)
+		if dist <= 1:
+			continue  # себе под ноги не бросают
+		var need := Combat.hit_number(dist, float(MCF.GRENADE_RANGE))
+		var path := r._throw_path(u.coord, aim)
+		var enemy_kills := 0.0
+		var own_kills := 0.0
+		var value := 0.0
+		for roll in range(1, 7):
+			var landing := aim
+			if roll < need:
+				var idx: int = clampi(dist - (need - roll), 0, dist)
+				landing = u.coord if idx <= 0 else path[idx - 1]
+			var out := _frag_outcome(state, landing, occupants)
+			enemy_kills += out[0] / 6.0
+			own_kills += out[1] / 6.0
+			value += out[2] / 6.0
+		if enemy_kills < min_kills or own_kills > 0.05:
+			continue
+		var score := SCORE_SHOOT_BASE + enemy_kills * SCORE_FRAG_PER_KILL + value \
+				- own_kills * FRAG_OWN_WEIGHT * SCORE_FRAG_PER_KILL
+		if best.is_empty() or score > best["score"]:
+			best = {"score": score, "intent": UseItemIntent.new(u.id, aim)}
+	return best
+
+## Взрыв в клетке c: [ожидаемо убитых врагов, своих/союзников, ценность убитых врагов].
+func _frag_outcome(state: GameState, c: Vector2i, occupants: Dictionary) -> Array:
+	var enemies := 0.0
+	var own := 0.0
+	var value := 0.0
+	for b: Vector2i in MCF.blast_x(c):
+		var o: UnitInstance = occupants.get(b)
+		if o == null:
+			continue
+		var p: float
+		if b == c and o.stats.special_ability_id != MCF.ABILITY_SHIELD_BEARER:
+			p = 1.0
+		else:
+			var need_roll: int = o.armor() + 1 - mini(o.carried_corpses, 1)
+			var save := clampf(float(7 - need_roll) / 6.0, 0.0, 1.0)
+			p = 1.0 - save * save
+		if o.owner == owner or (state.roster != null and state.roster.are_allies(owner, o.owner)) \
+				or CivilianAI.is_npc(o):
+			own += p
+		else:
+			enemies += p
+			value += p * _unit_value(o)
+	return [enemies, own, value]
+
+# --- Дымовая (0.12) ---
+## Завеса ставится туда, где она закроет больше всего ожидаемых попаданий по НАШИМ бойцам
+## — там, куда штаб их сейчас ведёт, — и меньше всего наших собственных выстрелов. Дым
+## держит линию огня целиком: и если лёг посреди линии, и если накрыл стрелка или цель.
+## Бросок тот же, что у осколочной: все шесть исходов точности, где ляжет облако.
+const SCORE_SMOKE_PER_HIT := 24.0
+## Свой закрытый дымом выстрел стоит долю закрытого вражеского: завеса — это и наша слепота.
+const SMOKE_OWN_COST := 0.6
+
+func _best_smoke(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
+	if u.held_item_id != MCF.ITEM_SMOKE or u.remaining_ap <= 0 or r.can_use_item(u) != "":
+		return {}
+	var ours: Array = []     # [клетка, где будет боец]
+	var theirs: Array = []   # враги-стрелки на поле
+	for o: UnitInstance in state.all_units():
+		if not o.is_alive() or o.is_drone or o.aboard_vehicle_id != -1 or not state.grid.in_bounds(o.coord):
+			continue
+		if o.owner == owner:
+			var dest := _planner.destination_of(o.id)
+			ours.append([o, dest if dest != Vector2i(-1, -1) else o.coord])
+		elif not CivilianAI.is_npc(o) and not state.roster.are_allies(owner, o.owner):
+			theirs.append(o)
+	if ours.is_empty() or theirs.is_empty():
+		return {}
+	# Линии огня: [вероятность попадания, клетки линии ВКЛЮЧАЯ концы, наша ли это линия].
+	var through := {}   # Vector2i -> [индексы линий]
+	var lines: Array = []
+	for pair: Array in ours:
+		var a: UnitInstance = pair[0]
+		var at: Vector2i = pair[1]
+		for e: UnitInstance in theirs:
+			if not Combat.is_on_firing_line(e.coord, at):
+				continue
+			var d := Combat.distance(e.coord, at)
+			if r.los_blocked(e.coord, at, true, true):
+				continue
+			var pe := _line_hit(e, d)
+			var pa := _line_hit(a, d)
+			if pe <= 0.0 and pa <= 0.0:
+				continue
+			var idx := lines.size()
+			lines.append([pe, pa])
+			var step := Vector2i(signi(at.x - e.coord.x), signi(at.y - e.coord.y))
+			var c := e.coord
+			while true:
+				if not through.has(c):
+					through[c] = []
+				(through[c] as Array).append(idx)
+				if c == at:
+					break
+				c += step
+	if lines.is_empty():
+		return {}
+	var min_net := float(_prof.get("smoke_min", 0.8))
+	var cache := {}
+	var best: Dictionary = {}
+	for aim: Vector2i in r.grenade_target_cells(u):
+		var dist := Combat.distance(u.coord, aim)
+		if dist <= 1:
+			continue
+		var need := Combat.hit_number(dist, float(MCF.GRENADE_RANGE))
+		var path := r._throw_path(u.coord, aim)
+		var net := 0.0
+		for roll in range(1, 7):
+			var landing := aim
+			if roll < need:
+				var idx: int = clampi(dist - (need - roll), 0, dist)
+				landing = u.coord if idx <= 0 else path[idx - 1]
+			if not cache.has(landing):
+				cache[landing] = _smoke_value(landing, through, lines)
+			net += float(cache[landing]) / 6.0
+		if net < min_net:
+			continue
+		var score := SCORE_SHOOT_BASE * 0.95 + net * SCORE_SMOKE_PER_HIT
+		if best.is_empty() or score > best["score"]:
+			best = {"score": score, "intent": UseItemIntent.new(u.id, aim)}
+	return best
+
+## Закрытые облаком в landing ожидаемые попадания: вражеские минус доля наших.
+func _smoke_value(landing: Vector2i, through: Dictionary, lines: Array) -> float:
+	var hit := {}
+	for dy in range(-MCF.SMOKE_RADIUS, MCF.SMOKE_RADIUS + 1):
+		for dx in range(-MCF.SMOKE_RADIUS, MCF.SMOKE_RADIUS + 1):
+			for i: int in through.get(landing + Vector2i(dx, dy), []):
+				hit[i] = true
+	var v := 0.0
+	for i: int in hit:
+		v += float(lines[i][0]) - SMOKE_OWN_COST * float(lines[i][1])
+	return v
+
+## Вероятность хотя бы одного попадания очередью стрелка s на дистанции d (без укрытий).
+static func _line_hit(s: UnitInstance, d: int) -> float:
+	if s.stats.special_ability_id == MCF.ABILITY_MARKSMAN:
+		return 0.66
+	var need := Combat.hit_number(d, s.fire_range())
+	if need >= 7:
+		return 0.0
+	var p := float(7 - need) / 6.0
+	return 1.0 - pow(1.0 - p, float(mini(maxi(1, s.rate_of_fire()), 4)))
+
+# --- Окопы и мешки (0.12, Fortifier) ---
+## Позицию, которую держат, укрепляют. Боец, которому штаб велел стоять (или которому
+## идти уже некуда), копает окоп ПОД СОБОЙ — от выстрела с дистанции он спасает вчистую;
+## инженер ставит мешки в клетку перед собой, в сторону ближайшего врага, а против
+## техники — ежа. Только пока враг на подходе: в тылу за полкарты копать незачем.
+const FORTIFY_ENEMY_RANGE := 24
+
+func _best_fortify(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
+	var dig_score := float(_prof.get("dig", 0.0))
+	var build_score := float(_prof.get("build", 0.0))
+	if dig_score <= 0.0 and build_score <= 0.0:
+		return {}
+	if u.remaining_ap <= 0 and u.dig_credits <= 0:
+		return {}
+	if u.is_drone or u.aboard_vehicle_id != -1 or u.carried_corpses > 0:
+		return {}
+	# Держит ли боец эту клетку: план оставил его на месте, или ходить уже нечем.
+	var dest := _planner.destination_of(u.id)
+	var holding := dest == u.coord or (u.remaining_ap <= 1 and u.move_credit <= 0)
+	if not holding:
+		return {}
+	var field := _enemy_distance_field(state, false, r)
+	var geo: int = field.at(u.coord)
+	if geo == GeoField.FAR or geo > FORTIFY_ENEMY_RANGE or geo <= 1:
+		return {}
+	var here := state.grid.cell(u.coord)
+	# Инженер: мешки (или ёж против техники) в клетку перед собой.
+	if build_score > 0.0 and u.stats.special_ability_id == MCF.ABILITY_ENGINEER and u.remaining_ap > 0:
+		var enemy := _nearest_enemy(state, u.coord, false, r)
+		if enemy != null:
+			var front := u.coord + _dir_toward(u.coord, enemy.coord)
+			var feature := MCF.FEATURE_SANDBAGS
+			if _enemy_vehicle_count(state) > 0 and u.remaining_ap >= MCF.BUILD_COST_HEDGEHOG:
+				feature = MCF.FEATURE_HEDGEHOG
+			if r.buildable_cells(u, feature).has(front) and not _blocks_own_lane(state, front):
+				return {"score": build_score, "intent": BuildIntent.new(u.id, front, feature)}
+	# Окоп под собой — если клетка ещё голая.
+	if dig_score > 0.0 and here.feature_id != MCF.FEATURE_TRENCH and r.diggable_cells(u).has(u.coord):
+		return {"score": dig_score, "intent": DigIntent.new(u.id, u.coord)}
+	return {}
+
+## Встала бы постройка в створ своему же стрелку (тот же смысл, что у штаба, #100).
+func _blocks_own_lane(state: GameState, c: Vector2i) -> bool:
+	for ally: UnitInstance in state.living_units_of(owner):
+		if ally.aboard_vehicle_id != -1 or ally.is_drone:
+			continue
+		for e: UnitInstance in _enemies_of(state):
+			if not state.grid.in_bounds(e.coord) or not Combat.is_on_firing_line(ally.coord, e.coord):
+				continue
+			var d := Combat.distance(ally.coord, e.coord)
+			if d <= 1 or Combat.distance(ally.coord, c) >= d:
+				continue
+			var step := Vector2i(signi(e.coord.x - ally.coord.x), signi(e.coord.y - ally.coord.y))
+			var k := ally.coord + step
+			while k != e.coord:
+				if k == c:
+					return true
+				k += step
+	return false
+
 func _best_capture(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
 	var ids := r.capturable_target_ids(u)
 	if ids.is_empty():
@@ -1509,7 +1968,7 @@ func _best_capture(state: GameState, r: GameActionResolver, u: UnitInstance) -> 
 		var t := state.get_unit(tid)
 		if t == null or t.owner == u.owner or CivilianAI.is_npc(t):
 			continue
-		var score := SCORE_CAPTURE_BASE + _unit_value(t)
+		var score := SCORE_CAPTURE_BASE + _unit_value(t) + float(_prof.get("capture_bonus", 0.0))
 		if best.is_empty() or score > best["score"]:
 			best = {"score": score, "intent": CaptureIntent.new(u.id, t.id)}
 	return best
@@ -1546,6 +2005,8 @@ func _plan_move(state: GameState, u: UnitInstance) -> Dictionary:
 			continue
 		var score := SCORE_MOVE_BASE + SCORE_PLAN_BONUS * 0.5 + gain * 2.0
 		score -= float(reach.cost[coord]) * SCORE_STEP_COST
+		# Самосохранение (0.12): по дороге к назначению не встаём под прицел зря.
+		score += _planner.threat_at(coord) * float(_prof.get("threat", 0.0)) * 0.5
 		if best.is_empty() or score > best["score"]:
 			best = {"score": score, "intent": MoveIntent.new(u.id, coord)}
 	return best
@@ -1554,8 +2015,8 @@ func _best_move(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dic
 	# План старше жадности: если штаб назначил бойцу клетку, идём туда. У особой манеры
 	# (style) свой выбор клетки — штабной план её бы перекрыл.
 	# Нейтралу план штаба ни к чему: он бежит прямо на ближайшего врага (playtest-20).
-	var neutral := MCF.is_npc_side(owner)
-	if style == Style.STANDARD and not neutral:
+	var neutral := MCF.is_neutral(owner)
+	if style != Style.FLANK and not neutral:
 		var planned := _plan_move(state, u)
 		if not planned.is_empty():
 			return planned
@@ -1632,6 +2093,8 @@ func _best_move(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dic
 				score += float(MCF.COVER_MOD.get(c.cover_height, 1)) * 2.0 * cover_k
 		if threat_k > 0.0:
 			score -= minf(threat[coord.y * gw + coord.x], 3.0) * threat_k
+		if not neutral:
+			score += _planner.threat_at(coord) * float(_prof.get("threat", 0.0)) * 0.5
 		if easy:
 			score += randf() * 4.0  # шумит, ходит менее осмысленно
 		if not have_best or score > best_score:
@@ -1811,16 +2274,40 @@ static func _walk_mask(grid: Grid) -> PackedByteArray:
 ## сближение с врагом такой ход обычно не даёт, поэтому он идёт отдельным кандидатом.
 func _flee_fire(state: GameState, u: UnitInstance) -> Dictionary:
 	# Огнеупорному (#2) бежать не от чего — он в пламени и стоит, и воюет.
-	if not _avoids_fire(u) or not _fire_near(state, u.coord):
+	if not _avoids_fire(u) or not (_fire_near(state, u.coord) or fire_creeps(_r, state, u.coord)):
 		return {}
 	var reach := _r.reachable_for(u, _move_budget(u))
 	var best: Dictionary = {}
 	for coord: Vector2i in reach.cost:
-		if coord == u.coord or _fire_near(state, coord) or _in_danger(coord):
+		if coord == u.coord or _fire_near(state, coord) or fire_creeps(_r, state, coord) \
+				or _in_danger(coord):
 			continue
-		var score: float = SCORE_CAPTURE_BASE + 20.0 - float(reach.cost[coord])
+		# Пожар убивает без броска: уйти от огня важнее любого выстрела (0.12, самосохранение;
+		# раньше боец стрелял, тратил последнее ОД и сгорал на месте).
+		var score: float = SCORE_FLEE_EVENT + 20.0 - float(reach.cost[coord])
 		if best.is_empty() or score > best["score"]:
 			best = {"score": score, "intent": MoveIntent.new(u.id, coord)}
+	if not best.is_empty():
+		return best
+	# Безопасной клетки в досягаемости нет (поле травы горит со всех сторон): тогда хотя бы
+	# дальше всего от пламени и не вплотную к нему — лучше, чем сгореть, не сдвинувшись.
+	var burning := GameActionResolver._burning_cells_of(state.grid)
+	var here_d := _fire_distance(u.coord, burning)
+	var best_d := here_d
+	for coord: Vector2i in reach.cost:
+		if coord == u.coord or _fire_near(state, coord) or _in_danger(coord):
+			continue
+		var d := _fire_distance(coord, burning)
+		if d > best_d:
+			best_d = d
+			best = {"score": SCORE_FLEE_EVENT, "intent": MoveIntent.new(u.id, coord)}
+	return best
+
+## Расстояние от клетки до ближайшего горящего места (Чебышёв); 1 << 20 — огня нет.
+static func _fire_distance(c: Vector2i, burning: Array) -> int:
+	var best := 1 << 20
+	for b: Vector2i in burning:
+		best = mini(best, Combat.distance(c, b))
 	return best
 
 ## Горит ли сама клетка или любая соседняя (#48): ИИ не встаёт вплотную к пламени —
@@ -1857,6 +2344,31 @@ func _fire_near(state: GameState, coord: Vector2i) -> bool:
 		ny += 1
 	return false
 
+## Доползёт ли пожар до клетки раньше, чем боец снова сможет ходить (0.12, самосохранение).
+## Огонь каждой стороны ползёт раз за круг — в начале её хода, свой — в начале НАШЕГО,
+## до наших действий. Два пожара разных сторон — два шага. Поэтому горючая клетка в двух
+## шагах от огня (по прямой) так же опасна, как соседняя: на траве и досках люди сгорали,
+## окружённые пламенем, хотя ни одна клетка рядом не горела в момент хода.
+static func fire_creeps(r: GameActionResolver, state: GameState, coord: Vector2i) -> bool:
+	if GridCell.burning == 0:
+		return false
+	var cell := state.grid.cell(coord)
+	if cell == null or r.fire_need(cell) > 6:
+		return false   # сама клетка не горит — дойти до неё огню нечем
+	for d: Vector2i in [Vector2i(2, 0), Vector2i(-2, 0), Vector2i(0, 2), Vector2i(0, -2),
+			Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1)]:
+		var src := state.grid.cell(coord + d)
+		if src == null or not src.on_fire:
+			continue
+		# Огонь идёт по прямым соседям: через клетку посередине, если та горит сама.
+		for mid: Vector2i in [coord + Vector2i(signi(d.x), 0), coord + Vector2i(0, signi(d.y))]:
+			if mid == coord:
+				continue
+			var mc := state.grid.cell(mid)
+			if mc != null and (mc.on_fire or r.fire_need(mc) <= 6):
+				return true
+	return false
+
 func _cover_bonus(state: GameState, coord: Vector2i) -> float:
 	var c := state.grid.cell(coord)
 	if c.has_cover():
@@ -1882,13 +2394,41 @@ func _drone_action(state: GameState, r: GameActionResolver, u: UnitInstance) -> 
 			return {"score": SCORE_SHOOT_BASE + SCORE_ANTI_TANK_PRIORITY + _vehicle_value(under),
 				"intent": DroneDetonateIntent.new(u.id,
 					_aim_component(under, u.coord, null))}
-	# Подрыв, если рядом враг (радиус взрыва 1 по Чебышёву). Он бесплатен (item 26),
-	# поэтому доступен и выдохшемуся дрону.
+	# Кого накроет подрыв из клетки (радиус 1 по Чебышёву): число врагов и их ценность.
+	# Дрон — один на станцию и взрывается раз (0.12): размен на одиночку, когда в том же
+	# подлёте достаётся кучка, — потерянный дрон, поэтому сначала ищем лучшую клетку.
+	var foes := {}   # Vector2i -> ценность врага в клетке
 	for e: UnitInstance in _enemies_of(state):
-		if Combat.distance(u.coord, e.coord) <= MCF.ANTI_TANK_BLAST_RADIUS:
-			return {"score": SCORE_SHOOT_BASE + _unit_value(e), "intent": DroneDetonateIntent.new(u.id)}
+		if state.grid.in_bounds(e.coord) and not CivilianAI.is_npc(e):
+			foes[e.coord] = _unit_value(e)
+	# Свои в радиусе подрыва (0.12, самосохранение): своих дрон не взрывает — клетка, где
+	# рядом стоит свой, для подрыва закрыта, как бы ни было много врагов.
+	var friends := {}
+	for a: UnitInstance in state.living_units_of(owner):
+		if a.id != u.id and not a.is_drone and state.grid.in_bounds(a.coord):
+			friends[a.coord] = true
+	var here_hit := _drone_cluster(u.coord, foes, friends)
+	var can_fly := u.remaining_ap > 0 or u.move_credit > 0
+	var best_cell := u.coord
+	var best_hit := here_hit
+	if can_fly and not foes.is_empty():
+		for coord: Vector2i in r.drone_flight_cells(u):
+			if state.grid.cell(coord).is_wall():
+				continue
+			var hit := _drone_cluster(coord, foes, friends)
+			if hit.x > best_hit.x or (hit.x == best_hit.x and hit.y > best_hit.y + 0.01):
+				best_hit = hit
+				best_cell = coord
+	# Подрыв бесплатен (item 26) и доступен выдохшемуся дрону. Взрываемся здесь, если лучше
+	# в этом подлёте не найти (или лететь уже нечем).
+	if here_hit.x >= 1.0 and (best_cell == u.coord or best_hit.x <= here_hit.x):
+		return {"score": SCORE_SHOOT_BASE + here_hit.y, "intent": DroneDetonateIntent.new(u.id)}
+	# Кучка достижима этим подлётом — летим туда; взрыв — следующим решением.
+	if best_cell != u.coord and best_hit.x >= 1.0:
+		return {"score": SCORE_SHOOT_BASE * 0.8 + best_hit.y,
+			"intent": DroneMoveIntent.new(u.id, best_cell)}
 	# Иначе — лететь к ближайшему врагу. Подрыв выше бесплатен, а полёт — нет.
-	if u.remaining_ap <= 0 and u.move_credit <= 0:
+	if not can_fly:
 		return {}
 	var enemy := _nearest_enemy(state, u.coord, false, r)
 	if enemy == null:
@@ -1910,6 +2450,20 @@ func _drone_action(state: GameState, r: GameActionResolver, u: UnitInstance) -> 
 		if best.is_empty() or score > best["score"]:
 			best = {"score": score, "intent": DroneMoveIntent.new(u.id, coord)}
 	return best
+
+## Подрыв дрона в клетке c: (сколько врагов накроет, их суммарная ценность).
+static func _drone_cluster(c: Vector2i, foes: Dictionary, friends: Dictionary) -> Vector2:
+	var n := 0.0
+	var v := 0.0
+	for dy in range(-MCF.ANTI_TANK_BLAST_RADIUS, MCF.ANTI_TANK_BLAST_RADIUS + 1):
+		for dx in range(-MCF.ANTI_TANK_BLAST_RADIUS, MCF.ANTI_TANK_BLAST_RADIUS + 1):
+			var k := c + Vector2i(dx, dy)
+			if friends.has(k):
+				return Vector2.ZERO   # свой под взрывом — не здесь
+			if foes.has(k):
+				n += 1.0
+				v += float(foes[k])
+	return Vector2(n, v)
 
 # --- Техника (§техника): ИИ управляет своей/захваченной машиной ---
 func _vehicle_candidates(state: GameState, r: GameActionResolver, veh: Vehicle) -> Array:
@@ -1936,6 +2490,8 @@ func _vehicle_candidates(state: GameState, r: GameActionResolver, veh: Vehicle) 
 		# ВРАЖЕСКАЯ БРОНЯ — цель важнее пехоты: танк, оставленный в покое, стреляет
 		# в ответ, и разменивать снаряд на солдата, когда напротив стоит машина, незачем.
 		var armour := _vehicle_best_armour_target(state, r, veh, rng)
+		if not armour.is_empty() and r.cannon_shot_endangers_own(veh, armour["cell"]):
+			armour = {}   # недолёт накрыл бы своих (0.12, самосохранение)
 		if not armour.is_empty():
 			var foe: Vehicle = armour["veh"]
 			var cell: Vector2i = armour["cell"]
@@ -1944,7 +2500,8 @@ func _vehicle_candidates(state: GameState, r: GameActionResolver, veh: Vehicle) 
 				"intent": VehicleCannonIntent.new(veh.id, cell,
 					_aim_component(foe, veh.center(), r))})
 		shot_target = _vehicle_best_target(state, r, veh, rng)
-		if shot_target != null and not _ally_near(state, shot_target.coord, MCF.CANNON_BLAST_RADIUS):
+		if shot_target != null and not _ally_near(state, shot_target.coord, MCF.CANNON_BLAST_RADIUS) \
+				and not r.cannon_shot_endangers_own(veh, shot_target.coord):
 			out.append({"score": SCORE_SHOOT_BASE + _unit_value(shot_target) + 6.0,
 				"intent": VehicleCannonIntent.new(veh.id, shot_target.coord)})
 		else:
@@ -1983,7 +2540,7 @@ func _vehicle_candidates(state: GameState, r: GameActionResolver, veh: Vehicle) 
 			# только сближение и о том, кто лежит по дороге, не спрашивал вовсе.
 			if r.vehicle_move_crushes_ally(veh, Vector2i(mv["dir"]), int(mv["steps"])):
 				continue
-			var score := SCORE_MOVE_BASE + gain * 3.0
+			var score := SCORE_MOVE_BASE + gain * 3.0 * float(_prof.get("vehicle_gain", 1.0))
 			if lines_up:
 				score += SCORE_VEHICLE_FIRING_LINE
 			score -= _backtrack_penalty("v%d" % veh.id, center)  # item 1

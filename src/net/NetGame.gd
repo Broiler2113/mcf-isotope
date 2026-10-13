@@ -111,6 +111,12 @@ func receive(msg: Dictionary) -> void:
 				var snap := {"k": K_STATE, "s": StateCodec.encode(state)}
 				if fx_snapshot.is_valid():
 					snap["fx"] = fx_snapshot.call()
+				# Облака газа и дыма живут не на доске, а в событиях (0.12): без них гость
+				# после пересинхронизации видел бы сквозь чужую завесу (или упирался в свою).
+				if resolver.random_events != null:
+					snap["ev"] = resolver.random_events.snapshot()
+				# Счёт, зоны и волны режима (0.12) тоже живут на резолвере.
+				snap["mode"] = resolver.mode.snapshot()
 				outgoing.emit(snap)
 		K_STATE:
 			if not is_host:
@@ -217,6 +223,16 @@ func _client_restore(msg: Dictionary) -> void:
 	if not (data is Dictionary):
 		return
 	StateCodec.restore_into(state, data)
+	var ev: Variant = msg.get("ev")
+	if ev is Dictionary:
+		if resolver.random_events == null:
+			resolver.random_events = RandomEvents.new(false)
+		resolver.random_events.restore(ev)
+	var md: Variant = msg.get("mode")
+	if md is Dictionary:
+		resolver.mode.restore(md)
+	# Газ и дым на клетках — выводимые: доска пришла без них, выводим из облаков заново.
+	resolver._sync_gas()
 	var fx: Variant = msg.get("fx")
 	restored_fx = fx if fx is Dictionary else {}
 	state.dice.clear_scripted()

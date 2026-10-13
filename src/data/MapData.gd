@@ -6,12 +6,12 @@ extends RefCounted
 ## встроенным редактором карт (scenes/MapEditor.tscn). Слой симуляции строит из
 ## MapData готовый GameState через build_state().
 
-## Editor maps: plain files in the shared "Isotope Data/Maps" folder (GameFolders, 0.11).
+## Editor maps: plain files in the "Maps" folder of the game folder (GameFolders, 0.12).
 static var MAPS_DIR := GameFolders.dir(GameFolders.MAPS)
 ## Карты, поставляемые с игрой (#57). Только чтение: редактор всегда сохраняет в
 ## user://, поэтому правка встроенной карты создаёт пользовательскую копию, которая
 ## перекрывает оригинал по имени. Сам файл в res:// при этом остаётся нетронутым.
-const BUNDLED_DIR := "res://maps"
+const BUNDLED_DIR := "res://src/data/maps"
 
 var width: int = 16
 var height: int = 12

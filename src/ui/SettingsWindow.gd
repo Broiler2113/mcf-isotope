@@ -137,13 +137,13 @@ func _build() -> void:
 	game_box.body.add_child(autoroll)
 
 	# --- Акцент (item 23) ---
-	var acc_box := SteamChrome.group_box("Accent colour")
+	var acc_box := SteamChrome.group_box("Accent color")
 	page.add_child(acc_box)
 	var arow := HBoxContainer.new()
 	arow.add_theme_constant_override("separation", 12)
 	acc_box.body.add_child(arow)
 	var albl := Label.new()
-	albl.text = "Colour"
+	albl.text = "Color"
 	albl.custom_minimum_size = Vector2(110, 0)
 	albl.add_theme_font_size_override("font_size", 12)
 	albl.add_theme_color_override("font_color", Color("#b0b0b0"))
@@ -184,7 +184,7 @@ func _build() -> void:
 	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	demo.add_child(bar)
 	var status := Label.new()
-	status.text = "[Status] Accent-coloured status text."
+	status.text = "[Status] Accent-colored status text."
 	Ui.style_status(status)
 	acc_box.body.add_child(status)
 
@@ -247,9 +247,17 @@ func _apply_scale() -> void:
 
 func _build_keybinds(tabs: TabContainer) -> void:
 	_key_buttons.clear()
+	# Вкладка прокручивается сама, если экран ниже неё (крупный интерфейс, 0.12): с клавиатурой
+	# страница выше прежней, а окно настроек обязано помещаться целиком, с кнопками внизу.
+	var page_scroll := ScrollContainer.new()
+	page_scroll.name = "Keybinds"
+	page_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	page_scroll.custom_minimum_size = Vector2(0, clampf(get_viewport().get_visible_rect().size.y - 300.0, 280.0, 560.0))
+	tabs.add_child(page_scroll)
 	var page := VBoxContainer.new()
-	page.name = "Keybinds"
-	tabs.add_child(page)
+	page.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	page.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	page_scroll.add_child(page)
 	_key_message = Label.new()
 	_key_message.text = "Choose a shortcut, then press a key. Escape cancels."
 	_key_message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -259,12 +267,24 @@ func _build_keybinds(tabs: TabContainer) -> void:
 	_key_sections = sections
 	page.add_child(sections)
 	for section in ["game", "editor"]:
+		# Сверху — клавиатура (0.12): что занято, что в сочетаниях, что свободно, с подсказкой
+		# по наведению; под ней — прежний список с переназначением.
+		var section_page := VBoxContainer.new()
+		section_page.name = "In-game shortcuts" if section == "game" else "Map editor shortcuts"
+		section_page.add_theme_constant_override("separation", 8)
+		sections.add_child(section_page)
+		var kb_box := SteamChrome.group_box("Keyboard — hover a key to see what it does")
+		section_page.add_child(kb_box)
+		var kb := KeyboardDiagram.new()
+		kb.section = section
+		kb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		kb_box.body.add_child(kb)
+		kb_box.body.add_child(_key_legend())
 		var scroll := ScrollContainer.new()
-		scroll.name = "In-game shortcuts" if section == "game" else "Map editor shortcuts"
-		scroll.custom_minimum_size = Vector2(490, 350)
+		scroll.custom_minimum_size = Vector2(490, 110)
 		scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-		sections.add_child(scroll)
+		section_page.add_child(scroll)
 		var box := SteamChrome.group_box("Actions" if section == "game" else "Tools and commands")
 		box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		scroll.add_child(box)
@@ -287,6 +307,32 @@ func _build_keybinds(tabs: TabContainer) -> void:
 			_key_buttons[entry.id] = button
 	_refresh_keys()
 
+## Подписи цветов под клавиатурой — те же цвета, что на клавишах.
+func _key_legend() -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 16)
+	for pair in [[Ui.accent_color().darkened(0.25), "Used"],
+			[KeyboardDiagram.COMBO_COLOR.darkened(0.3), "Used with Ctrl / Shift / Alt"],
+			[KeyboardDiagram.FREE_COLOR, "Free"]]:
+		var item := HBoxContainer.new()
+		item.add_theme_constant_override("separation", 6)
+		# Образец с рамкой, как клавиша: иначе «свободная» сливается с фоном окна.
+		var sw := Panel.new()
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = pair[0]
+		sb.border_color = Color(0, 0, 0, 0.85)
+		sb.set_border_width_all(1)
+		sw.add_theme_stylebox_override("panel", sb)
+		sw.custom_minimum_size = Vector2(16, 16)
+		sw.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		item.add_child(sw)
+		var l := Label.new()
+		l.text = str(pair[1])
+		l.add_theme_font_size_override("font_size", 11)
+		item.add_child(l)
+		row.add_child(item)
+	return row
+
 func show_keybinds(editor := false) -> void:
 	_tabs.current_tab = 1
 	_key_sections.current_tab = 1 if editor else 0
@@ -303,7 +349,7 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		if event.keycode == KEY_ESCAPE:
 			_capture_action = ""
-			_key_message.text = "Rebinding cancelled."
+			_key_message.text = "Rebinding canceled."
 		else:
 			var error := Keybinds.rebind(_capture_action, event)
 			if error.is_empty():

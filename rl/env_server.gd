@@ -303,6 +303,17 @@ var _tac: Dictionary = {}
 var _exposure: Array = []
 ## Память о скрытых врагах — своя у каждой стороны (во внешней игре решают обе).
 var _memory: Dictionary = {}
+## Режимы (0.12). Сторона волн Holdout (−1 — не Holdout), стоимость пришедших волн (в
+## дифференциал армий она не идёт: волну приносит правило, а не действие) и очки C&H на
+## прошлом ответе.
+var _wave_side: int = -1
+var _wave_value_in: float = 0.0
+var _wave_seen: Dictionary = {}
+var _last_pts: Vector2i = Vector2i.ZERO
+## Очко Capture & Hold — в долях типового убийства.
+const POINT_KILLS := 1.0
+## Исходы, которые решают партию, а не лимит раундов: за них ставка R_ROUT.
+const DECISIVE := ["rout", "points", "held", "overrun"]
 
 func _initialize() -> void:
 	# С `-- --reply-port=N` ответы идут в TCP-сокет 127.0.0.1:N, а не в stdout: всё, что
@@ -378,7 +389,28 @@ func _reset(req: Dictionary) -> Dictionary:
 		if str(req.get("army", "")) == "shuffle":
 			ArmyBuilder.shuffle(m, arng)
 	GameConfig.civilians_enabled = bool(req.get("civilians", false))
-	state = m.build_state(seed_value)
+	# Режим партии (0.12): "annihilation" | "capture" | "holdout". В Holdout обучаемый
+	# защищается (holdout_role "defend") или ведёт волны ("waves"); у стороны волн своей
+	# армии нет — её бойцы приходят с края.
+	match str(req.get("mode", "annihilation")):
+		"capture": GameConfig.game_mode = MatchMode.Kind.CAPTURE
+		"holdout": GameConfig.game_mode = MatchMode.Kind.HOLDOUT
+		_: GameConfig.game_mode = MatchMode.Kind.ANNIHILATION
+	GameConfig.capture_zones = int(req.get("zones", MatchMode.DEFAULT_ZONES))
+	GameConfig.capture_target = int(req.get("target", MatchMode.DEFAULT_TARGET))
+	GameConfig.holdout_waves = int(req.get("waves", MatchMode.DEFAULT_WAVES))
+	var roster: Roster = null
+	_wave_side = -1
+	if GameConfig.game_mode == MatchMode.Kind.HOLDOUT:
+		var learner := int(req.get("side", MCF.Owner.PLAYER_1))
+		var other := MCF.Owner.PLAYER_2 if learner == MCF.Owner.PLAYER_1 else MCF.Owner.PLAYER_1
+		_wave_side = learner if str(req.get("holdout_role", "defend")) == "waves" else other
+		m.spawns = m.spawns.filter(func(s: Dictionary) -> bool: return int(s["owner"]) != _wave_side)
+		roster = Roster.for_sides([MCF.Owner.PLAYER_1, MCF.Owner.PLAYER_2])
+		for s: Roster.Slot in roster.slots:
+			s.team = 1 if s.id == _wave_side else 0
+		roster.slot(_wave_side).role = Roster.ROLE_WAVES
+	state = m.build_state(seed_value, roster)
 	for pid: int in state.roster.player_ids():
 		var s := state.roster.slot(pid)
 		if s != null:
@@ -416,6 +448,10 @@ func _reset(req: Dictionary) -> Dictionary:
 		# Resolver defaults come from the game lobby; the training request is authoritative.
 		resolver.random_events = RandomEvents.new(false)
 	resolver.update_airlocks()
+	resolver.prepare_mode(m)
+	_wave_value_in = 0.0
+	_wave_seen = {}
+	_last_pts = Vector2i.ZERO
 	# Экипажи — ДО начала записи: машина появляется на поле уже с экипажем, как в
 	# настоящей партии (там технику покупают вместе с ним). Раньше посадка шла после
 	# recorder.begin() и попадала в повтор шагами veh_board — а _crew_vehicles подменяет
@@ -458,7 +494,7 @@ func _reset(req: Dictionary) -> Dictionary:
 			* float(army) / float(BUDGET_BASELINE_UNITS))))
 	_digs_turn_cap = maxi(2, int(round(float(DIGS_PER_TURN)
 			* float(army) / float(BUDGET_BASELINE_UNITS))))
-	_last_diff = _value_diff()
+	_last_diff = _shaped_diff()
 	_done = false
 	_illegal = 0
 	_illegal_kinds = {}
@@ -772,6 +808,33 @@ func _side_has_army(pid: int) -> bool:
 func _check_over() -> bool:
 	if _done:
 		return true
+	var md := resolver.mode
+	if md.kind != MatchMode.Kind.ANNIHILATION:
+		var out := resolver.match_outcome()
+		if out["over"]:
+			_by = str(out["reason"])
+			var winner := str(out["winner"])
+			_result = "draw" if winner == "" else (
+					"win" if winner == MatchMode.team_key(state.roster, side) else "loss")
+			_done = true
+			return true
+	if md.is_holdout():
+		# У волн армии сначала нет вовсе, поэтому «разгром» здесь — только match_outcome.
+		# Лимит раундов: защитник продержался — его победа, волнам — поражение.
+		if state.turns.round_number > round_cap:
+			_by = "cap"
+			_result = "loss" if side == md.wave_side else "win"
+		elif _steps >= max_steps:
+			_result = "draw_steps"
+		else:
+			return false
+		_done = true
+		return true
+	if md.is_capture() and state.turns.round_number > round_cap and _pts().x != _pts().y:
+		_by = "points_cap"
+		_result = "win" if _pts().x > _pts().y else "loss"
+		_done = true
+		return true
 	var mine := _side_has_army(side)
 	var theirs := false
 	for pid: int in state.roster.player_ids():
@@ -968,10 +1031,41 @@ func _value_diff() -> float:
 			theirs += Obs.army_value(state, pid)
 	return mine - theirs
 
-func _response(reward: float, is_reset: bool) -> Dictionary:
+## Очки Capture & Hold: x — наши, y — лучшие чужие.
+func _pts() -> Vector2i:
+	var md := resolver.mode
+	var us := MatchMode.team_key(state.roster, side)
+	var out := Vector2i.ZERO
+	for k: String in md.scores:
+		if k == us:
+			out.x = int(md.scores[k])
+		else:
+			out.y = maxi(out.y, int(md.scores[k]))
+	return out
+
+## Дифференциал армий без пришедших волн Holdout: волну приносит правило, а не действие.
+## Иначе обучаемый за волны получал бы награду за собственную высадку — и выгоднее всего
+## было бы скорее сдать волну, чтобы правило позвало следующую, бо́льшую.
+func _shaped_diff() -> float:
 	var diff := _value_diff()
+	if _wave_side < 0:
+		return diff
+	for u: UnitInstance in state.all_units():
+		if u.owner == _wave_side and not _wave_seen.has(u.id):
+			_wave_seen[u.id] = true
+			if u.is_alive() and not u.is_drone:
+				_wave_value_in += float(u.stats.cost)
+	return diff - _wave_value_in if side == _wave_side else diff + _wave_value_in
+
+func _response(reward: float, is_reset: bool) -> Dictionary:
+	var diff := _shaped_diff()
 	reward += (diff - _last_diff) / _norm
 	_last_diff = diff
+	if resolver.mode.is_capture():
+		var pts := _pts()
+		var gained := pts - _last_pts
+		reward += float(gained.x - gained.y) * _typical * POINT_KILLS
+		_last_pts = pts
 	var acting_now := state.active_player()
 	var potential_reward := 0.0
 	var hazard_reward := 0.0
@@ -1000,10 +1094,12 @@ func _response(reward: float, is_reset: bool) -> Dictionary:
 				"gas_clouds": resolver.random_events.clouds.size(),
 					"illegal_kinds": _illegal_kinds,
 				"value_diff": diff / _norm, "fire_losses": _fire_losses,
+				"mode": resolver.mode.kind, "points": _pts().x, "points_enemy": _pts().y,
+				"waves": resolver.mode.wave,
 				"shots": _shots, "shots_hit": _shots_hit}}
 	if _done:
 		resp["info"]["tac"] = _tac_summary()
-		var stake := R_ROUT if _by == "rout" else R_CAP
+		var stake := R_ROUT if _by in DECISIVE else R_CAP
 		match _result:
 			"win": resp["reward"] = float(resp["reward"]) + stake
 			"loss": resp["reward"] = float(resp["reward"]) - stake

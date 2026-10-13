@@ -274,7 +274,6 @@ var _ai_denied_streak: int = 0
 
 var p1_is_ai: bool = false
 var p2_is_ai: bool = false
-var ai_difficulty: int = AIController.Difficulty.NORMAL
 
 ## Панорама «камеры» по полю (WASD / средняя-правая мышь / жест тачпада).
 var pan: Vector2 = Vector2.ZERO:
@@ -468,7 +467,6 @@ var _corpse_cells: Array = []
 var _fx := FxDecals.new()
 var _p1_btn: Button
 var _p2_btn: Button
-var _diff_btn: Button
 # --- Запись, сохранение и повтор матча (M12, items 42 и 53) ---
 ## Регистратор пишет партию по ходу дела; повтор, наоборот, её проигрывает. Оба сразу
 ## не бывают: смотреть запись и одновременно писать новую нечего.
@@ -524,7 +522,6 @@ func _ready() -> void:
 	Ui.board_settings_changed.connect(_sync_lighting)
 	p1_is_ai = GameConfig.p1_is_ai
 	p2_is_ai = GameConfig.p2_is_ai
-	ai_difficulty = GameConfig.ai_difficulty
 	# Картинки-замены перечитываются при входе в бой (#55): подменил файл — видно
 	# со следующей партии, перезапускать игру не нужно.
 	Sprites.reload_overrides()
@@ -665,8 +662,10 @@ func _build_state() -> void:
 		resolver = GameActionResolver.new(state)
 		resolver.fog_mode = GameConfig.fog_mode
 		resolver.friendly_fire_enabled = GameConfig.friendly_fire
-		MapHandoff.pending = null
 		resolver.update_airlocks()
+		# Режим партии (0.12): зоны — из карты, мерило волн — из расставленных армий.
+		resolver.prepare_mode(MapHandoff.pending)
+		MapHandoff.pending = null
 		state.log.line_added.connect(_on_log_line)
 		return
 	state = GameState.new(GRID_W, GRID_H)
@@ -718,7 +717,7 @@ func _build_state() -> void:
 func _open_match() -> void:
 	_begin_recording()
 	_capture_opening_view()
-	state.log.add("— Initiative this match: %s —" % state.turns.order_names())
+	state.log.add("— Initiative this match: %s —" % _initiative_names())
 	# Открывающий слот мирных играется ВНЕ потока намерений, но кубики бросает —
 	# поэтому под запись он уходит через сам регистратор (см. ReplayRecorder).
 	await _play_civilian_result(recorder.capture_opening() if recorder != null
@@ -976,7 +975,7 @@ func _take_replay_state() -> void:
 ## Открыть просмотр записи: те же вступительные строки, что и у живой партии.
 func _open_replay() -> void:
 	state.log.add("— Replay: %s —" % ReplayFile.describe(replay.data))
-	state.log.add("— Initiative this match: %s —" % state.turns.order_names())
+	state.log.add("— Initiative this match: %s —" % _initiative_names())
 	if replay.opening_result != null:
 		await _play_civilian_result(replay.opening_result)
 	_refresh_replay_bar()
@@ -1104,7 +1103,6 @@ func _sync_roster_from_config() -> void:
 			continue
 		if side < flags.size():
 			slot.kind = Roster.SlotKind.AI if flags[side] else Roster.SlotKind.HUMAN
-		slot.ai_difficulty = ai_difficulty
 
 func _build_controllers() -> void:
 	# Любая сторона переключается человек/ИИ (§2.1, #103). Раньше первый игрок был жёстко
@@ -1125,26 +1123,27 @@ func _make_side(side: int) -> void:
 	var c: PlayerController
 	if _side_is_ai(side):
 		var slot := state.roster.slot(side)
-		c = _ai_controller_for(side, slot.ai_difficulty if slot != null else ai_difficulty)
+		c = _ai_controller_for(side, slot)
 	else:
 		c = LocalHumanController.new(side)
 	c.intent_ready.connect(_on_intent_ready)
 	controllers[side] = c
 	_refresh_omniscience()
 
-## Мозг для ИИ-слота (RL v1, §7): «AI - Learned» — обученная политика, остальные уровни —
-## AIController. Если модели нет, LearnedController сам переключается на HARD и говорит об
-## этом в журнал боя (§12) — партия не встаёт.
-func _ai_controller_for(side: int, difficulty: int) -> PlayerController:
-	if difficulty == AIController.Difficulty.LEARNED:
+## Мозг для ИИ-слота (RL v1, §7): «AI - Learned» — обученная политика, остальные —
+## AIController силы HARD с личностью слота (0.12). Если модели нет, LearnedController сам
+## переключается на HARD и говорит об этом в журнал боя (§12) — партия не встаёт.
+func _ai_controller_for(side: int, slot: Roster.Slot) -> PlayerController:
+	if slot != null and slot.ai_difficulty == AIController.Difficulty.LEARNED:
 		var learned := LearnedController.new(side)
 		learned.bind_match(resolver)
 		learned.fallback_engaged.connect(func(reason: String) -> void:
-			state.log.add("— %s: learned AI unavailable (%s) — AI - Hard takes the seat —" % [
+			state.log.add("— %s: learned AI unavailable (%s) — AI - Tactician takes the seat —" % [
 				MCF.owner_name(side), reason])
 			_refresh_status())
 		return learned
-	var ai := AIController.new(side, difficulty)
+	var ai := AIController.new(side, AIController.Difficulty.HARD)
+	ai.style = slot.ai_style if slot != null else AIPersonality.TACTICIAN
 	ai.bind_match(resolver)   # announced event zones (0.11.1)
 	return ai
 
@@ -3190,39 +3189,27 @@ func _refresh_pause_button() -> void:
 		_paused = false
 		_kick_if_ai()
 
-## Живые бойцы стороны — пехота на поле и экипаж в машинах; дрон сам по себе армией
-## не считается, и на пустую машину тоже никто не воюет.
-func _side_has_army(side: int) -> bool:
-	for u in state.all_units():
-		if u.owner == side and u.is_alive() and not u.is_drone:
-			return true
-	return false
-
-## Команда-победитель (batch 13 #9): −2 — бой продолжается (живы две команды и больше),
-## −1 — все погибли, иначе номер команды (для стороны вне команд — её собственный id,
-## сдвинутый в отрицательную область, чтобы не совпасть с настоящими командами).
-func _winning_team() -> int:
-	if state == null or state.roster == null:
-		return -2
-	var alive_teams: Dictionary = {}
-	for side: int in state.roster.player_ids():
-		if state.turns.is_eliminated(side) or not _side_has_army(side):
-			continue
-		var team := state.roster.team_of(side)
-		alive_teams[team if team >= 0 else -100 - side] = true
-	if alive_teams.size() >= 2:
-		return -2
-	if alive_teams.is_empty():
-		return -1
-	return alive_teams.keys()[0]
-
-func _team_members(team: int) -> Array[String]:
-	var out: Array[String] = []
-	for side: int in state.roster.player_ids():
-		var t := state.roster.team_of(side)
-		if (t if t >= 0 else -100 - side) == team:
-			out.append(state.roster.name_of(side))
-	return out
+## Заголовок итога партии по исходу резолвера (match_outcome): кто и как победил.
+func _outcome_title(out: Dictionary) -> String:
+	var md := resolver.mode
+	var key := str(out["winner"])
+	match str(out["reason"]):
+		"draw":
+			return "Everyone is dead — the match is a draw"
+		"held":
+			return "All %d waves held — the defenders win!" % md.waves_total
+		"overrun":
+			if md.endless():
+				return "Overrun — held out %d round(s), %d wave(s) beaten, %d fighter(s) killed" % [
+						state.turns.round_number, resolver.waves_beaten(), md.wave_spawned - resolver.wave_fighters_left()]
+			return "Overrun on wave %d of %d — the waves win" % [md.wave, md.waves_total]
+		"points":
+			var runner := 0
+			for k: String in md.scores:
+				if k != key:
+					runner = maxi(runner, int(md.scores[k]))
+			return "%s wins on points, %d–%d!" % [resolver.team_label(key), int(md.scores[key]), runner]
+	return "%s wins the match!" % resolver.team_label(key)
 
 ## Проверить исход и, если он есть, остановить партию. Возвращает true, когда бой окончен.
 ## В просмотре повтора исход не объявляется: там доской правит запись, а не игроки.
@@ -3234,19 +3221,11 @@ func _check_match_over() -> bool:
 	# В сети исход объявляет хост (batch 14): гость ждёт K_OVER.
 	if networked and net != null and not net.is_host:
 		return false
-	var team := _winning_team()
-	if team == -2:
+	var out := resolver.match_outcome()
+	if not out["over"]:
 		return false
 	_match_over = true
-	var title := ""
-	if team == -1:
-		title = "Everyone is dead — the match is a draw"
-	else:
-		var names := _team_members(team)
-		if names.size() == 1:
-			title = "%s wins the match!" % names[0]
-		else:
-			title = "Team %d (%s) wins the match!" % [team + 1, ", ".join(names)]
+	var title := _outcome_title(out)
 	if networked and session != null:
 		session.send({"k": K_OVER, "t": title})
 	_declare_match_over(title)
@@ -3803,7 +3782,7 @@ func _on_peer_ready(is_host: bool) -> void:
 	net.initiative_synced.connect(_on_initiative_synced)
 	# Рассинхрон (batch 14): гость просит снимок и, получив его, перечитывает доску.
 	net.desync_detected.connect(func() -> void:
-		state.log.add("[net] Board out of sync with the host — resynchronising…"))
+		state.log.add("[net] Board out of sync with the host — resynchronizing…"))
 	# Снимок хоста везёт и косметику поля — её гость кладёт вместо своей.
 	net.fx_snapshot = func() -> Dictionary: return _fx.to_dict()
 	net.resynced.connect(func() -> void:
@@ -3812,7 +3791,7 @@ func _on_peer_ready(is_host: bool) -> void:
 		_resync_after_restore()
 		for c in controllers.values():
 			c.notify_state_changed(state)
-		state.log.add("[net] Board resynchronised with the host.")
+		state.log.add("[net] Board resynchronized with the host.")
 		_kick_if_ai())
 	# Порядок инициативы бросается локально у каждой стороны, поэтому хост тут же
 	# объявляет свой — он и есть авторитетный (#53).
@@ -3906,8 +3885,9 @@ func _on_peer_left(id: int) -> void:
 	_autosave()
 	_take_side_as_ai(side)
 	if session != null:
-		session.send({"k": K_SIDE_AI, "side": side, "ai": AIController.Difficulty.HARD})
-	state.log.add("— %s left the match; a Hard AI takes over their army —" % state.roster.name_of(side))
+		session.send({"k": K_SIDE_AI, "side": side, "ai": AIController.Difficulty.HARD,
+				"st": AIPersonality.TACTICIAN})
+	state.log.add("— %s left the match; a Tactician AI takes over their army —" % state.roster.name_of(side))
 	_refresh_status()
 	_kick_if_ai()
 
@@ -3917,6 +3897,7 @@ func _take_side_as_ai(side: int) -> void:
 		return
 	slot.kind = Roster.SlotKind.AI
 	slot.ai_difficulty = AIController.Difficulty.HARD
+	slot.ai_style = AIPersonality.TACTICIAN
 	slot.peer_id = -1
 	_drop_drawings_of(side)
 	# Только хост (или оставшийся в одиночестве хост) ведёт машину сам; у гостя сторона
@@ -3925,8 +3906,7 @@ func _take_side_as_ai(side: int) -> void:
 		var old: PlayerController = controllers.get(side)
 		if old != null and old.intent_ready.is_connected(_on_intent_ready):
 			old.intent_ready.disconnect(_on_intent_ready)
-		var ai := AIController.new(side, slot.ai_difficulty)
-		ai.bind_match(resolver)
+		var ai := _ai_controller_for(side, slot)
 		ai.intent_ready.connect(_on_intent_ready)
 		controllers[side] = ai
 	_refresh_omniscience()
@@ -3944,9 +3924,10 @@ func _apply_side_ai(msg: Dictionary) -> void:
 	_autosave()
 	slot.kind = Roster.SlotKind.AI
 	slot.ai_difficulty = int(msg.get("ai", AIController.Difficulty.HARD))
+	slot.ai_style = int(msg.get("st", AIPersonality.TACTICIAN))
 	slot.peer_id = -1
 	_drop_drawings_of(side)
-	state.log.add("— %s left the match; a Hard AI takes over their army —" % state.roster.name_of(side))
+	state.log.add("— %s left the match; a Tactician AI takes over their army —" % state.roster.name_of(side))
 	_refresh_status()
 	_roll_arrived.emit(-1)
 
@@ -3966,7 +3947,7 @@ func _setup_network_controllers() -> void:
 	for remote in net.remote_owners():
 		if net.is_host and state.roster.is_ai(remote):
 			var slot := state.roster.slot(remote)
-			var ai := _ai_controller_for(remote, slot.ai_difficulty if slot != null else ai_difficulty)
+			var ai := _ai_controller_for(remote, slot)
 			ai.intent_ready.connect(_on_intent_ready)
 			controllers[remote] = ai
 		else:
@@ -4345,7 +4326,7 @@ func _dice_steps(ev: Dictionary) -> Array:
 			steps.append({"faces": hit_faces, "manual": hit_manual, "prompt": hit_prompt,
 				"speed": _roll_speed(ev["shots"], "need"), "roller": shooter_owner})
 			if not pen_faces.is_empty():
-				var def_note := _mods_text("Defence", ev.get("def_mods", []))
+				var def_note := _mods_text("Defense", ev.get("def_mods", []))
 				var def_owner := int(ev.get("def_owner", MCF.Owner.NEUTRAL))
 				var def_need := _need_text(_hit_shots(ev["shots"]), "armor")
 				var prompt: String = DEFENSE_PROMPT + def_need
@@ -5982,6 +5963,7 @@ func _draw() -> void:
 	_draw_fx_props(visible)
 	# Случайные события (0.9.4): объявленные зоны с отсчётом и стоящий газ.
 	_draw_random_events(font)
+	_draw_objectives(font, visible, fog_on, viewer)
 
 	# Труп существует в ДВУХ видах: погибший на месте боец — это occupant клетки со
 	# статусом CORPSE, а положенный из рук (#6) — безымянная куча cell.corpse_count.
@@ -6144,7 +6126,7 @@ func _draw() -> void:
 		# Туман войны (§3.9): чужой юнит виден, только если его клетку видит команда.
 		var uown := unit.owner
 		if uown != viewer and not state.roster.are_allies(viewer, uown) and fog_on \
-				and (state.grid.cell(at).gas or not visible.has(at)):
+				and (state.grid.cell(at).obscured() or not visible.has(at)):
 			continue
 		# Смерть в текущем действии показываем лишь ПОСЛЕ анимации броска (#46):
 		# пока крутится кубик, погибший рисуется как живой юнит.
@@ -6387,12 +6369,21 @@ const EVENT_COLORS := {
 	"mortar": Color(0.95, 0.45, 0.15, 1.0),
 	"gas": Color(0.95, 0.95, 0.95, 1.0),
 	"army": Color(0.85, 0.35, 0.75, 1.0),
+	"fire": Color(1.0, 0.3, 0.12, 1.0),
+	"emp": Color(0.35, 0.85, 1.0, 1.0),
+	"collapse": Color(0.78, 0.66, 0.5, 1.0),
+	"reinforce": Color(0.45, 0.9, 0.45, 1.0),
 }
+## Пыльная буря (0.12): песчаная дымка поверх поля, пока держится.
+const DUST_TINT := Color(0.8, 0.64, 0.4, 0.16)
+const BOUNTY_COLOR := Color(1.0, 0.82, 0.25)
 
 func _draw_random_events(font: Font) -> void:
 	if resolver == null or resolver.random_events == null:
 		return
 	var ev: RandomEvents = resolver.random_events
+	if ev.dust_left > 0:
+		draw_rect(Rect2(ORIGIN, Vector2(state.grid.width, state.grid.height) * CELL), DUST_TINT)
 	_draw_gas_tiles(0.65, true)
 	for cl: Dictionary in ev.clouds:
 		var rect := Rect2(ORIGIN + Vector2(int(cl["x"]), int(cl["y"])) * CELL,
@@ -6410,19 +6401,10 @@ func _draw_random_events(font: Font) -> void:
 		var p: Dictionary = e["params"]
 		var col: Color = EVENT_COLORS.get(id, Color(1, 1, 1, 1))
 		var rect := Rect2()
-		if id == RandomEvents.ARMY and p.has("hx"):
-			# Вход в бункер с конца коридора (issues-12 #13).
-			rect = Rect2(ORIGIN + Vector2(int(p["hx"]) - 1, int(p["hy"]) - 1) * CELL, Vector2(3, 3) * CELL)
-		elif id == RandomEvents.ARMY:
-			var seg := int(p.get("len", 1))
-			var from := int(p.get("from", 0))
-			var gw := state.grid.width
-			var gh := state.grid.height
-			match int(p.get("edge", 0)) % 4:
-				0: rect = Rect2(ORIGIN + Vector2(from, 0) * CELL, Vector2(seg, 2) * CELL)
-				1: rect = Rect2(ORIGIN + Vector2(gw - 2, from) * CELL, Vector2(2, seg) * CELL)
-				2: rect = Rect2(ORIGIN + Vector2(from, gh - 2) * CELL, Vector2(seg, 2) * CELL)
-				_: rect = Rect2(ORIGIN + Vector2(0, from) * CELL, Vector2(2, seg) * CELL)
+		if id == RandomEvents.DUST:
+			continue   # буря на всё поле: зоны нет, предупреждение — в журнале
+		if id == RandomEvents.ARMY or id == RandomEvents.REINFORCE:
+			rect = _army_rect(p)
 		else:
 			rect = Rect2(ORIGIN + Vector2(int(p.get("x", 0)), int(p.get("y", 0))) * CELL,
 					Vector2(int(p.get("w", 1)), int(p.get("h", 1))) * CELL)
@@ -6432,25 +6414,170 @@ func _draw_random_events(font: Font) -> void:
 		draw_string(font, rect.position + Vector2(4, 16), label,
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(col.r, col.g, col.b, 0.95))
 
+## «Report a Bug» (0.12): к отчёту можно приложить журнал боя и запись матча.
+func _open_bug_report() -> void:
+	var combat := ""
+	if state != null:
+		var tail: Array[String] = state.log.lines.slice(maxi(0, state.log.lines.size() - 400))
+		combat = "\n".join(tail)
+	var rec := ""
+	if recorder != null and not recorder.is_empty():
+		rec = JSON.stringify(recorder.to_dict())
+	BugReportWindow.open(self, combat, rec)
+
+## Участок высадки армии или волны: полоса у края, а в бункере — конец коридора.
+func _army_rect(p: Dictionary) -> Rect2:
+	var r := resolver.army_landing_rect(p)
+	return Rect2(ORIGIN + Vector2(r.position) * CELL, Vector2(r.size) * CELL)
+
+# --- Режим партии (0.12) ---------------------------------------------------------------
+var _objective_group: SteamChrome.GroupBox = null
+var _objective_key := ""
+const ZONE_IDLE := Color(0.86, 0.88, 0.92)
+
+## Цвет команды по ключу режима — цвет первой её стороны.
+func _team_key_color(key: String) -> Color:
+	var sides := resolver.team_sides(key)
+	return _side_color(sides[0]) if not sides.is_empty() else ZONE_IDLE
+
+## Зоны Capture & Hold и объявленная волна Holdout. Зоны — правило партии, а не разведка:
+## видны всем и под любым туманом. Цвет — команда, державшая зону на последней границе
+## раунда; живой подсчёт под туманом выдал бы невидимых.
+func _draw_objectives(font: Font, visible: Dictionary, fog_on: bool, viewer: int) -> void:
+	if resolver == null or resolver.mode == null:
+		return
+	var md := resolver.mode
+	# Метка награды (0.12) — над бойцом, но только если зритель его видит: туман не выдаёт.
+	if md.bounty_unit >= 0:
+		var bu := state.get_unit(md.bounty_unit)
+		if bu != null and bu.is_alive() and state.grid.in_bounds(bu.coord) and (not fog_on \
+				or bu.owner == viewer or state.roster.are_allies(viewer, bu.owner) \
+				or (visible.has(bu.coord) and not state.grid.cell(bu.coord).obscured())):
+			var r := Rect2(_cell_origin(bu.coord), Vector2(CELL, CELL))
+			draw_rect(r.grow(2.0), BOUNTY_COLOR, false, 2.0)
+			var tag := "BOUNTY +%d" % MatchMode.BOUNTY_POINTS
+			var tw := font.get_string_size(tag, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
+			var at := r.position + Vector2((CELL - tw) / 2.0 - 4, -18)
+			draw_rect(Rect2(at, Vector2(tw + 8, 16)), Color(0, 0, 0, 0.65))
+			draw_string(font, at + Vector2(4, 12), tag, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, BOUNTY_COLOR)
+	for i in md.zones.size():
+		var r := md.zone_rect(i)
+		var rect := Rect2(ORIGIN + Vector2(r.position) * CELL, Vector2(r.size) * CELL)
+		var h: String = md.holders[i] if i < md.holders.size() else ""
+		var col := _team_key_color(h) if h != "" else ZONE_IDLE
+		draw_rect(rect, Color(col.r, col.g, col.b, 0.10))
+		draw_rect(rect, Color(col.r, col.g, col.b, 0.9), false, 3.0)
+		var tag := md.zone_name(i).to_upper()
+		var tw := font.get_string_size(tag, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
+		draw_rect(Rect2(rect.position + Vector2(2, 2), Vector2(tw + 8, 18)), Color(0, 0, 0, 0.55))
+		draw_string(font, rect.position + Vector2(6, 16), tag,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(col.r, col.g, col.b, 1.0))
+	if md.is_holdout() and not md.pending_wave.is_empty():
+		var col: Color = EVENT_COLORS["army"]
+		var rect := _army_rect(md.pending_wave)
+		draw_rect(rect, Color(col.r, col.g, col.b, 0.14))
+		draw_rect(rect, Color(col.r, col.g, col.b, 0.85), false, 2.0)
+		draw_string(font, rect.position + Vector2(4, 16), "WAVE %d · END OF ROUND" % (md.wave + 1),
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(col.r, col.g, col.b, 0.95))
+
+## Панель режима: счёт и зоны (Capture & Hold) или волны (Holdout). Строки пересобираются,
+## только когда что-то в них изменилось.
+func _refresh_objective() -> void:
+	if _objective_group == null or resolver == null or resolver.mode == null:
+		return
+	var md := resolver.mode
+	_objective_group.visible = md.kind != MatchMode.Kind.ANNIHILATION
+	if not _objective_group.visible:
+		return
+	_objective_group.title = MatchMode.name_of(md.kind)
+	var rows: Array = []   # [цвет или null, подпись, значение]
+	if md.is_capture():
+		rows.append([null, "First to %d points" % md.target, ""])
+		for k: String in md.scores:
+			rows.append([_team_key_color(k), resolver.team_label(k), str(int(md.scores[k]))])
+		for i in md.zones.size():
+			var h: String = md.holders[i] if i < md.holders.size() else ""
+			rows.append([_team_key_color(h) if h != "" else ZONE_IDLE, md.zone_name(i),
+					resolver.team_label(h) if h != "" else "nobody"])
+		if md.bounty_unit >= 0:
+			var bu := state.get_unit(md.bounty_unit)
+			if bu != null:
+				rows.append([BOUNTY_COLOR, "Bounty: %s's %s" % [state.roster.name_of(bu.owner),
+						bu.stats.display_name], "+%d" % MatchMode.BOUNTY_POINTS])
+	else:
+		var left := resolver.wave_fighters_left()
+		rows.append([null, "Waves landed", "%d / %s" % [md.wave, "∞" if md.endless() else str(md.waves_total)]])
+		var next := "—"
+		if not md.pending_wave.is_empty():
+			next = "end of this round"
+		elif md.endless() or md.wave < md.waves_total:
+			next = "round %d" % maxi(md.next_wave_round, state.turns.round_number + 1)
+		rows.append([null, "Next wave", next])
+		rows.append([EVENT_COLORS["army"], "Enemies left", str(left)])
+		rows.append([null, "Killed", str(md.wave_spawned - left)])
+	var key := var_to_str(rows)
+	if key == _objective_key:
+		return
+	_objective_key = key
+	var body := _objective_group.body
+	for c in body.get_children():
+		c.queue_free()
+	for row: Array in rows:
+		var hb := HBoxContainer.new()
+		hb.add_theme_constant_override("separation", 6)
+		if row[0] != null:
+			var sw := ColorRect.new()
+			sw.color = row[0]
+			sw.custom_minimum_size = Vector2(10, 10)
+			sw.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			hb.add_child(sw)
+		var l := Label.new()
+		l.text = str(row[1])
+		l.add_theme_font_size_override("font_size", 12)
+		l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		l.clip_text = true
+		l.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		hb.add_child(l)
+		if str(row[2]) != "":
+			var v := Label.new()
+			v.text = str(row[2])
+			v.add_theme_font_size_override("font_size", 12)
+			hb.add_child(v)
+		body.add_child(hb)
+
 ## Connected gas tiles fade only at exposed edges, with a lighter pass over units.
 ## Cull to the viewport and draw overlapping clouds only once per cell.
 var _gas_canvas_texture: CanvasTexture
 
 func _draw_gas_tiles(alpha: float, fill: bool) -> void:
-	if resolver == null or resolver.random_events == null or resolver.random_events.clouds.is_empty():
+	if resolver == null or resolver.random_events == null:
+		return
+	var ev: RandomEvents = resolver.random_events
+	if ev.clouds.is_empty() and ev.smoke.is_empty():
 		return
 	var tex := GasTiles.texture()
 	if tex != null and (_gas_canvas_texture == null or _gas_canvas_texture.diffuse_texture != tex):
 		_gas_canvas_texture = CanvasTexture.new()
 		_gas_canvas_texture.diffuse_texture = tex
 		_gas_canvas_texture.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	var drawn := {}
 	# Туман войны (0.11.3): газ виден только там, куда смотрят (Resolver.team_sees_gas —
 	# в обзор сама газовая клетка не входит: газ прячет то, что внутри). Без тумана газ
 	# виден весь, как и раньше. Рамка и счётчик зоны — объявленное событие, они остаются.
+	# Дым дымовых гранат (0.12) — то же облако своим тоном и по тем же правилам тумана.
 	var view := _view_resolver()
 	var seen: Dictionary = view.team_sees_gas(_viewing_side()) if view.fog_enabled else {}
-	for cl: Dictionary in resolver.random_events.clouds:
+	_draw_cloud_tiles(ev.clouds, false, Color(1, 1, 1, alpha), fill, tex, view.fog_enabled, seen)
+	_draw_cloud_tiles(ev.smoke, true, Color(SMOKE_TINT.r, SMOKE_TINT.g, SMOKE_TINT.b, alpha),
+			fill, tex, view.fog_enabled, seen)
+
+## Тон дыма (0.12): тот же облачный рисунок, что у газа, но тёмно-серый — ядовитое облако
+## и безвредная завеса не путаются с первого взгляда.
+const SMOKE_TINT := Color(0.42, 0.44, 0.48)
+
+func _draw_cloud_tiles(clouds: Array, smoke: bool, tint: Color, fill: bool, tex: Texture2D,
+		fogged: bool, seen: Dictionary) -> void:
+	var drawn := {}
+	for cl: Dictionary in clouds:
 		var x0 := maxi(_cull_x0, int(cl["x"]))
 		var x1 := mini(_cull_x1, int(cl["x"]) + int(cl["w"]) - 1)
 		var y0 := maxi(_cull_y0, int(cl["y"]))
@@ -6458,17 +6585,17 @@ func _draw_gas_tiles(alpha: float, fill: bool) -> void:
 		for y in range(y0, y1 + 1):
 			for x in range(x0, x1 + 1):
 				var coord := Vector2i(x, y)
-				if drawn.has(coord) or not GasTiles.at(state.grid, coord):
+				if drawn.has(coord) or not GasTiles.at(state.grid, coord, smoke):
 					continue
 				drawn[coord] = true
-				if view.fog_enabled and not seen.has(coord):
+				if fogged and not seen.has(coord):
 					continue
 				var cell_rect := Rect2(ORIGIN + Vector2(x, y) * CELL, Vector2(CELL, CELL))
 				if tex != null:
-					var src := GasTiles.source_rect(tex, coord, GasTiles.mask_at(state.grid, coord))
-					draw_texture_rect_region(_gas_canvas_texture, cell_rect, src, Color(1, 1, 1, alpha))
+					var src := GasTiles.source_rect(tex, coord, GasTiles.mask_at(state.grid, coord, smoke))
+					draw_texture_rect_region(_gas_canvas_texture, cell_rect, src, tint)
 				elif fill:
-					draw_rect(cell_rect, Color(0.9, 0.9, 0.9, 0.36))
+					draw_rect(cell_rect, Color(tint.r * 0.9, tint.g * 0.9, tint.b * 0.9, 0.36))
 
 ## ВСПЫШКА ВЗРЫВА (0.9.4): клетки разрыва на секунду горят и гаснут. Чистая косметика —
 ## пламенем это не становится ни на одну клетку: ни резолвер, ни правила огня об этих
@@ -6902,6 +7029,10 @@ func _build_ui() -> void:
 	_clock_label.add_theme_font_size_override("font_size", 11)
 	_clock_label.modulate = Color(0.78, 0.81, 0.88)
 	vbox.add_child(_clock_label)
+	# Режим партии (0.12): счёт Capture & Hold или волны Holdout. В обычном бою скрыт.
+	_objective_group = SteamChrome.group_box_compact("Objective")
+	_objective_group.body.add_theme_constant_override("separation", 3)
+	vbox.add_child(_objective_group)
 
 	# Разделы — групповые окошки набора (аудит UI, editor-rework): «ход», «партия»,
 	# «инструменты», «рисование». Состав кнопок тот же, что задан в item 6.
@@ -6936,6 +7067,12 @@ func _build_ui() -> void:
 	_before_btn.tooltip_text = "Show the battlefield as it was at the start (press again to come back)."
 	match_box.add_child(_button_row([_compact_button("Settings", func() -> void: SettingsWindow.open(self)),
 			_before_btn]))
+	# Справочник (0.12) — в любой момент боя, и кнопкой, и клавишей.
+	var manual_btn := _compact_button("Manual", func() -> void: ManualWindow.toggle(self))
+	manual_btn.tooltip_text = "Rules, tactics and unit cards (%s)" % Keybinds.label("game_manual")
+	var bug_btn := _compact_button("Report a Bug", _open_bug_report)
+	bug_btn.tooltip_text = "Send a bug report with a screenshot, the log and this match's replay."
+	match_box.add_child(_button_row([manual_btn, bug_btn]))
 
 	var tools_box := _hud_group(vbox, "Tools")
 	_multi_btn = CheckBox.new()
@@ -7033,7 +7170,6 @@ func _build_ui() -> void:
 	_init_label = null
 	_p1_btn = null
 	_p2_btn = null
-	_diff_btn = null
 	_net_status = null
 
 	_build_log_panel()
@@ -7177,7 +7313,7 @@ func _refresh_component_panel() -> void:
 	# Разница между «стоит намертво» и «только не едет» для игрока существенная: во
 	# втором случае машина ещё разворачивается и может навести орудие.
 	if not veh.can_turn():
-		notes.append("immobilised")
+		notes.append("immobilized")
 	elif not veh.can_drive():
 		notes.append("cannot drive, can still turn")
 	if veh.has_component(MCF.COMP_GUN) and not veh.can_fire_gun():
@@ -7732,7 +7868,7 @@ func _colour_row() -> HFlowContainer:
 		b.button_group = group
 		b.focus_mode = Control.FOCUS_NONE
 		b.custom_minimum_size = Vector2(18, 18)
-		b.tooltip_text = "Your side's colour" if col.a <= 0.0 else "Draw in this colour"
+		b.tooltip_text = "Your side's color" if col.a <= 0.0 else "Draw in this color"
 		for st: String in ["normal", "hover", "pressed", "hover_pressed"]:
 			var sb := StyleBoxFlat.new()
 			sb.bg_color = Color(0.5, 0.5, 0.5) if col.a <= 0.0 else col
@@ -8192,7 +8328,7 @@ func _camera_row() -> Control:
 	for sid in sides:
 		var b := Button.new()
 		b.text = "Me" if sid == me else MCF.PLAYER_LETTERS[sid]
-		b.tooltip_text = "Centre the camera on %s" % ("your forces" if sid == me
+		b.tooltip_text = "Center the camera on %s" % ("your forces" if sid == me
 				else state.roster.name_of(sid) + "'s forces")
 		b.add_theme_font_size_override("font_size", 12)
 		b.custom_minimum_size = Vector2(30, 24)
@@ -8743,31 +8879,12 @@ func _set_side_ai(side: int, value: bool) -> void:
 	if slot != null:
 		slot.kind = Roster.SlotKind.AI if value else Roster.SlotKind.HUMAN
 
-func _cycle_difficulty() -> void:
-	if networked:
-		return
-	ai_difficulty = (ai_difficulty + 1) % 3
-	for side in state.roster.player_ids():
-		var slot := state.roster.slot(side)
-		if slot != null:
-			slot.ai_difficulty = ai_difficulty
-	if p1_is_ai:
-		_make_side(MCF.Owner.PLAYER_1)
-	if p2_is_ai:
-		_make_side(MCF.Owner.PLAYER_2)
-	_refresh_ai_buttons()
-	_refresh_pause_button()
-	_kick_if_ai()
 
 func _refresh_ai_buttons() -> void:
 	if _p1_btn != null:
 		_p1_btn.text = "Player 1: %s" % ("AI" if p1_is_ai else "Human")
 	if _p2_btn != null:
 		_p2_btn.text = "Player 2: %s" % ("AI" if p2_is_ai else "Human")
-	if _diff_btn != null:
-		var names := ["Easy", "Normal", "Hard"]
-		_diff_btn.text = "AI Difficulty: %s" % names[ai_difficulty]
-		_diff_btn.disabled = not (p1_is_ai or p2_is_ai)
 
 func _open_editor() -> void:
 	if networked:
@@ -8850,9 +8967,17 @@ func _side_label(side: int) -> String:
 		base += " (you)"
 	return base
 
+## Порядок инициативы именами из ростера: у волн Holdout — «Waves», у сетевых игроков —
+## их имена. Одинаков на всех пирах (ростер общий), поэтому годится и для журнала.
+func _initiative_names() -> String:
+	var parts: Array[String] = []
+	for s: int in state.turns.round_order:
+		parts.append(state.roster.name_of(s))
+	return " → ".join(parts)
+
 func _order_labels() -> String:
 	if not networked:
-		return state.turns.order_names()
+		return _initiative_names()
 	var parts: Array[String] = []
 	for s in state.turns.round_order:
 		parts.append(_side_label(s))
@@ -8893,6 +9018,9 @@ func _refresh_status() -> void:
 	if _status_label != null:
 		_status_label.text = "Turn: %s   |   Round: %d" % [
 			_side_label(_turn_now()), state.turns.round_number]
+		# Пыльная буря (0.12) — на виду, пока дует: она меняет каждый дальний выстрел.
+		if resolver != null and resolver.random_events != null and resolver.random_events.dust_left > 0:
+			_status_label.text += "   |   Dust storm: %d round(s)" % resolver.random_events.dust_left
 	# Кто ходит до и после игрока (item 6) — отдельной строкой под текущим ходом.
 	if _turn_neighbors_label != null and state != null:
 		var me := _turn_now()
@@ -8905,6 +9033,7 @@ func _refresh_status() -> void:
 			parts.append("Next: %s" % _side_label(nxt))
 		_turn_neighbors_label.text = "   ".join(parts)
 	_refresh_clocks()
+	_refresh_objective()
 	_refresh_initiative()
 	if _init_overlay != null and _init_overlay.visible:
 		_refresh_initiative_overlay()

@@ -167,9 +167,10 @@ func _on_host_peer_left(id: int) -> void:
 		var s: Roster.Slot = roster.slots[side]
 		s.kind = Roster.SlotKind.AI
 		s.ai_difficulty = AIController.Difficulty.HARD
+		s.ai_style = AIPersonality.TACTICIAN
 		s.peer_id = -1
 		s.display_name = MCF.owner_name(side)
-		_status.text = "%s left — a Hard AI takes that slot." % s.display_name
+		_status.text = "%s left — a Tactician AI takes that slot." % s.display_name
 	_refresh_host_status()
 	_lobby_changed()
 
@@ -330,6 +331,13 @@ func _apply_lobby_snapshot(msg: Dictionary) -> void:
 		_events_interval.value = GameConfig.random_events_interval
 		for ev_id in _event_pool:
 			_event_pool[ev_id] = float(GameConfig.random_events_weights.get(ev_id, 0.0)) > 0.0
+	if _mode_opt != null:
+		_mode_opt.select(clampi(GameConfig.game_mode, 0, MatchMode.NAMES.size() - 1))
+		_zones_opt.select(maxi(0, MatchMode.ZONE_COUNTS.find(GameConfig.capture_zones)))
+		_target_spin.set_value_no_signal(GameConfig.capture_target)
+		_waves_opt.select(maxi(0, MatchMode.WAVE_CHOICES.find(GameConfig.holdout_waves)))
+		_waves_ai_opt.select(clampi(GameConfig.holdout_ai, 0, _waves_ai_opt.item_count - 1))
+		_sync_mode_rows()
 	if _map_opt != null:
 		var map_name := str(msg.get("map", ""))
 		_map_opt.clear()
@@ -475,6 +483,7 @@ func _build_ui() -> void:
 	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	cols.add_child(right)
 
+	_build_mode(left)
 	_build_config(left)
 	if not _is_client:
 		_build_load(left)
@@ -536,6 +545,71 @@ func _row(box: VBoxContainer, label_text: String, control: Control) -> HBoxConta
 	r.add_child(control)
 	box.add_child(r)
 	return r
+
+# --- Режим партии (0.12) -------------------------------------------------------
+var _mode_opt: OptionButton
+var _mode_blurb: Label
+var _zones_opt: OptionButton
+var _target_spin: SpinBox
+var _waves_opt: OptionButton
+var _waves_ai_opt: OptionButton
+var _mode_rows: Array = []   # [строка, режим, в котором она видна]
+
+## Режим партии: уничтожение, Capture & Hold или Holdout — и настройки выбранного.
+func _build_mode(parent: VBoxContainer) -> void:
+	var box := _titled(parent, "Game Mode")
+	_mode_opt = _opt(MatchMode.NAMES, GameConfig.game_mode)
+	for i in MatchMode.BLURBS.size():
+		_mode_opt.set_item_tooltip(i, MatchMode.BLURBS[i])
+	_row(box, "Mode:", _mode_opt)
+	_mode_blurb = Label.new()
+	_mode_blurb.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_mode_blurb.custom_minimum_size = Vector2(300, 0)
+	_mode_blurb.add_theme_font_size_override("font_size", 11)
+	_mode_blurb.modulate = Color(0.75, 0.78, 0.85)
+	box.add_child(_mode_blurb)
+	_zones_opt = _opt(MatchMode.ZONE_COUNTS, MatchMode.ZONE_COUNTS.find(GameConfig.capture_zones))
+	_zones_opt.tooltip_text = "How many zones to fight over. Maps place them fairly between the deployment zones."
+	_mode_rows.append([_row(box, "Zones:", _zones_opt), MatchMode.Kind.CAPTURE])
+	_target_spin = SpinBox.new()
+	_target_spin.min_value = MatchMode.TARGET_MIN
+	_target_spin.max_value = MatchMode.TARGET_MAX
+	_target_spin.value = GameConfig.capture_target
+	_target_spin.tooltip_text = "Each zone held at the end of a round scores 1 point."
+	_mode_rows.append([_row(box, "Points to win:", _target_spin), MatchMode.Kind.CAPTURE])
+	var waves: Array = []
+	for n: int in MatchMode.WAVE_CHOICES:
+		waves.append("Endless" if n == 0 else str(n))
+	_waves_opt = _opt(waves, MatchMode.WAVE_CHOICES.find(GameConfig.holdout_waves))
+	_waves_opt.tooltip_text = "A wave lands every %d rounds, or as soon as the previous one is wiped out. Each is bigger than the last. Endless runs until the defenders fall." % MatchMode.WAVE_EVERY
+	_mode_rows.append([_row(box, "Waves:", _waves_opt), MatchMode.Kind.HOLDOUT])
+	var leaders: Array = []
+	for p: int in AIPersonality.ALL:
+		leaders.append("AI - " + AIPersonality.name_of(p))
+	leaders.append("AI - Learned")
+	_waves_ai_opt = _opt(leaders, GameConfig.holdout_ai)
+	for p: int in AIPersonality.ALL:
+		_waves_ai_opt.set_item_tooltip(p, AIPersonality.blurb_of(p))
+	_waves_ai_opt.set_item_tooltip(leaders.size() - 1,
+			"The trained model (RLM). Falls back to a Tactician when no model is running.")
+	_mode_rows.append([_row(box, "Waves led by:", _waves_ai_opt), MatchMode.Kind.HOLDOUT])
+	_mode_opt.item_selected.connect(func(_i: int) -> void: _sync_mode_rows())
+	_sync_mode_rows()
+	var opts: Array[OptionButton] = [_mode_opt, _zones_opt, _waves_opt, _waves_ai_opt]
+	if _is_host_net:
+		for o in opts:
+			o.item_selected.connect(func(_i: int) -> void: _broadcast_lobby())
+		_target_spin.value_changed.connect(func(_v: float) -> void: _broadcast_lobby())
+	if _is_client:
+		for o in opts:
+			o.disabled = true
+		_target_spin.editable = false
+
+func _sync_mode_rows() -> void:
+	var k := _mode_opt.selected
+	_mode_blurb.text = MatchMode.BLURBS[k]
+	for pair: Array in _mode_rows:
+		(pair[0] as Control).visible = int(pair[1]) == k
 
 func _build_config(parent: VBoxContainer) -> void:
 	var box := _titled(parent, "Lobby Configuration")
@@ -784,7 +858,7 @@ func _build_map(parent: VBoxContainer) -> void:
 
 ## Перечитать каталоги карт и пересобрать выпадающий список (item 1, issue 1).
 ##
-## ВСЕ сохранённые карты: и поставочные (res://maps), и созданные в редакторе
+## ВСЕ сохранённые карты: и поставочные (res://src/data/maps), и созданные в редакторе
 ## (user://maps). MapData.list_maps() объединяет оба каталога без дублей.
 ## Выбранная карта сохраняется по ПУТИ, а не по номеру строки: после пересканирования
 ## список мог сдвинуться, и номер указывал бы на чужую карту.
@@ -1200,7 +1274,7 @@ func _build_personal(parent: VBoxContainer) -> void:
 	box.add_child(_preview_swatch)
 	_refresh_swatch()
 	var note := Label.new()
-	note.text = "Your soldiers wear this faction's art (or its colour)."
+	note.text = "Your soldiers wear this faction's art (or its color)."
 	note.add_theme_font_size_override("font_size", 11)
 	note.modulate = Color(0.75, 0.78, 0.85)
 	box.add_child(note)
@@ -1258,10 +1332,14 @@ func _slot_row(s: Roster.Slot) -> Control:
 	row.add_child(idx)
 
 	var kind := OptionButton.new()
+	# Уровней сложности нет (0.12): ИИ всегда в полную силу, слоты различаются личностью.
 	for pair in [[Roster.SlotKind.OPEN, "Open"], [Roster.SlotKind.CLOSED, "Closed"],
-			[Roster.SlotKind.HUMAN, "Player"], [-10, "AI - Easy"], [-11, "AI - Medium"],
-			[-12, "AI - Hard"], [-13, "AI - Learned"], [-14, "Spectator"]]:
+			[Roster.SlotKind.HUMAN, "Player"], [-10, "AI - Tactician"], [-11, "AI - Aggressor"],
+			[-12, "AI - Fortifier"], [-13, "AI - Learned"], [-14, "Spectator"]]:
 		kind.add_item(str(pair[1]))
+	for p in AIPersonality.ALL:
+		kind.set_item_tooltip(3 + p, AIPersonality.blurb_of(p))
+	kind.set_item_tooltip(6, "The trained model (RLM). Falls back to a Tactician when no model is running.")
 	kind.select(_kind_index(s))
 	kind.item_selected.connect(_on_slot_kind.bind(s.id))
 	kind.disabled = _is_client
@@ -1481,7 +1559,16 @@ func _open_events_window() -> void:
 		cb.toggled.connect(func(on: bool) -> void:
 			_event_pool[eid] = on
 			_broadcast_lobby())
+		cb.tooltip_text = str(RandomEvents.NOTES.get(ev_id, ""))
 		body.add_child(cb)
+		# Что делает событие и где бывает (0.12) — строкой под галочкой, не только подсказкой.
+		var note := Label.new()
+		note.text = str(RandomEvents.NOTES.get(ev_id, ""))
+		note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		note.custom_minimum_size = Vector2(380, 0)
+		note.add_theme_font_size_override("font_size", 11)
+		note.modulate = Color(0.72, 0.75, 0.82)
+		body.add_child(SteamChrome.pad(note, 28, 0))
 
 ## Общее модальное окно в стиле игры: затемнение + рамка SteamChrome + кнопка «Close».
 ## Возвращает VBox для содержимого. Клиенту окна тоже открываются, но правки не едут по
@@ -1537,7 +1624,9 @@ func _kind_index(s: Roster.Slot) -> int:
 		Roster.SlotKind.OPEN: return 0
 		Roster.SlotKind.CLOSED: return 1
 		Roster.SlotKind.HUMAN: return 2
-		Roster.SlotKind.AI: return 3 + clampi(s.ai_difficulty, 0, 3)
+		Roster.SlotKind.AI:
+			return 6 if s.ai_difficulty == AIController.Difficulty.LEARNED \
+					else 3 + clampi(s.ai_style, 0, AIPersonality.NAMES.size() - 1)
 	return 0
 
 func _on_add_slot() -> void:
@@ -1595,7 +1684,11 @@ func _on_slot_kind(index: int, slot_id: int) -> void:
 		2: s.kind = Roster.SlotKind.HUMAN
 		_:
 			s.kind = Roster.SlotKind.AI
-			s.ai_difficulty = clampi(index - 3, 0, 3)
+			if index == 6:
+				s.ai_difficulty = AIController.Difficulty.LEARNED
+			else:
+				s.ai_difficulty = AIController.Difficulty.HARD
+				s.ai_style = clampi(index - 3, 0, AIPersonality.NAMES.size() - 1)
 	if s.kind != Roster.SlotKind.HUMAN and s.peer_id > 1:
 		s.peer_id = -1
 	_lobby_changed()
@@ -1807,6 +1900,11 @@ func _commit_config() -> void:
 	GameConfig.random_events_enabled = _events_check.button_pressed
 	GameConfig.random_events_mandatory = _events_mand.button_pressed
 	GameConfig.random_events_interval = int(_events_interval.value)
+	GameConfig.game_mode = _mode_opt.selected
+	GameConfig.capture_zones = MatchMode.ZONE_COUNTS[_zones_opt.selected]
+	GameConfig.capture_target = int(_target_spin.value)
+	GameConfig.holdout_waves = MatchMode.WAVE_CHOICES[_waves_opt.selected]
+	GameConfig.holdout_ai = _waves_ai_opt.selected
 	# Пул событий из окна (item 3/5): вес 1 у выбранных, 0 у прочих.
 	var weights: Dictionary = {}
 	for ev_id: String in _event_pool:
@@ -1842,8 +1940,11 @@ func _on_start() -> void:
 	for s: Roster.Slot in roster.slots:
 		if s.is_playing():
 			playing += 1
-	if playing < 2:
-		_status.text = "Need at least two playing slots (Player or AI)."
+	# Holdout (0.12): защищаться можно и одному — второй стороной будут волны.
+	var holdout := _mode_opt.selected == MatchMode.Kind.HOLDOUT and _save.is_empty()
+	if playing < (1 if holdout else 2):
+		_status.text = "Need at least one playing slot (Player or AI)." if holdout \
+				else "Need at least two playing slots (Player or AI)."
 		return
 	# В сетевой партии за каждым «Player» должен сидеть человек (batch 12 #8): слот без
 	# пира никто не поведёт, и бой встанет на его ходу.
@@ -1854,6 +1955,10 @@ func _on_start() -> void:
 				return
 	if not _save.is_empty():
 		_start_loaded()
+		return
+	# Волны — отдельный слот ИИ в конце ростера, все игроки — одна команда.
+	if holdout and not roster.set_waves(_waves_ai_opt.selected):
+		_status.text = "Holdout needs a free slot for the waves — remove a slot first."
 		return
 	_commit_config()
 	# Сетевой хост объявляет карту клиентам тем же путём, что и старый Setup. Случайная

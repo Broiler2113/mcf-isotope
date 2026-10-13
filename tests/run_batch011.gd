@@ -116,11 +116,13 @@ func _enter_rolls() -> void:
 	ck(pressed[0], "Enter rolls the dice")
 	roller.queue_free()
 
-## Saves, replays, maps and presets are plain files in "Isotope Data"; whatever is put
-## there by hand is listed, with no caption files left beside it.
+## Saves, replays, maps and presets are plain files in their own folders of the game folder
+## (0.12; "Isotope Data" in 0.11); whatever is put there by hand is listed, with no caption
+## files left beside it.
 func _shared_folders() -> void:
 	var root := GameFolders.root()
-	ck(DirAccess.dir_exists_absolute(root) and root.ends_with(GameFolders.ROOT_NAME), "the shared folder exists: " + root)
+	ck(DirAccess.dir_exists_absolute(root) and (root == GameFolders.game_dir()
+			or OS.get_environment("MCF_DATA_DIR") != ""), "the data folders live in the game folder: " + root)
 	ck(ReplayFile.SAVE_DIR == root.path_join("Saves") and ReplayFile.REPLAY_DIR == root.path_join("Replays")
 			and MapData.MAPS_DIR == root.path_join("Maps"), "saves, replays and maps have their own folders")
 	var save := {"kind": ReplayFile.KIND_SAVE, "meta": {"map": "Dropped", "round": 3}}

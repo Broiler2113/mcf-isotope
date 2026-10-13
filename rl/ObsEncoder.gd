@@ -23,7 +23,8 @@ const FEATURES := [
 	MCF.FEATURE_AIRLOCK, MCF.FEATURE_CORPSE_WALL, MCF.FEATURE_DRONE_STATION,
 	MCF.FEATURE_MINE, MCF.FEATURE_AV_MINE,
 ]
-const ITEMS := [MCF.ITEM_FRAG, MCF.ITEM_EXTINGUISHER, MCF.ITEM_DRONE_STATION, MCF.ITEM_LDF]
+const ITEMS := [MCF.ITEM_FRAG, MCF.ITEM_EXTINGUISHER, MCF.ITEM_DRONE_STATION, MCF.ITEM_LDF,
+	MCF.ITEM_SMOKE]
 
 ## Относительный владелец: 0 — свой/союзник, 1 — враг, 2 — нейтрал.
 static func rel_owner(r: GameActionResolver, side: int, owner: int) -> int:
@@ -144,18 +145,26 @@ static func vehicle_crush_threat(r: GameActionResolver, side: int) -> PackedFloa
 static func hazards(r: GameActionResolver) -> Dictionary:
 	var grid := r.state.grid
 	var out := {}
-	for key: String in ["gas", "gas_warning", "artillery_warning"]:
+	for key: String in ["gas", "gas_warning", "artillery_warning", "smoke", "wave_warning"]:
 		var layer := PackedFloat32Array()
 		layer.resize(grid.width * grid.height)
 		out[key] = layer
+	# Holdout (0.12): где высадится объявленная волна.
+	if r.mode != null and r.mode.is_holdout() and not r.mode.pending_wave.is_empty():
+		var lr := r.army_landing_rect(r.mode.pending_wave)
+		_hazard_rect(out["wave_warning"], grid,
+				{"x": lr.position.x, "y": lr.position.y, "w": lr.size.x, "h": lr.size.y}, 1.0)
 	var events := r.random_events
 	if events == null:
 		return out
+	for cloud: Dictionary in events.smoke:
+		_hazard_rect(out["smoke"], grid, cloud, 1.0)
 	for cloud: Dictionary in events.clouds:
 		_hazard_rect(out["gas"], grid, cloud, 1.0)
 	for event: Dictionary in events.pending:
 		var key := "gas_warning" if event["id"] == RandomEvents.GAS else "artillery_warning"
-		if event["id"] != RandomEvents.GAS and event["id"] != RandomEvents.MORTAR:
+		# Пожар и обрушение (0.12) — та же «уйди из зоны до конца раунда», что и обстрел.
+		if not event["id"] in [RandomEvents.GAS, RandomEvents.MORTAR, RandomEvents.FIRE, RandomEvents.COLLAPSE]:
 			continue
 		_hazard_rect(out[key], grid, event["params"], 1.0)
 	return out
@@ -336,7 +345,35 @@ static func encode(r: GameActionResolver, side: int, round_cap: int, tac: Dictio
 	for e: int in state.roster.player_ids():
 		if rel_owner(r, side, e) == 1:
 			enemy_value += army_value(state, e)
+	# Режим (0.12). Зоны Capture & Hold — правило партии, видны всегда: 1 — ничья,
+	# 2 — наша (на последней границе раунда), 3 — чужая.
+	var md: MatchMode = r.mode
+	var zone_a := PackedInt32Array()
+	zone_a.resize(n)
+	var pts := 0
+	var pts_enemy := 0
+	if md != null and md.is_capture():
+		var us := MatchMode.team_key(state.roster, side)
+		for zi in md.zones.size():
+			var holder: String = md.holders[zi] if zi < md.holders.size() else ""
+			var code := 1 if holder == "" else (2 if holder == us else 3)
+			var zr := md.zone_rect(zi)
+			for y in range(maxi(0, zr.position.y), mini(h, zr.end.y)):
+				for x in range(maxi(0, zr.position.x), mini(w, zr.end.x)):
+					zone_a[y * w + x] = code
+		for k: String in md.scores:
+			if k == us:
+				pts = int(md.scores[k])
+			else:
+				pts_enemy = maxi(pts_enemy, int(md.scores[k]))
 	return {
+		"mode": md.kind if md != null else 0, "zone": zone_a,
+		"pts": pts, "pts_enemy": pts_enemy, "pts_target": md.target if md != null else 0,
+		"wave": md.wave if md != null else 0,
+		"waves_total": md.waves_total if md != null and md.is_holdout() else 0,
+		"wave_pending": 1 if md != null and not md.pending_wave.is_empty() else 0,
+		"wave_left": r.wave_fighters_left() if md != null and md.is_holdout() else 0,
+		"smoke": tac["hazards"]["smoke"], "wave_warning": tac["hazards"]["wave_warning"],
 		"w": w, "h": h, "side": side,
 		"floor": floor_a, "feat": feat_a, "feat_own": feat_own, "cover": cover_a,
 		"fire": fire_a, "corpse": corpse_a, "dirt": dirt_a, "fog": fog_a, "veh": veh_a,

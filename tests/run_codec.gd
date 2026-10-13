@@ -142,6 +142,10 @@ const TS = preload("res://tests/TestSupport.gd")
 ## Поля-объекты сверяются отдельно: str() от объекта — это его адрес в памяти,
 ## он различается у любых двух копий.
 const OBJECT_FIELDS := ["stats", "action_state", "occupant"]
+## Выводимые поля клетки: газ и дым (0.12) ставятся из облаков событий (StateCodec.
+## apply_rules → _sync_gas), а не пишутся поклеточно. Их сохранение проверяют
+## run_random_events и run_batch012 — по облакам, а не по доске.
+const DERIVED_FIELDS := ["gas", "smoke"]
 
 func _check_state_codec() -> void:
 	var state := TS.build_state()
@@ -368,7 +372,7 @@ func _compare_fields(label: String, want: Object, got: Object) -> void:
 		if int(prop["usage"]) & PROPERTY_USAGE_SCRIPT_VARIABLE == 0:
 			continue
 		var name: String = prop["name"]
-		if name in OBJECT_FIELDS:
+		if name in OBJECT_FIELDS or (want is GridCell and name in DERIVED_FIELDS):
 			continue
 		var a: Variant = want.get(name)
 		var b: Variant = got.get(name)

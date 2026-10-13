@@ -401,7 +401,9 @@ share of Phase B (`pool_ai_fraction`), and in every evaluation. The owner retire
 EASY from the RL pipeline, so there is no setting that selects them — `opponent:` and
 `eval_opponents:` are gone, and a branch whose saved config still has them simply loses them
 on its next resume (its eval_log keeps any old `*_normal` columns as history; the dashboard
-shows HARD only). The game itself keeps all three difficulties for human matches.
+shows HARD only). Since 0.12 the game has no difficulty levels either: every scripted AI is
+HARD with a personality (Tactician / Aggressor / Fortifier), whose indices are the old
+`AIController.Style` numbers, so `opponent_styles` keeps working unchanged.
 
 NORMAL was also measuring very nearly the same thing: six arena games came back identical to
 their HARD counterparts step for step, because `AIController` separates the two in exactly one
@@ -411,6 +413,29 @@ EASY-only.
 Since the tactical env (2026-10-02, owner's decision) the TRAINING side may also face HARD in
 four play styles (`opponent_styles`: standard / rush / turtle / flank — `AIController.Style`)
 and its own past checkpoints (phase `league`). Evaluation is unchanged: standard HARD only.
+
+## Game modes (0.12)
+
+The env plays the game's new modes as well as annihilation, picked per TRAINING episode
+(evaluation stays annihilation, so the dashboard's numbers stay comparable):
+
+```yaml
+mode_weights: [0.6, 0.25, 0.15]   # annihilation, capture & hold, holdout
+capture_zones: 3                  # 1 / 3 / 5
+capture_target: 12
+holdout_waves: 10                 # 5 / 10 / 15, 0 = endless
+holdout_waves_share: 0.5          # holdout games where the learner LEADS the waves
+```
+
+The defaults (`[1, 0, 0]`) train exactly as before; add the block above to the run's config to
+opt in. **Capture & Hold**: each point is worth one typical kill, a points win pays the rout
+stake; at the round cap the points lead decides. **Holdout**: the learner either defends (HARD
+leads the waves) or leads the waves against HARD defenders (`holdout_role`). Wave arrivals are
+taken OUT of the value differential, so leading the waves cannot farm reward by getting a wave
+killed to call the next, bigger one. New inputs (zero-initialized when an old checkpoint
+loads): grid layers for smoke, zones (any / ours / theirs) and the announced wave strip; the
+flat vector grew 20 -> 28 with the mode, points and wave counters (`model.GROWERS` grows
+`flat.0` too). Smoke grenades are in `ObsEncoder.ITEMS`.
 
 ## Tactical environment (`config/tactical.yaml`)
 

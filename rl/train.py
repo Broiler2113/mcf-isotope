@@ -122,6 +122,12 @@ DEFAULTS = dict(
     # HARD's play styles in TRAINING games vs the scripted AI: weights for
     # [standard, rush, turtle, flank]. Evaluation always plays standard HARD.
     opponent_styles=[1.0, 0.0, 0.0, 0.0],
+    # Release 0.12 game modes in TRAINING games: weights for [annihilation, capture,
+    # holdout]. Evaluation stays annihilation. In holdout_waves_share of the holdout games
+    # the learner leads the waves (the owner's "RLM operates the waves"), otherwise it
+    # defends against HARD-led waves.
+    mode_weights=[1.0, 0.0, 0.0], capture_zones=3, capture_target=12, holdout_waves=10,
+    holdout_waves_share=0.5,
     # Prioritised fictitious self-play (phase "league"): a pool member that beats us more
     # often is picked more often — weight (1 - our win rate vs it)^pfsp_power + pfsp_floor.
     pfsp_power=2.0, pfsp_floor=0.05,
@@ -146,6 +152,7 @@ DEFAULTS = dict(
 )
 
 STYLE_NAMES = ["standard", "rush", "turtle", "flank"]
+MODES = ["annihilation", "capture", "holdout"]
 
 
 class EvaluationInterrupted(RuntimeError):
@@ -805,6 +812,13 @@ class Trainer:
             return 0
         return self.rng.choices(range(4), weights=w)[0]
 
+    def pick_mode(self) -> str:
+        """Game mode for a TRAINING game (release 0.12; evaluation plays annihilation)."""
+        w = (list(self.cfg.get("mode_weights") or [1.0]) + [0.0] * 3)[:3]
+        if sum(w) <= 0:
+            return MODES[0]
+        return MODES[self.rng.choices(range(3), weights=w)[0]]
+
     def shaping_scale(self) -> float:
         n = int(self.cfg["shaping_decay_updates"])
         if n <= 0:
@@ -892,6 +906,11 @@ class Trainer:
         style = self.pick_style() if opp == HARD else 0
         if style:
             label += ":" + STYLE_NAMES[style]
+        mode = self.pick_mode()
+        role = "waves" if mode == "holdout" and self.rng.random() < float(self.cfg["holdout_waves_share"]) \
+            else "defend"
+        if mode != "annihilation":
+            label += ":" + (mode if mode == "capture" else "holdout-" + role)
         self.episode_seed += 1
         mp = maps[self.map_idx]
         army = "shuffle" if not is_generated(mp) and self.rng.random() < float(self.cfg["army_shuffle"]) else ""
@@ -910,6 +929,8 @@ class Trainer:
             potential_coef=float(self.cfg["potential_coef"]), army=army,
             gamma=float(self.cfg["gamma"]), discount_unit=self.cfg["discount_unit"],
             canvas_size=int(self.cfg["canvas_size"]),
+            mode=mode, zones=int(self.cfg["capture_zones"]), target=int(self.cfg["capture_target"]),
+            waves=int(self.cfg["holdout_waves"]), holdout_role=role,
         )
         return cfg, label
 

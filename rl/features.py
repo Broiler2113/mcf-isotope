@@ -66,9 +66,19 @@ C_GAS = C_VEH_AP + 1
 C_GAS_WARNING = C_GAS + 1
 C_ARTILLERY_WARNING = C_GAS_WARNING + 1
 C_VEH_CRUSH = C_ARTILLERY_WARNING + 1
-N_CHANNELS = C_VEH_CRUSH + 1
+# Release 0.12: smoke clouds (they block sight like gas, but harmlessly), Capture & Hold
+# zones (any zone / held by us / held by the enemy at the last round end) and the landing
+# strip of an announced Holdout wave. Appended, so load_compat grows conv.0 by zeros.
+C_SMOKE = C_VEH_CRUSH + 1
+C_ZONE = C_SMOKE + 1
+C_ZONE_OURS = C_ZONE + 1
+C_ZONE_THEIRS = C_ZONE_OURS + 1
+C_WAVE_WARNING = C_ZONE_THEIRS + 1
+N_CHANNELS = C_WAVE_WARNING + 1
 
-FLAT_DIM = 20
+# 20 original entries, then the 0.12 game mode block (one-hot mode, points, waves); the
+# flat layer grows by zero columns for older checkpoints (model.GROWERS).
+FLAT_DIM = 28
 
 INTENT_KINDS = [
     "end", "move", "shoot", "capture", "release", "move_held", "item", "push",
@@ -139,12 +149,18 @@ def grid_tensor(obs: dict, canvas: int = CANVAS) -> np.ndarray:
     g[C_VEH_FOOT][sl] = veh
     for key, channel in (("gas", C_GAS), ("gas_warning", C_GAS_WARNING),
                          ("artillery_warning", C_ARTILLERY_WARNING),
-                         ("vcrush", C_VEH_CRUSH)):
+                         ("vcrush", C_VEH_CRUSH), ("smoke", C_SMOKE),
+                         ("wave_warning", C_WAVE_WARNING)):
         if key in obs:
             scale = 4.0 if key == "vcrush" else 1.0
             g[channel][sl] = np.asarray(obs[key], dtype=np.float32).reshape(h, w) / scale
     # Quarters of an expected hit on the wire (ObsEncoder._quarters); six hits a turn is
     # already "certain death", so the channel saturates there.
+    if "zone" in obs:
+        zone = plane("zone")   # 0 none, 1 unheld, 2 ours, 3 theirs
+        g[C_ZONE][sl] = zone > 0
+        g[C_ZONE_OURS][sl] = zone == 2
+        g[C_ZONE_THEIRS][sl] = zone == 3
     if "threat" in obs:
         g[C_THREAT][sl] = np.minimum(plane("threat") / 24.0, 1.0)
         g[C_FCOVER][sl] = np.minimum(plane("fcover") / 24.0, 1.0)
@@ -245,6 +261,14 @@ def flat_vector(obs: dict) -> np.ndarray:
     f[17] = obs["w"] / CANVAS
     f[18] = obs["h"] / CANVAS
     f[19] = 1.0
+    # 0.12 game modes: annihilation / capture & hold / holdout.
+    f[20 + min(2, int(obs.get("mode", 0)))] = 1.0
+    target = max(1, obs.get("pts_target", 0))
+    f[23] = obs.get("pts", 0) / target
+    f[24] = obs.get("pts_enemy", 0) / target
+    f[25] = obs.get("wave", 0) / max(1, obs.get("waves_total", 0) or 20)
+    f[26] = obs.get("wave_pending", 0)
+    f[27] = obs.get("wave_left", 0) / 20.0
     return f
 
 

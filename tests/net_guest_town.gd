@@ -63,7 +63,7 @@ func _initialize() -> void:
 				if str(l).find("[denied]") >= 0: denied += 1
 			var resynced := false
 			for l in m.state.log.lines:
-				if str(l).find("resynchronised with the host") >= 0: resynced = true
+				if str(l).find("resynchronized with the host") >= 0: resynced = true
 			ck(resynced, "the guest noticed the drift and pulled the host's board")
 			var alive_host := 0
 			for u in m.state.all_units():

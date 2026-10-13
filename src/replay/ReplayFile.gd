@@ -12,7 +12,7 @@ extends RefCounted
 ## текстовом виде повтор часовой партии разошёлся бы на десятки мегабайт. Читать файл
 ## обязан тот же режим, каким он записан, — отсюда одна пара функций на оба формата.
 
-## Plain files in the shared "Isotope Data" folder (GameFolders, 0.11).
+## Plain files in the "Saves" and "Replays" folders of the game folder (GameFolders, 0.12).
 static var REPLAY_DIR := GameFolders.dir(GameFolders.REPLAYS)
 static var SAVE_DIR := GameFolders.dir(GameFolders.SAVES)
 const REPLAY_EXT := "mcfr"
