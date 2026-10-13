@@ -260,6 +260,16 @@ const MAINT_ROOM_MAX := 24
 const HULL_POWER := 3.0
 const HULL_MARGIN := 1.06
 
+## Время суток случайной карты (0.12.1): "" — как раньше (ночь), одно из MapData.TIMES или
+## "random" — от зерна карты, своим потоком: остальная постройка от него не сдвигается.
+static func time_choice(opt: Dictionary) -> String:
+	var t := str(opt.get("time", ""))
+	if t == "random":
+		var r := RandomNumberGenerator.new()
+		r.seed = int(opt.get("seed", 1)) * 977 + 31
+		return MapData.TIMES[r.randi_range(0, MapData.TIMES.size() - 1)]
+	return t if MapData.TIMES.has(t) else ""
+
 static func default_options() -> Dictionary:
 	return {"style": Style.TOWN, "size": 1, "density": 1, "seed": 1, "zones": 2, "units": 10,
 			"width": 80, "height": 60, "symmetric": false,
@@ -342,6 +352,7 @@ func _build(options: Dictionary, dim: Vector2i, need: int, tight: bool) -> void:
 	_sym = 0 if not bool(opt.get("symmetric", false)) else (2 if n % 4 == 0 else 1)
 	m = MapData.new(w, h)
 	m.env = STYLE_ENV[clampi(_style, 0, STYLE_ENV.size() - 1)]
+	m.time_of_day = time_choice(opt)
 	_indoor = _bytes()
 	_door = _bytes()
 	_street = _bytes()
@@ -573,6 +584,26 @@ func _img(c: Vector2i, g: int) -> Vector2i:
 func _in_f(c: Vector2i) -> bool:
 	return (_sym == 0 or c.x <= (w - 1) / 2) and (_sym < 2 or c.y <= (h - 1) / 2)
 
+## Мелкие предметы исходной части — в отражения (0.12.1): по оси x угол a → π − a, по y → −a.
+func _mirror_items() -> void:
+	if m.items.is_empty():
+		return
+	var out: Array = []
+	for it: Array in m.items:
+		var c := SmallItems.cell_of(it)
+		if not _in_f(c):
+			continue
+		out.append(it)
+		var x := float(it[1])
+		var y := float(it[2])
+		var a := float(it[3])
+		var fx := _sym >= 1 and w - 1 - c.x != c.x
+		var fy := _sym >= 2 and h - 1 - c.y != c.y
+		if fx: out.append([it[0], w - x, y, fposmod(PI - a, TAU)])
+		if fy: out.append([it[0], x, h - y, fposmod(-a, TAU)])
+		if fx and fy: out.append([it[0], w - x, h - y, fposmod(PI + a, TAU)])
+	m.items = out
+
 ## Индекс клетки исходной части, отражением которой является (x, y).
 func _src_index(x: int, y: int) -> int:
 	var sx := mini(x, w - 1 - x) if _sym >= 1 else x
@@ -618,6 +649,7 @@ func _mirror() -> void:
 			_room_mask[i] = _room_mask[s]
 			if has_k:
 				_k[i] = _k[s]
+	_mirror_items()
 	_doors.clear()
 	for i in w * h:
 		if _door[i] != 0:
@@ -2699,9 +2731,25 @@ func _pick_anchors(pools: Array) -> Array[Vector2i]:
 		if out.is_empty():
 			var score := PackedFloat32Array()
 			score.resize(pool.size())
-			for i in pool.size():
-				score[i] = ((Vector2(pool[i]) - mid) / Vector2(w, h)).length()
-			a = _pick_top(pool, score, 0.6)
+			var share := 0.6
+			if _sym > 0 and not _rep_fold[r]:
+				# Симметричная карта (0.12.1, владелец): зоны развёртывания — на ПРОТИВОПОЛОЖНЫХ
+				# концах карты. Якорь тем лучше, чем дальше он от своего же отражения: при
+				# зеркале слева-направо это левый край (отражение — правый), по высоте ближе к
+				# середине; при четвертях — внешний угол.
+				share = 0.85
+				for i in pool.size():
+					var c := pool[i]
+					var sep := INF
+					for g in range(1, _group()):
+						var p := _img(c, g)
+						sep = minf(sep, (Vector2(p - c) / Vector2(w, h)).length())
+					var mid_y := 1.0 - absf(float(c.y) - mid.y) / float(h) if _sym == 1 else 1.0
+					score[i] = sep * (0.75 + 0.25 * mid_y)
+			else:
+				for i in pool.size():
+					score[i] = ((Vector2(pool[i]) - mid) / Vector2(w, h)).length()
+			a = _pick_top(pool, score, share)
 		else:
 			a = _pick_top(pool, mind[which], 0.9)
 		out.append(a)

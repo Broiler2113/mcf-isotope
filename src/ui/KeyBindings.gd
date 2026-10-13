@@ -74,6 +74,8 @@ const DEFINITIONS: Array = [
 	{"id": "editor_delete", "label": "Delete selection", "keys": [KEY_DELETE, KEY_BACKSPACE], "contexts": ["*"], "section": "editor"},
 	{"id": "editor_smaller", "label": "Smaller brush", "keys": [KEY_BRACKETLEFT], "contexts": ["*"], "section": "editor"},
 	{"id": "editor_larger", "label": "Larger brush", "keys": [KEY_BRACKETRIGHT], "contexts": ["*"], "section": "editor"},
+	{"id": "editor_variant_prev", "label": "Previous tile variant", "keys": [KEY_COMMA], "contexts": ["*"], "section": "editor"},
+	{"id": "editor_variant_next", "label": "Next tile variant", "keys": [KEY_PERIOD], "contexts": ["*"], "section": "editor"},
 	{"id": "editor_grid", "label": "Toggle grid", "keys": [KEY_G], "contexts": ["*"], "section": "editor"},
 	{"id": "editor_lighting", "label": "Lighting on / off", "keys": [KEY_MASK_SHIFT | KEY_L], "contexts": ["*"], "section": "editor"},
 	{"id": "editor_heightmap", "label": "Heightmap on / off", "keys": [KEY_MASK_SHIFT | KEY_H], "contexts": ["*"], "section": "editor"},

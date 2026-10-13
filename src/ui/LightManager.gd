@@ -223,7 +223,31 @@ func _ready() -> void:
 
 ## Ambient light level from the player's darkness setting (0 = daylight, 1 = pitch black)
 ## and the map: space and underground maps read cool, the outdoors moonlit.
-static func ambient_for(env: String, darkness: float) -> Color:
+## Время суток (0.12.1): ночь — настройка игрока как есть; утро, день и вечер светлее и
+## со своим оттенком. Под крышей (станция, бункер) солнце видно лишь в окна — сдвиг слабее.
+const TIME_DARKNESS := {"morning": 0.45, "day": 0.0, "evening": 0.65, "night": 1.0, "": 1.0}
+const TIME_TINT := {"morning": Color(1.06, 0.96, 0.9), "day": Color(1.0, 1.0, 0.98),
+		"evening": Color(1.12, 0.86, 0.7), "night": Color(1, 1, 1), "": Color(1, 1, 1)}
+
+static func ambient_for(env: String, darkness: float, time_of_day := "") -> Color:
+	var k: float = TIME_DARKNESS.get(time_of_day, 1.0)
+	if env in ["station", "bunker"]:
+		k = lerpf(1.0, k, 0.4)
+	darkness = clampf(darkness, 0.0, 1.0) * k
+	var c := _ambient_base(env, darkness)
+	var t: Color = TIME_TINT.get(time_of_day, Color(1, 1, 1))
+	return Color(c.r * t.r, c.g * t.g, c.b * t.b).clamp()
+
+## Без динамического света время суток всё равно видно (0.12.1): ровный оттенок поля —
+## мягче, чем настоящее освещение, чтобы карта оставалась читаемой.
+static func flat_tint(env: String, time_of_day: String) -> Color:
+	match time_of_day:
+		"morning": return Color(1.0, 0.95, 0.9)
+		"evening": return Color(1.0, 0.86, 0.74)
+		"night": return Color(0.66, 0.7, 0.82) if env in ["town", "field"] else Color(0.78, 0.8, 0.86)
+	return Color.WHITE
+
+static func _ambient_base(env: String, darkness: float) -> Color:
 	var v := lerpf(AMBIENT_BRIGHT, AMBIENT_DARK, clampf(darkness, 0.0, 1.0))
 	match env:
 		"town", "field":
@@ -237,7 +261,7 @@ static func ambient_for(env: String, darkness: float) -> Color:
 
 func update_view(grid: Grid, pan: Vector2, zoom: float, origin: Vector2, cell_size: float,
 		env: String = "", visible_cells: Dictionary = {}, limited: bool = false,
-		fx: FxDecals = null, after_layer: Node = null, darkness: float = -1.0) -> void:
+		fx: FxDecals = null, after_layer: Node = null, darkness: float = -1.0, time_of_day := "") -> void:
 	if _vp == null or grid == null: return
 	if after_layer != null and is_instance_valid(after_layer) and after_layer.get_parent() == get_parent() \
 			and get_index() < after_layer.get_index():
@@ -249,7 +273,7 @@ func update_view(grid: Grid, pan: Vector2, zoom: float, origin: Vector2, cell_si
 	if darkness < 0.0:
 		var ui := get_node_or_null("/root/Ui")
 		darkness = float(ui.light_darkness) if ui != null else 0.75
-	ambient = ambient_for(env, darkness)
+	ambient = ambient_for(env, darkness, time_of_day)
 	_space_env = env in ["station", "asteroid"]
 	occluders.sync(grid)
 	_sync_walls(grid)

@@ -595,7 +595,23 @@ func _advance_group_preview() -> void:
 
 var _lighting: LightManager
 
+## Время суток без динамического света (0.12.1): ровный оттенок поля CanvasModulate'ом —
+## интерфейс на своих CanvasLayer его не получает.
+var _time_mod: CanvasModulate = null
+func _sync_time_tint(tint: Color) -> void:
+	if tint == Color.WHITE:
+		if is_instance_valid(_time_mod):
+			_time_mod.queue_free()
+		_time_mod = null
+		return
+	if not is_instance_valid(_time_mod):
+		_time_mod = CanvasModulate.new()
+		add_child(_time_mod)
+	_time_mod.color = tint
+
 func _sync_lighting() -> void:
+	if state != null:
+		_sync_time_tint(Color.WHITE if Ui.dynamic_lighting else LightManager.flat_tint(state.env, state.time_of_day))
 	if not (Ui.dynamic_lighting):
 		if is_instance_valid(_lighting):
 			_lighting.free()
@@ -606,7 +622,8 @@ func _sync_lighting() -> void:
 		_lighting = LightManager.new()
 		add_child(_lighting)
 	if _before_on and _before_grid != null:
-		_lighting.update_view(_before_grid, pan, zoom, ORIGIN, CELL, state.env, {}, false, null, _lod)
+		_lighting.update_view(_before_grid, pan, zoom, ORIGIN, CELL, state.env, {}, false, null, _lod,
+				-1.0, state.time_of_day)
 	else:
 		var view := _view_resolver()
 		var limited := view.visibility_limited()
@@ -614,7 +631,8 @@ func _sync_lighting() -> void:
 		# выросшая в темноте, не должна выдавать себя новой тенью.
 		var lit_grid := _shown_grid if limited and _shown_grid != null else state.grid
 		_lighting.update_view(lit_grid, pan, zoom, ORIGIN, CELL, state.env,
-			view.team_visible_coords(_viewing_side()) if limited else {}, limited, _fx, _lod)
+			view.team_visible_coords(_viewing_side()) if limited else {}, limited, _fx, _lod,
+			-1.0, state.time_of_day)
 
 func _process(delta: float) -> void:
 	_advance_group_preview()
@@ -1004,6 +1022,7 @@ func _show_result(result: ActionResult) -> void:
 		await _play_dice(result.dice_events)
 		_pending_death_ids.clear()
 		_hold_visual = {}
+	await _play_flame_jets(result)
 	if not result.fx.is_empty():
 		_fx.apply(result.fx)
 	if _result_is_audible(result):
@@ -2777,6 +2796,12 @@ func _open_build_picker() -> void:
 				label = "Build: %s (%s)" % [MCF.FEATURE_NAMES[feat],
 						("%d left in batch" % left) if left > 0 else "1 AP for %d" % MCF.BORG_BUILD_BATCH]
 			_act_btn(vb, label, _enter_build.bind(feat), can_afford, "Needs %d AP" % cost)
+	# Назад к главному меню бойца (0.12.1, владелец): раньше выйти можно было только Esc.
+	_act_btn(vb, "‹ Back", func() -> void:
+		_picker.hide()
+		_back_to_menu(), true)
+	(vb.get_child(vb.get_child_count() - 1) as Control).tooltip_text = "Back to %s's actions (%s)" % [
+			unit.stats.display_name, Keybinds.label("game_cancel")]
 	_number_picker()
 	_menu.hide()
 	_anchor_menu(_picker)
@@ -3108,6 +3133,7 @@ func _on_intent_ready(intent: Intent) -> void:
 		_pending_death_ids.clear()
 		_hold_visual = {}
 		queue_redraw()
+	await _play_flame_jets(result)
 	# Косметика (#21) добавляется ПОСЛЕ анимации броска — вместе с показом смерти,
 	# иначе лужа крови проявлялась бы раньше, чем кубик решил судьбу цели.
 	if not result.fx.is_empty():
@@ -3269,10 +3295,12 @@ func _capture_opening_view() -> void:
 			b.cover_height = a.cover_height
 			b.airlock_welded = a.airlock_welded
 			b.lamps = a.lamps
+			b.items_off = a.items_off
 	g.furniture_turn = src.furniture_turn.duplicate(true)
 	g.wall_accent = src.wall_accent.duplicate()
 	g.door_look = src.door_look.duplicate()
 	g.map_decals = src.map_decals.duplicate(true)
+	g.map_items = src.map_items
 	g.floor_look = src.floor_look.duplicate()   # полы комнат (0.9.2) — и в «было» тоже
 	GridCell.logs_restore(saved)
 	_before_grid = g
@@ -3731,6 +3759,7 @@ func _show_net_action(intent: Intent, result: ActionResult) -> void:
 			await _play_dice(result.dice_events, not _result_is_audible(result))
 		_pending_death_ids.clear()
 		_hold_visual = {}
+	await _play_flame_jets(result)
 	if not result.fx.is_empty():
 		_fx.apply(result.fx)
 	if _result_is_audible(result):
@@ -5037,6 +5066,7 @@ static func _clone_board(src: Grid) -> Grid:
 	g.floor_look = src.floor_look
 	g.wall_accent = src.wall_accent
 	g.map_decals = src.map_decals
+	g.map_items = src.map_items
 	g.light_tint = src.light_tint
 	g.door_look = src.door_look
 	GridCell.logs_restore(logs)
@@ -5055,6 +5085,7 @@ static func _copy_look(dst: GridCell, src: GridCell) -> void:
 	dst.airlock_welded = src.airlock_welded
 	dst.on_fire = src.on_fire
 	dst.lamps = src.lamps
+	dst.items_off = src.items_off   # мелкие предметы (0.12.1): в тумане — какими их видели
 
 ## Держит слой дальнего плана в согласии с доской. far — рисует ли им этот кадр. Слой
 ## заводится при первом отъезде и дальше правится и вблизи: правка стоит столько, сколько
@@ -5374,7 +5405,7 @@ func _lod_sync_decals(grid: Grid, dmem: DecalMemory = null, shown: Grid = null) 
 			var c := Vector2i(floori(pos.x), floori(pos.y))
 			if not grid.in_bounds(c):
 				continue
-			var look: Array = FxDecals.LOOK.get(str(p["kind"]), [])
+			var look: Array = FxDecals.look_of(str(p["kind"]))
 			if look.is_empty():
 				continue
 			var col: Color = look[1]
@@ -5395,7 +5426,7 @@ func _lod_recolor_chunk(cc: Vector2i, grid: Grid, shown: Grid, fx: FxDecals) -> 
 		var c := Vector2i(floori(pos.x), floori(pos.y))
 		if not grid.in_bounds(c):
 			continue
-		var look: Array = FxDecals.LOOK.get(str(p["kind"]), [])
+		var look: Array = FxDecals.look_of(str(p["kind"]))
 		if look.is_empty():
 			continue
 		var col: Color = look[1]
@@ -6332,6 +6363,7 @@ func _draw_laser_preview(shooter: UnitInstance, aim: Vector2i) -> void:
 func _draw_fx_props(visible: Dictionary) -> void:
 	_draw_fx_lanes(visible)
 	_draw_fx_flashes(visible)
+	_draw_flame_jet(visible)
 	# Пули-трассеры (item 16): жёлтый штрих летит от стрелка к цели. Под туманом —
 	# только там, где голова пули в обзоре (0.11.3): трассер из темноты выдавал стрелка.
 	var tr_fog: bool = _view_resolver().visibility_limited()
@@ -6620,6 +6652,85 @@ func _draw_fx_flashes(visible: Dictionary) -> void:
 				draw_rect(Rect2(rect.position + Vector2(CELL, CELL) * 0.25,
 						Vector2(CELL, CELL) * 0.5), Color(1.0, 0.86, 0.35, 0.7 * a))
 
+## Струя огнемёта (0.12.1, владелец: «not instant»). Пламя бежит от сопла по клеткам
+## струи, FLAME_STEP секунд на клетку; огонь на полу и сожжённые появляются, когда фронт
+## до них добегает, потом струя гаснет за FLAME_TAIL. Это только показ: доска уже решена.
+const FLAME_STEP := 0.08
+const FLAME_TAIL := 0.3
+var _jet: Dictionary = {}
+
+func _play_flame_jets(result: ActionResult) -> void:
+	for ev: Dictionary in result.fx:
+		if str(ev.get("fx", "")) != "flame_jet" or (ev["cells"] as Array).is_empty():
+			continue
+		if not is_inside_tree() or _pace() >= 8.0 or _fast_playback \
+				or (replay != null and _replay_skip_animations) or _tiles == null:
+			return
+		var cells: Array = ev["cells"]
+		var burnt_at := {}
+		for id: int in result.deaths:
+			var u := state.get_unit(id)
+			if u != null and cells.has(u.coord):
+				burnt_at[id] = u.coord
+				_pending_death_ids[id] = true
+		for c: Vector2i in cells:
+			_tiles.hide_fire(c, true)
+		_jet = {"from": ev["from"], "cells": cells, "t": 0.0}
+		var reached := 0
+		var dur := cells.size() * FLAME_STEP + FLAME_TAIL
+		while float(_jet["t"]) < dur:
+			await get_tree().process_frame
+			if not is_inside_tree():
+				return
+			_jet["t"] = float(_jet["t"]) + get_process_delta_time() * _pace()
+			var front := mini(cells.size(), int(float(_jet["t"]) / FLAME_STEP) + 1)
+			while reached < front:
+				var c: Vector2i = cells[reached]
+				_tiles.hide_fire(c, false)
+				for id: int in burnt_at:
+					if burnt_at[id] == c:
+						_pending_death_ids.erase(id)
+				reached += 1
+			queue_redraw()
+		for id: int in burnt_at:
+			_pending_death_ids.erase(id)
+		_jet = {}
+		queue_redraw()
+
+## Рисунок струи: ядро и ореол от сопла до фронта, у каждой достигнутой клетки — языки
+## пламени с мерцанием. В тумане — только видимые клетки.
+func _draw_flame_jet(visible: Dictionary) -> void:
+	if _jet.is_empty():
+		return
+	var cells: Array = _jet["cells"]
+	var t := float(_jet["t"])
+	var head := minf(t / FLAME_STEP, float(cells.size()))
+	var fade := clampf(1.0 - (t - cells.size() * FLAME_STEP) / FLAME_TAIL, 0.0, 1.0)
+	var fog_on: bool = _view_resolver().visibility_limited()
+	var half := Vector2(CELL, CELL) * 0.5
+	var pts := PackedVector2Array([ORIGIN + Vector2(_jet["from"]) * CELL + half])
+	for i in ceili(head):
+		pts.append(ORIGIN + Vector2(cells[i]) * CELL + half)
+	if head < cells.size() and pts.size() > 1:
+		# Фронт — посередине между двумя клетками, а не скачком.
+		var k := head - floorf(head)
+		pts[pts.size() - 1] = pts[pts.size() - 2].lerp(pts[pts.size() - 1], k)
+	if pts.size() > 1:
+		draw_polyline(pts, Color(1.0, 0.42, 0.08, 0.55 * fade), CELL * 0.55, true)
+		draw_polyline(pts, Color(1.0, 0.85, 0.35, 0.85 * fade), CELL * 0.22, true)
+	var now := Time.get_ticks_msec() / 1000.0
+	for i in ceili(head):
+		var c: Vector2i = cells[i]
+		if fog_on and not visible.has(c):
+			continue
+		var center := ORIGIN + Vector2(c) * CELL + half
+		for j in 3:
+			var wob := Vector2(sin(now * 17.0 + i * 2.1 + j * 2.4), cos(now * 13.0 + i * 1.3 + j * 1.9)) * CELL * 0.12
+			var r := CELL * (0.34 - j * 0.08) * (0.85 + 0.15 * sin(now * 23.0 + i + j))
+			var col := [Color(0.95, 0.3, 0.05, 0.6), Color(1.0, 0.6, 0.12, 0.7), Color(1.0, 0.92, 0.55, 0.8)][j] as Color
+			col.a *= fade
+			draw_circle(center + wob, r, col)
+
 ## Дорожки боя (issue 8): «кто в кого стреляет». Трассер живёт 0.16 с — увидеть его
 ## можно, разобрать перестрелку нельзя, особенно в ход ИИ, когда за один заход стреляют
 ## десятки бойцов. Дорожка держится секунды: линия в цвете СТОРОНЫ СТРЕЛКА, кольцо у
@@ -6662,8 +6773,10 @@ func _draw_fx_lanes(visible: Dictionary) -> void:
 
 ## Вид частиц переехал в FxDecals.LOOK / TEXTURE (0.9.3): по той же таблице осевшую
 ## косметику запекает в доску TerrainTiles, и двум копиям разойтись теперь негде.
-const FX_LOOK := FxDecals.LOOK
 const FX_TEXTURE := FxDecals.TEXTURE
+## Контур летящего обломка стены в долях половины его размера: неровный пятиугольник.
+const CHUNK_SHAPE := [Vector2(-1.0, -0.7), Vector2(0.3, -1.0), Vector2(1.0, -0.2),
+		Vector2(0.6, 0.9), Vector2(-0.8, 0.8)]
 
 ## origin — клетка, откуда частица вылетела (разбитое окно): видел, как оно разбилось, —
 ## видишь и все его осколки, даже долетевшие в туман (item 7).
@@ -6680,11 +6793,26 @@ func _draw_fx_one(kind: String, cell_pos: Vector2, rot: float, scale: float,
 		return
 	if fog_on and not visible.has(_fxc) and not visible.has(origin):
 		return
-	var look: Array = FX_LOOK.get(kind, [0.12, Color(0.8, 0.8, 0.8, 0.8)])
+	var look: Array = FxDecals.look_of(kind)
+	if look.is_empty():
+		look = [0.12, Color(0.8, 0.8, 0.8, 0.8)]
 	var center := ORIGIN + cell_pos * CELL
 	var half: float = float(look[0]) * CELL * float(scale) * 0.5
 	var rect := Rect2(center - Vector2(half, half), Vector2(half, half) * 2.0)
-	if Sprites.draw_texture_override_rect(self, FX_TEXTURE.get(kind, kind), rect,
+	# Обломок стены (0.12.1) — неровный кусок её же плитки.
+	if kind.begins_with("chunk:"):
+		var tex := Sprites.texture_of(kind.substr(6))
+		if tex != null:
+			var pts := PackedVector2Array()
+			var uvs := PackedVector2Array()
+			# Картинка стены — лента вариантов: середина ПЕРВОЙ плитки, не всей ленты.
+			var span := float(tex.get_height()) / maxf(1.0, float(tex.get_width()))
+			for q: Vector2 in CHUNK_SHAPE:
+				pts.append(center + (q * half).rotated(rot))
+				uvs.append(Vector2((0.5 + q.x * 0.2) * span, 0.5 + q.y * 0.2))
+			draw_polygon(pts, PackedColorArray([Color.WHITE]), uvs, tex)
+			return
+	if Sprites.draw_texture_override_rect(self, FxDecals.texture_of_kind(kind), rect,
 			rad_to_deg(rot)):
 		return
 	if kind == "blood_pool":

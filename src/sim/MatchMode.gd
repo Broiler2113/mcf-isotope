@@ -140,6 +140,24 @@ func restore(d: Dictionary) -> void:
 	wave_spawned = int(d.get("wave_spawned", 0))
 	defender_value = int(d.get("defender_value", 0))
 
+## Нарисованные хостом зоны (GameConfig.capture_drawn), обрезанные по доске w×h; пусто —
+## «Auto». Не больше, чем есть букв для подписей.
+static func drawn_zones(w: int, h: int) -> Array:
+	return clean_drawn(GameConfig.capture_drawn, w, h)
+
+static func clean_drawn(list: Variant, w: int, h: int) -> Array:
+	var out: Array = []
+	if not (list is Array):
+		return out
+	var board := Rect2i(0, 0, w, h)
+	for z in list:
+		if not (z is Array) or (z as Array).size() != 4 or out.size() >= ZONE_LETTERS.length():
+			continue
+		var r := Rect2i(int(z[0]), int(z[1]), int(z[2]), int(z[3])).intersection(board)
+		if r.size.x > 0 and r.size.y > 0:
+			out.append([r.position.x, r.position.y, r.size.x, r.size.y])
+	return out
+
 func zone_rect(i: int) -> Rect2i:
 	var z: Array = zones[i]
 	return Rect2i(int(z[0]), int(z[1]), int(z[2]), int(z[3]))

@@ -243,6 +243,14 @@ func sync(fx_damage: Dictionary, damage_version: int) -> void:
 		_damaged = fx_damage.duplicate()
 		_damage_ver = damage_version
 
+## Клетки, чей огонь пока не рисуется (0.12.1): струя огнемёта до них ещё не добежала.
+var hidden_fire: Dictionary = {}
+
+func hide_fire(c: Vector2i, hide: bool) -> void:
+	if hide: hidden_fire[c] = true
+	else: hidden_fire.erase(c)
+	_touch(c)
+
 func _touch(c: Vector2i) -> void:
 	for dy in range(-1, 2):
 		for dx in range(-1, 2):
@@ -296,7 +304,8 @@ func draw_map_decals(ci: CanvasItem, origin: Vector2, cell: float, view: Rect2) 
 					draw_decal(ci, str(d["kind"]), origin + pos * cell, cell * float(d["scale"]), float(d["rot"]))
 
 static func draw_decal(ci: CanvasItem, kind: String, pos: Vector2, size: float, rot: float, alpha := 1.0) -> void:
-	var art := "corpse" if kind == "corpse" else str(FxDecals.TEXTURE.get(kind, ""))
+	var art := "corpse" if kind == "corpse" else (FxDecals.texture_of_kind(kind) if kind.begins_with("item:") \
+			else str(FxDecals.TEXTURE.get(kind, "")))
 	if kind == "corpse" and not Sprites.has_override(art):
 		art = Sprites.resolve("light_infantry", "_neutral")
 	var tex := Sprites.texture_of(art) if art != "" else null
@@ -305,7 +314,9 @@ static func draw_decal(ci: CanvasItem, kind: String, pos: Vector2, size: float, 
 		var arm := Vector2(size * 0.18, 0).rotated(rot)
 		ci.draw_line(pos - arm, pos + arm, Color(0.18, 0.05, 0.05, alpha), maxf(1.0, size * 0.06), true)
 		return
-	var look: Array = FxDecals.LOOK.get(kind, [0.95, Color.WHITE])
+	var look: Array = FxDecals.look_of(kind)
+	if look.is_empty():
+		look = [0.95, Color.WHITE]
 	size *= float(look[0])
 	if tex == null:
 		var color: Color = look[1]
@@ -317,6 +328,19 @@ static func draw_decal(ci: CanvasItem, kind: String, pos: Vector2, size: float, 
 	for p: Vector2 in uv:
 		points.append(pos + ((p - Vector2.ONE * 0.5) * size).rotated(rot))
 	ci.draw_polygon(points, PackedColorArray([Color(1, 1, 1, alpha)]), uv, tex)
+
+## Точка пятна копоти (0.12.1) в долях половины его размера. Край у каждого вида свой —
+## волнистый по углу, — к середине гуще, плюс редкая крупка; поэтому пятна не одинаковы.
+static func _soot_pixel(q: Vector2, variant: int, col: Color) -> Color:
+	var ang := q.angle()
+	var edge := 0.72 + 0.16 * sin(ang * 3.0 + variant * 1.7) + 0.09 * sin(ang * 7.0 + variant * 4.1) \
+			+ 0.05 * sin(ang * 13.0 + variant * 2.3)
+	var r := q.length() / edge
+	if r >= 1.0:
+		return Color(0, 0, 0, 0)
+	var grain := fposmod(sin(q.x * 91.7 + q.y * 47.3 + variant * 13.1) * 43758.5, 1.0)
+	var a := pow(1.0 - r, 0.8) * col.a * (0.75 + 0.35 * grain)
+	return Color(col.r, col.g, col.b, clampf(a, 0.0, 1.0))
 
 ## Какой кусок вывести: в нужном разрешении (собрав его, если бюджет кадра позволяет), а
 ## иначе — уже собранный в другом. Грязный кусок выбрасывается во всех разрешениях.
@@ -355,6 +379,7 @@ func _build(cc: Vector2i, res: int) -> void:
 					Vector2i(x * res, y * res), res)
 	_bake_ground_lines(floor_img, cc, res)
 	_bake_decals(floor_img, cc, res)
+	_bake_items(feat_img, cc, res)
 	var bytes := w * h * res * res * 4 * 2
 	_chunks[Vector3i(cc.x, cc.y, res)] = {"floor": ImageTexture.create_from_image(floor_img),
 			"feat": ImageTexture.create_from_image(feat_img), "used": _frame, "bytes": bytes}
@@ -404,7 +429,7 @@ func _bake_decals(img: Image, cc: Vector2i, res: int) -> void:
 		return
 	for d: Dictionary in list:
 		var kind := str(d["kind"])
-		var look: Array = [0.95, Color(0.8, 0.1, 0.1, 0.5)] if kind == "corpse" else FxDecals.LOOK.get(kind, [])
+		var look: Array = [0.95, Color(0.8, 0.1, 0.1, 0.5)] if kind == "corpse" else FxDecals.look_of(kind)
 		if look.is_empty():
 			continue
 		var pos: Vector2 = (d["pos"] as Vector2) - origin
@@ -419,32 +444,110 @@ func _bake_decals(img: Image, cc: Vector2i, res: int) -> void:
 		var at := Vector2i(roundi(pos.x * res) - px / 2, roundi(pos.y * res) - px / 2)
 		img.blend_rect(sprite, Rect2i(0, 0, px, px), at)
 
+# =====================================================================================
+#  Мелкие предметы карты (0.12.1, SmallItems)
+# =====================================================================================
+## Стоящие предметы лежат в слое объектов, ПОВЕРХ мебели (кружка на столе, а не под ним),
+## и впекаются в картинку куска при его сборке, как осевшая косметика в пол. Сбитые (бит в
+## GridCell.items_off) пропускаются; правка бита — правка вида клетки, и кусок пересобирается
+## сам. Список карты в бою не меняется, поэтому указатель по кускам строится один раз.
+var _items_chunks: Dictionary = {}   # Vector2i кусок -> номера предметов в _grid.map_items
+var _items_of: Array = []
+
+func _index_items() -> void:
+	if is_same(_items_of, _grid.map_items) and _items_of.size() == _grid.map_items.size():
+		return
+	_items_chunks.clear()
+	for i in _grid.map_items.size():
+		var cc := SmallItems.cell_of(_grid.map_items[i]) / C
+		if not _items_chunks.has(cc): _items_chunks[cc] = []
+		(_items_chunks[cc] as Array).append(i)
+	_items_of = _grid.map_items
+
+## Редактор поменял список предметов: пересобрать указатель и куски, где они были и стали.
+func set_map_items(before: Array = []) -> void:
+	for it: Array in before + _grid.map_items:
+		_dirty[SmallItems.cell_of(it) / C] = true
+		for d: Vector2i in [Vector2i(-1, 0), Vector2i(1, 0), Vector2i(0, -1), Vector2i(0, 1)]:
+			_dirty[(SmallItems.cell_of(it) + d) / C] = true
+	_items_of = []
+
+func _bake_items(img: Image, cc: Vector2i, res: int) -> void:
+	if _grid.map_items.is_empty():
+		return
+	_index_items()
+	var origin := Vector2(cc * C)
+	var px := maxi(2, roundi(SmallItems.DRAW_SCALE * res))
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			for i: int in _items_chunks.get(cc + Vector2i(dx, dy), []):
+				var it: Array = _grid.map_items[i]
+				var pos := Vector2(float(it[1]), float(it[2])) - origin
+				if pos.x < -1.0 or pos.y < -1.0 or pos.x > C + 1.0 or pos.y > C + 1.0:
+					continue
+				var cell := SmallItems.cell_of(it)
+				if not _grid.in_bounds(cell):
+					continue
+				var gc := _grid.cell_fast(cell.x, cell.y)
+				if gc.items_off != 0 and (gc.items_off & _grid.item_bit(i)) != 0:
+					continue
+				if gc.cover_height >= MCF.WALL_HEIGHT and not Furniture.is_furniture(gc.feature_id):
+					continue   # в стену предмет не впекается
+				var sprite := _decal_sprite("item:" + str(it[0]), px, float(it[3]), [SmallItems.DRAW_SCALE, Color.WHITE])
+				if sprite != null:
+					img.blend_rect(sprite, Rect2i(0, 0, px, px),
+							Vector2i(roundi(pos.x * res) - px / 2, roundi(pos.y * res) - px / 2))
+
 ## Картинка одной частицы размером px и под своим углом. Углов берём ANGLES штук: на
 ## четырёх-одиннадцати точках разницы между соседними уже не видно, а кэш не разрастается.
 ## Своя картинка игрока (glass_shard, blood_pool…) берётся как есть; без неё частица
 ## рисуется тем же, чем её рисовал экран: лужа — сплющенным кругом, прочее — четырёхугольником.
 const DECAL_ANGLES := 8
 
+## Мелкий предмет («item:<вид>», 0.12.1) — своей картинкой и с шагом угла мельче: его кладут
+## под любым углом, и восемь положений на нём видны.
+const ITEM_ANGLES := 32
+
 func _decal_sprite(kind: String, px: int, rot: float, look: Array) -> Image:
-	var step := posmod(roundi(rot / TAU * DECAL_ANGLES), DECAL_ANGLES)
+	var item := kind.begins_with("item:")
+	var angles := ITEM_ANGLES if item else DECAL_ANGLES
+	var step := posmod(roundi(rot / TAU * angles), angles)
 	var key := "decal@%s@%d@%d" % [kind, px, step]
 	if _tiles.has(key):
 		var hit: Array = _tiles[key]
 		return hit[0] if not hit.is_empty() else null
 	var img := Image.create(px, px, false, Image.FORMAT_RGBA8)
-	var a := float(step) / DECAL_ANGLES * TAU
+	var a := float(step) / angles * TAU
+	var chunk := kind.begins_with("chunk:")
+	var soot := kind.begins_with("soot:")
 	var art := "corpse" if kind == "corpse" else str(FxDecals.TEXTURE.get(kind, ""))
+	if chunk:
+		art = kind.substr(6)
+	elif item:
+		art = SmallItems.texture_name(kind.substr(5))
 	if kind == "corpse" and not Sprites.has_override(art):
 		art = Sprites.resolve("light_infantry", "_neutral")
 	var src := _load(art) if art != "" else null
 	var half := px * 0.5
 	var col: Color = look[1]
+	var variant := int(kind.substr(5)) if soot else 0
 	for y in px:
 		for x in px:
 			# Точка картинки — в системе самой частицы: поворачиваем назад.
 			var v := Vector2(x + 0.5 - half, y + 0.5 - half).rotated(-a)
 			var c := Color(0, 0, 0, 0)
-			if src != null:
+			if soot:
+				c = _soot_pixel(v / half, variant, col)
+			elif chunk:
+				# Обломок (0.12.1): середина плитки стены — в неровный пятиугольник.
+				var q := v / half
+				# Картинка стены — лента вариантов (по плитке в высоту): берём середину первой.
+				if absf(q.x) + absf(q.y) * 0.8 <= 1.15 and q.y >= -0.95:
+					var side := src.get_height() if src != null else 1
+					c = col if src == null else src.get_pixel(
+							clampi(int((q.x * 0.2 + 0.5) * side), 0, side - 1),
+							clampi(int((q.y * 0.2 + 0.5) * side), 0, side - 1))
+			elif src != null:
 				var sx := int((v.x / px + 0.5) * src.get_width())
 				var sy := int((v.y / px + 0.5) * src.get_height())
 				if sx >= 0 and sy >= 0 and sx < src.get_width() and sy < src.get_height():
@@ -484,7 +587,7 @@ func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> voi
 		var side := int(lamp[2])
 		var picture: Image = tiles[0].duplicate()
 		for k in side: picture.rotate_90(CLOCKWISE)
-		if Furniture.tint_colour(int(lamp[3])) > 0: picture = tint_lamp(picture, Furniture.light_color_of(id, int(lamp[3])))
+		if Furniture.tint_colour(int(lamp[3])) > 0: picture = tint_lamp(picture, Furniture.light_color_of(id, int(lamp[3])), Furniture.base_light_color(id))
 		feat.blend_rect(picture, Rect2i(0, 0, res, res), at)
 		if int(lamp[1]) < Furniture.durability_of(id):
 			var half: Rect2i = [Rect2i(0, 0, res, res / 2), Rect2i(res / 2, 0, res - res / 2, res),
@@ -509,7 +612,7 @@ func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int
 		var ov := _tile(over, res)
 		if not ov.is_empty():
 			img.blend_rect(ov[variant_of(c + origin, ov.size())], full, at)
-	if cell.on_fire:
+	if cell.on_fire and not hidden_fire.has(c):
 		var fire := _tile("fire", res)
 		if not fire.is_empty():
 			img.blend_rect(fire[0], full, at)
@@ -545,9 +648,12 @@ func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int
 		if wl != "":
 			name = wl
 	if Furniture.is_furniture(fid):
-		var fimg := _furniture_image(c, fid, res)
+		# Шкаф, который уже раскрылся и высыпал вещи (0.12.1), — своим рисунком, если он есть.
+		var art := fid + "_open" if (cell.items_off & GridCell.OPENED) != 0 \
+				and (Sprites.has_override(fid + "_open") or Sprites.has_override(fid + "_open" + Sprites.AUTOTILE_SUFFIX)) else ""
+		var fimg := _furniture_image(c, fid, res, art)
 		if fimg != null and Furniture.tint_colour(_grid.tint_at(c.x, c.y)) > 0 and Furniture.emits_light(fid):
-			fimg = tint_lamp(fimg, Furniture.light_color_of(fid, _grid.tint_at(c.x, c.y)))
+			fimg = tint_lamp(fimg, Furniture.light_color_of(fid, _grid.tint_at(c.x, c.y)), Furniture.base_light_color(fid))
 		if fimg != null:
 			feat.blit_rect(fimg, full, at)
 			if cell.feature_durability < Furniture.durability_of(fid):
@@ -790,7 +896,10 @@ const _CHAIRS := {"chair": true, "armchair": true}
 ## Плитка мебели в клетке c: у многоклеточной — кусок листа автотайла по маске соседей
 ## того же вида, взятой в системе предмета (верх = спинка), и повёрнутый вместе с ним; у
 ## одиночной — сама плитка, повёрнутая к стене.
-func _furniture_image(c: Vector2i, fid: String, res: int) -> Image:
+## art — другая картинка того же предмета (раскрытый шкаф, «<id>_open», 0.12.1): форма и
+## поворот считаются по самому предмету, берётся только иной рисунок.
+func _furniture_image(c: Vector2i, fid: String, res: int, art := "") -> Image:
+	var pic := art if art != "" else fid
 	var look: Array
 	if furniture_look == null:
 		look = _live_look(c, fid)
@@ -805,18 +914,18 @@ func _furniture_image(c: Vector2i, fid: String, res: int) -> Image:
 	var k: int = look[2]
 	var corner: int = look[3] if look.size() > 3 else 0
 	if not Furniture.joins(fid):
-		return _turned(fid, res, k)
-	var piece := _piece_image(c, fid, res, k)
+		return _turned(pic, res, k)
+	var piece := _piece_image(c, fid, res, k, pic)
 	if piece != null:
 		return piece
-	var key := "%s@%d@m%d@%d@i%d@c%d" % [fid, res, mask, k, inner, corner]
+	var key := "%s@%d@m%d@%d@i%d@c%d" % [pic, res, mask, k, inner, corner]
 	if _tiles.has(key):
 		var hit: Array = _tiles[key]
 		return hit[0] if not hit.is_empty() else null
-	var sheets := _sheet(fid, res)
+	var sheets := _sheet(pic, res)
 	if sheets.is_empty():
 		_tiles[key] = []
-		return _turned(fid, res, k)
+		return _turned(pic, res, k)
 	var img: Image
 	if corner != 0:
 		img = _corner_tile(sheets[0], corner, res)
@@ -833,7 +942,7 @@ func _furniture_image(c: Vector2i, fid: String, res: int) -> Image:
 ## "<id>_piece.png", sized to the whole piece with its back edge at the top (0.11). Each
 ## cell shows its part of that picture, turned with the piece. null — not such a piece, no
 ## picture, or the painted cells are not that exact shape (then the sheet or icon is used).
-func _piece_image(c: Vector2i, fid: String, res: int, k: int) -> Image:
+func _piece_image(c: Vector2i, fid: String, res: int, k: int, pic := "") -> Image:
 	if not Furniture.is_whole(fid):
 		return null
 	var sizes: Array = Furniture.sizes_of(fid)
@@ -841,7 +950,7 @@ func _piece_image(c: Vector2i, fid: String, res: int, k: int) -> Image:
 		return null
 	var w0 := int(sizes[0][0])
 	var h0 := int(sizes[0][1])
-	var turned := _piece_turned(fid, res, k, w0, h0)
+	var turned := _piece_turned(pic if pic != "" else fid, res, k, w0, h0)
 	if turned == null:
 		return null
 	var cells := Furniture.piece_cells(func(q: Vector2i) -> String: return _fid_at(_grid, q), c)
@@ -1245,18 +1354,34 @@ func _turned(name: String, res: int, k: int) -> Image:
 
 ## A lamp's glass takes its light colour (0.11): bright, unsaturated pixels — the bulb,
 ## the shade's glow — are recoloured; the metal body keeps its own colours.
-static func tint_lamp(src: Image, colour: Color) -> Image:
+## Перекраска светящегося предмета (0.12.1, владелец: «the color of the sprite should change
+## as well»). Белое свечение (плафон лампы) красится как раньше; цветное — экран консоли,
+## телевизора, огоньки стойки — узнаётся по оттенку своего света по умолчанию (base) и
+## получает новый оттенок при той же яркости. Это работа шейдера, только сделанная один раз
+## при сборке плитки: мебель запечена в картинки кусков доски, лишних спрайтов не нужно.
+static func tint_lamp(src: Image, colour: Color, base := Color.WHITE) -> Image:
 	var img: Image = src.duplicate()
+	var hued := base.s > 0.25
+	var sat_k := clampf(colour.s / maxf(base.s, 0.01), 0.0, 1.2)
 	for y in img.get_height():
 		for x in img.get_width():
 			var p := img.get_pixel(x, y)
 			if p.a <= 0.0: continue
+			if hued and p.s > 0.25 and p.v > 0.3 and _hue_gap(p.h, base.h) < 0.11:
+				img.set_pixel(x, y, Color.from_hsv(colour.h, clampf(p.s * sat_k, 0.0, 1.0), p.v, p.a))
+				continue
+			# Белое свечение (плафон, световая панель автомата). У цветного предмета — только
+			# почти белое: светло-серые клавиши консоли и корпус остаются как нарисованы.
 			var hi := maxf(p.r, maxf(p.g, p.b))
 			var lo := minf(p.r, minf(p.g, p.b))
-			if hi < 0.62 or (hi - lo) / hi > 0.3: continue
+			if hi < (0.85 if hued else 0.62) or (hi - lo) / hi > 0.3: continue
 			var k := clampf((hi - 0.62) / 0.3, 0.0, 1.0)
 			img.set_pixel(x, y, p.lerp(Color(colour.r * hi, colour.g * hi, colour.b * hi, p.a), 0.35 + 0.6 * k))
 	return img
+
+static func _hue_gap(a: float, b: float) -> float:
+	var d := absf(a - b)
+	return minf(d, 1.0 - d)
 
 ## Трещины по побитой мебели: два тёмных излома поперёк плитки.
 func _crack_overlay(res: int) -> Image:

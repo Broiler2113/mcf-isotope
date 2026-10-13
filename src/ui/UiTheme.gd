@@ -30,6 +30,11 @@ const SYMBOL_FALLBACKS := ["Segoe UI Symbol", "Segoe UI", "Apple Symbols", "Deja
 ## Handjet с увеличенным на 16 % кеглем (меньше unitsPerEm): при прежних размерах (13 и
 ## т. д.) строчные такой же высоты, как у прежнего Tahoma, и раскладка окон не поехала.
 const GAME_FONT := "res://fonts/handjet_ui.ttf"
+## 0.12.1: статические Regular и Bold из Handjet с СЛИТЫМИ контурами (tools/font/
+## build_handjet_ui.py) — у переменного шрифта буквы из стыкующихся квадратиков давали на
+## дробных размерах шов посередине слова. Жирный — отдельный файл, а не ось веса.
+const GAME_FONT_BOLD := "res://fonts/handjet_ui_bold.ttf"
+const GAME_FONT_EMBOLDEN := 0.35
 
 # --- palette (gunmetal-gray "2003 Steam" skin) -----------------------
 # item 8: серые части меню сделаны заметно темнее (примерно на четверть). Один и тот
@@ -526,6 +531,9 @@ func _font() -> Font:
 	var fv := FontVariation.new()
 	fv.base_font = game
 	fv.spacing_space = 2
+	# Слитые контуры (0.12.1) не прилипают к пиксельной сетке, как прежние квадратики, и
+	# на мелком кегле выходили бледнее; чуть жирнее — тот же вес, что был, но без шва.
+	fv.variation_embolden = GAME_FONT_EMBOLDEN
 	return fv
 
 ## Handjet как FontFile. Импорт — первым; если его нет (0.11.4/0.12, «the default pre font
@@ -536,14 +544,14 @@ func _font() -> Font:
 ## системном Tahoma — шрифте ДО 0.9.2 — на весь сеанс, до перезапуска (воспроизведено:
 ## удалённый .fontdata → SystemFont). Сырой .ttf лежит рядом всегда, когда игра запущена из
 ## исходников; в собранной игре его нет, но там нет и недоимпорта.
-func _game_font_file() -> FontFile:
-	if ResourceLoader.exists(GAME_FONT):
-		var imported := load(GAME_FONT) as FontFile
+func _game_font_file(path := GAME_FONT) -> FontFile:
+	if ResourceLoader.exists(path):
+		var imported := load(path) as FontFile
 		if imported != null:
 			return imported
-	if FileAccess.file_exists(GAME_FONT):
+	if FileAccess.file_exists(path):
 		var raw := FontFile.new()
-		if raw.load_dynamic_font(GAME_FONT) == OK:
+		if raw.load_dynamic_font(path) == OK:
 			return raw
 	return null
 
@@ -584,13 +592,17 @@ func bold_font() -> Font:
 	if _bold_cache == null:
 		_bold_cache = FontVariation.new()
 		var base := get_ui_font()
-		if base is FontVariation and (base as FontVariation).base_font is FontFile:
-			# Жирный Handjet по оси веса; буквам — точку воздуха, иначе они сливаются.
-			var ts := TextServerManager.get_primary_interface()
-			_bold_cache.base_font = (base as FontVariation).base_font
-			_bold_cache.variation_opentype = {ts.name_to_tag("wght"): 650}
+		var bold_file := _game_font_file(GAME_FONT_BOLD) if base is FontVariation else null
+		if bold_file != null:
+			# Жирный Handjet — свой файл (вес 650); буквам — точку воздуха, иначе сливаются.
+			bold_file.hinting = TextServer.HINTING_NONE
+			bold_file.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_DISABLED
+			bold_file.fallbacks = ((base as FontVariation).base_font as FontFile).fallbacks \
+					if (base as FontVariation).base_font is FontFile else []
+			_bold_cache.base_font = bold_file
 			_bold_cache.spacing_space = 2
 			_bold_cache.spacing_glyph = 1
+			_bold_cache.variation_embolden = GAME_FONT_EMBOLDEN
 		else:
 			_bold_cache.base_font = base
 			_bold_cache.variation_embolden = 0.55

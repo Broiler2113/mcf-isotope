@@ -263,7 +263,7 @@ const _BASE := {
 	"sink": {"name": "Sink", "cat": "residential", "h": 1.0, "mat": "metal", "dur": 1,
 		"mob": Mobility.FIXED, "ap": 1, "at": "wall", "gen": true,
 		"rooms": ["restroom", "bathroom", "kitchen", "laboratory", "surgery", "virology", "morgue", "changing"]},
-	"console": {"emits_light": true, "light_color": Color(0.45, 1.0, 0.7), "light_range": 2.5, "light_energy": 0.45, "name": "Console", "cat": "office", "h": 1.0, "mat": "metal", "dur": 3,
+	"console": {"emits_light": true, "light_color": Color(0.45, 1.0, 0.7), "light_range": 2.5, "light_energy": 0.45, "join": "run", "name": "Console", "cat": "office", "h": 1.0, "mat": "metal", "dur": 3,
 		"mob": Mobility.FIXED, "ap": 2, "at": "wall", "gen": true,
 		"rooms": ["command", "power", "laboratory"]},
 	"target": {"name": "Practice Target", "cat": "industrial", "h": 1.5, "mat": "wood", "dur": 1,
@@ -485,8 +485,20 @@ const LIGHT_TINTS := [["Lamp's own", Color(0, 0, 0, 0)], ["Warm", Color(1.0, 0.7
 
 ## Brightness a map maker can give any lamp (0.11.1, the same right-click menu): a
 ## multiplier on the lamp's own strength. Index 0 is the lamp as designed.
+## Индексы 0..6 — как в 0.11.1 (старые карты читаются как были); 7..15 добавлены в 0.12.1,
+## чтобы введённое числом значение ложилось на ближайшую ступень от 10 до 500 %.
 const LIGHT_LEVELS := [["100 %", 1.0], ["25 %", 0.25], ["50 %", 0.5], ["75 %", 0.75],
-		["150 %", 1.5], ["200 %", 2.0], ["300 %", 3.0]]
+		["150 %", 1.5], ["200 %", 2.0], ["300 %", 3.0], ["10 %", 0.1], ["125 %", 1.25],
+		["175 %", 1.75], ["250 %", 2.5], ["350 %", 3.5], ["400 %", 4.0], ["450 %", 4.5],
+		["500 %", 5.0], ["40 %", 0.4]]
+
+## Ступень яркости, ближайшая к проценту, введённому числом (0.12.1).
+static func level_for_percent(percent: float) -> int:
+	var best := 0
+	for l in LIGHT_LEVELS.size():
+		if absf(float(LIGHT_LEVELS[l][1]) * 100.0 - percent) < absf(float(LIGHT_LEVELS[best][1]) * 100.0 - percent):
+			best = l
+	return best
 
 ## A lamp's tint byte (MapData.light_tint, the wall-lamp record's 4th field) holds both
 ## choices: the low four bits are the colour (LIGHT_TINTS), the high four the brightness
@@ -515,6 +527,10 @@ static func light_color_of(id: String, tint: int) -> Color:
 	var c := tint_colour(tint)
 	if c > 0 and c < LIGHT_TINTS.size():
 		return LIGHT_TINTS[c][1]
+	return DEFS.get(id, {}).get("light_color", Color.WHITE)
+
+## Свет предмета без перекраски — по его оттенку узнаются светящиеся точки спрайта.
+static func base_light_color(id: String) -> Color:
 	return DEFS.get(id, {}).get("light_color", Color.WHITE)
 
 static func emits_light(id: String) -> bool:

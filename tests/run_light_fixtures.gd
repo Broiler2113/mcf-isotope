@@ -125,7 +125,7 @@ func _editor() -> void:
 	editor._set_light_tint(i, 2, 3)
 	ck(int(MapData.lamp_on(editor.map.fixtures[i], 2)[3]) == 3 and int(MapData.lamp_on(editor.map.fixtures[i], 0)[3]) == 0,
 			"each lamp has its own colour")
-	editor._set_light_tint(i, 0, editor.LIGHT_REMOVE)
+	editor._remove_lamp(i, 0)   # 0.12.1: Remove is its own command, not a tint value
 	ck(editor.map.fixtures[i].size() == 1 and not MapData.lamp_on(editor.map.fixtures[i], 2).is_empty(),
 			"the right-click menu removes just that lamp")
 	ck(editor._describe(Vector2i(10, 10)).contains("bottom side"), "the status bar names the lamp's side")

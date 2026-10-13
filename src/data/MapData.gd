@@ -48,8 +48,19 @@ var wall_accent: PackedByteArray = PackedByteArray()
 var door_look: PackedByteArray = PackedByteArray()
 ## Cosmetic ground decals, JSON records [kind, x, y, rotation, scale].
 var decals: Array = []
+## Small items (0.12.1, SmallItems): [kind, x, y, rotation] — free-placed, on tables or floor.
+var items: Array = []
 ## Index -> [fixture id, durability, quarter turns]. Separate from the wall beneath it.
 var fixtures: Dictionary = {}
+## Время суток карты (0.12.1, владелец): "" — как раньше (ночь), иначе одно из TIMES. Задаёт
+## окружающий свет в бою и в редакторе.
+var time_of_day := ""
+const TIMES := ["morning", "day", "evening", "night"]
+const TIME_NAMES := ["Morning", "Day", "Evening", "Night"]
+
+static func time_name(t: String) -> String:
+	var i := TIMES.find(t)
+	return TIME_NAMES[i] if i >= 0 else "Night"
 
 func _init(p_width: int = 16, p_height: int = 12) -> void:
 	resize(p_width, p_height)
@@ -79,6 +90,7 @@ func resize(p_width: int, p_height: int) -> void:
 	door_look = PackedByteArray()
 	light_tint = PackedByteArray()
 	decals = []
+	items = []
 	fixtures = {}
 
 ## Изменить размер, СОХРАНИВ содержимое (batch 13 #14): клетки в пересечении старого и
@@ -100,6 +112,7 @@ func resize_keep(p_width: int, p_height: int) -> void:
 	var old_tint := light_tint
 	var old_door := door_look
 	var old_decals := decals
+	var old_items := items
 	var old_fixtures := fixtures
 	resize(p_width, p_height)
 	fill_all_space()
@@ -128,6 +141,9 @@ func resize_keep(p_width: int, p_height: int) -> void:
 	for d: Array in old_decals:
 		if float(d[1]) >= 0 and float(d[2]) >= 0 and float(d[1]) < width and float(d[2]) < height:
 			decals.append(d.duplicate())
+	for it: Array in old_items:
+		if in_bounds(SmallItems.cell_of(it)):
+			items.append(it.duplicate())
 	for s in old_spawns:
 		if in_bounds(s["coord"]):
 			spawns.append(s)
@@ -206,6 +222,7 @@ func apply_to_grid(grid: Grid) -> void:
 	grid.floor_look = floor_look.duplicate() if floor_look.size() == grid.width * grid.height \
 			and grid.width == width else PackedByteArray()
 	grid.map_decals = decals.duplicate(true)
+	grid.map_items = items.duplicate(true)
 	grid.door_look = door_look.duplicate()
 	grid.light_tint = light_tint.duplicate() if light_tint.size() == grid.width * grid.height \
 			and grid.width == width else PackedByteArray()
@@ -251,6 +268,7 @@ static func from_grid(grid: Grid, p_env: String = "") -> MapData:
 	m.door_look = grid.door_look.duplicate()
 	m.light_tint = grid.light_tint.duplicate()
 	m.decals = grid.map_decals.duplicate(true)
+	m.items = grid.map_items.duplicate(true)
 	for c: Vector2i in grid.furniture_turn:
 		m.feature_turn[c.y * grid.width + c.x] = (grid.furniture_turn[c] as Array).duplicate()
 	return m
@@ -392,6 +410,7 @@ func build_state(dice_seed: int = -1, roster: Roster = null) -> GameState:
 		st.roster = Roster.for_sides(_spawn_sides())
 	apply_to_grid(st.grid)
 	st.env = environment()
+	st.time_of_day = time_of_day
 	# Мирных не больше, чем задано ползунком лобби (item 11). Лишних прореживаем РАВНОМЕРНО
 	# по порядку карты — у каждого пира тот же порядок, значит и тот же выбор, и жители не
 	# сбиваются в одну половину поля.
@@ -515,10 +534,14 @@ func to_dict() -> Dictionary:
 		out["door_look"] = rle(door_look)
 	if not decals.is_empty():
 		out["decals"] = decals.duplicate(true)
+	if not items.is_empty():
+		out["items"] = items.duplicate(true)
 	if not fixtures.is_empty():
 		var records := {}
 		for i: int in fixtures: records[str(i)] = fixtures[i].duplicate(true)
 		out["fixtures"] = records
+	if time_of_day != "":
+		out["time"] = time_of_day
 	return out
 
 static func from_dict(d: Dictionary) -> MapData:
@@ -553,6 +576,10 @@ static func from_dict(d: Dictionary) -> MapData:
 		if record is Array and record.size() == 5 and str(record[0]) in ["blood_pool", "blood_drop", "corpse"]:
 			if float(record[1]) >= 0 and float(record[2]) >= 0 and float(record[1]) < m.width and float(record[2]) < m.height:
 				m.decals.append([str(record[0]), float(record[1]), float(record[2]), float(record[3]), clampf(float(record[4]), 0.1, 4.0)])
+	for record in d.get("items", []):
+		var it := SmallItems.clean(record)
+		if not it.is_empty() and m.in_bounds(SmallItems.cell_of(it)):
+			m.items.append(it)
 	var ft2: Dictionary = d.get("feature_turn", {})
 	for k: String in ft2:
 		var rec: Array = ft2[k]
@@ -576,6 +603,8 @@ static func from_dict(d: Dictionary) -> MapData:
 			"owner": _migrate_owner(int(s.get("owner", 0)), version),
 			"coord": Vector2i(int(s.get("x", 0)), int(s.get("y", 0))),
 		})
+	var tod := str(d.get("time", ""))
+	m.time_of_day = tod if TIMES.has(tod) else ""
 	# item 5: старые карты с «нейтральной зоной» переводим в явные спавны мирных.
 	m._materialize_neutral_zones()
 	return m

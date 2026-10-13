@@ -10,6 +10,8 @@ var turns: TurnManager
 var log: CombatLog
 ## Кто играет: стороны, команды, цвета, выбитость (см. Roster). До сборки лобби
 ## это дуэль на двоих — то, чем игра была всегда.
+## Время суток карты (MapData.time_of_day, 0.12.1) — только свет.
+var time_of_day := ""
 var roster: Roster
 
 var units: Dictionary = {}  # id -> UnitInstance
@@ -321,6 +323,7 @@ func restore(snap: Dictionary) -> void:
 		c.dirt_level = rec["dirt_level"]
 		c.airlock_welded = rec["airlock_welded"]
 		c.lamps = rec.get("fixture", [])
+		c.items_off = int(rec.get("items_off", 0))
 	turns.active_index = snap["active_index"]
 	turns.round_number = snap["round_number"]
 	# Порядок инициативы теперь ИЗМЕНЯЕМ по ходу боя: группы нейтралов встают в

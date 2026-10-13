@@ -27,7 +27,9 @@ func _lamp_brightness() -> void:
 	ck(Furniture.tint_colour(t) == 4 and Furniture.tint_level(t) == 5, "tint byte packs colour and brightness")
 	ck(Furniture.light_color_of("wall_lamp", t) == Furniture.LIGHT_TINTS[4][1], "brightness keeps the chosen colour")
 	ck(Furniture.light_scale_of(3) == 1.0, "a 0.11 colour-only byte is normal brightness")
-	ck(Furniture.clean_tint(0xFF) == 0, "unknown colour and level fall back to the lamp's own")
+	# 0.12.1 filled all 16 brightness steps; only an unknown colour can still fall back.
+	ck(Furniture.clean_tint(0x0F) == 0 and Furniture.tint_level(Furniture.clean_tint(0xF0)) == 15,
+			"an unknown color falls back to the lamp's own; every brightness step is valid")
 	var g := Grid.new(4, 4)
 	g.cell(Vector2i(1, 1)).set_feature("streetlight")
 	g.light_tint.resize(16)

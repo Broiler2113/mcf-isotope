@@ -184,7 +184,9 @@ func _light_colours() -> void:
 	click.ctrl_pressed = true
 	click.position = screen
 	ed._unhandled_input(click)
-	ck(ed._light_menu != null and ed._light_menu.visible and ed._light_menu.item_count == Furniture.LIGHT_TINTS.size() + 1 + Furniture.LIGHT_LEVELS.size(),
+	# 0.12.1: seven common brightness steps plus "Type a value…" for the rest.
+	ck(ed._light_menu != null and ed._light_menu.visible and ed._light_menu.item_count == Furniture.LIGHT_TINTS.size() + 1 + 7 + 1
+			and ed._light_menu.get_item_index(ed.LIGHT_TYPE_ID) >= 0,
 			"Ctrl+click on a lamp opens its colour menu (Mac habit)")
 	ed._light_menu.hide()
 	for pressed in [true, false]:

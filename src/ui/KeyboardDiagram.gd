@@ -78,9 +78,13 @@ var _mods_used: Dictionary = {}
 var _keys: Array = []
 var _hover := -1
 
+## Своя всплывашка над клавишей (0.12.1): движковые подсказки на macOS у владельца не
+## появлялись вовсе, поэтому панель показывается сама, сразу при наведении, у курсора.
+var _popup: PanelContainer = null
+var _popup_text: RichTextLabel = null
+
 func _init() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
-	tooltip_text = " "   # непустая — иначе движок не спрашивает _get_tooltip
 	_layout()
 
 func _ready() -> void:
@@ -218,19 +222,20 @@ func _gui_input(event: InputEvent) -> void:
 		if at != _hover:
 			_hover = at
 			queue_redraw()
+			if at >= 0:
+				_show_popup(tooltip_for(_keys[at][1], _keys[at][2]))
+			else:
+				_hide_popup()
+		if _popup != null and _popup.visible:
+			_place_popup()
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_RESIZED:
 		update_minimum_size()
 	if what == NOTIFICATION_MOUSE_EXIT and _hover != -1:
 		_hover = -1
+		_hide_popup()
 		queue_redraw()
-
-func _get_tooltip(at_position: Vector2) -> String:
-	for i in _keys.size():
-		if _key_rect(i).has_point(at_position):
-			return tooltip_for(_keys[i][1], _keys[i][2])
-	return ""
 
 ## Текст всплывашки клавиши: её действия, затем действия в сочетаниях. Для Ctrl/Shift/Alt —
 ## все сочетания, где они участвуют.
@@ -272,23 +277,30 @@ func _ctx(contexts: Array) -> String:
 	return " (%s)" % ", ".join(names)
 
 ## Всплывашка в стиле набора: тёмная панель, первая строка — клавиша цветом акцента,
-## «In combinations:» — цветом сочетаний.
-func _make_custom_tooltip(for_text: String) -> Object:
-	var panel := PanelContainer.new()
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.1, 0.1, 0.1, 0.96)
-	sb.border_color = Color(0, 0, 0)
-	sb.set_border_width_all(1)
-	sb.set_content_margin_all(8)
-	panel.add_theme_stylebox_override("panel", sb)
-	var rt := RichTextLabel.new()
-	rt.bbcode_enabled = true
-	rt.fit_content = true
-	rt.autowrap_mode = TextServer.AUTOWRAP_OFF
-	rt.scroll_active = false
-	rt.add_theme_font_size_override("normal_font_size", 12)
-	rt.add_theme_font_size_override("bold_font_size", 13)
-	var lines := for_text.split("\n")
+## «In combinations:» — цветом сочетаний. Панель top_level: её не обрезают контейнеры окна.
+func _show_popup(text: String) -> void:
+	if _popup == null:
+		_popup = PanelContainer.new()
+		_popup.top_level = true
+		_popup.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_popup.z_index = 100
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(0.1, 0.1, 0.1, 0.96)
+		sb.border_color = Color(0, 0, 0)
+		sb.set_border_width_all(1)
+		sb.set_content_margin_all(8)
+		_popup.add_theme_stylebox_override("panel", sb)
+		_popup_text = RichTextLabel.new()
+		_popup_text.bbcode_enabled = true
+		_popup_text.fit_content = true
+		_popup_text.autowrap_mode = TextServer.AUTOWRAP_OFF
+		_popup_text.scroll_active = false
+		_popup_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_popup_text.add_theme_font_size_override("normal_font_size", 12)
+		_popup_text.add_theme_font_size_override("bold_font_size", 13)
+		_popup.add_child(_popup_text)
+		add_child(_popup)
+	var lines := text.split("\n")
 	var accent := (Ui.accent_color() if Ui != null else Color(0.55, 0.8, 0.55)).to_html(false)
 	var out := "[b][color=#%s]%s[/color][/b]" % [accent, lines[0]]
 	for i in range(1, lines.size()):
@@ -296,6 +308,26 @@ func _make_custom_tooltip(for_text: String) -> Object:
 		if lines[i] == "In combinations:":
 			l = "[color=#%s]%s[/color]" % [COMBO_COLOR.to_html(false), l]
 		out += "\n" + l
-	rt.text = out
-	panel.add_child(rt)
-	return panel
+	_popup_text.text = out
+	_popup.reset_size()
+	_popup.visible = true
+	_place_popup.call_deferred()
+
+func _hide_popup() -> void:
+	if _popup != null:
+		_popup.visible = false
+
+## Справа-снизу от курсора; у края экрана — с другой стороны, чтобы не уходить за него.
+func _place_popup() -> void:
+	if _popup == null or not _popup.visible:
+		return
+	_popup.reset_size()
+	var vp := get_viewport_rect().size
+	var m := get_global_mouse_position()
+	var sz := _popup.get_combined_minimum_size()
+	var pos := m + Vector2(16, 18)
+	if pos.x + sz.x > vp.x - 4.0:
+		pos.x = m.x - sz.x - 12.0
+	if pos.y + sz.y > vp.y - 4.0:
+		pos.y = m.y - sz.y - 12.0
+	_popup.global_position = pos.max(Vector2(4, 4))

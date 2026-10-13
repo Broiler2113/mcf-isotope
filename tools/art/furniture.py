@@ -22,6 +22,28 @@ BULB = rgb("#fff3da")
 WHITE = rgb("#e8e6df")
 
 
+# Opened cabinets (0.12.1): build_furniture.py renders "<id>_open" with this set; the game
+# shows it once a cabinet has been dragged and has spilled its contents.
+OPEN = False
+INSIDE = rgb("#1c1b1a")
+
+
+def open_front(cv, w, front, z, drawers=False):
+    """Doors ajar (a dark gap and two door edges swung out) or drawers pulled out, along the
+    front edge of every cell of the piece."""
+    if not OPEN:
+        return
+    for i in range(w):
+        if drawers:
+            cv.rect(i + 0.16, front - 0.3, i + 0.84, front + 0.05, z + 0.02, painted(rgb("#7c7a74")), r=0.01, bevel=0.015)
+            cv.rect(i + 0.21, front - 0.26, i + 0.79, front + 0.01, z - 0.08, solid(INSIDE), r=0.005, bevel=0.01)
+            cv.rect(i + 0.27, front - 0.22, i + 0.6, front - 0.05, z - 0.06, solid(rgb("#e9e4d6")), r=0.003, bevel=0.003)
+        else:
+            cv.rect(i + 0.1, front - 0.2, i + 0.9, front, 0.2, solid(INSIDE), r=0.0, bevel=0.01)
+            cv.line(i + 0.1, front, i + 0.0, front + 0.08, 0.035, z, painted(rgb("#8c8478")), bevel=0.01)
+            cv.line(i + 0.9, front, i + 1.0, front + 0.08, 0.035, z, painted(rgb("#8c8478")), bevel=0.01)
+
+
 def body(cv, w, h, z, mat, r=0.04, bevel=0.04, m=M, **kw):
     return cv.rect(m, m, w - m, h - m, z, mat, r=r, bevel=bevel, **kw)
 
@@ -110,41 +132,25 @@ def nightstand(cv, c):
 
 
 def desk(cv, w, h, c):
+    # Bare top (0.12.1): what lies on it are small items (SmallItems), placed in the map.
     c = c if c is not None else WOOD
     cv.rect(0.05, 0.08, w - 0.05, h - 0.14, 0.75, wood(c, freq=8), r=0.03, bevel=0.03)
     cv.rect(w - 0.6, h - 0.3, w - 0.08, h - 0.1, 0.6, wood(c * 0.85), r=0.02, bevel=0.02)
-    cv.rect(0.25, 0.2, 0.8, 0.55, 0.8, solid(rgb("#ece8dc"), var=0.02), r=0.005, bevel=0.005)
-    cv.rect(0.3, 0.25, 0.85, 0.6, 0.79, solid(rgb("#f4f1e8"), var=0.02), r=0.005, bevel=0.005)
-    cv.line(0.95, 0.3, 1.25, 0.45, 0.02, 0.8, solid(rgb("#20304a")), bevel=0.01)
-    cv.circle(w - 0.35, 0.3, 0.07, 0.82, ceramic(rgb("#d8d4cc")), bevel=0.02)
-    cv.circle(w - 0.35, 0.3, 0.045, 0.8, solid(rgb("#3a2414")), bevel=0.01)
 
 
 def office_desk(cv, w, h, c):
     cv.rect(0.05, 0.08, w - 0.05, h - 0.14, 0.75, solid(rgb("#b8b2a6"), var=0.02, gloss=0.2), r=0.03, bevel=0.03)
-    cv.rect(0.55, 0.12, 1.45, 0.26, 0.95, plastic(BLACK), r=0.02, bevel=0.02)
-    cv.rect(0.6, 0.14, 1.4, 0.24, 0.97, screen(rgb("#3b6fb0")), r=0.01, bevel=0.005, emit=0.65)
-    cv.rect(0.92, 0.26, 1.08, 0.36, 0.85, plastic(BLACK), r=0.02, bevel=0.02)
-    cv.rect(0.62, 0.48, 1.3, 0.66, 0.8, plastic(rgb("#2b2d30")), r=0.02, bevel=0.01)
-    for i in range(5):
-        cv.groove(0.65, 0.51 + i * 0.03, 1.27, 0.513 + i * 0.03, depth=0.003, dark=0.7)
-    cv.rect(1.4, 0.5, 1.48, 0.62, 0.8, plastic(rgb("#2b2d30")), r=0.03, bevel=0.02)
-    cv.rect(0.12, 0.3, 0.42, 0.7, 0.77, solid(rgb("#f1eee6")), r=0.005, bevel=0.005)
+    cv.groove(0.08, h - 0.3, w - 0.08, h - 0.288, depth=0.006, dark=0.8)
 
 
 def dining_table(cv, w, h, c):
     c = c if c is not None else WOOD_L
     body(cv, w, h, 0.75, wood(c, freq=6), r=0.06, bevel=0.03, m=0.06)
-    for i, j in cells(w, h):
-        cv.circle(i + 0.5, j + 0.5, 0.15, 0.78, ceramic(WHITE), bevel=0.05)
-        cv.circle(i + 0.5, j + 0.5, 0.09, 0.765, ceramic(WHITE * 0.95), bevel=0.04)
 
 
 def coffee_table(cv, c):
     cv.rect(0.12, 0.22, 0.88, 0.78, 0.4, wood(WOOD_D * 1.15, freq=8), r=0.05, bevel=0.03)
     cv.rect(0.18, 0.28, 0.82, 0.72, 0.42, glass(rgb("#95aeb8")), r=0.03, bevel=0.01)
-    cv.rect(0.3, 0.38, 0.55, 0.58, 0.45, solid(rgb("#b4392e"), var=0.03), r=0.01, bevel=0.01)
-    cv.circle(0.68, 0.48, 0.06, 0.47, ceramic(WHITE), bevel=0.02)
 
 
 def wardrobe(cv, w, h, c):
@@ -157,6 +163,7 @@ def wardrobe(cv, w, h, c):
     for i in range(w):
         for x in (i + 0.44, i + 0.56):
             cv.rect(x - 0.012, 0.42, x + 0.012, 0.6, 1.03, metal(rgb("#c8a85c"), gloss=0.8), r=0.01, bevel=0.005)
+    open_front(cv, w, h - 0.12, 1.0)
 
 
 def dresser(cv, w, h, c):
@@ -167,6 +174,7 @@ def dresser(cv, w, h, c):
             cv.groove(i + 0.1, y, i + 0.9, y + 0.012, depth=0.01, dark=0.6)
             knob(cv, i + 0.5, y + 0.1, 0.77, rgb("#c8a85c"), 0.02)
     cv.rect(0.12, 0.1, 0.4, 0.22, 0.8, ceramic(rgb("#5f7f9a")), r=0.04, bevel=0.02)
+    open_front(cv, w, h - 0.06, 0.75, drawers=True)
 
 
 def bookshelf(cv, w, h, c):
@@ -190,6 +198,7 @@ def cabinet(cv, c):
     cv.groove(0.494, 0.14, 0.506, 0.8, depth=0.02, dark=0.55)
     knob(cv, 0.44, 0.62, 0.77)
     knob(cv, 0.56, 0.62, 0.77)
+    open_front(cv, 1, 0.82, 0.75)
 
 
 def kitchen_counter(cv, w, h, c):
@@ -291,8 +300,6 @@ def sink(cv, c):
 # --- office ---------------------------------------------------------------------------------
 def conference_table(cv, w, h, c):
     cv.rect(0.06, 0.1, w - 0.06, h - 0.1, 0.75, wood(WOOD_D * 1.2, freq=5), r=0.4, bevel=0.03)
-    for i, j in cells(w, h):
-        cv.rect(i + 0.3, j + 0.38, i + 0.62, j + 0.62, 0.77, solid(rgb("#f1eee6")), r=0.005, bevel=0.005)
     cv.circle(w / 2, h / 2, 0.12, 0.8, plastic(BLACK), bevel=0.04)
 
 
@@ -302,6 +309,7 @@ def filing_cabinet(cv, w, h, c):
         cv.groove(i - 0.006, j + M, i + 0.006, j + 1 - M, depth=0.02, dark=0.55)
         cv.rect(i + 0.35, j + 0.66, i + 0.65, j + 0.74, 0.78, metal(CHROME, gloss=0.8), r=0.02, bevel=0.01)
         cv.rect(i + 0.38, j + 0.5, i + 0.62, j + 0.58, 0.76, solid(rgb("#ece6d2")), r=0.005, bevel=0.005)
+    open_front(cv, w, h - M, 0.75, drawers=True)
 
 
 def locker(cv, w, h, c):
@@ -312,6 +320,7 @@ def locker(cv, w, h, c):
         for k in range(3):
             cv.groove(i + 0.25, j + 0.22 + k * 0.05, i + 0.75, j + 0.235 + k * 0.05, depth=0.01, dark=0.6)
         cv.rect(i + 0.7, j + 0.55, i + 0.78, j + 0.75, 1.03, metal(CHROME, gloss=0.8), r=0.02, bevel=0.01)
+    open_front(cv, w, h - M, 1.0)
 
 
 def reception_desk(cv, w, h, c):
@@ -371,14 +380,22 @@ def water_cooler(cv, c):
     cv.rect(0.58, 0.76, 0.7, 0.82, 0.82, plastic(rgb("#c43a2e")), r=0.01, bevel=0.01)
 
 
-def console(cv, c):
-    cv.rect(0.06, 0.1, 0.94, 0.9, 0.75, metal(rgb("#3b4148"), gloss=0.5), r=0.04, bevel=0.03)
-    cv.rect(0.12, 0.14, 0.88, 0.48, 0.85, plastic(BLACK), r=0.02, bevel=0.02)
-    cv.rect(0.15, 0.17, 0.85, 0.45, 0.87, screen(rgb("#36c0a8")), r=0.01, bevel=0.005, emit=0.8)
-    cols = [rgb("#d64a3a"), rgb("#e3b62a"), rgb("#4ad46b"), rgb("#3a8ad6")]
-    for k in range(8):
-        cv.rect(0.16 + (k % 4) * 0.18, 0.56 + (k // 4) * 0.14, 0.28 + (k % 4) * 0.18, 0.64 + (k // 4) * 0.14, 0.79,
-                plastic(cols[(k * 3) % 4]), r=0.015, bevel=0.01, emit=0.4)
+def console(cv, w, h, c):
+    """Operator console (0.12.1 resprite, joins in a run): one desk, a monitor per cell along
+    the back, a keyboard strip at the front. Screens keep the console's light hue (#36c0a8),
+    which the game's recolour pass looks for."""
+    cv.rect(0, M, w, h - M, 0.7, metal(rgb("#3b4148"), gloss=0.45), r=0.0, bevel=0.03)
+    for i, j in cells(w, h):
+        cv.groove(i - 0.008, j + M, i + 0.008, j + 1 - M, depth=0.02, dark=0.55)
+        cv.rect(i + 0.07, j + 0.13, i + 0.93, j + 0.46, 0.95, plastic(rgb("#1c1e21")), r=0.03, bevel=0.025)
+        cv.rect(i + 0.11, j + 0.16, i + 0.89, j + 0.42, 0.97, screen(rgb("#36c0a8")), r=0.01, bevel=0.004, emit=0.85)
+        cv.rect(i + 0.14, j + 0.56, i + 0.86, j + 0.78, 0.78, plastic(rgb("#9ea3a8")), r=0.02, bevel=0.015)
+        for k in range(1, 8):
+            cv.groove(i + 0.14 + k * 0.09, j + 0.58, i + 0.14 + k * 0.09 + 0.008, j + 0.76, depth=0.004, dark=0.7)
+        for k in range(1, 3):
+            cv.groove(i + 0.16, j + 0.56 + k * 0.073, i + 0.84, j + 0.56 + k * 0.073 + 0.008, depth=0.004, dark=0.7)
+        cv.circle(i + 0.22, j + 0.85, 0.022, 0.76, solid(rgb("#d64a3a"), var=0), bevel=0.0, emit=0.9)
+        cv.circle(i + 0.3, j + 0.85, 0.022, 0.76, solid(rgb("#e3b62a"), var=0), bevel=0.0, emit=0.9)
 
 
 # --- industrial ---------------------------------------------------------------------------------
@@ -388,12 +405,6 @@ def workbench(cv, w, h, c):
     for i in range(w):
         for k in range(5):
             cv.circle(i + 0.12 + k * 0.19, M + 0.06, 0.012, 0.93, solid(BLACK), bevel=0.0)
-        if i % 2 == 0:
-            cv.rect(i + 0.15, 0.4, i + 0.4, 0.5, 0.8, metal(rgb("#c43a2e"), gloss=0.5), r=0.02, bevel=0.01)
-            cv.line(i + 0.5, 0.6, i + 0.85, 0.45, 0.04, 0.78, metal(STEEL, gloss=0.7), bevel=0.01)
-        else:
-            cv.rect(i + 0.2, 0.35, i + 0.5, 0.75, 0.85, metal(rgb("#4a4f55"), gloss=0.5), r=0.02, bevel=0.02)
-            cv.circle(i + 0.72, 0.6, 0.08, 0.8, metal(CHROME, gloss=0.8), bevel=0.03)
 
 
 def tool_cabinet(cv, c):
@@ -404,6 +415,7 @@ def tool_cabinet(cv, c):
         cv.groove(0.12, y, 0.88, y + 0.012, depth=0.01, dark=0.55)
         cv.rect(0.38, y + 0.03, 0.62, y + 0.06, 0.82, metal(CHROME, gloss=0.8), r=0.01, bevel=0.005)
     cv.circle(0.8, 0.17, 0.03, 0.82, metal(CHROME), bevel=0.01)
+    open_front(cv, 1, 0.86, 0.8, drawers=True)
 
 
 def storage_shelf(cv, w, h, c):
@@ -446,6 +458,7 @@ def industrial_cabinet(cv, w, h, c):
         cv.rect(i + 0.42, j + 0.4, i + 0.46, j + 0.62, 1.03, metal(CHROME, gloss=0.8), r=0.01, bevel=0.005)
         cv.rect(i + 0.54, j + 0.4, i + 0.58, j + 0.62, 1.03, metal(CHROME, gloss=0.8), r=0.01, bevel=0.005)
         cv.rect(i + 0.1, j + 0.2, i + 0.35, j + 0.3, 1.01, solid(rgb("#d4a62a")), r=0.005, bevel=0.0)
+    open_front(cv, w, h - M, 1.0)
 
 
 def pallet(cv, c):
@@ -539,11 +552,25 @@ def exam_table(cv, w, h, c):
 
 
 def washing_machine(cv, c):
+    """Top-loading washer seen from above (0.12.1 resprite): control strip with a dial at the
+    back; the glass lid shows the perforated drum and the agitator below it."""
     cv.rect(0.1, 0.08, 0.9, 0.9, 0.8, painted(rgb("#e7e7e3"), gloss=0.5), r=0.05, bevel=0.04)
-    cv.rect(0.12, 0.1, 0.88, 0.24, 0.82, painted(rgb("#d9d9d4")), r=0.03, bevel=0.02)
-    cv.circle(0.75, 0.17, 0.04, 0.84, plastic(rgb("#5a5c5e")), bevel=0.02)
-    cv.circle(0.5, 0.58, 0.27, 0.84, metal(CHROME, gloss=0.8), bevel=0.04)
-    cv.circle(0.5, 0.58, 0.21, 0.83, glass(rgb("#7f9ba8")), bevel=0.04, dome=0.02)
+    cv.rect(0.12, 0.1, 0.88, 0.25, 0.86, painted(rgb("#d6d6d1")), r=0.03, bevel=0.02)
+    cv.circle(0.24, 0.175, 0.05, 0.9, metal(CHROME, gloss=0.8), bevel=0.03, dome=0.01)
+    cv.rect(0.4, 0.145, 0.66, 0.205, 0.87, screen(rgb("#2f6b4f")), r=0.01, bevel=0.0, emit=0.5)
+    cv.circle(0.77, 0.175, 0.028, 0.88, plastic(rgb("#5a5c5e")), bevel=0.015)
+    cv.groove(0.14, 0.28, 0.86, 0.292, depth=0.015, dark=0.6)
+    cv.rect(0.16, 0.31, 0.84, 0.86, 0.6, metal(rgb("#59646b"), gloss=0.3), r=0.06, bevel=0.03)
+    cv.circle(0.5, 0.585, 0.24, 0.5, metal(rgb("#7c878d"), brushed=0.3, gloss=0.4), bevel=0.05)
+    for k in range(12):
+        a = k * math.pi / 6
+        cv.circle(0.5 + 0.18 * math.cos(a), 0.585 + 0.18 * math.sin(a), 0.016, 0.49, solid(rgb("#2e353a")), bevel=0.0)
+    cv.circle(0.5, 0.585, 0.08, 0.6, plastic(rgb("#b8bec2")), bevel=0.03, dome=0.03)
+    for k in range(4):
+        a = k * math.pi / 2 + math.pi / 4
+        cv.line(0.5, 0.585, 0.5 + 0.12 * math.cos(a), 0.585 + 0.12 * math.sin(a), 0.03, 0.56, plastic(rgb("#a9afb3")), bevel=0.01)
+    cv.line(0.21, 0.5, 0.29, 0.36, 0.022, 0.64, solid(rgb("#aebcc2"), var=0.0), bevel=0.0, emit=0.15)
+    cv.rect(0.42, 0.865, 0.58, 0.885, 0.84, plastic(rgb("#9a9c9e")), r=0.005, bevel=0.005)
 
 
 def fuel_tank(cv, w, h, c):
@@ -577,20 +604,12 @@ def vent_fan(cv, c):
 
 def steel_table(cv, w, h, c):
     body(cv, w, h, 0.75, metal(rgb("#b4b9be"), brushed=1, gloss=0.6), r=0.02, bevel=0.03, m=0.06)
-    for i, j in cells(w, h):
-        if (i + j) % 2 == 0:
-            cv.rect(i + 0.2, j + 0.3, i + 0.6, j + 0.55, 0.78, metal(rgb("#8a9096"), gloss=0.7), r=0.02, bevel=0.02)
-        else:
-            cv.circle(i + 0.6, j + 0.5, 0.08, 0.8, glass(rgb("#a8c6d0")), bevel=0.03)
 
 
 def lab_bench(cv, w, h, c):
     cv.rect(0, M, w, h - M, 0.8, solid(rgb("#2d3133"), var=0.03, gloss=0.35), r=0.0, bevel=0.03)
     cv.rect(0, M, w, M + 0.1, 0.95, metal(rgb("#c9ced3"), gloss=0.6), r=0.0, bevel=0.02)
     for i in range(w):
-        for k, col in enumerate((rgb("#7fc4a8"), rgb("#d4a62a"), rgb("#9ab8e6"))):
-            cv.circle(i + 0.25 + k * 0.2, 0.45, 0.06, 0.9, glass(col), bevel=0.03)
-        cv.rect(i + 0.2, 0.62, i + 0.7, 0.78, 0.84, metal(CHROME, gloss=0.7), r=0.02, bevel=0.02)
         cv.circle(i + 0.82, 0.7, 0.05, 0.88, metal(STEEL_D), bevel=0.02)
 
 
@@ -613,6 +632,7 @@ def biohazard_cabinet(cv, w, h, c):
             cv.circle(i + 0.5 + 0.07 * math.cos(a), j + 0.48 + 0.07 * math.sin(a), 0.055, 1.02, solid(BLACK), bevel=0.0)
         cv.circle(i + 0.5, j + 0.48, 0.03, 1.03, solid(rgb("#e3b62a")), bevel=0.0)
         cv.rect(i + 0.8, j + 0.6, i + 0.85, j + 0.78, 1.03, metal(CHROME), r=0.01, bevel=0.005)
+    open_front(cv, w, h - M, 1.0)
 
 
 def specimen_fridge(cv, c):
@@ -795,12 +815,12 @@ def lamp(cv, c):
 
 SINGLE = {k: v for k, v in globals().items() if callable(v) and k in (
     "chair armchair nightstand coffee_table cabinet refrigerator potted_plant tv_stand stove toilet sink "
-    "vending_machine water_cooler console tool_cabinet pallet crate barrel equipment_cart toolbox ammo_crate "
+    "vending_machine water_cooler tool_cabinet pallet crate barrel equipment_cart toolbox ammo_crate "
     "washing_machine target vent_fan specimen_fridge gas_canister water_bucket trash_bin street_cabinet "
     "wall_lamp wall_strip bulkhead_lamp wall_beacon ceiling_lamp streetlight floodlight bollard_light "
     "work_light floor_lamp desk_lamp lamp").split()}
 JOINED = {k: v for k, v in globals().items() if callable(v) and k in (
     "sofa bed bunk_bed desk office_desk dining_table wardrobe dresser bookshelf kitchen_counter piano "
     "conference_table filing_cabinet locker reception_desk display_shelf checkout_counter workbench "
-    "storage_shelf server_rack industrial_cabinet generator machinery exam_table fuel_tank steel_table "
+    "storage_shelf server_rack console industrial_cabinet generator machinery exam_table fuel_tank steel_table "
     "lab_bench morgue_drawers biohazard_cabinet bench dumpster park_table plastic_table").split()}

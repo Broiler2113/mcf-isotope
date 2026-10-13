@@ -85,6 +85,7 @@ var _gen_sym: CheckBox
 var _gen_timer: Timer
 var _gen_obstacles: CheckBox
 var _gen_furniture: OptionButton
+var _gen_time: OptionButton
 var _gen_seed: SpinBox
 var _gen_info: Label
 ## Собранная карта и настройки, из которых она собрана: пока они те же — не пересобираем.
@@ -338,6 +339,8 @@ func _apply_lobby_snapshot(msg: Dictionary) -> void:
 		_waves_opt.select(maxi(0, MatchMode.WAVE_CHOICES.find(GameConfig.holdout_waves)))
 		_waves_ai_opt.select(clampi(GameConfig.holdout_ai, 0, _waves_ai_opt.item_count - 1))
 		_sync_mode_rows()
+		if _preview_labels != null:
+			_preview_labels.queue_redraw()
 	if _map_opt != null:
 		var map_name := str(msg.get("map", ""))
 		_map_opt.clear()
@@ -571,6 +574,23 @@ func _build_mode(parent: VBoxContainer) -> void:
 	_zones_opt = _opt(MatchMode.ZONE_COUNTS, MatchMode.ZONE_COUNTS.find(GameConfig.capture_zones))
 	_zones_opt.tooltip_text = "How many zones to fight over. Maps place them fairly between the deployment zones."
 	_mode_rows.append([_row(box, "Zones:", _zones_opt), MatchMode.Kind.CAPTURE])
+	# Зоны рисует хост (0.12.1, только в лобби): «Auto» — расстановка по карте, как раньше.
+	var place := HBoxContainer.new()
+	place.add_theme_constant_override("separation", 6)
+	_drawn_label = Label.new()
+	_drawn_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	place.add_child(_drawn_label)
+	_draw_btn = Button.new()
+	_draw_btn.text = "Draw…"
+	_draw_btn.tooltip_text = "Draw the zones on the map yourself."
+	_draw_btn.pressed.connect(_open_zone_painter)
+	place.add_child(_draw_btn)
+	_auto_btn = Button.new()
+	_auto_btn.text = "Auto"
+	_auto_btn.tooltip_text = "Forget the drawn zones and let the map place them fairly."
+	_auto_btn.pressed.connect(func() -> void: _set_drawn([]))
+	place.add_child(_auto_btn)
+	_mode_rows.append([_row(box, "Zone layout:", place), MatchMode.Kind.CAPTURE])
 	_target_spin = SpinBox.new()
 	_target_spin.min_value = MatchMode.TARGET_MIN
 	_target_spin.max_value = MatchMode.TARGET_MAX
@@ -593,7 +613,10 @@ func _build_mode(parent: VBoxContainer) -> void:
 	_waves_ai_opt.set_item_tooltip(leaders.size() - 1,
 			"The trained model (RLM). Falls back to a Tactician when no model is running.")
 	_mode_rows.append([_row(box, "Waves led by:", _waves_ai_opt), MatchMode.Kind.HOLDOUT])
-	_mode_opt.item_selected.connect(func(_i: int) -> void: _sync_mode_rows())
+	_mode_opt.item_selected.connect(func(_i: int) -> void:
+		_sync_mode_rows()
+		if _preview_labels != null:
+			_preview_labels.queue_redraw())
 	_sync_mode_rows()
 	var opts: Array[OptionButton] = [_mode_opt, _zones_opt, _waves_opt, _waves_ai_opt]
 	if _is_host_net:
@@ -610,6 +633,114 @@ func _sync_mode_rows() -> void:
 	_mode_blurb.text = MatchMode.BLURBS[k]
 	for pair: Array in _mode_rows:
 		(pair[0] as Control).visible = int(pair[1]) == k
+	_sync_drawn()
+
+# --- Нарисованные зоны Capture & Hold (0.12.1) ----------------------------------------
+var _drawn_label: Label
+var _draw_btn: Button
+var _auto_btn: Button
+var _drawn_map := 0   # instance id карты, на которой нарисованы зоны
+
+func _set_drawn(list: Array) -> void:
+	GameConfig.capture_drawn = list.duplicate(true)
+	_drawn_map = _selected_map().get_instance_id()
+	_sync_drawn()
+	if _preview_labels != null:
+		_preview_labels.queue_redraw()
+	_broadcast_lobby()
+
+func _sync_drawn() -> void:
+	if _drawn_label == null:
+		return
+	var n := GameConfig.capture_drawn.size()
+	_drawn_label.text = "Auto" if n == 0 else "%d drawn zone%s" % [n, "" if n == 1 else "s"]
+	_zones_opt.disabled = _is_client or n > 0
+	_zones_opt.tooltip_text = "The drawn zones set the count; press Auto to choose it here." if n > 0 \
+			else "How many zones to fight over. Maps place them fairly between the deployment zones."
+	_draw_btn.disabled = _is_client
+	_auto_btn.disabled = _is_client or n == 0
+
+## Окно рисования зон: карта крупно, тянешь мышью — новая зона (до пяти), правый щелчок по
+## зоне — убрать. Правится сразу GameConfig.capture_drawn, гости видят зоны на превью.
+func _open_zone_painter() -> void:
+	var body := _modal_window("Draw Capture Zones")
+	var map := _selected_map()
+	var hint := Label.new()
+	hint.text = "Drag to draw a zone (up to %d). Right-click a zone to remove it." % MatchMode.ZONE_LETTERS.length()
+	hint.add_theme_font_size_override("font_size", 11)
+	hint.modulate = Color(0.75, 0.78, 0.85)
+	body.add_child(hint)
+	var view := TextureRect.new()
+	view.texture = _render_map_texture(map, _zone_tints(), _band_tints(map))
+	view.custom_minimum_size = Vector2(480, 270)
+	view.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	view.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	view.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	body.add_child(view)
+	var size := Vector2(maxi(1, map.width), maxi(1, map.height))
+	var drag := {"from": Vector2i(-1, -1), "to": Vector2i(-1, -1)}
+	var cell_at := func(p: Vector2) -> Vector2i:
+		var k := minf(view.size.x / size.x, view.size.y / size.y)
+		var off := (view.size - size * k) * 0.5
+		var c := ((p - off) / k).floor()
+		return Vector2i(clampi(int(c.x), 0, map.width - 1), clampi(int(c.y), 0, map.height - 1))
+	view.draw.connect(func() -> void:
+		var k := minf(view.size.x / size.x, view.size.y / size.y)
+		var off := (view.size - size * k) * 0.5
+		var rects: Array = []
+		for z: Array in GameConfig.capture_drawn:
+			rects.append(Rect2i(int(z[0]), int(z[1]), int(z[2]), int(z[3])))
+		if drag["from"] != Vector2i(-1, -1):
+			rects.append(_drag_rect(drag["from"], drag["to"]))
+		for i in rects.size():
+			_draw_zone_rect(view, off, k, rects[i], MatchMode.ZONE_LETTERS[mini(i, 4)], 16))
+	view.gui_input.connect(func(ev: InputEvent) -> void:
+		if ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_LEFT:
+			if ev.pressed and GameConfig.capture_drawn.size() < MatchMode.ZONE_LETTERS.length():
+				drag["from"] = cell_at.call(ev.position)
+				drag["to"] = drag["from"]
+			elif not ev.pressed and drag["from"] != Vector2i(-1, -1):
+				var r := _drag_rect(drag["from"], drag["to"])
+				drag["from"] = Vector2i(-1, -1)
+				var list := GameConfig.capture_drawn.duplicate(true)
+				list.append([r.position.x, r.position.y, r.size.x, r.size.y])
+				_set_drawn(list)
+			view.queue_redraw()
+		elif ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_RIGHT and ev.pressed:
+			var c: Vector2i = cell_at.call(ev.position)
+			var list := GameConfig.capture_drawn.duplicate(true)
+			for i in range(list.size() - 1, -1, -1):
+				if Rect2i(int(list[i][0]), int(list[i][1]), int(list[i][2]), int(list[i][3])).has_point(c):
+					list.remove_at(i)
+					_set_drawn(list)
+					break
+			view.queue_redraw()
+		elif ev is InputEventMouseMotion and drag["from"] != Vector2i(-1, -1):
+			drag["to"] = cell_at.call(ev.position)
+			view.queue_redraw())
+	var clear := Button.new()
+	clear.text = "Clear all"
+	clear.pressed.connect(func() -> void:
+		_set_drawn([])
+		view.queue_redraw())
+	body.add_child(clear)
+
+static func _drag_rect(a: Vector2i, b: Vector2i) -> Rect2i:
+	var lo := Vector2i(mini(a.x, b.x), mini(a.y, b.y))
+	return Rect2i(lo, Vector2i(absi(a.x - b.x) + 1, absi(a.y - b.y) + 1))
+
+## Зона на картинке карты: заливка, рамка и буква — цветом ничьей зоны в бою (Main.ZONE_IDLE).
+const DRAWN_ZONE_COLOR := Color(0.86, 0.88, 0.92)
+static func _draw_zone_rect(ci: CanvasItem, off: Vector2, k: float, r: Rect2i, letter: String, fs: int) -> void:
+	var rect := Rect2(off + Vector2(r.position) * k, Vector2(r.size) * k)
+	ci.draw_rect(rect, Color(0, 0, 0, 0.35))
+	ci.draw_rect(rect, Color(DRAWN_ZONE_COLOR, 0.25))
+	ci.draw_rect(rect, DRAWN_ZONE_COLOR, false, 2.0)
+	var font: Font = Ui.get_ui_font()
+	var w: float = font.get_string_size(letter, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var at := rect.get_center() + Vector2(-w * 0.5, fs * 0.35)
+	ci.draw_string_outline(font, at, letter, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 4, Color(0, 0, 0, 0.9))
+	ci.draw_string(font, at, letter, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, DRAWN_ZONE_COLOR)
 
 func _build_config(parent: VBoxContainer) -> void:
 	var box := _titled(parent, "Lobby Configuration")
@@ -959,6 +1090,12 @@ func _build_generator(box: VBoxContainer) -> void:
 	_gen_furniture.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_gen_furniture.item_selected.connect(func(_i: int) -> void: _on_gen_changed())
 	_row(_gen_box, "Furniture:", _gen_furniture)
+	# Время суток (0.12.1): свет карты; «Random» — от зерна, как и всё остальное.
+	_gen_time = _opt(MapData.TIME_NAMES + ["Random"], 3)
+	_gen_time.tooltip_text = "The time of day sets the map's light: morning, bright day, evening or night."
+	_gen_time.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_gen_time.item_selected.connect(func(_i: int) -> void: _on_gen_changed())
+	_row(_gen_box, "Time of day:", _gen_time)
 	# Мирные случайной карты: точное число, до 1000 (готовые карты — галочка «Civilians»).
 	var civ0 := GameConfig.civilian_count
 	if civ0 < 0 or civ0 >= GameConfig.CIVILIANS_MAX:
@@ -1040,6 +1177,7 @@ func _gen_options() -> Dictionary:
 			"flammable": MapGen.STYLE_FLAMMABLE[clampi(_gen_style.selected, 0, MapGen.STYLE_FLAMMABLE.size() - 1)],
 			"obstacles": _gen_obstacles.button_pressed,
 			"furniture": _gen_furniture.selected,
+			"time": (MapData.TIMES + ["random"])[_gen_time.selected] if _gen_time != null else "",
 			"civilian_count": _civ_count()}
 
 ## Сколько мирных в партии: ноль без галочки, число ползунка у случайной карты, иначе все,
@@ -1793,6 +1931,9 @@ func _refresh_map_preview() -> void:
 	if key == _preview_key:
 		return
 	_preview_key = key
+	# Зоны нарисованы для той карты, на которой их рисовали: другая карта — снова «Auto».
+	if not _is_client and not GameConfig.capture_drawn.is_empty() and map.get_instance_id() != _drawn_map:
+		_set_drawn([])
 	_map_preview.texture = _render_map_texture(map, tints, bands)
 	_zone_marks = _zone_centres(map)
 	_preview_size = Vector2(maxi(1, map.width), maxi(1, map.height))
@@ -1831,6 +1972,11 @@ func _draw_zone_numbers() -> void:
 	var box := _preview_labels.size
 	var k := minf(box.x / _preview_size.x, box.y / _preview_size.y)
 	var off := (box - _preview_size * k) * 0.5
+	if _mode_opt != null and _mode_opt.selected == MatchMode.Kind.CAPTURE:
+		for i in GameConfig.capture_drawn.size():
+			var z: Array = GameConfig.capture_drawn[i]
+			_draw_zone_rect(_preview_labels, off, k, Rect2i(int(z[0]), int(z[1]), int(z[2]), int(z[3])),
+					MatchMode.ZONE_LETTERS[mini(i, 4)], 12)
 	var font := _preview_labels.get_theme_default_font()
 	var fs := 18
 	for m: Array in _zone_marks:
