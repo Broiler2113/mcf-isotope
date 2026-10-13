@@ -95,7 +95,8 @@ const K_LOBBY_MAP := "lobby_map"
 ##   7 — 0.11.1: frag grenades roll for lamps, gas hides behind it with fog off, lamp brightness.
 ##   8 — 0.11.2: any own station packs up (docked drone with it), barrage skips sleeping
 ##       civilians, raiders enter bunkers by a hallway.
-const PROTOCOL := 8
+##   9 — 0.11.3: a drone over a wall is blind (changes what a side may target).
+const PROTOCOL := 9
 
 static func encode_rules() -> Dictionary:
 	var roster := GameConfig.active_roster()

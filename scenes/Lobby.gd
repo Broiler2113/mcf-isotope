@@ -83,7 +83,6 @@ var _gen_h: SpinBox
 var _gen_sym: CheckBox
 ## Большую карту пересобираем, когда щелчки по настройкам стихнут, а не на каждый.
 var _gen_timer: Timer
-var _gen_fire: CheckBox
 var _gen_obstacles: CheckBox
 var _gen_furniture: OptionButton
 var _gen_seed: SpinBox
@@ -876,8 +875,6 @@ func _build_generator(box: VBoxContainer) -> void:
 	_row(_gen_box, "Layout:", _gen_sym)
 	var mech := HFlowContainer.new()
 	mech.add_theme_constant_override("h_separation", 10)
-	_gen_fire = _gen_check(mech, "Flammable",
-			"Grass, plank floors, wooden walls and fences — ground that fire spreads over.")
 	_gen_obstacles = _gen_check(mech, "Obstacles",
 			"Sandbags, trenches, hedgehogs, barricades, crates and pillars.")
 	_row(_gen_box, "Mechanics:", mech)
@@ -896,11 +893,6 @@ func _build_generator(box: VBoxContainer) -> void:
 			func(v: float) -> String: return str(int(v)))
 	_civ_slider.tooltip_text = "How many neutral civilians to build, when there is room. They live in rooms sealed by airlocks and start asleep. Untick \"Civilians\" above for none."
 	_civ_slider.value_changed.connect(func(_v: float) -> void: _on_gen_changed())
-	# Умолчания стиля (items 25/26): город, поле и бункер — без космоса, бункер и станция —
-	# негорючие, астероид — в космосе и не горит. Выставляются при выборе стиля, дальше
-	# игрок волен переключить. Подключено РАНЬШЕ пересборки карты по смене стиля.
-	_apply_style_defaults(_gen_style.selected)
-	_gen_style.item_selected.connect(_apply_style_defaults)
 	_gen_seed = SpinBox.new()
 	_gen_seed.max_value = MapGen.SEED_MAX
 	_gen_seed.value = randi_range(1, MapGen.SEED_MAX)
@@ -945,11 +937,6 @@ func _dim_spin(value: int) -> SpinBox:
 	sp.tooltip_text = "Cells, at least %d — no upper limit. Very large maps take longer to build." % MapGen.MIN_DIM
 	return sp
 
-func _apply_style_defaults(style: int) -> void:
-	if style < 0 or style >= MapGen.STYLE_SPACE.size():
-		return
-	_gen_fire.set_pressed_no_signal(MapGen.STYLE_FLAMMABLE[style])
-
 func _gen_check(parent: Control, text: String, tip: String) -> CheckBox:
 	var cb := CheckBox.new()
 	cb.text = text
@@ -975,7 +962,9 @@ func _gen_options() -> Dictionary:
 			"width": int(_gen_w.value), "height": int(_gen_h.value),
 			"symmetric": _gen_sym.button_pressed,
 			"space": MapGen.STYLE_SPACE[clampi(_gen_style.selected, 0, MapGen.STYLE_SPACE.size() - 1)],
-			"flammable": _gen_fire.button_pressed, "obstacles": _gen_obstacles.button_pressed,
+			# Горючесть — от стиля (0.11.3: галочку «Flammable» убрали по просьбе игрока).
+			"flammable": MapGen.STYLE_FLAMMABLE[clampi(_gen_style.selected, 0, MapGen.STYLE_FLAMMABLE.size() - 1)],
+			"obstacles": _gen_obstacles.button_pressed,
 			"furniture": _gen_furniture.selected,
 			"civilian_count": _civ_count()}
 
