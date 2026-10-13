@@ -132,7 +132,7 @@ func _journal() -> void:
 func image() -> Array:
 	return [floor_type, cover_height, on_fire, fire_owner, fire_suppressed_until, is_space,
 			occupant, vehicle_id, feature_id, station_operator_id, feature_owner,
-			feature_durability, corpse_count, dirt_level, airlock_welded, gas, lamps.duplicate(true)]
+			feature_durability, corpse_count, dirt_level, airlock_welded, gas, lamps.duplicate(true), smoke]
 
 ## Вернуть клетке снятый image() — через сеттеры, чтобы версии и кеши узнали о правке.
 ## Высота идёт раньше объекта: сеттер feature_id смотрит на неё (стекло в стене).
@@ -155,6 +155,7 @@ func apply_image(im: Array) -> void:
 	if im.size() > 15:
 		gas = im[15]
 	lamps = im[16] if im.size() > 16 else []
+	smoke = im[17] if im.size() > 17 else false
 
 ## Wall lamps on this wall cell (0.11): at most one per side, each
 ## [furniture id, remaining durability, side 0..3 (N E S W, the face it hangs on), light tint].
@@ -230,6 +231,28 @@ var gas: bool = false:
 		gassed += 1 if v else -1
 		log_look_change(coord.x, coord.y)
 		log_vision_change(coord.x, coord.y)   # газ держит взгляд — кеш обзора обязан узнать
+
+## Дым (0.12, дымовая граната): держит взгляд и прицельный огонь ТЕМ ЖЕ путём, что и газ
+## (blocks_sight, obscured), но не травит. Как и газ, выводится из облаков
+## (RandomEvents.smoke) и в сохранение отдельно не пишется.
+static var smoked: int = 0
+var smoke: bool = false:
+	set(v):
+		if smoke == v:
+			return
+		if journaling: _journal()
+		smoke = v
+		smoked += 1 if v else -1
+		log_look_change(coord.x, coord.y)
+		log_vision_change(coord.x, coord.y)
+
+## Газ или дым: клетка закрывает обзор и линию огня, а стоящего в ней не видно.
+func obscured() -> bool:
+	return gas or smoke
+
+## Есть ли на карте хоть что-то, что застилает взгляд (газ или дым) — быстрый отсев.
+static func obscurants() -> int:
+	return gassed + smoked
 
 ## Сторона, устроившая пожар: огонь расползается только на её ходу (#45). -1 = ничей.
 var fire_owner: int = -1:
@@ -360,7 +383,7 @@ func can_hold_gas() -> bool:
 ## закрытый шлюз, у которого высота стенная, — кроме стекла: сквозь него видно (#29).
 ## Живые юниты, трупы и корпуса машин лучу не мешают.
 func blocks_sight() -> bool:
-	return gas or (cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(feature_id))
+	return gas or smoke or (cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(feature_id))
 
 ## Шлюз, который сам разъедется перед подошедшим бойцом (#100). Пока рядом никого нет,
 ## створки закрыты и cover_height читается как стена — но для ПЛАНИРОВАНИЯ пути это

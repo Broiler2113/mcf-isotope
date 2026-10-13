@@ -155,6 +155,32 @@ func add_cloud(x: int, y: int, w: int, h: int, rounds: int) -> Dictionary:
 	clouds.append(cloud)
 	return cloud
 
+## Дым дымовых гранат (0.12): [{"x", "y", "w", "h", "left"}] — те же облака, что у газа,
+## только безвредные. Живут здесь, потому что здесь и газ: снимок, загрузка, сеть и откат
+## хода уже умеют это хранить.
+var smoke: Array = []
+
+func add_smoke(x: int, y: int, w: int, h: int, rounds: int) -> Dictionary:
+	var cloud := {"x": x, "y": y, "w": w, "h": h, "left": rounds}
+	smoke.append(cloud)
+	return cloud
+
+## Дыму — раунд меньше; рассеявшиеся убрать.
+func age_smoke() -> void:
+	var left: Array = []
+	for c: Dictionary in smoke:
+		c["left"] = int(c["left"]) - 1
+		if int(c["left"]) > 0:
+			left.append(c)
+	smoke = left
+
+func smoke_at(c: Vector2i) -> bool:
+	for cl: Dictionary in smoke:
+		if c.x >= int(cl["x"]) and c.y >= int(cl["y"]) \
+				and c.x < int(cl["x"]) + int(cl["w"]) and c.y < int(cl["y"]) + int(cl["h"]):
+			return true
+	return false
+
 ## Отсчитать газу раунд: у всех облаков минус один, выдохшиеся убрать.
 func age_clouds() -> void:
 	var left: Array = []
@@ -184,10 +210,13 @@ func snapshot() -> Dictionary:
 	var cl: Array = []
 	for c: Dictionary in clouds:
 		cl.append(c.duplicate())
+	var sm: Array = []
+	for c: Dictionary in smoke:
+		sm.append(c.duplicate())
 	return {"enabled": enabled, "mandatory": mandatory, "interval": interval,
 			"weights": weights.duplicate(), "turns_since": turns_since,
 			"last_checked_round": last_checked_round,
-			"pending": pend, "clouds": cl, "armies": armies}
+			"pending": pend, "clouds": cl, "smoke": sm, "armies": armies}
 
 func restore(d: Dictionary) -> void:
 	enabled = d.get("enabled", false)
@@ -204,6 +233,9 @@ func restore(d: Dictionary) -> void:
 	clouds = []
 	for c: Dictionary in d.get("clouds", []):
 		clouds.append((c as Dictionary).duplicate())
+	smoke = []
+	for c: Dictionary in d.get("smoke", []):
+		smoke.append((c as Dictionary).duplicate())
 	armies = int(d.get("armies", 0))
 
 static func from_config() -> RandomEvents:

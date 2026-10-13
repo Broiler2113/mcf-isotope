@@ -259,6 +259,7 @@ func rebuild_theme() -> void:
 	theme = _build()
 	get_tree().root.theme = theme
 	theme_canvas_layers()
+	_watch_font()
 
 # Re-apply the current theme to every Control directly under a CanvasLayer
 # (theme-owner chain stops at the CanvasLayer boundary). Public so freshly
@@ -506,7 +507,8 @@ func _font() -> Font:
 	var sf := SystemFont.new()
 	sf.font_names = PackedStringArray(FONT_FALLBACKS)
 	sf.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_AUTO
-	var game := load(GAME_FONT) as FontFile if ResourceLoader.exists(GAME_FONT) else null
+	var game := _game_font_file()
+	_font_degraded = game == null
 	if game == null:
 		return sf
 	# Пиксельный шрифт — без хинтинга и дробных позиций: штрихи остаются на сетке.
@@ -523,6 +525,48 @@ func _font() -> Font:
 	fv.base_font = game
 	fv.spacing_space = 2
 	return fv
+
+## Handjet как FontFile. Импорт — первым; если его нет (0.11.4/0.12, «the default pre font
+## change font … until the game is restarted»), — сам .ttf с диска.
+##
+## Игру запускают из исходников, и сразу после обновления Godot ещё переимпортирует файлы:
+## .fontdata шрифта в этот момент нет, load() возвращает null, и тема молча собиралась на
+## системном Tahoma — шрифте ДО 0.9.2 — на весь сеанс, до перезапуска (воспроизведено:
+## удалённый .fontdata → SystemFont). Сырой .ttf лежит рядом всегда, когда игра запущена из
+## исходников; в собранной игре его нет, но там нет и недоимпорта.
+func _game_font_file() -> FontFile:
+	if ResourceLoader.exists(GAME_FONT):
+		var imported := load(GAME_FONT) as FontFile
+		if imported != null:
+			return imported
+	if FileAccess.file_exists(GAME_FONT):
+		var raw := FontFile.new()
+		if raw.load_dynamic_font(GAME_FONT) == OK:
+			return raw
+	return null
+
+## Тема собрана без Handjet (ни импорта, ни .ttf под рукой). Тогда раз в пару секунд
+## пробуем снова и, как только шрифт появился, пересобираем тему — без перезапуска.
+var _font_degraded := false
+var _font_retry: Timer = null
+const FONT_RETRY_SECONDS := 2.0
+const FONT_RETRY_LIMIT := 60
+
+func _watch_font() -> void:
+	if not _font_degraded or _font_retry != null or DisplayServer.get_name() == "headless":
+		return
+	_font_retry = Timer.new()
+	_font_retry.wait_time = FONT_RETRY_SECONDS
+	var tries := [0]
+	_font_retry.timeout.connect(func() -> void:
+		tries[0] += 1
+		if _game_font_file() != null:
+			rebuild_theme()
+		if not _font_degraded or tries[0] >= FONT_RETRY_LIMIT:
+			_font_retry.queue_free()
+			_font_retry = null)
+	add_child(_font_retry)
+	_font_retry.start()
 
 ## Вторая очередь запасных: шрифт со знаками (см. SYMBOL_FALLBACKS). allow_system_fallback
 ## оставлен включённым — если в системе нет и этих, пусть движок ищет сам.

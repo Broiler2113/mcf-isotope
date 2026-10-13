@@ -107,7 +107,7 @@ func _initialize() -> void:
 	b.set_spawn(Vector2i(2, 5), "light_infantry", 0)
 	b.set_spawn(Vector2i(17, 5), "light_infantry", 1)
 	MapHandoff.pending = b
-	GameConfig.roster = Roster.default_duel(false, AIController.Difficulty.EASY)
+	GameConfig.roster = Roster.default_duel(false)
 	_main = load("res://scenes/Main.tscn").instantiate()
 	root.add_child(_main)
 

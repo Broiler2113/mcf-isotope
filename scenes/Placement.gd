@@ -203,16 +203,17 @@ func _on_peer_left(id: int) -> void:
 	var slot := roster.slot(side)
 	slot.kind = Roster.SlotKind.AI
 	slot.ai_difficulty = AIController.Difficulty.HARD
+	slot.ai_style = AIPersonality.TACTICIAN
 	slot.peer_id = -1
 	_live_units.erase(side)
 	if _net != null:
-		_net.send({"k": K_SLOT_AI, "side": side, "ai": slot.ai_difficulty})
+		_net.send({"k": K_SLOT_AI, "side": side, "ai": slot.ai_difficulty, "st": slot.ai_style})
 	if _ready_sides.has(side) and _remote_units.has(side):
-		_status.text = "%s left — a Hard AI takes over their army." % roster.name_of(side)
+		_status.text = "%s left — a Tactician AI takes over their army." % roster.name_of(side)
 	else:
 		_ready_sides.erase(side)
 		_remote_units.erase(side)
-		_status.text = "%s left — deploy an army for the Hard AI that takes their place." % roster.name_of(side)
+		_status.text = "%s left — deploy an army for the Tactician AI that takes their place." % roster.name_of(side)
 		if _my_ready and GameConfig.placement_mode != GameConfig.Placement.MIRRORED:
 			# Своё уже сдано, а за ушедшего никто не ставил: возвращаем кнопку и ведём
 			# хоста по его новой стороне. Отправленные раньше стороны переслать не страшно —
@@ -234,10 +235,11 @@ func _apply_slot_ai(msg: Dictionary) -> void:
 		return
 	slot.kind = Roster.SlotKind.AI
 	slot.ai_difficulty = int(msg.get("ai", AIController.Difficulty.HARD))
+	slot.ai_style = int(msg.get("st", AIPersonality.TACTICIAN))
 	slot.peer_id = -1
 	_live_units.erase(side)
 	if _status != null:
-		_status.text = "%s left — a Hard AI takes that side." % roster.name_of(side)
+		_status.text = "%s left — a Tactician AI takes that side." % roster.name_of(side)
 	_refresh_labels()
 	queue_redraw()
 

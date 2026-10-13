@@ -167,9 +167,10 @@ func _on_host_peer_left(id: int) -> void:
 		var s: Roster.Slot = roster.slots[side]
 		s.kind = Roster.SlotKind.AI
 		s.ai_difficulty = AIController.Difficulty.HARD
+		s.ai_style = AIPersonality.TACTICIAN
 		s.peer_id = -1
 		s.display_name = MCF.owner_name(side)
-		_status.text = "%s left — a Hard AI takes that slot." % s.display_name
+		_status.text = "%s left — a Tactician AI takes that slot." % s.display_name
 	_refresh_host_status()
 	_lobby_changed()
 
@@ -1258,10 +1259,14 @@ func _slot_row(s: Roster.Slot) -> Control:
 	row.add_child(idx)
 
 	var kind := OptionButton.new()
+	# Уровней сложности нет (0.12): ИИ всегда в полную силу, слоты различаются личностью.
 	for pair in [[Roster.SlotKind.OPEN, "Open"], [Roster.SlotKind.CLOSED, "Closed"],
-			[Roster.SlotKind.HUMAN, "Player"], [-10, "AI - Easy"], [-11, "AI - Medium"],
-			[-12, "AI - Hard"], [-13, "AI - Learned"], [-14, "Spectator"]]:
+			[Roster.SlotKind.HUMAN, "Player"], [-10, "AI - Tactician"], [-11, "AI - Aggressor"],
+			[-12, "AI - Fortifier"], [-13, "AI - Learned"], [-14, "Spectator"]]:
 		kind.add_item(str(pair[1]))
+	for p in AIPersonality.ALL:
+		kind.set_item_tooltip(3 + p, AIPersonality.blurb_of(p))
+	kind.set_item_tooltip(6, "The trained model (RLM). Falls back to a Tactician when no model is running.")
 	kind.select(_kind_index(s))
 	kind.item_selected.connect(_on_slot_kind.bind(s.id))
 	kind.disabled = _is_client
@@ -1537,7 +1542,9 @@ func _kind_index(s: Roster.Slot) -> int:
 		Roster.SlotKind.OPEN: return 0
 		Roster.SlotKind.CLOSED: return 1
 		Roster.SlotKind.HUMAN: return 2
-		Roster.SlotKind.AI: return 3 + clampi(s.ai_difficulty, 0, 3)
+		Roster.SlotKind.AI:
+			return 6 if s.ai_difficulty == AIController.Difficulty.LEARNED \
+					else 3 + clampi(s.ai_style, 0, AIPersonality.NAMES.size() - 1)
 	return 0
 
 func _on_add_slot() -> void:
@@ -1595,7 +1602,11 @@ func _on_slot_kind(index: int, slot_id: int) -> void:
 		2: s.kind = Roster.SlotKind.HUMAN
 		_:
 			s.kind = Roster.SlotKind.AI
-			s.ai_difficulty = clampi(index - 3, 0, 3)
+			if index == 6:
+				s.ai_difficulty = AIController.Difficulty.LEARNED
+			else:
+				s.ai_difficulty = AIController.Difficulty.HARD
+				s.ai_style = clampi(index - 3, 0, AIPersonality.NAMES.size() - 1)
 	if s.kind != Roster.SlotKind.HUMAN and s.peer_id > 1:
 		s.peer_id = -1
 	_lobby_changed()

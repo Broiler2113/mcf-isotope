@@ -53,16 +53,18 @@ static func bake(source: Texture2D) -> ImageTexture:
 					atlas.set_pixel((mask % 4) * TILE + x, (variant * 4 + mask / 4) * TILE + y, color)
 	return ImageTexture.create_from_image(atlas)
 
-static func at(grid: Grid, coord: Vector2i) -> bool:
+## smoke = true — облако дымовой гранаты (0.12): та же текстура и та же стыковка краёв,
+## что у газа, только рисуется своим тоном (Main.SMOKE_TINT).
+static func at(grid: Grid, coord: Vector2i, smoke: bool = false) -> bool:
 	var cell := grid.cell(coord)
-	return cell != null and cell.gas and cell.can_hold_gas()
+	return cell != null and (cell.smoke if smoke else cell.gas) and cell.can_hold_gas()
 
-static func mask_at(grid: Grid, coord: Vector2i) -> int:
+static func mask_at(grid: Grid, coord: Vector2i, smoke: bool = false) -> int:
 	var mask := 0
-	if at(grid, coord + Vector2i.UP): mask |= Sprites.AUTOTILE_N
-	if at(grid, coord + Vector2i.RIGHT): mask |= Sprites.AUTOTILE_E
-	if at(grid, coord + Vector2i.DOWN): mask |= Sprites.AUTOTILE_S
-	if at(grid, coord + Vector2i.LEFT): mask |= Sprites.AUTOTILE_W
+	if at(grid, coord + Vector2i.UP, smoke): mask |= Sprites.AUTOTILE_N
+	if at(grid, coord + Vector2i.RIGHT, smoke): mask |= Sprites.AUTOTILE_E
+	if at(grid, coord + Vector2i.DOWN, smoke): mask |= Sprites.AUTOTILE_S
+	if at(grid, coord + Vector2i.LEFT, smoke): mask |= Sprites.AUTOTILE_W
 	return mask
 
 static func source_rect(sheet: Texture2D, coord: Vector2i, mask: int) -> Rect2:

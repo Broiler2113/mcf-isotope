@@ -1008,6 +1008,33 @@ func _shortfall_landing(from_coord: Vector2i, target: Vector2i, roll: int, need:
 ##
 ## Обходим не армию, а клетки взрыва: их не больше 6×9, и жильца каждой отдаёт сама
 ## сетка. На переборе целей ИИ это разница между сотней проверок и сотней тысяч.
+## То же для главной пушки танка (0.12, самосохранение ИИ): все шесть исходов броска на
+## точность — где ляжет снаряд (недолёт той же формулой, _shortfall_landing) и кого
+## накроет ромб взрыва. Свои в машине не в счёт: корпус их держит.
+func cannon_shot_endangers_own(veh: Vehicle, target: Vector2i) -> bool:
+	if veh == null:
+		return false
+	var port := cannon_port(veh, target)
+	if port == Vector2i(-1, -1):
+		return false
+	var gun: Dictionary = VehicleDB.get_vehicle(veh.type_id).get("weapons", {}).get("main_gun", {})
+	var need := Combat.hit_number(Combat.distance(port, target),
+			float(int(gun.get("range", MCF.CANNON_RANGE))))
+	for roll in range(1, 7):
+		var landing := _shortfall_landing(port, target, roll, need)
+		var area := cannon_blast_cells(veh, landing)
+		area.append(landing)
+		for c: Vector2i in area:
+			var cell := state.grid.cell(c)
+			if cell == null or cell.occupant == null or not cell.occupant.is_alive():
+				continue
+			var occ: UnitInstance = cell.occupant
+			if occ.aboard_vehicle_id != -1:
+				continue
+			if occ.owner == veh.owner or state.roster.are_allies(veh.owner, occ.owner):
+				return true
+	return false
+
 func anti_tank_shot_endangers_own(shooter: UnitInstance, center: Vector2i) -> bool:
 	if shooter == null or not _is_anti_tank(shooter):
 		return false
@@ -1678,7 +1705,7 @@ func can_laser_cell(shooter: UnitInstance, cell: Vector2i) -> String:
 	if shooter.remaining_ap < MCF.MARKSMAN_AP_COST:
 		return "Laser needs %d AP" % MCF.MARKSMAN_AP_COST
 	if gas_blocks_line(shooter.coord, cell):
-		return "Gas blocks line of sight"
+		return obscured_line_reason(shooter.coord, cell)
 	return ""
 
 ## Клетки, через которые пройдёт луч, если целиться в aim (для предпросмотра в UI).
@@ -3517,7 +3544,7 @@ func sight_of(unit: UnitInstance) -> int:
 func _vision_blocked(a: Vector2i, b: Vector2i, viewer: int = -1, through_gas: bool = false) -> bool:
 	if _line_off_board(a, b):
 		return true
-	if not through_gas and a != b and (state.grid.cell_fast(a.x, a.y).gas or state.grid.cell_fast(b.x, b.y).gas):
+	if not through_gas and a != b and (state.grid.cell_fast(a.x, a.y).obscured() or state.grid.cell_fast(b.x, b.y).obscured()):
 		return true
 	var sig := _tank_sig(viewer)
 	var tanks: PackedInt32Array = _tank_sig_cells[sig] if sig != 0 else PackedInt32Array()
@@ -3548,7 +3575,7 @@ func _vision_blocked(a: Vector2i, b: Vector2i, viewer: int = -1, through_gas: bo
 		# стоит здесь дёшево: до него доходят только клетки, уже опознанные как стена.
 		# Живые обзор не перекрывают, машины — тоже, КРОМЕ вражеского танка: его корпус
 		# закрывает обзор противнику (не своим). Стена и закрытый шлюз — GridCell.blocks_sight().
-		if (cell.gas and not through_gas) \
+		if (cell.obscured() and not through_gas) \
 				or (cell.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(cell.feature_id)):
 			return true
 		if not tanks.is_empty() and tanks.has(cy * grid.width + cx):
@@ -3627,7 +3654,7 @@ func team_sees_gas(owner: int) -> Dictionary:
 ## sight index so checking this never scans the whole board per target.
 func visibility_limited() -> bool:
 	if fog_enabled: return true
-	if GridCell.gassed <= 0: return false
+	if GridCell.obscurants() <= 0: return false
 	_sync_seen()
 	return not _sight_gas.is_empty()
 
@@ -3647,7 +3674,7 @@ func _gas_masks() -> Array:
 
 func team_sees(owner: int, coord: Vector2i) -> bool:
 	if not state.grid.in_bounds(coord): return false
-	if state.grid.cell(coord).gas: return false
+	if state.grid.cell(coord).obscured(): return false
 	if not visibility_limited(): return true
 	return team_visible_coords(owner).has(coord)
 
@@ -3655,7 +3682,7 @@ func team_sees(owner: int, coord: Vector2i) -> bool:
 func is_visible_to_team(owner: int, target: UnitInstance) -> bool:
 	if owner == target.owner or state.roster.are_allies(owner, target.owner): return true
 	if not state.grid.in_bounds(target.coord): return false
-	if state.grid.cell(target.coord).gas: return false
+	if state.grid.cell(target.coord).obscured(): return false
 	# The scripted AI ignores fog: one cloud anywhere must not blind it to the whole
 	# board. It still can't see into gas (above) or shoot through it (can_shoot).
 	if owner == omniscient_side: return true
@@ -3703,7 +3730,7 @@ static func _rebuild_blockers(grid: Grid) -> void:
 			var cell := grid.cell_fast(x, y)
 			# Ровно то же условие, что у поправки по журналу (_patch_blockers) — одним
 			# вопросом к клетке, чтобы газ (0.9.4) не выпал из холодной сборки таблицы.
-			if cell.gas:
+			if cell.obscured():
 				_sight_gas[row + x] = true
 			if cell.blocks_sight():
 				_blockers[row + x] = 1
@@ -3759,7 +3786,7 @@ static func _patch_blockers(grid: Grid, from_version: int) -> void:
 		var c := grid.cell(Vector2i(changes[i], changes[i + 1]))
 		if c != null:
 			var idx := c.coord.y * gw + c.coord.x
-			if c.gas:
+			if c.obscured():
 				_sight_gas[idx] = true
 			else:
 				_sight_gas.erase(idx)
@@ -3890,7 +3917,7 @@ func _seen_from(coord: Vector2i, r: int, viewer: int = -1, gas_only: bool = fals
 	if same != null:
 		return same
 	var origin := coord.y * gw + coord.x
-	if grid.cell_fast(coord.x, coord.y).gas:
+	if grid.cell_fast(coord.x, coord.y).obscured():
 		var own := PackedInt32Array([origin])
 		_store_seen(key, own, own)
 		return own
@@ -3902,7 +3929,7 @@ func _seen_from(coord: Vector2i, r: int, viewer: int = -1, gas_only: bool = fals
 		var clear := PackedInt32Array()
 		var cells := grid.cells_flat()
 		for i: int in res[0]:
-			if not cells[i].gas:
+			if not cells[i].obscured():
 				clear.append(i)
 		res[0] = clear
 	# Gas arriving on the observer must invalidate an otherwise unchanged view.
@@ -4549,10 +4576,11 @@ func _update_breached(civ: UnitInstance, idx: Dictionary = {}) -> void:
 ## из путей записи резолвера (_ignite, снос рельефа взрывом, стройка, окоп, открытие шлюза).
 func notify_cell_changed(coord: Vector2i) -> void:
 	# Construction/destruction inside a cloud immediately updates its footprint.
-	if random_events != null and not random_events.clouds.is_empty():
+	if random_events != null and (not random_events.clouds.is_empty() or not random_events.smoke.is_empty()):
 		var changed := state.grid.cell(coord)
 		if changed != null:
 			changed.gas = changed.can_hold_gas() and random_events.cloud_at(coord)
+			changed.smoke = changed.can_hold_gas() and random_events.smoke_at(coord)
 	for dy in range(-1, 2):
 		for dx in range(-1, 2):
 			if dx == 0 and dy == 0:
@@ -4796,7 +4824,14 @@ func advance_civilians(owner: int = MCF.Owner.NEUTRAL) -> ActionResult:
 	# Мозг заводится ПОД ВЛАДЕЛЬЦА слота: для группы её слот и есть owner, иначе
 	# _enemies_of посчитал бы своих же за врагов. Кэш держит один мозг на слот.
 	if _civ_brain == null or _civ_brain.owner != owner:
-		_civ_brain = AIController.new(owner, AIController.Difficulty.NORMAL)
+		# Налётчики (0.12): ИИ в игре всегда HARD, у налётчиков — личность Aggressor. Мирные
+		# остаются при своём простом мозге.
+		if raiders:
+			_civ_brain = AIController.new(owner, AIController.Difficulty.HARD)
+			_civ_brain.style = AIPersonality.AGGRESSOR
+			_civ_brain.bind_match(self)
+		else:
+			_civ_brain = AIController.new(owner, AIController.Difficulty.NORMAL)
 	# Item 23: живой, «в порядке очереди» отыгрыш вместо «телепорт + перемотка». В res
 	# первым уходит событие hold — оно ПРИКАЛЫВАЕТ каждого будущего ходока к ИСХОДНОЙ
 	# клетке, чтобы Main не показал их сразу в конечных позициях, пока идёт анимация.
@@ -5015,6 +5050,7 @@ func update_airlocks() -> void:
 		if cell.airlock_welded:
 			cell.cover_height = MCF.WALL_HEIGHT
 			cell.gas = false
+			cell.smoke = false
 			continue
 		# Тело в проёме держит створки (batch 13 #4): шлюз не закроется, пока труп не
 		# вытащат. Проверяется САМА клетка шлюза — труп рядом, за порогом, дверям не мешает.
@@ -5038,6 +5074,7 @@ func update_airlocks() -> void:
 		cell.cover_height = 0.0 if open else MCF.WALL_HEIGHT
 		if not open:
 			cell.gas = false
+			cell.smoke = false
 		# Открывшийся шлюз — повод активации соседних нейтралов (§3.1a): именно так в
 		# примере из задания игрок «вскрывает комнату», подойдя к её двери.
 		if open and was_closed:
@@ -6162,13 +6199,16 @@ func _resolve_use_item(intent: UseItemIntent) -> ActionResult:
 	if Combat.distance(actor.coord, intent.target) > MCF.GRENADE_RANGE:
 		return ActionResult.fail("Too far to throw (max %d)" % MCF.GRENADE_RANGE)
 	# Гранаты бросаются только ортогонально (#4).
-	if item_id == MCF.ITEM_FRAG and actor.coord.x != intent.target.x and actor.coord.y != intent.target.y:
+	if (item_id == MCF.ITEM_FRAG or item_id == MCF.ITEM_SMOKE) \
+			and actor.coord.x != intent.target.x and actor.coord.y != intent.target.y:
 		return ActionResult.fail("Grenades can only be thrown in straight lines")
 	actor.remaining_ap -= 1
 	actor.held_item_id = ""  # предмет расходуется в любом исходе
 
 	if item_id == MCF.ITEM_FRAG:
 		return _throw_frag(actor, intent.target)
+	elif item_id == MCF.ITEM_SMOKE:
+		return _throw_smoke(actor, intent.target)
 	elif item_id == MCF.ITEM_EXTINGUISHER:
 		return _extinguish(actor, intent.target)
 	return ActionResult.fail("Unknown item: %s" % item_id)
@@ -6200,6 +6240,41 @@ func _throw_frag(thrower: UnitInstance, aim: Vector2i) -> ActionResult:
 	else:
 		result.log("Roll %d (need %d+): short throw, grenade landed at (%d, %d)." % [
 			roll, need, landing.x, landing.y])
+	return result
+
+## Дымовая (0.12): тот же бросок на точность и тот же недолёт, что у осколочной; где легла —
+## облако 3×3 (в пределах поля), которое держит взгляд и прицельный огонь до конца
+## следующего раунда и никому не вредит. Облака живут рядом с газом (RandomEvents.smoke).
+func _throw_smoke(thrower: UnitInstance, aim: Vector2i) -> ActionResult:
+	var dist := Combat.distance(thrower.coord, aim)
+	var need := Combat.hit_number(dist, float(MCF.GRENADE_RANGE))
+	var roll := state.dice.roll_d6()
+	var on_target := roll >= need
+	var landing := aim
+	if not on_target:
+		var land_index: int = clampi(dist - (need - roll), 0, dist)
+		var path := _throw_path(thrower.coord, aim)
+		landing = thrower.coord if land_index <= 0 else path[land_index - 1]
+	if random_events == null:
+		random_events = RandomEvents.new(false)
+	var r := MCF.SMOKE_RADIUS
+	var x0 := maxi(0, landing.x - r)
+	var y0 := maxi(0, landing.y - r)
+	var x1 := mini(state.grid.width - 1, landing.x + r)
+	var y1 := mini(state.grid.height - 1, landing.y + r)
+	random_events.add_smoke(x0, y0, x1 - x0 + 1, y1 - y0 + 1, MCF.SMOKE_ROUNDS)
+	_sync_gas()
+	var result := ActionResult.success()
+	result.dice_events.push_front({
+		"kind": "check", "actor": thrower.stats.display_name,
+		"roll": roll, "need": need, "ok": on_target,
+	})
+	if on_target:
+		result.log("%s throws a smoke grenade: smoke at (%d, %d) (roll %d, need %d+)." % [
+			thrower.stats.display_name, landing.x, landing.y, roll, need])
+	else:
+		result.log("%s throws a smoke grenade short: smoke at (%d, %d) (roll %d, need %d+)." % [
+			thrower.stats.display_name, landing.x, landing.y, roll, need])
 	return result
 
 ## Упорядоченный путь клеток от a к b (без a, включая b), длиной = дистанция Чебышёва.
@@ -6350,6 +6425,8 @@ func blast_cells_for_item(item_id: String, center: Vector2i) -> Array[Vector2i]:
 	match item_id:
 		MCF.ITEM_FRAG:
 			return MCF.blast_x(center)
+		MCF.ITEM_SMOKE:
+			return MCF.blast_square(center, MCF.SMOKE_RADIUS)
 		MCF.ITEM_EXTINGUISHER:
 			# Пожаротушительная (#19) кроет ПОЛНЫЙ квадрат 5×5, а не «косой крест»
 			# осколочной: она не поражает, а гасит, и дырам в зоне взяться неоткуда.
@@ -6798,6 +6875,9 @@ func land_random_events(res: ActionResult) -> void:
 	if random_events == null:
 		return
 	_gas_tick(res)
+	# Дым дымовых гранат стоит до конца следующего раунда (0.12).
+	if not random_events.smoke.is_empty():
+		random_events.age_smoke()
 	for e: Dictionary in random_events.take_landing(state.turns.round_number):
 		var p: Dictionary = e["params"]
 		match str(e["id"]):
@@ -6922,6 +7002,7 @@ func _sync_gas() -> void:
 		for x in grid.width:
 			var cell := grid.cell_fast(x, y)
 			cell.gas = cell.can_hold_gas() and random_events.cloud_at(Vector2i(x, y))
+			cell.smoke = cell.can_hold_gas() and random_events.smoke_at(Vector2i(x, y))
 
 ## Независимая армия (0.9.4): у края карты высаживается ничья сила, враждебная всем.
 ## Сила — по средней армии ЖИВЫХ игроков (по цене закупки); слот встаёт в случайное место
@@ -7143,7 +7224,7 @@ func _hallway_spawn_cells(entry: Vector2i) -> Array[Vector2i]:
 ## Gas obscures aim even for weapons that can penetrate solid cover. Include
 ## both endpoints and support arbitrary sight directions without allocating a ray.
 func gas_blocks_line(a: Vector2i, b: Vector2i) -> bool:
-	if GridCell.gassed <= 0 or a == b or _line_off_board(a, b):
+	if GridCell.obscurants() <= 0 or a == b or _line_off_board(a, b):
 		return false
 	var dx := absi(b.x - a.x)
 	var dy := absi(b.y - a.y)
@@ -7152,7 +7233,7 @@ func gas_blocks_line(a: Vector2i, b: Vector2i) -> bool:
 	var err := dx - dy
 	var c := a
 	while true:
-		if state.grid.cell_fast(c.x, c.y).gas:
+		if state.grid.cell_fast(c.x, c.y).obscured():
 			return true
 		if c == b:
 			return false
@@ -7164,6 +7245,33 @@ func gas_blocks_line(a: Vector2i, b: Vector2i) -> bool:
 			err += dx
 			c.y += sy
 	return false
+
+## Отказ по застилающему линию облаку — с правильным названием (0.12): дым дымовой гранаты
+## или газ. Сама проверка — gas_blocks_line; здесь только слово для журнала.
+func obscured_line_reason(a: Vector2i, b: Vector2i) -> String:
+	var dx := absi(b.x - a.x)
+	var dy := absi(b.y - a.y)
+	var sx := 1 if a.x < b.x else -1
+	var sy := 1 if a.y < b.y else -1
+	var err := dx - dy
+	var c := a
+	var smoke := false
+	while true:
+		if state.grid.in_bounds(c):
+			var cell := state.grid.cell_fast(c.x, c.y)
+			if cell.gas:
+				return "Gas blocks line of sight"
+			smoke = smoke or cell.smoke
+		if c == b:
+			break
+		var e2 := 2 * err
+		if e2 > -dy:
+			err -= dy
+			c.x += sx
+		if e2 < dx:
+			err += dx
+			c.y += sy
+	return "Smoke blocks line of sight" if smoke else "Gas blocks line of sight"
 
 # --- Запросы легальности (для подсветки целей в UI) ---
 ## allow_embrasure=false — стрелок не может работать через амбразуру ДОТа: заряд
@@ -7200,13 +7308,13 @@ func los_blocked(from_coord: Vector2i, to_coord: Vector2i, allow_embrasure: bool
 	# Газ (0.9.4) держит и взгляд, и выстрел — как стена. Спрашивается он ТОЛЬКО когда газ
 	# на карте вообще есть: эта функция зовётся десятки тысяч раз за один расчёт плана ИИ.
 	# Gas also obscures either endpoint, unlike a wall face or a firing embrasure.
-	var any_gas := GridCell.gassed > 0
-	if any_gas and (grid.cell_fast(from_coord.x, from_coord.y).gas \
-			or grid.cell_fast(to_coord.x, to_coord.y).gas):
+	var any_gas := GridCell.obscurants() > 0
+	if any_gas and (grid.cell_fast(from_coord.x, from_coord.y).obscured() \
+			or grid.cell_fast(to_coord.x, to_coord.y).obscured()):
 		return true
 	while x != to_coord.x or y != to_coord.y:
 		var cell := grid.cell_fast(x, y)
-		if any_gas and cell.gas:
+		if any_gas and cell.obscured():
 			return true
 		if cell.cover_height >= MCF.WALL_HEIGHT:
 			# Ёж поверх мешков — решётчатая стена: с соседней клетки сквозь неё стреляют.
@@ -7392,7 +7500,7 @@ func fire_cover(viewer: int, hostile: bool) -> PackedFloat32Array:
 	var out := PackedFloat32Array()
 	out.resize(w * grid.height)
 	for u: UnitInstance in shooters:
-		if grid.cell(u.coord).gas:
+		if grid.cell(u.coord).obscured():
 			continue
 		var ability: String = u.stats.special_ability_id
 		var pierce := ability == MCF.ABILITY_MARKSMAN
@@ -7408,7 +7516,7 @@ func fire_cover(viewer: int, hostile: bool) -> PackedFloat32Array:
 				if dist > reach or not grid.in_bounds(c):
 					break
 				var cell := grid.cell_fast(c.x, c.y)
-				if cell.gas or (not pierce and (cell.blocks_sight() or cell.vehicle_id != -1)):
+				if cell.obscured() or (not pierce and (cell.blocks_sight() or cell.vehicle_id != -1)):
 					break
 				var need := 1 if pierce else (Combat.sniper_hit_number(dist) if sniper
 						else Combat.hit_number(dist, u.fire_range()))
@@ -7510,7 +7618,7 @@ func _forecast_unit(u: UnitInstance) -> Array:
 		var max_d := MCF.FLAME_JET_LENGTH if ability == MCF.ABILITY_FLAMETHROWER else 1 << 20
 		var rof := float(maxi(1, u.rate_of_fire()))
 		for from: Vector2i in spots:
-			if grid.cell(from).gas:
+			if grid.cell(from).obscured():
 				continue
 			for d: Vector2i in DIR8:
 				var c: Vector2i = from
@@ -7521,7 +7629,7 @@ func _forecast_unit(u: UnitInstance) -> Array:
 					if dist > max_d or not grid.in_bounds(c):
 						break
 					var cell := grid.cell_fast(c.x, c.y)
-					if cell.gas or (not pierce and (cell.blocks_sight() or cell.vehicle_id != -1)):
+					if cell.obscured() or (not pierce and (cell.blocks_sight() or cell.vehicle_id != -1)):
 						break
 					var need := 1 if pierce else (Combat.sniper_hit_number(dist) if sniper
 							else Combat.hit_number(dist, u.fire_range()))
@@ -7565,7 +7673,7 @@ func can_shoot(shooter: UnitInstance, target: UnitInstance) -> String:
 	# Свой всегда виден, поэтому проверку тумана войны он проходит сам собой.
 	# Туман войны (§3.9): скрытого противника нельзя выбрать целью.
 	if gas_blocks_line(shooter.coord, target.coord):
-		return "Gas blocks line of sight"
+		return obscured_line_reason(shooter.coord, target.coord)
 	if not is_visible_to_team(shooter.owner, target):
 		return "Target not visible"
 	if not Combat.is_on_firing_line(shooter.coord, target.coord):
@@ -7854,7 +7962,7 @@ func can_flame_cell(shooter: UnitInstance, cell: Vector2i) -> String:
 	if Combat.distance(shooter.coord, cell) > MCF.FLAME_JET_LENGTH:
 		return "Too far for the flame jet"
 	if gas_blocks_line(shooter.coord, cell):
-		return "Gas blocks line of sight"
+		return obscured_line_reason(shooter.coord, cell)
 	return ""
 
 ## Пустые клетки пола, по которым огнемётчик может пустить струю (для подсветки в UI).

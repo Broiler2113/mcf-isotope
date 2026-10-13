@@ -2,14 +2,14 @@ class_name GameConfig
 extends RefCounted
 
 ## Выбор режима из главного меню в игру (M8). Статические поля переживают смену
-## сцены, пока загружен скрипт класса (как MapHandoff). ai_difficulty = 1 (НОРМ.)
-## совпадает с AIController.Difficulty.NORMAL.
+## сцены, пока загружен скрипт класса (как MapHandoff).
 static var p2_is_ai: bool = false
 ## Первый игрок тоже может быть машиной (#103) — тогда партия идёт ИИ ПРОТИВ ИИ, а человек
 ## за ней наблюдает. Нужно это не для игры, а для проверки самого ИИ: полный бой прогоняется
 ## без единого клика, и видно, как штаб на деле распоряжается армией.
 static var p1_is_ai: bool = false
-static var ai_difficulty: int = 1
+## Личность ИИ второй стороны, когда лобби не было (хот-сит, демо): AIPersonality.
+static var ai_style: int = 0
 
 ## Настройки матча из экрана подготовки (Setup), как в isotope §12b.
 ## map_path == "" → демо-ростер по умолчанию (см. Main._build_state).
@@ -105,6 +105,6 @@ static func unlimited_for(owner: int) -> bool:
 ## дуэль, настроенная флагами p1_is_ai/p2_is_ai.
 static func active_roster() -> Roster:
 	if roster == null:
-		roster = Roster.default_duel(p2_is_ai, ai_difficulty)
+		roster = Roster.default_duel(p2_is_ai, ai_style)
 		roster.slots[0].kind = Roster.SlotKind.AI if p1_is_ai else Roster.SlotKind.HUMAN
 	return roster

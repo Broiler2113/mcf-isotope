@@ -48,6 +48,27 @@ const W_STEP := -0.15         # за каждое потраченное очк�
 const W_TANK_PATH := -12.0
 
 var owner: int = -1
+## Личность (0.12, AIPersonality): её веса заменяют константы выше на время плана. Мирные
+## жители ходят прежними весами (AIPersonality.CLASSIC) — личности их не касаются.
+var style: int = AIPersonality.TACTICIAN
+var _w_fire := W_FIRE
+var _w_ease := W_FIRE_EASE
+var _w_adv := W_ADVANCE
+var _w_cover := W_COVER
+var _w_trench := 2.0
+var _w_danger := W_DANGER
+var _w_stay := W_STAY
+var _w_step := W_STEP
+## Личности (не мирные) считают опасность по _threat, а укрытие — по соседям (_shelter).
+var _classic := true
+var _w_threat := 0.0
+var _w_shelter := 0.0
+## Разнос строя (0.12): у противника есть чем бить по площади (дроны, гранаты, заряды) —
+## соседство со своими стоит вот столько за каждого соседа. Клетки, где стоят свои на
+## начало плана, — _ally_cells.
+const W_SPREAD := -2.5
+var _spread := false
+var _ally_cells: Dictionary = {}
 ## unit_id -> Vector2i: куда штаб послал бойца в этом ходу.
 var destinations: Dictionary = {}
 ## unit_id -> float: оценка назначенной клетки (AIController поднимает ею приоритет).
@@ -87,6 +108,14 @@ var _lane_cells: Dictionary = {}
 ## марксмана луч не обрывается вовсе — его лазер бьёт сквозь всё и без учёта дальности.
 var _exposure: Dictionary = {}
 
+## Угроза клетке (0.12, самосохранение): не «сколько стволов смотрит», а сколько ПОПАДАНИЙ
+## ждать — сумма по врагам вероятности хотя бы одного попадания очередью. Учитывает то, что
+## правила и правда учитывают: дальность (число на кубике), укрытие в соседней клетке по
+## направлению на стрелка (−2 к попаданию; кроме выстрела в упор и через клетку), окоп
+## (с дистанции недосягаем). Раньше штаб награждал клетку за укрытие ПОД бойцом — а по
+## правилам (cover_effect_from) прикрывает только укрытие РЯДОМ, со стороны стрелка.
+var _threat: Dictionary = {}
+
 ## Обратная карта целей: Vector2i -> Array[UnitInstance] — какие враги стоят на прямой
 ## линии огня с этой клетки. Считается ОДИН раз на весь план.
 ##
@@ -123,6 +152,7 @@ func plan(state: GameState, r: GameActionResolver, field: GeoField,
 	destinations.clear()
 	dest_score.clear()
 	order.clear()
+	_apply_weights(state)
 	_collect_enemies()
 
 	var actors := _plannable_units()
@@ -164,6 +194,21 @@ func plan(state: GameState, r: GameActionResolver, field: GeoField,
 			dest_score[u.id] = 0.0
 
 	order = _order_activations(actors, occupied_by, vehicle_rows)
+
+func _apply_weights(state: GameState) -> void:
+	var w: Dictionary = AIPersonality.CLASSIC if MCF.is_neutral(owner) \
+			else AIPersonality.profile(style, state.turns.round_number)
+	_w_fire = float(w["fire"])
+	_w_ease = float(w["fire_ease"])
+	_w_adv = float(w["advance"])
+	_w_cover = float(w["cover"])
+	_w_trench = float(w["trench"])
+	_w_danger = float(w["danger"])
+	_w_stay = float(w["stay"])
+	_w_step = float(w["step"])
+	_classic = not w.has("threat")
+	_w_threat = float(w.get("threat", 0.0))
+	_w_shelter = float(w.get("shelter", 0.0))
 
 ## Куда штаб послал бойца; (-1,-1) — плана на него нет.
 func destination_of(unit_id: int) -> Vector2i:
@@ -215,7 +260,7 @@ func _candidates_for(u: UnitInstance, out: Array) -> void:
 	# считаем один раз на все его кандидатуры.
 	var leaving_lane := _lane_conflicts(u, u.coord) > 0
 	# Оставаться на месте всегда можно — за это и отвечает W_STAY.
-	out.append([_score_cell(u, u.coord, start_geo, 0, leaving_lane) + W_STAY, u.id, u.coord])
+	out.append([_score_cell(u, u.coord, start_geo, 0, leaving_lane) + _w_stay, u.id, u.coord])
 	if reach == null:
 		return
 	for coord: Vector2i in reach.cost:
@@ -230,7 +275,8 @@ func _score_cell(u: UnitInstance, coord: Vector2i, start_geo: int, steps: int,
 		return -1e9
 	# Вплотную к огню не встаём (#48): пламя расползается. Кроме огнеупорных (#2) —
 	# щитоносцу и огнемётчику пожар безразличен, и место у огня им ничем не хуже.
-	if not MCF.ability_is_fireproof(u.stats.special_ability_id) and _fire_near(coord):
+	if not MCF.ability_is_fireproof(u.stats.special_ability_id) and (_fire_near(coord) \
+			or (not _classic and AIController.fire_creeps(_r, _state, coord))):
 		return -1e9
 	var score := 0.0
 	# 1. Сектор обстрела — главное. Считаем каждую цель, до которой из клетки дострелим.
@@ -243,20 +289,34 @@ func _score_cell(u: UnitInstance, coord: Vector2i, start_geo: int, steps: int,
 			var ease := _fire_ease(u, coord, e)
 			if ease < 0.0:
 				continue
-			score += W_FIRE + ease * W_FIRE_EASE + _enemy_value[e.id]
+			score += _w_fire + ease * _w_ease + _enemy_value[e.id]
 	# 2. Сближение по реальному пути в обход стен.
 	var geo: int = _field.at(coord)
 	if start_geo < GEO_FAR and geo < GEO_FAR:
-		score += float(start_geo - geo) * W_ADVANCE
+		score += float(start_geo - geo) * _w_adv
 	elif geo < GEO_FAR:
-		score += W_ADVANCE  # были отрезаны, теперь путь есть — это уже прогресс
+		score += _w_adv  # были отрезаны, теперь путь есть — это уже прогресс
 	# 3. Укрытие и ответный огонь.
-	if cell.has_cover():
-		score += float(MCF.COVER_MOD.get(cell.cover_height, 1)) * W_COVER
-	# Окоп прячет бойца ниже линии огня — самая безопасная клетка на поле (§3.7).
-	if cell.feature_id == MCF.FEATURE_TRENCH:
-		score += W_COVER * 2.0
-	score += float(_exposure.get(coord, 0)) * W_DANGER
+	if _classic:
+		if cell.has_cover():
+			score += float(MCF.COVER_MOD.get(cell.cover_height, 1)) * _w_cover
+		# Окоп прячет бойца ниже линии огня — самая безопасная клетка на поле (§3.7).
+		if cell.feature_id == MCF.FEATURE_TRENCH:
+			score += _w_cover * _w_trench
+		score += float(_exposure.get(coord, 0)) * _w_danger
+	else:
+		# Самосохранение (0.12): сколько попаданий ждать здесь от тех, кто уже на прямой, и
+		# насколько клетка прикрыта со всех сторон — враг ведь сменит позицию до выстрела.
+		score += float(_threat.get(coord, 0.0)) * _w_threat
+		score += shelter(_state.grid, coord) * _w_shelter
+		if _spread:
+			var near := 0
+			for dir: Vector2i in Grid.N8:
+				if _ally_cells.has(coord + dir) and int(_ally_cells[coord + dir]) != u.id:
+					near += 1
+			score += float(near) * W_SPREAD
+		if cell.feature_id == MCF.FEATURE_TRENCH:
+			score += _w_cover * _w_trench
 	# 4. Не загораживать своим сектор обстрела — и, наоборот, уходить из чужого створа.
 	var lanes := _lane_conflicts(u, coord)
 	if lanes > 0:
@@ -266,7 +326,7 @@ func _score_cell(u: UnitInstance, coord: Vector2i, start_geo: int, steps: int,
 	# 5. Не стоять на дороге у своей же техники (item 2).
 	if _tank_path.has(coord):
 		score += W_TANK_PATH
-	score += float(steps) * W_STEP
+	score += float(steps) * _w_step
 	return score
 
 ## Коридор, по которому сегодня поедет своя техника (item 2).
@@ -379,14 +439,33 @@ func _build_lanes(allies: Array) -> void:
 ## включая поблажку амбразуре ДОТа и мешкам вплотную (d <= 1).
 func _build_exposure() -> void:
 	_exposure = {}
+	_threat = {}
+	_spread = false
+	_ally_cells = {}
+	if not _classic:
+		for a: UnitInstance in _state.living_units_of(owner):
+			if not a.is_drone and a.aboard_vehicle_id == -1:
+				_ally_cells[a.coord] = a.id
+		for e: UnitInstance in _threats:
+			var ab := e.stats.special_ability_id
+			if e.is_drone or ab == MCF.ABILITY_DRONE_OPERATOR or ab == MCF.ABILITY_ANTI_TANK \
+					or e.held_item_id == MCF.ITEM_FRAG:
+				_spread = true
+			# Вражеский дрон взорвётся в свой ход: клетки вплотную к нему — верная смерть.
+			if e.is_drone and _state.grid.in_bounds(e.coord):
+				for dy in range(-MCF.ANTI_TANK_BLAST_RADIUS, MCF.ANTI_TANK_BLAST_RADIUS + 1):
+					for dx in range(-MCF.ANTI_TANK_BLAST_RADIUS, MCF.ANTI_TANK_BLAST_RADIUS + 1):
+						var dc := e.coord + Vector2i(dx, dy)
+						_threat[dc] = float(_threat.get(dc, 0.0)) + 1.0
 	var grid := _state.grid
 	var gw := grid.width
 	var gh := grid.height
 	for e: UnitInstance in _threats:
-		if grid.cell(e.coord).gas:
+		if grid.cell(e.coord).obscured():
 			continue
 		var marksman := e.stats.special_ability_id == MCF.ABILITY_MARKSMAN
 		var rng: float = e.fire_range()
+		var burst := mini(maxi(1, e.rate_of_fire()), 4)
 		for dir: Vector2i in Grid.N8:
 			var dxs := dir.x
 			var dys := dir.y
@@ -397,9 +476,13 @@ func _build_exposure() -> void:
 				if not marksman and Combat.hit_number(d, rng) >= 7:
 					break  # дальше по лучу только дальше — попадания уже не будет
 				var c := Vector2i(x, y)
-				if grid.cell_fast(x, y).gas:
+				if grid.cell_fast(x, y).obscured():
 					break
 				_exposure[c] = int(_exposure.get(c, 0)) + 1
+				if not _classic:
+					var p := _hit_chance(grid, e, c, dir, d, rng, marksman, burst)
+					if p > 0.0:
+						_threat[c] = float(_threat.get(c, 0.0)) + p
 				if not marksman:
 					# Преграда НА этой клетке рвёт луч для всех следующих: для них она
 					# станет промежуточной, и los_blocked вернёт true.
@@ -414,6 +497,48 @@ func _build_exposure() -> void:
 				x += dxs
 				y += dys
 				d += 1
+
+## Вероятность хотя бы одного попадания очередью врага e в клетку c на луче dir, d клеток.
+## Правила те же, что у выстрела: число попадания по дальности, −2 за укрытие в соседней
+## с целью клетке по направлению на стрелка (не в упор и не через клетку, cover_effect_from),
+## окоп с дистанции недосягаем. Лазер марксмана — по своему правилу: укрытие его не держит.
+static func _hit_chance(grid: Grid, e: UnitInstance, c: Vector2i, dir: Vector2i, d: int,
+		rng: float, marksman: bool, burst: int) -> float:
+	var cell := grid.cell_fast(c.x, c.y)
+	if cell.feature_id == MCF.FEATURE_TRENCH and d > 1:
+		return 0.0
+	var need := 3 if marksman else Combat.hit_number(d, rng)
+	if not marksman and d > 2:
+		var shield := grid.cell(c - dir)
+		if shield != null:
+			var h := shield.cover_height
+			if Furniture.is_furniture(shield.feature_id):
+				need += Furniture.cover_penalty(h)
+			else:
+				need += int(MCF.COVER_MOD.get(h, 0))
+	if need >= 7:
+		return 0.0
+	var p := float(7 - need) / 6.0
+	return 1.0 - pow(1.0 - p, float(burst))
+
+## Насколько клетка прикрыта со всех сторон: доля из восьми направлений, где соседняя клетка
+## заслоняет (укрытие −2 или стена). Враг до выстрела сменит позицию — поэтому ценится не
+## только «спрятан от того, кто смотрит сейчас», но и «спрятан, откуда бы ни пришли».
+static func shelter(grid: Grid, c: Vector2i) -> float:
+	var covered := 0
+	for dir: Vector2i in Grid.N8:
+		var n := grid.cell(c + dir)
+		if n == null:
+			continue
+		var h := n.cover_height
+		if h >= MCF.WALL_HEIGHT or MCF.COVER_MOD.has(h) \
+				or (Furniture.is_furniture(n.feature_id) and Furniture.cover_penalty(h) > 0):
+			covered += 1
+	return float(covered) / 8.0
+
+## Угроза клетке (для решений вне плана — шаг к назначению, запасной ход).
+func threat_at(c: Vector2i) -> float:
+	return float(_threat.get(c, 0.0))
 
 ## Разметить, с каких клеток какие враги стоят на прямой линии огня (см. _line_targets).
 ## Из каждого врага пускаются те же восемь лучей, что признаёт Combat.is_on_firing_line();

@@ -21,6 +21,12 @@ const WALL_HEIGHT := 2.0
 const GRENADE_RANGE := 12
 const ITEM_FRAG := "frag_grenade"
 const ITEM_EXTINGUISHER := "fire_extinguisher_grenade"
+## Дымовая (0.12): у тяжёлой пехоты. Бросок как у осколочной, облако 3×3 держит взгляд и
+## прицельный огонь, как газ, но безвредно; стоит до конца СЛЕДУЮЩЕГО раунда.
+const ITEM_SMOKE := "smoke_grenade"
+const SMOKE_RADIUS := 1
+## Сколько границ раунда облако переживает: брошено в раунде R — рассеется в конце R+1.
+const SMOKE_ROUNDS := 2
 
 const ITEM_DRONE_STATION := "drone_station"
 const ITEM_LDF := "bru"  # стартовый предмет инженера (§3.7)
@@ -28,6 +34,7 @@ const ITEM_LDF := "bru"  # стартовый предмет инженера (�
 const ITEM_NAMES := {
 	ITEM_FRAG: "Frag Grenade",
 	ITEM_EXTINGUISHER: "Fire Extinguisher Grenade",
+	ITEM_SMOKE: "Smoke Grenade",
 	ITEM_DRONE_STATION: "Drone Station",
 	ITEM_LDF: "LDF",
 }

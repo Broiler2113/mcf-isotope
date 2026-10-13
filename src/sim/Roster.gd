@@ -60,7 +60,16 @@ class Slot extends RefCounted:
 	## Номер команды или −1 «сам за себя». Командный режим — это просто партия,
 	## в которой хотя бы у одного слота team >= 0.
 	var team: int = -1
-	var ai_difficulty: int = 1
+	## Сила ИИ: HARD (с 0.12 — единственный уровень скриптового ИИ) или LEARNED (модель).
+	var ai_difficulty: int = 2
+	## Личность ИИ (0.12, AIPersonality): Tactician / Aggressor / Fortifier.
+	var ai_style: int = 0
+
+	## Подпись слота ИИ: «AI - Tactician», «AI - Learned».
+	func ai_label() -> String:
+		if ai_difficulty == 3:
+			return "AI - Learned"
+		return "AI - " + AIPersonality.name_of(ai_style)
 	## Личный бюджет очков. 0 = безлимит (та же условность, что у GameConfig.budget).
 	var budget: int = 0
 	## Пир, который ведёт этот слот в сетевой партии; −1 — местный или никто.
@@ -133,11 +142,11 @@ func remove_slot(id: int) -> void:
 
 ## Партия на двоих без команд — ровно то, чем игра была до этого шага. Служит
 ## значением по умолчанию везде, где ростер ещё не собран лобби.
-static func default_duel(p2_is_ai: bool = false, difficulty: int = 1) -> Roster:
+static func default_duel(p2_is_ai: bool = false, style: int = 0) -> Roster:
 	var r := Roster.new()
 	r.add_slot(SlotKind.HUMAN)
 	r.add_slot(SlotKind.AI if p2_is_ai else SlotKind.HUMAN)
-	r.slots[1].ai_difficulty = difficulty
+	r.slots[1].ai_style = style
 	return r
 
 ## Ростер под уже готовую доску: слоты 0..max(ids), присутствующие — играющие,
@@ -291,7 +300,7 @@ func to_dict() -> Dictionary:
 		out.append({
 			"id": s.id, "kind": s.kind, "name": s.display_name,
 			"color": [s.color.r, s.color.g, s.color.b], "team": s.team,
-			"ai": s.ai_difficulty, "budget": s.budget, "peer": s.peer_id,
+			"ai": s.ai_difficulty, "st": s.ai_style, "budget": s.budget, "peer": s.peer_id,
 			"dead": s.eliminated,
 			# Зона и личный список юнитов раньше по сети не ехали (batch 12 #8/#9): гость
 			# расставлялся не там и покупал не то, что разрешил хост.
@@ -313,7 +322,9 @@ static func from_dict(d: Dictionary) -> Roster:
 			s.color = Color(float(col[0]), float(col[1]), float(col[2]))
 		else:
 			s.color = Color.from_string(str(col), s.color)  # старые файлы: html
-		s.ai_difficulty = int(rec.get("ai", 1))
+		# Уровни сложности (0.12) ушли: прежние Easy/Normal/Hard читаются как HARD-Tactician.
+		s.ai_difficulty = 3 if int(rec.get("ai", 2)) == 3 else 2
+		s.ai_style = clampi(int(rec.get("st", 0)), 0, AIPersonality.NAMES.size() - 1)
 		s.budget = int(rec.get("budget", 0))
 		s.peer_id = int(rec.get("peer", -1))
 		s.eliminated = bool(rec.get("dead", false))

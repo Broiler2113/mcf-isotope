@@ -274,7 +274,6 @@ var _ai_denied_streak: int = 0
 
 var p1_is_ai: bool = false
 var p2_is_ai: bool = false
-var ai_difficulty: int = AIController.Difficulty.NORMAL
 
 ## Панорама «камеры» по полю (WASD / средняя-правая мышь / жест тачпада).
 var pan: Vector2 = Vector2.ZERO:
@@ -468,7 +467,6 @@ var _corpse_cells: Array = []
 var _fx := FxDecals.new()
 var _p1_btn: Button
 var _p2_btn: Button
-var _diff_btn: Button
 # --- Запись, сохранение и повтор матча (M12, items 42 и 53) ---
 ## Регистратор пишет партию по ходу дела; повтор, наоборот, её проигрывает. Оба сразу
 ## не бывают: смотреть запись и одновременно писать новую нечего.
@@ -524,7 +522,6 @@ func _ready() -> void:
 	Ui.board_settings_changed.connect(_sync_lighting)
 	p1_is_ai = GameConfig.p1_is_ai
 	p2_is_ai = GameConfig.p2_is_ai
-	ai_difficulty = GameConfig.ai_difficulty
 	# Картинки-замены перечитываются при входе в бой (#55): подменил файл — видно
 	# со следующей партии, перезапускать игру не нужно.
 	Sprites.reload_overrides()
@@ -1104,7 +1101,6 @@ func _sync_roster_from_config() -> void:
 			continue
 		if side < flags.size():
 			slot.kind = Roster.SlotKind.AI if flags[side] else Roster.SlotKind.HUMAN
-		slot.ai_difficulty = ai_difficulty
 
 func _build_controllers() -> void:
 	# Любая сторона переключается человек/ИИ (§2.1, #103). Раньше первый игрок был жёстко
@@ -1125,26 +1121,27 @@ func _make_side(side: int) -> void:
 	var c: PlayerController
 	if _side_is_ai(side):
 		var slot := state.roster.slot(side)
-		c = _ai_controller_for(side, slot.ai_difficulty if slot != null else ai_difficulty)
+		c = _ai_controller_for(side, slot)
 	else:
 		c = LocalHumanController.new(side)
 	c.intent_ready.connect(_on_intent_ready)
 	controllers[side] = c
 	_refresh_omniscience()
 
-## Мозг для ИИ-слота (RL v1, §7): «AI - Learned» — обученная политика, остальные уровни —
-## AIController. Если модели нет, LearnedController сам переключается на HARD и говорит об
-## этом в журнал боя (§12) — партия не встаёт.
-func _ai_controller_for(side: int, difficulty: int) -> PlayerController:
-	if difficulty == AIController.Difficulty.LEARNED:
+## Мозг для ИИ-слота (RL v1, §7): «AI - Learned» — обученная политика, остальные —
+## AIController силы HARD с личностью слота (0.12). Если модели нет, LearnedController сам
+## переключается на HARD и говорит об этом в журнал боя (§12) — партия не встаёт.
+func _ai_controller_for(side: int, slot: Roster.Slot) -> PlayerController:
+	if slot != null and slot.ai_difficulty == AIController.Difficulty.LEARNED:
 		var learned := LearnedController.new(side)
 		learned.bind_match(resolver)
 		learned.fallback_engaged.connect(func(reason: String) -> void:
-			state.log.add("— %s: learned AI unavailable (%s) — AI - Hard takes the seat —" % [
+			state.log.add("— %s: learned AI unavailable (%s) — AI - Tactician takes the seat —" % [
 				MCF.owner_name(side), reason])
 			_refresh_status())
 		return learned
-	var ai := AIController.new(side, difficulty)
+	var ai := AIController.new(side, AIController.Difficulty.HARD)
+	ai.style = slot.ai_style if slot != null else AIPersonality.TACTICIAN
 	ai.bind_match(resolver)   # announced event zones (0.11.1)
 	return ai
 
@@ -3906,8 +3903,9 @@ func _on_peer_left(id: int) -> void:
 	_autosave()
 	_take_side_as_ai(side)
 	if session != null:
-		session.send({"k": K_SIDE_AI, "side": side, "ai": AIController.Difficulty.HARD})
-	state.log.add("— %s left the match; a Hard AI takes over their army —" % state.roster.name_of(side))
+		session.send({"k": K_SIDE_AI, "side": side, "ai": AIController.Difficulty.HARD,
+				"st": AIPersonality.TACTICIAN})
+	state.log.add("— %s left the match; a Tactician AI takes over their army —" % state.roster.name_of(side))
 	_refresh_status()
 	_kick_if_ai()
 
@@ -3917,6 +3915,7 @@ func _take_side_as_ai(side: int) -> void:
 		return
 	slot.kind = Roster.SlotKind.AI
 	slot.ai_difficulty = AIController.Difficulty.HARD
+	slot.ai_style = AIPersonality.TACTICIAN
 	slot.peer_id = -1
 	_drop_drawings_of(side)
 	# Только хост (или оставшийся в одиночестве хост) ведёт машину сам; у гостя сторона
@@ -3925,8 +3924,7 @@ func _take_side_as_ai(side: int) -> void:
 		var old: PlayerController = controllers.get(side)
 		if old != null and old.intent_ready.is_connected(_on_intent_ready):
 			old.intent_ready.disconnect(_on_intent_ready)
-		var ai := AIController.new(side, slot.ai_difficulty)
-		ai.bind_match(resolver)
+		var ai := _ai_controller_for(side, slot)
 		ai.intent_ready.connect(_on_intent_ready)
 		controllers[side] = ai
 	_refresh_omniscience()
@@ -3944,9 +3942,10 @@ func _apply_side_ai(msg: Dictionary) -> void:
 	_autosave()
 	slot.kind = Roster.SlotKind.AI
 	slot.ai_difficulty = int(msg.get("ai", AIController.Difficulty.HARD))
+	slot.ai_style = int(msg.get("st", AIPersonality.TACTICIAN))
 	slot.peer_id = -1
 	_drop_drawings_of(side)
-	state.log.add("— %s left the match; a Hard AI takes over their army —" % state.roster.name_of(side))
+	state.log.add("— %s left the match; a Tactician AI takes over their army —" % state.roster.name_of(side))
 	_refresh_status()
 	_roll_arrived.emit(-1)
 
@@ -3966,7 +3965,7 @@ func _setup_network_controllers() -> void:
 	for remote in net.remote_owners():
 		if net.is_host and state.roster.is_ai(remote):
 			var slot := state.roster.slot(remote)
-			var ai := _ai_controller_for(remote, slot.ai_difficulty if slot != null else ai_difficulty)
+			var ai := _ai_controller_for(remote, slot)
 			ai.intent_ready.connect(_on_intent_ready)
 			controllers[remote] = ai
 		else:
@@ -6144,7 +6143,7 @@ func _draw() -> void:
 		# Туман войны (§3.9): чужой юнит виден, только если его клетку видит команда.
 		var uown := unit.owner
 		if uown != viewer and not state.roster.are_allies(viewer, uown) and fog_on \
-				and (state.grid.cell(at).gas or not visible.has(at)):
+				and (state.grid.cell(at).obscured() or not visible.has(at)):
 			continue
 		# Смерть в текущем действии показываем лишь ПОСЛЕ анимации броска (#46):
 		# пока крутится кубик, погибший рисуется как живой юнит.
@@ -6437,20 +6436,34 @@ func _draw_random_events(font: Font) -> void:
 var _gas_canvas_texture: CanvasTexture
 
 func _draw_gas_tiles(alpha: float, fill: bool) -> void:
-	if resolver == null or resolver.random_events == null or resolver.random_events.clouds.is_empty():
+	if resolver == null or resolver.random_events == null:
+		return
+	var ev: RandomEvents = resolver.random_events
+	if ev.clouds.is_empty() and ev.smoke.is_empty():
 		return
 	var tex := GasTiles.texture()
 	if tex != null and (_gas_canvas_texture == null or _gas_canvas_texture.diffuse_texture != tex):
 		_gas_canvas_texture = CanvasTexture.new()
 		_gas_canvas_texture.diffuse_texture = tex
 		_gas_canvas_texture.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	var drawn := {}
 	# Туман войны (0.11.3): газ виден только там, куда смотрят (Resolver.team_sees_gas —
 	# в обзор сама газовая клетка не входит: газ прячет то, что внутри). Без тумана газ
 	# виден весь, как и раньше. Рамка и счётчик зоны — объявленное событие, они остаются.
+	# Дым дымовых гранат (0.12) — то же облако своим тоном и по тем же правилам тумана.
 	var view := _view_resolver()
 	var seen: Dictionary = view.team_sees_gas(_viewing_side()) if view.fog_enabled else {}
-	for cl: Dictionary in resolver.random_events.clouds:
+	_draw_cloud_tiles(ev.clouds, false, Color(1, 1, 1, alpha), fill, tex, view.fog_enabled, seen)
+	_draw_cloud_tiles(ev.smoke, true, Color(SMOKE_TINT.r, SMOKE_TINT.g, SMOKE_TINT.b, alpha),
+			fill, tex, view.fog_enabled, seen)
+
+## Тон дыма (0.12): тот же облачный рисунок, что у газа, но тёмно-серый — ядовитое облако
+## и безвредная завеса не путаются с первого взгляда.
+const SMOKE_TINT := Color(0.42, 0.44, 0.48)
+
+func _draw_cloud_tiles(clouds: Array, smoke: bool, tint: Color, fill: bool, tex: Texture2D,
+		fogged: bool, seen: Dictionary) -> void:
+	var drawn := {}
+	for cl: Dictionary in clouds:
 		var x0 := maxi(_cull_x0, int(cl["x"]))
 		var x1 := mini(_cull_x1, int(cl["x"]) + int(cl["w"]) - 1)
 		var y0 := maxi(_cull_y0, int(cl["y"]))
@@ -6458,17 +6471,17 @@ func _draw_gas_tiles(alpha: float, fill: bool) -> void:
 		for y in range(y0, y1 + 1):
 			for x in range(x0, x1 + 1):
 				var coord := Vector2i(x, y)
-				if drawn.has(coord) or not GasTiles.at(state.grid, coord):
+				if drawn.has(coord) or not GasTiles.at(state.grid, coord, smoke):
 					continue
 				drawn[coord] = true
-				if view.fog_enabled and not seen.has(coord):
+				if fogged and not seen.has(coord):
 					continue
 				var cell_rect := Rect2(ORIGIN + Vector2(x, y) * CELL, Vector2(CELL, CELL))
 				if tex != null:
-					var src := GasTiles.source_rect(tex, coord, GasTiles.mask_at(state.grid, coord))
-					draw_texture_rect_region(_gas_canvas_texture, cell_rect, src, Color(1, 1, 1, alpha))
+					var src := GasTiles.source_rect(tex, coord, GasTiles.mask_at(state.grid, coord, smoke))
+					draw_texture_rect_region(_gas_canvas_texture, cell_rect, src, tint)
 				elif fill:
-					draw_rect(cell_rect, Color(0.9, 0.9, 0.9, 0.36))
+					draw_rect(cell_rect, Color(tint.r * 0.9, tint.g * 0.9, tint.b * 0.9, 0.36))
 
 ## ВСПЫШКА ВЗРЫВА (0.9.4): клетки разрыва на секунду горят и гаснут. Чистая косметика —
 ## пламенем это не становится ни на одну клетку: ни резолвер, ни правила огня об этих
@@ -7033,7 +7046,6 @@ func _build_ui() -> void:
 	_init_label = null
 	_p1_btn = null
 	_p2_btn = null
-	_diff_btn = null
 	_net_status = null
 
 	_build_log_panel()
@@ -8743,31 +8755,12 @@ func _set_side_ai(side: int, value: bool) -> void:
 	if slot != null:
 		slot.kind = Roster.SlotKind.AI if value else Roster.SlotKind.HUMAN
 
-func _cycle_difficulty() -> void:
-	if networked:
-		return
-	ai_difficulty = (ai_difficulty + 1) % 3
-	for side in state.roster.player_ids():
-		var slot := state.roster.slot(side)
-		if slot != null:
-			slot.ai_difficulty = ai_difficulty
-	if p1_is_ai:
-		_make_side(MCF.Owner.PLAYER_1)
-	if p2_is_ai:
-		_make_side(MCF.Owner.PLAYER_2)
-	_refresh_ai_buttons()
-	_refresh_pause_button()
-	_kick_if_ai()
 
 func _refresh_ai_buttons() -> void:
 	if _p1_btn != null:
 		_p1_btn.text = "Player 1: %s" % ("AI" if p1_is_ai else "Human")
 	if _p2_btn != null:
 		_p2_btn.text = "Player 2: %s" % ("AI" if p2_is_ai else "Human")
-	if _diff_btn != null:
-		var names := ["Easy", "Normal", "Hard"]
-		_diff_btn.text = "AI Difficulty: %s" % names[ai_difficulty]
-		_diff_btn.disabled = not (p1_is_ai or p2_is_ai)
 
 func _open_editor() -> void:
 	if networked:
