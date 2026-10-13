@@ -12,7 +12,7 @@ import numpy as np
 import torch
 import train
 from demonstrations import import_replay, ReplayDataset, read_chunk
-from features import (Sparse, N_CHANNELS, CAND_DIM, C_VEH_CRUSH, F_VEH_CRUSH,
+from features import (Sparse, N_CHANNELS, CAND_DIM, FLAT_DIM, C_VEH_CRUSH, F_VEH_CRUSH,
                       F_ADVANCE, F_SPACING, F_COUNTER_TANK, candidate_rows, grid_tensor)
 from mcf_env import PROJECT, VecEnv
 from model import PolicyNet
@@ -71,7 +71,7 @@ class LearningTests(unittest.TestCase):
         with torch.no_grad():
             for p in net.parameters():
                 p.zero_()
-            scores, _ = net(torch.from_numpy(grid[None]), torch.zeros(1, 20),
+            scores, _ = net(torch.from_numpy(grid[None]), torch.zeros(1, FLAT_DIM),
                             torch.from_numpy(rows[None]), torch.from_numpy(cells[None]),
                             torch.ones(1, 2, dtype=torch.bool))
         self.assertGreater(scores[0, 0].item(), scores[0, 1].item() + 2)
@@ -79,7 +79,7 @@ class LearningTests(unittest.TestCase):
     def test_giant_board_uses_bounded_feature_grid_and_valid_cells(self):
         net = PolicyNet()
         grid = torch.rand(1, N_CHANNELS, 160, 160)
-        flat = torch.zeros(1, 20)
+        flat = torch.zeros(1, FLAT_DIM)
         cand = torch.zeros(1, 2, CAND_DIM)
         cells = torch.tensor([[[159 * 160 + 159, 0], [159 * 160 + 80, 80]]])
         mask = torch.ones(1, 2, dtype=torch.bool)

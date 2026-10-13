@@ -8,6 +8,10 @@ extends SceneTree
 ## A measuring tool, not a test. Run it before and after changing the AI and compare.
 ##   godot --headless --script res://tools/ai_tournament.gd -- [--games N] [--rounds R]
 ##       [--seed S] [--styles 0,1,2] [--sizes 0,1] [--units 8-16] [--out file.json]
+##       [--mode capture [--zones 3] [--target 12]] [--mode holdout [--waves 5]]
+## Capture & Hold matches end on points; at the round cap the points lead decides.
+## Holdout: side A defends with its army, side B leads the waves (no army of its own);
+## A wins by holding every wave, B by overrunning A. The round cap counts as held.
 
 const ArmyBuilder := preload("res://rl/ArmyBuilder.gd")
 const NAMES := {0: "Tactician", 1: "Aggressor", 2: "Fortifier", 3: "Flank(legacy)"}
@@ -28,6 +32,13 @@ func _initialize() -> void:
 	var units_s := _arg(args, "--units", "8-16")
 	var out_path := _arg(args, "--out", "")
 	_why = "--why" in args
+	match _arg(args, "--mode", ""):
+		"capture": GameConfig.game_mode = MatchMode.Kind.CAPTURE
+		"holdout": GameConfig.game_mode = MatchMode.Kind.HOLDOUT
+		_: GameConfig.game_mode = MatchMode.Kind.ANNIHILATION
+	GameConfig.holdout_waves = int(_arg(args, "--waves", "5"))
+	GameConfig.capture_zones = int(_arg(args, "--zones", "3"))
+	GameConfig.capture_target = int(_arg(args, "--target", "12"))
 	GameConfig.civilians_enabled = false
 	GameConfig.random_events_enabled = false
 	var pairs: Array = []
@@ -67,10 +78,11 @@ func _initialize() -> void:
 					for side in 2:
 						var st: int = a if side == 0 else b
 						_accumulate(behaviour, st, res["sides"][side])
-					print("  #%d %s(A) vs %s(B) map %d/%d: %s in %d rounds, kills %d-%d, %.1fs" % [
+					print("  #%d %s(A) vs %s(B) map %d/%d: %s in %d rounds, kills %d-%d, points %d-%d, %.1fs" % [
 						match_no, NAMES[a], NAMES[b], map_seed, size,
 						"draw" if winner == -1 else ("A" if winner == 0 else "B") + " wins (" + str(res["by"]) + ")",
 						res["rounds"], res["sides"][0]["kills"], res["sides"][1]["kills"],
+						res["sides"][0]["points"], res["sides"][1]["points"],
 						float(res["ms"]) / 1000.0])
 	print("\n== Results (row personality's record against the column) ==")
 	for key: String in table:
@@ -81,10 +93,10 @@ func _initialize() -> void:
 		var m: Dictionary = behaviour[st]
 		var n := float(maxi(1, int(m["matches"])))
 		print("%s  (%d side-matches)" % [NAMES[st], int(m["matches"])])
-		print("   kills %.1f  losses %.1f (own fault %.2f)  K/L %.2f  rounds %.1f  enemy-distance %.1f  safe %.0f%%  decide %.0f ms/action" % [
+		print("   kills %.1f  losses %.1f (own fault %.2f)  K/L %.2f  rounds %.1f  enemy-distance %.1f  safe %.0f%%  points %.1f  decide %.0f ms/action" % [
 			m["kills"] / n, m["losses"] / n, m["self_kills"] / n, m["kills"] / maxf(1.0, m["losses"]),
 			m["rounds"] / n, m["dist"] / n,
-			100.0 * m["cover"] / n, m["think_ms"] / maxf(1.0, m["actions_total"])])
+			100.0 * m["cover"] / n, m["points"] / n, m["think_ms"] / maxf(1.0, m["actions_total"])])
 		var dk: Array = (m["deaths_by"] as Dictionary).keys()
 		dk.sort()
 		var dparts: PackedStringArray = []
@@ -110,9 +122,9 @@ func _arg(args: PackedStringArray, name: String, default: String) -> String:
 func _accumulate(acc: Dictionary, st: int, side: Dictionary) -> void:
 	var m: Dictionary = acc.get(st, {"matches": 0, "kills": 0.0, "losses": 0.0, "rounds": 0.0,
 			"dist": 0.0, "cover": 0.0, "think_ms": 0.0, "actions_total": 0.0, "actions": {},
-			"deaths_by": {}, "self_kills": 0.0})
+			"deaths_by": {}, "self_kills": 0.0, "points": 0.0})
 	m["matches"] += 1
-	for k in ["kills", "losses", "rounds", "dist", "cover", "think_ms", "actions_total", "self_kills"]:
+	for k in ["kills", "losses", "rounds", "dist", "cover", "think_ms", "actions_total", "self_kills", "points"]:
 		m[k] += float(side[k])
 	for k: String in side["actions"]:
 		m["actions"][k] = float(m["actions"].get(k, 0.0)) + float(side["actions"][k])
@@ -139,13 +151,21 @@ func _play(map_seed: int, size: int, units_s: String, rounds: int, a: int, b: in
 		m = null
 	if m == null:
 		return {}
+	var holdout := GameConfig.game_mode == MatchMode.Kind.HOLDOUT
+	if holdout:
+		m.spawns = m.spawns.filter(func(s: Dictionary) -> bool: return int(s["owner"]) != MCF.Owner.PLAYER_2)
 	var st := m.build_state(map_seed * 7919)
 	for side in [MCF.Owner.PLAYER_1, MCF.Owner.PLAYER_2]:
 		st.roster.slot(side).kind = Roster.SlotKind.AI
+	if holdout:
+		st.roster.slot(MCF.Owner.PLAYER_1).team = 0
+		st.roster.slot(MCF.Owner.PLAYER_2).team = 1
+		st.roster.slot(MCF.Owner.PLAYER_2).role = Roster.ROLE_WAVES
 	var r := GameActionResolver.new(st)
 	r.fog_mode = MCF.Fog.STANDARD
 	r.random_events = RandomEvents.new(false)
 	r.update_airlocks()
+	r.prepare_mode(m)
 	_crew(st, r)
 	r.open_match()
 	var brains := {}
@@ -227,11 +247,32 @@ func _play(map_seed: int, size: int, units_s: String, rounds: int, a: int, b: in
 			metrics[side]["actions"][k] = int(metrics[side]["actions"].get(k, 0)) + 1
 		else:
 			ai.notify_intent_denied(st)
+		var outcome := r.match_outcome()
+		if holdout:
+			if outcome["over"]:
+				winner = 0 if str(outcome["reason"]) == "held" else 1
+				by = "%s, %d wave(s) beaten" % [outcome["reason"], r.waves_beaten()]
+				break
+			if st.turns.round_number > rounds:
+				winner = 0
+				by = "cap, %d wave(s) beaten" % r.waves_beaten()
+				break
+			continue
+		if outcome["over"] and str(outcome["reason"]) == "points":
+			winner = 0 if str(outcome["winner"]) == MatchMode.team_key(st.roster, MCF.Owner.PLAYER_1) else 1
+			by = "points"
+			break
 		var p1 := _alive(st, MCF.Owner.PLAYER_1)
 		var p2 := _alive(st, MCF.Owner.PLAYER_2)
 		if p1 == 0 or p2 == 0:
 			winner = -1 if p1 == p2 else (0 if p2 == 0 else 1)
 			by = "rout"
+			break
+		if st.turns.round_number > rounds and r.mode.is_capture():
+			var pa := _points(st, r, MCF.Owner.PLAYER_1)
+			var pb := _points(st, r, MCF.Owner.PLAYER_2)
+			winner = 0 if pa > pb else (1 if pb > pa else -1)
+			by = "points at cap"
 			break
 		if st.turns.round_number > rounds:
 			var lead := (_army_value(st, MCF.Owner.PLAYER_1) - _army_value(st, MCF.Owner.PLAYER_2)) \
@@ -245,13 +286,23 @@ func _play(map_seed: int, size: int, units_s: String, rounds: int, a: int, b: in
 		var mm: Dictionary = metrics[side]
 		mm["losses"] = int(start_units[side]) - _alive(st, side)
 		mm["kills"] = int(start_units[other]) - _alive(st, other)
+		if holdout:
+			# Волны приходят по ходу боя: их потери — пришедшие минус живые.
+			var wave_dead := r.mode.wave_spawned - r.wave_fighters_left()
+			var def_dead := int(start_units[MCF.Owner.PLAYER_1]) - _alive(st, MCF.Owner.PLAYER_1)
+			mm["losses"] = def_dead if side == MCF.Owner.PLAYER_1 else wave_dead
+			mm["kills"] = wave_dead if side == MCF.Owner.PLAYER_1 else def_dead
 		mm["rounds"] = st.turns.round_number
+		mm["points"] = _points(st, r, side)
 		var turns := float(maxi(1, int(mm["_turns"])))
 		mm["dist"] = float(mm["dist"]) / turns
 		mm["cover"] = float(mm["cover"]) / turns
 		out_sides.append(mm)
 	return {"winner": winner, "by": by, "rounds": st.turns.round_number, "sides": out_sides,
 			"ms": Time.get_ticks_msec() - t0}
+
+func _points(st: GameState, r: GameActionResolver, side: int) -> int:
+	return int(r.mode.scores.get(MatchMode.team_key(st.roster, side), 0))
 
 ## At the start of each own turn: how far the army stands from the enemy, and how much of
 ## it is in cover. Averaged over the match these say "closes in fast" / "digs in".

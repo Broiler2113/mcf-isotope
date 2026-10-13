@@ -52,7 +52,7 @@ func _initialize() -> void:
 	ck(pages.current_tab == menu.PAGE_HOME, "it opens on the main list")
 
 	var home := pages.get_tab_control(menu.PAGE_HOME)
-	var want := ["New Game", "Map Editor", "Multiplayer", "Saves & Replays", "Settings", "Quit"]
+	var want := ["New Game", "Map Editor", "Multiplayer", "Saves & Replays", "Manual", "Report a Bug", "Settings", "Quit"]
 	ck(_labels(home) == want, "every entry is one button in one column, in reading order (%s)"
 			% [_labels(home)])
 

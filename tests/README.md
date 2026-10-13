@@ -56,7 +56,7 @@ and refusing an end-turn or undo from a side that is not acting. Same
 host/client protocol as `run_lockstep.gd`, with per-action board comparison.
 
 **`run_lobby_maps.gd`** builds the real lobby scene and asserts that every map on
-disk — shipped in `res://maps` and saved by the editor in `user://maps` — is a row
+disk — shipped in `res://src/data/maps` and saved by the editor in `user://maps` — is a row
 in its dropdown, that each row points at a file that still reads back as a map, and
 that rescanning the folders neither loses maps nor doubles them. It also drives the *Random
 map* row: one zone per slot, "Players" adding and removing slots, "Units per side"

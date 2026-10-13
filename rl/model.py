@@ -161,7 +161,9 @@ def _grow_in(w: torch.Tensor, want_in: int) -> torch.Tensor:
     return torch.cat([w, pad], dim=1)
 
 
-GROWERS = {"cand.0.weight": _grow_cand, "conv.0.weight": _grow_in}
+# _grow_in pads the input dim at the end, which is also right for the flat Linear (0.12
+# appended the game mode block to the flat vector).
+GROWERS = {"cand.0.weight": _grow_cand, "conv.0.weight": _grow_in, "flat.0.weight": _grow_in}
 
 
 def load_compat(net: "PolicyNet", sd: dict, opt: torch.optim.Optimizer | None = None,

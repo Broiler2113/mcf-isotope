@@ -1,0 +1,25 @@
+# MCF Isotope bug reports (tools/bugs/isotope_bugs.py), next to the relay (release 0.12).
+# Install: copy isotope_bugs.py to /opt/isotope-bugs/, this file to
+# /etc/systemd/system/, then: systemctl daemon-reload && systemctl enable --now isotope-bugs
+# and open the port: ufw allow 8651/tcp
+# Reports land in /var/lib/isotope-bugs/<date>/<time>-<id>/ (systemd StateDirectory).
+[Unit]
+Description=MCF Isotope bug reports
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/isotope-bugs/isotope_bugs.py --port 8651 --dir /var/lib/isotope-bugs
+DynamicUser=yes
+StateDirectory=isotope-bugs
+StateDirectoryMode=0750
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

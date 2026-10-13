@@ -61,6 +61,12 @@ class EpisodeConfig:
     discount_unit: str = "decision"  # round keeps long multi-unit turns on one clock
     canvas_size: int = 64
     army: str = ""               # "" as on the map, "shuffle" = mirrored type swap (fixed maps)
+    # --- release 0.12 game modes ---
+    mode: str = "annihilation"   # "annihilation" | "capture" | "holdout"
+    zones: int = 3               # capture: zones on the map (1/3/5)
+    target: int = 12             # capture: points to win
+    waves: int = 10              # holdout: waves to survive (0 = endless)
+    holdout_role: str = "defend"  # holdout: "defend", or "waves" to lead the waves
 
     def to_cmd(self) -> dict:
         return {
@@ -74,6 +80,8 @@ class EpisodeConfig:
             "opponent_style": self.opponent_style, "shaping_scale": self.shaping_scale,
             "potential_coef": self.potential_coef, "army": self.army, "gamma": self.gamma,
             "discount_unit": self.discount_unit, "canvas_size": self.canvas_size,
+            "mode": self.mode, "zones": self.zones, "target": self.target,
+            "waves": self.waves, "holdout_role": self.holdout_role,
         }
 
 

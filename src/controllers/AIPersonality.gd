@@ -53,6 +53,8 @@ static func profile(style: int, round: int = 1) -> Dictionary:
 				# Самосохранение (owner rule, 0.12): и Aggressor не лезет под огонь зря —
 				# он наступает, но от укрытия к укрытию.
 				"threat": -10.0, "shelter": 4.0,
+				# Capture & Hold: шаг к нужной зоне и место в ней. Aggressor рвётся к зонам.
+				"objective": 9.0, "zone": 34.0,
 				# По ближайшему: цель ближе на клетку — на столько дороже.
 				"near_target": 1.2,
 				# Граната летит, если в среднем убьёт хотя бы столько.
@@ -68,6 +70,7 @@ static func profile(style: int, round: int = 1) -> Dictionary:
 				"fire": 30.0, "fire_ease": 3.0, "advance": _bounding(round), "cover": 6.0,
 				"trench": 2.5, "danger": -9.0, "stay": 6.0, "step": -0.2,
 				"threat": -20.0, "shelter": 10.0,
+				"objective": 7.0, "zone": 40.0,
 				"near_target": 0.0,
 				"grenade_min": 0.9,
 				"smoke_min": 0.7,
@@ -80,6 +83,7 @@ static func profile(style: int, round: int = 1) -> Dictionary:
 				"fire": 30.0, "fire_ease": 2.0, "advance": 3.0, "cover": 4.0, "trench": 2.0,
 				"danger": -5.0, "stay": 2.0, "step": -0.15,
 				"threat": -15.0, "shelter": 7.0,
+				"objective": 8.0, "zone": 34.0,
 				"near_target": 0.0,
 				"grenade_min": 0.9,
 				"smoke_min": 0.8,

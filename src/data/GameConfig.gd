@@ -81,6 +81,15 @@ static var live_placement_visible: bool = true
 ## Настройки случайных событий (§1.5, item 61): включены ли, обязательное событие каждый
 ## ход, сколько ходов между событиями и веса-доли по id события. Пустой roster = каркас
 ## без включённых событий. См. RandomEvents.
+## Режим партии (0.12, MatchMode): 0 Annihilation, 1 Capture & Hold, 2 Holdout — и его
+## настройки из лобби.
+static var game_mode: int = 0
+static var capture_zones: int = 3
+static var capture_target: int = 12
+static var holdout_waves: int = 10
+## Кто ведёт волны Holdout: личность ИИ 0..2 или 3 — обученная модель.
+static var holdout_ai: int = 1
+
 static var random_events_enabled: bool = false
 static var random_events_mandatory: bool = false
 static var random_events_interval: int = 3

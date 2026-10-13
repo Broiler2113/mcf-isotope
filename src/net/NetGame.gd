@@ -115,6 +115,8 @@ func receive(msg: Dictionary) -> void:
 				# после пересинхронизации видел бы сквозь чужую завесу (или упирался в свою).
 				if resolver.random_events != null:
 					snap["ev"] = resolver.random_events.snapshot()
+				# Счёт, зоны и волны режима (0.12) тоже живут на резолвере.
+				snap["mode"] = resolver.mode.snapshot()
 				outgoing.emit(snap)
 		K_STATE:
 			if not is_host:
@@ -226,6 +228,9 @@ func _client_restore(msg: Dictionary) -> void:
 		if resolver.random_events == null:
 			resolver.random_events = RandomEvents.new(false)
 		resolver.random_events.restore(ev)
+	var md: Variant = msg.get("mode")
+	if md is Dictionary:
+		resolver.mode.restore(md)
 	# Газ и дым на клетках — выводимые: доска пришла без них, выводим из облаков заново.
 	resolver._sync_gas()
 	var fx: Variant = msg.get("fx")

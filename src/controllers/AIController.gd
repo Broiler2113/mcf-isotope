@@ -197,6 +197,88 @@ var _danger: Array[Rect2i] = []
 func bind_match(r: GameActionResolver) -> void:
 	_match = weakref(r)
 
+## Режим партии (0.12) — с резолвера САМОЙ партии: у резолвера решения он свой, пустой.
+func _match_mode() -> MatchMode:
+	if _match == null:
+		return null
+	var live: GameActionResolver = _match.get_ref()
+	return live.mode if live != null else null
+
+## Сколько врагов в пределах этого числа клеток от зоны могут оспорить её к концу раунда.
+const ZONE_THREAT_RADIUS := 8
+
+## Сближение в Holdout: защитники — четверть обычного, волны — в полтора раза.
+const HOLDOUT_HOLD := 0.25
+const HOLDOUT_WAVE_PUSH := 1.5
+
+## Цель с наградой за голову стреляется охотнее прочих.
+const SCORE_BOUNTY := 30.0
+
+## Больше стольких бойцов штаб в одну зону не шлёт.
+const ZONE_MAX_SENT := 6
+
+## Цели Capture & Hold для штаба. В каждую зону — столько бойцов, чтобы перевесить врагов
+## в ней и рядом (лишний в зоне очков не даёт), и шлются БЛИЖАЙШИЕ по пути: каждый боец —
+## не больше чем в одну зону, остальные воюют как обычно. Иначе к нужной зоне тянуло бы
+## всю армию разом, а окопавшегося — никуда (окоп и укрытие перевешивали шаг к зоне).
+## Враги видны ИИ сквозь туман (#43) — как и для огня.
+func _set_zone_objectives(state: GameState, md: MatchMode) -> void:
+	var live: GameActionResolver = _match.get_ref()
+	var us := MatchMode.team_key(state.roster, owner)
+	var w := state.grid.width
+	var zone_of := {}
+	var caps: Array = []
+	var need: Array = []
+	var fields: Array = []
+	var foes: Array = []
+	for e: UnitInstance in state.all_units():
+		if e.is_alive() and not e.is_drone and MCF.is_player(e.owner) \
+				and not state.roster.are_allies(owner, e.owner) and state.grid.in_bounds(e.coord):
+			foes.append(e.coord)
+	for i in md.zones.size():
+		var rect := md.zone_rect(i)
+		var counts := live.zone_counts(i)
+		var ours := int(counts.get(us, 0))
+		var theirs := 0
+		for k: String in counts:
+			if k != us:
+				theirs = maxi(theirs, int(counts[k]))
+		var near := 0
+		var grown := rect.grow(ZONE_THREAT_RADIUS)
+		for c: Vector2i in foes:
+			if grown.has_point(c):
+				near += 1
+		var cap := clampi(maxi(theirs, near) + 1, 1, ZONE_MAX_SENT)
+		caps.append(cap)
+		need.append(maxi(0, cap - ours))
+		var seeds := PackedInt32Array()
+		for y in range(rect.position.y, rect.end.y):
+			for x in range(rect.position.x, rect.end.x):
+				var c := Vector2i(x, y)
+				if not state.grid.in_bounds(c) or state.grid.blocks_walk(c):
+					continue
+				zone_of[c] = i
+				seeds.append((y + 1) * (w + 2) + x + 1)
+		fields.append(wave(state.grid, seeds, {}) if int(need[i]) > 0 and not seeds.is_empty() else null)
+	var rows: Array = []   # [шагов до зоны, id бойца, номер зоны]
+	for u: UnitInstance in state.living_units_of(owner):
+		if u.is_drone or u.is_held() or u.aboard_vehicle_id != -1 or zone_of.has(u.coord):
+			continue
+		for i in fields.size():
+			var f: GeoField = fields[i]
+			if f != null and f.at(u.coord) < GeoField.FAR:
+				rows.append([f.at(u.coord), u.id, i])
+	rows.sort_custom(func(x: Array, y: Array) -> bool:
+		return x[0] < y[0] or (x[0] == y[0] and (x[1] < y[1] or (x[1] == y[1] and x[2] < y[2]))))
+	var sent := {}
+	for row: Array in rows:
+		var zi: int = row[2]
+		if sent.has(row[1]) or int(need[zi]) <= 0:
+			continue
+		need[zi] = int(need[zi]) - 1
+		sent[row[1]] = fields[zi]
+	_planner.set_objectives(sent, zone_of, caps)
+
 func _sync_danger() -> void:
 	_danger.clear()
 	if difficulty != Difficulty.HARD or _match == null:
@@ -205,7 +287,7 @@ func _sync_danger() -> void:
 	if live == null or live.random_events == null:
 		return
 	for e: Dictionary in live.random_events.pending:
-		if str(e["id"]) in [RandomEvents.MORTAR, RandomEvents.GAS]:
+		if str(e["id"]) in [RandomEvents.MORTAR, RandomEvents.GAS, RandomEvents.FIRE, RandomEvents.COLLAPSE]:
 			var p: Dictionary = e["params"]
 			_danger.append(Rect2i(int(p.get("x", 0)), int(p.get("y", 0)), int(p.get("w", 0)), int(p.get("h", 0))))
 	for cl: Dictionary in live.random_events.clouds:
@@ -530,6 +612,15 @@ func _sync_turn(state: GameState, r: GameActionResolver) -> void:
 	# исполнять. Геополе считается тут же и переиспользуется планом.
 	_planner.owner = owner
 	_planner.style = style if style != Style.FLANK else Style.STANDARD
+	_planner.clear_objectives()
+	var md := _match_mode()
+	_planner.advance_scale = 1.0
+	if md != null and md.is_capture() and not md.zones.is_empty() and not MCF.is_npc_side(owner):
+		_set_zone_objectives(state, md)
+	elif md != null and md.is_holdout() and MCF.is_player(owner):
+		# Защитник не выходит навстречу волне, а встречает её с подготовленных позиций;
+		# волна, наоборот, обязана дойти до них.
+		_planner.advance_scale = HOLDOUT_WAVE_PUSH if owner == md.wave_side else HOLDOUT_HOLD
 	_planner.plan(state, r, _enemy_distance_field(state, false, r), _vehicle_queue(state, r))
 	# Копия, а не сам массив: очередь исполнения вычерпывается pop_front'ом, и по
 	# ссылке она стирала бы САМ ПЛАН — а он нужен целиком до конца хода (отладка,
@@ -1142,9 +1233,16 @@ func _best_shoot(state: GameState, r: GameActionResolver, u: UnitInstance) -> Di
 		if r.anti_tank_shot_endangers_own(u, t.coord):
 			continue
 		var dist := Combat.distance(u.coord, t.coord)
-		var hit_need := Combat.hit_number(dist, u.fire_range())
+		# Через резолвер: в пыльную бурю (0.12) дальний выстрел труднее.
+		var hit_need := r.hit_need(dist, u.fire_range())
+		if hit_need >= 7:
+			continue
 		var ease := float(7 - hit_need)  # чем меньше нужное число, тем выше
 		var score := SCORE_SHOOT_BASE + _unit_value(t) + ease * 2.0
+		# Награда за голову (0.12, Capture & Hold): два очка — как пара удержанных зон.
+		var md := _match_mode()
+		if md != null and md.bounty_unit == t.id:
+			score += SCORE_BOUNTY
 		if _pref_hard():
 			score += ease  # на «сложном» сильнее любит гарантированные попадания
 		# Aggressor бьёт по ближайшему: тот, кто вот-вот дотянется, опаснее дорогого вдали.

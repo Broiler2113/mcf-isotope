@@ -178,6 +178,7 @@ static func encode_rules(resolver: GameActionResolver) -> Dictionary:
 		"fog": resolver.fog_mode,
 		"friendly_fire": resolver.friendly_fire_enabled,
 	}
+	out["mode"] = resolver.mode.snapshot()
 	if resolver.random_events != null:
 		out["events"] = resolver.random_events.snapshot()
 		out["events_cfg"] = {
@@ -191,6 +192,11 @@ static func encode_rules(resolver: GameActionResolver) -> Dictionary:
 static func apply_rules(resolver: GameActionResolver, d: Dictionary) -> void:
 	resolver.fog_mode = int(d.get("fog", resolver.fog_mode))
 	resolver.friendly_fire_enabled = bool(d.get("friendly_fire", true))
+	# Режим партии (0.12): старые сохранения его не знают — это обычное уничтожение.
+	resolver.mode = MatchMode.new()
+	var md: Variant = d.get("mode", {})
+	if md is Dictionary and not (md as Dictionary).is_empty():
+		resolver.mode.restore(md)
 	var cfg: Dictionary = d.get("events_cfg", {})
 	if not cfg.is_empty():
 		var weights: Dictionary = {}

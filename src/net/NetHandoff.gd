@@ -96,7 +96,9 @@ const K_LOBBY_MAP := "lobby_map"
 ##   8 — 0.11.2: any own station packs up (docked drone with it), barrage skips sleeping
 ##       civilians, raiders enter bunkers by a hallway.
 ##   9 — 0.11.3: a drone over a wall is blind (changes what a side may target).
-const PROTOCOL := 9
+##  10 — 0.12: game modes, AI personalities, smoke grenades, seven new random events,
+##       dust-storm hit numbers.
+const PROTOCOL := 10
 
 static func encode_rules() -> Dictionary:
 	var roster := GameConfig.active_roster()
@@ -110,6 +112,8 @@ static func encode_rules() -> Dictionary:
 		"re": GameConfig.random_events_enabled, "rm": GameConfig.random_events_mandatory,
 		"ri": GameConfig.random_events_interval,
 		"rw": GameConfig.random_events_weights.duplicate(),
+		"gm": GameConfig.game_mode, "cz": GameConfig.capture_zones,
+		"ct": GameConfig.capture_target, "hw": GameConfig.holdout_waves, "wa": GameConfig.holdout_ai,
 		"roster": roster.to_dict(),
 	}
 
@@ -138,6 +142,11 @@ static func apply_rules(msg: Dictionary) -> void:
 	if rw is Dictionary:
 		for k in rw:
 			GameConfig.random_events_weights[str(k)] = float(rw[k])
+	GameConfig.game_mode = int(msg.get("gm", 0))
+	GameConfig.capture_zones = int(msg.get("cz", MatchMode.DEFAULT_ZONES))
+	GameConfig.capture_target = int(msg.get("ct", MatchMode.DEFAULT_TARGET))
+	GameConfig.holdout_waves = int(msg.get("hw", MatchMode.DEFAULT_WAVES))
+	GameConfig.holdout_ai = int(msg.get("wa", 1))
 	GameConfig.allowed_units = {}
 	var rd: Variant = msg.get("roster")
 	if rd is Dictionary:

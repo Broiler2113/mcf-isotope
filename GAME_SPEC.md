@@ -1473,12 +1473,77 @@ their remaining rounds (`Main._draw_random_events`). Landing reuses the usual pl
 `deaths`, `fx` and `dice_events` ("check" rolls for gas), so deaths, the debris pass and the
 cosmetic fire flash all behave like any other attack.
 
+**0.12 events (owner's list).** All roll through the same dice stream; which ones may happen is
+asked only when an event is due (`_events_allowed`), and new ids are appended to `REGISTRY`, so
+old weight settings still pick the same way.
+- *Fire Outbreak* — a 3×3 zone around a burnable cell ignites at round end (owner
+  `EVENT_FIRE_OWNER` = −2) and spreads once at every later round close.
+- *EMP Burst* — a 7×7 zone centered on a vehicle (crewed first; owner: "target vehicles"; with
+  no vehicles, on drones or drone stations; nothing electronic → no EMP): drones drop, drone
+  stations and LDF walls burn out, each vehicle gun in it takes 1 damage.
+- *Dust Storm* — town and field maps only, one at a time, 2 rounds: every resolver hit roll
+  beyond 3 cells needs +1 (`hit_need`/`sniper_need`, 7 = impossible). The HUD shows it.
+- *Structural Collapse* — walls, wooden walls and glass in a 3×3 zone fall; each soldier
+  inside rolls d6, below 3 is crushed.
+- *Reinforcements* — the weakest side by soldier value (≥ 20 % behind the strongest; never the
+  Holdout waves) gets half the gap in fresh soldiers at its nearest edge.
+- *Bounty* — Capture & Hold only, instant: the points leader's most valuable soldier is marked
+  for 3 rounds; an enemy kill scores 2, any other death voids it.
+- *Old Minefield* — instant at a round's start, asteroid surface / town and field outdoors only
+  (no indoor floor finish, no wooden floors): up to 10 mines within 4 cells of a rolled center,
+  owner `OLD_MINE_OWNER` = −2, so nobody sees them until a sapper sweeps. The report names no
+  place. Each step onto one rolls d6 and only 5+ sets it off; a dud leaves no trace.
+
 **Networking.** `NetHandoff.PROTOCOL` (2 since 0.9.4) rides in every rules message; a guest
 whose version differs is refused in the lobby with a plain explanation instead of desyncing
 mid-battle. RL training keeps the roster but zeroes the `army` weight: a third side with no
 player number breaks both the observation and the reward.
 
 Covered by `tests/run_random_events.gd`.
+
+## 14b. Game Modes (0.12)
+
+`MatchMode` (`src/sim/MatchMode.gd`) lives on the resolver next to `random_events` and travels
+the same way: `StateCodec.encode_rules`/`apply_rules` (saves, replays, undo-free resync via
+`K_RESYNC`'s `"mode"`), `NetHandoff.encode_rules` (`gm`/`cz`/`ct`/`hw`/`wa`). A save without a
+mode plays annihilation. `GameActionResolver.prepare_mode(map)` sets the match up once the
+armies stand on the board; `match_outcome()` is the one verdict used by the battle screen,
+the RL env and the tools (`{"over", "winner": team key, "reason": rout|points|held|overrun|draw}`).
+Team keys are strings: `"t<team>"`, or `"s<side>"` for a side outside teams.
+
+**Annihilation** — the last team with soldiers standing wins (unchanged).
+
+**Capture & Hold** — 1/3/5 zones, points to win 3–99 (default 12).
+- *Placement* (`MatchMode.zones_for`): squares (3×3, or 5×5 when the map has ≥ 2000 open cells)
+  of mostly open, non-vacuum ground, never touching a deployment zone. Fairness is geodesic:
+  BFS over the game's own walkability (`GridCell.walkable_terrain`, furniture excluded) from each
+  side's deployment cells; a zone's spread (max − min steps) must stay within
+  `1 + 6% of the mean` (+2 at the last relaxation step). The first zone is the fairest, nearest
+  the middle of the route; later ones are as far from the others as fairness allows. Spacing
+  and the deployment gap relax first; fairness is never given up after the first zone, so a
+  cramped map (a bunker) may get fewer zones than asked. Pure function of the map: host,
+  guests and the purchase screen agree.
+- *Scoring* (`_score_zones`, at every round close): a zone belongs to the team with more living,
+  non-held soldiers in it (a crewed vehicle touching it counts one); a tie scores nothing; each
+  held zone is 1 point. First team at the target with a strict lead wins; annihilation still
+  wins outright. `mode.holders` keeps the last round end's holders — that is what the map and
+  HUD show, so live positions under fog are never revealed.
+- *Bounty* event (C&H only, §14a) adds `BOUNTY_POINTS` = 2.
+
+**Holdout** — all players are team 0; a roster slot with `role == ROLE_WAVES` (team 1, AI
+personality or Learned, `Roster.set_waves`) leads the waves and buys nothing (the purchase screen
+skips it). Waves: 5/10/15 or endless (`waves_total` 0).
+- *Timing (owner rule)*: a wave is announced at a round's start (edge strip, or a hallway end in
+  bunkers — the farthest of three rolled edges from the defenders) and lands at that round's
+  end. The next one is due `WAVE_EVERY` = 2 rounds later — **or immediately after the previous
+  wave is wiped out**: `_maybe_wave_cleared` runs after every resolved action, announces at once,
+  and clears the undo stack (its rolls are part of that action).
+- *Strength*: wave k is worth `defender_value × (0.2 + 0.07·(k−1))` in purchase points, drawn
+  from `ARMY_ROSTER` with dice. AI tournament: AI defenders hold 5 waves ~58 %, fall at waves
+  6–9 of 10.
+- *Outcome*: held = all waves landed and beaten (finite); overrun = no defender left (endless
+  matches end only this way; the title reports rounds, waves beaten and kills).
+- *AI*: defenders hold their ground (advance × 0.25), the waves push (× 1.5).
 
 ---
 
@@ -1504,6 +1569,13 @@ is consumed on use regardless of outcome** — a missed grenade is still gone.
 - **Other cells**: the target rolls **two dice** at `armor + 1 − corpse_shield` and must
   pass **both**.
 - **Glass** defends at `GLASS_ARMOR = 5`, also on 2 dice (#44).
+
+### Smoke grenade (0.12)
+
+Heavy Infantry carries one (`ITEM_SMOKE`). Thrown like a frag (same range, straight lines, same
+accuracy and short-fall), it leaves a 3×3 cloud (`RandomEvents.add_smoke`, `SMOKE_ROUNDS` = 2:
+until the end of the next round). Smoke is harmless and blocks sight and aimed fire exactly like
+gas (`GridCell.obscured()`); refusals say "Smoke blocks line of sight".
 
 ### Blasts in general (`_blast`)
 
@@ -1899,6 +1971,26 @@ itself survives the whole turn for inspection.
 > queue changes deployment without changing any rule. Second, `_lane_cells` and
 > `_exposure` are precomputed once per plan on the assumption that **nobody moves during
 > planning**; if that ever stops being true they must be rebuilt.
+
+### 17.0b Personalities (0.12)
+
+Difficulty levels are gone: every scripted AI is HARD with a personality (`AIPersonality`,
+indices = `AIController.Style` so RL configs keep working; FLANK stays RL-only). `profile(style,
+round)` gives planner weights and decision knobs:
+- **Tactician** — balanced cover, concentrated fire, even trades (old HARD).
+- **Aggressor** — advance 5, shoots the nearest, throws grenades at ≥ 0.55 expected kills,
+  takes prisoners, pushes vehicles; still threat-averse.
+- **Fortifier** — digs (58), builds (56), mines approaches, high cover/shelter weights, advances
+  by bounds as rounds pass (`_bounding`).
+**Self-preservation (owner rule):** the planner scores each cell by expected hits from enemies
+on its firing lines (`_threat`, directional cover, trenches) and by shelter; flame jets, lasers,
+drones and tank shells that would hit friends are vetoed; burning or creeping fire is fled
+first; sappers sweep when the enemy fielded one. Measured with `tools/ai_tournament.gd`:
+self-inflicted losses fell from ~1.2–1.5 to ~0.1–0.2 per match.
+**Capture & Hold:** `_set_zone_objectives` sends only the nearest needed soldiers to each zone
+(enough to outnumber the enemies in and near it, at most 6), each with its own geodesic field;
+the planner caps soldiers per zone and lowers their pull toward the enemy. Bounty targets get
++30 to shoot.
 
 ### 17.1 The executor (`AIController`)
 
@@ -3535,6 +3627,7 @@ glass are stamped into the terrain chunk once (`TerrainTiles._bake_decals`) inst
 redrawn every frame — at ~12k decals that was ~75 ms a frame and is now nothing. They follow
 the same fog rules as the terrain they sit on. Bloody footprints are gone with the rest of
 the per-step bookkeeping. **Service accents** (§20.2): on stations and in bunkers the walls and door frames of a service carry its colour — command blue, control/comms white, security red, medical green, science purple, engineering yellow, cargo orange, everything else grey; a room's own purpose beats its department (`MapGen.KIND_ACCENT`), the colour is a per-cell display-only byte (`MapData.wall_accent`, `MCF.Accent`) drawn as a line that runs along the wall and as a tinted door frame. **Corridors**: main ones are always 3 cells wide, maintenance tunnels 1 (2 about a quarter of the time), and grating is laid in roughly a third of the tunnels and in no room at all. **Grill walkway** (`MCF.Look.GRILL`): a floor look that is transparent between its bars and lies *over* a cell instead of replacing it; it runs from a hull airlock out into space with solar panels down both sides, and it is paintable in the editor. **Space draws no tile** — the `Starfield` parallax behind the board shows through it, following the camera (far layer 5 %, near 26 %); `floor_space.png` dropped by the player still wins. **Doors fill the whole cell** instead of a narrow panel in the middle of it. **Windows**: a symbol fallback font (✓ ✕ ▶ ⚠ are in neither Handjet nor Tahoma) and an explicit `stretch/aspect=expand` so a non-16:9 window is not letterboxed. Also: the hidden storage can no longer get an exterior airlock cut into it. **A border around every map** (§20.2): 10 cells in every direction that can be reached — diggable soil in a bunker, grass around a town or field, open space around a station or asteroid — and 2 more that cannot (`MCF.FEATURE_BOUNDARY`, in no destructible list, opaque to the laser), so the world keeps going past the battlefield but nothing walks off it. Lobby sizes now name the map, not the field. Also: `default_clear_color` was never applied — project.godot comments must start with `;`, and the `#` ones silently dropped the setting, so the window had been Godot grey instead of black all along. Tests: `tests/run_batch093.gd`. |
+| 130 | **Release 0.12** — **Game modes** (§14b): Capture & Hold (fair auto-placed zones, round-end points, first to the target) and Holdout (co-op against waves every 2 rounds or right after a wipe; 5/10/15/endless; waves led by an AI personality or the trained model). **AI personalities** replace difficulties (§17.0b), with self-preservation throughout. **Smoke grenades** for Heavy Infantry (§15). **Seven events** (§14a): fire outbreak, EMP (targets vehicles), dust storm, structural collapse, reinforcements, bounty, old minefield. **Manual** (F1; F2 in the editor; `ManualWindow`/`ManualText`) with rule pages and unit/vehicle cards. **Keyboard diagram** on the keybinds page (`KeyboardDiagram`: used / combination / free keys, hover tooltips, game and editor views). **Report a Bug** (`BugReportWindow`, in-memory `GameLog`) posting to `tools/bugs/isotope_bugs.py` on the relay host (port 8651). **Font** falls back to the raw TTF and retries while an import is pending. **American spelling** for every visible string (lint in `tests/run_batch012.gd`). **Folders:** Saves, Replays, Maps and Presets sit right in the game folder (0.11's "Isotope Data" is moved up once); bundled maps moved to `src/data/maps`; release notes in `Release Notes/`. RL: env modes, smoke/zone/wave layers, flat 20 → 28. Protocol 10. Tests: `tests/run_batch012.gd`. |
 | 129 | **Issues-fix-13** (0.11.3) — **Fog memory for decals and bodies:** under fog the battle screen bakes casings, glass shards, blood, gibs, laser marks and track marks from a per-viewer `DecalMemory` (`src/fx/DecalMemory.gd`) instead of the live `FxDecals`: in sight it mirrors the live layer, out of sight it keeps what the viewer saw there last (a casing dropped in the dark appears only once the spot is seen; a pool burned away in the dark stays until the spot is seen). Laser and track marks are cut at cell boundaries so only the seen part shows. Bodies (`Main._fog_mem_corpses`) follow the same rule under standard fog — this replaces playtest-20's "corpses stay visible". The far zoom layer now reads the viewer's remembered rubble and decals too (it used to show blasts in the dark). **Gas** under fog draws only on cells a team member would see if gas were clear (`Resolver.team_sees_gas`; walls and enemy tanks still block); the announced zone frame and its countdown stay. Tracers draw only where the bullet is in sight. **Before / After** under fog keeps the current fog veil and shows non-allied units/vehicles only where the viewer saw them at the start (`Main._before_seen`). **Drones:** a drone over a sight-blocking cell sees only its own cell (`sight_of` → 0). **Raiders** play at the host's AI speed (`_pace` during an independent slot) and the AI speed row appears while any are alive. **Random map:** no "Flammable" box — flammability follows the style (`MapGen.STYLE_FLAMMABLE`). The wooden wall texture lost its knots (`tools/gen_textures.gd -- --wood`). Tests: `tests/run_batch0113.gd`. |
 | 128 | **Issues-fix-12** (0.11.2) — **Fog rework:** the fog layer is drawn OVER walls and furniture (it used to sit between floor and objects). STANDARD is a grey veil (`Main.FOG_COL`) on every cell not seen now, explored or not: the whole map shows under it, but as the viewer remembers it — `Main._board_memory` keeps one `Grid` copy per viewer whose cells update only while seen (walls built or knocked down, field works, fire, lamps in the dark don't show; the light layer reads the same copy); units and vehicles outside sight stay hidden, corpses still show. REALISTIC blacks out everything outside sight, walls, furniture and corpses included. Field works are baked into the tiles again (playtest-20's per-visible-cell pass and `TerrainTiles.skip_features` removed); airlocks out of sight still draw closed. **Hidden information:** an unseen enemy's dice don't show (our own defence roll shows bare, without their modifiers), its "[denied]" lines stay out of the log, and a shot's target crosshair shows only where the viewer sees the shooter or the target. **Deployment:** under fog a non-allied army is never drawn on the purchase screen; without fog "Live placement visibility" governs ready armies too (they used to appear on Ready regardless); the lobby box is locked off while fog is on. **Drone stations:** a drone operator packs up ANY own-side station next to him; a drone sitting on its station is packed with it, a flying one must come back first (there was no landing, so a station with a live drone never packed); several stations → a picker; a shuttle-seat station keeps its operator through a flight, draws over the hull and flies (with its docked drone) in step with the shuttle; a drone over a hull is selectable (clicks cycle drone → rider → shuttle); a drone that can't act shows why with greyed Fly/Detonate. **Drawing:** pen and eraser survive another side's actions and animations; ten colour swatches (first = side colour), colour sent with the stroke. **Rules:** the artillery barrage aims only at players and woken civilian groups, never the sleeping block; on bunker maps raiders enter at the hallway end (`hallway_ends`: ≤3 wide, ≥7 long, wall ahead) nearest the announced edge segment and fill the corridor. **Settings:** Gameplay → Autoroll dice. **Heightmap:** a trench reads −2; labels draw over field works. Per-cell feature tiles use NEAREST (`Sprites.nearest`). Online games autosave when a player leaves or the connection drops. Protocol 8. Tests: `tests/run_batch0112.gd`. |
 | 127 | **Issues-fix-11** (0.11.1) — **Heightmap** (Shift+H in battle and editor, View menu / side-panel checkbox): the height of every cover tile written on it as a number ("0.5", "1", "1.5", "2"; full 2 m walls dimmed), under fog only on cells seen now. **Reverted from 0.11:** gas hides through the fog-of-war sweep again with fog off (the ~10 s/action Colossal cost from the 0.10 review returns), and only anti-tank aiming drops the pane's "glass N+" label. **HARD AI** reads the live event queue (`AIController.bind_match`): a soldier inside an announced barrage, announced gas or standing gas moves out first (score 300, nearest the edge if no safe cell is in reach) and no ordinary move ends inside one; NORMAL/EASY unchanged. **Lamps:** a tint byte's high four bits are a brightness step (`Furniture.LIGHT_LEVELS`, 25–300 %; energy × k, reach × √k), set from the editor's right-click lamp menu; old bytes read as 100 %. A broken lamp sheds glass shards like a window (`_lamp_shards`, wall lamps onto their own side); a frag grenade no longer auto-smashes lamps — each one in the X (a wall lamp only on the face towards the blast) rolls two dice against 6+ like glass. **Art:** an open door's doorway is transparent and drawn without the wall behind it, so the floor shows; solar panels have even 4×4 cells and the two panels of one walkway mirror each other. **Lobby preview:** deployment zones get a 35 % wash and a thin solid outline in the slot's faction colour (NOVA red, Purifiers yellow). "Isotope Data" gets a `.gdignore` when it sits inside the project. Tests: `tests/run_batch0111.gd`. |

@@ -27,6 +27,16 @@ extends RefCounted
 const MORTAR := "mortar"
 const GAS := "gas"
 const ARMY := "army"
+## 0.12 (решения владельца). FIRE, EMP, COLLAPSE, REINFORCE и DUST объявляются в начале
+## раунда и падают в его конце, как прежние. MINEFIELD и BOUNTY случаются СРАЗУ: о минах
+## говорят, что они есть, но не где; метка на бойца просто ставится.
+const FIRE := "fire"
+const EMP := "emp"
+const DUST := "dust"
+const COLLAPSE := "collapse"
+const REINFORCE := "reinforce"
+const BOUNTY := "bounty"
+const MINEFIELD := "minefield"
 
 ## Реестр известных событий: id -> человекочитаемое имя. Порядок фиксирован — по нему
 ## взвешенный выбор обходит события, поэтому у хоста и клиента он совпадает.
@@ -38,7 +48,28 @@ const REGISTRY := [
 	[MORTAR, "Artillery Barrage"],
 	[GAS, "Gas Cloud"],
 	[ARMY, "Independent Army"],
+	[FIRE, "Fire Outbreak"],
+	[EMP, "EMP Burst"],
+	[DUST, "Dust Storm"],
+	[COLLAPSE, "Structural Collapse"],
+	[REINFORCE, "Reinforcements"],
+	[BOUNTY, "Bounty"],
+	[MINEFIELD, "Old Minefield"],
 ]
+
+## Что делает событие и где оно бывает — для окна выбора событий в лобби.
+const NOTES := {
+	MORTAR: "A zone is shelled at the end of the round: every cell has an even chance to be destroyed.",
+	GAS: "A gas cloud settles over a zone for a few rounds and chokes anyone inside.",
+	ARMY: "Hostile raiders land at a map edge and fight everyone.",
+	FIRE: "A fire breaks out in a zone at the end of the round and keeps spreading every round.",
+	EMP: "Strikes a vehicle (crewed ones first): its gun takes damage, drones in the zone drop, drone stations and LDF walls burn out. With no vehicles on the field it hits drones instead.",
+	DUST: "Town and field maps only. For two rounds every shot beyond 3 cells needs one more.",
+	COLLAPSE: "Walls in a zone come down at the end of the round; anyone inside may be crushed.",
+	REINFORCE: "The weakest side gets fresh troops at its nearest map edge.",
+	BOUNTY: "Capture & Hold only. The leader's most valuable soldier is marked: kill it within 3 rounds for 2 points.",
+	MINEFIELD: "Asteroid, town (outdoors) and field maps. Old mines appear somewhere, location unknown; each one goes off only some of the time.",
+}
 
 static func event_name(id: String) -> String:
 	for pair in REGISTRY:
@@ -48,7 +79,10 @@ static func event_name(id: String) -> String:
 
 ## Веса по умолчанию, если хост включил события, но не тронул доли: все три поровну.
 static func default_weights() -> Dictionary:
-	return {MORTAR: 1, GAS: 1, ARMY: 1}
+	var w := {}
+	for pair in REGISTRY:
+		w[pair[0]] = 1
+	return w
 
 
 ## Состояние розыгрыша событий на весь матч. Живёт на резолвере и входит в снимок
@@ -67,6 +101,8 @@ var pending: Array = []
 var clouds: Array = []
 ## Сколько независимых армий уже пришло — по этому числу новая получает свой слот.
 var armies: int = 0
+## Пыльная буря (0.12): сколько раундов ещё держится; 0 — ясно.
+var dust_left: int = 0
 
 func _init(cfg_enabled := false, cfg_mandatory := false, cfg_interval := 3,
 		cfg_weights: Dictionary = {}) -> void:
@@ -94,13 +130,15 @@ func _due() -> bool:
 ## На «созревший» ход: если режим обязательный — одно из выбранных событий гарантированно;
 ## иначе сперва бросок «а случится ли вообще», и есть шанс, что не случится ничего.
 ## Все броски — через DiceService: и хост, и клиент прокатывают один поток (лок-степ).
-func roll_event(dice: DiceService) -> String:
+func roll_event(dice: DiceService, allowed: Callable = Callable()) -> String:
 	if not _due():
 		return ""
 	if not mandatory:
 		if dice.roll_d6() <= NOTHING_ON:
 			return ""
-	return _pick(dice)
+	# Какие события вообще возможны здесь и сейчас (карта, режим) — спрашиваем, только
+	# когда событие созрело: проверки ходят по всей доске.
+	return _pick(dice, allowed.call() if allowed.is_valid() else {})
 
 ## Сумма весов — только по ИЗВЕСТНЫМ событиям (0.9.4). Прежде она считала все ключи, и
 ## вес выбывшего «tremor» из старых настроек съедал свою долю розыгрыша: событие выпадало
@@ -114,21 +152,24 @@ func _total_weight() -> int:
 	return t
 
 ## Взвешенно выбрать событие ЧЕРЕЗ DiceService (лок-степ). Возвращает id или "".
-func _pick(dice: DiceService) -> String:
-	var total := _total_weight()
-	if total <= 0:
-		return ""
+func _pick(dice: DiceService, allowed: Dictionary = {}) -> String:
+	var total := 0
+	for pair in REGISTRY:
+		if allowed.is_empty() or allowed.has(pair[0]):
+			total += maxi(0, int(weights.get(pair[0], 0)))
 	# Ролл 1..total из общего потока: три d6 дают 216 значений, берём остаток — тем же
 	# приёмом, что и разлёт тел в резолвере, чтобы не заводить второй RNG.
 	var v := 0
 	for _i in 3:
 		v = v * 6 + (dice.roll_d6() - 1)
+	if total <= 0:
+		return ""
 	var pick := v % total
 	# Обходим реестр в ФИКСИРОВАННОМ порядке — одинаково у хоста и клиента.
 	for pair in REGISTRY:
 		var id: String = pair[0]
 		var w := int(weights.get(id, 0))
-		if w <= 0:
+		if w <= 0 or not (allowed.is_empty() or allowed.has(id)):
 			continue
 		if pick < w:
 			return id
@@ -216,7 +257,7 @@ func snapshot() -> Dictionary:
 	return {"enabled": enabled, "mandatory": mandatory, "interval": interval,
 			"weights": weights.duplicate(), "turns_since": turns_since,
 			"last_checked_round": last_checked_round,
-			"pending": pend, "clouds": cl, "smoke": sm, "armies": armies}
+			"pending": pend, "clouds": cl, "smoke": sm, "armies": armies, "dust": dust_left}
 
 func restore(d: Dictionary) -> void:
 	enabled = d.get("enabled", false)
@@ -237,6 +278,7 @@ func restore(d: Dictionary) -> void:
 	for c: Dictionary in d.get("smoke", []):
 		smoke.append((c as Dictionary).duplicate())
 	armies = int(d.get("armies", 0))
+	dust_left = int(d.get("dust", 0))
 
 static func from_config() -> RandomEvents:
 	var w: Dictionary = GameConfig.random_events_weights

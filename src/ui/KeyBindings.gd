@@ -6,6 +6,7 @@ const SETTINGS_PATH := "user://settings.cfg"
 const DEFINITIONS: Array = [
 	{"id": "game_cancel", "label": "Cancel / close menu", "keys": [KEY_ESCAPE], "contexts": ["*"], "section": "game"},
 	{"id": "game_initiative", "label": "Initiative overlay", "keys": [KEY_TAB], "contexts": ["*"], "section": "game"},
+	{"id": "game_manual", "label": "Manual", "keys": [KEY_F1], "contexts": ["*"], "section": "game"},
 	{"id": "game_pause_ai", "label": "Pause AI battle", "keys": [KEY_P], "contexts": ["*"], "section": "game"},
 	{"id": "game_heightmap", "label": "Heightmap on / off", "keys": [KEY_MASK_SHIFT | KEY_H], "contexts": ["*"], "section": "game"},
 	{"id": "game_save", "label": "Save game", "keys": [KEY_MASK_CTRL | KEY_S], "contexts": ["*"], "section": "game"},
@@ -78,6 +79,7 @@ const DEFINITIONS: Array = [
 	{"id": "editor_heightmap", "label": "Heightmap on / off", "keys": [KEY_MASK_SHIFT | KEY_H], "contexts": ["*"], "section": "editor"},
 	{"id": "editor_play", "label": "Play map", "keys": [KEY_F5], "contexts": ["*"], "section": "editor"},
 	{"id": "editor_help", "label": "Keyboard shortcuts", "keys": [KEY_F1], "contexts": ["*"], "section": "editor"},
+	{"id": "editor_manual", "label": "Manual", "keys": [KEY_F2], "contexts": ["*"], "section": "editor"},
 	{"id": "editor_pan_up", "label": "Pan up", "keys": [KEY_W, KEY_UP], "contexts": ["*"], "section": "editor"},
 	{"id": "editor_pan_down", "label": "Pan down", "keys": [KEY_S, KEY_DOWN], "contexts": ["*"], "section": "editor"},
 	{"id": "editor_pan_left", "label": "Pan left", "keys": [KEY_A, KEY_LEFT], "contexts": ["*"], "section": "editor"},
@@ -184,6 +186,19 @@ func down(id: String) -> bool:
 func typing(viewport: Viewport) -> bool:
 	var focus := viewport.gui_get_focus_owner()
 	return focus is LineEdit or focus is TextEdit or focus is SpinBox
+
+## Справочник «Manual» (0.12) открывается отовсюду — меню, лобби, расстановка, бой и
+## редактор — одной клавишей; та же клавиша его и закрывает. Сцены свои клавиши разбирают
+## раньше (_input), так что сюда доходит только то, что никто не занял.
+func _unhandled_key_input(event: InputEvent) -> void:
+	if not (matches(event, "game_manual") or matches(event, "editor_manual")) or typing(get_viewport()):
+		return
+	var open := not get_tree().get_nodes_in_group("manual_window").is_empty()
+	if not open and modal_open():
+		return
+	var host: Node = get_tree().current_scene if get_tree().current_scene != null else get_tree().root
+	ManualWindow.toggle(host)
+	get_viewport().set_input_as_handled()
 
 func modal_open() -> bool:
 	for node in get_tree().get_nodes_in_group("shortcut_modal"):

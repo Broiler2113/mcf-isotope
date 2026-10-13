@@ -63,6 +63,10 @@ func _ready() -> void:
 	if imported > 0:
 		print("Imported %d file(s) from the previous user data folder." % imported)
 	# 0.11: saves, replays, maps and presets moved into the shared "Isotope Data" folder.
+	# 0.12: the folders moved up from "Isotope Data" into the game folder itself.
+	var lifted := GameFolders.adopt_isotope_data()
+	if lifted > 0:
+		print("Moved %d file(s) from \"%s\" into %s." % [lifted, GameFolders.LEGACY_ROOT, GameFolders.root()])
 	var adopted := GameFolders.adopt_user_data()
 	if adopted > 0:
 		print("Moved %d file(s) into %s." % [adopted, GameFolders.root()])
@@ -205,6 +209,8 @@ func _build_home_page() -> Control:
 	page.add_child(_menu_button("Map Editor", _open_editor))
 	page.add_child(_menu_button("Multiplayer", _show_multiplayer))
 	page.add_child(_menu_button("Saves & Replays", _show_files))
+	page.add_child(_menu_button("Manual", func() -> void: ManualWindow.toggle(self)))
+	page.add_child(_menu_button("Report a Bug", func() -> void: BugReportWindow.open(self)))
 	page.add_child(_menu_button("Settings", _show_settings))
 	page.add_child(_menu_button("Quit", _quit))
 	return page

@@ -79,8 +79,12 @@ func _registry() -> void:
 	var ids: Array = []
 	for pair in RandomEvents.REGISTRY:
 		ids.append(pair[0])
-	ck(ids == [RandomEvents.MORTAR, RandomEvents.GAS, RandomEvents.ARMY],
-			"the registry is artillery, gas, raiders — in that order")
+	# 0.12 добавила семь событий В КОНЕЦ: прежние три остались на своих местах, и розыгрыш
+	# старых настроек (веса только у них) идёт тем же порядком.
+	ck(ids == [RandomEvents.MORTAR, RandomEvents.GAS, RandomEvents.ARMY, RandomEvents.FIRE,
+			RandomEvents.EMP, RandomEvents.DUST, RandomEvents.COLLAPSE, RandomEvents.REINFORCE,
+			RandomEvents.BOUNTY, RandomEvents.MINEFIELD],
+			"the registry is artillery, gas, raiders, then the 0.12 events — in that order")
 	ck(RandomEvents.event_name(RandomEvents.MORTAR) == "Artillery Barrage",
 			"the old mortar id is now called Artillery Barrage")
 	# Старые сохранённые веса с «tremor» не ломают выбор: реестр их просто не знает.

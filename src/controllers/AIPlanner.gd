@@ -69,6 +69,33 @@ var _w_shelter := 0.0
 const W_SPREAD := -2.5
 var _spread := false
 var _ally_cells: Dictionary = {}
+
+## Цели режима (0.12, Capture & Hold): каким бойцам к какой зоне идти (id → геополе до
+## неё), клетки зон (клетка → номер зоны) и потолок, сколько бойцов штаб держит в каждой.
+## Пусто — режим без целей, раскладка прежняя. Ставит AIController перед планом.
+var _obj_fields: Dictionary = {}
+var _zone_of: Dictionary = {}
+var _zone_cap: Array = []
+var _w_obj := 0.0
+var _w_zone := 0.0
+var _cur_obj: GeoField = null
+var _start_obj: int = GEO_FAR
+## Посланный к зоне идёт к ней, а не к врагу: сближение с врагом у него — четверть веса.
+const OBJ_ADVANCE_SHARE := 0.25
+
+## Множитель сближения от режима (0.12): защитники Holdout держат позиции (меньше единицы),
+## волны идут на штурм (больше). Ставит AIController перед планом.
+var advance_scale := 1.0
+
+func set_objectives(fields: Dictionary, zone_of: Dictionary, caps: Array) -> void:
+	_obj_fields = fields
+	_zone_of = zone_of
+	_zone_cap = caps
+
+func clear_objectives() -> void:
+	_obj_fields = {}
+	_zone_of = {}
+	_zone_cap = []
 ## unit_id -> Vector2i: куда штаб послал бойца в этом ходу.
 var destinations: Dictionary = {}
 ## unit_id -> float: оценка назначенной клетки (AIController поднимает ею приоритет).
@@ -177,6 +204,7 @@ func plan(state: GameState, r: GameActionResolver, field: GeoField,
 	# Жадная раздача: лучшее предложение по всей армии забирается первым.
 	rows.sort_custom(func(a: Array, b: Array) -> bool: return a[0] > b[0])
 	var taken: Dictionary = {}
+	var in_zone: Dictionary = {}   # номер зоны -> сколько бойцов штаб туда уже послал
 	for row: Array in rows:
 		var uid: int = row[1]
 		if destinations.has(uid):
@@ -184,6 +212,13 @@ func plan(state: GameState, r: GameActionResolver, field: GeoField,
 		var coord: Vector2i = row[2]
 		if taken.has(coord):
 			continue
+		# Зона набрана (0.12): лишние бойцы в ней очков не прибавят — пусть займут другую
+		# или прикроют подходы. Строку пропускаем, у бойца есть следующие.
+		var zi: int = int(_zone_of.get(coord, -1))
+		if zi >= 0 and zi < _zone_cap.size() and int(in_zone.get(zi, 0)) >= int(_zone_cap[zi]):
+			continue
+		if zi >= 0:
+			in_zone[zi] = int(in_zone.get(zi, 0)) + 1
 		taken[coord] = true
 		destinations[uid] = coord
 		dest_score[uid] = row[0]
@@ -200,7 +235,7 @@ func _apply_weights(state: GameState) -> void:
 			else AIPersonality.profile(style, state.turns.round_number)
 	_w_fire = float(w["fire"])
 	_w_ease = float(w["fire_ease"])
-	_w_adv = float(w["advance"])
+	_w_adv = float(w["advance"]) * advance_scale
 	_w_cover = float(w["cover"])
 	_w_trench = float(w["trench"])
 	_w_danger = float(w["danger"])
@@ -209,6 +244,8 @@ func _apply_weights(state: GameState) -> void:
 	_classic = not w.has("threat")
 	_w_threat = float(w.get("threat", 0.0))
 	_w_shelter = float(w.get("shelter", 0.0))
+	_w_obj = float(w.get("objective", 0.0))
+	_w_zone = float(w.get("zone", 0.0))
 
 ## Куда штаб послал бойца; (-1,-1) — плана на него нет.
 func destination_of(unit_id: int) -> Vector2i:
@@ -256,6 +293,8 @@ func _candidates_for(u: UnitInstance, out: Array) -> void:
 		budget = 0
 	var reach := _r.reachable_for(u, budget) if budget > 0 else null
 	var start_geo: int = _field.at(u.coord)
+	_cur_obj = _obj_fields.get(u.id)
+	_start_obj = _cur_obj.at(u.coord) if _cur_obj != null else GEO_FAR
 	# «Уходим ли мы из чужого створа» зависит только от бойца, а не от клетки —
 	# считаем один раз на все его кандидатуры.
 	var leaving_lane := _lane_conflicts(u, u.coord) > 0
@@ -290,12 +329,20 @@ func _score_cell(u: UnitInstance, coord: Vector2i, start_geo: int, steps: int,
 			if ease < 0.0:
 				continue
 			score += _w_fire + ease * _w_ease + _enemy_value[e.id]
+	# 1б. Цели режима (0.12): шаг к зоне, где нужны бойцы, и место в самой зоне.
+	if _cur_obj != null:
+		var og: int = _cur_obj.at(coord)
+		if _start_obj < GEO_FAR and og < GEO_FAR:
+			score += float(_start_obj - og) * _w_obj
+	if _zone_of.has(coord):
+		score += _w_zone
 	# 2. Сближение по реальному пути в обход стен.
 	var geo: int = _field.at(coord)
+	var adv := _w_adv * (OBJ_ADVANCE_SHARE if _cur_obj != null else 1.0)
 	if start_geo < GEO_FAR and geo < GEO_FAR:
-		score += float(start_geo - geo) * _w_adv
+		score += float(start_geo - geo) * adv
 	elif geo < GEO_FAR:
-		score += _w_adv  # были отрезаны, теперь путь есть — это уже прогресс
+		score += adv  # были отрезаны, теперь путь есть — это уже прогресс
 	# 3. Укрытие и ответный огонь.
 	if _classic:
 		if cell.has_cover():

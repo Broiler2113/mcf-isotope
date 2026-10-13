@@ -97,6 +97,8 @@ var _text_accent := TEXT_ACCENT
 var _header_bg := HEADER_BG
 
 func _ready() -> void:
+	# Журнал движка в памяти — для «Report a Bug» (0.12): в файл игра не пишет.
+	GameLog.install()
 	if DisplayServer.get_name() == "headless":
 		return
 	_load_settings()
