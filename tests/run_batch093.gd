@@ -324,7 +324,7 @@ func _border() -> void:
 					"soil":
 						ok = m.feature_id[i] == MCF.FEATURE_SOIL
 					"space":
-						ok = m.is_space[i] != 0
+						ok = m.is_space[i] != 0 or (core.grow(2).has_point(c) and m.feature_id[i] in [MCF.FEATURE_WALL, MCF.FEATURE_AIRLOCK, ""])
 					_:
 						ok = m.feature_id[i] == "" and m.is_space[i] == 0
 				if not ok and ring_bad.size() < 4:

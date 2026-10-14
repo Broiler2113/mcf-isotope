@@ -18,7 +18,7 @@ The shipped art is sorted one folder per object, inside a section:
   textures/walls/wall_station/wall_station_autotile.png   its 16-tile sheet
   textures/walls/wall_station/sample.png                  the marked-up template
 
-Sections: floors, walls, doors, features, furniture, decals, effects.
+Sections: floors, walls, doors, features, furniture, items, decals, effects, fx.
 Sort yours the same way or drop files straight into user://textures -- both work.
 
 == sample.png ==
@@ -150,6 +150,21 @@ Samples are never loaded into the game -- a file called sample is skipped.
 -- Misc --
   corpse.png
 
+-- Firing effects --
+  fx_bullet.png
+  fx_shell.png
+  fx_rocket.png
+  fx_grenade.png
+  fx_smoke.png
+  fx_muzzle.png
+  fx_exhaust.png
+
+-- Docking doors and unlit street fixtures --
+  door_docking.png
+  door_open_docking.png
+  streetlight_off.png
+  bollard_light_off.png
+
 -- Furniture (drawn from above, back of the piece at the TOP; the game turns it to the wall) --
 A fixed-size piece (piano, wardrobe, dumpster...) also takes <name>_piece.png: the whole
 piece as ONE picture, as many tiles wide and tall as the piece, back at the top.
@@ -178,6 +193,9 @@ piece as ONE picture, as many tiles wide and tall as the piece, back at the top.
   kitchen_counter.png
   refrigerator.png
   potted_plant.png
+  potted_plant_fern.png
+  potted_plant_palm.png
+  potted_plant_flowering.png
   tv_stand.png
   stove.png
   piano.png
@@ -186,6 +204,8 @@ piece as ONE picture, as many tiles wide and tall as the piece, back at the top.
   bunk_bed_green.png
   toilet.png
   sink.png
+  shower.png
+  bathtub.png
   office_desk.png
   conference_table.png
   filing_cabinet.png
@@ -194,10 +214,17 @@ piece as ONE picture, as many tiles wide and tall as the piece, back at the top.
   locker_grey.png
   reception_desk.png
   display_shelf.png
+  display_shelf_empty.png
+  display_shelf_drinks.png
+  display_shelf_food.png
+  display_shelf_medical.png
   checkout_counter.png
   vending_machine.png
   vending_machine_blue.png
   vending_machine_green.png
+  vending_machine_coffee.png
+  vending_machine_medical.png
+  vending_machine_snacks.png
   water_cooler.png
   console.png
   workbench.png
@@ -205,6 +232,10 @@ piece as ONE picture, as many tiles wide and tall as the piece, back at the top.
   tool_cabinet_blue.png
   tool_cabinet_green.png
   storage_shelf.png
+  storage_shelf_empty.png
+  storage_shelf_tools.png
+  storage_shelf_medical.png
+  storage_shelf_food.png
   server_rack.png
   industrial_cabinet.png
   pallet.png
@@ -218,7 +249,6 @@ piece as ONE picture, as many tiles wide and tall as the piece, back at the top.
   generator_red.png
   generator_green.png
   generator_grey.png
-  toolbox.png
   ammo_crate.png
   machinery.png
   exam_table.png
@@ -238,6 +268,7 @@ piece as ONE picture, as many tiles wide and tall as the piece, back at the top.
   gas_canister_green.png
   water_bucket.png
   water_bucket_blue.png
+  machine_workstation.png
   bench.png
   trash_bin.png
   trash_bin_grey.png
@@ -250,6 +281,10 @@ piece as ONE picture, as many tiles wide and tall as the piece, back at the top.
   plastic_table.png
   plastic_table_blue.png
   plastic_table_white.png
+  bush.png
+  bush_dry.png
+  bush_flowering.png
+  park_tree.png
   wall_lamp.png
   wall_strip.png
   bulkhead_lamp.png
@@ -260,8 +295,77 @@ piece as ONE picture, as many tiles wide and tall as the piece, back at the top.
   bollard_light.png
   work_light.png
   floor_lamp.png
-  desk_lamp.png
   lamp.png
+
+-- Loose props (tools/art/build_items.py) --
+  item_papers.png
+  item_folder.png
+  item_book.png
+  item_magazine.png
+  item_mug.png
+  item_plate.png
+  item_cup.png
+  item_bottle.png
+  item_can.png
+  item_monitor.png
+  item_keyboard.png
+  item_mouse.png
+  item_phone.png
+  item_laptop.png
+  item_radio.png
+  item_headset.png
+  item_wrench.png
+  item_screwdriver.png
+  item_flask.png
+  item_test_tubes.png
+  item_clipboard.png
+  item_tray.png
+  item_remote.png
+  item_shirt.png
+  item_box.png
+  item_map_sheet.png
+  item_newspaper.png
+  item_newspaper_local.png
+  item_newspaper_science.png
+  item_toolbox.png
+  item_cash_register.png
+  item_apple.png
+  item_orange.png
+  item_bread.png
+  item_sandwich.png
+  item_milk_carton.png
+  item_meat.png
+  item_vegetables.png
+  item_cheese.png
+  item_first_aid.png
+  item_bandages.png
+  item_medicine.png
+  item_syringe.png
+  item_stethoscope.png
+  item_sample_vial.png
+  item_guitar.png
+  item_violin.png
+  item_flute.png
+  item_hammer.png
+  item_pliers.png
+  item_drill.png
+  item_saw.png
+  item_handcuffs.png
+  item_rifle.png
+  item_pistol.png
+  item_ammunition.png
+  item_helmet.png
+  item_hard_hat.png
+  item_boots.png
+  item_gloves.png
+  item_backpack.png
+  item_fire_extinguisher.png
+  item_flashlight.png
+  item_keys.png
+  item_suitcase.png
+  item_microscope.png
+  item_petri_dish.png
+  item_multimeter.png
 
 == Factions ==
 Sides are factions, not colors. Soldiers accept a faction suffix:

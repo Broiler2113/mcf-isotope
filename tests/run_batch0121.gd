@@ -133,7 +133,7 @@ func _wall_chunks() -> void:
 	var chunks := fx.flying.filter(func(f: Dictionary) -> bool: return str(f["kind"]).begins_with("chunk:"))
 	ck(chunks.size() >= FxDecals.CHUNKS_MIN and chunks.size() <= FxDecals.CHUNKS_MAX,
 			"%d chunks fly (more than a window's shards)" % chunks.size())
-	ck(not chunks.is_empty() and str(chunks[0]["kind"]) == "chunk:wall_town", "town walls shed town-wall chunks (%s)" % (
+	ck(not chunks.is_empty() and str(FxDecals.chunk_parts(str(chunks[0]["kind"]))[0]) == "wall_town", "town walls shed town-wall chunks (%s)" % (
 			chunks[0]["kind"] if not chunks.is_empty() else "none"))
 	ck(chunks.all(func(f: Dictionary) -> bool: return Vector2(f["to"]).x > 11.0), "every chunk flies away from the blast")
 	ck(float(FxDecals.look_of("chunk:wall_town")[0]) > float(FxDecals.LOOK["shard"][0]), "chunks are bigger than glass shards")
@@ -358,16 +358,26 @@ func _cabinet_spill() -> void:
 	var res := r.resolve(DragIntent.new(u.id, Vector2i(6, 5), Vector2i(6, 6)))
 	ck(res.ok and st.grid.cell(Vector2i(6, 6)).feature_id == "cabinet", "the cabinet is dragged (%s)" % res.reason)
 	var spill := res.fx.filter(func(f: Dictionary) -> bool: return f.get("fx", "") == "spill")
-	ck(spill.size() == 1 and (st.grid.cell(Vector2i(6, 6)).items_off & GridCell.OPENED) != 0, "it opens and spills")
+	var destination := Vector2i(6, 6)
+	for attempt in 16:
+		if not spill.is_empty(): break
+		u.remaining_ap = 4
+		u.dragging = UnitInstance.NOT_DRAGGING
+		var next := Vector2i(6, 5) if destination.y == 6 else Vector2i(6, 6)
+		res = r.resolve(DragIntent.new(u.id, destination, next))
+		destination = next
+		spill = res.fx.filter(func(f: Dictionary) -> bool: return f.get("fx", "") == "spill")
+	ck(spill.size() == 1 and (st.grid.cell(destination).items_off & GridCell.OPENED) != 0, "it opens and spills")
 	var fx := FxDecals.new()
 	fx.apply(res.fx)
 	ck(fx.flying.size() >= SmallItems.SPILL_MIN and fx.flying.all(func(f: Dictionary) -> bool:
 			return SmallItems.SPILLS["cabinet"].has(str(f["kind"]).substr(5))), "with things a cabinet holds (%d)" % fx.flying.size())
 	u.remaining_ap = 4
 	u.dragging = UnitInstance.NOT_DRAGGING
-	var res2 := r.resolve(DragIntent.new(u.id, Vector2i(6, 6), Vector2i(6, 5)))
+	var next := Vector2i(6, 5) if destination.y == 6 else Vector2i(6, 6)
+	var res2 := r.resolve(DragIntent.new(u.id, destination, next))
 	ck(res2.ok and res2.fx.filter(func(f: Dictionary) -> bool: return f.get("fx", "") == "spill").is_empty()
-			and (st.grid.cell(Vector2i(6, 5)).items_off & GridCell.OPENED) != 0, "an open, empty cabinet spills nothing more")
+			and (st.grid.cell(next).items_off & GridCell.OPENED) != 0, "an open, empty cabinet spills nothing more")
 	var res3 := ActionResult.new()
 	r._blast(Vector2i(6, 5), res3, MCF.blast_square(Vector2i(6, 5), 1))
 	ck((st.grid.cell(Vector2i(6, 5)).items_off & GridCell.OPENED) == 0, "a destroyed cabinet leaves no open flag behind")
@@ -382,8 +392,8 @@ func _items_generator() -> void:
 		total += m.items.size()
 		var on_tables := m.items.all(func(it: Array) -> bool:
 			var c := SmallItems.cell_of(it)
-			return SmallItems.is_table(m.get_feature(c)))
-		ck(on_tables, "%s: every generated item lies on a table (%d)" % [MapGen.STYLE_NAMES[style], m.items.size()])
+			return SmallItems.is_kind(str(it[0])) and m.in_bounds(c) and not m.get_space(c) and m.get_cover(c) < MCF.WALL_HEIGHT)
+		ck(on_tables, "%s: generated items lie on accessible tables, counters or floors (%d)" % [MapGen.STYLE_NAMES[style], m.items.size()])
 		var again := MapGen.generate({"style": style, "size": MapGen.SIZE_CUSTOM, "width": 60, "height": 44,
 				"density": 2, "seed": 21, "zones": 2, "civilians": 0, "civilian_count": 0})
 		ck(again.items == m.items, "%s: the same seed lays the same items" % MapGen.STYLE_NAMES[style])

@@ -592,8 +592,13 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 ## здесь больше нет (0.9.3) — осталась только сама анимация хода.
 func _fx_steps(res: ActionResult, unit: UnitInstance, origin: Vector2i, path: Array, stop: Vector2i) -> void:
 	var cut: Array = []
+	var previous := origin
 	for c: Vector2i in path:
 		cut.append(c)
+		if _is_shield(unit):
+			_knock_items(res, c, previous, false)
+			_fx(res, {"fx": "sweep_props", "at": c, "from": previous})
+		previous = c
 		if c == stop:
 			break
 	# Боец идёт по клеткам на экране, а не появляется в конце (batch soil-rulers): то же
@@ -1298,7 +1303,7 @@ func _resolve_flame(shooter: UnitInstance, target_coord: Vector2i) -> ActionResu
 		var occ: UnitInstance = cell.occupant
 		# Над космосом струя проходит, но никого не жжёт (editor-rework): пламени без
 		# воздуха нет. Дальше, на полу за пробоиной, — жжёт как обычно.
-		if occ != null and occ.is_alive() and not cell.is_space:
+		if occ != null and occ.is_alive() and not cell.is_space and not is_fireproof(occ):
 			_kill_burnt(occ)  # огнемёт — крови нет
 			killed_names.append(occ.stats.display_name)
 			result.deaths.append(occ.id)
@@ -1433,9 +1438,10 @@ func _ignite(cell: GridCell, owner: int, res: ActionResult = null) -> void:
 	# огне всё равно гибнет, просто без взрыва, общей зачисткой ниже.
 	if cell.feature_id == MCF.FEATURE_MINE and res != null:
 		_detonate_mine(c, null, res)
-	elif Furniture.is_furniture(cell.feature_id) and not Furniture.flammable(cell.feature_id):
-		pass   # железный шкаф струя огнемёта обжигает, но не сжигает (§3.15)
 	elif cell.feature_id != MCF.FEATURE_CORPSE_WALL:
+		# Загоревшаяся мебель выгорает — и деревянная, и металлическая (0.12.2): раз уж
+		# занялась, от неё остаётся пол. Тихо, без разлёта: что стояло на ней, сгорает
+		# вместе с клеткой (строкой ниже), а не разлетается из огня.
 		cell.clear_feature()
 	# Мелкие предметы на горящей клетке сгорают, как и кровь с гильзами (0.12.1): тихо, без разлёта.
 	var n_items := mini(state.grid.items_in(c).size(), 30)
@@ -1516,7 +1522,7 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i, aimed: String = "") ->
 					if cell.is_wall():
 						blasted.append(c)
 					if Furniture.is_furniture(was):
-						_destroy_furniture(cell, result)   # цельный предмет — целиком
+						_destroy_furniture(cell, result)   # только задетая клетка (0.12.2)
 					else:
 						cell.clear_feature()
 					result.log("Beam destroys %s at (%d, %d)" % [
@@ -2224,25 +2230,41 @@ func _knock_items(res: ActionResult, c: Vector2i, from: Vector2i, far := true) -
 	_fx(res, {"fx": "items", "at": c, "from": from, "items": gone, "far": far})
 
 ## Шкаф раскрывается и высыпает вещи (0.12.1) — один раз: раскрытый уже пуст.
-func _spill(res: ActionResult, c: Vector2i, from: Vector2i, fid: String) -> void:
+## burst (0.12.2, item 3): разбитый шкаф разбрасывает содержимое ВО ВСЕ стороны, а
+## сдвинутый — себе за спину.
+func _spill(res: ActionResult, c: Vector2i, from: Vector2i, fid: String, burst := false) -> void:
 	if res == null or not SmallItems.spills(fid) or not state.grid.in_bounds(c):
 		return
 	var cell := state.grid.cell(c)
 	if cell.items_off & GridCell.OPENED:
 		return
 	cell.items_off |= GridCell.OPENED
-	_fx(res, {"fx": "spill", "at": c, "from": from, "fid": fid})
+	var ev := {"fx": "spill", "at": c, "from": from, "fid": fid}
+	if burst:
+		ev["burst"] = true
+	_fx(res, ev)
 
 ## Мебель сдвинули с src на dst: с неё падают предметы (по ходу), то, что лежало на полу в
-## dst, отлетает; шкаф раскрывается и сыплет вещи позади себя.
+## dst, отлетает; шкаф может раскрыться и высыпать вещи позади себя.
 func _furniture_moved(res: ActionResult, src: Vector2i, dst: Vector2i, fid: String) -> void:
 	if res == null:
 		return
 	_knock_items(res, src, src - (dst - src), false)
 	_knock_items(res, dst, src, false)
-	if SmallItems.spills(fid) and not (state.grid.cell(dst).items_off & GridCell.OPENED):
+	# Не каждый рывок вытряхивает полки (0.12.2, item 24): бросок чисто косметический, из
+	# номера события и клетки, — кубики партии он не трогает, а у всех пиров один и тот же.
+	if SmallItems.spills(fid) and not (state.grid.cell(dst).items_off & GridCell.OPENED) \
+			and _cosmetic_chance("spill_drag", src, SmallItems.SPILL_DRAG_CHANCE):
 		_fx(res, {"fx": "spill", "at": src, "from": dst, "fid": fid})
 		state.grid.cell(dst).items_off |= GridCell.OPENED
+
+## Косметический «бросок» без кубиков партии: одинаков у хоста и гостя (номер события
+## входит в подпись доски), но на правила не влияет и поток случайности не сдвигает.
+func _cosmetic_chance(tag: String, c: Vector2i, chance: float) -> bool:
+	state.fx_seq += 1  # a failed shake still advances the deterministic cosmetic stream
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(tag) * 1000003 + c.x * 7919 + c.y * 104729 + state.fx_seq * 2654435761
+	return rng.randf() < chance
 
 ## Стены, у которых есть обломки (0.12.1): разлетаются кусками своей плитки.
 const CHUNK_WALLS := {MCF.FEATURE_WALL: true, MCF.FEATURE_SOIL: true, MCF.FEATURE_WOOD_WALL: true,
@@ -2577,19 +2599,11 @@ func _scatter_corpses_random(center: Vector2i, count: int, res: ActionResult) ->
 ## противотанковый ёж — 2 (§3.7).
 ## Что получится, если положить new_fid поверх уже стоящего old_fid (#31).
 ## "" — так укладывать нельзя.
-const STACK_RESULT := {
-	MCF.FEATURE_SANDBAGS: {
-		MCF.FEATURE_SANDBAGS: MCF.FEATURE_SANDBAG_WALL,
-		MCF.FEATURE_HEDGEHOG: MCF.FEATURE_HEDGEHOG_SANDBAGS,
-	},
-}
-
 ## Во что превратится клетка, если положить new_fid на клетку cell; "" — нельзя.
 func stack_onto(cell: GridCell, new_fid: String) -> String:
 	if cell.occupant != null or cell.vehicle_id != -1:
 		return ""
-	var by_existing: Dictionary = STACK_RESULT.get(cell.feature_id, {})
-	return by_existing.get(new_fid, "")
+	return MCF.stacked(cell.feature_id, new_fid)
 
 const ENGINEER_BUILDABLE := {
 	MCF.FEATURE_SANDBAGS: MCF.BUILD_COST_SANDBAGS,
@@ -3410,16 +3424,18 @@ func _resolve_smash_furniture(actor: UnitInstance, coord: Vector2i) -> ActionRes
 	return res
 
 ## Снести предмет мебели: пол остаётся, высота сбрасывается в ноль (clear_feature), журнал
-## вида и обзора узнаёт об этом через сеттеры клетки. Цельный многоклеточный предмет
-## (кровать, стол, станок) гибнет целиком — полкровати не бывает. Щепки — той же
-## косметикой «разрушенный пол», что и у снесённых укреплений.
+## вида и обзора узнаёт об этом через сеттеры клетки. Щепки — той же косметикой «разрушенный
+## пол», что и у снесённых укреплений.
+## Гибнет только задетая клетка (0.12.2, владелец: «when a part of a table is destroyed, the
+## whole table gets deleted»): остальной стол стоит, как стоял, — вид мебели в бою заморожен
+## и не срастается заново, так что уцелевшая половина выглядит половиной.
 func _destroy_furniture(cell: GridCell, res: ActionResult, from: Vector2i = NOWHERE) -> void:
-	var cells := furniture_piece(cell.coord)
+	var cells: Array[Vector2i] = [cell.coord]
 	if Furniture.DEFS.get(cell.feature_id, {}).get("cat", "") == "lighting":
 		_lamp_shards(res, cell.coord, from)
 	for c: Vector2i in cells:
 		_knock_items(res, c, from if from != NOWHERE else c)
-		_spill(res, c, from if from != NOWHERE else c, cell.feature_id)
+		_spill(res, c, from if from != NOWHERE else c, cell.feature_id, true)
 	for c: Vector2i in cells:
 		state.grid.cell(c).clear_feature()
 		notify_cell_changed(c)
@@ -3628,10 +3644,9 @@ func fire_need(cell: GridCell) -> int:
 	if cell.is_tall_dirt():
 		return MCF.FIRE_NEED_TALL_DIRT
 	if cell.feature_id != "":
-		# Мебель (§3.15): дерево, ткань, пластик горят как деревянная стена; железо от
-		# соседнего пламени не занимается вовсе.
+		# Furniture burns with the cell. Wood/fabric/plastic catch on 3+, metal on 6.
 		if Furniture.is_furniture(cell.feature_id):
-			return MCF.FIRE_NEED_WOOD if Furniture.flammable(cell.feature_id) else MCF.FIRE_NEVER
+			return MCF.FIRE_NEED_WOOD if Furniture.flammable(cell.feature_id) else MCF.FIRE_NEED_METAL
 		# Всё, чего в таблице нет, — рядовое укрытие: мешки, ёж, ДПМГ, куча 1 м.
 		return int(MCF.FIRE_NEED_BY_FEATURE.get(cell.feature_id, MCF.FIRE_NEED_COVER))
 	match cell.floor_type:
@@ -5173,6 +5188,32 @@ func _airlock_candidates(cells: Array[GridCell]) -> Array[GridCell]:
 ## Правило то же с точностью до буквы: жилец должен быть ЖИВ (мёртвый лежит в клетке
 ## трупом и дверь ему не открывают) и не дроном (машина в воздухе створок не трогает).
 ## Сидящий в технике сюда не попадает сам собой: у него coord = OFFBOARD и клетки нет.
+## Pair only the enclosed, one-tile chambers leading to vacuum. Interior doors retain
+## their usual proximity behavior; the pairing survives save/load without hidden state.
+func _pressure_partner(cell: GridCell) -> GridCell:
+	var grid := state.grid
+	for d: Vector2i in [Vector2i.UP, Vector2i.RIGHT, Vector2i.DOWN, Vector2i.LEFT]:
+		var other := grid.cell(cell.coord + d * 2)
+		var middle := grid.cell(cell.coord + d)
+		if other == null or other.feature_id != MCF.FEATURE_AIRLOCK or middle == null or middle.is_space: continue
+		var side := Vector2i(d.y, -d.x)
+		var a := grid.cell(middle.coord + side)
+		var b := grid.cell(middle.coord - side)
+		if a == null or b == null or a.cover_height < MCF.WALL_HEIGHT or b.cover_height < MCF.WALL_HEIGHT: continue
+		var outside := grid.cell(other.coord + d)
+		var behind := grid.cell(cell.coord - d)
+		if (outside != null and outside.is_space) or (behind != null and behind.is_space): return other
+	return null
+
+func _door_distance(cell: GridCell) -> int:
+	var nearest := 999999
+	for y in range(maxi(0, cell.coord.y - 2), mini(state.grid.height, cell.coord.y + 3)):
+		for x in range(maxi(0, cell.coord.x - 2), mini(state.grid.width, cell.coord.x + 3)):
+			var unit := state.grid.cell_fast(x, y).occupant
+			if unit != null and unit.is_alive() and not unit.is_drone:
+				nearest = mini(nearest, absi(x - cell.coord.x) + absi(y - cell.coord.y))
+	return nearest
+
 func update_airlocks() -> void:
 	var cells := _airlocks_of(state.grid)
 	if cells.is_empty():
@@ -5182,7 +5223,11 @@ func update_airlocks() -> void:
 	var gh := grid.height
 	var radius: int = MCF.AIRLOCK_OPEN_RADIUS
 	var still_open: Array[GridCell] = []
-	for cell: GridCell in _airlock_candidates(cells):
+	var candidates := _airlock_candidates(cells)
+	for cell in candidates.duplicate():
+		var partner := _pressure_partner(cell)
+		if partner != null and not candidates.has(partner): candidates.append(partner)
+	for cell: GridCell in candidates:
 		# Заваренный инженером шлюз не открывается ни для кого (#99).
 		if cell.airlock_welded:
 			cell.cover_height = MCF.WALL_HEIGHT
@@ -5207,6 +5252,12 @@ func update_airlocks() -> void:
 					break
 				x += 1
 			y += 1
+		var partner := _pressure_partner(cell)
+		if open and partner != null and not partner.airlock_welded and corpses_at(cell.coord) == 0 and cell.occupant == null:
+			var mine := _door_distance(cell)
+			var theirs := _door_distance(partner)
+			var earlier := cell.coord.y < partner.coord.y or (cell.coord.y == partner.coord.y and cell.coord.x < partner.coord.x)
+			open = corpses_at(partner.coord) == 0 and partner.occupant == null and (mine < theirs or (mine == theirs and earlier))
 		var was_closed := cell.cover_height >= MCF.WALL_HEIGHT
 		cell.cover_height = 0.0 if open else MCF.WALL_HEIGHT
 		if not open:
@@ -6483,7 +6534,7 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 	for fc: Vector2i in area:
 		if state.grid.in_bounds(fc) and Furniture.is_furniture(state.grid.cell(fc).feature_id) \
 				and fixture_at(fc) == "":   # lamps roll below, like glass (0.11.1)
-			smashed.append_array(furniture_piece(fc))
+			smashed.append(fc)
 			_destroy_furniture(state.grid.cell(fc), result, center)
 	# Lamps in the blast defend like ordinary glass (0.11.1): two dice against 6+, both
 	# must hold. A standing lamp anywhere in the area; a wall lamp only on the face that
@@ -6508,7 +6559,7 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 					lcell.lamps = MapData.without_lamp(lcell.lamps, side)
 					notify_cell_changed(lc)
 				else:
-					smashed.append_array(furniture_piece(lc))
+					smashed.append(lc)
 					_destroy_furniture(lcell, result, center)
 			details.append(ldet)
 	# Осколки не сносят укрепления (#44): единственное, что бьётся, — стекло, и оно

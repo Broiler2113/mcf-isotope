@@ -278,8 +278,9 @@ const RECIPES := {
 		{"f": "server_rack", "at": "wall", "p": 0.3},
 	],
 	"assembly": [
+		{"f": "machine_workstation", "at": "wall"},
+		{"f": "machinery", "at": "center"},
 		{"f": "workbench", "at": "row", "n": [2, 3]},
-		{"f": "machinery", "at": "center", "p": 0.6, "big": true},
 		{"f": "tool_cabinet", "at": "wall"},
 		{"f": "equipment_cart", "at": "free", "p": 0.6},
 		{"f": "toolbox", "at": "free", "p": 0.5},
@@ -290,7 +291,8 @@ const RECIPES := {
 		{"f": "crate", "at": "free", "p": 0.4},
 	],
 	"machine_shop": [
-		{"f": "machinery", "at": "center", "big": true},
+		{"f": "machine_workstation", "at": "wall"},
+		{"f": "machinery", "at": "center"},
 		{"f": "machinery", "at": "center", "p": 0.5, "big": true},
 		{"f": "workbench", "at": "row", "n": [1, 2]},
 		{"f": "tool_cabinet", "at": "wall"},
@@ -310,7 +312,8 @@ const RECIPES := {
 		{"f": "trash_bin", "at": "corner", "p": 0.4},
 	],
 	"bathroom": [
-		{"f": "toilet", "at": "wall"},
+		{"f": "shower", "at": "corner", "p": 0.5},
+		{"f": "bathtub", "at": "wall", "p": 0.3},
 		{"f": "sink", "at": "wall", "p": 0.8},
 		{"f": "cabinet", "at": "wall", "p": 0.3},
 	],
@@ -489,11 +492,32 @@ static func run(gen: MapGen) -> void:
 	f.env = gen.m.env
 	f._furnish()
 
+## A compact production department must retain a workstation even when its room is
+## chosen for deployment. Reserve it before zones, leaving both door approaches clear.
+static func production_essentials(gen: MapGen) -> void:
+	for room in gen._rooms:
+		if gen._room_kind.get(room, "") not in ["machine_shop", "assembly"]: continue
+		if gen._sym > 0 and not (gen._in_f(room.position) and gen._in_f(room.end - Vector2i.ONE)): continue
+		for c in gen._rect_cells(room.grow(-1)):
+			if not gen._clear(c) or gen._indoor[c.y * gen.w + c.x] == 0: continue
+			var entry := false
+			var free := 0
+			for d: Vector2i in N4:
+				if gen.m.get_feature(c + d) == MCF.FEATURE_AIRLOCK: entry = true
+				if gen._clear(c + d): free += 1
+			if entry or free < 2: continue
+			gen.reserve_furniture(c, "machine_workstation")
+			break
+
 ## Клетки, куда мебель не встаёт ни в одной комнате: три на три вокруг каждой двери и
 ## шлюза, зоны развёртывания и всё, что генератор бережёт (_keep). Один проход по карте.
 var _no_go: PackedByteArray
 
 func _furnish() -> void:
+	if level > 0:
+		for i: int in g._essential_furniture:
+			var c := Vector2i(i % w, i / w)
+			if g._clear(c): g._put(c, g._essential_furniture[i])
 	_no_go = PackedByteArray()
 	_no_go.resize(w * h)
 	for i in w * h:
@@ -566,6 +590,23 @@ func _furnish_room(cells: Array[Vector2i], main: bool, count: int, r: Rect2i) ->
 	var first := placed.size()
 	_furnish_room_pieces(cells, main, count, r)
 	_lay_tables(first, r)
+	if level > 0 and not cells.is_empty():
+		var arch := str(g._room_kind.get(r, ""))
+		# Shop tills are independent props on a counter (or on an available desk).
+		if arch == "shop" and main:
+			var till := cells[0]
+			for k in range(first, placed.size()):
+				if Furniture.base_of(placed[k]["fid"]) in ["checkout_counter", "desk", "office_desk"]:
+					till = placed[k]["cells"][0]
+					break
+			m.items.append(["cash_register", till.x + 0.5, till.y + 0.5, 0.0])
+		# A little floor clutter; never reuses the table layout or fills the room.
+		if rng.randf() < 0.35:
+			for c in _shuffled(cells):
+				if m.get_feature(c) == "" and g._zone[c.y * w + c.x] < 0:
+					var pool := ["newspaper", "box", "can", "shirt"]
+					m.items.append([pool[rng.randi_range(0, pool.size() - 1)], c.x + rng.randf_range(0.3, 0.7), c.y + rng.randf_range(0.3, 0.7), rng.randf_range(-PI, PI)])
+					break
 
 ## Столы, поставленные в комнату, накрываются набором по её назначению (0.12.1, SmallItems).
 ## Своё зерно от карты и комнаты: прочая расстановка от этого не сдвигается.
@@ -603,6 +644,14 @@ func _furnish_room_pieces(cells: Array[Vector2i], main: bool, count: int, r: Rec
 	_paint_floor(cells, arch, r)
 	if level <= 0:
 		return
+	# Compact toilets may sit near a doorway, but never in the doorway or its passage.
+	if arch in ["bathroom", "restroom"]:
+		for c in cells:
+			if _entries.has(c) or m.get_feature(c) != "" or g._zone[c.y * w + c.x] >= 0: continue
+			if not _keeps_passage(c): continue
+			g._put(c, "toilet")
+			placed.append({"fid": "toilet", "cells": [c]})
+			break
 	_cand_all = []
 	for c in cells:
 		if _base_ok(c):
@@ -656,6 +705,8 @@ func _furnish_room_pieces(cells: Array[Vector2i], main: bool, count: int, r: Rec
 ## Назначение помещения: поле — хижина или руина; прочее — по таблице ROOMS. В доме
 ## с перегородкой большая половина — общая комната, меньшая — спальня или кухня.
 func _archetype(r: Rect2i, main: bool, count: int) -> String:
+	for bathroom in g._bathrooms:
+		if bathroom.has_point(_room.keys()[0]): return "bathroom"
 	# Назначение, данное генератором (0.9.2): комната отдела станции — как есть; здание
 	# города — по своей части (самая большая — главное помещение).
 	if g._room_kind.has(r):
@@ -741,6 +792,12 @@ func _run_step(step: Dictionary, anchor: Dictionary) -> Array:
 		return got
 	var n_raw: Variant = step.get("n", 1)
 	var n: int = rng.randi_range(int(n_raw[0]), int(n_raw[1])) if n_raw is Array else int(n_raw)
+	if str(step["f"]) == "toolbox":
+		for c in _cand_all:
+			if _base_ok(c):
+				m.items.append(["toolbox", c.x + 0.5, c.y + 0.5, rng.randf_range(-PI, PI)])
+				break
+		return got
 	var fid := Furniture.variant(step["f"], rng)   # цвет — один на шаг: ряд коек одного цвета
 	var rule: String = step["at"]
 	var subs: Array = step.get("then", [])
@@ -1162,6 +1219,21 @@ func _shuffled(a: Array) -> Array[Vector2i]:
 ## Мелочь снаружи помещений: скамьи, урны и столы в скверах, урны и баки у стен на
 ## широких улицах, ящики и тележки вдоль стен широких коридоров станции, ящики и бочки
 ## у хижин в поле. Только у стены, только там, где рядом остаётся проход в две клетки.
+## Reserve the useful park objects before deployment zones can occupy the whole lawn.
+## Open corners leave the central dirt paths and all four entrances unobstructed.
+static func park_essentials(gen: MapGen, park: Rect2i) -> void:
+	if park.size.x < 7 or park.size.y < 7: return
+	if gen._sym > 0 and not (gen._in_f(park.position) and gen._in_f(park.end - Vector2i.ONE)): return
+	var rng := RandomNumberGenerator.new()
+	rng.seed = int(gen.opt.get("seed", 1)) * 7919 + park.position.x * 131 + park.position.y
+	var bench := park.position + Vector2i(1, 1)
+	var vending := park.position + Vector2i(1, park.size.y - 2)
+	var tree := park.end - Vector2i(2, 2)
+	gen.reserve_furniture(bench, "bench")
+	gen.reserve_furniture(bench + Vector2i.RIGHT, "bench")
+	gen.reserve_furniture(tree, "park_tree")
+	gen.reserve_furniture(vending, Furniture.variant("vending_machine", rng))
+
 func _outdoor_clutter() -> void:
 	var style := _style_key()
 	var share: float = [0.0, 0.004, 0.008, 0.013, 0.02][level]
@@ -1171,10 +1243,20 @@ func _outdoor_clutter() -> void:
 		for p: Rect2i in g._parks:
 			if g._sym > 0 and not (g._in_f(p.position) and g._in_f(p.end - Vector2i.ONE)):
 				continue
+			for required: String in ["bench", "park_tree", "vending_machine"]:
+				var present := false
+				for c in g._rect_cells(p):
+					if Furniture.base_of(m.get_feature(c)) == required: present = true
+				if present: continue
+				var before := placed.size()
+				for c in _shuffled(g._rect_cells(p)):
+					if m.get_look(c.y * w + c.x) == MCF.Look.DIRT: continue
+					_outdoor_put(c, required, false)
+					if placed.size() > before: break
 			for k in 1 + roundi(p.get_area() / 40.0 * DENSITY_SHARE[level]):
 				var c := Vector2i(rng.randi_range(p.position.x, p.end.x - 1),
 						rng.randi_range(p.position.y, p.end.y - 1))
-				var pick: String = ["bench", "bench", "park_table", "trash_bin"][rng.randi_range(0, 3)]
+				var pick: String = ["bench", "park_tree", "bush", "bush_flowering", "vending_machine", "park_table", "trash_bin"][rng.randi_range(0, 6)]
 				_outdoor_put(c, pick, false)
 	for y in h:
 		for x in w:
@@ -1189,8 +1271,8 @@ func _outdoor_clutter() -> void:
 				if g._street[i] != 0:
 					pick = ["trash_bin", "dumpster", "street_cabinet", "trash_bin"][rng.randi_range(0, 3)]
 			elif style == "field":
-				if g._indoor[i] == 0 and g._room_mask[i] == 0 and _near_room(c):
-					pick = ["crate", "barrel", "pallet", "bench"][rng.randi_range(0, 3)]
+				if g._indoor[i] == 0 and g._room_mask[i] == 0:
+					pick = ["crate", "barrel", "pallet", "bench"][rng.randi_range(0, 3)] if _near_room(c) else ["bush", "bush_dry", "bush_flowering"][rng.randi_range(0, 2)]
 			elif g._k.size() == w * h and g._k[i] == MapGen.K_HALL:
 				pick = ["crate", "equipment_cart", "barrel", "trash_bin"][rng.randi_range(0, 3)]
 			if pick != "":
@@ -1245,7 +1327,7 @@ func _outdoor_put(c: Vector2i, base: String, need_wall: bool) -> void:
 
 ## Клетка снаружи, куда вообще можно что-то поставить.
 func _outdoor_ok(c: Vector2i) -> bool:
-	if not g._in(c):
+	if not g._core.has_point(c):
 		return false
 	var i := c.y * w + c.x
 	if m.is_space[i] != 0 or m.feature_id[i] != "" or m.cover_height[i] > 0.0 \

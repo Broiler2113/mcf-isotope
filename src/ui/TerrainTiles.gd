@@ -507,10 +507,11 @@ const DECAL_ANGLES := 8
 ## Мелкий предмет («item:<вид>», 0.12.1) — своей картинкой и с шагом угла мельче: его кладут
 ## под любым углом, и восемь положений на нём видны.
 const ITEM_ANGLES := 32
+const CHUNK_ANGLES := 16   # обломки (0.12.2): острые формы, восьми поворотов на них мало
 
 func _decal_sprite(kind: String, px: int, rot: float, look: Array) -> Image:
 	var item := kind.begins_with("item:")
-	var angles := ITEM_ANGLES if item else DECAL_ANGLES
+	var angles := ITEM_ANGLES if item else (CHUNK_ANGLES if kind.begins_with("chunk:") else DECAL_ANGLES)
 	var step := posmod(roundi(rot / TAU * angles), angles)
 	var key := "decal@%s@%d@%d" % [kind, px, step]
 	if _tiles.has(key):
@@ -521,8 +522,11 @@ func _decal_sprite(kind: String, px: int, rot: float, look: Array) -> Image:
 	var chunk := kind.begins_with("chunk:")
 	var soot := kind.begins_with("soot:")
 	var art := "corpse" if kind == "corpse" else str(FxDecals.TEXTURE.get(kind, ""))
+	var shape: PackedVector2Array = PackedVector2Array()
 	if chunk:
-		art = kind.substr(6)
+		var parts := FxDecals.chunk_parts(kind)
+		art = parts[0]
+		shape = PackedVector2Array(FxDecals.CHUNK_SHAPES[int(parts[1])])
 	elif item:
 		art = SmallItems.texture_name(kind.substr(5))
 	if kind == "corpse" and not Sprites.has_override(art):
@@ -539,14 +543,20 @@ func _decal_sprite(kind: String, px: int, rot: float, look: Array) -> Image:
 			if soot:
 				c = _soot_pixel(v / half, variant, col)
 			elif chunk:
-				# Обломок (0.12.1): середина плитки стены — в неровный пятиугольник.
+				# Обломок: середина плитки стены, вырезанная острым многоугольником своей формы
+				# (0.12.2), с тёмной кромкой по краю — так он читается гранёным, а не пятном.
 				var q := v / half
-				# Картинка стены — лента вариантов (по плитке в высоту): берём середину первой.
-				if absf(q.x) + absf(q.y) * 0.8 <= 1.15 and q.y >= -0.95:
+				if Geometry2D.is_point_in_polygon(q, shape):
+					# Картинка стены — лента вариантов (по плитке в высоту): середина первой.
 					var side := src.get_height() if src != null else 1
 					c = col if src == null else src.get_pixel(
 							clampi(int((q.x * 0.2 + 0.5) * side), 0, side - 1),
 							clampi(int((q.y * 0.2 + 0.5) * side), 0, side - 1))
+					var step_q := 2.0 / maxf(1.0, float(px))
+					for d: Vector2 in [Vector2(step_q, 0), Vector2(-step_q, 0), Vector2(0, step_q), Vector2(0, -step_q)]:
+						if not Geometry2D.is_point_in_polygon(q + d.rotated(-a), shape):
+							c = c.darkened(0.35)
+							break
 			elif src != null:
 				var sx := int((v.x / px + 0.5) * src.get_width())
 				var sy := int((v.y / px + 0.5) * src.get_height())
@@ -716,7 +726,7 @@ func _fill_notches(feat: Image, c: Vector2i, fid: String, mask: int, at: Vector2
 
 ## Клетка двери целиком: стена окружения (лист «wall» по маске семейства) и дверь спереди
 ## поверх неё. Кэш — по маске, состоянию, варианту и разрешению.
-const DOOR_MATERIALS := ["station", "town", "field", "bunker", "asteroid"]
+const DOOR_MATERIALS := ["station", "town", "field", "bunker", "asteroid", "docking"]
 
 func _door_image(grid: Grid, c: Vector2i, cell: GridCell, res: int, closed := false) -> Image:
 	var mask := mask_at(grid, c, MCF.FEATURE_AIRLOCK)
@@ -900,6 +910,7 @@ const _CHAIRS := {"chair": true, "armchair": true}
 ## поворот считаются по самому предмету, берётся только иной рисунок.
 func _furniture_image(c: Vector2i, fid: String, res: int, art := "") -> Image:
 	var pic := art if art != "" else fid
+	if time_of_day == "day" and fid in ["streetlight", "bollard_light"]: pic = fid + "_off"
 	var look: Array
 	if furniture_look == null:
 		look = _live_look(c, fid)
@@ -1015,17 +1026,21 @@ func _sheet_cell(sheet: Image, mask: int, res: int, k: int) -> Image:
 
 ## Вид клетки мебели по живой доске: [маска стыка, внутренние углы, поворот, угол].
 func _live_look(c: Vector2i, fid: String) -> Array:
-	if Furniture.joins(fid):
+	if Furniture.base_of(fid) in Furniture.LINEAR_RUNS:
+		return _linear_look(c, fid)
+	if Furniture.joins(fid) and not Furniture.is_pair(fid):
 		var bent := _path_look(_grid, c, fid)
 		if not bent.is_empty():
 			return bent
 	var k := furniture_turn(_grid, c, fid, origin)
 	if not Furniture.joins(fid):
 		return [0, 0, k, 0]
+	var piece: Array[Vector2i] = []
+	if Furniture.is_pair(fid): piece = Furniture.piece_cells(func(q: Vector2i) -> String: return _fid_at(_grid, q), c)
 	var mask := 0
 	for l in 4:
 		var n: Vector2i = c + _TURN_DIRS[(l + k) % 4]
-		if _grid.in_bounds(n) and _grid.cell_fast(n.x, n.y).feature_id == fid:
+		if _grid.in_bounds(n) and Furniture.connects(fid, _grid.cell_fast(n.x, n.y).feature_id) and (piece.is_empty() or piece.has(n)):
 			mask |= _MASK_BITS[l]
 	# Внутренние углы (Г-образная стойка, диван углом): обе стороны срослись, а клетки по
 	# диагонали нет — в этом углу тело должно отступить, как у соседей, иначе ступенька.
@@ -1035,6 +1050,39 @@ func _live_look(c: Vector2i, fid: String) -> Array:
 				and _fid_at(_grid, c + _TURN_DIRS[(l + k) % 4] + _TURN_DIRS[(l + 1 + k) % 4]) != fid:
 			inner |= 1 << l
 	return [mask, inner, k, 0]
+
+## Shelves are straight rows: stock varies per tile, while every section shares the
+## same orientation and continuous rails. Corner slicing must never cut through goods.
+func _linear_look(c: Vector2i, fid: String) -> Array:
+	var axis := _linear_axis(c, fid)
+	if axis < 0: return [0, 0, furniture_turn(_grid, c, fid, origin), 0]
+	var horizontal := axis == 0
+	var along := Vector2i.RIGHT if horizontal else Vector2i.DOWN
+	var back := Vector2i.UP if horizontal else Vector2i.RIGHT
+	var start := c
+	while _linear_join(start - along, fid, axis): start -= along
+	var score := 0
+	var p := start
+	while _linear_join(p, fid, axis):
+		for side in [-1, 1]:
+			var q: Vector2i = p + back * side
+			if _grid.in_bounds(q):
+				var cell := _grid.cell(q)
+				if cell.is_wall() and not Furniture.is_furniture(cell.feature_id): score += side
+		p += along
+	var k := (0 if horizontal else 1) + (2 if score < 0 else 0)
+	var mask := 0
+	for l in [1, 3]:
+		if _linear_join(c + _TURN_DIRS[(l + k) % 4], fid, axis): mask |= _MASK_BITS[l]
+	return [mask, 0, k, 0]
+
+func _linear_axis(c: Vector2i, fid: String) -> int:
+	if Furniture.connects(fid, _fid_at(_grid, c + Vector2i.LEFT)) or Furniture.connects(fid, _fid_at(_grid, c + Vector2i.RIGHT)): return 0
+	if Furniture.connects(fid, _fid_at(_grid, c + Vector2i.UP)) or Furniture.connects(fid, _fid_at(_grid, c + Vector2i.DOWN)): return 1
+	return -1
+
+func _linear_join(c: Vector2i, fid: String, axis: int) -> bool:
+	return Furniture.connects(fid, _fid_at(_grid, c)) and _linear_axis(c, fid) == axis
 
 ## Снимок вида всей мебели доски для furniture_look.
 func freeze_furniture() -> Dictionary:
@@ -1082,7 +1130,7 @@ static func group_cells(grid: Grid, c: Vector2i, fid: String) -> Array[Vector2i]
 	while i < out.size() and out.size() <= PATH_CAP:
 		for d: Vector2i in _TURN_DIRS:
 			var q: Vector2i = out[i] + d
-			if not seen.has(q) and _fid_at(grid, q) == fid:
+			if not seen.has(q) and Furniture.connects(fid, _fid_at(grid, q)):
 				seen[q] = true
 				out.append(q)
 		i += 1
@@ -1247,9 +1295,14 @@ static func _single_turn(grid: Grid, c: Vector2i, fid: String, at: Vector2i) -> 
 			var n: Vector2i = c + _TURN_DIRS[k]
 			if grid.in_bounds(n) and faces.has(Furniture.base_of(grid.cell_fast(n.x, n.y).feature_id)):
 				return (k + 2) % 4
+	# К СТЕНЕ, а не к соседней мебели (0.12.2, item 12): высокий шкаф рядом раньше считался
+	# стеной, и уже стоявший ящик разворачивало, стоило поставить шкаф сбоку.
 	for k in 4:
 		var n: Vector2i = c + _TURN_DIRS[k]
-		if not grid.in_bounds(n) or grid.cell_fast(n.x, n.y).is_wall():
+		if not grid.in_bounds(n):
+			return k
+		var nc := grid.cell_fast(n.x, n.y)
+		if nc.is_wall() and not Furniture.is_furniture(nc.feature_id):
 			return k
 	return variant_of(c + at, 4)
 
@@ -1313,7 +1366,7 @@ static func _run_turn(grid: Grid, c: Vector2i, fid: String, at: Vector2i = Vecto
 	var wall := [false, false, false, false]
 	for k in 4:
 		var q: Vector2i = c + _TURN_DIRS[k]
-		same[k] = _fid_at(grid, q) == fid
+		same[k] = Furniture.connects(fid, _fid_at(grid, q))
 		wall[k] = not grid.in_bounds(q) or grid.cell_fast(q.x, q.y).is_wall()
 	var across: bool = same[1] or same[3]   # сосед восток/запад — ряд лежит по горизонтали
 	var down: bool = same[0] or same[2]
@@ -1608,6 +1661,14 @@ static func prepare(ci: CanvasItem, cell_size: float) -> int:
 	return res
 
 ## Index authored decals separately from floor pixels, beneath walls and objects.
+var time_of_day := ""
+func set_time_of_day(value: String) -> bool:
+	if time_of_day == value: return false
+	time_of_day = value
+	_chunks.clear()
+	_bytes = 0
+	return true
+
 func set_map_decals() -> void:
 	map_decals.clear()
 	_map_decal_bleed = 1.5

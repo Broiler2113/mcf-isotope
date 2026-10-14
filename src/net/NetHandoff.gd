@@ -100,7 +100,9 @@ const K_LOBBY_MAP := "lobby_map"
 ##       dust-storm hit numbers.
 ##  11 — 0.12.1: wall and pillbox chunks take effect numbers (board signature), time of
 ##       day, host-drawn Capture & Hold zones.
-const PROTOCOL := 11
+##  12 — 0.12.2: destroying one cell of a multi-cell piece of furniture leaves the rest.
+##  13 — furniture fire, shield sweeps, pressure-door interlocks and paired furniture.
+const PROTOCOL := 13
 
 static func encode_rules() -> Dictionary:
 	var roster := GameConfig.active_roster()

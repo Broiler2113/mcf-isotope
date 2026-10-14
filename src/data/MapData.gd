@@ -50,6 +50,11 @@ var door_look: PackedByteArray = PackedByteArray()
 var decals: Array = []
 ## Small items (0.12.1, SmallItems): [kind, x, y, rotation] — free-placed, on tables or floor.
 var items: Array = []
+## Bodies lying on the map (0.12.2, item 20: "the corpse shouldn't be a decal"): one cell
+## index per body, so a pile is the same index repeated (up to MCF.CORPSE_WALL_COUNT).
+## In battle these become GridCell.corpse_count — real bodies that can be dragged and
+## stacked into a corpse wall, not a picture painted on the floor.
+var corpses: PackedInt32Array = PackedInt32Array()
 ## Index -> [fixture id, durability, quarter turns]. Separate from the wall beneath it.
 var fixtures: Dictionary = {}
 ## Время суток карты (0.12.1, владелец): "" — как раньше (ночь), иначе одно из TIMES. Задаёт
@@ -91,6 +96,7 @@ func resize(p_width: int, p_height: int) -> void:
 	light_tint = PackedByteArray()
 	decals = []
 	items = []
+	corpses = PackedInt32Array()
 	fixtures = {}
 
 ## Изменить размер, СОХРАНИВ содержимое (batch 13 #14): клетки в пересечении старого и
@@ -113,6 +119,7 @@ func resize_keep(p_width: int, p_height: int) -> void:
 	var old_door := door_look
 	var old_decals := decals
 	var old_items := items
+	var old_corpses := corpses
 	var old_fixtures := fixtures
 	resize(p_width, p_height)
 	fill_all_space()
@@ -144,6 +151,10 @@ func resize_keep(p_width: int, p_height: int) -> void:
 	for it: Array in old_items:
 		if in_bounds(SmallItems.cell_of(it)):
 			items.append(it.duplicate())
+	for i: int in old_corpses:
+		var c := Vector2i(i % old_w, i / old_w)
+		if in_bounds(c):
+			corpses.append(c.y * width + c.x)
 	for s in old_spawns:
 		if in_bounds(s["coord"]):
 			spawns.append(s)
@@ -237,6 +248,7 @@ func apply_to_grid(grid: Grid) -> void:
 			var coord := Vector2i(x, y)
 			var c := grid.cell(coord)
 			var i := _index(coord)
+			c.corpse_count = 0
 			c.floor_type = floor_type[i]
 			c.is_space = is_space[i] != 0
 			var fid := feature_id[i]
@@ -248,6 +260,16 @@ func apply_to_grid(grid: Grid) -> void:
 			else:
 				c.cover_height = cover_height[i]
 			c.lamps = fixtures.get(i, []) if c.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(fid) and fid != MCF.FEATURE_AIRLOCK else []
+
+	for i: int in corpses:
+		var coord := Vector2i(i % width, i / width)
+		if i < 0 or i >= width * height or not grid.in_bounds(coord): continue
+		var cell := grid.cell(coord)
+		if cell.feature_id == MCF.FEATURE_CORPSE_WALL: continue
+		cell.corpse_count += 1
+		if cell.corpse_count >= MCF.CORPSE_WALL_COUNT:
+			cell.set_feature(MCF.FEATURE_CORPSE_WALL)
+			cell.corpse_count = 0
 
 ## The inverse of apply_to_grid (0.11): a board as a map, e.g. a saved battlefield for
 ## the lobby preview. Units are not cells; callers add them as spawns.
@@ -269,6 +291,9 @@ static func from_grid(grid: Grid, p_env: String = "") -> MapData:
 	m.light_tint = grid.light_tint.duplicate()
 	m.decals = grid.map_decals.duplicate(true)
 	m.items = grid.map_items.duplicate(true)
+	for c: GridCell in grid.cells_flat():
+		for k in c.corpse_count:
+			m.corpses.append(c.coord.y * grid.width + c.coord.x)
 	for c: Vector2i in grid.furniture_turn:
 		m.feature_turn[c.y * grid.width + c.x] = (grid.furniture_turn[c] as Array).duplicate()
 	return m
@@ -536,6 +561,8 @@ func to_dict() -> Dictionary:
 		out["decals"] = decals.duplicate(true)
 	if not items.is_empty():
 		out["items"] = items.duplicate(true)
+	if not corpses.is_empty():
+		out["corpses"] = Array(corpses)
 	if not fixtures.is_empty():
 		var records := {}
 		for i: int in fixtures: records[str(i)] = fixtures[i].duplicate(true)
@@ -573,9 +600,20 @@ static func from_dict(d: Dictionary) -> MapData:
 		if int(k) < n and rec.size() == 2:
 			m.feature_dur[int(k)] = [str(rec[0]), int(rec[1])]
 	for record in d.get("decals", []):
-		if record is Array and record.size() == 5 and str(record[0]) in ["blood_pool", "blood_drop", "corpse"]:
+		if record is Array and record.size() == 5 and str(record[0]) in ["blood_pool", "blood_drop"]:
 			if float(record[1]) >= 0 and float(record[2]) >= 0 and float(record[1]) < m.width and float(record[2]) < m.height:
 				m.decals.append([str(record[0]), float(record[1]), float(record[2]), float(record[3]), clampf(float(record[4]), 0.1, 4.0)])
+	for entry in d.get("corpses", []):
+		var ci := int(entry)
+		if ci >= 0 and ci < n:
+			m.corpses.append(ci)
+	# Старые карты (до 0.12.2) рисовали тела декалью «corpse» — переводим их в настоящие
+	# тела на клетке: сама декаль больше не кладётся и не рисуется.
+	for record in d.get("decals", []):
+		if record is Array and (record as Array).size() >= 3 and str(record[0]) == "corpse":
+			var cc := Vector2i(floori(float(record[1])), floori(float(record[2])))
+			if m.in_bounds(cc):
+				m.corpses.append(cc.y * m.width + cc.x)
 	for record in d.get("items", []):
 		var it := SmallItems.clean(record)
 		if not it.is_empty() and m.in_bounds(SmallItems.cell_of(it)):
@@ -605,6 +643,18 @@ static func from_dict(d: Dictionary) -> MapData:
 		})
 	var tod := str(d.get("time", ""))
 	m.time_of_day = tod if TIMES.has(tod) else ""
+	# Retired furniture becomes its actual loose prop / ordinary desk on import.
+	for i in n:
+		if m.feature_id[i] == "toolbox":
+			m.items.append(["toolbox", float(i % m.width) + 0.5, float(i / m.width) + 0.5, 0.0])
+			m.feature_id[i] = ""
+			m.cover_height[i] = 0.0
+			m.feature_dur.erase(i)
+			m.feature_turn.erase(i)
+		elif m.feature_id[i] == "desk_lamp":
+			m.feature_id[i] = "desk"
+			m.feature_dur.erase(i)
+			m.feature_turn.erase(i)
 	# item 5: старые карты с «нейтральной зоной» переводим в явные спавны мирных.
 	m._materialize_neutral_zones()
 	return m

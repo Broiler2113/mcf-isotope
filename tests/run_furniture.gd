@@ -59,7 +59,7 @@ func _process(_d: float) -> bool:
 
 func _table() -> void:
 	ck(Furniture.DEFS.size() >= 40, "at least forty furniture types (%d)" % Furniture.DEFS.size())
-	for fid: String in Furniture.DEFS:
+	for fid: String in Furniture.ids():
 		var d: Dictionary = Furniture.DEFS[fid]
 		ck(float(d["h"]) in [0.5, 1.0, 1.5, 2.0], "%s height is one of the four classes" % fid)
 		ck(int(d["dur"]) >= 1 and int(d["ap"]) >= 1 and int(d["ap"]) <= 3, "%s durability and break AP in range" % fid)
@@ -216,7 +216,8 @@ func _actions() -> void:
 	ck(r.breakable_cells(u).is_empty(), "furniture never shows up as a fortification to demolish")
 	_multi_cell()
 
-## Многоклеточное: кровать 2×2 — один предмет (ломается, гибнет и сдвигается целиком),
+## Многоклеточное: кровать 2×2 — один предмет (сдвигается целиком; гибнет с 0.12.2 только
+## задетая клетка),
 ## стойка из трёх секций — три секции.
 func _multi_cell() -> void:
 	var bed := [Vector2i(6, 4), Vector2i(7, 4), Vector2i(6, 5), Vector2i(7, 5)]
@@ -242,10 +243,10 @@ func _multi_cell() -> void:
 	u.remaining_ap = 2
 	res = r.resolve(BreakIntent.new(u.id, Vector2i(6, 5)))
 	ck(res.ok and u.remaining_ap == 0, "smashing the bed costs its 2 AP once")
-	var gone := true
+	var left := 0
 	for c in bed:
-		gone = gone and st.grid.cell(c).feature_id == ""
-	ck(gone, "and takes the whole bed, not one corner")
+		left += 1 if st.grid.cell(c).feature_id == "bed" else 0
+	ck(st.grid.cell(Vector2i(6, 5)).feature_id == "" and left == 3, "and breaks only the cell it hit, the rest of the bed stands (0.12.2)")
 	var cook := st.grid.cell(Vector2i(3, 7)).occupant
 	cook.remaining_ap = 2
 	ck(r.resolve(BreakIntent.new(cook.id, Vector2i(3, 8))).ok, "a counter segment can be smashed")
@@ -261,14 +262,14 @@ func _multi_cell() -> void:
 			"…and the lone one left is a single cell again, so it can be grabbed")
 	res = r.resolve(DragIntent.new(smith.id, Vector2i(11, 2), Vector2i(11, 3)))
 	ck(res.ok and st.grid.cell(Vector2i(11, 3)).feature_id == "workbench", "and dragged (%s)" % res.reason)
-	# Разрыв по углу кровати — и кровати нет целиком.
+	# Разрыв по углу кровати — гибнет только этот угол (0.12.2).
 	var s2 := _board({Vector2i(8, 5): "bed", Vector2i(8, 6): "bed", Vector2i(12, 5): "bed", Vector2i(12, 6): "bed"},
 			[[Vector2i(1, 1), "light_infantry", 0], [Vector2i(18, 10), "light_infantry", 1]])
 	var r2 := GameActionResolver.new(s2)
 	var blast := ActionResult.success([])
 	r2._blast(Vector2i(9, 4), blast, [Vector2i(8, 5)])
-	ck(s2.grid.cell(Vector2i(8, 5)).feature_id == "" and s2.grid.cell(Vector2i(8, 6)).feature_id == "",
-			"a blast that wrecks one end of a bed wrecks the bed")
+	ck(s2.grid.cell(Vector2i(8, 5)).feature_id == "" and s2.grid.cell(Vector2i(8, 6)).feature_id == "bed",
+			"a blast on one end of a bed wrecks that end only (0.12.2)")
 	ck(s2.grid.cell(Vector2i(12, 5)).feature_id == "bed", "the other bed is untouched")
 
 # --- Оружие ------------------------------------------------------------------------------
@@ -307,9 +308,9 @@ func _weapons() -> void:
 			"firing the laser clears both (%s)" % res.reason)
 	# Огонь: дерево горит, железо — нет.
 	ck(r.fire_need(st.grid.cell(Vector2i(12, 2))) == MCF.FIRE_NEED_WOOD, "a wooden crate catches like a wooden wall")
-	ck(r.fire_need(st.grid.cell(Vector2i(13, 2))) == MCF.FIRE_NEVER, "a server rack never catches from spreading fire")
+	ck(r.fire_need(st.grid.cell(Vector2i(13, 2))) == MCF.FIRE_NEED_METAL, "metal furniture has a harder ignition roll")
 	r._ignite(st.grid.cell(Vector2i(13, 2)), 0, res)
-	ck(st.grid.cell(Vector2i(13, 2)).feature_id == "server_rack", "a flame jet scorches the rack but leaves it standing")
+	ck(st.grid.cell(Vector2i(13, 2)).feature_id == "", "a flame jet consumes the rack")
 	r._ignite(st.grid.cell(Vector2i(12, 2)), 0, res)
 	ck(st.grid.cell(Vector2i(12, 2)).feature_id == "", "but burns the crate away")
 
@@ -446,7 +447,7 @@ func _generation() -> void:
 			if on.floor_type[i] != off.floor_type[i] or on.is_space[i] != off.is_space[i]:
 				other += 1
 		ck(other == 0, "%s: furniture changes nothing else on the map (%d cells differ)" % [name, other])
-		ck(_no_furniture_at_doors(on), "%s: no furniture next to any door or airlock" % name)
+		ck(_no_furniture_at_doors(on), "%s: only compact restroom fixtures may sit near a door" % name)
 		var lost := _cut_off(off, on)
 		ck(lost == 0, "%s: every floor cell stays reachable even treating furniture as solid (%d cut off)" % [name, lost])
 		var st := on.build_state(1)
@@ -538,7 +539,7 @@ func _no_furniture_at_doors(m: MapData) -> bool:
 				continue
 			for dy in range(-1, 2):
 				for dx in range(-1, 2):
-					if Furniture.is_furniture(m.get_feature(Vector2i(x + dx, y + dy))):
+					if Furniture.is_furniture(m.get_feature(Vector2i(x + dx, y + dy))) and m.get_feature(Vector2i(x + dx, y + dy)) != "toilet":
 						return false
 	return true
 

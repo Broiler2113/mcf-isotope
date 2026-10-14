@@ -99,7 +99,39 @@ func _populate() -> void:
 			var floor_pos := _floor_near(c)
 			if floor_pos != Vector2i(-1, -1):
 				_place(floor_pos, _floor_kind(floor_pos, false), 0)
+	_room_lights()
 	_airlock_beacons()
+
+## Wall spacing must not leave a small enclosed restroom dark merely because another
+## lamp is close on the opposite side of its wall. Furniture does not exclude a room.
+func _room_lights() -> void:
+	var seen := {}
+	for i in g.w * g.h:
+		if seen.has(i) or g._indoor[i] == 0 or _opaque[i] != 0 or map.is_space[i] != 0:
+			continue
+		var queue: Array[int] = [i]
+		seen[i] = true
+		var head := 0
+		var brightest := 0.0
+		while head < queue.size():
+			var at := queue[head]
+			head += 1
+			brightest = maxf(brightest, coverage[at])
+			var c := Vector2i(at % g.w, at / g.w)
+			for d: Vector2i in N4:
+				var n := c + d
+				if not map.in_bounds(n): continue
+				var ni := n.y * g.w + n.x
+				if seen.has(ni) or g._indoor[ni] == 0 or _opaque[ni] != 0 or map.is_space[ni] != 0: continue
+				seen[ni] = true
+				queue.append(ni)
+		if brightest >= ROOM_TARGET: continue
+		for at: int in queue:
+			var c := Vector2i(at % g.w, at / g.w)
+			var mount := _wall_near(c)
+			if not mount.is_empty():
+				_place(mount[0], "wall_lamp", mount[1])
+				break
 
 ## How much light a tile should end up with (0.11). Rooms are lit, corridors dimmer and
 ## service tunnels mostly dark: pools of light, not a flat floodlit board. Outside, only
@@ -172,7 +204,7 @@ func _floor_kind(c: Vector2i, outdoors: bool) -> String:
 			"field", "asteroid": return "floodlight"
 		return "work_light"
 	# Houses and huts get household lamps, never street-style posts (0.11 playtest).
-	if map.env in ["town", "field"]: return "floor_lamp" if (c.x + c.y) % 2 else "desk_lamp"
+	if map.env in ["town", "field"]: return "floor_lamp"
 	return "work_light"
 
 ## The nearest wall with a free face towards c: [wall, side], or [] (0.11: one lamp per side).

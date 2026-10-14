@@ -370,12 +370,12 @@ const FLOOR_GRASS := 2
 ## номер вида лежит в сохранённой карте, и перестановка переписала бы все старые карты.
 const FLOOR_LOOKS := ["", "floor_wood", "floor_parquet", "floor_tile", "floor_checker",
 		"floor_carpet_red", "floor_carpet_blue", "floor_lino", "floor_plate", "floor_grate", "floor_solar",
-		"floor_grill", "floor_grass"]
+		"floor_grill", "floor_grass", "floor_field"]
 const FLOOR_LOOK_NAMES := ["Floor", "Wood floor", "Parquet", "Tiles", "Checker tiles", "Red carpet",
 		"Blue carpet", "Linoleum", "Steel plate", "Grating", "Solar panels", "Grill walkway",
-		"Grass"]
+		"Grass", "Dirt path"]
 enum Look {DEFAULT, WOOD, PARQUET, TILE, CHECKER, CARPET_RED, CARPET_BLUE, LINO, PLATE, GRATE, SOLAR,
-		GRILL, GRASS}
+		GRILL, GRASS, DIRT}
 ## Виды, которые кладутся ПОВЕРХ пола клетки, а не вместо него.
 const FLOOR_OVERLAY_LOOKS := {Look.GRILL: true}
 
@@ -427,6 +427,11 @@ const FIRE_NEED_WOOD := 4         # деревянная стена — 3/6
 const FIRE_NEED_GLASS := 5        # стекло — 2/6
 const FIRE_NEED_COVER := 4        # мешки, ёж, ДПМГ, куча 1 м — 3/6
 const FIRE_NEED_TALL_DIRT := 5    # куча в 2 м считается стеной — 2/6
+## Металлическая мебель (0.12.2, владелец: «fire doesn't consume furniture tiles»): шкаф,
+## стойка, станок больше не огнеупорны наглухо — занимаются только на 6, но уж если
+## занялись, выгорают, как и всё прочее. Раньше это был FIRE_NEVER, и в стальной каюте
+## пожар упирался в первый же шкаф.
+const FIRE_NEED_METAL := 6        # металлическая мебель — 1/6
 const FIRE_NEVER := 99            # заведомо недостижимо шестигранником
 
 ## Пороги по объекту на клетке. Всё, чего здесь нет, считается укрытием (3/6) —
@@ -713,6 +718,20 @@ static var display_env := ""
 
 static func rubble_env(env: String) -> bool:
 	return RUBBLE_ENVS.has(env)
+
+## Во что складываются укрепления (#31): мешки на мешки — стена из мешков, ёж на мешки —
+## ёж на мешках. Лежит здесь, а не в резолвере (0.12.2): по той же таблице кисть редактора
+## кладёт ежа поверх мешков, а не вместо них.
+const STACK_RESULT := {
+	FEATURE_SANDBAGS: {
+		FEATURE_SANDBAGS: FEATURE_SANDBAG_WALL,
+		FEATURE_HEDGEHOG: FEATURE_HEDGEHOG_SANDBAGS,
+	},
+}
+
+## Что получится, если положить new_fid на клетку с old_fid; "" — не складываются.
+static func stacked(old_fid: String, new_fid: String) -> String:
+	return str((STACK_RESULT.get(old_fid, {}) as Dictionary).get(new_fid, ""))
 
 static func feature_name(feature_id: String, fallback: String = "") -> String:
 	if feature_id == FEATURE_DIRT_PILE and RUBBLE_ENVS.has(display_env):

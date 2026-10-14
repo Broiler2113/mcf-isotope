@@ -25,23 +25,27 @@ WHITE = rgb("#e8e6df")
 # Opened cabinets (0.12.1): build_furniture.py renders "<id>_open" with this set; the game
 # shows it once a cabinet has been dragged and has spilled its contents.
 OPEN = False
+CONTENTS = ""
 INSIDE = rgb("#1c1b1a")
 
 
 def open_front(cv, w, front, z, drawers=False):
-    """Doors ajar (a dark gap and two door edges swung out) or drawers pulled out, along the
-    front edge of every cell of the piece."""
+    """Clearly exposed interior with shelves and doors swung beside the opening."""
     if not OPEN:
         return
     for i in range(w):
+        top = max(.18, front - .58)
+        cv.rect(i + .17, top, i + .83, front, z - .18, solid(INSIDE), r=.01, bevel=.025)
         if drawers:
-            cv.rect(i + 0.16, front - 0.3, i + 0.84, front + 0.05, z + 0.02, painted(rgb("#7c7a74")), r=0.01, bevel=0.015)
-            cv.rect(i + 0.21, front - 0.26, i + 0.79, front + 0.01, z - 0.08, solid(INSIDE), r=0.005, bevel=0.01)
-            cv.rect(i + 0.27, front - 0.22, i + 0.6, front - 0.05, z - 0.06, solid(rgb("#e9e4d6")), r=0.003, bevel=0.003)
+            cv.rect(i + .2, front - .12, i + .8, front + .07, z - .08, painted(rgb('#766c5d')), r=.01, bevel=.012)
+            cv.line(i + .22, front + .06, i + .78, front + .06, .05, z + .01, wood(WOOD), bevel=.01)
+            cv.line(i + .43, front + .07, i + .57, front + .07, .025, z + .03, metal(CHROME), bevel=.005)
         else:
-            cv.rect(i + 0.1, front - 0.2, i + 0.9, front, 0.2, solid(INSIDE), r=0.0, bevel=0.01)
-            cv.line(i + 0.1, front, i + 0.0, front + 0.08, 0.035, z, painted(rgb("#8c8478")), bevel=0.01)
-            cv.line(i + 0.9, front, i + 1.0, front + 0.08, 0.035, z, painted(rgb("#8c8478")), bevel=0.01)
+            for y in [top + .18, top + .38]:
+                cv.line(i + .18, y, i + .82, y, .045, z - .08, wood(WOOD_L), bevel=.01)
+            # Two broad door leaves, visibly attached at the front hinges.
+            cv.line(i + .16, front - .1, i + .06, front + .09, .105, z, wood(WOOD), bevel=.018)
+            cv.line(i + .84, front - .1, i + .94, front + .09, .105, z, wood(WOOD), bevel=.018)
 
 
 def body(cv, w, h, z, mat, r=0.04, bevel=0.04, m=M, **kw):
@@ -225,20 +229,52 @@ def refrigerator(cv, c):
     cv.rect(0.7, 0.14, 0.76, 0.32, 1.04, metal(CHROME, gloss=0.9), r=0.02, bevel=0.01)
     cv.rect(0.22, 0.5, 0.36, 0.6, 1.01, solid(rgb("#d64a3a")), r=0.01, bevel=0.005)
 
+    open_front(cv, 1, .88, 1.0)
+
+
+def foliage(cv, kind='', radius=.36, z=.5):
+    colours = [rgb('#456a31'), rgb('#638b43'), rgb('#355a29')]
+    for k in range(16 if kind != 'palm' else 8):
+        a = k * 2.39996
+        reach = radius * (.5 + .5 * ((k * 7 % 11) / 10))
+        x, y = .5 + reach*math.cos(a), .5 + reach*math.sin(a)
+        if kind in ['palm', 'fern', 'dry']:
+            cv.line(.5,.5,x,y,.045 if kind=='dry' else .08,z+.06,solid(rgb('#88724c') if kind=='dry' else colours[k%3]),bevel=.015)
+        else:
+            cv.ellipse(x,y,.12,.095,z+(k%4)*.04,solid(colours[k%3]),bevel=.04,dome=.035)
+        if kind == 'flowering' and k%3 == 0:
+            cv.circle(x,y,.045,z+.18,solid(rgb('#d89db6')),bevel=.01)
+
 
 def potted_plant(cv, c):
-    cv.circle(0.5, 0.52, 0.24, 0.35, ceramic(rgb("#a8573a"), gloss=0.3), bevel=0.05)
-    cv.circle(0.5, 0.52, 0.19, 0.3, solid(rgb("#3b2a1c")), bevel=0.03)
-    rng = np.random.default_rng(6)
-    greens = [rgb("#3e6e2e"), rgb("#4f8a36"), rgb("#2f5a24"), rgb("#5f9a40")]
-    for k in range(14):
-        a = k * 2.39996
-        L = 0.18 + rng.random() * 0.2
-        x1, y1 = 0.5 + L * math.cos(a), 0.52 + L * math.sin(a)
-        cv.ellipse((0.5 + x1) / 2, (0.52 + y1) / 2, L / 2, 0.07, 0.5 + rng.random() * 0.2,
-                   solid(greens[k % 4], var=0.08, gloss=0.25), bevel=0.04, dome=0.03,
-                   ) if abs(math.cos(a)) > 0.7 else cv.ellipse((0.5 + x1) / 2, (0.52 + y1) / 2, 0.07, L / 2,
-                   0.5 + rng.random() * 0.2, solid(greens[k % 4], var=0.08, gloss=0.25), bevel=0.04, dome=0.03)
+    cv.circle(.5,.5,.25,.3,ceramic(rgb('#a8573a')),bevel=.04)
+    cv.circle(.5,.5,.2,.28,solid(rgb('#3b2a1c')),bevel=.025)
+    foliage(cv, CONTENTS, .38, .5)
+
+
+def bush(cv, c): foliage(cv, '', .31, .4)
+def bush_dry(cv, c): foliage(cv, 'dry', .4, .4)
+def bush_flowering(cv, c): foliage(cv, 'flowering', .32, .4)
+def park_tree(cv, c):
+    cv.circle(.5,.5,.11,.35,wood(WOOD),bevel=.02)
+    foliage(cv, '', .36, .85)
+
+
+def shower(cv, c):
+    cv.rect(.08,.08,.92,.92,.2,ceramic(WHITE),r=.05,bevel=.03)
+    cv.rect(.17,.17,.83,.83,.12,ceramic(rgb('#b7c7c7')),r=.04,bevel=.03)
+    cv.circle(.68,.7,.045,.13,metal(STEEL_D),bevel=.01)
+    cv.line(.12,.13,.88,.13,.06,.9,metal(CHROME),bevel=.01)
+    cv.line(.12,.13,.12,.82,.035,.8,glass(rgb('#94c0c8')),bevel=.01)
+    cv.line(.5,.14,.5,.37,.045,.95,metal(CHROME),bevel=.01)
+    cv.circle(.5,.38,.095,1.0,metal(CHROME),bevel=.02)
+
+
+def bathtub(cv, w, h, c):
+    cv.rect(.1,.08,w-.1,h-.08,.45,ceramic(WHITE),r=.18,bevel=.04)
+    cv.rect(.22,.25,w-.22,h-.23,.2,ceramic(rgb('#b4caca')),r=.16,bevel=.06)
+    cv.circle(w*.5,h-.35,.045,.21,metal(STEEL_D),bevel=.01)
+    cv.line(w*.5,.12,w*.5,.34,.04,.5,metal(CHROME),bevel=.01)
 
 
 def tv_stand(cv, c):
@@ -335,18 +371,33 @@ def reception_desk(cv, w, h, c):
             cv.rect(i + 0.2, 0.3, i + 0.55, 0.6, 0.82, solid(rgb("#f1eee6")), r=0.005, bevel=0.005)
 
 
-def display_shelf(cv, w, h, c):
-    cv.rect(0, M, w, h - M, 0.9, metal(rgb("#b9bec4"), gloss=0.5), r=0.0, bevel=0.03)
-    rng = np.random.default_rng(cv.seed + 9)
-    goods = [rgb("#d8452e"), rgb("#e3b62a"), rgb("#2f78c4"), rgb("#3c9a52"), rgb("#ece9df"), rgb("#8a4ab0")]
+def stocked_shelf(cv, w, h, storage=False):
+    # Edge rails are continuous across tiles and independent of the contents variant.
+    cv.rect(0, M, w, h - M, .45, metal(rgb('#737d84') if storage else rgb('#b9bec4')), r=0, bevel=.02)
+    palette = {'medical': ['#e6e9dc', '#72a9a2', '#dedbca'], 'food': ['#d9b454', '#a95236', '#789f42'],
+               'drinks': ['#507c45', '#3887ac', '#b3422c'], 'tools': ['#b99532', '#536776', '#9ca7ac']}
+    goods = [rgb(x) for x in palette.get(CONTENTS, ['#b58d5f', '#9e7149', '#687e91'] if storage else ['#b64836', '#dbb444', '#3973a2'])]
     for i, j in cells(w, h):
-        for r in range(2):
-            for k in range(4):
-                col = goods[rng.integers(len(goods))]
-                x = i + 0.08 + k * 0.22
-                y = j + M + 0.08 + r * 0.38
-                cv.rect(x, y, x + 0.18, y + 0.3, 0.95 + rng.random() * 0.05, plastic(col, gloss=0.4), r=0.02, bevel=0.02)
-        cv.groove(i - 0.006, j + M, i + 0.006, j + 1 - M, depth=0.02, dark=0.6)
+        if CONTENTS != 'empty':
+            for row in range(2):
+                for col in range(3):
+                    x, y = i + .11 + col*.28, j + .2 + row*.34
+                    colour = goods[(row + col) % len(goods)]
+                    if CONTENTS == 'drinks':
+                        cv.circle(x+.1, y+.1, .09, .75, glass(colour), bevel=.025)
+                        cv.circle(x+.1, y+.1, .035, .8, metal(CHROME), bevel=.008)
+                    elif CONTENTS == 'tools':
+                        cv.line(x, y+.18, x+.18, y, .065, .65, metal(colour), bevel=.015)
+                        cv.circle(x+.18,y,.055,.68,metal(CHROME),bevel=.01)
+                    else:
+                        cv.rect(x,y,x+.21,y+.25,.72,solid(colour),r=.012,bevel=.02)
+                        cv.rect(x+.03,y+.08,x+.18,y+.14,.73,solid(WHITE),r=0,bevel=0)
+        for y in [j+M, j+1-M]:
+            cv.line(i,y,i+1,y,.055,.86,metal(rgb('#b7a15d') if storage else CHROME),bevel=.012)
+
+
+def display_shelf(cv, w, h, c):
+    stocked_shelf(cv, w, h, False)
 
 
 def checkout_counter(cv, w, h, c):
@@ -370,6 +421,17 @@ def vending_machine(cv, c):
     cv.rect(0.7, 0.52, 0.86, 0.66, 1.02, plastic(BLACK), r=0.01, bevel=0.01)
     cv.rect(0.72, 0.54, 0.84, 0.58, 1.03, screen(rgb("#4ad46b")), r=0.005, bevel=0.0, emit=0.9)
     cv.rect(0.16, 0.12, 0.84, 0.36, 1.02, solid(BULB, var=0.02), r=0.02, bevel=0.01, emit=0.75)
+
+    if CONTENTS == 'coffee':
+        cv.rect(.18,.48,.64,.85,1.03,plastic(BLACK),r=.02,bevel=.01)
+        cv.circle(.42,.68,.1,1.05,ceramic(WHITE),bevel=.02)
+        cv.line(.42,.52,.42,.6,.04,1.08,metal(CHROME),bevel=.01)
+    elif CONTENTS == 'medical':
+        cv.rect(.44,.14,.56,.34,1.04,solid(rgb('#b53e36')),r=0,bevel=0)
+        cv.rect(.34,.21,.66,.27,1.04,solid(rgb('#b53e36')),r=0,bevel=0)
+    elif CONTENTS == 'snacks':
+        for x in [.25,.43,.61]:
+            cv.rect(x,.16,x+.12,.33,1.04,plastic(rgb('#c87d32')),r=.02,bevel=.01)
 
 
 def water_cooler(cv, c):
@@ -419,22 +481,7 @@ def tool_cabinet(cv, c):
 
 
 def storage_shelf(cv, w, h, c):
-    cv.rect(0, M, w, h - M, 0.4, metal(rgb("#6b7178"), gloss=0.4), r=0.0, bevel=0.02)
-    rng = np.random.default_rng(cv.seed + 5)
-    for i, j in cells(w, h):
-        for (x, y) in ((i + 0.0, j + M), (i + 0.0, j + 1 - M)):
-            cv.rect(x - 0.03, y - 0.03, x + 0.03, y + 0.03, 1.05, metal(rgb("#d4a62a"), gloss=0.4), r=0.005, bevel=0.01)
-        k = rng.integers(3)
-        if k == 0:
-            cv.rect(i + 0.1, j + 0.18, i + 0.9, j + 0.82, 0.9, wood(rgb("#b88a55"), freq=7), r=0.02, bevel=0.03)
-            cv.rect(i + 0.1, j + 0.47, i + 0.9, j + 0.53, 0.92, solid(rgb("#c9b48a")), r=0.0, bevel=0.0)
-        elif k == 1:
-            for (x, y) in ((0.3, 0.32), (0.7, 0.32), (0.3, 0.68), (0.7, 0.68)):
-                cv.rect(i + x - 0.17, j + y - 0.15, i + x + 0.17, j + y + 0.15, 0.85, solid(rgb("#b9946a"), var=0.05), r=0.01, bevel=0.02)
-                cv.groove(i + x - 0.17, j + y - 0.01, i + x + 0.17, j + y + 0.01, depth=0.005, dark=0.75)
-        else:
-            cv.circle(i + 0.32, j + 0.5, 0.2, 0.95, metal(rgb("#3d6e9a"), gloss=0.5), bevel=0.04)
-            cv.rect(i + 0.58, j + 0.25, i + 0.88, j + 0.75, 0.8, plastic(rgb("#2f3a44")), r=0.02, bevel=0.02)
+    stocked_shelf(cv, w, h, True)
 
 
 def server_rack(cv, w, h, c):
@@ -525,6 +572,16 @@ def ammo_crate(cv, c):
         cv.rect(x - 0.02, 0.49, x + 0.02, 0.56, 0.615, solid(BLACK), r=0.0, bevel=0.0)
     cv.rect(0.12, 0.66, 0.2, 0.76, 0.64, metal(STEEL), r=0.01, bevel=0.01)
     cv.rect(0.8, 0.66, 0.88, 0.76, 0.64, metal(STEEL), r=0.01, bevel=0.01)
+
+
+def machine_workstation(cv, c):
+    cv.rect(.05,.12,.95,.85,.7,painted(rgb('#5f766c')),r=.025,bevel=.025)
+    cv.rect(.14,.22,.67,.67,.74,metal(STEEL_D),r=.01,bevel=.01)
+    cv.line(.2,.44,.63,.44,.13,.87,metal(CHROME),bevel=.025)
+    for x in [.22,.5]: cv.rect(x,.3,x+.07,.58,.9,metal(STEEL),r=.008,bevel=.012)
+    cv.rect(.74,.3,.88,.55,.83,plastic(BLACK),r=.01,bevel=.01)
+    cv.circle(.81,.4,.035,.85,solid(rgb('#70b76a')),bevel=.006)
+    cv.line(.15,.77,.85,.77,.05,.78,metal(rgb('#c6a444')),bevel=.01)
 
 
 def machinery(cv, w, h, c):
@@ -643,6 +700,8 @@ def specimen_fridge(cv, c):
         for l in range(5):
             cv.circle(0.24 + l * 0.13, y, 0.04, 1.03, glass([rgb("#c43a2e"), rgb("#7fc4a8"), rgb("#e3b62a")][(k + l) % 3]), bevel=0.02)
     cv.rect(0.74, 0.1, 0.84, 0.14, 1.02, solid(rgb("#46d0e8")), r=0.005, bevel=0.0, emit=1.0)
+
+    open_front(cv, 1, .88, 1.0)
 
 
 def gas_canister(cv, c):
@@ -818,9 +877,9 @@ SINGLE = {k: v for k, v in globals().items() if callable(v) and k in (
     "vending_machine water_cooler tool_cabinet pallet crate barrel equipment_cart toolbox ammo_crate "
     "washing_machine target vent_fan specimen_fridge gas_canister water_bucket trash_bin street_cabinet "
     "wall_lamp wall_strip bulkhead_lamp wall_beacon ceiling_lamp streetlight floodlight bollard_light "
-    "work_light floor_lamp desk_lamp lamp").split()}
+    "machine_workstation work_light floor_lamp desk_lamp lamp bush bush_dry bush_flowering park_tree shower").split()}
 JOINED = {k: v for k, v in globals().items() if callable(v) and k in (
     "sofa bed bunk_bed desk office_desk dining_table wardrobe dresser bookshelf kitchen_counter piano "
     "conference_table filing_cabinet locker reception_desk display_shelf checkout_counter workbench "
     "storage_shelf server_rack console industrial_cabinet generator machinery exam_table fuel_tank steel_table "
-    "lab_bench morgue_drawers biohazard_cabinet bench dumpster park_table plastic_table").split()}
+    "lab_bench morgue_drawers biohazard_cabinet bench dumpster park_table plastic_table bathtub").split()}

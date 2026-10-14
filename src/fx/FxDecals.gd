@@ -32,7 +32,28 @@ const DAMAGE_EPICENTER := 2  # клетка эпицентра — выгоре�
 ## «chunk:<картинка стены>»: кусок её же плитки, поэтому кирпич сыплется кирпичом.
 const CHUNKS_MIN := 8
 const CHUNKS_MAX := 14
-const CHUNK_SIZE := 0.3
+const CHUNK_SIZE := 0.32
+## Формы обломков (0.12.2, владелец: «sharper and vary in size and shape»): острые
+## многоугольники в долях половины размера. Вид частицы — «chunk:<картинка>#<форма>»;
+## без «#» (0.12.1) — форма 2.
+const CHUNK_SHAPES := [
+	[Vector2(-1.0, -0.55), Vector2(0.95, -0.9), Vector2(0.15, 1.0)],
+	[Vector2(-1.0, -0.22), Vector2(1.0, -0.42), Vector2(0.85, 0.28), Vector2(-0.8, 0.2)],
+	[Vector2(-0.7, -0.9), Vector2(0.6, -0.7), Vector2(1.0, 0.4), Vector2(0.1, 0.95), Vector2(-0.9, 0.3)],
+	[Vector2(-0.95, -0.95), Vector2(0.95, -0.45), Vector2(-0.35, 0.95)],
+	[Vector2(-0.95, -0.5), Vector2(0.3, -0.95), Vector2(0.95, 0.0), Vector2(0.45, 0.6), Vector2(-0.15, 0.25), Vector2(-0.85, 0.9)],
+	[Vector2(-0.6, -1.0), Vector2(0.75, -0.55), Vector2(0.5, 0.9), Vector2(-0.85, 0.5)],
+]
+const CHUNK_SCALE_MIN := 0.45
+const CHUNK_SCALE_MAX := 1.6
+
+## Картинка и форма обломка по виду частицы.
+static func chunk_parts(kind: String) -> Array:
+	var body := kind.substr(6)
+	var cut := body.rfind("#")
+	if cut < 0:
+		return [body, 2]
+	return [body.substr(0, cut), clampi(int(body.substr(cut + 1)), 0, CHUNK_SHAPES.size() - 1)]
 ## Копоть на месте взрыва (0.12.1): «soot:<0..SOOT_VARIANTS-1>», у каждого вида своя форма
 ## пятна; эпицентр — крупное, клетки вокруг — пятна поменьше и не все.
 const SOOT_VARIANTS := 4
@@ -325,6 +346,8 @@ func _apply(events: Array, lanes_only: bool) -> void:
 				_items(ev)
 			"spill":
 				_spill(ev)
+			"sweep_props":
+				_sweep_props(ev)
 			"casings":
 				_casings(ev)
 			"blood":
@@ -435,8 +458,7 @@ func _shards(ev: Dictionary) -> void:
 func _chunks(ev: Dictionary) -> void:
 	var at: Vector2i = ev.get("at", Vector2i.ZERO)
 	var from: Vector2i = ev.get("from", at)
-	var kind := "chunk:" + chunk_art(str(ev.get("fid", MCF.FEATURE_WALL)), int(ev.get("look", 0)),
-			str(ev.get("env", "")))
+	var art := chunk_art(str(ev.get("fid", MCF.FEATURE_WALL)), int(ev.get("look", 0)), str(ev.get("env", "")))
 	var dir := _away(at, from)
 	if bool(ev.get("toward", false)):
 		dir = -dir
@@ -444,8 +466,11 @@ func _chunks(ev: Dictionary) -> void:
 	var count: int = int(ev["count"]) if ev.has("count") \
 			else _rng_for("chunks_n", at, 0, _seq).randi_range(CHUNKS_MIN, CHUNKS_MAX)
 	for i in count:
-		_launch(kind, at, dir, _rng_for("chunk", at, i, _seq), SHARD_RANGE_MIN, SHARD_RANGE_MAX,
-				SHARD_FLIGHT_SEC, fan)
+		var rng := _rng_for("chunk", at, i, _seq)
+		var shape := rng.randi_range(0, CHUNK_SHAPES.size() - 1)
+		var size := rng.randf_range(CHUNK_SCALE_MIN, CHUNK_SCALE_MAX)
+		_launch("chunk:%s#%d" % [art, shape], at, dir, rng, SHARD_RANGE_MIN, SHARD_RANGE_MAX,
+				SHARD_FLIGHT_SEC, fan, Vector2.INF, INF, size)
 
 ## Мелкие предметы слетают (0.12.1): от взрыва — далеко, как осколки; со сдвинутой мебели —
 ## недалеко, как гильзы. Каждый летит со своего места и ложится на пол.
@@ -465,18 +490,49 @@ func _items(ev: Dictionary) -> void:
 
 ## Шкаф высыпает содержимое (0.12.1): несколько вещей его рода (SmallItems.SPILLS) из его
 ## клетки, прочь от толчка.
+func _sweep_props(ev: Dictionary) -> void:
+	var at: Vector2i = ev["at"]
+	var from: Vector2i = ev["from"]
+	var moved: Array = []
+	var kept: Array = []
+	for p: Dictionary in props:
+		var kind := str(p["kind"])
+		var cell := Vector2i(Vector2(p["pos"]).floor())
+		if cell == at and (kind.begins_with("item:") or kind.begins_with("chunk:") \
+				or kind in ["shard", "casing", "shell_casing"]):
+			moved.append(p)
+		else:
+			kept.append(p)
+	if moved.is_empty():
+		return
+	props = kept
+	_reindex()
+	decal_reset += 1
+	for i in moved.size():
+		var p: Dictionary = moved[i]
+		_launch(str(p["kind"]), at, _away(at, from), _rng_for("sweep", at, i, _seq),
+				0.6, 1.2, CASING_FLIGHT_SEC, 0.6, p["pos"], float(p["rot"]), float(p["scale"]))
+
 func _spill(ev: Dictionary) -> void:
 	var at: Vector2i = ev.get("at", Vector2i.ZERO)
 	var from: Vector2i = ev.get("from", at)
-	var kinds: Array = SmallItems.SPILLS.get(Furniture.base_of(str(ev.get("fid", ""))), [])
+	var kinds: Array = SmallItems.spill_contents(str(ev.get("fid", "")))
 	if kinds.is_empty():
 		return
+	var burst := bool(ev.get("burst", false))
 	var n_rng := _rng_for("spill_n", at, 0, _seq)
-	for i in n_rng.randi_range(SmallItems.SPILL_MIN, SmallItems.SPILL_MAX):
+	var n := n_rng.randi_range(SmallItems.SPILL_MIN, SmallItems.SPILL_MAX)
+	if burst:
+		n += 2
+	for i in n:
 		var rng := _rng_for("spill", at, i, _seq)
-		var dir := _away(at, from) if from != at else Vector2.RIGHT.rotated(rng.randf_range(0.0, TAU))
-		_launch("item:" + str(kinds[rng.randi_range(0, kinds.size() - 1)]), at, dir, rng, 0.35, 1.3,
-				CASING_FLIGHT_SEC * 1.4, 1.2, Vector2.INF, INF, 1.0)
+		# Разбитый шкаф (item 3): каждая вещь — в свою сторону, веером на все 360°.
+		var dir := Vector2.RIGHT.rotated(rng.randf_range(0.0, TAU)) if burst or from == at \
+				else _away(at, from)
+		_launch("item:" + str(kinds[rng.randi_range(0, kinds.size() - 1)]), at, dir, rng,
+				0.5 if burst else 0.35, 2.0 if burst else 1.3,
+				CASING_FLIGHT_SEC * (1.8 if burst else 1.4), PI if burst else 1.2,
+				Vector2.INF, INF, 1.0)
 
 ## Картинка стены, которой выглядят её обломки: материал стены (кирпич, штукатурка…), а
 ## без него — плитка объекта в окружении карты («wall» на станции — wall_station).
@@ -491,7 +547,7 @@ static func chunk_art(fid: String, look: int, env: String) -> String:
 static var _chunk_colors: Dictionary = {}
 static func look_of(kind: String) -> Array:
 	if kind.begins_with("chunk:"):
-		var art := kind.substr(6)
+		var art: String = chunk_parts(kind)[0]
 		if not _chunk_colors.has(art):
 			_chunk_colors[art] = _average_color(art)
 		return [CHUNK_SIZE, _chunk_colors[art]]
@@ -709,10 +765,13 @@ func _launch(kind: String, at: Vector2i, dir: Vector2, rng: RandomNumberGenerato
 		"rot0": rng.randf_range(0.0, TAU) if rot == INF else rot, "rot1": rng.randf_range(-TAU, TAU),
 		"scale": rng.randf_range(0.6, 1.1) if scale < 0.0 else scale, "t": 0.0, "dur": flight,
 	}
+	# In vacuum there is no floor or friction to stop a flying object.
+	if _space(at) or _space(Vector2i(to.floor())):
+		f["drift"] = true
 	# Отскок от края поля (batch 12 #6): частица долетает до стенки и отражается —
 	# остаток пути идёт обратно внутрь. Точка удара и доля полёта до неё запоминаются,
 	# чтобы траектория на экране действительно ломалась о край.
-	var b := _bounce(start, to)
+	var b := {} if f.get("drift", false) else _bounce(start, to)
 	if not b.is_empty():
 		f["to"] = b["to"]
 		f["via"] = b["via"]
@@ -803,7 +862,23 @@ func advance(delta: float) -> bool:
 	var landed: Array = []
 	for i in range(flying.size() - 1, -1, -1):
 		var f: Dictionary = flying[i]
+		var before := flight_pos(f)
 		f["t"] = float(f["t"]) + delta
+		if bool(f.get("drift", false)):
+			var pos := flight_pos(f)
+			var clipped := _clip_solid(before, pos, Vector2i(before.floor()))
+			if clipped != pos:
+				f["to"] = clipped
+				landed.append(f)
+				flying.remove_at(i)
+				continue
+			if (bounds != Vector2.ZERO and not Rect2(Vector2.ZERO, bounds).grow(1.0).has_point(pos)) \
+					or (bounds == Vector2.ZERO and float(f["t"]) > 30.0):
+				flying.remove_at(i)
+				continue
+			if _space(Vector2i(pos.floor())) or float(f["t"]) < float(f["dur"]):
+				continue
+			f["to"] = pos
 		if float(f["t"]) < float(f["dur"]):
 			continue
 		landed.append(f)
@@ -826,6 +901,9 @@ func advance(delta: float) -> bool:
 ## Где частица находится сейчас: линейно от from к to, с горкой по высоте, чтобы
 ## полёт читался как бросок, а не как скольжение.
 static func flight_pos(f: Dictionary) -> Vector2:
+	if bool(f.get("drift", false)):
+		return Vector2(f["from"]) + (Vector2(f["to"]) - Vector2(f["from"])) \
+				* float(f["t"]) / maxf(0.001, float(f["dur"]))
 	var k: float = clampf(float(f["t"]) / maxf(0.001, float(f["dur"])), 0.0, 1.0)
 	var base: Vector2
 	if f.has("via"):
@@ -841,6 +919,8 @@ static func flight_pos(f: Dictionary) -> Vector2:
 
 static func flight_rot(f: Dictionary) -> float:
 	var k: float = clampf(float(f["t"]) / maxf(0.001, float(f["dur"])), 0.0, 1.0)
+	if bool(f.get("drift", false)):
+		k = float(f["t"]) / maxf(0.001, float(f["dur"]))
 	return float(f["rot0"]) + float(f["rot1"]) * k
 
 # --- Сохранение косметики (M12, item 42) ---
@@ -857,12 +937,17 @@ func to_dict() -> Dictionary:
 	# сверка декалей у хоста с гостем (batch mp-perf) остаётся побайтово той же. Обратно
 	# from_dict() разводит записи по виду частицы.
 	var settled: Array = []
+	var drifting: Array = []
 	for p: Dictionary in props + gore:
 		var pos: Vector2 = p["pos"]
 		settled.append([str(p["kind"]), pos.x, pos.y, float(p["rot"]), float(p["scale"])])
 	# Ещё летящие осколки и брызги — там, где они лягут (batch mp-perf): снимок уходит гостю
 	# при пересинхронизации, и без них у него недоставало бы последнего выстрела.
 	for f: Dictionary in flying:
+		if bool(f.get("drift", false)):
+			drifting.append([str(f["kind"]), f["from"].x, f["from"].y, f["to"].x, f["to"].y,
+					float(f["rot0"]), float(f["rot1"]), float(f["scale"]), float(f["t"]), float(f["dur"])])
+			continue
 		var to: Vector2 = f["to"]
 		if f["kind"] == "blood_drop" and _space(Vector2i(floori(to.x), floori(to.y))):
 			continue
@@ -880,10 +965,18 @@ func to_dict() -> Dictionary:
 		tracks.append([ta.x, ta.y, tb.x, tb.y])
 	# Ключи «prints», «pools», «bloody» больше не пишутся (0.9.3): отпечатков ног нет.
 	# Старые сохранения с ними читаются — лишние ключи просто никто не спрашивает.
-	return {"damage": damage, "props": settled, "lasers": lasers, "tracks": tracks}
+	var out := {"damage": damage, "props": settled, "lasers": lasers, "tracks": tracks}
+	if not drifting.is_empty():
+		out["drifting"] = drifting
+	return out
 
 func from_dict(d: Dictionary) -> void:
 	clear()
+	for e: Array in d.get("drifting", []):
+		if e.size() == 10:
+			flying.append({"kind": str(e[0]), "from": Vector2(float(e[1]), float(e[2])),
+					"to": Vector2(float(e[3]), float(e[4])), "rot0": float(e[5]), "rot1": float(e[6]),
+					"scale": float(e[7]), "t": float(e[8]), "dur": maxf(0.001, float(e[9])), "drift": true})
 	for entry in d.get("damage", []):
 		if entry is Array and (entry as Array).size() >= 3:
 			floor_damage[Vector2i(int(entry[0]), int(entry[1]))] = int(entry[2])

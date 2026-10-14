@@ -46,13 +46,17 @@ static func pad(inner: Control, h: int = 8, v: int = 8) -> MarginContainer:
 # Window title bar of the UI kit (.window-title): grey gradient, bold bright 13px caption
 # with a black text shadow, flush-left, and an optional trailing control (e.g. the chat
 # collapse toggle) pinned right.
-static func header_bar(title: String, trailing: Control = null) -> PanelContainer:
+## leading (0.12.2) — кнопка СЛЕВА от заголовка: «‹ назад» у меню постройки инженера.
+static func header_bar(title: String, trailing: Control = null, leading: Control = null) -> PanelContainer:
 	var h := PanelContainer.new()
 	if Ui != null:
 		h.add_theme_stylebox_override("panel", Ui.header_box(0, 0))
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 7)
 	h.add_child(pad(row, 12, 5))
+	if leading != null:
+		leading.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(leading)
 	var lbl := Label.new()
 	lbl.text = title
 	lbl.add_theme_font_size_override("font_size", 13)
@@ -68,6 +72,7 @@ static func header_bar(title: String, trailing: Control = null) -> PanelContaine
 	if trailing != null:
 		trailing.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		row.add_child(trailing)
+	h.ready.connect(func() -> void: PanelInteraction.install_header.call_deferred(h))
 	return h
 
 # Group box of the UI kit (.group-box): a bevelled #2a2a2a frame with its caption sitting

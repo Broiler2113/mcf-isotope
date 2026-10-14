@@ -247,6 +247,21 @@ The Keybinds tab uses separate In-game shortcuts and Map editor shortcuts pages.
 
 ### Dynamic lighting and group previews
 
+`run_remaining_bugs.gd` covers direct flame immunity, vacuum momentum and save/load,
+shield debris sweeping, decal-memory updates, pressure-door interlocks, paired furniture,
+shelf contents and real map corpses. `run_remaining_generation.gd` checks residential
+restrooms and lighting, window floors, furnished parks, station engineering/solar arrays,
+production workstations and paired exterior doors across seeds and sizes.
+`run_remaining_ui.gd` checks Tools/Drawing, popup movement and resizing, deployment sidebar
+geometry, Before/After lighting and editor item preservation. Run it with `xvfb-run -a`
+instead of `--headless` to exercise the actual renderer and save screenshots in `/tmp`.
+
+The headless reference trace was updated for direct flame immunity: the first divergence
+is the enemy flamethrower surviving a jet. Its subsequent turns change the battle trace.
+The three benchmark references also change intentionally: their generated towns now use
+the new street layout, parks and restrooms, so the initial boards and subsequent battles
+differ. Host/guest agreement, zero resyncs, save/load and replay agreement remain required.
+
 `run_lighting.gd` covers incremental light/occluder updates, glass transmission,
 hidden-source filtering, local-only rendering, flash timing, the off-by-default
 setting, editor preview/exit, and cooperative group previews with identical orders.

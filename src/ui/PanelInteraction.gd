@@ -5,6 +5,7 @@ extends RefCounted
 static func resize_grip(panel: Control, body: Control, grow_x: float, on_start: Callable) -> Control:
 	# Три косые черты — рисуем сами: стрелочных глифов в системном шрифте может не быть.
 	var grip := Control.new()
+	grip.name = "LegacyResizeGrip"
 	grip.custom_minimum_size = Vector2(16, 16)
 	grip.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	grip.draw.connect(func() -> void:
@@ -49,12 +50,14 @@ static func resize_grip(panel: Control, body: Control, grow_x: float, on_start: 
 
 
 static func draggable(panel: Control, header: Control, on_move: Callable) -> void:
+	header.set_meta("drag_bound", true)
 	header.mouse_filter = Control.MOUSE_FILTER_STOP
 	var drag := {"active": false, "offset": Vector2.ZERO}
 	header.gui_input.connect(func(e: InputEvent) -> void:
 		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
 			drag.active = e.pressed
 			if e.pressed:
+				_release_layout(panel)
 				drag.offset = panel.global_position - e.global_position
 				on_move.call()
 			header.accept_event()
@@ -63,3 +66,88 @@ static func draggable(panel: Control, header: Control, on_move: Callable) -> voi
 			var pos: Vector2 = e.global_position + drag.offset
 			panel.position = pos.clamp(Vector2.ZERO, (vp - panel.size).max(Vector2.ZERO))
 			header.accept_event())
+
+## Chrome headers opt every popup into the same movement and sizing behavior.
+static func install_header(header: Control) -> void:
+	if not is_instance_valid(header) or not header.is_inside_tree(): return
+	var panel: Node = header.get_parent()
+	while panel != null and not panel is PanelContainer: panel = panel.get_parent()
+	if panel == null: return
+	var window := panel as Control
+	if not header.has_meta("drag_bound"):
+		draggable(window, header, func() -> void: pass)
+	if header.has_meta("resize_bound"): return
+	header.set_meta("resize_bound", true)
+	var row := header.get_child(0).get_child(0) as BoxContainer
+	if row == null: return
+	for legacy in header.find_children("LegacyResizeGrip", "", true, false): legacy.queue_free()
+	var grip := Button.new()
+	grip.name = "ResizeGrip"
+	grip.text = "◢"
+	grip.tooltip_text = "Drag to resize this panel"
+	grip.focus_mode = Control.FOCUS_NONE
+	grip.custom_minimum_size = Vector2(22, 22)
+	grip.mouse_default_cursor_shape = Control.CURSOR_BDIAGSIZE
+	row.add_child(grip)
+	var sizing := {"active": false, "from": Vector2.ZERO, "size": Vector2.ZERO}
+	grip.gui_input.connect(func(e: InputEvent) -> void:
+		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
+			sizing.active = e.pressed
+			if e.pressed:
+				_release_layout(window)
+				_prepare_resize(window, header)
+				sizing.from = e.global_position
+				sizing.size = window.size
+			grip.accept_event()
+		elif e is InputEventMouseMotion and sizing.active:
+			var available := (window.get_viewport_rect().size - window.position).max(Vector2(160, 90))
+			var target: Vector2 = sizing.size + e.global_position - sizing.from
+			window.size = target.clamp(window.get_combined_minimum_size().max(Vector2(160, 90)), available)
+			grip.accept_event())
+
+static func _release_layout(panel: Control) -> void:
+	var at := panel.global_position
+	var dimensions := panel.size
+	var parent := panel.get_parent()
+	if parent is Container:
+		panel.reparent(parent.get_parent(), true)
+	panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	panel.global_position = at
+	panel.size = dimensions
+	panel.set_meta("user_positioned", true)
+
+## Shared sidebar geometry for deployment and battle.
+static func sidebar(panel: Control, width := 264.0) -> void:
+	panel.anchor_left = 1.0
+	panel.anchor_right = 1.0
+	panel.anchor_top = 0.0
+	panel.anchor_bottom = 1.0
+	panel.offset_left = -width
+	panel.offset_right = 0.0
+	panel.offset_top = 0.0
+	panel.offset_bottom = 0.0
+
+static func _prepare_resize(panel: Control, header: Control) -> void:
+	var frame := header.get_parent() as BoxContainer
+	if frame == null or frame.has_meta("resize_prepared"): return
+	frame.set_meta("resize_prepared", true)
+	var dimensions := panel.size
+	panel.custom_minimum_size = Vector2(160, 90)
+	var content := VBoxContainer.new()
+	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	for child in frame.get_children():
+		if child == header: continue
+		frame.remove_child(child)
+		content.add_child(child)
+		_clear_scroll_minimums(child)
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.add_child(content)
+	frame.add_child(scroll)
+	panel.size = dimensions
+
+static func _clear_scroll_minimums(node: Node) -> void:
+	if node is ScrollContainer: node.custom_minimum_size.y = 0
+	for child in node.get_children(): _clear_scroll_minimums(child)
