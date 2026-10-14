@@ -124,7 +124,7 @@ const DEPARTMENTS := {
 		"cell"], "hall": 0, "extra": ["office", "cell"]},
 	"supply": {"front": "reception", "rooms": ["warehouse", "dock", "changing", "storage"], "hall": MCF.Look.PLATE,
 		"extra": ["storage", "office"]},
-	"production": {"front": "reception", "rooms": ["machine_shop", "assembly", "changing", "warehouse", "dock",
+	"production": {"front": "machine_shop", "rooms": ["machine_shop", "assembly", "changing", "warehouse", "dock",
 		"machine_shop"], "hall": MCF.Look.PLATE, "extra": ["storage", "workshop"]},
 	# Полигон у лабораторий стоит ОТДЕЛЬНО от станции (0.9.4, _annex): в списке комнат его
 	# больше нет — он пристраивается снаружи и соединяется коротким коридором.
@@ -173,6 +173,7 @@ const HULL_KINDS := {"dock": true, "testing_range": true}
 ## Комнаты, которые нельзя отдать под технические (их отдел без них — не отдел).
 const KEY_KINDS := {"reception": true, "command": true, "lounge": true, "captain": true, "hidden_storage": true,
 		"dock": true, "testing_range": true, "ward": true, "briefing": true, "kitchen": true,
+		"machine_shop": true,
 		# Раздевалка, морг, вирусология и камеры — тоже лицо отдела: под техничку их не отдают.
 		"changing": true, "morgue": true, "virology": true, "cell": true, "solitary": true}
 
@@ -200,6 +201,9 @@ var _doors: Array[Vector2i] = []
 var _rooms: Array[Rect2i] = []
 var _room_mask: PackedByteArray   # клетки прямоугольников _rooms (для поля)
 var _parks: Array[Rect2i] = []
+var _bathrooms: Array[Rect2i] = []
+var _bathroom_mask: PackedByteArray
+var _essential_furniture: Dictionary = {}
 var _street: PackedByteArray
 var _k: PackedByteArray
 var _room_min := 6                # сторона самой маленькой комнаты станции, со стенами
@@ -358,6 +362,8 @@ func _build(options: Dictionary, dim: Vector2i, need: int, tight: bool) -> void:
 	_street = _bytes()
 	_keep = _bytes()
 	_room_mask = _bytes()
+	_bathroom_mask = _bytes()
+	_essential_furniture.clear()
 	_zone = PackedInt32Array()
 	_zone.resize(w * h)
 	_zone.fill(-1)
@@ -383,6 +389,12 @@ func _build(options: Dictionary, dim: Vector2i, need: int, tight: bool) -> void:
 			_open_space()
 	_mirror()
 	_border_rim()
+	# Reserve essential objects even with furniture off, so density never changes
+	# deployment zones or the terrain dressed around them. Place objects later.
+	MapFurnish.production_essentials(self)
+	if _style == Style.TOWN:
+		for park in _parks:
+			MapFurnish.park_essentials(self, park)
 	_phase(Phase.ZONES)
 	_zones(n)
 	_phase(Phase.DRESSING)
@@ -402,6 +414,7 @@ func _build(options: Dictionary, dim: Vector2i, need: int, tight: bool) -> void:
 	# обстановка их обходит сама. Своим потоком: «Off» не трогает ни одной клетки.
 	_phase(Phase.FURNITURE)
 	MapFurnish.run(self)
+	_window_floors()
 	_phase(Phase.CIVILIANS)
 	if civ_wanted(opt):
 		_civilians()
@@ -409,6 +422,30 @@ func _build(options: Dictionary, dim: Vector2i, need: int, tight: bool) -> void:
 
 ## Свой поток случайных чисел на каждую фазу (см. шапку). Бункер тянет из потоков станции:
 ## то же зерно — та же станция, только под землёй.
+func _window_floors() -> void:
+	for i in w * h:
+		if not MCF.is_glass(m.feature_id[i]): continue
+		var c := Vector2i(i % w, i / w)
+		var chosen := -1
+		for d: Vector2i in [Vector2i.UP, Vector2i.RIGHT, Vector2i.DOWN, Vector2i.LEFT]:
+			var q := c + d
+			if not _in(q): continue
+			var qi := q.y * w + q.x
+			if _indoor[qi] != 0 and m.is_space[qi] == 0 and m.cover_height[qi] < MCF.WALL_HEIGHT:
+				chosen = qi
+				break
+		m.floor_type[i] = m.floor_type[chosen] if chosen >= 0 else MCF.FLOOR_NORMAL
+		m.set_look(i, m.get_look(chosen) if chosen >= 0 else 0)
+
+func reserve_furniture(c: Vector2i, fid: String) -> void:
+	for image_index in _group():
+		var p := _img(c, image_index)
+		_essential_furniture[p.y * w + p.x] = fid
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				var q := p + Vector2i(dx, dy)
+				if _in(q): _keep[q.y * w + q.x] = 1
+
 func _phase(p: int) -> void:
 	var style_seed := Style.STATION if _style == Style.BUNKER else _style
 	_rng = RandomNumberGenerator.new()
@@ -493,8 +530,11 @@ func _is_wallish(c: Vector2i) -> bool:
 	return m.get_cover(c) >= MCF.WALL_HEIGHT
 
 ## Проход «как дверь»: стены с двух противоположных сторон, проходимо с двух других.
-func _door_shaped(c: Vector2i, walk: PackedByteArray) -> bool:
-	var open := func(p: Vector2i) -> bool: return _in(p) and walk[p.y * w + p.x] != 0
+func _door_shaped(c: Vector2i, walk := PackedByteArray()) -> bool:
+	var open := func(p: Vector2i) -> bool:
+		if not _in(p): return false
+		if not walk.is_empty(): return walk[p.y * w + p.x] != 0
+		return m.get_feature(p) == MCF.FEATURE_AIRLOCK or (m.get_feature(p) not in [MCF.FEATURE_HEDGEHOG, MCF.FEATURE_DRONE_STATION] and (m.get_space(p) or m.get_cover(p) < MCF.WALL_HEIGHT))
 	return (_is_wallish(c + Vector2i(1, 0)) and _is_wallish(c - Vector2i(1, 0))
 			and open.call(c + Vector2i(0, 1)) and open.call(c - Vector2i(0, 1))) \
 			or (_is_wallish(c + Vector2i(0, 1)) and _is_wallish(c - Vector2i(0, 1))
@@ -629,6 +669,7 @@ func _mirror() -> void:
 			m.cover_height[i] = m.cover_height[s]
 			m.is_space[i] = m.is_space[s]
 			m.feature_id[i] = m.feature_id[s]
+			if not m.door_look.is_empty(): m.door_look[i] = m.door_look[s]
 			if m.fixtures.has(s):
 				# Each lamp keeps its side through the mirror: a lamp on the east face of the
 				# source wall hangs on the west face of the mirrored one.
@@ -647,6 +688,7 @@ func _mirror() -> void:
 			_door[i] = _door[s]
 			_street[i] = _street[s]
 			_room_mask[i] = _room_mask[s]
+			_bathroom_mask[i] = _bathroom_mask[s]
 			if has_k:
 				_k[i] = _k[s]
 	_mirror_items()
@@ -656,6 +698,7 @@ func _mirror() -> void:
 			_doors.append(Vector2i(i % w, i / w))
 	_rooms = _mirror_rects(_rooms)
 	_parks = _mirror_rects(_parks)
+	_bathrooms = _mirror_rects(_bathrooms)
 
 ## Прямоугольники после отражения: целиком в исходной части — он и его образы; через
 ## ось — растянутый до симметричного (такой он теперь на карте); целиком за осью —
@@ -861,6 +904,60 @@ func _station() -> void:
 			if _in(c) and m.get_space(c):
 				m.set_look(c.y * w + c.x, MCF.Look.SOLAR)
 
+
+## A hull exit has two pressure doors separated by exactly one floor tile.
+func _space_airlocks() -> void:
+	var exits: Array[Vector2i] = []
+	for i in w * h:
+		if m.feature_id[i] == MCF.FEATURE_AIRLOCK:
+			exits.append(Vector2i(i % w, i / w))
+	for c in exits:
+		if m.get_feature(c) != MCF.FEATURE_AIRLOCK: continue
+		for d: Vector2i in [Vector2i.UP, Vector2i.RIGHT, Vector2i.DOWN, Vector2i.LEFT]:
+			if not _in(c + d * 3) or not m.get_space(c + d) or not m.get_space(c + d * 2) or not m.get_space(c + d * 3): continue
+			if m.get_space(c - d) or m.get_cover(c - d) >= MCF.WALL_HEIGHT: continue
+			var side := Vector2i(d.y, -d.x)
+			var clear := true
+			for step in range(1, 3):
+				for offset in [-1, 1]:
+					var wall: Vector2i = c + d * step + side * offset
+					if not m.get_space(wall): clear = false
+					# A cap must not block the approach to another door or chamber.
+					for neighbour: Vector2i in N4:
+						var q := wall + neighbour
+						if m.get_feature(q) == MCF.FEATURE_AIRLOCK and q not in [c - side, c + side]: clear = false
+			if not clear: continue
+			# Replace the adjacent leaves of a wide hull opening with chamber walls,
+			# including leaves considered earlier in this scan.
+			for offset in [-1, 1]:
+				var adjacent: Vector2i = c + side * offset
+				if m.get_feature(adjacent) == MCF.FEATURE_AIRLOCK and m.get_space(adjacent + d):
+					_put(adjacent, MCF.FEATURE_WALL)
+					_door[adjacent.y * w + adjacent.x] = 0
+					_doors.erase(adjacent)
+			for step in range(1, 3):
+				for offset in [-1, 1]:
+					var wall: Vector2i = c + d * step + side * offset
+					_put(wall, MCF.FEATURE_WALL)
+					m.set_look(wall.y * w + wall.x, MCF.wall_look(MCF.WALL_LOOK_STATION))
+			var chamber := c + d
+			_ground(chamber)
+			_indoor[chamber.y * w + chamber.x] = 1
+			m.set_look(chamber.y * w + chamber.x, MCF.Look.PLATE)
+			_put(c + d * 2, MCF.FEATURE_AIRLOCK)
+			for door in [c, c + d * 2]:
+				m.set_door(door.y * w + door.x, 16)
+				m.set_look(door.y * w + door.x, MCF.Look.PLATE)
+			break
+
+	# A corner opening without room for a chamber remains sealed. Each dock has a
+	# central opening with room for the pair; no exposed single pressure door remains.
+	for c in exits:
+		if m.get_feature(c) == MCF.FEATURE_AIRLOCK and m.get_door(c.y * w + c.x) < 16 and _touches_space(c):
+			_put(c, MCF.FEATURE_WALL)
+			_door[c.y * w + c.x] = 0
+			_doors.erase(c)
+
 ## Отделы по отсекам (0.9.2). Мостик — ближе всех к середине станции; жилой — рядом с
 ## мостиком; производство — как можно дальше от жилого (требование игрока); отделам с
 ## причалом и полигону — отсеки у края (оттуда шлюз ведёт прямо в космос). Отсеков меньше,
@@ -877,6 +974,8 @@ func _assign_departments(kept: Array[Rect2i]) -> Array[String]:
 	var wanted: Array[String] = []
 	for k in free.size():
 		wanted.append(DEPT_ORDER[k] if k < DEPT_ORDER.size() else DEPT_EXTRA[(k - DEPT_ORDER.size()) % DEPT_EXTRA.size()])
+	if not wanted.is_empty() and not wanted.has("engineering"):
+		wanted[wanted.size() - 1] = "engineering"
 	var mid := Vector2((w - 1) * 0.5, (h - 1) * 0.5)
 	if _sym >= 1:
 		mid.x = (w - 1) * 0.25
@@ -1251,19 +1350,27 @@ func _outside_hull(s: Rect2i) -> bool:
 ## Садится на любой коридор, за которым сразу пустота, и строится ЦЕЛИКОМ в пустоте внутри
 ## игровой карты: ни одна клетка станции при этом не трогается. false — места не нашлось
 ## (тесная карта, застройка вплотную к краю), и тогда пристройки просто нет.
+var _annex_mounts: Array = []
+var _annex_mounts_ready := false
+
 func _annex(kind: String, rw: int, rh: int) -> bool:
+	# Annexes consume void and add private halls; they never create main/service
+	# halls. Index their possible attachment faces once, preserving row-major order.
+	if not _annex_mounts_ready:
+		_annex_mounts_ready = true
+		for y in range(_core.position.y, _core.end.y):
+			for x in range(_core.position.x, _core.end.x):
+				var k := _k[y * w + x]
+				if k != K_HALL and k != K_MAINT: continue
+				var c := Vector2i(x, y)
+				if not _in_f(c): continue
+				for d: Vector2i in N4:
+					if _kind(c.x + d.x, c.y + d.y) == K_VOID:
+						_annex_mounts.append([c, d])
 	var mounts: Array = []
-	for y in range(_core.position.y, _core.end.y):
-		for x in range(_core.position.x, _core.end.x):
-			var k := _k[y * w + x]
-			if k != K_HALL and k != K_MAINT:
-				continue
-			var c := Vector2i(x, y)
-			if not _in_f(c):
-				continue   # на зеркальной карте пристройка растёт в исходной части
-			for d: Vector2i in N4:
-				if _kind(c.x + d.x, c.y + d.y) == K_VOID:
-					mounts.append([c, d])
+	for mount: Array in _annex_mounts:
+		var q: Vector2i = mount[0] + mount[1]
+		if _kind(q.x, q.y) == K_VOID: mounts.append(mount)
 	if mounts.is_empty():
 		return false
 	# Обход в случайном порядке — чтобы пристройка не садилась всегда на первый коридор.
@@ -1473,9 +1580,7 @@ func _maintenance_exits() -> void:
 	# space very rarely». Чаще всего станция обходится без мостков вовсе, изредка выход
 	# один, совсем редко — два.
 	var roll := _rng.randf()
-	var limit := 0 if roll < SOLAR_EXIT_NONE else (1 if roll < SOLAR_EXIT_ONE else SOLAR_EXITS_MAX)
-	if limit == 0:
-		return
+	var limit := 1 if roll < SOLAR_EXIT_ONE else SOLAR_EXITS_MAX
 	for y in h:
 		for x in w:
 			if _k[y * w + x] != K_MAINT or not _in_f(Vector2i(x, y)):
@@ -1506,19 +1611,35 @@ func _maintenance_exits() -> void:
 				# Мостки — своей длины у каждого выхода, панели по обе стороны — своего
 				# размера (item 4: «make solar panels vary in size»). Панель шириной pw
 				# вдоль мостка и глубиной pd от него: от одинокой клетки до площадки 3×2.
-				var span := _rng.randi_range(SOLAR_WALK_MIN, SOLAR_WALK_MAX)
+				var span := _rng.randi_range(SOLAR_WALK_MIN, SOLAR_WALK_MAX) + 2
 				for k in range(1, span + 1):
 					_grill.append(wall + d * k)            # мостки от самой обшивки
 				# Both sides of one walkway carry the SAME panel, mirrored (0.11.1: "solar
 				# panels should be even"); the size still differs from exit to exit.
 				var pw := _rng.randi_range(1, mini(SOLAR_PANEL_MAX, span - 1))
 				var pd := _rng.randi_range(1, SOLAR_PANEL_DEPTH)
-				var at := _rng.randi_range(2, maxi(2, span - pw + 1))
+				var at := _rng.randi_range(3, maxi(3, span - pw + 1))
 				for t: int in [-1, 1]:
 					for a in pw:
 						for b in range(1, pd + 1):
 							_solar.append(wall + d * (at + a) + side * (t * b))
 				break
+	if used.is_empty():
+		for y in h:
+			for x in w:
+				var c := Vector2i(x, y)
+				if not _in_f(c) or _kind(x, y) != K_WALL: continue
+				for d: Vector2i in dirs:
+					if _kind(x - d.x, y - d.y) not in [K_ROOM, K_HALL, K_MAINT, K_DHALL]: continue
+					if not _looks_outside(c, d): continue
+					_space_doors.append(c)
+					var side := Vector2i(d.y, d.x)
+					for k in range(1, 6): _grill.append(c + d * k)
+					for k in range(3, 6):
+						for t: int in [-1, 1]:
+							_solar.append(c + d * k + side * t)
+					return
+
 ## Пустота за клеткой обшивки тянется НАРУЖУ до края игровой карты (0.9.4): по этому луч
 ## и отличает настоящий борт станции от пустого отсека внутри неё.
 func _looks_outside(wall: Vector2i, d: Vector2i) -> bool:
@@ -1686,6 +1807,8 @@ func _dress_station() -> void:
 				if _k[y * w + x] == K_ROOM and not m.get_space(c):
 					m.set_cell(c, MCF.FLOOR_FLAMMABLE, m.get_cover(c), false, m.get_feature(c))
 	if not bool(opt["obstacles"]):
+		if bool(opt["space"]) and _style == Style.STATION:
+			_space_airlocks()
 		return
 	for ri in _rooms.size():
 		var r := _rooms[ri]
@@ -1717,6 +1840,9 @@ func _dress_station() -> void:
 		for x in w:
 			if _k[y * w + x] == K_HALL and _rng.randf() < 0.03 * dens:
 				_try_put(Vector2i(x, y), MCF.FEATURE_SANDBAGS)
+
+	if bool(opt["space"]) and _style == Style.STATION:
+		_space_airlocks()
 
 ## Клетки обшивки: стена между чистым полом станции и открытым космосом по прямой,
 ## со стенами по бокам, — в них врезаются окна и внешние шлюзы.
@@ -1754,26 +1880,73 @@ func _town() -> void:
 			# A floor look changes art without making a nonflammable cell burn.
 			if lawn != MCF.FLOOR_GRASS and not _core.has_point(c):
 				m.set_look(y * w + x, MCF.Look.GRASS)
-	var ox := _core.position.x
-	var oy := _core.position.y
-	var xs := _street_lines(_core.size.x)
-	var ys := _street_lines(_core.size.y)
-	for s in xs:
-		for y in range(oy - BORDER, _core.end.y + BORDER):
-			for x in range(ox + s.x, ox + s.x + s.y):
-				_ground(Vector2i(x, y))
-				m.set_look(y * w + x, 0)
-				_street[y * w + x] = 1
-	for s in ys:
-		for y in range(oy + s.x, oy + s.x + s.y):
-			for x in range(ox - BORDER, _core.end.x + BORDER):
-				_ground(Vector2i(x, y))
-				m.set_look(y * w + x, 0)
-				_street[y * w + x] = 1
 	_pick_districts()
-	for gx in _gaps(xs, _core.size.x):
-		for gy in _gaps(ys, _core.size.y):
-			_block(Rect2i(ox + gx.x, oy + gy.x, gx.y - gx.x, gy.y - gy.x))
+	var blocks: Array[Rect2i] = []
+	_town_blocks(_core, 0, blocks)
+	_extend_town_roads()
+	# Reserve a park even in a densely built town.
+	var park := blocks.size() / 3
+	for i in blocks.size():
+		if i == park and blocks.size() > 1:
+			_parks.append(blocks[i])
+		else:
+			_block(blocks[i])
+	for p in _parks:
+		var center := p.get_center()
+		for c in _rect_cells(p):
+			if c.x == center.x or c.y == center.y:
+				_ground(c)
+				m.set_look(c.y * w + c.x, MCF.Look.DIRT)
+
+## Roads touching the town boundary continue across the grass border.
+func _extend_town_roads() -> void:
+	for d: Vector2i in N4:
+		var edge := _core
+		if d.x != 0:
+			edge.position.x = _core.position.x if d.x < 0 else _core.end.x - 1
+			edge.size.x = 1
+		else:
+			edge.position.y = _core.position.y if d.y < 0 else _core.end.y - 1
+			edge.size.y = 1
+		for c in _rect_cells(edge):
+			if _street[c.y * w + c.x] == 0: continue
+			for distance in range(1, BORDER_ALL + 1):
+				var q := c + d * distance
+				_ground(q)
+				m.set_look(q.y * w + q.x, 0)
+
+## Local streets stop at the enclosing block, producing T-junctions and offset lots.
+## Central lots keep a larger footprint for shops, offices and apartment buildings.
+func _town_blocks(r: Rect2i, depth: int, out: Array[Rect2i]) -> void:
+	var central := Vector2(r.get_center()).distance_to(Vector2(_core.get_center())) < minf(_core.size.x, _core.size.y) * 0.3
+	var limit := 23 if central else 15
+	var vertical := r.size.x >= r.size.y
+	var span := r.size.x if vertical else r.size.y
+	var road := 3 if depth == 0 else 2
+	if span <= limit or span < 8 * 2 + road:
+		out.append(r)
+		return
+	var cut := _rng.randi_range(8, span - road - 8)
+	var first := r
+	var second := r
+	var street := r
+	if vertical:
+		first.size.x = cut
+		second.position.x += cut + road
+		second.size.x -= cut + road
+		street.position.x += cut
+		street.size.x = road
+	else:
+		first.size.y = cut
+		second.position.y += cut + road
+		second.size.y -= cut + road
+		street.position.y += cut
+		street.size.y = road
+	for c in _rect_cells(street):
+		_ground(c)
+		_street[c.y * w + c.x] = 1
+	_town_blocks(first, depth + 1, out)
+	_town_blocks(second, depth + 1, out)
 
 # --- Районы города (0.9.2) ---------------------------------------------------------------
 ## Город делится на районы: у одного края — промзона (склады, цеха, гаражи; на астероиде —
@@ -1857,11 +2030,11 @@ func _block(b: Rect2i) -> void:
 		return
 	var district := _district(b)
 	# Большой квартал — два дома с проулком посередине (промзона — одно большое здание).
-	if district != "industrial" and split_roll < 0.6 and b.size.x >= 13 and b.size.x >= b.size.y:
+	if district == "residential" and split_roll < 0.6 and b.size.x >= 13 and b.size.x >= b.size.y:
 		var cut := 6 + int(cut_roll * (b.size.x - 12))
 		_house(Rect2i(b.position.x, b.position.y, cut, b.size.y), district)
 		_house(Rect2i(b.position.x + cut + 1, b.position.y, b.size.x - cut - 1, b.size.y), district)
-	elif district != "industrial" and split_roll < 0.6 and b.size.y >= 13:
+	elif district == "residential" and split_roll < 0.6 and b.size.y >= 13:
 		var cut := 6 + int(cut_roll * (b.size.y - 12))
 		_house(Rect2i(b.position.x, b.position.y, b.size.x, cut), district)
 		_house(Rect2i(b.position.x, b.position.y + cut + 1, b.size.x, b.size.y - cut - 1), district)
@@ -1922,6 +2095,8 @@ func _house(lot: Rect2i, district: String = "residential") -> void:
 				_indoor[y * w + x] = 1
 				if _style == Style.ASTEROID:
 					m.set_look(y * w + x, MCF.Look.PLATE)   # пол модуля — палуба, а не паркет
+	if district != "industrial" or kind == "garage":
+		_bathroom(house, wall, mat)
 	for i in (2 if house.get_area() >= 64 else 1):
 		_front_door(house, floor_type)
 	# Окна — стекло в стене, но не в углу и не у двери. Лавки и конторы — витринами,
@@ -1932,13 +2107,9 @@ func _house(lot: Rect2i, district: String = "residential") -> void:
 	elif district == "industrial":
 		glass_p = 0.05
 	for c in _edge_cells(house):
-		if _rng.randf() < glass_p and not _is_corner(house, c) and not _near_door(c):
+		if _rng.randf() < glass_p and not _is_corner(house, c) and not _near_door(c) and not _bathroom_near(c):
 			_put(c, MCF.FEATURE_GLASS)
 	_partition(house, wall, mat)
-	# Санузел (0.9.2): в жилом доме, лавке, конторе, закусочной, участке, клинике — тесная
-	# комнатка в углу с дверью внутрь дома. После перегородки — чтобы она его не разрезала.
-	if district != "industrial" or kind == "garage":
-		_bathroom(house, wall, mat)
 
 ## Перегородка в большом доме — внутренняя стена с одним проходом.
 func _partition(house: Rect2i, wall: String, mat: int = -1) -> void:
@@ -1962,28 +2133,30 @@ func _partition(house: Rect2i, wall: String, mat: int = -1) -> void:
 	var gap := cells[int(gap_roll * cells.size())]
 	for c in cells:
 		# Перегородка не упирается во входную дверь — у двери она просто обрывается.
-		if c != gap and not _near_door(c):
+		if c != gap and not _near_door(c) and not _bathroom_near(c):
 			_put(c, wall)
 			if mat >= 0:
 				m.set_look(c.y * w + c.x, MCF.wall_look(mat))
-	_mark_door(gap)
+	if not _bathroom_near(gap) and _door_shaped(gap):
+		_mark_door(gap)
 
 ## Санузел в углу дома: внутренности 2×2 (в большом доме 2×3), Г-образная стенка с дверью.
 ## Только если угол свободен: не у входной двери, не на перегородке.
 func _bathroom(house: Rect2i, wall: String, mat: int = -1) -> void:
 	var inner := house.grow(-1)
-	if inner.size.x < 6 or inner.size.y < 6:
+	if inner.size.x < 3 or inner.size.y < 3:
 		return
 	var corner := _rng.randi_range(0, 3)
+	var wide := 2 if inner.size.x >= 4 else 1
 	var tall := 3 if inner.size.y >= 9 and _rng.randf() < 0.5 else 2
 	for attempt in 4:
 		var k := (corner + attempt) % 4
 		var right := k == 1 or k == 2
 		var down := k >= 2
-		var x0 := inner.end.x - 2 if right else inner.position.x
+		var x0 := inner.end.x - wide if right else inner.position.x
 		var y0 := inner.end.y - tall if down else inner.position.y
-		var room := Rect2i(x0, y0, 2, tall)
-		var wx := x0 - 1 if right else x0 + 2              # стенка-столбец
+		var room := Rect2i(x0, y0, wide, tall)
+		var wx := x0 - 1 if right else x0 + wide           # стенка-столбец
 		var wy := y0 - 1 if down else y0 + tall           # стенка-строка
 		var walls: Array[Vector2i] = []
 		for y in range(room.position.y, room.end.y):
@@ -1991,7 +2164,7 @@ func _bathroom(house: Rect2i, wall: String, mat: int = -1) -> void:
 		for x in range(room.position.x, room.end.x):
 			walls.append(Vector2i(x, wy))
 		walls.append(Vector2i(wx, wy))
-		var door := Vector2i(wx, room.position.y + room.size.y / 2)
+		var door := Vector2i(wx, room.position.y + room.size.y - 1)
 		var hallway := door + Vector2i(-1 if right else 1, 0)   # куда дверь выходит в доме
 		var ok := _clear(hallway) and not _near_door(hallway)
 		for c in walls + _rect_cells(room):
@@ -2006,6 +2179,9 @@ func _bathroom(house: Rect2i, wall: String, mat: int = -1) -> void:
 				m.set_look(c.y * w + c.x, MCF.wall_look(mat))
 		_ground(door, m.get_floor(door))
 		_mark_door(door)
+		_bathrooms.append(room)
+		for c in _rect_cells(room.grow(1)):
+			if _in(c): _bathroom_mask[c.y * w + c.x] = 1
 		# ОКНАМ В САНУЗЛЕ НЕ МЕСТО (0.9.4, просьба игрока). Стёкла в наружной стене дома
 		# прорезаются ДО санузла (комнатка выгораживается последней, чтобы перегородка её не
 		# разрезала), поэтому те, что попали в его стены, заделываются обратно стеной.
@@ -2015,6 +2191,9 @@ func _bathroom(house: Rect2i, wall: String, mat: int = -1) -> void:
 				if mat >= 0:
 					m.set_look(c.y * w + c.x, MCF.wall_look(mat))
 		return
+
+func _bathroom_near(c: Vector2i) -> bool:
+	return _in(c) and _bathroom_mask[c.y * w + c.x] != 0
 
 func _rect_cells(r: Rect2i) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
@@ -2038,7 +2217,7 @@ func _front_door(r: Rect2i, floor_type: int) -> void:
 				c = Vector2i(r.position.x, _rng.randi_range(r.position.y + 1, r.end.y - 2))
 			_:
 				c = Vector2i(r.end.x - 1, _rng.randi_range(r.position.y + 1, r.end.y - 2))
-		if not _clear(c + _outward(r, c)) or _near_door(c):
+		if not _clear(c + _outward(r, c)) or not _clear(c - _outward(r, c)) or _near_door(c) or _bathroom_near(c):
 			continue
 		_ground(c, floor_type)
 		_mark_door(c)
@@ -2661,7 +2840,7 @@ func _anchor_candidates(n: int) -> Array[Vector2i]:
 		var y1 := mini(h, y + 3)
 		for x in w:
 			var i := y * w + x
-			if clear[i] == 0 or _door[i] != 0:
+			if clear[i] == 0 or _door[i] != 0 or _bathroom_near(Vector2i(x, y)) or _essential_furniture.has(i):
 				continue
 			any.append(Vector2i(x, y))
 			var x0 := maxi(0, x - 2)
@@ -2822,6 +3001,7 @@ func _grow(an: Array[Vector2i], target: int) -> int:
 ## Взять клетку представителю — вместе со всеми её отражениями. Каждое отражение обязано
 ## быть свободным и не ближе зазора к чужой зоне, включая другие отражения этой же клетки.
 func _claim(r: int, c: Vector2i, sizes: PackedInt32Array) -> bool:
+	if _bathroom_near(c) or _essential_furniture.has(c.y * w + c.x): return false
 	var ids: PackedInt32Array = _rep_ids[r]
 	var cells: Array[Vector2i] = []
 	var zids: Array[int] = []

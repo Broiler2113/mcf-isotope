@@ -96,9 +96,9 @@ const _BASE := {
 	"floor_lamp": {"name": "Floor Lamp", "cat": "lighting", "h": 0.5, "mat": "metal", "dur": 1,
 		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "floor",
 		"emits_light": true, "light_color": Color(1.0, 0.74, 0.45), "light_range": 5.0, "light_energy": 0.7},
-	"desk_lamp": {"name": "Desk with Lamp", "cat": "lighting", "h": 1.0, "mat": "metal", "dur": 2,
-		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["utility", "outdoor"], "mount": "floor",
-		"emits_light": true, "light_color": Color(1.0, 0.8, 0.52), "light_range": 3.5, "light_energy": 0.55},
+	# Legacy id remains readable; new maps and the palette use an ordinary desk.
+	"desk_lamp": {"name": "Desk", "cat": "residential", "h": 1.0, "mat": "wood", "dur": 2,
+		"mob": Mobility.HEAVY, "ap": 1, "at": "wall", "gen": false, "hidden": true, "rooms": []},
 
 	"lamp": {"name": "Lamp", "cat": "lighting", "h": 0.5, "mat": "metal", "dur": 1,
 		"mob": Mobility.FIXED, "ap": 1, "at": "wall", "gen": true, "rooms": ["utility", "outdoor"],
@@ -203,7 +203,7 @@ const _BASE := {
 	"generator": {"emits_light": true, "light_color": Color(0.55, 0.85, 1.0), "light_range": 3.5, "light_energy": 0.45, "join": "whole", "sizes": [[2, 1]], "back": "long", "name": "Generator", "cat": "industrial", "h": 1.5, "mat": "metal", "dur": 5,
 		"mob": Mobility.FIXED, "ap": 3, "at": "corner", "gen": true,
 		"rooms": ["utility", "server_room", "mining"]},
-	"toolbox": {"name": "Toolbox", "cat": "industrial", "h": 0.5, "mat": "metal", "dur": 1,
+	"toolbox": {"hidden": true, "name": "Toolbox", "cat": "industrial", "h": 0.0, "mat": "metal", "dur": 1,
 		"mob": Mobility.PORTABLE, "ap": 1, "at": "free", "gen": true,
 		"rooms": ["workshop", "garage", "utility"]},
 	"ammo_crate": {"name": "Ammo Crate", "cat": "industrial", "h": 1.0, "mat": "metal", "dur": 3,
@@ -305,6 +305,15 @@ const _BASE := {
 	"water_bucket": {"name": "Water Bucket", "cat": "industrial", "h": 0.5, "mat": "plastic", "dur": 1,
 		"mob": Mobility.PORTABLE, "ap": 1, "at": "free", "gen": true,
 		"rooms": ["utility", "water", "air", "restroom", "changing", "recycling", "laundry"]},
+	"machine_workstation": {"name": "Machine Workstation", "cat": "industrial", "h": 1.0, "mat": "metal", "dur": 3, "mob": Mobility.FIXED, "ap": 2, "at": "wall", "gen": true, "rooms": ["machine_shop", "assembly", "workshop"]},
+
+	"bush": {"name": "Leafy Bush", "cat": "public", "h": 0.5, "mat": "wood", "dur": 1, "mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["outdoor"]},
+	"bush_dry": {"name": "Dry Bush", "cat": "public", "h": 0.5, "mat": "wood", "dur": 1, "mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["outdoor"]},
+	"bush_flowering": {"name": "Flowering Bush", "cat": "public", "h": 0.5, "mat": "wood", "dur": 1, "mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["outdoor"]},
+	"park_tree": {"name": "Park Tree", "cat": "public", "h": 2.0, "mat": "wood", "dur": 3, "mob": Mobility.FIXED, "ap": 2, "at": "free", "gen": true, "rooms": ["outdoor"]},
+	"shower": {"name": "Shower Unit", "cat": "residential", "h": 1.5, "mat": "metal", "dur": 2, "mob": Mobility.FIXED, "ap": 2, "at": "wall", "gen": true, "rooms": ["bathroom", "restroom"]},
+	"bathtub": {"join": "whole", "sizes": [[1, 2]], "back": "short", "name": "Bathtub", "cat": "residential", "h": 0.5, "mat": "plastic", "dur": 2, "mob": Mobility.FIXED, "ap": 2, "at": "wall", "gen": true, "rooms": ["bathroom"]},
+
 }
 
 ## Цветовые варианты: та же строка таблицы (правила те же), свой id и своя плитка, где
@@ -321,7 +330,7 @@ const VARIANTS := {
 	"locker": [["blue", Color8(64, 88, 128)], ["grey", Color8(118, 124, 132)]],
 	"tool_cabinet": [["blue", Color8(46, 82, 150)], ["green", Color8(62, 110, 70)]],
 	"barrel": [["red", Color8(160, 48, 42)], ["yellow", Color8(196, 160, 40)], ["green", Color8(66, 108, 70)]],
-	"vending_machine": [["blue", Color8(44, 84, 160)], ["green", Color8(50, 124, 76)]],
+	"vending_machine": [["blue", Color8(44, 84, 160)], ["green", Color8(50, 124, 76)], ["coffee", Color8(98, 65, 43), "coffee"], ["medical", Color8(210, 220, 216), "medical"], ["snacks", Color8(190, 147, 43), "snacks"]],
 	"dumpster": [["blue", Color8(52, 80, 130)], ["red", Color8(140, 52, 44)]],
 	"trash_bin": [["grey", Color8(110, 114, 118)], ["blue", Color8(58, 88, 140)]],
 	"fuel_tank": [["red", Color8(160, 54, 46)]],
@@ -330,6 +339,10 @@ const VARIANTS := {
 		["green", Color8(62, 112, 72)]],
 	"plastic_table": [["blue", Color8(66, 96, 140)], ["white", Color8(212, 210, 202)]],
 	"water_bucket": [["blue", Color8(58, 96, 150)]],
+	"storage_shelf": [["empty", Color(0, 0, 0, 0), "empty"], ["tools", Color(0, 0, 0, 0), "tools"], ["medical", Color(0, 0, 0, 0), "medical"], ["food", Color(0, 0, 0, 0), "food"]],
+	"display_shelf": [["empty", Color(0, 0, 0, 0), "empty"], ["drinks", Color(0, 0, 0, 0), "drinks"], ["food", Color(0, 0, 0, 0), "food"], ["medical", Color(0, 0, 0, 0), "medical"]],
+	"potted_plant": [["fern", Color(0, 0, 0, 0), "fern"], ["palm", Color(0, 0, 0, 0), "palm"], ["flowering", Color(0, 0, 0, 0), "flowering"]],
+
 }
 
 static var DEFS: Dictionary = _with_variants()
@@ -344,6 +357,7 @@ static func _with_variants() -> Dictionary:
 			d["name"] = "%s (%s)" % [_BASE[fid]["name"], str(v[0]).replace("grey", "gray").capitalize()]
 			d["base"] = fid
 			d["tint"] = v[1]
+			if v.size() > 2: d["contents"] = v[2]
 			d["gen"] = false
 			out["%s_%s" % [fid, v[0]]] = d
 	return out
@@ -421,6 +435,18 @@ static func joins(fid: String) -> bool:
 static func is_whole(fid: String) -> bool:
 	return DEFS.has(fid) and str(DEFS[fid].get("join", "")) == "whole"
 
+## Two-cell pieces pair deterministically instead of becoming an unlimited joined blob.
+static func is_pair(fid: String) -> bool:
+	if not is_whole(fid): return false
+	var max_area := 0
+	for size: Array in sizes_of(fid): max_area = maxi(max_area, int(size[0]) * int(size[1]))
+	return max_area == 2
+
+const CONTENT_SHELVES := ["storage_shelf", "display_shelf"]
+const LINEAR_RUNS := ["storage_shelf", "display_shelf", "bookshelf", "server_rack", "locker", "filing_cabinet", "industrial_cabinet", "biohazard_cabinet", "morgue_drawers"]
+static func connects(a: String, b: String) -> bool:
+	return a == b or (base_of(a) in CONTENT_SHELVES and base_of(a) == base_of(b))
+
 static func sizes_of(fid: String) -> Array:
 	return DEFS[fid].get("sizes", [[1, 1]]) if DEFS.has(fid) else [[1, 1]]
 
@@ -435,6 +461,8 @@ static func piece_cells(fid_at: Callable, c: Vector2i) -> Array[Vector2i]:
 	var fid: String = fid_at.call(c)
 	if not is_whole(fid):
 		return out
+	if is_pair(fid):
+		return _pair_cells(fid_at, c, fid)
 	var seen := {c: true}
 	var k := 0
 	while k < out.size() and out.size() < PIECE_CAP:
@@ -446,6 +474,23 @@ static func piece_cells(fid_at: Callable, c: Vector2i) -> Array[Vector2i]:
 				seen[q] = true
 				out.append(q)
 	return out
+
+## Pair from the start of a straight run, independent of the queried cell and of
+## PIECE_CAP. Horizontal rows take precedence at junctions; vertical stems end there.
+static func _pair_cells(fid_at: Callable, c: Vector2i, fid: String) -> Array[Vector2i]:
+	var axis := func(p: Vector2i) -> Vector2i:
+		return Vector2i.RIGHT if fid_at.call(p + Vector2i.LEFT) == fid or fid_at.call(p + Vector2i.RIGHT) == fid else Vector2i.DOWN
+	var along: Vector2i = axis.call(c)
+	var start := c
+	while fid_at.call(start - along) == fid and axis.call(start - along) == along:
+		start -= along
+	var offset := absi(c.x - start.x) + absi(c.y - start.y)
+	var other := c + along * (1 if offset % 2 == 0 else -1)
+	var pair: Array[Vector2i] = [c]
+	if fid_at.call(other) == fid and axis.call(other) == along:
+		if offset % 2 == 0: pair.append(other)
+		else: pair.push_front(other)
+	return pair
 
 static func mobility_name(fid: String) -> String:
 	match mobility_of(fid):
@@ -460,7 +505,7 @@ static func ids() -> Array:
 	var out: Array = []
 	for cat: String in CATEGORIES:
 		for fid: String in DEFS:
-			if DEFS[fid]["cat"] == cat:
+			if DEFS[fid]["cat"] == cat and not bool(DEFS[fid].get("hidden", false)):
 				out.append(fid)
 	return out
 

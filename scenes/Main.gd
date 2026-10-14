@@ -143,7 +143,7 @@ const CORPSE_COLOR := Color(0.8, 0.1, 0.1, 0.5)
 const BURNT_TINT := Color(0.58, 0.42, 0.28)
 
 ## Левый верхний угол — постоянное место всех меню действий (#87).
-const MENU_ANCHOR := Vector2(16, 16)
+const MENU_ANCHOR := Vector2(16, 48)
 ## Запас по высоте под шапку окна и нижнее поле при обрезке прокрутки.
 const MENU_CHROME_H := 70.0
 
@@ -610,6 +610,9 @@ func _sync_time_tint(tint: Color) -> void:
 	_time_mod.color = tint
 
 func _sync_lighting() -> void:
+	if _tiles != null and _tiles.set_time_of_day(state.time_of_day if state != null else ""): queue_redraw()
+	if _before_tiles != null and _before_tiles.set_time_of_day(state.time_of_day if state != null else ""):
+		if _before_layer != null: _before_layer.queue_redraw()
 	if state != null:
 		_sync_time_tint(Color.WHITE if Ui.dynamic_lighting else LightManager.flat_tint(state.env, state.time_of_day))
 	if not (Ui.dynamic_lighting):
@@ -620,6 +623,9 @@ func _sync_lighting() -> void:
 	if state == null or state.grid == null: return
 	if not is_instance_valid(_lighting):
 		_lighting = LightManager.new()
+		# Свет — поверх всех дочерних слоёв (0.12.2, item 6): слой «было» добавляется позже
+		# и без этого закрывал собой темноту, из-за чего в режиме «было» ночь пропадала.
+		_lighting.z_index = 2
 		add_child(_lighting)
 	if _before_on and _before_grid != null:
 		_lighting.update_view(_before_grid, pan, zoom, ORIGIN, CELL, state.env, {}, false, null, _lod,
@@ -2766,7 +2772,9 @@ func _open_build_picker() -> void:
 	var unit := _selected_unit()
 	if unit == null or unit.stats.special_ability_id != MCF.ABILITY_ENGINEER: return
 	for child in _picker.get_children(): child.queue_free()
-	var vb := _scroll_menu(_picker, "Build fortification")
+	var vb := _scroll_menu(_picker, "Build fortification", func() -> void:
+		_picker.hide()
+		_back_to_menu())
 	for feat in [MCF.FEATURE_SANDBAGS, MCF.FEATURE_WALL, MCF.FEATURE_DOT,
 			MCF.FEATURE_DOT_OPEN, MCF.FEATURE_GLASS, MCF.FEATURE_AIRLOCK,
 			MCF.FEATURE_LDF, MCF.FEATURE_DPMG, MCF.FEATURE_HEDGEHOG]:
@@ -2789,12 +2797,6 @@ func _open_build_picker() -> void:
 				label = "Build: %s (%s)" % [MCF.FEATURE_NAMES[feat],
 						("%d left in batch" % left) if left > 0 else "1 AP for %d" % MCF.BORG_BUILD_BATCH]
 			_act_btn(vb, label, _enter_build.bind(feat), can_afford, "Needs %d AP" % cost)
-	# Назад к главному меню бойца (0.12.1, владелец): раньше выйти можно было только Esc.
-	_act_btn(vb, "‹ Back", func() -> void:
-		_picker.hide()
-		_back_to_menu(), true)
-	(vb.get_child(vb.get_child_count() - 1) as Control).tooltip_text = "Back to %s's actions (%s)" % [
-			unit.stats.display_name, Keybinds.label("game_cancel")]
 	_number_picker()
 	_menu.hide()
 	_anchor_menu(_picker)
@@ -3330,12 +3332,14 @@ func _toggle_before() -> void:
 	if _before_grid == null:
 		return
 	_before_on = not _before_on
+	if _lod != null: _lod.visible = not _before_on
 	if _before_btn != null:
 		_before_btn.set_pressed_no_signal(_before_on)
 	if _before_on:
 		if _before_layer == null:
 			_before_layer = BeforeLayer.new()
 			_before_layer.host = self
+			_before_layer.z_index = 1   # над бойцами и косметикой, но под светом (0.12.2)
 			_before_layer.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 			add_child(_before_layer)
 		if _before_note == null:
@@ -3344,7 +3348,7 @@ func _toggle_before() -> void:
 			_before_note.add_theme_color_override("font_color", Ui.text_accent_color() if Ui != null else Color.WHITE)
 			_before_note.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
 			_before_note.add_theme_constant_override("outline_size", 4)
-			_before_note.position = Vector2(16, 8)
+			_before_note.position = Vector2(16, 44)
 			_ui_layer.add_child(_before_note)
 	if _before_layer != null:
 		_before_layer.visible = _before_on
@@ -5114,6 +5118,7 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, fog_on: bool) -> voi
 	var tiles_key: Array = [shown.get_instance_id(), fog_on]
 	if _tiles == null or _tiles_grid != tiles_key:
 		_tiles = TerrainTiles.new(shown, state.env)
+		_tiles.set_time_of_day(state.time_of_day)
 		_tiles.furniture_look = _furniture_look
 		_tiles_grid = tiles_key
 		_lod.tiles = _tiles
@@ -5527,6 +5532,10 @@ func _draw() -> void:
 	# Дальний план (большие карты): рельеф, объекты и туман — текстурами слоя под нами.
 	var far := zoom < LOD_ZOOM
 	_lod_sync(far, viewer, visible, fog_on)
+	# Vacuum tiles are transparent. Covering the live board with the opening board
+	# cannot hide debris there; stop drawing the live layers while Before is shown.
+	if _before_on:
+		return
 	if not far:
 		# Пол, объекты, огонь и туман вблизи рисует слой под нами плитками (TerrainTiles,
 		# _lod_sync): здесь остаются подписи высоты насыпей — у кучи земли она бывает
@@ -6368,9 +6377,11 @@ func _draw_fx_props(visible: Dictionary) -> void:
 		var tf: Vector2 = ORIGIN + Vector2(tr["from"]) * CELL
 		var tt: Vector2 = ORIGIN + Vector2(tr["to"]) * CELL
 		var head: Vector2 = tf.lerp(tt, k)
-		var tail: Vector2 = tf.lerp(tt, maxf(0.0, k - 0.25))
-		draw_line(tail, head, Color(1.0, 0.95, 0.5, 0.9), 2.0)
-		draw_circle(head, 2.5, Color(1.0, 1.0, 0.7, 0.95))
+		_draw_projectile_sprite("bullet", head, (tt - tf).angle(), 0.65)
+		var source: Vector2 = tr["from"]
+		if k < 0.2 and (not tr_fog or visible.has(Vector2i(floori(source.x), floori(source.y)))):
+			_draw_projectile_sprite("muzzle", tf, (tt - tf).angle(), 0.6)
+
 	_draw_shots(visible, tr_fog)
 	# ОСЕВШЕЙ косметики здесь больше нет (0.9.3): кровь, гильзы и осколки впечатаны в
 	# картинку куска доски (TerrainTiles._bake_decals) и кадру ничего не стоят. Осталось
@@ -6455,17 +6466,18 @@ func _draw_shots(visible: Dictionary, fog_on: bool) -> void:
 			"rocket":
 				for i in range(1, 5):
 					var q := a.lerp(b, maxf(0.0, k - 0.06 * i))
-					draw_circle(ORIGIN + q * CELL, CELL * (0.05 + 0.025 * i), Color(0.75, 0.75, 0.72, 0.42 - 0.08 * i))
-				draw_circle(at - dir * CELL * 0.17, CELL * 0.07, Color(1.0, 0.62, 0.15, 0.95))
-				draw_line(at - dir * CELL * 0.15, at + dir * CELL * 0.13, Color(0.24, 0.27, 0.2), maxf(3.0, CELL * 0.09))
+					if fog_on and not visible.has(Vector2i(floori(q.x), floori(q.y))): continue
+					_draw_projectile_sprite("smoke", ORIGIN + q * CELL, 0.3 * i, 0.25 + i * 0.08, Color(1, 1, 1, 0.5 - i * 0.08))
+				_draw_projectile_sprite("exhaust", at - dir * CELL * 0.23, dir.angle(), 0.35)
+				_draw_projectile_sprite("rocket", at, dir.angle(), 0.65)
 			"shell":
-				draw_line(at - dir * CELL * 0.35, at, Color(1.0, 0.8, 0.35, 0.85), maxf(2.0, CELL * 0.06))
-				draw_circle(at, maxf(2.5, CELL * 0.05), Color(1.0, 0.97, 0.8))
+				_draw_projectile_sprite("shell", at, dir.angle(), 0.7)
 			_:
-				var lift := sin(k * PI) * CELL * 0.6
-				draw_circle(at + Vector2(CELL * 0.04, CELL * 0.06), CELL * 0.07, Color(0, 0, 0, 0.3))
-				draw_circle(at - Vector2(0, lift), CELL * 0.085, Color(0.23, 0.28, 0.2))
-				draw_circle(at - Vector2(CELL * 0.025, lift + CELL * 0.03), CELL * 0.03, Color(0.55, 0.6, 0.5))
+				_draw_projectile_sprite("grenade", at - Vector2(0, sin(k * PI) * CELL * 0.6), k * TAU, 0.5)
+
+func _draw_projectile_sprite(kind: String, at: Vector2, angle: float, scale_: float, tint := Color.WHITE) -> void:
+	var size_ := Vector2.ONE * CELL * scale_
+	Sprites.draw_texture_override_rect(self, "fx_" + kind, Rect2(at - size_ * 0.5, size_), rad_to_deg(angle), tint)
 
 ## СЛУЧАЙНЫЕ СОБЫТИЯ НА КАРТЕ (0.9.4). Объявленное событие игрок обязан ВИДЕТЬ — в этом
 ## весь смысл предупреждения за раунд: заштрихованная зона с подписью, сколько раундов до
@@ -6732,8 +6744,8 @@ func _draw_fx_flashes(visible: Dictionary) -> void:
 ## Струя огнемёта (0.12.1, владелец: «not instant»). Пламя бежит от сопла по клеткам
 ## струи, FLAME_STEP секунд на клетку; огонь на полу и сожжённые появляются, когда фронт
 ## до них добегает, потом струя гаснет за FLAME_TAIL. Это только показ: доска уже решена.
-const FLAME_STEP := 0.08
-const FLAME_TAIL := 0.3
+const FLAME_STEP := 0.045
+const FLAME_TAIL := 0.12
 var _jet: Dictionary = {}
 
 ## Всё, что идёт ПОСЛЕ бросков (0.12.1): струя огнемёта, полёт пуль и снарядов, и только по
@@ -6864,32 +6876,18 @@ func _draw_flame_jet(visible: Dictionary) -> void:
 		return
 	var cells: Array = _jet["cells"]
 	var t := float(_jet["t"])
-	var head := minf(t / FLAME_STEP, float(cells.size()))
-	var fade := clampf(1.0 - (t - cells.size() * FLAME_STEP) / FLAME_TAIL, 0.0, 1.0)
+	var reached := mini(cells.size(), int(t / FLAME_STEP) + 1)
 	var fog_on: bool = _view_resolver().visibility_limited()
-	var half := Vector2(CELL, CELL) * 0.5
-	var pts := PackedVector2Array([ORIGIN + Vector2(_jet["from"]) * CELL + half])
-	for i in ceili(head):
-		pts.append(ORIGIN + Vector2(cells[i]) * CELL + half)
-	if head < cells.size() and pts.size() > 1:
-		# Фронт — посередине между двумя клетками, а не скачком.
-		var k := head - floorf(head)
-		pts[pts.size() - 1] = pts[pts.size() - 2].lerp(pts[pts.size() - 1], k)
-	if pts.size() > 1:
-		draw_polyline(pts, Color(1.0, 0.42, 0.08, 0.55 * fade), CELL * 0.55, true)
-		draw_polyline(pts, Color(1.0, 0.85, 0.35, 0.85 * fade), CELL * 0.22, true)
-	var now := Time.get_ticks_msec() / 1000.0
-	for i in ceili(head):
+	# The same crisp fire tile as the burning floor, revealed rapidly along the jet.
+	# Clip every tile, including the leading one, to the viewer's sight.
+	for i in reached:
 		var c: Vector2i = cells[i]
 		if fog_on and not visible.has(c):
 			continue
-		var center := ORIGIN + Vector2(c) * CELL + half
-		for j in 3:
-			var wob := Vector2(sin(now * 17.0 + i * 2.1 + j * 2.4), cos(now * 13.0 + i * 1.3 + j * 1.9)) * CELL * 0.12
-			var r := CELL * (0.34 - j * 0.08) * (0.85 + 0.15 * sin(now * 23.0 + i + j))
-			var col := [Color(0.95, 0.3, 0.05, 0.6), Color(1.0, 0.6, 0.12, 0.7), Color(1.0, 0.92, 0.55, 0.8)][j] as Color
-			col.a *= fade
-			draw_circle(center + wob, r, col)
+		var cell := state.grid.cell(c)
+		if cell == null or cell.is_space:
+			continue
+		Sprites.draw_texture_override_rect(self, "fire", Rect2(_cell_origin(c), Vector2.ONE * CELL))
 
 ## Дорожки боя (issue 8): «кто в кого стреляет». Трассер живёт 0.16 с — увидеть его
 ## можно, разобрать перестрелку нельзя, особенно в ход ИИ, когда за один заход стреляют
@@ -7148,15 +7146,16 @@ func _reposition_hud_grip() -> void:
 		return
 	# Грип — тонкая полоса на левом крае панели, во всю её высоту.
 	var vp := get_viewport_rect().size
+	_hud_grip.visible = not _hud_window.has_meta("user_positioned")
 	_hud_grip.position = Vector2(vp.x - _hud_width - _hud_grip.custom_minimum_size.x, 0)
 	_hud_grip.size = Vector2(_hud_grip.custom_minimum_size.x, vp.y)
 	# Чат приколот к правому-нижнему углу, но левее правого меню — пока игрок его не
 	# перетащил сам (item 8): после ручного переноса автопозиционирование отключается.
-	if _chat_panel != null and not _chat_moved:
+	if _chat_panel != null and not _chat_moved and not _chat_panel.has_meta("user_positioned"):
 		_chat_panel.position = Vector2(vp.x - _hud_width - _chat_panel.size.x - 20.0,
 				vp.y - _chat_panel.size.y - 12.0)
 	# Журнал боя — в левом-нижнем углу (item 6), тоже до первого ручного переноса (item 8).
-	if _log_panel != null and not _log_moved:
+	if _log_panel != null and not _log_moved and not _log_panel.has_meta("user_positioned"):
 		_log_panel.position = Vector2(12.0, vp.y - _log_panel.size.y - 12.0)
 	# Не помещаются рядом (крупный интерфейс, item 23, или раздвинутый журнал) — чат встаёт
 	# над журналом, а не поверх него.
@@ -7169,13 +7168,13 @@ func _reposition_hud_grip() -> void:
 	# панель открываются вместе с выбором машины, так что рядом им и место; когда меню
 	# спрятано (машине нечего предложить), панель прижимается к самому углу.
 	# После ручного переноса её больше не двигаем (item 8).
-	if _comp_panel != null and _comp_panel.visible and not _comp_moved:
+	if _comp_panel != null and _comp_panel.visible and not _comp_moved and not _comp_panel.has_meta("user_positioned"):
 		var left: float = MENU_ANCHOR.x
 		if _menu != null and _menu.visible:
 			left = _menu.position.x + _menu.size.x + 12.0
 		_comp_panel.position = Vector2(left, MENU_ANCHOR.y)
 	# Полоса повтора (M12) — по центру внизу, как у любого проигрывателя.
-	if _replay_bar != null:
+	if _replay_bar != null and not _replay_bar.has_meta("user_positioned"):
 		_replay_bar.position = Vector2((vp.x - _replay_bar.size.x) * 0.5,
 				vp.y - _replay_bar.size.y - 14.0)
 
@@ -7260,14 +7259,7 @@ func _build_ui() -> void:
 	# «показывать команде» и «скрыть чужие рисунки» — и ничего больше.
 	var panel := PanelContainer.new()
 	SteamChrome.apply_panel(panel)
-	panel.anchor_left = 1.0
-	panel.anchor_right = 1.0
-	panel.anchor_top = 0.0
-	panel.anchor_bottom = 1.0
-	panel.offset_left = -_hud_width
-	panel.offset_right = 0.0
-	panel.offset_top = 0.0
-	panel.offset_bottom = 0.0
+	PanelInteraction.sidebar(panel, _hud_width)
 	_ui_layer.add_child(panel)
 	_hud_window = panel
 
@@ -7360,7 +7352,11 @@ func _build_ui() -> void:
 	bug_btn.tooltip_text = "Send a bug report with a screenshot, the log and this match's replay."
 	match_box.add_child(_button_row([manual_btn, bug_btn]))
 
-	var tools_box := _hud_group(vbox, "Tools")
+	var panel_buttons := HBoxContainer.new()
+	panel_buttons.position = Vector2(12, 8)
+	panel_buttons.add_theme_constant_override("separation", 6)
+	_ui_layer.add_child(panel_buttons)
+	var tools_box := _floating_hud_panel("Tools", panel_buttons, Vector2(12, 44))
 	_multi_btn = CheckBox.new()
 	_multi_btn.text = "Multi-Select"
 	_multi_btn.add_theme_font_size_override("font_size", 12)
@@ -7405,7 +7401,7 @@ func _build_ui() -> void:
 		match_box.add_child(sp_row)
 		_refresh_ai_speed_row()
 	# Рисование и стирание (item 6/51) с размерами кистей.
-	var draw_box := _hud_group(vbox, "Drawing")
+	var draw_box := _floating_hud_panel("Drawing", panel_buttons, Vector2(290, 44))
 	_draw_btn = _compact_button("Draw", _enter_draw)
 	_erase_btn = _compact_button("Erase", _enter_erase)
 	draw_box.add_child(_button_row([_draw_btn, _erase_btn]))
@@ -7613,7 +7609,7 @@ func _refresh_component_panel() -> void:
 		note.add_theme_color_override("font_color", Color(0.95, 0.6, 0.35))
 		_comp_body.add_child(note)
 	_comp_panel.show()
-	if not _comp_moved:
+	if not _comp_moved and not _comp_panel.has_meta("user_positioned"):
 		_comp_panel.call_deferred("reset_size")
 		call_deferred("_reposition_hud_grip")
 
@@ -8649,11 +8645,51 @@ func _button_row(buttons: Array) -> HBoxContainer:
 ## Строит начинку всплывающего меню в оконном стиле SteamChrome: шапка с
 ## заголовком + прокручиваемый столбец кнопок с отступами. Возвращает VBox для
 ## кнопок. Вызывающий сперва очищает детей панели — рамка пересобирается заново.
-func _scroll_menu(panel: PanelContainer, title: String = "Actions") -> VBoxContainer:
+## back (0.12.2) — «‹» в левом верхнем углу шапки: у меню постройки инженера это отдельная
+## кнопка возврата, а не ещё один пункт списка (владелец, item 49).
+func _floating_hud_panel(title: String, buttons: HBoxContainer, at: Vector2) -> VBoxContainer:
+	var panel := PanelContainer.new()
+	SteamChrome.apply_panel(panel)
+	panel.position = at
+	panel.size = Vector2(264, 380)
+	panel.visible = false
+	_ui_layer.add_child(panel)
 	var frame := VBoxContainer.new()
 	frame.add_theme_constant_override("separation", 0)
 	panel.add_child(frame)
-	frame.add_child(SteamChrome.header_bar(title))
+	var close := Button.new()
+	close.text = "×"
+	close.tooltip_text = "Close " + title
+	close.pressed.connect(func() -> void: panel.hide())
+	frame.add_child(SteamChrome.header_bar(title, close))
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	frame.add_child(scroll)
+	var body := VBoxContainer.new()
+	body.add_theme_constant_override("separation", 5)
+	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var pad := SteamChrome.pad(body, 8, 6)
+	pad.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(pad)
+	var button := _compact_button(title, func() -> void: panel.visible = not panel.visible)
+	buttons.add_child(button)
+	return body
+
+func _scroll_menu(panel: PanelContainer, title: String = "Actions", back := Callable()) -> VBoxContainer:
+	var frame := VBoxContainer.new()
+	frame.add_theme_constant_override("separation", 0)
+	panel.add_child(frame)
+	var lead: Button = null
+	if back.is_valid():
+		lead = Button.new()
+		lead.text = "‹"
+		lead.focus_mode = Control.FOCUS_NONE
+		lead.custom_minimum_size = Vector2(26, 22)
+		lead.add_theme_font_size_override("font_size", 15)
+		lead.pressed.connect(back)
+		lead.tooltip_text = "Back (%s)" % Keybinds.label("game_cancel")
+	frame.add_child(SteamChrome.header_bar(title, null, lead))
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	var vb := VBoxContainer.new()
@@ -9534,7 +9570,7 @@ func _activate_menu_action(id: String) -> void:
 
 func _collect_picker_buttons(node: Node) -> void:
 	if node.is_queued_for_deletion(): return
-	if node is Button and node.text != "Cancel": _number_choices.append(node)
+	if node is Button and node.text not in ["Cancel", "‹", "◢", "×"] and node.name != "ResizeGrip": _number_choices.append(node)
 	for child in node.get_children(): _collect_picker_buttons(child)
 
 func _number_picker() -> void:

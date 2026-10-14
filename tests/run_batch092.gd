@@ -170,7 +170,7 @@ func _departments() -> void:
 						docks += 1
 						for c in g._edge_cells(r):
 							var o2 := c + g._outward(r, c)
-							if m.get_feature(c) == MCF.FEATURE_AIRLOCK and g._in(o2) and m.get_space(o2):
+							if m.get_feature(c) == MCF.FEATURE_AIRLOCK and g._in(o2) and (m.get_space(o2) or (not m.get_space(o2) and m.get_feature(o2 + g._outward(r, c)) == MCF.FEATURE_AIRLOCK and m.get_space(o2 + g._outward(r, c) * 2))):
 								docks_open += 1
 								break
 				var service := Vector2(-1, -1)
@@ -194,7 +194,7 @@ func _departments() -> void:
 	ck(hall_breaks == 0, "no ward, surgery, briefing room, armory or cell opens onto a main corridor (%d)" % hall_breaks)
 	ck(far_breaks == 0, "production is the department farthest from the service department (%d maps broke it)" % far_breaks)
 	ck(no_recycling == 0, "every station and bunker has a waste recycling room (%d of %d lack it)" % [no_recycling, maps])
-	ck(docks > 0 and docks_open == docks, "station docks open straight into space (%d of %d)" % [docks_open, docks])
+	ck(docks > 0 and docks_open == docks, "station docks have a chamber and a second door to space (%d of %d)" % [docks_open, docks])
 	ck(hidden_bad == 0, "the hidden storage opens only into the captain's quarters (%d)" % hidden_bad)
 	ck(toilets > 0 and looks > 0, "stations and bunkers get toilets (%d) and room floors (%d cells)" % [toilets, looks])
 

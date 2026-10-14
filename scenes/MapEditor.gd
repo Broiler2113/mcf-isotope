@@ -453,7 +453,8 @@ func _write(i: int, t: Array) -> void:
 	_mini_stale = true
 
 func _begin() -> void:
-	_act = {"cells": {}, "spawns": null, "decals": map.decals.duplicate(true), "items": map.items.duplicate(true)}
+	_act = {"cells": {}, "spawns": null, "decals": map.decals.duplicate(true),
+			"items": map.items.duplicate(true), "corpses": map.corpses.duplicate()}
 
 ## Спавны трогает действие — запомнить их «до» (один раз за действие).
 func _touch_spawns() -> void:
@@ -475,6 +476,8 @@ func _commit() -> void:
 		entry["decals"] = [_act["decals"], map.decals.duplicate(true)]
 	if _act.get("items", map.items) != map.items:
 		entry["items"] = [_act["items"], map.items.duplicate(true)]
+	if _act.get("corpses", map.corpses) != map.corpses:
+		entry["corpses"] = [_act["corpses"], map.corpses.duplicate()]
 	for i: int in _act["cells"]:
 		var before: Array = _act["cells"][i]
 		var after := _tuple(i)
@@ -483,7 +486,8 @@ func _commit() -> void:
 	if _act["spawns"] != null:
 		entry["spawns"] = [_act["spawns"], _spawns_copy()]
 	_act = {}
-	if entry["cells"].is_empty() and entry["spawns"] == null and not entry.has("decals") and not entry.has("items"):
+	if entry["cells"].is_empty() and entry["spawns"] == null and not entry.has("decals") \
+			and not entry.has("items") and not entry.has("corpses"):
 		return
 	_push(entry)
 
@@ -519,6 +523,10 @@ func _apply_entry(entry: Dictionary, forward: bool) -> void:
 	if entry.has("items"):
 		map.items = entry["items"][k].duplicate(true)
 		_sync_editor_items()
+	if entry.has("corpses"):
+		map.corpses = entry["corpses"][k].duplicate()
+		_mark_dirty()
+		queue_redraw()
 	for i: int in entry["cells"]:
 		_write(i, entry["cells"][i][k])
 	if entry["spawns"] != null:
@@ -633,6 +641,15 @@ func _paint_cells(cells: Array, erase: bool) -> void:
 ## Нет объекта — убирается боец; нет и его — клетка возвращается к пустой земле пресета
 ## (пол, вид, зона). Прежде один щелчок сносил сразу всё.
 func _erase_cell(c: Vector2i) -> void:
+	if not map.corpses.is_empty():
+		var ci := c.y * map.width + c.x
+		var kept_bodies := PackedInt32Array()
+		for q: int in map.corpses:
+			if q != ci:
+				kept_bodies.append(q)
+		if kept_bodies.size() != map.corpses.size():
+			map.corpses = kept_bodies
+			_mark_dirty()
 	if not map.items.is_empty():
 		var left := map.items.filter(func(it: Array) -> bool: return SmallItems.cell_of(it) != c)
 		if left.size() != map.items.size():
@@ -730,12 +747,15 @@ func _brushed(t: Array, mask: int, i: int = -1) -> Array:
 				t[3] = ""
 				t[1] = 0.0
 			_:
-				t[3] = brush
-				t[1] = maxf(0.0, MCF.feature_height(brush))
+				# Ёж на мешки и мешки на мешки складываются (0.12.2, item 25) — той же
+				# таблицей, по которой их складывают бойцы в бою.
+				var stacked := MCF.stacked(String(t[3]), brush)
+				t[3] = stacked if stacked != "" else brush
+				t[1] = maxf(0.0, MCF.feature_height(String(t[3])))
 				t[2] = false
 				if t.size() < 6:
 					t.append(-1)
-				t[5] = mirror_turn(brush_turn, mask) if Furniture.is_furniture(brush) else -1
+				t[5] = mirror_turn(brush_turn, mask) if Furniture.is_furniture(String(t[3])) else -1
 	if _wall_brush(): t[7] = brush_accent
 	if brush == MCF.FEATURE_AIRLOCK: t[8] = brush_door
 	if float(t[1]) < MCF.WALL_HEIGHT or str(t[3]) == MCF.FEATURE_AIRLOCK or MCF.is_glass(str(t[3])): t[9] = []
@@ -887,6 +907,15 @@ func _stamp_once(p: Dictionary, at: Vector2i, mask: int) -> void:
 		if map.in_bounds(c):
 			_set_spawn(c, String(s[2]), _mirror_owner(int(s[3]), mask))
 
+	if p.has("corpses"):
+		var kept := PackedInt32Array()
+		var area := Rect2i(at, Vector2i(p["w"], p["h"]))
+		for ci: int in map.corpses:
+			if not area.has_point(Vector2i(ci % map.width, ci / map.width)): kept.append(ci)
+		map.corpses = kept
+		for body: Array in p["corpses"]:
+			var c := at + Vector2i(int(body[0]), int(body[1]))
+			if map.in_bounds(c): map.corpses.append(c.y * map.width + c.x)
 	for d: Array in p.get("decals", []):
 		var pos := Vector2(float(d[1]), float(d[2])) + Vector2(at)
 		if Rect2(0, 0, map.width, map.height).has_point(pos):
@@ -986,6 +1015,7 @@ var decal_rotation := 0.0
 var item_rotation := 0.0
 const ITEM_TURN := PI / 12
 const ITEM_ERASE := "item:erase"
+const CORPSE_BRUSH := "corpse_body"
 var brush_table_set := ""
 var _decal_painting := false
 var _decal_last := Vector2.INF
@@ -1226,6 +1256,7 @@ func _sync_time_tint() -> void:
 	_time_mod.color = tint
 
 func _sync_lighting() -> void:
+	if _tiles != null and _tiles.set_time_of_day(map.time_of_day if map != null else ""): queue_redraw()
 	_sync_time_tint()
 	if not _lighting_preview:
 		if is_instance_valid(_lighting):
@@ -1337,14 +1368,31 @@ func _unhandled_input(event: InputEvent) -> void:
 func _press(c: Vector2i, alt: bool, screen := Vector2.INF) -> void:
 	# Мелкий предмет (0.12.1): щелчок кладёт один ровно под курсор, под углом item_rotation;
 	# «Erase items» стирает их кистью, как ластик декалей. Действие закрывает _release().
+	# Тело на клетку (0.12.2): щелчок кладёт одно, до CORPSE_WALL_COUNT в стопке.
+	if brush == CORPSE_BRUSH and tool == Tool.BRUSH and map.in_bounds(c) and not alt:
+		_begin()
+		_decal_painting = true
+		var ci := c.y * map.width + c.x
+		var here := 0
+		for q: int in map.corpses:
+			here += 1 if q == ci else 0
+		if here < MCF.CORPSE_WALL_COUNT:
+			map.corpses.append(ci)
+			_mark_dirty()
+		else:
+			_flash("Five bodies already lie here")
+		queue_redraw()
+		return
 	if brush.begins_with("item:") and tool == Tool.BRUSH and map.in_bounds(c) and not alt:
 		_begin()
+		# Тот же флаг, что у декалей: пока он поднят, протяжка не красит клетки (0.12.2).
+		# Без него один сдвиг мыши с зажатой кнопкой закрашивал стол кистью «item:…».
+		_decal_painting = true
 		var at := ((get_viewport().get_mouse_position() if screen == Vector2.INF else screen) - pan) / cell_size()
 		if brush == ITEM_ERASE:
-			_decal_painting = true
 			_erase_items(at)
 		else:
-			map.items.append([brush.substr(5), at.x, at.y, item_rotation])
+			map.items.append([SmallItems.random_kind(brush.substr(5), randi()), at.x, at.y, item_rotation])
 			_sync_editor_items()
 		queue_redraw()
 		return
@@ -1624,6 +1672,24 @@ func _draw() -> void:
 				var i := y * w + x
 				if map.feature_id[i] == MCF.FEATURE_DIRT_PILE:
 					draw_string(font, Vector2(x * CELL + 3, (y + 1) * CELL - 3), "%.1f" % map.cover_height[i], HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.95, 0.85, 0.6))
+	# Тела на клетках (0.12.2): рисуются той же картинкой, что и в бою, стопкой до пяти.
+	if not map.corpses.is_empty():
+		var pile := {}
+		for q: int in map.corpses:
+			pile[q] = int(pile.get(q, 0)) + 1
+		for q: int in pile:
+			var cc := Vector2i(q % w, q / w)
+			if cc.x < x0 or cc.x > x1 or cc.y < y0 or cc.y > y1:
+				continue
+			var n: int = pile[q]
+			for k in n:
+				var off := Vector2(CELL * 0.5 + (k - (n - 1) * 0.5) * CELL * 0.12,
+						CELL * 0.5 + (k % 2) * CELL * 0.08)
+				TerrainTiles.draw_decal(self, "corpse", Vector2(cc) * CELL + off, CELL * 0.9,
+						float(k) * 0.7)
+			if n > 1:
+				draw_string(font, Vector2(cc) * CELL + Vector2(CELL * 0.62, CELL - 4),
+						"x%d" % n, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1, 0.85, 0.85))
 	for c: Vector2i in _spawn_at:
 		if c.x < x0 or c.x > x1 or c.y < y0 or c.y > y1:
 			continue
@@ -1827,6 +1893,10 @@ func _preview_key() -> String:
 			_float_moving, brush_turn]
 
 func _draw_preview() -> void:
+	if brush == CORPSE_BRUSH and tool == Tool.BRUSH:
+		var hc := Vector2(_hover) + Vector2(0.5, 0.5)
+		TerrainTiles.draw_decal(self, "corpse", hc * CELL, CELL * 0.9, 0.0, 0.5)
+		return
 	if brush.begins_with("item:") and tool == Tool.BRUSH:
 		var at := (get_viewport().get_mouse_position() - pan) / cell_size()
 		if brush == ITEM_ERASE:
@@ -2568,13 +2638,16 @@ func _refresh_palette() -> void:
 		_palette_box.remove_child(c)
 		c.queue_free()
 	_brush_buttons.clear()
-	_palette_group("Decals · click anywhere", [["decal:blood_pool", "Blood pool"], ["decal:blood_drop", "Blood drop"], ["decal:corpse", "Corpse"], ["decal:erase", "Erase decals"]])
+	_palette_group("Decals", [["decal:blood_pool", "Blood pool"], ["decal:blood_drop", "Blood drop"], ["decal:erase", "Erase decals"]])
+	# Тело — не декаль (0.12.2, item 20): это настоящее тело на клетке, его в бою можно
+	# оттащить и сложить в стену из тел; кистью кладётся по одному, до пяти на клетку.
+	_palette_group("Bodies", [[CORPSE_BRUSH, "Corpse"]])
 	# Мелкие предметы (0.12.1): кладутся куда угодно и под любым углом (R — поворот на 15°).
 	var small: Array = []
 	for kind: String in SmallItems.KINDS:
 		small.append(["item:" + kind, SmallItems.name_of(kind), "%s — click to place, R turns it 15°" % SmallItems.name_of(kind)])
 	small.append([ITEM_ERASE, "Erase items"])
-	_palette_group("Small items · click anywhere", small)
+	_palette_group("Small items", small)
 	var terrain: Array = TERRAIN.duplicate()
 	for lk: int in FLOOR_LOOK_BRUSHES:
 		terrain.append(["floor:%d" % lk, MCF.FLOOR_LOOK_NAMES[lk]])
@@ -2940,6 +3013,7 @@ func _set_brush_size(n: int) -> void:
 	queue_redraw()
 
 func _brush_name(id: String) -> String:
+	if id == CORPSE_BRUSH: return "Corpse"
 	if id == ITEM_ERASE: return "Erase items"
 	if id.begins_with("item:"): return SmallItems.name_of(id.substr(5))
 	if id.begins_with("decal:"): return id.substr(6).replace("_", " ").capitalize()
@@ -3072,6 +3146,7 @@ func _thumb(id: String) -> Texture2D:
 	if id == MCF.FEATURE_AIRLOCK: return _door_thumb(brush_door)
 	if id.begins_with("decal:"): return Sprites.texture_of("blood_splatter" if id == "decal:blood_drop" else id.substr(6))
 	if id.begins_with("item:"): return _item_thumb(id.substr(5)) if id != ITEM_ERASE else null
+	if id == CORPSE_BRUSH: return Sprites.texture_of("corpse")
 	var env := _env
 	if id.begins_with("unit:"):
 		var key := Sprites.resolve(id.substr(5), "_neutral")
@@ -3672,7 +3747,8 @@ func _furnish_new_tables() -> void:
 		for q: Vector2i in piece:
 			done[q] = true
 		var set_id := _table_set() if Furniture.base_of(brush) == Furniture.base_of(fid) else SmallItems.default_set(fid)
-		items.append_array(SmallItems.furnish(map, piece, set_id, rng))
+		var fresh := piece.filter(func(q: Vector2i) -> bool: return placed.has(q))
+		items.append_array(SmallItems.arrange(set_id, fresh, SmallItems.turn_on_map(map, piece[0]), rng))
 	map.items = items
 	_sync_editor_items()
 

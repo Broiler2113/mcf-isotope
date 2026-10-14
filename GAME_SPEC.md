@@ -556,7 +556,8 @@ hands its unburned cells to the other side (batch 17)**, so the jet burns six ce
 whenever the board allows — a diagonal jet into a straight wall used to lose the half of
 its splash that ran back into the same wall. `flame_cells(from, step)` is the one
 geometry for the shot, the preview and the AI; `_resolve_flame` only kills and ignites
-what it lists.
+what it lists. Flamethrower soldiers, shield bearers and borg operators retain their
+fire immunity when struck directly by another flame jet.
 
 **Shots land before they kill (0.12.1).** The battle screen shows every result in the same
 order (`Main._show_effects`, used by the local, network, replay and civilian paths): dice;
@@ -574,7 +575,7 @@ then flies to where it really lands.
 
 **Jet animation (0.12.1).** `_resolve_flame` also hands the screen
 `{"fx": "flame_jet", "from", "cells"}` (appended without an fx number — it seeds nothing).
-`Main._play_flame_jets` runs the jet out at `FLAME_STEP` (0.08 s) per cell and fades it over
+`Main._play_flame_jets` reveals fire sprites at `FLAME_STEP` (0.045 s) per cell and holds them for
 `FLAME_TAIL`; until the front reaches a cell, its fire tile is hidden (`TerrainTiles.hide_fire`)
 and a soldier burned there is still drawn alive (`_pending_death_ids`). The board is already
 resolved; this is only how it is shown, skipped at 8× speed and in skipped replays.
@@ -661,6 +662,8 @@ Blocks shots and lasers outright. Immune to fire (#50). Shield **push**: the tar
 rolls at `need = armor + 2`; **failure kills**, success shoves it 1 cell if the space
 behind is free. In a blast, a shield bearer outside the epicentre survives and
 **protects adjacent friendlies** via `_protected_by`.
+Movement also pushes loose items, spent casings, shards and wall chunks forward along
+every traversed cell; blood stays on the floor.
 
 ### 7.6 Sniper (§5)
 
@@ -839,6 +842,10 @@ if any living non-drone unit is within `AIRLOCK_OPEN_RADIUS = 1`, otherwise
 `WALL_HEIGHT`. Radius 1 includes **distance 0**: standing inside the doorway holds it
 open.
 
+Space-facing station exits use docking-door art and two doors separated by one enclosed
+floor tile. The pressure pair opens the nearer door; a soldier or corpse holding one leaf
+open keeps its partner closed. Ordinary interior doors retain proximity opening.
+
 **A closed airlock is not a wall to a route (#100).** Height alone made `is_wall()` true,
 so every path planner treated a shut door as solid and nobody ever walked through one.
 The fix is a three-layer split, and everything reads the same predicate:
@@ -953,19 +960,18 @@ the same id that join up by autotiling (`join` in the table):
 - *whole* pieces — bed (1×2, 2×2), sofa (2×1, 3×1), desk and office desk (2×1), dining
   table (2×1 to 3×2), conference table (3×2, 4×2), wardrobe, dresser, generator, machinery
   (2×2, 3×2), examination table, bench, park table, dumpster, piano (2×1), bunk bed (1×2),
-  fuel tank (2×2). The piece is the group of
-  same-id cells joined side to side (`Furniture.piece_cells`): it is smashed, wrecked and
-  drawn **as one** (0.12.2: destruction takes only the hit cell — the rest of the piece stands, drawn as it was). No shared id is stored, so the generator never puts two whole pieces
-  of the same kind side by side (they would read as one).
+  fuel tank (2×2). Same-id cells joined side to side (`Furniture.piece_cells`) share
+  their orientation and drawing. Destruction removes only the hit cell; the surviving
+  part retains its opening appearance. No shared id is stored, so the generator spaces
+  separate pieces apart.
 - *runs* — kitchen counter, reception and checkout counters, bookshelf, display shelf,
   filing cabinets, lockers, workbench, storage shelving, server racks, industrial
   cabinets. Each cell is a segment; neighbouring segments join into one long counter or
   shelf, and a segment is smashed or burnt on its own.
 Every cell keeps its own height and durability.
 
-**The table** is `src/data/Furniture.gd` (`_BASE`, 54 types in four palette groups —
-*Home*, *Office & shop*, *Industrial*, *Outdoor*; 0.9.2 added toilet, sink, console,
-practice target and vent fan). Each row gives name, height class,
+**The table** is `src/data/Furniture.gd` (`_BASE`, with colour and content variants
+expanded into `DEFS`). Each row gives name, height class,
 material, durability, mobility (`PORTABLE` / `HEAVY` / `FIXED`), AP to smash, preferred
 rooms, preferred spot (`wall`, `corner`, `center`, `free`) and whether the generator uses
 it. A new piece is a new row plus, optionally, `textures/<id>.png`.
@@ -975,13 +981,19 @@ armchairs, generators, lockers, tool cabinets, barrels, vending machines, dumpst
 fuel tanks, the piano. A variant is its own id (`bed_red`) with `base` pointing at the
 row it copies: same rules, its own tile. `DEFS` is `_BASE` plus the variants. Two cells
 of different colours never join, so a red bed and a blue bed side by side are two beds.
+Storage and display shelves also have content variants: empty, tools, medical supplies,
+food or drinks. These variants join across their shared shelf structure. Straight shelf
+rows end at perpendicular rows rather than slicing their contents into corner tiles.
+Whole pieces whose maximum footprint is two cells (including pianos, desks and wardrobes)
+form consistent pairs instead of arbitrarily large groups.
 The generator places the base id and picks the colour itself (`Furniture.variant`),
 once per recipe step, so a row of bunks comes out one colour. The editor palette
 keeps one button per piece, and a *Colour* row under the brush name switches the
 variant (0.12.1: ◀ ▶ arrows under the brush, or the **,** / **.** keys).
 
 **Small items (0.12.1, `src/data/SmallItems.gd`).** Loose objects — papers, mugs, plates,
-monitors, keyboards, tools, flasks… (26 kinds, `textures/items/item_<kind>/`, rendered by
+monitors, keyboards, food, medical supplies, instruments, clothing, tools and equipment
+(`textures/items/item_<kind>/`, rendered by
 `tools/art/build_items.py`) — are pure cosmetics, free-placed: `MapData.items` holds
 `[kind, x, y, angle]` with fractional cell coordinates. They are drawn 1.3× life size and
 baked into the **feature** layer of a tile chunk after the furniture (`TerrainTiles._bake_items`),
@@ -996,7 +1008,12 @@ look field, so undo, saves, fog memory and tile rebuilds follow it. Blasts, run-
 furniture that is dragged, carried or put down call `_knock_items`, which flips the bits and
 emits `fx: "items"`: the items fly from their own spot like casings (far on a blast) and settle
 as floor decals `item:<kind>`. Fire burns them silently. **Cabinets** (`SmallItems.SPILLS`)
-spill 3–6 of their kind of items once, when dragged, picked up or destroyed (`fx: "spill"`);
+have a 50% chance to spill when dragged and spill when picked up or destroyed (`fx: "spill"`);
+each container empties once. Destruction scatters 5–8 items in different directions;
+gentler movement drops 3–6. Shelf variants spill their displayed contents, empty shelves
+spill nothing, and refrigerators spill food. Cabinets contain household supplies rather
+than plates. In vacuum debris keeps moving and rotating until it collides or leaves the
+map, including across save/load;
 the `GridCell.OPENED` bit then shows `<id>_open` art (doors ajar / drawers out) and moves
 with the cabinet.
 
@@ -1011,7 +1028,7 @@ keep their look.
 
 | Height | Pieces (examples) | Movement | Shooting past it (cell next to the target) |
 |---|---|---|---|
-| 0.5 m | chair, nightstand, coffee table, crate, pallet, toolbox, trash bin, bed, bench | climb, 2 points | no modifier |
+| 0.5 m | chair, nightstand, coffee table, crate, pallet, trash bin, bed, bench | climb, 2 points | no modifier |
 | 1.0 m | desk, dining/conference table, counters, filing cabinet, locker, workbench, barrel, ammo crate | climb, 3 | −2 (the ordinary `COVER_MOD`) |
 | 1.5 m | wardrobe, bookshelf, refrigerator, server rack, industrial cabinet, generator, dumpster | climb, 4 | **−3** |
 | 2.0 m | storage shelf, vending machine, machinery | wall: impassable, blocks sight and fire | — |
@@ -1043,29 +1060,28 @@ Nothing ever moves furniture by walking into it.
 
 **Smashing.** Any soldier — not just a miner or engineer — can **Break Furniture** in an
 adjacent cell (`BreakIntent`, the same intent and cell clear as demolition): 1 AP for
-ordinary pieces, 2 for large, 3 for heavy industrial (`ap` in the table) — once for the
-whole bed or table, per segment of a run. The floor stays; the cells drop to height 0 and
+ordinary pieces, 2 for large, 3 for heavy industrial (`ap` in the table), per targeted
+cell. The floor stays; the destroyed cell drops to height 0 and
 leave debris decals. The AI does not smash,
 carry or drag furniture (§17 is unchanged; it walks, climbs and takes cover over it like
 over any other object).
 
 **Weapons** converge on the same durability:
-- every **explosion** whose area touches a piece **destroys it whole**, whatever its
+- every **explosion** destroys each furniture cell inside its area, whatever its
   durability (0.9.2 — there used to be survivors: a generator outlasted two blasts and a
   frag grenade never touched furniture at all). Frag grenades included: furniture in
   their X goes. Furniture does **not** absorb a direct hit the way a pillbox does
   (`_pillbox_absorbs` skips it): the blast happens in full.
 - the **laser** burns through a piece for its current durability in potential (a chair 1,
   a wardrobe 3, a generator 5) and carries on, or stops in it if it can't pay.
-- **fire**: wood, fabric and plastic catch like a wooden wall (3/6) and burn away with
-  the cell; metal never catches from spreading fire (`FIRE_NEVER`), and a flame jet
-  scorches the cell but leaves the metal piece standing.
+- **fire**: wood, fabric and plastic ignite on 3+; metal furniture ignites on 6.
+  Ignited furniture is consumed, including furniture hit directly by a flame jet.
 - **tracks** flatten furniture like every other object under a hull.
 - ordinary bullets do not damage furniture — the game has no bullet-versus-object damage
   outside armoured glass, and none was invented.
 
-When an explosion or the laser destroys any cell of a *whole* piece, the whole piece goes
-(`_destroy_furniture`); fire and tracks take cells one by one, as they do with everything.
+Destruction removes only the hit furniture cell (`_destroy_furniture`); the surviving
+cells retain their opening appearance, including when an explosion cuts a table in half.
 A damaged cell (durability below the table's) is drawn with cracks baked into its tile.
 
 **Drawing.** Pieces are baked into the `TerrainTiles` chunks like walls (so they are known
@@ -1085,8 +1101,8 @@ switch or a replay rewind keeps it). From then on each cell is drawn as the gene
 the editor built it. Half a bed flattened by tracks stays half a bed. A counter with a
 smashed segment stays two cut-off ends. A blown-out wall doesn't turn the wardrobe
 beside it. A piece that lands on a new cell during the battle (dragged there) joins
-nothing and keeps the turn it lands with. This is drawing only: whole-piece smashing and
-Grab still read same-id neighbours (`piece_cells`, `grabbable_cell`). A save loaded
+nothing and keeps the turn it lands with. Grab still reads piece neighbours
+(`piece_cells`, `grabbable_cell`). A save loaded
 mid-battle freezes from the loaded board.
 Changing durability now writes the cell into the look log, so a cracked piece re-bakes.
 Far-zoom colours, map previews and the editor minimap use the pieces' own tones.
@@ -2433,8 +2449,15 @@ instead of appearing at its destination.
 
 ### 18.6 HUD
 
-A movable, resizable side panel (`HUD_START_SIZE = (330, 430)`) with a universal base
-action menu shared by all units.
+Battle and deployment use the same 264-pixel-wide, full-height sidebar and window chrome.
+Tools and Drawing open separate panels from buttons at the top left. Popup headers drag
+their windows; the header resize grip resizes them, with scrolling content when reduced.
+The engineer's construction picker uses a separate back arrow in its header.
+
+Before / After shows the opening board under the current lighting and hides live debris,
+including over transparent vacuum tiles. Morning, day, evening and night have distinct
+lighting and a fallback tint when dynamic lighting is disabled. Streetlight and bollard
+sprites and their light sources switch off during the day.
 
 **Live and dead, counted straight (0.9.4, issues-fix-10).** The turn line and the initiative
 window read one source, `_army_counts()`, and it counts **living soldiers from the board and
@@ -2709,6 +2732,18 @@ not keep a live reference into the running match. That second check is not theor
 mutating with the game and replays began from the wrong board.
 
 ### 20.2 Random maps (`MapGen`)
+
+Town streets branch at block boundaries, with larger central plots. Residential buildings
+reserve an enclosed restroom before entrances and partitions; furnished maps include a
+toilet and light inside it. Window cells inherit their adjacent interior floor. Parks have
+dirt paths, trees, benches and vending machines, and shops have cash registers. Bushes,
+houseplants, vending machines, bathtubs and showers extend the native furniture catalogue.
+Loose floor items appear occasionally. The toolbox is a loose item; the desk-with-lamp
+brush is retired, and old maps migrate these two objects on import.
+
+Every station reserves an engineering department and an external solar array. Production
+departments retain machinery workstations even if deployment occupies the room. Hull
+access uses the paired pressure doors described in §9.4.
 
 The lobby's map list has a second built-in row, **Random map**, right under *Blank
 arena*. Picking it shows the generator settings in place. Every change rebuilds the map

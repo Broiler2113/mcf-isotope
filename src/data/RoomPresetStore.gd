@@ -86,6 +86,9 @@ static func to_map(p: Dictionary, env: String) -> MapData:
 		if t.size() > 10: m.set_tint(i, int(t[10]))
 	for spawn: Array in p.get("spawns", []):
 		m.set_spawn(Vector2i(int(spawn[0]), int(spawn[1])), str(spawn[2]), int(spawn[3]))
+	for c: Array in p.get("corpses", []):
+		var cell := Vector2i(int(c[0]), int(c[1]))
+		if m.in_bounds(cell): m.corpses.append(cell.y * m.width + cell.x)
 	m.decals = p.get("decals", []).duplicate(true)
 	for it in p.get("items", []):
 		var clean := SmallItems.clean(it)

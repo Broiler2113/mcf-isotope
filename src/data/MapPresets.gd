@@ -190,6 +190,8 @@ static func rotated(p: Dictionary) -> Dictionary:
 	out["items"] = []
 	for it: Array in p.get("items", []):
 		out["items"].append([it[0], h - float(it[2]), float(it[1]), fposmod(float(it[3]) + PI / 2, TAU)])
+	out["corpses"] = []
+	for c: Array in p.get("corpses", []): out["corpses"].append([h - 1 - int(c[1]), int(c[0])])
 	return out
 
 ## Отражение: по горизонтали (x → w−1−x) или по вертикали (y → h−1−y).
@@ -215,6 +217,9 @@ static func flipped(p: Dictionary, horizontal: bool) -> Dictionary:
 		out["items"].append([it[0], w - float(it[1]) if horizontal else float(it[1]),
 			h - float(it[2]) if not horizontal else float(it[2]),
 			fposmod(PI - float(it[3]) if horizontal else -float(it[3]), TAU)])
+	out["corpses"] = []
+	for c: Array in p.get("corpses", []):
+		out["corpses"].append([w - 1 - int(c[0]) if horizontal else int(c[0]), int(c[1]) if horizontal else h - 1 - int(c[1])])
 	return out
 
 ## Клетка узора с поворотом мебели (6-й элемент, 0.9.2), переставленным по таблице map
@@ -251,4 +256,8 @@ static func capture(m: MapData, r: Rect2i) -> Dictionary:
 	for it: Array in m.items:
 		if Rect2(r).has_point(Vector2(float(it[1]), float(it[2]))):
 			p["items"].append([it[0], float(it[1]) - r.position.x, float(it[2]) - r.position.y, it[3]])
+	p["corpses"] = []
+	for i: int in m.corpses:
+		var c := Vector2i(i % m.width, i / m.width)
+		if r.has_point(c): p["corpses"].append([c.x - r.position.x, c.y - r.position.y])
 	return p

@@ -5,6 +5,6 @@ func _initialize() -> void:
 	for id: String in Furniture.ids():
 		var t: Color = Furniture.tint_of(id)
 		out.append({"id": id, "base": Furniture.base_of(id), "tint": t.to_html(false) if t.a > 0 else "",
-				"join": str(Furniture.DEFS[id].get("join", "")), "sizes": Furniture.sizes_of(id)})
+				"contents": str(Furniture.DEFS[id].get("contents", "")), "join": str(Furniture.DEFS[id].get("join", "")), "sizes": Furniture.sizes_of(id)})
 	print("@@" + JSON.stringify(out))
 	quit()

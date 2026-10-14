@@ -101,7 +101,26 @@ def save(img, name):
     print(name)
 
 
+def docking(v, open_=False):
+    cv = Canvas(1, 1, opaque=not open_, seed=31+v)
+    frame(cv)
+    for x in [.005, .94]:
+        cv.rect(x,.18,x+.055,.82,1.04,hazard(7),r=0,bevel=.004)
+    if not open_:
+        cv.rect(F,F,1-F,1-F,.9,painted(rgb('#a6afb2')),r=.012,bevel=.025)
+        for x in [.16,.75]:
+            cv.rect(x,.12,x+.09,.88,.95,metal(rgb('#58656e')),r=.012,bevel=.012)
+        cv.circle(.5,.45,.16,.96,metal(CHROME),bevel=.025)
+        cv.circle(.5,.45,.11,.97,glass(rgb('#4a879d')),bevel=.02)
+        cv.line(.3,.73,.7,.73,.045,.97,metal(CHROME),bevel=.01)
+        cv.line(.5,.65,.5,.81,.04,.98,metal(CHROME),bevel=.008)
+        cv.rect(.31,.12,.69,.2,.96,hazard(),r=0,bevel=.005)
+    lamp(cv, open_)
+    return cv.image(shadow=False)
+
 def main():
+    save(strip([docking(v) for v in range(3)]), "door_docking")
+    save(strip([docking(v, True) for v in range(3)]), "door_open_docking")
     shut = strip([closed(v) for v in range(3)])
     open_ = strip([opened(v) for v in range(3)])
     for name, img in (("door_station", shut), ("door", shut), ("door_open_station", open_), ("door_open", open_)):

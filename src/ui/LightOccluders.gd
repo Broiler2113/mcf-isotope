@@ -69,6 +69,6 @@ func _read(cell: GridCell, grid: Grid) -> void:
 ## a 200 % lamp is twice as bright and reaches ~1.4× as far.
 static func _emitter(kind: String, def: Dictionary, offset: Vector2, id: String, tint: int) -> Dictionary:
 	var k := Furniture.light_scale_of(tint)
-	return {"kind": kind, "color": Furniture.light_color_of(id, tint),
+	return {"kind": kind, "id": id, "color": Furniture.light_color_of(id, tint),
 			"range": float(def.get("light_range", 6.0)) * sqrt(k), "energy": float(def.get("light_energy", 0.85)) * k,
 			"offset": offset}

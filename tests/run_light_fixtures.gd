@@ -95,8 +95,8 @@ func _persistence_and_combat() -> void:
 	state.grid.cell(at).lamps = both
 	state.grid.cell(at).clear_feature()
 	ck(state.grid.cell(at).lamps.is_empty(), "demolishing the supporting wall removes its lamps")
-	ck(Furniture.DEFS.floodlight.light_energy > Furniture.DEFS.desk_lamp.light_energy,
-		"floodlights are stronger than desk lamps")
+	ck(Furniture.DEFS.floodlight.light_energy > Furniture.DEFS.floor_lamp.light_energy,
+		"floodlights are stronger than floor lamps")
 	ck(Furniture.DEFS.streetlight.light_range > Furniture.DEFS.bollard_light.light_range,
 		"streetlights reach farther than bollards")
 

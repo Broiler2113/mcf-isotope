@@ -18,7 +18,8 @@ var view := FxDecals.new()
 ## view.decal_dirty, и забирают его они; этот — отдельно, его забирает Main.
 var lod_dirty: Dictionary = {}
 var _reset := -1
-var _done := 0
+var _gore_done := 0
+var _props_done := 0
 var _ground := -1
 ## Следы гусениц и лазера, разрезанные по границам клеток: кусок — [линия, t0, t1, клетка,
 ## вид]. Живые куски — по клеткам, дописываются только новыми линиями (списки следов растут
@@ -39,7 +40,8 @@ func _init(live: FxDecals) -> void:
 	view.props = live.props.duplicate()
 	view._reindex()
 	_reset = live.decal_reset
-	_done = live.gore.size() + live.props.size()
+	_gore_done = live.gore.size()
+	_props_done = live.props.size()
 	_ground = live.ground_version
 	_split_new(live)
 	for c: Vector2i in _live_lines:
@@ -52,7 +54,6 @@ func _init(live: FxDecals) -> void:
 func update(live: FxDecals, visible: Dictionary, changed: Variant, gw: int) -> void:
 	var touch := {}
 	var full: bool = changed == null or _reset != live.decal_reset
-	var total := live.gore.size() + live.props.size()
 	if full:
 		# ponytail: сброс (пожар, потолок) сверяет все куски — ~0.2 с на 68k частиц у
 		# потолка; если станет заметно, брать из FxDecals список задетых пожаром кусков.
@@ -63,15 +64,14 @@ func update(live: FxDecals, visible: Dictionary, changed: Variant, gw: int) -> v
 			touch[cc] = true
 	else:
 		# Новое оседает только в конец списков (до сброса), поэтому смотрим лишь хвост.
-		var skip := _done
-		for list: Array in [live.gore, live.props]:
-			var first := mini(skip, list.size())
-			skip -= first
-			for i in range(first, list.size()):
+		for pair: Array in [[live.gore, _gore_done], [live.props, _props_done]]:
+			var list: Array = pair[0]
+			for i in range(int(pair[1]), list.size()):
 				touch[_chunk(list[i])] = true
 		for k: int in changed:
 			touch[Vector2i((k % gw) / C, (k / gw) / C)] = true
-	_done = total
+	_gore_done = live.gore.size()
+	_props_done = live.props.size()
 	for cc: Vector2i in touch:
 		_rebuild(cc, live, visible)
 	if full or _ground != live.ground_version or not (changed as Array).is_empty():

@@ -240,6 +240,9 @@ static func ambient_for(env: String, darkness: float, time_of_day := "") -> Colo
 
 ## Без динамического света время суток всё равно видно (0.12.1): ровный оттенок поля —
 ## мягче, чем настоящее освещение, чтобы карта оставалась читаемой.
+static func source_on(source: Dictionary, time_of_day: String) -> bool:
+	return time_of_day != "day" or str(source.get("id", "")) not in ["streetlight", "bollard_light"]
+
 static func flat_tint(env: String, time_of_day: String) -> Color:
 	match time_of_day:
 		"morning": return Color(1.0, 0.95, 0.9)
@@ -297,7 +300,7 @@ func update_view(grid: Grid, pan: Vector2, zoom: float, origin: Vector2, cell_si
 	# Lights: static ones from the index (rebuilt only when the view's reach, the index or
 	# — under fog — the sight counters change), plus flashes and muzzle fire from effects.
 	var reach := view.grow(int(MAX_RANGE))
-	var skey := [reach, occluders.revision]
+	var skey := [reach, occluders.revision, time_of_day]
 	if skey != _static_key:
 		_static_key = skey
 		_static = []
@@ -305,6 +308,8 @@ func update_view(grid: Grid, pan: Vector2, zoom: float, origin: Vector2, cell_si
 		for c: Vector2i in occluders.sources:
 			if not reach.has_point(c): continue
 			for src: Dictionary in occluders.sources[c]:
+				if not source_on(src, time_of_day):
+					continue
 				var entry := [Vector2(c) + Vector2.ONE * 0.5 + Vector2(src.offset), minf(float(src.range), MAX_RANGE),
 						float(src.energy), src.color]
 				if src.kind == "fire": _fires.append([c, entry])

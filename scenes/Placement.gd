@@ -787,6 +787,10 @@ func _build_sky() -> void:
 var _lighting: LightManager
 
 func _sync_lighting() -> void:
+	if _tile_layer != null and _tile_layer.tiles.set_time_of_day(map.time_of_day if map != null else ""):
+		_tile_layer.queue_redraw()
+	if _tile_layer != null and map != null:
+		_tile_layer.modulate = Color.WHITE if Ui.dynamic_lighting else LightManager.flat_tint(map.environment(), map.time_of_day)
 	if not (Ui.dynamic_lighting):
 		if is_instance_valid(_lighting):
 			_lighting.free()
@@ -796,7 +800,7 @@ func _sync_lighting() -> void:
 	if not is_instance_valid(_lighting):
 		_lighting = LightManager.new()
 		add_child(_lighting)
-	_lighting.update_view(_tile_grid, pan, zoom, ORIGIN, CELL, map.environment(), {}, false, null, _tile_layer)
+	_lighting.update_view(_tile_grid, pan, zoom, ORIGIN, CELL, map.environment(), {}, false, null, _tile_layer, -1.0, map.time_of_day)
 
 func _process(delta: float) -> void:
 	_fit_ground()
@@ -1548,14 +1552,7 @@ func _build_ui() -> void:
 	# раньше она стояла в точке (940, 20) с высотой 720 и при окне 720 уходила за нижний
 	# край, а на другом размере окна или интерфейса — вовсе мимо экрана.
 	_panel = PanelContainer.new()
-	_panel.anchor_left = 1.0
-	_panel.anchor_right = 1.0
-	_panel.anchor_bottom = 1.0
-	_panel.offset_left = -340
-	_panel.offset_right = -20
-	_panel.offset_top = 20
-	_panel.offset_bottom = -20
-	_panel.custom_minimum_size = Vector2(320, 0)
+	PanelInteraction.sidebar(_panel)
 	SteamChrome.apply_panel(_panel)
 	_ui.add_child(_panel)
 
@@ -1563,32 +1560,33 @@ func _build_ui() -> void:
 	var frame := VBoxContainer.new()
 	frame.add_theme_constant_override("separation", 0)
 	_panel.add_child(frame)
-	frame.add_child(SteamChrome.header_bar("Deploy Your Force"))
+	frame.add_child(SteamChrome.header_bar("MCF Isotope"))
 
 	# Шапка: чья закупка и сколько очков — всегда на виду.
 	var top := VBoxContainer.new()
 	top.add_theme_constant_override("separation", 2)
-	frame.add_child(SteamChrome.pad(top, 10, 8))
+	frame.add_child(SteamChrome.pad(top, 8, 6))
 	_phase_label = Label.new()
-	_phase_label.add_theme_font_size_override("font_size", 16)
+	_phase_label.add_theme_font_size_override("font_size", 13)
+	_phase_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	top.add_child(_phase_label)
 	_budget_label = Label.new()
-	_budget_label.add_theme_font_size_override("font_size", 14)
+	_budget_label.add_theme_font_size_override("font_size", 11)
 	top.add_child(_budget_label)
 
 	# Середина прокручивается: разделы — групповые окошки набора (аудит UI), а главная
 	# кнопка (Ready / Start Battle) живёт ниже, вне прокрутки, и не уезжает за край.
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(300, 0)
+	scroll.custom_minimum_size = Vector2(0, 0)
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	var scroll_pad := SteamChrome.pad(scroll, 8, 4)
+	var scroll_pad := SteamChrome.pad(scroll, 8, 6)
 	scroll_pad.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	frame.add_child(scroll_pad)
 	frame.size_flags_vertical = Control.SIZE_EXPAND_FILL
 
 	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 10)
+	vbox.add_theme_constant_override("separation", 5)
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(vbox)
 
@@ -1616,7 +1614,7 @@ func _build_ui() -> void:
 	# Инструменты-формы (item 12): точка/линия/прямоугольник/круг/заливка зоны.
 	var brush_group := SteamChrome.group_box_compact("Brush")
 	vbox.add_child(brush_group)
-	var tools_row := HBoxContainer.new()
+	var tools_row := HFlowContainer.new()
 	tools_row.add_theme_constant_override("separation", 4)
 	brush_group.body.add_child(tools_row)
 	for pair in [[PTool.POINT, "Point"], [PTool.LINE, "Line"], [PTool.RECT, "Rect"],
@@ -1641,13 +1639,13 @@ func _build_ui() -> void:
 	# Низ окна — вне прокрутки: строка состояния, главная кнопка и выход.
 	var bottom := VBoxContainer.new()
 	bottom.add_theme_constant_override("separation", 6)
-	frame.add_child(SteamChrome.pad(bottom, 10, 10))
+	frame.add_child(SteamChrome.pad(bottom, 8, 6))
 	_status = Label.new()
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	Ui.style_status(_status)
 	bottom.add_child(_status)
 	_flow_btn = Button.new()
-	_flow_btn.custom_minimum_size = Vector2(0, 40)
+	_flow_btn.custom_minimum_size = Vector2(0, 32)
 	_flow_btn.pressed.connect(_on_net_flow if networked() else _on_flow)
 	bottom.add_child(_flow_btn)
 	var back_btn := Button.new()

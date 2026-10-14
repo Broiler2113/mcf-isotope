@@ -95,6 +95,8 @@ const MANIFEST := [
 	["Misc", [
 		"corpse",
 	]],
+	["Firing effects", ["fx_bullet", "fx_shell", "fx_rocket", "fx_grenade", "fx_smoke", "fx_muzzle", "fx_exhaust"]],
+	["Docking doors and unlit street fixtures", ["door_docking", "door_open_docking", "streetlight_off", "bollard_light_off"]],
 ]
 
 ## Автотайл (batch 17, item 12): лист «<объект>_autotile.png» из 16 плиток 4×4. Плитка
@@ -400,7 +402,7 @@ static func _manifest_text() -> String:
 		"  textures/walls/wall_station/wall_station_autotile.png   its 16-tile sheet",
 		"  textures/walls/wall_station/sample.png                  the marked-up template",
 		"",
-		"Sections: floors, walls, doors, features, furniture, decals, effects.",
+		"Sections: floors, walls, doors, features, furniture, items, decals, effects, fx.",
 		"Sort yours the same way or drop files straight into user://textures -- both work.",
 		"",
 		"== sample.png ==",
@@ -421,6 +423,10 @@ static func _manifest_text() -> String:
 	lines.append("piece as ONE picture, as many tiles wide and tall as the piece, back at the top.")
 	for fid: String in Furniture.ids():
 		lines.append("  %s.png" % fid)
+	lines.append("")
+	lines.append("-- Loose props (tools/art/build_items.py) --")
+	for kind: String in SmallItems.KINDS:
+		lines.append("  item_%s.png" % kind)
 	lines.append("")
 	lines.append_array([
 		"== Factions ==",

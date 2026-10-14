@@ -98,11 +98,11 @@ def laptop(cv):
 
 
 def radio(cv):
-    cv.line(C + 0.07, C - 0.06, C + 0.12, C - 0.22, 0.012, 0.12, metal(INK), bevel=0.004)
-    cv.rect(C - 0.11, C - 0.07, C + 0.11, C + 0.07, 0.1, painted(rgb("#5a6338"), gloss=0.25), r=0.015, bevel=0.012)
-    cv.rect(C - 0.09, C - 0.05, C + 0.02, C + 0.05, 0.105, solid(rgb("#30351f")), r=0.006, bevel=0.0)
+    cv.line(C + 0.07, C - 0.06, C + 0.14, C - 0.3, 0.025, 0.12, metal(INK), bevel=0.004)
+    cv.rect(C - 0.19, C - 0.12, C + 0.19, C + 0.12, 0.1, painted(rgb("#5a6338"), gloss=0.25), r=0.015, bevel=0.012)
+    cv.rect(C - 0.16, C - 0.08, C + 0.02, C + 0.08, 0.105, solid(rgb("#30351f")), r=0.006, bevel=0.0)
     for k in range(2):
-        cv.circle(C + 0.06, C - 0.025 + k * 0.05, 0.018, 0.12, metal(CHROME), bevel=0.008)
+        cv.circle(C + 0.11, C - 0.05 + k * 0.1, 0.03, 0.12, metal(CHROME), bevel=0.008)
 
 
 def headset(cv):
@@ -169,13 +169,16 @@ def box(cv):
 
 
 def map_sheet(cv):
-    cv.rect(C - 0.2, C - 0.15, C + 0.2, C + 0.15, 0.02, solid(rgb("#d9d2b8"), var=0.03), r=0.004, bevel=0.004)
+    cv.rect(C - 0.27, C - 0.21, C + 0.27, C + 0.21, 0.02, solid(rgb("#d9d2b8"), var=0.03), r=0.004, bevel=0.004)
     cv.groove(C - 0.2, C - 0.002, C + 0.2, C + 0.002, depth=0.002, dark=0.75)
     cv.groove(C - 0.002, C - 0.15, C + 0.002, C + 0.15, depth=0.002, dark=0.75)
-    cv.line(C - 0.15, C + 0.08, C + 0.12, C - 0.1, 0.012, 0.022, solid(rgb("#3a6aa8")), bevel=0.0)
+    cv.line(C - 0.15, C + 0.08, C + 0.2, C - 0.16, 0.028, 0.022, solid(rgb("#3a6aa8")), bevel=0.0)
     cv.circle(C + 0.06, C + 0.06, 0.025, 0.022, solid(rgb("#c43a2e")), bevel=0.0)
 
 
 ITEMS = {k: v for k, v in globals().items() if callable(v) and k in (
     "papers folder book magazine mug plate cup bottle can monitor keyboard mouse phone laptop radio headset "
     "wrench screwdriver flask test_tubes clipboard tray remote shirt box map_sheet").split()}
+
+from items_extra import EXTRA_ITEMS
+ITEMS.update(EXTRA_ITEMS)

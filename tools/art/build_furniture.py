@@ -42,7 +42,7 @@ def icon_of(piece):
 
 # Cabinets that open and spill (SmallItems.opens): an extra "<id>_open" set of pictures.
 OPENERS = {"cabinet", "wardrobe", "dresser", "filing_cabinet", "locker", "tool_cabinet",
-           "industrial_cabinet", "biohazard_cabinet"}
+           "industrial_cabinet", "biohazard_cabinet", "refrigerator", "specimen_fridge"}
 
 
 def main():
@@ -51,6 +51,11 @@ def main():
         if only and d["base"] not in only:
             continue
         build(d, "")
+        if d["base"] in {"streetlight", "bollard_light"}:
+            bulb = F.BULB
+            F.BULB = rgb("#59635f")
+            build(d, "_off")
+            F.BULB = bulb
         if d["base"] in OPENERS:
             F.OPEN = True
             build(d, "_open")
@@ -60,6 +65,7 @@ def main():
 def build(d, suffix):
     """Render one furniture id; suffix "_open" names the opened-cabinet set (no sample)."""
     fid, base = d["id"], d["base"]
+    F.CONTENTS = d.get("contents", "")
     colour = rgb(d["tint"]) if d["tint"] else None
     folder = os.path.join(OUT, fid)
     os.makedirs(folder, exist_ok=True)
