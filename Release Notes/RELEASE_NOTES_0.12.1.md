@@ -9,6 +9,13 @@
 - Explosions throw items off tables like shell casings. Items also fall off furniture that is dragged, picked up or run over, and fire burns them.
 - Cabinets, wardrobes, dressers, lockers and filing cabinets open and spill their contents when dragged or blown up.
 
+## Shots land before they kill
+
+- A soldier now falls when the bullet reaches them, not the moment the dice stop. Blood, broken glass and knocked-off items appear with the hit.
+- Anti-tank rockets, tank shells and frag grenades fly to where they land. The explosion, the casualties and the wrecked walls come when they arrive.
+- The assault shotgun and the machine-gun emplacement now show their bullets.
+- When a tank aims, its colored line points at the cell you picked, not at where the shell will fall. As with the anti-tank soldier, you see where it lands when it flies.
+
 ## Explosions and fire
 
 - Walls blown apart by explosions throw chunks that look like the wall they came from: brick, concrete, wood, sandbags.
@@ -16,6 +23,10 @@
 - Explosions leave soot marks of different shapes on the ground.
 - Shell casings, shards, blood, laser scorches and tank tracks are never cleaned up anymore. Everything stays until the end of the battle.
 - The flamethrower now fires a jet that runs out from the nozzle. Fire and burned soldiers appear as the flame reaches them.
+
+## Station and asteroid digging
+
+- On station and asteroid maps, soldiers dig into the floor plating instead of the ground. Trenches look like cuts in the deck, and the dug-out piles are heaps of floor scraps and metal called **Rubble Piles**.
 
 ## Map editor
 

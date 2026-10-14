@@ -777,13 +777,10 @@ func _play_civilian_result(res: ActionResult) -> void:
 		_fast_playback = true  # item 32: нейтральный слот идёт ускоренно
 		await _play_dice(res.dice_events)
 		_fast_playback = false
-		_pending_death_ids.clear()
 		queue_redraw()
-	# Остальная косметика (трассеры, гильзы, кровь) ложится ПОСЛЕ броска — иначе кровь
-	# опережала бы решение кубика.
-	if not res.fx.is_empty():
-		_fx.apply(res.fx)
-		queue_redraw()
+	# Остальная косметика ложится ПОСЛЕ броска (иначе кровь опережала бы решение кубика), а
+	# труп и кровь — когда пуля долетела (0.12.1).
+	await _show_effects(res)
 	# Слот отыгран — подсветку «сейчас ходит» снимаем (item 6).
 	_playing_slot = -1
 	if _init_overlay != null and _init_overlay.visible:
@@ -1020,11 +1017,7 @@ func _show_result(result: ActionResult) -> void:
 		_hold_visual = result.visual_hold  # item 22
 		queue_redraw()
 		await _play_dice(result.dice_events)
-		_pending_death_ids.clear()
-		_hold_visual = {}
-	await _play_flame_jets(result)
-	if not result.fx.is_empty():
-		_fx.apply(result.fx)
+	await _show_effects(result)
 	if _result_is_audible(result):
 		state.log.publish_result(result)
 	_refresh_status()
@@ -3130,15 +3123,10 @@ func _on_intent_ready(intent: Intent) -> void:
 			_play_walks_free(result.dice_events)
 		else:
 			await _play_dice(result.dice_events, not _result_is_audible(result))
-		_pending_death_ids.clear()
-		_hold_visual = {}
 		queue_redraw()
-	await _play_flame_jets(result)
-	# Косметика (#21) добавляется ПОСЛЕ анимации броска — вместе с показом смерти,
-	# иначе лужа крови проявлялась бы раньше, чем кубик решил судьбу цели.
-	if not result.fx.is_empty():
-		_fx.apply(result.fx)
-		queue_redraw()
+	# Косметика (#21) добавляется ПОСЛЕ анимации броска, а смерть, кровь и взрыв — когда
+	# пуля или снаряд долетели (0.12.1).
+	await _show_effects(result)
 	if _result_is_audible(result):
 		state.log.publish_result(result)
 	for c in controllers.values():
@@ -3757,11 +3745,7 @@ func _show_net_action(intent: Intent, result: ActionResult) -> void:
 			_play_walks_free(result.dice_events)   # your own soldier walking: stay live (0.11)
 		else:
 			await _play_dice(result.dice_events, not _result_is_audible(result))
-		_pending_death_ids.clear()
-		_hold_visual = {}
-	await _play_flame_jets(result)
-	if not result.fx.is_empty():
-		_fx.apply(result.fx)
+	await _show_effects(result)
 	if _result_is_audible(result):
 		state.log.publish_result(result)
 	for c in controllers.values():
@@ -5339,6 +5323,12 @@ func _lod_feature_color(cell: GridCell) -> Color:
 	# на дальнем плане её тоже не видно — там виден пол клетки.
 	if fid == MCF.FEATURE_BOUNDARY:
 		return _lod_tex_avg.get("boundary", Color(0, 0, 0, 0))
+	# Станция и астероид (0.12.1): куча — лом, окоп — прорезь в палубе, и вдали тоже.
+	if MCF.rubble_env(state.env):
+		var art := TerrainTiles.pile_art(state.env) if fid == MCF.FEATURE_DIRT_PILE \
+				else (TerrainTiles.env_name("trench", state.env) if fid == MCF.FEATURE_TRENCH else "")
+		if art != "" and _lod_tex_avg.has(art):
+			return _lod_tex_avg[art]
 	if _lod_tex_avg.has(fid):
 		return _lod_tex_avg[fid]
 	if fid == MCF.FEATURE_LDF:
@@ -5442,6 +5432,7 @@ func _lod_texture_averages() -> Dictionary:
 	names.append_array(MCF.FLOOR_LOOKS.slice(1))   # полы комнат (0.9.2) — как на холсте
 	names.append_array(FEATURE_TAGS.keys())
 	names.append_array(Furniture.ids())   # мебель на дальнем плане — цветом своей плитки
+	names.append_array(["rubble", "trench_station", "trench_asteroid"])   # 0.12.1
 	for n: String in names:
 		# Шлюз с 0.9.2 рисуется дверью в раме, и файл у неё — "door".
 		var base: String = "door" if n == MCF.FEATURE_AIRLOCK else n
@@ -6380,6 +6371,7 @@ func _draw_fx_props(visible: Dictionary) -> void:
 		var tail: Vector2 = tf.lerp(tt, maxf(0.0, k - 0.25))
 		draw_line(tail, head, Color(1.0, 0.95, 0.5, 0.9), 2.0)
 		draw_circle(head, 2.5, Color(1.0, 1.0, 0.7, 0.95))
+	_draw_shots(visible, tr_fog)
 	# ОСЕВШЕЙ косметики здесь больше нет (0.9.3): кровь, гильзы и осколки впечатаны в
 	# картинку куска доски (TerrainTiles._bake_decals) и кадру ничего не стоят. Осталось
 	# только то, что ещё в воздухе, — его и правда надо двигать каждый кадр.
@@ -6389,6 +6381,35 @@ func _draw_fx_props(visible: Dictionary) -> void:
 	for f: Dictionary in _fx.flying:
 		_draw_fx_one(f["kind"], FxDecals.flight_pos(f), FxDecals.flight_rot(f),
 				f["scale"], visible, fog_on, f.get("origin", Vector2i(-1, -1)))
+
+## Снаряды в полёте (0.12.1): ракета — тёмный корпус с факелом и дымным следом, снаряд танка —
+## раскалённый штрих, граната — по дуге, с тенью на земле. Под туманом — только там, где
+## снаряд в обзоре.
+func _draw_shots(visible: Dictionary, fog_on: bool) -> void:
+	for sh: Dictionary in _fx.shots:
+		var k: float = clampf(float(sh["t"]) / maxf(0.001, float(sh["dur"])), 0.0, 1.0)
+		var a: Vector2 = sh["from"]
+		var b: Vector2 = sh["to"]
+		var p := a.lerp(b, k)
+		if fog_on and not visible.has(Vector2i(floori(p.x), floori(p.y))):
+			continue
+		var dir := (b - a).normalized() if b != a else Vector2.RIGHT
+		var at := ORIGIN + p * CELL
+		match str(sh["kind"]):
+			"rocket":
+				for i in range(1, 5):
+					var q := a.lerp(b, maxf(0.0, k - 0.06 * i))
+					draw_circle(ORIGIN + q * CELL, CELL * (0.05 + 0.025 * i), Color(0.75, 0.75, 0.72, 0.42 - 0.08 * i))
+				draw_circle(at - dir * CELL * 0.17, CELL * 0.07, Color(1.0, 0.62, 0.15, 0.95))
+				draw_line(at - dir * CELL * 0.15, at + dir * CELL * 0.13, Color(0.24, 0.27, 0.2), maxf(3.0, CELL * 0.09))
+			"shell":
+				draw_line(at - dir * CELL * 0.35, at, Color(1.0, 0.8, 0.35, 0.85), maxf(2.0, CELL * 0.06))
+				draw_circle(at, maxf(2.5, CELL * 0.05), Color(1.0, 0.97, 0.8))
+			_:
+				var lift := sin(k * PI) * CELL * 0.6
+				draw_circle(at + Vector2(CELL * 0.04, CELL * 0.06), CELL * 0.07, Color(0, 0, 0, 0.3))
+				draw_circle(at - Vector2(0, lift), CELL * 0.085, Color(0.23, 0.28, 0.2))
+				draw_circle(at - Vector2(CELL * 0.025, lift + CELL * 0.03), CELL * 0.03, Color(0.55, 0.6, 0.5))
 
 ## СЛУЧАЙНЫЕ СОБЫТИЯ НА КАРТЕ (0.9.4). Объявленное событие игрок обязан ВИДЕТЬ — в этом
 ## весь смысл предупреждения за раунд: заштрихованная зона с подписью, сколько раундов до
@@ -6658,6 +6679,89 @@ func _draw_fx_flashes(visible: Dictionary) -> void:
 const FLAME_STEP := 0.08
 const FLAME_TAIL := 0.3
 var _jet: Dictionary = {}
+
+## Всё, что идёт ПОСЛЕ бросков (0.12.1): струя огнемёта, полёт пуль и снарядов, и только по
+## попаданию — трупы, кровь, осколки, взрыв и снесённые стены. Здесь же снимаются держатели
+## «до броска» (_pending_death_ids, _hold_visual), а остаток косметики ложится разом.
+func _show_effects(result: ActionResult) -> void:
+	# Пока летит пуля или струя, экран занят, как во время броска: ни щелчок игрока, ни шаг
+	# ИИ не должны начать следующее действие посреди полёта.
+	var was_animating := _animating
+	_animating = true
+	await _play_flame_jets(result)
+	await _play_shots(result)
+	_animating = was_animating
+	_pending_death_ids.clear()
+	_hold_visual = {}
+	var rest := result.fx.filter(func(e: Dictionary) -> bool: return not e.has("_shown"))
+	if not rest.is_empty():
+		_fx.apply(rest)
+	queue_redraw()
+
+## Пули и снаряды летят, а жертвы держатся живыми, пока их не настигнет попадание: трассер
+## отпускает убитых в своей клетке-цели и косметику этой клетки (кровь, осколки), снаряд —
+## всех убитых и всю косметику действия (взрыв). Гильзы вылетают сразу, с выстрелом.
+## На 8× и быстрее и в пропущенном показе повтора — без ожидания, как и кубики.
+func _play_shots(result: ActionResult) -> void:
+	var flights: Array = []   # [время попадания, клетка, взрыв?]
+	var launch: Array = []
+	for ev: Dictionary in result.fx:
+		match str(ev.get("fx", "")):
+			"tracer":
+				var to: Array = ev.get("to", [])
+				if to.size() >= 2:
+					launch.append(ev)
+					flights.append([FxDecals.tracer_dur(ev), Vector2i(int(to[0]), int(to[1])), false])
+			"shot":
+				var to: Array = ev.get("to", [])
+				if to.size() >= 2:
+					launch.append(ev)
+					flights.append([FxDecals.shot_dur(ev), Vector2i(int(to[0]), int(to[1])), true])
+			"casings":
+				launch.append(ev)
+	if flights.is_empty():
+		return
+	for ev: Dictionary in launch:
+		ev["_shown"] = true
+	_fx.apply(launch)
+	queue_redraw()
+	if not is_inside_tree() or _pace() >= 8.0 or (replay != null and _replay_skip_animations):
+		return
+	# Выстрел без бросков (заряд себе под ноги) — убитых тоже держим до разрыва.
+	for id: int in result.deaths:
+		_pending_death_ids[id] = true
+	flights.sort_custom(func(a: Array, b: Array) -> bool: return float(a[0]) < float(b[0]))
+	var t := 0.0
+	var k := 0
+	while k < flights.size():
+		await get_tree().process_frame
+		if not is_inside_tree():
+			return
+		t += get_process_delta_time()
+		while k < flights.size() and float(flights[k][0]) <= t:
+			_land_shot(result, flights[k][1], bool(flights[k][2]))
+			k += 1
+		queue_redraw()
+
+func _land_shot(result: ActionResult, cell: Vector2i, blast: bool) -> void:
+	var hit: Array = []
+	for ev: Dictionary in result.fx:
+		if ev.has("_shown") or str(ev.get("fx", "")) == "lane":
+			continue
+		var at: Variant = ev.get("at", null)
+		if blast or (at is Vector2i and at == cell):
+			ev["_shown"] = true
+			hit.append(ev)
+	if not hit.is_empty():
+		_fx.apply(hit)
+	if blast:
+		_pending_death_ids.clear()
+		_hold_visual = {}
+		return
+	for id: int in _pending_death_ids.keys():
+		var u := state.get_unit(id)
+		if u == null or u.coord == cell:
+			_pending_death_ids.erase(id)
 
 func _play_flame_jets(result: ActionResult) -> void:
 	for ev: Dictionary in result.fx:

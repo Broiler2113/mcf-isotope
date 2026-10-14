@@ -639,7 +639,7 @@ func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int
 			feat.blend_rect(_weld_overlay(res), full, at)
 		return
 	var accent := _accent_of(c)
-	var name := "soil" if fid == MCF.FEATURE_DIRT_PILE else tile_name(cell)
+	var name := pile_art(env) if fid == MCF.FEATURE_DIRT_PILE else tile_name(cell)
 	# Материал стены (0.9.4): вид клетки может назвать кирпич, штукатурку или шлакоблок —
 	# правила те же, плитка другая. Семейство автотайла остаётся «wall», поэтому дом из
 	# кирпича стыкуется с бетонным соседом без шва.
@@ -1503,6 +1503,13 @@ func _floor_overlay_name(cell: GridCell, c: Vector2i) -> String:
 		return ""   # пол разворочен взрывом — решётке на нём не устоять
 	return MCF.FLOOR_LOOKS[look]
 
+## Картинка кучи из окопа: на станции и астероиде — обрезки пола и металлический лом
+## (0.12.1, «rubble»), в прочих окружениях — грунт. Стена из грунта (Soil) не меняется.
+static func pile_art(p_env: String) -> String:
+	if MCF.rubble_env(p_env) and Sprites.has_override("rubble" + Sprites.AUTOTILE_SUFFIX):
+		return "rubble"
+	return "soil"
+
 ## Имя картинки объекта: id с учётом подмен (ЛДФ, ДПМГ) и состояния шлюза — открытый
 ## шлюз (высота ниже стены) рисуется разъехавшимися створками.
 static func tile_name(cell: GridCell) -> String:
@@ -1536,7 +1543,7 @@ func draw_feature_tile(ci: CanvasItem, fid: String, c: Vector2i, rect: Rect2, cl
 		if img != null:
 			ci.draw_texture_rect(Sprites.nearest(_furniture_tex(img)), rect, false)
 		return
-	var name: String = env_name("soil" if fid == MCF.FEATURE_DIRT_PILE else Sprites.ALIASES.get(fid, fid), env)
+	var name: String = env_name(pile_art(env) if fid == MCF.FEATURE_DIRT_PILE else Sprites.ALIASES.get(fid, fid), env)
 	var sheet := Sprites.texture_of(name + Sprites.AUTOTILE_SUFFIX)
 	if sheet != null:
 		Sprites.draw_autotile(ci, Sprites.nearest(sheet), rect, mask_at(_grid, c, fid), variant_of(c + origin, 64))

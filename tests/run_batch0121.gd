@@ -29,6 +29,9 @@ func run() -> void:
 	_cabinet_spill()
 	_items_generator()
 	await _items_editor()
+	_projectiles()
+	await _impact_in_battle()
+	_rubble()
 	print("batch 0.12.1: %d failure(s)" % fails.size())
 	quit(1 if not fails.is_empty() else 0)
 
@@ -424,3 +427,147 @@ func _items_editor() -> void:
 	ck(ed.map.items.all(func(it: Array) -> bool: return SmallItems.cell_of(it) != Vector2i(2, 8)), "erasing a table takes its items")
 	ed.queue_free()
 	await process_frame
+
+## Shots show a flying projectile and their effects on impact (0.12.1 follow-up): the tank's
+## lane points at the clicked cell (not where the shell will fall); the shell, the anti-tank
+## rocket and the frag grenade fly to where they really land; the shotgun and the DPMG get
+## bullet tracers. None of these take a board effect number.
+func _projectiles() -> void:
+	var tm := MapData.blank_arena(24, 12)
+	tm.set_spawn(Vector2i(3, 5), "tank", 0, Vector2i(1, 0))
+	tm.set_spawn(Vector2i(20, 10), "light_infantry", 1)
+	var ts := tm.build_state(5)
+	ts.turns.round_order = [0, 1]
+	ts.turns.active_index = 0
+	var r := GameActionResolver.new(ts)
+	var tank: Vehicle = ts.all_vehicles()[0]
+	var aim := Vector2i(14, 5)
+	var short_seen := false
+	var lanes_ok := true
+	var shots_ok := true
+	var reason := ""
+	for attempt in 40:
+		tank.ap = 9
+		tank.cannon_shots_this_round = 0
+		var seq := ts.fx_seq
+		var res := r.resolve(VehicleCannonIntent.new(tank.id, aim))
+		if not res.ok:
+			reason = res.reason
+			break
+		var lane := res.fx.filter(func(f: Dictionary) -> bool: return f.get("fx", "") == "lane")
+		var shot := res.fx.filter(func(f: Dictionary) -> bool: return f.get("fx", "") == "shot")
+		lanes_ok = lanes_ok and lane.size() == 1 and Vector2i(int(lane[0]["to"][0]), int(lane[0]["to"][1])) == aim
+		shots_ok = shots_ok and shot.size() == 1 and shot[0]["kind"] == "shell" and not shot[0].has("seq")
+		if not shot.is_empty() and Vector2i(int(shot[0]["to"][0]), int(shot[0]["to"][1])) != aim:
+			short_seen = true
+		if short_seen and attempt > 5:
+			break
+	ck(reason == "", "the tank fires (%s)" % reason)
+	ck(lanes_ok, "the tank's lane always points at the clicked cell")
+	ck(shots_ok, "each cannon shot flies a shell, without a board effect number")
+	ck(short_seen, "a short shell flies to where it really lands, not to the aim")
+	# Anti-tank rocket, frag grenade, shotgun and DPMG.
+	var m := MapData.blank_arena(20, 14)
+	m.set_spawn(Vector2i(3, 3), "anti_tank", 0)
+	m.set_spawn(Vector2i(3, 6), "assault", 0)
+	m.set_spawn(Vector2i(3, 10), "heavy_infantry", 0)
+	m.set_spawn(Vector2i(6, 6), "light_infantry", 1)
+	m.set_spawn(Vector2i(18, 13), "light_infantry", 1)
+	var st := m.build_state(6)
+	st.turns.round_order = [0, 1]
+	st.turns.active_index = 0
+	var r2 := GameActionResolver.new(st)
+	var at: UnitInstance = st.grid.cell(Vector2i(3, 3)).occupant
+	var ares := r2.resolve(ShootIntent.new(at.id, -1, -1, Vector2i(8, 3)))
+	var rocket := ares.fx.filter(func(f: Dictionary) -> bool: return f.get("fx", "") == "shot")
+	ck(ares.ok and rocket.size() == 1 and rocket[0]["kind"] == "rocket", "the anti-tank shot flies a rocket")
+	var asl: UnitInstance = st.grid.cell(Vector2i(3, 6)).occupant
+	var sres := r2.resolve(ShootIntent.new(asl.id, st.grid.cell(Vector2i(6, 6)).occupant.id))
+	ck(sres.ok and sres.fx.any(func(f: Dictionary) -> bool: return f.get("fx", "") == "tracer"), "the shotgun shows bullet tracers (%s)" % sres.reason)
+	var hv: UnitInstance = st.grid.cell(Vector2i(3, 10)).occupant
+	hv.held_item_id = MCF.ITEM_FRAG
+	var gres := r2.resolve(UseItemIntent.new(hv.id, Vector2i(6, 10)))
+	var lob := gres.fx.filter(func(f: Dictionary) -> bool: return f.get("fx", "") == "shot")
+	ck(gres.ok and lob.size() == 1 and lob[0]["kind"] == "grenade", "a frag grenade is lobbed (%s)" % gres.reason)
+	ck(FxDecals.shot_dur({"kind": "rocket", "from": [0, 0], "to": [30, 0]}) <= FxDecals.SHOT_MAX
+			and FxDecals.shot_dur({"kind": "grenade", "from": [0, 0], "to": [1, 0]}) >= FxDecals.SHOT_MIN, "flights stay short")
+	var fx := FxDecals.new()
+	fx.apply(ares.fx)
+	ck(fx.shots.size() == 1, "the effects layer flies the rocket")
+	for _i in 10:
+		fx.advance(0.1)
+	ck(fx.shots.is_empty(), "and lets it go once it lands")
+
+## On the battle screen a killed soldier stays standing until the bullet reaches them, and
+## the blood appears with the hit, not when the dice stop.
+func _impact_in_battle() -> void:
+	var ui := root.get_node("/root/Ui")
+	var autoroll: bool = ui.autoroll_dice
+	ui.autoroll_dice = true
+	var m := MapData.blank_arena(16, 8)
+	m.set_spawn(Vector2i(2, 3), "light_infantry", 0)
+	m.set_spawn(Vector2i(7, 3), "light_infantry", 1)
+	m.set_spawn(Vector2i(15, 7), "light_infantry", 1)
+	MapHandoff.pending = m
+	GameConfig.fog_mode = MCF.Fog.OFF
+	GameConfig.roster = Roster.default_duel(false)
+	var main: Node = load("res://scenes/Main.tscn").instantiate()
+	root.add_child(main)
+	for i in 6: await process_frame
+	while main.state == null or main._animating: await process_frame
+	var st: GameState = main.state
+	while st.active_player() != 0:
+		main._on_intent_ready(EndTurnIntent.new())
+		for i in 3: await process_frame
+		while main._animating: await process_frame
+	var shooter: UnitInstance = st.grid.cell(Vector2i(2, 3)).occupant
+	var target: UnitInstance = st.grid.cell(Vector2i(7, 3)).occupant
+	var res: ActionResult = null
+	for attempt in 60:
+		shooter.remaining_ap = 2
+		shooter.action_state = null
+		res = main.resolver.resolve(ShootIntent.new(shooter.id, target.id))
+		if not target.is_alive():
+			break
+	var blood_before: int = main._fx.gore.size()
+	main._show_result(res)
+	var waited := 0
+	while main._fx.tracers.is_empty() and waited < 2000:
+		await process_frame
+		waited += 1
+	ck(not target.is_alive() and main._pending_death_ids.has(target.id) and main._fx.gore.size() == blood_before
+			and main._fx.flying.filter(func(f: Dictionary) -> bool: return str(f["kind"]).begins_with("blood")).is_empty(),
+			"while the bullet flies, the target still stands and there is no blood yet")
+	await create_timer(0.6).timeout
+	ck(not main._pending_death_ids.has(target.id), "the hit drops the target")
+	ck(main._fx.gore.size() > blood_before or main._fx.flying.size() > 0, "and the blood comes with it")
+	main.queue_free()
+	await process_frame
+	ui.autoroll_dice = autoroll
+
+## On station and asteroid maps digging goes through the deck: the pile is drawn as rubble
+## and called "Rubble Pile", the trench has its metal look, the log says rubble; other maps
+## keep dirt.
+func _rubble() -> void:
+	var tt: GDScript = load("res://src/ui/TerrainTiles.gd")
+	ck(tt.pile_art("station") == "rubble" and tt.pile_art("asteroid") == "rubble" and tt.pile_art("town") == "soil"
+			and tt.pile_art("bunker") == "soil", "station and asteroid piles use the rubble art, other maps dirt")
+	ck(tt.env_name("trench", "station") == "trench_station" and tt.env_name("trench", "asteroid") == "trench_asteroid"
+			and tt.env_name("trench", "field") == "trench", "station and asteroid trenches are cut into metal")
+	for env in ["station", "town"]:
+		var m := MapData.blank_arena(12, 8)
+		m.env = env
+		m.set_spawn(Vector2i(3, 3), "engineer", 0)
+		m.set_spawn(Vector2i(11, 7), "light_infantry", 1)
+		var st := m.build_state(2)
+		st.turns.round_order = [0, 1]
+		st.turns.active_index = 0
+		var r := GameActionResolver.new(st)
+		var name := MCF.feature_name(MCF.FEATURE_DIRT_PILE)
+		var eng: UnitInstance = st.grid.cell(Vector2i(3, 3)).occupant
+		var res := r.resolve(DigIntent.new(eng.id, Vector2i(4, 3)))
+		var log := " ".join(res.log_lines)
+		if env == "station":
+			ck(name == "Rubble Pile" and res.ok and log.contains("rubble at"), "on a station the pile is a Rubble Pile (%s)" % log)
+		else:
+			ck(name == "Dirt Pile" and res.ok and log.contains("dirt at"), "elsewhere it stays a Dirt Pile (%s)" % log)

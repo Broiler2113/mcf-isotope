@@ -63,8 +63,13 @@ var mode: MatchMode = null
 
 func _init(p_state: GameState) -> void:
 	state = p_state
+	MCF.display_env = state.env   # «Rubble Pile» на станции и астероиде (0.12.1)
 	random_events = RandomEvents.from_config()
 	mode = MatchMode.from_config()
+
+## Что выбрасывает окоп: на станции и астероиде — лом палубы (0.12.1), иначе — земля.
+func _spoil_word() -> String:
+	return "rubble" if MCF.rubble_env(state.env) else "dirt"
 
 ## Сколько окопов роется за 1 ОД: обычная пехота — 3, инженер — 6 (§3.7).
 const DIG_TRENCHES_NORMAL := 3
@@ -970,6 +975,7 @@ func _resolve_anti_tank(shooter: UnitInstance, center: Vector2i, aimed: String =
 	# Снимок «до взрыва» для показа во время броска (item 22).
 	var at_area := MCF.blast_square(landing, MCF.ANTI_TANK_BLAST_RADIUS)
 	_capture_visual_hold(result, at_area)
+	_fx_shot(result, "rocket", shooter.coord, landing)
 	# Прямое попадание в ДОТ: бетон забирает весь удар, осколочного поля нет.
 	_blast_armor_wall(landing, result)
 	if _pillbox_absorbs(landing, MCF.ANTI_TANK_VEHICLE_DAMAGE, result, shooter.coord):
@@ -1808,6 +1814,7 @@ func _resolve_assault(shooter: UnitInstance, target: UnitInstance) -> ActionResu
 			"def_owner": t.owner, "shooter_owner": shooter.owner,  # item 13
 		})
 		_fx_lane(result, shooter.coord, t.coord, shooter.owner)  # issue 8
+		_fx_bullets(result, shooter.coord, t.coord, shot_details.size())
 		result.log("%s ⇒ %s: %d hits (need %d+, defense %d+)" % [
 			shooter.stats.display_name, t.stats.display_name, hits, need, parry_need])
 		if t_killed:
@@ -2254,6 +2261,19 @@ func _wall_chunks(res: ActionResult, c: Vector2i, from: Vector2i, fid: String,
 	if toward:
 		ev["toward"] = true
 	_fx(res, ev)
+
+## Полёт снаряда на экране (0.12.1): ракета противотанкиста, снаряд танка, граната. Взрыв,
+## гибель и снесённые стены экран показывает, когда снаряд долетел. Мимо _fx(): зерна полёту
+## не нужно, а номер события (fx_seq) входит в подпись доски.
+func _fx_shot(res: ActionResult, kind: String, from: Vector2i, to: Vector2i) -> void:
+	if res != null and from != to:
+		res.fx.append({"fx": "shot", "kind": kind, "from": [from.x, from.y], "to": [to.x, to.y]})
+
+## Пули-трассеры для выстрелов, у которых их не было (дробовик штурмовика, ДПМГ) — тоже
+## мимо _fx(), по той же причине.
+func _fx_bullets(res: ActionResult, from: Vector2i, to: Vector2i, count: int) -> void:
+	if res != null and count > 0:
+		res.fx.append({"fx": "tracer", "at": from, "from": [from.x, from.y], "to": [to.x, to.y], "count": count})
 
 ## Дорожка «кто в кого» (issue 8: «add visual clues that would tell the player who is
 ## shooting at who»). Кладётся КАЖДОЙ атакой — пулей, лучом, струёй, зарядом, пушкой,
@@ -2833,7 +2853,7 @@ func _resolve_dig(intent: DigIntent) -> ActionResult:
 	var spots := _dirt_spots(intent.target, actor.coord)
 	var picked := _chosen_dirt_spots(intent, spots)
 	if picked.size() < 2:
-		return ActionResult.fail("Nowhere to put the dug-up dirt (no room for 2 piles)")
+		return ActionResult.fail("Nowhere to put the dug-up %s (no room for 2 piles)" % _spoil_word())
 
 	# За 1 ОД пехота роет 3 окопа, инженер — 6. Первый окоп серии тратит ОД и открывает
 	# «кредит», следующие в той же серии бесплатны, пока кредит не исчерпан (§3.7).
@@ -2861,8 +2881,8 @@ func _resolve_dig(intent: DigIntent) -> ActionResult:
 	_extinguish_cell(state.grid.cell(picked[1]))
 	var tail := "[AP: %d, %d trench(es) left this AP]" % [actor.remaining_ap, actor.dig_credits] if not spent_ap \
 		else "[AP: %d, %d more trench(es) free this AP]" % [actor.remaining_ap, actor.dig_credits]
-	return ActionResult.success(["%s dug a trench at (%d, %d), dirt at (%d,%d) and (%d,%d) %s" % [
-		actor.stats.display_name, intent.target.x, intent.target.y,
+	return ActionResult.success(["%s dug a trench at (%d, %d), %s at (%d,%d) and (%d,%d) %s" % [
+		actor.stats.display_name, intent.target.x, intent.target.y, _spoil_word(),
 		picked[0].x, picked[0].y, picked[1].x, picked[1].y, tail]])
 
 ## Проверить/выбрать 2 клетки под землю: сначала берём корректный выбор игрока,
@@ -6240,6 +6260,7 @@ func _resolve_dpmg(intent: DPMGFireIntent) -> ActionResult:
 		"def_owner": target.owner, "shooter_owner": state.active_player(),  # item 13
 	})
 	_fx_lane(result, intent.dpmg_coord, target.coord, actor.owner)  # issue 8
+	_fx_bullets(result, intent.dpmg_coord, target.coord, fired)
 	result.log("DPMG (%s) → %s: %d shots, %d hits (need %d+)" % [
 		actor.stats.display_name, target.stats.display_name, fired, hits, need])
 	if killed:
@@ -6352,6 +6373,7 @@ func _throw_frag(thrower: UnitInstance, aim: Vector2i) -> ActionResult:
 		var path := _throw_path(thrower.coord, aim)
 		landing = thrower.coord if land_index <= 0 else path[land_index - 1]
 	var result := _explode_frag(thrower, landing)
+	_fx_shot(result, "grenade", thrower.coord, landing)
 	# Показать бросок на точность перед взрывом.
 	result.dice_events.push_front({
 		"kind": "check", "actor": thrower.stats.display_name,
@@ -9230,7 +9252,11 @@ func _resolve_vehicle_cannon(intent: VehicleCannonIntent) -> ActionResult:
 	var pre_area := cannon_blast_cells(veh, landing)
 	pre_area.append(landing)
 	_capture_visual_hold(res, pre_area)
-	_fx_lane(res, port, landing, veh.owner, "blast")  # issue 8: кто и куда бьёт пушкой
+	# Дорожка — на НАЗНАЧЕННУЮ клетку, как у противотанкиста (0.12.1): прежде она шла в
+	# место падения и до броска выдавала, будет ли недолёт. Куда лёг снаряд, видно по
+	# его полёту после броска.
+	_fx_lane(res, port, intent.target, veh.owner, "blast")  # issue 8: кто и куда бьёт пушкой
+	_fx_shot(res, "shell", port, landing)
 	# Прямое попадание в ДОТ: бетон принимает снаряд целиком (2 прочности = 1 выстрел
 	# танка), осколочного поля вокруг не возникает.
 	_blast_armor_wall(landing, res)

@@ -226,6 +226,7 @@ func _ready() -> void:
 ## Карта заменена целиком (новая, открытая, размер, очистка, откат снимка).
 func _map_replaced() -> void:
 	_env = map.environment()
+	MCF.display_env = _env
 	_sync_background()
 	_grid = Grid.new(map.width, map.height)
 	map.apply_to_grid(_grid)
@@ -263,6 +264,7 @@ func _map_replaced() -> void:
 ## Окружение сменилось — плитки и палитра в новом наряде, клетки те же.
 func _env_changed() -> void:
 	_env = map.environment()
+	MCF.display_env = _env
 	_sync_background()
 	_tiles = TerrainTiles.new(_grid, _env)
 	_layer.tiles = _tiles

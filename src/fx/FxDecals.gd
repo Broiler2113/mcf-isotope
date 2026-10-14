@@ -178,6 +178,13 @@ var ground_version := 0
 ## Летящие пули-трассеры (item 16): [{from, to, t, dur}] в клетках. Живут доли секунды,
 ## по истечении исчезают. Не оседают — это мгновенный полёт снаряда от стрелка к цели.
 var tracers: Array = []
+## Летящие снаряды (0.12.1): ракета, снаряд танка, граната — {kind, from, to, t, dur}. Как и
+## трассеры, живут доли секунды и не сохраняются.
+var shots: Array = []
+## Секунд на клетку полёта по виду снаряда; полёт — в пределах SHOT_MIN..SHOT_MAX.
+const SHOT_PACE := {"rocket": 0.06, "shell": 0.045, "grenade": 0.09}
+const SHOT_MIN := 0.18
+const SHOT_MAX := 0.55
 const TRACER_DUR := 0.16
 
 ## Дорожки боя «кто в кого» (issue 8: «add visual clues that would tell the player who is
@@ -250,6 +257,7 @@ func clear() -> void:
 	track_marks.clear()
 	ground_version += 1
 	tracers.clear()
+	shots.clear()
 	lanes.clear()
 	flashes.clear()
 	_event_seq = 0
@@ -266,6 +274,27 @@ func _tracer(ev: Dictionary) -> void:
 	var n: int = maxi(1, int(ev.get("count", 1)))
 	for i in n:
 		tracers.append({"from": a, "to": b, "t": -0.05 * i, "dur": TRACER_DUR})
+
+## Снаряд в полёте (0.12.1): от клетки к клетке, за shot_dur(ev).
+func _shot(ev: Dictionary) -> void:
+	var a: Array = ev.get("from", [])
+	var b: Array = ev.get("to", [])
+	if a.size() < 2 or b.size() < 2:
+		return
+	shots.append({"kind": str(ev.get("kind", "shell")), "t": 0.0, "dur": shot_dur(ev),
+			"from": Vector2(float(a[0]) + 0.5, float(a[1]) + 0.5),
+			"to": Vector2(float(b[0]) + 0.5, float(b[1]) + 0.5)})
+
+## Сколько летит снаряд события «shot»: по дальности и виду. Этим же экран ждёт попадания.
+static func shot_dur(ev: Dictionary) -> float:
+	var a: Array = ev.get("from", [0, 0])
+	var b: Array = ev.get("to", [0, 0])
+	var cells := Vector2(float(a[0]), float(a[1])).distance_to(Vector2(float(b[0]), float(b[1])))
+	return clampf(cells * float(SHOT_PACE.get(str(ev.get("kind", "")), 0.05)), SHOT_MIN, SHOT_MAX)
+
+## Через сколько трассер события «tracer» долетает до цели (последняя пуля очереди).
+static func tracer_dur(ev: Dictionary) -> float:
+	return TRACER_DUR + 0.05 * float(maxi(1, int(ev.get("count", 1))) - 1)
 
 ## Дорожки «кто в кого» (issue 8) разбираются ОТДЕЛЬНЫМ заходом — до броска кубика,
 ## тогда как остальная косметика ложится после него (иначе кровь опережала бы решение
@@ -308,6 +337,8 @@ func _apply(events: Array, lanes_only: bool) -> void:
 				_tracks(ev)
 			"tracer":
 				_tracer(ev)
+			"shot":
+				_shot(ev)
 			"lane":
 				_lane(ev)
 
@@ -755,7 +786,13 @@ func advance(delta: float) -> bool:
 			if float(flashes[i]["t"]) >= FLASH_DUR:
 				flashes.remove_at(i)
 	# Пули-трассеры (item 16): двигаем время, отработавшие убираем.
-	var tracers_active := not tracers.is_empty()
+	var shots_active := not shots.is_empty()
+	if shots_active:
+		for i in range(shots.size() - 1, -1, -1):
+			shots[i]["t"] = float(shots[i]["t"]) + delta
+			if float(shots[i]["t"]) >= float(shots[i]["dur"]):
+				shots.remove_at(i)
+	var tracers_active := not tracers.is_empty() or shots_active
 	if tracers_active:
 		for i in range(tracers.size() - 1, -1, -1):
 			tracers[i]["t"] = float(tracers[i]["t"]) + delta

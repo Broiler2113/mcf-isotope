@@ -141,6 +141,7 @@ func _ready() -> void:
 		spent[side] = 0
 	active_side = _sides()[0]
 	map = _load_or_blank_map()
+	MCF.display_env = map.environment()   # «Rubble Pile» на станции и астероиде (0.12.1)
 	_map_zones = _map_defines_zones()
 	# Сохранить нейтральные спавны карты (мирные), сбросить игровые.
 	if GameConfig.civilians_enabled:

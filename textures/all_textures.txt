@@ -60,6 +60,9 @@ Samples are never loaded into the game -- a file called sample is skipped.
   door_open_field.png
   door_asteroid.png
   door_open_asteroid.png
+  trench_station.png
+  trench_asteroid.png
+  rubble.png
 
 -- Wall materials (a town building picks one; same rules as a wall, different look) --
   wall_brick.png
