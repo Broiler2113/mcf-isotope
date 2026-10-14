@@ -2311,6 +2311,8 @@ func _time_items() -> Array:
 	return out
 
 func set_time_of_day(t: String) -> void:
+	if not MapData.supports_time_of_day(map.environment()) or not MapData.TIMES.has(t):
+		return
 	var before := map.time_of_day if map.time_of_day != "" else "night"
 	if t == before:
 		return
@@ -2512,7 +2514,9 @@ func _refresh_menu_checks() -> void:
 			m.set_item_checked(i, MapPresets.IDS[idx] == map.environment())
 		var t := MapData.TIME_NAMES.find(m.get_item_text(i))
 		if t >= 0 and m.is_item_radio_checkable(i):
-			m.set_item_checked(i, MapData.TIMES[t] == tod)
+			var available := MapData.supports_time_of_day(map.environment())
+			m.set_item_disabled(i, not available)
+			m.set_item_checked(i, available and MapData.TIMES[t] == tod)
 
 ## Пресет карты: окружение, а с ним плитки (откат — одной записью).
 func set_preset(env: String) -> void:

@@ -63,6 +63,9 @@ var time_of_day := ""
 const TIMES := ["morning", "day", "evening", "night"]
 const TIME_NAMES := ["Morning", "Day", "Evening", "Night"]
 
+static func supports_time_of_day(environment_id: String) -> bool:
+	return environment_id in ["town", "field"]
+
 static func time_name(t: String) -> String:
 	var i := TIMES.find(t)
 	return TIME_NAMES[i] if i >= 0 else "Night"

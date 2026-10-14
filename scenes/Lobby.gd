@@ -86,6 +86,7 @@ var _gen_timer: Timer
 var _gen_obstacles: CheckBox
 var _gen_furniture: OptionButton
 var _gen_time: OptionButton
+var _gen_time_row: Control
 var _gen_seed: SpinBox
 var _gen_info: Label
 ## Собранная карта и настройки, из которых она собрана: пока они те же — не пересобираем.
@@ -1095,7 +1096,8 @@ func _build_generator(box: VBoxContainer) -> void:
 	_gen_time.tooltip_text = "The time of day sets the map's light: morning, bright day, evening or night."
 	_gen_time.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_gen_time.item_selected.connect(func(_i: int) -> void: _on_gen_changed())
-	_row(_gen_box, "Time of day:", _gen_time)
+	_gen_time_row = _row(_gen_box, "Time of day:", _gen_time)
+	_gen_time_row.visible = MapData.supports_time_of_day(MapGen.STYLE_ENV[_gen_style.selected])
 	# Мирные случайной карты: точное число, до 1000 (готовые карты — галочка «Civilians»).
 	var civ0 := GameConfig.civilian_count
 	if civ0 < 0 or civ0 >= GameConfig.CIVILIANS_MAX:
@@ -1177,7 +1179,8 @@ func _gen_options() -> Dictionary:
 			"flammable": MapGen.STYLE_FLAMMABLE[clampi(_gen_style.selected, 0, MapGen.STYLE_FLAMMABLE.size() - 1)],
 			"obstacles": _gen_obstacles.button_pressed,
 			"furniture": _gen_furniture.selected,
-			"time": (MapData.TIMES + ["random"])[_gen_time.selected] if _gen_time != null else "",
+			"time": (MapData.TIMES + ["random"])[_gen_time.selected] if _gen_time != null
+					and MapData.supports_time_of_day(MapGen.STYLE_ENV[_gen_style.selected]) else "",
 			"civilian_count": _civ_count()}
 
 ## Сколько мирных в партии: ноль без галочки, число ползунка у случайной карты, иначе все,
@@ -1244,6 +1247,8 @@ func _set_player_count(n: int) -> void:
 	_lobby_changed()
 
 func _on_gen_changed() -> void:
+	if _gen_time_row != null:
+		_gen_time_row.visible = MapData.supports_time_of_day(MapGen.STYLE_ENV[_gen_style.selected])
 	if _gen_dims_row != null:
 		_gen_dims_row.visible = _gen_size.selected == MapGen.SIZE_CUSTOM
 	# Карта до ~100×100 собирается за десятки миллисекунд — сразу. Большая (до 250×250)

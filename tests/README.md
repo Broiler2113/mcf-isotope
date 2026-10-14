@@ -274,3 +274,11 @@ and 16 versus 80 overlapping light sources. Headless simulation tests cannot ver
 GPU pixels. Images are written to `/tmp/isotope-lighting-*.png` for inspection.
 
 `tests/bench/run_group_preview_bench.gd` reports cooperative preview costs for 20, 100, and 200 selected soldiers on a giant map. `tests/bench/run_lighting_coverage.gd` reports generated lighting coverage and generation time on small and giant maps. Timing is hardware-dependent; these are informational benchmarks. Colossal generation now allows 5 seconds (the prior 4-second budget plus 1 second for the fixture coverage pass).
+
+**`run_followup0122.gd`** checks shield strikes against ordinary and armored glass,
+invalid targets and AP costs, their codec/lockstep behavior, and wall chunks from vehicle
+ramming (including the original wall texture). It also checks environment-specific time
+choices and drives local, replay and network shot presentation through manual attack and
+defense rolls, asserting that flashes and bullets start afterward. `run_remaining_ui.gd`
+checks the restored sidebar tools, Drawing button, fixed Settings popup, retained log
+controls, editor time choices and clicking a glass target with Shield Push.
