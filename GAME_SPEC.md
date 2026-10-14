@@ -664,6 +664,10 @@ behind is free. In a blast, a shield bearer outside the epicentre survives and
 **protects adjacent friendlies** via `_protected_by`.
 Movement also pushes loose items, spent casings, shards and wall chunks forward along
 every traversed cell; blood stays on the floor.
+Shield Push also targets adjacent glass for **1 AP**: ordinary glass shatters, while
+armored glass holds on **4+**. A broken pane emits shards in the direction of the strike.
+`PushIntent.target_cell` carries the pane through networking and replay; unit pushes
+continue to use `target_id`.
 
 ### 7.6 Sniper (§5)
 
@@ -2447,17 +2451,26 @@ which steps the unit's **draw position** along the path one cell per `WALK_STEP_
 (#96). It is how an off-intent mover — today, a civilian — is seen crossing the board
 instead of appearing at its destination.
 
+Firing cues, including the lane-driven muzzle lighting, start in `_show_effects`
+**after all attack and defense dice finish**. Local actions, queued network actions,
+replay and opening civilian actions use that same order. Bullets then fly to the target
+before hit effects and deaths are shown.
+
 ### 18.6 HUD
 
 Battle and deployment use the same 264-pixel-wide, full-height sidebar and window chrome.
-Tools and Drawing open separate panels from buttons at the top left. Popup headers drag
-their windows; the header resize grip resizes them, with scrolling content when reduced.
+Multi-Select, Ruler, Heightmap and Camera live in the sidebar again. Drawing alone opens
+from a button at the top left. Headers no longer make every popup draggable and
+resizable; explicit controls such as the chat/log grips and sidebar width handle remain.
 The engineer's construction picker uses a separate back arrow in its header.
 
 Before / After shows the opening board under the current lighting and hides live debris,
 including over transparent vacuum tiles. Morning, day, evening and night have distinct
 lighting and a fallback tint when dynamic lighting is disabled. Streetlight and bollard
-sprites and their light sources switch off during the day.
+sprites and their light sources switch off during the day. Time-of-day selection is
+available only for Town and Field: the lobby hides it for Station, Bunker and Asteroid,
+and the editor disables those menu choices. Generation ignores time options for those
+three environments.
 
 **Live and dead, counted straight (0.9.4, issues-fix-10).** The turn line and the initiative
 window read one source, `_army_counts()`, and it counts **living soldiers from the board and
@@ -3188,7 +3201,10 @@ the middle of the strip's first tile. A pillbox that loses durability spalls
 round. Every blast leaves soot (`soot:0..3`, procedural blotches, `_soot_pixel`): a big patch
 on the epicenter and a smaller one on about half the cells around, never over space. The
 casing / laser / track / gore caps are gone (owner): nothing is evicted during a battle.
-Chunk events take an fx number, so they are part of the board signature (protocol 11).
+Vehicle ramming emits the same chunks for each wall tile it clears, preserving the wall
+material and sending debris away from the vehicle. Chunk events take an fx number, so
+they are part of the board signature; vehicle chunks and shield strikes require
+protocol 14.
 
 ## 22. Networking
 
@@ -3399,7 +3415,7 @@ through `net.submit_local` like a human's — resolved on the host, broadcast to
 Guests hold a `NetworkController` for those sides and only ever "kick" an AI that is
 theirs to run. Network actions are shown **one at a time** (`_net_queue`): the state is
 applied on receipt, the display waits for the previous animation to finish, and the
-display path now matches the local one — lanes before the dice, blood and casings after,
+display path matches the local one — dice first, then lanes, flashes and projectiles,
 undo/redo resyncing the board.
 
 ---

@@ -98,7 +98,11 @@ static func encode(intent: Intent) -> Dictionary:
 	if intent is UseItemIntent:
 		return {"t": T_ITEM, "a": intent.actor_id, "x": intent.target.x, "y": intent.target.y}
 	if intent is PushIntent:
-		return {"t": T_PUSH, "a": intent.actor_id, "tid": intent.target_id}
+		var push := {"t": T_PUSH, "a": intent.actor_id, "tid": intent.target_id}
+		if intent.target_cell != Vector2i(-999, -999):
+			push["x"] = intent.target_cell.x
+			push["y"] = intent.target_cell.y
+		return push
 	if intent is SpawnDroneIntent:
 		# Клетка станции (item 17) едет вместе с намерением: у оператора их может
 		# быть несколько, и выбор игрока обязан доехать до хоста без подмены.
@@ -195,7 +199,8 @@ static func decode(d: Dictionary) -> Intent:
 		T_CARRY: return CarryIntent.new(a, coord)
 		T_MOVE_HELD: return MoveHeldIntent.new(a, coord)
 		T_ITEM: return UseItemIntent.new(a, coord)
-		T_PUSH: return PushIntent.new(a, int(d.get("tid", -1)))
+		T_PUSH: return PushIntent.new(a, int(d.get("tid", -1)),
+			Vector2i(int(d.get("x", -999)), int(d.get("y", -999))))
 		T_SPAWN_DRONE: return SpawnDroneIntent.new(a,
 			Vector2i(int(d.get("x", -999)), int(d.get("y", -999))))
 		T_DRONE_MOVE: return DroneMoveIntent.new(a, coord)

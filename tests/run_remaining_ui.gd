@@ -43,6 +43,8 @@ func run() -> void:
 	m.time_of_day = "night"
 	m.set_cell(Vector2i(9, 8), 0, Furniture.height_of("streetlight"), false, "streetlight")
 	m.set_spawn(Vector2i(3, 4), "engineer", 0)
+	m.set_spawn(Vector2i(4, 4), "shield_bearer", 0)
+	m.set_cell(Vector2i(5, 4), 0, 2.0, false, MCF.FEATURE_GLASS)
 	m.set_spawn(Vector2i(22, 17), "light_infantry", 1)
 	MapHandoff.pending = m
 	var main = load("res://scenes/Main.tscn").instantiate()
@@ -50,11 +52,14 @@ func run() -> void:
 	await frames()
 	var tools_button := find_text(main, "Tools") as Button
 	var draw_button := find_text(main, "Drawing") as Button
-	ck(tools_button != null and draw_button != null and tools_button.global_position.x < 200 and draw_button.global_position.x < 250, "Tools and Drawing have separate top-left buttons")
-	tools_button.pressed.emit()
+	ck(tools_button == null and draw_button != null and draw_button.global_position.x < 200, "Drawing is the only top-left tool button")
+	for text in ["Multi-Select", "Ruler", "Heightmap", "Camera"]:
+		var control := find_text(main, text) as Control
+		ck(control != null and control.is_visible_in_tree() and main._hud_window.is_ancestor_of(control), text + " is back in the right sidebar")
+	ck(not find_text(main, "Undo drawing").is_visible_in_tree(), "Drawing starts closed")
 	draw_button.pressed.emit()
 	await frames()
-	ck(find_text(main, "Ruler").is_visible_in_tree() and find_text(main, "Undo drawing").is_visible_in_tree(), "both buttons open their corresponding panels")
+	ck(find_text(main, "Undo drawing").is_visible_in_tree(), "Drawing button opens its panel")
 	await capture("battle-panels")
 	if DisplayServer.get_name() != "headless":
 		ck(not main._tiles._chunks.is_empty(), "time-of-day changes leave the rendered terrain textures alive")
@@ -66,13 +71,15 @@ func run() -> void:
 	var old_pos := panel.global_position
 	drag(header, old_pos + Vector2(80, 10), old_pos + Vector2(35, 35))
 	await frames()
-	ck(panel.global_position != old_pos, "a centered settings popup can be dragged and stays where released")
-	var grip := header.find_child("ResizeGrip", true, false) as Control
-	var old_size := panel.size
-	drag(grip, grip.global_position, grip.global_position - Vector2(90, 70))
+	ck(panel.global_position == old_pos, "settings keeps its original centered layout when the header is dragged")
+	ck(header.find_child("ResizeGrip", true, false) == null, "settings no longer receives a universal resize handle")
+	ck(main._hud_window.find_child("ResizeGrip", true, false) == null, "battle sidebar receives no universal resize handle")
+	var log_position: Vector2 = main._log_panel.global_position
+	var log_header := main._log_panel.get_child(0).get_child(0) as Control
+	drag(log_header, log_position + Vector2(40, 10), log_position + Vector2(70, -20))
 	await frames()
-	ck(panel.size.x < old_size.x and panel.size.y < old_size.y, "the settings popup can shrink with scrolling content")
-	await capture("settings-resized")
+	ck(main._log_panel.global_position != log_position, "the battle log retains its original explicit dragging")
+	await capture("settings-fixed")
 	settings.free()
 	root.get_node("Ui").dynamic_lighting = true
 	main._sync_lighting()
@@ -89,6 +96,15 @@ func run() -> void:
 	main._toggle_before()
 	await frames()
 	ck(main._lod.visible, "After restores the live board")
+	main.state.turns.round_order = [0, 1] as Array[int]
+	main.state.turns.active_index = 0
+	var shield: UnitInstance = main.state.grid.cell(Vector2i(4, 4)).occupant
+	main._select(shield)
+	main._enter_push()
+	ck(main.item_cells.has(Vector2i(5, 4)), "Shield Push highlights adjacent glass in the battle UI")
+	main._handle_click(Vector2i(5, 4))
+	await frames()
+	ck(main.state.grid.cell(Vector2i(5, 4)).feature_id == "", "clicking the highlighted pane strikes and breaks it")
 	main.free()
 	await frames()
 	MapHandoff.pending = m
@@ -103,6 +119,17 @@ func run() -> void:
 	root.add_child(editor)
 	await frames()
 	editor.create_map("", "town", Vector2i(30, 24))
+	for env in ["bunker", "station", "asteroid", "town", "field"]:
+		editor.set_preset(env)
+		var map_menu: PopupMenu = editor._menus["Map"]
+		var outdoor: bool = env in ["town", "field"]
+		for i in map_menu.item_count:
+			if MapData.TIME_NAMES.has(map_menu.get_item_text(i)):
+				ck(map_menu.is_item_disabled(i) != outdoor, env + " time menu availability")
+		var before: String = editor.map.time_of_day
+		editor.set_time_of_day("day")
+		ck(editor.map.time_of_day == ("day" if outdoor else before), env + " time selection guard")
+	editor.set_preset("town")
 	editor._select_brush("dining_table")
 	editor._begin()
 	editor._paint_cells([Vector2i(8, 8)], false)

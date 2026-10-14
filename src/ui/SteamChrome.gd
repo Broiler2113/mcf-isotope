@@ -72,7 +72,6 @@ static func header_bar(title: String, trailing: Control = null, leading: Control
 	if trailing != null:
 		trailing.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		row.add_child(trailing)
-	h.ready.connect(func() -> void: PanelInteraction.install_header.call_deferred(h))
 	return h
 
 # Group box of the UI kit (.group-box): a bevelled #2a2a2a frame with its caption sitting

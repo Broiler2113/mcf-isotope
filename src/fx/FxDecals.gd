@@ -317,10 +317,8 @@ static func shot_dur(ev: Dictionary) -> float:
 static func tracer_dur(ev: Dictionary) -> float:
 	return TRACER_DUR + 0.05 * float(maxi(1, int(ev.get("count", 1))) - 1)
 
-## Дорожки «кто в кого» (issue 8) разбираются ОТДЕЛЬНЫМ заходом — до броска кубика,
-## тогда как остальная косметика ложится после него (иначе кровь опережала бы решение
-## кубика). Счётчик событий ведут оба захода, поэтому порядок зерна одинаков у всех,
-## кто разбирает тот же список.
+## Firing lanes are launched after the dice, alongside projectiles and muzzle lighting.
+## They use a separate pass from impact effects; both passes keep event seeds stable.
 func apply_lanes(events: Array) -> void:
 	_apply(events, true)
 

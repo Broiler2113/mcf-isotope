@@ -768,13 +768,6 @@ func _kick_if_ai() -> void:
 ## Показать отыгранный слот мирных (#96): сначала анимация их шагов и бросков, и лишь
 ## затем строки в журнал — иначе лог сообщал бы об убитом раньше, чем упадёт кубик.
 func _play_civilian_result(res: ActionResult) -> void:
-	# Дорожки «кто в кого» — ДО броска, ровно как у игроков и ИИ (item 5: «make the
-	# shooting indication also appear when neutrals are shooting at players' soldiers»).
-	# Житель стрелял беззвучно и без единой пометки: снаружи это выглядело так, будто
-	# боец умер сам по себе, и найти стрелявшего было нечем.
-	if not res.fx.is_empty():
-		_fx.apply_lanes(res.fx)
-		queue_redraw()
 	if not res.dice_events.is_empty():
 		_pending_death_ids.clear()
 		for id: int in res.deaths:
@@ -1011,11 +1004,6 @@ func _show_result(result: ActionResult) -> void:
 	if not result.ok:
 		state.log.add("[denied] " + result.reason)
 		return
-	# Дорожки «кто в кого» (issue 8) ставятся ДО броска: прицел должен быть виден,
-	# пока крутится кубик, — иначе игрок узнаёт о выстреле уже по его результату.
-	if not result.fx.is_empty():
-		_fx.apply_lanes(result.fx)
-		queue_redraw()
 	if not result.dice_events.is_empty():
 		_pending_death_ids.clear()
 		for id: int in result.deaths:
@@ -1546,6 +1534,9 @@ func _handle_click(coord: Vector2i) -> void:
 				return
 			_back_to_menu()
 		Mode.PUSH:
+			if item_cells.has(coord):
+				_submit(PushIntent.new(selected_id, -1, coord))
+				return
 			if occupant != null and target_ids.has(occupant.id):
 				_submit(PushIntent.new(selected_id, occupant.id))
 				return
@@ -2762,7 +2753,7 @@ func _enter_push() -> void:
 		return
 	mode = Mode.PUSH
 	reach = null
-	item_cells = []
+	item_cells = resolver.pushable_window_cells(u)
 	target_ids = resolver.pushable_target_ids(u)
 	_menu.hide()
 	queue_redraw()
@@ -3099,10 +3090,6 @@ func _on_intent_ready(intent: Intent) -> void:
 	if intent is UndoIntent or intent is RedoIntent:
 		_resync_after_restore()
 		return
-	# Дорожки «кто в кого» (issue 8) — до броска, вместе с прицелом на цели.
-	if not result.fx.is_empty():
-		_fx.apply_lanes(result.fx)
-		queue_redraw()
 	if not result.dice_events.is_empty():
 		# Кто погиб в этом действии — рисуем живым до конца броска.
 		_pending_death_ids.clear()
@@ -3723,7 +3710,7 @@ func _on_net_applied(intent: Intent, result: ActionResult) -> void:
 	_kick_if_ai()
 
 ## Показ одного сетевого действия — тем же порядком, что и местного в _on_intent_ready
-## (batch 12 #15): дорожки «кто в кого» до кубика, кровь и гильзы после, откат/повтор
+## (batch 12 #15): сначала кубики, затем вспышки, полёт и попадание; откат/повтор
 ## переставляют доску целиком. Раньше сетевой путь ничего из этого не делал, и по сети
 ## бой шёл без единой капли крови.
 func _show_net_action(intent: Intent, result: ActionResult) -> void:
@@ -3731,9 +3718,6 @@ func _show_net_action(intent: Intent, result: ActionResult) -> void:
 	if intent is UndoIntent or intent is RedoIntent:
 		_resync_after_restore()
 		return
-	if not result.fx.is_empty():
-		_fx.apply_lanes(result.fx)
-		queue_redraw()
 	if not result.dice_events.is_empty():
 		# Убитых мирными держим на карте живыми до конца анимации (#46, #96): передача
 		# хода везёт с собой весь слот жителей, и без этого трупы легли бы разом,
@@ -5703,6 +5687,8 @@ func _draw() -> void:
 			draw_rect(Rect2(_cell_origin(drag_object), Vector2(CELL, CELL)), Color(0.9, 0.8, 0.2, 0.40))
 
 	if mode == Mode.PUSH:
+		for coord in item_cells:
+			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(0.4, 0.7, 1.0, 0.28))
 		for tid in target_ids:
 			var t := state.get_unit(tid)
 			if t != null:
@@ -6756,6 +6742,8 @@ func _show_effects(result: ActionResult) -> void:
 	# ИИ не должны начать следующее действие посреди полёта.
 	var was_animating := _animating
 	_animating = true
+	# Lanes also drive muzzle lighting: launch them with the shot, after the dice.
+	_fx.apply_lanes(result.fx)
 	await _play_flame_jets(result)
 	await _play_shots(result)
 	_animating = was_animating
@@ -7146,16 +7134,15 @@ func _reposition_hud_grip() -> void:
 		return
 	# Грип — тонкая полоса на левом крае панели, во всю её высоту.
 	var vp := get_viewport_rect().size
-	_hud_grip.visible = not _hud_window.has_meta("user_positioned")
 	_hud_grip.position = Vector2(vp.x - _hud_width - _hud_grip.custom_minimum_size.x, 0)
 	_hud_grip.size = Vector2(_hud_grip.custom_minimum_size.x, vp.y)
 	# Чат приколот к правому-нижнему углу, но левее правого меню — пока игрок его не
 	# перетащил сам (item 8): после ручного переноса автопозиционирование отключается.
-	if _chat_panel != null and not _chat_moved and not _chat_panel.has_meta("user_positioned"):
+	if _chat_panel != null and not _chat_moved:
 		_chat_panel.position = Vector2(vp.x - _hud_width - _chat_panel.size.x - 20.0,
 				vp.y - _chat_panel.size.y - 12.0)
 	# Журнал боя — в левом-нижнем углу (item 6), тоже до первого ручного переноса (item 8).
-	if _log_panel != null and not _log_moved and not _log_panel.has_meta("user_positioned"):
+	if _log_panel != null and not _log_moved:
 		_log_panel.position = Vector2(12.0, vp.y - _log_panel.size.y - 12.0)
 	# Не помещаются рядом (крупный интерфейс, item 23, или раздвинутый журнал) — чат встаёт
 	# над журналом, а не поверх него.
@@ -7168,13 +7155,13 @@ func _reposition_hud_grip() -> void:
 	# панель открываются вместе с выбором машины, так что рядом им и место; когда меню
 	# спрятано (машине нечего предложить), панель прижимается к самому углу.
 	# После ручного переноса её больше не двигаем (item 8).
-	if _comp_panel != null and _comp_panel.visible and not _comp_moved and not _comp_panel.has_meta("user_positioned"):
+	if _comp_panel != null and _comp_panel.visible and not _comp_moved:
 		var left: float = MENU_ANCHOR.x
 		if _menu != null and _menu.visible:
 			left = _menu.position.x + _menu.size.x + 12.0
 		_comp_panel.position = Vector2(left, MENU_ANCHOR.y)
 	# Полоса повтора (M12) — по центру внизу, как у любого проигрывателя.
-	if _replay_bar != null and not _replay_bar.has_meta("user_positioned"):
+	if _replay_bar != null:
 		_replay_bar.position = Vector2((vp.x - _replay_bar.size.x) * 0.5,
 				vp.y - _replay_bar.size.y - 14.0)
 
@@ -7356,7 +7343,7 @@ func _build_ui() -> void:
 	panel_buttons.position = Vector2(12, 8)
 	panel_buttons.add_theme_constant_override("separation", 6)
 	_ui_layer.add_child(panel_buttons)
-	var tools_box := _floating_hud_panel("Tools", panel_buttons, Vector2(12, 44))
+	var tools_box := _hud_group(vbox, "Tools")
 	_multi_btn = CheckBox.new()
 	_multi_btn.text = "Multi-Select"
 	_multi_btn.add_theme_font_size_override("font_size", 12)
@@ -7401,7 +7388,7 @@ func _build_ui() -> void:
 		match_box.add_child(sp_row)
 		_refresh_ai_speed_row()
 	# Рисование и стирание (item 6/51) с размерами кистей.
-	var draw_box := _floating_hud_panel("Drawing", panel_buttons, Vector2(290, 44))
+	var draw_box := _floating_hud_panel("Drawing", panel_buttons, Vector2(12, 44))
 	_draw_btn = _compact_button("Draw", _enter_draw)
 	_erase_btn = _compact_button("Erase", _enter_erase)
 	draw_box.add_child(_button_row([_draw_btn, _erase_btn]))
@@ -7609,7 +7596,7 @@ func _refresh_component_panel() -> void:
 		note.add_theme_color_override("font_color", Color(0.95, 0.6, 0.35))
 		_comp_body.add_child(note)
 	_comp_panel.show()
-	if not _comp_moved and not _comp_panel.has_meta("user_positioned"):
+	if not _comp_moved:
 		_comp_panel.call_deferred("reset_size")
 		call_deferred("_reposition_hud_grip")
 

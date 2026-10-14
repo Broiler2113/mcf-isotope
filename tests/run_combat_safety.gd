@@ -194,7 +194,7 @@ func _fx_counts_every_shot() -> void:
 	fx4.apply(res.fx)
 	ck(fx4.lanes.is_empty(), "the ordinary fx pass does not draw the lane")
 	fx4.apply_lanes(res.fx)
-	ck(fx4.lanes.size() == 1, "the lane pass does — it runs before the dice roll")
+	ck(fx4.lanes.size() == 1, "the separate lane pass adds the firing cue")
 	if fx4.lanes.size() == 1:
 		ck(int(fx4.lanes[0]["owner"]) == shooter.owner, "the lane is painted in the shooter's colour")
 		fx4.advance(FxDecals.LANE_DUR + 0.1)

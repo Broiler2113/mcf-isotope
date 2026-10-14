@@ -1842,6 +1842,8 @@ func _resolve_push(intent: PushIntent) -> ActionResult:
 		return ActionResult.fail(err)
 	if not _is_shield(actor):
 		return ActionResult.fail("Only a shield bearer can shield-push")
+	if intent.target_id == -1:
+		return _push_window(actor, intent.target_cell)
 	var target := state.get_unit(intent.target_id)
 	if target == null or not target.is_alive():
 		return ActionResult.fail("No target to push")
@@ -1889,6 +1891,45 @@ func _resolve_push(intent: PushIntent) -> ActionResult:
 			actor.stats.display_name, target.stats.display_name, roll])
 	if pushed: _gas_on_arrival(target, result)
 	return result
+
+## A shield can smash an adjacent pane for 1 AP. Armored glass retains its hold roll.
+func _push_window(actor: UnitInstance, coord: Vector2i) -> ActionResult:
+	if not state.grid.in_bounds(coord) or Combat.distance(actor.coord, coord) != 1:
+		return ActionResult.fail("Window not adjacent")
+	var cell := state.grid.cell(coord)
+	if not MCF.is_glass(cell.feature_id):
+		return ActionResult.fail("No window there")
+	actor.remaining_ap -= 1
+	var result := ActionResult.success()
+	var name := MCF.feature_name(cell.feature_id, "Glass")
+	var need := MCF.glass_hold_need(cell.feature_id)
+	if need > 0:
+		var roll := state.dice.roll_d6()
+		result.dice_events.append({"kind": "check", "actor": name,
+				"roll": roll, "need": need, "ok": roll >= need})
+		if roll >= need:
+			result.log("%s strikes the %s with its shield — it holds (roll %d, need %d+)" % [
+					actor.stats.display_name, name.to_lower(), roll, need])
+			return result
+	_capture_visual_hold(result, [coord])
+	cell.clear_feature()
+	notify_cell_changed(coord)
+	_fx(result, {"fx": "shards", "at": coord, "from": actor.coord})
+	_fx(result, {"fx": "debris", "at": NOWHERE, "cells": [coord]})
+	result.log("%s smashes the %s with its shield" % [actor.stats.display_name, name.to_lower()])
+	return result
+
+func pushable_window_cells(actor: UnitInstance) -> Array:
+	var out: Array = []
+	if not _is_shield(actor) or not actor.is_alive() or actor.remaining_ap <= 0:
+		return out
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var coord := actor.coord + Vector2i(dx, dy)
+			if coord != actor.coord and state.grid.in_bounds(coord) \
+					and MCF.is_glass(state.grid.cell(coord).feature_id):
+				out.append(coord)
+	return out
 
 func pushable_target_ids(actor: UnitInstance) -> Array:
 	var out: Array = []
@@ -9130,6 +9171,8 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 		# по ходу машины. Раньше стекло исчезало молча, будто его и не было.
 		if MCF.is_glass(c.feature_id):
 			_fx(res, {"fx": "shards", "at": cell_coord, "from": from_c})
+		elif CHUNK_WALLS.has(c.feature_id):
+			_wall_chunks(res, cell_coord, from_c, c.feature_id)
 		if c.is_wall():
 			smashed += 1
 			notify_cell_changed(cell_coord)  # снос стены — повод проснуться жителям рядом

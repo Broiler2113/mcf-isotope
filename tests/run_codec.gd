@@ -37,6 +37,7 @@ func _samples() -> Array:
 		MoveHeldIntent.new(7, Vector2i(6, 5)),
 		UseItemIntent.new(7, Vector2i(14, 2)),
 		PushIntent.new(7, 12),
+		PushIntent.new(7, -1, Vector2i(8, 9)),
 		SpawnDroneIntent.new(7, Vector2i(5, 6)),
 		DroneMoveIntent.new(7, Vector2i(22, 17)),
 		DroneDetonateIntent.new(7),

@@ -267,6 +267,9 @@ const HULL_MARGIN := 1.06
 ## Время суток случайной карты (0.12.1): "" — как раньше (ночь), одно из MapData.TIMES или
 ## "random" — от зерна карты, своим потоком: остальная постройка от него не сдвигается.
 static func time_choice(opt: Dictionary) -> String:
+	var style := clampi(int(opt.get("style", Style.TOWN)), 0, STYLE_ENV.size() - 1)
+	if not MapData.supports_time_of_day(STYLE_ENV[style]):
+		return ""
 	var t := str(opt.get("time", ""))
 	if t == "random":
 		var r := RandomNumberGenerator.new()

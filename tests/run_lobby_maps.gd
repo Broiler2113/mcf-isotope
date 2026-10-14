@@ -142,6 +142,15 @@ func _check_random(lobby: Node, opt: OptionButton, paths: Array) -> void:
 	for n: String in added:
 		ck(MapData.load_from(MapData.path_for(n)) != null, "the saved random map reads back")
 		DirAccess.remove_absolute("%s/%s" % [MapData.MAPS_DIR, n])
+	for style in MapGen.STYLE_ENV.size():
+		lobby._gen_style.select(style)
+		lobby._gen_style.item_selected.emit(style)
+		var outdoor := style in [MapGen.Style.TOWN, MapGen.Style.FIELD]
+		ck(lobby._gen_time_row.visible == outdoor, MapGen.STYLE_NAMES[style] + " shows time choice only outdoors")
+		lobby._gen_time.select(MapData.TIMES.find("day"))
+		lobby._gen_time.item_selected.emit(lobby._gen_time.selected)
+		ck(lobby._gen_options()["time"] == ("day" if outdoor else ""), "generator options discard unsupported time choices")
+		ck(lobby._selected_map().time_of_day == ("day" if outdoor else ""), "generated map uses the allowed time setting")
 	_check_bunker_custom_symmetric(lobby)
 
 ## Бункер, свой размер до 250×250 и «Symmetrical» — через сами контролы лобби.
