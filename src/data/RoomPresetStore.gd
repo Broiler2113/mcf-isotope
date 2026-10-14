@@ -87,4 +87,7 @@ static func to_map(p: Dictionary, env: String) -> MapData:
 	for spawn: Array in p.get("spawns", []):
 		m.set_spawn(Vector2i(int(spawn[0]), int(spawn[1])), str(spawn[2]), int(spawn[3]))
 	m.decals = p.get("decals", []).duplicate(true)
+	for it in p.get("items", []):
+		var clean := SmallItems.clean(it)
+		if not clean.is_empty(): m.items.append(clean)
 	return m

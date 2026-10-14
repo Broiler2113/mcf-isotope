@@ -227,7 +227,7 @@ func _initialize() -> void:
 	mfx.apply(mres.fx)
 	ck(not mfx.gore.is_empty(), "while a man killed beside it still does")
 
-	# --- blood stays for the whole battle; casings are what gets evicted ---
+	# --- blood and casings both stay for the whole battle (0.12.1: no decal caps) ---
 	var gfx := FxDecals.new()
 	gfx.apply([{"fx": "blood", "at": Vector2i(5, 5), "from": Vector2i(8, 5)}])
 	for _i in 60:
@@ -237,8 +237,8 @@ func _initialize() -> void:
 	for _i in 400:
 		gfx.apply([{"fx": "casings", "at": Vector2i(7, 7), "toward": Vector2i(9, 7), "count": 8}])
 		gfx.advance(1.0)
-	ck(gfx.props.size() <= FxDecals.PROPS_CAP,
-			"casings are still capped (%d <= %d)" % [gfx.props.size(), FxDecals.PROPS_CAP])
+	ck(gfx.props.size() == 400 * 8,
+			"every casing stays on the floor (%d of %d)" % [gfx.props.size(), 400 * 8])
 	ck(gfx.gore.size() == settled,
 			"and not one drop of blood was pushed out (%d -> %d)" % [settled, gfx.gore.size()])
 

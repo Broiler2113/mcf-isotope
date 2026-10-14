@@ -63,8 +63,13 @@ var mode: MatchMode = null
 
 func _init(p_state: GameState) -> void:
 	state = p_state
+	MCF.display_env = state.env   # «Rubble Pile» на станции и астероиде (0.12.1)
 	random_events = RandomEvents.from_config()
 	mode = MatchMode.from_config()
+
+## Что выбрасывает окоп: на станции и астероиде — лом палубы (0.12.1), иначе — земля.
+func _spoil_word() -> String:
+	return "rubble" if MCF.rubble_env(state.env) else "dirt"
 
 ## Сколько окопов роется за 1 ОД: обычная пехота — 3, инженер — 6 (§3.7).
 const DIG_TRENCHES_NORMAL := 3
@@ -565,7 +570,7 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 	# Волочимый объект переезжает на предпоследнюю клетку пути — как пленник (#34).
 	if dragged != UnitInstance.NOT_DRAGGING:
 		var spot: Vector2i = origin if path.size() < 2 else path[path.size() - 2]
-		if _move_light_object(dragged, spot):
+		if _move_light_object(dragged, spot, gas_res):
 			unit.dragging = spot
 			lines.append("  ↳ dragging \"%s\" → (%d, %d)" % [
 				MCF.feature_name(state.grid.cell(spot).feature_id, "object"), spot.x, spot.y])
@@ -662,7 +667,7 @@ func dragged_cell_of(unit: UnitInstance) -> Vector2i:
 	return unit.dragging
 
 ## Переставить лёгкий объект (с его высотой/кучей) на свободную клетку. false — некуда.
-func _move_light_object(src: Vector2i, dst: Vector2i) -> bool:
+func _move_light_object(src: Vector2i, dst: Vector2i, res: ActionResult = null) -> bool:
 	if src == dst:
 		return true
 	var src_cell := state.grid.cell(src)
@@ -673,9 +678,12 @@ func _move_light_object(src: Vector2i, dst: Vector2i) -> bool:
 	var fowner := src_cell.feature_owner
 	var dirt := src_cell.dirt_level
 	var dur := src_cell.feature_durability
+	var opened := src_cell.items_off & GridCell.OPENED
 	src_cell.clear_feature()
 	dst_cell.set_feature(fid, fowner)
 	dst_cell.feature_durability = dur
+	dst_cell.items_off |= opened
+	_furniture_moved(res, src, dst, fid)
 	if fid == MCF.FEATURE_DIRT_PILE:
 		dst_cell.dirt_level = dirt
 		dst_cell.cover_height = MCF.DIRT_HEIGHT_PER_LEVEL * float(dirt)
@@ -967,9 +975,10 @@ func _resolve_anti_tank(shooter: UnitInstance, center: Vector2i, aimed: String =
 	# Снимок «до взрыва» для показа во время броска (item 22).
 	var at_area := MCF.blast_square(landing, MCF.ANTI_TANK_BLAST_RADIUS)
 	_capture_visual_hold(result, at_area)
+	_fx_shot(result, "rocket", shooter.coord, landing)
 	# Прямое попадание в ДОТ: бетон забирает весь удар, осколочного поля нет.
 	_blast_armor_wall(landing, result)
-	if _pillbox_absorbs(landing, MCF.ANTI_TANK_VEHICLE_DAMAGE, result):
+	if _pillbox_absorbs(landing, MCF.ANTI_TANK_VEHICLE_DAMAGE, result, shooter.coord):
 		return result
 	var area := MCF.blast_square(landing, MCF.ANTI_TANK_BLAST_RADIUS)
 	var killed_names := _blast(landing, result, area)
@@ -1183,7 +1192,8 @@ func _blast(center: Vector2i, res: ActionResult = null, cells: Array[Vector2i] =
 ## вовсе, поэтому боец на соседней клетке уцелеет. Считается только попадание ровно в
 ## клетку ДОТа: взрыв рядом с ним по-прежнему его не задевает.
 ## true — удар поглощён, вызывающему больше нечего применять.
-func _pillbox_absorbs(center: Vector2i, damage: int, res: ActionResult) -> bool:
+func _pillbox_absorbs(center: Vector2i, damage: int, res: ActionResult,
+		from_coord: Vector2i = NOWHERE) -> bool:
 	if not state.grid.in_bounds(center):
 		return false
 	var cell := state.grid.cell(center)
@@ -1192,8 +1202,14 @@ func _pillbox_absorbs(center: Vector2i, damage: int, res: ActionResult) -> bool:
 	if cell.feature_durability <= 0 or Furniture.is_furniture(cell.feature_id):
 		return false
 	var was: String = MCF.feature_name(cell.feature_id, cell.feature_id)
+	var fid := cell.feature_id
 	cell.feature_durability -= damage
+	# Бетон откалывается со стороны удара (0.12.1): куски летят к стрелку, по пачке на
+	# каждую снятую единицу прочности; рухнувший ДОТ разлетается целиком.
+	_wall_chunks(res, center, from_coord if from_coord != NOWHERE else center, fid,
+			mini(damage, 4) * PILLBOX_CHUNKS_PER_POINT, true)
 	if cell.feature_durability <= 0:
+		_wall_chunks(res, center, center, fid)
 		cell.clear_feature()
 		res.log("%s at (%d, %d) absorbs the hit and collapses!" % [was, center.x, center.y])
 	else:
@@ -1210,6 +1226,7 @@ func _blast_destroy_terrain(c: Vector2i, res: ActionResult = null,
 	if not state.grid.in_bounds(c):
 		return
 	var cell := state.grid.cell(c)
+	_knock_items(res, c, from_coord if from_coord != NOWHERE else c)
 	for lamp: Array in cell.lamps:   # a blast takes the whole wall tile: every lamp on it, from either side
 		_lamp_shards(res, c, from_coord, int(lamp[2]))
 	cell.lamps = []
@@ -1238,6 +1255,8 @@ func _blast_destroy_terrain(c: Vector2i, res: ActionResult = null,
 		# через _blast_armor_wall.
 	]
 	if fid in destructible:
+		if CHUNK_WALLS.has(fid):
+			_wall_chunks(res, c, from_coord if from_coord != NOWHERE else c, fid)
 		if MCF.is_glass(fid):
 			_fx(res, {"fx": "shards", "at": c,
 				"from": from_coord if from_coord != NOWHERE else c})
@@ -1270,7 +1289,11 @@ func _resolve_flame(shooter: UnitInstance, target_coord: Vector2i) -> ActionResu
 	result.ok = true
 	var killed_names: Array = []
 	var last := shooter.coord  # конец струи — для дорожки «кто в кого»
-	for c: Vector2i in flame_cells(shooter.coord, step):
+	var jet := flame_cells(shooter.coord, step)
+	# Струя на экране (0.12.1): бежит от сопла клетка за клеткой. Мимо _fx(): зерна ей не
+	# нужно, а номер события (fx_seq) входит в подпись доски.
+	result.fx.append({"fx": "flame_jet", "from": shooter.coord, "cells": jet})
+	for c: Vector2i in jet:
 		var cell := state.grid.cell(c)
 		var occ: UnitInstance = cell.occupant
 		# Над космосом струя проходит, но никого не жжёт (editor-rework): пламени без
@@ -1414,6 +1437,10 @@ func _ignite(cell: GridCell, owner: int, res: ActionResult = null) -> void:
 		pass   # железный шкаф струя огнемёта обжигает, но не сжигает (§3.15)
 	elif cell.feature_id != MCF.FEATURE_CORPSE_WALL:
 		cell.clear_feature()
+	# Мелкие предметы на горящей клетке сгорают, как и кровь с гильзами (0.12.1): тихо, без разлёта.
+	var n_items := mini(state.grid.items_in(c).size(), 30)
+	if n_items > 0:
+		cell.items_off |= (1 << n_items) - 1
 	_fx(res, {"fx": "burn", "cells": [c]})
 	# Появление огня — повод активации соседних нейтралов (§3.1a).
 	notify_cell_changed(cell.coord)
@@ -1481,6 +1508,9 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i, aimed: String = "") ->
 				var was: String = cell.feature_id
 				var cracks := int(rec["cracks"])
 				if cracks > 0:
+					if was == MCF.FEATURE_DOT:
+						_wall_chunks(result, c, shooter.coord, was,
+								mini(cracks, 4) * PILLBOX_CHUNKS_PER_POINT, true)
 					cell.feature_durability -= cracks
 				if destroyed:
 					if cell.is_wall():
@@ -1784,6 +1814,7 @@ func _resolve_assault(shooter: UnitInstance, target: UnitInstance) -> ActionResu
 			"def_owner": t.owner, "shooter_owner": shooter.owner,  # item 13
 		})
 		_fx_lane(result, shooter.coord, t.coord, shooter.owner)  # issue 8
+		_fx_bullets(result, shooter.coord, t.coord, shot_details.size())
 		result.log("%s ⇒ %s: %d hits (need %d+, defense %d+)" % [
 			shooter.stats.display_name, t.stats.display_name, hits, need, parry_need])
 		if t_killed:
@@ -2164,10 +2195,85 @@ func _blast_armor_wall(center: Vector2i, res: ActionResult) -> void:
 	var cell := state.grid.cell(center)
 	if cell == null or cell.feature_id != MCF.FEATURE_ARMOR_WALL:
 		return
+	_wall_chunks(res, center, center, MCF.FEATURE_ARMOR_WALL)
 	cell.clear_feature()
 	notify_cell_changed(center)
 	_fx(res, {"fx": "debris", "at": center, "cells": [center], "blast": true})
 	res.log("Armored Wall at (%d, %d) is blown apart." % [center.x, center.y])
+
+## Мелкие предметы клетки c слетают (0.12.1, чистая косметика): взрыв (far — далеко), или
+## мебель под ними сдвинули (близко, как гильзы). from — откуда толчок; c — во все стороны.
+## Клетка помечает сбитые (GridCell.items_off), летят они в FxDecals и ложатся на пол.
+func _knock_items(res: ActionResult, c: Vector2i, from: Vector2i, far := true) -> void:
+	if res == null or state.grid.map_items.is_empty() or not state.grid.in_bounds(c):
+		return
+	var idx := state.grid.items_in(c)
+	if idx.is_empty():
+		return
+	var cell := state.grid.cell(c)
+	var bits := cell.items_off
+	var gone: Array = []
+	for k in mini(idx.size(), 30):
+		if bits & (1 << k):
+			continue
+		bits |= 1 << k
+		gone.append((state.grid.map_items[idx[k]] as Array).duplicate())
+	if gone.is_empty():
+		return
+	cell.items_off = bits
+	_fx(res, {"fx": "items", "at": c, "from": from, "items": gone, "far": far})
+
+## Шкаф раскрывается и высыпает вещи (0.12.1) — один раз: раскрытый уже пуст.
+func _spill(res: ActionResult, c: Vector2i, from: Vector2i, fid: String) -> void:
+	if res == null or not SmallItems.spills(fid) or not state.grid.in_bounds(c):
+		return
+	var cell := state.grid.cell(c)
+	if cell.items_off & GridCell.OPENED:
+		return
+	cell.items_off |= GridCell.OPENED
+	_fx(res, {"fx": "spill", "at": c, "from": from, "fid": fid})
+
+## Мебель сдвинули с src на dst: с неё падают предметы (по ходу), то, что лежало на полу в
+## dst, отлетает; шкаф раскрывается и сыплет вещи позади себя.
+func _furniture_moved(res: ActionResult, src: Vector2i, dst: Vector2i, fid: String) -> void:
+	if res == null:
+		return
+	_knock_items(res, src, src - (dst - src), false)
+	_knock_items(res, dst, src, false)
+	if SmallItems.spills(fid) and not (state.grid.cell(dst).items_off & GridCell.OPENED):
+		_fx(res, {"fx": "spill", "at": src, "from": dst, "fid": fid})
+		state.grid.cell(dst).items_off |= GridCell.OPENED
+
+## Стены, у которых есть обломки (0.12.1): разлетаются кусками своей плитки.
+const CHUNK_WALLS := {MCF.FEATURE_WALL: true, MCF.FEATURE_SOIL: true, MCF.FEATURE_WOOD_WALL: true,
+		MCF.FEATURE_SANDBAG_WALL: true, MCF.FEATURE_ARMOR_WALL: true, MCF.FEATURE_DOT: true}
+const PILLBOX_CHUNKS_PER_POINT := 4
+
+## Обломки стены c (0.12.1) — чистая косметика, зовётся ДО того, как стену снесли: вид
+## кускам даёт её объект и материал. from — откуда удар (c — во все стороны); toward —
+## куски летят К удару (ДОТ откалывается со стороны выстрела). count 0 — сколько выпадет.
+func _wall_chunks(res: ActionResult, c: Vector2i, from: Vector2i, fid: String,
+		count := 0, toward := false) -> void:
+	var ev := {"fx": "chunks", "at": c, "from": from, "fid": fid,
+			"look": state.grid.look_at(c.x, c.y), "env": state.env}
+	if count > 0:
+		ev["count"] = count
+	if toward:
+		ev["toward"] = true
+	_fx(res, ev)
+
+## Полёт снаряда на экране (0.12.1): ракета противотанкиста, снаряд танка, граната. Взрыв,
+## гибель и снесённые стены экран показывает, когда снаряд долетел. Мимо _fx(): зерна полёту
+## не нужно, а номер события (fx_seq) входит в подпись доски.
+func _fx_shot(res: ActionResult, kind: String, from: Vector2i, to: Vector2i) -> void:
+	if res != null and from != to:
+		res.fx.append({"fx": "shot", "kind": kind, "from": [from.x, from.y], "to": [to.x, to.y]})
+
+## Пули-трассеры для выстрелов, у которых их не было (дробовик штурмовика, ДПМГ) — тоже
+## мимо _fx(), по той же причине.
+func _fx_bullets(res: ActionResult, from: Vector2i, to: Vector2i, count: int) -> void:
+	if res != null and count > 0:
+		res.fx.append({"fx": "tracer", "at": from, "from": [from.x, from.y], "to": [to.x, to.y], "count": count})
 
 ## Дорожка «кто в кого» (issue 8: «add visual clues that would tell the player who is
 ## shooting at who»). Кладётся КАЖДОЙ атакой — пулей, лучом, струёй, зарядом, пушкой,
@@ -2747,7 +2853,7 @@ func _resolve_dig(intent: DigIntent) -> ActionResult:
 	var spots := _dirt_spots(intent.target, actor.coord)
 	var picked := _chosen_dirt_spots(intent, spots)
 	if picked.size() < 2:
-		return ActionResult.fail("Nowhere to put the dug-up dirt (no room for 2 piles)")
+		return ActionResult.fail("Nowhere to put the dug-up %s (no room for 2 piles)" % _spoil_word())
 
 	# За 1 ОД пехота роет 3 окопа, инженер — 6. Первый окоп серии тратит ОД и открывает
 	# «кредит», следующие в той же серии бесплатны, пока кредит не исчерпан (§3.7).
@@ -2775,8 +2881,8 @@ func _resolve_dig(intent: DigIntent) -> ActionResult:
 	_extinguish_cell(state.grid.cell(picked[1]))
 	var tail := "[AP: %d, %d trench(es) left this AP]" % [actor.remaining_ap, actor.dig_credits] if not spent_ap \
 		else "[AP: %d, %d more trench(es) free this AP]" % [actor.remaining_ap, actor.dig_credits]
-	return ActionResult.success(["%s dug a trench at (%d, %d), dirt at (%d,%d) and (%d,%d) %s" % [
-		actor.stats.display_name, intent.target.x, intent.target.y,
+	return ActionResult.success(["%s dug a trench at (%d, %d), %s at (%d,%d) and (%d,%d) %s" % [
+		actor.stats.display_name, intent.target.x, intent.target.y, _spoil_word(),
 		picked[0].x, picked[0].y, picked[1].x, picked[1].y, tail]])
 
 ## Проверить/выбрать 2 клетки под землю: сначала берём корректный выбор игрока,
@@ -3312,6 +3418,9 @@ func _destroy_furniture(cell: GridCell, res: ActionResult, from: Vector2i = NOWH
 	if Furniture.DEFS.get(cell.feature_id, {}).get("cat", "") == "lighting":
 		_lamp_shards(res, cell.coord, from)
 	for c: Vector2i in cells:
+		_knock_items(res, c, from if from != NOWHERE else c)
+		_spill(res, c, from if from != NOWHERE else c, cell.feature_id)
+	for c: Vector2i in cells:
 		state.grid.cell(c).clear_feature()
 		notify_cell_changed(c)
 	_fx(res, {"fx": "debris", "at": NOWHERE, "cells": cells})
@@ -3369,10 +3478,14 @@ func _resolve_carry(intent: CarryIntent) -> ActionResult:
 	var fid := cell.feature_id
 	actor.remaining_ap -= 1
 	actor.held_item_id = fid
-	cell.clear_feature()
-	return ActionResult.success(["%s picks up the %s at (%d, %d) [AP: %d]" % [
+	var picked := ActionResult.success(["%s picks up the %s at (%d, %d) [AP: %d]" % [
 		actor.stats.display_name, Furniture.name_of(fid).to_lower(), intent.coord.x,
 		intent.coord.y, actor.remaining_ap]])
+	# Что стояло на предмете, падает; шкаф раскрывается и высыпает вещи (0.12.1).
+	_knock_items(picked, intent.coord, actor.coord, false)
+	_spill(picked, intent.coord, actor.coord, fid)
+	cell.clear_feature()
+	return picked
 
 func furniture_carry_cells(actor: UnitInstance) -> Array:
 	var out: Array = []
@@ -3413,9 +3526,11 @@ func _put_down_furniture(actor: UnitInstance, coord: Vector2i) -> ActionResult:
 	var cell := state.grid.cell(coord)
 	cell.set_feature(fid, -1)
 	_extinguish_cell(cell)   # поставленный на огонь предмет сбивает пламя, как и всё (#82)
-	return ActionResult.success(["%s puts the %s down at (%d, %d) [AP: %d]" % [
+	var put := ActionResult.success(["%s puts the %s down at (%d, %d) [AP: %d]" % [
 		actor.stats.display_name, Furniture.name_of(fid).to_lower(), coord.x, coord.y,
 		actor.remaining_ap]])
+	_knock_items(put, coord, actor.coord, false)   # что лежало на полу, отлетает в сторону
+	return put
 
 func furniture_put_cells(actor: UnitInstance) -> Array:
 	var out: Array = []
@@ -5958,8 +6073,11 @@ func _resolve_drag(intent: DragIntent) -> ActionResult:
 			return ActionResult.fail("Target cell is occupied")
 		var placed: String = stacked if stacked != "" else fid
 		var dur := src_cell.feature_durability
+		var opened := src_cell.items_off & GridCell.OPENED
 		src_cell.clear_feature()
 		dst_cell.set_feature(placed, fowner)
+		if stacked == "":
+			dst_cell.items_off |= opened
 		if stacked == "":
 			dst_cell.feature_durability = dur   # поцарапанный шкаф не чинится переездом
 		if placed == MCF.FEATURE_DIRT_PILE:
@@ -5973,9 +6091,11 @@ func _resolve_drag(intent: DragIntent) -> ActionResult:
 		if stacked == "":
 			actor.dragging = dst
 			_grant_carry_move(actor)
-		return ActionResult.success(["%s dragged \"%s\" → (%d, %d) [AP: %d]" % [
+		var dragged_res := ActionResult.success(["%s dragged \"%s\" → (%d, %d) [AP: %d]" % [
 			actor.stats.display_name, MCF.feature_name(placed, placed),
 			dst.x, dst.y, actor.remaining_ap]])
+		_furniture_moved(dragged_res, src, dst, fid)
+		return dragged_res
 
 	return ActionResult.fail("Nothing here to drag")
 
@@ -6140,6 +6260,7 @@ func _resolve_dpmg(intent: DPMGFireIntent) -> ActionResult:
 		"def_owner": target.owner, "shooter_owner": state.active_player(),  # item 13
 	})
 	_fx_lane(result, intent.dpmg_coord, target.coord, actor.owner)  # issue 8
+	_fx_bullets(result, intent.dpmg_coord, target.coord, fired)
 	result.log("DPMG (%s) → %s: %d shots, %d hits (need %d+)" % [
 		actor.stats.display_name, target.stats.display_name, fired, hits, need])
 	if killed:
@@ -6252,6 +6373,7 @@ func _throw_frag(thrower: UnitInstance, aim: Vector2i) -> ActionResult:
 		var path := _throw_path(thrower.coord, aim)
 		landing = thrower.coord if land_index <= 0 else path[land_index - 1]
 	var result := _explode_frag(thrower, landing)
+	_fx_shot(result, "grenade", thrower.coord, landing)
 	# Показать бросок на точность перед взрывом.
 	result.dice_events.push_front({
 		"kind": "check", "actor": thrower.stats.display_name,
@@ -8962,6 +9084,7 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 			notify_cell_changed(cell_coord)  # снос стены — повод проснуться жителям рядом
 		if c.occupant != null and c.occupant.is_alive():
 			c.occupant = null
+		_knock_items(res, cell_coord, from_c)
 		c.clear_feature()
 		if was_corpse_wall:
 			c.corpse_count = MCF.CORPSE_WALL_COUNT
@@ -9129,11 +9252,15 @@ func _resolve_vehicle_cannon(intent: VehicleCannonIntent) -> ActionResult:
 	var pre_area := cannon_blast_cells(veh, landing)
 	pre_area.append(landing)
 	_capture_visual_hold(res, pre_area)
-	_fx_lane(res, port, landing, veh.owner, "blast")  # issue 8: кто и куда бьёт пушкой
+	# Дорожка — на НАЗНАЧЕННУЮ клетку, как у противотанкиста (0.12.1): прежде она шла в
+	# место падения и до броска выдавала, будет ли недолёт. Куда лёг снаряд, видно по
+	# его полёту после броска.
+	_fx_lane(res, port, intent.target, veh.owner, "blast")  # issue 8: кто и куда бьёт пушкой
+	_fx_shot(res, "shell", port, landing)
 	# Прямое попадание в ДОТ: бетон принимает снаряд целиком (2 прочности = 1 выстрел
 	# танка), осколочного поля вокруг не возникает.
 	_blast_armor_wall(landing, res)
-	if _pillbox_absorbs(landing, int(gun.get("vehicle_damage", 2)), res):
+	if _pillbox_absorbs(landing, int(gun.get("vehicle_damage", 2)), res, port):
 		return res
 	# Осколочное поле снаряда — ромб радиуса 2 (#63), а не квадрат 3×3.
 	var area := cannon_blast_cells(veh, landing)
@@ -9867,7 +9994,10 @@ func prepare_mode(map: MapData) -> void:
 		for side: int in state.roster.player_ids():
 			sides.append(side)
 			mode.scores[MatchMode.team_key(state.roster, side)] = 0
-		if map != null:
+		var drawn := MatchMode.drawn_zones(state.grid.width, state.grid.height)
+		if not drawn.is_empty():
+			mode.zones = drawn   # нарисованы хостом в лобби (0.12.1)
+		elif map != null:
 			mode.zones = MatchMode.zones_for(map, mode.zone_count, sides, state.grid)
 		else:
 			var m := MapData.new(state.grid.width, state.grid.height)

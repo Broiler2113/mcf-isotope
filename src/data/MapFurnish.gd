@@ -563,6 +563,24 @@ func _room_floor(c: Vector2i, r: Rect2i) -> bool:
 			and f != MCF.FEATURE_AIRLOCK and not Furniture.is_furniture(f)
 
 func _furnish_room(cells: Array[Vector2i], main: bool, count: int, r: Rect2i) -> void:
+	var first := placed.size()
+	_furnish_room_pieces(cells, main, count, r)
+	_lay_tables(first, r)
+
+## Столы, поставленные в комнату, накрываются набором по её назначению (0.12.1, SmallItems).
+## Своё зерно от карты и комнаты: прочая расстановка от этого не сдвигается.
+func _lay_tables(first: int, r: Rect2i) -> void:
+	var irng := RandomNumberGenerator.new()
+	irng.seed = int(g.opt.get("seed", 1)) * 7919 + r.position.x * 104729 + r.position.y * 131 + r.size.x
+	var arch := str(g._room_kind.get(r, ""))
+	for k in range(first, placed.size()):
+		var fid := str(placed[k]["fid"])
+		if not SmallItems.is_table(fid):
+			continue
+		var set_id := str(SmallItems.ROOM_SETS.get(RECIPE_ALIAS.get(arch, arch), SmallItems.default_set(fid)))
+		m.items.append_array(SmallItems.furnish(m, placed[k]["cells"], set_id, irng))
+
+func _furnish_room_pieces(cells: Array[Vector2i], main: bool, count: int, r: Rect2i) -> void:
 	_room = {}
 	for c in cells:
 		_room[c] = true

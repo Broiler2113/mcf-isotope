@@ -181,8 +181,11 @@ var _brush_buttons: Dictionary = {}
 var _palette_box: VBoxContainer
 var _current_icon: TextureRect
 var _current_label: Label
-var _variant_popup: PopupPanel
-var _variant_box: HFlowContainer
+var _variant_row: HBoxContainer
+var _set_row: HBoxContainer
+var _set_label: Label
+var _variant_icon: TextureRect
+var _variant_label: Label
 var _more_zones := false
 var _mini_rect: TextureRect
 var _mini_view: Control
@@ -223,6 +226,7 @@ func _ready() -> void:
 ## Карта заменена целиком (новая, открытая, размер, очистка, откат снимка).
 func _map_replaced() -> void:
 	_env = map.environment()
+	MCF.display_env = _env
 	_sync_background()
 	_grid = Grid.new(map.width, map.height)
 	map.apply_to_grid(_grid)
@@ -260,6 +264,7 @@ func _map_replaced() -> void:
 ## Окружение сменилось — плитки и палитра в новом наряде, клетки те же.
 func _env_changed() -> void:
 	_env = map.environment()
+	MCF.display_env = _env
 	_sync_background()
 	_tiles = TerrainTiles.new(_grid, _env)
 	_layer.tiles = _tiles
@@ -448,7 +453,7 @@ func _write(i: int, t: Array) -> void:
 	_mini_stale = true
 
 func _begin() -> void:
-	_act = {"cells": {}, "spawns": null, "decals": map.decals.duplicate(true)}
+	_act = {"cells": {}, "spawns": null, "decals": map.decals.duplicate(true), "items": map.items.duplicate(true)}
 
 ## Спавны трогает действие — запомнить их «до» (один раз за действие).
 func _touch_spawns() -> void:
@@ -464,9 +469,12 @@ func _spawns_copy() -> Array:
 func _commit() -> void:
 	if _act.is_empty():
 		return
+	_furnish_new_tables()
 	var entry := {"cells": {}, "spawns": null}
 	if _act.get("decals", map.decals) != map.decals:
 		entry["decals"] = [_act["decals"], map.decals.duplicate(true)]
+	if _act.get("items", map.items) != map.items:
+		entry["items"] = [_act["items"], map.items.duplicate(true)]
 	for i: int in _act["cells"]:
 		var before: Array = _act["cells"][i]
 		var after := _tuple(i)
@@ -475,7 +483,7 @@ func _commit() -> void:
 	if _act["spawns"] != null:
 		entry["spawns"] = [_act["spawns"], _spawns_copy()]
 	_act = {}
-	if entry["cells"].is_empty() and entry["spawns"] == null and not entry.has("decals"):
+	if entry["cells"].is_empty() and entry["spawns"] == null and not entry.has("decals") and not entry.has("items"):
 		return
 	_push(entry)
 
@@ -500,9 +508,17 @@ func _apply_entry(entry: Dictionary, forward: bool) -> void:
 		map.env = entry["env"][k]
 		_env_changed()
 		return
+	if entry.has("time"):
+		map.time_of_day = entry["time"][k]
+		_sync_lighting()
+		_refresh_menu_checks()
+		return
 	if entry.has("decals"):
 		map.decals = entry["decals"][k].duplicate(true)
 		_sync_editor_decals()
+	if entry.has("items"):
+		map.items = entry["items"][k].duplicate(true)
+		_sync_editor_items()
 	for i: int in entry["cells"]:
 		_write(i, entry["cells"][i][k])
 	if entry["spawns"] != null:
@@ -617,6 +633,11 @@ func _paint_cells(cells: Array, erase: bool) -> void:
 ## Нет объекта — убирается боец; нет и его — клетка возвращается к пустой земле пресета
 ## (пол, вид, зона). Прежде один щелчок сносил сразу всё.
 func _erase_cell(c: Vector2i) -> void:
+	if not map.items.is_empty():
+		var left := map.items.filter(func(it: Array) -> bool: return SmallItems.cell_of(it) != c)
+		if left.size() != map.items.size():
+			map.items = left
+			_sync_editor_items()
 	if not map.decals.is_empty():
 		var kept := map.decals.filter(func(d: Array) -> bool:
 			return Vector2i(floori(float(d[1])), floori(float(d[2]))) != c)
@@ -871,6 +892,14 @@ func _stamp_once(p: Dictionary, at: Vector2i, mask: int) -> void:
 		if Rect2(0, 0, map.width, map.height).has_point(pos):
 			map.decals.append([d[0], pos.x, pos.y, d[3], d[4]])
 	_sync_editor_decals()
+	if p.has("items"):
+		var area := Rect2(Vector2(at), Vector2(int(p["w"]), int(p["h"])))
+		map.items = map.items.filter(func(it: Array) -> bool: return not area.has_point(Vector2(float(it[1]), float(it[2]))))
+		for it: Array in p["items"]:
+			var pos := Vector2(float(it[1]), float(it[2])) + Vector2(at)
+			if map.in_bounds(Vector2i(pos.floor())):
+				map.items.append([it[0], pos.x, pos.y, it[3]])
+		_sync_editor_items()
 
 func copy_selection() -> void:
 	if not _has_selection():
@@ -952,6 +981,12 @@ func _drop_float(at_cursor: Vector2i) -> void:
 ## 0.9.4: а если в руке НЕ мебель (ластик, пипетка, кисть стены), R разворачивает предмет
 ## ПОД КУРСОРОМ — стоящий на карте диван больше не нужно выделять или класть заново.
 var decal_rotation := 0.0
+## Мелкие предметы (0.12.1): угол следующего, шаг R — 15° (их кладут под любым углом), и
+## набор, которым кисть стола раскладывает предметы ("" — набор этого стола по умолчанию).
+var item_rotation := 0.0
+const ITEM_TURN := PI / 12
+const ITEM_ERASE := "item:erase"
+var brush_table_set := ""
 var _decal_painting := false
 var _decal_last := Vector2.INF
 var brush_accent := 0
@@ -964,6 +999,10 @@ func rotate_key(back_to_auto: bool = false) -> void:
 		rotate_selection()
 	elif brush.begins_with("decal:"):
 		decal_rotation = 0.0 if back_to_auto else fposmod(decal_rotation + PI / 2, TAU)
+		queue_redraw()
+	elif brush.begins_with("item:"):
+		item_rotation = 0.0 if back_to_auto else fposmod(item_rotation + ITEM_TURN, TAU)
+		_flash("%s turned to %d°" % [_brush_name(brush), roundi(rad_to_deg(item_rotation))])
 		queue_redraw()
 	elif Furniture.is_wall_light(brush):
 		brush_turn = -1 if back_to_auto else (brush_turn + 1) % 4
@@ -1172,7 +1211,22 @@ func _build_sky() -> void:
 
 var _lighting: LightManager
 
+## Время суток (0.12.1) видно и без предпросмотра света — ровным оттенком, как в бою.
+var _time_mod: CanvasModulate = null
+func _sync_time_tint() -> void:
+	var tint := Color.WHITE if _lighting_preview or map == null else LightManager.flat_tint(_env, map.time_of_day)
+	if tint == Color.WHITE:
+		if is_instance_valid(_time_mod):
+			_time_mod.queue_free()
+		_time_mod = null
+		return
+	if not is_instance_valid(_time_mod):
+		_time_mod = CanvasModulate.new()
+		add_child(_time_mod)
+	_time_mod.color = tint
+
 func _sync_lighting() -> void:
+	_sync_time_tint()
 	if not _lighting_preview:
 		if is_instance_valid(_lighting):
 			_lighting.free()
@@ -1182,7 +1236,8 @@ func _sync_lighting() -> void:
 	if not is_instance_valid(_lighting):
 		_lighting = LightManager.new()
 		add_child(_lighting)
-	_lighting.update_view(_grid, pan, zoom, Vector2.ZERO, CELL, _env, {}, false, null, _layer)
+	_lighting.update_view(_grid, pan, zoom, Vector2.ZERO, CELL, _env, {}, false, null, _layer,
+			-1.0, map.time_of_day if map != null else "")
 
 func _process(delta: float) -> void:
 	# Куски плиток собираются по нескольку за кадр: пока бюджет кадра выбран до дна,
@@ -1251,6 +1306,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			pan += event.relative
 			queue_redraw()
 			return
+		if brush.begins_with("item:") and tool == Tool.BRUSH:
+			queue_redraw()
+			if _decal_painting and brush == ITEM_ERASE and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
+				_erase_items((event.position - pan) / cell_size())
 		if brush.begins_with("decal:") and tool == Tool.BRUSH:
 			queue_redraw()
 			if _decal_painting:
@@ -1276,6 +1335,19 @@ func _unhandled_input(event: InputEvent) -> void:
 			_release(c)
 
 func _press(c: Vector2i, alt: bool, screen := Vector2.INF) -> void:
+	# Мелкий предмет (0.12.1): щелчок кладёт один ровно под курсор, под углом item_rotation;
+	# «Erase items» стирает их кистью, как ластик декалей. Действие закрывает _release().
+	if brush.begins_with("item:") and tool == Tool.BRUSH and map.in_bounds(c) and not alt:
+		_begin()
+		var at := ((get_viewport().get_mouse_position() if screen == Vector2.INF else screen) - pan) / cell_size()
+		if brush == ITEM_ERASE:
+			_decal_painting = true
+			_erase_items(at)
+		else:
+			map.items.append([brush.substr(5), at.x, at.y, item_rotation])
+			_sync_editor_items()
+		queue_redraw()
+		return
 	if brush.begins_with("decal:") and tool == Tool.BRUSH and map.in_bounds(c) and not alt:
 		_begin()
 		_decal_painting = true
@@ -1406,6 +1478,7 @@ func _shortcut(e: InputEventKey) -> bool:
 		"editor_zoom_out": zoom_out, "editor_delete": delete_selection,
 		"editor_smaller": _set_brush_size.bind(brush_size - 1),
 		"editor_larger": _set_brush_size.bind(brush_size + 1),
+		"editor_variant_prev": _cycle_variant.bind(-1), "editor_variant_next": _cycle_variant.bind(1),
 		"editor_play": play, "editor_help": _shortcuts_dialog, "editor_cancel": _cancel_tool,
 	}
 	for id: String in commands:
@@ -1754,6 +1827,13 @@ func _preview_key() -> String:
 			_float_moving, brush_turn]
 
 func _draw_preview() -> void:
+	if brush.begins_with("item:") and tool == Tool.BRUSH:
+		var at := (get_viewport().get_mouse_position() - pan) / cell_size()
+		if brush == ITEM_ERASE:
+			draw_circle(at * CELL, CELL * brush_size * 0.5, Color(1, 1, 1, 0.4), false, 1.0, true)
+		else:
+			TerrainTiles.draw_decal(self, "item:" + brush.substr(5), at * CELL, CELL, item_rotation, 0.7)
+		return
 	if brush.begins_with("decal:") and tool == Tool.BRUSH:
 		var pos := (get_viewport().get_mouse_position() - pan) / cell_size()
 		var kind := brush.substr(6)
@@ -2024,7 +2104,8 @@ func _build_menu_bar() -> void:
 			["Report a Bug…", func() -> void: BugReportWindow.open(self)]]],
 		["Presets", [["Save Selection…", _save_room_dialog], ["Manage Rooms & Structures…", _room_manager],
 			["Open Presets Folder", func() -> void: OS.shell_open(ProjectSettings.globalize_path(RoomPresets.DIR))]]],
-		["Map", [["Resize…", _resize_dialog], [], ["label", "Preset"]] + _preset_items()],
+		["Map", [["Resize…", _resize_dialog], [], ["label", "Preset"]] + _preset_items()
+			+ [[], ["label", "Time of Day"]] + _time_items()],
 	]:
 		var mb := MenuButton.new()
 		mb.text = spec[0]
@@ -2152,6 +2233,22 @@ func _refresh_edit_menu(pm: PopupMenu) -> void:
 			off = _float.is_empty()
 		pm.set_item_disabled(i, off)
 
+## Время суток карты (0.12.1, владелец): радио-пункты «time:<id>» в меню Map.
+func _time_items() -> Array:
+	var out: Array = []
+	for i in MapData.TIMES.size():
+		out.append(["radio:time:" + String(MapData.TIMES[i]), MapData.TIME_NAMES[i]])
+	return out
+
+func set_time_of_day(t: String) -> void:
+	var before := map.time_of_day if map.time_of_day != "" else "night"
+	if t == before:
+		return
+	map.time_of_day = t
+	_push({"time": [before, t]})
+	_sync_lighting()
+	_refresh_menu_checks()
+
 func _preset_items() -> Array:
 	var out: Array = []
 	for i in MapPresets.IDS.size():
@@ -2173,14 +2270,24 @@ func _open_light_menu(screen: Vector2) -> bool:
 		_light_menu = PopupMenu.new()
 		_light_menu.theme = Ui.theme
 		_light_menu.id_pressed.connect(func(id: int) -> void:
+			var cell := int(_light_menu.get_meta("cell"))
+			var side := int(_light_menu.get_meta("side"))
 			var was := int(_light_menu.get_meta("tint"))
+			# Снятие лампы — отдельная команда, не значение оттенка (0.12.1): байт 300 % с
+			# красным цветом равнялся прежнему LIGHT_REMOVE, и лампа сама исчезала.
+			if id == LIGHT_REMOVE:
+				_remove_lamp(cell, side)
+				return
+			if id == LIGHT_TYPE_ID:
+				_intensity_dialog(cell, side, was)
+				return
 			var tint := id
 			if id >= LIGHT_LEVEL_ID:
 				tint = Furniture.make_tint(Furniture.tint_colour(was), id - LIGHT_LEVEL_ID)
-			elif id != LIGHT_REMOVE:
+			else:
 				tint = Furniture.make_tint(id, Furniture.tint_level(was))
 			_light_menu.set_meta("tint", tint)
-			_set_light_tint(int(_light_menu.get_meta("cell")), int(_light_menu.get_meta("side")), tint))
+			_set_light_tint(cell, side, tint))
 		add_child(_light_menu)
 	_light_menu.clear()
 	# A wall lamp: the one on the face nearest the click (a wall can carry one per side).
@@ -2203,11 +2310,16 @@ func _open_light_menu(screen: Vector2) -> bool:
 		_light_menu.set_item_checked(at, Furniture.tint_colour(current) == t)
 	# Brightness (0.11.1): listed dimmest first; "100 %" is the lamp as designed.
 	_light_menu.add_separator()
-	var levels := range(Furniture.LIGHT_LEVELS.size())
-	levels.sort_custom(func(a: int, b: int) -> bool: return Furniture.LIGHT_LEVELS[a][1] < Furniture.LIGHT_LEVELS[b][1])
+	# Короткий список частых ступеней; любое другое значение — числом (0.12.1).
+	var levels := [1, 2, 3, 0, 4, 5, 6]
+	var cur_level := Furniture.tint_level(current)
 	for l: int in levels:
 		_light_menu.add_radio_check_item("Intensity · %s" % Furniture.LIGHT_LEVELS[l][0], LIGHT_LEVEL_ID + l)
-		_light_menu.set_item_checked(_light_menu.get_item_index(LIGHT_LEVEL_ID + l), Furniture.tint_level(current) == l)
+		_light_menu.set_item_checked(_light_menu.get_item_index(LIGHT_LEVEL_ID + l), cur_level == l)
+	var typed := "Intensity · Type a value…"
+	if not levels.has(cur_level) and cur_level < Furniture.LIGHT_LEVELS.size():
+		typed = "Intensity · %s (type a value…)" % Furniture.LIGHT_LEVELS[cur_level][0]
+	_light_menu.add_item(typed, LIGHT_TYPE_ID)
 	if side >= 0:
 		_light_menu.add_separator()
 		_light_menu.add_item("Remove this lamp", LIGHT_REMOVE)
@@ -2219,15 +2331,50 @@ func _open_light_menu(screen: Vector2) -> bool:
 
 const LIGHT_REMOVE := 100
 const LIGHT_LEVEL_ID := 200
+const LIGHT_TYPE_ID := 300
+
+## Яркость числом (0.12.1, владелец): окно с полем; значение ложится на ближайшую ступень
+## Furniture.LIGHT_LEVELS (10–500 %), и окно показывает, на какую.
+func _intensity_dialog(cell: int, side: int, was: int) -> void:
+	var body := VBoxContainer.new()
+	body.add_theme_constant_override("separation", 10)
+	var spin := _spin(roundi(Furniture.light_scale_of(was) * 100.0), 10, 500)
+	spin.suffix = "%"
+	_field_row(body, "Intensity", spin)
+	var hint := Label.new()
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.add_theme_font_size_override("font_size", 11)
+	hint.add_theme_color_override("font_color", Color("#8a8a8a"))
+	var refresh := func(v: float) -> void:
+		hint.text = "Lamps take one of %d steps between 10 %% and 500 %%: this one will be %s." % [
+				Furniture.LIGHT_LEVELS.size(), Furniture.LIGHT_LEVELS[Furniture.level_for_percent(v)][0]]
+	spin.value_changed.connect(refresh)
+	refresh.call(spin.value)
+	body.add_child(hint)
+	_dialog("Light Intensity", body, [["Cancel", null], ["Apply", func() -> void:
+		spin.apply()
+		_set_light_tint(cell, side, Furniture.make_tint(Furniture.tint_colour(was),
+				Furniture.level_for_percent(spin.value)))]])
+	spin.get_line_edit().grab_focus.call_deferred()
+	spin.get_line_edit().select_all.call_deferred()
 
 ## side >= 0: the wall lamp on that side (LIGHT_REMOVE takes it down); -1: the standing lamp.
 ## tint: the whole tint byte (Furniture.make_tint: colour and brightness).
+func _remove_lamp(i: int, side: int) -> void:
+	if side < 0:
+		return
+	var t := _tuple(i)
+	t[9] = MapData.without_lamp(t[9], side)
+	_begin()
+	_write(i, t)
+	_commit()
+	_sync_lighting()
+	queue_redraw()
+
 func _set_light_tint(i: int, side: int, tint: int) -> void:
 	var t := _tuple(i)
 	if side < 0:
 		t[10] = tint
-	elif tint == LIGHT_REMOVE:
-		t[9] = MapData.without_lamp(t[9], side)
 	else:
 		var rec := MapData.lamp_on(t[9], side).duplicate()
 		if rec.is_empty(): return
@@ -2267,6 +2414,8 @@ func _menu_action(a: Variant) -> void:
 			show_zones = not show_zones
 		elif s == "check:mini":
 			_mini_rect.get_parent().visible = not _mini_rect.get_parent().visible
+		elif s.begins_with("radio:time:"):
+			set_time_of_day(s.substr(11))
 		elif s.begins_with("radio:"):
 			set_preset(s.substr(6))
 		_refresh_menu_checks()
@@ -2286,10 +2435,14 @@ func _refresh_menu_checks() -> void:
 			"Deployment Zones": v.set_item_checked(i, show_zones)
 			"Minimap": v.set_item_checked(i, _mini_rect == null or _mini_rect.get_parent().visible)
 	var m: PopupMenu = _menus["Map"]
+	var tod := map.time_of_day if map.time_of_day != "" else "night"
 	for i in m.item_count:
 		var idx := MapPresets.NAMES.find(m.get_item_text(i))
 		if idx >= 0 and m.is_item_radio_checkable(i):
 			m.set_item_checked(i, MapPresets.IDS[idx] == map.environment())
+		var t := MapData.TIME_NAMES.find(m.get_item_text(i))
+		if t >= 0 and m.is_item_radio_checkable(i):
+			m.set_item_checked(i, MapData.TIMES[t] == tod)
 
 ## Пресет карты: окружение, а с ним плитки (откат — одной записью).
 func set_preset(env: String) -> void:
@@ -2342,16 +2495,62 @@ func _build_palette() -> void:
 	_current_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_current_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	cur.add_child(_current_label)
-	# Variants (colours, door textures, wall accents) open in a small popup beside the
-	# palette button that was clicked (0.11) instead of rows at the top of the palette.
-	_variant_popup = PopupPanel.new()
-	_variant_popup.theme = Ui.theme
-	_variant_box = HFlowContainer.new()
-	_variant_box.add_theme_constant_override("h_separation", 4)
-	_variant_box.add_theme_constant_override("v_separation", 4)
-	_variant_box.custom_minimum_size = Vector2(150, 0)
-	_variant_popup.add_child(_variant_box)
-	add_child(_variant_popup)
+	# Варианты (цвета мебели, текстуры дверей, акценты стен) — стрелками под текущей
+	# кистью (0.12.1, владелец: всплывающая полоска значков была неудобной). Клавиши — , и .
+	_variant_row = HBoxContainer.new()
+	_variant_row.add_theme_constant_override("separation", 4)
+	outer.add_child(_variant_row)
+	var prev := Button.new()
+	prev.text = "◀"
+	prev.focus_mode = Control.FOCUS_NONE
+	prev.custom_minimum_size = Vector2(28, 28)
+	prev.pressed.connect(_cycle_variant.bind(-1))
+	_variant_row.add_child(prev)
+	_variant_icon = TextureRect.new()
+	_variant_icon.custom_minimum_size = Vector2(24, 24)
+	_variant_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_variant_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_variant_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_variant_row.add_child(_variant_icon)
+	_variant_label = Label.new()
+	_variant_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_variant_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_variant_label.clip_text = true
+	_variant_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_variant_label.add_theme_font_size_override("font_size", 11)
+	_variant_row.add_child(_variant_label)
+	var nxt := Button.new()
+	nxt.text = "▶"
+	nxt.focus_mode = Control.FOCUS_NONE
+	nxt.custom_minimum_size = Vector2(28, 28)
+	nxt.pressed.connect(_cycle_variant.bind(1))
+	_variant_row.add_child(nxt)
+	_variant_row.visible = false
+	# Набор предметов стола (0.12.1): чем кисть стола его накрывает — те же стрелки.
+	_set_row = HBoxContainer.new()
+	_set_row.add_theme_constant_override("separation", 4)
+	outer.add_child(_set_row)
+	var sprev := Button.new()
+	sprev.text = "◀"
+	sprev.focus_mode = Control.FOCUS_NONE
+	sprev.custom_minimum_size = Vector2(28, 28)
+	sprev.pressed.connect(_cycle_table_set.bind(-1))
+	_set_row.add_child(sprev)
+	_set_label = Label.new()
+	_set_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_set_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_set_label.clip_text = true
+	_set_label.add_theme_font_size_override("font_size", 11)
+	_set_label.tooltip_text = "Which small items this table is laid with when you place it."
+	_set_label.mouse_filter = Control.MOUSE_FILTER_PASS
+	_set_row.add_child(_set_label)
+	var snext := Button.new()
+	snext.text = "▶"
+	snext.focus_mode = Control.FOCUS_NONE
+	snext.custom_minimum_size = Vector2(28, 28)
+	snext.pressed.connect(_cycle_table_set.bind(1))
+	_set_row.add_child(snext)
+	_set_row.visible = false
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -2370,6 +2569,12 @@ func _refresh_palette() -> void:
 		c.queue_free()
 	_brush_buttons.clear()
 	_palette_group("Decals · click anywhere", [["decal:blood_pool", "Blood pool"], ["decal:blood_drop", "Blood drop"], ["decal:corpse", "Corpse"], ["decal:erase", "Erase decals"]])
+	# Мелкие предметы (0.12.1): кладутся куда угодно и под любым углом (R — поворот на 15°).
+	var small: Array = []
+	for kind: String in SmallItems.KINDS:
+		small.append(["item:" + kind, SmallItems.name_of(kind), "%s — click to place, R turns it 15°" % SmallItems.name_of(kind)])
+	small.append([ITEM_ERASE, "Erase items"])
+	_palette_group("Small items · click anywhere", small)
 	var terrain: Array = TERRAIN.duplicate()
 	for lk: int in FLOOR_LOOK_BRUSHES:
 		terrain.append(["floor:%d" % lk, MCF.FLOOR_LOOK_NAMES[lk]])
@@ -2485,7 +2690,6 @@ func _palette_grid(parent: Control, items: Array, columns: int) -> void:
 			b.pressed.connect(_pick_stamp.bind(id.substr(6)))
 		else:
 			b.pressed.connect(_select_brush.bind(id))
-			b.pressed.connect(_open_variants.bind(b))
 		grid.add_child(b)
 		_brush_buttons[id] = b
 
@@ -2634,6 +2838,7 @@ func _select_brush(id: String) -> void:
 	# Другой предмет — поворот снова «сам»; цветной вариант того же предмета его сохраняет.
 	if Furniture.base_of(id) != Furniture.base_of(brush):
 		brush_turn = -1
+		brush_table_set = ""
 	brush = id
 	if tool in [Tool.ERASER, Tool.SELECT, Tool.PICK, Tool.STAMP]:
 		_select_tool(Tool.BRUSH)
@@ -2686,45 +2891,45 @@ func _set_accent(i: int) -> void:
 	_refresh_variants()
 	queue_redraw()
 
-## Open the variant strip right beside the palette button that was clicked.
-func _open_variants(anchor: Control) -> void:
-	if _variant_popup == null: return
-	var entries := _variant_entries()
-	if entries.is_empty():
-		_variant_popup.hide()
-		return
-	_fill_variants(entries)
-	# Beside the button: to its right if there is room, otherwise to its left (the palette
-	# sits at the right edge of the screen).
-	var want := _variant_popup.get_contents_minimum_size() + Vector2(8, 8)
-	var at := anchor.get_screen_position() + Vector2(anchor.size.x + 4.0, 0.0)
-	if at.x + want.x > get_viewport_rect().size.x:
-		at.x = anchor.get_screen_position().x - want.x - 4.0
-	_variant_popup.popup(Rect2i(Vector2i(at), Vector2i.ZERO))
-
+## Стрелки вариантов под текущей кистью: видны, когда у кисти больше одного варианта;
+## подпись — имя выбранного и «номер / сколько».
 func _refresh_variants() -> void:
-	if _variant_popup == null or not _variant_popup.visible: return
+	if _set_row != null:
+		_set_row.visible = SmallItems.is_table(brush) and tool != Tool.ERASER
+		if _set_row.visible:
+			_set_label.text = "Items: " + SmallItems.SET_NAMES[SmallItems.SET_IDS.find(_table_set())]
+	if _variant_row == null: return
 	var entries := _variant_entries()
-	if entries.is_empty(): _variant_popup.hide()
-	else: _fill_variants(entries)
+	_variant_row.visible = entries.size() > 1
+	if not _variant_row.visible: return
+	var sel := _variant_index(entries)
+	_variant_icon.texture = entries[sel][0]
+	_variant_label.text = "%s · %d/%d" % [entries[sel][1], sel + 1, entries.size()]
+	_variant_label.tooltip_text = "%s (%s / %s)" % [entries[sel][1],
+			Keybinds.label("editor_variant_prev"), Keybinds.label("editor_variant_next")]
 
-func _fill_variants(entries: Array) -> void:
-	for c in _variant_box.get_children():
-		_variant_box.remove_child(c)
-		c.queue_free()
-	for e: Array in entries:
-		var b := Button.new()
-		b.icon = e[0]
-		b.expand_icon = true
-		b.custom_minimum_size = Vector2(34, 34)
-		b.toggle_mode = true
-		b.button_pressed = e[3]
-		b.focus_mode = Control.FOCUS_NONE
-		b.tooltip_text = e[1]
-		_tight(b)
-		b.pressed.connect(e[2])
-		_variant_box.add_child(b)
-	_variant_popup.reset_size()
+func _variant_index(entries: Array) -> int:
+	for i in entries.size():
+		if bool(entries[i][3]):
+			return i
+	return 0
+
+## Набор, которым кисть стола накрывает его сейчас.
+func _table_set() -> String:
+	return brush_table_set if brush_table_set != "" else SmallItems.default_set(brush)
+
+func _cycle_table_set(d: int) -> void:
+	brush_table_set = SmallItems.SET_IDS[posmod(SmallItems.SET_IDS.find(_table_set()) + d, SmallItems.SET_IDS.size())]
+	_refresh_variants()
+
+## Соседний вариант по кругу: d = −1 назад, +1 вперёд.
+func _cycle_variant(d: int) -> void:
+	var entries := _variant_entries()
+	if entries.size() < 2: return
+	var next: Array = entries[posmod(_variant_index(entries) + d, entries.size())]
+	(next[2] as Callable).call()
+	_refresh_variants()
+	queue_redraw()
 
 func _set_brush_size(n: int) -> void:
 	brush_size = clampi(n, 1, 15)
@@ -2735,6 +2940,8 @@ func _set_brush_size(n: int) -> void:
 	queue_redraw()
 
 func _brush_name(id: String) -> String:
+	if id == ITEM_ERASE: return "Erase items"
+	if id.begins_with("item:"): return SmallItems.name_of(id.substr(5))
 	if id.begins_with("decal:"): return id.substr(6).replace("_", " ").capitalize()
 	if id.begins_with("accent:"): return MCF.ACCENT_NAMES[int(id.substr(7))] + " wall accent"
 	if id.begins_with("door:"): return "Door texture %s" % id.substr(5)
@@ -2835,12 +3042,36 @@ func _mark_dirty() -> void:
 
 # --- Картинки палитры и инструментов ---
 
+## Значок мелкого предмета (0.12.1): картинка обрезана по самому предмету — в натуральную
+## величину кружка на значке палитры была бы точкой.
+var _item_thumbs: Dictionary = {}
+func _item_thumb(kind: String) -> Texture2D:
+	if _item_thumbs.has(kind):
+		return _item_thumbs[kind]
+	var tex := Sprites.texture_of(SmallItems.texture_name(kind))
+	var img := tex.get_image() if tex != null else null
+	var out: Texture2D = tex
+	if img != null and not img.is_empty():
+		img = img.duplicate()
+		if img.is_compressed():
+			img.decompress()
+		var r := img.get_used_rect()
+		if r.size.x > 0 and r.size.y > 0:
+			var side := maxi(r.size.x, r.size.y) + 2
+			var sq := Image.create(side, side, false, Image.FORMAT_RGBA8)
+			sq.blit_rect(img, r, Vector2i((side - r.size.x) / 2, (side - r.size.y) / 2))
+			sq.resize(22, 22, Image.INTERPOLATE_NEAREST if side < 22 else Image.INTERPOLATE_LANCZOS)
+			out = ImageTexture.create_from_image(sq)
+	_item_thumbs[kind] = out
+	return out
+
 ## Картинка кисти — та же плитка, что ляжет на карту, в окружении пресета.
 func _thumb(id: String) -> Texture2D:
 	if id.begins_with("accent:"): return _swatch(MCF.ACCENT_COLORS[clampi(int(id.substr(7)), 0, MCF.ACCENT_COLORS.size() - 1)])
 	if id.begins_with("door:"): return _door_thumb(int(id.substr(5)))
 	if id == MCF.FEATURE_AIRLOCK: return _door_thumb(brush_door)
 	if id.begins_with("decal:"): return Sprites.texture_of("blood_splatter" if id == "decal:blood_drop" else id.substr(6))
+	if id.begins_with("item:"): return _item_thumb(id.substr(5)) if id != ITEM_ERASE else null
 	var env := _env
 	if id.begins_with("unit:"):
 		var key := Sprites.resolve(id.substr(5), "_neutral")
@@ -3391,6 +3622,59 @@ func _size_presets(body: Container, w: SpinBox, h: SpinBox) -> void:
 func _sync_editor_decals() -> void:
 	_grid.map_decals = map.decals.duplicate(true)
 	_tiles.set_map_decals()
+
+func _sync_editor_items() -> void:
+	var before := _grid.map_items
+	_grid.map_items = map.items.duplicate(true)
+	_tiles.set_map_items(before)
+	_mark_dirty()
+
+## Стереть предметы в круге кисти вокруг pos.
+func _erase_items(pos: Vector2) -> void:
+	var r := float(brush_size) * 0.5
+	var left := map.items.filter(func(it: Array) -> bool: return Vector2(float(it[1]), float(it[2])).distance_to(pos) > r)
+	if left.size() != map.items.size():
+		map.items = left
+		_sync_editor_items()
+
+## Стол, поставленный этим действием, получает предметы своего набора (0.12.1); со снятого
+## стола они уходят вместе с ним. Раскладка — по каждому новому столу целиком.
+func _furnish_new_tables() -> void:
+	# Вставка, заготовка и пресет несут свои предметы — раскладывает только рисование и ластик.
+	if not _float.is_empty() or not (tool in [Tool.BRUSH, Tool.ERASER, Tool.LINE, Tool.RECT, Tool.CIRCLE, Tool.FILL]):
+		return
+	var placed: Dictionary = {}   # клетка -> id стола
+	var cleared: Dictionary = {}
+	for i: int in _act.get("cells", {}):
+		var before := String((_act["cells"][i] as Array)[3])
+		var after := String(map.feature_id[i])
+		if before == after:
+			continue
+		var c := Vector2i(i % map.width, i / map.width)
+		if SmallItems.is_table(before):
+			cleared[c] = true
+		if SmallItems.is_table(after):
+			placed[c] = after
+	if placed.is_empty() and cleared.is_empty():
+		return
+	var items := map.items.filter(func(it: Array) -> bool:
+		var c := SmallItems.cell_of(it)
+		return not cleared.has(c) and not placed.has(c))
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	var done: Dictionary = {}
+	for c: Vector2i in placed:
+		if done.has(c):
+			continue
+		var fid: String = placed[c]
+		var piece := Furniture.piece_cells(func(q: Vector2i) -> String:
+			return String(map.feature_id[q.y * map.width + q.x]) if map.in_bounds(q) else "", c)
+		for q: Vector2i in piece:
+			done[q] = true
+		var set_id := _table_set() if Furniture.base_of(brush) == Furniture.base_of(fid) else SmallItems.default_set(fid)
+		items.append_array(SmallItems.furnish(map, piece, set_id, rng))
+	map.items = items
+	_sync_editor_items()
 
 func _save_room_dialog() -> void:
 	if not _has_selection():

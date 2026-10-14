@@ -771,8 +771,10 @@ const DOOR_FRAME_HEAVY := 3
 func _door_frame_w(style: String) -> int:
 	return DOOR_FRAME_HEAVY if (style == "bunker" or style == "asteroid") else DOOR_FRAME
 
+## Станционный люк (и дверь без окружения) с 0.12.1 рисует tools/art/build_doors.py — тем
+## же отрисовщиком, что мебель; здесь его больше не пишем, чтобы не затереть.
 func _doors_all() -> void:
-	for style: String in ["station", "bunker", "asteroid", "town", "field"]:
+	for style: String in ["bunker", "asteroid", "town", "field"]:
 		for open: bool in [false, true]:
 			var img := Image.create(T * 3, T, false, Image.FORMAT_RGBA8)
 			for v in 3:
@@ -780,8 +782,6 @@ func _doors_all() -> void:
 				img.blit_rect(one, Rect2i(0, 0, T, T), Vector2i(v * T, 0))
 			var name := "door_open" if open else "door"
 			_save("%s_%s" % [name, style], img)
-			if style == "station":
-				_save(name, img)   # без окружения — станционный люк
 
 func _door_front(style: String, open: bool, v: int) -> Image:
 	var img := Image.create(T, T, false, Image.FORMAT_RGBA8)

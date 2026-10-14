@@ -46,7 +46,7 @@ func _reference(img: Image, fx: FxDecals, done: int, grid: Grid) -> void:
 			var c := Vector2i(floori(pos.x), floori(pos.y))
 			if not grid.in_bounds(c):
 				continue
-			var look: Array = FxDecals.LOOK.get(str(p["kind"]), [])
+			var look: Array = FxDecals.look_of(str(p["kind"]))
 			if look.is_empty():
 				continue
 			var col: Color = look[1]

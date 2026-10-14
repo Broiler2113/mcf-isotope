@@ -27,8 +27,16 @@ const DAMAGE_EPICENTER := 2  # клетка эпицентра — выгоре�
 
 ## Сколько осколков даёт одно разбитое стекло (#21.2). Урезание «гипероптимизации»
 ## (item 5) откачено по прямой просьбе игрока (issue 7: «make more blood splatter
-## particles appear as well as glass shards»): 3..6 вместо 2..3. Потолок осевших
-## частиц (PROPS_CAP) поднят соразмерно, чтобы прибавка не выдавливала старые следы.
+## particles appear as well as glass shards»): 3..6 вместо 2..3.
+## Обломки стены (0.12.1): больше осколков стекла и чуть крупнее, летят так же. Вид —
+## «chunk:<картинка стены>»: кусок её же плитки, поэтому кирпич сыплется кирпичом.
+const CHUNKS_MIN := 8
+const CHUNKS_MAX := 14
+const CHUNK_SIZE := 0.3
+## Копоть на месте взрыва (0.12.1): «soot:<0..SOOT_VARIANTS-1>», у каждого вида своя форма
+## пятна; эпицентр — крупное, клетки вокруг — пятна поменьше и не все.
+const SOOT_VARIANTS := 4
+const SOOT_COLOR := Color(0.05, 0.045, 0.04, 0.6)
 const SHARDS_MIN := 5
 const SHARDS_MAX := 9
 ## Полёт осколка/гильзы: доли клетки в секунду и длительность. «Небольшая скорость»
@@ -57,19 +65,9 @@ const SPLATTER_RANGE := 1.5
 ## Разорван взрывом или раздавлен (blast): брызги кольцом вдвое гуще и дальше, плюс ошмётки.
 const GIBS_MIN := 4
 const GIBS_MAX := 7
-## Потолок осевших частиц. Косметика не должна расти бесконечно: длинный бой на
-## большой карте иначе набирает десятки тысяч точек, и отрисовка начинает стоить
-## дороже самой игры. Старые вытесняются, как в кольцевом буфере. Поднят до 1500
-## вместе с щедростью осколков и брызг (issue 7): при 500 гильзы и кровь одного
-## боестолкновения выдавливали следы предыдущего прямо на глазах.
-## Отрисовка от этого не страдает: частицы за краем экрана отсекаются в _draw_fx_one.
-## 8000 (playtest-20): игрок хочет, чтобы гильзы и осколки ОСТАВАЛИСЬ — при 1500 сетевая
-## партия на четверых выдавливала первые перестрелки ещё до середины боя.
-const PROPS_CAP := 8000
-
-## Потолок отрезков лазерного следа. Считается в ОТРЕЗКАХ, а не в выстрелах: над
-## космосом след не кладётся, поэтому один луч вдоль пробоины даёт несколько кусков.
-const LASER_CAP := 2000
+## Потолков у осевшей косметики нет (0.12.1, владелец: «remove all decal caps»): гильзы,
+## осколки, кровь, следы лазера и колеи остаются до конца боя. Отрисовке это не вредит —
+## осевшее запечено в картинки кусков доски (0.9.3), кадр о нём не знает.
 ## Шаг проверки «над чем идёт луч» в долях клетки. Мельче клетки, иначе граница куска
 ## встала бы по её середине и след заезжал бы в космос на пол-клетки.
 const LASER_STEP := 0.25
@@ -91,14 +89,7 @@ var floor_damage: Dictionary = {}
 var damage_version: int = 0
 ## Осевшая статика: [{kind, pos: Vector2 (в клетках), rot: float, scale: float}].
 var props: Array = []
-## Кровь и ошмётки — отдельно от props и БЕЗ вытеснения по ходу боя. Во что поле
-## превратилось к концу партии —
-## это и есть картина боя, и смотреть на неё игрок хочет целиком. Гильзы и осколки
-## остаются в props под прежним потолком: их на порядок больше, а ценности в старых нет.
-##
-## Потолок здесь всё-таки есть, но заведомо выше любой партии: он страхует от
-## бесконечного роста в патологическом случае, а не подчищает поле.
-const GORE_CAP := 60000
+## Кровь и ошмётки — отдельно от props: экран боя и запекание обходят их первыми.
 const GORE_KINDS := {"blood_pool": true, "blood_drop": true, "gib": true}
 
 ## Размер частицы в долях клетки и запасной цвет, когда картинки-замены нет. Таблица
@@ -184,10 +175,16 @@ var laser_lines: Array = []
 ## туман прячет их поклеточно, как и прочие следы, и чужой танк не выдаёт себя колеёй.
 var track_marks: Array = []
 var ground_version := 0
-const TRACKS_CAP := 6000
 ## Летящие пули-трассеры (item 16): [{from, to, t, dur}] в клетках. Живут доли секунды,
 ## по истечении исчезают. Не оседают — это мгновенный полёт снаряда от стрелка к цели.
 var tracers: Array = []
+## Летящие снаряды (0.12.1): ракета, снаряд танка, граната — {kind, from, to, t, dur}. Как и
+## трассеры, живут доли секунды и не сохраняются.
+var shots: Array = []
+## Секунд на клетку полёта по виду снаряда; полёт — в пределах SHOT_MIN..SHOT_MAX.
+const SHOT_PACE := {"rocket": 0.06, "shell": 0.045, "grenade": 0.09}
+const SHOT_MIN := 0.18
+const SHOT_MAX := 0.55
 const TRACER_DUR := 0.16
 
 ## Дорожки боя «кто в кого» (issue 8: «add visual clues that would tell the player who is
@@ -260,6 +257,7 @@ func clear() -> void:
 	track_marks.clear()
 	ground_version += 1
 	tracers.clear()
+	shots.clear()
 	lanes.clear()
 	flashes.clear()
 	_event_seq = 0
@@ -276,6 +274,27 @@ func _tracer(ev: Dictionary) -> void:
 	var n: int = maxi(1, int(ev.get("count", 1)))
 	for i in n:
 		tracers.append({"from": a, "to": b, "t": -0.05 * i, "dur": TRACER_DUR})
+
+## Снаряд в полёте (0.12.1): от клетки к клетке, за shot_dur(ev).
+func _shot(ev: Dictionary) -> void:
+	var a: Array = ev.get("from", [])
+	var b: Array = ev.get("to", [])
+	if a.size() < 2 or b.size() < 2:
+		return
+	shots.append({"kind": str(ev.get("kind", "shell")), "t": 0.0, "dur": shot_dur(ev),
+			"from": Vector2(float(a[0]) + 0.5, float(a[1]) + 0.5),
+			"to": Vector2(float(b[0]) + 0.5, float(b[1]) + 0.5)})
+
+## Сколько летит снаряд события «shot»: по дальности и виду. Этим же экран ждёт попадания.
+static func shot_dur(ev: Dictionary) -> float:
+	var a: Array = ev.get("from", [0, 0])
+	var b: Array = ev.get("to", [0, 0])
+	var cells := Vector2(float(a[0]), float(a[1])).distance_to(Vector2(float(b[0]), float(b[1])))
+	return clampf(cells * float(SHOT_PACE.get(str(ev.get("kind", "")), 0.05)), SHOT_MIN, SHOT_MAX)
+
+## Через сколько трассер события «tracer» долетает до цели (последняя пуля очереди).
+static func tracer_dur(ev: Dictionary) -> float:
+	return TRACER_DUR + 0.05 * float(maxi(1, int(ev.get("count", 1))) - 1)
 
 ## Дорожки «кто в кого» (issue 8) разбираются ОТДЕЛЬНЫМ заходом — до броска кубика,
 ## тогда как остальная косметика ложится после него (иначе кровь опережала бы решение
@@ -300,6 +319,12 @@ func _apply(events: Array, lanes_only: bool) -> void:
 				_debris(ev)
 			"shards":
 				_shards(ev)
+			"chunks":
+				_chunks(ev)
+			"items":
+				_items(ev)
+			"spill":
+				_spill(ev)
 			"casings":
 				_casings(ev)
 			"blood":
@@ -312,6 +337,8 @@ func _apply(events: Array, lanes_only: bool) -> void:
 				_tracks(ev)
 			"tracer":
 				_tracer(ev)
+			"shot":
+				_shot(ev)
 			"lane":
 				_lane(ev)
 
@@ -360,6 +387,7 @@ func _debris(ev: Dictionary) -> void:
 	# щебень под гусеницей танка, под снесённой лучом стеной или под разбитым окном его не
 	# ставит — там ничего не рвалось.
 	if bool(ev.get("blast", false)):
+		_soot(ev)
 		var cells: Array[Vector2i] = []
 		for c: Vector2i in ev.get("cells", []):
 			cells.append(c)
@@ -367,6 +395,27 @@ func _debris(ev: Dictionary) -> void:
 			flashes.append({"cells": cells, "t": 0.0})
 			if flashes.size() > FLASH_CAP:
 				flashes = flashes.slice(flashes.size() - FLASH_CAP)
+
+## Копоть (0.12.1): на эпицентре — крупное пятно, вокруг — пятна поменьше примерно на
+## каждой второй клетке. Вид, угол, размер и сдвиг у каждого свои; над космосом — ничего.
+func _soot(ev: Dictionary) -> void:
+	var epicenter: Vector2i = ev.get("at", Vector2i.ZERO)
+	var i := 0
+	for c: Vector2i in ev.get("cells", []):
+		i += 1
+		if _space(c):
+			continue
+		var rng := _rng_for("soot", c, i, _seq)
+		var big := c == epicenter
+		if not big and rng.randf() > 0.55:
+			continue
+		var jitter := 0.12 if big else 0.3
+		_settle(props, {"kind": "soot:%d" % rng.randi_range(0, SOOT_VARIANTS - 1),
+				"pos": Vector2(c) + Vector2(0.5, 0.5)
+						+ Vector2(rng.randf_range(-jitter, jitter), rng.randf_range(-jitter, jitter)),
+				"rot": rng.randf_range(0.0, TAU),
+				"scale": rng.randf_range(1.5, 2.1) if big else rng.randf_range(0.6, 1.15),
+				"origin": c})
 
 ## 21.2 — осколки стекла: 2..5 штук, летят ПРОТИВ направления удара, у каждого свои
 ## скорость и вращение.
@@ -379,6 +428,100 @@ func _shards(ev: Dictionary) -> void:
 	for i in count:
 		var rng := _rng_for("shard", at, i, _seq)
 		_launch("shard", at, away, rng, SHARD_RANGE_MIN, SHARD_RANGE_MAX, SHARD_FLIGHT_SEC, 1.25)
+
+## Обломки стены или ДОТа (0.12.1). Стена, снесённая взрывом, разлетается ПРОТИВ удара,
+## как стекло; ДОТ, потерявший прочность (toward), откалывается со стороны выстрела —
+## куски летят к стрелку. Удар из своей же клетки — во все стороны.
+func _chunks(ev: Dictionary) -> void:
+	var at: Vector2i = ev.get("at", Vector2i.ZERO)
+	var from: Vector2i = ev.get("from", at)
+	var kind := "chunk:" + chunk_art(str(ev.get("fid", MCF.FEATURE_WALL)), int(ev.get("look", 0)),
+			str(ev.get("env", "")))
+	var dir := _away(at, from)
+	if bool(ev.get("toward", false)):
+		dir = -dir
+	var fan := PI if from == at else 1.25
+	var count: int = int(ev["count"]) if ev.has("count") \
+			else _rng_for("chunks_n", at, 0, _seq).randi_range(CHUNKS_MIN, CHUNKS_MAX)
+	for i in count:
+		_launch(kind, at, dir, _rng_for("chunk", at, i, _seq), SHARD_RANGE_MIN, SHARD_RANGE_MAX,
+				SHARD_FLIGHT_SEC, fan)
+
+## Мелкие предметы слетают (0.12.1): от взрыва — далеко, как осколки; со сдвинутой мебели —
+## недалеко, как гильзы. Каждый летит со своего места и ложится на пол.
+func _items(ev: Dictionary) -> void:
+	var at: Vector2i = ev.get("at", Vector2i.ZERO)
+	var from: Vector2i = ev.get("from", at)
+	var far := bool(ev.get("far", true))
+	var k := 0
+	for it: Array in ev.get("items", []):
+		var rng := _rng_for("item", at, k, _seq)
+		k += 1
+		var dir := _away(at, from) if from != at else Vector2.RIGHT.rotated(rng.randf_range(0.0, TAU))
+		_launch("item:" + str(it[0]), at, dir, rng, 0.5 if far else CASING_RANGE_MIN,
+				SHARD_RANGE_MAX if far else CASING_RANGE_MAX * 1.2,
+				SHARD_FLIGHT_SEC if far else CASING_FLIGHT_SEC * 1.3, 1.0 if far else 0.8,
+				Vector2(float(it[1]), float(it[2])), float(it[3]), 1.0)
+
+## Шкаф высыпает содержимое (0.12.1): несколько вещей его рода (SmallItems.SPILLS) из его
+## клетки, прочь от толчка.
+func _spill(ev: Dictionary) -> void:
+	var at: Vector2i = ev.get("at", Vector2i.ZERO)
+	var from: Vector2i = ev.get("from", at)
+	var kinds: Array = SmallItems.SPILLS.get(Furniture.base_of(str(ev.get("fid", ""))), [])
+	if kinds.is_empty():
+		return
+	var n_rng := _rng_for("spill_n", at, 0, _seq)
+	for i in n_rng.randi_range(SmallItems.SPILL_MIN, SmallItems.SPILL_MAX):
+		var rng := _rng_for("spill", at, i, _seq)
+		var dir := _away(at, from) if from != at else Vector2.RIGHT.rotated(rng.randf_range(0.0, TAU))
+		_launch("item:" + str(kinds[rng.randi_range(0, kinds.size() - 1)]), at, dir, rng, 0.35, 1.3,
+				CASING_FLIGHT_SEC * 1.4, 1.2, Vector2.INF, INF, 1.0)
+
+## Картинка стены, которой выглядят её обломки: материал стены (кирпич, штукатурка…), а
+## без него — плитка объекта в окружении карты («wall» на станции — wall_station).
+static func chunk_art(fid: String, look: int, env: String) -> String:
+	var name := MCF.wall_look_tile(look) if fid == MCF.FEATURE_WALL else ""
+	if name == "":
+		name = "soil" if fid == MCF.FEATURE_DIRT_PILE else str(Sprites.ALIASES.get(fid, fid))
+	return TerrainTiles.env_name(name, env)
+
+## [размер в долях клетки, цвет] вида частицы — LOOK плюс обломки и копоть, у которых
+## вид составной. Пусто — частица неизвестна.
+static var _chunk_colors: Dictionary = {}
+static func look_of(kind: String) -> Array:
+	if kind.begins_with("chunk:"):
+		var art := kind.substr(6)
+		if not _chunk_colors.has(art):
+			_chunk_colors[art] = _average_color(art)
+		return [CHUNK_SIZE, _chunk_colors[art]]
+	if kind.begins_with("soot:"):
+		return [1.0, SOOT_COLOR]
+	if kind.begins_with("item:"):
+		var tex := SmallItems.texture_name(kind.substr(5))
+		if not _chunk_colors.has(tex):
+			_chunk_colors[tex] = _average_color(tex)
+		return [SmallItems.DRAW_SCALE, _chunk_colors[tex]]
+	return LOOK.get(kind, [])
+
+## Имя картинки вида частицы (мелкий предмет — своя, «item_<вид>»).
+static func texture_of_kind(kind: String) -> String:
+	if kind.begins_with("item:"):
+		return SmallItems.texture_name(kind.substr(5))
+	return str(TEXTURE.get(kind, kind))
+
+static func _average_color(art: String) -> Color:
+	var tex := Sprites.texture_of(art)
+	var img := tex.get_image() if tex != null else null
+	if img == null or img.is_empty():
+		return Color(0.45, 0.43, 0.4, 0.95)
+	img = img.duplicate()
+	if img.is_compressed():
+		img.decompress()
+	img.resize(1, 1, Image.INTERPOLATE_BILINEAR)
+	var c := img.get_pixel(0, 0)
+	c.a = 0.95
+	return c
 
 ## 21.3 — гильзы: по одной на выстрел, вылетают ЗА спину стрелка.
 func _casings(ev: Dictionary) -> void:
@@ -411,9 +554,6 @@ func _laser(ev: Dictionary) -> void:
 	for run: Array in _ground_runs(a, b):
 		laser_lines.append({"from": run[0], "to": run[1]})
 	ground_version += 1
-	# Не копим бесконечно — держим последние отрезки, как и осевшие частицы.
-	if laser_lines.size() > LASER_CAP:
-		laser_lines = laser_lines.slice(laser_lines.size() - LASER_CAP)
 
 ## Две колеи по бортам танка от старого места до нового (playtest-20). Над космосом колеи
 ## нет — там нечего продавить.
@@ -445,8 +585,6 @@ func _tracks(ev: Dictionary) -> void:
 				track_marks.append({"from": ra.lerp(rb, float(i) / n),
 						"to": ra.lerp(rb, float(i + 1) / n)})
 	ground_version += 1
-	if track_marks.size() > TRACKS_CAP:
-		track_marks = track_marks.slice(track_marks.size() - TRACKS_CAP)
 
 ## Куски отрезка a→b, идущие НАД ПОЛОМ, в виде [[начало, конец], …]. Космические клетки
 ## выбрасываются, соседние клетки с полом склеиваются в один кусок — ровная линия там, где
@@ -485,7 +623,6 @@ func _blood(ev: Dictionary) -> void:
 			for i in srng.randi_range(GIBS_MIN, GIBS_MAX):
 				_launch("gib", at, _away(at, from), _rng_for("gib", at, i, _seq), 0.5, 2.2,
 						SHARD_FLIGHT_SEC * 1.4, PI)
-			_trim()
 		return
 	var pool_rng := _rng_for("pool", at, 0, _seq)
 	_settle(gore, {
@@ -514,7 +651,6 @@ func _blood(ev: Dictionary) -> void:
 		for i in drops_rng.randi_range(GIBS_MIN, GIBS_MAX):
 			var rng := _rng_for("gib", at, i, _seq)
 			_launch("gib", at, away, rng, 0.5, 2.2, SHARD_FLIGHT_SEC * 1.4, PI)
-	_trim()
 
 ## Огонь съел клетку: с неё исчезает ВСЯ осевшая косметика — кровь, ошмётки, гильзы,
 ## осколки, отпечатки. Пламя прошло по земле, и под ним не остаётся ни лужи, ни латуни.
@@ -556,17 +692,22 @@ static func _away(at: Vector2i, source: Vector2i) -> Vector2:
 ## своё вращение. Координаты — в КЛЕТКАХ, поэтому слой не зависит от зума и размера
 ## клетки; в пиксели их переводит уже отрисовка.
 ## fan — полуширина веера в радианах (0.9 ≈ ±50°, у осколков шире).
+## from_pos / rot / scale (0.12.1) — для мелкого предмета: летит со своего места, со своим
+## углом и в своём размере (а не из середины клетки случайной крошкой).
 func _launch(kind: String, at: Vector2i, dir: Vector2, rng: RandomNumberGenerator,
-		r_min: float, r_max: float, flight: float, fan: float = 0.9) -> void:
+		r_min: float, r_max: float, flight: float, fan: float = 0.9,
+		from_pos := Vector2.INF, rot := INF, scale := -1.0) -> void:
 	var spread := rng.randf_range(-fan, fan)
 	var d := dir.rotated(spread)
 	var start := Vector2(at) + Vector2(0.5, 0.5) \
 			+ Vector2(rng.randf_range(-0.12, 0.12), rng.randf_range(-0.12, 0.12))
+	if from_pos != Vector2.INF:
+		start = from_pos
 	var to: Vector2 = _clip_solid(start, start + d * rng.randf_range(r_min, r_max), at)
 	var f := {
 		"kind": kind, "from": start, "to": to, "origin": at,
-		"rot0": rng.randf_range(0.0, TAU), "rot1": rng.randf_range(-TAU, TAU),
-		"scale": rng.randf_range(0.6, 1.1), "t": 0.0, "dur": flight,
+		"rot0": rng.randf_range(0.0, TAU) if rot == INF else rot, "rot1": rng.randf_range(-TAU, TAU),
+		"scale": rng.randf_range(0.6, 1.1) if scale < 0.0 else scale, "t": 0.0, "dur": flight,
 	}
 	# Отскок от края поля (batch 12 #6): частица долетает до стенки и отражается —
 	# остаток пути идёт обратно внутрь. Точка удара и доля полёта до неё запоминаются,
@@ -645,7 +786,13 @@ func advance(delta: float) -> bool:
 			if float(flashes[i]["t"]) >= FLASH_DUR:
 				flashes.remove_at(i)
 	# Пули-трассеры (item 16): двигаем время, отработавшие убираем.
-	var tracers_active := not tracers.is_empty()
+	var shots_active := not shots.is_empty()
+	if shots_active:
+		for i in range(shots.size() - 1, -1, -1):
+			shots[i]["t"] = float(shots[i]["t"]) + delta
+			if float(shots[i]["t"]) >= float(shots[i]["dur"]):
+				shots.remove_at(i)
+	var tracers_active := not tracers.is_empty() or shots_active
 	if tracers_active:
 		for i in range(tracers.size() - 1, -1, -1):
 			tracers[i]["t"] = float(tracers[i]["t"]) + delta
@@ -674,8 +821,6 @@ func advance(delta: float) -> bool:
 			_settle(gore, settled_prop)
 		else:
 			_settle(props, settled_prop)
-	if not landed.is_empty():
-		_trim()
 	return true
 
 ## Где частица находится сейчас: линейно от from к to, с горкой по высоте, чтобы
@@ -697,24 +842,6 @@ static func flight_pos(f: Dictionary) -> Vector2:
 static func flight_rot(f: Dictionary) -> float:
 	var k: float = clampf(float(f["t"]) / maxf(0.001, float(f["dur"])), 0.0, 1.0)
 	return float(f["rot0"]) + float(f["rot1"]) * k
-
-## Запас сверх потолка, при котором вытеснение ещё не запускается (0.9.3). Вытеснение
-## перебирает указатель кусков заново и выбрасывает все запечённые картинки, поэтому
-## делать это на каждую осевшую гильзу нельзя: перевалив за потолок, бой пересобирал бы
-## доску на каждое действие. С запасом это случается раз на SLACK частиц.
-const TRIM_SLACK := 400
-
-func _trim() -> void:
-	var over := props.size() - PROPS_CAP
-	var gore_over := gore.size() - GORE_CAP
-	if over <= TRIM_SLACK and gore_over <= TRIM_SLACK:
-		return
-	if over > 0:
-		props = props.slice(over)
-	# Кровь вытесняется только на аварийном потолке — см. GORE_CAP.
-	if gore_over > 0:
-		gore = gore.slice(gore_over)
-	_reindex()
 
 # --- Сохранение косметики (M12, item 42) ---
 ## Осевшая косметика — часть того, КАК выглядит бой, поэтому сохранение везёт её с
@@ -770,7 +897,6 @@ func from_dict(d: Dictionary) -> void:
 				gore.append(loaded)
 			else:
 				props.append(loaded)
-	_trim()
 	_reindex()
 	for e in d.get("lasers", []):
 		if e is Array and (e as Array).size() >= 4:

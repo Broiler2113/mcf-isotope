@@ -179,7 +179,7 @@ An anti-tank charge damages a vehicle only with a [b]direct hit[/b]. Anti-vehicl
 The last team with soldiers standing wins.
 
 [h]Capture & Hold[/h]
-Zones (1, 3 or 5) are placed fairly between the deployment zones and shown to everyone; a cramped map may get fewer, since every zone must be equally far for both sides. At the end of every round each zone belongs to the team with [b]more soldiers in it[/b] (a tie scores nothing); every zone held scores [b]1 point[/b]. First to the target (12 by default) wins. Wiping out the enemy still wins outright. The map shows who held each zone at the last round end.
+Zones (1, 3 or 5) are placed fairly between the deployment zones and shown to everyone; a cramped map may get fewer, since every zone must be equally far for both sides. The host can instead [b]draw the zones[/b] in the lobby (up to 5). At the end of every round each zone belongs to the team with [b]more soldiers in it[/b] (a tie scores nothing); every zone held scores [b]1 point[/b]. First to the target (12 by default) wins. Wiping out the enemy still wins outright. The map shows who held each zone at the last round end.
 
 [h]Holdout[/h]
 All players defend together against [b]waves[/b] led by an AI or the trained model. A wave lands every %d rounds — [b]or right after the previous wave is wiped out[/b] — and each is bigger than the last. Its landing edge is announced a round ahead. Hold 5, 10 or 15 waves to win; in Endless you play for how long you last.""" % [MatchMode.WAVE_EVERY]],

@@ -53,6 +53,9 @@ const MANIFEST := [
 		"bedrock", "boundary_bunker",
 		"door_station", "door_open_station", "door_bunker", "door_open_bunker",
 		"door_town", "door_open_town", "door_field", "door_open_field", "door_asteroid", "door_open_asteroid",
+		"trench_station", "trench_asteroid",
+		# Куча из окопа на станции и астероиде (0.12.1) — лом палубы вместо грунта.
+		"rubble",
 	]],
 	["Wall materials (a town building picks one; same rules as a wall, different look)", [
 		"wall_brick", "wall_stucco", "wall_block",

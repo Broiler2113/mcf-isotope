@@ -29,6 +29,27 @@ var floor_look: PackedByteArray = PackedByteArray()
 ## Акцент службы по клеткам (MapData.wall_accent) — тоже только для отрисовки.
 var wall_accent: PackedByteArray = PackedByteArray()
 var map_decals: Array = []
+## Мелкие предметы карты (0.12.1, SmallItems): [вид, x, y, угол]. В бою список не меняется:
+## сбитые взрывом или упавшие со сдвинутого стола отмечаются в клетке (GridCell.items_off).
+var map_items: Array = []
+var _items_index: Dictionary = {}   # клетка -> номера её предметов в map_items, по порядку
+var _items_indexed: Array = []
+
+## Номера предметов клетки c в map_items (в порядке списка; номер в клетке — бит items_off).
+func items_in(c: Vector2i) -> Array:
+	if not is_same(_items_indexed, map_items) or _items_indexed.size() != map_items.size():
+		_items_index.clear()
+		for i in map_items.size():
+			var cc := SmallItems.cell_of(map_items[i])
+			if not _items_index.has(cc): _items_index[cc] = []
+			(_items_index[cc] as Array).append(i)
+		_items_indexed = map_items
+	return _items_index.get(c, [])
+
+## Бит предмета i в GridCell.items_off его клетки: по месту среди предметов этой клетки.
+func item_bit(i: int) -> int:
+	var k := items_in(SmallItems.cell_of(map_items[i])).find(i)
+	return 1 << k if k >= 0 and k < 30 else 0
 ## Light colour per cell (MapData.light_tint) — display only.
 var light_tint: PackedByteArray = PackedByteArray()
 

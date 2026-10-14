@@ -51,7 +51,7 @@ static func encode(state: GameState) -> Dictionary:
 		"next_id": state._next_id,
 		"next_vehicle_id": state._next_vehicle_id,
 		"combat_started": state.combat_started,
-		"env": state.env,
+		"env": state.env, "time": state.time_of_day,
 		"fx_seq": state.fx_seq,
 		"kills": state.kills.duplicate(true),
 		"deaths": state.deaths.duplicate(true),
@@ -63,6 +63,8 @@ static func encode(state: GameState) -> Dictionary:
 ## иначе, чем сохранённая.
 static func _encode_decor(grid: Grid) -> Dictionary:
 	var out := {"decals": grid.map_decals.duplicate(true)}
+	if not grid.map_items.is_empty():
+		out["items"] = grid.map_items.duplicate(true)
 	if grid.floor_look.size() == grid.width * grid.height and grid.floor_look.count(0) < grid.floor_look.size():
 		out["floor"] = MapData.rle(grid.floor_look)
 	if grid.wall_accent.size() == grid.width * grid.height \
@@ -143,6 +145,7 @@ static func _encode_cells(grid: Grid) -> Array:
 		if c.dirt_level != 0: rec["dirt"] = c.dirt_level
 		if c.airlock_welded: rec["welded"] = true
 		if not c.lamps.is_empty(): rec["fixture"] = c.lamps.duplicate(true)
+		if c.items_off != 0: rec["items_off"] = c.items_off
 		if rec.is_empty():
 			continue
 		rec["i"] = i
@@ -269,9 +272,14 @@ static func restore_into(gs: GameState, d: Dictionary) -> void:
 	gs.turns.initiative_rolled = bool(turns.get("rolled", true))
 	gs.revealed_mines = _decode_mines(d.get("mines", []))
 	gs.env = str(d.get("env", gs.env))
+	gs.time_of_day = str(d.get("time", ""))
 	if d.has("decor"):
 		var dec: Dictionary = d["decor"]
 		gs.grid.map_decals = dec.get("decals", []).duplicate(true)
+		gs.grid.map_items = []
+		for it in dec.get("items", []):
+			var clean := SmallItems.clean(it)
+			if not clean.is_empty(): gs.grid.map_items.append(clean)
 		var n := gs.grid.width * gs.grid.height
 		gs.grid.floor_look = MapData.unrle(dec["floor"], n) if dec.has("floor") else PackedByteArray()
 		gs.grid.door_look = MapData.unrle(dec["door"], n) if dec.has("door") else PackedByteArray()
@@ -410,6 +418,7 @@ static func _decode_cells(sparse: Array, count: int) -> Array:
 		rec["dirt_level"] = int(raw.get("dirt", 0))
 		rec["airlock_welded"] = bool(raw.get("welded", false))
 		rec["fixture"] = MapData.valid_lamps(raw.get("fixture", []))
+		rec["items_off"] = int(raw.get("items_off", 0))
 	return out
 
 static func _default_cell() -> Dictionary:

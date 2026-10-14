@@ -705,7 +705,18 @@ static func feature_durability(feature_id: String) -> int:
 	return Furniture.durability_of(feature_id)
 
 ## Подпись объекта: укрепления — из FEATURE_NAMES, мебель — из Furniture (§3.15).
+## На станции и астероиде копают палубу, а не грунт (0.12.1, владелец): куча, которую
+## выбрасывает окоп, там — «Rubble Pile» и выглядит ломом. Окружение для имён ставит
+## резолвер при создании (бой) и редактор при смене карты; id и правила те же.
+const RUBBLE_ENVS := {"station": true, "asteroid": true}
+static var display_env := ""
+
+static func rubble_env(env: String) -> bool:
+	return RUBBLE_ENVS.has(env)
+
 static func feature_name(feature_id: String, fallback: String = "") -> String:
+	if feature_id == FEATURE_DIRT_PILE and RUBBLE_ENVS.has(display_env):
+		return "Rubble Pile"
 	if FEATURE_NAMES.has(feature_id):
 		return FEATURE_NAMES[feature_id]
 	if Furniture.is_furniture(feature_id):

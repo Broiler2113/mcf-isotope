@@ -86,6 +86,9 @@ static var live_placement_visible: bool = true
 static var game_mode: int = 0
 static var capture_zones: int = 3
 static var capture_target: int = 12
+## Зоны Capture & Hold, нарисованные хостом в лобби (0.12.1): [[x, y, w, h], …]. Пусто —
+## «Auto», расстановка по карте (MatchMode.zones_for). В карту не пишутся (владелец).
+static var capture_drawn: Array = []
 static var holdout_waves: int = 10
 ## Кто ведёт волны Holdout: личность ИИ 0..2 или 3 — обученная модель.
 static var holdout_ai: int = 1

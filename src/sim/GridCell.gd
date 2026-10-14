@@ -132,7 +132,7 @@ func _journal() -> void:
 func image() -> Array:
 	return [floor_type, cover_height, on_fire, fire_owner, fire_suppressed_until, is_space,
 			occupant, vehicle_id, feature_id, station_operator_id, feature_owner,
-			feature_durability, corpse_count, dirt_level, airlock_welded, gas, lamps.duplicate(true), smoke]
+			feature_durability, corpse_count, dirt_level, airlock_welded, gas, lamps.duplicate(true), smoke, items_off]
 
 ## Вернуть клетке снятый image() — через сеттеры, чтобы версии и кеши узнали о правке.
 ## Высота идёт раньше объекта: сеттер feature_id смотрит на неё (стекло в стене).
@@ -156,6 +156,7 @@ func apply_image(im: Array) -> void:
 		gas = im[15]
 	lamps = im[16] if im.size() > 16 else []
 	smoke = im[17] if im.size() > 17 else false
+	items_off = im[18] if im.size() > 18 else 0
 
 ## Wall lamps on this wall cell (0.11): at most one per side, each
 ## [furniture id, remaining durability, side 0..3 (N E S W, the face it hangs on), light tint].
@@ -369,6 +370,19 @@ var airlock_welded: bool = false:
 		walk_version += 1
 		log_look_change(coord.x, coord.y)
 
+## Мелкие предметы клетки (0.12.1, SmallItems), чисто вид: бит k — k-й предмет этой клетки
+## (Grid.items_in) сбит взрывом или упал со сдвинутой мебели; бит OPENED — шкаф на клетке
+## раскрыт и уже высыпал содержимое. Журналится как вид: и откат, и память тумана, и
+## плитки доски узнают о правке так же, как о сварке шлюза.
+const OPENED := 1 << 30
+var items_off: int = 0:
+	set(v):
+		if items_off == v:
+			return
+		if journaling: _journal()
+		items_off = v
+		log_look_change(coord.x, coord.y)
+
 func _init(p_coord: Vector2i) -> void:
 	coord = p_coord
 
@@ -449,6 +463,7 @@ func clear_feature() -> void:
 	cover_height = 0.0
 	dirt_level = 0
 	airlock_welded = false
+	items_off &= ~OPENED   # раскрытого шкафа на клетке больше нет
 
 ## Куча земли выше 1 м (уровень ≥3 = 1.5/2.0 м) — на неё нельзя вставать (§3.7).
 func is_tall_dirt() -> bool:

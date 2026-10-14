@@ -309,19 +309,18 @@ func _preview() -> void:
 	ck(ed._brush_buttons.has("bed") and not ed._brush_buttons.has("bed_red"),
 			"colour variants are not separate palette buttons")
 	ed._select_brush("bed_red")
-	ed._open_variants(ed._brush_buttons["bed"])
-	ck(ed._variant_popup.visible and ed._variant_box.get_child_count() == Furniture.colours_of("bed").size()
-			and (ed._brush_buttons["bed"] as Button).button_pressed,
-			"a coloured bed lights the Bed button and opens its colours beside it")
-	var bed_rect: Rect2 = (ed._brush_buttons["bed"] as Button).get_global_rect()
-	var bx: float = ed._brush_buttons["bed"].get_screen_position().x
-	ck(ed._variant_popup.position.x >= int(bx + bed_rect.size.x) or ed._variant_popup.position.x + ed._variant_popup.size.x <= int(bx),
-			"the colour popup sits beside the palette button, not over it or at the top")
-	ed._variant_popup.hide()
+	# 0.12.1: варианты — стрелками под текущей кистью (и клавишами , и .), не всплывашкой.
+	var colours := Furniture.colours_of("bed")
+	ck(ed._variant_row.visible and (ed._brush_buttons["bed"] as Button).button_pressed
+			and ed._variant_label.text.ends_with("%d/%d" % [colours.find("bed_red") + 1, colours.size()]),
+			"a colored bed lights the Bed button and shows its variant arrows (%s)" % ed._variant_label.text)
+	ed._cycle_variant(1)
+	ck(ed.brush == colours[(colours.find("bed_red") + 1) % colours.size()], "the right arrow picks the next color")
+	_key(KEY_COMMA)
+	ck(ed.brush == "bed_red", "the comma key steps back to the previous color")
 	_drag(Vector2i(4, 4), Vector2i(4, 4))
 	ed._select_brush("chair")
-	ed._open_variants(ed._brush_buttons["chair"])
-	ck(not ed._variant_popup.visible, "a piece with one colour opens no popup")
+	ck(not ed._variant_row.visible, "a piece with one color shows no arrows")
 	_key(KEY_I)
 	_press(Vector2i(4, 4))
 	ck(ed.brush == "bed_red", "the eyedropper picks the colour too")

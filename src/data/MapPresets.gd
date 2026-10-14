@@ -187,6 +187,9 @@ static func rotated(p: Dictionary) -> Dictionary:
 	out["decals"] = []
 	for d: Array in p.get("decals", []):
 		out["decals"].append([d[0], h - float(d[2]), float(d[1]), float(d[3]) + PI / 2, d[4]])
+	out["items"] = []
+	for it: Array in p.get("items", []):
+		out["items"].append([it[0], h - float(it[2]), float(it[1]), fposmod(float(it[3]) + PI / 2, TAU)])
 	return out
 
 ## Отражение: по горизонтали (x → w−1−x) или по вертикали (y → h−1−y).
@@ -207,6 +210,11 @@ static func flipped(p: Dictionary, horizontal: bool) -> Dictionary:
 	for d: Array in p.get("decals", []):
 		out["decals"].append([d[0], w - float(d[1]) if horizontal else d[1],
 			h - float(d[2]) if not horizontal else d[2], PI - float(d[3]) if horizontal else -float(d[3]), d[4]])
+	out["items"] = []
+	for it: Array in p.get("items", []):
+		out["items"].append([it[0], w - float(it[1]) if horizontal else float(it[1]),
+			h - float(it[2]) if not horizontal else float(it[2]),
+			fposmod(PI - float(it[3]) if horizontal else -float(it[3]), TAU)])
 	return out
 
 ## Клетка узора с поворотом мебели (6-й элемент, 0.9.2), переставленным по таблице map
@@ -239,4 +247,8 @@ static func capture(m: MapData, r: Rect2i) -> Dictionary:
 	for d: Array in m.decals:
 		if Rect2(r).has_point(Vector2(float(d[1]), float(d[2]))):
 			p["decals"].append([d[0], float(d[1]) - r.position.x, float(d[2]) - r.position.y, d[3], d[4]])
+	p["items"] = []
+	for it: Array in m.items:
+		if Rect2(r).has_point(Vector2(float(it[1]), float(it[2]))):
+			p["items"].append([it[0], float(it[1]) - r.position.x, float(it[2]) - r.position.y, it[3]])
 	return p

@@ -141,6 +141,7 @@ func _ready() -> void:
 		spent[side] = 0
 	active_side = _sides()[0]
 	map = _load_or_blank_map()
+	MCF.display_env = map.environment()   # «Rubble Pile» на станции и астероиде (0.12.1)
 	_map_zones = _map_defines_zones()
 	# Сохранить нейтральные спавны карты (мирные), сбросить игровые.
 	if GameConfig.civilians_enabled:
@@ -1854,7 +1855,9 @@ func _objective_mode() -> MatchMode:
 	if _objectives == null:
 		_objectives = MatchMode.from_config()
 		if _objectives.is_capture():
-			_objectives.zones = MatchMode.zones_for(map, _objectives.zone_count, roster.player_ids(), _tile_grid)
+			var drawn := MatchMode.drawn_zones(map.width, map.height)
+			_objectives.zones = drawn if not drawn.is_empty() \
+					else MatchMode.zones_for(map, _objectives.zone_count, roster.player_ids(), _tile_grid)
 	return _objectives
 
 func _sort_spawns() -> void:
