@@ -216,7 +216,8 @@ func _actions() -> void:
 	ck(r.breakable_cells(u).is_empty(), "furniture never shows up as a fortification to demolish")
 	_multi_cell()
 
-## Многоклеточное: кровать 2×2 — один предмет (ломается, гибнет и сдвигается целиком),
+## Многоклеточное: кровать 2×2 — один предмет (сдвигается целиком; гибнет с 0.12.2 только
+## задетая клетка),
 ## стойка из трёх секций — три секции.
 func _multi_cell() -> void:
 	var bed := [Vector2i(6, 4), Vector2i(7, 4), Vector2i(6, 5), Vector2i(7, 5)]
@@ -242,10 +243,10 @@ func _multi_cell() -> void:
 	u.remaining_ap = 2
 	res = r.resolve(BreakIntent.new(u.id, Vector2i(6, 5)))
 	ck(res.ok and u.remaining_ap == 0, "smashing the bed costs its 2 AP once")
-	var gone := true
+	var left := 0
 	for c in bed:
-		gone = gone and st.grid.cell(c).feature_id == ""
-	ck(gone, "and takes the whole bed, not one corner")
+		left += 1 if st.grid.cell(c).feature_id == "bed" else 0
+	ck(st.grid.cell(Vector2i(6, 5)).feature_id == "" and left == 3, "and breaks only the cell it hit, the rest of the bed stands (0.12.2)")
 	var cook := st.grid.cell(Vector2i(3, 7)).occupant
 	cook.remaining_ap = 2
 	ck(r.resolve(BreakIntent.new(cook.id, Vector2i(3, 8))).ok, "a counter segment can be smashed")
@@ -261,14 +262,14 @@ func _multi_cell() -> void:
 			"…and the lone one left is a single cell again, so it can be grabbed")
 	res = r.resolve(DragIntent.new(smith.id, Vector2i(11, 2), Vector2i(11, 3)))
 	ck(res.ok and st.grid.cell(Vector2i(11, 3)).feature_id == "workbench", "and dragged (%s)" % res.reason)
-	# Разрыв по углу кровати — и кровати нет целиком.
+	# Разрыв по углу кровати — гибнет только этот угол (0.12.2).
 	var s2 := _board({Vector2i(8, 5): "bed", Vector2i(8, 6): "bed", Vector2i(12, 5): "bed", Vector2i(12, 6): "bed"},
 			[[Vector2i(1, 1), "light_infantry", 0], [Vector2i(18, 10), "light_infantry", 1]])
 	var r2 := GameActionResolver.new(s2)
 	var blast := ActionResult.success([])
 	r2._blast(Vector2i(9, 4), blast, [Vector2i(8, 5)])
-	ck(s2.grid.cell(Vector2i(8, 5)).feature_id == "" and s2.grid.cell(Vector2i(8, 6)).feature_id == "",
-			"a blast that wrecks one end of a bed wrecks the bed")
+	ck(s2.grid.cell(Vector2i(8, 5)).feature_id == "" and s2.grid.cell(Vector2i(8, 6)).feature_id == "bed",
+			"a blast on one end of a bed wrecks that end only (0.12.2)")
 	ck(s2.grid.cell(Vector2i(12, 5)).feature_id == "bed", "the other bed is untouched")
 
 # --- Оружие ------------------------------------------------------------------------------

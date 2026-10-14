@@ -507,10 +507,11 @@ const DECAL_ANGLES := 8
 ## Мелкий предмет («item:<вид>», 0.12.1) — своей картинкой и с шагом угла мельче: его кладут
 ## под любым углом, и восемь положений на нём видны.
 const ITEM_ANGLES := 32
+const CHUNK_ANGLES := 16   # обломки (0.12.2): острые формы, восьми поворотов на них мало
 
 func _decal_sprite(kind: String, px: int, rot: float, look: Array) -> Image:
 	var item := kind.begins_with("item:")
-	var angles := ITEM_ANGLES if item else DECAL_ANGLES
+	var angles := ITEM_ANGLES if item else (CHUNK_ANGLES if kind.begins_with("chunk:") else DECAL_ANGLES)
 	var step := posmod(roundi(rot / TAU * angles), angles)
 	var key := "decal@%s@%d@%d" % [kind, px, step]
 	if _tiles.has(key):
@@ -521,8 +522,11 @@ func _decal_sprite(kind: String, px: int, rot: float, look: Array) -> Image:
 	var chunk := kind.begins_with("chunk:")
 	var soot := kind.begins_with("soot:")
 	var art := "corpse" if kind == "corpse" else str(FxDecals.TEXTURE.get(kind, ""))
+	var shape: PackedVector2Array = PackedVector2Array()
 	if chunk:
-		art = kind.substr(6)
+		var parts := FxDecals.chunk_parts(kind)
+		art = parts[0]
+		shape = PackedVector2Array(FxDecals.CHUNK_SHAPES[int(parts[1])])
 	elif item:
 		art = SmallItems.texture_name(kind.substr(5))
 	if kind == "corpse" and not Sprites.has_override(art):
@@ -539,14 +543,20 @@ func _decal_sprite(kind: String, px: int, rot: float, look: Array) -> Image:
 			if soot:
 				c = _soot_pixel(v / half, variant, col)
 			elif chunk:
-				# Обломок (0.12.1): середина плитки стены — в неровный пятиугольник.
+				# Обломок: середина плитки стены, вырезанная острым многоугольником своей формы
+				# (0.12.2), с тёмной кромкой по краю — так он читается гранёным, а не пятном.
 				var q := v / half
-				# Картинка стены — лента вариантов (по плитке в высоту): берём середину первой.
-				if absf(q.x) + absf(q.y) * 0.8 <= 1.15 and q.y >= -0.95:
+				if Geometry2D.is_point_in_polygon(q, shape):
+					# Картинка стены — лента вариантов (по плитке в высоту): середина первой.
 					var side := src.get_height() if src != null else 1
 					c = col if src == null else src.get_pixel(
 							clampi(int((q.x * 0.2 + 0.5) * side), 0, side - 1),
 							clampi(int((q.y * 0.2 + 0.5) * side), 0, side - 1))
+					var step_q := 2.0 / maxf(1.0, float(px))
+					for d: Vector2 in [Vector2(step_q, 0), Vector2(-step_q, 0), Vector2(0, step_q), Vector2(0, -step_q)]:
+						if not Geometry2D.is_point_in_polygon(q + d.rotated(-a), shape):
+							c = c.darkened(0.35)
+							break
 			elif src != null:
 				var sx := int((v.x / px + 0.5) * src.get_width())
 				var sy := int((v.y / px + 0.5) * src.get_height())

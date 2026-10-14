@@ -6375,12 +6375,68 @@ func _draw_fx_props(visible: Dictionary) -> void:
 	# ОСЕВШЕЙ косметики здесь больше нет (0.9.3): кровь, гильзы и осколки впечатаны в
 	# картинку куска доски (TerrainTiles._bake_decals) и кадру ничего не стоят. Осталось
 	# только то, что ещё в воздухе, — его и правда надо двигать каждый кадр.
+	_sync_fly_layer(visible)
+
+## Летящие частицы (0.12.2, владелец: «make them always pixelated»): той же картинкой, что
+## потом впечётся в пол (TerrainTiles._decal_sprite), в том же разрешении плиток и по той же
+## пиксельной сетке — у полёта и у осевшего один вид. Рисует их дочерний слой с фильтрацией
+## NEAREST (у узла она одна на всё, а бойцов главного узла огрублять нельзя). На дальнем
+## плане плиток нет — тогда по-старому, векторно.
+class FlyLayer extends Node2D:
+	var items: Array = []   # [текстура, прямоугольник]
+	func _draw() -> void:
+		for it: Array in items:
+			draw_texture_rect(it[0], it[1], false)
+
+var _fly: FlyLayer = null
+var _fly_tex: Dictionary = {}   # картинка частицы (Image) -> ImageTexture; на одни плитки
+var _fly_tiles: TerrainTiles = null
+
+func _sync_fly_layer(visible: Dictionary) -> void:
+	if _fly == null:
+		_fly = FlyLayer.new()
+		_fly.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		add_child(_fly)
+	_fly.position = pan
+	_fly.scale = Vector2(zoom, zoom)
+	var had := not _fly.items.is_empty()
+	_fly.items = []
 	if _fx.flying.is_empty():
+		if had:
+			_fly.queue_redraw()
 		return
 	var fog_on: bool = _view_resolver().visibility_limited()
+	var res := TerrainTiles.res_for(CELL * zoom * get_viewport().get_final_transform().get_scale().x)
+	if _fly_tiles != _tiles:
+		_fly_tex.clear()
+		_fly_tiles = _tiles
 	for f: Dictionary in _fx.flying:
-		_draw_fx_one(f["kind"], FxDecals.flight_pos(f), FxDecals.flight_rot(f),
-				f["scale"], visible, fog_on, f.get("origin", Vector2i(-1, -1)))
+		var kind := str(f["kind"])
+		var pos := FxDecals.flight_pos(f)
+		var origin: Vector2i = f.get("origin", Vector2i(-1, -1))
+		if _tiles == null or zoom < LOD_ZOOM:
+			_draw_fx_one(kind, pos, FxDecals.flight_rot(f), f["scale"], visible, fog_on, origin)
+			continue
+		var c := Vector2i(floori(pos.x), floori(pos.y))
+		if not _cell_on_screen(c.x, c.y):
+			continue
+		var wcell := state.grid.cell(c)
+		if wcell != null and wcell.cover_height >= MCF.WALL_HEIGHT:
+			continue
+		if fog_on and not visible.has(c) and not visible.has(origin):
+			continue
+		var look := FxDecals.look_of(kind)
+		if look.is_empty():
+			continue
+		var px := maxi(1, roundi(float(look[0]) * float(f["scale"]) * res))
+		var img: Image = _tiles._decal_sprite(kind, px, FxDecals.flight_rot(f), look)
+		if img == null:
+			continue
+		if not _fly_tex.has(img):
+			_fly_tex[img] = ImageTexture.create_from_image(img)
+		var at := Vector2(roundi(pos.x * res) - px / 2, roundi(pos.y * res) - px / 2) / float(res)
+		_fly.items.append([_fly_tex[img], Rect2(ORIGIN + at * CELL, Vector2(px, px) / float(res) * CELL)])
+	_fly.queue_redraw()
 
 ## Снаряды в полёте (0.12.1): ракета — тёмный корпус с факелом и дымным следом, снаряд танка —
 ## раскалённый штрих, граната — по дуге, с тенью на земле. Под туманом — только там, где
@@ -6878,9 +6934,6 @@ func _draw_fx_lanes(visible: Dictionary) -> void:
 ## Вид частиц переехал в FxDecals.LOOK / TEXTURE (0.9.3): по той же таблице осевшую
 ## косметику запекает в доску TerrainTiles, и двум копиям разойтись теперь негде.
 const FX_TEXTURE := FxDecals.TEXTURE
-## Контур летящего обломка стены в долях половины его размера: неровный пятиугольник.
-const CHUNK_SHAPE := [Vector2(-1.0, -0.7), Vector2(0.3, -1.0), Vector2(1.0, -0.2),
-		Vector2(0.6, 0.9), Vector2(-0.8, 0.8)]
 
 ## origin — клетка, откуда частица вылетела (разбитое окно): видел, как оно разбилось, —
 ## видишь и все его осколки, даже долетевшие в туман (item 7).
@@ -6905,13 +6958,14 @@ func _draw_fx_one(kind: String, cell_pos: Vector2, rot: float, scale: float,
 	var rect := Rect2(center - Vector2(half, half), Vector2(half, half) * 2.0)
 	# Обломок стены (0.12.1) — неровный кусок её же плитки.
 	if kind.begins_with("chunk:"):
-		var tex := Sprites.texture_of(kind.substr(6))
+		var parts := FxDecals.chunk_parts(kind)
+		var tex := Sprites.texture_of(parts[0])
 		if tex != null:
 			var pts := PackedVector2Array()
 			var uvs := PackedVector2Array()
 			# Картинка стены — лента вариантов: середина ПЕРВОЙ плитки, не всей ленты.
 			var span := float(tex.get_height()) / maxf(1.0, float(tex.get_width()))
-			for q: Vector2 in CHUNK_SHAPE:
+			for q: Vector2 in FxDecals.CHUNK_SHAPES[int(parts[1])]:
 				pts.append(center + (q * half).rotated(rot))
 				uvs.append(Vector2((0.5 + q.x * 0.2) * span, 0.5 + q.y * 0.2))
 			draw_polygon(pts, PackedColorArray([Color.WHITE]), uvs, tex)

@@ -1516,7 +1516,7 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i, aimed: String = "") ->
 					if cell.is_wall():
 						blasted.append(c)
 					if Furniture.is_furniture(was):
-						_destroy_furniture(cell, result)   # цельный предмет — целиком
+						_destroy_furniture(cell, result)   # только задетая клетка (0.12.2)
 					else:
 						cell.clear_feature()
 					result.log("Beam destroys %s at (%d, %d)" % [
@@ -3410,11 +3410,13 @@ func _resolve_smash_furniture(actor: UnitInstance, coord: Vector2i) -> ActionRes
 	return res
 
 ## Снести предмет мебели: пол остаётся, высота сбрасывается в ноль (clear_feature), журнал
-## вида и обзора узнаёт об этом через сеттеры клетки. Цельный многоклеточный предмет
-## (кровать, стол, станок) гибнет целиком — полкровати не бывает. Щепки — той же
-## косметикой «разрушенный пол», что и у снесённых укреплений.
+## вида и обзора узнаёт об этом через сеттеры клетки. Щепки — той же косметикой «разрушенный
+## пол», что и у снесённых укреплений.
+## Гибнет только задетая клетка (0.12.2, владелец: «when a part of a table is destroyed, the
+## whole table gets deleted»): остальной стол стоит, как стоял, — вид мебели в бою заморожен
+## и не срастается заново, так что уцелевшая половина выглядит половиной.
 func _destroy_furniture(cell: GridCell, res: ActionResult, from: Vector2i = NOWHERE) -> void:
-	var cells := furniture_piece(cell.coord)
+	var cells: Array[Vector2i] = [cell.coord]
 	if Furniture.DEFS.get(cell.feature_id, {}).get("cat", "") == "lighting":
 		_lamp_shards(res, cell.coord, from)
 	for c: Vector2i in cells:
@@ -6483,7 +6485,7 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 	for fc: Vector2i in area:
 		if state.grid.in_bounds(fc) and Furniture.is_furniture(state.grid.cell(fc).feature_id) \
 				and fixture_at(fc) == "":   # lamps roll below, like glass (0.11.1)
-			smashed.append_array(furniture_piece(fc))
+			smashed.append(fc)
 			_destroy_furniture(state.grid.cell(fc), result, center)
 	# Lamps in the blast defend like ordinary glass (0.11.1): two dice against 6+, both
 	# must hold. A standing lamp anywhere in the area; a wall lamp only on the face that
@@ -6508,7 +6510,7 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 					lcell.lamps = MapData.without_lamp(lcell.lamps, side)
 					notify_cell_changed(lc)
 				else:
-					smashed.append_array(furniture_piece(lc))
+					smashed.append(lc)
 					_destroy_furniture(lcell, result, center)
 			details.append(ldet)
 	# Осколки не сносят укрепления (#44): единственное, что бьётся, — стекло, и оно

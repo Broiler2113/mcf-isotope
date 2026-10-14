@@ -32,7 +32,28 @@ const DAMAGE_EPICENTER := 2  # клетка эпицентра — выгоре�
 ## «chunk:<картинка стены>»: кусок её же плитки, поэтому кирпич сыплется кирпичом.
 const CHUNKS_MIN := 8
 const CHUNKS_MAX := 14
-const CHUNK_SIZE := 0.3
+const CHUNK_SIZE := 0.32
+## Формы обломков (0.12.2, владелец: «sharper and vary in size and shape»): острые
+## многоугольники в долях половины размера. Вид частицы — «chunk:<картинка>#<форма>»;
+## без «#» (0.12.1) — форма 2.
+const CHUNK_SHAPES := [
+	[Vector2(-1.0, -0.55), Vector2(0.95, -0.9), Vector2(0.15, 1.0)],
+	[Vector2(-1.0, -0.22), Vector2(1.0, -0.42), Vector2(0.85, 0.28), Vector2(-0.8, 0.2)],
+	[Vector2(-0.7, -0.9), Vector2(0.6, -0.7), Vector2(1.0, 0.4), Vector2(0.1, 0.95), Vector2(-0.9, 0.3)],
+	[Vector2(-0.95, -0.95), Vector2(0.95, -0.45), Vector2(-0.35, 0.95)],
+	[Vector2(-0.95, -0.5), Vector2(0.3, -0.95), Vector2(0.95, 0.0), Vector2(0.45, 0.6), Vector2(-0.15, 0.25), Vector2(-0.85, 0.9)],
+	[Vector2(-0.6, -1.0), Vector2(0.75, -0.55), Vector2(0.5, 0.9), Vector2(-0.85, 0.5)],
+]
+const CHUNK_SCALE_MIN := 0.45
+const CHUNK_SCALE_MAX := 1.6
+
+## Картинка и форма обломка по виду частицы.
+static func chunk_parts(kind: String) -> Array:
+	var body := kind.substr(6)
+	var cut := body.rfind("#")
+	if cut < 0:
+		return [body, 2]
+	return [body.substr(0, cut), clampi(int(body.substr(cut + 1)), 0, CHUNK_SHAPES.size() - 1)]
 ## Копоть на месте взрыва (0.12.1): «soot:<0..SOOT_VARIANTS-1>», у каждого вида своя форма
 ## пятна; эпицентр — крупное, клетки вокруг — пятна поменьше и не все.
 const SOOT_VARIANTS := 4
@@ -435,8 +456,7 @@ func _shards(ev: Dictionary) -> void:
 func _chunks(ev: Dictionary) -> void:
 	var at: Vector2i = ev.get("at", Vector2i.ZERO)
 	var from: Vector2i = ev.get("from", at)
-	var kind := "chunk:" + chunk_art(str(ev.get("fid", MCF.FEATURE_WALL)), int(ev.get("look", 0)),
-			str(ev.get("env", "")))
+	var art := chunk_art(str(ev.get("fid", MCF.FEATURE_WALL)), int(ev.get("look", 0)), str(ev.get("env", "")))
 	var dir := _away(at, from)
 	if bool(ev.get("toward", false)):
 		dir = -dir
@@ -444,8 +464,11 @@ func _chunks(ev: Dictionary) -> void:
 	var count: int = int(ev["count"]) if ev.has("count") \
 			else _rng_for("chunks_n", at, 0, _seq).randi_range(CHUNKS_MIN, CHUNKS_MAX)
 	for i in count:
-		_launch(kind, at, dir, _rng_for("chunk", at, i, _seq), SHARD_RANGE_MIN, SHARD_RANGE_MAX,
-				SHARD_FLIGHT_SEC, fan)
+		var rng := _rng_for("chunk", at, i, _seq)
+		var shape := rng.randi_range(0, CHUNK_SHAPES.size() - 1)
+		var size := rng.randf_range(CHUNK_SCALE_MIN, CHUNK_SCALE_MAX)
+		_launch("chunk:%s#%d" % [art, shape], at, dir, rng, SHARD_RANGE_MIN, SHARD_RANGE_MAX,
+				SHARD_FLIGHT_SEC, fan, Vector2.INF, INF, size)
 
 ## Мелкие предметы слетают (0.12.1): от взрыва — далеко, как осколки; со сдвинутой мебели —
 ## недалеко, как гильзы. Каждый летит со своего места и ложится на пол.
@@ -491,7 +514,7 @@ static func chunk_art(fid: String, look: int, env: String) -> String:
 static var _chunk_colors: Dictionary = {}
 static func look_of(kind: String) -> Array:
 	if kind.begins_with("chunk:"):
-		var art := kind.substr(6)
+		var art: String = chunk_parts(kind)[0]
 		if not _chunk_colors.has(art):
 			_chunk_colors[art] = _average_color(art)
 		return [CHUNK_SIZE, _chunk_colors[art]]

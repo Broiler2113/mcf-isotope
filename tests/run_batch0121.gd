@@ -133,7 +133,7 @@ func _wall_chunks() -> void:
 	var chunks := fx.flying.filter(func(f: Dictionary) -> bool: return str(f["kind"]).begins_with("chunk:"))
 	ck(chunks.size() >= FxDecals.CHUNKS_MIN and chunks.size() <= FxDecals.CHUNKS_MAX,
 			"%d chunks fly (more than a window's shards)" % chunks.size())
-	ck(not chunks.is_empty() and str(chunks[0]["kind"]) == "chunk:wall_town", "town walls shed town-wall chunks (%s)" % (
+	ck(not chunks.is_empty() and str(FxDecals.chunk_parts(str(chunks[0]["kind"]))[0]) == "wall_town", "town walls shed town-wall chunks (%s)" % (
 			chunks[0]["kind"] if not chunks.is_empty() else "none"))
 	ck(chunks.all(func(f: Dictionary) -> bool: return Vector2(f["to"]).x > 11.0), "every chunk flies away from the blast")
 	ck(float(FxDecals.look_of("chunk:wall_town")[0]) > float(FxDecals.LOOK["shard"][0]), "chunks are bigger than glass shards")
