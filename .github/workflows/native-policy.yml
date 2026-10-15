@@ -11,6 +11,9 @@ env:
   PYTHONUTF8: '1'
 jobs:
   build:
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
@@ -38,7 +41,7 @@ jobs:
       - name: Install Godot 4.7 and export templates
         run: python native/policy/install_godot.py
       - name: Import and verify native loading
-        run: godot --headless --editor --path . --import --quit
+        run: godot --headless --editor --path . --import
       - name: Verify controller priority, fallback and model selection
         run: godot --headless --path . --script res://tests/run_native_policy.gd -- --require-native
       - name: Verify sound timing, visibility, caps and saved audio settings

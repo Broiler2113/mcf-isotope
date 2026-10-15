@@ -55,7 +55,7 @@ application/export_angle=0
     game_dir = output / native_target
     game_dir.mkdir(exist_ok=True)
     name = "MCF-Isotope" + {"Linux": ".x86_64", "Windows": ".exe", "Darwin": ".zip"}[system]
-    subprocess.run([a.godot, "--headless", "--editor", "--path", str(stage), "--import", "--quit"], check=True, timeout=240)
+    subprocess.run([a.godot, "--headless", "--editor", "--path", str(stage), "--import"], check=True, timeout=240)
     subprocess.run([a.godot, "--headless", "--path", str(stage), "--export-release", "Native Policy", str(game_dir / name), "--quit"],
                    check=True, timeout=240)
     # Keep third-party license notices readily accessible alongside each export.
