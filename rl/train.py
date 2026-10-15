@@ -23,6 +23,7 @@ import argparse
 import copy
 import glob
 import gc
+import io
 import json
 import os
 import random
@@ -52,7 +53,7 @@ from features import (CAND_DIM, CANVAS, FLAT_DIM, N_CHANNELS, Sparse, candidate_
 from mcf_env import (EXTERNAL, HARD, PROJECT, EnvDied, GodotEnv,  # noqa: E402
                      EpisodeConfig, VecEnv, refresh_class_cache)
 from model import OnnxWrapper, PolicyNet, load_compat  # noqa: E402
-from resources import trim_owned_logs  # noqa: E402
+from resources import maintain_storage  # noqa: E402
 
 RUNS = os.path.join(PROJECT, "rl", "runs")
 # Never shrink the rollout below this under memory pressure: a handful of transitions
@@ -101,8 +102,8 @@ DEFAULTS = dict(
     # restart tries the same failing write. Stopping early is the difference between
     # "stopped: disk floor" in the morning and a branch that died at 4am taking its last
     # checkpoint with it.
-    disk_floor_mb=1536,
-    disk_cleanup_trigger_mb=1024, log_max_mb=64,
+    disk_floor_mb=500,
+    disk_cleanup_trigger_mb=1024, disk_cleanup_target_mb=2048, log_max_mb=64,
     memory_cleanup_free_mb=1024, gpu_cache_max_mb=1024,
     gpu_memory_restart_mb=6144, resource_check_seconds=10,
     rollout_budget_mb=0,      # >0: end a rollout early once the buffer reaches this
@@ -161,6 +162,10 @@ class EvaluationInterrupted(RuntimeError):
 
 class ResourceRecycle(RuntimeError):
     """Resume the same checkpoint in a fresh process to release Metal/framework memory."""
+
+
+class DiskPressure(RuntimeError):
+    """Wait for free space without overwriting the last resumable checkpoint."""
 
 
 def map_name(path: str) -> str:
@@ -529,13 +534,26 @@ class Trainer:
 
     def save(self, tag: str | None = None) -> str:
         path = os.path.join(self.run_dir, f"ckpt_{self.global_step:09d}.pt" if tag is None else tag)
-        tmp = path + ".tmp"
         sd = self.state_dict()
-        torch.save(sd, tmp)
-        os.replace(tmp, path)          # never leave a half-written checkpoint behind
-        latest = os.path.join(self.run_dir, "latest.pt")
-        torch.save(sd, latest + ".tmp")
-        os.replace(latest + ".tmp", latest)
+        # Serialize once so cleanup reserves the actual size of both atomic writes.
+        # The previous latest stays intact if there is no space above the floor.
+        with io.BytesIO() as buffer:
+            torch.save(sd, buffer)
+            with buffer.getbuffer() as payload:
+                if not self.maintain_disk(required_mb=2 * len(payload) / 2**20 + 2)["ready"]:
+                    raise DiskPressure("insufficient room above disk_floor_mb for an atomic checkpoint")
+                latest = os.path.join(self.run_dir, "latest.pt")
+                for destination in dict.fromkeys((path, latest)):
+                    temporary = destination + ".tmp"
+                    try:
+                        with open(temporary, "wb") as f:
+                            f.write(payload)
+                            f.flush()
+                            os.fsync(f.fileno())
+                        os.replace(temporary, destination)
+                    finally:
+                        if os.path.exists(temporary):
+                            os.remove(temporary)
         # Sidecar for the dashboard (11.4): everything but the weights, readable without torch.
         meta = {k: v for k, v in sd.items()
                 if k not in ("model", "opt", "rng", "torch_rng", "numpy_rng", "mps_rng")}
@@ -634,8 +652,22 @@ class Trainer:
 
     def watch_waiting_resources(self) -> None:
         self.maintain_resources()
+        if not self.resource_cleanup.get("ready", True):
+            raise DiskPressure("disk reserve exhausted while waiting for an environment")
         if self._resource_restart:
             raise ResourceRecycle("memory pressure while waiting for an environment response")
+
+    def maintain_disk(self, required_mb: float = 64) -> dict:
+        parent = Path(self.run_dir).parent
+        # Temporary tests must not scan unrelated sibling directories.
+        runs = parent if parent.resolve() == Path(RUNS).resolve() else Path(self.run_dir)
+        protected = [self.parent] if self.parent else []
+        protected += self.pool_checkpoints()
+        return maintain_storage(runs, floor_mb=self.cfg["disk_floor_mb"],
+                                trigger_mb=self.cfg["disk_cleanup_trigger_mb"],
+                                target_mb=self.cfg["disk_cleanup_target_mb"],
+                                required_mb=required_mb, max_log_mb=self.cfg["log_max_mb"],
+                                home=Path.home() if runs == parent else None, protect=protected)
 
     def maintain_resources(self, force: bool = False) -> None:
         """Run between decisions/minibatches; restart only after a completed update.
@@ -647,17 +679,10 @@ class Trainer:
         if not force and now - self._resource_check_at < self.cfg["resource_check_seconds"]:
             return
         self._resource_check_at = now
-        disk = free_mb(self.run_dir)
-        trigger = max(self.cfg["disk_cleanup_trigger_mb"], self.cfg["disk_floor_mb"])
-        parent = Path(self.run_dir).parent
-        # Test/benchmark runs under /tmp must not scan unrelated sibling directories.
-        runs = parent if parent.resolve() == Path(RUNS).resolve() else Path(self.run_dir)
-        cleaned = trim_owned_logs(runs, max_mb=self.cfg["log_max_mb"],
-                                  pressure=disk < trigger,
-                                  home=Path.home() if runs == parent else None)
+        cleaned = self.maintain_disk()
         if cleaned["reclaimed_mb"]:
             print(f"[resources] reclaimed {cleaned['reclaimed_mb']:.1f} MB from "
-                  f"{cleaned['files']} diagnostic logs", flush=True)
+                  f"{cleaned['files']} training artifacts", flush=True)
             self._disk = (0.0, 0.0)
         memory = mem_report()
         gpu = self.gpu_memory()
@@ -851,6 +876,8 @@ class Trainer:
         EVALUATION (pinned map, always vs the graduation opponent). Mixing them in one
         directory would make the map column look inconsistent for no stated reason.
         """
+        if not self.maintain_disk()["ready"]:
+            return
         mp = map_name(env.cfg.map_path)
         stem = os.path.splitext(mp)[0]
         # train_<step>, NOT train/<step>: the dashboard gallery globs
@@ -1016,6 +1043,8 @@ class Trainer:
                                   rounds=[int(e.last["info"]["round"]) for e in envs if e.last])
                 if self._resource_restart:
                     raise ResourceRecycle("allocator memory could not be released during collection")
+                if not self.resource_cleanup.get("ready", True):
+                    raise DiskPressure("disk reserve exhausted during collection")
             if (taken < T * n and not capped) or responding():
                 collecting = taken < T * n and not capped
                 waiting = [i for i in range(n) if i not in inflight
@@ -1473,7 +1502,7 @@ class Trainer:
                         os.makedirs(record_dir, exist_ok=True)
                         dest = os.path.join(
                             record_dir, f"vs_{opponent}_{k + 1}_{results[-1]}.mcfr")
-                if dest is not None:
+                if dest is not None and self.maintain_disk()["ready"]:
                     rp = dest
                     if envs[i].save_replay(rp):
                         with open(rp + ".json", "w") as f:
@@ -1643,6 +1672,7 @@ class Trainer:
                     # run, which is a subtler version of the problem this fixes.
                     self._replay_maps.clear()
                 if self.stop_requested or os.path.exists(stop_flag):
+                    self.stop_requested = True
                     break
                 if os.path.exists(os.path.join(self.run_dir, "PAUSE")):
                     continue
@@ -1671,10 +1701,14 @@ class Trainer:
                 # resource stops by design, started the run again (town-8, 2026-10-02).
                 if os.path.exists(stop_flag):
                     os.remove(stop_flag)
+                    self.stop_requested = True
                     print("[train] STOP flag found", flush=True)
                     break
                 if self.over_memory_budget() or self.under_disk_floor():
                     break
+        except DiskPressure as e:
+            self.stop_reason = "" if self.stop_requested or os.path.exists(stop_flag) else "disk"
+            print(f"[resources] {e}; preserving checkpoint for automatic resume", flush=True)
         except ResourceRecycle as e:
             self.stop_reason = "" if self.stop_requested or os.path.exists(stop_flag) else "memory"
             print(f"[resources] {e}; saving checkpoint for automatic resume", flush=True)
@@ -1698,6 +1732,9 @@ class Trainer:
                 print("[train] CRASHED: " + crash["error"] + "\n" + crash["traceback"], flush=True)
                 raise
         finally:
+            if not crash and not self.stop_reason and not self.stop_requested \
+                    and not os.path.exists(stop_flag) and self.global_step >= cfg["total_steps"]:
+                self.stop_reason = "complete"
             try:
                 path = self.save()
                 print(f"[train] final checkpoint {path}", flush=True)
@@ -1727,6 +1764,7 @@ class Trainer:
                 return True
             if os.path.exists(os.path.join(self.run_dir, "STOP")):
                 os.remove(os.path.join(self.run_dir, "STOP"))
+                self.stop_requested = True
                 print("[train] STOP while paused", flush=True)
                 return True
             time.sleep(2)
@@ -2126,7 +2164,7 @@ def refuse_if_running(rd: str):
 def clear_flags(rd: str) -> None:
     """A STOP or PAUSE left behind by the previous run would stop or freeze the new one
     on its first update."""
-    for name in ("STOP", "PAUSE"):
+    for name in ("STOP", "OPERATOR_STOP", "PAUSE"):
         try:
             os.remove(os.path.join(rd, name))
         except OSError:
@@ -2249,6 +2287,7 @@ def cmd_fork(a):
 
 def cmd_stop(a):
     rd = run_dir_for(a.branch)
+    Path(rd, "OPERATOR_STOP").touch()
     open(os.path.join(rd, "STOP"), "w").close()
     print(f"[stop] requested; {a.branch} saves a checkpoint after its current update")
 

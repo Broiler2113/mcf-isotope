@@ -302,14 +302,46 @@ repeated resource failures. Unapplied rollouts or an evaluation may be interrupt
 training resumes from the last completed update. No manual model restart is needed.
 `memory_cleanup_free_mb`, `gpu_cache_max_mb` and `gpu_memory_restart_mb` set these limits.
 
-Disk space is a separate limit. At 1024 MiB free, diagnostic logs are trimmed to their
-last 64 KiB; ordinary maintenance caps each at 64 MiB. Only known RLM/Godot/tunnel logs
-are eligible. Checkpoints, evaluation histories, replays and unrelated Mac files are
-preserved. Sparse holes are excluded from reclaimed-space measurements, and active
-appenders keep their file handles. If the volume remains below `disk_floor_mb` because
-other applications consumed it, training still checkpoints and stops safely. This
-cannot reclaim 15 GiB of disk from an RLM directory containing only hundreds of MiB.
-macOS manages swap files; releasing memory reduces pressure without deleting OS files.
+Disk space has a 500 MiB free-space floor. Cleanup starts around 1 GiB free and targets
+2 GiB, including room for the next checkpoint's atomic writes. Diagnostic logs retain
+their last 64 KiB under pressure (64 MiB per log normally). If needed, cleanup deletes
+old generated replays, old TensorBoard event files, retired checkpoints and obsolete
+upgrade backups, oldest first. The latest and best models, seed models, current league
+opponents, newest replay windows, ten recent wins, evaluation histories, demonstrations,
+unknown files and unrelated Mac files are preserved. Files newer than ten minutes are
+excluded to avoid interrupting active writers or replay viewers. Milestone checkpoints
+are disposable under disk pressure. Cleanup is serialized between trainer and supervisor
+and does not follow symlinks. Sparse holes do not count as occupied disk space.
+
+Every checkpoint save checks space for both temporary writes before touching the last
+saved model. If other applications consume the remaining space and there are no eligible
+training artifacts left, training waits and resumes when space returns. Cleanup cannot
+guarantee the whole disk's free space against unrelated applications or delete OS swap;
+it prevents training from deliberately spending its final 500 MiB.
+
+For continuous unattended training on the Mac, run from its checkout:
+
+```bash
+git fetch origin main
+git show origin/main:rl/tools/enable_autonomy.sh > /tmp/isotope-enable-autonomy.sh
+bash /tmp/isotope-enable-autonomy.sh
+```
+
+This chooses the live branch, or the most recently active saved branch when none is
+running. Pass a branch name to choose explicitly. It stops gracefully, preserves a
+checkpoint backup, updates the checkout, resumes with the same config, and installs
+`~/Library/LaunchAgents/com.mcf.rlm-training.plist` under the current account. No admin
+password is needed. The service starts at login, restarts a failed supervisor, recovers
+crashed trainers and heartbeats frozen for fifteen minutes, and extends a completed
+training budget by another twenty million steps. Pause and Stop remain authoritative;
+`OPERATOR_STOP` preserves an explicit stop across crashes and reboots. Only branches
+marked `AUTONOMOUS` have their step budget extended. A logged-out, sleeping, or powered-off
+Mac cannot train; the service resumes after login/wake. One branch owns this service.
+Linux uses a systemd service (per-user unless installed as root).
+
+After updating an already stopped checkout, `bash rl/run.sh autonomous BRANCH` installs
+the same service directly. `bash rl/run.sh supervise BRANCH` remains a session-only
+supervisor without automatic budget extension.
 
 To install a resource-only update while retaining the same training branch and config,
 run on the training Mac from its checkout:

@@ -10,6 +10,7 @@
 #   bash rl/run.sh fork   <ckpt rel. to runs/> <new-branch>
 #   bash rl/run.sh stop   <branch>                 # graceful: checkpoint after this update
 #   bash rl/run.sh supervise <branch> [config]     # keep it alive: resume crashes and resource stops
+#   bash rl/run.sh autonomous <branch>            # persistent service, cleanup, continuous learning
 #   bash rl/run.sh pause  <branch>                 # checkpoint and hold; Godot envs stay up
 #   bash rl/run.sh continue <branch>               # release a paused run
 #   bash rl/run.sh status | logs <name> | alive <branch>
@@ -26,7 +27,30 @@ LOG_MAX_MB="${LOG_MAX_MB:-64}"
 export PATH="$HOME/.local/bin:$PATH" GODOT="${GODOT:-godot}" MCF_RL_PYTHON="$PY" PYTHONUNBUFFERED=1
 
 abspath() { ( cd "$(dirname "$1")" && printf '%s/%s\n' "$(pwd)" "$(basename "$1")" ); }   # macOS has no realpath on older releases
-pid_alive() { [ -f "$1" ] && kill -0 "$(cat "$1")" 2>/dev/null; }
+pid_alive() {
+  [ -f "$1" ] || return 1
+  # A reboot can reuse a saved pid for an unrelated app. Match the owned command
+  # before deciding a dashboard, trainer or supervisor is already running.
+  python3 - "$1" <<'PY'
+from pathlib import Path
+import shlex, subprocess, sys
+try:
+    path = Path(sys.argv[1]); pid = int(path.read_text())
+    if pid <= 1: raise ValueError('invalid pid')
+    args = shlex.split(subprocess.check_output(['ps', '-p', str(pid), '-o', 'command='], text=True))
+    name = path.stem
+    text = ' '.join(args)
+    if name == 'dashboard': owned = 'streamlit' in text and 'dashboard.py' in text
+    elif name == 'tensorboard': owned = any(Path(a).name == 'tensorboard' for a in args)
+    elif name == 'tunnel': owned = 'cloudflared' in text and 'tunnel' in args
+    elif name.startswith('supervisor-'): owned = ('supervise.sh' in text or 'autonomy.py' in text) and name[11:] in args
+    elif name.startswith('restart-'): owned = 'run.sh' in text and name[8:] in text
+    else: owned = any(Path(a).name == 'train.py' for a in args) and name in args
+    sys.exit(0 if owned else 1)
+except (OSError, ValueError, subprocess.CalledProcessError):
+    sys.exit(1)
+PY
+}
 alive() {   # trainer of <branch> still running? (status.json heartbeat + pid check, no torch import)
   python3 - "$RUNS/$1/status.json" <<'PYEOF'
 import json, os, sys
@@ -126,7 +150,8 @@ case "${1:-}" in
       done
     fi
     [ -f "$CFG" ] || { echo "no config at $CFG — pass one: run.sh supervise $2 <config.yaml>"; exit 2; }
-    spawn "supervisor-$2" bash "$HERE/tools/supervise.sh" "$2" "$(abspath "$CFG")";;
+    spawn "supervisor-$2" "$PY" "$HERE/autonomy.py" supervise "$2" "$(abspath "$CFG")";;
+  autonomous) "$PY" "$HERE/autonomy.py" install "$2";;
   pause)    "$PY" "$HERE/train.py" pause "$2";;      # pid stays: a paused run is a live process
   continue) "$PY" "$HERE/train.py" continue "$2";;
   status)  "$PY" "$HERE/train.py" status "${2:-}"
