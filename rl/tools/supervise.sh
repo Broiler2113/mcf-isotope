@@ -69,32 +69,34 @@ while true; do
   # Keep diagnostic files bounded even while the trainer is stopped. Memory
   # cleanup belongs to the live process; deleting logs cannot release RAM.
   RL_RESOURCE_PY="${VENV:-$HOME/.venvs/mcf-rl}/bin/python"
-  "$RL_RESOURCE_PY" "$HERE/resources.py" >> "$LOG" 2>&1
+  if ! "$RL_RESOURCE_PY" "$HERE/resources.py" >> "$LOG" 2>&1; then
+    say "waiting for free disk space above the 500 MiB floor and checkpoint reserve"
+    sleep 30
+    continue
+  fi
   # A STOP still lying in the run directory is the operator's: never resume over it, even
   # if the trainer recorded a resource reason on its way out (a stop that landed while
   # the disk sat under its floor once came back as "disk" and was resumed).
   [ -f "$HERE/runs/$BRANCH/STOP" ] && { sleep 60; continue; }
-  verdict=$(python3 - "$HERE/runs/$BRANCH/status.json" <<'PY'
-import json, os, sys
-try:
-    s = json.load(open(sys.argv[1]))
-except Exception:
-    print("unknown"); raise SystemExit
-if s.get("state") == "crashed":
-    print("crashed"); raise SystemExit
-if s.get("state") in ("running", "paused"):
-    try:
-        os.kill(int(s["pid"]), 0); print("ok")
-    except (OSError, ValueError, KeyError):
-        print("dead")
-    raise SystemExit
-# A clean stop says WHY in stop_reason: "memory"/"disk" are the machine's doing and worth
-# resuming, an operator stop leaves it empty and must be left alone.
-reason = str(s.get("stop_reason") or "")
-print(f"resource:{reason}" if reason in ("memory", "disk") else s.get("state", "unknown"))
-PY
-)
+  [ -f "$HERE/runs/$BRANCH/OPERATOR_STOP" ] && { sleep 30; continue; }
+  [ -f "$HERE/runs/$BRANCH/PAUSE" ] && { sleep 30; continue; }
+  verdict=$("$RL_RESOURCE_PY" "$HERE/autonomy.py" verdict "$BRANCH")
   case "$verdict" in
+    stale)
+      say "heartbeat stale for 15 minutes -> checkpointed recovery"
+      if "$RL_RESOURCE_PY" "$HERE/autonomy.py" recover "$BRANCH" >> "$LOG" 2>&1 \
+         && [ ! -f "$HERE/runs/$BRANCH/OPERATOR_STOP" ] \
+         && [ ! -f "$HERE/runs/$BRANCH/STOP" ] \
+         && [ ! -f "$HERE/runs/$BRANCH/PAUSE" ] \
+         && [ ! -f "$HERE/runs/$BRANCH/SUPERVISOR_OFF" ]; then
+        bash "$HERE/run.sh" resume "$BRANCH" "$CFG" >> "$LOG" 2>&1
+      fi
+      sleep 10 ;;
+    complete)
+      say "autonomous run reached target -> extending training budget"
+      "$RL_RESOURCE_PY" "$HERE/autonomy.py" extend "$BRANCH" "$CFG" >> "$LOG" 2>&1
+      bash "$HERE/run.sh" resume "$BRANCH" "$CFG" >> "$LOG" 2>&1
+      sleep 180 ;;
     crashed|dead)
       say "verdict=$verdict -> resuming"
       bash "$HERE/run.sh" resume "$BRANCH" "$CFG" >> "$LOG" 2>&1
@@ -106,6 +108,7 @@ PY
       sleep "$MEMORY_RETRY"
       [ -f "$HERE/runs/$BRANCH/SUPERVISOR_OFF" ] && continue
       [ -f "$HERE/runs/$BRANCH/STOP" ] && continue
+      [ -f "$HERE/runs/$BRANCH/OPERATOR_STOP" ] && continue
       bash "$HERE/run.sh" resume "$BRANCH" "$CFG" >> "$LOG" 2>&1
       MEMORY_RETRY=$(( MEMORY_RETRY < 300 ? MEMORY_RETRY * 2 : 600 ))
       sleep 10 ;;
@@ -114,7 +117,7 @@ PY
       # and so the log reads as "retrying every 10 min", not a loop.
       say "verdict=$verdict -> resuming (resource stop)"
       bash "$HERE/run.sh" resume "$BRANCH" "$CFG" >> "$LOG" 2>&1
-      sleep "${RESOURCE_BACKOFF:-600}" ;;
+      sleep "${RESOURCE_BACKOFF:-60}" ;;
     ok) MEMORY_RETRY=10; sleep 30 ;;
     *) sleep 30 ;;
   esac

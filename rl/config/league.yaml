@@ -128,12 +128,13 @@ milestone_every: 2000000
 keep_replay_sets: 6
 rollout_budget_mb: 2048
 mem_limit_mb: 6144
-disk_floor_mb: 400
+disk_floor_mb: 500
 memory_cleanup_free_mb: 1024
 gpu_cache_max_mb: 1024
 gpu_memory_restart_mb: 6144
 resource_check_seconds: 10
 disk_cleanup_trigger_mb: 1024
+disk_cleanup_target_mb: 2048
 log_max_mb: 64
 adaptive_curriculum: true
 discount_unit: round
