@@ -215,8 +215,7 @@ static func _shots(r: GameActionResolver, u: UnitInstance, out: Array) -> void:
 	if pending:
 		burst = u.action_state.remaining_shots
 	var splittable := burst > 1 and ability != MCF.ABILITY_ANTI_TANK \
-			and ability != MCF.ABILITY_FLAMETHROWER and ability != MCF.ABILITY_MARKSMAN \
-			and ability != MCF.ABILITY_ASSAULT
+			and ability != MCF.ABILITY_FLAMETHROWER and ability != MCF.ABILITY_MARKSMAN
 	for tid: int in r.hostile_target_ids(u):
 		out.append(ShootIntent.new(u.id, tid, -1))
 		if splittable:

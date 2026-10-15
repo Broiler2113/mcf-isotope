@@ -80,7 +80,7 @@ const MANIFEST := [
 		"dpmg", "dot", "wood_wall", "sandbag_wall", "hedgehog_sandbags", "mine", "soil",
 	]],
 	["Soldiers (add a faction suffix for a faction-specific look, see below)", [
-		"anti_tank", "assault", "civilian", "commander", "drone",
+		"anti_tank", "civilian", "commander", "drone",
 		"drone_operator", "engineer", "flamethrower", "heavy_infantry",
 		"light_infantry", "machinegunner", "marksman", "miner", "sapper",
 		"shield_bearer", "sniper",
@@ -255,7 +255,7 @@ static func set_base_transform(offset: Vector2, scale: Vector2) -> void:
 const UNIT_TAGS := {
 	"machinegunner": "MG", "marksman": "MK", "anti_tank": "AT", "sniper": "SN",
 	"shield_bearer": "SB", "drone_operator": "DO", "light_infantry": "LI",
-	"heavy_infantry": "HI", "miner": "MI", "sapper": "SA",
+	"heavy_infantry": "HI", "miner": "MI", "sapper": "MS",
 }
 static func unit_tag(stats_id: String, display_name: String = "") -> String:
 	if UNIT_TAGS.has(stats_id):

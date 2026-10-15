@@ -258,7 +258,6 @@ file *is* the database. Only three units define a `default_item_id`: Machinegunn
 |---|---:|---:|:---:|---:|:---:|---:|---|
 | Light Infantry | 12 | 2 | 4+ | 9 | 2 | 99 | — |
 | Heavy Infantry | 12 | 3 | 3+ | 6 | 2 | 108 | — |
-| Assault | 3 | 8 | 4+ | 9 | 2 | 45 | Shotgun chain (§7.4) |
 | Machinegunner | 6 | 4 | 3+ | 6 | 2 | 56 | Frag grenade |
 | Sniper | 30 | 1 | 4+ | 6 | 2 | 135 | Auto-hit ≤ 12, −2 target def |
 | Marksman | ∞ | 1 | 4+ | 4 | 2 | 90 | Piercing laser, potential 10 |
@@ -517,7 +516,7 @@ regardless of side.
 
 **There are no separate intent classes for the special attacks.** They all arrive as a
 `ShootIntent` and `_resolve_shoot` branches on the shooter's `special_ability_id` into
-`_resolve_anti_tank`, `_resolve_flame`, `_resolve_laser`, or `_resolve_assault`.
+`_resolve_anti_tank`, `_resolve_flame`, or `_resolve_laser`.
 `ShootIntent` carries `target_id`, `shots` (−1 = full rate of fire, otherwise a
 fragmented burst), and an optional `target_cell` — the sentinel `(-999, -999)` means
 "no cell", and a real value lets anti-tank, flame, and laser aim at **empty ground**
@@ -561,7 +560,7 @@ fire immunity when struck directly by another flame jet.
 
 **Shots land before they kill (0.12.1).** The battle screen shows every result in the same
 order (`Main._show_effects`, used by the local, network, replay and civilian paths): dice;
-the flame jet; then the shots — `tracer` events (bullets; the assault shotgun and the DPMG
+the flame jet; then the shots — `tracer` events (bullets; the DPMG
 now emit them too, `_fx_bullets`) and `shot` events (`_fx_shot`: `rocket` from the anti-tank
 soldier, `shell` from a tank's gun port, `grenade` for a frag throw; `FxDecals.shots`, flight
 `SHOT_PACE` s/cell within `SHOT_MIN..SHOT_MAX`) fly first, together with the casings. A
@@ -650,12 +649,6 @@ the trace the preview draws (`laser_preview`) and collects every own or allied u
 cell — and the shot goes only on *Fire anyway*; a volley gathers the friendlies of all its
 beams into one window. Presentation only: the rules of the beam are unchanged.
 
-### 7.4 Assault (§3.14)
-
-Shotgun chain of up to **3 targets** in a straight line directly behind one another.
-Each link rolls `parry_need = armor + 1 − corpse_shield`. The chain **stops at the
-first survivor**.
-
 ### 7.5 Shield Bearer (§3.14)
 
 Blocks shots and lasers outright. Immune to fire (#50). Shield **push**: the target
@@ -672,7 +665,7 @@ continue to use `target_id`.
 ### 7.6 Sniper (§5)
 
 Auto-hit (`need = 1`) at distance ≤ `SNIPER_AUTOHIT_RANGE` (12), provided no
-fortification lies between. Exempt from the burning-cell penalty. −2 to target defence.
+fortification lies between. −2 to target defence.
 Fires **one** bullet per action.
 
 ### 7.7 Miner
@@ -1155,7 +1148,7 @@ on a burning tile:
 | `_resolve_dig` — trench **and** each spoil heap | the ground is turned over, and the dug-out earth smothers whatever it is dumped on |
 | `_resolve_drag` / dragged object arriving on a cell | a dragged sandbag or hedgehog snuffs the flame |
 
-Shooting *through* fire is `FIRE_SHOOT_PENALTY` to hit (snipers exempt).
+Burning cells do not modify hit rolls, including shots at glass and DPMG fire.
 
 `state.combat_started` is a **latch**: set by the first shot or explosion anywhere on
 the map, never cleared. Civilians key off it (§14).
@@ -1394,8 +1387,7 @@ sync. The gates are therefore the shooting gate itself (§6.8):
 4. `_shield_blocks_shot` — a shield bearer is not worth a bullet.
 
 The shot goes through the same modifier stack as any other: target `cover_effect` (hit
-penalty **and** defence bonus), the carried-corpse defence bonus, and `FIRE_SHOOT_PENALTY`
-for fire on the line. Those modifiers are listed in the dice event, so the defender sees
+penalty **and** defence bonus) and the carried-corpse defence bonus. Those modifiers are listed in the dice event, so the defender sees
 *why* the roll is what it is.
 
 **Where NPC civilians come from (#99).** A **neutral zone painted on a map is a
@@ -2203,7 +2195,7 @@ can be started from Setup or switched on mid-battle. Two consequences had to be 
   In a networked match the **host** runs the AI slots the same way (§22.4); guests never
   kick a side that is not theirs.
 
-### 17.5 Sappers, mines and the paths that avoid them (batch 12 #3, #4, #7)
+### 17.5 Minesweepers, mines and the paths that avoid them (batch 12 #3, #4, #7)
 
 **Nobody walks onto a mine they know about.** `Movement.reachable(...)` takes an
 `avoid_cells` set; `GameActionResolver.known_mine_cells(owner)` fills it with every
@@ -4316,3 +4308,29 @@ digest, none of the audited paths was a hotspot.
 (`team_visible_coords`, ~6 ms at 330 units — 42 % of host time), the movement spill
 (`Movement.reachable`, §27.2 forbids changing its order), the AI's per-turn plan and
 `_best_shoot`. None was in the audit; they are the next pass.
+
+
+## Issues PDF (6) follow-up
+
+- End Turn uses configurable **Shift+Enter**. Its button does not retain keyboard focus;
+  plain Enter remains available for dice and wall confirmation.
+- Assault is retired from deployment, editor palettes, random armies and the manual.
+  Its old resource path resolves to Heavy Infantry for saved-map compatibility.
+  Minesweeper keeps the legacy `sapper` ID for maps and replays.
+- Manual cards describe only specialist abilities. Lasers have a separate section,
+  LDF is a six-cell connected fortification, and vehicle badges use square shapes and
+  their sprite overrides. Borg engineering and shuttle drone stations are documented.
+- Lobby event choices and effective weights share the map/mode eligibility rules:
+  dust on Field/Town, old mines on Field/Town/Asteroid, bounty in Capture & Hold.
+  Conditions depending on the armies or current battlefield remain runtime checks.
+- Bug reports accept external images, compressed or JSON replays, and text combat logs.
+  New replays include up to 600,000 characters of recent combat text. Selecting another
+  replay replaces the current battle's log with that replay's log; older replays can use
+  a separately selected text log. Only checked attachments are submitted.
+- Vacuum debris retains momentum beyond the invisible boundary and outside the grid.
+  Real walls still stop it; drifting particles survive save/load.
+- Projectile presentation holds complete pre-impact cells and visibility, including
+  secondary terrain changes, until impact. Near tiles, neighbour autotiling, door art,
+  distant terrain and lighting use the same view without mutating simulation state.
+- Network protocol **15** prevents mixed-rule matches after retiring Assault and the
+  firing-through-fire modifier. Released in 0.12.4.

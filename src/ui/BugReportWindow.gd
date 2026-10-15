@@ -12,6 +12,9 @@ const TIMEOUT := 40.0
 ## Больше этого запись матча не везём: сервер её не примет, а отчёт не должен падать из-за неё.
 const MAX_REPLAY := 7_500_000
 const SHOT_MAX_W := 1600
+const MAX_LOG := 600_000
+const MAX_SCREENSHOT := 5 * 1024 * 1024
+const MAX_IMAGE_FILE := 20 * 1024 * 1024
 
 var endpoint := ENDPOINT
 var _shot_png := PackedByteArray()
@@ -28,6 +31,9 @@ var _status: Label
 var _send_btn: Button
 var _close_btn: Button
 var _http: HTTPRequest
+var _attachment_names: Label
+var _names := {}
+var _file_dialog: FileDialog
 
 ## Открыть окно отчёта. combat_log и replay_json — из боя (в меню и редакторе их нет).
 static func open(host: Node, combat_log := "", replay_json := "") -> BugReportWindow:
@@ -90,7 +96,6 @@ func _build() -> void:
 	_text = TextEdit.new()
 	_text.custom_minimum_size = Vector2(540, 150)
 	_text.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
-	_text.placeholder_text = "Example: the tank drove onto a mine at the north gate and the game froze."
 	_text.text_changed.connect(_refresh_send)
 	what.body.add_child(_text)
 	_contact = LineEdit.new()
@@ -103,10 +108,20 @@ func _build() -> void:
 	_send_shot = _check(attach.body, "A screenshot of the game", not _shot_png.is_empty())
 	_send_log = _check(attach.body, "The game's technical log (errors and warnings)", true)
 	var has_match := _combat_log != "" or _replay_json != ""
-	_send_match = _check(attach.body, "This match's combat log and replay", has_match)
+	_send_match = _check(attach.body, "Combat log and replay", has_match)
 	_send_match.disabled = not has_match
-	if not has_match:
-		_send_match.tooltip_text = "Only available during a battle."
+	var choices := HBoxContainer.new()
+	attach.body.add_child(choices)
+	for pair in [["screenshot", "Choose screenshot…"], ["replay", "Choose replay…"], ["combat_log", "Choose combat log…"]]:
+		var button := Button.new()
+		button.text = pair[1]
+		button.pressed.connect(_choose_attachment.bind(str(pair[0])))
+		choices.add_child(button)
+	_attachment_names = Label.new()
+	_attachment_names.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_attachment_names.custom_minimum_size.x = 540
+	_attachment_names.add_theme_font_size_override("font_size", 11)
+	attach.body.add_child(_attachment_names)
 	var privacy := Label.new()
 	privacy.text = "Reports go to the MCF Isotope team's server. Only what is ticked above, the text you write and the game version are sent."
 	privacy.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -136,6 +151,85 @@ func _build() -> void:
 	_refresh_send()
 	Ui.theme_canvas_layers()
 	_text.grab_focus.call_deferred()
+
+func _choose_attachment(kind: String) -> void:
+	if is_instance_valid(_file_dialog): _file_dialog.queue_free()
+	_file_dialog = FileDialog.new()
+	_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	match kind:
+		"screenshot": _file_dialog.filters = PackedStringArray(["*.png,*.jpg,*.jpeg,*.webp; Images"])
+		"replay":
+			_file_dialog.filters = PackedStringArray(["*.mcfr,*.json; Match replays"])
+			_file_dialog.current_dir = ReplayFile.REPLAY_DIR
+		"combat_log": _file_dialog.filters = PackedStringArray(["*.txt,*.log; Combat logs"])
+	_file_dialog.title = "Choose " + kind.replace("_", " ")
+	_file_dialog.file_selected.connect(func(path: String) -> void: _load_attachment(kind, path))
+	add_child(_file_dialog)
+	_file_dialog.popup_centered_ratio(0.8)
+
+# Loading an attachment never submits a report or changes the selected match.
+func _load_attachment(kind: String, path: String) -> bool:
+	var file := FileAccess.open_compressed(path, FileAccess.READ, ReplayFile.COMPRESSION) \
+			if kind == "replay" and path.get_extension().to_lower() == ReplayFile.REPLAY_EXT \
+			else FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		_status.text = "Could not open that file."
+		return false
+	var limit: int = MAX_REPLAY if kind == "replay" else (MAX_LOG if kind == "combat_log" else MAX_IMAGE_FILE)
+	if file.get_length() > limit:
+		file.close()
+		_status.text = "That attachment is too large (limit: %s)." % String.humanize_size(limit)
+		return false
+	var bytes := file.get_buffer(file.get_length())
+	file.close()
+	match kind:
+		"screenshot":
+			var img := Image.load_from_file(path)
+			if img == null or img.is_empty():
+				_status.text = "Choose a valid PNG, JPEG or WebP image."
+				return false
+			var longest := maxi(img.get_width(), img.get_height())
+			if longest > SHOT_MAX_W:
+				var scale := float(SHOT_MAX_W) / longest
+				img.resize(maxi(1, int(img.get_width() * scale)), maxi(1, int(img.get_height() * scale)), Image.INTERPOLATE_BILINEAR)
+			var png := img.save_png_to_buffer()
+			if png.size() > MAX_SCREENSHOT:
+				_status.text = "The screenshot is too large. Choose a smaller image."
+				return false
+			_shot_png = png
+			_send_shot.button_pressed = true
+		"replay":
+			var text := bytes.get_string_from_utf8()
+			var json := JSON.new()
+			var parsed := json.parse(text)
+			var data: Variant = json.data if parsed == OK else null
+			if not data is Dictionary or data.get("kind") != ReplayFile.KIND_REPLAY \
+					or not data.get("start") is Dictionary or not data.get("steps") is Array:
+				_status.text = "Choose a valid .mcfr or replay JSON file."
+				return false
+			_replay_json = text
+			# Do not send the current battle's log alongside a different replay.
+			_combat_log = str(data.get("combat_log", "")).right(MAX_LOG)
+			_names.erase("combat_log")
+			if not _combat_log.is_empty(): _names["combat_log"] = path.get_file() + " (included)"
+			_send_match.disabled = false
+			_send_match.button_pressed = true
+		"combat_log":
+			if bytes.has(0):
+				_status.text = "Choose a text combat log."
+				return false
+			_combat_log = bytes.get_string_from_utf8()
+			_send_match.disabled = false
+			_send_match.button_pressed = true
+		_: return false
+	_names[kind] = path.get_file()
+	var names := PackedStringArray()
+	for key: String in _names:
+		names.append("%s: %s" % [key.replace("_", " ").capitalize(), _names[key]])
+	_attachment_names.text = "\n".join(names)
+	_status.text = "Replay attached. Choose its combat log if available." if kind == "replay" and _combat_log.is_empty() else "Attachment selected."
+	return true
 
 func _check(parent: Control, text: String, on: bool) -> CheckBox:
 	var cb := CheckBox.new()

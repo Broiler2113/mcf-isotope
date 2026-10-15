@@ -58,7 +58,7 @@ func _vacuum_debris() -> void:
 	loaded.from_dict(saved)
 	ck(loaded.flying.size() == n and loaded.props.is_empty(), "save/load preserves drifting debris without freezing it on space")
 	fx.advance(100.0)
-	ck(fx.flying.is_empty() and fx.props.is_empty(), "debris exits the map without bouncing off the edge of space")
+	ck(fx.flying.size() == n and fx.props.is_empty(), "debris keeps drifting beyond the edge of space")
 
 func _shield_sweep() -> void:
 	var m := MapData.blank_arena(18, 10)

@@ -1695,6 +1695,7 @@ func _open_events_window() -> void:
 	body.add_child(hint)
 	for pair in RandomEvents.REGISTRY:
 		var ev_id: String = pair[0]
+		if not RandomEvents.available_for_map(ev_id, _selected_map().environment(), _mode_opt.selected): continue
 		var cb := CheckBox.new()
 		cb.text = str(pair[1])
 		cb.button_pressed = bool(_event_pool.get(ev_id, false))
@@ -1702,16 +1703,7 @@ func _open_events_window() -> void:
 		cb.toggled.connect(func(on: bool) -> void:
 			_event_pool[eid] = on
 			_broadcast_lobby())
-		cb.tooltip_text = str(RandomEvents.NOTES.get(ev_id, ""))
 		body.add_child(cb)
-		# Что делает событие и где бывает (0.12) — строкой под галочкой, не только подсказкой.
-		var note := Label.new()
-		note.text = str(RandomEvents.NOTES.get(ev_id, ""))
-		note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		note.custom_minimum_size = Vector2(380, 0)
-		note.add_theme_font_size_override("font_size", 11)
-		note.modulate = Color(0.72, 0.75, 0.82)
-		body.add_child(SteamChrome.pad(note, 28, 0))
 
 ## Общее модальное окно в стиле игры: затемнение + рамка SteamChrome + кнопка «Close».
 ## Возвращает VBox для содержимого. Клиенту окна тоже открываются, но правки не едут по
@@ -2059,7 +2051,8 @@ func _commit_config() -> void:
 	# Пул событий из окна (item 3/5): вес 1 у выбранных, 0 у прочих.
 	var weights: Dictionary = {}
 	for ev_id: String in _event_pool:
-		weights[ev_id] = 1.0 if bool(_event_pool[ev_id]) else 0.0
+		weights[ev_id] = 1.0 if bool(_event_pool[ev_id]) and RandomEvents.available_for_map(
+				ev_id, _selected_map().environment(), _mode_opt.selected) else 0.0
 	GameConfig.random_events_weights = weights
 	# Общее ограничение состава больше не задаётся глобально — оно ПЕРСОНАЛЬНО у слотов
 	# (item 2). Глобальный список чистим, чтобы старое значение не перебивало личные.

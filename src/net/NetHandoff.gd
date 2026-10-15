@@ -103,7 +103,8 @@ const K_LOBBY_MAP := "lobby_map"
 ##  12 — 0.12.2: destroying one cell of a multi-cell piece of furniture leaves the rest.
 ##  13 — furniture fire, shield sweeps, pressure-door interlocks and paired furniture.
 ##  14 — 0.12.3: shield strikes against glass; vehicle ramming emits seeded wall chunks.
-const PROTOCOL := 14
+##  15 — 0.12.4: burning cells no longer penalize shots; Assault retired.
+const PROTOCOL := 15
 
 static func encode_rules() -> Dictionary:
 	var roster := GameConfig.active_roster()

@@ -1,6 +1,20 @@
 class_name FxDecals
 extends RefCounted
 
+# Invisible arena boundaries constrain units, never drifting particles in vacuum.
+static func solid_in(state: GameState, coord: Vector2i) -> bool:
+	var cell := state.grid.cell(coord) if state != null else null
+	if state != null and state.env in ["station", "asteroid"]:
+		if cell == null or cell.feature_id == MCF.FEATURE_BOUNDARY: return false
+	return cell == null or cell.cover_height >= MCF.WALL_HEIGHT
+
+static func space_in(state: GameState, coord: Vector2i) -> bool:
+	var cell := state.grid.cell(coord) if state != null else null
+	if state != null and state.env in ["station", "asteroid"]:
+		if cell == null or cell.feature_id == MCF.FEATURE_BOUNDARY: return true
+	return cell != null and cell.is_space
+
+
 ## Косметика боя (#21): следы разрушений, осколки стекла, гильзы, кровь.
 ##
 ## НИЧЕГО ИЗ ЭТОГО НЕ ВЛИЯЕТ НА ПРАВИЛА. Здесь нет ни одной величины, которую
@@ -870,10 +884,6 @@ func advance(delta: float) -> bool:
 				landed.append(f)
 				flying.remove_at(i)
 				continue
-			if (bounds != Vector2.ZERO and not Rect2(Vector2.ZERO, bounds).grow(1.0).has_point(pos)) \
-					or (bounds == Vector2.ZERO and float(f["t"]) > 30.0):
-				flying.remove_at(i)
-				continue
 			if _space(Vector2i(pos.floor())) or float(f["t"]) < float(f["dur"]):
 				continue
 			f["to"] = pos
@@ -974,7 +984,8 @@ func from_dict(d: Dictionary) -> void:
 		if e.size() == 10:
 			flying.append({"kind": str(e[0]), "from": Vector2(float(e[1]), float(e[2])),
 					"to": Vector2(float(e[3]), float(e[4])), "rot0": float(e[5]), "rot1": float(e[6]),
-					"scale": float(e[7]), "t": float(e[8]), "dur": maxf(0.001, float(e[9])), "drift": true})
+					"scale": float(e[7]), "t": float(e[8]), "dur": maxf(0.001, float(e[9])), "drift": true,
+					"origin": Vector2i(floori(float(e[1])), floori(float(e[2])))})
 	for entry in d.get("damage", []):
 		if entry is Array and (entry as Array).size() >= 3:
 			floor_damage[Vector2i(int(entry[0]), int(entry[1]))] = int(entry[2])

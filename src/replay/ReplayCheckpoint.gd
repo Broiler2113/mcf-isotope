@@ -35,13 +35,8 @@ static func unpack(frame: Dictionary) -> Dictionary:
 static func effects(state: GameState) -> FxDecals:
 	var fx := FxDecals.new()
 	fx.bounds = Vector2(state.grid.width, state.grid.height)
-	var grid := state.grid
-	fx.solid_at = func(c: Vector2i) -> bool:
-		var cell := grid.cell(c)
-		return cell == null or cell.cover_height >= MCF.WALL_HEIGHT
-	fx.space_at = func(c: Vector2i) -> bool:
-		var cell := grid.cell(c)
-		return cell != null and cell.is_space
+	fx.solid_at = func(c: Vector2i) -> bool: return FxDecals.solid_in(state, c)
+	fx.space_at = func(c: Vector2i) -> bool: return FxDecals.space_in(state, c)
 	return fx
 
 static func apply_effects(fx: FxDecals, result: ActionResult) -> void:

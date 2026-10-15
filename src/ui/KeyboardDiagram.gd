@@ -60,7 +60,7 @@ const FREE_COLOR := Color(0.17, 0.17, 0.17)
 const MODS := {KEY_CTRL: KEY_MASK_CTRL, KEY_SHIFT: KEY_MASK_SHIFT, KEY_ALT: KEY_MASK_ALT, KEY_META: KEY_MASK_META}
 ## Подписи контекстов из Keybinds.DEFINITIONS — кому принадлежит действие.
 const CONTEXT_NAMES := {
-	"infantry": "soldier", "sapper": "sapper", "engineer": "engineer", "operator": "drone operator",
+	"infantry": "soldier", "sapper": "minesweeper", "engineer": "engineer", "operator": "drone operator",
 	"miner": "miner", "drone": "drone", "passenger": "passenger", "group": "group", "vehicle": "vehicle",
 	"held": "held soldier", "dice": "dice", "replay": "replay", "picker": "action list", "wall": "wall building",
 }

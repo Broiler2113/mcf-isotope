@@ -25,7 +25,7 @@ const PURCHASABLE_VEHICLES := ["tank", "shuttle", "borg"]
 ## командует, и по своим он не стреляет. Нейтральные жители-НПС берутся только из
 ## разметки самой карты (preserved_neutral) — вот они и враждебны обоим.
 const PURCHASABLE := [
-	"light_infantry", "heavy_infantry", "assault", "machinegunner",
+	"light_infantry", "heavy_infantry", "machinegunner",
 	"sniper", "marksman", "anti_tank", "flamethrower",
 	"commander", "engineer", "miner", "sapper", "drone_operator", "shield_bearer",
 	"civilian",

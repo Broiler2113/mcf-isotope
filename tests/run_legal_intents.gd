@@ -17,7 +17,7 @@ const MAX_ACTIONS := 1500
 const SAMPLE := 48
 const INFANTRY := [
 	"light_infantry", "heavy_infantry", "machinegunner", "sniper", "anti_tank",
-	"engineer", "flamethrower", "assault", "marksman", "miner", "sapper",
+	"engineer", "flamethrower", "marksman", "miner", "sapper",
 	"shield_bearer", "drone_operator", "commander",
 ]
 

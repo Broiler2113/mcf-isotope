@@ -42,7 +42,6 @@ const ITEM_NAMES := {
 # --- Спецспособности (id в UnitStats.special_ability_id) ---
 const ABILITY_SHIELD_BEARER := "shield_bearer"
 const ABILITY_ANTI_TANK := "anti_tank"
-const ABILITY_ASSAULT := "assault"
 const ABILITY_FLAMETHROWER := "flamethrower"
 const ABILITY_MARKSMAN := "marksman"
 const ABILITY_SNIPER := "sniper"
@@ -356,7 +355,6 @@ const CORPSE_CARRY_MAX := 1
 const CORPSE_SCATTER_RADIUS := 3
 
 # --- Огонь (§3.8, таблица розжига #14/#31) ---
-const FIRE_SHOOT_PENALTY := 1     # стрельба через горящую клетку: −1 к попаданию (кроме снайпера)
 # Тип пола: 0 = обычный, 1 = горючий (дерево), 2 = трава (#14 — новый подтип пола).
 const FLOOR_NORMAL := 0
 const FLOOR_FLAMMABLE := 1
@@ -517,9 +515,6 @@ static func blast_x(center: Vector2i) -> Array[Vector2i]:
 		center + Vector2i(-1, -1), center + Vector2i(1, -1),
 		center + Vector2i(-1, 1), center + Vector2i(1, 1),
 	]
-# Штурмовик: дробовик задевает не более 3 целей по прямой (первым трём −1 к защите).
-const ASSAULT_MAX_TARGETS := 3
-const ASSAULT_DEFENSE_PENALTY := 1
 # Огнемётчик: длина струи пламени в клетках.
 const FLAME_JET_LENGTH := 6
 # Марксманн: запас «потенциала» лазера и стоимости пробития (§3.13).

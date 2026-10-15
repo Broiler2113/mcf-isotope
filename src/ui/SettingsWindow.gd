@@ -264,6 +264,7 @@ func _build_keybinds(tabs: TabContainer) -> void:
 	_key_message.custom_minimum_size.x = 450
 	page.add_child(_key_message)
 	var sections := TabContainer.new()
+	sections.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_key_sections = sections
 	page.add_child(sections)
 	for section in ["game", "editor"]:
