@@ -1551,8 +1551,10 @@ old weight settings still pick the same way.
   Holdout waves) gets half the gap in fresh soldiers at its nearest edge.
 - *Bounty* — Capture & Hold only, instant: the points leader's most valuable soldier is marked
   for 3 rounds; an enemy kill scores 2, any other death voids it.
-- *Old Minefield* — instant at a round's start, asteroid surface / town and field outdoors only
-  (no indoor floor finish, no wooden floors): up to 10 mines within 4 cells of a rolled center,
+- *Old Minefield* — instant at a round's start on every map, including decorated station
+  and bunker floors and asteroid terrain: up to 10 personnel and anti-vehicle mines within
+  4 cells of a rolled center. Ground must be unoccupied, traversable and free of structures,
+  bodies and fire; bare station vacuum is excluded. At least one mine is placed. The mines use
   owner `OLD_MINE_OWNER` = −2, so nobody sees them until a sapper sweeps. The report names no
   place. Each step onto one rolls d6 and only 5+ sets it off; a dud leaves no trace.
 
@@ -2746,7 +2748,8 @@ houseplants, vending machines, bathtubs and showers extend the native furniture 
 Loose floor items appear occasionally. The toolbox is a loose item; the desk-with-lamp
 brush is retired, and old maps migrate these two objects on import.
 
-Every station reserves an engineering department and an external solar array. Production
+Every station reserves an engineering department and several external solar arrays,
+with their number growing with the station perimeter. Production
 departments retain machinery workstations even if deployment occupies the room. Hull
 access uses the paired pressure doors described in §9.4.
 
@@ -4321,7 +4324,7 @@ digest, none of the audited paths was a hotspot.
   LDF is a six-cell connected fortification, and vehicle badges use square shapes and
   their sprite overrides. Borg engineering and shuttle drone stations are documented.
 - Lobby event choices and effective weights share the map/mode eligibility rules:
-  dust on Field/Town, old mines on Field/Town/Asteroid, bounty in Capture & Hold.
+  dust on Field/Town, old mines on every map, bounty in Capture & Hold.
   Conditions depending on the armies or current battlefield remain runtime checks.
 - Bug reports accept external images, compressed or JSON replays, and text combat logs.
   New replays include up to 600,000 characters of recent combat text. Selecting another
@@ -4334,3 +4337,37 @@ digest, none of the audited paths was a hotspot.
   distant terrain and lighting use the same view without mutating simulation state.
 - Network protocol **15** prevents mixed-rule matches after retiring Assault and the
   firing-through-fire modifier. Released in 0.12.4.
+
+
+### Reported-issue fixes (0.12.5)
+
+- The host selects Easy, Normal or Hard independent-army composition in the lobby.
+  Easy favors Light/Heavy Infantry; Hard favors anti-tank troops and specialists.
+  Normal keeps the prior uniform roster. The setting travels in lobby rules, event
+  snapshots, saves, resyncs and replays; army budget and NPC AI rules stay the same.
+- Old Minefield is available on every environment, uses personnel and anti-vehicle
+  mines, and cannot announce an empty field when eligible ground exists.
+- Station generation places several paired solar arrays around the exterior hull.
+- F11 toggles fullscreen across screens. The single shared shortcut is rebindable in
+  Settings and appears on both keyboard diagrams; conflicts include editor shortcuts.
+- Drawing canvases render above dynamic lighting and ignore the flat night tint.
+  Fire and explosion flashes render above terrain, vehicles and living units, with
+  corpses above fire. Fog still filters each cell.
+- Vehicle ramming reveals crushed troops, broken walls, flying items, debris and
+  tracks as the moving hull reaches each cell. Portable simulation resolves immediately;
+  this display schedule changes no board state or dice.
+- Undo/redo restores cosmetic checkpoints too: tracks, floor damage, wall chunks and
+  displaced items, including their flights, while preserving earlier battle debris.
+- Network simulation packets wait until earlier dice/impact presentation finishes;
+  roll signals continue immediately. Guests wait for acknowledgement before submitting
+  another order, and clicks use viewport coordinates consistently with camera pan/zoom.
+- Drag-selection keeps its starting board cell when the camera pans. Shift adds each
+  subsequent rectangle to the current selection without duplicating units.
+- Impact rendering preserves unaffected terrain textures, caches texture readbacks,
+  and rebuilds one previously cached dirty chunk per frame while retaining its fallback.
+  Deferred visible chunks request subsequent redraws. Explosion particle counts remain
+  unchanged. The informational benchmark is `tests/bench/run_explosion_bench.gd`.
+- Network protocol **16** rejects mixed versions of the event rules.
+
+Validation: `tests/run_reported_issues.gd`, `tests/render_reported_issues.gd`, the guest
+movement extension in `tests/net_guest_town.gd`, and the existing regression harness.

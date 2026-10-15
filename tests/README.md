@@ -282,3 +282,20 @@ choices and drives local, replay and network shot presentation through manual at
 defense rolls, asserting that flashes and bullets start afterward. `run_remaining_ui.gd`
 checks the restored sidebar tools, Drawing button, fixed Settings popup, retained log
 controls, editor time choices and clicking a glass target with Shield Push.
+
+### Reported issues (0.12.5)
+
+`run_reported_issues.gd` covers raider composition settings and serialization,
+old minefields across all environments, additional station solar arrays, cosmetic
+undo/redo, terrain rebuild budgets, camera-anchored and additive selection,
+vehicle impact timing, queued network actions and the rebindable fullscreen shortcut.
+The guest Town network scenario also issues a real menu/click move order after
+camera pan/zoom and checks the exact destination and acknowledgement behavior.
+
+`xvfb-run -a godot --script res://tests/render_reported_issues.gd` checks drawing
+colors under night tint and dynamic lighting, plus fire/corpse draw order. Images
+are written to `/tmp/isotope-drawings-night.png` and `/tmp/isotope-fire-layering.png`.
+
+`godot --headless --script res://tests/bench/run_explosion_bench.gd` reports
+impact-frame texture rebuilding time. An optional argument after `--` may point to
+an earlier `TerrainTiles.gd` source for comparison. Timings are informational.

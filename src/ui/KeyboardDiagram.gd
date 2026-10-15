@@ -133,7 +133,7 @@ func _rebuild() -> void:
 	_uses.clear()
 	_mods_used.clear()
 	for entry: Dictionary in Keybinds.DEFINITIONS:
-		if entry.section != section:
+		if entry.section != section and entry.id != "game_fullscreen":
 			continue
 		for code: int in Keybinds.codes(entry.id):
 			var key := code & KEY_CODE_MASK

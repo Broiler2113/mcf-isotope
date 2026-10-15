@@ -27,7 +27,6 @@ extends RefCounted
 static func available_for_map(id: String, env: String, game_mode: int) -> bool:
 	match id:
 		DUST: return env in ["town", "field"]
-		MINEFIELD: return env in ["town", "field", "asteroid"]
 		BOUNTY: return game_mode == MatchMode.Kind.CAPTURE
 	return true
 
@@ -75,7 +74,7 @@ const NOTES := {
 	COLLAPSE: "Walls in a zone come down at the end of the round; anyone inside may be crushed.",
 	REINFORCE: "The weakest side gets fresh troops at its nearest map edge.",
 	BOUNTY: "Capture & Hold only. The leader's most valuable soldier is marked: kill it within 3 rounds for 2 points.",
-	MINEFIELD: "Asteroid, town (outdoors) and field maps. Old mines appear somewhere, location unknown; each one goes off only some of the time.",
+	MINEFIELD: "All maps. Hidden personnel and anti-vehicle mines appear on unoccupied ground; old mines can fail to detonate.",
 }
 
 static func event_name(id: String) -> String:
@@ -108,6 +107,8 @@ var pending: Array = []
 var clouds: Array = []
 ## Сколько независимых армий уже пришло — по этому числу новая получает свой слот.
 var armies: int = 0
+var army_difficulty: int = 1
+const ARMY_DIFFICULTIES := ["Easy", "Normal", "Hard"]
 ## Пыльная буря (0.12): сколько раундов ещё держится; 0 — ясно.
 var dust_left: int = 0
 
@@ -263,6 +264,7 @@ func snapshot() -> Dictionary:
 		sm.append(c.duplicate())
 	return {"enabled": enabled, "mandatory": mandatory, "interval": interval,
 			"weights": weights.duplicate(), "turns_since": turns_since,
+			"army_difficulty": army_difficulty,
 			"last_checked_round": last_checked_round,
 			"pending": pend, "clouds": cl, "smoke": sm, "armies": armies, "dust": dust_left}
 
@@ -285,10 +287,13 @@ func restore(d: Dictionary) -> void:
 	for c: Dictionary in d.get("smoke", []):
 		smoke.append((c as Dictionary).duplicate())
 	armies = int(d.get("armies", 0))
+	army_difficulty = clampi(int(d.get("army_difficulty", 1)), 0, 2)
 	dust_left = int(d.get("dust", 0))
 
 static func from_config() -> RandomEvents:
 	var w: Dictionary = GameConfig.random_events_weights
-	return RandomEvents.new(GameConfig.random_events_enabled,
+	var events := RandomEvents.new(GameConfig.random_events_enabled,
 			GameConfig.random_events_mandatory, GameConfig.random_events_interval,
 			w if not w.is_empty() else default_weights())
+	events.army_difficulty = clampi(GameConfig.independent_army_difficulty, 0, 2)
+	return events

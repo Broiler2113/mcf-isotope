@@ -1008,3 +1008,31 @@ func from_dict(d: Dictionary) -> void:
 		if e is Array and (e as Array).size() >= 4:
 			track_marks.append({"from": Vector2(float(e[0]), float(e[1])),
 					"to": Vector2(float(e[2]), float(e[3]))})
+
+## Local undo snapshots retain animation progress; settled particle records are immutable.
+## This is separate from the portable save format, which intentionally settles flights.
+func capture_state() -> Dictionary:
+	return {"damage": floor_damage.duplicate(), "props": props.duplicate(),
+		"gore": gore.duplicate(), "flying": flying.duplicate(true),
+		"lasers": laser_lines.duplicate(), "tracks": track_marks.duplicate(),
+		"tracers": tracers.duplicate(true), "shots": shots.duplicate(true),
+		"lanes": lanes.duplicate(true), "flashes": flashes.duplicate(true),
+		"event_seq": _event_seq, "seq": _seq}
+
+func restore_state(snap: Dictionary) -> void:
+	floor_damage = snap["damage"].duplicate()
+	props = snap["props"].duplicate()
+	gore = snap["gore"].duplicate()
+	flying = snap["flying"].duplicate(true)
+	laser_lines = snap["lasers"].duplicate()
+	track_marks = snap["tracks"].duplicate()
+	tracers = snap["tracers"].duplicate(true)
+	shots = snap["shots"].duplicate(true)
+	lanes = snap["lanes"].duplicate(true)
+	flashes = snap["flashes"].duplicate(true)
+	_event_seq = int(snap["event_seq"])
+	_seq = int(snap["seq"])
+	damage_version += 1
+	ground_version += 1
+	decal_reset += 1
+	_reindex()

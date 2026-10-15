@@ -51,7 +51,7 @@ func _units_and_manual() -> void:
 	for env in ["town", "field", "station", "bunker", "asteroid"]:
 		for mode in [MatchMode.Kind.ANNIHILATION, MatchMode.Kind.CAPTURE, MatchMode.Kind.HOLDOUT]:
 			ck(RandomEvents.available_for_map("dust", env, mode) == (env in ["town", "field"])
-				and RandomEvents.available_for_map("minefield", env, mode) == (env in ["town", "field", "asteroid"])
+				and RandomEvents.available_for_map("minefield", env, mode)
 				and RandomEvents.available_for_map("bounty", env, mode) == (mode == MatchMode.Kind.CAPTURE), "event conditions: %s / %d" % [env, mode])
 
 func _fire() -> void:

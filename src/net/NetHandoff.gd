@@ -104,7 +104,8 @@ const K_LOBBY_MAP := "lobby_map"
 ##  13 — furniture fire, shield sweeps, pressure-door interlocks and paired furniture.
 ##  14 — 0.12.3: shield strikes against glass; vehicle ramming emits seeded wall chunks.
 ##  15 — 0.12.4: burning cells no longer penalize shots; Assault retired.
-const PROTOCOL := 15
+##  16 — configurable raider composition and mixed old minefields on every map.
+const PROTOCOL := 16
 
 static func encode_rules() -> Dictionary:
 	var roster := GameConfig.active_roster()
@@ -117,6 +118,7 @@ static func encode_rules() -> Dictionary:
 		"fu": GameConfig.free_unlimited_for,
 		"re": GameConfig.random_events_enabled, "rm": GameConfig.random_events_mandatory,
 		"ri": GameConfig.random_events_interval,
+		"rad": GameConfig.independent_army_difficulty,
 		"rw": GameConfig.random_events_weights.duplicate(),
 		"gm": GameConfig.game_mode, "cz": GameConfig.capture_zones,
 		"ct": GameConfig.capture_target, "hw": GameConfig.holdout_waves, "wa": GameConfig.holdout_ai,
@@ -144,6 +146,7 @@ static func apply_rules(msg: Dictionary) -> void:
 	GameConfig.random_events_enabled = bool(msg.get("re", false))
 	GameConfig.random_events_mandatory = bool(msg.get("rm", false))
 	GameConfig.random_events_interval = int(msg.get("ri", 3))
+	GameConfig.independent_army_difficulty = clampi(int(msg.get("rad", 1)), 0, 2)
 	var rw: Variant = msg.get("rw", {})
 	GameConfig.random_events_weights = {}
 	if rw is Dictionary:

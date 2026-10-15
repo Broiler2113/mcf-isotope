@@ -1579,11 +1579,10 @@ func _maint_wall(r: Rect2i) -> Vector2i:
 func _maintenance_exits() -> void:
 	var dirs := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 	var used: Array[Vector2i] = []
-	# Наружу служебная сеть выходит РЕДКО (item 2): «tech tunnels … should branch out into
-	# space very rarely». Чаще всего станция обходится без мостков вовсе, изредка выход
-	# один, совсем редко — два.
+	# Array count scales with station perimeter; every station gets several arrays.
 	var roll := _rng.randf()
-	var limit := 1 if roll < SOLAR_EXIT_ONE else SOLAR_EXITS_MAX
+	var limit := maxi(3, mini(10, (_core.size.x + _core.size.y) / 28))
+	if roll >= SOLAR_EXIT_ONE: limit += 1
 	for y in h:
 		for x in w:
 			if _k[y * w + x] != K_MAINT or not _in_f(Vector2i(x, y)):
@@ -1627,21 +1626,27 @@ func _maintenance_exits() -> void:
 						for b in range(1, pd + 1):
 							_solar.append(wall + d * (at + a) + side * (t * b))
 				break
-	if used.is_empty():
-		for y in h:
-			for x in w:
-				var c := Vector2i(x, y)
-				if not _in_f(c) or _kind(x, y) != K_WALL: continue
-				for d: Vector2i in dirs:
-					if _kind(x - d.x, y - d.y) not in [K_ROOM, K_HALL, K_MAINT, K_DHALL]: continue
-					if not _looks_outside(c, d): continue
-					_space_doors.append(c)
-					var side := Vector2i(d.y, d.x)
-					for k in range(1, 6): _grill.append(c + d * k)
-					for k in range(3, 6):
-						for t: int in [-1, 1]:
-							_solar.append(c + d * k + side * t)
-					return
+	var sealed := _sealed_room_walls()
+	for y in h:
+		for x in w:
+			if used.size() >= limit: return
+			var c := Vector2i(x, y)
+			if not _in_f(c) or _kind(x, y) != K_WALL or sealed.has(c): continue
+			for d: Vector2i in dirs:
+				if _kind(x - d.x, y - d.y) not in [K_ROOM, K_HALL, K_MAINT, K_DHALL]: continue
+				if not _looks_outside(c, d): continue
+				if used.any(func(u: Vector2i) -> bool: return u.distance_to(c) < SOLAR_EXIT_GAP): continue
+				used.append(c)
+				_space_doors.append(c)
+				var side := Vector2i(-d.y, d.x)
+				var span := _rng.randi_range(5, 8)
+				for k in range(1, span + 1): _grill.append(c + d * k)
+				var depth := _rng.randi_range(1, SOLAR_PANEL_DEPTH)
+				for k in range(3, span + 1):
+					for t: int in [-1, 1]:
+						for b in range(1, depth + 1):
+							_solar.append(c + d * k + side * t * b)
+				break
 
 ## Пустота за клеткой обшивки тянется НАРУЖУ до края игровой карты (0.9.4): по этому луч
 ## и отличает настоящий борт станции от пустого отсека внутри неё.
@@ -1668,10 +1673,8 @@ const MAINT_GRATE_CHANCE := 0.35
 const MAINT_SPLIT_MIN := 9
 ## Сколько самое большее выходов техтуннелей наружу с панелями бывает на станции (0.9.4) и
 ## как далеко они стоят друг от друга. Сам выход — редкость (item 2): доли броска ниже.
-const SOLAR_EXITS_MAX := 2
 const SOLAR_EXIT_GAP := 10.0
-const SOLAR_EXIT_NONE := 0.62   # станция вообще без мостков
-const SOLAR_EXIT_ONE := 0.94    # ниже этого — один выход, выше — SOLAR_EXITS_MAX
+const SOLAR_EXIT_ONE := 0.75    # chance of one additional array
 ## Мостки и панели на них разного размера (item 4): длина мостка и предельная площадка.
 const SOLAR_WALK_MIN := 3
 const SOLAR_WALK_MAX := 6

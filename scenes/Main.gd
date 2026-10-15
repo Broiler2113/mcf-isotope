@@ -223,7 +223,10 @@ func _terrain_before_impact(base: Grid, visible: Dictionary, fog_on: bool) -> Gr
 	view.floor_look = base.floor_look
 	view.wall_accent = base.wall_accent
 	view.map_decals = base.map_decals
-	view.map_items = base.map_items
+	view.map_items = base.map_items.duplicate()
+	for item: Array in _hold_visual.get("map_items", []):
+		if cells.has(SmallItems.cell_of(item)) and not view.map_items.has(item):
+			view.map_items.append(item)
 	view.light_tint = base.light_tint
 	view.door_look = base.door_look
 	for c: Vector2i in cells:
@@ -297,6 +300,8 @@ var _group_plan_cache: Array = []
 ## всегда остаётся обычным кликом по клетке.
 var _multi_btn: CheckBox
 var _box_dragging: bool = false
+var _box_start_cell := Vector2i.ZERO
+var _box_additive := false
 var _box_start_screen: Vector2 = Vector2.ZERO
 var _box_end_screen: Vector2 = Vector2.ZERO
 const BOX_DRAG_THRESHOLD := 8.0
@@ -529,6 +534,9 @@ var _corpse_cells: Array = []
 ## и рисует их поверх доски. Пустой слой не стоит ничего — все проходы по нему
 ## начинаются с проверки на пустоту.
 var _fx := FxDecals.new()
+var _annotations: Node2D
+var _net_request_pending := false
+var _net_messages: Array[Dictionary] = []
 var _p1_btn: Button
 var _p2_btn: Button
 # --- Запись, сохранение и повтор матча (M12, items 42 и 53) ---
@@ -580,6 +588,13 @@ var _net_playing: bool = false
 var _net_status: Label
 
 func _ready() -> void:
+	_annotations = Node2D.new()
+	_annotations.z_index = 3
+	var annotation_material := CanvasItemMaterial.new()
+	annotation_material.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
+	_annotations.material = annotation_material
+	_annotations.draw.connect(_draw_annotation_layer)
+	add_child(_annotations)
 	Keybinds.changed.connect(_refresh_menu_hotkeys)
 	_spectator = NetHandoff.session != null and NetHandoff.spectators.has(NetHandoff.session.my_peer_id())
 	Ui.board_settings_changed.connect(queue_redraw)
@@ -590,6 +605,8 @@ func _ready() -> void:
 	# со следующей партии, перезапускать игру не нужно.
 	Sprites.reload_overrides()
 	_build_state()
+	resolver.capture_cosmetics = _fx.capture_state
+	resolver.restore_cosmetics = _fx.restore_state
 	_furniture_look = TerrainTiles.new(state.grid, state.env).freeze_furniture()
 	# Край поля для косметики (batch 12 #6): гильзы, брызги и осколки отскакивают от него.
 	_fx.bounds = Vector2(state.grid.width, state.grid.height)
@@ -642,7 +659,7 @@ func _advance_group_preview() -> void:
 	if _group_order_pending != Vector2i(-1, -1) and _group_order_signature != GroupMovePreview.key(resolver, _group_ids):
 		_group_order_pending = Vector2i(-1, -1)
 	if _group_preview == null: _group_preview = GroupMovePreview.new()
-	var dest := _group_order_pending if _group_order_pending != Vector2i(-1, -1) else _pos_to_cell(get_global_mouse_position())
+	var dest := _group_order_pending if _group_order_pending != Vector2i(-1, -1) else _pos_to_cell(get_viewport().get_mouse_position())
 	var prior: Array = [_group_preview.revision, _group_preview.target, _group_preview.job.done if _group_preview.job != null else false]
 	var ready := _group_preview.sync(resolver, _group_ids, dest, _group_tactical)
 	if ready and _group_order_pending != Vector2i(-1, -1):
@@ -1066,7 +1083,7 @@ func _show_result(result: ActionResult) -> void:
 		return
 	if not result.dice_events.is_empty():
 		_pending_death_ids.clear()
-		for id: int in result.deaths:
+		for id: int in result.visual_deaths:
 			_pending_death_ids[id] = true
 		_hold_visual = result.visual_hold  # item 22
 		queue_redraw()
@@ -1257,6 +1274,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		_mouse_panning = event.pressed
 		return
 	if event is InputEventMouseMotion and _mouse_panning:
+		if _box_dragging: _box_end_screen = event.position
 		pan += event.relative
 		queue_redraw()
 		return
@@ -1282,7 +1300,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if mode == Mode.RULER:
 		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT \
 				and event.pressed:
-			var at := _pos_to_cell(get_global_mouse_position())
+			var at := _pos_to_cell(get_viewport().get_mouse_position())
 			if not state.grid.in_bounds(at):
 				return
 			if _ruler_a == Vector2i(-1, -1):
@@ -1294,7 +1312,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			queue_redraw()
 			return
 		if event is InputEventMouseMotion:
-			var hov := _pos_to_cell(get_global_mouse_position())
+			var hov := _pos_to_cell(get_viewport().get_mouse_position())
 			if hov != _ruler_hover:
 				_ruler_hover = hov
 				queue_redraw()
@@ -1346,13 +1364,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
 				_wall_drawing = true
-				_wall_try_add(_pos_to_cell(get_global_mouse_position()))
+				_wall_try_add(_pos_to_cell(get_viewport().get_mouse_position()))
 			else:
 				_wall_drawing = false
 			return
 		if event is InputEventMouseMotion:
 			if _wall_drawing:
-				_wall_try_add(_pos_to_cell(get_global_mouse_position()))
+				_wall_try_add(_pos_to_cell(get_viewport().get_mouse_position()))
 			else:
 				queue_redraw()
 			return
@@ -1363,31 +1381,32 @@ func _unhandled_input(event: InputEvent) -> void:
 	# выделения не ломаем — перерисовываем только при отпущенной ЛКМ.
 	if mode == Mode.GROUP_MOVE and event is InputEventMouseMotion \
 			and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) == 0:
-		var cell := _pos_to_cell(get_global_mouse_position())
+		var cell := _pos_to_cell(get_viewport().get_mouse_position())
 		if cell != _group_mouse_cell:
 			_group_mouse_cell = cell
 			queue_redraw()
 		return
-	# Рамка выделения (RTS, #18): в нейтральных режимах ЛКМ тянет прямоугольник,
-	# отпускание выделяет всех своих активных юнитов внутри. Короткая протяжка — обычный
-	# клик. В сетевой игре групповое управление отключено (риск десинка).
+	# Drag a world-anchored selection rectangle; Shift adds to the current group.
 	# Двойной щелчок по пассажиру — сам челнок. Одиночные щелчки чередуют «пассажир ↔
 	# машина», и если пассажир уже был выбран, двойной приходил обратно к нему.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 		_click_double = event.double_click
 	if _box_selectable() and event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
+			_box_start_cell = _pos_to_cell(event.position)
+			_box_additive = event.shift_pressed
 			_box_start_screen = event.position
 			_box_end_screen = event.position
 			_box_dragging = false
 		else:
+			_box_end_screen = event.position
 			if _box_dragging:
 				_box_dragging = false
 				_finalize_box()
 			elif event.shift_pressed:
-				_shift_pick(_pos_to_cell(get_global_mouse_position()))
+				_shift_pick(_pos_to_cell(event.position))
 			else:
-				_handle_click(_pos_to_cell(get_global_mouse_position()))
+				_handle_click(_pos_to_cell(event.position))
 		return
 	if _box_selectable() and event is InputEventMouseMotion \
 			and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
@@ -1398,7 +1417,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			queue_redraw()
 		return
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		_handle_click(_pos_to_cell(get_global_mouse_position()))
+		_handle_click(_pos_to_cell(event.position))
 
 func _handle_click(coord: Vector2i) -> void:
 	# Пока показана стартовая доска, щелчок по полю лишь возвращает настоящую: приказ по
@@ -2423,8 +2442,7 @@ func _adjacent8(a: Vector2i, b: Vector2i) -> bool:
 	return maxi(d.x, d.y) == 1
 
 # --- RTS-выделение и групповое движение (#18) ---
-## Рамкой можно выделять только в «нейтральных» режимах локальной игры (не во время
-## прицеливания и не по сети — там пошаговый ввод идёт через контроллеры).
+## Selection is available in neutral action modes for the locally controlled side.
 func _box_selectable() -> bool:
 	if state == null:
 		return false
@@ -2469,20 +2487,25 @@ func _shift_pick(coord: Vector2i) -> void:
 
 ## По завершении рамки — собрать своих активных пехотинцев внутри прямоугольника.
 func _finalize_box() -> void:
-	var a := _pos_to_cell(_box_start_screen)
+	var a := _box_start_cell
 	var b := _pos_to_cell(_box_end_screen)
 	var x0 := mini(a.x, b.x)
 	var x1 := maxi(a.x, b.x)
 	var y0 := mini(a.y, b.y)
 	var y1 := maxi(a.y, b.y)
 	var ids: Array[int] = []
+	if _box_additive: ids.assign(_group_ids)
+	if _box_additive and selected_id >= 0 and not ids.has(selected_id):
+		var selected := _selected_unit()
+		if selected != null and _is_own_active(selected) and not selected.is_drone and selected.aboard_vehicle_id == -1:
+			ids.append(selected_id)
 	for u in state.all_units():
 		if u.owner != state.active_player() or not u.is_alive() or not _can_control(u.owner):
 			continue
 		if u.is_drone or u.aboard_vehicle_id != -1:
 			continue
 		if u.coord.x >= x0 and u.coord.x <= x1 and u.coord.y >= y0 and u.coord.y <= y1:
-			ids.append(u.id)
+			if not ids.has(u.id): ids.append(u.id)
 	_set_group(ids)
 
 ## Установить выделенную группу. 0 → снять выделение; 1 → обычное меню; ≥2 → меню
@@ -3082,7 +3105,7 @@ func _begin_shoot(target: UnitInstance) -> void:
 func _submit(intent: Intent) -> void:
 	if replay != null:
 		return   # запись только смотрят: подавать за неё намерения некому
-	if networked and state.active_player() != my_owner:
+	if networked and (state.active_player() != my_owner or _net_request_pending):
 		return
 	# Ход ведёт машина — намерения игрока не принимаются (item 8). Между шагами ИИ
 	# _animating опущен, поэтому кнопка «конец хода» в этот момент доходила сюда и
@@ -3099,6 +3122,11 @@ func _on_intent_ready(intent: Intent) -> void:
 	if _match_over:
 		return
 	if networked:
+		if _net_request_pending or _net_playing: return
+		_net_request_pending = not net.is_host
+		_menu.hide()
+		_picker.hide()
+		_clear_hint_cell()
 		net.submit_local(intent)
 		return
 	_menu.hide()
@@ -3736,6 +3764,7 @@ func _after_action() -> void:
 		_deselect()
 
 func _on_net_applied(intent: Intent, result: ActionResult) -> void:
+	_net_request_pending = false
 	_menu.hide()
 	_picker.hide()
 	_clear_hint_cell()
@@ -3766,6 +3795,7 @@ func _on_net_applied(intent: Intent, result: ActionResult) -> void:
 		var item: Array = _net_queue.pop_front()
 		await _show_net_action(item[0], item[1])
 	_net_playing = false
+	_drain_net_messages.call_deferred()
 	# Ход мог перейти к ИИ-слоту, которого ведёт хост.
 	_kick_if_ai()
 
@@ -3783,7 +3813,7 @@ func _show_net_action(intent: Intent, result: ActionResult) -> void:
 		# хода везёт с собой весь слот жителей, и без этого трупы легли бы разом,
 		# ещё до первого кубика.
 		_pending_death_ids.clear()
-		for id: int in result.deaths:
+		for id: int in result.visual_deaths:
 			_pending_death_ids[id] = true
 		_hold_visual = result.visual_hold
 		queue_redraw()
@@ -3838,6 +3868,8 @@ func _on_peer_ready(is_host: bool) -> void:
 	net.outgoing.connect(func(msg: Dictionary) -> void: session.send(msg))
 	net.action_applied.connect(_on_net_applied)
 	net.denied.connect(func(reason: String) -> void:
+		_net_request_pending = false
+		_after_action()
 		state.log.add("[denied] " + reason)
 		_refresh_status())
 	net.initiative_synced.connect(_on_initiative_synced)
@@ -3847,6 +3879,7 @@ func _on_peer_ready(is_host: bool) -> void:
 	# Снимок хоста везёт и косметику поля — её гость кладёт вместо своей.
 	net.fx_snapshot = func() -> Dictionary: return _fx.to_dict()
 	net.resynced.connect(func() -> void:
+		_net_request_pending = false
 		if not net.restored_fx.is_empty():
 			_fx.from_dict(net.restored_fx)
 		_resync_after_restore()
@@ -3877,6 +3910,7 @@ func _on_initiative_synced() -> void:
 	_refresh_status()
 	queue_redraw()
 	await _play_civilian_result(net.opening_civilians)
+	_drain_net_messages.call_deferred()
 	queue_redraw()
 	# Первым может ходить ИИ-слот — его ведёт хост (batch 12 #15).
 	_kick_if_ai()
@@ -3913,9 +3947,18 @@ func _on_net_message(msg: Dictionary) -> void:
 				_declare_match_over(str(msg.get("t", "The match is over")))
 			return
 	if net != null:
-		net.receive(msg)
+		if str(msg.get("k", "")) in [NetGame.K_INTENT, NetGame.K_ACTION, NetGame.K_STATE, NetGame.K_INIT] and (_net_playing or _animating):
+			_net_messages.append(msg)
+		else:
+			net.receive(msg)
+
+func _drain_net_messages() -> void:
+	while net != null and not _net_playing and not _animating and not _net_messages.is_empty():
+		net.receive(_net_messages.pop_front())
 
 func _on_net_disconnected() -> void:
+	_net_request_pending = false
+	_net_messages.clear()
 	if _spectator:
 		_to_lobby()
 		return
@@ -4204,15 +4247,23 @@ func _play_veh_walk(ev: Dictionary) -> void:
 	var steps := maxi(1, int(ev.get("steps", 1)))
 	var dur_ms := SOLDIER_WALK_STEP_DELAY * steps / _pace() * 1000.0
 	var t0 := Time.get_ticks_msec()
+	var stages := _vehicle_presentation_stages(ev)
+	var shown_step := -1
 	while is_inside_tree():
 		if replay != null and _replay_skip_animations:
 			break
 		var k := minf(1.0, float(Time.get_ticks_msec() - t0) / maxf(1.0, dur_ms))
 		_set_veh_offset(ev, 1.0 - k)
+		var reached := mini(steps, floori(k * steps + 0.5))
+		while shown_step < reached:
+			shown_step += 1
+			_reveal_vehicle_stage(stages.get(shown_step, {}))
 		queue_redraw()
 		if k >= 1.0:
 			break
 		await get_tree().process_frame
+	for step: int in stages:
+		if step > shown_step: _reveal_vehicle_stage(stages[step])
 	var veh := state.get_vehicle(int(ev["vehicle"]))
 	if veh != null:
 		_veh_offset.erase(veh.id)
@@ -4532,7 +4583,7 @@ func _cell_screen(coord: Vector2i) -> Vector2:
 func _lamp_side_under_mouse(shooter: UnitInstance, coord: Vector2i) -> int:
 	var sides := resolver.shootable_lamp_sides(shooter, coord)
 	if sides.is_empty(): return -1
-	var f := ((get_global_mouse_position() - pan) / zoom - ORIGIN) / CELL - Vector2(coord)
+	var f := ((get_viewport().get_mouse_position() - pan) / zoom - ORIGIN) / CELL - Vector2(coord)
 	var best := sides[0]
 	for side: int in sides:
 		var face := Vector2(0.5, 0.5) + Vector2(Furniture.N4[side]) * 0.5
@@ -4577,7 +4628,7 @@ func _draw_move_preview() -> void:
 	var font := ThemeDB.fallback_font
 	var cvec := Vector2(CELL, CELL)
 	var half := cvec * 0.5
-	var hover := _pos_to_cell(get_global_mouse_position())
+	var hover := _pos_to_cell(get_viewport().get_mouse_position())
 	# Путь считаем ОДИН раз и держим множеством: подсветка маршрута идёт внутри общего
 	# прохода по клеткам, а искать в массиве на каждую клетку — квадрат.
 	var on_path: Dictionary = {}
@@ -4655,7 +4706,7 @@ func _draw_veh_move_preview() -> void:
 		costs[c] = int(veh_move_targets[c]["cost"])
 	_draw_zone_preview(costs, _veh_tiers, veh.center(),
 			0 if resolver.vehicle_move_credit(veh) > 0 else 1)
-	var hover := _pos_to_cell(get_global_mouse_position())
+	var hover := _pos_to_cell(get_viewport().get_mouse_position())
 	if veh_move_targets.has(hover):
 		var move: Dictionary = veh_move_targets[hover]
 		var origin: Vector2i = veh.origin + Vector2i(move["dir"]) * int(move["steps"])
@@ -4700,7 +4751,7 @@ func _draw_zone_cells(tier_at: Dictionary, label_at: Dictionary, on_path: Dictio
 	var font := ThemeDB.fallback_font
 	var cvec := Vector2(CELL, CELL)
 	var half := cvec * 0.5
-	var hover := _pos_to_cell(get_global_mouse_position()) if canvas == null else Vector2i(-1, -1)
+	var hover := _pos_to_cell(get_viewport().get_mouse_position()) if canvas == null else Vector2i(-1, -1)
 	var labels: bool = zoom >= MOVE_LABEL_MIN_ZOOM
 	var top := _pos_to_cell(Vector2.ZERO) - Vector2i.ONE
 	var bottom := _pos_to_cell(get_viewport_rect().size) + Vector2i.ONE
@@ -4729,7 +4780,7 @@ func _draw_zone_preview(costs: Dictionary, budgets: Array[int], from_cell: Vecto
 	var font := ThemeDB.fallback_font
 	var cvec := Vector2(CELL, CELL)
 	var half := cvec * 0.5
-	var hover := _pos_to_cell(get_global_mouse_position())
+	var hover := _pos_to_cell(get_viewport().get_mouse_position())
 	var labels: bool = zoom >= MOVE_LABEL_MIN_ZOOM
 	var tier_at: Dictionary = {}
 	var label_at: Dictionary = {}
@@ -4780,7 +4831,7 @@ func _draw_need(pos: Vector2, txt: String, big: bool) -> void:
 ## item_cells): одна подпись над корпусом, по ближайшей доступной клетке. need_at(c) —
 ## сколько выбросить по клетке c (0 — без броска).
 func _draw_vehicle_needs(owner: int, need_at: Callable) -> void:
-	var hov := _pos_to_cell(get_global_mouse_position())
+	var hov := _pos_to_cell(get_viewport().get_mouse_position())
 	for v: Vehicle in state.all_vehicles():
 		if not v.alive() or v.owner == owner or state.roster.are_allies(owner, v.owner):
 			continue
@@ -5008,6 +5059,7 @@ var _fog_mem: Dictionary = {}       # viewer -> Grid
 var _fog_mem_grid: Grid = null      # живая доска, с которой сняты копии
 var _fog_mem_viewer: int = -999     # чья копия обновлялась последней
 var _fog_mem_look: int = -1         # до какой GridCell.look_version копия доведена
+var _tile_hold_cells: Dictionary = {}
 var _shown_grid: Grid = null        # что рисуется в этом кадре: живая доска или копия
 ## Щебень и воронки (FxDecals.floor_damage) — тоже вид доски: зритель помнит их такими,
 ## какими видел. viewer -> {клетка: урон}; версия растёт на каждую правку любой из них.
@@ -5160,19 +5212,29 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, fog_on: bool) -> voi
 		dmem.update(_fx, visible, null if switched else vis_changed, gw)
 		_fx.decal_dirty.clear()   # живой слой под туманом плиткам не отдаётся
 		decals = dmem.view
+	var terrain_base := shown
 	shown = _terrain_before_impact(shown, visible, fog_on)
 	_shown_grid = shown
 	# Щебень и воронки дальнего плана — тоже из памяти зрителя: раньше отъезд показывал
 	# взрывы, случившиеся в темноте (0.11.3).
 	_lod_damage_src = _fog_mem_dmg.get(viewer, {}) if fog_on else _fx.floor_damage
 	var dmg_ver: int = _fog_mem_dmg_ver if fog_on else _fx.damage_version
-	var tiles_key: Array = [shown.get_instance_id(), fog_on]
+	var tiles_key: Array = [terrain_base.get_instance_id(), fog_on]
 	if _tiles == null or _tiles_grid != tiles_key:
 		_tiles = TerrainTiles.new(shown, state.env)
+		_tiles.bake_fire = false
 		_tiles.set_time_of_day(state.time_of_day)
 		_tiles.furniture_look = _furniture_look
 		_tiles_grid = tiles_key
 		_lod.tiles = _tiles
+	elif _tiles._grid != shown:
+		# A presentation view changes only held cells. Preserve all unaffected cached
+		# textures instead of rebuilding the visible board on each impact/vehicle step.
+		_tiles._grid = shown
+		var changed := _tile_hold_cells.duplicate()
+		changed.merge(_hold_visual.get("cells", {}))
+		for c: Vector2i in changed: _tiles._touch(c)
+	_tile_hold_cells = _hold_visual.get("cells", {}).duplicate()
 	if not far:
 		# Ближний план: плитки рельефа кусками (TerrainTiles). Набор кусков зависит от
 		# того, что на экране, поэтому слой перерисовывается вместе с кадром — это лишь
@@ -5542,6 +5604,7 @@ func _pile_cells() -> Array[Vector2i]:
 	return _piles
 
 func _draw() -> void:
+	if _annotations != null: _annotations.queue_redraw()
 	if state == null:
 		return
 	if _before_on and _before_layer != null:
@@ -5611,7 +5674,7 @@ func _draw() -> void:
 	# курсором жёлтыми кружками — куда конкретно встанет каждый выделенный юнит.
 	# Залп марксманов (item 12): лучи всех в сторону курсора — те же трассы, что у выстрела.
 	if mode == Mode.GROUP_LASER:
-		var vdir := _volley_dir(_pos_to_cell(get_global_mouse_position()))
+		var vdir := _volley_dir(_pos_to_cell(get_viewport().get_mouse_position()))
 		if vdir != Vector2i.ZERO:
 			for mm: UnitInstance in _group_marksmen():
 				_draw_laser_preview(mm, mm.coord + vdir)
@@ -5622,7 +5685,7 @@ func _draw() -> void:
 		# кружок места и сколько ОД он потратит.
 		var gz: Dictionary = _group_preview.zone if _group_preview != null and _group_preview.zone_ready else {"tier": {}, "label": {}, "reach": {}}
 		_draw_cached_group_zone(gz)
-		var ghov := _pos_to_cell(get_global_mouse_position())
+		var ghov := _pos_to_cell(get_viewport().get_mouse_position())
 		if state.grid.in_bounds(ghov):
 			draw_rect(Rect2(_cell_origin(ghov), Vector2(CELL, CELL)), Color(0.95, 0.85, 0.2, 0.20))
 			var half := Vector2(CELL, CELL) * 0.5
@@ -5666,7 +5729,7 @@ func _draw() -> void:
 		var at_unit := _selected_unit()
 		if mode == Mode.SHOOT and at_unit != null and at_unit.stats.special_ability_id == MCF.ABILITY_ANTI_TANK \
 				and zoom >= MOVE_LABEL_MIN_ZOOM:
-			var at_hover := _pos_to_cell(get_global_mouse_position())
+			var at_hover := _pos_to_cell(get_viewport().get_mouse_position())
 			for coord in item_cells:
 				if coord == at_hover or not _cell_on_screen(coord.x, coord.y):
 					continue
@@ -5682,7 +5745,7 @@ func _draw() -> void:
 				for fc: Vector2i in mveh.footprint():
 					draw_rect(Rect2(_cell_origin(fc), Vector2(CELL, CELL)),
 						Color(0.95, 0.55, 0.15, 0.28))
-		var shov := _pos_to_cell(get_global_mouse_position())
+		var shov := _pos_to_cell(get_viewport().get_mouse_position())
 		var su := _selected_unit()
 		# Марксманн (#49): под курсором рисуем сам луч — куда он долетит и кого заденет.
 		if mode == Mode.SHOOT and _is_marksman(su) and state.grid.in_bounds(shov):
@@ -5763,7 +5826,7 @@ func _draw() -> void:
 				draw_arc(c, CELL * 0.46, 0, TAU, 28, Color(0.4, 0.7, 1.0), 2.5)
 
 	if mode == Mode.ITEM:
-		var hover := _pos_to_cell(get_global_mouse_position())
+		var hover := _pos_to_cell(get_viewport().get_mouse_position())
 		var is_station: bool = _selected_unit() != null and _selected_unit().held_item_id == MCF.ITEM_DRONE_STATION
 		for coord in item_cells:
 			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(0.9, 0.5, 0.1, 0.16))
@@ -5796,7 +5859,7 @@ func _draw() -> void:
 			var budgets: Array[int] = [_drone_budget]
 			_draw_zone_preview(_drone_costs, budgets, dr.coord,
 					0 if dr.move_credit > 0 else 1,
-					_drone_path_to(dr, _pos_to_cell(get_global_mouse_position())))
+					_drone_path_to(dr, _pos_to_cell(get_viewport().get_mouse_position())))
 
 	if mode == Mode.BUILD:
 		for coord in item_cells:
@@ -5813,7 +5876,7 @@ func _draw() -> void:
 		# (единственная обязательная привязка). Дальше звенья ставятся куда угодно,
 		# поэтому весь пол не красим — вместо этого показываем предпросмотр под курсором.
 		if _wall_cells.size() < MCF.LDF_WALL_LENGTH:
-			var hov := _pos_to_cell(get_global_mouse_position())
+			var hov := _pos_to_cell(get_viewport().get_mouse_position())
 			if _wall_cells.is_empty():
 				for coord in item_cells:
 					if _wall_valid_next(coord):
@@ -5835,7 +5898,7 @@ func _draw() -> void:
 			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), fcol)
 
 	if mode == Mode.MINE:
-		var mhov := _pos_to_cell(get_global_mouse_position())
+		var mhov := _pos_to_cell(get_viewport().get_mouse_position())
 		# Противотанковые мины подсвечиваем синевой, противопехотные — оранжевым (item 13).
 		var lay_col := Color(0.3, 0.55, 0.9, 0.28) if _mine_av else Color(0.85, 0.35, 0.15, 0.28)
 		var lay_hi := Color(0.4, 0.65, 1.0, 0.5) if _mine_av else Color(0.95, 0.45, 0.2, 0.5)
@@ -5849,7 +5912,7 @@ func _draw() -> void:
 			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(0.3, 0.85, 0.5, 0.35))
 
 	if mode == Mode.DIG:
-		var dhov := _pos_to_cell(get_global_mouse_position())
+		var dhov := _pos_to_cell(get_viewport().get_mouse_position())
 		if dig_trench == Vector2i(-1, -1):
 			# Шаг 1: клетки под окоп (коричневый).
 			for coord in item_cells:
@@ -5875,21 +5938,21 @@ func _draw() -> void:
 
 	if mode == Mode.CORPSE_DROP:
 		# Клетки под труп — в цвет самого трупа (#59), чтобы связь читалась сразу.
-		var chov_c := _pos_to_cell(get_global_mouse_position())
+		var chov_c := _pos_to_cell(get_viewport().get_mouse_position())
 		for coord: Vector2i in item_cells:
 			var tint := Color(CORPSE_COLOR, 0.55) if coord == chov_c else Color(CORPSE_COLOR, 0.28)
 			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), tint)
 
 	if mode == Mode.MOVE_HELD:
 		# Куда можно переставить пленника (#100) — тот же голубой, что у сброса переноса.
-		var mhov := _pos_to_cell(get_global_mouse_position())
+		var mhov := _pos_to_cell(get_viewport().get_mouse_position())
 		for coord: Vector2i in item_cells:
 			var mt := Color(0.4, 0.7, 1.0, 0.55) if coord == mhov else Color(0.4, 0.7, 1.0, 0.28)
 			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), mt)
 
 	if mode == Mode.WELD:
 		# Шлюзы под заварку — в цвет сварочной дуги (#99).
-		var whov := _pos_to_cell(get_global_mouse_position())
+		var whov := _pos_to_cell(get_viewport().get_mouse_position())
 		for coord: Vector2i in item_cells:
 			var wt := Color(1.0, 0.65, 0.2, 0.55) if coord == whov else Color(1.0, 0.65, 0.2, 0.28)
 			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), wt)
@@ -5905,7 +5968,7 @@ func _draw() -> void:
 			draw_arc(vc, CELL * 1.1, 0, TAU, 40, Color(0.9, 0.8, 0.3, 0.6), 2.0)
 			# Четыре стрелки = четыре стороны света (item 2): диагональных разворотов у
 			# танка больше нет. Клик в любую клетку по лучу поворачивает корпус туда.
-			var thov := _pos_to_cell(get_global_mouse_position())
+			var thov := _pos_to_cell(get_viewport().get_mouse_position())
 			var thd := thov - vt.center()
 			var thdir := _ortho_dir(thd)
 			for d: Vector2i in GameActionResolver.DIR4:
@@ -5924,7 +5987,7 @@ func _draw() -> void:
 	if mode == Mode.VEH_CANNON:
 		for coord in item_cells:
 			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(1, 0.4, 0.1, 0.18))
-		var chov := _pos_to_cell(get_global_mouse_position())
+		var chov := _pos_to_cell(get_viewport().get_mouse_position())
 		var cveh_sel := _selected_vehicle()
 		if item_cells.has(chov) and cveh_sel != null:
 			# Предпросмотр берём у резолвера — ромб радиуса 2 (#63), а не квадрат 3×3.
@@ -6033,40 +6096,12 @@ func _draw() -> void:
 		draw_rect(Rect2(ho, hsz), Color(0.45, 0.85, 1.0, 0.25))
 		draw_rect(Rect2(ho, hsz), Color(0.6, 0.92, 1.0), false, 3.0)
 
-	# Трупы идут ОТДЕЛЬНЫМ проходом до корпусов машин (#59): танк наезжает на тело,
-	# а не тело лежит поверх брони. Смерти, ещё не показанные из-за анимации броска
-	# (#46), рисуются как живые в общем проходе ниже.
-	#
 	# Косметика поверх пола, но ПОД телами и бойцами (#21): лужи, осколки, гильзы.
 	_draw_fx_props(visible)
 	# Случайные события (0.9.4): объявленные зоны с отсчётом и стоящий газ.
 	_draw_random_events(font)
 	_draw_objectives(font, visible, fog_on, viewer)
 
-	# Труп существует в ДВУХ видах: погибший на месте боец — это occupant клетки со
-	# статусом CORPSE, а положенный из рук (#6) — безымянная куча cell.corpse_count.
-	# Кучи не рисовались вовсе: тело давало +1 к защите, но на карте его не было.
-	# Реалистичный туман прячет вне обзора всё (issues-12 #16) — и тела тоже.
-	var blackout: bool = fog_on and _view_resolver().fog_mode == MCF.Fog.REALISTIC
-	# Обычный туман (0.11.3): тела — как их видел зритель. Упавший в темноте не виден,
-	# пока туда не посмотрят; унесённый в темноте лежит, пока туда не посмотрят. Прежнее
-	# правило playtest-20 «тела видны и под туманом» этим заменено.
-	var corpses := _corpse_map()
-	if fog_on and not blackout and _fog_mem_corpses.has(viewer):
-		var cmem: Dictionary = _fog_mem_corpses[viewer]
-		for c: Vector2i in corpses:
-			if visible.has(c):
-				cmem[c] = corpses[c]
-		for c: Vector2i in cmem.keys():
-			if visible.has(c) and not corpses.has(c):
-				cmem.erase(c)
-		corpses = cmem
-	for c: Vector2i in corpses:
-		if c.x < vx0 or c.x > vx1 or c.y < vy0 or c.y > vy1 or not _cell_on_screen(c.x, c.y) \
-				or (blackout and not visible.has(c)):
-			continue
-		var e: Array = corpses[c]
-		_draw_corpse(c, int(e[1]), e[0])
 
 	# Корпуса машин (§техника): прямоугольник по всему следу, цвет владельца.
 	for veh: Vehicle in state.all_vehicles():
@@ -6154,7 +6189,7 @@ func _draw() -> void:
 	draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
 	# Выбор машины для посадки — поверх корпусов, иначе подсветку закрывала сама машина.
 	if mode == Mode.BOARD_PICK:
-		var bhov := _board_pick_at(_pos_to_cell(get_global_mouse_position()))
+		var bhov := _board_pick_at(_pos_to_cell(get_viewport().get_mouse_position()))
 		for bv: Vehicle in _board_pick:
 			var lit: bool = bv == bhov
 			for bc: Vector2i in _veh_cells(bv):
@@ -6208,7 +6243,7 @@ func _draw() -> void:
 			continue
 		# Смерть в текущем действии показываем лишь ПОСЛЕ анимации броска (#46):
 		# пока крутится кубик, погибший рисуется как живой юнит.
-		# Труп уже нарисован проходом выше, под машинами (#59).
+		# Corpses are drawn in the final ground pass, above fire.
 		if unit.status == MCF.Status.CORPSE and not _pending_death_ids.has(unit.id):
 			continue
 		if unit.is_drone:
@@ -6291,9 +6326,37 @@ func _draw() -> void:
 	# A thin second pass puts wisps in front of occupants without hiding their sprites.
 	_draw_gas_tiles(0.2, false)
 
+	_draw_fire_above_units(visible, fog_on)
+	_draw_fx_flashes(visible)
+	_draw_flame_jet(visible)
+	# Труп существует в ДВУХ видах: погибший на месте боец — это occupant клетки со
+	# статусом CORPSE, а положенный из рук (#6) — безымянная куча cell.corpse_count.
+	# Кучи не рисовались вовсе: тело давало +1 к защите, но на карте его не было.
+	# Реалистичный туман прячет вне обзора всё (issues-12 #16) — и тела тоже.
+	var blackout: bool = fog_on and _view_resolver().fog_mode == MCF.Fog.REALISTIC
+	# Обычный туман (0.11.3): тела — как их видел зритель. Упавший в темноте не виден,
+	# пока туда не посмотрят; унесённый в темноте лежит, пока туда не посмотрят. Прежнее
+	# правило playtest-20 «тела видны и под туманом» этим заменено.
+	var corpses := _corpse_map()
+	if fog_on and not blackout and _fog_mem_corpses.has(viewer):
+		var cmem: Dictionary = _fog_mem_corpses[viewer]
+		for c: Vector2i in corpses:
+			if visible.has(c):
+				cmem[c] = corpses[c]
+		for c: Vector2i in cmem.keys():
+			if visible.has(c) and not corpses.has(c):
+				cmem.erase(c)
+		corpses = cmem
+	for c: Vector2i in corpses:
+		if c.x < vx0 or c.x > vx1 or c.y < vy0 or c.y > vy1 or not _cell_on_screen(c.x, c.y) \
+				or (blackout and not visible.has(c)):
+			continue
+		var e: Array = corpses[c]
+		_draw_corpse(c, int(e[1]), e[0])
+
 	# Рамка выделения (#18): сетка-выровненный зелёный прямоугольник поверх поля.
 	if _box_dragging:
-		var ba := _pos_to_cell(_box_start_screen)
+		var ba := _box_start_cell
 		var bb := _pos_to_cell(_box_end_screen)
 		var bx0 := mini(ba.x, bb.x)
 		var by0 := mini(ba.y, bb.y)
@@ -6304,7 +6367,6 @@ func _draw() -> void:
 		draw_rect(brect, Color(0.4, 1.0, 0.5, 0.8), false, 2.0)
 
 	# Аннотации игроков поверх поля (item 51).
-	_draw_annotations()
 	_draw_ruler()
 
 ## Отрисовка одного дрона (item 14): вынесена из общего прохода, чтобы дрон рисовался
@@ -6409,8 +6471,6 @@ func _draw_laser_preview(shooter: UnitInstance, aim: Vector2i) -> void:
 ## векторные примитивы, как и всё остальное в этой игре.
 func _draw_fx_props(visible: Dictionary) -> void:
 	_draw_fx_lanes(visible)
-	_draw_fx_flashes(visible)
-	_draw_flame_jet(visible)
 	# Пули-трассеры (item 16): жёлтый штрих летит от стрелка к цели. Под туманом —
 	# только там, где голова пули в обзоре (0.11.3): трассер из темноты выдавал стрелка.
 	var tr_fog: bool = _view_resolver().visibility_limited()
@@ -6845,7 +6905,7 @@ func _play_shots(result: ActionResult) -> void:
 	if not is_inside_tree() or _pace() >= 8.0 or (replay != null and _replay_skip_animations):
 		return
 	# Выстрел без бросков (заряд себе под ноги) — убитых тоже держим до разрыва.
-	for id: int in result.deaths:
+	for id: int in result.visual_deaths:
 		_pending_death_ids[id] = true
 	flights.sort_custom(func(a: Array, b: Array) -> bool: return float(a[0]) < float(b[0]))
 	var t := 0.0
@@ -6889,7 +6949,7 @@ func _play_flame_jets(result: ActionResult) -> void:
 			return
 		var cells: Array = ev["cells"]
 		var burnt_at := {}
-		for id: int in result.deaths:
+		for id: int in result.visual_deaths:
 			var u := state.get_unit(id)
 			if u != null and cells.has(u.coord):
 				burnt_at[id] = u.coord
@@ -8096,7 +8156,7 @@ func _enter_ruler() -> void:
 	mode = Mode.RULER
 	_ruler_a = Vector2i(-1, -1)
 	_rulers.clear()
-	_ruler_hover = _pos_to_cell(get_global_mouse_position())
+	_ruler_hover = _pos_to_cell(get_viewport().get_mouse_position())
 	_refresh_ruler_button()
 	queue_redraw()
 
@@ -8237,7 +8297,7 @@ static func _flat_points(pts: Array) -> Array:
 ## Позиция курсора в ПРОСТРАНСТВЕ ОТРИСОВКИ поля (item 14): рисунок свободный, не по
 ## клеткам, поэтому храним пиксельные точки в той же системе, что и _cell_origin().
 func _draw_world_pos() -> Vector2:
-	return (get_global_mouse_position() - pan) / zoom
+	return (get_viewport().get_mouse_position() - pan) / zoom
 
 ## Свободный штрих (item 14): кисть рисует сразу, по мере движения мыши (item 15), а точки
 ## копятся для рассылки — заметный сдвиг, чтобы массив не пух от микродёрганий.
@@ -8422,16 +8482,21 @@ func _draw_ruler_segment(a: Vector2i, b: Vector2i, col: Color) -> void:
 	draw_string(font, mid + Vector2(-size.x * 0.5, 0), label,
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 16, col)
 
-func _draw_annotations() -> void:
+func _draw_annotation_layer() -> void:
+	if state == null or _before_on: return
+	_annotations.draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
+	_draw_annotations(_annotations)
+
+func _draw_annotations(ci: CanvasItem) -> void:
 	var view := Rect2(-pan / zoom, get_viewport_rect().size / zoom)
 	for key: Vector2i in _canvases:
 		if _stroke_visible_to_viewer({"author": key.x, "scope": key.y}):
-			(_canvases[key] as DrawCanvas).draw(self, view)
+			(_canvases[key] as DrawCanvas).draw(ci, view)
 	# Кружок кисти/ластика под курсором — видно, какой толщины след ляжет (item 15).
 	if mode == Mode.DRAW or mode == Mode.ERASE:
 		var r := _paint_radius(_draw_brush) if mode == Mode.DRAW else _erase_radius()
 		var col := _brush_colour() if mode == Mode.DRAW else Color(1, 1, 1, 0.8)
-		draw_arc(_draw_world_pos(), r, 0.0, TAU, 32, col, 1.5)
+		ci.draw_arc(_draw_world_pos(), r, 0.0, TAU, 32, col, 1.5)
 	# Образец «цвет стороны» следует за автором: в горячем кресле он меняется с ходом, а в
 	# сети сторона известна лишь после подключения — позже, чем строится панель.
 	if _side_swatch != null:
@@ -9305,10 +9370,14 @@ func _on_redo_pressed() -> void:
 
 ## Доска переставлена откатом/повтором внутри резолвера — привести к ней экран.
 func _resync_after_restore() -> void:
-	# Косметику НЕ стираем (playtest-20). Здесь стоял _fx.clear(): любой откат смывал с поля
-	# всю кровь, гильзы, подпалины и разбитый пол за партию, а у гостя сети — и снимок
-	# хоста, который net.resynced кладёт перед этим вызовом. Откатить можно только ход без
-	# кубиков (стрельба необратима), так что лишнего остаётся от силы пара следов ног.
+	# Resolver restores the matching cosmetic checkpoint; earlier battle debris remains.
+	_walk_jobs.clear()
+	_walks_running = 0
+	_walk_cells.clear()
+	_walk_offset.clear()
+	_veh_offset.clear()
+	_pending_death_ids.clear()
+	_hold_visual = {}
 	_deselect()
 	for c in controllers.values():
 		c.notify_state_changed(state)
@@ -9733,3 +9802,73 @@ func _handle_shortcut(event: InputEventKey) -> bool:
 			_activate_menu_action(id)
 			return true
 	return false
+
+func _draw_fire_above_units(visible: Dictionary, limited: bool) -> void:
+	if _shown_grid == null or GridCell.burning <= 0: return
+	for y in range(maxi(0, _cull_y0), mini(_shown_grid.height - 1, _cull_y1) + 1):
+		for x in range(maxi(0, _cull_x0), mini(_shown_grid.width - 1, _cull_x1) + 1):
+			var c := Vector2i(x, y)
+			if not _shown_grid.cell_fast(x, y).on_fire or (limited and not visible.has(c)) \
+					or (_tiles != null and _tiles.hidden_fire.has(c)): continue
+			var rect := Rect2(_cell_origin(c), Vector2.ONE * CELL)
+			if not Sprites.draw_texture_override_rect(self, "fire", rect):
+				draw_rect(rect, Color(1.0, 0.45, 0.08, 0.8))
+
+## Build an impact schedule without changing the already resolved board.
+func _vehicle_presentation_stages(ev: Dictionary) -> Dictionary:
+	var stages := {}
+	var veh := state.get_vehicle(int(ev["vehicle"]))
+	if veh == null: return stages
+	var start: Vector2i = ev["from"]
+	var steps := maxi(1, int(ev["steps"]))
+	var dir := Vector2i((veh.origin - start) / steps)
+	var effects: Array = ev.get("effects", [])
+	for c: Vector2i in _hold_visual.get("cells", {}):
+		_vehicle_stage(stages, _vehicle_cell_step(c, start, veh.size, dir, steps))["cells"].append(c)
+	for id: int in ev.get("deaths", []):
+		var u := state.get_unit(id)
+		if u != null:
+			_vehicle_stage(stages, _vehicle_cell_step(u.coord, start, veh.size, dir, steps))["deaths"].append(id)
+	for fx: Dictionary in effects:
+		if fx.get("fx", "") == "tracks":
+			var tracks := FxDecals.new()
+			tracks.space_at = _fx.space_at
+			tracks._tracks(fx)
+			for mark: Dictionary in tracks.track_marks:
+				var mid: Vector2 = (mark["from"] + mark["to"]) * 0.5
+				var at := Vector2i(floori(mid.x), floori(mid.y))
+				_vehicle_stage(stages, _vehicle_cell_step(at, start, veh.size, dir, steps))["tracks"].append(mark)
+		elif fx.get("fx", "") == "debris" and not fx.get("blast", false):
+			for c: Vector2i in fx.get("cells", []):
+				var piece := fx.duplicate()
+				piece["cells"] = [c]
+				_vehicle_stage(stages, _vehicle_cell_step(c, start, veh.size, dir, steps))["fx"].append(piece)
+		else:
+			var at: Vector2i = fx.get("at", veh.center())
+			_vehicle_stage(stages, _vehicle_cell_step(at, start, veh.size, dir, steps))["fx"].append(fx)
+		fx["_shown"] = true
+	return stages
+
+func _vehicle_stage(stages: Dictionary, step: int) -> Dictionary:
+	if not stages.has(step): stages[step] = {"cells": [], "deaths": [], "fx": [], "tracks": []}
+	return stages[step]
+
+func _vehicle_cell_step(c: Vector2i, start: Vector2i, size: Vector2i, dir: Vector2i, steps: int) -> int:
+	var best := steps
+	var distance := INF
+	for i in steps + 1:
+		var origin := start + dir * i
+		if Rect2i(origin, size).has_point(c): return i
+		var d := Vector2(c).distance_squared_to(Vector2(origin) + Vector2(size) * 0.5)
+		if d < distance:
+			distance = d
+			best = i
+	return best
+
+func _reveal_vehicle_stage(stage: Dictionary) -> void:
+	for c: Vector2i in stage.get("cells", []): _hold_visual.get("cells", {}).erase(c)
+	for id: int in stage.get("deaths", []): _pending_death_ids.erase(id)
+	if not stage.get("fx", []).is_empty(): _fx.apply(stage["fx"])
+	if not stage.get("tracks", []).is_empty():
+		_fx.track_marks.append_array(stage["tracks"])
+		_fx.ground_version += 1

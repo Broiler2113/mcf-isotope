@@ -285,7 +285,7 @@ func _events() -> void:
 	var st := _resolver(_map(MapGen.Style.STATION, 22), MatchMode.Kind.ANNIHILATION)
 	st.random_events = RandomEvents.new(true, true, 1)
 	var sa := st._events_allowed()
-	ck(not sa.has("dust") and not sa.has("minefield") and not sa.has("bounty"), "a station: no dust, minefield or bounty")
+	ck(not sa.has("dust") and sa.has("minefield") and not sa.has("bounty"), "a station supports old minefields, without dust or bounty")
 	var ast := _resolver(_map(MapGen.Style.ASTEROID, 23), MatchMode.Kind.ANNIHILATION)
 	ast.random_events = RandomEvents.new(true, true, 1)
 	ck(ast._events_allowed().has("minefield") and not ast._events_allowed().has("dust"), "an asteroid: minefield yes, dust no")
@@ -368,7 +368,7 @@ func _keyboard() -> void:
 			"the N key lists all three of its actions")
 	ck(kb._state(KEY_S) == 3, "S is used alone (pan) and in a combination (Ctrl+S)")
 	ck(kb._state(KEY_CTRL) == 2 and kb.tooltip_for(KEY_CTRL, "Ctrl").find("Ctrl+S") >= 0, "Ctrl lists its combinations")
-	ck(kb.tooltip_for(KEY_F11, "F11").ends_with("Not used"), "a free key says so")
+	ck(kb.tooltip_for(KEY_F12, "F12").ends_with("Not used"), "a free key says so")
 	kb.section = "editor"
 	ck(kb.tooltip_for(KEY_Z, "Z").find("Undo") >= 0, "the editor view shows editor shortcuts")
 	var overlap := false

@@ -57,6 +57,9 @@ var replay_recorder: RefCounted = null
 ## Viewers with no recorded undo/redo need no per-action copies of every soldier.
 ## Live games retain their existing undo behavior.
 var track_undo_history: bool = true
+## Optional local presentation state; rules-only and replay simulations need none.
+var capture_cosmetics: Callable = Callable()
+var restore_cosmetics: Callable = Callable()
 
 ## Режим партии (0.12): Annihilation / Capture & Hold / Holdout — его состояние.
 var mode: MatchMode = null
@@ -143,9 +146,11 @@ func resolve(intent: Intent) -> ActionResult:
 	# Снимок для отката — без клеток: их прежний вид собирает журнал GridCell по ходу
 	# действия, ровно для тронутых. Копия всей доски 250×250 стоила ~250 мс на щелчок.
 	var pre_snap: Dictionary = state.snapshot(false) if undoable else {}
+	if undoable and capture_cosmetics.is_valid():
+		pre_snap["cosmetics"] = capture_cosmetics.call()
 	if top:
 		GridCell.journal = {}
-		GridCell.journaling = undoable or intent is ShootIntent or intent is VehicleCannonIntent
+		GridCell.journaling = undoable or intent is ShootIntent or intent is VehicleCannonIntent or intent is VehicleMoveIntent
 	# Запись повтора (M12). Пишем ровно то же, что хост шлёт клиенту, — и тем же
 	# способом. Условие record_enabled здесь не формальность: в сетевой партии журнал
 	# уже ведёт NetGame, и второй begin_record отобрал бы у него броски действия.
@@ -162,6 +167,11 @@ func resolve(intent: Intent) -> ActionResult:
 	elif av != null:
 		actor_owner = av.owner
 		actor_from = av.center()
+	var items_before := state.grid.map_items.duplicate() if top and intent is VehicleMoveIntent else []
+	var alive_before := {}
+	if top:
+		for u: UnitInstance in state.all_units():
+			if u.is_alive(): alive_before[u.id] = true
 	var result := _dispatch(intent)
 	if top and result.ok:
 		_credit_kills(intent, au, av, result)
@@ -198,6 +208,10 @@ func resolve(intent: Intent) -> ActionResult:
 	_resolve_depth -= 1
 	if top:
 		# Include secondary explosions and door changes outside the original blast.
+		if intent is VehicleMoveIntent and result.ok and result.visual_hold.is_empty():
+			result.visual_hold = {"cells": {}}
+		if intent is VehicleMoveIntent and result.ok:
+			result.visual_hold["map_items"] = items_before
 		if not result.visual_hold.is_empty():
 			var held: Dictionary = result.visual_hold.get("cells", {})
 			for cell: GridCell in GridCell.journal:
@@ -211,6 +225,12 @@ func resolve(intent: Intent) -> ActionResult:
 			pre_snap["cells"] = GridCell.journal
 		GridCell.journal = {}
 	if top and result.ok:
+		for u: UnitInstance in state.all_units():
+			if alive_before.has(u.id) and not u.is_alive(): result.visual_deaths.append(u.id)
+		for ev: Dictionary in result.dice_events:
+			if ev.get("kind", "") == "veh_walk":
+				ev["effects"] = result.fx
+				ev["deaths"] = result.visual_deaths
 		# Новое действие обрывает откатанную ветку — повторять больше нечего (#38).
 		_redo_stack.clear()
 		if _turn_key() != turn_before or _is_irreversible(intent, result) or wave_called:
@@ -250,6 +270,8 @@ func _resolve_undo(intent: UndoIntent) -> ActionResult:
 	var snap: Dictionary = _undo_stack.pop_back()
 	_redo_stack.append(_counter_snapshot(snap))
 	state.restore(snap)
+	if snap.has("cosmetics") and restore_cosmetics.is_valid():
+		restore_cosmetics.call(snap["cosmetics"])
 	update_airlocks()
 	return ActionResult.success(["— undo —"])
 
@@ -261,6 +283,8 @@ func _resolve_redo(intent: RedoIntent) -> ActionResult:
 	var snap: Dictionary = _redo_stack.pop_back()
 	_undo_stack.append(_counter_snapshot(snap))
 	state.restore(snap)
+	if snap.has("cosmetics") and restore_cosmetics.is_valid():
+		restore_cosmetics.call(snap["cosmetics"])
 	update_airlocks()
 	return ActionResult.success(["— redo —"])
 
@@ -269,6 +293,7 @@ func _resolve_redo(intent: RedoIntent) -> ActionResult:
 ## ловит журнал GridCell, а откат с повтором кладут клетки только из снимков.
 func _counter_snapshot(snap: Dictionary) -> Dictionary:
 	var now := state.snapshot(false)
+	if capture_cosmetics.is_valid(): now["cosmetics"] = capture_cosmetics.call()
 	var cells := {}
 	for c: GridCell in snap["cells"]:
 		cells[c] = c.image()
@@ -7224,6 +7249,19 @@ func _sync_gas() -> void:
 ## Независимая армия (0.9.4): у края карты высаживается ничья сила, враждебная всем.
 ## Сила — по средней армии ЖИВЫХ игроков (по цене закупки); слот встаёт в случайное место
 ## очереди инициативы, и ходит армия сама — её ход ведёт резолвер, как ход жителей.
+func _independent_roster() -> Array:
+	var level := random_events.army_difficulty if random_events != null else 1
+	if level == 0:
+		return ["light_infantry", "light_infantry", "light_infantry", "light_infantry",
+				"heavy_infantry", "heavy_infantry", "heavy_infantry", "heavy_infantry",
+				"light_infantry", "heavy_infantry",
+				"machinegunner", "anti_tank", "sapper"]
+	if level == 2:
+		return ["light_infantry", "heavy_infantry", "anti_tank", "anti_tank", "anti_tank",
+				"anti_tank", "sniper", "marksman", "flamethrower", "shield_bearer",
+				"engineer", "miner", "sapper", "machinegunner"]
+	return ARMY_ROSTER
+
 func _land_army(p: Dictionary, res: ActionResult) -> void:
 	var budget := _army_budget()
 	var slot := MCF.independent_slot(random_events.armies + 1)
@@ -7248,7 +7286,8 @@ func _land_army(p: Dictionary, res: ActionResult) -> void:
 	var guard := 0
 	while guard < ARMY_UNIT_CAP and placed < spots.size():
 		guard += 1
-		var sid: String = ARMY_ROSTER[_rand_wide(ARMY_ROSTER.size())]
+		var roster := _independent_roster()
+		var sid: String = roster[_rand_wide(roster.size())]
 		var stats: UnitStats = _army_stats(sid)
 		if stats == null:
 			continue
@@ -10629,25 +10668,19 @@ func _check_bounty(res: ActionResult, killer: int) -> void:
 	else:
 		res.log("The bounty lapses — its target fell, but not to an enemy")
 
-## Где могут лечь старые мины: под открытым небом. На астероиде — его вакуумная поверхность,
-## в городе и в поле — трава и дорога (не пол домов: у него своя отделка или деревянный
-## настил). Клетка пустая: без объекта, бойца, машины, огня и тел.
+## Old mines can appear on traversable ground in every environment, including
+## decorated station/bunker floors and the asteroid surface. Never occupy a unit,
+## vehicle, structure, body or burning cell.
 func _minefield_cells() -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
-	var grid := state.grid
-	var w := grid.width
-	var looks := grid.floor_look.size() == w * grid.height
-	var astro := state.env == "asteroid"
-	for y in grid.height:
-		for x in w:
-			var c := grid.cell_fast(x, y)
+	for y in state.grid.height:
+		for x in state.grid.width:
+			var c := state.grid.cell_fast(x, y)
 			if c.feature_id != "" or c.occupant != null or c.vehicle_id != -1 or c.on_fire \
 					or c.corpse_count > 0 or not c.walkable_terrain():
 				continue
-			if astro:
-				if not c.is_space:
-					continue
-			elif c.is_space or c.floor_type == MCF.FLOOR_FLAMMABLE or (looks and grid.floor_look[y * w + x] != 0):
+			# Open vacuum on a station has no ground to hide a mine in.
+			if c.is_space and state.env != "asteroid":
 				continue
 			out.append(Vector2i(x, y))
 	return out
@@ -10666,7 +10699,12 @@ func _start_minefield(res: ActionResult) -> void:
 			continue
 		if state.dice.roll_d6() < MINEFIELD_LAY_ON:
 			continue
-		state.grid.cell(c).set_feature(MCF.FEATURE_MINE, OLD_MINE_OWNER)
+		var kind := MCF.FEATURE_AV_MINE if state.dice.roll_d6() >= 5 else MCF.FEATURE_MINE
+		state.grid.cell(c).set_feature(kind, OLD_MINE_OWNER)
 		notify_cell_changed(c)
 		placed += 1
+	if placed == 0:
+		var kind := MCF.FEATURE_AV_MINE if state.dice.roll_d6() >= 5 else MCF.FEATURE_MINE
+		state.grid.cell(centre).set_feature(kind, OLD_MINE_OWNER)
+		notify_cell_changed(centre)
 	res.log("⚠ Old Minefield — scouts report forgotten mines somewhere on the map. Watch your step.")
