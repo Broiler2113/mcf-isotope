@@ -171,7 +171,8 @@ def install(branch: str):
                         "[Install]\nWantedBy=" + ("multi-user.target" if system else "default.target") + "\n")
         ctl = ["systemctl"] + ([] if system else ["--user"])
         subprocess.run(ctl + ["daemon-reload"], check=True)
-        subprocess.run(ctl + ["enable", "--now", path.name], check=True)
+        subprocess.run(ctl + ["enable", path.name], check=True)
+        subprocess.run(ctl + ["restart", path.name], check=True)
     else:
         raise SystemExit("Persistent training supports macOS and Linux")
     print(f"Installed persistent supervision for {branch}; free-space floor 500 MiB")

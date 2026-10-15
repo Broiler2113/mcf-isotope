@@ -333,7 +333,8 @@ checkpoint backup, updates the checkout, resumes with the same config, and insta
 `~/Library/LaunchAgents/com.mcf.rlm-training.plist` under the current account. No admin
 password is needed. The service starts at login, restarts a failed supervisor, recovers
 crashed trainers and heartbeats frozen for fifteen minutes, and extends a completed
-training budget by another twenty million steps. Pause and Stop remain authoritative;
+training budget by another twenty million steps. The installer waits for an actual
+learning step increase and reports the remaining free space. Pause and Stop remain authoritative;
 `OPERATOR_STOP` preserves an explicit stop across crashes and reboots. Only branches
 marked `AUTONOMOUS` have their step budget extended. A logged-out, sleeping, or powered-off
 Mac cannot train; the service resumes after login/wake. One branch owns this service.

@@ -225,7 +225,16 @@ class SupervisionTests(unittest.TestCase):
 case "$1" in
 stop) touch "rl/runs/$2/STOP";;
 alive) exit 1;;
-autonomous) touch "rl/runs/$2/autonomy-installed";;
+autonomous)
+touch "rl/runs/$2/autonomy-installed"
+"$MCF_RL_PYTHON" - "$2" <<'PY'
+import json, pathlib, subprocess, sys
+root = pathlib.Path('rl/runs') / sys.argv[1]
+worker = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+(root / 'status.json').write_text(json.dumps(dict(state='running', pid=worker.pid, step=11)))
+PY
+;;
 dashboard) exit 0;;
 *) exit 2;;
 esac
@@ -247,15 +256,23 @@ esac
             git("reset", "--hard", before)
             root = project / "rl/runs/saved"
             root.mkdir(parents=True)
-            (root / "latest.pt").write_bytes(b"original checkpoint")
+            import torch
+            torch.save(dict(global_step=10), root / "latest.pt")
+            original = (root / "latest.pt").read_bytes()
             (root / "config.yaml").write_text("seed: 17\n")
             (root / "status.json").write_text(json.dumps(dict(state="stopped", pid=999999)))
             (project / "rl/.env").write_text("VENV='" + str(Path(sys.executable).parent.parent) + "'\n")
-            result = subprocess.run(["bash", str(script)], cwd=project, capture_output=True, text=True, timeout=30)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            try:
+                result = subprocess.run(["bash", str(script)], cwd=project, capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('Verified saved: step 10 -> 11', result.stdout)
+            finally:
+                state = json.loads((root / 'status.json').read_text())
+                if state.get('state') == 'running':
+                    os.kill(state['pid'], __import__('signal').SIGTERM)
             self.assertEqual(git("rev-parse", "HEAD"), target)
-            self.assertEqual((root / "latest.pt").read_bytes(), b"original checkpoint")
-            self.assertEqual(next(root.glob("pre-upgrade-*.pt")).read_bytes(), b"original checkpoint")
+            self.assertEqual((root / "latest.pt").read_bytes(), original)
+            self.assertEqual(next(root.glob("pre-upgrade-*.pt")).read_bytes(), original)
             self.assertTrue((root / "autonomy-installed").exists())
 
 
