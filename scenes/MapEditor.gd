@@ -77,7 +77,7 @@ const OBJECTS := [
 ]
 ## Кого можно поставить на карту нейтралом (item 5): любая пехота.
 const NEUTRAL_UNIT_IDS := [
-	"civilian", "light_infantry", "heavy_infantry", "assault", "machinegunner",
+	"civilian", "light_infantry", "heavy_infantry", "machinegunner",
 	"sniper", "marksman", "anti_tank", "flamethrower", "shield_bearer",
 	"engineer", "miner", "sapper", "commander", "drone_operator",
 ]

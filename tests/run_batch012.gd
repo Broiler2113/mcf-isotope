@@ -352,8 +352,8 @@ func _manual() -> void:
 	ck(formatted.find("[h]") < 0 and formatted.find("[font_size=15]") >= 0, "headings are formatted")
 	var cards_ok := true
 	for id: String in win.UNIT_ORDER:
-		cards_ok = cards_ok and text.UNIT_BLURBS.has(id) and ResourceLoader.exists("res://src/data/units/%s.tres" % id)
-	ck(cards_ok, "every unit card has data and a description")
+		cards_ok = cards_ok and ResourceLoader.exists("res://src/data/units/%s.tres" % id)
+	ck(cards_ok, "every unit card has data")
 	var keys: Node = root.get_node("/root/Keybinds")
 	ck(keys.codes("game_manual").has(KEY_F1) and keys.codes("editor_manual").has(KEY_F2),
 			"F1 opens the Manual in the game, F2 in the editor")

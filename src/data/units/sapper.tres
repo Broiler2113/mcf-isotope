@@ -5,7 +5,7 @@
 [resource]
 script = ExtResource("1")
 id = "sapper"
-display_name = "Sapper"
+display_name = "Minesweeper"
 armor_threshold = 4
 speed = 6
 action_points = 2

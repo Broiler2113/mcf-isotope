@@ -24,6 +24,13 @@ extends RefCounted
 ## другом. Само содержимое очереди и облаков входит в снимок состояния (snapshot), так что
 ## откат хода и загрузка сохранения возвращают и предупреждения, и стоящий газ.
 
+static func available_for_map(id: String, env: String, game_mode: int) -> bool:
+	match id:
+		DUST: return env in ["town", "field"]
+		MINEFIELD: return env in ["town", "field", "asteroid"]
+		BOUNTY: return game_mode == MatchMode.Kind.CAPTURE
+	return true
+
 const MORTAR := "mortar"
 const GAS := "gas"
 const ARMY := "army"

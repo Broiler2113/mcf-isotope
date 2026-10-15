@@ -4,6 +4,7 @@ extends Node
 signal changed
 const SETTINGS_PATH := "user://settings.cfg"
 const DEFINITIONS: Array = [
+	{"id": "game_end_turn", "label": "End turn", "keys": [KEY_MASK_SHIFT | KEY_ENTER], "contexts": ["*"], "section": "game"},
 	{"id": "game_cancel", "label": "Cancel / close menu", "keys": [KEY_ESCAPE], "contexts": ["*"], "section": "game"},
 	{"id": "game_initiative", "label": "Initiative overlay", "keys": [KEY_TAB], "contexts": ["*"], "section": "game"},
 	{"id": "game_manual", "label": "Manual", "keys": [KEY_F1], "contexts": ["*"], "section": "game"},

@@ -174,6 +174,70 @@ var _pending_death_ids: Dictionary = {}
 ## клетки и техника рисуются по этим старым значениям, чтобы исход не опережал бросок.
 ## {"cells": {Vector2i: {...}}, "vehicles": {vid: {...}}}. Пусто — рисуем как есть.
 var _hold_visual: Dictionary = {}
+var _held_grid: Grid = null
+var _held_grid_key: Array = []
+var _held_fog_key: int = 0
+var _held_fog_source: Dictionary = {}
+var _held_visible_source: Dictionary = {}
+
+func _visible_before_impact(viewer: int) -> Dictionary:
+	if _view_resolver().visibility_limited():
+		var held: Dictionary = _hold_visual.get("visible", {})
+		if held.has(viewer): return held[viewer]
+	return _view_resolver().team_visible_coords(viewer)
+
+
+# Standalone feature overlays must use the same pre-impact IDs as terrain tiles.
+func _display_feature_cells(fid: String) -> Array[Vector2i]:
+	var live := resolver._feature_cells(fid)
+	var held: Dictionary = _hold_visual.get("cells", {})
+	if held.is_empty(): return live
+	var coords := {}
+	for c: Vector2i in live: coords[c] = true
+	for c: Vector2i in held:
+		coords.erase(c)
+		if held[c].get("feature_id", "") == fid: coords[c] = true
+	var out: Array[Vector2i] = []
+	out.assign(coords.keys())
+	return out
+
+# A shallow board view shares untouched cells and copies only the held area. Terrain
+# tiles (including neighbouring autotiles), LOD and lighting all see the same state.
+func _terrain_before_impact(base: Grid, visible: Dictionary, fog_on: bool) -> Grid:
+	var cells: Dictionary = _hold_visual.get("cells", {})
+	if cells.is_empty():
+		_held_grid = null
+		_held_grid_key = []
+		_held_visible_source = {}
+		return base
+	var key := [base.get_instance_id(), cells.hash(), fog_on]
+	if _held_grid != null and key == _held_grid_key and (not fog_on or is_same(visible, _held_visible_source)):
+		return _held_grid
+	var logs := GridCell.logs_snapshot()
+	GridCell.journaling = false
+	var view := Grid.new(0, 0)
+	view.width = base.width
+	view.height = base.height
+	view._cells = base.cells_flat().duplicate()
+	view.furniture_turn = base.furniture_turn
+	view.floor_look = base.floor_look
+	view.wall_accent = base.wall_accent
+	view.map_decals = base.map_decals
+	view.map_items = base.map_items
+	view.light_tint = base.light_tint
+	view.door_look = base.door_look
+	for c: Vector2i in cells:
+		if not base.in_bounds(c) or (fog_on and not visible.has(c)): continue
+		var snapshot: Dictionary = cells[c]
+		var cell := GridCell.new(c)
+		cell.apply_image(snapshot.get("image", base.cell(c).image()))
+		view._cells[c.y * view.width + c.x] = cell
+	GridCell.logs_restore(logs)
+	_held_grid = view
+	_held_grid_key = key
+	_held_visible_source = visible
+	return view
+
 ## Видимый на экране диапазон клеток (item 5) — отсечение трупов и косметики за краем.
 var _cull_x0: int = 0
 var _cull_x1: int = 0
@@ -530,13 +594,8 @@ func _ready() -> void:
 	# Край поля для косметики (batch 12 #6): гильзы, брызги и осколки отскакивают от него.
 	_fx.bounds = Vector2(state.grid.width, state.grid.height)
 	# Частицы останавливаются о стены (item 7), а не «проваливаются» в них.
-	_fx.solid_at = func(c: Vector2i) -> bool:
-		var cl := state.grid.cell(c) if state != null else null
-		return cl == null or cl.cover_height >= MCF.WALL_HEIGHT
-	# Открытый космос: крови там не бывает (batch borg-corpses), только куски от взрыва.
-	_fx.space_at = func(c: Vector2i) -> bool:
-		var sc := state.grid.cell(c) if state != null else null
-		return sc != null and sc.is_space
+	_fx.solid_at = func(c: Vector2i) -> bool: return FxDecals.solid_in(state, c)
+	_fx.space_at = func(c: Vector2i) -> bool: return FxDecals.space_in(state, c)
 	# У записи нет игроков: смотреть — не играть, поэтому контроллеров не заводим
 	# вовсе. Ровно это и делает просмотр безопасным: подать намерение некому.
 	if replay == null and not _spectator:
@@ -635,9 +694,10 @@ func _sync_lighting() -> void:
 		var limited := view.visibility_limited()
 		# Под туманом тени — от доски, какой её помнит зритель (issues-12 #4): стена,
 		# выросшая в темноте, не должна выдавать себя новой тенью.
-		var lit_grid := _shown_grid if limited and _shown_grid != null else state.grid
+		var base: Grid = _fog_mem.get(_viewing_side(), state.grid) if limited else state.grid
+		var lit_grid := _terrain_before_impact(base, _visible_before_impact(_viewing_side()), limited)
 		_lighting.update_view(lit_grid, pan, zoom, ORIGIN, CELL, state.env,
-			view.team_visible_coords(_viewing_side()) if limited else {}, limited, _fx, _lod,
+			_visible_before_impact(_viewing_side()) if limited else {}, limited, _fx, _lod,
 			-1.0, state.time_of_day)
 
 func _process(delta: float) -> void:
@@ -705,7 +765,7 @@ func _build_state() -> void:
 		["sniper", Vector2i(0, 5)],
 		["machinegunner", Vector2i(0, 7)],
 		["anti_tank", Vector2i(0, 9)],
-		["assault", Vector2i(2, 2)],
+		["heavy_infantry", Vector2i(2, 2)],
 		["marksman", Vector2i(2, 4)],
 		["shield_bearer", Vector2i(2, 6)],
 		["miner", Vector2i(2, 8)],
@@ -5087,6 +5147,12 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, fog_on: bool) -> voi
 	var dmem: DecalMemory = null
 	if fog_on:
 		vis_changed = _view_resolver().take_vis_changes(viewer)
+		var held_seen: Dictionary = _hold_visual.get("visible", {})
+		if (not held_seen.is_empty() and not is_same(held_seen, _held_fog_source)) \
+				or (held_seen.is_empty() and not _held_fog_source.is_empty()):
+			vis_changed = null
+			_held_fog_source = held_seen
+			_held_fog_key += 1
 		var switched := viewer != _fog_mem_viewer
 		shown = _board_memory(viewer, visible, vis_changed)
 		# Косметика — по той же памяти (0.11.3): новый зритель сверяется целиком.
@@ -5094,6 +5160,7 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, fog_on: bool) -> voi
 		dmem.update(_fx, visible, null if switched else vis_changed, gw)
 		_fx.decal_dirty.clear()   # живой слой под туманом плиткам не отдаётся
 		decals = dmem.view
+	shown = _terrain_before_impact(shown, visible, fog_on)
 	_shown_grid = shown
 	# Щебень и воронки дальнего плана — тоже из памяти зрителя: раньше отъезд показывал
 	# взрывы, случившиеся в темноте (0.11.3).
@@ -5162,7 +5229,7 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, fog_on: bool) -> voi
 	# видимость сменилась (take_vis_changes; null — «сменилось всё»).
 	if fog_on:
 		var view := _view_resolver()
-		var fkey := [grid.get_instance_id(), view.get_instance_id(), viewer, view.fog_mode]
+		var fkey := [grid.get_instance_id(), view.get_instance_id(), viewer, view.fog_mode, _held_fog_key]
 		var changed: Variant = vis_changed
 		var hidden_col := FOG_COL if view.fog_mode == MCF.Fog.STANDARD else UNKNOWN_COL
 		if fkey != _lod_fog_key or _lod_fog == null or changed == null:
@@ -5491,7 +5558,7 @@ func _draw() -> void:
 	# флаг гасит 2500 лишних обращений к словарю за кадр.
 	var fog_on: bool = _view_resolver().visibility_limited()
 	var viewer := _viewing_side()
-	var visible := _view_resolver().team_visible_coords(viewer)
+	var visible := _visible_before_impact(viewer)
 	# Локальные копии полей и констант: тело цикла выполняется до 2500 раз за кадр,
 	# и каждое обращение к свойству узла/автозагрузки там заметно.
 	var grid := state.grid
@@ -5525,12 +5592,12 @@ func _draw() -> void:
 		# _lod_sync): здесь остаются подписи высоты насыпей — у кучи земли она бывает
 		# разной, и картинкой её не прочесть. Мелким шрифтом их не разглядеть на отъезде.
 		if zoom >= HEIGHT_LABEL_ZOOM and not _heightmap:   # the heightmap labels them too
-			for dc: Vector2i in resolver._feature_cells(MCF.FEATURE_DIRT_PILE):
+			for dc: Vector2i in _display_feature_cells(MCF.FEATURE_DIRT_PILE):
 				if not _cell_on_screen(dc.x, dc.y):
 					continue
 				if fog_on and not visible.has(dc):
 					continue
-				var dh: float = grid.cell(dc).cover_height
+				var dh: float = _shown_grid.cell(dc).cover_height
 				draw_string(font, _cell_origin(dc) + label_off, HEIGHT_LABELS.get(dh, "%.1fm" % dh),
 					HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.95, 0.85, 0.6))
 		# Сетку рисует слой плиток (_lod) между полом и объектами — линиями по строкам и
@@ -5898,7 +5965,7 @@ func _draw() -> void:
 		# Станция дронов — только там, где игрок СЕЙЧАС видит (туман). Из плиток она
 		# исключена ровно за этим: запечённая, она светила бы сквозь пелену и выдавала
 		# чужого оператора вернее, чем он сам.
-		for sc: Vector2i in resolver._feature_cells(MCF.FEATURE_DRONE_STATION):
+		for sc: Vector2i in _display_feature_cells(MCF.FEATURE_DRONE_STATION):
 			# Станцию в кресле челнока рисует сам корпус (issues-12 #7).
 			if _cell_on_screen(sc.x, sc.y) and _cell_seen_now(sc, visible) \
 					and grid.cell_fast(sc.x, sc.y).vehicle_id == -1:
@@ -5908,7 +5975,7 @@ func _draw() -> void:
 		# ходе ровно то, что туман и прячет. Рисуется поверх слоя плиток, поэтому и пелену
 		# над ней кладём сами (обычный туман; в реалистичном клетку и так закрывает чёрное).
 		if _view_resolver().visibility_limited() and _view_resolver().fog_mode == MCF.Fog.STANDARD:
-			for ac: Vector2i in resolver._feature_cells(MCF.FEATURE_AIRLOCK):
+			for ac: Vector2i in _display_feature_cells(MCF.FEATURE_AIRLOCK):
 				if not _cell_on_screen(ac.x, ac.y) or visible.has(ac):
 					continue
 				var acell := _shown_grid.cell_fast(ac.x, ac.y)
@@ -5917,27 +5984,21 @@ func _draw() -> void:
 							Rect2(_cell_origin(ac), fcell_size), true)
 					draw_rect(Rect2(_cell_origin(ac), fcell_size), FOG_COL)
 		for mk: String in [MCF.FEATURE_MINE, MCF.FEATURE_AV_MINE]:
-			for mc: Vector2i in resolver._feature_cells(mk):
+			for mc: Vector2i in _display_feature_cells(mk):
 				if _cell_on_screen(mc.x, mc.y) and resolver.mine_visible_to(viewer, mc):
 					if not Sprites.draw_texture_override_rect(self, mk, Rect2(_cell_origin(mc), fcell_size)):
 						draw_string(font, _cell_origin(mc) + Vector2(6, CELL - 15), FEATURE_TAGS[mk],
 							HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.9, 0.3, 0.25))
-		if not _hold_visual.is_empty():
-			var _hc: Dictionary = _hold_visual.get("cells", {})
-			for hk: Vector2i in _hc:
-				var hfid: String = _hc[hk]["feature_id"]
-				if hfid != "" and _cell_on_screen(hk.x, hk.y):
-					_tiles.draw_feature_tile(self, hfid, hk, Rect2(_cell_origin(hk), fcell_size))
 		# Побитый ДОТ трескается в самой плитке (TerrainTiles._pillbox_crack, 0.9.2).
 	else:
 		# На дальнем плане объекты — в текстуре рельефа, кроме мин: их видимость своя у
 		# каждой стороны (item 45). Мин на карте единицы — точкой в цвет тега.
 		for mk: String in [MCF.FEATURE_MINE, MCF.FEATURE_AV_MINE]:
-			for mc: Vector2i in resolver._feature_cells(mk):
+			for mc: Vector2i in _display_feature_cells(mk):
 				if _cell_on_screen(mc.x, mc.y) and resolver.mine_visible_to(viewer, mc):
 					draw_rect(Rect2(_cell_origin(mc) + Vector2(CELL * 0.25, CELL * 0.25),
 							Vector2(CELL * 0.5, CELL * 0.5)), Color(0.85, 0.25, 0.2))
-		for sc: Vector2i in resolver._feature_cells(MCF.FEATURE_DRONE_STATION):
+		for sc: Vector2i in _display_feature_cells(MCF.FEATURE_DRONE_STATION):
 			if _cell_on_screen(sc.x, sc.y) and _cell_seen_now(sc, visible):
 				draw_rect(Rect2(_cell_origin(sc) + Vector2(CELL * 0.25, CELL * 0.25),
 						Vector2(CELL * 0.5, CELL * 0.5)), Color(0.5, 0.8, 0.95))
@@ -6418,7 +6479,7 @@ func _sync_fly_layer(visible: Dictionary) -> void:
 		if not _cell_on_screen(c.x, c.y):
 			continue
 		var wcell := state.grid.cell(c)
-		if wcell != null and wcell.cover_height >= MCF.WALL_HEIGHT:
+		if wcell != null and wcell.cover_height >= MCF.WALL_HEIGHT and wcell.feature_id != MCF.FEATURE_BOUNDARY:
 			continue
 		if fog_on and not visible.has(c) and not visible.has(origin):
 			continue
@@ -6932,7 +6993,7 @@ func _draw_fx_one(kind: String, cell_pos: Vector2, rot: float, scale: float,
 	# Осколки/частицы не оседают на стенах — они от них отскакивают (item 7). Клетку-стену
 	# просто не рисуем: обломок туда «не долетел».
 	var _wcell := state.grid.cell(_fxc)
-	if _wcell != null and _wcell.cover_height >= MCF.WALL_HEIGHT:
+	if _wcell != null and _wcell.cover_height >= MCF.WALL_HEIGHT and _wcell.feature_id != MCF.FEATURE_BOUNDARY:
 		return
 	if fog_on and not visible.has(_fxc) and not visible.has(origin):
 		return
@@ -7304,6 +7365,7 @@ func _build_ui() -> void:
 	var turn_box := _hud_group(vbox, "Turn")
 	var end_btn := Button.new()
 	end_btn.text = "End Turn"
+	end_btn.focus_mode = Control.FOCUS_NONE
 	end_btn.custom_minimum_size = Vector2(0, 32)
 	end_btn.pressed.connect(_on_end_turn_pressed)
 	turn_box.add_child(end_btn)
@@ -8588,9 +8650,9 @@ func _camera_row() -> Control:
 	if sides.is_empty():
 		sides.append(me if me >= 0 else 0)
 	# Кнопки переносятся на новую строку: при восьми армиях ряд не влез бы в панель.
-	var flow := HFlowContainer.new()
-	flow.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	flow.alignment = FlowContainer.ALIGNMENT_END
+	var flow := GridContainer.new()
+	flow.columns = 3
+	flow.size_flags_horizontal = Control.SIZE_SHRINK_END
 	flow.add_theme_constant_override("h_separation", 4)
 	flow.add_theme_constant_override("v_separation", 4)
 	row.add_child(flow)
@@ -8600,7 +8662,9 @@ func _camera_row() -> Control:
 		b.tooltip_text = "Center the camera on %s" % ("your forces" if sid == me
 				else state.roster.name_of(sid) + "'s forces")
 		b.add_theme_font_size_override("font_size", 12)
-		b.custom_minimum_size = Vector2(30, 24)
+		b.custom_minimum_size = Vector2(40, 40)
+		b.clip_text = true
+		b.focus_mode = Control.FOCUS_NONE
 		var side := sid
 		b.pressed.connect(func() -> void: _center_on_side(side))
 		flow.add_child(b)
@@ -9470,7 +9534,7 @@ func _toggle_heightmap(on: bool) -> void:
 	queue_redraw()
 
 func _draw_heights(font: Font, visible: Dictionary, fog_on: bool, x0: int, y0: int, x1: int, y1: int) -> void:
-	var grid := state.grid
+	var grid := _shown_grid if _shown_grid != null else state.grid
 	for y in range(y0, y1 + 1):
 		for x in range(x0, x1 + 1):
 			var cell := grid.cell_fast(x, y)
@@ -9642,6 +9706,9 @@ func _handle_shortcut(event: InputEventKey) -> bool:
 		_wall_commit()
 		return true
 	if _animating or replay != null or not _my_turn() or _match_over: return false
+	if Keybinds.matches(event, "game_end_turn"):
+		_on_end_turn_pressed()
+		return true
 	if Keybinds.matches(event, "game_multiselect") and not (_menu.visible and _menu_actions.has("action_seat")):
 		if _multi_btn != null and not _multi_btn.disabled:
 			_multi_btn.button_pressed = not _multi_btn.button_pressed

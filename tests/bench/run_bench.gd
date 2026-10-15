@@ -25,7 +25,7 @@ extends SceneTree
 
 const EXPECTED := "res://tests/bench/expected.txt"
 const TS = preload("res://tests/TestSupport.gd")
-const ROSTER := ["light_infantry", "heavy_infantry", "machinegunner", "sniper", "assault",
+const ROSTER := ["light_infantry", "heavy_infantry", "machinegunner", "sniper",
 		"marksman", "anti_tank", "flamethrower", "engineer", "miner", "shield_bearer",
 		"commander", "drone_operator", "sapper"]
 const SCENES := {

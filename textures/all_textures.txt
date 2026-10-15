@@ -113,7 +113,6 @@ Samples are never loaded into the game -- a file called sample is skipped.
 
 -- Soldiers (add a faction suffix for a faction-specific look, see below) --
   anti_tank.png
-  assault.png
   civilian.png
   commander.png
   drone.png

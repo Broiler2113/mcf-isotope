@@ -145,7 +145,7 @@ func resolve(intent: Intent) -> ActionResult:
 	var pre_snap: Dictionary = state.snapshot(false) if undoable else {}
 	if top:
 		GridCell.journal = {}
-		GridCell.journaling = undoable
+		GridCell.journaling = undoable or intent is ShootIntent or intent is VehicleCannonIntent
 	# Запись повтора (M12). Пишем ровно то же, что хост шлёт клиенту, — и тем же
 	# способом. Условие record_enabled здесь не формальность: в сетевой партии журнал
 	# уже ведёт NetGame, и второй begin_record отобрал бы у него броски действия.
@@ -197,6 +197,15 @@ func resolve(intent: Intent) -> ActionResult:
 			replay_recorder.on_resolved(intent, rolls, result)
 	_resolve_depth -= 1
 	if top:
+		# Include secondary explosions and door changes outside the original blast.
+		if not result.visual_hold.is_empty():
+			var held: Dictionary = result.visual_hold.get("cells", {})
+			for cell: GridCell in GridCell.journal:
+				if held.has(cell.coord): continue
+				var im: Array = GridCell.journal[cell]
+				held[cell.coord] = {"image": im, "feature_id": im[8],
+					"feature_durability": im[11], "cover_height": im[1], "corpse_count": im[12]}
+			result.visual_hold["cells"] = held
 		GridCell.journaling = false
 		if undoable:
 			pre_snap["cells"] = GridCell.journal
@@ -772,8 +781,6 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 			return _recoiled(_resolve_flame(shooter, target.coord), shooter, target.coord)
 		MCF.ABILITY_MARKSMAN:
 			return _recoiled(_resolve_laser(shooter, target.coord, intent.component), shooter, target.coord)
-		MCF.ABILITY_ASSAULT:
-			return _resolve_assault(shooter, target)
 
 	# Продолжение начатого (дробимого) действия стрельбы по той же цели — без ОД.
 	# Привязка идёт к ФАКТИЧЕСКОЙ цели: если очередь перенаправило тело на линии,
@@ -1099,14 +1106,26 @@ func anti_tank_shot_endangers_own(shooter: UnitInstance, center: Vector2i) -> bo
 func _capture_visual_hold(res: ActionResult, area: Array) -> void:
 	if res == null:
 		return
+	if visibility_limited() and not res.visual_hold.has("visible"):
+		var seen := {}
+		for side: int in state.roster.player_ids():
+			seen[side] = team_visible_coords(side).duplicate()
+		res.visual_hold["visible"] = seen
 	var cells: Dictionary = res.visual_hold.get("cells", {})
-	for c: Vector2i in area:
+	# Nearby doors may close when a blast kills their neighbour. Hold those too.
+	var captured := {}
+	for at: Vector2i in area:
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				captured[at + Vector2i(dx, dy)] = true
+	for c: Vector2i in captured:
 		var cell := state.grid.cell(c)
 		if cell == null or cells.has(c):
 			continue
 		cells[c] = {
 			"feature_id": cell.feature_id, "feature_durability": cell.feature_durability,
 			"cover_height": cell.cover_height, "corpse_count": cell.corpse_count,
+			"image": cell.image(),
 		}
 	res.visual_hold["cells"] = cells
 	var vehs: Dictionary = res.visual_hold.get("vehicles", {})
@@ -1768,72 +1787,6 @@ func laser_path(shooter: UnitInstance, aim: Vector2i) -> Array:
 func laser_preview(shooter: UnitInstance, aim: Vector2i) -> Array:
 	return _laser_trace(shooter.coord, _step_toward(shooter.coord, aim))
 
-# --- Штурмовик (§3.14): дробовик до 3 целей по прямой, пробитие назад ---
-func _resolve_assault(shooter: UnitInstance, target: UnitInstance) -> ActionResult:
-	if shooter.remaining_ap <= 0:
-		return ActionResult.fail("Unit has no AP left")
-	shooter.remaining_ap -= 1
-	shooter.action_state = null
-	var step := _step_toward(shooter.coord, target.coord)
-
-	# Цепочка: цель + стоящие впритык позади враги, максимум 3 (§3.14).
-	var chain: Array = [target]
-	var cur := target.coord + step
-	while chain.size() < MCF.ASSAULT_MAX_TARGETS and state.grid.in_bounds(cur):
-		var occ: UnitInstance = state.grid.cell(cur).occupant
-		if occ != null and occ.is_alive() and occ.owner != shooter.owner:
-			chain.append(occ)
-			cur += step
-		else:
-			break
-
-	var result := ActionResult.new()
-	result.ok = true
-	var any_kill := false
-	for t in chain:
-		var need := hit_need(Combat.distance(shooter.coord, t.coord), shooter.fire_range())
-		var parry_need: int = t.armor() + MCF.ASSAULT_DEFENSE_PENALTY - _corpse_shield_bonus(t)
-		var shot_details: Array = []
-		var hits := 0
-		var t_killed := false
-		for _i in shooter.rate_of_fire():
-			var hit_roll := state.dice.roll_d6()
-			var is_hit := hit_roll >= need
-			var det := {
-				"hit_roll": hit_roll, "need": need, "hit": is_hit,
-				"def_roll": 0, "armor": parry_need, "parried": true,
-			}
-			if is_hit:
-				hits += 1
-				var def_roll := state.dice.roll_d6()
-				det["def_roll"] = def_roll
-				det["parried"] = def_roll >= parry_need
-				if not det["parried"]:
-					t_killed = true
-			shot_details.append(det)
-			if t_killed:
-				break
-		result.dice_events.append({
-			"kind": "attack", "shooter": shooter.stats.display_name,
-			"target": t.stats.display_name, "need": need,
-			"armor": parry_need, "shots": shot_details, "killed": t_killed,
-			"def_owner": t.owner, "shooter_owner": shooter.owner,  # item 13
-		})
-		_fx_lane(result, shooter.coord, t.coord, shooter.owner)  # issue 8
-		_fx_bullets(result, shooter.coord, t.coord, shot_details.size())
-		result.log("%s ⇒ %s: %d hits (need %d+, defense %d+)" % [
-			shooter.stats.display_name, t.stats.display_name, hits, need, parry_need])
-		if t_killed:
-			_kill(t, result, shooter.coord)
-			any_kill = true
-			result.log("%s killed!" % t.stats.display_name)
-		else:
-			break  # цель уцелела — пробитие останавливается
-	if not any_kill:
-		result.log("… target survived")
-	_apply_zero_g(shooter, target, result)  # невесомость (§3.11)
-	return result
-
 # --- Толчок щитом (§3.14) ---
 func _resolve_push(intent: PushIntent) -> ActionResult:
 	var actor := state.get_unit(intent.actor_id)
@@ -2005,10 +1958,6 @@ func hit_need_for(shooter: UnitInstance, target: UnitInstance, mods: Array = [])
 	need += pen
 	if pen != 0:
 		mods.append({"label": "Target cover", "delta": pen})
-	# Стрельба через горящие клетки (§3.8): −1 к попаданию (кроме снайпера).
-	if not is_sniper and _fire_between(shooter.coord, target.coord):
-		need += MCF.FIRE_SHOOT_PENALTY
-		mods.append({"label": "Fire on the line", "delta": MCF.FIRE_SHOOT_PENALTY})
 	return clampi(need, 1, 7)
 
 ## Сколько выбросить пушке машины по клетке (подпись прицела) — та же формула, что бросит
@@ -2034,8 +1983,6 @@ func aim_need(shooter: UnitInstance, cell: Vector2i, target: UnitInstance = null
 		MCF.ABILITY_ANTI_TANK:
 			if cell == shooter.coord:
 				return 0
-			return hit_need(Combat.distance(shooter.coord, cell), shooter.fire_range())
-		MCF.ABILITY_ASSAULT:
 			return hit_need(Combat.distance(shooter.coord, cell), shooter.fire_range())
 	if target == null:
 		# Окно: попасть в стекло (0.9.2) — по дальности, как в цель, без укрытия.
@@ -2072,26 +2019,6 @@ func _wall_between(from_coord: Vector2i, to_coord: Vector2i) -> bool:
 	var y := from_coord.y + sy
 	while x != to_coord.x or y != to_coord.y:
 		if grid.cell_fast(x, y).cover_height >= MCF.WALL_HEIGHT:
-			return true
-		x += sx
-		y += sy
-	return false
-
-## Есть ли горящая клетка на линии огня (§3.8).
-func _fire_between(from_coord: Vector2i, to_coord: Vector2i) -> bool:
-	if _line_off_board(from_coord, to_coord):
-		return false
-	var dx := to_coord.x - from_coord.x
-	var dy := to_coord.y - from_coord.y
-	if (dx == 0 and dy == 0) or (dx != 0 and dy != 0 and absi(dx) != absi(dy)):
-		return false
-	var sx := signi(dx)
-	var sy := signi(dy)
-	var grid := state.grid
-	var x := from_coord.x + sx
-	var y := from_coord.y + sy
-	while x != to_coord.x or y != to_coord.y:
-		if grid.cell_fast(x, y).on_fire:
 			return true
 		x += sx
 		y += sy
@@ -3023,7 +2950,7 @@ func _resolve_place_mine(intent: PlaceMineIntent) -> ActionResult:
 	if err != "":
 		return ActionResult.fail(err)
 	if not _is_sapper(actor):
-		return ActionResult.fail("Only a sapper can lay mines")
+		return ActionResult.fail("Only a minesweeper can lay mines")
 	if Combat.distance(actor.coord, intent.target) > 1:
 		return ActionResult.fail("Can only mine this cell or an adjacent one")
 	if not _can_mine_cell(intent.target):
@@ -3064,7 +2991,7 @@ func _resolve_disarm_mine(intent: DisarmMineIntent) -> ActionResult:
 	if err != "":
 		return ActionResult.fail(err)
 	if not _is_sapper(actor):
-		return ActionResult.fail("Only a sapper can disarm mines")
+		return ActionResult.fail("Only a minesweeper can disarm mines")
 	if actor.remaining_ap <= 0:
 		return ActionResult.fail("No AP left")
 	if Combat.distance(actor.coord, intent.target) > 1:
@@ -3096,7 +3023,7 @@ func _resolve_reveal_mines(intent: RevealMinesIntent) -> ActionResult:
 	if err != "":
 		return ActionResult.fail(err)
 	if not _is_sapper(actor):
-		return ActionResult.fail("Only a sapper can sweep for mines")
+		return ActionResult.fail("Only a minesweeper can sweep for mines")
 	if actor.remaining_ap <= 0:
 		return ActionResult.fail("No AP left")
 	actor.remaining_ap -= 1
@@ -6311,8 +6238,6 @@ func _resolve_dpmg(intent: DPMGFireIntent) -> ActionResult:
 	var cover := cover_effect_from(intent.dpmg_coord, target)
 	need += cover["hit_penalty"]
 	parry_need -= cover["defense_bonus"]
-	if _fire_between(intent.dpmg_coord, target.coord):
-		need += MCF.FIRE_SHOOT_PENALTY
 	need = clampi(need, 1, 7)
 
 	var want: int = MCF.DPMG_RATE_OF_FIRE if intent.shots < 0 else clampi(intent.shots, 1, MCF.DPMG_RATE_OF_FIRE)
@@ -6935,7 +6860,7 @@ const ARMY_SEGMENT_MAX := 10
 const ARMY_STRENGTH := 1.0
 ## Из кого набирается независимая армия: боевые профессии. Мирных, командиров и операторов
 ## дронов в ней нет — командовать ей некем, а станций у неё не бывает.
-const ARMY_ROSTER := ["light_infantry", "heavy_infantry", "assault", "machinegunner",
+const ARMY_ROSTER := ["light_infantry", "heavy_infantry", "machinegunner",
 		"sniper", "marksman", "anti_tank", "flamethrower", "shield_bearer", "engineer",
 		"miner", "sapper"]
 ## Если у игроков вообще нечего мерить (нулевая цена), армия приходит такой.
@@ -8009,7 +7934,7 @@ func can_shoot(shooter: UnitInstance, target: UnitInstance) -> String:
 ## пределах дальности. Спецстрелкам (противотанкист, огнемётчик, марксман) свой путь.
 func can_shoot_window(shooter: UnitInstance, cell: Vector2i) -> String:
 	if shooter.stats.special_ability_id in [MCF.ABILITY_ANTI_TANK, MCF.ABILITY_FLAMETHROWER,
-			MCF.ABILITY_MARKSMAN, MCF.ABILITY_ASSAULT, MCF.ABILITY_MINER, MCF.ABILITY_SHIELD_BEARER]:
+			MCF.ABILITY_MARKSMAN, MCF.ABILITY_MINER, MCF.ABILITY_SHIELD_BEARER]:
 		return "This unit can't shoot at windows"
 	if not state.grid.in_bounds(shooter.coord) or not state.grid.in_bounds(cell):
 		return "No target"
@@ -8074,14 +7999,12 @@ func _resolve_shoot_window(shooter: UnitInstance, cell: Vector2i, shots: int = -
 	return result
 
 ## Сколько выбросить, чтобы пуля этого стрелка попала в стекло в клетке cell: по дальности
-## до стекла, как в цель, но без укрытия (у стекла его нет); огонь на линии мешает так же.
+## до стекла, как в цель, но без укрытия (у стекла его нет); огонь на линии на попадание не влияет.
 func pane_hit_need(shooter: UnitInstance, cell: Vector2i) -> int:
 	var dist := Combat.distance(shooter.coord, cell)
 	var is_sniper := shooter.stats.special_ability_id == MCF.ABILITY_SNIPER
 	var need := sniper_need(dist) if is_sniper \
 			else hit_need(dist, shooter.fire_range())
-	if not is_sniper and _fire_between(shooter.coord, cell):
-		need += MCF.FIRE_SHOOT_PENALTY
 	return clampi(need, 1, 7)
 
 ## Очередь сквозь стёкла (0.9.2, правило игрока). Стёкла — по порядку от стрелка; у
@@ -10004,7 +9927,7 @@ func can_shoot_fixture(shooter: UnitInstance, c: Vector2i, side: int = -1) -> St
 	if shooter == null or not shooter.is_alive() or shooter.is_drone or shooter.captor_id >= 0:
 		return "Unit cannot fire"
 	if shooter.stats.special_ability_id in [MCF.ABILITY_ANTI_TANK, MCF.ABILITY_FLAMETHROWER,
-			MCF.ABILITY_MARKSMAN, MCF.ABILITY_ASSAULT, MCF.ABILITY_MINER, MCF.ABILITY_SHIELD_BEARER]:
+			MCF.ABILITY_MARKSMAN, MCF.ABILITY_MINER, MCF.ABILITY_SHIELD_BEARER]:
 		return "Use this unit's normal attack"
 	if side < 0 and not state.grid.cell(c).lamps.is_empty() and fixture_at(c) == "":
 		return "The lamp is on the other side of the wall"
@@ -10408,7 +10331,7 @@ func _events_allowed() -> Dictionary:
 		ok[RandomEvents.EMP] = true
 	if not _burnable_cells(_useful_rect()).is_empty():
 		ok[RandomEvents.FIRE] = true
-	if state.env in ["town", "field"] and random_events.dust_left <= 0:
+	if RandomEvents.available_for_map(RandomEvents.DUST, state.env, mode.kind) and random_events.dust_left <= 0:
 		ok[RandomEvents.DUST] = true
 	if not _collapse_walls().is_empty():
 		ok[RandomEvents.COLLAPSE] = true
@@ -10416,7 +10339,7 @@ func _events_allowed() -> Dictionary:
 		ok[RandomEvents.REINFORCE] = true
 	if mode.is_capture() and mode.bounty_unit < 0 and _bounty_pick() != null:
 		ok[RandomEvents.BOUNTY] = true
-	if state.env in ["asteroid", "town", "field"] and not _minefield_cells().is_empty():
+	if RandomEvents.available_for_map(RandomEvents.MINEFIELD, state.env, mode.kind) and not _minefield_cells().is_empty():
 		ok[RandomEvents.MINEFIELD] = true
 	return ok
 

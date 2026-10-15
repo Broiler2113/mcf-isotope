@@ -28,6 +28,10 @@ var start_rules: Dictionary = {}
 var opening: Array = []
 var opening_processed: bool = false
 var steps: Array = []
+# Recent combat text travels with the replay for reports submitted from the menu.
+const MAX_COMBAT_LOG := 600_000
+var combat_log: Array[String] = []
+var _combat_chars := 0
 var bookmarks: Array = []
 var _bookmark_round := -1
 var _bookmark_owner := -1
@@ -53,6 +57,8 @@ func begin(state: GameState, resolver: GameActionResolver, p_meta: Dictionary = 
 	start = StateCodec.encode(state)
 	start_rules = StateCodec.encode_rules(resolver)
 	steps.clear()
+	combat_log.clear()
+	_combat_chars = 0
 	bookmarks.clear()
 	_bookmark_round = -1
 	_bookmark_owner = -1
@@ -84,6 +90,12 @@ func observe_opening(result: ActionResult) -> void:
 	_observe(0, result)
 
 func _observe(index: int, result: ActionResult) -> void:
+	if result != null:
+		for line: String in result.log_lines:
+			combat_log.append(line)
+			_combat_chars += line.length() + 1
+		while _combat_chars > MAX_COMBAT_LOG and not combat_log.is_empty():
+			_combat_chars -= combat_log.pop_front().length() + 1
 	ReplayBookmarks.append(bookmarks, index, _state.turns.round_number, _state.active_player(),
 			_bookmark_round, _bookmark_owner, result.log_lines if result != null else [])
 	_bookmark_round = _state.turns.round_number
@@ -128,6 +140,7 @@ func to_dict() -> Dictionary:
 		"bookmarks": bookmarks,
 		"seek_version": 1,
 		"steps": steps,
+		"combat_log": "\n".join(combat_log),
 	}
 
 ## Записать повтор на диск. Возвращает путь или "" при неудаче.
