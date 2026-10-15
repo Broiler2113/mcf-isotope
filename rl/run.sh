@@ -77,6 +77,13 @@ spawn() {  # spawn <name> <command...>: background, log to runs/<name>.log, pid 
 train() {  # train <branch> <train.py args...>
   local b="$1"; shift
   spawn "$b" "$PY" train.py "$@"
+  if [ "$(uname -s)" = Darwin ] && pid_alive "$RUNS/$b.pid"; then
+    local rl_trainer_pid; rl_trainer_pid="$(cat "$RUNS/$b.pid")"
+    if ! pgrep -f "^/usr/bin/caffeinate -i -w $rl_trainer_pid$" >/dev/null; then
+      # Release the idle-sleep assertion automatically when this trainer exits.
+      nohup /usr/bin/caffeinate -i -w "$rl_trainer_pid" </dev/null >/dev/null 2>&1 &
+    fi
+  fi
 }
 
 case "${1:-}" in

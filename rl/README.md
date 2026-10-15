@@ -338,6 +338,8 @@ learning step increase and reports the remaining free space. Pause and Stop rema
 `OPERATOR_STOP` preserves an explicit stop across crashes and reboots. Only branches
 marked `AUTONOMOUS` have their step budget extended. A logged-out, sleeping, or powered-off
 Mac cannot train; the service resumes after login/wake. One branch owns this service.
+The launcher holds an idle-sleep assertion for each live Mac trainer, releasing it when
+the trainer exits. User-initiated sleep and closing the lid still suspend training.
 Linux uses a systemd service (per-user unless installed as root).
 
 After updating an already stopped checkout, `bash rl/run.sh autonomous BRANCH` installs
