@@ -96,6 +96,7 @@ static var holdout_ai: int = 1
 static var random_events_enabled: bool = false
 static var random_events_mandatory: bool = false
 static var random_events_interval: int = 3
+static var independent_army_difficulty: int = 1 # Easy / Normal / Hard composition
 static var random_events_weights: Dictionary = {}
 ## Ограничение состава на закупку (item 12): id юнита -> разрешён ли. Пустой словарь =
 ## разрешены ВСЕ. Заполняет лобби, применяет экран расстановки.

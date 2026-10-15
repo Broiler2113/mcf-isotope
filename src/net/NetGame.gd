@@ -192,7 +192,7 @@ func _host_resolve_and_send(intent: Intent) -> void:
 			"h": state.digest_hash()})
 	else:
 		outgoing.emit({"k": K_DENIED, "a": intent.actor_id, "reason": result.reason,
-			"p": intent.requester if intent is EndTurnIntent else -1})
+			"p": intent.requester if intent is EndTurnIntent or intent is UndoIntent or intent is RedoIntent else -1})
 	action_applied.emit(intent, result)
 
 # --- Клиент: воспроизведение с присланными бросками ---

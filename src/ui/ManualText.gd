@@ -156,7 +156,7 @@ Any soldier who steps on an anti-personnel mine sets it off - [b]your own side i
 [b]Sweep[/b] reveals enemy mines within %d cells in sight for one turn. [b]Disarm[/b] removes an adjacent mine. Fire sets anti-personnel mines off, and blasts destroy them.
 
 [h]Old minefields[/h]
-A random event can scatter forgotten mines outdoors. Nobody is told where they are, and each one goes off only some of the time - a safe step today is no promise for the next.""" % [MCF.MINES_PER_ACTION, MCF.MINE_REVEAL_RADIUS]],
+A random event can scatter forgotten anti-personnel and anti-vehicle mines on any map. Nobody is told where they are, and each one goes off only some of the time - a safe step today is no promise for the next.""" % [MCF.MINES_PER_ACTION, MCF.MINE_REVEAL_RADIUS]],
 
 		["Drones", """[h]Launching[/h]
 The [b]Drone Operator[/b] places a drone station, which launches a drone at once. The operator must stand next to the station to fly it.

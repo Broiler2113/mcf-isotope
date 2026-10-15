@@ -37,7 +37,7 @@ const C := 16
 ## Разрешения кусков: точек на клетку.
 const RES := [8, 16, 32]
 ## Сколько кусков собирать за кадр, когда есть чем подменить недостающие.
-const BUILDS_PER_FRAME := 4
+const BUILDS_PER_FRAME := 1
 ## Потолок памяти под текстуры кусков; сверх него выбрасываются давно не показанные.
 const MEMORY_BUDGET := 128 * 1024 * 1024
 
@@ -62,6 +62,7 @@ var _dirty: Dictionary = {}      # Vector2i(cx, cy) -> true: пересобра�
 var _pick: Dictionary = {}       # Vector2i(cx, cy) -> ключ куска, выведенного полом в этом кадре
 var _bytes := 0
 var _built := 0
+var _deferred_rebuild := false
 var _look_ver: int = -1
 var _damage_ver: int = -1
 var _damaged: Dictionary = {}
@@ -70,6 +71,7 @@ var _damaged: Dictionary = {}
 var decals: Dictionary = {}
 var map_decals: Dictionary = {}
 var bake_map_decals := false
+var bake_fire := true
 var _map_decal_bleed := 1.5
 var ground_lines: Dictionary = {}
 var _ground_version := -1
@@ -78,6 +80,7 @@ var _frame: int = 0
 ## Варианты плиток: "имя@res" -> Array[Image] (res×res); листы: "имя@res" -> Array[Image]
 ## (4res×4res). Пустой массив — картинки нет.
 var _tiles: Dictionary = {}
+var _source_images: Dictionary = {}
 var _sheets: Dictionary = {}
 
 ## Где клетка (0,0) этой сетки лежит на настоящей карте. Не ноль только у черновика
@@ -194,6 +197,9 @@ func _load(name: String) -> Image:
 	var tex := Sprites.texture_of(name)
 	if tex == null:
 		return null
+	var cached: Array = _source_images.get(name, [])
+	if not cached.is_empty() and cached[0] == tex:
+		return (cached[1] as Image).duplicate()
 	var img := tex.get_image()
 	if img == null:
 		return null
@@ -201,7 +207,8 @@ func _load(name: String) -> Image:
 	if img.is_compressed():
 		img.decompress()
 	img.convert(Image.FORMAT_RGBA8)
-	return img
+	_source_images[name] = [tex, img]
+	return img.duplicate()
 
 ## Подтянуть журнал вида и копоть взрывов: пометить грязными куски тронутых клеток и
 ## их соседей.
@@ -237,9 +244,9 @@ func sync(fx_damage: Dictionary, damage_version: int) -> void:
 	_look_ver = GridCell.look_version
 	if damage_version != _damage_ver:
 		for c: Vector2i in _damaged:
-			_touch(c)
+			if not fx_damage.has(c): _touch(c)
 		for c: Vector2i in fx_damage:
-			_touch(c)
+			if _damaged.get(c) != fx_damage[c]: _touch(c)
 		_damaged = fx_damage.duplicate()
 		_damage_ver = damage_version
 
@@ -276,6 +283,7 @@ func draw(ci: CanvasItem, origin: Vector2, cell: float, x0: int, y0: int, x1: in
 	if not features:
 		_frame += 1
 		_built = 0
+		_deferred_rebuild = false
 		_pick.clear()
 	for cy in range(y0 / C, y1 / C + 1):
 		for cx in range(x0 / C, x1 / C + 1):
@@ -290,6 +298,8 @@ func draw(ci: CanvasItem, origin: Vector2, cell: float, x0: int, y0: int, x1: in
 					Rect2(origin + Vector2(cx * C, cy * C) * cell, cells * cell), false)
 	if not features:
 		draw_map_decals(ci, origin, cell, Rect2(Vector2(x0, y0), Vector2(x1 - x0 + 1, y1 - y0 + 1)))
+	if not features and _deferred_rebuild:
+		ci.queue_redraw.call_deferred()
 	if features:
 		_evict()
 
@@ -345,19 +355,22 @@ static func _soot_pixel(q: Vector2, variant: int, col: Color) -> Color:
 ## Какой кусок вывести: в нужном разрешении (собрав его, если бюджет кадра позволяет), а
 ## иначе — уже собранный в другом. Грязный кусок выбрасывается во всех разрешениях.
 func _choose(cc: Vector2i, res: int) -> Variant:
-	if _dirty.has(cc):
-		_dirty.erase(cc)
-		for r: int in RES:
-			_drop(Vector3i(cc.x, cc.y, r))
 	var key := Vector3i(cc.x, cc.y, res)
-	if not _chunks.has(key):
-		var fallback: Variant = null
+	var fallback: Variant = key if _chunks.has(key) else null
+	if fallback == null:
 		for r: int in RES:
 			if _chunks.has(Vector3i(cc.x, cc.y, r)):
 				fallback = Vector3i(cc.x, cc.y, r)
-		if fallback != null and _built >= BUILDS_PER_FRAME:
-			_pick[cc] = fallback
-			return fallback
+	# Keep a valid previous texture until this chunk gets its frame budget. Previously
+	# dirty chunks were discarded first, so the budget never applied to explosions.
+	if fallback != null and _built >= BUILDS_PER_FRAME and (_dirty.has(cc) or not _chunks.has(key)):
+		_deferred_rebuild = true
+		_pick[cc] = fallback
+		return fallback
+	if _dirty.has(cc):
+		_dirty.erase(cc)
+		for r: int in RES: _drop(Vector3i(cc.x, cc.y, r))
+	if not _chunks.has(key):
 		_build(cc, res)
 		_built += 1
 	_pick[cc] = key
@@ -622,10 +635,9 @@ func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int
 		var ov := _tile(over, res)
 		if not ov.is_empty():
 			img.blend_rect(ov[variant_of(c + origin, ov.size())], full, at)
-	if cell.on_fire and not hidden_fire.has(c):
+	if bake_fire and cell.on_fire and not hidden_fire.has(c):
 		var fire := _tile("fire", res)
-		if not fire.is_empty():
-			img.blend_rect(fire[0], full, at)
+		if not fire.is_empty(): img.blend_rect(fire[0], Rect2i(0, 0, res, res), at)
 	var fid := cell.feature_id
 	# Бункер вырыт в скале (item 24): стена, со всех восьми сторон окружённая стеной (или
 	# краем карты), — толща породы, а не обшивка; металлом облицованы только стены комнат.
@@ -703,6 +715,7 @@ func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int
 ## тоже своя, угол заделывается телом из середины той же плитки.
 const NOTCHED := {"trench": true, "bags": true}
 const _CORNER_DIAG := [Vector2i(1, -1), Vector2i(1, 1), Vector2i(-1, 1), Vector2i(-1, -1)]
+
 
 func _fill_notches(feat: Image, c: Vector2i, fid: String, mask: int, at: Vector2i, res: int) -> void:
 	var fam: String = FAMILY.get(fid, fid)

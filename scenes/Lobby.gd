@@ -57,6 +57,7 @@ var _events_check: CheckBox
 var _event_pool: Dictionary = {}
 var _events_mand: CheckBox
 var _events_interval: SpinBox
+var _army_difficulty: OptionButton
 var _map_opt: OptionButton
 var _map_preview: TextureRect
 var _slots_box: VBoxContainer
@@ -331,6 +332,7 @@ func _apply_lobby_snapshot(msg: Dictionary) -> void:
 		_events_check.button_pressed = GameConfig.random_events_enabled
 		_events_mand.button_pressed = GameConfig.random_events_mandatory
 		_events_interval.value = GameConfig.random_events_interval
+		_army_difficulty.select(GameConfig.independent_army_difficulty)
 		for ev_id in _event_pool:
 			_event_pool[ev_id] = float(GameConfig.random_events_weights.get(ev_id, 0.0)) > 0.0
 	if _mode_opt != null:
@@ -840,6 +842,9 @@ func _build_config(parent: VBoxContainer) -> void:
 	_events_interval.max_value = 20
 	_events_interval.value = GameConfig.random_events_interval
 	_row(ev_box, "Rounds between events:", _events_interval)
+	_army_difficulty = _opt(RandomEvents.ARMY_DIFFICULTIES, GameConfig.independent_army_difficulty)
+	_army_difficulty.tooltip_text = "Easy favors light and heavy infantry. Hard favors anti-tank soldiers and specialists."
+	_row(ev_box, "Independent army difficulty:", _army_difficulty)
 	# Пул событий — в ОТДЕЛЬНОМ окне (item 3), а не длинным списком прямо в конфиге.
 	var cur_weights: Dictionary = GameConfig.random_events_weights
 	if cur_weights.is_empty():
@@ -855,7 +860,7 @@ func _build_config(parent: VBoxContainer) -> void:
 
 	# Хост: любой щелчок по правилам сразу уезжает гостям (batch 12 #8/#9/#10).
 	if _is_host_net:
-		for o: OptionButton in [_place_opt, _fog_opt, _army_opt]:
+		for o: OptionButton in [_place_opt, _fog_opt, _army_opt, _army_difficulty]:
 			o.item_selected.connect(func(_i: int) -> void: _broadcast_lobby())
 		if _civ_slider != null:
 			_civ_slider.value_changed.connect(func(_v: float) -> void: _broadcast_lobby())
@@ -865,7 +870,7 @@ func _build_config(parent: VBoxContainer) -> void:
 		_events_interval.value_changed.connect(func(_v: float) -> void: _broadcast_lobby())
 
 	if _is_client:
-		var _client_locked: Array = [_place_opt, _fog_opt, _army_opt,
+		var _client_locked: Array = [_place_opt, _fog_opt, _army_opt, _army_difficulty,
 				_ff_check, _team_check, _live_check, _civ_check, _events_check,
 				_events_mand, _events_interval]
 		for c in _client_locked:
@@ -2043,6 +2048,7 @@ func _commit_config() -> void:
 	GameConfig.random_events_enabled = _events_check.button_pressed
 	GameConfig.random_events_mandatory = _events_mand.button_pressed
 	GameConfig.random_events_interval = int(_events_interval.value)
+	GameConfig.independent_army_difficulty = _army_difficulty.selected
 	GameConfig.game_mode = _mode_opt.selected
 	GameConfig.capture_zones = MatchMode.ZONE_COUNTS[_zones_opt.selected]
 	GameConfig.capture_target = int(_target_spin.value)

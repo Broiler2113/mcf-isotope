@@ -1,5 +1,8 @@
 extends "res://tests/NetSmokeBase.gd"
 var _host_units := 0
+var _move_id := -1
+var _move_target := Vector2i(-1, -1)
+var _move_origin := Vector2i(-1, -1)
 ## Где стояли солдаты хоста, когда бой открылся. Ход хоста считается ПО ДОСКЕ: под
 ## туманом (а эта партия именно туманная) чужие ходы гостю в журнал не попадают вовсе —
 ## и не должны, иначе текст рассказывал бы ровно то, что туман прячет. Доска же у сторон
@@ -75,4 +78,37 @@ func _initialize() -> void:
 				if vis.has(u.coord): seen += 1
 			print("[guest-t] host soldiers visible to the guest: %d of %d" % [seen, m.state.living_units_of(0).size()])
 			print("[guest-t] digest ", load("res://tests/TestSupport.gd").digest(m.state).hash()))
+	step("guest gives a move order through the actual unit menu", func() -> bool:
+		var m = current_scene
+		return m.state.active_player() == 1 and not m._animating and not m._net_playing,
+		func() -> void:
+			var m = current_scene
+			for u in m.state.living_units_of(1):
+				m._select(u)
+				m._enter_move()
+				if m.reach == null: continue
+				for c: Vector2i in m.reach.cost:
+					if c == u.coord or int(m.reach.cost[c]) > 2: continue
+					_move_id = u.id
+					_move_origin = u.coord
+					_move_target = c
+					m.pan = Vector2(17, -31)
+					m.zoom = 0.9
+					var click := InputEventMouseButton.new()
+					click.button_index = MOUSE_BUTTON_LEFT
+					click.pressed = true
+					click.position = m.pan + (m.ORIGIN + (Vector2(c) + Vector2.ONE * 0.5) * m.CELL) * m.zoom
+					m._unhandled_input(click)
+					ck(m._net_request_pending, "guest locks duplicate orders until host acknowledgement")
+					# A second click while waiting must not submit a stale order.
+					m._unhandled_input(click)
+					return
+			ck(false, "guest has a reachable movement target"))
+	step("guest move is acknowledged at the selected tile", func() -> bool:
+		var m = current_scene
+		return _move_id >= 0 and not m._net_request_pending and m.state.get_unit(_move_id).coord == _move_target and m._walks_running == 0,
+		func() -> void:
+			var m = current_scene
+			ck(m.state.get_unit(_move_id).coord == _move_target and _move_target != _move_origin, "guest unit moves to exactly the clicked tile")
+			ck(not m.net._resync_pending, "guest movement needs no resync"))
 	step("hold", func() -> bool: return _step_t > 1.0)

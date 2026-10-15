@@ -4,6 +4,7 @@ extends Node
 signal changed
 const SETTINGS_PATH := "user://settings.cfg"
 const DEFINITIONS: Array = [
+	{"id": "game_fullscreen", "label": "Toggle fullscreen (all screens)", "keys": [KEY_F11], "contexts": ["*"], "section": "game"},
 	{"id": "game_end_turn", "label": "End turn", "keys": [KEY_MASK_SHIFT | KEY_ENTER], "contexts": ["*"], "section": "game"},
 	{"id": "game_cancel", "label": "Cancel / close menu", "keys": [KEY_ESCAPE], "contexts": ["*"], "section": "game"},
 	{"id": "game_initiative", "label": "Initiative overlay", "keys": [KEY_TAB], "contexts": ["*"], "section": "game"},
@@ -142,7 +143,8 @@ func conflicts(id: String, code: int) -> Array[String]:
 	var out: Array[String] = []
 	var current := definition(id)
 	for entry: Dictionary in DEFINITIONS:
-		if entry.id == id or entry.section != current.section or not codes(entry.id).has(code): continue
+		if entry.id == id or not codes(entry.id).has(code): continue
+		if entry.section != current.section and id != "game_fullscreen" and entry.id != "game_fullscreen": continue
 		var overlap: bool = entry.contexts.has("*") or current.contexts.has("*")
 		for context: String in current.contexts: overlap = overlap or entry.contexts.has(context)
 		if overlap: out.append(entry.label)
@@ -194,6 +196,10 @@ func typing(viewport: Viewport) -> bool:
 ## редактор — одной клавишей; та же клавиша его и закрывает. Сцены свои клавиши разбирают
 ## раньше (_input), так что сюда доходит только то, что никто не занял.
 func _unhandled_key_input(event: InputEvent) -> void:
+	if matches(event, "game_fullscreen"):
+		Ui.set_fullscreen(not Ui.fullscreen)
+		get_viewport().set_input_as_handled()
+		return
 	if not (matches(event, "game_manual") or matches(event, "editor_manual")) or typing(get_viewport()):
 		return
 	var open := not get_tree().get_nodes_in_group("manual_window").is_empty()

@@ -188,6 +188,7 @@ static func encode_rules(resolver: GameActionResolver) -> Dictionary:
 			"enabled": resolver.random_events.enabled,
 			"mandatory": resolver.random_events.mandatory,
 			"interval": resolver.random_events.interval,
+			"army_difficulty": resolver.random_events.army_difficulty,
 			"weights": resolver.random_events.weights.duplicate(),
 		}
 	return out
@@ -207,6 +208,7 @@ static func apply_rules(resolver: GameActionResolver, d: Dictionary) -> void:
 			weights[str(id)] = int(cfg["weights"][id])
 		resolver.random_events = RandomEvents.new(bool(cfg.get("enabled", false)),
 				bool(cfg.get("mandatory", false)), int(cfg.get("interval", 3)), weights)
+		resolver.random_events.army_difficulty = clampi(int(cfg.get("army_difficulty", 1)), 0, 2)
 	if resolver.random_events != null and d.has("events"):
 		resolver.random_events.restore(d["events"])
 		# Old saves have already started their round; reopening must not roll a
