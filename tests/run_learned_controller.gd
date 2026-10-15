@@ -18,6 +18,7 @@ var _pending: Intent = null
 var _fallbacks: Array = []
 
 func _initialize() -> void:
+	OS.set_environment(LearnedController.ENV_BACKEND, "socket")
 	var has_server := OS.get_environment(LearnedController.ENV_VAR) != ""
 	if has_server:
 		_run_live()

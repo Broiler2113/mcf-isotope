@@ -8,9 +8,8 @@ extends PlayerController
 ## видит ровно то, что видел бы человек на этом месте), и спрашивает у сервера политики
 ## индекс выбранного намерения.
 ##
-## v1 «сервер политики» — локальный процесс rl/policy_server.py, адрес в переменной
-## окружения MCF_RL_POLICY (так запускает `train.py play`). Встроенный ONNX-рантайм (§12)
-## подключится сюда же, заменив _ask(): протокол наблюдение → индекс не изменится.
+## Native ONNX inference is preferred; MCF_RL_POLICY keeps the training socket path.
+## Both accept the same observation/legal-intent request and return an action index.
 ##
 ## Если модели нет (переменная не задана, сервер не отвечает, ответ невалиден) — слот
 ## ведёт AIController HARD, а в журнал боя уходит сообщение (§12: «лобби говорит об
@@ -21,13 +20,46 @@ const Obs = preload("res://rl/ObsEncoder.gd")
 const ENV_VAR := "MCF_RL_POLICY"
 ## Подпись модели для лобби («town-8 · update 3867 · step 5,939,822»), от `train.py play`.
 const ENV_LABEL := "MCF_RL_MODEL_LABEL"
+const ENV_MODEL := "MCF_RL_MODEL"
+## train.py play explicitly selects its freshly started checkpoint server.
+const ENV_BACKEND := "MCF_RL_BACKEND"
+const BUNDLED_MODEL := "res://assets/policy/baseline.onnx"
+static var _embedded: RefCounted = null
+static var _embedded_metadata: Dictionary = {}
+static var _embedded_key := ""
+static var _embedded_error := ""
 
-## Игра запущена с сервером политики — есть против кого играть «AI - Learned».
+static func _load_embedded() -> RefCounted:
+	if OS.get_environment(ENV_BACKEND) == "socket":
+		return null
+	var path := OS.get_environment(ENV_MODEL)
+	if path.is_empty():
+		path = BUNDLED_MODEL
+	if _embedded_key == path:
+		return _embedded
+	_embedded_key = path
+	_embedded = null
+	_embedded_metadata = {}
+	_embedded_error = ""
+	if not ClassDB.class_exists("MCFPolicy"):
+		return null
+	var policy: RefCounted = ClassDB.instantiate("MCFPolicy")
+	var result: Variant = policy.call("load_model", path)
+	if result is Dictionary and result.get("ok", false):
+		_embedded = policy
+		_embedded_metadata = result
+	else:
+		_embedded_error = "embedded policy error: " + str(result)
+	return _embedded
+
+## A loadable embedded model or configured server makes AI - Learned available.
 static func available() -> bool:
-	return OS.get_environment(ENV_VAR) != ""
+	return _load_embedded() != null or OS.get_environment(ENV_VAR) != ""
 
 static func model_label() -> String:
 	var l := OS.get_environment(ENV_LABEL)
+	if _load_embedded() != null:
+		return l if l != "" else str(_embedded_metadata.get("mcf.label", "ONNX · " + _embedded_key.get_file()))
 	return l if l != "" else "served on " + OS.get_environment(ENV_VAR)
 const IntentBudget = preload("res://rl/IntentBudget.gd")
 const EnemyMemory = preload("res://rl/EnemyMemory.gd")
@@ -43,6 +75,7 @@ var _max_candidates: int = int(OS.get_environment(ENV_MAX_CANDIDATES))
 var _budget_rng := RandomNumberGenerator.new()
 const CONNECT_TIMEOUT_MS := 3000
 const REPLY_TIMEOUT_MS := 30000
+var reply_timeout_ms := REPLY_TIMEOUT_MS
 ## Лимит раундов, с которым обучалась политика (Q4): наблюдение содержит round/round_cap,
 ## то есть номер раунда попадает в сеть ПОДЕЛЁННЫМ на это число. Значит оно обязано быть
 ## тем же, с которым училась политика, иначе один из входов systematically смещён.
@@ -70,6 +103,13 @@ func bind_match(r: GameActionResolver) -> void:
 
 func _init(p_owner: int) -> void:
 	super(p_owner)
+	if _load_embedded() != null:
+		if OS.get_environment(ENV_MAX_ACTORS).is_empty():
+			_max_actors = int(_embedded_metadata.get("mcf.max_actors", 0))
+		if OS.get_environment(ENV_MAX_CANDIDATES).is_empty():
+			_max_candidates = int(_embedded_metadata.get("mcf.max_candidates", 0))
+		if OS.get_environment(ENV_ROUND_CAP).is_empty():
+			_round_cap = maxi(1, int(_embedded_metadata.get("mcf.round_cap", ROUND_CAP_FALLBACK)))
 
 func begin_turn(state: GameState) -> void:
 	if state.active_player() != owner:
@@ -211,7 +251,51 @@ func _connect() -> bool:
 	_peer = null
 	return false
 
+var _native_failed := false
+
+## Kept as a method so regression fixtures can exercise broken/absent native backends.
+func _embedded_infer(req: Dictionary) -> Variant:
+	var policy := _load_embedded()
+	return policy.call("infer", req) if policy != null else {}
+
+static func _valid_reply(reply: Variant, count: int) -> bool:
+	if not reply is Dictionary or reply.has("error") or not reply.has("action"):
+		return false
+	var action: Variant = reply["action"]
+	if not (action is int or action is float):
+		return false
+	var number := float(action)
+	if not is_finite(number) or number < 0 or number >= count or number != floor(number):
+		return false
+	if reply.has("value"):
+		var value: Variant = reply["value"]
+		if not (value is int or value is float) or not is_finite(float(value)):
+			return false
+	return true
+
 func _ask(req: Dictionary) -> Dictionary:
+	var native_reason := ""
+	if not _native_failed and OS.get_environment(ENV_BACKEND) != "socket":
+		var reply: Variant = _embedded_infer(req)
+		if _valid_reply(reply, req.get("legal", []).size()):
+			return reply
+		if not (reply is Dictionary and reply.is_empty()):
+			native_reason = "embedded policy error: " + str(reply)
+		else:
+			native_reason = _embedded_error
+			if native_reason.is_empty() and _load_embedded() != null:
+				native_reason = "embedded policy error: empty reply"
+		_native_failed = true
+	var reply := _ask_socket(req)
+	if _valid_reply(reply, req.get("legal", []).size()):
+		return reply
+	if not reply.is_empty():
+		_last_error = "policy answered an invalid action: " + str(reply)
+	if native_reason != "":
+		_last_error = native_reason + "; " + _last_error
+	return {}
+
+func _ask_socket(req: Dictionary) -> Dictionary:
 	if _peer == null and not _connect():
 		return {}
 	var line := JSON.stringify(req) + "\n"
@@ -219,7 +303,7 @@ func _ask(req: Dictionary) -> Dictionary:
 		_last_error = "policy connection dropped"
 		_peer = null
 		return {}
-	var deadline := Time.get_ticks_msec() + REPLY_TIMEOUT_MS
+	var deadline := Time.get_ticks_msec() + reply_timeout_ms
 	while Time.get_ticks_msec() < deadline:
 		_peer.poll()
 		if _peer.get_status() != StreamPeerTCP.STATUS_CONNECTED:
@@ -245,6 +329,6 @@ func _ask(req: Dictionary) -> Dictionary:
 				return {}
 		else:
 			OS.delay_msec(2)
-	_last_error = "policy did not answer within %d s" % (REPLY_TIMEOUT_MS / 1000)
+	_last_error = "policy did not answer within %d s" % (reply_timeout_ms / 1000)
 	_peer = null
 	return {}

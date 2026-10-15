@@ -213,13 +213,40 @@ def load_compat(net: "PolicyNet", sd: dict, opt: torch.optim.Optimizer | None = 
 
 
 class OnnxWrapper(nn.Module):
-    """Export shape: one state, N candidates -> (logits[N], value[]). Both heads (5.2)."""
+    """One state, N candidates -> (logits[N], value[]), including rollout precision."""
 
     def __init__(self, net: PolicyNet):
         super().__init__()
         self.net = net
 
     def forward(self, grid, flat, cand, cells):
+        # train.encode()/choose() round these two arrays through Sparse's float16
+        # storage even at serving time. Preserve that learned input contract in
+        # the graph; the native encoder itself still matches features.py float32.
+        grid = grid.to(torch.float16).to(torch.float32)
+        cand = cand.to(torch.float16).to(torch.float32)
+        # Keep the spatial bucket dynamic in ONNX. Tracing PolicyNet.embed directly
+        # freezes its Python size branch and adaptive pooling at the 64-cell example.
+        # Every supported bucket (including the 96-cell cap) is divisible by four,
+        # so reshape + mean is exactly AdaptiveAvgPool2d(4), with dynamic dimensions.
+        if torch.onnx.is_in_onnx_export():
+            shape = torch._shape_as_tensor(grid)
+            height = shape[-2].clamp(max=SPATIAL_LIMIT)
+            width = shape[-1].clamp(max=SPATIAL_LIMIT)
+            fm = self.net.conv(F.interpolate(grid, size=(height, width),
+                                             mode="bilinear", align_corners=False))
+            for block in self.net.res:
+                fm = F.relu(fm + block(fm))
+            pooled = fm.reshape(1, self.net.fmap, 4, height // 4, 4, width // 4).mean((3, 5)).flatten(1)
+            state = self.net.state(torch.cat([pooled, self.net.flat(flat)], dim=1))
+            valid = cells >= 0
+            safe = cells.clamp(min=0)
+            x = (safe % shape[-1]) * width // shape[-1]
+            y = (safe // shape[-1]) * height // shape[-2]
+            mapped = (y * width + x).masked_fill(~valid, -1)
+            mask = torch.ones(cand.shape[:2], dtype=torch.bool, device=cand.device)
+            logits = self.net.scores(fm, state, cand, mapped, mask)
+            return logits[0], self.net.value(state)[0, 0]
         mask = torch.ones(cand.shape[:2], dtype=torch.bool, device=cand.device)
         logits, value = self.net(grid, flat, cand, cells, mask)
         return logits[0], value[0]

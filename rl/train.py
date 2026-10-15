@@ -2396,8 +2396,27 @@ def cmd_export(a):
     cells = torch.zeros(1, 8, 2, dtype=torch.int64)
     torch.onnx.export(OnnxWrapper(net), (grid, flat, cand, cells), a.out, opset_version=17,
                       input_names=["grid", "flat", "cand", "cells"], output_names=["logits", "value"],
-                      dynamic_axes={"cand": {1: "n"}, "cells": {1: "n"}, "logits": {0: "n"}},
+                      dynamic_axes={"grid": {2: "height", 3: "width"},
+                                    "cand": {1: "n"}, "cells": {1: "n"}, "logits": {0: "n"}},
                       dynamo=False)
+    # The game needs the checkpoint's observation/action budgets as well as its weights.
+    import hashlib
+    import onnx
+    cfg = with_defaults(ck.get("cfg", {}))
+    branch = os.path.basename(os.path.dirname(os.path.abspath(a.checkpoint)))
+    label = (f"{branch} · update {ck.get('update', '?')} · "
+             f"step {int(ck.get('global_step') or 0):,}")
+    model = onnx.load(a.out)
+    onnx.helper.set_model_props(model, {
+        "mcf.label": label, "mcf.feature_version": "99:28:122",
+        "mcf.encoding": "sparse-fp16",
+        "mcf.round_cap": str(cfg["round_cap"]),
+        "mcf.max_actors": str(cfg["max_actors"]),
+        "mcf.max_candidates": str(cfg["max_candidates"]),
+        "mcf.checkpoint_sha256": hashlib.sha256(Path(a.checkpoint).read_bytes()).hexdigest(),
+    })
+    onnx.checker.check_model(model)
+    onnx.save(model, a.out)
     print(f"[export] {a.out} ({os.path.getsize(a.out)} bytes) — policy logits + value head")
 
 
@@ -2524,6 +2543,7 @@ def cmd_play(a):
         # trained on, so the checkpoint's own caps travel with it into the game — and so
         # does round_cap, which the observation normalises the round number by.
         env = dict(os.environ, MCF_RL_POLICY=f"127.0.0.1:{port}",
+                   MCF_RL_BACKEND="socket",
                    MCF_RL_MAX_ACTORS=str(cfg["max_actors"]),
                    MCF_RL_MAX_CANDIDATES=str(cfg["max_candidates"]),
                    MCF_RL_ROUND_CAP=str(cfg["round_cap"]),

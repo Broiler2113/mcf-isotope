@@ -15,6 +15,7 @@ rl/model.py                       CNN + candidate scorer + value head           
 rl/train.py                       PPO, checkpoints, resume/fork, TensorBoard, eval, replays   (§6, §8, §9, §10)
 rl/dashboard.py                   rlm.mindcontrolfactor.com — stats, controls, spreadsheet    (§11)
 rl/policy_server.py               serves a checkpoint to the running game                     (§7, 10.4)
+native/policy/                    native feature encoder, ONNX runtime, desktop build/export  (§12, Tier 2)
 src/controllers/LearnedController.gd  "AI - Learned" lobby slot; falls back to AI - Hard      (§7, §12)
 rl/tools/make_pool.gd             exports the test arena as the first pool map                (§8.2.2)
 rl/tools/make_town_map.py         maps/town.json + both armies -> rl/maps/town_50x50.json     (§8.2.2)
@@ -703,12 +704,17 @@ civilians on load.
 - oneDNN is disabled on CPU (`rl/torch_compat.py`) — its conv kernel SIGFPEs on the VPS's
   EPYC. `MCF_RL_MKLDNN=1` re-enables it.
 
+## In-game ONNX inference (Tier 2)
+
+The native `MCFPolicy` extension now encodes observations and runs the bundled
+checkpoint without Python or a second process. It preserves socket/HARD fallback,
+checkpoint labels and observation budgets. Build, override, parity and desktop
+release instructions: [native/policy/README.md](../native/policy/README.md).
+`MCF_RL_MODEL` selects a local `.onnx`; `MCF_RL_BACKEND=socket` selects the training
+server (`train.py play` sets this automatically).
+
 ## Not in this pass
 
-- In-game ONNX inference (§12, Tier 2). `train.py export` produces the model with both
-  heads; `LearnedController` talks to `policy_server.py` for now, and the onnxruntime
-  GDExtension build against 4.7 is still the gating item. A missing model falls back to
-  AI - Hard with a combat-log message, as specified.
 - Search, neutral RL. The dashboard (§11) is in; not in it: pausing a branch while you play
   it (§11.6 — the run keeps training), folding a live match back into training, the
   come-from-behind outstanding rule (needs a per-turn diff trace the eval doesn't record).

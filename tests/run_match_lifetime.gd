@@ -11,6 +11,7 @@ func ck(ok: bool, message: String) -> void:
 		fails.append(message)
 
 func _initialize() -> void:
+	OS.set_environment(LearnedController.ENV_BACKEND, "socket")
 	GameConfig.civilians_enabled = false
 	GameConfig.random_events_enabled = false
 	OS.set_environment(LearnedController.ENV_VAR, "")

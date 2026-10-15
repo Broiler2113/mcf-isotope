@@ -51,6 +51,11 @@ const PAGE_MULTI := 1
 const PAGE_FILES := 2
 
 func _ready() -> void:
+	# Release templates disable --script/path overrides. This explicit diagnostic
+	# exercises the shipped pack and native libraries without starting a UI session.
+	if OS.get_cmdline_user_args().has("--native-policy-smoke"):
+		get_tree().change_scene_to_file.call_deferred("res://native/policy/export_smoke.tscn")
+		return
 	# Пока игрок в меню, компилируем бой в фоновом потоке: скрипты игры (резолвер, ИИ,
 	# экран боя) — это почти секунда компиляции при каждом запуске из исходников, и
 	# платить её на щелчке «New Game» незачем. Дальнейший load() той же сцены просто

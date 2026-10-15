@@ -1,0 +1,13 @@
+{
+  "godot_cpp_commit": "e83fd0904c13356ed1d4c3d09f8bb9132bdc6b77",
+  "godot_cpp_tag": "godot-4.5-stable",
+  "json_version": "3.11.3",
+  "json_sha256": "9bea4c8066ef4a1c206b2be5a36302f8926f7fdc6087af5d20b417d0cf103ea6",
+  "ort_version": "1.22.0",
+  "ort": {
+    "linux-x86_64": {"archive": "onnxruntime-linux-x64-1.22.0.tgz", "sha256": "8344d55f93d5bc5021ce342db50f62079daf39aaafb5d311a451846228be49b3"},
+    "windows-x86_64": {"archive": "onnxruntime-win-x64-1.22.0.zip", "sha256": "174c616efc0271194488642a72f1a514e01487da4dfe84c49296d66e40ebe0da"},
+    "macos-arm64": {"archive": "onnxruntime-osx-arm64-1.22.0.tgz", "sha256": "cab6dcbd77e7ec775390e7b73a8939d45fec3379b017c7cb74f5b204c1a1cc07"},
+    "macos-x86_64": {"archive": "onnxruntime-osx-x86_64-1.22.0.tgz", "sha256": "e4ec94a7696de74fb1b12846569aa94e499958af6ffa186022cfde16c9d617f0"}
+  }
+}

@@ -84,6 +84,7 @@ func _record() -> Dictionary:
 	return rec.to_dict()
 
 func _initialize() -> void:
+	OS.set_environment(LearnedController.ENV_BACKEND, "socket")
 	var data := _record()
 	ck(int(data["steps"].size()) > 10, "the test match recorded something to chew on (%d steps)"
 			% data["steps"].size())
