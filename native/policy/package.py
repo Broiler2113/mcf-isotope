@@ -50,8 +50,8 @@ binary_format/architecture="{arch}"
 application/export_angle=0
 '''
     if system == "Darwin":
-        preset += 'application/bundle_identifier="org.mcf.isotope"\ncodesign/codesign=0\n'
-    (stage / "export_presets.cfg").write_text(preset)
+        preset += 'application/bundle_identifier="org.mcf.isotope"\ncodesign/codesign=1\n'
+    (stage / "export_presets.cfg").write_text(preset, encoding="utf-8")
     game_dir = output / native_target
     game_dir.mkdir(exist_ok=True)
     name = "MCF-Isotope" + {"Linux": ".x86_64", "Windows": ".exe", "Darwin": ".zip"}[system]
@@ -62,11 +62,11 @@ application/export_angle=0
     shutil.copytree(binaries / "licenses", game_dir / "licenses", dirs_exist_ok=True)
     executable = game_dir / name
     if system == "Darwin":
-        smoke = output / "macos-smoke"
         with zipfile.ZipFile(executable) as z:
             exe_name = next(n for n in z.namelist() if "/Contents/MacOS/" in n and not n.endswith("/"))
-            z.extractall(smoke)
-        executable = smoke / exe_name
+            z.extractall(game_dir)
+        executable.unlink()
+        executable = game_dir / exe_name
         executable.chmod(0o755)
     subprocess.run([str(executable), "--headless", "--", "--native-policy-smoke"],
                    check=True, timeout=90)

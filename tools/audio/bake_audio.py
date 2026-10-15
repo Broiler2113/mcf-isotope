@@ -85,21 +85,21 @@ def catalog_script(catalog):
 
 
 def check(catalog):
-    registry = (ROOT / "src/sim/RandomEvents.gd").read_text()
+    registry = (ROOT / "src/sim/RandomEvents.gd").read_text(encoding="utf-8")
     constants = dict(re.findall(r'const (\w+) := "([a-z_]+)"', registry))
     registry_block = registry.split("const REGISTRY :=", 1)[1].split("\n]", 1)[0]
     required = {constants[key] + "_" + phase for key in re.findall(r'\[(\w+), "', registry_block)
                 for phase in ("warn", "land")}
-    letters = re.search(r'const PLAYER_LETTERS := "([A-Z]+)"', (ROOT / "src/sim/MCF.gd").read_text()).group(1)
+    letters = re.search(r'const PLAYER_LETTERS := "([A-Z]+)"', (ROOT / "src/sim/MCF.gd").read_text(encoding="utf-8")).group(1)
     required |= {"turn_" + letter for letter in letters}
     required |= {"victory", "defeat", "draw", "fallback", "wave_warn", "wave_land",
                  "zone_contested", "zone_secured", "join", "leave"}
     if required - dict(catalog["voice"]).keys():
         raise RuntimeError("missing required SAM lines: " + str(sorted(required - dict(catalog["voice"]).keys())))
-    manifest = json.loads((AUDIO / "manifest.json").read_text())
+    manifest = json.loads((AUDIO / "manifest.json").read_text(encoding="utf-8"))
     if manifest["catalog_sha256"] != hashlib.sha256((AUDIO / "catalog.json").read_bytes()).hexdigest():
         raise RuntimeError("audio catalog changed; rerun the offline bake")
-    if (ROOT / "src/audio/AudioCatalog.gd").read_text() != catalog_script(catalog):
+    if (ROOT / "src/audio/AudioCatalog.gd").read_text(encoding="utf-8") != catalog_script(catalog):
         raise RuntimeError("generated audio catalog is stale")
     for group, entries in (("sfx", catalog["sfx"]), ("voice", dict(catalog["voice"]))):
         for name in entries:
@@ -122,7 +122,7 @@ def main():
     p.add_argument("--sam", type=Path)
     p.add_argument("--fetch-sam", action="store_true")
     a = p.parse_args()
-    catalog = json.loads((AUDIO / "catalog.json").read_text())
+    catalog = json.loads((AUDIO / "catalog.json").read_text(encoding="utf-8"))
     if a.check:
         check(catalog)
         return
@@ -140,7 +140,7 @@ def main():
         p.error("pass --sam or --fetch-sam to bake voice lines")
     previous = {}
     if (AUDIO / "manifest.json").exists():
-        previous = json.loads((AUDIO / "manifest.json").read_text()).get("voice_inputs", {})
+        previous = json.loads((AUDIO / "manifest.json").read_text(encoding="utf-8")).get("voice_inputs", {})
     for name, spec in catalog["sfx"].items():
         write_wav(AUDIO / "sfx" / (name + ".wav"), samples(spec[0], spec[1], name))
     voice_inputs = {}
@@ -163,12 +163,12 @@ def main():
         write_wav(path, values)
     target = ROOT / "src/audio/AudioCatalog.gd"
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(catalog_script(catalog))
-    files = {str(path.relative_to(AUDIO)):hashlib.sha256(path.read_bytes()).hexdigest()
+    target.write_text(catalog_script(catalog), encoding="utf-8", newline="\n")
+    files = {path.relative_to(AUDIO).as_posix():hashlib.sha256(path.read_bytes()).hexdigest()
              for group in ("sfx", "voice") for path in sorted((AUDIO/group).glob("*.wav"))}
     (AUDIO / "manifest.json").write_text(json.dumps(dict(
         catalog_sha256=hashlib.sha256((AUDIO / "catalog.json").read_bytes()).hexdigest(),
-        sam_revision=SAM_REVISION, voice_inputs=voice_inputs, files=files), indent=2)+"\n")
+        sam_revision=SAM_REVISION, voice_inputs=voice_inputs, files=files), indent=2)+"\n", encoding="utf-8", newline="\n")
     check(catalog)
 
 

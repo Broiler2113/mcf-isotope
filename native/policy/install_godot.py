@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import platform
 import shutil
+import subprocess
 import urllib.request
 import zipfile
 
@@ -26,10 +27,18 @@ def main():
             with urllib.request.urlopen(base + name, timeout=120) as response, path.open("wb") as out:
                 shutil.copyfileobj(response, out)
         expected = next(line.split()[0] for line in sums.splitlines() if line.split()[-1].lstrip("*") == name)
-        if hashlib.sha512(path.read_bytes()).hexdigest() != expected:
+        with path.open("rb") as archive:
+            actual = hashlib.file_digest(archive, "sha512").hexdigest()
+        if actual != expected:
             raise RuntimeError("Godot archive checksum mismatch: " + name)
         with zipfile.ZipFile(path) as z:
-            z.extractall(cache)
+            if name.endswith(".tpz"):
+                for member in z.namelist():
+                    needed = {"Linux": "linux_", "Windows": "windows_", "Darwin": "macos.zip"}[system]
+                    if member == "templates/version.txt" or member.removeprefix("templates/").startswith(needed):
+                        z.extract(member, cache)
+            else:
+                z.extractall(cache)
     executable = (cache / "Godot.app/Contents/MacOS/Godot" if system == "Darwin" else
                   cache / f"Godot_v{VERSION}-stable_{'win64.exe' if system == 'Windows' else 'linux.x86_64'}")
     executable.chmod(0o755)
@@ -48,9 +57,17 @@ def main():
             template.chmod(0o755)
     bin_dir = cache / "bin"
     bin_dir.mkdir(exist_ok=True)
-    shutil.copy2(executable, bin_dir / ("godot.exe" if system == "Windows" else "godot"))
+    if system == "Darwin":
+        # Keep the editor in its signed app bundle. Copying just its Mach-O out
+        # of the bundle can be rejected by macOS before main() is reached.
+        subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(cache / "Godot.app")], check=True)
+        launcher = bin_dir / "godot"
+        launcher.write_text('#!/bin/sh\nexec "' + str(executable) + '" "$@"\n', encoding="utf-8")
+        launcher.chmod(0o755)
+    else:
+        shutil.copy2(executable, bin_dir / ("godot.exe" if system == "Windows" else "godot"))
     if os.environ.get("GITHUB_PATH"):
-        with open(os.environ["GITHUB_PATH"], "a") as out:
+        with open(os.environ["GITHUB_PATH"], "a", encoding="utf-8") as out:
             out.write(str(bin_dir) + "\n")
     print(bin_dir)
 

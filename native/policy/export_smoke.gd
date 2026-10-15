@@ -1,6 +1,7 @@
 extends Node
 ## Diagnostic scene selected by --native-policy-smoke in release executables.
 func _ready() -> void:
+	print("export smoke: version " + str(ProjectSettings.get_setting("application/config/version", "")))
 	for id: String in GameAudio.Catalog.SFX:
 		if GameAudio.stream(id) == null:
 			get_tree().quit(1)

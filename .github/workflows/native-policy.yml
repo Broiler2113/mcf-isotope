@@ -7,6 +7,8 @@ on:
     paths: ['native/policy/**', 'addons/mcf_policy/**', 'assets/policy/**', 'rl/features.py', 'rl/model.py', 'rl/train.py', 'rl/test_native_policy.py', 'src/controllers/LearnedController.gd', 'src/replay/MatchAnalyst.gd', 'scenes/**', 'audio/**', 'tools/audio/**', 'src/audio/**', 'src/fx/FxDecals.gd', 'src/ui/SettingsWindow.gd', 'project.godot', 'tests/run_audio.gd', 'tests/bench/run_audio_bench.gd', 'tests/*native_policy*', 'tests/record_policy_requests.gd', 'tests/bench/run_native_policy.gd', '.github/workflows/native-policy.yml']
 permissions:
   contents: read
+env:
+  PYTHONUTF8: '1'
 jobs:
   build:
     strategy:
@@ -42,7 +44,13 @@ jobs:
       - name: Verify sound timing, visibility, caps and saved audio settings
         run: godot --headless --path . --script res://tests/run_audio.gd
       - name: Install parity dependencies
-        run: python -m pip install numpy onnx onnxruntime torch
+        run: python -m pip install numpy onnx onnxruntime==1.22.0
+      - name: Install CPU PyTorch
+        if: runner.os != 'macOS'
+        run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Install macOS PyTorch
+        if: runner.os == 'macOS'
+        run: python -m pip install torch
       - name: Feature and inference parity on real observations
         shell: bash
         run: |
