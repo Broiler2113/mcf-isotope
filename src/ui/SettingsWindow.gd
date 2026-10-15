@@ -31,6 +31,7 @@ func _ready() -> void:
 	_build()
 
 func _build() -> void:
+	var previous_tab := _tabs.current_tab if is_instance_valid(_tabs) else 0
 	if _body != null:
 		_body.queue_free()
 	var root := Control.new()
@@ -212,6 +213,8 @@ func _build() -> void:
 		Ui.set_grid(grid_toggle.button_pressed, value / 100.0))
 
 	_build_keybinds(tabs)
+	_build_audio(tabs)
+	tabs.current_tab = mini(previous_tab, tabs.get_tab_count() - 1)
 
 	# --- Кнопки справа внизу, как у окна набора ---
 	var bottom := HBoxContainer.new()
@@ -222,6 +225,10 @@ func _build() -> void:
 	reset.text = "Defaults"
 	reset.custom_minimum_size = Vector2(100, 0)
 	reset.pressed.connect(func() -> void:
+		if tabs.current_tab == 2:
+			GameAudio.set_levels(0.8, 0.8, 0.7, false, true)
+			_build.call_deferred()
+			return
 		if tabs.current_tab == 1:
 			_capture_action = ""
 			_key_message.text = Keybinds.reset_defaults()
@@ -244,6 +251,51 @@ func _build() -> void:
 
 func _apply_scale() -> void:
 	Ui.set_ui_scale(_scale_slider.value / 100.0)
+
+func _build_audio(tabs: TabContainer) -> void:
+	var page := VBoxContainer.new()
+	page.name = "Audio"
+	page.add_theme_constant_override("separation", 16)
+	tabs.add_child(page)
+	var group := SteamChrome.group_box("Sound")
+	page.add_child(group)
+	for setting: String in ["master", "sfx", "voice"]:
+		var row := HBoxContainer.new()
+		group.body.add_child(row)
+		var label := Label.new()
+		label.text = {"master": "Master", "sfx": "Sound effects", "voice": "Voice (SAM)"}[setting]
+		label.custom_minimum_size.x = 130
+		row.add_child(label)
+		var slider := HSlider.new()
+		slider.name = "Audio_" + setting
+		slider.min_value = 0
+		slider.max_value = 100
+		slider.step = 1
+		slider.value = float(GameAudio.get(setting)) * 100
+		slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(slider)
+		var amount := Label.new()
+		amount.text = "%d%%" % slider.value
+		amount.custom_minimum_size.x = 42
+		row.add_child(amount)
+		slider.value_changed.connect(func(value: float) -> void:
+			amount.text = "%d%%" % value
+			GameAudio.set(setting, value / 100.0)
+			GameAudio.set_levels(GameAudio.master, GameAudio.sfx, GameAudio.voice, GameAudio.muted, GameAudio.turn_voice))
+	var mute := CheckBox.new()
+	mute.name = "Audio_mute"
+	mute.text = "Mute all audio"
+	mute.button_pressed = GameAudio.muted
+	mute.toggled.connect(func(on: bool) -> void:
+		GameAudio.set_levels(GameAudio.master, GameAudio.sfx, GameAudio.voice, on, GameAudio.turn_voice))
+	group.body.add_child(mute)
+	var turns := CheckBox.new()
+	turns.name = "Audio_turn_voice"
+	turns.text = "Announce player turns"
+	turns.button_pressed = GameAudio.turn_voice
+	turns.toggled.connect(func(on: bool) -> void:
+		GameAudio.set_levels(GameAudio.master, GameAudio.sfx, GameAudio.voice, GameAudio.muted, on))
+	group.body.add_child(turns)
 
 func _build_keybinds(tabs: TabContainer) -> void:
 	_key_buttons.clear()

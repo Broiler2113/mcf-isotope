@@ -1,0 +1,16 @@
+[configuration]
+entry_symbol = "mcf_policy_init"
+compatibility_minimum = "4.5"
+reloadable = false
+
+[libraries]
+linux.x86_64 = "bin/linux-x86_64/mcf_policy.so"
+windows.x86_64 = "bin/windows-x86_64/mcf_policy.dll"
+macos.arm64 = "bin/macos-arm64/mcf_policy.dylib"
+macos.x86_64 = "bin/macos-x86_64/mcf_policy.dylib"
+
+[dependencies]
+linux.x86_64 = { "bin/linux-x86_64/libonnxruntime.so.1": "" }
+windows.x86_64 = { "bin/windows-x86_64/onnxruntime.dll": "", "bin/windows-x86_64/msvcp140.dll": "", "bin/windows-x86_64/vcruntime140.dll": "", "bin/windows-x86_64/vcruntime140_1.dll": "" }
+macos.arm64 = { "bin/macos-arm64/libonnxruntime.1.22.0.dylib": "Contents/Frameworks" }
+macos.x86_64 = { "bin/macos-x86_64/libonnxruntime.1.22.0.dylib": "Contents/Frameworks" }

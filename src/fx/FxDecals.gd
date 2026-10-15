@@ -1,5 +1,13 @@
 class_name FxDecals
 extends RefCounted
+## Emitted only by the client cosmetic lifecycle; never serialized or recorded.
+signal sound_requested(id: String, cell: Vector2i, owner: int)
+signal sound_reset
+var audio_suppressed := false
+
+func _sound(id: String, cell: Vector2i, owner := -1) -> void:
+	if not audio_suppressed:
+		sound_requested.emit(id, cell, owner)
 
 # Invisible arena boundaries constrain units, never drifting particles in vacuum.
 static func solid_in(state: GameState, coord: Vector2i) -> bool:
@@ -280,6 +288,7 @@ static func _rng_for(kind: String, at: Vector2i, index: int,
 	return rng
 
 func clear() -> void:
+	sound_reset.emit()
 	floor_damage.clear()
 	damage_version += 1
 	props.clear()
@@ -316,6 +325,7 @@ func _shot(ev: Dictionary) -> void:
 	var b: Array = ev.get("to", [])
 	if a.size() < 2 or b.size() < 2:
 		return
+	_sound(str(ev.get("kind", "shell")) + "_launch", Vector2i(int(a[0]), int(a[1])))
 	shots.append({"kind": str(ev.get("kind", "shell")), "t": 0.0, "dur": shot_dur(ev),
 			"from": Vector2(float(a[0]) + 0.5, float(a[1]) + 0.5),
 			"to": Vector2(float(b[0]) + 0.5, float(b[1]) + 0.5)})
@@ -337,10 +347,10 @@ func apply_lanes(events: Array) -> void:
 	_apply(events, true)
 
 ## Разобрать список описаний из ActionResult.fx (дорожки — за apply_lanes()).
-func apply(events: Array) -> void:
-	_apply(events, false)
+func apply(events: Array, projectile_blast := false) -> void:
+	_apply(events, false, projectile_blast or events.any(func(e: Dictionary) -> bool: return e.get("fx") == "shot"))
 
-func _apply(events: Array, lanes_only: bool) -> void:
+func _apply(events: Array, lanes_only: bool, projectile_blast := false) -> void:
 	for ev: Dictionary in events:
 		_event_seq += 1
 		_seq = int(ev["seq"]) if ev.has("seq") else _event_seq
@@ -349,7 +359,7 @@ func _apply(events: Array, lanes_only: bool) -> void:
 			continue
 		match fx_kind:
 			"debris":
-				_debris(ev)
+				_debris(ev, projectile_blast)
 			"shards":
 				_shards(ev)
 			"chunks":
@@ -375,14 +385,20 @@ func _apply(events: Array, lanes_only: bool) -> void:
 			"shot":
 				_shot(ev)
 			"lane":
-				_lane(ev)
+				var burst := events.any(func(e: Dictionary) -> bool:
+					return e.get("fx") == "tracer" and e.get("from") == ev.get("from") and int(e.get("count", 1)) > 1)
+				_lane(ev, burst)
 
 ## Дорожка боя (issue 8): от стрелка к цели, в цвете стороны стрелка.
-func _lane(ev: Dictionary) -> void:
+func _lane(ev: Dictionary, burst := false) -> void:
 	var from_arr: Array = ev.get("from", [])
 	var to_arr: Array = ev.get("to", [])
 	if from_arr.size() < 2 or to_arr.size() < 2:
 		return
+	var kind := str(ev.get("kind", "shot"))
+	var sound := {"shot": "burst" if burst else "rifle", "beam": "laser", "flame": "flame"}
+	if sound.has(kind):
+		_sound(sound[kind], Vector2i(int(from_arr[0]), int(from_arr[1])), int(ev.get("owner", -1)))
 	lanes.append({
 		"from": Vector2(float(from_arr[0]) + 0.5, float(from_arr[1]) + 0.5),
 		"to": Vector2(float(to_arr[0]) + 0.5, float(to_arr[1]) + 0.5),
@@ -406,7 +422,7 @@ static func lane_alpha(lane: Dictionary) -> float:
 	return clampf(1.0 - (t - LANE_HOLD) / maxf(0.001, LANE_DUR - LANE_HOLD), 0.0, 1.0)
 
 ## 21.1 — пол под разрушенным объектом меняет текстуру, эпицентр сильнее прочих.
-func _debris(ev: Dictionary) -> void:
+func _debris(ev: Dictionary, projectile_blast := false) -> void:
 	var epicenter: Vector2i = ev.get("at", Vector2i.ZERO)
 	for c: Vector2i in ev.get("cells", []):
 		# В открытом космосе щебню не на чем лежать — там нет пола, который можно побить
@@ -422,6 +438,13 @@ func _debris(ev: Dictionary) -> void:
 	# щебень под гусеницей танка, под снесённой лучом стеной или под разбитым окном его не
 	# ставит — там ничего не рвалось.
 	if bool(ev.get("blast", false)):
+		# Projectiles own their arrival bang. Their flash adds no second explosion.
+		if not projectile_blast:
+			if epicenter.x >= 0:
+				_sound("explosion", epicenter)
+			else:
+				for c: Vector2i in ev.get("cells", []):
+					_sound("explosion", c)
 		_soot(ev)
 		var cells: Array[Vector2i] = []
 		for c: Vector2i in ev.get("cells", []):
@@ -455,6 +478,7 @@ func _soot(ev: Dictionary) -> void:
 ## 21.2 — осколки стекла: 2..5 штук, летят ПРОТИВ направления удара, у каждого свои
 ## скорость и вращение.
 func _shards(ev: Dictionary) -> void:
+	_sound("glass", ev.get("at", Vector2i(-1, -1)))
 	var at: Vector2i = ev.get("at", Vector2i.ZERO)
 	var from: Vector2i = ev.get("from", at)
 	var away := _away(at, from)
@@ -468,6 +492,7 @@ func _shards(ev: Dictionary) -> void:
 ## как стекло; ДОТ, потерявший прочность (toward), откалывается со стороны выстрела —
 ## куски летят к стрелку. Удар из своей же клетки — во все стороны.
 func _chunks(ev: Dictionary) -> void:
+	_sound("structure", ev.get("at", Vector2i(-1, -1)))
 	var at: Vector2i = ev.get("at", Vector2i.ZERO)
 	var from: Vector2i = ev.get("from", at)
 	var art := chunk_art(str(ev.get("fid", MCF.FEATURE_WALL)), int(ev.get("look", 0)), str(ev.get("env", "")))
@@ -526,6 +551,8 @@ func _sweep_props(ev: Dictionary) -> void:
 				0.6, 1.2, CASING_FLIGHT_SEC, 0.6, p["pos"], float(p["rot"]), float(p["scale"]))
 
 func _spill(ev: Dictionary) -> void:
+	if bool(ev.get("burst", false)):
+		_sound("structure", ev.get("at", Vector2i(-1, -1)))
 	var at: Vector2i = ev.get("at", Vector2i.ZERO)
 	var from: Vector2i = ev.get("from", at)
 	var kinds: Array = SmallItems.spill_contents(str(ev.get("fid", "")))
@@ -615,6 +642,7 @@ func _laser(ev: Dictionary) -> void:
 	var to_arr: Array = ev.get("to", [])
 	if from_arr.size() < 2 or to_arr.size() < 2:
 		return
+	_sound("laser_hit", Vector2i(int(to_arr[0]), int(to_arr[1])))
 	var a := Vector2(float(from_arr[0]) + 0.5, float(from_arr[1]) + 0.5)
 	var b := Vector2(float(to_arr[0]) + 0.5, float(to_arr[1]) + 0.5)
 	# Над космосом отметины нет: пола, на котором остаётся подпалина, там нет вовсе.
@@ -681,6 +709,7 @@ func _ground_runs(a: Vector2, b: Vector2) -> Array:
 
 ## 21.4 — лужа под трупом плюс веер брызг против направления убившего выстрела.
 func _blood(ev: Dictionary) -> void:
+	_sound("corpse", ev.get("at", Vector2i(-1, -1)))
 	var at: Vector2i = ev.get("at", Vector2i.ZERO)
 	var from: Vector2i = ev.get("from", at)
 	var blast: bool = bool(ev.get("blast", false))
@@ -729,6 +758,7 @@ func _blood(ev: Dictionary) -> void:
 func _burn(ev: Dictionary) -> void:
 	var hit := {}
 	for c: Vector2i in ev.get("cells", []):
+		_sound("flame", c)
 		hit[c] = true
 	if hit.is_empty():
 		return
@@ -862,12 +892,14 @@ func advance(delta: float) -> bool:
 		for i in range(shots.size() - 1, -1, -1):
 			shots[i]["t"] = float(shots[i]["t"]) + delta
 			if float(shots[i]["t"]) >= float(shots[i]["dur"]):
+				_sound("explosion", Vector2i(Vector2(shots[i]["to"]).floor()))
 				shots.remove_at(i)
 	var tracers_active := not tracers.is_empty() or shots_active
 	if tracers_active:
 		for i in range(tracers.size() - 1, -1, -1):
 			tracers[i]["t"] = float(tracers[i]["t"]) + delta
 			if float(tracers[i]["t"]) >= float(tracers[i]["dur"]):
+				_sound("bullet_hit", Vector2i(Vector2(tracers[i]["to"]).floor()))
 				tracers.remove_at(i)
 	if flying.is_empty():
 		return tracers_active or lanes_active or flashes_active
@@ -1020,6 +1052,7 @@ func capture_state() -> Dictionary:
 		"event_seq": _event_seq, "seq": _seq}
 
 func restore_state(snap: Dictionary) -> void:
+	sound_reset.emit()
 	floor_damage = snap["damage"].duplicate()
 	props = snap["props"].duplicate()
 	gore = snap["gore"].duplicate()

@@ -1,5 +1,11 @@
 # Regression harness
 
+`run_audio.gd` checks sound lifecycle timing, visibility, fixed voice pools, SAM
+assets, dice, Audio settings and replay cue order. `bench/run_audio_bench.gd`
+stress-tests real Giant-board AI combat. Offline catalog/build-gate tests are
+`python3 tools/audio/test_catalog.py`; asset-generation details are in
+[audio/README.md](../audio/README.md).
+
 Headless runs, no engine window (the lobby check builds its scene without
 rendering it), no assets required.
 

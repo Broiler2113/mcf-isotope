@@ -129,6 +129,7 @@ func _ready() -> void:
 		NetHandoff.session.disconnected.connect(_on_client_lost)
 		NetHandoff.session.attach()
 		_status.text = "Connected — waiting for the host's lobby…"
+		GameAudio.say("join", self)
 		# Просим хоста прислать лобби ещё раз (batch 14): снимок, ушедший до того, как
 		# гость открыл этот экран, мог потеряться при быстром переподключении, и гость
 		# сидел бы «в ожидании» вечно. Хост усадит нас (если ещё не усадил) и вышлет всё.
@@ -156,6 +157,8 @@ func _ready() -> void:
 func _on_host_peer_joined(id: int) -> void:
 	_seat_peer(id)
 	_refresh_host_status()
+	GameAudio.ui("ui_nav")
+	GameAudio.say("join", self)
 	_lobby_changed()
 	# Новому гостю нужна ещё и карта — снимок несёт только её имя.
 	_send_lobby_map()
@@ -163,6 +166,8 @@ func _on_host_peer_joined(id: int) -> void:
 ## Ушедшего гостя подменяет ИИ высокой сложности (batch 13 #2): партия остаётся
 ## готовой к старту, а его место — занятым. Хост волен переключить слот обратно.
 func _on_host_peer_left(id: int) -> void:
+	GameAudio.ui("ui_nav")
+	GameAudio.say("leave", self)
 	NetHandoff.spectators.erase(id)
 	if NetHandoff.session != null: NetHandoff.session.spectators.erase(id)
 	var side := roster.side_of_peer(id)
@@ -417,6 +422,8 @@ func _on_client_message(msg: Dictionary) -> void:
 func _on_client_lost() -> void:
 	if _status != null:
 		_status.text = "Connection lost — returning to the menu."
+		# The lobby is removed immediately; let this connection notice finish in the menu.
+		GameAudio.say("leave", get_tree().root, 60)
 	NetHandoff.discard()
 	get_tree().change_scene_to_file(MENU_SCENE)
 

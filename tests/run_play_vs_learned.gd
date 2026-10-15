@@ -15,6 +15,7 @@ var _lobby: Node = null
 var _phase := 0
 
 func _initialize() -> void:
+	OS.set_environment(LearnedController.ENV_BACKEND, "socket")
 	OS.set_environment(LearnedController.ENV_VAR, "127.0.0.1:7791")
 	OS.set_environment(LearnedController.ENV_LABEL, LABEL)
 	_open()

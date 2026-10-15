@@ -1,0 +1,366 @@
+{
+  "sfx": {
+    "ui_click": [
+      "click",
+      0.055
+    ],
+    "ui_nav": [
+      "click",
+      0.09
+    ],
+    "ui_end": [
+      "metal",
+      0.14
+    ],
+    "dice_roll": [
+      "dice",
+      0.45
+    ],
+    "dice_land": [
+      "dice",
+      0.13
+    ],
+    "rifle": [
+      "shot",
+      0.19
+    ],
+    "burst": [
+      "burst",
+      0.36
+    ],
+    "laser": [
+      "laser",
+      0.25
+    ],
+    "laser_hit": [
+      "metal",
+      0.12
+    ],
+    "flame": [
+      "hiss",
+      0.65
+    ],
+    "rocket_launch": [
+      "whistle",
+      0.44
+    ],
+    "shell_launch": [
+      "shot",
+      0.25
+    ],
+    "grenade_launch": [
+      "metal",
+      0.2
+    ],
+    "bullet_hit": [
+      "metal",
+      0.18
+    ],
+    "explosion": [
+      "boom",
+      0.85
+    ],
+    "glass": [
+      "glass",
+      0.45
+    ],
+    "structure": [
+      "boom",
+      0.35
+    ],
+    "corpse": [
+      "metal",
+      0.2
+    ],
+    "build": [
+      "metal",
+      0.28
+    ],
+    "weld": [
+      "hiss",
+      0.45
+    ],
+    "mine_lay": [
+      "metal",
+      0.2
+    ],
+    "mine_disarm": [
+      "click",
+      0.2
+    ],
+    "vehicle_move": [
+      "engine",
+      1.0
+    ],
+    "vehicle_hull": [
+      "boom",
+      0.9
+    ],
+    "vehicle_tracks": [
+      "metal",
+      0.6
+    ],
+    "vehicle_tower": [
+      "metal",
+      0.7
+    ],
+    "vehicle_gun": [
+      "metal",
+      0.4
+    ],
+    "event_warn": [
+      "whistle",
+      0.45
+    ],
+    "event_land": [
+      "metal",
+      0.4
+    ],
+    "turn": [
+      "click",
+      0.14
+    ],
+    "victory": [
+      "victory",
+      0.5
+    ],
+    "defeat": [
+      "boom",
+      0.5
+    ],
+    "draw": [
+      "metal",
+      0.5
+    ],
+    "ambience": [
+      "ambient",
+      5.0
+    ]
+  },
+  "voice": [
+    [
+      "mortar_warn",
+      "Warning. Artillery barrage inbound."
+    ],
+    [
+      "mortar_land",
+      "Barrage impact."
+    ],
+    [
+      "gas_warn",
+      "Warning. Gas cloud incoming."
+    ],
+    [
+      "gas_land",
+      "Gas cloud deployed."
+    ],
+    [
+      "army_warn",
+      "Warning. Independent army approaching."
+    ],
+    [
+      "army_land",
+      "Independent army has arrived."
+    ],
+    [
+      "fire_warn",
+      "Warning. Fire outbreak imminent."
+    ],
+    [
+      "fire_land",
+      "Fire outbreak confirmed."
+    ],
+    [
+      "emp_warn",
+      "Warning. E M P burst incoming."
+    ],
+    [
+      "emp_land",
+      "E M P burst discharged."
+    ],
+    [
+      "dust_warn",
+      "Warning. Dust storm approaching."
+    ],
+    [
+      "dust_land",
+      "Dust storm has arrived."
+    ],
+    [
+      "collapse_warn",
+      "Warning. Structural collapse imminent."
+    ],
+    [
+      "collapse_land",
+      "Structural collapse confirmed."
+    ],
+    [
+      "reinforce_warn",
+      "Reinforcements incoming."
+    ],
+    [
+      "reinforce_land",
+      "Reinforcements have arrived."
+    ],
+    [
+      "bounty_warn",
+      "Attention. Bounty target designated."
+    ],
+    [
+      "bounty_land",
+      "Bounty protocol active."
+    ],
+    [
+      "minefield_warn",
+      "Warning. Old minefield reported."
+    ],
+    [
+      "minefield_land",
+      "Old minefield confirmed."
+    ],
+    [
+      "turn_A",
+      "Player A. Your move."
+    ],
+    [
+      "turn_B",
+      "Player B. Your move."
+    ],
+    [
+      "turn_C",
+      "Player C. Your move."
+    ],
+    [
+      "turn_D",
+      "Player D. Your move."
+    ],
+    [
+      "turn_E",
+      "Player E. Your move."
+    ],
+    [
+      "turn_F",
+      "Player F. Your move."
+    ],
+    [
+      "turn_G",
+      "Player G. Your move."
+    ],
+    [
+      "turn_H",
+      "Player H. Your move."
+    ],
+    [
+      "turn_I",
+      "Player I. Your move."
+    ],
+    [
+      "turn_J",
+      "Player J. Your move."
+    ],
+    [
+      "turn_K",
+      "Player K. Your move."
+    ],
+    [
+      "turn_L",
+      "Player L. Your move."
+    ],
+    [
+      "turn_M",
+      "Player M. Your move."
+    ],
+    [
+      "turn_N",
+      "Player N. Your move."
+    ],
+    [
+      "turn_O",
+      "Player O. Your move."
+    ],
+    [
+      "turn_P",
+      "Player P. Your move."
+    ],
+    [
+      "turn_Q",
+      "Player Q. Your move."
+    ],
+    [
+      "turn_R",
+      "Player R. Your move."
+    ],
+    [
+      "turn_S",
+      "Player S. Your move."
+    ],
+    [
+      "turn_T",
+      "Player T. Your move."
+    ],
+    [
+      "turn_U",
+      "Player U. Your move."
+    ],
+    [
+      "turn_V",
+      "Player V. Your move."
+    ],
+    [
+      "turn_W",
+      "Player W. Your move."
+    ],
+    [
+      "turn_X",
+      "Player X. Your move."
+    ],
+    [
+      "turn_Y",
+      "Player Y. Your move."
+    ],
+    [
+      "turn_Z",
+      "Player Z. Your move."
+    ],
+    [
+      "victory",
+      "Victory. Objective complete."
+    ],
+    [
+      "defeat",
+      "Defeat. Protocol terminated."
+    ],
+    [
+      "draw",
+      "Draw. No victor remains."
+    ],
+    [
+      "fallback",
+      "Switching to standard protocol."
+    ],
+    [
+      "wave_warn",
+      "Warning. Enemy wave incoming."
+    ],
+    [
+      "wave_land",
+      "Enemy wave has arrived."
+    ],
+    [
+      "zone_contested",
+      "Zone contested."
+    ],
+    [
+      "zone_secured",
+      "Zone secured."
+    ],
+    [
+      "join",
+      "Player connected."
+    ],
+    [
+      "leave",
+      "Player disconnected."
+    ]
+  ]
+}

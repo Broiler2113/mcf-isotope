@@ -534,6 +534,8 @@ var _corpse_cells: Array = []
 ## и рисует их поверх доски. Пустой слой не стоит ничего — все проходы по нему
 ## начинаются с проверки на пустоту.
 var _fx := FxDecals.new()
+var _audio: BattleAudio
+var _audio_victory_played := false
 var _annotations: Node2D
 var _net_request_pending := false
 var _net_messages: Array[Dictionary] = []
@@ -613,6 +615,16 @@ func _ready() -> void:
 	# Частицы останавливаются о стены (item 7), а не «проваливаются» в них.
 	_fx.solid_at = func(c: Vector2i) -> bool: return FxDecals.solid_in(state, c)
 	_fx.space_at = func(c: Vector2i) -> bool: return FxDecals.space_in(state, c)
+	_audio = BattleAudio.new()
+	_audio.origin = ORIGIN
+	_audio.cell_size = CELL
+	_audio.cell_visible = _audio_cell_visible
+	_audio.own_cell = _audio_own_cell
+	_audio.viewer = _viewing_side
+	add_child(_audio)
+	_fx.sound_requested.connect(_audio.cue)
+	_fx.sound_reset.connect(_audio.reset)
+	_sync_camera_layers()
 	# У записи нет игроков: смотреть — не играть, поэтому контроллеров не заводим
 	# вовсе. Ровно это и делает просмотр безопасным: подать намерение некому.
 	if replay == null and not _spectator:
@@ -718,6 +730,8 @@ func _sync_lighting() -> void:
 			-1.0, state.time_of_day)
 
 func _process(delta: float) -> void:
+	if _audio != null:
+		_audio.suppress = replay != null and _replay_skip_animations
 	_advance_group_preview()
 	_update_screen_shake()
 	# Не двигаем камеру, пока игрок печатает в текстовом поле (например, IP хоста).
@@ -1043,6 +1057,7 @@ func _adopt_replay() -> bool:
 ## есть подменяет и GameState, и резолвер — значит всё, что на них подписано, надо
 ## перевесить, а накопленную косметику сбросить: она относилась к прежней доске.
 func _take_replay_state() -> void:
+	_fx.audio_suppressed = true
 	if state != null and state.log.line_added.is_connected(_on_log_line):
 		state.log.line_added.disconnect(_on_log_line)
 	state = replay.state
@@ -1059,6 +1074,11 @@ func _take_replay_state() -> void:
 		_fx.from_dict(replay.seek_decals)
 		_fx.apply(replay.seek_fx)
 		_fx.advance(10.0)
+	_fx.audio_suppressed = false
+	if _audio != null:
+		_audio.reset()
+		_audio.turn_key_from_state(state)
+	_audio_victory_played = bool(resolver.match_outcome().get("over", false))
 	selected_id = -1
 	selected_vehicle_id = -1
 	mode = Mode.NONE
@@ -1092,6 +1112,12 @@ func _show_result(result: ActionResult) -> void:
 	if _result_is_audible(result):
 		state.log.publish_result(result)
 	_refresh_status()
+	if replay != null and not _audio_victory_played:
+		var outcome := resolver.match_outcome()
+		if bool(outcome.get("over", false)):
+			# A local caption, not a new recorded log/state mutation; replay stays seekable.
+			_on_log_line("— %s —" % _outcome_title(outcome))
+			_play_victory_audio()
 	queue_redraw()
 
 func _replay_step() -> void:
@@ -3599,6 +3625,7 @@ func _toast_analysis(text: String) -> void:
 	state.log.add(text)
 
 func _show_victory(title: String) -> void:
+	_play_victory_audio()
 	# Бой кончился — секундомер стола встаёт здесь и дальше не бежит.
 	if _real_stop_ms < 0:
 		_real_stop_ms = Time.get_ticks_msec()
@@ -4244,6 +4271,12 @@ func _veh_riders(veh: Vehicle) -> Array[UnitInstance]:
 	return out
 
 func _play_veh_walk(ev: Dictionary) -> void:
+	var engine: AudioStreamPlayer2D = null
+	var engine_generation := -1
+	if _audio != null:
+		var moving := state.get_vehicle(int(ev["vehicle"]))
+		engine = _audio.cue("vehicle_move", ev["from"], moving.owner if moving != null else -1)
+		if engine != null: engine_generation = int(engine.get_meta("audio_generation", 0))
 	var steps := maxi(1, int(ev.get("steps", 1)))
 	var dur_ms := SOLDIER_WALK_STEP_DELAY * steps / _pace() * 1000.0
 	var t0 := Time.get_ticks_msec()
@@ -4254,6 +4287,11 @@ func _play_veh_walk(ev: Dictionary) -> void:
 			break
 		var k := minf(1.0, float(Time.get_ticks_msec() - t0) / maxf(1.0, dur_ms))
 		_set_veh_offset(ev, 1.0 - k)
+		var moving := state.get_vehicle(int(ev["vehicle"]))
+		if _audio != null and moving != null:
+			var audio_cell := Vector2i(Vector2(ev["from"]).lerp(Vector2(moving.origin), k).floor())
+			engine = _audio.vehicle_at(engine, engine_generation, audio_cell, moving.owner)
+			if engine != null: engine_generation = int(engine.get_meta("audio_generation", 0))
 		var reached := mini(steps, floori(k * steps + 0.5))
 		while shown_step < reached:
 			shown_step += 1
@@ -4269,6 +4307,8 @@ func _play_veh_walk(ev: Dictionary) -> void:
 		_veh_offset.erase(veh.id)
 		for u: UnitInstance in _veh_riders(veh):
 			_walk_offset.erase(u.id)
+	if _audio != null:
+		_audio.stop_player(engine, engine_generation)
 	queue_redraw()
 
 ## Проиграть один пеший переход по клеткам (#96). Юнит УЖЕ стоит в конце маршрута —
@@ -6872,7 +6912,9 @@ func _show_effects(result: ActionResult) -> void:
 	_hold_visual = {}
 	var rest := result.fx.filter(func(e: Dictionary) -> bool: return not e.has("_shown"))
 	if not rest.is_empty():
-		_fx.apply(rest)
+		_fx.apply(rest, result.fx.any(func(e: Dictionary) -> bool: return e.get("fx") == "shot"))
+	if _audio != null:
+		_audio.action_result(result, state)
 	queue_redraw()
 
 ## Пули и снаряды летят, а жертвы держатся живыми, пока их не настигнет попадание: трассер
@@ -6921,6 +6963,8 @@ func _play_shots(result: ActionResult) -> void:
 		queue_redraw()
 
 func _land_shot(result: ActionResult, cell: Vector2i, blast: bool) -> void:
+	if _audio != null and blast:
+		_audio.component_damage(result, state)
 	var hit: Array = []
 	for ev: Dictionary in result.fx:
 		if ev.has("_shown") or str(ev.get("fx", "")) == "lane":
@@ -6930,7 +6974,7 @@ func _land_shot(result: ActionResult, cell: Vector2i, blast: bool) -> void:
 			ev["_shown"] = true
 			hit.append(ev)
 	if not hit.is_empty():
-		_fx.apply(hit)
+		_fx.apply(hit, blast)
 	if blast:
 		_pending_death_ids.clear()
 		_hold_visual = {}
@@ -9344,6 +9388,7 @@ func _to_menu() -> void:
 	get_tree().change_scene_to_file("res://scenes/MainMenu.tscn")
 
 func _on_end_turn_pressed() -> void:
+	GameAudio.ui("ui_end")
 	if _animating or _match_over:
 		return
 	_deselect()
@@ -9370,6 +9415,9 @@ func _on_redo_pressed() -> void:
 
 ## Доска переставлена откатом/повтором внутри резолвера — привести к ней экран.
 func _resync_after_restore() -> void:
+	if _audio != null:
+		_audio.reset()
+		_audio.turn_key_from_state(state)
 	# Resolver restores the matching cosmetic checkpoint; earlier battle debris remains.
 	_walk_jobs.clear()
 	_walks_running = 0
@@ -9460,6 +9508,8 @@ func _refresh_status() -> void:
 	if _status_label != null:
 		_status_label.text = "Turn: %s   |   Round: %d" % [
 			_side_label(_turn_now()), state.turns.round_number]
+		if _audio != null and not _match_over and not _audio_victory_played:
+			_audio.turn(state.turns.round_number, state.turns.active_index, _turn_now())
 		# Пыльная буря (0.12) — на виду, пока дует: она меняет каждый дальний выстрел.
 		if resolver != null and resolver.random_events != null and resolver.random_events.dust_left > 0:
 			_status_label.text += "   |   Dust storm: %d round(s)" % resolver.random_events.dust_left
@@ -9559,6 +9609,32 @@ func _result_is_audible(res: ActionResult) -> bool:
 func _on_log_line(text: String) -> void:
 	if _log_label != null:
 		_log_label.append_text(text + "\n")
+		if _audio != null:
+			_audio.message(text)
+
+func _play_victory_audio() -> void:
+	if _audio == null or _audio_victory_played:
+		return
+	_audio_victory_played = true
+	var outcome := resolver.match_outcome()
+	var winner := str(outcome.get("winner", ""))
+	var key := "draw" if winner == "" else ("victory" if winner == MatchMode.team_key(state.roster, _viewing_side()) else "defeat")
+	GameAudio.ui(key)
+	GameAudio.say(key, _audio, 100)
+
+func _audio_cell_visible(cell: Vector2i) -> bool:
+	if state == null or not state.grid.in_bounds(cell):
+		return false
+	return not _view_resolver().visibility_limited() or _visible_before_impact(_viewing_side()).has(cell)
+
+func _audio_own_cell(cell: Vector2i) -> bool:
+	if state == null or not state.grid.in_bounds(cell):
+		return false
+	var at := state.grid.cell(cell)
+	var own := _viewing_side()
+	return (at.occupant != null and state.roster.are_allies(at.occupant.owner, own)) \
+		or (at.vehicle_id >= 0 and state.get_vehicle(at.vehicle_id) != null \
+			and state.roster.are_allies(state.get_vehicle(at.vehicle_id).owner, own))
 
 ## Цвет подписи поверх заливки: на светлой (белая сторона) — чёрный, иначе белый.
 static func _ink(bg: Color) -> Color:
@@ -9614,7 +9690,7 @@ func _draw_heights(font: Font, visible: Dictionary, fog_on: bool, x0: int, y0: i
 					cell.cover_height >= MCF.WALL_HEIGHT and not Furniture.is_furniture(cell.feature_id))
 
 func _sync_camera_layers() -> void:
-	for layer in [_lod, _before_layer]:
+	for layer in [_lod, _before_layer, _audio]:
 		if layer != null:
 			layer.position = pan
 			layer.scale = Vector2(zoom, zoom)

@@ -196,7 +196,7 @@ class ArmyEventTests(unittest.TestCase):
                             time.sleep(.05)
                     game = subprocess.run(["godot", "--headless", "--path", PROJECT,
                                            "--script", "res://tests/run_learned_large_army.gd"],
-                        env=dict(os.environ, MCF_RL_POLICY=f"127.0.0.1:{port}",
+                        env=dict(os.environ, MCF_RL_POLICY=f"127.0.0.1:{port}", MCF_RL_BACKEND="socket",
                                  MCF_RL_MAX_ACTORS="16", MCF_RL_MAX_CANDIDATES="512"),
                         capture_output=True, text=True, timeout=180)
                     self.assertEqual(game.returncode, 0, game.stdout + game.stderr)

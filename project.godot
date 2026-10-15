@@ -10,7 +10,7 @@ config_version=5
 
 [application]
 
-config/version="0.12.5"
+config/version="0.12.6"
 
 config/name="MCF Isotope"
 run/main_scene="res://scenes/MainMenu.tscn"
@@ -21,6 +21,7 @@ config/features=PackedStringArray("4.7", "GL Compatibility")
 Keybinds="*res://src/ui/KeyBindings.gd"
 
 Ui="*res://src/ui/UiTheme.gd"
+GameAudio="*res://src/audio/GameAudio.gd"
 
 [display]
 
@@ -38,6 +39,8 @@ window/stretch/aspect="expand"
 [rendering]
 
 renderer/rendering_method="gl_compatibility"
+; Required by the Apple Silicon export validator, including Compatibility builds.
+textures/vram_compression/import_etc2_astc=true
 ; Чёрный фон окна по умолчанию (item 5). Годотовский серый (~0.3) просвечивал везде,
 ; где параллакс/сцена не закрашивали кадр целиком — отсюда «параллакс серый, не чёрный».
 ;

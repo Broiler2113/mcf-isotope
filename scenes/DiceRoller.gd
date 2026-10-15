@@ -10,6 +10,9 @@ signal finished
 ## Игрок нажал «Roll» (batch 12 #14) — бросок сейчас закрутится. Сцена боя по этому
 ## сигналу сообщает остальным, что можно открывать тот же бросок у них.
 signal rolled
+## Local animation lifecycle; rolled remains the manual/network handshake only.
+signal spin_started
+signal landed
 ## Внешнее «можно» для броска, которого ждём от другого игрока (см. release()).
 signal _released
 
@@ -26,6 +29,9 @@ var _prompt: Label
 var _roll_btn: Button
 
 func _ready() -> void:
+	var audio := get_node("/root/GameAudio")
+	spin_started.connect(func() -> void: audio.ui("dice_roll"))
+	landed.connect(func() -> void: audio.ui("dice_land"))
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var panel := PanelContainer.new()
@@ -54,6 +60,7 @@ func _ready() -> void:
 	_row.add_theme_constant_override("separation", 8)
 	vbox.add_child(_row)
 	_roll_btn = Button.new()
+	_roll_btn.set_meta("audio_silent", true)
 	_roll_btn.text = "Roll"
 	_roll_btn.custom_minimum_size = Vector2(120, 40)
 	_roll_btn.hide()
@@ -124,6 +131,8 @@ func play(dice: Array, manual: bool = false, prompt: String = "", speed: float =
 		finished.emit()  # показ перебит новым — тот и докрутит; ждущих всё равно отпускаем
 		return
 	var steps := maxi(1, int(round(SPIN_STEPS / rate)))
+	if not dice.is_empty():
+		spin_started.emit()
 	for spin in steps:
 		# Выход из партии посреди броска забирает узел вместе со сценой (item 10).
 		if not is_inside_tree():
@@ -155,6 +164,8 @@ func play(dice: Array, manual: bool = false, prompt: String = "", speed: float =
 		dv.queue_redraw()
 	if not is_inside_tree():
 		return
+	if not dice.is_empty():
+		landed.emit()
 	await get_tree().create_timer(LAND_PAUSE / rate).timeout
 	if my_gen != _generation:
 		finished.emit()

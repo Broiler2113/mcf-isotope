@@ -280,7 +280,7 @@ class FixTests(unittest.TestCase):
                     game = subprocess.run([
                         "godot", "--headless", "--path", PROJECT,
                         "--script", "res://tests/run_learned_large_map.gd"],
-                        env=dict(os.environ, MCF_RL_POLICY=f"127.0.0.1:{port}",
+                        env=dict(os.environ, MCF_RL_POLICY=f"127.0.0.1:{port}", MCF_RL_BACKEND="socket",
                                  MCF_RL_MAX_ACTORS="4", MCF_RL_MAX_CANDIDATES="32"),
                         capture_output=True, text=True, timeout=60)
                     self.assertEqual(game.returncode, 0, game.stdout + game.stderr)

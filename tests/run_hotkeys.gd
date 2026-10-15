@@ -337,7 +337,7 @@ func _editor() -> void:
 
 func _settings() -> void:
 	var settings = load("res://src/ui/SettingsWindow.gd").open(root)
-	ck(settings._tabs.get_tab_count() == 2 and settings._tabs.get_tab_title(1) == "Keybinds", "Settings has Keybinds tab")
+	ck(settings._tabs.get_tab_count() == 3 and settings._tabs.get_tab_title(1) == "Keybinds", "Settings keeps Keybinds alongside Audio")
 	ck(settings._key_sections.get_tab_title(0) == "In-game shortcuts" and settings._key_sections.get_tab_title(1) == "Map editor shortcuts", "keybinds are divided into gameplay and editor pages")
 	settings.show_keybinds(true)
 	ck(settings._tabs.current_tab == 1 and settings._key_sections.current_tab == 1, "editor help opens directly to editor shortcuts")

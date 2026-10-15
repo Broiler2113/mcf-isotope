@@ -27,7 +27,6 @@ const Obs = preload("res://rl/ObsEncoder.gd")
 const IntentBudget = preload("res://rl/IntentBudget.gd")
 const EnemyMemory = preload("res://rl/EnemyMemory.gd")
 
-const REPLY_TIMEOUT_MS := 4000
 ## Сколько ходов разбирается за один заход step_many(): пока идёт разбор, экран должен
 ## оставаться живым, а каждый вопрос политике — это сетевой round-trip.
 const CHUNK := 8
@@ -38,8 +37,7 @@ var rows: Array = []
 var error := ""
 
 var _player: ReplayPlayer = null
-var _peer: StreamPeerTCP = null
-var _rx := ""
+var _policy_client: LearnedController = null
 var _round_cap := 40
 var _max_actors := 0
 var _max_candidates := 0
@@ -55,8 +53,12 @@ func begin(data: Dictionary, round_cap: int = 40) -> bool:
 	rows = []
 	error = ""
 	_round_cap = round_cap
-	_max_actors = int(OS.get_environment(LearnedController.ENV_MAX_ACTORS))
-	_max_candidates = int(OS.get_environment(LearnedController.ENV_MAX_CANDIDATES))
+	_policy_client = LearnedController.new(0)
+	_policy_client.reply_timeout_ms = 4000
+	_max_actors = _policy_client._max_actors
+	_max_candidates = _policy_client._max_candidates
+	if LearnedController._load_embedded() != null:
+		_round_cap = _policy_client._round_cap
 	# Своё зерно на разбор, а не общий поток: тот же матч обязан разбираться одинаково
 	# при каждом запуске, иначе «ошибки» будут плавать от прогона к прогону.
 	_rng.seed = 20260101
@@ -182,62 +184,12 @@ func _ask_policy(state: GameState, r: GameActionResolver, side: int,
 static func _key(i: Intent) -> String:
 	return JSON.stringify(IntentCodec.encode(i))
 
-# --- связь с сервером политики ------------------------------------------------------
-## Свой сокет, а не чужой: LearnedController держит соединение под ИГРУ, и разбор, влезая
-## в него, рвал бы партию, которую как раз разбирает. Двадцать строк повтора дешевле.
-func _connect() -> bool:
-	var addr := OS.get_environment(LearnedController.ENV_VAR)
-	var parts := addr.split(":")
-	if parts.size() != 2:
-		error = "MCF_RL_POLICY is not host:port"
-		return false
-	_peer = StreamPeerTCP.new()
-	if _peer.connect_to_host(parts[0], int(parts[1])) != OK:
-		error = "cannot reach the policy server"
-		_peer = null
-		return false
-	var deadline := Time.get_ticks_msec() + REPLY_TIMEOUT_MS
-	while Time.get_ticks_msec() < deadline:
-		_peer.poll()
-		var st := _peer.get_status()
-		if st == StreamPeerTCP.STATUS_CONNECTED:
-			return true
-		if st == StreamPeerTCP.STATUS_ERROR:
-			break
-	error = "the policy server did not answer"
-	_peer = null
-	return false
-
+# Each analyst owns its client socket; the immutable embedded session can be shared.
 func _ask(req: Dictionary) -> Dictionary:
-	if _peer == null and not _connect():
-		return {}
-	if _peer.put_data((JSON.stringify(req) + "\n").to_utf8_buffer()) != OK:
-		error = "policy connection dropped"
-		_peer = null
-		return {}
-	var deadline := Time.get_ticks_msec() + REPLY_TIMEOUT_MS
-	while Time.get_ticks_msec() < deadline:
-		_peer.poll()
-		if _peer.get_status() != StreamPeerTCP.STATUS_CONNECTED:
-			error = "policy connection closed"
-			_peer = null
-			return {}
-		var n := _peer.get_available_bytes()
-		if n > 0:
-			var chunk: Array = _peer.get_data(n)
-			if int(chunk[0]) == OK:
-				_rx += (chunk[1] as PackedByteArray).get_string_from_utf8()
-			var nl := _rx.find("\n")
-			if nl >= 0:
-				var text := _rx.substr(0, nl)
-				_rx = _rx.substr(nl + 1)
-				var parsed: Variant = JSON.parse_string(text)
-				if typeof(parsed) == TYPE_DICTIONARY:
-					return parsed
-				error = "the policy server sent something unreadable"
-				return {}
-	error = "the policy server timed out"
-	return {}
+	var reply := _policy_client._ask(req)
+	if reply.is_empty():
+		error = _policy_client._last_error
+	return reply
 
 ## Самые дорогие ходы: там, где оценка позиции просела сильнее всего. Это и есть
 ## «какие ошибки были» — и у той стороны, и у другой.
