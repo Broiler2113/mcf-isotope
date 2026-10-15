@@ -6,6 +6,7 @@
 - **Audio settings.** The new Audio tab provides Master, Sound effects and Voice volume, mute, and an optional turn-announcement toggle. Settings persist alongside the existing interface and keybind settings.
 - **Training reliability.** RLM training resumes with verified process IDs, guarded storage cleanup and Mac sleep prevention while the trainer is running.
 - Multiplayer remains on protocol **16**. Learned opponents retain their existing local-play scope.
+- Desktop downloads bundle the native extension, ONNX Runtime, model and audio assets. macOS builds use ad-hoc signing; Apple notarization is not configured.
 
 ## Validation
 

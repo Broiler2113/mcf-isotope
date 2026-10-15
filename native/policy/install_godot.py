@@ -13,6 +13,25 @@ from build import ROOT
 VERSION = "4.7"
 
 
+def prepare_macos_template(archive, cache):
+    # Official templates contain universal executables. Godot's single-arch
+    # exporter requests an explicitly named slice, matching our native runtime.
+    arch = "arm64" if platform.machine().lower() in ("arm64", "aarch64") else "x86_64"
+    with zipfile.ZipFile(archive, "a", compression=zipfile.ZIP_DEFLATED) as app:
+        names = app.namelist()
+        for name in names:
+            if not name.endswith(".universal"):
+                continue
+            target = name.removesuffix(".universal") + "." + arch
+            if target in names:
+                continue
+            source = Path(app.extract(name, cache / "macos-template"))
+            thin = source.with_suffix("." + arch)
+            subprocess.run(["lipo", str(source), "-thin", arch, "-output", str(thin)], check=True)
+            thin.chmod(0o755)
+            app.write(thin, target)
+
+
 def main():
     system = platform.system()
     suffix = {"Linux": "linux.x86_64.zip", "Windows": "win64.exe.zip", "Darwin": "macos.universal.zip"}[system]
@@ -51,6 +70,8 @@ def main():
     templates = data / "export_templates" / f"{VERSION}.stable"
     templates.mkdir(parents=True, exist_ok=True)
     shutil.copytree(cache / "templates", templates, dirs_exist_ok=True)
+    if system == "Darwin":
+        prepare_macos_template(templates / "macos.zip", cache)
     # zip extraction does not retain Unix execute bits.
     for template in templates.iterdir():
         if template.is_file():
