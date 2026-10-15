@@ -9555,6 +9555,14 @@ func _damage_component(veh: Vehicle, comp: String, amount: int, source: String,
 		_damage_component(veh, MCF.COMP_HULL, amount, source, res)
 		return
 	var left: int = veh.component(target)
+	# Local presentation snapshot, like visual_hold's hull/cell values; no state or wire data.
+	if res != null:
+		var held: Dictionary = res.visual_hold.get("vehicles", {})
+		if not held.has(veh.id):
+			held[veh.id] = {"durability": veh.durability, "wrecked": veh.wrecked}
+		if not held[veh.id].has("components"):
+			held[veh.id]["components"] = veh.components.duplicate()
+		res.visual_hold["vehicles"] = held
 	var dealt: int = mini(amount, left)
 	var overflow: int = amount - dealt
 	if dealt > 0:

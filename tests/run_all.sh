@@ -9,7 +9,7 @@ EXTRA=""
 [ "${1:-}" = "--update" ] && EXTRA="-- --update"
 
 fail=0
-for script in tests/check_scripts.gd tests/run_codec.gd tests/run_headless.gd \
+for script in tests/check_scripts.gd tests/run_audio.gd tests/run_codec.gd tests/run_headless.gd \
               tests/run_lockstep.gd tests/run_player_actions.gd \
               tests/run_lobby_maps.gd tests/run_combat_safety.gd \
               tests/run_ui_assets.gd tests/run_main_menu.gd tests/run_hotkeys.gd tests/run_lighting.gd tests/run_light_fixtures.gd tests/run_ai_conduct.gd \

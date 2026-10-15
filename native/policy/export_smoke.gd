@@ -1,6 +1,14 @@
 extends Node
 ## Diagnostic scene selected by --native-policy-smoke in release executables.
 func _ready() -> void:
+	for id: String in GameAudio.Catalog.SFX:
+		if GameAudio.stream(id) == null:
+			get_tree().quit(1)
+			return
+	for id: String in GameAudio.Catalog.VOICE:
+		if GameAudio.stream(id, true) == null:
+			get_tree().quit(1)
+			return
 	if not ClassDB.class_exists("MCFPolicy") or LearnedController._load_embedded() == null:
 		printerr("export smoke: native class or bundled model missing")
 		get_tree().quit(1)

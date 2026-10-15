@@ -2524,6 +2524,30 @@ for everyone once the host went local and the AI's turn made it the "viewer".
 Context-sensitive cancel, in order: close dialog → exit build/sub-mode → deselect →
 quit dialog. Actions can be **unchosen** as well as undone.
 
+### 18.8 Sound effects and SAM
+
+Client presentation only: no audio fields enter `GameState`, replay recordings or
+network messages, and playback never consumes simulation dice. `GameAudio` owns
+Master/SFX/Voice buses and UI/SAM playback. `BattleAudio` follows the camera's
+pan/zoom, with twelve pooled world players. Every positioned cue and continuing
+tail uses the current viewer's pre-impact/cell visibility; hidden events are silent.
+Quiet non-positional ambience is independent of hidden activity. Music is absent.
+
+Weapons launch with the existing firing-lane/projectile lifecycle, after dice;
+tracer and ordnance arrival own their impact sounds. Explosion flashes do not
+double-play projectile bangs. Glass, debris, corpses, fire, accepted construction,
+mine work, welding and moving/damaged vehicles have separate cues. Own-unit sounds
+outrank other visible sounds; near-duplicate bursts merge with bounded gain, and
+the lowest-priority voice is replaced when the pool is full.
+
+SAM narrates existing public event/wave/zone messages, the turn HUD, outcome,
+learned-AI fallback and lobby connection status. Its finite 56-line catalog is
+baked to WAV offline, with no runtime speech engine. Settings → Audio adds Master,
+SFX, Voice, Mute and an optional turn-announcement toggle to `user://settings.cfg`.
+Replays use the same presentation hooks; seek/undo suppress historical audio.
+The build rejects missing/stale audio assets. See `audio/README.md` for generation,
+asset provenance, validation and the Giant-board stress harness.
+
 ---
 
 ## 19. Screens & Flow

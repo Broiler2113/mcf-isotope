@@ -4,6 +4,7 @@ from pathlib import Path
 import platform
 import shutil
 import subprocess
+import sys
 import zipfile
 
 from build import ROOT
@@ -14,6 +15,7 @@ def main():
     p.add_argument("--godot", default="godot")
     p.add_argument("--output", type=Path, default=ROOT / ".cache/policy-release")
     a = p.parse_args()
+    subprocess.run([sys.executable, str(ROOT / "tools/audio/bake_audio.py"), "--check"], check=True)
     system = platform.system()
     target = {"Linux": "Linux", "Windows": "Windows Desktop", "Darwin": "macOS"}[system]
     arch = "arm64" if platform.machine().lower() in ("arm64", "aarch64") else "x86_64"
@@ -27,7 +29,7 @@ def main():
     stage = output / "project"
     stage.mkdir(exist_ok=True)
     # An isolated export tree keeps local saves, Python environments and training runs out.
-    for name in ("src", "scenes", "fonts", "textures", "interface_textures", "assets", "addons", "rl"):
+    for name in ("src", "scenes", "fonts", "textures", "interface_textures", "assets", "addons", "rl", "audio"):
         shutil.copytree(ROOT / name, stage / name, dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns("runs", "__pycache__", "*.py", "*.sh", "*.yaml", ".streamlit"))
     shutil.copy2(ROOT / "project.godot", stage / "project.godot")

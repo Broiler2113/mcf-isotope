@@ -69,6 +69,9 @@ func _initialize() -> void:
 	ck(pages.current_tab == menu.PAGE_HOME, "back to the list again (%d)" % pages.current_tab)
 
 	menu.free()
+	# UI clicks now create asynchronous playback; drain it before a same-frame quit.
+	root.get_node("GameAudio").stop_all()
+	await create_timer(0.08).timeout
 	if fails.is_empty():
 		print("main menu: one column, six entries, and every page finds its way home")
 		quit(0)
