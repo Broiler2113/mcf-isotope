@@ -4333,4 +4333,4 @@ digest, none of the audited paths was a hotspot.
   secondary terrain changes, until impact. Near tiles, neighbour autotiling, door art,
   distant terrain and lighting use the same view without mutating simulation state.
 - Network protocol **15** prevents mixed-rule matches after retiring Assault and the
-  firing-through-fire modifier. Project version remains 0.12.3 pending a new release.
+  firing-through-fire modifier. Released in 0.12.4.
