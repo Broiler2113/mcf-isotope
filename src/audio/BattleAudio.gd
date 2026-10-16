@@ -61,14 +61,17 @@ func cue(id: String, cell: Vector2i, owner := -1) -> AudioStreamPlayer2D:
 			or (own_cell.is_valid() and own_cell.call(cell)):
 		priority += 50
 	if id in ["explosion", "vehicle_hull"]:
-		priority += 5
+		priority += 10
+	if id in ["structure", "glass"]:
+		priority += 9 if id == "glass" else 8
 	var now := Time.get_ticks_msec()
+	var merge_radius_squared := 16 if id in ["structure", "glass"] else 2
 	for entry in voices:
 		if entry.id == id and now - int(entry.start) <= MERGE_MS \
-				and Vector2i(entry.cell - cell).length_squared() <= 2:
+				and Vector2i(entry.cell - cell).length_squared() <= merge_radius_squared:
 			entry.count = mini(4, int(entry.count) + 1)
 			entry.priority = maxi(priority, entry.priority)
-			entry.player.volume_db = -12.0 + minf(3.0, 10.0 * log(float(entry.count)) / log(10.0))
+			entry.player.volume_db = _cue_volume(id) + minf(3.0, 10.0 * log(float(entry.count)) / log(10.0))
 			return entry.player
 	var player: AudioStreamPlayer2D
 	if voices.size() >= clampi(ceiling, 1, WORLD_CAP):
@@ -89,7 +92,7 @@ func cue(id: String, cell: Vector2i, owner := -1) -> AudioStreamPlayer2D:
 	if player == null:
 		return null
 	player.position = origin + (Vector2(cell) + Vector2(0.5, 0.5)) * cell_size
-	player.volume_db = -12
+	player.volume_db = _cue_volume(id)
 	player.stream = GameAudio.stream(id)
 	if id == "vehicle_move":
 		var engine := player.stream.duplicate() as AudioStreamWAV
@@ -102,6 +105,9 @@ func cue(id: String, cell: Vector2i, owner := -1) -> AudioStreamPlayer2D:
 		"player": player, "count": 1})
 	GameAudio.cue_played.emit(id, "SFX", player.global_position)
 	return player
+
+static func _cue_volume(id: String) -> float:
+	return -6.0 if id in ["explosion", "vehicle_hull", "structure", "glass"] else -12.0
 
 func _finished(player: AudioStreamPlayer2D) -> void:
 	voices = voices.filter(func(e: Dictionary) -> bool: return e.player != player)

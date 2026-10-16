@@ -34,6 +34,21 @@ def samples(kind, length, seed):
         attack = min(1., t * 600)
         if kind == "boom":
             v = (low * 3.4 + n * .17 + math.sin(2 * math.pi * (65*t - 17*t*t)) * .35) * math.exp(-t * 6)
+        elif kind == "blast":
+            # Shock crack, falling low-frequency pressure pulse, then rolling debris.
+            crack = n * .95 * math.exp(-t * 95)
+            body = math.sin(2*math.pi*(82*t - 26*t*t)) * .65 * math.exp(-t*5.5)
+            roll = low * 3.8 * math.exp(-t*3.6) + n*.22*math.exp(-t*12)
+            v = math.tanh((crack + body + roll)*1.3)*.82
+        elif kind == "masonry":
+            crack = n*.9*math.exp(-t*65)
+            thud = math.sin(2*math.pi*(125*t-48*t*t))*.55*math.exp(-t*11)
+            rubble = (n*.38 + low*2.1)*math.exp(-t*5)
+            # Irregular hard fragments instead of a continuous sand-like hiss.
+            for delay in (.037, .091, .164, .247, .36):
+                if t >= delay:
+                    rubble += (n*.32 + math.sin(2*math.pi*617*(t-delay))*.17)*math.exp(-(t-delay)*65)
+            v = math.tanh((crack + thud + rubble)*1.25)*.8
         elif kind == "shot":
             v = (n * .65 + math.sin(2*math.pi*145*t) * .3) * math.exp(-t * 37)
         elif kind == "burst":
@@ -119,6 +134,7 @@ def check(catalog):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--check", action="store_true")
+    p.add_argument("--sfx-only", action="store_true", help="rebake SFX while retaining verified SAM assets")
     p.add_argument("--sam", type=Path)
     p.add_argument("--fetch-sam", action="store_true")
     a = p.parse_args()
@@ -136,7 +152,7 @@ def main():
         sam = checkout / "sam"
         sources = [checkout / "src" / (name + ".c") for name in ("reciter", "sam", "render", "main", "debug")]
         subprocess.run(["cc", "-O2", "-fcommon", "-o", str(sam), *map(str,sources)], check=True)
-    if sam is None:
+    if sam is None and not a.sfx_only:
         p.error("pass --sam or --fetch-sam to bake voice lines")
     previous = {}
     if (AUDIO / "manifest.json").exists():
@@ -150,6 +166,8 @@ def main():
         voice_inputs[name] = signature
         if path.exists() and previous.get(name) == signature:
             continue
+        if a.sfx_only:
+            raise RuntimeError("SAM asset missing or stale: " + name)
         path.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run([str(sam.resolve()), "-wav", str(path), "-speed", "84", "-pitch", "60", text],
                        check=True, stdout=subprocess.DEVNULL, timeout=30)

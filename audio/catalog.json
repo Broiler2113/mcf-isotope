@@ -57,16 +57,16 @@
       0.18
     ],
     "explosion": [
-      "boom",
-      0.85
+      "blast",
+      1.15
     ],
     "glass": [
       "glass",
       0.45
     ],
     "structure": [
-      "boom",
-      0.35
+      "masonry",
+      0.65
     ],
     "corpse": [
       "metal",
@@ -93,7 +93,7 @@
       1.0
     ],
     "vehicle_hull": [
-      "boom",
+      "blast",
       0.9
     ],
     "vehicle_tracks": [

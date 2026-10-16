@@ -530,6 +530,15 @@ func _items(ev: Dictionary) -> void:
 func _sweep_props(ev: Dictionary) -> void:
 	var at: Vector2i = ev["at"]
 	var from: Vector2i = ev["from"]
+	# Most traversed cells have no loose props. Use the spatial index before
+	# walking the full persistent list; retain its ordering when something moves.
+	var loose := false
+	for p: Dictionary in by_chunk.get(at / DECAL_CHUNK, []):
+		var kind := str(p["kind"])
+		if Vector2i(Vector2(p["pos"]).floor()) == at and (kind.begins_with("item:") or kind.begins_with("chunk:") or kind in ["shard", "casing", "shell_casing"]):
+			loose = true
+			break
+	if not loose: return
 	var moved: Array = []
 	var kept: Array = []
 	for p: Dictionary in props:

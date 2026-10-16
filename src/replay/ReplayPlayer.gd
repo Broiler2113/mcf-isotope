@@ -104,6 +104,7 @@ func _rebuild(frame: Dictionary) -> void:
 	resolver.track_undo_history = _needs_undo(int(frame.get("at", 0)))
 	seek_decals = frame.get("fx", {})
 	StateCodec.apply_rules(resolver, frame.get("rules", {}))
+	resolver.random_events.legacy_selection = data.get("event_selection", "weighted") != "uniform"
 	resolver.update_airlocks()
 	index = int(frame.get("at", 0))
 	opening_result = null

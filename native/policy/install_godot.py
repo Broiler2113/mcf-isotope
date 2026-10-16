@@ -1,4 +1,5 @@
 """Install the pinned official Godot editor + export templates into a CI workspace."""
+import argparse
 import hashlib
 import os
 from pathlib import Path
@@ -33,6 +34,9 @@ def prepare_macos_template(archive, cache):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--editor-only", action="store_true", help="skip application export templates")
+    args = parser.parse_args()
     system = platform.system()
     suffix = {"Linux": "linux.x86_64.zip", "Windows": "win64.exe.zip", "Darwin": "macos.universal.zip"}[system]
     base = f"https://github.com/godotengine/godot/releases/download/{VERSION}-stable/"
@@ -40,7 +44,10 @@ def main():
     cache.mkdir(parents=True, exist_ok=True)
     with urllib.request.urlopen(base + "SHA512-SUMS.txt", timeout=120) as r:
         sums = r.read().decode()
-    for name in (f"Godot_v{VERSION}-stable_{suffix}", f"Godot_v{VERSION}-stable_export_templates.tpz"):
+    archives = [f"Godot_v{VERSION}-stable_{suffix}"]
+    if not args.editor_only:
+        archives.append(f"Godot_v{VERSION}-stable_export_templates.tpz")
+    for name in archives:
         path = cache / name
         if not path.exists():
             with urllib.request.urlopen(base + name, timeout=120) as response, path.open("wb") as out:
@@ -67,15 +74,16 @@ def main():
         data = Path.home() / "Library/Application Support/Godot"
     else:
         data = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))) / "godot"
-    templates = data / "export_templates" / f"{VERSION}.stable"
-    templates.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(cache / "templates", templates, dirs_exist_ok=True)
-    if system == "Darwin":
-        prepare_macos_template(templates / "macos.zip", cache)
-    # zip extraction does not retain Unix execute bits.
-    for template in templates.iterdir():
-        if template.is_file():
-            template.chmod(0o755)
+    if not args.editor_only:
+        templates = data / "export_templates" / f"{VERSION}.stable"
+        templates.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(cache / "templates", templates, dirs_exist_ok=True)
+        if system == "Darwin":
+            prepare_macos_template(templates / "macos.zip", cache)
+        # zip extraction does not retain Unix execute bits.
+        for template in templates.iterdir():
+            if template.is_file():
+                template.chmod(0o755)
     bin_dir = cache / "bin"
     bin_dir.mkdir(exist_ok=True)
     if system == "Darwin":

@@ -3,7 +3,7 @@ extends RefCounted
 
 ## Случайные события (§1.5 лобби, item 61; спека «Random Event System», 0.9.4). Хост в
 ## лобби включает события, задаёт «обязательное событие каждый ход» / «сколько ходов между
-## событиями» и веса-доли по каждому событию.
+## событиями» и пул равновероятных событий.
 ##
 ## Event intervals count rounds, with announcements at round opening.
 ## Each event announces its zone at a round's opening and resolves when that round
@@ -45,7 +45,7 @@ const BOUNTY := "bounty"
 const MINEFIELD := "minefield"
 
 ## Реестр известных событий: id -> человекочитаемое имя. Порядок фиксирован — по нему
-## взвешенный выбор обходит события, поэтому у хоста и клиента он совпадает.
+## равномерный выбор обходит события, поэтому у хоста и клиента он совпадает.
 ##
 ## Прежний «Tremor» убран (своего эффекта у него так и не появилось). Старые сохранённые
 ## веса с ключом "tremor" читаются как раньше: _pick обходит ТОЛЬКО реестр, и незнакомый
@@ -83,7 +83,7 @@ static func event_name(id: String) -> String:
 			return pair[1]
 	return id
 
-## Веса по умолчанию, если хост включил события, но не тронул доли: все три поровну.
+## Default pool: every known event enabled with equal probability.
 static func default_weights() -> Dictionary:
 	var w := {}
 	for pair in REGISTRY:
@@ -94,10 +94,12 @@ static func default_weights() -> Dictionary:
 ## Состояние розыгрыша событий на весь матч. Живёт на резолвере и входит в снимок
 ## состояния, чтобы откат хода не «потерял» ни отсчёт ходов до следующего события, ни
 ## объявленное, но ещё не упавшее.
+## Playback compatibility only; new matches and loaded saves use uniform selection.
+var legacy_selection := false
 var enabled: bool = false
 var mandatory: bool = false        # guarantee an event on each due round
 var interval: int = 3              # rounds between event checks
-var weights: Dictionary = {}       # id -> вес-доля (item 1.5)
+var weights: Dictionary = {}       # saved legacy field: positive = selected
 var last_checked_round: int = 0    # prevents another roll when reopening a saved round
 var turns_since: int = 0           # rounds since last event check; saved key kept for compatibility
 ## Объявленные события в очереди: [{"id", "params", "announced": раунд, "land": раунд}].
@@ -148,19 +150,35 @@ func roll_event(dice: DiceService, allowed: Callable = Callable()) -> String:
 	# когда событие созрело: проверки ходят по всей доске.
 	return _pick(dice, allowed.call() if allowed.is_valid() else {})
 
-## Сумма весов — только по ИЗВЕСТНЫМ событиям (0.9.4). Прежде она считала все ключи, и
-## вес выбывшего «tremor» из старых настроек съедал свою долю розыгрыша: событие выпадало
-## «никакое» и ход проходил впустую. Незнакомый ключ теперь не влияет ни на что.
+## The saved weights field remains compatible with old settings: positive means enabled.
+## Magnitudes never bias the chosen pool.
 func _total_weight() -> int:
-	var t := 0
+	var count := 0
 	for pair in REGISTRY:
-		var w := int(weights.get(pair[0], 0))
-		if w > 0:
-			t += w
-	return t
+		if float(weights.get(pair[0], 0)) > 0.0:
+			count += maxi(0, int(weights[pair[0]])) if legacy_selection else 1
+	return count
 
-## Взвешенно выбрать событие ЧЕРЕЗ DiceService (лок-степ). Возвращает id или "".
+## Uniform selection from the stable registry, using only the shared dice stream.
+## Reject the incomplete tail of 216 outcomes; modulo alone favors some events.
 func _pick(dice: DiceService, allowed: Dictionary = {}) -> String:
+	if legacy_selection: return _pick_legacy(dice, allowed)
+	var pool: Array[String] = []
+	for pair in REGISTRY:
+		if float(weights.get(pair[0], 0)) > 0.0 and (allowed.is_empty() or allowed.has(pair[0])):
+			pool.append(pair[0])
+	while true:
+		var v := 0
+		for _i in 3:
+			v = v * 6 + (dice.roll_d6() - 1)
+		if pool.is_empty():
+			return ""
+		if v < 216 - (216 % pool.size()):
+			return pool[v % pool.size()]
+	return ""
+
+## Existing replay dice tapes used weighted modulo selection without rejection.
+func _pick_legacy(dice: DiceService, allowed: Dictionary = {}) -> String:
 	var total := 0
 	for pair in REGISTRY:
 		if allowed.is_empty() or allowed.has(pair[0]):

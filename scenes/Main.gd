@@ -4948,6 +4948,10 @@ func _home_focus(side: int = -1) -> Vector2i:
 		side = my_owner if networked else state.active_player()
 	var sum := Vector2i.ZERO
 	var n := 0
+	if MCF.is_neutral(side):
+		var targets: Array = _neutral_camera_targets().get(side, [])
+		for c: Vector2i in targets: sum += c
+		return Vector2i(sum.x / targets.size(), sum.y / targets.size()) if not targets.is_empty() else Vector2i(state.grid.width / 2, state.grid.height / 2)
 	for u in state.all_units():
 		if u.owner == side and u.is_on_field() and _on_board(u):
 			sum += u.coord
@@ -8733,6 +8737,43 @@ func _set_ai_speed(v: float, broadcast: bool) -> void:
 	if broadcast and networked and session != null and net != null and net.is_host:
 		session.send({"k": K_AI_SPEED, "v": GameConfig.ai_speed})
 
+var _neutral_camera_row: HBoxContainer
+var _neutral_camera_buttons: GridContainer
+var _neutral_camera_sides: Array = []
+
+func _neutral_camera_targets() -> Dictionary:
+	var targets := {}
+	if state == null: return targets
+	var limited := _view_resolver().visibility_limited()
+	var visible := _visible_before_impact(_viewing_side()) if limited else {}
+	for u: UnitInstance in state.all_units():
+		if not MCF.is_neutral(u.owner) or not u.civilian_active or not u.is_on_field() or not _on_board(u): continue
+		if limited and not visible.has(u.coord): continue
+		if not targets.has(u.owner): targets[u.owner] = []
+		targets[u.owner].append(u.coord)
+	return targets
+
+func _refresh_neutral_camera() -> void:
+	if _neutral_camera_row == null: return
+	var sides := _neutral_camera_targets().keys()
+	sides.sort()
+	_neutral_camera_row.visible = not sides.is_empty()
+	if sides == _neutral_camera_sides: return
+	_neutral_camera_sides = sides
+	for child in _neutral_camera_buttons.get_children():
+		_neutral_camera_buttons.remove_child(child)
+		child.queue_free()
+	for side: int in sides:
+		var button := Button.new()
+		button.text = MCF.roman(MCF.neutral_group_index(side)) if side >= MCF.NEUTRAL_GROUP_BASE else "N"
+		button.tooltip_text = "Center on visible forces of " + MCF.owner_name(side)
+		button.custom_minimum_size = Vector2(40, 40)
+		button.focus_mode = Control.FOCUS_NONE
+		button.pressed.connect(func() -> void:
+			# Recheck visibility when clicked, including during movement animations.
+			if _neutral_camera_targets().has(side): _center_on_side(side))
+		_neutral_camera_buttons.add_child(button)
+
 func _camera_row() -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 4)
@@ -8777,7 +8818,20 @@ func _camera_row() -> Control:
 		var side := sid
 		b.pressed.connect(func() -> void: _center_on_side(side))
 		flow.add_child(b)
-	return row
+	var group := VBoxContainer.new()
+	group.add_child(row)
+	_neutral_camera_row = HBoxContainer.new()
+	var neutral_label := Label.new()
+	neutral_label.text = "Neutral camera"
+	neutral_label.add_theme_font_size_override("font_size", 11)
+	neutral_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_neutral_camera_row.add_child(neutral_label)
+	_neutral_camera_buttons = GridContainer.new()
+	_neutral_camera_buttons.columns = 3
+	_neutral_camera_row.add_child(_neutral_camera_buttons)
+	group.add_child(_neutral_camera_row)
+	_refresh_neutral_camera()
+	return group
 
 func _compact_button(text: String, handler: Callable) -> Button:
 	var b := Button.new()
@@ -9500,6 +9554,7 @@ static func _clock_text(total_seconds: int) -> String:
 	return "%d:%02d" % [t / 60, t % 60]
 
 func _refresh_status() -> void:
+	_refresh_neutral_camera()
 	# Пауза (item 4) появляется и исчезает вместе с составом стола: сторону может взять
 	# человек, и наоборот. Дешевле сверять её здесь, на каждом обновлении строки хода,
 	# чем помнить про кнопку в каждой точке, где меняется ростер.

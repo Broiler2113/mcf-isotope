@@ -9141,6 +9141,11 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 		if c.occupant != null and c.occupant.is_alive():
 			c.occupant = null
 		_knock_items(res, cell_coord, from_c)
+		# Fixtures crushed with their supporting wall shed glass too.
+		for lamp: Array in c.lamps:
+			_lamp_shards(res, cell_coord, from_c, int(lamp[2]))
+		if Furniture.DEFS.get(c.feature_id, {}).get("cat", "") == "lighting":
+			_lamp_shards(res, cell_coord, from_c)
 		c.clear_feature()
 		if was_corpse_wall:
 			c.corpse_count = MCF.CORPSE_WALL_COUNT

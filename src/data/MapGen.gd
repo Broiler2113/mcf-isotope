@@ -1581,7 +1581,7 @@ func _maintenance_exits() -> void:
 	var used: Array[Vector2i] = []
 	# Array count scales with station perimeter; every station gets several arrays.
 	var roll := _rng.randf()
-	var limit := maxi(3, mini(10, (_core.size.x + _core.size.y) / 28))
+	var limit := maxi(4, mini(12, (_core.size.x + _core.size.y) / 24))
 	if roll >= SOLAR_EXIT_ONE: limit += 1
 	for y in h:
 		for x in w:
@@ -1612,14 +1612,14 @@ func _maintenance_exits() -> void:
 				var side := Vector2i(d.y, d.x)
 				# Мостки — своей длины у каждого выхода, панели по обе стороны — своего
 				# размера (item 4: «make solar panels vary in size»). Панель шириной pw
-				# вдоль мостка и глубиной pd от него: от одинокой клетки до площадки 3×2.
+				# вдоль мостка и глубиной pd от него: от площадки 3×2 до 5×3.
 				var span := _rng.randi_range(SOLAR_WALK_MIN, SOLAR_WALK_MAX) + 2
 				for k in range(1, span + 1):
 					_grill.append(wall + d * k)            # мостки от самой обшивки
 				# Both sides of one walkway carry the SAME panel, mirrored (0.11.1: "solar
 				# panels should be even"); the size still differs from exit to exit.
-				var pw := _rng.randi_range(1, mini(SOLAR_PANEL_MAX, span - 1))
-				var pd := _rng.randi_range(1, SOLAR_PANEL_DEPTH)
+				var pw := _rng.randi_range(3, mini(SOLAR_PANEL_MAX, span - 2))
+				var pd := _rng.randi_range(2, SOLAR_PANEL_DEPTH)
 				var at := _rng.randi_range(3, maxi(3, span - pw + 1))
 				for t: int in [-1, 1]:
 					for a in pw:
@@ -1641,7 +1641,7 @@ func _maintenance_exits() -> void:
 				var side := Vector2i(-d.y, d.x)
 				var span := _rng.randi_range(5, 8)
 				for k in range(1, span + 1): _grill.append(c + d * k)
-				var depth := _rng.randi_range(1, SOLAR_PANEL_DEPTH)
+				var depth := _rng.randi_range(2, SOLAR_PANEL_DEPTH)
 				for k in range(3, span + 1):
 					for t: int in [-1, 1]:
 						for b in range(1, depth + 1):
@@ -1678,8 +1678,8 @@ const SOLAR_EXIT_ONE := 0.75    # chance of one additional array
 ## Мостки и панели на них разного размера (item 4): длина мостка и предельная площадка.
 const SOLAR_WALK_MIN := 3
 const SOLAR_WALK_MAX := 6
-const SOLAR_PANEL_MAX := 3
-const SOLAR_PANEL_DEPTH := 2
+const SOLAR_PANEL_MAX := 5
+const SOLAR_PANEL_DEPTH := 3
 ## Самое большее пустых отсеков на станцию (item 3) — сколько бы их ни было всего.
 const EMPTY_SECTORS_MAX := 3
 

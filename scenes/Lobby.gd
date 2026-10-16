@@ -57,6 +57,7 @@ var _events_check: CheckBox
 var _event_pool: Dictionary = {}
 var _events_mand: CheckBox
 var _events_interval: SpinBox
+var _army_difficulty_row: HBoxContainer
 var _army_difficulty: OptionButton
 var _map_opt: OptionButton
 var _map_preview: TextureRect
@@ -340,6 +341,7 @@ func _apply_lobby_snapshot(msg: Dictionary) -> void:
 		_army_difficulty.select(GameConfig.independent_army_difficulty)
 		for ev_id in _event_pool:
 			_event_pool[ev_id] = float(GameConfig.random_events_weights.get(ev_id, 0.0)) > 0.0
+	_sync_event_rows()
 	if _mode_opt != null:
 		_mode_opt.select(clampi(GameConfig.game_mode, 0, MatchMode.NAMES.size() - 1))
 		_zones_opt.select(maxi(0, MatchMode.ZONE_COUNTS.find(GameConfig.capture_zones)))
@@ -851,7 +853,7 @@ func _build_config(parent: VBoxContainer) -> void:
 	_row(ev_box, "Rounds between events:", _events_interval)
 	_army_difficulty = _opt(RandomEvents.ARMY_DIFFICULTIES, GameConfig.independent_army_difficulty)
 	_army_difficulty.tooltip_text = "Easy favors light and heavy infantry. Hard favors anti-tank soldiers and specialists."
-	_row(ev_box, "Independent army difficulty:", _army_difficulty)
+	_army_difficulty_row = _row(ev_box, "Independent army difficulty:", _army_difficulty)
 	# Пул событий — в ОТДЕЛЬНОМ окне (item 3), а не длинным списком прямо в конфиге.
 	var cur_weights: Dictionary = GameConfig.random_events_weights
 	if cur_weights.is_empty():
@@ -859,6 +861,8 @@ func _build_config(parent: VBoxContainer) -> void:
 	_event_pool = {}
 	for pair in RandomEvents.REGISTRY:
 		_event_pool[pair[0]] = float(cur_weights.get(pair[0], 0.0)) > 0.0
+	_events_check.toggled.connect(func(_on: bool) -> void: _sync_event_rows())
+	_sync_event_rows()
 	var pool_btn := Button.new()
 	pool_btn.text = "Choose Events…"
 	pool_btn.disabled = _is_client
@@ -1447,6 +1451,10 @@ func _refresh_swatch() -> void:
 
 # --- Слоты -------------------------------------------------------------------
 func _refresh_slots() -> void:
+	var mine := _my_slot()
+	if _color_opt != null:
+		_color_opt.select(mine.color_index() if mine != null else -1)
+	_refresh_swatch()
 	if _slots_box == null:
 		return
 	# Строки пересобираются с нуля, а число, набранное в SpinBox, но не подтверждённое
@@ -1697,11 +1705,15 @@ func _open_unit_restrict_window(slot_id: int) -> void:
 			_broadcast_lobby())
 		body.add_child(cb)
 
+func _sync_event_rows() -> void:
+	if _army_difficulty_row != null:
+		_army_difficulty_row.visible = _events_check.button_pressed and bool(_event_pool.get(RandomEvents.ARMY, false))
+
 ## Окно выбора пула случайных событий (item 3).
 func _open_events_window() -> void:
 	var body := _modal_window("Random Events Pool")
 	var hint := Label.new()
-	hint.text = "Only checked events can occur."
+	hint.text = "Checked events have equal chances when available on this map."
 	hint.add_theme_font_size_override("font_size", 11)
 	hint.modulate = Color(0.75, 0.78, 0.85)
 	body.add_child(hint)
@@ -1714,6 +1726,7 @@ func _open_events_window() -> void:
 		var eid := ev_id
 		cb.toggled.connect(func(on: bool) -> void:
 			_event_pool[eid] = on
+			_sync_event_rows()
 			_broadcast_lobby())
 		body.add_child(cb)
 
@@ -1885,6 +1898,7 @@ func _on_my_color(color_idx: int) -> void:
 		return
 	if not _assign_color(mine.id, color_idx):
 		_status.text = "That faction is taken."
+		_color_opt.select(mine.color_index())
 		return
 	_refresh_swatch()
 	_lobby_changed()

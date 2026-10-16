@@ -105,7 +105,8 @@ const K_LOBBY_MAP := "lobby_map"
 ##  14 — 0.12.3: shield strikes against glass; vehicle ramming emits seeded wall chunks.
 ##  15 — 0.12.4: burning cells no longer penalize shots; Assault retired.
 ##  16 — configurable raider composition and mixed old minefields on every map.
-const PROTOCOL := 16
+##  17 — equal event chances with rejection sampling; crushed fixtures shed glass.
+const PROTOCOL := 17
 
 static func encode_rules() -> Dictionary:
 	var roster := GameConfig.active_roster()

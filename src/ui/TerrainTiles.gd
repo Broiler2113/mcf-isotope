@@ -75,6 +75,7 @@ var bake_fire := true
 var _map_decal_bleed := 1.5
 var ground_lines: Dictionary = {}
 var _ground_version := -1
+var _decal_index: Dictionary = {}
 var _decal_reset: int = -1
 var _frame: int = 0
 ## Варианты плиток: "имя@res" -> Array[Image] (res×res); листы: "имя@res" -> Array[Image]
@@ -221,14 +222,20 @@ func sync_decals(fx: FxDecals) -> void:
 		_index_ground_lines(fx)
 	if _decal_reset != fx.decal_reset:
 		_decal_reset = fx.decal_reset
-		_chunks.clear()
-		_bytes = 0
-		fx.decal_dirty.clear()
-		return
+		# A tank sweeping rubble changes a few cells, not the entire board. Keep
+		# valid textures and invalidate only changed buckets (including edge bleed).
+		var chunks := _decal_index.duplicate()
+		chunks.merge(decals)
+		for cc: Vector2i in chunks:
+			if _decal_index.get(cc, []) == decals.get(cc, []): continue
+			for dy in range(-1, 2):
+				for dx in range(-1, 2): _dirty[cc + Vector2i(dx, dy)] = true
+		_decal_index = decals.duplicate()
 	if fx.decal_dirty.is_empty():
 		return
 	for cc: Vector2i in fx.decal_dirty:
 		_dirty[cc] = true
+	_decal_index = decals.duplicate()
 	fx.decal_dirty.clear()
 
 func sync(fx_damage: Dictionary, damage_version: int) -> void:

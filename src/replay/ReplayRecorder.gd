@@ -139,6 +139,7 @@ func to_dict() -> Dictionary:
 		"opening_processed": opening_processed,
 		"bookmarks": bookmarks,
 		"seek_version": 1,
+		"event_selection": "uniform",
 		"steps": steps,
 		"combat_log": "\n".join(combat_log),
 	}
