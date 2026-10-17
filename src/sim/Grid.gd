@@ -211,6 +211,8 @@ func place(unit: UnitInstance, coord: Vector2i) -> bool:
 		push_error("Grid.place: cell (%d, %d) is taken by %s, refusing to stack %s" % [
 			coord.x, coord.y, c.occupant.stats.display_name, unit.stats.display_name])
 		return false
+	if unit.is_on_field() and unit.aboard_vehicle_id == -1 and c.corpse_count > 0:
+		return false
 	# Юнит мог уже стоять на другой клетке (перестановка) — снимаем его оттуда, иначе
 	# он остался бы «жильцом» сразу двух клеток.
 	var prev := cell(unit.coord)
@@ -234,6 +236,8 @@ func move_occupant(from_coord: Vector2i, to_coord: Vector2i) -> bool:
 		push_error("Grid.move_occupant: (%d, %d) is taken by %s, %s stays put" % [
 			to_coord.x, to_coord.y, to_cell.occupant.stats.display_name,
 			unit.stats.display_name])
+		return false
+	if unit.is_on_field() and unit.aboard_vehicle_id == -1 and to_cell.corpse_count > 0:
 		return false
 	from_cell.occupant = null
 	to_cell.occupant = unit

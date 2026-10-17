@@ -16,6 +16,11 @@ import subprocess
 import time
 from dataclasses import dataclass
 
+try:
+    from orjson import loads as _decode_reply
+except ImportError:  # Existing training environments can still use the stdlib.
+    _decode_reply = json.loads
+
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVER_SCRIPT = "res://rl/env_server.gd"
 
@@ -234,7 +239,7 @@ class GodotEnv:
         while True:
             line = self._readline(deadline)
             if line.startswith(b"{"):    # anything else is Godot's own chatter
-                resp = json.loads(line)
+                resp = _decode_reply(line)
                 if not resp.get("ok", True):
                     raise RuntimeError("env error: %s" % resp.get("error"))
                 return resp

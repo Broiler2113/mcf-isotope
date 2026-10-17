@@ -625,6 +625,12 @@ func _build_mode(parent: VBoxContainer) -> void:
 	_waves_ai_opt.set_item_tooltip(leaders.size() - 1,
 			"The trained model (RLM). Falls back to a Tactician when no model is running.")
 	_mode_rows.append([_row(box, "Waves led by:", _waves_ai_opt), MatchMode.Kind.HOLDOUT])
+	var wave_units := Button.new()
+	wave_units.text = "Restrict wave units…"
+	wave_units.disabled = _is_client
+	wave_units.pressed.connect(_open_spawn_restrictions.bind(true))
+	box.add_child(wave_units)
+	_mode_rows.append([wave_units, MatchMode.Kind.HOLDOUT])
 	_mode_opt.item_selected.connect(func(_i: int) -> void:
 		_sync_mode_rows()
 		if _preview_labels != null:
@@ -854,6 +860,11 @@ func _build_config(parent: VBoxContainer) -> void:
 	_army_difficulty = _opt(RandomEvents.ARMY_DIFFICULTIES, GameConfig.independent_army_difficulty)
 	_army_difficulty.tooltip_text = "Easy favors light and heavy infantry. Hard favors anti-tank soldiers and specialists."
 	_army_difficulty_row = _row(ev_box, "Independent army difficulty:", _army_difficulty)
+	var raider_units := Button.new()
+	raider_units.text = "Restrict raider units…"
+	raider_units.disabled = _is_client
+	raider_units.pressed.connect(_open_spawn_restrictions.bind(false))
+	ev_box.add_child(raider_units)
 	# Пул событий — в ОТДЕЛЬНОМ окне (item 3), а не длинным списком прямо в конфиге.
 	var cur_weights: Dictionary = GameConfig.random_events_weights
 	if cur_weights.is_empty():
@@ -1704,6 +1715,33 @@ func _open_unit_restrict_window(slot_id: int) -> void:
 			s.allowed_units[u] = on
 			_broadcast_lobby())
 		body.add_child(cb)
+
+func _open_spawn_restrictions(waves: bool) -> void:
+	if _is_client: return
+	var dialog := AcceptDialog.new()
+	dialog.title = "Holdout units" if waves else "Raider units"
+	dialog.ok_button_text = "Done"
+	dialog.min_size = Vector2i(340, 430)
+	var box := VBoxContainer.new()
+	var label := Label.new()
+	label.text = "Untick a unit to prevent it from spawning."
+	box.add_child(label)
+	var excluded: Array[String] = GameConfig.holdout_excluded_units if waves else GameConfig.raider_excluded_units
+	for id: String in GameActionResolver.ARMY_ROSTER:
+		var stats: UnitStats = load("res://src/data/units/%s.tres" % id)
+		var cb := CheckBox.new()
+		cb.text = stats.display_name
+		cb.button_pressed = not excluded.has(id)
+		cb.toggled.connect(func(on: bool) -> void:
+			if on: excluded.erase(id)
+			elif not excluded.has(id): excluded.append(id)
+			if _is_host_net: _broadcast_lobby())
+		box.add_child(cb)
+	dialog.add_child(box)
+	add_child(dialog)
+	dialog.confirmed.connect(dialog.queue_free)
+	dialog.canceled.connect(dialog.queue_free)
+	dialog.popup_centered()
 
 func _sync_event_rows() -> void:
 	if _army_difficulty_row != null:

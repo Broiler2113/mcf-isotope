@@ -90,6 +90,8 @@ static var capture_target: int = 12
 ## «Auto», расстановка по карте (MatchMode.zones_for). В карту не пишутся (владелец).
 static var capture_drawn: Array = []
 static var holdout_waves: int = 10
+static var holdout_excluded_units: Array[String] = []
+static var raider_excluded_units: Array[String] = []
 ## Кто ведёт волны Holdout: личность ИИ 0..2 или 3 — обученная модель.
 static var holdout_ai: int = 1
 

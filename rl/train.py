@@ -1671,6 +1671,10 @@ class Trainer:
                     # fills once and the gallery freezes on the first few episodes of the
                     # run, which is a subtler version of the problem this fixes.
                     self._replay_maps.clear()
+                else:
+                    # Recover every completed update without filling the league with
+                    # nearly identical opponents or changing archive/replay cadence.
+                    self.save("latest.pt")
                 if self.stop_requested or os.path.exists(stop_flag):
                     self.stop_requested = True
                     break

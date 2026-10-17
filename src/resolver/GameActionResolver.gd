@@ -749,7 +749,7 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 		return _recoiled(_resolve_shoot_fixture(shooter, intent.target_cell, side, intent.shots), shooter, intent.target_cell)
 
 	# Противотанкист может бить по пустой клетке пола (§3.14) — взрыв в её центре.
-	if intent.target_id < 0 and shooter.stats.special_ability_id == MCF.ABILITY_ANTI_TANK:
+	if intent.target_id < 0 and shooter.attack_ability() == MCF.ABILITY_ANTI_TANK:
 		var ground_reason := can_blast_cell(shooter, intent.target_cell)
 		if ground_reason != "":
 			return ActionResult.fail(ground_reason)
@@ -757,7 +757,7 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 
 	# Огнемётчик может пустить струю по пустой клетке пола (как противотанкист): струя
 	# идёт в её направлении, поджигает пол и убивает всех на пути.
-	if intent.target_id < 0 and shooter.stats.special_ability_id == MCF.ABILITY_FLAMETHROWER:
+	if intent.target_id < 0 and shooter.attack_ability() == MCF.ABILITY_FLAMETHROWER:
 		var flame_reason := can_flame_cell(shooter, intent.target_cell)
 		if flame_reason != "":
 			return ActionResult.fail(flame_reason)
@@ -765,7 +765,7 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 
 	# Марксманн стреляет в НАПРАВЛЕНИЕ (#49): целиться в конкретного бойца не обязательно,
 	# луч уходит по лучу через указанную клетку и летит дальше сам.
-	if intent.target_id < 0 and shooter.stats.special_ability_id == MCF.ABILITY_MARKSMAN:
+	if intent.target_id < 0 and shooter.attack_ability() == MCF.ABILITY_MARKSMAN:
 		var laser_reason := can_laser_cell(shooter, intent.target_cell)
 		if laser_reason != "":
 			return ActionResult.fail(laser_reason)
@@ -789,8 +789,8 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 	# Лазер марксманна и струя огнемёта телами не останавливаются — у них своя геометрия
 	# (§3.13, §3.14), там всех на пути и так накрывает.
 	var redirect_line := ""
-	if shooter.stats.special_ability_id != MCF.ABILITY_MARKSMAN \
-			and shooter.stats.special_ability_id != MCF.ABILITY_FLAMETHROWER:
+	if shooter.attack_ability() != MCF.ABILITY_MARKSMAN \
+			and shooter.attack_ability() != MCF.ABILITY_FLAMETHROWER:
 		var intercepted := first_unit_on_line(shooter.coord, target.coord,
 				shooter if not friendly_fire_enabled else null)
 		if intercepted != null:
@@ -799,7 +799,7 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 			target = intercepted
 
 	# Спецстрельба (§3.13, §3.14) — отдельная геометрия, без дробления действия.
-	match shooter.stats.special_ability_id:
+	match shooter.attack_ability():
 		MCF.ABILITY_ANTI_TANK:
 			return _recoiled(_resolve_anti_tank(shooter, target.coord, intent.component), shooter, target.coord)
 		MCF.ABILITY_FLAMETHROWER:
@@ -836,9 +836,9 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 	# Разбивку для броска она заполняет сама.
 	var need := hit_need_for(shooter, target, hit_mods)
 	# Штраф стрелка к защите цели (снайпер −2, щитоносец −2, шахтёр −1): цель парирует хуже.
-	var parry_need: int = target.armor() + shooter.stats.target_defense_penalty
-	if shooter.stats.target_defense_penalty != 0:
-		def_mods.append({"label": "Shooter penetration", "delta": shooter.stats.target_defense_penalty})
+	var parry_need: int = target.armor() + shooter.attack_penalty()
+	if shooter.attack_penalty() != 0:
+		def_mods.append({"label": "Shooter penetration", "delta": shooter.attack_penalty()})
 	# Укрытие цели (§3.7): стрелку сложнее попасть (учтено выше), цель лучше парирует.
 	var cover := cover_effect(shooter, target)
 	parry_need -= cover["defense_bonus"]
@@ -1120,7 +1120,7 @@ func anti_tank_shot_endangers_own(shooter: UnitInstance, center: Vector2i) -> bo
 			continue  # чужого взрыв и должен накрывать — за этим и стреляем
 		if not bool(risk[c]):
 			# Не эпицентр: окоп прячет от осколков (#30), щитоносец их держит (§3.14).
-			if cell.feature_id == MCF.FEATURE_TRENCH or _is_shield(occ):
+			if cell.feature_id == MCF.FEATURE_TRENCH or _shield_immunity(occ):
 				continue
 		return true
 	return false
@@ -1182,7 +1182,7 @@ func _blast(center: Vector2i, res: ActionResult = null, cells: Array[Vector2i] =
 
 	var protectors: Array = []
 	for u in state.all_units():
-		if u.is_alive() and _is_shield(u) and in_area.has(u.coord) and u.coord != center:
+		if u.is_alive() and _shield_immunity(u) and in_area.has(u.coord) and u.coord != center:
 			protectors.append(u)
 
 	var killed_names: Array = []
@@ -1210,7 +1210,7 @@ func _blast(center: Vector2i, res: ActionResult = null, cells: Array[Vector2i] =
 		if (u.aboard_vehicle_id != -1 and seated_hit.has(u.aboard_vehicle_id)) \
 				or (u.borg_id != -1 and seated_hit.has(u.borg_id)):
 			continue  # уже разобран как пассажир / оператор борга
-		if _is_shield(u) and u.coord != center:
+		if _shield_immunity(u) and u.coord != center:
 			continue  # щитоносец гибнет только при прямом попадании
 		# Окоп укрывает от взрыва по СОСЕДНЕЙ клетке (#30): осколки идут поверх
 		# канавы. Прямое попадание в саму канаву по-прежнему убивает.
@@ -1248,7 +1248,8 @@ func _pillbox_absorbs(center: Vector2i, damage: int, res: ActionResult,
 	var cell := state.grid.cell(center)
 	# Мебель тоже держит прочность, но удар на себя не принимает: стол не ДОТ, разрыв на
 	# нём идёт полной волной и сам стол бьёт через _blast_destroy_terrain.
-	if cell.feature_durability <= 0 or Furniture.is_furniture(cell.feature_id):
+	if cell.feature_durability <= 0 or Furniture.is_furniture(cell.feature_id) \
+			or cell.feature_id == MCF.FEATURE_DRONE_STATION:
 		return false
 	var was: String = MCF.feature_name(cell.feature_id, cell.feature_id)
 	var fid := cell.feature_id
@@ -1283,6 +1284,10 @@ func _blast_destroy_terrain(c: Vector2i, res: ActionResult = null,
 	# Мебель любой разрыв сносит целиком (§3.15, 0.9.2) — и сейф, и станок.
 	if Furniture.is_furniture(fid):
 		_destroy_furniture(cell, res, from_coord)
+		return
+	if fid == MCF.FEATURE_DRONE_STATION:
+		_destroy_drone_station(c)
+		notify_cell_changed(c)
 		return
 	if cell.feature_durability > 0:
 		return
@@ -1444,7 +1449,7 @@ func _flame_flood(origin: Vector2i, count: int, out: Array, from_coord: Vector2i
 func _flame_blocked(c: Vector2i) -> bool:
 	var cell := state.grid.cell(c)
 	var occ: UnitInstance = cell.occupant
-	return cell.is_wall() or (occ != null and occ.is_alive() and _is_shield(occ))
+	return cell.is_wall() or (occ != null and occ.is_alive() and _shield_immunity(occ))
 
 ## Разлёт по направлению dir на count клеток от origin, до стены/щитоносца/края.
 ## Возвращает, сколько клеток набрано.
@@ -1692,7 +1697,7 @@ func _laser_trace(from_coord: Vector2i, step: Vector2i) -> Array:
 				rec["cost"] = potential
 				rec["damage"] = potential / MCF.POTENTIAL_PER_DURABILITY
 		elif occ != null and occ.is_alive():
-			if _is_shield(occ):
+			if _shield_immunity(occ):
 				rec["kind"] = "shield"
 				rec["stop"] = true  # щит полностью гасит луч
 				rec["label"] = "Shield Bearer"
@@ -1783,7 +1788,7 @@ func _dir_name(step: Vector2i) -> String:
 ## Можно ли пустить лазер в сторону клетки (#49): целью служит не боец, а НАПРАВЛЕНИЕ,
 ## поэтому годится любая клетка поля, кроме той, где стоит сам стрелок.
 func can_laser_cell(shooter: UnitInstance, cell: Vector2i) -> String:
-	if shooter.stats.special_ability_id != MCF.ABILITY_MARKSMAN:
+	if shooter.attack_ability() != MCF.ABILITY_MARKSMAN:
 		return "Only the marksman fires a laser"
 	if not state.grid.in_bounds(cell):
 		return "Target out of bounds"
@@ -1842,8 +1847,7 @@ func _resolve_push(intent: PushIntent) -> ActionResult:
 		_kill(target)
 	else:
 		var back := target.coord + step
-		if state.grid.in_bounds(back) and not state.grid.cell(back).is_wall() \
-				and state.grid.cell(back).occupant == null:
+		if not state.grid.blocks_walk(back):
 			state.grid.move_occupant(target.coord, back)
 			push_to = back
 			pushed = true
@@ -1923,13 +1927,22 @@ func _step_toward(from_coord: Vector2i, to_coord: Vector2i) -> Vector2i:
 	return Vector2i(signi(to_coord.x - from_coord.x), signi(to_coord.y - from_coord.y))
 
 func _is_shield(u: UnitInstance) -> bool:
-	return u != null and u.stats.special_ability_id == MCF.ABILITY_SHIELD_BEARER
+	return u != null and u.attack_ability() == MCF.ABILITY_SHIELD_BEARER
 
 ## Не гибнет в огне и не обходит его при поиске пути (#1, #2): щитоносец и огнемётчик.
 ## Публичная — тем же вопросом задаётся Main, когда решает, рисовать ли крест-предупреждение.
 func is_fireproof(u: UnitInstance) -> bool:
 	# Борг не горит (batch 13 B10): оператор внутри огня не боится.
-	return u != null and (MCF.ability_is_fireproof(u.stats.special_ability_id) or u.borg_id != -1)
+	if u == null: return false
+	# Sealed shuttle cabins protect every passenger, including the driver.
+	if seated_vehicle_of(u) != null or u.borg_id != -1: return true
+	return not _is_wave_fighter(u) and MCF.ability_is_fireproof(u.stats.special_ability_id)
+
+func _is_wave_fighter(u: UnitInstance) -> bool:
+	return u != null and mode != null and mode.is_holdout() and u.owner == mode.wave_side
+
+func _shield_immunity(u: UnitInstance) -> bool:
+	return _is_shield(u) and not _is_wave_fighter(u)
 
 func _protected_by(u: UnitInstance, protectors: Array) -> bool:
 	for sb in protectors:
@@ -1962,7 +1975,7 @@ func hit_need_for(shooter: UnitInstance, target: UnitInstance, mods: Array = [])
 	if shooter == null or target == null:
 		return 7
 	var dist := Combat.distance(shooter.coord, target.coord)
-	var is_sniper := shooter.stats.special_ability_id == MCF.ABILITY_SNIPER
+	var is_sniper := shooter.attack_ability() == MCF.ABILITY_SNIPER
 	# Снайпер считается по своей лестнице (§5), остальные — по общей формуле (§3.5).
 	# Раньше снайпер шёл по общей, и она мазала на каждой полосе: при дальности 40
 	# давала 3+ там, где нужно автопопадание, и 3+/4+/5+/6 там, где нужно 2+/3+/4+/5+.
@@ -2002,7 +2015,7 @@ func cannon_aim_need(veh: Vehicle, cell: Vector2i) -> int:
 func aim_need(shooter: UnitInstance, cell: Vector2i, target: UnitInstance = null) -> int:
 	if shooter == null:
 		return 7
-	match shooter.stats.special_ability_id:
+	match shooter.attack_ability():
 		MCF.ABILITY_MARKSMAN, MCF.ABILITY_FLAMETHROWER:
 			return 0
 		MCF.ABILITY_ANTI_TANK:
@@ -2017,9 +2030,9 @@ func aim_need(shooter: UnitInstance, cell: Vector2i, target: UnitInstance = null
 	return hit_need_for(shooter, target)
 
 func _shield_blocks_shot(shooter: UnitInstance, target: UnitInstance) -> bool:
-	if not _is_shield(target):
+	if not _shield_immunity(target):
 		return false
-	if shooter.stats.special_ability_id == MCF.ABILITY_SNIPER:
+	if shooter.attack_ability() == MCF.ABILITY_SNIPER:
 		return false  # снайпер бьёт щитоносца с любой дистанции (§3.14)
 	return Combat.distance(shooter.coord, target.coord) > 1
 
@@ -2130,7 +2143,7 @@ func _resolve_drop_corpse(intent: DropCorpseIntent) -> ActionResult:
 	if Combat.distance(unit.coord, intent.to) > 1:
 		return ActionResult.fail("Too far to place")
 	var cell := state.grid.cell(intent.to)
-	if cell == null or cell.is_wall() or cell.is_space:
+	if not can_drop_corpse_at(intent.to):
 		return ActionResult.fail("Can't place a corpse there")
 	# Больше пяти тел на клетку не влезает (#98): на пятом куча становится стеной, а
 	# стена уже отсеяна проверкой is_wall() выше.
@@ -2465,7 +2478,7 @@ func _trench_run_clear(from_coord: Vector2i, to_coord: Vector2i) -> bool:
 
 ## Бьёт ли этот стрелок плоским лучом, для которого край окопа — не преимущество.
 func _fires_flat_beam(shooter: UnitInstance) -> bool:
-	return shooter != null and shooter.stats.special_ability_id == MCF.ABILITY_MARKSMAN
+	return shooter != null and shooter.attack_ability() == MCF.ABILITY_MARKSMAN
 
 ## Почему окоп не даёт выстрелить (#105). Причина зависит от того, кто где: обычно цель
 ## НИЖЕ линии огня, но марксман со дна канавы упирается в ровно обратное — цель выше него
@@ -2494,6 +2507,12 @@ func corpse_pickup_cell(unit: UnitInstance) -> Vector2i:
 ## Куда юнит может положить несомый труп (#72): своя клетка и соседние восемь, если
 ## они проходимы. Условия ДОСЛОВНО те же, что проверяет _resolve_drop_corpse, —
 ## подсветка в UI не должна расходиться с тем, что резолвер реально разрешает.
+func can_drop_corpse_at(coord: Vector2i) -> bool:
+	var cell := state.grid.cell(coord)
+	return cell != null and cell.walkable_terrain() and not cell.is_space \
+			and cell.vehicle_id == -1 and (cell.occupant == null or not cell.occupant.is_on_field()) \
+			and corpses_at(coord) < MCF.CORPSE_WALL_COUNT
+
 func corpse_drop_cells(unit: UnitInstance) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
 	if unit == null or unit.carried_corpses <= 0:
@@ -2502,7 +2521,7 @@ func corpse_drop_cells(unit: UnitInstance) -> Array[Vector2i]:
 	var candidates: Array = state.grid.neighbors(unit.coord)
 	for c: Vector2i in candidates:
 		var cell := state.grid.cell(c)
-		if cell == null or cell.is_wall() or cell.is_space:
+		if not can_drop_corpse_at(c):
 			continue
 		if corpses_at(c) >= MCF.CORPSE_WALL_COUNT:
 			continue
@@ -3190,7 +3209,7 @@ func reachable_for(unit: UnitInstance, budget: int, blocked: Dictionary = {},
 				merged[c] = true
 		merged.merge(blocked)
 		avoid = merged
-	return Movement.reachable_for(state.grid, unit, budget, avoid, vacated)
+	return Movement.reachable(state.grid, unit.coord, budget, not is_fireproof(unit), avoid, vacated)
 
 func _trench_cells() -> Array:
 	return _feature_cells(MCF.FEATURE_TRENCH)
@@ -3299,6 +3318,16 @@ const NOWHERE := Vector2i(-9999, -9999)
 
 ## Первая горящая клетка на пройденном маршруте (#1). Огнеупорные бойцы (#2) сквозь
 ## пламя проходят невредимыми, и для них ответ всегда NOWHERE.
+func _hazards_on_arrival(unit: UnitInstance, res: ActionResult) -> void:
+	if unit != null and unit.is_alive() and state.grid.in_bounds(unit.coord) \
+			and state.grid.cell(unit.coord).on_fire and not is_fireproof(unit):
+		unit.burnt = true
+		_kill(unit, res)
+		res.deaths.append(unit.id)
+		res.log("%s burned to death on leaving the vehicle!" % unit.stats.display_name)
+		return
+	_gas_on_arrival(unit, res)
+
 func _fire_on_path(unit: UnitInstance, path: Array) -> Vector2i:
 	if is_fireproof(unit):
 		return NOWHERE
@@ -4458,6 +4487,12 @@ func _vision_sides(owner: int) -> Dictionary:
 	return out
 
 ## Множество клеток, видимых команде (для тумана в UI).
+var sight_positions: Dictionary = {}
+func set_sight_positions(positions: Dictionary) -> void:
+	if sight_positions == positions: return
+	sight_positions = positions.duplicate()
+	_vis_epoch.clear()
+
 func team_visible_coords(owner: int) -> Dictionary:
 	var mode := 1 if fog_enabled else (2 if visibility_limited() else 0)
 	# Самый частый случай — «с прошлого раза не изменилось вообще ничего»: его зовут из
@@ -4515,7 +4550,7 @@ func team_visible_coords(owner: int) -> Dictionary:
 		if u.aboard_vehicle_id != -1:
 			continue
 		live[u.id] = true
-		var fresh := _seen_from(u.coord, sight_of(u), u.owner)
+		var fresh := _seen_from(sight_positions.get(u.id, u.coord), sight_of(u), u.owner, mode == 2)
 		var was: Variant = seen.get(u.id)
 		# Обзор этого бойца не изменился — его вклад уже в счётчиках, и трогать нечего.
 		# На обычном ходу так отсеиваются 99 бойцов из 100.
@@ -4537,7 +4572,7 @@ func team_visible_coords(owner: int) -> Dictionary:
 			continue
 		var vkey := -1 - veh.id
 		live[vkey] = true
-		var vfresh := _vehicle_seen(veh)
+		var vfresh := _vehicle_seen(veh, mode == 2)
 		var vwas: Variant = seen.get(vkey)
 		if vwas != null and vwas == vfresh:
 			continue
@@ -5518,6 +5553,16 @@ func station_near(operator: UnitInstance) -> Vector2i:
 ## тяжёлым пехотинцем из кресла, резолвер отвечал «Only an operator can launch a drone», и
 ## так до конца хода: жадная оценка переспрашивает один и тот же отказ, пока среда не
 ## оборвёт ход на восьмом (отсюда отказы кратные восьми в eval_games.jsonl у tactical-2).
+func _destroy_drone_station(coord: Vector2i) -> void:
+	var cell := state.grid.cell(coord)
+	if cell == null or cell.feature_id != MCF.FEATURE_DRONE_STATION: return
+	var veh := state.get_vehicle(cell.vehicle_id)
+	if veh != null and _seated(veh):
+		for i in veh.seats.size():
+			if veh.seats[i] == Vehicle.SEAT_STATION and veh.seat_cell(i) == coord:
+				veh.seats[i] = -1
+	cell.clear_feature()
+
 func stations_near(operator: UnitInstance) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
 	if operator == null or operator.stats.special_ability_id != MCF.ABILITY_DRONE_OPERATOR:
@@ -6503,7 +6548,7 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 			"epicenter": at_epicenter, "armor": u.armor(),
 			"need": u.armor() + 1, "rolls": [], "survived": true,
 		}
-		var is_shield: bool = u.stats.special_ability_id == MCF.ABILITY_SHIELD_BEARER
+		var is_shield: bool = _shield_immunity(u)
 		if at_epicenter and not is_shield:
 			det["survived"] = false
 		else:
@@ -6523,6 +6568,10 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 	# взрывом, после которого стол оставался стоять.
 	var smashed: Array = []
 	for fc: Vector2i in area:
+		if state.grid.in_bounds(fc) and state.grid.cell(fc).feature_id == MCF.FEATURE_DRONE_STATION:
+			_capture_visual_hold(result, [fc])
+			_destroy_drone_station(fc)
+			notify_cell_changed(fc)
 		if state.grid.in_bounds(fc) and Furniture.is_furniture(state.grid.cell(fc).feature_id) \
 				and fixture_at(fc) == "":   # lamps roll below, like glass (0.11.1)
 			smashed.append(fc)
@@ -7250,6 +7299,12 @@ func _sync_gas() -> void:
 ## Сила — по средней армии ЖИВЫХ игроков (по цене закупки); слот встаёт в случайное место
 ## очереди инициативы, и ходит армия сама — её ход ведёт резолвер, как ход жителей.
 func _independent_roster() -> Array:
+	var pool := _weighted_raider_roster()
+	if random_events != null:
+		pool = pool.filter(func(id: String) -> bool: return not random_events.excluded_units.has(id))
+	return pool
+
+func _weighted_raider_roster() -> Array:
 	var level := random_events.army_difficulty if random_events != null else 1
 	if level == 0:
 		return ["light_infantry", "light_infantry", "light_infantry", "light_infantry",
@@ -7281,12 +7336,15 @@ func _land_army(p: Dictionary, res: ActionResult) -> void:
 	if spots.is_empty():
 		res.log("Unknown forces turn back — nowhere to land on that edge")
 		return
+	var roster := _independent_roster()
+	if roster.is_empty():
+		res.log("Unknown forces hold off — all raider unit types are restricted")
+		return
 	var spent := 0
 	var placed := 0
 	var guard := 0
 	while guard < ARMY_UNIT_CAP and placed < spots.size():
 		guard += 1
-		var roster := _independent_roster()
 		var sid: String = roster[_rand_wide(roster.size())]
 		var stats: UnitStats = _army_stats(sid)
 		if stats == null:
@@ -7295,7 +7353,8 @@ func _land_army(p: Dictionary, res: ActionResult) -> void:
 			break
 		if budget <= 0 and placed >= ARMY_FALLBACK_UNITS:
 			break
-		state.spawn_unit(stats, spots[placed], slot)
+		var raider := state.spawn_unit(stats, spots[placed], slot)
+		raider.neutral_group = random_events.armies + 1
 		spent += stats.cost
 		placed += 1
 	if placed == 0:
@@ -7758,7 +7817,7 @@ func fire_cover(viewer: int, hostile: bool) -> PackedFloat32Array:
 	for u: UnitInstance in shooters:
 		if grid.cell(u.coord).obscured():
 			continue
-		var ability: String = u.stats.special_ability_id
+		var ability: String = u.attack_ability()
 		var pierce := ability == MCF.ABILITY_MARKSMAN
 		var sniper := ability == MCF.ABILITY_SNIPER
 		var reach := MCF.FLAME_JET_LENGTH if ability == MCF.ABILITY_FLAMETHROWER else 1 << 20
@@ -7867,7 +7926,7 @@ func _forecast_unit(u: UnitInstance) -> Array:
 		if c.x % 3 == 0 and c.y % 3 == 0 and c != u.coord and not grid.blocks_walk(c):
 			spots.append(c)
 	var best: Dictionary = {}
-	var ability: String = u.stats.special_ability_id
+	var ability: String = u.attack_ability()
 	if u.fire_range() > 0.0 or ability == MCF.ABILITY_MARKSMAN:
 		var pierce := ability == MCF.ABILITY_MARKSMAN
 		var sniper := ability == MCF.ABILITY_SNIPER
@@ -7940,7 +7999,7 @@ func can_shoot(shooter: UnitInstance, target: UnitInstance) -> String:
 		return _trench_block_reason(shooter)
 
 	var dist := Combat.distance(shooter.coord, target.coord)
-	match shooter.stats.special_ability_id:
+	match shooter.attack_ability():
 		MCF.ABILITY_MARKSMAN:
 			# Лазер бьёт на любую дистанцию и пробивает препятствия (§3.13).
 			return ""
@@ -7972,7 +8031,7 @@ func can_shoot(shooter: UnitInstance, target: UnitInstance) -> String:
 ## Окно под выстрел (batch ui-drones): видимая клетка со стеклом на линии огня и в
 ## пределах дальности. Спецстрелкам (противотанкист, огнемётчик, марксман) свой путь.
 func can_shoot_window(shooter: UnitInstance, cell: Vector2i) -> String:
-	if shooter.stats.special_ability_id in [MCF.ABILITY_ANTI_TANK, MCF.ABILITY_FLAMETHROWER,
+	if shooter.attack_ability() in [MCF.ABILITY_ANTI_TANK, MCF.ABILITY_FLAMETHROWER,
 			MCF.ABILITY_MARKSMAN, MCF.ABILITY_MINER, MCF.ABILITY_SHIELD_BEARER]:
 		return "This unit can't shoot at windows"
 	if not state.grid.in_bounds(shooter.coord) or not state.grid.in_bounds(cell):
@@ -8041,7 +8100,7 @@ func _resolve_shoot_window(shooter: UnitInstance, cell: Vector2i, shots: int = -
 ## до стекла, как в цель, но без укрытия (у стекла его нет); огонь на линии на попадание не влияет.
 func pane_hit_need(shooter: UnitInstance, cell: Vector2i) -> int:
 	var dist := Combat.distance(shooter.coord, cell)
-	var is_sniper := shooter.stats.special_ability_id == MCF.ABILITY_SNIPER
+	var is_sniper := shooter.attack_ability() == MCF.ABILITY_SNIPER
 	var need := sniper_need(dist) if is_sniper \
 			else hit_need(dist, shooter.fire_range())
 	return clampi(need, 1, 7)
@@ -8095,7 +8154,7 @@ func _through_glass(shooter: UnitInstance, panes: Array[Vector2i], bullets: int,
 	return bullets
 
 func _is_anti_tank(u: UnitInstance) -> bool:
-	return u != null and u.stats.special_ability_id == MCF.ABILITY_ANTI_TANK
+	return u != null and u.attack_ability() == MCF.ABILITY_ANTI_TANK
 
 ## Все, по кому стрелок может открыть огонь. Со времён #100 сюда попадают и СВОИ:
 ## дружественный огонь разрешён, и игрок должен видеть, что союзник тоже под прицелом.
@@ -8148,7 +8207,7 @@ func hostile_target_ids(shooter: UnitInstance) -> Array:
 
 ## "" = противотанкист может ударить по этой клетке пола; иначе причина отказа (§3.14).
 func can_blast_cell(shooter: UnitInstance, cell: Vector2i) -> String:
-	if shooter.stats.special_ability_id != MCF.ABILITY_ANTI_TANK:
+	if shooter.attack_ability() != MCF.ABILITY_ANTI_TANK:
 		return "Only the anti-tank can hit the ground"
 	if not state.grid.in_bounds(cell):
 		return "Target out of bounds"
@@ -8178,7 +8237,7 @@ func can_blast_cell(shooter: UnitInstance, cell: Vector2i) -> String:
 ## Пустые клетки пола, по которым противотанкист может ударить (для подсветки в UI).
 func blastable_cells(shooter: UnitInstance) -> Array:
 	var out: Array = []
-	if shooter.stats.special_ability_id != MCF.ABILITY_ANTI_TANK:
+	if shooter.attack_ability() != MCF.ABILITY_ANTI_TANK:
 		return out
 	var reach := shooter.fire_range()
 	# Собственная клетка — первой в списке (#11): она и есть «ударить под себя»,
@@ -8201,7 +8260,7 @@ func blastable_cells(shooter: UnitInstance) -> Array:
 
 ## "" = огнемётчик может пустить струю в направлении этой клетки; иначе причина отказа.
 func can_flame_cell(shooter: UnitInstance, cell: Vector2i) -> String:
-	if shooter.stats.special_ability_id != MCF.ABILITY_FLAMETHROWER:
+	if shooter.attack_ability() != MCF.ABILITY_FLAMETHROWER:
 		return "Only the flamethrower can spray the ground"
 	if not state.grid.in_bounds(cell):
 		return "Target out of bounds"
@@ -8222,7 +8281,7 @@ func can_flame_cell(shooter: UnitInstance, cell: Vector2i) -> String:
 ## Пустые клетки пола, по которым огнемётчик может пустить струю (для подсветки в UI).
 func flammable_cells(shooter: UnitInstance) -> Array:
 	var out: Array = []
-	if shooter.stats.special_ability_id != MCF.ABILITY_FLAMETHROWER:
+	if shooter.attack_ability() != MCF.ABILITY_FLAMETHROWER:
 		return out
 	var reach := MCF.FLAME_JET_LENGTH
 	for dy in range(-reach, reach + 1):
@@ -8270,6 +8329,7 @@ func _board_borg(unit: UnitInstance, veh: Vehicle) -> ActionResult:
 	var err := _borg_entry_error(unit, veh)
 	if err != "":
 		return ActionResult.fail(err)
+	unit.action_state = null
 	var cell := state.grid.cell(veh.origin)
 	# Мёртвый оператор выталкивается наружу при посадке (B12) — на свободную клетку рядом.
 	if cell.occupant != null:
@@ -8333,6 +8393,7 @@ func _exit_borg(unit: UnitInstance, veh: Vehicle, target: Vector2i) -> ActionRes
 	unit.remaining_ap -= 1
 	state.grid.cell(unit.coord).occupant = null
 	unit.borg_id = -1
+	unit.action_state = null
 	veh.occupants = []
 	veh.origin = unit.coord
 	state.grid.set_vehicle_footprint(veh.id, veh.footprint())
@@ -8341,7 +8402,7 @@ func _exit_borg(unit: UnitInstance, veh: Vehicle, target: Vector2i) -> ActionRes
 	unit.remaining_ap = mini(unit.remaining_ap, unit.max_ap())
 	var res := ActionResult.success(["%s climbs out of the borg [AP: %d]" % [
 		unit.stats.display_name, unit.remaining_ap]])
-	_gas_on_arrival(unit, res)
+	_hazards_on_arrival(unit, res)
 	return res
 
 ## Борг следует за своим оператором: любое перемещение бойца (ход, отброс, перенос)
@@ -8546,7 +8607,7 @@ func _adjacent_to_vehicle(coord: Vector2i, veh: Vehicle) -> bool:
 	return false
 
 func _is_miner(u: UnitInstance) -> bool:
-	return u != null and u.stats.special_ability_id == MCF.ABILITY_MINER
+	return u != null and u.attack_ability() == MCF.ABILITY_MINER
 
 ## Шахтёр бьёт ломом по соседней вражеской машине (item 15): один бросок d6, на
 ## MINER_VEHICLE_HIT_NEED корпус теряет MINER_VEHICLE_DAMAGE прочности. Стоит 1 ОД
@@ -8665,6 +8726,19 @@ func repairable_vehicles(unit: UnitInstance) -> Array:
 
 ## Вытащить труп из машины на свободную соседнюю клетку (item 18): павший экипаж
 ## занимает место, его выгружают, чтобы освободить слот. Стоит 1 ОД.
+func _borg_body(veh: Vehicle) -> UnitInstance:
+	if veh == null or not veh.is_borg(): return null
+	var cell := state.grid.cell(veh.origin)
+	if cell != null and cell.occupant != null and cell.occupant.status == MCF.Status.CORPSE:
+		return cell.occupant
+	return null
+
+func _borg_body_drop_spot(actor: UnitInstance) -> Vector2i:
+	for n in state.grid.neighbors(actor.coord):
+		if not state.grid.blocks_walk(n) and not state.grid.cell(n).is_space:
+			return n
+	return NOWHERE
+
 func _resolve_vehicle_unload_corpse(intent: VehicleUnloadCorpseIntent) -> ActionResult:
 	var unit := state.get_unit(intent.actor_id)
 	var err := _validate_actor(unit)
@@ -8673,10 +8747,20 @@ func _resolve_vehicle_unload_corpse(intent: VehicleUnloadCorpseIntent) -> Action
 	if unit.remaining_ap <= 0:
 		return ActionResult.fail("Unit has no AP left")
 	var veh := state.get_vehicle(intent.vehicle_id)
-	if veh == null or not veh.alive():
+	if veh == null or (not veh.alive() and _borg_body(veh) == null):
 		return ActionResult.fail("No such vehicle")
 	if not _adjacent_to_vehicle(unit.coord, veh):
 		return ActionResult.fail("Must stand next to the vehicle")
+	var borg_body := _borg_body(veh)
+	if borg_body != null:
+		var body_spot := _borg_body_drop_spot(unit)
+		if body_spot == NOWHERE:
+			return ActionResult.fail("No room beside you to set the body down")
+		unit.remaining_ap -= 1
+		state.grid.move_occupant(borg_body.coord, body_spot)
+		borg_body.borg_id = -1
+		veh.occupants.erase(borg_body.id)
+		return ActionResult.success(["%s pulls the body out of the borg." % unit.stats.display_name])
 	if _seated(veh):
 		# Тело в кресле челнока (batch 13 S10): вытаскивают снаружи, стоя рядом с клеткой
 		# этого кресла; труп ложится к ногам вытащившего.
@@ -8747,7 +8831,7 @@ func unloadable_corpse_vehicle_ids(actor: UnitInstance) -> Array:
 	if not has_spot:
 		return out
 	for veh: Vehicle in state.all_vehicles():
-		if not veh.alive() or not _adjacent_to_vehicle(actor.coord, veh):
+		if (not veh.alive() and _borg_body(veh) == null) or not _adjacent_to_vehicle(actor.coord, veh):
 			continue
 		if _seated(veh):
 			for i in veh.seats.size():
@@ -8757,6 +8841,8 @@ func unloadable_corpse_vehicle_ids(actor: UnitInstance) -> Array:
 						and Combat.distance(actor.coord, veh.seat_cell(i)) == 1:
 					out.append(veh.id)
 					break
+		elif _borg_body(veh) != null:
+			if _borg_body_drop_spot(actor) != NOWHERE: out.append(veh.id)
 		elif not veh.corpse_slots.is_empty():
 			out.append(veh.id)
 	return out
@@ -8789,7 +8875,7 @@ func _resolve_vehicle_board(intent: VehicleBoardIntent) -> ActionResult:
 	if veh == null or not veh.alive():
 		return ActionResult.fail("No such vehicle")
 	# Щитоносцу и несущему трупы в машине не место (item 19): щит и груз внутрь не лезут.
-	if _is_shield(unit):
+	if _is_shield(unit) and not veh.is_borg():
 		return ActionResult.fail("A shield-bearer can't fit inside a vehicle")
 	if unit.carried_corpses > 0:
 		return ActionResult.fail("Drop the corpses before boarding")
@@ -8940,7 +9026,7 @@ func _resolve_vehicle_disembark(intent: VehicleDisembarkIntent) -> ActionResult:
 		res_s.ok = true
 		res_s.log("%s climbs out of the %s (free)." % [unit.stats.display_name,
 			VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)])
-		_gas_on_arrival(unit, res_s)
+		_hazards_on_arrival(unit, res_s)
 		return res_s
 	if unit.remaining_ap <= 0:
 		return ActionResult.fail("Unit has no AP left")
@@ -8962,7 +9048,7 @@ func _resolve_vehicle_disembark(intent: VehicleDisembarkIntent) -> ActionResult:
 	res.ok = true
 	res.log("%s disembarks the %s." % [unit.stats.display_name,
 		VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)])
-	_gas_on_arrival(unit, res)
+	_hazards_on_arrival(unit, res)
 	return res
 
 # --- Поворот танка ---
@@ -9034,9 +9120,13 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 		for i in veh.seats.size():
 			var sid: int = veh.seats[i]
 			if sid == Vehicle.SEAT_STATION:
+				var sc := state.grid.cell(veh.seat_cell(i))
+				# Repair stale seats from older saves; never resurrect a destroyed station.
+				if sc == null or sc.feature_id != MCF.FEATURE_DRONE_STATION:
+					veh.seats[i] = -1
+					continue
 				station_seats.append(i)
 				station_from[i] = veh.seat_cell(i)
-				var sc := state.grid.cell(veh.seat_cell(i))
 				station_op[i] = sc.station_operator_id
 				if sc.feature_id == MCF.FEATURE_DRONE_STATION:
 					sc.station_operator_id = -1
@@ -9737,11 +9827,11 @@ func controllable_vehicle_at(coord: Vector2i, owner: int) -> Vehicle:
 func boardable_vehicles(unit: UnitInstance) -> Array:
 	var out: Array = []
 	if unit == null or not unit.is_alive() or unit.aboard_vehicle_id != -1 or unit.is_drone \
-			or unit.borg_id != -1 or unit.carried_corpses > 0 or _is_shield(unit):
+			or unit.borg_id != -1 or unit.carried_corpses > 0:
 		return out   # то же, что отклонит _resolve_vehicle_board: меню не предлагает отказ
 	var seen := {}
 	for veh: Vehicle in state.all_vehicles():
-		if not veh.alive() or _vehicle_full(veh):
+		if not veh.alive() or _vehicle_full(veh) or (_is_shield(unit) and not veh.is_borg()):
 			continue
 		if seen.has(veh.id) or (veh.is_borg() and _borg_entry_error(unit, veh) != ""):
 			continue
@@ -9978,7 +10068,7 @@ func shootable_lamp_sides(shooter: UnitInstance, c: Vector2i) -> Array[int]:
 func can_shoot_fixture(shooter: UnitInstance, c: Vector2i, side: int = -1) -> String:
 	if shooter == null or not shooter.is_alive() or shooter.is_drone or shooter.captor_id >= 0:
 		return "Unit cannot fire"
-	if shooter.stats.special_ability_id in [MCF.ABILITY_ANTI_TANK, MCF.ABILITY_FLAMETHROWER,
+	if shooter.attack_ability() in [MCF.ABILITY_ANTI_TANK, MCF.ABILITY_FLAMETHROWER,
 			MCF.ABILITY_MARKSMAN, MCF.ABILITY_MINER, MCF.ABILITY_SHIELD_BEARER]:
 		return "Use this unit's normal attack"
 	if side < 0 and not state.grid.cell(c).lamps.is_empty() and fixture_at(c) == "":
@@ -10315,9 +10405,10 @@ func _land_wave(res: ActionResult) -> void:
 	mode.pending_wave = {}
 	var k := mode.wave + 1
 	var spots := _army_spawn_cells(p)
-	var placed := _spawn_budget(spots, mode.wave_budget(k), mode.wave_side)
+	var placed := _spawn_budget(spots, mode.wave_budget(k), mode.wave_side, mode.excluded_units, k)
 	mode.wave = k
 	mode.wave_spawned += placed
+	mode.wave_sizes[str(k)] = placed
 	# Слот волн обязан стоять в очереди: лобби ставит его туда с начала боя, а тем, кто
 	# собирает ростер позже (среда RL, инструменты), — место в конце круга.
 	state.turns.insert_slot(mode.wave_side, state.turns.round_order.size())
@@ -10614,19 +10705,23 @@ func _land_reinforce(p: Dictionary, res: ActionResult) -> void:
 
 ## Высадить бойцов из ARMY_ROSTER на клетки spots, пока хватает бюджета (первый — всегда).
 ## Кубики выбирают тип; порядок клеток задан. Возвращает, сколько встало.
-func _spawn_budget(spots: Array[Vector2i], budget: int, owner: int) -> int:
+func _spawn_budget(spots: Array[Vector2i], budget: int, owner: int,
+		excluded: Array[String] = [], group: int = 0) -> int:
+	var pool := ARMY_ROSTER.filter(func(id: String) -> bool: return not excluded.has(id))
+	if pool.is_empty(): return 0
 	var spent := 0
 	var placed := 0
 	var guard := 0
 	while guard < ARMY_UNIT_CAP and placed < spots.size():
 		guard += 1
-		var sid: String = ARMY_ROSTER[_rand_wide(ARMY_ROSTER.size())]
+		var sid: String = pool[_rand_wide(pool.size())]
 		var stats: UnitStats = _army_stats(sid)
 		if stats == null:
 			continue
 		if spent + stats.cost > budget and placed > 0:
 			break
-		state.spawn_unit(stats, spots[placed], owner)
+		var fighter := state.spawn_unit(stats, spots[placed], owner)
+		fighter.neutral_group = group
 		spent += stats.cost
 		placed += 1
 	return placed

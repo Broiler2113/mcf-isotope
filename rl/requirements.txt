@@ -2,6 +2,7 @@
 # pinned via --index-url in rl/setup.sh; on macOS the same wheel carries MPS.
 torch>=2.4
 numpy>=1.26
+orjson>=3.10,<4     # native decoding for the env's dense observation replies
 tensorboard>=2.16
 pyyaml>=6.0
 onnx>=1.16

@@ -10,7 +10,7 @@ config_version=5
 
 [application]
 
-config/version="0.12.7"
+config/version="0.12.8"
 
 config/name="MCF Isotope"
 run/main_scene="res://scenes/MainMenu.tscn"

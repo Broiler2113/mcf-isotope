@@ -49,11 +49,17 @@ def samples(kind, length, seed):
                 if t >= delay:
                     rubble += (n*.32 + math.sin(2*math.pi*617*(t-delay))*.17)*math.exp(-(t-delay)*65)
             v = math.tanh((crack + thud + rubble)*1.25)*.8
-        elif kind == "shot":
-            v = (n * .65 + math.sin(2*math.pi*145*t) * .3) * math.exp(-t * 37)
-        elif kind == "burst":
-            phase = t % .075
-            v = (n * .65 + low * .8) * math.exp(-phase * 65) * math.exp(-t * 2)
+        elif kind in ("shot", "burst"):
+            phase = t if kind == "shot" else t % .075
+            # A sharp broadband muzzle crack, low pressure thump and dry echoes.
+            crack = (n - low) * 1.65 * math.exp(-phase * 210)
+            thump = (low * 3.2 + math.sin(2 * math.pi * (115 * phase - 240 * phase**2)) * .5) * math.exp(-phase * 48)
+            tail = n * .25 * math.exp(-phase * 24)
+            echo = 0.0 if phase < .021 else n * .22 * math.exp(-(phase - .021) * 90)
+            v = math.tanh((crack + thump + tail + echo) * 1.6) * .82
+            attack = min(1., phase * 9000)
+            if kind == "burst":
+                v *= 1 - .12 * int(t / .075)
         elif kind == "laser":
             v = (math.sin(2*math.pi*(1900*t - 1200*t*t))*.6 + n*.08)*math.exp(-t*12)
         elif kind == "whistle":

@@ -32,6 +32,30 @@ def download(url, path, sha256):
         raise RuntimeError(f"checksum mismatch for {path.name}: {actual}")
 
 
+def stage_manifest(output: Path, target: str):
+    """Register only a complete, built platform; source checkouts need no extension."""
+    system, arch = target.split("-", 1)
+    library = {"linux": "mcf_policy.so", "windows": "mcf_policy.dll", "macos": "mcf_policy.dylib"}[system]
+    runtime = {"linux": "libonnxruntime.so.1", "windows": "onnxruntime.dll", "macos": "libonnxruntime.1.22.0.dylib"}[system]
+    required = [library, runtime]
+    if system == "windows":
+        required += ["msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll"]
+    missing = [name for name in required if not (output / name).is_file()]
+    if missing:
+        raise RuntimeError("Incomplete native policy build: " + ", ".join(missing))
+    template = (ROOT / "addons/mcf_policy/mcf_policy.gdextension.in").read_text()
+    lines = []
+    for line in template.splitlines():
+        if " = " in line and line.split(" = ", 1)[0].startswith(("linux.", "windows.", "macos.")):
+            if not line.startswith(f"{system}.{arch} = "):
+                continue
+            line = line.replace(f"bin/{target}/", "")
+        lines.append(line)
+    manifest = output / "mcf_policy.gdextension"
+    manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return manifest
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--cache", type=Path, default=ROOT / ".cache/policy-deps")
@@ -101,6 +125,7 @@ def main():
         redist = crt_dirs[-1].parent.parent
         for license_file in redist.glob("*.txt"):
             shutil.copy2(license_file, notices / license_file.name)
+    stage_manifest(output, target)
     print(f"Staged {target}: {output}")
 
 

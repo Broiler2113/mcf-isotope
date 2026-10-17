@@ -10,7 +10,7 @@ EXTRA=""
 
 fail=0
 for script in tests/check_scripts.gd tests/run_audio.gd tests/run_codec.gd tests/run_headless.gd \
-              tests/run_lockstep.gd tests/run_player_actions.gd \
+              tests/run_lockstep.gd tests/run_reclaim.gd tests/run_player_actions.gd \
               tests/run_lobby_maps.gd tests/run_combat_safety.gd \
               tests/run_ui_assets.gd tests/run_main_menu.gd tests/run_hotkeys.gd tests/run_lighting.gd tests/run_light_fixtures.gd tests/run_ai_conduct.gd \
               tests/run_mirror_stamp.gd tests/run_modular_tank.gd \
@@ -25,7 +25,7 @@ for script in tests/check_scripts.gd tests/run_audio.gd tests/run_codec.gd tests
               tests/run_random_events.gd tests/run_gas_visibility.gd tests/run_demolish_materials.gd \
               tests/run_outer_grass.gd tests/run_ground_backdrop.gd tests/run_batch094.gd tests/run_replay_seek.gd tests/run_replay_bookmarks.gd \
               tests/run_decal_sync.gd tests/run_match_lifetime.gd tests/run_rl_learning.gd \
-              tests/run_rl_giant_defense.gd tests/run_batch098.gd tests/run_followup098.gd tests/run_batch011.gd tests/run_batch0111.gd tests/run_batch0112.gd tests/run_batch0113.gd tests/run_batch012.gd tests/run_batch0121.gd tests/run_batch0122.gd tests/run_remaining_bugs.gd tests/run_remaining_generation.gd tests/run_remaining_ui.gd tests/run_followup0122.gd tests/run_issues6.gd tests/run_reported_issues.gd; do
+              tests/run_rl_giant_defense.gd tests/run_batch098.gd tests/run_followup098.gd tests/run_batch011.gd tests/run_batch0111.gd tests/run_batch0112.gd tests/run_batch0113.gd tests/run_batch012.gd tests/run_batch0121.gd tests/run_batch0122.gd tests/run_remaining_bugs.gd tests/run_remaining_generation.gd tests/run_remaining_ui.gd tests/run_followup0122.gd tests/run_issues6.gd tests/run_reported_issues.gd tests/run_player_reports.gd; do
   echo "=== $script ==="
   # shellcheck disable=SC2086
   "$GODOT" --headless --script "res://$script" $EXTRA
@@ -46,10 +46,14 @@ echo "=== tests/bench/run_bench.gd ==="
 # Приёмник отчётов об ошибках (0.12): сервер в tools/bugs, проверка без сети наружу.
 echo "=== tools/bugs/test_isotope_bugs.py ==="
 python3 tools/bugs/test_isotope_bugs.py || fail=1
+python3 tests/bench/test_compare_timings.py || fail=1
+python3 native/policy/test_manifest.py || fail=1
 
 # Сетевая партия на двух процессах (batch 12): лобби → расстановка → бой по ENet.
 echo "=== tests/run_net_match.sh ==="
 bash tests/run_net_match.sh || fail=1
+bash tests/run_net_reclaim.sh || fail=1
+MCF_RECLAIM_SOLO=1 bash tests/run_net_reclaim.sh || fail=1
 bash tests/run_net_spectators.sh || fail=1
 bash tests/run_net_kick.sh || fail=1
 bash tests/run_net_relay.sh || fail=1

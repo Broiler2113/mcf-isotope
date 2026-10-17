@@ -7,7 +7,7 @@ import subprocess
 import sys
 import zipfile
 
-from build import ROOT
+from build import ROOT, stage_manifest
 
 
 def main():
@@ -24,6 +24,7 @@ def main():
     model = ROOT / "assets/policy/baseline.onnx"
     if not binaries.is_dir() or not model.is_file():
         p.error("build native/policy/build.py and export a baseline model first")
+    stage_manifest(binaries, native_target)
     output = a.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     stage = output / "project"
@@ -32,6 +33,15 @@ def main():
     for name in ("src", "scenes", "fonts", "textures", "interface_textures", "assets", "addons", "rl", "audio"):
         shutil.copytree(ROOT / name, stage / name, dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns("runs", "__pycache__", "*.py", "*.sh", "*.yaml", ".streamlit"))
+    staged_addon = stage / "addons/mcf_policy"
+    # Previous exports may contain the former unconditional root manifest.
+    for old in staged_addon.glob("*.gdextension*"):
+        if not old.name.endswith((".in", ".in.uid")):
+            old.unlink()
+    staged_bins = staged_addon / "bin"
+    for platform_dir in staged_bins.iterdir():
+        if platform_dir.is_dir() and platform_dir.name != native_target:
+            shutil.rmtree(platform_dir)
     shutil.copy2(ROOT / "project.godot", stage / "project.godot")
     smoke_dir = stage / "native/policy"
     smoke_dir.mkdir(parents=True, exist_ok=True)

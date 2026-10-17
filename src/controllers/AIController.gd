@@ -904,7 +904,7 @@ func _neutral_firing_move(state: GameState, r: GameActionResolver, u: UnitInstan
 	positions.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
 		if reach.cost[a] != reach.cost[b]: return reach.cost[a] < reach.cost[b]
 		return a.y < b.y or (a.y == b.y and a.x < b.x))
-	var ability := u.stats.special_ability_id
+	var ability := u.attack_ability()
 	for coord: Vector2i in positions:
 		if coord == u.coord or (_avoids_fire(u) and _fire_near(state, coord)): continue
 		for target: UnitInstance in targets:
@@ -1042,7 +1042,7 @@ func _best_corpse_drop(state: GameState, r: GameActionResolver, u: UnitInstance)
 	var best: Dictionary = {}
 	for n: Vector2i in state.grid.neighbors(u.coord):
 		var cell := state.grid.cell(n)
-		if cell == null or cell.is_wall() or cell.is_space:
+		if not r.can_drop_corpse_at(n):
 			continue
 		var here: int = r.corpses_at(n)
 		if here >= MCF.CORPSE_WALL_COUNT:
@@ -1074,7 +1074,7 @@ func _pending_shoot(u: UnitInstance) -> bool:
 	return u.action_state != null and u.action_state.is_pending()
 
 func _shoot_ap_cost(u: UnitInstance) -> int:
-	return MCF.MARKSMAN_AP_COST if u.stats.special_ability_id == MCF.ABILITY_MARKSMAN else 1
+	return MCF.MARKSMAN_AP_COST if u.attack_ability() == MCF.ABILITY_MARKSMAN else 1
 
 # --- Оценка целей ---
 ## Тактическая «стоимость» вражеского юнита: спецстрелки опаснее, мирных-НПС не бьём.
@@ -1205,7 +1205,7 @@ func _best_shoot(state: GameState, r: GameActionResolver, u: UnitInstance) -> Di
 		# Пуля достанется первому живому на линии (#100). Если это свой — выстрел
 		# не предлагаем вовсе; если чужой — целимся сразу в него, честной оценкой.
 		# Лазер марксманна летит сквозь тела, его перенаправление не касается.
-		if u.stats.special_ability_id != MCF.ABILITY_MARKSMAN:
+		if u.attack_ability() != MCF.ABILITY_MARKSMAN:
 			var blocker := r.first_unit_on_line(u.coord, t.coord)
 			if blocker != null:
 				if blocker.owner == u.owner or CivilianAI.is_npc(blocker):
@@ -1270,7 +1270,7 @@ func _shots_for(r: GameActionResolver, u: UnitInstance, t: UnitInstance) -> int:
 	var cover := r.cover_effect(u, t)
 	var need := Combat.hit_number(Combat.distance(u.coord, t.coord), u.fire_range()) \
 			+ int(cover["hit_penalty"])
-	var parry: int = t.armor() + u.stats.target_defense_penalty \
+	var parry: int = t.armor() + u.attack_penalty() \
 			- int(cover["defense_bonus"]) - t.carried_corpses
 	var p_hit := clampf(float(7 - need) / 6.0, 0.0, 1.0)
 	var p_pen := clampf(float(parry - 1) / 6.0, 0.0, 1.0)
@@ -1302,7 +1302,7 @@ func _vehicle_value(veh: Vehicle) -> float:
 ## единственный в армии, чей выстрел снимает с брони прочность.
 ## Бьём по клетке следа: удар по земле (§3.14) накрывает её взрывом.
 func _best_vehicle_shot(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
-	if u.stats.special_ability_id != MCF.ABILITY_ANTI_TANK:
+	if u.attack_ability() != MCF.ABILITY_ANTI_TANK:
 		return {}
 	if u.remaining_ap < _shoot_ap_cost(u):
 		return {}
@@ -1339,7 +1339,7 @@ func _best_vehicle_shot(state: GameState, r: GameActionResolver, u: UnitInstance
 ## Цель ищем на луче к врагу, начиная с клетки, до которой взрыв не достаёт нас самих
 ## (радиус +1) — иначе сапёр подорвался бы на собственном заряде.
 func _best_blast_path(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
-	if u.stats.special_ability_id != MCF.ABILITY_ANTI_TANK:
+	if u.attack_ability() != MCF.ABILITY_ANTI_TANK:
 		return {}
 	if u.remaining_ap < _shoot_ap_cost(u):
 		return {}
@@ -1467,7 +1467,7 @@ func _best_board(state: GameState, r: GameActionResolver, u: UnitInstance) -> Di
 	return {}
 
 func _move_to_vehicle(state: GameState, u: UnitInstance) -> Dictionary:
-	if u.stats.special_ability_id != MCF.ABILITY_ANTI_TANK:
+	if u.attack_ability() != MCF.ABILITY_ANTI_TANK:
 		return {}
 	if u.remaining_ap <= 0 and u.move_credit <= 0:
 		return {}
@@ -1650,7 +1650,7 @@ func _best_mine(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dic
 ## (клетки струи + ортогональные соседи подожжённых клеток — туда огонь доползёт в начале
 ## нашего следующего хода). Огнеупорному соседу пожар не страшен; в струе гибнет и он.
 func _hurts_own(state: GameState, r: GameActionResolver, u: UnitInstance, aim: Vector2i) -> bool:
-	var ability := u.stats.special_ability_id
+	var ability := u.attack_ability()
 	if ability == MCF.ABILITY_MARKSMAN:
 		for c: Vector2i in r.laser_path(u, aim):
 			if _friend_at(state, c):
@@ -1891,7 +1891,7 @@ func _smoke_value(landing: Vector2i, through: Dictionary, lines: Array) -> float
 
 ## Вероятность хотя бы одного попадания очередью стрелка s на дистанции d (без укрытий).
 static func _line_hit(s: UnitInstance, d: int) -> float:
-	if s.stats.special_ability_id == MCF.ABILITY_MARKSMAN:
+	if s.attack_ability() == MCF.ABILITY_MARKSMAN:
 		return 0.66
 	var need := Combat.hit_number(d, s.fire_range())
 	if need >= 7:

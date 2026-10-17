@@ -26,6 +26,7 @@ for pair in "asym" "town" "unready"; do
     fail=1
   fi
 done
+MCF_TEST_RELAY="127.0.0.1:$PORT" bash tests/run_net_reclaim.sh || fail=1
 kill $rpid 2>/dev/null
 [ $fail -ne 0 ] && { echo "relay match FAILED"; exit 1; }
 echo "relay match OK"

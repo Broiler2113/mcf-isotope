@@ -73,6 +73,9 @@ var next_wave_round: int = 1
 var pending_wave: Dictionary = {}
 ## Сколько бойцов волн пришло всего — для счёта убитых в бесконечном режиме.
 var wave_spawned: int = 0
+var excluded_units: Array[String] = []
+## Counts include removed corpses, so the initiative breakdown survives cleanup.
+var wave_sizes: Dictionary = {}
 ## Сила армии защитников в начале партии (очки закупки) — мерило волн.
 var defender_value: int = 0
 
@@ -94,6 +97,7 @@ static func from_config() -> MatchMode:
 	m.zone_count = GameConfig.capture_zones if ZONE_COUNTS.has(GameConfig.capture_zones) else DEFAULT_ZONES
 	m.target = clampi(GameConfig.capture_target, TARGET_MIN, TARGET_MAX)
 	m.waves_total = GameConfig.holdout_waves if WAVE_CHOICES.has(GameConfig.holdout_waves) else DEFAULT_WAVES
+	m.excluded_units = GameConfig.holdout_excluded_units.duplicate()
 	return m
 
 ## Ключ команды: настоящая команда — "t<номер>", сторона вне команд — "s<номер>". Тот же
@@ -110,6 +114,7 @@ func snapshot() -> Dictionary:
 		"waves_total": waves_total, "wave": wave, "wave_side": wave_side,
 		"next_wave_round": next_wave_round, "pending_wave": pending_wave.duplicate(true),
 		"wave_spawned": wave_spawned, "defender_value": defender_value,
+		"excluded_units": excluded_units.duplicate(), "wave_sizes": wave_sizes.duplicate(),
 	}
 
 func restore(d: Dictionary) -> void:
@@ -138,6 +143,10 @@ func restore(d: Dictionary) -> void:
 	var pw: Variant = d.get("pending_wave", {})
 	pending_wave = (pw as Dictionary).duplicate(true) if pw is Dictionary else {}
 	wave_spawned = int(d.get("wave_spawned", 0))
+	excluded_units.assign(d.get("excluded_units", []))
+	wave_sizes = {}
+	for k in d.get("wave_sizes", {}):
+		wave_sizes[str(k)] = int(d["wave_sizes"][k])
 	defender_value = int(d.get("defender_value", 0))
 
 ## Нарисованные хостом зоны (GameConfig.capture_drawn), обрезанные по доске w×h; пусто —

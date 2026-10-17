@@ -1,0 +1,203 @@
+{
+  "machine": {
+    "cpu": "AMD EPYC 7C13 64-Core Processor",
+    "godot": "4.7-stable (official)",
+    "os": "Linux",
+    "renderer": "headless",
+    "threads": 2
+  },
+  "scenes": {
+    "giant": {
+      "config": {
+        "furniture": 2,
+        "h": 96,
+        "mode": 0,
+        "modern": true,
+        "rounds": 2,
+        "seed": 4404,
+        "style": 0,
+        "tanks": 2,
+        "units": 200,
+        "w": 120
+      },
+      "runs": [
+        {
+          "actions": 2425,
+          "board_size": [
+            144,
+            120
+          ],
+          "initial_units": [
+            200,
+            200
+          ],
+          "rules_hash": 3281335947,
+          "sig": "actions=2425 board=3499207833 trace=2061962036 alive=200/200/30 fx=727301645 guest_same=true resyncs=0 save=true replay=true rules=3281335947",
+          "t_ai": 17079.246,
+          "t_digest": 1833.849,
+          "t_fog": 31873.511,
+          "t_fx": 11.033,
+          "t_guest": 20914.592,
+          "t_host": 18245.181,
+          "t_lighting": 504.581,
+          "t_memory": 291.607,
+          "t_replay": 18157.461,
+          "t_save": 488.492,
+          "t_total": 69920.263
+        },
+        {
+          "actions": 2425,
+          "board_size": [
+            144,
+            120
+          ],
+          "initial_units": [
+            200,
+            200
+          ],
+          "rules_hash": 3281335947,
+          "sig": "actions=2425 board=3499207833 trace=2061962036 alive=200/200/30 fx=727301645 guest_same=true resyncs=0 save=true replay=true rules=3281335947",
+          "t_ai": 17208.044,
+          "t_digest": 1972.404,
+          "t_fog": 31853.135,
+          "t_fx": 11.244,
+          "t_guest": 21033.763,
+          "t_host": 18596.623,
+          "t_lighting": 494.438,
+          "t_memory": 305.374,
+          "t_replay": 16397.326,
+          "t_save": 395.479,
+          "t_total": 70530.156
+        }
+      ]
+    },
+    "giant_capture": {
+      "config": {
+        "furniture": 2,
+        "h": 96,
+        "mode": 1,
+        "modern": true,
+        "rounds": 2,
+        "seed": 4505,
+        "style": 0,
+        "tanks": 2,
+        "units": 200,
+        "w": 120
+      },
+      "runs": [
+        {
+          "actions": 2157,
+          "board_size": [
+            144,
+            120
+          ],
+          "initial_units": [
+            200,
+            200
+          ],
+          "rules_hash": 2833625649,
+          "sig": "actions=2157 board=3470155124 trace=984759705 alive=195/200/32 fx=2845201187 guest_same=true resyncs=0 save=true replay=true rules=2833625649",
+          "t_ai": 14430.348,
+          "t_digest": 1632.783,
+          "t_fog": 19194.646,
+          "t_fx": 7.8,
+          "t_guest": 16064.624,
+          "t_host": 16582.636,
+          "t_lighting": 326.44,
+          "t_memory": 230.752,
+          "t_replay": 14984.302,
+          "t_save": 393.286,
+          "t_total": 52472.451
+        },
+        {
+          "actions": 2157,
+          "board_size": [
+            144,
+            120
+          ],
+          "initial_units": [
+            200,
+            200
+          ],
+          "rules_hash": 2833625649,
+          "sig": "actions=2157 board=3470155124 trace=984759705 alive=195/200/32 fx=2845201187 guest_same=true resyncs=0 save=true replay=true rules=2833625649",
+          "t_ai": 15872.949,
+          "t_digest": 1807.226,
+          "t_fog": 20873.575,
+          "t_fx": 8.253,
+          "t_guest": 15002.443,
+          "t_host": 18936.883,
+          "t_lighting": 403.76,
+          "t_memory": 219.859,
+          "t_replay": 13191.665,
+          "t_save": 380.906,
+          "t_total": 58213.567
+        }
+      ]
+    },
+    "giant_holdout": {
+      "config": {
+        "furniture": 2,
+        "h": 96,
+        "mode": 2,
+        "modern": true,
+        "rounds": 2,
+        "seed": 4606,
+        "style": 0,
+        "tanks": 2,
+        "units": 200,
+        "w": 120
+      },
+      "runs": [
+        {
+          "actions": 2324,
+          "board_size": [
+            144,
+            120
+          ],
+          "initial_units": [
+            200,
+            200
+          ],
+          "rules_hash": 2078510549,
+          "sig": "actions=2324 board=934644379 trace=1416627434 alive=194/200/88 fx=558366088 guest_same=true resyncs=0 save=true replay=true rules=2078510549",
+          "t_ai": 14115.462,
+          "t_digest": 1940.982,
+          "t_fog": 28658.277,
+          "t_fx": 12.279,
+          "t_guest": 20108.404,
+          "t_host": 18150.97,
+          "t_lighting": 458.969,
+          "t_memory": 330.836,
+          "t_replay": 17972.967,
+          "t_save": 448.02,
+          "t_total": 63751.942
+        },
+        {
+          "actions": 2324,
+          "board_size": [
+            144,
+            120
+          ],
+          "initial_units": [
+            200,
+            200
+          ],
+          "rules_hash": 2078510549,
+          "sig": "actions=2324 board=934644379 trace=1416627434 alive=194/200/88 fx=558366088 guest_same=true resyncs=0 save=true replay=true rules=2078510549",
+          "t_ai": 13784.303,
+          "t_digest": 1956.151,
+          "t_fog": 28246.321,
+          "t_fx": 12.272,
+          "t_guest": 19214.012,
+          "t_host": 17772.537,
+          "t_lighting": 440.972,
+          "t_memory": 336.059,
+          "t_replay": 17099.082,
+          "t_save": 364.591,
+          "t_total": 62647.687
+        }
+      ]
+    }
+  }
+}

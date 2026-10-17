@@ -146,7 +146,8 @@ class ResourceTests(unittest.TestCase):
                      patch("torch.mps.empty_cache", side_effect=RuntimeError("allocator unavailable")):
                     t.maintain_resources(force=True)
                 self.assertTrue(t._resource_restart)
-                self.assertIn("allocator unavailable", t.resource_cleanup["errors"][0])
+                self.assertTrue(any("allocator unavailable" in error
+                                    for error in t.resource_cleanup["errors"]))
             finally:
                 t.writer.close()
 
@@ -198,6 +199,50 @@ class ResourceTests(unittest.TestCase):
                     torch.testing.assert_close(v, resumed.net.state_dict()[k], atol=0, rtol=0)
             finally:
                 resumed.writer.close()
+
+    def test_each_completed_update_is_resumable_without_extra_pool_members(self):
+        import torch
+        from train import Trainer, with_defaults
+        torch.set_num_threads(1)
+        with tempfile.TemporaryDirectory() as d:
+            cfg = with_defaults(dict(checkpoint_every=2, total_steps=10,
+                                     preflight=False, promotion_every=0,
+                                     disk_floor_mb=0, demonstrations=""))
+            t = Trainer(d, cfg)
+            observed = []
+
+            def collect():
+                if t.update:
+                    saved = torch.load(Path(d) / "latest.pt", weights_only=False)
+                    self.assertEqual(saved["global_step"], t.global_step)
+                    self.assertEqual(saved["update"], t.update)
+                    self.assertTrue(saved["opt"]["state"])
+                    for key, value in t.net.state_dict().items():
+                        torch.testing.assert_close(value, saved["model"][key], rtol=0, atol=0)
+                    observed.append(sorted(p.name for p in Path(d).glob("ckpt_*.pt")))
+                if t.update == 2:
+                    raise RuntimeError("simulated failure in the next rollout")
+                return [], {}
+
+            def update(_buffers):
+                t.opt.zero_grad()
+                next(t.net.parameters()).sum().backward()
+                t.opt.step()
+                t.global_step += 1
+                t.update += 1
+                return {}
+
+            with patch("train.VecEnv", return_value=SimpleNamespace(envs=[], close=lambda: None)), \
+                 patch("train.signal.signal"), \
+                 patch.object(t, "collect", side_effect=collect), \
+                 patch.object(t, "ppo_update", side_effect=update), \
+                 patch.object(t, "log"), patch.object(t, "write_status"), \
+                 patch.object(t, "has_eval_history", return_value=True), \
+                 patch.object(t, "over_memory_budget", return_value=False), \
+                 patch.object(t, "under_disk_floor", return_value=False):
+                with self.assertRaisesRegex(RuntimeError, "simulated failure"):
+                    t.train()
+            self.assertEqual(observed, [[], ["ckpt_000000002.pt"]])
 
     def test_deployment_resume_preserves_branch_and_restarts_supervisor(self):
         import torch

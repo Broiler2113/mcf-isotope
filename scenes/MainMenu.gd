@@ -50,6 +50,10 @@ const PAGE_HOME := 0
 const PAGE_MULTI := 1
 const PAGE_FILES := 2
 
+var _rejoining := false
+var _rejoin_deadline := 0
+var _rejoin_prompt: ConfirmationDialog = null
+
 func _ready() -> void:
 	# Release templates disable --script/path overrides. This explicit diagnostic
 	# exercises the shipped pack and native libraries without starting a UI session.
@@ -216,6 +220,9 @@ func _build_home_page() -> Control:
 	page.add_child(_menu_button("New Game", _new_game))
 	page.add_child(_menu_button("Map Editor", _open_editor))
 	page.add_child(_menu_button("Multiplayer", _show_multiplayer))
+	var rejoin := _menu_button("Rejoin last match", _rejoin_last_match)
+	rejoin.disabled = RejoinStore.read().is_empty()
+	page.add_child(rejoin)
 	page.add_child(_menu_button("Saves & Replays", _show_files))
 	page.add_child(_menu_button("Manual", func() -> void: ManualWindow.toggle(self)))
 	page.add_child(_menu_button("Report a Bug", func() -> void: BugReportWindow.open(self)))
@@ -513,6 +520,8 @@ func _show_lobbies(list: Array, error: String = "") -> void:
 		if str(r.get("room", "")) == chosen: _lobby_list.select(i)
 
 func _process(delta: float) -> void:
+	if _rejoining and _rejoin_deadline > 0 and Time.get_ticks_msec() > _rejoin_deadline:
+		_fail_net("The host did not respond. The match may have closed or the host is unreachable.")
 	if _lobby_probe != null:
 		_lobby_probe.poll(delta)
 	if _lobby_list != null and _lobby_list.is_visible_in_tree() and _session == null:
@@ -594,6 +603,11 @@ func _cancel_net() -> void:
 	_mp_status.text = "Offline"
 
 func _drop_session() -> void:
+	_rejoining = false
+	_rejoin_deadline = 0
+	if is_instance_valid(_rejoin_prompt):
+		_rejoin_prompt.queue_free()
+		_rejoin_prompt = null
 	if _session != null:
 		_session.close()
 		_session.queue_free()
@@ -612,7 +626,73 @@ func _on_net_lost() -> void:
 ## Гость подключился — уезжает в общее лобби (item 10 сдвинул сюда только КЛИЕНТА: хост
 ## открывает лобби сразу при нажатии «Host», не дожидаясь подключения).
 func _on_peer_ready(is_host: bool) -> void:
+	if _rejoining:
+		_session.send_to(1, {"k": NetHandoff.K_RECLAIM, "pv": NetHandoff.PROTOCOL})
+		_session.attach()
+		return
 	_go_lobby(is_host)
+
+func _rejoin_last_match() -> void:
+	if _session != null: return
+	var saved := RejoinStore.read()
+	_show_multiplayer()
+	if saved.is_empty():
+		_mp_status.text = "No previous multiplayer match was found."
+		return
+	_rejoining = true
+	_rejoin_deadline = Time.get_ticks_msec() + 20000
+	_start_session()
+	_session.client_token = str(saved.get("token", ""))
+	_session.message.connect(_on_rejoin_message)
+	var err: int
+	if saved.has("relay"):
+		err = _session.start_relay_client(str(saved.relay), str(saved.room), str(saved.get("password", "")))
+	else:
+		err = _session.start_client(str(saved.get("ip", "")), int(saved.get("port", NetworkSession.DEFAULT_PORT)))
+	if err != OK: _fail_net("Could not reconnect to the host (error %d)." % err)
+	else: _set_waiting("Reconnecting to your last match...")
+
+func _on_rejoin_message(msg: Dictionary) -> void:
+	match str(msg.get("k", "")):
+		"roll":
+			# Another guest's acknowledgment can overtake the host's large snapshot.
+			_session.roll_acks_on_join[int(msg.get("n", -1))] = true
+		NetHandoff.K_RECLAIM_OFFER:
+			_rejoin_deadline = 0
+			if is_instance_valid(_rejoin_prompt): return
+			_rejoin_prompt = ConfirmationDialog.new()
+			_rejoin_prompt.title = "Reclaim your army"
+			_rejoin_prompt.dialog_text = "%s is currently being played by an AI. Take back control at the next round?" % str(msg.get("name", "Your army"))
+			_rejoin_prompt.ok_button_text = "Take back control"
+			_rejoin_prompt.cancel_button_text = "Keep AI in control"
+			_rejoin_prompt.confirmed.connect(func() -> void:
+				_session.send_to(1, {"k": NetHandoff.K_RECLAIM_ACCEPT})
+				_mp_status.text = "Waiting for the next round. Your army remains under AI control until then.")
+			_rejoin_prompt.canceled.connect(_cancel_net)
+			add_child(_rejoin_prompt)
+			_rejoin_prompt.popup_centered(Vector2i(460, 160))
+			_rejoin_prompt.get_cancel_button().grab_focus()
+		NetHandoff.K_RECLAIM_STATUS:
+			if msg.has("error"): _fail_net(str(msg.error))
+			else: _mp_status.text = str(msg.get("text", "Waiting for the next round..."))
+		NetHandoff.K_LOAD:
+			var mismatch := NetHandoff.protocol_mismatch(msg)
+			if mismatch != "":
+				_fail_net(mismatch)
+				return
+			_session.detach()
+			_session.message.disconnect(_on_rejoin_message)
+			_session.roll_sequence_on_join = maxi(0, int(msg.get("roll_seq", 0)))
+			for seq in _session.roll_acks_on_join.keys():
+				if int(seq) < _session.roll_sequence_on_join: _session.roll_acks_on_join.erase(seq)
+			NetHandoff.session = _session
+			NetHandoff.apply_rules(msg.get("settings", {}))
+			NetHandoff.apply_load(msg)
+			NetHandoff.is_host = false
+			_session = null
+			_rejoining = false
+			get_tree().change_scene_to_file(MAIN_SCENE)
+
 
 ## Передать сессию в лобби и уйти туда. Общий путь для хоста (сразу), гостя (по связи)
 ## и одиночки (session == null).

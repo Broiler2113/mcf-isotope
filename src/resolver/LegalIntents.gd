@@ -171,7 +171,7 @@ static func _for_unit(r: GameActionResolver, u: UnitInstance, out: Array) -> voi
 			out.append(VehicleMeleeIntent.new(u.id, vid))
 		for vid: int in r.unloadable_corpse_vehicle_ids(u):
 			out.append(VehicleUnloadCorpseIntent.new(u.id, vid))
-		if u.borg_id == -1 and not r._is_shield(u) and u.carried_corpses == 0:
+		if u.borg_id == -1 and u.carried_corpses == 0:
 			for veh: Vehicle in r.boardable_vehicles(u):
 				if veh.is_borg():
 					out.append(VehicleBoardIntent.new(u.id, veh.id))
@@ -203,7 +203,7 @@ static func _for_unit(r: GameActionResolver, u: UnitInstance, out: Array) -> voi
 static func _shots(r: GameActionResolver, u: UnitInstance, out: Array) -> void:
 	var state := r.state
 	var pending := u.action_state != null and u.action_state.is_pending()
-	var ability := u.stats.special_ability_id
+	var ability := u.attack_ability()
 	var need_ap := MCF.MARKSMAN_AP_COST if ability == MCF.ABILITY_MARKSMAN else 1
 	if pending:
 		out.append(CancelShotIntent.new(u.id))

@@ -115,11 +115,13 @@ func max_ap() -> int:
 	return MCF.AP_PER_ACTIVATION
 
 # --- Действующие характеристики (batch 13): свои, либо борга, если боец сидит в нём ---
-## Инженер в борге сохраняет собственное оружие (B8), остальные стреляют из бортового:
-## дальность 12, скорострельность 4. Особые способности при этом остаются (B3): у
-## марксмана дальность бесконечна и здесь, лазер её и не читает.
-func _borg_gun() -> bool:
-	return borg_id != -1 and stats != null and stats.special_ability_id != MCF.ABILITY_ENGINEER
+## Boarding replaces every personal weapon with the same mounted gun.
+## Non-weapon abilities (building, drones, digging) remain available.
+func attack_ability() -> String:
+	return "" if borg_id != -1 else stats.special_ability_id
+
+func attack_penalty() -> int:
+	return 0 if borg_id != -1 else stats.target_defense_penalty
 
 func speed() -> int:
 	return MCF.BORG_SPEED if borg_id != -1 else stats.speed
@@ -129,12 +131,8 @@ func armor() -> int:
 			else stats.armor_threshold
 
 func fire_range() -> float:
-	if _borg_gun() and not is_inf(stats.fire_range) and stats.fire_range > 0.0:
-		return MCF.BORG_RANGE
-	return stats.fire_range
+	return MCF.BORG_RANGE if borg_id != -1 else stats.fire_range
 
-## Скорострельность борга — 4 у ЛЮБОГО, кто в нём сидит (batch borg-corpses), инженера
-## тоже: бортовой ствол один на всех. Дальность у инженера по-прежнему своя (B8).
 func rate_of_fire() -> int:
 	return MCF.BORG_ROF if borg_id != -1 else stats.rate_of_fire
 

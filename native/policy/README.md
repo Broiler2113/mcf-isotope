@@ -21,7 +21,11 @@ RefCounted/FileAccess API and load in the target Godot 4.7. `dependencies.json`
 records the pins. Dependencies/build output live under ignored `.cache/`;
 `addons/mcf_policy/bin/<platform>-<architecture>/` holds the extension, runtime,
 and required license notices. Windows also stages app-local MSVC runtime DLLs.
-An unsupported or absent native build leaves the socket/HARD path available.
+A successful build writes a platform-specific `mcf_policy.gdextension` beside the
+binaries only after verifying every required library. The tracked `.gdextension.in`
+is a build template, so source archives without native binaries do not register a
+missing extension. Packaging includes only the host platform and refuses incomplete
+builds. An unsupported or absent native build leaves the socket/HARD path available.
 
 Use `--godot-cpp`, `--ort-root`, and `--json-include` to reuse local dependencies.
 The `--cache`, `--build-dir`, and `--jobs` options control build storage and load.
@@ -87,9 +91,9 @@ explicitly. `tests/run_all.sh` includes the native controller checks, which also
 work without a compiled extension unless `--require-native` is passed.
 
 `.github/workflows/native-policy.yml` builds and tests all four desktop targets,
-installs Godot 4.7 plus export templates, verifies parity, exports each game with
-the `.onnx` and native dependencies, runs the exported game headlessly to verify
-model loading from the pack, and uploads per-platform game ZIPs and parity reports.
-`package.py` uses an isolated export project and keeps Python/training runs out of
-the game. The workflow does not publish a release. macOS distribution signing and
-notarization can be applied by the release owner to the resulting app.
+installs the Godot 4.7 editor, verifies parity and uploads diagnostic reports.
+Releases are currently source-only: CI does not export or publish applications.
+`package.py` remains an explicit local packaging tool; it uses an isolated export
+project and keeps Python/training runs out of the game. It is not part of the
+current release process. macOS signing and notarization remain separate steps if
+application distribution resumes.

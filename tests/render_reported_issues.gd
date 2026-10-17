@@ -1,6 +1,6 @@
 extends SceneTree
 
-## Actual Compatibility renderer checks for unlit drawings and late fire/corpse layering.
+## Actual Compatibility renderer checks for unlit drawings and fire/corpse/vehicle layering.
 var failures: Array[String] = []
 func ck(ok: bool, message: String) -> void:
 	print(("ok   " if ok else "FAIL ") + message)
@@ -55,8 +55,7 @@ func run() -> void:
 	var lit := await capture(main)
 	ck(day.get_pixelv(pixel).is_equal_approx(lit.get_pixelv(pixel)), "drawings retain their exact color above dynamic lighting")
 	lit.save_png("/tmp/isotope-drawings-night.png")
-	# Compare every pixel of two equally burning cells: the standing soldier is covered
-	# by the fire, while the corpse remains visible above it.
+	# Compare equally burning cells: living soldiers and corpses remain visible.
 	ui.dynamic_lighting = false
 	main.state.time_of_day = "day"
 	var corpse: UnitInstance = main.state.grid.cell(Vector2i(7, 5)).occupant
@@ -68,12 +67,11 @@ func run() -> void:
 	# verify draw order without treating underlying terrain variation as a failure.
 	var original: Texture2D = Sprites.texture_of("fire")
 	var opaque := original.get_image()
-	for y in opaque.get_height():
-		for x in opaque.get_width():
-			var color := opaque.get_pixel(x, y)
-			color.a = 1.0
-			opaque.set_pixel(x, y, color)
+	opaque.fill(Color.MAGENTA)
 	Sprites._overrides["fire"] = ImageTexture.create_from_image(opaque)
+	main._tiles._tiles.clear()
+	main._tiles._source_images.clear()
+	main._tiles._chunks.clear()
 	var fire := await capture(main)
 	var live_pixel := Vector2i(main.pan + main.ORIGIN + Vector2(5, 5) * main.CELL)
 	var body_pixel := Vector2i(main.pan + main.ORIGIN + Vector2(7, 5) * main.CELL)
@@ -81,7 +79,7 @@ func run() -> void:
 	var live_diff := 0
 	var corpse_diff := 0
 	var checked := 0
-	# Opaque pixels of the fire must be identical over a soldier and bare floor.
+	# Occupants must change the pixels above otherwise identical opaque fire.
 	var texture := Sprites.texture_of("fire")
 	var image := texture.get_image()
 	for y in range(8, 32):
@@ -93,8 +91,43 @@ func run() -> void:
 			if not fire.get_pixelv(live_pixel + offset).is_equal_approx(fire.get_pixelv(bare_pixel + offset)): live_diff += 1
 			if not fire.get_pixelv(body_pixel + offset).is_equal_approx(fire.get_pixelv(bare_pixel + offset)): corpse_diff += 1
 	print("fire pixels checked=", checked, " live differences=", live_diff, " corpse differences=", corpse_diff, " source=", image.get_size())
-	ck(checked > 0 and live_diff == 0, "opaque fire is drawn over standing units")
+	ck(checked > 0 and live_diff > 0, "standing units are drawn above opaque fire")
 	ck(corpse_diff > 0, "corpses remain visible over fire")
+	# Movement overlays must still tint opaque fire, even for a fireproof mover.
+	var soldier: UnitInstance = main.state.grid.cell(Vector2i(5, 5)).occupant
+	soldier.stats = load("res://src/data/units/flamethrower.tres")
+	main._select(soldier)
+	main._enter_move()
+	var movement := await capture(main)
+	ck(movement.get_region(Rect2i(bare_pixel + Vector2i(8, 8), Vector2i(24, 24))).get_data()
+		!= fire.get_region(Rect2i(bare_pixel + Vector2i(8, 8), Vector2i(24, 24))).get_data(), "movement zones appear above opaque fire")
+	main._deselect()
+	# A solid vehicle interior must cover both ground corpses and ground fire.
+	var tank: Vehicle = main.state.spawn_vehicle("tank", Vector2i(11, 6), 0)
+	var original_tank: Texture2D = Sprites.texture_of("tank")
+	var solid := Image.create(32, 32, false, Image.FORMAT_RGBA8)
+	solid.fill(Color.CYAN)
+	Sprites._overrides["tank"] = ImageTexture.create_from_image(solid)
+	var clean_tank := await capture(main)
+	for c: Vector2i in tank.footprint():
+		main.state.grid.cell(c).on_fire = true
+		main.state.grid.cell(c).corpse_count = 1
+	var dirty_tank := await capture(main)
+	var interior := Rect2i(Vector2i(main.pan + main.ORIGIN + Vector2(tank.origin) * main.CELL) + Vector2i(9, 23), Vector2i(50, 25))
+	ck(clean_tank.get_region(interior).get_data() == dirty_tank.get_region(interior).get_data(), "vehicle interior covers both corpses and fire")
+	Sprites._overrides["tank"] = original_tank
+	# Freeze cosmetic time so comparison changes only the presence of a flash.
+	main.set_process(false)
+	var vacuum := Vector2i(3, 9)
+	var floor_cell := Vector2i(5, 9)
+	main.state.grid.cell(vacuum).is_space = true
+	var no_flash := await capture(main)
+	main._fx.flashes.append({"cells": [vacuum, floor_cell], "t": 0.0})
+	var flash := await capture(main)
+	var vacuum_rect := Rect2i(Vector2i(main.pan + main.ORIGIN + Vector2(vacuum) * main.CELL), Vector2i(40, 40))
+	var floor_rect := Rect2i(Vector2i(main.pan + main.ORIGIN + Vector2(floor_cell) * main.CELL), Vector2i(40, 40))
+	ck(no_flash.get_region(vacuum_rect).get_data() == flash.get_region(vacuum_rect).get_data(), "explosion fire flashes never appear in space")
+	ck(no_flash.get_region(floor_rect).get_data() != flash.get_region(floor_rect).get_data(), "explosion fire flashes still appear on solid ground")
 	Sprites._overrides["fire"] = original
 	main.free()
 	print("Rendered reported issues: %d failure(s)" % failures.size())

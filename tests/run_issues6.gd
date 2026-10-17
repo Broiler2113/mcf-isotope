@@ -175,7 +175,7 @@ func _interface() -> void:
 	var row: Control = main._camera_row()
 	root.add_child(row)
 	await process_frame
-	var grid := row.get_child(1) as GridContainer
+	var grid := row.get_child(0).get_child(1) as GridContainer
 	ck(grid != null and grid.columns == 3 and grid.get_child(0).size.x == grid.get_child(0).size.y, "camera uses aligned square buttons")
 	row.free()
 	main.free()

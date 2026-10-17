@@ -1006,6 +1006,8 @@ func _save_payload() -> Dictionary:
 		"state": StateCodec.encode(state),
 		"rules": StateCodec.encode_rules(resolver),
 		"opening": _opening_state,
+		"combat_log": state.log.lines.duplicate(),
+		"chat": NetHandoff.chat_history.duplicate(true),
 		"clock_stopped": _real_stop_ms >= 0,
 		"elapsed_ms": maxi(0, (_real_stop_ms if _real_stop_ms >= 0 else Time.get_ticks_msec()) - _real_start_ms),
 	}
@@ -1027,6 +1029,8 @@ func _adopt_save() -> bool:
 		push_warning("save file is newer than this build — starting a normal match")
 		return false
 	state = loaded
+	state.log.lines.assign(data.get("combat_log", []))
+	NetHandoff.chat_history.assign(data.get("chat", []))
 	resolver = GameActionResolver.new(state)
 	StateCodec.apply_rules(resolver, data.get("rules", {}))
 	resolver.update_airlocks()
@@ -2300,13 +2304,13 @@ func _enter_shoot() -> void:
 	if _valid_pending_shoot(u) or u.remaining_ap > 0:
 		target_ids = resolver.shootable_target_ids(u)
 		# Противотанкист (§3.14) может ещё и ударить по пустой клетке пола.
-		if u.stats.special_ability_id == MCF.ABILITY_ANTI_TANK:
+		if u.attack_ability() == MCF.ABILITY_ANTI_TANK:
 			item_cells = resolver.blastable_cells(u)
 		# Огнемётчик может пустить струю по пустой клетке пола (в её направлении).
-		elif u.stats.special_ability_id == MCF.ABILITY_FLAMETHROWER:
+		elif u.attack_ability() == MCF.ABILITY_FLAMETHROWER:
 			item_cells = resolver.flammable_cells(u)
 		# Шахтёр может ломом бить по соседней вражеской машине (item 15).
-		elif u.stats.special_ability_id == MCF.ABILITY_MINER:
+		elif u.attack_ability() == MCF.ABILITY_MINER:
 			_melee_veh_ids = resolver.meleeable_vehicle_ids(u)
 		# Обычный стрелок может разбить окно (batch ui-drones) — клик по стеклу.
 		elif (u.remaining_ap > 0 or _pending_shoot(u)) and not _is_marksman(u):
@@ -2318,10 +2322,10 @@ func _enter_shoot() -> void:
 	queue_redraw()
 
 func _shoot_ap_cost(u: UnitInstance) -> int:
-	return MCF.MARKSMAN_AP_COST if u.stats.special_ability_id == MCF.ABILITY_MARKSMAN else 1
+	return MCF.MARKSMAN_AP_COST if u.attack_ability() == MCF.ABILITY_MARKSMAN else 1
 
 func _is_marksman(u: UnitInstance) -> bool:
-	return u != null and u.stats.special_ability_id == MCF.ABILITY_MARKSMAN
+	return u != null and u.attack_ability() == MCF.ABILITY_MARKSMAN
 
 ## Единая «рука» (#50): в одном режиме и бойцы под захват, и объекты под волочение —
 ## труп, мешки, ёж, куча земли. Отдельной кнопки Drag больше нет.
@@ -3260,7 +3264,7 @@ func _queue_ai_step(ctrl: PlayerController) -> void:
 	if _paused:
 		return
 	# За время паузы ход мог смениться (сдача хода, загрузка, конец боя).
-	if is_inside_tree() and state != null and state.active_player() == ctrl.owner:
+	if is_inside_tree() and state != null and state.active_player() == ctrl.owner and controllers.get(ctrl.owner) == ctrl:
 		ctrl.begin_turn(state)
 
 ## Можно ли вообще ставить на паузу (item 4): когда КАЖДУЮ сторону ведёт машина.
@@ -3349,6 +3353,10 @@ func _check_match_over() -> bool:
 	return true
 
 func _declare_match_over(title: String) -> void:
+	if session != null and session.is_host():
+		for peer in session.waiting_peers:
+			session.send_to(peer, {"k": NetHandoff.K_RECLAIM_STATUS, "error": "This match has ended."})
+		session.claims.offers.clear()
 	_match_over = true
 	state.log.add("— %s —" % title)
 	_deselect()
@@ -3822,6 +3830,7 @@ func _on_net_applied(intent: Intent, result: ActionResult) -> void:
 		var item: Array = _net_queue.pop_front()
 		await _show_net_action(item[0], item[1])
 	_net_playing = false
+	_grant_reclaims()
 	_drain_net_messages.call_deferred()
 	# Ход мог перейти к ИИ-слоту, которого ведёт хост.
 	_kick_if_ai()
@@ -3870,6 +3879,12 @@ func _adopt_network() -> void:
 	if s == null:
 		return
 	session = s
+	session.in_match = true
+	_roll_seq = session.roll_sequence_on_join
+	_roll_inbox = session.roll_acks_on_join.duplicate()
+	session.roll_acks_on_join.clear()
+	if not NetHandoff.is_host and not _spectator:
+		RejoinStore.remember(session.join_route, session.client_token)
 	session.message.connect(_on_net_message)
 	session.disconnected.connect(_on_net_disconnected)
 	if NetHandoff.is_host:
@@ -3919,6 +3934,7 @@ func _on_peer_ready(is_host: bool) -> void:
 	_capture_opening_view()
 	net.announce_initiative()
 	_setup_network_controllers()
+	_kick_if_ai()
 	_deselect()
 	if _net_status != null:
 		var slot := state.roster.slot(my_owner)
@@ -3943,6 +3959,14 @@ func _on_initiative_synced() -> void:
 	_kick_if_ai()
 
 func _on_net_message(msg: Dictionary) -> void:
+	var kind := str(msg.get("k", ""))
+	if kind in [NetHandoff.K_RECLAIM, NetHandoff.K_RECLAIM_ACCEPT]:
+		_on_reclaim_message(msg)
+		return
+	if kind == NetHandoff.K_SIDE_HUMAN:
+		if _net_playing or _animating: _net_messages.append(msg)
+		else: _apply_side_human(msg)
+		return
 	# Несимуляционные сообщения (item 50/51) обрабатываем здесь и НЕ передаём в netcode:
 	# они никогда не касаются резолвера и лок-степа.
 	match msg.get("k", ""):
@@ -3981,9 +4005,13 @@ func _on_net_message(msg: Dictionary) -> void:
 
 func _drain_net_messages() -> void:
 	while net != null and not _net_playing and not _animating and not _net_messages.is_empty():
-		net.receive(_net_messages.pop_front())
+		_on_net_message(_net_messages.pop_front())
 
 func _on_net_disconnected() -> void:
+	# Keep authority alive even with no guests: the listening host can accept a reclaim.
+	if session != null and session.is_host() and session.is_active():
+		_refresh_status()
+		return
 	_net_request_pending = false
 	_net_messages.clear()
 	if _spectator:
@@ -4014,6 +4042,7 @@ func _on_peer_left(id: int) -> void:
 	if side < 0:
 		return
 	_autosave()
+	if session != null: session.claims.reserve(str(session.peer_tokens.get(id, "")), side)
 	_take_side_as_ai(side)
 	if session != null:
 		session.send({"k": K_SIDE_AI, "side": side, "ai": AIController.Difficulty.HARD,
@@ -4021,6 +4050,60 @@ func _on_peer_left(id: int) -> void:
 	state.log.add("— %s left the match; a Tactician AI takes over their army —" % state.roster.name_of(side))
 	_refresh_status()
 	_kick_if_ai()
+
+func _on_reclaim_message(msg: Dictionary) -> void:
+	if session == null or not session.is_host(): return
+	var peer := int(msg.get("_from", -1))
+	if not session.waiting_peers.has(peer): return
+	if str(msg.k) == NetHandoff.K_RECLAIM:
+		var error := NetHandoff.protocol_mismatch(msg)
+		if error != "":
+			session.send_to(peer, {"k": NetHandoff.K_RECLAIM_STATUS, "error": error})
+			return
+		var reply := session.claims.offer(peer, str(session.peer_tokens.get(peer, "")),
+				state.roster, state.turns.round_number, _match_over)
+		reply["k"] = NetHandoff.K_RECLAIM_STATUS if reply.has("error") else NetHandoff.K_RECLAIM_OFFER
+		session.send_to(peer, reply)
+	elif not _match_over and session.claims.accept(peer, state.turns.round_number):
+		session.send_to(peer, {"k": NetHandoff.K_RECLAIM_STATUS, "text": "Seat reserved. Waiting for the next round..."})
+	else:
+		session.send_to(peer, {"k": NetHandoff.K_RECLAIM_STATUS, "error": "The reclaim offer is no longer available."})
+
+func _grant_reclaims() -> void:
+	if session == null or not session.is_host() or _match_over or _animating or _net_playing: return
+	for peer: int in session.claims.due(state.turns.round_number):
+		var side := int(session.claims.offers[peer].side)
+		var slot := state.roster.slot(side)
+		if slot == null or slot.kind != Roster.SlotKind.AI or not session.peers.has(peer):
+			session.claims.forget(peer)
+			continue
+		var update := {"k": NetHandoff.K_SIDE_HUMAN, "side": side, "peer": peer}
+		_apply_side_human(update)
+		# Existing players receive only the ordered ownership change. The returning
+		# player gets a complete current save, followed by subsequent action messages.
+		session.send(update)
+		var snapshot := NetHandoff.encode_load(_save_payload())
+		snapshot["pv"] = NetHandoff.PROTOCOL
+		snapshot["roll_seq"] = _roll_seq
+		snapshot["settings"] = NetHandoff.encode_rules()
+		session.send_to(peer, snapshot)
+		session.waiting_peers.erase(peer)
+		session.claims.forget(peer)
+		_autosave()
+
+func _apply_side_human(msg: Dictionary) -> void:
+	var side := int(msg.get("side", -1))
+	var slot := state.roster.slot(side)
+	if slot == null: return
+	var old: PlayerController = controllers.get(side)
+	if old != null and old.intent_ready.is_connected(_on_intent_ready):
+		old.intent_ready.disconnect(_on_intent_ready)
+	slot.kind = Roster.SlotKind.HUMAN
+	slot.peer_id = int(msg.get("peer", -1))
+	controllers[side] = NetworkController.new(side)
+	state.log.add("— %s returned and reclaimed their army —" % state.roster.name_of(side))
+	_refresh_omniscience()
+	_refresh_status()
 
 func _take_side_as_ai(side: int) -> void:
 	var slot := state.roster.slot(side)
@@ -4064,7 +4147,7 @@ func _apply_side_ai(msg: Dictionary) -> void:
 
 func _setup_network_controllers() -> void:
 	for c in controllers.values():
-		if c.is_local_human() and c.intent_ready.is_connected(_on_intent_ready):
+		if c.intent_ready.is_connected(_on_intent_ready):
 			c.intent_ready.disconnect(_on_intent_ready)
 	controllers.clear()
 	if not _spectator:
@@ -5266,7 +5349,7 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, fog_on: bool) -> voi
 	var tiles_key: Array = [terrain_base.get_instance_id(), fog_on]
 	if _tiles == null or _tiles_grid != tiles_key:
 		_tiles = TerrainTiles.new(shown, state.env)
-		_tiles.bake_fire = false
+		_tiles.bake_fire = true
 		_tiles.set_time_of_day(state.time_of_day)
 		_tiles.furniture_look = _furniture_look
 		_tiles_grid = tiles_key
@@ -5694,6 +5777,33 @@ func _draw() -> void:
 	# cannot hide debris there; stop drawing the live layers while Before is shown.
 	if _before_on:
 		return
+	_draw_fx_flashes(visible)
+	_draw_flame_jet(visible)
+	# Труп существует в ДВУХ видах: погибший на месте боец — это occupant клетки со
+	# статусом CORPSE, а положенный из рук (#6) — безымянная куча cell.corpse_count.
+	# Кучи не рисовались вовсе: тело давало +1 к защите, но на карте его не было.
+	# Реалистичный туман прячет вне обзора всё (issues-12 #16) — и тела тоже.
+	var blackout: bool = fog_on and _view_resolver().fog_mode == MCF.Fog.REALISTIC
+	# Обычный туман (0.11.3): тела — как их видел зритель. Упавший в темноте не виден,
+	# пока туда не посмотрят; унесённый в темноте лежит, пока туда не посмотрят. Прежнее
+	# правило playtest-20 «тела видны и под туманом» этим заменено.
+	var corpses := _corpse_map()
+	if fog_on and not blackout and _fog_mem_corpses.has(viewer):
+		var cmem: Dictionary = _fog_mem_corpses[viewer]
+		for c: Vector2i in corpses:
+			if visible.has(c):
+				cmem[c] = corpses[c]
+		for c: Vector2i in cmem.keys():
+			if visible.has(c) and not corpses.has(c):
+				cmem.erase(c)
+		corpses = cmem
+	for c: Vector2i in corpses:
+		if c.x < vx0 or c.x > vx1 or c.y < vy0 or c.y > vy1 or not _cell_on_screen(c.x, c.y) \
+				or (blackout and not visible.has(c)):
+			continue
+		var e: Array = corpses[c]
+		_draw_corpse(c, int(e[1]), e[0])
+
 	if not far:
 		# Пол, объекты, огонь и туман вблизи рисует слой под нами плитками (TerrainTiles,
 		# _lod_sync): здесь остаются подписи высоты насыпей — у кучи земли она бывает
@@ -5771,7 +5881,7 @@ func _draw() -> void:
 		# Anti-tank (0.11): the roll to hit is written on EVERY cell it can blast, not only
 		# the hovered one, so spots can be compared before the shell is spent.
 		var at_unit := _selected_unit()
-		if mode == Mode.SHOOT and at_unit != null and at_unit.stats.special_ability_id == MCF.ABILITY_ANTI_TANK \
+		if mode == Mode.SHOOT and at_unit != null and at_unit.attack_ability() == MCF.ABILITY_ANTI_TANK \
 				and zoom >= MOVE_LABEL_MIN_ZOOM:
 			var at_hover := _pos_to_cell(get_viewport().get_mouse_position())
 			for coord in item_cells:
@@ -5795,13 +5905,13 @@ func _draw() -> void:
 		if mode == Mode.SHOOT and _is_marksman(su) and state.grid.in_bounds(shov):
 			_draw_laser_preview(su, shov)
 		if item_cells.has(shov) and su != null:
-			if su.stats.special_ability_id == MCF.ABILITY_FLAMETHROWER:
+			if su.attack_ability() == MCF.ABILITY_FLAMETHROWER:
 				# Предпросмотр струи 6×1 в направлении наведённой клетки.
 				for jc in _flame_jet_preview(su.coord, shov):
 					if state.grid.cell(jc).is_space:
 						continue   # над космосом струя проходит, не поджигая (editor-rework)
 					draw_rect(Rect2(_cell_origin(jc), Vector2(CELL, CELL)), Color(1, 0.4, 0.05, 0.34))
-			elif su.stats.special_ability_id == MCF.ABILITY_ANTI_TANK:
+			elif su.attack_ability() == MCF.ABILITY_ANTI_TANK:
 				# Предпросмотр радиуса взрыва (3x3) вокруг наведённой клетки.
 				for dy in range(-1, 2):
 					for dx in range(-1, 2):
@@ -5816,7 +5926,7 @@ func _draw() -> void:
 				var gfid := state.grid.cell(shov).feature_id
 				# Only an anti-tank shell skips the pane's "glass N+" (0.11.1, user rule): it does
 				# not roll per bullet against the glass; everyone else sees the pane's save.
-				if MCF.is_glass(gfid) and su.stats.special_ability_id != MCF.ABILITY_ANTI_TANK:
+				if MCF.is_glass(gfid) and su.attack_ability() != MCF.ABILITY_ANTI_TANK:
 					ctxt = "glass %d+" % MCF.glass_bullet_save(gfid)
 				var ctp := _cell_origin(shov) + Vector2(CELL * 0.8, CELL * 0.2)
 				draw_string_outline(font, ctp, ctxt, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, 4, Color(0, 0, 0, 0.9))
@@ -6339,8 +6449,9 @@ func _draw() -> void:
 				draw_arc(center, CELL * 0.45, 0, TAU, 22, Color(0.85, 0.15, 0.15, 0.95), 2.0)
 			# Бейдж активационной группы (item 15): чёрный квадратик с римской цифрой в
 			# правом-нижнем углу — по нему видно, что инициатива изменилась.
-			if unit.neutral_group > 0:
-				_draw_group_badge(corner, unit.neutral_group, font)
+		var group := unit.neutral_group
+		if MCF.is_independent(uown): group = uown - MCF.INDEPENDENT_BASE + 1
+		if group > 0: _draw_group_badge(corner, group, font)
 		# Кольцо принадлежности к RTS-группе (#18).
 		if has_group and _group_set.has(unit.id):
 			draw_arc(center, CELL * 0.46, 0, TAU, 32, Color(0.4, 1.0, 0.5), 2.5)
@@ -6370,33 +6481,6 @@ func _draw() -> void:
 	# A thin second pass puts wisps in front of occupants without hiding their sprites.
 	_draw_gas_tiles(0.2, false)
 
-	_draw_fire_above_units(visible, fog_on)
-	_draw_fx_flashes(visible)
-	_draw_flame_jet(visible)
-	# Труп существует в ДВУХ видах: погибший на месте боец — это occupant клетки со
-	# статусом CORPSE, а положенный из рук (#6) — безымянная куча cell.corpse_count.
-	# Кучи не рисовались вовсе: тело давало +1 к защите, но на карте его не было.
-	# Реалистичный туман прячет вне обзора всё (issues-12 #16) — и тела тоже.
-	var blackout: bool = fog_on and _view_resolver().fog_mode == MCF.Fog.REALISTIC
-	# Обычный туман (0.11.3): тела — как их видел зритель. Упавший в темноте не виден,
-	# пока туда не посмотрят; унесённый в темноте лежит, пока туда не посмотрят. Прежнее
-	# правило playtest-20 «тела видны и под туманом» этим заменено.
-	var corpses := _corpse_map()
-	if fog_on and not blackout and _fog_mem_corpses.has(viewer):
-		var cmem: Dictionary = _fog_mem_corpses[viewer]
-		for c: Vector2i in corpses:
-			if visible.has(c):
-				cmem[c] = corpses[c]
-		for c: Vector2i in cmem.keys():
-			if visible.has(c) and not corpses.has(c):
-				cmem.erase(c)
-		corpses = cmem
-	for c: Vector2i in corpses:
-		if c.x < vx0 or c.x > vx1 or c.y < vy0 or c.y > vy1 or not _cell_on_screen(c.x, c.y) \
-				or (blackout and not visible.has(c)):
-			continue
-		var e: Array = corpses[c]
-		_draw_corpse(c, int(e[1]), e[0])
 
 	# Рамка выделения (#18): сетка-выровненный зелёный прямоугольник поверх поля.
 	if _box_dragging:
@@ -6883,7 +6967,8 @@ func _draw_fx_flashes(visible: Dictionary) -> void:
 		if a <= 0.0:
 			continue
 		for c: Vector2i in flash["cells"]:
-			if not _cell_on_screen(c.x, c.y) or (fog_on and not visible.has(c)):
+			if not _cell_on_screen(c.x, c.y) or (fog_on and not visible.has(c)) \
+					or not state.grid.in_bounds(c) or state.grid.cell(c).is_space:
 				continue
 			var rect := Rect2(ORIGIN + Vector2(c) * CELL, Vector2(CELL, CELL))
 			if not Sprites.draw_texture_override_rect(self, "fire", rect, 0.0,
@@ -7678,6 +7763,8 @@ func _build_log_panel() -> void:
 	log_tools.add_child(log_toggle)
 	_log_label.add_theme_font_size_override("normal_font_size", 11)
 	_log_label.scroll_following = true
+	if state != null:
+		_log_label.text = "\n".join(state.log.lines) + ("\n" if not state.log.lines.is_empty() else "")
 	_log_body_wrap = SteamChrome.pad(_log_label, 8, 6)
 	frame.add_child(_log_body_wrap)
 
@@ -8130,6 +8217,21 @@ func _refresh_initiative() -> void:
 
 ## Полный разбор инициативы для оверлея (item 49): каждый слот по порядку со своим цветом,
 ## живым счётом и пометкой активного/выбитого; игроки сгруппированы по командам, если те есть.
+func _wave_group_lines() -> Array[String]:
+	var out: Array[String] = []
+	var md := resolver.mode
+	for k in range(1, md.wave + 1):
+		var alive := 0
+		var present := 0
+		for u: UnitInstance in state.all_units():
+			if u.owner == md.wave_side and u.neutral_group == k and not u.is_drone:
+				present += 1
+				if u.is_on_field(): alive += 1
+		var total := int(md.wave_sizes.get(str(k), present))
+		if total > 0:
+			out.append("Wave %s — %d alive / %d dead" % [MCF.roman(k), alive, maxi(0, total - alive)])
+	return out
+
 func _refresh_initiative_overlay() -> void:
 	if _init_overlay_body == null or state == null:
 		return
@@ -8181,6 +8283,11 @@ func _refresh_initiative_overlay() -> void:
 			lbl.modulate = Color(1, 1, 1, 0.45)
 		row.add_child(lbl)
 		_init_overlay_body.add_child(row)
+		if resolver.mode.is_holdout() and slot == resolver.mode.wave_side:
+			for wave_row: String in _wave_group_lines():
+				var wave_label := Label.new()
+				wave_label.text = "    " + wave_row
+				_init_overlay_body.add_child(wave_label)
 	# Высота по содержимому, но не выше экрана — дальше прокрутка.
 	if _init_overlay_scroll != null:
 		_init_overlay_scroll.custom_minimum_size = Vector2(388, minf(
@@ -8613,6 +8720,7 @@ func _make_panel_draggable(panel: Control, header: Control, on_move: Callable) -
 func _replay_chat_history() -> void:
 	if _chat_log == null:
 		return
+	_chat_log.clear()
 	for rec: Dictionary in NetHandoff.chat_history:
 		_chat_log.append_text("[b]%s:[/b] %s\n" % [ChatBox.escape(_side_label(int(rec["side"]))),
 				ChatBox.escape(str(rec["text"]))])
@@ -8743,7 +8851,7 @@ var _neutral_camera_sides: Array = []
 
 func _neutral_camera_targets() -> Dictionary:
 	var targets := {}
-	if state == null: return targets
+	if state == null or resolver == null: return targets
 	var limited := _view_resolver().visibility_limited()
 	var visible := _visible_before_impact(_viewing_side()) if limited else {}
 	for u: UnitInstance in state.all_units():
@@ -9008,9 +9116,9 @@ func _open_menu(unit: UnitInstance) -> void:
 		# The rest of a burst is still just "Shoot" (0.11).
 		if _valid_pending_shoot(unit):
 			pshoot = "Shoot"
-		elif unit.stats.special_ability_id == MCF.ABILITY_MARKSMAN:
+		elif unit.attack_ability() == MCF.ABILITY_MARKSMAN:
 			pshoot = "Laser (2 AP)"
-		elif unit.stats.special_ability_id == MCF.ABILITY_FLAMETHROWER:
+		elif unit.attack_ability() == MCF.ABILITY_FLAMETHROWER:
 			pshoot = "Flame"
 		if unit.fire_range() > 0.0:
 			_act_btn(vb, pshoot, _enter_shoot,
@@ -9048,12 +9156,12 @@ func _open_menu(unit: UnitInstance) -> void:
 		# The rest of a burst is still just "Shoot" (0.11).
 		if _valid_pending_shoot(unit):
 			shoot_text = "Shoot"
-		elif unit.stats.special_ability_id == MCF.ABILITY_MARKSMAN:
+		elif unit.attack_ability() == MCF.ABILITY_MARKSMAN:
 			shoot_text = "Laser (2 AP)"
-		elif unit.stats.special_ability_id == MCF.ABILITY_MINER \
-				or unit.stats.special_ability_id == MCF.ABILITY_SHIELD_BEARER:
+		elif unit.attack_ability() == MCF.ABILITY_MINER \
+				or unit.attack_ability() == MCF.ABILITY_SHIELD_BEARER:
 			shoot_text = "Hit"  # ближний бой (§3.14)
-		elif unit.stats.special_ability_id == MCF.ABILITY_FLAMETHROWER:
+		elif unit.attack_ability() == MCF.ABILITY_FLAMETHROWER:
 			shoot_text = "Flame"
 		_act_btn(vb, shoot_text, _enter_shoot,
 				_valid_pending_shoot(unit) or unit.remaining_ap >= _shoot_ap_cost(unit),
@@ -9699,7 +9807,22 @@ static func _ink(bg: Color) -> Color:
 func _ground_image(name: String) -> Image:
 	return GroundBackdrop._ground_image(name)
 
+var _walking_view: GameActionResolver
+
 func _view_resolver() -> GameActionResolver:
+	if not _walk_cells.is_empty():
+		if _walking_view == null or _walking_view.state != state:
+			_walking_view = GameActionResolver.new(state)
+			_walking_view.track_undo_history = false
+			_walking_view.explored = resolver.explored
+		_walking_view.fog_mode = (MCF.Fog.STANDARD if _spectator_fog else MCF.Fog.OFF) if _spectator else resolver.fog_mode
+		_walking_view.set_sight_positions(_walk_cells)
+		return _walking_view
+	if _walking_view != null:
+		_walking_view = null
+		# The memory renderer must compare the final simulation view with the last
+		# walking frame, not with its own pre-animation incremental journal.
+		resolver._vis_log.clear()
 	if not _spectator: return resolver
 	if _spectator_view == null or _spectator_view.state != state:
 		_spectator_view = GameActionResolver.new(state)
@@ -9934,16 +10057,6 @@ func _handle_shortcut(event: InputEventKey) -> bool:
 			return true
 	return false
 
-func _draw_fire_above_units(visible: Dictionary, limited: bool) -> void:
-	if _shown_grid == null or GridCell.burning <= 0: return
-	for y in range(maxi(0, _cull_y0), mini(_shown_grid.height - 1, _cull_y1) + 1):
-		for x in range(maxi(0, _cull_x0), mini(_shown_grid.width - 1, _cull_x1) + 1):
-			var c := Vector2i(x, y)
-			if not _shown_grid.cell_fast(x, y).on_fire or (limited and not visible.has(c)) \
-					or (_tiles != null and _tiles.hidden_fire.has(c)): continue
-			var rect := Rect2(_cell_origin(c), Vector2.ONE * CELL)
-			if not Sprites.draw_texture_override_rect(self, "fire", rect):
-				draw_rect(rect, Color(1.0, 0.45, 0.08, 0.8))
 
 ## Build an impact schedule without changing the already resolved board.
 func _vehicle_presentation_stages(ev: Dictionary) -> Dictionary:

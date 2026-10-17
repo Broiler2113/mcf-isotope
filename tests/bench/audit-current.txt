@@ -1,0 +1,35 @@
+Current-scale performance audit — release 0.12.8, 2026-10-17
+
+4.7-stable (official), Linux, AMD EPYC 7C13 64-Core Processor; 2 CPUs exposed.
+CPU measurements using the headless renderer. No GPU/frame-rate conclusion.
+
+All giant maps request 120 x 96 cells, with 200 soldiers per player side,
+furnished terrain, tanks, Tactician AI, fog memory and lighting CPU updates.
+Holdout adds a wave side to two allied defending armies.
+
+Best host-loop repetition (seconds; every column uses the same repetition):
+Scene           Actions  Total    AI  Resolve    Fog  Memory  Lights   Guest  Replay
+giant              2425   69.92   17.08   18.25   31.87    0.29    0.50   20.91   18.16
+giant_capture      2157   52.47   14.43   16.58   19.19    0.23    0.33   16.06   14.98
+giant_holdout      2324   62.65   13.78   17.77   28.25    0.34    0.44   19.21   17.10
+
+Total covers the host action loop; guest simulation, save/load and replay run
+afterwards. Map generation and opening initiative are outside that loop.
+All subsystem timings and both repetitions are in baseline-current.json.
+
+Validation:
+- Two repetitions of all six scenarios have identical behavioral signatures.
+- Every run reports guest_same=true, zero resyncs, save=true and replay=true.
+- Rule comparisons include event queues/clouds and mode/wave/zone state.
+- Expected signatures were refreshed for the intentional 0.12.8 combat, corpse
+  and spawn-rule changes, including the new serialized restriction/cohort fields.
+
+Limits and comparison:
+This shared runner also performed release validation; timings are informational.
+These seeds do not establish whether one mode is inherently faster: map layout,
+combat and action counts differ. No speedup or regression is claimed here.
+Compare repeated runs on the same otherwise idle machine with compare_timings.py.
+It checks medians only when hardware, engine, configuration and signatures match.
+A warning requires both a 1.5x increase and at least 20 ms additional time.
+Earlier measurements with different gameplay signatures are not comparable.
+Lighting measurements cover CPU preparation, not GPU frame rate.

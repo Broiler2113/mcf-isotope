@@ -40,6 +40,16 @@ var spectators: Array[int] = []
 var _link: RelayLink = null
 ## Why the last connection failed, in words for the menu.
 var last_error := ""
+var client_token := ""
+var join_route: Dictionary = {}
+var peer_tokens: Dictionary = {}
+var in_match := false
+var waiting_peers: Array[int] = []
+var claims := SeatReclaims.new()
+## Presentation cursor/acknowledgments carried into Main after a live resync.
+var roll_sequence_on_join := 0
+var roll_acks_on_join: Dictionary = {}
+
 
 func start_relay_host(address: String, info: Dictionary) -> int:
 	_link = RelayLink.new()
@@ -53,6 +63,8 @@ func start_relay_host(address: String, info: Dictionary) -> int:
 	return OK
 
 func start_relay_client(address: String, code: String, password: String = "") -> int:
+	join_route = {"relay": address, "room": code, "password": password}
+	if client_token.is_empty(): client_token = RejoinStore.token()
 	_link = RelayLink.new()
 	var err := _link.connect_to(address)
 	if err != OK:
@@ -115,6 +127,8 @@ func start_host(port: int = DEFAULT_PORT) -> int:
 	return OK
 
 func start_client(ip: String, port: int = DEFAULT_PORT) -> int:
+	join_route = {"ip": ip, "port": port}
+	if client_token.is_empty(): client_token = RejoinStore.token()
 	if not is_inside_tree():
 		push_error("NetworkSession: add the node to the tree before joining")
 		return ERR_UNCONFIGURED
@@ -150,7 +164,8 @@ func attach() -> void:
 	var pending := _inbox.duplicate()
 	_inbox.clear()
 	for m in pending:
-		message.emit(m)
+		if _listening: message.emit(m)
+		else: _inbox.append(m)
 
 ## Сцена уходит — снова копим сообщения в буфер (#93). Без этого пакет, пришедший
 ## между экраном расстановки и боем, эмитился бы в пустоту и терялся.
@@ -167,7 +182,17 @@ func close() -> void:
 	multiplayer.multiplayer_peer = null
 
 # --- Транспорт сообщений ---
+func send_to(id: int, msg: Dictionary) -> void:
+	if _link != null: _link.send_to(id, var_to_bytes(msg))
+	elif _peer != null: _relay.rpc_id(id, msg)
+
 func send(msg: Dictionary) -> void:
+	if _is_host and in_match:
+		if peers.is_empty(): return
+		if not waiting_peers.is_empty():
+			for id in peers:
+				if not waiting_peers.has(id): send_to(id, msg)
+			return
 	if _link != null:
 		var payload := var_to_bytes(msg)
 		if str(msg.get("k", "")) == "draw" and spectators.has(my_peer_id()):
@@ -204,12 +229,23 @@ func _deliver(msg: Dictionary, sender: int) -> void:
 	# боя — чей это бросок. Ключ служебный, с подчёркиванием, чтобы не спутать с полями
 	# самих сообщений.
 	var kind := str(msg.get("k", ""))
+	if _is_host and kind in [NetHandoff.K_SIDE_HUMAN, NetHandoff.K_RECLAIM_OFFER, NetHandoff.K_RECLAIM_STATUS]: return
+	if _is_host and kind == NetHandoff.K_IDENTITY:
+		var identity := str(msg.get("token", ""))
+		if peers.has(sender) and not peer_tokens.has(sender) and identity.length() == 48:
+			peer_tokens[sender] = identity
+		return
+	if _is_host and kind == NetHandoff.K_RECLAIM and not in_match:
+		send_to(sender, {"k": NetHandoff.K_RECLAIM_STATUS, "error": "The previous match is no longer running."})
+		return
+	if _is_host and waiting_peers.has(sender) and kind not in [NetHandoff.K_RECLAIM, NetHandoff.K_RECLAIM_ACCEPT]:
+		return
 	if spectators.has(sender):
 		if kind == "draw":
 			if not spectators.has(my_peer_id()): return
 		elif kind not in ["lobby_req", "resync", "setup_req", "live_req"]:
 			return
-	if not _is_host and kind in ["action", "init", "state", "setup", "load", "lobby", "lobby_map", "go", "side_ai", "match_over", "ai_speed", "slot_ai", "unready"] and sender != 1:
+	if not _is_host and kind in ["action", "init", "state", "setup", "load", "lobby", "lobby_map", "go", "side_ai", "match_over", "ai_speed", "slot_ai", "unready", NetHandoff.K_RECLAIM_OFFER, NetHandoff.K_RECLAIM_STATUS, NetHandoff.K_SIDE_HUMAN] and sender != 1:
 		return
 	msg["_from"] = sender
 	if _listening:
@@ -236,11 +272,13 @@ func _on_peer_connected(id: int) -> void:
 		peers.append(id)
 	if _is_host:
 		_loosen_timeout(id)
+	if _is_host and in_match: waiting_peers.append(id)
 	peer_joined.emit(id)
 	peer_ready.emit(true)  # хост: клиент подключился
 
 func _on_connected_to_server() -> void:
 	_loosen_timeout(1)
+	send_to(1, {"k": NetHandoff.K_IDENTITY, "token": client_token})
 	peer_ready.emit(false)  # клиент: подключились к хосту
 
 func _on_connection_failed() -> void:
@@ -251,6 +289,9 @@ func _on_peer_disconnected(id: int = 0) -> void:
 	if _is_host and not peers.has(id): return
 	peers.erase(id)
 	peer_left.emit(id)
+	peer_tokens.erase(id)
+	waiting_peers.erase(id)
+	claims.forget(id)
 	# У хоста «связь потеряна» — это когда ушёл ПОСЛЕДНИЙ гость (batch 12 #15): один
 	# отвалившийся игрок из трёх не должен выбрасывать в меню всех остальных.
 	if _is_host and not peers.is_empty():

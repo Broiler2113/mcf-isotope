@@ -27,6 +27,12 @@ const K_SETUP_REQ := "setup_req"
 ## же причине, что и карта, — у клиента этого файла нет и быть не может. Расстановка
 ## при этом пропускается: армии уже стоят на доске, их только раздают игрокам.
 const K_LOAD := "load"
+const K_IDENTITY := "identity"
+const K_RECLAIM := "reclaim"
+const K_RECLAIM_OFFER := "reclaim_offer"
+const K_RECLAIM_ACCEPT := "reclaim_accept"
+const K_RECLAIM_STATUS := "reclaim_status"
+const K_SIDE_HUMAN := "side_human"
 
 ## Карта, объявленная хостом (#99). Едет по сети ЦЕЛИКОМ, а не именем файла: карта
 ## хоста может быть нарисована в его редакторе, и у клиента такого файла попросту нет.
@@ -106,7 +112,9 @@ const K_LOBBY_MAP := "lobby_map"
 ##  15 — 0.12.4: burning cells no longer penalize shots; Assault retired.
 ##  16 — configurable raider composition and mixed old minefields on every map.
 ##  17 — equal event chances with rejection sampling; crushed fixtures shed glass.
-const PROTOCOL := 17
+##  18 — authenticated seat reclaim and ordered human-controller handback.
+##  19 — spawn exclusions, wave immunities, borg weapons and smoke visibility.
+const PROTOCOL := 19
 
 static func encode_rules() -> Dictionary:
 	var roster := GameConfig.active_roster()
@@ -120,6 +128,8 @@ static func encode_rules() -> Dictionary:
 		"re": GameConfig.random_events_enabled, "rm": GameConfig.random_events_mandatory,
 		"ri": GameConfig.random_events_interval,
 		"rad": GameConfig.independent_army_difficulty,
+		"rx": GameConfig.raider_excluded_units.duplicate(),
+		"wx": GameConfig.holdout_excluded_units.duplicate(),
 		"rw": GameConfig.random_events_weights.duplicate(),
 		"gm": GameConfig.game_mode, "cz": GameConfig.capture_zones,
 		"ct": GameConfig.capture_target, "hw": GameConfig.holdout_waves, "wa": GameConfig.holdout_ai,
@@ -148,6 +158,8 @@ static func apply_rules(msg: Dictionary) -> void:
 	GameConfig.random_events_mandatory = bool(msg.get("rm", false))
 	GameConfig.random_events_interval = int(msg.get("ri", 3))
 	GameConfig.independent_army_difficulty = clampi(int(msg.get("rad", 1)), 0, 2)
+	GameConfig.raider_excluded_units.assign(msg.get("rx", []))
+	GameConfig.holdout_excluded_units.assign(msg.get("wx", []))
 	var rw: Variant = msg.get("rw", {})
 	GameConfig.random_events_weights = {}
 	if rw is Dictionary:

@@ -305,3 +305,71 @@ are written to `/tmp/isotope-drawings-night.png` and `/tmp/isotope-fire-layering
 `godot --headless --script res://tests/bench/run_explosion_bench.gd` reports
 impact-frame texture rebuilding time. An optional argument after `--` may point to
 an earlier `TerrainTiles.gd` source for comparison. Timings are informational.
+
+### Reclaiming a disconnected guest seat
+
+`run_reclaim.gd` checks identity matching, occupied/unknown/ended seats, declining,
+round-boundary queues, and the message permissions of waiting connections.
+`bash tests/run_net_reclaim.sh` runs a host and two guests through real ENet:
+one guest leaves, declines an offer, rejoins with a different peer ID, accepts,
+and receives the current board at the next round. Both guests compare their
+complete state and mode/event rules with the host. The returning guest also
+checks the restored RNG position, host settings changed during its absence,
+and the dice-animation cursor. A real shot then requires the returned player
+to roll defense, followed by a legal turn-ending intent from its new peer ID. `MCF_RECLAIM_SOLO=1` covers the last guest
+leaving; `MCF_TEST_RELAY=127.0.0.1:PORT` runs the same flow through a local relay.
+The harness uses temporary user-data directories, so it cannot overwrite a
+player's remembered match. Seat reclaim was introduced in network protocol 18; this release uses protocol 19
+for the updated combat and spawn rules. All peers must use the same release.
+
+### Current-scale performance audit
+
+The original `small`, `medium`, and `large` configurations and behavioral
+references remain unchanged. Their `units` field is **per side**, so `large`
+already has 150 soldiers per side. `giant`, `giant_capture`, and `giant_holdout`
+start with 200 per side, tanks, furniture, Tactician AI, fog memory, lighting CPU
+updates, and the complete selected random-event pool. Map and mode eligibility
+still apply (for example, Bounty only occurs in Capture & Hold). Holdout adds a
+separate wave side to two allied defending armies.
+
+```sh
+godot --headless --script res://tests/bench/run_bench.gd -- modern --reps 2 --timings /tmp/current.json
+python3 tests/bench/compare_timings.py tests/bench/baseline-current.json /tmp/current.json
+godot --headless --script res://tests/bench/run_bench.gd -- event_matrix
+```
+
+The event matrix isolates each of the ten entries on the furnished giant Capture
+map. Its Reinforcements fixture uses a cheaper second army so the event is
+eligible. These short runs exercise announce/land handling, guest agreement,
+save/load, and replay; the three main scenes measure complete AI turns.
+
+`--update` writes hashes only if repeated runs agree and guest, save, replay, and
+cosmetic invariants pass. It preserves unselected scene references. Timing
+reports contain each repetition and the machine/engine identity. The comparison
+uses medians, flags increases above 1.5x and 20 ms, and remains informational.
+Different machines, configs, or behavioral signatures are rejected as incomparable.
+Use an otherwise idle machine for a useful release-to-release comparison.
+
+Lighting measurements call the shipped `LightManager.update_view()` and include
+occluder indexing, emitter selection and texture/multimesh preparation. They are
+CPU measurements with a headless renderer, not GPU frame-rate measurements.
+Fog-memory timing calls the same board/decal memory updates used by `Main`.
+`total` covers the host action loop; guest simulation, save/load, and replay are
+reported separately. Startup/map generation and opening initiative precede that
+loop. The old timing columns retain their meanings; memory and lighting are
+additional columns in the JSON report and console output.
+
+To exercise the warning path with a real measured slowdown, collect `small`
+reports with and without `--inject-fog-delay-ms 3`, then compare them. The injected
+wait changes no intents, rolls or hashes. `python3 tests/bench/test_compare_timings.py`
+checks warning thresholds and machine/workload compatibility.
+
+The player-report regressions in `run_player_reports.gd` cover local smoke with fog
+off, capture/release targeting (including Heavy Infantry through the combat UI),
+shuttle drone stations, vehicle fire protection and exits, universal borg weapons,
+corpse blocking/extraction, spawn exclusions, wave cohorts, saved chat/combat log,
+and intermediate movement visibility. `render_reported_issues.gd` checks actual
+Compatibility-renderer layering and excludes explosion fire flashes from space.
+Run that script with a display (or `xvfb-run -a godot --path . --script
+res://tests/render_reported_issues.gd`). `native/policy/test_manifest.py` checks
+registration for all four supported desktop targets and rejects missing libraries.
