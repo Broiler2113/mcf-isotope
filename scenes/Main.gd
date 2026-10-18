@@ -8156,16 +8156,33 @@ const _EMPTY_COUNT := {"alive": 0, "dead": 0, "veh": 0, "veh_dead": 0}
 ## Дрон не в своде вовсе: ни бойцом, ни машиной — это расходная техника станции.
 func _army_counts() -> Dictionary:
 	var out: Dictionary = {}
+	var tm := state.turns
 	for u: UnitInstance in state.all_units():
 		if u.is_drone or u.status == MCF.Status.CORPSE:
 			continue
-		var rec: Dictionary = out.get(u.owner, _EMPTY_COUNT.duplicate())
+		var key := tm.slot_of(u)
+		var rec: Dictionary = out.get(key, _EMPTY_COUNT.duplicate())
 		rec["alive"] += 1
-		out[u.owner] = rec
+		out[key] = rec
 	for owner: Variant in state.deaths:
 		var rec: Dictionary = out.get(int(owner), _EMPTY_COUNT.duplicate())
 		rec["dead"] = int(state.deaths[owner])
 		out[int(owner)] = rec
+	# Holdout: each wave with its own slot counts its own fallen (arrivals minus survivors);
+	# the plain waves slot keeps only what no wave slot claims.
+	if tm.wave_owner >= 0 and resolver != null and resolver.mode != null:
+		var claimed := 0
+		for k: Variant in resolver.mode.wave_sizes:
+			var ws := MCF.wave_slot(int(k))
+			if ws < 0 or not tm.round_order.has(ws):
+				continue
+			var rec: Dictionary = out.get(ws, _EMPTY_COUNT.duplicate())
+			rec["dead"] = maxi(0, int(resolver.mode.wave_sizes[k]) - int(rec["alive"]))
+			claimed += int(rec["dead"])
+			out[ws] = rec
+		var plain: Dictionary = out.get(tm.wave_owner, _EMPTY_COUNT.duplicate())
+		plain["dead"] = maxi(0, int(plain["dead"]) - claimed)
+		out[tm.wave_owner] = plain
 	for v: Vehicle in state.all_vehicles():
 		var rec: Dictionary = out.get(v.owner, _EMPTY_COUNT.duplicate())
 		if v.alive():
@@ -8217,21 +8234,6 @@ func _refresh_initiative() -> void:
 
 ## Полный разбор инициативы для оверлея (item 49): каждый слот по порядку со своим цветом,
 ## живым счётом и пометкой активного/выбитого; игроки сгруппированы по командам, если те есть.
-func _wave_group_lines() -> Array[String]:
-	var out: Array[String] = []
-	var md := resolver.mode
-	for k in range(1, md.wave + 1):
-		var alive := 0
-		var present := 0
-		for u: UnitInstance in state.all_units():
-			if u.owner == md.wave_side and u.neutral_group == k and not u.is_drone:
-				present += 1
-				if u.is_on_field(): alive += 1
-		var total := int(md.wave_sizes.get(str(k), present))
-		if total > 0:
-			out.append("Wave %s — %d alive / %d dead" % [MCF.roman(k), alive, maxi(0, total - alive)])
-	return out
-
 func _refresh_initiative_overlay() -> void:
 	if _init_overlay_body == null or state == null:
 		return
@@ -8283,11 +8285,6 @@ func _refresh_initiative_overlay() -> void:
 			lbl.modulate = Color(1, 1, 1, 0.45)
 		row.add_child(lbl)
 		_init_overlay_body.add_child(row)
-		if resolver.mode.is_holdout() and slot == resolver.mode.wave_side:
-			for wave_row: String in _wave_group_lines():
-				var wave_label := Label.new()
-				wave_label.text = "    " + wave_row
-				_init_overlay_body.add_child(wave_label)
 	# Высота по содержимому, но не выше экрана — дальше прокрутка.
 	if _init_overlay_scroll != null:
 		_init_overlay_scroll.custom_minimum_size = Vector2(388, minf(
@@ -9049,6 +9046,8 @@ func _anchor_menu(panel: Control) -> void:
 func _side_color(side: int) -> Color:
 	if MCF.is_neutral(side):
 		return NEUTRAL_COLOR
+	if MCF.is_wave_slot(side):
+		side = state.turns.wave_owner
 	# Каждая сторона носит СВОЙ цвет из ростера — всегда (item 16). Прежняя перспектива
 	# «своё синее, чужое красное» в сетевой игре на двоих перекрашивала стороны под
 	# зрителя и путала, чей это на самом деле цвет (особенно после захвата чужого танка);
@@ -9610,7 +9609,7 @@ func _refresh_undo_btn() -> void:
 ## Имя стороны на экране. В сетевой партии стороны зовутся Player A (хост) и
 ## Player B (присоединившийся), а своя помечается «(you)» (#93).
 func _side_label(side: int) -> String:
-	if MCF.is_neutral(side):
+	if MCF.is_neutral(side) or MCF.is_wave_slot(side):
 		return MCF.owner_name(side)
 	var base := state.roster.name_of(side)
 	if state.turns.is_eliminated(side):
@@ -9624,7 +9623,7 @@ func _side_label(side: int) -> String:
 func _initiative_names() -> String:
 	var parts: Array[String] = []
 	for s: int in state.turns.round_order:
-		parts.append(state.roster.name_of(s))
+		parts.append(MCF.owner_name(s) if MCF.is_wave_slot(s) else state.roster.name_of(s))
 	return " → ".join(parts)
 
 func _order_labels() -> String:
@@ -9697,7 +9696,7 @@ func _refresh_status() -> void:
 ## Чей ход ИДЁТ сейчас: пока отыгрывается группа жителей — она, иначе активный слот.
 ## Одно правило для строки хода и для окна инициативы (playtest-20: они расходились).
 func _turn_now() -> int:
-	return _playing_slot if _playing_slot != -1 else state.active_player()
+	return _playing_slot if _playing_slot != -1 else state.turns.active_slot()
 
 func _refresh_info() -> void:
 	if _info_label == null:

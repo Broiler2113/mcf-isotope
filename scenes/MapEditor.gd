@@ -562,6 +562,13 @@ func _set_spawn(c: Vector2i, id: String, owner: int) -> void:
 	var s := {"stats_id": id, "owner": owner, "coord": c, "facing": Vector2i.ZERO}
 	map.spawns.append(s)
 	_spawn_at[c] = s
+	# A unit placed on bodies clears them: nobody stands on a body.
+	var ci := c.y * map.width + c.x
+	if map.corpses.has(ci):
+		var kept := PackedInt32Array()
+		for q: int in map.corpses:
+			if q != ci: kept.append(q)
+		map.corpses = kept
 
 func _clear_spawn(c: Vector2i) -> void:
 	if not _spawn_at.has(c):
@@ -915,7 +922,7 @@ func _stamp_once(p: Dictionary, at: Vector2i, mask: int) -> void:
 		map.corpses = kept
 		for body: Array in p["corpses"]:
 			var c := at + Vector2i(int(body[0]), int(body[1]))
-			if map.in_bounds(c): map.corpses.append(c.y * map.width + c.x)
+			if map.in_bounds(c) and not _spawn_at.has(c): map.corpses.append(c.y * map.width + c.x)
 	for d: Array in p.get("decals", []):
 		var pos := Vector2(float(d[1]), float(d[2])) + Vector2(at)
 		if Rect2(0, 0, map.width, map.height).has_point(pos):
@@ -1376,7 +1383,9 @@ func _press(c: Vector2i, alt: bool, screen := Vector2.INF) -> void:
 		var here := 0
 		for q: int in map.corpses:
 			here += 1 if q == ci else 0
-		if here < MCF.CORPSE_WALL_COUNT:
+		if _spawn_at.has(c):
+			_flash("A unit stands here — bodies can't be placed on it")
+		elif here < MCF.CORPSE_WALL_COUNT:
 			map.corpses.append(ci)
 			_mark_dirty()
 		else:

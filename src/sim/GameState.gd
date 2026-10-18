@@ -73,10 +73,11 @@ func spawn_unit(stats: UnitStats, coord: Vector2i, owner: int,
 		occupy: bool = true) -> UnitInstance:
 	var unit := UnitInstance.new(_next_id, stats, coord, owner)
 	_next_id += 1
+	# A refused cell (taken, or a body lies there) must not leave an off-board "ghost".
+	if occupy and not grid.place(unit, coord):
+		return null
 	units[unit.id] = unit
 	_units_dirty = true
-	if occupy:
-		grid.place(unit, coord)
 	return unit
 
 func get_unit(id: int) -> UnitInstance:
@@ -226,6 +227,7 @@ func snapshot(with_cells: bool = true) -> Dictionary:
 		"units": us, "vehicles": vs, "cells": cs,
 		"active_index": turns.active_index, "round_number": turns.round_number,
 		"round_order": turns.round_order.duplicate(),
+		"wave_owner": turns.wave_owner,
 		"turn_eliminated": turns.eliminated.duplicate(),
 		"roster": roster.snapshot(),
 		"revealed_mines": _snapshot_revealed_mines(),
@@ -331,6 +333,8 @@ func restore(snap: Dictionary) -> void:
 	# иначе Undo оставил бы в очереди группу, которой на доске уже нет.
 	if snap.has("round_order"):
 		turns.round_order = (snap["round_order"] as Array[int]).duplicate()
+	if snap.has("wave_owner"):
+		turns.wave_owner = int(snap["wave_owner"])
 	if snap.has("turn_eliminated"):
 		turns.eliminated = (snap["turn_eliminated"] as Dictionary).duplicate()
 	if snap.has("roster"):

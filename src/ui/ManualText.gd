@@ -132,7 +132,7 @@ Fire never goes out on its own. The extinguisher grenade douses an area; buildin
 		["Grenades & Items", """Items are used up when used, hit or miss.
 
 [h]Frag grenade[/h] - Machinegunner
-Thrown up to %d cells along a straight line. On a miss it falls short and still explodes. The X-shaped blast always kills in its center (except a Shield Bearer); everyone else in it must pass two parry rolls.
+Thrown up to %d cells along a straight line. On a miss it falls short and still explodes. The X-shaped blast always kills in its center; everyone else in it must pass two parry rolls, each 1 harder than usual. A Shield Bearer anywhere in it, center included, blocks it like two bullets: two rolls at 2+.
 
 [h]Smoke grenade[/h] - Heavy Infantry
 Thrown like a frag. A 3×3 cloud stays until the end of the next round, blocks sight and aimed fire, and harms no one. Use it to cross open ground or to blind a machine gun.
@@ -225,6 +225,6 @@ const UNIT_BLURBS := {
 	"engineer": "Builds sandbags, hedgehogs, pillboxes and an LDF (Large Deployable Fortification): six connected tiles in any shape. Welds airlocks, repairs vehicles and digs twice as fast.",
 	"miner": "Melee fighter (−1 to the parry) who tears down fortifications in one action.",
 	"sapper": "Lays up to five mines in one action, anti-vehicle mines too, sweeps for and disarms enemy mines.",
-	"shield_bearer": "Slow melee fighter whose shield blocks shots and lasers. Survives blasts outside their center and shelters the soldiers next to it. Fireproof.",
+	"shield_bearer": "Slow melee fighter. Only adjacent soldiers can fire at it; Snipers, Marksmen, Anti-Tank soldiers and tank cannons can also fire from range. Its shield stops lasers. Blocks a frag grenade, even a direct hit, on two 2+ rolls. Survives other blasts outside their center and shelters the soldiers next to it, but a direct hit kills it. Fireproof.",
 	"drone_operator": "Places a drone station that launches an exploding drone. Must stay next to the station to fly it.",
 }

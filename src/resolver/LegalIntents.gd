@@ -44,6 +44,9 @@ static func enumerate(r: GameActionResolver, side: int, actors: Dictionary = {})
 		var u: UnitInstance = state.units[id]
 		if u.owner != side or not u.is_alive():
 			continue
+		# Holdout: only the wave whose initiative slot is up may act.
+		if side == state.active_player() and not state.turns.slot_has(state.turns.active_slot(), u):
+			continue
 		if filtered and not actors.has(id):
 			continue
 		_for_unit(r, u, out)

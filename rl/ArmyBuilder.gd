@@ -14,7 +14,7 @@ extends RefCounted
 ## дрон рождается со станции, техника ставится отдельно, мирные — не армия.
 const POOL := {
 	"light_infantry": 3.0, "heavy_infantry": 2.0, "machinegunner": 2.0, "sniper": 1.0,
-	"anti_tank": 2.0, "engineer": 1.0, "flamethrower": 1.0, "assault": 2.0,
+	"anti_tank": 2.0, "engineer": 1.0, "flamethrower": 1.0,
 	"marksman": 1.0, "miner": 0.5, "sapper": 1.0, "shield_bearer": 1.0,
 	"drone_operator": 1.0, "commander": 0.5,
 }

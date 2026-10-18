@@ -181,8 +181,11 @@ func waves() -> void:
 	var display = load("res://scenes/Main.gd").new()
 	display.state = r.state
 	display.resolver = r
-	var groups: Array[String] = display._wave_group_lines()
-	ck(groups.size() == 2 and groups[0].begins_with("Wave I ") and groups[1].begins_with("Wave II "), "Initiative lists waves separately by arrival")
+	var w1 := MCF.wave_slot(1)
+	var w2 := MCF.wave_slot(2)
+	ck(r.state.turns.round_order.has(w1) and r.state.turns.round_order.has(w2)
+			and display._side_label(w1) == "Wave I" and display._side_label(w2) == "Wave II",
+			"Initiative lists waves separately by arrival")
 	display.free()
 	r.random_events.excluded_units.erase("light_infantry")
 	r._land_army({"edge": 1, "along": 10}, ActionResult.success([]))

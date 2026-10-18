@@ -31,8 +31,36 @@ var initiative_rolled: bool = false
 ## история партии: по ней не прочесть, кто вообще играл и в каком порядке.
 var eliminated: Dictionary = {}
 
-func active_player() -> int:
+## The Holdout waves side, once a wave has its own slot (MCF.WAVE_SLOT_BASE); -1 otherwise.
+var wave_owner: int = -1
+
+## Who plays a slot: the slot itself, except a wave slot, which plays for the waves side.
+func slot_owner(slot: int) -> int:
+	return wave_owner if MCF.is_wave_slot(slot) else slot
+
+## The slot being played (for the initiative list); active_player() is its owner.
+func active_slot() -> int:
 	return round_order[active_index]
+
+func active_player() -> int:
+	return slot_owner(round_order[active_index])
+
+## Does unit u act in this slot? A wave slot holds just its wave; the plain waves slot keeps
+## only soldiers whose wave has no slot (older saves, the hundred-and-first wave).
+func slot_has(slot: int, u: UnitInstance) -> bool:
+	if MCF.is_wave_slot(slot):
+		return u.owner == wave_owner and u.neutral_group == MCF.wave_index(slot)
+	if slot == wave_owner and wave_owner >= 0:
+		return u.owner == slot and not round_order.has(MCF.wave_slot(u.neutral_group))
+	return u.owner == slot
+
+## The initiative slot unit u acts in.
+func slot_of(u: UnitInstance) -> int:
+	if wave_owner >= 0 and u.owner == wave_owner:
+		var ws := MCF.wave_slot(u.neutral_group)
+		if ws >= 0 and round_order.has(ws):
+			return ws
+	return u.owner
 
 ## Бросок инициативы на всю партию — вызывается ОДИН раз, уже после расстановки
 ## юнитов (иначе не видно, есть ли на карте мирные). Бросок идёт через DiceService,
@@ -126,7 +154,7 @@ func mark_eliminated(slot_id: int) -> void:
 	eliminated[slot_id] = true
 
 func is_eliminated(slot_id: int) -> bool:
-	return eliminated.get(slot_id, false)
+	return eliminated.get(slot_owner(slot_id), false)
 
 ## Человекочитаемый порядок инициативы — для HUD и журнала боя.
 func order_names() -> String:
@@ -204,10 +232,10 @@ func _next_playable_from(start: int, all_units: Array) -> int:
 ## Явно выбитая сторона не играет, даже если на доске остался её юнит: выбытием
 ## распоряжается тот, кто его объявил (например, сдача или потеря командира).
 func _has_living(all_units: Array, side: int) -> bool:
-	if eliminated.get(side, false):
+	if eliminated.get(slot_owner(side), false):
 		return false
 	for u in all_units:
-		if u.owner == side and u.is_alive():
+		if u.is_alive() and slot_has(side, u):
 			return true
 	return false
 

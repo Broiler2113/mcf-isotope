@@ -361,7 +361,7 @@ func _decide(state: GameState) -> Intent:
 	while not _queue.is_empty():
 		var row: Dictionary = _queue[0]
 		var best := _best_for_actor(state, r, row)
-		if best.is_empty() and _forced_pass:
+		if best.is_empty() and _forced_pass and _acts_now(state, row):
 			best = _forced_action(state, r, row)
 		if not best.is_empty():
 			_acted[_row_key(row)] = true
@@ -431,10 +431,20 @@ func _backtrack_penalty(key: String, coord: Vector2i) -> float:
 
 ## Кто ещё может действовать, но за ход так и не сделал ничего (#103). Возвращаем
 ## пустой массив, если явка и так набрана — гонять армию ради галочки незачем.
+## Holdout: the waves side plays one wave per initiative slot; other waves wait their turn.
+## Every path that picks an actor (plan, forced pass, idle quota) asks this.
+func _acts_now(state: GameState, row: Dictionary) -> bool:
+	if row["vehicle"]:
+		return true
+	var u := state.get_unit(row["id"])
+	return u != null and state.turns.slot_has(state.turns.active_slot(), u)
+
 func _idle_rows(state: GameState) -> Array:
 	var live: Array = []
 	for u: UnitInstance in state.living_units_of(owner):
 		if u.is_drone or u.aboard_vehicle_id != -1 or not state.grid.in_bounds(u.coord):
+			continue
+		if not state.turns.slot_has(state.turns.active_slot(), u):
 			continue
 		if not _can_command(u):
 			continue
@@ -590,7 +600,8 @@ func _forced_vehicle_action(state: GameState, r: GameActionResolver, veh: Vehicl
 
 ## Уникальный номер текущего хода: раунд + чей ход. Смена номера = новый ход ИИ.
 func _turn_token_of(state: GameState) -> int:
-	return state.turns.round_number * 16 + state.turns.active_index
+	# Wide enough for any initiative length (neutral groups and wave slots add up past 16).
+	return state.turns.round_number * 4096 + state.turns.active_index
 
 ## Построить очередь заново, если начался новый ход ИИ (#52).
 func _sync_turn(state: GameState, r: GameActionResolver) -> void:
@@ -687,7 +698,7 @@ func _best_for_actor(state: GameState, r: GameActionResolver, row: Dictionary) -
 				best = cand
 		return best
 	var u := state.get_unit(row["id"])
-	if u == null or not u.is_alive() or u.owner != owner:
+	if u == null or not u.is_alive() or u.owner != owner or not _acts_now(state, row):
 		return {}
 	# Экипаж ТАНКА вынесен за карту (coord = OFFBOARD, −9999) — как пехота он больше
 	# не ходит, всё его участие идёт через экипаж машины (_vehicle_candidates). Раньше он
@@ -1665,7 +1676,7 @@ func _hurts_own(state: GameState, r: GameActionResolver, u: UnitInstance, aim: V
 	for c: Vector2i in jet:
 		for n: Vector2i in [c + Vector2i(1, 0), c + Vector2i(-1, 0), c + Vector2i(0, 1), c + Vector2i(0, -1)]:
 			var o := _friend_unit_at(state, n)
-			if o != null and o.id != u.id and not MCF.ability_is_fireproof(o.stats.special_ability_id):
+			if o != null and o.id != u.id and not r.is_fireproof(o):
 				return true
 	return false
 
@@ -1785,10 +1796,11 @@ func _frag_outcome(state: GameState, c: Vector2i, occupants: Dictionary) -> Arra
 		if o == null:
 			continue
 		var p: float
-		if b == c and o.stats.special_ability_id != MCF.ABILITY_SHIELD_BEARER:
+		var shield := o.stats.special_ability_id == MCF.ABILITY_SHIELD_BEARER
+		if b == c and not shield:
 			p = 1.0
 		else:
-			var need_roll: int = o.armor() + 1 - mini(o.carried_corpses, 1)
+			var need_roll: int = o.armor() if shield else o.armor() + 1 - mini(o.carried_corpses, 1)
 			var save := clampf(float(7 - need_roll) / 6.0, 0.0, 1.0)
 			p = 1.0 - save * save
 		if o.owner == owner or (state.roster != null and state.roster.are_allies(owner, o.owner)) \
@@ -2321,7 +2333,7 @@ static func _fire_distance(c: Vector2i, burning: Array) -> int:
 ## огонь обычная местность, и ИИ, водящий огнемётчика в обход собственного пожара,
 ## просто не даёт им работать.
 func _avoids_fire(u: UnitInstance) -> bool:
-	return not MCF.ability_is_fireproof(u.stats.special_ability_id)
+	return not _r.is_fireproof(u) if _r != null else not MCF.ability_is_fireproof(u.stats.special_ability_id)
 
 func _fire_near(state: GameState, coord: Vector2i) -> bool:
 	if GridCell.burning == 0:

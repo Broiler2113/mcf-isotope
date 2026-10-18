@@ -79,7 +79,7 @@ func _mg_nest() -> MapData:
 	_units(m, 1, "machinegunner", [Vector2i(24, 9), Vector2i(24, 11)])
 	_units(m, 1, "light_infantry", [Vector2i(25, 8), Vector2i(25, 12), Vector2i(26, 10)])
 	_units(m, 0, "light_infantry", _col(2, [6, 8, 10, 12, 14]))
-	_units(m, 0, "assault", [Vector2i(4, 9), Vector2i(4, 11)])
+	_units(m, 0, "heavy_infantry", [Vector2i(4, 9), Vector2i(4, 11)])
 	_units(m, 0, "marksman", [Vector2i(1, 10)])
 	_units(m, 0, "engineer", [Vector2i(3, 10)])
 	return m
@@ -147,7 +147,7 @@ func _crossfire() -> MapData:
 		var dx := 1 if side == 0 else -1
 		_units(m, side, "light_infantry", _col(x0, [4, 7, 10, 13, 16, 19]))
 		_units(m, side, "machinegunner", [Vector2i(x0 + dx * 2, 8), Vector2i(x0 + dx * 2, 13)])
-		_units(m, side, "assault", [Vector2i(x0 + dx * 3, 11)])
+		_units(m, side, "heavy_infantry", [Vector2i(x0 + dx * 3, 11)])
 	return m
 
 func _sniper_lanes() -> MapData:

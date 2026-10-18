@@ -114,7 +114,13 @@ const K_LOBBY_MAP := "lobby_map"
 ##  17 — equal event chances with rejection sampling; crushed fixtures shed glass.
 ##  18 — authenticated seat reclaim and ordered human-controller handback.
 ##  19 — spawn exclusions, wave immunities, borg weapons and smoke visibility.
-const PROTOCOL := 19
+##  20 — landings skip bodies, wave AI fire rules, burnt stations free seats, no dice on
+##       an empty event pool, bodies never land on units or under drones, blast epicentres
+##       are never shielded, grabbed soldiers can be hit and killed, shield bearers are
+##       fired at only from an adjacent cell (sniper, marksman, anti-tank and tanks excepted).
+##       Holdout waves take one initiative slot each (MCF.WAVE_SLOT_BASE), placed by dice.
+##       A frag grenade asks a shield bearer for two 2+ rolls (no −1), epicentre included.
+const PROTOCOL := 20
 
 static func encode_rules() -> Dictionary:
 	var roster := GameConfig.active_roster()
