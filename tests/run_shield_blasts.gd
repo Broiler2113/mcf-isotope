@@ -116,13 +116,14 @@ func ranged_fire() -> void:
 	r.mode.wave_side = 1
 	ck(not r.shield_out_of_reach(add(r, "light_infantry", Vector2i(6, 9), 0), shield), "Holdout wave shields carry no shield")
 
-## Owner rule (2026-10-19): a frag grenade on a shield bearer, epicentre included, is two
-## bullets against its shield: two rolls at its plain 2+, both must hold.
+## Owner rule (2026-10-19, later the same day): a frag grenade never kills a shield
+## bearer, epicentre included — only a tank shell, an anti-tank round or a drone right
+## over it does (run_playtest21). No dice are rolled for it.
 func frag_on_shield() -> void:
-	for rolls in [[2, 2], [2, 1]]:
+	for rolls in [[2, 2], [1, 1]]:
 		var r := arena()
 		var thrower := add(r, "machinegunner", Vector2i(4, 7), 0)
 		var sb := add(r, "shield_bearer", Vector2i(10, 7), 1)
 		r.state.dice.feed_scripted(rolls)
 		r._explode_frag(thrower, sb.coord)
-		ck(sb.is_alive() == (rolls[1] >= 2), "a grenade on a shield bearer, rolls %s: %s" % [rolls, "holds" if sb.is_alive() else "dies"])
+		ck(sb.is_alive(), "a grenade on a shield bearer (dice %s): it holds" % [rolls])

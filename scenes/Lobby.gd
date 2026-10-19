@@ -347,6 +347,7 @@ func _apply_lobby_snapshot(msg: Dictionary) -> void:
 		_zones_opt.select(maxi(0, MatchMode.ZONE_COUNTS.find(GameConfig.capture_zones)))
 		_target_spin.set_value_no_signal(GameConfig.capture_target)
 		_waves_opt.select(maxi(0, MatchMode.WAVE_CHOICES.find(GameConfig.holdout_waves)))
+		_wave_every_opt.select(maxi(0, MatchMode.WAVE_EVERY_CHOICES.find(GameConfig.holdout_wave_every)))
 		_waves_ai_opt.select(clampi(GameConfig.holdout_ai, 0, _waves_ai_opt.item_count - 1))
 		_sync_mode_rows()
 		if _preview_labels != null:
@@ -567,6 +568,7 @@ var _mode_blurb: Label
 var _zones_opt: OptionButton
 var _target_spin: SpinBox
 var _waves_opt: OptionButton
+var _wave_every_opt: OptionButton
 var _waves_ai_opt: OptionButton
 var _mode_rows: Array = []   # [строка, режим, в котором она видна]
 
@@ -613,8 +615,14 @@ func _build_mode(parent: VBoxContainer) -> void:
 	for n: int in MatchMode.WAVE_CHOICES:
 		waves.append("Endless" if n == 0 else str(n))
 	_waves_opt = _opt(waves, MatchMode.WAVE_CHOICES.find(GameConfig.holdout_waves))
-	_waves_opt.tooltip_text = "A wave lands every %d rounds, or as soon as the previous one is wiped out. Each is bigger than the last. Endless runs until the defenders fall." % MatchMode.WAVE_EVERY
+	_waves_opt.tooltip_text = "How many waves to survive. Each is bigger than the last. Endless runs until the defenders fall."
 	_mode_rows.append([_row(box, "Waves:", _waves_opt), MatchMode.Kind.HOLDOUT])
+	var gaps: Array = []
+	for n: int in MatchMode.WAVE_EVERY_CHOICES:
+		gaps.append("Every round" if n == 1 else "Every %d rounds" % n)
+	_wave_every_opt = _opt(gaps, maxi(0, MatchMode.WAVE_EVERY_CHOICES.find(GameConfig.holdout_wave_every)))
+	_wave_every_opt.tooltip_text = "How often a new wave lands. A wave also comes at once when the previous one is wiped out."
+	_mode_rows.append([_row(box, "Wave frequency:", _wave_every_opt), MatchMode.Kind.HOLDOUT])
 	var leaders: Array = []
 	for p: int in AIPersonality.ALL:
 		leaders.append("AI - " + AIPersonality.name_of(p))
@@ -641,7 +649,7 @@ func _build_mode(parent: VBoxContainer) -> void:
 		if _preview_labels != null:
 			_preview_labels.queue_redraw())
 	_sync_mode_rows()
-	var opts: Array[OptionButton] = [_mode_opt, _zones_opt, _waves_opt, _waves_ai_opt]
+	var opts: Array[OptionButton] = [_mode_opt, _zones_opt, _waves_opt, _wave_every_opt, _waves_ai_opt]
 	if _is_host_net:
 		for o in opts:
 			o.item_selected.connect(func(_i: int) -> void: _broadcast_lobby())
@@ -2121,6 +2129,7 @@ func _commit_config() -> void:
 	GameConfig.capture_zones = MatchMode.ZONE_COUNTS[_zones_opt.selected]
 	GameConfig.capture_target = int(_target_spin.value)
 	GameConfig.holdout_waves = MatchMode.WAVE_CHOICES[_waves_opt.selected]
+	GameConfig.holdout_wave_every = MatchMode.WAVE_EVERY_CHOICES[_wave_every_opt.selected]
 	GameConfig.holdout_ai = _waves_ai_opt.selected
 	# Пул событий из окна (item 3/5): вес 1 у выбранных, 0 у прочих.
 	var weights: Dictionary = {}

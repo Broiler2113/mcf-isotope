@@ -192,6 +192,7 @@ func resolve(intent: Intent) -> ActionResult:
 	# открыт поток записи кубиков, — иначе жребий места в очереди рассинхронил бы стороны.
 	# Только на верхнем уровне: под-resolve хода жителей (depth>1) кварталов не будит.
 	if top and result.ok:
+		_free_orphaned_captives()
 		_wake_and_group(result)
 	# Holdout (0.12, решение владельца): волна выбита — следующая идёт сразу, не дожидаясь
 	# своих двух раундов. Броски места высадки — броски этого действия (запись, сеть).
@@ -892,7 +893,9 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 		shot_details.append(det)
 
 	shooter.action_state.remaining_shots -= fired
-	if killed or shooter.action_state.remaining_shots <= 0:
+	# A kill ends only the bullets already fired: the rest of a paid burst (a borg's
+	# four, say) stays ready for another target, like any partial burst.
+	if shooter.action_state.remaining_shots <= 0:
 		shooter.action_state = null
 	# Смерть — РАНЬШЕ невесомости: _apply_zero_g отбрасывает только живых, и переставь
 	# их местами, труп в космосе начал бы улетать.
@@ -1018,7 +1021,7 @@ func _resolve_anti_tank(shooter: UnitInstance, center: Vector2i, aimed: String =
 	if _pillbox_absorbs(landing, MCF.ANTI_TANK_VEHICLE_DAMAGE, result, shooter.coord):
 		return result
 	var area := MCF.blast_square(landing, MCF.ANTI_TANK_BLAST_RADIUS)
-	var killed_names := _blast(landing, result, area)
+	var killed_names := _blast(landing, result, area, true, true)
 	# Технике взрыв тоже вредит (#67): раньше противотанкист выкашивал пехоту вокруг
 	# танка, а сам танк оставался с нетронутой прочностью. Снимаем единицу с каждой
 	# машины, чей след задет взрывом.
@@ -1171,8 +1174,11 @@ func _capture_visual_hold(res: ActionResult, area: Array) -> void:
 ## Общий для противотанкиста и дрона (§3.12). Также сносит станции дронов в зоне.
 ## cells — форма взрыва; пусто = квадрат 3×3 (радиус 1 по Чебышёву), как у
 ## противотанкиста. Танковая пушка передаёт свой ромб радиуса 2 (#63).
+## kills_shield (owner rule 2026-10-19): only a tank shell, an anti-tank round or a
+## drone bursting right over it kills a shield bearer, and only on its own cell. Mines
+## and exploding wrecks never do.
 func _blast(center: Vector2i, res: ActionResult = null, cells: Array[Vector2i] = [],
-		epicenter_debris: bool = true) -> Array:
+		epicenter_debris: bool = true, kills_shield: bool = false) -> Array:
 	var area: Array[Vector2i] = cells
 	if area.is_empty():
 		area = MCF.blast_square(center, MCF.ANTI_TANK_BLAST_RADIUS)
@@ -1210,8 +1216,8 @@ func _blast(center: Vector2i, res: ActionResult = null, cells: Array[Vector2i] =
 		if (u.aboard_vehicle_id != -1 and seated_hit.has(u.aboard_vehicle_id)) \
 				or (u.borg_id != -1 and seated_hit.has(u.borg_id)):
 			continue  # уже разобран как пассажир / оператор борга
-		if _shield_immunity(u) and u.coord != center:
-			continue  # щитоносец гибнет только при прямом попадании
+		if _shield_immunity(u) and (u.coord != center or not kills_shield):
+			continue  # щитоносец гибнет только при прямом попадании снаряда, ПТ или дрона
 		# Окоп укрывает от взрыва по СОСЕДНЕЙ клетке (#30): осколки идут поверх
 		# канавы. Прямое попадание в саму канаву по-прежнему убивает.
 		if u.coord != center and state.grid.cell(u.coord).feature_id == MCF.FEATURE_TRENCH:
@@ -5517,7 +5523,7 @@ func _drone_explode(drone: UnitInstance, center: Vector2i, why: String,
 	if _pillbox_absorbs(center, MCF.DRONE_EXPLOSION_DAMAGE, result):
 		return result
 	var area := MCF.blast_square(center, radius)
-	var killed := _blast(center, result, area)
+	var killed := _blast(center, result, area, true, true)
 	# Дрон, подорвавшийся над техникой, снимает с неё 1 прочность (item 14): раньше
 	# взрыв дрона выкашивал пехоту вокруг машины, а сам корпус не трогал вовсе.
 	# Подрыв дрона узел НЕ разыгрывает (§4): игрок указал — туда и пришлось.
@@ -5664,9 +5670,11 @@ func can_pick_up_station(operator: UnitInstance, coord: Vector2i) -> String:
 	# Дрон, сидящий на станции, сворачивается вместе с ней; улетевший — сперва вернуть.
 	# Раньше требовалось «посадить» дрон, а посадки в игре нет: станция с живым дроном
 	# не сворачивалась никогда.
+	# Only one drone fits on the pad: a second one launched from it hovers beside it and
+	# could never "land". Drones on the pad or right next to it fold up with it.
 	for d in state.all_units():
-		if d.is_drone and d.is_alive() and d.home_station == coord and d.coord != coord:
-			return "Fly the drone back onto the station first"
+		if d.is_drone and d.is_alive() and d.home_station == coord and Combat.distance(d.coord, coord) > 1:
+			return "Fly the drone back to the station first"
 	return ""
 
 ## Свои станции рядом, которые можно свернуть прямо сейчас — для подсветки в UI.
@@ -6575,13 +6583,13 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 			"need": u.armor() + 1, "rolls": [], "survived": true,
 		}
 		var is_shield: bool = _shield_immunity(u)
-		if at_epicenter and not is_shield:
+		if is_shield:
+			det["shielded"] = true # owner rule: a frag grenade never kills a shield bearer
+		elif at_epicenter:
 			det["survived"] = false
 		else:
 			# Штраф −1 к каждому кубику; несомый труп-щит облегчает защиту (#6).
-			# Owner rule (2026-10-19): a shield takes the blast like two bullets — two
-			# rolls at its plain armor (2+), even on the epicentre, no −1.
-			var need_roll: int = u.armor() if is_shield else u.armor() + 1 - _corpse_shield_bonus(u)
+			var need_roll: int = u.armor() + 1 - _corpse_shield_bonus(u)
 			det["need"] = need_roll
 			for _i in 2:
 				var r := state.dice.roll_d6()
@@ -6837,12 +6845,16 @@ func play_civilian_slots() -> ActionResult:
 ## захватчика, которого нет в живых, разрывается здесь. Освобождение перестаёт зависеть
 ## от того, каким путём захватчик выбыл, — а «схвачен покойником» перестаёт быть
 ## состоянием, которое доска вообще может держать.
+## A captor that is still alive but no longer beside its captive lets go too: one
+## stopped short on a mine it survived, or grabbed in turn (playtest: raiders left
+## "grabbed" by nobody). Runs after every action as well as at the handoff.
 func _free_orphaned_captives() -> void:
 	for u: UnitInstance in state.all_units():
 		if u.captor_id == -1:
 			continue
 		var captor := state.get_unit(u.captor_id)
-		if captor != null and captor.is_alive():
+		if captor != null and captor.is_alive() and captor.is_on_field() \
+				and state.grid.in_bounds(captor.coord) and Combat.distance(captor.coord, u.coord) <= 1:
 			continue
 		u.captor_id = -1
 		# Труп так трупом и остаётся: воскрешать освобождением нельзя.
@@ -7247,7 +7259,7 @@ func _destroy_cell(c: Vector2i, res: ActionResult) -> Array[String]:
 	if cell == null:
 		return names
 	var occ := cell.occupant
-	if occ != null and occ.is_on_field():
+	if occ != null and occ.is_on_field() and not _shield_immunity(occ):
 		_kill(occ, res, c, true)
 		names.append(occ.stats.display_name)
 		if res != null:
@@ -8766,11 +8778,39 @@ func _borg_body(veh: Vehicle) -> UnitInstance:
 		return cell.occupant
 	return null
 
-func _borg_body_drop_spot(actor: UnitInstance) -> Vector2i:
-	for n in state.grid.neighbors(actor.coord):
-		if not state.grid.blocks_walk(n) and not state.grid.cell(n).is_space:
-			return n
-	return NOWHERE
+## Where a body pulled out of veh may go (owner, 2026-10-19): any free cell beside the
+## puller that takes a body, and the puller's own cell when it can carry one — clicking
+## yourself means "take it in my arms".
+func unload_corpse_cells(unit: UnitInstance, veh: Vehicle) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	if unit == null or veh == null:
+		return out
+	# A borg or shuttle-seat body is a unit of its own and needs a cell to itself.
+	var whole := _borg_body(veh) != null or _seated(veh)
+	for n in state.grid.neighbors(unit.coord):
+		if can_drop_corpse_at(n) and (not whole or state.grid.cell(n).occupant == null):
+			out.append(n)
+	if unit.borg_id == -1 and not _is_shield(unit) and unit.carried_corpses < MCF.CORPSE_CARRY_MAX:
+		out.append(unit.coord)
+	return out
+
+## The body leaves the vehicle: onto the chosen cell, or into the puller's arms.
+func _place_pulled_body(unit: UnitInstance, body: UnitInstance, spot: Vector2i) -> void:
+	if body != null:
+		var at := state.grid.cell(body.coord)
+		if at != null and at.occupant == body:
+			at.occupant = null
+		if spot == unit.coord:
+			state.remove_unit(body.id)
+		else:
+			body.coord = spot
+			state.grid.cell(spot).occupant = body
+	elif spot != unit.coord:
+		state.grid.cell(spot).corpse_count += 1
+	if spot == unit.coord:
+		unit.carried_corpses += 1
+	else:
+		notify_cell_changed(spot)
 
 func _resolve_vehicle_unload_corpse(intent: VehicleUnloadCorpseIntent) -> ActionResult:
 	var unit := state.get_unit(intent.actor_id)
@@ -8784,16 +8824,26 @@ func _resolve_vehicle_unload_corpse(intent: VehicleUnloadCorpseIntent) -> Action
 		return ActionResult.fail("No such vehicle")
 	if not _adjacent_to_vehicle(unit.coord, veh):
 		return ActionResult.fail("Must stand next to the vehicle")
+	var cells := unload_corpse_cells(unit, veh)
+	var spot := intent.to
+	if spot == VehicleUnloadCorpseIntent.NOWHERE:
+		spot = NOWHERE
+		for c: Vector2i in cells:
+			if c != unit.coord:
+				spot = c
+				break
+		if spot == NOWHERE:
+			return ActionResult.fail("No room beside you to set the body down")
+	elif not cells.has(spot):
+		return ActionResult.fail("Can't put the body there" if spot != unit.coord else "Can't carry another body")
+	var where := "into %s's arms" % unit.stats.display_name if spot == unit.coord else "to (%d, %d)" % [spot.x, spot.y]
 	var borg_body := _borg_body(veh)
 	if borg_body != null:
-		var body_spot := _borg_body_drop_spot(unit)
-		if body_spot == NOWHERE:
-			return ActionResult.fail("No room beside you to set the body down")
 		unit.remaining_ap -= 1
-		state.grid.move_occupant(borg_body.coord, body_spot)
 		borg_body.borg_id = -1
 		veh.occupants.erase(borg_body.id)
-		return ActionResult.success(["%s pulls the body out of the borg." % unit.stats.display_name])
+		_place_pulled_body(unit, borg_body, spot)
+		return ActionResult.success(["%s pulls the body out of the borg %s." % [unit.stats.display_name, where]])
 	if _seated(veh):
 		# Тело в кресле челнока (batch 13 S10): вытаскивают снаружи, стоя рядом с клеткой
 		# этого кресла; труп ложится к ногам вытащившего.
@@ -8809,45 +8859,22 @@ func _resolve_vehicle_unload_corpse(intent: VehicleUnloadCorpseIntent) -> Action
 				break
 		if seat == -1:
 			return ActionResult.fail("No body in a seat next to you")
-		var spot_s := NOWHERE
-		for n in state.grid.neighbors(unit.coord):
-			var nc := state.grid.cell(n)
-			if nc != null and nc.occupant == null and not nc.is_wall() and not nc.is_space \
-					and nc.vehicle_id == -1 and nc.corpse_count < MCF.CORPSE_WALL_COUNT:
-				spot_s = n
-				break
-		if spot_s == NOWHERE:
-			return ActionResult.fail("No room beside you to set the body down")
 		unit.remaining_ap -= 1
 		var corpse := state.get_unit(veh.seats[seat])
-		state.grid.cell(corpse.coord).occupant = null
 		veh.seats[seat] = -1
 		corpse.aboard_vehicle_id = -1
-		corpse.coord = spot_s
-		state.grid.cell(spot_s).occupant = corpse
-		notify_cell_changed(spot_s)
-		return ActionResult.success(["%s pulls %s's body out of the %s to (%d, %d)." % [
+		_place_pulled_body(unit, corpse, spot)
+		return ActionResult.success(["%s pulls %s's body out of the %s %s." % [
 			unit.stats.display_name, corpse.stats.display_name,
-			VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id), spot_s.x, spot_s.y]])
+			VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id), where]])
 	if veh.corpse_slots.is_empty():
 		return ActionResult.fail("No bodies to pull out")
-	# Свободная клетка рядом с бойцом — куда положить тело.
-	var spot := NOWHERE
-	for n in state.grid.neighbors(unit.coord):
-		var nc := state.grid.cell(n)
-		if nc != null and nc.occupant == null and not nc.is_wall() and not nc.is_space \
-				and nc.corpse_count < MCF.CORPSE_WALL_COUNT:
-			spot = n
-			break
-	if spot == NOWHERE:
-		return ActionResult.fail("No room beside you to set the body down")
 	unit.remaining_ap -= 1
 	var name: String = veh.corpse_slots.pop_back()
-	state.grid.cell(spot).corpse_count += 1
-	notify_cell_changed(spot)
-	return ActionResult.success(["%s pulls %s's body out of the %s at (%d, %d)." % [
+	_place_pulled_body(unit, null, spot)
+	return ActionResult.success(["%s pulls %s's body out of the %s %s." % [
 		unit.stats.display_name, name,
-		VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id), spot.x, spot.y]])
+		VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id), where]])
 
 ## Соседние машины, из которых боец может вытащить труп (для UI, item 18): свои/чужие
 ## рядом, у которых есть трупы в слотах и куда есть куда положить тело.
@@ -8855,16 +8882,10 @@ func unloadable_corpse_vehicle_ids(actor: UnitInstance) -> Array:
 	var out: Array = []
 	if actor == null or actor.remaining_ap <= 0 or actor.aboard_vehicle_id != -1:
 		return out
-	var has_spot := false
-	for n in state.grid.neighbors(actor.coord):
-		var nc := state.grid.cell(n)
-		if nc != null and nc.occupant == null and not nc.is_wall() and not nc.is_space:
-			has_spot = true
-			break
-	if not has_spot:
-		return out
 	for veh: Vehicle in state.all_vehicles():
 		if (not veh.alive() and _borg_body(veh) == null) or not _adjacent_to_vehicle(actor.coord, veh):
+			continue
+		if unload_corpse_cells(actor, veh).is_empty():
 			continue
 		if _seated(veh):
 			for i in veh.seats.size():
@@ -8875,7 +8896,7 @@ func unloadable_corpse_vehicle_ids(actor: UnitInstance) -> Array:
 					out.append(veh.id)
 					break
 		elif _borg_body(veh) != null:
-			if _borg_body_drop_spot(actor) != NOWHERE: out.append(veh.id)
+			out.append(veh.id)
 		elif not veh.corpse_slots.is_empty():
 			out.append(veh.id)
 	return out
@@ -9448,7 +9469,7 @@ func _resolve_vehicle_cannon(intent: VehicleCannonIntent) -> ActionResult:
 		return res
 	# Осколочное поле снаряда — ромб радиуса 2 (#63), а не квадрат 3×3.
 	var area := cannon_blast_cells(veh, landing)
-	var killed: Array = _blast(landing, res, area)
+	var killed: Array = _blast(landing, res, area, true, true)
 	for n in killed:
 		res.log("%s killed in the blast!" % n)
 	# Технике — 2 прочности (§техника). Все машины, чей след задет ромбом.
@@ -10451,7 +10472,7 @@ func _land_wave(res: ActionResult) -> void:
 	var ws := MCF.wave_slot(k)
 	if placed > 0 and ws >= 0:
 		state.turns.insert_slot(ws, _rand_wide(state.turns.round_order.size() + 1))
-	mode.next_wave_round = state.turns.round_number + MatchMode.WAVE_EVERY
+	mode.next_wave_round = state.turns.round_number + mode.wave_every
 	var label := "Wave %d" % k if mode.endless() else "Wave %d of %d" % [k, mode.waves_total]
 	if placed == 0:
 		res.log("%s finds nowhere to land" % label)

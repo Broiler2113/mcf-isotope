@@ -166,7 +166,11 @@ static func encode(intent: Intent) -> Dictionary:
 		return {"t": T_VEH_REPAIR, "a": intent.actor_id, "v": intent.vehicle_id,
 			"cm": intent.component}
 	if intent is VehicleUnloadCorpseIntent:
-		return {"t": T_VEH_UNLOAD, "a": intent.actor_id, "v": intent.vehicle_id}
+		var unload := {"t": T_VEH_UNLOAD, "a": intent.actor_id, "v": intent.vehicle_id}
+		if intent.to != VehicleUnloadCorpseIntent.NOWHERE:
+			unload["x"] = intent.to.x
+			unload["y"] = intent.to.y
+		return unload
 	return {}
 
 static func decode(d: Dictionary) -> Intent:
@@ -230,5 +234,6 @@ static func decode(d: Dictionary) -> Intent:
 		T_VEH_MELEE: return VehicleMeleeIntent.new(a, int(d.get("v", -1)))
 		T_VEH_REPAIR: return RepairVehicleIntent.new(a, int(d.get("v", -1)),
 			str(d.get("cm", "")))
-		T_VEH_UNLOAD: return VehicleUnloadCorpseIntent.new(a, int(d.get("v", -1)))
+		T_VEH_UNLOAD: return VehicleUnloadCorpseIntent.new(a, int(d.get("v", -1)),
+			coord if d.has("x") else VehicleUnloadCorpseIntent.NOWHERE)
 	return null

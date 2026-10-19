@@ -138,7 +138,7 @@ static func encode_rules() -> Dictionary:
 		"wx": GameConfig.holdout_excluded_units.duplicate(),
 		"rw": GameConfig.random_events_weights.duplicate(),
 		"gm": GameConfig.game_mode, "cz": GameConfig.capture_zones,
-		"ct": GameConfig.capture_target, "hw": GameConfig.holdout_waves, "wa": GameConfig.holdout_ai,
+		"ct": GameConfig.capture_target, "hw": GameConfig.holdout_waves, "he": GameConfig.holdout_wave_every, "wa": GameConfig.holdout_ai,
 		"czd": GameConfig.capture_drawn.duplicate(true),
 		"roster": roster.to_dict(),
 	}
@@ -176,6 +176,7 @@ static func apply_rules(msg: Dictionary) -> void:
 	GameConfig.capture_target = int(msg.get("ct", MatchMode.DEFAULT_TARGET))
 	GameConfig.capture_drawn = MatchMode.clean_drawn(msg.get("czd", []), 1 << 16, 1 << 16)
 	GameConfig.holdout_waves = int(msg.get("hw", MatchMode.DEFAULT_WAVES))
+	GameConfig.holdout_wave_every = int(msg.get("he", MatchMode.WAVE_EVERY))
 	GameConfig.holdout_ai = int(msg.get("wa", 1))
 	GameConfig.allowed_units = {}
 	var rd: Variant = msg.get("roster")

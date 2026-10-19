@@ -392,13 +392,15 @@ const HUD_WIDTH_MIN := 180.0
 const HUD_WIDTH_MAX := 460.0
 ## Толщина кисти рисования (пиксели линии) и радиус ластика (в клетках), item 6.
 var _draw_brush: int = 3
-## Цвет кисти (issues-12 #8). Первый образец — цвет своей стороны (по умолчанию); он
-## хранится прозрачным и разворачивается в цвет стороны при каждом штрихе.
-const DRAW_COLOURS := [Color(0, 0, 0, 0), Color("#f2f2f2"), Color("#1c1c1c"), Color("#e04545"),
+## Цвет кисти (issues-12 #8). Последний образец — цвет своей стороны; он хранится
+## прозрачным и разворачивается в цвет стороны при каждом штрихе. Owner (2026-10-19): the
+## faction colour is no longer first or the default — white is.
+const DRAW_COLOURS := [Color("#f2f2f2"), Color("#1c1c1c"), Color("#e04545"),
 		Color("#f08c28"), Color("#f2d335"), Color("#4cc764"), Color("#3cc8e0"), Color("#4a78f0"),
-		Color("#c25be0")]
-var _draw_colour := Color(0, 0, 0, 0)
+		Color("#c25be0"), Color(0, 0, 0, 0)]
+var _draw_colour: Color = DRAW_COLOURS[0]
 var _side_swatch: Button = null
+var _draw_panel: PanelContainer
 var _erase_brush: int = 1
 var _status_label: Label
 ## Часы боя. Их двое, и считают они разное.
@@ -1514,9 +1516,13 @@ func _handle_click(coord: Vector2i) -> void:
 				return
 			_back_to_menu()
 		Mode.CORPSE_DROP:
-			# Труп кладётся на выбранную клетку, а не молча под ноги (#72).
+			# Труп кладётся на выбранную клетку, а не молча под ноги (#72). Body pulled out
+			# of a vehicle: a chosen cell, or the puller itself to carry it (2026-10-19).
 			if item_cells.has(coord):
-				_submit(DropCorpseIntent.new(selected_id, coord))
+				if _pull_vehicle_id >= 0:
+					_submit(VehicleUnloadCorpseIntent.new(selected_id, _pull_vehicle_id, coord))
+				else:
+					_submit(DropCorpseIntent.new(selected_id, coord))
 				return
 			_back_to_menu()
 		Mode.WELD:
@@ -2981,7 +2987,9 @@ func _wall_undo() -> void:
 func _wall_commit() -> void:
 	if _wall_cells.size() != MCF.LDF_WALL_LENGTH:
 		return
-	_submit(BuildWallIntent.new(selected_id, _wall_cells.duplicate()))
+	var cells := _wall_cells.duplicate()
+	_wall_cells = []   # committed: Undo must undo actions again, not pop a finished drawing
+	_submit(BuildWallIntent.new(selected_id, cells))
 
 ## Что из мебели стоит вплотную к бойцу: есть ли переносное и сколько ОД просит слом
 ## (одна цифра или «1–3», если рядом разное).
@@ -3043,6 +3051,27 @@ func _enter_corpse_drop() -> void:
 	var cells := resolver.corpse_drop_cells(u)
 	if cells.is_empty():
 		return
+	_pull_vehicle_id = -1
+	mode = Mode.CORPSE_DROP
+	reach = null
+	target_ids = []
+	item_cells = cells
+	_menu.hide()
+	queue_redraw()
+
+## Pull a body out of a vehicle (owner, 2026-10-19): pick the cell it goes to, or click
+## the puller to have it carry the body. Same highlight as dropping a carried body.
+var _pull_vehicle_id := -1
+
+func _enter_pull_body(vid: int) -> void:
+	var u := _selected_unit()
+	var veh := state.get_vehicle(vid)
+	if u == null or veh == null:
+		return
+	var cells := resolver.unload_corpse_cells(u, veh)
+	if cells.is_empty():
+		return
+	_pull_vehicle_id = vid
 	mode = Mode.CORPSE_DROP
 	reach = null
 	target_ids = []
@@ -7424,6 +7453,15 @@ func _reposition_hud_grip() -> void:
 		if _menu != null and _menu.visible:
 			left = _menu.position.x + _menu.size.x + 12.0
 		_comp_panel.position = Vector2(left, MENU_ANCHOR.y)
+	# The drawing panel steps right of an open action menu (and the vehicle panel beside
+	# it) instead of lying on top of it, and comes back when they close.
+	if _draw_panel != null and _draw_panel.visible:
+		var draw_left := 12.0
+		for other: Control in [_menu, _comp_panel]:
+			if other != null and other.visible and Rect2(Vector2(draw_left, _draw_panel.position.y),
+					_draw_panel.size).intersects(other.get_rect()):
+				draw_left = other.position.x + other.size.x + 12.0
+		_draw_panel.position.x = draw_left
 	# Полоса повтора (M12) — по центру внизу, как у любого проигрывателя.
 	if _replay_bar != null:
 		_replay_bar.position = Vector2((vp.x - _replay_bar.size.x) * 0.5,
@@ -8976,6 +9014,7 @@ func _button_row(buttons: Array) -> HBoxContainer:
 ## кнопок. Вызывающий сперва очищает детей панели — рамка пересобирается заново.
 ## back (0.12.2) — «‹» в левом верхнем углу шапки: у меню постройки инженера это отдельная
 ## кнопка возврата, а не ещё один пункт списка (владелец, item 49).
+## The Drawing panel. Its own toolbar button opens and closes it (no × of its own).
 func _floating_hud_panel(title: String, buttons: HBoxContainer, at: Vector2) -> VBoxContainer:
 	var panel := PanelContainer.new()
 	SteamChrome.apply_panel(panel)
@@ -8983,14 +9022,11 @@ func _floating_hud_panel(title: String, buttons: HBoxContainer, at: Vector2) -> 
 	panel.size = Vector2(264, 380)
 	panel.visible = false
 	_ui_layer.add_child(panel)
+	_draw_panel = panel
 	var frame := VBoxContainer.new()
 	frame.add_theme_constant_override("separation", 0)
 	panel.add_child(frame)
-	var close := Button.new()
-	close.text = "×"
-	close.tooltip_text = "Close " + title
-	close.pressed.connect(func() -> void: panel.hide())
-	frame.add_child(SteamChrome.header_bar(title, close))
+	frame.add_child(SteamChrome.header_bar(title, null))
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -9337,7 +9373,7 @@ func _open_menu(unit: UnitInstance) -> void:
 			var uveh: Vehicle = state.get_vehicle(vid)
 			if uveh != null:
 				_act_btn(vb, "Pull Corpse from %s" % VehicleDB.get_vehicle(uveh.type_id).get("name", uveh.type_id),
-						_submit.bind(VehicleUnloadCorpseIntent.new(unit.id, vid)), unit.remaining_ap > 0, "No action points left", "action_pull")
+						_enter_pull_body.bind(vid), unit.remaining_ap > 0, "No action points left", "action_pull")
 
 	# Выдохшемуся юниту меню не нужно (#97): когда ОД кончились и ни одного действия не
 	# набралось, панель с одной кнопкой Cancel только загораживает поле. Выделение при
@@ -9571,7 +9607,7 @@ func _on_undo_pressed() -> void:
 	if replay != null or _animating or not _my_turn():
 		return
 	# Незакоммиченное рисование ЛДФ-стены: убираем последнюю клетку (как Backspace).
-	if not _wall_cells.is_empty():
+	if mode == Mode.BUILD_WALL and not _wall_cells.is_empty():
 		_wall_undo()
 		return
 	if not resolver.can_undo():
@@ -9612,7 +9648,7 @@ func _refresh_undo_btn() -> void:
 	if _undo_btn == null:
 		return
 	var mine := _my_turn()
-	_undo_btn.disabled = not mine or (not resolver.can_undo() and _wall_cells.is_empty())
+	_undo_btn.disabled = not mine or (not resolver.can_undo() and (mode != Mode.BUILD_WALL or _wall_cells.is_empty()))
 	if _redo_btn != null:
 		_redo_btn.disabled = not mine or not resolver.can_redo()
 
