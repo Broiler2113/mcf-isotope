@@ -4,6 +4,10 @@ extends RefCounted
 signal sound_requested(id: String, cell: Vector2i, owner: int)
 signal sound_reset
 var audio_suppressed := false
+## Muzzle sound by the lane's weapon (shooter unit type, or the mounted gun); anything
+## else fires the service rifle, single or burst.
+const WEAPON_SOUND := {"sniper": "sniper", "assault": "shotgun", "machinegunner": "mg",
+	"dpmg": "heavy_mg", "borg": "heavy_mg"}
 
 func _sound(id: String, cell: Vector2i, owner := -1) -> void:
 	if not audio_suppressed:
@@ -396,7 +400,8 @@ func _lane(ev: Dictionary, burst := false) -> void:
 	if from_arr.size() < 2 or to_arr.size() < 2:
 		return
 	var kind := str(ev.get("kind", "shot"))
-	var sound := {"shot": "burst" if burst else "rifle", "beam": "laser", "flame": "flame"}
+	var gun: String = WEAPON_SOUND.get(str(ev.get("weapon", "")), "burst" if burst else "rifle")
+	var sound := {"shot": gun, "beam": "laser", "flame": "flame"}
 	if sound.has(kind):
 		_sound(sound[kind], Vector2i(int(from_arr[0]), int(from_arr[1])), int(ev.get("owner", -1)))
 	lanes.append({
@@ -758,31 +763,11 @@ func _blood(ev: Dictionary) -> void:
 			var rng := _rng_for("gib", at, i, _seq)
 			_launch("gib", at, away, rng, 0.5, 2.2, SHARD_FLIGHT_SEC * 1.4, PI)
 
-## Огонь съел клетку: с неё исчезает ВСЯ осевшая косметика — кровь, ошмётки, гильзы,
-## осколки, отпечатки. Пламя прошло по земле, и под ним не остаётся ни лужи, ни латуни.
-## Тела и машины сюда не относятся: это не косметика, и огонь их по правилам не трогает
-## (см. advance_fire) — здесь их попросту нет.
-##
-## Копоть на полу (floor_damage) ОСТАЁТСЯ: это и есть след пожара, стирать его нечем.
+## Fire no longer wipes the decals in its cells (owner, 2026-10-19): blood, casings,
+## shards and chunks stay for the whole match, like the soot under them.
 func _burn(ev: Dictionary) -> void:
-	var hit := {}
 	for c: Vector2i in ev.get("cells", []):
 		_sound("flame", c)
-		hit[c] = true
-	if hit.is_empty():
-		return
-	props = _swept(props, hit)
-	gore = _swept(gore, hit)
-	_reindex()
-
-static func _swept(list: Array, hit: Dictionary) -> Array:
-	var kept: Array = []
-	for p: Dictionary in list:
-		var pos: Vector2 = p["pos"]
-		if hit.has(Vector2i(floori(pos.x), floori(pos.y))):
-			continue
-		kept.append(p)
-	return kept
 
 func _space(c: Vector2i) -> bool:
 	return space_at.is_valid() and bool(space_at.call(c))

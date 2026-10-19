@@ -262,7 +262,7 @@ file *is* the database. Only three units define a `default_item_id`: Machinegunn
 | Sniper | 30 | 1 | 4+ | 6 | 2 | 135 | Auto-hit ≤ 12, −2 target def |
 | Marksman | ∞ | 1 | 4+ | 4 | 2 | 90 | Piercing laser, potential 10 |
 | Anti-Tank | 18 | 1 | 4+ | 6 | 2 | 81 | 3×3 auto-kill blast |
-| Flamethrower | 6 | 1 | 3+ | 6 | 2 | 50 | Flame jet + extinguisher grenade |
+| Flamethrower | 6 | 1 | 4+ | 6 | 2 | 50 | Flame jet + extinguisher grenade |
 | Commander | 12 | 4 | 2+ | 6 | **3** | 160 | High output, tough (#66) |
 | Engineer | 12 | 1 | 4+ | 6 | 2 | 51 | Build / BRU / dig ×6 |
 | Miner | 1 | 1 | 4+ | 6 | 2 | 25 | Demolish, −1 target def |
@@ -654,7 +654,11 @@ beams into one window. Presentation only: the rules of the beam are unchanged.
 Blocks shots and lasers outright. Immune to fire (#50). Shield **push**: the target
 rolls at `need = armor + 2`; **failure kills**, success shoves it 1 cell if the space
 behind is free. In a blast, a shield bearer outside the epicentre survives and
-**protects adjacent friendlies** via `_protected_by`.
+**protects adjacent friendlies** via `_protected_by`. Owner rule (2026-10-19): only a
+**direct hit** kills it, and only from a tank cannon, an anti-tank round or a drone exploding
+over its cell (`_blast(..., kills_shield = true)`); frag grenades, mines, artillery shells
+(`_destroy_cell`) and exploding wrecks never do, epicentre included. Holdout wave shields
+keep no shield, as before.
 Movement also pushes loose items, spent casings, shards and wall chunks forward along
 every traversed cell; blood stays on the floor.
 Shield Push also targets adjacent glass for **1 AP**: ordinary glass shatters, while
@@ -1634,8 +1638,8 @@ is consumed on use regardless of outcome** — a missed grenade is still gone.
 - Blast shape is `blast_x` — the **X / diagonal-only** pattern (#64), deliberately
   distinct from the anti-tank square and the cannon diamond.
 - **Epicentre** = automatic death, except a shield bearer.
-- **Shield bearer** (owner rule 2026-10-19), anywhere in the area including the epicentre:
-  two dice at its plain armor (**2+**, no −1), both must pass — it blocks the blast like two bullets.
+- **Shield bearer** (owner rule 2026-10-19, revised the same day): a frag grenade never kills
+  it, anywhere in the area including the epicentre, and rolls no dice for it.
 - **Other cells**: the target rolls **two dice** at `armor + 1 − corpse_shield` and must
   pass **both**.
 - **Glass** defends at `GLASS_ARMOR = 5`, also on 2 dice (#44).
@@ -1650,7 +1654,8 @@ gas (`GridCell.obscured()`); refusals say "Smoke blocks line of sight".
 ### Blasts in general (`_blast`)
 
 Auto-kill across the area, except shield bearers outside the epicentre (who also protect
-adjacent friendlies). `_blast_destroy_terrain` removes wall, glass, airlock, BRU, wood
+adjacent friendlies) — and shield bearers on the epicentre too unless the blast is a tank
+shell, an anti-tank round or a drone (`kills_shield`). `_blast_destroy_terrain` removes wall, glass, airlock, BRU, wood
 wall, corpse wall, drone station, RSP, sandbags, sandbag wall, hedgehog+sandbags, and —
 since #97 — the bare **hedgehog** and **dirt pile** as well, so a shell no longer leaves a
 chequerboard of low cover standing where it flattened the stone wall beside it.

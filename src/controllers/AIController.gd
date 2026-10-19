@@ -836,6 +836,10 @@ func _candidates(state: GameState, r: GameActionResolver, u: UnitInstance) -> Ar
 
 	# Ходы доступны и на одном кредите движения, без ОД (#103, §3.2).
 	if u.remaining_ap > 0 or u.move_credit > 0:
+		# The beam takes both AP: a marksman that walked onto a good line holds it for next
+		# turn's shot instead of wandering off it with its last AP (playtest 2026-10-19).
+		var holds := u.attack_ability() == MCF.ABILITY_MARKSMAN \
+				and u.remaining_ap < _shoot_ap_cost(u) and _marksman_lined_up(state, r, u)
 		var flee_event := _flee_events(state, u)
 		if not flee_event.is_empty():
 			out.append(flee_event)
@@ -848,6 +852,8 @@ func _candidates(state: GameState, r: GameActionResolver, u: UnitInstance) -> Ar
 			var drone := r.active_drone_of(u)
 			if drone != null and r.operator_controls(drone):
 				return out
+		if holds:
+			return out
 		# Первый ход: идём набивать свои пустые танки (item 6) — до сближения с врагом.
 		var to_own_veh := _move_to_own_vehicle(state, u)
 		if not to_own_veh.is_empty():
@@ -1250,6 +1256,13 @@ func _best_shoot(state: GameState, r: GameActionResolver, u: UnitInstance) -> Di
 			continue
 		var ease := float(7 - hit_need)  # чем меньше нужное число, тем выше
 		var score := SCORE_SHOOT_BASE + _unit_value(t) + ease * 2.0
+		# The beam spends potential on everything it crosses: fire only if it still kills
+		# the target when it gets there, and count every enemy it burns on the way.
+		if u.attack_ability() == MCF.ABILITY_MARKSMAN:
+			var beam := _laser_outcome(state, r, u, t.coord)
+			if not (beam["kills"] as Array).has(t):
+				continue
+			score += float(beam["value"]) - _unit_value(t)
 		# Награда за голову (0.12, Capture & Hold): два очка — как пара удержанных зон.
 		var md := _match_mode()
 		if md != null and md.bounty_unit == t.id:
@@ -1313,28 +1326,78 @@ func _vehicle_value(veh: Vehicle) -> float:
 ## единственный в армии, чей выстрел снимает с брони прочность.
 ## Бьём по клетке следа: удар по земле (§3.14) накрывает её взрывом.
 func _best_vehicle_shot(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
-	if u.attack_ability() != MCF.ABILITY_ANTI_TANK:
+	# The marksman's beam strips vehicle components too (owner, 2026-10-19: marksmen
+	# ignored tanks in front of them — only anti-tank soldiers ever aimed at hulls).
+	var marksman := u.attack_ability() == MCF.ABILITY_MARKSMAN
+	if u.attack_ability() != MCF.ABILITY_ANTI_TANK and not marksman:
 		return {}
 	if u.remaining_ap < _shoot_ap_cost(u):
 		return {}
 	var best: Dictionary = {}
 	for veh: Vehicle in _enemy_vehicles(state):
 		for fc: Vector2i in veh.footprint():
-			# Условия проверяет сам резолвер — линия огня, стены, дальность.
-			if r.can_blast_cell(u, fc) != "":
-				continue
-			# Своих (и себя) взрывом не накрываем (issue 3): танк стоит близко, и
-			# соблазн ударить в упор здесь особенно велик.
-			if r.anti_tank_shot_endangers_own(u, fc):
-				continue
-			var ease := float(7 - Combat.hit_number(
-				Combat.distance(u.coord, fc), u.fire_range()))
+			var ease := 4.0   # the beam needs 3+ at any range
+			var bonus := 0.0
+			if marksman:
+				if r.can_laser_cell(u, fc) != "" or _hurts_own(state, r, u, fc):
+					continue
+				# Walls, glass and bodies before the hull drain the beam: only a beam that
+				# still burns the hull is worth 2 AP (owner, 2026-10-19).
+				var beam := _laser_outcome(state, r, u, fc)
+				var burnt: int = int((beam["veh"] as Dictionary).get(veh.id, 0))
+				if burnt <= 0:
+					continue
+				bonus = float(beam["value"]) + float(burnt - 1) * 6.0
+			else:
+				# Условия проверяет сам резолвер — линия огня, стены, дальность.
+				if r.can_blast_cell(u, fc) != "":
+					continue
+				# Своих (и себя) взрывом не накрываем (issue 3): танк стоит близко, и
+				# соблазн ударить в упор здесь особенно велик.
+				if r.anti_tank_shot_endangers_own(u, fc):
+					continue
+				ease = float(7 - Combat.hit_number(Combat.distance(u.coord, fc), u.fire_range()))
 			var score := SCORE_SHOOT_BASE + SCORE_ANTI_TANK_PRIORITY \
-					+ _vehicle_value(veh) + ease * 2.0
+					+ _vehicle_value(veh) + ease * 2.0 + bonus
 			if best.is_empty() or score > best["score"]:
 				best = {"score": score, "intent": ShootIntent.new(u.id, -1, -1, fc,
 					_aim_component(veh, u.coord, r))}
 	return best
+
+## What a marksman's beam aimed at aim will really do: it loses potential on every wall,
+## pane, body and plate it crosses (MCF.LASER_COST), so a target behind enough of them is
+## never reached. Read from the very trace the shot resolves with — the beam rolls no
+## dice. kills — units it burns; value — their worth to us (enemies only); veh — vehicle
+## id -> component points it strips.
+func _laser_outcome(state: GameState, r: GameActionResolver, u: UnitInstance, aim: Vector2i) -> Dictionary:
+	var kills: Array = []
+	var value := 0.0
+	var veh: Dictionary = {}
+	for rec: Dictionary in r.laser_preview(u, aim):
+		var kind := str(rec["kind"])
+		if (kind == "unit" or kind == "shield") and bool(rec["destroyed"]):
+			var occ: UnitInstance = state.grid.cell(rec["coord"]).occupant
+			if occ != null:
+				kills.append(occ)
+				if occ.owner != owner and not CivilianAI.is_npc(occ):
+					value += _unit_value(occ)
+		elif kind == "vehicle" and int(rec["damage"]) > 0:
+			var vid := int(rec["vehicle_id"])
+			veh[vid] = int(veh.get(vid, 0)) + int(rec["damage"])
+	return {"kills": kills, "value": value, "veh": veh}
+
+## From where it stands, would the marksman's beam burn an enemy hull or kill an enemy?
+func _marksman_lined_up(state: GameState, r: GameActionResolver, u: UnitInstance) -> bool:
+	for veh: Vehicle in _enemy_vehicles(state):
+		for fc: Vector2i in veh.footprint():
+			if Combat.is_on_firing_line(u.coord, fc) \
+					and int((_laser_outcome(state, r, u, fc)["veh"] as Dictionary).get(veh.id, 0)) > 0:
+				return true
+	for e: UnitInstance in _enemies_of(state):
+		if state.grid.in_bounds(e.coord) and not CivilianAI.is_npc(e) and Combat.is_on_firing_line(u.coord, e.coord) \
+				and (_laser_outcome(state, r, u, e.coord)["kills"] as Array).has(e):
+			return true
+	return false
 
 ## Противотанкист прорубает себе дорогу (#103).
 ##
@@ -1489,13 +1552,31 @@ func _move_to_vehicle(state: GameState, u: UnitInstance) -> Dictionary:
 	var reach := _r.reachable_for(u, _move_budget(u))
 	var dodge := _avoids_fire(u)
 	var best: Dictionary = {}
+	# Owner (2026-10-19): anti-tank soldiers walked right up to the hull and then could not
+	# fire — their own blast would catch them. Stop at firing distance instead, and best of
+	# all on a cell with a clear shot and the AP still left to take it.
+	var hulls: Array = []
+	for veh: Vehicle in _enemy_vehicles(state):
+		hulls.append_array(veh.footprint())
+	var move_ap := 0 if u.move_credit > 0 else 1
 	for coord: Vector2i in reach.cost:
 		if dodge and _fire_near(state, coord):
 			continue  # от огня держимся на клетку (#48)
-		var gain := float(start - int(field.at(coord)))
-		if gain <= 0.0:
+		var nearest := 999
+		var shot := false
+		for fc: Vector2i in hulls:
+			var d := Combat.distance(coord, fc)
+			nearest = mini(nearest, d)
+			if not shot and d >= AIPlanner.AT_MIN_RANGE and Combat.is_on_firing_line(coord, fc) \
+					and Combat.hit_number(d, u.fire_range()) < 7 and not _r.los_blocked(coord, fc, false, true):
+				shot = true
+		if nearest < AIPlanner.AT_MIN_RANGE:
 			continue
-		var score := SCORE_MOVE_BASE + SCORE_ANTI_TANK_APPROACH + gain * 3.0
+		var gain := float(start - int(field.at(coord)))
+		var firing := shot and u.remaining_ap >= move_ap + _shoot_ap_cost(u)
+		if gain <= 0.0 and not firing:
+			continue
+		var score := SCORE_MOVE_BASE + SCORE_ANTI_TANK_APPROACH + gain * 3.0 + (40.0 if firing else 0.0)
 		score -= float(reach.cost[coord]) * SCORE_STEP_COST
 		if _seeks_cover():
 			score += _cover_bonus(state, coord)
@@ -1774,7 +1855,7 @@ func _best_frag(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dic
 			if roll < need:
 				var idx: int = clampi(dist - (need - roll), 0, dist)
 				landing = u.coord if idx <= 0 else path[idx - 1]
-			var out := _frag_outcome(state, landing, occupants)
+			var out := _frag_outcome(state, landing, occupants, r)
 			enemy_kills += out[0] / 6.0
 			own_kills += out[1] / 6.0
 			value += out[2] / 6.0
@@ -1787,7 +1868,7 @@ func _best_frag(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dic
 	return best
 
 ## Взрыв в клетке c: [ожидаемо убитых врагов, своих/союзников, ценность убитых врагов].
-func _frag_outcome(state: GameState, c: Vector2i, occupants: Dictionary) -> Array:
+func _frag_outcome(state: GameState, c: Vector2i, occupants: Dictionary, r: GameActionResolver = null) -> Array:
 	var enemies := 0.0
 	var own := 0.0
 	var value := 0.0
@@ -1796,11 +1877,13 @@ func _frag_outcome(state: GameState, c: Vector2i, occupants: Dictionary) -> Arra
 		if o == null:
 			continue
 		var p: float
-		var shield := o.stats.special_ability_id == MCF.ABILITY_SHIELD_BEARER
-		if b == c and not shield:
+		# A frag never kills a shield bearer (wave fighters excepted, like the resolver).
+		if o.stats.special_ability_id == MCF.ABILITY_SHIELD_BEARER and (r == null or r._shield_immunity(o)):
+			p = 0.0
+		elif b == c:
 			p = 1.0
 		else:
-			var need_roll: int = o.armor() if shield else o.armor() + 1 - mini(o.carried_corpses, 1)
+			var need_roll: int = o.armor() + 1 - mini(o.carried_corpses, 1)
 			var save := clampf(float(7 - need_roll) / 6.0, 0.0, 1.0)
 			p = 1.0 - save * save
 		if o.owner == owner or (state.roster != null and state.roster.are_allies(owner, o.owner)) \

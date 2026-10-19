@@ -70,6 +70,21 @@ const W_SPREAD := -2.5
 var _spread := false
 var _ally_cells: Dictionary = {}
 
+## Enemy vehicles (owner, 2026-10-19). A tank's crew sits off the board, so its gun never
+## showed up in _threat and infantry crowded around tanks and shuttles. Now: the cells
+## next to a hull are dangerous (run over, shot point-blank) — _veh_close, by personality
+## threat weight, ignored only by miners, who fight hulls in melee; while a tank can still
+## fire, one shell kills everything within CANNON_BLAST_RADIUS, so the plan keeps
+## soldiers that far apart (_gun_spread, GUN_SPREAD_MAX); and anti-tank soldiers and
+## marksmen value cells with a hull on their firing line (W_VEH_FIRE).
+const VEH_CLOSE_THREAT := [1.2, 0.5]   # at distance 1, 2 from the hull
+const GUN_SPREAD_MAX := 1              # more planned soldiers than this within a shell's reach: cell refused
+const W_VEH_FIRE := 45.0
+const AT_MIN_RANGE := 3                # closer, an anti-tank round can catch its shooter
+var _veh_close: Dictionary = {}
+var _gun_spread := false
+var _veh_targets: Array = []
+
 ## Цели режима (0.12, Capture & Hold): каким бойцам к какой зоне идти (id → геополе до
 ## неё), клетки зон (клетка → номер зоны) и потолок, сколько бойцов штаб держит в каждой.
 ## Пусто — режим без целей, раскладка прежняя. Ставит AIController перед планом.
@@ -205,6 +220,7 @@ func plan(state: GameState, r: GameActionResolver, field: GeoField,
 	rows.sort_custom(func(a: Array, b: Array) -> bool: return a[0] > b[0])
 	var taken: Dictionary = {}
 	var in_zone: Dictionary = {}   # номер зоны -> сколько бойцов штаб туда уже послал
+	var shell_reach: Dictionary = {}   # Vector2i -> planned soldiers one shell there would kill
 	for row: Array in rows:
 		var uid: int = row[1]
 		if destinations.has(uid):
@@ -212,6 +228,11 @@ func plan(state: GameState, r: GameActionResolver, field: GeoField,
 		var coord: Vector2i = row[2]
 		if taken.has(coord):
 			continue
+		if _gun_spread and int(shell_reach.get(coord, 0)) > GUN_SPREAD_MAX:
+			continue
+		if _gun_spread:
+			for c: Vector2i in MCF.blast_diamond(coord, MCF.CANNON_BLAST_RADIUS):
+				shell_reach[c] = int(shell_reach.get(c, 0)) + 1
 		# Зона набрана (0.12): лишние бойцы в ней очков не прибавят — пусть займут другую
 		# или прикроют подходы. Строку пропускаем, у бойца есть следующие.
 		var zi: int = int(_zone_of.get(coord, -1))
@@ -355,6 +376,11 @@ func _score_cell(u: UnitInstance, coord: Vector2i, start_geo: int, steps: int,
 		# Самосохранение (0.12): сколько попаданий ждать здесь от тех, кто уже на прямой, и
 		# насколько клетка прикрыта со всех сторон — враг ведь сменит позицию до выстрела.
 		score += float(_threat.get(coord, 0.0)) * _w_threat
+		var ab := u.attack_ability()
+		if ab != MCF.ABILITY_MINER:
+			score += float(_veh_close.get(coord, 0.0)) * _w_threat
+		if ab == MCF.ABILITY_ANTI_TANK or ab == MCF.ABILITY_MARKSMAN:
+			score += _vehicle_fire_value(u, coord, ab)
 		score += shelter(_state.grid, coord) * _w_shelter
 		if _spread:
 			var near := 0
@@ -434,7 +460,20 @@ func _fire_ease(shooter: UnitInstance, from: Vector2i, target: UnitInstance,
 	# Выстрел, который заведомо парируется (щитоносец издалека, #69) — не выстрел.
 	if target != null and _r.shot_is_futile(shooter, target):
 		return -1.0
+	# The beam loses potential on whatever stands between: a cell from which it would die
+	# out before the target is no firing position at all (owner, 2026-10-19).
+	if marksman and target != null and not _beam_kills(from, target):
+		return -1.0
 	return float(clampi(7 - need, 0, 6))
+
+## Would a marksman's beam fired from `from` still burn `target` when it gets there?
+## Same trace as the real shot (GameActionResolver._laser_trace), so no dice and no guess.
+func _beam_kills(from: Vector2i, target: UnitInstance) -> bool:
+	for rec: Dictionary in _r._laser_trace(from, _r._step_toward(from, target.coord)):
+		if rec["coord"] == target.coord:
+			var kind := str(rec["kind"])
+			return (kind == "unit" or kind == "shield") and bool(rec["destroyed"])
+	return false
 
 ## Разметить все створы своих стрелков (#100, оптимизация). Для каждого союзника,
 ## который в этом ходу ещё может выстрелить, проходим его открытые линии огня и
@@ -489,6 +528,21 @@ func _build_exposure() -> void:
 	_threat = {}
 	_spread = false
 	_ally_cells = {}
+	_veh_close = {}
+	_gun_spread = false
+	_veh_targets = []
+	if not _classic:
+		for veh: Vehicle in _state.all_vehicles():
+			if veh.owner == owner or not veh.alive():
+				continue
+			_veh_targets.append(veh)
+			_gun_spread = _gun_spread or veh.can_fire_gun()
+			for fc: Vector2i in veh.footprint():
+				for dy in range(-2, 3):
+					for dx in range(-2, 3):
+						var c := fc + Vector2i(dx, dy)
+						var near: float = VEH_CLOSE_THREAT[maxi(absi(dx), absi(dy)) - 1] if dx != 0 or dy != 0 else 0.0
+						_veh_close[c] = maxf(float(_veh_close.get(c, 0.0)), near)
 	if not _classic:
 		for a: UnitInstance in _state.living_units_of(owner):
 			if not a.is_drone and a.aboard_vehicle_id == -1:
@@ -544,6 +598,33 @@ func _build_exposure() -> void:
 				x += dxs
 				y += dys
 				d += 1
+
+## A hull on this cell's firing line, in reach and with a clear line, for a soldier whose
+## weapon hurts vehicles: the anti-tank gunner (not so close its own blast catches it)
+## and the marksman, whose beam ignores range.
+func _vehicle_fire_value(u: UnitInstance, coord: Vector2i, ability: String) -> float:
+	var value := 0.0
+	for veh: Vehicle in _veh_targets:
+		for fc: Vector2i in veh.footprint():
+			if not Combat.is_on_firing_line(coord, fc):
+				continue
+			if ability == MCF.ABILITY_ANTI_TANK:
+				var d := Combat.distance(coord, fc)
+				if d < AT_MIN_RANGE or Combat.hit_number(d, u.fire_range()) >= 7 \
+						or _r.los_blocked(coord, fc, false, true, false):
+					continue
+			elif not _beam_burns(coord, fc, veh.id):
+				continue
+			value += W_VEH_FIRE
+			break
+	return value
+
+## Does a beam from `from` toward `aim` still strip something off vehicle vid?
+func _beam_burns(from: Vector2i, aim: Vector2i, vid: int) -> bool:
+	for rec: Dictionary in _r._laser_trace(from, _r._step_toward(from, aim)):
+		if str(rec["kind"]) == "vehicle" and int(rec["vehicle_id"]) == vid:
+			return int(rec["damage"]) > 0
+	return false
 
 ## Вероятность хотя бы одного попадания очередью врага e в клетку c на луче dir, d клеток.
 ## Правила те же, что у выстрела: число попадания по дальности, −2 за укрытие в соседней

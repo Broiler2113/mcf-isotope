@@ -32,8 +32,18 @@ class CatalogTests(unittest.TestCase):
             bake_audio.check(self.catalog)
 
     def test_changed_audio_fails(self):
-        (bake_audio.AUDIO / "sfx/rifle.wav").write_bytes(b"damaged")
+        (bake_audio.AUDIO / "sfx/rifle_1.ogg").write_bytes(b"damaged")
         with self.assertRaisesRegex(RuntimeError, "changed without updating"):
+            bake_audio.check(self.catalog)
+
+    def test_missing_take_fails(self):
+        (bake_audio.AUDIO / "sfx/explosion_2.ogg").unlink()
+        with self.assertRaisesRegex(RuntimeError, "missing audio asset"):
+            bake_audio.check(self.catalog)
+
+    def test_stray_asset_fails(self):
+        (bake_audio.AUDIO / "sfx/rifle_99.ogg").write_bytes((bake_audio.AUDIO / "sfx/rifle_1.ogg").read_bytes())
+        with self.assertRaisesRegex(RuntimeError, "not in the catalog"):
             bake_audio.check(self.catalog)
 
     def test_stale_catalog_fails(self):

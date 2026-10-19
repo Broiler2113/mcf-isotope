@@ -41,6 +41,7 @@ func _run() -> void:
 	_catalog()
 	_lifecycle()
 	_fog_and_priority()
+	await _surfaces_and_rooms()
 	_component_damage()
 	await _dice()
 	await _settings()
@@ -64,8 +65,16 @@ func _heard(id: String, bus: String, _position: Vector2) -> void:
 
 func _catalog() -> void:
 	for id: String in audio_system.Catalog.SFX:
-		var stream := audio_system.stream(id)
-		ck(stream is AudioStreamWAV and stream.get_length() > 0, "SFX asset imported: " + id)
+		var spec: Dictionary = audio_system.Catalog.SFX[id]
+		for take in range(1, int(spec.n) + 1):
+			var stream := audio_system.stream(id, false, take)
+			ck(stream is AudioStreamOggVorbis and stream.get_length() > 0.02, "SFX take imported: %s_%d" % [id, take])
+			ck(stream != null and stream.loop == bool(spec.loop), "loop flag matches the catalog: %s_%d" % [id, take])
+		ck(audio_system.CATEGORY_DB.has(str(spec.cat)), "category has a mix level: " + id)
+	var takes := {}
+	for i in 12:
+		takes[audio_system.stream("rifle").resource_path] = true
+	ck(takes.size() > 1, "repeated shots rotate between recorded takes")
 	for id: String in audio_system.Catalog.VOICE:
 		var stream := audio_system.stream(id, true)
 		ck(stream is AudioStreamWAV and stream.get_length() > 0, "SAM asset imported: " + id)
@@ -98,6 +107,14 @@ func _lifecycle() -> void:
 	burst_tracer["count"] = 3
 	fx.apply_lanes([lane, tracer, burst_lane, burst_tracer])
 	ck(cues == ["rifle", "burst"], "batched lanes choose the muzzle cue for their own shooter")
+	for weapon: String in {"sniper": "sniper", "assault": "shotgun", "machinegunner": "mg",
+			"dpmg": "heavy_mg", "borg": "heavy_mg", "light_infantry": "rifle"}:
+		cues.clear()
+		var armed := lane.duplicate(true)
+		armed["weapon"] = weapon
+		fx.apply_lanes([armed])
+		ck(cues.size() == 1 and cues[0] == {"sniper": "sniper", "assault": "shotgun", "machinegunner": "mg",
+			"dpmg": "heavy_mg", "borg": "heavy_mg", "light_infantry": "rifle"}[weapon], "muzzle sound follows the weapon: " + weapon)
 	for kind: String in ["rocket", "shell", "grenade"]:
 		fx.clear()
 		cues.clear()
@@ -184,6 +201,73 @@ func _fog_and_priority() -> void:
 	b.free()
 	client_a.free()
 	client_b.free()
+
+## Recorded-sound routing reads the settled state: what a bullet hit, the floor under
+## a step, airlocks, vacuum, burning cells and the environment's room and ambience.
+func _surfaces_and_rooms() -> void:
+	GameConfig.civilians_enabled = false
+	var map := MapData.blank_arena(20, 12)
+	map.set_spawn(Vector2i(2, 2), "light_infantry", 0)
+	map.set_spawn(Vector2i(4, 2), "shield_bearer", 1)
+	map.set_cell(Vector2i(6, 2), MCF.FLOOR_NORMAL, 2.0, false, MCF.FEATURE_GLASS)
+	map.set_cell(Vector2i(7, 2), MCF.FLOOR_NORMAL, 2.0, false, MCF.FEATURE_WOOD_WALL)
+	map.set_cell(Vector2i(8, 2), MCF.FLOOR_NORMAL, 2.0, false, MCF.FEATURE_WALL)
+	map.set_cell(Vector2i(10, 6), MCF.FLOOR_NORMAL, 2.0, false, MCF.FEATURE_AIRLOCK)
+	map.set_cell(Vector2i(15, 8), MCF.FLOOR_NORMAL, 0.0, true, "")
+	map.set_look(5 * 20 + 3, MCF.Look.WOOD)
+	map.set_look(5 * 20 + 4, MCF.Look.GRATE)
+	var state := map.build_state(77)
+	state.grid.cell(Vector2i(9, 9)).corpse_count = 1
+	var audio := _layer()
+	audio.world = func() -> GameState: return state
+	ck(audio._impact(Vector2i(4, 2)) == "shield_block", "bullets on a living Shield Bearer ring off the shield")
+	ck(audio._impact(Vector2i(9, 9)) == "hit_flesh", "bullets into a body sound like flesh")
+	ck(audio._impact(Vector2i(6, 2)) == "hit_glass", "glass impact")
+	ck(audio._impact(Vector2i(7, 2)) == "hit_wood", "wood wall impact")
+	state.env = "town"
+	ck(audio._impact(Vector2i(8, 2)) == "hit_stone", "town wall is masonry")
+	state.env = "station"
+	ck(audio._impact(Vector2i(8, 2)) == "hit_metal", "station wall is plating")
+	ck(audio._impact(Vector2i(12, 9)) == "hit_metal", "station deck is metal")
+	state.env = "field"
+	ck(audio._impact(Vector2i(12, 9)) == "hit_dirt", "open field ground is dirt")
+	var walker := state.grid.cell(Vector2i(2, 2)).occupant
+	played.clear()
+	audio.step(walker, Vector2i(3, 4), Vector2i(3, 5))
+	audio.step(walker, Vector2i(3, 5), Vector2i(4, 5))
+	ck(played.has("SFX:step_wood") and played.has("SFX:step_metal"), "steps follow the floor look")
+	played.clear()
+	audio.step(walker, Vector2i(10, 3), Vector2i(10, 5))
+	ck(played.has("SFX:door_open"), "an airlock opens as a soldier comes within reach")
+	played.clear()
+	audio.step(walker, Vector2i(10, 5), Vector2i(10, 3))
+	ck(played.has("SFX:door_close"), "an airlock shuts behind a soldier who leaves")
+	walker.is_drone = true
+	played.clear()
+	audio.step(walker, Vector2i(10, 3), Vector2i(10, 5))
+	ck(played.is_empty(), "drones make no steps and open no airlocks")
+	walker.is_drone = false
+	audio.reset()
+	state.env = "station"
+	var space: AudioStreamPlayer2D = audio.cue("explosion", Vector2i(15, 8), 1)
+	var hall: AudioStreamPlayer2D = audio.cue("rifle", Vector2i(12, 9), 1)
+	ck(space != null and space.bus == "Vacuum" and hall != null and hall.bus == "World", "vacuum muffles, a hall rings")
+	audio._process(0.0)
+	ck(audio._env == "station" and audio._ambient.stream.resource_path.contains("amb_station"), "ambience follows the environment")
+	var reverb := AudioServer.get_bus_effect(AudioServer.get_bus_index("World"), 0) as AudioEffectReverb
+	ck(reverb != null and reverb.wet > 0.1, "station corridors get room reverb")
+	state.grid.cell(Vector2i(5, 9)).on_fire = true
+	audio._update_fire()
+	ck(audio._fire.playing and audio._fire.position.is_equal_approx(audio.origin + Vector2(5.5, 9.5) * audio.cell_size), "visible fire crackles where it burns")
+	state.grid.cell(Vector2i(5, 9)).on_fire = false
+	audio._update_fire()
+	ck(not audio._fire.playing, "fire loop stops when the flames are out")
+	played.clear()
+	audio_system.say("gas_warn", audio)
+	await _flush_voice()
+	ck(played.has("SFX:radio_in") and played.has("Voice:gas_warn"), "announcements are keyed over the radio")
+	audio_system.stop_scope(audio)
+	audio.free()
 
 func _dice() -> void:
 	var dice: Node = DiceScript.new()

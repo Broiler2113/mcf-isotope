@@ -132,7 +132,7 @@ Fire never goes out on its own. The extinguisher grenade douses an area; buildin
 		["Grenades & Items", """Items are used up when used, hit or miss.
 
 [h]Frag grenade[/h] - Machinegunner
-Thrown up to %d cells along a straight line. On a miss it falls short and still explodes. The X-shaped blast always kills in its center; everyone else in it must pass two parry rolls, each 1 harder than usual. A Shield Bearer anywhere in it, center included, blocks it like two bullets: two rolls at 2+.
+Thrown up to %d cells along a straight line. On a miss it falls short and still explodes. The X-shaped blast always kills in its center; everyone else in it must pass two parry rolls, each 1 harder than usual. It never kills a Shield Bearer, center included.
 
 [h]Smoke grenade[/h] - Heavy Infantry
 Thrown like a frag. A 3×3 cloud stays until the end of the next round, blocks sight and aimed fire, and harms no one. Use it to cross open ground or to blind a machine gun.
@@ -193,7 +193,7 @@ The last team with soldiers standing wins.
 Zones (1, 3 or 5) are placed fairly between the deployment zones and shown to everyone; a cramped map may get fewer, since every zone must be equally far for both sides. The host can instead [b]draw the zones[/b] in the lobby (up to 5). At the end of every round each zone belongs to the team with [b]more soldiers in it[/b] (a tie scores nothing); every zone held scores [b]1 point[/b]. First to the target (12 by default) wins. Wiping out the enemy still wins outright. The map shows who held each zone at the last round end.
 
 [h]Holdout[/h]
-All players defend together against [b]waves[/b] led by an AI or the trained model. A wave lands every %d rounds - [b]or right after the previous wave is wiped out[/b] - and each is bigger than the last. Its landing edge is announced a round ahead. Hold 5, 10 or 15 waves to win; in Endless you play for how long you last.""" % [MatchMode.WAVE_EVERY]],
+All players defend together against [b]waves[/b] led by an AI or the trained model. A wave lands every %d rounds by default (the lobby's Wave frequency sets it) - [b]or right after the previous wave is wiped out[/b] - and each is bigger than the last. Its landing edge is announced a round ahead. Hold 5, 10 or 15 waves to win; in Endless you play for how long you last.""" % [MatchMode.WAVE_EVERY]],
 
 		["AI Personalities", """Every AI plays at full strength and values its soldiers' lives - it uses cover, avoids open fire and does not throw units away. They differ in [b]manner[/b]:
 
@@ -225,6 +225,6 @@ const UNIT_BLURBS := {
 	"engineer": "Builds sandbags, hedgehogs, pillboxes and an LDF (Large Deployable Fortification): six connected tiles in any shape. Welds airlocks, repairs vehicles and digs twice as fast.",
 	"miner": "Melee fighter (−1 to the parry) who tears down fortifications in one action.",
 	"sapper": "Lays up to five mines in one action, anti-vehicle mines too, sweeps for and disarms enemy mines.",
-	"shield_bearer": "Slow melee fighter. Only adjacent soldiers can fire at it; Snipers, Marksmen, Anti-Tank soldiers and tank cannons can also fire from range. Its shield stops lasers. Blocks a frag grenade, even a direct hit, on two 2+ rolls. Survives other blasts outside their center and shelters the soldiers next to it, but a direct hit kills it. Fireproof.",
+	"shield_bearer": "Slow melee fighter. Only adjacent soldiers can fire at it; Snipers, Marksmen, Anti-Tank soldiers and tank cannons can also fire from range. Its shield stops lasers. Only a direct hit from a tank cannon or an Anti-Tank round, or a drone exploding right above it, kills it; grenades, mines, artillery and exploding wrecks never do. Shelters the soldiers next to it from blasts. Fireproof.",
 	"drone_operator": "Places a drone station that launches an exploding drone. Must stay next to the station to fly it.",
 }

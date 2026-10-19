@@ -79,10 +79,11 @@ func _fire_eats_the_cell() -> void:
 			"but a wall of bodies is still bodies (left '%s')" % st.grid.cell(bodies).feature_id)
 	ck(st.grid.vehicle_at(tank_cell) != -1, "and the tank is untouched by any of it")
 
+	# Owner (2026-10-19): decals stay for the whole match — fire no longer wipes them.
+	var before := _decals_at(fx, eaten[0])
 	fx.apply(res.fx)
-	ck(_decals_at(fx, eaten[0]) == 0,
-			"nothing is left on the burnt ground — no pools, no brass (%d)"
-			% _decals_at(fx, eaten[0]))
+	ck(_decals_at(fx, eaten[0]) == before,
+			"pools and brass stay on the burnt ground (%d)" % _decals_at(fx, eaten[0]))
 
 func _decals_at(fx: FxDecals, c: Vector2i) -> int:
 	var n := 0
@@ -127,8 +128,9 @@ func _a_flame_jet_sweeps_too() -> void:
 	ck(st.grid.cell(at).feature_id == "",
 			"the jet eats the sandbags, not just the ground (left '%s')" % st.grid.cell(at).feature_id)
 	ck(st.grid.cell(at).cover_height == 0.0, "and the cover they gave")
+	var brass := _decals_at(fx, at)
 	fx.apply(res.fx)
-	ck(_decals_at(fx, at) == 0, "and the brass with them (%d left)" % _decals_at(fx, at))
+	ck(_decals_at(fx, at) == brass, "but the brass stays (%d left)" % _decals_at(fx, at))
 
 ## В вакууме гореть нечему (editor-rework): струя проходит над космосом, не поджигая его
 ## и не трогая того, кто там висит, а пол за пробоиной горит как обычно. Расползание в
