@@ -1,366 +1,518 @@
 {
-  "sfx": {
-    "ui_click": [
-      "click",
-      0.055
-    ],
-    "ui_nav": [
-      "click",
-      0.09
-    ],
-    "ui_end": [
-      "metal",
-      0.14
-    ],
-    "dice_roll": [
-      "dice",
-      0.45
-    ],
-    "dice_land": [
-      "dice",
-      0.13
-    ],
-    "rifle": [
-      "shot",
-      0.19
-    ],
-    "burst": [
-      "burst",
-      0.36
-    ],
-    "laser": [
-      "laser",
-      0.25
-    ],
-    "laser_hit": [
-      "metal",
-      0.12
-    ],
-    "flame": [
-      "hiss",
-      0.65
-    ],
-    "rocket_launch": [
-      "whistle",
-      0.44
-    ],
-    "shell_launch": [
-      "shot",
-      0.25
-    ],
-    "grenade_launch": [
-      "metal",
-      0.2
-    ],
-    "bullet_hit": [
-      "metal",
-      0.18
-    ],
-    "explosion": [
-      "blast",
-      1.15
-    ],
-    "glass": [
-      "glass",
-      0.45
-    ],
-    "structure": [
-      "masonry",
-      0.65
-    ],
-    "corpse": [
-      "metal",
-      0.2
-    ],
-    "build": [
-      "metal",
-      0.28
-    ],
-    "weld": [
-      "hiss",
-      0.45
-    ],
-    "mine_lay": [
-      "metal",
-      0.2
-    ],
-    "mine_disarm": [
-      "click",
-      0.2
-    ],
-    "vehicle_move": [
-      "engine",
-      1.0
-    ],
-    "vehicle_hull": [
-      "blast",
-      0.9
-    ],
-    "vehicle_tracks": [
-      "metal",
-      0.6
-    ],
-    "vehicle_tower": [
-      "metal",
-      0.7
-    ],
-    "vehicle_gun": [
-      "metal",
-      0.4
-    ],
-    "event_warn": [
-      "whistle",
-      0.45
-    ],
-    "event_land": [
-      "metal",
-      0.4
-    ],
-    "turn": [
-      "click",
-      0.14
-    ],
-    "victory": [
-      "victory",
-      0.5
-    ],
-    "defeat": [
-      "boom",
-      0.5
-    ],
-    "draw": [
-      "metal",
-      0.5
-    ],
-    "ambience": [
-      "ambient",
-      5.0
-    ]
-  },
-  "voice": [
-    [
-      "mortar_warn",
-      "Warning. Artillery barrage inbound."
-    ],
-    [
-      "mortar_land",
-      "Barrage impact."
-    ],
-    [
-      "gas_warn",
-      "Warning. Gas cloud incoming."
-    ],
-    [
-      "gas_land",
-      "Gas cloud deployed."
-    ],
-    [
-      "army_warn",
-      "Warning. Independent army approaching."
-    ],
-    [
-      "army_land",
-      "Independent army has arrived."
-    ],
-    [
-      "fire_warn",
-      "Warning. Fire outbreak imminent."
-    ],
-    [
-      "fire_land",
-      "Fire outbreak confirmed."
-    ],
-    [
-      "emp_warn",
-      "Warning. E M P burst incoming."
-    ],
-    [
-      "emp_land",
-      "E M P burst discharged."
-    ],
-    [
-      "dust_warn",
-      "Warning. Dust storm approaching."
-    ],
-    [
-      "dust_land",
-      "Dust storm has arrived."
-    ],
-    [
-      "collapse_warn",
-      "Warning. Structural collapse imminent."
-    ],
-    [
-      "collapse_land",
-      "Structural collapse confirmed."
-    ],
-    [
-      "reinforce_warn",
-      "Reinforcements incoming."
-    ],
-    [
-      "reinforce_land",
-      "Reinforcements have arrived."
-    ],
-    [
-      "bounty_warn",
-      "Attention. Bounty target designated."
-    ],
-    [
-      "bounty_land",
-      "Bounty protocol active."
-    ],
-    [
-      "minefield_warn",
-      "Warning. Old minefield reported."
-    ],
-    [
-      "minefield_land",
-      "Old minefield confirmed."
-    ],
-    [
-      "turn_A",
-      "Player A. Your move."
-    ],
-    [
-      "turn_B",
-      "Player B. Your move."
-    ],
-    [
-      "turn_C",
-      "Player C. Your move."
-    ],
-    [
-      "turn_D",
-      "Player D. Your move."
-    ],
-    [
-      "turn_E",
-      "Player E. Your move."
-    ],
-    [
-      "turn_F",
-      "Player F. Your move."
-    ],
-    [
-      "turn_G",
-      "Player G. Your move."
-    ],
-    [
-      "turn_H",
-      "Player H. Your move."
-    ],
-    [
-      "turn_I",
-      "Player I. Your move."
-    ],
-    [
-      "turn_J",
-      "Player J. Your move."
-    ],
-    [
-      "turn_K",
-      "Player K. Your move."
-    ],
-    [
-      "turn_L",
-      "Player L. Your move."
-    ],
-    [
-      "turn_M",
-      "Player M. Your move."
-    ],
-    [
-      "turn_N",
-      "Player N. Your move."
-    ],
-    [
-      "turn_O",
-      "Player O. Your move."
-    ],
-    [
-      "turn_P",
-      "Player P. Your move."
-    ],
-    [
-      "turn_Q",
-      "Player Q. Your move."
-    ],
-    [
-      "turn_R",
-      "Player R. Your move."
-    ],
-    [
-      "turn_S",
-      "Player S. Your move."
-    ],
-    [
-      "turn_T",
-      "Player T. Your move."
-    ],
-    [
-      "turn_U",
-      "Player U. Your move."
-    ],
-    [
-      "turn_V",
-      "Player V. Your move."
-    ],
-    [
-      "turn_W",
-      "Player W. Your move."
-    ],
-    [
-      "turn_X",
-      "Player X. Your move."
-    ],
-    [
-      "turn_Y",
-      "Player Y. Your move."
-    ],
-    [
-      "turn_Z",
-      "Player Z. Your move."
-    ],
-    [
-      "victory",
-      "Victory. Objective complete."
-    ],
-    [
-      "defeat",
-      "Defeat. Protocol terminated."
-    ],
-    [
-      "draw",
-      "Draw. No victor remains."
-    ],
-    [
-      "fallback",
-      "Switching to standard protocol."
-    ],
-    [
-      "wave_warn",
-      "Warning. Enemy wave incoming."
-    ],
-    [
-      "wave_land",
-      "Enemy wave has arrived."
-    ],
-    [
-      "zone_contested",
-      "Zone contested."
-    ],
-    [
-      "zone_secured",
-      "Zone secured."
-    ],
-    [
-      "join",
-      "Player connected."
-    ],
-    [
-      "leave",
-      "Player disconnected."
-    ]
-  ]
+ "sources": {
+  "firearms": {"url": "https://opengameart.org/sites/default/files/Prepared%20SFX%20Library.7z", "sha256": "cc1ab5a99a0a365105c7c5dd783f4b0b1fe90938114d3ceec53856bfe005f7d6", "root": "Prepared SFX Library", "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney", "license": "CC0", "page": "https://opengameart.org/content/the-free-firearm-sound-library"},
+  "kenney_impact": {"url": "https://kenney.nl/media/pages/assets/impact-sounds/87b4ddecda-1677589768/kenney_impact-sounds.zip", "sha256": "029d734af1582474edf3a694d1b0cebc97c1c152f2f39fa34d4c2bafc5de77f8", "root": "Audio", "author": "Kenney", "license": "CC0", "page": "https://kenney.nl/assets/impact-sounds"},
+  "kenney_interface": {"url": "https://kenney.nl/media/pages/assets/interface-sounds/fa43c1dd4d-1677589452/kenney_interface-sounds.zip", "sha256": "f2193d072726d6758a5f7871b2dcc54dcce0d5c35c6f0a62f92549b327c81232", "root": "Audio", "author": "Kenney", "license": "CC0", "page": "https://kenney.nl/assets/interface-sounds"},
+  "kenney_rpg": {"url": "https://kenney.nl/media/pages/assets/rpg-audio/8e99002d76-1677590336/kenney_rpg-audio.zip", "sha256": "6dbeaf8544da958d8f2adcb4a4a4b76c1ade34a05f8ab9edccd327da7375f38b", "root": "Audio", "author": "Kenney", "license": "CC0", "page": "https://kenney.nl/assets/rpg-audio"},
+  "kenney_casino": {"url": "https://kenney.nl/media/pages/assets/casino-audio/2472606a04-1721639069/kenney_casino-audio.zip", "sha256": "f36250766ac5bc378c13708ddf12a23a8e54a3251f8d482c7536e51b5dbafa18", "root": "Audio", "author": "Kenney", "license": "CC0", "page": "https://kenney.nl/assets/casino-audio"},
+  "fs62925": {"url": "https://cdn.freesound.org/previews/62/62925_6479-hq.ogg", "sha256": "e938e20f85ffdd8310eda4099804a85f7afc3f253411418b791464fd8f90c0e8", "author": "SpeedY", "license": "CC0", "page": "https://freesound.org/s/62925/", "title": "welder 4.wav"},
+  "fs67616": {"url": "https://cdn.freesound.org/previews/67/67616_71257-hq.ogg", "sha256": "8e2ec089dbdc6b117ebf2288c769e2fc6f5a9b5a68211eb30b0c11cb2ee8f610", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/67616/", "title": "alarm_1.flac"},
+  "fs121531": {"url": "https://cdn.freesound.org/previews/121/121531_57789-hq.ogg", "sha256": "bfd3e706cf244bfa16bb9c1bc51afffd5d7c5ec33ed251cd7ad251985d02becb", "author": "cognito%20perceptu", "license": "CC0", "page": "https://freesound.org/s/121531/", "title": "tracked vehicle.wav"},
+  "fs160350": {"url": "https://cdn.freesound.org/previews/160/160350_71257-hq.ogg", "sha256": "9a6219bb88cbbc50ece70cf75fb8abe720acd3ff0ef9d3452e2f349fc186432b", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/160350/", "title": "Hiss.flac"},
+  "fs181563": {"url": "https://cdn.freesound.org/previews/181/181563_1857065-hq.ogg", "sha256": "851dd0961844dcaa9a73c5dbf6babc3f97fa5e4c32e1a3ed651508883500d572", "author": "kingsrow", "license": "CC0", "page": "https://freesound.org/s/181563/", "title": "Fire Crackling 01.wav"},
+  "fs182429": {"url": "https://cdn.freesound.org/previews/182/182429_71257-hq.ogg", "sha256": "26a3c679bb7ba7d9aee161b8e30509940c76aadc8ee6350146614e293341d145", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/182429/", "title": "Explosion"},
+  "fs182432": {"url": "https://cdn.freesound.org/previews/182/182432_71257-hq.ogg", "sha256": "05836556177a2a7d2446cc32044571a4517bba79834e6bfc458ea1ea284cc46b", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/182432/", "title": "Explosive 1 v1 [DOD 130303].flac"},
+  "fs182794": {"url": "https://cdn.freesound.org/previews/182/182794_71257-hq.ogg", "sha256": "91dfe9729e6083936fa11c3e36c9aa7a1a3653bd4d6a0453698fbfaadc5ba34a", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/182794/", "title": "Rocket Launch.flac"},
+  "fs183656": {"url": "https://cdn.freesound.org/previews/183/183656_71257-hq.ogg", "sha256": "7b54fc6b566252a58c26e3146df752f20c250c1395c20ef8c2193fea3465bc1d", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/183656/", "title": "50 Caliber MG.flac"},
+  "fs184274": {"url": "https://cdn.freesound.org/previews/184/184274_71257-hq.ogg", "sha256": "1152d59a110b0c2aa43a3d4485f125fbb4898bfacefb2d563dce3387fea6db79", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/184274/", "title": "Launching Anti-Tank Missiles.flac"},
+  "fs184357": {"url": "https://cdn.freesound.org/previews/184/184357_71257-hq.ogg", "sha256": "9b061fb6f66cf24adc8103961a83b9b0734b193cd6ec8567a3d4201b365b397e", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/184357/", "title": "Military Alarm & Noise.flac"},
+  "fs184382": {"url": "https://cdn.freesound.org/previews/184/184382_71257-hq.ogg", "sha256": "7c597a671af5ead79897021f4a57ea954ad46715ee69fc69feee170fda0dc89f", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/184382/", "title": "Mortar Shots.flac"},
+  "fs184935": {"url": "https://cdn.freesound.org/previews/184/184935_71257-hq.ogg", "sha256": "a0e4914aafdd307f6540ed632cfa1e945dfea9dc8d20720ef005f3b24b1a1473", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/184935/", "title": "Epic Metal Gate.flac"},
+  "fs187542": {"url": "https://cdn.freesound.org/previews/187/187542_71257-hq.ogg", "sha256": "a9ad76630d83406d5da9adc8cfa31b594cd57fe1c02fbd1be11e09c3a9d43660", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/187542/", "title": "M-327 Mortar Shots.flac"},
+  "fs187676": {"url": "https://cdn.freesound.org/previews/187/187676_71257-hq.ogg", "sha256": "ec0b8f4a94ce5dcfba6cdbf9d7c124a18359aa2d94d2bbdae405f7472a26b169", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/187676/", "title": "Driving Tank Engine.flac"},
+  "fs187767": {"url": "https://cdn.freesound.org/previews/187/187767_71257-hq.ogg", "sha256": "6706f061039998ffd3805d146a898cff2187e7ab81d7b6f8134e145494867081", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/187767/", "title": "Cannon Shot"},
+  "fs189778": {"url": "https://cdn.freesound.org/previews/189/189778_71257-hq.ogg", "sha256": "0ba2a09af02bfd285a0e68e21fd6d7e0354cd9d6725c9c94824153d8d5f1754a", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/189778/", "title": "Explosive.flac"},
+  "fs208101": {"url": "https://cdn.freesound.org/previews/208/208101_2943165-hq.ogg", "sha256": "11ad41f2d87c3790ee41edc8c4cf209991dc86f0fbdf4b4009411e0b92e58143", "author": "Phil25", "license": "CC0", "page": "https://freesound.org/s/208101/", "title": "Metal Steps"},
+  "fs218888": {"url": "https://cdn.freesound.org/previews/218/218888_71257-hq.ogg", "sha256": "589780e4ace1533018c24b551feab72f054857aaf10f12d78867d9c4e94f68c4", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/218888/", "title": "Door Smash 3"},
+  "fs218889": {"url": "https://cdn.freesound.org/previews/218/218889_71257-hq.ogg", "sha256": "517146a609358d62d358b5eaaa35e25cd0a5eecd58f036a596de5977e314bf4c", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/218889/", "title": "Door Smash 2"},
+  "fs218890": {"url": "https://cdn.freesound.org/previews/218/218890_71257-hq.ogg", "sha256": "69596b6b7d8c5ccf84509a9d6b37215f9bbee457f7a485b5deeeb2675b9156c5", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/218890/", "title": "Door Smash 1"},
+  "fs221528": {"url": "https://cdn.freesound.org/previews/221/221528_1038806-hq.ogg", "sha256": "5335c238731731b8efcb5b2bd81071432786c93fded88db6f8bc4090feb74f76", "author": "unfa", "license": "CC0", "page": "https://freesound.org/s/221528/", "title": "Glass Break"},
+  "fs239135": {"url": "https://cdn.freesound.org/previews/239/239135_71257-hq.ogg", "sha256": "6e374214bdb42e58b0fc8acbba6b3fa134cbc2a21375b910db32fb0358bbbf89", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/239135/", "title": "Tank Shots"},
+  "fs239138": {"url": "https://cdn.freesound.org/previews/239/239138_71257-hq.ogg", "sha256": "be8c59409da56f19d9d770b6b3dc2276aa2c68d5d45f8463dcbdc1dcf93aaa64", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/239138/", "title": "50 Cal MG"},
+  "fs241837": {"url": "https://cdn.freesound.org/previews/241/241837_4404989-hq.ogg", "sha256": "2ca7cf2c497bd1d6ea00838279feee4d79c5012fa66f7636b903339a1b77e430", "author": "Zagge28", "license": "CC0", "page": "https://freesound.org/s/241837/", "title": "Incoming mortar 4"},
+  "fs241838": {"url": "https://cdn.freesound.org/previews/241/241838_4404989-hq.ogg", "sha256": "60a8553c71f821394cc8619dc24c36e0dc3931285456252b27fc4d7433a6d6e4", "author": "Zagge28", "license": "CC0", "page": "https://freesound.org/s/241838/", "title": "Incoming mortar 3"},
+  "fs241839": {"url": "https://cdn.freesound.org/previews/241/241839_4404989-hq.ogg", "sha256": "4d352ff18c44e694045f7ca77f05f36c5ec48edbe9f77f1478be23865524cd43", "author": "Zagge28", "license": "CC0", "page": "https://freesound.org/s/241839/", "title": "Incoming mortar 2"},
+  "fs241840": {"url": "https://cdn.freesound.org/previews/241/241840_4404989-hq.ogg", "sha256": "400343a4feabf4ba4cb1f9d8887fe914c9bfa190d127b60058cbedaeee448d4c", "author": "Zagge28", "license": "CC0", "page": "https://freesound.org/s/241840/", "title": "Incoming mortar 1"},
+  "fs244983": {"url": "https://cdn.freesound.org/previews/244/244983_3008343-hq.ogg", "sha256": "f670a99bc80aef87b45ee26b4b2b4446118062ec9c5d2207bfdb4112c62cd7ec", "author": "ani_music", "license": "CC0", "page": "https://freesound.org/s/244983/", "title": "ANI Big Pipe Hit"},
+  "fs256915": {"url": "https://cdn.freesound.org/previews/256/256915_1149179-hq.ogg", "sha256": "b35e99e37fb745c1abb6430e7f76d8a3edaed44af06354380d2efd8451237ca6", "author": "squashy555", "license": "CC0", "page": "https://freesound.org/s/256915/", "title": "Arc Welding.wav"},
+  "fs340598": {"url": "https://cdn.freesound.org/previews/340/340598_4959511-hq.ogg", "sha256": "ee8b5f48034d6629d8234744b3ff68cb43223d441b5e3da1eeeb4be80f54e450", "author": "mickyman5000", "license": "CC0", "page": "https://freesound.org/s/340598/", "title": "Metallic_Slamming_Heavy_Many.wav"},
+  "fs346695": {"url": "https://cdn.freesound.org/previews/346/346695_2104797-hq.ogg", "sha256": "e1b66761be853a8259269b1fc5f5314d8441d46a44233616075535c49c374dd8", "author": "deleted_user_2104797", "license": "CC0", "page": "https://freesound.org/s/346695/", "title": "Body fall_01.wav"},
+  "fs353799": {"url": "https://cdn.freesound.org/previews/353/353799_5337613-hq.ogg", "sha256": "3f9f4b505bd67d56b216ee444d9cfdde856116bcd21a9926b8febaeb5cc3ab93", "author": "monte32", "license": "CC0", "page": "https://freesound.org/s/353799/", "title": "Footsteps_6_Dirt_shoe.wav"},
+  "fs353907": {"url": "https://cdn.freesound.org/previews/353/353907_5984825-hq.ogg", "sha256": "c4b9b510b96e91219569721c0e87ebe323f5e2dda7335d6301f52e7cb756cc81", "author": "dr19", "license": "CC0", "page": "https://freesound.org/s/353907/", "title": "Shovel_dirt.wav"},
+  "fs394873": {"url": "https://cdn.freesound.org/previews/394/394873_6479820-hq.ogg", "sha256": "009b725e5da1be6097775205ea69d0ee4817d150833335d172cc50e2b5b4201f", "author": "deleted_user_6479820", "license": "CC0", "page": "https://freesound.org/s/394873/", "title": "Throw 1.mp3"},
+  "fs396240": {"url": "https://cdn.freesound.org/previews/396/396240_453602-hq.ogg", "sha256": "64a0a06d8a6bb148f968f7bee61a2d736d286909f35375264e31796734e8a171", "author": "weaveofkev", "license": "CC0", "page": "https://freesound.org/s/396240/", "title": "Welding_Electric Sparks.wav"},
+  "fs403252": {"url": "https://cdn.freesound.org/previews/403/403252_7809148-hq.ogg", "sha256": "4aaab8727fcd9b8c72a39d61132c7bfbfeb3653007e0623f9f4f81c6dcd79312", "author": "The_Chemical_Workshop", "license": "CC0", "page": "https://freesound.org/s/403252/", "title": "Taser/High Voltage discharge"},
+  "fs438877": {"url": "https://cdn.freesound.org/previews/438/438877_2524442-hq.ogg", "sha256": "a186393de4a6cbc327381e4e7309c8f98453cca1280f5502f2965617ee2fb4f9", "author": "craigsmith", "license": "CC0", "page": "https://freesound.org/s/438877/", "title": "G56-22-Sandstorm.wav"},
+  "fs447941": {"url": "https://cdn.freesound.org/previews/447/447941_9159316-hq.ogg", "sha256": "288199646470dfa0fbb67a778b182db57502d28cae37ec2ed11136b33eadeebb", "author": "Breviceps", "license": "CC0", "page": "https://freesound.org/s/447941/", "title": "Blast + Flamethrower cooldown"},
+  "fs451924": {"url": "https://cdn.freesound.org/previews/451/451924_612689-hq.ogg", "sha256": "9d912dd687d64c3baef14644ba584ac30b7cf2dae3a7002438589d6fb221703d", "author": "kyles", "license": "CC0", "page": "https://freesound.org/s/451924/", "title": "room tone large room church basement heavy deep ventilation or furnace hum.flac"},
+  "fs487142": {"url": "https://cdn.freesound.org/previews/487/487142_2524442-hq.ogg", "sha256": "a5431fc72b8595892d7f15c93fa82684e24a62e92e4e9f26183163a8c6423947", "author": "craigsmith", "license": "CC0", "page": "https://freesound.org/s/487142/", "title": "R29-04-Crashing Collapse of Wood Building.wav"},
+  "fs490166": {"url": "https://cdn.freesound.org/previews/490/490166_5487341-hq.ogg", "sha256": "e85e08e5a35d13d17168835ba87c49ea57ffb9820f37eb711410b33f6c2f7574", "author": "SamsterBirdies", "license": "CC0", "page": "https://freesound.org/s/490166/", "title": "Flamethrower"},
+  "fs504626": {"url": "https://cdn.freesound.org/previews/504/504626_4437257-hq.ogg", "sha256": "7d50922d1789c5470ef0abcd755f4f85bf9949af097b027d21636ba31381b9ec", "author": "leonelmail", "license": "CC0", "page": "https://freesound.org/s/504626/", "title": "BODY FALL - V HVY - DIRT"},
+  "fs515087": {"url": "https://cdn.freesound.org/previews/515/515087_2282212-hq.ogg", "sha256": "049310979d482b615ffc21035410e50a70057f4a1247265777e1bcb6ec2c5445", "author": "szegvari", "license": "CC0", "page": "https://freesound.org/s/515087/", "title": "Digging20200426-125956_01.wav"},
+  "fs521588": {"url": "https://cdn.freesound.org/previews/521/521588_9395330-hq.ogg", "sha256": "063b71bb10b71f7b5d794817c8e1962798c24b5214b6a02b270490f9e52839b6", "author": "Fission9", "license": "CC0", "page": "https://freesound.org/s/521588/", "title": "Hiking Boot Footsteps on Gravel"},
+  "fs536763": {"url": "https://cdn.freesound.org/previews/536/536763_1415754-hq.ogg", "sha256": "31ef5cd109d177a1d1b6af79f6f37600e7e5da0142e8a517a666f9618e9695dc", "author": "egomassive", "license": "CC0", "page": "https://freesound.org/s/536763/", "title": "Glass.ogg"},
+  "fs615667": {"url": "https://cdn.freesound.org/previews/615/615667_1819746-hq.ogg", "sha256": "8a4d88241d960a45a9f238307fa76e0ccf856a290cc85da607b08b5a877f7416", "author": "henrikcederblad", "license": "CC0", "page": "https://freesound.org/s/615667/", "title": "FOL-gas-leak-02.wav"},
+  "fs615668": {"url": "https://cdn.freesound.org/previews/615/615668_1819746-hq.ogg", "sha256": "f2375588e9bf6318e82076bb2d92b22caa749519de27f323b5c5256de16f0ccb", "author": "henrikcederblad", "license": "CC0", "page": "https://freesound.org/s/615668/", "title": "FOL-gas-leak-01.wav"},
+  "fs623691": {"url": "https://cdn.freesound.org/previews/623/623691_7281605-hq.ogg", "sha256": "ad3e893e93dae7e803422cfcc0fbe4471c46e749f978329de330724243986903", "author": "launchsite", "license": "CC0", "page": "https://freesound.org/s/623691/", "title": "sandbag pick up and drop.wav"},
+  "fs626811": {"url": "https://cdn.freesound.org/previews/626/626811_12798871-hq.ogg", "sha256": "9ebe82bb5c2b1f255ccd93bc68264d6399404e9bf866013c49958ee9972a3680", "author": "EntoClash", "license": "CC0", "page": "https://freesound.org/s/626811/", "title": "Heavy metal clatter.wav"},
+  "fs648134": {"url": "https://cdn.freesound.org/previews/648/648134_13481362-hq.ogg", "sha256": "9d200af60ce1e1ba94d6ce18b6424970b843e1e4692a29281f6f5c2a2c0abf8f", "author": "5plus5equalspatata", "license": "CC0", "page": "https://freesound.org/s/648134/", "title": "Window break.wav"},
+  "fs670070": {"url": "https://cdn.freesound.org/previews/670/670070_2247456-hq.ogg", "sha256": "efe83aadb85c1c0cd4c29d4c298c9fc3237a51a49a8574f1ca74e2cb460b1740", "author": "Kinoton", "license": "CC0", "page": "https://freesound.org/s/670070/", "title": "Room Tone, Empty Hospital"},
+  "fs673424": {"url": "https://cdn.freesound.org/previews/673/673424_13324371-hq.ogg", "sha256": "b42adb2f91906777f8da57bc1dea309628092d827e10ca3d227e57a15e19217f", "author": "courtneyeck", "license": "CC0", "page": "https://freesound.org/s/673424/", "title": "Falling body hits the floor"},
+  "fs677833": {"url": "https://cdn.freesound.org/previews/677/677833_5287430-hq.ogg", "sha256": "4315d7337695bde6a486d7ec5d0df88716510fd25e2d38f485e883c89c7b365f", "author": "Sadiquecat", "license": "CC0", "page": "https://freesound.org/s/677833/", "title": "Tiny Hawk 2 short flight.wav"},
+  "fs684459": {"url": "https://cdn.freesound.org/previews/684/684459_12716775-hq.ogg", "sha256": "98586cc5fef700edec338bfdc58325acf36d13f67194259db6b0d0f8feea076a", "author": "gbnelso", "license": "CC0", "page": "https://freesound.org/s/684459/", "title": "Whoosh.wav"},
+  "fs697217": {"url": "https://cdn.freesound.org/previews/697/697217_7678208-hq.ogg", "sha256": "565d522f5f1545266747fc56c24658b2af927c089d51dc9cb5e477f5266d5fb7", "author": "dhallcomposer", "license": "CC0", "page": "https://freesound.org/s/697217/", "title": "Looping Gentle Wind Ambience on an Open Desert Plain.wav"},
+  "fs701314": {"url": "https://cdn.freesound.org/previews/701/701314_15203576-hq.ogg", "sha256": "caf9b26127f3100ad6c3eb6dd48efbccfc070ff7aee8b58bf613c374be6e30ae", "author": "SEF7", "license": "CC0", "page": "https://freesound.org/s/701314/", "title": "Walkie Talkie button press tone"},
+  "fs701326": {"url": "https://cdn.freesound.org/previews/701/701326_15203576-hq.ogg", "sha256": "f1d60da414b188e6cd0ef82f017db46e9ff909a3038ffb05b3db5257b692bbee", "author": "SEF7", "license": "CC0", "page": "https://freesound.org/s/701326/", "title": "Walkie Talkie famous beep"},
+  "fs701327": {"url": "https://cdn.freesound.org/previews/701/701327_15203576-hq.ogg", "sha256": "542e46870d68df29a3f01d46b1c09e5196704bb3ca565752c7873357223e5e05", "author": "SEF7", "license": "CC0", "page": "https://freesound.org/s/701327/", "title": "Walkie Talkie power on"},
+  "fs702456": {"url": "https://cdn.freesound.org/previews/702/702456_13447096-hq.ogg", "sha256": "9e3110075adb0f209bd38753b017f46b43beadeafbb96dadb532331826983164", "author": "AdamHarvester", "license": "CC0", "page": "https://freesound.org/s/702456/", "title": "AMX-13 Engine.wav"},
+  "fs703247": {"url": "https://cdn.freesound.org/previews/703/703247_13504080-hq.ogg", "sha256": "862a8abdd92006d442a567efe13b9f759fe7f19c74c756ab49cd324e8b8634e6", "author": "xkeril", "license": "CC0", "page": "https://freesound.org/s/703247/", "title": "Big falling debris (crash)"},
+  "fs703248": {"url": "https://cdn.freesound.org/previews/703/703248_13504080-hq.ogg", "sha256": "962c383f06d1439a8f11521e96e0fe8e28b83394066d9260670044f7d3e6f336", "author": "xkeril", "license": "CC0", "page": "https://freesound.org/s/703248/", "title": "Fall debris (crash)"},
+  "fs741173": {"url": "https://cdn.freesound.org/previews/741/741173_71257-hq.ogg", "sha256": "b7e812a4a3108ddf1cc3c20d1827e7b299659145c6c03f46a0905ce15bf8cdbb", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/741173/", "title": "Big Explosion"},
+  "fs741174": {"url": "https://cdn.freesound.org/previews/741/741174_71257-hq.ogg", "sha256": "fb5913e3b59c03b2d4664825efe0a6637fb93a669f2d2623d474f8b0261d060c", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/741174/", "title": "Huge Explosion"},
+  "fs812592": {"url": "https://cdn.freesound.org/previews/812/812592_71257-hq.ogg", "sha256": "35b15988c4d649d90b70cb6da0373ddc7e83d19dadde110fa12942515747f475", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/812592/", "title": "Clang"},
+  "fs817225": {"url": "https://cdn.freesound.org/previews/817/817225_9250976-hq.ogg", "sha256": "c134bdf4f45b20730b1f632e7fe4587a7630b38cb210062fb73ed2c04ede60d9", "author": "Nox_Sound", "license": "CC0", "page": "https://freesound.org/s/817225/", "title": "Atmosphere_Scifi_Bunker_Loop_Stereo"},
+  "fs832414": {"url": "https://cdn.freesound.org/previews/832/832414_71257-hq.ogg", "sha256": "775d11974ef3d2494dc9dcd27bf5ea59534773ab35cad1e87bb437a68b2c8ec9", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/832414/", "title": "Factory Warning Buzzer"},
+  "fs840720": {"url": "https://cdn.freesound.org/previews/840/840720_71257-hq.ogg", "sha256": "0226c4ef183dabd48e59c6cda2225586125ef631d2e6694a7a5f8bd5e33796b0", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/840720/", "title": "Windy City Park at Night"},
+  "fs845932": {"url": "https://cdn.freesound.org/previews/845/845932_2524442-hq.ogg", "sha256": "0bc8946c4bbd246e4bb9f2f085f670272c84aa3bfe378802f4a14e771f515398", "author": "craigsmith", "license": "CC0", "page": "https://freesound.org/s/845932/", "title": "Building Collapse"},
+  "fs854466": {"url": "https://cdn.freesound.org/previews/854/854466_71257-hq.ogg", "sha256": "56430546c7696cf211087e7cfd225ac1303836658c91da75f20467e9ba17f03f", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/854466/", "title": "FPV Drone Flight 3"},
+  "fs855247": {"url": "https://cdn.freesound.org/previews/855/855247_71257-hq.ogg", "sha256": "ab4ab1e4983d441ebb843018d3dfee11743772b185a09a02738c12313d5f15d9", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/855247/", "title": "Explosion and Shockwave 2"}
+ },
+ "sfx": {
+  "rifle": {"cat": "gun", "takes": [
+   ["firearms", "AK-47/C_31P.wav", 0.32, 1.3],
+   ["firearms", "AK-47/C_31P.wav", 4.39, 1.25],
+   ["firearms", "AR-15/D_24P.wav", 0.53, 1.5],
+   ["firearms", "AR-15/D_24P.wav", 3.89, 1.45],
+   ["firearms", "SKS/U_19P.wav", 2.6, 1.1],
+   ["firearms", "SKS/U_19P.wav", 8.0, 1.1]
+  ]},
+  "burst": {"cat": "gun", "takes": [
+   ["firearms", "AK-47/C_34P.wav", 0.72, 1.7],
+   ["firearms", "AK-47/C_34P.wav", 5.15, 1.7],
+   ["firearms", "AK-47/C_34P.wav", 8.98, 1.8],
+   ["firearms", "AK-47/C_34P.wav", 13.38, 1.9]
+  ]},
+  "mg": {"cat": "gun", "takes": [
+   ["firearms", "AK-47/C_36P.wav", 0.62, 2.1],
+   ["firearms", "AK-47/C_36P.wav", 4.45, 2.1],
+   ["firearms", "AK-47/C_36P.wav", 8.52, 2.1]
+  ]},
+  "sniper": {"cat": "gun", "takes": [
+   ["firearms", "Mosin Nagant/M_26P.wav", 1.12, 1.2],
+   ["firearms", "Mosin Nagant/M_26P.wav", 6.09, 1.15],
+   ["firearms", "Mosin Nagant/M_26P.wav", 10.73, 1.2],
+   ["firearms", "Tikka/W_24P.wav", 0.74, 1.6],
+   ["firearms", "Tikka/W_24P.wav", 5.36, 1.6]
+  ]},
+  "shotgun": {"cat": "gun", "takes": [
+   ["firearms", "Nova/O_17P.wav", 0.68, 1.6],
+   ["firearms", "Nova/O_17P.wav", 3.69, 1.55],
+   ["firearms", "Model 12/K_17P.wav", 0.89, 1.5],
+   ["firearms", "Model 12/K_17P.wav", 7.04, 1.6],
+   ["firearms", "Mossberg/N_26P.wav", 0.77, 1.2]
+  ]},
+  "heavy_mg": {"cat": "gun", "takes": [
+   ["fs183656", "", 0.03, 1.35],
+   ["fs183656", "", 4.93, 1.3],
+   ["fs183656", "", 16.17, 2.2],
+   ["fs239138", "", 0.0, 2.55]
+  ]},
+  "laser": {"cat": "gun", "takes": [
+   ["fs403252", "", 0.72, 0.45],
+   ["fs403252", "", 1.65, 0.33],
+   ["fs403252", "", 2.24, 0.4]
+  ]},
+  "flame": {"cat": "gun", "takes": [
+   ["fs490166", "", 0.2, 1.6],
+   ["fs490166", "", 3.0, 1.6],
+   ["fs490166", "", 6.0, 1.6],
+   ["fs490166", "", 9.0, 1.6],
+   ["fs447941", "", 0.03, 1.85]
+  ]},
+  "explosion": {"cat": "heavy", "takes": [
+   ["fs182429", "", 0.0, 3.0],
+   ["fs182432", "", 0.43, 3.0],
+   ["fs189778", "", 0.04, 1.95],
+   ["fs189778", "", 2.0, 2.05],
+   ["fs189778", "", 4.1, 3.0],
+   ["fs855247", "", 0.0, 3.9]
+  ]},
+  "vehicle_hull": {"cat": "heavy", "takes": [
+   ["fs741174", "", 0.0, 5.0],
+   ["fs741173", "", 0.0, 5.0]
+  ]},
+  "shell_launch": {"cat": "heavy", "takes": [
+   ["fs187767", "", 0.12, 3.0],
+   ["fs187767", "", 6.38, 3.5],
+   ["fs239135", "", 0.0, 3.2],
+   ["fs239135", "", 3.48, 3.5],
+   ["fs239135", "", 8.58, 2.3]
+  ]},
+  "rocket_launch": {"cat": "heavy", "takes": [
+   ["fs184274", "", 0.0, 3.0],
+   ["fs184274", "", 10.0, 3.0],
+   ["fs182794", "", 0.57, 3.0]
+  ]},
+  "mortar_fire": {"cat": "heavy", "takes": [
+   ["fs184382", "", 1.0, 1.4],
+   ["fs184382", "", 4.0, 0.95],
+   ["fs184382", "", 6.0, 1.0],
+   ["fs184382", "", 8.0, 1.7],
+   ["fs187542", "", 0.0, 1.2],
+   ["fs187542", "", 2.0, 1.1]
+  ]},
+  "hit_flesh": {"cat": "impact", "takes": [
+   ["kenney_impact", "impactPunch_heavy_000.ogg", 0, 0.6],
+   ["kenney_impact", "impactPunch_heavy_001.ogg", 0, 0.6],
+   ["kenney_impact", "impactPunch_heavy_002.ogg", 0, 0.6],
+   ["kenney_impact", "impactPunch_heavy_003.ogg", 0, 0.6],
+   ["kenney_impact", "impactPunch_heavy_004.ogg", 0, 0.6]
+  ]},
+  "hit_metal": {"cat": "impact", "takes": [
+   ["kenney_impact", "impactMetal_light_000.ogg", 0, 0.8],
+   ["kenney_impact", "impactMetal_light_001.ogg", 0, 0.8],
+   ["kenney_impact", "impactMetal_light_002.ogg", 0, 0.8],
+   ["kenney_impact", "impactMetal_light_003.ogg", 0, 0.8],
+   ["kenney_impact", "impactMetal_light_004.ogg", 0, 0.8],
+   ["kenney_impact", "impactPlate_light_000.ogg", 0, 0.8],
+   ["kenney_impact", "impactPlate_light_001.ogg", 0, 0.8],
+   ["kenney_impact", "impactPlate_light_002.ogg", 0, 0.8]
+  ]},
+  "hit_stone": {"cat": "impact", "takes": [
+   ["kenney_impact", "impactMining_000.ogg", 0, 0.8],
+   ["kenney_impact", "impactMining_001.ogg", 0, 0.8],
+   ["kenney_impact", "impactMining_002.ogg", 0, 0.8],
+   ["kenney_impact", "impactMining_003.ogg", 0, 0.8],
+   ["kenney_impact", "impactMining_004.ogg", 0, 0.8],
+   ["kenney_impact", "impactGeneric_light_000.ogg", 0, 0.8],
+   ["kenney_impact", "impactGeneric_light_001.ogg", 0, 0.8],
+   ["kenney_impact", "impactGeneric_light_002.ogg", 0, 0.8]
+  ]},
+  "hit_wood": {"cat": "impact", "takes": [
+   ["kenney_impact", "impactWood_light_000.ogg", 0, 0.8],
+   ["kenney_impact", "impactWood_light_001.ogg", 0, 0.8],
+   ["kenney_impact", "impactWood_light_002.ogg", 0, 0.8],
+   ["kenney_impact", "impactWood_light_003.ogg", 0, 0.8],
+   ["kenney_impact", "impactWood_light_004.ogg", 0, 0.8]
+  ]},
+  "hit_glass": {"cat": "impact", "takes": [
+   ["kenney_impact", "impactGlass_light_000.ogg", 0, 0.8],
+   ["kenney_impact", "impactGlass_light_001.ogg", 0, 0.8],
+   ["kenney_impact", "impactGlass_light_002.ogg", 0, 0.8],
+   ["kenney_impact", "impactGlass_light_003.ogg", 0, 0.8],
+   ["kenney_impact", "impactGlass_light_004.ogg", 0, 0.8]
+  ]},
+  "hit_dirt": {"cat": "impact", "takes": [
+   ["kenney_impact", "impactSoft_medium_000.ogg", 0, 0.6],
+   ["kenney_impact", "impactSoft_medium_001.ogg", 0, 0.6],
+   ["kenney_impact", "impactSoft_medium_002.ogg", 0, 0.6],
+   ["kenney_impact", "impactSoft_medium_003.ogg", 0, 0.6],
+   ["kenney_impact", "impactSoft_medium_004.ogg", 0, 0.6]
+  ]},
+  "shield_block": {"cat": "impact", "takes": [
+   ["kenney_impact", "impactPlate_heavy_000.ogg", 0, 1.0],
+   ["kenney_impact", "impactPlate_heavy_001.ogg", 0, 1.0],
+   ["kenney_impact", "impactPlate_heavy_002.ogg", 0, 1.0],
+   ["kenney_impact", "impactPlate_heavy_003.ogg", 0, 1.0],
+   ["kenney_impact", "impactPlate_heavy_004.ogg", 0, 1.0]
+  ]},
+  "laser_hit": {"cat": "impact", "takes": [
+   ["fs396240", "", 0.12, 0.6],
+   ["fs396240", "", 1.54, 0.7],
+   ["fs256915", "", 2.0, 0.6],
+   ["fs256915", "", 8.0, 0.6]
+  ]},
+  "glass": {"cat": "debris", "takes": [
+   ["fs221528", "", 0.3, 1.5],
+   ["fs536763", "", 0.0, 2.9],
+   ["fs648134", "", 0.0, 3.0]
+  ]},
+  "structure": {"cat": "debris", "takes": [
+   ["fs703247", "", 0.0, 3.0],
+   ["fs703248", "", 0.0, 3.0],
+   ["fs845932", "", 0.0, 3.5]
+  ]},
+  "corpse": {"cat": "debris", "takes": [
+   ["fs504626", "", 0.05, 1.3],
+   ["fs346695", "", 0.58, 0.7],
+   ["fs673424", "", 0.77, 1.1]
+  ]},
+  "vehicle_tracks": {"cat": "debris", "takes": [
+   ["fs340598", "", 0.0, 2.5],
+   ["fs184935", "", 0.0, 2.5]
+  ]},
+  "vehicle_tower": {"cat": "debris", "takes": [
+   ["fs626811", "", 0.0, 0.7],
+   ["fs244983", "", 0.0, 0.9],
+   ["fs340598", "", 0.0, 2.0]
+  ]},
+  "vehicle_gun": {"cat": "debris", "takes": [
+   ["fs812592", "", 0.0, 0.5],
+   ["fs626811", "", 0.0, 0.7],
+   ["fs244983", "", 0.0, 0.9]
+  ]},
+  "collapse": {"cat": "debris", "takes": [
+   ["fs845932", "", 0.0, 6.5],
+   ["fs487142", "", 0.0, 6.0]
+  ]},
+  "step_concrete": {"cat": "foley", "takes": [
+   ["kenney_impact", "footstep_concrete_000.ogg", 0, 0.5],
+   ["kenney_impact", "footstep_concrete_001.ogg", 0, 0.5],
+   ["kenney_impact", "footstep_concrete_002.ogg", 0, 0.5],
+   ["kenney_impact", "footstep_concrete_003.ogg", 0, 0.5],
+   ["kenney_impact", "footstep_concrete_004.ogg", 0, 0.5]
+  ]},
+  "step_wood": {"cat": "foley", "takes": [
+   ["kenney_impact", "footstep_wood_000.ogg", 0, 0.5],
+   ["kenney_impact", "footstep_wood_001.ogg", 0, 0.5],
+   ["kenney_impact", "footstep_wood_002.ogg", 0, 0.5],
+   ["kenney_impact", "footstep_wood_003.ogg", 0, 0.5],
+   ["kenney_impact", "footstep_wood_004.ogg", 0, 0.5]
+  ]},
+  "step_carpet": {"cat": "foley", "takes": [
+   ["kenney_impact", "footstep_carpet_000.ogg", 0, 0.5],
+   ["kenney_impact", "footstep_carpet_001.ogg", 0, 0.5],
+   ["kenney_impact", "footstep_carpet_002.ogg", 0, 0.5],
+   ["kenney_impact", "footstep_carpet_003.ogg", 0, 0.5],
+   ["kenney_impact", "footstep_carpet_004.ogg", 0, 0.5]
+  ]},
+  "step_grass": {"cat": "foley", "takes": [
+   ["kenney_impact", "footstep_grass_000.ogg", 0, 0.5],
+   ["kenney_impact", "footstep_grass_001.ogg", 0, 0.5],
+   ["kenney_impact", "footstep_grass_002.ogg", 0, 0.5],
+   ["kenney_impact", "footstep_grass_003.ogg", 0, 0.5],
+   ["kenney_impact", "footstep_grass_004.ogg", 0, 0.5]
+  ]},
+  "step_dirt": {"cat": "foley", "takes": [
+   ["fs353799", "", 0.31, 0.5],
+   ["fs353799", "", 1.29, 0.53],
+   ["fs353799", "", 2.27, 0.55],
+   ["fs353799", "", 3.19, 0.52],
+   ["fs353799", "", 4.16, 0.5],
+   ["fs521588", "", 0.08, 0.37],
+   ["fs521588", "", 0.84, 0.32],
+   ["fs521588", "", 1.55, 0.33]
+  ]},
+  "step_metal": {"cat": "foley", "takes": [
+   ["fs208101", "", 1.04, 0.35],
+   ["fs208101", "", 3.07, 0.35],
+   ["fs208101", "", 3.79, 0.35],
+   ["fs208101", "", 4.44, 0.35],
+   ["fs208101", "", 5.11, 0.35],
+   ["fs208101", "", 5.85, 0.35]
+  ]},
+  "build": {"cat": "foley", "takes": [
+   ["fs623691", "", 0.0, 2.6],
+   ["kenney_impact", "impactWood_heavy_000.ogg", 0, 0.9],
+   ["kenney_impact", "impactWood_heavy_001.ogg", 0, 0.9],
+   ["kenney_impact", "impactWood_heavy_002.ogg", 0, 0.9],
+   ["kenney_impact", "impactPlank_medium_000.ogg", 0, 0.9],
+   ["kenney_impact", "impactPlank_medium_001.ogg", 0, 0.9]
+  ]},
+  "dig": {"cat": "foley", "takes": [
+   ["fs353907", "", 0.0, 2.3],
+   ["fs353907", "", 2.65, 1.75],
+   ["fs353907", "", 6.91, 2.1],
+   ["fs515087", "", 0.15, 2.0]
+  ]},
+  "mine_lay": {"cat": "foley", "takes": [
+   ["kenney_rpg", "metalLatch.ogg", 0, 1.0],
+   ["kenney_rpg", "beltHandle1.ogg", 0, 1.0],
+   ["kenney_rpg", "beltHandle2.ogg", 0, 1.0],
+   ["kenney_rpg", "dropLeather.ogg", 0, 1.0]
+  ]},
+  "mine_disarm": {"cat": "foley", "takes": [
+   ["kenney_rpg", "metalClick.ogg", 0, 1.0],
+   ["kenney_rpg", "knifeSlice.ogg", 0, 1.0],
+   ["kenney_rpg", "knifeSlice2.ogg", 0, 1.0]
+  ]},
+  "grab": {"cat": "foley", "takes": [
+   ["kenney_rpg", "cloth1.ogg", 0, 1.0],
+   ["kenney_rpg", "cloth2.ogg", 0, 1.0],
+   ["kenney_rpg", "cloth3.ogg", 0, 1.0],
+   ["kenney_rpg", "cloth4.ogg", 0, 1.0],
+   ["kenney_rpg", "clothBelt.ogg", 0, 1.0]
+  ]},
+  "grenade_launch": {"cat": "foley", "takes": [
+   ["fs394873", "", 0.03, 0.35],
+   ["fs684459", "", 0.5, 0.8],
+   ["kenney_rpg", "cloth2.ogg", 0, 0.6]
+  ]},
+  "door_open": {"cat": "foley", "takes": [
+   ["fs160350", "", 0.13, 0.5],
+   ["fs160350", "", 1.27, 0.85],
+   ["fs160350", "", 5.01, 0.45],
+   ["fs160350", "", 6.32, 0.4]
+  ]},
+  "door_close": {"cat": "foley", "takes": [
+   ["fs218888", "", 0.86, 1.2],
+   ["fs218889", "", 1.72, 1.3],
+   ["fs218890", "", 1.85, 1.6]
+  ]},
+  "weld": {"cat": "foley", "takes": [
+   ["fs256915", "", 0.5, 2.0],
+   ["fs256915", "", 5.0, 2.0],
+   ["fs62925", "", 0.05, 1.9],
+   ["fs62925", "", 3.15, 1.5],
+   ["fs396240", "", 1.54, 2.0]
+  ]},
+  "event_warn": {"cat": "event", "takes": [
+   ["fs832414", "", 0.0, 1.6],
+   ["fs184357", "", 0.0, 1.8],
+   ["fs67616", "", 0.0, 1.6]
+  ]},
+  "incoming": {"cat": "event", "takes": [
+   ["fs241837", "", 0.0, 1.6],
+   ["fs241838", "", 0.0, 2.1],
+   ["fs241839", "", 0.0, 1.7],
+   ["fs241840", "", 0.0, 1.7]
+  ]},
+  "gas": {"cat": "event", "takes": [
+   ["fs615668", "", 0.0, 3.0],
+   ["fs615667", "", 0.0, 3.0],
+   ["fs160350", "", 2.94, 1.5]
+  ]},
+  "emp": {"cat": "event", "takes": [
+   ["fs403252", "", 0.7, 1.3],
+   ["fs62925", "", 0.05, 1.9]
+  ]},
+  "dust": {"cat": "event", "takes": [
+   ["fs438877", "", 5.0, 4.0],
+   ["fs438877", "", 30.0, 4.0]
+  ]},
+  "radio_in": {"cat": "radio", "takes": [
+   ["fs701314", "", 0.0, 0.22],
+   ["fs701327", "", 0.01, 0.57]
+  ]},
+  "radio_out": {"cat": "radio", "takes": [
+   ["fs701326", "", 0.0, 0.6]
+  ]},
+  "turn": {"cat": "radio", "takes": [
+   ["fs701327", "", 0.01, 0.57]
+  ]},
+  "event_land": {"cat": "radio", "takes": [
+   ["fs701314", "", 0.0, 0.22]
+  ]},
+  "ui_end": {"cat": "radio", "takes": [
+   ["fs701326", "", 0.0, 0.6]
+  ]},
+  "ui_click": {"cat": "ui", "takes": [
+   ["kenney_interface", "click_001.ogg", 0, 0.4],
+   ["kenney_interface", "select_001.ogg", 0, 0.4],
+   ["kenney_interface", "select_002.ogg", 0, 0.4],
+   ["kenney_interface", "select_007.ogg", 0, 0.4],
+   ["kenney_interface", "select_008.ogg", 0, 0.4]
+  ]},
+  "ui_nav": {"cat": "ui", "takes": [
+   ["kenney_interface", "toggle_001.ogg", 0, 0.4],
+   ["kenney_interface", "toggle_002.ogg", 0, 0.4],
+   ["kenney_interface", "toggle_004.ogg", 0, 0.4]
+  ]},
+  "dice_roll": {"cat": "ui", "takes": [
+   ["kenney_casino", "dice-shake-1.ogg", 0, 1.2],
+   ["kenney_casino", "dice-shake-2.ogg", 0, 1.2],
+   ["kenney_casino", "dice-shake-3.ogg", 0, 1.2]
+  ]},
+  "dice_land": {"cat": "ui", "takes": [
+   ["kenney_casino", "dice-throw-1.ogg", 0, 1.0],
+   ["kenney_casino", "dice-throw-2.ogg", 0, 1.0],
+   ["kenney_casino", "dice-throw-3.ogg", 0, 1.0],
+   ["kenney_casino", "die-throw-1.ogg", 0, 1.0],
+   ["kenney_casino", "die-throw-2.ogg", 0, 1.0]
+  ]},
+  "victory": {"cat": "ui", "takes": [
+   ["kenney_interface", "confirmation_001.ogg", 0, 1.5]
+  ]},
+  "defeat": {"cat": "ui", "takes": [
+   ["kenney_interface", "error_006.ogg", 0, 1.5]
+  ]},
+  "draw": {"cat": "ui", "takes": [
+   ["kenney_interface", "question_001.ogg", 0, 1.5]
+  ]},
+  "vehicle_move": {"cat": "engine", "loop": true, "takes": [
+   ["fs187676", "", 0.0, 4.4],
+   ["fs702456", "", 0.03, 4.0],
+   ["fs121531", "", 0.0, 7.5]
+  ]},
+  "drone_move": {"cat": "engine", "loop": true, "takes": [
+   ["fs677833", "", 5.0, 10.0],
+   ["fs854466", "", 0.0, 10.0]
+  ]},
+  "fire_loop": {"cat": "fire", "loop": true, "takes": [
+   ["fs181563", "", 0.0, 30.0]
+  ]},
+  "amb_station": {"cat": "ambience", "loop": true, "takes": [
+   ["fs670070", "", 10.0, 55.0]
+  ]},
+  "amb_bunker": {"cat": "ambience", "loop": true, "takes": [
+   ["fs451924", "", 5.0, 55.0]
+  ]},
+  "amb_asteroid": {"cat": "ambience", "loop": true, "takes": [
+   ["fs817225", "", 0.0, 55.0]
+  ]},
+  "amb_town": {"cat": "ambience", "loop": true, "takes": [
+   ["fs840720", "", 10.0, 55.0]
+  ]},
+  "amb_field": {"cat": "ambience", "loop": true, "takes": [
+   ["fs697217", "", 0.0, 39.0]
+  ]}
+ },
+ "voice": [
+  ["mortar_warn", "Warning. Artillery barrage inbound."],
+  ["mortar_land", "Barrage impact."],
+  ["gas_warn", "Warning. Gas cloud incoming."],
+  ["gas_land", "Gas cloud deployed."],
+  ["army_warn", "Warning. Independent army approaching."],
+  ["army_land", "Independent army has arrived."],
+  ["fire_warn", "Warning. Fire outbreak imminent."],
+  ["fire_land", "Fire outbreak confirmed."],
+  ["emp_warn", "Warning. E M P burst incoming."],
+  ["emp_land", "E M P burst discharged."],
+  ["dust_warn", "Warning. Dust storm approaching."],
+  ["dust_land", "Dust storm has arrived."],
+  ["collapse_warn", "Warning. Structural collapse imminent."],
+  ["collapse_land", "Structural collapse confirmed."],
+  ["reinforce_warn", "Reinforcements incoming."],
+  ["reinforce_land", "Reinforcements have arrived."],
+  ["bounty_warn", "Attention. Bounty target designated."],
+  ["bounty_land", "Bounty protocol active."],
+  ["minefield_warn", "Warning. Old minefield reported."],
+  ["minefield_land", "Old minefield confirmed."],
+  ["turn_A", "Player A. Your move."],
+  ["turn_B", "Player B. Your move."],
+  ["turn_C", "Player C. Your move."],
+  ["turn_D", "Player D. Your move."],
+  ["turn_E", "Player E. Your move."],
+  ["turn_F", "Player F. Your move."],
+  ["turn_G", "Player G. Your move."],
+  ["turn_H", "Player H. Your move."],
+  ["turn_I", "Player I. Your move."],
+  ["turn_J", "Player J. Your move."],
+  ["turn_K", "Player K. Your move."],
+  ["turn_L", "Player L. Your move."],
+  ["turn_M", "Player M. Your move."],
+  ["turn_N", "Player N. Your move."],
+  ["turn_O", "Player O. Your move."],
+  ["turn_P", "Player P. Your move."],
+  ["turn_Q", "Player Q. Your move."],
+  ["turn_R", "Player R. Your move."],
+  ["turn_S", "Player S. Your move."],
+  ["turn_T", "Player T. Your move."],
+  ["turn_U", "Player U. Your move."],
+  ["turn_V", "Player V. Your move."],
+  ["turn_W", "Player W. Your move."],
+  ["turn_X", "Player X. Your move."],
+  ["turn_Y", "Player Y. Your move."],
+  ["turn_Z", "Player Z. Your move."],
+  ["victory", "Victory. Objective complete."],
+  ["defeat", "Defeat. Protocol terminated."],
+  ["draw", "Draw. No victor remains."],
+  ["fallback", "Switching to standard protocol."],
+  ["wave_warn", "Warning. Enemy wave incoming."],
+  ["wave_land", "Enemy wave has arrived."],
+  ["zone_contested", "Zone contested."],
+  ["zone_secured", "Zone secured."],
+  ["join", "Player connected."],
+  ["leave", "Player disconnected."]
+ ]
 }

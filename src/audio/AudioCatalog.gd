@@ -2,42 +2,348 @@
 class_name AudioCatalog
 extends RefCounted
 
-const SFX = [
-  "ui_click",
-  "ui_nav",
-  "ui_end",
-  "dice_roll",
-  "dice_land",
-  "rifle",
-  "burst",
-  "laser",
-  "laser_hit",
-  "flame",
-  "rocket_launch",
-  "shell_launch",
-  "grenade_launch",
-  "bullet_hit",
-  "explosion",
-  "glass",
-  "structure",
-  "corpse",
-  "build",
-  "weld",
-  "mine_lay",
-  "mine_disarm",
-  "vehicle_move",
-  "vehicle_hull",
-  "vehicle_tracks",
-  "vehicle_tower",
-  "vehicle_gun",
-  "event_warn",
-  "event_land",
-  "turn",
-  "victory",
-  "defeat",
-  "draw",
-  "ambience"
-]
+const SFX = {
+  "rifle": {
+    "n": 6,
+    "cat": "gun",
+    "loop": false
+  },
+  "burst": {
+    "n": 4,
+    "cat": "gun",
+    "loop": false
+  },
+  "mg": {
+    "n": 3,
+    "cat": "gun",
+    "loop": false
+  },
+  "sniper": {
+    "n": 5,
+    "cat": "gun",
+    "loop": false
+  },
+  "shotgun": {
+    "n": 5,
+    "cat": "gun",
+    "loop": false
+  },
+  "heavy_mg": {
+    "n": 4,
+    "cat": "gun",
+    "loop": false
+  },
+  "laser": {
+    "n": 3,
+    "cat": "gun",
+    "loop": false
+  },
+  "flame": {
+    "n": 5,
+    "cat": "gun",
+    "loop": false
+  },
+  "explosion": {
+    "n": 6,
+    "cat": "heavy",
+    "loop": false
+  },
+  "vehicle_hull": {
+    "n": 2,
+    "cat": "heavy",
+    "loop": false
+  },
+  "shell_launch": {
+    "n": 5,
+    "cat": "heavy",
+    "loop": false
+  },
+  "rocket_launch": {
+    "n": 3,
+    "cat": "heavy",
+    "loop": false
+  },
+  "mortar_fire": {
+    "n": 6,
+    "cat": "heavy",
+    "loop": false
+  },
+  "hit_flesh": {
+    "n": 5,
+    "cat": "impact",
+    "loop": false
+  },
+  "hit_metal": {
+    "n": 8,
+    "cat": "impact",
+    "loop": false
+  },
+  "hit_stone": {
+    "n": 8,
+    "cat": "impact",
+    "loop": false
+  },
+  "hit_wood": {
+    "n": 5,
+    "cat": "impact",
+    "loop": false
+  },
+  "hit_glass": {
+    "n": 5,
+    "cat": "impact",
+    "loop": false
+  },
+  "hit_dirt": {
+    "n": 5,
+    "cat": "impact",
+    "loop": false
+  },
+  "shield_block": {
+    "n": 5,
+    "cat": "impact",
+    "loop": false
+  },
+  "laser_hit": {
+    "n": 4,
+    "cat": "impact",
+    "loop": false
+  },
+  "glass": {
+    "n": 3,
+    "cat": "debris",
+    "loop": false
+  },
+  "structure": {
+    "n": 3,
+    "cat": "debris",
+    "loop": false
+  },
+  "corpse": {
+    "n": 3,
+    "cat": "debris",
+    "loop": false
+  },
+  "vehicle_tracks": {
+    "n": 2,
+    "cat": "debris",
+    "loop": false
+  },
+  "vehicle_tower": {
+    "n": 3,
+    "cat": "debris",
+    "loop": false
+  },
+  "vehicle_gun": {
+    "n": 3,
+    "cat": "debris",
+    "loop": false
+  },
+  "collapse": {
+    "n": 2,
+    "cat": "debris",
+    "loop": false
+  },
+  "step_concrete": {
+    "n": 5,
+    "cat": "foley",
+    "loop": false
+  },
+  "step_wood": {
+    "n": 5,
+    "cat": "foley",
+    "loop": false
+  },
+  "step_carpet": {
+    "n": 5,
+    "cat": "foley",
+    "loop": false
+  },
+  "step_grass": {
+    "n": 5,
+    "cat": "foley",
+    "loop": false
+  },
+  "step_dirt": {
+    "n": 8,
+    "cat": "foley",
+    "loop": false
+  },
+  "step_metal": {
+    "n": 6,
+    "cat": "foley",
+    "loop": false
+  },
+  "build": {
+    "n": 6,
+    "cat": "foley",
+    "loop": false
+  },
+  "dig": {
+    "n": 4,
+    "cat": "foley",
+    "loop": false
+  },
+  "mine_lay": {
+    "n": 4,
+    "cat": "foley",
+    "loop": false
+  },
+  "mine_disarm": {
+    "n": 3,
+    "cat": "foley",
+    "loop": false
+  },
+  "grab": {
+    "n": 5,
+    "cat": "foley",
+    "loop": false
+  },
+  "grenade_launch": {
+    "n": 3,
+    "cat": "foley",
+    "loop": false
+  },
+  "door_open": {
+    "n": 4,
+    "cat": "foley",
+    "loop": false
+  },
+  "door_close": {
+    "n": 3,
+    "cat": "foley",
+    "loop": false
+  },
+  "weld": {
+    "n": 5,
+    "cat": "foley",
+    "loop": false
+  },
+  "event_warn": {
+    "n": 3,
+    "cat": "event",
+    "loop": false
+  },
+  "incoming": {
+    "n": 4,
+    "cat": "event",
+    "loop": false
+  },
+  "gas": {
+    "n": 3,
+    "cat": "event",
+    "loop": false
+  },
+  "emp": {
+    "n": 2,
+    "cat": "event",
+    "loop": false
+  },
+  "dust": {
+    "n": 2,
+    "cat": "event",
+    "loop": false
+  },
+  "radio_in": {
+    "n": 2,
+    "cat": "radio",
+    "loop": false
+  },
+  "radio_out": {
+    "n": 1,
+    "cat": "radio",
+    "loop": false
+  },
+  "turn": {
+    "n": 1,
+    "cat": "radio",
+    "loop": false
+  },
+  "event_land": {
+    "n": 1,
+    "cat": "radio",
+    "loop": false
+  },
+  "ui_end": {
+    "n": 1,
+    "cat": "radio",
+    "loop": false
+  },
+  "ui_click": {
+    "n": 5,
+    "cat": "ui",
+    "loop": false
+  },
+  "ui_nav": {
+    "n": 3,
+    "cat": "ui",
+    "loop": false
+  },
+  "dice_roll": {
+    "n": 3,
+    "cat": "ui",
+    "loop": false
+  },
+  "dice_land": {
+    "n": 5,
+    "cat": "ui",
+    "loop": false
+  },
+  "victory": {
+    "n": 1,
+    "cat": "ui",
+    "loop": false
+  },
+  "defeat": {
+    "n": 1,
+    "cat": "ui",
+    "loop": false
+  },
+  "draw": {
+    "n": 1,
+    "cat": "ui",
+    "loop": false
+  },
+  "vehicle_move": {
+    "n": 3,
+    "cat": "engine",
+    "loop": true
+  },
+  "drone_move": {
+    "n": 2,
+    "cat": "engine",
+    "loop": true
+  },
+  "fire_loop": {
+    "n": 1,
+    "cat": "fire",
+    "loop": true
+  },
+  "amb_station": {
+    "n": 1,
+    "cat": "ambience",
+    "loop": true
+  },
+  "amb_bunker": {
+    "n": 1,
+    "cat": "ambience",
+    "loop": true
+  },
+  "amb_asteroid": {
+    "n": 1,
+    "cat": "ambience",
+    "loop": true
+  },
+  "amb_town": {
+    "n": 1,
+    "cat": "ambience",
+    "loop": true
+  },
+  "amb_field": {
+    "n": 1,
+    "cat": "ambience",
+    "loop": true
+  }
+}
 
 const VOICE = {
   "mortar_warn": "Warning. Artillery barrage inbound.",

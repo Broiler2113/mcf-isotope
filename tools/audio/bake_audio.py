@@ -1,108 +1,65 @@
 #!/usr/bin/env python3
-"""Bake deterministic SFX and the finite SAM catalog; --check needs no synthesizer.
+"""Bake the game's sound effects and SAM lines from audio/catalog.json.
 
-SAM is an offline build tool only. Pass --sam /path/to/sam or --fetch-sam to build
-the pinned upstream C port in .cache/audio. Generated WAVs ship with the game.
+SFX are cut from pinned CC0 recordings ("sources") and pass one mastering chain, so
+every sound shares a format and a character: mono 44.1 kHz, 30 Hz-16 kHz, trimmed to
+the event with the same fades, levelled per category and peak-limited to -2 dBFS,
+written as Ogg Vorbis. Loops get a crossfaded seam. SAM is an offline build tool.
+
+The SFX bake needs the offline tool venv (never the game):
+  uv venv .cache/audio/venv
+  VIRTUAL_ENV=.cache/audio/venv uv pip install numpy scipy soundfile py7zr
+  .cache/audio/venv/bin/python tools/audio/bake_audio.py --sfx-only
+--check uses only the standard library.
 """
 import argparse
 from array import array
 import hashlib
 import json
-import math
 from pathlib import Path
-import random
 import re
 import subprocess
 import sys
+import urllib.request
 import wave
 
 ROOT = Path(__file__).resolve().parents[2]
 AUDIO = ROOT / "audio"
+CACHE = ROOT / ".cache/audio/raw"
 SAM_REVISION = "a7b36efac730957b59471a42a45fd779f94d77dd"
-RATE = 22050
+VOICE_RATE = 22050
+RATE = 44100
+# Category: (target level dB, fade-out s). One-shots are levelled by their loudest
+# 50 ms, loops by their mean, so a category plays at one loudness whatever the source.
+CATEGORY = {
+    "gun": (-8.0, 0.25), "heavy": (-6.0, 0.6), "impact": (-14.0, 0.08), "debris": (-12.0, 0.4),
+    "foley": (-18.0, 0.08), "event": (-14.0, 0.3), "radio": (-18.0, 0.05), "ui": (-18.0, 0.05),
+    "engine": (-18.0, 0.0), "fire": (-24.0, 0.0), "ambience": (-30.0, 0.0),
+}
 
 
-def samples(kind, length, seed):
-    rng = random.Random(seed)
-    low = 0.0
-    data = []
-    for i in range(int(RATE * length)):
-        t = i / RATE
-        n = rng.uniform(-1, 1)
-        low += .065 * (n - low)
-        end = min(1., (length - t) * 90)
-        attack = min(1., t * 600)
-        if kind == "boom":
-            v = (low * 3.4 + n * .17 + math.sin(2 * math.pi * (65*t - 17*t*t)) * .35) * math.exp(-t * 6)
-        elif kind == "blast":
-            # Shock crack, falling low-frequency pressure pulse, then rolling debris.
-            crack = n * .95 * math.exp(-t * 95)
-            body = math.sin(2*math.pi*(82*t - 26*t*t)) * .65 * math.exp(-t*5.5)
-            roll = low * 3.8 * math.exp(-t*3.6) + n*.22*math.exp(-t*12)
-            v = math.tanh((crack + body + roll)*1.3)*.82
-        elif kind == "masonry":
-            crack = n*.9*math.exp(-t*65)
-            thud = math.sin(2*math.pi*(125*t-48*t*t))*.55*math.exp(-t*11)
-            rubble = (n*.38 + low*2.1)*math.exp(-t*5)
-            # Irregular hard fragments instead of a continuous sand-like hiss.
-            for delay in (.037, .091, .164, .247, .36):
-                if t >= delay:
-                    rubble += (n*.32 + math.sin(2*math.pi*617*(t-delay))*.17)*math.exp(-(t-delay)*65)
-            v = math.tanh((crack + thud + rubble)*1.25)*.8
-        elif kind in ("shot", "burst"):
-            phase = t if kind == "shot" else t % .075
-            # A sharp broadband muzzle crack, low pressure thump and dry echoes.
-            crack = (n - low) * 1.65 * math.exp(-phase * 210)
-            thump = (low * 3.2 + math.sin(2 * math.pi * (115 * phase - 240 * phase**2)) * .5) * math.exp(-phase * 48)
-            tail = n * .25 * math.exp(-phase * 24)
-            echo = 0.0 if phase < .021 else n * .22 * math.exp(-(phase - .021) * 90)
-            v = math.tanh((crack + thump + tail + echo) * 1.6) * .82
-            attack = min(1., phase * 9000)
-            if kind == "burst":
-                v *= 1 - .12 * int(t / .075)
-        elif kind == "laser":
-            v = (math.sin(2*math.pi*(1900*t - 1200*t*t))*.6 + n*.08)*math.exp(-t*12)
-        elif kind == "whistle":
-            v = (n*.3 + math.sin(2*math.pi*(450*t + 1800*t*t))*.28)*math.exp(-t*4)
-        elif kind == "glass":
-            v = (n*.3 + sum(math.sin(2*math.pi*hz*t)*math.exp(-t*decay) for hz,decay in ((2711,16),(3917,24),(5231,30)))*.16)*math.exp(-t*5)
-        elif kind == "engine":
-            v = (.3*math.sin(2*math.pi*72*t) + .16*math.sin(2*math.pi*149*t) + low*.9 + n*.08)*(1+.2*math.sin(2*math.pi*14*t))
-        elif kind == "hiss":
-            v = (n*.18 + low*.7) * math.sin(math.pi*min(1,t/length))
-        elif kind == "metal":
-            v = (sum(math.sin(2*math.pi*hz*t)*math.exp(-t*decay) for hz,decay in ((311,12),(557,17),(911,23)))*.2 + n*.25*math.exp(-t*35))
-        elif kind == "dice":
-            phase = t % .055
-            v = (n*.4 + math.sin(2*math.pi*820*t)*.2)*math.exp(-phase*170)*math.exp(-t*6)
-        elif kind == "victory":
-            # A brief synthesized UI sting, no music bed.
-            hz = (523.25,659.25,783.99)[min(2,int(t*6))]
-            v = (math.sin(2*math.pi*hz*t)*.25 + math.sin(4*math.pi*hz*t)*.08)*math.exp(-(t%.1667)*8)
-        elif kind == "ambient":
-            # A fixed quiet texture, independent of hidden units/actions/positions.
-            v = low*.25 + n*.015 + math.sin(2*math.pi*57*t)*.025
-        else:
-            v = math.sin(2*math.pi*(700*t+700*t*t))*.28*math.exp(-t*30)+n*.04*math.exp(-t*60)
-        data.append(max(-.85, min(.85, v * attack * end)))
-    return data
-
-
-def write_wav(path, values):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    pcm = array("h", (int(max(-1,min(1,v))*32767) for v in values))
-    if sys.byteorder != "little":
-        pcm.byteswap()
-    with wave.open(str(path), "wb") as out:
-        out.setparams((1, 2, RATE, 0, "NONE", "not compressed"))
-        out.writeframes(pcm.tobytes())
+def sfx_files(name, spec):
+    return ["%s_%d.ogg" % (name, i + 1) for i in range(len(spec["takes"]))]
 
 
 def catalog_script(catalog):
+    sfx = {name: {"n": len(spec["takes"]), "cat": spec["cat"], "loop": bool(spec.get("loop", False))}
+           for name, spec in catalog["sfx"].items()}
     return ('# Generated by tools/audio/bake_audio.py from audio/catalog.json.\n'
             'class_name AudioCatalog\nextends RefCounted\n\n'
-            'const SFX = ' + json.dumps(list(catalog["sfx"]), indent=2) + '\n\n'
+            'const SFX = ' + json.dumps(sfx, indent=2) + '\n\n'
             'const VOICE = ' + json.dumps(dict(catalog["voice"]), indent=2) + '\n')
+
+
+def credits(catalog):
+    lines = ["# Sound credits", "",
+             "Generated by `tools/audio/bake_audio.py`. Every sound effect is cut from these",
+             "recordings, all released under CC0 (public domain). Credit is given as thanks.", ""]
+    for key, src in sorted(catalog["sources"].items()):
+        title = src.get("title", "")
+        lines.append("- %s%s by %s — %s (%s)" % (
+            '"%s" ' % title if title else "", key, src["author"], src["page"], src["license"]))
+    return "\n".join(lines) + "\n"
 
 
 def check(catalog):
@@ -117,24 +74,152 @@ def check(catalog):
                  "zone_contested", "zone_secured", "join", "leave"}
     if required - dict(catalog["voice"]).keys():
         raise RuntimeError("missing required SAM lines: " + str(sorted(required - dict(catalog["voice"]).keys())))
+    for name, spec in catalog["sfx"].items():
+        if spec["cat"] not in CATEGORY:
+            raise RuntimeError("unknown category for %s: %s" % (name, spec["cat"]))
+        for take in spec["takes"]:
+            if take[0] not in catalog["sources"]:
+                raise RuntimeError("unknown source for %s: %s" % (name, take[0]))
     manifest = json.loads((AUDIO / "manifest.json").read_text(encoding="utf-8"))
     if manifest["catalog_sha256"] != hashlib.sha256((AUDIO / "catalog.json").read_bytes()).hexdigest():
         raise RuntimeError("audio catalog changed; rerun the offline bake")
     if (ROOT / "src/audio/AudioCatalog.gd").read_text(encoding="utf-8") != catalog_script(catalog):
         raise RuntimeError("generated audio catalog is stale")
-    for group, entries in (("sfx", catalog["sfx"]), ("voice", dict(catalog["voice"]))):
-        for name in entries:
-            path = AUDIO / group / (name + ".wav")
-            if not path.is_file():
-                raise RuntimeError("missing audio asset: " + f"{group}/{name}.wav")
-            if hashlib.sha256(path.read_bytes()).hexdigest() != manifest["files"][f"{group}/{name}.wav"]:
-                raise RuntimeError("audio asset changed without updating the manifest: " + str(path))
-            with wave.open(str(path)) as source:
-                if source.getnframes() < 100 or source.getnchannels() != 1 or source.getframerate() != RATE or source.getsampwidth() != 2:
-                    raise RuntimeError("invalid or empty WAV: " + str(path))
-                if not any(source.readframes(source.getnframes())):
-                    raise RuntimeError("silent WAV: " + str(path))
-    print(f"audio catalog: {len(catalog['sfx'])} SFX and {len(catalog['voice'])} SAM lines verified")
+    if (AUDIO / "CREDITS.md").read_text(encoding="utf-8") != credits(catalog):
+        raise RuntimeError("audio credits are stale")
+    expected = {"sfx/" + f for name, spec in catalog["sfx"].items() for f in sfx_files(name, spec)}
+    expected |= {"voice/%s.wav" % name for name, _text in catalog["voice"]}
+    for rel in sorted(expected):
+        path = AUDIO / rel
+        if not path.is_file():
+            raise RuntimeError("missing audio asset: " + rel)
+        data = path.read_bytes()
+        if hashlib.sha256(data).hexdigest() != manifest["files"].get(rel):
+            raise RuntimeError("audio asset changed without updating the manifest: " + str(path))
+        if rel.endswith(".ogg"):
+            if not data.startswith(b"OggS") or b"vorbis" not in data[:200] or len(data) < 1000:
+                raise RuntimeError("invalid Ogg Vorbis: " + str(path))
+            continue
+        with wave.open(str(path)) as source:
+            if source.getnframes() < 100 or source.getnchannels() != 1 or source.getframerate() != VOICE_RATE or source.getsampwidth() != 2:
+                raise RuntimeError("invalid or empty WAV: " + str(path))
+            if not any(source.readframes(source.getnframes())):
+                raise RuntimeError("silent WAV: " + str(path))
+    stale = {p.relative_to(AUDIO).as_posix() for group in ("sfx", "voice")
+             for p in (AUDIO / group).glob("*") if p.suffix in (".ogg", ".wav")} - expected
+    if stale:
+        raise RuntimeError("audio assets not in the catalog: " + str(sorted(stale)))
+    print(f"audio catalog: {len(catalog['sfx'])} SFX ({len(expected) - len(catalog['voice'])} takes) "
+          f"and {len(catalog['voice'])} SAM lines verified")
+
+
+# ---------------------------------------------------------------- offline SFX bake
+
+def fetch(key, src):
+    """Download a source once into .cache (sha256-pinned) and unpack archives."""
+    folder = CACHE / "src" / key
+    target = folder / Path(urllib.request.url2pathname(src["url"].rsplit("/", 1)[1])).name
+    if not target.exists():
+        folder.mkdir(parents=True, exist_ok=True)
+        req = urllib.request.Request(src["url"], headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=600) as response:
+            target.write_bytes(response.read())
+    digest = hashlib.sha256(target.read_bytes()).hexdigest()
+    if digest != src["sha256"]:
+        raise RuntimeError("source %s does not match its pinned sha256 (%s)" % (key, digest))
+    if target.suffix not in (".zip", ".7z"):
+        return target
+    unpacked = folder / "x"
+    if not unpacked.exists():
+        if target.suffix == ".zip":
+            import zipfile
+            zipfile.ZipFile(target).extractall(unpacked)
+        else:
+            import py7zr
+            py7zr.SevenZipFile(target).extractall(unpacked)
+    return unpacked / src.get("root", "")
+
+
+def master(np, signal, sf, path, start, length, category, loop):
+    cache = master.__dict__.setdefault("loaded", {})
+    if path not in cache:
+        data, rate = sf.read(str(path), always_2d=True, dtype="float64")
+        cache[path] = (data.mean(axis=1), rate)
+    raw, rate = cache[path]
+    fade_s = CATEGORY[category][1]
+    crossfade = min(1.5, length * 0.2) if loop else 0.0
+    a = int(start * rate)
+    x = raw[a:a + int((length + crossfade) * rate)].copy()
+    if len(x) < rate * 0.02 or (loop and len(x) < int((length + crossfade) * rate)):
+        raise RuntimeError("take runs past its recording: %s @ %.2f" % (path, start))
+    if rate != RATE:
+        from math import gcd
+        g = gcd(RATE, rate)
+        x = signal.resample_poly(x, RATE // g, rate // g)
+    x = signal.sosfilt(signal.butter(2, 30, "highpass", fs=RATE, output="sos"), x)
+    x = signal.sosfilt(signal.butter(6, 16000, "lowpass", fs=RATE, output="sos"), x)
+    if loop:
+        n, xf = int(length * RATE), int(crossfade * RATE)
+        t = np.linspace(0, np.pi / 2, xf)
+        y = x[:n].copy()
+        y[:xf] = x[:xf] * np.sin(t) + x[n:n + xf] * np.cos(t)
+        level = 20 * np.log10(np.sqrt(np.mean(y ** 2)) + 1e-12)
+    else:
+        hop = int(RATE * 0.01)
+        frames = len(x) // hop
+        env = 20 * np.log10(np.sqrt((x[:frames * hop].reshape(frames, hop) ** 2).mean(axis=1)) + 1e-12)
+        top = env.max()
+        onset = max(0, int(np.argmax(env > top - 30)) * hop - int(RATE * 0.004))
+        tail = (np.nonzero(env > top - 50)[0][-1] + 2) * hop
+        y = x[onset:min(len(x), tail)].copy()
+        fade_in = int(RATE * 0.002)
+        y[:fade_in] *= np.linspace(0, 1, fade_in)
+        fade = min(int(fade_s * RATE), int(len(y) * 0.3))
+        if fade > 0:
+            y[-fade:] *= 0.5 * (1 + np.cos(np.linspace(0, np.pi, fade)))
+        win = int(RATE * 0.05)
+        power = np.convolve(y ** 2, np.ones(win) / win, mode="valid") if len(y) > win else np.array([np.mean(y ** 2)])
+        level = 10 * np.log10(power.max() + 1e-12)
+    y *= 10 ** ((CATEGORY[category][0] - level) / 20)
+    knee = 0.7  # soft limiter: transients above -3 dBFS saturate instead of clipping
+    over = np.abs(y) > knee
+    y[over] = np.sign(y[over]) * (knee + (1 - knee) * np.tanh((np.abs(y[over]) - knee) / (1 - knee)))
+    peak = np.abs(y).max()
+    if peak > 10 ** (-2 / 20):  # -2 dBFS leaves room for Vorbis overshoot
+        y *= 10 ** (-2 / 20) / peak
+    return y
+
+
+def bake_sfx(catalog):
+    import numpy as np
+    from scipy import signal
+    import soundfile as sf
+    roots = {key: fetch(key, src) for key, src in catalog["sources"].items()}
+    out = AUDIO / "sfx"
+    out.mkdir(parents=True, exist_ok=True)
+    for old in out.glob("*"):
+        if old.suffix in (".wav", ".ogg") or old.name.endswith((".wav.import", ".ogg.import")):
+            old.unlink()
+    for name, spec in catalog["sfx"].items():
+        for take, file in zip(spec["takes"], sfx_files(name, spec)):
+            key, inner, start, length = take
+            path = roots[key] / inner if inner else roots[key]
+            y = master(np, signal, sf, path, start, length, spec["cat"], spec.get("loop", False))
+            # libsndfile's Vorbis encoder crashes on large single writes; feed it blocks.
+            with sf.SoundFile(str(out / file), "w", RATE, 1, format="OGG", subtype="VORBIS") as dst:
+                for i in range(0, len(y), 16384):
+                    dst.write(y[i:i + 16384].astype(np.float32))
+    master.__dict__.pop("loaded", None)
+
+
+def write_wav(path, values):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pcm = array("h", (int(max(-1, min(1, v)) * 32767) for v in values))
+    if sys.byteorder != "little":
+        pcm.byteswap()
+    with wave.open(str(path), "wb") as out:
+        out.setparams((1, 2, VOICE_RATE, 0, "NONE", "not compressed"))
+        out.writeframes(pcm.tobytes())
 
 
 def main():
@@ -157,14 +242,13 @@ def main():
         subprocess.run(["git", "-C", str(checkout), "checkout", "--detach", SAM_REVISION], check=True)
         sam = checkout / "sam"
         sources = [checkout / "src" / (name + ".c") for name in ("reciter", "sam", "render", "main", "debug")]
-        subprocess.run(["cc", "-O2", "-fcommon", "-o", str(sam), *map(str,sources)], check=True)
+        subprocess.run(["cc", "-O2", "-fcommon", "-o", str(sam), *map(str, sources)], check=True)
     if sam is None and not a.sfx_only:
         p.error("pass --sam or --fetch-sam to bake voice lines")
     previous = {}
     if (AUDIO / "manifest.json").exists():
         previous = json.loads((AUDIO / "manifest.json").read_text(encoding="utf-8")).get("voice_inputs", {})
-    for name, spec in catalog["sfx"].items():
-        write_wav(AUDIO / "sfx" / (name + ".wav"), samples(spec[0], spec[1], name))
+    bake_sfx(catalog)
     voice_inputs = {}
     for name, text in catalog["voice"]:
         path = AUDIO / "voice" / (name + ".wav")
@@ -180,19 +264,20 @@ def main():
         with wave.open(str(path)) as source:
             data = source.readframes(source.getnframes())
         # SAM's unsigned 8-bit output -> 16-bit PCM with small edge fades and headroom.
-        values = [(v - 128)/128*.72 for v in data]
-        for i in range(min(150,len(values))):
-            values[i] *= i/150
-            values[-1-i] *= i/150
+        values = [(v - 128) / 128 * .72 for v in data]
+        for i in range(min(150, len(values))):
+            values[i] *= i / 150
+            values[-1 - i] *= i / 150
         write_wav(path, values)
     target = ROOT / "src/audio/AudioCatalog.gd"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(catalog_script(catalog), encoding="utf-8", newline="\n")
-    files = {path.relative_to(AUDIO).as_posix():hashlib.sha256(path.read_bytes()).hexdigest()
-             for group in ("sfx", "voice") for path in sorted((AUDIO/group).glob("*.wav"))}
+    (AUDIO / "CREDITS.md").write_text(credits(catalog), encoding="utf-8", newline="\n")
+    files = {path.relative_to(AUDIO).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+             for group, pattern in (("sfx", "*.ogg"), ("voice", "*.wav")) for path in sorted((AUDIO / group).glob(pattern))}
     (AUDIO / "manifest.json").write_text(json.dumps(dict(
         catalog_sha256=hashlib.sha256((AUDIO / "catalog.json").read_bytes()).hexdigest(),
-        sam_revision=SAM_REVISION, voice_inputs=voice_inputs, files=files), indent=2)+"\n", encoding="utf-8", newline="\n")
+        sam_revision=SAM_REVISION, voice_inputs=voice_inputs, files=files), indent=2) + "\n", encoding="utf-8", newline="\n")
     check(catalog)
 
 

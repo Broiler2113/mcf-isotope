@@ -4,6 +4,10 @@ extends RefCounted
 signal sound_requested(id: String, cell: Vector2i, owner: int)
 signal sound_reset
 var audio_suppressed := false
+## Muzzle sound by the lane's weapon (shooter unit type, or the mounted gun); anything
+## else fires the service rifle, single or burst.
+const WEAPON_SOUND := {"sniper": "sniper", "assault": "shotgun", "machinegunner": "mg",
+	"dpmg": "heavy_mg", "borg": "heavy_mg"}
 
 func _sound(id: String, cell: Vector2i, owner := -1) -> void:
 	if not audio_suppressed:
@@ -396,7 +400,8 @@ func _lane(ev: Dictionary, burst := false) -> void:
 	if from_arr.size() < 2 or to_arr.size() < 2:
 		return
 	var kind := str(ev.get("kind", "shot"))
-	var sound := {"shot": "burst" if burst else "rifle", "beam": "laser", "flame": "flame"}
+	var gun: String = WEAPON_SOUND.get(str(ev.get("weapon", "")), "burst" if burst else "rifle")
+	var sound := {"shot": gun, "beam": "laser", "flame": "flame"}
 	if sound.has(kind):
 		_sound(sound[kind], Vector2i(int(from_arr[0]), int(from_arr[1])), int(ev.get("owner", -1)))
 	lanes.append({

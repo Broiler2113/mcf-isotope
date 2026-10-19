@@ -919,7 +919,7 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 
 	# Гильза на каждый ушедший выстрел (#21.3), вылетают за спину стрелка.
 	if fired > 0:
-		_fx_lane(result, shooter.coord, target.coord, shooter.owner)  # issue 8
+		_fx_lane(result, shooter.coord, target.coord, shooter.owner, "shot", _weapon_of(shooter))  # issue 8
 		_fx(result, {"fx": "casings", "at": shooter.coord,
 			"toward": target.coord, "count": fired})
 		# Пуля летит от стрелка к цели (item 16) — по трассеру на выстрел.
@@ -2318,10 +2318,17 @@ func _fx_bullets(res: ActionResult, from: Vector2i, to: Vector2i, count: int) ->
 ## shooting at who»). Кладётся КАЖДОЙ атакой — пулей, лучом, струёй, зарядом, пушкой,
 ## ДПМГ, — чтобы в чужой ход было видно не только «где-то стреляли», но и кто по кому.
 ## Как и всё в fx, на правила не влияет: слой рисует её у себя и через LANE_DUR забывает.
+## weapon — what fired, for the muzzle sound only (FxDecals.WEAPON_SOUND); never read by rules.
 func _fx_lane(res: ActionResult, from_coord: Vector2i, to_coord: Vector2i,
-		owner: int, kind: String = "shot") -> void:
-	_fx(res, {"fx": "lane", "from": [from_coord.x, from_coord.y],
-		"to": [to_coord.x, to_coord.y], "owner": owner, "kind": kind})
+		owner: int, kind: String = "shot", weapon: String = "") -> void:
+	var ev := {"fx": "lane", "from": [from_coord.x, from_coord.y],
+		"to": [to_coord.x, to_coord.y], "owner": owner, "kind": kind}
+	if weapon != "":
+		ev["weapon"] = weapon
+	_fx(res, ev)
+
+static func _weapon_of(shooter: UnitInstance) -> String:
+	return "borg" if shooter.borg_id != -1 else shooter.stats.id
 
 ## Единственная точка смерти в резолвере (#8). Всё, что боец нёс в руках, обязано
 ## оказаться на доске: погибший с телом на руках оставляет на своей клетке ДВА трупа —
@@ -6365,7 +6372,7 @@ func _resolve_dpmg(intent: DPMGFireIntent) -> ActionResult:
 		"need": need, "armor": parry_need, "shots": shot_details, "killed": killed,
 		"def_owner": target.owner, "shooter_owner": state.active_player(),  # item 13
 	})
-	_fx_lane(result, intent.dpmg_coord, target.coord, actor.owner)  # issue 8
+	_fx_lane(result, intent.dpmg_coord, target.coord, actor.owner, "shot", "dpmg")  # issue 8
 	_fx_bullets(result, intent.dpmg_coord, target.coord, fired)
 	result.log("DPMG (%s) → %s: %d shots, %d hits (need %d+)" % [
 		actor.stats.display_name, target.stats.display_name, fired, hits, need])
@@ -8110,7 +8117,7 @@ func _resolve_shoot_window(shooter: UnitInstance, cell: Vector2i, shots: int = -
 	shooter.action_state.remaining_shots -= want
 	if shooter.action_state.remaining_shots <= 0:
 		shooter.action_state = null
-	_fx_lane(result, shooter.coord, cell, shooter.owner)
+	_fx_lane(result, shooter.coord, cell, shooter.owner, "shot", _weapon_of(shooter))
 	_fx(result, {"fx": "casings", "at": shooter.coord, "toward": cell, "count": want})
 	_fx(result, {"fx": "tracer", "at": shooter.coord, "from": [shooter.coord.x, shooter.coord.y],
 		"to": [cell.x, cell.y], "count": want})
@@ -10155,7 +10162,7 @@ func _resolve_shoot_fixture(shooter: UnitInstance, c: Vector2i, side: int, shots
 		label, c.x, c.y, damage, " — light destroyed" if fixture_at(c, side) == "" else ""])
 	shooter.action_state.remaining_shots -= want
 	if shooter.action_state.remaining_shots <= 0: shooter.action_state = null
-	_fx_lane(result, shooter.coord, c, shooter.owner)
+	_fx_lane(result, shooter.coord, c, shooter.owner, "shot", _weapon_of(shooter))
 	_fx(result, {"fx": "casings", "at": shooter.coord, "toward": c, "count": want})
 	_fx(result, {"fx": "tracer", "at": shooter.coord, "from": [shooter.coord.x, shooter.coord.y],
 		"to": [c.x, c.y], "count": want})

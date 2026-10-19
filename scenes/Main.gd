@@ -621,6 +621,7 @@ func _ready() -> void:
 	_audio.cell_visible = _audio_cell_visible
 	_audio.own_cell = _audio_own_cell
 	_audio.viewer = _viewing_side
+	_audio.world = func() -> GameState: return state
 	add_child(_audio)
 	_fx.sound_requested.connect(_audio.cue)
 	_fx.sound_reset.connect(_audio.reset)
@@ -4414,6 +4415,8 @@ func _play_walk(ev: Dictionary) -> void:
 	var step_ms := base / _pace() * 1000.0
 	var prev: Vector2i = ev["from"]
 	_walk_cells[id] = prev
+	var buzz: AudioStreamPlayer2D = null   # a drone's rotors follow it like an engine
+	var buzz_generation := -1
 	for cell: Vector2i in ev["path"]:
 		if replay != null and _replay_skip_animations:
 			break
@@ -4424,6 +4427,7 @@ func _play_walk(ev: Dictionary) -> void:
 				break
 			if _walk_jobs.get(id, -1) != serial:
 				_walks_running = maxi(0, _walks_running - 1)   # a newer walk took this unit over
+				if _audio != null: _audio.stop_player(buzz, buzz_generation)
 				return
 			var k := minf(1.0, float(Time.get_ticks_msec() - t0) / maxf(1.0, step_ms))
 			_walk_offset[id] = delta * k
@@ -4431,9 +4435,15 @@ func _play_walk(ev: Dictionary) -> void:
 			if k >= 1.0:
 				break
 			await get_tree().process_frame
+		if _audio != null and u != null:
+			_audio.step(u, prev, cell)
+			if u.is_drone:
+				buzz = _audio.vehicle_at(buzz, buzz_generation, cell, u.owner, "drone_move")
+				if buzz != null: buzz_generation = int(buzz.get_meta("audio_generation", 0))
 		prev = cell
 		_walk_cells[id] = cell
 		_walk_offset.erase(id)
+	if _audio != null: _audio.stop_player(buzz, buzz_generation)
 	if _walk_jobs.get(id, -1) != serial:
 		_walks_running = maxi(0, _walks_running - 1)
 		return
