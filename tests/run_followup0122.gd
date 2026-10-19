@@ -143,12 +143,12 @@ func _shot_timing() -> void:
 			else: main._show_net_action(intent, res)
 		await process_frame
 		ck(main._dice._roll_btn.visible, path + " waits for the attack roll")
-		ck(main._fx.lanes.is_empty() and main._fx.tracers.is_empty() and main._fx.shots.is_empty(), path + " emits no flash or bullets before attack dice")
+		ck(_only_held_lane_to(main._fx, target.coord) and main._fx.tracers.is_empty() and main._fx.shots.is_empty(), path + " shows only a held lane to the target (no flash, no bullets) before attack dice")
 		main._dice._roll_btn.pressed.emit()
 		await main._dice.finished
 		await process_frame
 		ck(main._dice._roll_btn.visible, path + " waits for the defense roll")
-		ck(main._fx.lanes.is_empty() and main._fx.tracers.is_empty(), path + " emits no flash or bullets before defense dice")
+		ck(_only_held_lane_to(main._fx, target.coord) and main._fx.tracers.is_empty(), path + " shows only a held lane to the target (no flash, no bullets) before defense dice")
 		main._dice._roll_btn.pressed.emit()
 		var seen := false
 		var deadline := Time.get_ticks_msec() + 10000
@@ -163,3 +163,9 @@ func _shot_timing() -> void:
 		ck(not main._animating, path + " presentation finishes")
 	main.free()
 	await process_frame
+
+## Issues-fix-6 #1: who fires at whom shows before the dice — a held lane (no muzzle light)
+## ending at the aimed target, never at where the bullets will land.
+func _only_held_lane_to(fx: FxDecals, at: Vector2i) -> bool:
+	return fx.lanes.size() == 1 and fx.lanes[0].get("hold", false) \
+			and fx.lanes[0]["to"] == Vector2(at) + Vector2(0.5, 0.5)

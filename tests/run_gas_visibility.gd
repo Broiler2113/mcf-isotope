@@ -102,11 +102,21 @@ func _weapons() -> void:
 		ck(r.can_shoot(shooter, target) == "", profession + " can initially aim")
 		r.random_events.add_cloud(4, 5, 1, 1, 3)
 		r._sync_gas()
-		ck(r.can_shoot(shooter, target) == "Gas blocks line of sight", profession + " cannot bypass gas with fog disabled")
+		# Issues-fix-6: gas hides the target from a lone shooter, even with fog disabled…
+		ck(r.can_shoot(shooter, target) == "Target not visible", profession + " cannot pick a target hidden by gas")
+		# …but once a teammate spots it, fire goes through the cloud at a penalty.
+		state.spawn_unit(load("res://src/data/units/light_infantry.tres"), Vector2i(6, 9), 0)
+		r.team_visible_coords(0)
+		ck(r.can_shoot(shooter, target) == "", profession + " fires through gas at a spotted target")
+		if profession == "light_infantry":
+			var mods: Array = []
+			var need := r.hit_need_for(shooter, target, mods)
+			ck(str(mods).contains("Gas") or str(mods).contains("Smoke"), "the gas penalty is named in the roll (%s)" % [mods])
+			ck(need == r.hit_need(4, shooter.fire_range()) + GameActionResolver.SMOKE_HIT_PENALTY, "the shot through gas needs +2")
 		if profession == "marksman":
-			ck(r.can_laser_cell(shooter, target.coord) == "Gas blocks line of sight", "laser cell aim respects gas")
+			ck(r.can_laser_cell(shooter, target.coord) == "", "laser cell aim passes gas")
 		if profession == "flamethrower":
-			ck(r.can_flame_cell(shooter, target.coord) == "Gas blocks line of sight", "flame cell aim respects gas")
+			ck(r.can_flame_cell(shooter, target.coord) == "", "flame cell aim passes gas")
 
 func _atlas() -> void:
 	var tex := GasTiles.texture()

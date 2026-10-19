@@ -164,7 +164,9 @@ func _ready() -> void:
 	# всё, что накопилось в буфере, а обработчик трогает метки панели.
 	if _net != null:
 		_net.attach()
-		_net.send({"k": K_LIVE_REQ})
+		# attach() can hand the session on at once (a late spectator's buffered start).
+		if _net != null:
+			_net.send({"k": K_LIVE_REQ})
 
 func networked() -> bool:
 	return _net != null

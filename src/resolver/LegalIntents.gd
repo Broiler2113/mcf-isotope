@@ -247,7 +247,7 @@ static func _items(r: GameActionResolver, u: UnitInstance, out: Array, seated: b
 			for dy in range(-rg, rg + 1):
 				for dx in range(-rg, rg + 1):
 					var c := Vector2i(u.coord.x + dx, u.coord.y + dy)
-					if state.grid.in_bounds(c):
+					if state.grid.in_bounds(c) and not r.throw_blocked(u.coord, c):
 						out.append(UseItemIntent.new(u.id, c))
 		MCF.ITEM_DRONE_STATION:
 			if r.deployed_station_of(u) == Vector2i(-1, -1):

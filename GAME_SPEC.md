@@ -1657,7 +1657,7 @@ until the end of the next round). Smoke is harmless and blocks sight exactly lik
 (issues-fix-6): the hit die needs `SMOKE_HIT_PENALTY` = 2 more (`smoke_penalty`, labelled in
 the roll's modifiers), a Sniper gets no auto-hit through a cloud, and a laser pays
 `LASER_COST_OBSCURED` = 1 potential per clouded cell. The target must still be visible to
-the team. The grenade itself, like a frag, is never thrown past a wall (`_throw_blocked`).
+the team. The grenade itself, like a frag, is never thrown past a wall (`throw_blocked`).
 
 ### Blasts in general (`_blast`)
 

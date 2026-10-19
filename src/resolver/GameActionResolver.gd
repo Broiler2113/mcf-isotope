@@ -612,6 +612,8 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 		else:
 			unit.dragging = UnitInstance.NOT_DRAGGING
 			lines.append("  ↳ dropped the object at (%d, %d)" % [dragged.x, dragged.y])
+	else:
+		unit.dragging = UnitInstance.NOT_DRAGGING   # the object was lost or left behind
 
 	var moved_res := gas_res
 	moved_res.log_lines.append_array(lines)
@@ -697,13 +699,15 @@ func _gas_on_arrival(unit: UnitInstance, res: ActionResult) -> void:
 		_gas_survival(unit, res)
 
 ## Клетка волочимого объекта, если юнит и правда его тащит и объект ещё рядом (#34).
+## A pure query: peers ask it at different moments (move previews, legal-move masks), so
+## ending a lapsed drag here forked lockstep state. The next move or action ends it.
 func dragged_cell_of(unit: UnitInstance) -> Vector2i:
 	if unit == null or unit.dragging == UnitInstance.NOT_DRAGGING:
 		return UnitInstance.NOT_DRAGGING
 	if not state.grid.in_bounds(unit.dragging) \
 			or Combat.distance(unit.coord, unit.dragging) > 1 \
 			or not grabbable_cell(unit.dragging):
-		unit.dragging = UnitInstance.NOT_DRAGGING
+		return UnitInstance.NOT_DRAGGING
 	return unit.dragging
 
 ## Переставить лёгкий объект (с его высотой/кучей) на свободную клетку. false — некуда.
@@ -6526,7 +6530,7 @@ func _resolve_use_item(intent: UseItemIntent) -> ActionResult:
 	if (item_id == MCF.ITEM_FRAG or item_id == MCF.ITEM_SMOKE) \
 			and actor.coord.x != intent.target.x and actor.coord.y != intent.target.y:
 		return ActionResult.fail("Grenades can only be thrown in straight lines")
-	if _throw_blocked(actor.coord, intent.target):
+	if throw_blocked(actor.coord, intent.target):
 		return ActionResult.fail("A wall is in the way")
 	actor.remaining_ap -= 1
 	actor.held_item_id = ""  # предмет расходуется в любом исходе
@@ -6833,14 +6837,14 @@ func grenade_target_cells(actor: UnitInstance) -> Array:
 				continue
 			if Combat.distance(actor.coord, c) > MCF.GRENADE_RANGE:
 				continue
-			if state.grid.cell(c).is_wall() or _throw_blocked(actor.coord, c):
+			if state.grid.cell(c).is_wall() or throw_blocked(actor.coord, c):
 				continue
 			out.append(c)
 	return out
 
 ## A throw never passes a wall (playtest 2026-10-19: the AI lobbed grenades through them).
 ## Low cover is thrown over; a wall, closed airlock or pane on the line stops it.
-func _throw_blocked(from_coord: Vector2i, to_coord: Vector2i) -> bool:
+func throw_blocked(from_coord: Vector2i, to_coord: Vector2i) -> bool:
 	for c: Vector2i in _throw_path(from_coord, to_coord):
 		if c != to_coord and state.grid.in_bounds(c) and state.grid.cell(c).is_wall():
 			return true
