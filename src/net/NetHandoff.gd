@@ -122,7 +122,7 @@ const K_LOBBY_MAP := "lobby_map"
 ##       A frag grenade asks a shield bearer for two 2+ rolls (no −1), epicentre included.
 ##  21 — 0.12.10: shield bearers survive all but direct hulls, AT and drones; bursts keep
 ##       their rest after a kill; Holdout wave frequency; flamethrower armor 4+.
-##  22 — shots through smoke at +2 to hit, allies always block the line, no throws past a
+##  22 — 0.12.11: shots through smoke at +2 to hit, allies always block the line, no throws past a
 ##       wall, DPMG bursts carry over and turn the gun, wave shields beat every blast but a
 ##       direct one, landings skip fire, no spoil on bodies.
 const PROTOCOL := 22
