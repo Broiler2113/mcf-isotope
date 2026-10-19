@@ -137,9 +137,10 @@ func add_slot(kind: int = SlotKind.OPEN, team: int = -1) -> int:
 
 ## Убрать слот и переиндексировать оставшиеся (item 4). До старта партии id слота и есть
 ## номер игрока, поэтому после удаления из середины ids/имена перенумеровываются подряд.
-## Нельзя опуститься ниже двух слотов — партии нужен минимум дуэт.
-func remove_slot(id: int) -> void:
-	if id < 0 or id >= slots.size() or slots.size() <= 2:
+## Нельзя опуститься ниже двух слотов — партии нужен минимум дуэт. Holdout passes 1:
+## its second side is the waves slot, added at start.
+func remove_slot(id: int, min_slots := 2) -> void:
+	if id < 0 or id >= slots.size() or slots.size() <= min_slots:
 		return
 	slots.remove_at(id)
 	for i in slots.size():

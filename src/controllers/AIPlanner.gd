@@ -314,7 +314,7 @@ func _score_cell(u: UnitInstance, coord: Vector2i, start_geo: int, steps: int,
 		return -1e9
 	# Вплотную к огню не встаём (#48): пламя расползается. Кроме огнеупорных (#2) —
 	# щитоносцу и огнемётчику пожар безразличен, и место у огня им ничем не хуже.
-	if not MCF.ability_is_fireproof(u.stats.special_ability_id) and (_fire_near(coord) \
+	if not _r.is_fireproof(u) and (_fire_near(coord) \
 			or (not _classic and AIController.fire_creeps(_r, _state, coord))):
 		return -1e9
 	var score := 0.0

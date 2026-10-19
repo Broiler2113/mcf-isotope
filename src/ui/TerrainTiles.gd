@@ -699,7 +699,7 @@ func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int
 		# ПО СТЕКЛУ ПОЛОСА НЕ ИДЁТ (0.9.4, просьба игрока): окно — это окно, а не крашеная
 		# стена, и полоса на нём читалась мазком поперёк витрины. Соседи-окна её тоже не
 		# продолжают (_accent_mask), поэтому у рамы полоса аккуратно обрывается.
-		if accent != MCF.Accent.NONE and FAMILY.get(fid, fid) == "wall" and not MCF.is_glass(fid):
+		if accent != MCF.Accent.NONE and _takes_accent(fid):
 			feat.blend_rect(_accent_overlay(accent, _accent_mask(c, accent), res), full, at)
 		# ДОТ, потерявший прочность, трескается прямо в плитке (0.9.2) — раньше была лишь
 		# красная чёрточка в углу клетки.
@@ -840,6 +840,12 @@ func _accent_of(c: Vector2i) -> int:
 	var a := _grid.accent_at(c.x, c.y)
 	return a if a > 0 and a < MCF.ACCENT_COLORS.size() else MCF.Accent.NONE
 
+## Service bands paint ordinary walls only. Glass is a window, and an LDF is a deployable
+## fortification: it neither carries a band from the cell it was built on nor continues one.
+func _takes_accent(fid: String) -> bool:
+	return fid != "" and FAMILY.get(fid, fid) == "wall" and not MCF.is_glass(fid) \
+			and fid != MCF.FEATURE_LDF
+
 ## Маска полосы: соседи-стены (и шлюзы) ТОГО ЖЕ цвета. Полоса сворачивает за угол вместе
 ## со стеной и обрывается там, где кончается отдел.
 func _accent_mask(c: Vector2i, accent: int) -> int:
@@ -851,8 +857,7 @@ func _accent_mask(c: Vector2i, accent: int) -> int:
 		if n.x < 0 or n.y < 0 or n.x >= _grid.width or n.y >= _grid.height:
 			continue
 		var nf := _grid.cell_fast(n.x, n.y).feature_id
-		if nf != "" and FAMILY.get(nf, nf) == "wall" and not MCF.is_glass(nf) \
-				and _accent_of(n) == accent:
+		if _takes_accent(nf) and _accent_of(n) == accent:
 			mask |= int(d[1])
 	return mask
 

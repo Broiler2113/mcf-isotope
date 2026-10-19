@@ -632,6 +632,11 @@ func _build_mode(parent: VBoxContainer) -> void:
 	box.add_child(wave_units)
 	_mode_rows.append([wave_units, MatchMode.Kind.HOLDOUT])
 	_mode_opt.item_selected.connect(func(_i: int) -> void:
+		# Leaving Holdout with a lone defender: other modes need an opponent again.
+		if roster.slots.size() < _min_slots():
+			_set_player_count(_min_slots())
+		if _gen_players != null: _gen_players.min_value = _min_slots()
+		_refresh_slots()
 		_sync_mode_rows()
 		if _preview_labels != null:
 			_preview_labels.queue_redraw())
@@ -1049,7 +1054,7 @@ func _build_generator(box: VBoxContainer) -> void:
 	var defaults := MapGen.default_options()
 	# Игроки — это слоты лобби (по зоне на каждого): спинбокс их добавляет и убирает.
 	_gen_players = SpinBox.new()
-	_gen_players.min_value = 2
+	_gen_players.min_value = _min_slots()
 	_gen_players.max_value = MCF.MAX_PLAYERS
 	_gen_players.value = roster.slots.size()
 	_gen_players.tooltip_text = "One deployment zone per player; this is the slot list above."
@@ -1268,7 +1273,7 @@ func _set_player_count(n: int) -> void:
 		if last.kind == Roster.SlotKind.HUMAN and last.peer_id > 1:
 			_status.text = "%s is sitting in the last slot — it can't be removed." % last.display_name
 			break
-		roster.remove_slot(last.id)
+		roster.remove_slot(last.id, _min_slots())
 		if roster.slots.has(last):
 			break  # меньше двух слотов ростер не отдаёт
 	_lobby_changed()
@@ -1629,7 +1634,7 @@ func _slot_row(s: Roster.Slot) -> Control:
 
 	# Удаление слота (item 4): «✕» справа. Нельзя убрать последние два — партии нужен
 	# хотя бы дуэт. Хост правит список, клиент только смотрит.
-	if not _is_client and s.peer_id != 1 and (roster.slots.size() > 2 or s.peer_id > 1):
+	if not _is_client and s.peer_id != 1 and (roster.slots.size() > _min_slots() or s.peer_id > 1):
 		var del := Button.new()
 		del.text = "✕"
 		del.pressed.connect(_on_remove_slot.bind(s.id))
@@ -1848,8 +1853,12 @@ func _on_remove_slot(slot_id: int) -> void:
 		NetHandoff.session.kick(peer)
 		_lobby_changed()
 		return
-	roster.remove_slot(slot_id)
+	roster.remove_slot(slot_id, _min_slots())
 	_lobby_changed()
+
+## Holdout can be defended alone (the waves are the other side); every other mode is a duel at least.
+func _min_slots() -> int:
+	return 1 if _mode_opt != null and _mode_opt.selected == MatchMode.Kind.HOLDOUT and _save.is_empty() else 2
 
 ## Первый ещё не занятый цвет палитры — чтобы новые слоты не дублировали цвета (item 6).
 func _first_free_color() -> int:

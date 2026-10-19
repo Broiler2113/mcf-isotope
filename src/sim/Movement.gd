@@ -59,19 +59,6 @@ static var _cache: Dictionary = {}
 static var _cache_version: int = -1
 static var _cache_grid: int = 0
 
-## Разлив для КОНКРЕТНОГО бойца: сам решает, обходить ли огонь (#1). Щитоносец и
-## огнемётчик огня не боятся, и для них он — обычный пол (#2).
-## avoid_cells — клетки, куда боец ЗАВЕДОМО не ступит (batch 12 #3/#4): известные ему
-## противопехотные мины (свои и подсвеченные чужие). Их даёт
-## GameActionResolver.known_mine_cells(owner); маршрут прокладывается в обход, и сама
-## клетка недостижима — на своей мине не остановишься даже нарочно.
-## free_cells — занятые клетки, которые считать пустыми: групповой приказ планирует
-## бойца так, будто товарищи, шедшие раньше, уже ушли со своих мест (GroupMovePlanner).
-static func reachable_for(grid: Grid, unit: UnitInstance, budget: int,
-		avoid_cells: Dictionary = {}, free_cells: Dictionary = {}) -> Reachability:
-	var avoid := not MCF.ability_is_fireproof(unit.stats.special_ability_id)
-	return reachable(grid, unit.coord, budget, avoid, avoid_cells, free_cells)
-
 ## avoid_fire — маршрут ОБХОДИТ горящие клетки (#1): в них можно войти, но нельзя
 ## ИЗ них выйти, поэтому они остаются в разливе как тупики. Это та же схема
 ## «достижимо, но терминально», что уже используется для дрона на стене: игрок

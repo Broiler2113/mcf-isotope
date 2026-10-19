@@ -42,6 +42,7 @@ static func encode(state: GameState) -> Dictionary:
 		"cells": _encode_cells(state.grid),
 		"turns": {
 			"order": _copy(state.turns.round_order),
+			"waves": state.turns.wave_owner,
 			"index": state.turns.active_index,
 			"round": state.turns.round_number,
 			"rolled": state.turns.initiative_rolled,
@@ -263,6 +264,7 @@ static func restore_into(gs: GameState, d: Dictionary) -> void:
 		"active_index": clampi(int(turns.get("index", 0)), 0, order.size() - 1),
 		"round_number": maxi(int(turns.get("round", 1)), 1),
 		"round_order": order,
+		"wave_owner": int(turns.get("waves", -1)),
 		"turn_eliminated": dead,
 		"next_id": int(d.get("next_id", 0)),
 		"next_vehicle_id": int(d.get("next_vehicle_id", Vehicle.ID_BASE)),

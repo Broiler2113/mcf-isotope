@@ -467,6 +467,9 @@ func build_state(dice_seed: int = -1, roster: Roster = null) -> GameState:
 		if not ResourceLoader.exists(path):
 			continue
 		var stats: UnitStats = load(path)
+		# Bodies block standing (0.12.8). Older maps may put a spawn on one: keep the soldier.
+		var under := st.grid.cell(s["coord"])
+		if under != null: under.corpse_count = 0
 		st.spawn_unit(stats, s["coord"], s["owner"])
 	# Инициатива бросается один раз — когда все юниты уже на карте (#53).
 	st.turns.begin_match(st.all_units(), st.dice, st.roster.player_ids())

@@ -96,8 +96,13 @@ func receive(msg: Dictionary) -> void:
 		K_INTENT:
 			if is_host:
 				var it := _decode(msg)
-				if it != null and _authorized(it, int(msg.get("_from", -1))):
+				var from := int(msg.get("_from", -1))
+				if it != null and _authorized(it, from):
 					_host_resolve_and_send(it)
+				elif from != -1:
+					# Silence left the sender waiting forever (_net_request_pending in Main).
+					outgoing.emit({"k": K_DENIED, "a": -1, "reason": "Not your unit or turn",
+						"p": state.roster.side_of_peer(from)})
 		K_ACTION:
 			if not is_host:
 				var it := _decode(msg)

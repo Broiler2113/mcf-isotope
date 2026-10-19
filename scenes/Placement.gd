@@ -707,6 +707,8 @@ func _cell_placeable(coord: Vector2i) -> bool:
 		return false
 	if map.get_cover(coord) >= MCF.WALL_HEIGHT:
 		return false
+	if map.corpses.has(coord.y * map.width + coord.x):
+		return false  # nobody stands on a body (0.12.8)
 	# Объект-препятствие (кроме мягких укрытий) не мешает — но занятые клетки нельзя.
 	return _placed_at(coord) == -1 and _neutral_at(coord) == -1
 

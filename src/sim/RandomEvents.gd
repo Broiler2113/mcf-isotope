@@ -96,6 +96,8 @@ static func default_weights() -> Dictionary:
 ## объявленное, но ещё не упавшее.
 ## Playback compatibility only; new matches and loaded saves use uniform selection.
 var legacy_selection := false
+## 0.12.7–0.12.8 replays rolled three dice even when no selected event was eligible.
+var empty_pool_rolls := false
 var enabled: bool = false
 var mandatory: bool = false        # guarantee an event on each due round
 var interval: int = 3              # rounds between event checks
@@ -168,6 +170,8 @@ func _pick(dice: DiceService, allowed: Dictionary = {}) -> String:
 	for pair in REGISTRY:
 		if float(weights.get(pair[0], 0)) > 0.0 and (allowed.is_empty() or allowed.has(pair[0])):
 			pool.append(pair[0])
+	if pool.is_empty() and not empty_pool_rolls:
+		return ""
 	while true:
 		var v := 0
 		for _i in 3:

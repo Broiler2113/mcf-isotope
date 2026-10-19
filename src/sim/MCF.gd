@@ -639,6 +639,23 @@ static func independent_index(owner: int) -> int:
 static func independent_slot(index: int) -> int:
 	return INDEPENDENT_BASE + index - 1
 
+## Holdout waves (2026-10-18): every landed wave takes its own initiative slot, placed at
+## random like a raider army and listed as "Wave I", "Wave II", … The slot is not an owner:
+## its soldiers still belong to the waves side (TurnManager.slot_owner); the slot only says
+## WHICH wave acts now (their neutral_group is the wave number).
+const WAVE_SLOT_BASE := 300
+const MAX_WAVE_SLOTS := 100
+
+static func is_wave_slot(slot: int) -> bool:
+	return slot >= WAVE_SLOT_BASE and slot < WAVE_SLOT_BASE + MAX_WAVE_SLOTS
+
+static func wave_index(slot: int) -> int:
+	return slot - WAVE_SLOT_BASE + 1 if is_wave_slot(slot) else 0
+
+## -1 when the wave number has no slot of its own (0, or past the hundredth wave).
+static func wave_slot(index: int) -> int:
+	return WAVE_SLOT_BASE + index - 1 if index >= 1 and index <= MAX_WAVE_SLOTS else -1
+
 ## Сторона БЕЗ КОМАНДИРА: её ход ведёт сам резолвер, а не контроллер игрока или штаб ИИ, и
 ## враждебна она всем (жители — всем игрокам, независимая армия — вообще всем). По этому
 ## вопросу ИИ выбирает «беспощадную» манеру, а передача хода отыгрывает слот на месте.
@@ -752,6 +769,8 @@ static func owner_name(owner: int) -> String:
 		return "Player %s" % PLAYER_LETTERS[owner]
 	if is_independent(owner):
 		return "Raiders %s" % roman(independent_index(owner))
+	if is_wave_slot(owner):
+		return "Wave %s" % roman(wave_index(owner))
 	if owner >= NEUTRAL_GROUP_BASE:
 		return "Neutral %s" % roman(neutral_group_index(owner))
 	return "Neutral"

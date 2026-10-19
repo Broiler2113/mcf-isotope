@@ -36,8 +36,13 @@ func _check(style: int, flammable: bool, space: bool) -> void:
 				rim = c
 			var grass_type := m.get_floor(c) == MCF.FLOOR_GRASS
 			var grass_look := m.get_look(y * m.width + x) == MCF.Look.GRASS
-			var road := style == MapGen.Style.TOWN and core.grow(MapGen.BORDER).has_point(c) \
-					and m.get_floor(c) == MCF.FLOOR_NORMAL and m.get_look(y * m.width + x) == 0
+			# Town streets run straight on to the board edge (0.12.2 _extend_town_roads):
+			# a rim road must continue a road on the play-area edge, never a corner patch.
+			var edge := Vector2i(clampi(x, core.position.x, core.end.x - 1), clampi(y, core.position.y, core.end.y - 1))
+			var straight := (edge.x == x) != (edge.y == y)
+			var road := style == MapGen.Style.TOWN and straight \
+					and m.get_floor(c) == MCF.FLOOR_NORMAL and m.get_look(y * m.width + x) == 0 \
+					and m.get_floor(edge) == MCF.FLOOR_NORMAL and m.get_look(edge.y * m.width + edge.x) == 0
 			if not grass_type and not grass_look and not road:
 				failures.append("%s: outer tile %s is not grass" % [tag, str(c)])
 				return

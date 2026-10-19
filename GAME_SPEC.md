@@ -1634,6 +1634,8 @@ is consumed on use regardless of outcome** — a missed grenade is still gone.
 - Blast shape is `blast_x` — the **X / diagonal-only** pattern (#64), deliberately
   distinct from the anti-tank square and the cannon diamond.
 - **Epicentre** = automatic death, except a shield bearer.
+- **Shield bearer** (owner rule 2026-10-19), anywhere in the area including the epicentre:
+  two dice at its plain armor (**2+**, no −1), both must pass — it blocks the blast like two bullets.
 - **Other cells**: the target rolls **two dice** at `armor + 1 − corpse_shield` and must
   pass **both**.
 - **Glass** defends at `GLASS_ARMOR = 5`, also on 2 dice (#44).

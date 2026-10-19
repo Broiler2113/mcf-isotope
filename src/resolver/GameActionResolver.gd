@@ -1203,7 +1203,7 @@ func _blast(center: Vector2i, res: ActionResult = null, cells: Array[Vector2i] =
 			seated_hit[veh.id] = true
 			killed_names.append_array(_shuttle_passengers_hit(veh, center, in_area, res))
 	for u in state.all_units():
-		if not u.is_alive():
+		if not u.is_on_field():
 			continue
 		if not in_area.has(u.coord):
 			continue
@@ -1216,7 +1216,8 @@ func _blast(center: Vector2i, res: ActionResult = null, cells: Array[Vector2i] =
 		# канавы. Прямое попадание в саму канаву по-прежнему убивает.
 		if u.coord != center and state.grid.cell(u.coord).feature_id == MCF.FEATURE_TRENCH:
 			continue
-		if _protected_by(u, protectors):
+		# A shield shelters the soldiers beside it, never the one the blast lands on.
+		if u.coord != center and _protected_by(u, protectors):
 			continue
 		_kill(u, res, center, true)
 		killed_names.append(u.stats.display_name)
@@ -1352,7 +1353,7 @@ func _resolve_flame(shooter: UnitInstance, target_coord: Vector2i) -> ActionResu
 		var occ: UnitInstance = cell.occupant
 		# Над космосом струя проходит, но никого не жжёт (editor-rework): пламени без
 		# воздуха нет. Дальше, на полу за пробоиной, — жжёт как обычно.
-		if occ != null and occ.is_alive() and not cell.is_space and not is_fireproof(occ):
+		if occ != null and occ.is_on_field() and not cell.is_space and not is_fireproof(occ):
 			_kill_burnt(occ)  # огнемёт — крови нет
 			killed_names.append(occ.stats.display_name)
 			result.deaths.append(occ.id)
@@ -1487,6 +1488,8 @@ func _ignite(cell: GridCell, owner: int, res: ActionResult = null) -> void:
 	# огне всё равно гибнет, просто без взрыва, общей зачисткой ниже.
 	if cell.feature_id == MCF.FEATURE_MINE and res != null:
 		_detonate_mine(c, null, res)
+	elif cell.feature_id == MCF.FEATURE_DRONE_STATION:
+		_destroy_drone_station(c)
 	elif cell.feature_id != MCF.FEATURE_CORPSE_WALL:
 		# Загоревшаяся мебель выгорает — и деревянная, и металлическая (0.12.2): раз уж
 		# занялась, от неё остаётся пол. Тихо, без разлёта: что стояло на ней, сгорает
@@ -1555,7 +1558,7 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i, aimed: String = "") ->
 						"laser", result)
 			"shield", "unit":
 				var occ: UnitInstance = cell.occupant
-				if destroyed and occ != null and occ.is_alive():
+				if destroyed and occ != null and occ.is_on_field():
 					_kill_burnt(occ)  # луч прижигает — крови нет (batch ui-drones)
 					killed_names.append(occ.stats.display_name)
 					result.deaths.append(occ.id)
@@ -1616,9 +1619,9 @@ func _scatter_corpses(from_coord: Vector2i, step: Vector2i, count: int) -> void:
 	while left > 0 and state.grid.in_bounds(cur):
 		var cell := state.grid.cell(cur)
 		# Клетку, забитую телами до предела, луч перешагивает (#98): пятое тело сложило
-		# бы там новую стену прямо в трассе только что пробитого прохода.
-		if not cell.is_wall() and cell.vehicle_id == -1 \
-				and corpses_at(cur) < MCF.CORPSE_WALL_COUNT:
+		# бы там новую стену прямо в трассе только что пробитого прохода. Living soldiers
+		# and drones in the beam's path are stepped over too: bodies never land on them.
+		if can_drop_corpse_at(cur):
 			cell.corpse_count += 1
 			left -= 1
 		cur += step
@@ -1696,7 +1699,7 @@ func _laser_trace(from_coord: Vector2i, step: Vector2i) -> Array:
 			else:
 				rec["cost"] = potential
 				rec["damage"] = potential / MCF.POTENTIAL_PER_DURABILITY
-		elif occ != null and occ.is_alive():
+		elif occ != null and occ.is_on_field():
 			if _shield_immunity(occ):
 				rec["kind"] = "shield"
 				rec["stop"] = true  # щит полностью гасит луч
@@ -2029,6 +2032,14 @@ func aim_need(shooter: UnitInstance, cell: Vector2i, target: UnitInstance = null
 		return hit_need(Combat.distance(shooter.coord, cell), shooter.fire_range())
 	return hit_need_for(shooter, target)
 
+## Owner rule (2026-10-18): a shield bearer can be fired at only from a neighbouring cell.
+## Snipers, marksmen and anti-tank soldiers may aim from range; a tank's cannon is its own
+## intent (VehicleCannonIntent) and never asks this. Holdout wave shields carry no shield.
+const SHIELD_RANGED_ABILITIES := [MCF.ABILITY_SNIPER, MCF.ABILITY_MARKSMAN, MCF.ABILITY_ANTI_TANK]
+func shield_out_of_reach(shooter: UnitInstance, target: UnitInstance) -> bool:
+	return _shield_immunity(target) and Combat.distance(shooter.coord, target.coord) > 1 \
+			and not SHIELD_RANGED_ABILITIES.has(shooter.attack_ability())
+
 func _shield_blocks_shot(shooter: UnitInstance, target: UnitInstance) -> bool:
 	if not _shield_immunity(target):
 		return false
@@ -2323,14 +2334,16 @@ func _fx_lane(res: ActionResult, from_coord: Vector2i, to_coord: Vector2i,
 ## NOWHERE (значение по умолчанию) = источник неизвестен, тогда веер расходится кругом.
 ## Сгорел в огне или прижжён лучом (playtest-20): тело остаётся обугленным.
 func _kill_burnt(u: UnitInstance) -> void:
-	if u != null and u.is_alive():
+	if u != null and u.is_on_field():
 		u.burnt = true
 	_kill(u)
 
 func _kill(u: UnitInstance, res: ActionResult = null, from_coord: Vector2i = NOWHERE,
 		blast: bool = false) -> void:
-	if u == null or not u.is_alive():
+	# is_on_field, not is_alive: a grabbed soldier (HELD) dies like anyone else.
+	if u == null or not u.is_on_field():
 		return
+	u.captor_id = -1
 	# Дрон — машина: ни лужи, ни брызг, ни ошмётков. Сбитый дрон и так рвётся на своей
 	# клетке (_drone_explode), и взрыв оставляет щербины на полу — этого довольно.
 	# Трупом он на доске не ложится: клетку дрон не занимает (spawn_unit occupy=false),
@@ -2511,7 +2524,7 @@ func can_drop_corpse_at(coord: Vector2i) -> bool:
 	var cell := state.grid.cell(coord)
 	return cell != null and cell.walkable_terrain() and not cell.is_space \
 			and cell.vehicle_id == -1 and (cell.occupant == null or not cell.occupant.is_on_field()) \
-			and corpses_at(coord) < MCF.CORPSE_WALL_COUNT
+			and corpses_at(coord) < MCF.CORPSE_WALL_COUNT and _drone_at(coord) == null
 
 func corpse_drop_cells(unit: UnitInstance) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
@@ -3626,7 +3639,7 @@ func advance_fire(owner: int = -1, res: ActionResult = null) -> void:
 			# на человека, а не только на траву. Клетка занимается огнём, apply-цикл
 			# ниже убивает бойца тем же путём, что и на любой загоревшейся клетке.
 			var occ := ncell.occupant
-			if occ != null and occ.is_alive() and not is_fireproof(occ):
+			if occ != null and occ.is_on_field() and not is_fireproof(occ):
 				ignite[n] = src.fire_owner
 				continue
 			var need := fire_need(ncell)
@@ -3638,7 +3651,7 @@ func advance_fire(owner: int = -1, res: ActionResult = null) -> void:
 		var cell := state.grid.cell(c)
 		# Новая клетка наследует поджигателя — цепочка остаётся привязана к своей стороне.
 		_ignite(cell, ignite[c], res)
-		if cell.occupant != null and cell.occupant.is_alive() and not is_fireproof(cell.occupant):
+		if cell.occupant != null and cell.occupant.is_on_field() and not is_fireproof(cell.occupant):
 			var burned := cell.occupant
 			# res здесь только ради кровавой косметики — _kill сам в deaths не пишет,
 			# это делают вызывающие. Мы пишем в fire_deaths, но НЕ в deaths (см.
@@ -4820,7 +4833,7 @@ func _cascade_activation() -> Array:
 func _next_group_number() -> int:
 	var n := 0
 	for slot: int in state.turns.round_order:
-		if slot >= MCF.NEUTRAL_GROUP_BASE:
+		if slot >= MCF.NEUTRAL_GROUP_BASE and not MCF.is_wave_slot(slot):
 			n += 1
 	return n + 1
 
@@ -6132,6 +6145,8 @@ func _resolve_drag(intent: DragIntent) -> ActionResult:
 		if corpses_at(dst) > 0:
 			if corpses_at(dst) >= MCF.CORPSE_WALL_COUNT:
 				return ActionResult.fail("No room for another body here")
+			if not can_drop_corpse_at(dst):
+				return ActionResult.fail("Can't place a corpse there")
 			# Перетаскиваемый труп уходит в кучу — убираем его из игры.
 			src_cell.occupant = null
 			state.remove_unit(corpse.id)
@@ -6252,7 +6267,7 @@ func rsp_cells(actor: UnitInstance, owned: bool) -> Array:
 func rsp_targets(actor: UnitInstance, dpmg_coord: Vector2i) -> Array:
 	var out: Array = []
 	for u in state.all_units():
-		if u.owner == actor.owner or not u.is_alive():
+		if u.owner == actor.owner or not u.is_on_field():
 			continue
 		if not is_visible_to_team(actor.owner, u):
 			continue
@@ -6261,6 +6276,8 @@ func rsp_targets(actor: UnitInstance, dpmg_coord: Vector2i) -> Array:
 		if los_blocked(dpmg_coord, u.coord):
 			continue
 		if hit_need(Combat.distance(dpmg_coord, u.coord), MCF.DPMG_RANGE) >= 7:
+			continue
+		if _shield_immunity(u) and Combat.distance(dpmg_coord, u.coord) > 1:
 			continue
 		out.append(u.id)
 	return out
@@ -6287,7 +6304,7 @@ func _resolve_dpmg(intent: DPMGFireIntent) -> ActionResult:
 
 	# Свой ДПМГ — стрельба очередью из клетки пулемёта.
 	var target := state.get_unit(intent.target_id)
-	if target == null or not target.is_alive():
+	if target == null or not target.is_on_field():
 		return ActionResult.fail("No target")
 	if target.owner == actor.owner:
 		return ActionResult.fail("Can't shoot your own")
@@ -6299,6 +6316,8 @@ func _resolve_dpmg(intent: DPMGFireIntent) -> ActionResult:
 		return ActionResult.fail("Firing line is blocked")
 	if trench_protected(intent.dpmg_coord, target):
 		return ActionResult.fail("Target is below the trench line")
+	if _shield_immunity(target) and Combat.distance(intent.dpmg_coord, target.coord) > 1:
+		return ActionResult.fail("The shield stops fire from range — get next to it")
 	var need := hit_need(Combat.distance(intent.dpmg_coord, target.coord), MCF.DPMG_RANGE)
 	if need >= 7:
 		return ActionResult.fail("Too far for the DPMG")
@@ -6523,7 +6542,7 @@ func _throw_path(a: Vector2i, b: Vector2i) -> Array:
 
 ## Осколочная граната (§3.6): взрыв в радиусе 1 (3x3, Чебышёв).
 ## В эпицентре — автосмерть (кроме щитоносца). Прочие бросают 2 кубика защиты
-## со штрафом −1 каждый; выживают только если ОБА парируют. Задевает всех, включая своих.
+## со штрафом −1 каждый (щитоносец — без штрафа, 2+); выживают только если ОБА парируют. Задевает всех, включая своих.
 func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 	state.combat_started = true  # взрыв слышен всем — мирные вскрываются (§3.10, #56)
 	var area := blast_cells_for_item(MCF.ITEM_FRAG, center)
@@ -6538,7 +6557,7 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 	var result := ActionResult.new()
 	result.ok = true
 	for u in state.all_units():
-		if not u.is_alive():
+		if not u.is_on_field():
 			continue
 		if not in_area.has(u.coord):
 			continue
@@ -6553,7 +6572,10 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 			det["survived"] = false
 		else:
 			# Штраф −1 к каждому кубику; несомый труп-щит облегчает защиту (#6).
-			var need_roll: int = u.armor() + 1 - _corpse_shield_bonus(u)
+			# Owner rule (2026-10-19): a shield takes the blast like two bullets — two
+			# rolls at its plain armor (2+), even on the epicentre, no −1.
+			var need_roll: int = u.armor() if is_shield else u.armor() + 1 - _corpse_shield_bonus(u)
+			det["need"] = need_roll
 			for _i in 2:
 				var r := state.dice.roll_d6()
 				det["rolls"].append(r)
@@ -7218,7 +7240,7 @@ func _destroy_cell(c: Vector2i, res: ActionResult) -> Array[String]:
 	if cell == null:
 		return names
 	var occ := cell.occupant
-	if occ != null and occ.is_alive():
+	if occ != null and occ.is_on_field():
 		_kill(occ, res, c, true)
 		names.append(occ.stats.display_name)
 		if res != null:
@@ -7254,21 +7276,21 @@ func _gas_tick(res: ActionResult) -> void:
 		return
 	var ids: Array = []
 	for u: UnitInstance in state.all_units():
-		if u.is_alive() and u.aboard_vehicle_id == -1 and u.borg_id == -1 \
+		if u.is_on_field() and u.aboard_vehicle_id == -1 and u.borg_id == -1 \
 				and state.grid.cell(u.coord) != null and state.grid.cell(u.coord).can_hold_gas() \
 				and random_events.cloud_at(u.coord):
 			ids.append(u.id)
 	ids.sort()
 	for id: int in ids:
 		var u := state.get_unit(id)
-		if u == null or not u.is_alive():
+		if u == null or not u.is_on_field():
 			continue
 		_gas_survival(u, res)
 	random_events.age_clouds()
 
 
 func _gas_survival(u: UnitInstance, res: ActionResult) -> void:
-	if not u.is_alive() or u.aboard_vehicle_id != -1 or u.borg_id != -1:
+	if not u.is_on_field() or u.aboard_vehicle_id != -1 or u.borg_id != -1:
 		return
 	var roll := state.dice.roll_d6()
 	res.dice_events.append({"kind": "check", "actor": u.stats.display_name,
@@ -7354,6 +7376,8 @@ func _land_army(p: Dictionary, res: ActionResult) -> void:
 		if budget <= 0 and placed >= ARMY_FALLBACK_UNITS:
 			break
 		var raider := state.spawn_unit(stats, spots[placed], slot)
+		if raider == null:
+			break
 		raider.neutral_group = random_events.armies + 1
 		spent += stats.cost
 		placed += 1
@@ -7433,9 +7457,7 @@ func _army_spawn_cells(p: Dictionary) -> Array[Vector2i]:
 				_: c = Vector2i(d, from + k)
 			if not state.grid.in_bounds(c):
 				continue
-			var cell := state.grid.cell(c)
-			if cell == null or not cell.walkable_terrain() or cell.occupant != null \
-					or cell.vehicle_id != -1 or cell.is_space:
+			if state.grid.blocks_walk(c) or state.grid.cell(c).is_space:
 				continue
 			out.append(c)
 	return out
@@ -7751,7 +7773,7 @@ func first_unit_on_line(from_coord: Vector2i, to_coord: Vector2i,
 			continue
 		# Боец на дне окопа сидит ниже линии огня — пуля проходит над ним (§3.7).
 		# Сосед по челноку перекрывает линию, как любой боец: стрелять сквозь него нельзя.
-		if cell.occupant != null and cell.occupant.is_alive() \
+		if cell.occupant != null and cell.occupant.is_on_field() \
 				and not trench_protected(from_coord, cell.occupant) \
 				and not (skip_allies_of != null
 						and is_ally_of(skip_allies_of, cell.occupant)):
@@ -7965,7 +7987,7 @@ func is_ally_of(a: UnitInstance, b: UnitInstance) -> bool:
 
 ## "" = стрелять можно; иначе причина отказа.
 func can_shoot(shooter: UnitInstance, target: UnitInstance) -> String:
-	if target == null or not target.is_alive():
+	if target == null or not target.is_on_field():
 		return "No target"
 	if target.id == shooter.id:
 		return "Can't shoot yourself"
@@ -7999,6 +8021,8 @@ func can_shoot(shooter: UnitInstance, target: UnitInstance) -> String:
 		return _trench_block_reason(shooter)
 
 	var dist := Combat.distance(shooter.coord, target.coord)
+	if shield_out_of_reach(shooter, target):
+		return "The shield stops fire from range — get next to it"
 	match shooter.attack_ability():
 		MCF.ABILITY_MARKSMAN:
 			# Лазер бьёт на любую дистанцию и пробивает препятствия (§3.13).
@@ -8167,7 +8191,7 @@ func shootable_target_ids(shooter: UnitInstance) -> Array:
 	var from: Vector2i = shooter.coord
 	var sid: int = shooter.id
 	for u in state.all_units():
-		if u.id == sid or not u.is_alive():
+		if u.id == sid or not u.is_on_field():
 			continue
 		# Экипаж танка (coord = OFFBOARD) на поле не стоит — целью не считается (#23);
 		# пассажир челнока сидит в клетке следа и под прицелом (batch 13 S5).
@@ -8190,7 +8214,7 @@ func hostile_target_ids(shooter: UnitInstance) -> Array:
 	var sowner: int = shooter.owner
 	var sid: int = shooter.id
 	for u in state.all_units():
-		if u.id == sid or not u.is_alive():
+		if u.id == sid or not u.is_on_field():
 			continue
 		# Не считаем целью СОЮЗНИКОВ: ни свой слот, ни товарища по команде, ни (для
 		# нейтралов) другого нейтрала — ИИ не должен даже пытаться в них стрелять
@@ -8310,6 +8334,8 @@ func _validate_actor(unit: UnitInstance, credit: int = 0) -> String:
 		return "Unit is being held — break free first"
 	if unit.owner != state.active_player():
 		return "It's the other player's turn"
+	if not state.turns.slot_has(state.turns.active_slot(), unit):
+		return "It's another wave's turn"
 	if unit.remaining_ap <= 0 and credit <= 0:
 		return "Unit has no AP left"
 	return ""
@@ -9147,7 +9173,7 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 	var crushed: Array[UnitInstance] = []
 	for cc in plan["crush_cells"]:
 		var occ: UnitInstance = state.grid.cell(cc).occupant
-		if occ != null and occ.is_alive():
+		if occ != null and occ.is_on_field():
 			_kill(occ, res, cc, true)
 			crushed.append(occ)
 			res.deaths.append(occ.id)
@@ -10412,6 +10438,12 @@ func _land_wave(res: ActionResult) -> void:
 	# Слот волн обязан стоять в очереди: лобби ставит его туда с начала боя, а тем, кто
 	# собирает ростер позже (среда RL, инструменты), — место в конце круга.
 	state.turns.insert_slot(mode.wave_side, state.turns.round_order.size())
+	# Each wave plays its own turn at a random place in the initiative, like a raider army
+	# (2026-10-18 owner request). Its soldiers stay on the waves side.
+	state.turns.wave_owner = mode.wave_side
+	var ws := MCF.wave_slot(k)
+	if placed > 0 and ws >= 0:
+		state.turns.insert_slot(ws, _rand_wide(state.turns.round_order.size() + 1))
 	mode.next_wave_round = state.turns.round_number + MatchMode.WAVE_EVERY
 	var label := "Wave %d" % k if mode.endless() else "Wave %d of %d" % [k, mode.waves_total]
 	if placed == 0:
@@ -10558,7 +10590,7 @@ func _land_fire(p: Dictionary, res: ActionResult) -> void:
 		_ignite(cell, EVENT_FIRE_OWNER, res)
 		lit += 1
 		var occ := cell.occupant
-		if occ != null and occ.is_alive() and not is_fireproof(occ):
+		if occ != null and occ.is_on_field() and not is_fireproof(occ):
 			_kill_burnt(occ)
 			res.fire_deaths.append(occ.id)
 			burned.append(occ.stats.display_name)
@@ -10623,7 +10655,7 @@ func _land_collapse(p: Dictionary, res: ActionResult) -> void:
 	ids.sort()
 	for id: int in ids:
 		var u := state.get_unit(id)
-		if u == null or not u.is_alive() or u.is_drone or u.aboard_vehicle_id != -1 \
+		if u == null or not u.is_on_field() or u.is_drone or u.aboard_vehicle_id != -1 \
 				or not rect.has_point(u.coord):
 			continue
 		var roll := state.dice.roll_d6()
@@ -10721,6 +10753,8 @@ func _spawn_budget(spots: Array[Vector2i], budget: int, owner: int,
 		if spent + stats.cost > budget and placed > 0:
 			break
 		var fighter := state.spawn_unit(stats, spots[placed], owner)
+		if fighter == null:
+			break
 		fighter.neutral_group = group
 		spent += stats.cost
 		placed += 1
