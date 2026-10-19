@@ -120,7 +120,12 @@ const K_LOBBY_MAP := "lobby_map"
 ##       fired at only from an adjacent cell (sniper, marksman, anti-tank and tanks excepted).
 ##       Holdout waves take one initiative slot each (MCF.WAVE_SLOT_BASE), placed by dice.
 ##       A frag grenade asks a shield bearer for two 2+ rolls (no −1), epicentre included.
-const PROTOCOL := 21
+##  21 — 0.12.10: shield bearers survive all but direct hulls, AT and drones; bursts keep
+##       their rest after a kill; Holdout wave frequency; flamethrower armor 4+.
+##  22 — shots through smoke at +2 to hit, allies always block the line, no throws past a
+##       wall, DPMG bursts carry over and turn the gun, wave shields beat every blast but a
+##       direct one, landings skip fire, no spoil on bodies.
+const PROTOCOL := 22
 
 static func encode_rules() -> Dictionary:
 	var roster := GameConfig.active_roster()

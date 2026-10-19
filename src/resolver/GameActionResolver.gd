@@ -110,7 +110,7 @@ func _turn_key() -> Vector2i:
 	return Vector2i(state.turns.round_number, state.turns.active_index)
 
 ## События потока «кубиков», которые на деле — только анимация, без броска.
-const ANIMATION_ONLY_EVENTS := ["walk", "hold", "ap", "focus", "slot", "veh_walk"]
+const ANIMATION_ONLY_EVENTS := ["walk", "hold", "ap", "focus", "slot", "veh_walk", "effects"]
 
 ## Действие, которое нельзя откатить (#81). Любой выстрел — открытая карта: кубики
 ## уже брошены и результат известен, откат превратился бы в переброс. Лазер марксманна
@@ -792,8 +792,7 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 	var redirect_line := ""
 	if shooter.attack_ability() != MCF.ABILITY_MARKSMAN \
 			and shooter.attack_ability() != MCF.ABILITY_FLAMETHROWER:
-		var intercepted := first_unit_on_line(shooter.coord, target.coord,
-				shooter if not friendly_fire_enabled else null)
+		var intercepted := first_unit_on_line(shooter.coord, target.coord)
 		if intercepted != null:
 			redirect_line = "%s fires through %s — the shot hits them instead!" % [
 				shooter.stats.display_name, intercepted.stats.display_name]
@@ -998,7 +997,7 @@ func _resolve_anti_tank(shooter: UnitInstance, center: Vector2i, aimed: String =
 	else:
 		# Бросок на попадание (#7): промах НЕ отменяет взрыв — заряд ложится ближе.
 		var dist := Combat.distance(shooter.coord, center)
-		var need := hit_need(dist, shooter.fire_range())
+		var need := mini(7, hit_need(dist, shooter.fire_range()) + smoke_penalty(shooter.coord, center))
 		var roll := state.dice.roll_d6()
 		var on_target := roll >= need
 		landing = _shortfall_landing(shooter.coord, center, roll, need)
@@ -1123,7 +1122,7 @@ func anti_tank_shot_endangers_own(shooter: UnitInstance, center: Vector2i) -> bo
 			continue  # чужого взрыв и должен накрывать — за этим и стреляем
 		if not bool(risk[c]):
 			# Не эпицентр: окоп прячет от осколков (#30), щитоносец их держит (§3.14).
-			if cell.feature_id == MCF.FEATURE_TRENCH or _shield_immunity(occ):
+			if cell.feature_id == MCF.FEATURE_TRENCH or _blast_shield(occ):
 				continue
 		return true
 	return false
@@ -1188,7 +1187,7 @@ func _blast(center: Vector2i, res: ActionResult = null, cells: Array[Vector2i] =
 
 	var protectors: Array = []
 	for u in state.all_units():
-		if u.is_alive() and _shield_immunity(u) and in_area.has(u.coord) and u.coord != center:
+		if u.is_alive() and _blast_shield(u) and in_area.has(u.coord) and u.coord != center:
 			protectors.append(u)
 
 	var killed_names: Array = []
@@ -1216,7 +1215,7 @@ func _blast(center: Vector2i, res: ActionResult = null, cells: Array[Vector2i] =
 		if (u.aboard_vehicle_id != -1 and seated_hit.has(u.aboard_vehicle_id)) \
 				or (u.borg_id != -1 and seated_hit.has(u.borg_id)):
 			continue  # уже разобран как пассажир / оператор борга
-		if _shield_immunity(u) and (u.coord != center or not kills_shield):
+		if _blast_shield(u) and (u.coord != center or not kills_shield):
 			continue  # щитоносец гибнет только при прямом попадании снаряда, ПТ или дрона
 		# Окоп укрывает от взрыва по СОСЕДНЕЙ клетке (#30): осколки идут поверх
 		# канавы. Прямое попадание в саму канаву по-прежнему убивает.
@@ -1607,7 +1606,8 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i, aimed: String = "") ->
 	# След луча на полу от стрелка до точки остановки (item 10) — чистая косметика.
 	_fx(result, {"fx": "laser", "from": [shooter.coord.x, shooter.coord.y],
 		"to": [beam_last.x, beam_last.y]})
-	_fx_lane(result, shooter.coord, beam_last, shooter.owner, "beam")  # issue 8
+	# The lane shows the aim, not where the beam died: no spoilers before the dice (2026-10-19).
+	_fx_lane(result, shooter.coord, aim, shooter.owner, "beam")  # issue 8
 	result.log_lines.push_front("%s: laser shot %s (potential left %d)" % [
 		shooter.stats.display_name, _dir_name(step), maxi(0, potential)])
 	if killed_names.is_empty():
@@ -1774,6 +1774,11 @@ func _laser_trace(from_coord: Vector2i, step: Vector2i) -> Array:
 				rec["destroyed"] = true
 			else:
 				rec["stop"] = true
+		# Smoke and gas scatter the beam (owner, 2026-10-19): it gets through, weaker.
+		if cell.obscured() and not bool(rec["stop"]):
+			rec["cost"] = int(rec["cost"]) + mini(MCF.LASER_COST_OBSCURED, potential - int(rec["cost"]))
+			if rec["kind"] == "empty":
+				rec["label"] = "Gas" if cell.gas else "Smoke"
 		# Потенциала не хватило даже задеть препятствие — луч гаснет ПЕРЕД клеткой.
 		if bool(rec["stop"]) and int(rec["cost"]) == 0:
 			break
@@ -1807,9 +1812,7 @@ func can_laser_cell(shooter: UnitInstance, cell: Vector2i) -> String:
 		return "Pick a direction to fire in"
 	if shooter.remaining_ap < MCF.MARKSMAN_AP_COST:
 		return "Laser needs %d AP" % MCF.MARKSMAN_AP_COST
-	if gas_blocks_line(shooter.coord, cell):
-		return obscured_line_reason(shooter.coord, cell)
-	return ""
+	return ""   # smoke and gas only drain the beam (_laser_trace)
 
 ## Клетки, через которые пройдёт луч, если целиться в aim (для предпросмотра в UI).
 ## Геометрия та же, что в _resolve_laser, но состояние не меняется (#49).
@@ -1950,6 +1953,12 @@ func is_fireproof(u: UnitInstance) -> bool:
 func _is_wave_fighter(u: UnitInstance) -> bool:
 	return u != null and mode != null and mode.is_holdout() and u.owner == mode.wave_side
 
+## Blasts (owner, 2026-10-19): every shield bearer, Holdout waves included, lives through
+## any blast but a direct tank shell, anti-tank round or drone. Waves still lose the
+## shield's other protections (_shield_immunity).
+func _blast_shield(u: UnitInstance) -> bool:
+	return _is_shield(u)
+
 func _shield_immunity(u: UnitInstance) -> bool:
 	return _is_shield(u) and not _is_wave_fighter(u)
 
@@ -1990,6 +1999,12 @@ func hit_need_for(shooter: UnitInstance, target: UnitInstance, mods: Array = [])
 	# давала 3+ там, где нужно автопопадание, и 3+/4+/5+/6 там, где нужно 2+/3+/4+/5+.
 	var need := sniper_need(dist) if is_sniper \
 			else hit_need(dist, shooter.fire_range())
+	var smoke := smoke_penalty(shooter.coord, target.coord)
+	if smoke > 0:
+		mods.append({"label": "Smoke or gas on the line", "delta": smoke})
+		if is_sniper and need == 1:
+			need = 2   # no auto-hit through a cloud
+		need += smoke
 	if is_sniper and need == 1:
 		# Автопопадание — именно АВТО: оно и раньше выставлялось ПОСЛЕ укрытия и
 		# перекрывало его, и это сохранено. Снимает автопопадание только укрепление
@@ -2030,7 +2045,8 @@ func aim_need(shooter: UnitInstance, cell: Vector2i, target: UnitInstance = null
 		MCF.ABILITY_ANTI_TANK:
 			if cell == shooter.coord:
 				return 0
-			return hit_need(Combat.distance(shooter.coord, cell), shooter.fire_range())
+			return mini(7, hit_need(Combat.distance(shooter.coord, cell), shooter.fire_range())
+					+ smoke_penalty(shooter.coord, cell))
 	if target == null:
 		# Окно: попасть в стекло (0.9.2) — по дальности, как в цель, без укрытия.
 		if state.grid.in_bounds(cell) and MCF.is_glass(state.grid.cell(cell).feature_id):
@@ -2298,9 +2314,11 @@ const PILLBOX_CHUNKS_PER_POINT := 4
 ## кускам даёт её объект и материал. from — откуда удар (c — во все стороны); toward —
 ## куски летят К удару (ДОТ откалывается со стороны выстрела). count 0 — сколько выпадет.
 func _wall_chunks(res: ActionResult, c: Vector2i, from: Vector2i, fid: String,
-		count := 0, toward := false) -> void:
+		count := 0, toward := false, crushed := false) -> void:
 	var ev := {"fx": "chunks", "at": c, "from": from, "fid": fid,
 			"look": state.grid.look_at(c.x, c.y), "env": state.env}
+	if crushed:
+		ev["crushed"] = true   # under a hull: a crunch, not a crash (sound only)
 	if count > 0:
 		ev["count"] = count
 	if toward:
@@ -5093,6 +5111,11 @@ func advance_civilians(owner: int = MCF.Owner.NEUTRAL) -> ActionResult:
 		# подслота молча выбрасывался: мирные стреляли в полной тишине, и по экрану нельзя
 		# было понять, откуда прилетело.
 		res.fx.append_array(sub.fx)
+		# Shown right here in the stream (playtest 2026-10-19): a raider's shot plays from
+		# where it stood, before its next move, not after the whole turn has walked past.
+		if not sub.fx.is_empty():
+			res.dice_events.append({"kind": "effects", "fx": sub.fx,
+					"deaths": sub.deaths.duplicate(), "visual_deaths": sub.visual_deaths.duplicate()})
 	# hold идёт ПЕРВЫМ во всём слоте (item 23): Main по нему снимает всех ходоков в их
 	# стартовые клетки разом, а уже потом проигрывает шаги и выстрелы по порядку.
 	if not moved_from.is_empty():
@@ -5642,7 +5665,8 @@ func unit_missing_equipment(u: UnitInstance) -> bool:
 	if u.ldf_wall_used or operator_has_station(u):
 		return true
 	var need: String = u.stats.default_item_id
-	if need == MCF.ITEM_EXTINGUISHER or need == MCF.ITEM_FRAG:
+	# A heavy infantryman who has thrown his smoke is out of it too (playtest 2026-10-19).
+	if need == MCF.ITEM_EXTINGUISHER or need == MCF.ITEM_FRAG or need == MCF.ITEM_SMOKE:
 		return u.held_item_id != need
 	return false
 
@@ -6288,9 +6312,10 @@ func rsp_targets(actor: UnitInstance, dpmg_coord: Vector2i) -> Array:
 			continue
 		if not Combat.is_on_firing_line(dpmg_coord, u.coord):
 			continue
-		if los_blocked(dpmg_coord, u.coord):
+		if los_blocked(dpmg_coord, u.coord, true, false, false, true):
 			continue
-		if hit_need(Combat.distance(dpmg_coord, u.coord), MCF.DPMG_RANGE) >= 7:
+		if hit_need(Combat.distance(dpmg_coord, u.coord), MCF.DPMG_RANGE) \
+				+ smoke_penalty(dpmg_coord, u.coord) >= 7:
 			continue
 		if _shield_immunity(u) and Combat.distance(dpmg_coord, u.coord) > 1:
 			continue
@@ -6327,28 +6352,42 @@ func _resolve_dpmg(intent: DPMGFireIntent) -> ActionResult:
 		return ActionResult.fail("Target not visible")
 	if not Combat.is_on_firing_line(intent.dpmg_coord, target.coord):
 		return ActionResult.fail("Target not on the firing line")
-	if los_blocked(intent.dpmg_coord, target.coord):
+	if los_blocked(intent.dpmg_coord, target.coord, true, false, false, true):
 		return ActionResult.fail("Firing line is blocked")
 	if trench_protected(intent.dpmg_coord, target):
 		return ActionResult.fail("Target is below the trench line")
 	if _shield_immunity(target) and Combat.distance(intent.dpmg_coord, target.coord) > 1:
 		return ActionResult.fail("The shield stops fire from range — get next to it")
-	var need := hit_need(Combat.distance(intent.dpmg_coord, target.coord), MCF.DPMG_RANGE)
+	var need := hit_need(Combat.distance(intent.dpmg_coord, target.coord), MCF.DPMG_RANGE) \
+			+ smoke_penalty(intent.dpmg_coord, target.coord)
 	if need >= 7:
 		return ActionResult.fail("Too far for the DPMG")
 
-	actor.remaining_ap -= 1
+	# Owner (2026-10-19): a DPMG burst is split like a soldier's — fire some rounds now and
+	# the rest later from the same gun without new AP, at the same or another target.
+	if actor.action_state == null or not actor.action_state.dpmg_pending(intent.dpmg_coord):
+		if actor.remaining_ap <= 0:
+			return ActionResult.fail("Unit has no AP left")
+		actor.remaining_ap -= 1
+		actor.action_state = ActionState.new()
+		actor.action_state.dpmg = intent.dpmg_coord
+		actor.action_state.remaining_shots = MCF.DPMG_RATE_OF_FIRE
+	actor.action_state.target_id = target.id
+	_face_dpmg(intent.dpmg_coord, target.coord)
 	var parry_need: int = target.armor() - _corpse_shield_bonus(target)
 	var cover := cover_effect_from(intent.dpmg_coord, target)
 	need += cover["hit_penalty"]
 	parry_need -= cover["defense_bonus"]
 	need = clampi(need, 1, 7)
 
-	var want: int = MCF.DPMG_RATE_OF_FIRE if intent.shots < 0 else clampi(intent.shots, 1, MCF.DPMG_RATE_OF_FIRE)
+	var available: int = actor.action_state.remaining_shots
+	var want: int = available if intent.shots < 0 else clampi(intent.shots, 1, available)
 	var shot_details: Array = []
 	var hits := 0
 	var killed := false
 	var fired := 0
+	# All the rounds asked for leave the barrel together: a kill on the first one does not
+	# take the rest back (they stay in the burst only if they were never fired).
 	for _i in want:
 		fired += 1
 		var hit_roll := state.dice.roll_d6()
@@ -6365,8 +6404,10 @@ func _resolve_dpmg(intent: DPMGFireIntent) -> ActionResult:
 			if not det["parried"]:
 				killed = true
 		shot_details.append(det)
-		if killed:
-			break
+	actor.action_state.remaining_shots -= fired
+	var left: int = actor.action_state.remaining_shots
+	if left <= 0:
+		actor.action_state = null
 
 	if killed:
 		_kill(target)
@@ -6386,7 +6427,26 @@ func _resolve_dpmg(intent: DPMGFireIntent) -> ActionResult:
 		actor.stats.display_name, target.stats.display_name, fired, hits, need])
 	if killed:
 		result.log("%s killed!" % target.stats.display_name)
+	if left > 0:
+		result.log("… rounds left in the DPMG burst: %d" % left)
 	return result
+
+## Turn the gun toward its target (owner, 2026-10-19). Eight directions, kept in the
+## grid's display turns ([id, k] with k = 0 east, clockwise in eighths), so saves, replays
+## and every peer draw it the same way.
+func _face_dpmg(at: Vector2i, toward: Vector2i) -> void:
+	var d := _step_toward(at, toward)
+	var k: int = DPMG_DIRS.find(d)
+	if k < 0:
+		return
+	var rec: Variant = state.grid.furniture_turn.get(at)
+	if rec is Array and str(rec[0]) == MCF.FEATURE_DPMG and int(rec[1]) == k:
+		return
+	state.grid.furniture_turn[at] = [MCF.FEATURE_DPMG, k]
+	GridCell.log_look_change(at.x, at.y)
+
+const DPMG_DIRS := [Vector2i(1, 0), Vector2i(1, 1), Vector2i(0, 1), Vector2i(-1, 1),
+		Vector2i(-1, 0), Vector2i(-1, -1), Vector2i(0, -1), Vector2i(1, -1)]
 
 # --- Применение предметов / гранаты (§3.6) ---
 func _resolve_use_item(intent: UseItemIntent) -> ActionResult:
@@ -6466,6 +6526,8 @@ func _resolve_use_item(intent: UseItemIntent) -> ActionResult:
 	if (item_id == MCF.ITEM_FRAG or item_id == MCF.ITEM_SMOKE) \
 			and actor.coord.x != intent.target.x and actor.coord.y != intent.target.y:
 		return ActionResult.fail("Grenades can only be thrown in straight lines")
+	if _throw_blocked(actor.coord, intent.target):
+		return ActionResult.fail("A wall is in the way")
 	actor.remaining_ap -= 1
 	actor.held_item_id = ""  # предмет расходуется в любом исходе
 
@@ -6582,7 +6644,7 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 			"epicenter": at_epicenter, "armor": u.armor(),
 			"need": u.armor() + 1, "rolls": [], "survived": true,
 		}
-		var is_shield: bool = _shield_immunity(u)
+		var is_shield: bool = _blast_shield(u)
 		if is_shield:
 			det["shielded"] = true # owner rule: a frag grenade never kills a shield bearer
 		elif at_epicenter:
@@ -6771,10 +6833,18 @@ func grenade_target_cells(actor: UnitInstance) -> Array:
 				continue
 			if Combat.distance(actor.coord, c) > MCF.GRENADE_RANGE:
 				continue
-			if state.grid.cell(c).is_wall():
+			if state.grid.cell(c).is_wall() or _throw_blocked(actor.coord, c):
 				continue
 			out.append(c)
 	return out
+
+## A throw never passes a wall (playtest 2026-10-19: the AI lobbed grenades through them).
+## Low cover is thrown over; a wall, closed airlock or pane on the line stops it.
+func _throw_blocked(from_coord: Vector2i, to_coord: Vector2i) -> bool:
+	for c: Vector2i in _throw_path(from_coord, to_coord):
+		if c != to_coord and state.grid.in_bounds(c) and state.grid.cell(c).is_wall():
+			return true
+	return false
 
 func capturable_target_ids(actor: UnitInstance) -> Array:
 	var out: Array = []
@@ -7259,7 +7329,7 @@ func _destroy_cell(c: Vector2i, res: ActionResult) -> Array[String]:
 	if cell == null:
 		return names
 	var occ := cell.occupant
-	if occ != null and occ.is_on_field() and not _shield_immunity(occ):
+	if occ != null and occ.is_on_field() and not _blast_shield(occ):
 		_kill(occ, res, c, true)
 		names.append(occ.stats.display_name)
 		if res != null:
@@ -7476,7 +7546,8 @@ func _army_spawn_cells(p: Dictionary) -> Array[Vector2i]:
 				_: c = Vector2i(d, from + k)
 			if not state.grid.in_bounds(c):
 				continue
-			if state.grid.blocks_walk(c) or state.grid.cell(c).is_space:
+			# Never into fire (playtest 2026-10-19): the search goes on to the cells beyond.
+			if state.grid.blocks_walk(c) or state.grid.cell(c).is_space or state.grid.cell(c).on_fire:
 				continue
 			out.append(c)
 	return out
@@ -7568,7 +7639,7 @@ func _hallway_spawn_cells(entry: Vector2i) -> Array[Vector2i]:
 		var c := queue[i]
 		i += 1
 		var cell := state.grid.cell(c)
-		if cell.occupant == null and cell.vehicle_id == -1 and not cell.blocks_move():
+		if cell.occupant == null and cell.vehicle_id == -1 and not cell.blocks_move() and not cell.on_fire:
 			out.append(c)
 		for d: Vector2i in Grid.N4:
 			var n := c + d
@@ -7645,7 +7716,7 @@ func obscured_line_reason(a: Vector2i, b: Vector2i) -> String:
 ## Флаг только для ПУЛЬ: заряд противотанкиста, снаряд пушки и обзор стекло по-прежнему
 ## считают стеной, поэтому по умолчанию он выключен.
 func los_blocked(from_coord: Vector2i, to_coord: Vector2i, allow_embrasure: bool = true,
-		ignore_units: bool = false, glass_passable: bool = false) -> bool:
+		ignore_units: bool = false, glass_passable: bool = false, smoke_passable: bool = false) -> bool:
 	if _line_off_board(from_coord, to_coord):
 		return false
 	var dx := to_coord.x - from_coord.x
@@ -7664,7 +7735,7 @@ func los_blocked(from_coord: Vector2i, to_coord: Vector2i, allow_embrasure: bool
 	# Газ (0.9.4) держит и взгляд, и выстрел — как стена. Спрашивается он ТОЛЬКО когда газ
 	# на карте вообще есть: эта функция зовётся десятки тысяч раз за один расчёт плана ИИ.
 	# Gas also obscures either endpoint, unlike a wall face or a firing embrasure.
-	var any_gas := GridCell.obscurants() > 0
+	var any_gas := GridCell.obscurants() > 0 and not smoke_passable
 	if any_gas and (grid.cell_fast(from_coord.x, from_coord.y).obscured() \
 			or grid.cell_fast(to_coord.x, to_coord.y).obscured()):
 		return true
@@ -8027,9 +8098,8 @@ func can_shoot(shooter: UnitInstance, target: UnitInstance) -> String:
 	if not friendly_fire_enabled and is_ally_of(shooter, target):
 		return "Friendly fire is off"
 	# Свой всегда виден, поэтому проверку тумана войны он проходит сам собой.
-	# Туман войны (§3.9): скрытого противника нельзя выбрать целью.
-	if gas_blocks_line(shooter.coord, target.coord):
-		return obscured_line_reason(shooter.coord, target.coord)
+	# Туман войны (§3.9): скрытого противника нельзя выбрать целью. Smoke and gas on the
+	# line no longer forbid the shot — they cost SMOKE_HIT_PENALTY (owner, 2026-10-19).
 	if not is_visible_to_team(shooter.owner, target):
 		return "Target not visible"
 	if not Combat.is_on_firing_line(shooter.coord, target.coord):
@@ -8059,17 +8129,24 @@ func can_shoot(shooter: UnitInstance, target: UnitInstance) -> String:
 	# Стекло — отдельный случай (#29): по цели ЗА стеклом стрелять можно, каждая пуля
 	# пробует его пробить сама. Заряд противотанкиста в это исключение не входит.
 	if los_blocked(shooter.coord, target.coord, not _is_anti_tank(shooter), true,
-			not _is_anti_tank(shooter)):
+			not _is_anti_tank(shooter), true):
 		return "Firing line is blocked"
 	# Стоящий за чужой спиной — не цель (batch soil-rulers): пуля и заряд ПТ всё равно
 	# достались бы первому на линии (см. перехват в _resolve_shoot), а прицел, который
 	# показывает заднего, обещал выстрел, которого в игре нет. Целиться — в того, кто ближе.
-	if first_unit_on_line(shooter.coord, target.coord,
-			shooter if not friendly_fire_enabled else null) != null:
+	# Your own soldiers block the line too (playtest 2026-10-19: crews leaving a tank fired
+	# straight through each other). Friendly fire off only means they are never hit.
+	if first_unit_on_line(shooter.coord, target.coord) != null:
 		return "Another unit is in the way"
-	if hit_need(dist, shooter.fire_range()) >= 7:
-		return "Too far"
+	if hit_need(dist, shooter.fire_range()) + smoke_penalty(shooter.coord, target.coord) >= 7:
+		return "Too far to hit through the smoke" if smoke_penalty(shooter.coord, target.coord) > 0 else "Too far"
 	return ""
+
+## Smoke and gas (owner, 2026-10-19): aimed fire into, out of or through a cloud is
+## allowed but blind — this much is added to the number the hit die needs.
+const SMOKE_HIT_PENALTY := 2
+func smoke_penalty(a: Vector2i, b: Vector2i) -> int:
+	return SMOKE_HIT_PENALTY if gas_blocks_line(a, b) else 0
 
 ## Окно под выстрел (batch ui-drones): видимая клетка со стеклом на линии огня и в
 ## пределах дальности. Спецстрелкам (противотанкист, огнемётчик, марксман) свой путь.
@@ -8271,9 +8348,10 @@ func can_blast_cell(shooter: UnitInstance, cell: Vector2i) -> String:
 	if not Combat.is_on_firing_line(shooter.coord, cell):
 		return "Target not on the firing line"
 	# Заряд противотанкиста в амбразуру не пролезает (#86).
-	if los_blocked(shooter.coord, cell, false):
+	if los_blocked(shooter.coord, cell, false, false, false, true):
 		return "Firing line is blocked"
-	if hit_need(Combat.distance(shooter.coord, cell), shooter.fire_range()) >= 7:
+	if hit_need(Combat.distance(shooter.coord, cell), shooter.fire_range()) \
+			+ smoke_penalty(shooter.coord, cell) >= 7:
 		return "Too far"
 	return ""
 
@@ -8317,9 +8395,7 @@ func can_flame_cell(shooter: UnitInstance, cell: Vector2i) -> String:
 		return "Target not on the firing line"
 	if Combat.distance(shooter.coord, cell) > MCF.FLAME_JET_LENGTH:
 		return "Too far for the flame jet"
-	if gas_blocks_line(shooter.coord, cell):
-		return obscured_line_reason(shooter.coord, cell)
-	return ""
+	return ""   # a jet is not aimed: smoke and gas don't stop it
 
 ## Пустые клетки пола, по которым огнемётчик может пустить струю (для подсветки в UI).
 func flammable_cells(shooter: UnitInstance) -> Array:
@@ -9278,7 +9354,7 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 		if MCF.is_glass(c.feature_id):
 			_fx(res, {"fx": "shards", "at": cell_coord, "from": from_c})
 		elif CHUNK_WALLS.has(c.feature_id):
-			_wall_chunks(res, cell_coord, from_c, c.feature_id)
+			_wall_chunks(res, cell_coord, from_c, c.feature_id, 0, false, true)
 		if c.is_wall():
 			smashed += 1
 			notify_cell_changed(cell_coord)  # снос стены — повод проснуться жителям рядом

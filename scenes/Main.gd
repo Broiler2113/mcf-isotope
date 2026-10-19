@@ -176,7 +176,6 @@ var _pending_death_ids: Dictionary = {}
 var _hold_visual: Dictionary = {}
 var _held_grid: Grid = null
 var _held_grid_key: Array = []
-var _held_fog_key: int = 0
 var _held_fog_source: Dictionary = {}
 var _held_visible_source: Dictionary = {}
 
@@ -571,6 +570,9 @@ const REPLAY_SPEEDS := [1.0, 2.0, 4.0, 8.0]
 var _spectator := false
 var _spectator_side := 0
 var _spectator_fog := false
+## After the match (playtest 2026-10-19): "Look at the Board" may lift all fog of war.
+var _reveal_board := false
+var _reveal_btn: CheckBox
 var _spectator_view: GameActionResolver = null
 var networked: bool = false
 var my_owner: int = MCF.Owner.PLAYER_1
@@ -626,6 +628,7 @@ func _ready() -> void:
 	_audio.world = func() -> GameState: return state
 	add_child(_audio)
 	_fx.sound_requested.connect(_audio.cue)
+	_fx.volley_requested.connect(_audio.volley)
 	_fx.sound_reset.connect(_audio.reset)
 	_sync_camera_layers()
 	# У записи нет игроков: смотреть — не играть, поэтому контроллеров не заводим
@@ -868,6 +871,7 @@ func _play_civilian_result(res: ActionResult) -> void:
 			_pending_death_ids[id] = true
 		queue_redraw()
 		_fast_playback = true  # item 32: нейтральный слот идёт ускоренно
+		_fx.preview_lanes(res.fx)   # who fires at whom shows while the dice roll
 		await _play_dice(res.dice_events)
 		_fast_playback = false
 		queue_redraw()
@@ -1114,6 +1118,7 @@ func _show_result(result: ActionResult) -> void:
 			_pending_death_ids[id] = true
 		_hold_visual = result.visual_hold  # item 22
 		queue_redraw()
+		_fx.preview_lanes(result.fx)   # who fires at whom shows while the dice roll
 		await _play_dice(result.dice_events)
 	await _show_effects(result)
 	if _result_is_audible(result):
@@ -1699,7 +1704,12 @@ func _handle_click(coord: Vector2i) -> void:
 			_back_to_menu()
 		Mode.DPMG_FIRE:
 			if occupant != null and target_ids.has(occupant.id):
-				_submit(DPMGFireIntent.new(selected_id, rsp_active, occupant.id, -1))
+				# How many rounds (owner, 2026-10-19): the rest of the burst stays for later.
+				var gun := rsp_active
+				var tid := occupant.id
+				var rounds := _dpmg_rounds_left(_selected_unit(), gun)
+				_open_shot_picker(occupant.stats.display_name, rounds if rounds > 0 else MCF.DPMG_RATE_OF_FIRE,
+						func(n: int) -> Intent: return DPMGFireIntent.new(selected_id, gun, tid, n))
 				return
 			if _is_own_active(occupant):
 				_select(occupant)
@@ -3094,9 +3104,14 @@ func _enter_weld() -> void:
 	_menu.hide()
 	queue_redraw()
 
+## Rounds still in this unit's DPMG burst at that gun (0 — none; a new burst costs 1 AP).
+func _dpmg_rounds_left(u: UnitInstance, dpmg_coord: Vector2i) -> int:
+	return u.action_state.remaining_shots if u != null and u.action_state != null \
+			and u.action_state.dpmg_pending(dpmg_coord) else 0
+
 func _enter_rsp_fire(dpmg_coord: Vector2i) -> void:
 	var u := _selected_unit()
-	if u == null or u.remaining_ap <= 0:
+	if u == null or (u.remaining_ap <= 0 and _dpmg_rounds_left(u, dpmg_coord) <= 0):
 		return
 	mode = Mode.DPMG_FIRE
 	rsp_active = dpmg_coord
@@ -3259,6 +3274,7 @@ func _on_intent_ready(intent: Intent) -> void:
 			_ap_display.erase(ap_actor.id if ap_actor != null else -1)
 			_play_walks_free(result.dice_events)
 		else:
+			_fx.preview_lanes(result.fx)   # who fires at whom shows while the dice roll
 			await _play_dice(result.dice_events, not _result_is_audible(result))
 		queue_redraw()
 	# Косметика (#21) добавляется ПОСЛЕ анимации броска, а смерть, кровь и взрыв — когда
@@ -3888,6 +3904,7 @@ func _show_net_action(intent: Intent, result: ActionResult) -> void:
 		if own_ctrl != null and own_ctrl.is_local_human() and _walks_only(result.dice_events):
 			_play_walks_free(result.dice_events)   # your own soldier walking: stay live (0.11)
 		else:
+			_fx.preview_lanes(result.fx)   # who fires at whom shows while the dice roll
 			await _play_dice(result.dice_events, not _result_is_audible(result))
 	await _show_effects(result)
 	if _result_is_audible(result):
@@ -4249,6 +4266,17 @@ func _play_dice(events: Array, hidden := false) -> void:
 		if ev.get("kind", "") == "veh_walk":
 			await _await_walks()
 			await _play_veh_walk(ev)
+			continue
+		if ev.get("kind", "") == "effects":
+			# One raider's or civilian's action, shown where it happened in the turn.
+			await _await_walks()
+			var part := ActionResult.success()
+			part.fx = ev["fx"]
+			part.deaths.assign(ev.get("deaths", []))
+			part.visual_deaths.assign(ev.get("visual_deaths", []))
+			await _show_effects(part, true)
+			for fx_ev: Dictionary in part.fx:
+				fx_ev["_shown"] = true
 			continue
 		if ev.get("kind", "") == "walk":
 			# One actor cannot run two interpolation jobs simultaneously.
@@ -5052,8 +5080,11 @@ func _ensure_visible(coord: Vector2i) -> void:
 ## машин, зум не трогает. В командной игре на панели есть кнопка на себя и на каждого
 ## союзника — найти своих на большой карте одним щелчком.
 func _center_on_side(side: int, instant: bool = false) -> void:
+	_center_on_cell(_home_focus(side), instant)
+
+func _center_on_cell(cell: Vector2i, instant: bool = false) -> void:
 	var view := get_viewport_rect().size
-	var centre := _cell_origin(_home_focus(side)) + Vector2(CELL, CELL) * 0.5
+	var centre := _cell_origin(cell) + Vector2(CELL, CELL) * 0.5
 	_kill_pan_tween()
 	if instant:
 		# Начало боя: прыжком, доводить нечего — камеру ещё никто не двигал.
@@ -5236,6 +5267,12 @@ var _fog_mem_dmg_ver: int = 0
 ## кровь и труп, появившиеся в темноте, не видны, пока туда не посмотрят.
 var _fog_mem_fx: Dictionary = {}       # viewer -> DecalMemory
 var _fog_mem_corpses: Dictionary = {}  # viewer -> {клетка: [павший или null, сколько тел]}
+## The visible set the memories were last brought up to date with, and whose it is. When
+## the view jumps (a walk starts or ends, a pre-impact hold opens or closes) the memories
+## re-check only the cells that differ, not the whole view (issues-fix-6 #4: ~90 ms each).
+var _mem_visible: Dictionary = {}
+var _mem_visible_key: Array = []
+var _mem_view: GameActionResolver = null
 
 func _board_memory(viewer: int, visible: Dictionary, vis_changed: Variant) -> Grid:
 	var grid := state.grid
@@ -5337,6 +5374,30 @@ static func _copy_look(dst: GridCell, src: GridCell) -> void:
 	dst.lamps = src.lamps
 	dst.items_off = src.items_off   # мелкие предметы (0.12.1): в тумане — какими их видели
 
+## Cells (y * width + x) whose visibility differs from what the fog memories last saw.
+## A logged step only touches its own cells; a jump to another view is diffed against the
+## kept copy. null (re-check the whole view) only without a copy for this viewer and board.
+func _track_mem_visible(viewer: int, visible: Dictionary, logged: Variant, jumped: bool) -> Variant:
+	var gw := state.grid.width
+	var key := [viewer, state.grid.get_instance_id()]
+	if key != _mem_visible_key:
+		_mem_visible_key = key
+		_mem_visible = visible.duplicate()
+		return null
+	if not jumped:
+		for k: int in logged:
+			var c := Vector2i(k % gw, k / gw)
+			if visible.has(c): _mem_visible[c] = true
+			else: _mem_visible.erase(c)
+		return logged
+	var diff: Array = []
+	for c: Vector2i in _mem_visible:
+		if not visible.has(c): diff.append(c.y * gw + c.x)
+	for c: Vector2i in visible:
+		if not _mem_visible.has(c): diff.append(c.y * gw + c.x)
+	_mem_visible = visible.duplicate()
+	return diff
+
 ## Держит слой дальнего плана в согласии с доской. far — рисует ли им этот кадр. Слой
 ## заводится при первом отъезде и дальше правится и вблизи: правка стоит столько, сколько
 ## клеток сменилось, а новый отъезд обходится без сборки заново. Выгрузка текстур на
@@ -5364,13 +5425,16 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, fog_on: bool) -> voi
 	var decals: FxDecals = _fx
 	var dmem: DecalMemory = null
 	if fog_on:
-		vis_changed = _view_resolver().take_vis_changes(viewer)
+		var view := _view_resolver()
+		vis_changed = view.take_vis_changes(viewer)
+		var jumped := vis_changed == null or view != _mem_view
+		_mem_view = view
 		var held_seen: Dictionary = _hold_visual.get("visible", {})
 		if (not held_seen.is_empty() and not is_same(held_seen, _held_fog_source)) \
 				or (held_seen.is_empty() and not _held_fog_source.is_empty()):
-			vis_changed = null
+			jumped = true
 			_held_fog_source = held_seen
-			_held_fog_key += 1
+		vis_changed = _track_mem_visible(viewer, visible, vis_changed, jumped)
 		var switched := viewer != _fog_mem_viewer
 		shown = _board_memory(viewer, visible, vis_changed)
 		# Косметика — по той же памяти (0.11.3): новый зритель сверяется целиком.
@@ -5457,7 +5521,7 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, fog_on: bool) -> voi
 	# видимость сменилась (take_vis_changes; null — «сменилось всё»).
 	if fog_on:
 		var view := _view_resolver()
-		var fkey := [grid.get_instance_id(), view.get_instance_id(), viewer, view.fog_mode, _held_fog_key]
+		var fkey := [grid.get_instance_id(), viewer, view.fog_mode]
 		var changed: Variant = vis_changed
 		var hidden_col := FOG_COL if view.fog_mode == MCF.Fog.STANDARD else UNKNOWN_COL
 		if fkey != _lod_fog_key or _lod_fog == null or changed == null:
@@ -7026,18 +7090,25 @@ var _jet: Dictionary = {}
 ## Всё, что идёт ПОСЛЕ бросков (0.12.1): струя огнемёта, полёт пуль и снарядов, и только по
 ## попаданию — трупы, кровь, осколки, взрыв и снесённые стены. Здесь же снимаются держатели
 ## «до броска» (_pending_death_ids, _hold_visual), а остаток косметики ложится разом.
-func _show_effects(result: ActionResult) -> void:
+## partial — one action out of a neutral turn, shown mid-stream: it releases only its own
+## dead and leaves the turn's "before impact" view to the whole result.
+func _show_effects(result: ActionResult, partial := false) -> void:
 	# Пока летит пуля или струя, экран занят, как во время броска: ни щелчок игрока, ни шаг
 	# ИИ не должны начать следующее действие посреди полёта.
 	var was_animating := _animating
 	_animating = true
-	# Lanes also drive muzzle lighting: launch them with the shot, after the dice.
-	_fx.apply_lanes(result.fx)
+	# Lanes also drive muzzle lighting: launch them with the shot, after the dice. Effects
+	# already shown mid-turn ("effects" events) are not launched twice.
+	_fx.apply_lanes(result.fx.filter(func(e: Dictionary) -> bool: return not e.has("_shown")))
 	await _play_flame_jets(result)
 	await _play_shots(result)
 	_animating = was_animating
-	_pending_death_ids.clear()
-	_hold_visual = {}
+	if partial:
+		for id: int in result.deaths + result.visual_deaths:
+			_pending_death_ids.erase(id)
+	else:
+		_pending_death_ids.clear()
+		_hold_visual = {}
 	var rest := result.fx.filter(func(e: Dictionary) -> bool: return not e.has("_shown"))
 	if not rest.is_empty():
 		_fx.apply(rest, result.fx.any(func(e: Dictionary) -> bool: return e.get("fx") == "shot"))
@@ -7053,6 +7124,8 @@ func _play_shots(result: ActionResult) -> void:
 	var flights: Array = []   # [время попадания, клетка, взрыв?]
 	var launch: Array = []
 	for ev: Dictionary in result.fx:
+		if ev.has("_shown"):
+			continue   # already shown mid-turn ("effects")
 		match str(ev.get("fx", "")):
 			"tracer":
 				var to: Array = ev.get("to", [])
@@ -7114,7 +7187,7 @@ func _land_shot(result: ActionResult, cell: Vector2i, blast: bool) -> void:
 
 func _play_flame_jets(result: ActionResult) -> void:
 	for ev: Dictionary in result.fx:
-		if str(ev.get("fx", "")) != "flame_jet" or (ev["cells"] as Array).is_empty():
+		if ev.has("_shown") or str(ev.get("fx", "")) != "flame_jet" or (ev["cells"] as Array).is_empty():
 			continue
 		if not is_inside_tree() or _pace() >= 8.0 or _fast_playback \
 				or (replay != null and _replay_skip_animations) or _tiles == null:
@@ -7662,6 +7735,15 @@ func _build_ui() -> void:
 	_height_btn.button_pressed = _heightmap
 	_height_btn.toggled.connect(_toggle_heightmap)
 	tools_box.add_child(_height_btn)
+	_reveal_btn = CheckBox.new()
+	_reveal_btn.text = "Show the whole board"
+	_reveal_btn.tooltip_text = "The match is over: lift the fog of war and see everything."
+	_reveal_btn.add_theme_font_size_override("font_size", 12)
+	_reveal_btn.visible = false
+	_reveal_btn.toggled.connect(func(on: bool) -> void:
+		_reveal_board = on
+		queue_redraw())
+	tools_box.add_child(_reveal_btn)
 	# Камера к своим (item 10): «Me» всегда, а в командной игре — и к каждому союзнику.
 	tools_box.add_child(_camera_row())
 	if _spectator: _build_spectator_controls(tools_box)
@@ -8984,7 +9066,75 @@ func _camera_row() -> Control:
 	_neutral_camera_row.add_child(_neutral_camera_buttons)
 	group.add_child(_neutral_camera_row)
 	_refresh_neutral_camera()
+	# Raiders and Holdout waves (playtest 2026-10-19): their own rows, apart from the
+	# players, with a button per army or wave you can see (all of them without fog).
+	for kind: String in ["raiders", "waves"]:
+		var frow := HBoxContainer.new()
+		var flabel := Label.new()
+		flabel.text = "Raider camera" if kind == "raiders" else "Wave camera"
+		flabel.add_theme_font_size_override("font_size", 11)
+		flabel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		frow.add_child(flabel)
+		var fgrid := GridContainer.new()
+		fgrid.columns = 3
+		frow.add_child(fgrid)
+		group.add_child(frow)
+		_force_rows[kind] = [frow, fgrid, []]
+	_refresh_force_cameras()
 	return group
+
+var _force_rows: Dictionary = {}   # "raiders"/"waves" -> [row, button grid, shown keys]
+
+## Visible raider armies (key: their slot) or Holdout waves (key: wave number) -> cells.
+func _force_camera_targets(waves: bool) -> Dictionary:
+	var targets := {}
+	if state == null or resolver == null: return targets
+	var limited := _view_resolver().visibility_limited()
+	var visible := _visible_before_impact(_viewing_side()) if limited else {}
+	var md := resolver.mode
+	for u: UnitInstance in state.all_units():
+		if not u.is_on_field() or u.is_drone or not _on_board(u): continue
+		var key := -1
+		if waves:
+			if md != null and md.is_holdout() and u.owner == md.wave_side and u.neutral_group > 0:
+				key = u.neutral_group
+		elif MCF.is_independent(u.owner):
+			key = u.owner
+		if key < 0 or (limited and not visible.has(u.coord)): continue
+		if not targets.has(key): targets[key] = []
+		targets[key].append(u.coord)
+	return targets
+
+func _refresh_force_cameras() -> void:
+	for kind: String in _force_rows:
+		var rec: Array = _force_rows[kind]
+		var waves := kind == "waves"
+		var keys := _force_camera_targets(waves).keys()
+		keys.sort()
+		(rec[0] as Control).visible = not keys.is_empty()
+		if keys == rec[2]: continue
+		rec[2] = keys
+		var grid_box: GridContainer = rec[1]
+		for child in grid_box.get_children():
+			grid_box.remove_child(child)
+			child.queue_free()
+		for key: int in keys:
+			var n: int = key if waves else key - MCF.INDEPENDENT_BASE + 1
+			var button := Button.new()
+			button.text = MCF.roman(n)
+			button.tooltip_text = ("Center on Wave %s" if waves else "Center on raider army %s") % MCF.roman(n)
+			button.custom_minimum_size = Vector2(40, 40)
+			button.focus_mode = Control.FOCUS_NONE
+			button.pressed.connect(func() -> void:
+				# Recheck when clicked: they may have moved out of sight since.
+				var cells: Array = _force_camera_targets(waves).get(key, [])
+				if not cells.is_empty(): _center_on_cells(cells))
+			grid_box.add_child(button)
+
+func _center_on_cells(cells: Array) -> void:
+	var sum := Vector2i.ZERO
+	for c: Vector2i in cells: sum += c
+	_center_on_cell(Vector2i(sum.x / cells.size(), sum.y / cells.size()))
 
 func _compact_button(text: String, handler: Callable) -> Button:
 	var b := Button.new()
@@ -9320,7 +9470,10 @@ func _open_menu(unit: UnitInstance) -> void:
 		# ДПМГ (§3.7): стрельба из своего пулемёта рядом.
 		var own_rsp := resolver.rsp_cells(unit, true)
 		if not own_rsp.is_empty():
-			_act_btn(vb, "Fire DPMG", _enter_rsp_fire.bind(own_rsp[0]), unit.remaining_ap > 0, "No action points left", "action_dpmg")
+			var rsp_left := _dpmg_rounds_left(unit, own_rsp[0])
+			_act_btn(vb, "Fire DPMG (%d left)" % rsp_left if rsp_left > 0 else "Fire DPMG",
+					_enter_rsp_fire.bind(own_rsp[0]), unit.remaining_ap > 0 or rsp_left > 0,
+					"No action points left", "action_dpmg")
 		# Отобрать вражеский ДПМГ (по правилу захвата).
 		var foe_rsp := resolver.rsp_cells(unit, false)
 		if not foe_rsp.is_empty():
@@ -9595,7 +9748,7 @@ func _to_menu() -> void:
 	get_tree().change_scene_to_file("res://scenes/MainMenu.tscn")
 
 func _on_end_turn_pressed() -> void:
-	GameAudio.ui("ui_end")
+	GameAudio.ui()
 	if _animating or _match_over:
 		return
 	_deselect()
@@ -9708,6 +9861,9 @@ static func _clock_text(total_seconds: int) -> String:
 
 func _refresh_status() -> void:
 	_refresh_neutral_camera()
+	_refresh_force_cameras()
+	if _reveal_btn != null:
+		_reveal_btn.visible = _match_over and not _spectator and resolver != null and resolver.fog_enabled
 	# Пауза (item 4) появляется и исчезает вместе с составом стола: сторону может взять
 	# человек, и наоборот. Дешевле сверять её здесь, на каждом обновлении строки хода,
 	# чем помнить про кнопку в каждой точке, где меняется ростер.
@@ -9868,10 +10024,10 @@ func _view_resolver() -> GameActionResolver:
 		# The memory renderer must compare the final simulation view with the last
 		# walking frame, not with its own pre-animation incremental journal.
 		resolver._vis_log.clear()
-	if not _spectator: return resolver
+	if not _spectator and not _reveal_board: return resolver
 	if _spectator_view == null or _spectator_view.state != state:
 		_spectator_view = GameActionResolver.new(state)
-	_spectator_view.fog_mode = MCF.Fog.STANDARD if _spectator_fog else MCF.Fog.OFF
+	_spectator_view.fog_mode = MCF.Fog.STANDARD if _spectator_fog and not _reveal_board else MCF.Fog.OFF
 	return _spectator_view
 
 func _build_spectator_controls(parent: Container) -> void:
@@ -9907,10 +10063,15 @@ func _draw_heights(font: Font, visible: Dictionary, fog_on: bool, x0: int, y0: i
 		for x in range(x0, x1 + 1):
 			var cell := grid.cell_fast(x, y)
 			var t := TerrainTiles.height_text(cell.cover_height, cell.is_space, cell.feature_id)
+			# A tank hull stands 2 m tall like a wall (playtest 2026-10-19).
+			var hull := cell.vehicle_id != -1 and state.get_vehicle(cell.vehicle_id) != null \
+					and state.get_vehicle(cell.vehicle_id).type_id == "tank"
+			if hull:
+				t = TerrainTiles.height_text(MCF.WALL_HEIGHT, false, "")
 			if t == "" or (fog_on and not visible.has(cell.coord)):
 				continue
 			TerrainTiles.draw_height_text(self, font, _cell_origin(cell.coord), CELL, t,
-					cell.cover_height >= MCF.WALL_HEIGHT and not Furniture.is_furniture(cell.feature_id))
+					hull or (cell.cover_height >= MCF.WALL_HEIGHT and not Furniture.is_furniture(cell.feature_id)))
 
 func _sync_camera_layers() -> void:
 	for layer in [_lod, _before_layer, _audio]:

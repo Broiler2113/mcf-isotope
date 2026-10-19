@@ -33,6 +33,9 @@ var _action_result: WeakRef
 var _turn_key := ""
 var _zone_states := {}
 var suppress := false
+## Seconds between rounds of one volley, by gun (FxDecals.volley_requested).
+const VOLLEY_GAP := {"rifle": 0.13, "mg": 0.085, "heavy_mg": 0.11, "shotgun": 0.45, "sniper": 1.0}
+var _volley_gen := 0
 
 func _ready() -> void:
 	for i in WORLD_CAP:
@@ -147,6 +150,16 @@ func cue(id: String, cell: Vector2i, owner := -1) -> AudioStreamPlayer2D:
 		"player": player, "count": 1, "db": player.volume_db})
 	GameAudio.cue_played.emit(id, "SFX", player.global_position)
 	return player
+
+## The rest of a volley: one shot per bullet, spaced by the gun's cadence. A reset (undo,
+## seek, new match) drops the rounds still waiting.
+func volley(id: String, cell: Vector2i, owner: int, count: int) -> void:
+	var gen := _volley_gen
+	var gap: float = VOLLEY_GAP.get(id, 0.12)
+	for i in range(1, count + 1):
+		get_tree().create_timer(gap * i).timeout.connect(func() -> void:
+			if gen == _volley_gen and is_inside_tree():
+				cue(id, cell, owner))
 
 func _finished(player: AudioStreamPlayer2D) -> void:
 	voices = voices.filter(func(e: Dictionary) -> bool: return e.player != player)
@@ -293,6 +306,7 @@ func _update_fire() -> void:
 		_fire.play()
 
 func reset() -> void:
+	_volley_gen += 1
 	for player in _pool:
 		player.stop()
 	voices.clear()

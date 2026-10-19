@@ -124,7 +124,8 @@ func prime(player: Node, id: String, extra_db := 0.0) -> bool:
 		return false
 	var spread: Vector2 = JITTER.get(category(id), Vector2.ZERO)
 	player.set("stream", take)
-	player.set("pitch_scale", 1.0 + _rng.randf_range(-spread.x, spread.x))
+	var pitch := float(Catalog.SFX.get(id, {}).get("pitch", 1.0))   # e.g. heavier guns
+	player.set("pitch_scale", pitch * (1.0 + _rng.randf_range(-spread.x, spread.x)))
 	player.set("volume_db", level_db(id) + extra_db + _rng.randf_range(-spread.y, spread.y))
 	return true
 
@@ -280,15 +281,28 @@ func _line_finished() -> void:
 	if _voice_queue.is_empty():
 		ui("radio_out") # end of transmission
 
+## One interface sound for everything the player does in the UI (owner, 2026-10-19):
+## buttons and toggles, tabs, drop-down choices and menus, sliders, lists, typed entries.
 func _watch_ui(node: Node) -> void:
 	if node is BaseButton:
 		node.pressed.connect(_button_pressed.bind(weakref(node)))
 	elif node is TabContainer:
 		node.tab_changed.connect(func(_index: int) -> void:
-			if node.get_tab_bar().has_focus(): ui("ui_nav"))
+			if node.get_tab_bar().has_focus(): ui())
+	elif node is PopupMenu:
+		node.id_pressed.connect(func(_id: int) -> void: ui())
+	elif node is Slider:
+		node.drag_ended.connect(func(changed: bool) -> void:
+			if changed: ui())
+	elif node is ItemList:
+		node.item_clicked.connect(func(_index: int, _at: Vector2, _button: int) -> void: ui())
+	elif node is LineEdit:
+		node.text_submitted.connect(func(_text: String) -> void: ui())
+	if node is OptionButton:
+		node.item_selected.connect(func(_index: int) -> void: ui())
 
 func _button_pressed(button_ref: WeakRef) -> void:
 	var button: BaseButton = button_ref.get_ref()
 	if button == null or button.get_meta("audio_silent", false):
 		return
-	ui("ui_end" if button is Button and button.text.begins_with("End Turn") else "ui_click")
+	ui()

@@ -49,12 +49,12 @@ Every hit is then [b]parried[/b]: the target rolls its armor number (4+, 3+, 2+�
 Rate of fire is how many dice one Shoot action rolls. A burst can be split between targets for the same AP.
 
 [h]Friendly fire[/h]
-A bullet hits the [b]first soldier on the line[/b], friend or foe. Keep your own men out of each other's firing lines.
+Nobody fires past a soldier standing in the line, friend or foe - aim at the nearer one. Keep your own men out of each other's firing lines.
 
 [h]Modifiers[/h]
-• [b]Smoke and gas block[/b] sight and aimed fire.
+• [b]Smoke and gas[/b] block sight. A shot into, out of or through a cloud still goes, but needs %d more on the hit die (no Sniper auto-hit).
 • Sniper: an automatic hit up to %d cells with no fortification in between.
-• In vacuum a shot knocks the shooter back %d cell and the target %d (not the anti-tank).""" % [MCF.SNIPER_AUTOHIT_RANGE,
+• In vacuum a shot knocks the shooter back %d cell and the target %d (not the anti-tank).""" % [GameActionResolver.SMOKE_HIT_PENALTY, MCF.SNIPER_AUTOHIT_RANGE,
 				MCF.ZEROG_SHOOTER_KNOCKBACK, MCF.ZEROG_TARGET_KNOCKBACK]],
 
 		["Lasers", """[h]Potential[/h]
@@ -115,7 +115,7 @@ The [b]Miner[/b] and the Engineer tear down fortifications for 1 AP each.
 Sandbags, hedgehogs, dirt piles, heavy furniture and corpses can be dragged. Sandbags dragged onto sandbags become a sandbag wall.
 
 [h]Airlocks and guns[/h]
-An airlock opens while a living soldier stands next to it. A stationary machine gun (DPMG) is fired from an adjacent cell: range %d, %d shots.""" % [MCF.DPMG_RANGE, MCF.DPMG_RATE_OF_FIRE]],
+An airlock opens while a living soldier stands next to it. A stationary machine gun (DPMG) is fired from an adjacent cell: range %d, a burst of %d shots for 1 AP. Fire as many rounds as you like; the rest of the burst can go at other targets without more AP. The gun turns to face what it fires at.""" % [MCF.DPMG_RANGE, MCF.DPMG_RATE_OF_FIRE]],
 
 		["Fire", """[h]Spreading[/h]
 Fire spreads at the start of the turn of the side that lit it. Each burning cell tries its 4 straight neighbors: grass, wooden floors and wooden walls catch on a [b]3+[/b], other floors on a [b]4+[/b]. Fire from a random event spreads once at the end of every round.
@@ -132,10 +132,10 @@ Fire never goes out on its own. The extinguisher grenade douses an area; buildin
 		["Grenades & Items", """Items are used up when used, hit or miss.
 
 [h]Frag grenade[/h] - Machinegunner
-Thrown up to %d cells along a straight line. On a miss it falls short and still explodes. The X-shaped blast always kills in its center; everyone else in it must pass two parry rolls, each 1 harder than usual. It never kills a Shield Bearer, center included.
+Thrown up to %d cells along a straight line, over low cover but never past a wall. On a miss it falls short and still explodes. The X-shaped blast always kills in its center; everyone else in it must pass two parry rolls, each 1 harder than usual. It never kills a Shield Bearer, center included.
 
 [h]Smoke grenade[/h] - Heavy Infantry
-Thrown like a frag. A 3×3 cloud stays until the end of the next round, blocks sight and aimed fire, and harms no one. Use it to cross open ground or to blind a machine gun.
+Thrown like a frag. A 3×3 cloud stays until the end of the next round, blocks sight, makes every shot through it harder, and harms no one. Use it to cross open ground or to blind a machine gun.
 
 [h]Fire extinguisher grenade[/h] - Flamethrower
 Puts out fire in its area.

@@ -105,6 +105,8 @@ static func _encode_unit(u: UnitInstance) -> Dictionary:
 	if u.action_state != null:
 		rec["action"] = {"target": u.action_state.target_id,
 				"shots": u.action_state.remaining_shots}
+		if u.action_state.dpmg != ActionState.NO_DPMG:
+			rec["action"]["dpmg"] = _xy(u.action_state.dpmg)
 	return rec
 
 static func _encode_vehicle(v: Vehicle) -> Dictionary:
@@ -322,7 +324,8 @@ static func _decode_unit(raw: Dictionary) -> Dictionary:
 	if raw.has("action"):
 		var a: Dictionary = raw["action"]
 		action = {"target_id": int(a.get("target", -1)),
-				"remaining_shots": int(a.get("shots", 0))}
+				"remaining_shots": int(a.get("shots", 0)),
+				"dpmg": _vec(a["dpmg"]) if a.has("dpmg") else ActionState.NO_DPMG}
 	return {
 		"obj": u, "id": u.id, "coord": u.coord, "owner": u.owner,
 		"remaining_ap": int(raw.get("ap", 0)), "status": int(raw.get("status", 0)),

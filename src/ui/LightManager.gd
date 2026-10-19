@@ -332,6 +332,7 @@ func update_view(grid: Grid, pan: Vector2, zoom: float, origin: Vector2, cell_si
 				if not reach.has_point(c): continue
 				dynamic.append([Vector2(c) + Vector2.ONE * 0.5, 4.0, 1.6 * a, Color(1.0, 0.7, 0.35)])
 		for lane: Dictionary in fx.lanes:
+			if lane.get("hold", false): continue   # previewed before the shot: no flash yet
 			var e := maxf(0.0, 1.0 - float(lane.t) / 0.12)
 			if e <= 0.0: continue
 			var from := Vector2(lane.from)

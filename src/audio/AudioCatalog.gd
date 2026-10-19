@@ -6,342 +6,398 @@ const SFX = {
   "rifle": {
     "n": 6,
     "cat": "gun",
-    "loop": false
-  },
-  "burst": {
-    "n": 4,
-    "cat": "gun",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "mg": {
-    "n": 3,
+    "n": 4,
     "cat": "gun",
-    "loop": false
+    "loop": false,
+    "pitch": 0.92
   },
   "sniper": {
     "n": 5,
     "cat": "gun",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "shotgun": {
     "n": 5,
     "cat": "gun",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "heavy_mg": {
-    "n": 4,
+    "n": 5,
     "cat": "gun",
-    "loop": false
+    "loop": false,
+    "pitch": 0.8
   },
   "laser": {
     "n": 3,
     "cat": "gun",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "flame": {
     "n": 5,
     "cat": "gun",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "explosion": {
     "n": 6,
     "cat": "heavy",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "vehicle_hull": {
     "n": 2,
     "cat": "heavy",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "shell_launch": {
     "n": 5,
     "cat": "heavy",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "rocket_launch": {
     "n": 3,
     "cat": "heavy",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "mortar_fire": {
     "n": 6,
     "cat": "heavy",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "hit_flesh": {
     "n": 5,
     "cat": "impact",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "hit_metal": {
     "n": 8,
     "cat": "impact",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "hit_stone": {
     "n": 8,
     "cat": "impact",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "hit_wood": {
     "n": 5,
     "cat": "impact",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "hit_glass": {
     "n": 5,
     "cat": "impact",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "hit_dirt": {
     "n": 5,
     "cat": "impact",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "shield_block": {
     "n": 5,
     "cat": "impact",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "laser_hit": {
     "n": 4,
     "cat": "impact",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "glass": {
     "n": 3,
     "cat": "debris",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "structure": {
     "n": 3,
     "cat": "debris",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "corpse": {
     "n": 3,
     "cat": "debris",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "vehicle_tracks": {
     "n": 2,
     "cat": "debris",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "vehicle_tower": {
     "n": 3,
     "cat": "debris",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "vehicle_gun": {
     "n": 3,
     "cat": "debris",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "collapse": {
     "n": 2,
     "cat": "debris",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "step_concrete": {
     "n": 5,
     "cat": "foley",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "step_wood": {
     "n": 5,
     "cat": "foley",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "step_carpet": {
     "n": 5,
     "cat": "foley",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "step_grass": {
     "n": 5,
     "cat": "foley",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "step_dirt": {
     "n": 8,
     "cat": "foley",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "step_metal": {
     "n": 6,
     "cat": "foley",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "build": {
     "n": 6,
     "cat": "foley",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "dig": {
     "n": 4,
     "cat": "foley",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "mine_lay": {
     "n": 4,
     "cat": "foley",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "mine_disarm": {
     "n": 3,
     "cat": "foley",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "grab": {
     "n": 5,
     "cat": "foley",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "grenade_launch": {
     "n": 3,
     "cat": "foley",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "door_open": {
     "n": 4,
     "cat": "foley",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "door_close": {
     "n": 3,
     "cat": "foley",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "weld": {
     "n": 5,
     "cat": "foley",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "event_warn": {
     "n": 3,
     "cat": "event",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "incoming": {
     "n": 4,
     "cat": "event",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "gas": {
     "n": 3,
     "cat": "event",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "emp": {
     "n": 2,
     "cat": "event",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "dust": {
     "n": 2,
     "cat": "event",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "radio_in": {
     "n": 2,
     "cat": "radio",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "radio_out": {
     "n": 1,
     "cat": "radio",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "turn": {
     "n": 1,
     "cat": "radio",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "event_land": {
     "n": 1,
     "cat": "radio",
-    "loop": false
-  },
-  "ui_end": {
-    "n": 1,
-    "cat": "radio",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "ui_click": {
-    "n": 5,
+    "n": 1,
     "cat": "ui",
-    "loop": false
-  },
-  "ui_nav": {
-    "n": 3,
-    "cat": "ui",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "dice_roll": {
     "n": 3,
     "cat": "ui",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "dice_land": {
     "n": 5,
     "cat": "ui",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "victory": {
     "n": 1,
     "cat": "ui",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "defeat": {
     "n": 1,
     "cat": "ui",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "draw": {
     "n": 1,
     "cat": "ui",
-    "loop": false
+    "loop": false,
+    "pitch": 1.0
   },
   "vehicle_move": {
     "n": 3,
     "cat": "engine",
-    "loop": true
+    "loop": true,
+    "pitch": 1.0
   },
   "drone_move": {
     "n": 2,
     "cat": "engine",
-    "loop": true
+    "loop": true,
+    "pitch": 1.0
   },
   "fire_loop": {
     "n": 1,
     "cat": "fire",
-    "loop": true
+    "loop": true,
+    "pitch": 1.0
   },
   "amb_station": {
     "n": 1,
     "cat": "ambience",
-    "loop": true
+    "loop": true,
+    "pitch": 1.0
   },
   "amb_bunker": {
     "n": 1,
     "cat": "ambience",
-    "loop": true
+    "loop": true,
+    "pitch": 1.0
   },
   "amb_asteroid": {
     "n": 1,
     "cat": "ambience",
-    "loop": true
+    "loop": true,
+    "pitch": 1.0
   },
   "amb_town": {
     "n": 1,
     "cat": "ambience",
-    "loop": true
+    "loop": true,
+    "pitch": 1.0
   },
   "amb_field": {
     "n": 1,
     "cat": "ambience",
-    "loop": true
+    "loop": true,
+    "pitch": 1.0
+  },
+  "crunch": {
+    "n": 3,
+    "cat": "foley",
+    "loop": false,
+    "pitch": 1.0
   }
 }
 

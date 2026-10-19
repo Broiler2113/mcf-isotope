@@ -106,7 +106,7 @@ func _lifecycle() -> void:
 	burst_tracer["from"] = [3, 3]
 	burst_tracer["count"] = 3
 	fx.apply_lanes([lane, tracer, burst_lane, burst_tracer])
-	ck(cues == ["rifle", "burst"], "batched lanes choose the muzzle cue for their own shooter")
+	ck(cues == ["rifle", "rifle"], "batched lanes choose the muzzle cue for their own shooter")
 	for weapon: String in {"sniper": "sniper", "assault": "shotgun", "machinegunner": "mg",
 			"dpmg": "heavy_mg", "borg": "heavy_mg", "light_infantry": "rifle"}:
 		cues.clear()

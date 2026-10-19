@@ -3,9 +3,12 @@ extends RefCounted
 ## Emitted only by the client cosmetic lifecycle; never serialized or recorded.
 signal sound_requested(id: String, cell: Vector2i, owner: int)
 signal sound_reset
+## The rounds after the first of a volley (playtest 2026-10-19: one recorded shot per
+## bullet, at the weapon's own cadence — BattleAudio.volley).
+signal volley_requested(id: String, cell: Vector2i, owner: int, count: int)
 var audio_suppressed := false
 ## Muzzle sound by the lane's weapon (shooter unit type, or the mounted gun); anything
-## else fires the service rifle, single or burst.
+## else fires the service rifle. One shot is heard per bullet fired.
 const WEAPON_SOUND := {"sniper": "sniper", "assault": "shotgun", "machinegunner": "mg",
 	"dpmg": "heavy_mg", "borg": "heavy_mg"}
 
@@ -349,6 +352,35 @@ static func tracer_dur(ev: Dictionary) -> float:
 ## They use a separate pass from impact effects; both passes keep event seeds stable.
 func apply_lanes(events: Array) -> void:
 	_apply(events, true)
+	# A previewed lane the shot did not take over still fades like any other.
+	for lane: Dictionary in lanes:
+		lane.erase("hold")
+
+## Before the dice (owner, 2026-10-19): who fires at whom shows while the dice roll —
+## the line only, aimed at the intended target, with no sound, no muzzle light and no
+## fade. The shot (apply_lanes) takes these lanes over and starts them from there.
+func preview_lanes(events: Array) -> void:
+	for ev: Dictionary in events:
+		if ev.get("fx") != "lane":
+			continue
+		var lane := _lane_entry(ev)
+		if lane.is_empty():
+			continue
+		lane["hold"] = true
+		lanes.append(lane)
+	if lanes.size() > LANE_CAP:
+		lanes = lanes.slice(lanes.size() - LANE_CAP)
+
+func _lane_entry(ev: Dictionary) -> Dictionary:
+	var from_arr: Array = ev.get("from", [])
+	var to_arr: Array = ev.get("to", [])
+	if from_arr.size() < 2 or to_arr.size() < 2:
+		return {}
+	return {
+		"from": Vector2(float(from_arr[0]) + 0.5, float(from_arr[1]) + 0.5),
+		"to": Vector2(float(to_arr[0]) + 0.5, float(to_arr[1]) + 0.5),
+		"owner": int(ev.get("owner", -1)), "kind": str(ev.get("kind", "shot")), "t": 0.0,
+	}
 
 ## Разобрать список описаний из ActionResult.fx (дорожки — за apply_lanes()).
 func apply(events: Array, projectile_blast := false) -> void:
@@ -389,26 +421,34 @@ func _apply(events: Array, lanes_only: bool, projectile_blast := false) -> void:
 			"shot":
 				_shot(ev)
 			"lane":
-				var burst := events.any(func(e: Dictionary) -> bool:
-					return e.get("fx") == "tracer" and e.get("from") == ev.get("from") and int(e.get("count", 1)) > 1)
-				_lane(ev, burst)
+				var rounds := 1
+				for e: Dictionary in events:
+					if e.get("fx") == "tracer" and e.get("from") == ev.get("from"):
+						rounds = maxi(rounds, int(e.get("count", 1)))
+				_lane(ev, rounds)
 
 ## Дорожка боя (issue 8): от стрелка к цели, в цвете стороны стрелка.
-func _lane(ev: Dictionary, burst := false) -> void:
+func _lane(ev: Dictionary, rounds := 1) -> void:
 	var from_arr: Array = ev.get("from", [])
 	var to_arr: Array = ev.get("to", [])
 	if from_arr.size() < 2 or to_arr.size() < 2:
 		return
 	var kind := str(ev.get("kind", "shot"))
-	var gun: String = WEAPON_SOUND.get(str(ev.get("weapon", "")), "burst" if burst else "rifle")
+	var gun: String = WEAPON_SOUND.get(str(ev.get("weapon", "")), "rifle")
 	var sound := {"shot": gun, "beam": "laser", "flame": "flame"}
 	if sound.has(kind):
-		_sound(sound[kind], Vector2i(int(from_arr[0]), int(from_arr[1])), int(ev.get("owner", -1)))
-	lanes.append({
-		"from": Vector2(float(from_arr[0]) + 0.5, float(from_arr[1]) + 0.5),
-		"to": Vector2(float(to_arr[0]) + 0.5, float(to_arr[1]) + 0.5),
-		"owner": int(ev.get("owner", -1)), "kind": str(ev.get("kind", "shot")), "t": 0.0,
-	})
+		var muzzle := Vector2i(int(from_arr[0]), int(from_arr[1]))
+		_sound(sound[kind], muzzle, int(ev.get("owner", -1)))
+		if kind == "shot" and rounds > 1 and not audio_suppressed:
+			volley_requested.emit(gun, muzzle, int(ev.get("owner", -1)), rounds - 1)
+	var entry := _lane_entry(ev)
+	for lane: Dictionary in lanes:
+		if lane.get("hold", false) and lane["from"] == entry["from"] and lane["to"] == entry["to"] \
+				and lane["kind"] == entry["kind"] and lane["owner"] == entry["owner"]:
+			lane.erase("hold")   # the previewed line: the shot starts it now
+			lane["t"] = 0.0
+			return
+	lanes.append(entry)
 	if lanes.size() > LANE_CAP:
 		lanes = lanes.slice(lanes.size() - LANE_CAP)
 
@@ -497,7 +537,8 @@ func _shards(ev: Dictionary) -> void:
 ## как стекло; ДОТ, потерявший прочность (toward), откалывается со стороны выстрела —
 ## куски летят к стрелку. Удар из своей же клетки — во все стороны.
 func _chunks(ev: Dictionary) -> void:
-	_sound("structure", ev.get("at", Vector2i(-1, -1)))
+	# A wall pushed over by a hull crunches; one blown or burnt down crashes (2026-10-19).
+	_sound("crunch" if bool(ev.get("crushed", false)) else "structure", ev.get("at", Vector2i(-1, -1)))
 	var at: Vector2i = ev.get("at", Vector2i.ZERO)
 	var from: Vector2i = ev.get("from", at)
 	var art := chunk_art(str(ev.get("fid", MCF.FEATURE_WALL)), int(ev.get("look", 0)), str(ev.get("env", "")))
@@ -557,7 +598,13 @@ func _sweep_props(ev: Dictionary) -> void:
 	if moved.is_empty():
 		return
 	props = kept
-	_reindex()
+	# Only this cell's chunk lost pieces: a fresh bucket for it (consumers spot the
+	# change by comparing buckets) instead of re-indexing the whole board.
+	var cc := at / DECAL_CHUNK
+	var bucket: Array = (by_chunk.get(cc, []) as Array).filter(func(q: Dictionary) -> bool:
+		return not moved.has(q))
+	if bucket.is_empty(): by_chunk.erase(cc)
+	else: by_chunk[cc] = bucket
 	decal_reset += 1
 	for i in moved.size():
 		var p: Dictionary = moved[i]
@@ -870,6 +917,8 @@ func advance(delta: float) -> bool:
 	var lanes_active := not lanes.is_empty()
 	if lanes_active:
 		for i in range(lanes.size() - 1, -1, -1):
+			if lanes[i].get("hold", false):
+				continue   # previewed during the dice: waits for its shot
 			lanes[i]["t"] = float(lanes[i]["t"]) + delta
 			if float(lanes[i]["t"]) >= LANE_DUR:
 				lanes.remove_at(i)
@@ -1048,6 +1097,11 @@ func capture_state() -> Dictionary:
 func restore_state(snap: Dictionary) -> void:
 	sound_reset.emit()
 	floor_damage = snap["damage"].duplicate()
+	var fresh := {}
+	_rebase(props, snap["props"], fresh)
+	_rebase(gore, snap["gore"], fresh)
+	for cc: Vector2i in fresh:
+		if (by_chunk[cc] as Array).is_empty(): by_chunk.erase(cc)
 	props = snap["props"].duplicate()
 	gore = snap["gore"].duplicate()
 	flying = snap["flying"].duplicate(true)
@@ -1062,4 +1116,33 @@ func restore_state(snap: Dictionary) -> void:
 	damage_version += 1
 	ground_version += 1
 	decal_reset += 1
-	_reindex()
+
+## Bring the chunk index from `list` to `keep` (an undo snapshot), touching only chunks
+## that differ: pieces matching in order stay put, the rest come out, and the snapshot's
+## unmatched pieces go back in. Changed chunks get fresh buckets, so the tiles and the fog
+## memories (which compare buckets) redo just those — re-indexing the whole board instead
+## cost ~120 ms per undo on a busy map (issues-fix-6 #4).
+func _rebase(list: Array, keep: Array, fresh: Dictionary) -> void:
+	var j := keep.size()
+	var back: Array = []
+	if list.size() < j or list.slice(0, j) != keep:
+		j = 0
+		for p: Dictionary in keep:
+			if j < list.size() and is_same(list[j], p): j += 1
+			else: back.append(p)
+	for i in range(list.size() - 1, j - 1, -1):
+		var bucket := _fresh_bucket(list[i], fresh)
+		var k := bucket.size() - 1
+		while not is_same(bucket[k], list[i]):
+			k -= 1
+		bucket.remove_at(k)
+	for p: Dictionary in back:
+		_fresh_bucket(p, fresh).append(p)
+
+func _fresh_bucket(p: Dictionary, fresh: Dictionary) -> Array:
+	var pos: Vector2 = p["pos"]
+	var cc := Vector2i(floori(pos.x) / DECAL_CHUNK, floori(pos.y) / DECAL_CHUNK)
+	if not fresh.has(cc):
+		fresh[cc] = true
+		by_chunk[cc] = (by_chunk.get(cc, []) as Array).duplicate()
+	return by_chunk[cc]

@@ -448,7 +448,8 @@ func add_dirt(owner: int = -1) -> bool:
 
 ## Можно ли досыпать сюда землю: пусто под насыпь ИЛИ уже куча ниже максимума.
 func accepts_dirt() -> bool:
-	if occupant != null:
+	# Bodies are never buried under spoil (playtest 2026-10-19).
+	if occupant != null or corpse_count > 0:
 		return false
 	if dirt_level > 0:
 		return dirt_level < MCF.DIRT_MAX_LEVEL
