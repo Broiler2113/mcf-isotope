@@ -78,7 +78,7 @@ var _ally_cells: Dictionary = {}
 ## soldiers that far apart (_gun_spread, GUN_SPREAD_MAX); and anti-tank soldiers and
 ## marksmen value cells with a hull on their firing line (W_VEH_FIRE).
 const VEH_CLOSE_THREAT := [1.2, 0.5]   # at distance 1, 2 from the hull
-const GUN_SPREAD_MAX := 1              # planned soldiers allowed inside one shell's reach
+const GUN_SPREAD_MAX := 1              # more planned soldiers than this within a shell's reach: cell refused
 const W_VEH_FIRE := 45.0
 const AT_MIN_RANGE := 3                # closer, an anti-tank round can catch its shooter
 var _veh_close: Dictionary = {}

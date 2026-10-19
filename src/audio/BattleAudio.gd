@@ -307,7 +307,9 @@ func turn(round_number: int, slot: int, owner: int) -> void:
 		return
 	_turn_key = key
 	if owner >= 0 and owner < MCF.PLAYER_LETTERS.length():
-		GameAudio.ui("turn")
+		# A spoken handoff keys the radio itself; the bare click is for when nobody speaks.
+		if not (GameAudio.turn_voice and GameAudio.audible("Voice")):
+			GameAudio.ui("turn")
 		GameAudio.say("turn_" + MCF.PLAYER_LETTERS[owner], self, 10)
 
 func turn_key_from_state(state: GameState) -> void:

@@ -120,7 +120,7 @@ const K_LOBBY_MAP := "lobby_map"
 ##       fired at only from an adjacent cell (sniper, marksman, anti-tank and tanks excepted).
 ##       Holdout waves take one initiative slot each (MCF.WAVE_SLOT_BASE), placed by dice.
 ##       A frag grenade asks a shield bearer for two 2+ rolls (no −1), epicentre included.
-const PROTOCOL := 20
+const PROTOCOL := 21
 
 static func encode_rules() -> Dictionary:
 	var roster := GameConfig.active_roster()

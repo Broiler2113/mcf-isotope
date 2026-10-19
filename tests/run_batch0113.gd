@@ -53,8 +53,11 @@ func _decal_memory() -> void:
 	mem.update(live, vis, [6 * gw + 30], gw)
 	ck(_held(mem, far), "and stays remembered after the spot goes dark")
 	live._burn({"cells": [Vector2i(30, 6)]})
+	ck(live.props.has(far), "fire leaves the casing where it lies (owner, 2026-10-19)")
+	live.props.erase(far)   # gone in the dark some other way: kicked aside, undone
+	live._reindex()
 	mem.update(live, vis, [], gw)
-	ck(_held(mem, far), "burned away in the dark: still remembered")
+	ck(_held(mem, far), "gone in the dark: still remembered")
 	vis[Vector2i(30, 6)] = true
 	mem.update(live, vis, [6 * gw + 30], gw)
 	ck(not _held(mem, far), "looked again: it is gone")
