@@ -181,7 +181,7 @@ func snapshot(with_cells: bool = true) -> Dictionary:
 		var ast: Dictionary = {}
 		if u.action_state != null:
 			ast = {"target_id": u.action_state.target_id,
-					"remaining_shots": u.action_state.remaining_shots}
+					"remaining_shots": u.action_state.remaining_shots, "dpmg": u.action_state.dpmg}
 		us.append({
 			"obj": u, "id": u.id, "coord": u.coord, "owner": u.owner,
 			"remaining_ap": u.remaining_ap, "status": u.status,
@@ -275,6 +275,7 @@ func restore(snap: Dictionary) -> void:
 			var a := ActionState.new()
 			a.target_id = ast["target_id"]
 			a.remaining_shots = ast["remaining_shots"]
+			a.dpmg = ast.get("dpmg", ActionState.NO_DPMG)
 			u.action_state = a
 		units[u.id] = u
 	vehicles.clear()

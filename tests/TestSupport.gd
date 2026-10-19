@@ -135,6 +135,8 @@ static func result_lines(res: ActionResult) -> PackedStringArray:
 	for l in res.log_lines:
 		out.append("    log: " + l)
 	for ev in res.dice_events:
+		if ev.get("kind", "") == "effects":
+			continue   # a display marker carrying fx, which the trace leaves out
 		out.append("    dice: " + _flatten(ev))
 	if not res.deaths.is_empty():
 		var deaths: Array = res.deaths.duplicate()

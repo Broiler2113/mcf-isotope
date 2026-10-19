@@ -455,7 +455,11 @@ func _fire_ease(shooter: UnitInstance, from: Vector2i, target: UnitInstance,
 	if target != null and _r.trench_protected(from, target, marksman):
 		return -1.0
 	# Стены и корпуса машин линию рвут; людей игнорируем — их разбирает _lane_conflicts.
-	if _r.gas_blocks_line(from, to_coord) or (not marksman and _r.los_blocked(from, to_coord, true, true)):
+	if not marksman and _r.los_blocked(from, to_coord, true, true, false, true):
+		return -1.0
+	# Smoke or gas on the line: allowed, but blind (resolver SMOKE_HIT_PENALTY).
+	need += _r.smoke_penalty(from, to_coord)
+	if not marksman and need >= 7:
 		return -1.0
 	# Выстрел, который заведомо парируется (щитоносец издалека, #69) — не выстрел.
 	if target != null and _r.shot_is_futile(shooter, target):

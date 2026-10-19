@@ -18,6 +18,9 @@ var view := FxDecals.new()
 ## view.decal_dirty, и забирают его они; этот — отдельно, его забирает Main.
 var lod_dirty: Dictionary = {}
 var _reset := -1
+## Per chunk: the live pieces this memory last took. When the live lists are cut back or
+## rebuilt (undo, a sweep), only chunks that differ from it are re-checked.
+var _live_copy: Dictionary = {}
 var _gore_done := 0
 var _props_done := 0
 var _ground := -1
@@ -39,6 +42,8 @@ func _init(live: FxDecals) -> void:
 	view.gore = live.gore.duplicate()
 	view.props = live.props.duplicate()
 	view._reindex()
+	for cc: Vector2i in live.by_chunk:
+		_live_copy[cc] = (live.by_chunk[cc] as Array).duplicate()
 	_reset = live.decal_reset
 	_gore_done = live.gore.size()
 	_props_done = live.props.size()
@@ -53,15 +58,24 @@ func _init(live: FxDecals) -> void:
 ## «сменилось всё» (новый зритель, перестроенный обзор).
 func update(live: FxDecals, visible: Dictionary, changed: Variant, gw: int) -> void:
 	var touch := {}
-	var full: bool = changed == null or _reset != live.decal_reset
-	if full:
-		# ponytail: сброс (пожар, потолок) сверяет все куски — ~0.2 с на 68k частиц у
-		# потолка; если станет заметно, брать из FxDecals список задетых пожаром кусков.
+	if changed == null:
+		_reset = live.decal_reset
+		for chunks: Dictionary in [live.by_chunk, view.by_chunk, _live_copy]:
+			for cc: Vector2i in chunks:
+				touch[cc] = true
+	elif _reset != live.decal_reset:
+		# The live lists were cut back or rebuilt (undo, a sweep, a load): re-check the
+		# chunks whose pieces differ from what was last taken. Records are shared, so ==
+		# settles on identity; re-filtering every chunk cost ~40 ms on a 30k-decal board.
 		_reset = live.decal_reset
 		for cc: Vector2i in live.by_chunk:
-			touch[cc] = true
-		for cc: Vector2i in view.by_chunk:
-			touch[cc] = true
+			if _live_copy.get(cc, []) != live.by_chunk[cc]:
+				touch[cc] = true
+		for cc: Vector2i in _live_copy:
+			if not live.by_chunk.has(cc):
+				touch[cc] = true
+		for k: int in changed:
+			touch[Vector2i((k % gw) / C, (k / gw) / C)] = true
 	else:
 		# Новое оседает только в конец списков (до сброса), поэтому смотрим лишь хвост.
 		for pair: Array in [[live.gore, _gore_done], [live.props, _props_done]]:
@@ -74,11 +88,14 @@ func update(live: FxDecals, visible: Dictionary, changed: Variant, gw: int) -> v
 	_props_done = live.props.size()
 	for cc: Vector2i in touch:
 		_rebuild(cc, live, visible)
-	if full or _ground != live.ground_version or not (changed as Array).is_empty():
-		_update_lines(live, visible, null if full else changed, gw)
+	if changed == null or _ground != live.ground_version or not (changed as Array).is_empty():
+		_update_lines(live, visible, changed, gw)
 
 ## Кусок cc заново: запомненное вне обзора плюс живое в обзоре.
 func _rebuild(cc: Vector2i, live: FxDecals, visible: Dictionary) -> void:
+	var taken: Array = live.by_chunk.get(cc, [])
+	if taken.is_empty(): _live_copy.erase(cc)
+	else: _live_copy[cc] = taken.duplicate()
 	var old: Array = view.by_chunk.get(cc, [])
 	var kept: Array = []
 	for p: Dictionary in old:

@@ -926,13 +926,13 @@ func _neutral_firing_move(state: GameState, r: GameActionResolver, u: UnitInstan
 		if coord == u.coord or (_avoids_fire(u) and _fire_near(state, coord)): continue
 		for target: UnitInstance in targets:
 			if not Combat.is_on_firing_line(coord, target.coord): continue
-			if r.gas_blocks_line(coord, target.coord) or r.trench_protected(coord, target, r._fires_flat_beam(u)): continue
+			if r.trench_protected(coord, target, r._fires_flat_beam(u)): continue
 			var dist := Combat.distance(coord, target.coord)
 			if ability == MCF.ABILITY_FLAMETHROWER:
 				if dist > MCF.FLAME_JET_LENGTH or r._wall_between(coord, target.coord): continue
 			elif ability != MCF.ABILITY_MARKSMAN:
-				if Combat.hit_number(dist, u.fire_range()) > 6: continue
-				if r.los_blocked(coord, target.coord, not r._is_anti_tank(u), true, not r._is_anti_tank(u)): continue
+				if Combat.hit_number(dist, u.fire_range()) + r.smoke_penalty(coord, target.coord) > 6: continue
+				if r.los_blocked(coord, target.coord, not r._is_anti_tank(u), true, not r._is_anti_tank(u), true): continue
 				var blocker := r.first_unit_on_line(coord, target.coord)
 				if blocker != null and blocker.id != u.id: continue
 			var score := SCORE_SHOOT_BASE - float(reach.cost[coord]) * 2.0
@@ -1251,7 +1251,7 @@ func _best_shoot(state: GameState, r: GameActionResolver, u: UnitInstance) -> Di
 			continue
 		var dist := Combat.distance(u.coord, t.coord)
 		# Через резолвер: в пыльную бурю (0.12) дальний выстрел труднее.
-		var hit_need := r.hit_need(dist, u.fire_range())
+		var hit_need := r.hit_need(dist, u.fire_range()) + r.smoke_penalty(u.coord, t.coord)
 		if hit_need >= 7:
 			continue
 		var ease := float(7 - hit_need)  # чем меньше нужное число, тем выше
@@ -1878,7 +1878,7 @@ func _frag_outcome(state: GameState, c: Vector2i, occupants: Dictionary, r: Game
 			continue
 		var p: float
 		# A frag never kills a shield bearer (wave fighters excepted, like the resolver).
-		if o.stats.special_ability_id == MCF.ABILITY_SHIELD_BEARER and (r == null or r._shield_immunity(o)):
+		if o.stats.special_ability_id == MCF.ABILITY_SHIELD_BEARER and (r == null or r._blast_shield(o)):
 			p = 0.0
 		elif b == c:
 			p = 1.0

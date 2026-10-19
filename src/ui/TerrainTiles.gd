@@ -399,6 +399,15 @@ func _build(cc: Vector2i, res: int) -> void:
 					Vector2i(x * res, y * res), res)
 	_bake_ground_lines(floor_img, cc, res)
 	_bake_decals(floor_img, cc, res)
+	# Flames over the debris, blood and brass lying in them (playtest 2026-10-19).
+	if bake_fire:
+		var fire := _tile("fire", res)
+		if not fire.is_empty():
+			for y in h:
+				for x in w:
+					var fc := Vector2i(cc.x * C + x, cc.y * C + y)
+					if _grid.cell_fast(fc.x, fc.y).on_fire and not hidden_fire.has(fc):
+						floor_img.blend_rect(fire[0], Rect2i(0, 0, res, res), Vector2i(x * res, y * res))
 	_bake_items(feat_img, cc, res)
 	var bytes := w * h * res * res * 4 * 2
 	_chunks[Vector3i(cc.x, cc.y, res)] = {"floor": ImageTexture.create_from_image(floor_img),
@@ -642,9 +651,6 @@ func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int
 		var ov := _tile(over, res)
 		if not ov.is_empty():
 			img.blend_rect(ov[variant_of(c + origin, ov.size())], full, at)
-	if bake_fire and cell.on_fire and not hidden_fire.has(c):
-		var fire := _tile("fire", res)
-		if not fire.is_empty(): img.blend_rect(fire[0], Rect2i(0, 0, res, res), at)
 	var fid := cell.feature_id
 	# Бункер вырыт в скале (item 24): стена, со всех восьми сторон окружённая стеной (или
 	# краем карты), — толща породы, а не обшивка; металлом облицованы только стены комнат.
@@ -688,6 +694,11 @@ func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int
 			if cell.feature_durability < Furniture.durability_of(fid):
 				feat.blend_rect(_crack_overlay(res), full, at)
 		return
+	if fid == MCF.FEATURE_DPMG:
+		var gun := _dpmg_image(dpmg_turn(_grid, c), res)
+		if gun != null:
+			feat.blit_rect(gun, full, at)
+			return
 	var sheets := _sheet(name, res)
 	if not sheets.is_empty():
 		var mask := mask_at(_grid, c, fid)
@@ -715,6 +726,60 @@ func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int
 			feat.blit_rect(singles[variant_of(c + origin, singles.size())], full, at)
 	if cell.airlock_welded:
 		feat.blend_rect(_weld_overlay(res), full, at)
+
+## Which way a DPMG points (owner, 2026-10-19): eighths clockwise from east, set by the
+## resolver when it fires (GameActionResolver._face_dpmg); east until it first fires.
+static func dpmg_turn(grid: Grid, c: Vector2i) -> int:
+	var rec: Variant = grid.furniture_turn.get(c)
+	return int(rec[1]) if rec is Array and str(rec[0]) == MCF.FEATURE_DPMG else 0
+
+var _dpmg_art: Dictionary = {}   # k * 4096 + res -> Image
+## The gun tile turned toward k. Pixel art does not survive a 45° rotation, so the
+## sandbag ring stays as drawn and only the gun turns: its grey pixels are lifted out (the
+## ring under the old barrel is patched from its mirror half), then the breech and barrel
+## are drawn back along the new direction by sampling the original gun pixels in a turned
+## frame, so they keep their texture and the barrel its light-dark-light profile.
+## Geometry is in the art's 32-pixel space: breech 6×8 centred 2 px behind the middle,
+## barrel 3 px wide running from it to 14 px out.
+func _dpmg_image(k: int, res: int) -> Image:
+	var key := k * 4096 + res
+	if _dpmg_art.has(key):
+		return _dpmg_art[key]
+	var tiles := _tile("dpmg", res)
+	if tiles.is_empty():
+		return null
+	var base: Image = tiles[0]
+	var w := base.get_width()
+	var h := base.get_height()
+	var sc := float(w) / 32.0
+	var img := base.duplicate() as Image
+	for y in h:
+		for x in w:
+			if _dpmg_gun_px(base.get_pixel(x, y)):
+				var m := base.get_pixel(w - 1 - x, y)
+				img.set_pixel(x, y, Color(0, 0, 0, 0) if _dpmg_gun_px(m) else m)
+	var dir := Vector2(Vector2i([1, 1, 0, -1, -1, -1, 0, 1][k % 8], [0, 1, 1, 1, 0, -1, -1, -1][k % 8])).normalized()
+	var side := Vector2(-dir.y, dir.x)
+	for y in h:
+		for x in w:
+			var v := Vector2((x + 0.5) / sc - 16.0, (y + 0.5) / sc - 16.0)
+			var a := v.dot(dir)
+			var b := v.dot(side)
+			var src := Vector2(-1, -1)
+			if absf(a + 2.0) < 3.0 and absf(b) < 4.0:
+				src = Vector2(16.0 + a, 16.0 + b)      # breech
+			elif a >= 1.0 and a < 14.0 and b >= -1.0 and b < 2.0:
+				src = Vector2(16.0 + a, 16.0 + b)      # barrel
+			if src.x < 0.0:
+				continue
+			var px := base.get_pixel(clampi(int(src.x * sc), 0, w - 1), clampi(int(src.y * sc), 0, h - 1))
+			if _dpmg_gun_px(px):
+				img.set_pixel(x, y, px)
+	_dpmg_art[key] = img
+	return img
+
+static func _dpmg_gun_px(c: Color) -> bool:
+	return c.a > 0.5 and c.get_luminance() < 0.4 and maxf(c.r, maxf(c.g, c.b)) - minf(c.r, minf(c.g, c.b)) < 0.06
 
 ## Семейства, у листа которых в углу между двумя сросшимися сторонами вырезан «внутренний
 ## угол» (окоп, мешки). Лист про диагональ не знает, поэтому в сплошном поле окопа или

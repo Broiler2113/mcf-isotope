@@ -13,7 +13,6 @@
   "fs182429": {"url": "https://cdn.freesound.org/previews/182/182429_71257-hq.ogg", "sha256": "26a3c679bb7ba7d9aee161b8e30509940c76aadc8ee6350146614e293341d145", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/182429/", "title": "Explosion"},
   "fs182432": {"url": "https://cdn.freesound.org/previews/182/182432_71257-hq.ogg", "sha256": "05836556177a2a7d2446cc32044571a4517bba79834e6bfc458ea1ea284cc46b", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/182432/", "title": "Explosive 1 v1 [DOD 130303].flac"},
   "fs182794": {"url": "https://cdn.freesound.org/previews/182/182794_71257-hq.ogg", "sha256": "91dfe9729e6083936fa11c3e36c9aa7a1a3653bd4d6a0453698fbfaadc5ba34a", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/182794/", "title": "Rocket Launch.flac"},
-  "fs183656": {"url": "https://cdn.freesound.org/previews/183/183656_71257-hq.ogg", "sha256": "7b54fc6b566252a58c26e3146df752f20c250c1395c20ef8c2193fea3465bc1d", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/183656/", "title": "50 Caliber MG.flac"},
   "fs184274": {"url": "https://cdn.freesound.org/previews/184/184274_71257-hq.ogg", "sha256": "1152d59a110b0c2aa43a3d4485f125fbb4898bfacefb2d563dce3387fea6db79", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/184274/", "title": "Launching Anti-Tank Missiles.flac"},
   "fs184357": {"url": "https://cdn.freesound.org/previews/184/184357_71257-hq.ogg", "sha256": "9b061fb6f66cf24adc8103961a83b9b0734b193cd6ec8567a3d4201b365b397e", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/184357/", "title": "Military Alarm & Noise.flac"},
   "fs184382": {"url": "https://cdn.freesound.org/previews/184/184382_71257-hq.ogg", "sha256": "7c597a671af5ead79897021f4a57ea954ad46715ee69fc69feee170fda0dc89f", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/184382/", "title": "Mortar Shots.flac"},
@@ -28,7 +27,6 @@
   "fs218890": {"url": "https://cdn.freesound.org/previews/218/218890_71257-hq.ogg", "sha256": "69596b6b7d8c5ccf84509a9d6b37215f9bbee457f7a485b5deeeb2675b9156c5", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/218890/", "title": "Door Smash 1"},
   "fs221528": {"url": "https://cdn.freesound.org/previews/221/221528_1038806-hq.ogg", "sha256": "5335c238731731b8efcb5b2bd81071432786c93fded88db6f8bc4090feb74f76", "author": "unfa", "license": "CC0", "page": "https://freesound.org/s/221528/", "title": "Glass Break"},
   "fs239135": {"url": "https://cdn.freesound.org/previews/239/239135_71257-hq.ogg", "sha256": "6e374214bdb42e58b0fc8acbba6b3fa134cbc2a21375b910db32fb0358bbbf89", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/239135/", "title": "Tank Shots"},
-  "fs239138": {"url": "https://cdn.freesound.org/previews/239/239138_71257-hq.ogg", "sha256": "be8c59409da56f19d9d770b6b3dc2276aa2c68d5d45f8463dcbdc1dcf93aaa64", "author": "qubodup", "license": "CC0", "page": "https://freesound.org/s/239138/", "title": "50 Cal MG"},
   "fs241837": {"url": "https://cdn.freesound.org/previews/241/241837_4404989-hq.ogg", "sha256": "2ca7cf2c497bd1d6ea00838279feee4d79c5012fa66f7636b903339a1b77e430", "author": "Zagge28", "license": "CC0", "page": "https://freesound.org/s/241837/", "title": "Incoming mortar 4"},
   "fs241838": {"url": "https://cdn.freesound.org/previews/241/241838_4404989-hq.ogg", "sha256": "60a8553c71f821394cc8619dc24c36e0dc3931285456252b27fc4d7433a6d6e4", "author": "Zagge28", "license": "CC0", "page": "https://freesound.org/s/241838/", "title": "Incoming mortar 3"},
   "fs241839": {"url": "https://cdn.freesound.org/previews/241/241839_4404989-hq.ogg", "sha256": "4d352ff18c44e694045f7ca77f05f36c5ec48edbe9f77f1478be23865524cd43", "author": "Zagge28", "license": "CC0", "page": "https://freesound.org/s/241839/", "title": "Incoming mortar 2"},
@@ -86,16 +84,11 @@
    ["firearms", "SKS/U_19P.wav", 2.6, 1.1],
    ["firearms", "SKS/U_19P.wav", 8.0, 1.1]
   ]},
-  "burst": {"cat": "gun", "takes": [
-   ["firearms", "AK-47/C_34P.wav", 0.72, 1.7],
-   ["firearms", "AK-47/C_34P.wav", 5.15, 1.7],
-   ["firearms", "AK-47/C_34P.wav", 8.98, 1.8],
-   ["firearms", "AK-47/C_34P.wav", 13.38, 1.9]
-  ]},
-  "mg": {"cat": "gun", "takes": [
-   ["firearms", "AK-47/C_36P.wav", 0.62, 2.1],
-   ["firearms", "AK-47/C_36P.wav", 4.45, 2.1],
-   ["firearms", "AK-47/C_36P.wav", 8.52, 2.1]
+  "mg": {"cat": "gun", "pitch": 0.92, "takes": [
+   ["firearms", "AK-47/C_31P.wav", 0.32, 1.3],
+   ["firearms", "AK-47/C_31P.wav", 4.39, 1.25],
+   ["firearms", "SKS/U_19P.wav", 12.78, 1.1],
+   ["firearms", "Mosin Nagant/M_26P.wav", 10.73, 1.2]
   ]},
   "sniper": {"cat": "gun", "takes": [
    ["firearms", "Mosin Nagant/M_26P.wav", 1.12, 1.2],
@@ -111,11 +104,12 @@
    ["firearms", "Model 12/K_17P.wav", 7.04, 1.6],
    ["firearms", "Mossberg/N_26P.wav", 0.77, 1.2]
   ]},
-  "heavy_mg": {"cat": "gun", "takes": [
-   ["fs183656", "", 0.03, 1.35],
-   ["fs183656", "", 4.93, 1.3],
-   ["fs183656", "", 16.17, 2.2],
-   ["fs239138", "", 0.0, 2.55]
+  "heavy_mg": {"cat": "gun", "pitch": 0.8, "takes": [
+   ["firearms", "1917/B_16P.wav", 0.6, 1.6],
+   ["firearms", "1917/B_16P.wav", 5.65, 1.6],
+   ["firearms", "Tikka/W_24P.wav", 0.74, 1.6],
+   ["firearms", "Tikka/W_24P.wav", 5.36, 1.6],
+   ["firearms", "Mosin Nagant/M_26P.wav", 6.09, 1.15]
   ]},
   "laser": {"cat": "gun", "takes": [
    ["fs403252", "", 0.72, 0.45],
@@ -393,20 +387,8 @@
   "event_land": {"cat": "radio", "takes": [
    ["fs701314", "", 0.0, 0.22]
   ]},
-  "ui_end": {"cat": "radio", "takes": [
-   ["fs701326", "", 0.0, 0.6]
-  ]},
   "ui_click": {"cat": "ui", "takes": [
-   ["kenney_interface", "click_001.ogg", 0, 0.4],
-   ["kenney_interface", "select_001.ogg", 0, 0.4],
-   ["kenney_interface", "select_002.ogg", 0, 0.4],
-   ["kenney_interface", "select_007.ogg", 0, 0.4],
-   ["kenney_interface", "select_008.ogg", 0, 0.4]
-  ]},
-  "ui_nav": {"cat": "ui", "takes": [
-   ["kenney_interface", "toggle_001.ogg", 0, 0.4],
-   ["kenney_interface", "toggle_002.ogg", 0, 0.4],
-   ["kenney_interface", "toggle_004.ogg", 0, 0.4]
+   ["kenney_interface", "click_001.ogg", 0, 0.4]
   ]},
   "dice_roll": {"cat": "ui", "takes": [
    ["kenney_casino", "dice-shake-1.ogg", 0, 1.2],
@@ -455,6 +437,11 @@
   ]},
   "amb_field": {"cat": "ambience", "loop": true, "takes": [
    ["fs697217", "", 0.0, 39.0]
+  ]},
+  "crunch": {"cat": "foley", "takes": [
+   ["fs703248", "", 0.0, 1.2],
+   ["fs703247", "", 0.0, 1.1],
+   ["fs487142", "", 0.0, 1.0]
   ]}
  },
  "voice": [

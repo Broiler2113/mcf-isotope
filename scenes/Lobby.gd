@@ -158,7 +158,7 @@ func _ready() -> void:
 func _on_host_peer_joined(id: int) -> void:
 	_seat_peer(id)
 	_refresh_host_status()
-	GameAudio.ui("ui_nav")
+	GameAudio.ui("radio_in")
 	GameAudio.say("join", self)
 	_lobby_changed()
 	# Новому гостю нужна ещё и карта — снимок несёт только её имя.
@@ -167,7 +167,7 @@ func _on_host_peer_joined(id: int) -> void:
 ## Ушедшего гостя подменяет ИИ высокой сложности (batch 13 #2): партия остаётся
 ## готовой к старту, а его место — занятым. Хост волен переключить слот обратно.
 func _on_host_peer_left(id: int) -> void:
-	GameAudio.ui("ui_nav")
+	GameAudio.ui("radio_in")
 	GameAudio.say("leave", self)
 	NetHandoff.spectators.erase(id)
 	if NetHandoff.session != null: NetHandoff.session.spectators.erase(id)
