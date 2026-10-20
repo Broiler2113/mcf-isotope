@@ -2,6 +2,6 @@
 small actions=178 board=3651117127 trace=2886871926 alive=1/4/7 fx=1908953456 guest_same=true resyncs=0 save=true replay=true
 medium actions=862 board=2706731336 trace=3966006083 alive=37/49/14 fx=1154300236 guest_same=true resyncs=0 save=true replay=true
 large actions=1751 board=4108105020 trace=3819699724 alive=150/150/23 fx=3138424602 guest_same=true resyncs=0 save=true replay=true
-giant actions=2160 board=394278554 trace=2293150686 alive=199/196/27 fx=3660488755 guest_same=true resyncs=0 save=true replay=true rules=453587407
+giant actions=2057 board=4244823644 trace=3494758174 alive=194/198/29 fx=3095912099 guest_same=true resyncs=0 save=true replay=true rules=345007626
 giant_capture actions=1998 board=3663846616 trace=2534751996 alive=197/200/32 fx=158605177 guest_same=true resyncs=0 save=true replay=true rules=505670519
 giant_holdout actions=2481 board=932929111 trace=2078735707 alive=199/200/149 fx=1650244871 guest_same=true resyncs=0 save=true replay=true rules=885148273
