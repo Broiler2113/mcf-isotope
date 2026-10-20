@@ -147,6 +147,9 @@ const OBJECT_FIELDS := ["stats", "action_state", "occupant"]
 ## apply_rules → _sync_gas), а не пишутся поклеточно. Их сохранение проверяют
 ## run_random_events и run_batch012 — по облакам, а не по доске.
 const DERIVED_FIELDS := ["gas", "smoke"]
+## Счётчики правок клетки, а не её состояние: StateCodec по ним только узнаёт, какие
+## записи пересобрать (2026-10). Загруженная клетка начинает свой счёт заново.
+const BOOKKEEPING_FIELDS := ["rev"]
 
 func _check_state_codec() -> void:
 	var state := TS.build_state()
@@ -373,7 +376,7 @@ func _compare_fields(label: String, want: Object, got: Object) -> void:
 		if int(prop["usage"]) & PROPERTY_USAGE_SCRIPT_VARIABLE == 0:
 			continue
 		var name: String = prop["name"]
-		if name in OBJECT_FIELDS or (want is GridCell and name in DERIVED_FIELDS):
+		if name in OBJECT_FIELDS or (want is GridCell and (name in DERIVED_FIELDS or name in BOOKKEEPING_FIELDS)):
 			continue
 		var a: Variant = want.get(name)
 		var b: Variant = got.get(name)
