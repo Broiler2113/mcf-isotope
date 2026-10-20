@@ -124,6 +124,9 @@ static var corpse_version: int = 0
 static var journaling: bool = false
 static var journal: Dictionary = {}   # GridCell -> Array (image() до первой правки)
 
+## Bumped by every setter of a saved field: StateCodec re-encodes only cells whose rev moved.
+var rev: int = 0
+
 func _journal() -> void:
 	if not journal.has(self):
 		journal[self] = image()
@@ -164,6 +167,7 @@ func apply_image(im: Array) -> void:
 var lamps: Array = []:
 	set(v):
 		if lamps == v: return
+		rev += 1
 		if journaling: _journal()
 		lamps = v.duplicate(true)
 		log_look_change(coord.x, coord.y)
@@ -172,6 +176,7 @@ var coord: Vector2i
 var floor_type: int = 0:
 	set(v):
 		if floor_type != v:
+			rev += 1
 			if journaling: _journal()
 			floor_type = v
 			log_look_change(coord.x, coord.y)
@@ -180,6 +185,7 @@ var cover_height: float = 0.0:
 	set(v):
 		if cover_height == v:
 			return
+		rev += 1
 		if journaling: _journal()
 		# Обзору важна не высота, а ровно факт «стена или нет» — _vision_blocked() читает
 		# только сравнение с WALL_HEIGHT. Отрытый окоп, мешки с песком, куча земли по пояс
@@ -206,6 +212,7 @@ var on_fire: bool = false:
 	set(v):
 		if on_fire == v:
 			return
+		rev += 1
 		if journaling: _journal()
 		on_fire = v
 		burning += 1 if v else -1
@@ -227,6 +234,7 @@ var gas: bool = false:
 	set(v):
 		if gas == v:
 			return
+		rev += 1
 		if journaling: _journal()
 		gas = v
 		gassed += 1 if v else -1
@@ -241,6 +249,7 @@ var smoke: bool = false:
 	set(v):
 		if smoke == v:
 			return
+		rev += 1
 		if journaling: _journal()
 		smoke = v
 		smoked += 1 if v else -1
@@ -259,6 +268,7 @@ static func obscurants() -> int:
 var fire_owner: int = -1:
 	set(v):
 		if fire_owner != v:
+			rev += 1
 			if journaling: _journal()
 			fire_owner = v
 ## Номер раунда, ДО которого в клетку не может вползти огонь: пожаротушительная
@@ -267,12 +277,14 @@ var fire_owner: int = -1:
 var fire_suppressed_until: int = 0:
 	set(v):
 		if fire_suppressed_until != v:
+			rev += 1
 			if journaling: _journal()
 			fire_suppressed_until = v
 ## "Космос" — правила невесомости (§3.11); задействуется на M5.
 var is_space: bool = false:
 	set(v):
 		if is_space != v:
+			rev += 1
 			if journaling: _journal()
 			is_space = v
 			log_look_change(coord.x, coord.y)
@@ -281,6 +293,7 @@ var occupant: UnitInstance = null:
 	set(v):
 		if occupant == v:
 			return
+		rev += 1
 		if journaling: _journal()
 		occupant = v
 		walk_version += 1
@@ -289,6 +302,7 @@ var vehicle_id: int = -1:
 	set(v):
 		if vehicle_id == v:
 			return
+		rev += 1
 		if journaling: _journal()
 		# Корпус машины обзор НЕ перекрывает (batch 13 #1): видно всё до стены или
 		# закрытого шлюза, и техника, как и живые, лучу не мешает. Поэтому смена
@@ -307,6 +321,7 @@ var feature_id: String = "":
 	set(v):
 		if feature_id == v:
 			return
+		rev += 1
 		if journaling: _journal()
 		# Стекло прозрачно для обзора (#29), а высота у него стенная — значит замена
 		# стены на стекло (и обратно) при той же высоте меняет просматриваемость, и
@@ -322,6 +337,7 @@ var feature_id: String = "":
 var feature_owner: int = -1:
 	set(v):
 		if feature_owner != v:
+			rev += 1
 			if journaling: _journal()
 			feature_owner = v
 ## Оператор, развернувший станцию дронов (item 16); -1 = станции нет или её поставил
@@ -330,6 +346,7 @@ var feature_owner: int = -1:
 var station_operator_id: int = -1:
 	set(v):
 		if station_operator_id != v:
+			rev += 1
 			if journaling: _journal()
 			station_operator_id = v
 ## Остаток прочности укрепления в единой шкале урона (§3.7): 0 = прочности нет,
@@ -337,6 +354,7 @@ var station_operator_id: int = -1:
 var feature_durability: int = 0:
 	set(v):
 		if feature_durability != v:
+			rev += 1
 			if journaling: _journal()
 			feature_durability = v
 			# Побитая мебель рисуется с трещинами прямо в плитке (§3.15): кусок рельефа
@@ -346,6 +364,7 @@ var feature_durability: int = 0:
 var corpse_count: int = 0:
 	set(v):
 		if corpse_count != v:
+			rev += 1
 			if journaling: _journal()
 			corpse_count = v
 			corpse_version += 1
@@ -355,6 +374,7 @@ var dirt_level: int = 0:
 	set(v):
 		if dirt_level == v:
 			return
+		rev += 1
 		if journaling: _journal()
 		dirt_level = v
 		walk_version += 1
@@ -365,6 +385,7 @@ var airlock_welded: bool = false:
 	set(v):
 		if airlock_welded == v:
 			return
+		rev += 1
 		if journaling: _journal()
 		airlock_welded = v
 		walk_version += 1
@@ -379,6 +400,7 @@ var items_off: int = 0:
 	set(v):
 		if items_off == v:
 			return
+		rev += 1
 		if journaling: _journal()
 		items_off = v
 		log_look_change(coord.x, coord.y)

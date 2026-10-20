@@ -126,34 +126,55 @@ static func _encode_vehicle(v: Vehicle) -> Dictionary:
 ## Клетки пишутся РАЗРЕЖЕННО: на карте 50×50 их две с половиной тысячи, и почти все
 ## — чистый пол. В файл едут только те, что отличаются от пустой клетки, с индексом
 ## в сетке; остальные при чтении собираются из умолчаний.
+## The last records per cell, reused while the cell's rev is unchanged: a replay checkpoint
+## of a 274×274 board used to read all 17 fields of all 75 000 cells (~150 ms every few dozen
+## actions); now only the cells that changed since. A changed cell gets a new record, so the
+## records already handed out (saves, replay starts) never change under their holders.
+static var _rec_grid := 0
+static var _rec_revs := PackedInt64Array()
+static var _rec_cache: Array = []
+
 static func _encode_cells(grid: Grid) -> Array:
+	var flat := grid.cells_flat()
+	if _rec_grid != grid.get_instance_id() or _rec_revs.size() != flat.size():
+		_rec_grid = grid.get_instance_id()
+		_rec_revs.resize(flat.size())
+		_rec_revs.fill(-1)
+		_rec_cache.resize(flat.size())
 	var out: Array = []
-	var i := -1
-	for c: GridCell in grid.cells_flat():
-		i += 1
-		var rec := {}
-		if c.floor_type != 0: rec["floor"] = c.floor_type
-		if c.cover_height != 0.0: rec["cover"] = c.cover_height
-		if c.on_fire: rec["fire"] = true
-		if c.fire_owner != -1: rec["fire_owner"] = c.fire_owner
-		if c.fire_suppressed_until != 0: rec["suppressed"] = c.fire_suppressed_until
-		if c.is_space: rec["space"] = true
-		if c.occupant != null: rec["occupant"] = c.occupant.id
-		if c.vehicle_id != -1: rec["vehicle"] = c.vehicle_id
-		if c.feature_id != "": rec["feature"] = c.feature_id
-		if c.feature_owner != -1: rec["feature_owner"] = c.feature_owner
-		if c.feature_durability != 0: rec["durability"] = c.feature_durability
-		if c.station_operator_id != -1: rec["station_op"] = c.station_operator_id
-		if c.corpse_count != 0: rec["corpses"] = c.corpse_count
-		if c.dirt_level != 0: rec["dirt"] = c.dirt_level
-		if c.airlock_welded: rec["welded"] = true
-		if not c.lamps.is_empty(): rec["fixture"] = c.lamps.duplicate(true)
-		if c.items_off != 0: rec["items_off"] = c.items_off
-		if rec.is_empty():
-			continue
-		rec["i"] = i
-		out.append(rec)
+	for i in flat.size():
+		var c: GridCell = flat[i]
+		if c.rev != _rec_revs[i]:
+			_rec_cache[i] = _cell_record(c, i)
+			_rec_revs[i] = c.rev
+		if _rec_cache[i] != null:
+			out.append(_rec_cache[i])
 	return out
+
+## One cell's saved fields; null for a cell with nothing to save.
+static func _cell_record(c: GridCell, i: int) -> Variant:
+	var rec := {}
+	if c.floor_type != 0: rec["floor"] = c.floor_type
+	if c.cover_height != 0.0: rec["cover"] = c.cover_height
+	if c.on_fire: rec["fire"] = true
+	if c.fire_owner != -1: rec["fire_owner"] = c.fire_owner
+	if c.fire_suppressed_until != 0: rec["suppressed"] = c.fire_suppressed_until
+	if c.is_space: rec["space"] = true
+	if c.occupant != null: rec["occupant"] = c.occupant.id
+	if c.vehicle_id != -1: rec["vehicle"] = c.vehicle_id
+	if c.feature_id != "": rec["feature"] = c.feature_id
+	if c.feature_owner != -1: rec["feature_owner"] = c.feature_owner
+	if c.feature_durability != 0: rec["durability"] = c.feature_durability
+	if c.station_operator_id != -1: rec["station_op"] = c.station_operator_id
+	if c.corpse_count != 0: rec["corpses"] = c.corpse_count
+	if c.dirt_level != 0: rec["dirt"] = c.dirt_level
+	if c.airlock_welded: rec["welded"] = true
+	if not c.lamps.is_empty(): rec["fixture"] = c.lamps.duplicate(true)
+	if c.items_off != 0: rec["items_off"] = c.items_off
+	if rec.is_empty():
+		return null
+	rec["i"] = i
+	return rec
 
 static func _encode_eliminated(dead: Dictionary) -> Array:
 	var out: Array = []
