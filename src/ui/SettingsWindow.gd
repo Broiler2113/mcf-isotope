@@ -136,6 +136,12 @@ func _build() -> void:
 	autoroll.button_pressed = Ui.autoroll_dice
 	autoroll.toggled.connect(Ui.set_autoroll_dice)
 	game_box.body.add_child(autoroll)
+	var desync := CheckBox.new()
+	desync.text = "Send desync reports"
+	desync.tooltip_text = "When a multiplayer board goes out of sync, quietly send the developers one report per match: the game version, your OS and graphics card, the technical log, the combat log and the state of the board."
+	desync.button_pressed = Ui.desync_reports
+	desync.toggled.connect(Ui.set_desync_reports)
+	game_box.body.add_child(desync)
 
 	# --- Акцент (item 23) ---
 	var acc_box := SteamChrome.group_box("Accent color")
@@ -240,6 +246,7 @@ func _build() -> void:
 		Ui.set_accent("green")
 		Ui.set_fullscreen(false)
 		Ui.set_autoroll_dice(false)
+		Ui.set_desync_reports(true)
 		_build.call_deferred())
 	bottom.add_child(reset)
 	var close := Button.new()

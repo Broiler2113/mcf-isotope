@@ -85,4 +85,6 @@ func _initialize() -> void:
 					printerr(l)
 			ck(_denied == 0, "no denied actions on the host (%d)" % _denied)
 			print("[host-t] digest ", load("res://tests/TestSupport.gd").digest(m.state).hash()))
-	step("hold", func() -> bool: return _step_t > 4.0)
+	step("hold", func() -> bool: return _step_t > 4.0, func() -> void:
+		ck(str(current_scene._desync_report.get("description", "")).contains("(host side)"),
+				"the guest's snapshot request was written up as the host's desync report"))

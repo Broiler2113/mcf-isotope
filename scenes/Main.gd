@@ -3982,7 +3982,9 @@ func _on_peer_ready(is_host: bool) -> void:
 	net.initiative_synced.connect(_on_initiative_synced)
 	# Рассинхрон (batch 14): гость просит снимок и, получив его, перечитывает доску.
 	net.desync_detected.connect(func() -> void:
-		state.log.add("[net] Board out of sync with the host — resynchronizing…"))
+		state.log.add("[net] Board out of sync with the host — resynchronizing…")
+		_report_desync("guest"))
+	net.resync_requested.connect(func(_from: int) -> void: _report_desync("host"))
 	# Снимок хоста везёт и косметику поля — её гость кладёт вместо своей.
 	net.fx_snapshot = func() -> Dictionary: return _fx.to_dict()
 	net.resynced.connect(func() -> void:
@@ -4100,6 +4102,21 @@ func _on_net_disconnected() -> void:
 ## Гость вышел из боя (batch 13 #2): его сторону берёт ИИ высокой сложности — на хосте
 ## настоящий AIController, у остальных гостей та же сторона остаётся удалённой (её ходы
 ## по-прежнему приходят от хоста), только ростер узнаёт, что за ней машина.
+## One automatic desync report per match (DesyncReport), unless switched off in Settings:
+## what was sent, or empty.
+var _desync_report: Dictionary = {}
+
+func _report_desync(role: String) -> void:
+	if not _desync_report.is_empty() or not Ui.desync_reports or net == null:
+		return
+	# The same key on every peer of this match, so the host's and a guest's reports pair up.
+	var key := "%08x" % (hash([state.roster.to_dict(), state.grid.width, state.grid.height]) & 0xFFFFFFFF)
+	_desync_report = DesyncReport.payload(role, state, resolver, _fx, net.recent.duplicate(true), key)
+	# Players never run headless; the network tests and training servers do, and their
+	# deliberate drifts must not land on the real report server.
+	if DisplayServer.get_name() != "headless":
+		DesyncReport.send(get_tree(), _desync_report)
+
 func _on_peer_left(id: int) -> void:
 	if state == null or state.roster == null:
 		return
