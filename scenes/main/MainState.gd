@@ -808,7 +808,7 @@ var _fly_tiles: TerrainTiles = null
 ## газ под туманом виден лишь там, куда смотрят (0.11.3, _draw_gas_tiles).
 const EVENT_COLORS := {
 	"mortar": Color(0.95, 0.45, 0.15, 1.0),
-	"gas": Color(0.95, 0.95, 0.95, 1.0),
+	"gas": Color(0.78, 0.92, 0.36, 1.0),   # GAS_TINT, a touch lighter: the warning matches the cloud
 	"army": Color(0.85, 0.35, 0.75, 1.0),
 	"fire": Color(1.0, 0.3, 0.12, 1.0),
 	"emp": Color(0.35, 0.85, 1.0, 1.0),

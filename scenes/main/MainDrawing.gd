@@ -1052,8 +1052,9 @@ func _draw() -> void:
 		draw_set_transform(pan + _walk_offset.get(d["unit"].id, Vector2.ZERO) * zoom, 0.0, Vector2(zoom, zoom))
 		_draw_drone(d["unit"], d["at"])
 	draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
-	# A thin second pass puts wisps in front of occupants without hiding their sprites.
-	_draw_gas_tiles(0.2, false)
+	# A thin second pass puts wisps in front of occupants without hiding their sprites; it
+	# drifts on its own layer (GasDrift).
+	_sync_gas_drift()
 
 
 	# Рамка выделения (#18): сетка-выровненный зелёный прямоугольник поверх поля.
@@ -1397,9 +1398,63 @@ func _refresh_objective() -> void:
 			hb.add_child(v)
 		body.add_child(hb)
 
-func _draw_gas_tiles(alpha: float, fill: bool) -> void:
+## Gas reads as poison, not gravel (owner, 2026-10): a sickly yellow-green, sampled smoothly
+## instead of pixel by pixel, and the light pass over units drifts (GasDrift). Smoke stays
+## the dark gray below, still.
+const GAS_TINT := Color(0.74, 0.88, 0.3)
+## The drifting wisps are lighter than the cloud under them, or their motion would not show.
+const GAS_WISP := Color(0.93, 1.0, 0.55)
+const SMOKE_WISP := Color(0.66, 0.68, 0.72)
+
+## The light pass over units: the same tiles on their own layer, whose shader slides two
+## layers of the cloud texture across them. It moves on the GPU, so a cloud on screen never
+## makes the battle screen redraw. Last in paint order, where that pass was drawn.
+class GasDrift extends Node2D:
+	const SHADER := """
+shader_type canvas_item;
+uniform sampler2D wisps : repeat_enable, filter_linear;
+uniform float span = 1600.0;   // board pixels per repeat of the cloud texture (40 cells)
+varying vec2 world;
+void vertex() {
+	world = VERTEX;
+}
+void fragment() {
+	vec4 shape = texture(TEXTURE, UV);
+	// The cloud texture's alpha holds its billows (about 0.47 to 0.68): two copies sliding
+	// different ways at a third of a cell a second, stretched to full strength.
+	float a = texture(wisps, world / span + TIME * vec2(0.0075, 0.003)).a;
+	float b = texture(wisps, world / (span * 1.6) + TIME * vec2(-0.004, 0.006)).a;
+	float drift = smoothstep(0.5, 0.62, (a + b) * 0.5);
+	COLOR = vec4(COLOR.rgb * shape.rgb, COLOR.a * shape.a * drift);
+}
+"""
+	var host: Node
+	func _ready() -> void:
+		var mat := ShaderMaterial.new()
+		mat.shader = Shader.new()
+		mat.shader.code = SHADER
+		mat.set_shader_parameter("wisps", Sprites.texture_of("gas"))
+		material = mat
+	func _draw() -> void:
+		if host != null:
+			host._draw_gas_tiles(0.45, false, self)
+
+var _gas_drift: GasDrift = null
+
+func _sync_gas_drift() -> void:
+	if _gas_drift == null:
+		_gas_drift = GasDrift.new()
+		_gas_drift.host = self
+		add_child(_gas_drift)
+	_gas_drift.position = pan
+	_gas_drift.scale = Vector2(zoom, zoom)
+	_gas_drift.queue_redraw()
+
+func _draw_gas_tiles(alpha: float, fill: bool, ci: CanvasItem = null) -> void:
 	if resolver == null or resolver.random_events == null:
 		return
+	if ci == null:
+		ci = self
 	var ev: RandomEvents = resolver.random_events
 	if ev.clouds.is_empty() and ev.smoke.is_empty():
 		return
@@ -1407,19 +1462,22 @@ func _draw_gas_tiles(alpha: float, fill: bool) -> void:
 	if tex != null and (_gas_canvas_texture == null or _gas_canvas_texture.diffuse_texture != tex):
 		_gas_canvas_texture = CanvasTexture.new()
 		_gas_canvas_texture.diffuse_texture = tex
-		_gas_canvas_texture.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		_gas_canvas_texture.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
 	# Туман войны (0.11.3): газ виден только там, куда смотрят (Resolver.team_sees_gas —
 	# в обзор сама газовая клетка не входит: газ прячет то, что внутри). Без тумана газ
 	# виден весь, как и раньше. Рамка и счётчик зоны — объявленное событие, они остаются.
 	# Дым дымовых гранат (0.12) — то же облако своим тоном и по тем же правилам тумана.
 	var view := _view_resolver()
 	var seen: Dictionary = view.team_sees_gas(_viewing_side()) if view.fog_enabled else {}
-	_draw_cloud_tiles(ev.clouds, false, Color(1, 1, 1, alpha), fill, tex, view.fog_enabled, seen)
-	_draw_cloud_tiles(ev.smoke, true, Color(SMOKE_TINT.r, SMOKE_TINT.g, SMOKE_TINT.b, alpha),
-			fill, tex, view.fog_enabled, seen)
+	var gas: Color = GAS_WISP if ci != self else GAS_TINT
+	var smoke: Color = SMOKE_WISP if ci != self else SMOKE_TINT
+	_draw_cloud_tiles(ci, ev.clouds, false, Color(gas.r, gas.g, gas.b, alpha), fill, tex,
+			view.fog_enabled, seen)
+	_draw_cloud_tiles(ci, ev.smoke, true, Color(smoke.r, smoke.g, smoke.b, alpha), fill, tex,
+			view.fog_enabled, seen)
 
-func _draw_cloud_tiles(clouds: Array, smoke: bool, tint: Color, fill: bool, tex: Texture2D,
-		fogged: bool, seen: Dictionary) -> void:
+func _draw_cloud_tiles(ci: CanvasItem, clouds: Array, smoke: bool, tint: Color, fill: bool,
+		tex: Texture2D, fogged: bool, seen: Dictionary) -> void:
 	var drawn := {}
 	for cl: Dictionary in clouds:
 		var x0 := maxi(_cull_x0, int(cl["x"]))
@@ -1436,10 +1494,12 @@ func _draw_cloud_tiles(clouds: Array, smoke: bool, tint: Color, fill: bool, tex:
 					continue
 				var cell_rect := Rect2(ORIGIN + Vector2(x, y) * CELL, Vector2(CELL, CELL))
 				if tex != null:
-					var src := GasTiles.source_rect(tex, coord, GasTiles.mask_at(state.grid, coord, smoke))
-					draw_texture_rect_region(_gas_canvas_texture, cell_rect, src, tint)
+					# Half a texel in from the tile's edge: smooth sampling must not pick up
+					# the neighbouring tile of the sheet.
+					var src := GasTiles.source_rect(tex, coord, GasTiles.mask_at(state.grid, coord, smoke)).grow(-0.5)
+					ci.draw_texture_rect_region(_gas_canvas_texture, cell_rect, src, tint)
 				elif fill:
-					draw_rect(cell_rect, Color(tint.r * 0.9, tint.g * 0.9, tint.b * 0.9, 0.36))
+					ci.draw_rect(cell_rect, Color(tint.r * 0.9, tint.g * 0.9, tint.b * 0.9, 0.36))
 
 ## ВСПЫШКА ВЗРЫВА (0.9.4): клетки разрыва на секунду горят и гаснут. Чистая косметика —
 ## пламенем это не становится ни на одну клетку: ни резолвер, ни правила огня об этих
