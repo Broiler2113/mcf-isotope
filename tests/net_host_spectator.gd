@@ -2,6 +2,7 @@ extends "res://tests/NetSmokeBase.gd"
 
 var initial_turn := -1
 var _draw_messages := 0
+var _live_reqs := {}
 
 func _initialize() -> void:
 	tag = "spectator-host"
@@ -12,8 +13,14 @@ func _initialize() -> void:
 		while lobby.roster.slots.size() > 2: lobby._on_remove_slot(lobby.roster.slots.size() - 1)
 		lobby._on_slot_kind(3, 1)
 		lobby._civ_check.button_pressed = false)
-	step("start", func() -> bool: return _step_t > 1.0, func() -> void: current_scene._on_start())
-	step("placement up", func() -> bool: return scene_is("Placement.gd") and current_scene._status != null, func() -> void:
+	step("start", func() -> bool: return _step_t > 1.0, func() -> void:
+		# Deploy only once both spectators have their deployment screen up; readying at
+		# once raced a slow spectator straight past it.
+		session().message.connect(func(msg: Dictionary) -> void:
+			if str(msg.get("k", "")) == "live_req": _live_reqs[msg.get("_from")] = true)
+		current_scene._on_start())
+	step("placement up", func() -> bool:
+		return scene_is("Placement.gd") and current_scene._status != null and _live_reqs.size() == 2, func() -> void:
 		var pl = current_scene
 		for side in [0, 1]:
 			pl.brush_unit = "heavy_infantry"

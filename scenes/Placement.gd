@@ -766,6 +766,8 @@ func _fit_ground() -> void:
 ## Камера на свою зону развёртывания (0.9.3). Раньше экран открывался в углу доски, и
 ## углом карты был её угол; теперь там кайма — десяток клеток пустой земли или космоса.
 func _home_view() -> void:
+	if not is_inside_tree():
+		return  # a late spectator's buffered start already left this screen
 	var cells: Array = map.zone_cells(active_side)
 	var centre := Vector2.ZERO
 	if cells.is_empty():
