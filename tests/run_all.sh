@@ -9,31 +9,30 @@ EXTRA=""
 [ "${1:-}" = "--update" ] && EXTRA="-- --update"
 
 fail=0
-for script in tests/check_scripts.gd tests/run_audio.gd tests/run_codec.gd tests/run_headless.gd \
-              tests/run_lockstep.gd tests/run_reclaim.gd tests/run_player_actions.gd \
-              tests/run_lobby_maps.gd tests/run_combat_safety.gd \
-              tests/run_ui_assets.gd tests/run_main_menu.gd tests/run_hotkeys.gd tests/run_lighting.gd tests/run_light_fixtures.gd tests/run_ai_conduct.gd \
-              tests/run_mirror_stamp.gd tests/run_modular_tank.gd \
-              tests/run_mines_and_corpses.gd tests/run_batch13.gd \
-              tests/run_shuttle.gd tests/run_borg.gd tests/run_batch17.gd \
-              tests/run_legal_intents.gd tests/run_intent_budget.gd tests/run_learned_controller.gd tests/run_native_policy.gd \
-              tests/run_learned_town.gd tests/run_mapgen.gd tests/run_play_vs_learned.gd tests/run_fog.gd tests/run_fire.gd \
-              tests/run_incremental.gd tests/run_fog_viewer.gd tests/run_group_move.gd tests/run_team_session.gd \
-              tests/run_ui_drones.gd tests/run_rl_tactics.gd tests/run_match_analysis.gd tests/run_soil_rulers.gd tests/run_batch_zones.gd tests/run_borg_corpses.gd tests/run_mp_perf.gd \
-              tests/run_playtest20.gd tests/run_playtest20_screen.gd tests/run_editor.gd \
-              tests/run_furniture.gd tests/run_batch092.gd tests/run_batch093.gd \
-              tests/run_random_events.gd tests/run_gas_visibility.gd tests/run_demolish_materials.gd \
-              tests/run_outer_grass.gd tests/run_ground_backdrop.gd tests/run_batch094.gd tests/run_replay_seek.gd tests/run_replay_bookmarks.gd \
-              tests/run_decal_sync.gd tests/run_match_lifetime.gd tests/run_rl_learning.gd \
-              tests/run_rl_giant_defense.gd tests/run_batch098.gd tests/run_followup098.gd tests/run_batch011.gd tests/run_batch0111.gd tests/run_batch0112.gd tests/run_batch0113.gd tests/run_batch012.gd tests/run_batch0121.gd tests/run_batch0122.gd tests/run_remaining_bugs.gd tests/run_remaining_generation.gd tests/run_remaining_ui.gd tests/run_followup0122.gd tests/run_issues6.gd tests/run_reported_issues.gd tests/run_player_reports.gd tests/run_audit0128.gd tests/run_holdout_solo.gd tests/run_ldf_accent.gd tests/run_corpse_drop.gd tests/run_shield_blasts.gd tests/run_wave_initiative.gd tests/run_playtest21.gd tests/run_issues_fix6.gd tests/run_gas_vision.gd tests/run_large_battles.gd tests/run_desync_report.gd; do
-  echo "=== $script ==="
+run_suite() {
+  echo "=== $1 ==="
   # shellcheck disable=SC2086
-  "$GODOT" --headless --script "res://$script" $EXTRA
+  "$GODOT" --headless --script "res://$1" $EXTRA
   rc=$?
   if [ $rc -ne 0 ]; then
-    echo "--- FAILED: $script (exit $rc)"
+    echo "--- FAILED: $1 (exit $rc)"
     fail=1
   fi
+}
+
+run_suite tests/check_scripts.gd
+# Every suite of every system folder (tests/README.md, «Layout»): a new run_*.gd in one of
+# them runs without touching this file.
+for dir in perf net combat vehicles ai events fog mapgen editor ui files audio; do
+  for script in tests/$dir/run_*.gd; do
+    run_suite "$script"
+  done
+done
+# The learned AI and its native policy stay at the top level: rl/ and CI call them by path.
+for script in tests/run_legal_intents.gd tests/run_intent_budget.gd tests/run_learned_controller.gd \
+              tests/run_native_policy.gd tests/run_learned_town.gd tests/run_play_vs_learned.gd \
+              tests/run_rl_tactics.gd tests/run_rl_learning.gd tests/run_rl_giant_defense.gd; do
+  run_suite "$script"
 done
 
 # Стенд производительности (perf pass, §27.22) в режиме сверки: малая и средняя партии

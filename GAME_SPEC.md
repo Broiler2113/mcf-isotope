@@ -1200,9 +1200,9 @@ blocked interval `(lo, hi]` hides exactly the rows `a·lo < b ≤ a·hi` of colu
 each gap is written out at once as a progression of indices; the walls of a column are
 found by a byte search over a copy of the wall table in which that column is contiguous
 (transposed for the octants where it runs along a grid column). The old cell-by-cell
-sweep is kept in `tests/run_fog.gd` as a reference and must agree with it — visible and
+sweep is kept in `tests/fog/run_fog.gd` as a reference and must agree with it — visible and
 sensitive cells both — on 800 random boards. The result is the identical set, in the
-identical order, as the per-cell ray it replaced — `tests/run_fog.gd` checks that on 600
+identical order, as the per-cell ray it replaced — `tests/fog/run_fog.gd` checks that on 600
 random boards and on real generated maps with tanks, and a one-character change to the
 tie rule fails it on half of them. One soldier's unlimited sight on a 250×250 map went
 from ~175 ms (town) / ~364 ms (field) to ~23–27 ms, and to ~9 ms in a station, where
@@ -1239,7 +1239,7 @@ or took is still exact, and is reused under the new set without a sweep (`_reuse
 over the side's last few sets). The team counts are a flat array; a
 moved soldier's new view is added before the old one is taken away, so cells seen both
 before and after never leave the set, and the scouting memory grows only on the cells that
-just became visible. `tests/run_fog.gd` flips unmarked cells on 500 random boards and
+just became visible. `tests/fog/run_fog.gd` flips unmarked cells on 500 random boards and
 checks the view never changes, and compares the incremental team view with one built from
 scratch after every action of a game full of airlocks.
 
@@ -1571,7 +1571,7 @@ whose version differs is refused in the lobby with a plain explanation instead o
 mid-battle. RL training keeps the roster but zeroes the `army` weight: a third side with no
 player number breaks both the observation and the reward.
 
-Covered by `tests/run_random_events.gd`.
+Covered by `tests/events/run_random_events.gd`.
 
 ## 14b. Game Modes (0.12)
 
@@ -2273,7 +2273,7 @@ statement of which previews follow the mouse.
   images, and undo/redo swap them with the cells' current ones (`_counter_snapshot`). A
   full copy of a 250×250 board was 62 500 dictionaries and ~250 ms on every click; every
   cell field now goes through a setter so nothing can slip past the journal.
-  `tests/run_incremental.gd` plays twin games — one undoing through the journal, one
+  `tests/perf/run_incremental.gd` plays twin games — one undoing through the journal, one
   through full board copies — and compares every field of every cell after each of ~700
   actions, 230 undos and 80 redos. Restoration mutates *the same* objects (units /
   vehicles / cells) so outside references — the selected unit in the HUD, for instance —
@@ -2618,7 +2618,7 @@ MainMenu → Setup → Placement → Main (battle)
   two zones most once their centres coincide, ties going to the one that faces the
   formation towards the map centre. Each unit lands on its carried cell or, if that is
   taken or outside the zone, on the nearest cell where it fits; a tank's facing is carried
-  by the same motion. `tests/run_mirror_stamp.gd` checks, on left–right, quartered,
+  by the same motion. `tests/editor/run_mirror_stamp.gd` checks, on left–right, quartered,
   3-player symmetric and 3-player non-symmetric maps, that every side ends up with exactly
   the same units — and exactly mirrored positions where the map is symmetric.
 
@@ -2680,7 +2680,7 @@ MainMenu → Setup → Placement → Main (battle)
     the editor comes back to it after the trial battle; *Exit to Main Menu* clears it and
     `MapHandoff.pending` (#104).
   - Measured on 250×250: a size-5 stroke step 0.2–0.4 ms, a whole-map fill 0.67 s, its
-    undo 0.25 s. Covered by `tests/run_editor.gd` (real input events) and the ported
+    undo 0.25 s. Covered by `tests/editor/run_editor.gd` (real input events) and the ported
     batch 13 checks.
 
   **Map presets** (`MapPresets`): Station, Town, Field, Bunker, Asteroid — the generator's
@@ -2771,7 +2771,7 @@ touches a single `owner` field. Deployment is skipped — the armies are already
 board. A networked host ships the whole save to the client (`K_LOAD`), for the same
 reason it ships the map: the client does not have that file.
 
-**Regression cover.** `tests/run_codec.gd` sweeps every script variable of every unit,
+**Regression cover.** `tests/net/run_codec.gd` sweeps every script variable of every unit,
 vehicle and cell through the file and back, and separately asserts that a snapshot does
 not keep a live reference into the running match. That second check is not theoretical:
 `Array(typed_array)` returns *the same array*, so the start-of-match keyframe kept
@@ -3066,7 +3066,7 @@ those things; streets, rooms and zones stay where they were.
 **The preview shows zones** in the colour of the slot that deploys there — for every map,
 not just random ones. It is redrawn only when the map or those colours change.
 
-Regression cover: `tests/run_mapgen.gd` checks, over every style, the sizes up to Huge in
+Regression cover: `tests/mapgen/run_mapgen.gd` checks, over every style, the sizes up to Huge in
 full and Giant/Colossal once each, 2–8 sides, large armies, each toggle, custom sizes and
 Symmetrical with 2, 3, 4, 5, 6 and 8 sides, that the promises above hold — same seed, same
 map; equal zones that fit the squads; **no walkable cell sealed off** on the real board;
@@ -3078,7 +3078,7 @@ without vacuum, walled in rock, and identical to the station of its seed with Sp
 stations and bunkers with rooms and hallways in proportion to their size; Colossal built
 within a time budget; civilians under the cap; and, with every zone cell occupied by a
 soldier, not one civilian awake after the first action. It also plays a few AI-vs-AI
-rounds per style. `tests/run_lobby_maps.gd` drives the real lobby: the row, the settings,
+rounds per style. `tests/mapgen/run_lobby_maps.gd` drives the real lobby: the row, the settings,
 Players ↔ slots, zone sizing, the start handoff, *Save as Map*, the bunker, Custom size
 with no upper limit, the Civilians selector, Symmetrical and the delayed rebuild of big
 maps.
@@ -3789,7 +3789,7 @@ the per-step bookkeeping. **Service accents** (§20.2): on stations and in bunke
 | 126 | **Issues-fix-10** (0.9.4) — **The alive/dead tally stops walking backwards** (§18.6): casualties come from the new `GameState.deaths` ledger instead of from corpses on the board (a body leaves the match when it is carried, piled or seated), a held unit counts alive, a drone counts in neither column, and every slot also lists its vehicles, alive and wrecked. **Two crashes on the AI's turn** (§18): clicking End Turn between AI steps assigned an `AIController` to a `LocalHumanController` variable — `_submit` now casts and bails out when the turn is not a local human's; and leaving the match mid-animation left the coroutines calling `get_tree()` on a node already out of the tree — the event loop, the walk loops, `_await_walks` and the dice roller all check `is_inside_tree()`. **Maps** (§20.2): corridors left serving a dropped sector are cut back (`_prune_orphan_halls`), so tech tunnels no longer trail out of the station into space; empty sectors are capped at 3 per map; a walkway into space is rare (none, usually) and its solar array is rolled per exit from one cell up to 3×2; asteroid buildings are plated like a station. **Random events** (§14a): gas and barrage zones are rolled inside the walkable plot, the barrage aims at the densest knot of soldiers two times in three, and raiders search the whole map depth for a landing instead of the edge strip — on a station they used to find nothing and turn back every time. **Textures** (§21): `res://textures` is sorted `<section>/<object>/`, the loader recurses, an autotile sheet is a single 4×4 block instead of six stacked variants, and every object folder carries a marked-up `sample.png` (the `templates/` dump and its `--templates` mode are gone). **Ground past the board** (§21): a map without vacuum tiles its own floor behind the board, pinned to the grid, so the border ground runs to the edge of the screen. Also `CONCEPT.md`: the game described as a game, without implementation or history. Tests: `tests/run_batch094.gd`; the 0.9.3 corridor-width check now ignores dead-end stubs. |
 | 123 | **Furniture doesn't re-join in battle** (§9.9) — the battle screen snapshots each furniture cell's joins, inner corners and turn when the match opens (`TerrainTiles.freeze_furniture`, `Main._furniture_look`) and draws from the snapshot: smashed, burnt or flattened cells leave their neighbours as they were (half a bed stays half a bed), a blown wall doesn't turn the furniture beside it, and a piece dragged to a new cell joins nothing. Generator, editor and deployment screen still join live. Rules unchanged. Tests: frozen-look checks in `run_furniture.gd`. |
 | 122 | **Furniture and editor polish** (§9.9) — 8 new pieces (potted plant, TV stand, stove, piano, bunk bed, water cooler, washing machine, fuel tank) and colour variants (`Furniture.VARIANTS`) that keep the base piece's rules; random maps and street clutter pick a colour once per recipe step; different colours never join. Joined tiles have no seam between cells, and L-shaped pieces cut their inner corners. Editor: fixed the typed-array error that broke every tool but Brush and Eraser (R → Rectangle tool hit the same error, and the game paused in the debugger). The preview under the cursor is now drawn by `TerrainTiles` on a scratch grid (`TerrainTiles.scratch`, with `origin` for the variant hashes). That gives the brush, line, rectangle, fill, stamps and pastes exactly the tiles they will place: walls join their neighbours, doors turn with the wall, furniture joins and turns to the wall. Brush previews draw at 50 %, patterns at 75 %, and oversized pastes fall back to palette pictures. The palette has one button per piece, a *Colour* row under the brush name, and wrapped labels. The cell grid in the battle screen, deployment screen and editor is now drawn between the floor and the objects (`TerrainTiles.draw_grid`): it shows on floors and no longer cuts across walls or multi-cell furniture. A whole piece puts its headboard only on a short side and a sofa or desk back only on a long side; with no wall there, it takes the default turn instead of turning sideways to the wall. |
-| 121 | **Furniture** (§9.9, §20.2) — 41 pieces as ordinary cell features in `src/data/Furniture.gd`, multi-cell beds, tables, sofas, desks, machinery (whole pieces) and counters, shelving, lockers (runs) joined by autotiling: heights 0.5/1/1.5/2 m through `cover_height` (climbed by the usual costs, 2 m is a wall), a furniture-only −3 cover at 1.5 m, carrying portable pieces (`CarryIntent`, put down free via `UseItemIntent`), dragging heavy single-cell ones through Grab (nothing that is part of a multi-cell structure can be grabbed), any soldier smashing furniture for 1–3 AP via `BreakIntent`, blasts/laser/fire/tracks by durability and material; baked into the tile chunks turned to the wall, cracked when damaged; editor palette groups; `MapData.feature_dur` for damaged pieces. Random maps gain a FURNITURE phase (`MapFurnish`): room purposes per style, recipe placement, clutter, wear, walkways kept by construction; lobby *Furniture* (Off…Very dense, default Normal, independent of *Obstacles*; furnished station/bunker rooms skip the obstacle crate piles) and *wear*. Tests: `tests/run_furniture.gd`, editor checks in `run_editor.gd`; the perf bench pins furniture Off and now compares the full board after save/load and replay. |
+| 121 | **Furniture** (§9.9, §20.2) — 41 pieces as ordinary cell features in `src/data/Furniture.gd`, multi-cell beds, tables, sofas, desks, machinery (whole pieces) and counters, shelving, lockers (runs) joined by autotiling: heights 0.5/1/1.5/2 m through `cover_height` (climbed by the usual costs, 2 m is a wall), a furniture-only −3 cover at 1.5 m, carrying portable pieces (`CarryIntent`, put down free via `UseItemIntent`), dragging heavy single-cell ones through Grab (nothing that is part of a multi-cell structure can be grabbed), any soldier smashing furniture for 1–3 AP via `BreakIntent`, blasts/laser/fire/tracks by durability and material; baked into the tile chunks turned to the wall, cracked when damaged; editor palette groups; `MapData.feature_dur` for damaged pieces. Random maps gain a FURNITURE phase (`MapFurnish`): room purposes per style, recipe placement, clutter, wear, walkways kept by construction; lobby *Furniture* (Off…Very dense, default Normal, independent of *Obstacles*; furnished station/bunker rooms skip the obstacle crate piles) and *wear*. Tests: `tests/combat/run_furniture.gd`, editor checks in `run_editor.gd`; the perf bench pins furniture Off and now compares the full board after save/load and replay. |
 | 120 | Performance only, no rule changed — the general optimization audit (§27.22): a reproducible benchmark and behaviour harness `tests/bench/run_bench.gd` (small/medium/large Hard-vs-Hard MapGen matches through the net layer, save/load and replay, plus a battle-screen render mode; `run_all.sh` checks the small and medium hashes); `all_units()`/`all_vehicles()` return a cached read-only list (`remove_unit`/`remove_vehicle`); the clock rebuilds its text once a second; group membership in `_draw` is a set; `digest_hash` builds the identical string with `str()` (−20 %). The HUD grip, vehicle lookups, the "!" check, the dice queue, AI temporaries and FX RNG were measured and left unchanged. |
 | 119 | Editor rework and UI audit — the map editor is rebuilt "like Paint": menu bar, icon toolbar, a palette of real tile thumbnails, minimap and status bar; the canvas draws the battle's own tile chunks; undo stores per-cell deltas; symmetry (L/R, T/B, quarters, zones handed to the matching player), select / move / copy / paste with rotate and flip, room and building stamps, eyedropper, New Map from the random generator, and Play This Map returns to the same map (§19). Map presets (Station, Town, Field, Bunker, Asteroid) set the tileset and pre-fill a new map (§20). Nothing burns in vacuum (§10). UI audit at 75/100/150 %: main-menu sub-pages, purchase panel, battle sidebar and lobby dialogs are framed in group boxes, main buttons stay on screen, the lobby puts slots and map first when its columns wrap. Tests: `run_editor` (new, 55 checks), `run_fire` (vacuum), `run_batch13` ported. |
 | 118 | Playtest batch (20 items + 2) — **Unready** on the purchase screen: only the host starts the battle (`go`), a guest's unready is a request the host confirms (`unready_req` → `unready`), and a ready army is locked until unready (§19); **Fullscreen** in Settings → Display, saved in `settings.cfg`; the **Real** clock starts with the battle scene — network games used to count from app launch, so it also ran on across matches; **double-click** on a shuttle passenger selects the shuttle, and the driver's seat has a thin outline (§16.7); a **welded airlock** gets steel straps and weld beads baked into its tile; decals are no longer wiped by undo/redo or by a network resync (the restored host decals were cleared right after loading), laser marks and the new **tank track marks** travel in the decal snapshot, and the casing/laser caps rise to 8000/2000; Godot's ENet timeout is relaxed to 20–90 s so a short stall no longer hands a friend's army to the AI (§22.4); running over own/allied units and blowing a drone up next to them ask first; the **Match Over** window lists kills per unit and vehicle with run-overs (`GameState.kills`, part of the undo snapshot and `StateCodec`, not the digest); under standard fog, hidden walls get a much darker veil, corpses stay visible, and trenches, sandbags, dirt piles and hedgehogs are drawn only where seen now (§11); **Undo drawing** (button or Ctrl+Z while drawing) restores the touched raster tiles and is mirrored to every peer; bodies killed by fire, flame or laser are drawn burnt (`UnitInstance.burnt`); breached civilians are ruthless and grab every body within reach without ever dropping one (§14); the turn line and the initiative window agree — Prev/Next skip slots with nobody alive, the line follows the neutral group being played, and the window scrolls and leaves out wiped-out groups. Golden trace re-baselined: civilians now shoot instead of dodging, which shifts the dice stream. |
@@ -4266,7 +4266,7 @@ nothing walks the whole map after the first time; it is patched from a log.
   by every AI and patched from the look log — with neighbours as fixed index offsets:
   ~140 ms → ~55 ms per field.
 
-`tests/run_incremental.gd` holds all of this to account: twin games (one incremental, one
+`tests/perf/run_incremental.gd` holds all of this to account: twin games (one incremental, one
 reference) compared field by field after every action, the object and fire indexes and the
 walk mask against a fresh scan, and the distance field against a plain BFS.
 
