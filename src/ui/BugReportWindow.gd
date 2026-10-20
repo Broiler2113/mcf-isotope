@@ -7,7 +7,7 @@ extends CanvasLayer
 ## боя и запись матча. Ничего сверх отмеченного не отправляется.
 
 const SteamChrome = preload("res://src/ui/SteamChrome.gd")
-const ENDPOINT := "http://103.86.177.137:8651/report"
+const ENDPOINT := NetHandoff.BUG_REPORTS
 const TIMEOUT := 40.0
 ## Больше этого запись матча не везём: сервер её не примет, а отчёт не должен падать из-за неё.
 const MAX_REPLAY := 7_500_000

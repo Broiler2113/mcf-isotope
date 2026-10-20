@@ -126,6 +126,9 @@ const K_LOBBY_MAP := "lobby_map"
 ##       wall, DPMG bursts carry over and turn the gun, wave shields beat every blast but a
 ##       direct one, landings skip fire, no spoil on bodies.
 const PROTOCOL := 22
+## The bug-report server on the relay's VPS (tools/bugs/isotope_bugs.py): the Report a Bug
+## window and the automatic desync reports both post here.
+const BUG_REPORTS := "http://103.86.177.137:8651/report"
 
 static func encode_rules() -> Dictionary:
 	var roster := GameConfig.active_roster()

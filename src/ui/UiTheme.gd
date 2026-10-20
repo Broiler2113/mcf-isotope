@@ -95,6 +95,9 @@ var grid_opacity := 0.32
 var fullscreen := false
 ## Autoroll dice (issues-12 #11): your own rolls start by themselves, no Roll/Enter press.
 var autoroll_dice := false
+## Automatic desync reports (2026-10): a multiplayer board that drifts out of sync sends one
+## report per match to the bug server (DesyncReport). On unless switched off in Settings.
+var desync_reports := true
 var _pal: Dictionary = PALETTES["green"]
 
 var _accent := ACCENT
@@ -136,6 +139,7 @@ func _load_settings() -> void:
 	grid_visible = bool(cf.get_value("board", "grid_visible", true))
 	grid_opacity = clampf(float(cf.get_value("board", "grid_opacity", 0.32)), 0.0, 1.0)
 	autoroll_dice = bool(cf.get_value("game", "autoroll_dice", false))
+	desync_reports = bool(cf.get_value("game", "desync_reports", true))
 
 func _save_settings() -> void:
 	var cf := ConfigFile.new()
@@ -148,6 +152,7 @@ func _save_settings() -> void:
 	cf.set_value("board", "grid_visible", grid_visible)
 	cf.set_value("board", "grid_opacity", grid_opacity)
 	cf.set_value("game", "autoroll_dice", autoroll_dice)
+	cf.set_value("game", "desync_reports", desync_reports)
 	cf.save(SETTINGS_PATH)
 
 func set_grid(visible: bool, opacity: float) -> void:
@@ -158,6 +163,10 @@ func set_grid(visible: bool, opacity: float) -> void:
 
 func set_autoroll_dice(on: bool) -> void:
 	autoroll_dice = on
+	_save_settings()
+
+func set_desync_reports(on: bool) -> void:
+	desync_reports = on
 	_save_settings()
 
 func set_dynamic_lighting(enabled: bool) -> void:

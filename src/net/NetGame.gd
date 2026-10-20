@@ -23,6 +23,8 @@ signal resynced()
 signal denied(reason: String)
 ## Гость сверил доску с хостом после действия и она не сошлась — просьба уже ушла.
 signal desync_detected()
+## Host: a guest asked for a full snapshot because its board drifted (DesyncReport).
+signal resync_requested(from: int)
 
 const K_INTENT := "intent"   # клиент → хост: «прошу выполнить моё намерение»
 ## Гость обнаружил, что его доска разошлась с доской хоста (batch 14): просит снимок.
@@ -48,6 +50,15 @@ var fx_snapshot: Callable = Callable()
 var restored_fx: Dictionary = {}
 ## Shares the existing host dice log; never starts a second recording stream.
 var recorder: ReplayRecorder = null
+## The last actions this side applied, oldest first: the wire, its rolls and the board
+## fingerprints around it (a guest's "want" is the host's). A desync report carries them.
+var recent: Array = []
+const RECENT_MAX := 20
+
+func _remember(entry: Dictionary) -> void:
+	recent.append(entry)
+	if recent.size() > RECENT_MAX:
+		recent.pop_front()
 
 ## p_my_owner — сторона, за которую играет ЭТА машина. −1 означает старую дуэльную
 ## раскладку «хост — первый, гость — второй»; лобби на N игроков передаёт номер явно.
@@ -123,6 +134,7 @@ func receive(msg: Dictionary) -> void:
 				# Счёт, зоны и волны режима (0.12) тоже живут на резолвере.
 				snap["mode"] = resolver.mode.snapshot()
 				outgoing.emit(snap)
+				resync_requested.emit(int(msg.get("_from", -1)))
 		K_STATE:
 			if not is_host:
 				_client_restore(msg)
@@ -193,8 +205,10 @@ func _host_resolve_and_send(intent: Intent) -> void:
 		if recorder != null:
 			recorder.on_resolved(intent, rolls, result)
 		# Подпись доски ПОСЛЕ действия (batch 14): гость сверит с ней свою.
-		outgoing.emit({"k": K_ACTION, "i": IntentCodec.encode(intent), "r": rolls,
-			"h": state.digest_hash()})
+		var digest := state.digest_hash()
+		outgoing.emit({"k": K_ACTION, "i": IntentCodec.encode(intent), "r": rolls, "h": digest})
+		_remember({"i": IntentCodec.encode(intent), "r": rolls, "h": digest,
+				"round": state.turns.round_number})
 	else:
 		outgoing.emit({"k": K_DENIED, "a": intent.actor_id, "reason": result.reason,
 			"p": intent.requester if intent is EndTurnIntent or intent is UndoIntent or intent is RedoIntent else -1})
@@ -213,13 +227,18 @@ func _client_apply(intent: Intent, rolls: Array, expected: int = 0) -> void:
 	# недоеденные или недостающие броски, иная подпись доски — всё это рассинхрон. Раньше
 	# он копился молча и всплывал как «Unit not found» на каждое действие хоста; теперь
 	# гость просит у хоста полный снимок и продолжает с него.
-	var drift := not result.ok or state.dice.scripted_remaining() > 0 \
-			or (expected != 0 and state.digest_hash() != expected)
+	var left := state.dice.scripted_remaining()
+	var digest := state.digest_hash()
+	_remember({"i": IntentCodec.encode(intent), "r": rolls, "want": expected, "h": digest,
+			"ok": result.ok, "reason": result.reason, "rolls_left": left,
+			"round": state.turns.round_number})
+	var drift := not result.ok or left > 0 or (expected != 0 and digest != expected)
 	if drift and not _resync_pending:
 		_resync_pending = true
 		state.dice.clear_scripted()
-		outgoing.emit({"k": K_RESYNC})
+		# Before the request: the drifted board is still here for a report to capture.
 		desync_detected.emit()
+		outgoing.emit({"k": K_RESYNC})
 	action_applied.emit(intent, result)
 
 func _client_restore(msg: Dictionary) -> void:

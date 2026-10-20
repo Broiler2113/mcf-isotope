@@ -68,6 +68,9 @@ func _initialize() -> void:
 			for l in m.state.log.lines:
 				if str(l).find("resynchronized with the host") >= 0: resynced = true
 			ck(resynced, "the guest noticed the drift and pulled the host's board")
+			ck(str(m._desync_report.get("scene", "")) == "Desync (automatic)" \
+					and str(m._desync_report.get("description", "")).contains("(guest side)"),
+					"the drift was written up as an automatic desync report")
 			var alive_host := 0
 			for u in m.state.all_units():
 				if u.owner == 0 and u.is_alive() and not u.is_drone: alive_host += 1
