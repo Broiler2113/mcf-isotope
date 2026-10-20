@@ -353,7 +353,7 @@ func _build(options: Dictionary, dim: Vector2i, need: int, tight: bool) -> void:
 	h = dim.y + BORDER_ALL * 2
 	dens = DENSITY_MULT[clampi(int(opt["density"]), 0, DENSITY_MULT.size() - 1)]
 	_style = int(opt["style"])
-	var n := clampi(int(opt["zones"]), 2, MCF.MAX_PLAYERS)
+	var n := clampi(int(opt["zones"]), 1, MCF.MAX_PLAYERS)
 	# Четыре четверти — когда стороны делятся на них поровну (по стороне на четверть);
 	# иначе зеркало слева направо, и при нечётном числе одна зона стоит на оси.
 	_sym = 0 if not bool(opt.get("symmetric", false)) else (2 if n % 4 == 0 else 1)
@@ -2943,8 +2943,13 @@ func _pick_anchors(pools: Array) -> Array[Vector2i]:
 					var mid_y := 1.0 - absf(float(c.y) - mid.y) / float(h) if _sym == 1 else 1.0
 					score[i] = sep * (0.75 + 0.25 * mid_y)
 			else:
+				# Holdout defended alone (owner, 2026-10): the only zone sits in the middle of the
+				# map, where the waves come at it from every side. Several zones start at the edges.
 				for i in pool.size():
-					score[i] = ((Vector2(pool[i]) - mid) / Vector2(w, h)).length()
+					var off := ((Vector2(pool[i]) - mid) / Vector2(w, h)).length()
+					score[i] = off if _zone_n > 1 else 1.0 - off
+				if _zone_n == 1:
+					share = 0.95
 			a = _pick_top(pool, score, share)
 		else:
 			a = _pick_top(pool, mind[which], 0.9)

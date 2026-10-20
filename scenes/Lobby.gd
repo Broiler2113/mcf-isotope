@@ -347,7 +347,7 @@ func _apply_lobby_snapshot(msg: Dictionary) -> void:
 		_zones_opt.select(maxi(0, MatchMode.ZONE_COUNTS.find(GameConfig.capture_zones)))
 		_target_spin.set_value_no_signal(GameConfig.capture_target)
 		_waves_opt.select(maxi(0, MatchMode.WAVE_CHOICES.find(GameConfig.holdout_waves)))
-		_wave_every_opt.select(maxi(0, MatchMode.WAVE_EVERY_CHOICES.find(GameConfig.holdout_wave_every)))
+		_wave_every_spin.set_value_no_signal(GameConfig.holdout_wave_every)
 		_waves_ai_opt.select(clampi(GameConfig.holdout_ai, 0, _waves_ai_opt.item_count - 1))
 		_sync_mode_rows()
 		if _preview_labels != null:
@@ -568,7 +568,7 @@ var _mode_blurb: Label
 var _zones_opt: OptionButton
 var _target_spin: SpinBox
 var _waves_opt: OptionButton
-var _wave_every_opt: OptionButton
+var _wave_every_spin: SpinBox
 var _waves_ai_opt: OptionButton
 var _mode_rows: Array = []   # [строка, режим, в котором она видна]
 
@@ -617,12 +617,13 @@ func _build_mode(parent: VBoxContainer) -> void:
 	_waves_opt = _opt(waves, MatchMode.WAVE_CHOICES.find(GameConfig.holdout_waves))
 	_waves_opt.tooltip_text = "How many waves to survive. Each is bigger than the last. Endless runs until the defenders fall."
 	_mode_rows.append([_row(box, "Waves:", _waves_opt), MatchMode.Kind.HOLDOUT])
-	var gaps: Array = []
-	for n: int in MatchMode.WAVE_EVERY_CHOICES:
-		gaps.append("Every round" if n == 1 else "Every %d rounds" % n)
-	_wave_every_opt = _opt(gaps, maxi(0, MatchMode.WAVE_EVERY_CHOICES.find(GameConfig.holdout_wave_every)))
-	_wave_every_opt.tooltip_text = "How often a new wave lands. A wave also comes at once when the previous one is wiped out."
-	_mode_rows.append([_row(box, "Wave frequency:", _wave_every_opt), MatchMode.Kind.HOLDOUT])
+	_wave_every_spin = SpinBox.new()
+	_wave_every_spin.min_value = 1
+	_wave_every_spin.max_value = MatchMode.WAVE_EVERY_MAX
+	_wave_every_spin.value = GameConfig.holdout_wave_every
+	_wave_every_spin.suffix = "round(s)"
+	_wave_every_spin.tooltip_text = "How many rounds between waves (type a number). A wave also comes at once when the previous one is wiped out."
+	_mode_rows.append([_row(box, "Wave every:", _wave_every_spin), MatchMode.Kind.HOLDOUT])
 	var leaders: Array = []
 	for p: int in AIPersonality.ALL:
 		leaders.append("AI - " + AIPersonality.name_of(p))
@@ -649,15 +650,17 @@ func _build_mode(parent: VBoxContainer) -> void:
 		if _preview_labels != null:
 			_preview_labels.queue_redraw())
 	_sync_mode_rows()
-	var opts: Array[OptionButton] = [_mode_opt, _zones_opt, _waves_opt, _wave_every_opt, _waves_ai_opt]
+	var opts: Array[OptionButton] = [_mode_opt, _zones_opt, _waves_opt, _waves_ai_opt]
 	if _is_host_net:
 		for o in opts:
 			o.item_selected.connect(func(_i: int) -> void: _broadcast_lobby())
 		_target_spin.value_changed.connect(func(_v: float) -> void: _broadcast_lobby())
+		_wave_every_spin.value_changed.connect(func(_v: float) -> void: _broadcast_lobby())
 	if _is_client:
 		for o in opts:
 			o.disabled = true
 		_target_spin.editable = false
+		_wave_every_spin.editable = false
 
 func _sync_mode_rows() -> void:
 	var k := _mode_opt.selected
@@ -1211,7 +1214,7 @@ func _gen_options() -> Dictionary:
 		return {}
 	return {"style": _gen_style.selected, "size": _gen_size.selected,
 			"density": _gen_density.selected, "seed": int(_gen_seed.value),
-			"zones": maxi(2, roster.slots.size()), "units": int(_gen_units.value),
+			"zones": maxi(_min_slots(), roster.slots.size()), "units": int(_gen_units.value),
 			"width": int(_gen_w.value), "height": int(_gen_h.value),
 			"symmetric": _gen_sym.button_pressed,
 			"space": MapGen.STYLE_SPACE[clampi(_gen_style.selected, 0, MapGen.STYLE_SPACE.size() - 1)],
@@ -2129,7 +2132,7 @@ func _commit_config() -> void:
 	GameConfig.capture_zones = MatchMode.ZONE_COUNTS[_zones_opt.selected]
 	GameConfig.capture_target = int(_target_spin.value)
 	GameConfig.holdout_waves = MatchMode.WAVE_CHOICES[_waves_opt.selected]
-	GameConfig.holdout_wave_every = MatchMode.WAVE_EVERY_CHOICES[_wave_every_opt.selected]
+	GameConfig.holdout_wave_every = int(_wave_every_spin.value)
 	GameConfig.holdout_ai = _waves_ai_opt.selected
 	# Пул событий из окна (item 3/5): вес 1 у выбранных, 0 у прочих.
 	var weights: Dictionary = {}

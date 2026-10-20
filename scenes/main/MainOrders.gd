@@ -404,11 +404,14 @@ func _board_pick_at(coord: Vector2i) -> Vehicle:
 ## Усадить в машину vid всех выделенных, кто рядом и кому это разрешено (item 5).
 ## Резолвер сам проверит соседство, вместимость и запреты (щит/трупы — item 19).
 func _group_embark(vid: int) -> void:
-	for id in _group_ids.duplicate():
+	var ids := _group_ids.duplicate()
+	# Deselect first: a soldier who lands in a borg is selected after its order resolves
+	# (_select_borg_pilot), and that must outlast the group order.
+	_deselect()
+	for id in ids:
 		var u := state.get_unit(id)
 		if u != null and u.is_alive() and u.aboard_vehicle_id == -1:
 			_submit(VehicleBoardIntent.new(id, vid))
-	_deselect()
 
 ## Групповое движение к клетке (#18): раскладку считает GroupMovePlanner. После приказа
 ## выделение снимается (#19).

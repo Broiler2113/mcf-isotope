@@ -21,7 +21,7 @@ const NAMES := ["Annihilation", "Capture & Hold", "Holdout"]
 const BLURBS := [
 	"The last team with soldiers standing wins.",
 	"Hold the zones. At the end of every round each zone scores 1 point for the team with more soldiers in it. First to the target wins; wiping out the enemy still wins outright.",
-	"All players defend together against waves, each bigger than the last. A wave lands every two rounds — or right after the previous one is wiped out. Survive them all, or as long as you can.",
+	"All players defend together against waves, each bigger than the last. A wave lands every few rounds (set below) — or right after the previous one is wiped out. Survive them all, or as long as you can.",
 ]
 
 const ZONE_COUNTS := [1, 3, 5]
@@ -35,8 +35,9 @@ const DEFAULT_WAVES := 10
 ## Раундов между волнами: волна объявляется в начале раунда и приходит в его конце.
 ## Выбитая волна зовёт следующую сразу (GameActionResolver._maybe_wave_cleared).
 const WAVE_EVERY := 2
-## Lobby choice of rounds between waves (owner, 2026-10-19); WAVE_EVERY is the default.
-const WAVE_EVERY_CHOICES := [1, 2, 3, 4, 5]
+## Rounds between waves, typed in the lobby (owner, 2026-10-20; was a 1-5 list);
+## WAVE_EVERY is the default.
+const WAVE_EVERY_MAX := 50
 ## Сила волны k в долях стартовой армии защитников: первая — пятая часть, каждая следующая
 ## на 7 % больше (замерено турниром ИИ: при 40 % + 15 % защитник падал на 3–4-й волне).
 const WAVE_BASE := 0.2
@@ -100,7 +101,7 @@ static func from_config() -> MatchMode:
 	m.zone_count = GameConfig.capture_zones if ZONE_COUNTS.has(GameConfig.capture_zones) else DEFAULT_ZONES
 	m.target = clampi(GameConfig.capture_target, TARGET_MIN, TARGET_MAX)
 	m.waves_total = GameConfig.holdout_waves if WAVE_CHOICES.has(GameConfig.holdout_waves) else DEFAULT_WAVES
-	m.wave_every = GameConfig.holdout_wave_every if WAVE_EVERY_CHOICES.has(GameConfig.holdout_wave_every) else WAVE_EVERY
+	m.wave_every = clampi(GameConfig.holdout_wave_every, 1, WAVE_EVERY_MAX)
 	m.excluded_units = GameConfig.holdout_excluded_units.duplicate()
 	return m
 
@@ -141,7 +142,7 @@ func restore(d: Dictionary) -> void:
 	bounty_side = int(d.get("bounty_side", -1))
 	bounty_until = int(d.get("bounty_until", 0))
 	waves_total = int(d.get("waves_total", DEFAULT_WAVES))
-	wave_every = clampi(int(d.get("wave_every", WAVE_EVERY)), 1, WAVE_EVERY_CHOICES.back())
+	wave_every = clampi(int(d.get("wave_every", WAVE_EVERY)), 1, WAVE_EVERY_MAX)
 	wave = int(d.get("wave", 0))
 	wave_side = int(d.get("wave_side", -1))
 	next_wave_round = int(d.get("next_wave_round", 1))

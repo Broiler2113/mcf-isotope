@@ -735,18 +735,9 @@ func _draw() -> void:
 			_draw_vehicle_needs(cveh_sel.owner, func(c: Vector2i) -> int:
 				return resolver.cannon_aim_need(cveh_sel, c))
 
-	if mode == Mode.VEH_DISEMBARK or mode == Mode.VEH_SEAT or mode == Mode.VEH_BOARD_SEAT:
+	if mode == Mode.VEH_DISEMBARK:
 		for coord in item_cells:
 			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), Color(0.4, 0.7, 1.0, 0.28))
-		# Кресло водителя подписано (batch 14): игрок решает, вести ему или ехать.
-		if mode != Mode.VEH_DISEMBARK:
-			var pv := state.get_vehicle(veh_board_vid) if mode == Mode.VEH_BOARD_SEAT \
-					else resolver.seated_vehicle_of(_selected_unit())
-			if pv != null and pv.seated():
-				var dc := pv.seat_cell(Vehicle.DRIVER_SEAT)
-				if item_cells.has(dc):
-					draw_string(font, _cell_origin(dc) + Vector2(4, 14), "DRIVER",
-						HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(1, 1, 0.6))
 
 	# Статические объекты вблизи — в плитках TerrainTiles. Поверх них здесь только то, что
 	# у каждого своё или живёт мгновение: мины (видимость своя у каждой стороны, item 45),
@@ -1054,6 +1045,7 @@ func _draw() -> void:
 	draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
 	# A thin second pass puts wisps in front of occupants without hiding their sprites.
 	_draw_gas_tiles(0.2, false)
+	_draw_seat_grid(font)
 
 
 	# Рамка выделения (#18): сетка-выровненный зелёный прямоугольник поверх поля.
@@ -1629,6 +1621,33 @@ func _draw_pixel_bang(top_left: Vector2) -> void:
 ## Борг (batch 13 B17): квадратная рамка в цвете стороны с оператором внутри (его кружок
 ## рисует общий проход бойцов поверх), пустой — серая рамка с точкой; бейдж «B» в углу,
 ## прочность — точками у нижней кромки. Остов — серая рамка с крестом.
+## Choosing a shuttle seat (owner, 2026-10-20): the seats are drawn as a grid OVER the hull
+## (before, their highlight lay under the shuttle's picture and could not be seen). Free
+## seats are lit, the driver's in amber and labelled; taken seats keep a thin outline.
+const SEAT_FREE_COLOR := Color(0.4, 0.7, 1.0)
+const SEAT_DRIVER_COLOR := Color(1.0, 0.76, 0.22)
+
+func _draw_seat_grid(font: Font) -> void:
+	if mode != Mode.VEH_SEAT and mode != Mode.VEH_BOARD_SEAT:
+		return
+	var pv := state.get_vehicle(veh_board_vid) if mode == Mode.VEH_BOARD_SEAT \
+			else resolver.seated_vehicle_of(_selected_unit())
+	if pv == null or not pv.seated():
+		return
+	pv.ensure_seats()
+	for i in pv.seats.size():
+		var c := pv.seat_cell(i)
+		var r := Rect2(_cell_origin(c), Vector2(CELL, CELL)).grow(-2)
+		if not item_cells.has(c):
+			draw_rect(r, Color(0.75, 0.75, 0.75, 0.55), false, 1.0)
+			continue
+		var col := SEAT_DRIVER_COLOR if i == Vehicle.DRIVER_SEAT else SEAT_FREE_COLOR
+		draw_rect(r, Color(col.r, col.g, col.b, 0.42))
+		draw_rect(r, col, false, 2.0)
+		if i == Vehicle.DRIVER_SEAT:
+			draw_string(font, r.position + Vector2(3, 12), "DRIVER", HORIZONTAL_ALIGNMENT_LEFT, -1, 10,
+					Color(1, 0.95, 0.75))
+
 func _draw_borg(veh: Vehicle, org: Vector2, col: Color, wrecked: bool, dur: int, font: Font) -> void:
 	var frame := Rect2(org + Vector2(2, 2), Vector2(CELL - 4, CELL - 4))
 	var op := state.get_unit(veh.borg_operator())

@@ -75,7 +75,7 @@ func _show_net_action(intent: Intent, result: ActionResult) -> void:
 	queue_redraw()
 	if _check_match_over():
 		return
-	if not _select_spawned_drone(intent, result):
+	if not _select_spawned_drone(intent, result) and not _select_borg_pilot(intent, result):
 		_after_action()
 
 ## Подхватить связь, налаженную во вкладке Multiplayer главного меню (#54).

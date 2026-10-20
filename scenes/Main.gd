@@ -958,7 +958,7 @@ func _on_intent_ready(intent: Intent) -> void:
 		_deselect()
 		_queue_ai_step(active_ctrl)
 		return
-	if not _select_spawned_drone(intent, result):
+	if not _select_spawned_drone(intent, result) and not _select_borg_pilot(intent, result):
 		_after_action()
 
 ## Следующий шаг ИИ — через короткую паузу (#52). Без неё вся армия отрабатывает
