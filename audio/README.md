@@ -91,7 +91,7 @@ before export.
 ## Tests and stress case
 
 ```sh
-godot --headless --path . --script res://tests/run_audio.gd
+godot --headless --path . --script res://tests/audio/run_audio.gd
 godot --headless --path . --script res://tests/bench/run_audio_bench.gd
 ```
 
