@@ -22,6 +22,9 @@ func run() -> void:
 
 	_holdout_waves_and_fire()
 
+	_lone_holdout_zone()
+	_typed_wave_frequency()
+
 const ArmyBuilder := preload("res://rl/ArmyBuilder.gd")
 
 func _map(style: int, seed: int, w := 40, h := 30, units := 8) -> MapData:
@@ -373,3 +376,39 @@ func _holdout_waves_and_fire() -> void:
 	planner._state = r.state
 	r.state.grid.cell(Vector2i(12, 12)).on_fire = true
 	ck(planner._score_cell(flame, Vector2i(12, 11), 0, 0, false) <= -1e8, "planner refuses fire-adjacent cells for wave flamers")
+
+## Holdout defended alone (owner, 2026-10-20): the random map has one deployment zone, near
+## the middle of the map, on every style.
+func _lone_holdout_zone() -> void:
+	for style in 5:
+		var m := MapGen.generate({"style": style, "size": 1, "seed": 11, "zones": 1, "units": 10})
+		var zones := {}
+		var sum := Vector2.ZERO
+		var n := 0
+		for y in m.height:
+			for x in m.width:
+				var z := m.get_zone(Vector2i(x, y))
+				if z >= 0:
+					zones[z] = true
+					sum += Vector2(x, y)
+					n += 1
+		var off := (sum / maxf(1, n) - Vector2(m.width - 1, m.height - 1) * 0.5) / Vector2(m.width, m.height)
+		ck(zones.keys() == [0], "style %d: one zone alone (%s)" % [style, str(zones.keys())])
+		ck(off.length() < 0.15, "style %d: the lone zone sits in the middle (%.2f off)" % [style, off.length()])
+
+## Wave frequency is typed (owner, 2026-10-20): any number of rounds from 1 to 50 reaches the
+## match and the guests; out-of-range values are clamped.
+func _typed_wave_frequency() -> void:
+	var keep := GameConfig.holdout_wave_every
+	GameConfig.holdout_wave_every = 7
+	ck(MatchMode.from_config().wave_every == 7, "7 rounds between waves reaches the match")
+	var back := MatchMode.new()
+	back.restore({"wave_every": 7})
+	ck(back.wave_every == 7, "a save keeps 7")
+	back.restore({"wave_every": 400})
+	ck(back.wave_every == MatchMode.WAVE_EVERY_MAX, "an old or forged value is clamped")
+	var msg := NetHandoff.encode_rules()
+	GameConfig.holdout_wave_every = 2
+	NetHandoff.apply_rules(msg)
+	ck(GameConfig.holdout_wave_every == 7, "guests get the typed frequency")
+	GameConfig.holdout_wave_every = keep

@@ -652,6 +652,19 @@ func _open_station_picker(stations: Array, title := "Launch From Which Station?"
 	_picker.show()
 
 
+## A soldier who climbs into a borg is selected at once, and the borg with it (owner,
+## 2026-10-20): the pilot stands on the borg's cell and its menu is the borg's. Covers every
+## way in — the soldier's menu, the vehicle's, a board pick, a group embark, the network.
+func _select_borg_pilot(intent: Intent, result: ActionResult) -> bool:
+	if replay != null or not result.ok or not intent is VehicleBoardIntent or _spectator:
+		return false
+	var pilot := state.get_unit(intent.actor_id)
+	if pilot == null or pilot.borg_id == -1 or not _is_own_active(pilot) \
+			or not _owner_is_local_human(pilot.owner):
+		return false
+	_select(pilot)
+	return true
+
 func _select_spawned_drone(intent: Intent, result: ActionResult) -> bool:
 	if replay != null or not result.ok or not intent is SpawnDroneIntent or _spectator:
 		return false

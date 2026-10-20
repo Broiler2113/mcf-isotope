@@ -35,6 +35,8 @@ func run() -> void:
 
 	_tanks_stay_out_of_space()
 
+	await _boarding_on_screen()
+
 func state_of(m: MapData) -> GameState:
 	var st := m.build_state(77)
 	st.turns.round_order = [0, 1]
@@ -439,3 +441,49 @@ func _tanks_stay_out_of_space() -> void:
 	var plan := VehicleRules.plan_line_move(ft["s"], veh, Vector2i(1, 0), 20, 40)
 	ck(plan["ok"] and veh.origin.x + int(plan["steps"]) + veh.size.x - 1 < 12,
 			"a tank drives up to the void and stops (%d steps)" % int(plan["steps"]))
+
+## On the battle screen (owner, 2026-10-20): a soldier who climbs into a borg is selected,
+## the borg with it, even when a group was ordered in; choosing a shuttle seat lays the
+## seat grid over the hull with the driver's seat apart.
+func _boarding_on_screen() -> void:
+	GameConfig.civilians_enabled = false
+	GameConfig.random_events_enabled = false
+	GameConfig.fog_mode = MCF.Fog.OFF
+	GameConfig.roster = Roster.default_duel(false)
+	var m := MapData.blank_arena(20, 14)
+	m.set_spawn(Vector2i(5, 5), "borg", MCF.Owner.PLAYER_1)
+	m.set_spawn(Vector2i(6, 5), "engineer", MCF.Owner.PLAYER_1)
+	m.set_spawn(Vector2i(6, 6), "light_infantry", MCF.Owner.PLAYER_1)
+	m.set_spawn(Vector2i(10, 3), "shuttle", MCF.Owner.PLAYER_1, Vector2i(1, 0))
+	m.set_spawn(Vector2i(9, 3), "heavy_infantry", MCF.Owner.PLAYER_1)
+	m.set_spawn(Vector2i(18, 12), "light_infantry", MCF.Owner.PLAYER_2)
+	MapHandoff.pending = m
+	var main: Node = load("res://scenes/Main.tscn").instantiate()
+	root.add_child(main)
+	for i in 5: await process_frame
+	while main.state.active_player() != 0:
+		main.resolver.resolve(EndTurnIntent.new())
+	var eng: UnitInstance = main.state.grid.cell(Vector2i(6, 5)).occupant
+	var li: UnitInstance = main.state.grid.cell(Vector2i(6, 6)).occupant
+	var borg: Vehicle = main.state.get_vehicle(main.state.grid.cell(Vector2i(5, 5)).vehicle_id)
+	var group: Array[int] = [eng.id, li.id]
+	main._set_group(group)
+	main._group_embark(borg.id)
+	for i in 30: await process_frame
+	ck(eng.borg_id == borg.id, "the engineer climbs into the borg")
+	ck(main.selected_id == eng.id and main._group_ids.is_empty() and main._menu.visible,
+			"after a group order the borg's pilot is selected, its menu open (selected %d)" % main.selected_id)
+	var hi: UnitInstance = main.state.grid.cell(Vector2i(9, 3)).occupant
+	var sh: Vehicle = main.state.get_vehicle(main.state.grid.cell(Vector2i(10, 3)).vehicle_id)
+	main._select(hi)
+	main._board_into(hi.id, sh)
+	ck(main.mode == main.Mode.VEH_BOARD_SEAT and main.item_cells.has(sh.seat_cell(Vehicle.DRIVER_SEAT)),
+			"boarding a shuttle asks for a seat, the driver's among them")
+	# The grid is drawn after the vehicles: the call order inside _draw shows it.
+	var draw_src: String = (load("res://scenes/main/MainDrawing.gd") as GDScript).source_code
+	ck(draw_src.find("_draw_seat_grid(font)") > draw_src.find("for veh: Vehicle in state.all_vehicles():"),
+			"the seat grid is drawn over the hulls")
+	main.queue_redraw()
+	await process_frame
+	main.queue_free()
+	await process_frame
