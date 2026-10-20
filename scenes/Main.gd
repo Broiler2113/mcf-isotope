@@ -179,6 +179,15 @@ var _held_grid_key: Array = []
 var _held_fog_source: Dictionary = {}
 var _held_visible_source: Dictionary = {}
 
+## The cells _visible_before_impact(viewer) leaves out, when known as a short list
+## (GameActionResolver.visible_complement); null otherwise.
+func _hidden_before_impact(viewer: int) -> Variant:
+	var view := _view_resolver()
+	if view.visibility_limited():
+		var held: Dictionary = _hold_visual.get("visible", {})
+		if held.has(viewer): return (_hold_visual.get("hidden", {}) as Dictionary).get(viewer)
+	return view.visible_complement(viewer)
+
 func _visible_before_impact(viewer: int) -> Dictionary:
 	if _view_resolver().visibility_limited():
 		var held: Dictionary = _hold_visual.get("visible", {})
@@ -614,6 +623,7 @@ func _ready() -> void:
 	resolver.capture_cosmetics = _fx.capture_state
 	resolver.restore_cosmetics = _fx.restore_state
 	_furniture_look = TerrainTiles.new(state.grid, state.env).freeze_furniture()
+	_furniture_look_of = [state.grid, GridCell.look_version]
 	# Край поля для косметики (batch 12 #6): гильзы, брызги и осколки отскакивают от него.
 	_fx.bounds = Vector2(state.grid.width, state.grid.height)
 	# Частицы останавливаются о стены (item 7), а не «проваливаются» в них.
@@ -3418,15 +3428,8 @@ func _declare_match_over(title: String) -> void:
 ## Снимок доски в начале боя для «было / стало». Черновая сетка — в тихом окне журналов
 ## (GridCell.logs_snapshot): Grid.new иначе заставил бы туман, ИИ и плитки боя пересчитать
 ## всё. Мебель рисуется тем же замороженным видом, что и в бою.
-func _capture_opening_view() -> void:
-	var saved := GridCell.logs_snapshot()
-	var opening := state
-	if _opening_state.is_empty():
-		_opening_state = StateCodec.encode(state)
-	else:
-		var decoded := StateCodec.decode(_opening_state)
-		if decoded != null: opening = decoded
-	var src := opening.grid
+## The opening board's look, copied for the Before view.
+static func _opening_grid(src: Grid) -> Grid:
 	var g := Grid.new(src.width, src.height)
 	for y in src.height:
 		for x in src.width:
@@ -3447,10 +3450,25 @@ func _capture_opening_view() -> void:
 	g.map_decals = src.map_decals.duplicate(true)
 	g.map_items = src.map_items
 	g.floor_look = src.floor_look.duplicate()   # полы комнат (0.9.2) — и в «было» тоже
+	return g
+
+func _capture_opening_view() -> void:
+	var saved := GridCell.logs_snapshot()
+	var opening := state
+	if _opening_state.is_empty():
+		_opening_state = StateCodec.encode(state)
+	else:
+		var decoded := StateCodec.decode(_opening_state)
+		if decoded != null: opening = decoded
+	var src := opening.grid
+	var g := _opening_grid(src)
 	GridCell.logs_restore(saved)
 	_before_grid = g
 	_before_tiles = TerrainTiles.new(g, state.env)
-	_before_tiles.furniture_look = _before_tiles.freeze_furniture()
+	# A new match opens on the board the battle froze its furniture from a moment ago, and
+	# the copy holds everything freezing reads: same result, no second pass over the board.
+	var fresh_board := opening == state and _furniture_look_of == [state.grid, GridCell.look_version]
+	_before_tiles.furniture_look = _furniture_look if fresh_board else _before_tiles.freeze_furniture()
 	_before_units.clear()
 	for u: UnitInstance in opening.all_units():
 		if u.is_alive() and src.in_bounds(u.coord):
@@ -5246,6 +5264,7 @@ var _tiles_grid: Array = []      # [доска, туман]: под тумано
 ## Вид мебели, снятый с доски в начале партии (TerrainTiles.furniture_look): в бою мебель
 ## заново не срастается. Живёт здесь, а не в плитках, — их пересоздаёт смена доски и тумана.
 var _furniture_look: Dictionary = {}
+var _furniture_look_of: Array = []   # [board, GridCell.look_version] it was frozen from
 
 ## Доска «как её помнит зритель» (issues-12 #4). Под туманом рельеф и объекты рисуются
 ## не с живой доски, а с её копии, где клетка обновляется, только пока зритель её видит:
@@ -5272,10 +5291,14 @@ var _fog_mem_corpses: Dictionary = {}  # viewer -> {клетка: [павший 
 ## re-check only the cells that differ, not the whole view (issues-fix-6 #4: ~90 ms each).
 var _mem_visible: Dictionary = {}
 var _mem_visible_key: Array = []
+## The cells _mem_visible leaves out, when the resolver knows them as a short list (fog off
+## with clouds: the board minus clouds and shadows); null when it does not.
+var _mem_hidden: Variant = null
 var _mem_view: GameActionResolver = null
 
 func _board_memory(viewer: int, visible: Dictionary, vis_changed: Variant) -> Grid:
 	var grid := state.grid
+	var fresh := not _fog_mem.has(viewer) or _fog_mem_grid != grid   # cloned below: already the live board
 	if _fog_mem_grid != grid:
 		_fog_mem = {}
 		_fog_mem_grid = grid
@@ -5300,7 +5323,7 @@ func _board_memory(viewer: int, visible: Dictionary, vis_changed: Variant) -> Gr
 	var dmg: Dictionary = _fog_mem_dmg[viewer]
 	var dmg_all := viewer != _fog_mem_viewer or vis_changed == null \
 			or _fog_mem_dmg_seen != _fx.damage_version
-	var dmg_cells: Variant = visible if dmg_all else vis_changed
+	var dmg_cells: Variant = [] if fresh else (visible if dmg_all else vis_changed)
 	for k: Variant in dmg_cells:
 		var dc: Vector2i = k if k is Vector2i else Vector2i(int(k) % grid.width, int(k) / grid.width)
 		if not visible.has(dc):
@@ -5317,7 +5340,9 @@ func _board_memory(viewer: int, visible: Dictionary, vis_changed: Variant) -> Gr
 	_fog_mem_dmg_seen = _fx.damage_version
 	var journaling := GridCell.journaling
 	GridCell.journaling = false
-	if viewer != _fog_mem_viewer or vis_changed == null or _fog_mem_look < GridCell.look_log_base:
+	if fresh:
+		pass
+	elif viewer != _fog_mem_viewer or vis_changed == null or _fog_mem_look < GridCell.look_log_base:
 		for c: Vector2i in visible:
 			_copy_look(mem.cell_fast(c.x, c.y), grid.cell_fast(c.x, c.y))
 	else:
@@ -5377,25 +5402,32 @@ static func _copy_look(dst: GridCell, src: GridCell) -> void:
 ## Cells (y * width + x) whose visibility differs from what the fog memories last saw.
 ## A logged step only touches its own cells; a jump to another view is diffed against the
 ## kept copy. null (re-check the whole view) only without a copy for this viewer and board.
-func _track_mem_visible(viewer: int, visible: Dictionary, logged: Variant, jumped: bool) -> Variant:
+func _track_mem_visible(viewer: int, visible: Dictionary, hidden: Variant, logged: Variant,
+		jumped: bool) -> Variant:
 	var gw := state.grid.width
 	var key := [viewer, state.grid.get_instance_id()]
 	if key != _mem_visible_key:
 		_mem_visible_key = key
 		_mem_visible = visible.duplicate()
+		_mem_hidden = hidden
 		return null
 	if not jumped:
 		for k: int in logged:
 			var c := Vector2i(k % gw, k / gw)
 			if visible.has(c): _mem_visible[c] = true
 			else: _mem_visible.erase(c)
+		_mem_hidden = hidden
 		return logged
 	var diff: Array = []
-	for c: Vector2i in _mem_visible:
-		if not visible.has(c): diff.append(c.y * gw + c.x)
-	for c: Vector2i in visible:
-		if not _mem_visible.has(c): diff.append(c.y * gw + c.x)
+	# Both views are the whole board but for a few cells: compare those few, not the board.
+	var old: Dictionary = _mem_hidden if hidden != null and _mem_hidden != null else _mem_visible
+	var now: Dictionary = hidden if hidden != null and _mem_hidden != null else visible
+	for c: Vector2i in old:
+		if not now.has(c): diff.append(c.y * gw + c.x)
+	for c: Vector2i in now:
+		if not old.has(c): diff.append(c.y * gw + c.x)
 	_mem_visible = visible.duplicate()
+	_mem_hidden = hidden
 	return diff
 
 ## Держит слой дальнего плана в согласии с доской. far — рисует ли им этот кадр. Слой
@@ -5434,7 +5466,7 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, fog_on: bool) -> voi
 				or (held_seen.is_empty() and not _held_fog_source.is_empty()):
 			jumped = true
 			_held_fog_source = held_seen
-		vis_changed = _track_mem_visible(viewer, visible, vis_changed, jumped)
+		vis_changed = _track_mem_visible(viewer, visible, _hidden_before_impact(viewer), vis_changed, jumped)
 		var switched := viewer != _fog_mem_viewer
 		shown = _board_memory(viewer, visible, vis_changed)
 		# Косметика — по той же памяти (0.11.3): новый зритель сверяется целиком.

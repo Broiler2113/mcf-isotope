@@ -314,14 +314,26 @@ func _illuminate(c: Vector2i, id: String, turn: int = 0) -> void:
 			if d >= 1 or not _line_clear(ray_start, q): continue
 			coverage[y * g.w + x] += float(def.light_energy) * falloff(d)
 
-func _line_clear(a: Vector2i, b: Vector2i) -> bool:
-	var dx := absi(b.x - a.x)
-	var dy := -absi(b.y - a.y)
-	var sx := signi(b.x - a.x)
-	var sy := signi(b.y - a.y)
+## The cells _line_clear walks between a and a + delta, as flat offsets from a: the walk
+## depends only on delta, so each one is traced once per board width, not once per lamp.
+static var _paths: Dictionary = {}
+static var _paths_width := -1
+
+func _path(delta: Vector2i) -> PackedInt32Array:
+	if _paths_width != g.w:
+		_paths.clear()
+		_paths_width = g.w
+	var hit: Variant = _paths.get(delta)
+	if hit != null:
+		return hit
+	var out := PackedInt32Array()
+	var dx := absi(delta.x)
+	var dy := -absi(delta.y)
+	var sx := signi(delta.x)
+	var sy := signi(delta.y)
 	var error := dx + dy
-	var c := a
-	while c != b:
+	var c := Vector2i.ZERO
+	while c != delta:
 		var e := 2 * error
 		if e >= dy:
 			error += dy
@@ -329,6 +341,13 @@ func _line_clear(a: Vector2i, b: Vector2i) -> bool:
 		if e <= dx:
 			error += dx
 			c.y += sy
-		if c == b: break
-		if _opaque[c.y * g.w + c.x] != 0: return false
+		if c == delta: break
+		out.append(c.y * g.w + c.x)
+	_paths[delta] = out
+	return out
+
+func _line_clear(a: Vector2i, b: Vector2i) -> bool:
+	var start := a.y * g.w + a.x
+	for off: int in _path(b - a):
+		if _opaque[start + off] != 0: return false
 	return true

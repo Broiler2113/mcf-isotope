@@ -589,12 +589,20 @@ func _on_edge(r: Rect2i, c: Vector2i) -> bool:
 func _is_corner(r: Rect2i, c: Vector2i) -> bool:
 	return (c.x == r.position.x or c.x == r.end.x - 1) and (c.y == r.position.y or c.y == r.end.y - 1)
 
+## The rim of r in row order: the same list a scan of the whole rectangle with _on_edge gave,
+## without visiting the inside (a big sector's area was scanned thousands of times).
 func _edge_cells(r: Rect2i) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
+	if r.size.x <= 0:
+		return out
 	for y in range(r.position.y, r.end.y):
-		for x in range(r.position.x, r.end.x):
-			if _on_edge(r, Vector2i(x, y)):
+		if y == r.position.y or y == r.end.y - 1:
+			for x in range(r.position.x, r.end.x):
 				out.append(Vector2i(x, y))
+		else:
+			out.append(Vector2i(r.position.x, y))
+			if r.size.x > 1:
+				out.append(Vector2i(r.end.x - 1, y))
 	return out
 
 ## Куда смотрит наружу клетка края прямоугольника (не угловая).
@@ -989,6 +997,7 @@ func _assign_departments(kept: Array[Rect2i]) -> Array[String]:
 		free.erase(k)
 	var dist := func(a: int, b: Vector2) -> float:
 		return Vector2(kept[a].get_center()).distance_to(b)
+	var on_hull := {}   # sector -> _sector_on_hull: the hull does not move while departments are dealt
 	# Мостик, жилой и сразу производство: «дальше всех от жилого» — это пока все отсеки
 	# свободны, а не тот, что останется после прочих отделов.
 	var order: Array[String] = []
@@ -1021,7 +1030,9 @@ func _assign_departments(kept: Array[Rect2i]) -> Array[String]:
 			"engineering", "supply", "research":
 				var edges: Array[int] = []
 				for k in free:
-					if _sector_on_hull(kept[k]):
+					if not on_hull.has(k):
+						on_hull[k] = _sector_on_hull(kept[k])
+					if on_hull[k]:
 						edges.append(k)
 				var pool: Array[int] = edges if not edges.is_empty() else free
 				best = pool[_rng.randi_range(0, pool.size() - 1)]

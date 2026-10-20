@@ -1139,9 +1139,12 @@ func _capture_visual_hold(res: ActionResult, area: Array) -> void:
 		return
 	if visibility_limited() and not res.visual_hold.has("visible"):
 		var seen := {}
+		var hidden := {}
 		for side: int in state.roster.player_ids():
 			seen[side] = team_visible_coords(side).duplicate()
+			hidden[side] = visible_complement(side)
 		res.visual_hold["visible"] = seen
+		res.visual_hold["hidden"] = hidden
 	var cells: Dictionary = res.visual_hold.get("cells", {})
 	# Nearby doors may close when a blast kills their neighbour. Hold those too.
 	var captured := {}
@@ -3884,6 +3887,7 @@ var _gas_masks_version := -1
 var _gas_masks_grid := 0
 var _gas_masks_cache: Array = []
 func _gas_masks() -> Array:
+	_sync_seen()   # _sight_gas is static: make sure it describes this board
 	var grid := state.grid
 	if _gas_masks_version != GridCell.vision_version or _gas_masks_grid != grid.get_instance_id():
 		var mask := PackedByteArray()
@@ -4396,6 +4400,125 @@ static func _sweep(ux: int, uy: int, r: int, blk: PackedByteArray, gw: int,
 	sens.sort()
 	return [out, sens]
 
+## The cells _sweep would leave out of a whole-board window (r at least the board's size):
+## the same octant walk and the same closed slope intervals, emitting the shadowed rows of
+## each column instead of the open ones. Columns before an octant's first blocker cast no
+## shadow, so the walk starts there (`blockers` lists them all); a closed octant emits its
+## remaining columns whole. Cost follows the shadow, not the board.
+static func _sweep_hidden(ux: int, uy: int, blk: PackedByteArray, gw: int, gh: int,
+		blk_t: PackedByteArray, blockers: PackedInt32Array) -> PackedInt32Array:
+	var origin := uy * gw + ux
+	var out := PackedInt32Array()
+	# First column holding a blocker per octant, in the walk's own search range 0 ≤ j ≤ a.
+	var first := PackedInt32Array()
+	first.resize(8)
+	first.fill(0x7FFFFFFF)
+	for g: int in blockers:
+		var dx := g % gw - ux
+		var dy := g / gw - uy
+		for oct in 8:
+			var sx := -1 if (oct & 1) != 0 else 1
+			var sy := -1 if (oct & 2) != 0 else 1
+			var a := dx * sx if oct < 4 else dy * sy
+			var j := dy * sy if oct < 4 else dx * sx
+			if a >= 1 and j >= 0 and j <= a and a < first[oct]:
+				first[oct] = a
+	var lo_n := PackedInt32Array()
+	var lo_d := PackedInt32Array()
+	var hi_n := PackedInt32Array()
+	var hi_d := PackedInt32Array()
+	for oct in 8:
+		var xmajor := oct < 4
+		var sx := -1 if (oct & 1) != 0 else 1
+		var sy := -1 if (oct & 2) != 0 else 1
+		var major_step := sx
+		var minor_step := sy * gw
+		var major_room := (gw - 1 - ux) if sx > 0 else ux
+		var minor_room := (gh - 1 - uy) if sy > 0 else uy
+		if not xmajor:
+			major_step = sy * gw
+			minor_step = sx
+			major_room = (gh - 1 - uy) if sy > 0 else uy
+			minor_room = (gw - 1 - ux) if sx > 0 else ux
+		if first[oct] > major_room:
+			continue
+		var run: PackedByteArray = blk_t if xmajor else blk
+		var run_dir := sy if xmajor else sx
+		var b0 := 1 if ((sy < 0) if xmajor else (sx < 0)) else 0
+		lo_n.clear()
+		lo_d.clear()
+		hi_n.clear()
+		hi_d.clear()
+		var closed := false
+		var a: int = first[oct]
+		while a <= major_room:
+			var col := origin + major_step * a
+			var bmax := mini(a if xmajor else a - 1, minor_room)
+			if closed:
+				if bmax >= b0:
+					out.append_array(_prog(col + minor_step * b0, minor_step, bmax - b0 + 1))
+				a += 1
+				continue
+			var jmax := mini(a, minor_room)
+			var n := lo_n.size()
+			var cur := b0
+			var k := 0
+			while k < n and cur <= bmax:
+				var bs: int = _fdiv(a * lo_n[k], lo_d[k]) + 1
+				if bs > bmax:
+					break
+				var be: int = _fdiv(a * hi_n[k], hi_d[k])
+				if be >= cur and bs <= be:
+					var hs := maxi(bs, cur)
+					var he := mini(be, bmax)
+					if he >= hs:
+						out.append_array(_prog(col + minor_step * hs, minor_step, he - hs + 1))
+					cur = be + 1
+				k += 1
+			var base: int = ((ux + sx * a) * gh + uy) if xmajor else col
+			var from: int = base if run_dir > 0 else base - jmax
+			var seg := run.slice(from, from + jmax + 1)
+			var hit := seg.find(1)
+			while hit != -1:
+				var j: int = hit if run_dir > 0 else jmax - hit
+				var nl := 2 * j - 1
+				var dl := 2 * a
+				var nh := 2 * j + 1
+				var dh := 2 * a
+				var m := lo_n.size()
+				var p := 0
+				while p < m and hi_n[p] * dl < nl * hi_d[p]:
+					p += 1
+				var q := p
+				while q < m and lo_n[q] * dh <= nh * lo_d[q]:
+					if lo_n[q] * dl < nl * lo_d[q]:
+						nl = lo_n[q]
+						dl = lo_d[q]
+					if hi_n[q] * dh > nh * hi_d[q]:
+						nh = hi_n[q]
+						dh = hi_d[q]
+					q += 1
+				if q == p:
+					lo_n.insert(p, nl)
+					lo_d.insert(p, dl)
+					hi_n.insert(p, nh)
+					hi_d.insert(p, dh)
+				else:
+					lo_n[p] = nl
+					lo_d[p] = dl
+					hi_n[p] = nh
+					hi_d[p] = dh
+					for t in q - p - 1:
+						lo_n.remove_at(p + 1)
+						lo_d.remove_at(p + 1)
+						hi_n.remove_at(p + 1)
+						hi_d.remove_at(p + 1)
+				hit = seg.find(1, hit + 1)
+			if lo_n.size() == 1 and lo_n[0] < 0 and hi_n[0] >= hi_d[0]:
+				closed = true
+			a += 1
+	return out
+
 ## ⌊p / q⌋ при q > 0 — точно, в целых (деление GDScript округляет к нулю).
 static func _fdiv(p: int, q: int) -> int:
 	return (p - posmod(p, q)) / q
@@ -4557,6 +4680,7 @@ func team_visible_coords(owner: int) -> Dictionary:
 		_vis_epoch.clear()
 		_vis_vv.clear()
 		_vis_log.clear()   # всё видимое собирается заново — перерисовывать всё
+		_gas_view.clear()
 		_vis_grid = gid
 		_vis_mode = mode
 	if mode == 0:
@@ -4571,6 +4695,17 @@ func team_visible_coords(owner: int) -> Dictionary:
 		_vis_epoch[owner] = UnitInstance.vision_epoch
 		_vis_vv[owner] = GridCell.vision_version
 		return full
+	if mode == 2:
+		var by_shadows: Variant = _team_visible_gas(owner)
+		if by_shadows != null:
+			return by_shadows
+		if _gas_view.has(owner):
+			# Someone's window got smaller than the board: start the per-soldier path afresh.
+			_gas_view.erase(owner)
+			_vis_set.erase(owner)
+			_vis_counts.erase(owner)
+			_vis_seen.erase(owner)
+			_vis_log.erase(owner)
 
 	var out: Dictionary = _vis_set.get(owner, {})
 	var gw := state.grid.width
@@ -4676,6 +4811,228 @@ func _vis_drop(cells: PackedInt32Array, counts: PackedInt32Array, out: Dictionar
 			if log != null:
 				log.append(i)
 	return counts
+
+## Fog off with gas or smoke on the board (mode 2). Every eye's window is the whole board and
+## only the clouds stop sight, so one soldier's view is the board minus a few shadows. The
+## per-soldier path paid for each view in full: on a 250×250 board that is 70 000 cells per
+## soldier, and one cloud froze every action for seconds. Here an eye contributes only its
+## shadow (_sweep_hidden, the exact complement of _sweep), and a cell is hidden from the team
+## when every eye's shadow holds it. The set is the same, cell for cell (run_gas_vision).
+## null: someone's window is smaller than the board, and the per-soldier path decides.
+var _gas_view: Dictionary = {}   # owner -> what _vis_set[owner] was last built from
+
+func _team_visible_gas(owner: int) -> Variant:
+	var grid := state.grid
+	var gw := grid.width
+	var full_r := maxi(gw, grid.height)
+	# The same eyes as the per-soldier path, with the same windows (_seen_from, _vehicle_seen).
+	var eyes: Array = []   # [cell, window radius]
+	var sides := _vision_sides(owner)
+	for u in state.all_units():
+		if u.is_alive() and sides.has(u.owner) and u.aboard_vehicle_id == -1:
+			eyes.append([sight_positions.get(u.id, u.coord), mini(sight_of(u), full_r)])
+	for veh: Vehicle in state.all_vehicles():
+		if not veh.wrecked and sides.has(veh.owner) and not veh.occupants.is_empty():
+			for c: Vector2i in veh.footprint():
+				eyes.append([c, full_r])
+	var big := PackedInt32Array()   # eyes that see the whole board but for their shadows
+	var small := {}   # eyes that see only their own cell: inside a cloud, or a drone over a wall
+	for e: Array in eyes:
+		var c: Vector2i = e[0]
+		if not grid.in_bounds(c):
+			continue
+		var r: int = e[1]
+		if r > 0 and r < full_r:
+			return null
+		if r == 0 or grid.cell_fast(c.x, c.y).obscured():
+			small[c.y * gw + c.x] = true
+		else:
+			big.append(c.y * gw + c.x)
+	big.sort()
+	var gas := _gas_cells()
+	var hidden: Dictionary = _gas_team(owner, gas, big)
+	var any := not big.is_empty()
+	var out: Dictionary = _vis_set.get(owner, {})
+	var memory: Dictionary = explored.get(owner, {})
+	var last: Dictionary = _gas_view.get(owner, {})
+	if last.is_empty() or last["any"] != any:
+		out.clear()
+		if any:
+			out.merge(_all_cells(grid))
+			for i: int in gas:
+				out.erase(Vector2i(i % gw, i / gw))
+			for i: int in hidden:
+				out.erase(Vector2i(i % gw, i / gw))
+		for i: int in small:
+			out[Vector2i(i % gw, i / gw)] = true
+		memory.merge(out)
+		_vis_log.erase(owner)   # everything changed
+		_vis_counts.erase(owner)
+		_vis_seen.erase(owner)
+	elif not is_same(last["hidden"], hidden) or last["small"] != small or last["gas"] != gas:
+		# Only cells hidden or clouded before or now, and the lone eyes, can have changed.
+		var log: Variant = _vis_log.get(owner)
+		var check := {}
+		for part: Dictionary in [last["hidden"], hidden, last["small"], small]:
+			check.merge(part)
+		if last["gas"] != gas:
+			for cells: PackedInt32Array in [last["gas"], gas]:
+				for i: int in cells:
+					check[i] = true
+		for i: int in check:
+			var c := Vector2i(i % gw, i / gw)
+			var vis := small.has(i) or (any and not _sight_gas.has(i) and not hidden.has(i))
+			if vis == out.has(c):
+				continue
+			if vis:
+				out[c] = true
+				memory[c] = true
+			else:
+				out.erase(c)
+			if log != null:
+				log.append(i)
+	_gas_view[owner] = {"gas": gas, "any": any, "hidden": hidden, "small": small}
+	_vis_set[owner] = out
+	explored[owner] = memory
+	_vis_epoch[owner] = UnitInstance.vision_epoch
+	_vis_vv[owner] = GridCell.vision_version
+	return out
+
+## The cells team_visible_coords(owner) leaves out when that is a short list known without a
+## pass over the board: {} while nothing is hidden, the clouds and the team's shadows with fog
+## off (mode 2); null otherwise. The returned set is never edited afterwards.
+func visible_complement(owner: int) -> Variant:
+	if not visibility_limited():
+		return {}
+	if fog_enabled:
+		return null
+	team_visible_coords(owner)
+	var v: Dictionary = _gas_view.get(owner, {})
+	if v.is_empty() or not v["any"]:
+		return null
+	if not v.has("complement"):
+		var gw := state.grid.width
+		var small: Dictionary = v["small"]
+		var out := {}
+		for cells: Variant in [v["gas"], v["hidden"]]:
+			for i: int in cells:
+				if not small.has(i):
+					out[Vector2i(i % gw, i / gw)] = true
+		v["complement"] = out
+	return v["complement"]
+
+## [grid id, owner] -> {gas, eyes, counts, hidden}: how many eyes' shadows hold each cell and
+## the cells all of them hold. Static, so the fresh resolver the AI builds per decision reuses
+## it; a move only swaps one eye's shadow in the counts. `hidden` is never edited in place.
+static var _gas_teams: Dictionary = {}
+
+func _gas_team(owner: int, gas: PackedInt32Array, big: PackedInt32Array) -> Dictionary:
+	var key := [state.grid.get_instance_id(), owner]
+	var t: Dictionary = _gas_teams.get(key, {})
+	if not t.is_empty() and t["gas"] == gas and t["eyes"] == big:
+		return t["hidden"]
+	var n := big.size()
+	var counts: PackedInt32Array
+	var check := {}
+	if t.is_empty() or t["gas"] != gas:
+		counts = PackedInt32Array()
+		counts.resize(state.grid.width * state.grid.height)
+		for o: int in big:
+			for i: int in _shadow(o, gas):
+				counts[i] += 1
+		if n > 0:
+			for i: int in _shadow(big[0], gas):
+				check[i] = true
+	else:
+		counts = t["counts"]
+		var old: PackedInt32Array = t["eyes"]
+		var gone := PackedInt32Array()
+		var came := PackedInt32Array()
+		var a := 0
+		var b := 0
+		while a < old.size() or b < n:
+			if a < old.size() and b < n and old[a] == big[b]:
+				a += 1
+				b += 1
+			elif b >= n or (a < old.size() and old[a] < big[b]):
+				gone.append(old[a])
+				a += 1
+			else:
+				came.append(big[b])
+				b += 1
+		for o: int in gone:
+			for i: int in _shadow(o, gas):
+				counts[i] -= 1
+				check[i] = true
+		for o: int in came:
+			for i: int in _shadow(o, gas):
+				counts[i] += 1
+				check[i] = true
+		check.merge(t["hidden"])
+		# Fewer eyes: a cell no changed shadow touched can now be hidden from all the rest,
+		# and every such cell lies in the shadow of any one of them.
+		if n < old.size() and n > 0:
+			for i: int in _shadow(big[0], gas):
+				check[i] = true
+	var hidden := {}
+	if n > 0:
+		for i: int in check:
+			if counts[i] == n:
+				hidden[i] = true
+	if not _gas_teams.has(key) and _gas_teams.size() >= 16:
+		_gas_teams.clear()   # forked boards (lockstep twins, replays) come and go
+	_gas_teams[key] = {"gas": gas, "eyes": big, "counts": counts, "hidden": hidden}
+	return hidden
+
+## The cloud cells, sorted: the key every shadow is valid under.
+static var _gas_cells_key: Array = []   # [vision_version, grid id]
+static var _gas_cells_now := PackedInt32Array()
+
+func _gas_cells() -> PackedInt32Array:
+	_sync_seen()
+	var key := [GridCell.vision_version, state.grid.get_instance_id()]
+	if key != _gas_cells_key:
+		var cells := PackedInt32Array(_sight_gas.keys())
+		cells.sort()
+		_gas_cells_now = cells
+		_gas_cells_key = key
+	return _gas_cells_now
+
+## origin -> its shadow under the clouds in _shadows_of; flushed when the clouds change.
+static var _shadows: Dictionary = {}
+static var _shadows_of: Array = []   # [grid id, cloud cells]
+static var _shadow_cells := 0
+const SHADOW_CELLS_CAP := 8_000_000
+
+func _shadow(o: int, gas: PackedInt32Array) -> PackedInt32Array:
+	var grid := state.grid
+	var of := [grid.get_instance_id(), gas]
+	if of != _shadows_of or _shadow_cells > SHADOW_CELLS_CAP:
+		_shadows.clear()
+		_shadow_cells = 0
+		_shadows_of = of
+	var hit: Variant = _shadows.get(o)
+	if hit != null:
+		return hit
+	var masks := _gas_masks()
+	var s := _sweep_hidden(o % grid.width, o / grid.width, masks[0], grid.width, grid.height,
+			masks[1], gas)
+	_shadows[o] = s
+	_shadow_cells += s.size()
+	return s
+
+## Every cell of the board as a set, built once per board: the starting point of a view.
+static var _all_cells_grid := 0
+static var _all_cells_set: Dictionary = {}
+
+static func _all_cells(grid: Grid) -> Dictionary:
+	if _all_cells_grid != grid.get_instance_id() or _all_cells_set.size() != grid.width * grid.height:
+		_all_cells_set = {}
+		for y in grid.height:
+			for x in grid.width:
+				_all_cells_set[Vector2i(x, y)] = true
+		_all_cells_grid = grid.get_instance_id()
+	return _all_cells_set
 
 ## Журнал смен видимости для экрана боя: owner -> Array плоских индексов клеток, чья
 ## видимость сменилась с прошлого take_vis_changes(). Заводится первым же вызовом — пока
@@ -7403,12 +7760,23 @@ func _gas_survival(u: UnitInstance, res: ActionResult) -> void:
 func _sync_gas() -> void:
 	if random_events == null:
 		return
+	# Only a cell inside a cloud, or one clouded right now (_sight_gas lists every cell with gas
+	# or smoke on this board), can change; the rest stay clear. The whole-board pass cost
+	# ~150 ms per round on 274×274 even with no cloud anywhere. Row order, as that pass had.
+	_sync_seen()
 	var grid := state.grid
-	for y in grid.height:
-		for x in grid.width:
-			var cell := grid.cell_fast(x, y)
-			cell.gas = cell.can_hold_gas() and random_events.cloud_at(Vector2i(x, y))
-			cell.smoke = cell.can_hold_gas() and random_events.smoke_at(Vector2i(x, y))
+	var gw := grid.width
+	var check := _sight_gas.duplicate()
+	for cl: Dictionary in random_events.clouds + random_events.smoke:
+		for y in range(maxi(0, int(cl["y"])), mini(grid.height, int(cl["y"]) + int(cl["h"]))):
+			for x in range(maxi(0, int(cl["x"])), mini(gw, int(cl["x"]) + int(cl["w"]))):
+				check[y * gw + x] = true
+	var cells := check.keys()
+	cells.sort()
+	for i: int in cells:
+		var cell := grid.cell_fast(i % gw, i / gw)
+		cell.gas = cell.can_hold_gas() and random_events.cloud_at(Vector2i(i % gw, i / gw))
+		cell.smoke = cell.can_hold_gas() and random_events.smoke_at(Vector2i(i % gw, i / gw))
 
 ## Независимая армия (0.9.4): у края карты высаживается ничья сила, враждебная всем.
 ## Сила — по средней армии ЖИВЫХ игроков (по цене закупки); слот встаёт в случайное место
