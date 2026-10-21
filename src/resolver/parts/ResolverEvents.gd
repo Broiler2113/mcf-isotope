@@ -681,10 +681,13 @@ func prepare_mode(map: MapData) -> void:
 		mode.pending_wave = {}
 		mode.next_wave_round = state.turns.round_number
 		var value := 0
+		var defenders := {}
 		for u: UnitInstance in state.all_units():
 			if u.is_alive() and not u.is_drone and MCF.is_player(u.owner) and u.owner != mode.wave_side:
 				value += u.stats.cost
-		mode.defender_value = value
+				defenders[u.owner] = true
+		# Средняя армия на игрока (fix-7 #17): волна меряется по ней, а не по сумме.
+		mode.defender_value = roundi(float(value) / float(maxi(1, defenders.size())))
 
 ## Живые бойцы волн Holdout (дроны не в счёт).
 func wave_fighters_left() -> int:

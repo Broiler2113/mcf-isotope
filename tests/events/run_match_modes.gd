@@ -24,6 +24,8 @@ func run() -> void:
 
 	_lone_holdout_zone()
 	_typed_wave_frequency()
+	_typed_wave_count()
+	_team_average_waves()
 
 const ArmyBuilder := preload("res://rl/ArmyBuilder.gd")
 
@@ -131,7 +133,7 @@ func _holdout_waves() -> void:
 	ro.add_slot(Roster.SlotKind.HUMAN)
 	ro.set_waves(1)
 	var r := _resolver(m, MatchMode.Kind.HOLDOUT, ro)
-	r.mode.waves_total = 3   # the lobby offers 5/10/15/Endless; three keeps the test short
+	r.mode.waves_total = 3   # typed in the lobby; three keeps the test short
 	var st := r.state
 	ck(r.mode.wave_side == 1 and st.roster.team_of(0) == 0 and st.roster.team_of(1) == 1,
 			"the waves side is its own team; the defenders share one")
@@ -412,3 +414,49 @@ func _typed_wave_frequency() -> void:
 	NetHandoff.apply_rules(msg)
 	ck(GameConfig.holdout_wave_every == 7, "guests get the typed frequency")
 	GameConfig.holdout_wave_every = keep
+
+## fix-7 #1: the number of waves is typed, 0 is endless, and it reaches guests and saves.
+func _typed_wave_count() -> void:
+	var keep := GameConfig.holdout_waves
+	GameConfig.holdout_waves = 7
+	ck(MatchMode.from_config().waves_total == 7 and not MatchMode.from_config().endless(), "7 waves typed reach the match")
+	var msg := NetHandoff.encode_rules()
+	GameConfig.holdout_waves = 0
+	ck(MatchMode.from_config().endless(), "0 waves is endless")
+	NetHandoff.apply_rules(msg)
+	ck(GameConfig.holdout_waves == 7, "guests get the typed wave count")
+	GameConfig.holdout_waves = keep
+
+## fix-7 #17 (owner): a wave is sized against the AVERAGE army of a defending player —
+## 0.7 of it first (editable), 0.1 more every wave (the 10th is 1.6; the PDF said 1.7).
+func _team_average_waves() -> void:
+	var m := _map(MapGen.Style.FIELD, 41)
+	var ro := Roster.new()
+	ro.add_slot(Roster.SlotKind.HUMAN)
+	ro.add_slot(Roster.SlotKind.HUMAN)
+	ro.set_waves(1)
+	var keep := GameConfig.holdout_wave_start
+	GameConfig.holdout_wave_start = MatchMode.WAVE_BASE
+	var r := _resolver(m, MatchMode.Kind.HOLDOUT, ro)
+	r.open_match()
+	var armies := [0, 0]
+	for u: UnitInstance in r.state.all_units():
+		if u.owner < 2 and u.is_alive() and not u.is_drone:
+			armies[u.owner] += u.stats.cost
+	var avg := roundi(float(armies[0] + armies[1]) / 2.0)
+	ck(armies[0] > 0 and armies[1] > 0 and r.mode.defender_value == avg,
+			"two defenders: waves measure the average army (%d, armies %s)" % [r.mode.defender_value, armies])
+	ck(r.mode.wave_budget(1) == roundi(avg * 0.7) and r.mode.wave_budget(10) == roundi(avg * 1.6),
+			"wave 1 is 0.7 and wave 10 is 1.6 average armies (%d, %d of %d)" % [r.mode.wave_budget(1), r.mode.wave_budget(10), avg])
+	GameConfig.holdout_wave_start = 1.2
+	var msg := NetHandoff.encode_rules()
+	GameConfig.holdout_wave_start = MatchMode.WAVE_BASE
+	NetHandoff.apply_rules(msg)
+	var r2 := _resolver(m, MatchMode.Kind.HOLDOUT, ro)
+	r2.open_match()
+	ck(is_equal_approx(r2.mode.wave_start, 1.2) and r2.mode.wave_budget(2) == roundi(r2.mode.defender_value * 1.3),
+			"the first-wave size typed in the lobby reaches guests and the match (%s)" % r2.mode.wave_start)
+	var back := MatchMode.new()
+	back.restore(r2.mode.snapshot())
+	ck(is_equal_approx(back.wave_start, 1.2), "a save keeps the first-wave size")
+	GameConfig.holdout_wave_start = keep
