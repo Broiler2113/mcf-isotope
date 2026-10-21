@@ -24,6 +24,7 @@ func run() -> void:
 	GameConfig.fog_mode = MCF.Fog.OFF
 	_vacuum_debris()
 	_decal_memory()
+	await _effects_run_while_typing()
 
 ## Decals are never evicted (owner: "remove all decal caps").
 func _no_caps() -> void:
@@ -118,3 +119,24 @@ func _decal_memory() -> void:
 	fx._settle(fx.gore, {"kind": "blood_pool", "pos": Vector2(33.5, 1.5), "rot": 0.0, "scale": 1.0})
 	memory.update(fx, visible, [], 64)
 	ck(memory.view.by_chunk.get(Vector2i(2, 0), []).size() == 1, "new blood appears in a visible chunk even after props already exist")
+
+## fix-7: while the chat line has focus the camera stays put, but flashes, tracers and
+## debris keep playing out instead of freezing on screen.
+func _effects_run_while_typing() -> void:
+	GameConfig.roster = Roster.default_duel(false)
+	var m := MapData.blank_arena(16, 10)
+	m.set_spawn(Vector2i(2, 2), "light_infantry", 0)
+	m.set_spawn(Vector2i(12, 7), "light_infantry", 1)
+	MapHandoff.pending = m
+	var main = load("res://scenes/Main.tscn").instantiate()
+	root.add_child(main)
+	await process_frame
+	main._fx.apply([{"fx": "flash", "cells": [Vector2i(5, 5)]}])
+	var typing := LineEdit.new()
+	main._ui_layer.add_child(typing)
+	typing.grab_focus()
+	main._process(0.6)
+	main._process(0.6)
+	ck(main._fx.flashes.is_empty(), "an explosion flash fades while the player types in the chat")
+	main.queue_free()
+	await process_frame

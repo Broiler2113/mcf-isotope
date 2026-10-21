@@ -88,6 +88,7 @@ func _resolve_move(intent: MoveIntent) -> ActionResult:
 			bcell.clear_feature()
 			notify_cell_changed(mine)
 			_fx(bres, {"fx": "debris", "at": NOWHERE, "cells": [mine], "blast": true})
+			_mine_flash(bres, mine)
 			bres.log("The borg rolls over an anti-vehicle mine at (%d, %d)!" % [mine.x, mine.y])
 			_sync_borg(unit)
 			var bveh := state.get_vehicle(unit.borg_id)

@@ -434,7 +434,8 @@ func _resolve_place_mine(intent: PlaceMineIntent) -> ActionResult:
 	if not intent.anti_vehicle and under != null and under.is_alive():
 		target_cell.clear_feature()
 		notify_cell_changed(intent.target)
-		_fx(res, {"fx": "debris", "at": intent.target, "cells": [intent.target]})
+		_fx(res, {"fx": "debris", "at": intent.target, "cells": [intent.target], "blast": true})
+		_mine_flash(res, intent.target)
 		_kill(under, res, intent.target)
 		res.deaths.append(under.id)
 		res.log("The mine goes off under %s's feet — killed instantly!" % under.stats.display_name)
@@ -529,6 +530,7 @@ func _detonate_mine(coord: Vector2i, victim: UnitInstance, res: ActionResult) ->
 	var area: Array[Vector2i] = [coord]
 	# Клетка мины оседает ОБЫЧНЫМ разрушенным полом, а не выжженным эпицентром (item 13).
 	var killed := _blast(coord, res, area, false)
+	_mine_flash(res, coord)
 	_damage_vehicles_in_area(area, coord, MCF.MINE_VEHICLE_DAMAGE, -1, res, "mine")
 	if killed.is_empty():
 		# victim == null — подрыв не под ногами (огонь дошёл): некому «уйти».
@@ -537,6 +539,16 @@ func _detonate_mine(coord: Vector2i, victim: UnitInstance, res: ActionResult) ->
 	else:
 		for n in killed:
 			res.log("%s killed by the mine!" % n)
+
+## Вспышка мины — как у обычного взрыва, на 3×3 вокруг (fix-7 #19). Бьёт мина по-прежнему
+## только свою клетку: это чистая картинка.
+func _mine_flash(res: ActionResult, coord: Vector2i) -> void:
+	var glow: Array[Vector2i] = []
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			if state.grid.in_bounds(coord + Vector2i(dx, dy)):
+				glow.append(coord + Vector2i(dx, dy))
+	_fx(res, {"fx": "flash", "cells": glow})
 
 ## Противопехотные мины, о которых сторона ЗНАЕТ (batch 12 #3/#4): свои и союзные всегда,
 ## чужие — пока держится подсветка зачистки. Словарь coord → true в порядке обхода

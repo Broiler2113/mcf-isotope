@@ -132,6 +132,13 @@ func _mine_under_a_unit_kills() -> void:
 	ck(not foe.is_alive(), "enemy standing on a fresh mine dies at once")
 	ck(s.grid.cell(Vector2i(3, 2)).feature_id == "", "the mine is spent")
 	ck(res.deaths.has(foe.id), "death reported")
+	# fix-7 #19: the blast flashes over the 3×3 around the mine, like any explosion.
+	var flash := res.fx.filter(func(e: Dictionary) -> bool: return e.get("fx") == "flash")
+	ck(flash.size() == 1 and (flash[0]["cells"] as Array).size() == 9 and (flash[0]["cells"] as Array).has(Vector2i(4, 3)),
+			"a mine going off flashes over the 3x3 around it (%s)" % str(flash))
+	var fx := FxDecals.new()
+	fx.apply(flash)
+	ck(fx.flashes.size() == 1 and (fx.flashes[0]["cells"] as Array).size() == 9, "the screen shows the flash")
 	# противотанковая под пехотой — молчит
 	var ally := _u(s, Vector2i(3, 3))
 	var res2 := r.resolve(PlaceMineIntent.new(sapper.id, Vector2i(3, 3), true))

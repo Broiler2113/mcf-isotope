@@ -555,6 +555,7 @@ var _old_mine_roll := 0
 @abstract func _is_shield(u: UnitInstance) -> bool
 @abstract func is_fireproof(u: UnitInstance) -> bool
 @abstract func stack_onto(cell: GridCell, new_fid: String) -> String
+@abstract func _mine_flash(res: ActionResult, coord: Vector2i) -> void
 @abstract func _detonate_mine(coord: Vector2i, victim: UnitInstance, res: ActionResult) -> void
 @abstract func move_tier_budgets(unit: UnitInstance) -> Array[int]
 @abstract func reachable_for(unit: UnitInstance, budget: int, blocked: Dictionary = {},

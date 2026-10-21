@@ -83,6 +83,11 @@ func _process(delta: float) -> void:
 	if _sky != null:
 		_sky.camera = pan   # параллакс за доской едет вслед за панорамой (0.9.3)
 	_fit_ground()
+	# Полёт осколков и гильз (#21): пока что-то летит — перерисовываем, потом слой
+	# засыпает и кадры снова ничего не стоят. До проверки фокуса (fix-7): пока игрок
+	# печатает в чате, вспышки и пули не должны замирать на экране.
+	if _fx.advance(delta):
+		queue_redraw()
 	var focused := get_viewport().gui_get_focus_owner()
 	if focused is LineEdit or focused is TextEdit or Keybinds.modal_open() or _quit_dialog.visible:
 		_sync_lighting()
@@ -95,10 +100,6 @@ func _process(delta: float) -> void:
 	if dir != Vector2.ZERO:
 		_kill_pan_tween()  # ручная панорама важнее плавного доводки камеры (item 52)
 		pan += dir.normalized() * PAN_SPEED * delta
-		queue_redraw()
-	# Полёт осколков и гильз (#21): пока что-то летит — перерисовываем, потом слой
-	# засыпает и кадры снова ничего не стоят.
-	if _fx.advance(delta):
 		queue_redraw()
 	_sync_lighting()
 

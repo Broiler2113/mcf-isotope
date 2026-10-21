@@ -412,6 +412,12 @@ func _apply(events: Array, lanes_only: bool, projectile_blast := false) -> void:
 				_blood(ev)
 			"burn":
 				_burn(ev)
+			"flash":
+				# Только вспышка, без щебня и звука (fix-7 #19: мина вспыхивает, как взрыв).
+				var fcells: Array[Vector2i] = []
+				fcells.assign(ev.get("cells", []))
+				if not fcells.is_empty():
+					flashes.append({"cells": fcells, "t": 0.0})
 			"laser":
 				_laser(ev)
 			"tracks":
