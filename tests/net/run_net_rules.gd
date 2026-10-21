@@ -16,6 +16,8 @@ func run() -> void:
 
 	_host_answers_foreign_intents()
 
+	await _teammates_see_placement_in_fog()
+
 var MainScript: GDScript
 
 func make_main(m: MapData) -> Node:
@@ -109,3 +111,44 @@ func _host_answers_foreign_intents() -> void:
 	guest.denied.connect(func(_why: String) -> void: unlocked[0] = true)
 	guest.receive(sent[0])
 	ck(unlocked[0], "the guest receives the denial")
+
+class SentLog extends NetworkSession:
+	var sent: Array = []
+	func send(msg: Dictionary) -> void:
+		sent.append(msg)
+
+## fix-7 #3: under fog (where the lobby turns live placement off) a player's deployment
+## still goes out live, and teammates draw it; enemies still don't.
+func _teammates_see_placement_in_fog() -> void:
+	var keep_fog := GameConfig.fog_mode
+	var keep_live := GameConfig.live_placement_visible
+	GameConfig.fog_mode = MCF.Fog.STANDARD
+	GameConfig.live_placement_visible = false
+	for teams: bool in [true, false]:
+		var ro := Roster.new()
+		ro.add_slot(Roster.SlotKind.HUMAN, 0 if teams else -1)
+		ro.add_slot(Roster.SlotKind.HUMAN, 0 if teams else -1)
+		ro.add_slot(Roster.SlotKind.HUMAN, 1 if teams else -1)
+		GameConfig.roster = ro
+		MapHandoff.pending = MapData.blank_arena(30, 20)
+		var p = load("res://scenes/Placement.tscn").instantiate()
+		root.add_child(p)
+		await process_frame
+		var log := SentLog.new()
+		p._net = log
+		p._my_side = 0
+		p._send_live()
+		var live := log.sent.filter(func(m: Dictionary) -> bool: return m.get("k", "") == p.K_LIVE)
+		if teams:
+			ck(not live.is_empty(), "with a teammate, deployment goes out live under fog")
+			p.active_side = 0
+			ck(not p._army_hidden(1) and p._army_hidden(2), "a teammate's army is drawn, an enemy's is not")
+		else:
+			ck(live.is_empty(), "without teammates nothing goes out live under fog")
+		p._net = null
+		log.free()
+		p.free()
+		await process_frame
+	GameConfig.fog_mode = keep_fog
+	GameConfig.live_placement_visible = keep_live
+	GameConfig.roster = Roster.default_duel(false)

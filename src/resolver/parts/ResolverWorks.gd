@@ -29,34 +29,46 @@ func _resolve_build(intent: BuildIntent) -> ActionResult:
 	if not state.grid.in_bounds(intent.target) or Combat.distance(actor.coord, intent.target) != 1:
 		return ActionResult.fail("Can only build in an adjacent cell")
 	var cell := state.grid.cell(intent.target)
+	# ДПМГ в кресло челнока (fix-7 #5): из соседнего кресла или снаружи, к борту.
+	var seat_veh := vehicle_covering(intent.target)
+	if seat_veh != null and seat_veh.seated() or seated_vehicle_of(actor) != null:
+		return _mount_seat_dpmg(actor, intent, seat_veh)
 	# Класть можно на пустую клетку либо ярусом поверх мешков (#31).
 	var stacked := stack_onto(cell, intent.feature_id)
 	if not cell.is_buildable() and stacked == "":
 		return ActionResult.fail("Cell is occupied")
 	var cost: int = ENGINEER_BUILDABLE[intent.feature_id]
 	var credit_note := ""
-	if actor.borg_id != -1:
-		# Инженер в борге (batch 13 B7): 1 ОД покупает BORG_BUILD_BATCH построек ОДНОГО
-		# типа, ставить их можно по одной между другими действиями; ДОТ — 1 за ОД.
-		# Кредиты сгорают на границе раунда (UnitInstance.reset_ap).
-		if MCF.BORG_BATCH_FEATURES.has(intent.feature_id):
-			var left: int = int(actor.build_credits.get(intent.feature_id, 0))
-			if left > 0:
-				actor.build_credits[intent.feature_id] = left - 1
-				cost = 0
-				credit_note = " (batch, %d left)" % (left - 1)
-			else:
-				if actor.remaining_ap < 1:
-					return ActionResult.fail("Need 1 AP")
-				cost = 1
-				actor.build_credits[intent.feature_id] = MCF.BORG_BUILD_BATCH - 1
-				credit_note = " (batch, %d left)" % (MCF.BORG_BUILD_BATCH - 1)
-		elif intent.feature_id == MCF.FEATURE_DOT or intent.feature_id == MCF.FEATURE_DOT_OPEN:
+	var batch := build_batch(actor, intent.feature_id)
+	if batch > 0:
+		# Партии (batch 13 B7, fix-7 #13): 1 ОД покупает batch построек ОДНОГО типа, ставить
+		# их можно по одной между другими действиями. Борг: стены/стекло/шлюзы/мешки/ежи по 3,
+		# прожекторы по 5; пеший инженер — прожекторы по 2. Кредиты сгорают на границе раунда
+		# (UnitInstance.reset_ap).
+		var left: int = int(actor.build_credits.get(intent.feature_id, 0))
+		if left > 0:
+			actor.build_credits[intent.feature_id] = left - 1
+			cost = 0
+			credit_note = " (batch, %d left)" % (left - 1)
+		else:
+			if actor.remaining_ap < 1:
+				return ActionResult.fail("Need 1 AP")
 			cost = 1
+			actor.build_credits[intent.feature_id] = batch - 1
+			credit_note = " (batch, %d left)" % (batch - 1)
+	elif actor.borg_id != -1 and (intent.feature_id == MCF.FEATURE_DOT or intent.feature_id == MCF.FEATURE_DOT_OPEN):
+		cost = 1
 	if actor.remaining_ap < cost:
 		return ActionResult.fail("Need %d AP" % cost)
 	actor.remaining_ap -= cost
 	var placed: String = stacked if stacked != "" else intent.feature_id
+	if placed == MCF.FEATURE_FLOODLIGHT:
+		# Цвет прожектора (fix-7 #13) — из того же списка, что у ламп в редакторе. Байт
+		# оттенка пишется до объекта: свет перечитывает клетку по её смене.
+		var g := state.grid
+		if g.light_tint.size() != g.width * g.height:
+			g.light_tint.resize(g.width * g.height)
+		g.light_tint[intent.target.y * g.width + intent.target.x] = Furniture.clean_tint(intent.tint)
 	cell.set_feature(placed, actor.owner)
 	notify_cell_changed(intent.target)  # застроенная клетка будит соседей (§3.1a)
 	_extinguish_cell(cell)  # стройка на горящей клетке гасит огонь (#82)
@@ -64,23 +76,72 @@ func _resolve_build(intent: BuildIntent) -> ActionResult:
 		actor.stats.display_name, MCF.feature_name(placed, placed),
 		intent.target.x, intent.target.y, actor.remaining_ap, credit_note]])
 
+## Кресло челнока, чья клетка — c, если оно свободно; иначе −1.
+func free_seat_at(veh: Vehicle, c: Vector2i) -> int:
+	if veh == null or not veh.seated():
+		return -1
+	for i in veh.seats.size():
+		if veh.seat_cell(i) == c:
+			return i if veh.seats[i] == -1 else -1
+	return -1
+
+func _mount_seat_dpmg(actor: UnitInstance, intent: BuildIntent, veh: Vehicle) -> ActionResult:
+	if intent.feature_id != MCF.FEATURE_DPMG:
+		return ActionResult.fail("Only a DPMG can be mounted in a shuttle seat")
+	if veh == null or not veh.seated():
+		return ActionResult.fail("From a seat, a DPMG goes into another seat")
+	if not state.roster.are_allies(veh.owner, actor.owner):
+		return ActionResult.fail("Not your shuttle")
+	var seat := free_seat_at(veh, intent.target)
+	if seat == -1:
+		return ActionResult.fail("That seat is taken")
+	var cost: int = ENGINEER_BUILDABLE[MCF.FEATURE_DPMG]
+	if actor.remaining_ap < cost:
+		return ActionResult.fail("Need %d AP" % cost)
+	actor.remaining_ap -= cost
+	veh.seats[seat] = Vehicle.SEAT_DPMG
+	state.grid.cell(intent.target).set_feature(MCF.FEATURE_DPMG, actor.owner)
+	notify_cell_changed(intent.target)
+	return ActionResult.success(["%s mounts a DPMG in the shuttle seat at (%d, %d) [AP: %d]" % [
+		actor.stats.display_name, intent.target.x, intent.target.y, actor.remaining_ap]])
+
+## Кресла с ДПМГ, чей пулемёт разбит или снят, освобождаются (fix-7 #5).
+func _sync_seat_guns() -> void:
+	for veh: Vehicle in state.all_vehicles():
+		if not veh.seated():
+			continue
+		for i in veh.seats.size():
+			if veh.seats[i] == Vehicle.SEAT_DPMG:
+				var c := state.grid.cell(veh.seat_cell(i))
+				if c == null or c.feature_id != MCF.FEATURE_DPMG:
+					veh.seats[i] = -1
+
 ## Цена постройки для этого инженера (для UI): в борге партия одного типа стоит 1 ОД,
 ## а пока кредиты партии не кончились — ничего.
 func build_cost_for(actor: UnitInstance, feature_id: String) -> int:
 	var cost: int = ENGINEER_BUILDABLE.get(feature_id, 1)
+	if actor != null and build_batch(actor, feature_id) > 0:
+		return 0 if int(actor.build_credits.get(feature_id, 0)) > 0 else 1
 	if actor != null and actor.borg_id != -1:
-		if MCF.BORG_BATCH_FEATURES.has(feature_id):
-			return 0 if int(actor.build_credits.get(feature_id, 0)) > 0 else 1
 		if feature_id == MCF.FEATURE_DOT or feature_id == MCF.FEATURE_DOT_OPEN:
 			return 1
 	return cost
+
+## Сколько построек этого типа даёт 1 ОД; 0 — партий нет, платится цена из ENGINEER_BUILDABLE.
+func build_batch(actor: UnitInstance, feature_id: String) -> int:
+	var in_borg := actor.borg_id != -1
+	if feature_id == MCF.FEATURE_FLOODLIGHT:
+		return MCF.BORG_FLOODLIGHT_BATCH if in_borg else MCF.FLOODLIGHT_BATCH
+	if in_borg and MCF.BORG_BATCH_FEATURES.has(feature_id):
+		return MCF.BORG_BUILD_BATCH
+	return 0
 
 ## Клетки соседних шлюзов, которые инженер может заварить (#99) — для подсветки в UI.
 func weldable_cells(unit: UnitInstance) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
 	if unit == null or not unit.is_alive() \
 			or unit.stats.special_ability_id != MCF.ABILITY_ENGINEER \
-			or unit.remaining_ap < WELD_AIRLOCK_AP:
+			or weld_cost_for(unit) > unit.remaining_ap:
 		return out
 	for c: Vector2i in state.grid.neighbors(unit.coord):
 		var cell := state.grid.cell(c)
@@ -109,14 +170,32 @@ func _resolve_weld_airlock(intent: WeldAirlockIntent) -> ActionResult:
 	# Створки не сойдутся на теле (batch 13 #4) — сначала вытащить труп из проёма.
 	if corpses_at(intent.to) > 0:
 		return ActionResult.fail("A body is jamming the doors — drag it out first")
-	if actor.remaining_ap < WELD_AIRLOCK_AP:
-		return ActionResult.fail("Need %d AP" % WELD_AIRLOCK_AP)
-	actor.remaining_ap -= WELD_AIRLOCK_AP
+	var cost := weld_cost_for(actor)
+	if actor.remaining_ap < cost:
+		return ActionResult.fail("Need %d AP" % cost)
+	actor.remaining_ap -= cost
+	var credit_note := ""
+	if actor.borg_id != -1:
+		# Инженер в борге (fix-7 #14): 1 ОД заваривает BORG_WELD_BATCH шлюзов, по одному
+		# между другими действиями, как партия построек; кредиты сгорают на границе раунда.
+		var left: int = int(actor.build_credits.get(WELD_CREDIT, 0))
+		left = left - 1 if cost == 0 else MCF.BORG_WELD_BATCH - 1
+		actor.build_credits[WELD_CREDIT] = left
+		credit_note = " (batch, %d left)" % left
 	cell.airlock_welded = true
 	# Створки закрываются немедленно, даже если рядом кто-то стоит.
 	cell.cover_height = MCF.WALL_HEIGHT
-	return ActionResult.success(["%s welds the airlock at (%d, %d) shut [AP: %d]" % [
-		actor.stats.display_name, intent.to.x, intent.to.y, actor.remaining_ap]])
+	return ActionResult.success(["%s welds the airlock at (%d, %d) shut [AP: %d]%s" % [
+		actor.stats.display_name, intent.to.x, intent.to.y, actor.remaining_ap, credit_note]])
+
+## Ключ кредитов сварки в build_credits (не id постройки — с партиями построек не путается).
+const WELD_CREDIT := "weld"
+
+## Сколько ОД стоит следующая сварка: в борге — ноль, пока не кончилась партия.
+func weld_cost_for(actor: UnitInstance) -> int:
+	if actor.borg_id != -1 and int(actor.build_credits.get(WELD_CREDIT, 0)) > 0:
+		return 0
+	return WELD_AIRLOCK_AP
 
 ## Инженер выкладывает ЛДФ-стену из 6 клеток за 1 ОД (§3.7). Клетки разные, на свободном
 ## полу, ОДНА обязана соседствовать с инженером, и все шесть обязаны складываться в
@@ -399,7 +478,8 @@ func _resolve_place_mine(intent: PlaceMineIntent) -> ActionResult:
 	if not intent.anti_vehicle and under != null and under.is_alive():
 		target_cell.clear_feature()
 		notify_cell_changed(intent.target)
-		_fx(res, {"fx": "debris", "at": intent.target, "cells": [intent.target]})
+		_fx(res, {"fx": "debris", "at": intent.target, "cells": [intent.target], "blast": true})
+		_mine_flash(res, intent.target)
 		_kill(under, res, intent.target)
 		res.deaths.append(under.id)
 		res.log("The mine goes off under %s's feet — killed instantly!" % under.stats.display_name)
@@ -494,6 +574,7 @@ func _detonate_mine(coord: Vector2i, victim: UnitInstance, res: ActionResult) ->
 	var area: Array[Vector2i] = [coord]
 	# Клетка мины оседает ОБЫЧНЫМ разрушенным полом, а не выжженным эпицентром (item 13).
 	var killed := _blast(coord, res, area, false)
+	_mine_flash(res, coord)
 	_damage_vehicles_in_area(area, coord, MCF.MINE_VEHICLE_DAMAGE, -1, res, "mine")
 	if killed.is_empty():
 		# victim == null — подрыв не под ногами (огонь дошёл): некому «уйти».
@@ -502,6 +583,16 @@ func _detonate_mine(coord: Vector2i, victim: UnitInstance, res: ActionResult) ->
 	else:
 		for n in killed:
 			res.log("%s killed by the mine!" % n)
+
+## Вспышка мины — как у обычного взрыва, на 3×3 вокруг (fix-7 #19). Бьёт мина по-прежнему
+## только свою клетку: это чистая картинка.
+func _mine_flash(res: ActionResult, coord: Vector2i) -> void:
+	var glow: Array[Vector2i] = []
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			if state.grid.in_bounds(coord + Vector2i(dx, dy)):
+				glow.append(coord + Vector2i(dx, dy))
+	_fx(res, {"fx": "flash", "cells": glow})
 
 ## Противопехотные мины, о которых сторона ЗНАЕТ (batch 12 #3/#4): свои и союзные всегда,
 ## чужие — пока держится подсветка зачистки. Словарь coord → true в порядке обхода
@@ -576,7 +667,7 @@ func nearest_reachable(u: UnitInstance, dest: Vector2i, taken: Dictionary = {}) 
 ## blocked / vacated — план группового приказа (GroupMovePlanner): клетки, куда уже
 ## встали товарищи, и клетки, с которых они к этому моменту ушли.
 func reachable_for(unit: UnitInstance, budget: int, blocked: Dictionary = {},
-		vacated: Dictionary = {}) -> Movement.Reachability:
+		vacated: Dictionary = {}, stop_at := Vector2i(-1, -1)) -> Movement.Reachability:
 	var avoid := known_mine_cells(unit.owner)
 	# Борг в окоп не съезжает (batch 13 B11): окопы для него — не клетки.
 	if unit.borg_id != -1 or not blocked.is_empty():
@@ -586,7 +677,7 @@ func reachable_for(unit: UnitInstance, budget: int, blocked: Dictionary = {},
 				merged[c] = true
 		merged.merge(blocked)
 		avoid = merged
-	return Movement.reachable(state.grid, unit.coord, budget, not is_fireproof(unit), avoid, vacated)
+	return Movement.reachable(state.grid, unit.coord, budget, not is_fireproof(unit), avoid, vacated, stop_at)
 
 func _trench_cells() -> Array:
 	return _feature_cells(MCF.FEATURE_TRENCH)
@@ -760,8 +851,19 @@ func buildable_cells(actor: UnitInstance, feature_id: String = "") -> Array:
 	var out: Array = []
 	if actor.stats.special_ability_id != MCF.ABILITY_ENGINEER:
 		return out
+	var aboard := seated_vehicle_of(actor) != null
 	for n in state.grid.neighbors(actor.coord):
 		var cell := state.grid.cell(n)
+		# Свободное кресло соседнего челнока берёт только ДПМГ (fix-7 #5); из кресла иначе
+		# строить некуда.
+		var sv := vehicle_covering(n)
+		if sv != null and sv.seated():
+			if feature_id == MCF.FEATURE_DPMG and free_seat_at(sv, n) != -1 \
+					and state.roster.are_allies(sv.owner, actor.owner):
+				out.append(n)
+			continue
+		if aboard:
+			continue
 		if cell.is_buildable() or (feature_id != "" and stack_onto(cell, feature_id) != ""):
 			out.append(n)
 	return out

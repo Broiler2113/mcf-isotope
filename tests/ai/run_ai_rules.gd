@@ -15,6 +15,8 @@ func run() -> void:
 
 	_ruthless_civilians()
 
+	_hard_ai_storms_vehicles()
+
 ## A HARD soldier inside an announced barrage walks out before shooting; it never ends
 ## an ordinary move inside one.
 func _hard_ai_leaves_zones() -> void:
@@ -226,3 +228,43 @@ func _ruthless_civilians() -> void:
 	cands = ai._neutral_candidates(st, r, civ)
 	ck(not cands.any(func(c: Dictionary) -> bool: return c["intent"] is DropCorpseIntent),
 			"a civilian never offers to drop a body")
+
+## fix-7 #8 (owner): HARD climbs into an enemy shuttle, tank or empty borg beside it before it
+## shoots anyone, and walks up to one within two moves when the way is not under fire.
+## NORMAL keeps shooting.
+func _hard_ai_storms_vehicles() -> void:
+	for kind: String in ["shuttle", "tank", "borg"]:
+		var m := MapData.blank_arena(30, 16)
+		m.set_spawn(Vector2i(10, 6), kind, 0, Vector2i(1, 0))
+		m.set_spawn(Vector2i(9, 6), "light_infantry", 1)
+		m.set_spawn(Vector2i(9, 12), "light_infantry", 0)   # an easy shot the storm must beat
+		var s := m.build_state(5)
+		s.turns.round_order.assign([1, 0])
+		s.turns.active_index = 0
+		var r := GameActionResolver.new(s)
+		r.fog_enabled = false
+		var normal := AIController.new(1, AIController.Difficulty.NORMAL)
+		normal.bind_match(r)
+		ck(not normal._decide(s) is VehicleBoardIntent, "NORMAL AI doesn't storm the enemy %s" % kind)
+		var hard := AIController.new(1, AIController.Difficulty.HARD)
+		hard.bind_match(r)
+		var it: Intent = hard._decide(s)
+		ck(it is VehicleBoardIntent, "HARD storms the empty enemy %s beside it (got %s)" % [kind, it])
+		if it is VehicleBoardIntent:
+			var res := r.resolve(it)
+			ck(res.ok and s.get_vehicle(it.vehicle_id).owner == 1, "and takes it: %s" % res.reason)
+	# Walking up: a shuttle six cells away, nobody covering it.
+	var m2 := MapData.blank_arena(30, 16)
+	m2.set_spawn(Vector2i(16, 6), "shuttle", 0)
+	m2.set_spawn(Vector2i(9, 6), "light_infantry", 1)
+	m2.set_spawn(Vector2i(28, 15), "light_infantry", 0)
+	var s2 := m2.build_state(5)
+	s2.turns.round_order.assign([1, 0])
+	s2.turns.active_index = 0
+	var r2 := GameActionResolver.new(s2)
+	r2.fog_enabled = false
+	var hard2 := AIController.new(1, AIController.Difficulty.HARD)
+	hard2.bind_match(r2)
+	var step: Intent = hard2._decide(s2)
+	ck(step is MoveIntent and Combat.distance((step as MoveIntent).target, Vector2i(16, 6)) <= 2,
+			"HARD walks up to an enemy shuttle it can take (got %s)" % [step])

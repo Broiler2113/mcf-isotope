@@ -142,6 +142,9 @@ static func _for_unit(r: GameActionResolver, u: UnitInstance, out: Array) -> voi
 			out.append(PickUpStationIntent.new(u.id, c))
 		if u.stats.special_ability_id == MCF.ABILITY_ENGINEER:
 			for fid: String in GameActionResolver.ENGINEER_BUILDABLE.keys():
+				# Прожекторы (fix-7) RL-агенту не предлагаются: его набор действий не меняется.
+				if fid == MCF.FEATURE_FLOODLIGHT:
+					continue
 				if ap < r.build_cost_for(u, fid):
 					continue
 				for c: Vector2i in r.buildable_cells(u, fid):

@@ -5,6 +5,7 @@ extends "res://tests/SuiteBase.gd"
 
 func run() -> void:
 	_vision_and_airlocks()
+	_held_soldier_still_sees()
 
 func _vision_and_airlocks() -> void:
 	var w := 30; var h := 20
@@ -79,3 +80,24 @@ func _vision_and_airlocks() -> void:
 	tank.occupants.clear()
 	vis = r.team_visible_coords(MCF.Owner.PLAYER_1)
 	ck(not vis.has(Vector2i(12, 18)), "empty tank is blind (cell only tank could see)")
+
+## fix-7 #12: a soldier held by an enemy still sees for its team.
+func _held_soldier_still_sees() -> void:
+	var m := MapData.new(20, 10)
+	for y in 10:
+		for x in 20:
+			m.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, MCF.FEATURE_WALL if x == 10 else "")
+	m.set_spawn(Vector2i(2, 2), "light_infantry", MCF.Owner.PLAYER_1)
+	m.set_spawn(Vector2i(14, 2), "light_infantry", MCF.Owner.PLAYER_1)
+	m.set_spawn(Vector2i(15, 2), "heavy_infantry", MCF.Owner.PLAYER_2)
+	GameConfig.civilians_enabled = false
+	var st := m.build_state(3)
+	var r := GameActionResolver.new(st)
+	r.fog_enabled = true
+	var held: UnitInstance = st.grid.cell(Vector2i(14, 2)).occupant
+	var captor: UnitInstance = st.grid.cell(Vector2i(15, 2)).occupant
+	ck(r.team_visible_coords(MCF.Owner.PLAYER_1).has(Vector2i(18, 8)), "the soldier beyond the wall sees the far corner")
+	held.status = MCF.Status.HELD
+	held.captor_id = captor.id
+	ck(r.team_visible_coords(MCF.Owner.PLAYER_1).has(Vector2i(18, 8)), "held by the enemy, it still sees for its team")
+	ck(r.team_sees(MCF.Owner.PLAYER_1, captor.coord), "its team sees the captor")

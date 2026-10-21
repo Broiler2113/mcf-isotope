@@ -29,8 +29,8 @@ const DEFAULT_ZONES := 3
 const DEFAULT_TARGET := 12
 const TARGET_MIN := 3
 const TARGET_MAX := 99
-## Число волн Holdout; 0 — бесконечно.
-const WAVE_CHOICES := [5, 10, 15, 0]
+## Число волн Holdout вводится числом (fix-7 #1); 0 — бесконечно.
+const WAVES_MAX := 999
 const DEFAULT_WAVES := 10
 ## Раундов между волнами: волна объявляется в начале раунда и приходит в его конце.
 ## Выбитая волна зовёт следующую сразу (GameActionResolver._maybe_wave_cleared).
@@ -38,10 +38,13 @@ const WAVE_EVERY := 2
 ## Rounds between waves, typed in the lobby (owner, 2026-10-20; was a 1-5 list);
 ## WAVE_EVERY is the default.
 const WAVE_EVERY_MAX := 50
-## Сила волны k в долях стартовой армии защитников: первая — пятая часть, каждая следующая
-## на 7 % больше (замерено турниром ИИ: при 40 % + 15 % защитник падал на 3–4-й волне).
-const WAVE_BASE := 0.2
-const WAVE_GROWTH := 0.07
+## Сила волны k в долях СРЕДНЕЙ армии игрока-защитника (fix-7 #17, владелец): первая —
+## wave_start (по умолчанию 0.7, правится в лобби), каждая следующая на 0.1 больше (десятая
+## при старте 0.7 — 1.6 средней армии). Один защитник — та же формула от его армии.
+const WAVE_BASE := 0.7
+const WAVE_GROWTH := 0.1
+const WAVE_START_MIN := 0.1
+const WAVE_START_MAX := 5.0
 ## Подписи зон на карте.
 const ZONE_LETTERS := "ABCDE"
 
@@ -67,6 +70,8 @@ const BOUNTY_POINTS := 2
 # --- Holdout ---
 var waves_total: int = DEFAULT_WAVES
 var wave_every: int = WAVE_EVERY
+## Сила первой волны в долях средней армии защитника.
+var wave_start: float = WAVE_BASE
 ## Сколько волн уже пришло.
 var wave: int = 0
 ## Слот ростера, который ведёт волны (Roster.Slot.role == ROLE_WAVES).
@@ -80,7 +85,7 @@ var wave_spawned: int = 0
 var excluded_units: Array[String] = []
 ## Counts include removed corpses, so the initiative breakdown survives cleanup.
 var wave_sizes: Dictionary = {}
-## Сила армии защитников в начале партии (очки закупки) — мерило волн.
+## Средняя армия игрока-защитника в начале партии (очки закупки) — мерило волн.
 var defender_value: int = 0
 
 func is_capture() -> bool:
@@ -100,8 +105,9 @@ static func from_config() -> MatchMode:
 	m.kind = clampi(GameConfig.game_mode, 0, NAMES.size() - 1)
 	m.zone_count = GameConfig.capture_zones if ZONE_COUNTS.has(GameConfig.capture_zones) else DEFAULT_ZONES
 	m.target = clampi(GameConfig.capture_target, TARGET_MIN, TARGET_MAX)
-	m.waves_total = GameConfig.holdout_waves if WAVE_CHOICES.has(GameConfig.holdout_waves) else DEFAULT_WAVES
+	m.waves_total = clampi(GameConfig.holdout_waves, 0, WAVES_MAX)
 	m.wave_every = clampi(GameConfig.holdout_wave_every, 1, WAVE_EVERY_MAX)
+	m.wave_start = clampf(GameConfig.holdout_wave_start, WAVE_START_MIN, WAVE_START_MAX)
 	m.excluded_units = GameConfig.holdout_excluded_units.duplicate()
 	return m
 
@@ -116,7 +122,7 @@ func snapshot() -> Dictionary:
 		"kind": kind, "zone_count": zone_count, "target": target,
 		"zones": zones.duplicate(true), "scores": scores.duplicate(), "holders": holders.duplicate(),
 		"bounty": bounty_unit, "bounty_side": bounty_side, "bounty_until": bounty_until,
-		"waves_total": waves_total, "wave_every": wave_every, "wave": wave, "wave_side": wave_side,
+		"waves_total": waves_total, "wave_every": wave_every, "wave_start": wave_start, "wave": wave, "wave_side": wave_side,
 		"next_wave_round": next_wave_round, "pending_wave": pending_wave.duplicate(true),
 		"wave_spawned": wave_spawned, "defender_value": defender_value,
 		"excluded_units": excluded_units.duplicate(), "wave_sizes": wave_sizes.duplicate(),
@@ -143,6 +149,7 @@ func restore(d: Dictionary) -> void:
 	bounty_until = int(d.get("bounty_until", 0))
 	waves_total = int(d.get("waves_total", DEFAULT_WAVES))
 	wave_every = clampi(int(d.get("wave_every", WAVE_EVERY)), 1, WAVE_EVERY_MAX)
+	wave_start = clampf(float(d.get("wave_start", WAVE_BASE)), WAVE_START_MIN, WAVE_START_MAX)
 	wave = int(d.get("wave", 0))
 	wave_side = int(d.get("wave_side", -1))
 	next_wave_round = int(d.get("next_wave_round", 1))
@@ -189,7 +196,7 @@ func zone_at(c: Vector2i) -> int:
 
 ## Сила волны k (с единицы) в очках закупки.
 func wave_budget(k: int) -> int:
-	return maxi(1, roundi(float(defender_value) * (WAVE_BASE + WAVE_GROWTH * float(k - 1))))
+	return maxi(1, roundi(float(defender_value) * (wave_start + WAVE_GROWTH * float(k - 1))))
 
 ## Зоны Capture & Hold для карты: count штук, честно между зонами развёртывания sides.
 ## grid — доска, собранная из этой же карты (проходимость клеток берётся у неё: грунт

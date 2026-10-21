@@ -17,11 +17,12 @@ func _initialize() -> void:
 	_shooting_in_and_out()
 	_heavy_hit_and_bodies()
 	_station_in_a_seat()
+	_dpmg_in_a_seat()
 	_only_the_operator_launches_from_a_seat()
 	_zero_g_keeps_passengers_seated()
 	_ai_flies_and_fires()
 	if fails.is_empty():
-		print("shuttle: seats, driver AP, fire from and into seats, heavy hits, bodies, stations, operator-only launches, zero-g seats and the AI all hold")
+		print("shuttle: seats, driver AP, fire from and into seats, heavy hits, bodies, stations, a DPMG in a seat, operator-only launches, zero-g seats and the AI all hold")
 		quit(0)
 		return
 	printerr("shuttle: %d failure(s)" % fails.size())
@@ -367,3 +368,53 @@ func _ai_flies_and_fires() -> void:
 	ck(boarded >= 2, "AI boarded its shuttle (%d boardings)" % boarded)
 	ck(moved and sh.origin != start, "AI flew the shuttle (origin %s)" % str(sh.origin))
 	ck(fired_from_seat, "AI fired from a seat")
+
+## fix-7 #5: an engineer mounts a DPMG in a free seat; the soldier in the next seat fires it;
+## it rides with the shuttle and, once destroyed, frees its seat.
+func _dpmg_in_a_seat() -> void:
+	var m := MapData.new(30, 12)
+	for y in 12:
+		for x in 30:
+			m.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	m.set_spawn(Vector2i(4, 4), "shuttle", MCF.Owner.PLAYER_1)
+	m.set_spawn(Vector2i(3, 4), "engineer", MCF.Owner.PLAYER_1)
+	m.set_spawn(Vector2i(3, 5), "light_infantry", MCF.Owner.PLAYER_1)
+	m.set_spawn(Vector2i(14, 4), "light_infantry", MCF.Owner.PLAYER_2)
+	m.set_spawn(Vector2i(14, 5), "light_infantry", MCF.Owner.PLAYER_2)
+	GameConfig.civilians_enabled = false
+	var st := m.build_state(777)
+	var r := GameActionResolver.new(st)
+	r.fog_enabled = false
+	while st.active_player() != MCF.Owner.PLAYER_1:
+		r.resolve(EndTurnIntent.new())
+	var sh: Vehicle = st.all_vehicles()[0]
+	var en := _u(st, Vector2i(3, 4))
+	var li := _u(st, Vector2i(3, 5))
+	ck(r.resolve(VehicleBoardIntent.new(en.id, sh.id)).ok and r.resolve(VehicleBoardIntent.new(li.id, sh.id)).ok, "both board")
+	en.remaining_ap = 2
+	var seats: Array = r.buildable_cells(en, MCF.FEATURE_DPMG)
+	ck(not seats.is_empty() and r.buildable_cells(en, MCF.FEATURE_WALL).is_empty(),
+			"from a seat only a DPMG can be mounted, into a free seat (%s)" % str(seats))
+	var gun: Vector2i = seats[0]
+	var res := r.resolve(BuildIntent.new(en.id, gun, MCF.FEATURE_DPMG))
+	ck(res.ok and st.grid.cell(gun).feature_id == MCF.FEATURE_DPMG and Vehicle.SEAT_DPMG in sh.seats,
+			"the engineer mounts a DPMG in the seat: %s" % res.reason)
+	ck(not r.resolve(BuildIntent.new(en.id, gun, MCF.FEATURE_WALL)).ok, "no walls inside a shuttle")
+	li.remaining_ap = 2
+	var targets: Array = r.rsp_targets(li, gun)
+	ck(not targets.is_empty(), "the soldier in the next seat can fire the DPMG (%s)" % str(r.rsp_cells(li, true)))
+	if not targets.is_empty():
+		var fire := r.resolve(DPMGFireIntent.new(li.id, gun, int(targets[0]), -1))
+		ck(fire.ok, "fires it: %s" % fire.reason)
+	# Rides along.
+	var seat := sh.seats.find(Vehicle.SEAT_DPMG)
+	en.remaining_ap = 2
+	var drv := st.get_unit(sh.driver_id())
+	drv.remaining_ap = 2
+	var mv := r.resolve(VehicleMoveIntent.new(sh.id, Vector2i(0, 1), 3))
+	ck(mv.ok and st.grid.cell(sh.seat_cell(seat)).feature_id == MCF.FEATURE_DPMG and st.grid.cell(gun).feature_id == "",
+			"the DPMG rides with the shuttle: %s" % mv.reason)
+	# Destroyed: the seat is free again.
+	st.grid.cell(sh.seat_cell(seat)).clear_feature()
+	r.resolve(EndTurnIntent.new())
+	ck(sh.seats[seat] == -1, "a destroyed DPMG frees its seat")

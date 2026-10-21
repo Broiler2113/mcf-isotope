@@ -54,6 +54,8 @@ func run() -> void:
 	_initiative_skips_empty_slots()
 	_drawing_undo_restores_tiles()
 
+	await _give_units_off_turn()
+
 	_deployment_initiative()
 	_cannon_label()
 
@@ -692,3 +694,50 @@ func _cannon_label() -> void:
 		if ev.has("need"):
 			logged = int(ev["need"])
 	ck(cres.ok and shown_need == logged, "the cannon label (%d+) is the roll it makes (%d+)" % [shown_need, logged])
+
+## fix-7 #18: during the AI's turn the player clicks one of their own soldiers (selected,
+## no action menu), presses Give Units, picks the other side and confirms.
+func _give_units_off_turn() -> void:
+	GameConfig.roster = Roster.default_duel(true)
+	GameConfig.fog_mode = MCF.Fog.OFF
+	var m := MapData.blank_arena(20, 12)
+	m.set_spawn(Vector2i(3, 3), "light_infantry", 0)
+	m.set_spawn(Vector2i(4, 3), "sniper", 0)
+	m.set_spawn(Vector2i(16, 8), "light_infantry", 1)
+	MapHandoff.pending = m
+	var main = load("res://scenes/Main.tscn").instantiate()
+	root.add_child(main)
+	await process_frame
+	main._paused = true
+	main.state.turns.round_order = [0, 1] as Array[int]
+	main.state.turns.active_index = 1
+	var mine: UnitInstance = main.state.grid.cell(Vector2i(4, 3)).occupant
+	main._handle_click(Vector2i(4, 3))
+	ck(main.selected_id == mine.id and not main._menu.visible,
+			"in the AI's turn a click selects your own soldier, without the action menu")
+	main._open_give_units()
+	var picker: Control = null
+	for c in main._ui_layer.get_children():
+		if c.is_in_group("shortcut_modal") and c.visible:
+			picker = c
+	var side_btn: Button = null
+	for b in picker.find_children("*", "Button", true, false) if picker != null else []:
+		if (b as Button).text == main._side_label(1):
+			side_btn = b
+	ck(side_btn != null, "Give Units lists the other player")
+	if side_btn != null:
+		side_btn.pressed.emit()
+		await process_frame
+		var give_btn: Button = null
+		for c in main._ui_layer.get_children():
+			if c.is_in_group("shortcut_modal") and c.visible:
+				for b in c.find_children("*", "Button", true, false):
+					if (b as Button).text == "Give":
+						give_btn = b
+		ck(give_btn != null, "giving asks for confirmation")
+		if give_btn != null:
+			give_btn.pressed.emit()
+	ck(mine.owner == 1, "after confirming, the soldier belongs to the other player")
+	ck(main.state.grid.cell(Vector2i(3, 3)).occupant.owner == 0, "the unselected soldier stays")
+	main.queue_free()
+	await process_frame

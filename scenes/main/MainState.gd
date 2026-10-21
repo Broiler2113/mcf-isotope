@@ -51,7 +51,7 @@ enum Mode {NONE, MENU, MOVE, SHOOT, GRAB, ITEM, PUSH, DRONE_FLY, BUILD, BUILD_WA
 	CORPSE_DROP, WELD, MOVE_HELD, MINE, DISARM,
 	GROUP_MENU, GROUP_MOVE, GROUP_LASER,
 	VEH_MENU, VEH_MOVE, VEH_TURN, VEH_CANNON, VEH_DISEMBARK, VEH_SEAT, VEH_BOARD_SEAT,
-	DRAW, ERASE, RULER, BOARD_PICK, CARRY_FURN, PUT_FURN}
+	DRAW, ERASE, RULER, BOARD_PICK, CARRY_FURN, PUT_FURN, FP_PICK}
 
 ## Линейка (item 11): два конца и клетка под курсором. Инструмент чисто зрительский —
 ## состояния не трогает, по сети не ходит, в повтор не пишется.
@@ -171,12 +171,18 @@ var _melee_veh_ids: Array = []
 ## Режим установки мин кладёт противотанковую мину, а не противопехотную (item 13).
 var _mine_av: bool = false
 var build_feature: String = ""
+## Цвет строящегося прожектора (Furniture.make_tint), fix-7 #13.
+var build_tint: int = 0
 ## Рисование ЛДФ-стены (§3.7): цепочка выбранных клеток и флаг «тянем» мышью.
 var _wall_cells: Array[Vector2i] = []
 var _wall_drawing: bool = false
 ## Юниты, чья смерть уже применена, но ещё анимируется бросок защиты (#46): рисуем
 ## их живыми, пока крутится кубик, чтобы не «спойлерить» исход.
 var _pending_death_ids: Dictionary = {}
+## Шаг ИИ ждёт своего таймера (_queue_ai_step) — второй не заказывается.
+var _ai_step_queued := false
+## Шаги, сделанные в этом кадре: [боец, откуда, куда] — звучат в _process разом.
+var _step_sounds: Array = []
 ## «Визуальный слепок» зоны взрыва ДО разрушения (item 22): пока крутится кубик выстрела,
 ## клетки и техника рисуются по этим старым значениям, чтобы исход не опережал бросок.
 ## {"cells": {Vector2i: {...}}, "vehicles": {vid: {...}}}. Пусто — рисуем как есть.
@@ -316,6 +322,13 @@ const ZOOM_MAX := 2.5
 const ZOOM_STEP := 1.1
 
 var _ui_layer: CanvasLayer
+var _fps_label: Label
+## Вид от первого лица (fix-7 #9): само окно, его слой и крыши этой партии.
+var _fp: FirstPerson = null
+var _fp_layer: CanvasLayer = null
+var _fp_roofs := PackedByteArray()
+## Картинки крови на стенах по виду, размеру и углу (fix-7 #16).
+var _wall_blood_tex: Dictionary = {}
 ## Движимое/масштабируемое окно HUD (заголовок = ручка перетаскивания, угол = грип).
 var _hud_window: PanelContainer
 var _hud_grip: Control
@@ -914,6 +927,8 @@ var _number_page := 0
 @abstract func _is_own_active(u: UnitInstance) -> bool
 @abstract func _on_board(u: UnitInstance) -> bool
 @abstract func _can_control(unit_owner: int) -> bool
+@abstract func _selection_side() -> int
+@abstract func _keeps_selection(u: UnitInstance) -> bool
 @abstract func _select(unit: UnitInstance) -> void
 @abstract func _deselect() -> void
 @abstract func _back_to_menu() -> void
@@ -946,6 +961,12 @@ var _number_page := 0
 @abstract func _replay_chat_history() -> void
 @abstract func _draw_black_cross(origin: Vector2, size: float, alpha: float = 0.95) -> void
 @abstract func _neutral_camera_targets() -> Dictionary
+@abstract func _open_build_picker() -> void
+@abstract func _open_give_units() -> void
+@abstract func _enter_fp_pick() -> void
+@abstract func _start_first_person(at: Vector2i) -> void
+@abstract func _act_btn(vb: VBoxContainer, text: String, cb: Callable,
+		enabled: bool, reason := "No action points left", key := "") -> void
 @abstract func _scroll_menu(panel: PanelContainer, title: String = "Actions", back := Callable()) -> VBoxContainer
 @abstract func _anchor_menu(panel: Control) -> void
 @abstract func _has_action_button(vb: VBoxContainer) -> bool

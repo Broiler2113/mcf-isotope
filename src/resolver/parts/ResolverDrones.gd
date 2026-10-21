@@ -24,12 +24,13 @@ func _resolve_spawn_drone(intent: SpawnDroneIntent) -> ActionResult:
 	# тогда, когда прежний ещё в воздухе.
 	# Дрон всегда поднимается прямо над своей станцией (#22); если там уже висит
 	# чужой дрон — уходит на ближайшую свободную клетку.
-	var drone := _launch_drone_at(station, operator)
+	var drone := _launch_drone_at(station, operator, intent.scout)
 	if drone == null:
 		return ActionResult.fail("Nowhere to place the drone")
 	operator.remaining_ap -= 1
-	var result := ActionResult.success(["%s launches a drone at (%d, %d)" % [
-		operator.stats.display_name, drone.coord.x, drone.coord.y]])
+	var result := ActionResult.success(["%s launches a %s at (%d, %d)" % [
+		operator.stats.display_name, "scout drone" if intent.scout else "kamikaze drone",
+		drone.coord.x, drone.coord.y]])
 	result.spawned_unit_id = drone.id
 	return result
 
@@ -49,7 +50,7 @@ func _resolve_drone_move(intent: DroneMoveIntent) -> ActionResult:
 			and intent.target == drone.wall_entry_from
 	# Недолётанный остаток прошлого подлёта тратится ПЕРВЫМ и нового ОД не стоит (#13).
 	var use_credit := drone.move_credit > 0
-	var budget: int = drone.move_credit if use_credit else MCF.DRONE_FLIGHT_RANGE
+	var budget: int = drone.move_credit if use_credit else MCF.drone_range(drone)
 	if drone.remaining_ap <= 0 and not descending and not use_credit:
 		return ActionResult.fail("Drone has no AP left")
 
@@ -61,8 +62,9 @@ func _resolve_drone_move(intent: DroneMoveIntent) -> ActionResult:
 		# Остаток дальности сохраняется до конца хода — им дрон долетит потом (#13).
 		drone.move_credit = maxi(0, budget - int(reach[intent.target]))
 		if state.grid.cell(intent.target).on_fire:
-			# Залетел в огонь — взрыв (§3.8/§3.12).
-			return _drone_explode(drone, intent.target, "flew into fire")
+			# Залетел в огонь — взрыв (§3.8/§3.12); разведчик просто сгорает.
+			drone.coord = intent.target
+			return _drone_destroyed(drone, intent.target, "flew into fire")
 		# Заход на стену запоминаем ДО переезда (#96): уйти с неё можно только назад.
 		var entry := Vector2i(-1, -1)
 		# Над стеной у дрона один ход — назад (#96), но остаток подлёта он НЕ теряет
@@ -100,6 +102,8 @@ func _resolve_drone_move(intent: DroneMoveIntent) -> ActionResult:
 		return flight
 	# Столкновение: цель занята/стена — дрон таранит и взрывается (§3.12).
 	var pre := _approach_cell(drone, intent.target, reach)
+	if pre != Vector2i(-1, -1) and MCF.is_scout(drone):
+		return ActionResult.fail("A scout drone can't ram")
 	if pre != Vector2i(-1, -1):
 		if drone.remaining_ap <= 0 and not use_credit:
 			return ActionResult.fail("Drone has no AP left")
@@ -128,11 +132,26 @@ func _resolve_drone_detonate(intent: DroneDetonateIntent) -> ActionResult:
 		return ActionResult.fail("It's the other player's turn")
 	if not operator_controls(drone):
 		return ActionResult.fail("Operator not at the station")
+	if MCF.is_scout(drone):
+		return ActionResult.fail("A scout drone carries no charge")
 	_aimed_component = intent.component
 	# Дрон рвётся НАД корпусом (§4): борта у такого удара нет, и выбор игрока ничем
 	# не ограничен — ни гусеницей с той стороны, ни направлением ствола.
 	_aim_from = NOWHERE
 	return _drone_explode(drone, drone.coord, "detonated")
+
+## Гибель дрона: камикадзе рвётся (_drone_explode), разведчик просто падает — ни взрыва,
+## ни урона (fix-7 #7).
+func _drone_destroyed(drone: UnitInstance, center: Vector2i, why: String,
+		radius: int = MCF.ANTI_TANK_BLAST_RADIUS) -> ActionResult:
+	if not MCF.is_scout(drone):
+		return _drone_explode(drone, center, why, radius)
+	drone.status = MCF.Status.CORPSE
+	drone.remaining_ap = 0
+	var result := ActionResult.new()
+	result.ok = true
+	result.log("Scout drone %s at (%d, %d) — it falls apart" % [why, center.x, center.y])
+	return result
 
 ## Взрыв дрона: снимаем его с поля (не оставляет труп) и детонируем как противотанкист.
 ## Дрон не занимает слот клетки (#13), так что снимать occupant не нужно.
@@ -165,7 +184,7 @@ func _drone_explode(drone: UnitInstance, center: Vector2i, why: String,
 ## развёртывании станции (#77). Возвращает дрон или null, если поднимать некуда/незачем.
 ## `pilot` — кто разворачивал станцию; управлять дроном всё равно сможет только
 ## оператор, стоящий вплотную к станции (см. operator_controls).
-func _launch_drone_at(station: Vector2i, pilot: UnitInstance) -> UnitInstance:
+func _launch_drone_at(station: Vector2i, pilot: UnitInstance, scout := false) -> UnitInstance:
 	var op := pilot
 	# Пультом владеет оператор: если станцию ставил не он, ищем своего оператора рядом.
 	if op == null or op.stats.special_ability_id != MCF.ABILITY_DRONE_OPERATOR:
@@ -182,7 +201,8 @@ func _launch_drone_at(station: Vector2i, pilot: UnitInstance) -> UnitInstance:
 		spawn_cell = _free_flight_cell_near(station)
 	if spawn_cell == Vector2i(-1, -1):
 		return null
-	var drone_stats: UnitStats = load("res://src/data/units/drone.tres")
+	var drone_stats: UnitStats = load("res://src/data/units/%s.tres" % (
+			MCF.SCOUT_DRONE_STATS_ID if scout else MCF.DRONE_STATS_ID))
 	# Дрон висит НАД клеткой и её не занимает (#103) — под ним свободно проходят.
 	var drone := state.spawn_unit(drone_stats, spawn_cell, op.owner, false)
 	drone.is_drone = true
@@ -424,7 +444,8 @@ func _drone_route(from_coord: Vector2i, target: Vector2i) -> Array[Vector2i]:
 ## она не «запас хода», а расстояние, на котором станция ещё держит дрон, и укоротить
 ## её остатком бюджета было бы неверно.
 func _drone_reach(drone: UnitInstance) -> Dictionary:
-	var budget: int = drone.move_credit if drone.move_credit > 0 else MCF.DRONE_FLIGHT_RANGE
+	var budget: int = drone.move_credit if drone.move_credit > 0 else MCF.drone_range(drone)
+	var leash := MCF.drone_leash(drone)
 	if state.grid.cell(drone.coord).is_wall():
 		return _drone_wall_exit(drone)
 	var dist := {drone.coord: 0}
@@ -461,7 +482,7 @@ func _drone_reach(drone: UnitInstance) -> Dictionary:
 			var nd: int = int(dist[cur]) + step_cost
 			if nd > budget:
 				continue
-			if Combat.distance(nxt, drone.home_station) > MCF.DRONE_LEASH:
+			if Combat.distance(nxt, drone.home_station) > leash:
 				continue
 			var cell := state.grid.cell(nxt)
 			# Дрон перелетает трупы, юнитов и технику и зависает над ними (#13; над
@@ -482,7 +503,7 @@ func _drone_wall_exit(drone: UnitInstance) -> Dictionary:
 	var back := drone.wall_entry_from
 	if back == Vector2i(-1, -1) or not state.grid.in_bounds(back) or back == drone.coord:
 		return {}
-	if Combat.distance(back, drone.home_station) > MCF.DRONE_LEASH:
+	if Combat.distance(back, drone.home_station) > MCF.drone_leash(drone):
 		return {}
 	var od := _drone_at(back)
 	if od != null and od != drone:
@@ -512,7 +533,7 @@ func drone_route_to(drone: UnitInstance, target: Vector2i) -> Array[Vector2i]:
 
 ## Потолок одного подлёта: остаток прошлого или полный подлёт за ОД.
 func drone_flight_budget(drone: UnitInstance) -> int:
-	return drone.move_credit if drone.move_credit > 0 else MCF.DRONE_FLIGHT_RANGE
+	return drone.move_credit if drone.move_credit > 0 else MCF.drone_range(drone)
 
 ## С какой клетки дрон зашёл на стену (#96) — туда же он потом и вернётся. Берём
 ## предшественника на кратчайшем маршруте, ничьи разрешаем по координатам: иначе хост

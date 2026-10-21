@@ -10,7 +10,10 @@ extends Intent
 const NOWHERE := Vector2i(-999, -999)
 
 var station: Vector2i = NOWHERE
+## Разведчик вместо камикадзе (fix-7 #7).
+var scout: bool = false
 
-func _init(p_actor_id: int, p_station: Vector2i = NOWHERE) -> void:
+func _init(p_actor_id: int, p_station: Vector2i = NOWHERE, p_scout: bool = false) -> void:
 	super(p_actor_id)
 	station = p_station
+	scout = p_scout

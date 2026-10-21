@@ -133,6 +133,7 @@ const ENGINEER_BUILDABLE := {
 	MCF.FEATURE_HEDGEHOG: MCF.BUILD_COST_HEDGEHOG,
 	MCF.FEATURE_DOT: MCF.BUILD_COST_DOT,
 	MCF.FEATURE_DOT_OPEN: MCF.BUILD_COST_DOT,
+	MCF.FEATURE_FLOODLIGHT: 1,
 }
 
 const WELD_AIRLOCK_AP := 1
@@ -287,6 +288,12 @@ var _ally_roster: int = 0
 
 ## Множество клеток, видимых команде (для тумана в UI).
 var sight_positions: Dictionary = {}
+## Обзоры из промежуточных клеток перехода (вид во время ходьбы, fix-7 #4): ключ кеша →
+## видимые клетки. В общий кеш они не идут — отряд из сорока бойцов за шесть шагов
+## вытеснял оттуда обзоры всей стоящей армии, и после ходьбы её пересчитывали целиком.
+## Действует, пока не сменились стены (_seen_local_vv).
+var _seen_local: Dictionary = {}
+var _seen_local_vv := -1
 
 ## Fog off with gas or smoke on the board (mode 2). Every eye's window is the whole board and
 ## only the clouds stop sight, so one soldier's view is the board minus a few shadows. The
@@ -554,10 +561,11 @@ var _old_mine_roll := 0
 @abstract func _is_shield(u: UnitInstance) -> bool
 @abstract func is_fireproof(u: UnitInstance) -> bool
 @abstract func stack_onto(cell: GridCell, new_fid: String) -> String
+@abstract func _mine_flash(res: ActionResult, coord: Vector2i) -> void
 @abstract func _detonate_mine(coord: Vector2i, victim: UnitInstance, res: ActionResult) -> void
 @abstract func move_tier_budgets(unit: UnitInstance) -> Array[int]
 @abstract func reachable_for(unit: UnitInstance, budget: int, blocked: Dictionary = {},
-		vacated: Dictionary = {}) -> Movement.Reachability
+		vacated: Dictionary = {}, stop_at := Vector2i(-1, -1)) -> Movement.Reachability
 @abstract func _fire_on_path(unit: UnitInstance, path: Array) -> Vector2i
 @abstract func _mine_on_path(unit: UnitInstance, path: Array) -> Vector2i
 @abstract func _resolve_smash_furniture(actor: UnitInstance, coord: Vector2i) -> ActionResult
@@ -569,9 +577,11 @@ var _old_mine_roll := 0
 @abstract func _apply_zero_g(shooter: UnitInstance, target: UnitInstance, res: ActionResult = null) -> void
 @abstract func _recoiled(result: ActionResult, shooter: UnitInstance, aim: Vector2i) -> ActionResult
 @abstract func vehicle_covering(c: Vector2i) -> Vehicle
+@abstract func _drone_destroyed(drone: UnitInstance, center: Vector2i, why: String,
+		radius: int = MCF.ANTI_TANK_BLAST_RADIUS) -> ActionResult
 @abstract func _drone_explode(drone: UnitInstance, center: Vector2i, why: String,
 		radius: int = MCF.ANTI_TANK_BLAST_RADIUS) -> ActionResult
-@abstract func _launch_drone_at(station: Vector2i, pilot: UnitInstance) -> UnitInstance
+@abstract func _launch_drone_at(station: Vector2i, pilot: UnitInstance, scout := false) -> UnitInstance
 @abstract func _destroy_drone_station(coord: Vector2i) -> void
 @abstract func deployed_station_of(operator: UnitInstance) -> Vector2i
 @abstract func _drone_at(coord: Vector2i) -> UnitInstance

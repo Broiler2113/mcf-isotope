@@ -127,7 +127,10 @@ const K_LOBBY_MAP := "lobby_map"
 ##       direct one, landings skip fire, no spoil on bodies.
 ##  23 — 0.12.12: Holdout wave frequency is any number of rounds from 1 to 50 (an older guest
 ##       would turn the host's 7 into 2); desync reports.
-const PROTOCOL := 23
+##  24 — 0.13: giving units (new intent), scout drones, floodlight colours and borg batches,
+##       DPMG in shuttle seats, typed Holdout wave count and start size, directional shield
+##       shelter, Hard AI storming vehicles.
+const PROTOCOL := 24
 ## The bug-report server on the relay's VPS (tools/bugs/isotope_bugs.py): the Report a Bug
 ## window and the automatic desync reports both post here.
 const BUG_REPORTS := "http://103.86.177.137:8651/report"
@@ -148,7 +151,7 @@ static func encode_rules() -> Dictionary:
 		"wx": GameConfig.holdout_excluded_units.duplicate(),
 		"rw": GameConfig.random_events_weights.duplicate(),
 		"gm": GameConfig.game_mode, "cz": GameConfig.capture_zones,
-		"ct": GameConfig.capture_target, "hw": GameConfig.holdout_waves, "he": GameConfig.holdout_wave_every, "wa": GameConfig.holdout_ai,
+		"ct": GameConfig.capture_target, "hw": GameConfig.holdout_waves, "he": GameConfig.holdout_wave_every, "hs": GameConfig.holdout_wave_start, "wa": GameConfig.holdout_ai,
 		"czd": GameConfig.capture_drawn.duplicate(true),
 		"roster": roster.to_dict(),
 	}
@@ -187,6 +190,7 @@ static func apply_rules(msg: Dictionary) -> void:
 	GameConfig.capture_drawn = MatchMode.clean_drawn(msg.get("czd", []), 1 << 16, 1 << 16)
 	GameConfig.holdout_waves = int(msg.get("hw", MatchMode.DEFAULT_WAVES))
 	GameConfig.holdout_wave_every = int(msg.get("he", MatchMode.WAVE_EVERY))
+	GameConfig.holdout_wave_start = float(msg.get("hs", MatchMode.WAVE_BASE))
 	GameConfig.holdout_ai = int(msg.get("wa", 1))
 	GameConfig.allowed_units = {}
 	var rd: Variant = msg.get("roster")

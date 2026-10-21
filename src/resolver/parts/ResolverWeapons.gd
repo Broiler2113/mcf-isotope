@@ -180,7 +180,7 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 		var keep_comp := _aimed_component
 		_aim_from = NOWHERE
 		_aimed_component = ""
-		var boom := _drone_explode(target, target.coord, "shot down", 0)  # только клетка под ним
+		var boom := _drone_destroyed(target, target.coord, "shot down", 0)  # только клетка под ним
 		_aim_from = keep_from
 		_aimed_component = keep_comp
 		result.log_lines.append_array(boom.log_lines)
@@ -498,8 +498,8 @@ func _blast(center: Vector2i, res: ActionResult = null, cells: Array[Vector2i] =
 		# канавы. Прямое попадание в саму канаву по-прежнему убивает.
 		if u.coord != center and state.grid.cell(u.coord).feature_id == MCF.FEATURE_TRENCH:
 			continue
-		# A shield shelters the soldiers beside it, never the one the blast lands on.
-		if u.coord != center and _protected_by(u, protectors):
+		# A shield shelters the soldiers behind it, never the one the blast lands on.
+		if u.coord != center and _protected_by(u, protectors, center):
 			continue
 		_kill(u, res, center, true)
 		killed_names.append(u.stats.display_name)

@@ -44,6 +44,27 @@ func _is_passenger(u: UnitInstance) -> bool:
 ## оставалось кликабельным. Между шагами ИИ есть пауза AI_STEP_DELAY, и чем больше
 ## у него юнитов, тем дольше ход — игрок успевал открыть меню чужого бойца и
 ## доиграть ход за компьютер. Мирные (NEUTRAL) тоже не наши: контроллера у них нет.
+## Чьих бойцов этот экран выделяет: идущей стороны, если она наша, а в чужой ход — своих
+## (fix-7 #18: передать бойцов можно в любой момент, значит и выбрать их — тоже). Меню
+## действий в чужой ход не открывается: выбор только для просмотра и передачи.
+func _selection_side() -> int:
+	if state == null or _spectator or replay != null:
+		return -1
+	var active := state.active_player()
+	if _can_control(active):
+		return active
+	if networked:
+		return my_owner
+	for side: int in state.roster.player_ids():
+		if _owner_is_local_human(side):
+			return side
+	return -1
+
+## Остаётся ли боец выделенным: живой, на поле, той стороны, чьих бойцов экран выделяет.
+func _keeps_selection(u: UnitInstance) -> bool:
+	return u != null and u.is_alive() and _on_board(u) and u.owner == _selection_side() \
+			and _can_control(u.owner)
+
 func _can_control(unit_owner: int) -> bool:
 	if _spectator: return false
 	if networked:
@@ -65,7 +86,10 @@ func _select(unit: UnitInstance) -> void:
 	reach = null
 	target_ids = []
 	item_cells = []
-	_open_menu(unit)
+	if unit.owner == state.active_player():
+		_open_menu(unit)
+	else:
+		_menu.hide()
 	_refresh_info()
 	queue_redraw()
 
@@ -112,8 +136,7 @@ func _box_selectable() -> bool:
 	# Рамка включается только тумблером «Multi-Select» (#21).
 	if _multi_btn == null or not _multi_btn.button_pressed:
 		return false
-	var ctrl: PlayerController = controllers.get(state.active_player())
-	if ctrl == null or not ctrl.is_local_human():
+	if _selection_side() < 0:
 		return false
 	return mode == Mode.NONE or mode == Mode.MENU \
 			or mode == Mode.GROUP_MENU or mode == Mode.GROUP_MOVE or mode == Mode.GROUP_LASER
@@ -132,7 +155,7 @@ func _on_multi_toggled(pressed: bool) -> void:
 ## не дрон и не в машине. Иначе shift набирал бы в отряд тех, кем отряд всё равно не ходит.
 func _shift_pick(coord: Vector2i) -> void:
 	var u := _unit_at(coord)
-	if u == null or u.owner != state.active_player() or not u.is_alive() \
+	if u == null or u.owner != _selection_side() or not u.is_alive() \
 			or not _can_control(u.owner) or u.is_drone or u.aboard_vehicle_id != -1:
 		return
 	var ids: Array[int] = _group_ids.duplicate()
@@ -160,10 +183,11 @@ func _finalize_box() -> void:
 	if _box_additive: ids.assign(_group_ids)
 	if _box_additive and selected_id >= 0 and not ids.has(selected_id):
 		var selected := _selected_unit()
-		if selected != null and _is_own_active(selected) and not selected.is_drone and selected.aboard_vehicle_id == -1:
+		if selected != null and selected.is_alive() and selected.owner == _selection_side() \
+				and not selected.is_drone and selected.aboard_vehicle_id == -1:
 			ids.append(selected_id)
 	for u in state.all_units():
-		if u.owner != state.active_player() or not u.is_alive() or not _can_control(u.owner):
+		if u.owner != _selection_side() or not u.is_alive() or not _can_control(u.owner):
 			continue
 		if u.is_drone or u.aboard_vehicle_id != -1:
 			continue
@@ -192,7 +216,10 @@ func _set_group(ids: Array[int]) -> void:
 	item_cells = []
 	_picker.hide()
 	_clear_hint_cell()
-	_open_group_menu()
+	if state.get_unit(ids[0]).owner == state.active_player():
+		_open_group_menu()
+	else:
+		_menu.hide()
 	_refresh_info()
 	queue_redraw()
 
@@ -526,8 +553,36 @@ func _open_build_picker() -> void:
 				label = "Build: %s (%s)" % [MCF.FEATURE_NAMES[feat],
 						("%d left in batch" % left) if left > 0 else "1 AP for %d" % MCF.BORG_BUILD_BATCH]
 			_act_btn(vb, label, _enter_build.bind(feat), can_afford, "Needs %d AP" % cost)
+	# Прожектор (fix-7 #13): партия на 1 ОД, цвет выбирается до постройки.
+	var fl := MCF.FEATURE_FLOODLIGHT
+	if not resolver.buildable_cells(unit, fl).is_empty():
+		var left: int = int(unit.build_credits.get(fl, 0))
+		var fl_label := "Build: Floodlight (%s)" % (("%d left in batch" % left) if left > 0
+				else "1 AP for %d" % resolver.build_batch(unit, fl))
+		_act_btn(vb, fl_label, _open_floodlight_colors, unit.remaining_ap >= 1 or left > 0, "Needs 1 AP")
 	_number_picker()
 	_menu.hide()
+	_anchor_menu(_picker)
+	_picker.show()
+
+## Цвет прожектора — тот же список, что у ламп в редакторе (Furniture.LIGHT_TINTS).
+func _open_floodlight_colors() -> void:
+	for child in _picker.get_children(): child.queue_free()
+	var vb := _scroll_menu(_picker, "Floodlight color", _open_build_picker)
+	for i in Furniture.LIGHT_TINTS.size():
+		var swatch := Image.create_empty(14, 14, false, Image.FORMAT_RGBA8)
+		swatch.fill(Furniture.light_color_of(MCF.FEATURE_FLOODLIGHT, i))
+		var b := Button.new()
+		b.text = str(Furniture.LIGHT_TINTS[i][0])
+		b.icon = ImageTexture.create_from_image(swatch)
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		var tint := Furniture.make_tint(i, 0)
+		b.pressed.connect(func() -> void:
+			build_tint = tint
+			_picker.hide()
+			_enter_build(MCF.FEATURE_FLOODLIGHT))
+		vb.add_child(b)
+	_number_picker()
 	_anchor_menu(_picker)
 	_picker.show()
 
@@ -831,6 +886,117 @@ func _confirm_dialog(title: String, message: String, ok_text: String,
 	row.add_child(ok)
 	_ui_layer.add_child(overlay)
 
+# --- Вид от первого лица (fix-7 #9) ---
+
+## Кнопка «First Person»: дальше щелчок по любой знакомой свободной клетке.
+func _enter_fp_pick() -> void:
+	_deselect()
+	mode = Mode.FP_PICK
+	_menu.hide()
+	state.log.add("Click a free cell your side has seen to walk there in first person (Esc leaves).")
+	queue_redraw()
+
+func _start_first_person(at: Vector2i) -> void:
+	mode = Mode.NONE
+	_fp_layer = CanvasLayer.new()
+	_fp_layer.layer = 60
+	add_child(_fp_layer)
+	_fp = FirstPerson.new(self, at)
+	_fp.left.connect(_end_first_person)
+	_fp_layer.add_child(_fp)
+	_ui_layer.visible = false
+
+func _end_first_person() -> void:
+	if _fp_layer != null:
+		_fp_layer.queue_free()
+	_fp_layer = null
+	_fp = null
+	_ui_layer.visible = true
+	queue_redraw()
+
+## Где потолок: считается раз за партию по доске начала боя — снесённая стена крышу не
+## снимает.
+func _fp_roof(grid: Grid, env: String) -> PackedByteArray:
+	if _fp_roofs.size() != grid.width * grid.height:
+		_fp_roofs = FirstPersonBoard.roofed(state.grid, env)
+	return _fp_roofs
+
+# --- Передача бойцов (fix-7 #18) ---
+
+## Выделенные бойцы, которых этот экран вправе отдать: живые, свои (одной стороны).
+func _giveable_selection() -> Array[int]:
+	var ids: Array[int] = []
+	if _spectator or replay != null:
+		return ids
+	var side := -1
+	for id: int in (_group_ids if not _group_ids.is_empty() else [selected_id] as Array[int]):
+		var u := state.get_unit(id)
+		if u == null or not u.is_alive() or u.is_drone:
+			continue
+		var mine := u.owner == my_owner if networked else (controllers.get(u.owner) != null
+				and (controllers[u.owner] as PlayerController).is_local_human())
+		if not mine or (side != -1 and u.owner != side):
+			continue
+		side = u.owner
+		ids.append(u.id)
+	return ids
+
+## Кнопка «Give Units…»: кому отдать — затем подтверждение.
+func _open_give_units() -> void:
+	var ids := _giveable_selection()
+	if ids.is_empty():
+		state.log.add("Select your own soldiers first, then press Give Units.")
+		return
+	var targets := resolver.give_targets(state.get_unit(ids[0]).owner)
+	if targets.is_empty():
+		state.log.add("There is no other player to give soldiers to.")
+		return
+	var w := SteamChrome.overlay_window("Give %d soldier(s) to" % ids.size())
+	var root: Control = w["root"]
+	root.add_to_group("shortcut_modal")
+	root.visibility_changed.connect(func() -> void:
+		if not root.visible: root.queue_free())
+	var body: VBoxContainer = w["body"]
+	for side: int in targets:
+		var swatch := Image.create_empty(14, 14, false, Image.FORMAT_RGBA8)
+		swatch.fill(_side_color(side))
+		var b := Button.new()
+		b.text = _side_label(side)
+		b.icon = ImageTexture.create_from_image(swatch)
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.pressed.connect(func() -> void:
+			root.hide()
+			_confirm_dialog("Give soldiers", "Give %d soldier(s) to %s? You can't take them back." % [
+					ids.size(), _side_label(side)], "Give", _give_units.bind(ids, side)))
+		body.add_child(b)
+	(w["scroll"] as ScrollContainer).custom_minimum_size = Vector2(388, minf(
+			body.get_combined_minimum_size().y + 8.0, get_viewport_rect().size.y - 140.0))
+	_ui_layer.add_child(root)
+	root.show()
+
+## Передать — в любой момент, и в чужой ход (владелец): мимо очереди хода, без шага ИИ.
+func _give_units(ids: Array[int], to_side: int) -> void:
+	var intent := GiveUnitsIntent.new(ids, to_side)
+	if networked:
+		if _net_request_pending or _net_playing:
+			state.log.add("Wait for the current action to finish, then give the soldiers.")
+			return
+		_net_request_pending = not net.is_host
+		_deselect()
+		net.submit_local(intent)
+		return
+	var result := resolver.resolve(intent)
+	if not result.ok:
+		state.log.add("[denied] " + result.reason)
+		return
+	state.log.publish_result(result)
+	for c: PlayerController in controllers.values():
+		c.notify_state_changed(state)
+	_deselect()
+	_refresh_status()
+	queue_redraw()
+	_check_match_over()
+
 func _scroll_menu(panel: PanelContainer, title: String = "Actions", back := Callable()) -> VBoxContainer:
 	var frame := VBoxContainer.new()
 	frame.add_theme_constant_override("separation", 0)
@@ -899,7 +1065,9 @@ func _open_menu(unit: UnitInstance) -> void:
 				_enter_drone_fly,
 				controllable and (unit.remaining_ap > 0 or unit.move_credit > 0 or _drone_on_wall(unit)),
 				why if not controllable else "Drone has no AP left", "action_move")
-		if not controllable:
+		if MCF.is_scout(unit):
+			pass   # разведчик без заряда (fix-7 #7): подрывать нечего
+		elif not controllable:
 			_act_btn(vb, "Detonate", Callable(), false, why, "action_shoot")
 		else:
 			var det_btn := Button.new()
@@ -953,12 +1121,24 @@ func _open_menu(unit: UnitInstance) -> void:
 		var pstations := resolver.stations_near(unit)
 		if unit.stats.special_ability_id == MCF.ABILITY_DRONE_OPERATOR \
 				and not pstations.is_empty():
-			_act_btn(vb, "Launch Drone", (_open_station_picker.bind(pstations) if pstations.size() > 1 else _submit.bind(SpawnDroneIntent.new(unit.id, pstations[0]))),
-					unit.remaining_ap > 0, "No action points left", "action_launch")
+			_launch_buttons(vb, unit, pstations)
 		var pfold := resolver.station_pickup_cells(unit)
 		if not pfold.is_empty():
 			_act_btn(vb, "Pack Up Drone Station", _pack_station_action(unit, pfold),
 					unit.remaining_ap > 0, "No action points left", "action_pack")
+		# ДПМГ в кресле (fix-7 #5): инженер ставит его в соседнее свободное кресло, стреляет
+		# любой сосед по креслу.
+		if unit.stats.special_ability_id == MCF.ABILITY_ENGINEER \
+				and not resolver.buildable_cells(unit, MCF.FEATURE_DPMG).is_empty():
+			var dcost: int = resolver.build_cost_for(unit, MCF.FEATURE_DPMG)
+			_act_btn(vb, "Mount DPMG in a Seat (%d AP)" % dcost, _enter_build.bind(MCF.FEATURE_DPMG),
+					unit.remaining_ap >= dcost, "Needs %d AP" % dcost, "action_build")
+		var seat_rsp := resolver.rsp_cells(unit, true)
+		if not seat_rsp.is_empty():
+			var seat_left := _dpmg_rounds_left(unit, seat_rsp[0])
+			_act_btn(vb, "Fire DPMG (%d left)" % seat_left if seat_left > 0 else "Fire DPMG",
+					_enter_rsp_fire.bind(seat_rsp[0]), unit.remaining_ap > 0 or seat_left > 0,
+					"No action points left", "action_dpmg")
 		if not resolver.seat_options(pveh).is_empty():
 			_act_btn(vb, "Change Seat (1 AP)", _enter_seat_switch, unit.remaining_ap > 0, "No action points left", "action_seat")
 		_act_btn(vb, "Exit Shuttle (free)", _enter_passenger_exit,
@@ -1031,14 +1211,7 @@ func _open_menu(unit: UnitInstance) -> void:
 		var stations := resolver.stations_near(unit)
 		if unit.stats.special_ability_id == MCF.ABILITY_DRONE_OPERATOR \
 				and not stations.is_empty():
-			if stations.size() > 1:
-				# Станций рядом несколько — выбирает игрок, а не порядок обхода (item 17).
-				_act_btn(vb, "Launch Drone (%d stations)…" % stations.size(),
-						_open_station_picker.bind(stations), unit.remaining_ap > 0, "No action points left", "action_launch")
-			else:
-				_act_btn(vb, "Launch Drone",
-						_submit.bind(SpawnDroneIntent.new(unit.id, stations[0])),
-						unit.remaining_ap > 0, "No action points left", "action_launch")
+			_launch_buttons(vb, unit, stations)
 
 		# Свернуть свою станцию обратно в предмет (item 16).
 		var foldable := resolver.station_pickup_cells(unit)
@@ -1057,7 +1230,7 @@ func _open_menu(unit: UnitInstance) -> void:
 		# Инженер: заварить соседний шлюз (#99).
 		if not resolver.weldable_cells(unit).is_empty():
 			var weld_btn := Button.new()
-			weld_btn.text = "Weld Airlock (%d AP)" % GameActionResolver.WELD_AIRLOCK_AP
+			weld_btn.text = "Weld Airlock (%d AP)" % resolver.weld_cost_for(unit)
 			weld_btn.pressed.connect(_enter_weld)
 			vb.add_child(weld_btn)
 			_register_menu_action(weld_btn, "action_weld")
@@ -1335,7 +1508,7 @@ func _input(event: InputEvent) -> void:
 		viewport.set_input_as_handled()
 
 func _handle_shortcut(event: InputEventKey) -> bool:
-	if not event.pressed or event.echo or Keybinds.typing(get_viewport()): return false
+	if not event.pressed or event.echo or Keybinds.typing(get_viewport()) or _fp != null: return false
 	if _quit_dialog != null and _quit_dialog.visible:
 		if Keybinds.matches(event, "game_cancel"):
 			_quit_dialog.hide()

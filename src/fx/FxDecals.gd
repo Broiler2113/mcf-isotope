@@ -215,6 +215,9 @@ func _reindex() -> void:
 	decal_dirty.clear()
 	decal_reset += 1
 var gore: Array = []
+## Кровь на стенах (fix-7 #16): {"cell": клетка стены, "face": Vector2i — сторона, глядящая
+## на тело, "rot", "scale"}. Ложится, когда боец гибнет вплотную к стене.
+var wall_blood: Array = []
 ## Кровавых отпечатков ног больше нет (0.9.3, по просьбе игрока), а с ними и учёта «кто в
 ## чём испачкался». Кровь остаётся лужами и брызгами там, где пролилась.
 ## Ещё летящие: то же плюс from/to и таймер. По приземлении переезжают в props.
@@ -300,6 +303,7 @@ func clear() -> void:
 	damage_version += 1
 	props.clear()
 	gore.clear()
+	wall_blood.clear()
 	by_chunk.clear()
 	decal_dirty.clear()
 	decal_reset += 1
@@ -412,6 +416,14 @@ func _apply(events: Array, lanes_only: bool, projectile_blast := false) -> void:
 				_blood(ev)
 			"burn":
 				_burn(ev)
+			"flash":
+				# Только вспышка, без щебня и звука (fix-7 #19: мина вспыхивает, как взрыв).
+				var fcells: Array[Vector2i] = []
+				for c: Vector2i in ev.get("cells", []):
+					if not _space(c):
+						fcells.append(c)
+				if not fcells.is_empty():
+					flashes.append({"cells": fcells, "t": 0.0})
 			"laser":
 				_laser(ev)
 			"tracks":
@@ -493,7 +505,8 @@ func _debris(ev: Dictionary, projectile_blast := false) -> void:
 		_soot(ev)
 		var cells: Array[Vector2i] = []
 		for c: Vector2i in ev.get("cells", []):
-			cells.append(c)
+			if not _space(c):   # в открытом космосе вспышке гореть нечему (fix-7)
+				cells.append(c)
 		if not cells.is_empty():
 			flashes.append({"cells": cells, "t": 0.0})
 			if flashes.size() > FLASH_CAP:
@@ -809,6 +822,16 @@ func _blood(ev: Dictionary) -> void:
 		for i in drops_rng.randi_range(GIBS_MIN, GIBS_MAX):
 			var rng := _rng_for("gib", at, i, _seq)
 			_launch("gib", at, away, rng, 0.5, 2.2, SHARD_FLIGHT_SEC * 1.4, PI)
+	# Стена вплотную забрызгана (fix-7 #16): от взрыва — любая, от пули — та, куда летели брызги.
+	if solid_at.is_valid():
+		for d: Vector2i in [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]:
+			var w := at + d
+			if not bool(solid_at.call(w)) or (not blast and Vector2(d).dot(away) < -0.3):
+				continue
+			var wrng := _rng_for("wall_blood", w, d.x * 3 + d.y, _seq)
+			wall_blood.append({"cell": w, "face": -d, "rot": wrng.randf_range(0.0, TAU),
+					"scale": wrng.randf_range(0.75, 1.15) * (1.2 if blast else 1.0)})
+			ground_version += 1
 
 ## Fire no longer wipes the decals in its cells (owner, 2026-10-19): blood, casings,
 ## shards and chunks stay for the whole match, like the soot under them.
@@ -1049,6 +1072,11 @@ func to_dict() -> Dictionary:
 	# Ключи «prints», «pools», «bloody» больше не пишутся (0.9.3): отпечатков ног нет.
 	# Старые сохранения с ними читаются — лишние ключи просто никто не спрашивает.
 	var out := {"damage": damage, "props": settled, "lasers": lasers, "tracks": tracks}
+	if not wall_blood.is_empty():
+		var wb: Array = []
+		for b: Dictionary in wall_blood:
+			wb.append([b["cell"].x, b["cell"].y, b["face"].x, b["face"].y, float(b["rot"]), float(b["scale"])])
+		out["wall_blood"] = wb
 	if not drifting.is_empty():
 		out["drifting"] = drifting
 	return out
@@ -1083,12 +1111,16 @@ func from_dict(d: Dictionary) -> void:
 		if e is Array and (e as Array).size() >= 4:
 			track_marks.append({"from": Vector2(float(e[0]), float(e[1])),
 					"to": Vector2(float(e[2]), float(e[3]))})
+	for e in d.get("wall_blood", []):
+		if e is Array and (e as Array).size() >= 6:
+			wall_blood.append({"cell": Vector2i(int(e[0]), int(e[1])), "face": Vector2i(int(e[2]), int(e[3])),
+					"rot": float(e[4]), "scale": float(e[5])})
 
 ## Local undo snapshots retain animation progress; settled particle records are immutable.
 ## This is separate from the portable save format, which intentionally settles flights.
 func capture_state() -> Dictionary:
 	return {"damage": floor_damage.duplicate(), "props": props.duplicate(),
-		"gore": gore.duplicate(), "flying": flying.duplicate(true),
+		"gore": gore.duplicate(), "flying": flying.duplicate(true), "wall_blood": wall_blood.duplicate(),
 		"lasers": laser_lines.duplicate(), "tracks": track_marks.duplicate(),
 		"tracers": tracers.duplicate(true), "shots": shots.duplicate(true),
 		"lanes": lanes.duplicate(true), "flashes": flashes.duplicate(true),
@@ -1105,6 +1137,7 @@ func restore_state(snap: Dictionary) -> void:
 	props = snap["props"].duplicate()
 	gore = snap["gore"].duplicate()
 	flying = snap["flying"].duplicate(true)
+	wall_blood = snap.get("wall_blood", []).duplicate()
 	laser_lines = snap["lasers"].duplicate()
 	track_marks = snap["tracks"].duplicate()
 	tracers = snap["tracers"].duplicate(true)

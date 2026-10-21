@@ -64,9 +64,13 @@ static var _cache_grid: int = 0
 ## «достижимо, но терминально», что уже используется для дрона на стене: игрок
 ## по-прежнему может осознанно послать бойца в огонь (Main спросит подтверждение),
 ## но автоматический маршрут сквозь пламя не проложится.
+## stop_at (fix-7 #4): нужна одна клетка — её цена и путь. Дейкстра снимает клетку с фронта
+## уже окончательной (цены извлечения не убывают, а более поздняя правка came_from при
+## равной цене невозможна: любой следующий шаг дороже), так что дальше идти незачем. Такой
+## разлив неполон — в кеш его не кладём, и cost остальных клеток в нём не окончателен.
 static func reachable(grid: Grid, start: Vector2i, budget: int,
 		avoid_fire: bool = false, avoid_cells: Dictionary = {},
-		free_cells: Dictionary = {}) -> Reachability:
+		free_cells: Dictionary = {}, stop_at := Vector2i(-1, -1)) -> Reachability:
 	# Embarked tank crew has an off-board coordinate, not a walkable origin.
 	if not grid.in_bounds(start): return Reachability.new()
 	var gid := grid.get_instance_id()
@@ -88,6 +92,7 @@ static func reachable(grid: Grid, start: Vector2i, budget: int,
 	# группового приказа новые десятки, и кешу, живущему до следующего хода, они не нужны.
 	var has_free := not free_cells.is_empty()
 	var hit: Variant = null if has_free else _cache.get(key)
+	var partial := stop_at != Vector2i(-1, -1)
 	if hit != null:
 		return hit
 	var result := Reachability.new()
@@ -174,6 +179,8 @@ static func reachable(grid: Grid, start: Vector2i, budget: int,
 		live -= 1
 		slot.erase(current)
 		var current_cost: int = best_c
+		if partial and current == stop_at:
+			break
 		var cx := current.x
 		var cy := current.y
 		var from_cell: GridCell = cells[cy * gw + cx]
@@ -258,6 +265,6 @@ static func reachable(grid: Grid, start: Vector2i, budget: int,
 					fcost.append(new_cost)
 					live += 1
 	cost.erase(start)
-	if not has_free:
+	if not has_free and not partial:
 		_cache[key] = result
 	return result

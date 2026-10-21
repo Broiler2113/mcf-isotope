@@ -15,6 +15,7 @@ func ck(c: bool, w: String) -> void:
 func _initialize() -> void:
 	_board_stats_and_exit()
 	_engineer_batches()
+	_floodlights_and_welds()
 	_fire_trench_and_mines()
 	_destruction()
 	_overtake_a_dead_operator()
@@ -22,7 +23,7 @@ func _initialize() -> void:
 	_operator_stays_a_unit()
 	_ai_uses_a_borg()
 	if fails.is_empty():
-		print("borg: boarding, stats, engineer batches, fire, trenches, mines, destruction, overtaking, a held operator's borg not offered, one-vehicle-at-a-time and the AI all hold")
+		print("borg: boarding, stats, engineer batches, floodlights and welds, fire, trenches, mines, destruction, overtaking, a held operator's borg not offered, one-vehicle-at-a-time and the AI all hold")
 		quit(0)
 		return
 	printerr("borg: %d failure(s)" % fails.size())
@@ -130,6 +131,51 @@ func _engineer_batches() -> void:
 	r.resolve(EndTurnIntent.new()); r.resolve(EndTurnIntent.new())
 	ck(en.build_credits.is_empty(), "batch credits expired with the round")
 	ck(en.remaining_ap == 3, "fresh round: 3 AP in the borg")
+
+## fix-7 #13/#14: an engineer builds floodlights 2 per AP in the colour chosen (5 per AP in a
+## borg), and a borg welds 3 airlocks per AP; on foot a weld stays 1 AP each.
+func _floodlights_and_welds() -> void:
+	var f := _field()
+	var st: GameState = f["s"]
+	var r: GameActionResolver = f["r"]
+	var b: Vehicle = f["b"]
+	var en := _u(st, Vector2i(4, 6))
+	var red := Furniture.make_tint(4, 0)
+	var ap0 := en.remaining_ap
+	var res := r.resolve(BuildIntent.new(en.id, Vector2i(3, 6), MCF.FEATURE_FLOODLIGHT, red))
+	ck(res.ok and en.remaining_ap == ap0 - 1, "a floodlight costs 1 AP on foot: " + res.reason)
+	res = r.resolve(BuildIntent.new(en.id, Vector2i(4, 7), MCF.FEATURE_FLOODLIGHT))
+	ck(res.ok and en.remaining_ap == ap0 - 1 and en.build_credits.get(MCF.FEATURE_FLOODLIGHT, -1) == 0,
+			"the second floodlight is free (2 per AP): " + res.reason)
+	ck(st.grid.cell(Vector2i(3, 6)).feature_id == MCF.FEATURE_FLOODLIGHT
+			and st.grid.tint_at(3, 6) == red and st.grid.tint_at(4, 7) == 0,
+			"the floodlight stands in the colour chosen")
+	var occ := LightOccluders.new()
+	occ.sync(st.grid)
+	var lit: Array = occ.sources.get(Vector2i(3, 6), [])
+	ck(not lit.is_empty() and (lit[0]["color"] as Color).is_equal_approx(Furniture.LIGHT_TINTS[4][1]),
+			"the built floodlight shines red (%s)" % str(lit))
+	var back := IntentCodec.decode(IntentCodec.encode(BuildIntent.new(en.id, Vector2i(3, 6), MCF.FEATURE_FLOODLIGHT, red)))
+	ck(back is BuildIntent and back.tint == red, "the colour travels over the network")
+	for c: Vector2i in [Vector2i(6, 5), Vector2i(5, 4), Vector2i(5, 6)]:
+		st.grid.cell(c).set_feature(MCF.FEATURE_AIRLOCK)
+	res = r.resolve(VehicleBoardIntent.new(en.id, b.id))
+	ck(res.ok, "engineer boards: " + res.reason)
+	var ap1 := en.remaining_ap
+	for c: Vector2i in [Vector2i(6, 5), Vector2i(5, 4), Vector2i(5, 6)]:
+		res = r.resolve(WeldAirlockIntent.new(en.id, c))
+		ck(res.ok and st.grid.cell(c).airlock_welded, "borg welds the airlock at %s: %s" % [c, res.reason])
+	ck(en.remaining_ap == ap1 - 1, "three welds cost the borg 1 AP (%d -> %d)" % [ap1, en.remaining_ap])
+	ck(r.build_cost_for(en, MCF.FEATURE_FLOODLIGHT) == 1 and r.build_batch(en, MCF.FEATURE_FLOODLIGHT) == 5,
+			"a borg builds floodlights 5 per AP")
+	var g := _field()
+	var on_foot := _u(g["s"], Vector2i(4, 6))
+	(g["s"] as GameState).grid.cell(Vector2i(4, 7)).set_feature(MCF.FEATURE_AIRLOCK)
+	(g["s"] as GameState).grid.cell(Vector2i(3, 6)).set_feature(MCF.FEATURE_AIRLOCK)
+	var ap2 := on_foot.remaining_ap
+	(g["r"] as GameActionResolver).resolve(WeldAirlockIntent.new(on_foot.id, Vector2i(4, 7)))
+	(g["r"] as GameActionResolver).resolve(WeldAirlockIntent.new(on_foot.id, Vector2i(3, 6)))
+	ck(on_foot.remaining_ap == ap2 - 2, "on foot every weld still costs 1 AP")
 
 func _fire_trench_and_mines() -> void:
 	var f := _field()

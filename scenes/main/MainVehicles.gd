@@ -97,9 +97,9 @@ func _open_vehicle_menu(veh: Vehicle) -> void:
 	if veh.seated():
 		for i in veh.seats.size():
 			var sid: int = veh.seats[i]
-			if sid == Vehicle.SEAT_STATION:
+			if sid == Vehicle.SEAT_STATION or sid == Vehicle.SEAT_DPMG:
 				var st := Label.new()
-				st.text = "Seat %d: drone station" % (i + 1)
+				st.text = "Seat %d: %s" % [i + 1, "drone station" if sid == Vehicle.SEAT_STATION else "DPMG"]
 				vb.add_child(st)
 			elif sid >= 0:
 				var b := state.get_unit(sid)
@@ -429,7 +429,7 @@ func _unit_at(coord: Vector2i) -> UnitInstance:
 func _cycle_pick(coord: Vector2i) -> UnitInstance:
 	var pickable: Array[UnitInstance] = []
 	for u in _stack_at(coord):
-		if u.owner == state.active_player() and u.is_on_field() and _can_control(u.owner):
+		if u.owner == _selection_side() and u.is_on_field() and _can_control(u.owner):
 			pickable.append(u)
 	if pickable.is_empty():
 		return null
@@ -446,7 +446,7 @@ func _drone_at(coord: Vector2i) -> UnitInstance:
 
 func _drone_can_ram(coord: Vector2i) -> bool:
 	var u := _selected_unit()
-	if u == null or not u.is_drone or not state.grid.in_bounds(coord):
+	if u == null or not u.is_drone or MCF.is_scout(u) or not state.grid.in_bounds(coord):
 		return false
 	# Таран — только по другому дрону (как у резолвера, _approach_cell): над стеной и над
 	# машиной дрон зависает.
@@ -627,6 +627,23 @@ func _vehicle_at_cell(coord: Vector2i) -> Vehicle:
 ## соседей), поэтому список — просто кнопки с координатами; подсветка на доске
 ## показывает те же клетки, что и кнопки.
 ## Свернуть станцию: одна рядом — сразу, несколько — игрок выбирает какую (issues-12 #3).
+## Запуск дрона (fix-7 #7): камикадзе или разведчик. Станций рядом несколько — выбирает
+## игрок, а не порядок обхода (item 17).
+func _launch_buttons(vb: VBoxContainer, unit: UnitInstance, stations: Array[Vector2i]) -> void:
+	var uid := unit.id
+	for scout: bool in [false, true]:
+		var label := "Launch Scout Drone" if scout else "Launch Kamikaze Drone"
+		var act: Callable
+		if stations.size() > 1:
+			label += " (%d stations)…" % stations.size()
+			act = _open_station_picker.bind(stations, "Launch %s From Which Station?" % (
+					"Scout Drone" if scout else "Kamikaze Drone"),
+					func(st: Vector2i) -> Intent: return SpawnDroneIntent.new(uid, st, scout))
+		else:
+			act = _submit.bind(SpawnDroneIntent.new(uid, stations[0], scout))
+		_act_btn(vb, label, act, unit.remaining_ap > 0, "No action points left",
+				"action_launch_scout" if scout else "action_launch")
+
 func _pack_station_action(unit: UnitInstance, cells: Array[Vector2i]) -> Callable:
 	if cells.size() == 1:
 		return _submit.bind(PickUpStationIntent.new(unit.id, cells[0]))

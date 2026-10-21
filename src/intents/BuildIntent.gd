@@ -6,8 +6,11 @@ extends Intent
 
 var target: Vector2i
 var feature_id: String
+## Оттенок прожектора (Furniture.make_tint); для прочих построек не читается.
+var tint: int
 
-func _init(p_actor_id: int, p_target: Vector2i, p_feature_id: String) -> void:
+func _init(p_actor_id: int, p_target: Vector2i, p_feature_id: String, p_tint: int = 0) -> void:
 	super(p_actor_id)
 	target = p_target
 	feature_id = p_feature_id
+	tint = p_tint

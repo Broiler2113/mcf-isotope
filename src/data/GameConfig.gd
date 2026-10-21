@@ -91,6 +91,7 @@ static var capture_target: int = 12
 static var capture_drawn: Array = []
 static var holdout_waves: int = 10
 static var holdout_wave_every: int = MatchMode.WAVE_EVERY
+static var holdout_wave_start: float = MatchMode.WAVE_BASE
 static var holdout_excluded_units: Array[String] = []
 static var raider_excluded_units: Array[String] = []
 ## Кто ведёт волны Holdout: личность ИИ 0..2 или 3 — обученная модель.

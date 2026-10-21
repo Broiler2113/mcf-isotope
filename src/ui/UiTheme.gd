@@ -98,6 +98,11 @@ var autoroll_dice := false
 ## Automatic desync reports (2026-10): a multiplayer board that drifts out of sync sends one
 ## report per match to the bug server (DesyncReport). On unless switched off in Settings.
 var desync_reports := true
+## FPS counter in battle, left of the side panel (fix-7 #6).
+var show_fps := false
+## First-person view (fix-7 #9): field of view in degrees and mouse sensitivity.
+var fp_fov := 80.0
+var fp_sensitivity := 0.25
 var _pal: Dictionary = PALETTES["green"]
 
 var _accent := ACCENT
@@ -140,6 +145,9 @@ func _load_settings() -> void:
 	grid_opacity = clampf(float(cf.get_value("board", "grid_opacity", 0.32)), 0.0, 1.0)
 	autoroll_dice = bool(cf.get_value("game", "autoroll_dice", false))
 	desync_reports = bool(cf.get_value("game", "desync_reports", true))
+	show_fps = bool(cf.get_value("display", "show_fps", false))
+	fp_fov = clampf(float(cf.get_value("display", "fp_fov", 80.0)), 50.0, 120.0)
+	fp_sensitivity = clampf(float(cf.get_value("display", "fp_sensitivity", 0.25)), 0.05, 1.0)
 
 func _save_settings() -> void:
 	var cf := ConfigFile.new()
@@ -153,6 +161,9 @@ func _save_settings() -> void:
 	cf.set_value("board", "grid_opacity", grid_opacity)
 	cf.set_value("game", "autoroll_dice", autoroll_dice)
 	cf.set_value("game", "desync_reports", desync_reports)
+	cf.set_value("display", "show_fps", show_fps)
+	cf.set_value("display", "fp_fov", fp_fov)
+	cf.set_value("display", "fp_sensitivity", fp_sensitivity)
 	cf.save(SETTINGS_PATH)
 
 func set_grid(visible: bool, opacity: float) -> void:
@@ -163,6 +174,15 @@ func set_grid(visible: bool, opacity: float) -> void:
 
 func set_autoroll_dice(on: bool) -> void:
 	autoroll_dice = on
+	_save_settings()
+
+func set_fp_view(fov: float, sensitivity: float) -> void:
+	fp_fov = clampf(fov, 50.0, 120.0)
+	fp_sensitivity = clampf(sensitivity, 0.05, 1.0)
+	_save_settings()
+
+func set_show_fps(on: bool) -> void:
+	show_fps = on
 	_save_settings()
 
 func set_desync_reports(on: bool) -> void:

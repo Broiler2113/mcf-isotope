@@ -1,5 +1,5 @@
 # Nongating timing baseline: tests/bench/baseline-current.json; see audit-current.txt
-small actions=178 board=3651117127 trace=2886871926 alive=1/4/7 fx=1908953456 guest_same=true resyncs=0 save=true replay=true
+small actions=285 board=2504254459 trace=1105405756 alive=0/12/7 fx=2536896001 guest_same=true resyncs=0 save=true replay=true
 medium actions=862 board=2706731336 trace=3966006083 alive=37/49/14 fx=1154300236 guest_same=true resyncs=0 save=true replay=true
 large actions=1751 board=4108105020 trace=3819699724 alive=150/150/23 fx=3138424602 guest_same=true resyncs=0 save=true replay=true
 giant actions=2057 board=4244823644 trace=3494758174 alive=194/198/29 fx=3095912099 guest_same=true resyncs=0 save=true replay=true rules=345007626

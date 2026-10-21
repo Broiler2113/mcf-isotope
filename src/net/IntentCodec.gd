@@ -43,6 +43,7 @@ const T_VEH_MELEE := "veh_melee"
 const T_VEH_REPAIR := "veh_repair"
 const T_VEH_UNLOAD := "veh_unload"
 const T_WELD := "weld"
+const T_GIVE := "give"
 
 static func encode(intent: Intent) -> Dictionary:
 	if intent is EndTurnIntent:
@@ -106,14 +107,18 @@ static func encode(intent: Intent) -> Dictionary:
 	if intent is SpawnDroneIntent:
 		# Клетка станции (item 17) едет вместе с намерением: у оператора их может
 		# быть несколько, и выбор игрока обязан доехать до хоста без подмены.
-		return {"t": T_SPAWN_DRONE, "a": intent.actor_id,
+		var sd := {"t": T_SPAWN_DRONE, "a": intent.actor_id,
 			"x": intent.station.x, "y": intent.station.y}
+		if intent.scout: sd["sc"] = 1
+		return sd
 	if intent is DroneMoveIntent:
 		return {"t": T_DRONE_MOVE, "a": intent.actor_id, "x": intent.target.x, "y": intent.target.y}
 	if intent is DroneDetonateIntent:
 		return {"t": T_DRONE_DET, "a": intent.actor_id, "cm": intent.component}
 	if intent is BuildIntent:
-		return {"t": T_BUILD, "a": intent.actor_id, "x": intent.target.x, "y": intent.target.y, "f": intent.feature_id}
+		var b := {"t": T_BUILD, "a": intent.actor_id, "x": intent.target.x, "y": intent.target.y, "f": intent.feature_id}
+		if intent.tint != 0: b["ti"] = intent.tint
+		return b
 	if intent is BreakIntent:
 		return {"t": T_BREAK, "a": intent.actor_id, "x": intent.target.x, "y": intent.target.y}
 	if intent is DragIntent:
@@ -146,6 +151,8 @@ static func encode(intent: Intent) -> Dictionary:
 		return {"t": T_CORPSE_DOWN, "a": intent.actor_id, "x": intent.to.x, "y": intent.to.y}
 	if intent is WeldAirlockIntent:
 		return {"t": T_WELD, "a": intent.actor_id, "x": intent.to.x, "y": intent.to.y}
+	if intent is GiveUnitsIntent:
+		return {"t": T_GIVE, "a": intent.actor_id, "u": intent.unit_ids.duplicate(), "to": intent.to_side}
 	if intent is VehicleBoardIntent:
 		return {"t": T_VEH_BOARD, "a": intent.actor_id, "v": intent.vehicle_id, "s": intent.seat}
 	if intent is VehicleSeatIntent:
@@ -206,10 +213,10 @@ static func decode(d: Dictionary) -> Intent:
 		T_PUSH: return PushIntent.new(a, int(d.get("tid", -1)),
 			Vector2i(int(d.get("x", -999)), int(d.get("y", -999))))
 		T_SPAWN_DRONE: return SpawnDroneIntent.new(a,
-			Vector2i(int(d.get("x", -999)), int(d.get("y", -999))))
+			Vector2i(int(d.get("x", -999)), int(d.get("y", -999))), int(d.get("sc", 0)) == 1)
 		T_DRONE_MOVE: return DroneMoveIntent.new(a, coord)
 		T_DRONE_DET: return DroneDetonateIntent.new(a, str(d.get("cm", "")))
-		T_BUILD: return BuildIntent.new(a, coord, str(d.get("f", "")))
+		T_BUILD: return BuildIntent.new(a, coord, str(d.get("f", "")), int(d.get("ti", 0)))
 		T_BREAK: return BreakIntent.new(a, coord)
 		T_DRAG: return DragIntent.new(a, Vector2i(int(d.get("ox", 0)), int(d.get("oy", 0))), coord)
 		T_DPMG: return DPMGFireIntent.new(a, coord, int(d.get("tid", -1)), int(d.get("s", -1)))
@@ -225,6 +232,11 @@ static func decode(d: Dictionary) -> Intent:
 		T_CORPSE_UP: return PickUpCorpseIntent.new(a, coord)
 		T_CORPSE_DOWN: return DropCorpseIntent.new(a, coord)
 		T_WELD: return WeldAirlockIntent.new(a, coord)
+		T_GIVE:
+			var gids: Array[int] = []
+			for id in d.get("u", []):
+				gids.append(int(id))
+			return GiveUnitsIntent.new(gids, int(d.get("to", -1)))
 		T_VEH_BOARD: return VehicleBoardIntent.new(a, int(d.get("v", -1)), int(d.get("s", -1)))
 		T_VEH_SEAT: return VehicleSeatIntent.new(a, int(d.get("s", -1)))
 		T_VEH_OUT: return VehicleDisembarkIntent.new(a, coord)

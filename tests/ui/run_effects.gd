@@ -24,6 +24,9 @@ func run() -> void:
 	GameConfig.fog_mode = MCF.Fog.OFF
 	_vacuum_debris()
 	_decal_memory()
+	await _effects_run_while_typing()
+	_no_flash_in_space()
+	_wall_blood()
 
 ## Decals are never evicted (owner: "remove all decal caps").
 func _no_caps() -> void:
@@ -118,3 +121,53 @@ func _decal_memory() -> void:
 	fx._settle(fx.gore, {"kind": "blood_pool", "pos": Vector2(33.5, 1.5), "rot": 0.0, "scale": 1.0})
 	memory.update(fx, visible, [], 64)
 	ck(memory.view.by_chunk.get(Vector2i(2, 0), []).size() == 1, "new blood appears in a visible chunk even after props already exist")
+
+## fix-7: while the chat line has focus the camera stays put, but flashes, tracers and
+## debris keep playing out instead of freezing on screen.
+func _effects_run_while_typing() -> void:
+	GameConfig.roster = Roster.default_duel(false)
+	var m := MapData.blank_arena(16, 10)
+	m.set_spawn(Vector2i(2, 2), "light_infantry", 0)
+	m.set_spawn(Vector2i(12, 7), "light_infantry", 1)
+	MapHandoff.pending = m
+	var main = load("res://scenes/Main.tscn").instantiate()
+	root.add_child(main)
+	await process_frame
+	main._fx.apply([{"fx": "flash", "cells": [Vector2i(5, 5)]}])
+	var typing := LineEdit.new()
+	main._ui_layer.add_child(typing)
+	typing.grab_focus()
+	main._process(0.6)
+	main._process(0.6)
+	ck(main._fx.flashes.is_empty(), "an explosion flash fades while the player types in the chat")
+	main.queue_free()
+	await process_frame
+
+## fix-7 (owner): an explosion's flash never shows over open space, on screen or in the light.
+func _no_flash_in_space() -> void:
+	var fx := FxDecals.new()
+	fx.space_at = func(c: Vector2i) -> bool: return c.x >= 5
+	fx.apply([{"fx": "debris", "at": Vector2i(4, 0), "cells": [Vector2i(4, 0), Vector2i(5, 0)], "blast": true}])
+	fx.apply([{"fx": "flash", "cells": [Vector2i(5, 1), Vector2i(6, 1)]}])
+	var lit: Array = []
+	for f: Dictionary in fx.flashes:
+		lit.append_array(f["cells"])
+	ck(lit == [Vector2i(4, 0)], "explosion flashes skip space cells (%s)" % str(lit))
+
+## fix-7 #16: a soldier killed next to a wall splashes it — the face toward the body, on the
+## side the spray flies (any side for a blast); kept in saves, resyncs and undo.
+func _wall_blood() -> void:
+	var fx := FxDecals.new()
+	var walls := {Vector2i(5, 4): true, Vector2i(5, 6): true}
+	fx.solid_at = func(c: Vector2i) -> bool: return walls.has(c)
+	fx.apply([{"fx": "blood", "at": Vector2i(5, 5), "from": Vector2i(5, 9)}])
+	ck(fx.wall_blood.size() == 1 and fx.wall_blood[0]["cell"] == Vector2i(5, 4) and fx.wall_blood[0]["face"] == Vector2i(0, 1),
+			"a shot from below splashes only the wall above, on its lower face (%s)" % str(fx.wall_blood))
+	var snap := fx.capture_state()
+	fx.apply([{"fx": "blood", "at": Vector2i(5, 5), "from": Vector2i(5, 5), "blast": true}])
+	ck(fx.wall_blood.size() == 3, "a blast splashes every wall beside the body")
+	var back := FxDecals.new()
+	back.from_dict(fx.to_dict())
+	ck(back.wall_blood.size() == 3 and back.wall_blood[2]["face"] == fx.wall_blood[2]["face"], "wall blood survives a save")
+	fx.restore_state(snap)
+	ck(fx.wall_blood.size() == 1, "undo takes the blast's wall blood back")

@@ -38,10 +38,11 @@ func _initialize() -> void:
 	_group_move()
 	_undo_redo()
 	_mines()
+	_give_units()
 	_end_turn_authority()
 
 	if fails.is_empty():
-		print("player actions: dig, group move, undo/redo, mines and authority all agree")
+		print("player actions: dig, group move, undo/redo, mines, authority and giving soldiers away all agree")
 		quit(0)
 		return
 	printerr("player actions: %d failure(s)" % fails.size())
@@ -253,6 +254,49 @@ func _end_turn_authority() -> void:
 	# Старый вызов без указания стороны по-прежнему проходит: так ходят ИИ и мирные.
 	ck(r_host.resolve(EndTurnIntent.new()).ok,
 			"an unattributed end-turn still works (AI, civilians, internal calls)")
+
+## fix-7 #18: soldiers can be given to another player at any moment — here during the
+## receiver's own turn — keep their AP, can't be taken back by undo, and the host only
+## takes the order from the peer who owns every one of them.
+func _give_units() -> void:
+	var giver := MCF.Owner.PLAYER_1 if host.active_player() != MCF.Owner.PLAYER_1 else MCF.Owner.PLAYER_2
+	var taker := host.active_player()
+	var mine: Array[int] = []
+	for u: UnitInstance in host.all_units():
+		if u.owner == giver and u.is_alive() and not u.is_drone and u.aboard_vehicle_id == -1 \
+				and u.borg_id == -1 and mine.size() < 2:
+			mine.append(u.id)
+	ck(mine.size() == 2, "the giver has two soldiers to give")
+	var ap := host.get_unit(mine[0]).remaining_ap
+	ck(not r_host.resolve(GiveUnitsIntent.new(mine, giver)).ok, "giving to yourself is refused")
+	ck(not r_host.resolve(GiveUnitsIntent.new(mine, 77)).ok, "giving to a side not in the game is refused")
+	var res := _apply(GiveUnitsIntent.new(mine, taker))
+	ck(res.ok, "giving two soldiers out of turn: %s" % res.reason)
+	ck(host.get_unit(mine[0]).owner == taker and host.get_unit(mine[1]).owner == taker,
+			"both soldiers now belong to the receiver")
+	ck(host.get_unit(mine[0]).remaining_ap == ap, "a given soldier keeps its AP")
+	ck(not r_host.can_undo(), "a gift can't be undone")
+	# The host takes the order only from the peer that owns every soldier in it.
+	var keep_kinds := {}
+	for sl: Roster.Slot in host.roster.slots:
+		keep_kinds[sl] = [sl.kind, sl.peer_id]
+		if sl.id == giver or sl.id == taker:
+			sl.kind = Roster.SlotKind.HUMAN
+			sl.peer_id = 5 if sl.id == giver else 6
+	var ng := NetGame.new(host, r_host, true)
+	var theirs: Array[int] = [mine[0]]
+	ck(not ng._authorized(GiveUnitsIntent.new(theirs, giver), 5), "you can't give away someone else's soldiers")
+	var both: Array[int] = [mine[0]]
+	for u: UnitInstance in host.all_units():
+		if u.owner == giver and u.is_alive():
+			both.push_front(u.id)
+			break
+	ck(not ng._authorized(GiveUnitsIntent.new(both, taker), 5), "one foreign soldier in the order spoils it")
+	var own: Array[int] = [both[0]]
+	ck(ng._authorized(GiveUnitsIntent.new(own, taker), 5), "the owner's own order is taken")
+	for sl: Roster.Slot in keep_kinds:
+		sl.kind = keep_kinds[sl][0]
+		sl.peer_id = keep_kinds[sl][1]
 
 func _unit_at(coord: Vector2i) -> UnitInstance:
 	var c := host.grid.cell(coord)

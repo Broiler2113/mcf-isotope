@@ -76,6 +76,11 @@ func _process(delta: float) -> void:
 	if _audio != null:
 		_audio.suppress = replay != null and _replay_skip_animations
 	_advance_group_preview()
+	if not _step_sounds.is_empty():
+		if _audio != null:
+			for s: Array in _step_sounds:
+				_audio.step(s[0], s[1], s[2])
+		_step_sounds.clear()
 	_update_screen_shake()
 	# Не двигаем камеру, пока игрок печатает в текстовом поле (например, IP хоста).
 	_reposition_hud_grip()
@@ -83,8 +88,13 @@ func _process(delta: float) -> void:
 	if _sky != null:
 		_sky.camera = pan   # параллакс за доской едет вслед за панорамой (0.9.3)
 	_fit_ground()
+	# Полёт осколков и гильз (#21): пока что-то летит — перерисовываем, потом слой
+	# засыпает и кадры снова ничего не стоят. До проверки фокуса (fix-7): пока игрок
+	# печатает в чате, вспышки и пули не должны замирать на экране.
+	if _fx.advance(delta):
+		queue_redraw()
 	var focused := get_viewport().gui_get_focus_owner()
-	if focused is LineEdit or focused is TextEdit or Keybinds.modal_open() or _quit_dialog.visible:
+	if focused is LineEdit or focused is TextEdit or Keybinds.modal_open() or _quit_dialog.visible or _fp != null:
 		_sync_lighting()
 		return
 	var dir := Vector2.ZERO
@@ -95,10 +105,6 @@ func _process(delta: float) -> void:
 	if dir != Vector2.ZERO:
 		_kill_pan_tween()  # ручная панорама важнее плавного доводки камеры (item 52)
 		pan += dir.normalized() * PAN_SPEED * delta
-		queue_redraw()
-	# Полёт осколков и гильз (#21): пока что-то летит — перерисовываем, потом слой
-	# засыпает и кадры снова ничего не стоят.
-	if _fx.advance(delta):
 		queue_redraw()
 	_sync_lighting()
 
@@ -194,7 +200,7 @@ func _kick_if_ai() -> void:
 
 # --- Ввод по сетке ---
 func _unhandled_input(event: InputEvent) -> void:
-	if Keybinds.modal_open(): return
+	if Keybinds.modal_open() or _fp != null: return
 	if event is InputEventKey:
 		if _handle_shortcut(event): get_viewport().set_input_as_handled()
 		return
@@ -383,6 +389,10 @@ func _handle_click(coord: Vector2i) -> void:
 				occupant = u
 				break
 
+	if mode == Mode.FP_PICK:
+		if FirstPerson.walkable_start(self, coord):
+			_start_first_person(coord)
+		return
 	match mode:
 		Mode.MOVE:
 			if reach != null and reach.can_reach(coord):
@@ -576,7 +586,8 @@ func _handle_click(coord: Vector2i) -> void:
 			_back_to_menu()
 		Mode.BUILD:
 			if item_cells.has(coord):
-				_submit(BuildIntent.new(selected_id, coord, build_feature))
+				_submit(BuildIntent.new(selected_id, coord, build_feature,
+						build_tint if build_feature == MCF.FEATURE_FLOODLIGHT else 0))
 				return
 			if _is_own_active(occupant):
 				_select(occupant)
@@ -775,6 +786,10 @@ func _handle_click(coord: Vector2i) -> void:
 ## Контекстная отмена по Esc (#54). Приоритет: закрыть диалог → отменить рисование
 ## ЛДФ → выйти из под-режима действия в меню (unchoose) → снять выделение → выход.
 func _escape_pressed() -> void:
+	if mode == Mode.FP_PICK:
+		mode = Mode.NONE
+		queue_redraw()
+		return
 	if _picker.visible and not _animating:
 		_picker.hide()
 		if selected_vehicle_id != -1:
@@ -955,7 +970,10 @@ func _on_intent_ready(intent: Intent) -> void:
 	var active_ctrl: PlayerController = controllers[state.active_player()]
 	if not active_ctrl.is_local_human():
 		_refresh_status()
-		_deselect()
+		# Своих бойцов, выбранных в ход ИИ (для передачи, fix-7 #18), шаг ИИ не снимает.
+		if not _keeps_selection(_selected_unit()) and (_group_ids.is_empty()
+				or not _keeps_selection(state.get_unit(_group_ids[0]))):
+			_deselect()
 		_queue_ai_step(active_ctrl)
 		return
 	if not _select_spawned_drone(intent, result) and not _select_borg_pilot(intent, result):
@@ -964,19 +982,30 @@ func _on_intent_ready(intent: Intent) -> void:
 ## Следующий шаг ИИ — через короткую паузу (#52). Без неё вся армия отрабатывает
 ## за считаные кадры, и вместо хода видно только мгновенный итог; с паузой бойцы
 ## заметно ходят ОДИН ЗА ДРУГИМ. Пауза же не даёт кадру «залипнуть» на расчётах.
-func _queue_ai_step(ctrl: PlayerController) -> void:
+func _queue_ai_step(_ctrl: PlayerController) -> void:
 	# Выход из партии во время хода ИИ (item 10): узел уже вне дерева, get_tree() вернул
 	# бы null прямо на этом create_timer. Планировать нечего — некому ходить.
 	if not is_inside_tree():
 		return
+	# Шаг уже заказан (fix-7): действие вне очереди хода — передача бойцов — снова
+	# «пинает» ИИ, и второй таймер завёл бы вторую, параллельную цепочку его ходов.
+	if _ai_step_queued:
+		return
+	_ai_step_queued = true
 	await get_tree().create_timer(AI_STEP_DELAY / GameConfig.ai_speed).timeout
+	_ai_step_queued = false
 	# Пауза (item 4) держится здесь, в единственной точке, откуда ИИ вообще получает
 	# ход. Снятие паузы само зовёт _kick_if_ai(), и бой продолжается с того же места.
 	if _paused:
 		return
-	# За время паузы ход мог смениться (сдача хода, загрузка, конец боя).
-	if is_inside_tree() and state != null and state.active_player() == ctrl.owner and controllers.get(ctrl.owner) == ctrl:
-		ctrl.begin_turn(state)
+	# За время паузы ход мог смениться (сдача хода, загрузка, конец боя). Шагает тот, чей
+	# ход СЕЙЧАС: пинок другому ИИ, пришедший, пока этот шаг ждал, был отброшен выше, и
+	# без этого бой вставал (net leave: ход ушёл ИИ, занявшему место ушедшего гостя).
+	if not is_inside_tree() or state == null:
+		return
+	var cur: PlayerController = controllers.get(state.active_player())
+	if cur != null and not cur.is_local_human():
+		cur.begin_turn(state)
 
 func _toggle_pause() -> void:
 	if not _pause_available():
@@ -1046,7 +1075,8 @@ func _after_action() -> void:
 		return
 	# Партия борга (batch borg-corpses): три постройки за ОД кладутся подряд, как окопы, —
 	# режим остаётся, пока в партии что-то есть и есть куда ставить.
-	if mode == Mode.BUILD and _is_own_active(u) and u.borg_id != -1 \
+	# Прожекторы пешего инженера (fix-7 #13) — тоже партия: вторая ставится следом.
+	if mode == Mode.BUILD and _is_own_active(u) \
 			and int(u.build_credits.get(build_feature, 0)) > 0 \
 			and not resolver.buildable_cells(u, build_feature).is_empty():
 		_enter_build(build_feature)
@@ -1059,13 +1089,14 @@ func _after_action() -> void:
 	if not _group_ids.is_empty():
 		var keep: Array[int] = []
 		for gid: int in _group_ids:
-			if _is_own_active(state.get_unit(gid)):
+			if _keeps_selection(state.get_unit(gid)):
 				keep.append(gid)
 		_set_group(keep)
 		return
 	# Один боец тоже остаётся выделенным, даже без ОД: меню просто показывает погашенные
-	# кнопки. Снимается выделение лишь с погибшего или когда ход ушёл.
-	if _is_own_active(u):
+	# кнопки. Снимается выделение с погибшего; свой боец в чужой ход остаётся выбранным
+	# (fix-7 #18) — без меню, для просмотра и передачи.
+	if _keeps_selection(u):
 		_select(u)  # переоткрываем меню для цепочки действий
 	else:
 		_deselect()

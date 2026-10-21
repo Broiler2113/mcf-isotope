@@ -352,6 +352,13 @@ func _reposition_hud_grip() -> void:
 	var vp := get_viewport_rect().size
 	_hud_grip.position = Vector2(vp.x - _hud_width - _hud_grip.custom_minimum_size.x, 0)
 	_hud_grip.size = Vector2(_hud_grip.custom_minimum_size.x, vp.y)
+	# Счётчик кадров (fix-7 #6) — в правом верхнем углу, вплотную левее правой панели.
+	if _fps_label != null:
+		_fps_label.visible = Ui.show_fps
+		if _fps_label.visible:
+			_fps_label.text = "%d FPS" % Engine.get_frames_per_second()
+			_fps_label.reset_size()
+			_fps_label.position = Vector2(vp.x - _hud_width - _hud_grip.size.x - _fps_label.size.x - 8.0, 6.0)
 	# Чат приколот к правому-нижнему углу, но левее правого меню — пока игрок его не
 	# перетащил сам (item 8): после ручного переноса автопозиционирование отключается.
 	if _chat_panel != null and not _chat_moved:
@@ -413,6 +420,12 @@ func _build_ui() -> void:
 	_hud_grip.mouse_default_cursor_shape = Control.CURSOR_HSIZE
 	_hud_grip.gui_input.connect(_on_hud_grip_input)
 	_ui_layer.add_child(_hud_grip)
+	_fps_label = Label.new()
+	_fps_label.add_theme_font_size_override("font_size", 13)
+	_fps_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
+	_fps_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_fps_label.visible = false
+	_ui_layer.add_child(_fps_label)
 	var grip_mark := ColorRect.new()
 	grip_mark.color = Ui.accent_color()
 	grip_mark.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -508,6 +521,14 @@ func _build_ui() -> void:
 	# Линейка (item 11) — зрительский инструмент, ничего не меняющий на доске.
 	_ruler_btn = _compact_button("Ruler", _enter_ruler)
 	tools_box.add_child(_ruler_btn)
+	# Передать выделенных бойцов другому игроку (fix-7 #18) — в любой момент.
+	var give_btn := _compact_button("Give Units…", _open_give_units)
+	give_btn.tooltip_text = "Give the selected soldiers to another player, at any time."
+	tools_box.add_child(give_btn)
+	# Вид от первого лица (fix-7 #9): нажать, щёлкнуть по клетке — и ходить.
+	var fp_btn := _compact_button("First Person", _enter_fp_pick)
+	fp_btn.tooltip_text = "Walk the board in first person: press, then click a free cell your side has seen."
+	tools_box.add_child(fp_btn)
 	_height_btn = CheckBox.new()
 	_height_btn.text = "Heightmap"
 	_height_btn.tooltip_text = "Show the height of every cover tile (%s)" % Keybinds.label("game_heightmap")
@@ -794,48 +815,10 @@ func _build_quit_dialog() -> void:
 ## слотами по порядку, цветами сторон, группировкой по командам, группами нейтралов и
 ## живым счётом каждого. Тело перезаполняется при каждом открытии из _refresh_initiative.
 func _build_initiative_overlay() -> void:
-	var overlay := Control.new()
-	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
-	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
-	overlay.hide()
-	var dim := ColorRect.new()
-	# Полупрозрачный оверлей (item 6): доску за инициативой видно, но затемнение
-	# ЗАМЕТНОЕ — чтобы игрок сразу понимал, что оверлей открыт и потому клики по полю
-	# сейчас не проходят (item 17). Клик по фону закрывает, как и клавиша инициативы или Esc.
-	dim.color = Color(0, 0, 0, 0.45)
-	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-	dim.mouse_filter = Control.MOUSE_FILTER_STOP
-	dim.gui_input.connect(func(e: InputEvent) -> void:
-		if e is InputEventMouseButton and e.pressed:
-			_init_overlay.hide())
-	overlay.add_child(dim)
-	var center := CenterContainer.new()
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
-	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	overlay.add_child(center)
-	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(420, 0)
-	SteamChrome.apply_panel(panel)
-	panel.modulate = Color(1, 1, 1, 0.82)  # само окно инициативы — полупрозрачное (item 6)
-	center.add_child(panel)
-	var frame := VBoxContainer.new()
-	frame.add_theme_constant_override("separation", 0)
-	panel.add_child(frame)
-	var close := Button.new()
-	close.text = "✕"
-	close.pressed.connect(func() -> void: _init_overlay.hide())
-	frame.add_child(SteamChrome.header_bar("Initiative", close))
-	_init_overlay_body = VBoxContainer.new()
-	_init_overlay_body.add_theme_constant_override("separation", 6)
-	# Прокрутка (playtest-20): групп жителей бывают десятки, и без неё список уходил за
-	# край экрана — нижние строки, в том числе нейтралы, просто не было видно.
-	var scroll := ScrollContainer.new()
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.add_child(_init_overlay_body)
-	_init_overlay_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_init_overlay_scroll = scroll
-	frame.add_child(SteamChrome.pad(scroll, 16, 14))
-	_init_overlay = overlay
+	var w := SteamChrome.overlay_window("Initiative")
+	_init_overlay_body = w["body"]
+	_init_overlay_scroll = w["scroll"]
+	_init_overlay = w["root"]
 	_ui_layer.add_child(_init_overlay)
 
 func _toggle_initiative_overlay() -> void:
@@ -1163,7 +1146,7 @@ func _camera_row() -> Control:
 				else state.roster.name_of(sid) + "'s forces")
 		b.add_theme_font_size_override("font_size", 12)
 		b.custom_minimum_size = Vector2(40, 40)
-		b.clip_text = true
+		# Not clipped (fix-7 #15): "Me" was cut down to "M" in a 40 px button.
 		b.focus_mode = Control.FOCUS_NONE
 		var side := sid
 		b.pressed.connect(func() -> void: _center_on_side(side))
