@@ -318,6 +318,7 @@ const ZOOM_MAX := 2.5
 const ZOOM_STEP := 1.1
 
 var _ui_layer: CanvasLayer
+var _fps_label: Label
 ## Движимое/масштабируемое окно HUD (заголовок = ручка перетаскивания, угол = грип).
 var _hud_window: PanelContainer
 var _hud_grip: Control

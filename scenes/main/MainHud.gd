@@ -352,6 +352,13 @@ func _reposition_hud_grip() -> void:
 	var vp := get_viewport_rect().size
 	_hud_grip.position = Vector2(vp.x - _hud_width - _hud_grip.custom_minimum_size.x, 0)
 	_hud_grip.size = Vector2(_hud_grip.custom_minimum_size.x, vp.y)
+	# Счётчик кадров (fix-7 #6) — в правом верхнем углу, вплотную левее правой панели.
+	if _fps_label != null:
+		_fps_label.visible = Ui.show_fps
+		if _fps_label.visible:
+			_fps_label.text = "%d FPS" % Engine.get_frames_per_second()
+			_fps_label.reset_size()
+			_fps_label.position = Vector2(vp.x - _hud_width - _hud_grip.size.x - _fps_label.size.x - 8.0, 6.0)
 	# Чат приколот к правому-нижнему углу, но левее правого меню — пока игрок его не
 	# перетащил сам (item 8): после ручного переноса автопозиционирование отключается.
 	if _chat_panel != null and not _chat_moved:
@@ -413,6 +420,12 @@ func _build_ui() -> void:
 	_hud_grip.mouse_default_cursor_shape = Control.CURSOR_HSIZE
 	_hud_grip.gui_input.connect(_on_hud_grip_input)
 	_ui_layer.add_child(_hud_grip)
+	_fps_label = Label.new()
+	_fps_label.add_theme_font_size_override("font_size", 13)
+	_fps_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
+	_fps_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_fps_label.visible = false
+	_ui_layer.add_child(_fps_label)
 	var grip_mark := ColorRect.new()
 	grip_mark.color = Ui.accent_color()
 	grip_mark.set_anchors_preset(Control.PRESET_FULL_RECT)

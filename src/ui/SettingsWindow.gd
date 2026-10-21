@@ -110,6 +110,12 @@ func _build() -> void:
 	lighting.button_pressed = Ui.dynamic_lighting
 	lighting.toggled.connect(Ui.set_dynamic_lighting)
 	disp_box.body.add_child(lighting)
+	var fps := CheckBox.new()
+	fps.text = "Show FPS counter"
+	fps.tooltip_text = "Frames per second in the top right corner of the battle screen, beside the side panel."
+	fps.button_pressed = Ui.show_fps
+	fps.toggled.connect(Ui.set_show_fps)
+	disp_box.body.add_child(fps)
 	var dark_row := HBoxContainer.new()
 	disp_box.body.add_child(dark_row)
 	var dark := HSlider.new()
