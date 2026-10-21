@@ -127,7 +127,10 @@ const K_LOBBY_MAP := "lobby_map"
 ##       direct one, landings skip fire, no spoil on bodies.
 ##  23 — 0.12.12: Holdout wave frequency is any number of rounds from 1 to 50 (an older guest
 ##       would turn the host's 7 into 2); desync reports.
-const PROTOCOL := 23
+##  24 — 0.13: giving units (new intent), scout drones, floodlight colours and borg batches,
+##       DPMG in shuttle seats, typed Holdout wave count and start size, directional shield
+##       shelter, Hard AI storming vehicles.
+const PROTOCOL := 24
 ## The bug-report server on the relay's VPS (tools/bugs/isotope_bugs.py): the Report a Bug
 ## window and the automatic desync reports both post here.
 const BUG_REPORTS := "http://103.86.177.137:8651/report"
