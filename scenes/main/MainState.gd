@@ -51,7 +51,7 @@ enum Mode {NONE, MENU, MOVE, SHOOT, GRAB, ITEM, PUSH, DRONE_FLY, BUILD, BUILD_WA
 	CORPSE_DROP, WELD, MOVE_HELD, MINE, DISARM,
 	GROUP_MENU, GROUP_MOVE, GROUP_LASER,
 	VEH_MENU, VEH_MOVE, VEH_TURN, VEH_CANNON, VEH_DISEMBARK, VEH_SEAT, VEH_BOARD_SEAT,
-	DRAW, ERASE, RULER, BOARD_PICK, CARRY_FURN, PUT_FURN}
+	DRAW, ERASE, RULER, BOARD_PICK, CARRY_FURN, PUT_FURN, FP_PICK}
 
 ## Линейка (item 11): два конца и клетка под курсором. Инструмент чисто зрительский —
 ## состояния не трогает, по сети не ходит, в повтор не пишется.
@@ -323,6 +323,10 @@ const ZOOM_STEP := 1.1
 
 var _ui_layer: CanvasLayer
 var _fps_label: Label
+## Вид от первого лица (fix-7 #9): само окно, его слой и крыши этой партии.
+var _fp: FirstPerson = null
+var _fp_layer: CanvasLayer = null
+var _fp_roofs := PackedByteArray()
 ## Картинки крови на стенах по виду, размеру и углу (fix-7 #16).
 var _wall_blood_tex: Dictionary = {}
 ## Движимое/масштабируемое окно HUD (заголовок = ручка перетаскивания, угол = грип).
@@ -959,6 +963,8 @@ var _number_page := 0
 @abstract func _neutral_camera_targets() -> Dictionary
 @abstract func _open_build_picker() -> void
 @abstract func _open_give_units() -> void
+@abstract func _enter_fp_pick() -> void
+@abstract func _start_first_person(at: Vector2i) -> void
 @abstract func _act_btn(vb: VBoxContainer, text: String, cb: Callable,
 		enabled: bool, reason := "No action points left", key := "") -> void
 @abstract func _scroll_menu(panel: PanelContainer, title: String = "Actions", back := Callable()) -> VBoxContainer

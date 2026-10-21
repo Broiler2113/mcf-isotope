@@ -208,6 +208,15 @@ All players defend together against [b]waves[/b] led by an AI or the trained mod
 
 [h]Learned[/h]
 The trained model (RLM). Falls back to a Tactician when no model is running.""" % [AIPersonality.BLURBS[0], AIPersonality.BLURBS[1], AIPersonality.BLURBS[2]]],
+
+		["First Person", """[h]Walking the battlefield[/h]
+Press [b]First Person[/b] in the tools, then click any free cell you can see to stand there. Nothing you do in first person changes the battle, and nobody else sees you.
+
+[h]Controls[/h]
+[b]WASD[/b] to walk, the mouse to look, [b]Space[/b] to jump or climb out of a trench, [b]X[/b] to walk through everything, [b]Esc[/b] to leave. In space you float: thrust with WASD and drift until you push back.
+
+[h]What you see[/h]
+One cell is one meter; walls and ceilings are 2.3 m high. Cells you have never seen are black, and cells out of sight now are dimmed - fog of war still applies. Field of view and mouse sensitivity are in Settings."""],
 	]
 
 static func _events_text() -> String:

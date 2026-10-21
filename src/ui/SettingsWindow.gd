@@ -116,6 +116,31 @@ func _build() -> void:
 	fps.button_pressed = Ui.show_fps
 	fps.toggled.connect(Ui.set_show_fps)
 	disp_box.body.add_child(fps)
+	# First person (fix-7 #9): field of view and mouse sensitivity.
+	for which: String in ["fov", "sens"]:
+		var fp_row := HBoxContainer.new()
+		disp_box.body.add_child(fp_row)
+		var sl := HSlider.new()
+		sl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var lab := Label.new()
+		if which == "fov":
+			sl.min_value = 50; sl.max_value = 120; sl.step = 1; sl.value = Ui.fp_fov
+			sl.tooltip_text = "Field of view in first person."
+			lab.text = "First-person FOV: %d°" % sl.value
+		else:
+			sl.min_value = 5; sl.max_value = 100; sl.step = 1; sl.value = Ui.fp_sensitivity * 100.0
+			sl.tooltip_text = "Mouse sensitivity in first person."
+			lab.text = "Mouse sensitivity: %d%%" % sl.value
+		fp_row.add_child(sl)
+		fp_row.add_child(lab)
+		var w := which
+		sl.value_changed.connect(func(v: float) -> void:
+			if w == "fov":
+				lab.text = "First-person FOV: %d°" % v
+				Ui.set_fp_view(v, Ui.fp_sensitivity)
+			else:
+				lab.text = "Mouse sensitivity: %d%%" % v
+				Ui.set_fp_view(Ui.fp_fov, v / 100.0))
 	var dark_row := HBoxContainer.new()
 	disp_box.body.add_child(dark_row)
 	var dark := HSlider.new()

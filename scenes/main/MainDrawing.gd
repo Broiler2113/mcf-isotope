@@ -678,6 +678,12 @@ func _draw() -> void:
 			var mt := Color(0.4, 0.7, 1.0, 0.55) if coord == mhov else Color(0.4, 0.7, 1.0, 0.28)
 			draw_rect(Rect2(_cell_origin(coord), Vector2(CELL, CELL)), mt)
 
+	if mode == Mode.FP_PICK:
+		var fp_at := _pos_to_cell(get_viewport().get_mouse_position())
+		if state.grid.in_bounds(fp_at):
+			var ok := FirstPerson.walkable_start(self, fp_at)
+			draw_rect(Rect2(_cell_origin(fp_at), Vector2(CELL, CELL)),
+					Color(0.35, 0.9, 0.5, 0.35) if ok else Color(0.9, 0.3, 0.2, 0.3))
 	if mode == Mode.WELD:
 		# Шлюзы под заварку — в цвет сварочной дуги (#99).
 		var whov := _pos_to_cell(get_viewport().get_mouse_position())

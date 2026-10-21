@@ -886,6 +886,41 @@ func _confirm_dialog(title: String, message: String, ok_text: String,
 	row.add_child(ok)
 	_ui_layer.add_child(overlay)
 
+# --- Вид от первого лица (fix-7 #9) ---
+
+## Кнопка «First Person»: дальше щелчок по любой знакомой свободной клетке.
+func _enter_fp_pick() -> void:
+	_deselect()
+	mode = Mode.FP_PICK
+	_menu.hide()
+	state.log.add("Click a free cell your side has seen to walk there in first person (Esc leaves).")
+	queue_redraw()
+
+func _start_first_person(at: Vector2i) -> void:
+	mode = Mode.NONE
+	_fp_layer = CanvasLayer.new()
+	_fp_layer.layer = 60
+	add_child(_fp_layer)
+	_fp = FirstPerson.new(self, at)
+	_fp.left.connect(_end_first_person)
+	_fp_layer.add_child(_fp)
+	_ui_layer.visible = false
+
+func _end_first_person() -> void:
+	if _fp_layer != null:
+		_fp_layer.queue_free()
+	_fp_layer = null
+	_fp = null
+	_ui_layer.visible = true
+	queue_redraw()
+
+## Где потолок: считается раз за партию по доске начала боя — снесённая стена крышу не
+## снимает.
+func _fp_roof(grid: Grid, env: String) -> PackedByteArray:
+	if _fp_roofs.size() != grid.width * grid.height:
+		_fp_roofs = FirstPersonBoard.roofed(state.grid, env)
+	return _fp_roofs
+
 # --- Передача бойцов (fix-7 #18) ---
 
 ## Выделенные бойцы, которых этот экран вправе отдать: живые, свои (одной стороны).
@@ -1473,7 +1508,7 @@ func _input(event: InputEvent) -> void:
 		viewport.set_input_as_handled()
 
 func _handle_shortcut(event: InputEventKey) -> bool:
-	if not event.pressed or event.echo or Keybinds.typing(get_viewport()): return false
+	if not event.pressed or event.echo or Keybinds.typing(get_viewport()) or _fp != null: return false
 	if _quit_dialog != null and _quit_dialog.visible:
 		if Keybinds.matches(event, "game_cancel"):
 			_quit_dialog.hide()

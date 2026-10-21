@@ -525,6 +525,10 @@ func _build_ui() -> void:
 	var give_btn := _compact_button("Give Units…", _open_give_units)
 	give_btn.tooltip_text = "Give the selected soldiers to another player, at any time."
 	tools_box.add_child(give_btn)
+	# Вид от первого лица (fix-7 #9): нажать, щёлкнуть по клетке — и ходить.
+	var fp_btn := _compact_button("First Person", _enter_fp_pick)
+	fp_btn.tooltip_text = "Walk the board in first person: press, then click a free cell your side has seen."
+	tools_box.add_child(fp_btn)
 	_height_btn = CheckBox.new()
 	_height_btn.text = "Heightmap"
 	_height_btn.tooltip_text = "Show the height of every cover tile (%s)" % Keybinds.label("game_heightmap")

@@ -94,7 +94,7 @@ func _process(delta: float) -> void:
 	if _fx.advance(delta):
 		queue_redraw()
 	var focused := get_viewport().gui_get_focus_owner()
-	if focused is LineEdit or focused is TextEdit or Keybinds.modal_open() or _quit_dialog.visible:
+	if focused is LineEdit or focused is TextEdit or Keybinds.modal_open() or _quit_dialog.visible or _fp != null:
 		_sync_lighting()
 		return
 	var dir := Vector2.ZERO
@@ -200,7 +200,7 @@ func _kick_if_ai() -> void:
 
 # --- Ввод по сетке ---
 func _unhandled_input(event: InputEvent) -> void:
-	if Keybinds.modal_open(): return
+	if Keybinds.modal_open() or _fp != null: return
 	if event is InputEventKey:
 		if _handle_shortcut(event): get_viewport().set_input_as_handled()
 		return
@@ -389,6 +389,10 @@ func _handle_click(coord: Vector2i) -> void:
 				occupant = u
 				break
 
+	if mode == Mode.FP_PICK:
+		if FirstPerson.walkable_start(self, coord):
+			_start_first_person(coord)
+		return
 	match mode:
 		Mode.MOVE:
 			if reach != null and reach.can_reach(coord):
@@ -782,6 +786,10 @@ func _handle_click(coord: Vector2i) -> void:
 ## Контекстная отмена по Esc (#54). Приоритет: закрыть диалог → отменить рисование
 ## ЛДФ → выйти из под-режима действия в меню (unchoose) → снять выделение → выход.
 func _escape_pressed() -> void:
+	if mode == Mode.FP_PICK:
+		mode = Mode.NONE
+		queue_redraw()
+		return
 	if _picker.visible and not _animating:
 		_picker.hide()
 		if selected_vehicle_id != -1:
