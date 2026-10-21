@@ -567,14 +567,7 @@ func _draw() -> void:
 		# Станция дронов (batch ui-drones): под курсором — квадрат поводка, дальше
 		# DRONE_LEASH клеток от станции её дрон не улетит.
 		if is_station and item_cells.has(hover):
-			var lr := MCF.DRONE_LEASH
-			var tl := Vector2i(maxi(0, hover.x - lr), maxi(0, hover.y - lr))
-			var br := Vector2i(mini(state.grid.width - 1, hover.x + lr), mini(state.grid.height - 1, hover.y + lr))
-			var rect := Rect2(_cell_origin(tl), Vector2(br - tl + Vector2i.ONE) * CELL)
-			draw_rect(rect, Color(0.38, 0.7, 0.85, 0.08))
-			draw_rect(rect, Color(0.38, 0.7, 0.85, 0.85), false, 2.0)
-			draw_string(ThemeDB.fallback_font, rect.position + Vector2(6, 16),
-				"Drone range %d" % lr, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0.6, 0.85, 0.95))
+			_draw_station_leashes(hover, true)
 		if item_cells.has(hover) and not is_station:
 			# Предпросмотр зоны взрыва вокруг наведённой клетки (#64): у осколочной и
 			# у пожаротушительной это «косой крест», а не квадрат 3×3. Форму берём у
@@ -797,12 +790,7 @@ func _draw() -> void:
 
 	if state.grid.in_bounds(_inspected_station) and grid.cell(_inspected_station).feature_id == MCF.FEATURE_DRONE_STATION \
 			and _cell_seen_now(_inspected_station, visible):
-		var leash := MCF.DRONE_LEASH
-		var top := (_inspected_station - Vector2i(leash, leash)).max(Vector2i.ZERO)
-		var bottom := (_inspected_station + Vector2i(leash + 1, leash + 1)).min(Vector2i(gw, gh))
-		var zone := Rect2(_cell_origin(top), Vector2(bottom - top) * CELL)
-		draw_rect(zone, Color(0.38, 0.7, 0.85, 0.08))
-		draw_rect(zone, Color(0.38, 0.7, 0.85, 0.8), false, 2.0)
+		_draw_station_leashes(_inspected_station, false)
 
 	# Объект под наведённой кнопкой выбора — поверх рельефа и объектов, чтобы его было
 	# видно сразу. Для станции заодно показываем поводок её дрона: выбор «с какой
@@ -811,13 +799,7 @@ func _draw() -> void:
 		var ho := _cell_origin(_hover_cell)
 		var hsz := Vector2(CELL, CELL)
 		if grid.cell(_hover_cell).feature_id == MCF.FEATURE_DRONE_STATION:
-			var hl := MCF.DRONE_LEASH
-			var htl := Vector2i(maxi(0, _hover_cell.x - hl), maxi(0, _hover_cell.y - hl))
-			var hbr := Vector2i(mini(grid.width - 1, _hover_cell.x + hl),
-					mini(grid.height - 1, _hover_cell.y + hl))
-			var hrect := Rect2(_cell_origin(htl), Vector2(hbr - htl + Vector2i.ONE) * CELL)
-			draw_rect(hrect, Color(0.38, 0.7, 0.85, 0.08))
-			draw_rect(hrect, Color(0.38, 0.7, 0.85, 0.7), false, 2.0)
+			_draw_station_leashes(_hover_cell, false)
 		draw_rect(Rect2(ho, hsz), Color(0.45, 0.85, 1.0, 0.25))
 		draw_rect(Rect2(ho, hsz), Color(0.6, 0.92, 1.0), false, 3.0)
 
@@ -1072,6 +1054,21 @@ func _draw() -> void:
 	# Аннотации игроков поверх поля (item 51).
 	_draw_ruler()
 
+## Привязь станции: докуда долетит её камикадзе (15) и разведчик (45, fix-7 #7).
+func _draw_station_leashes(station: Vector2i, labels: bool) -> void:
+	for lr: int in [MCF.DRONE_LEASH, MCF.SCOUT_LEASH]:
+		var scout := lr == MCF.SCOUT_LEASH
+		var tl := Vector2i(maxi(0, station.x - lr), maxi(0, station.y - lr))
+		var br := Vector2i(mini(state.grid.width - 1, station.x + lr), mini(state.grid.height - 1, station.y + lr))
+		var rect := Rect2(_cell_origin(tl), Vector2(br - tl + Vector2i.ONE) * CELL)
+		if not scout:
+			draw_rect(rect, Color(0.38, 0.7, 0.85, 0.08))
+		draw_rect(rect, Color(0.38, 0.7, 0.85, 0.45 if scout else 0.85), false, 2.0)
+		if labels:
+			draw_string(ThemeDB.fallback_font, rect.position + Vector2(6, 16),
+				"%s range %d" % ["Scout" if scout else "Kamikaze", lr], HORIZONTAL_ALIGNMENT_LEFT, -1, 13,
+				Color(0.6, 0.85, 0.95))
+
 func _draw_drone(unit: UnitInstance, at: Vector2i) -> void:
 	var center := _cell_origin(at) + Vector2(CELL, CELL) * 0.5
 	# Дрон висит над клеткой (#13): рисуем со сдвигом в верхний-правый угол,
@@ -1090,6 +1087,10 @@ func _draw_drone(unit: UnitInstance, at: Vector2i) -> void:
 			dc + Vector2(0, s), dc + Vector2(-s, 0)])
 		draw_colored_polygon(pts, _side_color(unit.owner))
 		draw_polyline(pts + PackedVector2Array([pts[0]]), Color(0.3, 0.9, 0.9), 2.0)
+	# Разведчик (fix-7 #7) — с «объективом»: белое кольцо и стекло поверх корпуса.
+	if MCF.is_scout(unit):
+		draw_arc(dc, s * 0.75, 0, TAU, 16, Color(0.95, 0.97, 1.0, 0.95), 2.0)
+		draw_circle(dc, s * 0.35, Color(0.55, 0.85, 1.0, 0.95))
 	if unit.id == selected_id:
 		draw_arc(dc, CELL * 0.3, 0, TAU, 24, Color(1, 0.9, 0.2), 3.0)
 	for i in _draw_ap(unit):

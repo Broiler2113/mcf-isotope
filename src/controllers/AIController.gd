@@ -1242,7 +1242,7 @@ func _best_shoot(state: GameState, r: GameActionResolver, u: UnitInstance) -> Di
 			continue
 		# Сбитый дрон взрывается (радиус 1): рядом со своим его не сбиваем — свой отойдёт
 		# (штаб считает клетки у вражеского дрона смертельными), и тогда собьём.
-		if t.is_drone and _friend_near(state, t.coord, MCF.ANTI_TANK_BLAST_RADIUS):
+		if t.is_drone and not MCF.is_scout(t) and _friend_near(state, t.coord, MCF.ANTI_TANK_BLAST_RADIUS):
 			continue
 		# Противотанкист бьёт ВЗРЫВОМ (§3.14), и промах кладёт заряд недолётом (#7):
 		# по цели в двух шагах он подрывает сам себя. Резолвер считает все шесть

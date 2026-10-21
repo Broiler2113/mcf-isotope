@@ -159,13 +159,13 @@ Any soldier who steps on an anti-personnel mine sets it off - [b]your own side i
 A random event can scatter forgotten anti-personnel and anti-vehicle mines on any map. Nobody is told where they are, and each one goes off only some of the time - a safe step today is no promise for the next.""" % [MCF.MINES_PER_ACTION, MCF.MINE_REVEAL_RADIUS]],
 
 		["Drones", """[h]Launching[/h]
-The [b]Drone Operator[/b] places a drone station, which launches a drone at once. The operator must stand next to the station to fly it.
+The [b]Drone Operator[/b] places a drone station, which launches a kamikaze drone at once. Later launches from the station can be a [b]kamikaze drone[/b] or a [b]scout drone[/b]. The operator must stand next to the station to fly either.
 
 [h]Flying[/h]
-A drone flies up to %d per action but never farther than %d cells from its station. It can perch on a wall (and is blind there) but cannot cross it.
+A kamikaze drone flies up to %d cells per action but never farther than %d cells from its station. A scout drone flies up to %d cells per action and up to %d cells from its station. Both can perch on a wall (and are blind there) but cannot cross it.
 
 [h]Detonating[/h]
-A drone blows itself up over a 3×3 area, killing everyone in it and leveling walls it sits on. It parries hits on a 5+.""" % [MCF.DRONE_FLIGHT_RANGE, MCF.DRONE_LEASH]],
+A kamikaze drone blows itself up over a 3×3 area, killing everyone in it and leveling walls it sits on; it also explodes when shot down, when it rams, or when it flies into fire. A scout drone never explodes and deals no damage. Both parry hits on a 5+.""" % [MCF.DRONE_FLIGHT_RANGE, MCF.DRONE_LEASH, MCF.SCOUT_FLIGHT_RANGE, MCF.SCOUT_LEASH]],
 
 		["Vehicles", """[h]Crew[/h]
 A vehicle acts with the AP of its living crew. Soldiers can board enemy vehicles: whoever holds the majority of the crew owns it.
@@ -226,5 +226,5 @@ const UNIT_BLURBS := {
 	"miner": "Melee fighter (−1 to the parry) who tears down fortifications in one action.",
 	"sapper": "Lays up to five mines in one action, anti-vehicle mines too, sweeps for and disarms enemy mines.",
 	"shield_bearer": "Slow melee fighter. Only adjacent soldiers can fire at it; Snipers, Marksmen, Anti-Tank soldiers and tank cannons can also fire from range. Its shield stops lasers. Only a direct hit from a tank cannon or an Anti-Tank round, or a drone exploding right above it, kills it; grenades, mines, artillery and exploding wrecks never do. Shelters the soldiers next to it from blasts. Fireproof.",
-	"drone_operator": "Places a drone station that launches an exploding drone. Must stay next to the station to fly it.",
+	"drone_operator": "Places a drone station that launches kamikaze drones or scout drones. Must stay next to the station to fly them.",
 }

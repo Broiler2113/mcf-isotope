@@ -571,9 +571,11 @@ var _old_mine_roll := 0
 @abstract func _apply_zero_g(shooter: UnitInstance, target: UnitInstance, res: ActionResult = null) -> void
 @abstract func _recoiled(result: ActionResult, shooter: UnitInstance, aim: Vector2i) -> ActionResult
 @abstract func vehicle_covering(c: Vector2i) -> Vehicle
+@abstract func _drone_destroyed(drone: UnitInstance, center: Vector2i, why: String,
+		radius: int = MCF.ANTI_TANK_BLAST_RADIUS) -> ActionResult
 @abstract func _drone_explode(drone: UnitInstance, center: Vector2i, why: String,
 		radius: int = MCF.ANTI_TANK_BLAST_RADIUS) -> ActionResult
-@abstract func _launch_drone_at(station: Vector2i, pilot: UnitInstance) -> UnitInstance
+@abstract func _launch_drone_at(station: Vector2i, pilot: UnitInstance, scout := false) -> UnitInstance
 @abstract func _destroy_drone_station(coord: Vector2i) -> void
 @abstract func deployed_station_of(operator: UnitInstance) -> Vector2i
 @abstract func _drone_at(coord: Vector2i) -> UnitInstance

@@ -1030,7 +1030,9 @@ func _open_menu(unit: UnitInstance) -> void:
 				_enter_drone_fly,
 				controllable and (unit.remaining_ap > 0 or unit.move_credit > 0 or _drone_on_wall(unit)),
 				why if not controllable else "Drone has no AP left", "action_move")
-		if not controllable:
+		if MCF.is_scout(unit):
+			pass   # разведчик без заряда (fix-7 #7): подрывать нечего
+		elif not controllable:
 			_act_btn(vb, "Detonate", Callable(), false, why, "action_shoot")
 		else:
 			var det_btn := Button.new()
@@ -1084,8 +1086,7 @@ func _open_menu(unit: UnitInstance) -> void:
 		var pstations := resolver.stations_near(unit)
 		if unit.stats.special_ability_id == MCF.ABILITY_DRONE_OPERATOR \
 				and not pstations.is_empty():
-			_act_btn(vb, "Launch Drone", (_open_station_picker.bind(pstations) if pstations.size() > 1 else _submit.bind(SpawnDroneIntent.new(unit.id, pstations[0]))),
-					unit.remaining_ap > 0, "No action points left", "action_launch")
+			_launch_buttons(vb, unit, pstations)
 		var pfold := resolver.station_pickup_cells(unit)
 		if not pfold.is_empty():
 			_act_btn(vb, "Pack Up Drone Station", _pack_station_action(unit, pfold),
@@ -1162,14 +1163,7 @@ func _open_menu(unit: UnitInstance) -> void:
 		var stations := resolver.stations_near(unit)
 		if unit.stats.special_ability_id == MCF.ABILITY_DRONE_OPERATOR \
 				and not stations.is_empty():
-			if stations.size() > 1:
-				# Станций рядом несколько — выбирает игрок, а не порядок обхода (item 17).
-				_act_btn(vb, "Launch Drone (%d stations)…" % stations.size(),
-						_open_station_picker.bind(stations), unit.remaining_ap > 0, "No action points left", "action_launch")
-			else:
-				_act_btn(vb, "Launch Drone",
-						_submit.bind(SpawnDroneIntent.new(unit.id, stations[0])),
-						unit.remaining_ap > 0, "No action points left", "action_launch")
+			_launch_buttons(vb, unit, stations)
 
 		# Свернуть свою станцию обратно в предмет (item 16).
 		var foldable := resolver.station_pickup_cells(unit)

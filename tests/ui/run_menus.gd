@@ -82,7 +82,7 @@ func _keyboard() -> void:
 	await process_frame
 	kb.section = "game"
 	var n: String = kb.tooltip_for(KEY_N, "N")
-	ck(n.find("Lay mine") >= 0 and n.find("Build fortification") >= 0 and n.find("Launch drone") >= 0,
+	ck(n.find("Lay mine") >= 0 and n.find("Build fortification") >= 0 and n.find("Launch kamikaze drone") >= 0,
 			"the N key lists all three of its actions")
 	ck(kb._state(KEY_S) == 3, "S is used alone (pan) and in a combination (Ctrl+S)")
 	ck(kb._state(KEY_CTRL) == 2 and kb.tooltip_for(KEY_CTRL, "Ctrl").find("Ctrl+S") >= 0, "Ctrl lists its combinations")

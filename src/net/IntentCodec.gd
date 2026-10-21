@@ -107,8 +107,10 @@ static func encode(intent: Intent) -> Dictionary:
 	if intent is SpawnDroneIntent:
 		# Клетка станции (item 17) едет вместе с намерением: у оператора их может
 		# быть несколько, и выбор игрока обязан доехать до хоста без подмены.
-		return {"t": T_SPAWN_DRONE, "a": intent.actor_id,
+		var sd := {"t": T_SPAWN_DRONE, "a": intent.actor_id,
 			"x": intent.station.x, "y": intent.station.y}
+		if intent.scout: sd["sc"] = 1
+		return sd
 	if intent is DroneMoveIntent:
 		return {"t": T_DRONE_MOVE, "a": intent.actor_id, "x": intent.target.x, "y": intent.target.y}
 	if intent is DroneDetonateIntent:
@@ -211,7 +213,7 @@ static func decode(d: Dictionary) -> Intent:
 		T_PUSH: return PushIntent.new(a, int(d.get("tid", -1)),
 			Vector2i(int(d.get("x", -999)), int(d.get("y", -999))))
 		T_SPAWN_DRONE: return SpawnDroneIntent.new(a,
-			Vector2i(int(d.get("x", -999)), int(d.get("y", -999))))
+			Vector2i(int(d.get("x", -999)), int(d.get("y", -999))), int(d.get("sc", 0)) == 1)
 		T_DRONE_MOVE: return DroneMoveIntent.new(a, coord)
 		T_DRONE_DET: return DroneDetonateIntent.new(a, str(d.get("cm", "")))
 		T_BUILD: return BuildIntent.new(a, coord, str(d.get("f", "")), int(d.get("ti", 0)))

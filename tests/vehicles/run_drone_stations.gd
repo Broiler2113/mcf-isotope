@@ -16,6 +16,8 @@ func run() -> void:
 
 	_fire_frees_station_seat()
 
+	_scout_drone()
+
 func _deploy(r: GameActionResolver, op: UnitInstance, at: Vector2i) -> void:
 	op.held_item_id = MCF.ITEM_DRONE_STATION
 	op.remaining_ap = 2
@@ -237,3 +239,36 @@ func _fire_frees_station_seat() -> void:
 	ck(r.resolve(UseItemIntent.new(op.id, at)).ok, "station mounts in the fourth seat")
 	r._ignite(s.grid.cell(at), 1, ActionResult.success([]))
 	ck(s.grid.cell(at).feature_id == "" and shuttle.seats[3] == -1, "a burnt station releases its shuttle seat")
+
+## fix-7 #7: a station also launches scout drones — 60 cells per flight, 45 from the station,
+## no detonation, no ram, no blast when shot down or burnt; the kamikaze keeps 30 / 15.
+func _scout_drone() -> void:
+	var fd := field(70, 12, [[Vector2i(5, 5), "drone_operator", 0], [Vector2i(9, 5), "light_infantry", 0],
+			[Vector2i(65, 10), "light_infantry", 1]])
+	var sd: GameState = fd["s"]
+	var rd: GameActionResolver = fd["r"]
+	var op := sd.grid.cell(Vector2i(5, 5)).occupant
+	var friend := sd.grid.cell(Vector2i(9, 5)).occupant
+	sd.grid.cell(Vector2i(6, 5)).feature_id = MCF.FEATURE_DRONE_STATION
+	sd.grid.cell(Vector2i(6, 5)).feature_owner = 0
+	sd.grid.cell(Vector2i(6, 5)).station_operator_id = op.id
+	op.remaining_ap = 3
+	var res := rd.resolve(SpawnDroneIntent.new(op.id, Vector2i(6, 5), true))
+	var scout := sd.get_unit(res.spawned_unit_id)
+	ck(res.ok and MCF.is_scout(scout), "the station launches a scout drone (%s)" % res.reason)
+	var kres := rd.resolve(SpawnDroneIntent.new(op.id, Vector2i(6, 5)))
+	var kami := sd.get_unit(kres.spawned_unit_id)
+	ck(kres.ok and kami.is_drone and not MCF.is_scout(kami), "and still a kamikaze drone")
+	ck(rd.drone_flight_budget(scout) == 60 and rd.drone_flight_budget(kami) == 30, "scout flies 60, kamikaze 30")
+	var far := rd.drone_flight_cells(scout)
+	ck(far.has(Vector2i(51, 5)) and not far.has(Vector2i(52, 5)), "the scout's leash is 45 cells from the station")
+	ck(not rd.drone_flight_cells(kami).has(Vector2i(22, 5)), "the kamikaze keeps its 15-cell leash")
+	ck(not rd.resolve(DroneDetonateIntent.new(scout.id)).ok, "a scout drone can't detonate")
+	ck(not rd.resolve(DroneMoveIntent.new(scout.id, friend.coord)).ok or friend.is_alive(), "a scout never rams")
+	ck(friend.is_alive(), "nobody hurt by the scout")
+	# Shot down beside a friend: it falls, no blast.
+	scout.coord = friend.coord
+	rd._drone_destroyed(scout, scout.coord, "shot down", 0)
+	ck(not scout.is_alive() and friend.is_alive(), "a scout shot down over a soldier hurts nobody")
+	var round_trip := IntentCodec.decode(IntentCodec.encode(SpawnDroneIntent.new(op.id, Vector2i(6, 5), true)))
+	ck(round_trip.scout, "the drone kind travels over the network")

@@ -178,6 +178,21 @@ const DRONE_FLIGHT_RANGE := 30
 ## тратится ВОКРУГ станции.
 const DRONE_LEASH := 15
 const DRONE_ARMOR := 5  # броня дрона 5+
+## Дрон-разведчик (fix-7 #7): та же станция, но 60 клеток полёта за действие и привязь 45;
+## не взрывается, не таранит и урона не наносит. Старый дрон — «камикадзе».
+const SCOUT_DRONE_STATS_ID := "scout_drone"
+const SCOUT_FLIGHT_RANGE := 60
+const SCOUT_LEASH := 45
+
+static func is_scout(u: UnitInstance) -> bool:
+	return u != null and u.is_drone and u.stats != null and u.stats.id == SCOUT_DRONE_STATS_ID
+
+## Полёт за одно действие и привязь к станции — у каждого дрона свои.
+static func drone_range(u: UnitInstance) -> int:
+	return SCOUT_FLIGHT_RANGE if is_scout(u) else DRONE_FLIGHT_RANGE
+
+static func drone_leash(u: UnitInstance) -> int:
+	return SCOUT_LEASH if is_scout(u) else DRONE_LEASH
 const DRONE_STATS_ID := "drone"
 
 # --- Статические объекты на клетке (станции, укрепления §3.7) ---

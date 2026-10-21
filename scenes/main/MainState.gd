@@ -955,6 +955,8 @@ var _number_page := 0
 @abstract func _neutral_camera_targets() -> Dictionary
 @abstract func _open_build_picker() -> void
 @abstract func _open_give_units() -> void
+@abstract func _act_btn(vb: VBoxContainer, text: String, cb: Callable,
+		enabled: bool, reason := "No action points left", key := "") -> void
 @abstract func _scroll_menu(panel: PanelContainer, title: String = "Actions", back := Callable()) -> VBoxContainer
 @abstract func _anchor_menu(panel: Control) -> void
 @abstract func _has_action_button(vb: VBoxContainer) -> bool
