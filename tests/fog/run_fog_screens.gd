@@ -16,6 +16,7 @@ func run() -> void:
 	await _battle_screen__batch0113()
 
 	_gas_visibility()
+	await _memory_keeps_sight_journal()
 
 ## #1: under fog no enemy army on the deployment screen; without fog the lobby toggle rules.
 func _placement_fog() -> void:
@@ -473,3 +474,35 @@ func _gas_visibility() -> void:
 	r.random_events.add_cloud(2, 5, 1, 1, 3)
 	r._sync_gas()
 	ck(not r.is_visible_to_team(1, own), "fog-ignoring AI cannot see into gas")
+
+## fix-7 #4: drawing the fog memory (copying newly seen cells into the remembered board)
+## leaves the board's sight and walk journals alone; it used to log those copies at the same
+## coordinates, and every soldier's cached view was thrown away and swept again.
+func _memory_keeps_sight_journal() -> void:
+	GameConfig.civilians_enabled = false
+	GameConfig.random_events_enabled = false
+	GameConfig.fog_mode = MCF.Fog.STANDARD
+	GameConfig.roster = Roster.default_duel(false)
+	var m := MapData.blank_arena(30, 16)
+	for y in range(3, 13):
+		m.set_cell(Vector2i(12, y), MCF.FLOOR_NORMAL, 2.0, false, MCF.FEATURE_WALL)
+	m.set_spawn(Vector2i(4, 8), "light_infantry", 0)
+	m.set_spawn(Vector2i(26, 8), "light_infantry", 1)
+	MapHandoff.pending = m
+	var main = load("res://scenes/Main.tscn").instantiate()
+	root.add_child(main)
+	for i in 4: await process_frame
+	# The wall falls (as under a tank): the fog memory catches up on the next frames.
+	for y in range(3, 13):
+		main.state.grid.cell(Vector2i(12, y)).cover_height = 0.0
+	main.resolver.team_visible_coords(main._viewing_side())
+	var vv := GridCell.vision_version
+	var wv := GridCell.walk_version
+	for i in 4:
+		main.queue_redraw()
+		await process_frame
+	ck(GridCell.vision_version == vv and GridCell.walk_version == wv,
+			"remembering what came into view touches no sight or walk journal (%d->%d, %d->%d)" % [
+			vv, GridCell.vision_version, wv, GridCell.walk_version])
+	main.queue_free()
+	await process_frame

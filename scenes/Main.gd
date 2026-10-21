@@ -76,6 +76,11 @@ func _process(delta: float) -> void:
 	if _audio != null:
 		_audio.suppress = replay != null and _replay_skip_animations
 	_advance_group_preview()
+	if not _step_sounds.is_empty():
+		if _audio != null:
+			for s: Array in _step_sounds:
+				_audio.step(s[0], s[1], s[2])
+		_step_sounds.clear()
 	_update_screen_shake()
 	# Не двигаем камеру, пока игрок печатает в текстовом поле (например, IP хоста).
 	_reposition_hud_grip()

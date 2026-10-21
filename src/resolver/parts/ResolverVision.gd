@@ -317,7 +317,8 @@ static func _tank_masks_of(sig: int, gh: int) -> Array:
 	_tank_masks[sig] = pair
 	return pair
 
-func _seen_from(coord: Vector2i, r: int, viewer: int = -1, gas_only: bool = false) -> PackedInt32Array:
+func _seen_from(coord: Vector2i, r: int, viewer: int = -1, gas_only: bool = false,
+		transient := false) -> PackedInt32Array:
 	# Смотрящий вне поля (сидит в машине, coord = OFFBOARD) не видит ничего: лучи из
 	# такой точки уходят за край сетки. Вызывающие сидящих и так пропускают — это
 	# страховка на будущих вызывающих (issue 2).
@@ -338,7 +339,11 @@ func _seen_from(coord: Vector2i, r: int, viewer: int = -1, gas_only: bool = fals
 	if hit != null:
 		_touch_seen(key, hit)
 		return hit
-	var same: Variant = null if gas_only else _reuse_under(key, viewer)
+	if transient:
+		hit = _local_seen(key)
+		if hit != null:
+			return hit
+	var same: Variant = null if gas_only or transient else _reuse_under(key, viewer)
 	if same != null:
 		return same
 	var origin := coord.y * gw + coord.x
@@ -348,20 +353,85 @@ func _seen_from(coord: Vector2i, r: int, viewer: int = -1, gas_only: bool = fals
 		return own
 	var masks := _gas_masks() if gas_only else _tank_masks_of(sig, gh)
 	var res := _sweep(coord.x, coord.y, r, masks[0], gw, gh, masks[1])
+	return _finish_seen(key, origin, res, transient)
+
+## Обзор из промежуточной клетки перехода, если он ещё годен (стены не менялись).
+func _local_seen(key: Vector4i) -> Variant:
+	if _seen_local_vv != GridCell.vision_version:
+		_seen_local.clear()
+		_seen_local_vv = GridCell.vision_version
+	return _seen_local.get(key)
+
+## Хвост _seen_from после обхода: газ, чувствительность к своей клетке, запись в кеш.
+func _finish_seen(key: Vector4i, origin: int, res: Array, transient := false) -> PackedInt32Array:
 	# A wall face is visible; a gas-filled cell conceals its occupants. Keep the
 	# sweep and its incremental invalidation, filtering only while gas exists.
 	if not _sight_gas.is_empty():
 		var clear := PackedInt32Array()
-		var cells := grid.cells_flat()
+		var cells := state.grid.cells_flat()
 		for i: int in res[0]:
 			if not cells[i].obscured():
 				clear.append(i)
 		res[0] = clear
+	if transient:
+		_local_seen(key)   # сверить версию стен до записи
+		if _seen_local.size() >= 512:
+			_seen_local.clear()
+		_seen_local[key] = res[0]
+		return res[0]
 	# Gas arriving on the observer must invalidate an otherwise unchanged view.
 	var sens: PackedInt32Array = res[1]
 	sens.insert(sens.bsearch(origin), origin)
 	_store_seen(key, res[0], sens)
 	return res[0]
+
+## Обзоры, которых нет в кеше, считаются заранее на всех ядрах (fix-7 #4): обход — чистая
+## функция клетки и таблицы стен, и много бойцов разом (танк снёс стену на виду у армии,
+## отряд сделал шаг) ждали его по очереди. Результат тот же, что у _seen_from по одному:
+## тот же обход, та же доработка (_finish_seen) в том же порядке, только в главном потоке.
+## asks — [клетка, радиус, смотрящий, gas_only].
+const PREFETCH_MIN := 4
+func _prefetch_seen(asks: Array) -> void:
+	if asks.size() < PREFETCH_MIN or OS.get_processor_count() < 2:
+		return
+	_sync_seen()
+	var grid := state.grid
+	var gw := grid.width
+	var gh := grid.height
+	var jobs: Array = []   # [ключ, клетка-индекс, x, y, радиус, маски]
+	var queued := {}
+	for ask: Array in asks:
+		var coord: Vector2i = ask[0]
+		if not grid.in_bounds(coord) or grid.cell_fast(coord.x, coord.y).obscured():
+			continue
+		var gas_only: bool = ask[3]
+		var transient: bool = ask.size() > 4 and ask[4]
+		var r := mini(int(ask[1]), maxi(gw, gh))
+		var sig := -1 if gas_only else _tank_sig(int(ask[2]))
+		var key := Vector4i(coord.x, coord.y, r, sig)
+		if queued.has(key) or _seen_cache.has(key) or (transient and _local_seen(key) != null):
+			continue
+		if not gas_only and not transient and _reuse_under(key, int(ask[2])) != null:
+			continue
+		queued[key] = true
+		jobs.append([key, coord.y * gw + coord.x, coord.x, coord.y, r,
+				_gas_masks() if gas_only else _tank_masks_of(sig, gh), transient])
+	if jobs.size() < 2:
+		return
+	var results: Array = []
+	results.resize(jobs.size())
+	var lock := Mutex.new()
+	var work := func(i: int) -> void:
+		var j: Array = jobs[i]
+		var m: Array = j[5]
+		var res := _sweep(int(j[2]), int(j[3]), int(j[4]), m[0], gw, gh, m[1])
+		lock.lock()
+		results[i] = res
+		lock.unlock()
+	var group := WorkerThreadPool.add_group_task(work, jobs.size(), -1, true, "sight")
+	WorkerThreadPool.wait_for_group_task_completion(group)
+	for i in jobs.size():
+		_finish_seen(jobs[i][0], jobs[i][1], results[i], jobs[i][6])
 
 func _reuse_under(key: Vector4i, viewer: int) -> Variant:
 	var hist: Array = _sig_history.get(viewer, [])
@@ -868,6 +938,12 @@ func team_visible_coords(owner: int) -> Dictionary:
 		log = null
 	var live: Dictionary = {}
 	var sides := _vision_sides(owner)
+	var asks: Array = []
+	for u in state.all_units():
+		if u.is_on_field() and sides.has(u.owner) and u.aboard_vehicle_id == -1:
+			asks.append([sight_positions.get(u.id, u.coord), sight_of(u), u.owner, mode == 2,
+					sight_positions.has(u.id)])
+	_prefetch_seen(asks)
 	for u in state.all_units():
 		# Схваченный (HELD) смотрит по-прежнему (fix-7 #12): его держат, но не ослепили.
 		if not u.is_on_field() or not sides.has(u.owner):
@@ -879,7 +955,8 @@ func team_visible_coords(owner: int) -> Dictionary:
 		if u.aboard_vehicle_id != -1:
 			continue
 		live[u.id] = true
-		var fresh := _seen_from(sight_positions.get(u.id, u.coord), sight_of(u), u.owner, mode == 2)
+		var fresh := _seen_from(sight_positions.get(u.id, u.coord), sight_of(u), u.owner, mode == 2,
+				sight_positions.has(u.id))
 		var was: Variant = seen.get(u.id)
 		# Обзор этого бойца не изменился — его вклад уже в счётчиках, и трогать нечего.
 		# На обычном ходу так отсеиваются 99 бойцов из 100.

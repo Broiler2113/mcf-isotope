@@ -47,6 +47,12 @@ func _board_memory(viewer: int, visible: Dictionary, vis_changed: Variant) -> Gr
 	_fog_mem_dmg_seen = _fx.damage_version
 	var journaling := GridCell.journaling
 	GridCell.journaling = false
+	# Журнал вида копия пишет (по нему плитки перерисуют её клетки), а журналы обзора,
+	# проходимости и объектов — нет (fix-7 #4): сеттеры клеток копии отмечали их на тех же
+	# координатах, и настоящая доска выбрасывала кеш обзора всей армии. Танк, проломивший
+	# стену на виду у ста пятидесяти бойцов, пересчитывал их обзор дважды.
+	var keep := [GridCell.vision_version, GridCell.vision_changes.duplicate(), GridCell.vision_log_base,
+			GridCell.walk_version, GridCell.feature_version]
 	if fresh:
 		pass
 	elif viewer != _fog_mem_viewer or vis_changed == null or _fog_mem_look < GridCell.look_log_base:
@@ -65,6 +71,11 @@ func _board_memory(viewer: int, visible: Dictionary, vis_changed: Variant) -> Gr
 			if visible.has(c):
 				_copy_look(mem.cell_fast(c.x, c.y), grid.cell_fast(c.x, c.y))
 	GridCell.journaling = journaling
+	GridCell.vision_version = keep[0]
+	GridCell.vision_changes = keep[1]
+	GridCell.vision_log_base = keep[2]
+	GridCell.walk_version = keep[3]
+	GridCell.feature_version = keep[4]
 	_fog_mem_viewer = viewer
 	# Свои же записи в копию журнал тоже отметил — их пропускаем, а плитки по ним
 	# перерисуют клетки копии.

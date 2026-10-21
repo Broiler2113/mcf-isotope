@@ -667,7 +667,7 @@ func nearest_reachable(u: UnitInstance, dest: Vector2i, taken: Dictionary = {}) 
 ## blocked / vacated — план группового приказа (GroupMovePlanner): клетки, куда уже
 ## встали товарищи, и клетки, с которых они к этому моменту ушли.
 func reachable_for(unit: UnitInstance, budget: int, blocked: Dictionary = {},
-		vacated: Dictionary = {}) -> Movement.Reachability:
+		vacated: Dictionary = {}, stop_at := Vector2i(-1, -1)) -> Movement.Reachability:
 	var avoid := known_mine_cells(unit.owner)
 	# Борг в окоп не съезжает (batch 13 B11): окопы для него — не клетки.
 	if unit.borg_id != -1 or not blocked.is_empty():
@@ -677,7 +677,7 @@ func reachable_for(unit: UnitInstance, budget: int, blocked: Dictionary = {},
 				merged[c] = true
 		merged.merge(blocked)
 		avoid = merged
-	return Movement.reachable(state.grid, unit.coord, budget, not is_fireproof(unit), avoid, vacated)
+	return Movement.reachable(state.grid, unit.coord, budget, not is_fireproof(unit), avoid, vacated, stop_at)
 
 func _trench_cells() -> Array:
 	return _feature_cells(MCF.FEATURE_TRENCH)

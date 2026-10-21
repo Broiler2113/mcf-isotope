@@ -14,8 +14,9 @@ var _pending: Intent = null
 func _initialize() -> void:
 	_encode_cache_matches_cold()
 	_gas_sync_matches_full_pass()
+	_move_to_one_cell_matches_full_search()
 	if fails.is_empty():
-		print("large battles: cached cell encoding == cold encoding through a game; gas sync == full pass")
+		print("large battles: cached cell encoding == cold encoding through a game; gas sync == full pass; a move's search stopped at its target == the full search")
 		quit(0)
 		return
 	printerr("large battles: %d failure(s)" % fails.size())
@@ -108,3 +109,41 @@ func _gas_sync_matches_full_pass() -> void:
 	r.random_events.clouds.clear()
 	r.random_events.smoke.clear()
 	r._sync_gas()
+
+## fix-7 #4: a move searches only until its target comes off the frontier; the cost and the
+## path it takes must be exactly the full search's — on a built-up map, with hedgehogs,
+## mines, fire and airlocks, for reachable and unreachable targets alike.
+func _move_to_one_cell_matches_full_search() -> void:
+	var m := MapGen.generate({"style": MapGen.Style.TOWN, "size": MapGen.SIZE_CUSTOM, "width": 60,
+			"height": 50, "seed": 31, "zones": 2, "units": 40, "civilians": 0, "density": 2})
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7
+	var placed := 0
+	for tries in 4000:
+		var c := Vector2i(rng.randi_range(0, 59), rng.randi_range(0, 49))
+		if placed < 30 and m.get_feature(c) == "" and m.get_cover(c) == 0.0 and not m.get_space(c):
+			m.set_spawn(c, "light_infantry", placed % 2)
+			placed += 1
+	var st := m.build_state(5)
+	var r := GameActionResolver.new(st)
+	for k in 30:
+		var c := Vector2i(rng.randi_range(0, 59), rng.randi_range(0, 49))
+		var cell := st.grid.cell(c)
+		if cell.occupant == null and cell.feature_id == "" and cell.cover_height == 0.0:
+			cell.set_feature([MCF.FEATURE_HEDGEHOG, MCF.FEATURE_MINE, MCF.FEATURE_SANDBAGS][k % 3], 1)
+	var units: Array = st.all_units().filter(func(u: UnitInstance) -> bool: return u.is_alive())
+	var checked := 0
+	for i in 300:
+		var u: UnitInstance = units[rng.randi_range(0, units.size() - 1)]
+		var budget := rng.randi_range(4, 24)
+		var full := r.reachable_for(u, budget)
+		var target := u.coord + Vector2i(rng.randi_range(-12, 12), rng.randi_range(-12, 12))
+		var part := r.reachable_for(u, budget, {}, {}, target)
+		if full.can_reach(target) != part.can_reach(target):
+			ck(false, "reachability of %s from %s differs" % [target, u.coord])
+			continue
+		if full.can_reach(target):
+			checked += 1
+			ck(int(full.cost[target]) == int(part.cost[target]) and full.path_to(target) == part.path_to(target),
+					"cost and path to %s from %s are the full search's" % [target, u.coord])
+	ck(checked > 100, "enough reachable targets compared (%d)" % checked)

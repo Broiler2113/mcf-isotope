@@ -288,7 +288,11 @@ func _play_walk(ev: Dictionary) -> void:
 				break
 			await get_tree().process_frame
 		if _audio != null and u != null:
-			_audio.step(u, prev, cell)
+			# Шаги звучат раз за кадр, после всех ходоков (fix-7 #4): проверка «слышно ли»
+			# смотрит в обзор, и сорок бойцов, шагнувших в одном кадре, пересчитывали его
+			# сорок раз — каждый сдвигал позиции, по которым обзор считается.
+			if not u.is_drone:
+				_step_sounds.append([u, prev, cell])
 			if u.is_drone:
 				buzz = _audio.vehicle_at(buzz, buzz_generation, cell, u.owner, "drone_move")
 				if buzz != null: buzz_generation = int(buzz.get_meta("audio_generation", 0))
