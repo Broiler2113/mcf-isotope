@@ -97,9 +97,9 @@ func _open_vehicle_menu(veh: Vehicle) -> void:
 	if veh.seated():
 		for i in veh.seats.size():
 			var sid: int = veh.seats[i]
-			if sid == Vehicle.SEAT_STATION:
+			if sid == Vehicle.SEAT_STATION or sid == Vehicle.SEAT_DPMG:
 				var st := Label.new()
-				st.text = "Seat %d: drone station" % (i + 1)
+				st.text = "Seat %d: %s" % [i + 1, "drone station" if sid == Vehicle.SEAT_STATION else "DPMG"]
 				vb.add_child(st)
 			elif sid >= 0:
 				var b := state.get_unit(sid)

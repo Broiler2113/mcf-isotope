@@ -1091,6 +1091,19 @@ func _open_menu(unit: UnitInstance) -> void:
 		if not pfold.is_empty():
 			_act_btn(vb, "Pack Up Drone Station", _pack_station_action(unit, pfold),
 					unit.remaining_ap > 0, "No action points left", "action_pack")
+		# ДПМГ в кресле (fix-7 #5): инженер ставит его в соседнее свободное кресло, стреляет
+		# любой сосед по креслу.
+		if unit.stats.special_ability_id == MCF.ABILITY_ENGINEER \
+				and not resolver.buildable_cells(unit, MCF.FEATURE_DPMG).is_empty():
+			var dcost: int = resolver.build_cost_for(unit, MCF.FEATURE_DPMG)
+			_act_btn(vb, "Mount DPMG in a Seat (%d AP)" % dcost, _enter_build.bind(MCF.FEATURE_DPMG),
+					unit.remaining_ap >= dcost, "Needs %d AP" % dcost, "action_build")
+		var seat_rsp := resolver.rsp_cells(unit, true)
+		if not seat_rsp.is_empty():
+			var seat_left := _dpmg_rounds_left(unit, seat_rsp[0])
+			_act_btn(vb, "Fire DPMG (%d left)" % seat_left if seat_left > 0 else "Fire DPMG",
+					_enter_rsp_fire.bind(seat_rsp[0]), unit.remaining_ap > 0 or seat_left > 0,
+					"No action points left", "action_dpmg")
 		if not resolver.seat_options(pveh).is_empty():
 			_act_btn(vb, "Change Seat (1 AP)", _enter_seat_switch, unit.remaining_ap > 0, "No action points left", "action_seat")
 		_act_btn(vb, "Exit Shuttle (free)", _enter_passenger_exit,

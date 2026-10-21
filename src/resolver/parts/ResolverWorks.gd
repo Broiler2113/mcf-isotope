@@ -29,6 +29,10 @@ func _resolve_build(intent: BuildIntent) -> ActionResult:
 	if not state.grid.in_bounds(intent.target) or Combat.distance(actor.coord, intent.target) != 1:
 		return ActionResult.fail("Can only build in an adjacent cell")
 	var cell := state.grid.cell(intent.target)
+	# ДПМГ в кресло челнока (fix-7 #5): из соседнего кресла или снаружи, к борту.
+	var seat_veh := vehicle_covering(intent.target)
+	if seat_veh != null and seat_veh.seated() or seated_vehicle_of(actor) != null:
+		return _mount_seat_dpmg(actor, intent, seat_veh)
 	# Класть можно на пустую клетку либо ярусом поверх мешков (#31).
 	var stacked := stack_onto(cell, intent.feature_id)
 	if not cell.is_buildable() and stacked == "":
@@ -71,6 +75,46 @@ func _resolve_build(intent: BuildIntent) -> ActionResult:
 	return ActionResult.success(["%s builds: %s at (%d, %d) [AP: %d]%s" % [
 		actor.stats.display_name, MCF.feature_name(placed, placed),
 		intent.target.x, intent.target.y, actor.remaining_ap, credit_note]])
+
+## Кресло челнока, чья клетка — c, если оно свободно; иначе −1.
+func free_seat_at(veh: Vehicle, c: Vector2i) -> int:
+	if veh == null or not veh.seated():
+		return -1
+	for i in veh.seats.size():
+		if veh.seat_cell(i) == c:
+			return i if veh.seats[i] == -1 else -1
+	return -1
+
+func _mount_seat_dpmg(actor: UnitInstance, intent: BuildIntent, veh: Vehicle) -> ActionResult:
+	if intent.feature_id != MCF.FEATURE_DPMG:
+		return ActionResult.fail("Only a DPMG can be mounted in a shuttle seat")
+	if veh == null or not veh.seated():
+		return ActionResult.fail("From a seat, a DPMG goes into another seat")
+	if not state.roster.are_allies(veh.owner, actor.owner):
+		return ActionResult.fail("Not your shuttle")
+	var seat := free_seat_at(veh, intent.target)
+	if seat == -1:
+		return ActionResult.fail("That seat is taken")
+	var cost: int = ENGINEER_BUILDABLE[MCF.FEATURE_DPMG]
+	if actor.remaining_ap < cost:
+		return ActionResult.fail("Need %d AP" % cost)
+	actor.remaining_ap -= cost
+	veh.seats[seat] = Vehicle.SEAT_DPMG
+	state.grid.cell(intent.target).set_feature(MCF.FEATURE_DPMG, actor.owner)
+	notify_cell_changed(intent.target)
+	return ActionResult.success(["%s mounts a DPMG in the shuttle seat at (%d, %d) [AP: %d]" % [
+		actor.stats.display_name, intent.target.x, intent.target.y, actor.remaining_ap]])
+
+## Кресла с ДПМГ, чей пулемёт разбит или снят, освобождаются (fix-7 #5).
+func _sync_seat_guns() -> void:
+	for veh: Vehicle in state.all_vehicles():
+		if not veh.seated():
+			continue
+		for i in veh.seats.size():
+			if veh.seats[i] == Vehicle.SEAT_DPMG:
+				var c := state.grid.cell(veh.seat_cell(i))
+				if c == null or c.feature_id != MCF.FEATURE_DPMG:
+					veh.seats[i] = -1
 
 ## Цена постройки для этого инженера (для UI): в борге партия одного типа стоит 1 ОД,
 ## а пока кредиты партии не кончились — ничего.
@@ -807,8 +851,19 @@ func buildable_cells(actor: UnitInstance, feature_id: String = "") -> Array:
 	var out: Array = []
 	if actor.stats.special_ability_id != MCF.ABILITY_ENGINEER:
 		return out
+	var aboard := seated_vehicle_of(actor) != null
 	for n in state.grid.neighbors(actor.coord):
 		var cell := state.grid.cell(n)
+		# Свободное кресло соседнего челнока берёт только ДПМГ (fix-7 #5); из кресла иначе
+		# строить некуда.
+		var sv := vehicle_covering(n)
+		if sv != null and sv.seated():
+			if feature_id == MCF.FEATURE_DPMG and free_seat_at(sv, n) != -1 \
+					and state.roster.are_allies(sv.owner, actor.owner):
+				out.append(n)
+			continue
+		if aboard:
+			continue
 		if cell.is_buildable() or (feature_id != "" and stack_onto(cell, feature_id) != ""):
 			out.append(n)
 	return out

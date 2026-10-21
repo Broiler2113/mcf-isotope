@@ -126,7 +126,9 @@ func _aboard_allowed(intent: Intent) -> bool:
 	return intent is ShootIntent or intent is CancelShotIntent or intent is UseItemIntent \
 			or intent is SpawnDroneIntent or intent is PickUpStationIntent \
 			or intent is VehicleSeatIntent or intent is VehicleDisembarkIntent \
-			or intent is EndTurnIntent or intent is ReleaseIntent
+			or intent is EndTurnIntent or intent is ReleaseIntent \
+			or intent is DPMGFireIntent \
+			or (intent is BuildIntent and intent.feature_id == MCF.FEATURE_DPMG)   # fix-7 #5
 
 func _seated(veh: Vehicle) -> bool:
 	return veh != null and veh.seated()
@@ -801,10 +803,20 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 	var station_seats: Array[int] = []
 	var station_from: Dictionary = {}  # seat -> прежняя клетка станции (для дронов)
 	var station_op: Dictionary = {}    # seat -> оператор, развернувший станцию (едет с ней)
+	var gun_seats: Dictionary = {}     # seat -> [владелец, прочность, разворот] ДПМГ (fix-7 #5)
 	if seated:
 		for i in veh.seats.size():
 			var sid: int = veh.seats[i]
-			if sid == Vehicle.SEAT_STATION:
+			if sid == Vehicle.SEAT_DPMG:
+				var gc_at := veh.seat_cell(i)
+				var gc := state.grid.cell(gc_at)
+				if gc == null or gc.feature_id != MCF.FEATURE_DPMG:
+					veh.seats[i] = -1
+					continue
+				gun_seats[i] = [gc.feature_owner, gc.feature_durability, state.grid.furniture_turn.get(gc_at)]
+				state.grid.furniture_turn.erase(gc_at)
+				gc.clear_feature()
+			elif sid == Vehicle.SEAT_STATION:
 				var sc := state.grid.cell(veh.seat_cell(i))
 				# Repair stale seats from older saves; never resurrect a destroyed station.
 				if sc == null or sc.feature_id != MCF.FEATURE_DRONE_STATION:
@@ -957,6 +969,14 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 	# Пассажиры и станция садятся обратно в свои кресла на новом месте.
 	for pair in riders:
 		_seat_unit(veh, pair[1], int(pair[0]))
+	for gi: int in gun_seats:
+		var g_at := veh.seat_cell(gi)
+		var gcell := state.grid.cell(g_at)
+		var rec: Array = gun_seats[gi]
+		gcell.set_feature(MCF.FEATURE_DPMG, int(rec[0]))
+		gcell.feature_durability = int(rec[1])
+		if rec[2] != null:
+			state.grid.furniture_turn[g_at] = rec[2]
 	for si in station_seats:
 		var new_c := veh.seat_cell(si)
 		var nc := state.grid.cell(new_c)
@@ -1443,9 +1463,9 @@ func _destroy_vehicle(veh: Vehicle, res: ActionResult) -> void:
 	if _seated(veh):
 		for i in veh.seats.size():
 			var sid: int = veh.seats[i]
-			if sid == Vehicle.SEAT_STATION:
+			if sid == Vehicle.SEAT_STATION or sid == Vehicle.SEAT_DPMG:
 				var sc := state.grid.cell(veh.seat_cell(i))
-				if sc != null and sc.feature_id == MCF.FEATURE_DRONE_STATION:
+				if sc != null and (sc.feature_id == MCF.FEATURE_DRONE_STATION or sc.feature_id == MCF.FEATURE_DPMG):
 					sc.clear_feature()
 			elif sid >= 0:
 				var body := state.get_unit(sid)

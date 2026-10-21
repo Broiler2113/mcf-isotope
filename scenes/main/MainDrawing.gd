@@ -889,8 +889,10 @@ func _draw() -> void:
 			if veh.seated():
 				for si in veh.seats.size():
 					var stc := veh.seat_cell(si)
-					if veh.seats[si] == Vehicle.SEAT_STATION and _cell_seen_now(stc, visible):
-						_tiles.draw_feature_tile(self, MCF.FEATURE_DRONE_STATION, stc,
+					var on_seat := MCF.FEATURE_DRONE_STATION if veh.seats[si] == Vehicle.SEAT_STATION \
+							else (MCF.FEATURE_DPMG if veh.seats[si] == Vehicle.SEAT_DPMG else "")
+					if on_seat != "" and _cell_seen_now(stc, visible):
+						_tiles.draw_feature_tile(self, on_seat, stc,
 								Rect2(_cell_origin(stc), Vector2(CELL, CELL)))
 
 	draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
