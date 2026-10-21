@@ -288,7 +288,7 @@ func _authorized(intent: Intent, peer: int) -> bool:
 	var actor: Variant = state.get_unit(intent.actor_id)
 	if actor == null: actor = state.get_vehicle(intent.actor_id)
 	if actor == null or actor.owner != side: return false
-	if intent is GroupMoveIntent:
+	if intent is GroupMoveIntent or intent is GiveUnitsIntent:
 		for id in intent.unit_ids:
 			var unit := state.get_unit(id)
 			if unit == null or unit.owner != side: return false

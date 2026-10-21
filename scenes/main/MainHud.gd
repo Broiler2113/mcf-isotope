@@ -521,6 +521,10 @@ func _build_ui() -> void:
 	# Линейка (item 11) — зрительский инструмент, ничего не меняющий на доске.
 	_ruler_btn = _compact_button("Ruler", _enter_ruler)
 	tools_box.add_child(_ruler_btn)
+	# Передать выделенных бойцов другому игроку (fix-7 #18) — в любой момент.
+	var give_btn := _compact_button("Give Units…", _open_give_units)
+	give_btn.tooltip_text = "Give the selected soldiers to another player, at any time."
+	tools_box.add_child(give_btn)
 	_height_btn = CheckBox.new()
 	_height_btn.text = "Heightmap"
 	_height_btn.tooltip_text = "Show the height of every cover tile (%s)" % Keybinds.label("game_heightmap")

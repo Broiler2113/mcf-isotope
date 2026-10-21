@@ -429,7 +429,7 @@ func _unit_at(coord: Vector2i) -> UnitInstance:
 func _cycle_pick(coord: Vector2i) -> UnitInstance:
 	var pickable: Array[UnitInstance] = []
 	for u in _stack_at(coord):
-		if u.owner == state.active_player() and u.is_on_field() and _can_control(u.owner):
+		if u.owner == _selection_side() and u.is_on_field() and _can_control(u.owner):
 			pickable.append(u)
 	if pickable.is_empty():
 		return null

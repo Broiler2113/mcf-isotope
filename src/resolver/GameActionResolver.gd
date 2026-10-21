@@ -37,8 +37,10 @@ func _is_irreversible(intent: Intent, result: ActionResult) -> bool:
 		# Переход по клеткам и прочие отметки анимации — не броски: шаг остаётся отменяемым.
 		if not ANIMATION_ONLY_EVENTS.has(String(ev.get("kind", ""))):
 			return true
+	# Переданных бойцов не забрать откатом (fix-7 #18): отдал — значит отдал.
 	return intent is ShootIntent or intent is DPMGFireIntent \
-			or intent is DroneDetonateIntent or intent is VehicleCannonIntent
+			or intent is DroneDetonateIntent or intent is VehicleCannonIntent \
+			or intent is GiveUnitsIntent
 
 ## Пишем ли снимок за эту сторону. Ходы ИИ и мирных в стек не идут (#94): чужой ход
 ## откатывать не вправе никто, а снимок стоит копии всей доски (§27.12).
@@ -338,6 +340,8 @@ func _route(intent: Intent) -> ActionResult:
 		return _resolve_vehicle_unload_corpse(intent)
 	elif intent is GroupMoveIntent:
 		return _resolve_group_move(intent)
+	elif intent is GiveUnitsIntent:
+		return _resolve_give_units(intent)
 	elif intent is PlaceMineIntent:
 		return _resolve_place_mine(intent)
 	elif intent is RevealMinesIntent:
@@ -345,6 +349,41 @@ func _route(intent: Intent) -> ActionResult:
 	elif intent is DisarmMineIntent:
 		return _resolve_disarm_mine(intent)
 	return ActionResult.fail("Unknown intent: %s" % intent)
+
+## Кому можно передать бойцов (fix-7 #18): любому другому игроку за столом, пока он в
+## игре; волнам Holdout, мирным и рейдерам — нет.
+func give_targets(from_side: int) -> Array[int]:
+	var out: Array[int] = []
+	for side: int in state.roster.player_ids():
+		if side != from_side and MCF.is_player(side) and not state.turns.is_eliminated(side) \
+				and not (mode.is_holdout() and side == mode.wave_side):
+			out.append(side)
+	return out
+
+## Передача бойцов (fix-7 #18): в любой момент, не только в свой ход, — бойцы сохраняют
+## ОД, раны и всё, что несут. В машине (кресло, борг, экипаж танка) передать нельзя:
+## машина осталась бы чужой.
+func _resolve_give_units(intent: GiveUnitsIntent) -> ActionResult:
+	if intent.unit_ids.is_empty():
+		return ActionResult.fail("No units to give")
+	var first := state.get_unit(intent.unit_ids[0])
+	if first == null:
+		return ActionResult.fail("Unit unavailable")
+	var from_side := first.owner
+	if not give_targets(from_side).has(intent.to_side):
+		return ActionResult.fail("Can't give units to that side")
+	var units: Array[UnitInstance] = []
+	for id: int in intent.unit_ids:
+		var u := state.get_unit(id)
+		if u == null or not u.is_alive() or u.owner != from_side or u.is_drone:
+			return ActionResult.fail("Only your own soldiers can be given")
+		if u.aboard_vehicle_id != -1 or u.borg_id != -1:
+			return ActionResult.fail("%s is in a vehicle — climb out first" % u.stats.display_name)
+		units.append(u)
+	for u in units:
+		u.owner = intent.to_side
+	return ActionResult.success(["%s gives %d unit(s) to %s" % [
+		state.roster.name_of(from_side), units.size(), state.roster.name_of(intent.to_side)]])
 
 ## Групповой приказ движения (item 34): готовый список «кому куда», посчитанный на
 ## машине отдавшего приказ. Резолвер его НЕ пересчитывает — иначе распределение у

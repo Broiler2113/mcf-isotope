@@ -44,6 +44,27 @@ func _is_passenger(u: UnitInstance) -> bool:
 ## оставалось кликабельным. Между шагами ИИ есть пауза AI_STEP_DELAY, и чем больше
 ## у него юнитов, тем дольше ход — игрок успевал открыть меню чужого бойца и
 ## доиграть ход за компьютер. Мирные (NEUTRAL) тоже не наши: контроллера у них нет.
+## Чьих бойцов этот экран выделяет: идущей стороны, если она наша, а в чужой ход — своих
+## (fix-7 #18: передать бойцов можно в любой момент, значит и выбрать их — тоже). Меню
+## действий в чужой ход не открывается: выбор только для просмотра и передачи.
+func _selection_side() -> int:
+	if state == null or _spectator or replay != null:
+		return -1
+	var active := state.active_player()
+	if _can_control(active):
+		return active
+	if networked:
+		return my_owner
+	for side: int in state.roster.player_ids():
+		if _owner_is_local_human(side):
+			return side
+	return -1
+
+## Остаётся ли боец выделенным: живой, на поле, той стороны, чьих бойцов экран выделяет.
+func _keeps_selection(u: UnitInstance) -> bool:
+	return u != null and u.is_alive() and _on_board(u) and u.owner == _selection_side() \
+			and _can_control(u.owner)
+
 func _can_control(unit_owner: int) -> bool:
 	if _spectator: return false
 	if networked:
@@ -65,7 +86,10 @@ func _select(unit: UnitInstance) -> void:
 	reach = null
 	target_ids = []
 	item_cells = []
-	_open_menu(unit)
+	if unit.owner == state.active_player():
+		_open_menu(unit)
+	else:
+		_menu.hide()
 	_refresh_info()
 	queue_redraw()
 
@@ -112,8 +136,7 @@ func _box_selectable() -> bool:
 	# Рамка включается только тумблером «Multi-Select» (#21).
 	if _multi_btn == null or not _multi_btn.button_pressed:
 		return false
-	var ctrl: PlayerController = controllers.get(state.active_player())
-	if ctrl == null or not ctrl.is_local_human():
+	if _selection_side() < 0:
 		return false
 	return mode == Mode.NONE or mode == Mode.MENU \
 			or mode == Mode.GROUP_MENU or mode == Mode.GROUP_MOVE or mode == Mode.GROUP_LASER
@@ -132,7 +155,7 @@ func _on_multi_toggled(pressed: bool) -> void:
 ## не дрон и не в машине. Иначе shift набирал бы в отряд тех, кем отряд всё равно не ходит.
 func _shift_pick(coord: Vector2i) -> void:
 	var u := _unit_at(coord)
-	if u == null or u.owner != state.active_player() or not u.is_alive() \
+	if u == null or u.owner != _selection_side() or not u.is_alive() \
 			or not _can_control(u.owner) or u.is_drone or u.aboard_vehicle_id != -1:
 		return
 	var ids: Array[int] = _group_ids.duplicate()
@@ -160,10 +183,11 @@ func _finalize_box() -> void:
 	if _box_additive: ids.assign(_group_ids)
 	if _box_additive and selected_id >= 0 and not ids.has(selected_id):
 		var selected := _selected_unit()
-		if selected != null and _is_own_active(selected) and not selected.is_drone and selected.aboard_vehicle_id == -1:
+		if selected != null and selected.is_alive() and selected.owner == _selection_side() \
+				and not selected.is_drone and selected.aboard_vehicle_id == -1:
 			ids.append(selected_id)
 	for u in state.all_units():
-		if u.owner != state.active_player() or not u.is_alive() or not _can_control(u.owner):
+		if u.owner != _selection_side() or not u.is_alive() or not _can_control(u.owner):
 			continue
 		if u.is_drone or u.aboard_vehicle_id != -1:
 			continue
@@ -192,7 +216,10 @@ func _set_group(ids: Array[int]) -> void:
 	item_cells = []
 	_picker.hide()
 	_clear_hint_cell()
-	_open_group_menu()
+	if state.get_unit(ids[0]).owner == state.active_player():
+		_open_group_menu()
+	else:
+		_menu.hide()
 	_refresh_info()
 	queue_redraw()
 
@@ -858,6 +885,82 @@ func _confirm_dialog(title: String, message: String, ok_text: String,
 		on_ok.call())
 	row.add_child(ok)
 	_ui_layer.add_child(overlay)
+
+# --- Передача бойцов (fix-7 #18) ---
+
+## Выделенные бойцы, которых этот экран вправе отдать: живые, свои (одной стороны).
+func _giveable_selection() -> Array[int]:
+	var ids: Array[int] = []
+	if _spectator or replay != null:
+		return ids
+	var side := -1
+	for id: int in (_group_ids if not _group_ids.is_empty() else [selected_id] as Array[int]):
+		var u := state.get_unit(id)
+		if u == null or not u.is_alive() or u.is_drone:
+			continue
+		var mine := u.owner == my_owner if networked else (controllers.get(u.owner) != null
+				and (controllers[u.owner] as PlayerController).is_local_human())
+		if not mine or (side != -1 and u.owner != side):
+			continue
+		side = u.owner
+		ids.append(u.id)
+	return ids
+
+## Кнопка «Give Units…»: кому отдать — затем подтверждение.
+func _open_give_units() -> void:
+	var ids := _giveable_selection()
+	if ids.is_empty():
+		state.log.add("Select your own soldiers first, then press Give Units.")
+		return
+	var targets := resolver.give_targets(state.get_unit(ids[0]).owner)
+	if targets.is_empty():
+		state.log.add("There is no other player to give soldiers to.")
+		return
+	var w := SteamChrome.overlay_window("Give %d soldier(s) to" % ids.size())
+	var root: Control = w["root"]
+	root.add_to_group("shortcut_modal")
+	root.visibility_changed.connect(func() -> void:
+		if not root.visible: root.queue_free())
+	var body: VBoxContainer = w["body"]
+	for side: int in targets:
+		var swatch := Image.create_empty(14, 14, false, Image.FORMAT_RGBA8)
+		swatch.fill(_side_color(side))
+		var b := Button.new()
+		b.text = _side_label(side)
+		b.icon = ImageTexture.create_from_image(swatch)
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.pressed.connect(func() -> void:
+			root.hide()
+			_confirm_dialog("Give soldiers", "Give %d soldier(s) to %s? You can't take them back." % [
+					ids.size(), _side_label(side)], "Give", _give_units.bind(ids, side)))
+		body.add_child(b)
+	(w["scroll"] as ScrollContainer).custom_minimum_size = Vector2(388, minf(
+			body.get_combined_minimum_size().y + 8.0, get_viewport_rect().size.y - 140.0))
+	_ui_layer.add_child(root)
+	root.show()
+
+## Передать — в любой момент, и в чужой ход (владелец): мимо очереди хода, без шага ИИ.
+func _give_units(ids: Array[int], to_side: int) -> void:
+	var intent := GiveUnitsIntent.new(ids, to_side)
+	if networked:
+		if _net_request_pending or _net_playing:
+			state.log.add("Wait for the current action to finish, then give the soldiers.")
+			return
+		_net_request_pending = not net.is_host
+		_deselect()
+		net.submit_local(intent)
+		return
+	var result := resolver.resolve(intent)
+	if not result.ok:
+		state.log.add("[denied] " + result.reason)
+		return
+	state.log.publish_result(result)
+	for c: PlayerController in controllers.values():
+		c.notify_state_changed(state)
+	_deselect()
+	_refresh_status()
+	queue_redraw()
+	_check_match_over()
 
 func _scroll_menu(panel: PanelContainer, title: String = "Actions", back := Callable()) -> VBoxContainer:
 	var frame := VBoxContainer.new()

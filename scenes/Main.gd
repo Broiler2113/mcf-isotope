@@ -957,7 +957,10 @@ func _on_intent_ready(intent: Intent) -> void:
 	var active_ctrl: PlayerController = controllers[state.active_player()]
 	if not active_ctrl.is_local_human():
 		_refresh_status()
-		_deselect()
+		# Своих бойцов, выбранных в ход ИИ (для передачи, fix-7 #18), шаг ИИ не снимает.
+		if not _keeps_selection(_selected_unit()) and (_group_ids.is_empty()
+				or not _keeps_selection(state.get_unit(_group_ids[0]))):
+			_deselect()
 		_queue_ai_step(active_ctrl)
 		return
 	if not _select_spawned_drone(intent, result) and not _select_borg_pilot(intent, result):
@@ -971,7 +974,13 @@ func _queue_ai_step(ctrl: PlayerController) -> void:
 	# бы null прямо на этом create_timer. Планировать нечего — некому ходить.
 	if not is_inside_tree():
 		return
+	# Шаг уже заказан (fix-7): действие вне очереди хода — передача бойцов — снова
+	# «пинает» ИИ, и второй таймер завёл бы вторую, параллельную цепочку его ходов.
+	if _ai_step_queued:
+		return
+	_ai_step_queued = true
 	await get_tree().create_timer(AI_STEP_DELAY / GameConfig.ai_speed).timeout
+	_ai_step_queued = false
 	# Пауза (item 4) держится здесь, в единственной точке, откуда ИИ вообще получает
 	# ход. Снятие паузы само зовёт _kick_if_ai(), и бой продолжается с того же места.
 	if _paused:
@@ -1048,7 +1057,8 @@ func _after_action() -> void:
 		return
 	# Партия борга (batch borg-corpses): три постройки за ОД кладутся подряд, как окопы, —
 	# режим остаётся, пока в партии что-то есть и есть куда ставить.
-	if mode == Mode.BUILD and _is_own_active(u) and u.borg_id != -1 \
+	# Прожекторы пешего инженера (fix-7 #13) — тоже партия: вторая ставится следом.
+	if mode == Mode.BUILD and _is_own_active(u) \
 			and int(u.build_credits.get(build_feature, 0)) > 0 \
 			and not resolver.buildable_cells(u, build_feature).is_empty():
 		_enter_build(build_feature)
@@ -1061,13 +1071,14 @@ func _after_action() -> void:
 	if not _group_ids.is_empty():
 		var keep: Array[int] = []
 		for gid: int in _group_ids:
-			if _is_own_active(state.get_unit(gid)):
+			if _keeps_selection(state.get_unit(gid)):
 				keep.append(gid)
 		_set_group(keep)
 		return
 	# Один боец тоже остаётся выделенным, даже без ОД: меню просто показывает погашенные
-	# кнопки. Снимается выделение лишь с погибшего или когда ход ушёл.
-	if _is_own_active(u):
+	# кнопки. Снимается выделение с погибшего; свой боец в чужой ход остаётся выбранным
+	# (fix-7 #18) — без меню, для просмотра и передачи.
+	if _keeps_selection(u):
 		_select(u)  # переоткрываем меню для цепочки действий
 	else:
 		_deselect()

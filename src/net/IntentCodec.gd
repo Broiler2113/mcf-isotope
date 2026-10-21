@@ -43,6 +43,7 @@ const T_VEH_MELEE := "veh_melee"
 const T_VEH_REPAIR := "veh_repair"
 const T_VEH_UNLOAD := "veh_unload"
 const T_WELD := "weld"
+const T_GIVE := "give"
 
 static func encode(intent: Intent) -> Dictionary:
 	if intent is EndTurnIntent:
@@ -148,6 +149,8 @@ static func encode(intent: Intent) -> Dictionary:
 		return {"t": T_CORPSE_DOWN, "a": intent.actor_id, "x": intent.to.x, "y": intent.to.y}
 	if intent is WeldAirlockIntent:
 		return {"t": T_WELD, "a": intent.actor_id, "x": intent.to.x, "y": intent.to.y}
+	if intent is GiveUnitsIntent:
+		return {"t": T_GIVE, "a": intent.actor_id, "u": intent.unit_ids.duplicate(), "to": intent.to_side}
 	if intent is VehicleBoardIntent:
 		return {"t": T_VEH_BOARD, "a": intent.actor_id, "v": intent.vehicle_id, "s": intent.seat}
 	if intent is VehicleSeatIntent:
@@ -227,6 +230,11 @@ static func decode(d: Dictionary) -> Intent:
 		T_CORPSE_UP: return PickUpCorpseIntent.new(a, coord)
 		T_CORPSE_DOWN: return DropCorpseIntent.new(a, coord)
 		T_WELD: return WeldAirlockIntent.new(a, coord)
+		T_GIVE:
+			var gids: Array[int] = []
+			for id in d.get("u", []):
+				gids.append(int(id))
+			return GiveUnitsIntent.new(gids, int(d.get("to", -1)))
 		T_VEH_BOARD: return VehicleBoardIntent.new(a, int(d.get("v", -1)), int(d.get("s", -1)))
 		T_VEH_SEAT: return VehicleSeatIntent.new(a, int(d.get("s", -1)))
 		T_VEH_OUT: return VehicleDisembarkIntent.new(a, coord)

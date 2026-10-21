@@ -179,6 +179,8 @@ var _wall_drawing: bool = false
 ## Юниты, чья смерть уже применена, но ещё анимируется бросок защиты (#46): рисуем
 ## их живыми, пока крутится кубик, чтобы не «спойлерить» исход.
 var _pending_death_ids: Dictionary = {}
+## Шаг ИИ ждёт своего таймера (_queue_ai_step) — второй не заказывается.
+var _ai_step_queued := false
 ## «Визуальный слепок» зоны взрыва ДО разрушения (item 22): пока крутится кубик выстрела,
 ## клетки и техника рисуются по этим старым значениям, чтобы исход не опережал бросок.
 ## {"cells": {Vector2i: {...}}, "vehicles": {vid: {...}}}. Пусто — рисуем как есть.
@@ -917,6 +919,8 @@ var _number_page := 0
 @abstract func _is_own_active(u: UnitInstance) -> bool
 @abstract func _on_board(u: UnitInstance) -> bool
 @abstract func _can_control(unit_owner: int) -> bool
+@abstract func _selection_side() -> int
+@abstract func _keeps_selection(u: UnitInstance) -> bool
 @abstract func _select(unit: UnitInstance) -> void
 @abstract func _deselect() -> void
 @abstract func _back_to_menu() -> void
@@ -950,6 +954,7 @@ var _number_page := 0
 @abstract func _draw_black_cross(origin: Vector2, size: float, alpha: float = 0.95) -> void
 @abstract func _neutral_camera_targets() -> Dictionary
 @abstract func _open_build_picker() -> void
+@abstract func _open_give_units() -> void
 @abstract func _scroll_menu(panel: PanelContainer, title: String = "Actions", back := Callable()) -> VBoxContainer
 @abstract func _anchor_menu(panel: Control) -> void
 @abstract func _has_action_button(vb: VBoxContainer) -> bool
