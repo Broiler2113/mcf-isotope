@@ -114,9 +114,24 @@ func _sync_lighting() -> void:
 		# выросшая в темноте, не должна выдавать себя новой тенью.
 		var base: Grid = _fog_mem.get(_viewing_side(), state.grid) if limited else state.grid
 		var lit_grid := _terrain_before_impact(base, _visible_before_impact(_viewing_side()), limited)
+		_lighting.extra_lights = drone_lights(_viewing_side(), _visible_before_impact(_viewing_side()), limited)
 		_lighting.update_view(lit_grid, pan, zoom, ORIGIN, CELL, state.env,
 			_visible_before_impact(_viewing_side()) if limited else {}, limited, _fx, _lod,
 			-1.0, state.time_of_day)
+
+## Drones in the air glow a little (fix-8 #12), scouts more: [cell centre, radius, energy,
+## colour] for every drone this viewer can see. First person lights its board the same way.
+func drone_lights(viewer: int, visible: Dictionary, limited: bool) -> Array:
+	var out: Array = []
+	for u: UnitInstance in state.all_units():
+		if not u.is_drone or not u.is_alive() or not state.grid.in_bounds(u.coord):
+			continue
+		if limited and u.owner != viewer and not state.roster.are_allies(viewer, u.owner) and not visible.has(u.coord):
+			continue
+		var scout := MCF.is_scout(u)
+		out.append([Vector2(u.coord) + Vector2(0.5, 0.5), 4.5 if scout else 2.5, 0.75 if scout else 0.4,
+				Color(0.8, 0.92, 1.0)])
+	return out
 
 func _update_screen_shake() -> void:
 	var age := 1.0
