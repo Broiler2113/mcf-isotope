@@ -225,6 +225,6 @@ const UNIT_BLURBS := {
 	"engineer": "Builds sandbags, hedgehogs, pillboxes and an LDF (Large Deployable Fortification): six connected tiles in any shape. Welds airlocks, repairs vehicles and digs twice as fast.",
 	"miner": "Melee fighter (−1 to the parry) who tears down fortifications in one action.",
 	"sapper": "Lays up to five mines in one action, anti-vehicle mines too, sweeps for and disarms enemy mines.",
-	"shield_bearer": "Slow melee fighter. Only adjacent soldiers can fire at it; Snipers, Marksmen, Anti-Tank soldiers and tank cannons can also fire from range. Its shield stops lasers. Only a direct hit from a tank cannon or an Anti-Tank round, or a drone exploding right above it, kills it; grenades, mines, artillery and exploding wrecks never do. Shelters the soldiers next to it from blasts. Fireproof.",
+	"shield_bearer": "Slow melee fighter. Only adjacent soldiers can fire at it; Snipers, Marksmen, Anti-Tank soldiers and tank cannons can also fire from range. Its shield stops lasers. Only a direct hit from a tank cannon or an Anti-Tank round, or a drone exploding right above it, kills it; grenades, mines, artillery and exploding wrecks never do. Shelters the soldiers right behind it (seen from the blast) from blasts. Fireproof.",
 	"drone_operator": "Places a drone station that launches kamikaze drones or scout drones. Must stay next to the station to fly them.",
 }

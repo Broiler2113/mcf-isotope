@@ -32,10 +32,16 @@ func _blast_shield(u: UnitInstance) -> bool:
 func _shield_immunity(u: UnitInstance) -> bool:
 	return _is_shield(u) and not _is_wave_fighter(u)
 
-func _protected_by(u: UnitInstance, protectors: Array) -> bool:
+## Укрывает только щит МЕЖДУ взрывом и бойцом (fix-7, владелец): соседний щитоносец, а
+## боец — по ту сторону от него, если смотреть из эпицентра. Раньше спасался любой сосед
+## щитоносца, хоть сбоку, хоть со стороны взрыва.
+func _protected_by(u: UnitInstance, protectors: Array, center: Vector2i) -> bool:
 	for sb in protectors:
 		if u.owner == sb.owner and Combat.distance(u.coord, sb.coord) <= MCF.ANTI_TANK_BLAST_RADIUS:
-			return true
+			var away := Vector2(u.coord - sb.coord)
+			var blast := Vector2(sb.coord - center)
+			if away.dot(blast) > 0.0:
+				return true
 	return false
 
 ## Выстрел заведомо ничего не даст: щитоносец неуязвим не в упор (§3.14), а очередь

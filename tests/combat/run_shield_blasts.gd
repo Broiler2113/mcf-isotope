@@ -51,7 +51,21 @@ func run() -> void:
 	var near := add(r, "light_infantry", Vector2i(10, 8), 1)
 	r._blast(li.coord, ActionResult.success([]))
 	ck(not li.is_alive(), "the soldier a blast lands on dies though a friendly shield stands beside him")
-	ck(near.is_alive(), "a shield still shelters the soldiers next to it outside the epicentre")
+	# Owner (fix-7): a shield shelters only who stands BEHIND it, seen from the blast.
+	ck(not near.is_alive(), "a soldier beside the shield, not behind it, is not sheltered")
+	r = arena()
+	var sh := add(r, "shield_bearer", Vector2i(9, 7), 1)
+	var behind := add(r, "light_infantry", Vector2i(10, 7), 1)
+	var beside := add(r, "light_infantry", Vector2i(9, 8), 1)
+	var front := add(r, "light_infantry", Vector2i(8, 8), 1)
+	var wide: Array[Vector2i] = []
+	for y in range(3, 12):
+		for x in range(5, 12):
+			if absi(x - 8) + absi(y - 7) <= 2:
+				wide.append(Vector2i(x, y))
+	r._blast(Vector2i(8, 7), ActionResult.success([]), wide)
+	ck(sh.is_alive() and behind.is_alive(), "the soldier right behind the shield lives")
+	ck(not beside.is_alive() and not front.is_alive(), "beside it and in front of it the blast kills")
 
 	r = arena()
 	var captor := add(r, "light_infantry", Vector2i(10, 7), 1)

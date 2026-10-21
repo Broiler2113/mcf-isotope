@@ -498,8 +498,8 @@ func _blast(center: Vector2i, res: ActionResult = null, cells: Array[Vector2i] =
 		# канавы. Прямое попадание в саму канаву по-прежнему убивает.
 		if u.coord != center and state.grid.cell(u.coord).feature_id == MCF.FEATURE_TRENCH:
 			continue
-		# A shield shelters the soldiers beside it, never the one the blast lands on.
-		if u.coord != center and _protected_by(u, protectors):
+		# A shield shelters the soldiers behind it, never the one the blast lands on.
+		if u.coord != center and _protected_by(u, protectors, center):
 			continue
 		_kill(u, res, center, true)
 		killed_names.append(u.stats.display_name)
