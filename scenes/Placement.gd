@@ -612,14 +612,26 @@ func _send_live() -> void:
 	# Зеркальный хост шлёт и под туманом: отражение — армия самого гостя, секрета в ней
 	# нет, а чужие отражения у получателя всё равно не рисуются (_army_hidden).
 	var mirror_host := _mirrors_live() and _net_is_host
+	# Союзники видят друг друга и под туманом (fix-7 #3): лобби там выключает «Live
+	# placement visibility», но команде расстановка партнёра нужна; врагам её не рисует
+	# _army_hidden, как и присланные по «Ready» армии.
 	if not networked() or _net == null or _my_ready \
-			or not (GameConfig.live_placement_visible or mirror_host):
+			or not (GameConfig.live_placement_visible or mirror_host or _has_teammates()):
 		return
 	var mine := _host_sides()
 	# Зеркальный хост шлёт и отражения (batch 13 #13): гость видит свою армию живьём.
 	if mirror_host:
 		mine = _sides()
 	_net.send({"k": K_LIVE, "u": _encode_roster(mine), "sides": mine})
+
+## Есть ли у моей стороны союзник за другим экраном.
+func _has_teammates() -> bool:
+	if roster == null or not roster.has_teams():
+		return false
+	for side: int in roster.player_ids():
+		if side != _my_side and roster.are_allies(_my_side, side):
+			return true
+	return false
 
 func _load_or_blank_map() -> MapData:
 	# Сетевая партия играется на карте ХОСТА, пришедшей целиком (#99) — у клиента
