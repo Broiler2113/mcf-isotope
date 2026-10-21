@@ -504,17 +504,23 @@ func _build_ui() -> void:
 	_build_config(left)
 	if not _is_client:
 		_build_load(left)
-	# Чат лобби (item 14) — только когда за столом есть кто-то по сети.
-	if NetHandoff.session != null:
-		_chat = ChatBox.new(_chat_label, func() -> int:
-			var mine := _my_slot()
-			return mine.id if mine != null else -1)
-		_titled(left, "Chat").add_child(_chat)
 	_build_slots(right)
 	_build_personal(right)
 	# Карта — справа, под слотами: там есть ширина, чтобы поставить превью рядом с
 	# настройками случайной карты, и «Players» там же, где список слотов.
 	_build_map(right)
+	# Чат лобби (item 14) — только когда за столом есть кто-то по сети. Справа под картой,
+	# рядом со случайными событиями и сохранением (fix-7 #2): там было пустое место, и чат
+	# растягивается на всю оставшуюся высоту колонки.
+	if NetHandoff.session != null:
+		_chat = ChatBox.new(_chat_label, func() -> int:
+			var mine := _my_slot()
+			return mine.id if mine != null else -1)
+		_chat.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		var chat_box := SteamChrome.group_box("Chat")
+		chat_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		chat_box.body.add_child(_chat)
+		right.add_child(chat_box)
 	# Перенос колонок (аудит UI): когда окно узкое (интерфейс 150 %), главное — слоты и
 	# карта — встаёт ПЕРВЫМ, а настройки уходят под него. Иначе за краем экрана оказывалось
 	# именно то, ради чего лобби открывают, а правая половина окна пустовала.
