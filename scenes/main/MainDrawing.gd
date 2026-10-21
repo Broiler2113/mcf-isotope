@@ -371,11 +371,17 @@ func _draw() -> void:
 			if visible.has(c) and not corpses.has(c):
 				cmem.erase(c)
 		corpses = cmem
+	# Тела внутри челнока ложатся поверх его корпуса (fix-7 #10): рисуются после машин.
+	var shuttle_bodies: Array = []
 	for c: Vector2i in corpses:
 		if c.x < vx0 or c.x > vx1 or c.y < vy0 or c.y > vy1 or not _cell_on_screen(c.x, c.y) \
 				or (blackout and not visible.has(c)):
 			continue
 		var e: Array = corpses[c]
+		var under := state.get_vehicle(state.grid.vehicle_at(c))
+		if under != null and under.seated():
+			shuttle_bodies.append([c, e])
+			continue
 		_draw_corpse(c, int(e[1]), e[0])
 
 	if not far:
@@ -906,6 +912,8 @@ func _draw() -> void:
 								Rect2(_cell_origin(stc), Vector2(CELL, CELL)))
 
 	draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
+	for b: Array in shuttle_bodies:
+		_draw_corpse(b[0], int(b[1][1]), b[1][0])
 	# Выбор машины для посадки — поверх корпусов, иначе подсветку закрывала сама машина.
 	if mode == Mode.BOARD_PICK:
 		var bhov := _board_pick_at(_pos_to_cell(get_viewport().get_mouse_position()))

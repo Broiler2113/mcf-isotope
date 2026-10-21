@@ -483,6 +483,9 @@ func _boarding_on_screen() -> void:
 	var draw_src: String = (load("res://scenes/main/MainDrawing.gd") as GDScript).source_code
 	ck(draw_src.find("_draw_seat_grid(font)") > draw_src.find("for veh: Vehicle in state.all_vehicles():"),
 			"the seat grid is drawn over the hulls")
+	# fix-7 #10: bodies inside a shuttle lie on top of its hull.
+	ck(draw_src.find("for b: Array in shuttle_bodies:") > draw_src.find("for veh: Vehicle in state.all_vehicles():"),
+			"bodies inside a shuttle are drawn over the hull")
 	main.queue_redraw()
 	await process_frame
 	main.queue_free()
