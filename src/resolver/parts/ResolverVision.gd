@@ -78,7 +78,7 @@ func team_sees_gas(owner: int) -> Dictionary:
 		var sides := _vision_sides(owner)
 		var eyes: Array = []   # [клетка, дальность по Чебышёву]
 		for u in state.all_units():
-			if u.is_alive() and sides.has(u.owner) and u.aboard_vehicle_id == -1:
+			if u.is_on_field() and sides.has(u.owner) and u.aboard_vehicle_id == -1:
 				eyes.append([u.coord, sight_of(u)])
 		for veh: Vehicle in state.all_vehicles():
 			if not veh.wrecked and sides.has(veh.owner) and not veh.occupants.is_empty():
@@ -869,7 +869,8 @@ func team_visible_coords(owner: int) -> Dictionary:
 	var live: Dictionary = {}
 	var sides := _vision_sides(owner)
 	for u in state.all_units():
-		if not u.is_alive() or not sides.has(u.owner):
+		# Схваченный (HELD) смотрит по-прежнему (fix-7 #12): его держат, но не ослепили.
+		if not u.is_on_field() or not sides.has(u.owner):
 			continue
 		# Экипаж В МАШИНЕ вынесен за карту (coord = OFFBOARD, −9999): его обзор даёт сама
 		# машина ниже. Раньше пассажир всё равно попадал в _seen_from(), и луч Брезенхэма
@@ -965,7 +966,7 @@ func _team_visible_gas(owner: int) -> Variant:
 	var eyes: Array = []   # [cell, window radius]
 	var sides := _vision_sides(owner)
 	for u in state.all_units():
-		if u.is_alive() and sides.has(u.owner) and u.aboard_vehicle_id == -1:
+		if u.is_on_field() and sides.has(u.owner) and u.aboard_vehicle_id == -1:
 			eyes.append([sight_positions.get(u.id, u.coord), mini(sight_of(u), full_r)])
 	for veh: Vehicle in state.all_vehicles():
 		if not veh.wrecked and sides.has(veh.owner) and not veh.occupants.is_empty():
