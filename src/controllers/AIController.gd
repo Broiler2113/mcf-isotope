@@ -174,6 +174,14 @@ var _planner: AIPlanner = AIPlanner.new()
 ## Насколько сильно план перевешивает обычную жадную оценку хода. Достаточно, чтобы
 ## боец шёл в назначенную клетку, но не настолько, чтобы идти вместо выстрела.
 const SCORE_PLAN_BONUS := 26.0
+## Штурм вражеской техники (fix-7 #8, владелец): HARD садится во вражеский танк, челнок или
+## пустой борг рядом раньше, чем стреляет, и идёт к ним, если путь не под огнём.
+const SCORE_STORM := 190.0
+const SCORE_STORM_APPROACH := 130.0
+## Дальше двух ходов пехоты к технике не тянемся: это уже не штурм, а прогулка через карту.
+const STORM_REACH_MOVES := 2
+## Клетка «под огнём»: ожидаемо хотя бы одно попадание (AIPlanner.threat_at).
+const STORM_MAX_THREAT := 1.0
 
 func _init(p_owner: int, p_difficulty: int = Difficulty.NORMAL) -> void:
 	super(p_owner)
@@ -861,6 +869,9 @@ func _candidates(state: GameState, r: GameActionResolver, u: UnitInstance) -> Ar
 		var to_veh := _move_to_vehicle(state, u)
 		if not to_veh.is_empty():
 			out.append(to_veh)
+		var storm := _move_to_storm(state, u)
+		if not storm.is_empty():
+			out.append(storm)
 		var mv := _best_move(state, r, u)
 		if not mv.is_empty():
 			out.append(mv)
@@ -1532,6 +1543,8 @@ func _best_board(state: GameState, r: GameActionResolver, u: UnitInstance) -> Di
 		if veh.slots_used() >= veh.capacity():
 			continue
 		var own := veh.owner == u.owner
+		if not own and _storms() and _stormable(state, r, veh):
+			return {"score": SCORE_STORM, "intent": VehicleBoardIntent.new(u.id, veh.id)}
 		if not own and not neutral:
 			continue
 		var score := SCORE_MOVE_BASE + 8.0
@@ -1580,6 +1593,52 @@ func _move_to_vehicle(state: GameState, u: UnitInstance) -> Dictionary:
 		score -= float(reach.cost[coord]) * SCORE_STEP_COST
 		if _seeks_cover():
 			score += _cover_bonus(state, coord)
+		if best.is_empty() or score > best["score"]:
+			best = {"score": score, "intent": MoveIntent.new(u.id, coord)}
+	return best
+
+func _storms() -> bool:
+	# Все личности HARD, налётчики и волны Holdout (они тоже HARD); мирные — нет (у них свой путь).
+	return (difficulty == Difficulty.HARD or MCF.is_independent(owner)) and not MCF.is_neutral(owner)
+
+## Можно ли взять эту машину на абордаж: вражеская, живая, есть место (у борга — нет
+## живого пилота).
+func _stormable(state: GameState, r: GameActionResolver, veh: Vehicle) -> bool:
+	if not veh.alive() or veh.owner == owner or (state.roster != null and state.roster.are_allies(owner, veh.owner)):
+		return false
+	if veh.is_borg():
+		var op := state.get_unit(veh.borg_operator())
+		return op == null or not op.is_alive()
+	if veh.seated():
+		return veh.first_free_seat() >= 0
+	return veh.slots_used() < veh.capacity()
+
+## Шаг к вражеской технике, которую можно взять (fix-7 #8): только на клетку не под огнём.
+func _move_to_storm(state: GameState, u: UnitInstance) -> Dictionary:
+	if not _storms() or u.stats.special_ability_id == MCF.ABILITY_SHIELD_BEARER or u.carried_corpses > 0:
+		return {}
+	if u.remaining_ap <= 0 and u.move_credit <= 0:
+		return {}
+	var seeds: Array = []
+	for veh: Vehicle in state.all_vehicles():
+		if _stormable(state, _r, veh):
+			seeds.append(veh)
+	if seeds.is_empty():
+		return {}
+	var field := _seed_vehicle_field(state, seeds, "storm")
+	if not field.has(u.coord):
+		return {}
+	var start: int = field.at(u.coord)
+	if start <= 1 or start > u.speed() * STORM_REACH_MOVES + 1:
+		return {}   # вплотную — посадкой займётся _best_board; слишком далеко — не штурм
+	var reach := _r.reachable_for(u, _move_budget(u))
+	var best: Dictionary = {}
+	for coord: Vector2i in reach.cost:
+		var gain := float(start - int(field.at(coord)))
+		if gain <= 0.0 or _in_danger(coord) or _planner.threat_at(coord) >= STORM_MAX_THREAT \
+				or (_avoids_fire(u) and _fire_near(state, coord)):
+			continue
+		var score := SCORE_STORM_APPROACH + gain * 3.0 - float(reach.cost[coord]) * SCORE_STEP_COST
 		if best.is_empty() or score > best["score"]:
 			best = {"score": score, "intent": MoveIntent.new(u.id, coord)}
 	return best
