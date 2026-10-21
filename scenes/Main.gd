@@ -982,7 +982,7 @@ func _on_intent_ready(intent: Intent) -> void:
 ## Следующий шаг ИИ — через короткую паузу (#52). Без неё вся армия отрабатывает
 ## за считаные кадры, и вместо хода видно только мгновенный итог; с паузой бойцы
 ## заметно ходят ОДИН ЗА ДРУГИМ. Пауза же не даёт кадру «залипнуть» на расчётах.
-func _queue_ai_step(ctrl: PlayerController) -> void:
+func _queue_ai_step(_ctrl: PlayerController) -> void:
 	# Выход из партии во время хода ИИ (item 10): узел уже вне дерева, get_tree() вернул
 	# бы null прямо на этом create_timer. Планировать нечего — некому ходить.
 	if not is_inside_tree():
@@ -998,9 +998,14 @@ func _queue_ai_step(ctrl: PlayerController) -> void:
 	# ход. Снятие паузы само зовёт _kick_if_ai(), и бой продолжается с того же места.
 	if _paused:
 		return
-	# За время паузы ход мог смениться (сдача хода, загрузка, конец боя).
-	if is_inside_tree() and state != null and state.active_player() == ctrl.owner and controllers.get(ctrl.owner) == ctrl:
-		ctrl.begin_turn(state)
+	# За время паузы ход мог смениться (сдача хода, загрузка, конец боя). Шагает тот, чей
+	# ход СЕЙЧАС: пинок другому ИИ, пришедший, пока этот шаг ждал, был отброшен выше, и
+	# без этого бой вставал (net leave: ход ушёл ИИ, занявшему место ушедшего гостя).
+	if not is_inside_tree() or state == null:
+		return
+	var cur: PlayerController = controllers.get(state.active_player())
+	if cur != null and not cur.is_local_human():
+		cur.begin_turn(state)
 
 func _toggle_pause() -> void:
 	if not _pause_available():
