@@ -321,6 +321,8 @@ const ZOOM_STEP := 1.1
 
 var _ui_layer: CanvasLayer
 var _fps_label: Label
+## Картинки крови на стенах по виду, размеру и углу (fix-7 #16).
+var _wall_blood_tex: Dictionary = {}
 ## Движимое/масштабируемое окно HUD (заголовок = ручка перетаскивания, угол = грип).
 var _hud_window: PanelContainer
 var _hud_grip: Control

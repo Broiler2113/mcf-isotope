@@ -1513,46 +1513,37 @@ func _draw_cloud_tiles(ci: CanvasItem, clouds: Array, smoke: bool, tint: Color, 
 ## Кровь на стенах (fix-7 #16): пятно и подтёки на грани стены, глядящей на тело. Под
 ## туманом — только там, где стену или клетку тела видно сейчас.
 func _draw_wall_blood(visible: Dictionary, fog_on: bool) -> void:
-	var px := CELL / 16.0
-	var col := Color(0.42, 0.03, 0.03, 0.92)
-	var rim := col.darkened(0.35)
+	if _tiles == null:
+		return
 	for b: Dictionary in _fx.wall_blood:
 		var c: Vector2i = b["cell"]
 		var face: Vector2i = b["face"]
 		if not _cell_on_screen(c.x, c.y) or (fog_on and not visible.has(c) and not visible.has(c + face)):
 			continue
-		# Пиксельная клякса, как лужи на полу (владелец): маска 16×8 пикселей у грани —
-		# u вдоль грани (−8..7), v вглубь стены (0..7); край маски темнее.
-		var mask := _wall_blood_mask(float(b["rot"]), float(b["scale"]))
+		# Те же лужа и брызги, что на полу, той же растеризацией (TerrainTiles._decal_sprite),
+		# у грани стены, глядящей на тело (владелец: «тот же стиль, что у остальной крови»).
 		var along := Vector2(-face.y, face.x)
-		var inward := -Vector2(face)
-		var edge := ORIGIN + (Vector2(c) + Vector2(0.5, 0.5) + Vector2(face) * 0.5) * CELL
-		for key: Vector2i in mask:
-			var p := edge + along * (key.x + 0.5) * px + inward * (key.y + 0.5) * px
-			draw_rect(Rect2(p - Vector2(px, px) * 0.5, Vector2(px, px)), rim if mask[key] else col)
-
-## Маска кляксы: Vector2i(u, v) -> край ли это. Детерминирована записью (rot, scale).
-static func _wall_blood_mask(rot: float, k: float) -> Dictionary:
-	var blobs: Array = []
-	for i in 5:
-		blobs.append([Vector2(sin(rot * (i + 1.7)) * 5.0, 1.0 + absf(cos(rot * (i + 0.3))) * 2.5),
-				(1.4 + 1.3 * absf(cos(rot * (i + 0.9)))) * k])
-	var inside := func(u: int, v: int) -> bool:
-		if v < 0 or v > 7 or u < -8 or u > 7:
-			return false
-		var q := Vector2(u + 0.5, v + 0.5)
-		for bl: Array in blobs:
-			if q.distance_to(bl[0]) <= float(bl[1]):
-				return true
-		# Подтёк вдоль грани.
-		return v == 0 and u >= -4 and u <= 3 and fmod(absf(rot) * 10.0 + u, 3.0) > 0.6
-	var out := {}
-	for v in 8:
-		for u in range(-8, 8):
-			if inside.call(u, v):
-				out[Vector2i(u, v)] = not (inside.call(u + 1, v) and inside.call(u - 1, v)
-						and inside.call(u, v + 1) and (v == 0 or inside.call(u, v - 1)))
-	return out
+		var edge := Vector2(c) + Vector2(0.5, 0.5) + Vector2(face) * 0.5
+		var rot := float(b["rot"])
+		var k := float(b["scale"])
+		for i in 6:
+			var kind := "blood_pool" if i == 0 else "blood_drop"
+			var look: Array = FxDecals.look_of(kind)
+			var size := float(look[0]) * (0.7 * k if i == 0 else 1.0 + 0.3 * absf(sin(rot * (i + 2.0))))
+			var pos := edge + along * sin(rot * (i + 1.3)) * 0.3 - Vector2(face) * (0.12 + 0.1 * absf(cos(rot * (i + 0.7))))
+			var px := maxi(1, roundi(size * 32.0))
+			var turn := rot * (i + 1.0)
+			var step := posmod(roundi(turn / TAU * TerrainTiles.DECAL_ANGLES), TerrainTiles.DECAL_ANGLES)
+			var key := "%s@%d@%d" % [kind, px, step]
+			var tex: Texture2D = _wall_blood_tex.get(key)
+			if tex == null:
+				var img: Image = _tiles._decal_sprite(kind, px, turn, look)
+				if img == null:
+					continue
+				tex = ImageTexture.create_from_image(img)
+				_wall_blood_tex[key] = tex
+			draw_texture_rect(tex, Rect2(ORIGIN + (pos - Vector2(size, size) * 0.5) * CELL,
+					Vector2(size, size) * CELL), false)
 
 func _draw_fx_flashes(visible: Dictionary) -> void:
 	if _fx.flashes.is_empty():
