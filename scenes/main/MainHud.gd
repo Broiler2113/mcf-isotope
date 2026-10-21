@@ -794,48 +794,10 @@ func _build_quit_dialog() -> void:
 ## слотами по порядку, цветами сторон, группировкой по командам, группами нейтралов и
 ## живым счётом каждого. Тело перезаполняется при каждом открытии из _refresh_initiative.
 func _build_initiative_overlay() -> void:
-	var overlay := Control.new()
-	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
-	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
-	overlay.hide()
-	var dim := ColorRect.new()
-	# Полупрозрачный оверлей (item 6): доску за инициативой видно, но затемнение
-	# ЗАМЕТНОЕ — чтобы игрок сразу понимал, что оверлей открыт и потому клики по полю
-	# сейчас не проходят (item 17). Клик по фону закрывает, как и клавиша инициативы или Esc.
-	dim.color = Color(0, 0, 0, 0.45)
-	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-	dim.mouse_filter = Control.MOUSE_FILTER_STOP
-	dim.gui_input.connect(func(e: InputEvent) -> void:
-		if e is InputEventMouseButton and e.pressed:
-			_init_overlay.hide())
-	overlay.add_child(dim)
-	var center := CenterContainer.new()
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
-	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	overlay.add_child(center)
-	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(420, 0)
-	SteamChrome.apply_panel(panel)
-	panel.modulate = Color(1, 1, 1, 0.82)  # само окно инициативы — полупрозрачное (item 6)
-	center.add_child(panel)
-	var frame := VBoxContainer.new()
-	frame.add_theme_constant_override("separation", 0)
-	panel.add_child(frame)
-	var close := Button.new()
-	close.text = "✕"
-	close.pressed.connect(func() -> void: _init_overlay.hide())
-	frame.add_child(SteamChrome.header_bar("Initiative", close))
-	_init_overlay_body = VBoxContainer.new()
-	_init_overlay_body.add_theme_constant_override("separation", 6)
-	# Прокрутка (playtest-20): групп жителей бывают десятки, и без неё список уходил за
-	# край экрана — нижние строки, в том числе нейтралы, просто не было видно.
-	var scroll := ScrollContainer.new()
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.add_child(_init_overlay_body)
-	_init_overlay_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_init_overlay_scroll = scroll
-	frame.add_child(SteamChrome.pad(scroll, 16, 14))
-	_init_overlay = overlay
+	var w := SteamChrome.overlay_window("Initiative")
+	_init_overlay_body = w["body"]
+	_init_overlay_scroll = w["scroll"]
+	_init_overlay = w["root"]
 	_ui_layer.add_child(_init_overlay)
 
 func _toggle_initiative_overlay() -> void:

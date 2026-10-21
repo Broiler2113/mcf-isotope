@@ -34,6 +34,7 @@ func _run() -> void:
 	await _replay()
 	await _editor()
 	await _settings()
+	await _purchase()
 	keys.load_bindings()
 	DirAccess.remove_absolute(TEMP_SETTINGS)
 	print("Hotkeys: %d checks, %d failures" % [checks, failures.size()])
@@ -349,4 +350,22 @@ func _settings() -> void:
 	settings._input(key(KEY_ESCAPE))
 	ck(settings._capture_action.is_empty() and not settings.is_queued_for_deletion(), "Escape cancels capture without closing Settings")
 	settings.queue_free()
+	await process_frame
+
+## fix-7: Tab opens the initiative overlay on the purchase screen too, with the order the
+## battle will use; Esc closes it.
+func _purchase() -> void:
+	GameConfig.roster = Roster.default_duel(false)
+	MapHandoff.pending = MapData.blank_arena(30, 20)
+	var placement = load("res://scenes/Placement.tscn").instantiate()
+	root.add_child(placement)
+	for i in 3: await process_frame
+	placement._input(key(KEY_TAB))
+	ck(placement._init_overlay != null and placement._init_overlay.visible, "Tab opens initiative on the purchase screen")
+	var rows: int = placement._init_overlay_body.get_child_count() if placement._init_overlay != null else 0
+	ck(rows == 2 and rows == placement._init_box.get_child_count(),
+			"the overlay lists the same order as the side panel (%d rows)" % rows)
+	placement._input(key(KEY_ESCAPE))
+	ck(placement._init_overlay != null and not placement._init_overlay.visible, "Esc closes it")
+	placement.free()
 	await process_frame

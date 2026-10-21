@@ -59,6 +59,9 @@ var _painting: bool = false
 var _paint_last: Vector2i = Vector2i(-9999, -9999)
 
 var _ui: CanvasLayer
+var _init_overlay: Control = null
+var _init_overlay_body: VBoxContainer = null
+var _init_overlay_scroll: ScrollContainer = null
 var _panel: PanelContainer
 var _budget_label: Label
 var _phase_label: Label
@@ -356,16 +359,20 @@ func _on_net_message(msg: Dictionary) -> void:
 ## Порядок хода, который бросит бой: игроки (тасовка от общего зерна) и место слота мирных,
 ## если на карте будут мирные. Пока зерна нет (гость ждёт сообщения хоста) — «бросается».
 func _refresh_initiative() -> void:
-	if _init_box == null:
-		return
-	for c in _init_box.get_children():
+	for box: VBoxContainer in [_init_box, _init_overlay_body]:
+		if box != null:
+			_fill_initiative(box, box == _init_overlay_body)
+
+func _fill_initiative(box: VBoxContainer, big: bool) -> void:
+	for c in box.get_children():
+		box.remove_child(c)
 		c.queue_free()
 	if _shared_seed < 0:
 		var wait := Label.new()
 		wait.text = "Rolled when the host starts the match"
 		wait.add_theme_font_size_override("font_size", 11)
 		wait.modulate = Color(0.75, 0.78, 0.85)
-		_init_box.add_child(wait)
+		box.add_child(wait)
 		return
 	# Мирные карты ждут в preserved_neutral (map.spawns на закупке чистится); бой вставит
 	# их слот, если хоть один житель встанет на поле.
@@ -376,9 +383,9 @@ func _refresh_initiative() -> void:
 	for i in order.size():
 		var sid: int = order[i]
 		var irow := HBoxContainer.new()
-		irow.add_theme_constant_override("separation", 6)
+		irow.add_theme_constant_override("separation", 8 if big else 6)
 		var sw := ColorRect.new()
-		sw.custom_minimum_size = Vector2(12, 12)
+		sw.custom_minimum_size = Vector2(14, 14) if big else Vector2(12, 12)
 		sw.color = _side_color(sid) if MCF.is_player(sid) else Color(0.6, 0.62, 0.66)
 		irow.add_child(sw)
 		var nm := "%d. " % (i + 1)
@@ -390,9 +397,38 @@ func _refresh_initiative() -> void:
 			nm += "Neutrals"
 		var il := Label.new()
 		il.text = nm
-		il.add_theme_font_size_override("font_size", 12)
+		if not big:
+			il.add_theme_font_size_override("font_size", 12)
 		irow.add_child(il)
-		_init_box.add_child(irow)
+		box.add_child(irow)
+
+## Tab на закупке (fix-7): то же окно инициативы, что в бою, с порядком хода партии.
+func _toggle_initiative_overlay() -> void:
+	if _init_overlay == null:
+		var w := SteamChrome.overlay_window("Initiative")
+		_init_overlay = w["root"]
+		_init_overlay_body = w["body"]
+		_init_overlay_scroll = w["scroll"]
+		_ui.add_child(_init_overlay)
+		Ui.theme_canvas_layers()
+	if _init_overlay.visible:
+		_init_overlay.hide()
+	else:
+		_fill_initiative(_init_overlay_body, true)
+		# Высота по содержимому, но не выше экрана — дальше прокрутка (как в бою).
+		_init_overlay_scroll.custom_minimum_size = Vector2(388, minf(
+				_init_overlay_body.get_combined_minimum_size().y, get_viewport_rect().size.y - 140.0))
+		_init_overlay.show()
+
+func _input(event: InputEvent) -> void:
+	if not (event is InputEventKey) or not event.pressed or event.echo or Keybinds.typing(get_viewport()):
+		return
+	if _init_overlay != null and _init_overlay.visible and Keybinds.matches(event, "game_cancel"):
+		_init_overlay.hide()
+		get_viewport().set_input_as_handled()
+	elif Keybinds.matches(event, "game_initiative") and not Keybinds.modal_open():
+		_toggle_initiative_overlay()
+		get_viewport().set_input_as_handled()
 
 func _ready_names() -> String:
 	var names: Array[String] = []

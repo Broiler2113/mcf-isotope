@@ -76,6 +76,50 @@ static func header_bar(title: String, trailing: Control = null, leading: Control
 
 # Group box of the UI kit (.group-box): a bevelled #2a2a2a frame with its caption sitting
 # ON the top border (.group-box-title). Returns the box; put content into box.body.
+## Окно поверх экрана (оверлей инициативы, item 49 / fix-7): затемнение, по центру
+## полупрозрачная панель с шапкой и прокруткой. Полупрозрачный оверлей (item 6): доску
+## за ним видно, но затемнение ЗАМЕТНОЕ — чтобы игрок сразу понимал, что оверлей открыт и
+## потому клики по полю сейчас не проходят (item 17). Клик по фону и ✕ закрывают.
+## {"root": оверлей (скрыт), "body": куда класть строки, "scroll": прокрутка тела}.
+static func overlay_window(title: String) -> Dictionary:
+	var overlay := Control.new()
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.hide()
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.45)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	dim.gui_input.connect(func(e: InputEvent) -> void:
+		if e is InputEventMouseButton and e.pressed:
+			overlay.hide())
+	overlay.add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.add_child(center)
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(420, 0)
+	apply_panel(panel)
+	panel.modulate = Color(1, 1, 1, 0.82)  # само окно — полупрозрачное (item 6)
+	center.add_child(panel)
+	var frame := VBoxContainer.new()
+	frame.add_theme_constant_override("separation", 0)
+	panel.add_child(frame)
+	var close := Button.new()
+	close.text = "✕"
+	close.pressed.connect(overlay.hide)
+	frame.add_child(header_bar(title, close))
+	var body := VBoxContainer.new()
+	body.add_theme_constant_override("separation", 6)
+	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# Прокрутка (playtest-20): строк бывают десятки, без неё список уходил за край экрана.
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.add_child(body)
+	frame.add_child(pad(scroll, 16, 14))
+	return {"root": overlay, "body": body, "scroll": scroll}
+
 static func group_box(title: String) -> GroupBox:
 	var g := GroupBox.new()
 	g.title = title
