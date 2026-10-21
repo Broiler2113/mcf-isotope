@@ -415,7 +415,9 @@ func _apply(events: Array, lanes_only: bool, projectile_blast := false) -> void:
 			"flash":
 				# Только вспышка, без щебня и звука (fix-7 #19: мина вспыхивает, как взрыв).
 				var fcells: Array[Vector2i] = []
-				fcells.assign(ev.get("cells", []))
+				for c: Vector2i in ev.get("cells", []):
+					if not _space(c):
+						fcells.append(c)
 				if not fcells.is_empty():
 					flashes.append({"cells": fcells, "t": 0.0})
 			"laser":
@@ -499,7 +501,8 @@ func _debris(ev: Dictionary, projectile_blast := false) -> void:
 		_soot(ev)
 		var cells: Array[Vector2i] = []
 		for c: Vector2i in ev.get("cells", []):
-			cells.append(c)
+			if not _space(c):   # в открытом космосе вспышке гореть нечему (fix-7)
+				cells.append(c)
 		if not cells.is_empty():
 			flashes.append({"cells": cells, "t": 0.0})
 			if flashes.size() > FLASH_CAP:

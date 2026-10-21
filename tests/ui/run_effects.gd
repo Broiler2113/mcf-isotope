@@ -25,6 +25,7 @@ func run() -> void:
 	_vacuum_debris()
 	_decal_memory()
 	await _effects_run_while_typing()
+	_no_flash_in_space()
 
 ## Decals are never evicted (owner: "remove all decal caps").
 func _no_caps() -> void:
@@ -140,3 +141,14 @@ func _effects_run_while_typing() -> void:
 	ck(main._fx.flashes.is_empty(), "an explosion flash fades while the player types in the chat")
 	main.queue_free()
 	await process_frame
+
+## fix-7 (owner): an explosion's flash never shows over open space, on screen or in the light.
+func _no_flash_in_space() -> void:
+	var fx := FxDecals.new()
+	fx.space_at = func(c: Vector2i) -> bool: return c.x >= 5
+	fx.apply([{"fx": "debris", "at": Vector2i(4, 0), "cells": [Vector2i(4, 0), Vector2i(5, 0)], "blast": true}])
+	fx.apply([{"fx": "flash", "cells": [Vector2i(5, 1), Vector2i(6, 1)]}])
+	var lit: Array = []
+	for f: Dictionary in fx.flashes:
+		lit.append_array(f["cells"])
+	ck(lit == [Vector2i(4, 0)], "explosion flashes skip space cells (%s)" % str(lit))
