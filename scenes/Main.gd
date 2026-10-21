@@ -576,7 +576,8 @@ func _handle_click(coord: Vector2i) -> void:
 			_back_to_menu()
 		Mode.BUILD:
 			if item_cells.has(coord):
-				_submit(BuildIntent.new(selected_id, coord, build_feature))
+				_submit(BuildIntent.new(selected_id, coord, build_feature,
+						build_tint if build_feature == MCF.FEATURE_FLOODLIGHT else 0))
 				return
 			if _is_own_active(occupant):
 				_select(occupant)

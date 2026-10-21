@@ -35,28 +35,36 @@ func _resolve_build(intent: BuildIntent) -> ActionResult:
 		return ActionResult.fail("Cell is occupied")
 	var cost: int = ENGINEER_BUILDABLE[intent.feature_id]
 	var credit_note := ""
-	if actor.borg_id != -1:
-		# Инженер в борге (batch 13 B7): 1 ОД покупает BORG_BUILD_BATCH построек ОДНОГО
-		# типа, ставить их можно по одной между другими действиями; ДОТ — 1 за ОД.
-		# Кредиты сгорают на границе раунда (UnitInstance.reset_ap).
-		if MCF.BORG_BATCH_FEATURES.has(intent.feature_id):
-			var left: int = int(actor.build_credits.get(intent.feature_id, 0))
-			if left > 0:
-				actor.build_credits[intent.feature_id] = left - 1
-				cost = 0
-				credit_note = " (batch, %d left)" % (left - 1)
-			else:
-				if actor.remaining_ap < 1:
-					return ActionResult.fail("Need 1 AP")
-				cost = 1
-				actor.build_credits[intent.feature_id] = MCF.BORG_BUILD_BATCH - 1
-				credit_note = " (batch, %d left)" % (MCF.BORG_BUILD_BATCH - 1)
-		elif intent.feature_id == MCF.FEATURE_DOT or intent.feature_id == MCF.FEATURE_DOT_OPEN:
+	var batch := build_batch(actor, intent.feature_id)
+	if batch > 0:
+		# Партии (batch 13 B7, fix-7 #13): 1 ОД покупает batch построек ОДНОГО типа, ставить
+		# их можно по одной между другими действиями. Борг: стены/стекло/шлюзы/мешки/ежи по 3,
+		# прожекторы по 5; пеший инженер — прожекторы по 2. Кредиты сгорают на границе раунда
+		# (UnitInstance.reset_ap).
+		var left: int = int(actor.build_credits.get(intent.feature_id, 0))
+		if left > 0:
+			actor.build_credits[intent.feature_id] = left - 1
+			cost = 0
+			credit_note = " (batch, %d left)" % (left - 1)
+		else:
+			if actor.remaining_ap < 1:
+				return ActionResult.fail("Need 1 AP")
 			cost = 1
+			actor.build_credits[intent.feature_id] = batch - 1
+			credit_note = " (batch, %d left)" % (batch - 1)
+	elif actor.borg_id != -1 and (intent.feature_id == MCF.FEATURE_DOT or intent.feature_id == MCF.FEATURE_DOT_OPEN):
+		cost = 1
 	if actor.remaining_ap < cost:
 		return ActionResult.fail("Need %d AP" % cost)
 	actor.remaining_ap -= cost
 	var placed: String = stacked if stacked != "" else intent.feature_id
+	if placed == MCF.FEATURE_FLOODLIGHT:
+		# Цвет прожектора (fix-7 #13) — из того же списка, что у ламп в редакторе. Байт
+		# оттенка пишется до объекта: свет перечитывает клетку по её смене.
+		var g := state.grid
+		if g.light_tint.size() != g.width * g.height:
+			g.light_tint.resize(g.width * g.height)
+		g.light_tint[intent.target.y * g.width + intent.target.x] = Furniture.clean_tint(intent.tint)
 	cell.set_feature(placed, actor.owner)
 	notify_cell_changed(intent.target)  # застроенная клетка будит соседей (§3.1a)
 	_extinguish_cell(cell)  # стройка на горящей клетке гасит огонь (#82)
@@ -68,19 +76,28 @@ func _resolve_build(intent: BuildIntent) -> ActionResult:
 ## а пока кредиты партии не кончились — ничего.
 func build_cost_for(actor: UnitInstance, feature_id: String) -> int:
 	var cost: int = ENGINEER_BUILDABLE.get(feature_id, 1)
+	if actor != null and build_batch(actor, feature_id) > 0:
+		return 0 if int(actor.build_credits.get(feature_id, 0)) > 0 else 1
 	if actor != null and actor.borg_id != -1:
-		if MCF.BORG_BATCH_FEATURES.has(feature_id):
-			return 0 if int(actor.build_credits.get(feature_id, 0)) > 0 else 1
 		if feature_id == MCF.FEATURE_DOT or feature_id == MCF.FEATURE_DOT_OPEN:
 			return 1
 	return cost
+
+## Сколько построек этого типа даёт 1 ОД; 0 — партий нет, платится цена из ENGINEER_BUILDABLE.
+func build_batch(actor: UnitInstance, feature_id: String) -> int:
+	var in_borg := actor.borg_id != -1
+	if feature_id == MCF.FEATURE_FLOODLIGHT:
+		return MCF.BORG_FLOODLIGHT_BATCH if in_borg else MCF.FLOODLIGHT_BATCH
+	if in_borg and MCF.BORG_BATCH_FEATURES.has(feature_id):
+		return MCF.BORG_BUILD_BATCH
+	return 0
 
 ## Клетки соседних шлюзов, которые инженер может заварить (#99) — для подсветки в UI.
 func weldable_cells(unit: UnitInstance) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
 	if unit == null or not unit.is_alive() \
 			or unit.stats.special_ability_id != MCF.ABILITY_ENGINEER \
-			or unit.remaining_ap < WELD_AIRLOCK_AP:
+			or weld_cost_for(unit) > unit.remaining_ap:
 		return out
 	for c: Vector2i in state.grid.neighbors(unit.coord):
 		var cell := state.grid.cell(c)
@@ -109,14 +126,32 @@ func _resolve_weld_airlock(intent: WeldAirlockIntent) -> ActionResult:
 	# Створки не сойдутся на теле (batch 13 #4) — сначала вытащить труп из проёма.
 	if corpses_at(intent.to) > 0:
 		return ActionResult.fail("A body is jamming the doors — drag it out first")
-	if actor.remaining_ap < WELD_AIRLOCK_AP:
-		return ActionResult.fail("Need %d AP" % WELD_AIRLOCK_AP)
-	actor.remaining_ap -= WELD_AIRLOCK_AP
+	var cost := weld_cost_for(actor)
+	if actor.remaining_ap < cost:
+		return ActionResult.fail("Need %d AP" % cost)
+	actor.remaining_ap -= cost
+	var credit_note := ""
+	if actor.borg_id != -1:
+		# Инженер в борге (fix-7 #14): 1 ОД заваривает BORG_WELD_BATCH шлюзов, по одному
+		# между другими действиями, как партия построек; кредиты сгорают на границе раунда.
+		var left: int = int(actor.build_credits.get(WELD_CREDIT, 0))
+		left = left - 1 if cost == 0 else MCF.BORG_WELD_BATCH - 1
+		actor.build_credits[WELD_CREDIT] = left
+		credit_note = " (batch, %d left)" % left
 	cell.airlock_welded = true
 	# Створки закрываются немедленно, даже если рядом кто-то стоит.
 	cell.cover_height = MCF.WALL_HEIGHT
-	return ActionResult.success(["%s welds the airlock at (%d, %d) shut [AP: %d]" % [
-		actor.stats.display_name, intent.to.x, intent.to.y, actor.remaining_ap]])
+	return ActionResult.success(["%s welds the airlock at (%d, %d) shut [AP: %d]%s" % [
+		actor.stats.display_name, intent.to.x, intent.to.y, actor.remaining_ap, credit_note]])
+
+## Ключ кредитов сварки в build_credits (не id постройки — с партиями построек не путается).
+const WELD_CREDIT := "weld"
+
+## Сколько ОД стоит следующая сварка: в борге — ноль, пока не кончилась партия.
+func weld_cost_for(actor: UnitInstance) -> int:
+	if actor.borg_id != -1 and int(actor.build_credits.get(WELD_CREDIT, 0)) > 0:
+		return 0
+	return WELD_AIRLOCK_AP
 
 ## Инженер выкладывает ЛДФ-стену из 6 клеток за 1 ОД (§3.7). Клетки разные, на свободном
 ## полу, ОДНА обязана соседствовать с инженером, и все шесть обязаны складываться в

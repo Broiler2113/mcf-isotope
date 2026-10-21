@@ -171,6 +171,8 @@ var _melee_veh_ids: Array = []
 ## Режим установки мин кладёт противотанковую мину, а не противопехотную (item 13).
 var _mine_av: bool = false
 var build_feature: String = ""
+## Цвет строящегося прожектора (Furniture.make_tint), fix-7 #13.
+var build_tint: int = 0
 ## Рисование ЛДФ-стены (§3.7): цепочка выбранных клеток и флаг «тянем» мышью.
 var _wall_cells: Array[Vector2i] = []
 var _wall_drawing: bool = false
@@ -946,6 +948,7 @@ var _number_page := 0
 @abstract func _replay_chat_history() -> void
 @abstract func _draw_black_cross(origin: Vector2, size: float, alpha: float = 0.95) -> void
 @abstract func _neutral_camera_targets() -> Dictionary
+@abstract func _open_build_picker() -> void
 @abstract func _scroll_menu(panel: PanelContainer, title: String = "Actions", back := Callable()) -> VBoxContainer
 @abstract func _anchor_menu(panel: Control) -> void
 @abstract func _has_action_button(vb: VBoxContainer) -> bool

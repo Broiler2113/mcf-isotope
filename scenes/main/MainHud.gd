@@ -1163,7 +1163,7 @@ func _camera_row() -> Control:
 				else state.roster.name_of(sid) + "'s forces")
 		b.add_theme_font_size_override("font_size", 12)
 		b.custom_minimum_size = Vector2(40, 40)
-		b.clip_text = true
+		# Not clipped (fix-7 #15): "Me" was cut down to "M" in a 40 px button.
 		b.focus_mode = Control.FOCUS_NONE
 		var side := sid
 		b.pressed.connect(func() -> void: _center_on_side(side))

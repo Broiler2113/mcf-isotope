@@ -526,8 +526,36 @@ func _open_build_picker() -> void:
 				label = "Build: %s (%s)" % [MCF.FEATURE_NAMES[feat],
 						("%d left in batch" % left) if left > 0 else "1 AP for %d" % MCF.BORG_BUILD_BATCH]
 			_act_btn(vb, label, _enter_build.bind(feat), can_afford, "Needs %d AP" % cost)
+	# Прожектор (fix-7 #13): партия на 1 ОД, цвет выбирается до постройки.
+	var fl := MCF.FEATURE_FLOODLIGHT
+	if not resolver.buildable_cells(unit, fl).is_empty():
+		var left: int = int(unit.build_credits.get(fl, 0))
+		var fl_label := "Build: Floodlight (%s)" % (("%d left in batch" % left) if left > 0
+				else "1 AP for %d" % resolver.build_batch(unit, fl))
+		_act_btn(vb, fl_label, _open_floodlight_colors, unit.remaining_ap >= 1 or left > 0, "Needs 1 AP")
 	_number_picker()
 	_menu.hide()
+	_anchor_menu(_picker)
+	_picker.show()
+
+## Цвет прожектора — тот же список, что у ламп в редакторе (Furniture.LIGHT_TINTS).
+func _open_floodlight_colors() -> void:
+	for child in _picker.get_children(): child.queue_free()
+	var vb := _scroll_menu(_picker, "Floodlight color", _open_build_picker)
+	for i in Furniture.LIGHT_TINTS.size():
+		var swatch := Image.create_empty(14, 14, false, Image.FORMAT_RGBA8)
+		swatch.fill(Furniture.light_color_of(MCF.FEATURE_FLOODLIGHT, i))
+		var b := Button.new()
+		b.text = str(Furniture.LIGHT_TINTS[i][0])
+		b.icon = ImageTexture.create_from_image(swatch)
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		var tint := Furniture.make_tint(i, 0)
+		b.pressed.connect(func() -> void:
+			build_tint = tint
+			_picker.hide()
+			_enter_build(MCF.FEATURE_FLOODLIGHT))
+		vb.add_child(b)
+	_number_picker()
 	_anchor_menu(_picker)
 	_picker.show()
 
@@ -1057,7 +1085,7 @@ func _open_menu(unit: UnitInstance) -> void:
 		# Инженер: заварить соседний шлюз (#99).
 		if not resolver.weldable_cells(unit).is_empty():
 			var weld_btn := Button.new()
-			weld_btn.text = "Weld Airlock (%d AP)" % GameActionResolver.WELD_AIRLOCK_AP
+			weld_btn.text = "Weld Airlock (%d AP)" % resolver.weld_cost_for(unit)
 			weld_btn.pressed.connect(_enter_weld)
 			vb.add_child(weld_btn)
 			_register_menu_action(weld_btn, "action_weld")

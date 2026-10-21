@@ -147,6 +147,12 @@ const BORG_EXPLODE_MIN := 4
 ## Инженер в борге строит партиями: 1 ОД = 3 постройки ОДНОГО типа из списка ниже, либо
 ## 1 ДОТ, либо 9 окопов (BORG_DIG_TRENCHES). Кредиты сгорают в конце хода.
 const BORG_BUILD_BATCH := 3
+## Шлюзов, которые инженер в борге заваривает за 1 ОД (fix-7 #14).
+const BORG_WELD_BATCH := 3
+## Прожектор (fix-7 #13): мебель "floodlight", которую строит инженер — 2 за ОД, в борге 5.
+const FEATURE_FLOODLIGHT := "floodlight"
+const FLOODLIGHT_BATCH := 2
+const BORG_FLOODLIGHT_BATCH := 5
 const BORG_BATCH_FEATURES := [FEATURE_WALL, FEATURE_GLASS, FEATURE_AIRLOCK, FEATURE_SANDBAGS, FEATURE_HEDGEHOG]
 const BORG_DIG_TRENCHES := 9
 
