@@ -26,6 +26,7 @@ func run() -> void:
 	_decal_memory()
 	await _effects_run_while_typing()
 	_no_flash_in_space()
+	_wall_blood()
 
 ## Decals are never evicted (owner: "remove all decal caps").
 func _no_caps() -> void:
@@ -152,3 +153,21 @@ func _no_flash_in_space() -> void:
 	for f: Dictionary in fx.flashes:
 		lit.append_array(f["cells"])
 	ck(lit == [Vector2i(4, 0)], "explosion flashes skip space cells (%s)" % str(lit))
+
+## fix-7 #16: a soldier killed next to a wall splashes it — the face toward the body, on the
+## side the spray flies (any side for a blast); kept in saves, resyncs and undo.
+func _wall_blood() -> void:
+	var fx := FxDecals.new()
+	var walls := {Vector2i(5, 4): true, Vector2i(5, 6): true}
+	fx.solid_at = func(c: Vector2i) -> bool: return walls.has(c)
+	fx.apply([{"fx": "blood", "at": Vector2i(5, 5), "from": Vector2i(5, 9)}])
+	ck(fx.wall_blood.size() == 1 and fx.wall_blood[0]["cell"] == Vector2i(5, 4) and fx.wall_blood[0]["face"] == Vector2i(0, 1),
+			"a shot from below splashes only the wall above, on its lower face (%s)" % str(fx.wall_blood))
+	var snap := fx.capture_state()
+	fx.apply([{"fx": "blood", "at": Vector2i(5, 5), "from": Vector2i(5, 5), "blast": true}])
+	ck(fx.wall_blood.size() == 3, "a blast splashes every wall beside the body")
+	var back := FxDecals.new()
+	back.from_dict(fx.to_dict())
+	ck(back.wall_blood.size() == 3 and back.wall_blood[2]["face"] == fx.wall_blood[2]["face"], "wall blood survives a save")
+	fx.restore_state(snap)
+	ck(fx.wall_blood.size() == 1, "undo takes the blast's wall blood back")

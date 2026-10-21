@@ -351,6 +351,7 @@ func _draw() -> void:
 	# cannot hide debris there; stop drawing the live layers while Before is shown.
 	if _before_on:
 		return
+	_draw_wall_blood(visible, fog_on)
 	_draw_fx_flashes(visible)
 	_draw_flame_jet(visible)
 	# Труп существует в ДВУХ видах: погибший на месте боец — это occupant клетки со
@@ -1509,6 +1510,26 @@ func _draw_cloud_tiles(ci: CanvasItem, clouds: Array, smoke: bool, tint: Color, 
 ## клетках не знают, и на следующий ход от вспышки не остаётся ничего, кроме обычного
 ## щебня. Рисуется плиткой огня (как и настоящий пожар), а без неё — оранжевой заливкой.
 ## Туман войны вспышка не протекает: чего команда не видит, того ей и не показывают.
+## Кровь на стенах (fix-7 #16): пятно и подтёки на грани стены, глядящей на тело. Под
+## туманом — только там, где стену или клетку тела видно сейчас.
+func _draw_wall_blood(visible: Dictionary, fog_on: bool) -> void:
+	for b: Dictionary in _fx.wall_blood:
+		var c: Vector2i = b["cell"]
+		var face: Vector2i = b["face"]
+		if not _cell_on_screen(c.x, c.y) or (fog_on and not visible.has(c) and not visible.has(c + face)):
+			continue
+		var center := ORIGIN + (Vector2(c) + Vector2(0.5, 0.5) + Vector2(face) * 0.36) * CELL
+		var along := Vector2(-face.y, face.x)
+		var rot := float(b["rot"])
+		var k := float(b["scale"])
+		var col := Color(0.42, 0.02, 0.02, 0.88)
+		for i in 5:
+			var t := sin(rot * (i + 1.7)) * 0.32
+			var r := CELL * 0.09 * k * (1.0 + 0.5 * absf(cos(rot * (i + 0.3))))
+			draw_circle(center + along * t * CELL - Vector2(face) * absf(t) * 0.12 * CELL, r, col)
+		# Подтёк вниз по грани — тонкая полоса вдоль неё.
+		draw_line(center - along * 0.22 * CELL * k, center + along * 0.18 * CELL * k, col, CELL * 0.06)
+
 func _draw_fx_flashes(visible: Dictionary) -> void:
 	if _fx.flashes.is_empty():
 		return
