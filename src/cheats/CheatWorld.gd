@@ -55,6 +55,7 @@ static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 		"world_fire_clear":
 			var radius := int(a.get("radius", maxi(grid.width, grid.height)))
 			var rect := Rect2i(at - Vector2i.ONE * radius, Vector2i.ONE * (radius * 2 + 1)).intersection(Rect2i(0, 0, grid.width, grid.height))
+			if a.has("width"): rect = Rect2i(a.x, a.y, a.width, a.height)
 			var count := 0
 			for y in range(rect.position.y, rect.end.y):
 				for x in range(rect.position.x, rect.end.x):
@@ -62,7 +63,7 @@ static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 					if c.on_fire: count += 1
 					c.on_fire = false
 					c.fire_owner = -1
-			out.cheat_output = "Extinguished %d fire cells (Chebyshev radius)." % count
+			out.cheat_output = "Extinguished %d fire cells." % count
 			return out
 	if cell == null: return ActionResult.fail("Cell is outside the board.")
 	if cell.feature_id == MCF.FEATURE_BOUNDARY: return ActionResult.fail("Map boundaries cannot be edited.")

@@ -166,7 +166,8 @@ func _seat_unit(veh: Vehicle, unit: UnitInstance, seat: int) -> void:
 	var cell_coord := veh.seat_cell(seat)
 	var cell := state.grid.cell(cell_coord)
 	if cell.occupant != null and cell.occupant.status == MCF.Status.CORPSE:
-		state.remove_unit(cell.occupant.id)
+		if legacy_corpse_rules: state.remove_unit(cell.occupant.id)
+		else: cell.occupant.corpse_stacked = true
 		cell.occupant = null
 		cell.corpse_count += 1
 	veh.seats[seat] = unit.id
@@ -428,18 +429,23 @@ func unload_corpse_cells(unit: UnitInstance, veh: Vehicle) -> Array[Vector2i]:
 	return out
 
 ## The body leaves the vehicle: onto the chosen cell, or into the puller's arms.
-func _place_pulled_body(unit: UnitInstance, body: UnitInstance, spot: Vector2i) -> void:
+func _place_pulled_body(unit: UnitInstance, body: UnitInstance, spot: Vector2i, pile := false) -> void:
 	if body != null:
 		var at := state.grid.cell(body.coord)
 		if at != null and at.occupant == body:
 			at.occupant = null
 		if spot == unit.coord:
-			state.remove_unit(body.id)
+			if legacy_corpse_rules: state.remove_unit(body.id)
+			else: CorpseIdentity.take(body, unit)
+		elif pile:
+			body.aboard_vehicle_id = -1
+			_add_corpse_to_cell(spot, body)
 		else:
 			body.coord = spot
 			state.grid.cell(spot).occupant = body
 	elif spot != unit.coord:
-		state.grid.cell(spot).corpse_count += 1
+		if legacy_corpse_rules: state.grid.cell(spot).corpse_count += 1
+		else: _add_corpse_to_cell(spot)
 	if spot == unit.coord:
 		unit.carried_corpses += 1
 	else:
@@ -504,7 +510,12 @@ func _resolve_vehicle_unload_corpse(intent: VehicleUnloadCorpseIntent) -> Action
 		return ActionResult.fail("No bodies to pull out")
 	unit.remaining_ap -= 1
 	var name: String = veh.corpse_slots.pop_back()
-	_place_pulled_body(unit, null, spot)
+	var body: UnitInstance = null
+	if not legacy_corpse_rules:
+		for candidate: UnitInstance in state.all_units():
+			if candidate.status == MCF.Status.CORPSE and candidate.aboard_vehicle_id == veh.id and candidate.stats.display_name == name:
+				if body == null or candidate.id < body.id: body = candidate
+	_place_pulled_body(unit, body, spot, true)
 	return ActionResult.success(["%s pulls %s's body out of the %s %s." % [
 		unit.stats.display_name, name,
 		VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id), where]])

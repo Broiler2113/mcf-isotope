@@ -38,8 +38,11 @@ func _resolve_pickup_corpse(intent: PickUpCorpseIntent) -> ActionResult:
 	# Снимаем один труп: сперва из кучи corpse_count, иначе труп-occupant.
 	if cell.corpse_count > 0:
 		cell.corpse_count -= 1
+		var bodies := CorpseIdentity.stacked(state, intent.from)
+		if not bodies.is_empty(): CorpseIdentity.take(bodies[0], unit)
 	elif cell.occupant != null and cell.occupant.status == MCF.Status.CORPSE:
-		state.remove_unit(cell.occupant.id)
+		if legacy_corpse_rules: state.remove_unit(cell.occupant.id)
+		else: CorpseIdentity.take(cell.occupant, unit)
 		cell.occupant = null
 	unit.remaining_ap -= 1
 	unit.carried_corpses += 1
@@ -71,7 +74,8 @@ func _resolve_drop_corpse(intent: DropCorpseIntent) -> ActionResult:
 	if corpses_at(intent.to) >= MCF.CORPSE_WALL_COUNT:
 		return ActionResult.fail("No room for another body here")
 	unit.carried_corpses -= 1
-	if _add_corpse_to_cell(intent.to):
+	var bodies := CorpseIdentity.carried(state, unit.id)
+	if _add_corpse_to_cell(intent.to, bodies[0] if not bodies.is_empty() else null):
 		return ActionResult.success(["%s stacks the fifth body — a corpse wall rises at (%d, %d)" % [
 			unit.stats.display_name, intent.to.x, intent.to.y]])
 	return ActionResult.success(["%s drops a corpse (%d/%d) at (%d, %d)" % [
@@ -300,7 +304,8 @@ func _kill(u: UnitInstance, res: ActionResult = null, from_coord: Vector2i = NOW
 		# посчитан, поэтому под стену остаётся ровно то, что до пяти не добрано.
 		if corpses_at(u.coord) >= MCF.CORPSE_WALL_COUNT:
 			return
-		_add_corpse_to_cell(u.coord)
+		var bodies := CorpseIdentity.carried(state, u.id)
+		_add_corpse_to_cell(u.coord, bodies[0] if not bodies.is_empty() else null)
 
 ## +1 к защите цели за каждый несомый ею труп (#6).
 func _corpse_shield_bonus(target: UnitInstance) -> int:
@@ -471,8 +476,12 @@ func corpses_at(coord: Vector2i) -> int:  # публично: нужен UI и �
 ## Кладёт одно тело на клетку; пятое складывает из кучи стену (§3.7, #98).
 ## Возвращает true, если стена образовалась. Вызывать, только убедившись, что
 ## corpses_at(coord) < CORPSE_WALL_COUNT — переполнить стену нечем.
-func _add_corpse_to_cell(coord: Vector2i) -> bool:
+func _add_corpse_to_cell(coord: Vector2i, body: UnitInstance = null) -> bool:
 	var c := state.grid.cell(coord)
+	if body != null:
+		body.coord = coord
+		body.corpse_carrier_id = -1
+		body.corpse_stacked = true
 	c.corpse_count += 1
 	if corpses_at(coord) < MCF.CORPSE_WALL_COUNT:
 		return false
@@ -482,6 +491,7 @@ func _add_corpse_to_cell(coord: Vector2i) -> bool:
 		state.remove_unit(c.occupant.id)
 		c.occupant = null
 	c.corpse_count = 0
+	for stacked: UnitInstance in CorpseIdentity.stacked(state, coord): state.remove_unit(stacked.id)
 	c.set_feature(MCF.FEATURE_CORPSE_WALL)
 	return true
 

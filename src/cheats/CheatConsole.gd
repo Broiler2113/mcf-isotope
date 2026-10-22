@@ -57,16 +57,12 @@ func _ready() -> void:
 	output.add_theme_color_override("default_color", Color("d3dce7"))
 	output.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	col.add_child(output)
-	var hint := Label.new()
-	hint.text = "Enter submits · ↑/↓ history · Tab completes · Esc stops tool / closes"
-	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	col.add_child(hint)
 	tool_hint = Label.new()
 	tool_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	tool_hint.modulate = Color("efd089")
 	col.add_child(tool_hint)
 	input = LineEdit.new()
-	input.placeholder_text = "Type help to browse commands"
+	input.placeholder_text = "Command"
 	input.max_length = 1024
 	var input_style := StyleBoxFlat.new()
 	input_style.bg_color = Color("101720")
@@ -91,9 +87,9 @@ func _ready() -> void:
 	input.text_submitted.connect(submit)
 	input.text_changed.connect(_text_changed)
 	input.gui_input.connect(_input_key)
-	if CheatAccess.permitted(main.state, caller()): output.add_text(main._cheat_output)
-	write("Cheats enabled. " + CheatQueries.run(main.resolver, {"op": "status", "args": {}}, caller()))
-	write("Use help for commands and bounds. State-changing commands clear undo history.")
+	var previous: String = main._cheat_output
+	main._cheat_output = ""
+	if CheatAccess.permitted(main.state, caller()) and not previous.is_empty(): write(previous.strip_edges())
 	if main.net != null:
 		main.net.cheat_permissions_changed.connect(_permissions_changed)
 	input.grab_focus()
@@ -110,13 +106,42 @@ func _permissions_changed() -> void:
 		cancel_tool()
 		output.clear()
 		main._cheat_ids = ""
+		main._cheat_coords = false
 		main._cheat_output = ""
 		main.queue_redraw()
 	write(CheatQueries.run(main.resolver, {"op": "status", "args": {}}, caller()))
 	_text_changed(input.text)
 
 func write(line: String) -> void:
-	output.add_text(line + "\n")
+	main._cheat_output = (main._cheat_output + line + "\n").right(60000)
+	var lines := line.split("\n")
+	var row := 0
+	while row < lines.size():
+		if not lines[row].contains(" | "):
+			output.add_text(lines[row] + "\n")
+			row += 1
+			continue
+		var rows: Array = []
+		var columns := 0
+		while row < lines.size() and lines[row].contains(" | "):
+			var cells := lines[row].split(" | ")
+			columns = maxi(columns, cells.size())
+			rows.append(cells)
+			row += 1
+		output.push_table(columns)
+		for index in rows.size():
+			for column in columns:
+				output.set_table_column_expand(column, true)
+				output.push_cell()
+				output.set_cell_padding(Rect2(7, 4, 7, 4))
+				output.set_cell_border_color(Color("35404d"))
+				output.set_cell_row_background_color(Color("111923"), Color("0c121a"))
+				if index == 0: output.push_bold()
+				output.add_text(rows[index][column] if column < rows[index].size() else "")
+				if index == 0: output.pop()
+				output.pop()
+		output.pop()
+		output.add_text("\n")
 	while output.get_paragraph_count() > 600: output.remove_paragraph(0)
 
 func _text_changed(line: String) -> void:
@@ -128,7 +153,7 @@ func _text_changed(line: String) -> void:
 	hints.clear()
 	for option: Dictionary in options.slice(0, 100):
 		hints.add_item(option.label)
-		hints.set_item_tooltip(hints.item_count - 1, option.get("syntax", "") + "\n" + option.label)
+		hints.set_item_tooltip(hints.item_count - 1, option.get("syntax", ""))
 
 func _insert_completion(index: int) -> void:
 	if index < 0 or index >= options.size(): return
@@ -184,7 +209,11 @@ func submit(line: String) -> void:
 		var denied := CheatAccess.denial(main.state, caller())
 		if not denied.is_empty(): write(denied); return
 	match parsed.op:
-		"clear": output.clear(); return
+		"clear": output.clear(); main._cheat_output = ""; return
+		"coords_on", "coords_off":
+			main._cheat_coords = parsed.op == "coords_on"
+			write("Tile coordinates: " + ("on" if main._cheat_coords else "off"))
+			return
 		"ids_on", "ids_off":
 			main._cheat_ids = parsed.args.get("category", "all") if parsed.op == "ids_on" else ""
 			main.queue_redraw()
@@ -210,17 +239,14 @@ func _refresh_prompt() -> void:
 	prompt.text = "%s · #%d · %s" % [main.state.roster.name_of(caller()), caller() + 1,
 		"Gameplay cheats allowed" if CheatAccess.permitted(main.state, caller()) else "Help and roster only · ask the host for permission"]
 
-func _exit_tree() -> void:
-	if is_instance_valid(main) and is_instance_valid(output):
-		main._cheat_output = output.get_parsed_text().right(60000)
 
 func start_tool(parsed: Dictionary) -> void:
 	tool = parsed.duplicate(true)
 	input.release_focus()
-	var description := "Inspect cells" if parsed.op == "inspect_tool" else "Place %s for %s" % [parsed.args.get("type", "event"), main.state.roster.name_of(parsed.args.get("owner", caller()))]
-	if parsed.op == "event_spawn_tool": description = "Place " + RandomEvents.event_name(parsed.args.event)
+	var description := "Inspect cells" if str(parsed.op).begins_with("inspect_") else "Place %s for %s" % [parsed.args.get("type", "event"), main.state.roster.name_of(parsed.args.get("owner", caller()))]
+	if parsed.op == "event_spawn_tool": description = "Select two opposite corners for " + RandomEvents.event_name(parsed.args.event) if _area_tool() else "Place " + RandomEvents.event_name(parsed.args.event)
 	if parsed.op == "event_remove_tool": description = "Select event to remove"
-	tool_hint.text = description + " — click the battlefield · Esc stops"
+	tool_hint.text = description + " · Esc stops"
 	write(tool_hint.text)
 
 func cancel_tool() -> void:
@@ -234,9 +260,9 @@ func board_input(event: InputEvent) -> bool:
 		if not event.pressed: return true
 		var at: Vector2i = main._pos_to_cell(event.position)
 		if not main.state.grid.in_bounds(at): return true
-		if tool.op == "inspect_tool":
+		if str(tool.op).begins_with("inspect_"):
 			write("────────────────────────────────────────────────")
-			write("Inspect (%d, %d)\n" % [at.x, at.y] + CheatQueries.inspect_at(main.resolver, at, caller()))
+			write("Inspect (%d, %d)\n" % [at.x, at.y] + CheatQueries.inspect_at(main.resolver, at, caller(), str(tool.op).trim_prefix("inspect_").trim_suffix("_tool")))
 			return true
 		if main._match_over: write("The match is over."); cancel_tool(); return true
 		if main._animating or main._net_playing or main._net_request_pending:
@@ -250,6 +276,17 @@ func board_input(event: InputEvent) -> bool:
 				CheatEventEditor.open(self, false, refs[0])
 			return true
 		var args: Dictionary = tool.args.duplicate(true)
+		if _area_tool():
+			if not tool.has("corner"):
+				tool.corner = at
+				tool_hint.text = "First corner (%d,%d) · Select opposite corner · Esc stops" % [at.x, at.y]
+				return true
+			var low: Vector2i = tool.corner.min(at)
+			var size: Vector2i = tool.corner.max(at) - low + Vector2i.ONE
+			args.properties.merge({"x": low.x, "y": low.y, "w": size.x, "h": size.y}, true)
+			at = low
+			tool.erase("corner")
+			tool_hint.text = "Select first corner · Esc stops"
 		args.x = at.x
 		args.y = at.y
 		execute_action(str(tool.op).trim_suffix("_tool"), args)
@@ -278,3 +315,6 @@ func execute_action(op: String, args: Dictionary) -> bool:
 	write("────────────────────────────────────────────────")
 	main._on_intent_ready(CheatIntent.new(op, args, caller()))
 	return true
+
+func _area_tool() -> bool:
+	return tool.get("op", "") == "event_spawn_tool" and tool.args.event in ["mortar", "gas", "fire", "emp", "collapse"]

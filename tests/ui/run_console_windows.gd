@@ -31,9 +31,9 @@ func run() -> void:
 	ck(not root.get_node("Keybinds").modal_open(), "console leaves battlefield interactive")
 	ck(not console.hints.visible and console.options.is_empty(), "empty input hides hints")
 	console._text_changed("s")
-	ck(console.hints.visible and not console.options.is_empty(), "first letter shows described suggestions")
-	ck(console.hints.get_item_text(0).contains("—"), "clickable suggestions explain commands")
-	console.submit("spawn unit engineer self")
+	ck(console.hints.visible and not console.options.is_empty(), "first letter shows suggestions")
+	ck(not console.hints.get_item_text(0).contains("—"), "suggestions contain commands without explanations")
+	console.submit("spawn unit engineer #1")
 	ck(not console.tool.is_empty() and not console.input.has_focus(), "spawn releases typing focus for placement")
 	click_cell(main, Vector2i(6, 6))
 	await process_frame
@@ -61,6 +61,7 @@ func run() -> void:
 	await process_frame
 	ck(console.tool.op == "event_spawn_tool", "event editor arms placement")
 	click_cell(main, Vector2i(12, 10))
+	click_cell(main, Vector2i(14, 12))
 	await process_frame
 	ck(main.resolver.random_events.clouds.size() == 1, "event placement starts an active cloud")
 	console.cancel_tool()
@@ -100,7 +101,7 @@ func click_cell(main: Node, cell: Vector2i) -> void:
 	click.button_index = MOUSE_BUTTON_LEFT
 	click.pressed = true
 	click.position = main._cell_screen(cell) + Vector2.ONE * main.CELL * main.zoom * 0.5
-	main._unhandled_input(click)
+	main._cheat_console.board_input(click)
 
 func host_tick() -> void:
 	var lobby: Node = load("res://scenes/Lobby.tscn").instantiate()

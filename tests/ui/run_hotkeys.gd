@@ -53,6 +53,12 @@ func _bindings() -> void:
 	ck(keys.rebind("action_move", key(KEY_MASK_ALT | KEY_M), TEMP_SETTINGS).is_empty(), "unused modified shortcut accepted")
 	keys.load_bindings(TEMP_SETTINGS)
 	ck(keys.matches(key(KEY_MASK_ALT | KEY_M), "action_move") and not keys.matches(key(KEY_M), "action_move"), "rebind persists across reload")
+	var shift := key(KEY_SHIFT)
+	shift.shift_pressed = true
+	ck(keys.rebind("fp_run", shift, TEMP_SETTINGS).is_empty(), "Run accepts a standalone modifier")
+	keys.load_bindings(TEMP_SETTINGS)
+	ck(keys.codes("fp_run") == [KEY_SHIFT], "standalone Run binding survives reload without a self modifier")
+	ck(not keys.rebind("action_move", shift, TEMP_SETTINGS).is_empty(), "ordinary shortcuts still wait for a complete chord")
 	var config := ConfigFile.new()
 	config.load(TEMP_SETTINGS)
 	config.set_value("ui", "accent", "blue")

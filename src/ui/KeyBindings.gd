@@ -4,6 +4,15 @@ extends Node
 signal changed
 const SETTINGS_PATH := "user://settings.cfg"
 const DEFINITIONS: Array = [
+	{"id": "fp_forward", "label": "Move forward", "keys": [KEY_W], "contexts": ["*"], "section": "fp"},
+	{"id": "fp_back", "label": "Move backward", "keys": [KEY_S], "contexts": ["*"], "section": "fp"},
+	{"id": "fp_left", "label": "Move left", "keys": [KEY_A], "contexts": ["*"], "section": "fp"},
+	{"id": "fp_right", "label": "Move right", "keys": [KEY_D], "contexts": ["*"], "section": "fp"},
+	{"id": "fp_run", "label": "Run / fly faster", "keys": [KEY_SHIFT], "contexts": ["*"], "section": "fp"},
+	{"id": "fp_up", "label": "Jump / climb / ascend", "keys": [KEY_SPACE], "contexts": ["*"], "section": "fp"},
+	{"id": "fp_down", "label": "Descend (space / noclip)", "keys": [KEY_C], "contexts": ["*"], "section": "fp"},
+	{"id": "fp_noclip", "label": "Toggle noclip", "keys": [KEY_X], "contexts": ["*"], "section": "fp"},
+	{"id": "fp_leave", "label": "Return to battlefield", "keys": [KEY_ESCAPE], "contexts": ["*"], "section": "fp"},
 	{"id": "game_fullscreen", "label": "Toggle fullscreen (all screens)", "keys": [KEY_F11], "contexts": ["*"], "section": "game"},
 	{"id": "game_end_turn", "label": "End turn", "keys": [KEY_MASK_SHIFT | KEY_ENTER], "contexts": ["*"], "section": "game"},
 	{"id": "game_cancel", "label": "Settings / cancel / close", "keys": [KEY_ESCAPE], "contexts": ["*"], "section": "game"},
@@ -162,9 +171,13 @@ func conflicts(id: String, code: int) -> Array[String]:
 
 func rebind(id: String, event: InputEventKey, path := SETTINGS_PATH) -> String:
 	var code := event.get_keycode_with_modifiers()
-	if event.keycode in [KEY_NONE, KEY_CTRL, KEY_SHIFT, KEY_ALT, KEY_META]: return "Press a key, optionally with modifiers."
 	var entry := definition(id)
 	if entry.is_empty(): return "Unknown shortcut."
+	if event.keycode == KEY_NONE: return "Press a key, optionally with modifiers."
+	if event.keycode in [KEY_CTRL, KEY_SHIFT, KEY_ALT, KEY_META]:
+		if id != "fp_run": return "Press a key, optionally with modifiers."
+		# A modifier held as Run is a key itself, not a chord with itself.
+		code = event.keycode
 	if entry.section == "game" and not id.begins_with("replay_") and ((code >= KEY_1 and code <= KEY_9) or (code >= KEY_KP_1 and code <= KEY_KP_9)):
 		return "Numbers 1–9 are reserved for action choices."
 	var taken := conflicts(id, code)
@@ -197,6 +210,10 @@ func matches(event: InputEvent, id: String) -> bool:
 
 func down(id: String) -> bool:
 	return Input.is_action_pressed(id, true)
+
+## Movement permits holding Run while moving, without changing shortcut matching.
+func movement_down(id: String) -> bool:
+	return Input.is_action_pressed(id)
 
 func typing(viewport: Viewport) -> bool:
 	var focus := viewport.gui_get_focus_owner()

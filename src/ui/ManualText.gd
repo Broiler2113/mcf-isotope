@@ -70,7 +70,7 @@ Armored walls and the map boundary stop the beam. A vehicle also stops the beam,
 Cover counts only on [b]the cell right next to the target, on the side facing the shooter[/b]. Within 2 cells there is no cover at all. A 1 m obstacle in that cell adds [b]+%d[/b] to the roll needed. Cover makes a soldier harder to hit, never harder to kill.
 
 [h]Corpses[/h]
-A corpse lying on the ground hides nobody. Five corpses on one cell become a [b]corpse wall[/b] - a full wall. A soldier can carry corpses as a shield: [b]+1 to its parry[/b] for each.
+A corpse lying on the ground hides nobody. Five corpses on one cell become a [b]corpse wall[/b]. It blocks movement and sight and cannot burn. A soldier can carry corpses as a shield: [b]+1 to its parry[/b] for each.
 
 [h]Trenches[/h]
 A soldier in a trench [b]cannot be shot from more than 1 cell away[/b]. An enemy standing at the lip can fire down into it. The Marksman's beam passes over trenches unless the Marksman stands in the same straight run of trench.
@@ -213,22 +213,24 @@ The trained model (RLM). Falls back to a Tactician when no model is running.""" 
 Press [b]First Person[/b] in the tools, then click any free cell you can see to stand there. Walking does not change the battle. Other players can see your walker where their fog of war permits it.
 
 [h]Controls[/h]
-[b]WASD[/b] to walk, hold [b]Shift[/b] to run, the mouse to look, [b]Space[/b] to jump or climb out of a trench, [b]X[/b] to walk through everything, [b]Esc[/b] to leave. In space you float: thrust with WASD and drift until you push back.
+The defaults are [b]WASD[/b] to move, [b]Shift[/b] to run, the mouse to look, [b]Space[/b] to jump or climb, [b]C[/b] to descend in space, [b]X[/b] to toggle noclip and [b]Esc[/b] to return. All bindings are listed in [b]Settings → Keybinds → First-person controls[/b]. Noclip flies where you look; Space and C move vertically. It has no gravity, drift or height limit, but cannot enter unexplored cells.
 
 [h]What you see[/h]
 One cell is one meter; walls and ceilings are 2.3 m high. Cells you have never seen are black, and cells out of sight now are dimmed - fog of war still applies. Field of view and mouse sensitivity are in Settings."""],
 
-		["Cheats", """[h]Opt-in sandbox controls[/h]
-Enable [b]Enable cheats[/b] in the lobby. The host chooses which human slots may change gameplay; guests start without permission. Loaded games restore their original settings, and the host can adjust cheats and ongoing rules before resuming.
+		["Cheats", """[h]Enabling cheats[/h]
+In the lobby, turn on [b]Enable cheats[/b]. The host chooses which human slots may change gameplay; guests start without permission. Loaded games restore their original settings, and the host can adjust cheats and ongoing rules before resuming.
 
 [h]Console[/h]
 Press [b]F2[/b] during a battle. Type [b]help[/b] for categories, use [b]Tab[/b] for command hints and completion, [b]Up/Down[/b] for history, [b]Enter[/b] to submit and [b]Esc[/b] to stop a placement tool or close. Drag the title bar to move the window; drag its lower corner to resize. Both the console and manual leave the battlefield interactive. This shortcut can be changed in Settings. The console is unavailable in first person, replays and spectator mode.
 
 [h]Permissions and commands[/h]
-[b]players[/b] lists player slots. [b]units[/b], [b]vehicles[/b] and [b]ids on[/b] identify battlefield entities when you have permission. Units show permanent [b]U[/b] IDs and vehicles [b]V[/b] IDs, including above the battlefield with [b]ids on[/b]. Commands accept the full displayed ID or its numeric part. Coordinates start at zero. [b]units self status[/b] and [b]vehicles self status[/b] show alive/dead counts for your player and the board. Player targets accept [b]self[/b], [b]#1[/b] through [b]#26[/b], or a quoted player name. The host can use [b]cheats grant #2[/b] and [b]cheats revoke #2[/b], even if their own gameplay permission is off.
+[b]players[/b] lists player slots. [b]units[/b], [b]vehicles[/b] and [b]ids on[/b] identify battlefield entities when you have permission. Units show permanent [b]U[/b] IDs and vehicles [b]V[/b] IDs, including above the battlefield with [b]ids on[/b]. Commands accept the full displayed ID or its numeric part. Coordinates start at zero and use [b](x,y)[/b]. Use [b]coords on[/b] to show them on the map. A corpse keeps its original ID with a trailing dash, such as [b]U12-[/b], while carried or dropped. [b]units self status[/b] and [b]vehicles self status[/b] show alive/dead counts for your player and the board. Player targets accept [b]self[/b], [b]#1[/b] through [b]#26[/b], or a quoted player name. The host can use [b]cheats grant #2[/b] and [b]cheats revoke #2[/b], even if their own gameplay permission is off.
 
 [h]Click tools and event management[/h]
-[b]inspect[/b] arms a repeatable inspection tool. [b]spawn unit engineer self[/b] and [b]spawn vehicle tank self[/b] keep placing the chosen entity when you click; [b]Esc[/b] stops the tool and leaves the console open. The title bar and corner let you move and resize the console while the battlefield stays usable.
+[b]inspect[/b], [b]inspect unit[/b], [b]inspect vehicle[/b] and [b]inspect cell[/b] let you select targets on the map. Supply a visible ID, such as [b]inspect unit U12[/b], to inspect that entity directly. [b]spawn unit engineer self[/b] and [b]spawn vehicle tank self[/b] keep placing the chosen entity when you click; [b]Esc[/b] stops the tool and leaves the console open. For spawning, [b]self[/b] means one independent army hostile to every player. Use your slot, such as [b]#1[/b], to spawn for your own army. Other commands keep using [b]self[/b] for your player.
+
+For an area event, click its two opposite corners, or enter [b]event place gas (1,2) (3,4) 3[/b]. Both corner cells are included. [b]world gas add[/b] and [b]world smoke add[/b] use the same corner format.
 
 [b]event types[/b] lists available types, [b]event list[/b] lists active effects and warnings, [b]event spawn gas[/b] opens a property editor and placement tool, and [b]event trigger gas[/b] triggers one immediately at its normal random location. [b]event edit gas:1[/b] edits that exact effect, and [b]event remove gas:1[/b] cancels it. Use references printed by event list or click their suggestions. Event fire and old mines are managed as aggregate effects because the simulation stores their affected cells; completed explosions, reinforcements and damage are not undone. Parameters appear only where the underlying event supports them.
 
@@ -239,7 +241,7 @@ The host can use [b]ai pause #2[/b], [b]ai step #2[/b] and [b]ai resume #2[/b]. 
 Successful gameplay commands are shared, recorded in the replay and cannot be undone. Effects survive saves and rejoining. Disabling cheats in a resumed lobby preserves effects already in the save and releases paused AI players so the match can continue. Commands stop changing gameplay after the match ends.
 
 [h]Complete command reference[/h]
-""" + CheatCommands.help_text().replace("[", "[lb]")],
+""" + CheatCommands.manual_reference()],
 	]
 
 static func _events_text() -> String:

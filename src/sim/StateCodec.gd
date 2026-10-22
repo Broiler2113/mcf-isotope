@@ -101,6 +101,7 @@ static func _encode_unit(u: UnitInstance) -> Dictionary:
 		"borg": u.borg_id, "bcred": u.build_credits.duplicate(),
 		"ldf_wall": u.ldf_wall_used, "move_credit": u.move_credit,
 		"mines": u.mine_credits, "corpses": u.carried_corpses,
+		"corpse_carrier": u.corpse_carrier_id, "corpse_stacked": u.corpse_stacked,
 		"dragging": _xy(u.dragging),
 	}
 	if u.cheat_invulnerable: rec["cheat_invulnerable"] = true
@@ -423,6 +424,7 @@ static func _decode_unit(raw: Dictionary) -> Dictionary:
 		"move_credit": int(raw.get("move_credit", 0)),
 		"mine_credits": int(raw.get("mines", 0)),
 		"carried_corpses": int(raw.get("corpses", 0)),
+		"corpse_carrier_id": int(raw.get("corpse_carrier", -1)), "corpse_stacked": bool(raw.get("corpse_stacked", false)),
 		"burnt": bool(raw.get("burnt", false)),
 		"cheat_invulnerable": raw.get("cheat_invulnerable", false),
 		"cheat_stats": UnitInstance.clean_cheat_stats(raw.get("cheat_stats", {})),

@@ -1025,8 +1025,8 @@ func _scroll_menu(panel: PanelContainer, title: String = "Actions", back := Call
 
 ## Под курсором ли какое-либо видимое всплывающее меню (#8).
 func _pointer_over_popup(pos: Vector2) -> bool:
-	for p in [_menu, _picker]:
-		if p != null and p.visible and p.get_global_rect().has_point(pos):
+	for p in [_menu, _picker, _hud_window, _chat_panel] + get_tree().get_nodes_in_group("board_input_panel"):
+		if is_instance_valid(p) and p.is_visible_in_tree() and not p.is_queued_for_deletion() and p.get_global_rect().has_point(pos):
 			return true
 	return false
 

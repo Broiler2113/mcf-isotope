@@ -12,6 +12,8 @@ static func refill(unit: UnitInstance) -> void:
 	unit.dragging = UnitInstance.NOT_DRAGGING
 
 static func linked(r: GameActionResolver, unit: UnitInstance) -> String:
+	if unit.corpse_carrier_id >= 0: return "This body is being carried."
+	if unit.corpse_stacked: return "This body is part of a corpse pile."
 	if unit.captor_id != -1 or r.held_unit_of(unit) != null: return "Release captives first."
 	if unit.aboard_vehicle_id != -1 or unit.borg_id != -1: return "Disembark from the vehicle first."
 	if unit.carried_corpses > 0: return "Drop carried corpses first."
@@ -83,10 +85,13 @@ static func spawn(r: GameActionResolver, args: Dictionary, source: UnitInstance 
 			unit = state.spawn_unit(stats, coord, owner)
 		if unit == null: continue
 		if source != null: unit.held_item_id = source.held_item_id
+		if MCF.is_independent(owner): unit.neutral_group = MCF.independent_index(owner)
 		ids.append(unit.id)
 	if ids.is_empty(): return ActionResult.fail("Placed 0 of %d: no legal destination cells." % requested)
 	state.roster.set_eliminated(owner, false)
 	state.turns.eliminated.erase(owner)
+	if MCF.is_independent(owner) and not state.turns.round_order.has(owner):
+		state.turns.insert_slot(owner, state.turns.round_order.size())
 	var detail := "Placed %d of %d %s; IDs: %s." % [ids.size(), requested, stats.display_name, str(ids)]
 	if ids.size() < requested: detail += " Remaining placements failed because no legal cells were available."
 	return result(detail)

@@ -24,7 +24,7 @@ func run() -> void:
 		ck(not r.state.dice.take_log().is_empty(), "destruction uses shared dice")
 		r.state.dice.record_enabled = false
 		command(r, "vehicle remove %d" % veh.id)
-	command(r, "spawn vehicle borg self 2 2")
+	command(r, "spawn vehicle borg #1 2 2")
 	var borg: Vehicle = r.state.all_vehicles()[0]
 	ck(r.state.get_unit(0).borg_id == borg.id and borg.borg_operator() == 0, "Borg operator links")
 	rejected(r, "vehicle remove %d" % borg.id)
@@ -36,7 +36,7 @@ func run() -> void:
 func _protected_crew() -> void:
 	for type: String in ["tank", "shuttle"]:
 		var r := fresh()
-		command(r, "spawn vehicle %s self 3 2" % type)
+		command(r, "spawn vehicle %s #1 3 2" % type)
 		var vehicle: Vehicle = r.state.all_vehicles()[0]
 		var crew := r.state.get_unit(0)
 		command(r, "unit invulnerable 0 on")

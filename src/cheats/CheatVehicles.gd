@@ -35,6 +35,9 @@ static func spawn(r: GameActionResolver, args: Dictionary) -> ActionResult:
 	var error := _placement(r.state, type, at, null, pilot)
 	if not error.is_empty(): return ActionResult.fail(error)
 	var veh := r.state.spawn_vehicle(type, at, args.owner)
+	if MCF.is_independent(veh.owner) and not r.state.turns.round_order.has(veh.owner):
+		r.state.turns.insert_slot(veh.owner, r.state.turns.round_order.size())
+	r.state.turns.eliminated.erase(veh.owner)
 	if args.has("facing"): veh.facing = _facing(args.facing)
 	if pilot != null:
 		# Same invariant as boarding: the operator occupies the cell, the Borg follows.

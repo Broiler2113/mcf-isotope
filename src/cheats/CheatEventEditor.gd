@@ -12,6 +12,8 @@ var apply_button: Button
 var remove_button: Button
 var records: Array[Dictionary] = []
 var controls: Dictionary = {}
+var corner_a: LineEdit
+var corner_b: LineEdit
 
 static func open(owner_console: CheatConsole, spawn_mode: bool, target := "") -> CheatEventEditor:
 	for old in owner_console.get_children():
@@ -98,6 +100,8 @@ func _show_selected() -> void:
 		fields.remove_child(child)
 		child.queue_free()
 	controls.clear()
+	corner_a = null
+	corner_b = null
 	apply_button.disabled = records.is_empty()
 	remove_button.disabled = records.is_empty()
 	if records.is_empty(): description.text = "No active events or pending warnings. Use event spawn to create one."; return
@@ -107,12 +111,32 @@ func _show_selected() -> void:
 	description.text = RandomEvents.NOTES.get(entry.event, "Harmless smoke reduces visibility.")
 	if spawning:
 		apply_button.disabled = not r._events_allowed().has(entry.event)
-		description.text += "\nClick to choose the area center, a soldier for a bounty, or the landing edge for a force. Dust covers the whole board. Esc stops placement."
+		if entry.event in ["mortar", "gas", "fire", "emp", "collapse"]:
+			description.text += "\nEnter two opposite corners below, or select them on the battlefield. Both corners are included."
+		elif entry.event == "bounty": description.text += "\nSelect a living soldier on the battlefield."
+		elif entry.event in ["army", "reinforce"]: description.text += "\nSelect a landing edge on the battlefield."
+		elif entry.event == "dust": description.text += "\nThis event covers the whole battlefield."
+		else: description.text += "\nSelect a location on the battlefield."
 	else:
 		description.text += "\nOnly this effect's supported properties are editable. Removing an event does not reverse damage already dealt."
 	var schema := CheatEventModel.schema(entry.event, r, entry.properties)
+	if schema.has("w") and (spawning or entry.properties.has_all(["x", "y", "w", "h"])):
+		for title: String in ["First corner", "Opposite corner"]:
+			var label := Label.new()
+			label.text = title
+			fields.add_child(label)
+			var input := LineEdit.new()
+			input.placeholder_text = "(x,y)"
+			input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			fields.add_child(input)
+			if corner_a == null: corner_a = input
+			else: corner_b = input
+		if not spawning:
+			var p: Dictionary = entry.properties
+			corner_a.text = "(%d,%d)" % [p.x, p.y]
+			corner_b.text = "(%d,%d)" % [p.x + p.w - 1, p.y + p.h - 1]
 	for key: String in entry.properties:
-		if not schema.has(key): continue
+		if not schema.has(key) or key in ["x", "y", "w", "h"]: continue
 		var label := Label.new()
 		label.text = {"w": "Width (cells)", "h": "Height (cells)", "rounds": "Rounds remaining" if not spawning else "Duration (rounds)", "edge": "Edge (0=N, 1=E, 2=S, 3=W)", "from": "Edge offset", "len": "Landing width", "side": "Player (zero-based slot)", "unit": "Target unit ID"}.get(key, key.capitalize())
 		fields.add_child(label)
@@ -123,7 +147,7 @@ func _show_selected() -> void:
 		spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		fields.add_child(spin)
 		controls[key] = spin
-	if controls.is_empty() and not spawning:
+	if controls.is_empty() and corner_a == null and not spawning:
 		apply_button.disabled = true
 		description.text += "\nThis effect can be removed; it has no adjustable numeric properties."
 
@@ -135,6 +159,16 @@ func _apply() -> void:
 		var spin: SpinBox = controls[key]
 		spin.apply()
 		props[key] = int(spin.value)
+	if corner_a != null and (not spawning or not corner_a.text.is_empty() or not corner_b.text.is_empty()):
+		var parsed := CheatCommands.parse("world smoke add %s %s" % [corner_a.text, corner_b.text], console.main.state, console.caller())
+		if parsed.has("error") or not parsed.get("args", {}).has("width"):
+			description.text = parsed.get("error", "Enter both corners as (x,y).")
+			return
+		props.merge({"x": parsed.args.x, "y": parsed.args.y, "w": parsed.args.width, "h": parsed.args.height}, true)
+		if spawning:
+			console.execute_action("event_spawn", {"event": entry.event, "x": props.x, "y": props.y, "properties": props})
+			queue_free()
+			return
 	if spawning:
 		console.start_tool({"op": "event_spawn_tool", "args": {"event": entry.event, "properties": props}})
 		queue_free()

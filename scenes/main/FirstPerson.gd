@@ -168,14 +168,6 @@ func _ready() -> void:
 	cross.set_anchors_preset(Control.PRESET_FULL_RECT)
 	cross.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(cross)
-	var help := Label.new()
-	help.text = "WASD Move   Shift Run   Space Jump   X Noclip   Esc Return"
-	help.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT)
-	help.position = Vector2(18, -38)
-	help.add_theme_color_override("font_shadow_color", Color.BLACK)
-	help.add_theme_constant_override("shadow_offset_x", 2)
-	help.add_theme_constant_override("shadow_offset_y", 2)
-	add_child(help)
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	grab_focus()
 	# Build the cells right around you before the first frame, so you never spawn in a void.
@@ -197,15 +189,15 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
-		match event.physical_keycode:
-			KEY_ESCAPE:
-				leave()
-			KEY_X:
-				noclip = not noclip
-			KEY_SPACE:
-				if (on_ground or noclip) and not _in_space(pos):
-					vel_y = JUMP_V
-					on_ground = false
+		if Keybinds.matches(event, "fp_leave"):
+			leave()
+		elif Keybinds.matches(event, "fp_noclip"):
+			noclip = not noclip
+			drift = Vector3.ZERO
+			vel_y = 0.0
+		elif event.is_action_pressed("fp_up") and on_ground and not noclip and not _in_space(pos):
+			vel_y = JUMP_V
+			on_ground = false
 		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventMouseButton:
@@ -295,13 +287,12 @@ func _ground_at(p: Vector3) -> float:
 
 func _blocked(p: Vector3) -> bool:
 	var g := _ground_at(p)
+	if noclip: return g == INF
 	if g > p.y + STEP:
 		return true
 	# Floating below the deck, the deck's edge is a wall.
 	if g > -INF and p.y < g - 0.05:
 		return true
-	if noclip:
-		return false
 	for id: int in _units:
 		var n: Node3D = _units[id]
 		if n.visible and n.has_meta("soldier") and Vector2(n.position.x - p.x, n.position.z - p.z).length() < RADIUS + UNIT_W * 0.5:
@@ -311,7 +302,7 @@ func _blocked(p: Vector3) -> bool:
 ## Holding Space against a ledge up to 2.2 m high pulls you up onto it: out of a trench,
 ## onto a wall of sandbags. Units still stand in the way.
 func _climb(p: Vector3) -> bool:
-	if not Input.is_physical_key_pressed(KEY_SPACE):
+	if not Keybinds.movement_down("fp_up"):
 		return false
 	var g := _ground_at(p)
 	if g == INF or g == -INF or g - pos.y > 2.2:
@@ -328,16 +319,41 @@ func _in_space(p: Vector3) -> bool:
 	return _ground_at(p) == -INF
 
 func _move(delta: float) -> void:
+	if noclip:
+		_fly(delta, _move_input(), Keybinds.movement_down("fp_run"))
+		return
 	if _in_space(pos) and not noclip:
 		_float(delta)
 		return
 	drift = Vector3.ZERO
 	var dir := Vector3.ZERO
-	if Input.is_physical_key_pressed(KEY_W): dir.z -= 1
-	if Input.is_physical_key_pressed(KEY_S): dir.z += 1
-	if Input.is_physical_key_pressed(KEY_A): dir.x -= 1
-	if Input.is_physical_key_pressed(KEY_D): dir.x += 1
-	_walk(delta, dir, Input.is_physical_key_pressed(KEY_SHIFT))
+	if Keybinds.movement_down("fp_forward"): dir.z -= 1
+	if Keybinds.movement_down("fp_back"): dir.z += 1
+	if Keybinds.movement_down("fp_left"): dir.x -= 1
+	if Keybinds.movement_down("fp_right"): dir.x += 1
+	_walk(delta, dir, Keybinds.movement_down("fp_run"))
+
+func _move_input() -> Vector3:
+	return Vector3(float(Keybinds.movement_down("fp_right")) - float(Keybinds.movement_down("fp_left")),
+		float(Keybinds.movement_down("fp_up")) - float(Keybinds.movement_down("fp_down")),
+		float(Keybinds.movement_down("fp_back")) - float(Keybinds.movement_down("fp_forward")))
+
+## Noclip has no gravity, inertia, ceiling or altitude limit. Only fog blocks it.
+func _fly(delta: float, direction: Vector3, running: bool) -> void:
+	drift = Vector3.ZERO
+	vel_y = 0.0
+	on_ground = false
+	var basis := Basis.from_euler(Vector3(pitch, yaw, 0))
+	var movement := basis * Vector3(direction.x, 0, direction.z) + Vector3.UP * direction.y
+	var step := movement.normalized() * (RUN_SPEED if running else SPEED) * delta
+	# Substeps prevent fast movement from skipping a narrow strip of unknown cells.
+	var count := maxi(1, ceili(step.length() / 0.2))
+	step /= count
+	for i in count:
+		for axis in [0, 2, 1]:
+			var next := pos
+			next[axis] += step[axis]
+			if not _blocked(next): pos = next
 
 ## Ground movement uses one normalized input vector for motion and footstep distance.
 func _walk(delta: float, dir: Vector3, running: bool) -> void:
@@ -394,11 +410,12 @@ func _settle_feet() -> void:
 ## a wall or hull you hit stops the part of your motion that went into it.
 func _float(delta: float) -> void:
 	var push := Vector3.ZERO
-	if Input.is_physical_key_pressed(KEY_W): push.z -= 1
-	if Input.is_physical_key_pressed(KEY_S): push.z += 1
-	if Input.is_physical_key_pressed(KEY_A): push.x -= 1
-	if Input.is_physical_key_pressed(KEY_D): push.x += 1
-	if Input.is_physical_key_pressed(KEY_SPACE): push.y += 1
+	if Keybinds.movement_down("fp_forward"): push.z -= 1
+	if Keybinds.movement_down("fp_back"): push.z += 1
+	if Keybinds.movement_down("fp_left"): push.x -= 1
+	if Keybinds.movement_down("fp_right"): push.x += 1
+	if Keybinds.movement_down("fp_up"): push.y += 1
+	if Keybinds.movement_down("fp_down"): push.y -= 1
 	if push != Vector3.ZERO:
 		drift += (_cam.global_transform.basis * push.normalized()) * THRUST * delta
 	for axis in 3:

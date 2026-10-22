@@ -213,7 +213,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	# и не кликаем по полю под ним. Прокрутку колесом уже получил сам ScrollContainer;
 	# всё, что «просочилось» сюда (например, докрутка на границе), просто гасим, чтобы
 	# камера не ехала вместе с меню.
-	if event is InputEventMouseButton and _pointer_over_popup(event.position):
+	if (event is InputEventMouseButton or event is InputEventGesture) and _pointer_over_popup(event.position):
 		return
 	# Панорама мышью (средняя/правая кнопка) и жестом тачпада — работает всегда.
 	if event is InputEventMouseButton and event.button_index in [MOUSE_BUTTON_MIDDLE, MOUSE_BUTTON_RIGHT]:

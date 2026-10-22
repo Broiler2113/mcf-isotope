@@ -761,7 +761,7 @@ func _flame_walk(origin: Vector2i, dir: Vector2i, count: int, out: Array) -> int
 func _ignite(cell: GridCell, owner: int, res: ActionResult = null) -> void:
 	# В вакууме гореть нечему (editor-rework): ни струя, ни расползание, ни что-либо ещё
 	# космос не поджигают — поджог у клетки один, и правило у него одно.
-	if cell.is_space:
+	if cell.is_space or (not legacy_corpse_rules and MCF.FIRE_NEED_BY_FEATURE.get(cell.feature_id, 0) == MCF.FIRE_NEVER):
 		return
 	cell.on_fire = true
 	cell.fire_owner = owner

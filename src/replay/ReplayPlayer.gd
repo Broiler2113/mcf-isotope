@@ -101,6 +101,7 @@ func _rebuild(frame: Dictionary) -> void:
 	if state == null:
 		state = GameState.new(16, 12)
 	resolver = GameActionResolver.new(state)
+	resolver.legacy_corpse_rules = int(data.get("corpse_rules", 0)) < 1
 	resolver.track_undo_history = _needs_undo(int(frame.get("at", 0)))
 	seek_decals = frame.get("fx", {})
 	StateCodec.apply_rules(resolver, frame.get("rules", {}))

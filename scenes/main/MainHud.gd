@@ -433,12 +433,11 @@ func _build_ui() -> void:
 	_fps_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_fps_label.visible = false
 	_ui_layer.add_child(_fps_label)
-	var grip_mark := ColorRect.new()
+	var grip_mark := AccentRect.new()
 	grip_mark.color = Ui.accent_color()
 	grip_mark.set_anchors_preset(Control.PRESET_FULL_RECT)
 	grip_mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hud_grip.add_child(grip_mark)
-	Ui.accent_changed.connect(func() -> void: grip_mark.color = Ui.accent_color())
 
 	var frame := VBoxContainer.new()
 	frame.add_theme_constant_override("separation", 0)

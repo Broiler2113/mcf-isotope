@@ -393,7 +393,7 @@ func _weighted_raider_roster() -> Array:
 func _land_army(p: Dictionary, res: ActionResult) -> void:
 	var budget := _army_budget()
 	var slot := MCF.independent_slot(random_events.armies + 1)
-	if not MCF.is_independent(slot):
+	if not MCF.is_independent(slot) or slot == MCF.CHEAT_ARMY_OWNER:
 		return
 	# Больше ARMY_MAX армий на карту не приходит (0.9.4): событие может выпасть и десять
 	# раз подряд, а десять ничьих сторон в очереди — это уже не «событие», а другая игра.

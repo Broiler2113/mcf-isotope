@@ -340,7 +340,7 @@ func _run_scene(name: String, cfg: Dictionary) -> Dictionary:
 	# Повтор с начала: стартовая доска + все действия с их бросками.
 	var tr := Time.get_ticks_usec()
 	var player := ReplayPlayer.new({"start": start, "rules": rules, "opening": opening, "opening_processed": modern, "steps": steps,
-			"event_selection": "uniform", "meta": {}})
+			"event_selection": "uniform2", "corpse_rules": 1, "meta": {}})
 	player.seek(player.step_count())
 	var t_replay := Time.get_ticks_usec() - tr
 	var replay_ok := player.state != null and TS.digest(player.state) == TS.digest(hs)

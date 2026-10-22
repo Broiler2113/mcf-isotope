@@ -33,7 +33,14 @@ static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 	if params.is_empty():
 		r.state.dice.restore_checkpoint(checkpoint)
 		return ActionResult.fail("No eligible area is available for this event.")
-	if a.has("x"):
+	if a.has("properties"):
+		params.merge(a.properties, true)
+		var error := CheatEventModel.validate(id, params, r)
+		if error.is_empty() and id == RandomEvents.MORTAR and _overlaps(r, params): error = "The artillery area overlaps a pending barrage."
+		if not error.is_empty():
+			r.state.dice.restore_checkpoint(checkpoint)
+			return ActionResult.fail(error)
+	elif a.has("x"):
 		params.x = clampi(a.x - int(params.w) / 2, 0, r.state.grid.width - int(params.w))
 		params.y = clampi(a.y - int(params.h) / 2, 0, r.state.grid.height - int(params.h))
 		if id == RandomEvents.MORTAR:
@@ -103,7 +110,7 @@ static func _spawn_now(r: GameActionResolver, intent: CheatIntent) -> ActionResu
 		return ActionResult.fail("No eligible event area is available.")
 	p.merge(properties, true)
 	if a.has("x"):
-		if p.has("w"):
+		if p.has("w") and not properties.has("x"):
 			p.x = clampi(a.x - int(p.w) / 2, 0, r.state.grid.width - int(p.w))
 			p.y = clampi(a.y - int(p.h) / 2, 0, r.state.grid.height - int(p.h))
 		elif p.has("edge"):
