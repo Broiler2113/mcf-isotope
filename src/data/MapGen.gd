@@ -429,6 +429,9 @@ func _build(options: Dictionary, dim: Vector2i, need: int, tight: bool) -> void:
 func _window_floors() -> void:
 	for i in w * h:
 		var doorway := m.feature_id[i] == MCF.FEATURE_AIRLOCK
+		# Indoor maps already generate symmetric, constructed thresholds. Only
+		# outdoor doors need their underlying grass/soil replaced.
+		if doorway and _style not in [Style.TOWN, Style.FIELD, Style.ASTEROID]: continue
 		if not doorway and not MCF.is_glass(m.feature_id[i]): continue
 		var c := Vector2i(i % w, i / w)
 		var chosen := -1
