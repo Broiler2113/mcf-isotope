@@ -803,7 +803,7 @@ func _fit_ground() -> void:
 		_ground.z_index = -20
 		add_child(_ground)
 		var env := map.environment()
-		_ground.texture = GroundBackdrop.wallpaper(env) if env in ["town", "field", "bunker"] else null
+		_ground.texture = GroundBackdrop.wallpaper(env, map.winter) if env in ["town", "field", "bunker"] else null
 		_ground.visible = _ground.texture != null
 	if _ground.texture == null: return
 	var pixels := float(_ground.texture.get_height()) / GroundBackdrop.GROUND_TILES
@@ -841,6 +841,8 @@ func _build_sky() -> void:
 var _lighting: LightManager
 
 func _sync_lighting() -> void:
+	if _tile_layer != null and map != null and _tile_layer.tiles.set_winter(map.winter and MapData.supports_winter(map.environment())):
+		_tile_layer.queue_redraw()
 	if _tile_layer != null and _tile_layer.tiles.set_time_of_day(map.time_of_day if map != null else ""):
 		_tile_layer.queue_redraw()
 	if _tile_layer != null and map != null:
@@ -992,8 +994,18 @@ func _pointer_over_panel(pos: Vector2) -> bool:
 	return (_panel != null and _panel.get_global_rect().has_point(pos)) \
 			or (_chat_win != null and _chat_win.get_global_rect().has_point(pos))
 
+## Far enough out to see the whole map at once, however big (owner, fix-8 #27), and at
+## least to 0.3. Large maps may need cells smaller than three pixels to fit the viewport.
+func _zoom_min() -> float:
+	if map == null:
+		return ZOOM_MIN
+	var vp := get_viewport_rect().size
+	var board_width := maxf(1.0, vp.x - (_panel.size.x if _panel != null else 0.0))
+	var fit := minf(board_width / (map.width * CELL + ORIGIN.x * 2.0), vp.y / (map.height * CELL + ORIGIN.y * 2.0))
+	return clampf(fit * 0.95, 0.02, 0.3)
+
 func _zoom_at(screen_pos: Vector2, factor: float) -> void:
-	var new_zoom: float = clampf(zoom * factor, ZOOM_MIN, ZOOM_MAX)
+	var new_zoom: float = clampf(zoom * factor, _zoom_min(), ZOOM_MAX)
 	if is_equal_approx(new_zoom, zoom):
 		return
 	var local := (screen_pos - pan) / zoom

@@ -131,6 +131,11 @@ var _hover := Vector2i(-1, -1)
 var _env := ""
 var _grid: Grid = null
 var _tiles: TerrainTiles = null
+## Walking the map in first person (owner, fix-8 #17): pick a cell, then the 3D view.
+var _fp_pick := false
+var _fp: FirstPerson = null
+var _fp_layer: CanvasLayer = null
+var _fp_host: FirstPersonHost = null
 var _layer: TerrainTiles.Layer = null
 var _zone_img: Image = null
 var _zone_tex: ImageTexture = null
@@ -354,6 +359,9 @@ static func map_color(m: MapData, i: int, env: String) -> Color:
 		if tone != null and m.floor_type[i] != MCF.FLOOR_GRASS \
 				and not MCF.FLOOR_OVERLAY_LOOKS.has(m.get_look(i)):
 			col = tone
+		if m.winter and MapData.supports_winter(env) \
+				and (m.floor_type[i] == MCF.FLOOR_GRASS or m.get_look(i) in [MCF.Look.DEFAULT, MCF.Look.GRASS]):
+			col = Color(0.85, 0.89, 0.94)
 		if feat == MCF.FEATURE_TRENCH:
 			col = Color(0.2, 0.16, 0.12)
 		elif feat != "":
@@ -516,6 +524,10 @@ func _apply_entry(entry: Dictionary, forward: bool) -> void:
 		map.time_of_day = entry["time"][k]
 		_sync_lighting()
 		_refresh_menu_checks()
+		return
+	if entry.has("winter"):
+		map.winter = entry["winter"][k]
+		_winter_changed()
 		return
 	if entry.has("decals"):
 		map.decals = entry["decals"][k].duplicate(true)
@@ -1224,7 +1236,7 @@ func _sync_background() -> void:
 		_ground = GroundBackdrop.new()
 		_ground.z_index = -20
 		add_child(_ground)
-	_ground.texture = GroundBackdrop.wallpaper(_env) if _env in ["town", "field", "bunker"] else null
+	_ground.texture = GroundBackdrop.wallpaper(_env, map != null and map.winter) if _env in ["town", "field", "bunker"] else null
 	_ground.visible = _ground.texture != null
 	_fit_background()
 
@@ -1264,6 +1276,7 @@ func _sync_time_tint() -> void:
 
 func _sync_lighting() -> void:
 	if _tiles != null and _tiles.set_time_of_day(map.time_of_day if map != null else ""): queue_redraw()
+	if _tiles != null and map != null and _tiles.set_winter(map.winter and MapData.supports_winter(map.environment())): queue_redraw()
 	_sync_time_tint()
 	if not _lighting_preview:
 		if is_instance_valid(_lighting):
@@ -1278,6 +1291,8 @@ func _sync_lighting() -> void:
 			-1.0, map.time_of_day if map != null else "")
 
 func _process(delta: float) -> void:
+	if _fp != null:
+		return   # WASD walk the first-person view, they don't pan the map
 	# Куски плиток собираются по нескольку за кадр: пока бюджет кадра выбран до дна,
 	# перерисовываемся, иначе часть карты осталась бы в грубом разрешении до первого жеста.
 	if _tiles != null and _tiles._built >= TerrainTiles.BUILDS_PER_FRAME:
@@ -1302,7 +1317,17 @@ func _process(delta: float) -> void:
 	_sync_lighting()
 
 func _unhandled_input(event: InputEvent) -> void:
-	if Keybinds.modal_open(): return
+	if Keybinds.modal_open() or _fp != null: return
+	if _fp_pick:
+		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			_start_first_person(cell_at(event.position))
+			get_viewport().set_input_as_handled()
+			return
+		if event is InputEventKey and event.pressed and Keybinds.matches(event, "editor_cancel"):
+			_fp_pick = false
+			_refresh_status()
+			get_viewport().set_input_as_handled()
+			return
 	if _modal != null:
 		if event is InputEventKey and event.pressed and Keybinds.matches(event, "editor_cancel"):
 			_close_modal()
@@ -1450,7 +1475,7 @@ func _paint_decal(pos: Vector2) -> void:
 	if not map.in_bounds(Vector2i(pos.floor())): return
 	var kind := brush.substr(6)
 	if kind == "corpse": pos = pos.floor() + Vector2.ONE * 0.5
-	var spacing := 0.5 if kind == "corpse" else maxf(0.08, brush_size * 0.15)
+	var spacing := float(brush_size) if kind in MapData.WINTER_DECORATIONS else maxf(0.08, brush_size * 0.15)
 	if _decal_last != Vector2.INF and pos.distance_to(_decal_last) < spacing: return
 	if kind == "erase":
 		map.decals = map.decals.filter(func(d: Array) -> bool:
@@ -1515,7 +1540,7 @@ func _menu_popup_open() -> bool:
 	return false
 
 func _input(event: InputEvent) -> void:
-	if Keybinds.modal_open() or _menu_popup_open() or not event is InputEventKey or not event.pressed or event.echo: return
+	if _fp != null or Keybinds.modal_open() or _menu_popup_open() or not event is InputEventKey or not event.pressed or event.echo: return
 	# A shortcut can leave the scene immediately. Capture the viewport first.
 	var viewport := get_viewport()
 	if _modal != null:
@@ -2177,6 +2202,7 @@ func _build_menu_bar() -> void:
 			["Clear Map…", _clear_dialog]]],
 		["View", [["Zoom In", zoom_in, "editor_zoom_in"], ["Zoom Out", zoom_out, "editor_zoom_out"],
 			["Fit Map", fit_view, "editor_fit"], [],
+			["Walk in First Person", _enter_fp_pick], [],
 			["check:lighting", "Lighting", "editor_lighting"], ["check:heightmap", "Heightmap", "editor_heightmap"], ["check:grid", "Grid", "editor_grid"], ["check:zones", "Deployment Zones"], ["check:mini", "Minimap"], [],
 			["Keyboard Shortcuts…", _shortcuts_dialog, "editor_help"],
 			["Manual", func() -> void: ManualWindow.toggle(self), "editor_manual"],
@@ -2184,7 +2210,7 @@ func _build_menu_bar() -> void:
 		["Presets", [["Save Selection…", _save_room_dialog], ["Manage Rooms & Structures…", _room_manager],
 			["Open Presets Folder", func() -> void: OS.shell_open(ProjectSettings.globalize_path(RoomPresets.DIR))]]],
 		["Map", [["Resize…", _resize_dialog], [], ["label", "Preset"]] + _preset_items()
-			+ [[], ["label", "Time of Day"]] + _time_items()],
+			+ [[], ["label", "Time of Day"]] + _time_items() + [[], ["check:winter", "Winter (snow)"]]],
 	]:
 		var mb := MenuButton.new()
 		mb.text = spec[0]
@@ -2329,6 +2355,61 @@ func set_time_of_day(t: String) -> void:
 	_push({"time": [before, t]})
 	_sync_lighting()
 	_refresh_menu_checks()
+
+## First person in the editor (owner, fix-8 #17): click a free cell and walk the map in 3D
+## as it stands — no fog, every placed soldier where he was put. Esc comes back.
+func _enter_fp_pick() -> void:
+	_fp_pick = true
+	_refresh_status()
+
+func _start_first_person(at: Vector2i) -> void:
+	if not map.in_bounds(at):
+		_refresh_status()
+		return
+	_fp_host = FirstPersonHost.new(map, _tiles)
+	add_child(_fp_host)
+	if not FirstPerson.walkable_start(_fp_host, at):
+		_fp_host.queue_free()
+		_fp_host = null
+		_status_label.text = "That cell is not free to stand on — pick floor, not a wall or a soldier."
+		return
+	_fp_pick = false
+	_fp_layer = CanvasLayer.new()
+	_fp_layer.layer = 60
+	add_child(_fp_layer)
+	_fp = FirstPerson.new(_fp_host, at)
+	_fp.left.connect(_end_first_person)
+	_fp_layer.add_child(_fp)
+	_ui.visible = false
+
+func _end_first_person() -> void:
+	if _fp_layer != null:
+		_fp_layer.queue_free()
+	if _fp_host != null:
+		_fp_host.queue_free()
+	_fp_layer = null
+	_fp = null
+	_fp_host = null
+	_ui.visible = true
+	_refresh_status()
+	queue_redraw()
+
+## Winter (owner, fix-8 #3): snow on a town or a field, only looks; undoable like the hour.
+func set_winter(on: bool) -> void:
+	if not MapData.supports_winter(map.environment()) or on == map.winter:
+		return
+	_push({"winter": [map.winter, on]})
+	map.winter = on
+	_winter_changed()
+
+func _winter_changed() -> void:
+	_sync_lighting()
+	_sync_background()
+	for i in map.width * map.height:
+		_mini_img.set_pixelv(Vector2i(i % map.width, i / map.width), map_color(map, i, _env))
+	_mini_stale = true
+	_refresh_menu_checks()
+	queue_redraw()
 
 func _preset_items() -> Array:
 	var out: Array = []
@@ -2493,6 +2574,8 @@ func _menu_action(a: Variant) -> void:
 			show_grid = not show_grid
 		elif s == "check:zones":
 			show_zones = not show_zones
+		elif s == "check:winter":
+			set_winter(not map.winter)
 		elif s == "check:mini":
 			_mini_rect.get_parent().visible = not _mini_rect.get_parent().visible
 		elif s.begins_with("radio:time:"):
@@ -2521,6 +2604,9 @@ func _refresh_menu_checks() -> void:
 		var idx := MapPresets.NAMES.find(m.get_item_text(i))
 		if idx >= 0 and m.is_item_radio_checkable(i):
 			m.set_item_checked(i, MapPresets.IDS[idx] == map.environment())
+		if m.get_item_text(i).begins_with("Winter"):
+			m.set_item_disabled(i, not MapData.supports_winter(map.environment()))
+			m.set_item_checked(i, map.winter and MapData.supports_winter(map.environment()))
 		var t := MapData.TIME_NAMES.find(m.get_item_text(i))
 		if t >= 0 and m.is_item_radio_checkable(i):
 			var available := MapData.supports_time_of_day(map.environment())
@@ -2652,6 +2738,7 @@ func _refresh_palette() -> void:
 		c.queue_free()
 	_brush_buttons.clear()
 	_palette_group("Decals", [["decal:blood_pool", "Blood pool"], ["decal:blood_drop", "Blood drop"], ["decal:erase", "Erase decals"]])
+	_palette_group("Winter decorations", [["decal:snowman", "Snowman"], ["decal:snowdrift", "Snowdrift"]])
 	# Тело — не декаль (0.12.2, item 20): это настоящее тело на клетке, его в бою можно
 	# оттащить и сложить в стену из тел; кистью кладётся по одному, до пяти на клетку.
 	_palette_group("Bodies", [[CORPSE_BRUSH, "Corpse"]])
@@ -3074,6 +3161,9 @@ static func _furniture_hint(fid: String) -> String:
 
 func _refresh_status() -> void:
 	if _status_label == null or map == null:
+		return
+	if _fp_pick:
+		_status_label.text = "First person: click any free cell to walk there (Esc cancels; Esc in 3D comes back)."
 		return
 	var tname := ""
 	for t: Dictionary in TOOLS:

@@ -48,6 +48,8 @@ var wall_accent: PackedByteArray = PackedByteArray()
 var door_look: PackedByteArray = PackedByteArray()
 ## Cosmetic ground decals, JSON records [kind, x, y, rotation, scale].
 var decals: Array = []
+const WINTER_DECORATIONS := ["snowman", "snowdrift"]
+const DECAL_KINDS := ["blood_pool", "blood_drop", "snowman", "snowdrift"]
 ## Small items (0.12.1, SmallItems): [kind, x, y, rotation] — free-placed, on tables or floor.
 var items: Array = []
 ## Bodies lying on the map (0.12.2, item 20: "the corpse shouldn't be a decal"): one cell
@@ -64,6 +66,13 @@ const TIMES := ["morning", "day", "evening", "night"]
 const TIME_NAMES := ["Morning", "Day", "Evening", "Night"]
 
 static func supports_time_of_day(environment_id: String) -> bool:
+	return environment_id in ["town", "field"]
+
+## Winter (owner, fix-8 #3): snow on the ground, the plants and the roofs, flakes falling.
+## Only looks — cover, movement and fire are as in summer. Town and field only.
+var winter := false
+
+static func supports_winter(environment_id: String) -> bool:
 	return environment_id in ["town", "field"]
 
 static func time_name(t: String) -> String:
@@ -430,7 +439,7 @@ func environment() -> String:
 ## Построить готовый GameState: сетка + рельеф + заспавненные по карте юниты.
 ## roster — состав партии из лобби; null означает «выведи стороны из самой карты»
 ## (демо-ростер, редакторская проба, старое сохранение).
-func build_state(dice_seed: int = -1, roster: Roster = null) -> GameState:
+func build_state(dice_seed: int = -1, roster: Roster = null, editor_preview := false) -> GameState:
 	var st := GameState.new(width, height, dice_seed)
 	if roster != null:
 		st.roster = roster
@@ -439,6 +448,7 @@ func build_state(dice_seed: int = -1, roster: Roster = null) -> GameState:
 	apply_to_grid(st.grid)
 	st.env = environment()
 	st.time_of_day = time_of_day
+	st.winter = winter and supports_winter(st.env)
 	# Мирных не больше, чем задано ползунком лобби (item 11). Лишних прореживаем РАВНОМЕРНО
 	# по порядку карты — у каждого пира тот же порядок, значит и тот же выбор, и жители не
 	# сбиваются в одну половину поля.
@@ -446,7 +456,7 @@ func build_state(dice_seed: int = -1, roster: Roster = null) -> GameState:
 	for s in spawns:
 		if MCF.is_neutral(int(s["owner"])):
 			n_civ += 1
-	var keep_civ := mini(n_civ, GameConfig.civilian_count)
+	var keep_civ := n_civ if editor_preview else mini(n_civ, GameConfig.civilian_count)
 	var civ_i := 0
 	for s in spawns:
 		var sid: String = s["stats_id"]
@@ -575,6 +585,8 @@ func to_dict() -> Dictionary:
 		out["fixtures"] = records
 	if time_of_day != "":
 		out["time"] = time_of_day
+	if winter:
+		out["winter"] = true
 	return out
 
 static func from_dict(d: Dictionary) -> MapData:
@@ -606,7 +618,7 @@ static func from_dict(d: Dictionary) -> MapData:
 		if int(k) < n and rec.size() == 2:
 			m.feature_dur[int(k)] = [str(rec[0]), int(rec[1])]
 	for record in d.get("decals", []):
-		if record is Array and record.size() == 5 and str(record[0]) in ["blood_pool", "blood_drop"]:
+		if record is Array and record.size() == 5 and str(record[0]) in DECAL_KINDS:
 			if float(record[1]) >= 0 and float(record[2]) >= 0 and float(record[1]) < m.width and float(record[2]) < m.height:
 				m.decals.append([str(record[0]), float(record[1]), float(record[2]), float(record[3]), clampf(float(record[4]), 0.1, 4.0)])
 	for entry in d.get("corpses", []):
@@ -649,6 +661,7 @@ static func from_dict(d: Dictionary) -> MapData:
 		})
 	var tod := str(d.get("time", ""))
 	m.time_of_day = tod if TIMES.has(tod) else ""
+	m.winter = bool(d.get("winter", false))
 	# Retired furniture becomes its actual loose prop / ordinary desk on import.
 	for i in n:
 		if m.feature_id[i] == "toolbox":

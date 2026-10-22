@@ -311,6 +311,21 @@ const _BASE := {
 	"bush_dry": {"name": "Dry Bush", "cat": "public", "h": 0.5, "mat": "wood", "dur": 1, "mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["outdoor"]},
 	"bush_flowering": {"name": "Flowering Bush", "cat": "public", "h": 0.5, "mat": "wood", "dur": 1, "mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["outdoor"]},
 	"park_tree": {"name": "Park Tree", "cat": "public", "h": 2.0, "mat": "wood", "dur": 3, "mob": Mobility.FIXED, "ap": 2, "at": "free", "gen": true, "rooms": ["outdoor"]},
+	# --- fix-8: botany (station hydroponics), more outdoor plants -------------------------
+	## Botany bays (owner, item 1): raised planter beds, racks of hydroponic trays under grow
+	## lights, a potting table with seedling trays.
+	"planter_bed": {"join": "run", "name": "Planter Bed", "cat": "industrial", "h": 0.5, "mat": "wood", "dur": 1,
+		"mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["botany"]},
+	"hydroponic_rack": {"join": "run", "name": "Hydroponic Rack", "cat": "industrial", "h": 1.5, "mat": "metal", "dur": 2,
+		"mob": Mobility.FIXED, "ap": 2, "at": "free", "gen": true, "rooms": ["botany"],
+		"emits_light": true, "light_color": Color(0.9, 0.55, 1.0), "light_range": 3.5, "light_energy": 0.5},
+	"seed_table": {"join": "whole", "sizes": [[2, 1]], "back": "", "name": "Potting Table", "cat": "industrial", "h": 1.0,
+		"mat": "metal", "dur": 2, "mob": Mobility.HEAVY, "ap": 1, "at": "center", "gen": true, "rooms": ["botany"]},
+	## More green outdoors (owner, item 2).
+	"pine_tree": {"name": "Pine Tree", "cat": "public", "h": 2.0, "mat": "wood", "dur": 3, "mob": Mobility.FIXED, "ap": 2, "at": "free", "gen": true, "rooms": ["outdoor"]},
+	"hedge": {"join": "run", "name": "Hedge", "cat": "public", "h": 1.0, "mat": "wood", "dur": 2, "mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["outdoor"]},
+	"tall_grass": {"name": "Tall Grass", "cat": "public", "h": 0.5, "mat": "fabric", "dur": 1, "mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["outdoor"]},
+	"flower_bed": {"join": "run", "name": "Flower Bed", "cat": "public", "h": 0.5, "mat": "wood", "dur": 1, "mob": Mobility.FIXED, "ap": 1, "at": "free", "gen": true, "rooms": ["outdoor"]},
 	"shower": {"name": "Shower Unit", "cat": "residential", "h": 1.5, "mat": "metal", "dur": 2, "mob": Mobility.FIXED, "ap": 2, "at": "wall", "gen": true, "rooms": ["bathroom", "restroom"]},
 	"bathtub": {"join": "whole", "sizes": [[1, 2]], "back": "short", "name": "Bathtub", "cat": "residential", "h": 0.5, "mat": "plastic", "dur": 2, "mob": Mobility.FIXED, "ap": 2, "at": "wall", "gen": true, "rooms": ["bathroom"]},
 

@@ -9,7 +9,7 @@ extends RefCounted
 ##    its relief baked in (owner: walls looked flat) — every brick, block, plank and panel is
 ##    lit on its upper-left edge and shaded in its joints, so they read as built, not painted.
 ##  * door leaves.
-## All drawn here in code and cached.
+## Generated here, baked by tools/art/build_first_person.gd, then cached in memory.
 
 const PX := 32                                   # pixels per metre
 const H := 74                                    # 2.3 m
@@ -29,6 +29,14 @@ static var _mats: Texture2DArray
 static func materials() -> Texture2DArray:
 	if _mats != null:
 		return _mats
+	var imgs := _read_layers("material", M_COUNT, PX)
+	if imgs.is_empty(): imgs = material_images()
+	_mats = Texture2DArray.new()
+	_mats.create_from_images(imgs)
+	return _mats
+
+## CPU image generation is retained as the source of the baked assets and a fallback.
+static func material_images() -> Array[Image]:
 	var imgs: Array[Image] = []
 	for m in M_COUNT:
 		var img := Image.create(PX, PX, false, Image.FORMAT_RGBA8)
@@ -51,9 +59,20 @@ static func materials() -> Texture2DArray:
 				img.set_pixel(x, y, c)
 		img.generate_mipmaps()
 		imgs.append(img)
-	_mats = Texture2DArray.new()
-	_mats.create_from_images(imgs)
-	return _mats
+	return imgs
+
+static func _read_layers(prefix: String, count: int, size: int) -> Array[Image]:
+	var out: Array[Image] = []
+	for i in count:
+		var path := "res://textures/first_person/%s_%02d.png" % [prefix, i]
+		if not ResourceLoader.exists(path): return []
+		var texture: Texture2D = load(path)
+		var img := texture.get_image() if texture != null else null
+		if img == null or img.get_size() != Vector2i(size, size): return []
+		img.convert(Image.FORMAT_RGBA8)
+		if not img.has_mipmaps(): img.generate_mipmaps()
+		out.append(img)
+	return out
 
 ## How strongly each material's height shows as relief.
 const _RELIEF := [0.0, 0.2, 0.0, 0.5, 0.25, 0.0, 0.0, 0.6, 0.6, 0.15, 0.3, 0.0, 0.0, 0.35, 0.5,
@@ -270,6 +289,13 @@ static func _vnp(x: float, y: float, cell: int, period: int, s := 0) -> float:
 static func grounds() -> Texture2DArray:
 	if _grounds != null:
 		return _grounds
+	var imgs := _read_layers("ground", G_COUNT, GROUND_PX)
+	if imgs.is_empty(): imgs = ground_images()
+	_grounds = Texture2DArray.new()
+	_grounds.create_from_images(imgs)
+	return _grounds
+
+static func ground_images() -> Array[Image]:
 	var imgs: Array[Image] = []
 	for g in G_COUNT:
 		var cols: Array[Color] = []
@@ -288,9 +314,7 @@ static func grounds() -> Texture2DArray:
 				img.set_pixel(x, y, _lit(cols[y * GROUND_PX + x], 1.0 + 0.45 * (hgt[y * GROUND_PX + x] - tl)))
 		img.generate_mipmaps()
 		imgs.append(img)
-	_grounds = Texture2DArray.new()
-	_grounds.create_from_images(imgs)
-	return _grounds
+	return imgs
 
 static func _ground_px(g: int, x: int, y: int) -> Array:
 	var P := GROUND_PX

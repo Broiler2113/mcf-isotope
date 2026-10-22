@@ -20,7 +20,6 @@ func _enter_ruler() -> void:
 	_deselect()
 	mode = Mode.RULER
 	_ruler_a = Vector2i(-1, -1)
-	_rulers.clear()
 	_ruler_hover = _pos_to_cell(get_viewport().get_mouse_position())
 	_refresh_ruler_button()
 	queue_redraw()
@@ -28,7 +27,6 @@ func _enter_ruler() -> void:
 func _exit_ruler() -> void:
 	mode = Mode.NONE
 	_ruler_a = Vector2i(-1, -1)
-	_rulers.clear()
 	_refresh_ruler_button()
 	queue_redraw()
 
@@ -50,12 +48,9 @@ func _draw_scope() -> int:
 
 func _refresh_ruler_button() -> void:
 	if _ruler_btn != null:
-		if mode != Mode.RULER:
-			_ruler_btn.text = "Ruler"
-		else:
-			_ruler_btn.text = "Ruler: on (%d)" % _rulers.size() if not _rulers.is_empty() else "Ruler: on"
-		_ruler_btn.tooltip_text = "Click two cells to measure; every ruler stays until you leave. " \
-				+ "Backspace removes the last one, Esc or this button clears them all."
+		_ruler_btn.text = "Ruler: on" if mode == Mode.RULER else "Ruler"
+		_ruler_btn.tooltip_text = "Click two cells to measure. A ruler is a drawing: it stays, is shared " \
+				+ "like your strokes, and Backspace or Undo drawing takes it back."
 
 func _enter_draw() -> void:
 	# Повторное нажатие ВЫКЛЮЧАЕТ рисование (item 14): режим теперь снимается кнопкой,
@@ -99,6 +94,7 @@ func _erase_segment(author: int, a: Vector2, b: Vector2, r: float) -> void:
 func _erase_commit() -> void:
 	if _cur_stroke.is_empty():
 		return
+	_pending_draw_entry = {"t": "e", "c": _flat_points(_cur_stroke), "r": _erase_radius()}
 	if networked and session != null:
 		session.send({"k": K_DRAW, "a": _draw_author(), "e": true, "c": _flat_points(_cur_stroke),
 			"r": _erase_radius()})
@@ -178,6 +174,8 @@ func _stroke_add(pos: Vector2) -> void:
 func _stroke_commit() -> void:
 	if _cur_stroke.is_empty():
 		return
+	_pending_draw_entry = {"t": "s", "s": _draw_scope(), "c": _flat_points(_cur_stroke), "w": _draw_brush,
+			"col": _draw_colour.to_html(false) if _draw_colour.a > 0.0 else ""}
 	if networked and session != null:
 		var msg := {"k": K_DRAW, "a": _draw_author(), "s": _draw_scope(),
 			"c": _flat_points(_cur_stroke), "w": _draw_brush}
@@ -204,6 +202,17 @@ func _on_remote_stroke(msg: Dictionary) -> void:
 	if bool(msg.get("undo", false)):
 		_undo_drawing_of(author)
 		return
+	if msg.has("reshare"):
+		_replay_draw_log(author, msg.get("reshare", []))
+		return
+	if msg.has("ruler"):
+		var ab: Array = msg["ruler"]
+		if ab.size() >= 4:
+			_add_ruler(author, int(msg.get("s", DrawScope.TEAM)), Vector2i(int(ab[0]), int(ab[1])), Vector2i(int(ab[2]), int(ab[3])))
+		return
+	if bool(msg.get("unruler", false)):
+		_drop_last_ruler(author)
+		return
 	var flat: Array = msg.get("c", [])
 	var pts: Array[Vector2] = []
 	var i := 0
@@ -214,6 +223,7 @@ func _on_remote_stroke(msg: Dictionary) -> void:
 		return
 	if bool(msg.get("e", false)):
 		var r := float(msg.get("r", CELL * 0.35))
+		_pending_draw_entry = {"t": "e", "c": flat, "r": r}
 		_draw_record_begin(author, -1)
 		for k in pts.size():
 			_erase_segment(author, pts[maxi(0, k - 1)], pts[k], r)
@@ -224,6 +234,7 @@ func _on_remote_stroke(msg: Dictionary) -> void:
 		var rad := _paint_radius(int(msg.get("w", 3)))
 		var col := Color.html(str(msg["col"])) if Color.html_is_valid(str(msg.get("col", ""))) \
 				else _side_color(author)
+		_pending_draw_entry = {"t": "s", "s": scope, "c": flat, "w": int(msg.get("w", 3)), "col": str(msg.get("col", ""))}
 		_draw_record_begin(author, scope)
 		for k in pts.size():
 			canvas.stroke(pts[maxi(0, k - 1)], pts[k], rad, col)
@@ -248,8 +259,21 @@ func _draw_record_end(author: int) -> void:
 			if not rec.is_empty():
 				op[key] = rec
 	_draw_rec_keys = []
+	var entry: Variant = _pending_draw_entry
+	_pending_draw_entry = null
 	if op.is_empty():
 		return
+	if entry != null:
+		op["log"] = entry
+		_log_drawing(author, entry)
+	_push_draw_op(author, op)
+
+func _log_drawing(author: int, entry: Dictionary) -> void:
+	var log: Array = _draw_log.get(author, [])
+	log.append(entry)
+	_draw_log[author] = log
+
+func _push_draw_op(author: int, op: Dictionary) -> void:
 	var hist: Array = _draw_history.get(author, [])
 	hist.append(op)
 	if hist.size() > DRAW_UNDO_DEPTH:
@@ -269,10 +293,27 @@ func _undo_drawing_of(author: int) -> bool:
 	if hist.is_empty():
 		return false
 	var op: Dictionary = hist.pop_back()
-	for key: Vector2i in op:
-		_canvas(key.x, key.y).restore(op[key])
+	if op.has("log"):
+		_remove_draw_entry(author, op["log"])
+	if op.has("ruler"):
+		var i := _rulers.rfind(op["ruler"])
+		if i >= 0:
+			_rulers.remove_at(i)
+		queue_redraw()
+		return true
+	for key: Variant in op:
+		if key is Vector2i:
+			_canvas(key.x, key.y).restore(op[key])
 	queue_redraw()
 	return true
+
+func _remove_draw_entry(author: int, entry: Dictionary) -> void:
+	# Identical strokes/rulers can occur more than once, with an erase between them.
+	# Undo removes the most recent occurrence, preserving the earlier drawing order.
+	var log: Array = _draw_log.get(author, [])
+	var i := log.rfind(entry)
+	if i >= 0:
+		log.remove_at(i)
 
 ## Видит ли просматривающий игрок этот штрих (item 51): свои — всегда; «для команды» —
 ## союзникам; «для всех» — всем; фильтры «скрыть свои/чужие/все» (batch 17, item 10).
@@ -304,6 +345,10 @@ func _drop_drawings_of(side: int) -> void:
 		if key.x == side:
 			_canvases.erase(key)
 	_draw_history.erase(side)   # стёртое целиком назад не откатывается
+	_draw_log.erase(side)
+	for r: Dictionary in _rulers.duplicate():
+		if int(r["author"]) == side:
+			_rulers.erase(r)
 	queue_redraw()
 
 func _clear_my_drawings() -> void:
@@ -321,10 +366,12 @@ func _clear_my_drawings() -> void:
 ## Второй конец, пока он не закреплён, берётся из-под курсора — расстояние тянется за
 ## мышью, и прикинуть дистанцию можно не кликая вовсе.
 func _draw_ruler() -> void:
+	if not _before_on:
+		for r: Dictionary in _rulers:
+			if _stroke_visible_to_viewer(r):
+				_draw_ruler_segment(r["a"], r["b"], Color(1.0, 0.86, 0.25))
 	if mode != Mode.RULER:
 		return
-	for seg: Array in _rulers:
-		_draw_ruler_segment(seg[0], seg[1], Color(1.0, 0.86, 0.25))
 	# Недотянутая линейка — за курсором, чуть светлее закреплённых.
 	if _ruler_a != Vector2i(-1, -1) and state.grid.in_bounds(_ruler_hover):
 		_draw_ruler_segment(_ruler_a, _ruler_hover, Color(1.0, 0.95, 0.6))
@@ -370,3 +417,92 @@ func _draw_annotations(ci: CanvasItem) -> void:
 			var sb := _side_swatch.get_theme_stylebox(st) as StyleBoxFlat
 			if sb != null and sb.bg_color != sc:
 				sb.bg_color = sc
+
+# --- Rulers as drawings; sharing what was drawn before (fix-8 #5, #6) ---
+
+## A ruler laid by this screen's author: kept, logged, sent like a stroke.
+func _place_ruler(a: Vector2i, b: Vector2i) -> void:
+	var me := _draw_author()
+	var scope := _draw_scope()
+	_add_ruler(me, scope, a, b)
+	if networked and session != null:
+		session.send({"k": K_DRAW, "a": me, "s": scope, "ruler": [a.x, a.y, b.x, b.y]})
+
+func _add_ruler(author: int, scope: int, a: Vector2i, b: Vector2i) -> void:
+	var mark := {"author": author, "scope": scope, "a": a, "b": b}
+	_rulers.append(mark)
+	var entry := {"t": "r", "s": scope, "ab": [a.x, a.y, b.x, b.y]}
+	_log_drawing(author, entry)
+	_push_draw_op(author, {"ruler": mark, "log": entry})
+	queue_redraw()
+
+func _remove_my_last_ruler() -> void:
+	var me := _draw_author()
+	if _drop_last_ruler(me) and networked and session != null:
+		session.send({"k": K_DRAW, "a": me, "unruler": true})
+
+func _drop_last_ruler(author: int) -> bool:
+	for i in range(_rulers.size() - 1, -1, -1):
+		var r: Dictionary = _rulers[i]
+		if int(r["author"]) != author:
+			continue
+		_rulers.remove_at(i)
+		var hist: Array = _draw_history.get(author, [])
+		for j in range(hist.size() - 1, -1, -1):
+			if hist[j].get("ruler") == r:
+				hist.remove_at(j)
+				break
+		# A ruler may be older than the bounded undo history; sharing must not revive it.
+		var a: Vector2i = r["a"]
+		var b: Vector2i = r["b"]
+		_remove_draw_entry(author, {"t": "r", "s": r["scope"], "ab": [a.x, a.y, b.x, b.y]})
+		queue_redraw()
+		return true
+	return false
+
+## Sharing turned on: everything this author drew so far goes up to `scope` (never down),
+## here and on every other screen — earlier drawings reach the new audience too.
+func _reshare_drawings(scope: int) -> void:
+	var me := _draw_author()
+	var log: Array = (_draw_log.get(me, []) as Array).duplicate(true)
+	if log.is_empty():
+		return
+	for e: Dictionary in log:
+		if e.has("s"):
+			e["s"] = maxi(int(e["s"]), scope)
+	_replay_draw_log(me, log)
+	if networked and session != null:
+		session.send({"k": K_DRAW, "a": me, "reshare": log})
+
+## Put an author's drawing back together from its log: strokes, erases and rulers in order.
+func _replay_draw_log(author: int, log: Array) -> void:
+	_drop_drawings_of(author)
+	for e: Dictionary in log:
+		var flat: Array = e.get("c", [])
+		var pts: Array[Vector2] = []
+		var i := 0
+		while i + 1 < flat.size():
+			pts.append(Vector2(float(flat[i]), float(flat[i + 1])))
+			i += 2
+		match str(e.get("t", "")):
+			"s":
+				var scope := int(e.get("s", DrawScope.TEAM))
+				var canvas := _canvas(author, scope)
+				var col := Color.html(str(e["col"])) if Color.html_is_valid(str(e.get("col", ""))) else _side_color(author)
+				var rad := _paint_radius(int(e.get("w", 3)))
+				_pending_draw_entry = e
+				_draw_record_begin(author, scope)
+				for k in pts.size():
+					canvas.stroke(pts[maxi(0, k - 1)], pts[k], rad, col)
+				_draw_record_end(author)
+			"e":
+				_pending_draw_entry = e
+				_draw_record_begin(author, -1)
+				for k in pts.size():
+					_erase_segment(author, pts[maxi(0, k - 1)], pts[k], float(e.get("r", CELL * 0.35)))
+				_draw_record_end(author)
+			"r":
+				var ab: Array = e.get("ab", [])
+				if ab.size() >= 4:
+					_add_ruler(author, int(e.get("s", DrawScope.TEAM)), Vector2i(int(ab[0]), int(ab[1])), Vector2i(int(ab[2]), int(ab[3])))
+	queue_redraw()

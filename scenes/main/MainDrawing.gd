@@ -372,16 +372,15 @@ func _draw() -> void:
 			if visible.has(c) and not corpses.has(c):
 				cmem.erase(c)
 		corpses = cmem
-	# Тела внутри челнока ложатся поверх его корпуса (fix-7 #10): рисуются после машин.
-	var shuttle_bodies: Array = []
+	# Тела внутри челнока (и борга) ложатся поверх его корпуса (fix-7 #10): рисуются после машин.
+	var vehicle_bodies: Array = []
 	for c: Vector2i in corpses:
 		if c.x < vx0 or c.x > vx1 or c.y < vy0 or c.y > vy1 or not _cell_on_screen(c.x, c.y) \
 				or (blackout and not visible.has(c)):
 			continue
 		var e: Array = corpses[c]
-		var under := state.get_vehicle(state.grid.vehicle_at(c))
-		if under != null and under.seated():
-			shuttle_bodies.append([c, e])
+		if _corpse_above_vehicle(c):
+			vehicle_bodies.append([c, e])
 			continue
 		_draw_corpse(c, int(e[1]), e[0])
 
@@ -903,8 +902,6 @@ func _draw() -> void:
 								Rect2(_cell_origin(stc), Vector2(CELL, CELL)))
 
 	draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
-	for b: Array in shuttle_bodies:
-		_draw_corpse(b[0], int(b[1][1]), b[1][0])
 	# Выбор машины для посадки — поверх корпусов, иначе подсветку закрывала сама машина.
 	if mode == Mode.BOARD_PICK:
 		var bhov := _board_pick_at(_pos_to_cell(get_viewport().get_mouse_position()))
@@ -1037,6 +1034,11 @@ func _draw() -> void:
 			_draw_corpse_marker(corner + Vector2(9, 9),
 				unit.carried_corpses, font)
 
+	# An occupied borg is drawn with its operator, after the ordinary vehicle pass.
+	# Draw its bodies here as well, so neither an idle nor an occupied hull hides them.
+	draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
+	for b: Array in vehicle_bodies:
+		_draw_corpse(b[0], int(b[1][1]), b[1][0])
 	# Дроны — верхний слой (item 14): рисуются поверх машин и наземных юнитов.
 	for d: Dictionary in _drones_pending:
 		draw_set_transform(pan + _walk_offset.get(d["unit"].id, Vector2.ZERO) * zoom, 0.0, Vector2(zoom, zoom))
@@ -1062,6 +1064,14 @@ func _draw() -> void:
 
 	# Аннотации игроков поверх поля (item 51).
 	_draw_ruler()
+
+## Corpses resting on a hull must be drawn after both ordinary vehicles and borg pilots.
+func _corpse_above_vehicle(at: Vector2i) -> bool:
+	var vehicle := state.get_vehicle(state.grid.vehicle_at(at))
+	if vehicle != null and (vehicle.seated() or vehicle.is_borg()):
+		return true
+	var cell := state.grid.cell(at)
+	return cell != null and cell.occupant != null and cell.occupant.borg_id != -1
 
 ## Привязь станции: докуда долетит её камикадзе (15) и разведчик (45, fix-7 #7).
 func _draw_station_leashes(station: Vector2i, labels: bool) -> void:
@@ -1376,7 +1386,9 @@ func _refresh_objective() -> void:
 		elif md.endless() or md.wave < md.waves_total:
 			next = "round %d" % maxi(md.next_wave_round, state.turns.round_number + 1)
 		rows.append([null, "Next wave", next])
-		rows.append([EVENT_COLORS["army"], "Enemies left", str(left)])
+		# The swatch wears the waves' own colour (owner, fix-8 #10), as their soldiers do.
+		var wave_col: Color = _side_color(state.turns.wave_owner) if state.turns.wave_owner >= 0 else EVENT_COLORS["army"]
+		rows.append([wave_col, "Enemies left", str(left)])
 		rows.append([null, "Killed", str(md.wave_spawned - left)])
 	var key := var_to_str(rows)
 	if key == _objective_key:
@@ -1526,30 +1538,24 @@ func _draw_wall_blood(visible: Dictionary, fog_on: bool) -> void:
 		var face: Vector2i = b["face"]
 		if not _cell_on_screen(c.x, c.y) or (fog_on and not visible.has(c) and not visible.has(c + face)):
 			continue
-		# Те же лужа и брызги, что на полу, той же растеризацией (TerrainTiles._decal_sprite),
-		# у грани стены, глядящей на тело (владелец: «тот же стиль, что у остальной крови»).
+		# A spatter on the face of the wall that looks at the body (owner, fix-8 #13): the burst
+		# at the edge, its streaks flung along the face; squashed across it, since from above
+		# a wall's face is a line.
 		var along := Vector2(-face.y, face.x)
 		var edge := Vector2(c) + Vector2(0.5, 0.5) + Vector2(face) * 0.5
-		var rot := float(b["rot"])
 		var k := float(b["scale"])
-		for i in 6:
-			var kind := "blood_pool" if i == 0 else "blood_drop"
-			var look: Array = FxDecals.look_of(kind)
-			var size := float(look[0]) * (0.7 * k if i == 0 else 1.0 + 0.3 * absf(sin(rot * (i + 2.0))))
-			var pos := edge + along * sin(rot * (i + 1.3)) * 0.3 - Vector2(face) * (0.12 + 0.1 * absf(cos(rot * (i + 0.7))))
-			var px := maxi(1, roundi(size * 32.0))
-			var turn := rot * (i + 1.0)
-			var step := posmod(roundi(turn / TAU * TerrainTiles.DECAL_ANGLES), TerrainTiles.DECAL_ANGLES)
-			var key := "%s@%d@%d" % [kind, px, step]
-			var tex: Texture2D = _wall_blood_tex.get(key)
-			if tex == null:
-				var img: Image = _tiles._decal_sprite(kind, px, turn, look)
-				if img == null:
-					continue
-				tex = ImageTexture.create_from_image(img)
-				_wall_blood_tex[key] = tex
-			draw_texture_rect(tex, Rect2(ORIGIN + (pos - Vector2(size, size) * 0.5) * CELL,
-					Vector2(size, size) * CELL), false)
+		var variant := int(absf(float(b["rot"])) * 1000.0) % FxDecals.SPATTER_VARIANTS
+		var key := "spatter@%d" % variant
+		var tex: Texture2D = _wall_blood_tex.get(key)
+		if tex == null:
+			tex = ImageTexture.create_from_image(FxDecals.spatter_image(variant, 48, false))
+			_wall_blood_tex[key] = tex
+		var size := 0.95 * k
+		var centre := edge - Vector2(face) * 0.14
+		draw_set_transform_matrix(Transform2D(0.0, Vector2(zoom, zoom), 0.0, pan)
+				* Transform2D(along * size, Vector2(face) * size * 0.45, ORIGIN + centre * CELL))
+		draw_texture_rect(tex, Rect2(Vector2(-0.5, -0.5) * CELL, Vector2(CELL, CELL)), false)
+		draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
 
 func _draw_fx_flashes(visible: Dictionary) -> void:
 	if _fx.flashes.is_empty():

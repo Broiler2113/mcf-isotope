@@ -112,8 +112,8 @@ const K_DHALL := 6
 const DEPARTMENTS := {
 	"bridge": {"front": "command", "rooms": ["captain", "hidden_storage", "changing", "server_room", "office"],
 		"hall": MCF.Look.CARPET_BLUE, "extra": ["office", "server_room"]},
-	"service": {"front": "lounge", "rooms": ["kitchen", "mess", "restroom", "quarters", "changing", "quarters",
-		"laundry", "quarters", "quarters"], "hall": MCF.Look.TILE, "extra": ["quarters", "storage"]},
+	"service": {"front": "lounge", "rooms": ["kitchen", "mess", "botany", "restroom", "quarters", "changing", "quarters",
+		"laundry", "quarters", "quarters"], "hall": MCF.Look.TILE, "extra": ["quarters", "storage", "botany"]},
 	"engineering": {"front": "reception", "rooms": ["power", "water", "air", "changing", "dock", "supply"],
 		"hall": MCF.Look.PLATE, "extra": ["utility", "storage"]},
 	# Морг и вирусология (0.9.4) — в медотсеке; оба вперёд склада, но после палаты с операционной.
@@ -128,8 +128,8 @@ const DEPARTMENTS := {
 		"machine_shop"], "hall": MCF.Look.PLATE, "extra": ["storage", "workshop"]},
 	# Полигон у лабораторий стоит ОТДЕЛЬНО от станции (0.9.4, _annex): в списке комнат его
 	# больше нет — он пристраивается снаружи и соединяется коротким коридором.
-	"research": {"front": "reception", "rooms": ["laboratory", "changing", "assembly", "supply"],
-		"hall": MCF.Look.LINO, "extra": ["laboratory", "office"]},
+	"research": {"front": "reception", "rooms": ["laboratory", "botany", "changing", "assembly", "supply"],
+		"hall": MCF.Look.LINO, "extra": ["laboratory", "botany", "office"]},
 	"misc": {"front": "lounge", "rooms": ["storage", "quarters", "changing", "office", "server_room"], "hall": 0,
 		"extra": ["storage", "quarters"]},
 }
@@ -161,7 +161,7 @@ const KIND_ACCENT := {
 	"ward": MCF.Accent.MEDICAL, "surgery": MCF.Accent.MEDICAL,
 	"morgue": MCF.Accent.MEDICAL, "virology": MCF.Accent.MEDICAL,
 	"solitary": MCF.Accent.SECURITY,
-	"laboratory": MCF.Accent.SCIENCE, "testing_range": MCF.Accent.SCIENCE,
+	"laboratory": MCF.Accent.SCIENCE, "testing_range": MCF.Accent.SCIENCE, "botany": MCF.Accent.MEDICAL,
 	"power": MCF.Accent.ENGINEERING, "water": MCF.Accent.ENGINEERING, "air": MCF.Accent.ENGINEERING,
 	"utility": MCF.Accent.ENGINEERING, "recycling": MCF.Accent.ENGINEERING,
 	"machine_shop": MCF.Accent.ENGINEERING, "workshop": MCF.Accent.ENGINEERING,
@@ -360,6 +360,7 @@ func _build(options: Dictionary, dim: Vector2i, need: int, tight: bool) -> void:
 	m = MapData.new(w, h)
 	m.env = STYLE_ENV[clampi(_style, 0, STYLE_ENV.size() - 1)]
 	m.time_of_day = time_choice(opt)
+	m.winter = bool(opt.get("winter", false)) and MapData.supports_winter(m.env)
 	_indoor = _bytes()
 	_door = _bytes()
 	_street = _bytes()

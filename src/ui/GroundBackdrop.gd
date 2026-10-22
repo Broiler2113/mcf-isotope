@@ -52,8 +52,8 @@ func _draw_patch(rect: Rect2) -> void:
 const GROUND_TILES := 16
 const GROUND_PATCH_CHANCE := 0.07
 
-static func wallpaper(env: String) -> ImageTexture:
-	var base := _ground_image(_ground_floor_name(env))
+static func wallpaper(env: String, winter := false) -> ImageTexture:
+	var base := _ground_image("floor_snow" if winter and env in ["town", "field"] else _ground_floor_name(env))
 	if env == "bunker":
 		# Continue the soil WALL using its fully connected tile, not a floor or
 		# the standalone wall sprite with a dark outline around every tile.

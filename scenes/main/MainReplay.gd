@@ -458,6 +458,13 @@ func _capture_opening_view() -> void:
 	# the copy holds everything freezing reads: same result, no second pass over the board.
 	var fresh_board := opening == state and _furniture_look_of == [state.grid, GridCell.look_version]
 	_before_tiles.furniture_look = _furniture_look if fresh_board else _before_tiles.freeze_furniture()
+	if opening != state:
+		# Reloaded damaged furniture keeps its original footprint just as it did before
+		# saving. Also retain pieces that were built or moved after the opening snapshot.
+		var current := _furniture_look
+		_furniture_look = _before_tiles.furniture_look.duplicate(true)
+		_furniture_look.merge(current, false)
+		if _tiles != null: _tiles.furniture_look = _furniture_look
 	_before_units.clear()
 	for u: UnitInstance in opening.all_units():
 		if u.is_alive() and src.in_bounds(u.coord):

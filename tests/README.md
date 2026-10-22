@@ -215,6 +215,25 @@ and needs `NetworkSession.DEFAULT_PORT` free.
 
 ## Scope
 
+The [Fix-8 PDF review](FIX8_REVIEW.md) maps the owner's 33 requests to the current
+implementation and its checks. The added suites cover cosmetic winter, editor
+walkthroughs, drawing sharing/undo, borg demolition/unwelding, drone-detonation undo,
+raider landings and damaged furniture after loading a save.
+
+`render_first_person.gd` is a manual Compatibility-renderer check, outside the
+headless suite. Run `godot --path . --script res://tests/render_first_person.gd`
+(or prefix it with `xvfb-run -a` on a server). It renders furniture, a damaged bed,
+outdoor fortifications, winter and vehicles, saves `/tmp/isotope-first-person-*.png`,
+and checks that camera movement leaves the simulation unchanged. Add, for example,
+`-- furniture vehicles` to render only those scenes.
+
+`bench/run_first_person_bench.gd` profiles entry and selected CPU update phases on a
+furnished 124×104 winter town with 200 soldiers. Run it with `godot --headless --script
+res://tests/bench/run_first_person_bench.gd`; add `-- --procedural` to measure the
+material-generation path instead of loading the baked textures. These are CPU
+measurements, not GPU frame rates. Verify the baked images against their sources with
+`godot --headless --script res://tools/art/build_first_person.gd -- --verify`.
+
 **`files/run_replay_seek.gd`** compares frame selection with the original forward scan at
 every boundary, including old recordings without frames and recordings edited in
 place. It also seeks a recorded match forwards and backwards and compares its full

@@ -268,6 +268,9 @@ piece as ONE picture, as many tiles wide and tall as the piece, back at the top.
   water_bucket.png
   water_bucket_blue.png
   machine_workstation.png
+  planter_bed.png
+  hydroponic_rack.png
+  seed_table.png
   bench.png
   trash_bin.png
   trash_bin_grey.png
@@ -284,6 +287,10 @@ piece as ONE picture, as many tiles wide and tall as the piece, back at the top.
   bush_dry.png
   bush_flowering.png
   park_tree.png
+  pine_tree.png
+  hedge.png
+  tall_grass.png
+  flower_bed.png
   wall_lamp.png
   wall_strip.png
   bulkhead_lamp.png

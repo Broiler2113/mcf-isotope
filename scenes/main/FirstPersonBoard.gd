@@ -55,6 +55,7 @@ uniform bool winter = false;
 uniform float sun_k = 0.0;
 uniform float glow_k = 1.7;
 uniform bool no_fog = false;
+uniform bool sight_only = false;
 varying vec3 wpos;
 varying vec3 wnorm;
 void vertex() {
@@ -107,6 +108,7 @@ void fragment() {
 	if (c.a < cut) discard;
 	vec2 cell = floor(wpos.xz - wnorm.xz * 0.02);
 	float v = no_fog ? 1.0 : texture(vis, (cell + 0.5) / board).r;
+	if (sight_only && v < 0.7) discard;
 	ROUGHNESS = 1.0;
 	SPECULAR = 0.0;
 	if (v < 0.2) {
@@ -378,7 +380,7 @@ static func build(grid: Grid, cc: Vector2i, roof: PackedByteArray, ctx: Dictiona
 					_wall_face(ws, at, d, 0.0, CEIL)
 					_trim(loose, grid, roof, env, kind, at, d)
 				if not is_roofed:
-					var top_c := FirstPersonArt.wall_top_colour(kind)
+					var top_c := Color(0.92, 0.94, 0.98) if ctx.get("winter", false) else FirstPersonArt.wall_top_colour(kind)
 					loose.box(Vector3(x, CEIL, y), Vector3(x + 1, CEIL + 0.001, y + 1), FirstPersonArt.M_CONCRETE, top_c, FirstPersonModels.Sink.NO_BOTTOM | FirstPersonModels.Sink.NO_BACK | FirstPersonModels.Sink.NO_FRONT | FirstPersonModels.Sink.NO_LEFT | FirstPersonModels.Sink.NO_RIGHT)
 				for lamp: Array in c.lamps:
 					_wall_lamp(models, counts, grid, at, lamp)
@@ -394,6 +396,12 @@ static func build(grid: Grid, cc: Vector2i, roof: PackedByteArray, ctx: Dictiona
 				_piece(models, glass, counts, grid, at, fid, ctx, cap, tops)
 				continue
 			_feature(models, counts, grid, at, fid, env)
+	# Blood spattered on the walls (fix-8 #13), on the face that looks at the body.
+	var blood := _sink()
+	for b: Dictionary in ctx.get("wall_blood", []):
+		_wall_spatter(blood, b)
+	if not blood.empty():
+		_add(node, blood.mesh(), mats.get("blood"), false)
 	# Small things lying about: the map's items, knocked items and rubble.
 	_items(loose, grid, cc, tops)
 	_decals(loose, ctx.get("decals", []), Rect2(x0, y0, x1 - x0, y1 - y0))
@@ -579,7 +587,7 @@ static func _glass(s: FirstPersonModels.Sink, gs: FirstPersonModels.Sink, grid: 
 	var m := FirstPersonArt.M_METAL if frame.r < 0.5 else FirstPersonArt.M_PLAIN
 	var skips := _wall_skips(grid, env, at)
 	var rail := 0.07 if not armored else 0.12
-	gs.box(Vector3(x, rail, z), Vector3(x + 1, CEIL - rail, z + 1), 0,
+	gs.box(Vector3(x + 0.006, rail, z + 0.006), Vector3(x + 0.994, CEIL - rail, z + 0.994), 0,
 			Color(0.55, 0.72, 0.8) if armored else Color(0.62, 0.8, 0.9), skips | FirstPersonModels.Sink.NO_TOP | FirstPersonModels.Sink.NO_BOTTOM)
 	s.box(Vector3(x, 0, z), Vector3(x + 1, rail, z + 1), m, frame, skips | FirstPersonModels.Sink.NO_BOTTOM)
 	s.box(Vector3(x, CEIL - rail, z), Vector3(x + 1, CEIL, z + 1), m, frame, skips)
@@ -737,6 +745,14 @@ static func _piece(models: SurfaceTool, glass: SurfaceTool, counts: Dictionary, 
 		ctx: Dictionary, cap: float, tops: Dictionary) -> void:
 	var fid_at := func(q: Vector2i) -> String: return grid.cell_fast(q.x, q.y).feature_id if grid.in_bounds(q) else ""
 	var cells: Array[Vector2i] = Furniture.piece_cells(fid_at, at)
+	var whole := Furniture.is_whole(fid)
+	# The 2D board freezes a piece's footprint before combat. A surviving foot of a bed
+	# must stay its foot, and a missing table section must remain a hole in the model.
+	var frozen: Variant = ctx.get("furniture_look")
+	if whole and frozen is Dictionary and frozen.has(at) and frozen[at][0] == fid:
+		cells = Furniture.piece_cells(func(q: Vector2i) -> String:
+			var record: Array = frozen.get(q, [])
+			return str(record[0]) if not record.is_empty() else "", at)
 	var lo := cells[0]
 	var hi := cells[0]
 	for q: Vector2i in cells:
@@ -758,17 +774,17 @@ static func _piece(models: SurfaceTool, glass: SurfaceTool, counts: Dictionary, 
 		if score < best:
 			best = score
 			p0 = corner
-	var whole := Furniture.is_whole(fid)
 	var jl := not whole and (mask & Sprites.AUTOTILE_W) != 0
 	var jr := not whole and (mask & Sprites.AUTOTILE_E) != 0
 	var tint := Furniture.light_color_of(fid, grid.tint_at(at.x, at.y)) if Furniture.emits_light(fid) else Color(1, 1, 1)
 	var lit := LightManager.source_on({"id": fid}, str(ctx.get("tod", "")))
 	var seed := (lo.x * 73 + lo.y * 37) % 4
-	var key := [fid, snappedf(W, 0.01), snappedf(D, 0.01), jl, jr, seed, tint.to_html(), lit, cap < 3.0]
+	var winter: bool = ctx.get("winter", false)
+	var key := [fid, snappedf(W, 0.01), snappedf(D, 0.01), jl, jr, seed, tint.to_html(), lit, cap < 3.0, winter]
 	var top := [-1.0]
 	var make := func(s: FirstPersonModels.Sink, g: FirstPersonModels.Sink) -> void:
 		top[0] = FirstPersonModels.furniture(s, g, fid, W, D, {"tint": Furniture.tint_of(fid), "art": FirstPersonArt.art_colour(fid),
-				"seed": seed, "jl": jl, "jr": jr, "cap": cap, "light": tint, "lit": lit})
+				"seed": seed, "jl": jl, "jr": jr, "cap": cap, "light": tint, "lit": lit, "winter": winter})
 	var tkey := str(key) + "|top"
 	var built: Array = FirstPersonModels.cached(str(key), make)
 	if not FirstPersonModels._cache.has(tkey):
@@ -778,13 +794,22 @@ static func _piece(models: SurfaceTool, glass: SurfaceTool, counts: Dictionary, 
 	for q: Vector2i in cells:
 		if q.y < anchor.y or (q.y == anchor.y and q.x < anchor.x):
 			anchor = q
-	if anchor == at:
+	var sliced := whole and (cells.size() != int(size.x * size.y) \
+			or cells.any(func(q: Vector2i) -> bool: return fid_at.call(q) != fid))
+	if anchor == at or sliced:
 		var xf := Transform3D(Basis(Vector3(a.x, 0, a.y), Vector3.UP, Vector3(d.x, 0, d.y)), Vector3(p0.x, 0, p0.y))
-		if built[0] != null:
-			models.append_from(built[0], 0, xf)
+		var opaque: ArrayMesh = built[0]
+		var transparent: ArrayMesh = built[1]
+		if sliced:
+			var local := xf.affine_inverse() * Vector3(at.x + 0.5, 0, at.y + 0.5)
+			var bounds := Rect2(Vector2(local.x, local.z) - Vector2.ONE * 0.5, Vector2.ONE)
+			opaque = FirstPersonModels.clipped(opaque, bounds)
+			transparent = FirstPersonModels.clipped(transparent, bounds)
+		if opaque != null:
+			models.append_from(opaque, 0, xf)
 			counts["models"] += 1
-		if built[1] != null:
-			glass.append_from(built[1], 0, xf)
+		if transparent != null:
+			glass.append_from(transparent, 0, xf)
 			counts["glass"] += 1
 	var surface := float(FirstPersonModels._cache.get(tkey, -1.0))
 	if surface > 0.0:
@@ -863,6 +888,27 @@ static func _place_item(s: FirstPersonModels.Sink, kind: String, at: Vector3, ro
 	FirstPersonModels.item(s, kind, FirstPersonArt.art_colour(SmallItems.texture_name(kind)))
 	s.xf = keep
 
+## One spatter quad on a wall face, just off it: the variant from the entry's own angle, as
+## on the battle screen; a little higher or lower, a little bigger or smaller per entry.
+static func _wall_spatter(s: FirstPersonModels.Sink, b: Dictionary) -> void:
+	var c: Vector2i = b["cell"]
+	var face: Vector2i = b["face"]
+	var rot := float(b["rot"])
+	var variant := int(absf(rot) * 1000.0) % FxDecals.SPATTER_VARIANTS
+	var size := 1.05 * float(b["scale"])
+	var along := Vector3(-face.y, 0, face.x)
+	var n := Vector3(face.x, 0, face.y)
+	var mid := Vector3(c.x + 0.5, 0, c.y + 0.5) + n * 0.512 + along * 0.15 * sin(rot * 3.0)
+	var y := 0.75 + 0.35 * absf(cos(rot * 2.0))
+	var half := size * 0.5
+	var u0 := float(variant) / FxDecals.SPATTER_VARIANTS
+	var u1 := float(variant + 1) / FxDecals.SPATTER_VARIANTS
+	var p0 := mid - along * half + Vector3(0, y - half, 0)
+	var p1 := mid + along * half + Vector3(0, y - half, 0)
+	var p2 := mid + along * half + Vector3(0, y + half, 0)
+	var p3 := mid - along * half + Vector3(0, y + half, 0)
+	s.face_uv([p0, p1, p2, p3], n, [Vector2(u0, 1), Vector2(u1, 1), Vector2(u1, 0), Vector2(u0, 0)], Color.WHITE)
+
 ## Knocked items and rubble from the battle's cosmetics: items as themselves, wall chunks
 ## as sharp lumps of their wall (owner, fix-8: flat chunk pictures looked like "strange
 ## shapes with barely connected parts").
@@ -872,7 +918,15 @@ static func _decals(s: FirstPersonModels.Sink, list: Array, area: Rect2) -> void
 		var p: Vector2 = d["pos"]
 		if not area.has_point(p):
 			continue
-		if kind.begins_with("item:"):
+		if kind in MapData.WINTER_DECORATIONS:
+			var previous := s.xf
+			var turn := Basis(Vector3.UP, float(d["rot"]))
+			var scale := float(d.get("scale", 1.0))
+			s.xf = Transform3D(turn.scaled(Vector3.ONE * scale), Vector3(p.x, 0, p.y)) \
+					* Transform3D(Basis.IDENTITY, Vector3(-0.5, 0, -0.5))
+			FirstPersonModels.furniture(s, FirstPersonModels.Sink.new(), kind, 1.0, 1.0, {})
+			s.xf = previous
+		elif kind.begins_with("item:"):
 			_place_item(s, kind.substr(5), Vector3(p.x, 0.0, p.y), float(d["rot"]))
 		elif kind.begins_with("chunk:"):
 			var parts := FxDecals.chunk_parts(kind)
@@ -885,6 +939,9 @@ static func _decals(s: FirstPersonModels.Sink, list: Array, area: Rect2) -> void
 			var hgt := r * (0.35 + 0.4 * FirstPersonArt._h(int(p.x * 97.0), int(p.y * 89.0), 7))
 			var col := FirstPersonArt.art_colour(art).lerp(Color(0.5, 0.5, 0.5), 0.15)
 			var m := FirstPersonArt.M_CONCRETE
-			if "wood" in art: m = FirstPersonArt.M_WOOD
+			if Furniture.is_furniture(art):
+				m = {"wood": FirstPersonArt.M_WOOD, "fabric": FirstPersonArt.M_FABRIC,
+						"metal": FirstPersonArt.M_METAL, "plastic": FirstPersonArt.M_PLASTIC}.get(Furniture.def_of(art).get("mat", ""), m)
+			elif "wood" in art: m = FirstPersonArt.M_WOOD
 			elif "station" in art or "armor" in art or "metal" in art: m = FirstPersonArt.M_PLATE
 			s.prism(poly, 0.0, hgt, m, col)

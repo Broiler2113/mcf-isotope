@@ -40,8 +40,7 @@ func _resolve_smash_furniture(actor: UnitInstance, coord: Vector2i) -> ActionRes
 	return res
 
 ## Снести предмет мебели: пол остаётся, высота сбрасывается в ноль (clear_feature), журнал
-## вида и обзора узнаёт об этом через сеттеры клетки. Щепки — той же косметикой «разрушенный
-## пол», что и у снесённых укреплений.
+## вида и обзора узнаёт об этом через сеттеры клетки.
 ## Гибнет только задетая клетка (0.12.2, владелец: «when a part of a table is destroyed, the
 ## whole table gets deleted»): остальной стол стоит, как стоял, — вид мебели в бою заморожен
 ## и не срастается заново, так что уцелевшая половина выглядит половиной.
@@ -52,10 +51,14 @@ func _destroy_furniture(cell: GridCell, res: ActionResult, from: Vector2i = NOWH
 	for c: Vector2i in cells:
 		_knock_items(res, c, from if from != NOWHERE else c)
 		_spill(res, c, from if from != NOWHERE else c, cell.feature_id, true)
+	# It breaks into pieces of itself (owner, fix-8 #7): chunks cut from its own picture
+	# fly off as a wall's do, more of them from a big piece; the floor stays as it was.
+	var fid := cell.feature_id
+	for c: Vector2i in cells:
+		_wall_chunks(res, c, from if from != NOWHERE else c, fid, 9 if Furniture.height_of(fid) >= 1.5 else 6)
 	for c: Vector2i in cells:
 		state.grid.cell(c).clear_feature()
 		notify_cell_changed(c)
-	_fx(res, {"fx": "debris", "at": NOWHERE, "cells": cells})
 
 ## A lamp breaks like a window (0.11.1): its glass flies off as the same shards, away
 ## from whatever hit it. A wall lamp (side >= 0) sheds them onto the floor of its own side.

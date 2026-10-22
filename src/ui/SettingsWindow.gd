@@ -116,6 +116,12 @@ func _build() -> void:
 	fps.button_pressed = Ui.show_fps
 	fps.toggled.connect(Ui.set_show_fps)
 	disp_box.body.add_child(fps)
+	var snow := CheckBox.new()
+	snow.text = "Falling snow on winter maps"
+	snow.tooltip_text = "Snowflakes drifting over winter maps, on the battle screen and in first person."
+	snow.button_pressed = Ui.snowfall
+	snow.toggled.connect(Ui.set_snowfall)
+	disp_box.body.add_child(snow)
 	# First person (fix-7 #9): field of view and mouse sensitivity.
 	for which: String in ["fov", "sens"]:
 		var fp_row := HBoxContainer.new()

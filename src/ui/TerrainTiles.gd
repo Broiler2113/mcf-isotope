@@ -328,6 +328,8 @@ func draw_map_decals(ci: CanvasItem, origin: Vector2, cell: float, view: Rect2) 
 static func draw_decal(ci: CanvasItem, kind: String, pos: Vector2, size: float, rot: float, alpha := 1.0) -> void:
 	var art := "corpse" if kind == "corpse" else (FxDecals.texture_of_kind(kind) if kind.begins_with("item:") \
 			else str(FxDecals.TEXTURE.get(kind, "")))
+	if kind in MapData.WINTER_DECORATIONS:
+		art = kind
 	if kind == "corpse" and not Sprites.has_override(art):
 		art = Sprites.resolve("light_infantry", "_neutral")
 	var tex := Sprites.texture_of(art) if art != "" else null
@@ -484,7 +486,7 @@ func _bake_decals(img: Image, cc: Vector2i, res: int) -> void:
 		return
 	for d: Dictionary in list:
 		var kind := str(d["kind"])
-		if _floor_only and (kind.begins_with("chunk:") or kind.begins_with("item:")):
+		if _floor_only and (kind.begins_with("chunk:") or kind.begins_with("item:") or kind in MapData.WINTER_DECORATIONS):
 			continue
 		var look: Array = [0.95, Color(0.8, 0.1, 0.1, 0.5)] if kind == "corpse" else FxDecals.look_of(kind)
 		if look.is_empty():
@@ -579,6 +581,8 @@ func _decal_sprite(kind: String, px: int, rot: float, look: Array) -> Image:
 	var chunk := kind.begins_with("chunk:")
 	var soot := kind.begins_with("soot:")
 	var art := "corpse" if kind == "corpse" else str(FxDecals.TEXTURE.get(kind, ""))
+	if kind in MapData.WINTER_DECORATIONS:
+		art = kind
 	var shape: PackedVector2Array = PackedVector2Array()
 	if chunk:
 		var parts := FxDecals.chunk_parts(kind)
@@ -669,6 +673,7 @@ func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int
 	var fname := _floor_name(cell, c)
 	if _floor_only and ground_kind(c) != 0:
 		fname = ""   # the first-person view lays its own seamless turf or earth there
+	fname = _winter_floor(fname)
 	var floors := _tile(fname, res) if fname != "" else []
 	if not floors.is_empty():
 		img.blit_rect(floors[variant_of(c + origin, floors.size())], full, at)
@@ -705,7 +710,7 @@ func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int
 		if dimg != null:
 			feat.blend_rect(dimg, full, at)
 		if cell.airlock_welded:
-			feat.blend_rect(_weld_overlay(res), full, at)
+			feat.blend_rect(_weld_overlay(res, _wooden_door(c)), full, at)
 		return
 	var accent := _accent_of(c)
 	var name := pile_art(env) if fid == MCF.FEATURE_DIRT_PILE else tile_name(cell)
@@ -759,7 +764,7 @@ func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int
 		if not singles.is_empty():
 			feat.blit_rect(singles[variant_of(c + origin, singles.size())], full, at)
 	if cell.airlock_welded:
-		feat.blend_rect(_weld_overlay(res), full, at)
+		feat.blend_rect(_weld_overlay(res, false), full, at)
 
 ## Which way a DPMG points (owner, 2026-10-19): eighths clockwise from east, set by the
 ## resolver when it fires (GameActionResolver._face_dpmg); east until it first fires.
@@ -999,10 +1004,22 @@ func _accent_overlay(accent: int, mask: int, res: int) -> Image:
 
 ## Заваренный шлюз: поверх створок — крест из стальных полос по
 ## концам и посередине. Рисуется кодом, в res×res, один раз на разрешение.
-func _weld_overlay(res: int) -> Image:
-	var key := "weld@%d" % res
+## A welded door (owner, fix-8 #8): a metal airlock shows its weld beads, a wooden door
+## (town, field) the planks nailed across it — pictures of their own; a plain cross when
+## those are missing.
+func _wooden_door(c: Vector2i) -> bool:
+	var look := clampi(_grid.door_at(c.x, c.y), 0, DOOR_MATERIALS.size() * 3)
+	var material: String = DOOR_MATERIALS[(look - 1) / 3] if look > 0 else env
+	return material in ["town", "field"]
+
+func _weld_overlay(res: int, wooden := false) -> Image:
+	var key := "weld@%d@%s" % [res, wooden]
 	if _tiles.has(key):
 		return _tiles[key][0]
+	var pic := _tile("weld_wood" if wooden else "weld_metal", res)
+	if not pic.is_empty():
+		_tiles[key] = [pic[0]]
+		return pic[0]
 	var img := Image.create(res, res, false, Image.FORMAT_RGBA8)
 	var w := maxi(1, res / 8)
 	var steel := Color(0.36, 0.37, 0.40)
@@ -1035,6 +1052,8 @@ const _CHAIRS := {"chair": true, "armchair": true}
 func _furniture_image(c: Vector2i, fid: String, res: int, art := "") -> Image:
 	var pic := art if art != "" else fid
 	if time_of_day == "day" and fid in ["streetlight", "bollard_light"]: pic = fid + "_off"
+	if winter and (Sprites.has_override(pic + "_snow") or Sprites.has_override(pic + "_snow" + Sprites.AUTOTILE_SUFFIX)):
+		pic += "_snow"
 	var look := look_of(c, fid)
 	var mask: int = look[0]
 	var inner: int = look[1]
@@ -1802,6 +1821,24 @@ static func prepare(ci: CanvasItem, cell_size: float) -> int:
 
 ## Index authored decals separately from floor pixels, beneath walls and objects.
 var time_of_day := ""
+## Winter (fix-8 #3): grass, earth and street under snow, plants in their snowy pictures.
+var winter := false
+
+func set_winter(value: bool) -> bool:
+	if winter == value: return false
+	winter = value
+	_chunks.clear()
+	_bytes = 0
+	return true
+
+const WINTER_FLOORS := {"floor_grass": "floor_snow", "floor_field": "floor_snow_field", "floor_town": "floor_town_snow"}
+
+## A floor tile's winter picture, when it has one.
+func _winter_floor(fname: String) -> String:
+	if not winter or fname == "":
+		return fname
+	return str(WINTER_FLOORS.get(env_name(fname, env), fname))
+
 func set_time_of_day(value: String) -> bool:
 	if time_of_day == value: return false
 	time_of_day = value

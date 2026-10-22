@@ -88,6 +88,9 @@ func _sync_time_tint(tint: Color) -> void:
 
 func _sync_lighting() -> void:
 	if _tiles != null and _tiles.set_time_of_day(state.time_of_day if state != null else ""): queue_redraw()
+	if _tiles != null and state != null and _tiles.set_winter(state.winter): queue_redraw()
+	if _before_tiles != null and state != null and _before_tiles.set_winter(state.winter):
+		if _before_layer != null: _before_layer.queue_redraw()
 	if _before_tiles != null and _before_tiles.set_time_of_day(state.time_of_day if state != null else ""):
 		if _before_layer != null: _before_layer.queue_redraw()
 	if state != null:
@@ -281,7 +284,7 @@ func _build_ground() -> void:
 ## координаты — тем же приёмом, что и на самой доске, поэтому рисунок не выстраивается в
 ## сетку. Дополнительная плитка нужна только окружениям, где допустимы проплешины.
 func _ground_wallpaper() -> ImageTexture:
-	return GroundBackdrop.wallpaper(state.env)
+	return GroundBackdrop.wallpaper(state.env, state.winter)
 
 func _ground_floor_name() -> String:
 	return GroundBackdrop._ground_floor_name(state.env)
