@@ -17,8 +17,7 @@ func sight_of(unit: UnitInstance) -> int:
 	if unit.is_drone and state.grid.in_bounds(unit.coord) \
 			and state.grid.cell_fast(unit.coord.x, unit.coord.y).blocks_sight():
 		return 0
-	var s: int = unit.stats.sight_range
-	return s if s > 0 else MCF.SIGHT_UNLIMITED
+	return unit.sight()
 
 ## Есть ли стена на луче между a и b (концы исключены) — для глаз стороны `viewer`:
 ## ей закрывают обзор ещё и корпуса вражеских танков (см. _tank_sig). -1 — только рельеф.
@@ -149,12 +148,14 @@ func _gas_masks() -> Array:
 
 func team_sees(owner: int, coord: Vector2i) -> bool:
 	if not state.grid.in_bounds(coord): return false
+	if state.cheat_vision.has(owner): return true
 	if state.grid.cell(coord).obscured(): return false
 	if not visibility_limited(): return true
 	return team_visible_coords(owner).has(coord)
 
 ## Radio contact keeps our own soldiers visible, including those inside gas.
 func is_visible_to_team(owner: int, target: UnitInstance) -> bool:
+	if state.cheat_vision.has(owner): return state.grid.in_bounds(target.coord)
 	if owner == target.owner or state.roster.are_allies(owner, target.owner): return true
 	if not state.grid.in_bounds(target.coord): return false
 	if state.grid.cell(target.coord).obscured(): return false
@@ -879,7 +880,23 @@ func set_sight_positions(positions: Dictionary) -> void:
 	sight_positions = positions.duplicate()
 	_vis_epoch.clear()
 
+var _cheat_view_modes: Dictionary = {}
+var _cheat_visible_grid := -1
+var _cheat_visible: Dictionary = {}
+
 func team_visible_coords(owner: int) -> Dictionary:
+	var revealed := state.cheat_vision.has(owner)
+	if _cheat_view_modes.get(owner, false) != revealed:
+		_cheat_view_modes[owner] = revealed
+		_vis_log[owner] = null
+		_vis_epoch.erase(owner)
+	if revealed:
+		if _cheat_visible_grid != state.grid.get_instance_id():
+			_cheat_visible_grid = state.grid.get_instance_id()
+			_cheat_visible.clear()
+			for y in state.grid.height:
+				for x in state.grid.width: _cheat_visible[Vector2i(x, y)] = true
+		return _cheat_visible
 	var mode := 1 if fog_enabled else (2 if visibility_limited() else 0)
 	# Самый частый случай — «с прошлого раза не изменилось вообще ничего»: его зовут из
 	# can_shoot() на каждую возможную цель. Три сверки целых чисел, и мы вышли; иначе
@@ -1116,6 +1133,7 @@ func _team_visible_gas(owner: int) -> Variant:
 ## pass over the board: {} while nothing is hidden, the clouds and the team's shadows with fog
 ## off (mode 2); null otherwise. The returned set is never edited afterwards.
 func visible_complement(owner: int) -> Variant:
+	if state.cheat_vision.has(owner): return {}
 	if not visibility_limited():
 		return {}
 	if fog_enabled:
@@ -1241,6 +1259,7 @@ func take_vis_changes(owner: int) -> Variant:
 ## Известна ли стороне эта клетка: видна сейчас ИЛИ разведана раньше (item 46).
 ## В REALISTIC режиме память не учитывается — там вопрос только «видно сейчас».
 func team_knows(owner: int, coord: Vector2i) -> bool:
+	if state.cheat_vision.has(owner): return state.grid.in_bounds(coord)
 	if not fog_enabled:
 		return true
 	if team_visible_coords(owner).has(coord):

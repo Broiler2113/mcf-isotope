@@ -366,7 +366,7 @@ func _clear_my_drawings() -> void:
 ## Второй конец, пока он не закреплён, берётся из-под курсора — расстояние тянется за
 ## мышью, и прикинуть дистанцию можно не кликая вовсе.
 func _draw_ruler() -> void:
-	if not _before_on:
+	if not _before_on and not _hide_rulers:
 		for r: Dictionary in _rulers:
 			if _stroke_visible_to_viewer(r):
 				_draw_ruler_segment(r["a"], r["b"], Color(1.0, 0.86, 0.25))

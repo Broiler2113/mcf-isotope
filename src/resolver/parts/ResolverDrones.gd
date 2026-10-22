@@ -144,6 +144,7 @@ func _resolve_drone_detonate(intent: DroneDetonateIntent) -> ActionResult:
 ## ни урона (fix-7 #7).
 func _drone_destroyed(drone: UnitInstance, center: Vector2i, why: String,
 		radius: int = MCF.ANTI_TANK_BLAST_RADIUS) -> ActionResult:
+	if drone.cheat_invulnerable: return ActionResult.success(["Invulnerable drone survives."])
 	if not MCF.is_scout(drone):
 		return _drone_explode(drone, center, why, radius)
 	drone.status = MCF.Status.CORPSE
@@ -157,6 +158,7 @@ func _drone_destroyed(drone: UnitInstance, center: Vector2i, why: String,
 ## Дрон не занимает слот клетки (#13), так что снимать occupant не нужно.
 func _drone_explode(drone: UnitInstance, center: Vector2i, why: String,
 		radius: int = MCF.ANTI_TANK_BLAST_RADIUS) -> ActionResult:
+	if drone.cheat_invulnerable: return ActionResult.success(["Invulnerable drone survives."])
 	drone.status = MCF.Status.CORPSE
 	drone.remaining_ap = 0
 	var result := ActionResult.new()
@@ -238,9 +240,11 @@ func stations_near(operator: UnitInstance) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
 	if operator == null or operator.stats.special_ability_id != MCF.ABILITY_DRONE_OPERATOR:
 		return out
-	for n in state.grid.neighbors(operator.coord):
+	var cells: Array[Vector2i] = [operator.coord]
+	cells.append_array(state.grid.neighbors(operator.coord))
+	for n in cells:
 		var cell := state.grid.cell(n)
-		if cell.feature_id == MCF.FEATURE_DRONE_STATION and cell.feature_owner == operator.owner:
+		if cell != null and cell.feature_id == MCF.FEATURE_DRONE_STATION and cell.feature_owner == operator.owner:
 			out.append(n)
 	return out
 
@@ -304,7 +308,7 @@ func can_pick_up_station(operator: UnitInstance, coord: Vector2i) -> String:
 		return "Hands are full"
 	if not state.grid.in_bounds(coord):
 		return "Out of bounds"
-	if Combat.distance(operator.coord, coord) != 1:
+	if Combat.distance(operator.coord, coord) > 1:
 		return "The station must be right next to you"
 	var cell := state.grid.cell(coord)
 	if cell.feature_id != MCF.FEATURE_DRONE_STATION:
@@ -328,7 +332,9 @@ func station_pickup_cells(operator: UnitInstance) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
 	if operator == null:
 		return out
-	for n in state.grid.neighbors(operator.coord):
+	var candidates: Array[Vector2i] = [operator.coord]
+	candidates.append_array(state.grid.neighbors(operator.coord))
+	for n in candidates:
 		if can_pick_up_station(operator, n) == "":
 			out.append(n)
 	return out
@@ -377,7 +383,7 @@ func operator_controls(drone: UnitInstance) -> bool:
 		return false
 	if state.grid.cell(drone.home_station).feature_id != MCF.FEATURE_DRONE_STATION:
 		return false
-	return Combat.distance(op.coord, drone.home_station) == 1
+	return Combat.distance(op.coord, drone.home_station) <= 1
 
 func _free_cell_near(coord: Vector2i) -> Vector2i:
 	for n in state.grid.neighbors(coord):

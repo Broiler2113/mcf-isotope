@@ -58,6 +58,7 @@ func _board_memory(viewer: int, visible: Dictionary, vis_changed: Variant) -> Gr
 	elif viewer != _fog_mem_viewer or vis_changed == null or _fog_mem_look < GridCell.look_log_base:
 		for c: Vector2i in visible:
 			_copy_look(mem.cell_fast(c.x, c.y), grid.cell_fast(c.x, c.y))
+			_copy_floor_look(mem, grid, c)
 	else:
 		var ch := GridCell.look_changes
 		var i: int = (_fog_mem_look - GridCell.look_log_base) * 2
@@ -65,11 +66,17 @@ func _board_memory(viewer: int, visible: Dictionary, vis_changed: Variant) -> Gr
 			var c := Vector2i(ch[i], ch[i + 1])
 			if visible.has(c):
 				_copy_look(mem.cell_fast(c.x, c.y), grid.cell_fast(c.x, c.y))
+				_copy_floor_look(mem, grid, c)
 			i += 2
 		for k: int in vis_changed:
 			var c := Vector2i(k % grid.width, k / grid.width)
 			if visible.has(c):
 				_copy_look(mem.cell_fast(c.x, c.y), grid.cell_fast(c.x, c.y))
+				_copy_floor_look(mem, grid, c)
+	if not is_same(mem.map_items, grid.map_items) and _fog_mem_look != GridCell.look_version:
+		mem.map_items = mem.map_items.filter(func(item: Array): return not visible.has(SmallItems.cell_of(item)))
+		for item: Array in grid.map_items:
+			if visible.has(SmallItems.cell_of(item)): mem.map_items.append(item)
 	GridCell.journaling = journaling
 	GridCell.vision_version = keep[0]
 	GridCell.vision_changes = keep[1]
@@ -562,3 +569,10 @@ func _pile_cells() -> Array[Vector2i]:
 			if c.corpse_count > 0:
 				_piles.append(c.coord)
 	return _piles
+
+func _copy_floor_look(dst: Grid, src: Grid, at: Vector2i) -> void:
+	var look := src.look_at(at.x, at.y)
+	if dst.look_at(at.x, at.y) == look: return
+	dst.floor_look.resize(dst.width * dst.height)
+	dst.floor_look[at.y * dst.width + at.x] = look
+	GridCell.log_look_change(at.x, at.y)

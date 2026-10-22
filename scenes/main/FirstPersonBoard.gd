@@ -56,6 +56,7 @@ uniform float sun_k = 0.0;
 uniform float glow_k = 1.7;
 uniform bool no_fog = false;
 uniform bool sight_only = false;
+uniform vec4 door_bounds = vec4(0.0);
 varying vec3 wpos;
 varying vec3 wnorm;
 void vertex() {
@@ -88,6 +89,9 @@ vec4 base_at(vec2 uv, vec2 xz) {
 	return c;
 }
 void fragment() {
+	// Sliding leaves stay inside their opening even after an adjacent wall is destroyed.
+	if (door_bounds.z > 0.0 && (wpos.x <= door_bounds.x || wpos.z <= door_bounds.y ||
+			wpos.x >= door_bounds.z || wpos.z >= door_bounds.w)) discard;
 	vec4 c;
 	bool emit = COLOR.a < 0.5;
 	if (use_mats) {
@@ -347,15 +351,12 @@ static func build(grid: Grid, cc: Vector2i, roof: PackedByteArray, ctx: Dictiona
 			var wall := is_wall(c, env)
 			# --- Floor
 			if dug:
-				_quad_up(_wall_sink(walls, "soil", Color(0, 0, 0, 0)), Vector3(x, -TRENCH, y), Vector3(x + 1, -TRENCH, y + 1), Rect2(0, 0, 1, 0.43))
-				_add_model(models, counts, ["trench"], Transform3D(Basis.IDENTITY, Vector3(x, -TRENCH, y)), func(s: FirstPersonModels.Sink, _g: FirstPersonModels.Sink) -> void:
-					for k in 5:
-						s.box(Vector3(0.06 + k * 0.18, 0.0, 0.05), Vector3(0.2 + k * 0.18, 0.04, 0.95), FirstPersonArt.M_WOOD, FirstPersonModels.WOOD_D))
+				_quad_up(_wall_sink(walls, "trench", Color(0, 0, 0, 0)), Vector3(x, -TRENCH, y), Vector3(x + 1, -TRENCH, y + 1), Rect2(x / 8.0, y / 8.0, 0.125, 0.125))
 				for d: Vector2i in Grid.N4:
 					var n := at + d
 					if grid.in_bounds(n) and grid.cell_fast(n.x, n.y).feature_id == MCF.FEATURE_TRENCH:
 						continue
-					_wall_face(_wall_sink(walls, "soil", Color(0, 0, 0, 0)), n, -d, -TRENCH, 0.0)
+					_wall_face(_wall_sink(walls, "trench", Color(0, 0, 0, 0)), n, -d, -TRENCH, 0.0, true)
 			elif not c.is_space and not wall:
 				_quad_up(_sink_for(floors, tcc), Vector3(x, 0.0, y), Vector3(x + 1, 0.0, y + 1), uv)
 			elif c.is_space:
@@ -396,12 +397,6 @@ static func build(grid: Grid, cc: Vector2i, roof: PackedByteArray, ctx: Dictiona
 				_piece(models, glass, counts, grid, at, fid, ctx, cap, tops)
 				continue
 			_feature(models, counts, grid, at, fid, env)
-	# Blood spattered on the walls (fix-8 #13), on the face that looks at the body.
-	var blood := _sink()
-	for b: Dictionary in ctx.get("wall_blood", []):
-		_wall_spatter(blood, b)
-	if not blood.empty():
-		_add(node, blood.mesh(), mats.get("blood"), false)
 	# Small things lying about: the map's items, knocked items and rubble.
 	_items(loose, grid, cc, tops)
 	_decals(loose, ctx.get("decals", []), Rect2(x0, y0, x1 - x0, y1 - y0))
@@ -482,7 +477,7 @@ static func _quad_down(s: FirstPersonModels.Sink, lo: Vector3, hi: Vector3, uv: 
 
 ## A wall's side toward d, from y0 to y1: the texture is a metre wide and the wall's full
 ## height, laid by world position so the pattern runs on unbroken from cell to cell.
-static func _wall_face(s: FirstPersonModels.Sink, at: Vector2i, d: Vector2i, y0: float, y1: float) -> void:
+static func _wall_face(s: FirstPersonModels.Sink, at: Vector2i, d: Vector2i, y0: float, y1: float, earth := false) -> void:
 	var x := float(at.x)
 	var z := float(at.y)
 	var a: Vector3
@@ -496,6 +491,11 @@ static func _wall_face(s: FirstPersonModels.Sink, at: Vector2i, d: Vector2i, y0:
 	var ub := 1.0
 	var v0 := 1.0 - y0 / CEIL
 	var v1 := 1.0 - y1 / CEIL
+	if earth:
+		ua = (a.x if d.y != 0 else a.z) / 8.0
+		ub = (b.x if d.y != 0 else b.z) / 8.0
+		v0 = -y0 / 8.0
+		v1 = -y1 / 8.0
 	s.face_uv([a + Vector3(0, y0, 0), b + Vector3(0, y0, 0), b + Vector3(0, y1, 0), a + Vector3(0, y1, 0)],
 			Vector3(d.x, 0, d.y), [Vector2(ua, v0), Vector2(ub, v0), Vector2(ub, v1), Vector2(ua, v1)], Color.WHITE)
 
@@ -649,7 +649,7 @@ static func _door(node: Node3D, grid: Grid, at: Vector2i, env: String, mats: Dic
 	door.position = Vector3(x, 0, z)
 	door.set_meta("cell", at)
 	door.set_meta("along_x", along_x)
-	var mat: Material = mats["door"].call("wood" if wood else "metal", accent)
+	var mat: Material = mats["door"].call("wood" if wood else "metal", accent, at)
 	var leaves := 1 if wood else 2
 	var w := 1.0 / leaves
 	var thick := 0.09 if wood else 0.16
@@ -887,27 +887,6 @@ static func _place_item(s: FirstPersonModels.Sink, kind: String, at: Vector3, ro
 	s.xf = Transform3D(Basis(Vector3.UP, -rot), at)
 	FirstPersonModels.item(s, kind, FirstPersonArt.art_colour(SmallItems.texture_name(kind)))
 	s.xf = keep
-
-## One spatter quad on a wall face, just off it: the variant from the entry's own angle, as
-## on the battle screen; a little higher or lower, a little bigger or smaller per entry.
-static func _wall_spatter(s: FirstPersonModels.Sink, b: Dictionary) -> void:
-	var c: Vector2i = b["cell"]
-	var face: Vector2i = b["face"]
-	var rot := float(b["rot"])
-	var variant := int(absf(rot) * 1000.0) % FxDecals.SPATTER_VARIANTS
-	var size := 1.05 * float(b["scale"])
-	var along := Vector3(-face.y, 0, face.x)
-	var n := Vector3(face.x, 0, face.y)
-	var mid := Vector3(c.x + 0.5, 0, c.y + 0.5) + n * 0.512 + along * 0.15 * sin(rot * 3.0)
-	var y := 0.75 + 0.35 * absf(cos(rot * 2.0))
-	var half := size * 0.5
-	var u0 := float(variant) / FxDecals.SPATTER_VARIANTS
-	var u1 := float(variant + 1) / FxDecals.SPATTER_VARIANTS
-	var p0 := mid - along * half + Vector3(0, y - half, 0)
-	var p1 := mid + along * half + Vector3(0, y - half, 0)
-	var p2 := mid + along * half + Vector3(0, y + half, 0)
-	var p3 := mid - along * half + Vector3(0, y + half, 0)
-	s.face_uv([p0, p1, p2, p3], n, [Vector2(u0, 1), Vector2(u1, 1), Vector2(u1, 0), Vector2(u0, 0)], Color.WHITE)
 
 ## Knocked items and rubble from the battle's cosmetics: items as themselves, wall chunks
 ## as sharp lumps of their wall (owner, fix-8: flat chunk pictures looked like "strange

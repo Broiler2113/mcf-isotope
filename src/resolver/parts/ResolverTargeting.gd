@@ -16,6 +16,7 @@ func _is_shield(u: UnitInstance) -> bool:
 func is_fireproof(u: UnitInstance) -> bool:
 	# Борг не горит (batch 13 B10): оператор внутри огня не боится.
 	if u == null: return false
+	if u.cheat_invulnerable: return true
 	# Sealed shuttle cabins protect every passenger, including the driver.
 	if seated_vehicle_of(u) != null or u.borg_id != -1: return true
 	return not _is_wave_fighter(u) and MCF.ability_is_fireproof(u.stats.special_ability_id)

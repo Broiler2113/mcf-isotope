@@ -200,7 +200,9 @@ class Sink:
 			var a: Vector2 = poly[i]
 			var b: Vector2 = poly[(i + 1) % cnt]
 			var e := b - a
-			var out := Vector3(e.y, 0, -e.x) if area < 0.0 else Vector3(-e.y, 0, e.x)
+			# Positive area in the x/z plane has its outside to the right of each edge.
+			# Inward normals also inverted the winding, hiding the near face of rubble.
+			var out := Vector3(e.y, 0, -e.x) if area > 0.0 else Vector3(-e.y, 0, e.x)
 			face([bot[i], bot[(i + 1) % cnt], top[(i + 1) % cnt], top[i]], out.normalized(), m, c.darkened(0.12))
 
 	func empty() -> bool:
@@ -1354,12 +1356,22 @@ static func dpmg(s: Sink) -> void:
 static func drone_station(s: Sink, side: Color) -> void:
 	s.box(Vector3(0.06, 0, 0.06), Vector3(0.94, 0.3, 0.94), FirstPersonArt.M_PLATE, METAL_D)
 	s.box(Vector3(0.04, 0.3, 0.04), Vector3(0.96, 0.34, 0.96), FirstPersonArt.M_PLATE, METAL_D.lightened(0.1))
-	s.cyl(Vector3(0.5, 0.34, 0.5), 0.36, 0.36, 0.006, FirstPersonArt.M_PLAIN, Color(0.9, 0.75, 0.15), 16, 2)
-	s.cyl(Vector3(0.5, 0.346, 0.5), 0.3, 0.3, 0.002, FirstPersonArt.M_PLAIN, METAL_D.lightened(0.05), 16, 2)
-	s.box(Vector3(0.47, 0.348, 0.36), Vector3(0.53, 0.352, 0.64), FirstPersonArt.M_PLAIN, WHITE)
-	s.box(Vector3(0.38, 0.348, 0.47), Vector3(0.62, 0.352, 0.53), FirstPersonArt.M_PLAIN, WHITE)
-	for p: Vector2 in [Vector2(0.06, 0.06), Vector2(0.9, 0.06), Vector2(0.06, 0.9), Vector2(0.9, 0.9)]:
-		s.box(Vector3(p.x, 0.22, p.y), Vector3(p.x + 0.04, 0.28, p.y + 0.04), FirstPersonArt.M_PLAIN, glow(side))
+	# A ring on a single deck, with no overlapping discs or coplanar cross arms.
+	for i in 24:
+		var a := TAU * i / 24.0
+		var b := TAU * (i + 1) / 24.0
+		var center := Vector3(0.5, 0.345, 0.5)
+		var da := Vector3(cos(a), 0, sin(a))
+		var db := Vector3(cos(b), 0, sin(b))
+		s.face([center + da * 0.3, center + da * 0.36, center + db * 0.36, center + db * 0.3],
+				Vector3.UP, FirstPersonArt.M_PLAIN, Color(0.9, 0.75, 0.15))
+	s.box(Vector3(0.47, 0.34, 0.36), Vector3(0.53, 0.35, 0.64), FirstPersonArt.M_PLAIN, WHITE, Sink.NO_BOTTOM)
+	for x in [0.38, 0.53]:
+		s.box(Vector3(x, 0.34, 0.47), Vector3(x + 0.09, 0.35, 0.53), FirstPersonArt.M_PLAIN, WHITE,
+				Sink.NO_BOTTOM | (Sink.NO_RIGHT if x < 0.5 else Sink.NO_LEFT))
+	for z in [0.045, 0.94]:
+		for x in [0.12, 0.8]:
+			s.box(Vector3(x, 0.22, z), Vector3(x + 0.08, 0.28, z + 0.015), FirstPersonArt.M_PLAIN, glow(side))
 	s.cyl(Vector3(0.88, 0.34, 0.12), 0.012, 0.012, 0.5, FirstPersonArt.M_METAL, METAL, 6)
 	s.box(Vector3(0.86, 0.84, 0.1), Vector3(0.9, 0.88, 0.14), FirstPersonArt.M_PLAIN, glow(side.lightened(0.3)))
 
@@ -1561,13 +1573,14 @@ static func tank_turret(s: Sink, paint: Color, wrecked: bool) -> void:
 	s.cyl(Vector3(-0.2, 1.65, 0.25), 0.18, 0.18, 0.12, FirstPersonArt.M_PLATE, c.darkened(0.15), 8)
 	s.cyl(Vector3(-0.35, 1.65, -0.35), 0.015, 0.015, 0.35, FirstPersonArt.M_METAL, METAL_D, 4, 0)
 
-## A small space shuttle on its skids: a cabin with a dark canopy, engines glowing aft.
+## A small space shuttle with four wheels, landing struts, a canopy and aft engines.
 static func shuttle(s: Sink, paint: Color, wrecked: bool) -> void:
 	var c := Color(0.16, 0.15, 0.14) if wrecked else paint.lerp(WHITE, 0.35)
 	for z in [-0.75, 0.75]:
-		s.box(Vector3(-0.9, 0.0, z - 0.05), Vector3(0.9, 0.08, z + 0.05), FirstPersonArt.M_METAL, METAL_D)
 		for x in [-0.6, 0.6]:
-			s.box(Vector3(x - 0.04, 0.08, z - 0.04), Vector3(x + 0.04, 0.4, z + 0.04), FirstPersonArt.M_METAL, METAL_D)
+			s.box(Vector3(x - 0.04, 0.2, z - 0.04), Vector3(x + 0.04, 0.5, z + 0.04), FirstPersonArt.M_METAL, METAL_D)
+			s.zcyl(Vector3(x, 0.22, z + 0.12), 0.22, 0.24, FirstPersonArt.M_RUBBER, BLACK, 16)
+			s.zcyl(Vector3(x, 0.22, z + 0.126), 0.105, 0.252, FirstPersonArt.M_METAL, METAL, 12)
 	s.box(Vector3(-0.95, 0.4, -0.8), Vector3(0.75, 1.5, 0.8), FirstPersonArt.M_PLATE, c)
 	s.face([Vector3(0.75, 1.5, -0.8), Vector3(0.75, 1.5, 0.8), Vector3(1.0, 1.0, 0.7), Vector3(1.0, 1.0, -0.7)], Vector3(0.9, 0.45, 0), FirstPersonArt.M_PLAIN,
 			Color(0.1, 0.16, 0.24) if not wrecked else BLACK)

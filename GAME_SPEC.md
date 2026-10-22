@@ -1632,6 +1632,13 @@ skips it). Waves: 5/10/15 or endless (`waves_total` 0).
   matches end only this way; the title reports rounds, waves beaten and kills).
 - *AI*: defenders hold their ground (advance × 0.25), the waves push (× 1.5).
 
+**Fix 9:** wave and raider landings have no fixed unit-count ceiling. Their purchase
+budget and available landing cells determine the force size. The same rules apply to
+resumed matches. Loading a battle restores the wave and raider controls; changes apply
+to future arrivals while preserving the current wave, announced landing, initiative,
+and event progress. Pre-cohort Holdout saves acquire deterministic wave groups without
+rerolling initiative or gameplay dice. These rule changes use network protocol 26.
+
 ---
 
 ## 15. Items & Grenades (§3.6)
@@ -2431,7 +2438,7 @@ town: 149 ms → 0.2 ms at `ZOOM_MIN`, 17 ms → 8 ms just above `LOD_ZOOM`, 2.8
 1:1. The purchase screen got the same viewport culling (it drew all 62 500 cells every
 frame: ~500 ms → 2–8 ms).
 
-**First person (0.13.1).** The battle and editor offer a private walkthrough: WASD,
+**First person (fix 9).** The battle and editor offer a walkthrough: WASD, Shift to run,
 mouse look, Space to jump, X to pass through walls within known terrain, and Escape
 back to the board. The editor shows all authored soldiers, civilians and corpse piles,
 independent of lobby population limits. It does not modify the map or battle state.
@@ -2440,6 +2447,96 @@ and ground use 32 texels per metre. The view samples `LightManager` for the same
 colours and occlusion as 2D, with outdoor sun shadows. `FirstPersonArt` retains the
 procedural source but loads pre-baked layers from `textures/first_person` on entry.
 `tools/art/build_first_person.gd -- --verify` checks those layers pixel for pixel.
+Multiplayer walkers appear as cosmetic, named avatars, clipped to the viewer's current
+sight; movement and presence never change battle state. Entry works during another
+side's action. Soldier and vehicle animation uses continuous interpolation, with a
+minimum per-cell duration in first person. Walking and running footsteps use actual
+distance traveled, including diagonal motion. Bullets, shells, rockets, laser beams
+and expanding explosions follow the battle's effect timeline and visibility.
+
+Rubble faces point outward, drone pads have non-overlapping markings, and sliding doors
+retain their opening when chunks rebuild and cannot protrude through neighboring walls.
+Pillboxes never inherit service stripes. LDF faces read the 2D LDF texture, shuttles have
+four wheels, and corpse markers fit centrally on their cells. Wall blood spatter is
+removed from both views; legacy saves remain readable. The walking fog resolver retains
+its incremental visibility caches between actions rather than rebuilding the entire
+army's visibility at every walk.
+
+Operators can pack a station beneath them or beside them. The action stays visible
+with a reason when unavailable. Bodies can be dropped, dragged, or unloaded from a
+vehicle onto adjacent space tiles, subject to the usual occupancy and pile limits.
+Drawing controls include **Hide rulers**, independently of ordinary strokes.
+**Battle controls (0.13.2).** Combat Log and Chat share one resizable Communications
+panel, selected by tabs; inactive chat shows an unread count. Undo and Redo live in
+Tools. On macOS their default bindings are Command-Z and Command-Shift-Z (including
+the editor); saved custom bindings still win. Escape cancels the current interaction
+or closes its dialog, then opens Settings when idle, including during animations.
+There is no separate gameplay Settings button. Manual and Report a Bug are compact
+buttons beside Drawing. Host-only AI speed and pause controls are hidden from guests.
+
+**Resuming a match.** Saves retain the original lobby configuration, including fog,
+friendly fire, cheats, population, deployment, generation options, AI pace, event pool,
+wave restrictions and mode configuration. Loading restores those controls and the saved
+roster. The host can edit ongoing fog, cheats, teams, events and future-wave settings
+before resuming. The existing battlefield, deployment and game mode remain fixed;
+editing future waves never resets the current wave, pending landing or event progress.
+Network identities come from the current session, not saved peer numbers.
+
+**Presentation fixes (0.13.2).** Winter previews use the same seasonal terrain as the
+battle. Outdoor doors and airlocks receive constructed floors, including a visual
+fallback for old grass thresholds. Asteroids generate no trees or outdoor greenery.
+Trench floors and walls share continuous earth at the same world scale. First-person
+light maps use two buffers: texture and world rectangle switch together after rendering,
+so crossing a streaming boundary cannot sample the previous texture at new coordinates.
+
+**Cheat console (0.13.2).** The lobby's Enable cheats switch defaults off. A separate
+Cheats checkbox belongs to each roster slot: new local/host humans default allowed,
+other slots default denied. Guests cannot edit either setting; AI, open/closed slots,
+spectators and replay viewers cannot issue cheats. Disconnect/reclaim preserves the
+slot grant. Loading can disable the console while preserving previously saved effects.
+
+F2 (rebindable) opens the console during a battle when cheats are enabled. Seated humans
+can read help, players and cheats status; inspection and gameplay require their slot's
+grant. Host administration remains available even if the host revokes their own gameplay
+rights. Enter submits one command, Up/Down recall the last 100 inputs, Tab completes
+commands and contextual IDs, Escape closes. History survives reopening within the scene;
+output is bounded and rendered as plain text. IDs are optional local labels, disabled by
+default. Privileged inspection is never published to other players.
+
+`CheatCommands.CATALOG` is the single grammar/help registry. It resolves real unit,
+vehicle, feature, furniture, item and event identifiers case-insensitively; players use
+self, #1–#26, exact quoted names, or all where supported. Entity IDs, integer coordinates,
+stat bounds and footprints are checked again at execution. Lists are sorted by ID and
+paginated in groups of 25. Bulk unit creation uses deterministic clockwise square rings,
+capped at 100; partial success reports the placed/requested count. Other invalid commands
+leave the simulation and dice stream unchanged.
+
+The catalog covers unit spawning/cloning, kill/revive/removal, teleport/ownership, AP,
+items, civilian activation, invulnerability and effective speed/armor/range/rof/sight;
+vehicle spawning/cloning, movement/ownership, supported components, repair/destruction
+and removal; feature/furniture placement, gameplay floor versus appearance, space,
+fire, gas/smoke, winter/time; existing random-event queuing/cancellation; per-side vision
+and mine revelation; turn end/refill, host AI pace/personality, Capture scores and Holdout
+wave counts. Unsafe links and footprints are refused. Explicit unit kill bypasses
+invulnerability; ordinary shared death paths respect it. Destroyed vehicles release
+protected passengers safely and retain a real crew link if no ejection cell exists.
+
+Gameplay commands become typed `CheatIntent` operations through the ordinary resolver,
+shared DiceService, IntentCodec, NetGame and ReplayRecorder. The live host derives the
+issuer from the authenticated sending peer, checks the current slot grant and command
+rights, and accepts permitted cheats outside the issuer's turn. Historical authoritative
+actions bypass current grants during replay. Successful gameplay cheats clear undo/redo
+and publish a concise [CHEAT] entry; detailed results go to the issuer's console. No
+state-changing cheat is accepted after match completion. Host-only cheats grant/revoke
+are administrative permission updates, separate from gameplay intents.
+
+StateCodec, snapshots and compact digests preserve unit overrides/protection and per-side
+vision/mines. Old or malformed optional fields fall back safely. Vision uses normal view
+and targeting helpers without changing global fog mode. Forced events reuse ordinary
+eligibility, parameters, timing, landing and dice; forcing never enables automatic events.
+Network protocol is 26; older save/replay formats remain readable. Focused suites live
+in tests/cheats, with real ENet coverage in tests/run_net_cheats.sh.
+
 The placement screen's minimum zoom adapts to the map and viewport so the whole map
 can be surveyed before deployment.
 
@@ -3821,6 +3918,7 @@ glass are stamped into the terrain chunk once (`TerrainTiles._bake_decals`) inst
 redrawn every frame — at ~12k decals that was ~75 ms a frame and is now nothing. They follow
 the same fog rules as the terrain they sit on. Bloody footprints are gone with the rest of
 the per-step bookkeeping. **Service accents** (§20.2): on stations and in bunkers the walls and door frames of a service carry its colour — command blue, control/comms white, security red, medical green, science purple, engineering yellow, cargo orange, everything else grey; a room's own purpose beats its department (`MapGen.KIND_ACCENT`), the colour is a per-cell display-only byte (`MapData.wall_accent`, `MCF.Accent`) drawn as a line that runs along the wall and as a tinted door frame. **Corridors**: main ones are always 3 cells wide, maintenance tunnels 1 (2 about a quarter of the time), and grating is laid in roughly a third of the tunnels and in no room at all. **Grill walkway** (`MCF.Look.GRILL`): a floor look that is transparent between its bars and lies *over* a cell instead of replacing it; it runs from a hull airlock out into space with solar panels down both sides, and it is paintable in the editor. **Space draws no tile** — the `Starfield` parallax behind the board shows through it, following the camera (far layer 5 %, near 26 %); `floor_space.png` dropped by the player still wins. **Doors fill the whole cell** instead of a narrow panel in the middle of it. **Windows**: a symbol fallback font (✓ ✕ ▶ ⚠ are in neither Handjet nor Tahoma) and an explicit `stretch/aspect=expand` so a non-16:9 window is not letterboxed. Also: the hidden storage can no longer get an exterior airlock cut into it. **A border around every map** (§20.2): 10 cells in every direction that can be reached — diggable soil in a bunker, grass around a town or field, open space around a station or asteroid — and 2 more that cannot (`MCF.FEATURE_BOUNDARY`, in no destructible list, opaque to the laser), so the world keeps going past the battlefield but nothing walks off it. Lobby sizes now name the map, not the field. Also: `default_clear_color` was never applied — project.godot comments must start with `;`, and the `#` ones silently dropped the setting, so the window had been Godot grey instead of black all along. Tests: `tests/run_batch093.gd`. |
+| 135 | **0.13.2 — Issues-fix-9 and cheat console**: F2 console with typed commands, hints, host-controlled multiplayer permissions, deterministic gameplay, persistent effects and replay support (§18.4). First-person geometry, station seams, door travel, remote walkers, smooth motion, projectiles, footsteps/run and atomic light-map updates; matching LDF art, uniform earth trenches, shuttle wheels, centered bodies, no wall blood. Cached fog updates, underfoot station packing, bodies on space, uncapped wave/raider populations and saved-wave migration. Saved lobby settings restore and ongoing rules remain editable. Log/Chat tabs, tools undo/redo, macOS Command shortcuts, Escape settings, host-only controls and compact help buttons. Winter previews, constructed doorway floors and no asteroid greenery. Protocol **26**. |
 | 134 | **Issues-fix-8** (release 0.13.1) — **First person rebuilt** (§18.4): the 3D view is lit by the battle screen's own light map (`LightManager.render_area` for the cells around the walker, read by every surface), sharing the board's light colours and occlusion through a cached light map; every piece of furniture, fortification, wall lamp, small item and lump of rubble is a modelled object (`FirstPersonModels`) at one texel density (32 px a metre, `FirstPersonArt.materials`); walls and floors carry baked relief; grass and field earth are one seamless 8 m texture instead of per-cell tiles; the map edge (`FEATURE_BOUNDARY`) is invisible in 3D as it is in 2D, and solar panels and gratings over space are drawn; vehicles are models with a turning turret and their name in Handjet on the hull. **Rules**: a wave or raider slot with no living *soldier* is skipped in the initiative (a drone in the air is not a soldier, §3.3); an engineer cuts a welded airlock open again for the same AP, three per action in a borg (§9.5); a borg tears down walls, glass and airlocks three per AP, like it builds them (§9.5); a drone detonation that killed nobody can be undone (§18.2); furniture smashed anywhere breaks into chunks of its own picture instead of rubbling the floor (§9.9). **Maps**: botany bays on stations (planter beds, hydroponic racks, potting tables), greenery on open ground (tall grass, hedges, flower beds, pines) and a **Winter** switch for town and field — snow on the ground, the plants and the roofs, snowmen and drifts, falling snow on both screens (Settings → Display). **Raiders** land again: an army crowds out the next one only while it is still a force (5+ fighters and 3 in 10 of its landing), and a landing stretch of bare vacuum slides along the edge to the nearest ground (§15.3). Rulers are drawings — they stay, share and undo like strokes — and turning on sharing re-sends everything drawn before it (§18.6). |
 | 133 | **Issues-fix-6** (protocol 22) — **Lanes** show before the dice (held, `FxDecals.preview_lanes`) but end at the aimed target. **Shot sounds:** one recorded single shot per bullet fired, the rest of a volley at the gun's cadence (`FxDecals.volley_requested` → `BattleAudio.volley`); the `burst` cue is gone. A hull pushing a wall over plays `crunch`, not `structure`. One `ui_click` for every UI interaction (`GameAudio._watch_ui`). **Raiders** play each action's effects before the next walk ("effects" markers from `advance_civilians`). **Smoke/gas** cost +2 to hit instead of blocking shots (§15). **Allies block** the firing line (§6.9). **Grenades** are never thrown past a wall. **DPMG:** choose the rounds, keep the rest of the 8-round burst for other targets at no AP (`ActionState.dpmg`), and the gun sprite turns toward its target (`Grid.furniture_turn`). **Wave shield bearers** survive every blast but a direct hull/AT/drone hit. **Landings** skip burning cells. **No spoil** on bodies. **HI** shows the "!" once its smoke is thrown. **Heightmap** labels tanks 2. **Fire** draws above debris. **Camera buttons** for raider groups and Holdout waves (visible ones under fog). **"Show the whole board"** after the match lifts the fog. **Perf:** fog memories diff the view on a walk or pre-impact hold instead of re-checking it (~90 ms → 0 per switch on a 120×90 board with 30k decals); undo and shield sweeps cut decal chunks in place instead of re-indexing (undo hitch ~120 ms → none). SFX bake is incremental (`sfx_inputs` signatures). Tests: `tests/run_issues_fix6.gd`. |
 | 132 | **0.12.2** — Wall chunks are sharp polygons in six shapes (`FxDecals.CHUNK_SHAPES`, kind `chunk:<art>#<shape>`) and sizes 0.45–1.6×, baked with a dark rim at 16 angles. Destroying furniture takes only the hit cell (`_destroy_furniture`; was the whole connected piece): the rest keeps its frozen battle look. Flying particles are drawn from the same baked sprite as the settled decal (`TerrainTiles._decal_sprite`) at the tile resolution, on the board's pixel grid, by a NEAREST-filtered child layer (`Main.FlyLayer`); vector drawing remains only without tiles. Protocol 12. Tests: `tests/run_batch0122.gd`. |

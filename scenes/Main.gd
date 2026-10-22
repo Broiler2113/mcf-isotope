@@ -22,6 +22,7 @@ func _ready() -> void:
 	# со следующей партии, перезапускать игру не нужно.
 	Sprites.reload_overrides()
 	_build_state()
+	if _lobby_settings.is_empty(): _lobby_settings = LobbySettings.capture()
 	resolver.capture_cosmetics = _fx.capture_state
 	resolver.restore_cosmetics = _fx.restore_state
 	_furniture_look = TerrainTiles.new(state.grid, state.env).freeze_furniture()
@@ -94,7 +95,8 @@ func _process(delta: float) -> void:
 	# Полёт осколков и гильз (#21): пока что-то летит — перерисовываем, потом слой
 	# засыпает и кадры снова ничего не стоят. До проверки фокуса (fix-7): пока игрок
 	# печатает в чате, вспышки и пули не должны замирать на экране.
-	if _fx.advance(delta):
+	# Heavy 3D frames must not consume an entire projectile before it can be displayed.
+	if _fx.advance(minf(delta, 1.0 / 30.0) if _fp != null else delta):
 		queue_redraw()
 	var focused := get_viewport().gui_get_focus_owner()
 	if focused is LineEdit or focused is TextEdit or Keybinds.modal_open() or _quit_dialog.visible or _fp != null:
@@ -301,6 +303,11 @@ func _unhandled_input(event: InputEvent) -> void:
 				_erase_at(_draw_world_pos())
 			queue_redraw()  # кружок ластика под курсором
 			return
+	# Looking around is independent of the acting side and its animation lock.
+	if mode == Mode.FP_PICK:
+		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			_handle_click(_pos_to_cell(event.position))
+		return
 	if _animating:
 		return
 	# Рисование ЛДФ-стены: тянем цепочку клеток левой кнопкой; Backspace — отмена
@@ -373,6 +380,10 @@ func _handle_click(coord: Vector2i) -> void:
 	if not state.grid.in_bounds(coord):
 		_deselect()
 		return
+	if mode == Mode.FP_PICK:
+		if FirstPerson.walkable_start(self, coord):
+			_start_first_person(coord)
+		return
 	# В повторе клик только РАССМАТРИВАЕТ юнита: меню действий не открывается, потому
 	# что действовать в записанной партии нельзя — она уже сыграна.
 	if replay != null or _spectator:
@@ -393,10 +404,6 @@ func _handle_click(coord: Vector2i) -> void:
 				occupant = u
 				break
 
-	if mode == Mode.FP_PICK:
-		if FirstPerson.walkable_start(self, coord):
-			_start_first_person(coord)
-		return
 	match mode:
 		Mode.MOVE:
 			if reach != null and reach.can_reach(coord):
@@ -828,6 +835,7 @@ func _escape_pressed() -> void:
 		queue_redraw()
 		return
 	if _animating:
+		SettingsWindow.open(self)
 		return
 	# Отмена незакоммиченного рисования ЛДФ-стены.
 	if mode == Mode.BUILD_WALL:
@@ -857,8 +865,8 @@ func _escape_pressed() -> void:
 	if selected_id != -1 or selected_vehicle_id != -1:
 		_deselect()
 		return
-	# Ничего не выбрано — открыть выход в главное меню.
-	_quit_dialog.show()
+	# No pending interaction: Escape opens settings.
+	SettingsWindow.open(self)
 
 # --- Поток намерений (с анимацией кубиков) ---
 func _submit(intent: Intent) -> void:
@@ -876,6 +884,11 @@ func _submit(intent: Intent) -> void:
 
 func _on_intent_ready(intent: Intent) -> void:
 	if _spectator: return
+	if intent is CheatIntent and not networked:
+		var denied := CheatAccess.denial(state, intent.issuer)
+		if not denied.is_empty():
+			_cheat_result(intent, ActionResult.fail(denied))
+			return
 	# После победы доска стоит (batch 13 #9): намерения не принимаются ни от людей,
 	# ни от ИИ. В сети хост точно так же не передаёт их дальше.
 	if _match_over:
@@ -904,6 +917,7 @@ func _on_intent_ready(intent: Intent) -> void:
 	var ap_actor := state.get_unit(intent.actor_id) if intent.actor_id >= 0 else null
 	var ap_before := ap_actor.remaining_ap if ap_actor != null else 0
 	var result := resolver.resolve(intent)
+	_cheat_result(intent, result)
 	if not result.ok:
 		# Отказ невидимому чужому бойцу или машине в журнал не идёт (issues-12 #5).
 		if _result_is_audible(result):
@@ -1041,6 +1055,7 @@ func _check_match_over() -> bool:
 	return true
 
 func _declare_match_over(title: String) -> void:
+	if net != null: net.match_finished = true
 	if session != null and session.is_host():
 		for peer in session.waiting_peers:
 			session.send_to(peer, {"k": NetHandoff.K_RECLAIM_STATUS, "error": "This match has ended."})

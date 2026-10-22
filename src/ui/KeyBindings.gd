@@ -6,8 +6,9 @@ const SETTINGS_PATH := "user://settings.cfg"
 const DEFINITIONS: Array = [
 	{"id": "game_fullscreen", "label": "Toggle fullscreen (all screens)", "keys": [KEY_F11], "contexts": ["*"], "section": "game"},
 	{"id": "game_end_turn", "label": "End turn", "keys": [KEY_MASK_SHIFT | KEY_ENTER], "contexts": ["*"], "section": "game"},
-	{"id": "game_cancel", "label": "Cancel / close menu", "keys": [KEY_ESCAPE], "contexts": ["*"], "section": "game"},
+	{"id": "game_cancel", "label": "Settings / cancel / close", "keys": [KEY_ESCAPE], "contexts": ["*"], "section": "game"},
 	{"id": "game_initiative", "label": "Initiative overlay", "keys": [KEY_TAB], "contexts": ["*"], "section": "game"},
+	{"id": "game_cheats", "label": "Cheat console (when enabled)", "keys": [KEY_F2], "contexts": ["*"], "section": "game"},
 	{"id": "game_manual", "label": "Manual", "keys": [KEY_F1], "contexts": ["*"], "section": "game"},
 	{"id": "game_pause_ai", "label": "Pause AI battle", "keys": [KEY_P], "contexts": ["*"], "section": "game"},
 	{"id": "game_heightmap", "label": "Heightmap on / off", "keys": [KEY_MASK_SHIFT | KEY_H], "contexts": ["*"], "section": "game"},
@@ -128,11 +129,19 @@ func _apply(id: String, keys: Array) -> void:
 	InputMap.action_erase_events(id)
 	for code: int in keys: InputMap.action_add_event(id, key_event(code))
 
+## Platform defaults do not overwrite explicitly rebound shortcuts.
+func default_keys(entry: Dictionary, platform: String) -> Array:
+	var keys: Array = entry.keys.duplicate()
+	if platform == "macOS" and entry.id in ["game_undo", "game_redo", "editor_undo", "editor_redo"]:
+		for i in keys.size():
+			keys[i] = (int(keys[i]) & ~KEY_MASK_CTRL) | KEY_MASK_META
+	return keys
+
 func load_bindings(path := SETTINGS_PATH) -> void:
 	var config := ConfigFile.new()
 	config.load(path)
 	for entry: Dictionary in DEFINITIONS:
-		_apply(entry.id, entry.keys)
+		_apply(entry.id, default_keys(entry, OS.get_name()))
 	# Load the whole saved map together: swapped bindings must survive reload.
 	for entry: Dictionary in DEFINITIONS:
 		var saved: Variant = config.get_value("keybinds", entry.id, 0)

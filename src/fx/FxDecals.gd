@@ -76,58 +76,6 @@ const CHUNK_SHAPES := [
 const CHUNK_SCALE_MIN := 0.45
 const CHUNK_SCALE_MAX := 1.6
 
-## Blood spattered on a wall (owner, fix-8 #13): a burst where it hit, streaks flung out
-## from it with a drop at each tip, a mist of droplets round it, and — on an upright wall
-## (drips) — a few runs trickling down. px × px, deterministic by variant; cached.
-const SPATTER_VARIANTS := 8
-static var _spatters := {}
-static func spatter_image(variant: int, px: int, drips: bool) -> Image:
-	var key := "%d@%d@%s" % [variant, px, drips]
-	if _spatters.has(key):
-		return _spatters[key]
-	var img := Image.create(px, px, false, Image.FORMAT_RGBA8)
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 9001 + variant * 7919
-	var c := Vector2(px * 0.5, px * (0.42 if drips else 0.5))
-	var col := Color(0.42, 0.02, 0.03, 0.92)
-	var core := Color(0.3, 0.01, 0.02, 0.95)
-	var dot := func(p: Vector2, r: float, cc: Color) -> void:
-		for y in range(maxi(0, floori(p.y - r)), mini(px, ceili(p.y + r) + 1)):
-			for x in range(maxi(0, floori(p.x - r)), mini(px, ceili(p.x + r) + 1)):
-				if Vector2(x + 0.5, y + 0.5).distance_to(p) <= r:
-					img.set_pixel(x, y, cc)
-	# The burst: lumpy, darker at its heart.
-	var r0 := px * rng.randf_range(0.1, 0.15)
-	for k in 9:
-		var a := TAU * k / 9.0 + rng.randf() * 0.4
-		dot.call(c + Vector2(cos(a), sin(a)) * r0 * rng.randf_range(0.3, 0.7), r0 * rng.randf_range(0.45, 0.75), col)
-	dot.call(c, r0 * 0.55, core)
-	# Streaks flung outward, thinning to a tip with a drop on it.
-	for k in rng.randi_range(7, 12):
-		var a2 := rng.randf() * TAU
-		var length := px * rng.randf_range(0.18, 0.46)
-		var w0 := px * rng.randf_range(0.025, 0.05)
-		var dir := Vector2(cos(a2), sin(a2))
-		var steps := int(length)
-		for i in steps:
-			var t := float(i) / maxf(1.0, steps)
-			dot.call(c + dir * (r0 * 0.6 + t * length), maxf(0.6, w0 * (1.0 - t * 0.85)), col)
-		dot.call(c + dir * (r0 * 0.6 + length + w0), maxf(0.9, w0 * 0.9), col)
-	# A mist of droplets.
-	for k in rng.randi_range(10, 18):
-		var a3 := rng.randf() * TAU
-		dot.call(c + Vector2(cos(a3), sin(a3)) * px * rng.randf_range(0.15, 0.48), rng.randf_range(0.6, 1.4) * px / 64.0, col)
-	# Runs down the wall.
-	if drips:
-		for k in rng.randi_range(2, 4):
-			var x0 := c.x + rng.randf_range(-r0, r0)
-			var run := px * rng.randf_range(0.18, 0.5)
-			for i in int(run):
-				dot.call(Vector2(x0 + sin(i * 0.15 + k) * 0.6, c.y + r0 * 0.4 + i), maxf(0.7, px / 64.0 * (1.2 - float(i) / run * 0.5)), col)
-			dot.call(Vector2(x0, c.y + r0 * 0.4 + run), px / 64.0 * 1.8, col)
-	_spatters[key] = img
-	return img
-
 ## Картинка и форма обломка по виду частицы.
 static func chunk_parts(kind: String) -> Array:
 	var body := kind.substr(6)
@@ -276,6 +224,8 @@ var wall_blood: Array = []
 var flying: Array = []
 ## Отрезки лазерного следа (item 11): [{from: Vector2, to: Vector2}] в клетках.
 var laser_lines: Array = []
+## Short-lived beams are separate from the permanent scorches on the floor.
+var beams: Array = []
 ## Следы гусениц танка (playtest-20): [{from, to}] в клетках, кусками не длиннее клетки —
 ## туман прячет их поклеточно, как и прочие следы, и чужой танк не выдаёт себя колеёй.
 var track_marks: Array = []
@@ -361,6 +311,7 @@ func clear() -> void:
 	decal_reset += 1
 	flying.clear()
 	laser_lines.clear()
+	beams.clear()
 	track_marks.clear()
 	ground_version += 1
 	tracers.clear()
@@ -773,6 +724,7 @@ func _laser(ev: Dictionary) -> void:
 	_sound("laser_hit", Vector2i(int(to_arr[0]), int(to_arr[1])))
 	var a := Vector2(float(from_arr[0]) + 0.5, float(from_arr[1]) + 0.5)
 	var b := Vector2(float(to_arr[0]) + 0.5, float(to_arr[1]) + 0.5)
+	beams.append({"from": a, "to": b, "t": 0.0, "dur": 0.18})
 	# Над космосом отметины нет: пола, на котором остаётся подпалина, там нет вовсе.
 	# Луч при этом летит как раньше — делится только СЛЕД, по клеткам под ним.
 	for run: Array in _ground_runs(a, b):
@@ -876,16 +828,6 @@ func _blood(ev: Dictionary) -> void:
 		for i in drops_rng.randi_range(GIBS_MIN, GIBS_MAX):
 			var rng := _rng_for("gib", at, i, _seq)
 			_launch("gib", at, away, rng, 0.5, 2.2, SHARD_FLIGHT_SEC * 1.4, PI)
-	# Стена вплотную забрызгана (fix-7 #16): от взрыва — любая, от пули — та, куда летели брызги.
-	if solid_at.is_valid():
-		for d: Vector2i in [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]:
-			var w := at + d
-			if not bool(solid_at.call(w)) or (not blast and Vector2(d).dot(away) < -0.3):
-				continue
-			var wrng := _rng_for("wall_blood", w, d.x * 3 + d.y, _seq)
-			wall_blood.append({"cell": w, "face": -d, "rot": wrng.randf_range(0.0, TAU),
-					"scale": wrng.randf_range(0.75, 1.15) * (1.2 if blast else 1.0)})
-			ground_version += 1
 
 ## Fire no longer wipes the decals in its cells (owner, 2026-10-19): blood, casings,
 ## shards and chunks stay for the whole match, like the soot under them.
@@ -990,6 +932,10 @@ func _bounce(from: Vector2, to: Vector2) -> Dictionary:
 
 ## Продвинуть полёты. Возвращает true, если что-то изменилось и надо перерисовать.
 func advance(delta: float) -> bool:
+	for i in range(beams.size() - 1, -1, -1):
+		beams[i]["t"] = float(beams[i]["t"]) + delta
+		if float(beams[i]["t"]) >= float(beams[i]["dur"]):
+			beams.remove_at(i)
 	# Дорожки «кто в кого» (issue 8): гаснут по времени, отработавшие убираем.
 	var lanes_active := not lanes.is_empty()
 	if lanes_active:
@@ -1181,6 +1127,7 @@ func capture_state() -> Dictionary:
 		"event_seq": _event_seq, "seq": _seq}
 
 func restore_state(snap: Dictionary) -> void:
+	beams.clear()
 	sound_reset.emit()
 	floor_damage = snap["damage"].duplicate()
 	var fresh := {}

@@ -236,15 +236,17 @@ static func _weapon_of(shooter: UnitInstance) -> String:
 ## NOWHERE (значение по умолчанию) = источник неизвестен, тогда веер расходится кругом.
 ## Сгорел в огне или прижжён лучом (playtest-20): тело остаётся обугленным.
 func _kill_burnt(u: UnitInstance) -> void:
+	if u != null and u.cheat_invulnerable: return
 	if u != null and u.is_on_field():
 		u.burnt = true
 	_kill(u)
 
 func _kill(u: UnitInstance, res: ActionResult = null, from_coord: Vector2i = NOWHERE,
-		blast: bool = false) -> void:
+		blast: bool = false, force: bool = false) -> void:
 	# is_on_field, not is_alive: a grabbed soldier (HELD) dies like anyone else.
 	if u == null or not u.is_on_field():
 		return
+	if u.cheat_invulnerable and not force: return
 	u.captor_id = -1
 	# Дрон — машина: ни лужи, ни брызг, ни ошмётков. Сбитый дрон и так рвётся на своей
 	# клетке (_drone_explode), и взрыв оставляет щербины на полу — этого довольно.
@@ -424,7 +426,7 @@ func corpse_pickup_cell(unit: UnitInstance) -> Vector2i:
 ## подсветка в UI не должна расходиться с тем, что резолвер реально разрешает.
 func can_drop_corpse_at(coord: Vector2i) -> bool:
 	var cell := state.grid.cell(coord)
-	return cell != null and cell.walkable_terrain() and not cell.is_space \
+	return cell != null and cell.walkable_terrain() \
 			and cell.vehicle_id == -1 and (cell.occupant == null or not cell.occupant.is_on_field()) \
 			and corpses_at(coord) < MCF.CORPSE_WALL_COUNT and _drone_at(coord) == null
 

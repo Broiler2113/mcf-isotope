@@ -49,6 +49,8 @@ static func encode(state: GameState) -> Dictionary:
 			"dead": _encode_eliminated(state.turns.eliminated),
 		},
 		"mines": _encode_mines(state.revealed_mines),
+		"cheats_enabled": state.cheats_enabled, "cheat_sequence": state.cheat_sequence,
+		"cheat_vision": state.cheat_vision.duplicate(), "cheat_mines": state.cheat_mines.duplicate(),
 		"next_id": state._next_id,
 		"next_vehicle_id": state._next_vehicle_id,
 		"combat_started": state.combat_started,
@@ -100,6 +102,8 @@ static func _encode_unit(u: UnitInstance) -> Dictionary:
 		"mines": u.mine_credits, "corpses": u.carried_corpses,
 		"dragging": _xy(u.dragging),
 	}
+	if u.cheat_invulnerable: rec["cheat_invulnerable"] = true
+	if not u.cheat_stats.is_empty(): rec["cheat_stats"] = u.cheat_stats.duplicate()
 	if u.burnt:
 		rec["burnt"] = true
 	if u.action_state != null:
@@ -202,7 +206,7 @@ static func _encode_mines(revealed: Dictionary) -> Array:
 ## не воспроизводимо: тот же ход при другом тумане законен по-другому.
 static func encode_rules(resolver: GameActionResolver) -> Dictionary:
 	var out := {
-		"fog": resolver.fog_mode,
+		"fog": resolver.fog_mode, "cheats": resolver.state.cheats_enabled, "ai_speed": GameConfig.ai_speed,
 		"friendly_fire": resolver.friendly_fire_enabled,
 	}
 	out["mode"] = resolver.mode.snapshot()
@@ -219,6 +223,9 @@ static func encode_rules(resolver: GameActionResolver) -> Dictionary:
 	return out
 
 static func apply_rules(resolver: GameActionResolver, d: Dictionary) -> void:
+	resolver.state.cheats_enabled = d.get("cheats", false) is bool and d.get("cheats", false)
+	if d.get("ai_speed") is float or d.get("ai_speed") is int:
+		if GameConfig.AI_SPEEDS.has(float(d.ai_speed)): GameConfig.ai_speed = float(d.ai_speed)
 	resolver.fog_mode = int(d.get("fog", resolver.fog_mode))
 	resolver.friendly_fire_enabled = bool(d.get("friendly_fire", true))
 	# Режим партии (0.12): старые сохранения его не знают — это обычное уничтожение.
@@ -226,6 +233,7 @@ static func apply_rules(resolver: GameActionResolver, d: Dictionary) -> void:
 	var md: Variant = d.get("mode", {})
 	if md is Dictionary and not (md as Dictionary).is_empty():
 		resolver.mode.restore(md)
+		_restore_legacy_waves(resolver, md)
 	var cfg: Dictionary = d.get("events_cfg", {})
 	if not cfg.is_empty():
 		var weights: Dictionary = {}
@@ -245,6 +253,49 @@ static func apply_rules(resolver: GameActionResolver, d: Dictionary) -> void:
 		# восстанавливается из списка облаков. Иначе загруженная партия знала бы про
 		# облако, а доска о нём — нет, и сквозь газ было бы видно.
 		resolver._sync_gas()
+
+## Older Holdout saves did not tag wave cohorts or record their sizes. Keep the
+## surviving force in one known cohort; never invent past casualties or reroll initiative.
+static func _restore_legacy_waves(resolver: GameActionResolver, data: Dictionary) -> void:
+	var mode := resolver.mode
+	if not mode.is_holdout() or data.has("wave_sizes"):
+		return
+	var state := resolver.state
+	if mode.wave_side < 0:
+		mode.wave_side = state.roster.waves_side()
+	if mode.wave_side < 0:
+		return
+	var groups := {}
+	for u: UnitInstance in state.all_units():
+		if u.owner != mode.wave_side or u.is_drone:
+			continue
+		if u.neutral_group <= 0:
+			u.neutral_group = maxi(1, mode.wave)
+		groups[u.neutral_group] = int(groups.get(u.neutral_group, 0)) + 1
+	var ids: Array = groups.keys()
+	ids.sort()
+	state.turns.wave_owner = mode.wave_side
+	var active := state.turns.active_slot()
+	var at := state.turns.round_order.find(mode.wave_side)
+	if at < 0: at = state.turns.round_order.size()
+	for group: int in ids:
+		mode.wave_sizes[str(group)] = groups[group]
+		mode.wave = maxi(mode.wave, group)
+		var slot := MCF.wave_slot(group)
+		if slot >= 0 and not state.turns.round_order.has(slot):
+			state.turns.round_order.insert(at, slot)
+			at += 1
+	if active == mode.wave_side and not ids.is_empty() and MCF.wave_slot(ids[0]) >= 0:
+		active = MCF.wave_slot(ids[0])
+	state.turns.active_index = maxi(0, state.turns.round_order.find(active))
+	if not data.has("defender_value"):
+		var armies := {}
+		for u: UnitInstance in state.all_units():
+			if MCF.is_player(u.owner) and u.owner != mode.wave_side and not u.is_drone:
+				armies[u.owner] = int(armies.get(u.owner, 0)) + u.stats.cost
+		var value := 0
+		for cost: int in armies.values(): value += cost
+		mode.defender_value = roundi(float(value) / maxi(1, armies.size()))
 
 # --- Чтение -----------------------------------------------------------------
 
@@ -283,6 +334,8 @@ static func restore_into(gs: GameState, d: Dictionary) -> void:
 		dead[int(slot)] = true
 	var snap := {
 		"units": unit_recs, "vehicles": veh_recs,
+		"cheats_enabled": d.get("cheats_enabled", false), "cheat_sequence": d.get("cheat_sequence", 0),
+		"cheat_vision": d.get("cheat_vision", {}), "cheat_mines": d.get("cheat_mines", {}),
 		"cells": _decode_cells(d.get("cells", []), gs.grid.width * gs.grid.height),
 		"active_index": clampi(int(turns.get("index", 0)), 0, order.size() - 1),
 		"round_number": maxi(int(turns.get("round", 1)), 1),
@@ -368,6 +421,8 @@ static func _decode_unit(raw: Dictionary) -> Dictionary:
 		"mine_credits": int(raw.get("mines", 0)),
 		"carried_corpses": int(raw.get("corpses", 0)),
 		"burnt": bool(raw.get("burnt", false)),
+		"cheat_invulnerable": raw.get("cheat_invulnerable", false),
+		"cheat_stats": UnitInstance.clean_cheat_stats(raw.get("cheat_stats", {})),
 		"dragging": _vec(raw.get("dragging"), UnitInstance.NOT_DRAGGING),
 		"action_state": action,
 	}

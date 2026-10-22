@@ -23,7 +23,7 @@ run_suite() {
 run_suite tests/check_scripts.gd
 # Every suite of every system folder (tests/README.md, «Layout»): a new run_*.gd in one of
 # them runs without touching this file.
-for dir in perf net combat vehicles ai events fog mapgen editor ui files audio; do
+for dir in perf net combat vehicles ai events fog cheats mapgen editor ui files audio; do
   for script in tests/$dir/run_*.gd; do
     run_suite "$script"
   done
@@ -51,6 +51,8 @@ python3 native/policy/test_manifest.py || fail=1
 # Сетевая партия на двух процессах (batch 12): лобби → расстановка → бой по ENet.
 echo "=== tests/run_net_match.sh ==="
 bash tests/run_net_match.sh || fail=1
+bash tests/run_net_first_person.sh || fail=1
+bash tests/run_net_cheats.sh || fail=1
 bash tests/run_net_reclaim.sh || fail=1
 MCF_RECLAIM_SOLO=1 bash tests/run_net_reclaim.sh || fail=1
 bash tests/run_net_spectators.sh || fail=1

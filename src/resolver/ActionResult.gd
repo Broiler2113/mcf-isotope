@@ -8,6 +8,10 @@ var ok: bool = false
 var spawned_unit_id: int = -1
 ## Причина отказа (для нелегальных намерений).
 var reason: String = ""
+## Detailed console output is local to the issuing player; shared logs use a summary.
+var cheat_output: String = ""
+## Replaced furniture cells whose original cosmetic shape must be rebuilt.
+var cheat_cells: Array[Vector2i] = []
 ## Строки боевого лога для UI (§2.2, п.4).
 var log_lines: Array[String] = []
 ## Диагностика бросков для анимации кубиков: [{"kind","rolls","need","...}].

@@ -948,7 +948,7 @@ func _accent_of(c: Vector2i) -> int:
 ## fortification: it neither carries a band from the cell it was built on nor continues one.
 func _takes_accent(fid: String) -> bool:
 	return fid != "" and FAMILY.get(fid, fid) == "wall" and not MCF.is_glass(fid) \
-			and fid != MCF.FEATURE_LDF
+			and fid not in [MCF.FEATURE_LDF, MCF.FEATURE_DOT, MCF.FEATURE_DOT_OPEN]
 
 ## Маска полосы: соседи-стены (и шлюзы) ТОГО ЖЕ цвета. Полоса сворачивает за угол вместе
 ## со стеной и обрывается там, где кончается отдел.
@@ -1682,6 +1682,11 @@ func _floor_name(cell: GridCell, c: Vector2i) -> String:
 		return "floor_epicenter"
 	if dmg == FxDecals.DAMAGE_RUBBLE:
 		return "floor_destroyed"
+	# Old outdoor maps also receive a proper threshold, without changing their rules.
+	if cell.feature_id == MCF.FEATURE_AIRLOCK and env in ["town", "field", "asteroid"]:
+		if look in [MCF.Look.DEFAULT, MCF.Look.DIRT, MCF.Look.GRASS] or look >= MCF.FLOOR_LOOKS.size():
+			return "floor_plate"
+		if not MCF.FLOOR_OVERLAY_LOOKS.has(look): return MCF.FLOOR_LOOKS[look]
 	if cell.floor_type == MCF.FLOOR_GRASS:
 		return "floor_grass"
 	# Пол комнаты (0.9.2): дерево, плитка, ковёр — вид, правила те же.
@@ -1897,6 +1902,7 @@ static func map_preview(map: MapData, tints: Dictionary = {}, bands: Dictionary 
 	var grid := Grid.new(map.width, map.height)
 	map.apply_to_grid(grid)
 	var tiles := TerrainTiles.new(grid, map.environment())
+	tiles.set_winter(map.winter and MapData.supports_winter(map.environment()))
 	tiles.bake_map_decals = true
 	var res := clampi(1024 / maxi(map.width, map.height), 2, 16)
 	var img := Image.create(map.width * res, map.height * res, false, Image.FORMAT_RGBA8)

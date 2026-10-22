@@ -26,6 +26,10 @@ signal desync_detected()
 ## Host: a guest asked for a full snapshot because its board drifted (DesyncReport).
 signal resync_requested(from: int)
 
+const K_CHEAT_PERMISSIONS := "cheat_permissions"
+var match_finished := false
+signal cheat_permissions_changed()
+
 const K_INTENT := "intent"   # клиент → хост: «прошу выполнить моё намерение»
 ## Гость обнаружил, что его доска разошлась с доской хоста (batch 14): просит снимок.
 const K_RESYNC := "resync"
@@ -87,6 +91,10 @@ func remote_owners() -> Array[int]:
 ## Локальный игрок подал намерение (через свой LocalHumanController).
 func submit_local(intent: Intent) -> void:
 	if my_owner == -2: return
+	if intent is CheatIntent:
+		intent.issuer = my_owner
+		var error := cheat_denial(intent, my_owner, is_host)
+		if not error.is_empty(): denied.emit(error); return
 	if is_host:
 		_host_resolve_and_send(intent)
 	else:
@@ -104,15 +112,23 @@ func submit_local(intent: Intent) -> void:
 ## так же роняло резолвер.
 func receive(msg: Dictionary) -> void:
 	match msg.get("k", ""):
+		K_CHEAT_PERMISSIONS:
+			if not is_host and int(msg.get("_from", -1)) == 1 and msg.get("slots") is Array:
+				for record in msg.slots:
+					if not record is Dictionary or not record.get("allowed") is bool or not CheatCommands._integer(record.get("side")): continue
+					var slot := state.roster.slot(int(record.side))
+					if slot != null: slot.cheats_allowed = record.allowed
+				cheat_permissions_changed.emit()
 		K_INTENT:
 			if is_host:
 				var it := _decode(msg)
 				var from := int(msg.get("_from", -1))
 				if it != null and _authorized(it, from):
+					if it is CheatIntent: it.issuer = state.roster.side_of_peer(from)
 					_host_resolve_and_send(it)
 				elif from != -1:
 					# Silence left the sender waiting forever (_net_request_pending in Main).
-					outgoing.emit({"k": K_DENIED, "a": -1, "reason": "Not your unit or turn",
+					outgoing.emit({"k": K_DENIED, "a": -1, "reason": cheat_denial(it, state.roster.side_of_peer(from), false) if it is CheatIntent else "Not your unit or turn",
 						"p": state.roster.side_of_peer(from)})
 		K_ACTION:
 			if not is_host:
@@ -124,7 +140,7 @@ func receive(msg: Dictionary) -> void:
 				_client_adopt_initiative(msg)
 		K_RESYNC:
 			if is_host:
-				var snap := {"k": K_STATE, "s": StateCodec.encode(state)}
+				var snap := {"k": K_STATE, "s": StateCodec.encode(state), "ai_speed": GameConfig.ai_speed}
 				if fx_snapshot.is_valid():
 					snap["fx"] = fx_snapshot.call()
 				# Облака газа и дыма живут не на доске, а в событиях (0.12): без них гость
@@ -211,7 +227,7 @@ func _host_resolve_and_send(intent: Intent) -> void:
 				"round": state.turns.round_number})
 	else:
 		outgoing.emit({"k": K_DENIED, "a": intent.actor_id, "reason": result.reason,
-			"p": intent.requester if intent is EndTurnIntent or intent is UndoIntent or intent is RedoIntent else -1})
+			"p": intent.issuer if intent is CheatIntent else intent.requester if intent is EndTurnIntent or intent is UndoIntent or intent is RedoIntent else -1})
 	action_applied.emit(intent, result)
 
 # --- Клиент: воспроизведение с присланными бросками ---
@@ -247,6 +263,8 @@ func _client_restore(msg: Dictionary) -> void:
 	if not (data is Dictionary):
 		return
 	StateCodec.restore_into(state, data)
+	if (msg.get("ai_speed") is float or msg.get("ai_speed") is int) and GameConfig.AI_SPEEDS.has(float(msg.ai_speed)):
+		GameConfig.ai_speed = float(msg.ai_speed)
 	var ev: Variant = msg.get("ev")
 	if ev is Dictionary:
 		if resolver.random_events == null:
@@ -279,6 +297,8 @@ func _resolve_showing_ap(intent: Intent) -> ActionResult:
 
 ## Authenticate the sending peer, not a side number supplied in its payload.
 func _authorized(intent: Intent, peer: int) -> bool:
+	if intent is CheatIntent:
+		return peer > 1 and cheat_denial(intent, state.roster.side_of_peer(peer), false).is_empty()
 	if peer == -1: return true # In-process test/legacy transport; ENet always supplies _from.
 	var side := state.roster.side_of_peer(peer)
 	if side < 0: return false
@@ -293,3 +313,23 @@ func _authorized(intent: Intent, peer: int) -> bool:
 			var unit := state.get_unit(id)
 			if unit == null or unit.owner != side: return false
 	return true
+
+## Live authorization only: recorded authoritative actions bypass changing permissions.
+func cheat_denial(intent: CheatIntent, side: int, host: bool) -> String:
+	if match_finished: return "The match is over. Gameplay cheats are no longer available."
+	var reason := CheatAccess.denial(state, side)
+	if not reason.is_empty(): return reason
+	var entry := CheatCommands.definition(intent.op)
+	if entry.is_empty() or entry.access not in ["play", "host_play"]: return "Not a gameplay cheat operation."
+	if entry.access == "host_play" and not host: return "Only the host may change shared AI settings."
+	return ""
+
+func set_cheat_permission(side: int, allowed: bool) -> String:
+	var reason := CheatAccess.set_permission(state, side, allowed, is_host, true)
+	if not reason.is_empty(): return reason
+	var slots: Array = []
+	for slot: Roster.Slot in state.roster.slots:
+		slots.append({"side": slot.id, "allowed": slot.cheats_allowed})
+	outgoing.emit({"k": K_CHEAT_PERMISSIONS, "slots": slots})
+	cheat_permissions_changed.emit()
+	return ""

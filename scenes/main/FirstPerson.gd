@@ -19,6 +19,9 @@ signal left
 
 const EYE := 1.62          # eye height of a 1.7 m soldier
 const RADIUS := 0.25
+const RUN_SPEED := 6.2
+const STEP_DISTANCE := 1.6
+const RUN_STEP_DISTANCE := 2.1
 const SPEED := 3.6         # m/s
 const STEP := 0.36         # climbs onto anything this low without jumping
 const GRAVITY := 15.0
@@ -76,6 +79,8 @@ var _dirty := {}           # 3D chunks whose cells changed
 var _door_open := {}       # cell -> 0..1, opened in this view only
 var _units := {}           # unit id -> Node3D
 var _vehicles := {}
+var _walkers := {}
+var _presence_timer := 0.0
 var _features := {}        # cell -> Node3D: drone stations and mines, as this viewer sees them
 var _fire_mm: MultiMeshInstance3D
 var _gas_mm: MultiMeshInstance3D
@@ -89,6 +94,9 @@ var _ground_tex: ImageTexture   # one texel a cell: which open ground lies there
 var _ground_img: Image
 var _art_mats := {}
 var _lm: LightManager
+var _lm_spare: LightManager
+var _lm_pending := false
+var _lm_options: Array = []
 var _lm_rect := Rect2i()
 var _lm_tex: Texture2D
 
@@ -136,12 +144,15 @@ func _ready() -> void:
 	_lm.offscreen = true
 	_lm.flicker = false
 	add_child(_lm)
+	_lm_spare = LightManager.new()
+	_lm_spare.offscreen = true
+	_lm_spare.flicker = false
+	add_child(_lm_spare)
 	_roof = main._fp_roof(grid, env)
 	_vis_img = Image.create(grid.width, grid.height, false, Image.FORMAT_R8)
 	_vis_tex = ImageTexture.create_from_image(_vis_img)
 	_build_solid()
 	_look_ver = GridCell.look_version
-	_blood_seen = (main._fx.wall_blood as Array).size()
 	_sync_vis(true)
 	var tod: String = state.time_of_day
 	_sun_on = env in ["town", "field"] and tod in ["day", "morning", "evening"]
@@ -157,6 +168,14 @@ func _ready() -> void:
 	cross.set_anchors_preset(Control.PRESET_FULL_RECT)
 	cross.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(cross)
+	var help := Label.new()
+	help.text = "WASD Move   Shift Run   Space Jump   X Noclip   Esc Return"
+	help.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT)
+	help.position = Vector2(18, -38)
+	help.add_theme_color_override("font_shadow_color", Color.BLACK)
+	help.add_theme_constant_override("shadow_offset_x", 2)
+	help.add_theme_constant_override("shadow_offset_y", 2)
+	add_child(help)
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	grab_focus()
 	# Build the cells right around you before the first frame, so you never spawn in a void.
@@ -197,6 +216,7 @@ func _input(event: InputEvent) -> void:
 # --- Frame -------------------------------------------------------------------------------
 
 func _process(delta: float) -> void:
+	_presence_timer -= delta
 	delta = minf(delta, 0.05)
 	_move(delta)
 	_sync_snow()
@@ -207,12 +227,15 @@ func _process(delta: float) -> void:
 		_sync_vis(false)
 	_update_light(false)
 	_take_look_changes()
-	_take_new_blood()
 	_refresh_floors()
 	_stream_chunks(BUILD_BUDGET_USEC)
 	_doors(delta)
 	_sync_units()
 	_sync_vehicles()
+	_sync_walkers(delta)
+	if _presence_timer <= 0.0 and main.has_method("_send_fp_presence"):
+		_presence_timer = 0.1
+		main._send_fp_presence(true)
 	_sync_combat_fx()
 	_cloud_timer -= delta
 	if _cloud_timer <= 0.0:
@@ -314,20 +337,22 @@ func _move(delta: float) -> void:
 	if Input.is_physical_key_pressed(KEY_S): dir.z += 1
 	if Input.is_physical_key_pressed(KEY_A): dir.x -= 1
 	if Input.is_physical_key_pressed(KEY_D): dir.x += 1
+	_walk(delta, dir, Input.is_physical_key_pressed(KEY_SHIFT))
+
+## Ground movement uses one normalized input vector for motion and footstep distance.
+func _walk(delta: float, dir: Vector3, running: bool) -> void:
 	var step := Vector3.ZERO
 	if dir != Vector3.ZERO:
-		step = dir.normalized().rotated(Vector3.UP, yaw) * SPEED * delta
-	var moved := 0.0
+		step = dir.normalized().rotated(Vector3.UP, yaw) * (RUN_SPEED if running else SPEED) * delta
+	var before_move := pos
 	if step.x != 0.0:
 		var p := pos + Vector3(step.x, 0, 0)
 		if not _blocked(p) or _climb(p):
 			pos.x = p.x
-			moved += absf(step.x)
 	if step.z != 0.0:
 		var p2 := pos + Vector3(0, 0, step.z)
 		if not _blocked(p2) or _climb(p2):
 			pos.z = p2.z
-			moved += absf(step.z)
 	# Stepping off the deck into space keeps your walking speed: you drift on.
 	if _in_space(pos) and not noclip:
 		drift = step / maxf(delta, 0.0001) + Vector3(0, vel_y, 0)
@@ -348,11 +373,12 @@ func _move(delta: float) -> void:
 	if _roofed_at(pos) and pos.y + EYE > FirstPersonBoard.CEIL - 0.08:
 		pos.y = FirstPersonBoard.CEIL - 0.08 - EYE
 		vel_y = minf(vel_y, 0.0)
-	# Footsteps: one every 0.8 m on the ground, heard where you stand.
+	var moved := Vector2(pos.x - before_move.x, pos.z - before_move.z).length()
 	if on_ground and moved > 0.0:
 		_walked += moved
-		if _walked >= 0.8:
-			_walked = 0.0
+		var stride := RUN_STEP_DISTANCE if running else STEP_DISTANCE
+		if _walked >= stride:
+			_walked = fmod(_walked, stride)
 			_footstep()
 	var here := Vector2i(floori(pos.x), floori(pos.z))
 	if here != _last_cell:
@@ -401,9 +427,10 @@ func _roofed_at(p: Vector3) -> bool:
 
 func _footstep() -> void:
 	var a = main.get("_audio")
-	if a == null or not state.grid.in_bounds(_last_cell):
+	var cell := Vector2i(floori(pos.x), floori(pos.z))
+	if a == null or not state.grid.in_bounds(cell):
 		return
-	a.cue(a.STEP.get(a._material(state, _last_cell), "step_concrete"), _last_cell, viewer)
+	a.cue(a.STEP.get(a._material(state, cell), "step_concrete"), cell, viewer)
 
 # --- Visibility ---------------------------------------------------------------------------
 
@@ -531,20 +558,17 @@ func _build_materials() -> void:
 	_mats["roof"] = _mat(_board_sh, {"tex": _roof_texture(env, state.winter)})
 	_mats["models"] = _mat(_board_sh, {"use_mats": true})
 	_mats["glass"] = _mat(_glass_sh, {"use_mats": true})
-	var atlas := Image.create(64 * FxDecals.SPATTER_VARIANTS, 64, false, Image.FORMAT_RGBA8)
-	for v in FxDecals.SPATTER_VARIANTS:
-		atlas.blit_rect(FxDecals.spatter_image(v, 64, true), Rect2i(0, 0, 64, 64), Vector2i(v * 64, 0))
-	_mats["blood"] = _mat(_board_sh, {"tex": ImageTexture.create_from_image(atlas), "cut": 0.5, "sight_only": true})
 	_mats["env"] = env
 	_mats["wall"] = func(kind: String, accent: Color) -> Material:
 		var key := "wall|%s|%s" % [kind, accent.to_html()]
 		if not _art_mats.has(key):
 			_art_mats[key] = _mat(_board_sh, {"tex": FirstPersonArt.wall_texture(kind, accent), "ground_ao": true})
 		return _art_mats[key]
-	_mats["door"] = func(style: String, accent: Color) -> Material:
-		var key := "door|%s|%s" % [style, accent.to_html()]
+	_mats["door"] = func(style: String, accent: Color, at: Vector2i) -> Material:
+		var key := "door|%s|%s|%s" % [style, accent.to_html(), at]
 		if not _art_mats.has(key):
-			_art_mats[key] = _mat(_board_sh, {"tex": FirstPersonArt.door_texture(style, accent)})
+			_art_mats[key] = _mat(_board_sh, {"tex": FirstPersonArt.door_texture(style, accent),
+					"door_bounds": Vector4(at.x + 0.001, at.y + 0.001, at.x + 0.999, at.y + 0.999)})
 		return _art_mats[key]
 
 ## The first-person floor of a tile chunk (TerrainTiles.FP_RES) and its two materials.
@@ -581,6 +605,7 @@ func _refresh_floors() -> void:
 ## The light map for the cells around you: the battle screen's lamps, fire and flashes, and
 ## the drones in the air — redrawn only when something in it changed.
 func _update_light(force: bool) -> void:
+	if _lm_pending: return
 	var r: GameActionResolver = main._view_resolver()
 	var limited := r.visibility_limited()
 	var visible: Dictionary = main._visible_before_impact(viewer) if limited else {}
@@ -590,14 +615,31 @@ func _update_light(force: bool) -> void:
 	var rect := Rect2i(lo, Vector2i(reach * 2 + 16, reach * 2 + 16)).intersection(Rect2i(0, 0, grid.width, grid.height))
 	var base: Grid = main._fog_mem.get(viewer, state.grid) if limited else state.grid
 	var lit: Grid = main._terrain_before_impact(base, visible, limited)
-	_lm.extra_lights = main.drone_lights(viewer, visible, limited)
-	_lm_tex = _lm.render_area(lit, rect, LM_TEXELS, env, visible, limited, main._fx, state.time_of_day)
-	if rect != _lm_rect or force:
-		_lm_rect = rect
-		var p := _light_params()
-		for m: ShaderMaterial in _all_mats:
-			for k: String in p:
-				m.set_shader_parameter(k, p[k])
+	var shifting := rect != _lm_rect and _lm_tex != null
+	var target := _lm_spare if shifting else _lm
+	target.extra_lights = main.drone_lights(viewer, visible, limited)
+	var texture := target.render_area(lit, rect, LM_TEXELS, env, visible, limited, main._fx, state.time_of_day)
+	if shifting and DisplayServer.get_name() != "headless":
+		# A viewport texture becomes ready after drawing. Keep the previous map AND
+		# its coordinates together until the replacement is ready, including resizes
+		# at the edge of the board. Otherwise lamps jump for one frame every 8 cells.
+		_lm_pending = true
+		RenderingServer.frame_post_draw.connect(_commit_light_map.bind(target, texture, rect), CONNECT_ONE_SHOT)
+	elif rect != _lm_rect or force or _lm_options != [Ui.dynamic_lighting, state.time_of_day]:
+		_commit_light_map(target, texture, rect)
+
+func _commit_light_map(target: LightManager, texture: Texture2D, rect: Rect2i) -> void:
+	if target != _lm:
+		_lm_spare = _lm
+		_lm = target
+	_lm_tex = texture
+	_lm_rect = rect
+	_lm_pending = false
+	_lm_options = [Ui.dynamic_lighting, state.time_of_day]
+	var params := _light_params()
+	for material: ShaderMaterial in _all_mats:
+		for key: String in params:
+			material.set_shader_parameter(key, params[key])
 
 func _build_environment() -> void:
 	var e := Environment.new()
@@ -870,46 +912,22 @@ func _build_chunk(cc: Vector2i) -> void:
 	var built := FirstPersonBoard.build(grid, cc, _roof, {"env": env, "mats": _mats, "tod": state.time_of_day, "winter": state.winter,
 			"look": func(c: Vector2i, fid: String) -> Array: return tiles.look_of(c, fid),
 			"furniture_look": tiles.furniture_look,
-			"decals": tiles.decals.get(tcc, []), "map_decals": tiles.map_decals.get(tcc, []),
-			"wall_blood": _blood_in(cc)})
+			"decals": tiles.decals.get(tcc, []), "map_decals": tiles.map_decals.get(tcc, [])})
 	_drop_chunk(cc)
 	var node: Node3D = built["node"]
 	_board_node.add_child(node)
 	_chunks[cc] = {"node": node, "doors": built["doors"], "tops": built["tops"],
 			"decal_n": (tiles.decals.get(tcc, []) as Array).size()}
 
-## Wall blood whose wall stands in chunk cc.
-func _blood_in(cc: Vector2i) -> Array:
-	var out: Array = []
-	var area := Rect2i(cc * FirstPersonBoard.CH, Vector2i(FirstPersonBoard.CH, FirstPersonBoard.CH))
-	for b: Dictionary in main._fx.wall_blood:
-		if area.has_point(b["cell"]):
-			out.append(b)
-	return out
-
-## New blood on a wall: the chunk that holds the wall gathers it up.
-var _blood_seen := 0
-func _take_new_blood() -> void:
-	var list: Array = main._fx.wall_blood
-	if list.size() == _blood_seen:
-		return
-	for i in range(mini(_blood_seen, list.size()), list.size()):
-		var c: Vector2i = list[i]["cell"]
-		var cc := Vector2i(c.x / FirstPersonBoard.CH, c.y / FirstPersonBoard.CH)
-		if _chunks.has(cc):
-			_dirty[cc] = true
-	if list.size() < _blood_seen:
-		for cc: Vector2i in _chunks:
-			_dirty[cc] = true
-	_blood_seen = list.size()
-
 func _drop_chunk(cc: Vector2i) -> void:
 	if _chunks.has(cc):
 		(_chunks[cc]["node"] as Node3D).queue_free()
 		_chunks.erase(cc)
 
-## Doors open in this view only, when you walk up to them; the game's own open state
-## (a soldier standing by) shows too. A welded door stays shut.
+## Kept for older local profiling scripts; wall spatters have been removed.
+func _take_new_blood() -> void:
+	pass
+
 func _doors(delta: float) -> void:
 	for cc: Vector2i in _chunks:
 		for at: Vector2i in _chunks[cc]["doors"]:
@@ -918,13 +936,15 @@ func _doors(delta: float) -> void:
 			var near := Vector2(at.x + 0.5 - pos.x, at.y + 0.5 - pos.z).length() < 1.4
 			var want := 1.0 if (near or cell.cover_height < MCF.WALL_HEIGHT) and not cell.airlock_welded else 0.0
 			var was := float(_door_open.get(at, 0.0))
-			if was == want:
+			# A streamed/rebuilt chunk has fresh leaves even when the opening is unchanged.
+			if was == want and door.get_meta("opening", -1.0) == want:
 				continue
 			var now := move_toward(was, want, delta * 3.0)
 			if was == 0.0 and now > 0.0 and near:
 				var a = main.get("_audio")
 				if a != null and state.grid.in_bounds(at): a.cue("door_open", at, viewer)
 			_door_open[at] = now
+			door.set_meta("opening", now)
 			var ease := now * now * (3.0 - 2.0 * now)
 			var along_x: bool = door.get_meta("along_x")
 			var leaves := 0
@@ -935,7 +955,7 @@ func _doors(delta: float) -> void:
 				if not leaf.has_meta("side"):
 					continue
 				# Into the wall beside the doorway: halves apart, a single door aside.
-				var off := float(leaf.get_meta("side")) * ease * (0.5 if leaves == 2 else 0.98)
+				var off := float(leaf.get_meta("side")) * ease * (0.51 if leaves == 2 else 1.01)
 				var home: Vector3 = leaf.get_meta("home")
 				(leaf as Node3D).position = home + (Vector3(off, 0, 0) if along_x else Vector3(0, 0, off))
 
@@ -948,7 +968,7 @@ func _build_dynamic() -> void:
 	var cmm := MultiMesh.new()
 	cmm.transform_format = MultiMesh.TRANSFORM_3D
 	var cq := QuadMesh.new()
-	cq.size = Vector2(UNIT_W, UNIT_H)
+	cq.size = Vector2(UNIT_W * 0.8, 0.86)
 	cq.orientation = PlaneMesh.FACE_Y
 	cmm.mesh = cq
 	_corpse_mm = MultiMeshInstance3D.new()
@@ -967,6 +987,7 @@ func _build_dynamic() -> void:
 ## debris, casings and blood thrown about — all from the battle screen's own effects, shown
 ## where the battle screen shows them. One multimesh of glowing or plain blocks.
 var _fx_mm: MultiMeshInstance3D
+var _blast_mm: MultiMeshInstance3D
 func _sync_combat_fx() -> void:
 	var fx: FxDecals = main._fx
 	if _fx_mm == null:
@@ -984,10 +1005,30 @@ func _sync_combat_fx() -> void:
 		_fx_mm.material_override = m
 		_fx_mm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		_dyn.add_child(_fx_mm)
+	if _blast_mm == null:
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		var sphere := SphereMesh.new()
+		sphere.radius = 0.5
+		sphere.height = 1.0
+		sphere.radial_segments = 12
+		sphere.rings = 6
+		mm.mesh = sphere
+		_blast_mm = MultiMeshInstance3D.new()
+		_blast_mm.multimesh = mm
+		var material := StandardMaterial3D.new()
+		material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		material.vertex_color_use_as_albedo = true
+		material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_blast_mm.material_override = material
+		_blast_mm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_dyn.add_child(_blast_mm)
 	var visible: Dictionary = main._visible_before_impact(viewer)
 	var limited: bool = main._view_resolver().visibility_limited()
 	var seen := func(p: Vector2) -> bool: return not limited or visible.has(Vector2i(floori(p.x), floori(p.y)))
 	var out: Array = []   # [Transform3D, Color]
+	var blasts: Array = []
 	var streak := func(a: Vector3, b: Vector3, w: float, col: Color) -> void:
 		var d := b - a
 		var len := d.length()
@@ -998,6 +1039,16 @@ func _sync_combat_fx() -> void:
 		var z := x.cross(up).normalized()
 		var y := z.cross(x)
 		out.append([Transform3D(Basis(x * len, y * w, z * w), (a + b) * 0.5), col])
+	for beam: Dictionary in fx.beams:
+		var a: Vector2 = beam["from"]
+		var b: Vector2 = beam["to"]
+		var count := maxi(1, ceili(a.distance_to(b) * 4.0))
+		# Clip the glowing beam to this viewer's sight, including when it crosses fog.
+		for i in count:
+			var p0 := a.lerp(b, float(i) / count)
+			var p1 := a.lerp(b, float(i + 1) / count)
+			if seen.call((p0 + p1) * 0.5):
+				streak.call(Vector3(p0.x, 1.3, p0.y), Vector3(p1.x, 1.3, p1.y), 0.055, Color(3.5, 0.18, 0.12))
 	for tr: Dictionary in fx.tracers:
 		var k := clampf(float(tr["t"]) / maxf(0.001, float(tr["dur"])), 0.0, 1.0)
 		if k <= 0.0:
@@ -1041,9 +1092,16 @@ func _sync_combat_fx() -> void:
 			var c: Vector2i = cells[i]
 			if not seen.call(Vector2(c)):
 				continue
-			var s := 0.35 + 0.9 * a3 * (1.0 if i == cells.size() / 2 else 0.7)
-			out.append([Transform3D(Basis().scaled(Vector3.ONE * s), Vector3(c.x + 0.5, 0.25 + s * 0.45, c.y + 0.5)),
-					Color(3.0 * a3 + 0.4, 1.6 * a3 + 0.2, 0.5 * a3, 1.0)])
+			var age := clampf(float(flash["t"]) / FxDecals.FLASH_DUR, 0.0, 1.0)
+			var s := (0.75 + age * 0.7) * (1.0 if i == cells.size() / 2 else 0.7)
+			var center := Vector3(c.x + 0.5, 0.25 + s * 0.4, c.y + 0.5)
+			# Rounded, expanding lobes around a hot core. Deterministic; no game dice.
+			for lobe in 5:
+				var angle := TAU * lobe / 4.0 + c.x * 0.7 + c.y * 0.3
+				var offset := Vector3.ZERO if lobe == 4 else Vector3(cos(angle), 0.15 * (lobe % 2), sin(angle)) * s * 0.35
+				var scale := Vector3.ONE * s * (0.75 if lobe == 4 else 0.65)
+				var col := Color(3.0, 1.4, 0.3, a3) if lobe == 4 else Color(2.1, 0.45 + 0.12 * lobe, 0.06, a3)
+				blasts.append([Transform3D(Basis().scaled(scale), center + offset), col])
 	for f: Dictionary in fx.flying:
 		var pos := FxDecals.flight_pos(f)
 		var origin: Vector2i = f.get("origin", Vector2i(-1, -1))
@@ -1064,6 +1122,12 @@ func _sync_combat_fx() -> void:
 	for i in out.size():
 		mm2.set_instance_transform(i, out[i][0])
 		mm2.set_instance_color(i, out[i][1])
+	var blast_mm := _blast_mm.multimesh
+	if blast_mm.instance_count < blasts.size(): blast_mm.instance_count = blasts.size() + 16
+	blast_mm.visible_instance_count = blasts.size()
+	for i in blasts.size():
+		blast_mm.set_instance_transform(i, blasts[i][0])
+		blast_mm.set_instance_color(i, blasts[i][1])
 
 ## Fire: steady glowing half-cubes (owner, fix-8: no flicker); gas and smoke: haze.
 func _cloud_layer(col: Color, fire: bool) -> MultiMeshInstance3D:
@@ -1296,6 +1360,48 @@ func _sync_vehicles() -> void:
 		if not live.has(id):
 			(_vehicles[id] as Node3D).queue_free()
 			_vehicles.erase(id)
+
+## Remote free-look avatars obey this viewer's fog and expire after a lost connection.
+func _sync_walkers(delta: float) -> void:
+	var peers: Variant = main.get("_fp_walkers")
+	if not peers is Dictionary:
+		return
+	var wanted := {}
+	for id: int in peers.keys():
+		var p: Dictionary = peers[id]
+		if Time.get_ticks_msec() - int(p["time"]) > 3000:
+			peers.erase(id)
+			continue
+		var target: Vector3 = p["pos"]
+		var cell := Vector2i(floori(target.x), floori(target.z))
+		if not _seen(cell) or target.distance_to(pos) > VIEW_R:
+			continue
+		wanted[id] = true
+		var n: Node3D = _walkers.get(id)
+		if n == null:
+			n = Node3D.new()
+			var mesh := MeshInstance3D.new()
+			var quad := QuadMesh.new()
+			quad.size = Vector2(0.62, UNIT_H)
+			quad.center_offset = Vector3(0, UNIT_H * 0.5, 0)
+			mesh.mesh = quad
+			mesh.material_override = _billboard_mat(_soldier_texture(main._side_color(p["side"]), "FP"))
+			n.add_child(mesh)
+			var label := Label3D.new()
+			label.text = state.roster.name_of(p["side"])
+			label.position.y = 1.95
+			label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+			label.font_size = 32
+			label.pixel_size = 0.007
+			n.add_child(label)
+			_dyn.add_child(n)
+			n.position = target
+			_walkers[id] = n
+		n.position = target if n.position.distance_to(target) > 3.0 else n.position.lerp(target, 1.0 - exp(-18.0 * delta))
+	for id: int in _walkers.keys():
+		if not wanted.has(id):
+			(_walkers[id] as Node3D).queue_free()
+			_walkers.erase(id)
 
 var _handjet: Font
 func _vehicle_node(veh: Vehicle) -> Node3D:

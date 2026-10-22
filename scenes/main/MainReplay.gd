@@ -129,12 +129,14 @@ func _save_payload() -> Dictionary:
 		"meta": meta.duplicate(true),
 		"state": StateCodec.encode(state),
 		"rules": StateCodec.encode_rules(resolver),
+		"lobby": LobbySettings.with_rules(_lobby_settings, StateCodec.encode_rules(resolver)),
 		"opening": _opening_state,
 		"combat_log": state.log.lines.duplicate(),
 		"chat": NetHandoff.chat_history.duplicate(true),
 		"clock_stopped": _real_stop_ms >= 0,
 		"elapsed_ms": maxi(0, (_real_stop_ms if _real_stop_ms >= 0 else Time.get_ticks_msec()) - _real_start_ms),
 	}
+	data["lobby"]["ais"] = GameConfig.ai_speed
 	var fx := _fx.to_dict()
 	if not fx.is_empty():
 		data["fx"] = fx
@@ -153,6 +155,8 @@ func _adopt_save() -> bool:
 		push_warning("save file is newer than this build — starting a normal match")
 		return false
 	state = loaded
+	_lobby_settings = LobbySettings.with_rules(data.get("lobby", {}), data.get("rules", {}))
+	LobbySettings.apply(_lobby_settings)
 	state.log.lines.assign(data.get("combat_log", []))
 	NetHandoff.chat_history.assign(data.get("chat", []))
 	resolver = GameActionResolver.new(state)

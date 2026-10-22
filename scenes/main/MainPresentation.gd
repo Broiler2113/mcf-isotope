@@ -221,7 +221,8 @@ func _play_veh_walk(ev: Dictionary) -> void:
 		engine = _audio.cue("vehicle_move", ev["from"], moving.owner if moving != null else -1)
 		if engine != null: engine_generation = int(engine.get_meta("audio_generation", 0))
 	var steps := maxi(1, int(ev.get("steps", 1)))
-	var dur_ms := SOLDIER_WALK_STEP_DELAY * steps / _pace() * 1000.0
+	var cell_time := maxf(SOLDIER_WALK_STEP_DELAY / _pace(), 0.12) if _fp != null else SOLDIER_WALK_STEP_DELAY / _pace()
+	var dur_ms := cell_time * steps * 1000.0
 	var t0 := Time.get_ticks_msec()
 	var stages := _vehicle_presentation_stages(ev)
 	var shown_step := -1
@@ -264,41 +265,42 @@ func _play_walk(ev: Dictionary) -> void:
 	var base: float = DRONE_FLY_STEP_DELAY if u != null and u.is_drone \
 			else (SOLDIER_WALK_STEP_DELAY if ev.get("soldier", false)
 			else (NEUTRAL_WALK_STEP_DELAY if _fast_playback else WALK_STEP_DELAY))
-	var step_ms := base / _pace() * 1000.0
+	var cell_time := maxf(base / _pace(), 0.16) if _fp != null else base / _pace()
+	var step_us := maxf(1.0, cell_time * 1000000.0)
 	var prev: Vector2i = ev["from"]
 	_walk_cells[id] = prev
-	var buzz: AudioStreamPlayer2D = null   # a drone's rotors follow it like an engine
+	var buzz: AudioStreamPlayer2D = null
 	var buzz_generation := -1
-	for cell: Vector2i in ev["path"]:
+	var path: Array = ev["path"]
+	var t0 := Time.get_ticks_usec()
+	var completed := 0
+	# One clock for the whole path: rounding a separate clock for every cell added a
+	# pause at each corner and made speed depend on how many frames a cell took.
+	while is_inside_tree() and completed < path.size():
 		if replay != null and _replay_skip_animations:
 			break
-		var t0 := Time.get_ticks_msec()
-		var delta := Vector2(cell - prev) * CELL
-		while is_inside_tree():
-			if replay != null and _replay_skip_animations:
-				break
-			if _walk_jobs.get(id, -1) != serial:
-				_walks_running = maxi(0, _walks_running - 1)   # a newer walk took this unit over
-				if _audio != null: _audio.stop_player(buzz, buzz_generation)
-				return
-			var k := minf(1.0, float(Time.get_ticks_msec() - t0) / maxf(1.0, step_ms))
-			_walk_offset[id] = delta * k
-			queue_redraw()
-			if k >= 1.0:
-				break
-			await get_tree().process_frame
-		if _audio != null and u != null:
-			# Шаги звучат раз за кадр, после всех ходоков (fix-7 #4): проверка «слышно ли»
-			# смотрит в обзор, и сорок бойцов, шагнувших в одном кадре, пересчитывали его
-			# сорок раз — каждый сдвигал позиции, по которым обзор считается.
-			if not u.is_drone:
-				_step_sounds.append([u, prev, cell])
-			if u.is_drone:
-				buzz = _audio.vehicle_at(buzz, buzz_generation, cell, u.owner, "drone_move")
-				if buzz != null: buzz_generation = int(buzz.get_meta("audio_generation", 0))
-		prev = cell
-		_walk_cells[id] = cell
-		_walk_offset.erase(id)
+		if _walk_jobs.get(id, -1) != serial:
+			_walks_running = maxi(0, _walks_running - 1)
+			if _audio != null: _audio.stop_player(buzz, buzz_generation)
+			return
+		var progress := minf(float(path.size()), (Time.get_ticks_usec() - t0) / step_us)
+		while completed < floori(progress):
+			var cell: Vector2i = path[completed]
+			if _audio != null and u != null:
+				if not u.is_drone: _step_sounds.append([u, prev, cell])
+				else:
+					buzz = _audio.vehicle_at(buzz, buzz_generation, cell, u.owner, "drone_move")
+					if buzz != null: buzz_generation = int(buzz.get_meta("audio_generation", 0))
+			prev = cell
+			_walk_cells[id] = cell
+			completed += 1
+		if completed < path.size():
+			_walk_offset[id] = Vector2(Vector2i(path[completed]) - prev) * CELL * (progress - completed)
+		else:
+			_walk_offset.erase(id)
+		queue_redraw()
+		if completed < path.size(): await get_tree().process_frame
+
 	if _audio != null: _audio.stop_player(buzz, buzz_generation)
 	if _walk_jobs.get(id, -1) != serial:
 		_walks_running = maxi(0, _walks_running - 1)
@@ -549,6 +551,15 @@ func _mods_text(header: String, mods: Array) -> String:
 ## partial — one action out of a neutral turn, shown mid-stream: it releases only its own
 ## dead and leaves the turn's "before impact" view to the whole result.
 func _show_effects(result: ActionResult, partial := false) -> void:
+	if not result.cheat_cells.is_empty():
+		var live := TerrainTiles.new(state.grid, state.env)
+		for at: Vector2i in result.cheat_cells:
+			_furniture_look.erase(at)
+			var cell := state.grid.cell(at)
+			if cell != null and Furniture.is_furniture(cell.feature_id):
+				_furniture_look[at] = [cell.feature_id] + live._live_look(at, cell.feature_id)
+			if _tiles != null: _tiles._touch(at)
+		_lod_terrain_key = []
 	# Пока летит пуля или струя, экран занят, как во время броска: ни щелчок игрока, ни шаг
 	# ИИ не должны начать следующее действие посреди полёта.
 	var was_animating := _animating

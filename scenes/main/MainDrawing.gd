@@ -351,7 +351,6 @@ func _draw() -> void:
 	# cannot hide debris there; stop drawing the live layers while Before is shown.
 	if _before_on:
 		return
-	_draw_wall_blood(visible, fog_on)
 	_draw_fx_flashes(visible)
 	_draw_flame_jet(visible)
 	# Труп существует в ДВУХ видах: погибший на месте боец — это occupant клетки со
@@ -1064,6 +1063,7 @@ func _draw() -> void:
 
 	# Аннотации игроков поверх поля (item 51).
 	_draw_ruler()
+	_draw_cheat_ids()
 
 ## Corpses resting on a hull must be drawn after both ordinary vehicles and borg pilots.
 func _corpse_above_vehicle(at: Vector2i) -> bool:
@@ -1528,35 +1528,6 @@ func _draw_cloud_tiles(ci: CanvasItem, clouds: Array, smoke: bool, tint: Color, 
 ## клетках не знают, и на следующий ход от вспышки не остаётся ничего, кроме обычного
 ## щебня. Рисуется плиткой огня (как и настоящий пожар), а без неё — оранжевой заливкой.
 ## Туман войны вспышка не протекает: чего команда не видит, того ей и не показывают.
-## Кровь на стенах (fix-7 #16): пятно и подтёки на грани стены, глядящей на тело. Под
-## туманом — только там, где стену или клетку тела видно сейчас.
-func _draw_wall_blood(visible: Dictionary, fog_on: bool) -> void:
-	if _tiles == null:
-		return
-	for b: Dictionary in _fx.wall_blood:
-		var c: Vector2i = b["cell"]
-		var face: Vector2i = b["face"]
-		if not _cell_on_screen(c.x, c.y) or (fog_on and not visible.has(c) and not visible.has(c + face)):
-			continue
-		# A spatter on the face of the wall that looks at the body (owner, fix-8 #13): the burst
-		# at the edge, its streaks flung along the face; squashed across it, since from above
-		# a wall's face is a line.
-		var along := Vector2(-face.y, face.x)
-		var edge := Vector2(c) + Vector2(0.5, 0.5) + Vector2(face) * 0.5
-		var k := float(b["scale"])
-		var variant := int(absf(float(b["rot"])) * 1000.0) % FxDecals.SPATTER_VARIANTS
-		var key := "spatter@%d" % variant
-		var tex: Texture2D = _wall_blood_tex.get(key)
-		if tex == null:
-			tex = ImageTexture.create_from_image(FxDecals.spatter_image(variant, 48, false))
-			_wall_blood_tex[key] = tex
-		var size := 0.95 * k
-		var centre := edge - Vector2(face) * 0.14
-		draw_set_transform_matrix(Transform2D(0.0, Vector2(zoom, zoom), 0.0, pan)
-				* Transform2D(along * size, Vector2(face) * size * 0.45, ORIGIN + centre * CELL))
-		draw_texture_rect(tex, Rect2(Vector2(-0.5, -0.5) * CELL, Vector2(CELL, CELL)), false)
-		draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
-
 func _draw_fx_flashes(visible: Dictionary) -> void:
 	if _fx.flashes.is_empty():
 		return

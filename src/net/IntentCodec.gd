@@ -46,6 +46,8 @@ const T_WELD := "weld"
 const T_GIVE := "give"
 
 static func encode(intent: Intent) -> Dictionary:
+	if intent is CheatIntent:
+		return {"t": "cheat", "op": intent.op, "args": intent.args.duplicate(true), "issuer": intent.issuer}
 	if intent is EndTurnIntent:
 		return {"t": T_END, "q": intent.requester}
 	if intent is PlaceMineIntent:
@@ -181,6 +183,10 @@ static func encode(intent: Intent) -> Dictionary:
 	return {}
 
 static func decode(d: Dictionary) -> Intent:
+	if d.get("t") == "cheat":
+		if not d.get("op") is String or not d.get("args") is Dictionary or not CheatCommands._integer(d.get("issuer", -1)): return null
+		if d.op.length() > 64 or d.args.size() > 8 or JSON.stringify(d).length() > 2048: return null
+		return CheatIntent.new(d.op, d.args, int(d.get("issuer", -1)))
 	var t: String = d.get("t", "")
 	var a: int = int(d.get("a", -1))
 	var coord := Vector2i(int(d.get("x", 0)), int(d.get("y", 0)))

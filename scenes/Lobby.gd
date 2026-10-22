@@ -41,6 +41,8 @@ var _place_opt: OptionButton
 var _fog_opt: OptionButton
 var _army_opt: OptionButton
 var _ff_check: CheckBox
+var _cheats_check: CheckBox
+var _spectators_check: CheckBox
 ## «Disable neutrals» (item 2): инверсия GameConfig.civilians_enabled.
 ## Чат лобби (item 14).
 var _chat: ChatBox = null
@@ -325,20 +327,37 @@ func _apply_lobby_snapshot(msg: Dictionary) -> void:
 		return
 	NetHandoff.apply_rules(rules)
 	roster = GameConfig.active_roster()
+	_restore_config_controls()
+	if _map_opt != null:
+		var map_name := str(msg.get("map", ""))
+		_map_opt.clear()
+		_map_opt.add_item(map_name if map_name != "" else "(host's map)")
+		_map_opt.select(0)
+	_refresh_slots()
+	var mine := _my_slot()
+	if mine != null:
+		if _color_opt != null:
+			_color_opt.select(mine.color_index())
+		_refresh_swatch()
+		_status.text = "You are %s — waiting for the host to start the match." % mine.display_name
+	else:
+		_status.text = "Connected — no free slot yet. The host can add one."
+
+func _restore_config_controls() -> void:
 	_team_mode = _roster_has_teams()
 	if _place_opt != null:
 		_place_opt.select(clampi(GameConfig.placement_mode, 0, 1))
 		_fog_opt.select(clampi(GameConfig.fog_mode, 0, 2))
 		_army_opt.select(clampi(GameConfig.army_select_mode, 0, 1))
 		_team_check.set_pressed_no_signal(_team_mode)
-		_ff_check.button_pressed = GameConfig.friendly_fire
+		_ff_check.set_pressed_no_signal(GameConfig.friendly_fire)
 		_ff_check.visible = _team_mode
-		_live_check.button_pressed = GameConfig.live_placement_visible
+		_live_check.set_pressed_no_signal(GameConfig.live_placement_visible)
 		_sync_live_check()
 		_civ_check.set_pressed_no_signal(GameConfig.civilian_count > 0)
-		_events_check.button_pressed = GameConfig.random_events_enabled
-		_events_mand.button_pressed = GameConfig.random_events_mandatory
-		_events_interval.value = GameConfig.random_events_interval
+		_events_check.set_pressed_no_signal(GameConfig.random_events_enabled)
+		_events_mand.set_pressed_no_signal(GameConfig.random_events_mandatory)
+		_events_interval.set_value_no_signal(GameConfig.random_events_interval)
 		_army_difficulty.select(GameConfig.independent_army_difficulty)
 		for ev_id in _event_pool:
 			_event_pool[ev_id] = float(GameConfig.random_events_weights.get(ev_id, 0.0)) > 0.0
@@ -354,20 +373,47 @@ func _apply_lobby_snapshot(msg: Dictionary) -> void:
 		_sync_mode_rows()
 		if _preview_labels != null:
 			_preview_labels.queue_redraw()
-	if _map_opt != null:
-		var map_name := str(msg.get("map", ""))
-		_map_opt.clear()
-		_map_opt.add_item(map_name if map_name != "" else "(host's map)")
-		_map_opt.select(0)
-	_refresh_slots()
-	var mine := _my_slot()
-	if mine != null:
-		if _color_opt != null:
-			_color_opt.select(mine.color_index())
-		_refresh_swatch()
-		_status.text = "You are %s — waiting for the host to start the match." % mine.display_name
-	else:
-		_status.text = "Connected — no free slot yet. The host can add one."
+	_cheats_check.set_pressed_no_signal(GameConfig.cheats_enabled)
+	if _spectators_check != null:
+		_spectators_check.set_pressed_no_signal(NetHandoff.allow_spectators)
+	if _civ_slider != null: _civ_slider.set_value_no_signal(GameConfig.civilian_count)
+
+## A resumed battlefield keeps its original setup; only ongoing rules are editable.
+func _load_saved_lobby(data: Dictionary) -> void:
+	LobbySettings.apply(LobbySettings.with_rules(data.get("lobby", {}), data.get("rules", {})))
+	var waves := roster.slot(roster.waves_side())
+	if waves != null: GameConfig.holdout_ai = 3 if waves.ai_difficulty == 3 else waves.ai_style
+	_restore_config_controls()
+	_load_spawn_settings(data.get("rules", {}))
+	var options := GameConfig.map_generation
+	for pair: Array in [["style", _gen_style], ["size", _gen_size], ["density", _gen_density], ["furniture", _gen_furniture]]:
+		var opt: OptionButton = pair[1]
+		if opt != null and options.has(pair[0]): opt.select(clampi(int(options[pair[0]]), 0, opt.item_count - 1))
+	for pair: Array in [["seed", _gen_seed], ["units", _gen_units], ["width", _gen_w], ["height", _gen_h]]:
+		if pair[1] != null and options.has(pair[0]): pair[1].set_value_no_signal(options[pair[0]])
+	for pair: Array in [["symmetric", _gen_sym], ["obstacles", _gen_obstacles], ["winter", _gen_winter]]:
+		if pair[1] != null and options.has(pair[0]): pair[1].set_pressed_no_signal(bool(options[pair[0]]))
+	if _gen_time != null: _gen_time.select(maxi(0, (MapData.TIMES + ["random"]).find(str(options.get("time", "day")))))
+	var path := RANDOM_MAP if not options.is_empty() else GameConfig.map_path
+	var index := _map_paths.find(path)
+	if index >= 0: _map_opt.select(index)
+	_set_resume_controls(true)
+
+func _set_resume_controls(loaded: bool) -> void:
+	for button: BaseButton in [_place_opt, _army_opt, _live_check, _civ_check, _map_opt, _mode_opt, _zones_opt, _draw_btn, _auto_btn]:
+		if button == null: continue
+		button.disabled = loaded or _is_client
+		if loaded: button.tooltip_text = "Original match setup. Clear the saved game to change this before a new deployment."
+	if _gen_box != null: _lock_generator(_gen_box, loaded)
+	_sync_live_check()
+
+func _lock_generator(node: Node, locked: bool) -> void:
+	for child in node.get_children():
+		if child is BaseButton: child.disabled = locked
+		elif child is Range:
+			if child is SpinBox: child.editable = not locked
+			elif child is Slider: child.editable = not locked
+		_lock_generator(child, locked)
 
 ## Карта хоста для превью (batch 12 #8).
 func _apply_lobby_map(msg: Dictionary) -> void:
@@ -434,8 +480,10 @@ func _on_client_lost() -> void:
 
 ## Начальный ростер: дуэль из двух слотов (хост-человек + открытый), как минимум для игры.
 func _seed_roster() -> Roster:
+	GameConfig.cheats_enabled = false
 	var r := Roster.new()
-	r.add_slot(Roster.SlotKind.HUMAN)   # слот 0 — этот игрок (хост/одиночка)
+	r.add_slot(Roster.SlotKind.HUMAN)
+	r.slots[0].cheats_allowed = true   # слот 0 — этот игрок (хост/одиночка)
 	# В одиночке второй слот — ИИ (item 20): партия готова к старту сразу, без соперника-
 	# человека. В сетевой игре он ОТКРЫТ и ждёт гостя.
 	if _is_solo:
@@ -707,11 +755,11 @@ func _sync_drawn() -> void:
 		return
 	var n := GameConfig.capture_drawn.size()
 	_drawn_label.text = "Auto" if n == 0 else "%d drawn zone%s" % [n, "" if n == 1 else "s"]
-	_zones_opt.disabled = _is_client or n > 0
+	_zones_opt.disabled = _is_client or not _save.is_empty() or n > 0
 	_zones_opt.tooltip_text = "The drawn zones set the count; press Auto to choose it here." if n > 0 \
 			else "How many zones to fight over. Maps place them fairly between the deployment zones."
-	_draw_btn.disabled = _is_client
-	_auto_btn.disabled = _is_client or n == 0
+	_draw_btn.disabled = _is_client or not _save.is_empty()
+	_auto_btn.disabled = _is_client or not _save.is_empty() or n == 0
 
 ## Окно рисования зон: карта крупно, тянешь мышью — новая зона (до пяти), правый щелчок по
 ## зоне — убрать. Правится сразу GameConfig.capture_drawn, гости видят зоны на превью.
@@ -803,6 +851,14 @@ func _build_config(parent: VBoxContainer) -> void:
 	_place_opt = _opt(["Asymmetric", "Mirrored"], GameConfig.placement_mode)
 	_row(box, "Placement:", _place_opt)
 
+	_cheats_check = CheckBox.new()
+	_cheats_check.text = "Enable cheats"
+	_cheats_check.button_pressed = GameConfig.cheats_enabled
+	_cheats_check.disabled = _is_client
+	_cheats_check.tooltip_text = "Allow the console. Grant gameplay commands separately on human slots; the host can manage permissions during battle."
+	_cheats_check.toggled.connect(func(_on: bool) -> void: _lobby_changed())
+	box.add_child(_cheats_check)
+
 	_fog_opt = _opt(["Off", "Standard", "Realistic"], GameConfig.fog_mode)
 	_row(box, "Fog of War:", _fog_opt)
 
@@ -813,6 +869,7 @@ func _build_config(parent: VBoxContainer) -> void:
 	# The host decides whether guests may watch (0.11). Off also sends current spectators away.
 	if _is_host_net:
 		var watch := CheckBox.new()
+		_spectators_check = watch
 		watch.text = "Allow spectators"
 		watch.button_pressed = NetHandoff.allow_spectators
 		watch.toggled.connect(func(on: bool) -> void:
@@ -947,7 +1004,7 @@ func _sync_live_check() -> void:
 	var fog := _fog_opt.selected != MCF.Fog.OFF
 	if fog:
 		_live_check.set_pressed_no_signal(false)
-	_live_check.disabled = fog or _is_client
+	_live_check.disabled = fog or _is_client or not _save.is_empty()
 
 ## Строка «подпись — ползунок — число» (как slider-row в наборе интерфейса). fmt — как
 ## показать значение в окошке справа.
@@ -1393,6 +1450,7 @@ func _on_load_save() -> void:
 	# Ростер файла становится основой: слоты, цвета и команды в нём уже те, что были в
 	# бою. Хост дальше правит их как обычно — это и есть переназначение ролей.
 	roster = Roster.from_dict(saved.get("roster", {}))
+	_load_saved_lobby(data)
 	# Saved peer IDs belong to the old session; never restore them as connected people.
 	var host_seated := false
 	for slot: Roster.Slot in roster.slots:
@@ -1405,7 +1463,58 @@ func _on_load_save() -> void:
 	if _is_host_net:
 		for id in NetHandoff.session.peers: _seat_peer(id)
 	_lobby_changed()
-	_status.text = "Loaded %s" % name
+	_status.text = "Loaded %s — edit fog, cheats, teams, events and future waves, then resume. Original deployment settings are preserved." % name
+
+## Keep saved progress, while exposing the current wave/raider controls on resume.
+func _load_spawn_settings(rules: Dictionary) -> void:
+	var mode := MatchMode.new()
+	mode.restore(rules.get("mode", {}))
+	_mode_opt.select(mode.kind)
+	_mode_opt.disabled = true   # changing the match objective would invalidate progress
+	_waves_spin.set_value_no_signal(mode.waves_total)
+	_wave_every_spin.set_value_no_signal(mode.wave_every)
+	_wave_start_spin.set_value_no_signal(mode.wave_start)
+	GameConfig.holdout_excluded_units = mode.excluded_units.duplicate()
+	var events: Dictionary = rules.get("events", rules.get("events_cfg", {}))
+	GameConfig.raider_excluded_units.assign(events.get("excluded_units", []))
+	_events_check.set_pressed_no_signal(bool(events.get("enabled", false)))
+	_events_mand.set_pressed_no_signal(bool(events.get("mandatory", false)))
+	_events_interval.set_value_no_signal(int(events.get("interval", 3)))
+	_army_difficulty.select(clampi(int(events.get("army_difficulty", 1)), 0, 2))
+	for id: String in _event_pool:
+		_event_pool[id] = float(events.get("weights", {}).get(id, 0.0)) > 0.0
+	_sync_mode_rows()
+	_sync_event_rows()
+
+func _store_spawn_settings() -> void:
+	var rules: Dictionary = _save.get("rules", {}).duplicate(true)
+	rules["fog"] = GameConfig.fog_mode
+	rules["friendly_fire"] = GameConfig.friendly_fire
+	rules["cheats"] = GameConfig.cheats_enabled
+	rules["ai_speed"] = GameConfig.ai_speed
+	var mode: Dictionary = rules.get("mode", {}).duplicate(true)
+	if int(mode.get("kind", 0)) == MatchMode.Kind.CAPTURE:
+		mode["target"] = GameConfig.capture_target
+	if int(mode.get("kind", 0)) == MatchMode.Kind.HOLDOUT:
+		mode["waves_total"] = GameConfig.holdout_waves
+		mode["wave_every"] = GameConfig.holdout_wave_every
+		mode["wave_start"] = GameConfig.holdout_wave_start
+		mode["excluded_units"] = GameConfig.holdout_excluded_units.duplicate()
+	rules["mode"] = mode
+	var waves := roster.slot(roster.waves_side())
+	if waves != null:
+		waves.ai_difficulty = 3 if GameConfig.holdout_ai == 3 else 2
+		waves.ai_style = clampi(GameConfig.holdout_ai, 0, 2)
+	var events: Dictionary = rules.get("events", {}).duplicate(true)
+	var cfg := {"enabled": GameConfig.random_events_enabled, "mandatory": GameConfig.random_events_mandatory,
+			"interval": GameConfig.random_events_interval, "weights": GameConfig.random_events_weights.duplicate(),
+			"army_difficulty": GameConfig.independent_army_difficulty,
+			"excluded_units": GameConfig.raider_excluded_units.duplicate()}
+	events.merge(cfg, true)
+	rules["events"] = events
+	rules["events_cfg"] = cfg
+	_save["rules"] = rules
+	_save["lobby"] = LobbySettings.capture()
 
 ## The saved board as a map for the preview, every living soldier where they stand (0.11).
 var _save_map: MapData = null
@@ -1414,6 +1523,8 @@ func _saved_battlefield(saved: Dictionary) -> MapData:
 	if gs == null or gs.grid == null:
 		return null
 	var m := MapData.from_grid(gs.grid, gs.env)
+	m.winter = gs.winter
+	m.time_of_day = gs.time_of_day
 	for u: UnitInstance in gs.all_units():
 		if u.is_alive() and gs.grid.in_bounds(u.coord):
 			m.spawns.append({"coord": u.coord, "stats_id": u.stats.id, "owner": u.owner})
@@ -1421,6 +1532,7 @@ func _saved_battlefield(saved: Dictionary) -> MapData:
 
 func _on_clear_save() -> void:
 	_save = {}
+	_set_resume_controls(false)
 	_save_armies = {}
 	_save_map = null
 	_lobby_changed()
@@ -1633,7 +1745,7 @@ func _slot_row(s: Roster.Slot) -> Control:
 		zone.add_item("Zone %d" % (zi + 1))
 	zone.select(clampi(s.deploy_zone + 1, 0, zone.item_count - 1))
 	zone.item_selected.connect(func(i: int) -> void: _on_slot_zone(float(i), s.id))
-	zone.disabled = _is_client
+	zone.disabled = _is_client or not _save.is_empty()
 	zone.custom_minimum_size = Vector2(SLOT_COL_ZONE, 0)
 	row.add_child(zone)
 
@@ -1649,9 +1761,20 @@ func _slot_row(s: Roster.Slot) -> Control:
 	budget.get_line_edit().text_changed.connect(func(t: String) -> void:
 		if t.is_valid_int():
 			(roster.slots[s.id] as Roster.Slot).budget = int(t))
-	budget.editable = not _is_client
+	budget.editable = not _is_client and _save.is_empty()
 	budget.custom_minimum_size = Vector2(SLOT_COL_PTS, 0)
 	row.add_child(budget)
+
+	var cheats := CheckBox.new()
+	cheats.text = "Cheats"
+	cheats.button_pressed = s.cheats_allowed
+	cheats.disabled = _is_client or not _cheats_check.button_pressed or s.kind != Roster.SlotKind.HUMAN
+	cheats.tooltip_text = "Gameplay cheat permission for this slot. Host administration remains available separately."
+	cheats.toggled.connect(func(on: bool) -> void:
+		if _is_client: return
+		s.cheats_allowed = on
+		_broadcast_lobby())
+	row.add_child(cheats)
 
 	# Ограничение состава ДЛЯ ЭТОГО ИГРОКА (item 2): открывает окно с галочками.
 	if not _is_client:
@@ -1894,7 +2017,7 @@ func _on_remove_slot(slot_id: int) -> void:
 
 ## Holdout can be defended alone (the waves are the other side); every other mode is a duel at least.
 func _min_slots() -> int:
-	return 1 if _mode_opt != null and _mode_opt.selected == MatchMode.Kind.HOLDOUT and _save.is_empty() else 2
+	return 1 if _mode_opt != null and _mode_opt.selected == MatchMode.Kind.HOLDOUT else 2
 
 ## Первый ещё не занятый цвет палитры — чтобы новые слоты не дублировали цвета (item 6).
 func _first_free_color() -> int:
@@ -2146,9 +2269,12 @@ func _commit_config() -> void:
 	GameConfig.free_placement = true
 	GameConfig.placement_mode = _place_opt.selected
 	GameConfig.fog_mode = _fog_opt.selected
+	GameConfig.cheats_enabled = _cheats_check.button_pressed
 	GameConfig.army_select_mode = _army_opt.selected
 	GameConfig.live_placement_visible = _live_check.button_pressed
-	GameConfig.civilian_count = _civ_count()  # item 11
+	if _save.is_empty():
+		GameConfig.civilian_count = _civ_count()
+		GameConfig.civilians_enabled = _civ_check.button_pressed
 	GameConfig.random_events_enabled = _events_check.button_pressed
 	GameConfig.random_events_mandatory = _events_mand.button_pressed
 	GameConfig.random_events_interval = int(_events_interval.value)
@@ -2169,9 +2295,11 @@ func _commit_config() -> void:
 	# Общее ограничение состава больше не задаётся глобально — оно ПЕРСОНАЛЬНО у слотов
 	# (item 2). Глобальный список чистим, чтобы старое значение не перебивало личные.
 	GameConfig.allowed_units = {}
-	GameConfig.friendly_fire = _team_mode and _ff_check.button_pressed
+	GameConfig.friendly_fire = _ff_check.button_pressed if not _save.is_empty() else _team_mode and _ff_check.button_pressed
 	# У случайной карты файла нет — на расстановку она уезжает готовой (_on_start).
-	GameConfig.map_path = "" if _is_random() else _map_paths[_map_opt.selected]
+	if _save.is_empty():
+		GameConfig.map_path = "" if _is_random() else _map_paths[_map_opt.selected]
+		GameConfig.map_generation = _gen_options() if _is_random() else {}
 	GameConfig.roster = roster
 
 ## Старт с загруженной партии: ростер лобби подменяет сохранённый прямо в словаре
@@ -2179,6 +2307,7 @@ func _commit_config() -> void:
 ## владельцев юнитов. Расстановка пропускается: армии уже на доске.
 func _start_loaded() -> void:
 	_commit_config()
+	_store_spawn_settings()
 	var saved: Dictionary = _save.get("state", {})
 	saved["roster"] = roster.to_dict()
 	_save["state"] = saved

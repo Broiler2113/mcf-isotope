@@ -329,12 +329,14 @@ func _view_resolver() -> GameActionResolver:
 		if _walking_view == null or _walking_view.state != state:
 			_walking_view = GameActionResolver.new(state)
 			_walking_view.track_undo_history = false
-			_walking_view.explored = resolver.explored
+		_walking_view.explored = resolver.explored
 		_walking_view.fog_mode = (MCF.Fog.STANDARD if _spectator_fog else MCF.Fog.OFF) if _spectator else resolver.fog_mode
 		_walking_view.set_sight_positions(_walk_cells)
 		return _walking_view
-	if _walking_view != null:
-		_walking_view = null
+	if _walking_view != null and not _walking_view.sight_positions.is_empty():
+		# Keep the incremental counters and sight caches between actions. Recreating
+		# this resolver made the first frame of every walk merge the whole army's view.
+		_walking_view.set_sight_positions({})
 		# The memory renderer must compare the final simulation view with the last
 		# walking frame, not with its own pre-animation incremental journal.
 		resolver._vis_log.clear()
