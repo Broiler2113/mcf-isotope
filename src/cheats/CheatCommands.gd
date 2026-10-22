@@ -6,8 +6,13 @@ const CATALOG: Array = [
 	{"op": "help", "pattern": "help {topic:text?}", "access": "safe", "help": "Show command categories, syntax and bounds."},
 	{"op": "status", "pattern": "cheats status", "access": "safe", "help": "Show master setting and your current rights."},
 	{"op": "players", "pattern": "players", "access": "safe", "help": "List roster metadata and permissions."},
-	{"op": "units", "pattern": "units {owner:players?} page {page:page?}", "access": "inspect", "help": "List units sorted by ID, 25 per page; player and page are optional."},
-	{"op": "vehicles", "pattern": "vehicles {owner:players?} page {page:page?}", "access": "inspect", "help": "List vehicles sorted by ID, 25 per page; player and page are optional."},
+	{"op": "units", "pattern": "units {owner:players?} page {page:page?}", "access": "inspect", "help": "List units by permanent U-ID, 25 per page; player and page are optional."},
+	{"op": "vehicles", "pattern": "vehicles {owner:players?} page {page:page?}", "access": "inspect", "help": "List vehicles by permanent V-ID, 25 per page; player and page are optional."},
+	{"op": "units_status", "pattern": "units {owner:players} status", "access": "inspect", "help": "Count each soldier/drone type alive and dead for a player, then the entire board."},
+	{"op": "vehicles_status", "pattern": "vehicles {owner:players} status", "access": "inspect", "help": "Count each vehicle type intact and wrecked for a player, then the entire board."},
+	{"op": "inspect_tool", "pattern": "inspect", "access": "tool", "help": "Click battlefield cells to inspect units, vehicles and their stats; Esc stops the tool."},
+	{"op": "spawn_unit_tool", "pattern": "spawn unit {type:unit_type} {owner:player}", "access": "tool", "help": "Click cells to place this unit repeatedly; Esc stops placement."},
+	{"op": "spawn_vehicle_tool", "pattern": "spawn vehicle {type:vehicle_type} {owner:player}", "access": "tool", "help": "Click cells to place this vehicle repeatedly; Esc stops placement."},
 	{"op": "ids_on", "pattern": "ids on {category:entities?}", "access": "inspect", "help": "Show local battlefield IDs; default all."},
 	{"op": "ids_off", "pattern": "ids off", "access": "safe", "help": "Hide local battlefield IDs."},
 	{"op": "inspect_unit", "pattern": "inspect unit {unit:unit}", "access": "inspect", "help": "Inspect a unit, including its overrides."},
@@ -31,7 +36,8 @@ const CATALOG: Array = [
 	{"op": "vehicle_clone", "pattern": "vehicle clone {vehicle:vehicle} {x:x} {y:y}", "access": "play", "help": "Spawn a fresh, intact copy without passengers."},
 	{"op": "vehicle_move", "pattern": "vehicle move {vehicle:vehicle} {x:x} {y:y} {facing:facing?}", "access": "play", "help": "Move a vehicle footprint to legal terrain without AP."},
 	{"op": "vehicle_owner", "pattern": "vehicle owner {vehicle:vehicle} {owner:player}", "access": "play", "help": "Transfer an empty vehicle to a playable side."},
-	{"op": "vehicle_repair", "pattern": "vehicle repair {vehicle:vehicle}", "access": "play", "help": "Restore supported components; unsafe wreck restoration is refused."},
+	{"op": "vehicle_repair", "pattern": "vehicle repair {vehicle:vehicle}", "access": "play", "help": "Restore all durability and components of a living vehicle to maximum."},
+	{"op": "vehicle_durability", "pattern": "vehicle durability {vehicle:vehicle} {value:component_value?}", "access": "play", "help": "Restore hull durability (omit value or use restore), or set 0..maximum. Wrecks cannot be revived."},
 	{"op": "vehicle_component", "pattern": "vehicle component {vehicle:vehicle} {component:component} {value:component_value}", "access": "play", "help": "Set an existing component to restore or 0..its maximum."},
 	{"op": "vehicle_destroy", "pattern": "vehicle destroy {vehicle:vehicle}", "access": "play", "help": "Use normal destruction and crew cleanup with shared dice."},
 	{"op": "vehicle_remove", "pattern": "vehicle remove {vehicle:vehicle}", "access": "play", "help": "Remove an empty vehicle without explosion."},
@@ -49,7 +55,20 @@ const CATALOG: Array = [
 	{"op": "world_winter", "pattern": "world winter {enabled:bool}", "access": "play", "help": "Toggle existing winter presentation."},
 	{"op": "world_time", "pattern": "world time {time:time}", "access": "play", "help": "Set morning, day, evening or night."},
 	{"op": "world_clear_cell", "pattern": "world clear-cell {x:x} {y:y}", "access": "play", "help": "Remove terrain objects and fire safely; preserves units, vehicles and boundaries."},
-	{"op": "event_list", "pattern": "event list", "access": "inspect", "help": "List every registered event and current availability."},
+	{"op": "event_list", "pattern": "event list", "access": "inspect", "help": "List active effects and pending warnings with stable references for editing or removal."},
+	{"op": "event_types", "pattern": "event types", "access": "inspect", "help": "List registered event types and their availability on this map."},
+	{"op": "event_spawn_tool", "pattern": "event spawn {event:event?}", "access": "tool", "help": "Open the event editor, then click to place an event with its supported properties."},
+	{"op": "event_edit_tool", "pattern": "event edit {target:event_ref?}", "access": "tool", "help": "Open an adaptive editor for an active effect or pending warning from event list."},
+	{"op": "event_remove_tool", "pattern": "event remove", "access": "tool", "help": "Click an event area to select and cancel it; Esc stops the tool."},
+	{"op": "event_remove", "pattern": "event remove {target:event_ref}", "access": "play", "help": "Cancel a warning or active effect by its stable reference. Past damage is not reversed."},
+	{"op": "event_trigger", "pattern": "event trigger {event:event}", "access": "play", "help": "Immediately trigger an eligible event using its normal parameters and shared dice."},
+	{"op": "event_spawn", "pattern": "event place {event:event} {x:x} {y:y} {properties:event_properties?}", "access": "play", "help": "Immediately place an event at a cell. The event spawn editor supplies supported properties."},
+	{"op": "event_set", "pattern": "event set {target:event_ref} {property:event_property} {value:event_value}", "access": "play", "help": "Edit one supported integer property of an existing warning or effect."},
+	{"op": "event_update", "pattern": "event update {target:event_ref} {properties:event_properties}", "access": "play", "help": "Apply the editor's complete property set atomically; properties use a quoted JSON object."},
+	{"op": "event_automatic", "pattern": "event automatic {enabled:bool}", "access": "play", "help": "Enable or disable automatic event scheduling; existing effects remain."},
+	{"op": "event_interval", "pattern": "event interval {rounds:event_interval}", "access": "play", "help": "Set rounds between automatic event checks (1–20)."},
+	{"op": "event_guaranteed", "pattern": "event guaranteed {enabled:bool}", "access": "play", "help": "Guarantee an event at each due check, or use the normal random chance."},
+	{"op": "event_enabled", "pattern": "event enabled {event:event} {enabled:bool}", "access": "play", "help": "Include or exclude this type from the automatic event pool; selected types have equal probability."},
 	{"op": "event_status", "pattern": "event status", "access": "inspect", "help": "Inspect pending events, clouds and automatic event configuration."},
 	{"op": "event_queue", "pattern": "event queue {event:event} {x:x?} {y:y?}", "access": "play", "help": "Queue an existing event with normal timing and shared dice; optional center for supported zones."},
 	{"op": "event_cancel", "pattern": "event cancel {index:event_index}", "access": "play", "help": "Cancel a zero-based pending event index or all warnings."},
@@ -58,10 +77,16 @@ const CATALOG: Array = [
 	{"op": "vision_mines", "pattern": "vision mines {owner:players} {enabled:bool}", "access": "play", "help": "Reveal all mines for selected side(s), or remove the override."},
 	{"op": "turn_end", "pattern": "turn end", "access": "play", "help": "End the currently active turn using normal round and event rules."},
 	{"op": "turn_refill", "pattern": "turn refill {owner:players}", "access": "play", "help": "Refill eligible living units and clear partial action counters."},
+	{"op": "ai_pause", "pattern": "ai pause {owner:player}", "access": "host_play", "help": "Pause an AI player after its current action; host only."},
+	{"op": "ai_resume", "pattern": "ai resume {owner:player}", "access": "host_play", "help": "Resume a paused AI player; host only."},
+	{"op": "ai_step", "pattern": "ai step {owner:player}", "access": "host_play", "help": "Pause the active AI and permit exactly one decision/action; host only."},
 	{"op": "ai_speed", "pattern": "ai speed {speed:ai_speed}", "access": "host_play", "help": "Set shared AI pace to 0.5, 1, 2, 4, 8, 16 or 64; host only."},
 	{"op": "ai_personality", "pattern": "ai personality {owner:player} {personality:personality}", "access": "host_play", "help": "Set an AI slot to tactician, aggressor, fortifier or learned at its next safe decision boundary."},
 	{"op": "match_score", "pattern": "match score {owner:player} {points:points}", "access": "play", "help": "Set a Capture & Hold team score (0–1000000)."},
+	{"op": "wave_status", "pattern": "wave status", "access": "inspect", "help": "Show surviving defenders, the next wave multiplier and target, and the last landing count."},
 	{"op": "match_waves", "pattern": "match waves {waves:waves}", "access": "play", "help": "Set Holdout total waves (0–999; 0 is endless)."},
+	{"op": "kick", "pattern": "kick {owner:player}", "access": "admin", "help": "Disconnect a connected human player; host only. The normal AI takeover/rejoin rules apply."},
+	{"op": "ban", "pattern": "ban {owner:player}", "access": "admin", "help": "Disconnect a human player and block their reconnect identity for this hosted session; host only."},
 	{"op": "permissions", "pattern": "cheats permissions", "access": "admin", "help": "List slot permissions; host administration only."},
 	{"op": "grant", "pattern": "cheats grant {owner:player}", "access": "admin", "help": "Grant a connected human slot gameplay permission; host only."},
 	{"op": "revoke", "pattern": "cheats revoke {owner:player}", "access": "admin", "help": "Revoke slot permission immediately; existing effects remain."},
@@ -140,7 +165,7 @@ static func parse(line: String, state: GameState, caller: int) -> Dictionary:
 	var words: Array = lex.words
 	if words.is_empty(): return {"error": "Enter a command. Type help for the catalog."}
 	var first := str(words[0]).to_lower()
-	if not CheatAccess.permitted(state, caller) and first not in ["help", "players", "cheats", "clear"] and not (words.size() == 2 and first == "ids" and str(words[1]).to_lower() == "off"):
+	if not CheatAccess.permitted(state, caller) and first not in ["help", "players", "cheats", "clear", "kick", "ban"] and not (words.size() == 2 and first == "ids" and str(words[1]).to_lower() == "off"):
 		return {"error": CheatAccess.denial(state, caller)}
 	if first == "help": return {"op": "help", "args": {"topic": " ".join(words.slice(1)).to_lower()}, "access": "safe"}
 	if first in ["units", "vehicles"]: return _parse_list(first, words.slice(1), state, caller)
@@ -186,6 +211,9 @@ static func _parse_list(op: String, words: Array, state: GameState, caller: int)
 		if owner.has("error"): return owner
 		args.owner = owner.value
 		index = 1
+	if index < words.size() and str(words[index]).to_lower() == "status":
+		if words.size() != index + 1: return {"error": "Syntax: %s <player|all> status" % op}
+		return {"op": op + "_status", "args": {"owner": args.owner}, "access": "inspect"}
 	if index < words.size():
 		if words.size() != index + 2 or str(words[index]).to_lower() != "page":
 			return {"error": "Syntax: %s [player|all] [page <number>]" % op}
@@ -242,6 +270,17 @@ static func _atom(raw: Variant, type: String, state: GameState, caller: int, typ
 	if type == "bool":
 		if typed: return {"value": raw} if raw is bool else {"error": "Expected on or off."}
 		return {"value": lower == "on"} if lower in ["on", "off"] else {"error": "Expected on or off."}
+	if type == "event_properties":
+		var props: Variant = raw if typed else JSON.parse_string(text)
+		if not props is Dictionary or props.size() > 8: return {"error": "Expected a quoted JSON object of supported event properties."}
+		var cleaned := {}
+		for key in props:
+			if not key is String or not key in ["x", "y", "w", "h", "rounds", "edge", "from", "len", "hx", "hy", "side", "budget", "unit"] or not _integer(props[key]) or absf(float(props[key])) > 1000000: return {"error": "Unsupported event property or non-integer value."}
+			cleaned[key] = int(props[key])
+		return {"value": cleaned}
+	if type == "event_ref":
+		if not raw is String or text.length() > 40: return {"error": "Expected an event reference from event list."}
+		return {"value": lower}
 	if type == "text": return {"value": text} if raw is String and text.length() <= 100 else {"error": "Invalid text."}
 	if type in ["ap", "component_value", "event_index"]:
 		var keyword: String = {"ap": "refill", "component_value": "restore", "event_index": "all"}[type]
@@ -254,9 +293,12 @@ static func _atom(raw: Variant, type: String, state: GameState, caller: int, typ
 		"unit": [0, Vehicle.ID_BASE - 1], "vehicle": [Vehicle.ID_BASE, 2147483647],
 		"count": [1, 100], "ap": [0, 99], "stat_value": [0, 1024], "rotation": [0, 3],
 		"radius": [0, maxi(state.grid.width, state.grid.height)], "width": [1, state.grid.width],
-		"height": [1, state.grid.height], "rounds": [1, 100], "page": [1, 1000000],
+		"height": [1, state.grid.height], "event_value": [0, 1000000], "event_interval": [1, 20], "rounds": [1, 100], "page": [1, 1000000],
 		"points": [0, 1000000], "waves": [0, 999], "component_value": [0, 1000000], "event_index": [0, 1000000]}
 	if ranges.has(type):
+		if not typed and ((type == "unit" and lower.begins_with("u")) or (type == "vehicle" and lower.begins_with("v"))):
+			text = text.substr(1)
+			raw = text
 		if not (_integer(raw) if typed else text.is_valid_int()): return {"error": "Expected an integer."}
 		if float(raw) < ranges[type][0] or float(raw) > ranges[type][1]: return {"error": "Value outside allowed bounds."}
 		var value := int(raw)
@@ -293,6 +335,7 @@ static func choices(type: String, state: GameState, caller: int, entities: bool)
 		"item": ids = MCF.ITEM_NAMES.keys(); ids.append("none")
 		"event":
 			for entry: Array in RandomEvents.REGISTRY: ids.append(entry[0])
+		"event_property": ids = ["x", "y", "w", "h", "rounds", "edge", "from", "len", "hx", "hy", "side", "budget", "unit"]
 		"time": ids = MapData.TIMES.duplicate()
 		"stat": ids = UnitInstance.CHEAT_STAT_BOUNDS.keys()
 		"facing": ids = ["n", "e", "s", "w"]
@@ -324,7 +367,7 @@ static func choices(type: String, state: GameState, caller: int, entities: bool)
 			for entity in units:
 				var at: Vector2i = entity.coord if type == "unit" else entity.origin
 				var name: String = entity.stats.display_name if type == "unit" else entity.type_id
-				out.append({"value": str(entity.id), "label": "%d — %s, %s, (%d, %d)" % [entity.id, name, state.roster.name_of(entity.owner), at.x, at.y]})
+				out.append({"value": str(entity.id), "label": "%s%d — %s, %s, (%d, %d)" % ["U" if type == "unit" else "V", entity.id, name, state.roster.name_of(entity.owner), at.x, at.y]})
 			return out
 	ids.sort()
 	var out: Array = []
@@ -334,7 +377,7 @@ static func choices(type: String, state: GameState, caller: int, entities: bool)
 		out.append({"value": value, "label": label})
 	return out
 
-static func complete(line: String, state: GameState, caller: int) -> Array:
+static func complete(line: String, state: GameState, caller: int, resolver: GameActionResolver = null) -> Array:
 	var lex := tokenize(line, true)
 	if lex.has("error"): return []
 	var words: Array = lex.words
@@ -344,7 +387,7 @@ static func complete(line: String, state: GameState, caller: int) -> Array:
 	var out: Array = []
 	var used := {}
 	for entry: Dictionary in CATALOG:
-		if entry.access in ["inspect", "play", "host_play"] and not CheatAccess.permitted(state, caller): continue
+		if entry.access in ["inspect", "play", "host_play", "tool"] and not CheatAccess.permitted(state, caller): continue
 		var tokens := str(entry.pattern).split(" ")
 		if index >= tokens.size(): continue
 		var match_prefix := true
@@ -352,6 +395,17 @@ static func complete(line: String, state: GameState, caller: int) -> Array:
 			if not tokens[i].begins_with("{") and str(words[i]).to_lower() != tokens[i]: match_prefix = false; break
 		if not match_prefix: continue
 		var values := choices(_field(tokens[index]).type, state, caller, true) if tokens[index].begins_with("{") else [{"value": tokens[index], "label": tokens[index]}]
+		if resolver != null and tokens[index].begins_with("{"):
+			var type: String = _field(tokens[index]).type
+			if type == "event_ref":
+				values = []
+				for event: Dictionary in CheatEventModel.entries(resolver):
+					values.append({"value": event.ref, "label": "%s · %s · %s" % [event.ref, RandomEvents.event_name(event.event), event.phase]})
+			elif type == "event_property" and words.size() > 2:
+				var event := CheatEventModel.find(resolver, str(words[2]))
+				if not event.is_empty():
+					values = []
+					for key: String in event.properties: values.append({"value": key, "label": key})
 		for value: Dictionary in values:
 			var insert := str(value.value)
 			if not insert.to_lower().begins_with(prefix) or used.has(insert): continue
@@ -361,5 +415,5 @@ static func complete(line: String, state: GameState, caller: int) -> Array:
 				if str(before[i]).contains(" "): before[i] = '"' + before[i] + '"'
 			if insert.contains(" "): insert = '"' + insert + '"'
 			before.append(insert)
-			out.append({"insert": " ".join(before) + " ", "label": value.label})
+			out.append({"insert": " ".join(before) + " ", "label": value.label + "  —  " + entry.help, "syntax": syntax(entry)})
 	return out

@@ -1063,7 +1063,6 @@ func _draw() -> void:
 
 	# Аннотации игроков поверх поля (item 51).
 	_draw_ruler()
-	_draw_cheat_ids()
 
 ## Corpses resting on a hull must be drawn after both ordinary vehicles and borg pilots.
 func _corpse_above_vehicle(at: Vector2i) -> bool:
@@ -1386,6 +1385,14 @@ func _refresh_objective() -> void:
 		elif md.endless() or md.wave < md.waves_total:
 			next = "round %d" % maxi(md.next_wave_round, state.turns.round_number + 1)
 		rows.append([null, "Next wave", next])
+		if md.live_wave_counts:
+			var details := md.pending_wave if md.pending_wave.has("target") else resolver.wave_size_details(md.wave + 1)
+			rows.append([null, "Surviving defenders", str(details.defenders)])
+			rows.append([null, "Wave multiplier", "× %.2f" % details.multiplier])
+			rows.append([null, "Target enemies", str(details.target)])
+			if md.wave_details.has(str(md.wave)):
+				var last: Dictionary = md.wave_details[str(md.wave)]
+				rows.append([null, "Last landing", "%d / %d enemies" % [last.placed, last.target]])
 		# The swatch wears the waves' own colour (owner, fix-8 #10), as their soldiers do.
 		var wave_col: Color = _side_color(state.turns.wave_owner) if state.turns.wave_owner >= 0 else EVENT_COLORS["army"]
 		rows.append([wave_col, "Enemies left", str(left)])

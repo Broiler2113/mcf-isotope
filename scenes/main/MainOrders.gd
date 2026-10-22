@@ -1513,12 +1513,17 @@ func _handle_shortcut(event: InputEventKey) -> bool:
 		return false
 	if Keybinds.modal_open(): return false
 	if Keybinds.matches(event, "game_cheats"):
+		if is_instance_valid(_cheat_console): _cheat_console.queue_free(); return true
 		if replay == null and not _spectator and state.cheats_enabled and _fp == null:
 			var side: int = net.my_owner if net != null else _viewing_side()
 			if CheatAccess.seated(state, side):
 				_cheat_console = CheatConsole.open(self)
 		return true
 	if Keybinds.matches(event, "game_cancel"):
+		if is_instance_valid(_cheat_console):
+			if not _cheat_console.tool.is_empty(): _cheat_console.cancel_tool()
+			else: _cheat_console.queue_free()
+			return true
 		if _init_overlay != null and _init_overlay.visible: _init_overlay.hide()
 		else: _escape_pressed()
 		return true
@@ -1607,6 +1612,10 @@ func _cheat_result(intent: Intent, result: ActionResult) -> void:
 	if not result.ok: return
 	if intent.op == "ai_personality" and (net == null or net.is_host):
 		_make_side(intent.args.owner)
+	if intent.op in ["ai_pause", "ai_resume", "ai_step"] and (net == null or net.is_host):
+		if intent.op == "ai_step": _cheat_ai_steps[int(intent.args.owner)] = 1
+		else: _cheat_ai_steps.erase(int(intent.args.owner))
+		_kick_if_ai.call_deferred()
 	if intent.op == "ai_speed": _set_ai_speed(GameConfig.ai_speed, false)
 	if intent.op.begins_with("world_") or intent.op.begins_with("vision_"):
 		# Force cached floor, fog and lighting presentation to adopt edited state.
@@ -1614,30 +1623,3 @@ func _cheat_result(intent: Intent, result: ActionResult) -> void:
 		GridCell.reset_vision_log()
 		UnitInstance.vision_epoch += 1
 	queue_redraw()
-
-func _draw_cheat_ids() -> void:
-	if _cheat_ids.is_empty() or replay != null or _spectator: return
-	var side: int = net.my_owner if net != null else _viewing_side()
-	if not CheatAccess.permitted(state, side):
-		_cheat_ids = ""
-		return
-	var font := ThemeDB.fallback_font
-	var entries: Array = []
-	if _cheat_ids in ["units", "all"]:
-		for unit: UnitInstance in state.all_units():
-			if state.grid.in_bounds(unit.coord): entries.append([unit.coord, "U%d" % unit.id])
-	if _cheat_ids in ["vehicles", "all"]:
-		for veh: Vehicle in state.all_vehicles(): entries.append([veh.origin, "V%d" % veh.id])
-	var occupied: Array[Rect2] = []
-	for entry: Array in entries:
-		var at: Vector2 = _cell_origin(entry[0]) + Vector2(2, 13)
-		var width := font.get_string_size(entry[1], HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x + 6
-		var box := Rect2(at - Vector2(2, 12), Vector2(width, 16))
-		if not get_viewport_rect().intersects(box): continue
-		var overlaps := false
-		for other: Rect2 in occupied:
-			if other.intersects(box): overlaps = true; break
-		if overlaps: continue
-		occupied.append(box)
-		draw_rect(box, Color(0.02, 0.03, 0.04, 0.9))
-		draw_string(font, at, entry[1], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1.0, 0.85, 0.4))

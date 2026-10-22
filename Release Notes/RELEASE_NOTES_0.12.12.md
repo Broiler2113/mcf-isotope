@@ -1,7 +1,5 @@
 # Isotope 0.12.12
 
-This is a **source-only release**. Download **Source code (zip)** or **Source code (tar.gz)** below, import `project.godot` in Godot 4.7, and run with the GL Compatibility renderer.
-
 ## Large battles
 - With fog off, a gas cloud or a smoke grenade no longer freezes the game. On a Colossal map every action used to stall for 8–16 seconds; now the first view takes a fraction of a second and a soldier's move a few milliseconds.
 - The first smoke grenade of a fog-off match no longer stalls the screen for over a second.

@@ -49,6 +49,7 @@ static func encode(state: GameState) -> Dictionary:
 			"dead": _encode_eliminated(state.turns.eliminated),
 		},
 		"mines": _encode_mines(state.revealed_mines),
+		"cheat_ai_paused": state.cheat_ai_paused.duplicate(),
 		"cheats_enabled": state.cheats_enabled, "cheat_sequence": state.cheat_sequence,
 		"cheat_vision": state.cheat_vision.duplicate(), "cheat_mines": state.cheat_mines.duplicate(),
 		"next_id": state._next_id,
@@ -224,6 +225,7 @@ static func encode_rules(resolver: GameActionResolver) -> Dictionary:
 
 static func apply_rules(resolver: GameActionResolver, d: Dictionary) -> void:
 	resolver.state.cheats_enabled = d.get("cheats", false) is bool and d.get("cheats", false)
+	if not resolver.state.cheats_enabled: resolver.state.cheat_ai_paused.clear()
 	if d.get("ai_speed") is float or d.get("ai_speed") is int:
 		if GameConfig.AI_SPEEDS.has(float(d.ai_speed)): GameConfig.ai_speed = float(d.ai_speed)
 	resolver.fog_mode = int(d.get("fog", resolver.fog_mode))
@@ -334,6 +336,7 @@ static func restore_into(gs: GameState, d: Dictionary) -> void:
 		dead[int(slot)] = true
 	var snap := {
 		"units": unit_recs, "vehicles": veh_recs,
+		"cheat_ai_paused": d.get("cheat_ai_paused", {}),
 		"cheats_enabled": d.get("cheats_enabled", false), "cheat_sequence": d.get("cheat_sequence", 0),
 		"cheat_vision": d.get("cheat_vision", {}), "cheat_mines": d.get("cheat_mines", {}),
 		"cells": _decode_cells(d.get("cells", []), gs.grid.width * gs.grid.height),

@@ -53,6 +53,7 @@ echo "=== tests/run_net_match.sh ==="
 bash tests/run_net_match.sh || fail=1
 bash tests/run_net_first_person.sh || fail=1
 bash tests/run_net_cheats.sh || fail=1
+bash tests/run_net_ban.sh || fail=1
 bash tests/run_net_reclaim.sh || fail=1
 MCF_RECLAIM_SOLO=1 bash tests/run_net_reclaim.sh || fail=1
 bash tests/run_net_spectators.sh || fail=1

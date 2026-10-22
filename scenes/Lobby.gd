@@ -687,8 +687,8 @@ func _build_mode(parent: VBoxContainer) -> void:
 	_wave_start_spin.max_value = MatchMode.WAVE_START_MAX
 	_wave_start_spin.step = 0.05
 	_wave_start_spin.value = GameConfig.holdout_wave_start
-	_wave_start_spin.suffix = "× army"
-	_wave_start_spin.tooltip_text = "Size of the first wave against the average army of a defending player. Every next wave is 0.1 bigger: from 0.7 the 10th wave is 1.6 armies."
+	_wave_start_spin.suffix = "× soldiers"
+	_wave_start_spin.tooltip_text = "Multiplier of all defenders’ surviving soldiers when a wave is announced. Each wave adds 0.1: wave 12 at the default 0.7 is 1.8 × your team’s soldier count."
 	_mode_rows.append([_row(box, "First wave:", _wave_start_spin), MatchMode.Kind.HOLDOUT])
 	var leaders: Array = []
 	for p: int in AIPersonality.ALL:
@@ -856,7 +856,11 @@ func _build_config(parent: VBoxContainer) -> void:
 	_cheats_check.button_pressed = GameConfig.cheats_enabled
 	_cheats_check.disabled = _is_client
 	_cheats_check.tooltip_text = "Allow the console. Grant gameplay commands separately on human slots; the host can manage permissions during battle."
-	_cheats_check.toggled.connect(func(_on: bool) -> void: _lobby_changed())
+	_cheats_check.toggled.connect(func(on: bool) -> void:
+		if on and not _is_client:
+			var host_slot := _my_slot()
+			if host_slot != null and host_slot.kind == Roster.SlotKind.HUMAN: host_slot.cheats_allowed = true
+		_lobby_changed())
 	box.add_child(_cheats_check)
 
 	_fog_opt = _opt(["Off", "Standard", "Realistic"], GameConfig.fog_mode)

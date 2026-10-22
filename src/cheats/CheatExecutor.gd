@@ -35,6 +35,12 @@ static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 				for unit: UnitInstance in state.all_units():
 					if unit.is_alive() and (a.owner == -1 or unit.owner == a.owner): CheatUnits.refill(unit); count += 1
 				out.cheat_output = "Refilled %d living units." % count
+			"ai_pause", "ai_resume", "ai_step":
+				if not state.roster.is_ai(a.owner): return ActionResult.fail("Choose an AI player, not a human.")
+				if intent.op == "ai_step" and state.active_player() != a.owner: return ActionResult.fail("Step requires that AI player's active turn.")
+				if intent.op == "ai_resume": state.cheat_ai_paused.erase(a.owner)
+				else: state.cheat_ai_paused[a.owner] = true
+				out.cheat_output = "%s: %s." % [state.roster.name_of(a.owner), "resumed" if intent.op == "ai_resume" else "one decision, then paused" if intent.op == "ai_step" else "paused after the current action"]
 			"ai_speed":
 				out.cheat_output = "AI speed: %s → %s." % [GameConfig.ai_speed, a.speed]
 				GameConfig.ai_speed = a.speed

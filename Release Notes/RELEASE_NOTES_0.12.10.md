@@ -1,7 +1,5 @@
 # Isotope 0.12.10
 
-This is a **source-only release**. Download **Source code (zip)** or **Source code (tar.gz)** below, import `project.godot` in Godot 4.7, and run with the GL Compatibility renderer.
-
 ## Sound
 - Every sound effect is now a real recording: firearms, military explosions, cannons, engines, impacts and footsteps, all mixed to one consistent style.
 - Each weapon sounds like itself: rifle, burst, sniper, shotgun, machine gun, the heavy machine gun on DPMGs and borgs, the marksman's laser and the flamethrower.

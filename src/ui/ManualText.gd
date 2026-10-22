@@ -193,7 +193,7 @@ The last team with soldiers standing wins.
 Zones (1, 3 or 5) are placed fairly between the deployment zones and shown to everyone; a cramped map may get fewer, since every zone must be equally far for both sides. The host can instead [b]draw the zones[/b] in the lobby (up to 5). At the end of every round each zone belongs to the team with [b]more soldiers in it[/b] (a tie scores nothing); every zone held scores [b]1 point[/b]. First to the target (12 by default) wins. Wiping out the enemy still wins outright. The map shows who held each zone at the last round end.
 
 [h]Holdout[/h]
-All players defend together against [b]waves[/b] led by an AI or the trained model. A wave lands every %d rounds by default (the lobby's Wave frequency sets it) - [b]or right after the previous wave is wiped out[/b] - and each is bigger than the last. Its landing edge is announced a round ahead. Hold 5, 10 or 15 waves to win; in Endless you play for how long you last.""" % [MatchMode.WAVE_EVERY]],
+All players defend together against [b]waves[/b] led by an AI or the trained model. A wave lands every %d rounds by default (the lobby's Wave frequency sets it) - [b]or right after the previous wave is wiped out[/b] - and each wave adds 0.1 to the size multiplier. The multiplier applies to [b]all surviving defending soldiers[/b] when the wave is announced, excluding drones and corpses. At the default start of 0.7, wave 12 against 161 survivors targets [b]290 enemies[/b] (161 × 1.8, rounded). The objective panel shows the survivor count, multiplier, target and last landing. The announced count stays fixed until landing; if safe space runs out, the combat log reports the shortfall. Choose a total wave count in the lobby, or Endless to play for how long you last.""" % [MatchMode.WAVE_EVERY]],
 
 		["AI Personalities", """Every AI plays at full strength and values its soldiers' lives - it uses cover, avoids open fire and does not throw units away. They differ in [b]manner[/b]:
 
@@ -222,13 +222,24 @@ One cell is one meter; walls and ceilings are 2.3 m high. Cells you have never s
 Enable [b]Enable cheats[/b] in the lobby. The host chooses which human slots may change gameplay; guests start without permission. Loaded games restore their original settings, and the host can adjust cheats and ongoing rules before resuming.
 
 [h]Console[/h]
-Press [b]F2[/b] during a battle. Type [b]help[/b] for categories, use [b]Tab[/b] for command hints and completion, [b]Up/Down[/b] for history, [b]Enter[/b] to submit and [b]Esc[/b] to close. This shortcut can be changed in Settings. The console is unavailable in first person, replays and spectator mode.
+Press [b]F2[/b] during a battle. Type [b]help[/b] for categories, use [b]Tab[/b] for command hints and completion, [b]Up/Down[/b] for history, [b]Enter[/b] to submit and [b]Esc[/b] to stop a placement tool or close. Drag the title bar to move the window; drag its lower corner to resize. Both the console and manual leave the battlefield interactive. This shortcut can be changed in Settings. The console is unavailable in first person, replays and spectator mode.
 
 [h]Permissions and commands[/h]
-[b]players[/b] lists player slots. [b]units[/b], [b]vehicles[/b] and [b]ids on[/b] identify battlefield entities when you have permission. Use a unit or vehicle's exact numeric ID and zero-based cell coordinates. Player targets accept [b]self[/b], [b]#1[/b] through [b]#26[/b], or a quoted player name. The host can use [b]cheats grant #2[/b] and [b]cheats revoke #2[/b], even if their own gameplay permission is off.
+[b]players[/b] lists player slots. [b]units[/b], [b]vehicles[/b] and [b]ids on[/b] identify battlefield entities when you have permission. Units show permanent [b]U[/b] IDs and vehicles [b]V[/b] IDs, including above the battlefield with [b]ids on[/b]. Commands accept the full displayed ID or its numeric part. Coordinates start at zero. [b]units self status[/b] and [b]vehicles self status[/b] show alive/dead counts for your player and the board. Player targets accept [b]self[/b], [b]#1[/b] through [b]#26[/b], or a quoted player name. The host can use [b]cheats grant #2[/b] and [b]cheats revoke #2[/b], even if their own gameplay permission is off.
+
+[h]Click tools and event management[/h]
+[b]inspect[/b] arms a repeatable inspection tool. [b]spawn unit engineer self[/b] and [b]spawn vehicle tank self[/b] keep placing the chosen entity when you click; [b]Esc[/b] stops the tool and leaves the console open. The title bar and corner let you move and resize the console while the battlefield stays usable.
+
+[b]event types[/b] lists available types, [b]event list[/b] lists active effects and warnings, [b]event spawn gas[/b] opens a property editor and placement tool, and [b]event trigger gas[/b] triggers one immediately at its normal random location. [b]event edit gas:1[/b] edits that exact effect, and [b]event remove gas:1[/b] cancels it. Use references printed by event list or click their suggestions. Event fire and old mines are managed as aggregate effects because the simulation stores their affected cells; completed explosions, reinforcements and damage are not undone. Parameters appear only where the underlying event supports them.
+
+[h]AI and players[/h]
+The host can use [b]ai pause #2[/b], [b]ai step #2[/b] and [b]ai resume #2[/b]. A step lets the active AI make exactly one decision, including an end-turn or a rejected action, then pauses it again. Other AI players keep their own settings. [b]kick #2[/b] disconnects a human guest; [b]ban #2[/b] also blocks their saved reconnect identity until this hosted session closes. These commands do not target units or AI slots.
 
 [h]Saved effects[/h]
-Successful gameplay commands are shared, recorded in the replay and cannot be undone. Effects survive saves and rejoining. Disabling the console in a resumed lobby preserves effects already in the save. Commands stop changing gameplay after the match ends."""],
+Successful gameplay commands are shared, recorded in the replay and cannot be undone. Effects survive saves and rejoining. Disabling cheats in a resumed lobby preserves effects already in the save and releases paused AI players so the match can continue. Commands stop changing gameplay after the match ends.
+
+[h]Complete command reference[/h]
+""" + CheatCommands.help_text().replace("[", "[lb]")],
 	]
 
 static func _events_text() -> String:

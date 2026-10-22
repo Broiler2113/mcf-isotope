@@ -107,6 +107,13 @@ var turns_since: int = 0           # rounds since last event check; saved key ke
 ## Объявленные события в очереди: [{"id", "params", "announced": раунд, "land": раунд}].
 ## Их может быть несколько сразу (обязательный режим с коротким интервалом).
 var pending: Array = []
+var next_uid := 1
+
+func allocate_uid() -> int:
+	var id := next_uid
+	next_uid += 1
+	return id
+
 ## Стоящие газовые облака: [{"x", "y", "w", "h", "left": раундов осталось}].
 var clouds: Array = []
 ## Сколько независимых армий уже пришло — по этому числу новая получает свой слот.
@@ -212,7 +219,7 @@ func _pick_legacy(dice: DiceService, allowed: Dictionary = {}) -> String:
 ## A warning lands when its round closes. Round metadata stays in snapshots for
 ## compatibility; pending warnings from older saves land at the next round end.
 func announce(id: String, params: Dictionary, round_number: int) -> Dictionary:
-	var entry := {"id": id, "params": params, "announced": round_number, "land": round_number}
+	var entry := {"uid": allocate_uid(), "id": id, "params": params, "announced": round_number, "land": round_number}
 	pending.append(entry)
 	return entry
 
@@ -223,7 +230,7 @@ func take_landing(_round_number: int) -> Array:
 
 ## Поставить газовое облако (при падении события).
 func add_cloud(x: int, y: int, w: int, h: int, rounds: int) -> Dictionary:
-	var cloud := {"x": x, "y": y, "w": w, "h": h, "left": rounds}
+	var cloud := {"uid": allocate_uid(), "x": x, "y": y, "w": w, "h": h, "left": rounds}
 	clouds.append(cloud)
 	return cloud
 
@@ -233,7 +240,7 @@ func add_cloud(x: int, y: int, w: int, h: int, rounds: int) -> Dictionary:
 var smoke: Array = []
 
 func add_smoke(x: int, y: int, w: int, h: int, rounds: int) -> Dictionary:
-	var cloud := {"x": x, "y": y, "w": w, "h": h, "left": rounds}
+	var cloud := {"uid": allocate_uid(), "x": x, "y": y, "w": w, "h": h, "left": rounds}
 	smoke.append(cloud)
 	return cloud
 
@@ -277,7 +284,7 @@ func cloud_at(c: Vector2i) -> bool:
 func snapshot() -> Dictionary:
 	var pend: Array = []
 	for e: Dictionary in pending:
-		pend.append({"id": e["id"], "params": (e["params"] as Dictionary).duplicate(),
+		pend.append({"uid": e.get("uid", 0), "id": e["id"], "params": (e["params"] as Dictionary).duplicate(),
 				"announced": e["announced"], "land": e["land"]})
 	var cl: Array = []
 	for c: Dictionary in clouds:
@@ -285,13 +292,14 @@ func snapshot() -> Dictionary:
 	var sm: Array = []
 	for c: Dictionary in smoke:
 		sm.append(c.duplicate())
-	return {"enabled": enabled, "mandatory": mandatory, "interval": interval,
+	return {"next_uid": next_uid, "enabled": enabled, "mandatory": mandatory, "interval": interval,
 			"weights": weights.duplicate(), "turns_since": turns_since,
 			"army_difficulty": army_difficulty, "excluded_units": excluded_units.duplicate(),
 			"last_checked_round": last_checked_round,
 			"pending": pend, "clouds": cl, "smoke": sm, "armies": armies, "dust": dust_left}
 
 func restore(d: Dictionary) -> void:
+	next_uid = maxi(1, int(d.get("next_uid", 1)))
 	enabled = d.get("enabled", false)
 	mandatory = d.get("mandatory", false)
 	interval = d.get("interval", 3)
@@ -300,7 +308,7 @@ func restore(d: Dictionary) -> void:
 	last_checked_round = int(d.get("last_checked_round", 0))
 	pending = []
 	for e: Dictionary in d.get("pending", []):
-		pending.append({"id": str(e.get("id", "")),
+		pending.append({"uid": int(e.get("uid", 0)), "id": str(e.get("id", "")),
 				"params": (e.get("params", {}) as Dictionary).duplicate(),
 				"announced": int(e.get("announced", 0)), "land": int(e.get("land", 0))})
 	clouds = []
@@ -309,6 +317,11 @@ func restore(d: Dictionary) -> void:
 	smoke = []
 	for c: Dictionary in d.get("smoke", []):
 		smoke.append((c as Dictionary).duplicate())
+	# Old saves get deterministic stable references without consuming gameplay dice.
+	for entry in pending + clouds + smoke:
+		next_uid = maxi(next_uid, int(entry.get("uid", 0)) + 1)
+	for entry in pending + clouds + smoke:
+		if int(entry.get("uid", 0)) <= 0: entry["uid"] = allocate_uid()
 	armies = int(d.get("armies", 0))
 	excluded_units.assign(d.get("excluded_units", []))
 	army_difficulty = clampi(int(d.get("army_difficulty", 1)), 0, 2)

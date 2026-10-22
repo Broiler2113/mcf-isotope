@@ -64,6 +64,8 @@ jobs:
           done
           godot --headless --path . --script res://tests/ui/run_release_0132.gd
           godot --headless --path . --script res://tests/mapgen/run_release_0132.gd
+          godot --headless --path . --script res://tests/ui/run_console_windows.gd
+          godot --headless --path . --script res://tests/events/run_live_wave_counts.gd
       - name: Install parity dependencies
         run: python -m pip install numpy onnx onnxruntime==1.22.0
       - name: Install CPU PyTorch

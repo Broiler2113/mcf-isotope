@@ -74,6 +74,9 @@ static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 			for component: String in veh.components: veh.components[component] = veh.component_max(component)
 			veh.tower_locked_dir = Vector2i.ZERO
 			return CheatUnits.result("%s components: %s → %s." % [label, old, veh.components])
+		"vehicle_durability":
+			var repair := CheatIntent.new("vehicle_component", {"vehicle": veh.id, "component": MCF.COMP_HULL, "value": args.get("value", "restore")}, intent.issuer)
+			return apply(r, repair)
 		"vehicle_component":
 			if veh.wrecked or not veh.alive(): return ActionResult.fail("A destroyed hull cannot be restored by component repair.")
 			if not veh.has_component(args.component): return ActionResult.fail("This vehicle does not have that component.")

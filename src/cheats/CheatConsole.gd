@@ -15,6 +15,9 @@ var options: Array = []
 var completion_line := ""
 var completion_index := -1
 var _changing := false
+var window: FloatingPanel
+var tool: Dictionary = {}
+var tool_hint: Label
 
 static func open(host: Node) -> CheatConsole:
 	var console := CheatConsole.new()
@@ -34,55 +37,60 @@ func caller() -> int:
 
 func _ready() -> void:
 	layer = 88
-	add_to_group("shortcut_modal")
+	add_to_group("cheat_console")
 	history = main._cheat_history
 	history_index = history.size()
-	var root := Control.new()
-	root.set_anchors_preset(Control.PRESET_FULL_RECT)
-	add_child(root)
-	var shade := ColorRect.new()
-	shade.color = Color(0.01, 0.015, 0.025, 0.65)
-	shade.set_anchors_preset(Control.PRESET_FULL_RECT)
-	root.add_child(shade)
-	var center := CenterContainer.new()
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
-	root.add_child(center)
-	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(760, 520)
-	SteamChrome.apply_panel(panel)
-	center.add_child(panel)
-	var col := VBoxContainer.new()
-	panel.add_child(col)
-	col.add_child(SteamChrome.header_bar("Cheat console"))
+	window = FloatingPanel.new()
+	add_child(window)
+	window.setup("Cheat console", "CheatConsole", Vector2(760, 520), Vector2(520, 300), true)
+	window.close_requested.connect(queue_free)
+	var col := window.body
 	prompt = Label.new()
+	prompt.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	col.add_child(prompt)
 	_refresh_prompt()
 	output = RichTextLabel.new()
 	output.bbcode_enabled = false
 	output.selection_enabled = true
 	output.scroll_following = true
-	output.custom_minimum_size = Vector2(720, 240)
+	output.custom_minimum_size = Vector2(0, 100)
+	output.add_theme_color_override("default_color", Color("d3dce7"))
 	output.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	col.add_child(output)
 	var hint := Label.new()
-	hint.text = "Enter submits · ↑/↓ history · Tab completes · Esc closes"
+	hint.text = "Enter submits · ↑/↓ history · Tab completes · Esc stops tool / closes"
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	col.add_child(hint)
+	tool_hint = Label.new()
+	tool_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	tool_hint.modulate = Color("efd089")
+	col.add_child(tool_hint)
 	input = LineEdit.new()
 	input.placeholder_text = "Type help to browse commands"
 	input.max_length = 1024
+	var input_style := StyleBoxFlat.new()
+	input_style.bg_color = Color("101720")
+	input_style.border_color = Color("46576b")
+	input_style.set_border_width_all(1)
+	input_style.content_margin_left = 8
+	input_style.content_margin_top = 6
+	input_style.content_margin_bottom = 6
+	input.add_theme_stylebox_override("normal", input_style)
+	input.add_theme_color_override("font_color", Color("edf2f8"))
 	col.add_child(input)
 	hints = ItemList.new()
-	hints.custom_minimum_size.y = 120
+	hints.custom_minimum_size.y = 84
+	hints.allow_reselect = true
+	var hint_style := StyleBoxFlat.new()
+	hint_style.bg_color = Color("0d1219")
+	hints.add_theme_stylebox_override("panel", hint_style)
+	hints.add_theme_color_override("font_color", Color("bdcfdf"))
 	hints.focus_mode = Control.FOCUS_NONE
 	col.add_child(hints)
-	hints.item_clicked.connect(func(index: int, _at: Vector2, _button: int): _insert_completion(index))
+	hints.item_clicked.connect(func(index: int, _at: Vector2, _button: int): _insert_completion(index); _text_changed(input.text))
 	input.text_submitted.connect(submit)
 	input.text_changed.connect(_text_changed)
 	input.gui_input.connect(_input_key)
-	var close := Button.new()
-	close.text = "Close"
-	close.pressed.connect(queue_free)
-	col.add_child(close)
 	if CheatAccess.permitted(main.state, caller()): output.add_text(main._cheat_output)
 	write("Cheats enabled. " + CheatQueries.run(main.resolver, {"op": "status", "args": {}}, caller()))
 	write("Use help for commands and bounds. State-changing commands clear undo history.")
@@ -99,6 +107,7 @@ func _permissions_changed() -> void:
 	_refresh_prompt()
 	if not CheatAccess.permitted(main.state, caller()):
 		# Remove any previously inspected private information immediately on revocation.
+		cancel_tool()
 		output.clear()
 		main._cheat_ids = ""
 		main._cheat_output = ""
@@ -114,9 +123,12 @@ func _text_changed(line: String) -> void:
 	if _changing: return
 	completion_line = line
 	completion_index = -1
-	options = CheatCommands.complete(line, main.state, caller())
+	options = [] if line.strip_edges().is_empty() else CheatCommands.complete(line, main.state, caller(), main.resolver)
+	hints.visible = not options.is_empty()
 	hints.clear()
-	for option: Dictionary in options.slice(0, 100): hints.add_item(option.label)
+	for option: Dictionary in options.slice(0, 100):
+		hints.add_item(option.label)
+		hints.set_item_tooltip(hints.item_count - 1, option.get("syntax", "") + "\n" + option.label)
 
 func _insert_completion(index: int) -> void:
 	if index < 0 or index >= options.size(): return
@@ -130,7 +142,8 @@ func _input_key(event: InputEvent) -> void:
 	if not event is InputEventKey or not event.pressed: return
 	if event.keycode == KEY_ESCAPE or Keybinds.matches(event, "game_cheats"):
 		get_viewport().set_input_as_handled()
-		queue_free()
+		if not tool.is_empty(): cancel_tool()
+		else: queue_free()
 	elif event.keycode == KEY_TAB:
 		if not options.is_empty():
 			completion_index = posmod(completion_index + (-1 if event.shift_pressed else 1), options.size())
@@ -152,12 +165,15 @@ func submit(line: String) -> void:
 	history_index = history.size()
 	draft = ""
 	input.clear()
+	_text_changed("")
+	write("────────────────────────────────────────────────")
 	write("> " + line)
 	var parsed := CheatCommands.parse(line, main.state, caller())
 	if parsed.has("error"): write(parsed.error); return
 	var access: String = parsed.access
 	if access == "admin":
-		if main.net != null and not main.net.is_host: write("Only the host can manage cheat permissions."); return
+		if main.net != null and not main.net.is_host: write("Only the host can administer players."); return
+		if parsed.op in ["kick", "ban"]: _moderate(parsed.op, parsed.args.owner); return
 		if parsed.op == "permissions": write(CheatQueries.players(main.state)); return
 		var allowed: bool = parsed.op == "grant"
 		var error: String = main.net.set_cheat_permission(parsed.args.owner, allowed) if main.net != null else CheatAccess.set_permission(main.state, parsed.args.owner, allowed, true)
@@ -174,9 +190,14 @@ func submit(line: String) -> void:
 			main.queue_redraw()
 			write("Battlefield IDs: " + (main._cheat_ids if not main._cheat_ids.is_empty() else "off"))
 			return
+	if access == "tool":
+		if parsed.op in ["event_spawn_tool", "event_edit_tool"]:
+			CheatEventEditor.open(self, parsed.op == "event_spawn_tool", parsed.args.get("event", parsed.args.get("target", "")))
+		else: start_tool(parsed)
+		return
 	if access in ["safe", "inspect"]: write(CheatQueries.run(main.resolver, parsed, caller())); return
 	if main._match_over: write("The match is over; gameplay cheats are unavailable."); return
-	if main._animating or main._net_playing or main._net_request_pending:
+	if (main._animating or main._net_playing or main._net_request_pending) and parsed.op not in ["ai_pause", "ai_resume"]:
 		write("Wait for the current action to finish, then submit again.")
 		return
 	if access == "host_play" and main.net != null and not main.net.is_host:
@@ -192,3 +213,68 @@ func _refresh_prompt() -> void:
 func _exit_tree() -> void:
 	if is_instance_valid(main) and is_instance_valid(output):
 		main._cheat_output = output.get_parsed_text().right(60000)
+
+func start_tool(parsed: Dictionary) -> void:
+	tool = parsed.duplicate(true)
+	input.release_focus()
+	var description := "Inspect cells" if parsed.op == "inspect_tool" else "Place %s for %s" % [parsed.args.get("type", "event"), main.state.roster.name_of(parsed.args.get("owner", caller()))]
+	if parsed.op == "event_spawn_tool": description = "Place " + RandomEvents.event_name(parsed.args.event)
+	if parsed.op == "event_remove_tool": description = "Select event to remove"
+	tool_hint.text = description + " — click the battlefield · Esc stops"
+	write(tool_hint.text)
+
+func cancel_tool() -> void:
+	tool.clear()
+	if is_instance_valid(tool_hint): tool_hint.text = ""
+
+func board_input(event: InputEvent) -> bool:
+	if tool.is_empty(): return false
+	if not CheatAccess.permitted(main.state, caller()): cancel_tool(); return false
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if not event.pressed: return true
+		var at: Vector2i = main._pos_to_cell(event.position)
+		if not main.state.grid.in_bounds(at): return true
+		if tool.op == "inspect_tool":
+			write("────────────────────────────────────────────────")
+			write("Inspect (%d, %d)\n" % [at.x, at.y] + CheatQueries.inspect_at(main.resolver, at, caller()))
+			return true
+		if main._match_over: write("The match is over."); cancel_tool(); return true
+		if main._animating or main._net_playing or main._net_request_pending:
+			write("Wait for the current action to finish."); return true
+		if tool.op == "event_remove_tool":
+			var refs := CheatEventModel.at_cell(main.resolver, at)
+			if refs.is_empty(): write("No active event at this cell.")
+			elif refs.size() == 1: execute_action("event_remove", {"target": refs[0]})
+			else:
+				write("Overlapping events: " + ", ".join(refs) + ". Choose one in the event editor.")
+				CheatEventEditor.open(self, false, refs[0])
+			return true
+		var args: Dictionary = tool.args.duplicate(true)
+		args.x = at.x
+		args.y = at.y
+		execute_action(str(tool.op).trim_suffix("_tool"), args)
+		return true
+	return event is InputEventMouseMotion
+
+func _moderate(op: String, side: int) -> void:
+	if main.net == null or main.session == null: write("Player moderation requires a multiplayer lobby."); return
+	if not main.net.is_host: write("Only the host can administer players."); return
+	var slot: Roster.Slot = main.state.roster.slot(side)
+	if slot == null or slot.kind != Roster.SlotKind.HUMAN or slot.peer_id <= 1 or not main.session.peers.has(slot.peer_id):
+		write("Choose a connected human guest; AI players and the host cannot be kicked or banned."); return
+	var name: String = slot.display_name
+	if op == "ban":
+		var error: String = main.session.ban_player(slot.peer_id)
+		write(error if not error.is_empty() else name + " banned for this hosted session.")
+	else:
+		main.session.kick(slot.peer_id)
+		write(name + " kicked.")
+
+func execute_action(op: String, args: Dictionary) -> bool:
+	var denial := CheatAccess.denial(main.state, caller())
+	if not denial.is_empty(): write(denial); cancel_tool(); return false
+	if main._match_over: write("The match is over."); return false
+	if main._animating or main._net_playing or main._net_request_pending: write("Wait for the current action to finish."); return false
+	write("────────────────────────────────────────────────")
+	main._on_intent_ready(CheatIntent.new(op, args, caller()))
+	return true

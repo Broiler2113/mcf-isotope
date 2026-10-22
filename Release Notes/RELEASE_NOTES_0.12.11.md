@@ -1,7 +1,5 @@
 # Isotope 0.12.11
 
-This is a **source-only release**. Download **Source code (zip)** or **Source code (tar.gz)** below, import `project.godot` in Godot 4.7, and run with the GL Compatibility renderer.
-
 ## Combat
 - You can now shoot through smoke and gas, but the hit roll needs 2 more. Snipers get no automatic hit through a cloud, and a Marksman's laser loses 1 power per clouded cell.
 - A Heavy Infantry soldier standing in its own smoke can now fire at enemies its team can see.

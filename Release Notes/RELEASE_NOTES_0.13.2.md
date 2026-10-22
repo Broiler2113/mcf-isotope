@@ -1,7 +1,5 @@
 # Isotope 0.13.2
 
-This is a **source-only release**. Download **Source code (zip)** or **Source code (tar.gz)**, import `project.godot` in Godot 4.7, and run with the GL Compatibility renderer.
-
 ## First person
 
 - Fixed missing faces on wall fragments and gaps around drone station pads.
