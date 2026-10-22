@@ -172,6 +172,7 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 		shooter.action_state = null
 	# Смерть — РАНЬШЕ невесомости: _apply_zero_g отбрасывает только живых, и переставь
 	# их местами, труп в космосе начал бы улетать.
+	killed = killed and not target.cheat_invulnerable
 	if killed and target.is_drone:
 		# Сбитый дрон падает и рвётся под собой (batch ui-drones): тот же взрыв, что и
 		# подрыв оператором, — по клетке, над которой он висел.
@@ -485,7 +486,7 @@ func _blast(center: Vector2i, res: ActionResult = null, cells: Array[Vector2i] =
 			seated_hit[veh.id] = true
 			killed_names.append_array(_shuttle_passengers_hit(veh, center, in_area, res))
 	for u in state.all_units():
-		if not u.is_on_field():
+		if not u.is_on_field() or u.cheat_invulnerable:
 			continue
 		if not in_area.has(u.coord):
 			continue
@@ -840,7 +841,7 @@ func _resolve_laser(shooter: UnitInstance, aim: Vector2i, aimed: String = "") ->
 						"laser", result)
 			"shield", "unit":
 				var occ: UnitInstance = cell.occupant
-				if destroyed and occ != null and occ.is_on_field():
+				if destroyed and occ != null and occ.is_on_field() and not occ.cheat_invulnerable:
 					_kill_burnt(occ)  # луч прижигает — крови нет (batch ui-drones)
 					killed_names.append(occ.stats.display_name)
 					result.deaths.append(occ.id)
@@ -1128,7 +1129,7 @@ func _resolve_push(intent: PushIntent) -> ActionResult:
 	var step := _step_toward(actor.coord, target.coord)
 	var need: int = target.armor() + MCF.SHIELD_PUSH_DEFENSE_PENALTY
 	var roll := state.dice.roll_d6()
-	var survived := roll >= need
+	var survived := target.cheat_invulnerable or roll >= need
 	var pushed := false
 	var push_from := target.coord
 	var push_to := target.coord
@@ -1332,6 +1333,7 @@ func _resolve_dpmg(intent: DPMGFireIntent) -> ActionResult:
 	if left <= 0:
 		actor.action_state = null
 
+	killed = killed and not target.cheat_invulnerable
 	if killed:
 		_kill(target)
 
@@ -1554,7 +1556,7 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 	var result := ActionResult.new()
 	result.ok = true
 	for u in state.all_units():
-		if not u.is_on_field():
+		if not u.is_on_field() or u.cheat_invulnerable:
 			continue
 		if not in_area.has(u.coord):
 			continue
@@ -1578,6 +1580,7 @@ func _explode_frag(thrower: UnitInstance, center: Vector2i) -> ActionResult:
 				det["rolls"].append(r)
 				if r < need_roll:
 					det["survived"] = false
+		if u.cheat_invulnerable: det["survived"] = true
 		if not det["survived"]:
 			_kill(u, result, center, true)
 			killed_names.append(u.stats.display_name)

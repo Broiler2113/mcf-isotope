@@ -21,6 +21,10 @@ func _pause_available() -> bool:
 func _refresh_ai_speed_row() -> void:
 	if _ai_speed_row == null or state == null or state.roster == null:
 		return
+	var authority := net.is_host if networked and net != null else (NetHandoff.session == null or NetHandoff.is_host)
+	if not authority or replay != null:
+		_ai_speed_row.hide()
+		return
 	_ai_speed_row.visible = state.roster.slots.any(
 			func(sl: Roster.Slot) -> bool: return sl.kind == Roster.SlotKind.AI) \
 			or state.all_units().any(
@@ -359,19 +363,9 @@ func _reposition_hud_grip() -> void:
 			_fps_label.text = "%d FPS" % Engine.get_frames_per_second()
 			_fps_label.reset_size()
 			_fps_label.position = Vector2(vp.x - _hud_width - _hud_grip.size.x - _fps_label.size.x - 8.0, 6.0)
-	# Чат приколот к правому-нижнему углу, но левее правого меню — пока игрок его не
-	# перетащил сам (item 8): после ручного переноса автопозиционирование отключается.
-	if _chat_panel != null and not _chat_moved:
-		_chat_panel.position = Vector2(vp.x - _hud_width - _chat_panel.size.x - 20.0,
-				vp.y - _chat_panel.size.y - 12.0)
-	# Журнал боя — в левом-нижнем углу (item 6), тоже до первого ручного переноса (item 8).
+	# Combat log and chat share one movable window.
 	if _log_panel != null and not _log_moved:
 		_log_panel.position = Vector2(12.0, vp.y - _log_panel.size.y - 12.0)
-	# Не помещаются рядом (крупный интерфейс, item 23, или раздвинутый журнал) — чат встаёт
-	# над журналом, а не поверх него.
-	if _chat_panel != null and _log_panel != null and not _chat_moved \
-			and _chat_panel.get_rect().intersects(_log_panel.get_rect()):
-		_chat_panel.position.y = maxf(0.0, _log_panel.position.y - _chat_panel.size.y - 8.0)
 	# Панель узлов машины (веха «Modular tank system») — СПРАВА от меню действий, на той
 	# же верхней линии (batch 13 #13). Раньше она стояла над журналом боя в левом-нижнем
 	# углу, и длинное меню машины, растущее из левого-верхнего, накрывало её. Меню и
@@ -488,7 +482,7 @@ func _build_ui() -> void:
 	_undo_btn.disabled = true
 	_redo_btn = _compact_button("Redo", _on_redo_pressed)
 	_redo_btn.disabled = true
-	turn_box.add_child(_button_row([_undo_btn, _redo_btn]))
+
 	# Сохранение вернулось в правое меню (batch 13 #3): Ctrl+S остаётся, но кнопка
 	# нужна тем, кто горячих клавиш не знает. В просмотре повтора сохранять нечего.
 	# Пауза боя машин (item 4). Кнопка живёт рядом с управлением ходом и показывается
@@ -507,20 +501,20 @@ func _build_ui() -> void:
 	_before_btn = _compact_button("Before / After", _toggle_before)
 	_before_btn.toggle_mode = true
 	_before_btn.tooltip_text = "Show the battlefield as it was at the start (press again to come back)."
-	match_box.add_child(_button_row([_compact_button("Settings", func() -> void: SettingsWindow.open(self)),
-			_before_btn]))
+	match_box.add_child(_before_btn)
 	# Справочник (0.12) — в любой момент боя, и кнопкой, и клавишей.
 	var manual_btn := _compact_button("Manual", func() -> void: ManualWindow.toggle(self))
 	manual_btn.tooltip_text = "Rules, tactics and unit cards (%s)" % Keybinds.label("game_manual")
 	var bug_btn := _compact_button("Report a Bug", _open_bug_report)
 	bug_btn.tooltip_text = "Send a bug report with a screenshot, the log and this match's replay."
-	match_box.add_child(_button_row([manual_btn, bug_btn]))
+
 
 	var panel_buttons := HBoxContainer.new()
 	panel_buttons.position = Vector2(12, 8)
 	panel_buttons.add_theme_constant_override("separation", 6)
 	_ui_layer.add_child(panel_buttons)
 	var tools_box := _hud_group(vbox, "Tools")
+	tools_box.add_child(_button_row([_undo_btn, _redo_btn]))
 	_multi_btn = CheckBox.new()
 	_multi_btn.text = "Multi-Select"
 	_multi_btn.add_theme_font_size_override("font_size", 12)
@@ -584,6 +578,8 @@ func _build_ui() -> void:
 		_refresh_ai_speed_row()
 	# Рисование и стирание (item 6/51) с размерами кистей.
 	var draw_box := _floating_hud_panel("Drawing", panel_buttons, Vector2(12, 44))
+	panel_buttons.add_child(manual_btn)
+	panel_buttons.add_child(bug_btn)
 	_draw_btn = _compact_button("Draw", _enter_draw)
 	_erase_btn = _compact_button("Erase", _enter_erase)
 	# The ruler is a drawing tool now (owner, fix-8 #5): its marks stay and are shared.
@@ -632,6 +628,7 @@ func _build_ui() -> void:
 	draw_box.add_child(_draw_toggle("Hide others' drawings", func(on: bool) -> void: _hide_others_draw = on))
 	draw_box.add_child(_draw_toggle("Hide my drawings", func(on: bool) -> void: _hide_my_draw = on))
 	draw_box.add_child(_draw_toggle("Hide all drawings", func(on: bool) -> void: _hide_all_draw = on))
+	draw_box.add_child(_draw_toggle("Hide rulers", func(on: bool) -> void: _hide_rulers = on))
 
 	# Убрано из правого меню по item 6 — обновляющие функции этих ссылок уже
 	# null-безопасны. Журнал боя переехал в свою панель (снизу слева), чат остаётся
@@ -664,7 +661,7 @@ func _build_ui() -> void:
 
 	_build_quit_dialog()
 	_build_initiative_overlay()
-	_build_chat_panel()
+
 	if replay != null:
 		_build_replay_bar()
 
@@ -679,86 +676,63 @@ func _hud_group(parent: Container, title: String) -> VBoxContainer:
 ## _log_label, что и раньше, поэтому publish_result/_on_log_line работают без правок.
 func _build_log_panel() -> void:
 	var panel := PanelContainer.new()
-	# Высоту в минимум НЕ пишем (issue 6): свёрнутая панель обязана ужаться до шапки,
-	# а заданный минимум держал бы её прежней. Тело задаёт высоту само, пока открыто.
 	panel.custom_minimum_size = Vector2(360, 0)
 	SteamChrome.apply_panel(panel)
-	# Полупрозрачный, как чат (item 18): self_modulate гасит только фон, не текст.
 	panel.self_modulate = Color(1, 1, 1, PANEL_GLASS_ALPHA)
 	_ui_layer.add_child(panel)
 	_log_panel = panel
-	var frame := VBoxContainer.new()
-	frame.add_theme_constant_override("separation", 0)
-	panel.add_child(frame)
-	# Журнал сворачивается и разворачивается той же стрелкой, что и чат (issue 6).
-	var log_toggle := Button.new()
-	log_toggle.text = "▴"
-	log_toggle.pressed.connect(_toggle_log)
-	_log_toggle_btn = log_toggle
-	var log_tools := HBoxContainer.new()
-	log_tools.add_theme_constant_override("separation", 4)
-	var log_header := SteamChrome.header_bar("Combat Log", log_tools)
-	log_header.self_modulate = Color(1, 1, 1, PANEL_GLASS_ALPHA)  # item 18
-	_make_panel_draggable(panel, log_header, func() -> void: _log_moved = true)  # item 8
-	frame.add_child(log_header)
-	_log_label = RichTextLabel.new()
-	_log_label.custom_minimum_size = Vector2(360, 130)
-	_style_panel_scroll(_log_label)
-	# Размер — ручкой в шапке (item 18): вверх — выше, вправо — шире.
-	log_tools.add_child(_resize_grip(panel, _log_label, 1.0, func() -> void: pass))
-	log_tools.add_child(log_toggle)
-	_log_label.add_theme_font_size_override("normal_font_size", 11)
-	_log_label.scroll_following = true
-	if state != null:
-		_log_label.text = "\n".join(state.log.lines) + ("\n" if not state.log.lines.is_empty() else "")
-	_log_body_wrap = SteamChrome.pad(_log_label, 8, 6)
-	frame.add_child(_log_body_wrap)
-
-## Чат в правом-нижнем углу (item 50): рамка SteamChrome с заголовком-переключателем,
-## прокручиваемым журналом и строкой ввода. Позиция подгоняется в _reposition_hud_grip.
-func _build_chat_panel() -> void:
-	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(280, 0)
-	SteamChrome.apply_panel(panel)
-	# Полупрозрачное окно чата (issue 5). Красим self_modulate, а не modulate: первый
-	# гасит ТОЛЬКО фон самой панели, второй утянул бы за собой и текст с кнопками.
-	panel.self_modulate = Color(1, 1, 1, PANEL_GLASS_ALPHA)
-	_ui_layer.add_child(panel)
 	_chat_panel = panel
 	var frame := VBoxContainer.new()
 	frame.add_theme_constant_override("separation", 0)
 	panel.add_child(frame)
-	var toggle := Button.new()
-	toggle.text = "▾"
-	toggle.pressed.connect(_toggle_chat)
-	_chat_toggle_btn = toggle
-	var chat_tools := HBoxContainer.new()
-	chat_tools.add_theme_constant_override("separation", 4)
-	var chat_header := SteamChrome.header_bar("Chat", chat_tools)
-	chat_header.self_modulate = Color(1, 1, 1, PANEL_GLASS_ALPHA)  # issue 5
-	_make_panel_draggable(panel, chat_header, func() -> void: _chat_moved = true)  # item 8
-	frame.add_child(chat_header)
+	_log_toggle_btn = _compact_button("▴", _toggle_log)
+	_chat_toggle_btn = _log_toggle_btn
+	var controls := HBoxContainer.new()
+	var header := SteamChrome.header_bar("Communications", controls)
+	header.self_modulate = Color(1, 1, 1, PANEL_GLASS_ALPHA)
+	_make_panel_draggable(panel, header, func() -> void:
+		_log_moved = true
+		_chat_moved = true)
+	frame.add_child(header)
+	_comms_tabs = TabContainer.new()
+	_comms_tabs.custom_minimum_size = Vector2(360, 198)
+	_log_body_wrap = _comms_tabs
+	frame.add_child(_comms_tabs)
+	controls.add_child(_resize_grip(panel, _comms_tabs, 1.0, func() -> void:
+		_set_panel_collapsed(panel, _comms_tabs, _log_toggle_btn, false)))
+	controls.add_child(_log_toggle_btn)
+	_log_label = RichTextLabel.new()
+	_log_label.bbcode_enabled = false
+	_log_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_log_label.add_theme_font_size_override("normal_font_size", 11)
+	_log_label.scroll_following = true
+	_style_panel_scroll(_log_label)
+	if state != null:
+		_log_label.text = "\n".join(state.log.lines) + ("\n" if not state.log.lines.is_empty() else "")
+	var log_page := SteamChrome.pad(_log_label, 8, 6)
+	log_page.name = "Combat Log"
+	_comms_tabs.add_child(log_page)
+	_build_chat_panel()
+	_comms_tabs.tab_changed.connect(func(index: int) -> void:
+		if index == 1:
+			_chat_unread = 0
+			_comms_tabs.set_tab_title(1, "Chat")
+		else:
+			_chat_input.release_focus())
+
+func _build_chat_panel() -> void:
 	_chat_body = VBoxContainer.new()
 	_chat_body.add_theme_constant_override("separation", 4)
-	# Сворачиваем ОБЁРТКУ-отступ, а не сам _chat_body (item 15): прятать только внутренний
-	# VBox оставляло пустую padding-рамку, и окно не «уезжало» вниз — сжимается вся обёртка.
-	_chat_body_wrap = SteamChrome.pad(_chat_body, 8, 8)
-	_chat_body_wrap.visible = false
-	frame.add_child(_chat_body_wrap)
+	_chat_body_wrap = SteamChrome.pad(_chat_body, 8, 6)
+	_chat_body_wrap.name = "Chat"
+	_comms_tabs.add_child(_chat_body_wrap)
 	_chat_log = RichTextLabel.new()
 	_chat_log.bbcode_enabled = true
-	_chat_log.custom_minimum_size = Vector2(260, 120)
+	_chat_log.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_chat_log.add_theme_font_size_override("normal_font_size", 11)
 	_chat_log.scroll_following = true
 	_style_panel_scroll(_chat_log)
 	_chat_body.add_child(_chat_log)
-	# Размер — ручкой в шапке (item 18): вверх — выше, влево — шире (чат стоит у правого края).
-	chat_tools.add_child(_resize_grip(panel, _chat_log, -1.0, func() -> void:
-		if _chat_body_wrap != null and not _chat_body_wrap.visible:
-			_set_panel_collapsed(_chat_panel, _chat_body_wrap, _chat_toggle_btn, false)))
-	chat_tools.add_child(toggle)
-	# Разговор из лобби и закупки (item 14) продолжается здесь. Отложенно: «(you)» в
-	# подписи зависит от своей стороны, а её знает только подключённая сеть.
 	_replay_chat_history.call_deferred()
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 4)
@@ -768,10 +742,7 @@ func _build_chat_panel() -> void:
 	_chat_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_chat_input.text_submitted.connect(func(_t: String) -> void: _chat_send())
 	row.add_child(_chat_input)
-	var send := Button.new()
-	send.text = "Send"
-	send.pressed.connect(_chat_send)
-	row.add_child(send)
+	row.add_child(_compact_button("Send", _chat_send))
 
 ## Модальное окно «выход в меню» в общем стиле (#51): затемнитель на весь экран
 ## и центрированная рамка SteamChrome с заголовком, текстом и кнопками.
@@ -995,11 +966,9 @@ func _refresh_initiative_overlay() -> void:
 # --- Чат (item 50) ---
 
 func _toggle_chat() -> void:
-	if _chat_body_wrap == null:
-		return
-	# Стрелка вниз (▾) = свёрнуто, остаётся одна шапка; вверх (▴) = развёрнуто.
-	_set_panel_collapsed(_chat_panel, _chat_body_wrap, _chat_toggle_btn,
-			_chat_body_wrap.visible)
+	if _comms_tabs == null: return
+	_comms_tabs.current_tab = 1
+	_set_panel_collapsed(_log_panel, _comms_tabs, _log_toggle_btn, false)
 
 ## Свернуть/развернуть журнал боя (issue 6) — ровно тем же способом, что и чат.
 func _toggle_log() -> void:
@@ -1052,9 +1021,9 @@ func _chat_append(who: String, text: String) -> void:
 	if _chat_log == null:
 		return
 	_chat_log.append_text("[b]%s:[/b] %s\n" % [ChatBox.escape(who), ChatBox.escape(text)])
-	# Пришло сообщение — чат разворачивается сам, вместе со стрелкой и размером панели.
-	if _chat_body_wrap != null and not _chat_body_wrap.visible:
-		_set_panel_collapsed(_chat_panel, _chat_body_wrap, _chat_toggle_btn, false)
+	if _comms_tabs != null and (_comms_tabs.current_tab != 1 or not _comms_tabs.visible):
+		_chat_unread += 1
+		_comms_tabs.set_tab_title(1, "Chat (%d)" % _chat_unread)
 
 func _chat_send() -> void:
 	if _chat_input == null:

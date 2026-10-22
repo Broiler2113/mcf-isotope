@@ -210,13 +210,25 @@ All players defend together against [b]waves[/b] led by an AI or the trained mod
 The trained model (RLM). Falls back to a Tactician when no model is running.""" % [AIPersonality.BLURBS[0], AIPersonality.BLURBS[1], AIPersonality.BLURBS[2]]],
 
 		["First Person", """[h]Walking the battlefield[/h]
-Press [b]First Person[/b] in the tools, then click any free cell you can see to stand there. Nothing you do in first person changes the battle, and nobody else sees you.
+Press [b]First Person[/b] in the tools, then click any free cell you can see to stand there. Walking does not change the battle. Other players can see your walker where their fog of war permits it.
 
 [h]Controls[/h]
-[b]WASD[/b] to walk, the mouse to look, [b]Space[/b] to jump or climb out of a trench, [b]X[/b] to walk through everything, [b]Esc[/b] to leave. In space you float: thrust with WASD and drift until you push back.
+[b]WASD[/b] to walk, hold [b]Shift[/b] to run, the mouse to look, [b]Space[/b] to jump or climb out of a trench, [b]X[/b] to walk through everything, [b]Esc[/b] to leave. In space you float: thrust with WASD and drift until you push back.
 
 [h]What you see[/h]
 One cell is one meter; walls and ceilings are 2.3 m high. Cells you have never seen are black, and cells out of sight now are dimmed - fog of war still applies. Field of view and mouse sensitivity are in Settings."""],
+
+		["Cheats", """[h]Opt-in sandbox controls[/h]
+Enable [b]Enable cheats[/b] in the lobby. The host chooses which human slots may change gameplay; guests start without permission. Loaded games restore their original settings, and the host can adjust cheats and ongoing rules before resuming.
+
+[h]Console[/h]
+Press [b]F2[/b] during a battle. Type [b]help[/b] for categories, use [b]Tab[/b] for command hints and completion, [b]Up/Down[/b] for history, [b]Enter[/b] to submit and [b]Esc[/b] to close. This shortcut can be changed in Settings. The console is unavailable in first person, replays and spectator mode.
+
+[h]Permissions and commands[/h]
+[b]players[/b] lists player slots. [b]units[/b], [b]vehicles[/b] and [b]ids on[/b] identify battlefield entities when you have permission. Use a unit or vehicle's exact numeric ID and zero-based cell coordinates. Player targets accept [b]self[/b], [b]#1[/b] through [b]#26[/b], or a quoted player name. The host can use [b]cheats grant #2[/b] and [b]cheats revoke #2[/b], even if their own gameplay permission is off.
+
+[h]Saved effects[/h]
+Successful gameplay commands are shared, recorded in the replay and cannot be undone. Effects survive saves and rejoining. Disabling the console in a resumed lobby preserves effects already in the save. Commands stop changing gameplay after the match ends."""],
 	]
 
 static func _events_text() -> String:

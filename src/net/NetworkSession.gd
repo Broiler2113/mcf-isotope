@@ -229,7 +229,7 @@ func _deliver(msg: Dictionary, sender: int) -> void:
 	# боя — чей это бросок. Ключ служебный, с подчёркиванием, чтобы не спутать с полями
 	# самих сообщений.
 	var kind := str(msg.get("k", ""))
-	if _is_host and kind in [NetHandoff.K_SIDE_HUMAN, NetHandoff.K_RECLAIM_OFFER, NetHandoff.K_RECLAIM_STATUS]: return
+	if _is_host and kind in ["cheat_permissions", NetHandoff.K_SIDE_HUMAN, NetHandoff.K_RECLAIM_OFFER, NetHandoff.K_RECLAIM_STATUS]: return
 	if _is_host and kind == NetHandoff.K_IDENTITY:
 		var identity := str(msg.get("token", ""))
 		if peers.has(sender) and not peer_tokens.has(sender) and identity.length() == 48:
@@ -245,7 +245,7 @@ func _deliver(msg: Dictionary, sender: int) -> void:
 			if not spectators.has(my_peer_id()): return
 		elif kind not in ["lobby_req", "resync", "setup_req", "live_req"]:
 			return
-	if not _is_host and kind in ["action", "init", "state", "setup", "load", "lobby", "lobby_map", "go", "side_ai", "match_over", "ai_speed", "slot_ai", "unready", NetHandoff.K_RECLAIM_OFFER, NetHandoff.K_RECLAIM_STATUS, NetHandoff.K_SIDE_HUMAN] and sender != 1:
+	if not _is_host and kind in ["cheat_permissions", "action", "init", "state", "setup", "load", "lobby", "lobby_map", "go", "side_ai", "match_over", "ai_speed", "slot_ai", "unready", NetHandoff.K_RECLAIM_OFFER, NetHandoff.K_RECLAIM_STATUS, NetHandoff.K_SIDE_HUMAN] and sender != 1:
 		return
 	msg["_from"] = sender
 	if _listening:

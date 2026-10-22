@@ -134,7 +134,9 @@ const K_LOBBY_MAP := "lobby_map"
 ##       air no longer holds its turn open), an engineer unwelds an airlock and a borg
 ##       demolishes in batches of three, a harmless drone detonation is undoable, smashed
 ##       furniture throws chunks instead of rubbling the floor, winter maps.
-const PROTOCOL := 25
+##  26 — fix 9: uncapped wave/raider forces, packing a station under the operator,
+##       bodies on space tiles, and host-authorized persistent cheat intents.
+const PROTOCOL := 26
 ## The bug-report server on the relay's VPS (tools/bugs/isotope_bugs.py): the Report a Bug
 ## window and the automatic desync reports both post here.
 const BUG_REPORTS := "http://103.86.177.137:8651/report"
@@ -143,6 +145,7 @@ static func encode_rules() -> Dictionary:
 	var roster := GameConfig.active_roster()
 	return {
 		"pv": PROTOCOL, "spectators": spectators.duplicate(),
+		"cheats": GameConfig.cheats_enabled,
 		"b": GameConfig.budget, "c": GameConfig.civilians_enabled, "f": GameConfig.fog_mode,
 		"cn": GameConfig.civilian_count, "ais": GameConfig.ai_speed,
 		"pm": GameConfig.placement_mode, "lv": GameConfig.live_placement_visible,
@@ -158,13 +161,17 @@ static func encode_rules() -> Dictionary:
 		"ct": GameConfig.capture_target, "hw": GameConfig.holdout_waves, "he": GameConfig.holdout_wave_every, "hs": GameConfig.holdout_wave_start, "wa": GameConfig.holdout_ai,
 		"czd": GameConfig.capture_drawn.duplicate(true),
 		"roster": roster.to_dict(),
+		"mg": GameConfig.map_generation.duplicate(true),
 	}
 
-static func apply_rules(msg: Dictionary) -> void:
-	spectators.clear()
-	for id in msg.get("spectators", []):
-		if int(id) > 1: spectators.append(int(id))
-	if session != null: session.spectators = spectators.duplicate()
+static func apply_rules(msg: Dictionary, restore_session := true) -> void:
+	if restore_session:
+		spectators.clear()
+		for id in msg.get("spectators", []):
+			if int(id) > 1: spectators.append(int(id))
+		if session != null: session.spectators = spectators.duplicate()
+	GameConfig.cheats_enabled = msg.get("cheats", false) is bool and msg.get("cheats", false)
+	GameConfig.map_generation = msg.mg.duplicate(true) if msg.get("mg") is Dictionary else {}
 	GameConfig.budget = int(msg.get("b", GameConfig.DEFAULT_BUDGET))
 	GameConfig.civilians_enabled = bool(msg.get("c", true))
 	GameConfig.civilian_count = int(msg.get("cn", GameConfig.civilian_count))
@@ -198,7 +205,7 @@ static func apply_rules(msg: Dictionary) -> void:
 	GameConfig.holdout_ai = int(msg.get("wa", 1))
 	GameConfig.allowed_units = {}
 	var rd: Variant = msg.get("roster")
-	if rd is Dictionary:
+	if restore_session and rd is Dictionary:
 		GameConfig.roster = Roster.from_dict(rd)
 	GameConfig.free_placement = true
 	GameConfig.p2_is_ai = false

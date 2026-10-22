@@ -428,7 +428,8 @@ func _build(options: Dictionary, dim: Vector2i, need: int, tight: bool) -> void:
 ## то же зерно — та же станция, только под землёй.
 func _window_floors() -> void:
 	for i in w * h:
-		if not MCF.is_glass(m.feature_id[i]): continue
+		var doorway := m.feature_id[i] == MCF.FEATURE_AIRLOCK
+		if not doorway and not MCF.is_glass(m.feature_id[i]): continue
 		var c := Vector2i(i % w, i / w)
 		var chosen := -1
 		for d: Vector2i in [Vector2i.UP, Vector2i.RIGHT, Vector2i.DOWN, Vector2i.LEFT]:
@@ -440,6 +441,10 @@ func _window_floors() -> void:
 				break
 		m.floor_type[i] = m.floor_type[chosen] if chosen >= 0 else MCF.FLOOR_NORMAL
 		m.set_look(i, m.get_look(chosen) if chosen >= 0 else 0)
+		if doorway:
+			# Thresholds are built floors even when a door opens straight onto terrain.
+			if m.floor_type[i] == MCF.FLOOR_GRASS: m.floor_type[i] = MCF.FLOOR_NORMAL
+			if m.get_look(i) in [MCF.Look.DEFAULT, MCF.Look.DIRT]: m.set_look(i, MCF.Look.PLATE)
 
 func reserve_furniture(c: Vector2i, fid: String) -> void:
 	for image_index in _group():

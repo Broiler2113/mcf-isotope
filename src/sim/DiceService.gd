@@ -88,6 +88,19 @@ func take_log() -> Array[int]:
 func current_seed() -> int:
 	return int(_rng.seed)
 
+## A transient transaction guard for validating an event's rolled placement. Never
+## serialized: the normal seed/roll stream remains the disk and network format.
+func checkpoint() -> Dictionary:
+	return {"rng": _rng.state, "own": own_rolls, "scripted": _scripted.duplicate(),
+		"log": _log.duplicate(), "fallback": fallback_rolls}
+
+func restore_checkpoint(mark: Dictionary) -> void:
+	_rng.state = mark.rng
+	own_rolls = mark.own
+	_scripted.assign(mark.scripted)
+	_log.assign(mark.log)
+	fallback_rolls = mark.fallback
+
 ## Вернуть генератор в точку «зерно + столько-то сделанных бросков». Броски
 ## прокручиваются вхолостую тем же вызовом, что и в игре, — иначе поток разошёлся бы.
 func restore_position(seed_value: int, count: int) -> void:

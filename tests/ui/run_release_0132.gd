@@ -1,0 +1,107 @@
+extends "res://tests/SuiteBase.gd"
+
+func run() -> void:
+	var keys: Node = root.get_node("Keybinds")
+	for id: String in ["game_undo", "editor_undo", "game_redo", "editor_redo"]:
+		var codes: Array = keys.default_keys(keys.definition(id), "macOS")
+		ck((codes[0] & KEY_MASK_META) != 0 and (codes[0] & KEY_MASK_CTRL) == 0, "Command modifier: " + id)
+		ck(((codes[0] & KEY_MASK_SHIFT) != 0) == id.ends_with("redo"), "Shift for redo: " + id)
+	GameConfig.civilians_enabled = false
+	GameConfig.random_events_enabled = false
+	GameConfig.cheats_enabled = true
+	GameConfig.fog_mode = MCF.Fog.OFF
+	GameConfig.roster = Roster.default_duel(false)
+	GameConfig.roster.slots[0].cheats_allowed = true
+	GameConfig.roster.slots[1].cheats_allowed = true
+	var map := MapData.blank_arena(24, 20)
+	map.set_spawn(Vector2i(3, 3), "light_infantry", 0)
+	map.set_spawn(Vector2i(21, 17), "light_infantry", 1)
+	MapHandoff.pending = map
+	var main: Node = load("res://scenes/Main.tscn").instantiate()
+	root.add_child(main)
+	main._paused = true
+	for i in 5: await process_frame
+	ck(main._comms_tabs.get_tab_count() == 2, "one communications panel with two tabs")
+	ck(main._comms_tabs.get_tab_title(0) == "Combat Log" and main._comms_tabs.get_tab_title(1) == "Chat", "log and chat tab titles")
+	ck(main._chat_panel == main._log_panel, "chat and combat log share a panel")
+	var undo: Button = main._undo_btn
+	ck(undo.get_parent() == main._redo_btn.get_parent(), "undo and redo share tools row")
+	var console = load("res://src/cheats/CheatConsole.gd").open(main)
+	main._cheat_console = console
+	await process_frame
+	console.write("[b]literal[/b]")
+	ck(console.output.get_parsed_text().contains("[b]literal[/b]"), "console escapes BBCode")
+	console.submit("players")
+	console.submit("units")
+	console.submit("inspect unit 0")
+	console.submit("inspect cell 3 3")
+	console.submit("event list")
+	ck(console.output.get_parsed_text().contains("light_infantry"), "real query output")
+	console.submit("unit ap 0 7")
+	await process_frame
+	ck(main.state.get_unit(0).remaining_ap == 7, "console submits through normal action flow")
+	console.submit("world furniture set 10 10 bed 0")
+	await process_frame
+	console.submit("world furniture set 10 10 bed 1")
+	await process_frame
+	var live := TerrainTiles.new(main.state.grid, main.state.env)
+	for at: Vector2i in main.resolver.furniture_piece(Vector2i(10, 10)):
+		var fid: String = main.state.grid.cell(at).feature_id
+		ck(main._furniture_look.get(at, []) == [fid] + live._live_look(at, fid), "replacement furniture keeps new shape and rotation")
+	main.networked = true
+	main.net = NetGame.new(main.state, main.resolver, false, 1)
+	main._refresh_ai_speed_row()
+	main._refresh_pause_button()
+	ck(not main._ai_speed_row.visible and not main._pause_btn.visible, "guest cannot see host-only speed or local pause")
+	main.networked = false
+	main.net = null
+	console.queue_free()
+	await process_frame
+	console = load("res://src/cheats/CheatConsole.gd").open(main)
+	main._cheat_console = console
+	await process_frame
+	ck(console.history.has("unit ap 0 7") and console.input.text.is_empty(), "reopening retains history with empty input")
+	ck(console.output.get_parsed_text().contains("[b]literal[/b]"), "reopening retains bounded output")
+	console.queue_free()
+	await process_frame
+	main._deselect()
+	main._escape_pressed()
+	await process_frame
+	var settings: Node = null
+	for child in main.get_children():
+		if child.get_script() != null and child.get_script().resource_path == "res://src/ui/SettingsWindow.gd": settings = child
+	ck(settings != null, "idle Escape opens settings")
+	if settings != null: settings.queue_free()
+	main.free()
+	await process_frame
+	await lobby()
+
+func lobby() -> void:
+	GameConfig.map_generation = {"style": MapGen.Style.FIELD, "size": 0, "winter": true, "seed": 132}
+	GameConfig.map_path = ""
+	GameConfig.fog_mode = MCF.Fog.STANDARD
+	GameConfig.cheats_enabled = true
+	GameConfig.ai_speed = 4
+	GameConfig.placement_mode = 1
+	GameConfig.budget = 321
+	var original := LobbySettings.capture()
+	var roster := Roster.default_duel(false)
+	roster.slots[0].cheats_allowed = true
+	var rules := {"fog": MCF.Fog.STANDARD, "cheats": true, "ai_speed": 4, "friendly_fire": true}
+	var scene: Node = load("res://scenes/Lobby.tscn").instantiate()
+	root.add_child(scene)
+	for i in 3: await process_frame
+	scene.roster = roster
+	scene._save = {"lobby": original, "rules": rules}
+	scene._load_saved_lobby(scene._save)
+	ck(scene._cheats_check.button_pressed and scene._fog_opt.selected == MCF.Fog.STANDARD, "loaded original ongoing settings")
+	ck(GameConfig.map_generation.winter and GameConfig.ai_speed == 4 and GameConfig.budget == 321, "loaded original generation, speed and budget")
+	ck(not scene._cheats_check.disabled and not scene._fog_opt.disabled, "resumed cheats and fog remain editable")
+	ck(scene._mode_opt.disabled and scene._map_opt.disabled, "existing map and mode cannot be regenerated by resume")
+	scene._cheats_check.set_pressed_no_signal(false)
+	scene._fog_opt.select(MCF.Fog.OFF)
+	scene._commit_config()
+	scene._store_spawn_settings()
+	ck(not scene._save.rules.cheats and scene._save.rules.fog == MCF.Fog.OFF, "edited rules stored in resumed save")
+	scene.free()
+	await process_frame

@@ -64,6 +64,8 @@ var _ruler_hover := Vector2i(-1, -1)
 ## Rulers are drawings (owner, fix-8 #5): {author, scope, a, b} — kept, shared by the
 ## same scope as strokes, taken back by Undo drawing; any number of them.
 var _rulers: Array = []
+var _hide_rulers := false
+var _lobby_settings: Dictionary = {}
 ## Each author's drawing in order (strokes, erases, rulers) — what "Share with
 ## everyone" sends again so earlier drawings reach everyone too (fix-8 #6).
 var _draw_log: Dictionary = {}
@@ -333,8 +335,9 @@ var _fps_label: Label
 var _fp: FirstPerson = null
 var _fp_layer: CanvasLayer = null
 var _fp_roofs := PackedByteArray()
+## Cosmetic peer avatars, never part of the simulation, save or replay state.
+var _fp_walkers: Dictionary = {}
 ## Картинки крови на стенах по виду, размеру и углу (fix-7 #16).
-var _wall_blood_tex: Dictionary = {}
 ## Движимое/масштабируемое окно HUD (заголовок = ручка перетаскивания, угол = грип).
 var _hud_window: PanelContainer
 var _hud_grip: Control
@@ -463,6 +466,8 @@ const TURN_ACTIVE_COLOR := Color(0.35, 0.92, 0.42)
 const PANEL_GLASS_ALPHA := 0.5
 
 ## Чат, докнутый в правый-нижний угол (item 50): тело сворачивается кнопкой заголовка.
+var _comms_tabs: TabContainer
+var _chat_unread := 0
 var _chat_panel: PanelContainer
 var _chat_body: VBoxContainer
 ## Обёртка-отступ вокруг тела чата — сворачивается целиком (item 15).
@@ -971,6 +976,7 @@ var _number_page := 0
 @abstract func _open_give_units() -> void
 @abstract func _enter_fp_pick() -> void
 @abstract func _start_first_person(at: Vector2i) -> void
+@abstract func _send_fp_presence(active: bool) -> void
 @abstract func _act_btn(vb: VBoxContainer, text: String, cb: Callable,
 		enabled: bool, reason := "No action points left", key := "") -> void
 @abstract func _scroll_menu(panel: PanelContainer, title: String = "Actions", back := Callable()) -> VBoxContainer
@@ -995,3 +1001,12 @@ var _number_page := 0
 @abstract func _sync_camera_layers() -> void
 @abstract func _register_menu_action(button: Button, id: String) -> void
 @abstract func _number_picker() -> void
+
+var _cheat_console: CheatConsole = null
+var _cheat_ids := ""
+
+@abstract func _draw_cheat_ids() -> void
+@abstract func _set_ai_speed(v: float, broadcast: bool) -> void
+
+var _cheat_history: Array[String] = []
+var _cheat_output := ""

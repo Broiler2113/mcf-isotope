@@ -158,16 +158,11 @@ func _no_flash_in_space() -> void:
 ## side the spray flies (any side for a blast); kept in saves, resyncs and undo.
 func _wall_blood() -> void:
 	var fx := FxDecals.new()
-	var walls := {Vector2i(5, 4): true, Vector2i(5, 6): true}
-	fx.solid_at = func(c: Vector2i) -> bool: return walls.has(c)
+	fx.solid_at = func(_c: Vector2i) -> bool: return true
 	fx.apply([{"fx": "blood", "at": Vector2i(5, 5), "from": Vector2i(5, 9)}])
-	ck(fx.wall_blood.size() == 1 and fx.wall_blood[0]["cell"] == Vector2i(5, 4) and fx.wall_blood[0]["face"] == Vector2i(0, 1),
-			"a shot from below splashes only the wall above, on its lower face (%s)" % str(fx.wall_blood))
-	var snap := fx.capture_state()
 	fx.apply([{"fx": "blood", "at": Vector2i(5, 5), "from": Vector2i(5, 5), "blast": true}])
-	ck(fx.wall_blood.size() == 3, "a blast splashes every wall beside the body")
+	ck(fx.wall_blood.is_empty(), "bullets and blasts leave no wall spatters")
+	ck(not fx.gore.is_empty(), "floor blood is retained")
 	var back := FxDecals.new()
-	back.from_dict(fx.to_dict())
-	ck(back.wall_blood.size() == 3 and back.wall_blood[2]["face"] == fx.wall_blood[2]["face"], "wall blood survives a save")
-	fx.restore_state(snap)
-	ck(fx.wall_blood.size() == 1, "undo takes the blast's wall blood back")
+	back.from_dict({"wall_blood": [[5, 4, 0, 1, 0.0, 1.0]]})
+	ck(back.wall_blood.size() == 1, "old wall-blood records remain readable for save compatibility")

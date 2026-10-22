@@ -15,6 +15,9 @@ static var ai_style: int = 0
 ## map_path == "" → демо-ростер по умолчанию (см. Main._build_state).
 const DEFAULT_BUDGET := 300
 static var map_path: String = ""
+## Original random-map controls, retained as save metadata without regenerating a battle.
+static var cheats_enabled: bool = false
+static var map_generation: Dictionary = {}
 ## Сколько мирных жителей на карте самое большее (item 11): ползунок лобби. 0 — без мирных.
 ## Готовая карта прореживается до этого числа, случайная столько и строит (если есть место).
 ## Случайная карта берёт число с ползунка генератора (до 1000), готовая — всех своих

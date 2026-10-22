@@ -5,6 +5,7 @@ extends "res://scenes/main/MainReplay.gd"
 ## the AI or back, desync reports.
 
 func _on_net_applied(intent: Intent, result: ActionResult) -> void:
+	_cheat_result(intent, result)
 	_net_request_pending = false
 	_menu.hide()
 	_picker.hide()
@@ -117,6 +118,7 @@ func _on_peer_ready(is_host: bool) -> void:
 	net.outgoing.connect(func(msg: Dictionary) -> void: session.send(msg))
 	net.action_applied.connect(_on_net_applied)
 	net.denied.connect(func(reason: String) -> void:
+		if is_instance_valid(_cheat_console): _cheat_console.write(reason)
 		_net_request_pending = false
 		_after_action()
 		state.log.add("[denied] " + reason)
@@ -169,6 +171,9 @@ func _on_initiative_synced() -> void:
 
 func _on_net_message(msg: Dictionary) -> void:
 	var kind := str(msg.get("k", ""))
+	if kind == "fp_pose":
+		_receive_fp_presence(msg)
+		return
 	if kind in [NetHandoff.K_RECLAIM, NetHandoff.K_RECLAIM_ACCEPT]:
 		_on_reclaim_message(msg)
 		return
@@ -253,6 +258,7 @@ func _report_desync(role: String) -> void:
 		DesyncReport.send(get_tree(), _desync_report)
 
 func _on_peer_left(id: int) -> void:
+	_fp_walkers.erase(id)
 	if state == null or state.roster == null:
 		return
 	var side := state.roster.side_of_peer(id)
@@ -267,6 +273,37 @@ func _on_peer_left(id: int) -> void:
 	state.log.add("— %s left the match; a Tactician AI takes over their army —" % state.roster.name_of(side))
 	_refresh_status()
 	_kick_if_ai()
+
+## Walking avatars travel on the cosmetic channel, independently of turns.
+func _send_fp_presence(active: bool) -> void:
+	if not networked or session == null or _spectator:
+		return
+	var msg := {"k": "fp_pose", "active": active}
+	if active and _fp != null:
+		msg["p"] = [_fp.pos.x, _fp.pos.y, _fp.pos.z, _fp.yaw]
+	session.send(msg)
+
+func _receive_fp_presence(msg: Dictionary) -> void:
+	if session == null or state == null:
+		return
+	var peer := int(msg.get("_from", -1))
+	var side := state.roster.side_of_peer(peer)
+	if side < 0 or peer == session.my_peer_id():
+		return
+	if not bool(msg.get("active", false)):
+		_fp_walkers.erase(peer)
+		return
+	var raw: Variant = msg.get("p")
+	if not raw is Array or raw.size() != 4:
+		return
+	for v: Variant in raw:
+		if not (v is float or v is int) or not is_finite(float(v)):
+			return
+	var p := Vector3(float(raw[0]), float(raw[1]), float(raw[2]))
+	if p.x < 0 or p.z < 0 or p.x >= state.grid.width or p.z >= state.grid.height \
+			or p.y < -FirstPersonBoard.TRENCH or p.y > FirstPerson.SPACE_CEIL:
+		return
+	_fp_walkers[peer] = {"side": side, "pos": p, "yaw": float(raw[3]), "time": Time.get_ticks_msec()}
 
 func _on_reclaim_message(msg: Dictionary) -> void:
 	if session == null or not session.is_host(): return

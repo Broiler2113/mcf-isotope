@@ -17,6 +17,24 @@ extends RefCounted
 ## Запись тем же значением версию не двигает — из тех же соображений, что и в GridCell.
 static var vision_epoch: int = 0
 
+const CHEAT_STAT_BOUNDS := {"speed": [0, 999], "armor": [1, 12], "range": [0, 1024], "rof": [0, 100], "sight": [0, 1024]}
+var cheat_invulnerable := false
+var cheat_stats: Dictionary = {}
+
+## Saved overrides are data only; unknown fields and malformed numbers are ignored.
+static func clean_cheat_stats(raw: Variant) -> Dictionary:
+	var out := {}
+	if raw is Dictionary:
+		for key: String in CHEAT_STAT_BOUNDS:
+			var value: Variant = raw.get(key)
+			if (value is int or value is float) and is_finite(float(value)):
+				out[key] = int(clampf(float(value), CHEAT_STAT_BOUNDS[key][0], CHEAT_STAT_BOUNDS[key][1]))
+	return out
+
+func sight() -> int:
+	if cheat_stats.has("sight"): return int(cheat_stats.sight)
+	return stats.sight_range if stats.sight_range > 0 else MCF.SIGHT_UNLIMITED
+
 var id: int = -1
 var stats: UnitStats
 var coord: Vector2i:
@@ -124,16 +142,20 @@ func attack_penalty() -> int:
 	return 0 if borg_id != -1 else stats.target_defense_penalty
 
 func speed() -> int:
+	if cheat_stats.has("speed"): return int(cheat_stats["speed"])
 	return MCF.BORG_SPEED if borg_id != -1 else stats.speed
 
 func armor() -> int:
+	if cheat_stats.has("armor"): return int(cheat_stats["armor"])
 	return maxi(1, stats.armor_threshold - MCF.BORG_ARMOR_BONUS) if borg_id != -1 \
 			else stats.armor_threshold
 
 func fire_range() -> float:
+	if cheat_stats.has("range"): return float(cheat_stats["range"])
 	return MCF.BORG_RANGE if borg_id != -1 else stats.fire_range
 
 func rate_of_fire() -> int:
+	if cheat_stats.has("rof"): return int(cheat_stats["rof"])
 	return MCF.BORG_ROF if borg_id != -1 else stats.rate_of_fire
 
 func is_alive() -> bool:

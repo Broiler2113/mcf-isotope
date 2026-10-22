@@ -230,7 +230,7 @@ func _shuttle_passengers_hit(veh: Vehicle, center: Vector2i, in_area: Dictionary
 	var killed: Array = []
 	for uid in veh.occupants.duplicate():
 		var u := state.get_unit(uid)
-		if u == null or not u.is_alive():
+		if u == null or not u.is_alive() or u.cheat_invulnerable:
 			continue
 		if u.coord == center:
 			_kill(u, res, center, true)
@@ -1420,7 +1420,7 @@ func _tank_crew_hit(veh: Vehicle, res: ActionResult) -> void:
 	# на единицу ниже собственной брони, но не мягче 1+.
 	var need: int = maxi(1, crew.armor() - MCF.TANK_CREW_DEFENSE_BONUS)
 	var roll := state.dice.roll_d6()
-	var survived := roll >= need
+	var survived := crew.cheat_invulnerable or roll >= need
 	res.dice_events.append({
 		"kind": "check", "actor": "%s (crew)" % crew.stats.display_name,
 		"roll": roll, "need": need, "ok": survived,
@@ -1438,6 +1438,10 @@ func _tank_crew_hit(veh: Vehicle, res: ActionResult) -> void:
 
 ## Уничтожение машины: экипаж гибнет, бросок d6 на взрыв; танк остаётся обломком.
 func _destroy_vehicle(veh: Vehicle, res: ActionResult) -> void:
+	var protected: Array[UnitInstance] = []
+	for uid: int in veh.occupants:
+		var unit := state.get_unit(uid)
+		if unit != null and unit.is_on_field() and unit.cheat_invulnerable: protected.append(unit)
 	var spec := VehicleDB.get_vehicle(veh.type_id)
 	var name: String = spec.get("name", veh.type_id)
 	var dtable: Dictionary = VehicleDB.DESTRUCTION.get(veh.type_id, {})
@@ -1516,6 +1520,21 @@ func _destroy_vehicle(veh: Vehicle, res: ActionResult) -> void:
 	# Любая машина оставляет остов (batch 17, item 7): укрытие и блок линии огня —
 	# взорвалась она или нет. Раньше челнок исчезал всегда, борг — после взрыва.
 	veh.wrecked = true
+	for unit: UnitInstance in protected:
+		unit.borg_id = -1
+		unit.aboard_vehicle_id = -1
+		if not state.grid.in_bounds(unit.coord):
+			var placed := false
+			for at: Vector2i in CheatUnits.ring_cells(veh.origin, state.grid):
+				if CheatUnits.cell_error(state, at).is_empty():
+					state.grid.place(unit, at)
+					placed = true
+					break
+			if not placed:
+				# Retain a real crew link, never an inaccessible floating entity.
+				veh.occupants.append(unit.id)
+				unit.aboard_vehicle_id = veh.id
+		res.log("%s survives the destruction through invulnerability." % unit.stats.display_name)
 	if veh.is_borg():
 		state.grid.set_vehicle_footprint(veh.id, veh.footprint())
 

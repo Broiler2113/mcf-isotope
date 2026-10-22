@@ -33,6 +33,7 @@ func _turn_key() -> Vector2i:
 ## уже брошены и результат известен, откат превратился бы в переброс. Лазер марксманна
 ## кубиков не бросает, но тоже необратим — он уже снёс стену и убил всех на линии.
 func _is_irreversible(intent: Intent, result: ActionResult) -> bool:
+	if intent is CheatIntent: return true
 	# A drone that went off and killed nobody can be taken back (owner, fix-8 #9): the
 	# drone, the walls and the wounds all roll back with the undo.
 	if intent is DroneDetonateIntent:
@@ -101,6 +102,7 @@ func resolve(intent: Intent) -> ActionResult:
 			if u.is_alive(): alive_before[u.id] = true
 	var result := _dispatch(intent)
 	if top and result.ok:
+		result.deaths = result.deaths.filter(func(id: int): return state.get_unit(id) != null and not state.get_unit(id).is_alive())
 		_credit_kills(intent, au, av, result)
 	if top:
 		result.actor_owner = actor_owner
@@ -283,6 +285,7 @@ func legal_intents(side: int, actors: Dictionary = {}) -> Array:
 
 ## Маршрутизация намерения к его резолверу — без побочных эффектов (см. _dispatch).
 func _route(intent: Intent) -> ActionResult:
+	if intent is CheatIntent: return CheatExecutor.apply(self, intent)
 	if intent is EndTurnIntent:
 		return _resolve_end_turn(intent)
 	elif intent is MoveIntent:

@@ -58,8 +58,22 @@ var env: String = "town"
 ## могут двое, и у каждого свой срок. Ни в какие пакеты не едет — это знание стороны
 ## о поле, а не само поле.
 var revealed_mines: Dictionary = {}
+var cheats_enabled := false
+var cheat_vision: Dictionary = {}
+var cheat_mines: Dictionary = {}
+var cheat_sequence := 0
+
+static func clean_cheat_sides(raw: Variant) -> Dictionary:
+	var out := {}
+	if raw is Dictionary:
+		for key in raw:
+			var text := str(key)
+			if text.is_valid_int() and MCF.is_player(int(text)) and raw[key] is bool and raw[key]:
+				out[int(text)] = true
+	return out
 
 func _init(width: int, height: int, dice_seed: int = -1) -> void:
+	cheats_enabled = GameConfig.cheats_enabled
 	grid = Grid.new(width, height)
 	dice = DiceService.new(dice_seed)
 	turns = TurnManager.new()
@@ -164,6 +178,14 @@ func digest_hash() -> int:
 		var at := u.coord
 		parts.append(str(u.id, ":", at.x, ",", at.y, ":", u.owner, ":", u.status, ":",
 				u.remaining_ap, ":", u.move_credit, ":", u.aboard_vehicle_id, ":", u.borg_id))
+		if u.cheat_invulnerable or not u.cheat_stats.is_empty():
+			parts.append(str("uc", u.id, ":", u.cheat_invulnerable, ":", UnitInstance.clean_cheat_stats(u.cheat_stats)))
+	if cheat_sequence != 0 or not cheat_vision.is_empty() or not cheat_mines.is_empty():
+		var vision_sides := cheat_vision.keys()
+		var mine_sides := cheat_mines.keys()
+		vision_sides.sort()
+		mine_sides.sort()
+		parts.append(str("c", cheat_sequence, ":", vision_sides, ":", mine_sides))
 	var vids: Array = vehicles.keys()
 	vids.sort()
 	for id: int in vids:
@@ -198,7 +220,7 @@ func snapshot(with_cells: bool = true) -> Dictionary:
 			"ldf_wall_used": u.ldf_wall_used, "move_credit": u.move_credit,
 			"mine_credits": u.mine_credits,
 			"carried_corpses": u.carried_corpses, "dragging": u.dragging, "burnt": u.burnt,
-			"action_state": ast,
+			"action_state": ast, "cheat_stats": u.cheat_stats.duplicate(), "cheat_invulnerable": u.cheat_invulnerable,
 		})
 	var vs: Array = []
 	for v: Vehicle in all_vehicles():
@@ -233,6 +255,8 @@ func snapshot(with_cells: bool = true) -> Dictionary:
 		"turn_eliminated": turns.eliminated.duplicate(),
 		"roster": roster.snapshot(),
 		"revealed_mines": _snapshot_revealed_mines(),
+		"cheat_vision": cheat_vision.duplicate(), "cheat_mines": cheat_mines.duplicate(),
+		"cheat_sequence": cheat_sequence, "cheats_enabled": cheats_enabled,
 		"next_id": _next_id, "next_vehicle_id": _next_vehicle_id,
 		"combat_started": combat_started,
 		"kills": kills.duplicate(true),
@@ -241,6 +265,10 @@ func snapshot(with_cells: bool = true) -> Dictionary:
 
 ## Откатить состояние к ранее взятому снимку (см. snapshot()).
 func restore(snap: Dictionary) -> void:
+	cheats_enabled = snap.get("cheats_enabled", false) is bool and snap.get("cheats_enabled", false)
+	cheat_vision = clean_cheat_sides(snap.get("cheat_vision", {}))
+	cheat_mines = clean_cheat_sides(snap.get("cheat_mines", {}))
+	cheat_sequence = clampi(int(snap.get("cheat_sequence", 0)), 0, 2147483647) if CheatCommands._integer(snap.get("cheat_sequence", 0)) else 0
 	kills = (snap.get("kills", {}) as Dictionary).duplicate(true)
 	deaths = (snap.get("deaths", {}) as Dictionary).duplicate(true)
 	units.clear()
@@ -269,6 +297,8 @@ func restore(snap: Dictionary) -> void:
 		u.mine_credits = rec.get("mine_credits", 0)
 		u.carried_corpses = rec["carried_corpses"]
 		u.burnt = bool(rec.get("burnt", false))
+		u.cheat_invulnerable = rec.get("cheat_invulnerable", false) is bool and rec.get("cheat_invulnerable", false)
+		u.cheat_stats = UnitInstance.clean_cheat_stats(rec.get("cheat_stats", {}))
 		u.dragging = rec["dragging"]
 		var ast: Dictionary = rec["action_state"]
 		if ast.is_empty():

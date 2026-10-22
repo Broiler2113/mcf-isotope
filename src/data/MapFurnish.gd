@@ -1259,6 +1259,7 @@ func _outdoor_clutter() -> void:
 			if g._sym > 0 and not (g._in_f(p.position) and g._in_f(p.end - Vector2i.ONE)):
 				continue
 			for required: String in ["bench", "park_tree", "vending_machine"]:
+				if style == "asteroid" and is_greenery(required): continue
 				var present := false
 				for c in g._rect_cells(p):
 					if Furniture.base_of(m.get_feature(c)) == required: present = true
@@ -1272,6 +1273,7 @@ func _outdoor_clutter() -> void:
 				var c := Vector2i(rng.randi_range(p.position.x, p.end.x - 1),
 						rng.randi_range(p.position.y, p.end.y - 1))
 				var pick: String = ["bench", "park_tree", "bush", "bush_flowering", "vending_machine", "park_table", "trash_bin"][rng.randi_range(0, 6)]
+				if style == "asteroid" and is_greenery(pick): continue
 				_outdoor_put(c, pick, false)
 	for y in h:
 		for x in w:

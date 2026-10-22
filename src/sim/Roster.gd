@@ -90,6 +90,8 @@ class Slot extends RefCounted:
 	## Ограничение состава ЛИЧНО для этого игрока (item 2): id юнита -> разрешён ли.
 	## Пустой словарь = разрешено всё. Заполняет лобби, применяет экран расстановки.
 	var allowed_units: Dictionary = {}
+	## A grant belongs to the slot, including while disconnected under AI control.
+	var cheats_allowed: bool = false
 
 	## Разрешён ли юнит этому слоту к покупке (item 2). Пусто = можно всё.
 	func unit_allowed(id: String) -> bool:
@@ -349,7 +351,7 @@ func to_dict() -> Dictionary:
 			"id": s.id, "kind": s.kind, "name": s.display_name,
 			"color": [s.color.r, s.color.g, s.color.b], "team": s.team,
 			"ai": s.ai_difficulty, "st": s.ai_style, "role": s.role, "budget": s.budget, "peer": s.peer_id,
-			"dead": s.eliminated,
+			"dead": s.eliminated, "cheats_allowed": s.cheats_allowed,
 			# Зона и личный список юнитов раньше по сети не ехали (batch 12 #8/#9): гость
 			# расставлялся не там и покупал не то, что разрешил хост.
 			"zone": s.deploy_zone, "allow": s.allowed_units.duplicate(),
@@ -377,6 +379,7 @@ static func from_dict(d: Dictionary) -> Roster:
 		s.budget = int(rec.get("budget", 0))
 		s.peer_id = int(rec.get("peer", -1))
 		s.eliminated = bool(rec.get("dead", false))
+		s.cheats_allowed = rec.get("cheats_allowed", false) is bool and rec.get("cheats_allowed", false)
 		s.deploy_zone = int(rec.get("zone", -1))
 		var allow: Variant = rec.get("allow", {})
 		if allow is Dictionary:

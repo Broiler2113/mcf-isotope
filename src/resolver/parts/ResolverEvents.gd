@@ -283,7 +283,7 @@ func _destroy_cell(c: Vector2i, res: ActionResult) -> Array[String]:
 	if cell == null:
 		return names
 	var occ := cell.occupant
-	if occ != null and occ.is_on_field() and not _blast_shield(occ):
+	if occ != null and occ.is_on_field() and not occ.cheat_invulnerable and not _blast_shield(occ):
 		_kill(occ, res, c, true)
 		names.append(occ.stats.display_name)
 		if res != null:
@@ -333,6 +333,7 @@ func _gas_tick(res: ActionResult) -> void:
 
 
 func _gas_survival(u: UnitInstance, res: ActionResult) -> void:
+	if u.cheat_invulnerable: return
 	if not u.is_on_field() or u.aboard_vehicle_id != -1 or u.borg_id != -1:
 		return
 	var roll := state.dice.roll_d6()
@@ -418,13 +419,11 @@ func _land_army(p: Dictionary, res: ActionResult) -> void:
 		return
 	var spent := 0
 	var placed := 0
-	var guard := 0
-	while guard < ARMY_UNIT_CAP and placed < spots.size():
-		guard += 1
+	while placed < spots.size():
 		var sid: String = roster[_rand_wide(roster.size())]
 		var stats: UnitStats = _army_stats(sid)
 		if stats == null:
-			continue
+			break
 		if budget > 0 and spent + stats.cost > budget and placed > 0:
 			break
 		if budget <= 0 and placed >= ARMY_FALLBACK_UNITS:
@@ -525,8 +524,6 @@ func _army_band_cells(edge: int, from: int, seg: int) -> Array[Vector2i]:
 	# назад». Отсюда и «армии не приходят, особенно на космических картах».
 	var depth := gh if edge % 2 == 0 else gw
 	for d in depth:
-		if out.size() >= ARMY_UNIT_CAP:
-			break
 		for k in seg:
 			var c: Vector2i
 			match edge:
@@ -617,7 +614,7 @@ func _hallway_spawn_cells(entry: Vector2i) -> Array[Vector2i]:
 	var seen := {entry: true}
 	var queue: Array[Vector2i] = [entry]
 	var i := 0
-	while i < queue.size() and out.size() < ARMY_UNIT_CAP:
+	while i < queue.size():
 		var c := queue[i]
 		i += 1
 		var cell := state.grid.cell(c)
@@ -1093,7 +1090,7 @@ func _land_emp(p: Dictionary, res: ActionResult) -> void:
 	ids.sort()
 	for id: int in ids:
 		var u := state.get_unit(id)
-		if u != null and u.is_alive() and u.is_drone and rect.has_point(u.coord):
+		if u != null and u.is_alive() and not u.cheat_invulnerable and u.is_drone and rect.has_point(u.coord):
 			_kill(u, res, u.coord)
 			res.deaths.append(u.id)
 			fried.append("a drone")
@@ -1141,7 +1138,7 @@ func _land_collapse(p: Dictionary, res: ActionResult) -> void:
 	ids.sort()
 	for id: int in ids:
 		var u := state.get_unit(id)
-		if u == null or not u.is_on_field() or u.is_drone or u.aboard_vehicle_id != -1 \
+		if u == null or not u.is_on_field() or u.cheat_invulnerable or u.is_drone or u.aboard_vehicle_id != -1 \
 				or not rect.has_point(u.coord):
 			continue
 		var roll := state.dice.roll_d6()
@@ -1229,13 +1226,11 @@ func _spawn_budget(spots: Array[Vector2i], budget: int, owner: int,
 	if pool.is_empty(): return 0
 	var spent := 0
 	var placed := 0
-	var guard := 0
-	while guard < ARMY_UNIT_CAP and placed < spots.size():
-		guard += 1
+	while placed < spots.size():
 		var sid: String = pool[_rand_wide(pool.size())]
 		var stats: UnitStats = _army_stats(sid)
 		if stats == null:
-			continue
+			break
 		if spent + stats.cost > budget and placed > 0:
 			break
 		var fighter := state.spawn_unit(stats, spots[placed], owner)

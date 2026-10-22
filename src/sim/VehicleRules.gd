@@ -49,6 +49,8 @@ static func cell_entry(state: GameState, cell: Vector2i, self_id: int) -> Dictio
 		return blocked.call("blocked by another vehicle")
 
 	var c := state.grid.cell(cell)
+	if c.occupant != null and c.occupant.is_on_field() and c.occupant.cheat_invulnerable and c.occupant.aboard_vehicle_id != self_id:
+		return blocked.call("an invulnerable unit blocks the vehicle")
 
 	# ДОТ (армированный бетон) — непроходим для техники.
 	if c.feature_id == MCF.FEATURE_DOT:

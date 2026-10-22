@@ -529,7 +529,7 @@ func _resolve_place_mine(intent: PlaceMineIntent) -> ActionResult:
 		_mine_flash(res, intent.target)
 		_kill(under, res, intent.target)
 		res.deaths.append(under.id)
-		res.log("The mine goes off under %s's feet — killed instantly!" % under.stats.display_name)
+		res.log("The mine goes off under %s's feet — %s!" % [under.stats.display_name, "invulnerability protects them" if under.cheat_invulnerable else "killed instantly"])
 	return res
 
 ## Сапёр обезвреживает подсвеченную его стороной чужую мину на соседней клетке (item 13).
@@ -806,6 +806,7 @@ func mine_visible_to(owner: int, coord: Vector2i) -> bool:
 	var cell := state.grid.cell(coord)
 	if cell == null or (cell.feature_id != MCF.FEATURE_MINE and cell.feature_id != MCF.FEATURE_AV_MINE):
 		return false
+	if state.cheat_mines.has(owner): return true
 	if state.roster.are_allies(owner, cell.feature_owner):
 		return true
 	var seen: Dictionary = state.revealed_mines.get(owner, {})

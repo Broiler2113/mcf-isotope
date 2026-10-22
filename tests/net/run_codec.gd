@@ -21,6 +21,7 @@ var fails: PackedStringArray = []
 func _samples() -> Array:
 	var cells: Array[Vector2i] = [Vector2i(3, 4), Vector2i(4, 4), Vector2i(5, 4)]
 	return [
+		CheatIntent.new("unit_spawn", {"type": "rifleman", "owner": 2, "x": 17, "y": 13}, 2),
 		EndTurnIntent.new(),
 		EndTurnIntent.new(3),
 		UndoIntent.new(2),

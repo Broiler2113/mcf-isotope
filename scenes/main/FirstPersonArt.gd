@@ -269,6 +269,7 @@ const GROUND_PX := 256     # one ground tile: 8 m at 32 px a metre, seamless
 
 enum {G_GRASS, G_EARTH, G_SNOW, G_COUNT}
 static var _grounds: Texture2DArray
+static var _ground_sources: Array[Image] = []
 
 ## Value noise wrapping every `period` pixels.
 static func _vnp(x: float, y: float, cell: int, period: int, s := 0) -> float:
@@ -289,11 +290,15 @@ static func _vnp(x: float, y: float, cell: int, period: int, s := 0) -> float:
 static func grounds() -> Texture2DArray:
 	if _grounds != null:
 		return _grounds
-	var imgs := _read_layers("ground", G_COUNT, GROUND_PX)
-	if imgs.is_empty(): imgs = ground_images()
 	_grounds = Texture2DArray.new()
-	_grounds.create_from_images(imgs)
+	_grounds.create_from_images(_ground_source_images())
 	return _grounds
+
+static func _ground_source_images() -> Array[Image]:
+	if _ground_sources.is_empty():
+		_ground_sources = _read_layers("ground", G_COUNT, GROUND_PX)
+		if _ground_sources.is_empty(): _ground_sources = ground_images()
+	return _ground_sources
 
 static func ground_images() -> Array[Image]:
 	var imgs: Array[Image] = []
@@ -411,6 +416,8 @@ static func wall_kind(grid: Grid, at: Vector2i, env: String) -> String:
 	return "brick"
 
 static func accent_of(grid: Grid, at: Vector2i) -> Color:
+	if grid.cell(at).feature_id in [MCF.FEATURE_LDF, MCF.FEATURE_DOT, MCF.FEATURE_DOT_OPEN]:
+		return Color(0, 0, 0, 0)
 	var i := at.y * grid.width + at.x
 	var a := int(grid.wall_accent[i]) if i < grid.wall_accent.size() else 0
 	return MCF.ACCENT_COLORS[a] if a > 0 and a < MCF.ACCENT_COLORS.size() else Color(0, 0, 0, 0)
@@ -418,9 +425,26 @@ static func accent_of(grid: Grid, at: Vector2i) -> Color:
 ## The side texture of a wall kind, 1 m wide (it repeats along the wall) and 2.3 m tall,
 ## with its relief lit from the upper left and grime gathering toward the floor.
 static func wall_texture(kind: String, accent: Color) -> ImageTexture:
-	var key := "wall|%s|%s" % [kind, accent.to_html()]
+	if kind in ["ldf", "dot", "dot_open"]:
+		accent = Color(0, 0, 0, 0)
+	var source: Texture2D = Sprites.texture_of("ldf") if kind == "ldf" else null
+	var key := "wall|%s|%s|%d" % [kind, accent.to_html(), source.get_instance_id() if source != null else 0]
 	if _cache.has(key):
 		return _cache[key]
+	if kind == "trench":
+		# The same seamless earth and metre scale on the floor and excavated faces.
+		var earth := ImageTexture.create_from_image(_ground_source_images()[G_EARTH])
+		_cache[key] = earth
+		return earth
+	if kind == "ldf":
+		# Use the board's supplied (or user-replaced) art, without another procedural skin.
+		if source != null:
+			var sheet := source.get_image()
+			var tile := sheet.get_region(Rect2i(0, 0, sheet.get_height(), sheet.get_height()))
+			tile.generate_mipmaps()
+			var same := ImageTexture.create_from_image(tile)
+			_cache[key] = same
+			return same
 	var cols: Array[Color] = []
 	cols.resize(PX * H)
 	var hgt := PackedFloat32Array()

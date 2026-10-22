@@ -5,6 +5,7 @@ extends "res://tests/SuiteBase.gd"
 func run() -> void:
 	GameConfig.civilians_enabled = false
 	GameConfig.random_events_enabled = false
+	_station_underfoot()
 	_station_rules()
 	_shuttle_station()
 
@@ -272,3 +273,23 @@ func _scout_drone() -> void:
 	ck(not scout.is_alive() and friend.is_alive(), "a scout shot down over a soldier hurts nobody")
 	var round_trip := IntentCodec.decode(IntentCodec.encode(SpawnDroneIntent.new(op.id, Vector2i(6, 5), true)))
 	ck(round_trip.scout, "the drone kind travels over the network")
+
+func _station_underfoot() -> void:
+	var m := MapData.blank_arena(18, 12)
+	m.set_spawn(Vector2i(5, 5), "drone_operator", 0)
+	m.set_spawn(Vector2i(16, 10), "light_infantry", 1)
+	var state := m.build_state(3)
+	state.turns.round_order.assign([0, 1])
+	state.turns.active_index = 0
+	var r := GameActionResolver.new(state)
+	var op := state.grid.cell(Vector2i(5, 5)).occupant
+	var at := Vector2i(6, 5)
+	_deploy(r, op, at)
+	state.grid.move_occupant(op.coord, at)
+	op.remaining_ap = 2
+	ck(r.station_pickup_cells(op).has(at), "standing on a deployed station still offers packing")
+	var drone := r.active_drone_of(op)
+	ck(drone != null and r.operator_controls(drone), "an operator on the pad controls its drone")
+	var res := r.resolve(PickUpStationIntent.new(op.id, at))
+	ck(res.ok and op.held_item_id == MCF.ITEM_DRONE_STATION, "the operator packs the station beneath their feet")
+	ck(state.grid.cell(at).occupant == op, "packing leaves the operator on the cell")
