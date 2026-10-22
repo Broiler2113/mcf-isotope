@@ -561,6 +561,7 @@ Run the compatibility check before a migration (it also runs automatically at st
 python rl/train.py preflight rl/config/tactical.yaml
 python rl/test_rl.py
 python rl/test_training_fixes.py
+python rl/test_action_fastpath.py
 python rl/test_army_events.py
 ```
 
@@ -586,6 +587,10 @@ crossed step interval; saving at an exact multiple is unnecessary.
 `speed/*` records collection, update, evaluation, encoding, inference, socket wait,
 receive/JSON, legal-enumeration and observation costs. Wait time overlaps work in other
 environment processes; these values are diagnostics, not additive CPU timings.
+Frozen opponents and evaluation skip observation encoding and policy inference when
+there is exactly one legal action. `speed/forced_opponent_actions` counts these
+shortcuts during collection. Learner actions still compute their value estimates
+for PPO, including forced moves.
 `actions/<map>/<kind>_{offered,chosen,accepted}` distinguishes candidate availability,
 policy selection and resolver acceptance. Accepted attacks need not hit: use the
 existing per-map hit-rate and tactical counters for combat effectiveness.
