@@ -53,9 +53,14 @@ func run() -> void:
 	var tools_button := find_text(main, "Tools") as Button
 	var draw_button := find_text(main, "Drawing") as Button
 	ck(tools_button == null and draw_button != null and draw_button.global_position.x < 200, "Drawing is the only top-left tool button")
-	for text in ["Multi-Select", "Ruler", "Heightmap", "Camera"]:
-		var control := find_text(main, text) as Control
-		ck(control != null and control.is_visible_in_tree() and main._hud_window.is_ancestor_of(control), text + " is back in the right sidebar")
+	var camera := find_text(main, "Camera") as Control
+	ck(camera != null and camera.is_visible_in_tree() and main._hud_window.is_ancestor_of(camera), "Camera is in the right sidebar")
+	# Owner, fix-8 #5: multi-select and the heightmap are hotkeys only; the ruler is a drawing tool.
+	for text in ["Multi-Select", "Heightmap"]:
+		var hidden := find_text(main, text) as Control
+		ck(hidden == null or not hidden.is_visible_in_tree(), text + " is no longer shown in the right sidebar")
+	var ruler := find_text(main, "Ruler") as Control
+	ck(ruler != null and not main._hud_window.is_ancestor_of(ruler), "the Ruler sits with the drawing tools")
 	ck(not find_text(main, "Undo drawing").is_visible_in_tree(), "Drawing starts closed")
 	draw_button.pressed.emit()
 	await frames()
@@ -65,6 +70,12 @@ func run() -> void:
 		ck(not main._tiles._chunks.is_empty(), "time-of-day changes leave the rendered terrain textures alive")
 	var settings = load("res://src/ui/SettingsWindow.gd").open(main)
 	await frames()
+	var ui: Node = root.get_node("Ui")
+	var accent_before: String = ui.accent_name
+	ui.set_accent("blue" if accent_before != "blue" else "green")
+	ck((main._hud_grip.get_child(0) as ColorRect).color == ui.accent_color(),
+			"changing the accent immediately recolors the existing sidebar stripe")
+	ui.set_accent(accent_before)
 	var label := find_text(settings, "Settings")
 	var header := label.get_parent().get_parent().get_parent() as Control
 	var panel := header.get_parent().get_parent() as Control
@@ -113,6 +124,11 @@ func run() -> void:
 	await frames()
 	ck(is_equal_approx(placement._panel.size.x, 264.0) and placement._panel.position.y == 0.0 and is_equal_approx(placement._panel.size.y, 800.0), "deployment uses the same sidebar dimensions and edge alignment as battle")
 	await capture("deployment-panel")
+	placement.map = MapData.blank_arena(500, 200)
+	placement._zoom_at(Vector2(400, 300), 0.0001)
+	ck(500 * placement.CELL * placement.zoom < root.size.x - placement._panel.size.x
+			and 200 * placement.CELL * placement.zoom < root.size.y,
+			"purchase zoom can fit a giant wide map beside its sidebar")
 	placement.free()
 	await frames()
 	var editor = load("res://scenes/MapEditor.tscn").instantiate()

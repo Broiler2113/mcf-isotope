@@ -231,11 +231,13 @@ func _next_playable_from(start: int, all_units: Array) -> int:
 ## Есть ли у стороны хоть один живой юнит — по этому и пропускается слот.
 ## Явно выбитая сторона не играет, даже если на доске остался её юнит: выбытием
 ## распоряжается тот, кто его объявил (например, сдача или потеря командира).
+## A drone in the air is not a soldier (owner, fix-8 #4): a group with none left is
+## skipped, as its count in the initiative list (which never counts drones) says.
 func _has_living(all_units: Array, side: int) -> bool:
 	if eliminated.get(slot_owner(side), false):
 		return false
 	for u in all_units:
-		if u.is_alive() and slot_has(side, u):
+		if u.is_alive() and not u.is_drone and slot_has(side, u):
 			return true
 	return false
 

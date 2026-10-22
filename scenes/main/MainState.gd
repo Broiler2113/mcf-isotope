@@ -61,8 +61,13 @@ enum Mode {NONE, MENU, MOVE, SHOOT, GRAB, ITEM, PUSH, DRONE_FLY, BUILD, BUILD_WA
 ## число, по которому считается попадание, была бы хуже, чем никакой.
 var _ruler_a := Vector2i(-1, -1)
 var _ruler_hover := Vector2i(-1, -1)
-## Закреплённые отрезки линейки — их может быть сколько угодно: [начало, конец].
+## Rulers are drawings (owner, fix-8 #5): {author, scope, a, b} — kept, shared by the
+## same scope as strokes, taken back by Undo drawing; any number of them.
 var _rulers: Array = []
+## Each author's drawing in order (strokes, erases, rulers) — what "Share with
+## everyone" sends again so earlier drawings reach everyone too (fix-8 #6).
+var _draw_log: Dictionary = {}
+var _pending_draw_entry: Variant = null
 var _ruler_btn: Button = null
 ## Отряд, выделенный до группового приказа: _after_action выделяет его снова.
 var _regroup_ids: Array[int] = []
@@ -248,6 +253,7 @@ var _group_plan_cache: Array = []
 ## Рамка работает только при нажатой кнопке «Multi-Select» (#21) — иначе ЛКМ
 ## всегда остаётся обычным кликом по клетке.
 var _multi_btn: CheckBox
+var _snowfall: Snowfall = null
 var _box_dragging: bool = false
 var _box_start_cell := Vector2i.ZERO
 var _box_additive := false

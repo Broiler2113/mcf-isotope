@@ -484,7 +484,8 @@ func _boarding_on_screen() -> void:
 	ck(draw_src.find("_draw_seat_grid(font)") > draw_src.find("for veh: Vehicle in state.all_vehicles():"),
 			"the seat grid is drawn over the hulls")
 	# fix-7 #10: bodies inside a shuttle lie on top of its hull.
-	ck(draw_src.find("for b: Array in shuttle_bodies:") > draw_src.find("for veh: Vehicle in state.all_vehicles():"),
+	ck(main._corpse_above_vehicle(sh.seat_cell(Vehicle.DRIVER_SEAT))
+			and draw_src.find("for b: Array in vehicle_bodies:") > draw_src.find("for veh: Vehicle in state.all_vehicles():"),
 			"bodies inside a shuttle are drawn over the hull")
 	main.queue_redraw()
 	await process_frame

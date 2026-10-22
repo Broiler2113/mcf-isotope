@@ -87,6 +87,8 @@ var theme: Theme
 var accent_name := "green"
 var ui_scale := 1.0
 signal board_settings_changed
+## The accent colour changed: what was painted with it at build time repaints (fix-8 #18).
+signal accent_changed
 var dynamic_lighting := false
 ## How dark unlit ground is with dynamic lighting on: 0 = daylight, 1 = pitch black.
 var light_darkness := 0.75
@@ -103,6 +105,8 @@ var show_fps := false
 ## First-person view (fix-7 #9): field of view in degrees and mouse sensitivity.
 var fp_fov := 80.0
 var fp_sensitivity := 0.25
+## Falling snow on winter maps (owner, fix-8 #3), on the battle screen and in first person.
+var snowfall := true
 var _pal: Dictionary = PALETTES["green"]
 
 var _accent := ACCENT
@@ -148,6 +152,7 @@ func _load_settings() -> void:
 	show_fps = bool(cf.get_value("display", "show_fps", false))
 	fp_fov = clampf(float(cf.get_value("display", "fp_fov", 80.0)), 50.0, 120.0)
 	fp_sensitivity = clampf(float(cf.get_value("display", "fp_sensitivity", 0.25)), 0.05, 1.0)
+	snowfall = bool(cf.get_value("display", "snowfall", true))
 
 func _save_settings() -> void:
 	var cf := ConfigFile.new()
@@ -164,6 +169,7 @@ func _save_settings() -> void:
 	cf.set_value("display", "show_fps", show_fps)
 	cf.set_value("display", "fp_fov", fp_fov)
 	cf.set_value("display", "fp_sensitivity", fp_sensitivity)
+	cf.set_value("display", "snowfall", snowfall)
 	cf.save(SETTINGS_PATH)
 
 func set_grid(visible: bool, opacity: float) -> void:
@@ -179,6 +185,10 @@ func set_autoroll_dice(on: bool) -> void:
 func set_fp_view(fov: float, sensitivity: float) -> void:
 	fp_fov = clampf(fov, 50.0, 120.0)
 	fp_sensitivity = clampf(sensitivity, 0.05, 1.0)
+	_save_settings()
+
+func set_snowfall(on: bool) -> void:
+	snowfall = on
 	_save_settings()
 
 func set_show_fps(on: bool) -> void:
@@ -215,6 +225,7 @@ func set_accent(name: String) -> void:
 	_set_palette(name)
 	_save_settings()
 	rebuild_theme()
+	accent_changed.emit()
 
 ## Сменить размер интерфейса (item 17).
 func set_ui_scale(s: float) -> void:

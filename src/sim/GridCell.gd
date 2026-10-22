@@ -380,7 +380,7 @@ var dirt_level: int = 0:
 		walk_version += 1
 		log_look_change(coord.x, coord.y)
 ## Шлюз заварен инженером (#99): створки больше не разъезжаются от подошедшего юнита,
-## клетка навсегда остаётся стеной. Снимается только сносом самого шлюза.
+## клетка остаётся стеной, пока инженер не срежет сварку или шлюз не будет снесён.
 var airlock_welded: bool = false:
 	set(v):
 		if airlock_welded == v:
@@ -390,6 +390,9 @@ var airlock_welded: bool = false:
 		airlock_welded = v
 		walk_version += 1
 		log_look_change(coord.x, coord.y)
+		# Closed doors are not revisited until their surroundings change. Cutting a weld
+		# must invalidate that cache even when every nearby soldier has stood still.
+		log_vision_change(coord.x, coord.y)
 
 ## Мелкие предметы клетки (0.12.1, SmallItems), чисто вид: бит k — k-й предмет этой клетки
 ## (Grid.items_in) сбит взрывом или упал со сдвинутой мебели; бит OPENED — шкаф на клетке

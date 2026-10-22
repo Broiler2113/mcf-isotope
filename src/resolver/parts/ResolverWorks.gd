@@ -136,6 +136,20 @@ func build_batch(actor: UnitInstance, feature_id: String) -> int:
 		return MCF.BORG_BUILD_BATCH
 	return 0
 
+## Welded airlocks next to an engineer, which he can cut open again (owner, fix-8 #15).
+## Kept apart from weldable_cells: the learned AI's choices stay as they were.
+func unweldable_cells(unit: UnitInstance) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	if unit == null or not unit.is_alive() \
+			or unit.stats.special_ability_id != MCF.ABILITY_ENGINEER \
+			or weld_cost_for(unit) > unit.remaining_ap:
+		return out
+	for c: Vector2i in state.grid.neighbors(unit.coord):
+		var cell := state.grid.cell(c)
+		if cell != null and cell.feature_id == MCF.FEATURE_AIRLOCK and cell.airlock_welded:
+			out.append(c)
+	return out
+
 ## Клетки соседних шлюзов, которые инженер может заварить (#99) — для подсветки в UI.
 func weldable_cells(unit: UnitInstance) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
@@ -155,7 +169,8 @@ func weldable_cells(unit: UnitInstance) -> Array[Vector2i]:
 ## не тратя стройку на новую стену.
 func _resolve_weld_airlock(intent: WeldAirlockIntent) -> ActionResult:
 	var actor := state.get_unit(intent.actor_id)
-	var err := _validate_actor(actor)
+	var credit := int(actor.build_credits.get(WELD_CREDIT, 0)) if actor != null and actor.borg_id != -1 else 0
+	var err := _validate_actor(actor, credit)
 	if err != "":
 		return ActionResult.fail(err)
 	if actor.stats.special_ability_id != MCF.ABILITY_ENGINEER:
@@ -165,10 +180,11 @@ func _resolve_weld_airlock(intent: WeldAirlockIntent) -> ActionResult:
 	var cell := state.grid.cell(intent.to)
 	if cell.feature_id != MCF.FEATURE_AIRLOCK:
 		return ActionResult.fail("There is no airlock there")
-	if cell.airlock_welded:
-		return ActionResult.fail("This airlock is already welded shut")
+	# A welded airlock is cut open again by the same work (owner, fix-8 #15): same AP,
+	# and an engineer in a borg does three of them for one AP, welding or cutting.
+	var unweld := cell.airlock_welded
 	# Створки не сойдутся на теле (batch 13 #4) — сначала вытащить труп из проёма.
-	if corpses_at(intent.to) > 0:
+	if not unweld and corpses_at(intent.to) > 0:
 		return ActionResult.fail("A body is jamming the doors — drag it out first")
 	var cost := weld_cost_for(actor)
 	if actor.remaining_ap < cost:
@@ -182,6 +198,11 @@ func _resolve_weld_airlock(intent: WeldAirlockIntent) -> ActionResult:
 		left = left - 1 if cost == 0 else MCF.BORG_WELD_BATCH - 1
 		actor.build_credits[WELD_CREDIT] = left
 		credit_note = " (batch, %d left)" % left
+	if unweld:
+		cell.airlock_welded = false
+		update_airlocks()   # it opens again for whoever stands by
+		return ActionResult.success(["%s cuts the airlock at (%d, %d) open [AP: %d]%s" % [
+			actor.stats.display_name, intent.to.x, intent.to.y, actor.remaining_ap, credit_note]])
 	cell.airlock_welded = true
 	# Створки закрываются немедленно, даже если рядом кто-то стоит.
 	cell.cover_height = MCF.WALL_HEIGHT
@@ -297,14 +318,40 @@ func _resolve_break(intent: BreakIntent) -> ActionResult:
 	var cell := state.grid.cell(intent.target)
 	if not _is_breakable_fortification(cell):
 		return ActionResult.fail("Nothing to demolish")
-	if actor.remaining_ap < MCF.BREAK_COST:
-		return ActionResult.fail("Need %d AP" % MCF.BREAK_COST)
-	actor.remaining_ap -= MCF.BREAK_COST
+	var cost := break_cost_for(actor, cell)
+	if actor.remaining_ap < cost:
+		return ActionResult.fail("Need %d AP" % cost)
+	actor.remaining_ap -= cost
+	var note := ""
+	if _borg_batch_break(actor, cell):
+		# A borg tears down what it can build three at a time (owner, fix-8 #14): walls,
+		# glass, airlocks; the batch burns out at the end of the round like its building.
+		var left: int = int(actor.build_credits.get(BREAK_CREDIT, 0))
+		left = left - 1 if cost == 0 else MCF.BORG_BUILD_BATCH - 1
+		actor.build_credits[BREAK_CREDIT] = left
+		note = " (batch, %d left)" % left
 	var was: String = MCF.feature_name(cell.feature_id, "wall")
 	cell.clear_feature()
 	cell.corpse_count = 0
-	return ActionResult.success(["%s demolishes: %s at (%d, %d) [AP: %d]" % [
-		actor.stats.display_name, was, intent.target.x, intent.target.y, actor.remaining_ap]])
+	return ActionResult.success(["%s demolishes: %s at (%d, %d) [AP: %d]%s" % [
+		actor.stats.display_name, was, intent.target.x, intent.target.y, actor.remaining_ap, note]])
+
+const BREAK_CREDIT := "break"
+
+## Does a borg tear this down in batches: what it builds in batches, walls of any kind
+## of plain wall included.
+func _borg_batch_break(actor: UnitInstance, cell: GridCell) -> bool:
+	if actor.borg_id == -1:
+		return false
+	var fid := cell.feature_id
+	return fid in [MCF.FEATURE_WALL, MCF.FEATURE_GLASS, MCF.FEATURE_ARMOR_GLASS, MCF.FEATURE_AIRLOCK] \
+			or (fid == "" and cell.is_wall())
+
+## AP the next demolition costs this soldier: in a borg, nothing while its batch lasts.
+func break_cost_for(actor: UnitInstance, cell: GridCell) -> int:
+	if _borg_batch_break(actor, cell) and int(actor.build_credits.get(BREAK_CREDIT, 0)) > 0:
+		return 0
+	return MCF.BREAK_COST
 
 # --- Копка окопа (§3.7) ---
 # Юнит роет соседнюю клетку в окоп (укрытие выс. 1); вынутая земля — 2 кучи по 0.5 м.

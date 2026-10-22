@@ -87,6 +87,9 @@ func _process(delta: float) -> void:
 	_refresh_clocks()
 	if _sky != null:
 		_sky.camera = pan   # параллакс за доской едет вслед за панорамой (0.9.3)
+	if _snowfall != null:
+		_snowfall.pan = pan
+		_snowfall.get_parent().visible = _fp == null
 	_fit_ground()
 	# Полёт осколков и гильз (#21): пока что-то летит — перерисовываем, потом слой
 	# засыпает и кадры снова ничего не стоят. До проверки фокуса (fix-7): пока игрок
@@ -236,8 +239,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	# Линейка (item 11). Первый клик ставит начало, дальше расстояние тянется за курсором,
 	# второй клик закрепляет отрезок; следующий клик начинает НОВЫЙ, а прежние остаются на
-	# поле — линеек сколько угодно. Backspace снимает последнюю (или недотянутую), выход
-	# из режима (Esc/кнопка) убирает все. Правая кнопка панорамирует камеру — ею не мерим.
+	# поле — линеек сколько угодно. Since fix-8 a ruler is a drawing: it stays after the
+	# tool is put away, is shared like strokes, Backspace or Undo drawing takes it back.
+	# Правая кнопка панорамирует камеру — ею не мерим.
 	if mode == Mode.RULER:
 		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT \
 				and event.pressed:
@@ -247,7 +251,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			if _ruler_a == Vector2i(-1, -1):
 				_ruler_a = at
 			else:
-				_rulers.append([_ruler_a, at])
+				_place_ruler(_ruler_a, at)
 				_ruler_a = Vector2i(-1, -1)
 			_refresh_ruler_button()
 			queue_redraw()

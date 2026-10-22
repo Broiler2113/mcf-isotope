@@ -33,6 +33,14 @@ func _turn_key() -> Vector2i:
 ## уже брошены и результат известен, откат превратился бы в переброс. Лазер марксманна
 ## кубиков не бросает, но тоже необратим — он уже снёс стену и убил всех на линии.
 func _is_irreversible(intent: Intent, result: ActionResult) -> bool:
+	# A drone that went off and killed nobody can be taken back (owner, fix-8 #9): the
+	# drone, the walls and the wounds all roll back with the undo.
+	if intent is DroneDetonateIntent:
+		for id: int in result.visual_deaths:
+			var u := state.get_unit(id)
+			if u == null or not u.is_drone:
+				return true
+		return false
 	for ev: Dictionary in result.dice_events:
 		# Переход по клеткам и прочие отметки анимации — не броски: шаг остаётся отменяемым.
 		if not ANIMATION_ONLY_EVENTS.has(String(ev.get("kind", ""))):

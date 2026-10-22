@@ -268,6 +268,18 @@ const RECIPES := {
 	"solitary": [
 		{"f": "bed", "at": "corner", "sz": [1, 2]},
 	],
+	## Botany bay (owner, fix-8 #1): planter beds and hydroponic racks in rows, a potting
+	## table, water at hand, pots in the corners.
+	"botany": [
+		{"f": "hydroponic_rack", "at": "row", "n": [2, 4]},
+		{"f": "planter_bed", "at": "row", "n": [2, 4]},
+		{"f": "seed_table", "at": "center", "p": 0.8},
+		{"f": "planter_bed", "at": "row", "n": [2, 3], "p": 0.6},
+		{"f": "sink", "at": "wall", "p": 0.6},
+		{"f": "water_bucket", "at": "free", "n": [1, 2]},
+		{"f": "potted_plant", "at": "corner", "n": [1, 3]},
+		{"f": "equipment_cart", "at": "free", "p": 0.4},
+	],
 	"laboratory": [
 		{"f": "lab_bench", "at": "row", "n": [2, 3]},
 		{"f": "biohazard_cabinet", "at": "wall", "p": 0.4},
@@ -408,6 +420,7 @@ const FLOOR_BY_KIND := {
 	"surgery": [MCF.Look.TILE, MCF.Look.LINO],
 	"briefing": [MCF.Look.CARPET_BLUE, MCF.Look.LINO], "armory": [MCF.Look.PLATE],
 	"laboratory": [MCF.Look.LINO, MCF.Look.TILE], "assembly": [MCF.Look.PLATE],
+	"botany": [MCF.Look.TILE, MCF.Look.PLATE],
 	"testing_range": [MCF.Look.PLATE], "machine_shop": [MCF.Look.PLATE], "workshop": [MCF.Look.PLATE],
 	"warehouse": [MCF.Look.PLATE, MCF.Look.DEFAULT], "dock": [MCF.Look.PLATE],
 	"storage": [MCF.Look.PLATE, MCF.Look.DEFAULT], "supply": [MCF.Look.PLATE, MCF.Look.DEFAULT],
@@ -545,9 +558,11 @@ func _furnish() -> void:
 			_furnish_room(comps[ci], ci == main, comps.size(), r)
 	if level > 0:
 		_outdoor_clutter()
+		_greenery()
 		MapLighting.populate(g)
 	if g._sym > 0:
 		g._mirror()
+	_winter_decorations()
 
 # --- Помещения ---------------------------------------------------------------------------
 
@@ -1277,6 +1292,71 @@ func _outdoor_clutter() -> void:
 				pick = ["crate", "equipment_cart", "barrel", "trash_bin"][rng.randi_range(0, 3)]
 			if pick != "":
 				_outdoor_put(c, pick, style != "field")
+
+## More green outdoors (owner, fix-8 #2): tufts of tall grass, bushes, flower beds, short
+## hedge runs and now and then a tree on the open ground of a town or a field.
+## Its own random stream, so the rest of the map keeps
+## its shape for the same seed.
+const GREEN_SHARE := [0.0, 0.012, 0.022, 0.034, 0.05]
+const GREEN_PICKS := [["tall_grass", 5], ["bush", 3], ["bush_flowering", 2], ["bush_dry", 1], ["flower_bed", 2],
+		["hedge", 2], ["park_tree", 1], ["pine_tree", 1]]
+
+## Plants and snow — the open ground's greenery, not the furniture of a room.
+static func is_greenery(fid: String) -> bool:
+	return Furniture.base_of(fid) in ["tall_grass", "bush", "bush_flowering", "bush_dry", "flower_bed", "hedge",
+			"park_tree", "pine_tree", "snowdrift", "snowman"]
+
+func _greenery() -> void:
+	var style := _style_key()
+	if style != "town" and style != "field":
+		return
+	var grng := RandomNumberGenerator.new()
+	grng.seed = rng.seed * 31 + 977
+	var picks: Array = GREEN_PICKS
+	var total := 0
+	for p: Array in picks:
+		total += int(p[1])
+	for y in h:
+		for x in w:
+			if grng.randf() >= GREEN_SHARE[level]:
+				continue
+			var c := Vector2i(x, y)
+			var i := y * w + x
+			if (g._sym > 0 and not g._in_f(c)) or (g._street.size() == w * h and g._street[i] != 0):
+				continue
+			var roll := grng.randi_range(0, total - 1)
+			var pick := ""
+			for p: Array in picks:
+				roll -= int(p[1])
+				if roll < 0:
+					pick = p[0]
+					break
+			if pick == "flower_bed" and style == "field":
+				pick = "tall_grass"
+			# Runs (hedges, beds, drifts) go down two to four cells in a line.
+			var run := 1
+			var along := Vector2i(1, 0) if grng.randf() < 0.5 else Vector2i(0, 1)
+			if Furniture.joins(pick):
+				run = grng.randi_range(2, 4)
+			for k in run:
+				var before := placed.size()
+				_outdoor_put(c + along * k, pick, false)
+				if placed.size() == before:
+					break
+
+## Snow scenery is stored with cosmetic decals, never as cover or a movement obstacle.
+## A separate stream leaves terrain, greenery, lights and civilians identical in summer.
+func _winter_decorations() -> void:
+	if not m.winter or not MapData.supports_winter(m.environment()):
+		return
+	var srng := RandomNumberGenerator.new()
+	srng.seed = rng.seed * 43 + 1307
+	for y in h:
+		for x in w:
+			var c := Vector2i(x, y)
+			if srng.randf() < 0.009 and _outdoor_ok(c):
+				var kind := "snowman" if srng.randf() < 0.2 else "snowdrift"
+				m.decals.append([kind, x + 0.5, y + 0.5, srng.randf() * TAU, 1.0])
 
 ## У хижины или руины (в двух клетках) — там в поле и лежит брошенное.
 func _near_room(c: Vector2i) -> bool:

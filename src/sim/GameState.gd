@@ -12,6 +12,8 @@ var log: CombatLog
 ## это дуэль на двоих — то, чем игра была всегда.
 ## Время суток карты (MapData.time_of_day, 0.12.1) — только свет.
 var time_of_day := ""
+## Winter map (MapData.winter, fix-8) — only looks.
+var winter := false
 var roster: Roster
 
 var units: Dictionary = {}  # id -> UnitInstance

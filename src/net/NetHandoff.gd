@@ -130,7 +130,11 @@ const K_LOBBY_MAP := "lobby_map"
 ##  24 — 0.13: giving units (new intent), scout drones, floodlight colours and borg batches,
 ##       DPMG in shuttle seats, typed Holdout wave count and start size, directional shield
 ##       shelter, Hard AI storming vehicles.
-const PROTOCOL := 24
+##  25 — 0.13.1: a side with no living soldier is skipped in the initiative (a drone in the
+##       air no longer holds its turn open), an engineer unwelds an airlock and a borg
+##       demolishes in batches of three, a harmless drone detonation is undoable, smashed
+##       furniture throws chunks instead of rubbling the floor, winter maps.
+const PROTOCOL := 25
 ## The bug-report server on the relay's VPS (tools/bugs/isotope_bugs.py): the Report a Bug
 ## window and the automatic desync reports both post here.
 const BUG_REPORTS := "http://103.86.177.137:8651/report"

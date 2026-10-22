@@ -1,11 +1,19 @@
 class_name FirstPerson
 extends Control
 
-## First-person walk through the board (fix-7 #9, owner's answers 2026-10-21). A free look:
-## private, costs nothing, available at any time, and live — soldiers move around you while
-## turns resolve. Only what your side has seen can be walked; never-seen cells are black,
-## remembered ones dimmed. WASD moves, the mouse looks, Space jumps, X walks through
-## everything (but never into the unknown), Esc leaves. Nothing here touches the game state.
+## First-person walk through the board (fix-7 #9, owner's answers 2026-10-21; rebuilt in
+## fix-8). A free look: private, costs nothing, available at any time, and live — soldiers
+## move around you while turns resolve. Only what your side has seen can be walked;
+## never-seen cells are black, remembered ones dimmed. WASD moves, the mouse looks, Space
+## jumps, X walks through everything (but never into the unknown), Esc leaves. Nothing here
+## touches the game state.
+##
+## Light is the battle screen's own light map (owner, fix-8: "exactly the same as in 2D"):
+## a second LightManager draws it for the cells around you and every surface reads it, so
+## lights share one cached map instead of separate shadow-casting 3D lamps.
+## By day outdoors the sun adds its shadows. The board streams in by chunks within a time
+## budget; a chunk is rebuilt only when its cells change, and a fresh floor bake (blood,
+## debris) just swaps the floor's picture.
 
 signal left
 
@@ -16,14 +24,12 @@ const STEP := 0.36         # climbs onto anything this low without jumping
 const GRAVITY := 15.0
 const JUMP_V := 5.2        # about 0.9 m: onto a crate, a table or a sandbag wall
 const VIEW_R := 36         # metres of board kept built around you
-const BUILDS_PER_FRAME := 4
-const SHADOW_LIGHTS := 4   # nearest lamps that cast shadows (each one is a cube render)
-const LIGHT_R := 30.0      # lamps farther than this switch off
-const FIRE_LIGHTS := 8
+const BUILD_BUDGET_USEC := 6000
+const LM_TEXELS := 4       # light map texels per cell
 const UNIT_H := 1.7
 const UNIT_W := 0.55
-const DRONE := 0.4
 const VEHICLE_H := 2.0
+const SUN_K := 0.42        # how much of the daylight the sun's shadows take back
 
 var main: Node
 var state: GameState
@@ -55,36 +61,36 @@ var _vis_tex: ImageTexture
 var _vis_key: Array = []
 var _vis_prev: Array[Vector2i] = []
 var _vis_timer := 0.0
-var _chunks := {}          # 3D chunk -> {"node", "lights": [OmniLight3D], "doors", "tiles": {tcc: tex}}
-var _tile := {}            # TerrainTiles chunk -> {"floor": tex, "feat": tex, "feat_img", "w", "h"}
-var _mats := {"floor": {}, "feat": {}}
+var _solid_img: Image
+var _solid_tex: ImageTexture
+var _chunks := {}          # 3D chunk -> {"node", "doors", "tops", "tiles": {tcc: floor texture}}
+var _floor_tex := {}       # tile chunk -> its first-person floor texture
+var _mats := {"floor": {}, "floor_cut": {}}
+var _all_mats: Array[ShaderMaterial] = []
+var _board_sh: Shader
+var _bill_sh: Shader
+var _glass_sh: Shader
+var _sun_on := false
+var _look_ver := -1
+var _dirty := {}           # 3D chunks whose cells changed
 var _door_open := {}       # cell -> 0..1, opened in this view only
 var _units := {}           # unit id -> Node3D
 var _vehicles := {}
-var _side_mats := {}
+var _features := {}        # cell -> Node3D: drone stations and mines, as this viewer sees them
 var _fire_mm: MultiMeshInstance3D
 var _gas_mm: MultiMeshInstance3D
 var _smoke_mm: MultiMeshInstance3D
 var _corpse_mm: MultiMeshInstance3D
-var _fire_lights: Array[OmniLight3D] = []
-var _flash_lights: Array[OmniLight3D] = []
 var _cloud_timer := 0.0
-var _light_timer := 0.0
+var _feature_timer := 0.0
+var _map_timer := 0.0
 var _minimap: Control
-var _ground_tex: Texture2D
+var _ground_tex: ImageTexture   # one texel a cell: which open ground lies there
+var _ground_img: Image
 var _art_mats := {}
-
-## Station and bunker keep their brighter lamp-lit look; buildings on open maps are softer.
-func _lit_inside() -> bool:
-	return env in ["station", "bunker"]
-var _repeat_sh: Shader
-## The board shader with its texture repeating (walls lay a 1 m picture along their length).
-func _repeat_shader() -> Shader:
-	if _repeat_sh == null:
-		_repeat_sh = Shader.new()
-		_repeat_sh.code = FirstPersonBoard.SHADER.replace("uniform sampler2D tex : source_color, filter_nearest;",
-				"uniform sampler2D tex : source_color, filter_nearest_mipmap, repeat_enable;")
-	return _repeat_sh
+var _lm: LightManager
+var _lm_rect := Rect2i()
+var _lm_tex: Texture2D
 
 static func walkable_start(m: Node, c: Vector2i) -> bool:
 	var g: Grid = m.state.grid
@@ -123,16 +129,28 @@ func _ready() -> void:
 	_dyn = Node3D.new()
 	_world.add_child(_dyn)
 	_cam = Camera3D.new()
-	_cam.near = 0.05
-	_cam.far = 400.0
+	_cam.near = 0.06
+	_cam.far = 700.0
 	_world.add_child(_cam)
+	_lm = LightManager.new()
+	_lm.offscreen = true
+	_lm.flicker = false
+	add_child(_lm)
 	_roof = main._fp_roof(grid, env)
 	_vis_img = Image.create(grid.width, grid.height, false, Image.FORMAT_R8)
 	_vis_tex = ImageTexture.create_from_image(_vis_img)
+	_build_solid()
+	_look_ver = GridCell.look_version
+	_blood_seen = (main._fx.wall_blood as Array).size()
 	_sync_vis(true)
+	var tod: String = state.time_of_day
+	_sun_on = env in ["town", "field"] and tod in ["day", "morning", "evening"]
+	_build_shaders()
+	_update_light(true)
 	_build_materials()
 	_build_environment()
 	_build_dynamic()
+	_sync_snow()
 	_minimap = Minimap.new(self)
 	add_child(_minimap)
 	var cross := Crosshair.new()
@@ -142,8 +160,7 @@ func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	grab_focus()
 	# Build the cells right around you before the first frame, so you never spawn in a void.
-	for i in 6:
-		_stream_chunks(64)
+	_stream_chunks(400000)
 	_settle_feet()
 	_place_camera()
 
@@ -182,32 +199,40 @@ func _input(event: InputEvent) -> void:
 func _process(delta: float) -> void:
 	delta = minf(delta, 0.05)
 	_move(delta)
+	_sync_snow()
 	_place_camera()
 	_vis_timer -= delta
 	if _vis_timer <= 0.0:
 		_vis_timer = 0.12
 		_sync_vis(false)
-	_refresh_dirty_tiles()
-	_stream_chunks(BUILDS_PER_FRAME)
+	_update_light(false)
+	_take_look_changes()
+	_take_new_blood()
+	_refresh_floors()
+	_stream_chunks(BUILD_BUDGET_USEC)
 	_doors(delta)
 	_sync_units()
 	_sync_vehicles()
+	_sync_combat_fx()
 	_cloud_timer -= delta
 	if _cloud_timer <= 0.0:
 		_cloud_timer = 0.25
 		_sync_clouds()
-	_light_timer -= delta
-	if _light_timer <= 0.0:
-		_light_timer = 0.3
-		_pick_lights()
-	_flicker(delta)
-	_sync_flashes()
-	_minimap.queue_redraw()
+	_feature_timer -= delta
+	if _feature_timer <= 0.0:
+		_feature_timer = 0.3
+		_sync_features()
+	_map_timer -= delta
+	if _map_timer <= 0.0:
+		_map_timer = 0.1
+		_minimap.queue_redraw()
 
 func _place_camera() -> void:
 	_cam.fov = clampf(float(Ui.fp_fov), 50.0, 120.0)
 	_cam.position = pos + Vector3(0, EYE, 0)
 	_cam.rotation = Vector3(pitch, yaw, 0)
+	if _snow != null:
+		_snow.position = pos + Vector3(0, 9.0, 0)
 
 # --- Movement ------------------------------------------------------------------------------
 
@@ -229,12 +254,11 @@ func _top(c: Vector2i) -> float:
 	if state.grid.in_bounds(c) and state.grid.cell_fast(c.x, c.y).vehicle_id != -1:
 		return VEHICLE_H
 	if Furniture.is_furniture(cell.feature_id):
-		var spec: Array = FirstPersonBoard.SHAPES.get(cell.feature_id, ["box", Furniture.height_of(cell.feature_id)])
-		var hh := float(spec[1])
+		var hh := Furniture.height_of(cell.feature_id)
 		return INF if hh > 1.25 else hh
 	if cell.feature_id == MCF.FEATURE_TRENCH:
 		return -FirstPersonBoard.TRENCH
-	if cell.feature_id == "":
+	if cell.feature_id == "" or cell.feature_id in [MCF.FEATURE_MINE, MCF.FEATURE_AV_MINE]:
 		return 0.0
 	return cell.cover_height
 
@@ -257,7 +281,7 @@ func _blocked(p: Vector3) -> bool:
 		return false
 	for id: int in _units:
 		var n: Node3D = _units[id]
-		if n.visible and Vector2(n.position.x - p.x, n.position.z - p.z).length() < RADIUS + UNIT_W * 0.5:
+		if n.visible and n.has_meta("soldier") and Vector2(n.position.x - p.x, n.position.z - p.z).length() < RADIUS + UNIT_W * 0.5:
 			return true
 	return false
 
@@ -333,7 +357,7 @@ func _move(delta: float) -> void:
 	var here := Vector2i(floori(pos.x), floori(pos.z))
 	if here != _last_cell:
 		_last_cell = here
-		if state.grid.in_bounds(here):
+		if state.grid.in_bounds(here) and main.has_method("_center_on_cell"):
 			main._center_on_cell(here, true)   # the battle's sounds are placed around you
 
 func _settle_feet() -> void:
@@ -376,7 +400,7 @@ func _roofed_at(p: Vector3) -> bool:
 	return grid.in_bounds(c) and _roof[c.y * grid.width + c.x] == 1
 
 func _footstep() -> void:
-	var a = main._audio
+	var a = main.get("_audio")
 	if a == null or not state.grid.in_bounds(_last_cell):
 		return
 	a.cue(a.STEP.get(a._material(state, _last_cell), "step_concrete"), _last_cell, viewer)
@@ -392,11 +416,9 @@ func _sync_vis(full: bool) -> void:
 	if not full and key == _vis_key:
 		return
 	_vis_key = key
-	var w := grid.width
 	if not limited:
-		if full or _vis_prev.size() != -1:
-			_vis_img.fill(Color(1, 1, 1))
-			_vis_prev = []
+		_vis_img.fill(Color(1, 1, 1))
+		_vis_prev = []
 		_vis_tex.update(_vis_img)
 		return
 	var visible: Dictionary = main._visible_before_impact(viewer)
@@ -404,7 +426,7 @@ func _sync_vis(full: bool) -> void:
 		_vis_img.fill(Color(0, 0, 0))
 		var explored: Dictionary = r.explored.get(viewer, {}) if r.fog_enabled else {}
 		for c: Vector2i in explored:
-			if c.x < w and c.y < grid.height:
+			if c.x < grid.width and c.y < grid.height:
 				_vis_img.set_pixel(c.x, c.y, Color(0.5, 0, 0))
 	for c: Vector2i in _vis_prev:
 		if not visible.has(c):
@@ -418,115 +440,213 @@ func _sync_vis(full: bool) -> void:
 func _seen(c: Vector2i) -> bool:
 	return grid.in_bounds(c) and _vis_img.get_pixel(c.x, c.y).r > 0.75
 
-# --- Materials, sky and light ---------------------------------------------------------------
+## One texel a cell: how much each cell shades the floor beside it (walls, furniture).
+func _build_solid() -> void:
+	var data := PackedByteArray()
+	data.resize(grid.width * grid.height)
+	var cells := grid.cells_flat()
+	for i in cells.size():
+		data[i] = int(FirstPersonBoard.solid_value(cells[i], env) * 255.0)
+	_solid_img = Image.create_from_data(grid.width, grid.height, false, Image.FORMAT_R8, data)
+	_solid_tex = ImageTexture.create_from_image(_solid_img)
+	var tiles: TerrainTiles = main._tiles
+	var kinds := PackedByteArray()
+	kinds.resize(grid.width * grid.height)
+	for y in grid.height:
+		for x in grid.width:
+			kinds[y * grid.width + x] = tiles.ground_kind(Vector2i(x, y))
+	_ground_img = Image.create_from_data(grid.width, grid.height, false, Image.FORMAT_R8, kinds)
+	_ground_tex = ImageTexture.create_from_image(_ground_img)
+
+## Cells whose look changed (a wall fell, furniture moved, a door was welded): their 3D
+## chunks — and the neighbours that share a wall face or a piece with them — are rebuilt.
+func _take_look_changes() -> void:
+	if _look_ver == GridCell.look_version:
+		return
+	var changed := {}
+	if _look_ver < GridCell.look_log_base:
+		for cc: Vector2i in _chunks:
+			_dirty[cc] = true
+	else:
+		var ch := GridCell.look_changes
+		var i: int = (_look_ver - GridCell.look_log_base) * 2
+		while i < ch.size():
+			changed[Vector2i(ch[i], ch[i + 1])] = true
+			i += 2
+	_look_ver = GridCell.look_version
+	var solid_dirty := false
+	var ground_dirty := false
+	for c: Vector2i in changed:
+		if not grid.in_bounds(c):
+			continue
+		var gk: int = main._tiles.ground_kind(c)
+		if int(_ground_img.get_pixel(c.x, c.y).r * 255.0 + 0.5) != gk:
+			_ground_img.set_pixel(c.x, c.y, Color(gk / 255.0, 0, 0))
+			ground_dirty = true
+		var v := int(FirstPersonBoard.solid_value(grid.cell_fast(c.x, c.y), env) * 255.0)
+		if int(_solid_img.get_pixel(c.x, c.y).r * 255.0 + 0.5) != v:
+			_solid_img.set_pixel(c.x, c.y, Color(v / 255.0, 0, 0))
+			solid_dirty = true
+		for dy in range(-3, 4, 3):
+			for dx in range(-3, 4, 3):
+				var cc := Vector2i((c.x + dx) / FirstPersonBoard.CH, (c.y + dy) / FirstPersonBoard.CH)
+				if _chunks.has(cc):
+					_dirty[cc] = true
+	if solid_dirty:
+		_solid_tex.update(_solid_img)
+	if ground_dirty:
+		_ground_tex.update(_ground_img)
+
+# --- Shaders, materials, sky and light ---------------------------------------------------------
+
+func _build_shaders() -> void:
+	_board_sh = Shader.new()
+	_board_sh.code = FirstPersonBoard.sun_shader_code() if _sun_on else FirstPersonBoard.SHADER
+	_bill_sh = Shader.new()
+	_bill_sh.code = FirstPersonBoard.BILLBOARD
+	var g := _board_sh.code.replace("render_mode cull_back, depth_draw_opaque", "render_mode cull_disabled, blend_mix, depth_draw_opaque")
+	g = g.replace("		ALBEDO = c.rgb * lit * k;", "		ALBEDO = c.rgb * lit * k;\n		ALPHA = 0.3;")
+	_glass_sh = Shader.new()
+	_glass_sh.code = g
+
+## Every board material shares the sight map, the shade map and the light map.
+func _mat(shader: Shader, p: Dictionary) -> ShaderMaterial:
+	var common := {"vis": _vis_tex, "solid": _solid_tex, "board": Vector2(grid.width, grid.height),
+			"mats": FirstPersonArt.materials(), "sun_k": SUN_K if _sun_on else 0.0,
+			"grounds": FirstPersonArt.grounds(), "ground_kind": _ground_tex, "winter": state.winter}
+	common.merge(_light_params())
+	common.merge(p, true)
+	var m := FirstPersonBoard.material(shader, common)
+	_all_mats.append(m)
+	return m
+
+func _light_params() -> Dictionary:
+	var on: bool = Ui.dynamic_lighting
+	return {"lightmap": _lm_tex, "lm_rect": Vector4(_lm_rect.position.x, _lm_rect.position.y, maxi(1, _lm_rect.size.x), maxi(1, _lm_rect.size.y)),
+			"lm_px": Vector2(1.0 / maxf(1.0, _lm_rect.size.x * LM_TEXELS), 1.0 / maxf(1.0, _lm_rect.size.y * LM_TEXELS)),
+			"lm_on": on and _lm_tex != null, "flat_light": LightManager.flat_tint(env, state.time_of_day)}
 
 func _build_materials() -> void:
-	var board := Vector2(grid.width, grid.height)
-	_ground_tex = GroundBackdrop.wallpaper(env)
-	_mats["ceiling"] = FirstPersonBoard.material(_vis_tex, board, _panel_texture(env), 0.0, Color.WHITE, 0.7)
-	_mats["roof"] = FirstPersonBoard.material(_vis_tex, board, _roof_texture(env), 0.0, Color.WHITE, 0.95)
-	var glass := FirstPersonBoard.material(_vis_tex, board, null, 0.0, Color(0.62, 0.8, 0.9, 1.0), 0.08)
-	var gsh := glass.shader.code.replace("render_mode cull_back, depth_draw_opaque;", "render_mode cull_disabled, blend_mix, depth_draw_opaque;")
-	gsh = gsh.replace("ALBEDO = c.rgb * k;", "ALBEDO = c.rgb * k; ALPHA = 0.32;")
-	var gs := Shader.new()
-	gs.code = gsh
-	glass.shader = gs
-	glass.set_shader_parameter("vis", _vis_tex)
-	glass.set_shader_parameter("board", board)
-	glass.set_shader_parameter("textured", false)
-	glass.set_shader_parameter("tint", Color(0.62, 0.8, 0.9))
-	glass.set_shader_parameter("rough", 0.08)
-	_mats["glass"] = glass
-	_mats["glow"] = FirstPersonBoard.material(_vis_tex, board, null, 0.0, Color(1.0, 0.94, 0.82), 0.3, 2.6)
+	_mats["ceiling"] = _mat(_board_sh, {"tex": _panel_texture(env)})
+	_mats["roof"] = _mat(_board_sh, {"tex": _roof_texture(env, state.winter)})
+	_mats["models"] = _mat(_board_sh, {"use_mats": true})
+	_mats["glass"] = _mat(_glass_sh, {"use_mats": true})
+	var atlas := Image.create(64 * FxDecals.SPATTER_VARIANTS, 64, false, Image.FORMAT_RGBA8)
+	for v in FxDecals.SPATTER_VARIANTS:
+		atlas.blit_rect(FxDecals.spatter_image(v, 64, true), Rect2i(0, 0, 64, 64), Vector2i(v * 64, 0))
+	_mats["blood"] = _mat(_board_sh, {"tex": ImageTexture.create_from_image(atlas), "cut": 0.5, "sight_only": true})
 	_mats["env"] = env
-	_mats["wall_mat"] = func(kind: String, accent: Color) -> Material:
+	_mats["wall"] = func(kind: String, accent: Color) -> Material:
 		var key := "wall|%s|%s" % [kind, accent.to_html()]
 		if not _art_mats.has(key):
-			var m := FirstPersonBoard.material(_vis_tex, board, FirstPersonArt.wall_texture(kind, accent), 0.0,
-					Color.WHITE, 0.92 if kind in ["brick", "stucco", "block", "soil", "rock", "sandbag"] else 0.6,
-					0.9 if kind == "ldf" else 0.0)
-			# The texture is a metre wide: let it repeat along the wall.
-			m.shader = _repeat_shader()
-			m.set_shader_parameter("tex", FirstPersonArt.wall_texture(kind, accent))
-			_art_mats[key] = m
+			_art_mats[key] = _mat(_board_sh, {"tex": FirstPersonArt.wall_texture(kind, accent), "ground_ao": true})
 		return _art_mats[key]
-	_mats["door_mat"] = func(style: String, accent: Color) -> Material:
+	_mats["door"] = func(style: String, accent: Color) -> Material:
 		var key := "door|%s|%s" % [style, accent.to_html()]
 		if not _art_mats.has(key):
-			_art_mats[key] = FirstPersonBoard.material(_vis_tex, board, FirstPersonArt.door_texture(style, accent),
-					0.0, Color.WHITE, 0.5 if style == "metal" else 0.85)
+			_art_mats[key] = _mat(_board_sh, {"tex": FirstPersonArt.door_texture(style, accent)})
 		return _art_mats[key]
 
-## A tile chunk's textures, baked by the battle screen; built here if it never was.
-func _tile_chunk(tcc: Vector2i) -> Dictionary:
+## The first-person floor of a tile chunk (TerrainTiles.FP_RES) and its two materials.
+func _tile_floor(tcc: Vector2i) -> void:
 	var tiles: TerrainTiles = main._tiles
-	var key := Vector3i(tcc.x, tcc.y, FirstPersonBoard.RES)
-	if tiles._dirty.has(tcc):
-		tiles._dirty.erase(tcc)
-		for r: int in TerrainTiles.RES:
-			tiles._drop(Vector3i(tcc.x, tcc.y, r))
-	if not tiles._chunks.has(key):
-		tiles._build(tcc, FirstPersonBoard.RES)
-	var ch: Dictionary = tiles._chunks[key]
-	var known: Dictionary = _tile.get(tcc, {})
-	if known.is_empty() or known["floor"] != ch["floor"]:
-		var board := Vector2(grid.width, grid.height)
-		known = {"floor": ch["floor"], "feat": ch["feat"], "feat_img": (ch["feat"] as ImageTexture).get_image(),
-				"w": mini(TerrainTiles.C, grid.width - tcc.x * TerrainTiles.C),
-				"h": mini(TerrainTiles.C, grid.height - tcc.y * TerrainTiles.C)}
-		_tile[tcc] = known
-		var fm := FirstPersonBoard.material(_vis_tex, board, ch["floor"], 0.0, Color.WHITE, 0.9)
-		if _ground_tex != null:
-			fm.set_shader_parameter("ground", _ground_tex)
-			fm.set_shader_parameter("has_ground", true)
-		_mats["floor"][tcc] = fm
-		_mats["feat"][tcc] = FirstPersonBoard.material(_vis_tex, board, ch["feat"], 0.5, Color.WHITE, 0.8)
-	return known
+	var tex := tiles.floor_3d(tcc)
+	if _floor_tex.get(tcc) == tex:
+		return
+	_floor_tex[tcc] = tex
+	if _mats["floor"].has(tcc):
+		(_mats["floor"][tcc] as ShaderMaterial).set_shader_parameter("tex", tex)
+		(_mats["floor_cut"][tcc] as ShaderMaterial).set_shader_parameter("tex", tex)
+		return
+	var p := {"tex": tex, "relief": 0.6, "ground_ao": true, "has_ground": true}
+	_mats["floor"][tcc] = _mat(_board_sh, p)
+	_mats["floor_cut"][tcc] = _mat(_board_sh, {"tex": tex, "cut": 0.5, "relief": 0.6})
+
+## A fresh floor bake (blood landed, the fog memory caught up) only swaps the picture.
+func _refresh_floors() -> void:
+	var tiles: TerrainTiles = main._tiles
+	for tcc: Vector2i in _floor_tex:
+		var key := Vector3i(tcc.x, tcc.y, TerrainTiles.FP_RES)
+		if tiles._dirty.has(tcc) or not tiles._chunks.has(key) or tiles._chunks[key]["floor"] != _floor_tex[tcc]:
+			_tile_floor(tcc)
+			# New rubble or knocked items there: the chunks over it gather them up.
+			var n := (tiles.decals.get(tcc, []) as Array).size()
+			var per := TerrainTiles.C / FirstPersonBoard.CH
+			for dy in per:
+				for dx in per:
+					var cc := tcc * per + Vector2i(dx, dy)
+					if _chunks.has(cc) and int(_chunks[cc]["decal_n"]) != n:
+						_dirty[cc] = true
+
+## The light map for the cells around you: the battle screen's lamps, fire and flashes, and
+## the drones in the air — redrawn only when something in it changed.
+func _update_light(force: bool) -> void:
+	var r: GameActionResolver = main._view_resolver()
+	var limited := r.visibility_limited()
+	var visible: Dictionary = main._visible_before_impact(viewer) if limited else {}
+	var here := Vector2i(floori(pos.x), floori(pos.z))
+	var reach := VIEW_R + 8
+	var lo := Vector2i(floori((here.x - reach) / 8.0) * 8, floori((here.y - reach) / 8.0) * 8)
+	var rect := Rect2i(lo, Vector2i(reach * 2 + 16, reach * 2 + 16)).intersection(Rect2i(0, 0, grid.width, grid.height))
+	var base: Grid = main._fog_mem.get(viewer, state.grid) if limited else state.grid
+	var lit: Grid = main._terrain_before_impact(base, visible, limited)
+	_lm.extra_lights = main.drone_lights(viewer, visible, limited)
+	_lm_tex = _lm.render_area(lit, rect, LM_TEXELS, env, visible, limited, main._fx, state.time_of_day)
+	if rect != _lm_rect or force:
+		_lm_rect = rect
+		var p := _light_params()
+		for m: ShaderMaterial in _all_mats:
+			for k: String in p:
+				m.set_shader_parameter(k, p[k])
 
 func _build_environment() -> void:
 	var e := Environment.new()
 	var tod: String = state.time_of_day
-	var amb := LightManager.ambient_for(env, float(Ui.light_darkness), tod)
-	var night := tod == "night"
+	var night := tod in ["night", ""]
 	var dusk := tod in ["morning", "evening"]
+	# The light map is all the light there is; the sun only adds its shadows.
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	e.ambient_light_color = amb if not night else Color(0.32, 0.38, 0.6)
-	# Lamps, fire and the sun do the lighting; ambient only keeps shadows from going black.
-	e.ambient_light_energy = 0.12 if night else (0.38 if dusk else 0.5)
-	if _lit_inside():
-		# Indoors under the station's own lighting, whatever the hour (owner liked it as it was).
-		e.ambient_light_color = amb.lerp(Color(0.5, 0.5, 0.55), 0.15)
-		e.ambient_light_energy = 0.9
-		e.tonemap_exposure = 1.1
-	e.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	e.ambient_light_color = Color.BLACK
+	e.ambient_light_energy = 0.0
+	e.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED
+	e.tonemap_mode = Environment.TONE_MAPPER_LINEAR
 	e.tonemap_exposure = 1.0
 	e.glow_enabled = true
-	e.glow_intensity = 0.55
-	e.glow_hdr_threshold = 1.1
+	e.glow_intensity = 0.65
+	e.glow_strength = 1.0
+	e.glow_hdr_threshold = 1.05
 	e.glow_bloom = 0.0
-	if _lit_inside():
-		e.glow_intensity = 0.7
-		e.glow_hdr_threshold = 1.0
-		e.glow_bloom = 0.08
 	match env:
 		"town", "field":
 			var sky := Sky.new()
 			var pm := ProceduralSkyMaterial.new()
-			pm.sky_top_color = Color(0.005, 0.007, 0.018) if night else (Color(0.32, 0.42, 0.66) if dusk else Color(0.28, 0.48, 0.82))
-			pm.sky_horizon_color = Color(0.02, 0.025, 0.045) if night else (Color(0.95, 0.66, 0.45) if dusk else Color(0.68, 0.78, 0.9))
-			pm.sky_energy_multiplier = 0.4 if night else 1.0
-			pm.ground_bottom_color = Color(0.1, 0.1, 0.1)
+			pm.sky_top_color = Color(0.01, 0.012, 0.03) if night else (Color(0.32, 0.42, 0.66) if dusk else Color(0.28, 0.48, 0.82))
+			pm.sky_horizon_color = Color(0.03, 0.035, 0.06) if night else (Color(0.95, 0.66, 0.45) if dusk else Color(0.68, 0.78, 0.9))
+			pm.sky_energy_multiplier = 1.0
+			pm.ground_bottom_color = Color(0.05, 0.05, 0.05)
 			pm.ground_horizon_color = pm.sky_horizon_color
+			pm.sun_angle_max = 0.0
 			sky.sky_material = pm
 			e.background_mode = Environment.BG_SKY
 			e.sky = sky
 			e.fog_enabled = true
 			e.fog_light_color = pm.sky_horizon_color
-			e.fog_density = 0.006
-			e.fog_density = 0.012 if night else 0.006
-			# Day sun, low warm sun, or a faint moon.
-			_sun(Color(1.0, 0.95, 0.85) if not (night or dusk) else (Color(1.0, 0.72, 0.5) if dusk else Color(0.5, 0.58, 0.85)),
-					0.82 if not (night or dusk) else (0.6 if dusk else 0.07), -50.0 if not dusk else -18.0)
+			e.fog_density = 0.016 if night else 0.008
+			e.fog_sky_affect = 0.0
+			_world.add_child(_far_ground())
+			if _sun_on:
+				var sun := DirectionalLight3D.new()
+				sun.light_color = Color.WHITE
+				sun.light_energy = 1.0
+				sun.rotation_degrees = Vector3(-50.0 if not dusk else -24.0, 35.0, 0)
+				sun.shadow_enabled = true
+				sun.directional_shadow_max_distance = 55.0
+				sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL if OS.get_name() == "Web" else DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+				sun.shadow_blur = 1.2
+				sun.shadow_bias = 0.04
+				_world.add_child(sun)
+			elif night:
+				_world.add_child(_moon())
 		"asteroid":
 			var sky2 := Sky.new()
 			var stars := PanoramaSkyMaterial.new()
@@ -534,30 +654,130 @@ func _build_environment() -> void:
 			sky2.sky_material = stars
 			e.background_mode = Environment.BG_SKY
 			e.sky = sky2
-			_sun(Color(1, 1, 1), 1.3, -35.0)
 		_:
 			e.background_mode = Environment.BG_COLOR
 			e.background_color = Color(0.01, 0.01, 0.015)
-			var sky3 := Sky.new()
-			var stars3 := PanoramaSkyMaterial.new()
-			stars3.panorama = _star_texture()
-			sky3.sky_material = stars3
+			e.fog_enabled = true
+			e.fog_light_color = Color(0.02, 0.02, 0.025)
+			e.fog_density = 0.01
 			if env == "station":
+				var sky3 := Sky.new()
+				var stars3 := PanoramaSkyMaterial.new()
+				stars3.panorama = _star_texture()
+				sky3.sky_material = stars3
 				e.background_mode = Environment.BG_SKY
 				e.sky = sky3
+				e.fog_enabled = false
 	var we := WorldEnvironment.new()
 	we.environment = e
 	_world.add_child(we)
 
-func _sun(col: Color, energy: float, elev: float) -> void:
-	var sun := DirectionalLight3D.new()
-	sun.light_color = col
-	sun.light_energy = energy
-	sun.rotation_degrees = Vector3(elev, 35.0, 0)
-	sun.shadow_enabled = true
-	sun.directional_shadow_max_distance = 60.0
-	sun.shadow_blur = 1.5
-	_world.add_child(sun)
+## The land goes on past the map (as on the battle screen, where the ground runs on behind
+## the board): one wide plane of the same turf or earth, just under the board's floor.
+func _far_ground() -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var s := FirstPersonModels.Sink.new()
+	s.shade_floor = false
+	var w := float(grid.width)
+	var h := float(grid.height)
+	var r := 800.0
+	# A ring round the board, never under it: the board has pits (trenches) to see into.
+	for q: Rect2 in [Rect2(-r, -r, w + 2 * r, r), Rect2(-r, h, w + 2 * r, r), Rect2(-r, 0, r, h), Rect2(w, 0, r, h)]:
+		s.face_uv([Vector3(q.position.x, -0.01, q.position.y), Vector3(q.end.x, -0.01, q.position.y), Vector3(q.end.x, -0.01, q.end.y),
+				Vector3(q.position.x, -0.01, q.end.y)], Vector3.UP, [Vector2.ZERO, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO], Color.WHITE)
+	mi.mesh = s.mesh()
+	var clear := Image.create(1, 1, false, Image.FORMAT_RGBA8)
+	clear.fill(Color(0, 0, 0, 0))
+	mi.material_override = _mat(_board_sh, {"tex": ImageTexture.create_from_image(clear), "has_ground": true, "no_fog": true})
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return mi
+
+## Snow falling round you on a winter map (fix-8 #3): flakes in a box that follows the
+## camera, drifting a little; switched off in Settings with the battle screen's snow.
+var _snow: CPUParticles3D
+func _sync_snow() -> void:
+	var on := state.winter and Ui.snowfall
+	if on and _snow == null:
+		_world.add_child(_snow_particles())
+	if _snow != null:
+		_snow.visible = on
+		_snow.emitting = on
+
+func _snow_particles() -> CPUParticles3D:
+	_snow = CPUParticles3D.new()
+	_snow.position = pos + Vector3(0, 9.0, 0)
+	_snow.amount = 1400
+	_snow.lifetime = 6.0
+	_snow.preprocess = 6.0
+	_snow.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+	_snow.emission_box_extents = Vector3(18, 0.5, 18)
+	_snow.direction = Vector3(0.15, -1, 0.05)
+	_snow.spread = 12.0
+	_snow.gravity = Vector3(0, -0.6, 0)
+	_snow.initial_velocity_min = 0.9
+	_snow.initial_velocity_max = 1.6
+	_snow.local_coords = false
+	var q := QuadMesh.new()
+	q.size = Vector2(0.035, 0.035)
+	var m := ShaderMaterial.new()
+	var sh := Shader.new()
+	sh.code = """
+shader_type spatial;
+render_mode unshaded, cull_disabled;
+uniform sampler2D roofs : filter_nearest;
+uniform sampler2D sight : filter_nearest;
+uniform vec2 board;
+varying vec3 world_pos;
+void vertex() {
+	MODELVIEW_MATRIX = VIEW_MATRIX * mat4(INV_VIEW_MATRIX[0], INV_VIEW_MATRIX[1], INV_VIEW_MATRIX[2], MODEL_MATRIX[3]);
+	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+}
+void fragment() {
+	vec2 uv = (floor(world_pos.xz) + 0.5) / board;
+	if (world_pos.y < 0.0 || texture(sight, uv).r < 0.7) discard;
+	if (world_pos.y < 2.65 && texture(roofs, uv).r > 0.5) discard;
+	ALBEDO = vec3(0.95, 0.97, 1.0);
+	ALPHA = 0.75;
+}
+"""
+	m.shader = sh
+	var roof_pixels := _roof.duplicate()
+	for i in roof_pixels.size():
+		roof_pixels[i] *= 255
+	m.set_shader_parameter("roofs", ImageTexture.create_from_image(Image.create_from_data(grid.width, grid.height, false, Image.FORMAT_R8, roof_pixels)))
+	m.set_shader_parameter("sight", _vis_tex)
+	m.set_shader_parameter("board", Vector2(grid.width, grid.height))
+	q.material = m
+	_snow.mesh = q
+	_snow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return _snow
+
+## The moon over a night town: a pale disc far up the sky.
+func _moon() -> Node3D:
+	var mi := MeshInstance3D.new()
+	var q := QuadMesh.new()
+	q.size = Vector2(9, 9)
+	mi.mesh = q
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.albedo_color = Color(0.85, 0.88, 0.95)
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+	m.albedo_texture = _disc_texture()
+	m.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	m.disable_fog = true
+	mi.material_override = m
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.position = Vector3(grid.width * 0.5 + 120, 160, grid.height * 0.5 - 140)
+	return mi
+
+static func _disc_texture() -> ImageTexture:
+	var img := Image.create(32, 32, false, Image.FORMAT_RGBA8)
+	for y in 32:
+		for x in 32:
+			var d := Vector2(x - 15.5, y - 15.5).length()
+			var crater := FirstPersonArt._vn(x, y, 8, 50) * 0.12
+			img.set_pixel(x, y, Color(1.0 - crater, 1.0 - crater, 1.0 - crater, 1.0 if d < 15.0 else 0.0))
+	return ImageTexture.create_from_image(img)
 
 static func _star_texture() -> ImageTexture:
 	var img := Image.create(2048, 1024, false, Image.FORMAT_RGB8)
@@ -570,31 +790,57 @@ static func _star_texture() -> ImageTexture:
 		img.set_pixel(rng.randi_range(0, 2047), rng.randi_range(0, 1023), tint * (0.25 + b * 0.75))
 	return ImageTexture.create_from_image(img)
 
-## Ceiling panels (station, bunker, asteroid domes) or plaster (town, field houses).
+## Ceiling panels (station, bunker, asteroid domes) or plaster (town, field houses), 1 m a
+## tile like everything else, with their joints in relief.
 static func _panel_texture(e: String) -> ImageTexture:
 	var img := Image.create(32, 32, false, Image.FORMAT_RGB8)
 	var metal := e in ["station", "bunker", "asteroid"]
 	for y in 32:
 		for x in 32:
-			var seam := x % 16 == 0 or y % 16 == 0
-			var n := fposmod(sin(x * 12.9898 + y * 78.233) * 43758.5453, 1.0) * 0.04
-			var base := Color(0.36, 0.38, 0.41) if metal else Color(0.56, 0.54, 0.51)
-			img.set_pixel(x, y, (base * (0.72 if seam else 1.0 + n)) if metal else base * (0.97 + n))
+			var n := FirstPersonArt._h(x, y, 60) * 0.04
+			var c: Color
+			if metal:
+				var seam := x % 16 == 0 or y % 16 == 0
+				var lit := x % 16 == 1 or y % 16 == 1
+				c = Color(0.36, 0.38, 0.41) * (0.7 if seam else (1.08 if lit else 1.0 + n))
+				if (x % 16 == 8) and (y % 16 >= 4 and y % 16 <= 11):
+					c = Color(0.3, 0.31, 0.33)   # a vent slot
+			else:
+				var crack := FirstPersonArt._vn(x, y, 8, 61) * 0.05
+				c = Color(0.62, 0.6, 0.56) * (0.97 + n - crack)
+			img.set_pixel(x, y, c)
+	img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
 
-static func _roof_texture(e: String) -> ImageTexture:
+static func _roof_texture(e: String, winter := false) -> ImageTexture:
 	var img := Image.create(32, 32, false, Image.FORMAT_RGB8)
+	var metal := e in ["station", "bunker", "asteroid"]
 	for y in 32:
 		for x in 32:
-			var n := fposmod(sin(x * 7.13 + y * 3.71) * 9187.31, 1.0) * 0.08
-			var row := (y % 8 == 0)
-			var base := Color(0.32, 0.33, 0.35) if e in ["station", "bunker", "asteroid"] else Color(0.36, 0.22, 0.18)
-			img.set_pixel(x, y, base * (0.75 if row else 0.95 + n))
+			var n := FirstPersonArt._h(x, y, 62) * 0.08
+			var c: Color
+			if winter and not metal:
+				# Snow lies on the roofs, a tile edge showing through here and there.
+				var thin := FirstPersonArt._vn(x, y, 8, 64) < 0.25 and y % 4 == 3
+				img.set_pixel(x, y, Color(0.5, 0.3, 0.24) if thin else Color(0.9, 0.93, 0.97) * (0.96 + n * 0.5))
+				continue
+			if metal:
+				c = Color(0.32, 0.33, 0.35) * (0.75 if (x % 16 == 0 or y % 16 == 0) else 0.95 + n)
+			else:
+				# Clay tiles in courses, each lit on its upper edge.
+				var row := y / 4
+				var bx := (x + (2 if row % 2 == 1 else 0)) % 4
+				var base := Color(0.46, 0.24, 0.17) * (0.9 + FirstPersonArt._h(row, (x + (2 if row % 2 == 1 else 0)) / 4, 63) * 0.15)
+				c = base * (0.72 if y % 4 == 3 else (1.12 if y % 4 == 0 else 1.0)) * (0.85 if bx == 3 else 1.0)
+			img.set_pixel(x, y, c)
+	img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
 
 # --- The board, streamed around you ---------------------------------------------------------
 
+## Build missing and changed chunks nearest first, within `budget` microseconds; drop far ones.
 func _stream_chunks(budget: int) -> void:
+	var t0 := Time.get_ticks_usec()
 	var here := Vector2i(floori(pos.x) / FirstPersonBoard.CH, floori(pos.z) / FirstPersonBoard.CH)
 	var reach := VIEW_R / FirstPersonBoard.CH + 1
 	var want: Array = []
@@ -603,10 +849,12 @@ func _stream_chunks(budget: int) -> void:
 			var cc := here + Vector2i(dx, dy)
 			if cc.x < 0 or cc.y < 0 or cc.x * FirstPersonBoard.CH >= grid.width or cc.y * FirstPersonBoard.CH >= grid.height:
 				continue
-			if not _chunks.has(cc):
+			if not _chunks.has(cc) or _dirty.has(cc):
 				want.append(cc)
 	want.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return a.distance_squared_to(here) < b.distance_squared_to(here))
-	for cc: Vector2i in want.slice(0, budget):
+	for cc: Vector2i in want:
+		if Time.get_ticks_usec() - t0 > budget:
+			break
 		_build_chunk(cc)
 	# Far chunks go; they come back when you do.
 	for cc: Vector2i in _chunks.keys():
@@ -614,159 +862,54 @@ func _stream_chunks(budget: int) -> void:
 			_drop_chunk(cc)
 
 func _build_chunk(cc: Vector2i) -> void:
-	_drop_chunk(cc)
-	var tiles := {}
+	_dirty.erase(cc)
 	var ch := FirstPersonBoard.CH
-	for ty in range(cc.y * ch / TerrainTiles.C, (cc.y * ch + ch - 1) / TerrainTiles.C + 1):
-		for tx in range(cc.x * ch / TerrainTiles.C, (cc.x * ch + ch - 1) / TerrainTiles.C + 1):
-			var tcc := Vector2i(tx, ty)
-			if tx * TerrainTiles.C < grid.width and ty * TerrainTiles.C < grid.height:
-				tiles[tcc] = _tile_chunk(tcc)
-	var built := FirstPersonBoard.build(grid, cc, _roof, _mats, tiles)
+	var tcc := Vector2i(cc.x * ch / TerrainTiles.C, cc.y * ch / TerrainTiles.C)
+	_tile_floor(tcc)
+	var tiles: TerrainTiles = main._tiles
+	var built := FirstPersonBoard.build(grid, cc, _roof, {"env": env, "mats": _mats, "tod": state.time_of_day, "winter": state.winter,
+			"look": func(c: Vector2i, fid: String) -> Array: return tiles.look_of(c, fid),
+			"furniture_look": tiles.furniture_look,
+			"decals": tiles.decals.get(tcc, []), "map_decals": tiles.map_decals.get(tcc, []),
+			"wall_blood": _blood_in(cc)})
+	_drop_chunk(cc)
 	var node: Node3D = built["node"]
 	_board_node.add_child(node)
-	var lights: Array[Light3D] = []
-	for l: Array in built["lights"]:
-		var o: Light3D
-		if l.size() > 4 and l[4] == "spot":
-			# A streetlight throws its pool of light down onto the road.
-			var sp := SpotLight3D.new()
-			sp.rotation_degrees = Vector3(-90, 0, 0)
-			sp.spot_range = float(l[2])
-			sp.spot_angle = 58.0
-			sp.spot_angle_attenuation = 0.8
-			o = sp
-		else:
-			var om := OmniLight3D.new()
-			om.omni_range = float(l[2])
-			om.omni_attenuation = 1.4 if _lit_inside() else 1.8
-			o = om
-		o.position = l[0]
-		o.light_color = l[1]
-		o.light_energy = float(l[3]) * (0.9 if o is SpotLight3D else (1.6 if _lit_inside() else 0.3))
-		o.light_size = 0.15
-		o.shadow_bias = 0.08
-		node.add_child(o)
-		lights.append(o)
-	for b: Array in built["bills"]:
-		_foliage(node, b, tiles)
-	_map_decals(node, cc)
-	var stamps := {}
-	for tcc: Vector2i in tiles:
-		stamps[tcc] = tiles[tcc]["floor"]
-	_chunks[cc] = {"node": node, "lights": lights, "doors": built["doors"], "tiles": stamps}
+	_chunks[cc] = {"node": node, "doors": built["doors"], "tops": built["tops"],
+			"decal_n": (tiles.decals.get(tcc, []) as Array).size()}
 
-## Decals the map maker laid by hand: the battle screen draws them apart from the baked
-## tiles, so here they lie on the floor as their own pictures.
-func _map_decals(node: Node3D, cc: Vector2i) -> void:
-	var tiles: TerrainTiles = main._tiles
-	var ch := FirstPersonBoard.CH
-	var area := Rect2(cc.x * ch, cc.y * ch, ch, ch)
-	var tcc := Vector2i(cc.x * ch / TerrainTiles.C, cc.y * ch / TerrainTiles.C)
-	for d: Dictionary in tiles.map_decals.get(tcc, []):
-		var p: Vector2 = d["pos"]
-		if not area.has_point(p):
-			continue
-		var kind := str(d["kind"])
-		var art := FxDecals.texture_of_kind(kind) if kind.begins_with("item:") else str(FxDecals.TEXTURE.get(kind, ""))
-		var tex := Sprites.texture_of(art) if art != "" else null
-		if tex == null:
-			continue
-		var look: Array = FxDecals.look_of(kind)
-		var sz := float(d["scale"]) * (float(look[0]) if not look.is_empty() else 0.95)
-		var mi := MeshInstance3D.new()
-		var q := QuadMesh.new()
-		q.size = Vector2(sz, sz)
-		q.orientation = PlaneMesh.FACE_Y
-		mi.mesh = q
-		mi.material_override = _decal_mat(tex)
-		mi.position = Vector3(p.x, 0.008, p.y)
-		mi.rotation.y = -float(d["rot"])
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		node.add_child(mi)
-
-var _decal_mats := {}
-func _decal_mat(tex: Texture2D) -> ShaderMaterial:
-	if not _decal_mats.has(tex):
-		_decal_mats[tex] = FirstPersonBoard.material(_vis_tex, Vector2(grid.width, grid.height), tex, 0.5, Color.WHITE, 0.9)
-	return _decal_mats[tex]
-
-## A tree crown, a bush or a plant: its own map art standing up and facing you.
-func _foliage(node: Node3D, b: Array, tiles: Dictionary) -> void:
-	var at: Vector2i = b[2]
-	var bb: Rect2 = b[3]
-	var tile: Dictionary = tiles.get(Vector2i(at.x / TerrainTiles.C, at.y / TerrainTiles.C), {})
-	if tile.is_empty():
-		return
-	var res := FirstPersonBoard.RES
-	var src := Rect2i((at.x % TerrainTiles.C) * res + int(bb.position.x * res), (at.y % TerrainTiles.C) * res + int(bb.position.y * res),
-			maxi(1, int(bb.size.x * res)), maxi(1, int(bb.size.y * res)))
-	var img: Image = (tile["feat_img"] as Image).get_region(src)
-	if b.size() > 4:
-		img = _solid_foliage(img, b[4] == "crown")
-	var mi := MeshInstance3D.new()
-	var q := QuadMesh.new()
-	var sz: Vector2 = b[1]
-	q.size = sz
-	q.center_offset = Vector3(0, sz.y * 0.5, 0)
-	mi.mesh = q
-	mi.material_override = _billboard_mat(ImageTexture.create_from_image(img))
-	mi.position = b[0]
-	node.add_child(mi)
-
-## Seen from the side a crown is leaves all through (owner): the top-down art's gaps and
-## the trunk showing in its middle are filled with the leaves' own colour, speckled.
-static func _solid_foliage(img: Image, crown: bool) -> Image:
-	var w := img.get_width()
-	var h := img.get_height()
-	var sum := Color(0, 0, 0)
-	var n := 0
-	for y in h:
-		for x in w:
-			var p := img.get_pixel(x, y)
-			if p.a > 0.5 and p.g > p.r:
-				sum += p
-				n += 1
-	if n == 0:
-		return img
-	var leaf := Color(sum.r / n, sum.g / n, sum.b / n)
-	var out := img.duplicate() as Image
-	var c := Vector2(w, h) * 0.5
-	for y in h:
-		for x in w:
-			var q := (Vector2(x + 0.5, y + 0.5) - c) / c
-			var p := out.get_pixel(x, y)
-			var inner := q.length() < (0.86 if crown else 0.8)
-			if inner and (p.a < 0.5 or p.g <= p.r):
-				var grain := fposmod(sin(x * 12.9898 + y * 78.233) * 43758.5, 1.0)
-				out.set_pixel(x, y, leaf.darkened(0.08 + grain * 0.18) if grain > 0.3 else leaf.lightened(0.06))
+## Wall blood whose wall stands in chunk cc.
+func _blood_in(cc: Vector2i) -> Array:
+	var out: Array = []
+	var area := Rect2i(cc * FirstPersonBoard.CH, Vector2i(FirstPersonBoard.CH, FirstPersonBoard.CH))
+	for b: Dictionary in main._fx.wall_blood:
+		if area.has_point(b["cell"]):
+			out.append(b)
 	return out
+
+## New blood on a wall: the chunk that holds the wall gathers it up.
+var _blood_seen := 0
+func _take_new_blood() -> void:
+	var list: Array = main._fx.wall_blood
+	if list.size() == _blood_seen:
+		return
+	for i in range(mini(_blood_seen, list.size()), list.size()):
+		var c: Vector2i = list[i]["cell"]
+		var cc := Vector2i(c.x / FirstPersonBoard.CH, c.y / FirstPersonBoard.CH)
+		if _chunks.has(cc):
+			_dirty[cc] = true
+	if list.size() < _blood_seen:
+		for cc: Vector2i in _chunks:
+			_dirty[cc] = true
+	_blood_seen = list.size()
 
 func _drop_chunk(cc: Vector2i) -> void:
 	if _chunks.has(cc):
 		(_chunks[cc]["node"] as Node3D).queue_free()
 		_chunks.erase(cc)
 
-## The battle screen re-bakes a tile chunk when its cells change (a wall falls, blood
-## lands, the fog memory catches up): the 3D chunks over it are rebuilt to match.
-func _refresh_dirty_tiles() -> void:
-	var tiles: TerrainTiles = main._tiles
-	var redo := {}
-	for cc: Vector2i in _chunks:
-		for tcc: Vector2i in _chunks[cc]["tiles"]:
-			var key := Vector3i(tcc.x, tcc.y, FirstPersonBoard.RES)
-			if tiles._dirty.has(tcc) or not tiles._chunks.has(key) \
-					or tiles._chunks[key]["floor"] != _chunks[cc]["tiles"][tcc]:
-				redo[cc] = true
-	var n := 0
-	for cc: Vector2i in redo:
-		if n >= BUILDS_PER_FRAME:
-			break
-		_build_chunk(cc)
-		n += 1
-
 ## Doors open in this view only, when you walk up to them; the game's own open state
-## (a soldier standing by) shows too.
+## (a soldier standing by) shows too. A welded door stays shut.
 func _doors(delta: float) -> void:
 	for cc: Vector2i in _chunks:
 		for at: Vector2i in _chunks[cc]["doors"]:
@@ -775,19 +918,26 @@ func _doors(delta: float) -> void:
 			var near := Vector2(at.x + 0.5 - pos.x, at.y + 0.5 - pos.z).length() < 1.4
 			var want := 1.0 if (near or cell.cover_height < MCF.WALL_HEIGHT) and not cell.airlock_welded else 0.0
 			var was := float(_door_open.get(at, 0.0))
+			if was == want:
+				continue
 			var now := move_toward(was, want, delta * 3.0)
 			if was == 0.0 and now > 0.0 and near:
-				var a = main._audio
+				var a = main.get("_audio")
 				if a != null and state.grid.in_bounds(at): a.cue("door_open", at, viewer)
 			_door_open[at] = now
 			var ease := now * now * (3.0 - 2.0 * now)
 			var along_x: bool = door.get_meta("along_x")
-			var halves := door.get_child_count()
-			for leaf: Node3D in door.get_children():
-				# Into the wall beside the doorway: halves apart, a single block aside.
-				var off := float(leaf.get_meta("side")) * ease * (0.5 if halves == 2 else 0.98)
+			var leaves := 0
+			for leaf: Node in door.get_children():
+				if leaf.has_meta("side"):
+					leaves += 1
+			for leaf: Node in door.get_children():
+				if not leaf.has_meta("side"):
+					continue
+				# Into the wall beside the doorway: halves apart, a single door aside.
+				var off := float(leaf.get_meta("side")) * ease * (0.5 if leaves == 2 else 0.98)
 				var home: Vector3 = leaf.get_meta("home")
-				leaf.position = home + (Vector3(off, 0, 0) if along_x else Vector3(0, 0, off))
+				(leaf as Node3D).position = home + (Vector3(off, 0, 0) if along_x else Vector3(0, 0, off))
 
 # --- Soldiers, bodies, vehicles, drones -------------------------------------------------------
 
@@ -809,22 +959,113 @@ func _build_dynamic() -> void:
 	cmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	cmat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_corpse_mm.material_override = cmat
+	_corpse_mm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_dyn.add_child(_corpse_mm)
-	for i in FIRE_LIGHTS:
-		var o := OmniLight3D.new()
-		o.light_color = Color(1.0, 0.55, 0.2)
-		o.omni_range = 5.0
-		o.visible = false
-		_dyn.add_child(o)
-		_fire_lights.append(o)
-	for i in 4:
-		var f := OmniLight3D.new()
-		f.light_color = Color(1.0, 0.75, 0.4)
-		f.omni_range = 9.0
-		f.visible = false
-		_dyn.add_child(f)
-		_flash_lights.append(f)
 
+## The battle in the air (fix-8: "the atmosphere of the battle"): tracers streaking from the
+## muzzle, rockets, shells and grenades in flight, fireballs where a blast went off, and the
+## debris, casings and blood thrown about — all from the battle screen's own effects, shown
+## where the battle screen shows them. One multimesh of glowing or plain blocks.
+var _fx_mm: MultiMeshInstance3D
+func _sync_combat_fx() -> void:
+	var fx: FxDecals = main._fx
+	if _fx_mm == null:
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		var bm := BoxMesh.new()
+		bm.size = Vector3.ONE
+		mm.mesh = bm
+		_fx_mm = MultiMeshInstance3D.new()
+		_fx_mm.multimesh = mm
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.vertex_color_use_as_albedo = true
+		_fx_mm.material_override = m
+		_fx_mm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_dyn.add_child(_fx_mm)
+	var visible: Dictionary = main._visible_before_impact(viewer)
+	var limited: bool = main._view_resolver().visibility_limited()
+	var seen := func(p: Vector2) -> bool: return not limited or visible.has(Vector2i(floori(p.x), floori(p.y)))
+	var out: Array = []   # [Transform3D, Color]
+	var streak := func(a: Vector3, b: Vector3, w: float, col: Color) -> void:
+		var d := b - a
+		var len := d.length()
+		if len < 0.001:
+			return
+		var x := d / len
+		var up := Vector3.UP if absf(x.y) < 0.95 else Vector3.RIGHT
+		var z := x.cross(up).normalized()
+		var y := z.cross(x)
+		out.append([Transform3D(Basis(x * len, y * w, z * w), (a + b) * 0.5), col])
+	for tr: Dictionary in fx.tracers:
+		var k := clampf(float(tr["t"]) / maxf(0.001, float(tr["dur"])), 0.0, 1.0)
+		if k <= 0.0:
+			continue
+		var f2: Vector2 = tr["from"]
+		var t2: Vector2 = tr["to"]
+		var head := f2.lerp(t2, k)
+		if not seen.call(head):
+			continue
+		var tail := f2.lerp(t2, maxf(0.0, k - 1.4 / maxf(0.5, f2.distance_to(t2))))
+		streak.call(Vector3(tail.x, 1.28, tail.y), Vector3(head.x, 1.28, head.y), 0.022, Color(3.2, 2.5, 1.0))
+		if k < 0.2 and seen.call(f2):
+			var dir := (t2 - f2).normalized()
+			var mz := f2 + dir * 0.35
+			out.append([Transform3D(Basis().scaled(Vector3.ONE * 0.16), Vector3(mz.x, 1.28, mz.y)), Color(3.5, 2.2, 0.8)])
+	for sh: Dictionary in fx.shots:
+		var k2 := clampf(float(sh["t"]) / maxf(0.001, float(sh["dur"])), 0.0, 1.0)
+		var a2: Vector2 = sh["from"]
+		var b2: Vector2 = sh["to"]
+		var p := a2.lerp(b2, k2)
+		if not seen.call(p):
+			continue
+		var dir2 := (b2 - a2).normalized() if b2 != a2 else Vector2.RIGHT
+		match str(sh["kind"]):
+			"rocket":
+				var back := p - dir2 * 0.45
+				streak.call(Vector3(back.x, 1.3, back.y), Vector3(p.x, 1.3, p.y), 0.08, Color(0.18, 0.2, 0.18))
+				streak.call(Vector3(back.x - dir2.x * 0.3, 1.3, back.y - dir2.y * 0.3), Vector3(back.x, 1.3, back.y), 0.1, Color(3.5, 2.0, 0.6))
+			"shell":
+				var back2 := p - dir2 * 0.9
+				streak.call(Vector3(back2.x, 1.4, back2.y), Vector3(p.x, 1.4, p.y), 0.05, Color(3.0, 1.8, 0.7))
+			_:
+				out.append([Transform3D(Basis().scaled(Vector3.ONE * 0.1), Vector3(p.x, 1.2 + sin(k2 * PI) * 1.6, p.y)), Color(0.22, 0.26, 0.18)])
+	for flash: Dictionary in fx.flashes:
+		var a3 := FxDecals.flash_alpha(flash)
+		if a3 <= 0.0:
+			continue
+		var cells: Array = flash["cells"]
+		var step := maxi(1, cells.size() / 9)
+		for i in range(0, cells.size(), step):
+			var c: Vector2i = cells[i]
+			if not seen.call(Vector2(c)):
+				continue
+			var s := 0.35 + 0.9 * a3 * (1.0 if i == cells.size() / 2 else 0.7)
+			out.append([Transform3D(Basis().scaled(Vector3.ONE * s), Vector3(c.x + 0.5, 0.25 + s * 0.45, c.y + 0.5)),
+					Color(3.0 * a3 + 0.4, 1.6 * a3 + 0.2, 0.5 * a3, 1.0)])
+	for f: Dictionary in fx.flying:
+		var pos := FxDecals.flight_pos(f)
+		var origin: Vector2i = f.get("origin", Vector2i(-1, -1))
+		if limited and not visible.has(Vector2i(floori(pos.x), floori(pos.y))) and not visible.has(origin):
+			continue
+		var look := FxDecals.look_of(str(f["kind"]))
+		if look.is_empty():
+			continue
+		var k3 := clampf(float(f["t"]) / maxf(0.001, float(f["dur"])), 0.0, 1.0)
+		var size := maxf(0.03, float(look[0]) * float(f["scale"]) * 0.45)
+		var col: Color = look[1]
+		var basis := Basis(Vector3.UP, FxDecals.flight_rot(f)).scaled(Vector3(size, size * 0.5, size))
+		out.append([Transform3D(basis, Vector3(pos.x, 0.05 + sin(k3 * PI) * 0.7, pos.y)), Color(col.r, col.g, col.b, 1.0)])
+	var mm2 := _fx_mm.multimesh
+	if mm2.instance_count < out.size():
+		mm2.instance_count = out.size() + 32
+	mm2.visible_instance_count = out.size()
+	for i in out.size():
+		mm2.set_instance_transform(i, out[i][0])
+		mm2.set_instance_color(i, out[i][1])
+
+## Fire: steady glowing half-cubes (owner, fix-8: no flicker); gas and smoke: haze.
 func _cloud_layer(col: Color, fire: bool) -> MultiMeshInstance3D:
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -838,28 +1079,21 @@ func _cloud_layer(col: Color, fire: bool) -> MultiMeshInstance3D:
 	if fire:
 		mat.emission_enabled = true
 		mat.emission = col
-		mat.emission_energy_multiplier = 2.4
+		mat.emission_energy_multiplier = 2.2
 		mat.albedo_color = Color(1.0, 0.6, 0.15, 0.85)
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED if fire else BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mi.material_override = mat
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_dyn.add_child(mi)
 	return mi
 
-func _side_mat(side: int) -> StandardMaterial3D:
-	if not _side_mats.has(side):
-		var m := StandardMaterial3D.new()
-		m.albedo_color = main._side_color(side)
-		m.roughness = 0.7
-		_side_mats[side] = m
-	return _side_mats[side]
-
 ## A soldier: a flat 1.7 m cut-out in its side's colour that always turns to face you, its
 ## class tag drawn on it in pixels (owner: 2D rectangles, like a 2.5D shooter's sprites).
 func _unit_node(u: UnitInstance) -> Node3D:
 	var n := Node3D.new()
+	n.set_meta("soldier", true)
 	var mi := MeshInstance3D.new()
 	var q := QuadMesh.new()
 	q.size = Vector2(0.62, UNIT_H)
@@ -867,23 +1101,16 @@ func _unit_node(u: UnitInstance) -> Node3D:
 	mi.mesh = q
 	mi.material_override = _billboard_mat(_soldier_texture(main._side_color(u.owner),
 			Sprites.unit_tag(u.stats.id, u.stats.display_name)))
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	n.add_child(mi)
 	_dyn.add_child(n)
 	return n
 
-var _bill_shader: Shader
 var _bill_mats := {}
 func _billboard_mat(tex: Texture2D) -> ShaderMaterial:
 	if _bill_mats.has(tex):
 		return _bill_mats[tex]
-	if _bill_shader == null:
-		_bill_shader = Shader.new()
-		_bill_shader.code = FirstPersonBoard.BILLBOARD
-	var m := ShaderMaterial.new()
-	m.shader = _bill_shader
-	m.set_shader_parameter("tex", tex)
-	m.set_shader_parameter("vis", _vis_tex)
-	m.set_shader_parameter("board", Vector2(grid.width, grid.height))
+	var m := _mat(_bill_sh, {"tex": tex})
 	_bill_mats[tex] = m
 	return m
 
@@ -974,13 +1201,15 @@ func _sync_units() -> void:
 			_units.erase(id)
 	# Bodies as the battle screen shows them: fallen soldiers and piles set down, under fog
 	# as last seen. Half-transparent red, lying flat, one per body.
-	for c: Vector2i in _corpses():
-		var e: Array = _corpses()[c]
+	var bodies := _corpses()
+	for c: Vector2i in bodies:
+		var e: Array = bodies[c]
 		for k in maxi(1, int(e[1])):
 			corpses.append(Transform3D(Basis(Vector3.UP, float((c.x * 7 + c.y * 13 + k * 5) % 9) * 0.35),
 					Vector3(c.x + 0.5, 0.02 + k * 0.03, c.y + 0.5)))
 	var mm := _corpse_mm.multimesh
-	mm.instance_count = corpses.size()
+	if mm.instance_count != corpses.size():
+		mm.instance_count = corpses.size()
 	for i in corpses.size():
 		mm.set_instance_transform(i, corpses[i])
 
@@ -1006,31 +1235,32 @@ func _corpses() -> Dictionary:
 			_corpse_cache[c] = map[c]
 	return _corpse_cache
 
+## A drone hangs just under the ceiling (1.8 m, owner); over a vehicle, above its roof.
 func _place_drone(u: UnitInstance) -> void:
 	var n: Node3D = _units.get(u.id)
 	if n == null:
 		n = Node3D.new()
 		var mi := MeshInstance3D.new()
-		var bm := BoxMesh.new()
-		bm.size = Vector3(DRONE, DRONE, DRONE)
-		mi.mesh = bm
-		var m := StandardMaterial3D.new()
-		m.albedo_color = main._side_color(u.owner)
-		m.emission_enabled = true
-		m.emission = main._side_color(u.owner) * 0.4
-		m.metallic = 0.6
-		mi.material_override = m
+		var col: Color = main._side_color(u.owner)
+		var scout := MCF.is_scout(u)
+		var built: Array = FirstPersonModels.cached(str(["drone", col.to_html(), scout]),
+				func(s: FirstPersonModels.Sink, _g: FirstPersonModels.Sink) -> void:
+					s.shade_floor = false
+					FirstPersonModels.drone(s, col, scout))
+		mi.mesh = built[0]
+		mi.material_override = _mats["models"]
 		n.add_child(mi)
 		_dyn.add_child(n)
 		_units[u.id] = n
 	var p := _unit_pos(u)
-	# Hovering just under the ceiling; over a vehicle, above its roof.
-	var y := 1.8 + DRONE * 0.5
+	var y := 1.85
 	if state.grid.in_bounds(u.coord) and state.grid.cell(u.coord).vehicle_id != -1:
-		y = VEHICLE_H + DRONE * 0.5 + 0.08
+		y = VEHICLE_H + 0.25
 	n.position = Vector3(p.x, y + sin(Time.get_ticks_msec() * 0.003 + u.id) * 0.03, p.z)
 	n.rotation.y += 0.01
 
+## Vehicles as models — the tank's turret turns on its own — with the type's name in the
+## battle screen's font on both flanks, sized to stay on the hull (owner, fix-8).
 func _sync_vehicles() -> void:
 	var visible: Dictionary = main._visible_before_impact(viewer)
 	var limited: bool = main._view_resolver().visibility_limited()
@@ -1044,36 +1274,74 @@ func _sync_vehicles() -> void:
 		if not seen or cells.is_empty():
 			continue
 		live[veh.id] = true
-		var n: MeshInstance3D = _vehicles.get(veh.id)
+		var key := [veh.type_id, veh.owner, veh.wrecked]
+		var n: Node3D = _vehicles.get(veh.id)
+		if n != null and n.get_meta("key") != key:
+			n.queue_free()
+			n = null
 		if n == null:
-			n = MeshInstance3D.new()
-			var bm := BoxMesh.new()
-			bm.size = Vector3(veh.size.x - 0.06, VEHICLE_H, veh.size.y - 0.06)
-			n.mesh = bm
-			var m := StandardMaterial3D.new()
-			m.albedo_color = main._side_color(veh.owner).darkened(0.15)
-			m.metallic = 0.35
-			m.roughness = 0.55
-			n.material_override = m
-			var l := Label3D.new()
-			l.text = str(VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)).to_upper()
-			l.font_size = 72
-			l.pixel_size = 0.006
-			l.modulate = Color(0.05, 0.05, 0.05)
-			l.position = Vector3(0, 0.2, (veh.size.y - 0.06) * 0.5 + 0.004)
-			n.add_child(l)
+			n = _vehicle_node(veh)
+			n.set_meta("key", key)
 			_dyn.add_child(n)
 			_vehicles[veh.id] = n
 		var off: Vector2 = main._veh_offset.get(veh.id, Vector2.ZERO) / main.CELL
-		n.position = Vector3(veh.origin.x + veh.size.x * 0.5 + off.x, VEHICLE_H * 0.5, veh.origin.y + veh.size.y * 0.5 + off.y)
-		(n.material_override as StandardMaterial3D).albedo_color = Color(0.16, 0.15, 0.14) if veh.wrecked \
-				else main._side_color(veh.owner).darkened(0.15)
+		n.position = Vector3(veh.origin.x + veh.size.x * 0.5 + off.x, 0.0, veh.origin.y + veh.size.y * 0.5 + off.y)
+		var face := Vector2(veh.facing) if veh.facing != Vector2i.ZERO else Vector2(1, 0)
+		n.rotation.y = -face.angle()
+		var turret: Node3D = n.get_node_or_null("turret")
+		if turret != null:
+			var aim := Vector2(veh.tower_locked_dir) if veh.tower_locked_dir != Vector2i.ZERO else face
+			turret.rotation.y = -(aim.angle() - face.angle())
 	for id: int in _vehicles.keys():
 		if not live.has(id):
 			(_vehicles[id] as Node3D).queue_free()
 			_vehicles.erase(id)
 
-# --- Fire, gas and smoke ------------------------------------------------------------------------
+var _handjet: Font
+func _vehicle_node(veh: Vehicle) -> Node3D:
+	var n := Node3D.new()
+	var paint: Color = main._side_color(veh.owner).darkened(0.15)
+	var wrecked := veh.wrecked
+	var type := veh.type_id
+	var hull: Array = FirstPersonModels.cached(str(["veh", type, paint.to_html(), wrecked]),
+			func(s: FirstPersonModels.Sink, _g: FirstPersonModels.Sink) -> void: FirstPersonModels.vehicle(s, type, paint, wrecked))
+	var mi := MeshInstance3D.new()
+	mi.mesh = hull[0]
+	mi.material_override = _mats["models"]
+	n.add_child(mi)
+	if type == "tank":
+		var turret := Node3D.new()
+		turret.name = "turret"
+		var tm := MeshInstance3D.new()
+		tm.mesh = FirstPersonModels.cached(str(["turret", paint.to_html(), wrecked]),
+				func(s: FirstPersonModels.Sink, _g: FirstPersonModels.Sink) -> void:
+					s.shade_floor = false
+					FirstPersonModels.tank_turret(s, paint, wrecked))[0]
+		tm.material_override = _mats["models"]
+		turret.add_child(tm)
+		n.add_child(turret)
+	# The name on both flanks, within the hull's length.
+	if _handjet == null:
+		_handjet = load("res://fonts/handjet_ui_bold.ttf")
+	var text := str(VehicleDB.get_vehicle(type).get("name", type)).to_upper()
+	var half: Vector2 = {"tank": Vector2(1.2, 0.86), "shuttle": Vector2(0.85, 0.81), "borg": Vector2(0.36, 0.41)}.get(type, Vector2(0.5, 0.5))
+	var y: float = {"tank": 0.98, "shuttle": 0.68, "borg": 1.5}.get(type, 1.0)
+	for side: float in [-1.0, 1.0]:
+		var l := Label3D.new()
+		l.text = text
+		l.font = _handjet
+		l.font_size = 64
+		l.outline_size = 0
+		l.double_sided = false
+		l.modulate = Color(0.06, 0.06, 0.06) if not wrecked else Color(0.3, 0.3, 0.3)
+		var px := _handjet.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 64).x
+		l.pixel_size = minf(0.008, half.x * 1.7 / maxf(1.0, px))
+		l.position = Vector3(0, y, (half.y + 0.012) * side)
+		l.rotation.y = 0.0 if side > 0 else PI
+		n.add_child(l)
+	return n
+
+# --- Fire, gas and smoke; drone stations and mines ---------------------------------------------
 
 func _sync_clouds() -> void:
 	var here := Vector2i(floori(pos.x), floori(pos.z))
@@ -1095,62 +1363,61 @@ func _sync_clouds() -> void:
 	_fill(_fire_mm, fire, 0.25, 1.0)
 	_fill(_gas_mm, gas, FirstPersonBoard.CEIL * 0.5, FirstPersonBoard.CEIL)
 	_fill(_smoke_mm, smoke, FirstPersonBoard.CEIL * 0.5, FirstPersonBoard.CEIL)
-	fire.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return a.distance_squared_to(here) < b.distance_squared_to(here))
-	for i in _fire_lights.size():
-		var o := _fire_lights[i]
-		o.visible = i < fire.size()
-		if o.visible:
-			o.position = Vector3(fire[i].x + 0.5, 0.7, fire[i].y + 0.5)
 
 func _fill(mi: MultiMeshInstance3D, cells: Array[Vector2i], y: float, hgt: float) -> void:
 	var mm := mi.multimesh
 	mm.instance_count = cells.size()
 	for i in cells.size():
-		var b := Basis().scaled(Vector3(1, hgt if hgt != 1.0 else 1.0, 1)) if hgt != 1.0 else Basis()
+		var b := Basis().scaled(Vector3(1, hgt, 1)) if hgt != 1.0 else Basis()
 		mm.set_instance_transform(i, Transform3D(b, Vector3(cells[i].x + 0.5, y, cells[i].y + 0.5)))
 
-## Fire breathes: its lights and its half-cubes flicker a little.
-func _flicker(_delta: float) -> void:
-	var t := Time.get_ticks_msec() * 0.001
-	for i in _fire_lights.size():
-		var o := _fire_lights[i]
-		if o.visible:
-			o.light_energy = 1.6 + 0.35 * sin(t * 11.0 + i * 1.7) + 0.2 * sin(t * 23.0 + i)
-	var m := _fire_mm.material_override as StandardMaterial3D
-	m.emission_energy_multiplier = 2.2 + 0.4 * sin(t * 9.0)
-
-func _sync_flashes() -> void:
-	var fx: FxDecals = main._fx
-	var n := 0
-	for flash: Dictionary in fx.flashes:
-		if n >= _flash_lights.size():
-			break
-		var cells: Array = flash["cells"]
-		if cells.is_empty():
+## Drone stations and mines are drawn apart from the board on the battle screen too: each
+## side sees its own (a station while in sight, mines only its own or the revealed ones).
+func _sync_features() -> void:
+	var visible: Dictionary = main._visible_before_impact(viewer)
+	var limited: bool = main._view_resolver().visibility_limited()
+	var want := {}
+	var here := Vector2(pos.x, pos.z)
+	for sc: Vector2i in main._display_feature_cells(MCF.FEATURE_DRONE_STATION):
+		if Vector2(sc).distance_to(here) > VIEW_R or state.grid.cell_fast(sc.x, sc.y).vehicle_id != -1:
 			continue
-		var a := FxDecals.flash_alpha(flash)
-		var c: Vector2i = cells[cells.size() / 2]
-		var o := _flash_lights[n]
-		o.position = Vector3(c.x + 0.5, 1.0, c.y + 0.5)
-		o.light_energy = 6.0 * a
-		o.visible = a > 0.0 and _seen(c)
-		n += 1
-	for i in range(n, _flash_lights.size()):
-		_flash_lights[i].visible = false
+		if limited and not visible.has(sc):
+			continue
+		want[sc] = ["station", _station_colour(sc)]
+	for mk: String in [MCF.FEATURE_MINE, MCF.FEATURE_AV_MINE]:
+		for mc: Vector2i in main._display_feature_cells(mk):
+			if Vector2(mc).distance_to(here) <= VIEW_R and (main.get("editor_view") == true or main.resolver.mine_visible_to(viewer, mc)):
+				want[mc] = [mk, Color.WHITE]
+	for c: Vector2i in _features.keys():
+		if not want.has(c) or (_features[c] as Node3D).get_meta("spec") != want[c]:
+			(_features[c] as Node3D).queue_free()
+			_features.erase(c)
+	for c: Vector2i in want:
+		if _features.has(c):
+			continue
+		var spec: Array = want[c]
+		var kind: String = spec[0]
+		var col: Color = spec[1]
+		var built: Array = FirstPersonModels.cached(str(["feature", kind, col.to_html()]),
+				func(s: FirstPersonModels.Sink, _g: FirstPersonModels.Sink) -> void:
+					if kind == "station":
+						FirstPersonModels.drone_station(s, col)
+					else:
+						FirstPersonModels.mine(s, kind == MCF.FEATURE_AV_MINE))
+		var mi := MeshInstance3D.new()
+		mi.mesh = built[0]
+		mi.material_override = _mats["models"]
+		mi.position = Vector3(c.x, 0, c.y)
+		mi.set_meta("spec", spec)
+		_dyn.add_child(mi)
+		_features[c] = mi
 
-## Lamps far away switch off; the few nearest cast shadows.
-func _pick_lights() -> void:
-	var all: Array = []
-	for cc: Vector2i in _chunks:
-		for o: Light3D in _chunks[cc]["lights"]:
-			var d := o.position.distance_to(_cam.position)
-			o.visible = d < LIGHT_R
-			o.shadow_enabled = false
-			if o.visible:
-				all.append([d, o])
-	all.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
-	for i in mini(SHADOW_LIGHTS, all.size()):
-		(all[i][1] as Light3D).shadow_enabled = true
+## A station's lights in its operators' colour, when somebody's drone calls it home.
+func _station_colour(sc: Vector2i) -> Color:
+	for u: UnitInstance in state.all_units():
+		if u.is_drone and u.home_station == sc:
+			return main._side_color(u.owner)
+	return Color(0.55, 0.85, 1.0)
 
 # --- HUD -----------------------------------------------------------------------------------------
 
@@ -1187,8 +1454,8 @@ class Minimap extends Control:
 				var cell := g.cell_fast(c.x, c.y)
 				var col := Color(0.32, 0.33, 0.36)
 				if cell.is_space: col = Color(0.03, 0.03, 0.06)
-				elif FirstPersonBoard.is_wall(cell): col = Color(0.75, 0.76, 0.8)
-				elif cell.feature_id != "": col = Color(0.52, 0.5, 0.46)
+				elif FirstPersonBoard.is_wall(cell, fp.env): col = Color(0.75, 0.76, 0.8)
+				elif cell.feature_id != "" and cell.feature_id != MCF.FEATURE_BOUNDARY: col = Color(0.52, 0.5, 0.46)
 				if v < 0.75: col = col.darkened(0.55)
 				draw_rect(Rect2(Vector2(dx + R, dy + R) * PX, Vector2(PX, PX)), col)
 		for id: int in fp._units:

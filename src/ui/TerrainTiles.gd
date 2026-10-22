@@ -36,6 +36,10 @@ const T := 32
 const C := 16
 ## Разрешения кусков: точек на клетку.
 const RES := [8, 16, 32]
+## The first-person floor (fix-8): 32 px a cell like the sharpest bake, but floor only —
+## no objects layer, and neither wall chunks nor knocked items, which lie there in 3D.
+const FP_RES := -32
+const ALL_RES := [8, 16, 32, FP_RES]
 ## Сколько кусков собирать за кадр, когда есть чем подменить недостающие.
 const BUILDS_PER_FRAME := 1
 ## Потолок памяти под текстуры кусков; сверх него выбрасываются давно не показанные.
@@ -57,6 +61,7 @@ const FAMILY := {
 var _grid: Grid
 ## Окружение карты (item 24): плитка «<имя>_<окружение>» важнее общей.
 var env: String = ""
+var _floor_only := false        # baking an FP_RES chunk right now
 var _chunks: Dictionary = {}     # Vector3i(cx, cy, res) -> {"floor", "feat": ImageTexture, "used": int, "bytes": int}
 var _dirty: Dictionary = {}      # Vector2i(cx, cy) -> true: пересобрать во всех разрешениях
 var _pick: Dictionary = {}       # Vector2i(cx, cy) -> ключ куска, выведенного полом в этом кадре
@@ -323,6 +328,8 @@ func draw_map_decals(ci: CanvasItem, origin: Vector2, cell: float, view: Rect2) 
 static func draw_decal(ci: CanvasItem, kind: String, pos: Vector2, size: float, rot: float, alpha := 1.0) -> void:
 	var art := "corpse" if kind == "corpse" else (FxDecals.texture_of_kind(kind) if kind.begins_with("item:") \
 			else str(FxDecals.TEXTURE.get(kind, "")))
+	if kind in MapData.WINTER_DECORATIONS:
+		art = kind
 	if kind == "corpse" and not Sprites.has_override(art):
 		art = Sprites.resolve("light_infantry", "_neutral")
 	var tex := Sprites.texture_of(art) if art != "" else null
@@ -376,12 +383,23 @@ func _choose(cc: Vector2i, res: int) -> Variant:
 		return fallback
 	if _dirty.has(cc):
 		_dirty.erase(cc)
-		for r: int in RES: _drop(Vector3i(cc.x, cc.y, r))
+		for r: int in ALL_RES: _drop(Vector3i(cc.x, cc.y, r))
 	if not _chunks.has(key):
 		_build(cc, res)
 		_built += 1
 	_pick[cc] = key
 	return key
+
+## The first-person floor of chunk cc (FP_RES), baked now if it is missing or dirty.
+func floor_3d(cc: Vector2i) -> ImageTexture:
+	if _dirty.has(cc):
+		_dirty.erase(cc)
+		for r: int in ALL_RES: _drop(Vector3i(cc.x, cc.y, r))
+	var key := Vector3i(cc.x, cc.y, FP_RES)
+	if not _chunks.has(key):
+		_build(cc, FP_RES)
+	_chunks[key]["used"] = _frame
+	return _chunks[key]["floor"]
 
 func _drop(key: Vector3i) -> void:
 	if _chunks.has(key):
@@ -389,6 +407,10 @@ func _drop(key: Vector3i) -> void:
 		_chunks.erase(key)
 
 func _build(cc: Vector2i, res: int) -> void:
+	var key := Vector3i(cc.x, cc.y, res)
+	_floor_only = res == FP_RES
+	if _floor_only:
+		res = 32
 	var w := mini(C, _grid.width - cc.x * C)
 	var h := mini(C, _grid.height - cc.y * C)
 	var floor_img := Image.create(w * res, h * res, false, Image.FORMAT_RGBA8)
@@ -408,9 +430,15 @@ func _build(cc: Vector2i, res: int) -> void:
 					var fc := Vector2i(cc.x * C + x, cc.y * C + y)
 					if _grid.cell_fast(fc.x, fc.y).on_fire and not hidden_fire.has(fc):
 						floor_img.blend_rect(fire[0], Rect2i(0, 0, res, res), Vector2i(x * res, y * res))
+	if _floor_only:
+		_floor_only = false
+		var fbytes := w * h * res * res * 4
+		_chunks[key] = {"floor": ImageTexture.create_from_image(floor_img), "feat": null, "used": _frame, "bytes": fbytes}
+		_bytes += fbytes
+		return
 	_bake_items(feat_img, cc, res)
 	var bytes := w * h * res * res * 4 * 2
-	_chunks[Vector3i(cc.x, cc.y, res)] = {"floor": ImageTexture.create_from_image(floor_img),
+	_chunks[key] = {"floor": ImageTexture.create_from_image(floor_img),
 			"feat": ImageTexture.create_from_image(feat_img), "used": _frame, "bytes": bytes}
 	_bytes += bytes
 
@@ -441,7 +469,7 @@ func _bake_decals(img: Image, cc: Vector2i, res: int) -> void:
 		for dx in range(-1, 2):
 			var chunk := cc + Vector2i(dx, dy)
 			var near: Array = decals.get(chunk, []).duplicate()
-			if bake_map_decals:
+			if bake_map_decals or _floor_only:
 				near.append_array(map_decals.get(chunk, []))
 			if near == null:
 				continue
@@ -458,6 +486,8 @@ func _bake_decals(img: Image, cc: Vector2i, res: int) -> void:
 		return
 	for d: Dictionary in list:
 		var kind := str(d["kind"])
+		if _floor_only and (kind.begins_with("chunk:") or kind.begins_with("item:") or kind in MapData.WINTER_DECORATIONS):
+			continue
 		var look: Array = [0.95, Color(0.8, 0.1, 0.1, 0.5)] if kind == "corpse" else FxDecals.look_of(kind)
 		if look.is_empty():
 			continue
@@ -551,6 +581,8 @@ func _decal_sprite(kind: String, px: int, rot: float, look: Array) -> Image:
 	var chunk := kind.begins_with("chunk:")
 	var soot := kind.begins_with("soot:")
 	var art := "corpse" if kind == "corpse" else str(FxDecals.TEXTURE.get(kind, ""))
+	if kind in MapData.WINTER_DECORATIONS:
+		art = kind
 	var shape: PackedVector2Array = PackedVector2Array()
 	if chunk:
 		var parts := FxDecals.chunk_parts(kind)
@@ -618,6 +650,8 @@ func _evict() -> void:
 ## в слой объектов. at — угол клетки в картинке, res — точек на клетку.
 func _paint(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int) -> void:
 	_paint_terrain(img, feat, c, at, res)
+	if _floor_only:
+		return
 	# Each wall lamp hangs on the half of the wall tile facing its own side (0.11).
 	for lamp: Array in _grid.cell_fast(c.x, c.y).lamps:
 		var id := str(lamp[0])
@@ -637,6 +671,9 @@ func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int
 	var cell := _grid.cell_fast(c.x, c.y)
 	var full := Rect2i(0, 0, res, res)
 	var fname := _floor_name(cell, c)
+	if _floor_only and ground_kind(c) != 0:
+		fname = ""   # the first-person view lays its own seamless turf or earth there
+	fname = _winter_floor(fname)
 	var floors := _tile(fname, res) if fname != "" else []
 	if not floors.is_empty():
 		img.blit_rect(floors[variant_of(c + origin, floors.size())], full, at)
@@ -651,6 +688,8 @@ func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int
 		var ov := _tile(over, res)
 		if not ov.is_empty():
 			img.blend_rect(ov[variant_of(c + origin, ov.size())], full, at)
+	if _floor_only:
+		return
 	var fid := cell.feature_id
 	# Бункер вырыт в скале (item 24): стена, со всех восьми сторон окружённая стеной (или
 	# краем карты), — толща породы, а не обшивка; металлом облицованы только стены комнат.
@@ -671,7 +710,7 @@ func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int
 		if dimg != null:
 			feat.blend_rect(dimg, full, at)
 		if cell.airlock_welded:
-			feat.blend_rect(_weld_overlay(res), full, at)
+			feat.blend_rect(_weld_overlay(res, _wooden_door(c)), full, at)
 		return
 	var accent := _accent_of(c)
 	var name := pile_art(env) if fid == MCF.FEATURE_DIRT_PILE else tile_name(cell)
@@ -725,7 +764,7 @@ func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int
 		if not singles.is_empty():
 			feat.blit_rect(singles[variant_of(c + origin, singles.size())], full, at)
 	if cell.airlock_welded:
-		feat.blend_rect(_weld_overlay(res), full, at)
+		feat.blend_rect(_weld_overlay(res, false), full, at)
 
 ## Which way a DPMG points (owner, 2026-10-19): eighths clockwise from east, set by the
 ## resolver when it fires (GameActionResolver._face_dpmg); east until it first fires.
@@ -965,10 +1004,22 @@ func _accent_overlay(accent: int, mask: int, res: int) -> Image:
 
 ## Заваренный шлюз: поверх створок — крест из стальных полос по
 ## концам и посередине. Рисуется кодом, в res×res, один раз на разрешение.
-func _weld_overlay(res: int) -> Image:
-	var key := "weld@%d" % res
+## A welded door (owner, fix-8 #8): a metal airlock shows its weld beads, a wooden door
+## (town, field) the planks nailed across it — pictures of their own; a plain cross when
+## those are missing.
+func _wooden_door(c: Vector2i) -> bool:
+	var look := clampi(_grid.door_at(c.x, c.y), 0, DOOR_MATERIALS.size() * 3)
+	var material: String = DOOR_MATERIALS[(look - 1) / 3] if look > 0 else env
+	return material in ["town", "field"]
+
+func _weld_overlay(res: int, wooden := false) -> Image:
+	var key := "weld@%d@%s" % [res, wooden]
 	if _tiles.has(key):
 		return _tiles[key][0]
+	var pic := _tile("weld_wood" if wooden else "weld_metal", res)
+	if not pic.is_empty():
+		_tiles[key] = [pic[0]]
+		return pic[0]
 	var img := Image.create(res, res, false, Image.FORMAT_RGBA8)
 	var w := maxi(1, res / 8)
 	var steel := Color(0.36, 0.37, 0.40)
@@ -1001,15 +1052,9 @@ const _CHAIRS := {"chair": true, "armchair": true}
 func _furniture_image(c: Vector2i, fid: String, res: int, art := "") -> Image:
 	var pic := art if art != "" else fid
 	if time_of_day == "day" and fid in ["streetlight", "bollard_light"]: pic = fid + "_off"
-	var look: Array
-	if furniture_look == null:
-		look = _live_look(c, fid)
-	else:
-		var snap: Array = furniture_look.get(c, [])
-		if snap.is_empty() or snap[0] != fid:
-			snap = [fid, 0, 0, _single_turn(_grid, c, fid, origin), 0]
-			furniture_look[c] = snap
-		look = snap.slice(1)
+	if winter and (Sprites.has_override(pic + "_snow") or Sprites.has_override(pic + "_snow" + Sprites.AUTOTILE_SUFFIX)):
+		pic += "_snow"
+	var look := look_of(c, fid)
 	var mask: int = look[0]
 	var inner: int = look[1]
 	var k: int = look[2]
@@ -1038,6 +1083,18 @@ func _furniture_image(c: Vector2i, fid: String, res: int, art := "") -> Image:
 		img.rotate_90(CLOCKWISE)
 	_tiles[key] = [img]
 	return img
+
+## How furniture in cell c is drawn: [mask, inner, k, corner] — the joined sides in the
+## piece's own frame, its inner corners, k quarter turns (the back faces _TURN_DIRS[k]) and
+## the mitred corner. The first-person view stands its models the same way (fix-8).
+func look_of(c: Vector2i, fid: String) -> Array:
+	if furniture_look == null:
+		return _live_look(c, fid)
+	var snap: Array = furniture_look.get(c, [])
+	if snap.is_empty() or snap[0] != fid:
+		snap = [fid, 0, 0, _single_turn(_grid, c, fid, origin), 0]
+		furniture_look[c] = snap
+	return snap.slice(1)
 
 ## A fixed-size piece (piano, wardrobe, desk, dumpster...) is ONE picture,
 ## "<id>_piece.png", sized to the whole piece with its back edge at the top (0.11). Each
@@ -1633,6 +1690,18 @@ func _floor_name(cell: GridCell, c: Vector2i) -> String:
 		return MCF.FLOOR_LOOKS[look]
 	return "floor"
 
+## Open ground under cell c for the first-person view (fix-8): 1 grass, 2 bare earth,
+## 0 anything else. On the board these are 32-pixel tiles; walked on in 3D, a grid of
+## tiles showed through (owner), so there the ground is one seamless texture instead.
+func ground_kind(c: Vector2i) -> int:
+	var cell := _grid.cell_fast(c.x, c.y)
+	if cell.is_space:
+		return 0
+	match env_name(_floor_name(cell, c), env):
+		"floor_grass": return 1
+		"floor_field": return 2
+	return 0
+
 ## Настил ПОВЕРХ пола клетки (решётка, 0.9.3) или «» — настила нет. Решётка прозрачна
 ## между прутьями, поэтому она не заменяет пол: в космосе под ней звёзды, в помещении — его
 ## собственный пол.
@@ -1752,6 +1821,24 @@ static func prepare(ci: CanvasItem, cell_size: float) -> int:
 
 ## Index authored decals separately from floor pixels, beneath walls and objects.
 var time_of_day := ""
+## Winter (fix-8 #3): grass, earth and street under snow, plants in their snowy pictures.
+var winter := false
+
+func set_winter(value: bool) -> bool:
+	if winter == value: return false
+	winter = value
+	_chunks.clear()
+	_bytes = 0
+	return true
+
+const WINTER_FLOORS := {"floor_grass": "floor_snow", "floor_field": "floor_snow_field", "floor_town": "floor_town_snow"}
+
+## A floor tile's winter picture, when it has one.
+func _winter_floor(fname: String) -> String:
+	if not winter or fname == "":
+		return fname
+	return str(WINTER_FLOORS.get(env_name(fname, env), fname))
+
 func set_time_of_day(value: String) -> bool:
 	if time_of_day == value: return false
 	time_of_day = value

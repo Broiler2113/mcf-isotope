@@ -86,6 +86,7 @@ var _gen_sym: CheckBox
 ## Большую карту пересобираем, когда щелчки по настройкам стихнут, а не на каждый.
 var _gen_timer: Timer
 var _gen_obstacles: CheckBox
+var _gen_winter: CheckBox
 var _gen_furniture: OptionButton
 var _gen_time: OptionButton
 var _gen_time_row: Control
@@ -1144,6 +1145,9 @@ func _build_generator(box: VBoxContainer) -> void:
 	mech.add_theme_constant_override("h_separation", 10)
 	_gen_obstacles = _gen_check(mech, "Obstacles",
 			"Sandbags, trenches, hedgehogs, barricades, crates and pillars.")
+	# Winter (owner, fix-8 #3): next to Obstacles; snow on a town or a field, only looks.
+	_gen_winter = _gen_check(mech, "Winter", "Snow on the ground, the plants and the roofs, with snowmen and drifts. Town and field only; it changes nothing but the look.")
+	_gen_winter.set_pressed_no_signal(false)
 	_row(_gen_box, "Mechanics:", mech)
 	# Мебель (§3.15) — отдельно от «Obstacles»: обстановка комнат, а не укрепления.
 	_gen_furniture = _opt(MapFurnish.DENSITY_NAMES, int(defaults.get("furniture", MapFurnish.DEFAULT_DENSITY)))
@@ -1239,6 +1243,7 @@ func _gen_options() -> Dictionary:
 			# Горючесть — от стиля (0.11.3: галочку «Flammable» убрали по просьбе игрока).
 			"flammable": MapGen.STYLE_FLAMMABLE[clampi(_gen_style.selected, 0, MapGen.STYLE_FLAMMABLE.size() - 1)],
 			"obstacles": _gen_obstacles.button_pressed,
+			"winter": _gen_winter != null and _gen_winter.button_pressed,
 			"furniture": _gen_furniture.selected,
 			"time": (MapData.TIMES + ["random"])[_gen_time.selected] if _gen_time != null
 					and MapData.supports_time_of_day(MapGen.STYLE_ENV[_gen_style.selected]) else "",
@@ -1310,6 +1315,8 @@ func _set_player_count(n: int) -> void:
 func _on_gen_changed() -> void:
 	if _gen_time_row != null:
 		_gen_time_row.visible = MapData.supports_time_of_day(MapGen.STYLE_ENV[_gen_style.selected])
+	if _gen_winter != null:
+		_gen_winter.visible = MapData.supports_winter(MapGen.STYLE_ENV[_gen_style.selected])
 	if _gen_dims_row != null:
 		_gen_dims_row.visible = _gen_size.selected == MapGen.SIZE_CUSTOM
 	# Карта до ~100×100 собирается за десятки миллисекунд — сразу. Большая (до 250×250)

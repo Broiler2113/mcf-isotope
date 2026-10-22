@@ -126,6 +126,10 @@ func _roll_event_params(id: String) -> Dictionary:
 			var along := gw if edge % 2 == 0 else gh
 			var seg := mini(along, ARMY_SEGMENT_MIN + _rand_wide(ARMY_SEGMENT_MAX - ARMY_SEGMENT_MIN + 1))
 			var army := {"edge": edge, "from": _rand_wide(along - seg + 1), "len": seg}
+			# Announce where it will really land: a stretch of bare vacuum slides to ground.
+			var band := _army_band(edge, int(army["from"]), seg)
+			if not band.is_empty():
+				army = {"edge": band[0], "from": band[1], "len": band[2]}
 			# В бункере за краем — толща грунта (issues-12 #13): армия входит в САМ бункер,
 			# с конца коридора, ближайшего к объявленному участку края.
 			if state.env == "bunker":
@@ -399,7 +403,7 @@ func _land_army(p: Dictionary, res: ActionResult) -> void:
 	# Выпавшее сверх потолка событие просто проходит мимо, как и прежние «ничего».
 	var alive := 0
 	for s_id: int in state.turns.round_order:
-		if MCF.is_independent(s_id) and state.turns.playable(s_id, state.all_units()):
+		if MCF.is_independent(s_id) and _army_holds_field(s_id):
 			alive += 1
 	if alive >= ARMY_MAX:
 		res.log("Unknown forces hold off — the field is crowded enough")
@@ -448,6 +452,17 @@ func _land_army(p: Dictionary, res: ActionResult) -> void:
 			MCF.owner_name(slot), names[int(p.get("edge", 0)) % 4], placed])
 	notify_cell_changed(spots[0])
 
+## Does this raider army still hold the field (it crowds a new one out)? Only while it is
+## a force: at least five fighters and three in ten of those it landed with. A handful of
+## stragglers kept every later army away (owner, fix-8 #11: "raiders just don't spawn").
+func _army_holds_field(slot: int) -> bool:
+	var alive := 0
+	for u: UnitInstance in state.all_units():
+		if u.owner == slot and u.is_alive() and not u.is_drone:
+			alive += 1
+	var fallen := int(state.deaths.get(slot, state.deaths.get(str(slot), 0)))
+	return alive >= maxi(5, ceili((alive + fallen) * 0.3))
+
 func _army_stats(id: String) -> UnitStats:
 	if _army_stats_cache.has(id):
 		return _army_stats_cache[id]
@@ -474,15 +489,36 @@ func _army_budget() -> int:
 
 ## Свободные клетки участка края, на который высаживается армия: сперва по самому краю,
 ## потом глубже внутрь карты. Порядок строгий — он же порядок расстановки.
+## A stretch of edge with nothing but vacuum or wall across the whole map (a station's
+## margin) used to turn the army back (owner, fix-8 #11): the landing slides along the edge
+## to the nearest stretch with ground, then tries the other edges.
 func _army_spawn_cells(p: Dictionary) -> Array[Vector2i]:
 	if p.has("hx"):
 		return _hallway_spawn_cells(Vector2i(int(p["hx"]), int(p["hy"])))
+	var found: Array = _army_band(int(p.get("edge", 0)) % 4, int(p.get("from", 0)), maxi(1, int(p.get("len", ARMY_SEGMENT_MIN))))
+	return found[3] if not found.is_empty() else ([] as Array[Vector2i])
+
+## The nearest stretch of edge an army can land on: [edge, from, len, cells], or [] when the
+## whole map has nowhere.
+func _army_band(edge: int, from: int, seg: int) -> Array:
+	for e in 4:
+		var ed := (edge + e) % 4
+		var along := state.grid.width if ed % 2 == 0 else state.grid.height
+		var start := from if e == 0 else (along - seg) / 2
+		for k in range(0, along / seg + 2):
+			for sgn: int in ([1] if k == 0 else [1, -1]):
+				var f := start + sgn * k * seg
+				if f < 0 or f > along - 1:
+					continue
+				var cells := _army_band_cells(ed, f, mini(seg, along - f))
+				if not cells.is_empty():
+					return [ed, f, mini(seg, along - f), cells]
+	return []
+
+func _army_band_cells(edge: int, from: int, seg: int) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
 	var gw := state.grid.width
 	var gh := state.grid.height
-	var edge := int(p.get("edge", 0)) % 4
-	var from := int(p.get("from", 0))
-	var seg := int(p.get("len", ARMY_SEGMENT_MIN))
 	# Идём вглубь, пока не наберём, на что высаживаться (item 6). Прежде вглубь смотрели
 	# ровно на длину участка — и на станции, где у края один вакуум, а жилое начинается
 	# клеток через двадцать, армия не находила НИ ОДНОЙ клетки и всегда «поворачивала

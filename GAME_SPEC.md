@@ -865,8 +865,8 @@ The fix is a three-layer split, and everything reads the same predicate:
 `CivilianAI` all go through these instead of `is_occupied_or_wall`. The doorway also costs
 `FLAT_MOVE_COST`, not a climb: reading a shut airlock's 2 m `cover_height` as a wall to be
 scaled would have charged a soldier for vaulting a door that simply slides aside. A
-**welded** airlock fails `airlock_opens()` and therefore stays impassable forever, exactly
-as #99 intends.
+**welded** airlock fails `airlock_opens()` and remains impassable until an engineer cuts
+the weld or demolishes the door.
 
 **A body in the doorway holds the doors (batch 13 #4).** `update_airlocks()` treats a corpse
 *on the airlock cell itself* (`corpses_at(cell) > 0`) as a permanent "open": the doors
@@ -878,9 +878,12 @@ threshold *beside* the doorway does nothing. Welding such an airlock is refused
 **1 AP** (`WELD_AIRLOCK_AP`, `WeldAirlockIntent`). The cell gains `airlock_welded`, its
 height snaps to `WALL_HEIGHT` immediately — even with the engineer himself standing
 there — and `update_airlocks()` skips it from then on: the doors never part for anyone
-again. The flag rides in `GameState.snapshot`/`restore` (so Undo restores it) and in
-`IntentCodec` (`T_WELD`), and it is cleared only by `clear_feature()`, i.e. by
-demolishing the airlock outright. `weldable_cells(unit)` lists the adjacent unwelded
+again until cut. The flag rides in `GameState.snapshot`/`restore` (so Undo restores it) and in
+`IntentCodec` (`T_WELD`). The same intent cuts a welded door open for the same cost;
+`unweldable_cells(unit)` supplies that separate menu action. An engineer in a borg gets
+three weld/cut actions per AP, including remaining batch actions at zero AP. Changing
+the weld invalidates the door's proximity cache so it can open immediately.
+`weldable_cells(unit)` lists the adjacent unwelded
 airlocks and drives both the menu button and the highlight. This is how a corridor gets
 sealed without spending an engineer's whole turn building a fresh wall.
 
@@ -891,6 +894,10 @@ Glass, Armored Wall, Armored Glass, Airlock, BRU, Corpse Wall, **both pillbox va
 Sandbag Wall, Hedgehog+Sandbags, Hedgehog, and nameless terrain walls. The world
 boundary is excluded. **Miner or Engineer**, 1 AP each — demolition ignores durability,
 so a pillbox falls to one miner action even though it soaks two shells.
+Inside a borg, an engineer or miner demolishes ordinary walls, doors and glass in
+batches of three per AP. The remaining `break` credits persist between actions and
+expire with the unit's other build credits at the next round. Other fortifications
+retain their normal demolition cost.
 
 ### 9.6 Digging
 
@@ -974,6 +981,10 @@ the same id that join up by autotiling (`join` in the table):
   cabinets. Each cell is a segment; neighbouring segments join into one long counter or
   shelf, and a segment is smashed or burnt on its own.
 Every cell keeps its own height and durability.
+Destroyed furniture emits fragments of its own art and material, leaving the floor
+unchanged unless the attack itself damages it. The 3D model is clipped to surviving
+cells using the frozen original footprint, so a half-bed stays half a bed. Loading a
+save recovers that footprint from the saved opening board.
 
 **The table** is `src/data/Furniture.gd` (`_BASE`, with colour and content variants
 expanded into `DEFS`). Each row gives name, height class,
@@ -2294,10 +2305,14 @@ statement of which previews follow the mouse.
   click rewind the computer's move mid-turn.
 - **Dice are final (#81).** `_is_irreversible(intent, result)` returns true for anything
   that produced `dice_events`, and for `ShootIntent`, `RSPFireIntent`,
-  `DroneDetonateIntent`, and `VehicleCannonIntent` regardless. Such an action **clears the
+  and `VehicleCannonIntent` regardless. Such an action **clears the
   whole undo stack** rather than pushing a snapshot, so a bad roll cannot be replayed.
   Previously a shot pushed no snapshot but left the stack intact, so pressing Undo after
   firing silently rewound the action *before* the shot — the worst of both behaviours.
+- **Nonlethal drone detonation (0.13.1).** `DroneDetonateIntent` is an explicit exception:
+  undo is allowed when no non-drone unit died, including secondary damage. The drone,
+  affected terrain, equipment and wounds are restored; redo reapplies the saved result.
+  Event identifiers and consumed dice remain monotonic. A lethal detonation clears undo.
 - `feature_durability` is carried by `snapshot()` / `restore()` like every other cell
   field, so undoing back past a hit restores a cracked pillbox to full.
 
@@ -2416,6 +2431,18 @@ town: 149 ms → 0.2 ms at `ZOOM_MIN`, 17 ms → 8 ms just above `LOD_ZOOM`, 2.8
 1:1. The purchase screen got the same viewport culling (it drew all 62 500 cells every
 frame: ~500 ms → 2–8 ms).
 
+**First person (0.13.1).** The battle and editor offer a private walkthrough: WASD,
+mouse look, Space to jump, X to pass through walls within known terrain, and Escape
+back to the board. The editor shows all authored soldiers, civilians and corpse piles,
+independent of lobby population limits. It does not modify the map or battle state.
+`FirstPersonBoard` merges cached `FirstPersonModels` into streamed chunks; materials
+and ground use 32 texels per metre. The view samples `LightManager` for the same lamps,
+colours and occlusion as 2D, with outdoor sun shadows. `FirstPersonArt` retains the
+procedural source but loads pre-baked layers from `textures/first_person` on entry.
+`tools/art/build_first_person.gd -- --verify` checks those layers pixel for pixel.
+The placement screen's minimum zoom adapts to the map and viewport so the whole map
+can be surveyed before deployment.
+
 ### 18.5 Dice presentation
 
 Rolls play one at a time in a SteamChrome-framed **Dice Roll** window showing the
@@ -2481,6 +2508,15 @@ available only for Town and Field: the lobby hides it for Station, Bunker and As
 and the editor disables those menu choices. Generation ignores time options for those
 three environments.
 
+**Winter (0.13.1).** Town and Field maps have a saved `winter` flag, selected beside
+Obstacles in the generator or through the editor's undoable Map → Winter control.
+Snow replaces outdoor ground, foliage and roof art, including the distant view and
+editor minimap. Snowmen and drifts are `MapData.decals`, never cover or obstacles.
+Their generator uses a separate deterministic RNG, so turning winter on preserves
+the seed's entire gameplay map. Settings → Display controls falling snow in 2D and
+3D; 3D flakes respect roofs and visibility. Botany rooms in station service/research
+departments use planter beds, hydroponic racks and potting tables.
+
 **Live and dead, counted straight (0.9.4, issues-fix-10).** The turn line and the initiative
 window read one source, `_army_counts()`, and it counts **living soldiers from the board and
 casualties from `GameState.deaths`** — a per-owner ledger incremented in `_kill` and carried
@@ -2533,6 +2569,12 @@ network game and the active side in hotseat; **a side driven by an AI never coun
 viewer's own**, and when a player leaves and an AI takes over, their strokes are dropped
 on every screen (`_drop_drawings_of`) — before this the leaver's team drawings surfaced
 for everyone once the host went local and the AI's turn made it the "viewer".
+
+Rulers belong to the Drawing panel alongside Draw and Erase. Their endpoints, scope
+and undo operation travel with drawings. Enabling team/everyone sharing republishes
+the author's previous strokes, erasures and rulers in order, preserving the bounded
+undo history. A removed ruler never returns on resharing, even if it predates the undo
+limit. Multi-select and Heightmap remain available through their hotkeys.
 
 ### 18.7 Escape
 
@@ -3779,6 +3821,7 @@ glass are stamped into the terrain chunk once (`TerrainTiles._bake_decals`) inst
 redrawn every frame — at ~12k decals that was ~75 ms a frame and is now nothing. They follow
 the same fog rules as the terrain they sit on. Bloody footprints are gone with the rest of
 the per-step bookkeeping. **Service accents** (§20.2): on stations and in bunkers the walls and door frames of a service carry its colour — command blue, control/comms white, security red, medical green, science purple, engineering yellow, cargo orange, everything else grey; a room's own purpose beats its department (`MapGen.KIND_ACCENT`), the colour is a per-cell display-only byte (`MapData.wall_accent`, `MCF.Accent`) drawn as a line that runs along the wall and as a tinted door frame. **Corridors**: main ones are always 3 cells wide, maintenance tunnels 1 (2 about a quarter of the time), and grating is laid in roughly a third of the tunnels and in no room at all. **Grill walkway** (`MCF.Look.GRILL`): a floor look that is transparent between its bars and lies *over* a cell instead of replacing it; it runs from a hull airlock out into space with solar panels down both sides, and it is paintable in the editor. **Space draws no tile** — the `Starfield` parallax behind the board shows through it, following the camera (far layer 5 %, near 26 %); `floor_space.png` dropped by the player still wins. **Doors fill the whole cell** instead of a narrow panel in the middle of it. **Windows**: a symbol fallback font (✓ ✕ ▶ ⚠ are in neither Handjet nor Tahoma) and an explicit `stretch/aspect=expand` so a non-16:9 window is not letterboxed. Also: the hidden storage can no longer get an exterior airlock cut into it. **A border around every map** (§20.2): 10 cells in every direction that can be reached — diggable soil in a bunker, grass around a town or field, open space around a station or asteroid — and 2 more that cannot (`MCF.FEATURE_BOUNDARY`, in no destructible list, opaque to the laser), so the world keeps going past the battlefield but nothing walks off it. Lobby sizes now name the map, not the field. Also: `default_clear_color` was never applied — project.godot comments must start with `;`, and the `#` ones silently dropped the setting, so the window had been Godot grey instead of black all along. Tests: `tests/run_batch093.gd`. |
+| 134 | **Issues-fix-8** (release 0.13.1) — **First person rebuilt** (§18.4): the 3D view is lit by the battle screen's own light map (`LightManager.render_area` for the cells around the walker, read by every surface), sharing the board's light colours and occlusion through a cached light map; every piece of furniture, fortification, wall lamp, small item and lump of rubble is a modelled object (`FirstPersonModels`) at one texel density (32 px a metre, `FirstPersonArt.materials`); walls and floors carry baked relief; grass and field earth are one seamless 8 m texture instead of per-cell tiles; the map edge (`FEATURE_BOUNDARY`) is invisible in 3D as it is in 2D, and solar panels and gratings over space are drawn; vehicles are models with a turning turret and their name in Handjet on the hull. **Rules**: a wave or raider slot with no living *soldier* is skipped in the initiative (a drone in the air is not a soldier, §3.3); an engineer cuts a welded airlock open again for the same AP, three per action in a borg (§9.5); a borg tears down walls, glass and airlocks three per AP, like it builds them (§9.5); a drone detonation that killed nobody can be undone (§18.2); furniture smashed anywhere breaks into chunks of its own picture instead of rubbling the floor (§9.9). **Maps**: botany bays on stations (planter beds, hydroponic racks, potting tables), greenery on open ground (tall grass, hedges, flower beds, pines) and a **Winter** switch for town and field — snow on the ground, the plants and the roofs, snowmen and drifts, falling snow on both screens (Settings → Display). **Raiders** land again: an army crowds out the next one only while it is still a force (5+ fighters and 3 in 10 of its landing), and a landing stretch of bare vacuum slides along the edge to the nearest ground (§15.3). Rulers are drawings — they stay, share and undo like strokes — and turning on sharing re-sends everything drawn before it (§18.6). |
 | 133 | **Issues-fix-6** (protocol 22) — **Lanes** show before the dice (held, `FxDecals.preview_lanes`) but end at the aimed target. **Shot sounds:** one recorded single shot per bullet fired, the rest of a volley at the gun's cadence (`FxDecals.volley_requested` → `BattleAudio.volley`); the `burst` cue is gone. A hull pushing a wall over plays `crunch`, not `structure`. One `ui_click` for every UI interaction (`GameAudio._watch_ui`). **Raiders** play each action's effects before the next walk ("effects" markers from `advance_civilians`). **Smoke/gas** cost +2 to hit instead of blocking shots (§15). **Allies block** the firing line (§6.9). **Grenades** are never thrown past a wall. **DPMG:** choose the rounds, keep the rest of the 8-round burst for other targets at no AP (`ActionState.dpmg`), and the gun sprite turns toward its target (`Grid.furniture_turn`). **Wave shield bearers** survive every blast but a direct hull/AT/drone hit. **Landings** skip burning cells. **No spoil** on bodies. **HI** shows the "!" once its smoke is thrown. **Heightmap** labels tanks 2. **Fire** draws above debris. **Camera buttons** for raider groups and Holdout waves (visible ones under fog). **"Show the whole board"** after the match lifts the fog. **Perf:** fog memories diff the view on a walk or pre-impact hold instead of re-checking it (~90 ms → 0 per switch on a 120×90 board with 30k decals); undo and shield sweeps cut decal chunks in place instead of re-indexing (undo hitch ~120 ms → none). SFX bake is incremental (`sfx_inputs` signatures). Tests: `tests/run_issues_fix6.gd`. |
 | 132 | **0.12.2** — Wall chunks are sharp polygons in six shapes (`FxDecals.CHUNK_SHAPES`, kind `chunk:<art>#<shape>`) and sizes 0.45–1.6×, baked with a dark rim at 16 angles. Destroying furniture takes only the hit cell (`_destroy_furniture`; was the whole connected piece): the rest keeps its frozen battle look. Flying particles are drawn from the same baked sprite as the settled decal (`TerrainTiles._decal_sprite`) at the tile resolution, on the board's pixel grid, by a NEAREST-filtered child layer (`Main.FlyLayer`); vector drawing remains only without tiles. Protocol 12. Tests: `tests/run_batch0122.gd`. |
 | 131 | **Issues-fix-5** (0.12.1) — **Small items** (§9.9): free-placed cosmetic objects at any angle on tables and floors, table item sets (editor arrows, generator by room), knocked off by blasts, drags, carrying and run-overs, burned by fire; cabinets open (`_open` art) and spill once. **Explosions** (§21): wall chunks in the wall's own look, pillbox spall toward the shooter, varied soot, no decal caps. **Flamethrower** jet animation (§7.2). **Time of day** (Morning/Day/Evening/Night) per map: `MapData.time_of_day`, editor Map menu, generator option, `LightManager.TIME_*` ambient + flat tint. Lamp brightness: 16 steps, a typed value (10–500 %), the 300 % red lamp no longer equals the Remove menu id. **Drawn C&H zones** in the lobby (§14b). Symmetric random maps deploy at opposite ends. Editor variants by arrows / `,` `.`. Resprites: joined console (run), top-down washer, station airlocks (`tools/art/build_doors.py`); glowing objects recolor their glow pixels by hue (`TerrainTiles.tint_lamp`). **Font:** Handjet rebuilt as static Regular/Bold with merged outlines (no seam) and a slashed zero (`tools/font/build_handjet_ui.py`), emboldened 0.35. Keybind keyboard hover on Mac (own popup), engineer Build **‹ Back**. Follow-up (owner): deaths, blood and glass on bullet impact, flying rockets/shells/grenades with the blast on impact, the tank lane on the clicked cell (§7.2); station/asteroid rubble piles and deck trenches, "Rubble Pile" (§9.9). Protocol 11. Tests: `tests/run_batch0121.gd`. |

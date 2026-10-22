@@ -705,7 +705,7 @@ func _enter_furniture(m: int) -> void:
 
 func _enter_break() -> void:
 	var u := _selected_unit()
-	if u == null or u.remaining_ap <= 0:
+	if u == null or (u.remaining_ap <= 0 and int(u.build_credits.get(resolver.BREAK_CREDIT, 0)) <= 0):
 		return
 	mode = Mode.BREAK
 	reach = null
@@ -753,7 +753,7 @@ func _enter_weld() -> void:
 	var u := _selected_unit()
 	if u == null:
 		return
-	var cells := resolver.weldable_cells(u)
+	var cells := resolver.weldable_cells(u) + resolver.unweldable_cells(u)
 	if cells.is_empty():
 		return
 	mode = Mode.WELD
@@ -1228,16 +1228,20 @@ func _open_menu(unit: UnitInstance) -> void:
 		if unit.stats.special_ability_id == MCF.ABILITY_ENGINEER:
 			_act_btn(vb, "Build…", _open_build_picker, true, "", "action_build")
 		# Инженер: заварить соседний шлюз (#99).
-		if not resolver.weldable_cells(unit).is_empty():
+		var can_weld := not resolver.weldable_cells(unit).is_empty()
+		var can_cut := not resolver.unweldable_cells(unit).is_empty()
+		if can_weld or can_cut:
 			var weld_btn := Button.new()
-			weld_btn.text = "Weld Airlock (%d AP)" % resolver.weld_cost_for(unit)
+			weld_btn.text = "%s Airlock (%d AP)" % ["Weld / Unweld" if can_weld and can_cut else ("Weld" if can_weld else "Unweld"),
+					resolver.weld_cost_for(unit)]
 			weld_btn.pressed.connect(_enter_weld)
 			vb.add_child(weld_btn)
 			_register_menu_action(weld_btn, "action_weld")
 
 		# Инженер/шахтёр: слом укреплений (§3.7).
 		if not resolver.breakable_cells(unit).is_empty():
-			_act_btn(vb, "Demolish Fortification", _enter_break, unit.remaining_ap > 0, "No action points left", "action_demolish")
+			_act_btn(vb, "Demolish Fortification", _enter_break,
+					unit.remaining_ap > 0 or int(unit.build_credits.get(resolver.BREAK_CREDIT, 0)) > 0, "No action points left", "action_demolish")
 
 		# Инженер чинит свою машину (веха «Modular tank system», §8): одно очко узлу
 		# за 1 ОД. Кнопка на каждую машину рядом — их редко больше одной, а выбирать
@@ -1546,7 +1550,7 @@ func _handle_shortcut(event: InputEventKey) -> bool:
 	if Keybinds.matches(event, "game_remove_point"):
 		if mode == Mode.RULER:
 			if _ruler_a != Vector2i(-1, -1): _ruler_a = Vector2i(-1, -1)
-			elif not _rulers.is_empty(): _rulers.pop_back()
+			else: _remove_my_last_ruler()
 			_refresh_ruler_button()
 			queue_redraw()
 			return true

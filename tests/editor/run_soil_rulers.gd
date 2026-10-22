@@ -119,9 +119,7 @@ func _process(_d: float) -> bool:
 	# Clicks go through _pos_to_cell(get_global_mouse_position()); headless has no mouse,
 	# so drive the same branch with the rulers' own state instead.
 	for pair in [[Vector2i(1, 1), Vector2i(6, 1)], [Vector2i(1, 3), Vector2i(1, 8)], [Vector2i(3, 3), Vector2i(9, 9)]]:
-		_main._ruler_a = pair[0]
-		_main._rulers.append([_main._ruler_a, pair[1]])
-		_main._ruler_a = Vector2i(-1, -1)
+		_main._place_ruler(pair[0], pair[1])
 	ck(_main._rulers.size() == 3, "three rulers stay on the field")
 	var bs := InputEventKey.new()
 	bs.keycode = KEY_BACKSPACE
@@ -129,9 +127,18 @@ func _process(_d: float) -> bool:
 	_main._unhandled_input(bs)
 	ck(_main._rulers.size() == 2, "Backspace removes the last ruler")
 	_main._refresh_ruler_button()
-	ck(_main._ruler_btn.text == "Ruler: on (2)", "the button counts them (%s)" % _main._ruler_btn.text)
+	ck(_main._ruler_btn.text == "Ruler: on", "the button says the tool is on (%s)" % _main._ruler_btn.text)
+	# Owner, fix-8 #5: a ruler is a drawing — it stays when the tool is put away, Undo
+	# drawing takes the last one back, and Share with everyone sends them again.
 	_main._enter_ruler()   # toggles off
-	ck(_main._rulers.is_empty(), "leaving the ruler clears them all")
+	ck(_main._rulers.size() == 2, "rulers stay after the tool is put away")
+	_main._undo_my_drawing()
+	ck(_main._rulers.size() == 1, "Undo drawing takes the last ruler back")
+	_main._reshare_drawings(_main.DrawScope.ALL)
+	ck(_main._rulers.size() == 1 and int(_main._rulers[0]["scope"]) == _main.DrawScope.ALL,
+			"sharing with everyone sends the ruler too")
+	_main._clear_my_drawings()
+	ck(_main._rulers.is_empty(), "Clear my drawings clears the rulers")
 	print("soil/rulers: %d failure(s)" % fails)
 	quit(1 if fails else 0)
 	return true

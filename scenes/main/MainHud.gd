@@ -399,6 +399,13 @@ func _reposition_hud_grip() -> void:
 
 # --- UI ---
 func _build_ui() -> void:
+	# Snow over a winter map (fix-8 #3): over the board, under every window.
+	if state != null and state.winter:
+		var snow_layer := CanvasLayer.new()
+		snow_layer.layer = 1   # the same as the UI layer, added first: under it
+		add_child(snow_layer)
+		_snowfall = Snowfall.new()
+		snow_layer.add_child(_snowfall)
 	_ui_layer = CanvasLayer.new()
 	add_child(_ui_layer)
 
@@ -431,6 +438,7 @@ func _build_ui() -> void:
 	grip_mark.set_anchors_preset(Control.PRESET_FULL_RECT)
 	grip_mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hud_grip.add_child(grip_mark)
+	Ui.accent_changed.connect(func() -> void: grip_mark.color = Ui.accent_color())
 
 	var frame := VBoxContainer.new()
 	frame.add_theme_constant_override("separation", 0)
@@ -517,10 +525,10 @@ func _build_ui() -> void:
 	_multi_btn.text = "Multi-Select"
 	_multi_btn.add_theme_font_size_override("font_size", 12)
 	_multi_btn.toggled.connect(_on_multi_toggled)
+	# Multi-select and the heightmap are hotkeys only (owner, fix-8 #5): the boxes stay as
+	# their state, out of sight.
+	_multi_btn.visible = false
 	tools_box.add_child(_multi_btn)
-	# Линейка (item 11) — зрительский инструмент, ничего не меняющий на доске.
-	_ruler_btn = _compact_button("Ruler", _enter_ruler)
-	tools_box.add_child(_ruler_btn)
 	# Передать выделенных бойцов другому игроку (fix-7 #18) — в любой момент.
 	var give_btn := _compact_button("Give Units…", _open_give_units)
 	give_btn.tooltip_text = "Give the selected soldiers to another player, at any time."
@@ -535,6 +543,7 @@ func _build_ui() -> void:
 	_height_btn.add_theme_font_size_override("font_size", 12)
 	_height_btn.button_pressed = _heightmap
 	_height_btn.toggled.connect(_toggle_heightmap)
+	_height_btn.visible = false
 	tools_box.add_child(_height_btn)
 	_reveal_btn = CheckBox.new()
 	_reveal_btn.text = "Show the whole board"
@@ -577,7 +586,9 @@ func _build_ui() -> void:
 	var draw_box := _floating_hud_panel("Drawing", panel_buttons, Vector2(12, 44))
 	_draw_btn = _compact_button("Draw", _enter_draw)
 	_erase_btn = _compact_button("Erase", _enter_erase)
-	draw_box.add_child(_button_row([_draw_btn, _erase_btn]))
+	# The ruler is a drawing tool now (owner, fix-8 #5): its marks stay and are shared.
+	_ruler_btn = _compact_button("Ruler", _enter_ruler)
+	draw_box.add_child(_button_row([_draw_btn, _erase_btn, _ruler_btn]))
 	draw_box.add_child(_colour_row())
 	var undo_draw := _compact_button("Undo drawing", _undo_my_drawing)
 	undo_draw.tooltip_text = "Take back your last stroke or erase (%s while drawing)." % Keybinds.label("game_undo")
@@ -612,8 +623,12 @@ func _build_ui() -> void:
 		scope_note.add_theme_font_size_override("font_size", 12)
 		draw_box.add_child(scope_note)
 	else:
-		draw_box.add_child(_draw_toggle("Share with team", func(on: bool) -> void: _draw_scope_team = on))
-		draw_box.add_child(_draw_toggle("Share with everyone", func(on: bool) -> void: _draw_scope_all = on))
+		draw_box.add_child(_draw_toggle("Share with team", func(on: bool) -> void:
+			_draw_scope_team = on
+			if on: _reshare_drawings(DrawScope.TEAM)))
+		draw_box.add_child(_draw_toggle("Share with everyone", func(on: bool) -> void:
+			_draw_scope_all = on
+			if on: _reshare_drawings(DrawScope.ALL)))
 	draw_box.add_child(_draw_toggle("Hide others' drawings", func(on: bool) -> void: _hide_others_draw = on))
 	draw_box.add_child(_draw_toggle("Hide my drawings", func(on: bool) -> void: _hide_my_draw = on))
 	draw_box.add_child(_draw_toggle("Hide all drawings", func(on: bool) -> void: _hide_all_draw = on))
@@ -966,6 +981,9 @@ func _refresh_initiative_overlay() -> void:
 			lbl.add_theme_color_override("font_color", TURN_ACTIVE_COLOR)
 		if tm.is_eliminated(slot):
 			lbl.text += "  (eliminated)"
+			lbl.modulate = Color(1, 1, 1, 0.45)
+		elif int(rec["alive"]) == 0:
+			lbl.text += "  (no soldiers, skipped)"
 			lbl.modulate = Color(1, 1, 1, 0.45)
 		row.add_child(lbl)
 		_init_overlay_body.add_child(row)

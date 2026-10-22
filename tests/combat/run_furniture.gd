@@ -410,7 +410,7 @@ func _gen(style: int, lv: int, seed: int, extra: Dictionary = {}) -> MapData:
 func _count(m: MapData) -> int:
 	var n := 0
 	for f in m.feature_id:
-		if Furniture.is_furniture(f) and Furniture.DEFS[f].cat != "lighting" and f != "lamp":
+		if Furniture.is_furniture(f) and Furniture.DEFS[f].cat != "lighting" and f != "lamp" and not MapFurnish.is_greenery(f):
 			n += 1
 	return n
 

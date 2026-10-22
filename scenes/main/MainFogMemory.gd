@@ -204,6 +204,7 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, fog_on: bool) -> voi
 		_tiles = TerrainTiles.new(shown, state.env)
 		_tiles.bake_fire = true
 		_tiles.set_time_of_day(state.time_of_day)
+		_tiles.set_winter(state.winter)
 		_tiles.furniture_look = _furniture_look
 		_tiles_grid = tiles_key
 		_lod.tiles = _tiles
@@ -514,7 +515,12 @@ func _lod_texture_averages() -> Dictionary:
 		# Шлюз с 0.9.2 рисуется дверью в раме, и файл у неё — "door".
 		var base: String = "door" if n == MCF.FEATURE_AIRLOCK else n
 		# Окружение карты (item 24): дальний план того же цвета, что и плитки вблизи.
-		var tex := Sprites.texture_of(TerrainTiles.env_name(base, state.env))
+		var art := TerrainTiles.env_name(base, state.env)
+		if state.winter:
+			art = str(TerrainTiles.WINTER_FLOORS.get(art, art))
+			if Furniture.is_furniture(base) and Sprites.has_override(base + "_snow"):
+				art = base + "_snow"
+		var tex := Sprites.texture_of(art)
 		if tex == null:
 			continue
 		var img := tex.get_image()

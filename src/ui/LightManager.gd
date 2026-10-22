@@ -147,6 +147,14 @@ void fragment() {
 
 var occluders := LightOccluders.new()
 var ambient := Color(0.24, 0.25, 0.28)
+## Fire breathes a little on the battle screen; the first-person view keeps it steady
+## (owner, fix-8: "remove the flickering lights").
+var flicker := true
+## Lights that are neither lamps nor effects: drones in the air (fix-8 #12). Each is
+## [position in cells, radius, energy, colour]; the owner of this map fills it.
+var extra_lights: Array = []
+## Drawn into a texture only (first person): nothing is laid over the screen.
+var offscreen := false
 ## Debug / test counters.
 var redraws := 0
 var last_instances := 0
@@ -220,6 +228,9 @@ func _ready() -> void:
 	_shade = _Shade.new()
 	_shade.material = mul
 	add_child(_shade)
+	if offscreen:
+		_out.visible = false
+		_shade.visible = false
 
 ## Ambient light level from the player's darkness setting (0 = daylight, 1 = pitch black)
 ## and the map: space and underground maps read cool, the outdoors moonlit.
@@ -292,11 +303,38 @@ func update_view(grid: Grid, pan: Vector2, zoom: float, origin: Vector2, cell_si
 		_shade.set_view(Rect2(), Rect2(origin, Vector2(grid.width, grid.height) * cell_size), _outside(),
 				Rect2((Vector2.ZERO - pan) / zoom, screen / zoom))
 		return
-	_out.visible = true
+	_out.visible = not offscreen
 	var texels := clampi(int(cell_size * zoom / SCREEN_PX_PER_TEXEL), MIN_TEXELS, MAX_TEXELS)
 	# Keep the map within a sane texture size however far out the camera is.
 	while texels > MIN_TEXELS and view.size.x * view.size.y * texels * texels > 1_500_000:
 		texels -= 1
+	_out.position = origin + Vector2(view.position) * cell_size
+	_out.scale = Vector2.ONE * cell_size / float(texels)
+	_shade.set_view(Rect2(_out.position, Vector2(view.size) * cell_size),
+			Rect2(origin, Vector2(grid.width, grid.height) * cell_size), _outside(),
+			Rect2((Vector2.ZERO - pan) / zoom, screen / zoom))
+	_render(grid, view, texels, visible_cells, limited, fx, time_of_day)
+
+## The first-person view (fix-8) lights its board from this very map, so 3D is lit exactly
+## like the battle screen: the cells `view` at `texels` per cell, with no screen around it.
+## Read the texture at (cell - view.position) / view.size; it is ready next frame.
+func render_area(grid: Grid, view: Rect2i, texels: int, env: String, visible_cells: Dictionary,
+		limited: bool, fx: FxDecals, time_of_day: String, darkness: float = -1.0) -> Texture2D:
+	if _vp == null or grid == null: return null
+	if darkness < 0.0:
+		var ui := get_node_or_null("/root/Ui")
+		darkness = float(ui.light_darkness) if ui != null else 0.75
+	ambient = ambient_for(env, darkness, time_of_day)
+	_space_env = env in ["station", "asteroid"]
+	occluders.sync(grid)
+	_sync_walls(grid)
+	view = view.intersection(Rect2i(0, 0, grid.width, grid.height))
+	if view.size.x > 0 and view.size.y > 0:
+		_render(grid, view, texels, visible_cells, limited, fx, time_of_day)
+	return _vp.get_texture()
+
+func _render(grid: Grid, view: Rect2i, texels: int, visible_cells: Dictionary, limited: bool,
+		fx: FxDecals, time_of_day: String) -> void:
 	# Lights: static ones from the index (rebuilt only when the view's reach, the index or
 	# — under fog — the sight counters change), plus flashes and muzzle fire from effects.
 	var reach := view.grow(int(MAX_RANGE))
@@ -321,8 +359,12 @@ func update_view(grid: Grid, pan: Vector2, zoom: float, origin: Vector2, cell_si
 		if not limited or visible_cells.has(f[0]):
 			var cell: Vector2i = f[0]
 			var fire: Array = f[1].duplicate()
-			fire[2] = float(fire[2]) * (0.9 + 0.1 * sin(Time.get_ticks_msec() * 0.009 + cell.x * 1.7 + cell.y * 2.3))
+			if flicker:
+				fire[2] = float(fire[2]) * (0.9 + 0.1 * sin(Time.get_ticks_msec() * 0.009 + cell.x * 1.7 + cell.y * 2.3))
 			dynamic.append(fire)
+	for l: Array in extra_lights:
+		if reach.has_point(Vector2i((l[0] as Vector2).floor())):
+			dynamic.append(l)
 	if fx != null:
 		for flash: Dictionary in fx.flashes:
 			var a := FxDecals.flash_alpha(flash)
@@ -339,11 +381,6 @@ func update_view(grid: Grid, pan: Vector2, zoom: float, origin: Vector2, cell_si
 			if limited and not visible_cells.has(Vector2i(from.floor())): continue
 			dynamic.append([from, 2.5, 1.2 * e, Color(1.0, 0.85, 0.5)])
 	var key := [view, texels, skey, _walls_key, ambient, hash(dynamic) if not dynamic.is_empty() else 0]
-	_out.position = origin + Vector2(view.position) * cell_size
-	_out.scale = Vector2.ONE * cell_size / float(texels)
-	_shade.set_view(Rect2(_out.position, Vector2(view.size) * cell_size),
-			Rect2(origin, Vector2(grid.width, grid.height) * cell_size), _outside(),
-			Rect2((Vector2.ZERO - pan) / zoom, screen / zoom))
 	if key == _key: return
 	_key = key
 	var size := view.size * texels

@@ -232,6 +232,11 @@ def refrigerator(cv, c):
     open_front(cv, 1, .88, 1.0)
 
 
+# Winter (fix-8): build_fix8.py renders "<id>_snow" with this set — snow lying on top.
+SNOW = False
+SNOW_C = rgb('#eef3f8')
+
+
 def foliage(cv, kind='', radius=.36, z=.5):
     colours = [rgb('#456a31'), rgb('#638b43'), rgb('#355a29')]
     for k in range(16 if kind != 'palm' else 8):
@@ -242,8 +247,10 @@ def foliage(cv, kind='', radius=.36, z=.5):
             cv.line(.5,.5,x,y,.045 if kind=='dry' else .08,z+.06,solid(rgb('#88724c') if kind=='dry' else colours[k%3]),bevel=.015)
         else:
             cv.ellipse(x,y,.12,.095,z+(k%4)*.04,solid(colours[k%3]),bevel=.04,dome=.035)
-        if kind == 'flowering' and k%3 == 0:
+        if kind == 'flowering' and k%3 == 0 and not SNOW:
             cv.circle(x,y,.045,z+.18,solid(rgb('#d89db6')),bevel=.01)
+        if SNOW and k % 2 == 0:
+            cv.ellipse(x - .02, y - .02, .075, .055, z + .2 + (k % 4) * .04, solid(SNOW_C, var=.02, gloss=.25), bevel=.03, dome=.02)
 
 
 def potted_plant(cv, c):
@@ -857,6 +864,136 @@ def floor_lamp(cv, c):
     cv.circle(0.5, 0.5, 0.12, 0.95, solid(BULB, var=0.0, gloss=0.7), bevel=0.06, dome=0.04, emit=0.9)
 
 
+# --- fix-8: botany, outdoor plants, winter ------------------------------------------------
+LEAF = [rgb('#456a31'), rgb('#638b43'), rgb('#355a29'), rgb('#7a9a4a')]
+SOIL = rgb('#3b2a1c')
+
+
+def planter_bed(cv, w, h, c):
+    """A raised wooden bed of soil along a row, leafy crops in it."""
+    cv.rect(0.0, M, w, h - M, 0.42, wood(rgb('#8a5f37'), freq=6), r=0.0, bevel=0.03)
+    cv.rect(0.0, M + .07, w, h - M - .07, 0.36, solid(SOIL, var=.12, scale=9), r=0.0, bevel=0.02)
+    rng = np.random.default_rng(cv.seed + 11)
+    for i, j in cells(w, h):
+        for k in range(3):
+            x = i + .2 + k * .3
+            y = j + .5 + (rng.random() - .5) * .16
+            for l in range(5):
+                a = l * 1.256 + rng.random() * .4
+                cv.ellipse(x + .07 * math.cos(a), y + .07 * math.sin(a), .07, .045, .46 + l * .01,
+                           solid(LEAF[(k + l) % 4], var=.05), bevel=.02, dome=.02)
+
+
+def hydroponic_rack(cv, w, h, c):
+    """Seen from above: the top tray of a rack — plants in rows, grow-light bars over them."""
+    cv.rect(0.0, M, w, h - M, 1.2, metal(STEEL_D, gloss=.4), r=0.0, bevel=0.02)
+    cv.rect(0.0, M + .06, w, h - M - .06, 1.18, plastic(rgb('#d9dcd6')), r=0.0, bevel=0.015)
+    for i, j in cells(w, h):
+        for k in range(4):
+            x = i + .14 + k * .24
+            for l in range(2):
+                y = j + .32 + l * .36
+                cv.circle(x, y, .07, 1.24, solid(LEAF[(k + l) % 4]), bevel=.02, dome=.03)
+        for y in (j + .2, j + .8):
+            cv.rect(i - .01, y - .03, i + 1.01, y + .03, 1.32, solid(BULB, var=0.0, gloss=0.6), r=0.01, bevel=0.01, emit=0.9)
+
+
+def seed_table(cv, w, h, c):
+    """A steel potting table covered in seedling trays and a few pots."""
+    cv.rect(.05, M, w - .05, h - M, .8, metal(STEEL, gloss=.45), r=.02, bevel=.02)
+    rng = np.random.default_rng(cv.seed + 5)
+    for k in range(int(w * 2)):
+        x0 = .1 + k * (w - .2) / (w * 2)
+        x1 = x0 + (w - .2) / (w * 2) - .04
+        cv.rect(x0, .2, x1, .62, .84, plastic(rgb('#2b2b2b')), r=.01, bevel=.01)
+        for gx in range(3):
+            for gy in range(3):
+                cv.circle(x0 + (x1 - x0) * (gx + .5) / 3, .26 + gy * .13, .035, .88, solid(LEAF[(gx + gy + k) % 4]), bevel=.01, dome=.02)
+    for k in range(int(w * 2)):
+        cv.circle(.25 + k * .5, .78, .09, .9, ceramic(rgb('#a8573a')), bevel=.02)
+        cv.circle(.25 + k * .5, .78, .05, .96, solid(LEAF[k % 4]), bevel=.02, dome=.03)
+
+
+def pine_tree(cv, c):
+    """A conifer from above: tiers of dark needles narrowing to the top."""
+    cv.circle(.5, .5, .1, .3, wood(WOOD), bevel=.02)
+    greens = [rgb('#2c4a2a'), rgb('#36573a'), rgb('#25402a')]
+    for t, r in enumerate((.44, .36, .27, .17, .08)):
+        z = .6 + t * .18
+        for k in range(10):
+            a = k * .628 + t * .3
+            cv.ellipse(.5 + r * .55 * math.cos(a), .5 + r * .55 * math.sin(a), r * .55, r * .4, z,
+                       solid(greens[(k + t) % 3], var=.06), bevel=.04, dome=.03)
+        if SNOW:
+            for k in range(5):
+                a = k * 1.256 + t
+                cv.ellipse(.5 + r * .45 * math.cos(a) - .02, .5 + r * .45 * math.sin(a) - .02, r * .3, r * .2, z + .12,
+                           solid(SNOW_C, var=.02, gloss=.25), bevel=.03, dome=.02)
+
+
+def hedge(cv, w, h, c):
+    """A clipped hedge row: a dense flat-topped mass of small leaves."""
+    cv.rect(0.0, M + .05, w, h - M - .05, .9, solid(rgb('#35562b'), var=.1, scale=14), r=.08, bevel=.08, dome=.06)
+    rng = np.random.default_rng(cv.seed + 3)
+    for _ in range(int(60 * w)):
+        x = rng.random() * w
+        y = M + .1 + rng.random() * (h - 2 * M - .2)
+        cv.circle(x, y, .03 + rng.random() * .03, .97, solid(LEAF[rng.integers(4)]), bevel=.015, dome=.01)
+    if SNOW:
+        cv.rect(0.0, M + .12, w, h - M - .2, 1.02, solid(SNOW_C, var=.02, gloss=.25), r=.08, bevel=.05, dome=.03)
+
+
+def tall_grass(cv, c):
+    """A tuft of tall grass and reeds: blades fanning out from a clump."""
+    rng = np.random.default_rng(cv.seed + 17)
+    cols = [rgb('#6f8a3a'), rgb('#8a9a4a'), rgb('#556f2e'), rgb('#9aa05a')]
+    for k in range(26):
+        a = rng.random() * 6.283
+        r = .12 + rng.random() * .3
+        cv.line(.5 + .04 * math.cos(a), .5 + .04 * math.sin(a), .5 + r * math.cos(a), .5 + r * math.sin(a),
+                .03, .25 + rng.random() * .3, solid(cols[k % 4], var=.05), bevel=.01)
+    if SNOW:
+        cv.circle(.5, .5, .12, .62, solid(SNOW_C, var=.02, gloss=.25), bevel=.04, dome=.03)
+
+
+def flower_bed(cv, w, h, c):
+    """A brick-edged bed of soil with flowers in colours."""
+    cv.rect(0.0, M, w, h - M, .3, concrete(rgb('#8a4a38')), r=0.0, bevel=.03)
+    cv.rect(0.0, M + .07, w, h - M - .07, .27, solid(SOIL, var=.12, scale=9), r=0.0, bevel=.02)
+    rng = np.random.default_rng(cv.seed + 23)
+    petals = [rgb('#d8445a'), rgb('#f0c040'), rgb('#e8e0f0'), rgb('#8a5ad0'), rgb('#f08a3a')]
+    for i, j in cells(w, h):
+        for k in range(9):
+            x = i + .1 + rng.random() * .8
+            y = j + M + .12 + rng.random() * (1 - 2 * M - .24)
+            cv.circle(x, y, .055, .32, solid(LEAF[k % 4]), bevel=.015, dome=.01)
+            if not SNOW:
+                cv.circle(x, y, .03, .37, solid(petals[rng.integers(5)]), bevel=.01, dome=.01)
+    if SNOW:
+        cv.rect(0.0, M + .1, w, h - M - .1, .4, solid(SNOW_C, var=.02, gloss=.25), r=.04, bevel=.04, dome=.02)
+
+
+def snowman(cv, c):
+    """Three balls of snow from above, a carrot nose, coal eyes and a scarf."""
+    snow = solid(SNOW_C, var=.03, gloss=.25)
+    cv.circle(.5, .55, .34, .55, snow, bevel=.12, dome=.12)
+    cv.circle(.5, .5, .25, .95, snow, bevel=.1, dome=.1)
+    cv.rect(.3, .36, .7, .44, 1.1, fabric(rgb('#b0302a')), r=.03, bevel=.02)
+    cv.circle(.5, .45, .17, 1.3, snow, bevel=.08, dome=.08)
+    for x in (.44, .56):
+        cv.circle(x, .4, .022, 1.42, solid(BLACK), bevel=.005)
+    cv.line(.5, .45, .5, .62, .035, 1.42, solid(rgb('#e07a2a')), bevel=.01)
+
+
+def snowdrift(cv, w, h, c):
+    """A long heap of snow, sculpted by the wind."""
+    cv.rect(0.0, M + .02, w, h - M - .02, .35, solid(SNOW_C, var=.03, gloss=.2), r=.18, bevel=.25, dome=.15)
+    rng = np.random.default_rng(cv.seed + 31)
+    for _ in range(int(6 * w)):
+        x = rng.random() * w
+        cv.ellipse(x, .3 + rng.random() * .4, .14, .08, .5, solid(SNOW_C * .97, var=.02, gloss=.2), bevel=.06, dome=.04)
+
+
 def desk_lamp(cv, c):
     cv.rect(0.06, 0.08, 0.94, 0.82, 0.75, wood(WOOD, freq=8), r=0.03, bevel=0.03)
     cv.rect(0.4, 0.38, 0.88, 0.7, 0.77, solid(rgb("#f1eee6")), r=0.005, bevel=0.005)
@@ -877,9 +1014,11 @@ SINGLE = {k: v for k, v in globals().items() if callable(v) and k in (
     "vending_machine water_cooler tool_cabinet pallet crate barrel equipment_cart toolbox ammo_crate "
     "washing_machine target vent_fan specimen_fridge gas_canister water_bucket trash_bin street_cabinet "
     "wall_lamp wall_strip bulkhead_lamp wall_beacon ceiling_lamp streetlight floodlight bollard_light "
-    "machine_workstation work_light floor_lamp desk_lamp lamp bush bush_dry bush_flowering park_tree shower").split()}
+    "machine_workstation work_light floor_lamp desk_lamp lamp bush bush_dry bush_flowering park_tree shower "
+    "pine_tree tall_grass snowman").split()}
 JOINED = {k: v for k, v in globals().items() if callable(v) and k in (
     "sofa bed bunk_bed desk office_desk dining_table wardrobe dresser bookshelf kitchen_counter piano "
     "conference_table filing_cabinet locker reception_desk display_shelf checkout_counter workbench "
     "storage_shelf server_rack console industrial_cabinet generator machinery exam_table fuel_tank steel_table "
-    "lab_bench morgue_drawers biohazard_cabinet bench dumpster park_table plastic_table bathtub").split()}
+    "lab_bench morgue_drawers biohazard_cabinet bench dumpster park_table plastic_table bathtub "
+    "planter_bed hydroponic_rack seed_table hedge flower_bed snowdrift").split()}

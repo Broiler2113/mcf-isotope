@@ -88,6 +88,9 @@ func _sync_time_tint(tint: Color) -> void:
 
 func _sync_lighting() -> void:
 	if _tiles != null and _tiles.set_time_of_day(state.time_of_day if state != null else ""): queue_redraw()
+	if _tiles != null and state != null and _tiles.set_winter(state.winter): queue_redraw()
+	if _before_tiles != null and state != null and _before_tiles.set_winter(state.winter):
+		if _before_layer != null: _before_layer.queue_redraw()
 	if _before_tiles != null and _before_tiles.set_time_of_day(state.time_of_day if state != null else ""):
 		if _before_layer != null: _before_layer.queue_redraw()
 	if state != null:
@@ -114,9 +117,24 @@ func _sync_lighting() -> void:
 		# выросшая в темноте, не должна выдавать себя новой тенью.
 		var base: Grid = _fog_mem.get(_viewing_side(), state.grid) if limited else state.grid
 		var lit_grid := _terrain_before_impact(base, _visible_before_impact(_viewing_side()), limited)
+		_lighting.extra_lights = drone_lights(_viewing_side(), _visible_before_impact(_viewing_side()), limited)
 		_lighting.update_view(lit_grid, pan, zoom, ORIGIN, CELL, state.env,
 			_visible_before_impact(_viewing_side()) if limited else {}, limited, _fx, _lod,
 			-1.0, state.time_of_day)
+
+## Drones in the air glow a little (fix-8 #12), scouts more: [cell centre, radius, energy,
+## colour] for every drone this viewer can see. First person lights its board the same way.
+func drone_lights(viewer: int, visible: Dictionary, limited: bool) -> Array:
+	var out: Array = []
+	for u: UnitInstance in state.all_units():
+		if not u.is_drone or not u.is_alive() or not state.grid.in_bounds(u.coord):
+			continue
+		if limited and u.owner != viewer and not state.roster.are_allies(viewer, u.owner) and not visible.has(u.coord):
+			continue
+		var scout := MCF.is_scout(u)
+		out.append([Vector2(u.coord) + Vector2(0.5, 0.5), 4.5 if scout else 2.5, 0.75 if scout else 0.4,
+				Color(0.8, 0.92, 1.0)])
+	return out
 
 func _update_screen_shake() -> void:
 	var age := 1.0
@@ -266,7 +284,7 @@ func _build_ground() -> void:
 ## координаты — тем же приёмом, что и на самой доске, поэтому рисунок не выстраивается в
 ## сетку. Дополнительная плитка нужна только окружениям, где допустимы проплешины.
 func _ground_wallpaper() -> ImageTexture:
-	return GroundBackdrop.wallpaper(state.env)
+	return GroundBackdrop.wallpaper(state.env, state.winter)
 
 func _ground_floor_name() -> String:
 	return GroundBackdrop._ground_floor_name(state.env)
