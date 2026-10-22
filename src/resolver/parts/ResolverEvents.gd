@@ -223,26 +223,22 @@ func land_random_events(res: ActionResult) -> void:
 		if random_events.dust_left == 0:
 			res.log("The dust storm blows over")
 	for e: Dictionary in random_events.take_landing(state.turns.round_number):
-		var p: Dictionary = e["params"]
-		match str(e["id"]):
-			RandomEvents.MORTAR:
-				_land_barrage(p, res)
-			RandomEvents.GAS:
-				_land_gas(p, res)
-			RandomEvents.ARMY:
-				_land_army(p, res)
-			RandomEvents.FIRE:
-				_land_fire(p, res)
-			RandomEvents.EMP:
-				_land_emp(p, res)
-			RandomEvents.DUST:
-				random_events.dust_left = int(p.get("rounds", DUST_ROUNDS))
-				res.log("A dust storm sweeps the battlefield: for %d rounds every shot beyond %d cells needs one more" % [
-						random_events.dust_left, DUST_CLEAR])
-			RandomEvents.COLLAPSE:
-				_land_collapse(p, res)
-			RandomEvents.REINFORCE:
-				_land_reinforce(p, res)
+		land_event(str(e["id"]), e["params"], res)
+	_sync_gas()
+
+## Shared by scheduled events and immediate console triggers; no unrelated round ticks.
+func land_event(id: String, p: Dictionary, res: ActionResult) -> void:
+	match id:
+		RandomEvents.MORTAR: _land_barrage(p, res)
+		RandomEvents.GAS: _land_gas(p, res)
+		RandomEvents.ARMY: _land_army(p, res)
+		RandomEvents.FIRE: _land_fire(p, res)
+		RandomEvents.EMP: _land_emp(p, res)
+		RandomEvents.COLLAPSE: _land_collapse(p, res)
+		RandomEvents.REINFORCE: _land_reinforce(p, res)
+		RandomEvents.DUST:
+			random_events.dust_left = int(p.get("rounds", DUST_ROUNDS))
+			res.log("A dust storm sweeps the battlefield: for %d rounds every shot beyond %d cells needs one more" % [random_events.dust_left, DUST_CLEAR])
 	_sync_gas()
 
 ## Обстрел: зона делится на столбцы по клетке, столбцы идут с запада на восток, клетки в
@@ -896,12 +892,13 @@ func _announce_wave(res: ActionResult) -> void:
 	var p := _roll_wave_params()
 	if p.is_empty():
 		return
+	if mode.live_wave_counts: p.merge(wave_size_details(mode.wave + 1), true)
 	mode.pending_wave = p
 	var k := mode.wave + 1
 	var label := "Wave %d" % k if mode.endless() else "Wave %d of %d" % [k, mode.waves_total]
 	if not mode.endless() and k == mode.waves_total:
 		label += " (final)"
-	res.log("⚠ %s — %s, landing at the end of this round" % [label, _event_where(RandomEvents.ARMY, p)])
+	res.log("⚠ %s — %s, landing at the end of this round%s" % [label, _event_where(RandomEvents.ARMY, p), " · " + wave_size_text(p) if p.has("target") else ""])
 
 ## Участок высадки армии или волны в клетках: полоса глубиной 2 у края, а в бункере —
 ## квадрат 3×3 у конца коридора. Его рисует бой и видит обучаемая политика.
@@ -947,7 +944,22 @@ func _land_wave(res: ActionResult) -> void:
 	mode.pending_wave = {}
 	var k := mode.wave + 1
 	var spots := _army_spawn_cells(p)
-	var placed := _spawn_budget(spots, mode.wave_budget(k), mode.wave_side, mode.excluded_units, k)
+	var placed: int
+	if mode.live_wave_counts:
+		if not p.has("target"): p.merge(wave_size_details(k), true)
+		var target := int(p.target)
+		# Expand beyond the narrow landing strip instead of silently shrinking a funded wave.
+		if spots.size() < target and not p.has("hx"):
+			var seen := {}
+			for at: Vector2i in spots: seen[at] = true
+			var edge := int(p.get("edge", 0)) % 4
+			var along := state.grid.width if edge % 2 == 0 else state.grid.height
+			for at: Vector2i in _army_band_cells(edge, 0, along):
+				if not seen.has(at): spots.append(at)
+		placed = _spawn_count(spots, target, mode.wave_side, mode.excluded_units, k)
+		mode.wave_details[str(k)] = {"defenders": p.defenders, "multiplier": p.multiplier, "target": target, "placed": placed}
+	else:
+		placed = _spawn_budget(spots, mode.wave_budget(k), mode.wave_side, mode.excluded_units, k)
 	mode.wave = k
 	mode.wave_spawned += placed
 	mode.wave_sizes[str(k)] = placed
@@ -963,10 +975,39 @@ func _land_wave(res: ActionResult) -> void:
 	mode.next_wave_round = state.turns.round_number + mode.wave_every
 	var label := "Wave %d" % k if mode.endless() else "Wave %d of %d" % [k, mode.waves_total]
 	if placed == 0:
-		res.log("%s finds nowhere to land" % label)
+		res.log("%s finds nowhere to land%s" % [label, " · " + wave_size_text(p) if p.has("target") else ""])
+		if p.has("target"):
+			res.log("Wave placement: 0 of %d; %s." % [p.target, "no permitted unit types" if mode.excluded_units.size() >= ARMY_ROSTER.size() else "insufficient safe landing cells"])
 		return
-	res.log("— %s lands: %d fighters —" % [label, placed])
+	res.log("— %s lands: %d fighters%s —" % [label, placed, " · " + wave_size_text(p) if p.has("target") else ""])
+	if p.has("target") and placed < int(p.target):
+		res.log("Wave placement: %d of %d; %s." % [placed, p.target, "no permitted unit types" if mode.excluded_units.size() >= ARMY_ROSTER.size() else "insufficient safe landing cells"])
 	notify_cell_changed(spots[0])
+
+## Snapshot the team's surviving soldiers when the wave is announced.
+func wave_size_details(k: int) -> Dictionary:
+	var count := 0
+	for unit: UnitInstance in state.all_units():
+		if unit.is_alive() and not unit.is_drone and MCF.is_player(unit.owner) and unit.owner != mode.wave_side:
+			count += 1
+	var multiplier := mode.wave_start + MatchMode.WAVE_GROWTH * float(k - 1)
+	return {"defenders": count, "multiplier": multiplier, "target": maxi(1, roundi(count * multiplier))}
+
+func wave_size_text(p: Dictionary) -> String:
+	return "%d surviving soldiers × %.2f = %d enemies" % [p.get("defenders", 0), p.get("multiplier", 0.0), p.get("target", 0)]
+
+func _spawn_count(spots: Array[Vector2i], count: int, owner: int, excluded: Array[String], group: int) -> int:
+	var pool := ARMY_ROSTER.filter(func(id: String) -> bool: return not excluded.has(id))
+	if pool.is_empty(): return 0
+	var placed := 0
+	for at: Vector2i in spots:
+		if placed >= count: break
+		var stats := _army_stats(pool[_rand_wide(pool.size())])
+		var fighter := state.spawn_unit(stats, at, owner)
+		if fighter == null: continue
+		fighter.neutral_group = group
+		placed += 1
+	return placed
 
 ## Нужный бросок с поправкой на пыльную бурю. Все выстрелы резолвера считаются через неё.
 func hit_need(dist: int, fire_range: float) -> int:
@@ -1309,11 +1350,11 @@ func _minefield_cells() -> Array[Vector2i]:
 	return out
 
 ## Старое минное поле: случается сразу, в начале раунда. Где — не говорится никому.
-func _start_minefield(res: ActionResult) -> void:
+func _start_minefield(res: ActionResult, selected_center := Vector2i(-1, -1)) -> void:
 	var cells := _minefield_cells()
 	if cells.is_empty():
 		return
-	var centre: Vector2i = cells[_rand_wide(cells.size())]
+	var centre: Vector2i = selected_center if selected_center.x >= 0 else cells[_rand_wide(cells.size())]
 	var placed := 0
 	for c: Vector2i in cells:
 		if placed >= MINEFIELD_MAX:

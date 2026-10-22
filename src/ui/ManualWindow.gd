@@ -24,6 +24,7 @@ const CARD_MIN_W := 330.0
 ## Последний открытый раздел - окно открывается там, где его закрыли.
 static var _last := 0
 
+var window: FloatingPanel
 var _sections: Array = []
 var _buttons: Array[Button] = []
 var _content: VBoxContainer = null
@@ -38,7 +39,6 @@ static func toggle(host: Node) -> void:
 
 func _ready() -> void:
 	layer = 95
-	add_to_group("shortcut_modal")
 	add_to_group("manual_window")
 	_sections = ManualText.sections()
 	# Карточки - сразу под «Getting Started»: к ним возвращаются чаще всего.
@@ -47,29 +47,11 @@ func _ready() -> void:
 	_show(clampi(_last, 0, _sections.size() - 1))
 
 func _build() -> void:
-	var root := Control.new()
-	root.set_anchors_preset(Control.PRESET_FULL_RECT)
-	add_child(root)
-	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.55)
-	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-	dim.mouse_filter = Control.MOUSE_FILTER_STOP
-	root.add_child(dim)
-	var center := CenterContainer.new()
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
-	root.add_child(center)
-
-	var win := PanelContainer.new()
-	SteamChrome.apply_panel(win)
-	# По размеру экрана, но не больше удобного для чтения: на 150 % интерфейса окно
-	# обязано целиком помещаться.
-	var vp := root.get_viewport_rect().size
-	win.custom_minimum_size = Vector2(minf(960.0, vp.x - 32.0), minf(640.0, vp.y - 32.0))
-	center.add_child(win)
-	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 0)
-	win.add_child(col)
-	col.add_child(SteamChrome.header_bar("Manual"))
+	window = FloatingPanel.new()
+	add_child(window)
+	window.setup("Manual", "Manual", Vector2(960, 640), Vector2(600, 350))
+	window.close_requested.connect(queue_free)
+	var col := window.body
 
 	var body := HBoxContainer.new()
 	body.add_theme_constant_override("separation", 12)
@@ -109,6 +91,7 @@ func _build() -> void:
 	bottom.add_theme_constant_override("separation", 10)
 	col.add_child(SteamChrome.pad(bottom, 16, 10))
 	var hint := Label.new()
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.text = "Open or close the Manual at any time: %s (%s in the map editor)." % [
 			Keybinds.label("game_manual"), Keybinds.label("editor_manual")]
 	hint.add_theme_font_size_override("font_size", 11)
@@ -251,7 +234,10 @@ func _card(title: String, tag: String, tex: Texture2D, rows: Array, blurb: Strin
 	return box
 
 ## Escape закрывает; клавиша самого справочника - в Keybinds (она и открывает, и закрывает).
-func _unhandled_key_input(event: InputEvent) -> void:
+func _input(event: InputEvent) -> void:
+	if Keybinds.typing(get_viewport()) or Keybinds.modal_open(): return
+	for console in get_tree().get_nodes_in_group("cheat_console"):
+		if not console.tool.is_empty(): return
 	if Keybinds.matches(event, "game_cancel") or Keybinds.matches(event, "editor_cancel"):
 		get_viewport().set_input_as_handled()
 		queue_free()

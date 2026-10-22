@@ -12,6 +12,7 @@ folder, so a new suite only has to be put in the right place:
 | `ai/` | how the scripted AI behaves |
 | `events/` | random events and match modes (Capture & Hold, Holdout, waves) |
 | `fog/` | sight, fog of war and what each side's screen shows |
+| `cheats/` | command grammar, permissions, click tools, event editing, save/replay and network authority |
 | `mapgen/` | the random-map generator and the lobby's maps |
 | `editor/` | the map editor and its tools |
 | `ui/` | the battle screen, dice, menus, board art, lighting, effects |
@@ -32,6 +33,20 @@ stress-tests real Giant-board AI combat. Offline catalog/build-gate tests are
 
 Headless runs, no engine window (the lobby check builds its scene without
 rendering it), no assets required.
+
+The 0.13.3 console checks are `cheats/run_console_followup.gd`,
+`cheats/run_event_management.gd`, `ui/run_console_windows.gd` and
+`events/run_live_wave_counts.gd`. They cover stable IDs, counts and statistics,
+event editing and replay, single-decision AI stepping, host permissions, and
+the combined surviving-soldier wave formula. `bash tests/run_net_cheats.sh`
+checks real host/guest event edits and AI authority. `bash tests/run_net_ban.sh`
+checks session bans, blocked reconnect identities and an unrelated player
+joining from the same address.
+
+`xvfb-run -a godot --path . --rendering-method gl_compatibility --script
+res://tests/render_console_followup.gd` exercises actual window dragging,
+resizing and battlefield ID pixels, and writes console/manual/event-editor
+screenshots to `/tmp/isotope-0133-*.png`.
 
 ```
 bash tests/run_all.sh            # verify

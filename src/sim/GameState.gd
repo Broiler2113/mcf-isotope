@@ -62,6 +62,7 @@ var cheats_enabled := false
 var cheat_vision: Dictionary = {}
 var cheat_mines: Dictionary = {}
 var cheat_sequence := 0
+var cheat_ai_paused: Dictionary = {}
 
 static func clean_cheat_sides(raw: Variant) -> Dictionary:
 	var out := {}
@@ -186,6 +187,10 @@ func digest_hash() -> int:
 		vision_sides.sort()
 		mine_sides.sort()
 		parts.append(str("c", cheat_sequence, ":", vision_sides, ":", mine_sides))
+	if not cheat_ai_paused.is_empty():
+		var paused := cheat_ai_paused.keys()
+		paused.sort()
+		parts.append("ai_paused:" + str(paused))
 	var vids: Array = vehicles.keys()
 	vids.sort()
 	for id: int in vids:
@@ -256,6 +261,7 @@ func snapshot(with_cells: bool = true) -> Dictionary:
 		"roster": roster.snapshot(),
 		"revealed_mines": _snapshot_revealed_mines(),
 		"cheat_vision": cheat_vision.duplicate(), "cheat_mines": cheat_mines.duplicate(),
+		"cheat_ai_paused": cheat_ai_paused.duplicate(),
 		"cheat_sequence": cheat_sequence, "cheats_enabled": cheats_enabled,
 		"next_id": _next_id, "next_vehicle_id": _next_vehicle_id,
 		"combat_started": combat_started,
@@ -267,6 +273,7 @@ func snapshot(with_cells: bool = true) -> Dictionary:
 func restore(snap: Dictionary) -> void:
 	cheats_enabled = snap.get("cheats_enabled", false) is bool and snap.get("cheats_enabled", false)
 	cheat_vision = clean_cheat_sides(snap.get("cheat_vision", {}))
+	cheat_ai_paused = clean_cheat_sides(snap.get("cheat_ai_paused", {}))
 	cheat_mines = clean_cheat_sides(snap.get("cheat_mines", {}))
 	cheat_sequence = clampi(int(snap.get("cheat_sequence", 0)), 0, 2147483647) if CheatCommands._integer(snap.get("cheat_sequence", 0)) else 0
 	kills = (snap.get("kills", {}) as Dictionary).duplicate(true)

@@ -20,6 +20,7 @@ func run() -> void:
 	ck(connected, "ENet connects")
 	if not connected: return
 	var r := fresh()
+	r.state.roster.add_slot(Roster.SlotKind.AI)
 	r.state.roster.slots[1].peer_id = session.peers[0] if host else session.my_peer_id()
 	r.state.roster.slots[1].cheats_allowed = false
 	netgame = NetGame.new(r.state, r, host, 0 if host else 1)
@@ -40,14 +41,25 @@ func run() -> void:
 	if not host:
 		netgame.submit_local(CheatIntent.new("unit_invulnerable", {"unit": 1, "enabled": true}, 1))
 		netgame.submit_local(CheatIntent.new("event_queue", {"event": "gas"}, 1))
+		netgame.submit_local(CheatIntent.new("event_spawn", {"event": "gas", "x": 10, "y": 10, "properties": {"w": 3, "h": 4, "rounds": 7}}, 1))
 	await phase("submitted")
 	# Host may have sent the barrier before processing guest input; wait for the
 	# authoritative state, not elapsed time, on both peers.
 	deadline = Time.get_ticks_msec() + 15000
-	while r.state.cheat_sequence < 2 and Time.get_ticks_msec() < deadline: await process_frame
-	ck(r.state.cheat_sequence == 2 and r.state.get_unit(1).cheat_invulnerable, "guest gameplay actions applied")
+	while r.state.cheat_sequence < 3 and Time.get_ticks_msec() < deadline: await process_frame
+	ck(r.state.cheat_sequence == 3 and r.state.get_unit(1).cheat_invulnerable, "guest gameplay actions applied")
 	await phase("applied", r.state.digest_hash())
 	ck(phases.applied == r.state.digest_hash(), "host/guest state matches")
+	if host: netgame.submit_local(CheatIntent.new("ai_pause", {"owner": 2}, 0))
+	await phase("ai_pause")
+	deadline = Time.get_ticks_msec() + 10000
+	while not r.state.cheat_ai_paused.has(2) and Time.get_ticks_msec() < deadline: await process_frame
+	ck(r.state.cheat_ai_paused.has(2), "AI pause synchronized")
+	ck(r.random_events.clouds.size() == 1 and r.random_events.clouds[0].left == 7, "event editor payload synchronized")
+	if not host:
+		session.send({"k": NetGame.K_INTENT, "i": IntentCodec.encode(CheatIntent.new("ai_resume", {"owner": 2}, 0))})
+	await phase("ai_spoof")
+	ck(r.state.cheat_ai_paused.has(2), "guest cannot resume shared AI by forging issuer")
 	if host: netgame.set_cheat_permission(1, false)
 	await phase("revoked")
 	ck(not r.state.roster.slots[1].cheats_allowed, "revocation synchronized")

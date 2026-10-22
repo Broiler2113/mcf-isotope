@@ -400,6 +400,12 @@ func _build_ui() -> void:
 		add_child(snow_layer)
 		_snowfall = Snowfall.new()
 		snow_layer.add_child(_snowfall)
+	var id_layer := CanvasLayer.new()
+	id_layer.layer = 1
+	add_child(id_layer)
+	var id_overlay := CheatOverlay.new()
+	id_overlay.main = self
+	id_layer.add_child(id_overlay)
 	_ui_layer = CanvasLayer.new()
 	add_child(_ui_layer)
 

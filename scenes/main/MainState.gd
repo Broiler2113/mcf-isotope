@@ -188,6 +188,7 @@ var _wall_drawing: bool = false
 var _pending_death_ids: Dictionary = {}
 ## Шаг ИИ ждёт своего таймера (_queue_ai_step) — второй не заказывается.
 var _ai_step_queued := false
+var _cheat_ai_steps: Dictionary = {}
 ## Шаги, сделанные в этом кадре: [боец, откуда, куда] — звучат в _process разом.
 var _step_sounds: Array = []
 ## «Визуальный слепок» зоны взрыва ДО разрушения (item 22): пока крутится кубик выстрела,
@@ -1005,7 +1006,6 @@ var _number_page := 0
 var _cheat_console: CheatConsole = null
 var _cheat_ids := ""
 
-@abstract func _draw_cheat_ids() -> void
 @abstract func _set_ai_speed(v: float, broadcast: bool) -> void
 
 var _cheat_history: Array[String] = []

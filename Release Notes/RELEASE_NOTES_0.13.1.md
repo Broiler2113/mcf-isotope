@@ -1,7 +1,5 @@
 # Isotope 0.13.1
 
-This is a **source-only release**. Download **Source code (zip)** or **Source code (tar.gz)** below, import `project.godot` in Godot 4.7, and run with the GL Compatibility renderer.
-
 ## First person, rebuilt
 - The 3D view is lit by the battle screen's own lighting: the same lamps, the same colors, the same shadows the board shows. No more lights popping on and off or flickering as you walk.
 - Furniture has models built to its shape — chairs with frames, tables whose legs meet the top, beds with headboards and pillows, lockers, shelves of books and goods, machines with their panels.

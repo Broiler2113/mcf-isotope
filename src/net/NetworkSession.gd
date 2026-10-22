@@ -43,6 +43,9 @@ var last_error := ""
 var client_token := ""
 var join_route: Dictionary = {}
 var peer_tokens: Dictionary = {}
+# Session lifetime: closing this host discards the ban list. Use the existing
+# reconnect identity; an address ban would also exclude innocent guests behind one NAT.
+var banned_tokens: Dictionary = {}
 var in_match := false
 var waiting_peers: Array[int] = []
 var claims := SeatReclaims.new()
@@ -173,6 +176,7 @@ func detach() -> void:
 	_listening = false
 
 func close() -> void:
+	banned_tokens.clear()
 	if _link != null:
 		_link.close()
 		_link = null
@@ -218,6 +222,17 @@ func kick(id: int) -> void:
 		return
 	if peers.has(id): _on_peer_disconnected(id)
 
+func ban_player(id: int) -> String:
+	if not _is_host: return "Only the host may ban players."
+	if id <= 1 or not peers.has(id): return "Choose a connected guest player."
+	var token := str(peer_tokens.get(id, ""))
+	if token.is_empty(): return "This player has not identified their connection yet. Try again shortly."
+	if not token.is_empty():
+		banned_tokens[token] = true
+		claims.seats.erase(token)
+	kick(id)
+	return ""
+
 @rpc("any_peer", "call_remote", "reliable")
 func _relay(msg: Dictionary) -> void:
 	_deliver(msg, multiplayer.get_remote_sender_id())
@@ -229,6 +244,9 @@ func _deliver(msg: Dictionary, sender: int) -> void:
 	# боя — чей это бросок. Ключ служебный, с подчёркиванием, чтобы не спутать с полями
 	# самих сообщений.
 	var kind := str(msg.get("k", ""))
+	if _is_host and kind in [NetHandoff.K_IDENTITY, NetHandoff.K_RECLAIM] and banned_tokens.has(str(msg.get("token", ""))):
+		kick(sender)
+		return
 	if _is_host and kind in ["cheat_permissions", NetHandoff.K_SIDE_HUMAN, NetHandoff.K_RECLAIM_OFFER, NetHandoff.K_RECLAIM_STATUS]: return
 	if _is_host and kind == NetHandoff.K_IDENTITY:
 		var identity := str(msg.get("token", ""))

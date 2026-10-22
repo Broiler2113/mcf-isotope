@@ -1,7 +1,5 @@
 # Isotope 0.13
 
-This is a **source-only release**. Download **Source code (zip)** or **Source code (tar.gz)** below, import `project.godot` in Godot 4.7, and run with the GL Compatibility renderer.
-
 ## First person
 - **First Person** in the tools: click any free cell you can see and walk the battlefield in 3D. WASD and the mouse, Space to jump or climb out of a trench, X to walk through everything, Esc to leave.
 - One cell is one meter. Walls and glass fill their whole cell up to the 2.3 m ceiling, buildings have ceilings inside and roofs outside, and trenches are 2 m soil pits you can climb into.

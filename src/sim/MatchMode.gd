@@ -38,9 +38,8 @@ const WAVE_EVERY := 2
 ## Rounds between waves, typed in the lobby (owner, 2026-10-20; was a 1-5 list);
 ## WAVE_EVERY is the default.
 const WAVE_EVERY_MAX := 50
-## Сила волны k в долях СРЕДНЕЙ армии игрока-защитника (fix-7 #17, владелец): первая —
-## wave_start (по умолчанию 0.7, правится в лобби), каждая следующая на 0.1 больше (десятая
-## при старте 0.7 — 1.6 средней армии). Один защитник — та же формула от его армии.
+## Wave k uses all surviving defending soldiers at announcement: 0.7 initially,
+## then +0.1 per wave. Legacy point budgets remain only for older replay playback.
 const WAVE_BASE := 0.7
 const WAVE_GROWTH := 0.1
 const WAVE_START_MIN := 0.1
@@ -70,7 +69,7 @@ const BOUNTY_POINTS := 2
 # --- Holdout ---
 var waves_total: int = DEFAULT_WAVES
 var wave_every: int = WAVE_EVERY
-## Сила первой волны в долях средней армии защитника.
+## First-wave multiplier of the defending team’s current surviving soldiers.
 var wave_start: float = WAVE_BASE
 ## Сколько волн уже пришло.
 var wave: int = 0
@@ -86,7 +85,9 @@ var excluded_units: Array[String] = []
 ## Counts include removed corpses, so the initiative breakdown survives cleanup.
 var wave_sizes: Dictionary = {}
 ## Средняя армия игрока-защитника в начале партии (очки закупки) — мерило волн.
-var defender_value: int = 0
+var defender_value: int = 0 # Legacy replay point budget only.
+var live_wave_counts := true
+var wave_details: Dictionary = {}
 
 func is_capture() -> bool:
 	return kind == Kind.CAPTURE
@@ -125,6 +126,7 @@ func snapshot() -> Dictionary:
 		"waves_total": waves_total, "wave_every": wave_every, "wave_start": wave_start, "wave": wave, "wave_side": wave_side,
 		"next_wave_round": next_wave_round, "pending_wave": pending_wave.duplicate(true),
 		"wave_spawned": wave_spawned, "defender_value": defender_value,
+		"live_wave_counts": live_wave_counts, "wave_details": wave_details.duplicate(true),
 		"excluded_units": excluded_units.duplicate(), "wave_sizes": wave_sizes.duplicate(),
 	}
 
@@ -161,6 +163,8 @@ func restore(d: Dictionary) -> void:
 	for k in d.get("wave_sizes", {}):
 		wave_sizes[str(k)] = int(d["wave_sizes"][k])
 	defender_value = int(d.get("defender_value", 0))
+	live_wave_counts = bool(d.get("live_wave_counts", true))
+	wave_details = (d.get("wave_details", {}) as Dictionary).duplicate(true)
 
 ## Нарисованные хостом зоны (GameConfig.capture_drawn), обрезанные по доске w×h; пусто —
 ## «Auto». Не больше, чем есть букв для подписей.

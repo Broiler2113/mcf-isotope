@@ -104,6 +104,9 @@ func _rebuild(frame: Dictionary) -> void:
 	resolver.track_undo_history = _needs_undo(int(frame.get("at", 0)))
 	seek_decals = frame.get("fx", {})
 	StateCodec.apply_rules(resolver, frame.get("rules", {}))
+	# Preserve historical point-budget waves only when playing an older recording.
+	var saved_mode: Dictionary = frame.get("rules", {}).get("mode", {})
+	resolver.mode.live_wave_counts = bool(saved_mode.get("live_wave_counts", false))
 	var selection := str(data.get("event_selection", "weighted"))
 	resolver.random_events.legacy_selection = selection not in ["uniform", "uniform2"]
 	resolver.random_events.empty_pool_rolls = selection == "uniform"

@@ -239,6 +239,11 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMagnifyGesture:
 		_zoom_at(event.position, event.factor)
 		return
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		get_viewport().gui_release_focus()
+	if is_instance_valid(_cheat_console) and _cheat_console.board_input(event):
+		get_viewport().set_input_as_handled()
+		return
 	# Линейка (item 11). Первый клик ставит начало, дальше расстояние тянется за курсором,
 	# второй клик закрепляет отрезок; следующий клик начинает НОВЫЙ, а прежние остаются на
 	# поле — линеек сколько угодно. Since fix-8 a ruler is a drawing: it stays after the
@@ -893,8 +898,9 @@ func _on_intent_ready(intent: Intent) -> void:
 	# ни от ИИ. В сети хост точно так же не передаёт их дальше.
 	if _match_over:
 		return
+	var ai_control: bool = intent is CheatIntent and intent.op in ["ai_pause", "ai_resume", "ai_step"]
 	if networked:
-		if _net_request_pending or _net_playing: return
+		if _net_request_pending or (_net_playing and not ai_control): return
 		_net_request_pending = not net.is_host
 		_menu.hide()
 		_picker.hide()
@@ -918,6 +924,10 @@ func _on_intent_ready(intent: Intent) -> void:
 	var ap_before := ap_actor.remaining_ap if ap_actor != null else 0
 	var result := resolver.resolve(intent)
 	_cheat_result(intent, result)
+	if ai_control:
+		if result.ok: state.log.publish_result(result)
+		_kick_if_ai()
+		return
 	if not result.ok:
 		# Отказ невидимому чужому бойцу или машине в журнал не идёт (issues-12 #5).
 		if _result_is_audible(result):
@@ -1007,6 +1017,7 @@ func _queue_ai_step(_ctrl: PlayerController) -> void:
 		return
 	# Шаг уже заказан (fix-7): действие вне очереди хода — передача бойцов — снова
 	# «пинает» ИИ, и второй таймер завёл бы вторую, параллельную цепочку его ходов.
+	if state.cheat_ai_paused.has(state.active_player()) and int(_cheat_ai_steps.get(state.active_player(), 0)) <= 0: return
 	if _ai_step_queued:
 		return
 	_ai_step_queued = true
@@ -1022,7 +1033,11 @@ func _queue_ai_step(_ctrl: PlayerController) -> void:
 	if not is_inside_tree() or state == null:
 		return
 	var cur: PlayerController = controllers.get(state.active_player())
-	if cur != null and not cur.is_local_human():
+	if _animating or _net_playing or _match_over or replay != null: return
+	if cur != null and not cur.is_local_human() and not cur is NetworkController:
+		if state.cheat_ai_paused.has(state.active_player()):
+			if int(_cheat_ai_steps.get(state.active_player(), 0)) <= 0: return
+			_cheat_ai_steps.erase(state.active_player())
 		cur.begin_turn(state)
 
 func _toggle_pause() -> void:

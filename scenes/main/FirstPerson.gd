@@ -968,7 +968,7 @@ func _build_dynamic() -> void:
 	var cmm := MultiMesh.new()
 	cmm.transform_format = MultiMesh.TRANSFORM_3D
 	var cq := QuadMesh.new()
-	cq.size = Vector2(UNIT_W * 0.8, 0.86)
+	cq.size = Vector2(UNIT_W, UNIT_H)
 	cq.orientation = PlaneMesh.FACE_Y
 	cmm.mesh = cq
 	_corpse_mm = MultiMeshInstance3D.new()

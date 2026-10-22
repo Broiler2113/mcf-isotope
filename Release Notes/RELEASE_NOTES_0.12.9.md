@@ -1,7 +1,5 @@
 # Isotope 0.12.9
 
-This is a **source-only release**. Download **Source code (zip)** or **Source code (tar.gz)** below, import `project.godot` in Godot 4.7, and run with the GL Compatibility renderer.
-
 ## Shields, blasts and captives
 - A drone or blast that lands right on a soldier always kills it, even with a friendly Shield Bearer standing next to it.
 - Shield Bearers still shelter the soldiers beside them from the rest of a blast.
