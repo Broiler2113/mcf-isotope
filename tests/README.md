@@ -59,7 +59,8 @@ it checks first-person fog stability and produces 1x/4x MP4 exports under `/tmp`
 res://tests/render_label_zoom.gd` compares actual ID and coordinate glyph pixels
 through pinch zoom from 0.12x to 2.5x, including fractional camera positions,
 unit and corpse IDs, and vehicle IDs. The text must retain its screen size and
-shape while its anchor follows the map.
+shape while its anchor follows the map. The Linux CI job runs this rendered
+check automatically.
 
 ```
 bash tests/run_all.sh            # verify
