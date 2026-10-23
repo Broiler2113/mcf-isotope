@@ -55,6 +55,12 @@ the battle menu, replay timelapse and network restore authority.
 FFmpeg is installed. `tests/render_fix11.gd` needs a display (or Xvfb) and FFmpeg;
 it checks first-person fog stability and produces 1x/4x MP4 exports under `/tmp`.
 
+`xvfb-run -a godot --path . --rendering-method gl_compatibility --script
+res://tests/render_label_zoom.gd` compares actual ID and coordinate glyph pixels
+through pinch zoom from 0.12x to 2.5x, including fractional camera positions,
+unit and corpse IDs, and vehicle IDs. The text must retain its screen size and
+shape while its anchor follows the map.
+
 ```
 bash tests/run_all.sh            # verify
 bash tests/run_all.sh --update   # re-baseline after a deliberate rule change
