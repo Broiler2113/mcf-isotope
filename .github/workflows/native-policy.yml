@@ -54,7 +54,7 @@ jobs:
         run: godot --headless --path . --script res://tests/run_source_fixes.gd
       - name: Verify reported gameplay and saved-history fixes
         run: |
-          for suite in combat/run_smoke_and_gas combat/run_bodies combat/run_flamethrower vehicles/run_drone_stations vehicles/run_vehicle_rules events/run_match_modes files/run_game_files ui/run_battle_screen ui/run_menus ui/run_first_person ui/run_first_person_fix9 ui/run_first_person_damage ui/run_first_person_streaming; do
+          for suite in combat/run_smoke_and_gas combat/run_bodies combat/run_flamethrower vehicles/run_drone_stations vehicles/run_vehicle_rules events/run_match_modes files/run_game_files ui/run_battle_screen ui/run_menus ui/run_main_menu ui/run_first_person ui/run_first_person_fix9 ui/run_first_person_damage ui/run_first_person_streaming; do
             godot --headless --path . --script "res://tests/$suite.gd" || exit 1
           done
       - name: Verify cheat commands, permissions, saves and network authority

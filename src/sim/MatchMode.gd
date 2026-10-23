@@ -42,6 +42,7 @@ const WAVE_EVERY_MAX := 50
 ## then +0.1 per wave. Legacy point budgets remain only for older replay playback.
 const WAVE_BASE := 0.7
 const WAVE_GROWTH := 0.1
+const WAVE_GROWTH_MAX := 5.0
 const WAVE_START_MIN := 0.1
 const WAVE_START_MAX := 5.0
 ## Подписи зон на карте.
@@ -71,6 +72,7 @@ var waves_total: int = DEFAULT_WAVES
 var wave_every: int = WAVE_EVERY
 ## First-wave multiplier of the defending team’s current surviving soldiers.
 var wave_start: float = WAVE_BASE
+var wave_growth: float = WAVE_GROWTH
 ## Сколько волн уже пришло.
 var wave: int = 0
 ## Слот ростера, который ведёт волны (Roster.Slot.role == ROLE_WAVES).
@@ -109,6 +111,7 @@ static func from_config() -> MatchMode:
 	m.waves_total = clampi(GameConfig.holdout_waves, 0, WAVES_MAX)
 	m.wave_every = clampi(GameConfig.holdout_wave_every, 1, WAVE_EVERY_MAX)
 	m.wave_start = clampf(GameConfig.holdout_wave_start, WAVE_START_MIN, WAVE_START_MAX)
+	m.wave_growth = clean_wave_growth(GameConfig.holdout_wave_growth)
 	m.excluded_units = GameConfig.holdout_excluded_units.duplicate()
 	return m
 
@@ -119,7 +122,7 @@ static func team_key(roster: Roster, side: int) -> String:
 	return "t%d" % t if t >= 0 else "s%d" % side
 
 func snapshot() -> Dictionary:
-	return {
+	var out := {
 		"kind": kind, "zone_count": zone_count, "target": target,
 		"zones": zones.duplicate(true), "scores": scores.duplicate(), "holders": holders.duplicate(),
 		"bounty": bounty_unit, "bounty_side": bounty_side, "bounty_until": bounty_until,
@@ -129,6 +132,12 @@ func snapshot() -> Dictionary:
 		"live_wave_counts": live_wave_counts, "wave_details": wave_details.duplicate(true),
 		"excluded_units": excluded_units.duplicate(), "wave_sizes": wave_sizes.duplicate(),
 	}
+	# Default matches retain their existing rule snapshots and replay hashes.
+	if wave_growth != WAVE_GROWTH: out["wave_growth"] = wave_growth
+	return out
+
+static func clean_wave_growth(value: float) -> float:
+	return clampf(value, 0.0, WAVE_GROWTH_MAX) if is_finite(value) else WAVE_GROWTH
 
 func restore(d: Dictionary) -> void:
 	kind = clampi(int(d.get("kind", 0)), 0, NAMES.size() - 1)
@@ -152,6 +161,7 @@ func restore(d: Dictionary) -> void:
 	waves_total = int(d.get("waves_total", DEFAULT_WAVES))
 	wave_every = clampi(int(d.get("wave_every", WAVE_EVERY)), 1, WAVE_EVERY_MAX)
 	wave_start = clampf(float(d.get("wave_start", WAVE_BASE)), WAVE_START_MIN, WAVE_START_MAX)
+	wave_growth = clean_wave_growth(float(d.get("wave_growth", WAVE_GROWTH)))
 	wave = int(d.get("wave", 0))
 	wave_side = int(d.get("wave_side", -1))
 	next_wave_round = int(d.get("next_wave_round", 1))

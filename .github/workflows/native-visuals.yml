@@ -1,0 +1,58 @@
+name: Native visual kernels
+on:
+  workflow_dispatch:
+  push:
+    paths: ['native/visuals/**', 'native/policy/dependencies.json', 'addons/mcf_visuals/**', 'scenes/main/FirstPerson*.gd', 'src/ui/NativeVisuals.gd', 'tests/ui/run_native_visuals.gd', 'tests/render_native_visuals.gd', 'tests/bench/run_native_visuals.gd', '.github/workflows/native-visuals.yml']
+  pull_request:
+    paths: ['native/visuals/**', 'native/policy/dependencies.json', 'addons/mcf_visuals/**', 'scenes/main/FirstPerson*.gd', 'src/ui/NativeVisuals.gd', 'tests/ui/run_native_visuals.gd', 'tests/render_native_visuals.gd', 'tests/bench/run_native_visuals.gd', '.github/workflows/native-visuals.yml']
+permissions:
+  contents: read
+env:
+  PYTHONUTF8: '1'
+jobs:
+  parity:
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build optional C++ visual kernels
+        run: python native/visuals/build.py --jobs 2
+      - name: Verify source checkout and platform manifests
+        run: python native/visuals/test_manifest.py
+      - name: Install Godot 4.7 editor
+        run: python native/policy/install_godot.py --editor-only
+      - name: Import and compare geometry bytes
+        run: |
+          godot --headless --editor --path . --import
+          godot --headless --path . --script res://tests/ui/run_native_visuals.gd -- --require-native
+      - name: Verify first-person behavior with native geometry
+        run: |
+          for suite in run_first_person run_first_person_fix9 run_first_person_damage run_first_person_streaming; do
+            godot --headless --path . --script "res://tests/ui/$suite.gd" || exit 1
+          done
+      - name: Verify original GDScript fallback
+        env:
+          MCF_NATIVE_VISUALS: 'off'
+        run: godot --headless --path . --script res://tests/ui/run_first_person.gd
+      - name: Compare rendered native and GDScript scenes
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb libgl1-mesa-dri
+          LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a godot --path . --rendering-method gl_compatibility --script res://tests/render_native_visuals.gd
+      - name: Measure native and GDScript CPU work
+        run: godot --headless --path . --script res://tests/bench/run_native_visuals.gd > native-visuals-benchmark.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-visuals-${{ matrix.os }}
+          path: native-visuals-benchmark.txt
+          if-no-files-found: error

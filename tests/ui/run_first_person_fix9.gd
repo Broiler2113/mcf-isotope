@@ -150,20 +150,25 @@ func _loaded_settings() -> void:
 	root.add_child(lobby)
 	await process_frame
 	var rules := {"mode": {"kind": MatchMode.Kind.HOLDOUT, "wave": 4, "wave_spawned": 200,
-			"next_wave_round": 12, "waves_total": 20, "wave_every": 3, "wave_start": 0.8,
-			"excluded_units": ["sniper"]}, "events": {"enabled": true, "armies": 3, "turns_since": 2,
+			"next_wave_round": 12, "waves_total": 20, "wave_every": 3, "wave_start": 0.8, "wave_growth": 0.25,
+			"excluded_units": ["sniper"], "pending_wave": {"target": 42, "multiplier": 1.4}}, "events": {"enabled": true, "armies": 3, "turns_since": 2,
 			"pending": [{"id": "army", "land": 9}], "excluded_units": ["miner"]}}
 	lobby._save = {"rules": rules}
 	lobby._load_spawn_settings(rules)
 	ck(lobby._waves_spin.value == 20 and lobby._wave_every_spin.value == 3, "resuming shows saved wave controls")
+	ck(is_equal_approx(lobby._wave_start_spin.value, 0.8) and is_equal_approx(lobby._wave_growth_spin.value, 0.25) and lobby._wave_growth_spin.editable,
+			"resuming exposes saved multiplier and growth (%s, %s, editable %s)" % [lobby._wave_start_spin.value, lobby._wave_growth_spin.value, lobby._wave_growth_spin.editable])
 	GameConfig.holdout_waves = 30
 	GameConfig.holdout_wave_every = 5
 	GameConfig.holdout_wave_start = 1.2
+	GameConfig.holdout_wave_growth = 0.3
 	GameConfig.holdout_excluded_units.assign(["miner"])
 	GameConfig.raider_excluded_units.assign(["sniper"])
 	lobby._store_spawn_settings()
 	var written: Dictionary = lobby._save["rules"]
 	ck(written["mode"]["waves_total"] == 30 and written["mode"]["wave_every"] == 5, "new wave settings apply to resumed games")
+	ck(written["mode"]["wave_start"] == 1.2 and written["mode"]["wave_growth"] == 0.3, "edited multiplier and growth apply to resumed games")
+	ck(written["mode"]["pending_wave"] == rules["mode"]["pending_wave"], "editing future growth preserves the already-announced wave")
 	ck(written["mode"]["wave"] == 4 and written["mode"]["wave_spawned"] == 200 and written["mode"]["next_wave_round"] == 12,
 			"changing future waves preserves saved progress and announced timing")
 	ck(written["events"]["armies"] == 3 and written["events"]["pending"].size() == 1, "raider changes retain queued events")

@@ -139,7 +139,8 @@ const K_LOBBY_MAP := "lobby_map"
 ##  27 — live survivor-count waves, stable event references, AI pause/step cheats.
 ##  28 — persistent corpse identities, fireproof corpse walls and independent cheat spawns.
 ##  29 - complete host history restores, explicit event forces and independent colors.
-const PROTOCOL := 29
+##  30 - configurable Holdout multiplier growth shared through lobby and saved rules.
+const PROTOCOL := 30
 ## The bug-report server on the relay's VPS (tools/bugs/isotope_bugs.py): the Report a Bug
 ## window and the automatic desync reports both post here.
 const BUG_REPORTS := "http://103.86.177.137:8651/report"
@@ -162,6 +163,7 @@ static func encode_rules() -> Dictionary:
 		"rw": GameConfig.random_events_weights.duplicate(),
 		"gm": GameConfig.game_mode, "cz": GameConfig.capture_zones,
 		"ct": GameConfig.capture_target, "hw": GameConfig.holdout_waves, "he": GameConfig.holdout_wave_every, "hs": GameConfig.holdout_wave_start, "wa": GameConfig.holdout_ai,
+		"hg": GameConfig.holdout_wave_growth,
 		"czd": GameConfig.capture_drawn.duplicate(true),
 		"roster": roster.to_dict(),
 		"mg": GameConfig.map_generation.duplicate(true),
@@ -205,6 +207,7 @@ static func apply_rules(msg: Dictionary, restore_session := true) -> void:
 	GameConfig.holdout_waves = int(msg.get("hw", MatchMode.DEFAULT_WAVES))
 	GameConfig.holdout_wave_every = int(msg.get("he", MatchMode.WAVE_EVERY))
 	GameConfig.holdout_wave_start = float(msg.get("hs", MatchMode.WAVE_BASE))
+	GameConfig.holdout_wave_growth = MatchMode.clean_wave_growth(float(msg.get("hg", MatchMode.WAVE_GROWTH)))
 	GameConfig.holdout_ai = int(msg.get("wa", 1))
 	GameConfig.allowed_units = {}
 	var rd: Variant = msg.get("roster")

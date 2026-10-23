@@ -31,26 +31,60 @@ const CLOTH := Color(0.92, 0.91, 0.88)
 ## Collects triangles in the model's frame. `xf` places the parts being added (a beam turned
 ## on its side, a leg leaning out); UVs follow the model's own metres on the face's main axis.
 class Sink:
-	var v := PackedVector3Array()
-	var n := PackedVector3Array()
-	var uv := PackedVector2Array()
-	var uv2 := PackedVector2Array()
-	var col := PackedColorArray()
+	var _v := PackedVector3Array()
+	var _n := PackedVector3Array()
+	var _uv := PackedVector2Array()
+	var _uv2 := PackedVector2Array()
+	var _col := PackedColorArray()
+	var _native: RefCounted
+	var v: PackedVector3Array:
+		get: return _native.arrays()[Mesh.ARRAY_VERTEX] if _native != null else _v
+	var n: PackedVector3Array:
+		get: return _native.arrays()[Mesh.ARRAY_NORMAL] if _native != null else _n
+	var uv: PackedVector2Array:
+		get: return _native.arrays()[Mesh.ARRAY_TEX_UV] if _native != null else _uv
+	var uv2: PackedVector2Array:
+		get: return _native.arrays()[Mesh.ARRAY_TEX_UV2] if _native != null else _uv2
+	var col: PackedColorArray:
+		get: return _native.arrays()[Mesh.ARRAY_COLOR] if _native != null else _col
 	var xf := Transform3D.IDENTITY
 	var shade_floor := true   # parts darken toward the floor (contact shadow)
 
+	func _init(use_native := true) -> void:
+		_native = NativeVisuals.mesh_builder() if use_native else null
+
+	func _fallback() -> void:
+		# Preserve earlier geometry if a native call declines an unsupported input.
+		var saved: Array = _native.arrays()
+		_v = saved[Mesh.ARRAY_VERTEX]; _n = saved[Mesh.ARRAY_NORMAL]
+		_uv = saved[Mesh.ARRAY_TEX_UV]; _uv2 = saved[Mesh.ARRAY_TEX_UV2]
+		_col = saved[Mesh.ARRAY_COLOR]
+		_native = null
+
+	func append_raw(p: Vector3, nn: Vector3, u: Vector2, layer: Vector2, c: Color) -> void:
+		if _native != null:
+			_native.add_vertex(p, nn, u, layer, c, false)
+			return
+		_v.append(p); _n.append(nn); _uv.append(u); _uv2.append(layer); _col.append(c)
+
 	func _vert(p: Vector3, nn: Vector3, u: Vector2, m: int, c: Color) -> void:
-		v.append(p)
-		n.append(nn)
-		uv.append(u)
-		uv2.append(Vector2(m, 0))
+		if _native != null:
+			_native.add_vertex(p, nn, u, Vector2(m, 0), c, shade_floor)
+			return
+		_v.append(p)
+		_n.append(nn)
+		_uv.append(u)
+		_uv2.append(Vector2(m, 0))
 		if shade_floor and c.a > 0.5:
 			var k := 0.62 + 0.38 * smoothstep(0.0, 0.32, p.y)
 			c = Color(c.r * k, c.g * k, c.b * k, c.a)
-		col.append(c)
+		_col.append(c)
 
 	## A flat polygon (3 or 4 points, any order round its edge) facing out along `out`.
 	func face(pts: Array, out: Vector3, m: int, c: Color) -> void:
+		if _native != null:
+			if _native.face(pts, out, m, c, xf, shade_floor): return
+			_fallback()
 		var w: Array[Vector3] = []
 		for p: Vector3 in pts:
 			w.append(xf * p)
@@ -76,6 +110,9 @@ class Sink:
 
 	## A polygon with its own UVs (board tiles, wall pictures): no material layer.
 	func face_uv(pts: Array, out: Vector3, uvs: Array, c: Color) -> void:
+		if _native != null:
+			if _native.face_uv(pts, out, uvs, c, xf, shade_floor): return
+			_fallback()
 		var nn := (xf.basis * out).normalized()
 		var w: Array[Vector3] = []
 		for p: Vector3 in pts:
@@ -98,6 +135,9 @@ class Sink:
 	const NO_RIGHT := 32   # +x
 
 	func box(lo: Vector3, hi: Vector3, m: int, c: Color, skip := 0) -> void:
+		if _native != null:
+			_native.box(lo, hi, m, c, skip, xf, shade_floor)
+			return
 		var x0 := lo.x
 		var y0 := lo.y
 		var z0 := lo.z
@@ -206,20 +246,22 @@ class Sink:
 			face([bot[i], bot[(i + 1) % cnt], top[(i + 1) % cnt], top[i]], out.normalized(), m, c.darkened(0.12))
 
 	func empty() -> bool:
-		return v.is_empty()
+		return _native.empty() if _native != null else _v.is_empty()
+
+	func arrays() -> Array:
+		if _native != null: return _native.arrays()
+		var arr := []
+		arr.resize(Mesh.ARRAY_MAX)
+		arr[Mesh.ARRAY_VERTEX] = _v
+		arr[Mesh.ARRAY_NORMAL] = _n
+		arr[Mesh.ARRAY_TEX_UV] = _uv
+		arr[Mesh.ARRAY_TEX_UV2] = _uv2
+		arr[Mesh.ARRAY_COLOR] = _col
+		return arr
 
 	func mesh() -> ArrayMesh:
 		var am := ArrayMesh.new()
-		if v.is_empty():
-			return am
-		var arr := []
-		arr.resize(Mesh.ARRAY_MAX)
-		arr[Mesh.ARRAY_VERTEX] = v
-		arr[Mesh.ARRAY_NORMAL] = n
-		arr[Mesh.ARRAY_TEX_UV] = uv
-		arr[Mesh.ARRAY_TEX_UV2] = uv2
-		arr[Mesh.ARRAY_COLOR] = col
-		am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+		if not empty(): am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays())
 		return am
 
 # --- Cache ------------------------------------------------------------------------------
@@ -265,11 +307,7 @@ static func clipped(mesh: ArrayMesh, bounds: Rect2) -> ArrayMesh:
 			poly = next
 		for j in range(1, poly.size() - 1):
 			for vertex: Array in [poly[0], poly[j], poly[j + 1]]:
-				out.v.append(vertex[0])
-				out.n.append(vertex[1])
-				out.uv.append(vertex[2])
-				out.uv2.append(vertex[3])
-				out.col.append(vertex[4])
+				out.append_raw(vertex[0], vertex[1], vertex[2], vertex[3], vertex[4])
 	return null if out.empty() else out.mesh()
 
 ## The model for `key`, built by `make.call(sink)` the first time. Returns [opaque, glass]

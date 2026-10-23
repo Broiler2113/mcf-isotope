@@ -25,6 +25,25 @@ func run() -> void:
 	r._land_wave(ActionResult.success([]))
 	ck(r.mode.wave_sizes["12"] == 290 and r.mode.wave_details["12"].placed == 290, "full announced wave lands with varied troop costs")
 	ck(r.wave_size_details(13).target == 304, "next wave uses 160 surviving defenders × 1.9")
+	r.mode.wave_start = 1.2
+	r.mode.wave_growth = 0.25
+	ck(r.wave_size_details(3).target == 272, "custom base and growth use all surviving defenders")
+	r.mode.wave_growth = 0.0
+	ck(r.wave_size_details(99).target == 192, "zero growth keeps the selected multiplier constant")
+	var saved := r.mode.snapshot()
+	var restored := MatchMode.new()
+	restored.restore(saved)
+	ck(restored.wave_growth == 0.0 and restored.wave_start == 1.2, "custom wave settings survive rules snapshots")
+	GameConfig.holdout_wave_growth = 0.35
+	var lobby := NetHandoff.encode_rules()
+	GameConfig.holdout_wave_growth = 0.1
+	NetHandoff.apply_rules(lobby, false)
+	ck(GameConfig.holdout_wave_growth == 0.35 and MatchMode.from_config().wave_growth == 0.35, "host growth reaches guests and new matches")
+	NetHandoff.apply_rules({}, false)
+	ck(GameConfig.holdout_wave_growth == MatchMode.WAVE_GROWTH, "older lobby data restores the original growth")
+	ck(LobbySettings.with_rules({"hg": 0.7}, {"mode": {}}).hg == MatchMode.WAVE_GROWTH, "legacy saved rules override newer lobby defaults")
+	ck(MatchMode.clean_wave_growth(NAN) == MatchMode.WAVE_GROWTH and MatchMode.clean_wave_growth(-1.0) == 0.0, "invalid growth is bounded")
+	ck(not MatchMode.new().snapshot().has("wave_growth"), "default rule snapshots keep existing replay hashes")
 	var old := {"mode": {"kind": MatchMode.Kind.HOLDOUT, "wave": 12, "wave_side": 2, "defender_value": 200}}
 	StateCodec.apply_rules(r, old)
 	ck(r.mode.live_wave_counts and r.wave_size_details(13).target == 304, "older saves adopt current-count sizing without restarting progress")

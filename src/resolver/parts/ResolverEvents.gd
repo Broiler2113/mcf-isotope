@@ -1013,7 +1013,7 @@ func wave_size_details(k: int) -> Dictionary:
 	for unit: UnitInstance in state.all_units():
 		if unit.is_alive() and not unit.is_drone and MCF.is_player(unit.owner) and unit.owner != mode.wave_side:
 			count += 1
-	var multiplier := mode.wave_start + MatchMode.WAVE_GROWTH * float(k - 1)
+	var multiplier := mode.wave_start + mode.wave_growth * float(k - 1)
 	return {"defenders": count, "multiplier": multiplier, "target": maxi(1, roundi(count * multiplier))}
 
 func wave_size_text(p: Dictionary) -> String:

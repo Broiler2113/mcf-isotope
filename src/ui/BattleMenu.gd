@@ -35,7 +35,7 @@ func _ready() -> void:
 	body.add_theme_constant_override("separation", 9)
 	frame.add_child(Chrome.pad(body, 18, 16))
 	for entry: Array in [
-		["Return to Menu", func() -> void: main._to_lobby()],
+		["Resume", func() -> void: queue_free()],
 		["Settings", func() -> void: SettingsWindow.open(main)],
 		["Save Game", func() -> void: main._save_game()],
 		["Save Replay", func() -> void: main._prompt_save_name(true)],
@@ -48,13 +48,14 @@ func _ready() -> void:
 		buttons.append(button)
 	buttons[2].disabled = main.replay != null or main._spectator or main._animating
 	buttons[3].disabled = main.recorder == null or main.recorder.is_empty()
-	var close := Button.new()
-	close.text = "Resume"
-	close.custom_minimum_size.y = 34
-	close.pressed.connect(queue_free)
-	body.add_child(close)
+	var return_button := Button.new()
+	return_button.text = "Return to Menu"
+	return_button.custom_minimum_size.y = 34
+	return_button.pressed.connect(func() -> void: main._to_lobby())
+	body.add_child(return_button)
+	buttons.append(return_button)
 	Ui.theme_canvas_layers()
-	close.grab_focus()
+	buttons[0].grab_focus()
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
