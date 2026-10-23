@@ -36,6 +36,8 @@ def prepare_macos_template(archive, cache):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--editor-only", action="store_true", help="skip application export templates")
+    parser.add_argument("--preserve-signature", action="store_true",
+                        help="verify the official macOS app signature without re-signing it")
     args = parser.parse_args()
     system = platform.system()
     suffix = {"Linux": "linux.x86_64.zip", "Windows": "win64.exe.zip", "Darwin": "macos.universal.zip"}[system]
@@ -89,7 +91,10 @@ def main():
     if system == "Darwin":
         # Keep the editor in its signed app bundle. Copying just its Mach-O out
         # of the bundle can be rejected by macOS before main() is reached.
-        subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(cache / "Godot.app")], check=True)
+        if args.preserve_signature:
+            subprocess.run(["codesign", "--verify", "--deep", "--strict", str(cache / "Godot.app")], check=True)
+        else:
+            subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(cache / "Godot.app")], check=True)
         launcher = bin_dir / "godot"
         launcher.write_text('#!/bin/sh\nexec "' + str(executable) + '" "$@"\n', encoding="utf-8")
         launcher.chmod(0o755)

@@ -1,14 +1,23 @@
 # MCF Isotope
 
-Releases are source-only. Download the release archive, import `project.godot` in Godot 4.7, and run the project
-with the GL Compatibility renderer. Native policy libraries are optional; source checkouts without them use
-the existing socket/HARD fallback. Application exports remain paused.
+Download the release project, import `project.godot` in Godot 4.7, and run with the
+GL Compatibility renderer. C++ acceleration is included and starts automatically
+on Windows x64, Intel Mac with macOS 11+, and Apple
+Silicon with macOS 13+. No compiler, terminal commands, or plugin setup are needed
+to play.
 
-Optional C++ game kernels accelerate first-person geometry, terrain preparation,
-AI planning, pathfinding and visibility. Run `python native/visuals/build.py` once
-to enable them, then launch the game normally from Godot. See the
-[native build guide](native/visuals/README.md) for prerequisites and verification.
-Without the library, the same game systems use their original GDScript algorithms.
+**Settings → Interface → Performance** shows whether acceleration is active.
+First-person geometry, terrain preparation, AI planning, pathfinding, and visibility
+use the bundled C++ library. If acceleration is unavailable, the game remains
+playable through the original GDScript implementations.
+
+The complete source and the native libraries for all three desktop targets are in
+the same project archive. See the [native guide](native/visuals/README.md) for
+verification and optional developer builds. Learned-policy inference has its own
+optional library; without it, learned AI retains the existing socket/HARD fallback.
+
+Builds and CI checks target Windows and macOS only. Linux support and Linux CI
+are paused until explicitly requested again.
 
 Release notes start with the changes. Do not prepend the source-download and
 Godot-import instructions to release descriptions.

@@ -1,2 +1,5 @@
 # This catalog is checksummed byte-for-byte by the offline audio build gate.
 audio/catalog.json text eol=lf
+
+# Shipped native payloads and provenance are verified against their exact bytes.
+addons/mcf_visuals/prebuilt/** -text

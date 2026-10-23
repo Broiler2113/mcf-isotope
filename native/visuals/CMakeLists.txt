@@ -6,6 +6,12 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(GODOT_CPP_DIR "" CACHE PATH "Pinned godot-cpp source directory")
 set(GODOTCPP_BUILD_PROFILE "${CMAKE_CURRENT_SOURCE_DIR}/build_profile.json" CACHE PATH "" FORCE)
 set(GODOTCPP_TARGET template_release CACHE STRING "" FORCE)
+# Release bundles must not require a separately installed C++ runtime.
+# godot-cpp applies static libstdc++/libgcc on Linux and the matching MSVC runtime.
+set(GODOTCPP_USE_STATIC_CPP ON CACHE BOOL "Use a self-contained C++ runtime" FORCE)
+if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+    message(FATAL_ERROR "Set CMAKE_OSX_DEPLOYMENT_TARGET before configuring (build.py does this)")
+endif()
 add_subdirectory("${GODOT_CPP_DIR}" godot-cpp)
 add_library(mcf_visuals SHARED src/mesh_builder.cpp src/visibility_kernel.cpp
     src/pathfinding_kernel.cpp src/ai_kernel.cpp src/terrain_kernel.cpp)
@@ -35,3 +41,5 @@ set_target_properties(mcf_visuals PROPERTIES PREFIX ""
     LIBRARY_OUTPUT_DIRECTORY "${MCF_OUTPUT}"
     RUNTIME_OUTPUT_DIRECTORY "${MCF_OUTPUT}"
     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${MCF_OUTPUT}")
+# Only system libraries are dynamic dependencies; avoid embedding local build paths.
+set_target_properties(mcf_visuals PROPERTIES SKIP_BUILD_RPATH TRUE INSTALL_RPATH "")

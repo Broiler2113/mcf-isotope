@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Build optional game kernels; source-only Godot projects retain GDScript fallback."""
+"""Developer build for game kernels; normal project downloads include native libraries."""
 import argparse
 import json
 from pathlib import Path
 import platform
 import shutil
 import subprocess
+from package import record_build
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
@@ -28,7 +29,7 @@ def stage_manifest(output: Path, target: str):
                 continue
         lines.append(line)
     manifest = output / "mcf_visuals.gdextension"
-    manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    manifest.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
     return manifest
 
 
@@ -52,8 +53,13 @@ def main():
     revision = subprocess.check_output(["git", "-C", str(cpp), "rev-parse", "HEAD"], text=True).strip()
     if revision != LOCK["godot_cpp_commit"]:
         raise RuntimeError("godot-cpp revision differs from the pinned dependencies")
-    subprocess.run(["cmake", "-S", str(HERE), "-B", str(args.build_dir),
-                    "-DCMAKE_BUILD_TYPE=Release", f"-DGODOT_CPP_DIR={cpp}"], check=True)
+    configure = ["cmake", "-S", str(HERE), "-B", str(args.build_dir),
+                 "-DCMAKE_BUILD_TYPE=Release", f"-DGODOT_CPP_DIR={cpp}"]
+    if system == "macos":
+        # Match Godot 4.7's supported OS floor, rather than the CI runner's OS.
+        minimum_macos = "13.0" if arch == "arm64" else "11.0"
+        configure.append(f"-DCMAKE_OSX_DEPLOYMENT_TARGET={minimum_macos}")
+    subprocess.run(configure, check=True)
     subprocess.run(["cmake", "--build", str(args.build_dir), "--config", "Release",
                     "--parallel", str(args.jobs)], check=True)
     target = f"{system}-{arch}"
@@ -61,7 +67,14 @@ def main():
     notices = output / "licenses"
     notices.mkdir(parents=True, exist_ok=True)
     shutil.copy2(cpp / "LICENSE.md", notices / "godot-cpp-LICENSE.txt")
+    if system == "macos":
+        # Sign the final bytes before the provenance hashes are recorded. This
+        # ad-hoc signature is integrity metadata, not Apple notarization.
+        library = str(output / LIBRARIES[system])
+        subprocess.run(["codesign", "--force", "--sign", "-", library], check=True)
+        subprocess.run(["codesign", "--verify", "--strict", library], check=True)
     stage_manifest(output, target)
+    record_build(output, target, revision)
     print(f"Staged {target}: {output}")
 
 

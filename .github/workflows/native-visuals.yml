@@ -1,6 +1,12 @@
 name: Native game kernels
+# Supported release/CI targets: Windows and macOS only. Do not add Linux jobs.
 on:
   workflow_dispatch:
+    inputs:
+      rebuild:
+        description: Rebuild the Windows and Mac native packages
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths: ['native/visuals/**', 'native/policy/dependencies.json', 'addons/mcf_visuals/**', 'scenes/main/FirstPerson*.gd', 'src/ui/NativeVisuals.gd', 'src/ui/TerrainTiles.gd', 'src/sim/**', 'src/controllers/**', 'src/resolver/**', 'tests/**', '.github/workflows/native-visuals.yml']
@@ -8,32 +14,80 @@ on:
     paths: ['native/visuals/**', 'native/policy/dependencies.json', 'addons/mcf_visuals/**', 'scenes/main/FirstPerson*.gd', 'src/ui/NativeVisuals.gd', 'src/ui/TerrainTiles.gd', 'src/sim/**', 'src/controllers/**', 'src/resolver/**', 'tests/**', '.github/workflows/native-visuals.yml']
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 env:
   PYTHONUTF8: '1'
 jobs:
+  plan:
+    name: Check whether native libraries need rebuilding
+    runs-on: windows-2022
+    timeout-minutes: 10
+    outputs:
+      build: ${{ steps.bundle.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - id: bundle
+        name: Reuse verified libraries when their native source is unchanged
+        shell: bash
+        env:
+          FORCE_REBUILD: ${{ inputs.rebuild || false }}
+        run: |
+          python - <<'PY'
+          import os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'native/visuals')
+          from package import verify_bundle
+          rebuild = os.environ['FORCE_REBUILD'] == 'true'
+          try:
+              verify_bundle(Path('addons/mcf_visuals/prebuilt'))
+          except (ValueError, OSError):
+              rebuild = True
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('build=' + str(rebuild).lower() + '\n')
+          print('Build native packages' if rebuild else 'Reuse source-matched native packages; verify startup on Windows and both Macs')
+          PY
   parity:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, windows-2022, macos-15, macos-15-intel]
+        include:
+          - {os: windows-2022, target: windows-x86_64, library: mcf_visuals.dll}
+          - {os: macos-15, target: macos-arm64, library: mcf_visuals.dylib}
+          - {os: macos-15-intel, target: macos-x86_64, library: mcf_visuals.dylib}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Build optional C++ game kernels
+      - name: Build native C++ game kernels
         run: python native/visuals/build.py --jobs 2
       - name: Verify source checkout and platform manifests
-        run: python native/visuals/test_manifest.py
+        run: |
+          python native/visuals/test_manifest.py
+          python native/visuals/test_package.py
+          python native/visuals/test_portability.py
+      - name: Verify native architecture and self-contained platform dependencies
+        run: python native/visuals/check_portability.py --target ${{ matrix.target }} --report native-kernels-portability.json
       - name: Install Godot 4.7 editor
         run: python native/policy/install_godot.py --editor-only
       - name: Import and compare native kernels with original algorithms
         run: |
           godot --headless --editor --path . --import
+          godot --headless --path . --script res://tests/ui/run_bundled_native.gd -- --require-local
+          godot --headless --path . --script res://tests/ui/run_native_bundle_validation.gd
+          godot --headless --path . --script res://tests/ui/run_native_setup.gd
           for suite in ui/run_native_visuals ui/run_native_terrain ai/run_native_ai perf/run_native_pathfinding fog/run_native_visibility; do
             godot --headless --path . --script "res://tests/$suite.gd" -- --require-native || exit 1
           done
@@ -43,9 +97,6 @@ jobs:
             godot --headless --path . --script "res://tests/$suite.gd" || exit 1
           done
           godot --headless --path . --script res://tests/bench/run_native_match_parity.gd
-      - name: Verify mixed native and reference multiplayer peers
-        if: runner.os == 'Linux'
-        run: bash tests/run_net_native_kernels.sh
       - name: Verify first-person behavior with native geometry
         run: |
           for suite in run_first_person run_first_person_fix9 run_first_person_damage run_first_person_streaming; do
@@ -57,12 +108,6 @@ jobs:
           MCF_NATIVE_KERNELS: 'off'
         run: |
           godot --headless --path . --script res://tests/ui/run_first_person.gd
-      - name: Compare rendered native and GDScript scenes
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq xvfb libgl1-mesa-dri
-          LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a godot --path . --rendering-method gl_compatibility --script res://tests/render_native_visuals.gd
       - name: Measure native and GDScript CPU work
         run: |
           for kernel in visuals terrain ai pathfinding visibility; do
@@ -71,5 +116,78 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: native-kernels-${{ matrix.os }}
-          path: native-kernels-benchmark.txt
+          path: |
+            native-kernels-benchmark.txt
+            native-kernels-portability.json
           if-no-files-found: error
+      - name: Package the exact tested native library
+        run: python native/visuals/package.py create --target ${{ matrix.target }} --output .cache/native-packages/mcf-kernels-${{ matrix.target }}.zip --require-ci
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-package-${{ matrix.target }}
+          path: .cache/native-packages/mcf-kernels-${{ matrix.target }}.zip
+          if-no-files-found: error
+  bundled:
+    name: Source download without compilation (${{ matrix.target }})
+    needs: [plan, parity]
+    if: always() && needs.plan.result == 'success' && (needs.parity.result == 'success' || needs.parity.result == 'skipped')
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: windows-2022, target: windows-x86_64, library: mcf_visuals.dll}
+          - {os: macos-15, target: macos-arm64, library: mcf_visuals.dylib}
+          - {os: macos-15-intel, target: macos-x86_64, library: mcf_visuals.dylib}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # During the first bundle refresh there is no committed payload yet. Build
+      # artifacts have already passed the full parity matrix above. Once a bundle
+      # is checked in, verify that exact shipped payload instead of replacing it.
+      - uses: actions/download-artifact@v4
+        if: hashFiles('addons/mcf_visuals/prebuilt/manifest.json') == ''
+        with:
+          pattern: native-package-*
+          path: .cache/native-packages
+      - name: Assemble the initial Windows and Mac bundle
+        if: hashFiles('addons/mcf_visuals/prebuilt/manifest.json') == ''
+        run: python native/visuals/package.py assemble --artifacts .cache/native-packages
+      - name: Verify all shipped files and source fingerprints
+        run: |
+          python native/visuals/package.py verify
+          python -c "from pathlib import Path; assert not Path('addons/mcf_visuals/bin').exists(), 'A developer build would mask bundled startup'"
+          python native/visuals/check_portability.py --target ${{ matrix.target }} --library "addons/mcf_visuals/prebuilt/${{ matrix.target }}/${{ matrix.library }}" --report native-bundle-portability.json
+      - name: Install the official Godot editor only
+        run: python native/policy/install_godot.py --editor-only --preserve-signature
+      - name: Simulate a browser-downloaded Mac library
+        if: runner.os == 'macOS'
+        run: |
+          xattr -w com.apple.quarantine "0083;$(printf '%x' "$(date +%s)");Safari;$(uuidgen)" "addons/mcf_visuals/prebuilt/${{ matrix.target }}/mcf_visuals.dylib"
+      - name: Import and run bundled kernels without rebuilding
+        run: |
+          godot --headless --editor --path . --import
+          godot --headless --path . --script res://tests/ui/run_bundled_native.gd -- --require-bundled
+          godot --headless --path . --script res://tests/ui/run_native_bundle_validation.gd
+          godot --headless --path . --script res://tests/ui/run_native_setup.gd
+          for suite in ui/run_native_visuals ui/run_native_terrain ai/run_native_ai perf/run_native_pathfinding fog/run_native_visibility; do
+            godot --headless --path . --script "res://tests/$suite.gd" -- --require-native || exit 1
+          done
+      - name: Verify explicit fallback for the same source download
+        env:
+          MCF_NATIVE_VISUALS: 'off'
+          MCF_NATIVE_KERNELS: 'off'
+        run: godot --headless --path . --script res://tests/ui/run_bundled_native.gd -- --expect-disabled
+      - name: Verify gameplay and first person with reused native libraries
+        if: needs.parity.result == 'skipped'
+        run: |
+          for suite in ai/run_ai_conduct ai/run_ai_rules fog/run_fog fog/run_sight_lines fog/run_gas_visibility fog/run_gas_vision fog/run_fog_viewer fog/run_fog_screens perf/run_incremental net/run_lockstep files/run_game_files files/run_replay_seek ui/run_first_person ui/run_first_person_fix9 ui/run_first_person_damage ui/run_first_person_streaming; do
+            godot --headless --path . --script "res://tests/$suite.gd" || exit 1
+          done
+          godot --headless --path . --script res://tests/bench/run_native_match_parity.gd

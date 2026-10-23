@@ -19,6 +19,9 @@ var _key_message: Label
 var _tabs: TabContainer
 var _interface_scroll: ScrollContainer
 var _key_sections: TabContainer
+var _acceleration_status: Label
+var _acceleration_detail: Label
+var _performance_box: Control
 
 static func open(host: Node) -> SettingsWindow:
 	var w := SettingsWindow.new()
@@ -106,6 +109,22 @@ func _build() -> void:
 	_scale_slider.gui_input.connect(func(e: InputEvent) -> void:
 		if e is InputEventKey and e.pressed:
 			_apply_scale.call_deferred())
+
+	var performance := SteamChrome.group_box("Performance")
+	_performance_box = performance
+	page.add_child(performance)
+	_acceleration_status = Label.new()
+	_acceleration_status.name = "NativeAccelerationStatus"
+	_acceleration_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	Ui.style_status(_acceleration_status)
+	performance.body.add_child(_acceleration_status)
+	_acceleration_detail = Label.new()
+	_acceleration_detail.name = "NativeAccelerationDetail"
+	_acceleration_detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_acceleration_detail.add_theme_font_size_override("font_size", 12)
+	_acceleration_detail.add_theme_color_override("font_color", Color("#b0b0b0"))
+	performance.body.add_child(_acceleration_detail)
+	_refresh_acceleration()
 
 	# --- Экран ---
 	var disp_box := SteamChrome.group_box("Display")
@@ -311,6 +330,11 @@ func _build() -> void:
 	close.pressed.connect(queue_free)
 	bottom.add_child(close)
 	Ui.theme_canvas_layers()
+
+func _refresh_acceleration(snapshot: Dictionary = {}) -> void:
+	var status := NativeAcceleration.status() if snapshot.is_empty() else snapshot
+	_acceleration_status.text = str(status.get("title", "C++ acceleration unavailable"))
+	_acceleration_detail.text = str(status.get("detail", "The game uses standard processing."))
 
 func _apply_scale() -> void:
 	Ui.set_ui_scale(_scale_slider.value / 100.0)
