@@ -2,9 +2,12 @@ extends "res://tests/cheats/CheatSuite.gd"
 
 func run() -> void:
 	var r := fresh()
-	for line: String in ["inspect", "spawn unit engineer #1", "spawn vehicle tank #2", "event spawn", "event edit", "event remove"]:
+	for line: String in ["inspect", "spawn unit engineer #1", "spawn vehicle tank #2"]:
 		var parsed := CheatCommands.parse(line, r.state, 0)
 		ck(not parsed.has("error") and parsed.access == "tool", "interactive command: " + line)
+	for line: String in ["event spawn gas", "event edit gas:1 {rounds:5}", "event remove gas:1"]:
+		var event := CheatCommands.parse(line, r.state, 0)
+		ck(not event.has("error") and event.access == "play", "event management is a complete command: " + line)
 	var parsed := CheatCommands.parse("units self status", r.state, 0)
 	ck(parsed.op == "units_status", "player status grammar")
 	var summary := CheatQueries.run(r, parsed, 0)
@@ -42,4 +45,5 @@ func run() -> void:
 	for section: Array in docs:
 		if section[0] == "Cheats": cheats = section[1]
 	for entry: Dictionary in CheatCommands.CATALOG:
+		if entry.get("hidden", false): continue
 		ck(cheats.contains(entry.help), "manual explains " + entry.op)

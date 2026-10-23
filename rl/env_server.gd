@@ -616,7 +616,7 @@ func _crew_vehicles() -> void:
 
 func _step(req: Dictionary) -> Dictionary:
 	if _done or state == null:
-		return {"ok": false, "error": "episode is over — reset first"}
+		return {"ok": false, "error": "episode is over - reset first"}
 	var k := int(req.get("action", -1))
 	if k < 0 or k >= _legal.size():
 		return {"ok": false, "error": "action %d out of range (%d legal)" % [k, _legal.size()]}

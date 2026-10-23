@@ -125,14 +125,14 @@ func _ready() -> void:
 	_refresh_slots()
 	_refresh_map_preview()
 	if _is_solo and LearnedController.available():
-		_status.text = "Opponent: AI - Learned — %s" % LearnedController.model_label()
+		_status.text = "Opponent: AI - Learned - %s" % LearnedController.model_label()
 	# Гость (item 61) сидит в лобби и ждёт, когда хост объявит условия матча (K_SETUP);
 	# по ним он и уходит на закупку. До того он может трогать только свой цвет.
 	if _is_client and NetHandoff.session != null:
 		NetHandoff.session.message.connect(_on_client_message)
 		NetHandoff.session.disconnected.connect(_on_client_lost)
 		NetHandoff.session.attach()
-		_status.text = "Connected — waiting for the host's lobby…"
+		_status.text = "Connected - waiting for the host's lobby…"
 		GameAudio.say("join", self)
 		# Просим хоста прислать лобби ещё раз (batch 14): снимок, ушедший до того, как
 		# гость открыл этот экран, мог потеряться при быстром переподключении, и гость
@@ -182,7 +182,7 @@ func _on_host_peer_left(id: int) -> void:
 		s.ai_style = AIPersonality.TACTICIAN
 		s.peer_id = -1
 		s.display_name = MCF.owner_name(side)
-		_status.text = "%s left — a Tactician AI takes that slot." % s.display_name
+		_status.text = "%s left - a Tactician AI takes that slot." % s.display_name
 	_refresh_host_status()
 	_lobby_changed()
 
@@ -225,9 +225,9 @@ func _refresh_host_status() -> void:
 	if NetHandoff.session.is_relay():
 		where = " Listed online as \"%s\" (code %s)." % [NetHandoff.room_name, NetHandoff.session.relay_code()]
 	if n == 0:
-		_status.text = "Hosting — waiting for players to join. You can also add AI slots and start now." + where
+		_status.text = "Hosting - waiting for players to join. You can also add AI slots and start now." + where
 	else:
-		_status.text = "Hosting — %d player%s connected. Start when everyone is seated." % [
+		_status.text = "Hosting - %d player%s connected. Start when everyone is seated." % [
 			n, "" if n == 1 else "s"] + where
 
 ## Любое изменение лобби у хоста: перерисовать и разослать гостям.
@@ -241,7 +241,7 @@ func _update_listing(status: String = "In lobby") -> void:
 	var seats := 0
 	for s: Roster.Slot in roster.slots:
 		if s.kind == Roster.SlotKind.HUMAN or s.kind == Roster.SlotKind.OPEN: seats += 1
-	var map_name := "Random map" if _is_random() else (_map_opt.get_item_text(_map_opt.selected) if _map_opt != null and _map_opt.selected >= 0 else "—")
+	var map_name := "Random map" if _is_random() else (_map_opt.get_item_text(_map_opt.selected) if _map_opt != null and _map_opt.selected >= 0 else "-")
 	NetHandoff.session.update_listing({"name": NetHandoff.room_name, "map": map_name,
 			"players": humans, "max_players": maxi(seats, humans), "status": status})
 
@@ -339,9 +339,9 @@ func _apply_lobby_snapshot(msg: Dictionary) -> void:
 		if _color_opt != null:
 			_color_opt.select(mine.color_index())
 		_refresh_swatch()
-		_status.text = "You are %s — waiting for the host to start the match." % mine.display_name
+		_status.text = "You are %s - waiting for the host to start the match." % mine.display_name
 	else:
-		_status.text = "Connected — no free slot yet. The host can add one."
+		_status.text = "Connected - no free slot yet. The host can add one."
 
 func _restore_config_controls() -> void:
 	_team_mode = _roster_has_teams()
@@ -444,7 +444,7 @@ func _on_client_message(msg: Dictionary) -> void:
 			PlacementScript.K_ROSTER]:
 		if not _setup_requested and NetHandoff.session != null:
 			_setup_requested = true
-			_status.text = "The host has started — catching up…"
+			_status.text = "The host has started - catching up…"
 			NetHandoff.session.send({"k": NetHandoff.K_SETUP_REQ})
 		return
 	# Хост открыл сохранение (M12): доска приезжает целиком, и закупка пропускается.
@@ -472,7 +472,7 @@ func _on_client_message(msg: Dictionary) -> void:
 
 func _on_client_lost() -> void:
 	if _status != null:
-		_status.text = "Connection lost — returning to the menu."
+		_status.text = "Connection lost - returning to the menu."
 		# The lobby is removed immediately; let this connection notice finish in the menu.
 		GameAudio.say("leave", get_tree().root, 60)
 	NetHandoff.discard()
@@ -1175,7 +1175,7 @@ func _build_generator(box: VBoxContainer) -> void:
 		sizes.append("%s (%d×%d)" % [MapGen.SIZE_NAMES[i], d.x, d.y])
 	sizes.append("Custom…")
 	_gen_size = _opt(sizes, int(defaults["size"]))
-	_gen_size.tooltip_text = "Starting size — the map grows if the armies don't fit. Custom: any width and height, no upper limit."
+	_gen_size.tooltip_text = "Starting size - the map grows if the armies don't fit. Custom: any width and height, no upper limit."
 	_gen_density = _opt(MapGen.DENSITY_NAMES, int(defaults["density"]))
 	_gen_density.tooltip_text = "How built-up and cluttered the map is."
 	var look := HBoxContainer.new()
@@ -1199,7 +1199,7 @@ func _build_generator(box: VBoxContainer) -> void:
 	_gen_dims_row.visible = false
 	_gen_sym = CheckBox.new()
 	_gen_sym.text = "Symmetrical"
-	_gen_sym.tooltip_text = "Mirror the map so every side gets the same ground. Four quarters for 4 or 8 players, left and right otherwise — with an odd number, one zone sits on the middle line."
+	_gen_sym.tooltip_text = "Mirror the map so every side gets the same ground. Four quarters for 4 or 8 players, left and right otherwise - with an odd number, one zone sits on the middle line."
 	_gen_sym.toggled.connect(func(_on: bool) -> void: _on_gen_changed())
 	_row(_gen_box, "Layout:", _gen_sym)
 	var mech := HFlowContainer.new()
@@ -1212,7 +1212,7 @@ func _build_generator(box: VBoxContainer) -> void:
 	_row(_gen_box, "Mechanics:", mech)
 	# Мебель (§3.15) — отдельно от «Obstacles»: обстановка комнат, а не укрепления.
 	_gen_furniture = _opt(MapFurnish.DENSITY_NAMES, int(defaults.get("furniture", MapFurnish.DEFAULT_DENSITY)))
-	_gen_furniture.tooltip_text = "How furnished the rooms are: beds, desks, shelves, counters, crates. Furniture is cover you can climb onto, carry, drag or smash — full-height shelves block sight like walls. Doors and walkways always stay clear."
+	_gen_furniture.tooltip_text = "How furnished the rooms are: beds, desks, shelves, counters, crates. Furniture is cover you can climb onto, carry, drag or smash - full-height shelves block sight like walls. Doors and walkways always stay clear."
 	# Износа мебели больше нет (0.9.2: игрок попросил убрать механику).
 	_gen_furniture.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_gen_furniture.item_selected.connect(func(_i: int) -> void: _on_gen_changed())
@@ -1273,7 +1273,7 @@ func _dim_spin(value: int) -> SpinBox:
 	sp.max_value = 1000
 	sp.allow_greater = true
 	sp.value = value
-	sp.tooltip_text = "Cells, at least %d — no upper limit. Very large maps take longer to build." % MapGen.MIN_DIM
+	sp.tooltip_text = "Cells, at least %d - no upper limit. Very large maps take longer to build." % MapGen.MIN_DIM
 	return sp
 
 func _gen_check(parent: Control, text: String, tip: String) -> CheckBox:
@@ -1337,7 +1337,7 @@ func _zone_summary(map: MapData) -> String:
 		if z >= 0:
 			sizes[z] = int(sizes.get(z, 0)) + 1
 	if sizes.is_empty():
-		return "No room for deployment zones — try fewer players."
+		return "No room for deployment zones - try fewer players."
 	var o := _gen_options()
 	var units := int(o["units"])
 	var cells: int = sizes.values().min()
@@ -1366,7 +1366,7 @@ func _set_player_count(n: int) -> void:
 	while roster.slots.size() > n:
 		var last: Roster.Slot = roster.slots[roster.slots.size() - 1]
 		if last.kind == Roster.SlotKind.HUMAN and last.peer_id > 1:
-			_status.text = "%s is sitting in the last slot — it can't be removed." % last.display_name
+			_status.text = "%s is sitting in the last slot - it can't be removed." % last.display_name
 			break
 		roster.remove_slot(last.id, _min_slots())
 		if roster.slots.has(last):
@@ -1409,7 +1409,7 @@ func _save_random_map() -> void:
 		_status.text = "Could not save the map."
 		return
 	_reload_map_items()  # выбор хранится по пути — «Random map» остаётся выбранной
-	_status.text = "Saved as '%s' — it's in the map list and the editor now." % name
+	_status.text = "Saved as '%s' - it's in the map list and the editor now." % name
 
 ## Открыть сохранённую партию прямо в лобби (item 42). Смысл именно здесь, а не в
 ## меню: доска и армии в файле уже есть, а вот КТО их ведёт — вопрос сегодняшнего
@@ -1467,7 +1467,7 @@ func _on_load_save() -> void:
 	if _is_host_net:
 		for id in NetHandoff.session.peers: _seat_peer(id)
 	_lobby_changed()
-	_status.text = "Loaded %s — edit fog, cheats, teams, events and future waves, then resume. Original deployment settings are preserved." % name
+	_status.text = "Loaded %s - edit fog, cheats, teams, events and future waves, then resume. Original deployment settings are preserved." % name
 
 ## Keep saved progress, while exposing the current wave/raider controls on resume.
 func _load_spawn_settings(rules: Dictionary) -> void:
@@ -1540,7 +1540,7 @@ func _on_clear_save() -> void:
 	_save_armies = {}
 	_save_map = null
 	_lobby_changed()
-	_status.text = "Saved game cleared — the match will start from deployment."
+	_status.text = "Saved game cleared - the match will start from deployment."
 
 ## Живые юниты по сторонам прямо из файла: разбирать его в GameState ради счётчика
 ## незачем, а показать «Player B: 11 units» надо до старта.
@@ -1708,7 +1708,7 @@ func _slot_row(s: Roster.Slot) -> Control:
 		join.pressed.connect(_on_join_slot.bind(s.id))
 		row.add_child(join)
 	else:
-		who.text = "—" if s.kind == Roster.SlotKind.OPEN else ""
+		who.text = "-" if s.kind == Roster.SlotKind.OPEN else ""
 		who.modulate = Color(0.6, 0.62, 0.7)
 		row.add_child(who)
 
@@ -1859,7 +1859,7 @@ func _on_slot_budget(value: float, slot_id: int) -> void:
 ## Окно ограничения состава ДЛЯ КОНКРЕТНОГО слота (item 2).
 func _open_unit_restrict_window(slot_id: int) -> void:
 	var s := roster.slots[slot_id] as Roster.Slot
-	var body := _modal_window("Allowed Units — %s" % Roster.color_name(s.color_index()))
+	var body := _modal_window("Allowed Units - %s" % Roster.color_name(s.color_index()))
 	var hint := Label.new()
 	hint.text = "Unchecked units can't be bought by this player."
 	hint.add_theme_font_size_override("font_size", 11)
@@ -2045,7 +2045,7 @@ func _on_slot_kind(index: int, slot_id: int) -> void:
 	# Слот сидящего гостя хост не переназначает (batch 12 #8): игрока не выкинешь
 	# щелчком по списку — только отключением.
 	if s.kind == Roster.SlotKind.HUMAN and s.peer_id > 1 and index != 2:
-		_status.text = "%s is sitting in that slot — it stays a Player." % s.display_name
+		_status.text = "%s is sitting in that slot - it stays a Player." % s.display_name
 		_refresh_slots()
 		return
 	match index:
@@ -2065,7 +2065,7 @@ func _on_slot_kind(index: int, slot_id: int) -> void:
 
 func _on_slot_color(color_idx: int, slot_id: int) -> void:
 	if not _assign_color(slot_id, color_idx):
-		_status.text = "That faction is taken — no two players share a faction."
+		_status.text = "That faction is taken - no two players share a faction."
 	_lobby_changed()
 
 func _on_slot_zone(value: float, slot_id: int) -> void:
@@ -2323,7 +2323,7 @@ func _start_loaded() -> void:
 
 func _on_start() -> void:
 	if roster.has_duplicate_colors():
-		_status.text = "Two players share a faction — fix that first."
+		_status.text = "Two players share a faction - fix that first."
 		return
 	var playing := 0
 	for s: Roster.Slot in roster.slots:
@@ -2340,14 +2340,14 @@ func _on_start() -> void:
 	if _is_host_net:
 		for s: Roster.Slot in roster.slots:
 			if s.kind == Roster.SlotKind.HUMAN and s.peer_id < 0:
-				_status.text = "Slot %d is 'Player' but nobody has joined it — wait for them, or set the slot to Open / AI." % (s.id + 1)
+				_status.text = "Slot %d is 'Player' but nobody has joined it - wait for them, or set the slot to Open / AI." % (s.id + 1)
 				return
 	if not _save.is_empty():
 		_start_loaded()
 		return
 	# Волны — отдельный слот ИИ в конце ростера, все игроки — одна команда.
 	if holdout and not roster.set_waves(_waves_ai_opt.selected):
-		_status.text = "Holdout needs a free slot for the waves — remove a slot first."
+		_status.text = "Holdout needs a free slot for the waves - remove a slot first."
 		return
 	_commit_config()
 	# Сетевой хост объявляет карту клиентам тем же путём, что и старый Setup. Случайная

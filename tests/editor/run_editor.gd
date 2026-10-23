@@ -490,7 +490,7 @@ func _furniture() -> void:
 	ed.brush_size = 1
 	_drag(Vector2i(6, 6), Vector2i(6, 6))
 	ck(_feat(Vector2i(6, 6)) == "bed" and ed.map.get_cover(Vector2i(6, 6)) == 0.5, "painting places a bed at 0.5 m")
-	ck(ed._brush_name("bed") == "Bed — 0.5 m", "the brush label names it with its height")
+	ck(ed._brush_name("bed") == "Bed - 0.5 m", "the brush label names it with its height")
 	ed._select_brush("floor")
 	ed.pick_at(Vector2i(6, 6))
 	ck(ed.brush == "bed", "the eyedropper picks furniture up as a brush")

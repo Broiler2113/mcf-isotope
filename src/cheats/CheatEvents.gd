@@ -16,31 +16,36 @@ static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 		events.pending.remove_at(a.index)
 		return CheatUnits.result("Canceled warning %d: %s." % [a.index, old.id])
 	var id: String = a.event
-	if a.has("x") and id not in [RandomEvents.MORTAR, RandomEvents.GAS, RandomEvents.FIRE, RandomEvents.EMP, RandomEvents.COLLAPSE]:
+	if a.has("x") and id not in [RandomEvents.MORTAR, RandomEvents.GAS, RandomEvents.FIRE, RandomEvents.EMP, RandomEvents.COLLAPSE, RandomEvents.ARMY, RandomEvents.REINFORCE]:
 		return ActionResult.fail("This event does not support a target coordinate.")
-	if not r._events_allowed().has(id): return ActionResult.fail("This event has no eligible targets in the current map or mode.")
+	if not _eligible(r, id, a.get("properties", {})): return ActionResult.fail("This event has no eligible targets in the current map or mode.")
 	if id == RandomEvents.ARMY:
 		var armies := 0
 		for side: int in r.state.turns.round_order:
 			if MCF.is_independent(side) and r._army_holds_field(side): armies += 1
 		if armies >= r.ARMY_MAX: return ActionResult.fail("Two independent armies are already active.")
-		if r._independent_roster().is_empty(): return ActionResult.fail("All independent army unit types are restricted.")
+		if r._independent_roster().is_empty() and not a.get("properties", {}).has("units"): return ActionResult.fail("All independent army unit types are restricted.")
 	var out := CheatUnits.result("Forced event: " + RandomEvents.event_name(id) + ".")
 	if id == RandomEvents.MINEFIELD: r._start_minefield(out); return out
 	if id == RandomEvents.BOUNTY: r._start_bounty(out); return out
 	var checkpoint := r.state.dice.checkpoint()
-	var params := r._roll_event_params(id)
+	var params := _roll_params(r, id, a.get("properties", {}))
 	if params.is_empty():
 		r.state.dice.restore_checkpoint(checkpoint)
 		return ActionResult.fail("No eligible area is available for this event.")
 	if a.has("properties"):
 		params.merge(a.properties, true)
+		_normalize_entry(params, a.properties, r)
 		var error := CheatEventModel.validate(id, params, r)
 		if error.is_empty() and id == RandomEvents.MORTAR and _overlaps(r, params): error = "The artillery area overlaps a pending barrage."
 		if not error.is_empty():
 			r.state.dice.restore_checkpoint(checkpoint)
 			return ActionResult.fail(error)
-	elif a.has("x"):
+	if a.has("x") and id in [RandomEvents.ARMY, RandomEvents.REINFORCE]:
+		params.x = a.x
+		params.y = a.y
+		params.erase("hx"); params.erase("hy")
+	elif a.has("x") and not a.has("properties"):
 		params.x = clampi(a.x - int(params.w) / 2, 0, r.state.grid.width - int(params.w))
 		params.y = clampi(a.y - int(params.h) / 2, 0, r.state.grid.height - int(params.h))
 		if id == RandomEvents.MORTAR:
@@ -49,7 +54,7 @@ static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 				r.state.dice.restore_checkpoint(checkpoint)
 				return ActionResult.fail("No non-overlapping barrage area is available.")
 	events.announce(id, params, r.state.turns.round_number)
-	out.log("⚠ %s — %s, landing at the end of this round" % [RandomEvents.event_name(id), r._event_where(id, params)])
+	out.log("⚠ %s - %s, landing at the end of this round" % [RandomEvents.event_name(id), r._event_where(id, params)])
 	out.cheat_output += " " + r._event_where(id, params)
 	return out
 
@@ -77,12 +82,12 @@ static func _overlaps(r: GameActionResolver, p: Dictionary, except_uid := -1) ->
 static func _spawn_now(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 	var a := intent.args
 	var id: String = a.event
-	if not r._events_allowed().has(id): return ActionResult.fail("This event has no eligible targets in this map or mode.")
+	if not _eligible(r, id, a.get("properties", {})): return ActionResult.fail("This event has no eligible targets in this map or mode.")
 	if id == RandomEvents.ARMY:
 		var armies := 0
 		for side: int in r.state.turns.round_order:
 			if MCF.is_independent(side) and r._army_holds_field(side): armies += 1
-		if armies >= r.ARMY_MAX or r._independent_roster().is_empty(): return ActionResult.fail("No independent army can land: two active armies or all unit types excluded.")
+		if armies >= r.ARMY_MAX or r._independent_roster().is_empty() and not a.get("properties", {}).has("units"): return ActionResult.fail("No independent army can land: two active armies or all unit types excluded.")
 	var out := CheatUnits.result("Triggered " + RandomEvents.event_name(id) + ".")
 	var properties: Dictionary = a.get("properties", {})
 	var error := CheatEventModel.validate(id, properties, r)
@@ -104,15 +109,19 @@ static func _spawn_now(r: GameActionResolver, intent: CheatIntent) -> ActionResu
 			r._start_bounty(out)
 		return out
 	var checkpoint := r.state.dice.checkpoint()
-	var p := r._roll_event_params(id)
+	var p := _roll_params(r, id, a.get("properties", {}))
 	if p.is_empty():
 		r.state.dice.restore_checkpoint(checkpoint)
 		return ActionResult.fail("No eligible event area is available.")
 	p.merge(properties, true)
+	_normalize_entry(p, properties, r)
 	if a.has("x"):
 		if p.has("w") and not properties.has("x"):
 			p.x = clampi(a.x - int(p.w) / 2, 0, r.state.grid.width - int(p.w))
 			p.y = clampi(a.y - int(p.h) / 2, 0, r.state.grid.height - int(p.h))
+		elif id in [RandomEvents.ARMY, RandomEvents.REINFORCE]:
+			p.x = a.x; p.y = a.y
+			p.erase("hx"); p.erase("hy")
 		elif p.has("edge"):
 			if r.state.env == "bunker": p.hx = a.x; p.hy = a.y
 			else:
@@ -129,6 +138,7 @@ static func _spawn_now(r: GameActionResolver, intent: CheatIntent) -> ActionResu
 		return ActionResult.fail(error)
 	r.land_event(id, p, out)
 	out.cheat_output += " " + r._event_where(id, p)
+	if id in [RandomEvents.ARMY, RandomEvents.REINFORCE] and not out.log_lines.is_empty(): out.cheat_output += "\n" + "\n".join(out.log_lines)
 	return out
 
 static func _edit(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
@@ -141,7 +151,7 @@ static func _edit(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 		var changed: Dictionary = intent.args.get("properties", {})
 		if intent.op == "event_set": changed = {intent.args.property: intent.args.value}
 		for key: String in changed:
-			if not p.has(key): return ActionResult.fail("This event has no editable '%s' property." % key)
+			if not CheatEventModel.schema(entry.event, r, p).has(key): return ActionResult.fail("This event has no editable '%s' property." % key)
 		p.merge(changed, true)
 		var error := CheatEventModel.validate(entry.event, p, r)
 		if not error.is_empty(): return ActionResult.fail(error)
@@ -189,3 +199,28 @@ static func _edit(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 	r._sync_gas()
 	UnitInstance.vision_epoch += 1
 	return CheatUnits.result(("Removed " if remove else "Updated ") + ref + ("." if remove else ": " + str(p)))
+
+static func _normalize_entry(params: Dictionary, options: Dictionary, r: GameActionResolver) -> void:
+	if not params.has("edge"): return
+	if options.has("x") or options.has("edge"):
+		params.erase("hx")
+		params.erase("hy")
+	if options.has("edge"):
+		var along := r.state.grid.width if int(params.edge) % 2 == 0 else r.state.grid.height
+		params.len = mini(int(params.get("len", 1)), along)
+		if not options.has("from"): params["from"] = (along - int(params.len)) / 2
+
+static func _eligible(r: GameActionResolver, id: String, options: Dictionary) -> bool:
+	if id == RandomEvents.REINFORCE and options.has("side"):
+		return r.state.roster.player_ids().has(int(options.side))
+	if id == RandomEvents.ARMY and options.has("units"):
+		return r.mode.kind != MatchMode.Kind.HOLDOUT
+	return r._events_allowed().has(id)
+
+static func _roll_params(r: GameActionResolver, id: String, options: Dictionary) -> Dictionary:
+	if id == RandomEvents.REINFORCE and options.has("side"):
+		var params := r._roll_event_params(RandomEvents.ARMY)
+		params.side = options.side
+		params.budget = int(options.get("budget", 1))
+		return params
+	return r._roll_event_params(id)

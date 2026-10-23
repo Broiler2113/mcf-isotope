@@ -7,6 +7,7 @@ extends "res://scenes/main/MainOrders.gd"
 ## Можно ли вообще ставить на паузу (item 4): когда КАЖДУЮ сторону ведёт машина.
 ## В сети и в просмотре повтора паузы нет: там темпом распоряжается не эта сессия.
 func _pause_available() -> bool:
+	if _history_hold and replay == null and (net == null or net.is_host): return true
 	if networked or replay != null or state == null or state.roster == null:
 		return false
 	var sides := state.roster.player_ids()
@@ -48,14 +49,14 @@ func _outcome_title(out: Dictionary) -> String:
 	var key := str(out["winner"])
 	match str(out["reason"]):
 		"draw":
-			return "Everyone is dead — the match is a draw"
+			return "Everyone is dead - the match is a draw"
 		"held":
-			return "All %d waves held — the defenders win!" % md.waves_total
+			return "All %d waves held - the defenders win!" % md.waves_total
 		"overrun":
 			if md.endless():
-				return "Overrun — held out %d round(s), %d wave(s) beaten, %d fighter(s) killed" % [
+				return "Overrun - held out %d round(s), %d wave(s) beaten, %d fighter(s) killed" % [
 						state.turns.round_number, resolver.waves_beaten(), md.wave_spawned - resolver.wave_fighters_left()]
-			return "Overrun on wave %d of %d — the waves win" % [md.wave, md.waves_total]
+			return "Overrun on wave %d of %d - the waves win" % [md.wave, md.waves_total]
 		"points":
 			var runner := 0
 			for k: String in md.scores:
@@ -142,7 +143,7 @@ func _analysis_summary(analyst: MatchAnalyst) -> String:
 	for side: int in state.roster.player_ids():
 		if not MCF.is_player(side):
 			continue
-		out += "  %s — %d%%\n" % [state.roster.name_of(side),
+		out += "  %s - %d%%\n" % [state.roster.name_of(side),
 				roundi(analyst.agreement(side) * 100.0)]
 	out += "\nBelow: the moves after which the model's own read of the position fell "
 	out += "the furthest. That drop covers the move AND whatever the opponent did next."
@@ -207,7 +208,7 @@ func _show_victory(title: String) -> void:
 	body.add_theme_constant_override("separation", 14)
 	frame.add_child(SteamChrome.pad(body, 16, 14))
 	var msg := Label.new()
-	msg.text = title + "\nThe battle is frozen — nothing else will happen on the board."
+	msg.text = title + "\nThe battle is frozen - nothing else will happen on the board."
 	msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	msg.custom_minimum_size = Vector2(340, 0)
 	body.add_child(msg)
@@ -278,7 +279,7 @@ func _kills_table() -> Control:
 		else:
 			continue
 		var cells: Array[String] = [who + ("" if alive else "  †"), _side_label(side),
-				str(rec[0]), str(rec[1]) if v != null else "—"]
+				str(rec[0]), str(rec[1]) if v != null else "-"]
 		for i in cells.size():
 			var l := Label.new()
 			l.text = cells[i]
@@ -497,10 +498,6 @@ func _build_ui() -> void:
 	_refresh_pause_button()
 
 	var match_box := _hud_group(vbox, "Match")
-	_save_btn = _compact_button("Save Game", _save_game)
-	_save_btn.visible = replay == null
-	# «Возврат в меню» — единая кнопка: в сети уводит из партии, в одиночке — в главное меню.
-	match_box.add_child(_button_row([_save_btn, _compact_button("Return to Menu", _to_lobby)]))
 	# Настройки (items 17/23): размер интерфейса и акцент — не выходя из боя.
 	# «Было / стало» (0.9.2) — рядом: доска, какой она была в начале боя, и обратно.
 	_before_btn = _compact_button("Before / After", _toggle_before)
@@ -948,7 +945,7 @@ func _refresh_initiative_overlay() -> void:
 			if t >= 0:
 				name_txt += " · %s" % MCF.team_name(t)
 		var lbl := Label.new()
-		lbl.text = "%s — %s" % [name_txt, _count_str(counts, slot)]
+		lbl.text = "%s - %s" % [name_txt, _count_str(counts, slot)]
 		# Чей ход ИДЁТ ПРЯМО СЕЙЧАС — стрелка и зелёный (item 5). Правило одно на всех:
 		# слот мирных и слот активированной группы жителей помечаются ровно так же, как
 		# игрок, — по очереди ходят и они, и по ней же игрок сверяется, чей сейчас ход.
@@ -1427,12 +1424,12 @@ func _refresh_info() -> void:
 			else "Click to select a unit."
 		return
 	var range_text := "∞" if is_inf(u.fire_range()) else (
-		"—" if u.fire_range() <= 0 else str(int(u.fire_range())))
+		"-" if u.fire_range() <= 0 else str(int(u.fire_range())))
 	var bonus := ""
 	if u.stats.target_defense_penalty > 0:
 		bonus = "  (−%d to target defense)" % u.stats.target_defense_penalty
 	if Furniture.is_furniture(u.held_item_id):
-		bonus += "  — carrying a %s" % Furniture.name_of(u.held_item_id).to_lower()
+		bonus += "  - carrying a %s" % Furniture.name_of(u.held_item_id).to_lower()
 	_info_label.text = "%s - range %s, RoF %d, armor %d+, speed %d%s" % [
 		u.stats.display_name, range_text,
 		u.rate_of_fire(), u.armor(), u.speed(), bonus,

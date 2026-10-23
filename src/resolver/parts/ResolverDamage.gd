@@ -26,7 +26,7 @@ func _resolve_pickup_corpse(intent: PickUpCorpseIntent) -> ActionResult:
 	if unit.borg_id != -1:
 		return ActionResult.fail("A borg can't pick up corpses")
 	if unit.carried_corpses >= MCF.CORPSE_CARRY_MAX:
-		return ActionResult.fail("Hands full — %s" % ("one body is the limit"
+		return ActionResult.fail("Hands full - %s" % ("one body is the limit"
 			if MCF.CORPSE_CARRY_MAX == 1 else "%d bodies is the limit" % MCF.CORPSE_CARRY_MAX))
 	if Combat.distance(unit.coord, intent.from) > 1:
 		return ActionResult.fail("Corpse is out of reach")
@@ -46,7 +46,7 @@ func _resolve_pickup_corpse(intent: PickUpCorpseIntent) -> ActionResult:
 		cell.occupant = null
 	unit.remaining_ap -= 1
 	unit.carried_corpses += 1
-	return ActionResult.success(["%s picks up a corpse — carrying %d (+%d defense) [AP: %d]" % [
+	return ActionResult.success(["%s picks up a corpse - carrying %d (+%d defense) [AP: %d]" % [
 		unit.stats.display_name, unit.carried_corpses, unit.carried_corpses, unit.remaining_ap]])
 
 ## Кладёт один несомый труп на свою/соседнюю проходимую клетку (бесплатно).
@@ -76,7 +76,7 @@ func _resolve_drop_corpse(intent: DropCorpseIntent) -> ActionResult:
 	unit.carried_corpses -= 1
 	var bodies := CorpseIdentity.carried(state, unit.id)
 	if _add_corpse_to_cell(intent.to, bodies[0] if not bodies.is_empty() else null):
-		return ActionResult.success(["%s stacks the fifth body — a corpse wall rises at (%d, %d)" % [
+		return ActionResult.success(["%s stacks the fifth body - a corpse wall rises at (%d, %d)" % [
 			unit.stats.display_name, intent.to.x, intent.to.y]])
 	return ActionResult.success(["%s drops a corpse (%d/%d) at (%d, %d)" % [
 		unit.stats.display_name, corpses_at(intent.to), MCF.CORPSE_WALL_COUNT,
@@ -293,7 +293,7 @@ func _kill(u: UnitInstance, res: ActionResult = null, from_coord: Vector2i = NOW
 		captive.status = MCF.Status.ALIVE
 		captive.captor_id = -1
 		if res != null:
-			res.log("%s is free — %s is dead." % [captive.stats.display_name, u.stats.display_name])
+			res.log("%s is free - %s is dead." % [captive.stats.display_name, u.stats.display_name])
 	if load <= 0:
 		return
 	var cell := state.grid.cell(u.coord) if state.grid.in_bounds(u.coord) else null
@@ -530,4 +530,4 @@ func _scatter_corpses_random(center: Vector2i, count: int, res: ActionResult) ->
 		free.remove_at(idx)
 		placed += 1
 	if res != null:
-		res.log("… the corpse wall bursts — %d bodies are thrown clear." % placed)
+		res.log("… the corpse wall bursts - %d bodies are thrown clear." % placed)

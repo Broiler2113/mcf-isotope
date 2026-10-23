@@ -220,9 +220,10 @@ func submit(line: String) -> void:
 			write("Battlefield IDs: " + (main._cheat_ids if not main._cheat_ids.is_empty() else "off"))
 			return
 	if access == "tool":
-		if parsed.op in ["event_spawn_tool", "event_edit_tool"]:
-			CheatEventEditor.open(self, parsed.op == "event_spawn_tool", parsed.args.get("event", parsed.args.get("target", "")))
-		else: start_tool(parsed)
+		start_tool(parsed)
+		return
+	if access == "host_history":
+		write(main._history_command(parsed, caller()))
 		return
 	if access in ["safe", "inspect"]: write(CheatQueries.run(main.resolver, parsed, caller())); return
 	if main._match_over: write("The match is over; gameplay cheats are unavailable."); return
@@ -244,8 +245,6 @@ func start_tool(parsed: Dictionary) -> void:
 	tool = parsed.duplicate(true)
 	input.release_focus()
 	var description := "Inspect cells" if str(parsed.op).begins_with("inspect_") else "Place %s for %s" % [parsed.args.get("type", "event"), main.state.roster.name_of(parsed.args.get("owner", caller()))]
-	if parsed.op == "event_spawn_tool": description = "Select two opposite corners for " + RandomEvents.event_name(parsed.args.event) if _area_tool() else "Place " + RandomEvents.event_name(parsed.args.event)
-	if parsed.op == "event_remove_tool": description = "Select event to remove"
 	tool_hint.text = description + " · Esc stops"
 	write(tool_hint.text)
 
@@ -267,26 +266,7 @@ func board_input(event: InputEvent) -> bool:
 		if main._match_over: write("The match is over."); cancel_tool(); return true
 		if main._animating or main._net_playing or main._net_request_pending:
 			write("Wait for the current action to finish."); return true
-		if tool.op == "event_remove_tool":
-			var refs := CheatEventModel.at_cell(main.resolver, at)
-			if refs.is_empty(): write("No active event at this cell.")
-			elif refs.size() == 1: execute_action("event_remove", {"target": refs[0]})
-			else:
-				write("Overlapping events: " + ", ".join(refs) + ". Choose one in the event editor.")
-				CheatEventEditor.open(self, false, refs[0])
-			return true
 		var args: Dictionary = tool.args.duplicate(true)
-		if _area_tool():
-			if not tool.has("corner"):
-				tool.corner = at
-				tool_hint.text = "First corner (%d,%d) · Select opposite corner · Esc stops" % [at.x, at.y]
-				return true
-			var low: Vector2i = tool.corner.min(at)
-			var size: Vector2i = tool.corner.max(at) - low + Vector2i.ONE
-			args.properties.merge({"x": low.x, "y": low.y, "w": size.x, "h": size.y}, true)
-			at = low
-			tool.erase("corner")
-			tool_hint.text = "Select first corner · Esc stops"
 		args.x = at.x
 		args.y = at.y
 		execute_action(str(tool.op).trim_suffix("_tool"), args)
@@ -315,6 +295,3 @@ func execute_action(op: String, args: Dictionary) -> bool:
 	write("────────────────────────────────────────────────")
 	main._on_intent_ready(CheatIntent.new(op, args, caller()))
 	return true
-
-func _area_tool() -> bool:
-	return tool.get("op", "") == "event_spawn_tool" and tool.args.event in ["mortar", "gas", "fire", "emp", "collapse"]

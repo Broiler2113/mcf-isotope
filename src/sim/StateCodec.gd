@@ -35,7 +35,8 @@ static func encode(state: GameState) -> Dictionary:
 	return {
 		"schema": SCHEMA,
 		"w": state.grid.width, "h": state.grid.height,
-		"dice": {"seed": state.dice.current_seed(), "rolls": state.dice.own_rolls},
+		# JSON numbers cannot preserve every 64-bit seed. Legacy numeric seeds still load.
+		"dice": {"seed": str(state.dice.current_seed()), "rolls": state.dice.own_rolls},
 		"roster": state.roster.to_dict(),
 		"units": units,
 		"vehicles": vehicles,

@@ -25,6 +25,9 @@ var seek_fx: Array = []
 var seek_decals: Dictionary = {}
 var _undo_turns: Array[Vector2i] = []
 var last_seek_actions := 0
+var advance_random := false
+var restored_checkpoint: Dictionary = {}
+var seek_error := ""
 
 func _init(p_data: Dictionary) -> void:
 	data = p_data
@@ -66,24 +69,42 @@ func seek(target: int) -> void:
 	# Косметику пересобираем ВСЕГДА с ближайшего ключевого кадра до цели (item 9), чтобы
 	# после прыжка по таймлайну кровь/гильзы/разрушенный пол были на месте, а не исчезали.
 	seek_fx = []
+	seek_error = ""
 	last_seek_actions = 0
 	var frame := _frame_at_or_before(want)
 	_rebuild(frame)
+	if advance_random and (state.dice.fallback_rolls > 0 or state.dice.scripted_remaining() > 0): seek_error = "Recorded opening dice did not match."
 	if opening_result != null:
 		seek_fx.append_array(opening_result.fx)
 	while index < want:
 		var r := play_next()
 		last_seek_actions += 1
+		if advance_random and (r == null or not r.ok or state.dice.fallback_rolls > 0 or state.dice.scripted_remaining() > 0): seek_error = "Recorded action %d could not be reconstructed safely." % index
 		if r != null:
 			seek_fx.append_array(r.fx)
 
 ## Применить следующее записанное действие. null — запись кончилась.
 func play_next() -> ActionResult:
+	restored_checkpoint = {}
 	if state == null:
 		seek(0)
 	if not has_next():
 		return null
 	var step: Dictionary = steps()[index]
+	if step.get("i", {}).get("t", "") == "checkpoint":
+		var frame := ReplayCheckpoint.unpack(step.get("k", {}))
+		index += 1
+		if frame.is_empty(): return ActionResult.fail("Unreadable resumed-match checkpoint")
+		restored_checkpoint = frame
+		seek_decals = frame.get("fx", {})
+		seek_fx.clear()
+		StateCodec.restore_into(state, frame.get("state", {}))
+		StateCodec.apply_rules(resolver, frame.get("rules", {}))
+		resolver.explored = frame.get("visibility", {}).duplicate(true)
+		resolver._undo_stack.clear()
+		resolver._redo_stack.clear()
+		UnitInstance.vision_epoch += 1
+		return ActionResult.success()
 	resolver.track_undo_history = _needs_undo(index)
 	var intent := IntentCodec.decode(step.get("i", {}))
 	index += 1
@@ -91,8 +112,11 @@ func play_next() -> ActionResult:
 		return ActionResult.fail("Unreadable action in replay")
 	# Броски подставляются ровно так же, как их подставляет сетевой клиент: свой
 	# генератор при этом не трогается, поэтому доска повторяется бит в бит.
-	state.dice.feed_scripted(step.get("r", []))
-	return resolver.resolve(intent)
+	var rolls: Array = step.get("r", [])
+	state.dice.feed_scripted(rolls)
+	var result := resolver.resolve(intent)
+	if advance_random and not (intent is UndoIntent or intent is RedoIntent): state.dice.advance_recorded(rolls.size())
+	return result
 
 ## Пересобрать доску по кадру. opening_result заполняется только на стартовом кадре:
 ## поздние кадры сняты уже ПОСЛЕ открывающего слота мирных.
@@ -105,6 +129,7 @@ func _rebuild(frame: Dictionary) -> void:
 	resolver.track_undo_history = _needs_undo(int(frame.get("at", 0)))
 	seek_decals = frame.get("fx", {})
 	StateCodec.apply_rules(resolver, frame.get("rules", {}))
+	resolver.explored = frame.get("visibility", {}).duplicate(true)
 	# Preserve historical point-budget waves only when playing an older recording.
 	var saved_mode: Dictionary = frame.get("rules", {}).get("mode", {})
 	resolver.mode.live_wave_counts = bool(saved_mode.get("live_wave_counts", false))
@@ -119,6 +144,7 @@ func _rebuild(frame: Dictionary) -> void:
 		state.dice.feed_scripted(open)
 		opening_result = resolver.open_match() if bool(frame.get("opening_processed", false)) \
 				else resolver.play_civilian_slots()
+		if advance_random: state.dice.advance_recorded(open.size())
 
 ## Ключевой кадр, не позже шага i. Кадр, привязанный к шагу s, снят ПОСЛЕ него,
 ## то есть описывает позицию s+1.
@@ -137,6 +163,7 @@ func _frame_at_or_before(i: int) -> Dictionary:
 						"rules": kf.get("rules", {}), "open": []}
 				if kf.has("fx"):
 					found["fx"] = kf.fx
+				if kf.has("visibility"): found["visibility"] = kf.visibility
 				return found
 		s -= 1
 	var first := {"at": 0, "state": data.get("start", {}),

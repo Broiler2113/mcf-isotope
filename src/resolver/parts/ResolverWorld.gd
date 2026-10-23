@@ -158,7 +158,7 @@ func _wake_and_group(res: ActionResult) -> void:
 			u.owner = slot
 		var idx := _rand_index(state.turns.round_order.size() + 1)
 		state.turns.insert_slot(slot, idx)
-		res.log("— Neutral group %s joins the fight (%d unit%s) —" % [
+		res.log("- Neutral group %s joins the fight (%d unit%s) -" % [
 			MCF.roman(num), woke.size(), "" if woke.size() == 1 else "s"])
 		# Свежевскрытый кластер мог открыть обзор ещё одному кварталу — проверяем снова.
 		_seed_sight_activation()
@@ -375,7 +375,7 @@ func advance_civilians(owner: int = MCF.Owner.NEUTRAL) -> ActionResult:
 	if not moved_from.is_empty():
 		res.dice_events.push_front({"kind": "hold", "units": moved_from})
 	if not acted.is_empty():
-		res.log_lines.push_front("— %s take their turn (%d active) —" % [
+		res.log_lines.push_front("- %s take their turn (%d active) -" % [
 			MCF.owner_name(owner) if raiders else "Civilians", acted.size()])
 	return res
 

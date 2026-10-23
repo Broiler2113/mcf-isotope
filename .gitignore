@@ -22,4 +22,5 @@ graphify-out/*
 /Isotope Data/
 __pycache__/
 .cache/
+/Checkpoints/
 /addons/mcf_policy/bin/

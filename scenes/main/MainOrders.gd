@@ -1114,7 +1114,7 @@ func _open_menu(unit: UnitInstance) -> void:
 		if unit.fire_range() > 0.0:
 			_act_btn(vb, pshoot, _enter_shoot,
 					_valid_pending_shoot(unit) or unit.remaining_ap >= _shoot_ap_cost(unit),
-					"Laser needs both AP — don't move first" if _is_marksman(unit) else "No action points left", "action_shoot")
+					"Laser needs both AP - don't move first" if _is_marksman(unit) else "No action points left", "action_shoot")
 		if unit.held_item_id != "" and MCF.ITEM_NAMES.has(unit.held_item_id):
 			_act_btn(vb, MCF.ITEM_NAMES.get(unit.held_item_id, "Item"), _enter_item,
 					unit.remaining_ap > 0 and resolver.can_use_item(unit) == ""
@@ -1166,7 +1166,7 @@ func _open_menu(unit: UnitInstance) -> void:
 			shoot_text = "Flame"
 		_act_btn(vb, shoot_text, _enter_shoot,
 				_valid_pending_shoot(unit) or unit.remaining_ap >= _shoot_ap_cost(unit),
-				"Laser needs both AP — don't move first" if _is_marksman(unit) else "No action points left", "action_shoot")
+				"Laser needs both AP - don't move first" if _is_marksman(unit) else "No action points left", "action_shoot")
 
 		# Переложить пленника на другую соседнюю клетку — бесплатно (#100). Кнопка
 		# появляется, только пока кого-то держим, и ОД не требует: носильщик просто

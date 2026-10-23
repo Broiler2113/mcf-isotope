@@ -593,7 +593,7 @@ func can_shoot(shooter: UnitInstance, target: UnitInstance) -> String:
 
 	var dist := Combat.distance(shooter.coord, target.coord)
 	if shield_out_of_reach(shooter, target):
-		return "The shield stops fire from range — get next to it"
+		return "The shield stops fire from range - get next to it"
 	match shooter.attack_ability():
 		MCF.ABILITY_MARKSMAN:
 			# Лазер бьёт на любую дистанцию и пробивает препятствия (§3.13).
@@ -813,7 +813,7 @@ func can_blast_cell(shooter: UnitInstance, cell: Vector2i) -> String:
 		return "Shooter is not on the board"
 	var c := state.grid.cell(cell)
 	if c.is_space:
-		return "Can't hit space — no floor"
+		return "Can't hit space - no floor"
 	# Выстрел под себя (#11): собственная клетка — законная цель. Проверять линию огня
 	# и дистанцию до самого себя нечего, и is_on_firing_line на нулевом векторе всё
 	# равно отвечает «нет», поэтому этот случай обязан отстреливаться первым.

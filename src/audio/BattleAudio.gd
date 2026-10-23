@@ -330,10 +330,11 @@ func turn_key_from_state(state: GameState) -> void:
 	_turn_key = "%d:%d:%d" % [state.turns.round_number, state.turns.active_index, state.active_player()]
 
 func message(text: String) -> void:
+	text = text.replace(char(0x2014), "-")
 	if suppress:
 		return
 	for pair: Array in RandomEvents.REGISTRY:
-		if text.begins_with("⚠ " + str(pair[1]) + " —"):
+		if text.begins_with("⚠ " + str(pair[1]) + " -"):
 			_announce(str(pair[0]) + "_warn", true)
 			if pair[0] in [RandomEvents.MINEFIELD, RandomEvents.BOUNTY]:
 				_announce(str(pair[0]) + "_land", false)
@@ -345,15 +346,18 @@ func message(text: String) -> void:
 		"Artillery Barrage hits": "mortar", "Gas Cloud settles": "gas",
 		"Fire breaks out": "fire", "EMP Burst over": "emp",
 		"A dust storm sweeps": "dust", "Structural collapse at": "collapse",
-		"— Reinforcements reach": "reinforce", "— Unknown forces": "army",
+		"- Reinforcements reach": "reinforce", "- Unknown forces": "army",
 	}
 	for prefix: String in landings:
 		if text.begins_with(prefix):
 			_announce(str(landings[prefix]) + "_land", false)
 			return
-	if text.begins_with("— Wave ") and text.contains(" lands:"):
+	if text.begins_with("- Raiders ") and (text.contains(" land on the ") or text.contains(" land at (")):
+		_announce("army_land", false)
+		return
+	if text.begins_with("- Wave ") and text.contains(" lands:"):
 		_announce("wave_land", false)
-	elif text.begins_with("— ") and text.contains("hostile to everyone"):
+	elif text.begins_with("- ") and text.contains("hostile to everyone"):
 		_announce("army_land", false)
 	elif text.contains("learned AI unavailable"):
 		GameAudio.say("fallback", self, 60)

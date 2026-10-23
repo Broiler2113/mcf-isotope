@@ -67,11 +67,8 @@ func run() -> void:
 	main._deselect()
 	main._escape_pressed()
 	await process_frame
-	var settings: Node = null
-	for child in main.get_children():
-		if child.get_script() != null and child.get_script().resource_path == "res://src/ui/SettingsWindow.gd": settings = child
-	ck(settings != null, "idle Escape opens settings")
-	if settings != null: settings.queue_free()
+	ck(main._battle_menu != null, "idle Escape opens battle menu")
+	if main._battle_menu != null: main._battle_menu.queue_free()
 	main.free()
 	await process_frame
 	await lobby()

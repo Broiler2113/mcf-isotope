@@ -5,6 +5,7 @@ func run() -> void:
 	r.state.roster.slots[1].display_name = "Red Team"
 	ck(CheatCommands.CATALOG.size() >= 50, "full command catalog")
 	for entry: Dictionary in CheatCommands.CATALOG:
+		if entry.get("hidden", false): continue
 		ck(CheatCommands.help_text().contains(CheatCommands.syntax(entry)), "help documents " + entry.op)
 	var parsed := CheatCommands.parse('SpAwN UnIt light_infantry "Red Team" 4 4', r.state, 0)
 	ck(not parsed.has("error") and parsed.args.owner == 1, "case-insensitive keywords and exact quoted names")

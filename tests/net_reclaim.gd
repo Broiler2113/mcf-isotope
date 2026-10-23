@@ -21,7 +21,8 @@ func _initialize() -> void:
 			return scene_is("Main.gd") and current_scene.state.roster.is_ai(1), func() -> void:
 			ck(current_scene.networked, "host retains authority")
 			ck(current_scene.controllers[1] is AIController, "dropped seat uses AI")
-			current_scene._set_ai_speed(2.0, true))
+			current_scene._set_ai_speed(2.0, true)
+			current_scene.net.broadcast_restore("Checkpoint epoch before rejoin"))
 		step("declined offer removed", func() -> bool:
 			return current_scene.session.claims.offers.is_empty() and current_scene.session.peers.size() == (0 if solo else 1) and _step_t > 2.0)
 		step("returner accepted", func() -> bool:
@@ -190,6 +191,7 @@ func _agree() -> void:
 		live.state.erase("dice")
 	ck(snapshot == live, "complete state and mode/event rules agree")
 	ck(current_scene.networked, "connection remains active")
+	ck(current_scene.net.history_epoch == 1, "rejoining preserves the restored match epoch")
 	FileAccess.open(OS.get_environment("MCF_RECLAIM_SYNC") + "/" + role, FileAccess.WRITE).store_string("ok")
 
 func _combat_done() -> bool:

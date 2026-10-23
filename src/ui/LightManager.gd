@@ -64,7 +64,7 @@ render_mode blend_add, unshaded;
 
 // One texel per cell, read exactly: a ray is stopped by a wall cell or it is not. The
 // softness comes from the area light below and the composite blur, never from blending
-// the mask — blended reads let light seep a cell deep behind every wall (0.11).
+// the mask - blended reads let light seep a cell deep behind every wall (0.11).
 uniform sampler2D walls : filter_nearest, repeat_disable;
 uniform vec2 board;          // board size in cells
 

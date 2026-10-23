@@ -516,6 +516,10 @@ var _p2_btn: Button
 ## не бывают: смотреть запись и одновременно писать новую нечего.
 var recorder: ReplayRecorder = null
 var replay: ReplayPlayer = null
+var video_export := false
+var export_replay_data: Dictionary = {}
+var _replay_timelapse := false
+var _replay_run_id := 0
 var _loaded_from_save: bool = false
 var _replay_playing: bool = false
 var _replay_speed: float = 1.0
@@ -532,9 +536,15 @@ var _replay_seek_timer: Timer
 var _replay_seek_target := 0
 var _replay_skip_animations := false
 var _save_btn: Button = null
+var _battle_menu: CanvasLayer = null
+var _history := MatchHistory.new()
+var _loaded_history: Dictionary = {}
+var _recording_resumed := false
+var _history_hold := false
+var _history_epoch := 0
 ## Пауза между действиями при автопроигрывании — делится на выбранную скорость.
 const REPLAY_STEP_DELAY := 0.5
-const REPLAY_SPEEDS := [1.0, 2.0, 4.0, 8.0]
+const REPLAY_SPEEDS := [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0]
 
 var _spectator := false
 var _spectator_side := 0
@@ -598,8 +608,8 @@ var _pull_vehicle_id := -1
 ## what was sent, or empty.
 var _desync_report: Dictionary = {}
 
-const DEFENSE_PROMPT := "You are under attack — click Roll to defend"
-const RESIST_PROMPT := "You are grabbed — click Roll to resist"
+const DEFENSE_PROMPT := "You are under attack - click Roll to defend"
+const RESIST_PROMPT := "You are grabbed - click Roll to resist"
 
 ## Пауза, чтобы осыпавшееся стекло было видно до бросков по цели за ним (секунды).
 const GLASS_BREAK_PAUSE := 0.35
@@ -964,6 +974,7 @@ var _number_page := 0
 @abstract func _toggle_before() -> void
 @abstract func _after_action() -> void
 @abstract func _fit_ground() -> void
+@abstract func _setup_network_controllers() -> void
 @abstract func _build_replay_bar() -> void
 @abstract func _toggle_initiative_overlay() -> void
 @abstract func _to_lobby() -> void

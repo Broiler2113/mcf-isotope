@@ -90,6 +90,7 @@ static func spawn(r: GameActionResolver, args: Dictionary, source: UnitInstance 
 	if ids.is_empty(): return ActionResult.fail("Placed 0 of %d: no legal destination cells." % requested)
 	state.roster.set_eliminated(owner, false)
 	state.turns.eliminated.erase(owner)
+	state.roster.assign_independent_color(owner, hash([state.turns.round_order, state.turns.round_number, state.all_units().size()]))
 	if MCF.is_independent(owner) and not state.turns.round_order.has(owner):
 		state.turns.insert_slot(owner, state.turns.round_order.size())
 	var detail := "Placed %d of %d %s; IDs: %s." % [ids.size(), requested, stats.display_name, str(ids)]
@@ -102,7 +103,7 @@ static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 	if intent.op == "spawn_unit": return spawn(r, args)
 	var unit := state.get_unit(args.unit)
 	if unit == null: return ActionResult.fail("Unit ID no longer exists.")
-	var name := "%d — %s" % [unit.id, unit.stats.display_name]
+	var name := "%d - %s" % [unit.id, unit.stats.display_name]
 	match intent.op:
 		"unit_remove", "unit_teleport", "unit_owner", "unit_revive":
 			var error := linked(r, unit)

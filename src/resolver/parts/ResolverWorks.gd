@@ -185,7 +185,7 @@ func _resolve_weld_airlock(intent: WeldAirlockIntent) -> ActionResult:
 	var unweld := cell.airlock_welded
 	# Створки не сойдутся на теле (batch 13 #4) — сначала вытащить труп из проёма.
 	if not unweld and corpses_at(intent.to) > 0:
-		return ActionResult.fail("A body is jamming the doors — drag it out first")
+		return ActionResult.fail("A body is jamming the doors - drag it out first")
 	var cost := weld_cost_for(actor)
 	if actor.remaining_ap < cost:
 		return ActionResult.fail("Need %d AP" % cost)
@@ -529,7 +529,7 @@ func _resolve_place_mine(intent: PlaceMineIntent) -> ActionResult:
 		_mine_flash(res, intent.target)
 		_kill(under, res, intent.target)
 		res.deaths.append(under.id)
-		res.log("The mine goes off under %s's feet — %s!" % [under.stats.display_name, "invulnerability protects them" if under.cheat_invulnerable else "killed instantly"])
+		res.log("The mine goes off under %s's feet - %s!" % [under.stats.display_name, "invulnerability protects them" if under.cheat_invulnerable else "killed instantly"])
 	return res
 
 ## Сапёр обезвреживает подсвеченную его стороной чужую мину на соседней клетке (item 13).
@@ -551,7 +551,7 @@ func _resolve_disarm_mine(intent: DisarmMineIntent) -> ActionResult:
 		return ActionResult.fail("That's a friendly mine")
 	# Обезвредить можно лишь то, что уже нашли зачисткой: слепой сапёр чужого поля не видит.
 	if not mine_visible_to(actor.owner, intent.target):
-		return ActionResult.fail("Sweep for it first — you can't see that mine")
+		return ActionResult.fail("Sweep for it first - you can't see that mine")
 	actor.remaining_ap -= 1
 	var was_av := cell.feature_id == MCF.FEATURE_AV_MINE
 	cell.clear_feature()

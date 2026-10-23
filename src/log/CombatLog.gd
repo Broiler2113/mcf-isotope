@@ -9,6 +9,7 @@ signal dice_rolled(event: Dictionary)
 var lines: Array[String] = []
 
 func add(text: String) -> void:
+	text = text.replace(char(0x2014), "-")
 	lines.append(text)
 	line_added.emit(text)
 

@@ -52,6 +52,7 @@ const SPACE_FLOOR := 0.0   # never below the station's deck (owner)
 const SPACE_CEIL := 6.0
 var _walked := 0.0
 var _last_cell := Vector2i(-1, -1)
+var _render_distance_applied := -1
 
 var _vp: SubViewport
 var _world: Node3D
@@ -61,6 +62,8 @@ var _dyn: Node3D
 var _roof: PackedByteArray
 var _vis_img: Image
 var _vis_tex: ImageTexture
+var _vis_spare: ImageTexture
+var _vis_extra_materials: Array[ShaderMaterial] = []
 var _vis_key: Array = []
 var _vis_prev: Array[Vector2i] = []
 var _vis_timer := 0.0
@@ -242,7 +245,14 @@ func _process(delta: float) -> void:
 		_map_timer = 0.1
 		_minimap.queue_redraw()
 
+func view_distance() -> int:
+	return Ui.fp_render_distance
+
 func _place_camera() -> void:
+	if _render_distance_applied != view_distance():
+		_render_distance_applied = view_distance()
+		for material: ShaderMaterial in _all_mats:
+			material.set_shader_parameter("render_radius", float(_render_distance_applied))
 	_cam.fov = clampf(float(Ui.fp_fov), 50.0, 120.0)
 	_cam.position = pos + Vector3(0, EYE, 0)
 	_cam.rotation = Vector3(pitch, yaw, 0)
@@ -463,7 +473,7 @@ func _sync_vis(full: bool) -> void:
 	if not limited:
 		_vis_img.fill(Color(1, 1, 1))
 		_vis_prev = []
-		_vis_tex.update(_vis_img)
+		_upload_visibility()
 		return
 	var visible: Dictionary = main._visible_before_impact(viewer)
 	if full:
@@ -479,7 +489,17 @@ func _sync_vis(full: bool) -> void:
 	for c: Vector2i in visible:
 		_vis_img.set_pixel(c.x, c.y, Color(1, 0, 0))
 		_vis_prev.append(c)
-	_vis_tex.update(_vis_img)
+	_upload_visibility()
+
+## Publish a complete visibility image together, without overwriting the sampled map.
+func _upload_visibility() -> void:
+	if _vis_spare == null: _vis_spare = ImageTexture.create_from_image(_vis_img)
+	else: _vis_spare.update(_vis_img)
+	var previous := _vis_tex
+	_vis_tex = _vis_spare
+	_vis_spare = previous
+	for material: ShaderMaterial in _all_mats: material.set_shader_parameter("vis", _vis_tex)
+	for material: ShaderMaterial in _vis_extra_materials: material.set_shader_parameter("sight", _vis_tex)
 
 func _seen(c: Vector2i) -> bool:
 	return grid.in_bounds(c) and _vis_img.get_pixel(c.x, c.y).r > 0.75
@@ -557,7 +577,8 @@ func _build_shaders() -> void:
 func _mat(shader: Shader, p: Dictionary) -> ShaderMaterial:
 	var common := {"vis": _vis_tex, "solid": _solid_tex, "board": Vector2(grid.width, grid.height),
 			"mats": FirstPersonArt.materials(), "sun_k": SUN_K if _sun_on else 0.0,
-			"grounds": FirstPersonArt.grounds(), "ground_kind": _ground_tex, "winter": state.winter}
+			"grounds": FirstPersonArt.grounds(), "ground_kind": _ground_tex, "winter": state.winter,
+			"render_radius": float(view_distance())}
 	common.merge(_light_params())
 	common.merge(p, true)
 	var m := FirstPersonBoard.material(shader, common)
@@ -627,7 +648,7 @@ func _update_light(force: bool) -> void:
 	var limited := r.visibility_limited()
 	var visible: Dictionary = main._visible_before_impact(viewer) if limited else {}
 	var here := Vector2i(floori(pos.x), floori(pos.z))
-	var reach := VIEW_R + 8
+	var reach := view_distance() + 8
 	var lo := Vector2i(floori((here.x - reach) / 8.0) * 8, floori((here.y - reach) / 8.0) * 8)
 	var rect := Rect2i(lo, Vector2i(reach * 2 + 16, reach * 2 + 16)).intersection(Rect2i(0, 0, grid.width, grid.height))
 	var base: Grid = main._fog_mem.get(viewer, state.grid) if limited else state.grid
@@ -805,6 +826,7 @@ void fragment() {
 		roof_pixels[i] *= 255
 	m.set_shader_parameter("roofs", ImageTexture.create_from_image(Image.create_from_data(grid.width, grid.height, false, Image.FORMAT_R8, roof_pixels)))
 	m.set_shader_parameter("sight", _vis_tex)
+	_vis_extra_materials.append(m)
 	m.set_shader_parameter("board", Vector2(grid.width, grid.height))
 	q.material = m
 	_snow.mesh = q
@@ -901,7 +923,7 @@ static func _roof_texture(e: String, winter := false) -> ImageTexture:
 func _stream_chunks(budget: int) -> void:
 	var t0 := Time.get_ticks_usec()
 	var here := Vector2i(floori(pos.x) / FirstPersonBoard.CH, floori(pos.z) / FirstPersonBoard.CH)
-	var reach := VIEW_R / FirstPersonBoard.CH + 1
+	var reach := view_distance() / FirstPersonBoard.CH + 1
 	var want: Array = []
 	for dy in range(-reach, reach + 1):
 		for dx in range(-reach, reach + 1):
@@ -1391,7 +1413,7 @@ func _sync_walkers(delta: float) -> void:
 			continue
 		var target: Vector3 = p["pos"]
 		var cell := Vector2i(floori(target.x), floori(target.z))
-		if not _seen(cell) or target.distance_to(pos) > VIEW_R:
+		if not _seen(cell) or target.distance_to(pos) > view_distance():
 			continue
 		wanted[id] = true
 		var n: Node3D = _walkers.get(id)
@@ -1471,7 +1493,7 @@ func _sync_clouds() -> void:
 	var fire: Array[Vector2i] = []
 	var gas: Array[Vector2i] = []
 	var smoke: Array[Vector2i] = []
-	var r := VIEW_R
+	var r := view_distance()
 	for y in range(maxi(0, here.y - r), mini(grid.height, here.y + r + 1)):
 		for x in range(maxi(0, here.x - r), mini(grid.width, here.x + r + 1)):
 			var c := state.grid.cell_fast(x, y)
@@ -1502,14 +1524,14 @@ func _sync_features() -> void:
 	var want := {}
 	var here := Vector2(pos.x, pos.z)
 	for sc: Vector2i in main._display_feature_cells(MCF.FEATURE_DRONE_STATION):
-		if Vector2(sc).distance_to(here) > VIEW_R or state.grid.cell_fast(sc.x, sc.y).vehicle_id != -1:
+		if Vector2(sc).distance_to(here) > view_distance() or state.grid.cell_fast(sc.x, sc.y).vehicle_id != -1:
 			continue
 		if limited and not visible.has(sc):
 			continue
 		want[sc] = ["station", _station_colour(sc)]
 	for mk: String in [MCF.FEATURE_MINE, MCF.FEATURE_AV_MINE]:
 		for mc: Vector2i in main._display_feature_cells(mk):
-			if Vector2(mc).distance_to(here) <= VIEW_R and (main.get("editor_view") == true or main.resolver.mine_visible_to(viewer, mc)):
+			if Vector2(mc).distance_to(here) <= view_distance() and (main.get("editor_view") == true or main.resolver.mine_visible_to(viewer, mc)):
 				want[mc] = [mk, Color.WHITE]
 	for c: Vector2i in _features.keys():
 		if not want.has(c) or (_features[c] as Node3D).get_meta("spec") != want[c]:

@@ -21,7 +21,7 @@ const NAMES := ["Annihilation", "Capture & Hold", "Holdout"]
 const BLURBS := [
 	"The last team with soldiers standing wins.",
 	"Hold the zones. At the end of every round each zone scores 1 point for the team with more soldiers in it. First to the target wins; wiping out the enemy still wins outright.",
-	"All players defend together against waves, each bigger than the last. A wave lands every few rounds (set below) — or right after the previous one is wiped out. Survive them all, or as long as you can.",
+	"All players defend together against waves, each bigger than the last. A wave lands every few rounds (set below) - or right after the previous one is wiped out. Survive them all, or as long as you can.",
 ]
 
 const ZONE_COUNTS := [1, 3, 5]

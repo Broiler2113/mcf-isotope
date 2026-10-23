@@ -230,10 +230,10 @@ func _battle_screen() -> void:
 	st.roster.slot(1).kind = Roster.SlotKind.HUMAN
 	st.roster.slot(1).peer_id = 77
 	_main._on_peer_left(77)
-	var saved: Array = Array(st.log.lines).filter(func(l: String) -> bool: return l.begins_with("— Game saved as autosave"))
+	var saved: Array = Array(st.log.lines).filter(func(l: String) -> bool: return l.begins_with("- Game saved as autosave"))
 	ck(saved.size() == 1, "a leaver autosaves: %s" % [saved])
 	if saved.size() == 1:
-		var fname: String = str(saved[0]).trim_prefix("— Game saved as ").trim_suffix(" —")
+		var fname: String = str(saved[0]).trim_prefix("- Game saved as ").trim_suffix(" -")
 		var path := ReplayFile.path_for(ReplayFile.SAVE_DIR, fname)
 		ck(FileAccess.file_exists(path), "the autosave is on disk: %s" % path)
 		DirAccess.remove_absolute(path)

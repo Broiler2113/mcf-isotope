@@ -140,7 +140,7 @@ func can_put_down_furniture(actor: UnitInstance, coord: Vector2i) -> String:
 	if actor.owner != state.active_player():
 		return "It's the other player's turn"
 	if actor.is_held():
-		return "Unit is being held — break free first"
+		return "Unit is being held - break free first"
 	if not Furniture.is_furniture(actor.held_item_id):
 		return "Not carrying furniture"
 	if not state.grid.in_bounds(coord) or Combat.distance(actor.coord, coord) != 1:

@@ -78,7 +78,7 @@ static func counts(state: GameState, units: bool, owner: int) -> String:
 	var out: Array[String] = []
 	var scopes: Array = [owner, -1] if owner >= 0 else [-1]
 	for side: int in scopes:
-		out.append((state.roster.name_of(side) if side >= 0 else "Entire board") + " — " + ("units" if units else "vehicles"))
+		out.append((state.roster.name_of(side) if side >= 0 else "Entire board") + " - " + ("units" if units else "vehicles"))
 		out.append("Type | Alive | Dead | Total")
 		var tally := {}
 		var alive := 0

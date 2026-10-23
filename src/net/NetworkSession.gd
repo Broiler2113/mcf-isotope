@@ -50,6 +50,7 @@ var in_match := false
 var waiting_peers: Array[int] = []
 var claims := SeatReclaims.new()
 ## Presentation cursor/acknowledgments carried into Main after a live resync.
+var history_epoch_on_join := 0
 var roll_sequence_on_join := 0
 var roll_acks_on_join: Dictionary = {}
 

@@ -3,6 +3,12 @@ extends RefCounted
 
 ## Explicit grammar and typed payload validation shared by UI and authority.
 const CATALOG: Array = [
+	{"op": "checkpoint_restore", "pattern": "checkpoint restore {name:text}", "access": "host_history", "help": "Restore a complete named test checkpoint. Ordinary Undo remains independent."},
+	{"op": "checkpoint_list", "pattern": "checkpoint list", "access": "host_history", "help": "List the named test checkpoints for this match."},
+	{"op": "checkpoint_save", "pattern": "checkpoint {name:text?}", "access": "host_history", "help": "Save a complete test checkpoint, using quick when the name is omitted. Stored separately from manual saves."},
+	{"op": "history_back", "pattern": "game step back", "access": "host_history", "help": "Host only: rewind one recorded action, including turns, attacks and cheats. New actions replace the forward branch."},
+	{"op": "history_forward", "pattern": "game step forward", "access": "host_history", "help": "Host only: restore the next action after rewinding, until a new action is performed."},
+	{"op": "history_status", "pattern": "game history", "access": "host_history", "help": "Show the current action and the available match history."},
 	{"op": "help", "pattern": "help {topic:text?}", "access": "safe", "help": "Show command categories, syntax and bounds."},
 	{"op": "status", "pattern": "cheats status", "access": "safe", "help": "Show master setting and your current rights."},
 	{"op": "players", "pattern": "players", "access": "safe", "help": "List roster metadata and permissions."},
@@ -18,7 +24,7 @@ const CATALOG: Array = [
 	{"op": "inspect_unit_tool", "pattern": "inspect unit", "access": "tool", "help": "Click a soldier or corpse to inspect it. You can also supply its U-ID directly."},
 	{"op": "inspect_vehicle_tool", "pattern": "inspect vehicle", "access": "tool", "help": "Click any tile of a vehicle to inspect it, or supply its V-ID directly."},
 	{"op": "inspect_cell_tool", "pattern": "inspect cell", "access": "tool", "help": "Click a tile to inspect its terrain, coordinates and effects."},
-	{"op": "coords_on", "pattern": "coords on", "access": "inspect", "help": "Show tile coordinates on your battlefield. Zoom in to read dense areas."},
+	{"op": "coords_on", "pattern": "coords on", "access": "inspect", "help": "Show fixed-size tile coordinates. Zoom in to show every tile in dense areas."},
 	{"op": "coords_off", "pattern": "coords off", "access": "safe", "help": "Hide tile coordinates."},
 	{"op": "inspect_unit", "pattern": "inspect unit {unit:unit}", "access": "inspect", "help": "Inspect a unit, including its overrides."},
 	{"op": "inspect_vehicle", "pattern": "inspect vehicle {vehicle:vehicle}", "access": "inspect", "help": "Inspect a vehicle and crew."},
@@ -36,7 +42,8 @@ const CATALOG: Array = [
 	{"op": "unit_item", "pattern": "unit item {unit:unit} {item:item}", "access": "play", "help": "Set a registered held item, or none."},
 	{"op": "unit_invulnerable", "pattern": "unit invulnerable {unit:unit} {enabled:bool}", "access": "play", "help": "Prevent ordinary deaths until switched off."},
 	{"op": "unit_stat_reset", "pattern": "unit stat reset {unit:unit} {field:stat?}", "access": "play", "help": "Remove one or all per-instance stat overrides."},
-	{"op": "unit_stat", "pattern": "unit stat {unit:unit} {field:stat} {value:stat_value}", "access": "play", "help": "Override speed 0–999, armor 1–12 (lower is tougher), range/sight 0–1024 or rof 0–100."},
+	{"op": "unit_stat", "pattern": "unit stat change {unit:unit} {field:stat} {value:stat_value}", "access": "play", "help": "Change a unit stat with a value in parentheses, such as unit stat change U12 armor (6). Armor is the minimum defense roll; lower is tougher."},
+	{"hidden": true, "op": "unit_stat", "pattern": "unit stat {unit:unit} {field:stat} {value:stat_value}", "access": "play", "help": "Override speed 0–999, armor 1–12 (lower is tougher), range/sight 0–1024 or rof 0–100."},
 	{"op": "unit_civilian", "pattern": "unit civilian {unit:unit} {active:civilian}", "access": "play", "help": "Activate or sleep an eligible civilian."},
 	{"op": "vehicle_clone", "pattern": "vehicle clone {vehicle:vehicle} {x:x} {y:y}", "access": "play", "help": "Spawn a fresh, intact copy without passengers."},
 	{"op": "vehicle_move", "pattern": "vehicle move {vehicle:vehicle} {x:x} {y:y} {facing:facing?}", "access": "play", "help": "Move a vehicle footprint to legal terrain without AP."},
@@ -62,20 +69,21 @@ const CATALOG: Array = [
 	{"op": "world_clear_cell", "pattern": "world clear-cell {x:x} {y:y}", "access": "play", "help": "Remove terrain objects and fire safely; preserves units, vehicles and boundaries."},
 	{"op": "event_list", "pattern": "event list", "access": "inspect", "help": "List active effects and pending warnings with stable references for editing or removal."},
 	{"op": "event_types", "pattern": "event types", "access": "inspect", "help": "List registered event types and their availability on this map."},
-	{"op": "event_spawn_tool", "pattern": "event spawn {event:event?}", "access": "tool", "help": "Open the event editor, then click to place an event with its supported properties."},
-	{"op": "event_edit_tool", "pattern": "event edit {target:event_ref?}", "access": "tool", "help": "Open an adaptive editor for an active effect or pending warning from event list."},
-	{"op": "event_remove_tool", "pattern": "event remove", "access": "tool", "help": "Click an event area to select and cancel it; Esc stops the tool."},
 	{"op": "event_remove", "pattern": "event remove {target:event_ref}", "access": "play", "help": "Cancel a warning or active effect by its stable reference. Past damage is not reversed."},
 	{"op": "event_trigger", "pattern": "event trigger {event:event}", "access": "play", "help": "Immediately trigger an eligible event using its normal parameters and shared dice."},
-	{"op": "event_spawn", "pattern": "event place {event:event} {x:x} {y:y} {properties:event_properties?}", "access": "play", "help": "Immediately place an event at a cell. For an area, use (x1,y1) (x2,y2), followed by an optional duration in rounds. The event spawn editor exposes supported properties."},
+	{"op": "event_spawn", "pattern": "event spawn {event:event} {properties:event_properties?}", "payload": "{event:event} {x:x?} {y:y?} {properties:event_properties?}", "access": "play", "help": "Start an event immediately. Options use braces, for example {edge:east, units:{machinegunner:15,civilian:10}}. Use event types for available events."},
+	{"hidden": true, "op": "event_spawn", "pattern": "event place {event:event} {x:x} {y:y} {properties:event_properties?}", "access": "play", "help": "Place an event at coordinates."},
+	{"hidden": true, "op": "event_spawn", "pattern": "event spawn {event:event} {x:x} {y:y} {properties:event_properties?}", "access": "play", "help": "Place an event at coordinates."},
 	{"op": "event_set", "pattern": "event set {target:event_ref} {property:event_property} {value:event_value}", "access": "play", "help": "Edit one supported integer property of an existing warning or effect."},
-	{"op": "event_update", "pattern": "event update {target:event_ref} {properties:event_properties}", "access": "play", "help": "Apply the editor's complete property set atomically; properties use a quoted JSON object."},
+	{"op": "event_update", "pattern": "event edit {target:event_ref} {properties:event_properties}", "access": "play", "help": "Edit supported event options atomically using braces."},
+	{"hidden": true, "op": "event_update", "pattern": "event update {target:event_ref} {properties:event_properties}", "access": "play", "help": "Edit supported event options atomically using braces."},
 	{"op": "event_automatic", "pattern": "event automatic {enabled:bool}", "access": "play", "help": "Enable or disable automatic event scheduling; existing effects remain."},
 	{"op": "event_interval", "pattern": "event interval {rounds:event_interval}", "access": "play", "help": "Set rounds between automatic event checks (1–20)."},
 	{"op": "event_guaranteed", "pattern": "event guaranteed {enabled:bool}", "access": "play", "help": "Guarantee an event at each due check, or use the normal random chance."},
 	{"op": "event_enabled", "pattern": "event enabled {event:event} {enabled:bool}", "access": "play", "help": "Include or exclude this type from the automatic event pool; selected types have equal probability."},
 	{"op": "event_status", "pattern": "event status", "access": "inspect", "help": "Inspect pending events, clouds and automatic event configuration."},
 	{"op": "event_queue", "pattern": "event queue {event:event} {x:x?} {y:y?} {properties:event_properties?}", "access": "play", "help": "Queue an event with normal timing and shared dice. For an area, supply two opposite corners and an optional duration in rounds. Omit coordinates for a random location."},
+	{"hidden": true, "op": "event_queue", "pattern": "event queue {event:event} {properties:event_properties}", "access": "play", "help": "Queue an event with options."},
 	{"op": "event_cancel", "pattern": "event cancel {index:event_index}", "access": "play", "help": "Cancel a zero-based pending event index or all warnings."},
 	{"op": "vision_reveal", "pattern": "vision reveal {owner:players}", "access": "play", "help": "Give selected side(s) omniscient view and targeting knowledge."},
 	{"op": "vision_reset", "pattern": "vision reset {owner:players}", "access": "play", "help": "Remove omniscience while preserving explored map memory."},
@@ -116,8 +124,9 @@ static func definition(op: String) -> Dictionary:
 static func syntax(entry: Dictionary) -> String:
 	if entry.op in ["world_gas_add", "world_smoke_add"]: return "world %s add (x1,y1) (x2,y2) [rounds]" % ("gas" if entry.op == "world_gas_add" else "smoke")
 	if entry.op == "world_fire_clear": return "world fire clear [(x1,y1) (x2,y2)]"
-	if entry.op == "event_spawn": return "event place <event> (x,y) [properties]\nevent place <area-event> (x1,y1) (x2,y2) [rounds]"
-	if entry.op == "event_queue": return "event queue <event> [(x1,y1) (x2,y2) [rounds]]"
+	if entry.op == "event_spawn": return "event spawn <event> [options]\nevent spawn <area-event> (x1,y1) (x2,y2) [rounds]"
+	if entry.op == "event_queue": return "event queue <event> [options]\nevent queue <area-event> (x1,y1) (x2,y2) [rounds]"
+	if entry.op == "unit_stat": return "unit stat change <unit> <stat> (<value>)"
 	if entry.op in ["units", "vehicles"]: return entry.op + " [player|all] [page <number>]"
 	var out: Array[String] = []
 	for word in str(entry.pattern).split(" "):
@@ -132,13 +141,14 @@ static func help_text(topic := "") -> String:
 	var category := topic.to_lower().strip_edges()
 	category = {"units": "unit", "vehicles": "vehicle", "events": "event", "admin": "cheats"}.get(category, category)
 	for entry: Dictionary in CATALOG:
+		if entry.get("hidden", false): continue
 		if category.is_empty() or str(entry.pattern).begins_with(category + " ") or str(entry.pattern) == category \
 				or (category == "unit" and entry.op == "spawn_unit") or (category == "vehicle" and entry.op == "spawn_vehicle"):
 			lines.append(syntax(entry) + "\n  " + entry.help)
 	return "\n".join(lines) if not lines.is_empty() else "Unknown help topic. Use help for the command catalog."
 
 static func tokenize(line: String, incomplete := false) -> Dictionary:
-	if line.length() > 1024: return {"error": "Command is too long (maximum 1024 characters)."}
+	if line.length() > 4096: return {"error": "Command is too long (maximum 4096 characters)."}
 	if line.contains(";") or line.contains("\n") or line.contains("\r"):
 		return {"error": "Submit one command per line; command batches are not supported."}
 	var words: Array[String] = []
@@ -146,11 +156,26 @@ static func tokenize(line: String, incomplete := false) -> Dictionary:
 	var quote := ""
 	var started := false
 	var coordinate := false
+	var depth := 0
+	var json_quote := false
+	var escaped := false
 	var coordinate_indices: Array[int] = []
 	for ch in line:
-		if not quote.is_empty():
+		if depth > 0:
+			word += ch
+			if escaped: escaped = false
+			elif ch == "\\" and json_quote: escaped = true
+			elif ch == '"': json_quote = not json_quote
+			elif not json_quote:
+				if ch == "{": depth += 1
+				elif ch == "}": depth -= 1
+		elif not quote.is_empty():
 			if ch == quote: quote = ""
 			else: word += ch
+		elif ch == "{" and not started:
+			depth = 1
+			word = ch
+			started = true
 		elif ch == "(" and not started:
 			coordinate = true
 			coordinate_indices.append(words.size())
@@ -170,7 +195,7 @@ static func tokenize(line: String, incomplete := false) -> Dictionary:
 		else:
 			word += ch
 			started = true
-	if not quote.is_empty() and not incomplete: return {"error": "Unclosed quote."}
+	if not incomplete and (not quote.is_empty() or depth > 0): return {"error": "Unclosed quote or options brace."}
 	if started: words.append(word)
 	return {"words": words, "coordinates": coordinate_indices}
 
@@ -191,6 +216,8 @@ static func parse(line: String, state: GameState, caller: int) -> Dictionary:
 	words = converted.words
 	if first == "help": return {"op": "help", "args": {"topic": " ".join(words.slice(1)).to_lower()}, "access": "safe"}
 	if first in ["units", "vehicles"]: return _parse_list(first, words.slice(1), state, caller)
+	if words.size() == 6 and " ".join(words.slice(0, 3)).to_lower() == "unit stat change":
+		if not str(words[5]).begins_with("(") or not str(words[5]).ends_with(")"): return {"error": "Put the stat value in parentheses, for example unit stat change U12 armor (6)."}
 	var best := "Unknown command. Type help for the catalog."
 	var best_prefix := 0
 	for entry: Dictionary in CATALOG:
@@ -250,7 +277,7 @@ static func validate_payload(op: String, payload: Variant, state: GameState, cal
 	if entry.is_empty(): return {"error": "Unknown cheat operation."}
 	if not payload is Dictionary or payload.size() > 8: return {"error": "Invalid cheat payload."}
 	var args := {}
-	for token in str(entry.pattern).split(" "):
+	for token in str(entry.get("payload", entry.pattern)).split(" "):
 		if not token.begins_with("{"): continue
 		var field := _field(token)
 		if not payload.has(field.name):
@@ -268,7 +295,7 @@ static func validate_payload(op: String, payload: Variant, state: GameState, cal
 		var rectangle := args.size() == 4 and args.has_all(["x", "y", "width", "height"])
 		if not (args.is_empty() or legacy_radius or rectangle):
 			return {"error": "Supply two corners, or omit the area to clear all fire."}
-	if op == "event_queue" and args.has("x") != args.has("y"): return {"error": "Supply both x and y, or omit both."}
+	if op in ["event_queue", "event_spawn"] and args.has("x") != args.has("y"): return {"error": "Supply both x and y, or omit both."}
 	if args.has("width") and (args.x + args.width > state.grid.width or args.y + args.height > state.grid.height):
 		return {"error": "Area extends outside the board."}
 	return {"op": op, "args": args, "access": entry.access}
@@ -299,14 +326,7 @@ static func _atom(raw: Variant, type: String, state: GameState, caller: int, typ
 	if type == "bool":
 		if typed: return {"value": raw} if raw is bool else {"error": "Expected on or off."}
 		return {"value": lower == "on"} if lower in ["on", "off"] else {"error": "Expected on or off."}
-	if type == "event_properties":
-		var props: Variant = raw if typed else JSON.parse_string(text)
-		if not props is Dictionary or props.size() > 8: return {"error": "Expected a quoted JSON object of supported event properties."}
-		var cleaned := {}
-		for key in props:
-			if not (key is String or key is StringName) or not key in ["x", "y", "w", "h", "rounds", "edge", "from", "len", "hx", "hy", "side", "budget", "unit"] or not _integer(props[key]) or absf(float(props[key])) > 1000000: return {"error": "Unsupported event property or non-integer value."}
-			cleaned[str(key)] = int(props[key])
-		return {"value": cleaned}
+	if type == "event_properties": return event_options(raw, state, caller, typed)
 	if type == "event_ref":
 		if not raw is String or text.length() > 40: return {"error": "Expected an event reference from event list."}
 		return {"value": lower}
@@ -324,6 +344,9 @@ static func _atom(raw: Variant, type: String, state: GameState, caller: int, typ
 		"radius": [0, maxi(state.grid.width, state.grid.height)], "width": [1, state.grid.width],
 		"height": [1, state.grid.height], "event_value": [0, 1000000], "event_interval": [1, 20], "rounds": [1, 100], "page": [1, 1000000],
 		"points": [0, 1000000], "waves": [0, 999], "component_value": [0, 1000000], "event_index": [0, 1000000]}
+	if type == "stat_value" and not typed and text.begins_with("(") and text.ends_with(")"):
+		text = text.substr(1, text.length() - 2).strip_edges()
+		raw = text
 	if ranges.has(type):
 		if not typed and ((type == "unit" and lower.begins_with("u")) or (type == "vehicle" and lower.begins_with("v"))):
 			text = text.substr(1).trim_suffix("-") if type == "unit" else text.substr(1)
@@ -394,7 +417,7 @@ static func choices(type: String, state: GameState, caller: int, entities: bool)
 	var out: Array = []
 	for value in ids:
 		var label := str(value)
-		if label.begins_with("#"): label += " — " + state.roster.name_of(int(label.substr(1)) - 1)
+		if label.begins_with("#"): label += " - " + state.roster.name_of(int(label.substr(1)) - 1)
 		out.append({"value": value, "label": label})
 	return out
 
@@ -412,7 +435,8 @@ static func complete(line: String, state: GameState, caller: int, resolver: Game
 	var out: Array = []
 	var used := {}
 	for entry: Dictionary in CATALOG:
-		if entry.access in ["inspect", "play", "host_play", "tool"] and not CheatAccess.permitted(state, caller): continue
+		if entry.get("hidden", false): continue
+		if entry.access in ["inspect", "play", "host_play", "host_history", "tool"] and not CheatAccess.permitted(state, caller): continue
 		var tokens := str(entry.pattern).split(" ")
 		if index >= tokens.size(): continue
 		var match_prefix := true
@@ -453,6 +477,9 @@ static func _coordinates(words: Array, state: GameState, caller: int, coordinate
 	for index in words.size():
 		var word: String = words[index]
 		if coordinate_indices.has(index):
+			if word.begins_with("(") and word.ends_with(")") and not word.contains(","):
+				expanded.append(word)
+				continue
 			var found := regex.search(word)
 			if found == null: return {"error": "Coordinates use (x,y), for example (3,4)."}
 			var x := _atom(found.get_string(1), "x", state, caller, false)
@@ -474,7 +501,7 @@ static func _coordinates(words: Array, state: GameState, caller: int, coordinate
 		if prefix in ["world gas add", "world smoke add"]:
 			expanded[3] = str(low.x); expanded[4] = str(low.y)
 			expanded[5] = str(size.x); expanded[6] = str(size.y)
-		elif str(expanded[0]).to_lower() == "event" and str(expanded[1]).to_lower() in ["place", "queue"]:
+		elif str(expanded[0]).to_lower() == "event" and str(expanded[1]).to_lower() in ["place", "spawn", "queue"]:
 			if expanded.size() > 8: return {"error": "Supply two corners and an optional duration in rounds."}
 			var props := {"x": low.x, "y": low.y, "w": size.x, "h": size.y}
 			if expanded.size() == 8:
@@ -484,7 +511,7 @@ static func _coordinates(words: Array, state: GameState, caller: int, coordinate
 			var event := _atom(expanded[2], "event", state, caller, false)
 			if event.has("error"): return event
 			if event.value not in ["mortar", "gas", "fire", "emp", "collapse"]: return {"error": "This event does not use a rectangular area."}
-			return validate_payload("event_spawn" if str(expanded[1]).to_lower() == "place" else "event_queue", {"event": event.value, "x": low.x, "y": low.y, "properties": props}, state, caller)
+			return validate_payload("event_queue" if str(expanded[1]).to_lower() == "queue" else "event_spawn", {"event": event.value, "x": low.x, "y": low.y, "properties": props}, state, caller)
 		else: return {"error": "This command takes one cell, not an area."}
 	elif pairs.size() > 2: return {"error": "An area needs exactly two corners."}
 	return {"words": expanded}
@@ -492,5 +519,69 @@ static func _coordinates(words: Array, state: GameState, caller: int, coordinate
 static func manual_reference() -> String:
 	var out: Array[String] = []
 	for entry: Dictionary in CATALOG:
+		if entry.get("hidden", false): continue
 		out.append("[b]" + syntax(entry).replace("[", "[lb]") + "[/b]\n" + entry.help)
 	return "\n\n".join(out)
+
+## Braces are grouped by the lexer, so JSON and concise unquoted option keys both work.
+static func event_options(raw: Variant, state: GameState, caller: int, typed: bool) -> Dictionary:
+	var props: Variant = raw
+	if not typed:
+		var json := JSON.new()
+		var text := str(raw)
+		if json.parse(text) != OK:
+			var keys := RegEx.new()
+			keys.compile("([{,]\\s*)([A-Za-z_][A-Za-z_0-9-]*)(\\s*:)")
+			text = keys.sub(text, '$1"$2"$3', true)
+			var values := RegEx.new()
+			values.compile("(:\\s*)([A-Za-z_#][A-Za-z_0-9#-]*)(\\s*[,}])")
+			text = values.sub(text, '$1"$2"$3', true)
+			var coords := RegEx.new()
+			coords.compile("\\(\\s*(-?[0-9]+)\\s*,\\s*(-?[0-9]+)\\s*\\)")
+			text = coords.sub(text, "[$1,$2]", true)
+			if json.parse(text) != OK: return {"error": "Use options such as {edge:east, units:{machinegunner:15,civilian:10}}."}
+		props = json.data
+	if not props is Dictionary or props.size() > 16: return {"error": "Expected an options object in braces."}
+	var clean := {}
+	for raw_key in props:
+		if not (raw_key is String or raw_key is StringName): return {"error": "Option names must be text."}
+		var key := str(raw_key)
+		var value: Variant = props[raw_key]
+		if key == "size": key = "count"
+		if key == "at":
+			if not value is Array or value.size() != 2 or not _integer(value[0]) or not _integer(value[1]): return {"error": "at uses (x,y), for example {at:(12,8)}."}
+			clean.x = int(value[0]); clean.y = int(value[1])
+			continue
+		if key == "player":
+			var player := _atom(value, "player", state, caller, false)
+			if player.has("error"): return player
+			clean.side = player.value
+			continue
+		if key in ["edge", "side"] and value is String:
+			var edge: int = ["north", "east", "south", "west"].find(value.to_lower())
+			if edge >= 0:
+				clean.edge = edge
+				continue
+		if key == "units":
+			if not value is Dictionary or value.is_empty() or value.size() > 40: return {"error": "units must contain unit types and positive counts."}
+			var units := {}
+			var total := 0
+			for name in value:
+				var type := _atom(str(name).replace("machine_gunner", "machinegunner"), "unit_type", state, caller, false)
+				if type.has("error"): return {"error": "Unknown unit type: " + str(name)}
+				if not _integer(value[name]) or value[name] < 1 or value[name] > 10000: return {"error": "Each unit count must be 1-10000."}
+				if units.has(type.value): return {"error": "Specify each unit type once."}
+				units[type.value] = int(value[name])
+				total += int(value[name])
+			if total > 10000: return {"error": "The complete force must contain at most 10000 units."}
+			clean.units = units
+			continue
+		if key not in ["x", "y", "w", "h", "rounds", "edge", "from", "len", "hx", "hy", "side", "budget", "unit", "count"] or not _integer(value) or absf(float(value)) > 1000000:
+			return {"error": "Unsupported option or non-integer value: " + key}
+		if clean.has(key): return {"error": "Specify each option once: " + key}
+		clean[key] = int(value)
+	if clean.has("units") and clean.has("count"):
+		var total := 0
+		for count: int in clean.units.values(): total += count
+		if total != clean.count: return {"error": "The unit counts must add up to count (%d)." % clean.count}
+	return {"value": clean}

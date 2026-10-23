@@ -48,6 +48,13 @@ res://tests/render_console_followup.gd` exercises actual window dragging,
 resizing and battlefield ID pixels, and writes console/manual/event-editor
 screenshots to `/tmp/isotope-0133-*.png`.
 
+`cheats/run_fix11.gd` and `ui/run_fix11.gd` cover named checkpoints, whole-match
+history, exact event forces, independent colors, corpse-safe vehicle placement,
+the battle menu, replay timelapse and network restore authority.
+`files/run_video_encoder.gd` verifies real H.264 output and safe cancellation when
+FFmpeg is installed. `tests/render_fix11.gd` needs a display (or Xvfb) and FFmpeg;
+it checks first-person fog stability and produces 1x/4x MP4 exports under `/tmp`.
+
 ```
 bash tests/run_all.sh            # verify
 bash tests/run_all.sh --update   # re-baseline after a deliberate rule change

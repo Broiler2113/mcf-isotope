@@ -16,7 +16,7 @@ static func due(state: GameState, since: int, handoff: bool) -> bool:
 const MAX_BYTES := 64 * 1024 * 1024
 
 static func pack(state: GameState, resolver: GameActionResolver, fx: FxDecals, mid_turn: bool) -> Dictionary:
-	var payload := {"state": StateCodec.encode(state), "rules": StateCodec.encode_rules(resolver), "fx": fx.to_dict()}
+	var payload := {"state": StateCodec.encode(state), "rules": StateCodec.encode_rules(resolver), "fx": fx.to_dict(), "visibility": resolver.explored.duplicate(true)}
 	var raw := var_to_bytes(payload)
 	return {"z": Marshalls.raw_to_base64(raw.compress(FileAccess.COMPRESSION_ZSTD)),
 			"bytes": raw.size(), "mid_turn": mid_turn}

@@ -99,7 +99,7 @@ func _build() -> void:
 	_text.text_changed.connect(_refresh_send)
 	what.body.add_child(_text)
 	_contact = LineEdit.new()
-	_contact.placeholder_text = "Contact (optional) — name, Discord or email, if you'd like a reply"
+	_contact.placeholder_text = "Contact (optional) - name, Discord or email, if you'd like a reply"
 	_contact.max_length = 200
 	what.body.add_child(_contact)
 
@@ -276,7 +276,7 @@ func _send() -> void:
 func _on_done(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
 	var reply: Variant = JSON.parse_string(body.get_string_from_utf8()) if not body.is_empty() else null
 	if result != HTTPRequest.RESULT_SUCCESS:
-		_status.text = "Could not reach the report server — check your connection and try again."
+		_status.text = "Could not reach the report server - check your connection and try again."
 	elif code == 200 and reply is Dictionary and bool(reply.get("ok", false)):
 		_status.text = "Thank you! Report #%s was sent." % str(reply.get("id", ""))
 		_close_btn.text = "Close"

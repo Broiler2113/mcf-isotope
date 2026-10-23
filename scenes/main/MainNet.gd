@@ -111,9 +111,11 @@ func _on_peer_ready(is_host: bool) -> void:
 		mine = MCF.Owner.PLAYER_1 if is_host else MCF.Owner.PLAYER_2
 	my_owner = mine
 	net = NetGame.new(state, resolver, is_host, my_owner)
+	net.history_epoch = session.history_epoch_on_join
 	if is_host:
 		recorder = ReplayRecorder.new()
 		recorder.begin(state, resolver, _match_meta().merged({"network": true}))
+		_restore_recorded_history()
 		net.recorder = recorder
 	net.outgoing.connect(func(msg: Dictionary) -> void: session.send(msg))
 	net.action_applied.connect(_on_net_applied)
@@ -126,15 +128,31 @@ func _on_peer_ready(is_host: bool) -> void:
 	net.initiative_synced.connect(_on_initiative_synced)
 	# Рассинхрон (batch 14): гость просит снимок и, получив его, перечитывает доску.
 	net.desync_detected.connect(func() -> void:
-		state.log.add("[net] Board out of sync with the host — resynchronizing…")
+		state.log.add("[net] Board out of sync with the host - resynchronizing…")
 		_report_desync("guest"))
 	net.resync_requested.connect(func(_from: int) -> void: _report_desync("host"))
 	# Снимок хоста везёт и косметику поля — её гость кладёт вместо своей.
 	net.fx_snapshot = func() -> Dictionary: return _fx.to_dict()
 	net.resynced.connect(func() -> void:
 		_net_request_pending = false
-		if not net.restored_fx.is_empty():
-			_fx.from_dict(net.restored_fx)
+		resolver = net.resolver
+		resolver.capture_cosmetics = _fx.capture_state
+		resolver.restore_cosmetics = _fx.restore_state
+		_fx.clear()
+		_fx.from_dict(net.restored_fx)
+		if net.history_restored:
+			GameConfig.fog_mode = resolver.fog_mode
+			GameConfig.friendly_fire = resolver.friendly_fire_enabled
+			_match_over = false
+			_audio_victory_played = false
+			if is_instance_valid(_victory_overlay):
+				_victory_overlay.queue_free()
+				_victory_overlay = null
+			_real_stop_ms = -1
+			_fog_mem.clear()
+			_fog_mem_grid = null
+			_rebuild_restored_controllers()
+			_skey_cache.clear()
 		_resync_after_restore()
 		for c in controllers.values():
 			c.notify_state_changed(state)
@@ -152,7 +170,7 @@ func _on_peer_ready(is_host: bool) -> void:
 		_net_status.text = "Network: you are %s (%s)%s" % [
 			state.roster.name_of(my_owner),
 			Roster.color_name(slot.color_index()) if slot != null else "?",
-			" — host" if is_host else ""]
+			" - host" if is_host else ""]
 		if _spectator: _net_status.text = "Spectating · drawings shared with spectators only"
 		_net_status.show()
 	_refresh_status()
@@ -160,7 +178,7 @@ func _on_peer_ready(is_host: bool) -> void:
 ## Порядок инициативы согласован (#53, #19). Сам ход мирных уже отыгран внутри
 ## NetGame — одинаково у обеих сторон; здесь только показываем итог.
 func _on_initiative_synced() -> void:
-	state.log.add("— Initiative this match: %s —" % _order_labels())
+	state.log.add("- Initiative this match: %s -" % _order_labels())
 	_refresh_status()
 	queue_redraw()
 	await _play_civilian_result(net.opening_civilians)
@@ -270,7 +288,7 @@ func _on_peer_left(id: int) -> void:
 	if session != null:
 		session.send({"k": K_SIDE_AI, "side": side, "ai": AIController.Difficulty.HARD,
 				"st": AIPersonality.TACTICIAN})
-	state.log.add("— %s left the match; a Tactician AI takes over their army —" % state.roster.name_of(side))
+	state.log.add("- %s left the match; a Tactician AI takes over their army -" % state.roster.name_of(side))
 	_refresh_status()
 	_kick_if_ai()
 
@@ -339,6 +357,7 @@ func _grant_reclaims() -> void:
 		var snapshot := NetHandoff.encode_load(_save_payload())
 		snapshot["pv"] = NetHandoff.PROTOCOL
 		snapshot["roll_seq"] = _roll_seq
+		snapshot["history_epoch"] = net.history_epoch
 		snapshot["settings"] = NetHandoff.encode_rules()
 		session.send_to(peer, snapshot)
 		session.waiting_peers.erase(peer)
@@ -355,7 +374,7 @@ func _apply_side_human(msg: Dictionary) -> void:
 	slot.kind = Roster.SlotKind.HUMAN
 	slot.peer_id = int(msg.get("peer", -1))
 	controllers[side] = NetworkController.new(side)
-	state.log.add("— %s returned and reclaimed their army —" % state.roster.name_of(side))
+	state.log.add("- %s returned and reclaimed their army -" % state.roster.name_of(side))
 	_refresh_omniscience()
 	_refresh_status()
 
@@ -395,7 +414,7 @@ func _apply_side_ai(msg: Dictionary) -> void:
 	slot.ai_style = int(msg.get("st", AIPersonality.TACTICIAN))
 	slot.peer_id = -1
 	_drop_drawings_of(side)
-	state.log.add("— %s left the match; a Tactician AI takes over their army —" % state.roster.name_of(side))
+	state.log.add("- %s left the match; a Tactician AI takes over their army -" % state.roster.name_of(side))
 	_refresh_status()
 	_roll_arrived.emit(-1)
 

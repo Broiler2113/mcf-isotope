@@ -3,9 +3,9 @@ extends RefCounted
 
 ## One registry for live recording and legacy migration. No kill/combat bookmarks.
 const EVENTS := {
-	"mortar": {"announce": "⚠ Artillery Barrage —", "land": "Artillery Barrage hits zone", "label": "Artillery Barrage"},
-	"gas": {"announce": "⚠ Gas Cloud —", "land": "Gas Cloud settles over zone", "label": "Gas Cloud"},
-	"army": {"announce": "⚠ Independent Army —", "land": "— Raiders ", "label": "Independent Army"},
+	"mortar": {"announce": "⚠ Artillery Barrage -", "land": "Artillery Barrage hits zone", "label": "Artillery Barrage"},
+	"gas": {"announce": "⚠ Gas Cloud -", "land": "Gas Cloud settles over zone", "label": "Gas Cloud"},
+	"army": {"announce": "⚠ Independent Army -", "land": "- Raiders ", "label": "Independent Army"},
 }
 
 static func append(out: Array, index: int, round_no: int, owner: int,
@@ -16,11 +16,12 @@ static func append(out: Array, index: int, round_no: int, owner: int,
 		out.append({"index": index, "round": round_no,
 				"label": "%s's turn - round %d" % [MCF.owner_name(owner), round_no]})
 	for line: String in lines:
+		line = line.replace(char(0x2014), "-")
 		for event: Dictionary in EVENTS.values():
 			var label := ""
 			if line.begins_with(event.announce):
 				label = event.label + " incoming"
-			elif line.begins_with(event.land) and (event.label != "Independent Army" or line.contains(" land on the ")):
+			elif line.begins_with(event.land) and (event.label != "Independent Army" or (line.contains(" land on the ") or line.contains(" land at ("))):
 				label = event.label + " lands"
 			if label != "":
 				out.append({"index": index, "round": round_no, "label": "%s - round %d" % [label, round_no]})

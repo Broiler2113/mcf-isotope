@@ -14,9 +14,10 @@ func run() -> void:
 	for entry: Dictionary in r.random_events.pending:
 		ck(entry.land == r.state.turns.round_number, "warning uses normal round-end delay")
 	rejected(r, "event queue bounty")
-	rejected(r, "event queue army 2 2")
+	command(r, "event queue army 2 2")
+	ck(r.random_events.pending.back().params.x == 2, "army supports a direct entry coordinate")
 	command(r, "event cancel 0")
-	ck(r.random_events.pending.size() == 2, "cancel one warning")
+	ck(r.random_events.pending.size() == 3, "cancel one warning")
 	command(r, "event cancel all")
 	ck(r.random_events.pending.is_empty(), "cancel all warnings")
 	r.fog_enabled = true
