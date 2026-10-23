@@ -18,6 +18,8 @@ config/features=PackedStringArray("4.7", "GL Compatibility")
 
 [autoload]
 
+Acceleration="*res://src/sim/NativeAcceleration.gd"
+
 Keybinds="*res://src/ui/KeyBindings.gd"
 
 Ui="*res://src/ui/UiTheme.gd"

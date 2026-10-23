@@ -1,7 +1,8 @@
 class_name NativeVisuals
 extends RefCounted
 
-## Optional native geometry. Source downloads run the same GDScript path without a build.
+## Native geometry loads automatically from the bundled desktop library at startup.
+## Missing or incompatible libraries retain the original GDScript implementation.
 ## MCF_NATIVE_VISUALS=off selects the reference implementation for comparison.
 static var enabled := OS.get_environment("MCF_NATIVE_VISUALS") != "off"
 static var _checked := false

@@ -1,7 +1,16 @@
 # Native game kernels
 
-The optional GDExtension moves CPU work into C++ while retaining the Godot project
-and original GDScript algorithms. It now provides:
+Open `project.godot` in Godot 4.7 and run the game normally. The project archive
+already includes C++ acceleration for Windows x64, Linux x64, Intel Mac, and Apple
+Silicon. Linux requires glibc 2.28+; Mac requires macOS 11+ on Intel or macOS 13+ on
+Apple Silicon. It starts automatically, without a compiler, terminal command, or
+plugin setup. **Settings → Interface → Performance** shows the current status.
+
+All four desktop libraries travel with the same source project. The game chooses
+the library for the running Godot architecture. An unsupported system or unavailable
+library uses the original GDScript algorithms, so the project remains playable.
+
+The GDExtension provides:
 
 | Kernel | Native work |
 | --- | --- |
@@ -15,7 +24,13 @@ Game rules, action execution, random draws, persistence, model descriptions and
 scene ownership stay in GDScript. Native kernels return the same ordered results;
 they do not introduce a new AI strategy or change sight and movement rules.
 
-Build with Python 3.12+, CMake 3.22+, git, and a C++17 compiler:
+## Optional developer builds
+
+Build only when changing the C++ source or developing for another supported target.
+Close the Godot editor and running game first. Use Python 3.12+, CMake 3.22+, git,
+and a C++17 compiler matching the Godot architecture. Windows developers should use
+an x64 toolchain; Apple Silicon developers should keep their build tools and Godot
+native to ARM64 instead of mixing them with Rosetta.
 
 ```sh
 python native/visuals/build.py
@@ -27,20 +42,23 @@ godot --headless --path . --script res://tests/ai/run_native_ai.gd -- --require-
 godot --headless --path . --script res://tests/fog/run_native_visibility.gd -- --require-native
 ```
 
-Then open `project.godot` and run normally. Rebuild after changing the C++ source;
+Use `python3` if your system names Python that way. Then reopen `project.godot`
+and run normally. Rebuild after changing the C++ source;
 ordinary GDScript edits use the usual Godot workflow. The build verifies the same
 godot-cpp commit pinned by `native/policy/dependencies.json`, without downloading
 ONNX Runtime or policy dependencies. `--godot-cpp`, `--cache`, `--build-dir`, and
 `--jobs` support existing dependencies and build environments.
 
-Compiled output stays in ignored `addons/mcf_visuals/bin/<platform>-<arch>/`.
-Only a completed build generates a platform manifest. Source archives keep the
-working GDScript implementation and open without a compiler or native library;
-building enables all five kernels. `MCF_NATIVE_VISUALS=off` selects the original
+Bundled libraries are in `addons/mcf_visuals/prebuilt/`, with their manifest and
+licenses. Developer builds stay in ignored
+`addons/mcf_visuals/bin/<platform>-<arch>/` and take precedence over the bundled
+library. Only a completed developer build generates its local platform manifest.
+One build provides all five kernels. `MCF_NATIVE_VISUALS=off` selects the original
 mesh builder; `MCF_NATIVE_KERNELS=off` selects the original terrain, AI, pathfinding
 and visibility algorithms. Set both for a complete reference run. An incompatible
-API also falls back to GDScript. Build the
-extension separately on each platform that will use it.
+API also falls back to GDScript. These developer overrides are not needed for normal
+play. Restart Godot after changing a library or an override; native hot reload is
+disabled.
 
 ## Compatibility and verification
 
