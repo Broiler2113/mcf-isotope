@@ -1,0 +1,7 @@
+[configuration]
+entry_symbol = "mcf_visuals_init"
+compatibility_minimum = "4.5"
+reloadable = false
+
+[libraries]
+windows.x86_64 = "mcf_visuals.dll"
