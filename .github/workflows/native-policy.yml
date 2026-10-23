@@ -4,9 +4,9 @@ name: Native learned policy
 on:
   workflow_dispatch:
   push:
-    paths: ['.gitattributes', 'native/policy/**', 'addons/mcf_policy/**', 'assets/policy/**', 'rl/features.py', 'rl/model.py', 'rl/train.py', 'rl/test_native_policy.py', 'rl/test_action_fastpath.py', 'rl/test_training_fixes.py', 'src/controllers/LearnedController.gd', 'src/replay/MatchAnalyst.gd', 'scenes/**', 'audio/**', 'tools/audio/**', 'src/audio/**', 'src/fx/FxDecals.gd', 'src/resolver/GameActionResolver.gd', 'src/cheats/**', 'src/intents/CheatIntent.gd', 'src/net/**', 'src/sim/**', 'tests/cheats/**', 'tests/render_label_zoom.gd', 'tests/ui/run_release_0132.gd', 'tests/mapgen/run_release_0132.gd', 'src/ui/SettingsWindow.gd', 'project.godot', 'tests/audio/run_audio.gd', 'tests/run_source_fixes.gd', 'tests/bench/run_crush_bench.gd', 'src/ui/TerrainTiles.gd', 'src/sim/RandomEvents.gd', 'src/data/MapGen.gd', 'tests/bench/run_audio_bench.gd', 'tests/*native_policy*', 'tests/record_policy_requests.gd', 'tests/bench/run_native_policy.gd', '.github/workflows/native-policy.yml']
+    paths: ['.gitattributes', 'native/policy/**', 'addons/mcf_policy/**', 'assets/policy/**', 'rl/features.py', 'rl/model.py', 'rl/train.py', 'rl/test_native_policy.py', 'rl/test_action_fastpath.py', 'rl/test_training_fixes.py', 'src/controllers/LearnedController.gd', 'src/replay/MatchAnalyst.gd', 'scenes/**', 'audio/**', 'tools/audio/**', 'src/audio/**', 'src/fx/FxDecals.gd', 'src/resolver/GameActionResolver.gd', 'src/cheats/**', 'src/intents/CheatIntent.gd', 'src/net/**', 'src/sim/**', 'tests/cheats/**', 'tests/render_label_zoom.gd', 'tests/render_first_person_fog.gd', 'tests/ui/run_first_person*.gd', 'src/ui/UiTheme.gd', 'tests/ui/run_release_0132.gd', 'tests/mapgen/run_release_0132.gd', 'src/ui/SettingsWindow.gd', 'project.godot', 'tests/audio/run_audio.gd', 'tests/run_source_fixes.gd', 'tests/bench/run_crush_bench.gd', 'src/ui/TerrainTiles.gd', 'src/sim/RandomEvents.gd', 'src/data/MapGen.gd', 'tests/bench/run_audio_bench.gd', 'tests/*native_policy*', 'tests/record_policy_requests.gd', 'tests/bench/run_native_policy.gd', '.github/workflows/native-policy.yml']
   pull_request:
-    paths: ['.gitattributes', 'native/policy/**', 'addons/mcf_policy/**', 'assets/policy/**', 'rl/features.py', 'rl/model.py', 'rl/train.py', 'rl/test_native_policy.py', 'rl/test_action_fastpath.py', 'rl/test_training_fixes.py', 'src/controllers/LearnedController.gd', 'src/replay/MatchAnalyst.gd', 'scenes/**', 'audio/**', 'tools/audio/**', 'src/audio/**', 'src/fx/FxDecals.gd', 'src/resolver/GameActionResolver.gd', 'src/cheats/**', 'src/intents/CheatIntent.gd', 'src/net/**', 'src/sim/**', 'tests/cheats/**', 'tests/render_label_zoom.gd', 'tests/ui/run_release_0132.gd', 'tests/mapgen/run_release_0132.gd', 'src/ui/SettingsWindow.gd', 'project.godot', 'tests/audio/run_audio.gd', 'tests/run_source_fixes.gd', 'tests/bench/run_crush_bench.gd', 'src/ui/TerrainTiles.gd', 'src/sim/RandomEvents.gd', 'src/data/MapGen.gd', 'tests/bench/run_audio_bench.gd', 'tests/*native_policy*', 'tests/record_policy_requests.gd', 'tests/bench/run_native_policy.gd', '.github/workflows/native-policy.yml']
+    paths: ['.gitattributes', 'native/policy/**', 'addons/mcf_policy/**', 'assets/policy/**', 'rl/features.py', 'rl/model.py', 'rl/train.py', 'rl/test_native_policy.py', 'rl/test_action_fastpath.py', 'rl/test_training_fixes.py', 'src/controllers/LearnedController.gd', 'src/replay/MatchAnalyst.gd', 'scenes/**', 'audio/**', 'tools/audio/**', 'src/audio/**', 'src/fx/FxDecals.gd', 'src/resolver/GameActionResolver.gd', 'src/cheats/**', 'src/intents/CheatIntent.gd', 'src/net/**', 'src/sim/**', 'tests/cheats/**', 'tests/render_label_zoom.gd', 'tests/render_first_person_fog.gd', 'tests/ui/run_first_person*.gd', 'src/ui/UiTheme.gd', 'tests/ui/run_release_0132.gd', 'tests/mapgen/run_release_0132.gd', 'src/ui/SettingsWindow.gd', 'project.godot', 'tests/audio/run_audio.gd', 'tests/run_source_fixes.gd', 'tests/bench/run_crush_bench.gd', 'src/ui/TerrainTiles.gd', 'src/sim/RandomEvents.gd', 'src/data/MapGen.gd', 'tests/bench/run_audio_bench.gd', 'tests/*native_policy*', 'tests/record_policy_requests.gd', 'tests/bench/run_native_policy.gd', '.github/workflows/native-policy.yml']
 permissions:
   contents: read
 env:
@@ -54,7 +54,7 @@ jobs:
         run: godot --headless --path . --script res://tests/run_source_fixes.gd
       - name: Verify reported gameplay and saved-history fixes
         run: |
-          for suite in combat/run_smoke_and_gas combat/run_bodies combat/run_flamethrower vehicles/run_drone_stations vehicles/run_vehicle_rules events/run_match_modes files/run_game_files ui/run_battle_screen ui/run_menus; do
+          for suite in combat/run_smoke_and_gas combat/run_bodies combat/run_flamethrower vehicles/run_drone_stations vehicles/run_vehicle_rules events/run_match_modes files/run_game_files ui/run_battle_screen ui/run_menus ui/run_first_person ui/run_first_person_fix9 ui/run_first_person_damage ui/run_first_person_streaming; do
             godot --headless --path . --script "res://tests/$suite.gd" || exit 1
           done
       - name: Verify cheat commands, permissions, saves and network authority
@@ -70,12 +70,13 @@ jobs:
           godot --headless --path . --script res://tests/files/run_replay_seek.gd
           godot --headless --path . --script res://tests/files/run_video_encoder.gd
           godot --headless --path . --script res://tests/events/run_live_wave_counts.gd
-      - name: Verify battlefield labels stay within their cells while zooming
+      - name: Verify rendered battlefield labels and opaque first-person fog
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq xvfb libgl1-mesa-dri
           LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a godot --path . --rendering-method gl_compatibility --script res://tests/render_label_zoom.gd
+          LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a godot --path . --rendering-method gl_compatibility --script res://tests/render_first_person_fog.gd
       - name: Install parity dependencies
         run: python -m pip install numpy onnx onnxruntime==1.22.0
       - name: Install CPU PyTorch

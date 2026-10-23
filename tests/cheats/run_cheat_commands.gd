@@ -4,6 +4,8 @@ func run() -> void:
 	var r := fresh()
 	r.state.roster.slots[1].display_name = "Red Team"
 	ck(CheatCommands.CATALOG.size() >= 50, "full command catalog")
+	ck(CheatCommands.help_text("time").contains("morning, day, evening or night"), "time command is documented")
+	ck(not CheatCommands.complete("time m", r.state, 0).is_empty(), "time values appear in suggestions")
 	for entry: Dictionary in CheatCommands.CATALOG:
 		if entry.get("hidden", false): continue
 		ck(CheatCommands.help_text().contains(CheatCommands.syntax(entry)), "help documents " + entry.op)
@@ -15,6 +17,7 @@ func run() -> void:
 	ck(not CheatCommands.complete("spawn unit li", r.state, 0).is_empty(), "autocomplete from unit registry")
 	ck(CheatCommands.complete("unit kill ", r.state, 0).is_empty(), "entity commands accept visible IDs without listing every unit")
 	r.state.roster.slots[0].cheats_allowed = false
+	ck(CheatCommands.parse("time day", r.state, 0).has("error"), "time changes require gameplay cheat permission")
 	ck(CheatCommands.complete("unit kill ", r.state, 0).is_empty(), "unauthorized IDs do not leak through completion")
 	ck(CheatCommands.parse("inspect unit 999999", r.state, 0).error.contains("permission"), "permission denial precedes private ID validation")
 	ck(not CheatCommands.parse("players", r.state, 0).has("error"), "public roster query still available")

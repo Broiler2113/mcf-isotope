@@ -37,12 +37,19 @@ func _check(style: int) -> void:
 				trench = Vector2i(x, y)
 	ck(start.x >= 0 and wall.x >= 0, "map has a free cell and a wall")
 	var before := JSON.stringify(StateCodec.encode(main.state))
+	var board_visibility := {}
+	for child: Node in main.get_children():
+		if child is CanvasItem: board_visibility[child] = child.visible
 
 	main._start_first_person(start)
 	for i in 40:
 		await process_frame
 	var fp = main._fp
 	ck(fp != null and not main._ui_layer.visible, "entering hides the battle UI")
+	for child: Node in board_visibility:
+		if is_instance_valid(child): ck(not child.visible, "first person hides covered 2D layers")
+	if is_instance_valid(main._lighting):
+		ck(main._lighting._vp.render_target_update_mode == SubViewport.UPDATE_DISABLED, "first person suspends the covered 2D light map")
 	ck(fp._chunks.size() > 0, "chunks stream in around the walker")
 
 	# Every triangle's winding agrees with its normal the same way as the floor's does.
@@ -80,6 +87,8 @@ func _check(style: int) -> void:
 	for i in 3:
 		await process_frame
 	ck(main._fp == null and main._ui_layer.visible, "Esc leaves and brings the battle UI back")
+	for child: Node in board_visibility:
+		if is_instance_valid(child): ck(child.visible == board_visibility[child], "leaving restores each 2D layer's visibility")
 	ck(JSON.stringify(StateCodec.encode(main.state)) == before, "first person never changes the game")
 	main.queue_free()
 	await process_frame

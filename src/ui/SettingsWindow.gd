@@ -302,7 +302,7 @@ func _build() -> void:
 		Ui.set_fullscreen(false)
 		Ui.set_autoroll_dice(false)
 		Ui.set_desync_reports(true)
-		Ui.set_fp_render_distance(36)
+		Ui.set_fp_render_distance(Ui.FP_DISTANCE_DEFAULT)
 		_build.call_deferred())
 	bottom.add_child(reset)
 	var close := Button.new()

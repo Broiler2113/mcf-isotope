@@ -107,7 +107,8 @@ var fp_fov := 80.0
 var fp_sensitivity := 0.25
 const FP_DISTANCE_MIN := 16
 const FP_DISTANCE_MAX := 160
-var fp_render_distance := 36
+const FP_DISTANCE_DEFAULT := 160
+var fp_render_distance := FP_DISTANCE_DEFAULT
 var ffmpeg_path := ""
 ## Falling snow on winter maps (owner, fix-8 #3), on the battle screen and in first person.
 var snowfall := true
@@ -156,7 +157,7 @@ func _load_settings() -> void:
 	show_fps = bool(cf.get_value("display", "show_fps", false))
 	fp_fov = clampf(float(cf.get_value("display", "fp_fov", 80.0)), 50.0, 120.0)
 	fp_sensitivity = clampf(float(cf.get_value("display", "fp_sensitivity", 0.25)), 0.05, 1.0)
-	fp_render_distance = clampi(int(cf.get_value("display", "fp_render_distance", 36)), FP_DISTANCE_MIN, FP_DISTANCE_MAX)
+	fp_render_distance = clampi(int(cf.get_value("display", "fp_render_distance", FP_DISTANCE_DEFAULT)), FP_DISTANCE_MIN, FP_DISTANCE_MAX)
 	ffmpeg_path = str(cf.get_value("display", "ffmpeg_path", ""))
 	snowfall = bool(cf.get_value("display", "snowfall", true))
 

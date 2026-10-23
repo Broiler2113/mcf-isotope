@@ -1,12 +1,10 @@
 # Isotope 0.13.5.1
 
-## Battlefield labels
+## Fixed-size battlefield labels
 
-- Tile coordinates appear on every cell, including when the whole map is visible. Zooming out no longer skips rows or columns of labels.
-- Unit, corpse, and vehicle IDs stay within their own cells. All labels shrink with their tiles when zooming out and remain capped at their normal text size when zooming in.
-- Long IDs fit within the cell, and IDs sharing a tile stack separately from its coordinate label.
-- Coordinate drawing is retained between camera changes to avoid rebuilding thousands of labels each frame.
-- Automatic rendered checks cover the full zoom range, a 160×120 map, stacked corpses, vehicle IDs, panning, and cheat permissions.
+- Battlefield IDs and tile coordinates retain their screen size and shape throughout the 0.12x to 2.5x zoom range. Their anchors follow the map.
+- Added an automatic rendered regression check for living-unit, corpse, vehicle, and coordinate labels, including fractional camera positions.
+- Linux CI compares the actual glyph pixels through zoom input, so a change that scales either type of label fails the check.
 
 **Compatibility:** network protocol **29** and replay schema **3**, unchanged from 0.13.5. Existing saves and replays remain supported.
 

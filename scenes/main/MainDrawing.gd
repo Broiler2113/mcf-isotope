@@ -351,8 +351,9 @@ func _draw() -> void:
 	# cannot hide debris there; stop drawing the live layers while Before is shown.
 	if _before_on:
 		return
-	_draw_fx_flashes(visible)
-	_draw_flame_jet(visible)
+	if _fp == null:
+		_draw_fx_flashes(visible)
+		_draw_flame_jet(visible)
 	# Труп существует в ДВУХ видах: погибший на месте боец — это occupant клетки со
 	# статусом CORPSE, а положенный из рук (#6) — безымянная куча cell.corpse_count.
 	# Кучи не рисовались вовсе: тело давало +1 к защите, но на карте его не было.
@@ -371,6 +372,9 @@ func _draw() -> void:
 			if visible.has(c) and not corpses.has(c):
 				cmem.erase(c)
 		corpses = cmem
+	# Fog memory and floor/decal invalidation above remain live for the 3D view.
+	# The covered 2D board needs no sprite, effect or annotation draw commands.
+	if _fp != null: return
 	# Тела внутри челнока (и борга) ложатся поверх его корпуса (fix-7 #10): рисуются после машин.
 	var vehicle_bodies: Array = []
 	for c: Vector2i in corpses:

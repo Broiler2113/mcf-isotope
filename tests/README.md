@@ -63,6 +63,18 @@ shrink with it at distant zoom. Every visible tile must retain its coordinates,
 including on a fully zoomed-out 160x120 map. The Linux CI job runs this rendered
 check automatically.
 
+`ui/run_first_person_streaming.gd` checks incremental mesh and floor construction,
+changes arriving during preparation, exact ground-stroke pixels, and sparse effect
+updates. `render_first_person_fog.gd` places a bright marker behind unexplored fog
+and verifies that it is completely occluded at walking and flying heights. The
+marker becomes visible when the fog mesh is disabled, providing a negative control.
+Linux CI runs both rendered label and fog checks.
+
+`bench/run_first_person_render.gd` profiles a large town at the 160 m render
+distance, reporting frame and CPU percentiles, draw calls, and triangles for still
+and moving views. Run it with the GL Compatibility renderer and a real display
+(or Xvfb); software-renderer timings are not representative of a hardware GPU.
+
 ```
 bash tests/run_all.sh            # verify
 bash tests/run_all.sh --update   # re-baseline after a deliberate rule change

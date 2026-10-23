@@ -334,6 +334,7 @@ var _ui_layer: CanvasLayer
 var _fps_label: Label
 ## Вид от первого лица (fix-7 #9): само окно, его слой и крыши этой партии.
 var _fp: FirstPerson = null
+var _fp_board_visibility := {}
 var _fp_layer: CanvasLayer = null
 var _fp_roofs := PackedByteArray()
 ## Cosmetic peer avatars, never part of the simulation, save or replay state.

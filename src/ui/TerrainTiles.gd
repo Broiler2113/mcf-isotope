@@ -63,6 +63,7 @@ var _grid: Grid
 var env: String = ""
 var _floor_only := false        # baking an FP_RES chunk right now
 var _chunks: Dictionary = {}     # Vector3i(cx, cy, res) -> {"floor", "feat": ImageTexture, "used": int, "bytes": int}
+var _generation := 0            # invalidates in-progress first-person bakes after a full reset
 var _dirty: Dictionary = {}      # Vector2i(cx, cy) -> true: пересобрать во всех разрешениях
 var _pick: Dictionary = {}       # Vector2i(cx, cy) -> ключ куска, выведенного полом в этом кадре
 var _bytes := 0
@@ -245,6 +246,7 @@ func sync_decals(fx: FxDecals) -> void:
 
 func sync(fx_damage: Dictionary, damage_version: int) -> void:
 	if _look_ver < GridCell.look_log_base:
+		_generation += 1
 		_chunks.clear()   # журнал оборвался — дешевле собрать заново, чем разбирать
 		_bytes = 0
 	elif _look_ver != GridCell.look_version:
@@ -401,6 +403,59 @@ func floor_3d(cc: Vector2i) -> ImageTexture:
 	_chunks[key]["used"] = _frame
 	return _chunks[key]["floor"]
 
+## First-person streaming prepares a complete replacement over several frames.
+## The old texture remains displayed until every cell and decal is ready.
+func begin_floor_job(cc: Vector2i) -> Dictionary:
+	if _dirty.has(cc):
+		_dirty.erase(cc)
+		for r: int in ALL_RES: _drop(Vector3i(cc.x, cc.y, r))
+	var w := mini(C, _grid.width - cc.x * C)
+	var h := mini(C, _grid.height - cc.y * C)
+	_floor_only = true
+	var marks := _decal_list(cc)
+	_floor_only = false
+	return {"cc": cc, "source": self, "generation": _generation, "size": Vector2i(w, h), "next": 0, "phase": 0, "decals": marks,
+		"floor": Image.create(w * 32, h * 32, false, Image.FORMAT_RGBA8),
+		"features": Image.create(w * 32, h * 32, false, Image.FORMAT_RGBA8)}
+
+func advance_floor_job(job: Dictionary, deadline: int) -> bool:
+	var cc: Vector2i = job.cc
+	var size: Vector2i = job.size
+	var picture: Image = job.floor
+	_floor_only = true
+	while Time.get_ticks_usec() < deadline:
+		var i: int = job.next
+		match int(job.phase):
+			0:
+				if i == size.x * size.y:
+					_bake_ground_lines(picture, cc, 32)
+					job.phase = 1; job.next = 0
+					continue
+				var offset := Vector2i(i % size.x, i / size.x)
+				_paint(picture, job.features, cc * C + offset, offset * 32, 32)
+			1:
+				if i == job.decals.size():
+					job.phase = 2; job.next = 0
+					continue
+				_paint_decal(picture, cc, 32, job.decals[i])
+			2:
+				if not bake_fire or i == size.x * size.y:
+					picture.generate_mipmaps()
+					var bytes := picture.get_data_size()
+					var key := Vector3i(cc.x, cc.y, FP_RES)
+					_drop(key)
+					_chunks[key] = {"floor": ImageTexture.create_from_image(picture), "feat": null, "used": _frame, "bytes": bytes}
+					_bytes += bytes
+					_floor_only = false
+					return true
+				var cell := cc * C + Vector2i(i % size.x, i / size.x)
+				if _grid.cell(cell).on_fire and not hidden_fire.has(cell):
+					var fire := _tile("fire", 32)
+					if not fire.is_empty(): picture.blend_rect(fire[0], Rect2i(0, 0, 32, 32), (cell - cc * C) * 32)
+		job.next += 1
+	_floor_only = false
+	return false
+
 func _drop(key: Vector3i) -> void:
 	if _chunks.has(key):
 		_bytes -= int(_chunks[key]["bytes"])
@@ -432,7 +487,8 @@ func _build(cc: Vector2i, res: int) -> void:
 						floor_img.blend_rect(fire[0], Rect2i(0, 0, res, res), Vector2i(x * res, y * res))
 	if _floor_only:
 		_floor_only = false
-		var fbytes := w * h * res * res * 4
+		floor_img.generate_mipmaps()
+		var fbytes := floor_img.get_data_size()
 		_chunks[key] = {"floor": ImageTexture.create_from_image(floor_img), "feat": null, "used": _frame, "bytes": fbytes}
 		_bytes += fbytes
 		return
@@ -462,7 +518,7 @@ func _build(cc: Vector2i, res: int) -> void:
 ## каждые 16 клеток.
 const DECAL_BLEED := 1.5
 
-func _bake_decals(img: Image, cc: Vector2i, res: int) -> void:
+func _decal_list(cc: Vector2i) -> Array:
 	var origin := Vector2(cc * C)
 	var list: Array = []
 	for dy in range(-1, 2):
@@ -482,26 +538,30 @@ func _bake_decals(img: Image, cc: Vector2i, res: int) -> void:
 				if p.x > -DECAL_BLEED and p.y > -DECAL_BLEED \
 						and p.x < C + DECAL_BLEED and p.y < C + DECAL_BLEED:
 					list.append(d)
-	if list.is_empty():
+	return list
+
+func _bake_decals(img: Image, cc: Vector2i, res: int) -> void:
+	for decal: Dictionary in _decal_list(cc): _paint_decal(img, cc, res, decal)
+
+func _paint_decal(img: Image, cc: Vector2i, res: int, d: Dictionary) -> void:
+	var origin := Vector2(cc * C)
+	var kind := str(d["kind"])
+	if _floor_only and (kind.begins_with("chunk:") or kind.begins_with("item:") or kind in MapData.WINTER_DECORATIONS):
 		return
-	for d: Dictionary in list:
-		var kind := str(d["kind"])
-		if _floor_only and (kind.begins_with("chunk:") or kind.begins_with("item:") or kind in MapData.WINTER_DECORATIONS):
-			continue
-		var look: Array = [0.95, Color(0.8, 0.1, 0.1, 0.5)] if kind == "corpse" else FxDecals.look_of(kind)
-		if look.is_empty():
-			continue
-		var pos: Vector2 = (d["pos"] as Vector2) - origin
-		# Частица не оседает на стене (экран её и не рисовал): клетку-стену пропускаем.
-		var cell := Vector2i(cc * C) + Vector2i(floori(pos.x), floori(pos.y))
-		if not _grid.in_bounds(cell) or _grid.cell_fast(cell.x, cell.y).cover_height >= MCF.WALL_HEIGHT:
-			continue
-		var px := maxi(1, roundi(float(look[0]) * float(d["scale"]) * res))
-		var sprite := _decal_sprite(kind, px, float(d["rot"]), look)
-		if sprite == null:
-			continue
-		var at := Vector2i(roundi(pos.x * res) - px / 2, roundi(pos.y * res) - px / 2)
-		img.blend_rect(sprite, Rect2i(0, 0, px, px), at)
+	var look: Array = [0.95, Color(0.8, 0.1, 0.1, 0.5)] if kind == "corpse" else FxDecals.look_of(kind)
+	if look.is_empty():
+		return
+	var pos: Vector2 = (d["pos"] as Vector2) - origin
+	# Частица не оседает на стене (экран её и не рисовал): клетку-стену пропускаем.
+	var cell := Vector2i(cc * C) + Vector2i(floori(pos.x), floori(pos.y))
+	if not _grid.in_bounds(cell) or _grid.cell_fast(cell.x, cell.y).cover_height >= MCF.WALL_HEIGHT:
+		return
+	var px := maxi(1, roundi(float(look[0]) * float(d["scale"]) * res))
+	var sprite := _decal_sprite(kind, px, float(d["rot"]), look)
+	if sprite == null:
+		return
+	var at := Vector2i(roundi(pos.x * res) - px / 2, roundi(pos.y * res) - px / 2)
+	img.blend_rect(sprite, Rect2i(0, 0, px, px), at)
 
 # =====================================================================================
 #  Мелкие предметы карты (0.12.1, SmallItems)
@@ -1832,6 +1892,7 @@ var winter := false
 func set_winter(value: bool) -> bool:
 	if winter == value: return false
 	winter = value
+	_generation += 1
 	_chunks.clear()
 	_bytes = 0
 	return true
@@ -1847,6 +1908,7 @@ func _winter_floor(fname: String) -> String:
 func set_time_of_day(value: String) -> bool:
 	if time_of_day == value: return false
 	time_of_day = value
+	_generation += 1
 	_chunks.clear()
 	_bytes = 0
 	return true
@@ -1861,6 +1923,7 @@ func set_map_decals() -> void:
 		if not map_decals.has(cc): map_decals[cc] = []
 		map_decals[cc].append({"kind": str(d[0]), "pos": pos, "rot": float(d[3]), "scale": float(d[4])})
 	if bake_map_decals:
+		_generation += 1
 		_chunks.clear()
 		_bytes = 0
 
@@ -1889,8 +1952,18 @@ func _bake_ground_lines(img: Image, cc: Vector2i, res: int) -> void:
 		var ink := Color(0.1, 0.08, 0.05, 0.2) if int(line[2]) == 0 else Color(0, 0, 0, 0.4)
 		var lo := a.min(b) - Vector2.ONE * radius
 		var hi := a.max(b) + Vector2.ONE * radius
+		var dy := b.y - a.y
 		for y in range(maxi(0, floori(lo.y)), mini(img.get_height(), ceili(hi.y))):
-			for x in range(maxi(0, floori(lo.x)), mini(img.get_width(), ceili(hi.x))):
+			# Only visit the strip touched by the stroke on this row. A diagonal
+			# track used to test every pixel of its entire rectangular bounding box.
+			var left := lo.x
+			var right := hi.x
+			if absf(dy) > 0.00001:
+				var x0 := lerpf(a.x, b.x, clampf((y + 0.5 - radius - a.y) / dy, 0.0, 1.0))
+				var x1 := lerpf(a.x, b.x, clampf((y + 0.5 + radius - a.y) / dy, 0.0, 1.0))
+				left = maxf(left, minf(x0, x1) - radius)
+				right = minf(right, maxf(x0, x1) + radius)
+			for x in range(maxi(0, floori(left)), mini(img.get_width(), ceili(right))):
 				var p := Vector2(x + 0.5, y + 0.5)
 				if p.distance_to(Geometry2D.get_closest_point_to_segment(p, a, b)) <= radius:
 					img.set_pixel(x, y, img.get_pixel(x, y).blend(ink))

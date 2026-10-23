@@ -905,6 +905,12 @@ func _start_first_person(at: Vector2i) -> void:
 	_fp.left.connect(_end_first_person)
 	_fp_layer.add_child(_fp)
 	_ui_layer.visible = false
+	_fp_board_visibility.clear()
+	for child: Node in get_children():
+		if child is CanvasItem:
+			_fp_board_visibility[child] = child.visible
+			child.hide()
+	queue_redraw()
 	_send_fp_presence(true)
 
 func _end_first_person() -> void:
@@ -913,7 +919,11 @@ func _end_first_person() -> void:
 		_fp_layer.queue_free()
 	_fp_layer = null
 	_fp = null
+	for child: Node in _fp_board_visibility:
+		if is_instance_valid(child): child.visible = _fp_board_visibility[child]
+	_fp_board_visibility.clear()
 	_ui_layer.visible = true
+	if is_instance_valid(_lighting): _lighting._key.clear()
 	queue_redraw()
 
 ## Где потолок: считается раз за партию по доске начала боя — снесённая стена крышу не
