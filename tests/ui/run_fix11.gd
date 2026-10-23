@@ -57,7 +57,7 @@ func run() -> void:
 	main._escape_pressed()
 	var menu: Node = main._battle_menu
 	ck(menu != null, "Escape opens battle menu")
-	ck(menu.buttons.map(func(button: Button): return button.text) == ["Return to Menu", "Settings", "Save Game", "Save Replay"], "battle menu buttons have the requested order")
+	ck(menu.buttons.map(func(button: Button): return button.text) == ["Resume", "Settings", "Save Game", "Save Replay", "Return to Menu"], "battle menu starts with Resume and ends with Return to Menu")
 	for button: Button in main._hud_window.find_children("*", "Button", true, false):
 		ck(button.text not in ["Return to Menu", "Save Game", "Save Replay", "Settings"], "battle menu actions removed from right panel")
 	var replay_steps: int = main.recorder.steps.size()

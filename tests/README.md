@@ -70,6 +70,28 @@ and verifies that it is completely occluded at walking and flying heights. The
 marker becomes visible when the fog mesh is disabled, providing a negative control.
 Linux CI runs both rendered label and fog checks.
 
+`ui/run_native_visuals.gd` compares the optional C++ mesh builder with GDScript
+byte-for-byte, including transformed primitives, the furniture catalog, damaged
+pieces, and rejected inputs. Pass `-- --require-native` to require a compiled
+extension. `render_native_visuals.gd` compares native geometry in complete town
+and station scenes, keeping the same lighting and instances to avoid unrelated
+render-order variation. `bench/run_native_visuals.gd` measures both backends in
+alternating order. See [native/visuals/README.md](../native/visuals/README.md).
+
+The other native kernels have dedicated differential suites:
+`ui/run_native_terrain.gd` compares roof masks and floor/track pixels;
+`perf/run_native_pathfinding.gd` compares ordered costs and predecessor trees;
+`ai/run_native_ai.gd` compares planning kernels and full action/RNG traces;
+`fog/run_native_visibility.gd` compares visible cells, sensitivity, shadows and
+incremental exploration logs. Each accepts `-- --require-native`. Their matching
+`bench/run_native_*.gd` scripts alternate backends, including input preparation.
+`run_net_native_kernels.sh` runs real native/reference peers in both host roles.
+Set `MCF_NATIVE_KERNELS=off` to use the original four algorithms throughout a game.
+`bench/run_native_match_parity.gd` runs complete reference/native matches on the
+same engine, comparing every signature field, including effects. Historical
+gameplay signatures remain required. Windows' effects hash is compared with its
+local reference because the stored effects baseline was recorded on Linux.
+
 `bench/run_first_person_render.gd` profiles a large town at the 160 m render
 distance, reporting frame and CPU percentiles, draw calls, and triangles for still
 and moving views. Run it with the GL Compatibility renderer and a real display

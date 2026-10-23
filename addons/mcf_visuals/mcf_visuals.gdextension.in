@@ -1,0 +1,11 @@
+[configuration]
+entry_symbol = "mcf_visuals_init"
+compatibility_minimum = "4.5"
+reloadable = false
+
+[libraries]
+linux.x86_64 = "mcf_visuals.so"
+linux.arm64 = "mcf_visuals.so"
+windows.x86_64 = "mcf_visuals.dll"
+macos.x86_64 = "mcf_visuals.dylib"
+macos.arm64 = "mcf_visuals.dylib"

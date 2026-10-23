@@ -414,9 +414,12 @@ func begin_floor_job(cc: Vector2i) -> Dictionary:
 	_floor_only = true
 	var marks := _decal_list(cc)
 	_floor_only = false
-	return {"cc": cc, "source": self, "generation": _generation, "size": Vector2i(w, h), "next": 0, "phase": 0, "decals": marks,
+	var job := {"cc": cc, "source": self, "generation": _generation, "size": Vector2i(w, h), "next": 0, "phase": 0, "decals": marks,
 		"floor": Image.create(w * 32, h * 32, false, Image.FORMAT_RGBA8),
 		"features": Image.create(w * 32, h * 32, false, Image.FORMAT_RGBA8)}
+	var plan := _native_floor_plan(cc, Vector2i(w, h))
+	if not plan.is_empty(): job["native_plan"] = plan; job["native_tiles"] = _native_floor_images(plan, 32)
+	return job
 
 func advance_floor_job(job: Dictionary, deadline: int) -> bool:
 	var cc: Vector2i = job.cc
@@ -431,6 +434,13 @@ func advance_floor_job(job: Dictionary, deadline: int) -> bool:
 					_bake_ground_lines(picture, cc, 32)
 					job.phase = 1; job.next = 0
 					continue
+				if job.has("native_plan"):
+					var native := NativeKernels.terrain()
+					var count := mini(size.x, size.x * size.y - i)
+					if native != null and native.paint_floor(picture, job.native_plan, job.native_tiles, i, count, 32):
+						job.next += count
+						continue
+					job.erase("native_plan")
 				var offset := Vector2i(i % size.x, i / size.x)
 				_paint(picture, job.features, cc * C + offset, offset * 32, 32)
 			1:
@@ -456,6 +466,37 @@ func advance_floor_job(job: Dictionary, deadline: int) -> bool:
 	_floor_only = false
 	return false
 
+## The native plan classifies a complete chunk once, then paints bounded rows while
+## the existing streaming job checks its deadline. Texture loading stays on this side.
+func _native_floor_plan(cc: Vector2i, size: Vector2i) -> Dictionary:
+	var native := NativeKernels.terrain()
+	if native == null: return {}
+	var ground_names := {}
+	var winter_names := {}
+	var names: Array = MCF.FLOOR_LOOKS.duplicate()
+	names.append_array(["floor", "floor_space", "floor_epicenter", "floor_destroyed"])
+	for name: String in names:
+		var actual := env_name(name, env) if name != "" else ""
+		ground_names[name] = actual
+		winter_names[name] = str(WINTER_FLOORS.get(actual, name)) if winter and name != "" else name
+	return native.floor_plan(_grid.cells_flat(), _grid.width, _grid.height, _grid.floor_look, _damaged,
+		Rect2i(cc * C, size), origin, {"floor_names": MCF.FLOOR_LOOKS, "overlays": MCF.FLOOR_OVERLAY_LOOKS,
+		"env": env, "airlock": MCF.FEATURE_AIRLOCK, "space_override": Sprites.has_user_override("floor_space"),
+		"solar": MCF.Look.SOLAR, "grass_look": MCF.Look.GRASS, "dirt_look": MCF.Look.DIRT,
+		"grass_type": MCF.FLOOR_GRASS, "epicenter": FxDecals.DAMAGE_EPICENTER, "rubble": FxDecals.DAMAGE_RUBBLE,
+		"ground_names": ground_names, "winter_names": winter_names})
+
+func _native_floor_images(plan: Dictionary, res: int) -> Dictionary:
+	var images := {}
+	for name: String in plan.needed: images[name] = _tile(name, res)
+	return images
+
+func _native_paint_floor(img: Image, cc: Vector2i, size: Vector2i, res: int) -> bool:
+	var native := NativeKernels.terrain()
+	if native == null: return false
+	var plan := _native_floor_plan(cc, size)
+	return not plan.is_empty() and native.paint_floor(img, plan, _native_floor_images(plan, res), 0, size.x * size.y, res)
+
 func _drop(key: Vector3i) -> void:
 	if _chunks.has(key):
 		_bytes -= int(_chunks[key]["bytes"])
@@ -470,10 +511,11 @@ func _build(cc: Vector2i, res: int) -> void:
 	var h := mini(C, _grid.height - cc.y * C)
 	var floor_img := Image.create(w * res, h * res, false, Image.FORMAT_RGBA8)
 	var feat_img := Image.create(w * res, h * res, false, Image.FORMAT_RGBA8)
-	for y in h:
-		for x in w:
-			_paint(floor_img, feat_img, Vector2i(cc.x * C + x, cc.y * C + y),
-					Vector2i(x * res, y * res), res)
+	if not _floor_only or not _native_paint_floor(floor_img, cc, Vector2i(w, h), res):
+		for y in h:
+			for x in w:
+				_paint(floor_img, feat_img, Vector2i(cc.x * C + x, cc.y * C + y),
+						Vector2i(x * res, y * res), res)
 	_bake_ground_lines(floor_img, cc, res)
 	_bake_decals(floor_img, cc, res)
 	# Flames over the debris, blood and brass lying in them (playtest 2026-10-19).
@@ -1945,6 +1987,11 @@ func _index_ground_lines(fx: FxDecals) -> void:
 					_dirty[cc] = true
 
 func _bake_ground_lines(img: Image, cc: Vector2i, res: int) -> void:
+	var native := NativeKernels.terrain()
+	if native != null and native.paint_ground_lines(img, ground_lines.get(cc, []), Vector2(cc * C), res): return
+	_bake_ground_lines_gd(img, cc, res)
+
+func _bake_ground_lines_gd(img: Image, cc: Vector2i, res: int) -> void:
 	for line: Array in ground_lines.get(cc, []):
 		var a: Vector2 = (line[0] - Vector2(cc * C)) * res
 		var b: Vector2 = (line[1] - Vector2(cc * C)) * res

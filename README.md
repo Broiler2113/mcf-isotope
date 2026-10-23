@@ -4,6 +4,12 @@ Releases are source-only. Download the release archive, import `project.godot` i
 with the GL Compatibility renderer. Native policy libraries are optional; source checkouts without them use
 the existing socket/HARD fallback. Application exports remain paused.
 
+Optional C++ game kernels accelerate first-person geometry, terrain preparation,
+AI planning, pathfinding and visibility. Run `python native/visuals/build.py` once
+to enable them, then launch the game normally from Godot. See the
+[native build guide](native/visuals/README.md) for prerequisites and verification.
+Without the library, the same game systems use their original GDScript algorithms.
+
 Release notes start with the changes. Do not prepend the source-download and
 Godot-import instructions to release descriptions.
 

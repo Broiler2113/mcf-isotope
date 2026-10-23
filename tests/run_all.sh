@@ -47,6 +47,7 @@ echo "=== tools/bugs/test_isotope_bugs.py ==="
 python3 tools/bugs/test_isotope_bugs.py || fail=1
 python3 tests/bench/test_compare_timings.py || fail=1
 python3 native/policy/test_manifest.py || fail=1
+python3 native/visuals/test_manifest.py || fail=1
 
 # Сетевая партия на двух процессах (batch 12): лобби → расстановка → бой по ENet.
 echo "=== tests/run_net_match.sh ==="

@@ -225,7 +225,6 @@ func _build_home_page() -> Control:
 	page.add_child(rejoin)
 	page.add_child(_menu_button("Saves & Replays", _show_files))
 	page.add_child(_menu_button("Manual", func() -> void: ManualWindow.toggle(self)))
-	page.add_child(_menu_button("Report a Bug", func() -> void: BugReportWindow.open(self)))
 	page.add_child(_menu_button("Settings", _show_settings))
 	page.add_child(_menu_button("Quit", _quit))
 	return page

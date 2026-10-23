@@ -369,6 +369,7 @@ func _restore_config_controls() -> void:
 		_waves_spin.set_value_no_signal(GameConfig.holdout_waves)
 		_wave_every_spin.set_value_no_signal(GameConfig.holdout_wave_every)
 		_wave_start_spin.set_value_no_signal(GameConfig.holdout_wave_start)
+		_wave_growth_spin.set_value_no_signal(GameConfig.holdout_wave_growth)
 		_waves_ai_opt.select(clampi(GameConfig.holdout_ai, 0, _waves_ai_opt.item_count - 1))
 		_sync_mode_rows()
 		if _preview_labels != null:
@@ -626,6 +627,7 @@ var _target_spin: SpinBox
 var _waves_spin: SpinBox
 var _wave_every_spin: SpinBox
 var _wave_start_spin: SpinBox
+var _wave_growth_spin: SpinBox
 var _waves_ai_opt: OptionButton
 var _mode_rows: Array = []   # [строка, режим, в котором она видна]
 
@@ -688,8 +690,16 @@ func _build_mode(parent: VBoxContainer) -> void:
 	_wave_start_spin.step = 0.05
 	_wave_start_spin.value = GameConfig.holdout_wave_start
 	_wave_start_spin.suffix = "× soldiers"
-	_wave_start_spin.tooltip_text = "Multiplier of all defenders’ surviving soldiers when a wave is announced. Each wave adds 0.1: wave 12 at the default 0.7 is 1.8 × your team’s soldier count."
-	_mode_rows.append([_row(box, "First wave:", _wave_start_spin), MatchMode.Kind.HOLDOUT])
+	_wave_start_spin.tooltip_text = "First-wave multiplier of all defenders' surviving soldiers. Later waves add the increase below for each wave."
+	_mode_rows.append([_row(box, "Wave multiplier:", _wave_start_spin), MatchMode.Kind.HOLDOUT])
+	_wave_growth_spin = SpinBox.new()
+	_wave_growth_spin.min_value = 0.0
+	_wave_growth_spin.max_value = MatchMode.WAVE_GROWTH_MAX
+	_wave_growth_spin.step = 0.05
+	_wave_growth_spin.value = GameConfig.holdout_wave_growth
+	_wave_growth_spin.suffix = "× per wave"
+	_wave_growth_spin.tooltip_text = "Added to the multiplier after each wave; 0 keeps it constant. Defaults: 0.7 + 0.1 × (wave - 1), so wave 12 is 1.8 × surviving defenders. Changes apply to future announcements."
+	_mode_rows.append([_row(box, "Multiplier increase:", _wave_growth_spin), MatchMode.Kind.HOLDOUT])
 	var leaders: Array = []
 	for p: int in AIPersonality.ALL:
 		leaders.append("AI - " + AIPersonality.name_of(p))
@@ -717,7 +727,7 @@ func _build_mode(parent: VBoxContainer) -> void:
 			_preview_labels.queue_redraw())
 	_sync_mode_rows()
 	var opts: Array[OptionButton] = [_mode_opt, _zones_opt, _waves_ai_opt]
-	var spins: Array[SpinBox] = [_target_spin, _waves_spin, _wave_every_spin, _wave_start_spin]
+	var spins: Array[SpinBox] = [_target_spin, _waves_spin, _wave_every_spin, _wave_start_spin, _wave_growth_spin]
 	if _is_host_net:
 		for o in opts:
 			o.item_selected.connect(func(_i: int) -> void: _broadcast_lobby())
@@ -1478,6 +1488,7 @@ func _load_spawn_settings(rules: Dictionary) -> void:
 	_waves_spin.set_value_no_signal(mode.waves_total)
 	_wave_every_spin.set_value_no_signal(mode.wave_every)
 	_wave_start_spin.set_value_no_signal(mode.wave_start)
+	_wave_growth_spin.set_value_no_signal(mode.wave_growth)
 	GameConfig.holdout_excluded_units = mode.excluded_units.duplicate()
 	var events: Dictionary = rules.get("events", rules.get("events_cfg", {}))
 	GameConfig.raider_excluded_units.assign(events.get("excluded_units", []))
@@ -1503,6 +1514,8 @@ func _store_spawn_settings() -> void:
 		mode["waves_total"] = GameConfig.holdout_waves
 		mode["wave_every"] = GameConfig.holdout_wave_every
 		mode["wave_start"] = GameConfig.holdout_wave_start
+		if GameConfig.holdout_wave_growth == MatchMode.WAVE_GROWTH: mode.erase("wave_growth")
+		else: mode["wave_growth"] = GameConfig.holdout_wave_growth
 		mode["excluded_units"] = GameConfig.holdout_excluded_units.duplicate()
 	rules["mode"] = mode
 	var waves := roster.slot(roster.waves_side())
@@ -2289,6 +2302,7 @@ func _commit_config() -> void:
 	GameConfig.holdout_waves = int(_waves_spin.value)
 	GameConfig.holdout_wave_every = int(_wave_every_spin.value)
 	GameConfig.holdout_wave_start = _wave_start_spin.value
+	GameConfig.holdout_wave_growth = _wave_growth_spin.value
 	GameConfig.holdout_ai = _waves_ai_opt.selected
 	# Пул событий из окна (item 3/5): вес 1 у выбранных, 0 у прочих.
 	var weights: Dictionary = {}

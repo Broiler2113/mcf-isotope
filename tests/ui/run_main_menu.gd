@@ -52,7 +52,7 @@ func _initialize() -> void:
 	ck(pages.current_tab == menu.PAGE_HOME, "it opens on the main list")
 
 	var home := pages.get_tab_control(menu.PAGE_HOME)
-	var want := ["New Game", "Map Editor", "Multiplayer", "Rejoin last match", "Saves & Replays", "Manual", "Report a Bug", "Settings", "Quit"]
+	var want := ["New Game", "Map Editor", "Multiplayer", "Rejoin last match", "Saves & Replays", "Manual", "Settings", "Quit"]
 	ck(_labels(home) == want, "every entry is one button in one column, in reading order (%s)"
 			% [_labels(home)])
 
@@ -73,7 +73,7 @@ func _initialize() -> void:
 	root.get_node("GameAudio").stop_all()
 	await create_timer(0.08).timeout
 	if fails.is_empty():
-		print("main menu: one column, nine entries, and every page finds its way home")
+		print("main menu: one column, eight entries, and every page finds its way home")
 		quit(0)
 		return
 	printerr("main menu: %d failure(s)" % fails.size())

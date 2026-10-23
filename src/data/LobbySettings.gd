@@ -24,7 +24,9 @@ static func with_rules(settings: Dictionary, rules: Dictionary) -> Dictionary:
 	out["ff"] = bool(rules.get("friendly_fire", out.get("ff", true)))
 	var mode: Dictionary = rules.get("mode", {})
 	var mode_keys := {"kind": "gm", "zone_count": "cz", "target": "ct", "waves_total": "hw",
-			"wave_every": "he", "wave_start": "hs", "excluded_units": "wx"}
+			"wave_every": "he", "wave_start": "hs", "wave_growth": "hg", "excluded_units": "wx"}
+	# Older rules omit growth because their increment was fixed at 0.1.
+	out["hg"] = mode.get("wave_growth", MatchMode.WAVE_GROWTH)
 	for key: String in mode_keys:
 		if mode.has(key): out[mode_keys[key]] = mode[key]
 	var events: Dictionary = rules.get("events", rules.get("events_cfg", {}))

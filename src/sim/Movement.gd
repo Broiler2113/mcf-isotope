@@ -59,6 +59,51 @@ static var _cache: Dictionary = {}
 static var _cache_version: int = -1
 static var _cache_grid: int = 0
 
+# A native search consumes immutable primitive data. Only the area it can reach is
+# packed, once per walking revision, so moving one soldier never requires copying
+# every GridCell on a large board. These bits are shared with pathfinding_kernel.cpp.
+const NATIVE_WALKABLE := 1
+const NATIVE_OCCUPIED := 2
+const NATIVE_HARD_BLOCKED := 4
+const NATIVE_AIRLOCK := 8
+const NATIVE_HEDGEHOG := 16
+const NATIVE_FIRE := 32
+const NATIVE_CORPSES := 64
+static var _native_grid := 0
+static var _native_version := -1
+static var _native_flags := PackedByteArray()
+static var _native_heights := PackedFloat64Array()
+static var _native_valid := PackedByteArray()
+
+static func _prepare_native(grid: Grid, start: Vector2i, budget: int) -> void:
+	var count := grid.width * grid.height
+	if _native_grid != grid.get_instance_id() or _native_version != GridCell.walk_version:
+		_native_grid = grid.get_instance_id()
+		_native_version = GridCell.walk_version
+		_native_flags.resize(count)
+		_native_heights.resize(count)
+		_native_valid.resize(count)
+		_native_valid.fill(0)
+	# A hedgehog crosses two cells. Account for its rule cost as well as normal steps.
+	var radius := maxi(0, budget) * maxi(1, ceili(2.0 / MCF.HEDGEHOG_JUMP_COST))
+	var cells := grid.cells_flat()
+	for y in range(maxi(0, start.y - radius), mini(grid.height, start.y + radius + 1)):
+		for x in range(maxi(0, start.x - radius), mini(grid.width, start.x + radius + 1)):
+			var i := y * grid.width + x
+			if _native_valid[i] != 0: continue
+			var cell := cells[i]
+			var flags := NATIVE_WALKABLE if cell.walkable_terrain() else 0
+			if cell.occupant != null: flags |= NATIVE_OCCUPIED
+			if cell.vehicle_id != -1 or cell.corpse_count > 0: flags |= NATIVE_HARD_BLOCKED
+			# Normal entry requires exactly zero; jump landings use blocks_walk (> 0).
+			if cell.corpse_count != 0: flags |= NATIVE_CORPSES
+			if cell.airlock_opens(): flags |= NATIVE_AIRLOCK
+			if cell.feature_id == MCF.FEATURE_HEDGEHOG: flags |= NATIVE_HEDGEHOG
+			if cell.on_fire: flags |= NATIVE_FIRE
+			_native_flags[i] = flags
+			_native_heights[i] = cell.cover_height
+			_native_valid[i] = 1
+
 ## avoid_fire — маршрут ОБХОДИТ горящие клетки (#1): в них можно войти, но нельзя
 ## ИЗ них выйти, поэтому они остаются в разливе как тупики. Это та же схема
 ## «достижимо, но терминально», что уже используется для дрона на стене: игрок
@@ -95,6 +140,19 @@ static func reachable(grid: Grid, start: Vector2i, budget: int,
 	var partial := stop_at != Vector2i(-1, -1)
 	if hit != null:
 		return hit
+	var kernel := NativeKernels.pathfinding()
+	if kernel != null and budget < (1 << 30):
+		_prepare_native(grid, start, budget)
+		var packed: Array = kernel.reachable(Vector2i(grid.width, grid.height), start, budget,
+				_native_flags, _native_heights, {"avoid_fire": avoid_fire, "avoid": avoid_cells,
+				"free": free_cells, "stop": stop_at, "flat": MCF.FLAT_MOVE_COST,
+				"jump": MCF.HEDGEHOG_JUMP_COST, "climb": MCF.CLIMB_COST})
+		if packed.size() == 2:
+			var native_result := Reachability.new()
+			native_result.cost = packed[0]
+			native_result.came_from = packed[1]
+			if not has_free and not partial: _cache[key] = native_result
+			return native_result
 	var result := Reachability.new()
 	var cost: Dictionary = result.cost
 	var came_from: Dictionary = result.came_from

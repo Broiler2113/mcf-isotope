@@ -216,6 +216,26 @@ func plan(state: GameState, r: GameActionResolver, field: GeoField,
 	var rows: Array = []
 	for u: UnitInstance in actors:
 		_candidates_for(u, rows)
+	_assign_candidates(rows)
+	# Кому клетка так и не досталась — остаётся на месте (лишь бы не мешал).
+	for u: UnitInstance in actors:
+		if not destinations.has(u.id):
+			destinations[u.id] = u.coord
+			dest_score[u.id] = 0.0
+
+	order = _order_activations(actors, occupied_by, vehicle_rows)
+
+## Native assignment keeps the engine's score-only tie sort and all capacity checks.
+## The reference implementation stays here for differential tests and source downloads.
+func _assign_candidates(rows: Array) -> void:
+	var native := NativeKernels.ai()
+	if native != null:
+		var selected: Array = native.assign_candidates(rows, _gun_spread, MCF.CANNON_BLAST_RADIUS,
+				GUN_SPREAD_MAX, _zone_of, _zone_cap)
+		if selected.size() == 2:
+			destinations.merge(selected[0])
+			dest_score.merge(selected[1])
+			return
 	# Жадная раздача: лучшее предложение по всей армии забирается первым.
 	rows.sort_custom(func(a: Array, b: Array) -> bool: return a[0] > b[0])
 	var taken: Dictionary = {}
@@ -243,13 +263,6 @@ func plan(state: GameState, r: GameActionResolver, field: GeoField,
 		taken[coord] = true
 		destinations[uid] = coord
 		dest_score[uid] = row[0]
-	# Кому клетка так и не досталась — остаётся на месте (лишь бы не мешал).
-	for u: UnitInstance in actors:
-		if not destinations.has(u.id):
-			destinations[u.id] = u.coord
-			dest_score[u.id] = 0.0
-
-	order = _order_activations(actors, occupied_by, vehicle_rows)
 
 func _apply_weights(state: GameState) -> void:
 	var w: Dictionary = AIPersonality.CLASSIC if MCF.is_neutral(owner) \
@@ -684,6 +697,15 @@ func _build_line_targets() -> void:
 	var grid := _state.grid
 	var gw := grid.width
 	var gh := grid.height
+	var native := NativeKernels.ai()
+	if native != null:
+		var xy := PackedInt32Array()
+		for e: UnitInstance in _enemies:
+			_enemy_value[e.id] = _unit_value(e)
+			xy.append(e.coord.x)
+			xy.append(e.coord.y)
+		_line_targets = native.line_targets(gw, gh, _enemies, xy)
+		return
 	for e: UnitInstance in _enemies:
 		_enemy_value[e.id] = _unit_value(e)
 		var ex: int = e.coord.x
