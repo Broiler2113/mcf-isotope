@@ -95,6 +95,12 @@ func _sync_lighting() -> void:
 		if _before_layer != null: _before_layer.queue_redraw()
 	if state != null:
 		_sync_time_tint(Color.WHITE if Ui.dynamic_lighting else LightManager.flat_tint(state.env, state.time_of_day))
+	# First person owns its light maps; the covered 2D map must not render another.
+	if _fp != null:
+		if is_instance_valid(_lighting):
+			_lighting.hide()
+			_lighting._vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
+		return
 	if not (Ui.dynamic_lighting):
 		if is_instance_valid(_lighting):
 			_lighting.free()

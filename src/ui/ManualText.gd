@@ -249,6 +249,8 @@ A successful cheat still clears ordinary Undo and Redo. Before changing a scenar
 
 [b]game step back[/b] and [b]game step forward[/b] let the host move across recorded actions, including turns and cheats. [b]game history[/b] shows the current position. A new live action replaces the forward branch. Restoring pauses AI until Resume is pressed. These controls require cheats and remain available after a match finishes.
 
+[b]time morning[/b], [b]time day[/b], [b]time evening[/b] and [b]time night[/b] change the time and lighting on town and field maps. The first-person sky, sunlight, moon and lamps update while the view is open. These commands require gameplay cheat permission and are shared with other players. [b]world time[/b] remains an alias.
+
 [h]AI and players[/h]
 The host can use [b]ai pause #2[/b], [b]ai step #2[/b] and [b]ai resume #2[/b]. A step lets the active AI make exactly one decision, including an end-turn or a rejected action, then pauses it again. Other AI players keep their own settings. [b]kick #2[/b] disconnects a human guest; [b]ban #2[/b] also blocks their saved reconnect identity until this hosted session closes. These commands do not target units or AI slots.
 

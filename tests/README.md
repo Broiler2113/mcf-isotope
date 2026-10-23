@@ -56,11 +56,24 @@ FFmpeg is installed. `tests/render_fix11.gd` needs a display (or Xvfb) and FFmpe
 it checks first-person fog stability and produces 1x/4x MP4 exports under `/tmp`.
 
 `xvfb-run -a godot --path . --rendering-method gl_compatibility --script
-res://tests/render_label_zoom.gd` compares actual ID and coordinate glyph pixels
-through pinch zoom from 0.12x to 2.5x, including fractional camera positions,
-unit and corpse IDs, and vehicle IDs. The text must retain its screen size and
-shape while its anchor follows the map. The Linux CI job runs this rendered
+res://tests/render_label_zoom.gd` checks rendered labels through pinch zoom from
+0.12x to 2.5x, including fractional camera positions, unit and corpse IDs, long
+vehicle IDs and stacked bodies. Labels must stay inside their own tile and
+shrink with it at distant zoom. Every visible tile must retain its coordinates,
+including on a fully zoomed-out 160x120 map. The Linux CI job runs this rendered
 check automatically.
+
+`ui/run_first_person_streaming.gd` checks incremental mesh and floor construction,
+changes arriving during preparation, exact ground-stroke pixels, and sparse effect
+updates. `render_first_person_fog.gd` places a bright marker behind unexplored fog
+and verifies that it is completely occluded at walking and flying heights. The
+marker becomes visible when the fog mesh is disabled, providing a negative control.
+Linux CI runs both rendered label and fog checks.
+
+`bench/run_first_person_render.gd` profiles a large town at the 160 m render
+distance, reporting frame and CPU percentiles, draw calls, and triangles for still
+and moving views. Run it with the GL Compatibility renderer and a real display
+(or Xvfb); software-renderer timings are not representative of a hardware GPU.
 
 ```
 bash tests/run_all.sh            # verify

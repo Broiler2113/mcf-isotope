@@ -165,6 +165,9 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, fog_on: bool) -> voi
 		_lod.show_behind_parent = true
 		_lod.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 		add_child(_lod)
+		if _fp != null:
+			_fp_board_visibility[_lod] = true
+			_lod.hide()
 	var grid := state.grid
 	var gw := grid.width
 	var gh := grid.height

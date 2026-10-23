@@ -36,5 +36,16 @@ func run() -> void:
 	command(r, "world winter on")
 	command(r, "world time night")
 	ck(r.state.winter and r.state.time_of_day == "night", "world presentation state")
+	for environment: String in ["town", "field"]:
+		r.state.env = environment
+		for time: String in MapData.TIMES:
+			command(r, "time " + time)
+			ck(r.state.time_of_day == time, "simple time command: " + environment + "/" + time)
+			var restored := StateCodec.decode(JSON.parse_string(JSON.stringify(StateCodec.encode(r.state))))
+			ck(restored.time_of_day == time, "time survives saved state")
+	for environment: String in ["station", "bunker", "asteroid"]:
+		r.state.env = environment
+		rejected(r, "time day")
+	rejected(r, "time midnight")
 	r.state.env = "asteroid"
 	rejected(r, "world winter on")

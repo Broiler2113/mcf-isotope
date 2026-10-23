@@ -56,29 +56,7 @@ func run() -> void:
 	GameConfig.fog_mode = MCF.Fog.OFF
 	main.state.turns.active_index = main.state.turns.round_order.find(0)
 	main._kill_pan_tween()
-	var measured: Array[Rect2i] = []
-	for zoom: float in [0.5, 1.0, 3.0]:
-		main.zoom = zoom
-		main.pan = Vector2(140, 100) - main._cell_origin(Vector2i(8, 8)) * zoom
-		main._cheat_coords = false
-		main.queue_redraw()
-		await process_frame
-		await RenderingServer.frame_post_draw
-		var plain := root.get_texture().get_image()
-		main._cheat_coords = true
-		await process_frame
-		await RenderingServer.frame_post_draw
-		var labeled := root.get_texture().get_image()
-		var low := Vector2i(999, 999)
-		var high := Vector2i(-1, -1)
-		for y in range(100, 119):
-			for x in range(140, 179):
-				if plain.get_pixel(x, y) != labeled.get_pixel(x, y):
-					low = low.min(Vector2i(x, y))
-					high = high.max(Vector2i(x, y))
-		measured.append(Rect2i(low, high - low + Vector2i.ONE))
-	ck(measured[0] == measured[1] and measured[1] == measured[2] and measured[0].size.y > 8, "actual coordinate label pixels keep the same bounds across zoom: %s" % str(measured))
-	main._cheat_coords = false
+	# Full rendered tile-label coverage lives in render_label_zoom.gd.
 	var settings: Node = load("res://src/ui/SettingsWindow.gd").open(main)
 	for i in 5: await process_frame
 	await RenderingServer.frame_post_draw

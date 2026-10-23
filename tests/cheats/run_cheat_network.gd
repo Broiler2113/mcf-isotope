@@ -10,6 +10,9 @@ func run() -> void:
 	guest.outgoing.connect(func(msg: Dictionary): var wire: Dictionary = JSON.parse_string(JSON.stringify(msg)); wire._from = 2; host.receive(wire))
 	guest.submit_local(CheatIntent.new("unit_ap", {"unit": 1, "value": 7}, 0))
 	ck(r.state.get_unit(1).remaining_ap == 7 and guest_state.digest_hash() == r.state.digest_hash(), "authorized guest acts outside their turn; issuer authenticated")
+	var parsed := CheatCommands.parse("time evening", guest_state, 1)
+	guest.submit_local(CheatIntent.new(parsed.op, parsed.args, 1))
+	ck(r.state.time_of_day == "evening" and guest_state.time_of_day == "evening" and guest_state.digest_hash() == r.state.digest_hash(), "authorized time changes synchronize host and guest")
 	var before := r.state.digest_hash()
 	for peer in [-1, 3]:
 		host.receive({"k": NetGame.K_INTENT, "_from": peer, "i": IntentCodec.encode(CheatIntent.new("unit_ap", {"unit": 0, "value": 9}, 0))})

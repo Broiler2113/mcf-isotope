@@ -47,10 +47,10 @@ func run() -> void:
 	var overlay := CheatOverlay.new()
 	overlay.main = main
 	root.add_child(overlay)
-	var size := overlay.coordinate_box(Vector2i(3, 3)).size
 	for zoom in [0.3, 1.0, 3.0]:
 		main.zoom = zoom
-		ck(overlay.coordinate_box(Vector2i(3, 3)).size == size, "coordinate labels keep constant pixel dimensions")
+		var tile := Rect2(main._cell_screen(Vector2i(3, 3)), Vector2.ONE * main.CELL * zoom)
+		ck(tile.encloses(overlay.coordinate_box(Vector2i(3, 3))), "coordinate labels stay within their own cell")
 	overlay.free()
 	console.free()
 	main._cheat_console = null

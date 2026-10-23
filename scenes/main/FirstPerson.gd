@@ -65,12 +65,19 @@ var _vis_tex: ImageTexture
 var _vis_spare: ImageTexture
 var _vis_extra_materials: Array[ShaderMaterial] = []
 var _vis_key: Array = []
+var _fog_boundary: FirstPersonFog
+var _environment_root: Node3D
+var _environment_time := ""
+var _outer_ground: MeshInstance3D
 var _vis_prev: Array[Vector2i] = []
 var _vis_timer := 0.0
 var _solid_img: Image
 var _solid_tex: ImageTexture
 var _chunks := {}          # 3D chunk -> {"node", "doors", "tops", "tiles": {tcc: floor texture}}
+var _chunk_jobs := {}
 var _floor_tex := {}       # tile chunk -> its first-person floor texture
+var _floor_jobs := {}
+var _floor_refresh := {}
 var _mats := {"floor": {}, "floor_cut": {}}
 var _all_mats: Array[ShaderMaterial] = []
 var _board_sh: Shader
@@ -90,6 +97,8 @@ var _gas_mm: MultiMeshInstance3D
 var _smoke_mm: MultiMeshInstance3D
 var _corpse_mm: MultiMeshInstance3D
 var _cloud_timer := 0.0
+var _cloud_cells := {}
+var _cloud_version := -1
 var _feature_timer := 0.0
 var _map_timer := 0.0
 var _minimap: Control
@@ -157,6 +166,9 @@ func _ready() -> void:
 	_build_solid()
 	_look_ver = GridCell.look_version
 	_sync_vis(true)
+	_fog_boundary = FirstPersonFog.new()
+	_world.add_child(_fog_boundary)
+	_fog_boundary.update_visibility(_vis_img)
 	var tod: String = state.time_of_day
 	_sun_on = env in ["town", "field"] and tod in ["day", "morning", "evening"]
 	_build_shaders()
@@ -181,6 +193,10 @@ func _ready() -> void:
 func leave() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	left.emit()
+
+func _exit_tree() -> void:
+	for job: Dictionary in _chunk_jobs.values(): job.node.free()
+	_chunk_jobs.clear()
 
 # --- Input -------------------------------------------------------------------------------
 
@@ -220,6 +236,7 @@ func _process(delta: float) -> void:
 	if _vis_timer <= 0.0:
 		_vis_timer = 0.12
 		_sync_vis(false)
+	_sync_environment()
 	_update_light(false)
 	_take_look_changes()
 	_refresh_floors()
@@ -256,6 +273,7 @@ func _place_camera() -> void:
 	_cam.fov = clampf(float(Ui.fp_fov), 50.0, 120.0)
 	_cam.position = pos + Vector3(0, EYE, 0)
 	_cam.rotation = Vector3(pitch, yaw, 0)
+	_fog_boundary.set_view(pos, view_distance())
 	if _snow != null:
 		_snow.position = pos + Vector3(0, 9.0, 0)
 
@@ -500,6 +518,7 @@ func _upload_visibility() -> void:
 	_vis_spare = previous
 	for material: ShaderMaterial in _all_mats: material.set_shader_parameter("vis", _vis_tex)
 	for material: ShaderMaterial in _vis_extra_materials: material.set_shader_parameter("sight", _vis_tex)
+	if _fog_boundary != null: _fog_boundary.update_visibility(_vis_img)
 
 func _seen(c: Vector2i) -> bool:
 	return grid.in_bounds(c) and _vis_img.get_pixel(c.x, c.y).r > 0.75
@@ -531,6 +550,8 @@ func _take_look_changes() -> void:
 	if _look_ver < GridCell.look_log_base:
 		for cc: Vector2i in _chunks:
 			_dirty[cc] = true
+		for cc: Vector2i in _chunk_jobs:
+			_dirty[cc] = true
 	else:
 		var ch := GridCell.look_changes
 		var i: int = (_look_ver - GridCell.look_log_base) * 2
@@ -554,7 +575,7 @@ func _take_look_changes() -> void:
 		for dy in range(-3, 4, 3):
 			for dx in range(-3, 4, 3):
 				var cc := Vector2i((c.x + dx) / FirstPersonBoard.CH, (c.y + dy) / FirstPersonBoard.CH)
-				if _chunks.has(cc):
+				if _chunks.has(cc) or _chunk_jobs.has(cc):
 					_dirty[cc] = true
 	if solid_dirty:
 		_solid_tex.update(_solid_img)
@@ -564,13 +585,13 @@ func _take_look_changes() -> void:
 # --- Shaders, materials, sky and light ---------------------------------------------------------
 
 func _build_shaders() -> void:
-	_board_sh = Shader.new()
+	if _board_sh == null: _board_sh = Shader.new()
 	_board_sh.code = FirstPersonBoard.sun_shader_code() if _sun_on else FirstPersonBoard.SHADER
-	_bill_sh = Shader.new()
+	if _bill_sh == null: _bill_sh = Shader.new()
 	_bill_sh.code = FirstPersonBoard.BILLBOARD
 	var g := _board_sh.code.replace("render_mode cull_back, depth_draw_opaque", "render_mode cull_disabled, blend_mix, depth_draw_opaque")
 	g = g.replace("		ALBEDO = c.rgb * lit * k;", "		ALBEDO = c.rgb * lit * k;\n		ALPHA = 0.3;")
-	_glass_sh = Shader.new()
+	if _glass_sh == null: _glass_sh = Shader.new()
 	_glass_sh.code = g
 
 ## Every board material shares the sight map, the shade map and the light map.
@@ -630,7 +651,7 @@ func _refresh_floors() -> void:
 	for tcc: Vector2i in _floor_tex:
 		var key := Vector3i(tcc.x, tcc.y, TerrainTiles.FP_RES)
 		if tiles._dirty.has(tcc) or not tiles._chunks.has(key) or tiles._chunks[key]["floor"] != _floor_tex[tcc]:
-			_tile_floor(tcc)
+			_floor_refresh[tcc] = true
 			# New rubble or knocked items there: the chunks over it gather them up.
 			var n := (tiles.decals.get(tcc, []) as Array).size()
 			var per := TerrainTiles.C / FirstPersonBoard.CH
@@ -639,6 +660,21 @@ func _refresh_floors() -> void:
 					var cc := tcc * per + Vector2i(dx, dy)
 					if _chunks.has(cc) and int(_chunks[cc]["decal_n"]) != n:
 						_dirty[cc] = true
+
+func _prepare_floor(tcc: Vector2i, deadline: int) -> bool:
+	var tiles: TerrainTiles = main._tiles
+	var key := Vector3i(tcc.x, tcc.y, TerrainTiles.FP_RES)
+	if tiles._dirty.has(tcc): _floor_jobs.erase(tcc)
+	if _floor_jobs.has(tcc) and (_floor_jobs[tcc].source != tiles or _floor_jobs[tcc].generation != tiles._generation):
+		_floor_jobs.erase(tcc)
+	if not tiles._dirty.has(tcc) and tiles._chunks.has(key):
+		_tile_floor(tcc)
+		return true
+	if not _floor_jobs.has(tcc): _floor_jobs[tcc] = tiles.begin_floor_job(tcc)
+	if not tiles.advance_floor_job(_floor_jobs[tcc], deadline): return false
+	_floor_jobs.erase(tcc)
+	_tile_floor(tcc)
+	return true
 
 ## The light map for the cells around you: the battle screen's lamps, fire and flashes, and
 ## the drones in the air — redrawn only when something in it changed.
@@ -679,7 +715,23 @@ func _commit_light_map(target: LightManager, texture: Texture2D, rect: Rect2i) -
 		for key: String in params:
 			material.set_shader_parameter(key, params[key])
 
+func _sync_environment() -> void:
+	if _environment_time == state.time_of_day: return
+	_sun_on = env in ["town", "field"] and state.time_of_day in ["day", "morning", "evening"]
+	_build_shaders()
+	for material: ShaderMaterial in _all_mats:
+		material.set_shader_parameter("sun_k", SUN_K if _sun_on else 0.0)
+	main._tiles.set_time_of_day(state.time_of_day)
+	# Lamp models include emissive surfaces, so refresh them with the new time.
+	for cc: Vector2i in _chunks: _dirty[cc] = true
+	for cc: Vector2i in _chunk_jobs: _dirty[cc] = true
+	_build_environment()
+
 func _build_environment() -> void:
+	if _environment_root != null: _environment_root.free()
+	_environment_root = Node3D.new()
+	_world.add_child(_environment_root)
+	_environment_time = state.time_of_day
 	var e := Environment.new()
 	var tod: String = state.time_of_day
 	var night := tod in ["night", ""]
@@ -713,7 +765,9 @@ func _build_environment() -> void:
 			e.fog_light_color = pm.sky_horizon_color
 			e.fog_density = 0.016 if night else 0.008
 			e.fog_sky_affect = 0.0
-			_world.add_child(_far_ground())
+			if _outer_ground == null:
+				_outer_ground = _far_ground()
+				_world.add_child(_outer_ground)
 			if _sun_on:
 				var sun := DirectionalLight3D.new()
 				sun.light_color = Color.WHITE
@@ -724,9 +778,9 @@ func _build_environment() -> void:
 				sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL if OS.get_name() == "Web" else DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
 				sun.shadow_blur = 1.2
 				sun.shadow_bias = 0.04
-				_world.add_child(sun)
+				_environment_root.add_child(sun)
 			elif night:
-				_world.add_child(_moon())
+				_environment_root.add_child(_moon())
 		"asteroid":
 			var sky2 := Sky.new()
 			var stars := PanoramaSkyMaterial.new()
@@ -750,7 +804,7 @@ func _build_environment() -> void:
 				e.fog_enabled = false
 	var we := WorldEnvironment.new()
 	we.environment = e
-	_world.add_child(we)
+	_environment_root.add_child(we)
 
 ## The land goes on past the map (as on the battle screen, where the ground runs on behind
 ## the board): one wide plane of the same turf or earth, just under the board's floor.
@@ -922,6 +976,10 @@ static func _roof_texture(e: String, winter := false) -> ImageTexture:
 ## Build missing and changed chunks nearest first, within `budget` microseconds; drop far ones.
 func _stream_chunks(budget: int) -> void:
 	var t0 := Time.get_ticks_usec()
+	var deadline := t0 + budget
+	for tcc: Vector2i in _floor_refresh.keys():
+		if not _prepare_floor(tcc, deadline): return
+		_floor_refresh.erase(tcc)
 	var here := Vector2i(floori(pos.x) / FirstPersonBoard.CH, floori(pos.z) / FirstPersonBoard.CH)
 	var reach := view_distance() / FirstPersonBoard.CH + 1
 	var want: Array = []
@@ -930,19 +988,54 @@ func _stream_chunks(budget: int) -> void:
 			var cc := here + Vector2i(dx, dy)
 			if cc.x < 0 or cc.y < 0 or cc.x * FirstPersonBoard.CH >= grid.width or cc.y * FirstPersonBoard.CH >= grid.height:
 				continue
-			if not _chunks.has(cc) or _dirty.has(cc):
+			if not _chunks.has(cc) or _dirty.has(cc) or _chunk_jobs.has(cc):
 				want.append(cc)
 	want.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return a.distance_squared_to(here) < b.distance_squared_to(here))
 	for cc: Vector2i in want:
 		if Time.get_ticks_usec() - t0 > budget:
 			break
-		_build_chunk(cc)
+		var tcc := Vector2i(cc.x * FirstPersonBoard.CH / TerrainTiles.C, cc.y * FirstPersonBoard.CH / TerrainTiles.C)
+		if not _prepare_floor(tcc, deadline): break
+		if Time.get_ticks_usec() >= deadline: break
+		if not _advance_chunk(cc, deadline): break
 	# Far chunks go; they come back when you do.
 	for cc: Vector2i in _chunks.keys():
 		if maxi(absi(cc.x - here.x), absi(cc.y - here.y)) > reach + 2:
 			_drop_chunk(cc)
+	for cc: Vector2i in _chunk_jobs.keys():
+		if maxi(absi(cc.x - here.x), absi(cc.y - here.y)) > reach + 2:
+			_discard_chunk_job(cc)
+
+func _chunk_context() -> Dictionary:
+	var tiles: TerrainTiles = main._tiles
+	return {"env": env, "mats": _mats, "tod": state.time_of_day, "winter": state.winter,
+		"look": func(c: Vector2i, fid: String) -> Array: return tiles.look_of(c, fid),
+		"furniture_look": tiles.furniture_look}
+
+func _advance_chunk(cc: Vector2i, deadline: int) -> bool:
+	if _dirty.has(cc): _discard_chunk_job(cc)
+	if not _chunk_jobs.has(cc):
+		_dirty.erase(cc)
+		var ctx := _chunk_context()
+		var tcc := Vector2i(cc.x * FirstPersonBoard.CH / TerrainTiles.C, cc.y * FirstPersonBoard.CH / TerrainTiles.C)
+		ctx["decals"] = main._tiles.decals.get(tcc, [])
+		ctx["map_decals"] = main._tiles.map_decals.get(tcc, [])
+		_chunk_jobs[cc] = FirstPersonBoard.begin_build(grid, cc, _roof, ctx)
+	var job: Dictionary = _chunk_jobs[cc]
+	if not job.advance.call(deadline): return false
+	if Time.get_ticks_usec() >= deadline: return false
+	var built: Dictionary = job.finish.call()
+	_chunk_jobs.erase(cc)
+	_install_chunk(cc, built)
+	return true
+
+func _discard_chunk_job(cc: Vector2i) -> void:
+	if _chunk_jobs.has(cc):
+		_chunk_jobs[cc].node.free()
+		_chunk_jobs.erase(cc)
 
 func _build_chunk(cc: Vector2i) -> void:
+	_discard_chunk_job(cc)
 	_dirty.erase(cc)
 	var ch := FirstPersonBoard.CH
 	var tcc := Vector2i(cc.x * ch / TerrainTiles.C, cc.y * ch / TerrainTiles.C)
@@ -952,11 +1045,15 @@ func _build_chunk(cc: Vector2i) -> void:
 			"look": func(c: Vector2i, fid: String) -> Array: return tiles.look_of(c, fid),
 			"furniture_look": tiles.furniture_look,
 			"decals": tiles.decals.get(tcc, []), "map_decals": tiles.map_decals.get(tcc, [])})
+	_install_chunk(cc, built)
+
+func _install_chunk(cc: Vector2i, built: Dictionary) -> void:
+	var tcc := Vector2i(cc.x * FirstPersonBoard.CH / TerrainTiles.C, cc.y * FirstPersonBoard.CH / TerrainTiles.C)
 	_drop_chunk(cc)
 	var node: Node3D = built["node"]
 	_board_node.add_child(node)
 	_chunks[cc] = {"node": node, "doors": built["doors"], "tops": built["tops"],
-			"decal_n": (tiles.decals.get(tcc, []) as Array).size()}
+			"decal_n": (main._tiles.decals.get(tcc, []) as Array).size()}
 
 func _drop_chunk(cc: Vector2i) -> void:
 	if _chunks.has(cc):
@@ -1489,29 +1586,41 @@ func _vehicle_node(veh: Vehicle) -> Node3D:
 # --- Fire, gas and smoke; drone stations and mines ---------------------------------------------
 
 func _sync_clouds() -> void:
+	# Update a sparse index from the appearance journal instead of repeatedly
+	# scanning every cell inside the render distance.
+	if _cloud_version < GridCell.look_log_base:
+		_cloud_cells.clear()
+		for cell: GridCell in state.grid.cells_flat():
+			if cell.on_fire or cell.gas or cell.smoke: _cloud_cells[cell.coord] = true
+	elif _cloud_version != GridCell.look_version:
+		var changes := GridCell.look_changes
+		for i in range((_cloud_version - GridCell.look_log_base) * 2, changes.size(), 2):
+			var at := Vector2i(changes[i], changes[i + 1])
+			if not state.grid.in_bounds(at): continue
+			var cell := state.grid.cell(at)
+			if cell.on_fire or cell.gas or cell.smoke: _cloud_cells[at] = true
+			else: _cloud_cells.erase(at)
+	_cloud_version = GridCell.look_version
 	var here := Vector2i(floori(pos.x), floori(pos.z))
 	var fire: Array[Vector2i] = []
 	var gas: Array[Vector2i] = []
 	var smoke: Array[Vector2i] = []
 	var r := view_distance()
-	for y in range(maxi(0, here.y - r), mini(grid.height, here.y + r + 1)):
-		for x in range(maxi(0, here.x - r), mini(grid.width, here.x + r + 1)):
-			var c := state.grid.cell_fast(x, y)
-			if not (c.on_fire or c.gas or c.smoke):
-				continue
-			var at := Vector2i(x, y)
-			if not _seen(at):
-				continue
-			if c.on_fire: fire.append(at)
-			if c.gas: gas.append(at)
-			elif c.smoke: smoke.append(at)
+	for at: Vector2i in _cloud_cells:
+		if absi(at.x - here.x) > r or absi(at.y - here.y) > r or not _seen(at): continue
+		var c := state.grid.cell(at)
+		if c.on_fire: fire.append(at)
+		if c.gas: gas.append(at)
+		elif c.smoke: smoke.append(at)
 	_fill(_fire_mm, fire, 0.25, 1.0)
 	_fill(_gas_mm, gas, FirstPersonBoard.CEIL * 0.5, FirstPersonBoard.CEIL)
 	_fill(_smoke_mm, smoke, FirstPersonBoard.CEIL * 0.5, FirstPersonBoard.CEIL)
 
 func _fill(mi: MultiMeshInstance3D, cells: Array[Vector2i], y: float, hgt: float) -> void:
+	if mi.get_meta("cells", []) == cells: return
+	mi.set_meta("cells", cells)
 	var mm := mi.multimesh
-	mm.instance_count = cells.size()
+	if mm.instance_count != cells.size(): mm.instance_count = cells.size()
 	for i in cells.size():
 		var b := Basis().scaled(Vector3(1, hgt, 1)) if hgt != 1.0 else Basis()
 		mm.set_instance_transform(i, Transform3D(b, Vector3(cells[i].x + 0.5, y, cells[i].y + 0.5)))

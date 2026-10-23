@@ -327,6 +327,13 @@ static func material(shader: Shader, p: Dictionary) -> ShaderMaterial:
 ## accent)), "look": Callable(cell, fid) -> [mask, inner, k, corner], "tod", "decals" (the
 ## battle screen's settled cosmetics in this area), "map_decals".
 static func build(grid: Grid, cc: Vector2i, roof: PackedByteArray, ctx: Dictionary) -> Dictionary:
+	var job := begin_build(grid, cc, roof, ctx)
+	job.advance.call(9223372036854775807)
+	return job.finish.call()
+
+## A chunk can be prepared over several frames without exposing a half-built
+## board. Its completed node is attached only after all cells and models are ready.
+static func begin_build(grid: Grid, cc: Vector2i, roof: PackedByteArray, ctx: Dictionary) -> Dictionary:
 	var node := Node3D.new()
 	var env: String = ctx["env"]
 	var mats: Dictionary = ctx["mats"]
@@ -349,8 +356,14 @@ static func build(grid: Grid, cc: Vector2i, roof: PackedByteArray, ctx: Dictiona
 	var y0 := cc.y * CH
 	var x1 := mini(x0 + CH, w)
 	var y1 := mini(y0 + CH, grid.height)
-	for y in range(y0, y1):
-		for x in range(x0, x1):
+	var cursor := [x0, y0]
+	var advance := func(deadline: int) -> bool:
+		while cursor[1] < y1:
+			if Time.get_ticks_usec() >= deadline: return false
+			var x: int = cursor[0]
+			var y: int = cursor[1]
+			cursor[0] += 1
+			if cursor[0] == x1: cursor[0] = x0; cursor[1] += 1
 			var c := grid.cell_fast(x, y)
 			var at := Vector2i(x, y)
 			var tcc := Vector2i(x / TerrainTiles.C, y / TerrainTiles.C)
@@ -407,30 +420,33 @@ static func build(grid: Grid, cc: Vector2i, roof: PackedByteArray, ctx: Dictiona
 				_piece(models, glass, counts, grid, at, fid, ctx, cap, tops)
 				continue
 			_feature(models, counts, grid, at, fid, env)
-	# Small things lying about: the map's items, knocked items and rubble.
-	_items(loose, grid, cc, tops)
-	_decals(loose, ctx.get("decals", []), Rect2(x0, y0, x1 - x0, y1 - y0))
-	_decals(loose, ctx.get("map_decals", []), Rect2(x0, y0, x1 - x0, y1 - y0))
-	if not loose.empty():
-		models.append_from(loose.mesh(), 0, Transform3D.IDENTITY)
-		counts["models"] += 1
-	if not loose_glass.empty():
-		glass.append_from(loose_glass.mesh(), 0, Transform3D.IDENTITY)
-		counts["glass"] += 1
-	for tcc: Vector2i in floors:
-		_add(node, (floors[tcc] as FirstPersonModels.Sink).mesh(), mats["floor"].get(tcc), false)
-	for tcc: Vector2i in floors_cut:
-		_add(node, (floors_cut[tcc] as FirstPersonModels.Sink).mesh(), mats["floor_cut"].get(tcc), false)
-	_add(node, ceil_s.mesh(), mats["ceiling"], false)
-	_add(node, roof_s.mesh(), mats["roof"], true)
-	for key: String in walls:
-		var parts := key.split("|")
-		_add(node, (walls[key] as FirstPersonModels.Sink).mesh(), mats["wall"].call(parts[0], Color.html(parts[1]) if parts[1] != "" else Color(0, 0, 0, 0)), true)
-	if counts["models"] > 0:
-		_add(node, models.commit(), mats["models"], true)
-	if counts["glass"] > 0:
-		_add(node, glass.commit(), mats["glass"], false)
-	return {"node": node, "doors": doors, "tops": tops}
+		return true
+	var finish := func() -> Dictionary:
+		# Small things lying about: the map's items, knocked items and rubble.
+		_items(loose, grid, cc, tops)
+		_decals(loose, ctx.get("decals", []), Rect2(x0, y0, x1 - x0, y1 - y0))
+		_decals(loose, ctx.get("map_decals", []), Rect2(x0, y0, x1 - x0, y1 - y0))
+		if not loose.empty():
+			models.append_from(loose.mesh(), 0, Transform3D.IDENTITY)
+			counts["models"] += 1
+		if not loose_glass.empty():
+			glass.append_from(loose_glass.mesh(), 0, Transform3D.IDENTITY)
+			counts["glass"] += 1
+		for tcc: Vector2i in floors:
+			_add(node, (floors[tcc] as FirstPersonModels.Sink).mesh(), mats["floor"].get(tcc), false)
+		for tcc: Vector2i in floors_cut:
+			_add(node, (floors_cut[tcc] as FirstPersonModels.Sink).mesh(), mats["floor_cut"].get(tcc), false)
+		_add(node, ceil_s.mesh(), mats["ceiling"], false)
+		_add(node, roof_s.mesh(), mats["roof"], true)
+		for key: String in walls:
+			var parts := key.split("|")
+			_add(node, (walls[key] as FirstPersonModels.Sink).mesh(), mats["wall"].call(parts[0], Color.html(parts[1]) if parts[1] != "" else Color(0, 0, 0, 0)), true)
+		if counts["models"] > 0:
+			_add(node, models.commit(), mats["models"], true)
+		if counts["glass"] > 0:
+			_add(node, glass.commit(), mats["glass"], false)
+		return {"node": node, "doors": doors, "tops": tops}
+	return {"node": node, "advance": advance, "finish": finish}
 
 static func _sink() -> FirstPersonModels.Sink:
 	var s := FirstPersonModels.Sink.new()

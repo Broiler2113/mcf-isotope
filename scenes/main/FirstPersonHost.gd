@@ -21,6 +21,8 @@ var _walk_offset := {}
 var _veh_offset := {}
 var _roofs := PackedByteArray()
 var _bodies := {}
+var _features := {}
+var _feature_version := -1
 
 func _init(map: MapData, tiles: TerrainTiles) -> void:
 	state = map.build_state(1, null, true)
@@ -60,10 +62,11 @@ func _fp_roof(grid: Grid, env: String) -> PackedByteArray:
 	return _roofs
 
 func _display_feature_cells(fid: String) -> Array[Vector2i]:
-	var out: Array[Vector2i] = []
-	var g := state.grid
-	for y in g.height:
-		for x in g.width:
-			if g.cell_fast(x, y).feature_id == fid:
-				out.append(Vector2i(x, y))
-	return out
+	if _feature_version != GridCell.feature_version:
+		_features.clear()
+		for cell: GridCell in state.grid.cells_flat():
+			if cell.feature_id.is_empty(): continue
+			if not _features.has(cell.feature_id): _features[cell.feature_id] = [] as Array[Vector2i]
+			_features[cell.feature_id].append(cell.coord)
+		_feature_version = GridCell.feature_version
+	return _features.get(fid, [] as Array[Vector2i])
