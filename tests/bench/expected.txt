@@ -1,7 +1,7 @@
 # Nongating timing baseline: tests/bench/baseline-current.json; see audit-current.txt
-small actions=285 board=2504254459 trace=1105405756 alive=0/12/7 fx=2536896001 guest_same=true resyncs=0 save=true replay=true
-medium actions=862 board=2706731336 trace=3966006083 alive=37/49/14 fx=1154300236 guest_same=true resyncs=0 save=true replay=true
+small actions=285 board=1715172927 trace=1105405756 alive=0/12/7 fx=2536896001 guest_same=true resyncs=0 save=true replay=true
+medium actions=862 board=114778621 trace=3966006083 alive=37/49/14 fx=1154300236 guest_same=true resyncs=0 save=true replay=true
 large actions=1751 board=4108105020 trace=3819699724 alive=150/150/23 fx=3138424602 guest_same=true resyncs=0 save=true replay=true
-giant actions=2057 board=4244823644 trace=3494758174 alive=194/198/29 fx=3095912099 guest_same=true resyncs=0 save=true replay=true rules=345007626
-giant_capture actions=1998 board=3663846616 trace=2534751996 alive=197/200/32 fx=158605177 guest_same=true resyncs=0 save=true replay=true rules=505670519
-giant_holdout actions=2481 board=932929111 trace=2078735707 alive=199/200/149 fx=1650244871 guest_same=true resyncs=0 save=true replay=true rules=885148273
+giant actions=2221 board=4256723493 trace=215864010 alive=184/199/31 fx=3230693893 guest_same=true resyncs=0 save=true replay=true rules=3583900936
+giant_capture actions=2026 board=2541090846 trace=445042253 alive=197/200/32 fx=861099197 guest_same=true resyncs=0 save=true replay=true rules=3418193490
+giant_holdout actions=2995 board=2942014882 trace=857791057 alive=198/200/532 fx=579643649 guest_same=true resyncs=0 save=true replay=true rules=3311163470

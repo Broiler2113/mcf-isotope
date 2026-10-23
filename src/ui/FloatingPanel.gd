@@ -16,6 +16,7 @@ var _start_rect := Rect2()
 
 func setup(title: String, key: String, preferred: Vector2, minimum: Vector2, dark := false) -> void:
 	window_key = key
+	add_to_group("board_input_panel")
 	name = key + "Window"
 	custom_minimum_size = minimum
 	mouse_filter = Control.MOUSE_FILTER_STOP

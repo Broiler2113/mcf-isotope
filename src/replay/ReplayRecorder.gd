@@ -140,6 +140,7 @@ func to_dict() -> Dictionary:
 		"bookmarks": bookmarks,
 		"seek_version": 1,
 		"event_selection": "uniform2",
+		"corpse_rules": 1,
 		"steps": steps,
 		"combat_log": "\n".join(combat_log),
 	}

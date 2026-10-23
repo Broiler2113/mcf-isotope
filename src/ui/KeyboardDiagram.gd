@@ -165,10 +165,8 @@ func _key_rect(i: int) -> Rect2:
 
 ## Что на клавише: 0 — свободна, 1 — сама по себе, 2 — только в сочетаниях, 3 — и так и так.
 func _state(code: int) -> int:
-	if MODS.has(code):
-		return 2 if _mods_used.has(code) else 0
 	var plain := false
-	var combo := false
+	var combo := _mods_used.has(code)
 	for use: Array in _uses.get(code, []):
 		if int(use[0]) == 0:
 			plain = true
@@ -240,15 +238,6 @@ func _notification(what: int) -> void:
 ## Текст всплывашки клавиши: её действия, затем действия в сочетаниях. Для Ctrl/Shift/Alt —
 ## все сочетания, где они участвуют.
 func tooltip_for(code: int, label: String) -> String:
-	var lines: Array[String] = []
-	if MODS.has(code):
-		var mask: int = MODS[code]
-		for key: int in _uses:
-			for use: Array in _uses[key]:
-				if int(use[0]) & mask:
-					lines.append("%s — %s%s" % [Keybinds.key_event(int(use[0]) | key).as_text(), use[1], _ctx(use[2])])
-		lines.sort()
-		return "%s\n%s" % [label, "\n".join(lines) if not lines.is_empty() else "Not used in any combination"]
 	var plain: Array[String] = []
 	var combos: Array[String] = []
 	for use: Array in _uses.get(code, []):
@@ -256,6 +245,14 @@ func tooltip_for(code: int, label: String) -> String:
 			plain.append("%s%s" % [use[1], _ctx(use[2])])
 		else:
 			combos.append("%s — %s%s" % [Keybinds.key_event(int(use[0]) | code).as_text(), use[1], _ctx(use[2])])
+	if MODS.has(code):
+		var mask: int = MODS[code]
+		for key: int in _uses:
+			for use: Array in _uses[key]:
+				if int(use[0]) & mask:
+					var description := "%s — %s%s" % [Keybinds.key_event(int(use[0]) | key).as_text(), use[1], _ctx(use[2])]
+					if not combos.has(description): combos.append(description)
+		combos.sort()
 	if plain.is_empty() and combos.is_empty():
 		return "%s\nNot used" % label
 	var out := label

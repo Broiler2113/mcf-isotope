@@ -1819,7 +1819,7 @@ func _dress_station() -> void:
 		var roll := _rng.randf()
 		if roll < 0.025 and not _near_feature(c, MCF.FEATURE_AIRLOCK):
 			_put(c, MCF.FEATURE_AIRLOCK)
-		elif roll < 0.11:
+		elif roll < (0.14 if _style == Style.STATION else 0.11):
 			_put(c, MCF.FEATURE_GLASS)
 	var wooden: Array[bool] = []
 	for r in _rooms:

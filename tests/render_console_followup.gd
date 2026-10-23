@@ -53,6 +53,11 @@ func run() -> void:
 	ck(console.window.size.x > before_size.x + 50 and console.window.size.y > before_size.y + 25, "console resize grip changes dimensions: %s to %s" % [before_size, console.window.size])
 	await RenderingServer.frame_post_draw
 	root.get_texture().get_image().save_png("/tmp/isotope-0133-console.png")
+	console.submit("clear")
+	console.submit("units all")
+	for i in 3: await process_frame
+	await RenderingServer.frame_post_draw
+	root.get_texture().get_image().save_png("/tmp/isotope-fix10-unit-table.png")
 	console.input.release_focus()
 	load("res://src/ui/ManualWindow.gd").toggle(main)
 	for i in 4: await process_frame
@@ -76,6 +81,13 @@ func run() -> void:
 	for i in 3: await process_frame
 	await RenderingServer.frame_post_draw
 	root.get_texture().get_image().save_png("/tmp/isotope-0133-event-editor.png")
+	var settings: Node = load("res://src/ui/SettingsWindow.gd").open(main)
+	settings._tabs.current_tab = 1
+	settings._key_sections.current_tab = 2
+	for i in 4: await process_frame
+	await RenderingServer.frame_post_draw
+	root.get_texture().get_image().save_png("/tmp/isotope-fix10-fp-controls.png")
+	ck(settings._key_sections.get_current_tab_control().name == "First-person controls", "first-person controls tab renders alongside editor shortcuts")
 	main.free()
 	await process_frame
 

@@ -490,8 +490,8 @@ func _resolve_drag(intent: DragIntent) -> ActionResult:
 				return ActionResult.fail("Can't place a corpse there")
 			# Перетаскиваемый труп уходит в кучу — убираем его из игры.
 			src_cell.occupant = null
-			state.remove_unit(corpse.id)
-			if _add_corpse_to_cell(dst):
+			if legacy_corpse_rules: state.remove_unit(corpse.id)
+			if _add_corpse_to_cell(dst, null if legacy_corpse_rules else corpse):
 				return ActionResult.success(["%s formed a corpse wall at (%d, %d) [AP: %d]" % [
 					actor.stats.display_name, dst.x, dst.y, actor.remaining_ap]])
 			return ActionResult.success(["%s piled a corpse (%d/%d) at (%d, %d) [AP: %d]" % [

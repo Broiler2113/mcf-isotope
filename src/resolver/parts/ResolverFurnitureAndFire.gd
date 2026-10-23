@@ -253,6 +253,7 @@ func advance_fire(owner: int = -1, res: ActionResult = null) -> void:
 ## сама куча и есть объект (add_dirt ставит FEATURE_DIRT_PILE), и по таблице #14
 ## она в полный рост горит как стена (2/6), а не как укрытие (3/6) — метровая.
 func fire_need(cell: GridCell) -> int:
+	if legacy_corpse_rules and cell.feature_id == MCF.FEATURE_CORPSE_WALL: return MCF.FIRE_NEED_WALL
 	if cell.is_tall_dirt():
 		return MCF.FIRE_NEED_TALL_DIRT
 	if cell.feature_id != "":

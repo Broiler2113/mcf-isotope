@@ -2,7 +2,7 @@ extends "res://tests/cheats/CheatSuite.gd"
 
 func run() -> void:
 	var r := fresh()
-	for line: String in ["inspect", "spawn unit engineer self", "spawn vehicle tank #2", "event spawn", "event edit", "event remove"]:
+	for line: String in ["inspect", "spawn unit engineer #1", "spawn vehicle tank #2", "event spawn", "event edit", "event remove"]:
 		var parsed := CheatCommands.parse(line, r.state, 0)
 		ck(not parsed.has("error") and parsed.access == "tool", "interactive command: " + line)
 	var parsed := CheatCommands.parse("units self status", r.state, 0)

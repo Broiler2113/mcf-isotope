@@ -6,7 +6,7 @@ func run() -> void:
 	recorder.begin(r.state, r)
 	recorder.capture_opening()
 	r.replay_recorder = recorder
-	for line: String in ["spawn unit engineer self 6 6 3", "unit stat 0 sight 7", "unit invulnerable 0 on", "vision reveal #2", "vision mines self on", "world floor-look 8 8 4", "world smoke add 8 8 3 3 2", "event queue gas", "world time night", "unit ap 1 7"]:
+	for line: String in ["spawn unit engineer #1 6 6 3", "unit stat 0 sight 7", "unit invulnerable 0 on", "vision reveal #2", "vision mines #1 on", "world floor-look 8 8 4", "world smoke add 8 8 3 3 2", "event queue gas", "world time night", "unit ap 1 7"]:
 		command(r, line)
 	# Administration is deliberately outside gameplay history.
 	r.state.roster.slots[0].cheats_allowed = false

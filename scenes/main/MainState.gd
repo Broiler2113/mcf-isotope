@@ -1005,6 +1005,7 @@ var _number_page := 0
 
 var _cheat_console: CheatConsole = null
 var _cheat_ids := ""
+var _cheat_coords := false
 
 @abstract func _set_ai_speed(v: float, broadcast: bool) -> void
 

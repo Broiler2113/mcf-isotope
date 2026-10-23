@@ -406,6 +406,32 @@ def choose(net: PolicyNet, encoded: list, device, greedy=False):
     return actions, logps, values
 
 
+def choose_actions(net: PolicyNet, responses: list[dict], device="cpu", greedy=False,
+                   timings: dict | None = None):
+    """Actions for frozen opponents/evaluation, where no value estimate is needed.
+
+    A state with one legal action has probability one regardless of the network.
+    Skip its dense observation encoding and CNN entirely. Learner rollouts still
+    use choose(): their value estimates are required for returns and advantages.
+    """
+    actions = np.zeros(len(responses), dtype=np.int64)
+    decision = [i for i, response in enumerate(responses) if len(response.get("legal", [])) != 1]
+    if timings is not None:
+        timings["forced_actions"] += len(responses) - len(decision)
+    if not decision:
+        return actions
+    start = time.perf_counter()
+    encoded = [encode(responses[i]) for i in decision]
+    if timings is not None:
+        timings["encode_secs"] += time.perf_counter() - start
+    start = time.perf_counter()
+    selected, _, _ = choose(net, encoded, device, greedy=greedy)
+    if timings is not None:
+        timings["inference_secs"] += time.perf_counter() - start
+    actions[decision] = selected
+    return actions
+
+
 def canvas_batches(steps, batch_size):
     groups = defaultdict(list)
     for i in np.random.permutation(len(steps)):
@@ -1083,12 +1109,12 @@ class Trainer:
                             collecting or (buffers[i] and not buffers[i][-1].done)):
                         by_net[envs[i].label.split(":", 1)[1]].append(i)
                 for path, idxs in by_net.items():
-                    ts = time.perf_counter()
-                    enc = [encode(envs[i].last) for i in idxs]
-                    timings["encode_secs"] += time.perf_counter() - ts
-                    ts = time.perf_counter()
-                    a, _, _ = choose(self.pool_net(path), enc, "cpu")
-                    timings["opponent_inference_secs"] += time.perf_counter() - ts
+                    opponent_timings = Counter()
+                    a = choose_actions(self.pool_net(path), [envs[i].last for i in idxs],
+                                       timings=opponent_timings)
+                    timings["encode_secs"] += opponent_timings["encode_secs"]
+                    timings["opponent_inference_secs"] += opponent_timings["inference_secs"]
+                    timings["forced_opponent_actions"] += opponent_timings["forced_actions"]
                     for j, i in enumerate(idxs):
                         actions[i] = int(a[j])
                 for i, act in actions.items():
@@ -1525,7 +1551,7 @@ class Trainer:
                     groups[is_opponent].append(i)
                 for is_opponent, indices in groups.items():
                     acting_net = opponent_net if is_opponent else net
-                    a, _, _ = choose(acting_net, [encode(envs[i].last) for i in indices], "cpu", greedy=True)
+                    a = choose_actions(acting_net, [envs[i].last for i in indices], greedy=True)
                     for q, i in enumerate(indices):
                         envs[i].send({"cmd": "step", "action": int(a[q])})
                         inflight.add(i)

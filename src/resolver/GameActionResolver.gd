@@ -102,6 +102,7 @@ func resolve(intent: Intent) -> ActionResult:
 			if u.is_alive(): alive_before[u.id] = true
 	var result := _dispatch(intent)
 	if top and result.ok:
+		CorpseIdentity.cleanup(state)
 		result.deaths = result.deaths.filter(func(id: int): return state.get_unit(id) != null and not state.get_unit(id).is_alive())
 		_credit_kills(intent, au, av, result)
 	if top:

@@ -137,7 +137,8 @@ const K_LOBBY_MAP := "lobby_map"
 ##  26 — fix 9: uncapped wave/raider forces, packing a station under the operator,
 ##       bodies on space tiles, and host-authorized persistent cheat intents.
 ##  27 — live survivor-count waves, stable event references, AI pause/step cheats.
-const PROTOCOL := 27
+##  28 — persistent corpse identities, fireproof corpse walls and independent cheat spawns.
+const PROTOCOL := 28
 ## The bug-report server on the relay's VPS (tools/bugs/isotope_bugs.py): the Report a Bug
 ## window and the automatic desync reports both post here.
 const BUG_REPORTS := "http://103.86.177.137:8651/report"

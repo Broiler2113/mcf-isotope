@@ -458,7 +458,7 @@ const FIRE_NEVER := 99            # заведомо недостижимо ше
 const FIRE_NEED_BY_FEATURE := {
 	FEATURE_WALL: FIRE_NEED_WALL,
 	FEATURE_SOIL: FIRE_NEED_WALL,
-	FEATURE_CORPSE_WALL: FIRE_NEED_WALL,
+	FEATURE_CORPSE_WALL: FIRE_NEVER,
 	FEATURE_WOOD_WALL: FIRE_NEED_WOOD,
 	FEATURE_GLASS: FIRE_NEED_GLASS,
 	FEATURE_AIRLOCK: FIRE_NEED_WALL,
@@ -626,6 +626,7 @@ const MAX_NEUTRAL_GROUPS := 100
 ## подписи в журнале.
 const INDEPENDENT_BASE := 200
 const MAX_INDEPENDENT := 100
+const CHEAT_ARMY_OWNER := INDEPENDENT_BASE + MAX_INDEPENDENT - 1
 
 ## Игроки зовутся латинскими буквами по порядку слотов: A, B, C, ... Z.
 const PLAYER_LETTERS := "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -788,6 +789,7 @@ static func feature_height(feature_id: String) -> float:
 ## Имя стороны для журнала и HUD. Игрок — по своей букве, группа нейтралов —
 ## по своему римскому номеру, общий нейтральный слот — просто «Neutral».
 static func owner_name(owner: int) -> String:
+	if owner == CHEAT_ARMY_OWNER: return "Independent army"
 	if is_player(owner):
 		return "Player %s" % PLAYER_LETTERS[owner]
 	if is_independent(owner):

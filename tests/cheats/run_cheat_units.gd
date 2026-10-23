@@ -3,8 +3,8 @@ extends "res://tests/cheats/CheatSuite.gd"
 func run() -> void:
 	var r := fresh()
 	var twin := fresh()
-	command(r, "spawn unit engineer self 5 5 5")
-	command(twin, "spawn unit engineer self 5 5 5")
+	command(r, "spawn unit engineer #1 5 5 5")
+	command(twin, "spawn unit engineer #1 5 5 5")
 	ck(r.state.digest_hash() == twin.state.digest_hash(), "expanding ring placement deterministic")
 	ck(r.state.all_units().size() == 7, "requested spawn count")
 	command(r, "unit item 2 none")
@@ -49,7 +49,7 @@ func run() -> void:
 func _civilians() -> void:
 	var r := fresh()
 	rejected(r, "unit civilian 0 activate")
-	command(r, "spawn unit civilian self 6 9")
+	command(r, "spawn unit civilian #1 6 9")
 	command(r, "unit civilian 2 activate")
 	ck(r.state.get_unit(2).civilian_active, "civilian activated")
 	command(r, "unit civilian 2 sleep")
@@ -86,9 +86,9 @@ func _damage_paths() -> void:
 	r._explode_frag(r.state.get_unit(1), target.coord)
 	r._land_collapse({"x": 1, "y": 1, "w": 4, "h": 4}, out)
 	ck(target.is_alive(), "direct frag and structural collapse respect protection")
-	command(r, "spawn unit drone_operator self 10 10")
+	command(r, "spawn unit drone_operator #1 10 10")
 	command(r, "world feature set 10 11 drone_station self")
-	command(r, "spawn unit drone self 11 11")
+	command(r, "spawn unit drone #1 11 11")
 	var drone := r.state.get_unit(3)
 	drone.cheat_invulnerable = true
 	r._land_emp({"x": 11, "y": 11, "w": 1, "h": 1}, out)

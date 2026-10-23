@@ -363,13 +363,18 @@ func _build_keybinds(tabs: TabContainer) -> void:
 	sections.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_key_sections = sections
 	page.add_child(sections)
-	for section in ["game", "editor"]:
+	for section in ["game", "editor", "fp"]:
 		# Сверху — клавиатура (0.12): что занято, что в сочетаниях, что свободно, с подсказкой
 		# по наведению; под ней — прежний список с переназначением.
 		var section_page := VBoxContainer.new()
-		section_page.name = "In-game shortcuts" if section == "game" else "Map editor shortcuts"
+		section_page.name = {"game": "In-game shortcuts", "editor": "Map editor shortcuts", "fp": "First-person controls"}[section]
 		section_page.add_theme_constant_override("separation", 8)
 		sections.add_child(section_page)
+		if section == "fp":
+			var look := Label.new()
+			look.text = "Move the mouse to look around. Jump also climbs ledges and ascends in space or noclip."
+			look.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			section_page.add_child(look)
 		var kb_box := SteamChrome.group_box("Keyboard — hover a key to see what it does")
 		section_page.add_child(kb_box)
 		var kb := KeyboardDiagram.new()

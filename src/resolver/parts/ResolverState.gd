@@ -1,6 +1,9 @@
 @abstract
 extends RefCounted
 
+## Only old recordings retain anonymous carried bodies and flammable corpse walls.
+var legacy_corpse_rules := false
+
 ## The resolver's state: every variable, constant and static cache of GameActionResolver,
 ## and the declarations the files above need. GameActionResolver is one class spread over a
 ## chain of files by system — ResolverState, ResolverVision, ResolverDamage, ResolverMovement,
