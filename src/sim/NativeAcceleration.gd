@@ -5,7 +5,7 @@ extends Node
 ## The ignored bundle is loaded explicitly so unsupported systems still open normally.
 const BUNDLE_ROOT := "res://addons/mcf_visuals/prebuilt"
 const CLASSES := ["MCFMeshBuilder", "MCFTerrain", "MCFAI", "MCFPathfinding", "MCFVisibility"]
-const LIBRARIES := {"linux": "mcf_visuals.so", "windows": "mcf_visuals.dll", "macos": "mcf_visuals.dylib"}
+const LIBRARIES := {"windows": "mcf_visuals.dll", "macos": "mcf_visuals.dylib"}
 const SOURCE_CONFIG := ["native/visuals/CMakeLists.txt", "native/visuals/build_profile.json",
 	"native/visuals/build.py", "native/policy/dependencies.json", "addons/mcf_visuals/mcf_visuals.gdextension.in"]
 const REQUIRED_SOURCES := ["native/visuals/src/mesh_builder.cpp", "native/visuals/src/terrain_kernel.cpp",
@@ -20,7 +20,7 @@ func _init() -> void:
 	initialize()
 
 static func platform_target(system: String = OS.get_name(), architecture: String = Engine.get_architecture_name()) -> String:
-	var platform: String = {"Linux": "linux", "Windows": "windows", "macOS": "macos"}.get(system, "")
+	var platform: String = {"Windows": "windows", "macOS": "macos"}.get(system, "")
 	if platform.is_empty() or architecture not in ["x86_64", "arm64"]: return ""
 	return platform + "-" + architecture
 
@@ -111,7 +111,7 @@ static func _source_path(path: String) -> bool:
 ## tested without ever passing them to the native loader. Source hashes normalize
 ## CRLF checkouts; binary and extension-manifest hashes always use the exact bytes.
 static func validate_bundle(root: String, target: String, source_root: String = "res://") -> Dictionary:
-	if target not in ["linux-x86_64", "windows-x86_64", "macos-x86_64", "macos-arm64"]:
+	if target not in ["windows-x86_64", "macos-x86_64", "macos-arm64"]:
 		return _failure("unsupported")
 	var manifest_path := root.path_join("manifest.json")
 	if not FileAccess.file_exists(manifest_path): return _failure("missing")

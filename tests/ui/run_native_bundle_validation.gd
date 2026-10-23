@@ -3,7 +3,7 @@ extends "res://tests/SuiteBase.gd"
 var fixture_root := "user://native-bundle-validation"
 var source_root := fixture_root.path_join("project")
 var bundle_root := fixture_root.path_join("bundle")
-var target := "linux-x86_64"
+var target := "windows-x86_64"
 var manifest: Dictionary
 var sources: Dictionary
 
@@ -17,16 +17,16 @@ func run() -> void:
 	ck(_validate().code == "source", "stale binaries are rejected when native source changes")
 	_write(source_root.path_join(source_path), "fixture\nsecond line\n")
 
-	_write(bundle_root.path_join(target + "/mcf_visuals.so"), "corrupt bytes")
+	_write(bundle_root.path_join(target + "/mcf_visuals.dll"), "corrupt bytes")
 	ck(_validate().code == "corrupt", "corrupted libraries never reach the extension loader")
-	_write(bundle_root.path_join(target + "/mcf_visuals.so"), "test library - never executed")
+	_write(bundle_root.path_join(target + "/mcf_visuals.dll"), "test library - never executed")
 	var original_extension := FileAccess.get_file_as_string(bundle_root.path_join(target + "/mcf_visuals.gdextension"))
 	_write(bundle_root.path_join(target + "/mcf_visuals.gdextension"), original_extension + "# edited\n")
 	ck(_validate().code == "corrupt", "modified extension manifests are rejected")
 	_write(bundle_root.path_join(target + "/mcf_visuals.gdextension"), original_extension)
 
 	var original: Dictionary = manifest.duplicate(true)
-	manifest.platforms[target].library = "../outside.so"
+	manifest.platforms[target].library = "../outside.dll"
 	_save_manifest()
 	ck(_validate().code == "invalid", "library paths cannot escape the selected platform")
 	manifest = original.duplicate(true)
@@ -65,9 +65,9 @@ func run() -> void:
 		var config := ConfigFile.new()
 		config.load(bundle_root.path_join(target + "/mcf_visuals.gdextension"))
 		match change:
-			"path": config.set_value("libraries", "linux.x86_64", "../other.so")
-			"extra_library": config.set_value("libraries", "linux", "other.so")
-			"dependency": config.set_value("dependencies", "linux.x86_64", {"other.so": ""})
+			"path": config.set_value("libraries", "windows.x86_64", "../other.dll")
+			"extra_library": config.set_value("libraries", "windows", "other.dll")
+			"dependency": config.set_value("dependencies", "windows.x86_64", {"other.dll": ""})
 			"entry": config.set_value("configuration", "entry_symbol", "other_init")
 		config.save(bundle_root.path_join(target + "/mcf_visuals.gdextension"))
 		manifest.platforms[target].extension_sha256 = FileAccess.get_sha256(bundle_root.path_join(target + "/mcf_visuals.gdextension"))
@@ -109,16 +109,16 @@ func _build_fixture() -> void:
 		fingerprint.update(path.to_utf8_buffer())
 		fingerprint.update(PackedByteArray([0]))
 		fingerprint.update((str(sources[path]) + "\n").to_utf8_buffer())
-	_write(bundle_root.path_join(target + "/mcf_visuals.so"), "test library - never executed")
+	_write(bundle_root.path_join(target + "/mcf_visuals.dll"), "test library - never executed")
 	var config := ConfigFile.new()
 	config.set_value("configuration", "entry_symbol", "mcf_visuals_init")
 	config.set_value("configuration", "compatibility_minimum", "4.5")
 	config.set_value("configuration", "reloadable", false)
-	config.set_value("libraries", "linux.x86_64", "mcf_visuals.so")
+	config.set_value("libraries", "windows.x86_64", "mcf_visuals.dll")
 	config.save(bundle_root.path_join(target + "/mcf_visuals.gdextension"))
 	manifest = {"schema": 1, "source_files": sources, "source_fingerprint": fingerprint.finish().hex_encode(),
-		"platforms": {target: {"library": target + "/mcf_visuals.so", "extension": target + "/mcf_visuals.gdextension",
-			"sha256": FileAccess.get_sha256(bundle_root.path_join(target + "/mcf_visuals.so")),
+		"platforms": {target: {"library": target + "/mcf_visuals.dll", "extension": target + "/mcf_visuals.gdextension",
+			"sha256": FileAccess.get_sha256(bundle_root.path_join(target + "/mcf_visuals.dll")),
 			"extension_sha256": FileAccess.get_sha256(bundle_root.path_join(target + "/mcf_visuals.gdextension"))}}}
 	_save_manifest()
 

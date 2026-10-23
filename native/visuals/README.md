@@ -1,12 +1,11 @@
 # Native game kernels
 
 Open `project.godot` in Godot 4.7 and run the game normally. The project archive
-already includes C++ acceleration for Windows x64, Linux x64, Intel Mac, and Apple
-Silicon. Linux requires glibc 2.28+; Mac requires macOS 11+ on Intel or macOS 13+ on
-Apple Silicon. It starts automatically, without a compiler, terminal command, or
+already includes C++ acceleration for Windows x64, Intel Mac, and Apple Silicon.
+Mac requires macOS 11+ on Intel or macOS 13+ on Apple Silicon. It starts automatically, without a compiler, terminal command, or
 plugin setup. **Settings → Interface → Performance** shows the current status.
 
-All four desktop libraries travel with the same source project. The game chooses
+All three desktop libraries travel with the same source project. The game chooses
 the library for the running Godot architecture. An unsupported system or unavailable
 library uses the original GDScript algorithms, so the project remains playable.
 
@@ -23,6 +22,15 @@ The GDExtension provides:
 Game rules, action execution, random draws, persistence, model descriptions and
 scene ownership stay in GDScript. Native kernels return the same ordered results;
 they do not introduce a new AI strategy or change sight and movement rules.
+
+Linux builds, release libraries, and CI jobs are paused. Do not re-enable them
+unless the project owner explicitly requests Linux support.
+
+CI reuses the checked-in libraries when their source and payload hashes match,
+then tests automatic startup on Windows and both Mac architectures. It rebuilds
+packages when the bundle is missing or outdated, or when the workflow's `rebuild`
+input is explicitly enabled. This avoids recompiling unchanged C++ for UI and
+documentation changes.
 
 ## Optional developer builds
 
@@ -91,7 +99,8 @@ dense geometry and complete town preparation. Results are CPU timings, not GPU
 frame-rate predictions. Keep parity and benchmark evidence with each subsequent
 native conversion; migrate another subsystem only after identifying its cost.
 
-Local Linux headless measurements after enabling all kernels:
+Historical headless measurements from the initial migration (recorded before
+Linux checks were paused; not a current Linux support claim):
 
 | Workload | GDScript ms | C++ ms | Speedup |
 | --- | ---: | ---: | ---: |

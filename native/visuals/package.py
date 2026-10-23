@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package tested native kernels and assemble the four-platform source-project bundle."""
+"""Package tested native kernels and assemble the Windows/Mac source-project bundle."""
 import argparse
 import hashlib
 import json
@@ -12,7 +12,7 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
-TARGETS = ("linux-x86_64", "windows-x86_64", "macos-x86_64", "macos-arm64")
+TARGETS = ("windows-x86_64", "macos-x86_64", "macos-arm64")
 LIBRARIES = {"linux": "mcf_visuals.so", "windows": "mcf_visuals.dll", "macos": "mcf_visuals.dylib"}
 FIXED_SOURCES = (
     "native/visuals/CMakeLists.txt", "native/visuals/build_profile.json", "native/visuals/build.py",
@@ -50,7 +50,7 @@ def source_identity(root=ROOT):
 
 
 def library_name(target):
-    if target not in TARGETS and target != "linux-arm64":
+    if target not in TARGETS and target not in ("linux-x86_64", "linux-arm64"):
         raise ValueError("Unsupported native kernel target: " + target)
     return LIBRARIES[target.split("-", 1)[0]]
 
@@ -120,7 +120,7 @@ def verify_provenance(provenance, payload, root=ROOT):
 
 def create_package(target, output, archive, godot_version, root=ROOT, require_ci=False):
     if target not in TARGETS:
-        raise ValueError("Only the four release platforms can be bundled")
+        raise ValueError("Only the three release platforms can be bundled")
     provenance = json.loads(read_file(output, STAMP))
     if provenance.get("target") != target:
         raise ValueError("Build provenance belongs to another platform")
@@ -189,7 +189,7 @@ def verify_bundle(output, root=ROOT):
         raise ValueError("Native bundle must be a directory hidden from automatic Godot discovery")
     manifest = json.loads(read_file(output, "manifest.json"))
     if not isinstance(manifest, dict) or manifest.get("schema") != 1 or set(manifest.get("platforms", {})) != set(TARGETS):
-        raise ValueError("Native bundle must contain all four release platforms")
+        raise ValueError("Native bundle must contain all three release platforms")
     expected_files = {".gdignore", "manifest.json"}
     packages = {}
     for target in TARGETS:
@@ -218,7 +218,7 @@ def assemble(archives, output, root=ROOT):
             raise ValueError("Duplicate native package for " + target)
         packages[target] = (provenance, payload)
     if set(packages) != set(TARGETS):
-        raise ValueError("Assembling a native bundle requires all four release platforms")
+        raise ValueError("Assembling a native bundle requires all three release platforms")
     if len({p[0]["source_commit"] for p in packages.values()}) != 1:
         raise ValueError("Native packages must be tested from the same source commit")
     if output.is_symlink():
@@ -274,7 +274,7 @@ def main():
         print(assemble(sorted(args.artifacts.rglob("mcf-kernels-*.zip")), args.output))
     else:
         manifest = verify_bundle(args.bundle)
-        print("Verified four-platform native bundle: " + manifest["source_fingerprint"])
+        print("Verified Windows/Mac native bundle: " + manifest["source_fingerprint"])
 
 
 if __name__ == "__main__":

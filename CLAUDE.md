@@ -7,3 +7,10 @@ Rules:
 - If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
 - After modifying code, run `$(cat graphify-out/.graphify_python) graphify-out/rebuild.py` (the post-commit hook does this automatically). Do NOT use `graphify update` — graphify cannot parse GDScript; code nodes come from `graphify-out/.gd_extract.py`. Docs (GAME_SPEC.md, AUDIT.md) need `/graphify --update` to re-extract.
+
+## Platform and CI scope
+
+The project owner explicitly requested Windows and macOS only on 2026-10-23 to
+avoid spending CI credits on Linux. Do not schedule Linux CI jobs, Linux platform
+checks, Linux builds, or Linux release libraries unless the owner explicitly asks
+to restore Linux support. Keep both Intel Mac and Apple Silicon checks.

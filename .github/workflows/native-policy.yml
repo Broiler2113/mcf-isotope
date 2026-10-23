@@ -1,5 +1,6 @@
 name: Native learned policy
-# Releases are source-only. Do not add game exports or application archives until
+# Supported release/CI targets: Windows and macOS only. Do not add Linux jobs.
+# Releases are source projects with bundled acceleration. Do not add game exports or application archives until
 # the project owner explicitly resumes application releases.
 on:
   workflow_dispatch:
@@ -10,10 +11,14 @@ on:
     paths: ['.gitattributes', 'native/policy/**', 'addons/mcf_policy/**', 'assets/policy/**', 'rl/features.py', 'rl/model.py', 'rl/train.py', 'rl/test_native_policy.py', 'rl/test_action_fastpath.py', 'rl/test_training_fixes.py', 'src/controllers/LearnedController.gd', 'src/replay/MatchAnalyst.gd', 'scenes/**', 'audio/**', 'tools/audio/**', 'src/audio/**', 'src/fx/FxDecals.gd', 'src/resolver/GameActionResolver.gd', 'src/cheats/**', 'src/intents/CheatIntent.gd', 'src/net/**', 'src/sim/**', 'tests/cheats/**', 'tests/render_label_zoom.gd', 'tests/render_first_person_fog.gd', 'tests/ui/run_first_person*.gd', 'src/ui/UiTheme.gd', 'tests/ui/run_release_0132.gd', 'tests/mapgen/run_release_0132.gd', 'src/ui/SettingsWindow.gd', 'project.godot', 'tests/audio/run_audio.gd', 'tests/run_source_fixes.gd', 'tests/bench/run_crush_bench.gd', 'src/ui/TerrainTiles.gd', 'src/sim/RandomEvents.gd', 'src/data/MapGen.gd', 'tests/bench/run_audio_bench.gd', 'tests/*native_policy*', 'tests/record_policy_requests.gd', 'tests/bench/run_native_policy.gd', '.github/workflows/native-policy.yml']
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 env:
   PYTHONUTF8: '1'
 jobs:
   build:
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
@@ -21,8 +26,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
-            target: linux-x86_64
           - os: windows-2022
             target: windows-x86_64
           - os: macos-15
@@ -71,13 +74,6 @@ jobs:
           godot --headless --path . --script res://tests/files/run_replay_seek.gd
           godot --headless --path . --script res://tests/files/run_video_encoder.gd
           godot --headless --path . --script res://tests/events/run_live_wave_counts.gd
-      - name: Verify rendered battlefield labels and opaque first-person fog
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq xvfb libgl1-mesa-dri
-          LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a godot --path . --rendering-method gl_compatibility --script res://tests/render_label_zoom.gd
-          LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a godot --path . --rendering-method gl_compatibility --script res://tests/render_first_person_fog.gd
       - name: Install parity dependencies
         run: python -m pip install numpy onnx onnxruntime==1.22.0
       - name: Install CPU PyTorch
@@ -96,12 +92,6 @@ jobs:
           probe=.cache/native-policy/mcf_policy_probe
           if [ -f .cache/native-policy/Release/mcf_policy_probe.exe ]; then probe=.cache/native-policy/Release/mcf_policy_probe.exe; fi
           python rl/test_native_policy.py --probe "$probe" --extension --report .cache/native-policy/parity.json
-      - name: Verify forced-action inference and learner accounting
-        if: runner.os == 'Linux'
-        run: |
-          python -m pip install pyyaml tensorboard psutil
-          python rl/test_action_fastpath.py
-          python rl/test_training_fixes.py
       - name: Benchmark synchronous small and Giant-board inference
         shell: bash
         run: godot --headless --path . --script res://tests/bench/run_native_policy.gd > .cache/native-policy/benchmark.jsonl

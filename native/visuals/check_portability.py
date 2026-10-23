@@ -3,17 +3,14 @@
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
 import platform
-import re
 import struct
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
-TARGETS = ("linux-x86_64", "windows-x86_64", "macos-x86_64", "macos-arm64")
-LIBRARIES = {"linux": "mcf_visuals.so", "windows": "mcf_visuals.dll", "macos": "mcf_visuals.dylib"}
-LINUX_SYSTEM = {"libc.so.6", "libm.so.6", "libpthread.so.0", "libdl.so.2", "librt.so.1", "ld-linux-x86-64.so.2"}
+TARGETS = ("windows-x86_64", "macos-x86_64", "macos-arm64")
+LIBRARIES = {"windows": "mcf_visuals.dll", "macos": "mcf_visuals.dylib"}
 WINDOWS_SYSTEM = {"kernel32.dll", "advapi32.dll", "bcrypt.dll", "crypt32.dll", "ntdll.dll",
                   "ole32.dll", "oleaut32.dll", "shell32.dll", "shlwapi.dll", "user32.dll",
                   "version.dll", "ws2_32.dll", "winmm.dll", "secur32.dll", "rpcrt4.dll",
@@ -38,28 +35,6 @@ def cstring(data, offset, end):
         return data[offset:stop].decode("ascii")
     except UnicodeDecodeError as error:
         raise ValueError("Non-ASCII native dependency name") from error
-
-
-def check_elf_metadata(header, dynamic, versions):
-    require(re.search(r"Class:\s+ELF64\b", header) and
-            re.search(r"Machine:\s+Advanced Micro Devices X86-64\b", header), "Expected an x86_64 ELF library")
-    dependencies = re.findall(r"\(NEEDED\).*?\[([^]]+)\]", dynamic)
-    require(dependencies, "ELF library has no recorded system dependencies")
-    require(set(dependencies) <= LINUX_SYSTEM, "Non-system Linux dependency: " + ", ".join(sorted(set(dependencies) - LINUX_SYSTEM)))
-    require(not re.search(r"\((?:RPATH|RUNPATH)\).*?\[[^]]+\]", dynamic), "Linux library contains a runtime search path")
-    require(not re.search(r"(?:GLIBCXX|CXXABI)_", versions), "Linux library requires an external C++ runtime")
-    required = {tuple(map(int, version.split("."))) for version in re.findall(r"\bGLIBC_(\d+(?:\.\d+)+)\b", versions)}
-    require(required, "ELF library has no recorded glibc baseline")
-    maximum = max(required)
-    require(maximum <= (2, 28), "Linux library requires glibc " + ".".join(map(str, maximum)) + "; maximum allowed is 2.28")
-    return {"architecture": "x86_64", "dependencies": sorted(dependencies), "glibc_max": ".".join(map(str, maximum))}
-
-
-def inspect_elf(library):
-    environment = dict(os.environ, LC_ALL="C")
-    def readelf(flag):
-        return subprocess.check_output(["readelf", flag, str(library)], text=True, env=environment)
-    return check_elf_metadata(readelf("-h"), readelf("-d"), readelf("--version-info"))
 
 
 def inspect_pe(data):
@@ -170,9 +145,7 @@ def inspect_macho(data, target):
 def inspect_library(library, target):
     require(target in TARGETS, "Unsupported release target")
     data = library.read_bytes()
-    if target.startswith("linux-"):
-        result = inspect_elf(library)
-    elif target.startswith("windows-"):
+    if target.startswith("windows-"):
         result = inspect_pe(data)
     else:
         result = inspect_macho(data, target)

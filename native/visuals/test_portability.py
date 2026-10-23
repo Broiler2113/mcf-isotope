@@ -2,7 +2,7 @@
 import struct
 import unittest
 
-from check_portability import check_elf_metadata, inspect_macho, inspect_pe
+from check_portability import inspect_macho, inspect_pe
 
 
 def pe_fixture(imports=("KERNEL32.dll",), delayed=()):
@@ -50,22 +50,6 @@ def macho_fixture(architecture="arm64", minimum=(13, 0, 0), dependency="/usr/lib
 
 
 class PortabilityTests(unittest.TestCase):
-    def test_linux_accepts_os_only_228_baseline(self):
-        report = check_elf_metadata("Class: ELF64\nMachine: Advanced Micro Devices X86-64", "(NEEDED) Shared library: [libc.so.6]", "GLIBC_2.2.5 GLIBC_2.28")
-        self.assertEqual(report["glibc_max"], "2.28")
-
-    def test_linux_rejects_new_host_glibc_and_external_runtime(self):
-        header = "Class: ELF64\nMachine: Advanced Micro Devices X86-64"
-        dependency = "(NEEDED) Shared library: [libc.so.6]"
-        for dynamic, versions, message in (
-            (dependency, "GLIBC_2.38", "glibc 2.38"),
-            (dependency + "\n(NEEDED) Shared library: [libstdc++.so.6]", "GLIBC_2.28", "Non-system"),
-            (dependency, "GLIBC_2.28 CXXABI_1.3", "external C\\+\\+"),
-            (dependency + "\n(RUNPATH) Library runpath: [/home/builder/lib]", "GLIBC_2.28", "search path"),
-        ):
-            with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
-                check_elf_metadata(header, dynamic, versions)
-
     def test_windows_accepts_system_and_api_set_imports(self):
         report = inspect_pe(pe_fixture(("KERNEL32.dll", "api-ms-win-core-synch-l1-2-0.dll"), ("USER32.dll",)))
         self.assertEqual(report["dependencies"], ["api-ms-win-core-synch-l1-2-0.dll", "kernel32.dll", "user32.dll"])

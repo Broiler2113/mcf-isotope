@@ -2,7 +2,7 @@
 
 Download the release project, import `project.godot` in Godot 4.7, and run with the
 GL Compatibility renderer. C++ acceleration is included and starts automatically
-on Windows x64, Linux x64 with glibc 2.28+, Intel Mac with macOS 11+, and Apple
+on Windows x64, Intel Mac with macOS 11+, and Apple
 Silicon with macOS 13+. No compiler, terminal commands, or plugin setup are needed
 to play.
 
@@ -11,10 +11,13 @@ First-person geometry, terrain preparation, AI planning, pathfinding, and visibi
 use the bundled C++ library. If acceleration is unavailable, the game remains
 playable through the original GDScript implementations.
 
-The complete source and the native libraries for all four desktop targets are in
+The complete source and the native libraries for all three desktop targets are in
 the same project archive. See the [native guide](native/visuals/README.md) for
 verification and optional developer builds. Learned-policy inference has its own
 optional library; without it, learned AI retains the existing socket/HARD fallback.
+
+Builds and CI checks target Windows and macOS only. Linux support and Linux CI
+are paused until explicitly requested again.
 
 Release notes start with the changes. Do not prepend the source-download and
 Godot-import instructions to release descriptions.
