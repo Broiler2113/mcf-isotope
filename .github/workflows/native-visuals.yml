@@ -2,6 +2,7 @@ name: Native game kernels
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     paths: ['native/visuals/**', 'native/policy/dependencies.json', 'addons/mcf_visuals/**', 'scenes/main/FirstPerson*.gd', 'src/ui/NativeVisuals.gd', 'src/ui/TerrainTiles.gd', 'src/sim/**', 'src/controllers/**', 'src/resolver/**', 'tests/**', '.github/workflows/native-visuals.yml']
   pull_request:
     paths: ['native/visuals/**', 'native/policy/dependencies.json', 'addons/mcf_visuals/**', 'scenes/main/FirstPerson*.gd', 'src/ui/NativeVisuals.gd', 'src/ui/TerrainTiles.gd', 'src/sim/**', 'src/controllers/**', 'src/resolver/**', 'tests/**', '.github/workflows/native-visuals.yml']
@@ -41,7 +42,7 @@ jobs:
           for suite in ai/run_ai_conduct ai/run_ai_rules fog/run_fog fog/run_sight_lines fog/run_gas_visibility fog/run_gas_vision fog/run_fog_viewer fog/run_fog_screens perf/run_incremental net/run_lockstep files/run_game_files files/run_replay_seek; do
             godot --headless --path . --script "res://tests/$suite.gd" || exit 1
           done
-          godot --headless --path . --script res://tests/bench/run_bench.gd -- small medium --reps 1
+          godot --headless --path . --script res://tests/bench/run_native_match_parity.gd
       - name: Verify mixed native and reference multiplayer peers
         if: runner.os == 'Linux'
         run: bash tests/run_net_native_kernels.sh
@@ -56,7 +57,6 @@ jobs:
           MCF_NATIVE_KERNELS: 'off'
         run: |
           godot --headless --path . --script res://tests/ui/run_first_person.gd
-          godot --headless --path . --script res://tests/bench/run_bench.gd -- small medium --reps 1
       - name: Compare rendered native and GDScript scenes
         if: runner.os == 'Linux'
         run: |

@@ -87,6 +87,10 @@ incremental exploration logs. Each accepts `-- --require-native`. Their matching
 `bench/run_native_*.gd` scripts alternate backends, including input preparation.
 `run_net_native_kernels.sh` runs real native/reference peers in both host roles.
 Set `MCF_NATIVE_KERNELS=off` to use the original four algorithms throughout a game.
+`bench/run_native_match_parity.gd` runs complete reference/native matches on the
+same engine, comparing every signature field, including effects. Historical
+gameplay signatures remain required. Windows' effects hash is compared with its
+local reference because the stored effects baseline was recorded on Linux.
 
 `bench/run_first_person_render.gd` profiles a large town at the 160 m render
 distance, reporting frame and CPU percentiles, draw calls, and triangles for still
