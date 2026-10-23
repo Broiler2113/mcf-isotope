@@ -472,7 +472,7 @@ func _resolve_drag(intent: DragIntent) -> ActionResult:
 		return ActionResult.fail("Object not in an adjacent cell")
 	# Многоклеточное (кровать 2×2, стол, секция в ряду стойки) руками не берут (§3.15).
 	if is_draggable_feature(state.grid.cell(src).feature_id) and not grabbable_cell(src):
-		return ActionResult.fail("Too big to move — it's part of a larger piece")
+		return ActionResult.fail("Too big to move - it's part of a larger piece")
 	if Combat.distance(actor.coord, dst) != 1:
 		return ActionResult.fail("Can only drag to an adjacent cell")
 	var src_cell := state.grid.cell(src)

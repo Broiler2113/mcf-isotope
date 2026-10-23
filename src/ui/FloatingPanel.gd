@@ -81,8 +81,12 @@ func _settle(saved: Rect2) -> void:
 	# Wrapped labels initially measure against zero-width containers. Let their
 	# widths settle before restoring the requested size, rather than retaining
 	# a spurious several-thousand-pixel minimum from the first layout pass.
-	await get_tree().process_frame
-	await get_tree().process_frame
+	get_tree().process_frame.connect(_settle_second.bind(saved), CONNECT_ONE_SHOT)
+
+func _settle_second(saved: Rect2) -> void:
+	get_tree().process_frame.connect(_settle_final.bind(saved), CONNECT_ONE_SHOT)
+
+func _settle_final(saved: Rect2) -> void:
 	position = saved.position
 	size = saved.size
 	_fit()

@@ -8,7 +8,12 @@ extends RefCounted
 ## Разделы по порядку: [заголовок, текст]. Карточки бойцов строит окно само (UNIT_BLURBS).
 static func sections() -> Array:
 	return [
-		["Getting Started", """[h]The match[/h]
+		["Getting Started", """[h]Battle menu and replays[/h]
+During battle, [b]Esc[/b] opens Return to Menu, Settings, Save Game and Save Replay. Esc first cancels any active targeting or placement tool. Saving a replay keeps recording the match.
+
+Replays have adjustable playback speed and a [b]Timelapse[/b] checkbox that skips animation delays. At 1x, timelapse plays 30 recorded actions per second. [b]Export MP4[/b] exports the whole 2D battlefield at a chosen speed, resolution (720p through 4K) and frame rate (24, 30 or 60 fps). Export always starts at the beginning and preserves the view you were watching. Install [b]FFmpeg[/b] with H.264 encoding, or select its executable in the export window. No audio or interface is included. Cancel leaves existing files intact.
+
+[h]The match[/h]
 A match has two phases. In [b]deployment[/b] each side buys an army with its points and places it in its own zone. Then the [b]battle[/b] begins.
 
 [h]Turns and rounds[/h]
@@ -216,7 +221,7 @@ Press [b]First Person[/b] in the tools, then click any free cell you can see to 
 The defaults are [b]WASD[/b] to move, [b]Shift[/b] to run, the mouse to look, [b]Space[/b] to jump or climb, [b]C[/b] to descend in space, [b]X[/b] to toggle noclip and [b]Esc[/b] to return. All bindings are listed in [b]Settings → Keybinds → First-person controls[/b]. Noclip flies where you look; Space and C move vertically. It has no gravity, drift or height limit, but cannot enter unexplored cells.
 
 [h]What you see[/h]
-One cell is one meter; walls and ceilings are 2.3 m high. Cells you have never seen are black, and cells out of sight now are dimmed - fog of war still applies. Field of view and mouse sensitivity are in Settings."""],
+One cell is one meter; walls and ceilings are 2.3 m high. Cells you have never seen are black, and cells out of sight now are dimmed - fog of war still applies. Field of view, mouse sensitivity and render distance (16 to 160 cells) are in Settings."""],
 
 		["Cheats", """[h]Enabling cheats[/h]
 In the lobby, turn on [b]Enable cheats[/b]. The host chooses which human slots may change gameplay; guests start without permission. Loaded games restore their original settings, and the host can adjust cheats and ongoing rules before resuming.
@@ -230,9 +235,19 @@ Press [b]F2[/b] during a battle. Type [b]help[/b] for categories, use [b]Tab[/b]
 [h]Click tools and event management[/h]
 [b]inspect[/b], [b]inspect unit[/b], [b]inspect vehicle[/b] and [b]inspect cell[/b] let you select targets on the map. Supply a visible ID, such as [b]inspect unit U12[/b], to inspect that entity directly. [b]spawn unit engineer self[/b] and [b]spawn vehicle tank self[/b] keep placing the chosen entity when you click; [b]Esc[/b] stops the tool and leaves the console open. For spawning, [b]self[/b] means one independent army hostile to every player. Use your slot, such as [b]#1[/b], to spawn for your own army. Other commands keep using [b]self[/b] for your player.
 
-For an area event, click its two opposite corners, or enter [b]event place gas (1,2) (3,4) 3[/b]. Both corner cells are included. [b]world gas add[/b] and [b]world smoke add[/b] use the same corner format.
+For an area event, enter [b]event spawn gas (1,2) (3,4) 3[/b]. Both corner cells are included. [b]world gas add[/b] and [b]world smoke add[/b] use the same corner format.
 
-[b]event types[/b] lists available types, [b]event list[/b] lists active effects and warnings, [b]event spawn gas[/b] opens a property editor and placement tool, and [b]event trigger gas[/b] triggers one immediately at its normal random location. [b]event edit gas:1[/b] edits that exact effect, and [b]event remove gas:1[/b] cancels it. Use references printed by event list or click their suggestions. Event fire and old mines are managed as aggregate effects because the simulation stores their affected cells; completed explosions, reinforcements and damage are not undone. Parameters appear only where the underlying event supports them.
+[b]event types[/b] lists available types, [b]event list[/b] lists active effects and warnings, [b]event spawn gas[/b] starts a cloud at a random eligible location, and [b]event trigger gas[/b] triggers one immediately at its normal random location. [b]event edit gas:1 {rounds:5,w:3,h:4}[/b] edits that exact effect, and [b]event remove gas:1[/b] cancels it. Use references printed by event list or click their suggestions. Event fire and old mines are managed as aggregate effects because the simulation stores their affected cells; completed explosions, reinforcements and damage are not undone. Parameters appear only where the underlying event supports them.
+
+[h]Exact forces and unit stats[/h]
+[b]event spawn army {edge:east, units:{machinegunner:15,civilian:10}}[/b] brings exactly 25 raiders from the east. Use [b]{at:(12,8),count:25}[/b] for a random composition arriving around a coordinate. [b]event spawn reinforce {player:#1,edge:west,units:{engineer:5}}[/b] reinforces a chosen player. [b]event queue[/b] accepts the same options and waits for the normal landing time. Exact forces fill the nearest open floor cells; if the map has less room, the log reports the number that could land.
+
+[b]unit stat change U12 armor (6)[/b] sets the minimum defense roll to 6. Other supported stats use the same parentheses, for example [b]unit stat change U12 speed (12)[/b]. Use command hints for supported fields and bounds.
+
+[h]Test checkpoints and match history[/h]
+A successful cheat still clears ordinary Undo and Redo. Before changing a scenario, the host can enter [b]checkpoint[/b] (named quick) or [b]checkpoint baseline[/b]. [b]checkpoint restore baseline[/b] restores the complete board, rules, units, vehicles, dice state and permanent effects. [b]checkpoint list[/b] lists this match's checkpoints. They are stored separately from manual saves in Checkpoints. Quote names containing spaces. Current network seats and cheat permissions stay with the current hosted session.
+
+[b]game step back[/b] and [b]game step forward[/b] let the host move across recorded actions, including turns and cheats. [b]game history[/b] shows the current position. A new live action replaces the forward branch. Restoring pauses AI until Resume is pressed. These controls require cheats and remain available after a match finishes.
 
 [h]AI and players[/h]
 The host can use [b]ai pause #2[/b], [b]ai step #2[/b] and [b]ai resume #2[/b]. A step lets the active AI make exactly one decision, including an end-turn or a rejected action, then pauses it again. Other AI players keep their own settings. [b]kick #2[/b] disconnects a human guest; [b]ban #2[/b] also blocks their saved reconnect identity until this hosted session closes. These commands do not target units or AI slots.

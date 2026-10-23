@@ -239,7 +239,7 @@ func _shuttle_passengers_hit(veh: Vehicle, center: Vector2i, in_area: Dictionary
 			if res != null:
 				res.deaths.append(u.id)
 			if res != null:
-				res.log("%s takes the hit square on — killed." % u.stats.display_name)
+				res.log("%s takes the hit square on - killed." % u.stats.display_name)
 			continue
 		if not in_area.has(u.coord):
 			continue
@@ -255,7 +255,7 @@ func _shuttle_passengers_hit(veh: Vehicle, center: Vector2i, in_area: Dictionary
 			if res != null:
 				res.deaths.append(u.id)
 			if res != null:
-				res.log("%s (passenger) fails the defense roll (%d, need %d+) — killed." % [
+				res.log("%s (passenger) fails the defense roll (%d, need %d+) - killed." % [
 					u.stats.display_name, roll, need])
 		elif res != null:
 			res.log("%s (passenger) holds on (roll %d, need %d+)." % [u.stats.display_name, roll, need])
@@ -353,7 +353,7 @@ func _resolve_repair_vehicle(intent: RepairVehicleIntent) -> ActionResult:
 	if veh == null:
 		return ActionResult.fail("No such vehicle")
 	if not veh.alive():
-		return ActionResult.fail("The hull is gone — nothing left to repair")
+		return ActionResult.fail("The hull is gone - nothing left to repair")
 	if veh.owner != unit.owner and not state.roster.are_allies(veh.owner, unit.owner):
 		return ActionResult.fail("That's not your vehicle")
 	if not _adjacent_to_vehicle(unit.coord, veh):
@@ -587,7 +587,7 @@ func _resolve_vehicle_board(intent: VehicleBoardIntent) -> ActionResult:
 		veh.ensure_seats()
 		var seat := intent.seat if intent.seat >= 0 else veh.first_free_seat()
 		if seat < 0 or seat >= veh.seats.size() or veh.seats[seat] != -1:
-			return ActionResult.fail("That seat is taken — pull the body out or pick another")
+			return ActionResult.fail("That seat is taken - pull the body out or pick another")
 		var boarding_enemy_s: bool = veh.owner != unit.owner
 		state.grid.cell(unit.coord).occupant = null
 		veh.occupants.append(unit.id)
@@ -606,7 +606,7 @@ func _resolve_vehicle_board(intent: VehicleBoardIntent) -> ActionResult:
 				"the driver's" if seat == Vehicle.DRIVER_SEAT else "a", vname])
 		return res_s
 	if veh.slots_used() >= veh.capacity():
-		return ActionResult.fail("Vehicle is full — pull a corpse out to make room")
+		return ActionResult.fail("Vehicle is full - pull a corpse out to make room")
 
 	var boarding_enemy: bool = veh.owner != unit.owner
 	unit.remaining_ap -= 1
@@ -784,7 +784,7 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 		return ActionResult.fail(err)
 	# А вот ЕХАТЬ нужны обе: на одной гусенице машина только крутится.
 	if not veh.can_drive():
-		return ActionResult.fail("A broken track — the vehicle cannot drive")
+		return ActionResult.fail("A broken track - the vehicle cannot drive")
 	var dir: Vector2i = intent.dir
 	if veh.facing != Vector2i.ZERO and dir != veh.facing and dir != -veh.facing:
 		return ActionResult.fail("Tank can only drive along its facing")
@@ -1013,7 +1013,7 @@ func _resolve_vehicle_move(intent: VehicleMoveIntent) -> ActionResult:
 			var ap_cost := int(ceil(float(rest) / float(MCF.SHUTTLE_CELLS_PER_AP)))
 			driver.remaining_ap -= ap_cost
 			veh.move_credit = ap_cost * MCF.SHUTTLE_CELLS_PER_AP - rest
-		res.log("%s flies %d cell(s) — %s at the wheel (AP %d, %d cells left)" % [
+		res.log("%s flies %d cell(s) - %s at the wheel (AP %d, %d cells left)" % [
 			VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id),
 			int(plan["steps"]), driver.stats.display_name, driver.remaining_ap, veh.move_credit])
 	else:
@@ -1085,7 +1085,7 @@ func _resolve_vehicle_cannon(intent: VehicleCannonIntent) -> ActionResult:
 		if locked == Vector2i.ZERO:
 			return ActionResult.fail("The tower is jammed and has never been laid")
 		if fire_dir != locked:
-			return ActionResult.fail("The tower is jammed — it fires only where it last did")
+			return ActionResult.fail("The tower is jammed - it fires only where it last did")
 
 	veh.ap -= int(gun.get("ap_cost", 1))
 	# Снаряд приходит от БОРТА, с которого стреляли (веха 14.1): по нему цель и считает,
@@ -1112,7 +1112,7 @@ func _resolve_vehicle_cannon(intent: VehicleCannonIntent) -> ActionResult:
 		res.log("%s fires its main gun at (%d, %d)! (roll %d, need %d+)" % [
 			spec.get("name", veh.type_id), intent.target.x, intent.target.y, roll, need])
 	else:
-		res.log("%s fires — shot falls short, shell lands at (%d, %d)! (roll %d, need %d+)" % [
+		res.log("%s fires - shot falls short, shell lands at (%d, %d)! (roll %d, need %d+)" % [
 			spec.get("name", veh.type_id), landing.x, landing.y, roll, need])
 	# Снимок «до взрыва» для показа во время броска (item 22): разрушения и снятая
 	# прочность появятся только ПОСЛЕ того, как кубик докрутится.
@@ -1849,7 +1849,7 @@ func _resolve_shoot_fixture(shooter: UnitInstance, c: Vector2i, side: int, shots
 			cell.feature_durability -= damage
 			if cell.feature_durability <= 0: _destroy_furniture(cell, result, shooter.coord)
 	result.log("%s fires %d at %s (%d, %d): %d hits%s" % [shooter.stats.display_name, want,
-		label, c.x, c.y, damage, " — light destroyed" if fixture_at(c, side) == "" else ""])
+		label, c.x, c.y, damage, " - light destroyed" if fixture_at(c, side) == "" else ""])
 	shooter.action_state.remaining_shots -= want
 	if shooter.action_state.remaining_shots <= 0: shooter.action_state = null
 	_fx_lane(result, shooter.coord, c, shooter.owner, "shot", _weapon_of(shooter))

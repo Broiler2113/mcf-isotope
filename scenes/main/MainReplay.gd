@@ -12,7 +12,22 @@ func _begin_recording() -> void:
 		return
 	recorder = ReplayRecorder.new()
 	recorder.begin(state, resolver, _match_meta())
+	_restore_recorded_history()
 	resolver.replay_recorder = recorder
+
+func _restore_recorded_history() -> void:
+	if _loaded_history.is_empty() or recorder == null: return
+	if not MatchHistory.valid_recording(_loaded_history.get("source")):
+		_loaded_history = {}
+		return
+	var source: Dictionary = _loaded_history.source
+	var count := clampi(int(_loaded_history.get("cursor", 0)), 0, source.get("steps", []).size())
+	recorder.adopt_prefix(source, count, state, resolver, _fx.to_dict())
+	_history.load_data(_loaded_history, recorder)
+	recorder.resume_checkpoint(_fx)
+	_history.applied(recorder)
+	_recording_resumed = true
+	_loaded_history = {}
 
 ## Подпись матча для списков в меню: карта, раунд, время.
 func _match_meta() -> Dictionary:
@@ -46,7 +61,7 @@ func _save_game() -> void:
 	_prompt_save_name()
 
 ## Модальное окошко ввода имени сохранения (item 19).
-func _prompt_save_name() -> void:
+func _prompt_save_name(save_replay := false) -> void:
 	var layer := CanvasLayer.new()
 	layer.add_to_group("shortcut_modal")
 	layer.layer = 80
@@ -64,12 +79,12 @@ func _prompt_save_name() -> void:
 	var frame := VBoxContainer.new()
 	frame.add_theme_constant_override("separation", 0)
 	panel.add_child(frame)
-	frame.add_child(SteamChrome.header_bar("Save Game"))
+	frame.add_child(SteamChrome.header_bar("Save Replay" if save_replay else "Save Game"))
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 10)
 	frame.add_child(SteamChrome.pad(box, 16, 12))
 	var lbl := Label.new()
-	lbl.text = "Name this save:"
+	lbl.text = "Name this replay:" if save_replay else "Name this save:"
 	box.add_child(lbl)
 	var edit := LineEdit.new()
 	edit.custom_minimum_size = Vector2(280, 0)
@@ -89,12 +104,20 @@ func _prompt_save_name() -> void:
 	var close := func() -> void: layer.queue_free()
 	cancel.pressed.connect(close)
 	var commit := func() -> void:
-		_do_save_game(edit.text)
+		if save_replay: _do_save_replay(edit.text)
+		else: _do_save_game(edit.text)
 		layer.queue_free()
 	ok.pressed.connect(commit)
 	edit.text_submitted.connect(func(_t: String) -> void: commit.call())
 	edit.grab_focus()
 	edit.select_all()
+
+func _do_save_replay(chosen_name: String) -> void:
+	if recorder == null or recorder.is_empty(): return
+	var name := ReplayFile.named(chosen_name, ReplayFile.REPLAY_EXT)
+	var path := ReplayFile.path_for(ReplayFile.REPLAY_DIR, name)
+	state.log.add("Replay saved as %s" % name if ReplayFile.write(path, recorder.to_dict()) else "[denied] Could not write the replay file.")
+	_refresh_status()
 
 func _do_save_game(chosen_name: String) -> void:
 	if replay != null or state == null:
@@ -103,7 +126,7 @@ func _do_save_game(chosen_name: String) -> void:
 	var name := ReplayFile.named(chosen_name, ReplayFile.SAVE_EXT)
 	var path := ReplayFile.path_for(ReplayFile.SAVE_DIR, name)
 	if ReplayFile.write(path, data):
-		state.log.add("— Game saved as %s —" % name)
+		state.log.add("- Game saved as %s -" % name)
 	else:
 		state.log.add("[denied] Could not write the save file.")
 	_refresh_status()
@@ -137,6 +160,7 @@ func _save_payload() -> Dictionary:
 		"elapsed_ms": maxi(0, (_real_stop_ms if _real_stop_ms >= 0 else Time.get_ticks_msec()) - _real_start_ms),
 	}
 	data["lobby"]["ais"] = GameConfig.ai_speed
+	if recorder != null: data["history"] = _history.to_dict(recorder)
 	var fx := _fx.to_dict()
 	if not fx.is_empty():
 		data["fx"] = fx
@@ -152,7 +176,7 @@ func _adopt_save() -> bool:
 		return false
 	var loaded := StateCodec.decode(data.get("state", {}))
 	if loaded == null:
-		push_warning("save file is newer than this build — starting a normal match")
+		push_warning("save file is newer than this build - starting a normal match")
 		return false
 	state = loaded
 	_lobby_settings = LobbySettings.with_rules(data.get("lobby", {}), data.get("rules", {}))
@@ -173,11 +197,96 @@ func _adopt_save() -> bool:
 	_real_start_ms = Time.get_ticks_msec() - maxi(0, int(data.get("elapsed_ms", 0)))
 	_real_stop_ms = Time.get_ticks_msec() if bool(data.get("clock_stopped", false)) else -1
 	_loaded_from_save = true
+	_loaded_history = data.get("history", {}) if data.get("history") is Dictionary else {}
 	state.log.line_added.connect(_on_log_line)
 	return true
 
+## Full history and test checkpoints are host controls, separate from Undo/Redo.
+func _history_command(parsed: Dictionary, side: int) -> String:
+	if replay != null or _spectator or (net != null and not net.is_host): return "Only the host can change match history or test checkpoints."
+	var denied := CheatAccess.denial(state, side)
+	if not denied.is_empty(): return denied
+	if recorder == null: return "No recorded history is available in this session."
+	if _animating or _net_playing or _net_request_pending: return "Wait for the current action to finish."
+	if parsed.op == "history_status": return _history.position(recorder)
+	if parsed.op == "checkpoint_list": return _history.checkpoint_list(recorder)
+	var name: String = parsed.args.get("name", "quick")
+	if parsed.op == "checkpoint_save": return _history.checkpoint(recorder, state, resolver, _fx, name)
+	var restored: Dictionary = _history.restore_checkpoint(recorder, name) if parsed.op == "checkpoint_restore" else _history.step(recorder, -1 if parsed.op == "history_back" else 1)
+	if restored.has("error"): return str(restored.error)
+	var frame := ReplayCheckpoint.unpack(restored.frame)
+	if frame.get("state", {}).get("w") != state.grid.width or frame.get("state", {}).get("h") != state.grid.height: return "This checkpoint belongs to a different battlefield."
+	var seats := {}
+	for slot: Roster.Slot in state.roster.slots:
+		seats[slot.id] = {"kind": slot.kind, "peer": slot.peer_id, "name": slot.display_name, "cheats": slot.cheats_allowed}
+	var cheats := state.cheats_enabled
+	var capture := resolver.capture_cosmetics
+	var restore := resolver.restore_cosmetics
+	StateCodec.restore_into(state, frame.state)
+	state.dice.resume_random()
+	state.cheats_enabled = cheats
+	for slot: Roster.Slot in state.roster.slots:
+		if not seats.has(slot.id): continue
+		slot.cheats_allowed = seats[slot.id].cheats
+		if networked:
+			slot.kind = seats[slot.id].kind
+			slot.peer_id = seats[slot.id].peer
+			slot.display_name = seats[slot.id].name
+	resolver = GameActionResolver.new(state)
+	StateCodec.apply_rules(resolver, frame.rules)
+	state.cheats_enabled = cheats
+	resolver.explored = frame.get("visibility", {}).duplicate(true)
+	resolver.capture_cosmetics = capture
+	resolver.restore_cosmetics = restore
+	resolver.update_airlocks()
+	GameConfig.fog_mode = resolver.fog_mode
+	GameConfig.friendly_fire = resolver.friendly_fire_enabled
+	_fx.clear()
+	_fx.from_dict(frame.get("fx", {}))
+	recorder.adopt_prefix(restored.recording, int(restored.cursor), state, resolver, _fx.to_dict())
+	recorder.resume_checkpoint(_fx)
+	_history.source = restored.recording
+	_history.cursor = int(restored.cursor)
+	_history.applied(recorder)
+	if net != null:
+		net.resolver = resolver
+		net.recorder = recorder
+		net.match_finished = false
+	else:
+		resolver.replay_recorder = recorder
+	_history_epoch += 1
+	_ai_step_queued = false
+	_net_queue.clear()
+	_net_messages.clear()
+	_cheat_ai_steps.clear()
+	_history_hold = true
+	_paused = true
+	_match_over = false
+	_audio_victory_played = false
+	if is_instance_valid(_victory_overlay):
+		_victory_overlay.queue_free()
+		_victory_overlay = null
+	_real_stop_ms = -1
+	_fog_mem.clear()
+	_fog_mem_grid = null
+	UnitInstance.vision_epoch += 1
+	_rebuild_restored_controllers()
+	_skey_cache.clear()
+	_resync_after_restore()
+	var notice := "Restored checkpoint '%s'." % name if parsed.op == "checkpoint_restore" else _history.position(recorder)
+	state.log.add(notice)
+	if net != null: net.broadcast_restore(notice)
+	return notice + " AI is paused; use Resume to continue."
+
+func _rebuild_restored_controllers() -> void:
+	for controller: PlayerController in controllers.values():
+		if controller.intent_ready.is_connected(_on_intent_ready): controller.intent_ready.disconnect(_on_intent_ready)
+	controllers.clear()
+	if networked: _setup_network_controllers()
+	else: _build_controllers()
+
 func _adopt_replay() -> bool:
-	var data := SaveHandoff.take_replay()
+	var data := export_replay_data if video_export else SaveHandoff.take_replay()
 	if data.is_empty():
 		return false
 	replay = ReplayPlayer.new(data)
@@ -217,8 +326,8 @@ func _take_replay_state() -> void:
 
 ## Открыть просмотр записи: те же вступительные строки, что и у живой партии.
 func _open_replay() -> void:
-	state.log.add("— Replay: %s —" % ReplayFile.describe(replay.data))
-	state.log.add("— Initiative this match: %s —" % _initiative_names())
+	state.log.add("- Replay: %s -" % ReplayFile.describe(replay.data))
+	state.log.add("- Initiative this match: %s -" % _initiative_names())
 	if replay.opening_result != null:
 		await _play_civilian_result(replay.opening_result)
 	_refresh_replay_bar()
@@ -230,6 +339,7 @@ func _open_replay() -> void:
 func _show_result(result: ActionResult) -> void:
 	if result == null:
 		return
+	_accept_replay_checkpoint()
 	if not result.ok:
 		state.log.add("[denied] " + result.reason)
 		return
@@ -249,14 +359,17 @@ func _show_result(result: ActionResult) -> void:
 		var outcome := resolver.match_outcome()
 		if bool(outcome.get("over", false)):
 			# A local caption, not a new recorded log/state mutation; replay stays seekable.
-			_on_log_line("— %s —" % _outcome_title(outcome))
+			_on_log_line("- %s -" % _outcome_title(outcome))
 			_play_victory_audio()
 	queue_redraw()
 
 func _replay_step() -> void:
 	if replay == null or _animating or not replay.has_next():
 		return
-	await _show_result(replay.play_next())
+	if _replay_timelapse:
+		_apply_timelapse_result(replay.play_next())
+		_refresh_status()
+	else: await _show_result(replay.play_next())
 	_refresh_replay_bar()
 
 ## Шаг назад и любая перемотка — это пересборка доски из ближайшего ключевого кадра
@@ -266,6 +379,7 @@ func _replay_seek(target: int) -> void:
 	if replay == null:
 		return
 	_replay_playing = false
+	_replay_run_id += 1
 	if _animating:
 		# Keep the latest destination and finish the current presentation promptly.
 		# Never replace the board while an old animation coroutine still owns it.
@@ -273,7 +387,7 @@ func _replay_seek(target: int) -> void:
 		_replay_skip_animations = true
 		_replay_seek_timer.start(0.02)
 		return
-	_replay_skip_animations = false
+	_replay_skip_animations = _replay_timelapse
 	if _replay_seek_timer != null:
 		_replay_seek_timer.stop()
 	replay.seek(target)
@@ -291,19 +405,63 @@ func _replay_toggle() -> void:
 		_replay_loop()
 
 func _replay_loop() -> void:
-	while _replay_playing and replay != null and replay.has_next() and is_inside_tree():
+	_replay_run_id += 1
+	var run_id := _replay_run_id
+	var credit := 1.0
+	var previous := Time.get_ticks_usec()
+	while _replay_playing and run_id == _replay_run_id and replay != null and replay.has_next() and is_inside_tree():
 		if _animating:
 			await get_tree().process_frame
+			previous = Time.get_ticks_usec()
 			continue
-		await _show_result(replay.play_next())
+		if _replay_timelapse:
+			var now := Time.get_ticks_usec()
+			credit += minf(float(now - previous) / 1000000.0, 0.25) * 30.0 * _replay_speed
+			previous = now
+			var budget := now + 8000
+			while credit >= 1.0 and replay.has_next() and Time.get_ticks_usec() < budget:
+				_apply_timelapse_result(replay.play_next())
+				credit -= 1.0
+			_refresh_status()
+			queue_redraw()
+			_refresh_replay_bar()
+			await get_tree().process_frame
+		else:
+			await _show_result(replay.play_next())
+			_refresh_replay_bar()
+			if not _replay_playing or not is_inside_tree(): break
+			await get_tree().create_timer(REPLAY_STEP_DELAY / _replay_speed).timeout
+			previous = Time.get_ticks_usec()
+	if run_id == _replay_run_id:
+		_replay_playing = false
 		_refresh_replay_bar()
-		# _show_result мог увести узел из дерева (выход из повтора) — тогда таймер ниже
-		# упал бы на get_tree() == null (item 10).
-		if not _replay_playing or not is_inside_tree():
-			break
-		await get_tree().create_timer(REPLAY_STEP_DELAY / _replay_speed).timeout
-	_replay_playing = false
-	_refresh_replay_bar()
+
+func _set_replay_timelapse(enabled: bool) -> void:
+	_replay_timelapse = enabled
+	_replay_skip_animations = enabled
+	if _audio != null: _audio.suppress = enabled
+
+func _accept_replay_checkpoint() -> void:
+	if replay == null or replay.restored_checkpoint.is_empty(): return
+	resolver.fog_mode = MCF.Fog.OFF
+	_fx.clear()
+	_fx.from_dict(replay.restored_checkpoint.get("fx", {}))
+	_fog_mem.clear()
+	_fog_mem_grid = null
+	_walk_cells.clear()
+	_pending_death_ids.clear()
+	_hold_visual.clear()
+
+func _apply_timelapse_result(result: ActionResult) -> void:
+	_accept_replay_checkpoint()
+	if result == null: return
+	if not result.ok:
+		state.log.add("[denied] " + result.reason)
+		return
+	_fx.audio_suppressed = true
+	_fx.apply(result.fx)
+	_fx.advance(10.0)
+	state.log.publish_result(result)
 
 func _replay_cycle_speed() -> void:
 	var i := REPLAY_SPEEDS.find(_replay_speed)
@@ -326,7 +484,7 @@ func _refresh_replay_bar() -> void:
 			_replay_bookmarks.select(nearest)
 			_replay_bookmarks.ensure_current_is_visible()
 	_replay_play_btn.text = "❚❚" if _replay_playing else "▶"
-	_replay_speed_btn.text = "%dx" % int(_replay_speed)
+	_replay_speed_btn.text = str(_replay_speed) + "x"
 	# Таймлайн (item 7) отражает позицию, не вызывая seek: обновляем под флагом.
 	if _replay_slider != null:
 		_replay_slider_syncing = true
@@ -380,7 +538,7 @@ func _ai_controller_for(side: int, slot: Roster.Slot) -> PlayerController:
 		var learned := LearnedController.new(side)
 		learned.bind_match(resolver)
 		learned.fallback_engaged.connect(func(reason: String) -> void:
-			state.log.add("— %s: learned AI unavailable (%s) — AI - Tactician takes the seat —" % [
+			state.log.add("- %s: learned AI unavailable (%s) - AI - Tactician takes the seat -" % [
 				MCF.owner_name(side), reason])
 			_refresh_status())
 		return learned
@@ -578,6 +736,14 @@ func _build_replay_bar() -> void:
 		row.add_child(rl_label)
 	# Таймлайн (item 7): тянешь ползунок — прыгаешь в любую точку записи, минуя всё
 	# между. Перемотка идёт через seek(), тем же путём, что и кнопки шага.
+	var options := HBoxContainer.new()
+	frame.add_child(SteamChrome.pad(options, 12, 2))
+	var timelapse := CheckBox.new()
+	timelapse.text = "Timelapse"
+	timelapse.tooltip_text = "Skip animation delays. At 1x, play 30 recorded actions per second."
+	timelapse.toggled.connect(_set_replay_timelapse)
+	options.add_child(timelapse)
+	options.add_child(_replay_btn("Export MP4…", func() -> void: ReplayExportWindow.open(self)))
 	var slider_wrap := HBoxContainer.new()
 	frame.add_child(SteamChrome.pad(slider_wrap, 12, 4))
 	_replay_slider = HSlider.new()

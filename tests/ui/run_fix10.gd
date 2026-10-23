@@ -77,31 +77,18 @@ func run() -> void:
 	ck(ui.accent_changed.get_connections().size() == count, "freed accent controls leave no signal connections")
 
 func event_editor(console: Node) -> void:
-	var editor_script = load("res://src/cheats/CheatEventEditor.gd")
-	var editor: Node = editor_script.open(console, true, "gas")
-	for i in 3: await process_frame
-	editor.corner_a.text = "(7,8)"
-	editor.corner_b.text = "(5,6)"
-	editor.controls.rounds.value = 4
-	editor._apply()
+	console.submit("event spawn gas (5,6) (7,8) 4")
 	for i in 3: await process_frame
 	var clouds: Array = console.main.resolver.random_events.clouds
 	ck(clouds.size() == 1 and clouds[0].x == 5 and clouds[0].y == 6 and clouds[0].w == 3 and clouds[0].h == 3, "typed event corners place the exact inclusive rectangle")
 	console.submit("world smoke add (10,10) (12,12) 4")
 	var smoke: Dictionary = console.main.resolver.random_events.smoke[0]
-	editor = editor_script.open(console, false, "smoke:%d" % smoke.uid)
-	for i in 3: await process_frame
-	ck(editor.corner_a.text == "(10,10)" and editor.corner_b.text == "(12,12)", "editing smoke shows both inclusive corners")
-	editor.corner_b.text = "(14,13)"
-	editor._apply()
+	console.submit("event edit smoke:%d {x:10,y:10,w:5,h:4}" % smoke.uid)
 	smoke = console.main.resolver.random_events.smoke[0]
 	ck(smoke.w == 5 and smoke.h == 4, "smoke area edits use the same coordinate convention")
 	console.main.resolver._ignite(console.main.state.grid.cell(Vector2i(18, 12)), console.main.resolver.EVENT_FIRE_OWNER)
-	editor = editor_script.open(console, false, "fire")
-	for i in 3: await process_frame
-	ck(editor.corner_a == null and editor.apply_button.disabled and not editor.remove_button.disabled, "aggregate fire can be removed without inventing an editable rectangle")
-	editor.queue_free()
-	await process_frame
+	console.submit("event remove fire")
+	ck(not console.main.state.grid.cell(Vector2i(18, 12)).on_fire, "aggregate fire can be removed through commands")
 
 func flight(main: Node) -> void:
 	var fp = load("res://scenes/main/FirstPerson.gd").new(main, Vector2i(5, 5))

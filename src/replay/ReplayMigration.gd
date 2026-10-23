@@ -37,6 +37,12 @@ static func upgrade(data: Dictionary, path: String = "") -> Dictionary:
 		owner = player.state.active_player()
 		ReplayCheckpoint.apply_effects(fx, result)
 		var step: Dictionary = player.steps()[player.index - 1]
+		if str(step.get("i", {}).get("t", "")) == "checkpoint":
+			fx.clear()
+			fx.from_dict(ReplayCheckpoint.unpack(step.get("k", {})).get("fx", {}))
+			frames[player.index - 1] = step.get("k", {})
+			frame_at = player.index
+			continue
 		var handoff := str(step.get("i", {}).get("t", "")) == IntentCodec.T_END
 		if ReplayCheckpoint.due(player.state, player.index - frame_at, handoff):
 			frames[player.index - 1] = ReplayCheckpoint.pack(player.state, player.resolver, fx, not handoff)

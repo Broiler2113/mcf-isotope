@@ -296,7 +296,7 @@ func _draw_vehicle_needs(owner: int, need_at: Callable) -> void:
 			continue
 		var n: int = need_at.call(best)
 		var top := _cell_origin(Vector2i(v.center().x, v.origin.y)) + Vector2(CELL * 0.3, -CELL * 0.08)
-		_draw_need(top, "auto" if n <= 0 else ("%d+" % n if n <= 6 else "—"), lit)
+		_draw_need(top, "auto" if n <= 0 else ("%d+" % n if n <= 6 else "-"), lit)
 
 ## Клетки, которые накроет струя огнемёта из from к цели (для предпросмотра) — та же
 ## геометрия, что у выстрела, включая разлёт о стену (batch 17, item 5).
@@ -467,7 +467,7 @@ func _draw() -> void:
 				if coord == at_hover or not _cell_on_screen(coord.x, coord.y):
 					continue
 				var an: int = resolver.aim_need(at_unit, coord)
-				var at := "auto" if an <= 0 else ("%d+" % an if an <= 6 else "—")
+				var at := "auto" if an <= 0 else ("%d+" % an if an <= 6 else "-")
 				var ap := _cell_origin(coord) + Vector2(CELL * 0.08, CELL * 0.62)
 				draw_string_outline(font, ap, at, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, 3, Color(0, 0, 0, 0.85))
 				draw_string(font, ap, at, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1, 0.92, 0.5, 0.9))
@@ -500,7 +500,7 @@ func _draw() -> void:
 			# Бросок и для выстрела по клетке пола (окно, разрыв ПТ) — как у целей-юнитов.
 			if mode == Mode.SHOOT and _unit_at(shov) == null:
 				var cneed: int = resolver.aim_need(su, shov)
-				var ctxt := "auto" if cneed <= 0 else ("%d+" % cneed if cneed <= 6 else "—")
+				var ctxt := "auto" if cneed <= 0 else ("%d+" % cneed if cneed <= 6 else "-")
 				# Окно: бросает не стрелок, а стекло — его спасбросок против каждой пули.
 				var gfid := state.grid.cell(shov).feature_id
 				# Only an anti-tank shell skips the pane's "glass N+" (0.11.1, user rule): it does
@@ -523,7 +523,7 @@ func _draw() -> void:
 				draw_line(c - Vector2(0, CELL * 0.5), c + Vector2(0, CELL * 0.5), Color(1, 0.3, 0.3, 0.7), 1.5)
 				if show_need:
 					var need: int = resolver.aim_need(su, t.coord, t)
-					var txt := "auto" if need <= 0 else ("%d+" % need if need <= 6 else "—")
+					var txt := "auto" if need <= 0 else ("%d+" % need if need <= 6 else "-")
 					var big: bool = t.coord == shov
 					var fs := 16 if big else 12
 					var tp := c + Vector2(CELL * 0.3, -CELL * 0.3)
@@ -734,7 +734,7 @@ func _draw() -> void:
 				if coord == chov or (occ != null and occ.owner != cveh_sel.owner):
 					var cn: int = resolver.cannon_aim_need(cveh_sel, coord)
 					_draw_need(_cell_origin(coord) + Vector2(CELL * 0.62, CELL * 0.22),
-							"%d+" % cn if cn <= 6 else "—", coord == chov)
+							"%d+" % cn if cn <= 6 else "-", coord == chov)
 			# Над вражескими машинами — один бросок на корпус, а не по цифре на клетку.
 			_draw_vehicle_needs(cveh_sel.owner, func(c: Vector2i) -> int:
 				return resolver.cannon_aim_need(cveh_sel, c))
@@ -992,6 +992,8 @@ func _draw() -> void:
 			if details:
 				draw_arc(ucenter, usz * 0.34, 0, TAU, 20, cols[1], 1.5)
 				_tag_line(unit).draw(canvas, ucenter + Vector2(-9, 5 - 16 * 0.8), cols[2])
+		if MCF.is_independent(uown) and state.roster.faction_suffix_of(uown) == "_neutral":
+			draw_arc(center, CELL * 0.39, 0, TAU, 24, cols[0], 2.5)
 		if in_trench:
 			draw_rect(Rect2(uorg + Vector2(usz * 0.12, usz * 0.72), Vector2(usz * 0.76, usz * 0.2)),
 					Color(0.1, 0.07, 0.04, 0.55))
@@ -1379,7 +1381,7 @@ func _refresh_objective() -> void:
 	else:
 		var left := resolver.wave_fighters_left()
 		rows.append([null, "Waves landed", "%d / %s" % [md.wave, "∞" if md.endless() else str(md.waves_total)]])
-		var next := "—"
+		var next := "-"
 		if not md.pending_wave.is_empty():
 			next = "end of this round"
 		elif md.endless() or md.wave < md.waves_total:

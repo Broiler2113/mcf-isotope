@@ -11,4 +11,4 @@ rate_of_fire = 4
 armor_threshold = 3
 cost = 65
 default_item_id = "frag_grenade"
-notes = "Стартовый предмет — осколочная граната (реализуется на M2)."
+notes = "Стартовый предмет - осколочная граната (реализуется на M2)."

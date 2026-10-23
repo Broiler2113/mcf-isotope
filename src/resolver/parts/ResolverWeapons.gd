@@ -68,7 +68,7 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 			and shooter.attack_ability() != MCF.ABILITY_FLAMETHROWER:
 		var intercepted := first_unit_on_line(shooter.coord, target.coord)
 		if intercepted != null:
-			redirect_line = "%s fires through %s — the shot hits them instead!" % [
+			redirect_line = "%s fires through %s - the shot hits them instead!" % [
 				shooter.stats.display_name, intercepted.stats.display_name]
 			target = intercepted
 
@@ -218,7 +218,7 @@ func _resolve_shoot(intent: ShootIntent) -> ActionResult:
 		shooter.stats.display_name, target.stats.display_name, fired, hits, need
 	]
 	if arriving < fired:
-		summary += " — %d of %d got through the glass" % [arriving, fired]
+		summary += " - %d of %d got through the glass" % [arriving, fired]
 	result.log(summary)
 	if killed:
 		result.log("%s killed!" % target.stats.display_name)
@@ -241,7 +241,7 @@ func _resolve_cancel_shot(intent: CancelShotIntent) -> ActionResult:
 		return ActionResult.fail("No burst to cancel")
 	var left: int = unit.action_state.remaining_shots
 	unit.action_state = null
-	return ActionResult.success(["%s holds fire — %d shot(s) in the burst dropped." % [
+	return ActionResult.success(["%s holds fire - %d shot(s) in the burst dropped." % [
 		unit.stats.display_name, left]])
 
 # --- Противотанкист (§3.14): выстрел-взрыв, авто-поражение в радиусе 1 ---
@@ -267,7 +267,7 @@ func _resolve_anti_tank(shooter: UnitInstance, center: Vector2i, aimed: String =
 	# холостой бросок сдвигает поток случайности и разводит хост с клиентом.
 	var landing := center
 	if center == shooter.coord:
-		result.log("%s fires at their own feet — the charge lands at (%d, %d)." % [
+		result.log("%s fires at their own feet - the charge lands at (%d, %d)." % [
 			shooter.stats.display_name, center.x, center.y])
 	else:
 		# Бросок на попадание (#7): промах НЕ отменяет взрыв — заряд ложится ближе.
@@ -281,10 +281,10 @@ func _resolve_anti_tank(shooter: UnitInstance, center: Vector2i, aimed: String =
 			"roll": roll, "need": need, "ok": on_target,
 		})
 		if on_target:
-			result.log("%s: roll %d (need %d+) — direct hit at (%d, %d)!" % [
+			result.log("%s: roll %d (need %d+) - direct hit at (%d, %d)!" % [
 				shooter.stats.display_name, roll, need, landing.x, landing.y])
 		else:
-			result.log("%s: roll %d (need %d+) — missed, charge fell short at (%d, %d)." % [
+			result.log("%s: roll %d (need %d+) - missed, charge fell short at (%d, %d)." % [
 				shooter.stats.display_name, roll, need, landing.x, landing.y])
 	# Снимок «до взрыва» для показа во время броска (item 22).
 	var at_area := MCF.blast_square(landing, MCF.ANTI_TANK_BLAST_RADIUS)
@@ -1153,7 +1153,7 @@ func _resolve_push(intent: PushIntent) -> ActionResult:
 	})
 	if not survived:
 		_fx(result, {"fx": "blood", "at": target.coord, "from": actor.coord})
-		result.log("%s shield-pushes %s — it dies (roll %d, need %d+)" % [
+		result.log("%s shield-pushes %s - it dies (roll %d, need %d+)" % [
 			actor.stats.display_name, target.stats.display_name, roll, need])
 	elif pushed:
 		result.log("%s pushes %s back one cell (roll %d)" % [
@@ -1180,7 +1180,7 @@ func _push_window(actor: UnitInstance, coord: Vector2i) -> ActionResult:
 		result.dice_events.append({"kind": "check", "actor": name,
 				"roll": roll, "need": need, "ok": roll >= need})
 		if roll >= need:
-			result.log("%s strikes the %s with its shield — it holds (roll %d, need %d+)" % [
+			result.log("%s strikes the %s with its shield - it holds (roll %d, need %d+)" % [
 					actor.stats.display_name, name.to_lower(), roll, need])
 			return result
 	_capture_visual_hold(result, [coord])
@@ -1281,7 +1281,7 @@ func _resolve_dpmg(intent: DPMGFireIntent) -> ActionResult:
 	if trench_protected(intent.dpmg_coord, target):
 		return ActionResult.fail("Target is below the trench line")
 	if _shield_immunity(target) and Combat.distance(intent.dpmg_coord, target.coord) > 1:
-		return ActionResult.fail("The shield stops fire from range — get next to it")
+		return ActionResult.fail("The shield stops fire from range - get next to it")
 	var need := hit_need(Combat.distance(intent.dpmg_coord, target.coord), MCF.DPMG_RANGE) \
 			+ smoke_penalty(intent.dpmg_coord, target.coord)
 	if need >= 7:

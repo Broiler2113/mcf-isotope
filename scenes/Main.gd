@@ -33,6 +33,7 @@ func _ready() -> void:
 	_fx.solid_at = func(c: Vector2i) -> bool: return FxDecals.solid_in(state, c)
 	_fx.space_at = func(c: Vector2i) -> bool: return FxDecals.space_in(state, c)
 	_audio = BattleAudio.new()
+	_audio.suppress = video_export
 	_audio.origin = ORIGIN
 	_audio.cell_size = CELL
 	_audio.cell_visible = _audio_cell_visible
@@ -60,20 +61,21 @@ func _ready() -> void:
 	# Связь налажена во вкладке Multiplayer главного меню (#54) — подхватываем её.
 	# ДО открытия партии: в сети стартовый слот мирных отыгрывает хост и высылает
 	# его броски клиенту (#93), иначе каждая сторона сыграла бы его по-своему.
-	_adopt_network()
+	if not video_export: _adopt_network()
 	# После UI — иначе первые строки боя (порядок инициативы) уйдут в никуда.
 	if replay != null:
-		_open_replay()
+		if not video_export: _open_replay()
 	elif not networked:
 		_open_match()
 	_refresh_status()
 	set_process(true)
 	# Камера — на свои войска, а не в угол доски: с каймой вокруг карты (0.9.3) угол поля
 	# это десяток клеток пустого грунта, травы или космоса.
-	_center_on_side.call_deferred(my_owner if networked else state.active_player(), true)
+	if not video_export: _center_on_side.call_deferred(my_owner if networked else state.active_player(), true)
 	queue_redraw()
 
 func _process(delta: float) -> void:
+	if video_export: return
 	if _audio != null:
 		_audio.suppress = replay != null and _replay_skip_animations
 	_advance_group_preview()
@@ -179,11 +181,11 @@ func _build_state() -> void:
 func _open_match() -> void:
 	_begin_recording()
 	_capture_opening_view()
-	state.log.add("— Initiative this match: %s —" % _initiative_names())
+	state.log.add("- Initiative this match: %s -" % _initiative_names())
 	# Открывающий слот мирных играется ВНЕ потока намерений, но кубики бросает —
 	# поэтому под запись он уходит через сам регистратор (см. ReplayRecorder).
-	await _play_civilian_result(recorder.capture_opening() if recorder != null
-			else resolver.open_match())
+	if not _recording_resumed:
+		await _play_civilian_result(recorder.capture_opening() if recorder != null else resolver.open_match())
 	# Ходящий первым может оказаться машиной (#103): до этого ИИ запускался только ПОСЛЕ
 	# чужого действия, и партия «ИИ против ИИ» просто стояла на месте, пока человек не
 	# нажмёт что-нибудь — а нажимать ему нечем, своих юнитов у него нет.
@@ -191,9 +193,10 @@ func _open_match() -> void:
 
 ## Отдать ход текущей стороне, если ею управляет не человек.
 func _kick_if_ai() -> void:
+	if not networked and is_instance_valid(_battle_menu): return
 	# В сети (batch 12 #15) ИИ ведёт хост, и шаг ему даётся только когда очередь показа
 	# пуста — иначе два таймера подняли бы его дважды за одно действие.
-	if state == null or _animating or _paused or _net_playing or _match_over:
+	if state == null or _animating or _paused or _history_hold or _net_playing or _match_over:
 		return
 	var ac: PlayerController = controllers.get(state.active_player())
 	if ac == null or ac.is_local_human():
@@ -840,7 +843,7 @@ func _escape_pressed() -> void:
 		queue_redraw()
 		return
 	if _animating:
-		SettingsWindow.open(self)
+		BattleMenu.open(self)
 		return
 	# Отмена незакоммиченного рисования ЛДФ-стены.
 	if mode == Mode.BUILD_WALL:
@@ -870,8 +873,7 @@ func _escape_pressed() -> void:
 	if selected_id != -1 or selected_vehicle_id != -1:
 		_deselect()
 		return
-	# No pending interaction: Escape opens settings.
-	SettingsWindow.open(self)
+	BattleMenu.open(self)
 
 # --- Поток намерений (с анимацией кубиков) ---
 func _submit(intent: Intent) -> void:
@@ -1021,11 +1023,13 @@ func _queue_ai_step(_ctrl: PlayerController) -> void:
 	if _ai_step_queued:
 		return
 	_ai_step_queued = true
+	var epoch := _history_epoch
 	await get_tree().create_timer(AI_STEP_DELAY / GameConfig.ai_speed).timeout
+	if epoch != _history_epoch: return
 	_ai_step_queued = false
 	# Пауза (item 4) держится здесь, в единственной точке, откуда ИИ вообще получает
 	# ход. Снятие паузы само зовёт _kick_if_ai(), и бой продолжается с того же места.
-	if _paused:
+	if _paused or _history_hold or (not networked and is_instance_valid(_battle_menu)):
 		return
 	# За время паузы ход мог смениться (сдача хода, загрузка, конец боя). Шагает тот, чей
 	# ход СЕЙЧАС: пинок другому ИИ, пришедший, пока этот шаг ждал, был отброшен выше, и
@@ -1041,6 +1045,12 @@ func _queue_ai_step(_ctrl: PlayerController) -> void:
 		cur.begin_turn(state)
 
 func _toggle_pause() -> void:
+	if _history_hold:
+		_history_hold = false
+		_paused = false
+		_refresh_pause_button()
+		_kick_if_ai()
+		return
 	if not _pause_available():
 		return
 	_paused = not _paused
@@ -1076,7 +1086,7 @@ func _declare_match_over(title: String) -> void:
 			session.send_to(peer, {"k": NetHandoff.K_RECLAIM_STATUS, "error": "This match has ended."})
 		session.claims.offers.clear()
 	_match_over = true
-	state.log.add("— %s —" % title)
+	state.log.add("- %s -" % title)
 	_deselect()
 	_menu.hide()
 	_picker.hide()
@@ -1210,6 +1220,7 @@ func _my_turn() -> bool:
 	return state != null and _can_control(state.active_player())
 
 func _on_log_line(text: String) -> void:
+	text = text.replace(char(0x2014), "-")
 	if _log_label != null:
 		_log_label.append_text(text + "\n")
 		if _audio != null:

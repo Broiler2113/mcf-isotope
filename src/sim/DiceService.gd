@@ -70,6 +70,16 @@ func scripted_remaining() -> int:
 func clear_scripted() -> void:
 	_scripted.clear()
 
+## A replay used as a live history position must also restore the real RNG cursor.
+func advance_recorded(count: int) -> void:
+	for i in count:
+		_rng.randi_range(1, 6)
+		own_rolls += 1
+
+func resume_random() -> void:
+	_scripted.clear()
+	_scripted_mode = false
+
 ## Хост: начать запись бросков нового действия (журнал очищается).
 func begin_record() -> void:
 	record_enabled = true

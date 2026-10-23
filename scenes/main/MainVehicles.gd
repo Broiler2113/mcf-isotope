@@ -498,7 +498,7 @@ func _refresh_component_panel() -> void:
 	for c in _comp_body.get_children():
 		c.queue_free()
 	var title := Label.new()
-	title.text = "%s — %s" % [
+	title.text = "%s - %s" % [
 		VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id), _side_label(veh.owner)]
 	title.add_theme_font_size_override("font_size", 12)
 	_comp_body.add_child(title)

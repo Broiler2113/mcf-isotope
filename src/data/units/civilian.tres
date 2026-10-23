@@ -12,4 +12,4 @@ armor_threshold = 5
 speed = 9
 cost = 30
 special_ability_id = "civilian"
-notes = "Нейтральный на карте — НПС под CivilianAI; купленный за очки — обычный боец своей стороны."
+notes = "Нейтральный на карте - НПС под CivilianAI; купленный за очки - обычный боец своей стороны."

@@ -51,20 +51,10 @@ func run() -> void:
 	console.cancel_tool()
 	console.submit("ids on")
 	ck(main._cheat_ids == "all", "ID display enabled")
-	console.submit("event spawn gas")
+	console.submit("event spawn gas (12,10) (14,12) 3")
 	await process_frame
-	var editor: Node = null
-	for child in console.get_children():
-		if child.get_script() != null and child.get_script().resource_path.ends_with("CheatEventEditor.gd") and not child.is_queued_for_deletion(): editor = child
-	ck(editor != null and editor.controls.has("rounds") and not editor.controls.has("intensity"), "gas editor exposes supported properties")
-	editor._apply()
-	await process_frame
-	ck(console.tool.op == "event_spawn_tool", "event editor arms placement")
-	click_cell(main, Vector2i(12, 10))
-	click_cell(main, Vector2i(14, 12))
-	await process_frame
-	ck(main.resolver.random_events.clouds.size() == 1, "event placement starts an active cloud")
-	console.cancel_tool()
+	ck(console.tool.is_empty(), "event commands do not arm a separate placement tool")
+	ck(main.resolver.random_events.clouds.size() == 1, "event command starts an active cloud")
 	load("res://src/ui/ManualWindow.gd").toggle(main)
 	await process_frame
 	ck(not root.get_node("Keybinds").modal_open(), "manual is nonmodal")

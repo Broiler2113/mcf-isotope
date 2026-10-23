@@ -17,7 +17,7 @@ extends RefCounted
 ## Network matches share the host dice log through NetGame.on_resolved;
 ## offline matches use the resolver hook. Only one component starts the dice log.
 
-const SCHEMA := 2
+const SCHEMA := 3
 
 var meta: Dictionary = {}
 ## Кадр доски ДО открывающего слота мирных и броски самого этого слота: он играется
@@ -28,6 +28,7 @@ var start_rules: Dictionary = {}
 var opening: Array = []
 var opening_processed: bool = false
 var steps: Array = []
+var revision := 0
 # Recent combat text travels with the replay for reports submitted from the menu.
 const MAX_COMBAT_LOG := 600_000
 var combat_log: Array[String] = []
@@ -51,6 +52,7 @@ var _resolver: GameActionResolver:
 
 ## Начать запись. Вызывается сразу после сборки состояния, ДО первого действия.
 func begin(state: GameState, resolver: GameActionResolver, p_meta: Dictionary = {}) -> void:
+	revision += 1
 	_state = state
 	_resolver = resolver
 	meta = p_meta.duplicate(true)
@@ -106,6 +108,7 @@ func on_resolved(intent: Intent, rolls: Array, result: ActionResult = null) -> v
 	var wire := IntentCodec.encode(intent)
 	if wire.is_empty():
 		return
+	revision += 1
 	if bookmarks.is_empty():
 		# Recorders attached mid-match need a starting location, too.
 		var turn: Dictionary = start.get("turns", {})
@@ -120,6 +123,36 @@ func on_resolved(intent: Intent, rolls: Array, result: ActionResult = null) -> v
 		step["k"] = ReplayCheckpoint.pack(_state, _resolver, _fx, not intent is EndTurnIntent)
 		_checkpoint_at = at
 	steps.append(step)
+
+## Keep the canonical replay prefix after host history navigation. The forward branch
+## lives in MatchHistory until the next live action replaces it.
+func adopt_prefix(data: Dictionary, count: int, state: GameState, resolver: GameActionResolver, effects: Dictionary) -> void:
+	_state = state
+	_resolver = resolver
+	meta = data.get("meta", {}).duplicate(true)
+	start = data.get("start", {}).duplicate(true)
+	start_rules = data.get("rules", {}).duplicate(true)
+	opening.assign(data.get("opening", []))
+	opening_processed = bool(data.get("opening_processed", false))
+	steps = data.get("steps", []).slice(0, count)
+	bookmarks = data.get("bookmarks", []).filter(func(mark: Dictionary) -> bool: return int(mark.get("index", 0)) <= count)
+	combat_log.assign(str(data.get("combat_log", "")).split("\n", false))
+	_combat_chars = str(data.get("combat_log", "")).length()
+	_checkpoint_at = 0
+	for i in steps.size():
+		if steps[i].has("k"): _checkpoint_at = i + 1
+	_bookmark_round = state.turns.round_number
+	_bookmark_owner = state.active_player()
+	_fx = ReplayCheckpoint.effects(state)
+	_fx.from_dict(effects)
+	revision += 1
+
+## Resuming a saved match may change lobby rules. Keep that transition explicit so
+## sequential playback and seeking apply the same resumed state.
+func resume_checkpoint(fx: FxDecals) -> void:
+	steps.append({"i": {"t": "checkpoint"}, "r": [], "k": ReplayCheckpoint.pack(_state, _resolver, fx, false)})
+	_checkpoint_at = steps.size()
+	revision += 1
 
 func is_empty() -> bool:
 	return steps.is_empty()

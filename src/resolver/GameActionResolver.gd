@@ -205,7 +205,7 @@ func _resolve_undo(intent: UndoIntent) -> ActionResult:
 	if snap.has("cosmetics") and restore_cosmetics.is_valid():
 		restore_cosmetics.call(snap["cosmetics"])
 	update_airlocks()
-	return ActionResult.success(["— undo —"])
+	return ActionResult.success(["- undo -"])
 
 func _resolve_redo(intent: RedoIntent) -> ActionResult:
 	if intent.requester >= 0 and intent.requester != state.active_player():
@@ -218,7 +218,7 @@ func _resolve_redo(intent: RedoIntent) -> ActionResult:
 	if snap.has("cosmetics") and restore_cosmetics.is_valid():
 		restore_cosmetics.call(snap["cosmetics"])
 	update_airlocks()
-	return ActionResult.success(["— redo —"])
+	return ActionResult.success(["- redo -"])
 
 ## Обратный снимок к snap: доска как сейчас, а из клеток — ровно те, что snap вернёт.
 ## Прочие клетки между двумя снимками не менялись: каждую правку во время действия
@@ -240,7 +240,7 @@ func _dispatch(intent: Intent) -> ActionResult:
 	var _rider := state.get_unit(intent.actor_id)
 	if _rider != null and _rider.aboard_vehicle_id != -1 and _rider.is_alive() \
 			and not _aboard_allowed(intent):
-		return ActionResult.fail("Not possible from inside the shuttle — disembark first")
+		return ActionResult.fail("Not possible from inside the shuttle - disembark first")
 	var result := _route(intent)
 	# Побочные эффекты действия — ТОЛЬКО когда оно состоялось. Раньше они шли до проверок,
 	# и отвергнутое намерение (нет линии огня, цель вне досягаемости) всё равно сжигало
@@ -391,7 +391,7 @@ func _resolve_give_units(intent: GiveUnitsIntent) -> ActionResult:
 		if u == null or not u.is_alive() or u.owner != from_side or u.is_drone:
 			return ActionResult.fail("Only your own soldiers can be given")
 		if u.aboard_vehicle_id != -1 or u.borg_id != -1:
-			return ActionResult.fail("%s is in a vehicle — climb out first" % u.stats.display_name)
+			return ActionResult.fail("%s is in a vehicle - climb out first" % u.stats.display_name)
 		units.append(u)
 	for u in units:
 		u.owner = intent.to_side
@@ -547,7 +547,7 @@ func _resolve_end_turn(intent: EndTurnIntent = null) -> ActionResult:
 		veh.cannon_shots_this_round = 0
 		veh.move_credit = 0  # недокатанные клетки через ход не переносятся (#97)
 	var lines: Array[String] = [
-		"— %s ended their turn. %s to move (round %d) —" % [
+		"- %s ended their turn. %s to move (round %d) -" % [
 			state.roster.name_of(prev), state.roster.name_of(state.active_player()),
 			state.turns.round_number
 		]
@@ -603,7 +603,7 @@ func _validate_actor(unit: UnitInstance, credit: int = 0) -> String:
 	# Пленник ничего не делает, кроме попытки вырваться (#76): раньше его сковывали
 	# обнулением ОД, но тогда он терял и весь свой ход после освобождения.
 	if unit.is_held():
-		return "Unit is being held — break free first"
+		return "Unit is being held - break free first"
 	if unit.owner != state.active_player():
 		return "It's the other player's turn"
 	if not state.turns.slot_has(state.turns.active_slot(), unit):

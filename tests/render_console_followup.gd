@@ -77,10 +77,10 @@ func run() -> void:
 	root.get_texture().get_image().save_png("/tmp/isotope-0133-manual.png")
 	manual.queue_free()
 	await process_frame
-	console.submit("event spawn gas")
+	console.submit("event spawn gas (12,10) (14,12) 3")
 	for i in 3: await process_frame
 	await RenderingServer.frame_post_draw
-	root.get_texture().get_image().save_png("/tmp/isotope-0133-event-editor.png")
+	root.get_texture().get_image().save_png("/tmp/isotope-fix11-event-command.png")
 	var settings: Node = load("res://src/ui/SettingsWindow.gd").open(main)
 	settings._tabs.current_tab = 1
 	settings._key_sections.current_tab = 2

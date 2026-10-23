@@ -55,7 +55,7 @@ func run() -> void:
 	deadline = Time.get_ticks_msec() + 10000
 	while not r.state.cheat_ai_paused.has(2) and Time.get_ticks_msec() < deadline: await process_frame
 	ck(r.state.cheat_ai_paused.has(2), "AI pause synchronized")
-	ck(r.random_events.clouds.size() == 1 and r.random_events.clouds[0].left == 7, "event editor payload synchronized")
+	ck(r.random_events.clouds.size() == 1 and r.random_events.clouds[0].left == 7, "event command payload synchronized")
 	if not host:
 		session.send({"k": NetGame.K_INTENT, "i": IntentCodec.encode(CheatIntent.new("ai_resume", {"owner": 2}, 0))})
 	await phase("ai_spoof")
@@ -71,6 +71,35 @@ func run() -> void:
 	await phase("resync")
 	await phase("done", r.state.digest_hash())
 	ck(phases.get("done", -1) == r.state.digest_hash(), "resync preserves effects and permission")
+	if host: netgame.set_cheat_permission(1, true)
+	await phase("history_permission")
+	var snapshot := StateCodec.encode(r.state)
+	var rules := StateCodec.encode_rules(netgame.resolver)
+	var baseline := r.state.digest_hash()
+	await phase("history_snapshot", baseline)
+	ck(phases.history_snapshot == baseline, "both peers checkpoint the same pre-edit state")
+	if host: netgame.submit_local(CheatIntent.new("unit_ap", {"unit": 1, "value": 8}, 0))
+	await phase("history_changed")
+	deadline = Time.get_ticks_msec() + 10000
+	while r.state.get_unit(1).remaining_ap != 8 and Time.get_ticks_msec() < deadline: await process_frame
+	if host:
+		StateCodec.restore_into(r.state, snapshot)
+		netgame.resolver = GameActionResolver.new(r.state)
+		StateCodec.apply_rules(netgame.resolver, rules)
+		netgame.broadcast_restore("Restored test checkpoint")
+	await phase("history_restored")
+	deadline = Time.get_ticks_msec() + 10000
+	while netgame.history_epoch != 1 and Time.get_ticks_msec() < deadline: await process_frame
+	ck(r.state.digest_hash() == baseline and netgame.history_epoch == 1, "complete checkpoint restores across ENet")
+	if not host:
+		session.send({"k": NetGame.K_INTENT, "epoch": 0, "i": IntentCodec.encode(CheatIntent.new("unit_ap", {"unit": 1, "value": 9}, 1))})
+	await phase("history_stale")
+	ck(r.state.get_unit(1).remaining_ap != 9, "pre-restore request cannot alter restored ENet session")
+	if not host: netgame.submit_local(CheatIntent.new("unit_ap", {"unit": 1, "value": 7}, 1))
+	deadline = Time.get_ticks_msec() + 10000
+	while r.state.get_unit(1).remaining_ap != 7 and Time.get_ticks_msec() < deadline: await process_frame
+	await phase("history_live", r.state.digest_hash())
+	ck(r.state.get_unit(1).remaining_ap == 7 and phases.history_live == r.state.digest_hash(), "fresh actions synchronize after restore")
 	await create_timer(0.3).timeout # flush the final reliable barrier before closing ENet
 	for connection: Dictionary in netgame.outgoing.get_connections(): netgame.outgoing.disconnect(connection.callable)
 	session.close()

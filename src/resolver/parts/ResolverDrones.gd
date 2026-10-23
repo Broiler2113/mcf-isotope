@@ -151,7 +151,7 @@ func _drone_destroyed(drone: UnitInstance, center: Vector2i, why: String,
 	drone.remaining_ap = 0
 	var result := ActionResult.new()
 	result.ok = true
-	result.log("Scout drone %s at (%d, %d) — it falls apart" % [why, center.x, center.y])
+	result.log("Scout drone %s at (%d, %d) - it falls apart" % [why, center.x, center.y])
 	return result
 
 ## Взрыв дрона: снимаем его с поля (не оставляет труп) и детонируем как противотанкист.
@@ -163,7 +163,7 @@ func _drone_explode(drone: UnitInstance, center: Vector2i, why: String,
 	drone.remaining_ap = 0
 	var result := ActionResult.new()
 	result.ok = true
-	result.log("Drone %s — explosion at (%d, %d)" % [why, center.x, center.y])
+	result.log("Drone %s - explosion at (%d, %d)" % [why, center.x, center.y])
 	# Дрон, влетевший прямо в ДОТ, весь свой заряд оставляет в бетоне.
 	_blast_armor_wall(center, result)
 	if _pillbox_absorbs(center, MCF.DRONE_EXPLOSION_DAMAGE, result):

@@ -52,6 +52,8 @@ var opening_civilians: ActionResult = ActionResult.success()
 ## restored_fx и кладёт поверх доски — после пересинхронизации поле выглядит как у хоста.
 var fx_snapshot: Callable = Callable()
 var restored_fx: Dictionary = {}
+var history_restored := false
+var history_epoch := 0
 ## Shares the existing host dice log; never starts a second recording stream.
 var recorder: ReplayRecorder = null
 ## The last actions this side applied, oldest first: the wire, its rolls and the board
@@ -103,7 +105,7 @@ func submit_local(intent: Intent) -> void:
 			_end_turn_pending = true
 		if intent is EndTurnIntent or intent is UndoIntent or intent is RedoIntent:
 			intent.requester = my_owner
-		outgoing.emit({"k": K_INTENT, "i": IntentCodec.encode(intent)})
+		outgoing.emit({"k": K_INTENT, "i": IntentCodec.encode(intent), "epoch": history_epoch})
 
 ## Пришло сообщение от второй стороны.
 ## Сообщение приходит из сети, то есть от чужой машины: считать его правильным
@@ -121,6 +123,8 @@ func receive(msg: Dictionary) -> void:
 				cheat_permissions_changed.emit()
 		K_INTENT:
 			if is_host:
+				if int(msg.get("epoch", 0)) != history_epoch:
+					return
 				var it := _decode(msg)
 				var from := int(msg.get("_from", -1))
 				if it != null and _authorized(it, from):
@@ -131,7 +135,7 @@ func receive(msg: Dictionary) -> void:
 					outgoing.emit({"k": K_DENIED, "a": -1, "reason": cheat_denial(it, state.roster.side_of_peer(from), false) if it is CheatIntent else "Not your unit or turn",
 						"p": state.roster.side_of_peer(from)})
 		K_ACTION:
-			if not is_host:
+			if not is_host and int(msg.get("_from", -1)) in [-1, 1] and int(msg.get("epoch", 0)) == history_epoch:
 				var it := _decode(msg)
 				if it != null:
 					_client_apply(it, msg.get("r", []), int(msg.get("h", 0)))
@@ -140,7 +144,7 @@ func receive(msg: Dictionary) -> void:
 				_client_adopt_initiative(msg)
 		K_RESYNC:
 			if is_host:
-				var snap := {"k": K_STATE, "s": StateCodec.encode(state), "ai_speed": GameConfig.ai_speed}
+				var snap := {"k": K_STATE, "s": StateCodec.encode(state), "ai_speed": GameConfig.ai_speed, "epoch": history_epoch, "rules": StateCodec.encode_rules(resolver)}
 				if fx_snapshot.is_valid():
 					snap["fx"] = fx_snapshot.call()
 				# Облака газа и дыма живут не на доске, а в событиях (0.12): без них гость
@@ -152,7 +156,7 @@ func receive(msg: Dictionary) -> void:
 				outgoing.emit(snap)
 				resync_requested.emit(int(msg.get("_from", -1)))
 		K_STATE:
-			if not is_host:
+			if not is_host and int(msg.get("_from", -1)) in [-1, 1]:
 				_client_restore(msg)
 		K_DENIED:
 			if not is_host:
@@ -188,7 +192,7 @@ func announce_initiative() -> void:
 	state.dice.begin_record()
 	opening_civilians = resolver.open_match()
 	msg["r"] = state.dice.take_log()
-	if recorder != null:
+	if recorder != null and recorder.steps.is_empty():
 		recorder.opening = msg["r"].duplicate()
 		recorder.opening_processed = true
 		recorder.observe_opening(opening_civilians)
@@ -222,7 +226,7 @@ func _host_resolve_and_send(intent: Intent) -> void:
 			recorder.on_resolved(intent, rolls, result)
 		# Подпись доски ПОСЛЕ действия (batch 14): гость сверит с ней свою.
 		var digest := state.digest_hash()
-		outgoing.emit({"k": K_ACTION, "i": IntentCodec.encode(intent), "r": rolls, "h": digest})
+		outgoing.emit({"k": K_ACTION, "i": IntentCodec.encode(intent), "r": rolls, "h": digest, "epoch": history_epoch})
 		_remember({"i": IntentCodec.encode(intent), "r": rolls, "h": digest,
 				"round": state.turns.round_number})
 	else:
@@ -263,6 +267,12 @@ func _client_restore(msg: Dictionary) -> void:
 	if not (data is Dictionary):
 		return
 	StateCodec.restore_into(state, data)
+	history_epoch = int(msg.get("epoch", history_epoch))
+	history_restored = bool(msg.get("history", false))
+	if history_restored:
+		resolver = GameActionResolver.new(state)
+		match_finished = false
+	if msg.get("rules") is Dictionary: StateCodec.apply_rules(resolver, msg.rules)
 	if (msg.get("ai_speed") is float or msg.get("ai_speed") is int) and GameConfig.AI_SPEEDS.has(float(msg.ai_speed)):
 		GameConfig.ai_speed = float(msg.ai_speed)
 	var ev: Variant = msg.get("ev")
@@ -280,6 +290,15 @@ func _client_restore(msg: Dictionary) -> void:
 	state.dice.clear_scripted()
 	_resync_pending = false
 	resynced.emit()
+
+func broadcast_restore(notice: String) -> void:
+	if not is_host: return
+	history_epoch += 1
+	_end_turn_pending = false
+	var msg := {"k": K_STATE, "s": StateCodec.encode(state), "rules": StateCodec.encode_rules(resolver),
+		"ev": resolver.random_events.snapshot(), "mode": resolver.mode.snapshot(), "history": true, "notice": notice, "epoch": history_epoch}
+	if fx_snapshot.is_valid(): msg.fx = fx_snapshot.call()
+	outgoing.emit(msg)
 
 ## Резолв + событие «точка ОД погасла» (#99). Остаток снимаем ДО действия, потому что
 ## к моменту сигнала состояние уже изменено, и по нему не понять, чего ход стоил. Так

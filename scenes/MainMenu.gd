@@ -104,7 +104,7 @@ func _ready() -> void:
 			_new_game.call_deferred()
 			return
 		_lobby_broken = true
-		push_error("Lobby.gd does not compile — re-import the project (godot --headless --import)")
+		push_error("Lobby.gd does not compile - re-import the project (godot --headless --import)")
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--replay="):
 			var data := ReplayFile.read_replay(arg.trim_prefix("--replay="))
@@ -318,10 +318,10 @@ func _folder_button(dir: String) -> Button:
 func _refresh_files() -> void:
 	_game_names = ReplayFile.saves()
 	_fill_file_list(_game_list, _game_names, ReplayFile.SAVE_DIR,
-			"(no saved games yet — save one from a match)")
+			"(no saved games yet - save one from a match)")
 	_replay_names = ReplayFile.replays()
 	_fill_file_list(_replay_list, _replay_names, ReplayFile.REPLAY_DIR,
-			"(no replays yet — they are written when you leave a match)")
+			"(no replays yet - they are written when you leave a match)")
 
 func _fill_file_list(list: ItemList, names: PackedStringArray, dir: String,
 		empty_text: String) -> void:
@@ -344,11 +344,11 @@ func _fill_notes(list: ItemList, names: PackedStringArray, dir: String) -> void:
 			return
 		var note := ReplayFile.note_for(ReplayFile.path_for(dir, names[i]))
 		if note != "":
-			list.set_item_text(i, "%s  —  %s" % [names[i].get_basename(), note])
+			list.set_item_text(i, "%s  -  %s" % [names[i].get_basename(), note])
 
 func _mark_unreadable(list: ItemList, idx: int, name: String) -> void:
 	if is_instance_valid(list) and idx < list.item_count:
-		list.set_item_text(idx, "%s  —  can't be opened (damaged, or not a %s file)" % [name.get_basename(),
+		list.set_item_text(idx, "%s  -  can't be opened (damaged, or not a %s file)" % [name.get_basename(),
 				"saved game" if list == _game_list else "replay"])
 
 func _on_game_activated(idx: int) -> void:
@@ -503,7 +503,7 @@ func _show_lobbies(list: Array, error: String = "") -> void:
 	_lobby_rooms = list
 	_lobby_list.clear()
 	if list.is_empty():
-		_lobby_list.add_item(error if error != "" else "No open games right now — host one below.")
+		_lobby_list.add_item(error if error != "" else "No open games right now - host one below.")
 		_lobby_list.set_item_disabled(0, true)
 		return
 	for r: Dictionary in list:
@@ -538,7 +538,7 @@ func _host_online() -> void:
 	_session.relay_room.connect(func(code: String) -> void:
 		NetHandoff.room_code = code
 		_go_lobby(true))
-	var err := _session.start_relay_host(_server(), {"name": room_name, "map": "—", "players": 1,
+	var err := _session.start_relay_host(_server(), {"name": room_name, "map": "-", "players": 1,
 			"max_players": 2, "status": "In lobby", "version": str(ProjectSettings.get_setting("application/config/version", "")),
 			"protocol": NetHandoff.PROTOCOL, "password": _mp_password.text})
 	if err == OK: _set_waiting("Opening your game on the lobby server...")

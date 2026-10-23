@@ -215,11 +215,11 @@ func _on_peer_left(id: int) -> void:
 	if _net != null:
 		_net.send({"k": K_SLOT_AI, "side": side, "ai": slot.ai_difficulty, "st": slot.ai_style})
 	if _ready_sides.has(side) and _remote_units.has(side):
-		_status.text = "%s left — a Tactician AI takes over their army." % roster.name_of(side)
+		_status.text = "%s left - a Tactician AI takes over their army." % roster.name_of(side)
 	else:
 		_ready_sides.erase(side)
 		_remote_units.erase(side)
-		_status.text = "%s left — deploy an army for the Tactician AI that takes their place." % roster.name_of(side)
+		_status.text = "%s left - deploy an army for the Tactician AI that takes their place." % roster.name_of(side)
 		if _my_ready and GameConfig.placement_mode != GameConfig.Placement.MIRRORED:
 			# Своё уже сдано, а за ушедшего никто не ставил: возвращаем кнопку и ведём
 			# хоста по его новой стороне. Отправленные раньше стороны переслать не страшно —
@@ -245,7 +245,7 @@ func _apply_slot_ai(msg: Dictionary) -> void:
 	slot.peer_id = -1
 	_live_units.erase(side)
 	if _status != null:
-		_status.text = "%s left — a Tactician AI takes that side." % roster.name_of(side)
+		_status.text = "%s left - a Tactician AI takes that side." % roster.name_of(side)
 	_refresh_labels()
 	queue_redraw()
 
@@ -255,12 +255,12 @@ func _on_net_lost() -> void:
 	# а расстановка и бой идут дальше тем же сетевым путём, только слать уже некому.
 	if _net_is_host:
 		if _status != null:
-			_status.text = "Everyone else left — the remaining sides are Hard AI. Finish deploying and press Ready."
+			_status.text = "Everyone else left - the remaining sides are Hard AI. Finish deploying and press Ready."
 		_refresh_labels()
 		_try_start()
 		return
 	if _status != null:
-		_status.text = "Connection lost — returning to the menu."
+		_status.text = "Connection lost - returning to the menu."
 	_drop_session()
 	get_tree().change_scene_to_file(MENU_SCENE)
 
@@ -531,7 +531,7 @@ func _apply_unready(sides: Array) -> void:
 	if sides.has(_my_side) and _my_ready:
 		_my_ready = false
 		_unready_pending = false
-		_status.text = "You are no longer ready — change your army and press Ready again."
+		_status.text = "You are no longer ready - change your army and press Ready again."
 		_send_live()
 	elif not sides.is_empty() and _status != null:
 		_status.text = "%s is no longer ready." % roster.name_of(int(sides[0]))
@@ -940,7 +940,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _ready_locked():
 		if event is InputEventMouseButton and event.pressed \
 				and event.button_index == MOUSE_BUTTON_LEFT:
-			_status.text = "You're ready — press Unready to change your army."
+			_status.text = "You're ready - press Unready to change your army."
 		return
 	# Инструменты-формы (item 12): линия/прямоугольник/круг тянутся от нажатия к
 	# отпусканию, заливка ставит всю зону одним кликом. Точка — прежнее перетаскивание.
@@ -1417,7 +1417,7 @@ func _click_cell(coord: Vector2i) -> void:
 			placed.remove_at(idx)
 			_placement_changed()
 		elif bool(placed[idx].get("mirror", false)):
-			_status.text = "That's a mirrored copy — remove the original instead."
+			_status.text = "That's a mirrored copy - remove the original instead."
 		else:
 			_status.text = "That unit belongs to the other side."
 		return
@@ -1429,7 +1429,7 @@ func _click_cell(coord: Vector2i) -> void:
 		_status.text = "Pick a unit from the palette first."
 		return
 	if not _footprint_placeable(brush_unit, coord, active_side):
-		_status.text = "Can't deploy there — blocked or outside your zone."
+		_status.text = "Can't deploy there - blocked or outside your zone."
 		return
 	var c := _cost(brush_unit)
 	# Бюджет <= 0 — безлимит (§Setup «0 = unlimited»); иначе соблюдаем заданный предел.
@@ -1806,7 +1806,7 @@ func _refresh_labels() -> void:
 	if eb > 0:
 		_budget_label.text = "Points: %d / %d   (units: %d)" % [spent[active_side], eb, count]
 	else:
-		_budget_label.text = "Points spent: %d   (unlimited — units: %d)" % [spent[active_side], count]
+		_budget_label.text = "Points spent: %d   (unlimited - units: %d)" % [spent[active_side], count]
 	if networked():
 		var mine := _host_sides()
 		var at := mine.find(active_side)

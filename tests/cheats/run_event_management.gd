@@ -54,9 +54,8 @@ func run() -> void:
 	command(r, "event remove " + ref)
 	ck(r.random_events.clouds.is_empty() and not r.state.grid.cell(Vector2i(10, 9)).gas, "remove clears effect and gas mask")
 	rejected(r, "event remove " + ref)
-	# Editor metadata is read-only and consumes no dice.
+	# Command metadata is read-only and consumes no dice.
 	var checkpoint := r.state.dice.checkpoint()
 	for pair: Array in RandomEvents.REGISTRY:
-		load("res://src/cheats/CheatEventEditor.gd").defaults(pair[0], r)
 		CheatEventModel.schema(pair[0], r)
-	ck(r.state.dice.checkpoint() == checkpoint, "opening editor does not advance shared RNG")
+	ck(r.state.dice.checkpoint() == checkpoint, "reading event metadata does not advance shared RNG")

@@ -974,7 +974,7 @@ func delete_selection() -> void:
 
 func paste() -> void:
 	if _clipboard.is_empty():
-		_flash("Nothing to paste — copy a selection first")
+		_flash("Nothing to paste - copy a selection first")
 		return
 	if tool != Tool.SELECT:
 		_select_tool(Tool.SELECT)
@@ -1409,7 +1409,7 @@ func _press(c: Vector2i, alt: bool, screen := Vector2.INF) -> void:
 		for q: int in map.corpses:
 			here += 1 if q == ci else 0
 		if _spawn_at.has(c):
-			_flash("A unit stands here — bodies can't be placed on it")
+			_flash("A unit stands here - bodies can't be placed on it")
 		elif here < MCF.CORPSE_WALL_COUNT:
 			map.corpses.append(ci)
 			_mark_dirty()
@@ -2371,7 +2371,7 @@ func _start_first_person(at: Vector2i) -> void:
 	if not FirstPerson.walkable_start(_fp_host, at):
 		_fp_host.queue_free()
 		_fp_host = null
-		_status_label.text = "That cell is not free to stand on — pick floor, not a wall or a soldier."
+		_status_label.text = "That cell is not free to stand on - pick floor, not a wall or a soldier."
 		return
 	_fp_pick = false
 	_fp_layer = CanvasLayer.new()
@@ -2745,7 +2745,7 @@ func _refresh_palette() -> void:
 	# Мелкие предметы (0.12.1): кладутся куда угодно и под любым углом (R — поворот на 15°).
 	var small: Array = []
 	for kind: String in SmallItems.KINDS:
-		small.append(["item:" + kind, SmallItems.name_of(kind), "%s — click to place, R turns it 15°" % SmallItems.name_of(kind)])
+		small.append(["item:" + kind, SmallItems.name_of(kind), "%s - click to place, R turns it 15°" % SmallItems.name_of(kind)])
 	small.append([ITEM_ERASE, "Erase items"])
 	_palette_group("Small items", small)
 	var terrain: Array = TERRAIN.duplicate()
@@ -2814,8 +2814,8 @@ func _tight(b: Button) -> void:
 		b.add_theme_stylebox_override(st, _tight_styles[st])
 
 ## Подзаголовки высот мебели в палитре.
-const HEIGHT_NAMES := {0.5: "Low — 0.5 m", 1.0: "Waist — 1 m", 1.5: "Chest — 1.5 m",
-		2.0: "Tall — 2 m, blocks sight"}
+const HEIGHT_NAMES := {0.5: "Low - 0.5 m", 1.0: "Waist - 1 m", 1.5: "Chest - 1.5 m",
+		2.0: "Tall - 2 m, blocks sight"}
 
 ## Группа палитры: items — кнопки одной сеткой; sections — [[подзаголовок, items], …]
 ## (мебель по высоте), каждая своей сеткой под своей подписью.
@@ -3133,14 +3133,14 @@ func _brush_name(id: String) -> String:
 			if it[0] == id:
 				return it[1]
 	if Furniture.is_furniture(id):
-		return "%s — %.1f m" % [Furniture.name_of(id), Furniture.height_of(id)]
+		return "%s - %.1f m" % [Furniture.name_of(id), Furniture.height_of(id)]
 	return id
 
 ## Подсказка кнопки мебели: высота, материал, прочность, подвижность, цена слома.
 static func _furniture_hint(fid: String) -> String:
 	var d: Dictionary = Furniture.def_of(fid)
 	if Furniture.is_wall_light(fid):
-		return "%s — attaches to a solid wall; R rotates\nShoot to destroy · durability %d\nLight strength %.2f · range %.1f tiles" % [Furniture.name_of(fid), int(d.dur), float(d.light_energy), float(d.light_range)]
+		return "%s - attaches to a solid wall; R rotates\nShoot to destroy · durability %d\nLight strength %.2f · range %.1f tiles" % [Furniture.name_of(fid), int(d.dur), float(d.light_energy), float(d.light_range)]
 	var move: String = {"portable": "carried by hand", "drag": "dragged",
 			"fixed": "immovable"}[Furniture.mobility_name(fid)]
 	if Furniture.joins(fid):
@@ -3151,9 +3151,9 @@ static func _furniture_hint(fid: String) -> String:
 			else ("cover −%d" % Furniture.cover_penalty(float(d["h"])) if Furniture.cover_penalty(float(d["h"])) > 0
 			else "climbable, no cover")
 	var colours := Furniture.colours_of(fid).size()
-	var hint := "%s — %.1f m, %s, %s\n%s, durability %d, breaks for %d AP%s" % [Furniture.name_of(fid),
+	var hint := "%s - %.1f m, %s, %s\n%s, durability %d, breaks for %d AP%s" % [Furniture.name_of(fid),
 			float(d["h"]), d["mat"], cover, move[0].to_upper() + move.substr(1), int(d["dur"]), int(d["ap"]),
-			"\n%d colors — pick one under the brush name" % colours if colours > 1 else ""]
+			"\n%d colors - pick one under the brush name" % colours if colours > 1 else ""]
 	if Furniture.emits_light(fid): hint += "\nLight strength %.2f · range %.1f tiles" % [float(d.light_energy), float(d.light_range)]
 	return hint
 
@@ -3407,7 +3407,7 @@ func _save_named(name: String) -> bool:
 	if map.save_to("%s/%s" % [MapData.MAPS_DIR, fname]):
 		map_name = fname.get_basename()
 		_dirty = false
-		_flash("Saved %s — it appears in the lobby's map list" % fname)
+		_flash("Saved %s - it appears in the lobby's map list" % fname)
 		return true
 	_flash("Could not save %s" % fname)
 	return false

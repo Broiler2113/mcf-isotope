@@ -3,6 +3,8 @@ extends Node2D
 
 const FONT_SIZE := 12
 const LABEL_HEIGHT := 16
+const COORD_FONT_SIZE := 10
+const COORD_LABEL_HEIGHT := 14
 var main: Node
 
 func _process(_delta: float) -> void:
@@ -33,6 +35,11 @@ func label_box(cell: Vector2i, text: String, row := 0) -> Rect2:
 	var width := ThemeDB.fallback_font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, FONT_SIZE).x + 8
 	return Rect2(at + Vector2(-width * 0.5, -17 * (row + 1)), Vector2(width, LABEL_HEIGHT))
 
+func coordinate_box(cell: Vector2i) -> Rect2:
+	var text := "(%d,%d)" % [cell.x, cell.y]
+	var width := ThemeDB.fallback_font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, COORD_FONT_SIZE).x + 6
+	return Rect2(main._cell_screen(cell) + Vector2(2, 1), Vector2(width, COORD_LABEL_HEIGHT))
+
 func _draw() -> void:
 	if not is_instance_valid(main) or main.state == null: return
 	if main.replay != null or main._spectator or main._fp != null: return
@@ -42,6 +49,8 @@ func _draw() -> void:
 		main._cheat_coords = false
 		return
 	var font := ThemeDB.fallback_font
+	# Both kinds of labels draw in screen pixels; zoom affects their anchors only.
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	var by_cell := labels()
 	for cell: Vector2i in by_cell:
 		for row in by_cell[cell].size():
@@ -53,15 +62,12 @@ func _draw() -> void:
 	if main._cheat_coords:
 		var first: Vector2i = main._pos_to_cell(Vector2.ZERO).max(Vector2i.ZERO)
 		var last: Vector2i = main._pos_to_cell(get_viewport_rect().size).min(Vector2i(main.state.grid.width - 1, main.state.grid.height - 1))
-		for y in range(first.y, last.y + 1):
-			for x in range(first.x, last.x + 1):
+		var widest := coordinate_box(Vector2i(main.state.grid.width - 1, main.state.grid.height - 1)).size
+		var step_x := maxi(1, ceili((widest.x + 2) / (main.CELL * main.zoom)))
+		var step_y := maxi(1, ceili((widest.y + 2) / (main.CELL * main.zoom)))
+		for y in range(first.y + posmod(-first.y, step_y), last.y + 1, step_y):
+			for x in range(first.x + posmod(-first.x, step_x), last.x + 1, step_x):
 				var text := "(%d,%d)" % [x, y]
-				var at: Vector2 = main._cell_screen(Vector2i(x, y)) + Vector2(2, 12)
-				draw_string_outline(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, 3, Color.BLACK)
-				draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("b9d9e9"))
-	if is_instance_valid(main._cheat_console) and main._cheat_console.tool.has("corner"):
-		var a: Vector2i = main._cheat_console.tool.corner
-		var b: Vector2i = main._pos_to_cell(get_viewport().get_mouse_position()).clamp(Vector2i.ZERO, Vector2i(main.state.grid.width - 1, main.state.grid.height - 1))
-		var rect := Rect2(main._cell_screen(a.min(b)), Vector2(a.max(b) - a.min(b) + Vector2i.ONE) * main.CELL * main.zoom)
-		draw_rect(rect, Color(0.4, 0.75, 1, 0.2))
-		draw_rect(rect, Color(0.6, 0.85, 1), false, 2.0)
+				var box := coordinate_box(Vector2i(x, y))
+				draw_rect(box, Color(0.01, 0.015, 0.025, 0.78))
+				draw_string(font, box.position + Vector2(3, 11), text, HORIZONTAL_ALIGNMENT_LEFT, -1, COORD_FONT_SIZE, Color("b9d9e9"))

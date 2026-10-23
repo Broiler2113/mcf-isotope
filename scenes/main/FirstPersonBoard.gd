@@ -36,7 +36,7 @@ render_mode cull_back, depth_draw_opaque, unshaded;
 uniform sampler2D tex : source_color, filter_nearest_mipmap, repeat_enable;
 uniform sampler2DArray mats : source_color, filter_nearest_mipmap, repeat_enable;
 uniform bool use_mats = false;
-uniform sampler2D vis : filter_nearest;
+uniform sampler2D vis : filter_nearest, repeat_disable;
 uniform sampler2D solid : filter_nearest;
 uniform vec2 board = vec2(1.0);
 uniform sampler2D lightmap : source_color, filter_linear;
@@ -55,10 +55,11 @@ uniform bool winter = false;
 uniform float sun_k = 0.0;
 uniform float glow_k = 1.7;
 uniform bool no_fog = false;
+uniform float render_radius = 1000.0;
 uniform bool sight_only = false;
 uniform vec4 door_bounds = vec4(0.0);
-varying vec3 wpos;
-varying vec3 wnorm;
+varying highp vec3 wpos;
+varying highp vec3 wnorm;
 void vertex() {
 	wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	wnorm = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
@@ -89,6 +90,7 @@ vec4 base_at(vec2 uv, vec2 xz) {
 	return c;
 }
 void fragment() {
+	if (!no_fog && distance(wpos, INV_VIEW_MATRIX[3].xyz) > render_radius) discard;
 	// Sliding leaves stay inside their opening even after an adjacent wall is destroyed.
 	if (door_bounds.z > 0.0 && (wpos.x <= door_bounds.x || wpos.z <= door_bounds.y ||
 			wpos.x >= door_bounds.z || wpos.z >= door_bounds.w)) discard;
@@ -111,7 +113,11 @@ void fragment() {
 	c *= tint;
 	if (c.a < cut) discard;
 	vec2 cell = floor(wpos.xz - wnorm.xz * 0.02);
-	float v = no_fog ? 1.0 : texture(vis, (cell + 0.5) / board).r;
+	float v = 0.0;
+	if (no_fog) v = 1.0;
+	else if (all(greaterThanEqual(cell, vec2(0.0))) && all(lessThan(cell, board))) {
+		v = texelFetch(vis, ivec2(cell), 0).r;
+	}
 	if (sight_only && v < 0.7) discard;
 	ROUGHNESS = 1.0;
 	SPECULAR = 0.0;
@@ -171,8 +177,9 @@ const BILLBOARD := """
 shader_type spatial;
 render_mode cull_disabled, depth_draw_opaque, unshaded;
 uniform sampler2D tex : source_color, filter_nearest;
-uniform sampler2D vis : filter_nearest;
+uniform sampler2D vis : filter_nearest, repeat_disable;
 uniform vec2 board = vec2(1.0);
+uniform float render_radius = 1000.0;
 uniform sampler2D lightmap : source_color, filter_linear;
 uniform vec4 lm_rect = vec4(0.0, 0.0, 1.0, 1.0);
 uniform vec2 lm_px = vec2(0.01);
@@ -190,8 +197,11 @@ void vertex() {
 }
 void fragment() {
 	vec4 c = texture(tex, UV);
+	if (distance(base, INV_VIEW_MATRIX[3].xyz) > render_radius) discard;
 	if (c.a < 0.5) discard;
-	float v = texture(vis, (floor(base.xz) + 0.5) / board).r;
+	vec2 cell = floor(base.xz);
+	if (any(lessThan(cell, vec2(0.0))) || any(greaterThanEqual(cell, board))) discard;
+	float v = texelFetch(vis, ivec2(cell), 0).r;
 	if (v < 0.2) discard;
 	vec3 l = lm_on ? texture(lightmap, (base.xz - lm_rect.xy) / lm_rect.zw).rgb : flat_light;
 	ALBEDO = c.rgb * max(l, vec3(0.5)) * (v < 0.7 ? 0.38 : 1.0);

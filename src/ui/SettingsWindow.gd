@@ -17,6 +17,7 @@ var _capture_action := ""
 var _key_buttons: Dictionary = {}
 var _key_message: Label
 var _tabs: TabContainer
+var _interface_scroll: ScrollContainer
 var _key_sections: TabContainer
 
 static func open(host: Node) -> SettingsWindow:
@@ -29,6 +30,11 @@ func _ready() -> void:
 	add_to_group("shortcut_modal")
 	Keybinds.changed.connect(_refresh_keys)
 	_build()
+	get_viewport().size_changed.connect(_resize_pages)
+
+func _resize_pages() -> void:
+	var height := get_viewport().get_visible_rect().size.y
+	if is_instance_valid(_interface_scroll): _interface_scroll.custom_minimum_size.y = clampf(height - 200.0, 160.0, 560.0)
 
 func _build() -> void:
 	var previous_tab := _tabs.current_tab if is_instance_valid(_tabs) else 0
@@ -63,8 +69,13 @@ func _build() -> void:
 	var page := VBoxContainer.new()
 	page.add_theme_constant_override("separation", 18)
 	var page_pad := SteamChrome.pad(page, 8, 12)
-	page_pad.name = "Interface"   # имя ребёнка — подпись вкладки
-	tabs.add_child(page_pad)
+	_interface_scroll = ScrollContainer.new()
+	_interface_scroll.name = "Interface"
+	_interface_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	page_pad.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_interface_scroll.add_child(page_pad)
+	tabs.add_child(_interface_scroll)
+	_resize_pages()
 
 	# --- Размер интерфейса (item 17) ---
 	var size_box := SteamChrome.group_box("Interface size")
@@ -123,7 +134,7 @@ func _build() -> void:
 	snow.toggled.connect(Ui.set_snowfall)
 	disp_box.body.add_child(snow)
 	# First person (fix-7 #9): field of view and mouse sensitivity.
-	for which: String in ["fov", "sens"]:
+	for which: String in ["fov", "sens", "distance"]:
 		var fp_row := HBoxContainer.new()
 		disp_box.body.add_child(fp_row)
 		var sl := HSlider.new()
@@ -133,10 +144,14 @@ func _build() -> void:
 			sl.min_value = 50; sl.max_value = 120; sl.step = 1; sl.value = Ui.fp_fov
 			sl.tooltip_text = "Field of view in first person."
 			lab.text = "First-person FOV: %d°" % sl.value
-		else:
+		elif which == "sens":
 			sl.min_value = 5; sl.max_value = 100; sl.step = 1; sl.value = Ui.fp_sensitivity * 100.0
 			sl.tooltip_text = "Mouse sensitivity in first person."
 			lab.text = "Mouse sensitivity: %d%%" % sl.value
+		else:
+			sl.min_value = Ui.FP_DISTANCE_MIN; sl.max_value = Ui.FP_DISTANCE_MAX; sl.step = 4; sl.value = Ui.fp_render_distance
+			sl.tooltip_text = "How far the first-person view renders the battlefield, in meters."
+			lab.text = "Render distance: %d m" % sl.value
 		fp_row.add_child(sl)
 		fp_row.add_child(lab)
 		var w := which
@@ -144,9 +159,12 @@ func _build() -> void:
 			if w == "fov":
 				lab.text = "First-person FOV: %d°" % v
 				Ui.set_fp_view(v, Ui.fp_sensitivity)
-			else:
+			elif w == "sens":
 				lab.text = "Mouse sensitivity: %d%%" % v
-				Ui.set_fp_view(Ui.fp_fov, v / 100.0))
+				Ui.set_fp_view(Ui.fp_fov, v / 100.0)
+			else:
+				lab.text = "Render distance: %d m" % v
+				Ui.set_fp_render_distance(int(v)))
 	var dark_row := HBoxContainer.new()
 	disp_box.body.add_child(dark_row)
 	var dark := HSlider.new()
@@ -284,6 +302,7 @@ func _build() -> void:
 		Ui.set_fullscreen(false)
 		Ui.set_autoroll_dice(false)
 		Ui.set_desync_reports(true)
+		Ui.set_fp_render_distance(36)
 		_build.call_deferred())
 	bottom.add_child(reset)
 	var close := Button.new()
@@ -375,7 +394,7 @@ func _build_keybinds(tabs: TabContainer) -> void:
 			look.text = "Move the mouse to look around. Jump also climbs ledges and ascends in space or noclip."
 			look.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			section_page.add_child(look)
-		var kb_box := SteamChrome.group_box("Keyboard — hover a key to see what it does")
+		var kb_box := SteamChrome.group_box("Keyboard - hover a key to see what it does")
 		section_page.add_child(kb_box)
 		var kb := KeyboardDiagram.new()
 		kb.section = section

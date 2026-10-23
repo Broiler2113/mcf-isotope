@@ -43,7 +43,7 @@ initiative Neutral → Player B → Player A
     dice: {from:(24, 5),kind:walk,path:[(23, 5),(22, 5),(21, 5),(20, 5),(19, 5),(18, 5)],soldier:true,unit:5}
 [r1 s3 p1] ShootIntent(a=11 cm= cx=-999 cy=-999 s=-1 t=shoot tid=19)
     ok=true
-    log: Anti-Tank: roll 6 (need 3+) — direct hit at (22, 22)!
+    log: Anti-Tank: roll 6 (need 3+) - direct hit at (22, 22)!
     log: Civilian destroyed!
     dice: {actor:Anti-Tank,kind:check,need:3,ok:true,roll:6}
     deaths: [19]
@@ -80,12 +80,12 @@ initiative Neutral → Player B → Player A
 [r1 s3 p1] MoveIntent(a=7 dx=-999 dy=-999 t=move x=19 y=4)
     ok=true
     log: Machinegunner: move → (19, 4) [AP: 0]
-    log: — Neutral group III joins the fight (1 unit) —
+    log: - Neutral group III joins the fight (1 unit) -
     dice: {kind:hold,units:{7:(25, 4)}}
     dice: {from:(25, 4),kind:walk,path:[(23, 4),(22, 4),(21, 4),(20, 4),(19, 4)],soldier:true,unit:7}
 [r1 s4 p1] EndTurnIntent(q=-1 t=end)
     ok=true
-    log: — Player B ended their turn. Player A to move (round 1) —
+    log: - Player B ended their turn. Player A to move (round 1) -
 [r1 s5 p0] ShootIntent(a=8 cm= cx=-999 cy=-999 s=-1 t=shoot tid=9)
     ok=true
     log: Sniper → Sniper: 1 shots, 0 hits (need 4+)
@@ -101,7 +101,7 @@ initiative Neutral → Player B → Player A
     dice: {from:(3, 14),kind:walk,path:[(3, 15),(4, 16),(4, 17),(4, 18),(4, 19)],soldier:true,unit:10}
 [r1 s5 p0] ShootIntent(a=10 cm= cx=-999 cy=-999 s=-1 t=shoot tid=15)
     ok=true
-    log: Anti-Tank: roll 3 (need 5+) — missed, charge fell short at (12, 19).
+    log: Anti-Tank: roll 3 (need 5+) - missed, charge fell short at (12, 19).
     log: … nobody destroyed
     dice: {actor:Anti-Tank,kind:check,need:5,ok:false,roll:3}
 [r1 s5 p0] MoveIntent(a=10 dx=-999 dy=-999 t=move x=5 y=18)
@@ -183,12 +183,12 @@ initiative Neutral → Player B → Player A
     dice: {from:(8, 4),kind:walk,path:[(10, 4),(11, 4),(12, 4),(13, 5),(14, 5)],soldier:true,unit:6}
 [r1 s5 p0] EndTurnIntent(q=-1 t=end)
     ok=true
-    log: — Player A ended their turn. Player B to move (round 2) —
-    log: — Civilians take their turn (1 active) —
+    log: - Player A ended their turn. Player B to move (round 2) -
+    log: - Civilians take their turn (1 active) -
     log: Civilian: move → (18, 21) [AP: 1]
     log: Civilian → Flamethrower: 1 shots, 1 hits (need 1+)
     log: Civilian: move → (18, 20) [AP: 0]
-    log: — Civilians take their turn (1 active) —
+    log: - Civilians take their turn (1 active) -
     log: Civilian → Sniper: 1 shots, 0 hits (need 5+)
     log: Civilian → Sniper: 1 shots, 0 hits (need 5+)
     dice: {kind:slot,owner:102}
@@ -268,7 +268,7 @@ initiative Neutral → Player B → Player A
     deaths: [18]
 [r2 s4 p1] PickUpCorpseIntent(a=15 t=corpse_up x=18 y=20)
     ok=true
-    log: Flamethrower picks up a corpse — carrying 1 (+1 defense) [AP: 0]
+    log: Flamethrower picks up a corpse - carrying 1 (+1 defense) [AP: 0]
 [r2 s4 p1] MoveIntent(a=11 dx=-999 dy=-999 t=move x=20 y=10)
     ok=true
     log: Anti-Tank: move → (20, 10) [AP: 1]
@@ -287,7 +287,7 @@ initiative Neutral → Player B → Player A
 [r2 s4 p1] MoveIntent(a=11 dx=-999 dy=-999 t=move x=16 y=13)
     ok=true
     log: Anti-Tank: move → (16, 13) [AP: 0]
-    log: — Neutral group IV joins the fight (1 unit) —
+    log: - Neutral group IV joins the fight (1 unit) -
     dice: {kind:hold,units:{11:(20, 10)}}
     dice: {from:(20, 10),kind:walk,path:[(19, 10),(18, 11),(17, 12),(16, 13)],soldier:true,unit:11}
 [r2 s5 p1] MoveIntent(a=13 dx=-999 dy=-999 t=move x=12 y=4)
@@ -297,7 +297,7 @@ initiative Neutral → Player B → Player A
     dice: {from:(15, 6),kind:walk,path:[(14, 6),(13, 5),(12, 4)],soldier:true,unit:13}
 [r2 s5 p1] EndTurnIntent(q=-1 t=end)
     ok=true
-    log: — Player B ended their turn. Player A to move (round 2) —
+    log: - Player B ended their turn. Player A to move (round 2) -
 [r2 s6 p0] ShootIntent(a=4 cm= cx=-999 cy=-999 s=3 t=shoot tid=7)
     ok=true
     log: Heavy Infantry → Machinegunner: 3 shots, 1 hits (need 3+)
@@ -312,7 +312,7 @@ initiative Neutral → Player B → Player A
     deaths: [5]
 [r2 s6 p0] PickUpCorpseIntent(a=0 t=corpse_up x=12 y=3)
     ok=true
-    log: Light Infantry picks up a corpse — carrying 1 (+1 defense) [AP: 1]
+    log: Light Infantry picks up a corpse - carrying 1 (+1 defense) [AP: 1]
 [r2 s6 p0] MoveIntent(a=0 dx=-999 dy=-999 t=move x=11 y=3)
     ok=true
     log: Light Infantry: move → (11, 3) [AP: 0]
@@ -341,7 +341,7 @@ initiative Neutral → Player B → Player A
     dice: {from:(5, 18),kind:walk,path:[(6, 18),(7, 18),(8, 18),(9, 18),(10, 19)],soldier:true,unit:10}
 [r2 s6 p0] ShootIntent(a=10 cm= cx=-999 cy=-999 s=-1 t=shoot tid=15)
     ok=true
-    log: Anti-Tank: roll 3 (need 3+) — direct hit at (18, 19)!
+    log: Anti-Tank: roll 3 (need 3+) - direct hit at (18, 19)!
     log: Flamethrower destroyed!
     dice: {actor:Anti-Tank,kind:check,need:3,ok:true,roll:3}
     deaths: [15]
@@ -372,13 +372,13 @@ initiative Neutral → Player B → Player A
     dice: {from:(14, 15),kind:walk,path:[(15, 16),(16, 17),(17, 18),(18, 17),(19, 16),(20, 16)],soldier:true,unit:14}
 [r2 s6 p0] EndTurnIntent(q=-1 t=end)
     ok=true
-    log: — Player A ended their turn. Player B to move (round 3) —
-    log: — Civilians take their turn (1 active) —
+    log: - Player A ended their turn. Player B to move (round 3) -
+    log: - Civilians take their turn (1 active) -
     log: Civilian: move → (15, 21) [AP: 1]
     log: Civilian → Flamethrower: 1 shots, 1 hits (need 3+)
     log: Flamethrower killed!
     log: Civilian: move → (12, 18) [AP: 0]
-    log: — Civilians take their turn (1 active) —
+    log: - Civilians take their turn (1 active) -
     log: Civilian: move → (12, 21) [AP: 1]
     log: Civilian: move → (11, 20) [AP: 1]
     log: Civilian → Anti-Tank: 1 shots, 1 hits (need 1+)
@@ -449,10 +449,10 @@ initiative Neutral → Player B → Player A
     dice: {from:(13, 5),kind:walk,path:[(14, 6)],soldier:true,unit:4}
 [r3 s5 p1] EndTurnIntent(q=-1 t=end)
     ok=true
-    log: — Player B ended their turn. Player A to move (round 3) —
+    log: - Player B ended their turn. Player A to move (round 3) -
 [r3 s6 p0] PickUpCorpseIntent(a=10 t=corpse_up x=12 y=18)
     ok=true
-    log: Anti-Tank picks up a corpse — carrying 1 (+1 defense) [AP: 1]
+    log: Anti-Tank picks up a corpse - carrying 1 (+1 defense) [AP: 1]
 [r3 s6 p0] MoveIntent(a=10 dx=-999 dy=-999 t=move x=15 y=23)
     ok=true
     log: Anti-Tank: move → (15, 23) [AP: 0]
@@ -479,8 +479,8 @@ initiative Neutral → Player B → Player A
     dice: {armor:4,def_mods:[],def_owner:1,hit_mods:[],killed:false,kind:attack,need:3,shooter:Light Infantry,shooter_owner:0,shots:[{armor:4,def_roll:6,hit:true,hit_roll:3,need:3,parried:true},{armor:4,def_roll:0,hit:false,hit_roll:2,need:3,parried:true}],target:Engineer}
 [r3 s6 p0] EndTurnIntent(q=-1 t=end)
     ok=true
-    log: — Player A ended their turn. Player B to move (round 4) —
-    log: — Civilians take their turn (1 active) —
+    log: - Player A ended their turn. Player B to move (round 4) -
+    log: - Civilians take their turn (1 active) -
     log: Civilian: move → (11, 19) [AP: 1]
     log: Civilian → Anti-Tank: 1 shots, 1 hits (need 2+)
     log: Civilian: move → (14, 22) [AP: 0]
@@ -508,7 +508,7 @@ initiative Neutral → Player B → Player A
     deaths: [4]
 [r4 s5 p1] EndTurnIntent(q=-1 t=end)
     ok=true
-    log: — Player B ended their turn. Player A to move (round 4) —
+    log: - Player B ended their turn. Player A to move (round 4) -
 [r4 s6 p0] ShootIntent(a=0 cm= cx=-999 cy=-999 s=2 t=shoot tid=13)
     ok=true
     log: Light Infantry → Engineer: 2 shots, 0 hits (need 3+)
@@ -544,8 +544,8 @@ initiative Neutral → Player B → Player A
     dice: {from:(24, 15),kind:walk,path:[(23, 14),(22, 13),(21, 12),(20, 11),(19, 10),(18, 9)],soldier:true,unit:12}
 [r4 s6 p0] EndTurnIntent(q=-1 t=end)
     ok=true
-    log: — Player A ended their turn. Player A to move (round 5) —
-    log: — Civilians take their turn (1 active) —
+    log: - Player A ended their turn. Player A to move (round 5) -
+    log: - Civilians take their turn (1 active) -
     log: Civilian: move → (15, 23) [AP: 1]
     log: Civilian → Anti-Tank: 1 shots, 1 hits (need 3+)
     log: Civilian: move → (14, 18) [AP: 0]
@@ -596,8 +596,8 @@ initiative Neutral → Player B → Player A
     dice: {from:(17, 8),kind:walk,path:[(18, 9)],soldier:true,unit:12}
 [r5 s6 p0] EndTurnIntent(q=-1 t=end)
     ok=true
-    log: — Player A ended their turn. Player A to move (round 6) —
-    log: — Civilians take their turn (1 active) —
+    log: - Player A ended their turn. Player A to move (round 6) -
+    log: - Civilians take their turn (1 active) -
     log: Civilian: move → (14, 17) [AP: 1]
     log: Civilian → Anti-Tank: 1 shots, 1 hits (need 1+)
     log: Anti-Tank killed!
@@ -648,7 +648,7 @@ initiative Neutral → Player B → Player A
     dice: {from:(17, 8),kind:walk,path:[(18, 9)],soldier:true,unit:12}
 [r6 s6 p0] EndTurnIntent(q=-1 t=end)
     ok=true
-    log: — Player A ended their turn. Player A to move (round 7) —
+    log: - Player A ended their turn. Player A to move (round 7) -
 actions 111
 --- digest ---
 U 0 (5, 20) 0/45 st0 ap2 mc0 cap-1 cor0 veh-1 drg(-9999, -9999) civ0

@@ -244,13 +244,13 @@ func tooltip_for(code: int, label: String) -> String:
 		if int(use[0]) == 0:
 			plain.append("%s%s" % [use[1], _ctx(use[2])])
 		else:
-			combos.append("%s — %s%s" % [Keybinds.key_event(int(use[0]) | code).as_text(), use[1], _ctx(use[2])])
+			combos.append("%s - %s%s" % [Keybinds.key_event(int(use[0]) | code).as_text(), use[1], _ctx(use[2])])
 	if MODS.has(code):
 		var mask: int = MODS[code]
 		for key: int in _uses:
 			for use: Array in _uses[key]:
 				if int(use[0]) & mask:
-					var description := "%s — %s%s" % [Keybinds.key_event(int(use[0]) | key).as_text(), use[1], _ctx(use[2])]
+					var description := "%s - %s%s" % [Keybinds.key_event(int(use[0]) | key).as_text(), use[1], _ctx(use[2])]
 					if not combos.has(description): combos.append(description)
 		combos.sort()
 	if plain.is_empty() and combos.is_empty():

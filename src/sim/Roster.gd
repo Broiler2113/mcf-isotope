@@ -118,6 +118,7 @@ class Slot extends RefCounted:
 		return id % Roster.PALETTE.size()
 
 var slots: Array = []
+var independent_colors: Dictionary = {}
 ## Бюджет очков на команду; индекс = номер команды. Пусто — команд нет.
 var team_budgets: Array = []
 
@@ -289,13 +290,16 @@ func color_of(owner: int) -> Color:
 	# Независимая армия (0.9.4) — своя, ничья сторона: у неё нет слота в ростере, и цвет
 	# ей нужен свой, не белый «не знаю кто».
 	if MCF.is_independent(owner):
-		return INDEPENDENT_COLOR
+		return independent_colors.get(owner, INDEPENDENT_COLOR)
 	var s := slot(owner)
 	return s.color if s != null else Color.WHITE
 
 ## Суффикс картинок стороны (batch 17, item 13): «_nova» и т. п.; нейтралы — «_neutral».
 func faction_suffix_of(owner: int) -> String:
 	# Своих картинок у независимой армии нет — берёт нейтральные (0.9.4).
+	if MCF.is_independent(owner) and independent_colors.has(owner):
+		for i in PALETTE.size():
+			if independent_colors[owner].to_html(false) == PALETTE[i].to_html(false): return "_" + faction_key(i)
 	if MCF.is_npc_side(owner):
 		return "_neutral"
 	var s := slot(owner)
@@ -356,10 +360,27 @@ func to_dict() -> Dictionary:
 			# расставлялся не там и покупал не то, что разрешил хост.
 			"zone": s.deploy_zone, "allow": s.allowed_units.duplicate(),
 		})
-	return {"slots": out, "team_budgets": team_budgets.duplicate()}
+	var result := {"slots": out, "team_budgets": team_budgets.duplicate()}
+	if not independent_colors.is_empty():
+		var colors := {}
+		for side: int in independent_colors:
+			var color: Color = independent_colors[side]
+			colors[str(side)] = [color.r, color.g, color.b]
+		result["independent_colors"] = colors
+	return result
 
 static func from_dict(d: Dictionary) -> Roster:
 	var r := Roster.new()
+	var colors: Variant = d.get("independent_colors", {})
+	if colors is Dictionary:
+		for key in colors:
+			if not str(key).is_valid_int() or not MCF.is_independent(int(key)): continue
+			var value: Variant = colors[key]
+			if value is Array and value.size() == 3:
+				if value.all(func(v: Variant) -> bool: return (v is float or v is int) and is_finite(float(v))):
+					r.independent_colors[int(key)] = Color(float(value[0]), float(value[1]), float(value[2]))
+			elif value is String:
+				r.independent_colors[int(key)] = Color.from_string(value, INDEPENDENT_COLOR)
 	for rec in d.get("slots", []):
 		var id := r.add_slot(int(rec.get("kind", SlotKind.OPEN)),
 				int(rec.get("team", -1)))
@@ -400,3 +421,32 @@ func snapshot() -> Array:
 func restore(snap: Array) -> void:
 	for i in mini(snap.size(), slots.size()):
 		slots[i].eliminated = bool(snap[i])
+
+## Use an unchosen faction first; a full palette falls back to an unused colour.
+## A separate deterministic generator keeps cosmetic choices out of combat dice.
+func assign_independent_color(owner: int, context: int = 0) -> void:
+	if not MCF.is_independent(owner) or independent_colors.has(owner): return
+	var used := {NEUTRAL_COLOR.to_html(false): true}
+	for player: Slot in slots:
+		if player.is_playing(): used[player.color.to_html(false)] = true
+	for color: Color in independent_colors.values(): used[color.to_html(false)] = true
+	var available: Array[Color] = []
+	for color: Color in PALETTE:
+		if not used.has(color.to_html(false)): available.append(color)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash([owner, context])
+	if not available.is_empty():
+		independent_colors[owner] = available[rng.randi_range(0, available.size() - 1)]
+		return
+	var best := Color.WHITE
+	var best_distance := -1.0
+	for i in 96:
+		var candidate := Color.from_hsv(rng.randf(), rng.randf_range(0.5, 0.9), rng.randf_range(0.7, 1.0))
+		if used.has(candidate.to_html(false)): continue
+		var distance := INF
+		for html: String in used:
+			var other := Color.from_string(html, Color.WHITE)
+			distance = minf(distance, Vector3(candidate.r, candidate.g, candidate.b).distance_squared_to(Vector3(other.r, other.g, other.b)))
+		if distance > best_distance:
+			best = candidate; best_distance = distance
+	independent_colors[owner] = best

@@ -375,7 +375,7 @@ func _dice_steps(ev: Dictionary) -> Array:
 			var g_name := String(ev["name"]).to_lower()
 			steps.append({"faces": g_faces, "manual": g_manual, "roller": g_own,
 				"speed": FAST_ROLL_SPEED if int(ev["need"]) <= 1 else 1.0,
-				"prompt": ("Your shot — roll to hit the %s (need %d+)" if g_manual
+				"prompt": ("Your shot - roll to hit the %s (need %d+)" if g_manual
 						else "To hit the %s (need %d+)") % [g_name, int(ev["need"])]})
 			if not (ev["saves"] as Array).is_empty():
 				var s_faces: Array = []
@@ -413,7 +413,7 @@ func _dice_steps(ev: Dictionary) -> Array:
 			var hit_prompt := hit_note
 			if hit_manual:
 				hit_prompt = (hit_note + "\n" if hit_note != "" else "") \
-						+ "Your shot — roll to hit" + hit_need
+						+ "Your shot - roll to hit" + hit_need
 			elif hit_need != "":
 				hit_prompt = (hit_note + "\n" if hit_note != "" else "") + "To hit" + hit_need
 			steps.append({"faces": hit_faces, "manual": hit_manual, "prompt": hit_prompt,
@@ -477,7 +477,7 @@ func _dice_steps(ev: Dictionary) -> Array:
 			step["manual"] = false
 			step["auto"] = true
 			step["speed"] = FAST_ROLL_SPEED
-			step["prompt"] = (str(step.get("prompt", "")) + "\n").lstrip("\n") + "Cannot succeed — needs 7+"
+			step["prompt"] = (str(step.get("prompt", "")) + "\n").lstrip("\n") + "Cannot succeed - needs 7+"
 	return steps
 
 ## Every die of the step needs more than 6 (0.11): an automatic failure, never a prompt.

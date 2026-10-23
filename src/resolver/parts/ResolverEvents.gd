@@ -37,7 +37,7 @@ func _maybe_random_event(res: ActionResult) -> void:
 	if params.is_empty():
 		return
 	random_events.announce(id, params, state.turns.round_number)
-	res.log("⚠ %s — %s, landing at the end of this round" % [
+	res.log("⚠ %s - %s, landing at the end of this round" % [
 		RandomEvents.event_name(id), _event_where(id, params)])
 
 ## Полезный участок карты — рамка по всем клеткам, которые НЕ космос и не голая земля
@@ -189,6 +189,8 @@ func _free_barrage_zone(preferred: Dictionary, area: Rect2i) -> Dictionary:
 
 ## Где именно — строкой для журнала и подсказки на карте.
 func _event_where(id: String, p: Dictionary) -> String:
+	if id in [RandomEvents.ARMY, RandomEvents.REINFORCE] and p.has("x"):
+		return "force entering at (%d,%d)" % [p.x, p.y]
 	if id == RandomEvents.DUST:
 		return "across the whole battlefield"
 	if id == RandomEvents.REINFORCE:
@@ -265,7 +267,7 @@ func _land_barrage(p: Dictionary, res: ActionResult) -> void:
 		# Один пакет косметики на весь обстрел, а не событие на клетку: клетки в нём идут
 		# в том же порядке, в каком разрешались, — экран так и показывает разрывы.
 		_fx(res, {"fx": "debris", "at": NOWHERE, "cells": hit, "blast": true})
-	var tail := "" if killed.is_empty() else " — " + ", ".join(killed) + " killed"
+	var tail := "" if killed.is_empty() else " - " + ", ".join(killed) + " killed"
 	res.log("Artillery Barrage hits zone (%d, %d) %d×%d: %d of %d cells destroyed%s" % [
 		x0, y0, bw, bh, hit.size(), bw * bh, tail])
 
@@ -403,47 +405,53 @@ func _land_army(p: Dictionary, res: ActionResult) -> void:
 		if MCF.is_independent(s_id) and _army_holds_field(s_id):
 			alive += 1
 	if alive >= ARMY_MAX:
-		res.log("Unknown forces hold off — the field is crowded enough")
+		res.log("Unknown forces hold off - the field is crowded enough")
 		return
 	var spots := _army_spawn_cells(p)
 	if spots.is_empty():
-		res.log("Unknown forces turn back — nowhere to land on that edge")
+		res.log("Unknown forces turn back - nowhere to land on that edge")
 		return
 	var roster := _independent_roster()
-	if roster.is_empty():
-		res.log("Unknown forces hold off — all raider unit types are restricted")
+	if roster.is_empty() and not p.has("units"):
+		res.log("Unknown forces hold off - all raider unit types are restricted")
 		return
 	var spent := 0
 	var placed := 0
-	while placed < spots.size():
-		var sid: String = roster[_rand_wide(roster.size())]
-		var stats: UnitStats = _army_stats(sid)
-		if stats == null:
-			break
-		if budget > 0 and spent + stats.cost > budget and placed > 0:
-			break
-		if budget <= 0 and placed >= ARMY_FALLBACK_UNITS:
-			break
-		var raider := state.spawn_unit(stats, spots[placed], slot)
-		if raider == null:
-			break
-		raider.neutral_group = random_events.armies + 1
-		spent += stats.cost
-		placed += 1
+	if p.has("units") or p.has("count"):
+		placed = _spawn_force(spots, p, slot, random_events.armies + 1, roster, res)
+	else:
+		while placed < spots.size():
+			var sid: String = roster[_rand_wide(roster.size())]
+			var stats: UnitStats = _army_stats(sid)
+			if stats == null:
+				break
+			if budget > 0 and spent + stats.cost > budget and placed > 0:
+				break
+			if budget <= 0 and placed >= ARMY_FALLBACK_UNITS:
+				break
+			var raider := state.spawn_unit(stats, spots[placed], slot)
+			if raider == null:
+				break
+			raider.neutral_group = random_events.armies + 1
+			spent += stats.cost
+			placed += 1
 	if placed == 0:
-		res.log("Unknown forces turn back — nowhere to land on that edge")
+		res.log("Unknown forces turn back - nowhere to land on that edge")
 		return
+	state.roster.assign_independent_color(slot, hash([state.turns.round_order, state.turns.round_number, state.all_units().size()]))
 	random_events.armies += 1
 	# Слот — в СЛУЧАЙНОЕ место очереди. События падают в конце раунда, активный слот уже
 	# обошёл круг, поэтому вставка не может ни пропустить, ни повторить чей-то ход.
 	var at := _rand_wide(state.turns.round_order.size() + 1)
 	state.turns.insert_slot(slot, at)
 	var names := ["north", "east", "south", "west"]
-	if p.has("hx"):
-		res.log("— %s break into the hallway at (%d, %d): %d fighters, hostile to everyone —" % [
+	if p.has("x"):
+		res.log("- %s land at (%d, %d): %d fighters, hostile to everyone -" % [MCF.owner_name(slot), int(p.x), int(p.y), placed])
+	elif p.has("hx"):
+		res.log("- %s break into the hallway at (%d, %d): %d fighters, hostile to everyone -" % [
 			MCF.owner_name(slot), int(p["hx"]), int(p["hy"]), placed])
 	else:
-		res.log("— %s land on the %s edge: %d fighters, hostile to everyone —" % [
+		res.log("- %s land on the %s edge: %d fighters, hostile to everyone -" % [
 			MCF.owner_name(slot), names[int(p.get("edge", 0)) % 4], placed])
 	notify_cell_changed(spots[0])
 
@@ -488,6 +496,20 @@ func _army_budget() -> int:
 ## margin) used to turn the army back (owner, fix-8 #11): the landing slides along the edge
 ## to the nearest stretch with ground, then tries the other edges.
 func _army_spawn_cells(p: Dictionary) -> Array[Vector2i]:
+	if p.has("x") or p.has("units") or p.has("count"):
+		var out: Array[Vector2i] = []
+		for cell: GridCell in state.grid.cells_flat():
+			if _open_floor(cell.coord): out.append(cell.coord)
+		var point := Vector2i(int(p.get("x", 0)), int(p.get("y", 0)))
+		var edge := int(p.get("edge", 0)) % 4
+		var along := int(p.get("from", 0)) + int(p.get("len", 1)) / 2
+		if not p.has("x"):
+			point = [Vector2i(along, 0), Vector2i(state.grid.width - 1, along), Vector2i(along, state.grid.height - 1), Vector2i(0, along)][edge]
+		out.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+			var da := a.distance_squared_to(point)
+			var db := b.distance_squared_to(point)
+			return da < db if da != db else (a.y < b.y if a.y != b.y else a.x < b.x))
+		return out
 	if p.has("hx"):
 		return _hallway_spawn_cells(Vector2i(int(p["hx"]), int(p["hy"])))
 	var found: Array = _army_band(int(p.get("edge", 0)) % 4, int(p.get("from", 0)), maxi(1, int(p.get("len", ARMY_SEGMENT_MIN))))
@@ -898,11 +920,12 @@ func _announce_wave(res: ActionResult) -> void:
 	var label := "Wave %d" % k if mode.endless() else "Wave %d of %d" % [k, mode.waves_total]
 	if not mode.endless() and k == mode.waves_total:
 		label += " (final)"
-	res.log("⚠ %s — %s, landing at the end of this round%s" % [label, _event_where(RandomEvents.ARMY, p), " · " + wave_size_text(p) if p.has("target") else ""])
+	res.log("⚠ %s - %s, landing at the end of this round%s" % [label, _event_where(RandomEvents.ARMY, p), " · " + wave_size_text(p) if p.has("target") else ""])
 
 ## Участок высадки армии или волны в клетках: полоса глубиной 2 у края, а в бункере —
 ## квадрат 3×3 у конца коридора. Его рисует бой и видит обучаемая политика.
 func army_landing_rect(p: Dictionary) -> Rect2i:
+	if p.has("x"): return Rect2i(int(p.x), int(p.y), 1, 1)
 	if p.has("hx"):
 		return Rect2i(int(p["hx"]) - 1, int(p["hy"]) - 1, 3, 3)
 	var seg := int(p.get("len", 1))
@@ -979,7 +1002,7 @@ func _land_wave(res: ActionResult) -> void:
 		if p.has("target"):
 			res.log("Wave placement: 0 of %d; %s." % [p.target, "no permitted unit types" if mode.excluded_units.size() >= ARMY_ROSTER.size() else "insufficient safe landing cells"])
 		return
-	res.log("— %s lands: %d fighters%s —" % [label, placed, " · " + wave_size_text(p) if p.has("target") else ""])
+	res.log("- %s lands: %d fighters%s -" % [label, placed, " · " + wave_size_text(p) if p.has("target") else ""])
 	if p.has("target") and placed < int(p.target):
 		res.log("Wave placement: %d of %d; %s." % [placed, p.target, "no permitted unit types" if mode.excluded_units.size() >= ARMY_ROSTER.size() else "insufficient safe landing cells"])
 	notify_cell_changed(spots[0])
@@ -1119,7 +1142,7 @@ func _land_fire(p: Dictionary, res: ActionResult) -> void:
 			res.fire_deaths.append(occ.id)
 			burned.append(occ.stats.display_name)
 		notify_cell_changed(c)
-	var tail := "" if burned.is_empty() else " — " + ", ".join(burned) + " burned"
+	var tail := "" if burned.is_empty() else " - " + ", ".join(burned) + " burned"
 	res.log("Fire breaks out in zone (%d, %d) %d×%d: %d cell(s) ablaze%s" % [
 		rect.position.x, rect.position.y, rect.size.x, rect.size.y, lit, tail])
 
@@ -1248,15 +1271,17 @@ func _reinforce_target() -> Dictionary:
 
 func _land_reinforce(p: Dictionary, res: ActionResult) -> void:
 	var side := int(p.get("side", -1))
-	if not side_has_army(side):
-		res.log("Reinforcements turn back — nobody is left to reinforce")
+	if not side_has_army(side) and not p.has("units") and not p.has("count"):
+		res.log("Reinforcements turn back - nobody is left to reinforce")
 		return
 	var spots := _army_spawn_cells(p)
-	var placed := _spawn_budget(spots, int(p.get("budget", 1)), side)
+	var placed := _spawn_force(spots, p, side, 0, ARMY_ROSTER, res) if p.has("units") or p.has("count") else _spawn_budget(spots, int(p.get("budget", 1)), side)
 	if placed == 0:
 		res.log("Reinforcements find nowhere to land")
 		return
-	res.log("— Reinforcements reach %s: %d fighters —" % [state.roster.name_of(side), placed])
+	state.turns.eliminated.erase(side)
+	if not state.turns.round_order.has(side): state.turns.insert_slot(side, state.turns.round_order.size())
+	res.log("- Reinforcements reach %s: %d fighters -" % [state.roster.name_of(side), placed])
 	notify_cell_changed(spots[0])
 
 ## Высадить бойцов из ARMY_ROSTER на клетки spots, пока хватает бюджета (первый — всегда).
@@ -1316,7 +1341,7 @@ func _start_bounty(res: ActionResult) -> void:
 	mode.bounty_unit = u.id
 	mode.bounty_side = u.owner
 	mode.bounty_until = state.turns.round_number + BOUNTY_ROUNDS - 1
-	res.log("⚠ Bounty — %s's %s is marked: kill it within %d rounds for %d points" % [
+	res.log("⚠ Bounty - %s's %s is marked: kill it within %d rounds for %d points" % [
 		state.roster.name_of(u.owner), u.stats.display_name, BOUNTY_ROUNDS, MatchMode.BOUNTY_POINTS])
 
 ## Цель награды пала: убил враг — его команде очки; иначе (огонь, событие, свои) — сгорела.
@@ -1328,9 +1353,9 @@ func _check_bounty(res: ActionResult, killer: int) -> void:
 	if killer >= 0 and MCF.is_player(killer) and not state.roster.are_allies(killer, mode.bounty_side):
 		var k := MatchMode.team_key(state.roster, killer)
 		mode.scores[k] = int(mode.scores.get(k, 0)) + MatchMode.BOUNTY_POINTS
-		res.log("Bounty claimed — %s scores %d points" % [team_label(k), MatchMode.BOUNTY_POINTS])
+		res.log("Bounty claimed - %s scores %d points" % [team_label(k), MatchMode.BOUNTY_POINTS])
 	else:
-		res.log("The bounty lapses — its target fell, but not to an enemy")
+		res.log("The bounty lapses - its target fell, but not to an enemy")
 
 ## Old mines can appear on traversable ground in every environment, including
 ## decorated station/bunker floors and the asteroid surface. Never occupy a unit,
@@ -1371,4 +1396,28 @@ func _start_minefield(res: ActionResult, selected_center := Vector2i(-1, -1)) ->
 		var kind := MCF.FEATURE_AV_MINE if state.dice.roll_d6() >= 5 else MCF.FEATURE_MINE
 		state.grid.cell(centre).set_feature(kind, OLD_MINE_OWNER)
 		notify_cell_changed(centre)
-	res.log("⚠ Old Minefield — scouts report forgotten mines somewhere on the map. Watch your step.")
+	res.log("⚠ Old Minefield - scouts report forgotten mines somewhere on the map. Watch your step.")
+
+## Exact compositions/counts share the same landing order as the selected entry.
+func _spawn_force(spots: Array[Vector2i], p: Dictionary, owner: int, group: int, pool: Array, result: ActionResult) -> int:
+	var types: Array[String] = []
+	if p.has("units"):
+		var names: Array = p.units.keys()
+		names.sort()
+		for type: String in names:
+			for i in int(p.units[type]): types.append(type)
+	else:
+		if pool.is_empty(): return 0
+		for i in int(p.get("count", 0)): types.append(str(pool[_rand_wide(pool.size())]))
+	var placed := 0
+	for type: String in types:
+		if placed >= spots.size(): break
+		var stats := _army_stats(type)
+		if stats == null: continue
+		var unit := state.spawn_unit(stats, spots[placed], owner)
+		if unit == null: break
+		unit.neutral_group = group
+		placed += 1
+	if placed < types.size():
+		result.log("Force placement: %d of %d units; insufficient open ground." % [placed, types.size()])
+	return placed

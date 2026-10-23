@@ -13,11 +13,11 @@ static func _placement(state: GameState, type: String, at: Vector2i, current: Ve
 		for x in size.x:
 			var cell := state.grid.cell(at + Vector2i(x, y))
 			if cell == null: return "The complete vehicle footprint must fit on the board."
-			if cell.is_space or cell.is_wall() or cell.blocks_move() or Furniture.blocks_move(cell.feature_id) or cell.corpse_count > 0:
-				return "The footprint overlaps blocked terrain, space or bodies."
+			if cell.is_space or cell.is_wall() or cell.blocks_move() or Furniture.blocks_move(cell.feature_id):
+				return "The footprint overlaps blocked terrain or space."
 			if cell.vehicle_id != -1 and (current == null or cell.vehicle_id != current.id): return "The footprint overlaps another vehicle."
-			if cell.occupant != null and cell.occupant != pilot and (current == null or not current.occupants.has(cell.occupant.id)):
-				return "The footprint overlaps a unit or corpse."
+			if cell.occupant != null and cell.occupant.status != MCF.Status.CORPSE and cell.occupant != pilot and (current == null or not current.occupants.has(cell.occupant.id)):
+				return "The footprint overlaps a living unit."
 	return ""
 
 static func spawn(r: GameActionResolver, args: Dictionary) -> ActionResult:
@@ -34,6 +34,7 @@ static func spawn(r: GameActionResolver, args: Dictionary) -> ActionResult:
 			return ActionResult.fail("A Borg requires a living, unbound soldier of the chosen owner at its origin.")
 	var error := _placement(r.state, type, at, null, pilot)
 	if not error.is_empty(): return ActionResult.fail(error)
+	r.state.roster.assign_independent_color(args.owner, hash([r.state.turns.round_order, r.state.turns.round_number, r.state.all_units().size()]))
 	var veh := r.state.spawn_vehicle(type, at, args.owner)
 	if MCF.is_independent(veh.owner) and not r.state.turns.round_order.has(veh.owner):
 		r.state.turns.insert_slot(veh.owner, r.state.turns.round_order.size())
@@ -45,14 +46,14 @@ static func spawn(r: GameActionResolver, args: Dictionary) -> ActionResult:
 		pilot.borg_id = veh.id
 		veh.occupants.assign([pilot.id])
 		CheatUnits.refill(pilot)
-	return CheatUnits.result("Created %d — %s for %s at %s." % [veh.id, spec.get("name", type), r.state.roster.name_of(veh.owner), at])
+	return CheatUnits.result("Created %d - %s for %s at %s." % [veh.id, spec.get("name", type), r.state.roster.name_of(veh.owner), at])
 
 static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 	var args := intent.args
 	if intent.op == "spawn_vehicle": return spawn(r, args)
 	var veh := r.state.get_vehicle(args.vehicle)
 	if veh == null: return ActionResult.fail("Vehicle ID no longer exists.")
-	var label := "%d — %s" % [veh.id, VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)]
+	var label := "%d - %s" % [veh.id, VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)]
 	match intent.op:
 		"vehicle_clone":
 			var copy := {"type": veh.type_id, "owner": veh.owner, "x": args.x, "y": args.y}
