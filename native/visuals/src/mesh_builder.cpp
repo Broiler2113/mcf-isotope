@@ -7,6 +7,10 @@
 #include <godot_cpp/variant/transform3d.hpp>
 #include <algorithm>
 #include <vector>
+#include "visibility_kernel.h"
+#include "pathfinding_kernel.h"
+#include "ai_kernel.h"
+#include "terrain_kernel.h"
 
 using namespace godot;
 
@@ -148,7 +152,13 @@ public:
 };
 
 static void initialize(ModuleInitializationLevel level) {
-    if (level == MODULE_INITIALIZATION_LEVEL_SCENE) ClassDB::register_class<MCFMeshBuilder>();
+    if (level == MODULE_INITIALIZATION_LEVEL_SCENE) {
+        ClassDB::register_class<MCFMeshBuilder>();
+        register_visibility_kernel();
+        register_pathfinding_kernel();
+        register_ai_kernel();
+        register_terrain_kernel();
+    }
 }
 static void terminate(ModuleInitializationLevel) {}
 extern "C" GDExtensionBool GDE_EXPORT mcf_visuals_init(GDExtensionInterfaceGetProcAddress proc,

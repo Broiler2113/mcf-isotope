@@ -7,7 +7,8 @@ set(GODOT_CPP_DIR "" CACHE PATH "Pinned godot-cpp source directory")
 set(GODOTCPP_BUILD_PROFILE "${CMAKE_CURRENT_SOURCE_DIR}/build_profile.json" CACHE PATH "" FORCE)
 set(GODOTCPP_TARGET template_release CACHE STRING "" FORCE)
 add_subdirectory("${GODOT_CPP_DIR}" godot-cpp)
-add_library(mcf_visuals SHARED src/mesh_builder.cpp)
+add_library(mcf_visuals SHARED src/mesh_builder.cpp src/visibility_kernel.cpp
+    src/pathfinding_kernel.cpp src/ai_kernel.cpp src/terrain_kernel.cpp)
 target_link_libraries(mcf_visuals PRIVATE godot-cpp)
 # Match GDScript's operation order. Fused or reassociated arithmetic changes vertices.
 if(MSVC)

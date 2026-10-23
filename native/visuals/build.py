@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build optional visual kernels; source-only Godot projects retain GDScript fallback."""
+"""Build optional game kernels; source-only Godot projects retain GDScript fallback."""
 import argparse
 import json
 from pathlib import Path

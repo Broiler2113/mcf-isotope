@@ -15,6 +15,7 @@ func run() -> void:
 		var map := MapGen.generate({"style": style, "size": MapGen.SIZE_CUSTOM,
 			"width": 32, "height": 24, "seed": 83, "units": 24, "furniture": 3, "winter": false})
 		NativeVisuals.enabled = false
+		NativeKernels.enabled = false
 		FirstPersonModels._cache.clear()
 		var grid := Grid.new(map.width, map.height)
 		map.apply_to_grid(grid)
@@ -33,13 +34,25 @@ func run() -> void:
 		var reference := await picture(fp)
 		reference.save_png("/tmp/isotope-native-%d-gdscript.png" % style)
 		NativeVisuals.enabled = true
+		NativeKernels.enabled = true
 		FirstPersonModels._cache.clear()
+		ck(FirstPersonBoard.roofed(grid, map.environment()) == fp._roof, "native roof mask matches the rendered reference")
+		var native_tiles := TerrainTiles.new(grid, map.environment())
+		for field: String in ["origin", "winter", "decals", "map_decals", "ground_lines", "_damaged", "hidden_fire"]:
+			native_tiles.set(field, host._tiles.get(field))
+		var floors := {}
 		# Keep the same viewport, lights and instance order. Recreating a whole
 		# world can change coplanar/shadow edge pixels even between two GDScript runs.
 		# Replace each mesh with an independently generated native mesh instead.
 		for cc: Vector2i in fp._chunks:
 			var ctx: Dictionary = fp._chunk_context()
 			var tcc := Vector2i(cc.x * FirstPersonBoard.CH / TerrainTiles.C, cc.y * FirstPersonBoard.CH / TerrainTiles.C)
+			if not floors.has(tcc):
+				floors[tcc] = true
+				var original: ImageTexture = host._tiles.floor_3d(tcc)
+				var native_floor := native_tiles.floor_3d(tcc).get_image()
+				ck(original.get_image().get_data() == native_floor.get_data(), "native terrain atlas bytes agree")
+				original.update(native_floor)
 			ctx["decals"] = host._tiles.decals.get(tcc, [])
 			ctx["map_decals"] = host._tiles.map_decals.get(tcc, [])
 			var native := FirstPersonBoard.build(grid, cc, fp._roof, ctx)
@@ -58,6 +71,7 @@ func run() -> void:
 		host.free()
 		await process_frame
 	NativeVisuals.enabled = true
+	NativeKernels.enabled = true
 
 func picture(fp: Node) -> Image:
 	for i in 3:

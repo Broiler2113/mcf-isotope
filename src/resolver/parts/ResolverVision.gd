@@ -421,6 +421,8 @@ func _prefetch_seen(asks: Array) -> void:
 		return
 	var results: Array = []
 	results.resize(jobs.size())
+	# Initialize on the main thread; the native sweep has no shared mutable state.
+	NativeKernels.visibility()
 	var lock := Mutex.new()
 	var work := func(i: int) -> void:
 		var j: Array = jobs[i]
@@ -526,6 +528,14 @@ static func _sweep_seen(ux: int, uy: int, r: int, blk: PackedByteArray, gw: int,
 ## лежит в промежутке c — промежуток не в тени, и c отмечена. Клетки за столбцом, на
 ## котором октант закрылся целиком, не просматриваются вовсе — и не отмечаются.
 static func _sweep(ux: int, uy: int, r: int, blk: PackedByteArray, gw: int,
+		gh: int, blk_t: PackedByteArray = PackedByteArray()) -> Array:
+	var kernel := NativeKernels.visibility()
+	if kernel != null:
+		var result: Array = kernel.sweep(ux, uy, r, blk, gw, gh, blk_t)
+		if result.size() == 2: return result
+	return _sweep_reference(ux, uy, r, blk, gw, gh, blk_t)
+
+static func _sweep_reference(ux: int, uy: int, r: int, blk: PackedByteArray, gw: int,
 		gh: int, blk_t: PackedByteArray = PackedByteArray()) -> Array:
 	# Столбец октанта лежит сплошняком либо в самой таблице (октанты |dy| > |dx|: столбец —
 	# кусок строки сетки), либо в транспонированной (|dx| ≥ |dy|: кусок столбца сетки).
@@ -669,6 +679,12 @@ static func _sweep(ux: int, uy: int, r: int, blk: PackedByteArray, gw: int,
 ## remaining columns whole. Cost follows the shadow, not the board.
 static func _sweep_hidden(ux: int, uy: int, blk: PackedByteArray, gw: int, gh: int,
 		blk_t: PackedByteArray, blockers: PackedInt32Array) -> PackedInt32Array:
+	var kernel := NativeKernels.visibility()
+	if kernel != null: return kernel.hidden(ux, uy, blk, gw, gh, blk_t, blockers)
+	return _sweep_hidden_reference(ux, uy, blk, gw, gh, blk_t, blockers)
+
+static func _sweep_hidden_reference(ux: int, uy: int, blk: PackedByteArray, gw: int, gh: int,
+		blk_t: PackedByteArray, blockers: PackedInt32Array) -> PackedInt32Array:
 	var origin := uy * gw + ux
 	var out := PackedInt32Array()
 	# First column holding a blocker per octant, in the walk's own search range 0 ≤ j ≤ a.
@@ -807,6 +823,11 @@ static func _sens_rows(parts: Array, shared: Dictionary, col: int, step: int,
 
 ## Таблица блокировщиков, транспонированная: индекс x·высота + y.
 static func _transpose(blk: PackedByteArray, gw: int, gh: int) -> PackedByteArray:
+	var kernel := NativeKernels.visibility()
+	if kernel != null: return kernel.transpose(blk, gw, gh)
+	return _transpose_reference(blk, gw, gh)
+
+static func _transpose_reference(blk: PackedByteArray, gw: int, gh: int) -> PackedByteArray:
 	var t := PackedByteArray()
 	t.resize(gw * gh)
 	for y in gh:
@@ -1030,6 +1051,12 @@ func team_visible_coords(owner: int) -> Dictionary:
 ## Packed-массив в GDScript передаётся копией, поэтому счётчики возвращаются.
 func _vis_add(cells: PackedInt32Array, counts: PackedInt32Array, out: Dictionary,
 		memory: Dictionary, gw: int, log: Variant) -> PackedInt32Array:
+	var kernel := NativeKernels.visibility()
+	if kernel != null: return kernel.merge_visibility(cells, counts, out, memory, gw, log, true)
+	return _vis_add_reference(cells, counts, out, memory, gw, log)
+
+func _vis_add_reference(cells: PackedInt32Array, counts: PackedInt32Array, out: Dictionary,
+		memory: Dictionary, gw: int, log: Variant) -> PackedInt32Array:
 	for i: int in cells:
 		var n: int = counts[i]
 		counts[i] = n + 1
@@ -1042,6 +1069,12 @@ func _vis_add(cells: PackedInt32Array, counts: PackedInt32Array, out: Dictionary
 	return counts
 
 func _vis_drop(cells: PackedInt32Array, counts: PackedInt32Array, out: Dictionary,
+		gw: int, log: Variant) -> PackedInt32Array:
+	var kernel := NativeKernels.visibility()
+	if kernel != null: return kernel.merge_visibility(cells, counts, out, {}, gw, log, false)
+	return _vis_drop_reference(cells, counts, out, gw, log)
+
+func _vis_drop_reference(cells: PackedInt32Array, counts: PackedInt32Array, out: Dictionary,
 		gw: int, log: Variant) -> PackedInt32Array:
 	for i: int in cells:
 		var n: int = counts[i] - 1

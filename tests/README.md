@@ -78,6 +78,16 @@ and station scenes, keeping the same lighting and instances to avoid unrelated
 render-order variation. `bench/run_native_visuals.gd` measures both backends in
 alternating order. See [native/visuals/README.md](../native/visuals/README.md).
 
+The other native kernels have dedicated differential suites:
+`ui/run_native_terrain.gd` compares roof masks and floor/track pixels;
+`perf/run_native_pathfinding.gd` compares ordered costs and predecessor trees;
+`ai/run_native_ai.gd` compares planning kernels and full action/RNG traces;
+`fog/run_native_visibility.gd` compares visible cells, sensitivity, shadows and
+incremental exploration logs. Each accepts `-- --require-native`. Their matching
+`bench/run_native_*.gd` scripts alternate backends, including input preparation.
+`run_net_native_kernels.sh` runs real native/reference peers in both host roles.
+Set `MCF_NATIVE_KERNELS=off` to use the original four algorithms throughout a game.
+
 `bench/run_first_person_render.gd` profiles a large town at the 160 m render
 distance, reporting frame and CPU percentiles, draw calls, and triangles for still
 and moving views. Run it with the GL Compatibility renderer and a real display

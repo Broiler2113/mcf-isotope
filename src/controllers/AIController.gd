@@ -1186,6 +1186,12 @@ func _nearest_enemy(state: GameState, from_coord: Vector2i, only_visible: bool, 
 	var hit: Variant = _near_cache.get(ck)
 	if hit != null or _near_cache.has(ck):
 		return hit
+	var native := NativeKernels.ai()
+	if native != null and not only_visible:
+		var index: int = native.nearest_index(from_coord, _near_xy)
+		var selected: UnitInstance = _near_units[index] if index >= 0 else null
+		_near_cache[ck] = selected
+		return selected
 	var best: UnitInstance = null
 	var best_d := 1 << 30
 	var fx := from_coord.x
@@ -2342,6 +2348,10 @@ static func wave(grid: Grid, seeds: PackedInt32Array, off: Dictionary,
 	var w := grid.width
 	var h := grid.height
 	var pw := w + 2
+	var native := NativeKernels.ai()
+	if native != null:
+		var distances: PackedInt32Array = native.wave(w, h, _walk_mask(grid), seeds, must_reach, extra)
+		if distances.size() == w * h: return GeoField.new(w, h, distances, off)
 	var st: PackedByteArray = _walk_mask(grid).duplicate()   # 0 — не взята, 1 — взята, 2 — стена
 	var pd := PackedInt32Array()
 	pd.resize(pw * (h + 2))

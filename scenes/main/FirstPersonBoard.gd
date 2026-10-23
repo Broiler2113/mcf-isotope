@@ -213,6 +213,16 @@ void fragment() {
 ## is inside when no walkable way leads to the map edge, grass and dirt paths, or space,
 ## without crossing a wall, glass or a door.
 static func roofed(grid: Grid, env: String) -> PackedByteArray:
+	var native := NativeKernels.terrain()
+	if native != null:
+		var result: PackedByteArray = native.roofed(grid.cells_flat(), grid.width, grid.height, grid.floor_look,
+			env in ["station", "bunker"], {"boundary": MCF.FEATURE_BOUNDARY, "airlock": MCF.FEATURE_AIRLOCK,
+			"glass": [MCF.FEATURE_GLASS, MCF.FEATURE_ARMOR_GLASS], "wall_height": MCF.WALL_HEIGHT,
+			"grass_type": MCF.FLOOR_GRASS, "grass_look": MCF.Look.GRASS, "dirt_look": MCF.Look.DIRT})
+		if result.size() == grid.width * grid.height: return result
+	return _roofed_gd(grid, env)
+
+static func _roofed_gd(grid: Grid, env: String) -> PackedByteArray:
 	var w := grid.width
 	var h := grid.height
 	var out := PackedByteArray()

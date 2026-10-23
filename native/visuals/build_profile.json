@@ -1,1 +1,1 @@
-{"enabled_classes": ["RefCounted", "Mesh", "OS", "ClassDB"]}
+{"enabled_classes": ["RefCounted", "Mesh", "OS", "ClassDB", "Image", "Geometry2D"]}

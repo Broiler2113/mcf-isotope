@@ -1,10 +1,10 @@
-name: Native visual kernels
+name: Native game kernels
 on:
   workflow_dispatch:
   push:
-    paths: ['native/visuals/**', 'native/policy/dependencies.json', 'addons/mcf_visuals/**', 'scenes/main/FirstPerson*.gd', 'src/ui/NativeVisuals.gd', 'tests/ui/run_native_visuals.gd', 'tests/render_native_visuals.gd', 'tests/bench/run_native_visuals.gd', '.github/workflows/native-visuals.yml']
+    paths: ['native/visuals/**', 'native/policy/dependencies.json', 'addons/mcf_visuals/**', 'scenes/main/FirstPerson*.gd', 'src/ui/NativeVisuals.gd', 'src/ui/TerrainTiles.gd', 'src/sim/**', 'src/controllers/**', 'src/resolver/**', 'tests/**', '.github/workflows/native-visuals.yml']
   pull_request:
-    paths: ['native/visuals/**', 'native/policy/dependencies.json', 'addons/mcf_visuals/**', 'scenes/main/FirstPerson*.gd', 'src/ui/NativeVisuals.gd', 'tests/ui/run_native_visuals.gd', 'tests/render_native_visuals.gd', 'tests/bench/run_native_visuals.gd', '.github/workflows/native-visuals.yml']
+    paths: ['native/visuals/**', 'native/policy/dependencies.json', 'addons/mcf_visuals/**', 'scenes/main/FirstPerson*.gd', 'src/ui/NativeVisuals.gd', 'src/ui/TerrainTiles.gd', 'src/sim/**', 'src/controllers/**', 'src/resolver/**', 'tests/**', '.github/workflows/native-visuals.yml']
 permissions:
   contents: read
 env:
@@ -24,16 +24,27 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Build optional C++ visual kernels
+      - name: Build optional C++ game kernels
         run: python native/visuals/build.py --jobs 2
       - name: Verify source checkout and platform manifests
         run: python native/visuals/test_manifest.py
       - name: Install Godot 4.7 editor
         run: python native/policy/install_godot.py --editor-only
-      - name: Import and compare geometry bytes
+      - name: Import and compare native kernels with original algorithms
         run: |
           godot --headless --editor --path . --import
-          godot --headless --path . --script res://tests/ui/run_native_visuals.gd -- --require-native
+          for suite in ui/run_native_visuals ui/run_native_terrain ai/run_native_ai perf/run_native_pathfinding fog/run_native_visibility; do
+            godot --headless --path . --script "res://tests/$suite.gd" -- --require-native || exit 1
+          done
+      - name: Verify AI, visibility, movement, saves and replays
+        run: |
+          for suite in ai/run_ai_conduct ai/run_ai_rules fog/run_fog fog/run_sight_lines fog/run_gas_visibility fog/run_gas_vision fog/run_fog_viewer fog/run_fog_screens perf/run_incremental net/run_lockstep files/run_game_files files/run_replay_seek; do
+            godot --headless --path . --script "res://tests/$suite.gd" || exit 1
+          done
+          godot --headless --path . --script res://tests/bench/run_bench.gd -- small medium --reps 1
+      - name: Verify mixed native and reference multiplayer peers
+        if: runner.os == 'Linux'
+        run: bash tests/run_net_native_kernels.sh
       - name: Verify first-person behavior with native geometry
         run: |
           for suite in run_first_person run_first_person_fix9 run_first_person_damage run_first_person_streaming; do
@@ -42,7 +53,10 @@ jobs:
       - name: Verify original GDScript fallback
         env:
           MCF_NATIVE_VISUALS: 'off'
-        run: godot --headless --path . --script res://tests/ui/run_first_person.gd
+          MCF_NATIVE_KERNELS: 'off'
+        run: |
+          godot --headless --path . --script res://tests/ui/run_first_person.gd
+          godot --headless --path . --script res://tests/bench/run_bench.gd -- small medium --reps 1
       - name: Compare rendered native and GDScript scenes
         if: runner.os == 'Linux'
         run: |
@@ -50,9 +64,12 @@ jobs:
           sudo apt-get install -y -qq xvfb libgl1-mesa-dri
           LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a godot --path . --rendering-method gl_compatibility --script res://tests/render_native_visuals.gd
       - name: Measure native and GDScript CPU work
-        run: godot --headless --path . --script res://tests/bench/run_native_visuals.gd > native-visuals-benchmark.txt
+        run: |
+          for kernel in visuals terrain ai pathfinding visibility; do
+            godot --headless --path . --script "res://tests/bench/run_native_$kernel.gd" >> native-kernels-benchmark.txt || exit 1
+          done
       - uses: actions/upload-artifact@v4
         with:
-          name: native-visuals-${{ matrix.os }}
-          path: native-visuals-benchmark.txt
+          name: native-kernels-${{ matrix.os }}
+          path: native-kernels-benchmark.txt
           if-no-files-found: error

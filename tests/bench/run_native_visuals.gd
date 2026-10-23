@@ -35,6 +35,7 @@ func _go() -> void:
 	for repeat in 4:
 		for native: bool in ([false, true] if repeat % 2 == 0 else [true, false]):
 			NativeVisuals.enabled = native
+			NativeKernels.enabled = native
 			FirstPersonModels._cache.clear()
 			var grid := Grid.new(map.width, map.height)
 			map.apply_to_grid(grid)
