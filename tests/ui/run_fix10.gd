@@ -45,10 +45,12 @@ func run() -> void:
 	var overlay := CheatOverlay.new()
 	overlay.main = main
 	root.add_child(overlay)
-	var initial := overlay.label_box(Vector2i(3, 3), "U123").size
 	for zoom in [0.35, 1.0, 3.0]:
 		main.zoom = zoom
-		ck(overlay.label_box(Vector2i(3, 3), "U123").size == initial, "ID label size independent of zoom")
+		var tile := Rect2(main._cell_screen(Vector2i(3, 3)), Vector2.ONE * main.CELL * zoom)
+		for id: String in ["U123", "V1000000", "U123456789-"]:
+			for row in 8:
+				ck(tile.encloses(overlay.label_box(Vector2i(3, 3), id, row, 8)), "stacked IDs fit within their tile at every zoom")
 	var body: UnitInstance = main.state.get_unit(0)
 	main._walk_cells[body.id] = Vector2i(3, 4)
 	ck(overlay.labels().has(Vector2i(3, 4)), "living IDs follow the walking sprite")

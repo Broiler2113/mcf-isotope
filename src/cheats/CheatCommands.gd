@@ -24,7 +24,7 @@ const CATALOG: Array = [
 	{"op": "inspect_unit_tool", "pattern": "inspect unit", "access": "tool", "help": "Click a soldier or corpse to inspect it. You can also supply its U-ID directly."},
 	{"op": "inspect_vehicle_tool", "pattern": "inspect vehicle", "access": "tool", "help": "Click any tile of a vehicle to inspect it, or supply its V-ID directly."},
 	{"op": "inspect_cell_tool", "pattern": "inspect cell", "access": "tool", "help": "Click a tile to inspect its terrain, coordinates and effects."},
-	{"op": "coords_on", "pattern": "coords on", "access": "inspect", "help": "Show fixed-size tile coordinates. Zoom in to show every tile in dense areas."},
+	{"op": "coords_on", "pattern": "coords on", "access": "inspect", "help": "Show coordinates on every tile. Labels stay within their cells as you zoom."},
 	{"op": "coords_off", "pattern": "coords off", "access": "safe", "help": "Hide tile coordinates."},
 	{"op": "inspect_unit", "pattern": "inspect unit {unit:unit}", "access": "inspect", "help": "Inspect a unit, including its overrides."},
 	{"op": "inspect_vehicle", "pattern": "inspect vehicle {vehicle:vehicle}", "access": "inspect", "help": "Inspect a vehicle and crew."},

@@ -70,7 +70,7 @@ jobs:
           godot --headless --path . --script res://tests/files/run_replay_seek.gd
           godot --headless --path . --script res://tests/files/run_video_encoder.gd
           godot --headless --path . --script res://tests/events/run_live_wave_counts.gd
-      - name: Verify battlefield labels retain their rendered size while zooming
+      - name: Verify battlefield labels stay within their cells while zooming
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq

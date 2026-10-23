@@ -29,10 +29,10 @@ func run() -> void:
 	for i in 3: await process_frame
 	await RenderingServer.frame_post_draw
 	var with_ids := root.get_texture().get_image()
-	var at: Vector2 = main._cell_screen(Vector2i(3, 3)) + Vector2(main.CELL * main.zoom * 0.5, 0)
+	var at: Vector2 = main._cell_screen(Vector2i(3, 3))
 	var changed := 0
-	for y in range(maxi(0, int(at.y) - 18), mini(900, int(at.y))):
-		for x in range(maxi(0, int(at.x) - 15), mini(1280, int(at.x) + 15)):
+	for y in range(int(at.y), int(at.y + main.CELL * main.zoom)):
+		for x in range(int(at.x), int(at.x + main.CELL * main.zoom)):
 			if with_ids.get_pixel(x, y) != without.get_pixel(x, y): changed += 1
 	ck(changed > 50, "IDs are visibly drawn above the battlefield layers")
 	with_ids.save_png("/tmp/isotope-0133-ids.png")
