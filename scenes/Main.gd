@@ -221,13 +221,18 @@ func _unhandled_input(event: InputEvent) -> void:
 	# Панорама мышью (средняя/правая кнопка) и жестом тачпада — работает всегда.
 	if event is InputEventMouseButton and event.button_index in [MOUSE_BUTTON_MIDDLE, MOUSE_BUTTON_RIGHT]:
 		_mouse_panning = event.pressed
+		if event.pressed: _kill_pan_tween()
 		return
 	if event is InputEventMouseMotion and _mouse_panning:
+		if (event.button_mask & (MOUSE_BUTTON_MASK_MIDDLE | MOUSE_BUTTON_MASK_RIGHT)) == 0:
+			_mouse_panning = false
+			return
 		if _box_dragging: _box_end_screen = event.position
 		pan += event.relative
 		queue_redraw()
 		return
 	if event is InputEventPanGesture:
+		_kill_pan_tween()
 		pan -= event.delta * 24.0
 		queue_redraw()
 		return

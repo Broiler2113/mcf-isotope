@@ -1508,22 +1508,38 @@ func _refresh_choice_labels() -> void:
 		button.text = "%d. %s" % [i % 9 + 1, button.get_meta("choice_label")]
 
 # _input precedes GUI focus traversal: Tab and replay Space/arrows must not activate
-# a previously focused HUD button. Text fields and modal windows retain their input.
+# a previously focused HUD button. Text fields retain gameplay input; the console's
+# function-key shortcut is handled explicitly below. Modal windows retain input.
 func _input(event: InputEvent) -> void:
+	# Keep release cleanup in the shared handler: overriding _input in Main would
+	# bypass shortcuts and let F2 fall through to the editor Manual binding.
+	if event is InputEventMouseButton and not event.pressed \
+			and event.button_index in [MOUSE_BUTTON_MIDDLE, MOUSE_BUTTON_RIGHT]:
+		_mouse_panning = false
 	var viewport := get_viewport()
 	if event is InputEventKey and _handle_shortcut(event) and is_instance_valid(viewport):
 		viewport.set_input_as_handled()
 
 func _handle_shortcut(event: InputEventKey) -> bool:
-	if not event.pressed or event.echo or Keybinds.typing(get_viewport()) or _fp != null: return false
+	if not event.pressed or event.echo or _fp != null: return false
+	var console_key := Keybinds.matches(event, "game_cheats")
+	# Function keys can open the console from chat/search fields. Printable
+	# rebound keys still belong to the field, as do all other gameplay shortcuts.
+	if Keybinds.typing(get_viewport()) and not (console_key \
+			and event.keycode >= KEY_F1 and event.keycode <= KEY_F35): return false
 	if _quit_dialog != null and _quit_dialog.visible:
 		if Keybinds.matches(event, "game_cancel"):
 			_quit_dialog.hide()
 			return true
 		return false
 	if Keybinds.modal_open(): return false
-	if Keybinds.matches(event, "game_cheats"):
-		if is_instance_valid(_cheat_console): _cheat_console.queue_free(); return true
+	if console_key:
+		if is_instance_valid(_cheat_console):
+			if _cheat_console.input.has_focus() and not _cheat_console.tool.is_empty():
+				_cheat_console.cancel_tool()
+			else:
+				_cheat_console.queue_free()
+			return true
 		if replay == null and not _spectator and state.cheats_enabled and _fp == null:
 			var side: int = net.my_owner if net != null else _viewing_side()
 			if CheatAccess.seated(state, side):

@@ -36,7 +36,9 @@ func _draw_before(ci: Node2D) -> void:
 		var vsize := Vector2(v[3]) * CELL
 		var col := _side_color(int(v[1]))
 		var key := Sprites.resolve(String(v[0]))
-		if key == "" or not Sprites.draw_texture_override_rect(ci, key, Rect2(org, vsize), _facing_degrees(v[4])):
+		if String(v[0]) == "tank":
+			TankModel.draw(ci, Rect2(org, vsize), v[4], col)
+		elif key == "" or not Sprites.draw_texture_override_rect(ci, key, Rect2(org, vsize), _facing_degrees(v[4])):
 			ci.draw_rect(Rect2(org + Vector2(3, 3), vsize - Vector2(6, 6)), col.darkened(0.35))
 		ci.draw_rect(Rect2(org + Vector2(2, 2), vsize - Vector2(4, 4)), col, false, 2.0)
 		ci.draw_string(font, org + Vector2(8, 18), String(VehicleDB.get_vehicle(String(v[0])).get("name", v[0])),
@@ -160,7 +162,9 @@ func _draw_veh_move_preview() -> void:
 		var move: Dictionary = veh_move_targets[hover]
 		var origin: Vector2i = veh.origin + Vector2i(move["dir"]) * int(move["steps"])
 		var rect := Rect2(_cell_origin(origin), Vector2(veh.size) * CELL)
-		if not Sprites.draw_texture_override_rect(self, veh.type_id, rect,
+		if veh.type_id == "tank":
+			TankModel.draw(self, rect, veh.facing, _side_color(veh.owner), false, Color(1, 1, 1, 0.4), veh.tower_locked_dir)
+		elif not Sprites.draw_texture_override_rect(self, veh.type_id, rect,
 				_facing_degrees(veh.facing), Color(1, 1, 1, 0.4)):
 			draw_rect(rect, Color(_side_color(veh.owner), 0.3))
 		draw_rect(rect, Color(0.65, 1.0, 0.7, 0.85), false, 2.0)
@@ -862,10 +866,15 @@ func _draw() -> void:
 		var veh_key := Sprites.resolve(veh_name)
 		if veh_key == "" and disp_wrecked:
 			veh_key = Sprites.resolve(veh.type_id)
-		if veh_key != "":
-			Sprites.draw_texture_override_rect(self, veh_key, Rect2(org, vsize),
-				_facing_degrees(veh.facing), Color(1, 1, 1,
-					0.4 if mode == Mode.VEH_MOVE and veh.id == selected_vehicle_id else 1.0))
+		if veh_key != "" or veh.type_id == "tank":
+			var opacity := Color(1, 1, 1, 0.4 if mode == Mode.VEH_MOVE and veh.id == selected_vehicle_id else 1.0)
+			if veh.type_id == "tank":
+				Sprites.set_base_transform(pan + voff * zoom, Vector2(zoom, zoom))
+				TankModel.draw(self, Rect2(org, vsize), veh.facing, hull_col, disp_wrecked, opacity, veh.tower_locked_dir)
+				Sprites.set_base_transform(pan, Vector2(zoom, zoom))
+			else:
+				Sprites.draw_texture_override_rect(self, veh_key, Rect2(org, vsize),
+						_facing_degrees(veh.facing), opacity)
 			# Рамка в цвете стороны поверх картинки (issue 4): поставочная текстура
 			# танка одна на всех, и без рамки два вражеских танка выглядели бы
 			# одинаково — а принадлежность машины игрок обязан читать с доски.

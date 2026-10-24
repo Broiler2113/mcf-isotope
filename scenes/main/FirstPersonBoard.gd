@@ -46,6 +46,8 @@ uniform bool lm_on = true;
 uniform vec3 flat_light : source_color = vec3(1.0);
 uniform float cut = 0.0;
 uniform vec4 tint : source_color = vec4(1.0);
+uniform bool team_paint = false;
+uniform vec4 team_color : source_color = vec4(1.0);
 uniform float relief = 0.0;
 uniform bool ground_ao = false;
 uniform sampler2DArray grounds : source_color, filter_nearest_mipmap, repeat_enable;
@@ -111,6 +113,7 @@ void fragment() {
 		c.rgb *= COLOR.rgb;
 	}
 	c *= tint;
+	if (team_paint) c.rgb = vec3(lum(c.rgb)) * team_color.rgb;
 	if (c.a < cut) discard;
 	vec2 cell = floor(wpos.xz - wnorm.xz * 0.02);
 	float v = 0.0;

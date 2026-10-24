@@ -285,6 +285,12 @@ static func draw_texture_override_rect(ci: CanvasItem, name: String, rect: Rect2
 		if tex == null:
 			_misses[name] = true
 			return false
+	draw_texture_rect(ci, tex, rect, rot_deg, tint)
+	return true
+
+## Shared rotation and transform restoration for baked model sprites too.
+static func draw_texture_rect(ci: CanvasItem, tex: Texture2D, rect: Rect2,
+		rot_deg := 0.0, tint := Color.WHITE) -> void:
 	if is_zero_approx(rot_deg):
 		ci.draw_texture_rect(tex, rect, false, tint)
 	else:
@@ -293,7 +299,6 @@ static func draw_texture_override_rect(ci: CanvasItem, name: String, rect: Rect2
 				deg_to_rad(rot_deg), _base_scale)
 		ci.draw_texture_rect(tex, Rect2(-rect.size * 0.5, rect.size), false, tint)
 		ci.draw_set_transform(_base_offset, 0.0, _base_scale)
-	return true
 
 ## Объект на клетке: автотайл, если для него лежит лист, иначе обычная картинка.
 ## same(dx, dy) → стоит ли на соседней клетке тот же объект. false — замены нет вовсе,

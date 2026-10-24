@@ -69,6 +69,9 @@ jobs:
           godot --headless --path . --script res://tests/ui/run_release_0132.gd
           godot --headless --path . --script res://tests/mapgen/run_release_0132.gd
           godot --headless --path . --script res://tests/ui/run_console_windows.gd
+          godot --headless --path . --script res://tests/ui/run_console_shortcut.gd
+          godot --headless --path . --script res://tests/ui/run_hotkeys.gd
+          godot --headless --path . --script res://tests/ui/run_tank_visuals.gd
           godot --headless --path . --script res://tests/ui/run_fix10.gd
           godot --headless --path . --script res://tests/ui/run_fix11.gd
           godot --headless --path . --script res://tests/files/run_replay_seek.gd

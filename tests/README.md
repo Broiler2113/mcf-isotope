@@ -351,12 +351,17 @@ wall-clock timing is informational rather than a hardware-dependent test asserti
 
 ### Action hotkeys and keybinding settings
 
-`godot --headless --script res://tests/run_hotkeys.gd` exercises the shared menu
+`godot --headless --script res://tests/ui/run_hotkeys.gd` exercises the shared menu
 buttons and context bindings, disabled/absent actions, collision fallback, numbered
 choices (including pages and keypad digits), real build/repair/boarding/station
 pickers, drone selection for local/network owners, undo/redo and drawing isolation,
 replay transport, Tab with GUI focus, editor rebinding, persistence and conflicts.
 The Keybinds tab uses separate In-game shortcuts and Map editor shortcuts pages.
+
+`ui/run_console_shortcut.gd` sends F2 through the viewport input pipeline with
+the board, chat, console input and a key-consuming HUD control focused. It covers
+rebinding, key repeat, typing printable shortcuts, AI turns, and the existing
+console access restrictions. The Windows and macOS source checks run it as well.
 
 ### Dynamic lighting and group previews
 

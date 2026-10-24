@@ -187,6 +187,7 @@ func _set_pan(v: Vector2) -> void:
 	queue_redraw()
 
 func _ensure_visible(coord: Vector2i) -> void:
+	if _mouse_panning: return
 	var view := get_viewport_rect().size
 	var centre := _cell_origin(coord) + Vector2(CELL, CELL) * 0.5
 	var p := pan + zoom * centre
@@ -244,6 +245,7 @@ func _home_focus(side: int = -1) -> Vector2i:
 
 ## Масштабирование вокруг точки экрана (клетка под курсором остаётся на месте).
 func _zoom_at(screen_pos: Vector2, factor: float) -> void:
+	_kill_pan_tween()
 	var new_zoom: float = clampf(zoom * factor, ZOOM_MIN, ZOOM_MAX)
 	if is_equal_approx(new_zoom, zoom):
 		return
