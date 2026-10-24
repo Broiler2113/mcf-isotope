@@ -11,11 +11,27 @@ const SPRITE_SIZE := 96
 const SPRITE_METRES := 3.84
 static var _sprites := {}
 static var _pictures := {}
+static var _silhouettes := {}
 
-## Keep text and AP dots on one neutral card below the complete sprite, so neither
-## the roof stripe nor the turret is hidden by status labels at any hull facing.
+## Keep the card just below the visible tank, excluding transparent sprite padding.
+## Cache alpha bounds once per frame; team colours do not change the silhouette.
+static func status_top(rect: Rect2, facing: Vector2i, aim: Vector2i, wrecked := false) -> float:
+	var frame := aim_frame(aim)
+	var name := ("tank_wreck" if wrecked else "tank") + ("_aim_%d" % frame if frame != 0 else "")
+	if not _silhouettes.has(name): _silhouettes[name] = _picture(name).get_used_rect()
+	var bounds: Rect2i = _silhouettes[name]
+	var angle := Vector2(facing).angle() + PI * 0.5 if facing != Vector2i.ZERO else 0.0
+	var bottom := -INF
+	for corner: Vector2 in [Vector2(bounds.position), Vector2(bounds.end),
+			Vector2(bounds.position.x, bounds.end.y), Vector2(bounds.end.x, bounds.position.y)]:
+		var local := (corner - Vector2.ONE * SPRITE_SIZE * 0.5) * rect.size * (SPRITE_METRES / 3.0) / SPRITE_SIZE
+		bottom = maxf(bottom, local.rotated(angle).y)
+	return rect.get_center().y + bottom + 2
+
+## Keep text and AP dots on one neutral card without covering the stripe or gun.
 static func draw_status(ci: CanvasItem, rect: Rect2, label: String,
-		durability := -1, crew := 0, ap := 0) -> void:
+		durability := -1, crew := 0, ap := 0, facing := Vector2i.UP,
+		aim := Vector2i.ZERO, wrecked := false) -> void:
 	var font := ThemeDB.fallback_font
 	var stats := "DUR %d  CREW %d" % [durability, crew] if durability >= 0 else ""
 	var title_size := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 14)
@@ -24,7 +40,7 @@ static func draw_status(ci: CanvasItem, rect: Rect2, label: String,
 	var title_height := font.get_height(14)
 	var height: float = title_height + 8 + (font.get_height(12) + 2 if stats != "" else 0)
 	var pos := Vector2(rect.get_center().x - width * 0.5,
-			rect.end.y + rect.size.y * (SPRITE_METRES / 3.0 - 1.0) * 0.5 + 2)
+			status_top(rect, facing, aim, wrecked))
 	var card := Rect2(pos, Vector2(width, height))
 	ci.draw_rect(card, Color(0.055, 0.065, 0.08, 0.97))
 	ci.draw_rect(card, Color(0.45, 0.49, 0.54), false, 1.0)

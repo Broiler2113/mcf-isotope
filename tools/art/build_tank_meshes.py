@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare the supplied SVAROG OBJ with its UVs intact and 25% extra height.
+"""Prepare the supplied SVAROG OBJ with its UVs intact and adjusted height.
 
 Run before Godot import and tools/art/build_tank_sprites.gd. The model is Y-up,
 faces +Z, and has its turret centred at (0, *, 0.7). Game models face +X.
@@ -20,7 +20,7 @@ SOURCE_VERTICES = [tuple(map(float, line.split()[1:4]))
 Z_MIN = min(v[2] for v in SOURCE_VERTICES)
 Z_MAX = max(v[2] for v in SOURCE_VERTICES)
 SCALE = 3.6 / (Z_MAX - Z_MIN)
-HEIGHT_SCALE = 1.25
+HEIGHT_SCALE = 1.25 / 1.125
 CENTER_Z = (Z_MAX + Z_MIN) / 2.0
 TURRET_Z = 0.7
 

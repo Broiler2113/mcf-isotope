@@ -4,6 +4,7 @@ func run() -> void:
 	floor_jobs()
 	ground_strokes()
 	fog_boundary()
+	fog_seams()
 	await live_updates()
 
 func floor_jobs() -> void:
@@ -47,6 +48,54 @@ func fog_boundary() -> void:
 	sight.fill(Color.WHITE)
 	ck(fog.update_visibility(sight) and fog.mesh == null, "fully known maps have no fog curtain")
 	fog.free()
+
+## Cast through the actual boundary triangles. Unjoined offset panels leave an
+## unobstructed diagonal ray at a convex corner even though both cells are fogged.
+func fog_seams() -> void:
+	var fog := FirstPersonFog.new()
+	root.add_child(fog)
+	var sight := Image.create(12, 12, false, Image.FORMAT_R8)
+	sight.fill(Color.BLACK)
+	for y in range(3, 9):
+		for x in range(3, 9): sight.set_pixel(x, y, Color.WHITE)
+	fog.update_visibility(sight)
+	for height: float in [-1000.0, -129.0, -0.1, 1.6, 127.9, 128.0, 1000.0]:
+		for corner: Vector2 in [Vector2(3, 3), Vector2(9, 3), Vector2(3, 9), Vector2(9, 9)]:
+			var direction := (corner - Vector2(6, 6)).sign()
+			var inside := corner - direction * 0.5
+			var outside := corner + direction * 0.5
+			var eye := Vector3(inside.x, height, inside.y)
+			fog.set_view(eye, 160)
+			ck(fog_blocks(fog, eye, Vector3(outside.x, height, outside.y)),
+					"fog seals convex corners across camera altitude bands")
+	# Every local arrangement includes convex, concave, straight and diagonal joins.
+	var cells: Array[Vector2i] = [Vector2i(4, 4), Vector2i(5, 4), Vector2i(4, 5), Vector2i(5, 5)]
+	for pattern in range(1, 16):
+		sight.fill(Color.BLACK)
+		for i in 4:
+			if pattern & (1 << i): sight.set_pixel(cells[i].x, cells[i].y, Color.WHITE)
+		fog.update_visibility(sight)
+		fog.set_view(Vector3.ZERO, 160)
+		for i in 4:
+			if not (pattern & (1 << i)): continue
+			var eye := Vector3(cells[i].x + 0.5, 1.6, cells[i].y + 0.5)
+			for j in 4:
+				if j == i: continue
+				var target := Vector3(cells[j].x + 0.5, 1.6, cells[j].y + 0.5)
+				if not (pattern & (1 << j)):
+					ck(fog_blocks(fog, eye, target), "fog joins hide every adjacent unknown cell, including diagonal gaps")
+				elif (cells[j] - cells[i]).length_squared() == 1:
+					ck(not fog_blocks(fog, eye, target), "sealing fog does not block the view between adjacent known cells")
+	fog.free()
+
+func fog_blocks(fog: FirstPersonFog, from: Vector3, to: Vector3) -> bool:
+	if fog.mesh == null: return false
+	var vertices: PackedVector3Array = fog.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	for i in range(0, vertices.size(), 3):
+		if Geometry3D.segment_intersects_triangle(fog.to_local(from), fog.to_local(to),
+				vertices[i], vertices[i + 1], vertices[i + 2]) != null:
+			return true
+	return false
 
 func ground_strokes() -> void:
 	var tiles := TerrainTiles.new(Grid.new(16, 16), "town")
