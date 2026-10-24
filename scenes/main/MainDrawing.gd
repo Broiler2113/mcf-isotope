@@ -42,8 +42,12 @@ func _draw_before(ci: Node2D) -> void:
 			ci.draw_rect(Rect2(org + Vector2(3, 3), vsize - Vector2(6, 6)), col.darkened(0.35))
 		if String(v[0]) != "tank":
 			ci.draw_rect(Rect2(org + Vector2(2, 2), vsize - Vector2(4, 4)), col, false, 2.0)
-		ci.draw_string(font, org + Vector2(8, 18), String(VehicleDB.get_vehicle(String(v[0])).get("name", v[0])),
-				HORIZONTAL_ALIGNMENT_LEFT, -1, 14, _ink(col.darkened(0.35)))
+		var label := String(VehicleDB.get_vehicle(String(v[0])).get("name", v[0]))
+		if String(v[0]) == "tank":
+			TankModel.draw_status(ci, Rect2(org, vsize), label)
+		else:
+			ci.draw_string(font, org + Vector2(8, 18), label,
+					HORIZONTAL_ALIGNMENT_LEFT, -1, 14, _ink(col.darkened(0.35)))
 	# Units exactly as the battle draws them (0.11): faction sprite, or the side-coloured
 	# disc with its outline and role tag — no extra ring.
 	var details := zoom >= UNIT_DETAIL_ZOOM
@@ -890,6 +894,10 @@ func _draw() -> void:
 		var label: String = VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)
 		if disp_wrecked:
 			label = "WRECK"
+		if veh.type_id == "tank":
+			TankModel.draw_status(self, Rect2(org, vsize), label, -1 if disp_wrecked else disp_dur,
+					veh.living_crew_count(), 0 if disp_wrecked else maxi(0, veh.ap))
+			continue
 		draw_string(font, org + Vector2(8, 18), "%s" % label,
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 14, _ink(hull_col.darkened(0.35)))
 		if not disp_wrecked:

@@ -211,6 +211,8 @@ static func encode_rules(resolver: GameActionResolver) -> Dictionary:
 	var out := {
 		"fog": resolver.fog_mode, "cheats": resolver.state.cheats_enabled, "ai_speed": GameConfig.ai_speed,
 		"friendly_fire": resolver.friendly_fire_enabled,
+		# Replay metadata only: live saves always resume with current cannon rules.
+		"cannon_arc": 0 if resolver.legacy_rear_cannon else 1,
 	}
 	out["mode"] = resolver.mode.snapshot()
 	if resolver.random_events != null:

@@ -1065,6 +1065,8 @@ func _resolve_vehicle_cannon(intent: VehicleCannonIntent) -> ActionResult:
 	# цель лежит строго по прямой НАРУЖУ (ствол не упирается в собственный корпус).
 	var port := cannon_port(veh, intent.target)
 	if port == Vector2i(-1, -1):
+		if veh.type_id == "tank" and not legacy_rear_cannon:
+			return ActionResult.fail("Cannon fires only forward or sideways along horizontal or vertical lines")
 		return ActionResult.fail("Cannon fires only horizontally or vertically")
 	var dist := Combat.distance(port, intent.target)
 	if dist > int(gun.get("range", MCF.CANNON_RANGE)):
@@ -1164,7 +1166,7 @@ func cannon_port(veh: Vehicle, target: Vector2i) -> Vector2i:
 		if fc.x != target.x and fc.y != target.y:
 			continue
 		var step := Vector2i(signi(target.x - fc.x), signi(target.y - fc.y))
-		if step == Vector2i.ZERO or own.has(fc + step):
+		if step == Vector2i.ZERO or own.has(fc + step) or not cannon_direction_allowed(veh, step):
 			continue
 		var d := Combat.distance(fc, target)
 		if d < best_dist:
@@ -1197,6 +1199,8 @@ func cannon_target_cells(veh: Vehicle, limit_to: Dictionary = {}) -> Array[Vecto
 	# что резолвер реально разрешит выстрелить.
 	for fc: Vector2i in veh.footprint():
 		for d: Vector2i in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
+			if not cannon_direction_allowed(veh, d):
+				continue
 			if own.has(fc + d):
 				continue  # это внутренняя клетка, а не амбразура
 			var c := fc + d

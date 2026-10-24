@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
-"""Prepare the supplied SVAROG OBJ without changing its UVs or proportions.
+"""Prepare the supplied SVAROG OBJ with its UVs intact and 25% extra height.
 
 Run before Godot import and tools/art/build_tank_sprites.gd. The model is Y-up,
 faces +Z, and has its turret centred at (0, *, 0.7). Game models face +X.
 The 3.6 m vehicle slightly overhangs its unchanged 3x3 gameplay footprint.
 """
 from pathlib import Path
+from math import sqrt
 
 ROOT = Path(__file__).resolve().parents[2]
 FOLDER = ROOT / "assets/models/tank"
 SOURCE = FOLDER / "source/SVAROG.obj"
 TURRET_OBJECTS = {"Cylinder", "Cylinder.001", "Cube.007"}
-# Only the upper hull and turret carry the identification stripe. The shader
-# restricts it to upward-facing surfaces, keeping sides, tracks and barrel intact.
-STRIPE_OBJECTS = {"Cube.001", "Cylinder"}
+# Only the rear deck carries the transverse identification stripe. The shader
+# restricts it to the roof behind the turret, leaving the turret and sides intact.
+STRIPE_OBJECTS = {"Cube.001"}
 SOURCE_VERTICES = [tuple(map(float, line.split()[1:4]))
                    for line in SOURCE.read_text().splitlines() if line.startswith("v ")]
 Z_MIN = min(v[2] for v in SOURCE_VERTICES)
 Z_MAX = max(v[2] for v in SOURCE_VERTICES)
 SCALE = 3.6 / (Z_MAX - Z_MIN)
+HEIGHT_SCALE = 1.25
 CENTER_Z = (Z_MAX + Z_MIN) / 2.0
 TURRET_Z = 0.7
 
@@ -38,10 +40,13 @@ def build():
             x, y, z = map(float, value.split())
             # Rotate +Z to +X, raise the track base to the ground, and centre.
             common.append("v %.9f %.9f %.9f" % ((z - CENTER_Z) * SCALE,
-                          (y + 1.0) * SCALE, -x * SCALE))
+                          (y + 1.0) * SCALE * HEIGHT_SCALE, -x * SCALE))
         elif kind == "vn":
             x, y, z = map(float, value.split())
-            common.append("vn %.9f %.9f %.9f" % (z, y, -x))
+            # Inverse-transpose the height stretch so sloped armor lights correctly.
+            y /= HEIGHT_SCALE
+            length = sqrt(x * x + y * y + z * z)
+            common.append("vn %.9f %.9f %.9f" % (z / length, y / length, -x / length))
         elif kind == "vt":
             common.append(line)
         elif kind == "usemtl":

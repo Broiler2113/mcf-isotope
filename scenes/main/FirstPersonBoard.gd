@@ -49,6 +49,7 @@ uniform vec4 tint : source_color = vec4(1.0);
 uniform bool team_stripe = false;
 uniform bool stripe_mask = false;
 uniform float stripe_half_width = 0.138;
+uniform float stripe_center_x = -1.35;
 uniform vec4 team_color : source_color = vec4(1.0);
 uniform float relief = 0.0;
 uniform bool ground_ao = false;
@@ -119,9 +120,9 @@ void fragment() {
 		c.rgb *= COLOR.rgb;
 	}
 	c *= tint;
-	// A narrow identification stripe follows the roof when hull/turret turn.
+	// A transverse identification stripe sits on the rear deck behind the turret.
 	// Use model coordinates so it never slides with the vehicle's world position.
-	bool on_stripe = team_stripe && abs(model_pos.z) <= stripe_half_width && model_normal.y > 0.8;
+	bool on_stripe = team_stripe && abs(model_pos.x - stripe_center_x) <= stripe_half_width && model_normal.y > 0.8;
 	if (stripe_mask) c.rgb = vec3(on_stripe ? 1.0 : 0.0);
 	else if (on_stripe) c.rgb = vec3(lum(c.rgb)) * team_color.rgb;
 	if (c.a < cut) discard;
