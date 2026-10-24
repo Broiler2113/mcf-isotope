@@ -5,8 +5,10 @@ extends RefCounted
 ## Both meshes retain the original UVs and normals. +X is the game's forward axis.
 const HULL: Mesh = preload("res://assets/models/tank/hull.obj")
 const TURRET: Mesh = preload("res://assets/models/tank/turret.obj")
-const TURRET_PIVOT := Vector3(-0.161406665, 0.0, 0.0)
+const TURRET_PIVOT := Vector3(-0.168424347, 0.0, 0.0)
 const SPRITE_SIZE := 96
+# The hull fills its 3m footprint. Padding also fits the barrel at all eight angles.
+const SPRITE_METRES := 3.2
 static var _sprites := {}
 static var _pictures := {}
 
@@ -22,8 +24,8 @@ static func _picture(name: String) -> Image:
 		_pictures[name] = img
 	return _pictures[name]
 
-## A cached 96x96 sprite per team and gun angle. Only painted armour is recoloured;
-## track pixels and the source texture's highlights, seams and weathering survive.
+## A cached 96x96 sprite per team and gun angle. Only the roof stripe is recoloured;
+## all other armour, tracks and barrel pixels keep the original texture unchanged.
 static func sprite(paint: Color, wrecked := false, aim := 0) -> Texture2D:
 	var suffix := "_aim_%d" % aim if aim != 0 else ""
 	var key := str([paint.to_rgba32() if not wrecked else 0, wrecked, aim])
@@ -47,7 +49,9 @@ static func draw(ci: CanvasItem, rect: Rect2, facing: Vector2i, paint: Color,
 	if Sprites.has_user_override(name) or (wrecked and Sprites.has_user_override("tank")):
 		Sprites.draw_texture_override_rect(ci, name if Sprites.has_user_override(name) else "tank", rect, angle, tint)
 		return
-	Sprites.draw_texture_rect(ci, Sprites.nearest(sprite(paint, wrecked, aim_frame(aim))), rect, angle, tint)
+	var picture_size := rect.size * (SPRITE_METRES / 3.0)
+	var picture_rect := Rect2(rect.get_center() - picture_size * 0.5, picture_size)
+	Sprites.draw_texture_rect(ci, Sprites.nearest(sprite(paint, wrecked, aim_frame(aim))), picture_rect, angle, tint)
 
 ## The same assembled model is used by first person and the overhead sprite baker.
 ## material_for receives the imported material so callers can retain its texture.

@@ -8,11 +8,12 @@ texture to the original material name. No texture was invented or generated.
 
 `tools/art/build_tank_meshes.py` preserves the OBJ's UV coordinates, normals and
 proportions, turns its +Z nose to the game's +X axis, puts the track base on the
-floor, and fits it within the tank's existing 3×3 metre footprint. It separates the
-original turret, mantlet and barrel at their original pivot. `TeamPaint` marks
-armour; the track surfaces retain their original colours. The geometry is shared
-across teams, with cached materials for their roster colours. Wrecks use a dark
-neutral material.
+floor, and scales it uniformly to fill the length of the tank's existing 3×3 metre
+footprint. It separates the original turret, mantlet and barrel at their original
+pivot. `TeamStripe` marks the upper hull and turret; the shader limits faction
+color to a narrow stripe on their upward-facing surfaces. All other armor,
+tracks and barrel surfaces retain the supplied texture. The geometry is shared
+across teams, with cached stripe materials. Wrecks use a dark neutral material.
 
 Rebuild after replacing the source model or colour texture:
 
@@ -27,8 +28,11 @@ The sprite baker needs a graphics display; omit `xvfb-run -a` on a desktop.
 `TankModel` assembles the same imported hull and turret for the baker and first
 person. Each baked image is exactly **96×96**, orthographic from directly above,
 with a transparent background and the nose pointing up. Eight relative turret
-angles have separate tank, wreck and paint-mask frames. The runtime caches team
-paint per colour and frame and draws it with nearest filtering. Existing
+angles have separate tank, wreck and stripe-mask frames. The 3.2 metre view includes
+transparent padding for the barrel when it points backward. The sprite is drawn
+at that same scale, so the hull still fills its 3 metre footprint. The runtime caches
+stripes per colour and frame and draws them with nearest filtering in both battle
+and purchase/placement, without a faction-colored bounding rectangle. Existing
 `user://textures/tank.png` and `tank_wreck.png` replacements still take priority.
 
 Verification:

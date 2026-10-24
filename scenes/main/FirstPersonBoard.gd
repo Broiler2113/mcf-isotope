@@ -46,7 +46,9 @@ uniform bool lm_on = true;
 uniform vec3 flat_light : source_color = vec3(1.0);
 uniform float cut = 0.0;
 uniform vec4 tint : source_color = vec4(1.0);
-uniform bool team_paint = false;
+uniform bool team_stripe = false;
+uniform bool stripe_mask = false;
+uniform float stripe_half_width = 0.115;
 uniform vec4 team_color : source_color = vec4(1.0);
 uniform float relief = 0.0;
 uniform bool ground_ao = false;
@@ -62,7 +64,11 @@ uniform bool sight_only = false;
 uniform vec4 door_bounds = vec4(0.0);
 varying highp vec3 wpos;
 varying highp vec3 wnorm;
+varying vec3 model_pos;
+varying vec3 model_normal;
 void vertex() {
+	model_pos = VERTEX;
+	model_normal = NORMAL;
 	wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	wnorm = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
 }
@@ -113,7 +119,11 @@ void fragment() {
 		c.rgb *= COLOR.rgb;
 	}
 	c *= tint;
-	if (team_paint) c.rgb = vec3(lum(c.rgb)) * team_color.rgb;
+	// A narrow identification stripe follows the roof when hull/turret turn.
+	// Use model coordinates so it never slides with the vehicle's world position.
+	bool on_stripe = team_stripe && abs(model_pos.z) <= stripe_half_width && model_normal.y > 0.8;
+	if (stripe_mask) c.rgb = vec3(on_stripe ? 1.0 : 0.0);
+	else if (on_stripe) c.rgb = vec3(lum(c.rgb)) * team_color.rgb;
 	if (c.a < cut) discard;
 	vec2 cell = floor(wpos.xz - wnorm.xz * 0.02);
 	float v = 0.0;

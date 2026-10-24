@@ -40,7 +40,8 @@ func _draw_before(ci: Node2D) -> void:
 			TankModel.draw(ci, Rect2(org, vsize), v[4], col)
 		elif key == "" or not Sprites.draw_texture_override_rect(ci, key, Rect2(org, vsize), _facing_degrees(v[4])):
 			ci.draw_rect(Rect2(org + Vector2(3, 3), vsize - Vector2(6, 6)), col.darkened(0.35))
-		ci.draw_rect(Rect2(org + Vector2(2, 2), vsize - Vector2(4, 4)), col, false, 2.0)
+		if String(v[0]) != "tank":
+			ci.draw_rect(Rect2(org + Vector2(2, 2), vsize - Vector2(4, 4)), col, false, 2.0)
 		ci.draw_string(font, org + Vector2(8, 18), String(VehicleDB.get_vehicle(String(v[0])).get("name", v[0])),
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 14, _ink(col.darkened(0.35)))
 	# Units exactly as the battle draws them (0.11): faction sprite, or the side-coloured
@@ -167,7 +168,8 @@ func _draw_veh_move_preview() -> void:
 		elif not Sprites.draw_texture_override_rect(self, veh.type_id, rect,
 				_facing_degrees(veh.facing), Color(1, 1, 1, 0.4)):
 			draw_rect(rect, Color(_side_color(veh.owner), 0.3))
-		draw_rect(rect, Color(0.65, 1.0, 0.7, 0.85), false, 2.0)
+		if veh.type_id != "tank":
+			draw_rect(rect, Color(0.65, 1.0, 0.7, 0.85), false, 2.0)
 
 ## Клетки зон хода: заливка по зоне (подсвеченная под курсором), контур по краю зоны и
 ## подпись клетки. Общая часть для техники, дрона и отряда.
@@ -875,10 +877,9 @@ func _draw() -> void:
 			else:
 				Sprites.draw_texture_override_rect(self, veh_key, Rect2(org, vsize),
 						_facing_degrees(veh.facing), opacity)
-			# Рамка в цвете стороны поверх картинки (issue 4): поставочная текстура
-			# танка одна на всех, и без рамки два вражеских танка выглядели бы
-			# одинаково — а принадлежность машины игрок обязан читать с доски.
-			draw_rect(Rect2(org + Vector2(2, 2), vsize - Vector2(4, 4)), hull_col, false, 2.0)
+			# Tanks identify their team with a roof stripe, without a bounding box.
+			if veh.type_id != "tank":
+				draw_rect(Rect2(org + Vector2(2, 2), vsize - Vector2(4, 4)), hull_col, false, 2.0)
 		else:
 			draw_rect(hull, Color(hull_col.darkened(0.35), 0.4 if mode == Mode.VEH_MOVE and veh.id == selected_vehicle_id else 1.0))
 			draw_rect(hull, hull_col, false, 3.0)

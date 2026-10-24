@@ -11,6 +11,14 @@ class SpriteBoard extends Node2D:
 		TankModel.draw(self, Rect2(0, 0, 96, 96), face, paint, false, Color.WHITE, aim)
 		draw_rect(Rect2(100, 0, 2, 2), Color.MAGENTA)
 
+class PurchaseReference extends Node2D:
+	var face := Vector2i.RIGHT
+	var paint := Color.WHITE
+	var preview_opacity := 1.0
+	func _draw() -> void:
+		Sprites.set_base_transform(Vector2.ZERO, Vector2.ONE)
+		TankModel.draw(self, Rect2(30, 30, 102, 102), face, paint, false, Color(1, 1, 1, preview_opacity))
+
 func run() -> void:
 	if DisplayServer.get_name() == "headless": ck(false, "requires rendered display"); return
 	root.size = Vector2i(960, 640)
@@ -36,6 +44,7 @@ func run() -> void:
 		ck(original.get_data() == pictures[i].get_region(Rect2i(20, 20, 192, 192)).get_data(), "2D hull rotation matches its compass direction exactly")
 	pictures[0].save_png("/tmp/isotope-tank-2d.png")
 	vp.free()
+	await purchase_sprites()
 	var ui := root.get_node("Ui")
 	ui.snowfall = false
 	ui.dynamic_lighting = false
@@ -66,10 +75,10 @@ func run() -> void:
 	for i in TankModel.HULL.get_surface_count():
 		var mat: ShaderMaterial = node.get_child(0).get_surface_override_material(i)
 		ck(mat.get_shader_parameter("tex") != null, "first-person surfaces bind the supplied texture")
-		if mat.get_shader_parameter("team_paint"):
+		if mat.get_shader_parameter("team_stripe"):
 			painted += 1
-			ck(mat.get_shader_parameter("team_color") == host._side_color(tank.owner), "first-person body paint matches its team")
-	ck(painted > 0, "armour is marked for team paint")
+			ck(mat.get_shader_parameter("team_color") == host._side_color(tank.owner), "first-person roof stripe matches its team")
+	ck(painted > 0, "upper armour is marked for the roof stripe")
 	for direction: Vector2i in directions:
 		tank.facing = direction
 		for local: Vector2i in [Vector2i.RIGHT, Vector2i.DOWN, Vector2i(-1, -1)]:
@@ -103,3 +112,34 @@ func frame(viewport: SubViewport) -> Image:
 	await process_frame
 	await RenderingServer.frame_post_draw
 	return viewport.get_texture().get_image()
+
+func purchase_sprites() -> void:
+	var vp := SubViewport.new()
+	vp.size = Vector2i(164, 164)
+	vp.transparent_bg = true
+	vp.disable_3d = true
+	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	root.add_child(vp)
+	# Load after autoloads initialize: Placement uses the Ui singleton.
+	var token: Node2D = load("res://tests/fixtures/TankPurchaseToken.gd").new()
+	token.roster = Roster.default_duel(false)
+	var reference := PurchaseReference.new()
+	reference.paint = token.roster.color_of(0)
+	vp.add_child(token)
+	vp.add_child(reference)
+	for direction: Vector2i in [Vector2i.UP, Vector2i.RIGHT, Vector2i.DOWN, Vector2i.LEFT]:
+		for opacity: float in [1.0, 0.65]:
+			token.face = direction
+			token.preview_opacity = opacity
+			token.show()
+			token.queue_redraw()
+			reference.hide()
+			var actual := await frame(vp)
+			token.hide()
+			reference.face = direction
+			reference.preview_opacity = opacity
+			reference.show()
+			reference.queue_redraw()
+			ck(actual.get_data() == (await frame(vp)).get_data(),
+					"purchase and live placement draw the same tank sprite without a bounding rectangle, with its facing and opacity")
+	vp.free()

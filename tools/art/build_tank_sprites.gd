@@ -20,7 +20,7 @@ func _bake() -> void:
 	vp.add_child(world)
 	var camera := Camera3D.new()
 	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
-	camera.size = 3.0
+	camera.size = TankModel.SPRITE_METRES
 	camera.position = Vector3(0, 8, 0)
 	# The game's models face +X. Project +X to the top of the sprite (nose-up).
 	camera.look_at_from_position(camera.position, Vector3.ZERO, Vector3.RIGHT)
@@ -43,15 +43,12 @@ func _bake() -> void:
 		for kind: String in ["tank", "tank_wreck", "tank_mask"]:
 			var model := TankModel.create(func(imported: Material) -> Material:
 				var source := imported as StandardMaterial3D
-				if kind == "tank_mask":
-					var mat := StandardMaterial3D.new()
-					mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-					mat.albedo_color = Color.WHITE if imported.resource_name == "TeamPaint" else Color.BLACK
-					return mat
 				var tint := source.albedo_color
 				if kind == "tank_wreck": tint *= Color(0.28, 0.27, 0.25)
 				return FirstPersonBoard.material(shader, {"tex": source.albedo_texture,
-						"no_fog": true, "lm_on": false, "flat_light": Color.WHITE, "tint": tint}))
+						"no_fog": true, "lm_on": false, "flat_light": Color.WHITE, "tint": tint,
+						"stripe_mask": kind == "tank_mask",
+						"team_stripe": kind == "tank_mask" and source.resource_name == "TeamStripe"}))
 			world.add_child(model)
 			model.get_node("turret").rotation.y = -frame * PI / 4.0
 			await process_frame
@@ -64,5 +61,5 @@ func _bake() -> void:
 				return
 			model.free()
 	vp.free()
-	print("SVAROG: 96x96 nose-up tank, wreck and paint masks baked for eight gun angles.")
+	print("SVAROG: 96x96 nose-up tank, wreck and roof-stripe masks baked for eight gun angles.")
 	quit()

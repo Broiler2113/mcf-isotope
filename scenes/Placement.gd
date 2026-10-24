@@ -1533,7 +1533,8 @@ func _draw() -> void:
 		for e in _remote_units[side]:
 			if _army_hidden(int(e["o"])):
 				continue
-			_draw_token(Vector2i(int(e["x"]), int(e["y"])), int(e["o"]), str(e["id"]), font)
+			_draw_token(Vector2i(int(e["x"]), int(e["y"])), int(e["o"]), str(e["id"]), font,
+					Vector2i(int(e.get("fx", 0)), int(e.get("fy", 0))))
 	for side in _live_units:
 		if _remote_units.has(side) or _placed_here(int(side)):
 			continue
@@ -1541,13 +1542,15 @@ func _draw() -> void:
 			if _army_hidden(int(e["o"])):
 				continue
 			var c := Vector2i(int(e["x"]), int(e["y"]))
-			_draw_token(c, int(e["o"]), str(e["id"]), font)
-			draw_rect(Rect2(_cell_origin(c), Vector2(CELL, CELL)), Color(0, 0, 0, 0.35))
+			_draw_token(c, int(e["o"]), str(e["id"]), font,
+					Vector2i(int(e.get("fx", 0)), int(e.get("fy", 0))), 0.65 if str(e["id"]) == "tank" else 1.0)
+			if str(e["id"]) != "tank":
+				draw_rect(Rect2(_cell_origin(c), Vector2(CELL, CELL)), Color(0, 0, 0, 0.35))
 	# Расставленные юниты.
 	for p in placed:
 		if _army_hidden(int(p["owner"])):
 			continue
-		_draw_token(p["coord"], int(p["owner"]), p["stats_id"], font)
+		_draw_token(p["coord"], int(p["owner"]), p["stats_id"], font, _placed_facing_or_zero(p))
 		# Стрелка фронта танка (item 21): показывает, куда он смотрит, — крутится клавишей R.
 		# Якорь в НИЖНЕМ ЛЕВОМ углу следа (item 3): раньше стрелка шла из центра и
 		# перекрывала корпус/инициалы; теперь компактный указатель сидит в углу.
@@ -1585,7 +1588,13 @@ func _army_hidden(owner: int) -> bool:
 		return false
 	return not roster.are_allies(active_side, owner)
 
-func _draw_token(coord: Vector2i, owner: int, stats_id: String, font: Font) -> void:
+func _draw_token(coord: Vector2i, owner: int, stats_id: String, font: Font,
+		facing := Vector2i.ZERO, opacity := 1.0) -> void:
+	if stats_id == "tank":
+		if facing == Vector2i.ZERO: facing = _placed_facing({"owner": owner})
+		TankModel.draw(self, Rect2(_cell_origin(coord), Vector2(VehicleDB.size_of(stats_id)) * CELL),
+				facing, _side_color(owner), false, Color(1, 1, 1, opacity))
+		return
 	# Техника (#10) рисуется прямоугольником по всему следу.
 	if VehicleDB.is_vehicle(stats_id):
 		var size := VehicleDB.size_of(stats_id)

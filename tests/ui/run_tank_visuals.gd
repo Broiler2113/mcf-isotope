@@ -11,7 +11,11 @@ func run() -> void:
 			for normal: Vector3 in arrays[Mesh.ARRAY_NORMAL]:
 				ck(is_equal_approx(normal.length(), 1.0), "imported normals remain normalised")
 	var bounds := TankModel.HULL.get_aabb().merge(TankModel.TURRET.get_aabb())
-	ck(absf(bounds.position.y) < 0.001 and bounds.size.x < 3.0 and bounds.size.z < 3.0, "tank stands on its tracks inside the 3x3 footprint")
+	ck(absf(bounds.position.y) < 0.001 and is_equal_approx(bounds.size.x, 3.0) and bounds.size.z < 3.0, "tank fills the length of its 3x3 footprint and stands on its tracks")
+	var original := load("res://assets/models/tank/source/SVAROG.obj") as Mesh
+	var source_size := original.get_aabb().size
+	var ratios := Vector3(bounds.size.x / source_size.z, bounds.size.y / source_size.y, bounds.size.z / source_size.x)
+	ck(is_equal_approx(ratios.x, ratios.y) and is_equal_approx(ratios.y, ratios.z), "enlargement preserves all three source-model proportions")
 	var model := TankModel.create()
 	ck(model.get_node("turret").position == TankModel.TURRET_PIVOT, "turret pivots around the source model's turret axis")
 	model.free()
@@ -21,9 +25,10 @@ func run() -> void:
 		var blue := TankModel.sprite(Color(0.1, 0.3, 1), false, aim).get_image()
 		var wreck := TankModel.sprite(Color.RED, true, aim).get_image()
 		var mask := TankModel._picture("tank_mask" + ("_aim_%d" % aim if aim != 0 else ""))
+		var base := TankModel._picture("tank" + ("_aim_%d" % aim if aim != 0 else ""))
 		ck(red.get_size() == Vector2i(96, 96) and wreck.get_size() == Vector2i(96, 96), "every tank and wreck frame is exactly 96x96")
 		var painted := 0
-		var tracks := 0
+		var unchanged := 0
 		var tones := {}
 		for y in 96:
 			for x in 96:
@@ -32,12 +37,17 @@ func run() -> void:
 				if r.a == 0: continue
 				if mask.get_pixel(x, y).r > 0.5:
 					painted += 1
-					ck(r.r >= r.b and b.b >= b.r, "body paint uses its team's colour")
+					ck(r.r >= r.b and b.b >= b.r, "roof stripe uses its team's colour")
 					tones[r.to_rgba32()] = true
 				else:
-					tracks += 1
-					ck(r == b, "team paint preserves the track texture")
-		ck(painted > 500 and tracks > 200 and tones.size() > 20, "paint mask preserves both textured armour and neutral tracks")
+					unchanged += 1
+					ck(r == b and r == base.get_pixel(x, y), "armour, tracks and barrel outside the stripe keep their original texture")
+		ck(painted > 80 and painted < (painted + unchanged) * 0.2 and unchanged > 1500 and tones.size() > 10,
+				"team colour is a visible narrow stripe, not whole-body paint")
+		for edge in TankModel.SPRITE_SIZE:
+			ck(red.get_pixel(edge, 0).a == 0 and red.get_pixel(edge, 95).a == 0 \
+					and red.get_pixel(0, edge).a == 0 and red.get_pixel(95, edge).a == 0,
+					"every turret angle fits inside the transparent sprite padding")
 		ck(red.get_pixel(0, 0).a == 0.0, "sprite background stays transparent")
 		ck(aim == 0 or red.get_data() != previous, "turning the turret changes the projected sprite")
 		previous = red.get_data()
