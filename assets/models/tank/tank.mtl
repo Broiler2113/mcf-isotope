@@ -1,4 +1,4 @@
-# Generated texture bindings; TeamPaint marks armour, not tracks.
+# Generated texture bindings; TeamStripe marks stripe-bearing roof parts.
 newmtl Material.001
 Kd 1 1 1
 Ks 0 0 0
@@ -7,7 +7,7 @@ d 1
 illum 2
 map_Kd source/albedo.jpg
 
-newmtl TeamPaint
+newmtl TeamStripe
 Kd 1 1 1
 Ks 0 0 0
 Ns 0
