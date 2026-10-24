@@ -1474,7 +1474,7 @@ func _sync_vehicles() -> void:
 		if not seen or cells.is_empty():
 			continue
 		live[veh.id] = true
-		var key := [veh.type_id, veh.owner, veh.wrecked]
+		var key := [veh.type_id, veh.owner, veh.wrecked, main._side_color(veh.owner)]
 		var n: Node3D = _vehicles.get(veh.id)
 		if n != null and n.get_meta("key") != key:
 			n.queue_free()
@@ -1490,7 +1490,8 @@ func _sync_vehicles() -> void:
 		n.rotation.y = -face.angle()
 		var turret: Node3D = n.get_node_or_null("turret")
 		if turret != null:
-			var aim := Vector2(veh.tower_locked_dir) if veh.tower_locked_dir != Vector2i.ZERO else face
+			var aim := Vector2(veh.gun_world_dir())
+			if aim == Vector2.ZERO: aim = face
 			turret.rotation.y = -(aim.angle() - face.angle())
 	for id: int in _vehicles.keys():
 		if not live.has(id):
@@ -1541,6 +1542,18 @@ func _sync_walkers(delta: float) -> void:
 
 var _handjet: Font
 func _vehicle_node(veh: Vehicle) -> Node3D:
+	if veh.type_id == "tank":
+		return TankModel.create(func(imported: Material) -> Material:
+			var source := imported as StandardMaterial3D
+			var color: Color = main._side_color(veh.owner)
+			var key := str(["tank", source.resource_name, color, veh.wrecked])
+			if not _art_mats.has(key):
+				var tint := source.albedo_color
+				if veh.wrecked: tint *= Color(0.28, 0.27, 0.25)
+				_art_mats[key] = _mat(_board_sh, {"tex": source.albedo_texture, "tint": tint,
+					"team_paint": source.resource_name == "TeamPaint" and not veh.wrecked,
+					"team_color": color})
+			return _art_mats[key])
 	var n := Node3D.new()
 	var paint: Color = main._side_color(veh.owner).darkened(0.15)
 	var wrecked := veh.wrecked
@@ -1551,17 +1564,6 @@ func _vehicle_node(veh: Vehicle) -> Node3D:
 	mi.mesh = hull[0]
 	mi.material_override = _mats["models"]
 	n.add_child(mi)
-	if type == "tank":
-		var turret := Node3D.new()
-		turret.name = "turret"
-		var tm := MeshInstance3D.new()
-		tm.mesh = FirstPersonModels.cached(str(["turret", paint.to_html(), wrecked]),
-				func(s: FirstPersonModels.Sink, _g: FirstPersonModels.Sink) -> void:
-					s.shade_floor = false
-					FirstPersonModels.tank_turret(s, paint, wrecked))[0]
-		tm.material_override = _mats["models"]
-		turret.add_child(tm)
-		n.add_child(turret)
 	# The name on both flanks, within the hull's length.
 	if _handjet == null:
 		_handjet = load("res://fonts/handjet_ui_bold.ttf")

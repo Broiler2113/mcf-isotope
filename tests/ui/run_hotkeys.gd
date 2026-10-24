@@ -4,6 +4,7 @@ var failures: Array[String] = []
 var checks := 0
 var board: Node
 var keys: Node
+var undo_modifier: int = KEY_MASK_META if OS.get_name() == "macOS" else KEY_MASK_CTRL
 const TEMP_SETTINGS := "user://hotkeys-test.cfg"
 
 func ck(ok: bool, message: String) -> void:
@@ -248,10 +249,10 @@ func _undo_and_focus() -> void:
 	var before: Vector2i = unit.coord
 	ck(board.resolver.resolve(MoveIntent.new(unit.id, before + Vector2i(1, 0))).ok, "undo fixture moves")
 	board._select(unit)
-	press(KEY_MASK_CTRL | KEY_Z)
-	ck(board.state.get_unit(unit.id).coord == before, "Ctrl+Z undoes real game action")
-	press(KEY_MASK_CTRL | KEY_MASK_SHIFT | KEY_Z)
-	ck(board.state.get_unit(unit.id).coord == before + Vector2i(1, 0), "Ctrl+Shift+Z redoes action")
+	press(undo_modifier | KEY_Z)
+	ck(board.state.get_unit(unit.id).coord == before, "platform undo shortcut undoes real game action")
+	press(undo_modifier | KEY_MASK_SHIFT | KEY_Z)
+	ck(board.state.get_unit(unit.id).coord == before + Vector2i(1, 0), "platform redo shortcut redoes action")
 	var digest: int = board.state.digest_hash()
 	board.mode = board.Mode.DRAW
 	board._draw_record_begin(0, 0)
@@ -261,11 +262,11 @@ func _undo_and_focus() -> void:
 	board._stroke_commit()
 	board._draw_record_end(0)
 	ck(not board._canvas(0, 0).is_empty(), "drawing shortcut fixture has a stroke")
-	press(KEY_MASK_CTRL | KEY_Z)
-	ck(board._canvas(0, 0).is_empty(), "Ctrl+Z in drawing mode removes only the last stroke")
+	press(undo_modifier | KEY_Z)
+	ck(board._canvas(0, 0).is_empty(), "platform undo shortcut in drawing mode removes only the last stroke")
 	ck(board.state.digest_hash() == digest, "drawing undo leaves game state intact")
 	board.mode = board.Mode.ERASE
-	press(KEY_MASK_CTRL | KEY_MASK_SHIFT | KEY_Z)
+	press(undo_modifier | KEY_MASK_SHIFT | KEY_Z)
 	ck(board.state.digest_hash() == digest, "drawing mode never redoes gameplay")
 	board.mode = board.Mode.NONE
 	ck(not press(KEY_1) and not press(KEY_KP_1), "1 and keypad 1 no longer open initiative")
@@ -313,8 +314,8 @@ func _replay() -> void:
 	press(KEY_LEFT)
 	ck(board.replay.index == 0, "Left at start clamps")
 	var digest: int = board.state.digest_hash()
-	press(KEY_MASK_CTRL | KEY_Z)
-	press(KEY_MASK_CTRL | KEY_MASK_SHIFT | KEY_Z)
+	press(undo_modifier | KEY_Z)
+	press(undo_modifier | KEY_MASK_SHIFT | KEY_Z)
 	ck(board.state.digest_hash() == digest, "replay ignores undo/redo")
 	var playing: bool = board._replay_playing
 	press(KEY_SPACE)
