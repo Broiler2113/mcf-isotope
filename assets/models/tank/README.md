@@ -9,7 +9,8 @@ texture to the original material name. No texture was invented or generated.
 `tools/art/build_tank_meshes.py` preserves the OBJ's UV coordinates, turns its +Z
 nose to the game's +X axis, and puts the track base on the floor. Length and width
 remain 3.6×2.59 metres, with the same slight overhang around the 3×3 gameplay
-footprint. Version 0.14.2.2 adds 25% height (about 1.94 metres tall); normals use
+footprint. Version 0.14.2.3 divides the previous height by 1.125 (about 1.72 metres
+tall, or 1.25 / 1.125 times the original model's proportional height); normals use
 the inverse-transpose stretch to preserve correct lighting on sloping surfaces.
 It separates the original turret, mantlet and barrel at their original pivot.
 `TeamStripe` marks only the rear deck; the shader limits faction color to a narrow
@@ -36,6 +37,8 @@ at that same scale, preserving the hull's slight visual overhang. The runtime ca
 stripes per colour and frame and draws them with nearest filtering in both battle
 and purchase/placement, without a faction-colored bounding rectangle. Existing
 `user://textures/tank.png` and `tank_wreck.png` replacements still take priority.
+The framed status card sits two draw pixels below the rotated sprite's visible
+silhouette, excluding transparent padding and following the hull and gun facing.
 
 Verification:
 

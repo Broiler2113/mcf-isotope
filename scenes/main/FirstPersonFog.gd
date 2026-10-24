@@ -20,6 +20,10 @@ void fragment() {
 }
 """
 static var _mist: ImageTexture
+# Offset into unknown cells to avoid z-fighting with their walls. Extend the ends
+# by slightly more than that offset so perpendicular/diagonal joins stay sealed.
+const EDGE_OFFSET := 0.015
+const EDGE_OVERLAP := 0.02
 var _source := PackedByteArray()
 var _known := PackedByteArray()
 var _size := Vector2i.ZERO
@@ -68,7 +72,7 @@ func update_visibility(picture: Image) -> bool:
 			var next := int(known[y * _size.x + x - 1]) - int(known[y * _size.x + x]) if y < _size.y else 0
 			if next == direction: continue
 			if direction != 0:
-				_quad(vertices, Vector2(x + direction * 0.015, start), Vector2(x + direction * 0.015, y))
+				_quad(vertices, Vector2(x + direction * EDGE_OFFSET, start), Vector2(x + direction * EDGE_OFFSET, y))
 			start = y
 			direction = next
 	for y in range(1, _size.y):
@@ -78,7 +82,7 @@ func update_visibility(picture: Image) -> bool:
 			var next := int(known[(y - 1) * _size.x + x]) - int(known[y * _size.x + x]) if x < _size.x else 0
 			if next == direction: continue
 			if direction != 0:
-				_quad(vertices, Vector2(start, y + direction * 0.015), Vector2(x, y + direction * 0.015))
+				_quad(vertices, Vector2(start, y + direction * EDGE_OFFSET), Vector2(x, y + direction * EDGE_OFFSET))
 			start = x
 			direction = next
 	if vertices.is_empty():
@@ -93,6 +97,9 @@ func update_visibility(picture: Image) -> bool:
 	return true
 
 func _quad(vertices: PackedVector3Array, a: Vector2, b: Vector2) -> void:
+	var overlap := (b - a).normalized() * EDGE_OVERLAP
+	a -= overlap
+	b += overlap
 	vertices.append_array(PackedVector3Array([
 		Vector3(a.x, -256, a.y), Vector3(b.x, -256, b.y), Vector3(b.x, 256, b.y),
 		Vector3(a.x, -256, a.y), Vector3(b.x, 256, b.y), Vector3(a.x, 256, a.y)]))

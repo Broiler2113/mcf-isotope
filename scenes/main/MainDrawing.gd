@@ -44,7 +44,7 @@ func _draw_before(ci: Node2D) -> void:
 			ci.draw_rect(Rect2(org + Vector2(2, 2), vsize - Vector2(4, 4)), col, false, 2.0)
 		var label := String(VehicleDB.get_vehicle(String(v[0])).get("name", v[0]))
 		if String(v[0]) == "tank":
-			TankModel.draw_status(ci, Rect2(org, vsize), label)
+			TankModel.draw_status(ci, Rect2(org, vsize), label, -1, 0, 0, v[4])
 		else:
 			ci.draw_string(font, org + Vector2(8, 18), label,
 					HORIZONTAL_ALIGNMENT_LEFT, -1, 14, _ink(col.darkened(0.35)))
@@ -896,7 +896,8 @@ func _draw() -> void:
 			label = "WRECK"
 		if veh.type_id == "tank":
 			TankModel.draw_status(self, Rect2(org, vsize), label, -1 if disp_wrecked else disp_dur,
-					veh.living_crew_count(), 0 if disp_wrecked else maxi(0, veh.ap))
+					veh.living_crew_count(), 0 if disp_wrecked else maxi(0, veh.ap),
+					veh.facing, veh.tower_locked_dir, disp_wrecked)
 			continue
 		draw_string(font, org + Vector2(8, 18), "%s" % label,
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 14, _ink(hull_col.darkened(0.35)))

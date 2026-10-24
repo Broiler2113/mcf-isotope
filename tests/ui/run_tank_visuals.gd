@@ -17,7 +17,7 @@ func run() -> void:
 	var original := load("res://assets/models/tank/source/SVAROG.obj") as Mesh
 	var source_size := original.get_aabb().size
 	var ratios := Vector3(bounds.size.x / source_size.z, bounds.size.y / source_size.y, bounds.size.z / source_size.x)
-	ck(is_equal_approx(ratios.x, ratios.z) and is_equal_approx(ratios.y, ratios.x * 1.25), "tank gains 25% height while preserving its length and width")
+	ck(is_equal_approx(ratios.x, ratios.z) and is_equal_approx(ratios.y, ratios.x * 1.25 / 1.125), "tank is 1.125 times shorter than 0.14.2.2 with unchanged length and width")
 	var model := TankModel.create()
 	ck(model.get_node("turret").position == TankModel.TURRET_PIVOT, "turret pivots around the source model's turret axis")
 	model.free()
