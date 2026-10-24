@@ -11,7 +11,9 @@ func run() -> void:
 			for normal: Vector3 in arrays[Mesh.ARRAY_NORMAL]:
 				ck(is_equal_approx(normal.length(), 1.0), "imported normals remain normalised")
 	var bounds := TankModel.HULL.get_aabb().merge(TankModel.TURRET.get_aabb())
-	ck(absf(bounds.position.y) < 0.001 and is_equal_approx(bounds.size.x, 3.0) and bounds.size.z < 3.0, "tank fills the length of its 3x3 footprint and stands on its tracks")
+	ck(absf(bounds.position.y) < 0.001 and is_equal_approx(bounds.size.x, 3.6) and bounds.size.z > 2.5 and bounds.size.z < 3.0,
+			"larger tank slightly overhangs its 3x3 footprint and stands on its tracks")
+	ck(VehicleDB.size_of("tank") == Vector2i(3, 3), "visual enlargement keeps the 3x3 gameplay footprint")
 	var original := load("res://assets/models/tank/source/SVAROG.obj") as Mesh
 	var source_size := original.get_aabb().size
 	var ratios := Vector3(bounds.size.x / source_size.z, bounds.size.y / source_size.y, bounds.size.z / source_size.x)

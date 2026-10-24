@@ -5,10 +5,10 @@ extends RefCounted
 ## Both meshes retain the original UVs and normals. +X is the game's forward axis.
 const HULL: Mesh = preload("res://assets/models/tank/hull.obj")
 const TURRET: Mesh = preload("res://assets/models/tank/turret.obj")
-const TURRET_PIVOT := Vector3(-0.168424347, 0.0, 0.0)
+const TURRET_PIVOT := Vector3(-0.202109216, 0.0, 0.0)
 const SPRITE_SIZE := 96
-# The hull fills its 3m footprint. Padding also fits the barrel at all eight angles.
-const SPRITE_METRES := 3.2
+# A 3.6m hull slightly overhangs its 3x3 footprint; padding fits every turret angle.
+const SPRITE_METRES := 3.84
 static var _sprites := {}
 static var _pictures := {}
 

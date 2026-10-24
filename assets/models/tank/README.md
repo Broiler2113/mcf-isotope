@@ -8,7 +8,8 @@ texture to the original material name. No texture was invented or generated.
 
 `tools/art/build_tank_meshes.py` preserves the OBJ's UV coordinates, normals and
 proportions, turns its +Z nose to the game's +X axis, puts the track base on the
-floor, and scales it uniformly to fill the length of the tank's existing 3×3 metre
+floor, and scales it uniformly to 3.6 metres long and about 2.59 metres wide, about
+25% larger than the 0.14.2 model. It slightly overhangs the unchanged 3×3 gameplay
 footprint. It separates the original turret, mantlet and barrel at their original
 pivot. `TeamStripe` marks the upper hull and turret; the shader limits faction
 color to a narrow stripe on their upward-facing surfaces. All other armor,
@@ -28,9 +29,9 @@ The sprite baker needs a graphics display; omit `xvfb-run -a` on a desktop.
 `TankModel` assembles the same imported hull and turret for the baker and first
 person. Each baked image is exactly **96×96**, orthographic from directly above,
 with a transparent background and the nose pointing up. Eight relative turret
-angles have separate tank, wreck and stripe-mask frames. The 3.2 metre view includes
+angles have separate tank, wreck and stripe-mask frames. The 3.84 metre view includes
 transparent padding for the barrel when it points backward. The sprite is drawn
-at that same scale, so the hull still fills its 3 metre footprint. The runtime caches
+at that same scale, preserving the hull's slight visual overhang. The runtime caches
 stripes per colour and frame and draws them with nearest filtering in both battle
 and purchase/placement, without a faction-colored bounding rectangle. Existing
 `user://textures/tank.png` and `tank_wreck.png` replacements still take priority.

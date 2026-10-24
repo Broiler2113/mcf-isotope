@@ -3,7 +3,7 @@
 
 Run before Godot import and tools/art/build_tank_sprites.gd. The model is Y-up,
 faces +Z, and has its turret centred at (0, *, 0.7). Game models face +X.
-The complete vehicle fits within the existing 3 m footprint at 32 pixels/metre.
+The 3.6 m vehicle slightly overhangs its unchanged 3x3 gameplay footprint.
 """
 from pathlib import Path
 
@@ -18,7 +18,7 @@ SOURCE_VERTICES = [tuple(map(float, line.split()[1:4]))
                    for line in SOURCE.read_text().splitlines() if line.startswith("v ")]
 Z_MIN = min(v[2] for v in SOURCE_VERTICES)
 Z_MAX = max(v[2] for v in SOURCE_VERTICES)
-SCALE = 3.0 / (Z_MAX - Z_MIN)
+SCALE = 3.6 / (Z_MAX - Z_MIN)
 CENTER_Z = (Z_MAX + Z_MIN) / 2.0
 TURRET_Z = 0.7
 
