@@ -3,6 +3,12 @@ extends RefCounted
 
 ## Only old recordings retain anonymous carried bodies and flammable corpse walls.
 var legacy_corpse_rules := false
+## Playback alone retains rearward cannon fire from recordings before 0.14.2.2.
+var legacy_rear_cannon := false
+
+func cannon_direction_allowed(veh: Vehicle, direction: Vector2i) -> bool:
+	return legacy_rear_cannon or veh.type_id != "tank" \
+			or direction.x * veh.facing.x + direction.y * veh.facing.y >= 0
 
 ## The resolver's state: every variable, constant and static cache of GameActionResolver,
 ## and the declarations the files above need. GameActionResolver is one class spread over a

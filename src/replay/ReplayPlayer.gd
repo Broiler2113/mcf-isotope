@@ -100,6 +100,7 @@ func play_next() -> ActionResult:
 		seek_fx.clear()
 		StateCodec.restore_into(state, frame.get("state", {}))
 		StateCodec.apply_rules(resolver, frame.get("rules", {}))
+		_restore_cannon_rules(frame)
 		resolver.explored = frame.get("visibility", {}).duplicate(true)
 		resolver._undo_stack.clear()
 		resolver._redo_stack.clear()
@@ -129,6 +130,7 @@ func _rebuild(frame: Dictionary) -> void:
 	resolver.track_undo_history = _needs_undo(int(frame.get("at", 0)))
 	seek_decals = frame.get("fx", {})
 	StateCodec.apply_rules(resolver, frame.get("rules", {}))
+	_restore_cannon_rules(frame)
 	resolver.explored = frame.get("visibility", {}).duplicate(true)
 	# Preserve historical point-budget waves only when playing an older recording.
 	var saved_mode: Dictionary = frame.get("rules", {}).get("mode", {})
@@ -145,6 +147,12 @@ func _rebuild(frame: Dictionary) -> void:
 		opening_result = resolver.open_match() if bool(frame.get("opening_processed", false)) \
 				else resolver.play_civilian_slots()
 		if advance_random: state.dice.advance_recorded(open.size())
+
+## Old prefixes retain their original shots; a resumed live checkpoint switches to
+## current rules. This applies both to linear playback and seeking into that branch.
+func _restore_cannon_rules(frame: Dictionary) -> void:
+	resolver.legacy_rear_cannon = int(frame.get("rules", {}).get("cannon_arc",
+			data.get("rules", {}).get("cannon_arc", 0))) < 1
 
 ## Ключевой кадр, не позже шага i. Кадр, привязанный к шагу s, снят ПОСЛЕ него,
 ## то есть описывает позицию s+1.

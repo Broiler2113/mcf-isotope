@@ -17,7 +17,7 @@ func run() -> void:
 	var original := load("res://assets/models/tank/source/SVAROG.obj") as Mesh
 	var source_size := original.get_aabb().size
 	var ratios := Vector3(bounds.size.x / source_size.z, bounds.size.y / source_size.y, bounds.size.z / source_size.x)
-	ck(is_equal_approx(ratios.x, ratios.y) and is_equal_approx(ratios.y, ratios.z), "enlargement preserves all three source-model proportions")
+	ck(is_equal_approx(ratios.x, ratios.z) and is_equal_approx(ratios.y, ratios.x * 1.25), "tank gains 25% height while preserving its length and width")
 	var model := TankModel.create()
 	ck(model.get_node("turret").position == TankModel.TURRET_PIVOT, "turret pivots around the source model's turret axis")
 	model.free()
@@ -39,6 +39,7 @@ func run() -> void:
 				if r.a == 0: continue
 				if mask.get_pixel(x, y).r > 0.5:
 					painted += 1
+					ck(y >= 78 and y <= 85, "stripe runs across the rear deck behind the turret in every aim frame")
 					ck(r.r >= r.b and b.b >= b.r, "roof stripe uses its team's colour")
 					tones[r.to_rgba32()] = true
 				else:

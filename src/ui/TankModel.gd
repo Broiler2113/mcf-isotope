@@ -2,7 +2,7 @@ class_name TankModel
 extends RefCounted
 
 ## Supplied SVAROG geometry, normalised once by tools/art/build_tank_meshes.py.
-## Both meshes retain the original UVs and normals. +X is the game's forward axis.
+## UVs are unchanged; normals account for the taller hull. +X is the forward axis.
 const HULL: Mesh = preload("res://assets/models/tank/hull.obj")
 const TURRET: Mesh = preload("res://assets/models/tank/turret.obj")
 const TURRET_PIVOT := Vector3(-0.202109216, 0.0, 0.0)
@@ -11,6 +11,30 @@ const SPRITE_SIZE := 96
 const SPRITE_METRES := 3.84
 static var _sprites := {}
 static var _pictures := {}
+
+## Keep text and AP dots on one neutral card below the complete sprite, so neither
+## the roof stripe nor the turret is hidden by status labels at any hull facing.
+static func draw_status(ci: CanvasItem, rect: Rect2, label: String,
+		durability := -1, crew := 0, ap := 0) -> void:
+	var font := ThemeDB.fallback_font
+	var stats := "DUR %d  CREW %d" % [durability, crew] if durability >= 0 else ""
+	var title_size := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 14)
+	var stats_size := font.get_string_size(stats, HORIZONTAL_ALIGNMENT_LEFT, -1, 12)
+	var width := maxf(title_size.x + (ap * 8 + 10 if ap > 0 else 0), stats_size.x) + 12
+	var title_height := font.get_height(14)
+	var height: float = title_height + 8 + (font.get_height(12) + 2 if stats != "" else 0)
+	var pos := Vector2(rect.get_center().x - width * 0.5,
+			rect.end.y + rect.size.y * (SPRITE_METRES / 3.0 - 1.0) * 0.5 + 2)
+	var card := Rect2(pos, Vector2(width, height))
+	ci.draw_rect(card, Color(0.055, 0.065, 0.08, 0.97))
+	ci.draw_rect(card, Color(0.45, 0.49, 0.54), false, 1.0)
+	ci.draw_string(font, pos + Vector2(6, 4 + font.get_ascent(14)), label,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0.96, 0.97, 1.0))
+	for i in maxi(0, ap):
+		ci.draw_circle(pos + Vector2(width - 9 - i * 8, 4 + title_height * 0.5), 3, Color(1, 1, 0.4))
+	if stats != "":
+		ci.draw_string(font, pos + Vector2(6, 6 + title_height + font.get_ascent(12)), stats,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.94, 0.94, 0.74))
 
 static func aim_frame(direction: Vector2i) -> int:
 	return posmod(roundi(Vector2(direction).angle() / (PI / 4.0)), 8) if direction != Vector2i.ZERO else 0

@@ -6,13 +6,14 @@ and [512×512 colour texture](https://drive.google.com/file/d/12cAEL0pB8Qma4FRMm
 locally. The linked MTL was inaccessible, so `source/SVAROG.mtl` binds the supplied
 texture to the original material name. No texture was invented or generated.
 
-`tools/art/build_tank_meshes.py` preserves the OBJ's UV coordinates, normals and
-proportions, turns its +Z nose to the game's +X axis, puts the track base on the
-floor, and scales it uniformly to 3.6 metres long and about 2.59 metres wide, about
-25% larger than the 0.14.2 model. It slightly overhangs the unchanged 3×3 gameplay
-footprint. It separates the original turret, mantlet and barrel at their original
-pivot. `TeamStripe` marks the upper hull and turret; the shader limits faction
-color to a narrow stripe on their upward-facing surfaces. All other armor,
+`tools/art/build_tank_meshes.py` preserves the OBJ's UV coordinates, turns its +Z
+nose to the game's +X axis, and puts the track base on the floor. Length and width
+remain 3.6×2.59 metres, with the same slight overhang around the 3×3 gameplay
+footprint. Version 0.14.2.2 adds 25% height (about 1.94 metres tall); normals use
+the inverse-transpose stretch to preserve correct lighting on sloping surfaces.
+It separates the original turret, mantlet and barrel at their original pivot.
+`TeamStripe` marks only the rear deck; the shader limits faction color to a narrow
+transverse band behind the turret, perpendicular to the forward gun. All other armor,
 tracks and barrel surfaces retain the supplied texture. The geometry is shared
 across teams, with cached stripe materials. Wrecks use a dark neutral material.
 

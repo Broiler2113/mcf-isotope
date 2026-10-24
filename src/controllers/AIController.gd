@@ -2766,7 +2766,7 @@ func _opens_cannon_line(state: GameState, r: GameActionResolver, veh: Vehicle,
 			if fc.x != e.coord.x and fc.y != e.coord.y:
 				continue  # пушка бьёт только по прямой
 			var step := Vector2i(signi(e.coord.x - fc.x), signi(e.coord.y - fc.y))
-			if step == Vector2i.ZERO or own.has(fc + step):
+			if step == Vector2i.ZERO or own.has(fc + step) or not r.cannon_direction_allowed(veh, step):
 				continue  # ствол смотрит в собственную броню
 			if Combat.distance(fc, e.coord) > rng or r.los_blocked(fc, e.coord):
 				continue
