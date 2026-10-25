@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://sfee3pmkmhm5"
+path="res://.godot/imported/drone.png-ac33be9fa8a75404a30d9914fecdaadd.image"
+
+[deps]
+
+source_file="res://assets/models/drone/sprites/drone.png"
+dest_files=["res://.godot/imported/drone.png-ac33be9fa8a75404a30d9914fecdaadd.image"]
+
+[params]
+

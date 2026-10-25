@@ -525,7 +525,7 @@ static func _quad_down(s: FirstPersonModels.Sink, lo: Vector3, hi: Vector3, uv: 
 	s.face_uv([Vector3(lo.x, lo.y, lo.z), Vector3(hi.x, lo.y, lo.z), Vector3(hi.x, lo.y, hi.z), Vector3(lo.x, lo.y, hi.z)],
 			Vector3.DOWN, [uv.position, Vector2(uv.end.x, uv.position.y), uv.end, Vector2(uv.position.x, uv.end.y)], Color.WHITE)
 
-## A wall's side toward d, from y0 to y1: the texture is a metre wide and the wall's full
+## A wall's side toward d, from y0 to y1: the texture is 4 m wide and the wall's full
 ## height, laid by world position so the pattern runs on unbroken from cell to cell.
 static func _wall_face(s: FirstPersonModels.Sink, at: Vector2i, d: Vector2i, y0: float, y1: float, earth := false) -> void:
 	var x := float(at.x)
@@ -537,8 +537,9 @@ static func _wall_face(s: FirstPersonModels.Sink, at: Vector2i, d: Vector2i, y0:
 		Vector2i(0, 1): a = Vector3(x, 0, z + 1); b = Vector3(x + 1, 0, z + 1)
 		Vector2i(-1, 0): a = Vector3(x, 0, z); b = Vector3(x, 0, z + 1)
 		_: a = Vector3(x + 1, 0, z + 1); b = Vector3(x + 1, 0, z)
-	var ua := 0.0
-	var ub := 1.0
+	# Along the face, left to right as seen from the open side.
+	var ua := (a.x * d.y if d.y != 0 else a.z * -d.x) / 4.0
+	var ub := ua + 0.25
 	var v0 := 1.0 - y0 / CEIL
 	var v1 := 1.0 - y1 / CEIL
 	if earth:
@@ -968,7 +969,12 @@ static func _decals(s: FirstPersonModels.Sink, list: Array, area: Rect2) -> void
 			var hgt := r * (0.35 + 0.4 * FirstPersonArt._h(int(p.x * 97.0), int(p.y * 89.0), 7))
 			var col := FirstPersonArt.art_colour(art).lerp(Color(0.5, 0.5, 0.5), 0.15)
 			var m := FirstPersonArt.M_CONCRETE
-			if Furniture.is_furniture(art):
+			var wall := FirstPersonArt.chunk_kind(art)
+			if wall != "":
+				# A chunk of wall wears that wall's own surface.
+				m = FirstPersonArt.M_W_BRICK + FirstPersonArt.WALL_MATS.find(wall)
+				col = Color.WHITE * (0.85 + 0.2 * FirstPersonArt._h(int(p.x * 61.0), int(p.y * 53.0), 9))
+			elif Furniture.is_furniture(art):
 				m = {"wood": FirstPersonArt.M_WOOD, "fabric": FirstPersonArt.M_FABRIC,
 						"metal": FirstPersonArt.M_METAL, "plastic": FirstPersonArt.M_PLASTIC}.get(Furniture.def_of(art).get("mat", ""), m)
 			elif "wood" in art: m = FirstPersonArt.M_WOOD

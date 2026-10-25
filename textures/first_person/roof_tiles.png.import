@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://dohoa5wocxy8a"
+path="res://.godot/imported/roof_tiles.png-5b3f21f5b397155cdae05bd5a39686ca.image"
+
+[deps]
+
+source_file="res://textures/first_person/roof_tiles.png"
+dest_files=["res://.godot/imported/roof_tiles.png-5b3f21f5b397155cdae05bd5a39686ca.image"]
+
+[params]
+

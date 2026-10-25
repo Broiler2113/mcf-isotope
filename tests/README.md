@@ -293,10 +293,8 @@ and checks that camera movement leaves the simulation unchanged. Add, for exampl
 
 `bench/run_first_person_bench.gd` profiles entry and selected CPU update phases on a
 furnished 124×104 winter town with 200 soldiers. Run it with `godot --headless --script
-res://tests/bench/run_first_person_bench.gd`; add `-- --procedural` to measure the
-material-generation path instead of loading the baked textures. These are CPU
-measurements, not GPU frame rates. Verify the baked images against their sources with
-`godot --headless --script res://tools/art/build_first_person.gd -- --verify`.
+res://tests/bench/run_first_person_bench.gd`. These are CPU measurements, not GPU frame
+rates. The textures themselves are drawn by `tools/art/build_first_person.py`.
 
 **`files/run_replay_seek.gd`** compares frame selection with the original forward scan at
 every boundary, including old recordings without frames and recordings edited in

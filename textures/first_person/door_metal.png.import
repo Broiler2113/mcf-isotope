@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://da7j57folp24q"
+path="res://.godot/imported/door_metal.png-80af7d17e4363dc47d2b28757b478017.image"
+
+[deps]
+
+source_file="res://textures/first_person/door_metal.png"
+dest_files=["res://.godot/imported/door_metal.png-80af7d17e4363dc47d2b28757b478017.image"]
+
+[params]
+

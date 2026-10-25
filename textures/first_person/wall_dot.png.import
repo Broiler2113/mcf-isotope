@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://4fjbh538owh7"
+path="res://.godot/imported/wall_dot.png-00724b4b073bb6683bf1382b352772c9.image"
+
+[deps]
+
+source_file="res://textures/first_person/wall_dot.png"
+dest_files=["res://.godot/imported/wall_dot.png-00724b4b073bb6683bf1382b352772c9.image"]
+
+[params]
+

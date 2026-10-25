@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://qdrmha52keji"
+path="res://.godot/imported/material_29.png-779ef54f828cb4c51bc90624d37e0ebb.image"
+
+[deps]
+
+source_file="res://textures/first_person/material_29.png"
+dest_files=["res://.godot/imported/material_29.png-779ef54f828cb4c51bc90624d37e0ebb.image"]
+
+[params]
+

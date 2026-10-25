@@ -1,9 +1,59 @@
 extends "res://tests/SuiteBase.gd"
 
 func run() -> void:
+	_art()
 	_meshes()
 	await _view()
 	await _loaded_settings()
+
+## The shipped first-person art (tools/art/build_first_person.py, build_drone_meshes.py).
+func _art() -> void:
+	ck(FirstPersonArt.materials().get_layers() == FirstPersonArt.M_COUNT, "every material layer is shipped")
+	for kind: String in FirstPersonArt.WALL_MATS + ["dot_open"]:
+		ck(FirstPersonArt.picture("wall_" + kind).get_size() == Vector2i(128, FirstPersonArt.H), "4 m wall picture: " + kind)
+	for art: String in ["wall_brick", "wall_station", "wood_wall", "bru", "sandbag_wall", "wall_asteroid"]:
+		ck(FirstPersonArt.chunk_kind(art) in FirstPersonArt.WALL_MATS, "wall chunk wears its wall: " + art)
+	ck(FirstPersonArt.chunk_kind("bed") == "", "furniture chunks keep their own material")
+	var plain := FirstPersonArt.wall_texture("station", Color(0, 0, 0, 0)).get_image()
+	var band := FirstPersonArt.wall_texture("station", Color.RED).get_image()
+	var rows := {}
+	for y in plain.get_height():
+		for x in plain.get_width():
+			if plain.get_pixel(x, y) != band.get_pixel(x, y): rows[y] = true
+	ck(rows.has(FirstPersonArt.H - 38) and rows.keys().all(func(y: int) -> bool: return y >= FirstPersonArt.H - 41 and y <= FirstPersonArt.H - 35),
+			"a department colour paints only its band at hand height")
+	# Seen from the open side, each wall face continues its left neighbour's pattern.
+	for d: Vector2i in Grid.N4:
+		var right := Vector2i(d.y, -d.x)
+		var a := FirstPersonModels.Sink.new()
+		var b := FirstPersonModels.Sink.new()
+		FirstPersonBoard._wall_face(a, Vector2i(5, 5), d, 0.0, 2.3)
+		FirstPersonBoard._wall_face(b, Vector2i(5, 5) + right, d, 0.0, 2.3)
+		var ua := Array(a.uv)
+		var ub := Array(b.uv)
+		ua.sort_custom(func(p: Vector2, q: Vector2) -> bool: return p.x < q.x)
+		ub.sort_custom(func(p: Vector2, q: Vector2) -> bool: return p.x < q.x)
+		ck(is_equal_approx(ua[ua.size() - 1].x, ub[0].x) and is_equal_approx(ua[ua.size() - 1].x - ua[0].x, 0.25),
+				"wall texture runs on unbroken, a quarter of its 4 m width a cell, facing %s" % d)
+	for scout: bool in [false, true]:
+		var mesh: Mesh = DroneModel.SCOUT if scout else DroneModel.KAMIKAZE
+		var stripes := 0
+		for surface in mesh.get_surface_count():
+			var mat := mesh.surface_get_material(surface) as StandardMaterial3D
+			ck(mat != null and mat.albedo_texture != null, "drone surfaces carry the atlas")
+			if mat != null and mat.resource_name == "TeamStripe": stripes += 1
+		ck(stripes == 1, "drone top plates take the side's colour")
+		var base := DroneModel._picture("scout_drone" if scout else "drone")
+		var mask := DroneModel._picture(("scout_drone" if scout else "drone") + "_mask")
+		var painted := (DroneModel.sprite(Color.RED, scout) as CanvasTexture).diffuse_texture.get_image()
+		var changed := 0
+		var stray := 0
+		for y in base.get_height():
+			for x in base.get_width():
+				if base.get_pixel(x, y).is_equal_approx(painted.get_pixel(x, y)): continue
+				if mask.get_pixel(x, y).r > 0.5: changed += 1
+				else: stray += 1
+		ck(changed > 20 and stray == 0, "only the drone's marked plates and arms are painted")
 
 func _meshes() -> void:
 	for reverse in [false, true]:
@@ -17,11 +67,10 @@ func _meshes() -> void:
 				ck(Vector3(center.x, 0, center.z).dot(sink.n[i]) > 0.0, "rubble sides point outward in either polygon order")
 			ck((sink.v[i + 1] - sink.v[i]).cross(sink.v[i + 2] - sink.v[i]).dot(sink.n[i]) < 0,
 					"rubble winding agrees with Godot's front faces")
-	var source := Sprites.texture_of("ldf").get_image()
-	var tile := source.get_region(Rect2i(0, 0, source.get_height(), source.get_height()))
-	tile.generate_mipmaps()
-	ck(FirstPersonArt.wall_texture("ldf", Color.GREEN).get_image().get_data() == tile.get_data(),
-			"LDF uses the supplied 2D texture without a color band")
+	var ldf := FirstPersonArt.picture("wall_ldf")
+	ldf.generate_mipmaps()
+	ck(FirstPersonArt.wall_texture("ldf", Color.GREEN).get_image().get_data() == ldf.get_data(),
+			"LDF uses its first-person texture without a color band")
 	for fid: String in [MCF.FEATURE_DOT, MCF.FEATURE_DOT_OPEN]:
 		var grid := Grid.new(3, 3)
 		grid.cell(Vector2i(1, 1)).set_feature(fid)

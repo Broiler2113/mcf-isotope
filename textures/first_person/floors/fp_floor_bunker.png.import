@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://c46rbkld2e4g0"
+path="res://.godot/imported/fp_floor_bunker.png-74b3075142d2190cc8e26a752ac28ca1.image"
+
+[deps]
+
+source_file="res://textures/first_person/floors/fp_floor_bunker.png"
+dest_files=["res://.godot/imported/fp_floor_bunker.png-74b3075142d2190cc8e26a752ac28ca1.image"]
+
+[params]
+

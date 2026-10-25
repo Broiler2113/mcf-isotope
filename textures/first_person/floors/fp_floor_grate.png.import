@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://batl7vr1s66we"
+path="res://.godot/imported/fp_floor_grate.png-cb4b462b3c3005b64628a28195f73ab8.image"
+
+[deps]
+
+source_file="res://textures/first_person/floors/fp_floor_grate.png"
+dest_files=["res://.godot/imported/fp_floor_grate.png-cb4b462b3c3005b64628a28195f73ab8.image"]
+
+[params]
+

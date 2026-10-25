@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://bved0iro35usb"
+path="res://.godot/imported/fp_floor_station.png-49820ca57d4d79eb1dc7d524140943b6.image"
+
+[deps]
+
+source_file="res://textures/first_person/floors/fp_floor_station.png"
+dest_files=["res://.godot/imported/fp_floor_station.png-49820ca57d4d79eb1dc7d524140943b6.image"]
+
+[params]
+

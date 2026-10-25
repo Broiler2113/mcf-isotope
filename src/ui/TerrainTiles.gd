@@ -147,11 +147,16 @@ static func variant_of(c: Vector2i, n: int) -> int:
 
 ## Варианты плитки в разрешении res (лента вариантов в файле).
 func _tile(name: String, res: int) -> Array:
-	var key := "%s@%d" % [name, res]
+	var key := "%s@%d%s" % [name, res, "fp" if _floor_only else ""]
 	if _tiles.has(key):
 		return _tiles[key]
 	var out: Array = []
-	var img := _load(env_name(name, env))
+	# First person lays its own realistic floors (textures/first_person/floors/fp_*), unless
+	# the player replaced that floor with their own picture.
+	var own := env_name(name, env)
+	var img := _load("fp_" + own) if _floor_only and not Sprites.has_user_override(own) else null
+	if img == null:
+		img = _load(env_name(name, env))
 	if img == null:
 		img = _atlas_part(name, Sprites.ATLAS_TURN_ROW, 1, 1)   # атлас: первый поворот
 	if img != null:
@@ -413,12 +418,12 @@ func begin_floor_job(cc: Vector2i) -> Dictionary:
 	var h := mini(C, _grid.height - cc.y * C)
 	_floor_only = true
 	var marks := _decal_list(cc)
-	_floor_only = false
 	var job := {"cc": cc, "source": self, "generation": _generation, "size": Vector2i(w, h), "next": 0, "phase": 0, "decals": marks,
 		"floor": Image.create(w * 32, h * 32, false, Image.FORMAT_RGBA8),
 		"features": Image.create(w * 32, h * 32, false, Image.FORMAT_RGBA8)}
 	var plan := _native_floor_plan(cc, Vector2i(w, h))
 	if not plan.is_empty(): job["native_plan"] = plan; job["native_tiles"] = _native_floor_images(plan, 32)
+	_floor_only = false
 	return job
 
 func advance_floor_job(job: Dictionary, deadline: int) -> bool:

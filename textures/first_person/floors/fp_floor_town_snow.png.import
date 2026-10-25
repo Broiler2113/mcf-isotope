@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://cgg3holwg5x6j"
+path="res://.godot/imported/fp_floor_town_snow.png-4d066a076103898df379350c3ed1dd0e.image"
+
+[deps]
+
+source_file="res://textures/first_person/floors/fp_floor_town_snow.png"
+dest_files=["res://.godot/imported/fp_floor_town_snow.png-4d066a076103898df379350c3ed1dd0e.image"]
+
+[params]
+

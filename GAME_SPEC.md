@@ -2444,9 +2444,13 @@ back to the board. The editor shows all authored soldiers, civilians and corpse 
 independent of lobby population limits. It does not modify the map or battle state.
 `FirstPersonBoard` merges cached `FirstPersonModels` into streamed chunks; materials
 and ground use 32 texels per metre. The view samples `LightManager` for the same lamps,
-colours and occlusion as 2D, with outdoor sun shadows. `FirstPersonArt` retains the
-procedural source but loads pre-baked layers from `textures/first_person` on entry.
-`tools/art/build_first_person.gd -- --verify` checks those layers pixel for pixel.
+colours and occlusion as 2D, with outdoor sun shadows. Every first-person texture follows
+the SVAROG tank's look (realistic, weathered, pixelated): `tools/art/build_first_person.py`
+models each at 8x and averages it down into `textures/first_person` (material tiles, ground,
+4 m walls, doors and airlocks, ceilings, roofs, fire, smoke and first-person floor variants),
+imported as CPU Images. Wall chunks wear their wall's surface. Department colours are worn
+paint over the wall. Drones are low-poly models on a realistic atlas, like the tank
+(`tools/art/build_drone_meshes.py`, `DroneModel`); the board draws sprites baked from them.
 Multiplayer walkers appear as cosmetic, named avatars, clipped to the viewer's current
 sight; movement and presence never change battle state. Entry works during another
 side's action. Soldier and vehicle animation uses continuous interpolation, with a

@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://bqa0ygrma76pb"
+path="res://.godot/imported/scout_drone.png-1ac576eaeb35665dc0e5645059ca7091.image"
+
+[deps]
+
+source_file="res://assets/models/drone/sprites/scout_drone.png"
+dest_files=["res://.godot/imported/scout_drone.png-1ac576eaeb35665dc0e5645059ca7091.image"]
+
+[params]
+

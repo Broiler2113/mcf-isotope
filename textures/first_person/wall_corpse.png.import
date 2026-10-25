@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://jevyh6w87oqg"
+path="res://.godot/imported/wall_corpse.png-32d9a1e73eb38fd346853f1dcd12993b.image"
+
+[deps]
+
+source_file="res://textures/first_person/wall_corpse.png"
+dest_files=["res://.godot/imported/wall_corpse.png-32d9a1e73eb38fd346853f1dcd12993b.image"]
+
+[params]
+
