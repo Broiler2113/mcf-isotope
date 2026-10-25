@@ -30,7 +30,7 @@ jobs:
         env:
           MCF_RENDER_CAPTURE_DIR: .cache/visibility/native
         run: |
-          godot --path . --rendering-method gl_compatibility --rendering-driver opengl3_angle --script res://tests/render_battle_visibility.gd
+          godot --path . --audio-driver Dummy --script res://tests/render_battle_visibility.gd
           python -c "import json; r=json.load(open('.cache/visibility/native/result.json')); assert not r['failures'], r"
       - name: Render the same battle using GDScript
         if: always()
@@ -39,7 +39,7 @@ jobs:
           MCF_NATIVE_VISUALS: 'off'
           MCF_RENDER_CAPTURE_DIR: .cache/visibility/fallback
         run: |
-          godot --path . --rendering-method gl_compatibility --rendering-driver opengl3_angle --script res://tests/render_battle_visibility.gd
+          godot --path . --audio-driver Dummy --script res://tests/render_battle_visibility.gd
           python -c "import json; r=json.load(open('.cache/visibility/fallback/result.json')); assert not r['failures'], r"
       - uses: actions/upload-artifact@v4
         if: always()

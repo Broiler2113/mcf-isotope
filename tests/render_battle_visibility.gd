@@ -1,7 +1,7 @@
 extends "res://tests/SuiteBase.gd"
 
 ## Pixel checks for the complete 2D battle, including the terrain below its actors.
-## Run with a real renderer. Windows CI uses ANGLE and the shipped native bundle.
+## Run with a real renderer and the shipped native bundle.
 var output_dir := OS.get_environment("MCF_RENDER_CAPTURE_DIR")
 
 func run() -> void:
@@ -11,9 +11,7 @@ func run() -> void:
 	if output_dir.is_empty(): output_dir = OS.get_cache_dir().path_join("isotope-battle-visibility")
 	DirAccess.make_dir_recursive_absolute(output_dir)
 	root.mode = Window.MODE_WINDOWED
-	root.size = Vector2i(1000, 720)
-	root.content_scale_size = Vector2i.ZERO
-	root.content_scale_factor = 1.0
+	root.size = Vector2i(1280, 720)
 	GameConfig.civilians_enabled = false
 	GameConfig.random_events_enabled = false
 	GameConfig.p1_is_ai = false
@@ -22,9 +20,13 @@ func run() -> void:
 	GameConfig.fog_mode = MCF.Fog.OFF
 	var ui := root.get_node("Ui")
 	ui.snowfall = false
-	ui.dynamic_lighting = false
 	ui.warm_up(["res://scenes/Lobby.tscn", "res://scenes/Main.tscn"])
 	await process_frame
+	await deployment_transition()
+	ui.dynamic_lighting = false
+	root.size = Vector2i(1000, 720)
+	root.content_scale_size = Vector2i.ZERO
+	root.content_scale_factor = 1.0
 	var map := MapData.blank_arena(60, 48)
 	map.env = "field"
 	map.time_of_day = "day"
@@ -67,7 +69,54 @@ func run() -> void:
 	main.free()
 	await process_frame
 	var report := FileAccess.open(output_dir.path_join("result.json"), FileAccess.WRITE)
-	report.store_string(JSON.stringify({"failures": fails, "platform": OS.get_name()}))
+	report.store_string(JSON.stringify({"failures": fails, "platform": OS.get_name(),
+			"driver": RenderingServer.get_current_rendering_driver_name(),
+			"adapter": RenderingServer.get_video_adapter_name(), "log": GameLog.text()}))
+
+func deployment_transition() -> void:
+	GameConfig.map_path = ""
+	GameConfig.budget = 1000
+	GameConfig.fog_mode = MCF.Fog.STANDARD
+	var placement: Node = load("res://scenes/Placement.tscn").instantiate()
+	root.add_child(placement)
+	current_scene = placement
+	for i in 5: await process_frame
+	for side: int in [0, 1]:
+		placement.brush_unit = "tank"
+		placement._click_cell(Vector2i(6 if side == 0 else 15, 5))
+		placement.brush_unit = "light_infantry"
+		placement._click_cell(Vector2i(9 if side == 0 else 14, 9))
+		ck(placement._side_unit_count(side) == 2, "deployment records both actors for side %d" % side)
+		placement._on_flow()
+	await scene_changed
+	for i in 10: await process_frame
+	var main := current_scene
+	ck(main.scene_file_path == "res://scenes/Main.tscn", "deployment enters the battle scene")
+	ck(main.state.all_units().size() == 2, "both deployed soldiers enter the battle")
+	ck(main.state.all_vehicles().size() == 2, "both deployed tanks enter the battle")
+	var side: int = main.state.active_player()
+	var soldier := Vector2i(9 if side == 0 else 14, 9)
+	var tank := Vector2i(6 if side == 0 else 15, 5)
+	var screen: Vector2 = main._cell_screen(soldier) + Vector2.ONE * main.CELL * main.zoom * 0.5
+	ck(main.get_viewport_rect().has_point(screen), "the starting camera includes its own soldier")
+	main._handle_click(main._pos_to_cell(screen))
+	ck(main.selected_id == main.state.grid.cell(soldier).occupant.id, "the deployed soldier can be selected")
+	main._deselect()
+	main._handle_click(tank)
+	ck(main.selected_vehicle_id == main.state.vehicle_on(tank).id, "the deployed tank can be selected")
+	main._deselect()
+	var actors := await capture(main)
+	actors.save_png(output_dir.path_join("deployment-battle.png"))
+	main.self_modulate.a = 0.0
+	var terrain := await capture(main)
+	var soldier_rect := Rect2i(Rect2(main._cell_screen(soldier) + Vector2.ONE * 8 * main.zoom,
+			Vector2.ONE * 24 * main.zoom))
+	var hull_rect := Rect2i(Rect2(main._cell_screen(tank) + Vector2.ONE * 24 * main.zoom,
+			Vector2.ONE * 72 * main.zoom))
+	ck(changed_pixels(actors, terrain, soldier_rect) > 20, "new-battle soldier is drawn with the default camera and lighting")
+	ck(changed_pixels(actors, terrain, hull_rect) > 100, "new-battle tank is drawn with the default camera and lighting")
+	main.free()
+	await process_frame
 
 func capture(main: Node) -> Image:
 	main.queue_redraw()
