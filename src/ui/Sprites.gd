@@ -191,9 +191,11 @@ static func _scan_override_dir(dir_path: String, depth: int = 0) -> void:
 ## Вторая попытка идёт как запасная — на случай неимпортированного png в проекте.
 static func _load_texture_at(path: String) -> Texture2D:
 	if path.begins_with("res://") and ResourceLoader.exists(path):
-		var res := ResourceLoader.load(path) as Texture2D
-		if res != null:
+		var res := ResourceLoader.load(path)
+		if res is Texture2D:
 			return res
+		if res is Image:   # baked model sprites import as Images (TankModel)
+			return ImageTexture.create_from_image(res)
 	var img := Image.new()
 	if img.load(path) == OK:
 		return ImageTexture.create_from_image(img)
