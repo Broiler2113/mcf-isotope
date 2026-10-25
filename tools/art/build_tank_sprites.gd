@@ -44,11 +44,11 @@ func _bake() -> void:
 			var model := TankModel.create(func(imported: Material) -> Material:
 				var source := imported as StandardMaterial3D
 				var tint := source.albedo_color
-				if kind == "tank_wreck": tint *= Color(0.28, 0.27, 0.25)
+				if kind == "tank_wreck": tint *= TankModel.WRECK_TINT
 				return FirstPersonBoard.material(shader, {"tex": source.albedo_texture,
 						"no_fog": true, "lm_on": false, "flat_light": Color.WHITE, "tint": tint,
 						"stripe_mask": kind == "tank_mask",
-						"team_stripe": kind == "tank_mask" and source.resource_name == "TeamStripe"}))
+						"team_stripe": kind == "tank_mask" and source.resource_name == "TeamStripe"}), kind == "tank_wreck")
 			world.add_child(model)
 			model.get_node("turret").rotation.y = -frame * PI / 4.0
 			await process_frame

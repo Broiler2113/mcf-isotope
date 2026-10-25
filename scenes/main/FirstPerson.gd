@@ -1549,11 +1549,11 @@ func _vehicle_node(veh: Vehicle) -> Node3D:
 			var key := str(["tank", source.resource_name, color, veh.wrecked])
 			if not _art_mats.has(key):
 				var tint := source.albedo_color
-				if veh.wrecked: tint *= Color(0.28, 0.27, 0.25)
+				if veh.wrecked: tint *= TankModel.WRECK_TINT
 				_art_mats[key] = _mat(_board_sh, {"tex": source.albedo_texture, "tint": tint,
 					"team_stripe": source.resource_name == "TeamStripe" and not veh.wrecked,
 					"team_color": color})
-			return _art_mats[key])
+			return _art_mats[key], veh.wrecked)
 	var n := Node3D.new()
 	var paint: Color = main._side_color(veh.owner).darkened(0.15)
 	var wrecked := veh.wrecked

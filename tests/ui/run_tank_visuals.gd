@@ -1,7 +1,7 @@
 extends "res://tests/SuiteBase.gd"
 
 func run() -> void:
-	for mesh: Mesh in [TankModel.HULL, TankModel.TURRET]:
+	for mesh: Mesh in [TankModel.HULL, TankModel.TURRET, TankModel.WRECK_HULL, TankModel.WRECK_TURRET]:
 		ck(mesh.get_surface_count() > 0, "SVAROG contains imported geometry")
 		for surface in mesh.get_surface_count():
 			var material := mesh.surface_get_material(surface) as StandardMaterial3D
@@ -21,7 +21,16 @@ func run() -> void:
 	var model := TankModel.create()
 	ck(model.get_node("turret").position == TankModel.TURRET_PIVOT, "turret pivots around the source model's turret axis")
 	model.free()
+	var wreck_bounds := TankModel.WRECK_HULL.get_aabb()
+	ck(is_equal_approx(wreck_bounds.position.x, bounds.position.x)
+			and is_equal_approx(wreck_bounds.end.x, bounds.end.x) and absf(wreck_bounds.position.y) < 0.001,
+			"destroyed chassis keeps the live hull's length, centre and ground plane despite its export offset")
+	var wreck_model := TankModel.create(Callable(), true)
+	ck(wreck_model.get_node("turret").position == TankModel.TURRET_PIVOT,
+			"damaged turret and hatch rotate around the same axis as the live turret")
+	wreck_model.free()
 	var previous: PackedByteArray
+	var previous_wreck: PackedByteArray
 	for aim in 8:
 		var red := TankModel.sprite(Color(1, 0.2, 0.1), false, aim).get_image()
 		var blue := TankModel.sprite(Color(0.1, 0.3, 1), false, aim).get_image()
@@ -32,10 +41,12 @@ func run() -> void:
 		var painted := 0
 		var unchanged := 0
 		var tones := {}
+		var changed_silhouette := 0
 		for y in 96:
 			for x in 96:
 				var r := red.get_pixel(x, y)
 				var b := blue.get_pixel(x, y)
+				if r.a != wreck.get_pixel(x, y).a: changed_silhouette += 1
 				if r.a == 0: continue
 				if mask.get_pixel(x, y).r > 0.5:
 					painted += 1
@@ -51,9 +62,15 @@ func run() -> void:
 			ck(red.get_pixel(edge, 0).a == 0 and red.get_pixel(edge, 95).a == 0 \
 					and red.get_pixel(0, edge).a == 0 and red.get_pixel(95, edge).a == 0,
 					"every turret angle fits inside the transparent sprite padding")
+			ck(wreck.get_pixel(edge, 0).a == 0 and wreck.get_pixel(edge, 95).a == 0 \
+					and wreck.get_pixel(0, edge).a == 0 and wreck.get_pixel(95, edge).a == 0,
+					"wreck debris and damaged turret fit inside the same sprite padding")
+		ck(changed_silhouette > 30, "wreck sprite depicts damaged geometry rather than just darkened live armour")
+		ck(aim == 0 or wreck.get_data() != previous_wreck, "destroyed turret retains its own directional sprite")
 		ck(red.get_pixel(0, 0).a == 0.0, "sprite background stays transparent")
 		ck(aim == 0 or red.get_data() != previous, "turning the turret changes the projected sprite")
 		previous = red.get_data()
+		previous_wreck = wreck.get_data()
 	ck(TankModel.sprite(Color.RED, true) == TankModel.sprite(Color.BLUE, true), "wreck appearance is independent of its former owner")
 	await camera_drag()
 

@@ -1,0 +1,9 @@
+# Local material binding for the supplied UV-mapped colour texture.
+newmtl Material.001
+Kd 1.0 1.0 1.0
+Ka 0.0 0.0 0.0
+Ks 0.0 0.0 0.0
+Ns 0.0
+d 1.0
+illum 2
+map_Kd albedo.jpg

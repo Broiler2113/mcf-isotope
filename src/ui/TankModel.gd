@@ -5,6 +5,9 @@ extends RefCounted
 ## UVs are unchanged; normals account for the taller hull. +X is the forward axis.
 const HULL: Mesh = preload("res://assets/models/tank/hull.obj")
 const TURRET: Mesh = preload("res://assets/models/tank/turret.obj")
+const WRECK_HULL: Mesh = preload("res://assets/models/tank/wreck_hull.obj")
+const WRECK_TURRET: Mesh = preload("res://assets/models/tank/wreck_turret.obj")
+const WRECK_TINT := Color(0.28, 0.27, 0.25)
 const TURRET_PIVOT := Vector3(-0.202109216, 0.0, 0.0)
 const SPRITE_SIZE := 96
 # A 3.6m hull slightly overhangs its 3x3 footprint; padding fits every turret angle.
@@ -95,14 +98,14 @@ static func draw(ci: CanvasItem, rect: Rect2, facing: Vector2i, paint: Color,
 
 ## The same assembled model is used by first person and the overhead sprite baker.
 ## material_for receives the imported material so callers can retain its texture.
-static func create(material_for: Callable = Callable()) -> Node3D:
+static func create(material_for: Callable = Callable(), wrecked := false) -> Node3D:
 	var root := Node3D.new()
-	root.name = "SVAROG"
-	root.add_child(_mesh_instance(HULL, material_for))
+	root.name = "SVAROG_destroyed" if wrecked else "SVAROG"
+	root.add_child(_mesh_instance(WRECK_HULL if wrecked else HULL, material_for))
 	var turret := Node3D.new()
 	turret.name = "turret"
 	turret.position = TURRET_PIVOT
-	var gun := _mesh_instance(TURRET, material_for)
+	var gun := _mesh_instance(WRECK_TURRET if wrecked else TURRET, material_for)
 	gun.position = -TURRET_PIVOT
 	turret.add_child(gun)
 	root.add_child(turret)
