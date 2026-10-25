@@ -4,11 +4,12 @@ class SpriteBoard extends Node2D:
 	var paint := Color(0.9, 0.18, 0.12)
 	var face := Vector2i.UP
 	var aim := Vector2i.ZERO
+	var wrecked := false
 	func _draw() -> void:
 		# Fractional pan/zoom and an animation displacement exercise transform recovery.
 		draw_set_transform(Vector2(20, 20), 0.0, Vector2(2, 2))
 		Sprites.set_base_transform(Vector2(20, 20), Vector2(2, 2))
-		TankModel.draw(self, Rect2(0, 0, 96, 96), face, paint, false, Color.WHITE, aim)
+		TankModel.draw(self, Rect2(0, 0, 96, 96), face, paint, wrecked, Color.WHITE, aim)
 		draw_rect(Rect2(100, 0, 2, 2), Color.MAGENTA)
 
 class PurchaseReference extends Node2D:
@@ -43,6 +44,18 @@ func run() -> void:
 		for turn in i: original.rotate_90(CLOCKWISE)
 		ck(original.get_data() == pictures[i].get_region(Rect2i(20, 20, 192, 192)).get_data(), "2D hull rotation matches its compass direction exactly")
 	pictures[0].save_png("/tmp/isotope-tank-2d.png")
+	board.wrecked = true
+	board.face = Vector2i.UP
+	board.queue_redraw()
+	var wreck_up := await frame(vp)
+	wreck_up.save_png("/tmp/isotope-tank-wreck-2d.png")
+	for i in range(1, 4):
+		board.face = directions[i]
+		board.queue_redraw()
+		var original := wreck_up.get_region(Rect2i(20, 20, 192, 192))
+		for turn in i: original.rotate_90(CLOCKWISE)
+		ck(original.get_data() == (await frame(vp)).get_region(Rect2i(20, 20, 192, 192)).get_data(),
+				"2D wreck keeps the live tank's compass direction and sprite origin")
 	vp.free()
 	await purchase_sprites()
 	var ui := root.get_node("Ui")
@@ -101,9 +114,48 @@ func run() -> void:
 	fp._vis_img.fill(Color.WHITE)
 	fp._upload_visibility()
 	ck((await frame(fp._vp)).get_data() != dark.get_data(), "textured tank materials obey the first-person visibility map")
-	tank.wrecked = true
+	# Exercise destruction through the rules, with a nonzero animation offset and
+	# every hull/turret direction. Neither model selection nor export alignment may
+	# move the chassis or reset the gun. Include the never-fired turret fallback.
+	var before := host.state.snapshot()
+	for direction: Vector2i in directions:
+		for aim_frame in range(-1, 8):
+			host.state.restore(before)
+			tank = host.state.all_vehicles()[0]
+			tank.facing = direction
+			tank.tower_locked_dir = Vector2i.ZERO if aim_frame < 0 else Vector2i(Vector2.RIGHT.rotated(aim_frame * PI / 4.0).round())
+			host._veh_offset[tank.id] = Vector2(7.5, -4.25)
+			fp._sync_vehicles()
+			var live: Node3D = fp._vehicles[tank.id]
+			var hull_transform := live.global_transform
+			var turret_transform: Transform3D = live.get_node("turret").global_transform
+			var origin := tank.origin
+			var footprint := tank.footprint()
+			var gun_direction := tank.gun_world_dir()
+			host.state.dice.feed_scripted([1 if aim_frame % 2 == 0 else 6])
+			host.resolver._destroy_vehicle(tank, ActionResult.new())
+			fp._sync_vehicles()
+			var wreck_node: Node3D = fp._vehicles[tank.id]
+			ck(tank.wrecked and tank.origin == origin and tank.footprint() == footprint
+					and tank.facing == direction and tank.gun_world_dir() == gun_direction,
+					"destruction preserves position, footprint, hull facing and gun direction")
+			ck(wreck_node != live and wreck_node.get_child(0).mesh == TankModel.WRECK_HULL
+					and wreck_node.get_node("turret").get_child(0).mesh == TankModel.WRECK_TURRET,
+					"destruction selects both supplied wreck meshes")
+			ck(wreck_node.global_transform.is_equal_approx(hull_transform)
+					and wreck_node.get_node("turret").global_transform.is_equal_approx(turret_transform),
+					"wreck retains the exact rendered hull/turret transforms including animation displacement")
+			var restored := StateCodec.decode(StateCodec.encode(host.state))
+			var saved_tank: Vehicle = restored.get_vehicle(tank.id)
+			ck(saved_tank.wrecked and saved_tank.origin == origin and saved_tank.facing == direction
+					and saved_tank.gun_world_dir() == gun_direction, "save/load retains the wreck and its orientation")
+			# Flush replaced nodes between samples, just as a game frame does.
+			await process_frame
+	host._veh_offset.clear()
+	tank.facing = Vector2i.RIGHT
+	tank.tower_locked_dir = Vector2i.RIGHT
 	fp._sync_vehicles()
-	ck(fp._vehicles[tank.id] != node, "wrecking replaces the textured model with its burnt material")
+	(await frame(fp._vp)).save_png("/tmp/isotope-tank-wreck-first-person.png")
 	fp.free()
 	host.free()
 	await process_frame
