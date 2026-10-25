@@ -1,7 +1,17 @@
 extends "res://tests/SuiteBase.gd"
 
 func run() -> void:
-	for mesh: Mesh in [TankModel.HULL, TankModel.TURRET, TankModel.WRECK_HULL, TankModel.WRECK_TURRET]:
+	# Models read from source (no import cache needed) match Godot's own import exactly.
+	for path: String in ["res://assets/models/tank/hull.obj", "res://assets/models/tank/wreck_turret.obj",
+			"res://assets/models/drone/kamikaze.obj", "res://assets/models/drone/scout.obj"]:
+		var imported := load(path) as Mesh
+		if imported == null:
+			ck(false, "the import of %s exists to compare against" % path)
+			continue
+		ck(_same_triangles(_triangles(Sprites._read_obj(path)), _triangles(imported)), "reading %s ourselves gives Godot's triangles, winding and UVs" % path)
+	var albedo := Sprites.image_at("res://assets/models/tank/source/albedo.jpg")
+	ck(albedo != null and albedo.get_size() == Vector2i(512, 512), "the tank texture reads without its import")
+	for mesh: Mesh in [TankModel.mesh("hull"), TankModel.mesh("turret"), TankModel.mesh("wreck_hull"), TankModel.mesh("wreck_turret")]:
 		ck(mesh.get_surface_count() > 0, "SVAROG contains imported geometry")
 		for surface in mesh.get_surface_count():
 			var material := mesh.surface_get_material(surface) as StandardMaterial3D
@@ -10,7 +20,7 @@ func run() -> void:
 			ck(arrays[Mesh.ARRAY_VERTEX].size() == arrays[Mesh.ARRAY_TEX_UV].size(), "UVs cover every imported vertex")
 			for normal: Vector3 in arrays[Mesh.ARRAY_NORMAL]:
 				ck(is_equal_approx(normal.length(), 1.0), "imported normals remain normalised")
-	var bounds := TankModel.HULL.get_aabb().merge(TankModel.TURRET.get_aabb())
+	var bounds := TankModel.mesh("hull").get_aabb().merge(TankModel.mesh("turret").get_aabb())
 	ck(absf(bounds.position.y) < 0.001 and is_equal_approx(bounds.size.x, 3.6) and bounds.size.z > 2.5 and bounds.size.z < 3.0,
 			"larger tank slightly overhangs its 3x3 footprint and stands on its tracks")
 	ck(VehicleDB.size_of("tank") == Vector2i(3, 3), "visual enlargement keeps the 3x3 gameplay footprint")
@@ -21,7 +31,7 @@ func run() -> void:
 	var model := TankModel.create()
 	ck(model.get_node("turret").position == TankModel.TURRET_PIVOT, "turret pivots around the source model's turret axis")
 	model.free()
-	var wreck_bounds := TankModel.WRECK_HULL.get_aabb()
+	var wreck_bounds := TankModel.mesh("wreck_hull").get_aabb()
 	ck(is_equal_approx(wreck_bounds.position.x, bounds.position.x)
 			and is_equal_approx(wreck_bounds.end.x, bounds.end.x) and absf(wreck_bounds.position.y) < 0.001,
 			"destroyed chassis keeps the live hull's length, centre and ground plane despite its export offset")
@@ -127,3 +137,53 @@ func camera_drag() -> void:
 	ck(main._pan_tween == null, "manual zoom also stops automatic recentering")
 	main.free()
 	await process_frame
+
+## Material name -> triangles as [position, UV, normal] corners, keyed by their corners to
+## the centimetre whatever corner they start at: the import reorders
+## triangles for the vertex cache and compresses vertices, so the two agree as sets, to a millimetre.
+func _triangles(mesh: Mesh) -> Dictionary:
+	var out := {}
+	for surface in mesh.get_surface_count():
+		var arrays := mesh.surface_get_arrays(surface)
+		var vtx: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX] if arrays[Mesh.ARRAY_INDEX] != null else PackedInt32Array(range(vtx.size()))
+		var list: Array = out.get_or_add(mesh.surface_get_material(surface).resource_name, [])
+		for t in range(0, idx.size(), 3):
+			var tri := []
+			for k in 3:
+				var i := idx[t + k]
+				tri.append([vtx[i], arrays[Mesh.ARRAY_TEX_UV][i], arrays[Mesh.ARRAY_NORMAL][i], str(vtx[i].snappedf(0.01))])
+			var keys := [tri[0][3], tri[1][3], tri[2][3]]
+			keys.sort()
+			list.append(["".join(keys), tri])
+	return out
+
+func _same_triangles(a: Dictionary, b: Dictionary) -> bool:
+	if a.keys() != b.keys(): return false
+	for name: String in a:
+		var x: Array = a[name]
+		var y: Array = b[name]
+		if x.size() != y.size(): return false
+		var left := {}   # coarse key -> unmatched triangles of b
+		for t: Array in y: (left.get_or_add(t[0], []) as Array).append(t[1])
+		for t: Array in x:
+			var found := false
+			for bucket: Array in ([left.get(t[0], [])] + left.values()):
+				for i in bucket.size():
+					if _close(t[1], bucket[i]):
+						bucket.remove_at(i)
+						found = true
+						break
+				if found: break
+			if not found: return false
+	return true
+
+## The same triangle with the same winding: q may start at any of its corners.
+func _close(p: Array, q: Array) -> bool:
+	for r in 3:
+		var same := true
+		for k in 3:
+			for f in 3:
+				if (p[k][f] - q[(k + r) % 3][f]).length() > 0.001: same = false
+		if same: return true
+	return false

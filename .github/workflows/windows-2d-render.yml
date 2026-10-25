@@ -41,6 +41,16 @@ jobs:
         run: |
           godot --path . --audio-driver Dummy --script res://tests/render_battle_visibility.gd
           python -c "import json; r=json.load(open('.cache/visibility/fallback/result.json')); assert not r['failures'], r"
+      - name: Render again as a copy updated without re-importing
+        if: always()
+        env:
+          MCF_RENDER_CAPTURE_DIR: .cache/visibility/stale-import
+        # Players who update the source without the editor re-importing lack new imports.
+        # Models and pictures must still load: a failed preload once hid every soldier.
+        run: |
+          rm -f .godot/imported/*.obj-*.mesh .godot/imported/*.image
+          godot --path . --audio-driver Dummy --script res://tests/render_battle_visibility.gd
+          python -c "import json; r=json.load(open('.cache/visibility/stale-import/result.json')); assert not r['failures'], r"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

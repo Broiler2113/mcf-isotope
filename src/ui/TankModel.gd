@@ -3,10 +3,10 @@ extends RefCounted
 
 ## Supplied SVAROG geometry, normalised once by tools/art/build_tank_meshes.py.
 ## UVs are unchanged; normals account for the taller hull. +X is the forward axis.
-const HULL: Mesh = preload("res://assets/models/tank/hull.obj")
-const TURRET: Mesh = preload("res://assets/models/tank/turret.obj")
-const WRECK_HULL: Mesh = preload("res://assets/models/tank/wreck_hull.obj")
-const WRECK_TURRET: Mesh = preload("res://assets/models/tank/wreck_turret.obj")
+## Loaded on use, never preloaded: a missing import must not stop the script compiling.
+static func mesh(part: String) -> Mesh:   # "hull", "turret", "wreck_hull", "wreck_turret"
+	return Sprites.mesh_at("res://assets/models/tank/%s.obj" % part)
+
 const WRECK_TINT := Color(0.28, 0.27, 0.25)
 const TURRET_PIVOT := Vector3(-0.202109216, 0.0, 0.0)
 const SPRITE_SIZE := 96
@@ -63,8 +63,8 @@ static func aim_frame(direction: Vector2i) -> int:
 ## aborting the whole board.
 static func _picture(name: String) -> Image:
 	if not _pictures.has(name):
-		var img := load("res://textures/vehicles/tank/%s.png" % name) as Image
-		img = img.duplicate() if img != null else Image.create(SPRITE_SIZE, SPRITE_SIZE, false, Image.FORMAT_RGBA8)
+		var img := Sprites.image_at("res://textures/vehicles/tank/%s.png" % name)
+		if img == null: img = Image.create(SPRITE_SIZE, SPRITE_SIZE, false, Image.FORMAT_RGBA8)
 		if img.is_compressed(): img.decompress()
 		img.convert(Image.FORMAT_RGBA8)
 		_pictures[name] = img
@@ -107,11 +107,11 @@ static func draw(ci: CanvasItem, rect: Rect2, facing: Vector2i, paint: Color,
 static func create(material_for: Callable = Callable(), wrecked := false) -> Node3D:
 	var root := Node3D.new()
 	root.name = "SVAROG_destroyed" if wrecked else "SVAROG"
-	root.add_child(_mesh_instance(WRECK_HULL if wrecked else HULL, material_for))
+	root.add_child(_mesh_instance(mesh("wreck_hull" if wrecked else "hull"), material_for))
 	var turret := Node3D.new()
 	turret.name = "turret"
 	turret.position = TURRET_PIVOT
-	var gun := _mesh_instance(WRECK_TURRET if wrecked else TURRET, material_for)
+	var gun := _mesh_instance(mesh("wreck_turret" if wrecked else "turret"), material_for)
 	gun.position = -TURRET_PIVOT
 	turret.add_child(gun)
 	root.add_child(turret)
