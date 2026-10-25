@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://dt43fgfbd24gu"
+path="res://.godot/imported/wall_sandbag.png-606b42f9713e29c9626c3acb66b98f22.image"
+
+[deps]
+
+source_file="res://textures/first_person/wall_sandbag.png"
+dest_files=["res://.godot/imported/wall_sandbag.png-606b42f9713e29c9626c3acb66b98f22.image"]
+
+[params]
+

@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://bem0g6ol244o4"
+path="res://.godot/imported/fp_floor_epicenter.png-a31bdb74fb1f320bbf8c74b8be951290.image"
+
+[deps]
+
+source_file="res://textures/first_person/floors/fp_floor_epicenter.png"
+dest_files=["res://.godot/imported/fp_floor_epicenter.png-a31bdb74fb1f320bbf8c74b8be951290.image"]
+
+[params]
+

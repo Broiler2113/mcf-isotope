@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://dllmaob0333s0"
+path="res://.godot/imported/material_36.png-c1ecb5e87e7d92fa9a8eac7b97d9ecf5.image"
+
+[deps]
+
+source_file="res://textures/first_person/material_36.png"
+dest_files=["res://.godot/imported/material_36.png-c1ecb5e87e7d92fa9a8eac7b97d9ecf5.image"]
+
+[params]
+

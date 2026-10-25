@@ -1,0 +1,16 @@
+# Generated: the atlas, and the top plates the side's colour paints.
+newmtl Drone
+Kd 1 1 1
+Ks 0 0 0
+Ns 0
+d 1
+illum 2
+map_Kd atlas.png
+
+newmtl TeamStripe
+Kd 1 1 1
+Ks 0 0 0
+Ns 0
+d 1
+illum 2
+map_Kd atlas.png

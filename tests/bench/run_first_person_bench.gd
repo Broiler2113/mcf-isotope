@@ -29,16 +29,9 @@ func _go() -> void:
 		for x in range(40, 60):
 			if start.x < 0 and fp_script.walkable_start(host, Vector2i(x, y)): start = Vector2i(x, y)
 	var enter := Time.get_ticks_usec()
-	var procedural := OS.get_cmdline_user_args().has("--procedural")
-	if procedural:
-		FirstPersonArt._mats = Texture2DArray.new()
-		FirstPersonArt._mats.create_from_images(FirstPersonArt.material_images())
-		FirstPersonArt._grounds = Texture2DArray.new()
-		FirstPersonArt._grounds.create_from_images(FirstPersonArt.ground_images())
 	var fp: Control = fp_script.new(host, start)
 	root.add_child(fp)
-	print("First-person entry (%s): %.1f ms, map %dx%d, %d units" % [
-			"procedural" if procedural else "baked", (Time.get_ticks_usec() - enter) / 1000.0,
+	print("First-person entry: %.1f ms, map %dx%d, %d units" % [(Time.get_ticks_usec() - enter) / 1000.0,
 			map.width, map.height, host.state.units.size()])
 	for i in 160: await process_frame
 	fp.set_process(false)

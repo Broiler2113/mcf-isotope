@@ -906,13 +906,7 @@ func _moon() -> Node3D:
 	return mi
 
 static func _disc_texture() -> ImageTexture:
-	var img := Image.create(32, 32, false, Image.FORMAT_RGBA8)
-	for y in 32:
-		for x in 32:
-			var d := Vector2(x - 15.5, y - 15.5).length()
-			var crater := FirstPersonArt._vn(x, y, 8, 50) * 0.12
-			img.set_pixel(x, y, Color(1.0 - crater, 1.0 - crater, 1.0 - crater, 1.0 if d < 15.0 else 0.0))
-	return ImageTexture.create_from_image(img)
+	return ImageTexture.create_from_image(FirstPersonArt.picture("moon"))
 
 static func _star_texture() -> ImageTexture:
 	var img := Image.create(2048, 1024, false, Image.FORMAT_RGB8)
@@ -925,49 +919,17 @@ static func _star_texture() -> ImageTexture:
 		img.set_pixel(rng.randi_range(0, 2047), rng.randi_range(0, 1023), tint * (0.25 + b * 0.75))
 	return ImageTexture.create_from_image(img)
 
-## Ceiling panels (station, bunker, asteroid domes) or plaster (town, field houses), 1 m a
-## tile like everything else, with their joints in relief.
+## Ceiling panels (station, bunker, asteroid domes) or plaster (town, field houses); metal
+## roofs, clay tiles, or tiles under snow. 1 m a tile like everything else.
 static func _panel_texture(e: String) -> ImageTexture:
-	var img := Image.create(32, 32, false, Image.FORMAT_RGB8)
-	var metal := e in ["station", "bunker", "asteroid"]
-	for y in 32:
-		for x in 32:
-			var n := FirstPersonArt._h(x, y, 60) * 0.04
-			var c: Color
-			if metal:
-				var seam := x % 16 == 0 or y % 16 == 0
-				var lit := x % 16 == 1 or y % 16 == 1
-				c = Color(0.36, 0.38, 0.41) * (0.7 if seam else (1.08 if lit else 1.0 + n))
-				if (x % 16 == 8) and (y % 16 >= 4 and y % 16 <= 11):
-					c = Color(0.3, 0.31, 0.33)   # a vent slot
-			else:
-				var crack := FirstPersonArt._vn(x, y, 8, 61) * 0.05
-				c = Color(0.62, 0.6, 0.56) * (0.97 + n - crack)
-			img.set_pixel(x, y, c)
-	img.generate_mipmaps()
-	return ImageTexture.create_from_image(img)
+	return _tile_texture("ceiling_" + ("metal" if e in ["station", "bunker", "asteroid"] else "plaster"))
 
 static func _roof_texture(e: String, winter := false) -> ImageTexture:
-	var img := Image.create(32, 32, false, Image.FORMAT_RGB8)
 	var metal := e in ["station", "bunker", "asteroid"]
-	for y in 32:
-		for x in 32:
-			var n := FirstPersonArt._h(x, y, 62) * 0.08
-			var c: Color
-			if winter and not metal:
-				# Snow lies on the roofs, a tile edge showing through here and there.
-				var thin := FirstPersonArt._vn(x, y, 8, 64) < 0.25 and y % 4 == 3
-				img.set_pixel(x, y, Color(0.5, 0.3, 0.24) if thin else Color(0.9, 0.93, 0.97) * (0.96 + n * 0.5))
-				continue
-			if metal:
-				c = Color(0.32, 0.33, 0.35) * (0.75 if (x % 16 == 0 or y % 16 == 0) else 0.95 + n)
-			else:
-				# Clay tiles in courses, each lit on its upper edge.
-				var row := y / 4
-				var bx := (x + (2 if row % 2 == 1 else 0)) % 4
-				var base := Color(0.46, 0.24, 0.17) * (0.9 + FirstPersonArt._h(row, (x + (2 if row % 2 == 1 else 0)) / 4, 63) * 0.15)
-				c = base * (0.72 if y % 4 == 3 else (1.12 if y % 4 == 0 else 1.0)) * (0.85 if bx == 3 else 1.0)
-			img.set_pixel(x, y, c)
+	return _tile_texture("roof_" + ("metal" if metal else ("snow" if winter else "tiles")))
+
+static func _tile_texture(name: String) -> ImageTexture:
+	var img := FirstPersonArt.picture(name)
 	img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
 
@@ -1274,14 +1236,24 @@ func _cloud_layer(col: Color, fire: bool) -> MultiMeshInstance3D:
 	mm.mesh = bm
 	var mi := MultiMeshInstance3D.new()
 	mi.multimesh = mm
+	# Pixelated flames and billows (tools/art/build_first_person.py) laid on every side by
+	# triplanar mapping: flames rise from each block's foot; smoke stays put in the world.
 	var mat := StandardMaterial3D.new()
+	var tex := ImageTexture.create_from_image(FirstPersonArt.picture("fire" if fire else "smoke"))
+	mat.albedo_texture = tex
 	mat.albedo_color = col
-	if fire:
-		mat.emission_enabled = true
-		mat.emission = col
-		mat.emission_energy_multiplier = 2.2
-		mat.albedo_color = Color(1.0, 0.6, 0.15, 0.85)
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	mat.uv1_triplanar = true
+	mat.uv1_world_triplanar = not fire
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	if fire:
+		mat.uv1_scale = Vector3(1, 2, 1)
+		mat.uv1_offset = Vector3(0, 0.5, 0)
+		mat.albedo_color = Color.WHITE
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+		mat.emission_enabled = true
+		mat.emission_texture = tex
+		mat.emission_energy_multiplier = 0.8
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mi.material_override = mat
@@ -1440,16 +1412,14 @@ func _place_drone(u: UnitInstance) -> void:
 	var n: Node3D = _units.get(u.id)
 	if n == null:
 		n = Node3D.new()
-		var mi := MeshInstance3D.new()
 		var col: Color = main._side_color(u.owner)
-		var scout := MCF.is_scout(u)
-		var built: Array = FirstPersonModels.cached(str(["drone", col.to_html(), scout]),
-				func(s: FirstPersonModels.Sink, _g: FirstPersonModels.Sink) -> void:
-					s.shade_floor = false
-					FirstPersonModels.drone(s, col, scout))
-		mi.mesh = built[0]
-		mi.material_override = _mats["models"]
-		n.add_child(mi)
+		n.add_child(DroneModel.create(MCF.is_scout(u), func(imported: Material) -> Material:
+			var source := imported as StandardMaterial3D
+			var key := str(["drone", source.resource_name, col])
+			if not _art_mats.has(key):
+				_art_mats[key] = _mat(_board_sh, {"tex": source.albedo_texture, "team_color": col,
+					"team_stripe": source.resource_name == "TeamStripe", "stripe_center_x": 0.0, "stripe_half_width": 10.0})
+			return _art_mats[key]))
 		_dyn.add_child(n)
 		_units[u.id] = n
 	var p := _unit_pos(u)
@@ -1577,9 +1547,10 @@ func _vehicle_node(veh: Vehicle) -> Node3D:
 		l.font_size = 64
 		l.outline_size = 0
 		l.double_sided = false
-		l.modulate = Color(0.06, 0.06, 0.06) if not wrecked else Color(0.3, 0.3, 0.3)
+		# Stencilled in worn paint, not printed: smaller, a little see-through.
+		l.modulate = Color(0.12, 0.12, 0.11, 0.72) if not wrecked else Color(0.3, 0.3, 0.3, 0.5)
 		var px := _handjet.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 64).x
-		l.pixel_size = minf(0.008, half.x * 1.7 / maxf(1.0, px))
+		l.pixel_size = minf(0.004, half.x * 0.9 / maxf(1.0, px))
 		l.position = Vector3(0, y, (half.y + 0.012) * side)
 		l.rotation.y = 0.0 if side > 0 else PI
 		n.add_child(l)

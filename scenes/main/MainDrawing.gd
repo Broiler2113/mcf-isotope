@@ -1114,26 +1114,24 @@ func _draw_station_leashes(station: Vector2i, labels: bool) -> void:
 
 func _draw_drone(unit: UnitInstance, at: Vector2i) -> void:
 	var center := _cell_origin(at) + Vector2(CELL, CELL) * 0.5
-	# Дрон висит над клеткой (#13): рисуем со сдвигом в верхний-правый угол,
-	# чтобы был виден наземный юнит/труп под ним.
-	var dc := _cell_origin(at) + Vector2(CELL * 0.72, CELL * 0.28)
-	# Тень под дроном по центру клетки — подсказка, что он парит.
-	draw_circle(center, CELL * 0.1, Color(0, 0, 0, 0.25))
+	# The drone hangs over the middle of its cell (owner, 2026-10-25), nudged a little up and
+	# right so its shadow, and a soldier or body beneath, still show.
+	var dc := _cell_origin(at) + Vector2(CELL * 0.55, CELL * 0.45)
+	# Тень под дроном — подсказка, что он парит.
+	draw_circle(center + Vector2(-CELL * 0.06, CELL * 0.08), CELL * 0.12, Color(0, 0, 0, 0.25))
 	var s := CELL * 0.2
 	var drone_key := Sprites.resolve("drone", _owner_suffix(unit.owner))
-	if drone_key != "":
+	if drone_key != "" and Sprites.has_user_override(drone_key):
 		var dsz := Vector2(CELL, CELL) * 0.5
 		Sprites.draw_texture_override_rect(self, drone_key, Rect2(dc - dsz * 0.5, dsz))
+		# Разведчик (fix-7 #7) — с «объективом»: белое кольцо и стекло поверх корпуса.
+		if MCF.is_scout(unit):
+			draw_arc(dc, s * 0.75, 0, TAU, 16, Color(0.95, 0.97, 1.0, 0.95), 2.0)
+			draw_circle(dc, s * 0.35, Color(0.55, 0.85, 1.0, 0.95))
 	else:
-		var pts := PackedVector2Array([
-			dc + Vector2(0, -s), dc + Vector2(s, 0),
-			dc + Vector2(0, s), dc + Vector2(-s, 0)])
-		draw_colored_polygon(pts, _side_color(unit.owner))
-		draw_polyline(pts + PackedVector2Array([pts[0]]), Color(0.3, 0.9, 0.9), 2.0)
-	# Разведчик (fix-7 #7) — с «объективом»: белое кольцо и стекло поверх корпуса.
-	if MCF.is_scout(unit):
-		draw_arc(dc, s * 0.75, 0, TAU, 16, Color(0.95, 0.97, 1.0, 0.95), 2.0)
-		draw_circle(dc, s * 0.35, Color(0.55, 0.85, 1.0, 0.95))
+		# The kamikaze or scout model seen from above, its top plates in the side's colour.
+		var msz := Vector2(CELL, CELL) * 0.8
+		DroneModel.draw(self, Rect2(dc - msz * 0.5, msz), _side_color(unit.owner), MCF.is_scout(unit))
 	if unit.id == selected_id:
 		draw_arc(dc, CELL * 0.3, 0, TAU, 24, Color(1, 0.9, 0.2), 3.0)
 	for i in _draw_ap(unit):

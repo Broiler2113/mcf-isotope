@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://bg68me8ak4lmu"
+path="res://.godot/imported/roof_metal.png-8043de502324f7aac762feb44ac2699c.image"
+
+[deps]
+
+source_file="res://textures/first_person/roof_metal.png"
+dest_files=["res://.godot/imported/roof_metal.png-8043de502324f7aac762feb44ac2699c.image"]
+
+[params]
+

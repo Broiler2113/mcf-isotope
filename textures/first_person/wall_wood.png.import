@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://e84ahk5hgbpp"
+path="res://.godot/imported/wall_wood.png-4636689994c242a7c0105f712fe8bc5d.image"
+
+[deps]
+
+source_file="res://textures/first_person/wall_wood.png"
+dest_files=["res://.godot/imported/wall_wood.png-4636689994c242a7c0105f712fe8bc5d.image"]
+
+[params]
+

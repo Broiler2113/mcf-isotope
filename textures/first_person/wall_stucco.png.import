@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://dfy0q7b85b7df"
+path="res://.godot/imported/wall_stucco.png-de991fb0a7b45b97beb14ec05393c8bd.image"
+
+[deps]
+
+source_file="res://textures/first_person/wall_stucco.png"
+dest_files=["res://.godot/imported/wall_stucco.png-de991fb0a7b45b97beb14ec05393c8bd.image"]
+
+[params]
+

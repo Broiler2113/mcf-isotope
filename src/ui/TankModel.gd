@@ -78,15 +78,18 @@ static func sprite(paint: Color, wrecked := false, aim := 0) -> Texture2D:
 	if not _sprites.has(key):
 		var image: Image = _picture(("tank_wreck" if wrecked else "tank") + suffix).duplicate()
 		if not wrecked:
-			var mask := _picture("tank_mask" + suffix)
-			for y in SPRITE_SIZE:
-				for x in SPRITE_SIZE:
-					var c := image.get_pixel(x, y)
-					if c.a == 0.0 or mask.get_pixel(x, y).r < 0.5: continue
-					var l := c.r * 0.3 + c.g * 0.59 + c.b * 0.11
-					image.set_pixel(x, y, Color(l * paint.r, l * paint.g, l * paint.b, c.a))
+			paint_stripe(image, _picture("tank_mask" + suffix), paint)
 		_sprites[key] = ImageTexture.create_from_image(image)
 	return _sprites[key]
+
+## Recolour the mask's white pixels with the side's paint, keeping their light and shade.
+static func paint_stripe(image: Image, mask: Image, paint: Color) -> void:
+	for y in image.get_height():
+		for x in image.get_width():
+			var c := image.get_pixel(x, y)
+			if c.a == 0.0 or mask.get_pixel(x, y).r < 0.5: continue
+			var l := c.r * 0.3 + c.g * 0.59 + c.b * 0.11
+			image.set_pixel(x, y, Color(l * paint.r, l * paint.g, l * paint.b, c.a))
 
 static func draw(ci: CanvasItem, rect: Rect2, facing: Vector2i, paint: Color,
 		wrecked := false, tint := Color.WHITE, aim := Vector2i.ZERO) -> void:

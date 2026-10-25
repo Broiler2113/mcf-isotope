@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://vqjsgmxahtci"
+path="res://.godot/imported/roof_snow.png-cd77b9af06b531f5e67baf21c56c0950.image"
+
+[deps]
+
+source_file="res://textures/first_person/roof_snow.png"
+dest_files=["res://.godot/imported/roof_snow.png-cd77b9af06b531f5e67baf21c56c0950.image"]
+
+[params]
+

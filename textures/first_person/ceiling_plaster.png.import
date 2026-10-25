@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://crlcckgtnt5eg"
+path="res://.godot/imported/ceiling_plaster.png-4eda8567b77b09700571253f8026cf27.image"
+
+[deps]
+
+source_file="res://textures/first_person/ceiling_plaster.png"
+dest_files=["res://.godot/imported/ceiling_plaster.png-4eda8567b77b09700571253f8026cf27.image"]
+
+[params]
+

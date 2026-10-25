@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://dqoqlp5p3jnx1"
+path="res://.godot/imported/wall_block.png-8e8dbf1f005ce09901af63d2284a5a9a.image"
+
+[deps]
+
+source_file="res://textures/first_person/wall_block.png"
+dest_files=["res://.godot/imported/wall_block.png-8e8dbf1f005ce09901af63d2284a5a9a.image"]
+
+[params]
+

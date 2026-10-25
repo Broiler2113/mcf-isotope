@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://c0ys4lkw37r7j"
+path="res://.godot/imported/drone_mask.png-931e5deaf8462337ca179287bc3ceb8b.image"
+
+[deps]
+
+source_file="res://assets/models/drone/sprites/drone_mask.png"
+dest_files=["res://.godot/imported/drone_mask.png-931e5deaf8462337ca179287bc3ceb8b.image"]
+
+[params]
+

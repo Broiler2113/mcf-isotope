@@ -1611,14 +1611,15 @@ static func tank_turret(s: Sink, paint: Color, wrecked: bool) -> void:
 	s.cyl(Vector3(-0.2, 1.65, 0.25), 0.18, 0.18, 0.12, FirstPersonArt.M_PLATE, c.darkened(0.15), 8)
 	s.cyl(Vector3(-0.35, 1.65, -0.35), 0.015, 0.015, 0.35, FirstPersonArt.M_METAL, METAL_D, 4, 0)
 
-## A small space shuttle with four wheels, landing struts, a canopy and aft engines.
+## A small space shuttle with four wheels, landing struts, a canopy and aft engines: weathered
+## spacecraft white like the tank's own paint, the side's colour only on its flank stripes.
 static func shuttle(s: Sink, paint: Color, wrecked: bool) -> void:
-	var c := Color(0.16, 0.15, 0.14) if wrecked else paint.lerp(WHITE, 0.35)
+	var c := Color(0.16, 0.15, 0.14) if wrecked else Color(0.66, 0.67, 0.64)
 	for z in [-0.75, 0.75]:
 		for x in [-0.6, 0.6]:
 			s.box(Vector3(x - 0.04, 0.2, z - 0.04), Vector3(x + 0.04, 0.5, z + 0.04), FirstPersonArt.M_METAL, METAL_D)
 			s.zcyl(Vector3(x, 0.22, z + 0.12), 0.22, 0.24, FirstPersonArt.M_RUBBER, BLACK, 16)
-			s.zcyl(Vector3(x, 0.22, z + 0.126), 0.105, 0.252, FirstPersonArt.M_METAL, METAL, 12)
+			s.zcyl(Vector3(x, 0.22, z + 0.126), 0.105, 0.252, FirstPersonArt.M_METAL, METAL_D, 12)
 	s.box(Vector3(-0.95, 0.4, -0.8), Vector3(0.75, 1.5, 0.8), FirstPersonArt.M_PLATE, c)
 	s.face([Vector3(0.75, 1.5, -0.8), Vector3(0.75, 1.5, 0.8), Vector3(1.0, 1.0, 0.7), Vector3(1.0, 1.0, -0.7)], Vector3(0.9, 0.45, 0), FirstPersonArt.M_PLAIN,
 			Color(0.1, 0.16, 0.24) if not wrecked else BLACK)
@@ -1630,39 +1631,26 @@ static func shuttle(s: Sink, paint: Color, wrecked: bool) -> void:
 	for z2 in [-0.45, 0.45]:
 		s.xcyl(Vector3(-1.0, 0.85, z2), 0.22, 0.1, FirstPersonArt.M_METAL, METAL_D, 10)
 		s.xcyl(Vector3(-1.02, 0.85, z2), 0.15, 0.02, FirstPersonArt.M_PLAIN, glow(Color(0.5, 0.8, 1.0)) if not wrecked else BLACK, 10)
-	s.box(Vector3(-0.95, 0.9, -0.81), Vector3(0.6, 0.98, -0.8), FirstPersonArt.M_PLAIN, paint)
-	s.box(Vector3(-0.95, 0.9, 0.8), Vector3(0.6, 0.98, 0.81), FirstPersonArt.M_PLAIN, paint)
+	var band := Color(0.16, 0.15, 0.14) if wrecked else paint
+	s.box(Vector3(-0.95, 0.9, -0.81), Vector3(0.6, 0.98, -0.8), FirstPersonArt.M_METAL, band)
+	s.box(Vector3(-0.95, 0.9, 0.8), Vector3(0.6, 0.98, 0.81), FirstPersonArt.M_METAL, band)
+	s.box(Vector3(-0.3, 1.5, -0.8), Vector3(-0.1, 1.501, 0.8), FirstPersonArt.M_METAL, band)
 
-## A borg: a one-seat walker — two legs, a cab with its window, two arms.
+## A borg: a one-seat walker — two legs, a cab with its window, two arms — in weathered
+## grey-olive armour; the side's colour on its cab roof and shoulder plates.
 static func borg(s: Sink, paint: Color, wrecked: bool) -> void:
-	var c := Color(0.16, 0.15, 0.14) if wrecked else paint
+	var c := Color(0.16, 0.15, 0.14) if wrecked else Color(0.4, 0.42, 0.36)
+	var team := c if wrecked else paint
 	for z in [-0.25, 0.25]:
 		s.box(Vector3(-0.18, 0.0, z - 0.1), Vector3(0.22, 0.08, z + 0.1), FirstPersonArt.M_PLATE, METAL_D)
 		s.box(Vector3(-0.08, 0.08, z - 0.07), Vector3(0.08, 0.55, z + 0.07), FirstPersonArt.M_PLATE, c.darkened(0.2))
 		s.box(Vector3(-0.1, 0.5, z - 0.09), Vector3(0.1, 0.62, z + 0.09), FirstPersonArt.M_METAL, METAL_D)
 		s.box(Vector3(-0.07, 0.62, z - 0.07), Vector3(0.07, 0.95, z + 0.07), FirstPersonArt.M_PLATE, c.darkened(0.2))
 	s.box(Vector3(-0.38, 0.95, -0.4), Vector3(0.36, 1.85, 0.4), FirstPersonArt.M_PLATE, c)
-	s.box(Vector3(-0.34, 1.85, -0.36), Vector3(0.3, 1.98, 0.36), FirstPersonArt.M_PLATE, c.darkened(0.15))
+	s.box(Vector3(-0.34, 1.85, -0.36), Vector3(0.3, 1.98, 0.36), FirstPersonArt.M_PLATE, team)
 	s.box(Vector3(0.36, 1.35, -0.28), Vector3(0.38, 1.7, 0.28), FirstPersonArt.M_PLAIN, Color(0.12, 0.18, 0.26) if not wrecked else BLACK)
 	for z2 in [-0.48, 0.48]:
-		s.box(Vector3(-0.12, 1.3, z2 - 0.08), Vector3(0.12, 1.75, z2 + 0.08), FirstPersonArt.M_PLATE, c.darkened(0.1))
+		s.box(Vector3(-0.12, 1.3, z2 - 0.08), Vector3(0.12, 1.75, z2 + 0.08), FirstPersonArt.M_PLATE, team.darkened(0.1))
 		s.box(Vector3(-0.05, 0.95, z2 - 0.06), Vector3(0.35, 1.3, z2 + 0.06), FirstPersonArt.M_PLATE, c.darkened(0.25))
 	if not wrecked:
 		s.box(Vector3(0.37, 1.78, -0.05), Vector3(0.39, 1.82, 0.05), FirstPersonArt.M_PLAIN, glow(Color(1.0, 0.4, 0.2)))
-
-## A quadcopter drone in its side's colour: body, four arms and rotors, a lit band; the
-## scout carries a camera lens.
-static func drone(s: Sink, paint: Color, scout: bool) -> void:
-	s.box(Vector3(-0.13, -0.06, -0.13), Vector3(0.13, 0.06, 0.13), FirstPersonArt.M_PLATE, paint)
-	s.box(Vector3(-0.135, -0.015, -0.135), Vector3(0.135, 0.015, 0.135), FirstPersonArt.M_PLAIN, glow(paint.lightened(0.4)))
-	for k in 4:
-		var a := PI / 4 + k * PI / 2
-		var d := Vector3(cos(a), 0, sin(a))
-		s.rbox(d * 0.2, Vector3(0.22, 0.025, 0.04), Basis(Vector3.UP, -a), FirstPersonArt.M_METAL, METAL_D)
-		s.cyl(d * 0.3 + Vector3(0, 0.0, 0), 0.03, 0.03, 0.05, FirstPersonArt.M_METAL, METAL_D, 6)
-		s.cyl(d * 0.3 + Vector3(0, 0.05, 0), 0.14, 0.14, 0.006, FirstPersonArt.M_PLAIN, Color(0.15, 0.15, 0.16, 1.0), 10)
-	if scout:
-		s.xcyl(Vector3(0.13, -0.05, 0.0), 0.05, 0.06, FirstPersonArt.M_PLAIN, BLACK, 8)
-		s.xcyl(Vector3(0.19, -0.05, 0.0), 0.035, 0.005, FirstPersonArt.M_PLAIN, glow(Color(0.5, 0.8, 1.0)), 8)
-	else:
-		s.box(Vector3(-0.08, -0.14, -0.06), Vector3(0.08, -0.06, 0.06), FirstPersonArt.M_PLATE, Color(0.3, 0.33, 0.22))

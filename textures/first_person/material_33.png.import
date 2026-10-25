@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://c6kirkqgdos2r"
+path="res://.godot/imported/material_33.png-8673516d7b463c7e009b539b7fa82948.image"
+
+[deps]
+
+source_file="res://textures/first_person/material_33.png"
+dest_files=["res://.godot/imported/material_33.png-8673516d7b463c7e009b539b7fa82948.image"]
+
+[params]
+
