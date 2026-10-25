@@ -201,6 +201,83 @@ static func _load_texture_at(path: String) -> Texture2D:
 		return ImageTexture.create_from_image(img)
 	return null
 
+## A shipped picture's pixels without Godot's import cache: from source, the PNG or JPG
+## itself; in an exported game, the imported resource. A copy updated without the editor
+## re-importing (Windows players after 0.14.2) then still draws its tanks and walls.
+static func image_at(path: String) -> Image:
+	if FileAccess.file_exists(path):
+		var img := Image.new()
+		var bytes := FileAccess.get_file_as_bytes(path)
+		var err := img.load_jpg_from_buffer(bytes) if path.get_extension().to_lower() in ["jpg", "jpeg"] \
+				else img.load_png_from_buffer(bytes)
+		if err == OK: return img
+	var res: Resource = load(path) if ResourceLoader.exists(path) else null
+	if res is Image: return (res as Image).duplicate()
+	if res is Texture2D: return (res as Texture2D).get_image()
+	return null
+
+static var _meshes := {}
+## A shipped OBJ model, likewise: from source, read here exactly as Godot's importer reads it
+## (fan triangles in its clockwise order, V flipped, one surface per material); in an exported
+## game, the imported mesh. A failed preload of the tank once hid every soldier on Windows.
+static func mesh_at(path: String) -> Mesh:
+	if _meshes.has(path): return _meshes[path]
+	var mesh: Mesh = _read_obj(path) if FileAccess.file_exists(path) else null
+	if mesh == null and ResourceLoader.exists(path): mesh = load(path) as Mesh
+	_meshes[path] = mesh
+	return mesh
+
+static func _read_obj(path: String) -> Mesh:
+	var v := PackedVector3Array()
+	var vt := PackedVector2Array()
+	var vn := PackedVector3Array()
+	var tools := {}
+	var materials := {}
+	var current := ""
+	for line in FileAccess.get_file_as_string(path).split("\n"):
+		var p := line.strip_edges().split(" ", false)
+		if p.size() < 2: continue
+		match p[0]:
+			"v": v.append(Vector3(p[1].to_float(), p[2].to_float(), p[3].to_float()))
+			"vt": vt.append(Vector2(p[1].to_float(), 1.0 - p[2].to_float()))
+			"vn": vn.append(Vector3(p[1].to_float(), p[2].to_float(), p[3].to_float()))
+			"mtllib": materials = _read_mtl(path.get_base_dir().path_join(p[1]))
+			"usemtl": current = p[1]
+			"f":
+				if not tools.has(current):
+					tools[current] = SurfaceTool.new()
+					(tools[current] as SurfaceTool).begin(Mesh.PRIMITIVE_TRIANGLES)
+				var st: SurfaceTool = tools[current]
+				for i in range(2, p.size() - 1):
+					for k: int in [i, 1, i + 1]:
+						var c := p[k].split("/")
+						if c.size() > 1 and c[1] != "": st.set_uv(vt[c[1].to_int() - 1])
+						if c.size() > 2: st.set_normal(vn[c[2].to_int() - 1])
+						st.add_vertex(v[c[0].to_int() - 1])
+	if tools.is_empty(): return null
+	var mesh := ArrayMesh.new()
+	for name: String in tools:
+		(tools[name] as SurfaceTool).commit(mesh)
+		mesh.surface_set_material(mesh.get_surface_count() - 1, materials.get(name))
+	return mesh
+
+static func _read_mtl(path: String) -> Dictionary:
+	var out := {}
+	var mat: StandardMaterial3D = null
+	for line in FileAccess.get_file_as_string(path).split("\n"):
+		var p := line.strip_edges().split(" ", false)
+		if p.size() < 2: continue
+		if p[0] == "newmtl":
+			mat = StandardMaterial3D.new()
+			mat.resource_name = p[1]
+			out[p[1]] = mat
+		elif mat != null and p[0] == "Kd" and p.size() > 3:
+			mat.albedo_color = Color(p[1].to_float(), p[2].to_float(), p[3].to_float())
+		elif mat != null and p[0] == "map_Kd":
+			var img := image_at(path.get_base_dir().path_join(p[1]))
+			if img != null: mat.albedo_texture = ImageTexture.create_from_image(img)
+	return out
+
 ## id объекта → имя файла-замены. Нужен ровно для переименованных объектов.
 const ALIASES := {
 	"bru": "ldf",

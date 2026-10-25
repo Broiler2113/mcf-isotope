@@ -36,7 +36,7 @@ func _art() -> void:
 		ck(is_equal_approx(ua[ua.size() - 1].x, ub[0].x) and is_equal_approx(ua[ua.size() - 1].x - ua[0].x, 0.25),
 				"wall texture runs on unbroken, a quarter of its 4 m width a cell, facing %s" % d)
 	for scout: bool in [false, true]:
-		var mesh: Mesh = DroneModel.SCOUT if scout else DroneModel.KAMIKAZE
+		var mesh: Mesh = DroneModel.mesh(scout)
 		var stripes := 0
 		for surface in mesh.get_surface_count():
 			var mat := mesh.surface_get_material(surface) as StandardMaterial3D

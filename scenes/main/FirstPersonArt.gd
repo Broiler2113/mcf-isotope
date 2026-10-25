@@ -8,7 +8,7 @@ extends RefCounted
 ##  * ground: seamless 8 m turf, earth and snow.
 ##  * walls: each wall material's side, 4 m wide and the full 2.3 m tall; doors, ceilings,
 ##    roofs and the moon.
-## All are drawn by tools/art/build_first_person.py and import as CPU Images (no GPU readback).
+## All are drawn by tools/art/build_first_person.py; Sprites.image_at reads them without the import cache.
 
 const PX := 32                                   # pixels per metre
 const H := 74                                    # 2.3 m
@@ -58,8 +58,8 @@ static func materials() -> Texture2DArray:
 
 ## One shipped picture as a fresh RGBA8 Image (a blank one if it is missing).
 static func picture(name: String) -> Image:
-	var img := load(DIR + name + ".png") as Image
-	img = img.duplicate() if img != null else Image.create(PX, PX, false, Image.FORMAT_RGBA8)
+	var img := Sprites.image_at(DIR + name + ".png")
+	if img == null: img = Image.create(PX, PX, false, Image.FORMAT_RGBA8)
 	img.convert(Image.FORMAT_RGBA8)
 	return img
 
@@ -202,7 +202,7 @@ static func wall_texture(kind: String, accent: Color) -> ImageTexture:
 			var same := ImageTexture.create_from_image(tile)
 			_cache[key] = same
 			return same
-	var img := picture("wall_" + (kind if ResourceLoader.exists(DIR + "wall_" + kind + ".png") else "block"))
+	var img := picture("wall_" + (kind if kind in WALL_MATS or kind == "dot_open" else "block"))
 	if accent.a > 0.0:
 		_paint_band(img, accent, H - 40, H - 35)
 	img.generate_mipmaps()   # far walls average out instead of shimmering

@@ -81,11 +81,11 @@ func run() -> void:
 	fp._sync_vehicles()
 	var tank: Vehicle = host.state.all_vehicles()[0]
 	var node: Node3D = fp._vehicles[tank.id]
-	ck(node.get_child(0).mesh == TankModel.HULL, "first-person view uses the actual supplied hull mesh")
+	ck(node.get_child(0).mesh == TankModel.mesh("hull"), "first-person view uses the actual supplied hull mesh")
 	var turret: Node3D = node.get_node("turret")
-	ck(turret.get_child(0).mesh == TankModel.TURRET, "first-person gun uses the supplied turret mesh")
+	ck(turret.get_child(0).mesh == TankModel.mesh("turret"), "first-person gun uses the supplied turret mesh")
 	var painted := 0
-	for i in TankModel.HULL.get_surface_count():
+	for i in TankModel.mesh("hull").get_surface_count():
 		var mat: ShaderMaterial = node.get_child(0).get_surface_override_material(i)
 		ck(mat.get_shader_parameter("tex") != null, "first-person surfaces bind the supplied texture")
 		if mat.get_shader_parameter("team_stripe"):
@@ -139,8 +139,8 @@ func run() -> void:
 			ck(tank.wrecked and tank.origin == origin and tank.footprint() == footprint
 					and tank.facing == direction and tank.gun_world_dir() == gun_direction,
 					"destruction preserves position, footprint, hull facing and gun direction")
-			ck(wreck_node != live and wreck_node.get_child(0).mesh == TankModel.WRECK_HULL
-					and wreck_node.get_node("turret").get_child(0).mesh == TankModel.WRECK_TURRET,
+			ck(wreck_node != live and wreck_node.get_child(0).mesh == TankModel.mesh("wreck_hull")
+					and wreck_node.get_node("turret").get_child(0).mesh == TankModel.mesh("wreck_turret"),
 					"destruction selects both supplied wreck meshes")
 			ck(wreck_node.global_transform.is_equal_approx(hull_transform)
 					and wreck_node.get_node("turret").global_transform.is_equal_approx(turret_transform),

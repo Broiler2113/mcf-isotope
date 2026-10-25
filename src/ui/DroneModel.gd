@@ -5,16 +5,18 @@ extends RefCounted
 ## (tools/art/build_drone_meshes.py). +X is the nose; the top plates (TeamStripe) take the
 ## side's colour. The board draws sprites baked from these same models
 ## (tools/art/build_drone_sprites.gd), recoloured the tank's way.
-const KAMIKAZE: Mesh = preload("res://assets/models/drone/kamikaze.obj")
-const SCOUT: Mesh = preload("res://assets/models/drone/scout.obj")
 const SPRITE_SIZE := 48
 const SPRITE_METRES := 0.62
 static var _pictures := {}
 static var _sprites := {}
 
+## Loaded on use, never preloaded: a missing import must not stop the script compiling.
+static func mesh(scout: bool) -> Mesh:
+	return Sprites.mesh_at("res://assets/models/drone/%s.obj" % ("scout" if scout else "kamikaze"))
+
 static func create(scout: bool, material_for: Callable = Callable()) -> MeshInstance3D:
 	var node := MeshInstance3D.new()
-	node.mesh = SCOUT if scout else KAMIKAZE
+	node.mesh = mesh(scout)
 	if material_for.is_valid():
 		for surface in node.mesh.get_surface_count():
 			node.set_surface_override_material(surface, material_for.call(node.mesh.surface_get_material(surface)))
@@ -22,8 +24,8 @@ static func create(scout: bool, material_for: Callable = Callable()) -> MeshInst
 
 static func _picture(name: String) -> Image:
 	if not _pictures.has(name):
-		var img := load("res://assets/models/drone/sprites/%s.png" % name) as Image
-		img = img.duplicate() if img != null else Image.create(SPRITE_SIZE, SPRITE_SIZE, false, Image.FORMAT_RGBA8)
+		var img := Sprites.image_at("res://assets/models/drone/sprites/%s.png" % name)
+		if img == null: img = Image.create(SPRITE_SIZE, SPRITE_SIZE, false, Image.FORMAT_RGBA8)
 		img.convert(Image.FORMAT_RGBA8)
 		_pictures[name] = img
 	return _pictures[name]
