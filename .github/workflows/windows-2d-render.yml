@@ -1,0 +1,49 @@
+name: Windows 2D visibility
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/windows-2d-visibility]
+permissions:
+  contents: read
+concurrency:
+  group: windows-2d-visibility-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  render:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install the pinned Windows Godot editor
+        run: python native/policy/install_godot.py --editor-only
+      - name: Import the clean project
+        run: godot --headless --editor --path . --import
+      - name: Render the battle with the shipped native libraries
+        env:
+          MCF_RENDER_CAPTURE_DIR: .cache/visibility/native
+        run: |
+          godot --path . --audio-driver Dummy --script res://tests/render_battle_visibility.gd
+          python -c "import json; r=json.load(open('.cache/visibility/native/result.json')); assert not r['failures'], r"
+      - name: Render the same battle using GDScript
+        if: always()
+        env:
+          MCF_NATIVE_KERNELS: 'off'
+          MCF_NATIVE_VISUALS: 'off'
+          MCF_RENDER_CAPTURE_DIR: .cache/visibility/fallback
+        run: |
+          godot --path . --audio-driver Dummy --script res://tests/render_battle_visibility.gd
+          python -c "import json; r=json.load(open('.cache/visibility/fallback/result.json')); assert not r['failures'], r"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-2d-visibility
+          path: .cache/visibility
+          if-no-files-found: warn

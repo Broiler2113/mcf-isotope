@@ -58,10 +58,13 @@ static func draw_status(ci: CanvasItem, rect: Rect2, label: String,
 static func aim_frame(direction: Vector2i) -> int:
 	return posmod(roundi(Vector2(direction).angle() / (PI / 4.0)), 8) if direction != Vector2i.ZERO else 0
 
+## The sprites import as CPU Images (no GPU readback: Windows players lost every soldier
+## when this ran inside the board's _draw). A missing picture draws nothing instead of
+## aborting the whole board.
 static func _picture(name: String) -> Image:
 	if not _pictures.has(name):
-		var tex: Texture2D = load("res://textures/vehicles/tank/%s.png" % name)
-		var img := tex.get_image()
+		var img := load("res://textures/vehicles/tank/%s.png" % name) as Image
+		img = img.duplicate() if img != null else Image.create(SPRITE_SIZE, SPRITE_SIZE, false, Image.FORMAT_RGBA8)
 		if img.is_compressed(): img.decompress()
 		img.convert(Image.FORMAT_RGBA8)
 		_pictures[name] = img
