@@ -479,13 +479,17 @@ func _boarding_on_screen() -> void:
 	main._board_into(hi.id, sh)
 	ck(main.mode == main.Mode.VEH_BOARD_SEAT and main.item_cells.has(sh.seat_cell(Vehicle.DRIVER_SEAT)),
 			"boarding a shuttle asks for a seat, the driver's among them")
-	# The grid is drawn after the vehicles: the call order inside _draw shows it.
+	# The grid is drawn over the vehicles: the layer over the soldiers draws it, and that layer
+	# is a child of the board, drawn after every hull the board draws itself.
 	var draw_src: String = (load("res://scenes/main/MainDrawing.gd") as GDScript).source_code
-	ck(draw_src.find("_draw_seat_grid(font)") > draw_src.find("for veh: Vehicle in state.all_vehicles():"),
-			"the seat grid is drawn over the hulls")
+	var top_at := draw_src.find("func _draw_unit_top")
+	var top_src := draw_src.substr(top_at, draw_src.find("\nfunc ", top_at + 1) - top_at)
+	var top_over: bool = main._unit_top != null and main._unit_top.get_parent() == main \
+			and not main._unit_top.show_behind_parent and main._unit_top.z_index == 0
+	ck(top_over and top_src.find("_draw_seat_grid(font, ci)") > 0, "the seat grid is drawn over the hulls")
 	# fix-7 #10: bodies inside a shuttle lie on top of its hull.
 	ck(main._corpse_above_vehicle(sh.seat_cell(Vehicle.DRIVER_SEAT))
-			and draw_src.find("for b: Array in vehicle_bodies:") > draw_src.find("for veh: Vehicle in state.all_vehicles():"),
+			and top_over and top_src.find("for b: Array in _top_bodies:") > 0,
 			"bodies inside a shuttle are drawn over the hull")
 	main.queue_redraw()
 	await process_frame

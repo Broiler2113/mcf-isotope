@@ -36,7 +36,7 @@ var owner: int = -1:
 		if owner == v:
 			return
 		owner = v
-		UnitInstance.vision_epoch += 1
+		UnitInstance.bump_world_vision()
 
 ## Прочность УЗЛОВ (веха «Modular tank system»): id узла → текущие очки.
 ## Отсутствующий ключ = узла у этой машины нет вовсе (у челнока нет башни и пушки).
@@ -69,7 +69,7 @@ var origin: Vector2i = Vector2i.ZERO:
 		if origin == v:
 			return
 		origin = v
-		UnitInstance.vision_epoch += 1
+		UnitInstance.bump_world_vision()
 var size: Vector2i = Vector2i.ONE
 
 ## Направление (единичный вектор) для машин с фронтом — у танка (одно из 8).
@@ -99,7 +99,7 @@ var wrecked: bool = false:
 		if wrecked == v:
 			return
 		wrecked = v
-		UnitInstance.vision_epoch += 1
+		UnitInstance.bump_world_vision()
 
 ## Сколько раз главная пушка стреляла в этом раунде (не чаще 2×/ход).
 var cannon_shots_this_round: int = 0

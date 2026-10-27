@@ -31,9 +31,9 @@ func _civ_sees_soldier(civ: UnitInstance, idx: Dictionary = {}) -> bool:
 				return true
 	return false
 
-func _sight_index() -> Dictionary:
+func _sight_index(soldiers: Variant = null) -> Dictionary:
 	var targets: Array[Vector2i] = []
-	for s: UnitInstance in _living_soldiers():
+	for s: UnitInstance in (_living_soldiers() if soldiers == null else soldiers):
 		targets.append(s.coord)
 	for veh: Vehicle in state.all_vehicles():
 		if veh.alive() and not MCF.is_neutral(veh.owner):
@@ -166,9 +166,41 @@ func _wake_and_group(res: ActionResult) -> void:
 ## Засеять фронт теми спящими НЕ сгруппированными нейтралами, кто видит солдата (§3.1b).
 ## Дорого только когда на карте есть и спящие нейтралы, и солдаты, — иначе выходит сразу.
 func _seed_sight_activation() -> void:
-	var soldiers := _living_soldiers()
+	# One pass over the army collects the soldiers and the sleepers. Positions: while the unit
+	# list is the one of the last check, only units stamped since can stand elsewhere, and only
+	# their entries are compared; otherwise every position is collected and compared.
+	var soldiers: Array = []
+	var sleepers: Array = []
+	var units := state.all_units()
+	var incremental := is_same(units, _wk_units) and _wk_world == UnitInstance.vision_world
+	var pos := {}
+	var stamped: Array = []
+	var in_grid := state.grid
+	for u: UnitInstance in units:
+		if incremental:
+			if u.vision_stamp > _wk_epoch:
+				stamped.append(u)
+		elif not u.is_drone and u.is_alive() and in_grid.in_bounds(u.coord):
+			pos[u.id] = u.coord
+		if not u.is_alive():
+			continue
+		if CivilianAI.is_soldier(u):
+			soldiers.append(u)
+		elif _is_civilian(u) and u.neutral_group == 0:
+			sleepers.append(u)
 	if soldiers.is_empty():
 		return
+	# [клетка до или null, клетка после или null, юнит] for every entry that differs.
+	var shifts: Array = []
+	if incremental:
+		for u: UnitInstance in stamped:
+			var now: Variant = u.coord if not u.is_drone and u.is_alive() and in_grid.in_bounds(u.coord) else null
+			var was: Variant = _wk_pos.get(u.id)
+			if was != now:
+				shifts.append([was, now, u])
+	_wk_units = units
+	_wk_world = UnitInstance.vision_world
+	_wk_epoch = UnitInstance.vision_epoch
 	# Проверяем только то, что могло измениться с прошлого раза (batch mp-perf). Раньше на
 	# каждое действие строился индекс ВСЕЙ армии и каждый спящий житель проверялся по нему
 	# заново: ~4 мс на шаг в бою на полтысячи бойцов, у хоста и у каждого гостя.
@@ -180,14 +212,6 @@ func _seed_sight_activation() -> void:
 	#     на линии через освободившуюся клетку проверяется целиком;
 	#   * сменился рельеф или машины — тогда проверяется всё.
 	# Видевшие солдата, но ещё не собранные в группу проверяются целиком каждый раз.
-	var sleepers: Array = []
-	for u in state.all_units():
-		if _is_civilian(u) and u.is_alive() and u.neutral_group == 0:
-			sleepers.append(u)
-	var pos := {}
-	for u: UnitInstance in state.units.values():
-		if not u.is_drone and u.is_alive() and state.grid.in_bounds(u.coord):
-			pos[u.id] = u.coord
 	var vsig := 0
 	for veh: Vehicle in state.all_vehicles():
 		if veh.alive():
@@ -199,7 +223,15 @@ func _seed_sight_activation() -> void:
 			or check_everything or (_wk_vv != GridCell.vision_version and _wk_vv < GridCell.vision_log_base)
 	var moved: Array[Vector2i] = []
 	var vacated := {}
-	if not full:
+	if not full and incremental:
+		for sh: Array in shifts:
+			var u: UnitInstance = sh[2]
+			if sh[1] != null and u.is_alive() and CivilianAI.is_soldier(u):
+				moved.append(sh[1])
+			if sh[0] != null:
+				for key in _line_keys(sh[0]):
+					vacated[key] = true
+	elif not full:
 		for so: UnitInstance in soldiers:
 			var c: Vector2i = so.coord
 			if _wk_pos.get(so.id) != c:
@@ -209,6 +241,7 @@ func _seed_sight_activation() -> void:
 			if pos.get(id) != was:
 				for key in _line_keys(was):
 					vacated[key] = true
+	if not full:
 		if _wk_vv != GridCell.vision_version:
 			var changes := GridCell.vision_changes
 			var i: int = (_wk_vv - GridCell.vision_log_base) * 2
@@ -222,7 +255,14 @@ func _seed_sight_activation() -> void:
 	_wk_sleepers = {}
 	for u: UnitInstance in sleepers:
 		_wk_sleepers[u.id] = true
-	_wk_pos = pos
+	if incremental:
+		for sh: Array in shifts:
+			if sh[1] == null:
+				_wk_pos.erase((sh[2] as UnitInstance).id)
+			else:
+				_wk_pos[(sh[2] as UnitInstance).id] = sh[1]
+	else:
+		_wk_pos = pos
 	_wk_vv = GridCell.vision_version
 	_wk_vsig = vsig
 	_wk_grid = state.grid.get_instance_id()
@@ -243,7 +283,7 @@ func _seed_sight_activation() -> void:
 		var sees := false
 		if whole:
 			if full_idx.is_empty():
-				full_idx = _sight_index()
+				full_idx = _sight_index(soldiers)
 			sees = _civ_sees_soldier(u, full_idx)
 		elif not moved.is_empty():
 			sees = _civ_sees_soldier(u, moved_idx)
@@ -437,12 +477,37 @@ func _airlock_candidates(cells: Array[GridCell]) -> Array[GridCell]:
 	# могут поменяться только у шлюзов рядом с тем, кто сдвинулся, появился или выбыл.
 	# Раньше на каждый вызов перебирались девять клеток вокруг КАЖДОГО бойца карты —
 	# на армиях в полтысячи это было ~7 мс на каждый шаг каждого бойца.
-	var pos := {}
-	for u: UnitInstance in state.units.values():
-		if not u.is_drone and u.is_alive():
-			pos[u.id] = u.coord
-	var prev := _al_pos
-	_al_pos = pos
+	var moved: Array = []   # [клетка до или null, клетка после или null]
+	var units := state.all_units()
+	if is_same(units, _al_units) and _al_world == UnitInstance.vision_world:
+		for u: UnitInstance in units:
+			if u.vision_stamp <= _al_epoch:
+				continue
+			var was: Variant = _al_pos.get(u.id)
+			var now: Variant = u.coord if not u.is_drone and u.is_alive() else null
+			if was == now:
+				continue
+			moved.append([was, now])
+			if now == null:
+				_al_pos.erase(u.id)
+			else:
+				_al_pos[u.id] = now
+	else:
+		var pos := {}
+		for u: UnitInstance in units:
+			if not u.is_drone and u.is_alive():
+				pos[u.id] = u.coord
+		for id: int in pos:
+			var was: Variant = _al_pos.get(id)
+			if was == null or was != pos[id]:
+				moved.append([was, pos[id]])
+		for id: int in _al_pos:
+			if not pos.has(id):
+				moved.append([_al_pos[id], null])
+		_al_pos = pos
+	_al_units = units
+	_al_world = UnitInstance.vision_world
+	_al_epoch = UnitInstance.vision_epoch
 	if _al_grid != grid.get_instance_id() or _al_fv != _airlock_version \
 			or _al_vv < GridCell.vision_log_base or check_everything:
 		return cells
@@ -458,17 +523,11 @@ func _airlock_candidates(cells: Array[GridCell]) -> Array[GridCell]:
 		if idx != null:
 			marks[idx] = true
 		i += 2
-	for id: int in pos:
-		var was: Variant = prev.get(id)
-		var now: Vector2i = pos[id]
-		if was != null and was == now:
-			continue
-		_mark_airlocks_near(now, marks)
-		if was != null:
-			_mark_airlocks_near(was, marks)
-	for id: int in prev:
-		if not pos.has(id):
-			_mark_airlocks_near(prev[id], marks)
+	for m: Array in moved:
+		if m[1] != null:
+			_mark_airlocks_near(m[1], marks)
+		if m[0] != null:
+			_mark_airlocks_near(m[0], marks)
 	var order: Array = marks.keys()
 	order.sort()
 	var out: Array[GridCell] = []

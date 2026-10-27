@@ -911,6 +911,7 @@ func set_sight_positions(positions: Dictionary) -> void:
 	if sight_positions == positions: return
 	sight_positions = positions.duplicate()
 	_vis_epoch.clear()
+	_vis_world.clear()
 
 var _cheat_view_modes: Dictionary = {}
 var _cheat_visible_grid := -1
@@ -943,6 +944,8 @@ func team_visible_coords(owner: int) -> Dictionary:
 		_vis_seen.clear()
 		_vis_epoch.clear()
 		_vis_vv.clear()
+		_vis_built.clear()
+		_vis_world.clear()
 		_vis_log.clear()   # всё видимое собирается заново — перерисовывать всё
 		_gas_view.clear()
 		_vis_grid = gid
@@ -988,9 +991,17 @@ func team_visible_coords(owner: int) -> Dictionary:
 	var live: Dictionary = {}
 	var sides := _vision_sides(owner)
 	_tank_sig_memo = {}
+	# A soldier's view is a function of its own cell, side and status plus the walls, the
+	# enemy tanks and cheats. While the latter stand still, only soldiers stamped after the
+	# last pass can see anything new: the rest keep their counted view untouched.
+	var world := [UnitInstance.vision_world, GridCell.vision_version, sight_positions.is_empty()]
+	for side: int in sides:
+		world.append(_tank_sig(side))
+	var since: int = _vis_built.get(owner, -1) if _vis_world.get(owner) == world else -1
 	var asks: Array = []
 	for u in state.all_units():
-		if u.is_on_field() and sides.has(u.owner) and u.aboard_vehicle_id == -1:
+		if u.is_on_field() and sides.has(u.owner) and u.aboard_vehicle_id == -1 \
+				and (u.vision_stamp > since or not seen.has(u.id)):
 			asks.append([sight_positions.get(u.id, u.coord), sight_of(u), u.owner, mode == 2,
 					sight_positions.has(u.id)])
 	_prefetch_seen(asks)
@@ -1005,6 +1016,8 @@ func team_visible_coords(owner: int) -> Dictionary:
 		if u.aboard_vehicle_id != -1:
 			continue
 		live[u.id] = true
+		if u.vision_stamp <= since and seen.has(u.id):
+			continue
 		var fresh := _seen_from(sight_positions.get(u.id, u.coord), sight_of(u), u.owner, mode == 2,
 				sight_positions.has(u.id))
 		var was: Variant = seen.get(u.id)
@@ -1050,6 +1063,8 @@ func team_visible_coords(owner: int) -> Dictionary:
 	_vis_seen[owner] = seen
 	_vis_epoch[owner] = UnitInstance.vision_epoch
 	_vis_vv[owner] = GridCell.vision_version
+	_vis_built[owner] = UnitInstance.vision_epoch
+	_vis_world[owner] = world
 	explored[owner] = memory
 	return out
 

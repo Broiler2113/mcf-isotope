@@ -365,33 +365,35 @@ func _clear_my_drawings() -> void:
 ##
 ## Второй конец, пока он не закреплён, берётся из-под курсора — расстояние тянется за
 ## мышью, и прикинуть дистанцию можно не кликая вовсе.
-func _draw_ruler() -> void:
+func _draw_ruler(ci: CanvasItem = null) -> void:
+	if ci == null: ci = self
 	if not _before_on and not _hide_rulers:
 		for r: Dictionary in _rulers:
 			if _stroke_visible_to_viewer(r):
-				_draw_ruler_segment(r["a"], r["b"], Color(1.0, 0.86, 0.25))
+				_draw_ruler_segment(r["a"], r["b"], Color(1.0, 0.86, 0.25), ci)
 	if mode != Mode.RULER:
 		return
 	# Недотянутая линейка — за курсором, чуть светлее закреплённых.
 	if _ruler_a != Vector2i(-1, -1) and state.grid.in_bounds(_ruler_hover):
-		_draw_ruler_segment(_ruler_a, _ruler_hover, Color(1.0, 0.95, 0.6))
+		_draw_ruler_segment(_ruler_a, _ruler_hover, Color(1.0, 0.95, 0.6), ci)
 
-func _draw_ruler_segment(a: Vector2i, b: Vector2i, col: Color) -> void:
+func _draw_ruler_segment(a: Vector2i, b: Vector2i, col: Color, ci: CanvasItem = null) -> void:
+	if ci == null: ci = self
 	var pa := _cell_origin(a) + Vector2(CELL, CELL) * 0.5
 	var pb := _cell_origin(b) + Vector2(CELL, CELL) * 0.5
-	draw_line(pa, pb, Color(0, 0, 0, 0.55), 5.0)
-	draw_line(pa, pb, col, 2.0)
-	draw_arc(pa, CELL * 0.28, 0.0, TAU, 20, col, 2.0)
-	draw_arc(pb, CELL * 0.28, 0.0, TAU, 20, col, 2.0)
+	ci.draw_line(pa, pb, Color(0, 0, 0, 0.55), 5.0)
+	ci.draw_line(pa, pb, col, 2.0)
+	ci.draw_arc(pa, CELL * 0.28, 0.0, TAU, 20, col, 2.0)
+	ci.draw_arc(pb, CELL * 0.28, 0.0, TAU, 20, col, 2.0)
 	var dist := Combat.distance(a, b)
 	var label := "%d" % dist if dist == 1 else "%d cells" % dist
 	var font := ThemeDB.fallback_font
 	var mid := (pa + pb) * 0.5
 	var size := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 16)
 	# Подложка под числом: над светлым полом жёлтая надпись иначе теряется.
-	draw_rect(Rect2(mid + Vector2(-size.x * 0.5 - 4, -14), size + Vector2(8, 6)),
+	ci.draw_rect(Rect2(mid + Vector2(-size.x * 0.5 - 4, -14), size + Vector2(8, 6)),
 			Color(0, 0, 0, 0.7))
-	draw_string(font, mid + Vector2(-size.x * 0.5, 0), label,
+	ci.draw_string(font, mid + Vector2(-size.x * 0.5, 0), label,
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 16, col)
 
 func _draw_annotation_layer() -> void:

@@ -414,7 +414,7 @@ func _tanks_block_enemy_sight_only() -> void:
 		ck(r.team_visible_coords(0).has(behind), "an enemy %s does not block sight" % kind)
 		st.grid.clear_vehicle_footprint(veh.id, veh.footprint())
 		st.remove_vehicle(veh.id)
-		UnitInstance.vision_epoch += 1
+		UnitInstance.bump_world_vision()
 
 func _big_map_sight_is_fast() -> void:
 	var m := MapGen.generate({"style": MapGen.Style.FIELD, "size": 5, "seed": 21, "civilians": false})

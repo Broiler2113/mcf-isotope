@@ -62,6 +62,7 @@ func _undoable_side(side: int) -> bool:
 func resolve(intent: Intent) -> ActionResult:
 	if intent == null:
 		return ActionResult.fail("No intent")
+	state.revision += 1
 	if intent is UndoIntent or intent is RedoIntent:
 		var undone := _resolve_undo(intent) if intent is UndoIntent else _resolve_redo(intent)
 		if undone.ok and replay_recorder != null and not state.dice.record_enabled:

@@ -70,7 +70,7 @@ static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 				return CheatUnits.result("%s owner: %s → %s." % [label, CheatQueries.player_label(r.state, old), CheatQueries.player_label(r.state, veh.owner)])
 			r.state.grid.clear_vehicle_footprint(veh.id, veh.footprint())
 			r.state.remove_vehicle(veh.id)
-			UnitInstance.vision_epoch += 1
+			UnitInstance.bump_world_vision()
 			return CheatUnits.result(label + " removed.")
 		"vehicle_repair":
 			if veh.wrecked or not veh.alive(): return ActionResult.fail("The hull is gone; ordinary rules do not permit restoring this wreck.")

@@ -1646,5 +1646,5 @@ func _cheat_result(intent: Intent, result: ActionResult) -> void:
 		# Force cached floor, fog and lighting presentation to adopt edited state.
 		_lod_terrain_key = []
 		GridCell.reset_vision_log()
-		UnitInstance.vision_epoch += 1
+		UnitInstance.bump_world_vision()
 	_redraw()

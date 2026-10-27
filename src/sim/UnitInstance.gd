@@ -16,6 +16,16 @@ extends RefCounted
 ## Поля-источники ОБЯЗАНЫ писаться через сеттеры (то есть обычным `u.coord = x`).
 ## Запись тем же значением версию не двигает — из тех же соображений, что и в GridCell.
 static var vision_epoch: int = 0
+## The part of vision_epoch that no single unit's setter explains (vehicles, cheats,
+## replay jumps): every soldier's view is suspect after it. bump_world_vision() moves both.
+static var vision_world: int = 0
+## vision_epoch right after this unit's own coord/owner/status last changed: fog redoes
+## only the soldiers stamped after its previous build.
+var vision_stamp: int = 0
+
+static func bump_world_vision() -> void:
+	vision_epoch += 1
+	vision_world += 1
 
 const CHEAT_STAT_BOUNDS := {"speed": [0, 999], "armor": [1, 12], "range": [0, 1024], "rof": [0, 100], "sight": [0, 1024]}
 var cheat_invulnerable := false
@@ -43,12 +53,14 @@ var coord: Vector2i:
 			return
 		coord = v
 		vision_epoch += 1
+		vision_stamp = vision_epoch
 var owner: int:
 	set(v):
 		if owner == v:
 			return
 		owner = v
 		vision_epoch += 1
+		vision_stamp = vision_epoch
 var remaining_ap: int
 var status: int = MCF.Status.ALIVE:
 	set(v):
@@ -56,6 +68,7 @@ var status: int = MCF.Status.ALIVE:
 			return
 		status = v
 		vision_epoch += 1
+		vision_stamp = vision_epoch
 var action_state: ActionState = null
 var held_item_id: String = ""
 ## Погиб в огне или от лазера (playtest-20): тело рисуется обугленным.
@@ -124,6 +137,7 @@ func _init(p_id: int, p_stats: UnitStats, p_coord: Vector2i, p_owner: int) -> vo
 	# Новый боец на поле — это изменение состава, даже если сеттеры промолчали (боец
 	# первой стороны в клетке (0,0) получил бы ровно те значения, что уже стояли).
 	vision_epoch += 1
+	vision_stamp = vision_epoch
 
 ## Сколько ОД юнит получает в свою активацию. Обычно MCF.AP_PER_ACTIVATION, но
 ## статы могут задать своё число — у командира их 3 (#66).

@@ -191,7 +191,49 @@ func _init(p_owner: int, p_difficulty: int = Difficulty.NORMAL) -> void:
 func begin_turn(state: GameState) -> void:
 	if state.active_player() != owner:
 		return
+	if _thinking:
+		push_warning("AI side %d asked to act while its plan is still being made" % owner)
+		return
 	intent_ready.emit(_decide(state))
+
+## Whether the next decision opens a new turn, and so makes the staff plan first.
+func wants_plan(state: GameState) -> bool:
+	return state.active_player() == owner and _turn_token_of(state) != _turn_token
+
+## The stamp of the battle a prepared plan was made against (think_ahead): any action,
+## cheat or restore in between changes it, and the decision then plans afresh.
+var _thought: Array = []
+var _thinking := false
+
+## Main's AI step, before begin_turn: the staff plan of a new turn made ahead, spread over
+## frames (AIPlanner.think_budget_usec), so a big army's turn does not freeze the screen.
+## The same plan as the decision would make (same state, same order of work); it is kept
+## only if nothing changed while it was made, and the decision re-checks that again.
+func think_ahead(state: GameState, budget_usec: int) -> void:
+	if not wants_plan(state):
+		return
+	var stamp := _think_stamp(state)
+	_decide_gen += 1
+	var r := GameActionResolver.new(state)
+	r.omniscient_side = owner
+	_r = r
+	_prof = AIPersonality.profile(style if style != Style.FLANK else Style.STANDARD,
+			state.turns.round_number)
+	_sync_danger()
+	_planner.think_budget_usec = budget_usec
+	_thinking = true
+	await _sync_turn(state, r)
+	_thinking = false
+	_planner.think_budget_usec = 0
+	if _think_stamp(state) == stamp:
+		_thought = stamp
+	else:
+		_thought = []
+		_turn_token = -1
+
+func _think_stamp(state: GameState) -> Array:
+	return [state.digest_hash(), _turn_token_of(state), UnitInstance.vision_epoch, GridCell.walk_version,
+			GridCell.vision_version, GridCell.feature_version, GridCell.corpse_version]
 
 # --- Announced events (0.11.1): HARD gets out of the way -----------------------------
 
@@ -363,6 +405,10 @@ func _decide(state: GameState) -> Intent:
 	_prof = AIPersonality.profile(style if style != Style.FLANK else Style.STANDARD,
 			state.turns.round_number)
 	_sync_danger()
+	if not _thought.is_empty():
+		if _thought != _think_stamp(state):
+			_turn_token = -1   # prepared against another battle: plan this one now
+		_thought = []
 	_sync_turn(state, r)
 	# Доигрываем текущего актёра; когда ходов у него не осталось — берём следующего.
 	# Очередь только укорачивается, поэтому цикл конечен.
@@ -640,7 +686,7 @@ func _sync_turn(state: GameState, r: GameActionResolver) -> void:
 		# Защитник не выходит навстречу волне, а встречает её с подготовленных позиций;
 		# волна, наоборот, обязана дойти до них.
 		_planner.advance_scale = HOLDOUT_WAVE_PUSH if owner == md.wave_side else HOLDOUT_HOLD
-	_planner.plan(state, r, _enemy_distance_field(state, false, r), _vehicle_queue(state, r))
+	await _planner.plan(state, r, _enemy_distance_field(state, false, r), _vehicle_queue(state, r))
 	# Копия, а не сам массив: очередь исполнения вычерпывается pop_front'ом, и по
 	# ссылке она стирала бы САМ ПЛАН — а он нужен целиком до конца хода (отладка,
 	# журнал, проверка «кто кого ждёт»).

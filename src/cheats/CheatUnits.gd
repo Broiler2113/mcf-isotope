@@ -141,7 +141,7 @@ static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 			var cell := state.grid.cell(unit.coord)
 			if cell != null and cell.occupant == unit: cell.occupant = null
 			state.remove_unit(unit.id)
-			UnitInstance.vision_epoch += 1
+			UnitInstance.bump_world_vision()
 			return result(name + " removed.")
 		"unit_teleport":
 			if not unit.is_alive() or not state.grid.in_bounds(unit.coord): return ActionResult.fail("Teleport requires a living on-board unit.")
@@ -185,7 +185,7 @@ static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 			if intent.op == "unit_stat": unit.cheat_stats[args.field] = args.value
 			elif args.has("field"): unit.cheat_stats.erase(args.field)
 			else: unit.cheat_stats.clear()
-			UnitInstance.vision_epoch += 1
+			UnitInstance.bump_world_vision()
 			return result("%s stat overrides: %s → %s." % [name, old, unit.cheat_stats])
 		"unit_civilian":
 			if not unit.is_alive() or (unit.stats.id != "civilian" and not CivilianAI.is_npc(unit)):

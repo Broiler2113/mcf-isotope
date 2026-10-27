@@ -316,7 +316,9 @@ func _flame_jet_preview(from_coord: Vector2i, toward: Vector2i) -> Array:
 
 func _draw() -> void:
 	if _annotations != null: _annotations.queue_redraw()
+	_unit_top_live = false
 	if state == null:
+		_show_unit_layers(false)
 		return
 	if _before_on and _before_layer != null:
 		_before_layer.queue_redraw()   # слой «было» идёт за панорамой и зумом
@@ -360,6 +362,7 @@ func _draw() -> void:
 	# Vacuum tiles are transparent. Covering the live board with the opening board
 	# cannot hide debris there; stop drawing the live layers while Before is shown.
 	if _before_on:
+		_show_unit_layers(false)
 		return
 	if _fp == null:
 		_draw_fx_flashes(visible)
@@ -384,7 +387,9 @@ func _draw() -> void:
 		corpses = cmem
 	# Fog memory and floor/decal invalidation above remain live for the 3D view.
 	# The covered 2D board needs no sprite, effect or annotation draw commands.
-	if _fp != null: return
+	if _fp != null:
+		_show_unit_layers(false)
+		return
 	# Тела внутри челнока (и борга) ложатся поверх его корпуса (fix-7 #10): рисуются после машин.
 	var vehicle_bodies: Array = []
 	for c: Vector2i in corpses:
@@ -939,36 +944,94 @@ func _draw() -> void:
 						HORIZONTAL_ALIGNMENT_LEFT, -1, 14, 4, Color(0, 0, 0, 0.9))
 				draw_string(font, _cell_origin(bv.origin) + Vector2(2, -6), "Board %s" % bname,
 						HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0.75, 0.88, 1.0))
-	var _drones_pending: Array = []
-	var shifted := false
+	# Soldiers live on their own layer (_sync_unit_layer): only those whose look changed are
+	# drawn again. What lies over them (bodies on hulls, drones, seats, the selection box and
+	# rulers) is drawn by the layer above them (_draw_unit_top).
+	_sync_unit_layer(visible, fog_on, viewer, vx0, vx1, vy0, vy1)
+	_top_bodies = vehicle_bodies
+	_unit_top_live = true
+	# A thin second pass puts wisps in front of occupants without hiding their sprites; it
+	# drifts on its own layer (GasDrift).
+	_sync_gas_drift()
+
+## Soldiers on their own layer (perf, 0.14.4.3): one small canvas item per soldier, drawn
+## again only when what it shows changes. The board used to issue ~10 draw commands for every
+## soldier on screen on each redraw (5 of 6 ms on a big battle); now a pan or zoom just moves
+## the layer, and an action redraws the soldiers it touched. Each sprite draws from its key:
+## everything its look depends on, read once per board redraw.
+class UnitSprite extends Node2D:
+	var key: Array = []
+	var shown_frame := -1
+	var host: Object
+
+	func _draw() -> void:
+		host._draw_unit_sprite(self)
+
+var _unit_layer: Node2D = null
+var _unit_top: Node2D = null
+var _unit_sprites: Dictionary = {}   # unit id -> UnitSprite
+var _unit_frame := 0
+var _top_bodies: Array = []
+var _top_drones: Array = []
+var _unit_top_live := false
+## What every soldier's key depends on beyond the soldier itself, at the last full pass. While
+## it stands, a redraw (a pan inside the margin, a hover preview) skips the soldiers entirely.
+var _unit_sig: Array = []
+var _unit_visible: Dictionary = {}
+const UNIT_CULL_SNAP := 16
+
+func _make_unit_layers() -> void:
+	_unit_layer = Node2D.new()
+	_unit_layer.name = "Units"
+	add_child(_unit_layer)
+	_unit_top = Node2D.new()
+	_unit_top.name = "OverUnits"
+	_unit_top.draw.connect(_draw_unit_top)
+	add_child(_unit_top)
+
+## Board settings (colours, sizes) change soldiers' looks outside the battle's state.
+func _forget_unit_keys() -> void:
+	_unit_sig = []
+
+## Both layers show only while the board itself draws its live layers.
+func _show_unit_layers(on: bool) -> void:
+	if _unit_layer != null and _unit_layer.visible != on:
+		_unit_layer.visible = on
+	if _unit_top != null:
+		_unit_top.queue_redraw()
+
+func _sync_unit_layer(visible: Dictionary, fog_on: bool, viewer: int, vx0: int, vx1: int, vy0: int, vy1: int) -> void:
+	_unit_layer.position = pan
+	_unit_layer.scale = Vector2(zoom, zoom)
+	_show_unit_layers(true)
+	# The window is widened to whole blocks of cells, so panning inside them changes nothing
+	# here; soldiers drawn off screen are culled by the renderer.
+	vx0 = floori(vx0 / float(UNIT_CULL_SNAP)) * UNIT_CULL_SNAP
+	vy0 = floori(vy0 / float(UNIT_CULL_SNAP)) * UNIT_CULL_SNAP
+	vx1 = (floori(vx1 / float(UNIT_CULL_SNAP)) + 1) * UNIT_CULL_SNAP
+	vy1 = (floori(vy1 / float(UNIT_CULL_SNAP)) + 1) * UNIT_CULL_SNAP
+	var sig := [state.get_instance_id(), state.revision, UnitInstance.vision_epoch, UnitInstance.vision_world,
+		_history_epoch, selected_id, _group_ids.hash(), zoom >= UNIT_DETAIL_ZOOM, viewer, fog_on,
+		visible.size(), _ap_display.hash(), _pending_death_ids.hash(), vx0, vx1, vy0, vy1]
+	var moving := not _walk_cells.is_empty() or not _walk_offset.is_empty()
+	if not moving and sig == _unit_sig and is_same(visible, _unit_visible):
+		return
+	_unit_sig = sig
+	_unit_visible = visible
+	_unit_frame += 1
+	_top_drones = []
 	var walking := not _walk_cells.is_empty()
-	# Раз на кадр (batch mp-perf): цвета сторон, есть ли выделенная группа, ведётся ли показ
-	# старых ОД, и мелкие подробности (обводка, метка, точки ОД) — только когда их видно.
 	var side_cols: Dictionary = {}
 	var has_group := not _group_ids.is_empty()
 	var ap_held := not _ap_display.is_empty()
 	var details := zoom >= UNIT_DETAIL_ZOOM
-	var canvas := get_canvas_item()
+	var grid := state.grid
 	for unit: UnitInstance in state.all_units():
 		# Экипаж танка на поле не рисуется (§техника): он за краем поля, и отсечение по окну
 		# ниже его отбрасывает. Пассажир челнока — поверх корпуса, в клетке своего кресла.
 		# Во время проигрывания шагов житель рисуется на промежуточной клетке (#96),
 		# а не там, где он уже стоит по состоянию.
 		var at: Vector2i = _walk_cells.get(unit.id, unit.coord) if walking else unit.coord
-		# Отсечение по вьюпорту — первым и без вызовов функций (batch mp-perf): на большой
-		# карте почти вся армия за краем экрана.
-		if at.x < vx0 or at.x > vx1 or at.y < vy0 or at.y > vy1:
-			continue
-		# Плавный шаг: рисунок бойца сдвинут на долю пути к следующей клетке. Смена
-		# преобразования — команда отрисовки, поэтому только у тех, кто сейчас идёт
-		# (batch mp-perf): раньше её получал каждый боец каждый кадр.
-		var woff: Variant = _walk_offset.get(unit.id)
-		if woff != null:
-			draw_set_transform(pan + Vector2(woff) * zoom, 0.0, Vector2(zoom, zoom))
-			shifted = true
-		elif shifted:
-			draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
-			shifted = false
 		# Отсечение по вьюпорту (item 5): бойца за краем экрана не рисуем — на 500×500 это
 		# главный выигрыш, ведь армия почти всегда шире окна.
 		if at.x < vx0 or at.x > vx1 or at.y < vy0 or at.y > vy1:
@@ -976,7 +1039,7 @@ func _draw() -> void:
 		# Туман войны (§3.9): чужой юнит виден, только если его клетку видит команда.
 		var uown := unit.owner
 		if uown != viewer and not state.roster.are_allies(viewer, uown) and fog_on \
-				and (state.grid.cell(at).obscured() or not visible.has(at)):
+				and (grid.cell(at).obscured() or not visible.has(at)):
 			continue
 		# Смерть в текущем действии показываем лишь ПОСЛЕ анимации броска (#46):
 		# пока крутится кубик, погибший рисуется как живой юнит.
@@ -984,95 +1047,137 @@ func _draw() -> void:
 		if unit.status == MCF.Status.CORPSE and not _pending_death_ids.has(unit.id):
 			continue
 		if unit.is_drone:
-			# Дроны рисуем ПОСЛЕ всех наземных юнитов и машин (item 14): собираем их
-			# здесь, а сам разлёт — отдельным проходом ниже, чтобы дрон гарантированно
-			# был поверх корпуса, над которым висит.
-			_drones_pending.append({"unit": unit, "at": at})
+			# Дроны рисуем ПОСЛЕ всех наземных юнитов и машин (item 14): их рисует слой над
+			# бойцами, чтобы дрон гарантированно был поверх корпуса, над которым висит.
+			_top_drones.append({"unit": unit, "at": at})
 			continue
-		# Тело цикла — без лишних вызовов (batch mp-perf): на отъезде на экране сотни
-		# бойцов, и вызовы функций на каждого стоили больше самих команд отрисовки.
-		# Угол клетки считается здесь же, цвета стороны — раз на кадр (side_cols).
-		var corner := ORIGIN + Vector2(at.x * CELL, at.y * CELL)
-		var center := corner + Vector2(CELL, CELL) * 0.5
 		var cols: Array = side_cols.get(uown, [])
 		if cols.is_empty():
 			var sc := _side_color(uown)
 			cols = [sc, sc.darkened(0.45), _ink(sc)]
 			side_cols[uown] = cols
-		# Картинка бойца своей фракции (batch 17, item 13): light_infantry_nova.png, иначе
-		# общая light_infantry.png; без картинки — кружок цвета стороны с инициалами (item 6).
-		var skey := _sprite_key(unit)
-		# Боец в окопе (gore batch) стоит В канаве: чуть меньше и ниже, ноги скрыты
-		# тенью земляной стенки — не «висит» над окопом.
-		var in_trench := grid.cell_fast(at.x, at.y).feature_id == MCF.FEATURE_TRENCH
-		var usz := CELL * (0.8 if in_trench else 1.0)
-		var uorg := corner + Vector2((CELL - usz) * 0.5, (CELL - usz) * 0.75)
-		var ucenter := uorg + Vector2(usz, usz) * 0.5
-		if skey != "":
-			Sprites.draw_texture_override(self, skey, uorg, usz)
-		else:
-			draw_circle(ucenter, usz * 0.34, cols[0])
-			if details:
-				draw_arc(ucenter, usz * 0.34, 0, TAU, 20, cols[1], 1.5)
-				_tag_line(unit).draw(canvas, ucenter + Vector2(-9, 5 - 16 * 0.8), cols[2])
-		if MCF.is_independent(uown) and state.roster.faction_suffix_of(uown) == "_neutral":
-			draw_arc(center, CELL * 0.39, 0, TAU, 24, cols[0], 2.5)
-		if in_trench:
-			draw_rect(Rect2(uorg + Vector2(usz * 0.12, usz * 0.72), Vector2(usz * 0.76, usz * 0.2)),
-					Color(0.1, 0.07, 0.04, 0.55))
-		if unit.id == selected_id:
-			draw_arc(center, CELL * 0.42, 0, TAU, 32, Color(1, 0.9, 0.2), 3.0)
-		# Водитель челнока — тонкая рамка по клетке кресла: видно, кто ведёт машину.
+		var driver := false
 		if unit.aboard_vehicle_id != -1:
 			var dveh := state.get_vehicle(unit.aboard_vehicle_id)
-			if dveh != null and dveh.driver_id() == unit.id:
-				draw_rect(Rect2(corner + Vector2(2, 2), Vector2(CELL - 4, CELL - 4)),
-						Color(1.0, 0.95, 0.7, 0.9), false, 1.5)
-		if MCF.is_neutral(uown):
-			# Вскрытый мирный житель охотится — красное кольцо тревоги (§3.10, #56).
-			if unit.civilian_active:
-				draw_arc(center, CELL * 0.45, 0, TAU, 22, Color(0.85, 0.15, 0.15, 0.95), 2.0)
-			# Бейдж активационной группы (item 15): чёрный квадратик с римской цифрой в
-			# правом-нижнем углу — по нему видно, что инициатива изменилась.
+			driver = dveh != null and dveh.driver_id() == unit.id
 		var group := unit.neutral_group
 		if MCF.is_independent(uown): group = uown - MCF.INDEPENDENT_BASE + 1
-		if group > 0: _draw_group_badge(corner, group, font)
-		# Кольцо принадлежности к RTS-группе (#18).
-		if has_group and _group_set.has(unit.id):
-			draw_arc(center, CELL * 0.46, 0, TAU, 32, Color(0.4, 1.0, 0.5), 2.5)
-		if unit.is_held():
-			draw_arc(center, CELL * 0.48, 0, TAU, 32, Color(0.8, 0.3, 1.0), 3.0)
-		if unit.action_state != null and unit.action_state.is_pending():
-			draw_arc(center, CELL * 0.5, 0, TAU, 32, Color(1, 0.6, 0.1), 2.0)
-		if details:
-			var ap: int = unit.remaining_ap if not ap_held else int(_ap_display.get(unit.id, unit.remaining_ap))
-			for i in ap:
-				draw_circle(corner + Vector2(6 + i * 8, CELL - 6), 3, Color(1, 1, 0.4))
-		# Снаряжения не хватает — общий пиксельный «!» (item 18): инженер без ЛДФ,
-		# оператор без станции, огнемётчик без огнетушителя, пулемётчик без фраги. Спрашиваем
-		# только тех, у кого это вообще бывает (gear_check по роду).
-		if _gear_checked(unit) and resolver.unit_missing_equipment(unit):
-			_draw_pixel_bang(corner + Vector2(CELL - 12, 4))
-		# Юнит тащит на себе труп-щит (#6) — без метки это видно только в подсказке (#71).
-		if unit.carried_corpses > 0:
-			_draw_corpse_marker(corner + Vector2(9, 9),
-				unit.carried_corpses, font)
+		var skey := _sprite_key(unit)
+		var key := [at, skey, grid.cell_fast(at.x, at.y).feature_id == MCF.FEATURE_TRENCH,
+			cols, details, _tag_line(unit) if skey == "" and details else null,
+			MCF.is_independent(uown) and state.roster.faction_suffix_of(uown) == "_neutral",
+			unit.id == selected_id, driver, MCF.is_neutral(uown) and unit.civilian_active, group,
+			has_group and _group_set.has(unit.id), unit.is_held(),
+			unit.action_state != null and unit.action_state.is_pending(),
+			(unit.remaining_ap if not ap_held else int(_ap_display.get(unit.id, unit.remaining_ap))) if details else -1,
+			_gear_checked(unit) and resolver.unit_missing_equipment(unit), unit.carried_corpses]
+		var sprite: UnitSprite = _unit_sprites.get(unit.id)
+		if sprite == null:
+			sprite = UnitSprite.new()
+			sprite.host = self
+			_unit_layer.add_child(sprite)
+			_unit_sprites[unit.id] = sprite
+		if sprite.key != key:
+			sprite.key = key
+			sprite.queue_redraw()
+		# Плавный шаг: рисунок бойца сдвинут на долю пути к следующей клетке.
+		var woff: Vector2 = _walk_offset.get(unit.id, Vector2.ZERO)
+		if sprite.position != woff:
+			sprite.position = woff
+		if not sprite.visible:
+			sprite.visible = true
+		sprite.shown_frame = _unit_frame
+	var gone: Array = []
+	for id: int in _unit_sprites:
+		var sp: UnitSprite = _unit_sprites[id]
+		if sp.shown_frame != _unit_frame:
+			if not state.units.has(id):
+				gone.append(id)
+			elif sp.visible:
+				sp.visible = false
+	for id: int in gone:
+		(_unit_sprites[id] as UnitSprite).queue_free()
+		_unit_sprites.erase(id)
 
+## One soldier, from its key (see _sync_unit_layer for the order).
+func _draw_unit_sprite(sp: UnitSprite) -> void:
+	var k := sp.key
+	var at: Vector2i = k[0]
+	var skey: String = k[1]
+	var in_trench: bool = k[2]
+	var cols: Array = k[3]
+	var details: bool = k[4]
+	var font := ThemeDB.fallback_font
+	# Угол клетки считается здесь же, цвета стороны — раз на кадр (side_cols).
+	var corner := ORIGIN + Vector2(at.x * CELL, at.y * CELL)
+	var center := corner + Vector2(CELL, CELL) * 0.5
+	# Картинка бойца своей фракции (batch 17, item 13): light_infantry_nova.png, иначе
+	# общая light_infantry.png; без картинки — кружок цвета стороны с инициалами (item 6).
+	# Боец в окопе (gore batch) стоит В канаве: чуть меньше и ниже, ноги скрыты
+	# тенью земляной стенки — не «висит» над окопом.
+	var usz := CELL * (0.8 if in_trench else 1.0)
+	var uorg := corner + Vector2((CELL - usz) * 0.5, (CELL - usz) * 0.75)
+	var ucenter := uorg + Vector2(usz, usz) * 0.5
+	if skey != "":
+		Sprites.draw_texture_override(sp, skey, uorg, usz)
+	else:
+		sp.draw_circle(ucenter, usz * 0.34, cols[0])
+		if details:
+			sp.draw_arc(ucenter, usz * 0.34, 0, TAU, 20, cols[1], 1.5)
+			(k[5] as TextLine).draw(sp.get_canvas_item(), ucenter + Vector2(-9, 5 - 16 * 0.8), cols[2])
+	if k[6]:
+		sp.draw_arc(center, CELL * 0.39, 0, TAU, 24, cols[0], 2.5)
+	if in_trench:
+		sp.draw_rect(Rect2(uorg + Vector2(usz * 0.12, usz * 0.72), Vector2(usz * 0.76, usz * 0.2)),
+				Color(0.1, 0.07, 0.04, 0.55))
+	if k[7]:
+		sp.draw_arc(center, CELL * 0.42, 0, TAU, 32, Color(1, 0.9, 0.2), 3.0)
+	# Водитель челнока — тонкая рамка по клетке кресла: видно, кто ведёт машину.
+	if k[8]:
+		sp.draw_rect(Rect2(corner + Vector2(2, 2), Vector2(CELL - 4, CELL - 4)),
+				Color(1.0, 0.95, 0.7, 0.9), false, 1.5)
+	# Вскрытый мирный житель охотится — красное кольцо тревоги (§3.10, #56).
+	if k[9]:
+		sp.draw_arc(center, CELL * 0.45, 0, TAU, 22, Color(0.85, 0.15, 0.15, 0.95), 2.0)
+	# Бейдж активационной группы (item 15): чёрный квадратик с римской цифрой в
+	# правом-нижнем углу — по нему видно, что инициатива изменилась.
+	if k[10] > 0: _draw_group_badge(corner, k[10], font, sp)
+	# Кольцо принадлежности к RTS-группе (#18).
+	if k[11]:
+		sp.draw_arc(center, CELL * 0.46, 0, TAU, 32, Color(0.4, 1.0, 0.5), 2.5)
+	if k[12]:
+		sp.draw_arc(center, CELL * 0.48, 0, TAU, 32, Color(0.8, 0.3, 1.0), 3.0)
+	if k[13]:
+		sp.draw_arc(center, CELL * 0.5, 0, TAU, 32, Color(1, 0.6, 0.1), 2.0)
+	for i in maxi(0, k[14]):
+		sp.draw_circle(corner + Vector2(6 + i * 8, CELL - 6), 3, Color(1, 1, 0.4))
+	# Снаряжения не хватает — общий пиксельный «!» (item 18): инженер без ЛДФ,
+	# оператор без станции, огнемётчик без огнетушителя, пулемётчик без фраги.
+	if k[15]:
+		_draw_pixel_bang(corner + Vector2(CELL - 12, 4), sp)
+	# Юнит тащит на себе труп-щит (#6) — без метки это видно только в подсказке (#71).
+	if k[16] > 0:
+		_draw_corpse_marker(corner + Vector2(9, 9), k[16], font, sp)
+
+## What lies over the soldiers: bodies on hulls, drones, the seat grid, the selection box
+## and rulers. Drawn after the soldier layer, in the board's own transform.
+func _draw_unit_top() -> void:
+	if state == null or not _unit_top_live:
+		return
+	var ci := _unit_top
+	var font := ThemeDB.fallback_font
+	Sprites.set_base_transform(pan, Vector2(zoom, zoom))
 	# An occupied borg is drawn with its operator, after the ordinary vehicle pass.
 	# Draw its bodies here as well, so neither an idle nor an occupied hull hides them.
-	draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
-	for b: Array in vehicle_bodies:
-		_draw_corpse(b[0], int(b[1][1]), b[1][0])
+	ci.draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
+	for b: Array in _top_bodies:
+		_draw_corpse(b[0], int(b[1][1]), b[1][0], ci)
 	# Дроны — верхний слой (item 14): рисуются поверх машин и наземных юнитов.
-	for d: Dictionary in _drones_pending:
-		draw_set_transform(pan + _walk_offset.get(d["unit"].id, Vector2.ZERO) * zoom, 0.0, Vector2(zoom, zoom))
-		_draw_drone(d["unit"], d["at"])
-	draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
-	# A thin second pass puts wisps in front of occupants without hiding their sprites; it
-	# drifts on its own layer (GasDrift).
-	_sync_gas_drift()
-	_draw_seat_grid(font)
-
+	for d: Dictionary in _top_drones:
+		ci.draw_set_transform(pan + _walk_offset.get(d["unit"].id, Vector2.ZERO) * zoom, 0.0, Vector2(zoom, zoom))
+		_draw_drone(d["unit"], d["at"], ci)
+	ci.draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
+	_draw_seat_grid(font, ci)
 
 	# Рамка выделения (#18): сетка-выровненный зелёный прямоугольник поверх поля.
 	if _box_dragging:
@@ -1083,11 +1188,11 @@ func _draw() -> void:
 		var bw := absi(bb.x - ba.x) + 1
 		var bh := absi(bb.y - ba.y) + 1
 		var brect := Rect2(_cell_origin(Vector2i(bx0, by0)), Vector2(bw * CELL, bh * CELL))
-		draw_rect(brect, Color(0.3, 0.9, 0.4, 0.12))
-		draw_rect(brect, Color(0.4, 1.0, 0.5, 0.8), false, 2.0)
+		ci.draw_rect(brect, Color(0.3, 0.9, 0.4, 0.12))
+		ci.draw_rect(brect, Color(0.4, 1.0, 0.5, 0.8), false, 2.0)
 
 	# Аннотации игроков поверх поля (item 51).
-	_draw_ruler()
+	_draw_ruler(ci)
 
 ## Corpses resting on a hull must be drawn after both ordinary vehicles and borg pilots.
 func _corpse_above_vehicle(at: Vector2i) -> bool:
@@ -1112,29 +1217,30 @@ func _draw_station_leashes(station: Vector2i, labels: bool) -> void:
 				"%s range %d" % ["Scout" if scout else "Kamikaze", lr], HORIZONTAL_ALIGNMENT_LEFT, -1, 13,
 				Color(0.6, 0.85, 0.95))
 
-func _draw_drone(unit: UnitInstance, at: Vector2i) -> void:
+func _draw_drone(unit: UnitInstance, at: Vector2i, ci: CanvasItem = null) -> void:
+	if ci == null: ci = self
 	var center := _cell_origin(at) + Vector2(CELL, CELL) * 0.5
 	# The drone hangs exactly over the middle of its cell, above any soldier there (owner, 0.14.4).
 	var dc := center
 	# Тень под дроном — подсказка, что он парит.
-	draw_circle(center + Vector2(-CELL * 0.06, CELL * 0.08), CELL * 0.12, Color(0, 0, 0, 0.25))
+	ci.draw_circle(center + Vector2(-CELL * 0.06, CELL * 0.08), CELL * 0.12, Color(0, 0, 0, 0.25))
 	var s := CELL * 0.2
 	var drone_key := Sprites.resolve("drone", _owner_suffix(unit.owner))
 	if drone_key != "" and Sprites.has_user_override(drone_key):
 		var dsz := Vector2(CELL, CELL) * 0.5
-		Sprites.draw_texture_override_rect(self, drone_key, Rect2(dc - dsz * 0.5, dsz))
+		Sprites.draw_texture_override_rect(ci, drone_key, Rect2(dc - dsz * 0.5, dsz))
 		# Разведчик (fix-7 #7) — с «объективом»: белое кольцо и стекло поверх корпуса.
 		if MCF.is_scout(unit):
-			draw_arc(dc, s * 0.75, 0, TAU, 16, Color(0.95, 0.97, 1.0, 0.95), 2.0)
-			draw_circle(dc, s * 0.35, Color(0.55, 0.85, 1.0, 0.95))
+			ci.draw_arc(dc, s * 0.75, 0, TAU, 16, Color(0.95, 0.97, 1.0, 0.95), 2.0)
+			ci.draw_circle(dc, s * 0.35, Color(0.55, 0.85, 1.0, 0.95))
 	else:
 		# The kamikaze or scout model seen from above, its top plates in the side's colour.
 		var msz := Vector2(CELL, CELL) * 0.8
-		DroneModel.draw(self, Rect2(dc - msz * 0.5, msz), _side_color(unit.owner), MCF.is_scout(unit))
+		DroneModel.draw(ci, Rect2(dc - msz * 0.5, msz), _side_color(unit.owner), MCF.is_scout(unit))
 	if unit.id == selected_id:
-		draw_arc(dc, CELL * 0.3, 0, TAU, 24, Color(1, 0.9, 0.2), 3.0)
+		ci.draw_arc(dc, CELL * 0.3, 0, TAU, 24, Color(1, 0.9, 0.2), 3.0)
 	for i in _draw_ap(unit):
-		draw_circle(_cell_origin(at) + Vector2(6 + i * 8, CELL - 6), 3, Color(1, 1, 0.4))
+		ci.draw_circle(_cell_origin(at) + Vector2(6 + i * 8, CELL - 6), 3, Color(1, 1, 0.4))
 
 ## Труп на земле (#59): красный круг на половинной прозрачности — того же размера,
 ## что и живой боец, но полупрозрачный, поэтому тело сразу отличимо от бойца и не
@@ -1688,41 +1794,45 @@ func _draw_fx_one(kind: String, cell_pos: Vector2, rot: float, scale: float,
 
 ## count > 1 — куча тел. Павший боец — СВОЯ картинка, повёрнутая на 90° по часовой
 ## (batch 17, item 13); без неё — общий corpse.png набок (#21.4), без него — красный круг.
-func _draw_corpse(coord: Vector2i, count: int, who: UnitInstance = null) -> void:
+func _draw_corpse(coord: Vector2i, count: int, who: UnitInstance = null, ci: CanvasItem = null) -> void:
+	if ci == null: ci = self
 	var org := _cell_origin(coord)
 	var center := org + Vector2(CELL, CELL) * 0.5
 	var own_key := Sprites.resolve(who.stats.id, _owner_suffix(who.owner)) if who != null else ""
 	# Сгоревший в огне или прижжённый лучом — обугленный, в бурых тонах (playtest-20).
 	var tint := BURNT_TINT if who != null and who.burnt else Color.WHITE
 	if own_key != "":
-		Sprites.draw_texture_override(self, own_key, org, float(CELL), 90.0, tint)
-	elif not Sprites.draw_texture_override(self, "corpse", org, float(CELL), CORPSE_LIE_DEG, tint):
-		draw_circle(center, CELL * 0.34, CORPSE_COLOR * tint)
+		Sprites.draw_texture_override(ci, own_key, org, float(CELL), 90.0, tint)
+	elif not Sprites.draw_texture_override(ci, "corpse", org, float(CELL), CORPSE_LIE_DEG, tint):
+		ci.draw_circle(center, CELL * 0.34, CORPSE_COLOR * tint)
 	if count > 1:
-		draw_string(ThemeDB.fallback_font, center + Vector2(CELL * 0.16, CELL * 0.3),
+		ci.draw_string(ThemeDB.fallback_font, center + Vector2(CELL * 0.16, CELL * 0.3),
 			"x%d" % count, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 0.85, 0.85))
 
 ## Метка «несёт труп» (#71): кружок цвета трупа (#59) в углу клетки, непрозрачный и
 ## с чёрной обводкой — иначе на тёмной картинке юнита его не разглядеть. Если трупов
 ## больше одного, рядом стоит их число (щит даёт +1 к защите за каждый, #6).
-func _draw_corpse_marker(at: Vector2, count: int, font: Font) -> void:
-	draw_circle(at, 5.0, Color(CORPSE_COLOR, 0.95))
-	draw_arc(at, 5.0, 0, TAU, 14, Color(0, 0, 0, 0.85), 1.5)
+func _draw_corpse_marker(at: Vector2, count: int, font: Font, ci: CanvasItem = null) -> void:
+	if ci == null: ci = self
+	ci.draw_circle(at, 5.0, Color(CORPSE_COLOR, 0.95))
+	ci.draw_arc(at, 5.0, 0, TAU, 14, Color(0, 0, 0, 0.85), 1.5)
 	if count > 1:
-		draw_string(font, at + Vector2(7, 4), str(count),
+		ci.draw_string(font, at + Vector2(7, 4), str(count),
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1, 0.9, 0.9))
 
 ## Бейдж активационной группы нейтралов (item 15): маленький чёрный квадрат с римской
 ## цифрой в правом-нижнем углу клетки юнита.
-func _draw_group_badge(cell_origin: Vector2, group: int, font: Font) -> void:
+func _draw_group_badge(cell_origin: Vector2, group: int, font: Font, ci: CanvasItem = null) -> void:
+	if ci == null: ci = self
 	var sz := CELL * 0.34
 	var pos := cell_origin + Vector2(CELL - sz - 2.0, CELL - sz - 2.0)
-	draw_rect(Rect2(pos, Vector2(sz, sz)), Color(0.05, 0.05, 0.05, 0.92))
-	draw_rect(Rect2(pos, Vector2(sz, sz)), Color(0.9, 0.9, 0.9, 0.75), false, 1.0)
-	draw_string(font, pos + Vector2(2.0, sz - 3.0), MCF.roman(group),
+	ci.draw_rect(Rect2(pos, Vector2(sz, sz)), Color(0.05, 0.05, 0.05, 0.92))
+	ci.draw_rect(Rect2(pos, Vector2(sz, sz)), Color(0.9, 0.9, 0.9, 0.75), false, 1.0)
+	ci.draw_string(font, pos + Vector2(2.0, sz - 3.0), MCF.roman(group),
 		HORIZONTAL_ALIGNMENT_CENTER, sz - 3.0, 11, Color(1, 1, 1))
 
-func _draw_pixel_bang(top_left: Vector2) -> void:
+func _draw_pixel_bang(top_left: Vector2, ci: CanvasItem = null) -> void:
+	if ci == null: ci = self
 	# Пиксель-арт восклицательного знака: столбик + точка. p = размер «пикселя».
 	var p := 3.0
 	var col := Color(1.0, 0.85, 0.1)
@@ -1733,9 +1843,9 @@ func _draw_pixel_bang(top_left: Vector2) -> void:
 		var b: Vector2 = top_left + off
 		# Ствол: 3 «пикселя» по вертикали.
 		for i in 3:
-			draw_rect(Rect2(b + Vector2(0, i * p), Vector2(p, p)), c)
+			ci.draw_rect(Rect2(b + Vector2(0, i * p), Vector2(p, p)), c)
 		# Точка внизу с зазором.
-		draw_rect(Rect2(b + Vector2(0, 4 * p), Vector2(p, p)), c)
+		ci.draw_rect(Rect2(b + Vector2(0, 4 * p), Vector2(p, p)), c)
 
 ## Борг (batch 13 B17): квадратная рамка в цвете стороны с оператором внутри (его кружок
 ## рисует общий проход бойцов поверх), пустой — серая рамка с точкой; бейдж «B» в углу,
@@ -1746,7 +1856,8 @@ func _draw_pixel_bang(top_left: Vector2) -> void:
 const SEAT_FREE_COLOR := Color(0.4, 0.7, 1.0)
 const SEAT_DRIVER_COLOR := Color(1.0, 0.76, 0.22)
 
-func _draw_seat_grid(font: Font) -> void:
+func _draw_seat_grid(font: Font, ci: CanvasItem = null) -> void:
+	if ci == null: ci = self
 	if mode != Mode.VEH_SEAT and mode != Mode.VEH_BOARD_SEAT:
 		return
 	var pv := state.get_vehicle(veh_board_vid) if mode == Mode.VEH_BOARD_SEAT \
@@ -1758,13 +1869,13 @@ func _draw_seat_grid(font: Font) -> void:
 		var c := pv.seat_cell(i)
 		var r := Rect2(_cell_origin(c), Vector2(CELL, CELL)).grow(-2)
 		if not item_cells.has(c):
-			draw_rect(r, Color(0.75, 0.75, 0.75, 0.55), false, 1.0)
+			ci.draw_rect(r, Color(0.75, 0.75, 0.75, 0.55), false, 1.0)
 			continue
 		var col := SEAT_DRIVER_COLOR if i == Vehicle.DRIVER_SEAT else SEAT_FREE_COLOR
-		draw_rect(r, Color(col.r, col.g, col.b, 0.42))
-		draw_rect(r, col, false, 2.0)
+		ci.draw_rect(r, Color(col.r, col.g, col.b, 0.42))
+		ci.draw_rect(r, col, false, 2.0)
 		if i == Vehicle.DRIVER_SEAT:
-			draw_string(font, r.position + Vector2(3, 12), "DRIVER", HORIZONTAL_ALIGNMENT_LEFT, -1, 10,
+			ci.draw_string(font, r.position + Vector2(3, 12), "DRIVER", HORIZONTAL_ALIGNMENT_LEFT, -1, 10,
 					Color(1, 0.95, 0.75))
 
 func _draw_borg(veh: Vehicle, org: Vector2, col: Color, wrecked: bool, dur: int, font: Font) -> void:

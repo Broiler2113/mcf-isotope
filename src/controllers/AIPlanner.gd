@@ -184,10 +184,23 @@ var _line_targets: Dictionary = {}
 ## каждую удачную пару «клетка × цель».
 var _enemy_value: Dictionary = {}
 
+## Time budget per frame for plan(). 0 (the default: tests, tools, the network twin) plans
+## in one go. AIController.think_ahead sets one, and plan() then waits for the next frame
+## between phases and soldiers whenever it is spent: the same work in the same order,
+## spread so that a big army's plan (~350 ms) does not freeze the battle screen.
+var think_budget_usec := 0
+var _think_t0 := 0
+
+func _think_pause() -> void:
+	if think_budget_usec > 0 and Time.get_ticks_usec() - _think_t0 >= think_budget_usec:
+		await (Engine.get_main_loop() as SceneTree).process_frame
+		_think_t0 = Time.get_ticks_usec()
+
 ## Полный пересчёт плана на один ход ИИ. field — мультиисточниковое геополе
 ## AIController'а (кэш там же), чтобы не гонять BFS дважды.
 func plan(state: GameState, r: GameActionResolver, field: GeoField,
 		vehicle_rows: Array) -> void:
+	_think_t0 = Time.get_ticks_usec()
 	_state = state
 	_r = r
 	_field = field
@@ -206,9 +219,12 @@ func plan(state: GameState, r: GameActionResolver, field: GeoField,
 		occupied_by[u.coord] = u.id
 
 	_build_lanes(actors)
-	_build_exposure()
+	await _think_pause()
+	await _build_exposure()
+	await _think_pause()
 	_build_line_targets()
 	_build_tank_paths()
+	await _think_pause()
 
 	# Кандидаты — плоские тройки [score, id, coord], а не словари: их десятки тысяч,
 	# и словарь на каждую клетку карты стоит дороже самой оценки. Сравнение в
@@ -217,6 +233,7 @@ func plan(state: GameState, r: GameActionResolver, field: GeoField,
 	var rows: Array = []
 	for u: UnitInstance in actors:
 		_candidates_for(u, rows)
+		await _think_pause()
 	_assign_candidates(rows)
 	# Кому клетка так и не досталась — остаётся на месте (лишь бы не мешал).
 	for u: UnitInstance in actors:
@@ -591,6 +608,7 @@ func _build_exposure() -> void:
 	var gw := grid.width
 	var gh := grid.height
 	for e: UnitInstance in _threats:
+		await _think_pause()   # sums go in the same order either way
 		if grid.cell(e.coord).obscured():
 			continue
 		var marksman := e.stats.special_ability_id == MCF.ABILITY_MARKSMAN

@@ -59,7 +59,7 @@ func _placement() -> void:
 		_stage = 9
 		return
 	ck(p._sides() == [0], "only the defender deploys (sides %s)" % [p._sides()])
-	# Five defenders, so two small waves can't end the match before both have played.
+	# Five defenders, so two small waves are unlikely to end the match before both have played.
 	var spots: Array[Vector2i] = []
 	for y in p.map.height:
 		for x in p.map.width:
@@ -122,7 +122,11 @@ func _waves_play() -> void:
 		return
 	var w1 := MCF.wave_slot(1)
 	var w2 := MCF.wave_slot(2)
-	ck(not m._match_over, "the defenders are still standing")
+	# The match is random (lobby map and dice), and two waves can wipe five defenders who only
+	# end their turns: that is a fair result once both waves have played. Ending before
+	# that is the failure this guards against.
+	ck(not m._match_over or (_acted.has(1) and _acted.has(2)),
+			"the match lasts until both waves have played (over: %s, acted %s)" % [m._match_over, _acted.keys()])
 	ck(_slots_seen.has(w1) and _slots_seen.has(w2), "the battle plays Wave I and Wave II as their own turns (%s)" % [_slots_seen.keys()])
 	ck(_acted.has(1) and _acted.has(2), "the waves' AI plays each wave on its own turn (%s)" % [_acted.keys()])
 	_stage = 9

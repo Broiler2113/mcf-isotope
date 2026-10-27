@@ -16,13 +16,15 @@ func _board_memory(viewer: int, visible: Dictionary, vis_changed: Variant) -> Gr
 		for side: int in state.roster.player_ids():
 			var pc: PlayerController = controllers.get(side)
 			if side == viewer or (pc != null and pc.is_local_human()):
-				_fog_mem[side] = _clone_board(grid)
+				_fog_mem[side] = _take_fog_spare(grid)
+				if side == viewer: _fog_mem_new = _fog_mem[side]
 				_fog_mem_dmg[side] = _fx.floor_damage.duplicate()
 				_fog_mem_fx[side] = DecalMemory.new(_fx)
 				_fog_mem_corpses[side] = _corpse_map()
 	var mem: Grid = _fog_mem.get(viewer)
 	if mem == null:
-		mem = _clone_board(grid)
+		mem = _take_fog_spare(grid)
+		_fog_mem_new = mem
 		_fog_mem[viewer] = mem
 		_fog_mem_dmg[viewer] = _fx.floor_damage.duplicate()
 		_fog_mem_fx[viewer] = DecalMemory.new(_fx)
@@ -89,6 +91,101 @@ func _board_memory(viewer: int, visible: Dictionary, vis_changed: Variant) -> Gr
 	_fog_mem_look = GridCell.look_version
 	return mem
 
+## The live board or one of the fog memories taken from it: tiles painted for one of them
+## can be re-pointed at another (_lod_sync).
+func _same_match_board(g: Grid) -> bool:
+	if g == null or state == null:
+		return false
+	return g == state.grid or (_fog_mem_grid == state.grid and _fog_mem.values().has(g))
+
+## Whether two cells look different on the board (the fields _copy_look carries).
+static func _looks_differ(a: GridCell, b: GridCell) -> bool:
+	return a.floor_type != b.floor_type or a.is_space != b.is_space or a.cover_height != b.cover_height \
+			or a.feature_id != b.feature_id or a.feature_durability != b.feature_durability \
+			or a.dirt_level != b.dirt_level or a.airlock_welded != b.airlock_welded or a.on_fire != b.on_fire \
+			or a.items_off != b.items_off or a.lamps != b.lamps or a.feature_owner != b.feature_owner
+
+## The prepared spare when it is complete, else a clone made now. Either way the board
+## as it is this frame: the spare follows the look journal (_fog_spare_sync).
+func _take_fog_spare(grid: Grid) -> Grid:
+	if _fog_spare_src != grid or _fog_spare == null or _fog_spare.cells_flat().size() != grid.width * grid.height \
+			or not _fog_spare_sync(grid):
+		return _clone_board(grid)
+	var g := _fog_spare
+	_fog_spare = null
+	_copy_board_fields(g, grid)
+	return g
+
+## Grows the spare by a few milliseconds' worth of rows, or keeps a complete one in step.
+## Only while some side could still become a viewer without a memory: a spectator
+## switching sides, or a fogless match whose first smoke limits the view.
+var _fog_spare_budget_usec := 2000   # at least one row per frame regardless
+func _fog_spare_step() -> void:
+	if state == null or video_export:
+		return
+	var grid := state.grid
+	# Before the first memory always (a fogless match waits for its first smoke). After
+	# it, only if the viewer can be a side without one: a spectator, or no local human,
+	# when the active side is the viewer.
+	var wanted := true
+	if _fog_mem_grid == grid and not _spectator:
+		for c: PlayerController in controllers.values():
+			if c != null and c.is_local_human():
+				wanted = false
+				break
+	if not wanted:
+		_fog_spare = null
+		_fog_spare_src = null
+		return
+	if _fog_spare_src != grid or _fog_spare == null:
+		var logs := GridCell.logs_snapshot()
+		_fog_spare = Grid.new(grid.width, grid.height, false)
+		GridCell.logs_restore(logs)
+		_fog_spare_src = grid
+		_fog_spare_look = GridCell.look_version
+	if not _fog_spare_sync(grid):
+		_fog_spare = null   # the journal broke off: start over next frame
+		return
+	var cells := _fog_spare.cells_flat()
+	if cells.size() == grid.width * grid.height:
+		return
+	var t0 := Time.get_ticks_usec()
+	var logs := GridCell.logs_snapshot()
+	GridCell.journaling = false
+	while cells.size() < grid.width * grid.height:
+		var first := cells.size()
+		_fog_spare.add_rows(1)
+		for i in range(first, cells.size()):
+			var c := cells[i]
+			_copy_fresh_look(c, grid.cell_fast(c.coord.x, c.coord.y))
+		if Time.get_ticks_usec() - t0 >= _fog_spare_budget_usec:
+			break
+	GridCell.logs_restore(logs)
+
+## Copies onto the spare's built cells what the look journal says changed since the last
+## sync. False when the journal no longer reaches back that far.
+func _fog_spare_sync(grid: Grid) -> bool:
+	if _fog_spare_look == GridCell.look_version:
+		return true
+	if _fog_spare_look < GridCell.look_log_base:
+		return false
+	var cells := _fog_spare.cells_flat()
+	var built := cells.size()
+	var logs := GridCell.logs_snapshot()
+	GridCell.journaling = false
+	var ch: PackedInt32Array = logs[1]
+	var gw := grid.width
+	var i: int = (_fog_spare_look - GridCell.look_log_base) * 2
+	while i < ch.size():
+		var x := ch[i]
+		var y := ch[i + 1]
+		if x < gw and y < grid.height and y * gw + x < built:
+			_copy_look(cells[y * gw + x], grid.cell_fast(x, y))
+		i += 2
+	GridCell.logs_restore(logs)
+	_fog_spare_look = GridCell.look_version
+	return true
+
 ## Копия доски для памяти зрителя. Grid.new объявляет журналы оборванными — их состояние
 ## возвращается, иначе кэши настоящей доски пересобирались бы целиком.
 ## ponytail: полная копия, ~0.6 с на 274×274 один раз на местного игрока; если станет
@@ -98,7 +195,12 @@ static func _clone_board(src: Grid) -> Grid:
 	GridCell.journaling = false
 	var g := Grid.new(src.width, src.height)
 	for c: GridCell in src.cells_flat():
-		_copy_look(g.cell_fast(c.coord.x, c.coord.y), c)
+		_copy_fresh_look(g.cell_fast(c.coord.x, c.coord.y), c)
+	_copy_board_fields(g, src)
+	GridCell.logs_restore(logs)
+	return g
+
+static func _copy_board_fields(g: Grid, src: Grid) -> void:
 	g.furniture_turn = src.furniture_turn
 	g.floor_look = src.floor_look
 	g.wall_accent = src.wall_accent
@@ -106,11 +208,25 @@ static func _clone_board(src: Grid) -> Grid:
 	g.map_items = src.map_items
 	g.light_tint = src.light_tint
 	g.door_look = src.door_look
-	GridCell.logs_restore(logs)
-	return g
 
 ## Только то, из чего собирается вид клетки. Высота — раньше объекта (сеттер объекта
 ## смотрит на неё), лампы — последними (высота и объект их сбрасывают).
+## _copy_look into a cell fresh from Grid.new: the fields still at their defaults are
+## skipped. Each setter call costs more than the check, and a fresh cell already holds
+## exactly what the setter would leave there; the order of the rest is _copy_look's.
+static func _copy_fresh_look(dst: GridCell, src: GridCell) -> void:
+	if src.floor_type != 0: dst.floor_type = src.floor_type
+	if src.is_space: dst.is_space = true
+	if src.cover_height != 0.0: dst.cover_height = src.cover_height
+	if src.feature_id != "": dst.feature_id = src.feature_id
+	if src.feature_owner != -1: dst.feature_owner = src.feature_owner
+	if src.feature_durability != 0: dst.feature_durability = src.feature_durability
+	if src.dirt_level != 0: dst.dirt_level = src.dirt_level
+	if src.airlock_welded: dst.airlock_welded = true
+	if src.on_fire: dst.on_fire = true
+	if not src.lamps.is_empty(): dst.lamps = src.lamps
+	if src.items_off != 0: dst.items_off = src.items_off
+
 static func _copy_look(dst: GridCell, src: GridCell) -> void:
 	dst.floor_type = src.floor_type
 	dst.is_space = src.is_space
@@ -210,13 +326,30 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, fog_on: bool) -> voi
 	_lod_damage_src = _fog_mem_dmg.get(viewer, {}) if fog_on else _fx.floor_damage
 	var dmg_ver: int = _fog_mem_dmg_ver if fog_on else _fx.damage_version
 	var tiles_key: Array = [terrain_base.get_instance_id(), fog_on]
-	if _tiles == null or _tiles_grid != tiles_key:
+	if _tiles != null and _tiles_grid != tiles_key and _same_match_board(_tiles_base) and _same_match_board(terrain_base):
+		# The view moved between the live board and a fog memory of it (a fogless match's
+		# smoke, a viewer switch): same tiles, repainting only the cells that look different
+		# there. A new tile set repainted every chunk on screen at once (~160 ms on a big map).
+		var prev: Grid = _tiles._grid
+		_tiles._grid = shown
+		_tiles._damage_ver = -1   # other damage and decal sources: compared afresh by the syncs
+		_tiles._decal_reset = -1
+		_tiles._ground_version = -1
+		if not (prev == state.grid and terrain_base == _fog_mem_new):
+			var pc := prev.cells_flat()
+			var nc := shown.cells_flat()
+			for i in nc.size():
+				if _looks_differ(pc[i], nc[i]): _tiles._touch(nc[i].coord)
+		_tiles_grid = tiles_key
+		_tiles_base = terrain_base
+	elif _tiles == null or _tiles_grid != tiles_key:
 		_tiles = TerrainTiles.new(shown, state.env)
 		_tiles.bake_fire = true
 		_tiles.set_time_of_day(state.time_of_day)
 		_tiles.set_winter(state.winter)
 		_tiles.furniture_look = _furniture_look
 		_tiles_grid = tiles_key
+		_tiles_base = terrain_base
 		_lod.tiles = _tiles
 	elif _tiles._grid != shown:
 		# A presentation view changes only held cells. Preserve all unaffected cached
@@ -226,6 +359,7 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, fog_on: bool) -> voi
 		changed.merge(_hold_visual.get("cells", {}))
 		for c: Vector2i in changed: _tiles._touch(c)
 	_tile_hold_cells = _hold_visual.get("cells", {}).duplicate()
+	_fog_mem_new = null
 	if not far:
 		# Ближний план: плитки рельефа кусками (TerrainTiles). Набор кусков зависит от
 		# того, что на экране, поэтому слой перерисовывается вместе с кадром — это лишь

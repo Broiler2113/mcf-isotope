@@ -4504,6 +4504,48 @@ digest, none of the audited paths was a hotspot.
 `_best_shoot`. None was in the audit; they are the next pass.
 
 
+### 27.23 The smoothness pass (0.14.5)
+
+The 0.14.4.2 profile of the giant bench battle (`run_bench.gd` scene `giant`, Hard vs Hard,
+40 civilians) had no single hot function left: an action cost ~11 ms spread over fog, the
+AI's candidates, civilian wake checks and airlocks, and the worst frames came from one-off
+stalls. The gate was the usual one: the 1,200-action headless trace and board hashes, the
+Main-driven battle digest and windowed screenshots had to come back identical.
+
+* **Per-unit vision stamps.** `UnitInstance.vision_stamp` is `vision_epoch` right after this
+  unit's own `coord`, `owner` or `status` setter ran; everything else that moves
+  `vision_epoch` (vehicles, cheats, replay jumps) goes through `bump_world_vision()`, which
+  also moves `vision_world`. While the unit list (`all_units()`, the same array object),
+  `vision_world`, the walls (`GridCell.vision_version`) and the enemy-tank signatures stand,
+  `team_visible_coords` re-sweeps only units stamped after its previous pass (fog 2.6 →
+  ~1 ms per action), and `_airlock_candidates` and `_seed_sight_activation` diff only those
+  units' positions instead of rebuilding a position map of the whole army twice per action.
+* **The next fog memory is prepared ahead.** A viewer's first memory was a full board clone
+  in the frame that needed it (~150 ms on the giant map: the first smoke of a fogless match,
+  a spectator's new side, AI-vs-AI viewers). `MainFogMemory._fog_spare_step` now grows a
+  spare clone a few rows per frame (2 ms budget, at least one row) and keeps it current
+  from the look journal; `_take_fog_spare` hands it over whole. The tile layer is re-pointed
+  between the live board and a memory of it instead of repainting every chunk on screen,
+  repainting only cells that look different (none for a memory made this frame).
+* **The AI's turn plan is spread over frames.** `AIPlanner.plan` (≈350 ms at the start of
+  each giant AI turn) waits for the next frame between phases, soldiers and threats once
+  `think_budget_usec` is spent. Only Main's AI step sets it, through
+  `AIController.think_ahead` before `begin_turn`; every other caller plans in one go. The
+  prepared plan is used only if the state stamp (`digest_hash` plus the version counters) is
+  unchanged at the decision; otherwise the decision plans afresh. Same work, same order,
+  same moves. GDScript objects and the static caches are shared, so the plan is not run on
+  a worker thread.
+* **Soldiers on their own layer.** `MainDrawing._sync_unit_layer` keeps one small canvas item
+  per soldier, keyed by everything its look depends on; a key change redraws that soldier
+  only. A signature (`GameState.revision`, moved by every `resolve()` and `restore()`, the
+  vision counters, selection, group, zoom detail, viewer and fog, a culling window snapped
+  to 16-cell blocks) skips the pass entirely while it stands. Bodies on hulls, drones, the
+  seat grid, the selection box and rulers moved to the layer above (`_draw_unit_top`).
+
+Measured on this VPS (giant scene): headless 1,200 actions 13.8 → 10.4 s; worst frame of
+a Main-driven AI battle 365 → 48 ms; windowed (llvmpipe) board draw with nothing changed
+6.0 → 0.8 ms, during AI play (an action every frame) 6.0 → 4.8 ms.
+
 ## Issues PDF (6) follow-up
 
 - End Turn uses configurable **Shift+Enter**. Its button does not retain keyboard focus;
