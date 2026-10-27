@@ -187,7 +187,7 @@ A one-man walker: the operator stays on the field inside it. An Engineer inside 
 [h]Fighting vehicles[/h]
 An anti-tank charge damages a vehicle only with a [b]direct hit[/b]. Anti-vehicle mines tear at the hull. Engineers repair damaged parts.""" % [MCF.CANNON_RANGE]],
 
-		["Civilians", """Neutral civilians start passive. Once fighting breaks out, or one of them sees a soldier, they wake up, hunt the nearest soldier and shoot - they are hostile to everyone. A civilian [b]bought[/b] with deployment points fights for the side that bought it.""" ],
+		["Civilians", """Neutral civilians start passive. Once fighting breaks out, or one of them sees a soldier, they wake up, hunt the nearest soldier and shoot - they are hostile to everyone. A civilian who sees another civilian wake up wakes up too, and joins that civilian's group. A civilian [b]bought[/b] with deployment points fights for the side that bought it.""" ],
 
 		["Random Events", _events_text()],
 

@@ -14,6 +14,8 @@ func run() -> void:
 	ai_vehicles_and_beam()
 
 	_ruthless_civilians()
+	_civilians_wake_by_sight()
+	_crew_unseen_by_civilians()
 
 	_hard_ai_storms_vehicles()
 
@@ -180,6 +182,66 @@ func ai_vehicles_and_beam() -> void:
 	ck(vai._planner._gun_spread and close > 0.0, "the plan sees the tank's gun and the danger beside its hull")
 
 ## ruthless civilians: an active civilian with a soldier next to it never retreats
+## Owner rule 2026-10-27: seeing a civilian wake up wakes you too, down the line, into the
+## same group. A wall, or no straight line at all, keeps a civilian asleep.
+func _civilians_wake_by_sight() -> void:
+	var m := MapData.new(30, 16)
+	for y in 16:
+		for x in 30:
+			m.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	m.set_cell(Vector2i(10, 11), MCF.FLOOR_NORMAL, 2.0, false, MCF.FEATURE_WALL)
+	m.set_spawn(Vector2i(2, 8), "light_infantry", 0)
+	m.set_spawn(Vector2i(28, 0), "light_infantry", 1)
+	var civ := {}
+	for name: String in ["a", "b", "c", "d", "e", "f"]:
+		var at: Vector2i = {"a": Vector2i(10, 8), "b": Vector2i(10, 2), "c": Vector2i(16, 8),
+			"d": Vector2i(20, 2), "e": Vector2i(25, 13), "f": Vector2i(10, 15)}[name]
+		m.set_spawn(at, "civilian", MCF.Owner.NEUTRAL)
+		civ[at] = name
+	GameConfig.civilians_enabled = true
+	var st: GameState = m.build_state(5)
+	var r: GameActionResolver = GameActionResolver.new(st)
+	var by_name := {}
+	for u in st.all_units():
+		if civ.has(u.coord):
+			by_name[civ[u.coord]] = u
+	ck(by_name.size() == 6, "six civilians placed")
+	var res := r.resolve(EndTurnIntent.new())
+	ck(res.ok, "the turn passes")
+	var a: UnitInstance = by_name["a"]
+	ck(a.neutral_group != 0, "a civilian in sight of the soldier wakes")
+	for name: String in ["b", "c", "d"]:
+		var u: UnitInstance = by_name[name]
+		ck(u.civilian_active and u.neutral_group == a.neutral_group,
+				"civilian %s, who saw one wake, wakes into the same group (%d vs %d)" % [name, u.neutral_group, a.neutral_group])
+	for name: String in ["e", "f"]:
+		var u: UnitInstance = by_name[name]
+		ck(not u.civilian_active and u.neutral_group == 0, "civilian %s, with no clear line, sleeps on" % name)
+
+## Crew inside a tank are off the board: no civilian sees them, wherever it stands (a sleeper
+## on the x == y diagonal used to, since an off-board line counted as clear).
+func _crew_unseen_by_civilians() -> void:
+	var m := MapData.new(30, 16)
+	for y in 16:
+		for x in 30:
+			m.set_cell(Vector2i(x, y), MCF.FLOOR_NORMAL, 0.0, false, "")
+	m.set_spawn(Vector2i(5, 14), "light_infantry", 0)
+	m.set_spawn(Vector2i(28, 0), "light_infantry", 1)
+	m.set_spawn(Vector2i(12, 12), "civilian", MCF.Owner.NEUTRAL)
+	GameConfig.civilians_enabled = true
+	var st: GameState = m.build_state(5)
+	var tank: Vehicle = st.spawn_vehicle("tank", Vector2i(1, 4), 0)
+	var crew: UnitInstance = st.grid.cell(Vector2i(5, 14)).occupant
+	st.grid.cell(crew.coord).occupant = null
+	crew.coord = GameActionResolver.OFFBOARD
+	crew.aboard_vehicle_id = tank.id
+	tank.occupants.append(crew.id)
+	var civ: UnitInstance = st.grid.cell(Vector2i(12, 12)).occupant
+	var r: GameActionResolver = GameActionResolver.new(st)
+	ck(r.resolve(EndTurnIntent.new()).ok, "the turn passes with a crewed tank")
+	ck(civ != null and not civ.civilian_active and civ.neutral_group == 0,
+			"a civilian on the diagonal does not see the crew inside a tank")
+
 func _ruthless_civilians() -> void:
 	var m := MapData.new(30, 12)
 	for y in 12:

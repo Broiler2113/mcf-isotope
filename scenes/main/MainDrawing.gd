@@ -954,7 +954,7 @@ func _draw() -> void:
 	# drifts on its own layer (GasDrift).
 	_sync_gas_drift()
 
-## Soldiers on their own layer (perf, 0.14.4.3): one small canvas item per soldier, drawn
+## Soldiers on their own layer (perf, 0.14.5): one small canvas item per soldier, drawn
 ## again only when what it shows changes. The board used to issue ~10 draw commands for every
 ## soldier on screen on each redraw (5 of 6 ms on a big battle); now a pan or zoom just moves
 ## the layer, and an action redraws the soldiers it touched. Each sprite draws from its key:

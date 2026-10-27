@@ -152,7 +152,7 @@ const DERIVED_FIELDS := ["gas", "smoke"]
 ## Счётчики правок клетки, а не её состояние: StateCodec по ним только узнаёт, какие
 ## записи пересобрать (2026-10). Загруженная клетка начинает свой счёт заново.
 const BOOKKEEPING_FIELDS := ["rev"]
-## The same for a unit: when its sight last changed (0.14.4.3), for the fog and wake-up caches.
+## The same for a unit: when its sight last changed (0.14.5), for the fog and wake-up caches.
 const UNIT_BOOKKEEPING_FIELDS := ["vision_stamp"]
 
 func _check_state_codec() -> void:

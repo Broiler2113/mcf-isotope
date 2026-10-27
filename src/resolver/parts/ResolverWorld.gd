@@ -34,7 +34,8 @@ func _civ_sees_soldier(civ: UnitInstance, idx: Dictionary = {}) -> bool:
 func _sight_index(soldiers: Variant = null) -> Dictionary:
 	var targets: Array[Vector2i] = []
 	for s: UnitInstance in (_living_soldiers() if soldiers == null else soldiers):
-		targets.append(s.coord)
+		if state.grid.in_bounds(s.coord):   # crew inside a tank are off the board: unseen
+			targets.append(s.coord)
 	for veh: Vehicle in state.all_vehicles():
 		if veh.alive() and not MCF.is_neutral(veh.owner):
 			targets.append_array(veh.footprint())
@@ -151,6 +152,7 @@ func _wake_and_group(res: ActionResult) -> void:
 		var woke := _flood_component(seed_id)
 		if woke.is_empty():
 			continue
+		_wake_by_sight(woke)
 		var num := _next_group_number()
 		var slot := MCF.neutral_group_slot(num)
 		for u: UnitInstance in woke:
@@ -162,6 +164,33 @@ func _wake_and_group(res: ActionResult) -> void:
 			MCF.roman(num), woke.size(), "" if woke.size() == 1 else "s"])
 		# Свежевскрытый кластер мог открыть обзор ещё одному кварталу — проверяем снова.
 		_seed_sight_activation()
+
+## Owner rule (2026-10-27): a sleeping civilian who sees another civilian wake up wakes too,
+## with the civilians around it, and so on down the line. "Sees" is _civ_sees_soldier's clear
+## row, column or diagonal. They join the group being formed: one wake-up stays one group and
+## one initiative slot, however far it spreads. Grows woke in place, in a fixed order (units
+## by the order of state.all_units(), each one's neighbours as _flood_component takes them).
+func _wake_by_sight(woke: Array) -> void:
+	var taken := {}
+	for u: UnitInstance in woke:
+		taken[u.id] = true
+	var fresh := woke.duplicate()
+	while not fresh.is_empty():
+		var targets: Array[Vector2i] = []
+		for u: UnitInstance in fresh:
+			targets.append(u.coord)
+		var idx := _index_lines(targets)
+		fresh = []
+		for u: UnitInstance in state.all_units():
+			if taken.has(u.id) or not _is_civilian(u) or not u.is_alive() or u.neutral_group != 0:
+				continue
+			if not _civ_sees_soldier(u, idx):
+				continue
+			for w: UnitInstance in _flood_component(u.id):
+				if not taken.has(w.id):
+					taken[w.id] = true
+					woke.append(w)
+					fresh.append(w)
 
 ## Засеять фронт теми спящими НЕ сгруппированными нейтралами, кто видит солдата (§3.1b).
 ## Дорого только когда на карте есть и спящие нейтралы, и солдаты, — иначе выходит сразу.
@@ -185,7 +214,10 @@ func _seed_sight_activation() -> void:
 		if not u.is_alive():
 			continue
 		if CivilianAI.is_soldier(u):
-			soldiers.append(u)
+			# Tank crew sit off the board (OFFBOARD), and an off-board line counts as clear in
+			# los_blocked: a sleeper on the x == y diagonal used to "see" every crew member.
+			if in_grid.in_bounds(u.coord):
+				soldiers.append(u)
 		elif _is_civilian(u) and u.neutral_group == 0:
 			sleepers.append(u)
 	if soldiers.is_empty():
