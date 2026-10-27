@@ -8,7 +8,7 @@ func run() -> void:
 	ck(not CheatCommands.complete("time m", r.state, 0).is_empty(), "time values appear in suggestions")
 	for entry: Dictionary in CheatCommands.CATALOG:
 		if entry.get("hidden", false): continue
-		ck(CheatCommands.help_text().contains(CheatCommands.syntax(entry)), "help documents " + entry.op)
+		ck(CheatCommands.help_text("all").contains(CheatCommands.syntax(entry)), "help documents " + entry.op)
 	var parsed := CheatCommands.parse('SpAwN UnIt light_infantry "Red Team" 4 4', r.state, 0)
 	ck(not parsed.has("error") and parsed.args.owner == 1, "case-insensitive keywords and exact quoted names")
 	for bad: String in ["unknown", "unit kill 999999", "inspect cell -1 0", "spawn unit ../../file #1 2 2", "unit stat 0 armor 0", "unit stat 0 speed 1000", "unit stat 0 rof 101", "unit stat 0 sight 1025", "spawn unit light_infantry #1 0 0 101", "players; unit kill 0", 'inspect unit "0', "world gas add 23 19 2 2", "world fire clear 3", "event queue gas 3"]:

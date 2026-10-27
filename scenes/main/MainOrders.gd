@@ -1540,10 +1540,9 @@ func _handle_shortcut(event: InputEventKey) -> bool:
 			else:
 				_cheat_console.queue_free()
 			return true
-		if replay == null and not _spectator and state.cheats_enabled and _fp == null:
-			var side: int = net.my_owner if net != null else _viewing_side()
-			if CheatAccess.seated(state, side):
-				_cheat_console = CheatConsole.open(self)
+		# Opens with cheats off too; its commands then refuse (owner, 0.14.4).
+		if replay == null and not _spectator and _fp == null and CheatAccess.seated(state, CheatAccess.console_side(self)):
+			_cheat_console = CheatConsole.open(self)
 		return true
 	if Keybinds.matches(event, "game_cancel"):
 		if is_instance_valid(_cheat_console):
@@ -1634,7 +1633,7 @@ func _cheat_result(intent: Intent, result: ActionResult) -> void:
 	if not intent is CheatIntent: return
 	var mine: bool = net == null or intent.issuer == net.my_owner
 	if mine and is_instance_valid(_cheat_console):
-		_cheat_console.write(result.cheat_output if result.ok else result.reason)
+		_cheat_console.write(result.cheat_output if result.ok else result.reason, "" if result.ok else "error")
 	if not result.ok: return
 	if intent.op == "ai_personality" and (net == null or net.is_host):
 		_make_side(intent.args.owner)

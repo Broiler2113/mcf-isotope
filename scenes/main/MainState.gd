@@ -1022,4 +1022,5 @@ var _cheat_coords := false
 @abstract func _set_ai_speed(v: float, broadcast: bool) -> void
 
 var _cheat_history: Array[String] = []
-var _cheat_output := ""
+## Console transcript kept across reopening: [text, kind] pairs (CheatConsole.write).
+var _cheat_output: Array = []

@@ -87,7 +87,7 @@ func _damage_paths() -> void:
 	r._land_collapse({"x": 1, "y": 1, "w": 4, "h": 4}, out)
 	ck(target.is_alive(), "direct frag and structural collapse respect protection")
 	command(r, "spawn unit drone_operator #1 10 10")
-	command(r, "world feature set 10 11 drone_station self")
+	command(r, "world feature set 10 11 drone_station A")
 	command(r, "spawn unit drone #1 11 11")
 	var drone := r.state.get_unit(3)
 	drone.cheat_invulnerable = true

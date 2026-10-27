@@ -120,7 +120,7 @@ func _on_peer_ready(is_host: bool) -> void:
 	net.outgoing.connect(func(msg: Dictionary) -> void: session.send(msg))
 	net.action_applied.connect(_on_net_applied)
 	net.denied.connect(func(reason: String) -> void:
-		if is_instance_valid(_cheat_console): _cheat_console.write(reason)
+		if is_instance_valid(_cheat_console): _cheat_console.write(reason, "error")
 		_net_request_pending = false
 		_after_action()
 		state.log.add("[denied] " + reason)

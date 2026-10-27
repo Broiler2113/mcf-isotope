@@ -17,7 +17,7 @@ const DEFINITIONS: Array = [
 	{"id": "game_end_turn", "label": "End turn", "keys": [KEY_MASK_SHIFT | KEY_ENTER], "contexts": ["*"], "section": "game"},
 	{"id": "game_cancel", "label": "Settings / cancel / close", "keys": [KEY_ESCAPE], "contexts": ["*"], "section": "game"},
 	{"id": "game_initiative", "label": "Initiative overlay", "keys": [KEY_TAB], "contexts": ["*"], "section": "game"},
-	{"id": "game_cheats", "label": "Cheat console (when enabled)", "keys": [KEY_F2], "contexts": ["*"], "section": "game"},
+	{"id": "game_cheats", "label": "Cheat console", "keys": [KEY_F2], "contexts": ["*"], "section": "game"},
 	{"id": "game_manual", "label": "Manual", "keys": [KEY_F1], "contexts": ["*"], "section": "game"},
 	{"id": "game_pause_ai", "label": "Pause AI battle", "keys": [KEY_P], "contexts": ["*"], "section": "game"},
 	{"id": "game_heightmap", "label": "Heightmap on / off", "keys": [KEY_MASK_SHIFT | KEY_H], "contexts": ["*"], "section": "game"},

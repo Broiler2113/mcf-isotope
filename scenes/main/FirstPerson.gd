@@ -32,6 +32,11 @@ const LM_TEXELS := 4       # light map texels per cell
 const UNIT_H := 1.7
 const UNIT_W := 0.55
 const VEHICLE_H := 2.0
+## Drone hover (owner, 0.14.4): centre height, how far it bobs, and the room it keeps under a
+## ceiling (model top 0.15 m + bob + a margin).
+const DRONE_Y := 1.75
+const DRONE_BOB := 0.05
+const DRONE_CLEARANCE := 0.4
 const SUN_K := 0.42        # how much of the daylight the sun's shadows take back
 
 var main: Node
@@ -1407,7 +1412,8 @@ func _corpses() -> Dictionary:
 			_corpse_cache[c] = map[c]
 	return _corpse_cache
 
-## A drone hangs just under the ceiling (1.8 m, owner); over a vehicle, above its roof.
+## A drone hovers at 1.75 m, clear of the 2.3 m ceiling (owner, 0.14.4); over a vehicle, above
+## its roof, but never into a roof indoors. It faces north like its board sprite and only bobs.
 func _place_drone(u: UnitInstance) -> void:
 	var n: Node3D = _units.get(u.id)
 	if n == null:
@@ -1423,11 +1429,13 @@ func _place_drone(u: UnitInstance) -> void:
 		_dyn.add_child(n)
 		_units[u.id] = n
 	var p := _unit_pos(u)
-	var y := 1.85
+	var y := DRONE_Y
 	if state.grid.in_bounds(u.coord) and state.grid.cell(u.coord).vehicle_id != -1:
 		y = VEHICLE_H + 0.25
-	n.position = Vector3(p.x, y + sin(Time.get_ticks_msec() * 0.003 + u.id) * 0.03, p.z)
-	n.rotation.y += 0.01
+	if _roofed_at(p):
+		y = minf(y, FirstPersonBoard.CEIL - DRONE_CLEARANCE)
+	n.position = Vector3(p.x, y + sin(Time.get_ticks_msec() * 0.0025 + u.id) * DRONE_BOB, p.z)
+	n.rotation.y = PI * 0.5
 
 ## Vehicles as models — the tank's turret turns on its own — with the type's name in the
 ## battle screen's font on both flanks, sized to stay on the hull (owner, fix-8).

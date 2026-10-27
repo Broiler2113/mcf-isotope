@@ -1114,9 +1114,8 @@ func _draw_station_leashes(station: Vector2i, labels: bool) -> void:
 
 func _draw_drone(unit: UnitInstance, at: Vector2i) -> void:
 	var center := _cell_origin(at) + Vector2(CELL, CELL) * 0.5
-	# The drone hangs over the middle of its cell (owner, 2026-10-25), nudged a little up and
-	# right so its shadow, and a soldier or body beneath, still show.
-	var dc := _cell_origin(at) + Vector2(CELL * 0.55, CELL * 0.45)
+	# The drone hangs exactly over the middle of its cell, above any soldier there (owner, 0.14.4).
+	var dc := center
 	# Тень под дроном — подсказка, что он парит.
 	draw_circle(center + Vector2(-CELL * 0.06, CELL * 0.08), CELL * 0.12, Color(0, 0, 0, 0.25))
 	var s := CELL * 0.2

@@ -46,14 +46,14 @@ static func spawn(r: GameActionResolver, args: Dictionary) -> ActionResult:
 		pilot.borg_id = veh.id
 		veh.occupants.assign([pilot.id])
 		CheatUnits.refill(pilot)
-	return CheatUnits.result("Created %d - %s for %s at %s." % [veh.id, spec.get("name", type), r.state.roster.name_of(veh.owner), at])
+	return CheatUnits.result("Created %s %s for %s at (%d,%d)." % [CheatCommands.vehicle_label(veh.id), spec.get("name", type), CheatQueries.player_label(r.state, veh.owner), at.x, at.y])
 
 static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 	var args := intent.args
 	if intent.op == "spawn_vehicle": return spawn(r, args)
 	var veh := r.state.get_vehicle(args.vehicle)
 	if veh == null: return ActionResult.fail("Vehicle ID no longer exists.")
-	var label := "%d - %s" % [veh.id, VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)]
+	var label := "%s %s" % [CheatCommands.vehicle_label(veh.id), VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)]
 	match intent.op:
 		"vehicle_clone":
 			var copy := {"type": veh.type_id, "owner": veh.owner, "x": args.x, "y": args.y}
@@ -67,17 +67,16 @@ static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 			if intent.op == "vehicle_owner":
 				var old := veh.owner
 				veh.owner = args.owner
-				return CheatUnits.result("%s owner: %s → %s." % [label, r.state.roster.name_of(old), r.state.roster.name_of(veh.owner)])
+				return CheatUnits.result("%s owner: %s → %s." % [label, CheatQueries.player_label(r.state, old), CheatQueries.player_label(r.state, veh.owner)])
 			r.state.grid.clear_vehicle_footprint(veh.id, veh.footprint())
 			r.state.remove_vehicle(veh.id)
 			UnitInstance.vision_epoch += 1
 			return CheatUnits.result(label + " removed.")
 		"vehicle_repair":
 			if veh.wrecked or not veh.alive(): return ActionResult.fail("The hull is gone; ordinary rules do not permit restoring this wreck.")
-			var old := veh.components.duplicate()
 			for component: String in veh.components: veh.components[component] = veh.component_max(component)
 			veh.tower_locked_dir = Vector2i.ZERO
-			return CheatUnits.result("%s components: %s → %s." % [label, old, veh.components])
+			return CheatUnits.result("%s: every component restored to full durability." % label)
 		"vehicle_durability":
 			var repair := CheatIntent.new("vehicle_component", {"vehicle": veh.id, "component": MCF.COMP_HULL, "value": args.get("value", "restore")}, intent.issuer)
 			return apply(r, repair)
