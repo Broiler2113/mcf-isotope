@@ -43,6 +43,10 @@ func has(coord: Vector2i) -> bool:
 
 ## Шаги до ближайшего источника; FAR — не дотянулась (аналог Dictionary.get с
 ## умолчанием GEO_FAR, и значение умолчания то же самое).
+## Steps for every board cell, y * width + x (FAR: unreachable). For native kernels.
+func cells() -> PackedInt32Array:
+	return _d
+
 func at(coord: Vector2i) -> int:
 	var x := coord.x
 	var y := coord.y

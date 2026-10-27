@@ -4,7 +4,7 @@ extends Node
 ## Load the bundled, matching desktop library before any simulation or worker runs.
 ## The ignored bundle is loaded explicitly so unsupported systems still open normally.
 const BUNDLE_ROOT := "res://addons/mcf_visuals/prebuilt"
-const CLASSES := ["MCFMeshBuilder", "MCFTerrain", "MCFAI", "MCFPathfinding", "MCFVisibility"]
+const CLASSES := ["MCFMeshBuilder", "MCFTerrain", "MCFAI", "MCFPathfinding", "MCFVisibility", "MCFPlanScorer"]
 const LIBRARIES := {"windows": "mcf_visuals.dll", "macos": "mcf_visuals.dylib"}
 const SOURCE_CONFIG := ["native/visuals/CMakeLists.txt", "native/visuals/build_profile.json",
 	"native/visuals/build.py", "native/policy/dependencies.json", "addons/mcf_visuals/mcf_visuals.gdextension.in"]
