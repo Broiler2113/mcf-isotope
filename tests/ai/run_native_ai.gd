@@ -107,6 +107,7 @@ func _plan_scores(rng: RandomNumberGenerator) -> void:
 		"shield_bearer", "marksman", "heavy_infantry", "flamethrower"]
 	var rows := 0
 	var native_soldiers := 0
+	var beam_records := 0
 	for board in 6:
 		var style: int = [MapGen.Style.TOWN, MapGen.Style.STATION, MapGen.Style.FIELD][board % 3]
 		var m := MapGen.generate({"style": style, "size": 1, "seed": 4100 + board, "civilians": false})
@@ -168,6 +169,8 @@ func _plan_scores(rng: RandomNumberGenerator) -> void:
 				u.neutral_group = 1
 			if k % 7 == 3: u.remaining_ap = 1
 			if k % 11 == 5: u.move_credit = 2
+			if k % 13 == 6: u.carried_corpses = 1
+			if k % 17 == 9: u.status = MCF.Status.CORPSE
 		var r := GameActionResolver.new(state)
 		for setting: Array in [[0, AIPersonality.TACTICIAN, false], [1, AIPersonality.AGGRESSOR, true],
 				[0, AIPersonality.FORTIFIER, true], [civ_slot, AIPersonality.TACTICIAN, false]]:
@@ -209,6 +212,8 @@ func _plan_scores(rng: RandomNumberGenerator) -> void:
 			planner._build_exposure()
 			ck(planner._native_plan != null and planner._exposure == exposure and planner._threat == threat,
 					"the native threat map equals GDScript's on board %d (owner %d)" % [board, owner])
+			if setting == [0, AIPersonality.TACTICIAN, false] and planner._native_plan != null:
+				beam_records += _compare_beams(planner._native_plan, r, state, rng, marks)
 			planner._build_line_targets()
 			planner._build_tank_paths()
 			planner._setup_native_scorer()
@@ -236,7 +241,36 @@ func _plan_scores(rng: RandomNumberGenerator) -> void:
 			c.smoke = false
 			c.gas = false
 	ck(rows > 2000 and native_soldiers > 100, "plan scores compared (%d rows, %d soldiers scored natively)" % [rows, native_soldiers])
-	print("Compared %d plan cell scores (%d soldiers scored natively)." % [rows, native_soldiers])
+	ck(beam_records > 3000, "marksman beams compared (%d records)" % beam_records)
+	print("Compared %d plan cell scores (%d soldiers scored natively) and %d beam records." % [rows, native_soldiers, beam_records])
+
+## The marksman's beam (MCFPlanScorer.beam) against GameActionResolver._laser_trace, record by
+## record: from every trench, smoke and feature cell strewn above, every unit and some random
+## cells, in all eight directions.
+func _compare_beams(scorer: RefCounted, r: GameActionResolver, state: GameState,
+		rng: RandomNumberGenerator, marks: Array[GridCell]) -> int:
+	var grid := state.grid
+	var froms: Array[Vector2i] = []
+	for c: GridCell in marks: froms.append(c.coord)
+	for u: UnitInstance in state.all_units():
+		if grid.in_bounds(u.coord): froms.append(u.coord)
+	for k in 150: froms.append(Vector2i(rng.randi_range(0, grid.width - 1), rng.randi_range(0, grid.height - 1)))
+	var kinds := {"empty": 0, "terrain": 1, "vehicle": 2, "shield": 3, "unit": 4, "feature": 5}
+	var count := 0
+	for from: Vector2i in froms:
+		for step: Vector2i in Grid.N8:
+			var want := PackedInt32Array()
+			for rec: Dictionary in r._laser_trace(from, step):
+				var at: Vector2i = rec["coord"]
+				want.append_array([at.x, at.y, kinds[rec["kind"]], int(rec["cost"]), int(rec["destroyed"]),
+					int(rec["stop"]), int(rec["damage"]), int(rec["vehicle_id"]), int(rec["left"])])
+			var got: PackedInt32Array = scorer.beam(from, step)
+			if got != want:
+				ck(false, "the native beam from %s toward %s matches _laser_trace" % [from, step])
+				print("  native  %s\n  GDScript %s" % [got, want])
+				return count
+			count += want.size() / 9
+	return count
 
 func _decision_traces() -> void:
 	GameConfig.civilians_enabled = false
