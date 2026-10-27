@@ -42,6 +42,11 @@ static func initialize() -> void:
 	_reason = checked.code
 	if not checked.valid: return
 	var extension_path := ProjectSettings.globalize_path(checked.extension)
+	if target.begins_with("macos"):
+		# A browser download quarantines the verified library, and Gatekeeper then
+		# blocks it with a dialog only an administrator can override. The owner of
+		# the extracted files can clear the flag without one.
+		OS.execute("/usr/bin/xattr", ["-d", "com.apple.quarantine", extension_path.get_base_dir().path_join(LIBRARIES.macos)], [], true)
 	var result := GDExtensionManager.load_extension(extension_path)
 	if result not in [GDExtensionManager.LOAD_STATUS_OK, GDExtensionManager.LOAD_STATUS_ALREADY_LOADED]:
 		_reason = "restart" if result == GDExtensionManager.LOAD_STATUS_NEEDS_RESTART else "load"

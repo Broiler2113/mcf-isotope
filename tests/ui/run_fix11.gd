@@ -35,6 +35,10 @@ func run() -> void:
 	console.submit("spawn unit engineer #1 (10,10)")
 	await process_frame
 	ck(main.state.all_units().size() == 3, "scenario has an added unit to recover from")
+	console.submit("undo")
+	ck(main.state.all_units().size() == 2, "console undo takes back the last command")
+	console.submit("redo")
+	ck(main.state.all_units().size() == 3, "console redo puts the command back")
 	main._victory_overlay = Control.new()
 	main._ui_layer.add_child(main._victory_overlay)
 	main._match_over = true

@@ -26,7 +26,8 @@ func position(recorder: ReplayRecorder) -> String:
 		if i < cursor: before += 1
 	return "Match history: action %d of %d." % [before, total]
 
-func step(recorder: ReplayRecorder, direction: int) -> Dictionary:
+## commands_only (console undo/redo): cross the step only if it is a console command.
+func step(recorder: ReplayRecorder, direction: int, commands_only := false) -> Dictionary:
 	_sync(recorder)
 	var steps: Array = source.get("steps", [])
 	var from := cursor
@@ -37,6 +38,8 @@ func step(recorder: ReplayRecorder, direction: int) -> Dictionary:
 		while target <= steps.size() and steps[target - 1].get("i", {}).get("t", "") == "checkpoint": target += 1
 	if target < 0: return {"error": "Already at the beginning of the recorded match."}
 	if target > source.get("steps", []).size(): return {"error": "No forward action. New live actions replace the forward branch."}
+	if commands_only and steps[target if direction < 0 else target - 1].get("i", {}).get("t", "") != "cheat":
+		return {"error": "Nothing to undo: the last action was not a console command." if direction < 0 else "Nothing to redo: the next action is not a console command."}
 	var player := ReplayPlayer.new(source)
 	player.advance_random = true
 	player.seek(target)
