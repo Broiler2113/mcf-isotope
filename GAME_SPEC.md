@@ -4550,6 +4550,34 @@ Measured on this VPS (giant scene): headless 1,200 actions 13.8 → 10.4 s; wors
 a Main-driven AI battle 365 → 48 ms; windowed (llvmpipe) board draw with nothing changed
 6.0 → 0.8 ms, during AI play (an action every frame) 6.0 → 4.8 ms.
 
+### 27.24 The AI's turn plan in C++ (0.14.5.1)
+
+The first slice of the simulation core in C++: `MCFPlanScorer` (native/visuals, one instance
+per plan) runs the three hot parts of `AIPlanner.plan` — the threat map's rays
+(`_build_exposure`), every soldier's candidate-cell scores (`_score_cell` with `_fire_ease`,
+fire, shelter, lanes, spacing and vehicle fire) and the marksman's laser trace
+(`_laser_trace`, for `_beam_kills` and `_beam_burns`). GDScript keeps every rule it does
+not hand over, and remains the reference and the fallback.
+
+* **The board mirror.** `AIPlanner._scoring_board` keeps one int of flags per cell (wall,
+  cover value, shelter, trench, embrasures, fire, fire spread, gas/smoke, the cover a shot
+  past the cell meets) and one laser code (armour/edge, furniture, glass, durable box,
+  fixed cost, wall), built once per board and patched from the look journal like
+  `AIController._walk_mask`. Vehicles, occupants and hulls covering cells are passed per plan.
+* **Bit for bit.** Every score is a sum of doubles in GDScript's order; the build disables
+  fast-math and contraction. `_hit_chance`'s `pow()` never runs natively: the 24
+  (need, burst) values come in a table computed by the engine, so no platform's math
+  library can change a move. `shot_is_futile` (measured from the soldier's own cell) stays
+  in GDScript and is asked once per enemy the kernel names.
+* `_exposure` and `_threat` are flat per-cell arrays in both paths (nothing iterated them).
+* **Tests.** `tests/ai/run_native_ai.gd` compares the threat maps, ~43,000 candidate rows and
+  ~200,000 laser records exactly on generated boards with trenches, embrasures, glass, fire,
+  smoke, gas, tanks, a wreck, corpses and corpse carriers, under every personality and the
+  civilians' classic weights; the complete AI decision traces match as before.
+
+Measured (giant bench scene): a soldier's scoring 1.46 → 0.19 ms; the plan-bearing decision
+~400 → 144 ms; 1,200 actions 10.5 → 9.5 s (all GDScript: 12.6 s); the hashes are unchanged.
+
 ## Issues PDF (6) follow-up
 
 - End Turn uses configurable **Shift+Enter**. Its button does not retain keyboard focus;

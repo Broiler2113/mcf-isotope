@@ -148,7 +148,7 @@ var _lane_cells: Dictionary = {}
 ## _fire_ease: когда hit_number перевалил за 7 (дальше он только растёт) или когда на
 ## луче встала стена/корпус машины (дальше los_blocked вернул бы true для всех). У
 ## марксмана луч не обрывается вовсе — его лазер бьёт сквозь всё и без учёта дальности.
-## Per board cell, y * width + x (0.14.6: was a Dictionary by Vector2i; nothing iterated it).
+## Per board cell, y * width + x (0.14.5.1: was a Dictionary by Vector2i; nothing iterated it).
 var _exposure := PackedInt32Array()
 
 ## Угроза клетке (0.12, самосохранение): не «сколько стволов смотрит», а сколько ПОПАДАНИЙ

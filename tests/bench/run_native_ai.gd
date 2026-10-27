@@ -35,6 +35,32 @@ func _go() -> void:
 	planner._state = state
 	planner._enemies = state.all_units()
 	_measure("AI 240-enemy firing-line index", func() -> void: planner._build_line_targets(), 3)
+	# A whole turn plan's scoring on the giant bench battle (MCFPlanScorer): the threat map,
+	# then every soldier's candidate cells, marksmen included.
+	var bench: GDScript = load("res://tests/bench/run_bench.gd")
+	GameConfig.civilians_enabled = true
+	GameConfig.civilian_count = 40
+	var giant: GameState = bench.build_map(bench.SCENES.giant).build_state(7)
+	var r := GameActionResolver.new(giant)
+	r.omniscient_side = 0
+	var ai := AIController.new(0, AIController.Difficulty.HARD)
+	ai._r = r
+	var staff := AIPlanner.new()
+	staff.owner = 0
+	staff._state = giant
+	staff._r = r
+	staff._field = ai._enemy_distance_field(giant, false, r)
+	staff._apply_weights(giant)
+	staff._collect_enemies()
+	var actors := staff._plannable_units()
+	staff._build_lanes(actors)
+	staff._build_line_targets()
+	staff._build_tank_paths()
+	_measure("AI giant plan: threat map and %d soldiers' cell scores" % actors.size(), func() -> void:
+		staff._build_exposure()
+		staff._setup_native_scorer()
+		var scored: Array = []
+		for u: UnitInstance in actors: staff._candidates_for(u, scored), 1)
 	NativeKernels.enabled = true
 	quit()
 
