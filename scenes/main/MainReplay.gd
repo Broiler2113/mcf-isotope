@@ -212,7 +212,7 @@ func _history_command(parsed: Dictionary, side: int) -> String:
 	if parsed.op == "checkpoint_list": return _history.checkpoint_list(recorder)
 	var name: String = parsed.args.get("name", "quick")
 	if parsed.op == "checkpoint_save": return _history.checkpoint(recorder, state, resolver, _fx, name)
-	var restored: Dictionary = _history.restore_checkpoint(recorder, name) if parsed.op == "checkpoint_restore" else _history.step(recorder, -1 if parsed.op == "history_back" else 1)
+	var restored: Dictionary = _history.restore_checkpoint(recorder, name) if parsed.op == "checkpoint_restore" else _history.step(recorder, -1 if parsed.op in ["history_back", "history_undo"] else 1, parsed.op in ["history_undo", "history_redo"])
 	if restored.has("error"): return str(restored.error)
 	var frame := ReplayCheckpoint.unpack(restored.frame)
 	if frame.get("state", {}).get("w") != state.grid.width or frame.get("state", {}).get("h") != state.grid.height: return "This checkpoint belongs to a different battlefield."

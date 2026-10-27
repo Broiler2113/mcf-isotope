@@ -8,6 +8,8 @@ const CATALOG: Array = [
 	{"op": "checkpoint_save", "pattern": "checkpoint {name:text?}", "access": "host_history", "help": "Save a complete test checkpoint, using quick when the name is omitted. Stored separately from manual saves."},
 	{"op": "history_back", "pattern": "game step back", "access": "host_history", "help": "Host only: rewind one recorded action, including turns, attacks and cheats. New actions replace the forward branch."},
 	{"op": "history_forward", "pattern": "game step forward", "access": "host_history", "help": "Host only: restore the next action after rewinding, until a new action is performed."},
+	{"op": "history_undo", "pattern": "undo", "access": "host_history", "help": "Host only: take back the last console command, if no other action came after it."},
+	{"op": "history_redo", "pattern": "redo", "access": "host_history", "help": "Host only: put back the command that undo took back, until a new action is performed."},
 	{"op": "history_status", "pattern": "game history", "access": "host_history", "help": "Show the current action and the available match history."},
 	{"op": "help", "pattern": "help {topic:text?}", "access": "safe", "help": "Show the command topics; help <topic> lists its commands and help all lists every command."},
 	{"op": "status", "pattern": "cheats status", "access": "safe", "help": "Show master setting and your current rights."},
@@ -119,11 +121,11 @@ const TOPICS := [
 	["ai", "pause, step, speed and personality of AI players (host)"],
 	["match", "Capture & Hold scores and Holdout waves"],
 	["cheats", "permissions, kick and ban (host)"],
-	["game", "test checkpoints and match history (host)"],
+	["game", "undo and redo commands, test checkpoints and match history (host)"],
 ]
 const TOPIC_OF := {"help": "info", "players": "info", "units": "info", "vehicles": "info", "inspect": "info",
 	"ids": "info", "coords": "info", "clear": "info", "kick": "cheats", "ban": "cheats", "time": "world",
-	"wave": "match", "checkpoint": "game"}
+	"wave": "match", "checkpoint": "game", "undo": "game", "redo": "game"}
 const DIRECTIONS := ["north", "east", "south", "west"]
 ## Console words for internal ids players never see (owner, 0.14.4): the LDF is stored
 ## as "bru" and the stationary machine gun as "rsp". Saves and the wire keep the ids.

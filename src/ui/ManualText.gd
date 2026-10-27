@@ -247,7 +247,7 @@ For an area event, enter [b]event spawn gas (1,2) (3,4) 3[/b]. Both corner cells
 [h]Test checkpoints and match history[/h]
 A successful cheat still clears ordinary Undo and Redo, except AI pause, resume, step and speed. Before changing a scenario, the host can enter [b]checkpoint[/b] (named quick) or [b]checkpoint baseline[/b]. [b]checkpoint restore baseline[/b] restores the complete board, rules, units, vehicles, dice state and permanent effects. [b]checkpoint list[/b] lists this match's checkpoints. They are stored separately from manual saves in Checkpoints. Quote names containing spaces. Current network seats and cheat permissions stay with the current hosted session.
 
-[b]game step back[/b] and [b]game step forward[/b] let the host move across recorded actions, including turns and cheats. [b]game history[/b] shows the current position. A new live action replaces the forward branch. Restoring pauses AI until Resume is pressed. These controls require cheats and remain available after a match finishes.
+[b]game step back[/b] and [b]game step forward[/b] let the host move across recorded actions, including turns and cheats. [b]undo[/b] and [b]redo[/b] do the same for console commands only: undo takes back the last command if no other action came after it. [b]game history[/b] shows the current position. A new live action replaces the forward branch. Restoring pauses AI until Resume is pressed. These controls require cheats and remain available after a match finishes.
 
 [b]time morning[/b], [b]time day[/b], [b]time evening[/b] and [b]time night[/b] change the time and lighting on town and field maps. The first-person sky, sunlight, moon and lamps update while the view is open. These commands require gameplay cheat permission and are shared with other players. [b]world time[/b] remains an alias.
 
@@ -255,7 +255,7 @@ A successful cheat still clears ordinary Undo and Redo, except AI pause, resume,
 The host can use [b]ai pause B[/b], [b]ai step B[/b] and [b]ai resume B[/b]. A step lets the active AI make exactly one decision, including an end-turn or a rejected action, then pauses it again. Other AI players keep their own settings. [b]kick B[/b] disconnects a human guest; [b]ban B[/b] also blocks their saved reconnect identity until this hosted session closes. These commands do not target units or AI slots.
 
 [h]Saved effects[/h]
-Successful gameplay commands are shared, recorded in the replay and cannot be undone. Effects survive saves and rejoining. Disabling cheats in a resumed lobby preserves effects already in the save and releases paused AI players so the match can continue. Commands stop changing gameplay after the match ends.
+Successful gameplay commands are shared and recorded in the replay. Ordinary Undo cannot take them back; the host can use [b]undo[/b]. Effects survive saves and rejoining. Disabling cheats in a resumed lobby preserves effects already in the save and releases paused AI players so the match can continue. Commands stop changing gameplay after the match ends.
 
 [h]Complete command reference[/h]
 """ + CheatCommands.manual_reference()],

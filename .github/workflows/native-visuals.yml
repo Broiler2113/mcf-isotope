@@ -174,6 +174,9 @@ jobs:
         run: |
           godot --headless --editor --path . --import
           godot --headless --path . --script res://tests/ui/run_bundled_native.gd -- --require-bundled
+          if [ "$RUNNER_OS" = macOS ] && xattr -p com.apple.quarantine "addons/mcf_visuals/prebuilt/${{ matrix.target }}/mcf_visuals.dylib" 2>/dev/null; then
+            echo "::error::Startup left the Gatekeeper quarantine flag on the bundled library"; exit 1
+          fi
           godot --headless --path . --script res://tests/ui/run_native_bundle_validation.gd
           godot --headless --path . --script res://tests/ui/run_native_setup.gd
           for suite in ui/run_native_visuals ui/run_native_terrain ai/run_native_ai perf/run_native_pathfinding fog/run_native_visibility; do
