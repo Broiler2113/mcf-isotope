@@ -272,8 +272,13 @@ func snapshot(with_cells: bool = true) -> Dictionary:
 		"deaths": deaths.duplicate(true),
 	}
 
+## Moves on every resolve() and restore(): the battle screen redoes per-soldier work only
+## when the battle could have changed (MainDrawing._sync_unit_layer).
+var revision := 0
+
 ## Откатить состояние к ранее взятому снимку (см. snapshot()).
 func restore(snap: Dictionary) -> void:
+	revision += 1
 	cheats_enabled = snap.get("cheats_enabled", false) is bool and snap.get("cheats_enabled", false)
 	cheat_vision = clean_cheat_sides(snap.get("cheat_vision", {}))
 	cheat_ai_paused = clean_cheat_sides(snap.get("cheat_ai_paused", {}))

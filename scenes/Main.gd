@@ -12,9 +12,11 @@ func _ready() -> void:
 	_annotations.material = annotation_material
 	_annotations.draw.connect(_draw_annotation_layer)
 	add_child(_annotations)
+	_make_unit_layers()
 	Keybinds.changed.connect(_refresh_menu_hotkeys)
 	_spectator = NetHandoff.session != null and NetHandoff.spectators.has(NetHandoff.session.my_peer_id())
 	Ui.board_settings_changed.connect(queue_redraw)
+	Ui.board_settings_changed.connect(_forget_unit_keys)
 	Ui.board_settings_changed.connect(_sync_lighting)
 	p1_is_ai = GameConfig.p1_is_ai
 	p2_is_ai = GameConfig.p2_is_ai
@@ -76,6 +78,7 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	_process_frame(delta)
+	_fog_spare_step()
 	if _redraw_wanted:
 		_redraw_wanted = false
 		queue_redraw()
@@ -1053,6 +1056,17 @@ func _queue_ai_step(_ctrl: PlayerController) -> void:
 		if state.cheat_ai_paused.has(state.active_player()):
 			if int(_cheat_ai_steps.get(state.active_player(), 0)) <= 0: return
 			_cheat_ai_steps.erase(state.active_player())
+		if cur is AIController and (cur as AIController).wants_plan(state):
+			# A new AI turn: its staff plan is made over the next frames instead of in
+			# this one. The step stays queued meanwhile, and everything above is asked
+			# again afterwards: the battle may have been paused or left while it thought.
+			_ai_step_queued = true
+			await (cur as AIController).think_ahead(state, AI_THINK_BUDGET_USEC)
+			_ai_step_queued = false
+			if epoch != _history_epoch or not is_inside_tree() or state == null or _paused or _history_hold \
+					or _animating or _net_playing or _match_over or replay != null \
+					or (not networked and is_instance_valid(_battle_menu)) or controllers.get(state.active_player()) != cur:
+				return
 		cur.begin_turn(state)
 
 func _toggle_pause() -> void:

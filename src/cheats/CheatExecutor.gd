@@ -29,7 +29,7 @@ static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 					elif intent.op == "vision_reset": state.cheat_vision.erase(side)
 					elif a.enabled: state.cheat_mines[side] = true
 					else: state.cheat_mines.erase(side)
-				UnitInstance.vision_epoch += 1
+				UnitInstance.bump_world_vision()
 			"turn_end":
 				out = r._resolve_end_turn(EndTurnIntent.new(state.active_player()))
 				out.cheat_output = "Ended the active turn using normal turn and round rules."

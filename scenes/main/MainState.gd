@@ -278,6 +278,8 @@ var _animating: bool = false
 ## Пауза между действиями ИИ (#52): бойцы должны ходить ОДИН ЗА ДРУГИМ и на глазах,
 ## а не отрабатывать всю армию за пару кадров.
 const AI_STEP_DELAY := 0.12
+## A new AI turn's staff plan gets this much of each frame (AIController.think_ahead).
+const AI_THINK_BUDGET_USEC := 8000
 
 ## Пауза между клетками пешего перехода (#96) — по ней видно, КУДА идёт житель.
 const WALK_STEP_DELAY := 0.07
@@ -759,6 +761,8 @@ var _lod_fog_stale := false
 var _lod_tex_avg: Dictionary = {}  # имя картинки-замены -> её средний цвет
 var _tiles: TerrainTiles = null     # ближний план рельефа кусками-плитками
 var _tiles_grid: Array = []      # [доска, туман]: под туманом укрепления не запекаются
+var _tiles_base: Grid = null     # the board (live or a fog memory) _tiles were painted from
+var _fog_mem_new: Grid = null    # the memory made this frame from the live board: looks the same
 ## Вид мебели, снятый с доски в начале партии (TerrainTiles.furniture_look): в бою мебель
 ## заново не срастается. Живёт здесь, а не в плитках, — их пересоздаёт смена доски и тумана.
 var _furniture_look: Dictionary = {}
@@ -773,6 +777,11 @@ var _fog_mem: Dictionary = {}       # viewer -> Grid
 var _fog_mem_grid: Grid = null      # живая доска, с которой сняты копии
 var _fog_mem_viewer: int = -999     # чья копия обновлялась последней
 var _fog_mem_look: int = -1         # до какой GridCell.look_version копия доведена
+## The next viewer's memory, prepared ahead (MainFogMemory._fog_spare_step): cloning the
+## board in the frame that needs it stalled that frame (~150 ms on a giant map).
+var _fog_spare: Grid = null
+var _fog_spare_src: Grid = null     # the live board it copies
+var _fog_spare_look: int = -1       # look_version its built cells are up to date with
 var _tile_hold_cells: Dictionary = {}
 var _shown_grid: Grid = null        # что рисуется в этом кадре: живая доска или копия
 ## Щебень и воронки (FxDecals.floor_damage) — тоже вид доски: зритель помнит их такими,
@@ -980,7 +989,7 @@ var _number_page := 0
 @abstract func _toggle_initiative_overlay() -> void
 @abstract func _to_lobby() -> void
 @abstract func _refresh_initiative_overlay() -> void
-@abstract func _draw_ruler() -> void
+@abstract func _draw_ruler(ci: CanvasItem = null) -> void
 @abstract func _make_panel_draggable(panel: Control, header: Control, on_move: Callable) -> void
 @abstract func _replay_chat_history() -> void
 @abstract func _draw_black_cross(origin: Vector2, size: float, alpha: float = 0.95) -> void

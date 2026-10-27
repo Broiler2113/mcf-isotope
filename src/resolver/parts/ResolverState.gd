@@ -284,6 +284,8 @@ var _vis_counts: Dictionary = {}   # owner -> {плоский индекс: ск
 var _vis_seen: Dictionary = {}     # owner -> {unit_id: PackedInt32Array} — учтённый вклад
 var _vis_epoch: Dictionary = {}    # owner -> UnitInstance.vision_epoch на момент сборки
 var _vis_vv: Dictionary = {}       # owner -> GridCell.vision_version на момент сборки
+var _vis_built: Dictionary = {}    # owner -> vision_epoch after the last per-soldier pass
+var _vis_world: Dictionary = {}    # owner -> what every view depends on (walls, tanks, cheats) then
 var _vis_grid: int = 0
 var _vis_mode: int = -1
 ## Чьи глаза вливаются в обзор стороны: она сама плюс союзники по команде (§9
@@ -370,6 +372,11 @@ var _activation_frontier: Array[int] = []
 var check_everything := false
 
 var _wk_pos: Dictionary = {}   # солдат -> клетка на прошлой проверке пробуждения
+## The unit list, vision_world and vision_epoch of that check: while the list is the same,
+## only units stamped after it can stand elsewhere (UnitInstance.vision_stamp).
+var _wk_units: Variant = null
+var _wk_world: int = -1
+var _wk_epoch: int = -1
 var _wk_vv: int = -1
 var _wk_vsig: int = 0
 var _wk_grid: int = 0
@@ -421,6 +428,11 @@ var _al_fv: int = -1
 var _al_grid: int = 0
 ## Живые бойцы на прошлом пересчёте шлюзов: id -> клетка (см. _airlock_candidates).
 var _al_pos: Dictionary = {}
+## The unit list, vision_world and vision_epoch of that pass: while the list is the same one,
+## only units stamped after it (UnitInstance.vision_stamp) can have moved, died or stood up.
+var _al_units: Variant = null
+var _al_world: int = -1
+var _al_epoch: int = -1
 
 const DRONE_DIRS_8 := [
 	Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1),

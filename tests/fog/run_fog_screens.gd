@@ -17,6 +17,7 @@ func run() -> void:
 
 	_gas_visibility()
 	await _memory_keeps_sight_journal()
+	await _spare_memory_matches_clone()
 
 ## #1: under fog no enemy army on the deployment screen; without fog the lobby toggle rules.
 func _placement_fog() -> void:
@@ -506,3 +507,51 @@ func _memory_keeps_sight_journal() -> void:
 			vv, GridCell.vision_version, wv, GridCell.walk_version])
 	main.queue_free()
 	await process_frame
+
+## The next viewer's memory is grown a few rows per frame and handed over whole: it must be
+## the board of that frame, exactly as a clone made then, and building it must leave the
+## live board's sight, walk and look journals alone.
+func _spare_memory_matches_clone() -> void:
+	GameConfig.civilians_enabled = false
+	GameConfig.random_events_enabled = false
+	GameConfig.fog_mode = MCF.Fog.OFF
+	GameConfig.roster = Roster.default_duel(false)
+	var m := MapData.blank_arena(30, 16)
+	for y in range(3, 13):
+		m.set_cell(Vector2i(12, y), MCF.FLOOR_NORMAL, 2.0, false, MCF.FEATURE_WALL)
+	m.set_spawn(Vector2i(4, 8), "light_infantry", 0)
+	m.set_spawn(Vector2i(26, 8), "light_infantry", 1)
+	MapHandoff.pending = m
+	var main = load("res://scenes/Main.tscn").instantiate()
+	main._fog_spare_budget_usec = 0   # one row per frame
+	root.add_child(main)
+	await process_frame
+	var grid: Grid = main.state.grid
+	var rows: int = main._fog_spare.cells_flat().size() / grid.width if main._fog_spare != null else -1
+	ck(rows >= 1 and rows < grid.height, "a fogless battle grows a spare memory row by row (%d rows)" % rows)
+	# Changes to rows already built (the journal catches them up) and to rows not yet built.
+	grid.cell(Vector2i(6, 0)).dirt_level = 1
+	grid.cell(Vector2i(12, 3)).cover_height = 0.0
+	grid.cell(Vector2i(2, 14)).on_fire = true
+	var looks := [GridCell.vision_version, GridCell.walk_version, GridCell.look_version]
+	main._fog_spare_step()
+	ck([GridCell.vision_version, GridCell.walk_version, GridCell.look_version] == looks,
+			"growing the spare writes no sight, walk or look journal")
+	for i in grid.height + 2: await process_frame
+	ck(main._fog_spare.cells_flat().size() == grid.width * grid.height, "the spare is complete")
+	grid.cell(Vector2i(12, 9)).cover_height = 0.0
+	grid.cell(Vector2i(20, 1)).dirt_level = 2
+	grid.cell(Vector2i(2, 14)).on_fire = false
+	var spare: Grid = main._fog_spare
+	var mem: Grid = main._take_fog_spare(grid)
+	ck(is_same(mem, spare) and main._fog_spare == null, "the complete spare is handed over")
+	ck(_look_sig(mem) == _look_sig(main._clone_board(grid)), "the handed-over spare equals a clone of the board now")
+	main.queue_free()
+	await process_frame
+
+static func _look_sig(g: Grid) -> int:
+	var h := 0
+	for c: GridCell in g.cells_flat():
+		h = hash([h, c.floor_type, c.is_space, c.cover_height, c.feature_id, c.feature_durability,
+				c.dirt_level, c.airlock_welded, c.on_fire, c.lamps, c.items_off])
+	return hash([h, g.furniture_turn, g.floor_look, g.map_items])

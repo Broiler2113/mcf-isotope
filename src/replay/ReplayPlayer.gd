@@ -104,7 +104,7 @@ func play_next() -> ActionResult:
 		resolver.explored = frame.get("visibility", {}).duplicate(true)
 		resolver._undo_stack.clear()
 		resolver._redo_stack.clear()
-		UnitInstance.vision_epoch += 1
+		UnitInstance.bump_world_vision()
 		return ActionResult.success()
 	resolver.track_undo_history = _needs_undo(index)
 	var intent := IntentCodec.decode(step.get("i", {}))

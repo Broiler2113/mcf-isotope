@@ -3191,7 +3191,10 @@ Crowd* (`MapGen.CIV_LEVELS`; Normal by default) scales the base rate of one per 
 
 **Neutrals start sealed and dormant.** A civilian wakes the moment it sees a soldier along
 a clear row, column or diagonal, or when a neighbouring cell changes — an airlock opening
-included (§14). Generated civilians live only in **sealed rooms** (`_sealed_rooms`):
+included (§14). It also wakes the moment it sees **another civilian wake up** along such a
+line, and then the civilians who see *it* wake, and so on (owner rule, 2026-10-27). Everyone
+woken this way joins the group of the wake-up that started it (`_wake_by_sight`): one
+event stays one group and one initiative slot, however far it spreads. Generated civilians live only in **sealed rooms** (`_sealed_rooms`):
 indoor floor from which no deployment zone can be reached without passing an airlock.
 Nobody can see them and nothing next to them changes until a soldier opens their door —
 so no action at the start of the match can wake them, and waking a room is a choice. On
@@ -3926,6 +3929,7 @@ glass are stamped into the terrain chunk once (`TerrainTiles._bake_decals`) inst
 redrawn every frame — at ~12k decals that was ~75 ms a frame and is now nothing. They follow
 the same fog rules as the terrain they sit on. Bloody footprints are gone with the rest of
 the per-step bookkeeping. **Service accents** (§20.2): on stations and in bunkers the walls and door frames of a service carry its colour — command blue, control/comms white, security red, medical green, science purple, engineering yellow, cargo orange, everything else grey; a room's own purpose beats its department (`MapGen.KIND_ACCENT`), the colour is a per-cell display-only byte (`MapData.wall_accent`, `MCF.Accent`) drawn as a line that runs along the wall and as a tinted door frame. **Corridors**: main ones are always 3 cells wide, maintenance tunnels 1 (2 about a quarter of the time), and grating is laid in roughly a third of the tunnels and in no room at all. **Grill walkway** (`MCF.Look.GRILL`): a floor look that is transparent between its bars and lies *over* a cell instead of replacing it; it runs from a hull airlock out into space with solar panels down both sides, and it is paintable in the editor. **Space draws no tile** — the `Starfield` parallax behind the board shows through it, following the camera (far layer 5 %, near 26 %); `floor_space.png` dropped by the player still wins. **Doors fill the whole cell** instead of a narrow panel in the middle of it. **Windows**: a symbol fallback font (✓ ✕ ▶ ⚠ are in neither Handjet nor Tahoma) and an explicit `stretch/aspect=expand` so a non-16:9 window is not letterboxed. Also: the hidden storage can no longer get an exterior airlock cut into it. **A border around every map** (§20.2): 10 cells in every direction that can be reached — diggable soil in a bunker, grass around a town or field, open space around a station or asteroid — and 2 more that cannot (`MCF.FEATURE_BOUNDARY`, in no destructible list, opaque to the laser), so the world keeps going past the battlefield but nothing walks off it. Lobby sizes now name the map, not the field. Also: `default_clear_color` was never applied — project.godot comments must start with `;`, and the `#` ones silently dropped the setting, so the window had been Godot grey instead of black all along. Tests: `tests/run_batch093.gd`. |
+| 137 | **0.14.5 — Civilians and smoothness**: a civilian who sees another civilian wake up wakes too, into the same group (`_wake_by_sight`, §20.2 "Neutrals start sealed and dormant"); tank crew are off the board and no longer seen by civilians (a sleeper on the x == y diagonal used to see them); the smoothness pass of §27.23 — per-unit vision stamps, the spare fog memory and re-pointed tiles, the AI's turn plan spread over frames, soldiers on their own layer. Protocol 33. |
 | 136 | **0.14.4 — Cheat console pass**: player letters (`independent` for the independent army), short V-IDs, in-game names in completion and input (`ldf`, `dpmg`), help topics, optional parentheses, `event cancel all` only, edge/side names in `event set`, readable inspect output, hidden admin commands, first-human-seat admin in local games, AI pacing keeps Undo and the log clean, console opens with cheats off. Redesigned black console under the kit title bar. Drones centered on their cell in 2D; in first person they hover at 1.75 m, face north and bob instead of spinning. Protocol **32**. |
 | 135 | **0.13.2 — Issues-fix-9 and cheat console**: F2 console with typed commands, hints, host-controlled multiplayer permissions, deterministic gameplay, persistent effects and replay support (§18.4). First-person geometry, station seams, door travel, remote walkers, smooth motion, projectiles, footsteps/run and atomic light-map updates; matching LDF art, uniform earth trenches, shuttle wheels, centered bodies, no wall blood. Cached fog updates, underfoot station packing, bodies on space, uncapped wave/raider populations and saved-wave migration. Saved lobby settings restore and ongoing rules remain editable. Log/Chat tabs, tools undo/redo, macOS Command shortcuts, Escape settings, host-only controls and compact help buttons. Winter previews, constructed doorway floors and no asteroid greenery. Protocol **26**. |
 | 134 | **Issues-fix-8** (release 0.13.1) — **First person rebuilt** (§18.4): the 3D view is lit by the battle screen's own light map (`LightManager.render_area` for the cells around the walker, read by every surface), sharing the board's light colours and occlusion through a cached light map; every piece of furniture, fortification, wall lamp, small item and lump of rubble is a modelled object (`FirstPersonModels`) at one texel density (32 px a metre, `FirstPersonArt.materials`); walls and floors carry baked relief; grass and field earth are one seamless 8 m texture instead of per-cell tiles; the map edge (`FEATURE_BOUNDARY`) is invisible in 3D as it is in 2D, and solar panels and gratings over space are drawn; vehicles are models with a turning turret and their name in Handjet on the hull. **Rules**: a wave or raider slot with no living *soldier* is skipped in the initiative (a drone in the air is not a soldier, §3.3); an engineer cuts a welded airlock open again for the same AP, three per action in a borg (§9.5); a borg tears down walls, glass and airlocks three per AP, like it builds them (§9.5); a drone detonation that killed nobody can be undone (§18.2); furniture smashed anywhere breaks into chunks of its own picture instead of rubbling the floor (§9.9). **Maps**: botany bays on stations (planter beds, hydroponic racks, potting tables), greenery on open ground (tall grass, hedges, flower beds, pines) and a **Winter** switch for town and field — snow on the ground, the plants and the roofs, snowmen and drifts, falling snow on both screens (Settings → Display). **Raiders** land again: an army crowds out the next one only while it is still a force (5+ fighters and 3 in 10 of its landing), and a landing stretch of bare vacuum slides along the edge to the nearest ground (§15.3). Rulers are drawings — they stay, share and undo like strokes — and turning on sharing re-sends everything drawn before it (§18.6). |
@@ -4503,6 +4507,48 @@ digest, none of the audited paths was a hotspot.
 (`Movement.reachable`, §27.2 forbids changing its order), the AI's per-turn plan and
 `_best_shoot`. None was in the audit; they are the next pass.
 
+
+### 27.23 The smoothness pass (0.14.5)
+
+The 0.14.4.2 profile of the giant bench battle (`run_bench.gd` scene `giant`, Hard vs Hard,
+40 civilians) had no single hot function left: an action cost ~11 ms spread over fog, the
+AI's candidates, civilian wake checks and airlocks, and the worst frames came from one-off
+stalls. The gate was the usual one: the 1,200-action headless trace and board hashes, the
+Main-driven battle digest and windowed screenshots had to come back identical.
+
+* **Per-unit vision stamps.** `UnitInstance.vision_stamp` is `vision_epoch` right after this
+  unit's own `coord`, `owner` or `status` setter ran; everything else that moves
+  `vision_epoch` (vehicles, cheats, replay jumps) goes through `bump_world_vision()`, which
+  also moves `vision_world`. While the unit list (`all_units()`, the same array object),
+  `vision_world`, the walls (`GridCell.vision_version`) and the enemy-tank signatures stand,
+  `team_visible_coords` re-sweeps only units stamped after its previous pass (fog 2.6 →
+  ~1 ms per action), and `_airlock_candidates` and `_seed_sight_activation` diff only those
+  units' positions instead of rebuilding a position map of the whole army twice per action.
+* **The next fog memory is prepared ahead.** A viewer's first memory was a full board clone
+  in the frame that needed it (~150 ms on the giant map: the first smoke of a fogless match,
+  a spectator's new side, AI-vs-AI viewers). `MainFogMemory._fog_spare_step` now grows a
+  spare clone a few rows per frame (2 ms budget, at least one row) and keeps it current
+  from the look journal; `_take_fog_spare` hands it over whole. The tile layer is re-pointed
+  between the live board and a memory of it instead of repainting every chunk on screen,
+  repainting only cells that look different (none for a memory made this frame).
+* **The AI's turn plan is spread over frames.** `AIPlanner.plan` (≈350 ms at the start of
+  each giant AI turn) waits for the next frame between phases, soldiers and threats once
+  `think_budget_usec` is spent. Only Main's AI step sets it, through
+  `AIController.think_ahead` before `begin_turn`; every other caller plans in one go. The
+  prepared plan is used only if the state stamp (`digest_hash` plus the version counters) is
+  unchanged at the decision; otherwise the decision plans afresh. Same work, same order,
+  same moves. GDScript objects and the static caches are shared, so the plan is not run on
+  a worker thread.
+* **Soldiers on their own layer.** `MainDrawing._sync_unit_layer` keeps one small canvas item
+  per soldier, keyed by everything its look depends on; a key change redraws that soldier
+  only. A signature (`GameState.revision`, moved by every `resolve()` and `restore()`, the
+  vision counters, selection, group, zoom detail, viewer and fog, a culling window snapped
+  to 16-cell blocks) skips the pass entirely while it stands. Bodies on hulls, drones, the
+  seat grid, the selection box and rulers moved to the layer above (`_draw_unit_top`).
+
+Measured on this VPS (giant scene): headless 1,200 actions 13.8 → 10.4 s; worst frame of
+a Main-driven AI battle 365 → 48 ms; windowed (llvmpipe) board draw with nothing changed
+6.0 → 0.8 ms, during AI play (an action every frame) 6.0 → 4.8 ms.
 
 ## Issues PDF (6) follow-up
 

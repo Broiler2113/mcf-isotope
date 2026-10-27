@@ -70,12 +70,13 @@ func accent_at(x: int, y: int) -> int:
 	var i := y * width + x
 	return wall_accent[i] if i < wall_accent.size() else 0
 
-func _init(p_width: int, p_height: int) -> void:
+## p_fill = false leaves the cells to add_rows(): the fog memory's spare copy of the
+## board (MainFogMemory) grows that way a few rows per frame instead of in one stall.
+func _init(p_width: int, p_height: int, p_fill := true) -> void:
 	width = p_width
 	height = p_height
-	for y in height:
-		for x in width:
-			_cells.append(GridCell.new(Vector2i(x, y)))
+	if p_fill:
+		add_rows(height)
 	# Новая сетка — заведомо новая обстановка. Movement.reachable() и кеш обзора
 	# различают сетки по instance_id, а его Godot теоретически может выдать повторно
 	# после освобождения старой; сдвиг версий закрывает этот случай раз и навсегда,
@@ -86,6 +87,16 @@ func _init(p_width: int, p_height: int) -> void:
 	# Журнал отката принадлежит действию на ПРЕЖНЕЙ доске; стройка новой в него не пишет.
 	GridCell.journaling = false
 	GridCell.journal = {}
+
+## Rows of fresh cells after the ones already there; returns how many rows exist now.
+func add_rows(rows: int) -> int:
+	var y := _cells.size() / width if width > 0 else height
+	var end := mini(height, y + rows)
+	while y < end:
+		for x in width:
+			_cells.append(GridCell.new(Vector2i(x, y)))
+		y += 1
+	return y
 
 func in_bounds(coord: Vector2i) -> bool:
 	return coord.x >= 0 and coord.y >= 0 and coord.x < width and coord.y < height

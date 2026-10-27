@@ -269,7 +269,7 @@ func _history_command(parsed: Dictionary, side: int) -> String:
 	_real_stop_ms = -1
 	_fog_mem.clear()
 	_fog_mem_grid = null
-	UnitInstance.vision_epoch += 1
+	UnitInstance.bump_world_vision()
 	_rebuild_restored_controllers()
 	_skey_cache.clear()
 	_resync_after_restore()

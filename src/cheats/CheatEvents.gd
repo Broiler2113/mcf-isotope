@@ -197,7 +197,7 @@ static func _edit(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 			if not error.is_empty(): return ActionResult.fail("Cannot withdraw linked army unit U%d: %s" % [unit.id, error])
 		for unit: UnitInstance in army: CheatUnits.apply(r, CheatIntent.new("unit_remove", {"unit": unit.id}, intent.issuer))
 	r._sync_gas()
-	UnitInstance.vision_epoch += 1
+	UnitInstance.bump_world_vision()
 	return CheatUnits.result(("Removed " if remove else "Updated ") + ref + ("." if remove else ": " + str(p)))
 
 static func _normalize_entry(params: Dictionary, options: Dictionary, r: GameActionResolver) -> void:

@@ -141,7 +141,10 @@ const K_LOBBY_MAP := "lobby_map"
 ##  29 - complete host history restores, explicit event forces and independent colors.
 ##  30 - configurable Holdout multiplier growth shared through lobby and saved rules.
 ##  31 - tank cannon fires forward or sideways only, never backward.
-const PROTOCOL := 32
+##  32 - 0.14.4 console cheat pass: players by letter, short vehicle IDs.
+##  33 - a civilian who sees another wake up wakes too, into the same group; tank crew are
+##       off the board and no longer seen by civilians.
+const PROTOCOL := 33
 ## The bug-report server on the relay's VPS (tools/bugs/isotope_bugs.py): the Report a Bug
 ## window and the automatic desync reports both post here.
 const BUG_REPORTS := "http://103.86.177.137:8651/report"
