@@ -82,7 +82,10 @@ func run() -> void:
 	root.gui_release_focus()
 	main.state.cheats_enabled = false
 	press(KEY_F2)
-	ck(not console_open(), "disabled cheats cannot be opened with F2")
+	ck(console_open(), "F2 opens the console with cheats disabled")
+	main._cheat_console.submit("units")
+	ck(main._cheat_console.output.get_parsed_text().contains("disabled"), "commands refuse while cheats are disabled")
+	await close_windows()
 	main.state.cheats_enabled = true
 	main._spectator = true
 	press(KEY_F2)

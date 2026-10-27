@@ -39,7 +39,7 @@ static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 			return out
 		"world_time":
 			if not MapData.supports_time_of_day(state.env): return ActionResult.fail("This environment has no time-of-day cycle.")
-			out.cheat_output = "Time: %s → %s." % [state.time_of_day, a.time]
+			out.cheat_output = "Time: %s → %s." % [MapData.time_name(state.time_of_day).to_lower(), a.time]
 			state.time_of_day = a.time
 			return out
 		"world_gas_add", "world_smoke_add", "world_gas_clear", "world_smoke_clear":
@@ -71,7 +71,7 @@ static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 		"world_floor":
 			var old := cell.floor_type
 			cell.floor_type = {"normal": MCF.FLOOR_NORMAL, "flammable": MCF.FLOOR_FLAMMABLE, "grass": MCF.FLOOR_GRASS}[a.floor]
-			out.cheat_output = "Floor at %s: %d → %s." % [at, old, a.floor]
+			out.cheat_output = "Floor at (%d,%d): %s → %s." % [at.x, at.y, CheatQueries.FLOOR_WORDS.get(old, str(old)), a.floor]
 		"world_floor_look":
 			var old := grid.look_at(at.x, at.y)
 			grid.floor_look.resize(grid.width * grid.height)
@@ -140,7 +140,7 @@ static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 			if intent.op == "world_clear_cell": cell.on_fire = false; cell.fire_owner = -1; cell.lamps = []
 			r.update_airlocks()
 			r._sync_gas()
-			out.cheat_output = "Cell %s: removed %d cell(s), placed %s on %d cell(s)." % [at, removed.size(), fid, placed.size()]
+			out.cheat_output = "Cell (%d,%d): removed %d cell(s), placed %s on %d cell(s)." % [at.x, at.y, removed.size(), CheatQueries.feature_name(fid), placed.size()]
 		_:
 			return ActionResult.fail("Unknown world operation.")
 	return out

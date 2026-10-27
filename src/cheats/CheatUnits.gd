@@ -93,7 +93,7 @@ static func spawn(r: GameActionResolver, args: Dictionary, source: UnitInstance 
 	state.roster.assign_independent_color(owner, hash([state.turns.round_order, state.turns.round_number, state.all_units().size()]))
 	if MCF.is_independent(owner) and not state.turns.round_order.has(owner):
 		state.turns.insert_slot(owner, state.turns.round_order.size())
-	var detail := "Placed %d of %d %s; IDs: %s." % [ids.size(), requested, stats.display_name, str(ids)]
+	var detail := "Placed %d of %d %s for %s: %s." % [ids.size(), requested, stats.display_name, CheatQueries.player_label(state, owner), ", ".join(ids.map(func(id: int): return "U%d" % id))]
 	if ids.size() < requested: detail += " Remaining placements failed because no legal cells were available."
 	return result(detail)
 
@@ -103,7 +103,7 @@ static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 	if intent.op == "spawn_unit": return spawn(r, args)
 	var unit := state.get_unit(args.unit)
 	if unit == null: return ActionResult.fail("Unit ID no longer exists.")
-	var name := "%d - %s" % [unit.id, unit.stats.display_name]
+	var name := "%s %s" % [CorpseIdentity.id_label(unit), unit.stats.display_name]
 	match intent.op:
 		"unit_remove", "unit_teleport", "unit_owner", "unit_revive":
 			var error := linked(r, unit)
@@ -165,7 +165,7 @@ static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 			else:
 				state.deaths[old] = maxi(0, int(state.deaths.get(old, 0)) - 1)
 				state.deaths[unit.owner] = int(state.deaths.get(unit.owner, 0)) + 1
-			return result("%s owner: %s → %s." % [name, state.roster.name_of(old), state.roster.name_of(unit.owner)])
+			return result("%s owner: %s → %s." % [name, CheatQueries.player_label(state, old), CheatQueries.player_label(state, unit.owner)])
 		"unit_ap":
 			if not unit.is_alive() or not state.grid.in_bounds(unit.coord): return ActionResult.fail("AP requires a living on-board unit.")
 			var old := unit.remaining_ap
@@ -175,7 +175,7 @@ static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 		"unit_item":
 			var old := unit.held_item_id
 			unit.held_item_id = "" if args.item == "none" else args.item
-			return result("%s item: %s → %s." % [name, old, unit.held_item_id])
+			return result("%s item: %s → %s." % [name, MCF.ITEM_NAMES.get(old, "none"), MCF.ITEM_NAMES.get(unit.held_item_id, "none")])
 		"unit_invulnerable":
 			var old := unit.cheat_invulnerable
 			unit.cheat_invulnerable = args.enabled

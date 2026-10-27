@@ -163,6 +163,8 @@ func resolve(intent: Intent) -> ActionResult:
 			if ev.get("kind", "") == "veh_walk":
 				ev["effects"] = result.fx
 				ev["deaths"] = result.visual_deaths
+		# AI pause/step/speed changes nothing on the board: Undo and Redo stay (0.14.4).
+		if intent is CheatIntent and intent.op in CheatExecutor.PACING: return result
 		# Новое действие обрывает откатанную ветку — повторять больше нечего (#38).
 		_redo_stack.clear()
 		if _turn_key() != turn_before or _is_irreversible(intent, result) or wave_called:

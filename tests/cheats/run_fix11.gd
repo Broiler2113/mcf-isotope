@@ -10,7 +10,8 @@ func run() -> void:
 	var r := fresh()
 	command(r, "unit stat change U0 armor (6)")
 	ck(r.state.get_unit(0).armor() == 6, "armor value is the minimum defense roll")
-	rejected(r, "unit stat change U0 armor 6")
+	command(r, "unit stat change U0 armor 6")
+	ck(r.state.get_unit(0).armor() == 6, "stat values need no parentheses")
 	rejected(r, "unit stat change U0 armor (0)")
 	rejected(r, "unit stat change U0 armor (13)")
 	command(r, "event spawn army {edge:east, units:{machinegunner:15,civilian:10}}")
@@ -21,7 +22,7 @@ func run() -> void:
 			army = unit.owner
 			force[unit.stats.id] = int(force.get(unit.stats.id, 0)) + 1
 	ck(force == {"machinegunner": 15, "civilian": 10}, "raiders have the exact requested composition")
-	command(r, "spawn unit engineer self (8,8)")
+	command(r, "spawn unit engineer independent (8,8)")
 	var self_color := r.state.roster.color_of(MCF.CHEAT_ARMY_OWNER)
 	ck(self_color != r.state.roster.color_of(army), "self army and raiders have different colors")
 	for side: int in [MCF.CHEAT_ARMY_OWNER, army]:

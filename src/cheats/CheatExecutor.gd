@@ -1,6 +1,9 @@
 class_name CheatExecutor
 extends RefCounted
 
+## AI pacing changes no board state: it keeps Undo/Redo and stays out of the shared log (owner, 0.14.4).
+const PACING := ["ai_pause", "ai_resume", "ai_step", "ai_speed"]
+
 ## Only canonical, already-authorized operations enter here. Network authority and
 ## local console check live rights; replay deliberately ignores later revocations.
 static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
@@ -62,7 +65,8 @@ static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 				r.mode.waves_total = a.waves
 			_: return ActionResult.fail("Unknown gameplay operation.")
 	if out.ok:
+		# Pacing still counts: recorded digests of older replays include it.
 		state.cheat_sequence += 1
 		# Details stay in the issuer's console. Shared log identifies the operation only.
-		out.log("[CHEAT] %s: %s" % [state.roster.name_of(intent.issuer), intent.op.replace("_", " ")])
+		if intent.op not in PACING: out.log("[CHEAT] %s: %s" % [state.roster.name_of(intent.issuer), intent.op.replace("_", " ")])
 	return out

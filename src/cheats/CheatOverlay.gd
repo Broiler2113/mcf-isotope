@@ -48,7 +48,7 @@ func labels() -> Dictionary:
 	if main._cheat_ids in ["vehicles", "all"]:
 		for vehicle: Vehicle in main.state.all_vehicles():
 			if not out.has(vehicle.origin): out[vehicle.origin] = []
-			out[vehicle.origin].append("V%d" % vehicle.id)
+			out[vehicle.origin].append(CheatCommands.vehicle_label(vehicle.id))
 	return out
 
 func _text_width(text: String, font_size: int) -> float:
@@ -84,12 +84,9 @@ func visible_coordinate_cells() -> Rect2i:
 
 func _enabled() -> bool:
 	if main.replay != null or main._spectator or main._fp != null: return false
-	var side: int = main.net.my_owner if main.net != null else main._viewing_side()
-	if not CheatAccess.permitted(main.state, side):
-		main._cheat_ids = ""
-		main._cheat_coords = false
-		return false
-	return true
+	# The console's own side, so a hotseat AI turn or another seat hides the labels
+	# without switching them off for the player who turned them on.
+	return CheatAccess.permitted(main.state, CheatAccess.console_side(main))
 
 func _draw() -> void:
 	if not is_instance_valid(main) or main.state == null or not _enabled(): return

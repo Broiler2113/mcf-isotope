@@ -29,8 +29,8 @@ func run() -> void:
 	ck(not r.state.grid.cell(Vector2i(5, 5)).on_fire and r.state.grid.cell(Vector2i(6, 6)).on_fire, "fire clearing uses inclusive area only")
 	r.state.roster.slots[1].cheats_allowed = false
 	ck(CheatCommands.parse("event place gas (4,5) (6,8)", r.state, 1).has("error"), "coordinate shortcut still enforces permission")
-	command(r, "spawn unit engineer self (12,12)")
-	command(r, "spawn unit light_infantry self (13,12)")
+	command(r, "spawn unit engineer independent (12,12)")
+	command(r, "spawn unit light_infantry independent (13,12)")
 	var independent: UnitInstance = r.state.grid.cell(Vector2i(12, 12)).occupant
 	ck(independent.owner == MCF.CHEAT_ARMY_OWNER and r.state.grid.cell(Vector2i(13, 12)).occupant.owner == independent.owner, "self spawns share one independent army")
 	ck(not r.state.roster.are_allies(0, independent.owner) and not r.state.roster.are_allies(1, independent.owner), "independent army hostile to every player")
@@ -118,7 +118,7 @@ func corpse_replays() -> void:
 
 func independent_turn() -> void:
 	var r := fresh()
-	command(r, "spawn unit light_infantry self (4,2)")
+	command(r, "spawn unit light_infantry independent (4,2)")
 	var soldier: UnitInstance = r.state.grid.cell(Vector2i(4, 2)).occupant
 	r.state.turns.active_index = r.state.turns.round_order.find(MCF.CHEAT_ARMY_OWNER)
 	var result := r.play_civilian_slots()

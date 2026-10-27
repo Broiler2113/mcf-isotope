@@ -1,6 +1,30 @@
 class_name CheatEventModel
 extends RefCounted
 
+## What each event option means, for help and completion.
+const OPTION_HELP := {
+	"at": "target cell as (x,y)",
+	"x": "left column of the area, or the entry column",
+	"y": "top row of the area, or the entry row",
+	"w": "area width in cells",
+	"h": "area height in cells",
+	"rounds": "duration in rounds",
+	"edge": "landing edge: north, east, south or west",
+	"from": "first cell of the landing strip along the edge",
+	"len": "landing strip length in cells",
+	"hx": "bunker hallway entry column",
+	"hy": "bunker hallway entry row",
+	"units": "exact force, such as units:{machinegunner:15,civilian:10}",
+	"count": "number of soldiers",
+	"player": "player letter that receives reinforcements",
+	"side": "player letter that receives reinforcements",
+	"budget": "reinforcement points to spend",
+	"unit": "U-ID of the bounty target",
+}
+## How an event is aimed when spawned or queued.
+const AREA_EVENTS := ["mortar", "gas", "fire", "emp", "collapse"]
+const POINT_EVENTS := ["army", "reinforce", "minefield", "bounty"]
+
 ## Commands expose only properties consumed by ResolverEvents and RandomEvents.
 static func schema(id: String, r: GameActionResolver, props: Dictionary = {}) -> Dictionary:
 	var w := r.state.grid.width

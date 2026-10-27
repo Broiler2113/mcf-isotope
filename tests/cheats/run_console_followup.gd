@@ -8,7 +8,7 @@ func run() -> void:
 	for line: String in ["event spawn gas", "event edit gas:1 {rounds:5}", "event remove gas:1"]:
 		var event := CheatCommands.parse(line, r.state, 0)
 		ck(not event.has("error") and event.access == "play", "event management is a complete command: " + line)
-	var parsed := CheatCommands.parse("units self status", r.state, 0)
+	var parsed := CheatCommands.parse("units A status", r.state, 0)
 	ck(parsed.op == "units_status", "player status grammar")
 	var summary := CheatQueries.run(r, parsed, 0)
 	ck(summary.contains("Entire board") and summary.contains("light_infantry | 2 | 0 | 2"), "counts include player and board totals")
@@ -21,12 +21,12 @@ func run() -> void:
 	command(r, "vehicle durability V%d" % veh.id)
 	ck(veh.durability == veh.component_max(MCF.COMP_HULL), "simple durability restore")
 	var inspected := CheatQueries.inspect_at(r, Vector2i(11, 11), 0)
-	ck(inspected.contains("V%d" % veh.id) and inspected.contains("Stats:"), "inspect any footprint tile includes vehicle stats")
-	ck(CheatQueries.run(r, CheatCommands.parse("vehicles self status", r.state, 0), 0).contains("tank | 1 | 0 | 1"), "vehicle counts")
+	ck(inspected.contains(CheatCommands.vehicle_label(veh.id)) and inspected.contains("Stats:"), "inspect any footprint tile includes vehicle stats")
+	ck(CheatQueries.run(r, CheatCommands.parse("vehicles a status", r.state, 0), 0).contains("tank | 1 | 0 | 1"), "vehicle counts")
 	r.state.roster.slots[1].kind = Roster.SlotKind.AI
 	command(r, "ai pause #2")
 	ck(r.state.cheat_ai_paused.has(1), "pause stored per AI player")
-	rejected(r, "ai pause self")
+	rejected(r, "ai pause A")
 	rejected(r, "ai step #2")
 	r.state.turns.active_index = 1
 	command(r, "ai step #2")
