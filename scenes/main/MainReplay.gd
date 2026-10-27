@@ -348,7 +348,7 @@ func _show_result(result: ActionResult) -> void:
 		for id: int in result.visual_deaths:
 			_pending_death_ids[id] = true
 		_hold_visual = result.visual_hold  # item 22
-		queue_redraw()
+		_redraw()
 		_fx.preview_lanes(result.fx)   # who fires at whom shows while the dice roll
 		await _play_dice(result.dice_events)
 	await _show_effects(result)
@@ -361,7 +361,7 @@ func _show_result(result: ActionResult) -> void:
 			# A local caption, not a new recorded log/state mutation; replay stays seekable.
 			_on_log_line("- %s -" % _outcome_title(outcome))
 			_play_victory_audio()
-	queue_redraw()
+	_redraw()
 
 func _replay_step() -> void:
 	if replay == null or _animating or not replay.has_next():
@@ -394,7 +394,7 @@ func _replay_seek(target: int) -> void:
 	_take_replay_state()
 	_refresh_replay_bar()
 	_refresh_status()
-	queue_redraw()
+	_redraw()
 
 func _replay_toggle() -> void:
 	if replay == null:
@@ -423,7 +423,7 @@ func _replay_loop() -> void:
 				_apply_timelapse_result(replay.play_next())
 				credit -= 1.0
 			_refresh_status()
-			queue_redraw()
+			_redraw()
 			_refresh_replay_bar()
 			await get_tree().process_frame
 		else:
@@ -685,7 +685,7 @@ func _toggle_before() -> void:
 		_before_layer.visible = _before_on
 	if _before_note != null:
 		_before_note.visible = _before_on
-	queue_redraw()
+	_redraw()
 
 ## Полоса управления повтором (item 53) внизу экрана: в начало, шаг назад,
 ## пуск/пауза, шаг вперёд, скорость, в конец. Строится только в режиме просмотра —

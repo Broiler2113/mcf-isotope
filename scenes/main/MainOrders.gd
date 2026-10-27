@@ -20,7 +20,7 @@ func _advance_group_preview() -> void:
 		_group_order_pending = Vector2i(-1, -1)
 		_commit_group_plan(plan)
 	elif prior != [_group_preview.revision, _group_preview.target, ready]:
-		queue_redraw()
+		_redraw()
 
 ## Юнит, которым игрок может командовать ПРЯМО СЕЙЧАС как пехотинцем на поле.
 ## Сидящий в машине — не такой (#95): при посадке его снимают с сетки и ставят
@@ -91,7 +91,7 @@ func _select(unit: UnitInstance) -> void:
 	else:
 		_menu.hide()
 	_refresh_info()
-	queue_redraw()
+	_redraw()
 
 func _deselect() -> void:
 	selected_id = -1
@@ -113,7 +113,7 @@ func _deselect() -> void:
 	if _comp_panel != null:
 		_comp_panel.hide()  # машину сняли с выбора — панель узлов уходит с ней
 	_refresh_info()
-	queue_redraw()
+	_redraw()
 
 func _back_to_menu() -> void:
 	if selected_vehicle_id != -1:
@@ -145,7 +145,7 @@ func _on_multi_toggled(pressed: bool) -> void:
 	if not pressed:
 		_set_group([])
 	_box_dragging = false
-	queue_redraw()
+	_redraw()
 
 ## Shift + клик при включённом мульти-выделении: добавить бойца в отряд, а если он там
 ## уже есть — убрать. Рамка берёт всех подряд в прямоугольнике, и отряд из троих, стоящих
@@ -221,7 +221,7 @@ func _set_group(ids: Array[int]) -> void:
 	else:
 		_menu.hide()
 	_refresh_info()
-	queue_redraw()
+	_redraw()
 
 ## Меню действий для выделенной группы (#19). Пока в нём одно действие — движение;
 ## остальные приказы отдаются юнитам по отдельности.
@@ -253,7 +253,7 @@ func _open_group_menu() -> void:
 		volley.pressed.connect(func() -> void:
 			mode = Mode.GROUP_LASER
 			_menu.hide()
-			queue_redraw())
+			_redraw())
 		vb.add_child(volley)
 		_register_menu_action(volley, "action_volley")
 
@@ -376,7 +376,7 @@ func _enter_group_move(tactical: bool) -> void:
 	_group_tactical = tactical
 	mode = Mode.GROUP_MOVE
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 ## Машины, в которые может сесть хоть один из выделенных юнитов (item 5): все разные,
 ## в порядке нахождения. Больше одной — игрок выбирает щелчком (BOARD_PICK).
@@ -416,7 +416,7 @@ func _enter_board_pick(vehicles: Array, group: bool) -> void:
 	_number_picker()
 	_anchor_menu(_picker)
 	_picker.show()
-	queue_redraw()
+	_redraw()
 
 ## Клетки машины на поле: след на сетке, а у борга — его клетка.
 func _veh_cells(v: Vehicle) -> Array:
@@ -462,7 +462,7 @@ func _group_move_to(dest: Vector2i) -> void:
 func _commit_group_plan(plan: Array) -> void:
 	_regroup_ids = _group_ids.duplicate()
 	_set_group([])
-	queue_redraw()
+	_redraw()
 	if not plan[0].is_empty():
 		_submit(GroupMoveIntent.new(plan[0], plan[1]))
 
@@ -521,7 +521,7 @@ func _enter_push() -> void:
 	item_cells = resolver.pushable_window_cells(u)
 	target_ids = resolver.pushable_target_ids(u)
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 
 func _open_build_picker() -> void:
@@ -598,7 +598,7 @@ func _enter_build(feature_id: String) -> void:
 	# Для мешков/ежа сюда попадают и клетки под ярус поверх уже стоящих мешков (#31).
 	item_cells = resolver.buildable_cells(u, feature_id)
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 # --- Рисование ЛДФ-стены (§3.7, ЛДФ 1×6) ---
 func _enter_build_wall() -> void:
@@ -614,7 +614,7 @@ func _enter_build_wall() -> void:
 	# Пул допустимых клеток — весь свободный пол (буду фильтровать по соединению).
 	item_cells = resolver.buildable_cells(u)
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 ## Годится ли клетка как звено формы: свободный пол, не повтор. Первое (опорное)
 ## звено — соседнее с инженером; каждое следующее должно примыкать ОРТОГОНАЛЬНО к
@@ -641,11 +641,11 @@ func _wall_try_add(coord: Vector2i) -> void:
 	if _wall_cells.size() >= MCF.LDF_WALL_LENGTH:
 		return
 	if not _wall_valid_next(coord):
-		queue_redraw()
+		_redraw()
 		return
 	_wall_cells.append(coord)
 	_refresh_undo_btn()
-	queue_redraw()
+	_redraw()
 	if _wall_cells.size() >= MCF.LDF_WALL_LENGTH:
 		_wall_commit()
 
@@ -655,7 +655,7 @@ func _wall_undo() -> void:
 		return
 	_wall_cells.pop_back()
 	_refresh_undo_btn()
-	queue_redraw()
+	_redraw()
 
 func _wall_commit() -> void:
 	if _wall_cells.size() != MCF.LDF_WALL_LENGTH:
@@ -701,7 +701,7 @@ func _enter_furniture(m: int) -> void:
 	reach = null
 	target_ids = []
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 func _enter_break() -> void:
 	var u := _selected_unit()
@@ -712,7 +712,7 @@ func _enter_break() -> void:
 	target_ids = []
 	item_cells = resolver.breakable_cells(u)
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 ## Выбор клетки, куда лечь трупу (#72). Раньше кнопка сразу роняла его под ноги, из-за
 ## чего тело нельзя было положить в нужное место — например, в проём как укрытие (#6).
@@ -730,7 +730,7 @@ func _enter_corpse_drop() -> void:
 	target_ids = []
 	item_cells = cells
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 func _enter_pull_body(vid: int) -> void:
 	var u := _selected_unit()
@@ -746,7 +746,7 @@ func _enter_pull_body(vid: int) -> void:
 	target_ids = []
 	item_cells = cells
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 ## Выбор соседнего шлюза под заварку (#99).
 func _enter_weld() -> void:
@@ -761,7 +761,7 @@ func _enter_weld() -> void:
 	target_ids = []
 	item_cells = cells
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 ## Rounds still in this unit's DPMG burst at that gun (0 — none; a new burst costs 1 AP).
 func _dpmg_rounds_left(u: UnitInstance, dpmg_coord: Vector2i) -> int:
@@ -778,7 +778,7 @@ func _enter_rsp_fire(dpmg_coord: Vector2i) -> void:
 	item_cells = []
 	target_ids = resolver.rsp_targets(u, dpmg_coord)
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 ## Режим установки мин (item 45). Как и копка, живёт на кредите: первая мина тратит
 ## ОД, остальные бесплатны, пока кредит не кончился.
@@ -794,7 +794,7 @@ func _enter_mine(av: bool = false) -> void:
 	target_ids = []
 	item_cells = resolver.mine_cells(u)
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 ## Обезвреживание подсвеченных чужих мин рядом (item 13).
 func _enter_disarm() -> void:
@@ -806,7 +806,7 @@ func _enter_disarm() -> void:
 	target_ids = []
 	item_cells = resolver.disarmable_mine_cells(u)
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 func _enter_dig() -> void:
 	var u := _selected_unit()
@@ -819,7 +819,7 @@ func _enter_dig() -> void:
 	dig_dirt_a = Vector2i(-1, -1)
 	item_cells = resolver.diggable_cells(u)
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 func _begin_shoot(target: UnitInstance) -> void:
 	var shooter := _selected_unit()
@@ -894,7 +894,7 @@ func _enter_fp_pick() -> void:
 	mode = Mode.FP_PICK
 	_menu.hide()
 	state.log.add("Click a free cell your side has seen to walk there in first person (Esc leaves).")
-	queue_redraw()
+	_redraw()
 
 func _start_first_person(at: Vector2i) -> void:
 	mode = Mode.NONE
@@ -910,7 +910,7 @@ func _start_first_person(at: Vector2i) -> void:
 		if child is CanvasItem:
 			_fp_board_visibility[child] = child.visible
 			child.hide()
-	queue_redraw()
+	_redraw()
 	_send_fp_presence(true)
 
 func _end_first_person() -> void:
@@ -924,7 +924,7 @@ func _end_first_person() -> void:
 	_fp_board_visibility.clear()
 	_ui_layer.visible = true
 	if is_instance_valid(_lighting): _lighting._key.clear()
-	queue_redraw()
+	_redraw()
 
 ## Где потолок: считается раз за партию по доске начала боя — снесённая стена крышу не
 ## снимает.
@@ -1006,7 +1006,7 @@ func _give_units(ids: Array[int], to_side: int) -> void:
 		c.notify_state_changed(state)
 	_deselect()
 	_refresh_status()
-	queue_redraw()
+	_redraw()
 	_check_match_over()
 
 func _scroll_menu(panel: PanelContainer, title: String = "Actions", back := Callable()) -> VBoxContainer:
@@ -1410,17 +1410,17 @@ func _open_shot_picker(what: String, available: int, make: Callable) -> void:
 func _hint_cell(b: Button, c: Vector2i) -> void:
 	b.mouse_entered.connect(func() -> void:
 		_hover_cell = c
-		queue_redraw())
+		_redraw())
 	b.mouse_exited.connect(func() -> void:
 		if _hover_cell == c:
 			_hover_cell = Vector2i(-1, -1)
-			queue_redraw())
+			_redraw())
 
 ## Погасить подсветку выбора (список закрылся — наводиться больше не на что).
 func _clear_hint_cell() -> void:
 	if _hover_cell != Vector2i(-1, -1):
 		_hover_cell = Vector2i(-1, -1)
-		queue_redraw()
+		_redraw()
 
 func _register_menu_action(button: Button, id: String) -> void:
 	button.set_meta("action_label", button.text)
@@ -1581,7 +1581,7 @@ func _handle_shortcut(event: InputEventKey) -> bool:
 			if _ruler_a != Vector2i(-1, -1): _ruler_a = Vector2i(-1, -1)
 			else: _remove_my_last_ruler()
 			_refresh_ruler_button()
-			queue_redraw()
+			_redraw()
 			return true
 		if mode == Mode.BUILD_WALL and not _animating: _wall_undo(); return true
 	if mode == Mode.BUILD_WALL and not _animating and Keybinds.matches(event, "game_confirm_wall"):
@@ -1647,4 +1647,4 @@ func _cheat_result(intent: Intent, result: ActionResult) -> void:
 		_lod_terrain_key = []
 		GridCell.reset_vision_log()
 		UnitInstance.vision_epoch += 1
-	queue_redraw()
+	_redraw()

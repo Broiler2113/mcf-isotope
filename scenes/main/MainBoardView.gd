@@ -4,6 +4,14 @@ extends "res://scenes/main/MainState.gd"
 ## Camera and board geometry: cells to screen and back, panning and centering, what the
 ## viewer sees right now (before an impact lands), ground and sky behind the board.
 
+## One board draw per frame. A redraw asked for after _process (AI timers, tweens) drew
+## the whole board at the start of the next frame and again after its _process, and only
+## the second draw was ever shown. Requests now wait for the end of _process (Main.gd).
+var _redraw_wanted := false
+func _redraw() -> void:
+	if video_export or not is_processing(): queue_redraw()
+	else: _redraw_wanted = true
+
 ## The cells _visible_before_impact(viewer) leaves out, when known as a short list
 ## (GameActionResolver.visible_complement); null otherwise.
 func _hidden_before_impact(viewer: int) -> Variant:
@@ -87,8 +95,8 @@ func _sync_time_tint(tint: Color) -> void:
 	_time_mod.color = tint
 
 func _sync_lighting() -> void:
-	if _tiles != null and _tiles.set_time_of_day(state.time_of_day if state != null else ""): queue_redraw()
-	if _tiles != null and state != null and _tiles.set_winter(state.winter): queue_redraw()
+	if _tiles != null and _tiles.set_time_of_day(state.time_of_day if state != null else ""): _redraw()
+	if _tiles != null and state != null and _tiles.set_winter(state.winter): _redraw()
 	if _before_tiles != null and state != null and _before_tiles.set_winter(state.winter):
 		if _before_layer != null: _before_layer.queue_redraw()
 	if _before_tiles != null and _before_tiles.set_time_of_day(state.time_of_day if state != null else ""):
@@ -184,7 +192,7 @@ func _kill_pan_tween() -> void:
 
 func _set_pan(v: Vector2) -> void:
 	pan = v
-	queue_redraw()
+	_redraw()
 
 func _ensure_visible(coord: Vector2i) -> void:
 	if _mouse_panning: return
@@ -252,7 +260,7 @@ func _zoom_at(screen_pos: Vector2, factor: float) -> void:
 	var local := (screen_pos - pan) / zoom
 	zoom = new_zoom
 	pan = screen_pos - local * zoom
-	queue_redraw()
+	_redraw()
 
 func _viewing_side() -> int:
 	if _spectator: return _spectator_side
@@ -359,4 +367,4 @@ func _sync_camera_layers() -> void:
 		if layer != null:
 			layer.position = pan
 			layer.scale = Vector2(zoom, zoom)
-	queue_redraw()
+	_redraw()

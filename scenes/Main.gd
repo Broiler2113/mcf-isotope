@@ -72,9 +72,15 @@ func _ready() -> void:
 	# Камера — на свои войска, а не в угол доски: с каймой вокруг карты (0.9.3) угол поля
 	# это десяток клеток пустого грунта, травы или космоса.
 	if not video_export: _center_on_side.call_deferred(my_owner if networked else state.active_player(), true)
-	queue_redraw()
+	_redraw()
 
 func _process(delta: float) -> void:
+	_process_frame(delta)
+	if _redraw_wanted:
+		_redraw_wanted = false
+		queue_redraw()
+
+func _process_frame(delta: float) -> void:
 	if video_export: return
 	if _audio != null:
 		_audio.suppress = replay != null and _replay_skip_animations
@@ -99,7 +105,7 @@ func _process(delta: float) -> void:
 	# печатает в чате, вспышки и пули не должны замирать на экране.
 	# Heavy 3D frames must not consume an entire projectile before it can be displayed.
 	if _fx.advance(minf(delta, 1.0 / 30.0) if _fp != null else delta):
-		queue_redraw()
+		_redraw()
 	var focused := get_viewport().gui_get_focus_owner()
 	if focused is LineEdit or focused is TextEdit or Keybinds.modal_open() or _quit_dialog.visible or _fp != null:
 		_sync_lighting()
@@ -112,7 +118,7 @@ func _process(delta: float) -> void:
 	if dir != Vector2.ZERO:
 		_kill_pan_tween()  # ручная панорама важнее плавного доводки камеры (item 52)
 		pan += dir.normalized() * PAN_SPEED * delta
-		queue_redraw()
+		_redraw()
 	_sync_lighting()
 
 func _build_state() -> void:
@@ -229,12 +235,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		if _box_dragging: _box_end_screen = event.position
 		pan += event.relative
-		queue_redraw()
+		_redraw()
 		return
 	if event is InputEventPanGesture:
 		_kill_pan_tween()
 		pan -= event.delta * 24.0
-		queue_redraw()
+		_redraw()
 		return
 	# Масштаб: колесо мыши и жест щипка тачпада — сохраняем клетку под курсором.
 	if event is InputEventMouseButton and event.pressed:
@@ -269,13 +275,13 @@ func _unhandled_input(event: InputEvent) -> void:
 				_place_ruler(_ruler_a, at)
 				_ruler_a = Vector2i(-1, -1)
 			_refresh_ruler_button()
-			queue_redraw()
+			_redraw()
 			return
 		if event is InputEventMouseMotion:
 			var hov := _pos_to_cell(get_viewport().get_mouse_position())
 			if hov != _ruler_hover:
 				_ruler_hover = hov
-				queue_redraw()
+				_redraw()
 			return
 	# Рисование аннотаций (item 51): тянем штрих левой кнопкой; отпускание фиксирует его
 	# и, в сетевой партии, рассылает. Симуляции это не касается — чистый клиентский слой,
@@ -296,7 +302,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event is InputEventMouseMotion:
 			if _stroke_drawing:
 				_stroke_add(_draw_world_pos())
-			queue_redraw()  # кружок кисти под курсором
+			_redraw()  # кружок кисти под курсором
 			return
 	# Ластик (item 6): тем же жестом стираем СВОИ штрихи в радиусе кисти под курсором.
 	if mode == Mode.ERASE:
@@ -314,7 +320,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event is InputEventMouseMotion:
 			if _stroke_drawing:
 				_erase_at(_draw_world_pos())
-			queue_redraw()  # кружок ластика под курсором
+			_redraw()  # кружок ластика под курсором
 			return
 	# Looking around is independent of the acting side and its animation lock.
 	if mode == Mode.FP_PICK:
@@ -337,10 +343,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			if _wall_drawing:
 				_wall_try_add(_pos_to_cell(get_viewport().get_mouse_position()))
 			else:
-				queue_redraw()
+				_redraw()
 			return
 	if HOVER_PREVIEW_MODES.has(mode) and event is InputEventMouseMotion:
-		queue_redraw()  # обновляем предпросмотр радиуса/струи/окопа под курсором
+		_redraw()  # обновляем предпросмотр радиуса/струи/окопа под курсором
 		return
 	# Групповое движение: под курсором показываем, кто куда встанет (#88). Рамку
 	# выделения не ломаем — перерисовываем только при отпущенной ЛКМ.
@@ -349,7 +355,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		var cell := _pos_to_cell(get_viewport().get_mouse_position())
 		if cell != _group_mouse_cell:
 			_group_mouse_cell = cell
-			queue_redraw()
+			_redraw()
 		return
 	# Drag a world-anchored selection rectangle; Shift adds to the current group.
 	# Двойной щелчок по пассажиру — сам челнок. Одиночные щелчки чередуют «пассажир ↔
@@ -379,7 +385,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if not _box_dragging and event.position.distance_to(_box_start_screen) >= BOX_DRAG_THRESHOLD:
 			_box_dragging = true
 		if _box_dragging:
-			queue_redraw()
+			_redraw()
 		return
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		_handle_click(_pos_to_cell(event.position))
@@ -403,11 +409,11 @@ func _handle_click(coord: Vector2i) -> void:
 		var seen := _unit_at(coord)
 		selected_id = seen.id if seen != null else -1
 		_refresh_info()
-		queue_redraw()
+		_redraw()
 		return
 	_inspected_station = coord if state.grid.cell(coord).feature_id == MCF.FEATURE_DRONE_STATION \
 			and _cell_seen_now(coord, _view_resolver().team_visible_coords(_viewing_side())) else Vector2i(-1, -1)
-	queue_redraw()
+	_redraw()
 	var occupant: UnitInstance = _unit_at(coord)
 	# Прицеливание: из стопки «дрон над юнитом» берём того, кто реально доступен как
 	# цель, иначе по клетке с дроном нельзя было бы достать наземного бойца (#23).
@@ -426,7 +432,7 @@ func _handle_click(coord: Vector2i) -> void:
 					move_dest = coord
 					item_cells = resolver.carry_drop_cells(coord)
 					mode = Mode.CARRY_DROP
-					queue_redraw()
+					_redraw()
 					return
 				# Огонь на маршруте убивает наповал (#1). Маршрут его уже обходит, так
 				# что попасть сюда можно только приказом ИДТИ ПРЯМО В ПЛАМЯ — и такой
@@ -566,7 +572,7 @@ func _handle_click(coord: Vector2i) -> void:
 				if item_cells.has(coord):
 					drag_object = coord
 					item_cells = resolver.drag_dest_cells(_selected_unit(), coord)
-					queue_redraw()
+					_redraw()
 					return
 				if _is_own_active(occupant):
 					_select(occupant)
@@ -655,7 +661,7 @@ func _handle_click(coord: Vector2i) -> void:
 					dig_trench = coord
 					dig_dirt_a = Vector2i(-1, -1)
 					item_cells = resolver.dirt_spots_for(coord, _selected_unit().coord)
-					queue_redraw()
+					_redraw()
 					return
 				if _is_own_active(occupant):
 					_select(occupant)
@@ -665,7 +671,7 @@ func _handle_click(coord: Vector2i) -> void:
 				# Первая куча (можно затем выбрать ту же клетку второй — вырастет выше).
 				if item_cells.has(coord):
 					dig_dirt_a = coord
-					queue_redraw()
+					_redraw()
 					return
 				_enter_dig()  # клик мимо — начинаем выбор окопа заново
 			else:
@@ -812,7 +818,7 @@ func _handle_click(coord: Vector2i) -> void:
 func _escape_pressed() -> void:
 	if mode == Mode.FP_PICK:
 		mode = Mode.NONE
-		queue_redraw()
+		_redraw()
 		return
 	if _picker.visible and not _animating:
 		_picker.hide()
@@ -845,7 +851,7 @@ func _escape_pressed() -> void:
 			_draw_record_end(_draw_author())
 		_cur_stroke = []
 		mode = Mode.NONE
-		queue_redraw()
+		_redraw()
 		return
 	if _animating:
 		BattleMenu.open(self)
@@ -860,7 +866,7 @@ func _escape_pressed() -> void:
 	if mode == Mode.GROUP_MOVE or mode == Mode.GROUP_LASER:
 		mode = Mode.GROUP_MENU
 		_open_group_menu()
-		queue_redraw()
+		_redraw()
 		return
 	# Групповое выделение (#18) — снять его.
 	if mode == Mode.GROUP_MENU:
@@ -981,7 +987,7 @@ func _on_intent_ready(intent: Intent) -> void:
 				"from": ap_before, "left": ap_actor.remaining_ap,
 			})
 		_hold_visual = result.visual_hold  # item 22: держим «до взрыва», пока крутится кубик
-		queue_redraw()
+		_redraw()
 		var mover: PlayerController = controllers.get(state.active_player())
 		if mover != null and mover.is_local_human() and replay == null and _walks_only(result.dice_events):
 			# Your own soldiers just walking (0.11): the walk plays on its own and the screen
@@ -991,7 +997,7 @@ func _on_intent_ready(intent: Intent) -> void:
 		else:
 			_fx.preview_lanes(result.fx)   # who fires at whom shows while the dice roll
 			await _play_dice(result.dice_events, not _result_is_audible(result))
-		queue_redraw()
+		_redraw()
 	# Косметика (#21) добавляется ПОСЛЕ анимации броска, а смерть, кровь и взрыв — когда
 	# пуля или снаряд долетели (0.12.1).
 	await _show_effects(result)
@@ -1098,7 +1104,7 @@ func _declare_match_over(title: String) -> void:
 	_clear_hint_cell()
 	_show_victory(title)
 	_refresh_status()
-	queue_redraw()
+	_redraw()
 
 func _after_action() -> void:
 	_refresh_status()
@@ -1217,7 +1223,7 @@ func _resync_after_restore() -> void:
 	for c in controllers.values():
 		c.notify_state_changed(state)
 	_refresh_status()
-	queue_redraw()
+	_redraw()
 
 ## Откат доступен ТОЛЬКО на своём ходу (#94): на ходу ИИ, мирных или соперника по
 ## сети кнопка гаснет — переигрывать чужой ход нельзя.

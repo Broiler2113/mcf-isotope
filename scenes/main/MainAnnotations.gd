@@ -22,13 +22,13 @@ func _enter_ruler() -> void:
 	_ruler_a = Vector2i(-1, -1)
 	_ruler_hover = _pos_to_cell(get_viewport().get_mouse_position())
 	_refresh_ruler_button()
-	queue_redraw()
+	_redraw()
 
 func _exit_ruler() -> void:
 	mode = Mode.NONE
 	_ruler_a = Vector2i(-1, -1)
 	_refresh_ruler_button()
-	queue_redraw()
+	_redraw()
 
 func _draw_toggle(text: String, on_toggle: Callable) -> CheckBox:
 	var cb := CheckBox.new()
@@ -36,7 +36,7 @@ func _draw_toggle(text: String, on_toggle: Callable) -> CheckBox:
 	cb.add_theme_font_size_override("font_size", 12)
 	cb.toggled.connect(func(on: bool) -> void:
 		on_toggle.call(on)
-		queue_redraw())
+		_redraw())
 	return cb
 
 ## Область видимости нового штриха: «для всех» сильнее «для команды».
@@ -59,22 +59,22 @@ func _enter_draw() -> void:
 		mode = Mode.NONE
 		_stroke_drawing = false
 		_cur_stroke = []
-		queue_redraw()
+		_redraw()
 		return
 	_deselect()
 	mode = Mode.DRAW
-	queue_redraw()
+	_redraw()
 
 ## Ластик (item 6): режим стирания СВОИХ штрихов кистью заданного радиуса.
 func _enter_erase() -> void:
 	if mode == Mode.ERASE:  # повторное нажатие выключает (item 14)
 		mode = Mode.NONE
 		_stroke_drawing = false
-		queue_redraw()
+		_redraw()
 		return
 	_deselect()
 	mode = Mode.ERASE
-	queue_redraw()
+	_redraw()
 
 ## Ластик (item 15): стирает пиксели СВОИХ рисунков там, где прошёл, — как в Paint. Ход
 ## ластика уходит по сети при отпускании, и у остальных стирается то же самое (раньше
@@ -84,7 +84,7 @@ func _erase_at(pos: Vector2) -> void:
 	_erase_segment(_draw_author(), last, pos, _erase_radius())
 	if _cur_stroke.is_empty() or last.distance_to(pos) >= 2.0:
 		_cur_stroke.append(pos)
-	queue_redraw()
+	_redraw()
 
 func _erase_segment(author: int, a: Vector2, b: Vector2, r: float) -> void:
 	for key: Vector2i in _canvases:
@@ -169,7 +169,7 @@ func _stroke_add(pos: Vector2) -> void:
 	var me := _draw_author()
 	_canvas(me, _draw_scope()).stroke(last, pos, _paint_radius(_draw_brush), _brush_colour())
 	_cur_stroke.append(pos)
-	queue_redraw()
+	_redraw()
 
 func _stroke_commit() -> void:
 	if _cur_stroke.is_empty():
@@ -239,7 +239,7 @@ func _on_remote_stroke(msg: Dictionary) -> void:
 		for k in pts.size():
 			canvas.stroke(pts[maxi(0, k - 1)], pts[k], rad, col)
 		_draw_record_end(author)
-	queue_redraw()
+	_redraw()
 
 ## Начать запись отката: штрих пишет один холст (scope), ластик — все холсты автора (-1).
 func _draw_record_begin(author: int, scope: int) -> void:
@@ -299,12 +299,12 @@ func _undo_drawing_of(author: int) -> bool:
 		var i := _rulers.rfind(op["ruler"])
 		if i >= 0:
 			_rulers.remove_at(i)
-		queue_redraw()
+		_redraw()
 		return true
 	for key: Variant in op:
 		if key is Vector2i:
 			_canvas(key.x, key.y).restore(op[key])
-	queue_redraw()
+	_redraw()
 	return true
 
 func _remove_draw_entry(author: int, entry: Dictionary) -> void:
@@ -349,7 +349,7 @@ func _drop_drawings_of(side: int) -> void:
 	for r: Dictionary in _rulers.duplicate():
 		if int(r["author"]) == side:
 			_rulers.erase(r)
-	queue_redraw()
+	_redraw()
 
 func _clear_my_drawings() -> void:
 	var me := _draw_author()
@@ -434,7 +434,7 @@ func _add_ruler(author: int, scope: int, a: Vector2i, b: Vector2i) -> void:
 	var entry := {"t": "r", "s": scope, "ab": [a.x, a.y, b.x, b.y]}
 	_log_drawing(author, entry)
 	_push_draw_op(author, {"ruler": mark, "log": entry})
-	queue_redraw()
+	_redraw()
 
 func _remove_my_last_ruler() -> void:
 	var me := _draw_author()
@@ -456,7 +456,7 @@ func _drop_last_ruler(author: int) -> bool:
 		var a: Vector2i = r["a"]
 		var b: Vector2i = r["b"]
 		_remove_draw_entry(author, {"t": "r", "s": r["scope"], "ab": [a.x, a.y, b.x, b.y]})
-		queue_redraw()
+		_redraw()
 		return true
 	return false
 
@@ -505,4 +505,4 @@ func _replay_draw_log(author: int, log: Array) -> void:
 				var ab: Array = e.get("ab", [])
 				if ab.size() >= 4:
 					_add_ruler(author, int(e.get("s", DrawScope.TEAM)), Vector2i(int(ab[0]), int(ab[1])), Vector2i(int(ab[2]), int(ab[3])))
-	queue_redraw()
+	_redraw()

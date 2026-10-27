@@ -1986,10 +1986,23 @@ func _best_smoke(state: GameState, r: GameActionResolver, u: UnitInstance) -> Di
 	# Линии огня: [вероятность попадания, клетки линии ВКЛЮЧАЯ концы, наша ли это линия].
 	var through := {}   # Vector2i -> [индексы линий]
 	var lines: Array = []
+	# A firing line is a row, column or diagonal: index the enemies by line instead of
+	# testing every pair (200 x 200 on a big map). Pairs keep their original order.
+	var by_line := {}
+	for i in theirs.size():
+		var ec: Vector2i = theirs[i].coord
+		for key: Vector2i in [Vector2i(0, ec.x), Vector2i(1, ec.y), Vector2i(2, ec.x - ec.y), Vector2i(3, ec.x + ec.y)]:
+			if not by_line.has(key): by_line[key] = []
+			(by_line[key] as Array).append(i)
 	for pair: Array in ours:
 		var a: UnitInstance = pair[0]
 		var at: Vector2i = pair[1]
-		for e: UnitInstance in theirs:
+		var near: Array = []
+		for key: Vector2i in [Vector2i(0, at.x), Vector2i(1, at.y), Vector2i(2, at.x - at.y), Vector2i(3, at.x + at.y)]:
+			near.append_array(by_line.get(key, []))
+		near.sort()
+		for j: int in near:
+			var e: UnitInstance = theirs[j]
 			if not Combat.is_on_firing_line(e.coord, at):
 				continue
 			var d := Combat.distance(e.coord, at)
