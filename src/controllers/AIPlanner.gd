@@ -194,6 +194,7 @@ func plan(state: GameState, r: GameActionResolver, field: GeoField,
 	destinations.clear()
 	dest_score.clear()
 	order.clear()
+	_beam_traces.clear()
 	_apply_weights(state)
 	_collect_enemies()
 
@@ -224,6 +225,7 @@ func plan(state: GameState, r: GameActionResolver, field: GeoField,
 			dest_score[u.id] = 0.0
 
 	order = _order_activations(actors, occupied_by, vehicle_rows)
+	_beam_traces.clear()
 
 ## Native assignment keeps the engine's score-only tie sort and all capacity checks.
 ## The reference implementation stays here for differential tests and source downloads.
@@ -485,8 +487,18 @@ func _fire_ease(shooter: UnitInstance, from: Vector2i, target: UnitInstance,
 
 ## Would a marksman's beam fired from `from` still burn `target` when it gets there?
 ## Same trace as the real shot (GameActionResolver._laser_trace), so no dice and no guess.
+## The board stands still while plan() runs, so each cell's beam in each direction is
+## traced once and shared by every target on that line.
+var _beam_traces: Dictionary = {}
+
 func _beam_kills(from: Vector2i, target: UnitInstance) -> bool:
-	for rec: Dictionary in _r._laser_trace(from, _r._step_toward(from, target.coord)):
+	var step := _r._step_toward(from, target.coord)
+	var key := Vector4i(from.x, from.y, step.x, step.y)
+	var trace: Variant = _beam_traces.get(key)
+	if trace == null:
+		trace = _r._laser_trace(from, step)
+		_beam_traces[key] = trace
+	for rec: Dictionary in trace:
 		if rec["coord"] == target.coord:
 			var kind := str(rec["kind"])
 			return (kind == "unit" or kind == "shield") and bool(rec["destroyed"])

@@ -271,9 +271,20 @@ static func _catch_up_seen(from_version: int, gw: int) -> void:
 
 ## Номер набора корпусов танков, враждебных стороне `viewer`; 0 — таких нет (или смотрит
 ## «никто»: только рельеф).
+## One team_visible_coords call asks this for every soldier, yet the tanks cannot move
+## in between: _tank_sig_memo holds each viewer's answer for the length of that call.
+var _tank_sig_memo: Variant = null
+
 func _tank_sig(viewer: int) -> int:
 	if viewer < 0:
 		return 0
+	if _tank_sig_memo != null and _tank_sig_memo.has(viewer):
+		return _tank_sig_memo[viewer]
+	var sig := _tank_sig_uncached(viewer)
+	if _tank_sig_memo != null: _tank_sig_memo[viewer] = sig
+	return sig
+
+func _tank_sig_uncached(viewer: int) -> int:
 	var gw := state.grid.width
 	var cells := PackedInt32Array()
 	for veh: Vehicle in state.all_vehicles():
@@ -976,6 +987,7 @@ func team_visible_coords(owner: int) -> Dictionary:
 		log = null
 	var live: Dictionary = {}
 	var sides := _vision_sides(owner)
+	_tank_sig_memo = {}
 	var asks: Array = []
 	for u in state.all_units():
 		if u.is_on_field() and sides.has(u.owner) and u.aboard_vehicle_id == -1:
@@ -1024,6 +1036,7 @@ func team_visible_coords(owner: int) -> Dictionary:
 		if vwas != null:
 			counts = _vis_drop(vwas, counts, out, gw, log)
 		seen[vkey] = vfresh
+	_tank_sig_memo = null
 	# Выбывшие — погиб, сел в машину, попал в плен, машину сожгли: снимаем их вклад.
 	var gone: Array = []
 	for uid: int in seen:

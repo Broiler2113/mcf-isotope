@@ -59,7 +59,7 @@ func _show_net_action(intent: Intent, result: ActionResult) -> void:
 		for id: int in result.visual_deaths:
 			_pending_death_ids[id] = true
 		_hold_visual = result.visual_hold
-		queue_redraw()
+		_redraw()
 		var walker := state.get_unit(intent.actor_id) if intent != null else null
 		var own_ctrl: PlayerController = controllers.get(walker.owner) if walker != null else null
 		if own_ctrl != null and own_ctrl.is_local_human() and _walks_only(result.dice_events):
@@ -73,7 +73,7 @@ func _show_net_action(intent: Intent, result: ActionResult) -> void:
 	for c in controllers.values():
 		c.notify_state_changed(state)
 	_refresh_status()
-	queue_redraw()
+	_redraw()
 	if _check_match_over():
 		return
 	if not _select_spawned_drone(intent, result) and not _select_borg_pilot(intent, result):
@@ -180,10 +180,10 @@ func _on_peer_ready(is_host: bool) -> void:
 func _on_initiative_synced() -> void:
 	state.log.add("- Initiative this match: %s -" % _order_labels())
 	_refresh_status()
-	queue_redraw()
+	_redraw()
 	await _play_civilian_result(net.opening_civilians)
 	_drain_net_messages.call_deferred()
-	queue_redraw()
+	_redraw()
 	# Первым может ходить ИИ-слот — его ведёт хост (batch 12 #15).
 	_kick_if_ai()
 
@@ -445,7 +445,7 @@ func _build_spectator_controls(parent: Container) -> void:
 	fog.text = "Spectator fog of war"
 	fog.toggled.connect(func(on: bool) -> void:
 		_spectator_fog = on
-		queue_redraw())
+		_redraw())
 	parent.add_child(fog)
 	var pov := OptionButton.new()
 	var sides := state.roster.player_ids()
@@ -453,5 +453,5 @@ func _build_spectator_controls(parent: Container) -> void:
 	if not sides.is_empty(): _spectator_side = sides[0]
 	pov.item_selected.connect(func(i: int) -> void:
 		_spectator_side = pov.get_item_id(i)
-		queue_redraw())
+		_redraw())
 	parent.add_child(pov)

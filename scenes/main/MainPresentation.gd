@@ -10,12 +10,12 @@ func _play_civilian_result(res: ActionResult) -> void:
 		_pending_death_ids.clear()
 		for id: int in res.deaths:
 			_pending_death_ids[id] = true
-		queue_redraw()
+		_redraw()
 		_fast_playback = true  # item 32: нейтральный слот идёт ускоренно
 		_fx.preview_lanes(res.fx)   # who fires at whom shows while the dice roll
 		await _play_dice(res.dice_events)
 		_fast_playback = false
-		queue_redraw()
+		_redraw()
 	# Остальная косметика ложится ПОСЛЕ броска (иначе кровь опережала бы решение кубика), а
 	# труп и кровь — когда пуля долетела (0.12.1).
 	await _show_effects(res)
@@ -49,7 +49,7 @@ func _play_dice(events: Array, hidden := false) -> void:
 		elif ev.get("kind", "") == "veh_walk":
 			# Машина (и пассажиры в креслах) рисуется на старте, пока до неё не дошла очередь.
 			_set_veh_offset(ev, 1.0)
-	queue_redraw()  # (состояние уже применено; кадр обновится после анимации)
+	_redraw()  # (состояние уже применено; кадр обновится после анимации)
 	for ev in events:
 		# Игрок вышел из партии прямо посреди показа (item 10): смена сцены уже забрала
 		# узел, get_tree() ниже вернул бы null. Обрываем показ — показывать некому.
@@ -106,7 +106,7 @@ func _play_dice(events: Array, hidden := false) -> void:
 			return
 		if ev.get("kind", "") == "ap":
 			_ap_display[int(ev["unit"])] = int(ev["left"])
-			queue_redraw()
+			_redraw()
 			await get_tree().create_timer(
 					(NEUTRAL_AP_DOT_DELAY if _fast_playback else AP_DOT_DELAY) / _pace()).timeout
 			continue
@@ -157,7 +157,7 @@ func _play_dice(events: Array, hidden := false) -> void:
 		if ev.get("kind", "") == "glass" and bool(ev.get("broke", false)):
 			_hold_visual.get("cells", {}).erase(ev["cell"])
 			_fx.apply(ev["fx"])
-			queue_redraw()
+			_redraw()
 			if _pace() < 8.0 and not _fast_playback and is_inside_tree():
 				await get_tree().create_timer(GLASS_BREAK_PAUSE / _pace()).timeout
 	await _await_walks()
@@ -172,7 +172,7 @@ func _play_dice(events: Array, hidden := false) -> void:
 	if _playing_slot != -1:
 		_playing_slot = -1
 		_refresh_status()
-	queue_redraw()
+	_redraw()
 
 func _await_walks() -> void:
 	var t0 := Time.get_ticks_msec()
@@ -240,7 +240,7 @@ func _play_veh_walk(ev: Dictionary) -> void:
 		while shown_step < reached:
 			shown_step += 1
 			_reveal_vehicle_stage(stages.get(shown_step, {}))
-		queue_redraw()
+		_redraw()
 		if k >= 1.0:
 			break
 		await get_tree().process_frame
@@ -253,7 +253,7 @@ func _play_veh_walk(ev: Dictionary) -> void:
 			_walk_offset.erase(u.id)
 	if _audio != null:
 		_audio.stop_player(engine, engine_generation)
-	queue_redraw()
+	_redraw()
 
 func _play_walk(ev: Dictionary) -> void:
 	var id := int(ev["unit"])
@@ -298,7 +298,7 @@ func _play_walk(ev: Dictionary) -> void:
 			_walk_offset[id] = Vector2(Vector2i(path[completed]) - prev) * CELL * (progress - completed)
 		else:
 			_walk_offset.erase(id)
-		queue_redraw()
+		_redraw()
 		if completed < path.size(): await get_tree().process_frame
 
 	if _audio != null: _audio.stop_player(buzz, buzz_generation)
@@ -309,7 +309,7 @@ func _play_walk(ev: Dictionary) -> void:
 	# Keep the visual endpoint until the whole action has finished.
 	_walk_offset.erase(id)
 	_walks_running = maxi(0, _walks_running - 1)
-	queue_redraw()
+	_redraw()
 
 ## Only soldiers walking — no dice, deaths, mines, gas or vehicles (0.11).
 func _walks_only(events: Array) -> bool:
@@ -335,7 +335,7 @@ func _free_walk(ev: Dictionary) -> void:
 	if not _walk_jobs.has(id) and not _animating and is_inside_tree():
 		_walk_cells.erase(id)
 		_walk_offset.erase(id)
-		queue_redraw()
+		_redraw()
 
 ## Юнит этого владельца управляется локальным человеком (значит, его броски защиты
 ## ждут ручного нажатия)? Мирные (NEUTRAL) и ИИ — нет: у них нет контроллера-человека.
@@ -581,7 +581,7 @@ func _show_effects(result: ActionResult, partial := false) -> void:
 		_fx.apply(rest, result.fx.any(func(e: Dictionary) -> bool: return e.get("fx") == "shot"))
 	if _audio != null:
 		_audio.action_result(result, state)
-	queue_redraw()
+	_redraw()
 
 ## Пули и снаряды летят, а жертвы держатся живыми, пока их не настигнет попадание: трассер
 ## отпускает убитых в своей клетке-цели и косметику этой клетки (кровь, осколки), снаряд —
@@ -611,7 +611,7 @@ func _play_shots(result: ActionResult) -> void:
 	for ev: Dictionary in launch:
 		ev["_shown"] = true
 	_fx.apply(launch)
-	queue_redraw()
+	_redraw()
 	if not is_inside_tree() or _pace() >= 8.0 or (replay != null and _replay_skip_animations):
 		return
 	# Выстрел без бросков (заряд себе под ноги) — убитых тоже держим до разрыва.
@@ -628,7 +628,7 @@ func _play_shots(result: ActionResult) -> void:
 		while k < flights.size() and float(flights[k][0]) <= t:
 			_land_shot(result, flights[k][1], bool(flights[k][2]))
 			k += 1
-		queue_redraw()
+		_redraw()
 
 func _land_shot(result: ActionResult, cell: Vector2i, blast: bool) -> void:
 	if _audio != null and blast:
@@ -684,11 +684,11 @@ func _play_flame_jets(result: ActionResult) -> void:
 					if burnt_at[id] == c:
 						_pending_death_ids.erase(id)
 				reached += 1
-			queue_redraw()
+			_redraw()
 		for id: int in burnt_at:
 			_pending_death_ids.erase(id)
 		_jet = {}
-		queue_redraw()
+		_redraw()
 
 ## Первая горящая клетка на маршруте до dst, которая убьёт этого бойца (#1);
 ## NOWHERE — пути через огонь нет либо боец огнеупорен (#2).

@@ -1860,4 +1860,4 @@ static func _ink(bg: Color) -> Color:
 func _toggle_heightmap(on: bool) -> void:
 	_heightmap = on
 	if _height_btn != null: _height_btn.set_pressed_no_signal(on)
-	queue_redraw()
+	_redraw()

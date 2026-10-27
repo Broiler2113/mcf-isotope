@@ -5,7 +5,7 @@ import json, re, sys
 from pathlib import Path
 
 root = Path('.').resolve()
-files = sorted(p for p in root.rglob('*.gd') if '.godot' not in p.parts and 'graphify-out' not in p.parts)
+files = sorted(p for p in root.rglob('*.gd') if '.godot' not in p.parts and '.cache' not in p.parts and 'graphify-out' not in p.parts)
 nodes, edges = [], []
 def nid(s): return re.sub(r'[^A-Za-z0-9_]', '_', s)
 

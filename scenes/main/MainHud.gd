@@ -548,7 +548,7 @@ func _build_ui() -> void:
 	_reveal_btn.visible = false
 	_reveal_btn.toggled.connect(func(on: bool) -> void:
 		_reveal_board = on
-		queue_redraw())
+		_redraw())
 	tools_box.add_child(_reveal_btn)
 	# Камера к своим (item 10): «Me» всегда, а в командной игре — и к каждому союзнику.
 	tools_box.add_child(_camera_row())
@@ -1293,7 +1293,7 @@ func _toggle_p1_ai() -> void:
 	_make_side(MCF.Owner.PLAYER_1)
 	_refresh_ai_buttons()
 	_refresh_pause_button()
-	queue_redraw()
+	_redraw()
 	_kick_if_ai()
 
 ## Записать «эта сторона — машина» в ростер. Кнопки хот-сита на двоих остаются

@@ -21,7 +21,7 @@ func _select_vehicle(veh: Vehicle) -> void:
 	_open_vehicle_menu(veh)
 	_refresh_info()
 	_refresh_component_panel()
-	queue_redraw()
+	_redraw()
 
 func _veh_back_to_menu() -> void:
 	var veh := _selected_vehicle()
@@ -137,7 +137,7 @@ func _veh_enter_move() -> void:
 	mode = Mode.VEH_MOVE
 	item_cells = []
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 func _veh_enter_turn() -> void:
 	var veh := _selected_vehicle()
@@ -147,7 +147,7 @@ func _veh_enter_turn() -> void:
 	item_cells = []
 	veh_move_targets = {}
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 func _veh_enter_cannon() -> void:
 	var veh := _selected_vehicle()
@@ -161,7 +161,7 @@ func _veh_enter_cannon() -> void:
 	mode = Mode.VEH_CANNON
 	veh_move_targets = {}
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 ## Индекс кресла челнока по клетке следа; −1 — не кресло.
 func _seat_index_at(veh: Vehicle, coord: Vector2i) -> int:
@@ -196,7 +196,7 @@ func _board_into(unit_id: int, veh: Vehicle) -> void:
 	mode = Mode.VEH_BOARD_SEAT
 	veh_move_targets = {}
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 ## Пересадка пассажира внутри челнока (batch 13 S6, 1 ОД).
 func _enter_seat_switch() -> void:
@@ -213,7 +213,7 @@ func _enter_seat_switch() -> void:
 	reach = null
 	target_ids = []
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 ## Оператор вылезает из борга (batch 13): на свободную соседнюю клетку, 1 ОД.
 func _enter_borg_exit() -> void:
@@ -231,7 +231,7 @@ func _enter_borg_exit() -> void:
 	reach = null
 	target_ids = []
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 ## Выход пассажира из челнока (batch 13 S7): бесплатно, через свой борт.
 func _enter_passenger_exit() -> void:
@@ -247,7 +247,7 @@ func _enter_passenger_exit() -> void:
 	reach = null
 	target_ids = []
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 func _veh_enter_disembark(unit_id: int) -> void:
 	var veh := _selected_vehicle()
@@ -258,7 +258,7 @@ func _veh_enter_disembark(unit_id: int) -> void:
 	mode = Mode.VEH_DISEMBARK
 	veh_move_targets = {}
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 func _pending_shoot(u: UnitInstance) -> bool:
 	return u.action_state != null and u.action_state.is_pending()
@@ -283,7 +283,7 @@ func _enter_move() -> void:
 	reach = resolver.reachable_for(u, _reach_tiers[_reach_tiers.size() - 1])
 	target_ids = []
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 func _enter_shoot() -> void:
 	var u := _selected_unit()
@@ -313,7 +313,7 @@ func _enter_shoot() -> void:
 	else:
 		target_ids = []
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 func _shoot_ap_cost(u: UnitInstance) -> int:
 	return MCF.MARKSMAN_AP_COST if u.attack_ability() == MCF.ABILITY_MARKSMAN else 1
@@ -337,7 +337,7 @@ func _enter_grab() -> void:
 	item_cells = resolver.draggable_cells(u)
 	item_cells.append_array(_corpse_cells)
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 ## Перекладывание пленника вокруг носильщика (#100). Свободные соседние клетки
 ## подсвечиваются теми же средствами, что и клетка сброса при переносе.
@@ -353,7 +353,7 @@ func _enter_move_held() -> void:
 	target_ids = []
 	item_cells = cells
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 func _enter_item() -> void:
 	var u := _selected_unit()
@@ -369,7 +369,7 @@ func _enter_item() -> void:
 	else:
 		item_cells = resolver.grenade_target_cells(u)
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 ## Почему дрон сейчас не слушается (issues-12 #10) — та же проверка, что operator_controls.
 func _drone_idle_reason(drone: UnitInstance) -> String:
@@ -403,7 +403,7 @@ func _enter_drone_fly() -> void:
 	_drone_costs = resolver.drone_flight_costs(u)
 	_drone_budget = resolver.drone_flight_budget(u)
 	_menu.hide()
-	queue_redraw()
+	_redraw()
 
 ## Всё, что стоит на клетке, сверху вниз: дрон висит НАД наземным юнитом (#13, он не
 ## занимает слот клетки), под ним — живой юнит или труп.
