@@ -372,131 +372,16 @@ func _candidates_for(u: UnitInstance, out: Array) -> void:
 ## The plan's native scorer, or null (no library, or it refused the plan): GDScript scores.
 var _native_plan: RefCounted = null
 
-## Board bits for the native scorer: per cell, exactly what _score_cell and _fire_ease read off
-## the board. Built once per board, then patched from the look journal like
-## AIController._walk_mask; fire_need depends on the match's corpse rules, so they are keyed.
-const SB_WALL := 1
-const SB_COVER := 2
-const SB_SHELTER := 4
-const SB_TRENCH := 8
-const SB_HEDGEHOG := 16
-const SB_DOT_OPEN := 32
-const SB_FIRE := 64
-const SB_SPREAD := 128
-const SB_OBSCURED := 256
-const SB_COVER_SHIFT := 12   # 3 bits: MCF.COVER_MOD.get(cover_height, 1) of a cell with cover
-const SB_SHIELD_SHIFT := 15  # 3 bits: the hit penalty this cell gives a shot past it
-## What a marksman's beam meets in each cell (GameActionResolver._laser_trace): the kind in bits
-## 0-2, its cost or durability above. Kept with _sb, from the same journal.
-const SL_NONE := 0
-const SL_STOP := 1        # armour plate, the edge of the world
-const SL_FURNITURE := 2   # costs its durability
-const SL_GLASS := 3
-const SL_BOX := 4         # a durable box (DOT): cracks by POTENTIAL_PER_DURABILITY
-const SL_FIXED := 5       # MCF.LASER_COST
-const SL_WALL := 6        # bare terrain wall
-const SL_SHIFT := 3
-## The occupant of a cell, for the beam.
-const SO_ALIVE := 1
-const SO_FIELD := 2
-const SO_SHIELD := 4
-const SO_CORPSE := 8
-static var _sb: PackedInt32Array = PackedInt32Array()
-static var _sl: PackedInt32Array = PackedInt32Array()
-static var _sb_grid := 0
-static var _sb_look := -1
-static var _sb_legacy := false
-
-static func _scoring_bits(c: GridCell, r: GameActionResolver) -> int:
-	var h := c.cover_height
-	var fid := c.feature_id
-	var bits := 0
-	if h >= MCF.WALL_HEIGHT:
-		bits |= SB_WALL
-	if c.has_cover():
-		bits |= SB_COVER | (int(MCF.COVER_MOD.get(h, 1)) << SB_COVER_SHIFT)
-	# shelter(): the same condition, one neighbour at a time.
-	if h >= MCF.WALL_HEIGHT or MCF.COVER_MOD.has(h) \
-			or (Furniture.is_furniture(fid) and Furniture.cover_penalty(h) > 0):
-		bits |= SB_SHELTER
-	if fid == MCF.FEATURE_TRENCH:
-		bits |= SB_TRENCH
-	elif fid == MCF.FEATURE_HEDGEHOG_SANDBAGS:
-		bits |= SB_HEDGEHOG
-	elif fid == MCF.FEATURE_DOT_OPEN:
-		bits |= SB_DOT_OPEN
-	if c.on_fire:
-		bits |= SB_FIRE
-	if r.fire_need(c) <= 6:
-		bits |= SB_SPREAD
-	if c.obscured():
-		bits |= SB_OBSCURED
-	# What this cell takes off a shot at its neighbour behind it (_hit_chance's "shield").
-	var shield: int = Furniture.cover_penalty(h) if Furniture.is_furniture(fid) else int(MCF.COVER_MOD.get(h, 0))
-	return bits | (clampi(shield, 0, 7) << SB_SHIELD_SHIFT)
-
-static func _scoring_laser(c: GridCell) -> int:
-	var fid := c.feature_id
-	if fid == MCF.FEATURE_ARMOR_WALL or fid == MCF.FEATURE_BOUNDARY:
-		return SL_STOP
-	if Furniture.is_furniture(fid):
-		return SL_FURNITURE | (c.feature_durability << SL_SHIFT)
-	if fid != "" and MCF.LASER_COST.has(fid):
-		if fid == MCF.FEATURE_GLASS:
-			return SL_GLASS
-		if c.feature_durability > 0:
-			return SL_BOX | (c.feature_durability << SL_SHIFT)
-		var cost := int(MCF.LASER_COST[fid])
-		if fid == MCF.FEATURE_DIRT_PILE and c.cover_height >= MCF.WALL_HEIGHT:
-			cost = MCF.LASER_COST_TERRAIN_WALL
-		return SL_FIXED | (cost << SL_SHIFT)
-	return SL_WALL if c.is_wall() else SL_NONE
-
-static func _scoring_board(grid: Grid, r: GameActionResolver) -> PackedInt32Array:
-	var w := grid.width
-	var h := grid.height
-	if grid.get_instance_id() != _sb_grid or _sb_look < GridCell.look_log_base \
-			or _sb.size() != w * h or _sb_legacy != r.legacy_corpse_rules:
-		_sb.resize(w * h)
-		_sl.resize(w * h)
-		var cells := grid.cells_flat()
-		for i in cells.size():
-			_sb[i] = _scoring_bits(cells[i], r)
-			_sl[i] = _scoring_laser(cells[i])
-		_sb_grid = grid.get_instance_id()
-		_sb_legacy = r.legacy_corpse_rules
-	elif _sb_look != GridCell.look_version:
-		var ch := GridCell.look_changes
-		var i: int = (_sb_look - GridCell.look_log_base) * 2
-		while i < ch.size():
-			var x := ch[i]
-			var y := ch[i + 1]
-			if x < w and y < h:
-				_sb[y * w + x] = _scoring_bits(grid.cell_fast(x, y), r)
-				_sl[y * w + x] = _scoring_laser(grid.cell_fast(x, y))
-			i += 2
-	_sb_look = GridCell.look_version
-	return _sb
-
 ## A native scorer for this plan with the board handed over, or null: GDScript does it all.
 func _native_board() -> void:
-	_native_plan = NativeKernels.plan_scorer()
+	var layer := NativeBoard.vehicle_layer(_state)
+	_native_plan = NativeBoard.scorer(_state, _r, layer)
 	if _native_plan == null:
 		return
 	var grid := _state.grid
 	var gw := grid.width
-	var vehicle_cells := PackedInt32Array()
-	var vehicle_ids := PackedInt32Array()
-	for veh: Vehicle in _state.all_vehicles():
-		for fc: Vector2i in veh.footprint():
-			if grid.in_bounds(fc) and grid.cell_fast(fc.x, fc.y).vehicle_id != -1:
-				vehicle_cells.append(fc.y * gw + fc.x)
-				vehicle_ids.append(grid.cell_fast(fc.x, fc.y).vehicle_id)
-	var flags := _scoring_board(grid, _r)
-	if not _native_plan.set_board({"width": gw, "height": grid.height, "flags": flags, "laser": _sl,
-			"vehicle_cells": vehicle_cells, "vehicle_ids": vehicle_ids}):
-		_native_plan = null
-		return
+	var vehicle_cells: PackedInt32Array = layer[0]
+	var vehicle_ids: PackedInt32Array = layer[1]
 	# The beam's view of the units: each cell's occupant, and the hull covering it
 	# (vehicle_covering: a footprint, or a piloted borg standing on its origin).
 	var occ_cells := PackedInt32Array()
@@ -505,8 +390,8 @@ func _native_board() -> void:
 		if not grid.in_bounds(u.coord) or grid.cell_fast(u.coord.x, u.coord.y).occupant != u:
 			continue
 		occ_cells.append(u.coord.y * gw + u.coord.x)
-		occ_bits.append((SO_ALIVE if u.is_alive() else 0) | (SO_FIELD if u.is_on_field() else 0)
-				| (SO_SHIELD if _r._shield_immunity(u) else 0) | (SO_CORPSE if u.carried_corpses > 0 else 0))
+		occ_bits.append((NativeBoard.SO_ALIVE if u.is_alive() else 0) | (NativeBoard.SO_FIELD if u.is_on_field() else 0)
+				| (NativeBoard.SO_SHIELD if _r._shield_immunity(u) else 0) | (NativeBoard.SO_CORPSE if u.carried_corpses > 0 else 0))
 	var cover_cells := PackedInt32Array()
 	var cover_ids := PackedInt32Array()
 	var cover_durability := PackedInt32Array()

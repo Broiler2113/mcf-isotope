@@ -1037,6 +1037,15 @@ func _best_break(state: GameState, r: GameActionResolver, u: UnitInstance) -> Di
 func _best_corpse_grab(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dictionary:
 	if u.carried_corpses >= CORPSE_CARRY_MAX or u.borg_id != -1:
 		return {}
+	# No body next to the soldier, nothing to weigh: the enemy and field below only matter
+	# for a neighbour holding one (they fill per-decision caches and change no answer).
+	var any_body := false
+	for n: Vector2i in state.grid.neighbors(u.coord):
+		if r.has_corpse(n):
+			any_body = true
+			break
+	if not any_body:
+		return {}
 	var enemy := _nearest_enemy(state, u.coord, false, r)
 	var enemy_near := enemy != null \
 			and Combat.distance(u.coord, enemy.coord) <= CORPSE_GRAB_ENEMY_RANGE
@@ -1781,14 +1790,14 @@ func _best_mine(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dic
 	var free_credit := u.mine_credits > 0
 	if not free_credit and u.remaining_ap <= 0:
 		return {}
+	# From the feature index, not a walk over the whole board (7 ms a sapper on a big map).
 	var own_mines := 0
 	var own_av := 0
-	for c: GridCell in state.grid.cells_flat():
-		if c.feature_owner != owner:
-			continue
-		if c.feature_id == MCF.FEATURE_MINE:
+	for mc: Vector2i in r._feature_cells(MCF.FEATURE_MINE):
+		if state.grid.cell(mc).feature_owner == owner:
 			own_mines += 1
-		elif c.feature_id == MCF.FEATURE_AV_MINE:
+	for mc: Vector2i in r._feature_cells(MCF.FEATURE_AV_MINE):
+		if state.grid.cell(mc).feature_owner == owner:
 			own_av += 1
 	var enemy_veh := _enemy_vehicle_count(state)
 	var lay_av := enemy_veh > 0 and own_av < enemy_veh
@@ -1799,6 +1808,10 @@ func _best_mine(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dic
 		return {}
 	var my_geo: int = field.at(u.coord)
 	var grid := state.grid
+	var allies_at := {}   # where our other soldiers on foot stand
+	for ally: UnitInstance in state.living_units_of(owner):
+		if ally.id != u.id and ally.aboard_vehicle_id == -1:
+			allies_at[ally.coord] = true
 	var have_best := false
 	var best_score := 0.0
 	var best_cell := Vector2i.ZERO
@@ -1836,11 +1849,12 @@ func _best_mine(state: GameState, r: GameActionResolver, u: UnitInstance) -> Dic
 					continue
 				score -= 10.0 if maxi(absi(dx), absi(dy)) == 1 else 3.0
 		# Свои рядом будут её обходить — лучше положить чуть в стороне от строя.
-		for ally: UnitInstance in state.living_units_of(owner):
-			if ally.id != u.id and ally.aboard_vehicle_id == -1 \
-					and Combat.distance(ally.coord, cell) <= 1:
-				score -= 2.0
-				break
+		var crowded := false
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				crowded = crowded or allies_at.has(cell + Vector2i(dx, dy))
+		if crowded:
+			score -= 2.0
 		if not have_best or score > best_score:
 			have_best = true
 			best_score = score
@@ -2029,6 +2043,9 @@ func _best_smoke(state: GameState, r: GameActionResolver, u: UnitInstance) -> Di
 			theirs.append(o)
 	if ours.is_empty() or theirs.is_empty():
 		return {}
+	var native := _native_smoke(state, r, u, ours, theirs)
+	if not native.is_empty():
+		return native[0]
 	# Линии огня: [вероятность попадания, клетки линии ВКЛЮЧАЯ концы, наша ли это линия].
 	var through := {}   # Vector2i -> [индексы линий]
 	var lines: Array = []
@@ -2095,6 +2112,72 @@ func _best_smoke(state: GameState, r: GameActionResolver, u: UnitInstance) -> Di
 		if best.is_empty() or score > best["score"]:
 			best = {"score": score, "intent": UseItemIntent.new(u.id, aim)}
 	return best
+
+## _best_smoke with the lines in C++ (MCFPlanScorer.smoke_values): the same aims, the same
+## landings and values, so the same choice. [] when the kernel is missing or refuses: the
+## GDScript path then runs; otherwise [the candidate, or {} for none].
+func _native_smoke(state: GameState, r: GameActionResolver, u: UnitInstance, ours: Array, theirs: Array) -> Array:
+	var scorer := NativeBoard.scorer(state, r)
+	if scorer == null:
+		return []
+	var ours_xy := PackedInt32Array()
+	var ours_range := PackedFloat64Array()
+	for pair: Array in ours:
+		var a: UnitInstance = pair[0]
+		var at: Vector2i = pair[1]
+		ours_xy.append_array([at.x, at.y, mini(maxi(1, a.rate_of_fire()), 4), 1 if a.attack_ability() == MCF.ABILITY_MARKSMAN else 0])
+		ours_range.append(a.fire_range())
+	var theirs_xy := PackedInt32Array()
+	var theirs_range := PackedFloat64Array()
+	for e: UnitInstance in theirs:
+		theirs_xy.append_array([e.coord.x, e.coord.y, mini(maxi(1, e.rate_of_fire()), 4), 1 if e.attack_ability() == MCF.ABILITY_MARKSMAN else 0])
+		theirs_range.append(e.fire_range())
+	# Where each aim's six rolls land (the same arithmetic as below).
+	var aims: Array = []   # [aim, landings]
+	var landing_xy := PackedInt32Array()
+	var landing_index := {}
+	for aim: Vector2i in r.grenade_target_cells(u):
+		var dist := Combat.distance(u.coord, aim)
+		if dist <= 1:
+			continue
+		var need := Combat.hit_number(dist, float(MCF.GRENADE_RANGE))
+		var path := r._throw_path(u.coord, aim)
+		var rolls: Array[Vector2i] = []
+		for roll in range(1, 7):
+			var landing := aim
+			if roll < need:
+				var idx: int = clampi(dist - (need - roll), 0, dist)
+				landing = u.coord if idx <= 0 else path[idx - 1]
+			rolls.append(landing)
+			if not landing_index.has(landing):
+				landing_index[landing] = landing_index.size()
+				landing_xy.append_array([landing.x, landing.y])
+		aims.append([aim, rolls])
+	var table := PackedFloat64Array()
+	for need in range(1, 7):
+		for burst in range(1, 5):
+			var p := float(7 - need) / 6.0
+			table.append(1.0 - pow(1.0 - p, float(burst)))
+	var out: Array = scorer.smoke_values({"ours": ours_xy, "ours_range": ours_range, "theirs": theirs_xy,
+		"theirs_range": theirs_range, "hit_table": table, "marksman_hit": 0.66,
+		"own_cost": SMOKE_OWN_COST, "radius": MCF.SMOKE_RADIUS, "landings": landing_xy})
+	if out.size() != 2:
+		return []
+	if int(out[1]) == 0:
+		return [{}]
+	var values: PackedFloat64Array = out[0]
+	var min_net := float(_prof.get("smoke_min", 0.8))
+	var best: Dictionary = {}
+	for entry: Array in aims:
+		var net := 0.0
+		for landing: Vector2i in entry[1]:
+			net += values[landing_index[landing]] / 6.0
+		if net < min_net:
+			continue
+		var score := SCORE_SHOOT_BASE * 0.95 + net * SCORE_SMOKE_PER_HIT
+		if best.is_empty() or score > best["score"]:
+			best = {"score": score, "intent": UseItemIntent.new(u.id, entry[0])}
+	return [best]
 
 ## Закрытые облаком в landing ожидаемые попадания: вражеские минус доля наших.
 func _smoke_value(landing: Vector2i, through: Dictionary, lines: Array) -> float:

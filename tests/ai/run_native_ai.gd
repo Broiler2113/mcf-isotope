@@ -104,10 +104,12 @@ func _nearest(rng: RandomNumberGenerator) -> void:
 ## and the civilians' classic weights, with and without capture objectives.
 func _plan_scores(rng: RandomNumberGenerator) -> void:
 	var kinds := ["light_infantry", "machinegunner", "sniper", "miner", "anti_tank", "engineer",
-		"shield_bearer", "marksman", "heavy_infantry", "flamethrower"]
+		"shield_bearer", "marksman", "heavy_infantry", "flamethrower", "assault"]
 	var rows := 0
 	var native_soldiers := 0
 	var beam_records := 0
+	var smoke_checks := 0
+	var sight_checks := 0
 	for board in 6:
 		var style: int = [MapGen.Style.TOWN, MapGen.Style.STATION, MapGen.Style.FIELD][board % 3]
 		var m := MapGen.generate({"style": style, "size": 1, "seed": 4100 + board, "civilians": false})
@@ -171,7 +173,15 @@ func _plan_scores(rng: RandomNumberGenerator) -> void:
 			if k % 11 == 5: u.move_credit = 2
 			if k % 13 == 6: u.carried_corpses = 1
 			if k % 17 == 9: u.status = MCF.Status.CORPSE
+		# Sleeping civilians among the walls, glass, gas and hulls, for the wake-up check.
+		for k in 14:
+			if next >= open.size(): break
+			var at := open[next]
+			next += 1
+			if grid.cell(at).occupant == null and grid.cell(at).vehicle_id == -1:
+				state.spawn_unit(StateCodec.load_stats("civilian"), at, MCF.Owner.NEUTRAL)
 		var r := GameActionResolver.new(state)
+		sight_checks += _compare_civilian_sight(state, r)
 		for setting: Array in [[0, AIPersonality.TACTICIAN, false], [1, AIPersonality.AGGRESSOR, true],
 				[0, AIPersonality.FORTIFIER, true], [civ_slot, AIPersonality.TACTICIAN, false]]:
 			var owner: int = setting[0]
@@ -214,6 +224,8 @@ func _plan_scores(rng: RandomNumberGenerator) -> void:
 					"the native threat map equals GDScript's on board %d (owner %d)" % [board, owner])
 			if setting == [0, AIPersonality.TACTICIAN, false] and planner._native_plan != null:
 				beam_records += _compare_beams(planner._native_plan, r, state, rng, marks)
+			if owner != civ_slot:
+				smoke_checks += _compare_smoke(state, r, owner, setting[1])
 			planner._build_line_targets()
 			planner._build_tank_paths()
 			planner._setup_native_scorer()
@@ -242,7 +254,58 @@ func _plan_scores(rng: RandomNumberGenerator) -> void:
 			c.gas = false
 	ck(rows > 2000 and native_soldiers > 100, "plan scores compared (%d rows, %d soldiers scored natively)" % [rows, native_soldiers])
 	ck(beam_records > 3000, "marksman beams compared (%d records)" % beam_records)
-	print("Compared %d plan cell scores (%d soldiers scored natively) and %d beam records." % [rows, native_soldiers, beam_records])
+	ck(smoke_checks > 20, "smoke throws compared (%d)" % smoke_checks)
+	ck(sight_checks > 50 and _sight_seen > 10, "civilian wake-up checks compared (%d, %d of them seeing a soldier)" % [sight_checks, _sight_seen])
+	print("Compared %d plan cell scores (%d soldiers scored natively), %d beam records, %d smoke throws and %d wake-up checks (%d seeing)." % [rows, native_soldiers, beam_records, smoke_checks, sight_checks, _sight_seen])
+
+## The civilians' wake-up check natively (ResolverWorld._civilians_seeing_native) against the
+## GDScript full check (_civ_sees_soldier over _sight_index), sleeper by sleeper.
+var _sight_seen := 0
+
+func _compare_civilian_sight(state: GameState, r: GameActionResolver) -> int:
+	var soldiers: Array = []
+	for so: UnitInstance in r._living_soldiers():
+		if state.grid.in_bounds(so.coord): soldiers.append(so)
+	var civilians: Array = []
+	for u: UnitInstance in state.all_units():
+		if CivilianAI.is_npc(u) and u.is_alive() and u.neutral_group == 0: civilians.append(u)
+	var native: Variant = r._civilians_seeing_native(soldiers, civilians)
+	ck(native != null, "the native wake-up check runs")
+	if native == null: return 0
+	var idx := r._sight_index(soldiers)
+	for i in civilians.size():
+		var want := r._civ_sees_soldier(civilians[i], idx)
+		if want: _sight_seen += 1
+		if want != (native[i] != 0):
+			ck(false, "civilian at %s: native wake-up check says %s, GDScript %s" % [civilians[i].coord, native[i] != 0, want])
+			return i
+	return civilians.size()
+
+## A smoke grenade's best aim (AIController._best_smoke), native lines against GDScript's:
+## the same score to the bit and the same cell, for every soldier carrying one, with the
+## personality's threshold and with none (so every aim is rated and compared).
+func _compare_smoke(state: GameState, r: GameActionResolver, owner: int, style: int) -> int:
+	var ai := AIController.new(owner, AIController.Difficulty.HARD)
+	ai._r = r
+	var count := 0
+	for u: UnitInstance in state.living_units_of(owner):
+		if u.held_item_id != MCF.ITEM_SMOKE:
+			continue
+		for threshold: Variant in [null, -1e9]:
+			ai._prof = AIPersonality.profile(style, 1).duplicate()
+			if threshold != null: ai._prof["smoke_min"] = threshold
+			NativeKernels.enabled = false
+			var want := ai._best_smoke(state, r, u)
+			NativeKernels.enabled = true
+			var got := ai._best_smoke(state, r, u)
+			var same := want.is_empty() == got.is_empty()
+			if same and not want.is_empty():
+				same = want["score"] == got["score"] and (want["intent"] as UseItemIntent).target == (got["intent"] as UseItemIntent).target
+			if not same:
+				ck(false, "native smoke throw of %s at %s matches GDScript (%s / %s)" % [u.stats.id, u.coord, want, got])
+				return count
+			count += 1
+	return count
 
 ## The marksman's beam (MCFPlanScorer.beam) against GameActionResolver._laser_trace, record by
 ## record: from every trench, smoke and feature cell strewn above, every unit and some random

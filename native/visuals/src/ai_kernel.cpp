@@ -210,7 +210,7 @@ class MCFPlanScorer : public RefCounted {
 
     // AIPlanner.SB_* bits.
     static constexpr int32_t WALL = 1, COVER = 2, SHELTER = 4, TRENCH = 8, HEDGEHOG = 16,
-            DOT_OPEN = 32, FIRE = 64, SPREAD = 128, OBSCURED = 256, COVER_SHIFT = 12, SHIELD_SHIFT = 15;
+            DOT_OPEN = 32, FIRE = 64, SPREAD = 128, OBSCURED = 256, GLASS = 512, COVER_SHIFT = 12, SHIELD_SHIFT = 15;
     static constexpr int32_t ABILITY_AT = 1, ABILITY_MINER = 2, ABILITY_MARKSMAN = 3;
     // AIPlanner.SL_*: what a marksman's beam meets in a cell (kind in bits 0-2, value above).
     static constexpr int32_t L_NONE = 0, L_STOP = 1, L_FURNITURE = 2, L_GLASS = 3, L_BOX = 4, L_FIXED = 5, L_WALL = 6;
@@ -266,6 +266,32 @@ class MCFPlanScorer : public RefCounted {
             if (f & WALL) {
                 if (!(d <= 1 && ((f & HEDGEHOG) || (allow_embrasure && (f & DOT_OPEN))))) return true;
             } else if (vehicle[i] != -1 && vehicle[i] != vehicle[from] && vehicle[i] != vehicle[to]) {
+                return true;
+            }
+            x += sx;
+            y += sy;
+            ++d;
+        }
+        return false;
+    }
+    // los_blocked(from, to, allow_embrasure = true, ignore_units = false, glass_passable = true):
+    // a civilian's sight. Gas blocks; a living unit on the way blocks.
+    bool sight_blocked(int64_t fx, int64_t fy, int64_t tx, int64_t ty, const std::vector<uint8_t> &alive) const {
+        const int64_t dx = tx - fx, dy = ty - fy;
+        if (dx == 0 && dy == 0) return false;
+        if (dx != 0 && dy != 0 && std::abs(dx) != std::abs(dy)) return false;
+        const int64_t sx = sign(dx), sy = sign(dy), from = fy * w + fx, to = ty * w + tx;
+        if ((flags[from] & OBSCURED) || (flags[to] & OBSCURED)) return true;
+        int64_t x = fx + sx, y = fy + sy, d = 1;
+        while (x != tx || y != ty) {
+            const int64_t i = y * w + x;
+            const int32_t f = flags[i];
+            if (f & OBSCURED) return true;
+            if (f & WALL) {
+                if (!((d <= 1 && (f & (HEDGEHOG | DOT_OPEN))) || (f & GLASS))) return true;
+            } else if (vehicle[i] != -1 && vehicle[i] != vehicle[from] && vehicle[i] != vehicle[to]) {
+                return true;
+            } else if (alive[i]) {
                 return true;
             }
             x += sx;
@@ -535,6 +561,8 @@ protected:
         ClassDB::bind_method(D_METHOD("set_board", "board"), &MCFPlanScorer::set_board);
         ClassDB::bind_method(D_METHOD("set_units", "units"), &MCFPlanScorer::set_units);
         ClassDB::bind_method(D_METHOD("beam", "from", "step"), &MCFPlanScorer::beam);
+        ClassDB::bind_method(D_METHOD("smoke_values", "smoke"), &MCFPlanScorer::smoke_values);
+        ClassDB::bind_method(D_METHOD("civilians_seeing", "sleepers", "targets", "occupied"), &MCFPlanScorer::civilians_seeing);
         ClassDB::bind_method(D_METHOD("exposure", "threats", "ranges", "hit_table", "classic", "threat_seed"), &MCFPlanScorer::exposure);
         ClassDB::bind_method(D_METHOD("setup", "plan"), &MCFPlanScorer::setup);
         ClassDB::bind_method(D_METHOD("targets", "range", "fireproof", "marksman", "cells"), &MCFPlanScorer::targets);
@@ -574,6 +602,143 @@ public:
         beams.clear();
         units = true;
         return true;
+    }
+
+    // ResolverWorld._seed_sight_activation as a full check (the incremental GDScript one
+    // must equal it): for each sleeper (x, y), whether it sees a target (x, y: a soldier or a
+    // hull cell) along a clear row, column or diagonal. los_blocked(sleeper, target,
+    // allow_embrasure, units block, glass is clear, gas blocks); occupied lists the cells
+    // holding a living unit. One byte per sleeper.
+    PackedByteArray civilians_seeing(const PackedInt32Array &sleepers, const PackedInt32Array &targets,
+            const PackedInt32Array &occupied) const {
+        PackedByteArray result;
+        if (!board || sleepers.size() % 2 != 0 || targets.size() % 2 != 0) return result;
+        std::vector<uint8_t> alive(w * h, 0);
+        for (int64_t i = 0; i < occupied.size(); ++i) {
+            if (occupied[i] < 0 || occupied[i] >= w * h) return result;
+            alive[occupied[i]] = 1;
+        }
+        std::unordered_map<int64_t, std::vector<int32_t>> by_line;
+        auto line_key = [](int64_t kind, int64_t value) { return kind * 4194304 + value + 2097152; };
+        for (int64_t k = 0; k < targets.size(); k += 2) {
+            const int64_t x = targets[k], y = targets[k + 1];
+            if (!on_board(x, y)) return result;
+            for (const int64_t key : {line_key(0, y), line_key(1, x), line_key(2, x - y), line_key(3, x + y)}) {
+                by_line[key].push_back(static_cast<int32_t>(k / 2));
+            }
+        }
+        result.resize(sleepers.size() / 2);
+        for (int64_t s = 0; s < sleepers.size(); s += 2) {
+            const int64_t cx = sleepers[s], cy = sleepers[s + 1];
+            if (!on_board(cx, cy)) return PackedByteArray();
+            bool sees = false;
+            for (const int64_t key : {line_key(0, cy), line_key(1, cx), line_key(2, cx - cy), line_key(3, cx + cy)}) {
+                auto found = by_line.find(key);
+                if (found == by_line.end()) continue;
+                for (const int32_t t : found->second) {
+                    const int64_t tx = targets[t * 2], ty = targets[t * 2 + 1];
+                    if ((tx == cx && ty == cy) || sight_blocked(cx, cy, tx, ty, alive)) continue;
+                    sees = true;
+                    break;
+                }
+                if (sees) break;
+            }
+            result.set(s / 2, sees ? 1 : 0);
+        }
+        return result;
+    }
+
+    // AIController._best_smoke's firing lines and _smoke_value, after set_board(): "ours" and
+    // "theirs" are [x, y, burst, marksman] per soldier in GDScript's order, with fire ranges;
+    // a line is kept like GDScript keeps it (enemy -> our cell, clear of walls and gas,
+    // someone can hit), and "through" lists, per cell, the lines crossing it in creation
+    // order. Returns [the value of each landing (x, y pairs), the number of lines].
+    Array smoke_values(const Dictionary &smoke) const {
+        Array result;
+        std::vector<int32_t> ours, theirs, landings;
+        std::vector<double> ours_range, theirs_range, table;
+        if (!board || !read_ints(smoke, "ours", ours) || !read_ints(smoke, "theirs", theirs)
+                || !read_doubles(smoke, "ours_range", ours_range) || !read_doubles(smoke, "theirs_range", theirs_range)
+                || !read_doubles(smoke, "hit_table", table) || !read_ints(smoke, "landings", landings)
+                || ours.size() != ours_range.size() * 4 || theirs.size() != theirs_range.size() * 4
+                || table.size() != 24 || landings.size() % 2 != 0) return result;
+        const double marksman_hit = smoke.get("marksman_hit", 0.0), own_cost = smoke.get("own_cost", 0.0);
+        const int64_t radius = smoke.get("radius", 0);
+        // AIController._line_hit.
+        auto line_hit = [&](const std::vector<int32_t> &who, const std::vector<double> &ranges, size_t k, int64_t d) {
+            if (who[k * 4 + 3]) return marksman_hit;
+            const int64_t need = hit_number(d, ranges[k]);
+            if (need >= 7) return 0.0;
+            return table[(need - 1) * 4 + who[k * 4 + 2] - 1];
+        };
+        for (size_t k = 0; k < theirs_range.size(); ++k) {
+            if (!on_board(theirs[k * 4], theirs[k * 4 + 1]) || theirs[k * 4 + 2] < 1 || theirs[k * 4 + 2] > 4) return result;
+        }
+        for (size_t k = 0; k < ours_range.size(); ++k) {
+            if (!on_board(ours[k * 4], ours[k * 4 + 1]) || ours[k * 4 + 2] < 1 || ours[k * 4 + 2] > 4) return result;
+        }
+        // Enemies by firing line: column, row and both diagonals.
+        std::unordered_map<int64_t, std::vector<int32_t>> by_line;
+        auto line_key = [](int64_t kind, int64_t value) { return kind * 4194304 + value + 2097152; };
+        for (size_t k = 0; k < theirs_range.size(); ++k) {
+            const int64_t x = theirs[k * 4], y = theirs[k * 4 + 1];
+            for (const int64_t key : {line_key(0, x), line_key(1, y), line_key(2, x - y), line_key(3, x + y)}) {
+                by_line[key].push_back(static_cast<int32_t>(k));
+            }
+        }
+        std::vector<double> pe_of, pa_of;
+        std::unordered_map<int64_t, std::vector<int32_t>> through;
+        for (size_t a = 0; a < ours_range.size(); ++a) {
+            const int64_t ax = ours[a * 4], ay = ours[a * 4 + 1];
+            std::vector<int32_t> near;
+            for (const int64_t key : {line_key(0, ax), line_key(1, ay), line_key(2, ax - ay), line_key(3, ax + ay)}) {
+                auto found = by_line.find(key);
+                if (found != by_line.end()) near.insert(near.end(), found->second.begin(), found->second.end());
+            }
+            std::sort(near.begin(), near.end());
+            for (const int32_t e : near) {
+                const int64_t ex = theirs[e * 4], ey = theirs[e * 4 + 1];
+                if (!on_line(ex, ey, ax, ay)) continue;
+                const int64_t d = std::max(std::abs(ex - ax), std::abs(ey - ay));
+                if (line_blocked(ex, ey, ax, ay, true, true)) continue;
+                const double pe = line_hit(theirs, theirs_range, e, d), pa = line_hit(ours, ours_range, a, d);
+                if (pe <= 0.0 && pa <= 0.0) continue;
+                const int32_t index = static_cast<int32_t>(pe_of.size());
+                pe_of.push_back(pe);
+                pa_of.push_back(pa);
+                const int64_t sx = sign(ax - ex), sy = sign(ay - ey);
+                for (int64_t x = ex, y = ey;; x += sx, y += sy) {
+                    through[y * w + x].push_back(index);
+                    if (x == ax && y == ay) break;
+                }
+            }
+        }
+        PackedFloat64Array values;
+        values.resize(landings.size() / 2);
+        std::vector<int64_t> seen(pe_of.size(), -1);
+        std::vector<int32_t> order;
+        for (size_t l = 0; l * 2 < landings.size(); ++l) {
+            const int64_t lx = landings[l * 2], ly = landings[l * 2 + 1];
+            order.clear();
+            for (int64_t dy = -radius; dy <= radius; ++dy) {
+                for (int64_t dx = -radius; dx <= radius; ++dx) {
+                    if (!on_board(lx + dx, ly + dy)) continue;
+                    auto found = through.find((ly + dy) * w + lx + dx);
+                    if (found == through.end()) continue;
+                    for (const int32_t i : found->second) {
+                        if (seen[i] == static_cast<int64_t>(l)) continue;
+                        seen[i] = static_cast<int64_t>(l);
+                        order.push_back(i);
+                    }
+                }
+            }
+            double v = 0.0;
+            for (const int32_t i : order) v += pe_of[i] - own_cost * pa_of[i];
+            values.set(l, v);
+        }
+        result.push_back(values);
+        result.push_back(static_cast<int64_t>(pe_of.size()));
+        return result;
     }
 
     // The laser trace from a cell in a direction, flattened: [x, y, kind, cost, destroyed,
