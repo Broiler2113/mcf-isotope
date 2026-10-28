@@ -225,9 +225,6 @@ var flying: Array = []
 ## Bumped whenever advance() settles a particle: the battle screen redraws the board then,
 ## and only its flying layer while particles merely move.
 var landed_seq := 0
-## Drifting debris this many cells past the board's edge is gone: in vacuum nothing stops it,
-## and it used to fly on forever, out of sight, keeping the whole board redrawing every frame.
-const DRIFT_GONE := 96.0
 ## Отрезки лазерного следа (item 11): [{from: Vector2, to: Vector2}] в клетках.
 var laser_lines: Array = []
 ## Short-lived beams are separate from the permanent scorches on the floor.
@@ -982,9 +979,6 @@ func advance(delta: float) -> bool:
 		f["t"] = float(f["t"]) + delta
 		if bool(f.get("drift", false)):
 			var pos := flight_pos(f)
-			if bounds != Vector2.ZERO and not Rect2(-Vector2.ONE * DRIFT_GONE, bounds + Vector2.ONE * DRIFT_GONE * 2.0).has_point(pos):
-				flying.remove_at(i)
-				continue
 			var clipped := _clip_solid(before, pos, Vector2i(before.floor()))
 			if clipped != pos:
 				f["to"] = clipped
