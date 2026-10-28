@@ -4,28 +4,28 @@
       "extension": "macos-arm64/mcf_visuals.gdextension",
       "extension_sha256": "58990fa0be29f8a070202d4d70fb4e145397d1b4537decdcbea577bfa793b127",
       "library": "macos-arm64/mcf_visuals.dylib",
-      "library_size": 389920,
+      "library_size": 406896,
       "provenance": "macos-arm64/provenance.json",
-      "provenance_sha256": "b9a4cebc82b2cfdfd1a0c0c8fa60b3d516b1d4da6deaea671a0865bbebd04955",
-      "sha256": "7428f0e5db9395b4355efc6311615c9f222c05feb97a91e342c1aca5199a4c68"
+      "provenance_sha256": "ce40a259a439c13bd00b961792fe8a3e16a281cf5de90ace26072e3462b5706d",
+      "sha256": "8999a56c0c753b03089d502df85935a6c981f9470f7eab55e392117829e5bbc0"
     },
     "macos-x86_64": {
       "extension": "macos-x86_64/mcf_visuals.gdextension",
       "extension_sha256": "62fd7fe8e9b9192af216962ac2618f2db6c4b70c0a2760f10b06dd02f33e0efb",
       "library": "macos-x86_64/mcf_visuals.dylib",
-      "library_size": 412416,
+      "library_size": 430208,
       "provenance": "macos-x86_64/provenance.json",
-      "provenance_sha256": "2ef1e71f35baf900a1a21c7c93e4894e5c30ccdf1f43b7897e81b0643c03ffe9",
-      "sha256": "16564c4ee6e279ea47dee3fe9a72f757899147090e220adbe14f23c2c8800303"
+      "provenance_sha256": "3056d981578371986111a52c64c8be63cb4032f1c497c9c6882b46d976c982a1",
+      "sha256": "89d7677ada550f209872461add7027988c5752d50b3f736f82831376f860a047"
     },
     "windows-x86_64": {
       "extension": "windows-x86_64/mcf_visuals.gdextension",
       "extension_sha256": "9abfde1041d1482ea5af8f0b754c3d58a4e2cfce728454fd3103eca992739c20",
       "library": "windows-x86_64/mcf_visuals.dll",
-      "library_size": 542720,
+      "library_size": 559616,
       "provenance": "windows-x86_64/provenance.json",
-      "provenance_sha256": "959adb8a92047dedd9b829439ea732f686900ffa8e4ed137dbcc70276bcc4214",
-      "sha256": "0773c4e77312982935edd49f8dbe29e40a853b385ba0dd8820c8af88a0fb51a9"
+      "provenance_sha256": "9bcc5ced8c8d47fbdb254c1922e1e0da710fbc1b78e26597d73497ac7cddb115",
+      "sha256": "919e4e239c2916eac76e29b725dbd045578dbda5744e026c7055b9169424e750"
     }
   },
   "schema": 1,
@@ -35,7 +35,7 @@
     "native/visuals/CMakeLists.txt": "6126f7f13ad54263bdb9b5a6a1617be062eac7a903e5935a35a05923d7ff021f",
     "native/visuals/build.py": "29194420f3cccc2163a8e543b7f62f58b83fa4294fd08f2c82da3ff376514a37",
     "native/visuals/build_profile.json": "95ab8eefce646b27992d7a51fe90b6bf5e5e647e63904bd772923aabb0e451f1",
-    "native/visuals/src/ai_kernel.cpp": "6b4a6b23b928c029ae26ed487207837b6562cd5e48d9296a3c7d43020a50479a",
+    "native/visuals/src/ai_kernel.cpp": "38bba5a397c93155dbce56c71b91efb9602d604f17a841e7ed7e0369de347ba3",
     "native/visuals/src/ai_kernel.h": "e347baef261286481ca2d12b415c6b0d31d1a136436416e3e7d84777d6e1f111",
     "native/visuals/src/mesh_builder.cpp": "b57bb54ba291512d5591c2a3a68f73c7fd8eed9934dda3f6c6bb17fbd44b9124",
     "native/visuals/src/pathfinding_kernel.cpp": "f6614e66a82898a944f29bdced47a456ae86dbfe47c53b2e33e000d26cce16e6",
@@ -45,5 +45,5 @@
     "native/visuals/src/visibility_kernel.cpp": "8aff90ad1234dbffe848441941eecdc52d8679285637da4eb9968bdf6a1cda5e",
     "native/visuals/src/visibility_kernel.h": "fd413b21efdc918ff37d81359386ec85fdd560d5ae4003e1e52370e6bc0e2b63"
   },
-  "source_fingerprint": "dae3a61141ed50ce021c30bc8d66ecbbca9d964db3677faa602a541895d00ded"
+  "source_fingerprint": "deda71626358af55fdbf0d8454ec25f4beab14c2760b3f37860b5e59811c173a"
 }
