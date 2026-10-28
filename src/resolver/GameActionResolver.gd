@@ -97,10 +97,15 @@ func resolve(intent: Intent) -> ActionResult:
 		actor_owner = av.owner
 		actor_from = av.center()
 	var items_before := state.grid.map_items.duplicate() if top and intent is VehicleMoveIntent else []
-	var alive_before := {}
+	# Who is alive now, as GameState's flat rows with the list and log position they belong
+	# to: the deaths of this action are read off the units logged since (_deaths_since).
+	var alive_list: Array = []
+	var alive_rows := PackedByteArray()
+	var alive_pos := 0
 	if top:
-		for u: UnitInstance in state.all_units():
-			if u.is_alive(): alive_before[u.id] = true
+		alive_rows = state.alive_rows().duplicate()
+		alive_list = state.all_units()
+		alive_pos = UnitInstance.vision_log_end()
 	var result := _dispatch(intent)
 	if top and result.ok:
 		CorpseIdentity.cleanup(state)
@@ -158,8 +163,7 @@ func resolve(intent: Intent) -> ActionResult:
 			pre_snap["cells"] = GridCell.journal
 		GridCell.journal = {}
 	if top and result.ok:
-		for u: UnitInstance in state.all_units():
-			if alive_before.has(u.id) and not u.is_alive(): result.visual_deaths.append(u.id)
+		result.visual_deaths.append_array(_deaths_since(alive_list, alive_rows, alive_pos))
 		for ev: Dictionary in result.dice_events:
 			if ev.get("kind", "") == "veh_walk":
 				ev["effects"] = result.fx
@@ -173,6 +177,27 @@ func resolve(intent: Intent) -> ActionResult:
 		elif undoable:
 			_undo_stack.append(pre_snap)
 	return result
+
+## Ids of the units alive in `alive` (rows of `list`, GameState.alive_rows) that are dead now,
+## in all_units() order. A death moves the status, so on the same unit list only the units
+## logged since `pos` can be among them; another list (a spawn, a body taken off) asks everyone.
+func _deaths_since(list: Array, alive: PackedByteArray, pos: int) -> Array:
+	var out: Array = []
+	var picks: Variant = state.units_logged_since(pos, list)
+	if picks != null:
+		for i: int in picks:
+			var u: UnitInstance = list[i]
+			if alive[i] != 0 and not u.is_alive():
+				out.append(u.id)
+		return out
+	var was := {}
+	for i in list.size():
+		if alive[i] != 0:
+			was[(list[i] as UnitInstance).id] = true
+	for u: UnitInstance in state.all_units():
+		if was.has(u.id) and not u.is_alive():
+			out.append(u.id)
+	return out
 
 ## Счёт таблицы итогов (playtest-20): убитые этим действием записываются тому, кто
 ## действовал, — бойцу, дрону или машине; раздавленные гусеницей — отдельной колонкой.
@@ -501,9 +526,7 @@ func play_civilian_slots() -> ActionResult:
 ## stopped short on a mine it survived, or grabbed in turn (playtest: raiders left
 ## "grabbed" by nobody). Runs after every action as well as at the handoff.
 func _free_orphaned_captives() -> void:
-	for u: UnitInstance in state.all_units():
-		if u.captor_id == -1:
-			continue
+	for u: UnitInstance in state.captives():
 		var captor := state.get_unit(u.captor_id)
 		if captor != null and captor.is_alive() and captor.is_on_field() \
 				and state.grid.in_bounds(captor.coord) and Combat.distance(captor.coord, u.coord) <= 1:

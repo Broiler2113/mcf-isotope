@@ -3929,6 +3929,8 @@ glass are stamped into the terrain chunk once (`TerrainTiles._bake_decals`) inst
 redrawn every frame — at ~12k decals that was ~75 ms a frame and is now nothing. They follow
 the same fog rules as the terrain they sit on. Bloody footprints are gone with the rest of
 the per-step bookkeeping. **Service accents** (§20.2): on stations and in bunkers the walls and door frames of a service carry its colour — command blue, control/comms white, security red, medical green, science purple, engineering yellow, cargo orange, everything else grey; a room's own purpose beats its department (`MapGen.KIND_ACCENT`), the colour is a per-cell display-only byte (`MapData.wall_accent`, `MCF.Accent`) drawn as a line that runs along the wall and as a tinted door frame. **Corridors**: main ones are always 3 cells wide, maintenance tunnels 1 (2 about a quarter of the time), and grating is laid in roughly a third of the tunnels and in no room at all. **Grill walkway** (`MCF.Look.GRILL`): a floor look that is transparent between its bars and lies *over* a cell instead of replacing it; it runs from a hull airlock out into space with solar panels down both sides, and it is paintable in the editor. **Space draws no tile** — the `Starfield` parallax behind the board shows through it, following the camera (far layer 5 %, near 26 %); `floor_space.png` dropped by the player still wins. **Doors fill the whole cell** instead of a narrow panel in the middle of it. **Windows**: a symbol fallback font (✓ ✕ ▶ ⚠ are in neither Handjet nor Tahoma) and an explicit `stretch/aspect=expand` so a non-16:9 window is not letterboxed. Also: the hidden storage can no longer get an exterior airlock cut into it. **A border around every map** (§20.2): 10 cells in every direction that can be reached — diggable soil in a bunker, grass around a town or field, open space around a station or asteroid — and 2 more that cannot (`MCF.FEATURE_BOUNDARY`, in no destructible list, opaque to the laser), so the world keeps going past the battlefield but nothing walks off it. Lobby sizes now name the map, not the field. Also: `default_clear_color` was never applied — project.godot comments must start with `;`, and the `#` ones silently dropped the setting, so the window had been Godot grey instead of black all along. Tests: `tests/run_batch093.gd`. |
+| 141 | **0.14.5.4 — The unit change log** (§27.27): `UnitInstance.vision_log` records every unit whose cell, side, status, seat or neutral group changed; team fog, the civilians' wake-up check (now only sleepers whose sight lines changed), captives, carried bodies, each action's deaths and the AI's enemy lists read the changed units instead of the whole army; the firing-line and neighbour scans of target and capture lists and the wake-up rows run in C++ (`MCFAI.line_slots`/`near_slots`, `MCFPlanScorer.civilians_seeing_rows`). 1,200 giant actions 5.9 → ~3.1 s. No rule changed; protocol 33. |
+| 140 | **0.14.5.3 — Frame cost and hitches** (§27.26): zoom builds one terrain chunk per frame, group orders patch the native board from a walk journal, the soldier layer skips unchanged soldiers, replay checkpoints are sealed off the main thread, cheaper fog in smoke, and viewer switches copy only the cells a fog memory can have wrong. 1,200 giant actions 7.3 → ~5.5 s. No rule changed; protocol 33. |
 | 139 | **0.14.5.2 — AI decisions and the wake-up check** (§27.25): exact index fixes for shot/capture targets, mines and corpse grabs; smoke-grenade lines and the civilians' wake-up sight check in C++ (`MCFPlanScorer`); the board mirror moved to `NativeBoard`. 1,200 giant actions 9.5 → 7.6 s. No rule changed; protocol 33. |
 | 138 | **0.14.5.1 — The AI's turn plan in C++** (§27.24): `MCFPlanScorer` runs the threat map, every soldier's candidate-cell scores and the marksman's laser trace, bit for bit with GDScript (which stays as reference and fallback); a board mirror patched from the look journal feeds it. Giant plan scoring 203 → 14 ms. No rule changed; protocol 33. |
 | 137 | **0.14.5 — Civilians and smoothness**: a civilian who sees another civilian wake up wakes too, into the same group (`_wake_by_sight`, §20.2 "Neutrals start sealed and dormant"); tank crew are off the board and no longer seen by civilians (a sleeper on the x == y diagonal used to see them); the smoothness pass of §27.23 — per-unit vision stamps, the spare fog memory and re-pointed tiles, the AI's turn plan spread over frames, soldiers on their own layer. Protocol 33. |
@@ -4648,6 +4650,51 @@ GDScript reading units around native calls; the next native step is a flat unit 
 by the unit setters, so that sight activation, a side's fog and AI candidates read arrays.
 
 1,200 actions 7.3 → ~5.5 s; hashes 630575507 / 2998049945 unchanged.
+
+### 27.27 The unit change log (0.14.5.4)
+
+Behaviour-identical; every timing with standard fog and per-action viewer fog, giant bench
+scene, HARD against HARD. What remained after 27.26 was GDScript walking the whole army
+(~350 units) several times per action and per decision to find the few units that matter.
+
+* **The log.** `UnitInstance.vision_log` lists every unit whose `coord`, `owner`, `status`,
+  `aboard_vehicle_id` or `neutral_group` changed, in order, appended by those setters. It is
+  one process-wide list (capped, `vision_log_start` counts what was dropped); each reader keeps
+  its own position and skips units that are not its state's (`GameState.unit_slot`).
+  `GameState.units_logged_since(pos, list)` gives the changed units' indices in
+  `all_units()` order, or null when the list is another one or the log no longer reaches
+  back — the reader then does the whole pass it did before.
+* **Flat rows.** `GameState.unit_xy()` / `alive_rows()` keep every unit's cell and "alive"
+  in `all_units()` order from the log. `slots_on_lines` / `slots_near` (natively
+  `MCFAI.line_slots` / `near_slots`) give the units on a firing line or next to a cell, the
+  first test of `hostile_target_ids` and `capturable_target_ids`. Packed arrays are shared,
+  not copied, in Godot 4: a caller keeping a moment's rows duplicates them.
+* **Team fog.** With the same unit list, allies and world signature as its last pass,
+  `team_visible_coords` looks only at the logged units (in list order); an unlogged unit is
+  where that pass left it. 0.92 → 0.51 ms a call.
+* **Wake-up check.** `_sync_wake_rows` keeps each unit's role (soldier target, sleeper) and the
+  cells a living unit holds, re-reading only logged units and the walk log's cells. A sleeper
+  that saw no one is asked again only when a cell on its row, column or diagonal changed
+  (`_wa_dirty`); a new scorer key (board look, hulls) asks everyone, as does
+  `check_everything`. Most actions ask 3–4 sleepers instead of ~32. Natively each asked sleeper
+  scans the soldiers directly (no per-line index for a handful of sleepers), and
+  `civilians_seeing_rows` takes the soldiers as the kept rows, so GDScript walks only the
+  sleepers' slots (`_wa_sleepers`). 0.71 → 0.18 ms an action.
+* **Per-action subsets.** `GameState.captives()` (on `hold_epoch`) and `tracked_bodies()`
+  (new `UnitInstance.corpse_epoch`) replace the whole-army loops of `_free_orphaned_captives`
+  and `CorpseIdentity.cleanup`; `resolve()` reads its deaths (`visual_deaths`) off the units
+  logged during the action.
+* **AI.** `_living_enemy_count` and `_nearest_enemy`'s candidates are kept between decisions
+  and follow the log; a candidate list keeps its order while nobody joins or leaves it.
+
+`tests/perf/run_unit_log.gd` plays town and station games with civilians, tanks, shuttles,
+drones, undo/redo, side swaps, spawns and lifted occupants, and after every step compares each
+of these with a whole-army pass (fog against a second resolver forced whole; every sleeper left
+unasked re-checked from scratch). `tests/net/run_mp_perf.gd` still compares the wake-up check
+with `check_everything`; `tests/ai/run_native_ai.gd` compares the native scans with GDScript.
+
+1,200 actions 5.9 → ~3.1 s (9.0 s with `MCF_NATIVE_KERNELS=off`); hashes 630575507 /
+2998049945 unchanged.
 
 ## Issues PDF (6) follow-up
 

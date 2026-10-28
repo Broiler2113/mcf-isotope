@@ -117,12 +117,159 @@ var _held_by: Dictionary = {}
 var _held_epoch := -1
 var _held_list: Array = []
 
+## Units with a captor (captor_id != -1), in all_units() order: what the per-action captive
+## check walks instead of the whole army. Rebuilt on the same signal as held_by's index.
+func captives() -> Array:
+	var list := all_units()
+	if _captive_epoch != UnitInstance.hold_epoch or not is_same(list, _captive_list):
+		_captive_epoch = UnitInstance.hold_epoch
+		_captive_list = list
+		_captives = []
+		for u: UnitInstance in list:
+			if u.captor_id != -1: _captives.append(u)
+	return _captives
+
+var _captives: Array = []
+var _captive_epoch := -1
+var _captive_list: Array = []
+
+## Bodies stacked in a pile or carried (corpse_stacked or corpse_carrier_id >= 0), in all_units()
+## order: CorpseIdentity.cleanup's candidates after every action. Rebuilt when either field of
+## any unit changes (UnitInstance.corpse_epoch) or the unit list does.
+func tracked_bodies() -> Array:
+	var list := all_units()
+	if _bodies_epoch != UnitInstance.corpse_epoch or not is_same(list, _bodies_list):
+		_bodies_epoch = UnitInstance.corpse_epoch
+		_bodies_list = list
+		_bodies = []
+		for u: UnitInstance in list:
+			if u.corpse_stacked or u.corpse_carrier_id >= 0: _bodies.append(u)
+	return _bodies
+
+var _bodies: Array = []
+var _bodies_epoch := -1
+var _bodies_list: Array = []
+
 func all_units() -> Array:
 	if _units_dirty or _unit_list.size() != units.size():
 		_unit_list = units.values()
 		_unit_list.make_read_only()
 		_units_dirty = false
 	return _unit_list
+
+## Unit coordinates as flat ints in all_units() order (x, y per unit). Scans that reject almost
+## the whole army on position alone (firing lines, adjacency) read these instead of every unit.
+## Kept by UnitInstance.vision_log: only the units logged since the last call are rewritten.
+func unit_xy() -> PackedInt32Array:
+	var list := _sync_unit_rows()
+	var log := UnitInstance.vision_log
+	var k := _xy_pos - UnitInstance.vision_log_start
+	while k < log.size():
+		var u: UnitInstance = log[k]
+		var i: int = _xy_slot.get(u.id, -1)
+		if i >= 0 and is_same(list[i], u):
+			_xy[i * 2] = u.coord.x
+			_xy[i * 2 + 1] = u.coord.y
+			_alive[i] = 1 if u.status == MCF.Status.ALIVE else 0
+		k += 1
+	_xy_pos = UnitInstance.vision_log_end()
+	return _xy
+
+## 1 per living unit, 0 otherwise, in all_units() order; kept like unit_xy. Packed arrays are
+## shared, not copied: a caller keeping the statuses of a moment duplicates them.
+func alive_rows() -> PackedByteArray:
+	unit_xy()
+	return _alive
+
+## Indices in all_units() of the units on a firing line from `from` (its row, column or a
+## diagonal; a unit on `from` itself is not), ascending: what target scans test first, on the
+## flat coordinates and natively when the kernel is there.
+func slots_on_lines(from: Vector2i) -> PackedInt32Array:
+	var xy := unit_xy()
+	var native := NativeKernels.ai()
+	if native != null:
+		return native.line_slots(from, xy)
+	var out := PackedInt32Array()
+	for i in xy.size() / 2:
+		var dx: int = xy[i * 2] - from.x
+		var dy: int = xy[i * 2 + 1] - from.y
+		if (dx == 0 and dy == 0) or (dx != 0 and dy != 0 and absi(dx) != absi(dy)):
+			continue
+		out.append(i)
+	return out
+
+## Indices in all_units() of the units within `radius` cells of `at` (Chebyshev; a unit on `at`
+## itself is not), ascending; natively when the kernel is there.
+func slots_near(at: Vector2i, radius: int) -> PackedInt32Array:
+	var xy := unit_xy()
+	var native := NativeKernels.ai()
+	if native != null:
+		return native.near_slots(at, xy, radius)
+	var out := PackedInt32Array()
+	for i in xy.size() / 2:
+		var dx := absi(xy[i * 2] - at.x)
+		var dy := absi(xy[i * 2 + 1] - at.y)
+		if dx > radius or dy > radius or (dx == 0 and dy == 0):
+			continue
+		out.append(i)
+	return out
+
+## Indices in all_units() of this state's units logged (UnitInstance.vision_log) since log
+## position pos, ascending and unique; null when the log no longer reaches back to pos or the
+## unit list is another one than at pos (the caller then looks at everyone).
+func units_logged_since(pos: int, list: Array) -> Variant:
+	if pos < UnitInstance.vision_log_start or not is_same(list, all_units()):
+		return null
+	_sync_unit_rows()
+	var log := UnitInstance.vision_log
+	var out := PackedInt32Array()
+	var k := pos - UnitInstance.vision_log_start
+	while k < log.size():
+		var u: UnitInstance = log[k]
+		var i: int = _xy_slot.get(u.id, -1)
+		if i >= 0 and is_same(list[i], u):
+			out.append(i)
+		k += 1
+	if out.size() > 1:
+		out.sort()
+		var w := 1
+		for r in range(1, out.size()):
+			if out[r] != out[w - 1]:
+				out[w] = out[r]
+				w += 1
+		out.resize(w)
+	return out
+
+## u's index in all_units(), or -1 when u is not one of this state's units.
+func unit_slot(u: UnitInstance) -> int:
+	var list := _sync_unit_rows()
+	var i: int = _xy_slot.get(u.id, -1)
+	return i if i >= 0 and is_same(list[i], u) else -1
+
+## The slot index and coordinate rows for the current unit list, rebuilt whole when the list
+## changes or the log dropped entries this state had not read yet.
+func _sync_unit_rows() -> Array:
+	var list := all_units()
+	if is_same(list, _xy_list) and _xy_pos >= UnitInstance.vision_log_start:
+		return list
+	_xy_list = list
+	_xy_slot.clear()
+	_xy.resize(list.size() * 2)
+	_alive.resize(list.size())
+	for i in list.size():
+		var u: UnitInstance = list[i]
+		_xy_slot[u.id] = i
+		_xy[i * 2] = u.coord.x
+		_xy[i * 2 + 1] = u.coord.y
+		_alive[i] = 1 if u.status == MCF.Status.ALIVE else 0
+	_xy_pos = UnitInstance.vision_log_end()
+	return list
+
+var _xy := PackedInt32Array()
+var _alive := PackedByteArray()
+var _xy_slot: Dictionary = {}   # unit id -> index in _xy_list
+var _xy_list: Array = []
+var _xy_pos := -1
 
 ## Убрать юнита из партии совсем (тело ушло в кучу, переработано боргом и т. п.).
 func remove_unit(id: int) -> void:

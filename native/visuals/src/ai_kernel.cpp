@@ -45,6 +45,8 @@ protected:
         ClassDB::bind_method(D_METHOD("line_targets", "width", "height", "enemies", "xy"), &MCFAI::line_targets);
         ClassDB::bind_method(D_METHOD("assign_candidates", "rows", "gun_spread", "radius", "spread_max", "zone_of", "zone_caps"), &MCFAI::assign_candidates);
         ClassDB::bind_method(D_METHOD("nearest_index", "from", "xy"), &MCFAI::nearest_index);
+        ClassDB::bind_method(D_METHOD("line_slots", "from", "xy"), &MCFAI::line_slots);
+        ClassDB::bind_method(D_METHOD("near_slots", "at", "xy", "radius"), &MCFAI::near_slots);
     }
 public:
     int64_t api_version() const { return 1; }
@@ -185,6 +187,34 @@ public:
         return result;
     }
 
+    // GameState.slots_on_lines: the rows (x, y per unit) on a firing line from `from` (its row,
+    // column or a diagonal; `from` itself is not), in row order.
+    PackedInt32Array line_slots(const Vector2i &from, const PackedInt32Array &xy) const {
+        PackedInt32Array result;
+        if (xy.size() % 2 != 0) return result;
+        for (int64_t i = 0; i < xy.size(); i += 2) {
+            const int64_t dx = static_cast<int64_t>(xy[i]) - from.x;
+            const int64_t dy = static_cast<int64_t>(xy[i + 1]) - from.y;
+            if ((dx == 0 && dy == 0) || (dx != 0 && dy != 0 && std::abs(dx) != std::abs(dy))) continue;
+            result.push_back(static_cast<int32_t>(i / 2));
+        }
+        return result;
+    }
+
+    // GameState.slots_near: the rows within `radius` cells of `at` (Chebyshev; `at` itself is
+    // not), in row order.
+    PackedInt32Array near_slots(const Vector2i &at, const PackedInt32Array &xy, int64_t radius) const {
+        PackedInt32Array result;
+        if (xy.size() % 2 != 0 || radius < 0) return result;
+        for (int64_t i = 0; i < xy.size(); i += 2) {
+            const int64_t dx = std::abs(static_cast<int64_t>(xy[i]) - at.x);
+            const int64_t dy = std::abs(static_cast<int64_t>(xy[i + 1]) - at.y);
+            if (dx > radius || dy > radius || (dx == 0 && dy == 0)) continue;
+            result.push_back(static_cast<int32_t>(i / 2));
+        }
+        return result;
+    }
+
     int64_t nearest_index(const Vector2i &from, const PackedInt32Array &xy) const {
         int64_t best = -1, distance = int64_t(1) << 30;
         if (xy.size() % 2 != 0) return -1;
@@ -299,6 +329,32 @@ class MCFPlanScorer : public RefCounted {
             ++d;
         }
         return false;
+    }
+    // civilians_seeing's body: each sleeper against every target on one of its lines (a few
+    // sleepers are asked on most actions, so no per-line index is built).
+    PackedByteArray sight_check(const PackedInt32Array &sleepers, const std::vector<int32_t> &t,
+            const PackedInt32Array &occupied) const {
+        PackedByteArray result;
+        std::vector<uint8_t> alive(w * h, 0);
+        for (int64_t i = 0; i < occupied.size(); ++i) {
+            if (occupied[i] < 0 || occupied[i] >= w * h) return result;
+            alive[occupied[i]] = 1;
+        }
+        for (size_t k = 0; k < t.size(); k += 2) {
+            if (!on_board(t[k], t[k + 1])) return result;
+        }
+        result.resize(sleepers.size() / 2);
+        for (int64_t s = 0; s < sleepers.size(); s += 2) {
+            const int64_t cx = sleepers[s], cy = sleepers[s + 1];
+            if (!on_board(cx, cy)) return PackedByteArray();
+            bool sees = false;
+            for (size_t k = 0; k < t.size() && !sees; k += 2) {
+                const int64_t tx = t[k], ty = t[k + 1];
+                sees = on_line(cx, cy, tx, ty) && !sight_blocked(cx, cy, tx, ty, alive);
+            }
+            result.set(s / 2, sees ? 1 : 0);
+        }
+        return result;
     }
     // GameActionResolver.gas_blocks_line: the same Bresenham walk, both ends included.
     bool gas_on_line(int64_t ax, int64_t ay, int64_t bx, int64_t by) const {
@@ -563,6 +619,7 @@ protected:
         ClassDB::bind_method(D_METHOD("beam", "from", "step"), &MCFPlanScorer::beam);
         ClassDB::bind_method(D_METHOD("smoke_values", "smoke"), &MCFPlanScorer::smoke_values);
         ClassDB::bind_method(D_METHOD("civilians_seeing", "sleepers", "targets", "occupied"), &MCFPlanScorer::civilians_seeing);
+        ClassDB::bind_method(D_METHOD("civilians_seeing_rows", "sleepers", "xy", "kinds", "hulls", "occupied"), &MCFPlanScorer::civilians_seeing_rows);
         ClassDB::bind_method(D_METHOD("exposure", "threats", "ranges", "hit_table", "classic", "threat_seed"), &MCFPlanScorer::exposure);
         ClassDB::bind_method(D_METHOD("setup", "plan"), &MCFPlanScorer::setup);
         ClassDB::bind_method(D_METHOD("targets", "range", "fireproof", "marksman", "cells"), &MCFPlanScorer::targets);
@@ -611,43 +668,34 @@ public:
     // holding a living unit. One byte per sleeper.
     PackedByteArray civilians_seeing(const PackedInt32Array &sleepers, const PackedInt32Array &targets,
             const PackedInt32Array &occupied) const {
-        PackedByteArray result;
-        if (!board || sleepers.size() % 2 != 0 || targets.size() % 2 != 0) return result;
-        std::vector<uint8_t> alive(w * h, 0);
-        for (int64_t i = 0; i < occupied.size(); ++i) {
-            if (occupied[i] < 0 || occupied[i] >= w * h) return result;
-            alive[occupied[i]] = 1;
-        }
-        std::unordered_map<int64_t, std::vector<int32_t>> by_line;
-        auto line_key = [](int64_t kind, int64_t value) { return kind * 4194304 + value + 2097152; };
-        for (int64_t k = 0; k < targets.size(); k += 2) {
-            const int64_t x = targets[k], y = targets[k + 1];
-            if (!on_board(x, y)) return result;
-            for (const int64_t key : {line_key(0, y), line_key(1, x), line_key(2, x - y), line_key(3, x + y)}) {
-                by_line[key].push_back(static_cast<int32_t>(k / 2));
-            }
-        }
-        result.resize(sleepers.size() / 2);
-        for (int64_t s = 0; s < sleepers.size(); s += 2) {
-            const int64_t cx = sleepers[s], cy = sleepers[s + 1];
-            if (!on_board(cx, cy)) return PackedByteArray();
-            bool sees = false;
-            for (const int64_t key : {line_key(0, cy), line_key(1, cx), line_key(2, cx - cy), line_key(3, cx + cy)}) {
-                auto found = by_line.find(key);
-                if (found == by_line.end()) continue;
-                for (const int32_t t : found->second) {
-                    const int64_t tx = targets[t * 2], ty = targets[t * 2 + 1];
-                    if ((tx == cx && ty == cy) || sight_blocked(cx, cy, tx, ty, alive)) continue;
-                    sees = true;
-                    break;
-                }
-                if (sees) break;
-            }
-            result.set(s / 2, sees ? 1 : 0);
-        }
-        return result;
+        if (!board || sleepers.size() % 2 != 0 || targets.size() % 2 != 0) return PackedByteArray();
+        std::vector<int32_t> t(targets.ptr(), targets.ptr() + targets.size());
+        return sight_check(sleepers, t, occupied);
     }
 
+    // The same check with the soldiers as ResolverWorld's wake-up rows: the (x, y) of every row
+    // whose kind is 1 (_WA_TARGET), then the hull cells. No soldier: nobody sees (the hulls
+    // alone wake no one), every byte 0.
+    PackedByteArray civilians_seeing_rows(const PackedInt32Array &sleepers, const PackedInt32Array &xy,
+            const PackedByteArray &kinds, const PackedInt32Array &hulls, const PackedInt32Array &occupied) const {
+        if (!board || sleepers.size() % 2 != 0 || xy.size() != kinds.size() * 2 || hulls.size() % 2 != 0) {
+            return PackedByteArray();
+        }
+        std::vector<int32_t> t;
+        for (int64_t i = 0; i < kinds.size(); ++i) {
+            if (kinds[i] != 1) continue;
+            t.push_back(xy[i * 2]);
+            t.push_back(xy[i * 2 + 1]);
+        }
+        if (t.empty()) {
+            PackedByteArray none;
+            none.resize(sleepers.size() / 2);
+            none.fill(0);
+            return none;
+        }
+        t.insert(t.end(), hulls.ptr(), hulls.ptr() + hulls.size());
+        return sight_check(sleepers, t, occupied);
+    }
     // AIController._best_smoke's firing lines and _smoke_value, after set_board(): "ours" and
     // "theirs" are [x, y, burst, marksman] per soldier in GDScript's order, with fire ranges;
     // a line is kept like GDScript keeps it (enemy -> our cell, clear of walls and gas,

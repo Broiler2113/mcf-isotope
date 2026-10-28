@@ -1183,12 +1183,31 @@ func _unit_value(u: UnitInstance) -> float:
 
 ## Сколько врагов ещё живо — по этому числу инвалидируется геополе (#52), поэтому
 ## считаем без выделения массива: вызывается на каждое решение ИИ.
+## Living units not on our side. Asked on every decision (the geo-field stamp), so the set is
+## kept between decisions: only the units logged since (UnitInstance.vision_log: side and status
+## move only through it) are looked at again; another unit list counts everyone.
+var _lec_in: Dictionary = {}
+var _lec_list: Array = []
+var _lec_pos := -1
+
 func _living_enemy_count(state: GameState) -> int:
-	var n := 0
-	for u: UnitInstance in state.all_units():
-		if u.owner != owner and u.is_alive():
-			n += 1
-	return n
+	var units := state.all_units()
+	var picks: Variant = state.units_logged_since(_lec_pos, _lec_list)
+	_lec_pos = UnitInstance.vision_log_end()
+	if picks == null:
+		_lec_list = units
+		_lec_in.clear()
+		for u: UnitInstance in units:
+			if u.owner != owner and u.is_alive():
+				_lec_in[u.id] = true
+	else:
+		for i: int in picks:
+			var u: UnitInstance = units[i]
+			if u.owner != owner and u.is_alive():
+				_lec_in[u.id] = true
+			else:
+				_lec_in.erase(u.id)
+	return _lec_in.size()
 
 func _enemies_of(state: GameState) -> Array:
 	var out: Array = []
@@ -1217,26 +1236,52 @@ func _enemies_of(state: GameState) -> Array:
 ##
 ## Порядок в списках — тот же порядок state.all_units(), а сравнение осталось строгим
 ## `<`, поэтому из равноудалённых по-прежнему побеждает первый по этому обходу.
+##
+## The two lists also outlive the decision: the filter reads only side and status, and every unit
+## whose side, status or cell changed is in UnitInstance.vision_log. While none of the logged
+## units joins or leaves the list, its order stands and only their coordinates are rewritten;
+## otherwise (or on another unit list) it is collected again, as before.
 var _near_cache: Dictionary = {}
 var _near_gen: int = -1
 var _near_units: Array[UnitInstance] = []
 var _near_xy: PackedInt32Array = PackedInt32Array()
+var _near_at: Dictionary = {}   # unit id -> its index in _near_units
+var _near_list: Array = []
+var _near_pos := -1
 
 func _nearest_enemy(state: GameState, from_coord: Vector2i, only_visible: bool, r: GameActionResolver) -> UnitInstance:
 	var us: int = owner
 	if _near_gen != _decide_gen:
 		_near_gen = _decide_gen
 		_near_cache.clear()
-		_near_units.clear()
-		_near_xy.clear()
-		for e: UnitInstance in state.all_units():
-			if e.owner == us or not e.is_alive():
-				continue
-			if CivilianAI.is_npc(e):
-				continue  # к мирным-НПС не рвёмся; купленный житель — обычный боец (#96)
-			_near_units.append(e)
-			_near_xy.append(e.coord.x)
-			_near_xy.append(e.coord.y)
+		var units := state.all_units()
+		var picks: Variant = state.units_logged_since(_near_pos, _near_list)
+		_near_pos = UnitInstance.vision_log_end()
+		var collect := picks == null
+		if not collect:
+			for i: int in picks:
+				var e: UnitInstance = units[i]
+				var at: int = _near_at.get(e.id, -1)
+				if (e.owner != us and e.is_alive() and not CivilianAI.is_npc(e)) != (at >= 0):
+					collect = true
+					break
+				if at >= 0:
+					_near_xy[at * 2] = e.coord.x
+					_near_xy[at * 2 + 1] = e.coord.y
+		if collect:
+			_near_list = units
+			_near_units.clear()
+			_near_xy.clear()
+			_near_at.clear()
+			for e: UnitInstance in units:
+				if e.owner == us or not e.is_alive():
+					continue
+				if CivilianAI.is_npc(e):
+					continue  # к мирным-НПС не рвёмся; купленный житель — обычный боец (#96)
+				_near_at[e.id] = _near_units.size()
+				_near_units.append(e)
+				_near_xy.append(e.coord.x)
+				_near_xy.append(e.coord.y)
 	var ck := Vector3i(from_coord.x, from_coord.y, 1 if only_visible else 0)
 	var hit: Variant = _near_cache.get(ck)
 	if hit != null or _near_cache.has(ck):

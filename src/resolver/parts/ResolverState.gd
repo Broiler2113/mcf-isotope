@@ -286,6 +286,9 @@ var _vis_epoch: Dictionary = {}    # owner -> UnitInstance.vision_epoch на м�
 var _vis_vv: Dictionary = {}       # owner -> GridCell.vision_version на момент сборки
 var _vis_built: Dictionary = {}    # owner -> vision_epoch after the last per-soldier pass
 var _vis_world: Dictionary = {}    # owner -> what every view depends on (walls, tanks, cheats) then
+var _vis_pos: Dictionary = {}      # owner -> UnitInstance.vision_log_end() after that pass
+var _vis_units_of: Dictionary = {} # owner -> the state.all_units() list that pass read
+var _vis_sides_of: Dictionary = {} # owner -> the _vision_sides() set that pass used
 var _vis_grid: int = 0
 var _vis_mode: int = -1
 ## Чьи глаза вливаются в обзор стороны: она сама плюс союзники по команде (§9

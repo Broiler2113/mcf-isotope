@@ -39,6 +39,5 @@ static func take(body: UnitInstance, carrier: UnitInstance) -> void:
 	body.borg_id = -1
 
 static func cleanup(state: GameState) -> void:
-	for body: UnitInstance in state.all_units():
-		if body.corpse_stacked or body.corpse_carrier_id >= 0:
-			if cell_of(state, body) == NOWHERE: state.remove_unit(body.id)
+	for body: UnitInstance in state.tracked_bodies():
+		if cell_of(state, body) == NOWHERE: state.remove_unit(body.id)

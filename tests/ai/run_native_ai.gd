@@ -11,10 +11,11 @@ func run() -> void:
 	_assignments(rng)
 	_line_targets(rng)
 	_nearest(rng)
+	_unit_slots(rng)
 	_plan_scores(rng)
 	_decision_traces()
 	NativeKernels.enabled = true
-	print("Compared AI wave fields, firing-line indexes, tied army assignments, plan cell scores and complete action/RNG traces.")
+	print("Compared AI wave fields, firing-line indexes, tied army assignments, unit-row line and neighbour scans, plan cell scores and complete action/RNG traces.")
 
 func _wave_fields(rng: RandomNumberGenerator) -> void:
 	for sample in 80:
@@ -97,6 +98,28 @@ func _nearest(rng: RandomNumberGenerator) -> void:
 			var d := Combat.distance(from, Vector2i(xy[i * 2], xy[i * 2 + 1]))
 			if d < distance: best = i; distance = d
 		ck(kernel.nearest_index(from, xy) == best, "nearest target keeps the first equal-distance enemy")
+
+## GameState.slots_on_lines / slots_near (the first test of hostile_target_ids and
+## capturable_target_ids): native and GDScript give the same rows in the same order, units off
+## the board (tank crew at OFFBOARD) included.
+func _unit_slots(rng: RandomNumberGenerator) -> void:
+	var stats: UnitStats = load("res://src/data/units/light_infantry.tres")
+	for sample in 30:
+		var state := GameState.new(12 + sample, 10 + sample, 89)
+		for i in sample * 3:
+			var at := Vector2i(rng.randi_range(0, state.grid.width - 1), rng.randi_range(0, state.grid.height - 1))
+			var u := state.spawn_unit(stats, at, i % 2)
+			if u != null and i % 7 == 0: u.coord = GameActionResolver.OFFBOARD
+		for probe in 12:
+			var from := Vector2i(rng.randi_range(-2, state.grid.width + 1), rng.randi_range(-2, state.grid.height + 1))
+			var radius := probe % 3
+			NativeKernels.enabled = false
+			var lines := state.slots_on_lines(from)
+			var near := state.slots_near(from, radius)
+			NativeKernels.enabled = true
+			ck(state.slots_on_lines(from) == lines, "line scan %d/%d keeps the GDScript rows and order" % [sample, probe])
+			ck(state.slots_near(from, radius) == near, "neighbour scan %d/%d (radius %d) keeps the GDScript rows" % [sample, probe, radius])
+		if not fails.is_empty(): return
 
 ## The staff plan natively (MCFPlanScorer): the threat map, and every candidate row of every
 ## soldier, native and GDScript, compared exactly, on generated boards strewn with trenches, embrasures,
