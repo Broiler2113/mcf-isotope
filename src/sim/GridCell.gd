@@ -80,7 +80,7 @@ static func reset_vision_log() -> void:
 static func logs_snapshot() -> Array:
 	return [look_version, look_changes.duplicate(), look_log_base,
 			vision_version, vision_changes.duplicate(), vision_log_base,
-			walk_version, feature_version, journaling, journal]
+			walk_version, feature_version, journaling, journal, walk_changes.duplicate(), walk_log_base]
 
 static func logs_restore(s: Array) -> void:
 	look_version = s[0]
@@ -93,6 +93,8 @@ static func logs_restore(s: Array) -> void:
 	feature_version = s[7]
 	journaling = s[8]
 	journal = s[9]
+	walk_changes = s[10]
+	walk_log_base = s[11]
 
 ## Журнал ВИДА клеток — пол, высота, огонь, космос, объект, насыпь, сварка: всё, из чего
 ## экран боя собирает дальний план (Main, LOD) и ИИ — карту проходимости рельефа
@@ -111,6 +113,28 @@ static func log_look_change(x: int, y: int) -> void:
 		return
 	look_changes.append(x)
 	look_changes.append(y)
+
+## Журнал проходимости: пара (x, y) на каждую единицу walk_version, как у журнала вида.
+## По нему Movement правит снимок доски для C++ разлива только в изменившихся клетках:
+## шаг одного бойца сбрасывал снимок целиком, и групповой приказ на 200 бойцов
+## пересобирал его 200 раз (~1 мс на бойца).
+static var walk_changes: PackedInt32Array = PackedInt32Array()
+static var walk_log_base: int = 0
+
+static func log_walk_change(x: int, y: int) -> void:
+	walk_version += 1
+	if walk_changes.size() >= VISION_LOG_CAP:
+		walk_changes.clear()
+		walk_log_base = walk_version
+		return
+	walk_changes.append(x)
+	walk_changes.append(y)
+
+## Объявить журнал проходимости оборванным (новая сетка).
+static func reset_walk_log() -> void:
+	walk_version += 1
+	walk_changes.clear()
+	walk_log_base = walk_version
 
 ## Смена числа тел в какой-нибудь клетке: экран держит по ней список куч трупов, чтобы
 ## не перебирать ради них всё поле.
@@ -195,7 +219,7 @@ var cover_height: float = 0.0:
 		var was_wall := cover_height >= MCF.WALL_HEIGHT
 		cover_height = v
 		if v < MCF.WALL_HEIGHT and not lamps.is_empty(): lamps = []
-		walk_version += 1
+		log_walk_change(coord.x, coord.y)
 		log_look_change(coord.x, coord.y)
 		if was_wall != (v >= MCF.WALL_HEIGHT):
 			log_vision_change(coord.x, coord.y)
@@ -217,7 +241,7 @@ var on_fire: bool = false:
 		on_fire = v
 		burning += 1 if v else -1
 		log_look_change(coord.x, coord.y)
-		walk_version += 1   # маршрут обходит огонь (#1) — см. заголовок файла
+		log_walk_change(coord.x, coord.y)   # маршрут обходит огонь (#1) — см. заголовок файла
 ## ГАЗ (0.9.4, случайное событие «Gas Cloud»): клетка затянута газом. Он держит взгляд и
 ## линию огня, как стена, и травит всех, кто в нём стоит.
 ##
@@ -296,7 +320,7 @@ var occupant: UnitInstance = null:
 		rev += 1
 		if journaling: _journal()
 		occupant = v
-		walk_version += 1
+		log_walk_change(coord.x, coord.y)
 ## Корпус машины (танк/челнок), накрывающий клетку; -1 = нет (§ «Техника»).
 var vehicle_id: int = -1:
 	set(v):
@@ -308,7 +332,7 @@ var vehicle_id: int = -1:
 		# закрытого шлюза, и техника, как и живые, лучу не мешает. Поэтому смена
 		# vehicle_id версию обзора не двигает — только проходимость.
 		vehicle_id = v
-		walk_version += 1
+		log_walk_change(coord.x, coord.y)
 ## Статический объект на клетке (станция дрона, укрепление и т. п.); "" = нет.
 ## Владелец — для станций/ДПМГ. Высота укрытия задаётся при установке через set_feature().
 ## Версия «расстановки объектов». Двигается на каждую смену feature_id — только на неё,
@@ -329,7 +353,7 @@ var feature_id: String = "":
 		var saw_through := MCF.is_glass(feature_id)
 		feature_id = v
 		if (MCF.is_glass(v) or v == MCF.FEATURE_AIRLOCK) and not lamps.is_empty(): lamps = []
-		walk_version += 1
+		log_walk_change(coord.x, coord.y)
 		feature_version += 1
 		log_look_change(coord.x, coord.y)
 		if cover_height >= MCF.WALL_HEIGHT and saw_through != MCF.is_glass(v):
@@ -368,7 +392,7 @@ var corpse_count: int = 0:
 			if journaling: _journal()
 			corpse_count = v
 			corpse_version += 1
-			walk_version += 1   # куча тел — не проход (batch borg-corpses), маршрут её обходит
+			log_walk_change(coord.x, coord.y)   # куча тел — не проход (batch borg-corpses), маршрут её обходит
 ## Уровень кучи земли (§3.7): 0 = нет, 1..4 = 0.5 м на уровень (макс. 2 м = стена).
 var dirt_level: int = 0:
 	set(v):
@@ -377,7 +401,7 @@ var dirt_level: int = 0:
 		rev += 1
 		if journaling: _journal()
 		dirt_level = v
-		walk_version += 1
+		log_walk_change(coord.x, coord.y)
 		log_look_change(coord.x, coord.y)
 ## Шлюз заварен инженером (#99): створки больше не разъезжаются от подошедшего юнита,
 ## клетка остаётся стеной, пока инженер не срежет сварку или шлюз не будет снесён.
@@ -388,7 +412,7 @@ var airlock_welded: bool = false:
 		rev += 1
 		if journaling: _journal()
 		airlock_welded = v
-		walk_version += 1
+		log_walk_change(coord.x, coord.y)
 		log_look_change(coord.x, coord.y)
 		# Closed doors are not revisited until their surroundings change. Cutting a weld
 		# must invalidate that cache even when every nearby soldier has stood still.

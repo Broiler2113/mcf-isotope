@@ -77,13 +77,23 @@ static var _native_valid := PackedByteArray()
 
 static func _prepare_native(grid: Grid, start: Vector2i, budget: int) -> void:
 	var count := grid.width * grid.height
-	if _native_grid != grid.get_instance_id() or _native_version != GridCell.walk_version:
+	if _native_grid != grid.get_instance_id() or _native_version < GridCell.walk_log_base \
+			or _native_valid.size() != count:
 		_native_grid = grid.get_instance_id()
 		_native_version = GridCell.walk_version
 		_native_flags.resize(count)
 		_native_heights.resize(count)
 		_native_valid.resize(count)
 		_native_valid.fill(0)
+	elif _native_version != GridCell.walk_version:
+		# Only the journaled cells changed: re-read those, keep the rest of the snapshot.
+		var ch := GridCell.walk_changes
+		var i := (_native_version - GridCell.walk_log_base) * 2
+		while i < ch.size():
+			if ch[i] >= 0 and ch[i] < grid.width and ch[i + 1] >= 0 and ch[i + 1] < grid.height:
+				_native_valid[ch[i + 1] * grid.width + ch[i]] = 0
+			i += 2
+		_native_version = GridCell.walk_version
 	# A hedgehog crosses two cells. Account for its rule cost as well as normal steps.
 	var radius := maxi(0, budget) * maxi(1, ceili(2.0 / MCF.HEDGEHOG_JUMP_COST))
 	var cells := grid.cells_flat()

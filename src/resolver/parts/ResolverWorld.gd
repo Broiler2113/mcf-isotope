@@ -692,6 +692,8 @@ func update_airlocks() -> void:
 	var cells := _airlocks_of(state.grid)
 	if cells.is_empty():
 		return
+	if not check_everything and _al_done == _airlock_inputs() and is_same(_al_done_units, state.all_units()):
+		return
 	var grid := state.grid
 	var gw := grid.width
 	var gh := grid.height
@@ -747,6 +749,14 @@ func update_airlocks() -> void:
 	_al_vv = GridCell.vision_version
 	_al_fv = _airlock_version
 	_al_grid = grid.get_instance_id()
+	_al_done = _airlock_inputs()
+	_al_done_units = state.all_units()
+
+## What the doors read: occupants, bodies, features and heights (walk_version), space (look),
+## who is alive where (the units' vision epochs and list), on this grid.
+func _airlock_inputs() -> Array:
+	return [state.grid.get_instance_id(), GridCell.walk_version, GridCell.look_version,
+		GridCell.vision_version, UnitInstance.vision_epoch, UnitInstance.vision_world, _airlock_version]
 
 ## Отдача/отбрасывание после выстрела в невесомости (§3.11). Только для юнитов,
 ## стоящих в клетке-космосе, и только если позади свободно на всю дистанцию.

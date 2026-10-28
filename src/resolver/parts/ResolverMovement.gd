@@ -415,12 +415,7 @@ func _grant_carry_move(actor: UnitInstance) -> void:
 
 ## Юнит, которого удерживает captor (status HELD, captor_id == captor.id), или null (§3.4).
 func held_unit_of(captor: UnitInstance) -> UnitInstance:
-	if captor == null:
-		return null
-	for u in state.all_units():
-		if u.is_held() and u.captor_id == captor.id:
-			return u
-	return null
+	return null if captor == null else state.held_by(captor.id)
 
 ## Пленника кладут в свободную клетку рядом с целью переноса (§3.4).
 func _valid_carry_drop(drop: Vector2i, dest: Vector2i) -> bool:

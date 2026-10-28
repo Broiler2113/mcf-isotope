@@ -69,12 +69,20 @@ var status: int = MCF.Status.ALIVE:
 		status = v
 		vision_epoch += 1
 		vision_stamp = vision_epoch
+		hold_epoch += 1
 var action_state: ActionState = null
 var held_item_id: String = ""
 ## Погиб в огне или от лазера (playtest-20): тело рисуется обугленным.
 var burnt: bool = false
 ## Кто удерживает этого юнита (id захватившего), -1 = свободен (§3.4).
-var captor_id: int = -1
+var captor_id: int = -1:
+	set(v):
+		if captor_id == v:
+			return
+		captor_id = v
+		hold_epoch += 1
+## Moves whenever any unit's status or captor_id changes: GameState.held_by's index.
+static var hold_epoch: int = 0
 ## Дрон (§3.12): помечает летающую сущность и её привязку к станции/оператору.
 var is_drone: bool = false
 var home_station: Vector2i = Vector2i(-1, -1)

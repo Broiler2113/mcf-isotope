@@ -100,6 +100,23 @@ func spawn_unit(stats: UnitStats, coord: Vector2i, owner: int,
 func get_unit(id: int) -> UnitInstance:
 	return units.get(id, null)
 
+## The unit captor_id holds (the first in all_units() order), or null. The index is rebuilt
+## only after a status or captor change (UnitInstance.hold_epoch) or a new unit list: the
+## scan it replaces ran on every move budget, O(army) per soldier of a group order.
+func held_by(captor_id: int) -> UnitInstance:
+	var list := all_units()
+	if _held_epoch != UnitInstance.hold_epoch or not is_same(list, _held_list):
+		_held_epoch = UnitInstance.hold_epoch
+		_held_list = list
+		_held_by.clear()
+		for u: UnitInstance in list:
+			if u.is_held() and not _held_by.has(u.captor_id): _held_by[u.captor_id] = u
+	return _held_by.get(captor_id)
+
+var _held_by: Dictionary = {}
+var _held_epoch := -1
+var _held_list: Array = []
+
 func all_units() -> Array:
 	if _units_dirty or _unit_list.size() != units.size():
 		_unit_list = units.values()

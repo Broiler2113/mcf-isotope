@@ -433,6 +433,11 @@ var _al_pos: Dictionary = {}
 var _al_units: Variant = null
 var _al_world: int = -1
 var _al_epoch: int = -1
+## Every input of update_airlocks as it stood when the last one finished (its own writes
+## included): equal again means nothing near any door changed, and the doors stay as they are.
+## A group order called it twice per soldier with nothing in between.
+var _al_done: Array = []
+var _al_done_units: Variant = null
 
 const DRONE_DIRS_8 := [
 	Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1),

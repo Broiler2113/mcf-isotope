@@ -49,6 +49,17 @@ func run() -> void:
 				changed.vehicle_id = -1
 				changed.on_fire = not changed.on_fire
 				_compare(grid, start, 6, true, avoid, free, stop)
+				# The snapshot patched from the walk journal equals one built afresh.
+				var patched := Movement._native_flags.duplicate()
+				var heights := Movement._native_heights.duplicate()
+				var valid := Movement._native_valid.duplicate()
+				Movement._native_grid = 0
+				Movement._prepare_native(grid, start, 6)
+				var same := true
+				for i in valid.size():
+					if valid[i] != 0 and Movement._native_valid[i] != 0:
+						same = same and patched[i] == Movement._native_flags[i] and heights[i] == Movement._native_heights[i]
+				ck(same, "search %d: the journal-patched snapshot equals a fresh one" % compared)
 			if not fails.is_empty(): return
 	_edge_cases()
 	ck(kernel.reachable(Vector2i(5, 5), Vector2i.ZERO, 3, PackedByteArray(), PackedFloat64Array(), {}).is_empty(), "malformed native snapshots are declined")

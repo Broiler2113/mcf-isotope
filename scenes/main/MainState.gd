@@ -250,9 +250,6 @@ var _group_ids: Array[int] = []:
 var _group_set: Dictionary = {}
 ## Групповое движение «тактическое»: каждый встаёт в укрытие у точки приказа.
 var _group_tactical: bool = false
-## Раскладка под курсором считается заново, только когда сменились точка или доска.
-var _group_plan_key: Array = []
-var _group_plan_cache: Array = []
 ## Рамка работает только при нажатой кнопке «Multi-Select» (#21) — иначе ЛКМ
 ## всегда остаётся обычным кликом по клетке.
 var _multi_btn: CheckBox
@@ -594,11 +591,6 @@ var _time_mod: CanvasModulate = null
 var _board_pick: Array = []
 var _board_pick_group := false
 
-## Зоны хода выделенного отряда (batch group-zones): у каждой клетки — лучшая зона, в
-## которую до неё дойдёт хоть кто-то из группы (1/2/3 ОД), и подпись «цена/потолок» того,
-## кому это дешевле всех. Считается раз на состояние доски и состав группы.
-var _gz_key: Array = []
-var _gz: Dictionary = {}
 
 ## Pull a body out of a vehicle (owner, 2026-10-19): pick the cell it goes to, or click
 ## the puller to have it carry the body. Same highlight as dropping a carried body.
