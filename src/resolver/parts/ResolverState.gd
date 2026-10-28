@@ -186,9 +186,15 @@ const BURNS_AWAY := [
 ## war»). Сам газ непрозрачен — что в нём, не видно, — но облако видно там, куда дотянулся
 ## бы взгляд, будь газ прозрачным: стены и вражеские танки закрывают его как обычно. Кеш —
 ## до первого шага или правки рельефа (газ — тоже правка обзора).
-## ponytail: луч на каждую пару «клетка газа × глаз», с выходом на первом увидевшем;
-## если облака станут огромными, считать проходом _sweep по маске без газа.
+## Each eye is one _sweep over a mask without gas (walls and enemy tanks only), kept per eye
+## cell until the walls, the gas or the tanks change (a ray per gas cell × eye cost 400 ms an
+## action on a 149×119 board with 600 soldiers and long smoke).
 var _gas_seen: Dictionary = {}   # owner -> [vision_epoch, vision_version, {Vector2i: true}]
+## Per eye: the gas cells its sweep reaches. Key Vector4i(x, y, window, tank sig); valid for
+## _gas_eyes_of = [vision_version, grid]. Masks without gas per tank sig, same validity.
+static var _gas_eyes: Dictionary = {}
+static var _gas_eyes_of: Array = []
+static var _clear_masks: Dictionary = {}
 
 var _gas_masks_version := -1
 var _gas_masks_grid := 0

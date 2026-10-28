@@ -244,8 +244,9 @@ func sync_decals(fx: FxDecals) -> void:
 		_decal_index = decals.duplicate()
 	if fx.decal_dirty.is_empty():
 		return
+	# false = only decals changed: _choose tries painting just the new ones (_append_decals).
 	for cc: Vector2i in fx.decal_dirty:
-		_dirty[cc] = true
+		if not _dirty.has(cc): _dirty[cc] = false
 	_decal_index = decals.duplicate()
 	fx.decal_dirty.clear()
 
@@ -379,6 +380,8 @@ static func _soot_pixel(q: Vector2, variant: int, col: Color) -> Color:
 ## иначе — уже собранный в другом. Грязный кусок выбрасывается во всех разрешениях.
 func _choose(cc: Vector2i, res: int) -> Variant:
 	var key := Vector3i(cc.x, cc.y, res)
+	if _dirty.get(cc, true) == false and _append_decals(cc, key):
+		_dirty.erase(cc)
 	var fallback: Variant = key if _chunks.has(key) else null
 	if fallback == null:
 		for r: int in RES:
@@ -524,7 +527,8 @@ func _build(cc: Vector2i, res: int) -> void:
 				_paint(floor_img, feat_img, Vector2i(cc.x * C + x, cc.y * C + y),
 						Vector2i(x * res, y * res), res)
 	_bake_ground_lines(floor_img, cc, res)
-	_bake_decals(floor_img, cc, res)
+	var painted := _bake_decals(floor_img, cc, res)
+	var burning := false
 	# Flames over the debris, blood and brass lying in them (playtest 2026-10-19).
 	if bake_fire:
 		var fire := _tile("fire", res)
@@ -534,6 +538,7 @@ func _build(cc: Vector2i, res: int) -> void:
 					var fc := Vector2i(cc.x * C + x, cc.y * C + y)
 					if _grid.cell_fast(fc.x, fc.y).on_fire and not hidden_fire.has(fc):
 						floor_img.blend_rect(fire[0], Rect2i(0, 0, res, res), Vector2i(x * res, y * res))
+						burning = true
 	if _floor_only:
 		_floor_only = false
 		floor_img.generate_mipmaps()
@@ -542,9 +547,11 @@ func _build(cc: Vector2i, res: int) -> void:
 		_bytes += fbytes
 		return
 	_bake_items(feat_img, cc, res)
-	var bytes := w * h * res * res * 4 * 2
+	# The floor picture stays in memory too (a third copy), for _append_decals.
+	var bytes := w * h * res * res * 4 * 3
 	_chunks[key] = {"floor": ImageTexture.create_from_image(floor_img),
-			"feat": ImageTexture.create_from_image(feat_img), "used": _frame, "bytes": bytes}
+			"feat": ImageTexture.create_from_image(feat_img), "used": _frame, "bytes": bytes,
+			"img": floor_img, "painted": painted, "burning": burning}
 	_bytes += bytes
 
 
@@ -589,8 +596,39 @@ func _decal_list(cc: Vector2i) -> Array:
 					list.append(d)
 	return list
 
-func _bake_decals(img: Image, cc: Vector2i, res: int) -> void:
-	for decal: Dictionary in _decal_list(cc): _paint_decal(img, cc, res, decal)
+func _bake_decals(img: Image, cc: Vector2i, res: int) -> Array:
+	var list := _decal_list(cc)
+	for decal: Dictionary in list: _paint_decal(img, cc, res, decal)
+	return list
+
+## New blood and brass in a built chunk: paint just those over its picture. A rebuild
+## repaints every decal around (hundreds mid-battle, ~10 ms of its ~13 ms), and a battle
+## lands decals in some chunk nearly every action. Only when nothing painted is gone (fog
+## memory rebuilds its buckets as it pleases) and no flames lie over the decals; the newest
+## then lie on top even where a rebuild would stack them in bucket order, which the fog
+## memory's re-sorted buckets already do. Other resolutions of the chunk are dropped.
+func _append_decals(cc: Vector2i, key: Vector3i) -> bool:
+	var chunk: Dictionary = _chunks.get(key, {})
+	if not chunk.has("img") or chunk["burning"]:
+		return false
+	var painted: Array = chunk["painted"]
+	var had := {}
+	for d: Dictionary in painted: had[d] = true
+	var now := _decal_list(cc)
+	var fresh: Array = []
+	var kept := 0
+	for d: Dictionary in now:
+		if had.has(d): kept += 1
+		else: fresh.append(d)
+	if kept != painted.size():
+		return false
+	var img: Image = chunk["img"]
+	for d: Dictionary in fresh: _paint_decal(img, cc, key.z, d)
+	(chunk["floor"] as ImageTexture).update(img)
+	chunk["painted"] = now
+	for r: int in ALL_RES:
+		if r != key.z: _drop(Vector3i(cc.x, cc.y, r))
+	return true
 
 func _paint_decal(img: Image, cc: Vector2i, res: int, d: Dictionary) -> void:
 	var origin := Vector2(cc * C)

@@ -11,6 +11,7 @@ func ck(ok: bool, message: String) -> void:
 func _initialize() -> void:
 	_coverage()
 	_visibility()
+	_sees_gas_parity()
 	_weapons()
 	_atlas()
 	if failures.is_empty():
@@ -88,6 +89,68 @@ func _visibility() -> void:
 			r.random_events.clouds.clear()
 			r._sync_gas()
 			ck(r.team_visible_coords(0).has(target), "visibility recovers after gas dissipates")
+
+## team_sees_gas (one sweep per eye over a mask without gas, kept per eye) against the
+## ray-per-pair reference: random walls, glass, gas and smoke, two sides, an enemy tank, and
+## again after soldiers move, a wall falls and the smoke clears.
+func _sees_gas_parity() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 4242
+	var li: UnitStats = load("res://src/data/units/light_infantry.tres")
+	var walls := [MCF.FEATURE_WALL, MCF.FEATURE_WALL, MCF.FEATURE_GLASS, MCF.FEATURE_WOOD_WALL]
+	var seen_some := 0
+	for trial in 16:
+		var w := rng.randi_range(10, 26)
+		var h := rng.randi_range(8, 18)
+		var tank := trial % 3 == 0
+		var m := MapData.blank_arena(w, h)
+		for i in rng.randi_range(w, w * h / 4):
+			var c := Vector2i(rng.randi_range(0, w - 1), rng.randi_range(0, h - 1))
+			if tank and c.x <= 4 and c.y <= 4: continue
+			m.set_cell(c, MCF.FLOOR_NORMAL, MCF.WALL_HEIGHT, false, walls[rng.randi_range(0, walls.size() - 1)])
+		var state := m.build_state(971 + trial)
+		var r := GameActionResolver.new(state)
+		r.fog_mode = MCF.Fog.STANDARD
+		if tank: state.spawn_vehicle("tank", Vector2i(1, 1), 1)
+		var free := func() -> Vector2i:
+			while true:
+				var c := Vector2i(rng.randi_range(0, w - 1), rng.randi_range(0, h - 1))
+				var cell := state.grid.cell(c)
+				if cell.feature_id == "" and cell.occupant == null and not (tank and c.x <= 4 and c.y <= 4):
+					return c
+			return Vector2i.ZERO
+		var units: Array = []
+		for i in rng.randi_range(2, 9): units.append(state.spawn_unit(li, free.call(), i % 2))
+		for i in rng.randi_range(1, 3):
+			var x := rng.randi_range(0, w - 3)
+			var y := rng.randi_range(0, h - 3)
+			if i % 2 == 0: r.random_events.add_cloud(x, y, rng.randi_range(1, 6), rng.randi_range(1, 5), 3)
+			else: r.random_events.add_smoke(x, y, rng.randi_range(1, 6), rng.randi_range(1, 5), 3)
+		if tank: r.random_events.add_smoke(0, 0, 5, 5, 3)   # the hull under smoke still blocks
+		r._sync_gas()
+		for step in 4:
+			if step == 1:
+				for u: UnitInstance in units.slice(0, 2): state.grid.move_occupant(u.coord, free.call())
+			elif step == 2:
+				for y in h:
+					for x in w:
+						var wc := state.grid.cell(Vector2i(x, y))
+						if wc.feature_id == MCF.FEATURE_WALL and rng.randf() < 0.3:
+							wc.feature_id = ""
+							wc.cover_height = 0.0
+							r.notify_cell_changed(wc.coord)
+			elif step == 3:
+				r.random_events.smoke.clear()
+				r._sync_gas()
+			for side in [0, 1]:
+				var got := r.team_sees_gas(side)
+				var want := r._team_sees_gas_reference(side)
+				var same := got.size() == want.size()
+				for c: Vector2i in want:
+					same = same and got.has(c)
+				seen_some += want.size()
+				ck(same, "trial %d step %d side %d: seen gas %d cells, rays say %d" % [trial, step, side, got.size(), want.size()])
+	ck(seen_some > 100, "the parity boards put gas in sight (%d cells)" % seen_some)
 
 func _weapons() -> void:
 	for profession in ["light_infantry", "marksman", "flamethrower", "anti_tank"]:

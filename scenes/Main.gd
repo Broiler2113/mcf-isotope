@@ -107,8 +107,15 @@ func _process_frame(delta: float) -> void:
 	# засыпает и кадры снова ничего не стоят. До проверки фокуса (fix-7): пока игрок
 	# печатает в чате, вспышки и пули не должны замирать на экране.
 	# Heavy 3D frames must not consume an entire projectile before it can be displayed.
+	var landed := _fx.landed_seq
 	if _fx.advance(minf(delta, 1.0 / 30.0) if _fp != null else delta):
-		_redraw()
+		# Only particles in the air moved: their own layer, not the whole board (debris
+		# drifting through vacuum used to redraw every soldier and body each frame).
+		if _fly != null and _fp == null and not _before_on and state != null and landed == _fx.landed_seq \
+				and _fx.tracers.is_empty() and _fx.lanes.is_empty() and _fx.flashes.is_empty() and _fx.shots.is_empty():
+			_sync_fly_layer(_visible_before_impact(_viewing_side()))
+		else:
+			_redraw()
 	var focused := get_viewport().gui_get_focus_owner()
 	if focused is LineEdit or focused is TextEdit or Keybinds.modal_open() or _quit_dialog.visible or _fp != null:
 		_sync_lighting()

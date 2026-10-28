@@ -73,6 +73,100 @@ func team_sees_gas(owner: int) -> Dictionary:
 	_sync_seen()
 	var out := {}
 	if not _sight_gas.is_empty():
+		var grid := state.grid
+		var gw := grid.width
+		var gh := grid.height
+		var full_r := maxi(gw, gh)
+		var of := [GridCell.vision_version, grid.get_instance_id()]
+		if of != _gas_eyes_of or _gas_eyes.size() > SEEN_CACHE_CAP:
+			_gas_eyes.clear()
+			_clear_masks.clear()
+			_gas_eyes_of = of
+		var sig := _tank_sig(owner)
+		var sides := _vision_sides(owner)
+		var eyes: Array = []   # Vector4i keys: cell, window (Chebyshev), tank sig
+		for u in state.all_units():
+			if u.is_on_field() and sides.has(u.owner) and u.aboard_vehicle_id == -1 and grid.in_bounds(u.coord):
+				eyes.append(Vector4i(u.coord.x, u.coord.y, mini(sight_of(u), full_r), sig))
+		for veh: Vehicle in state.all_vehicles():
+			if not veh.wrecked and sides.has(veh.owner) and not veh.occupants.is_empty():
+				for c: Vector2i in veh.footprint():
+					if grid.in_bounds(c):
+						eyes.append(Vector4i(c.x, c.y, full_r, sig))
+		var missing: Array = []
+		var queued := {}
+		for k: Vector4i in eyes:
+			if not _gas_eyes.has(k) and not queued.has(k):
+				queued[k] = true
+				missing.append(k)
+		if not missing.is_empty():
+			var masks := _clear_gas_masks(sig)
+			var raws: Array = []
+			raws.resize(missing.size())
+			var lock := Mutex.new()
+			var work := func(i: int) -> void:
+				var k: Vector4i = missing[i]
+				var raw: PackedInt32Array = _sweep(k.x, k.y, k.z, masks[0], gw, gh, masks[1])[0]
+				lock.lock()
+				raws[i] = raw
+				lock.unlock()
+			if missing.size() >= PREFETCH_MIN and OS.get_processor_count() >= 2:
+				NativeKernels.visibility()   # initialised on the main thread; the sweep shares nothing
+				var group := WorkerThreadPool.add_group_task(work, missing.size(), -1, true, "gas sight")
+				WorkerThreadPool.wait_for_group_task_completion(group)
+			else:
+				for i in missing.size(): work.call(i)
+			var gas := _gas_cells()
+			for i in missing.size():
+				var raw: PackedInt32Array = raws[i]
+				var reach := PackedInt32Array()
+				if gas.size() < raw.size():
+					for g: int in gas:
+						var at := raw.bsearch(g)
+						if at < raw.size() and raw[at] == g:
+							reach.append(g)
+				else:
+					for c: int in raw:
+						if _sight_gas.has(c):
+							reach.append(c)
+				_gas_eyes[missing[i]] = reach
+		for k: Vector4i in eyes:
+			for i: int in _gas_eyes[k]:
+				out[Vector2i(i % gw, i / gw)] = true
+	_gas_seen[owner] = [UnitInstance.vision_epoch, GridCell.vision_version, out]
+	return out
+
+## Blockers as _vision_blocked(..., through_gas = true) sees them: walls and these enemy tanks,
+## a gas cell only when it is a wall too. [mask, transposed mask], like _tank_masks_of.
+func _clear_gas_masks(sig: int) -> Array:
+	var hit: Variant = _clear_masks.get(sig)
+	if hit != null:
+		return hit
+	var grid := state.grid
+	var gw := grid.width
+	var gh := grid.height
+	var base := _tank_masks_of(sig, gh)
+	var mask: PackedByteArray = base[0].duplicate()
+	var mask_t: PackedByteArray = base[1].duplicate()
+	var tanks: PackedInt32Array = _tank_sig_cells[sig] if sig != 0 else PackedInt32Array()
+	for i: int in _sight_gas:
+		var cell := grid.cell_fast(i % gw, i / gw)
+		if cell.cover_height >= MCF.WALL_HEIGHT and not MCF.is_glass(cell.feature_id):
+			continue
+		var t := tanks.bsearch(i)
+		if t < tanks.size() and tanks[t] == i:
+			continue
+		mask[i] = 0
+		mask_t[(i % gw) * gh + i / gw] = 0
+	var pair := [mask, mask_t]
+	_clear_masks[sig] = pair
+	return pair
+
+## The ray-per-pair original: tests compare team_sees_gas with it.
+func _team_sees_gas_reference(owner: int) -> Dictionary:
+	_sync_seen()
+	var out := {}
+	if not _sight_gas.is_empty():
 		var gw := state.grid.width
 		var sides := _vision_sides(owner)
 		var eyes: Array = []   # [клетка, дальность по Чебышёву]
@@ -91,7 +185,6 @@ func team_sees_gas(owner: int) -> Dictionary:
 						and not _vision_blocked(at, g, owner, true):
 					out[g] = true
 					break
-	_gas_seen[owner] = [UnitInstance.vision_epoch, GridCell.vision_version, out]
 	return out
 
 ## Видит ли команда владельца эту клетку (общая видимость, §3.9).

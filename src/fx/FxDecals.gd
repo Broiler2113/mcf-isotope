@@ -222,6 +222,9 @@ var wall_blood: Array = []
 ## чём испачкался». Кровь остаётся лужами и брызгами там, где пролилась.
 ## Ещё летящие: то же плюс from/to и таймер. По приземлении переезжают в props.
 var flying: Array = []
+## Bumped whenever advance() settles a particle: the battle screen redraws the board then,
+## and only its flying layer while particles merely move.
+var landed_seq := 0
 ## Отрезки лазерного следа (item 11): [{from: Vector2, to: Vector2}] в клетках.
 var laser_lines: Array = []
 ## Short-lived beams are separate from the permanent scorches on the floor.
@@ -989,6 +992,7 @@ func advance(delta: float) -> bool:
 			continue
 		landed.append(f)
 		flying.remove_at(i)
+	if not landed.is_empty(): landed_seq += 1
 	for f: Dictionary in landed:
 		# Капля, долетевшая до вакуума, не ложится пятном (batch borg-corpses).
 		if f["kind"] == "blood_drop" and _space(Vector2i(floori(f["to"].x), floori(f["to"].y))):
