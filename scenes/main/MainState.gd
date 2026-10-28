@@ -250,9 +250,6 @@ var _group_ids: Array[int] = []:
 var _group_set: Dictionary = {}
 ## Групповое движение «тактическое»: каждый встаёт в укрытие у точки приказа.
 var _group_tactical: bool = false
-## Раскладка под курсором считается заново, только когда сменились точка или доска.
-var _group_plan_key: Array = []
-var _group_plan_cache: Array = []
 ## Рамка работает только при нажатой кнопке «Multi-Select» (#21) — иначе ЛКМ
 ## всегда остаётся обычным кликом по клетке.
 var _multi_btn: CheckBox
@@ -594,11 +591,6 @@ var _time_mod: CanvasModulate = null
 var _board_pick: Array = []
 var _board_pick_group := false
 
-## Зоны хода выделенного отряда (batch group-zones): у каждой клетки — лучшая зона, в
-## которую до неё дойдёт хоть кто-то из группы (1/2/3 ОД), и подпись «цена/потолок» того,
-## кому это дешевле всех. Считается раз на состояние доски и состав группы.
-var _gz_key: Array = []
-var _gz: Dictionary = {}
 
 ## Pull a body out of a vehicle (owner, 2026-10-19): pick the cell it goes to, or click
 ## the puller to have it carry the body. Same highlight as dropping a carried body.
@@ -777,6 +769,12 @@ var _fog_mem: Dictionary = {}       # viewer -> Grid
 var _fog_mem_grid: Grid = null      # живая доска, с которой сняты копии
 var _fog_mem_viewer: int = -999     # чья копия обновлялась последней
 var _fog_mem_look: int = -1         # до какой GridCell.look_version копия доведена
+## Per memory Grid: the cells (y * width + x) where it may look unlike the live board, or
+## null (anywhere: the look journal ran past). A memory is the live board when taken and then
+## only copies live cells, so it can differ only where the look journal wrote since; a viewer
+## switch copies and compares those instead of the whole board (~60 ms on the giant bench).
+var _fog_mem_dirty: Dictionary = {}
+var _fog_mem_dirty_ver: int = -1     # GridCell.look_version folded into _fog_mem_dirty
 ## The next viewer's memory, prepared ahead (MainFogMemory._fog_spare_step): cloning the
 ## board in the frame that needs it stalled that frame (~150 ms on a giant map).
 var _fog_spare: Grid = null

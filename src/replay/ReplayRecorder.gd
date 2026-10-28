@@ -38,6 +38,9 @@ var _bookmark_round := -1
 var _bookmark_owner := -1
 var _checkpoint_at := 0
 var _fx: FxDecals
+## Checkpoints being sealed on a worker thread: [task id, step, [result]]. Half of a giant
+## board's ~30 ms checkpoint is bytes and compression; the battle goes on meanwhile.
+var _sealing: Array = []
 
 var _state: GameState = null
 ## The resolver owns its recording hook. Keep the return link weak, otherwise
@@ -52,6 +55,7 @@ var _resolver: GameActionResolver:
 
 ## Начать запись. Вызывается сразу после сборки состояния, ДО первого действия.
 func begin(state: GameState, resolver: GameActionResolver, p_meta: Dictionary = {}) -> void:
+	_collect_sealed(true)
 	revision += 1
 	_state = state
 	_resolver = resolver
@@ -120,13 +124,35 @@ func on_resolved(intent: Intent, rolls: Array, result: ActionResult = null) -> v
 	var step := {"i": wire, "r": rolls.duplicate()}
 	_observe(at, result)
 	if _state != null and ReplayCheckpoint.due(_state, at - _checkpoint_at, intent is EndTurnIntent):
-		step["k"] = ReplayCheckpoint.pack(_state, _resolver, _fx, not intent is EndTurnIntent)
+		var data := ReplayCheckpoint.payload(_state, _resolver, _fx)
+		var mid_turn := not intent is EndTurnIntent
+		var box := [null]
+		_sealing.append([WorkerThreadPool.add_task(ReplayCheckpoint.seal_into.bind(box, data, mid_turn),
+				false, "replay checkpoint"), step, box])
 		_checkpoint_at = at
 	steps.append(step)
+	_collect_sealed(false)
+
+## Every pool task is waited for. (A RefCounted cannot call its own methods while deleted.)
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		for job: Array in _sealing: WorkerThreadPool.wait_for_task_completion(job[0])
+
+## Put sealed checkpoints into their steps, in order; wait — also those still being sealed.
+## A step whose checkpoint is not in yet is just a step: seeking starts from an earlier one.
+func _collect_sealed(wait: bool) -> void:
+	while not _sealing.is_empty():
+		var job: Array = _sealing[0]
+		if not wait and not WorkerThreadPool.is_task_completed(job[0]):
+			return
+		WorkerThreadPool.wait_for_task_completion(job[0])
+		(job[1] as Dictionary)["k"] = job[2][0]
+		_sealing.pop_front()
 
 ## Keep the canonical replay prefix after host history navigation. The forward branch
 ## lives in MatchHistory until the next live action replaces it.
 func adopt_prefix(data: Dictionary, count: int, state: GameState, resolver: GameActionResolver, effects: Dictionary) -> void:
+	_collect_sealed(true)
 	_state = state
 	_resolver = resolver
 	meta = data.get("meta", {}).duplicate(true)
@@ -158,6 +184,7 @@ func is_empty() -> bool:
 	return steps.is_empty()
 
 func to_dict() -> Dictionary:
+	_collect_sealed(true)
 	var out_meta := meta.duplicate(true)
 	out_meta["steps"] = steps.size()
 	if _state != null:

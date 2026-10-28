@@ -6,8 +6,12 @@ extends "res://scenes/main/MainBoardView.gd"
 func _board_memory(viewer: int, visible: Dictionary, vis_changed: Variant) -> Grid:
 	var grid := state.grid
 	var fresh := not _fog_mem.has(viewer) or _fog_mem_grid != grid   # cloned below: already the live board
+	if _fog_mem_grid == grid:
+		_fold_mem_dirty()   # live changes since the last frame, before this frame's copies
 	if _fog_mem_grid != grid:
 		_fog_mem = {}
+		_fog_mem_dirty = {}
+		_fog_mem_dirty_ver = GridCell.look_version
 		_fog_mem_grid = grid
 		_fog_mem_viewer = -999
 		_fog_mem_dmg = {}
@@ -17,6 +21,7 @@ func _board_memory(viewer: int, visible: Dictionary, vis_changed: Variant) -> Gr
 			var pc: PlayerController = controllers.get(side)
 			if side == viewer or (pc != null and pc.is_local_human()):
 				_fog_mem[side] = _take_fog_spare(grid)
+				_fog_mem_dirty[_fog_mem[side]] = {}
 				if side == viewer: _fog_mem_new = _fog_mem[side]
 				_fog_mem_dmg[side] = _fx.floor_damage.duplicate()
 				_fog_mem_fx[side] = DecalMemory.new(_fx)
@@ -26,6 +31,7 @@ func _board_memory(viewer: int, visible: Dictionary, vis_changed: Variant) -> Gr
 		mem = _take_fog_spare(grid)
 		_fog_mem_new = mem
 		_fog_mem[viewer] = mem
+		_fog_mem_dirty[mem] = {}
 		_fog_mem_dmg[viewer] = _fx.floor_damage.duplicate()
 		_fog_mem_fx[viewer] = DecalMemory.new(_fx)
 		_fog_mem_corpses[viewer] = _corpse_map()
@@ -54,13 +60,30 @@ func _board_memory(viewer: int, visible: Dictionary, vis_changed: Variant) -> Gr
 	# координатах, и настоящая доска выбрасывала кеш обзора всей армии. Танк, проломивший
 	# стену на виду у ста пятидесяти бойцов, пересчитывал их обзор дважды.
 	var keep := [GridCell.vision_version, GridCell.vision_changes.duplicate(), GridCell.vision_log_base,
-			GridCell.walk_version, GridCell.feature_version]
+			GridCell.walk_version, GridCell.feature_version, GridCell.walk_changes.duplicate(), GridCell.walk_log_base]
+	var dirty: Variant = _fog_mem_dirty.get(mem)
+	var gw := grid.width
+	var count := gw * grid.height
 	if fresh:
 		pass
+	elif (viewer != _fog_mem_viewer or vis_changed == null or _fog_mem_look < GridCell.look_log_base) \
+			and dirty != null:
+		# Everything in view, but only where this memory can be out of date.
+		for k: int in (dirty as Dictionary).keys():
+			var c := Vector2i(k % gw, k / gw)
+			if k < count and visible.has(c):
+				_copy_look(mem.cell_fast(c.x, c.y), grid.cell_fast(c.x, c.y))
+				_copy_floor_look(mem, grid, c)
+				dirty.erase(k)
 	elif viewer != _fog_mem_viewer or vis_changed == null or _fog_mem_look < GridCell.look_log_base:
 		for c: Vector2i in visible:
 			_copy_look(mem.cell_fast(c.x, c.y), grid.cell_fast(c.x, c.y))
 			_copy_floor_look(mem, grid, c)
+		# Up to date wherever it looks now: out of date at most where it does not.
+		var stale := {}
+		for k in count:
+			if not visible.has(Vector2i(k % gw, k / gw)): stale[k] = true
+		_fog_mem_dirty[mem] = stale
 	else:
 		var ch := GridCell.look_changes
 		var i: int = (_fog_mem_look - GridCell.look_log_base) * 2
@@ -69,12 +92,14 @@ func _board_memory(viewer: int, visible: Dictionary, vis_changed: Variant) -> Gr
 			if visible.has(c):
 				_copy_look(mem.cell_fast(c.x, c.y), grid.cell_fast(c.x, c.y))
 				_copy_floor_look(mem, grid, c)
+				if dirty != null: dirty.erase(c.y * gw + c.x)
 			i += 2
 		for k: int in vis_changed:
 			var c := Vector2i(k % grid.width, k / grid.width)
 			if visible.has(c):
 				_copy_look(mem.cell_fast(c.x, c.y), grid.cell_fast(c.x, c.y))
 				_copy_floor_look(mem, grid, c)
+				if dirty != null: dirty.erase(k)
 	if not is_same(mem.map_items, grid.map_items) and _fog_mem_look != GridCell.look_version:
 		mem.map_items = mem.map_items.filter(func(item: Array): return not visible.has(SmallItems.cell_of(item)))
 		for item: Array in grid.map_items:
@@ -85,11 +110,50 @@ func _board_memory(viewer: int, visible: Dictionary, vis_changed: Variant) -> Gr
 	GridCell.vision_log_base = keep[2]
 	GridCell.walk_version = keep[3]
 	GridCell.feature_version = keep[4]
+	GridCell.walk_changes = keep[5]
+	GridCell.walk_log_base = keep[6]
 	_fog_mem_viewer = viewer
 	# Свои же записи в копию журнал тоже отметил — их пропускаем, а плитки по ним
 	# перерисуют клетки копии.
 	_fog_mem_look = GridCell.look_version
+	_fog_mem_dirty_ver = GridCell.look_version
 	return mem
+
+## Fold the look journal since the last fold into every memory's out-of-date cells. Run before
+## a frame's copies (they are journaled too, and skipped: a copied cell matches the board).
+func _fold_mem_dirty() -> void:
+	if _fog_mem_dirty_ver == GridCell.look_version:
+		return
+	var lost := _fog_mem_dirty_ver < GridCell.look_log_base
+	var gw := state.grid.width
+	var ch := GridCell.look_changes
+	var from: int = (_fog_mem_dirty_ver - GridCell.look_log_base) * 2
+	for g: Grid in _fog_mem_dirty:
+		var d: Variant = _fog_mem_dirty[g]
+		if lost:
+			_fog_mem_dirty[g] = null
+			continue
+		if d == null:
+			continue
+		var i := from
+		while i < ch.size():
+			if ch[i] >= 0 and ch[i] < gw:
+				d[ch[i + 1] * gw + ch[i]] = true
+			i += 2
+	_fog_mem_dirty_ver = GridCell.look_version
+
+## Cells where two boards of this match (the live one, fog memories) may look different, or
+## null when unknown: neither differs from the live board outside its out-of-date cells.
+func _mem_diff_cells(a: Grid, b: Grid) -> Variant:
+	var out := {}
+	for g: Grid in [a, b]:
+		if g == state.grid:
+			continue
+		var d: Variant = _fog_mem_dirty.get(g)
+		if d == null or not _fog_mem.values().has(g):
+			return null
+		out.merge(d)
+	return out
 
 ## The live board or one of the fog memories taken from it: tiles painted for one of them
 ## can be re-pointed at another (_lod_sync).
@@ -338,8 +402,13 @@ func _lod_sync(far: bool, viewer: int, visible: Dictionary, fog_on: bool) -> voi
 		if not (prev == state.grid and terrain_base == _fog_mem_new):
 			var pc := prev.cells_flat()
 			var nc := shown.cells_flat()
-			for i in nc.size():
-				if _looks_differ(pc[i], nc[i]): _tiles._touch(nc[i].coord)
+			var maybe: Variant = _mem_diff_cells(prev, shown)
+			if maybe == null:
+				for i in nc.size():
+					if _looks_differ(pc[i], nc[i]): _tiles._touch(nc[i].coord)
+			else:
+				for i: int in maybe:
+					if i < nc.size() and _looks_differ(pc[i], nc[i]): _tiles._touch(nc[i].coord)
 		_tiles_grid = tiles_key
 		_tiles_base = terrain_base
 	elif _tiles == null or _tiles_grid != tiles_key:

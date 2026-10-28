@@ -4605,6 +4605,50 @@ the decisions and the resolver):
 Measured (giant bench scene): an AI decision 4.0 → ~2.2 ms; 1,200 actions 9.5 → 7.6 s (all
 GDScript 12.6 → 11.4 s); the hashes are unchanged.
 
+### 27.26 Frame cost and hitches (0.14.5.3)
+
+Behaviour-identical GDScript work; every timing with standard fog on, giant bench scene.
+
+* **Zoom.** `TerrainTiles.draw` queued its follow-up redraw with `call_deferred`, which Godot
+  drains inside the same redraw pass: a zoom step across a tile-sharpness threshold built
+  every visible chunk at once (~300 ms). The follow-up now waits for the next frame.
+* **Group orders.** `GameState.held_by` (an index rebuilt on `UnitInstance.hold_epoch`)
+  replaces the O(army) captive scan; `GridCell.walk_changes` journals walkability so
+  `Movement._prepare_native` patches only changed cells; `update_airlocks` returns when its
+  inputs are unchanged. 200 soldiers' order 341 → 64 ms.
+* **Soldier layer.** `UnitInstance.look_stamp` (display only, never saved) moves with every
+  field a sprite shows. `_sync_unit_layer` builds a soldier's key again only when its stamp,
+  its cell or a board-wide input (`_unit_look`: selection, zoom detail, features, wave owner)
+  changed; the AP shown during a roll is compared per soldier. A frame where only a walk
+  plays visits just the walkers. 3.8 → 1.9 ms a frame; the board's `_draw` 5.2 → 3.3 ms.
+  `tests/ui/run_unit_layer.gd` compares every sprite with a full pass.
+* **Replay checkpoints.** The state is encoded on the main thread (it reads the live match);
+  bytes, zstd and base64 run on the `WorkerThreadPool` (`ReplayCheckpoint.seal_into`), and
+  `ReplayRecorder.to_dict()` waits for them. A step whose checkpoint is not in yet is just a
+  step. The checkpoint action 34 → 19.5 ms.
+* **Fog in smoke.** With any gas or smoke on the board every fresh view was filtered by asking
+  each cell `obscured()`; the clouds (`_sight_gas`, exact after `_sync_seen`) are now looked
+  up in the sorted view. A broken wall's re-sweep 90 → 25 ms; fog over 1,200 actions
+  1,484 → ~1,000 ms.
+* **Wake-up check input.** `_native_sight_activation` reads the army without per-unit method
+  calls (1.12 → 0.77 ms an action).
+* **Viewer switches.** `_fog_mem_dirty` holds, per fog memory, the cells where it may look
+  unlike the live board: a memory is the board when taken and then only copies board cells,
+  so it can differ only where the look journal wrote since (folded every frame, dropped when
+  copied; null when the journal ran past, and the full pass runs). A hotseat handoff or a
+  spectator's switch copies and compares only those (`_lod_sync` 53–73 → 2–3.5 ms a handoff).
+  `feature_owner` now logs a look change like the other drawn fields.
+  `tests/fog/run_fog_memory_handoff.gd` checks the invariant after every handoff.
+
+Not done, with the reason measured: the AI on a worker thread needs its own copy of the
+match (the static caches — `Movement._cache`, the sight cache, `NativeBoard` — are shared
+with the drawing), and encoding the giant board alone takes ~13 ms against ~2 ms for an
+average decision. The remaining per-action cost (decide ~1.8, resolve ~1.7, fog ~0.8 ms) is
+GDScript reading units around native calls; the next native step is a flat unit mirror kept
+by the unit setters, so that sight activation, a side's fog and AI candidates read arrays.
+
+1,200 actions 7.3 → ~5.5 s; hashes 630575507 / 2998049945 unchanged.
+
 ## Issues PDF (6) follow-up
 
 - End Turn uses configurable **Shift+Enter**. Its button does not retain keyboard focus;

@@ -334,23 +334,32 @@ func _seed_sight_activation() -> void:
 func _native_sight_activation(scorer: RefCounted) -> void:
 	var grid := state.grid
 	var gw := grid.width
+	var gh := grid.height
+	var cells := grid.cells_flat()
 	var targets := PackedInt32Array()
 	var occupied := PackedInt32Array()
 	var waiting: Array = []
 	var xy := PackedInt32Array()
+	# Run on every action over the whole army: CivilianAI.is_soldier and _is_civilian are
+	# inlined (the unit is alive here), and sides are asked once each.
+	var side_kind := {}   # owner -> 1 player, 2 neutral, 0 neither
 	for u: UnitInstance in state.all_units():
-		if not u.is_alive():
+		if u.status != MCF.Status.ALIVE:
 			continue
 		var c := u.coord
-		var on_board := grid.in_bounds(c)
+		var on_board := c.x >= 0 and c.y >= 0 and c.x < gw and c.y < gh
 		# Living units block a civilian's sight: the cells they hold.
-		if on_board and grid.cell_fast(c.x, c.y).occupant == u:
+		if on_board and cells[c.y * gw + c.x].occupant == u:
 			occupied.append(c.y * gw + c.x)
-		if CivilianAI.is_soldier(u):
+		var kind: Variant = side_kind.get(u.owner)
+		if kind == null:
+			kind = 1 if MCF.is_player(u.owner) else (2 if MCF.is_neutral(u.owner) else 0)
+			side_kind[u.owner] = kind
+		if kind == 1 and not u.is_drone:
 			if on_board:   # crew inside a tank are off the board: unseen
 				targets.append(c.x)
 				targets.append(c.y)
-		elif _is_civilian(u) and u.neutral_group == 0 and not _activation_frontier.has(u.id):
+		elif kind == 2 and u.neutral_group == 0 and not _activation_frontier.has(u.id):
 			waiting.append(u)
 			xy.append(c.x)
 			xy.append(c.y)
@@ -692,6 +701,8 @@ func update_airlocks() -> void:
 	var cells := _airlocks_of(state.grid)
 	if cells.is_empty():
 		return
+	if not check_everything and _al_done == _airlock_inputs() and is_same(_al_done_units, state.all_units()):
+		return
 	var grid := state.grid
 	var gw := grid.width
 	var gh := grid.height
@@ -747,6 +758,14 @@ func update_airlocks() -> void:
 	_al_vv = GridCell.vision_version
 	_al_fv = _airlock_version
 	_al_grid = grid.get_instance_id()
+	_al_done = _airlock_inputs()
+	_al_done_units = state.all_units()
+
+## What the doors read: occupants, bodies, features and heights (walk_version), space (look),
+## who is alive where (the units' vision epochs and list), on this grid.
+func _airlock_inputs() -> Array:
+	return [state.grid.get_instance_id(), GridCell.walk_version, GridCell.look_version,
+		GridCell.vision_version, UnitInstance.vision_epoch, UnitInstance.vision_world, _airlock_version]
 
 ## Отдача/отбрасывание после выстрела в невесомости (§3.11). Только для юнитов,
 ## стоящих в клетке-космосе, и только если позади свободно на всю дистанцию.

@@ -81,7 +81,7 @@ func _init(p_width: int, p_height: int, p_fill := true) -> void:
 	# различают сетки по instance_id, а его Godot теоретически может выдать повторно
 	# после освобождения старой; сдвиг версий закрывает этот случай раз и навсегда,
 	# ничего не стоя.
-	GridCell.walk_version += 1
+	GridCell.reset_walk_log()
 	GridCell.feature_version += 1
 	GridCell.reset_vision_log()
 	# Журнал отката принадлежит действию на ПРЕЖНЕЙ доске; стройка новой в него не пишет.

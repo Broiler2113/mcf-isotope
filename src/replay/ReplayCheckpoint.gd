@@ -16,10 +16,22 @@ static func due(state: GameState, since: int, handoff: bool) -> bool:
 const MAX_BYTES := 64 * 1024 * 1024
 
 static func pack(state: GameState, resolver: GameActionResolver, fx: FxDecals, mid_turn: bool) -> Dictionary:
-	var payload := {"state": StateCodec.encode(state), "rules": StateCodec.encode_rules(resolver), "fx": fx.to_dict(), "visibility": resolver.explored.duplicate(true)}
-	var raw := var_to_bytes(payload)
+	return seal(payload(state, resolver, fx), mid_turn)
+
+## What a checkpoint holds, read from the live match (main thread). Every container in it is
+## new or never written again (StateCodec's cached cell records), so seal() may run elsewhere.
+static func payload(state: GameState, resolver: GameActionResolver, fx: FxDecals) -> Dictionary:
+	return {"state": StateCodec.encode(state), "rules": StateCodec.encode_rules(resolver), "fx": fx.to_dict(), "visibility": resolver.explored.duplicate(true)}
+
+## Bytes, compressed, as stored. Reads nothing but payload: safe on a worker thread.
+static func seal(data: Dictionary, mid_turn: bool) -> Dictionary:
+	var raw := var_to_bytes(data)
 	return {"z": Marshalls.raw_to_base64(raw.compress(FileAccess.COMPRESSION_ZSTD)),
 			"bytes": raw.size(), "mid_turn": mid_turn}
+
+## seal() for a worker thread: the result goes into box[0].
+static func seal_into(box: Array, data: Dictionary, mid_turn: bool) -> void:
+	box[0] = seal(data, mid_turn)
 
 static func unpack(frame: Dictionary) -> Dictionary:
 	if not frame.has("z"):

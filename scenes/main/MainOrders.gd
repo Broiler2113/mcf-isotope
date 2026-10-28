@@ -466,52 +466,6 @@ func _commit_group_plan(plan: Array) -> void:
 	if not plan[0].is_empty():
 		_submit(GroupMoveIntent.new(plan[0], plan[1]))
 
-## [ids, targets] для точки dest — один расчёт на точку и состояние доски: предпросмотр
-## спрашивает его на каждой перерисовке. Ход в ключе — ради ОД: новый ход их вернул,
-## даже если на доске никто не сдвинулся.
-func _group_plan(dest: Vector2i) -> Array:
-	# Зона клетки, по которой щёлкнули, — столько ОД отряд и потратит (как у бойца).
-	var tier: int = int(_group_zone()["tier"].get(dest, 0))
-	var key: Array = [dest, _group_tactical, tier, GridCell.walk_version, _group_ids.duplicate(),
-			state.turns.round_number, state.turns.active_index]
-	if key != _group_plan_key:
-		_group_plan_key = key
-		_group_plan_cache = GroupMovePlanner.plan(resolver, _group_ids, dest, _group_tactical, tier)
-	return _group_plan_cache
-
-func _group_zone() -> Dictionary:
-	var ap := 0
-	for id in _group_ids:
-		var gu := state.get_unit(id)
-		if gu != null:
-			ap += gu.remaining_ap * 64 + gu.move_credit
-	var key: Array = [GridCell.walk_version, _group_ids.duplicate(), state.turns.round_number,
-			state.turns.active_index, ap]
-	if key == _gz_key:
-		return _gz
-	_gz_key = key
-	var tier_at: Dictionary = {}
-	var label_at: Dictionary = {}
-	var best: Dictionary = {}   # клетка -> [зона, цена]
-	var reaches: Dictionary = {}
-	for id in _group_ids:
-		var u := state.get_unit(id)
-		if not resolver.can_move(u):
-			continue
-		var tiers := resolver.move_tier_budgets(u)
-		var rc := resolver.reachable_for(u, tiers[tiers.size() - 1])
-		reaches[id] = [tiers, rc]
-		for c: Vector2i in rc.cost:
-			var cost := int(rc.cost[c])
-			var k := GameActionResolver.tier_of(tiers, cost)
-			var b: Variant = best.get(c)
-			if b == null or k < int(b[0]) or (k == int(b[0]) and cost < int(b[1])):
-				best[c] = [k, cost]
-				tier_at[c] = k
-				label_at[c] = "%d/%d" % [cost, tiers[k]]
-	_gz = {"tier": tier_at, "label": label_at, "reach": reaches}
-	return _gz
-
 func _enter_push() -> void:
 	var u := _selected_unit()
 	if u == null or u.remaining_ap <= 0:

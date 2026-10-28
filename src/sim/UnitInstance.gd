@@ -23,6 +23,11 @@ static var vision_world: int = 0
 ## only the soldiers stamped after its previous build.
 var vision_stamp: int = 0
 
+## Display only (MainDrawing's soldier layer): moves on every change of a field the soldier's
+## sprite shows, so a soldier whose stamp and cell stand keeps its drawing untouched.
+static var look_epoch: int = 0
+var look_stamp: int = 0
+
 static func bump_world_vision() -> void:
 	vision_epoch += 1
 	vision_world += 1
@@ -54,6 +59,8 @@ var coord: Vector2i:
 		coord = v
 		vision_epoch += 1
 		vision_stamp = vision_epoch
+		look_epoch += 1
+		look_stamp = look_epoch
 var owner: int:
 	set(v):
 		if owner == v:
@@ -61,7 +68,15 @@ var owner: int:
 		owner = v
 		vision_epoch += 1
 		vision_stamp = vision_epoch
-var remaining_ap: int
+		look_epoch += 1
+		look_stamp = look_epoch
+var remaining_ap: int:
+	set(v):
+		if remaining_ap == v:
+			return
+		remaining_ap = v
+		look_epoch += 1
+		look_stamp = look_epoch
 var status: int = MCF.Status.ALIVE:
 	set(v):
 		if status == v:
@@ -69,12 +84,35 @@ var status: int = MCF.Status.ALIVE:
 		status = v
 		vision_epoch += 1
 		vision_stamp = vision_epoch
-var action_state: ActionState = null
-var held_item_id: String = ""
+		hold_epoch += 1
+		look_epoch += 1
+		look_stamp = look_epoch
+## Its fields change in place: the soldier layer redraws a soldier holding one every pass.
+var action_state: ActionState = null:
+	set(v):
+		action_state = v
+		look_epoch += 1
+		look_stamp = look_epoch
+var held_item_id: String = "":
+	set(v):
+		if held_item_id == v:
+			return
+		held_item_id = v
+		look_epoch += 1
+		look_stamp = look_epoch
 ## Погиб в огне или от лазера (playtest-20): тело рисуется обугленным.
 var burnt: bool = false
 ## Кто удерживает этого юнита (id захватившего), -1 = свободен (§3.4).
-var captor_id: int = -1
+var captor_id: int = -1:
+	set(v):
+		if captor_id == v:
+			return
+		captor_id = v
+		hold_epoch += 1
+		look_epoch += 1
+		look_stamp = look_epoch
+## Moves whenever any unit's status or captor_id changes: GameState.held_by's index.
+static var hold_epoch: int = 0
 ## Дрон (§3.12): помечает летающую сущность и её привязку к станции/оператору.
 var is_drone: bool = false
 var home_station: Vector2i = Vector2i(-1, -1)
@@ -85,18 +123,36 @@ var operator_id: int = -1
 ## клеткам и оказывался на другой стороне.
 var wall_entry_from: Vector2i = Vector2i(-1, -1)
 ## Мирный житель (§3.10): «вскрыт» ли (замечен/задет) — тогда начинает двигаться.
-var civilian_active: bool = false
+var civilian_active: bool = false:
+	set(v):
+		if civilian_active == v:
+			return
+		civilian_active = v
+		look_epoch += 1
+		look_stamp = look_epoch
 ## Номер активационной группы нейтралов (§15 «Нейтралы»): 0 — ещё не в группе, иначе
 ## 1..100. По нему рисуется чёрный бейдж с римской цифрой и он совпадает с номером
 ## слота инициативы (MCF.neutral_group_slot). Владелец после сбора группы указывает на
 ## тот же слот, но номер держим отдельным полем — так его читают и бейдж, и HUD.
-var neutral_group: int = 0
+var neutral_group: int = 0:
+	set(v):
+		if neutral_group == v:
+			return
+		neutral_group = v
+		look_epoch += 1
+		look_stamp = look_epoch
 ## Удерживаемого юнита нельзя переносить более одного раза за ход (§3.4).
 var carried_this_round: bool = false
 ## Внутри машины (§техника): id машины, -1 = на поле. Экипаж танка не на сетке
 ## (coord = OFFBOARD); пассажир челнока сидит В КЛЕТКЕ следа (batch 13) — у него
 ## настоящая координата, и он под обстрелом, как любой боец.
-var aboard_vehicle_id: int = -1
+var aboard_vehicle_id: int = -1:
+	set(v):
+		if aboard_vehicle_id == v:
+			return
+		aboard_vehicle_id = v
+		look_epoch += 1
+		look_stamp = look_epoch
 ## Сидит в борге (batch 13, «Borg characteristics»): id машины, −1 = нет. Оператор
 ## остаётся на сетке в клетке борга и играется как боец — только с числами борга:
 ## см. speed() / armor() / fire_range() / rate_of_fire() / max_ap() ниже.
@@ -109,7 +165,13 @@ var build_credits: Dictionary = {}
 ## Сбрасывается при любом другом действии и в конце хода.
 var dig_credits: int = 0
 ## Инженер получает лишь ОДНУ ЛДФ-стену за игру (#40). После постройки — true.
-var ldf_wall_used: bool = false
+var ldf_wall_used: bool = false:
+	set(v):
+		if ldf_wall_used == v:
+			return
+		ldf_wall_used = v
+		look_epoch += 1
+		look_stamp = look_epoch
 ## Остаток мин текущего действия сапёра (item 45). В отличие от dig_credits, ДРУГИЕ
 ## действия его НЕ гасят: источник прямо требует, чтобы прерванный сапёр доставил
 ## оставшиеся мины позже. Гаснет на границе раунда, вместе с ОД.
@@ -119,7 +181,13 @@ var mine_credits: int = 0
 var move_credit: int = 0
 ## Подобранные трупы, которые юнит несёт как переносной щит (#6): каждый даёт +1
 ## к его броскам защиты. Не сбрасывается на границе раунда — щит остаётся при юните.
-var carried_corpses: int = 0
+var carried_corpses: int = 0:
+	set(v):
+		if carried_corpses == v:
+			return
+		carried_corpses = v
+		look_epoch += 1
+		look_stamp = look_epoch
 var corpse_carrier_id: int = -1
 var corpse_stacked := false
 ## Клетка с лёгким объектом (мешки/ёж/куча), который юнит тащит за собой (#34).

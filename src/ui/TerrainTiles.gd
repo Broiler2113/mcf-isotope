@@ -317,8 +317,10 @@ func draw(ci: CanvasItem, origin: Vector2, cell: float, x0: int, y0: int, x1: in
 					Rect2(origin + Vector2(cx * C, cy * C) * cell, cells * cell), false)
 	if not features:
 		draw_map_decals(ci, origin, cell, Rect2(Vector2(x0, y0), Vector2(x1 - x0 + 1, y1 - y0 + 1)))
-	if not features and _deferred_rebuild:
-		ci.queue_redraw.call_deferred()
+	# Next frame, not call_deferred: the deferred queue is drained within this frame's
+	# redraw pass, so that built every remaining chunk at once (~270 ms on a zoom step).
+	if not features and _deferred_rebuild and not ci.get_tree().process_frame.is_connected(ci.queue_redraw):
+		ci.get_tree().process_frame.connect(ci.queue_redraw, CONNECT_ONE_SHOT)
 	if features:
 		_evict()
 
