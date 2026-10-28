@@ -4708,6 +4708,19 @@ Fitted giant: 642 → 216 draw calls, 29k → 2.3k triangles; label zoom (0.35) 
 (the per-soldier caption still switches to the font texture). Screenshots at 0.19 / 0.35 / 1.0
 match the old ones but for sub-pixel edges of 5 px dots. Drawing only; no rule changed.
 
+Follow-up on the same branch:
+- The disc texture is now a marker sheet (disc, square, independent ring): the ring, trench
+  shade, group badge, corpse marker and pixel "!" are textured rects, so they batch too. Body
+  piles' "xN" and the badge / marker numerals are drawn only at label zoom.
+- Particles merely flying redraw only the flying layer, not the whole board. Debris drifting
+  through vacuum is dropped 96 cells past the board's edge (it used to fly on forever).
+- New blood and brass in a built terrain chunk are painted over its kept floor picture
+  instead of rebuilding it (not under flames, and only if no painted decal is gone).
+- Gas sight: one `_sweep` per eye over a mask without gas, cached per eye cell, replaces a
+  ray per gas cell × eye (400 ms an action on 149×119 with long smoke).
+- At the default AI speed a giant AI battle costs about what an idle one does (llvmpipe fit
+  40 ms vs 37 ms); what's left is render, not per-action script.
+
 ## Issues PDF (6) follow-up
 
 - End Turn uses configurable **Shift+Enter**. Its button does not retain keyboard focus;

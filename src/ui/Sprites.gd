@@ -379,20 +379,52 @@ static func draw_texture_rect(ci: CanvasItem, tex: Texture2D, rect: Rect2,
 		ci.draw_texture_rect(tex, Rect2(-rect.size * 0.5, rect.size), false, tint)
 		ci.draw_set_transform(_base_offset, 0.0, _base_scale)
 
-## A filled circle, drawn as one shared hard-edged disc texture: the same pixels as
-## draw_circle, but textured rects batch across canvas items while every circle polygon is
-## its own draw call (432 soldiers zoomed out = 432 draw calls; as discs, one).
-static var _disc: ImageTexture = null
+## Battle markers as ONE shared texture: a hard-edged disc, a solid square and the independent
+## army's ring side by side (transparent gaps between them). Textured rects of one texture
+## batch across canvas items, while every draw_circle polygon, untextured rect and outline is
+## a draw call of its own — 556 soldiers zoomed out cost ~1,900 draw calls that way. Discs and
+## squares cover the same pixels as draw_circle / draw_rect.
+const MARK := 128
+const MARK_GAP := 8
+## The independent ring (MainDrawing: radius CELL * 0.39, 2.5 px wide): inner / outer radius.
+const MARK_RING_IN := 14.35 / 16.85
+static var _marks: ImageTexture = null
+static func _marks_tex() -> ImageTexture:
+	if _marks == null:
+		var img := Image.create(MARK * 3 + MARK_GAP * 2, MARK, false, Image.FORMAT_LA8)
+		var half := MARK * 0.5
+		for y in MARK:
+			for x in MARK:
+				var d := Vector2(x + 0.5 - half, y + 0.5 - half).length()
+				img.set_pixel(x, y, Color(1, 1, 1, 1.0 if d <= half else 0.0))
+				img.set_pixel(MARK + MARK_GAP + x, y, Color.WHITE)
+				img.set_pixel((MARK + MARK_GAP) * 2 + x, y, Color(1, 1, 1, 1.0 if d <= half and d >= half * MARK_RING_IN else 0.0))
+		_marks = ImageTexture.create_from_image(img)
+	return _marks
+
 static func draw_disc(ci: CanvasItem, center: Vector2, radius: float, color: Color) -> void:
-	if _disc == null:
-		const N := 128
-		var img := Image.create(N, N, false, Image.FORMAT_LA8)
-		for y in N:
-			for x in N:
-				var inside := Vector2(x + 0.5 - N * 0.5, y + 0.5 - N * 0.5).length() <= N * 0.5
-				img.set_pixel(x, y, Color(1, 1, 1, 1.0 if inside else 0.0))
-		_disc = ImageTexture.create_from_image(img)
-	ci.draw_texture_rect(_disc, Rect2(center - Vector2(radius, radius), Vector2(radius, radius) * 2.0), false, color)
+	ci.draw_texture_rect_region(_marks_tex(), Rect2(center - Vector2(radius, radius), Vector2(radius, radius) * 2.0),
+			Rect2(0, 0, MARK, MARK), color)
+
+## A filled rect (sampled from the square's middle, so filtering never reaches its edge).
+static func draw_square(ci: CanvasItem, rect: Rect2, color: Color) -> void:
+	ci.draw_texture_rect_region(_marks_tex(), rect, Rect2(MARK + MARK_GAP + MARK / 4, MARK / 4, MARK / 2, MARK / 2), color)
+
+## A rect outline `width` wide, centred on the rect's edges like draw_rect(..., false, width):
+## four strips that never overlap, so a translucent colour stays even.
+static func draw_frame(ci: CanvasItem, rect: Rect2, color: Color, width := 1.0) -> void:
+	var h := width * 0.5
+	var p := rect.position
+	var e := rect.end
+	draw_square(ci, Rect2(p.x - h, p.y - h, rect.size.x + width, width), color)
+	draw_square(ci, Rect2(p.x - h, e.y - h, rect.size.x + width, width), color)
+	draw_square(ci, Rect2(p.x - h, p.y + h, width, rect.size.y - width), color)
+	draw_square(ci, Rect2(e.x - h, p.y + h, width, rect.size.y - width), color)
+
+## The independent army's ring around a soldier (outer radius `outer`).
+static func draw_ring(ci: CanvasItem, center: Vector2, outer: float, color: Color) -> void:
+	ci.draw_texture_rect_region(_marks_tex(), Rect2(center - Vector2(outer, outer), Vector2(outer, outer) * 2.0),
+			Rect2((MARK + MARK_GAP) * 2, 0, MARK, MARK), color)
 
 ## Объект на клетке: автотайл, если для него лежит лист, иначе обычная картинка.
 ## same(dx, dy) → стоит ли на соседней клетке тот же объект. false — замены нет вовсе,

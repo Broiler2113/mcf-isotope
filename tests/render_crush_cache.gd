@@ -51,5 +51,28 @@ func run() -> void:
 						if got.get_data() != expected.get_data():
 							printerr("Pixel mismatch res=%d phase=%d chunk=%s layer=%s" % [res, phase, key, layer])
 							failures += 1
-	print("Crush cache pixels: %d failure(s), 108 layer comparisons" % failures)
+		# Fresh blood, nothing taken away: painted over the cached pictures (same textures),
+		# matching a rebuild. Pools apart from each other; one crosses the chunk seam at x 16.
+		var kept := {}
+		for y in 2:
+			for x in 3: kept[Vector2i(x, y)] = tiles._chunks[Vector3i(x, y, res)]["floor"]
+		for i in 6:
+			fx._settle(fx.gore, {"kind": "blood_pool", "pos": Vector2(4.5 + i * 5.7, 27.5), "rot": i * 0.7, "scale": 0.9})
+		tiles.sync_decals(fx)
+		tiles._built = 0
+		for y in 2:
+			for x in 3: tiles._choose(Vector2i(x, y), res)
+		var fresh := TerrainTiles.new(grid, "town")
+		fresh.decals = fx.by_chunk
+		for y in 2:
+			for x in 3:
+				var key := Vector3i(x, y, res)
+				fresh._build(Vector2i(x, y), res)
+				if tiles._chunks[key]["floor"] != kept[Vector2i(x, y)]:
+					printerr("Rebuilt instead of painted res=%d chunk=%s" % [res, key])
+					failures += 1
+				if tiles._chunks[key]["floor"].get_image().get_data() != fresh._chunks[key]["floor"].get_image().get_data():
+					printerr("Pixel mismatch after fresh decals res=%d chunk=%s" % [res, key])
+					failures += 1
+	print("Crush cache pixels: %d failure(s), 126 layer comparisons" % failures)
 	quit(1 if failures else 0)

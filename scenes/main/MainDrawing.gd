@@ -1190,9 +1190,9 @@ func _draw_unit_sprite(sp: UnitSprite) -> void:
 		if details:
 			(k[5] as TextLine).draw(sp.get_canvas_item(), ucenter + Vector2(-9, 5 - 16 * 0.8), cols[2])
 	if k[6]:
-		sp.draw_arc(center, CELL * 0.39, 0, TAU, 24, cols[0], 2.5)
+		Sprites.draw_ring(sp, center, CELL * 0.39 + 1.25, cols[0])
 	if in_trench:
-		sp.draw_rect(Rect2(uorg + Vector2(usz * 0.12, usz * 0.72), Vector2(usz * 0.76, usz * 0.2)),
+		Sprites.draw_square(sp, Rect2(uorg + Vector2(usz * 0.12, usz * 0.72), Vector2(usz * 0.76, usz * 0.2)),
 				Color(0.1, 0.07, 0.04, 0.55))
 	if k[7]:
 		sp.draw_arc(center, CELL * 0.42, 0, TAU, 32, Color(1, 0.9, 0.2), 3.0)
@@ -1205,7 +1205,7 @@ func _draw_unit_sprite(sp: UnitSprite) -> void:
 		sp.draw_arc(center, CELL * 0.45, 0, TAU, 22, Color(0.85, 0.15, 0.15, 0.95), 2.0)
 	# Бейдж активационной группы (item 15): чёрный квадратик с римской цифрой в
 	# правом-нижнем углу — по нему видно, что инициатива изменилась.
-	if k[10] > 0: _draw_group_badge(corner, k[10], font, sp)
+	if k[10] > 0: _draw_group_badge(corner, k[10], font, sp, details)
 	# Кольцо принадлежности к RTS-группе (#18).
 	if k[11]:
 		sp.draw_arc(center, CELL * 0.46, 0, TAU, 32, Color(0.4, 1.0, 0.5), 2.5)
@@ -1221,7 +1221,7 @@ func _draw_unit_sprite(sp: UnitSprite) -> void:
 		_draw_pixel_bang(corner + Vector2(CELL - 12, 4), sp)
 	# Юнит тащит на себе труп-щит (#6) — без метки это видно только в подсказке (#71).
 	if k[16] > 0:
-		_draw_corpse_marker(corner + Vector2(9, 9), k[16], font, sp)
+		_draw_corpse_marker(corner + Vector2(9, 9), k[16], font, sp, details)
 
 ## What lies over the soldiers: bodies on hulls, drones, the seat grid, the selection box
 ## and rulers. Drawn after the soldier layer, in the board's own transform.
@@ -1869,30 +1869,33 @@ func _draw_corpse(coord: Vector2i, count: int, who: UnitInstance = null, ci: Can
 		Sprites.draw_texture_override(ci, own_key, org, float(CELL), 90.0, tint)
 	elif not Sprites.draw_texture_override(ci, "corpse", org, float(CELL), CORPSE_LIE_DEG, tint):
 		Sprites.draw_disc(ci, center, CELL * 0.34, CORPSE_COLOR * tint)
-	if count > 1:
+	# A 12 px caption is unreadable below label zoom, and each one splits the bodies' batch.
+	if count > 1 and zoom >= UNIT_DETAIL_ZOOM:
 		ci.draw_string(ThemeDB.fallback_font, center + Vector2(CELL * 0.16, CELL * 0.3),
 			"x%d" % count, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 0.85, 0.85))
 
 ## Метка «несёт труп» (#71): кружок цвета трупа (#59) в углу клетки, непрозрачный и
 ## с чёрной обводкой — иначе на тёмной картинке юнита его не разглядеть. Если трупов
 ## больше одного, рядом стоит их число (щит даёт +1 к защите за каждый, #6).
-func _draw_corpse_marker(at: Vector2, count: int, font: Font, ci: CanvasItem = null) -> void:
+## Discs of the shared marker texture; the count only where an 11 px caption is readable.
+func _draw_corpse_marker(at: Vector2, count: int, font: Font, ci: CanvasItem = null, text := true) -> void:
 	if ci == null: ci = self
-	ci.draw_circle(at, 5.0, Color(CORPSE_COLOR, 0.95))
-	ci.draw_arc(at, 5.0, 0, TAU, 14, Color(0, 0, 0, 0.85), 1.5)
-	if count > 1:
+	Sprites.draw_disc(ci, at, 5.75, Color(0, 0, 0, 0.85))
+	Sprites.draw_disc(ci, at, 4.25, Color(CORPSE_COLOR, 0.95))
+	if count > 1 and text:
 		ci.draw_string(font, at + Vector2(7, 4), str(count),
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1, 0.9, 0.9))
 
 ## Бейдж активационной группы нейтралов (item 15): маленький чёрный квадрат с римской
 ## цифрой в правом-нижнем углу клетки юнита.
-func _draw_group_badge(cell_origin: Vector2, group: int, font: Font, ci: CanvasItem = null) -> void:
+## Squares of the shared marker texture; the numeral only where an 11 px caption is readable.
+func _draw_group_badge(cell_origin: Vector2, group: int, font: Font, ci: CanvasItem = null, text := true) -> void:
 	if ci == null: ci = self
 	var sz := CELL * 0.34
 	var pos := cell_origin + Vector2(CELL - sz - 2.0, CELL - sz - 2.0)
-	ci.draw_rect(Rect2(pos, Vector2(sz, sz)), Color(0.05, 0.05, 0.05, 0.92))
-	ci.draw_rect(Rect2(pos, Vector2(sz, sz)), Color(0.9, 0.9, 0.9, 0.75), false, 1.0)
-	ci.draw_string(font, pos + Vector2(2.0, sz - 3.0), MCF.roman(group),
+	Sprites.draw_square(ci, Rect2(pos, Vector2(sz, sz)), Color(0.05, 0.05, 0.05, 0.92))
+	Sprites.draw_frame(ci, Rect2(pos, Vector2(sz, sz)), Color(0.9, 0.9, 0.9, 0.75))
+	if text: ci.draw_string(font, pos + Vector2(2.0, sz - 3.0), MCF.roman(group),
 		HORIZONTAL_ALIGNMENT_CENTER, sz - 3.0, 11, Color(1, 1, 1))
 
 func _draw_pixel_bang(top_left: Vector2, ci: CanvasItem = null) -> void:
@@ -1907,9 +1910,9 @@ func _draw_pixel_bang(top_left: Vector2, ci: CanvasItem = null) -> void:
 		var b: Vector2 = top_left + off
 		# Ствол: 3 «пикселя» по вертикали.
 		for i in 3:
-			ci.draw_rect(Rect2(b + Vector2(0, i * p), Vector2(p, p)), c)
+			Sprites.draw_square(ci, Rect2(b + Vector2(0, i * p), Vector2(p, p)), c)
 		# Точка внизу с зазором.
-		ci.draw_rect(Rect2(b + Vector2(0, 4 * p), Vector2(p, p)), c)
+		Sprites.draw_square(ci, Rect2(b + Vector2(0, 4 * p), Vector2(p, p)), c)
 
 ## Борг (batch 13 B17): квадратная рамка в цвете стороны с оператором внутри (его кружок
 ## рисует общий проход бойцов поверх), пустой — серая рамка с точкой; бейдж «B» в углу,
