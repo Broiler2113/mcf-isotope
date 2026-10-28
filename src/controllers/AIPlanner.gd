@@ -148,7 +148,8 @@ var _lane_cells: Dictionary = {}
 ## _fire_ease: когда hit_number перевалил за 7 (дальше он только растёт) или когда на
 ## луче встала стена/корпус машины (дальше los_blocked вернул бы true для всех). У
 ## марксмана луч не обрывается вовсе — его лазер бьёт сквозь всё и без учёта дальности.
-var _exposure: Dictionary = {}
+## Per board cell, y * width + x (0.14.5.1: was a Dictionary by Vector2i; nothing iterated it).
+var _exposure := PackedInt32Array()
 
 ## Угроза клетке (0.12, самосохранение): не «сколько стволов смотрит», а сколько ПОПАДАНИЙ
 ## ждать — сумма по врагам вероятности хотя бы одного попадания очередью. Учитывает то, что
@@ -156,7 +157,8 @@ var _exposure: Dictionary = {}
 ## направлению на стрелка (−2 к попаданию; кроме выстрела в упор и через клетку), окоп
 ## (с дистанции недосягаем). Раньше штаб награждал клетку за укрытие ПОД бойцом — а по
 ## правилам (cover_effect_from) прикрывает только укрытие РЯДОМ, со стороны стрелка.
-var _threat: Dictionary = {}
+## Per board cell, like _exposure; cells off the board carry no threat.
+var _threat := PackedFloat64Array()
 
 ## Обратная карта целей: Vector2i -> Array[UnitInstance] — какие враги стоят на прямой
 ## линии огня с этой клетки. Считается ОДИН раз на весь план.
@@ -225,6 +227,8 @@ func plan(state: GameState, r: GameActionResolver, field: GeoField,
 	_build_line_targets()
 	_build_tank_paths()
 	await _think_pause()
+	_setup_native_scorer()
+	await _think_pause()
 
 	# Кандидаты — плоские тройки [score, id, coord], а не словари: их десятки тысяч,
 	# и словарь на каждую клетку карты стоит дороже самой оценки. Сравнение в
@@ -243,6 +247,7 @@ func plan(state: GameState, r: GameActionResolver, field: GeoField,
 
 	order = _order_activations(actors, occupied_by, vehicle_rows)
 	_beam_traces.clear()
+	_native_plan = null
 
 ## Native assignment keeps the engine's score-only tie sort and all capacity checks.
 ## The reference implementation stays here for differential tests and source downloads.
@@ -351,6 +356,9 @@ func _candidates_for(u: UnitInstance, out: Array) -> void:
 	# «Уходим ли мы из чужого створа» зависит только от бойца, а не от клетки —
 	# считаем один раз на все его кандидатуры.
 	var leaving_lane := _lane_conflicts(u, u.coord) > 0
+	# The native scorer rates the same cells to the same bits.
+	if _native_plan != null and _native_candidates_for(u, reach, start_geo, leaving_lane, out):
+		return
 	# Оставаться на месте всегда можно — за это и отвечает W_STAY.
 	out.append([_score_cell(u, u.coord, start_geo, 0, leaving_lane) + _w_stay, u.id, u.coord])
 	if reach == null:
@@ -358,6 +366,298 @@ func _candidates_for(u: UnitInstance, out: Array) -> void:
 	for coord: Vector2i in reach.cost:
 		out.append([_score_cell(u, coord, start_geo, int(reach.cost[coord]), leaving_lane),
 			u.id, coord])
+
+# --- Native scoring (MCFPlanScorer, native/visuals/src/ai_kernel.cpp) ---
+
+## The plan's native scorer, or null (no library, or it refused the plan): GDScript scores.
+var _native_plan: RefCounted = null
+
+## Board bits for the native scorer: per cell, exactly what _score_cell and _fire_ease read off
+## the board. Built once per board, then patched from the look journal like
+## AIController._walk_mask; fire_need depends on the match's corpse rules, so they are keyed.
+const SB_WALL := 1
+const SB_COVER := 2
+const SB_SHELTER := 4
+const SB_TRENCH := 8
+const SB_HEDGEHOG := 16
+const SB_DOT_OPEN := 32
+const SB_FIRE := 64
+const SB_SPREAD := 128
+const SB_OBSCURED := 256
+const SB_COVER_SHIFT := 12   # 3 bits: MCF.COVER_MOD.get(cover_height, 1) of a cell with cover
+const SB_SHIELD_SHIFT := 15  # 3 bits: the hit penalty this cell gives a shot past it
+## What a marksman's beam meets in each cell (GameActionResolver._laser_trace): the kind in bits
+## 0-2, its cost or durability above. Kept with _sb, from the same journal.
+const SL_NONE := 0
+const SL_STOP := 1        # armour plate, the edge of the world
+const SL_FURNITURE := 2   # costs its durability
+const SL_GLASS := 3
+const SL_BOX := 4         # a durable box (DOT): cracks by POTENTIAL_PER_DURABILITY
+const SL_FIXED := 5       # MCF.LASER_COST
+const SL_WALL := 6        # bare terrain wall
+const SL_SHIFT := 3
+## The occupant of a cell, for the beam.
+const SO_ALIVE := 1
+const SO_FIELD := 2
+const SO_SHIELD := 4
+const SO_CORPSE := 8
+static var _sb: PackedInt32Array = PackedInt32Array()
+static var _sl: PackedInt32Array = PackedInt32Array()
+static var _sb_grid := 0
+static var _sb_look := -1
+static var _sb_legacy := false
+
+static func _scoring_bits(c: GridCell, r: GameActionResolver) -> int:
+	var h := c.cover_height
+	var fid := c.feature_id
+	var bits := 0
+	if h >= MCF.WALL_HEIGHT:
+		bits |= SB_WALL
+	if c.has_cover():
+		bits |= SB_COVER | (int(MCF.COVER_MOD.get(h, 1)) << SB_COVER_SHIFT)
+	# shelter(): the same condition, one neighbour at a time.
+	if h >= MCF.WALL_HEIGHT or MCF.COVER_MOD.has(h) \
+			or (Furniture.is_furniture(fid) and Furniture.cover_penalty(h) > 0):
+		bits |= SB_SHELTER
+	if fid == MCF.FEATURE_TRENCH:
+		bits |= SB_TRENCH
+	elif fid == MCF.FEATURE_HEDGEHOG_SANDBAGS:
+		bits |= SB_HEDGEHOG
+	elif fid == MCF.FEATURE_DOT_OPEN:
+		bits |= SB_DOT_OPEN
+	if c.on_fire:
+		bits |= SB_FIRE
+	if r.fire_need(c) <= 6:
+		bits |= SB_SPREAD
+	if c.obscured():
+		bits |= SB_OBSCURED
+	# What this cell takes off a shot at its neighbour behind it (_hit_chance's "shield").
+	var shield: int = Furniture.cover_penalty(h) if Furniture.is_furniture(fid) else int(MCF.COVER_MOD.get(h, 0))
+	return bits | (clampi(shield, 0, 7) << SB_SHIELD_SHIFT)
+
+static func _scoring_laser(c: GridCell) -> int:
+	var fid := c.feature_id
+	if fid == MCF.FEATURE_ARMOR_WALL or fid == MCF.FEATURE_BOUNDARY:
+		return SL_STOP
+	if Furniture.is_furniture(fid):
+		return SL_FURNITURE | (c.feature_durability << SL_SHIFT)
+	if fid != "" and MCF.LASER_COST.has(fid):
+		if fid == MCF.FEATURE_GLASS:
+			return SL_GLASS
+		if c.feature_durability > 0:
+			return SL_BOX | (c.feature_durability << SL_SHIFT)
+		var cost := int(MCF.LASER_COST[fid])
+		if fid == MCF.FEATURE_DIRT_PILE and c.cover_height >= MCF.WALL_HEIGHT:
+			cost = MCF.LASER_COST_TERRAIN_WALL
+		return SL_FIXED | (cost << SL_SHIFT)
+	return SL_WALL if c.is_wall() else SL_NONE
+
+static func _scoring_board(grid: Grid, r: GameActionResolver) -> PackedInt32Array:
+	var w := grid.width
+	var h := grid.height
+	if grid.get_instance_id() != _sb_grid or _sb_look < GridCell.look_log_base \
+			or _sb.size() != w * h or _sb_legacy != r.legacy_corpse_rules:
+		_sb.resize(w * h)
+		_sl.resize(w * h)
+		var cells := grid.cells_flat()
+		for i in cells.size():
+			_sb[i] = _scoring_bits(cells[i], r)
+			_sl[i] = _scoring_laser(cells[i])
+		_sb_grid = grid.get_instance_id()
+		_sb_legacy = r.legacy_corpse_rules
+	elif _sb_look != GridCell.look_version:
+		var ch := GridCell.look_changes
+		var i: int = (_sb_look - GridCell.look_log_base) * 2
+		while i < ch.size():
+			var x := ch[i]
+			var y := ch[i + 1]
+			if x < w and y < h:
+				_sb[y * w + x] = _scoring_bits(grid.cell_fast(x, y), r)
+				_sl[y * w + x] = _scoring_laser(grid.cell_fast(x, y))
+			i += 2
+	_sb_look = GridCell.look_version
+	return _sb
+
+## A native scorer for this plan with the board handed over, or null: GDScript does it all.
+func _native_board() -> void:
+	_native_plan = NativeKernels.plan_scorer()
+	if _native_plan == null:
+		return
+	var grid := _state.grid
+	var gw := grid.width
+	var vehicle_cells := PackedInt32Array()
+	var vehicle_ids := PackedInt32Array()
+	for veh: Vehicle in _state.all_vehicles():
+		for fc: Vector2i in veh.footprint():
+			if grid.in_bounds(fc) and grid.cell_fast(fc.x, fc.y).vehicle_id != -1:
+				vehicle_cells.append(fc.y * gw + fc.x)
+				vehicle_ids.append(grid.cell_fast(fc.x, fc.y).vehicle_id)
+	var flags := _scoring_board(grid, _r)
+	if not _native_plan.set_board({"width": gw, "height": grid.height, "flags": flags, "laser": _sl,
+			"vehicle_cells": vehicle_cells, "vehicle_ids": vehicle_ids}):
+		_native_plan = null
+		return
+	# The beam's view of the units: each cell's occupant, and the hull covering it
+	# (vehicle_covering: a footprint, or a piloted borg standing on its origin).
+	var occ_cells := PackedInt32Array()
+	var occ_bits := PackedInt32Array()
+	for u: UnitInstance in _state.all_units():
+		if not grid.in_bounds(u.coord) or grid.cell_fast(u.coord.x, u.coord.y).occupant != u:
+			continue
+		occ_cells.append(u.coord.y * gw + u.coord.x)
+		occ_bits.append((SO_ALIVE if u.is_alive() else 0) | (SO_FIELD if u.is_on_field() else 0)
+				| (SO_SHIELD if _r._shield_immunity(u) else 0) | (SO_CORPSE if u.carried_corpses > 0 else 0))
+	var cover_cells := PackedInt32Array()
+	var cover_ids := PackedInt32Array()
+	var cover_durability := PackedInt32Array()
+	for i in vehicle_cells.size():
+		cover_cells.append(vehicle_cells[i])
+		cover_ids.append(vehicle_ids[i])
+		cover_durability.append(_state.get_vehicle(vehicle_ids[i]).durability)
+	for veh: Vehicle in _state.all_vehicles():
+		var o := veh.origin
+		if veh.is_borg() and grid.in_bounds(o) and grid.cell_fast(o.x, o.y).vehicle_id == -1 \
+				and not cover_cells.has(o.y * gw + o.x):
+			cover_cells.append(o.y * gw + o.x)
+			cover_ids.append(veh.id)
+			cover_durability.append(veh.durability)
+	if not _native_plan.set_units({"occupant_cells": occ_cells, "occupant_bits": occ_bits,
+			"cover_cells": cover_cells, "cover_ids": cover_ids, "cover_durability": cover_durability,
+			"laser_costs": PackedInt32Array([MCF.MARKSMAN_POTENTIAL, MCF.POTENTIAL_PER_DURABILITY,
+				MCF.LASER_COST_KILL, MCF.LASER_COST_KILL_CORPSE, MCF.LASER_COST_SHIELD,
+				MCF.LASER_COST_TERRAIN_WALL, MCF.LASER_COST_OBSCURED, MCF.LASER_GLASS_RECHARGE_EVERY,
+				MCF.LASER_GLASS_RECHARGE])}):
+		_native_plan = null
+
+## _build_exposure's rays in the native scorer; false leaves them to GDScript. _hit_chance's
+## pow() is the engine's: each (need, burst) pair is computed here once and looked up there.
+func _native_exposure() -> bool:
+	var threats := PackedInt32Array()
+	var ranges := PackedFloat64Array()
+	for e: UnitInstance in _threats:
+		threats.append_array([e.coord.x, e.coord.y, 1 if e.stats.special_ability_id == MCF.ABILITY_MARKSMAN else 0,
+			mini(maxi(1, e.rate_of_fire()), 4)])
+		ranges.append(e.fire_range())
+	var table := PackedFloat64Array()
+	for need in range(1, 7):
+		for burst in range(1, 5):
+			var p := float(7 - need) / 6.0
+			table.append(1.0 - pow(1.0 - p, float(burst)))
+	var out: Array = _native_plan.exposure(threats, ranges, table, _classic, _threat)
+	if out.size() != 2:
+		return false
+	_exposure = out[0]
+	_threat = out[1]
+	return true
+
+## Hands this plan's maps to the native scorer. Only on-board cells are passed: the scorer is
+## asked about cells a soldier can stand on.
+func _setup_native_scorer() -> void:
+	if _native_plan == null:
+		return
+	var grid := _state.grid
+	var gw := grid.width
+	var lane_cells := PackedInt32Array()
+	var lane_counts := PackedInt32Array()
+	var lane_ids := PackedInt32Array()
+	for c: Vector2i in _lane_cells:
+		if not grid.in_bounds(c):
+			continue
+		var owners: Dictionary = _lane_cells[c]
+		lane_cells.append(c.y * gw + c.x)
+		lane_counts.append(owners.size())
+		for id: int in owners:
+			lane_ids.append(id)
+	var enemy_xy := PackedInt32Array()
+	var enemy_values := PackedFloat64Array()
+	for e: UnitInstance in _enemies:
+		enemy_xy.append(e.coord.x)
+		enemy_xy.append(e.coord.y)
+		enemy_values.append(float(_enemy_value[e.id]))
+	var veh_xy := PackedInt32Array()
+	var veh_counts := PackedInt32Array()
+	var veh_ids := PackedInt32Array()
+	for veh: Vehicle in _veh_targets:
+		var fp := veh.footprint()
+		veh_counts.append(fp.size())
+		veh_ids.append(veh.id)
+		for fc: Vector2i in fp:
+			veh_xy.append(fc.x)
+			veh_xy.append(fc.y)
+	var plan := {
+		"geo": _field.cells(), "exposure": _exposure, "threat": _threat,
+		"lane_cells": lane_cells, "lane_counts": lane_counts, "lane_ids": lane_ids,
+		"enemy_xy": enemy_xy, "enemy_values": enemy_values, "veh_xy": veh_xy, "veh_counts": veh_counts, "veh_ids": veh_ids,
+		"weights": PackedFloat64Array([_w_fire, _w_ease, _w_adv, _w_cover, _w_trench, _w_danger,
+			_w_threat, _w_shelter, _w_obj, _w_zone, _w_step, OBJ_ADVANCE_SHARE, W_SPREAD,
+			W_LANE_BLOCK, W_LANE_CLEAR, W_TANK_PATH, W_VEH_FIRE]),
+		"classic": _classic, "spread": _spread, "at_min_range": AT_MIN_RANGE,
+		"smoke_penalty": GameActionResolver.SMOKE_HIT_PENALTY, "geo_far": GEO_FAR,
+	}
+	_sparse_cells(plan, "veh_close", _veh_close, true)
+	_sparse_cells(plan, "ally", _ally_cells, false, "ally_cells", "ally_ids")
+	_sparse_cells(plan, "", _zone_of, false, "zone_cells", "")
+	_sparse_cells(plan, "", _tank_path, false, "tank_cells", "")
+	if not _native_plan.setup(plan):
+		_native_plan = null
+
+## A coord-keyed map as flat on-board cell indices (and values, unless values_key is "").
+func _sparse_cells(plan: Dictionary, name: String, source: Dictionary, floats: bool,
+		cells_key := "", values_key := "-") -> void:
+	var grid := _state.grid
+	var cells := PackedInt32Array()
+	var ints := PackedInt32Array()
+	var reals := PackedFloat64Array()
+	for c: Vector2i in source:
+		if not grid.in_bounds(c):
+			continue
+		cells.append(c.y * grid.width + c.x)
+		if floats:
+			reals.append(float(source[c]))
+		else:
+			ints.append(int(source[c]))
+	plan[cells_key if cells_key != "" else name + "_cells"] = cells
+	if values_key != "":
+		plan[values_key if values_key != "-" else name] = reals if floats else ints
+
+## The native path of _candidates_for: the same rows, in the same order. False if the scorer
+## refused (a malformed call): the GDScript loop then scores this soldier.
+func _native_candidates_for(u: UnitInstance, reach: Movement.Reachability, start_geo: int,
+		leaving_lane: bool, out: Array) -> bool:
+	var gw := _state.grid.width
+	var cells := PackedInt32Array([u.coord.y * gw + u.coord.x])
+	var steps := PackedInt32Array([0])
+	var coords: Array[Vector2i] = [u.coord]
+	if reach != null:
+		for coord: Vector2i in reach.cost:
+			cells.append(coord.y * gw + coord.x)
+			steps.append(int(reach.cost[coord]))
+			coords.append(coord)
+	var fireproof := _r.is_fireproof(u)
+	# shot_is_futile is measured from the soldier's own cell: one answer per enemy serves
+	# every cell, and only for the enemies some cell could actually fire on.
+	var futile := PackedByteArray()
+	futile.resize(_enemies.size())
+	futile.fill(0)
+	var marksman := u.stats.special_ability_id == MCF.ABILITY_MARKSMAN
+	for i: int in _native_plan.targets(u.fire_range(), fireproof, marksman, cells):
+		if _r.shot_is_futile(u, _enemies[i]):
+			futile[i] = 1
+	var ab := u.attack_ability()
+	var code := 0
+	match ab:
+		MCF.ABILITY_ANTI_TANK: code = 1
+		MCF.ABILITY_MINER: code = 2
+		MCF.ABILITY_MARKSMAN: code = 3
+	var soldier := [u.id, u.fire_range(), fireproof, code, start_geo, _start_obj, leaving_lane,
+		_cur_obj.cells() if _cur_obj != null else PackedInt32Array(), marksman]
+	var scores: PackedFloat64Array = _native_plan.score(soldier, cells, steps, futile)
+	if scores.size() != cells.size():
+		return false
+	out.append([scores[0] + _w_stay, u.id, u.coord])
+	for k in range(1, cells.size()):
+		out.append([scores[k], u.id, coords[k]])
+	return true
 
 ## Штабная ценность клетки для конкретного бойца.
 func _score_cell(u: UnitInstance, coord: Vector2i, start_geo: int, steps: int,
@@ -403,11 +703,11 @@ func _score_cell(u: UnitInstance, coord: Vector2i, start_geo: int, steps: int,
 		# Окоп прячет бойца ниже линии огня — самая безопасная клетка на поле (§3.7).
 		if cell.feature_id == MCF.FEATURE_TRENCH:
 			score += _w_cover * _w_trench
-		score += float(_exposure.get(coord, 0)) * _w_danger
+		score += float(_exposure[coord.y * _state.grid.width + coord.x]) * _w_danger
 	else:
 		# Самосохранение (0.12): сколько попаданий ждать здесь от тех, кто уже на прямой, и
 		# насколько клетка прикрыта со всех сторон — враг ведь сменит позицию до выстрела.
-		score += float(_threat.get(coord, 0.0)) * _w_threat
+		score += _threat[coord.y * _state.grid.width + coord.x] * _w_threat
 		var ab := u.attack_ability()
 		if ab != MCF.ABILITY_MINER:
 			score += float(_veh_close.get(coord, 0.0)) * _w_threat
@@ -570,8 +870,16 @@ func _build_lanes(allies: Array) -> void:
 ## вовсе (target был null); линия огня — те же правила, что в los_blocked(ignore_units),
 ## включая поблажку амбразуре ДОТа и мешкам вплотную (d <= 1).
 func _build_exposure() -> void:
-	_exposure = {}
-	_threat = {}
+	var grid := _state.grid
+	var gw := grid.width
+	var gh := grid.height
+	_exposure = PackedInt32Array()
+	_exposure.resize(gw * gh)
+	_exposure.fill(0)
+	_threat = PackedFloat64Array()
+	_threat.resize(gw * gh)
+	_threat.fill(0.0)
+	_native_board()
 	_spread = false
 	_ally_cells = {}
 	_veh_close = {}
@@ -603,10 +911,10 @@ func _build_exposure() -> void:
 				for dy in range(-MCF.ANTI_TANK_BLAST_RADIUS, MCF.ANTI_TANK_BLAST_RADIUS + 1):
 					for dx in range(-MCF.ANTI_TANK_BLAST_RADIUS, MCF.ANTI_TANK_BLAST_RADIUS + 1):
 						var dc := e.coord + Vector2i(dx, dy)
-						_threat[dc] = float(_threat.get(dc, 0.0)) + 1.0
-	var grid := _state.grid
-	var gw := grid.width
-	var gh := grid.height
+						if grid.in_bounds(dc):
+							_threat[dc.y * gw + dc.x] += 1.0
+	if _native_plan != null and _native_exposure():
+		return
 	for e: UnitInstance in _threats:
 		await _think_pause()   # sums go in the same order either way
 		if grid.cell(e.coord).obscured():
@@ -626,11 +934,11 @@ func _build_exposure() -> void:
 				var c := Vector2i(x, y)
 				if grid.cell_fast(x, y).obscured():
 					break
-				_exposure[c] = int(_exposure.get(c, 0)) + 1
+				_exposure[y * gw + x] += 1
 				if not _classic:
 					var p := _hit_chance(grid, e, c, dir, d, rng, marksman, burst)
 					if p > 0.0:
-						_threat[c] = float(_threat.get(c, 0.0)) + p
+						_threat[y * gw + x] += p
 				if not marksman:
 					# Преграда НА этой клетке рвёт луч для всех следующих: для них она
 					# станет промежуточной, и los_blocked вернёт true.
@@ -713,7 +1021,10 @@ static func shelter(grid: Grid, c: Vector2i) -> float:
 
 ## Угроза клетке (для решений вне плана — шаг к назначению, запасной ход).
 func threat_at(c: Vector2i) -> float:
-	return float(_threat.get(c, 0.0))
+	var grid := _state.grid if _state != null else null
+	if grid == null or not grid.in_bounds(c) or _threat.size() != grid.width * grid.height:
+		return 0.0
+	return _threat[c.y * grid.width + c.x]
 
 ## Разметить, с каких клеток какие враги стоят на прямой линии огня (см. _line_targets).
 ## Из каждого врага пускаются те же восемь лучей, что признаёт Combat.is_on_firing_line();

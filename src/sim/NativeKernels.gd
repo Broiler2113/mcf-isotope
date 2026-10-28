@@ -42,6 +42,12 @@ static func ai() -> RefCounted:
 		_ai_checked = true
 	return _ai
 
+## A fresh native scorer for one AI plan (MCFPlanScorer), or null. Unlike the kernels here it
+## holds a plan's board and maps, so every plan gets its own instance.
+static func plan_scorer() -> RefCounted:
+	if not enabled or not ClassDB.class_exists("MCFPlanScorer"): return null
+	return _load_kernel("MCFPlanScorer")
+
 static func visibility() -> RefCounted:
 	if not enabled: return null
 	if not _visibility_checked:

@@ -10,7 +10,8 @@ func run() -> void:
 	if "--expect-fallback" in args:
 		ck(report.state == "fallback" and report.active_count == 0, "missing or invalid bundle keeps the game playable through the reference path")
 		return
-	ck(report.state == "active" and report.active_count == 5, "all five native systems activate automatically at startup")
+	ck(report.state == "active" and report.active_count == NativeAcceleration.CLASSES.size(),
+			"all %d native systems activate automatically at startup" % NativeAcceleration.CLASSES.size())
 	if "--require-bundled" in args:
 		ck(report.source == "bundled", "a fresh download uses the shipped library without a local build")
 	if "--require-local" in args:

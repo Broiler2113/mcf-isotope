@@ -3929,6 +3929,7 @@ glass are stamped into the terrain chunk once (`TerrainTiles._bake_decals`) inst
 redrawn every frame — at ~12k decals that was ~75 ms a frame and is now nothing. They follow
 the same fog rules as the terrain they sit on. Bloody footprints are gone with the rest of
 the per-step bookkeeping. **Service accents** (§20.2): on stations and in bunkers the walls and door frames of a service carry its colour — command blue, control/comms white, security red, medical green, science purple, engineering yellow, cargo orange, everything else grey; a room's own purpose beats its department (`MapGen.KIND_ACCENT`), the colour is a per-cell display-only byte (`MapData.wall_accent`, `MCF.Accent`) drawn as a line that runs along the wall and as a tinted door frame. **Corridors**: main ones are always 3 cells wide, maintenance tunnels 1 (2 about a quarter of the time), and grating is laid in roughly a third of the tunnels and in no room at all. **Grill walkway** (`MCF.Look.GRILL`): a floor look that is transparent between its bars and lies *over* a cell instead of replacing it; it runs from a hull airlock out into space with solar panels down both sides, and it is paintable in the editor. **Space draws no tile** — the `Starfield` parallax behind the board shows through it, following the camera (far layer 5 %, near 26 %); `floor_space.png` dropped by the player still wins. **Doors fill the whole cell** instead of a narrow panel in the middle of it. **Windows**: a symbol fallback font (✓ ✕ ▶ ⚠ are in neither Handjet nor Tahoma) and an explicit `stretch/aspect=expand` so a non-16:9 window is not letterboxed. Also: the hidden storage can no longer get an exterior airlock cut into it. **A border around every map** (§20.2): 10 cells in every direction that can be reached — diggable soil in a bunker, grass around a town or field, open space around a station or asteroid — and 2 more that cannot (`MCF.FEATURE_BOUNDARY`, in no destructible list, opaque to the laser), so the world keeps going past the battlefield but nothing walks off it. Lobby sizes now name the map, not the field. Also: `default_clear_color` was never applied — project.godot comments must start with `;`, and the `#` ones silently dropped the setting, so the window had been Godot grey instead of black all along. Tests: `tests/run_batch093.gd`. |
+| 138 | **0.14.5.1 — The AI's turn plan in C++** (§27.24): `MCFPlanScorer` runs the threat map, every soldier's candidate-cell scores and the marksman's laser trace, bit for bit with GDScript (which stays as reference and fallback); a board mirror patched from the look journal feeds it. Giant plan scoring 203 → 14 ms. No rule changed; protocol 33. |
 | 137 | **0.14.5 — Civilians and smoothness**: a civilian who sees another civilian wake up wakes too, into the same group (`_wake_by_sight`, §20.2 "Neutrals start sealed and dormant"); tank crew are off the board and no longer seen by civilians (a sleeper on the x == y diagonal used to see them); the smoothness pass of §27.23 — per-unit vision stamps, the spare fog memory and re-pointed tiles, the AI's turn plan spread over frames, soldiers on their own layer. Protocol 33. |
 | 136 | **0.14.4 — Cheat console pass**: player letters (`independent` for the independent army), short V-IDs, in-game names in completion and input (`ldf`, `dpmg`), help topics, optional parentheses, `event cancel all` only, edge/side names in `event set`, readable inspect output, hidden admin commands, first-human-seat admin in local games, AI pacing keeps Undo and the log clean, console opens with cheats off. Redesigned black console under the kit title bar. Drones centered on their cell in 2D; in first person they hover at 1.75 m, face north and bob instead of spinning. Protocol **32**. |
 | 135 | **0.13.2 — Issues-fix-9 and cheat console**: F2 console with typed commands, hints, host-controlled multiplayer permissions, deterministic gameplay, persistent effects and replay support (§18.4). First-person geometry, station seams, door travel, remote walkers, smooth motion, projectiles, footsteps/run and atomic light-map updates; matching LDF art, uniform earth trenches, shuttle wheels, centered bodies, no wall blood. Cached fog updates, underfoot station packing, bodies on space, uncapped wave/raider populations and saved-wave migration. Saved lobby settings restore and ongoing rules remain editable. Log/Chat tabs, tools undo/redo, macOS Command shortcuts, Escape settings, host-only controls and compact help buttons. Winter previews, constructed doorway floors and no asteroid greenery. Protocol **26**. |
@@ -4549,6 +4550,34 @@ Main-driven battle digest and windowed screenshots had to come back identical.
 Measured on this VPS (giant scene): headless 1,200 actions 13.8 → 10.4 s; worst frame of
 a Main-driven AI battle 365 → 48 ms; windowed (llvmpipe) board draw with nothing changed
 6.0 → 0.8 ms, during AI play (an action every frame) 6.0 → 4.8 ms.
+
+### 27.24 The AI's turn plan in C++ (0.14.5.1)
+
+The first slice of the simulation core in C++: `MCFPlanScorer` (native/visuals, one instance
+per plan) runs the three hot parts of `AIPlanner.plan` — the threat map's rays
+(`_build_exposure`), every soldier's candidate-cell scores (`_score_cell` with `_fire_ease`,
+fire, shelter, lanes, spacing and vehicle fire) and the marksman's laser trace
+(`_laser_trace`, for `_beam_kills` and `_beam_burns`). GDScript keeps every rule it does
+not hand over, and remains the reference and the fallback.
+
+* **The board mirror.** `AIPlanner._scoring_board` keeps one int of flags per cell (wall,
+  cover value, shelter, trench, embrasures, fire, fire spread, gas/smoke, the cover a shot
+  past the cell meets) and one laser code (armour/edge, furniture, glass, durable box,
+  fixed cost, wall), built once per board and patched from the look journal like
+  `AIController._walk_mask`. Vehicles, occupants and hulls covering cells are passed per plan.
+* **Bit for bit.** Every score is a sum of doubles in GDScript's order; the build disables
+  fast-math and contraction. `_hit_chance`'s `pow()` never runs natively: the 24
+  (need, burst) values come in a table computed by the engine, so no platform's math
+  library can change a move. `shot_is_futile` (measured from the soldier's own cell) stays
+  in GDScript and is asked once per enemy the kernel names.
+* `_exposure` and `_threat` are flat per-cell arrays in both paths (nothing iterated them).
+* **Tests.** `tests/ai/run_native_ai.gd` compares the threat maps, ~43,000 candidate rows and
+  ~200,000 laser records exactly on generated boards with trenches, embrasures, glass, fire,
+  smoke, gas, tanks, a wreck, corpses and corpse carriers, under every personality and the
+  civilians' classic weights; the complete AI decision traces match as before.
+
+Measured (giant bench scene): a soldier's scoring 1.46 → 0.19 ms; the plan-bearing decision
+~400 → 144 ms; 1,200 actions 10.5 → 9.5 s (all GDScript: 12.6 s); the hashes are unchanged.
 
 ## Issues PDF (6) follow-up
 

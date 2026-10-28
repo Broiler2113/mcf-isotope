@@ -18,6 +18,7 @@ The GDExtension provides:
 | `MCFPathfinding` | Ordered Dijkstra searches, movement costs, predecessor/path ties, obstacles, fire and hedgehog jumps |
 | `MCFAI` | Distance fields, firing-line indexes, nearest-enemy searches and army destination assignment |
 | `MCFVisibility` | Exact integer octant sweeps, shadow complements, mask transposition and incremental team visibility merging |
+| `MCFPlanScorer` | One AI turn plan: the threat map, every soldier's candidate-cell scores and the marksman's laser trace, over a flat board mirror and units layer |
 
 Game rules, action execution, random draws, persistence, model descriptions and
 scene ownership stay in GDScript. Native kernels return the same ordered results;
@@ -61,7 +62,7 @@ Bundled libraries are in `addons/mcf_visuals/prebuilt/`, with their manifest and
 licenses. Developer builds stay in ignored
 `addons/mcf_visuals/bin/<platform>-<arch>/` and take precedence over the bundled
 library. Only a completed developer build generates its local platform manifest.
-One build provides all five kernels. `MCF_NATIVE_VISUALS=off` selects the original
+One build provides all six kernels. `MCF_NATIVE_VISUALS=off` selects the original
 mesh builder; `MCF_NATIVE_KERNELS=off` selects the original terrain, AI, pathfinding
 and visibility algorithms. Set both for a complete reference run. An incompatible
 API also falls back to GDScript. These developer overrides are not needed for normal
@@ -73,7 +74,10 @@ disabled.
 Compiler fast-math and floating-point contraction are disabled. Geometry and
 terrain tests compare raw mesh/image bytes. Pathfinding tests compare costs,
 predecessors and dictionary order; AI tests compare tied candidate choices,
-complete action traces, board snapshots and random state. Visibility tests compare
+every plan cell score and threat-map value bit for bit, laser traces record by record,
+complete action traces, board snapshots and random state. Plan scores are summed in
+GDScript's order, and `pow()` results arrive as an engine-computed table, so the
+platform's math library never decides an AI move. Visibility tests compare
 both visible cells and cache-invalidation sensitivity, including exact shadow
 order and exploration logs. The worker-thread sweep has no mutable native state.
 

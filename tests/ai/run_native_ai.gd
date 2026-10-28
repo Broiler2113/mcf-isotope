@@ -11,9 +11,10 @@ func run() -> void:
 	_assignments(rng)
 	_line_targets(rng)
 	_nearest(rng)
+	_plan_scores(rng)
 	_decision_traces()
 	NativeKernels.enabled = true
-	print("Compared AI wave fields, firing-line indexes, tied army assignments and complete action/RNG traces.")
+	print("Compared AI wave fields, firing-line indexes, tied army assignments, plan cell scores and complete action/RNG traces.")
 
 func _wave_fields(rng: RandomNumberGenerator) -> void:
 	for sample in 80:
@@ -96,6 +97,180 @@ func _nearest(rng: RandomNumberGenerator) -> void:
 			var d := Combat.distance(from, Vector2i(xy[i * 2], xy[i * 2 + 1]))
 			if d < distance: best = i; distance = d
 		ck(kernel.nearest_index(from, xy) == best, "nearest target keeps the first equal-distance enemy")
+
+## The staff plan natively (MCFPlanScorer): the threat map, and every candidate row of every
+## soldier, native and GDScript, compared exactly, on generated boards strewn with trenches, embrasures,
+## hedgehogs, cover, fire, smoke and gas, tanks and a wreck, under every HARD personality
+## and the civilians' classic weights, with and without capture objectives.
+func _plan_scores(rng: RandomNumberGenerator) -> void:
+	var kinds := ["light_infantry", "machinegunner", "sniper", "miner", "anti_tank", "engineer",
+		"shield_bearer", "marksman", "heavy_infantry", "flamethrower"]
+	var rows := 0
+	var native_soldiers := 0
+	var beam_records := 0
+	for board in 6:
+		var style: int = [MapGen.Style.TOWN, MapGen.Style.STATION, MapGen.Style.FIELD][board % 3]
+		var m := MapGen.generate({"style": style, "size": 1, "seed": 4100 + board, "civilians": false})
+		var state := m.build_state(77 + board)
+		var grid := state.grid
+		var open: Array[Vector2i] = []
+		for c: GridCell in grid.cells_flat():
+			if c.occupant == null and c.vehicle_id == -1 and c.cover_height == 0.0 and not c.is_space:
+				open.append(c.coord)
+		for i in open.size():
+			var j := rng.randi_range(i, open.size() - 1)
+			var t := open[i]
+			open[i] = open[j]
+			open[j] = t
+		var next := 0
+		# Two tanks a side, one of them wrecked, where their footprint is open floor.
+		for side in [0, 1, 0, 1]:
+			while next < open.size():
+				var at := open[next]
+				next += 1
+				var free := true
+				for dy in 3:
+					for dx in 3:
+						var fc := grid.cell(at + Vector2i(dx, dy))
+						free = free and fc != null and fc.occupant == null and fc.vehicle_id == -1 \
+								and fc.cover_height == 0.0 and not fc.is_space
+				if free:
+					var veh: Vehicle = state.spawn_vehicle("tank", at, side)
+					if side == 1 and state.all_vehicles().size() == 4: veh.wrecked = true
+					break
+		var marks: Array[GridCell] = []
+		for k in 90:
+			if next >= open.size(): break
+			var c := grid.cell(open[next])
+			next += 1
+			if c.vehicle_id != -1: continue
+			match k % 9:
+				0: c.set_feature(MCF.FEATURE_TRENCH)
+				1: c.set_feature(MCF.FEATURE_HEDGEHOG_SANDBAGS)
+				2: c.set_feature(MCF.FEATURE_DOT_OPEN)
+				3: c.set_feature(MCF.FEATURE_SANDBAGS)
+				4: c.on_fire = true
+				5: c.smoke = true
+				6: c.gas = true
+				7: c.set_feature(MCF.FEATURE_DIRT_PILE)
+				_: c.set_feature(MCF.FEATURE_WALL)
+			marks.append(c)
+		var civ_slot := MCF.neutral_group_slot(1)
+		for k in 54:
+			if next >= open.size(): break
+			var at := open[next]
+			next += 1
+			if grid.cell(at).occupant != null or grid.cell(at).vehicle_id != -1: continue
+			var owner: int = civ_slot if k % 9 == 8 else k % 2
+			var u := state.spawn_unit(StateCodec.load_stats("civilian" if owner == civ_slot else kinds[k % kinds.size()]), at, owner)
+			if u == null: continue
+			if owner == civ_slot:
+				u.civilian_active = true
+				u.neutral_group = 1
+			if k % 7 == 3: u.remaining_ap = 1
+			if k % 11 == 5: u.move_credit = 2
+			if k % 13 == 6: u.carried_corpses = 1
+			if k % 17 == 9: u.status = MCF.Status.CORPSE
+		var r := GameActionResolver.new(state)
+		for setting: Array in [[0, AIPersonality.TACTICIAN, false], [1, AIPersonality.AGGRESSOR, true],
+				[0, AIPersonality.FORTIFIER, true], [civ_slot, AIPersonality.TACTICIAN, false]]:
+			var owner: int = setting[0]
+			r.omniscient_side = owner
+			var ai := AIController.new(owner, AIController.Difficulty.HARD)
+			ai._r = r
+			var planner := AIPlanner.new()
+			planner.owner = owner
+			planner.style = setting[1]
+			planner._state = state
+			planner._r = r
+			planner._field = ai._enemy_distance_field(state, false, r)
+			if setting[2]:
+				# A capture zone: its cells, and the walk to it for half of the army.
+				var zone := {}
+				var seeds := PackedInt32Array()
+				var centre: Vector2i = open[open.size() / 2]
+				for y in range(centre.y - 1, centre.y + 2):
+					for x in range(centre.x - 1, centre.x + 2):
+						if grid.in_bounds(Vector2i(x, y)) and not grid.blocks_walk(Vector2i(x, y)):
+							zone[Vector2i(x, y)] = 0
+							seeds.append((y + 1) * (grid.width + 2) + x + 1)
+				var fields := {}
+				if not seeds.is_empty():
+					var f := AIController.wave(grid, seeds, {})
+					for u: UnitInstance in state.living_units_of(owner):
+						if u.id % 2 == 0: fields[u.id] = f
+				planner.set_objectives(fields, zone, [3])
+			planner._apply_weights(state)
+			planner._collect_enemies()
+			var actors := planner._plannable_units()
+			planner._build_lanes(actors)
+			NativeKernels.enabled = false
+			planner._build_exposure()
+			var exposure := planner._exposure
+			var threat := planner._threat
+			NativeKernels.enabled = true
+			planner._build_exposure()
+			ck(planner._native_plan != null and planner._exposure == exposure and planner._threat == threat,
+					"the native threat map equals GDScript's on board %d (owner %d)" % [board, owner])
+			if setting == [0, AIPersonality.TACTICIAN, false] and planner._native_plan != null:
+				beam_records += _compare_beams(planner._native_plan, r, state, rng, marks)
+			planner._build_line_targets()
+			planner._build_tank_paths()
+			planner._setup_native_scorer()
+			ck(planner._native_plan != null, "the native plan scorer accepts board %d (owner %d)" % [board, owner])
+			if planner._native_plan == null: return
+			for u: UnitInstance in actors:
+				var native_rows: Array = []
+				planner._candidates_for(u, native_rows)
+				var scorer := planner._native_plan
+				planner._native_plan = null
+				var reference: Array = []
+				planner._candidates_for(u, reference)
+				planner._native_plan = scorer
+				rows += reference.size()
+				if u.stats.special_ability_id != MCF.ABILITY_MARKSMAN: native_soldiers += 1
+				if native_rows != reference:
+					ck(false, "plan scores of %s at %s on board %d (owner %d) match GDScript" % [u.stats.id, u.coord, board, owner])
+					for i in mini(native_rows.size(), reference.size()):
+						if native_rows[i] != reference[i]:
+							print("  first difference at row %d: native %s, GDScript %s" % [i, native_rows[i], reference[i]])
+							break
+					return
+		for c: GridCell in marks:
+			c.on_fire = false
+			c.smoke = false
+			c.gas = false
+	ck(rows > 2000 and native_soldiers > 100, "plan scores compared (%d rows, %d soldiers scored natively)" % [rows, native_soldiers])
+	ck(beam_records > 3000, "marksman beams compared (%d records)" % beam_records)
+	print("Compared %d plan cell scores (%d soldiers scored natively) and %d beam records." % [rows, native_soldiers, beam_records])
+
+## The marksman's beam (MCFPlanScorer.beam) against GameActionResolver._laser_trace, record by
+## record: from every trench, smoke and feature cell strewn above, every unit and some random
+## cells, in all eight directions.
+func _compare_beams(scorer: RefCounted, r: GameActionResolver, state: GameState,
+		rng: RandomNumberGenerator, marks: Array[GridCell]) -> int:
+	var grid := state.grid
+	var froms: Array[Vector2i] = []
+	for c: GridCell in marks: froms.append(c.coord)
+	for u: UnitInstance in state.all_units():
+		if grid.in_bounds(u.coord): froms.append(u.coord)
+	for k in 150: froms.append(Vector2i(rng.randi_range(0, grid.width - 1), rng.randi_range(0, grid.height - 1)))
+	var kinds := {"empty": 0, "terrain": 1, "vehicle": 2, "shield": 3, "unit": 4, "feature": 5}
+	var count := 0
+	for from: Vector2i in froms:
+		for step: Vector2i in Grid.N8:
+			var want := PackedInt32Array()
+			for rec: Dictionary in r._laser_trace(from, step):
+				var at: Vector2i = rec["coord"]
+				want.append_array([at.x, at.y, kinds[rec["kind"]], int(rec["cost"]), int(rec["destroyed"]),
+					int(rec["stop"]), int(rec["damage"]), int(rec["vehicle_id"]), int(rec["left"])])
+			var got: PackedInt32Array = scorer.beam(from, step)
+			if got != want:
+				ck(false, "the native beam from %s toward %s matches _laser_trace" % [from, step])
+				print("  native  %s\n  GDScript %s" % [got, want])
+				return count
+			count += want.size() / 9
+	return count
 
 func _decision_traces() -> void:
 	GameConfig.civilians_enabled = false
