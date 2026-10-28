@@ -71,6 +71,8 @@ static func supports_time_of_day(environment_id: String) -> bool:
 ## Winter (owner, fix-8 #3): snow on the ground, the plants and the roofs, flakes falling.
 ## Only looks — cover, movement and fire are as in summer. Town and field only.
 var winter := false
+## Overcast sky (issues-12 #20): a grey cloud deck over a town or a field, no sun; only looks.
+var overcast := false
 
 static func supports_winter(environment_id: String) -> bool:
 	return environment_id in ["town", "field"]
@@ -449,6 +451,7 @@ func build_state(dice_seed: int = -1, roster: Roster = null, editor_preview := f
 	st.env = environment()
 	st.time_of_day = time_of_day
 	st.winter = winter and supports_winter(st.env)
+	st.overcast = overcast and supports_winter(st.env)
 	# Мирных не больше, чем задано ползунком лобби (item 11). Лишних прореживаем РАВНОМЕРНО
 	# по порядку карты — у каждого пира тот же порядок, значит и тот же выбор, и жители не
 	# сбиваются в одну половину поля.
@@ -587,6 +590,8 @@ func to_dict() -> Dictionary:
 		out["time"] = time_of_day
 	if winter:
 		out["winter"] = true
+	if overcast:
+		out["overcast"] = true
 	return out
 
 static func from_dict(d: Dictionary) -> MapData:
@@ -662,6 +667,7 @@ static func from_dict(d: Dictionary) -> MapData:
 	var tod := str(d.get("time", ""))
 	m.time_of_day = tod if TIMES.has(tod) else ""
 	m.winter = bool(d.get("winter", false))
+	m.overcast = bool(d.get("overcast", false))
 	# Retired furniture becomes its actual loose prop / ordinary desk on import.
 	for i in n:
 		if m.feature_id[i] == "toolbox":

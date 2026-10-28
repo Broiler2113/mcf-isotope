@@ -89,6 +89,7 @@ var _gen_sym: CheckBox
 var _gen_timer: Timer
 var _gen_obstacles: CheckBox
 var _gen_winter: CheckBox
+var _gen_overcast: CheckBox
 var _gen_furniture: OptionButton
 var _gen_time: OptionButton
 var _gen_time_row: Control
@@ -392,7 +393,7 @@ func _load_saved_lobby(data: Dictionary) -> void:
 		if opt != null and options.has(pair[0]): opt.select(clampi(int(options[pair[0]]), 0, opt.item_count - 1))
 	for pair: Array in [["seed", _gen_seed], ["units", _gen_units], ["width", _gen_w], ["height", _gen_h]]:
 		if pair[1] != null and options.has(pair[0]): pair[1].set_value_no_signal(options[pair[0]])
-	for pair: Array in [["symmetric", _gen_sym], ["obstacles", _gen_obstacles], ["winter", _gen_winter]]:
+	for pair: Array in [["symmetric", _gen_sym], ["obstacles", _gen_obstacles], ["winter", _gen_winter], ["overcast", _gen_overcast]]:
 		if pair[1] != null and options.has(pair[0]): pair[1].set_pressed_no_signal(bool(options[pair[0]]))
 	if _gen_time != null: _gen_time.select(maxi(0, (MapData.TIMES + ["random"]).find(str(options.get("time", "day")))))
 	var path := RANDOM_MAP if not options.is_empty() else GameConfig.map_path
@@ -1219,6 +1220,8 @@ func _build_generator(box: VBoxContainer) -> void:
 	# Winter (owner, fix-8 #3): next to Obstacles; snow on a town or a field, only looks.
 	_gen_winter = _gen_check(mech, "Winter", "Snow on the ground, the plants and the roofs, with snowmen and drifts. Town and field only; it changes nothing but the look.")
 	_gen_winter.set_pressed_no_signal(false)
+	_gen_overcast = _gen_check(mech, "Overcast", "A gray cloud deck instead of a clear sky, with no sun and no sun shadows in first person. Town and field only; it changes nothing but the look.")
+	_gen_overcast.set_pressed_no_signal(false)
 	_row(_gen_box, "Mechanics:", mech)
 	# Мебель (§3.15) — отдельно от «Obstacles»: обстановка комнат, а не укрепления.
 	_gen_furniture = _opt(MapFurnish.DENSITY_NAMES, int(defaults.get("furniture", MapFurnish.DEFAULT_DENSITY)))
@@ -1315,6 +1318,7 @@ func _gen_options() -> Dictionary:
 			"flammable": MapGen.STYLE_FLAMMABLE[clampi(_gen_style.selected, 0, MapGen.STYLE_FLAMMABLE.size() - 1)],
 			"obstacles": _gen_obstacles.button_pressed,
 			"winter": _gen_winter != null and _gen_winter.button_pressed,
+			"overcast": _gen_overcast != null and _gen_overcast.button_pressed,
 			"furniture": _gen_furniture.selected,
 			"time": (MapData.TIMES + ["random"])[_gen_time.selected] if _gen_time != null
 					and MapData.supports_time_of_day(MapGen.STYLE_ENV[_gen_style.selected]) else "",
@@ -1388,6 +1392,8 @@ func _on_gen_changed() -> void:
 		_gen_time_row.visible = MapData.supports_time_of_day(MapGen.STYLE_ENV[_gen_style.selected])
 	if _gen_winter != null:
 		_gen_winter.visible = MapData.supports_winter(MapGen.STYLE_ENV[_gen_style.selected])
+	if _gen_overcast != null:
+		_gen_overcast.visible = MapData.supports_winter(MapGen.STYLE_ENV[_gen_style.selected])
 	if _gen_dims_row != null:
 		_gen_dims_row.visible = _gen_size.selected == MapGen.SIZE_CUSTOM
 	# Карта до ~100×100 собирается за десятки миллисекунд — сразу. Большая (до 250×250)
@@ -1541,6 +1547,7 @@ func _saved_battlefield(saved: Dictionary) -> MapData:
 		return null
 	var m := MapData.from_grid(gs.grid, gs.env)
 	m.winter = gs.winter
+	m.overcast = gs.overcast
 	m.time_of_day = gs.time_of_day
 	for u: UnitInstance in gs.all_units():
 		if u.is_alive() and gs.grid.in_bounds(u.coord):

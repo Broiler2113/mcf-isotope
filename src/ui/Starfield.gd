@@ -49,47 +49,59 @@ const TINTS := [
 	Color(1.0, 1.0, 1.0), Color(0.78, 0.86, 1.0), Color(1.0, 0.92, 0.78),
 ]
 
+## One full-screen pass draws the black sky and all three layers (zoomed-out FPS, 2026-10-28):
+## five stacked full-screen rects (black, a black gradient, three star tiles) cost the
+## owner's 1,400-unit station save half its frame on a software renderer.
+const SHADER := """
+shader_type canvas_item;
+uniform sampler2D l0 : repeat_enable, filter_nearest;
+uniform sampler2D l1 : repeat_enable, filter_nearest;
+uniform sampler2D l2 : repeat_enable, filter_nearest;
+uniform vec2 o0;
+uniform vec2 o1;
+uniform vec2 o2;
+uniform vec2 px;
+uniform float tile;
+void fragment() {
+	vec2 p = UV * px;
+	vec3 c = vec3(0.0);
+	vec4 s = texture(l0, (p - o0) / tile);
+	c = mix(c, s.rgb, s.a);
+	s = texture(l1, (p - o1) / tile);
+	c = mix(c, s.rgb, s.a);
+	s = texture(l2, (p - o2) / tile);
+	c = mix(c, s.rgb, s.a);
+	COLOR = vec4(c, 1.0);
+}
+"""
+
 var _layers: Array = []
 var _viewport_size: Vector2 = Vector2.ZERO
-## Подложка и небо: их размер выставляется в _fit() ЧИСЛОМ, а не привязками. Привязки
-## меряются по родителю-Control, а за доской боя слои висят на голом CanvasLayer — там
-## прямоугольник родителя нулевой, подложка схлопывалась в точку, и сквозь звёзды
-## просвечивал серый фон окна.
-var _solid: ColorRect = null
-var _base: TextureRect = null
+## Размер выставляется в _fit() ЧИСЛОМ, а не привязками: за доской боя небо висит на голом
+## CanvasLayer, где прямоугольник родителя нулевой.
+var _sky: ColorRect = null
+var _mat: ShaderMaterial = null
 
 func _ready() -> void:
-	# Размер — числом в _fit(), не привязками: за доской боя слои висят на голом
-	# CanvasLayer, где привязки мерить не по чему (см. _solid).
 	set_anchors_preset(Control.PRESET_TOP_LEFT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	# Гарантированно ЧЁРНАЯ подложка (item 1): сплошной ColorRect под всем. Прежде фон
-	# рисовался только градиент-текстурой, и если она не растягивалась на весь экран,
-	# сквозь неё просвечивал серый clear-color окна — отсюда «параллакс не чёрный».
-	_solid = ColorRect.new()
-	_solid.color = Color(0, 0, 0)
-	_solid.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_solid)
-	_base = TextureRect.new()
-	_base.texture = _sky_gradient()
-	_base.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_base.stretch_mode = TextureRect.STRETCH_SCALE
-	_base.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_base)
-
+	_sky = ColorRect.new()
+	_sky.color = Color(0, 0, 0)
+	_sky.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_mat = ShaderMaterial.new()
+	var shader := Shader.new()
+	shader.code = SHADER
+	_mat.shader = shader
+	_mat.set_shader_parameter("tile", float(TILE))
+	_sky.material = _mat
+	add_child(_sky)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = SEED
-	for cfg: Dictionary in LAYERS:
-		var rect := TextureRect.new()
-		rect.texture = _star_tile(rng, int(cfg["stars"]), int(cfg["size"]),
-				float(cfg["alpha"]))
-		rect.stretch_mode = TextureRect.STRETCH_TILE
-		# Тиражирование в GL-compatibility включается явно, иначе плитка растянется.
-		rect.texture_repeat = CanvasItem.TEXTURE_REPEAT_ENABLED
-		rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		add_child(rect)
-		_layers.append({"rect": rect, "speed": float(cfg["speed"]),
-				"offset": Vector2.ZERO})
+	for i in LAYERS.size():
+		var cfg: Dictionary = LAYERS[i]
+		_mat.set_shader_parameter("l%d" % i, _star_tile(rng, int(cfg["stars"]), int(cfg["size"]),
+				float(cfg["alpha"])))
+		_layers.append({"speed": float(cfg["speed"]), "offset": Vector2.ZERO})
 	_fit()
 	set_process(true)
 
@@ -106,24 +118,17 @@ func _process(delta: float) -> void:
 		# а без сворачивания координата за долгую сессию доросла бы до потери точности.
 		var wrapped := Vector2(fposmod(offset.x, float(TILE)), fposmod(offset.y, float(TILE)))
 		layer["offset"] = wrapped
-		# Панорама доски входит сюда долей DEPTH — тоже свёрнутой по плитке, иначе на
-		# большой карте прямоугольник уехал бы за пределы экрана и слой пропал бы.
+		# Панорама доски входит сюда долей DEPTH — тоже свёрнутой по плитке.
 		var par := camera * float(DEPTH[i] if i < DEPTH.size() else 0.0)
-		var rect: TextureRect = layer["rect"]
-		rect.position = Vector2(fposmod(wrapped.x + par.x, float(TILE)),
-				fposmod(wrapped.y + par.y, float(TILE))) - Vector2(TILE, TILE)
+		_mat.set_shader_parameter("o%d" % i, Vector2(fposmod(wrapped.x + par.x, float(TILE)),
+				fposmod(wrapped.y + par.y, float(TILE))))
 
-## Подогнать слои под окно. Каждый на плитку больше экрана с каждой стороны — запас
-## под сдвиг, иначе у края появлялась бы пустая полоса.
 func _fit() -> void:
 	_viewport_size = get_viewport_rect().size
 	size = _viewport_size
-	if _solid != null:
-		_solid.size = _viewport_size
-	if _base != null:
-		_base.size = _viewport_size
-	for layer: Dictionary in _layers:
-		(layer["rect"] as TextureRect).size = _viewport_size + Vector2(TILE, TILE) * 2.0
+	if _sky != null:
+		_sky.size = _viewport_size
+		_mat.set_shader_parameter("px", _viewport_size)
 
 ## Плитка со звёздами. Координаты сворачиваются по модулю плитки, поэтому звезда у
 ## края продолжается на соседней — шва не видно.
@@ -141,17 +146,3 @@ func _star_tile(rng: RandomNumberGenerator, count: int, size: int,
 			for dx in size:
 				img.set_pixel((x + dx) % TILE, (y + dy) % TILE, col)
 	return ImageTexture.create_from_image(img)
-
-## Небо за звёздами: чистый чёрный (item 1). Прежний сине-серый градиент читался как
-## «серый фон» — заказчик просит именно чёрный, звёзды поверх него и так видны.
-func _sky_gradient() -> GradientTexture2D:
-	var gradient := Gradient.new()
-	gradient.set_color(0, Color(0, 0, 0))
-	gradient.set_color(1, Color(0, 0, 0))
-	var tex := GradientTexture2D.new()
-	tex.gradient = gradient
-	tex.fill_from = Vector2(0.0, 0.0)
-	tex.fill_to = Vector2(0.0, 1.0)
-	tex.width = 8
-	tex.height = 128
-	return tex

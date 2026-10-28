@@ -434,7 +434,7 @@ static func begin_build(grid: Grid, cc: Vector2i, roof: PackedByteArray, ctx: Di
 					_wall_lamp(models, counts, grid, at, lamp)
 				continue
 			if MCF.is_glass(fid):
-				_glass(loose, loose_glass, grid, env, at, fid == MCF.FEATURE_ARMOR_GLASS)
+				_glass(loose, loose_glass, grid, env, at, fid == MCF.FEATURE_ARMOR_GLASS, walls, is_roofed, roof)
 				continue
 			if fid == MCF.FEATURE_AIRLOCK:
 				doors[at] = _door(node, grid, at, env, mats, walls, is_roofed)
@@ -576,7 +576,9 @@ static func _trim(s: FirstPersonModels.Sink, grid: Grid, roof: PackedByteArray, 
 		# Round an outer corner: the wall ends here on that side.
 		for sx: int in [-1, 1]:
 			var side := at + Vector2i(sx, 0)
-			if grid.in_bounds(side) and not is_wall(grid.cell_fast(side.x, side.y), env):
+			# A window carries the wall's plinth on (issues-12 #17): no corner there.
+			if grid.in_bounds(side) and not is_wall(grid.cell_fast(side.x, side.y), env) \
+					and not MCF.is_glass(grid.cell_fast(side.x, side.y).feature_id):
 				if sx < 0: lo.x -= depth
 				else: hi.x += depth
 	var skip: int = FirstPersonModels.Sink.NO_BOTTOM | [FirstPersonModels.Sink.NO_FRONT, FirstPersonModels.Sink.NO_LEFT, FirstPersonModels.Sink.NO_BACK, FirstPersonModels.Sink.NO_RIGHT][[Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)].find(d)]
@@ -628,21 +630,50 @@ static func _runs_x(grid: Grid, at: Vector2i) -> bool:
 	return (grid.in_bounds(e) and _barrier(grid.cell_fast(e.x, e.y))) \
 			or (grid.in_bounds(w) and _barrier(grid.cell_fast(w.x, w.y)))
 
-## Glass: a whole cell of it, as thick as the wall line (owner, fix-7), in a frame of rails
-## at the floor and ceiling and posts where the run of glass ends. Its sides against a wall
-## or more glass are left out: drawn there they fought the wall's own face and flickered.
-static func _glass(s: FirstPersonModels.Sink, gs: FirstPersonModels.Sink, grid: Grid, env: String, at: Vector2i, armored: bool) -> void:
+## A window (issues-12 #17): a pane smaller than the wall, set in that wall — a sill below and a
+## lintel above in the material (and service colour) of the wall it stands in, like a doorway;
+## the glass between, as thick as the wall line (owner, fix-7), in a frame of rails at the sill
+## and the head and posts where the run of glass ends. Sides against a wall or more glass are
+## left out: drawn there they fought the wall's own face and flickered.
+const SILL := 0.9
+const HEAD := 1.95
+static func _glass(s: FirstPersonModels.Sink, gs: FirstPersonModels.Sink, grid: Grid, env: String, at: Vector2i, armored: bool,
+		walls: Dictionary, roofed: bool, roof: PackedByteArray) -> void:
 	var x := float(at.x)
 	var z := float(at.y)
 	var frame := Color(0.24, 0.25, 0.27) if env in ["station", "bunker", "asteroid"] or armored else Color(0.82, 0.81, 0.78)
 	var m := FirstPersonArt.M_METAL if frame.r < 0.5 else FirstPersonArt.M_PLAIN
 	var skips := _wall_skips(grid, env, at)
-	var rail := 0.07 if not armored else 0.12
-	gs.box(Vector3(x + 0.006, rail, z + 0.006), Vector3(x + 0.994, CEIL - rail, z + 0.994), 0,
-			Color(0.55, 0.72, 0.8) if armored else Color(0.62, 0.8, 0.9), skips | FirstPersonModels.Sink.NO_TOP | FirstPersonModels.Sink.NO_BOTTOM)
-	s.box(Vector3(x, 0, z), Vector3(x + 1, rail, z + 1), m, frame, skips | FirstPersonModels.Sink.NO_BOTTOM)
-	s.box(Vector3(x, CEIL - rail, z), Vector3(x + 1, CEIL, z + 1), m, frame, skips)
+	var rail := 0.06 if not armored else 0.1
+	# The wall the window stands in: the nearest wall along its run, else across it.
 	var along_x := _runs_x(grid, at)
+	var kind := "station" if env in ["station", "asteroid"] else ("bunker" if env == "bunker" else "brick")
+	var host := Vector2i(-1, -1)
+	for d: Vector2i in ([Vector2i(-1, 0), Vector2i(1, 0)] if along_x else [Vector2i(0, -1), Vector2i(0, 1)]) + Grid.N4:
+		var n := at + d
+		while grid.in_bounds(n) and MCF.is_glass(grid.cell_fast(n.x, n.y).feature_id): n += d
+		if grid.in_bounds(n) and is_wall(grid.cell_fast(n.x, n.y), env):
+			host = n
+			kind = FirstPersonArt.wall_kind(grid, n, env)
+			break
+	# Sill and lintel wear the host wall's service colour, as its own faces do.
+	var ws := _wall_sink(walls, kind, FirstPersonArt.accent_of(grid, host) if host.x >= 0 else Color(0, 0, 0, 0))
+	for d: Vector2i in Grid.N4:
+		var n := at + d
+		if grid.in_bounds(n):
+			var nc := grid.cell_fast(n.x, n.y)
+			if is_wall(nc, env) or MCF.is_glass(nc.feature_id): continue
+		_wall_face(ws, at, d, 0.0, SILL)
+		_wall_face(ws, at, d, HEAD, CEIL)
+		if grid.in_bounds(n): _trim(s, grid, roof, env, kind, at, d)
+	_quad_up(ws, Vector3(x, SILL, z), Vector3(x + 1, SILL, z + 1), Rect2(0, 0.6, 1, 0.04))
+	_quad_down(ws, Vector3(x, HEAD, z), Vector3(x + 1, HEAD, z + 1), Rect2(0, 0.05, 1, 0.05))
+	if not roofed:
+		_quad_up(ws, Vector3(x, CEIL, z), Vector3(x + 1, CEIL, z + 1), Rect2(0, 0, 1, 0.04))
+	gs.box(Vector3(x + 0.006, SILL + rail, z + 0.006), Vector3(x + 0.994, HEAD - rail, z + 0.994), 0,
+			Color(0.55, 0.72, 0.8) if armored else Color(0.62, 0.8, 0.9), skips | FirstPersonModels.Sink.NO_TOP | FirstPersonModels.Sink.NO_BOTTOM)
+	s.box(Vector3(x, SILL, z), Vector3(x + 1, SILL + rail, z + 1), m, frame, skips | FirstPersonModels.Sink.NO_BOTTOM)
+	s.box(Vector3(x, HEAD - rail, z), Vector3(x + 1, HEAD, z + 1), m, frame, skips | FirstPersonModels.Sink.NO_TOP)
 	for e in [-1, 1]:
 		var n := at + (Vector2i(e, 0) if along_x else Vector2i(0, e))
 		if grid.in_bounds(n) and MCF.is_glass(grid.cell_fast(n.x, n.y).feature_id):
@@ -651,10 +682,10 @@ static func _glass(s: FirstPersonModels.Sink, gs: FirstPersonModels.Sink, grid: 
 			continue
 		if along_x:
 			var px := x if e < 0 else x + 1.0 - rail
-			s.box(Vector3(px, rail, z), Vector3(px + rail, CEIL - rail, z + 1), m, frame, skips)
+			s.box(Vector3(px, SILL + rail, z), Vector3(px + rail, HEAD - rail, z + 1), m, frame, skips)
 		else:
 			var pz := z if e < 0 else z + 1.0 - rail
-			s.box(Vector3(x, rail, pz), Vector3(x + 1, CEIL - rail, pz + rail), m, frame, skips)
+			s.box(Vector3(x, SILL + rail, pz), Vector3(x + 1, HEAD - rail, pz + rail), m, frame, skips)
 
 ## Sides of a block that touch a wall (hidden; drawing them would fight its face).
 static func _wall_skips(grid: Grid, env: String, at: Vector2i) -> int:

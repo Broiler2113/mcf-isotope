@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://brbe5dywhlevb"
+path="res://.godot/imported/tank_hull.png-471b6707cb494c52dd5e0bc66a226032.image"
+
+[deps]
+
+source_file="res://textures/vehicles/tank/tank_hull.png"
+dest_files=["res://.godot/imported/tank_hull.png-471b6707cb494c52dd5e0bc66a226032.image"]
+
+[params]
+

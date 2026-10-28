@@ -124,6 +124,9 @@ func _preview() -> void:
 	print("20-soldier giant-map preview: %d frames, longest slice %.2f ms" % [frames, max_slice / 1000.0])
 
 func _editor() -> void:
+	var ui := root.get_node("Ui")
+	ck(ui.dynamic_lighting, "dynamic lighting defaults on (owner, 2026-10-28)")
+	ui.dynamic_lighting = false
 	var editor = load("res://scenes/MapEditor.tscn").instantiate()
 	root.add_child(editor)
 	await process_frame
@@ -132,8 +135,7 @@ func _editor() -> void:
 	editor._build_preview()
 	ck(not editor._pv.is_empty() and editor._pv_floor != null, "floor texture change has a hover preview")
 	ck(is_equal_approx(editor._pv_tint.a, 0.5), "floor preview is half opaque")
-	var ui := root.get_node("Ui")
-	ck(not ui.dynamic_lighting and editor._lighting == null, "lighting defaults off and creates no renderer")
+	ck(editor._lighting == null, "with the battle setting off the editor creates no light renderer")
 	var key := InputEventKey.new()
 	key.pressed = true
 	key.keycode = KEY_L

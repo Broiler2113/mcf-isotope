@@ -171,6 +171,34 @@ func _tile(name: String, res: int) -> Array:
 	_tiles[key] = out
 	return out
 
+## The fire tile in its eight turns and flips (issues-12 #18): each burning cell picks one by
+## its position, so a spread fire is a field of flames, not one picture repeated.
+func _fire_turns(res: int) -> Array:
+	var key := "fire_turns@%d" % res
+	if _tiles.has(key): return _tiles[key]
+	var out: Array = []
+	var base := _tile("fire", res)
+	# Read the new art from source (issues-12 #18): a stale import cache keeps the old tile.
+	var own: Image = Sprites.image_at("res://textures/decals/fire/fire.png") if not Sprites.has_user_override("fire") else null
+	if own != null:
+		own = own.duplicate()
+		if own.is_compressed(): own.decompress()
+		own.convert(Image.FORMAT_RGBA8)
+		if own.get_width() != res: own.resize(res, res, Image.INTERPOLATE_LANCZOS)
+		base = [own]
+	if not base.is_empty():
+		var img: Image = base[0]
+		for k in 8:
+			var v: Image = img.duplicate()
+			if k & 4: v.flip_x()
+			for r in k & 3: v.rotate_90(CLOCKWISE)
+			out.append(v)
+	_tiles[key] = out
+	return out
+
+static func _fire_at(turns: Array, c: Vector2i) -> Image:
+	return turns[posmod(c.x * 7 + c.y * 13 + (c.x * c.y) % 5, turns.size())]
+
 ## Варианты листа автотайла в разрешении res (столбик листов 4×4 в файле).
 func _sheet(name: String, res: int) -> Array:
 	var key := "%s@%d" % [name, res]
@@ -470,8 +498,8 @@ func advance_floor_job(job: Dictionary, deadline: int) -> bool:
 					return true
 				var cell := cc * C + Vector2i(i % size.x, i / size.x)
 				if _grid.cell(cell).on_fire and not hidden_fire.has(cell):
-					var fire := _tile("fire", 32)
-					if not fire.is_empty(): picture.blend_rect(fire[0], Rect2i(0, 0, 32, 32), (cell - cc * C) * 32)
+					var fire := _fire_turns(32)
+					if not fire.is_empty(): picture.blend_rect(_fire_at(fire, cell), Rect2i(0, 0, 32, 32), (cell - cc * C) * 32)
 		job.next += 1
 	_floor_only = false
 	return false
@@ -531,13 +559,13 @@ func _build(cc: Vector2i, res: int) -> void:
 	var burning := false
 	# Flames over the debris, blood and brass lying in them (playtest 2026-10-19).
 	if bake_fire:
-		var fire := _tile("fire", res)
+		var fire := _fire_turns(res)
 		if not fire.is_empty():
 			for y in h:
 				for x in w:
 					var fc := Vector2i(cc.x * C + x, cc.y * C + y)
 					if _grid.cell_fast(fc.x, fc.y).on_fire and not hidden_fire.has(fc):
-						floor_img.blend_rect(fire[0], Rect2i(0, 0, res, res), Vector2i(x * res, y * res))
+						floor_img.blend_rect(_fire_at(fire, fc), Rect2i(0, 0, res, res), Vector2i(x * res, y * res))
 						burning = true
 	if _floor_only:
 		_floor_only = false
@@ -892,12 +920,14 @@ func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int
 				Rect2i((mask % 4) * res, (mask / 4) * res, res, res), at)
 		if NOTCHED.has(FAMILY.get(fid, fid)):
 			_fill_notches(feat, c, fid, mask, at, res)
-		# Полоса службы (0.9.3): цветная линия вдоль стены отдела.
+		# Полоса службы (0.9.3) — now one band on each side the wall faces, on that side's half
+		# (issues-12 #16: a wall is two halves, as in first person, where every face of a
+		# service's wall carries its colour). Every accented wall, every open side: the bands
+		# run on unbroken along a wall and round its corners, inside and out.
 		# ПО СТЕКЛУ ПОЛОСА НЕ ИДЁТ (0.9.4, просьба игрока): окно — это окно, а не крашеная
-		# стена, и полоса на нём читалась мазком поперёк витрины. Соседи-окна её тоже не
-		# продолжают (_accent_mask), поэтому у рамы полоса аккуратно обрывается.
+		# стена; у рамы полоса аккуратно обрывается.
 		if accent != MCF.Accent.NONE and _takes_accent(fid):
-			feat.blend_rect(_accent_overlay(accent, _accent_mask(c, accent), res), full, at)
+			feat.blend_rect(_accent_bands(accent, mask, _inner_corners(c, mask), res), full, at)
 		# ДОТ, потерявший прочность, трескается прямо в плитке (0.9.2) — раньше была лишь
 		# красная чёрточка в углу клетки.
 		if (fid == MCF.FEATURE_DOT or fid == MCF.FEATURE_DOT_OPEN) and cell.feature_durability > 0 \
@@ -1097,55 +1127,69 @@ func _takes_accent(fid: String) -> bool:
 	return fid != "" and FAMILY.get(fid, fid) == "wall" and not MCF.is_glass(fid) \
 			and fid not in [MCF.FEATURE_LDF, MCF.FEATURE_DOT, MCF.FEATURE_DOT_OPEN]
 
-## Маска полосы: соседи-стены (и шлюзы) ТОГО ЖЕ цвета. Полоса сворачивает за угол вместе
-## со стеной и обрывается там, где кончается отдел.
-func _accent_mask(c: Vector2i, accent: int) -> int:
-	var mask := 0
-	var dirs := [[Vector2i(0, -1), Sprites.AUTOTILE_N], [Vector2i(1, 0), Sprites.AUTOTILE_E],
-			[Vector2i(0, 1), Sprites.AUTOTILE_S], [Vector2i(-1, 0), Sprites.AUTOTILE_W]]
-	for d in dirs:
-		var n: Vector2i = c + d[0]
-		if n.x < 0 or n.y < 0 or n.x >= _grid.width or n.y >= _grid.height:
-			continue
-		var nf := _grid.cell_fast(n.x, n.y).feature_id
-		if _takes_accent(nf) and _accent_of(n) == accent:
-			mask |= int(d[1])
-	return mask
+## Inner corners of a wall cell: a diagonal between two joined sides that is not wall —
+## there the bands of the two neighbours meet inside this cell. Bits: NE 1, SE 2, SW 4, NW 8.
+func _inner_corners(c: Vector2i, mask: int) -> int:
+	var out := 0
+	var corners := [[Sprites.AUTOTILE_N | Sprites.AUTOTILE_E, Vector2i(1, -1)], [Sprites.AUTOTILE_S | Sprites.AUTOTILE_E, Vector2i(1, 1)],
+			[Sprites.AUTOTILE_S | Sprites.AUTOTILE_W, Vector2i(-1, 1)], [Sprites.AUTOTILE_N | Sprites.AUTOTILE_W, Vector2i(-1, -1)]]
+	for k in 4:
+		if mask & int(corners[k][0]) != int(corners[k][0]): continue
+		var q: Vector2i = c + corners[k][1]
+		if not _grid.in_bounds(q): continue
+		var qf := _grid.cell_fast(q.x, q.y).feature_id
+		if qf == "" or FAMILY.get(qf, qf) != "wall":
+			out |= 1 << k
+	return out
 
-## Полоса службы по стене: линия вдоль стены с загибами к соседям той же службы. Клетка
-## со стеной сама по себе (маска 0) получает просто пятно — красить нечего.
-func _accent_overlay(accent: int, mask: int, res: int) -> Image:
-	var key := "accent@%d@%d@%d" % [accent, mask, res]
+## Service bands: 3 px of paint just inside the wall's bevel, along every open side (mask:
+## the joined sides), meeting in an L at outer corners and carried round inner ones. Drawn
+## at 32 px and scaled without smoothing, so they stay as crisp as the wall under them.
+const BAND_FROM := 4
+const BAND_TO := 6
+func _accent_bands(accent: int, mask: int, corners: int, res: int) -> Image:
+	var key := "bands@%d@%d@%d@%d" % [accent, mask, corners, res]
 	if _tiles.has(key):
 		return _tiles[key][0]
-	var img := Image.create(res, res, false, Image.FORMAT_RGBA8)
+	var img := Image.create(32, 32, false, Image.FORMAT_RGBA8)
 	var col: Color = MCF.ACCENT_COLORS[accent]
-	var half := maxi(1, roundi(res * 3.0 / 32.0))
-	var lo := res / 2 - half
-	var hi := res / 2 + half
-	var band := Color(col.r, col.g, col.b, 0.92)
-	var rim := Color(col.r * 0.42, col.g * 0.42, col.b * 0.42, 0.95)
-	# Полоса — центральный квадрат плюс «рукав» к каждому соседу той же службы; рукав
-	# продолжается ЗА край плитки, поэтому на стыке двух клеток полоса идёт без шва.
-	var inside := func(x: int, y: int) -> bool:
-		var across_x: bool = x >= lo and x <= hi
-		var across_y: bool = y >= lo and y <= hi
-		if across_x and across_y:
-			return true
-		if across_x and ((y < lo and mask & int(Sprites.AUTOTILE_N) != 0)
-				or (y > hi and mask & int(Sprites.AUTOTILE_S) != 0)):
-			return true
-		return across_y and ((x < lo and mask & int(Sprites.AUTOTILE_W) != 0)
-				or (x > hi and mask & int(Sprites.AUTOTILE_E) != 0))
-	for y in res:
-		for x in res:
-			if not inside.call(x, y):
-				continue
-			# Кромка — там, где полоса кончается ПОПЕРЁК себя; вдоль неё кромки нет, иначе
-			# прямой участок получил бы поперечные перекладины.
-			var edge: bool = not inside.call(x - 1, y) or not inside.call(x + 1, y) \
-					or not inside.call(x, y - 1) or not inside.call(x, y + 1)
-			img.set_pixel(x, y, rim if edge else band)
+	var band := Color(col.r, col.g, col.b, 0.95)
+	var rim := Color(col.r * 0.5, col.g * 0.5, col.b * 0.5, 0.95)
+	var open_n := mask & Sprites.AUTOTILE_N == 0
+	var open_e := mask & Sprites.AUTOTILE_E == 0
+	var open_s := mask & Sprites.AUTOTILE_S == 0
+	var open_w := mask & Sprites.AUTOTILE_W == 0
+	for y in 32:
+		for x in 32:
+			var dn := y
+			var ds := 31 - y
+			var dw := x
+			var de := 31 - x
+			var on := false
+			var across := -1    # how far into the band, to shade its inner edge
+			for side in [[open_n, dn, dw, de, open_w, open_e], [open_s, ds, dw, de, open_w, open_e],
+					[open_w, dw, dn, ds, open_n, open_s], [open_e, de, dn, ds, open_n, open_s]]:
+				if not side[0]: continue
+				var d: int = side[1]
+				if d < BAND_FROM or d > BAND_TO: continue
+				# Along the side: up to the neighbouring side's band where that side is open
+				# too (an outer corner), right to the edge where the wall goes on.
+				if side[4] and int(side[2]) < BAND_FROM: continue
+				if side[5] and int(side[3]) < BAND_FROM: continue
+				on = true
+				across = maxi(across, d)
+			# Inner corners: the two neighbours' bands meet here.
+			for k in 4:
+				if corners & (1 << k) == 0: continue
+				var da: int = [dn, ds, ds, dn][k]
+				var db: int = [de, de, dw, dw][k]
+				if (da >= BAND_FROM and da <= BAND_TO and db <= BAND_TO) or (db >= BAND_FROM and db <= BAND_TO and da <= BAND_TO):
+					on = true
+					across = maxi(across, BAND_TO)
+			if on:
+				img.set_pixel(x, y, rim if across == BAND_TO else band)
+	if res != 32:
+		img.resize(res, res, Image.INTERPOLATE_NEAREST)
 	_tiles[key] = [img]
 	return img
 

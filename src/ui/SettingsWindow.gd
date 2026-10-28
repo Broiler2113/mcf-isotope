@@ -152,6 +152,12 @@ func _build() -> void:
 	snow.button_pressed = Ui.snowfall
 	snow.toggled.connect(Ui.set_snowfall)
 	disp_box.body.add_child(snow)
+	var crt := CheckBox.new()
+	crt.text = "CRT terminal filter"
+	crt.tooltip_text = "Play as if through an old computer terminal: scanlines, a phosphor grille and dark tube corners."
+	crt.button_pressed = Ui.crt_filter
+	crt.toggled.connect(Ui.set_crt_filter)
+	disp_box.body.add_child(crt)
 	# First person (fix-7 #9): field of view and mouse sensitivity.
 	for which: String in ["fov", "sens", "distance"]:
 		var fp_row := HBoxContainer.new()

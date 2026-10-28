@@ -14,6 +14,8 @@ var log: CombatLog
 var time_of_day := ""
 ## Winter map (MapData.winter, fix-8) — only looks.
 var winter := false
+## Overcast sky (MapData.overcast, issues-12 #20) — only looks.
+var overcast := false
 var roster: Roster
 
 var units: Dictionary = {}  # id -> UnitInstance

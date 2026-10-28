@@ -3929,6 +3929,7 @@ glass are stamped into the terrain chunk once (`TerrainTiles._bake_decals`) inst
 redrawn every frame — at ~12k decals that was ~75 ms a frame and is now nothing. They follow
 the same fog rules as the terrain they sit on. Bloody footprints are gone with the rest of
 the per-step bookkeeping. **Service accents** (§20.2): on stations and in bunkers the walls and door frames of a service carry its colour — command blue, control/comms white, security red, medical green, science purple, engineering yellow, cargo orange, everything else grey; a room's own purpose beats its department (`MapGen.KIND_ACCENT`), the colour is a per-cell display-only byte (`MapData.wall_accent`, `MCF.Accent`) drawn as a line that runs along the wall and as a tinted door frame. **Corridors**: main ones are always 3 cells wide, maintenance tunnels 1 (2 about a quarter of the time), and grating is laid in roughly a third of the tunnels and in no room at all. **Grill walkway** (`MCF.Look.GRILL`): a floor look that is transparent between its bars and lies *over* a cell instead of replacing it; it runs from a hull airlock out into space with solar panels down both sides, and it is paintable in the editor. **Space draws no tile** — the `Starfield` parallax behind the board shows through it, following the camera (far layer 5 %, near 26 %); `floor_space.png` dropped by the player still wins. **Doors fill the whole cell** instead of a narrow panel in the middle of it. **Windows**: a symbol fallback font (✓ ✕ ▶ ⚠ are in neither Handjet nor Tahoma) and an explicit `stretch/aspect=expand` so a non-16:9 window is not letterboxed. Also: the hidden storage can no longer get an exterior airlock cut into it. **A border around every map** (§20.2): 10 cells in every direction that can be reached — diggable soil in a bunker, grass around a town or field, open space around a station or asteroid — and 2 more that cannot (`MCF.FEATURE_BOUNDARY`, in no destructible list, opaque to the laser), so the world keeps going past the battlefield but nothing walks off it. Lobby sizes now name the map, not the field. Also: `default_clear_color` was never applied — project.godot comments must start with `;`, and the `#` ones silently dropped the setting, so the window had been Godot grey instead of black all along. Tests: `tests/run_batch093.gd`. |
+| 143 | **0.14.6 — Issues 11–21** (§27.29, "Issues-12"): hovered units twitch, units and vehicles in vacuum sway, an aiming tank's turret follows the cursor smoothly; solar panels only on the station's top; icons on the top-left buttons; station, town, field and asteroid walls redrawn in the board's pixel style to match first person, service colour as a band on each side a wall faces; first-person windows set in their wall, flame billboards, Sun, Earth and lens flare in space, clouds and an Overcast map option on the surface; new top-down fire; optional CRT filter; dynamic lighting on by default; the space backdrop in one pass. Looks only: protocol (33) and replay schema (3) unchanged. |
 | 142 | **0.14.5.5 — Zoomed-out frame rate** (§27.28): soldiers, bodies, rings, badges and markers are textured rects from one marker sheet, so they batch (fitted giant 642 → 216 draw calls); flying particles redraw only their own layer; new blood and brass are painted onto a kept terrain chunk; gas sight sweeps once per eye; dynamic lighting caches static lamps and draws flicker, flashes and muzzle fire over a copy (30 fires: 198 → 65 ms a frame). Drawing only: no rule, protocol (33) or replay schema (3) change. |
 | 141 | **0.14.5.4 — The unit change log** (§27.27): `UnitInstance.vision_log` records every unit whose cell, side, status, seat or neutral group changed; team fog, the civilians' wake-up check (now only sleepers whose sight lines changed), captives, carried bodies, each action's deaths and the AI's enemy lists read the changed units instead of the whole army; the firing-line and neighbour scans of target and capture lists and the wake-up rows run in C++ (`MCFAI.line_slots`/`near_slots`, `MCFPlanScorer.civilians_seeing_rows`). 1,200 giant actions 5.9 → ~3.1 s. No rule changed; protocol 33. |
 | 140 | **0.14.5.3 — Frame cost and hitches** (§27.26): zoom builds one terrain chunk per frame, group orders patch the native board from a walk journal, the soldier layer skips unchanged soldiers, replay checkpoints are sealed off the main thread, cheaper fog in smoke, and viewer switches copy only the cells a fog memory can have wrong. 1,200 giant actions 7.3 → ~5.5 s. No rule changed; protocol 33. |
@@ -4726,6 +4727,58 @@ Follow-up on the same branch:
   fire flicker, flashes and muzzle fire draw over a 1:1 copy of it. Before, each flicker
   re-marched every lamp on screen (~420 zoomed out). Fitted giant with 30 fires, lighting on:
   198 → 65 ms a frame on llvmpipe; output identical pixel for pixel.
+
+### 27.29 The owner's big station save, zoomed out
+
+`Dima_15.mcfs` (149×119 station, 614 soldiers, 825 bodies, 47 vehicles, 23k decals, 20k
+props), fitted, standard fog, lighting on, llvmpipe: 107–115 ms a frame, render-bound.
+Hiding one layer at a time put half of it in the space backdrop: five stacked full-screen
+rects (black, an all-black gradient, three star tiles). `Starfield` is now one shader pass
+sampling the three tiles at their parallax offsets: pixel-identical, 115 → 74 ms. What is
+left: terrain chunks ~22 ms, the light map ~12, the HUD ~10.
+
+## Issues-12 (items 11–21)
+
+All of it is looks; no rule, protocol (33) or replay schema (3) changed. Dynamic lighting
+is on by default (owner, 2026-10-28); settings saved before that are switched on once.
+
+- **Board motion** (`MainDrawing` "Board motion"): a unit or drone the cursor enters twitches
+  once (0.32 s, a small shake and turn). Soldiers on vacuum with nothing to stand on (grill
+  walkways and solar panels are floors), drones over it and vehicles mostly over it sway
+  slowly; riders sway with their hull. Floating vehicles draw on their own layer under the
+  soldiers, so only that layer redraws each frame.
+- **Turret** (#12): `TankModel` draws a live tank as hull + turret (baked apart by
+  `tools/art/build_tank_sprites.gd -- split`), the turret turned about its ring at any angle.
+  While a tank aims its cannon the turret follows the cursor inside the gun's arc (forward and
+  both sides; anywhere under the legacy rear-cannon rule) and holds its last angle outside it;
+  it eases at most 3.2 rad/s, and after the shot or a cancel it settles on the stored aim.
+  A turning turret is drawn by the layer over the soldiers; the board keeps the hull.
+- **Solar panels** (#14): only on exits facing the top of the map; other exits keep their
+  airlock and walkway. A four-way mirror would copy them onto the bottom hull, so after the
+  last mirror (`MapFurnish.run`) only the top panels and their left-right mirror stay.
+- **Top-left buttons** (#15): `HudIcons` — a pencil, an open book and a bug, drawn in code.
+- **Walls** (#16): the board keeps its crisp pixel tiles (`tools/gen_textures.gd`), and the
+  walls whose material differed from first person's are redrawn in that same style to match it
+  (`-- --walls`): a station's light hull plates with seams and rivets, a town's red brick, a
+  field's concrete block, an asteroid's rock. A service's colour is a band on each side a wall
+  faces — that side's half — instead of one line down its middle: every accented wall, every
+  open side, running on along the wall and round its corners inside and out
+  (`TerrainTiles._accent_bands`), as first person paints it on every face. Floors, doors and
+  airlocks keep their pictures (owner: "bring back the airlock textures"; "the same good
+  quality and consistency as it was before").
+- **Windows in first person** (#17): a pane from 0.9 m to 1.95 m in the host wall — sill and
+  lintel in its material, plinth carried through.
+- **Fire** (#18): a new top-down tile (`tools/art/build_fire.py`), turned and flipped per cell;
+  first person shows an upright flame billboard that blooms, lit by the light map.
+- **Skies** (#19, #20, `FirstPersonSky`): space has the Sun and a lit, turning Earth with
+  clouds, ice, air and city lights, and a lens flare (glare, streak, ghosts) when the Sun is in
+  sight — walls and ceilings hide it, glass does not. Town and field have drifting clouds and
+  the Sun where the shadows come from. **Overcast** (lobby generator, editor View menu,
+  `MapData.overcast`, town and field only) closes the clouds into a grey deck: no sun, no sun
+  shadows, denser haze.
+- **CRT filter** (#21, Settings → Display, off by default): scanlines, an RGB grille, colour
+  fringing, tube corners and a faint flicker over the whole game. The picture is not bent, so
+  clicks land where they look.
 
 ## Issues PDF (6) follow-up
 

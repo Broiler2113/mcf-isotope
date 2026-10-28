@@ -1068,14 +1068,17 @@ def moon():
 
 
 def fire():
-    """Flame tongues for the half-metre fire blocks: a hot base fading up to dark red tips;
-    alpha cuts the silhouette (1 m wide, the block's height tall)."""
+    """A flame standing on the floor, seen from the side, for the first-person billboard
+    (issues-12 #18): a broad hot base narrowing into tongues with dark red tips; alpha cuts
+    the silhouette (1.15 m wide, 1.35 m tall in game)."""
     h = w = 32 * SS
     x, y = grid(h, w)
     rise = 1 - y                                         # 0 at the base, 1 at the top
     tongues = noise(h, w, 951, 0.09, sy=4.0)
     flick = noise(h, w, 952, 0.04, sy=2.5)
-    density = (1 - rise) * 2.2 + 0.7 * tongues + 0.2 * flick - 1.0
+    # Narrower the higher it reaches, so it reads as one fire, not a wall of flame.
+    side = np.abs(x - 0.5) * 2.0
+    density = (1 - rise) * 2.2 + 0.7 * tongues + 0.2 * flick - 1.0 - side * side * (1.5 + 2.4 * rise)
     heat = np.clip(density * 1.05, 0, 1)
     stops = [(0.0, "5a0d04"), (0.3, "c2360c"), (0.55, "f07a18"), (0.8, "ffc246"), (1.0, "fff0b0")]
     c = col(rgb(stops[0][1]), h, w)

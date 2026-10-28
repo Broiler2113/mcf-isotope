@@ -91,16 +91,60 @@ static func paint_stripe(image: Image, mask: Image, paint: Color) -> void:
 			var l := c.r * 0.3 + c.g * 0.59 + c.b * 0.11
 			image.set_pixel(x, y, Color(l * paint.r, l * paint.g, l * paint.b, c.a))
 
+## The turret's angle from the hull's front (radians, clockwise on screen) for a stored
+## hull-relative gun direction; a gun that never fired looks forward.
+static func turret_angle(aim: Vector2i) -> float:
+	return Vector2(aim).angle() if aim != Vector2i.ZERO else 0.0
+
+## The turret ring behind the sprite's centre (TURRET_PIVOT), as a fraction of the picture.
+const PIVOT_BACK := 0.202109216 / SPRITE_METRES
+enum Part {WHOLE, HULL, TURRET}
+
+## A live tank is its hull and a turret turned by any angle (issues-12 #12: the turret follows
+## the cursor smoothly); wrecks and user pictures keep their whole-tank frames.
+## turret: radians from the hull's front, NAN = the stored aim's.
 static func draw(ci: CanvasItem, rect: Rect2, facing: Vector2i, paint: Color,
-		wrecked := false, tint := Color.WHITE, aim := Vector2i.ZERO) -> void:
+		wrecked := false, tint := Color.WHITE, aim := Vector2i.ZERO, turret := NAN, part := Part.WHOLE) -> void:
 	var name := "tank_wreck" if wrecked else "tank"
 	var angle := rad_to_deg(Vector2(facing).angle()) + 90.0 if facing != Vector2i.ZERO else 0.0
 	if Sprites.has_user_override(name) or (wrecked and Sprites.has_user_override("tank")):
-		Sprites.draw_texture_override_rect(ci, name if Sprites.has_user_override(name) else "tank", rect, angle, tint)
+		if part != Part.TURRET:
+			Sprites.draw_texture_override_rect(ci, name if Sprites.has_user_override(name) else "tank", rect, angle, tint)
 		return
 	var picture_size := rect.size * (SPRITE_METRES / 3.0)
 	var picture_rect := Rect2(rect.get_center() - picture_size * 0.5, picture_size)
-	Sprites.draw_texture_rect(ci, Sprites.nearest(sprite(paint, wrecked, aim_frame(aim))), picture_rect, angle, tint)
+	if wrecked or not _has_split():
+		if part != Part.TURRET:
+			Sprites.draw_texture_rect(ci, Sprites.nearest(sprite(paint, wrecked, aim_frame(aim))), picture_rect, angle, tint)
+		return
+	if part != Part.TURRET:
+		Sprites.draw_texture_rect(ci, Sprites.nearest(part_sprite(paint, "hull")), picture_rect, angle, tint)
+	if part != Part.HULL:
+		var hull := deg_to_rad(angle)
+		var back := Vector2(0, picture_size.y * PIVOT_BACK)
+		var pivot := picture_rect.get_center() + back.rotated(hull)
+		Sprites.draw_texture_about(ci, Sprites.nearest(part_sprite(paint, "turret")),
+				Rect2(-picture_size * 0.5 - back, picture_size), pivot,
+				hull + (turret if not is_nan(turret) else turret_angle(aim)), tint)
+
+static var _split := -1
+static func _has_split() -> bool:
+	if _split < 0: _split = 0 if _picture("tank_turret").is_invisible() else 1
+	return _split == 1
+
+## Where the turret ring sits on the board for a tank drawn into rect.
+static func turret_pivot(rect: Rect2, facing: Vector2i) -> Vector2:
+	var hull := Vector2(facing).angle() + PI * 0.5 if facing != Vector2i.ZERO else 0.0
+	return rect.get_center() + Vector2(0, rect.size.y * (SPRITE_METRES / 3.0) * PIVOT_BACK).rotated(hull)
+
+## The hull or the turret alone, stripe painted like sprite().
+static func part_sprite(paint: Color, part: String) -> Texture2D:
+	var key := str([paint.to_rgba32(), part])
+	if not _sprites.has(key):
+		var image: Image = _picture("tank_" + part).duplicate()
+		paint_stripe(image, _picture("tank_%s_mask" % part), paint)
+		_sprites[key] = ImageTexture.create_from_image(image)
+	return _sprites[key]
 
 ## The same assembled model is used by first person and the overhead sprite baker.
 ## material_for receives the imported material so callers can retain its texture.

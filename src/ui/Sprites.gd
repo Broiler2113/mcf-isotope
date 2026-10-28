@@ -379,6 +379,14 @@ static func draw_texture_rect(ci: CanvasItem, tex: Texture2D, rect: Rect2,
 		ci.draw_texture_rect(tex, Rect2(-rect.size * 0.5, rect.size), false, tint)
 		ci.draw_set_transform(_base_offset, 0.0, _base_scale)
 
+## A texture turned by rot (radians) about `pivot` (board space); rect is relative to the pivot,
+## unrotated. A tank turret turns about its own ring, not the sprite's centre.
+static func draw_texture_about(ci: CanvasItem, tex: Texture2D, rect: Rect2, pivot: Vector2,
+		rot: float, tint := Color.WHITE) -> void:
+	ci.draw_set_transform(_base_offset + pivot * _base_scale, rot, _base_scale)
+	ci.draw_texture_rect(tex, rect, false, tint)
+	ci.draw_set_transform(_base_offset, 0.0, _base_scale)
+
 ## Battle markers as ONE shared texture: a hard-edged disc, a solid square and the independent
 ## army's ring side by side (transparent gaps between them). Textured rects of one texture
 ## batch across canvas items, while every draw_circle polygon, untextured rect and outline is
