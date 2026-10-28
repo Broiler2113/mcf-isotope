@@ -10,7 +10,10 @@ extends Node2D
 ## has one texel per cell, read exactly; five rays across the lamp's width and a blur
 ## soften the edges. A wall tile that light reaches is lit whole and evenly, while the floor
 ## behind it stays dark; furniture under 2 m, glass and open doors let light through; a
-## lamp always lights its own tile, and a wall lamp only its own side of the wall. The map starts from the ambient colour and
+## lamp always lights its own tile, and a wall lamp only its own side of the wall. Lamps are
+## drawn into a cached map of their own, redrawn only when the view, walls or lamps change;
+## fire, flashes and muzzle fire go on top of a copy of it, so a flicker never re-marches
+## hundreds of lamps (zoomed-out FPS, 2026-10-28). The map starts from the ambient colour and
 ## the finished texture MULTIPLIES the terrain layer only — tokens, labels and previews
 ## stay readable. The cost follows the screen, not the number of lamps or the map size.
 ##
@@ -160,6 +163,11 @@ var redraws := 0
 var last_instances := 0
 
 var _vp: SubViewport
+## Ambient + space + every static lamp; _vp shows it under the dynamic lights.
+var _svp: SubViewport
+var _copy: Sprite2D
+var _dmesh: MultiMesh
+var _static_render: Array = []
 var _base: ColorRect
 var _space: ColorRect
 var _space_mat: ShaderMaterial
@@ -176,7 +184,6 @@ var _key: Array = []
 var _static_key: Array = []
 var _static: Array = []
 var _fires: Array = []
-var _uploaded: Array = []   # [cell, light] — filtered by the viewer's sight every frame
 var _cell := 32.0
 var _origin := Vector2.ZERO
 
@@ -188,15 +195,27 @@ func _ready() -> void:
 	_vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	_vp.canvas_item_default_texture_filter = Viewport.DEFAULT_CANVAS_ITEM_TEXTURE_FILTER_LINEAR
 	add_child(_vp)
+	# A child viewport is drawn before its parent, so the copy below is never a frame old.
+	_svp = SubViewport.new()
+	_svp.disable_3d = true
+	_svp.transparent_bg = false
+	_svp.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	_svp.canvas_item_default_texture_filter = Viewport.DEFAULT_CANVAS_ITEM_TEXTURE_FILTER_LINEAR
+	_vp.add_child(_svp)
+	_copy = Sprite2D.new()
+	_copy.centered = false
+	_copy.texture = _svp.get_texture()
+	_copy.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	_vp.add_child(_copy)
 	_base = ColorRect.new()
-	_vp.add_child(_base)
+	_svp.add_child(_base)
 	_space = ColorRect.new()
 	_space_mat = ShaderMaterial.new()
 	var space_shader := Shader.new()
 	space_shader.code = SPACE_SHADER
 	_space_mat.shader = space_shader
 	_space.material = _space_mat
-	_vp.add_child(_space)
+	_svp.add_child(_space)
 	_mesh = MultiMesh.new()
 	_mesh.transform_format = MultiMesh.TRANSFORM_2D
 	_mesh.use_colors = true
@@ -211,7 +230,16 @@ func _ready() -> void:
 	shader.code = SHADER
 	_mat.shader = shader
 	_mmi.material = _mat
-	_vp.add_child(_mmi)
+	_svp.add_child(_mmi)
+	_dmesh = MultiMesh.new()
+	_dmesh.transform_format = MultiMesh.TRANSFORM_2D
+	_dmesh.use_colors = true
+	_dmesh.use_custom_data = true
+	_dmesh.mesh = quad
+	var dmmi := MultiMeshInstance2D.new()
+	dmmi.multimesh = _dmesh
+	dmmi.material = _mat
+	_vp.add_child(dmmi)
 	var mul := CanvasItemMaterial.new()
 	mul.blend_mode = CanvasItemMaterial.BLEND_MODE_MUL
 	mul.light_mode = CanvasItemMaterial.LIGHT_MODE_UNSHADED
@@ -384,39 +412,44 @@ func _render(grid: Grid, view: Rect2i, texels: int, visible_cells: Dictionary, l
 	if key == _key: return
 	_key = key
 	var size := view.size * texels
-	if _vp.size != size: _vp.size = size
-	_base.size = Vector2(size)
-	_base.color = ambient
-	_space.size = Vector2(size)
-	_space_mat.set_shader_parameter("walls", _walls_tex)
-	_space_mat.set_shader_parameter("board", Vector2(grid.width, grid.height))
-	_space_mat.set_shader_parameter("view", Vector4(view.position.x, view.position.y, view.size.x, view.size.y))
-	_mat.set_shader_parameter("walls", _walls_tex)
-	_mat.set_shader_parameter("board", Vector2(grid.width, grid.height))
-	# Static lamps are uploaded once per view/texel/index change; each later redraw only
-	# rewrites the few dynamic lights after them (fire flicker, flashes, muzzle fire).
+	if _vp.size != size:
+		_vp.size = size
+		_svp.size = size
+	# Static map: only for a new view, texel density, lamp index, wall mask or ambient.
 	var t := float(texels)
-	var upload := [view, texels, skey]
-	if upload != _uploaded or _static.size() + dynamic.size() > _mesh.instance_count:
-		_uploaded = upload
-		_mesh.instance_count = _static.size() + maxi(64, dynamic.size() * 2)
+	var srender := [view, texels, skey, _walls_key, ambient]
+	if srender != _static_render:
+		_static_render = srender
+		_base.size = Vector2(size)
+		_base.color = ambient
+		_space.size = Vector2(size)
+		_space_mat.set_shader_parameter("walls", _walls_tex)
+		_space_mat.set_shader_parameter("board", Vector2(grid.width, grid.height))
+		_space_mat.set_shader_parameter("view", Vector4(view.position.x, view.position.y, view.size.x, view.size.y))
+		_mat.set_shader_parameter("walls", _walls_tex)
+		_mat.set_shader_parameter("board", Vector2(grid.width, grid.height))
+		_mesh.instance_count = _static.size()
 		for i in _static.size():
-			_put(i, _static[i], view, t)
+			_put(_mesh, i, _static[i], view, t)
+		_svp.render_target_update_mode = SubViewport.UPDATE_ONCE
+	# Dynamic pass: the cached map copied 1:1, the few flickering lights added on top.
+	if dynamic.size() > _dmesh.instance_count:
+		_dmesh.instance_count = maxi(64, dynamic.size() * 2)
 	for i in dynamic.size():
-		_put(_static.size() + i, dynamic[i], view, t)
-	_mesh.visible_instance_count = _static.size() + dynamic.size()
-	lights = _mesh.visible_instance_count
+		_put(_dmesh, i, dynamic[i], view, t)
+	_dmesh.visible_instance_count = dynamic.size()
+	lights = _static.size() + dynamic.size()
 	last_instances = lights
 	redraws += 1
 	_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
 
-func _put(i: int, l: Array, view: Rect2i, t: float) -> void:
+func _put(mesh: MultiMesh, i: int, l: Array, view: Rect2i, t: float) -> void:
 	var at: Vector2 = l[0]
 	var radius: float = l[1]
-	_mesh.set_instance_transform_2d(i, Transform2D(0.0, Vector2(radius, radius) * t, 0.0,
+	mesh.set_instance_transform_2d(i, Transform2D(0.0, Vector2(radius, radius) * t, 0.0,
 			(at - Vector2(view.position)) * t))
-	_mesh.set_instance_custom_data(i, Color(at.x, at.y, radius, l[2]))
-	_mesh.set_instance_color(i, l[3])
+	mesh.set_instance_custom_data(i, Color(at.x, at.y, radius, l[2]))
+	mesh.set_instance_color(i, l[3])
 
 ## Space backdrops (stars) are never darkened; grass and soil share the ambient.
 func _outside() -> Color:

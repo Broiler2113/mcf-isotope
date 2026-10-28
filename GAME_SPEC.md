@@ -4720,6 +4720,11 @@ Follow-up on the same branch:
   ray per gas cell × eye (400 ms an action on 149×119 with long smoke).
 - At the default AI speed a giant AI battle costs about what an idle one does (llvmpipe fit
   40 ms vs 37 ms); what's left is render, not per-action script.
+- Dynamic lighting: static lamps render into a cached light map of their own (a child
+  viewport, redrawn only for a new view, texel density, lamp index, wall mask or ambient);
+  fire flicker, flashes and muzzle fire draw over a 1:1 copy of it. Before, each flicker
+  re-marched every lamp on screen (~420 zoomed out). Fitted giant with 30 fires, lighting on:
+  198 → 65 ms a frame on llvmpipe; output identical pixel for pixel.
 
 ## Issues PDF (6) follow-up
 
