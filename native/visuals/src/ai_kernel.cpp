@@ -45,6 +45,8 @@ protected:
         ClassDB::bind_method(D_METHOD("line_targets", "width", "height", "enemies", "xy"), &MCFAI::line_targets);
         ClassDB::bind_method(D_METHOD("assign_candidates", "rows", "gun_spread", "radius", "spread_max", "zone_of", "zone_caps"), &MCFAI::assign_candidates);
         ClassDB::bind_method(D_METHOD("nearest_index", "from", "xy"), &MCFAI::nearest_index);
+        ClassDB::bind_method(D_METHOD("line_slots", "from", "xy"), &MCFAI::line_slots);
+        ClassDB::bind_method(D_METHOD("near_slots", "at", "xy", "radius"), &MCFAI::near_slots);
     }
 public:
     int64_t api_version() const { return 1; }
@@ -182,6 +184,34 @@ public:
         }
         result.push_back(destinations);
         result.push_back(scores);
+        return result;
+    }
+
+    // GameState.slots_on_lines: the rows (x, y per unit) on a firing line from `from` (its row,
+    // column or a diagonal; `from` itself is not), in row order.
+    PackedInt32Array line_slots(const Vector2i &from, const PackedInt32Array &xy) const {
+        PackedInt32Array result;
+        if (xy.size() % 2 != 0) return result;
+        for (int64_t i = 0; i < xy.size(); i += 2) {
+            const int64_t dx = static_cast<int64_t>(xy[i]) - from.x;
+            const int64_t dy = static_cast<int64_t>(xy[i + 1]) - from.y;
+            if ((dx == 0 && dy == 0) || (dx != 0 && dy != 0 && std::abs(dx) != std::abs(dy))) continue;
+            result.push_back(static_cast<int32_t>(i / 2));
+        }
+        return result;
+    }
+
+    // GameState.slots_near: the rows within `radius` cells of `at` (Chebyshev; `at` itself is
+    // not), in row order.
+    PackedInt32Array near_slots(const Vector2i &at, const PackedInt32Array &xy, int64_t radius) const {
+        PackedInt32Array result;
+        if (xy.size() % 2 != 0 || radius < 0) return result;
+        for (int64_t i = 0; i < xy.size(); i += 2) {
+            const int64_t dx = std::abs(static_cast<int64_t>(xy[i]) - at.x);
+            const int64_t dy = std::abs(static_cast<int64_t>(xy[i + 1]) - at.y);
+            if (dx > radius || dy > radius || (dx == 0 && dy == 0)) continue;
+            result.push_back(static_cast<int32_t>(i / 2));
+        }
         return result;
     }
 

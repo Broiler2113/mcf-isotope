@@ -181,6 +181,39 @@ func alive_rows() -> PackedByteArray:
 	unit_xy()
 	return _alive
 
+## Indices in all_units() of the units on a firing line from `from` (its row, column or a
+## diagonal; a unit on `from` itself is not), ascending: what target scans test first, on the
+## flat coordinates and natively when the kernel is there.
+func slots_on_lines(from: Vector2i) -> PackedInt32Array:
+	var xy := unit_xy()
+	var native := NativeKernels.ai()
+	if native != null:
+		return native.line_slots(from, xy)
+	var out := PackedInt32Array()
+	for i in xy.size() / 2:
+		var dx: int = xy[i * 2] - from.x
+		var dy: int = xy[i * 2 + 1] - from.y
+		if (dx == 0 and dy == 0) or (dx != 0 and dy != 0 and absi(dx) != absi(dy)):
+			continue
+		out.append(i)
+	return out
+
+## Indices in all_units() of the units within `radius` cells of `at` (Chebyshev; a unit on `at`
+## itself is not), ascending; natively when the kernel is there.
+func slots_near(at: Vector2i, radius: int) -> PackedInt32Array:
+	var xy := unit_xy()
+	var native := NativeKernels.ai()
+	if native != null:
+		return native.near_slots(at, xy, radius)
+	var out := PackedInt32Array()
+	for i in xy.size() / 2:
+		var dx := absi(xy[i * 2] - at.x)
+		var dy := absi(xy[i * 2 + 1] - at.y)
+		if dx > radius or dy > radius or (dx == 0 and dy == 0):
+			continue
+		out.append(i)
+	return out
+
 ## Indices in all_units() of this state's units logged (UnitInstance.vision_log) since log
 ## position pos, ascending and unique; null when the log no longer reaches back to pos or the
 ## unit list is another one than at pos (the caller then looks at everyone).

@@ -9,7 +9,8 @@ extends "res://tests/SuiteBase.gd"
 ##     pass collected: each unit's kind and the cells a living unit holds;
 ##   • hostile_target_ids / capturable_target_ids == the whole-army scans they replaced;
 ##   • alive_rows, captives(), tracked_bodies() and each action's visual_deaths == a whole pass;
-##   • no sleeper the wake-up check left unasked (nothing on its lines changed) sees a soldier.
+##   • no sleeper the wake-up check left unasked (nothing on its lines changed) sees a soldier;
+##   • the AI's kept enemy count and nearest-enemy candidates == a whole pass.
 ## Steps mix AI decisions, random legal intents, undo/redo (a restore: a new unit list), side
 ## swaps and spawns (cheats do both), on town and station maps with civilians, tanks, shuttles
 ## and drones; now and then a cell's occupant is lifted with no unit logged (the walk log path).
@@ -20,15 +21,15 @@ const STEPS := 220
 
 var _pending: Intent = null
 var _n := {"steps": 0, "fog": 0, "partial": 0, "wake": 0, "targets": 0, "pokes": 0,
-		"deaths": 0, "captives": 0, "bodies": 0, "quiet": 0}
+		"deaths": 0, "captives": 0, "bodies": 0, "quiet": 0, "ai": 0}
 
 func run() -> void:
 	for style: int in [MapGen.Style.TOWN, MapGen.Style.STATION]:
 		for seed_value: int in [11, 12, 15]:
 			_play(style, seed_value)
-	print("unit log: %d steps, %d fog checks (%d on the unit list of the last pass), %d wake-up rows, %d target lists, %d occupant pokes, %d deaths, %d captive and %d body rows, %d unasked sleepers re-checked" % [
+	print("unit log: %d steps, %d fog checks (%d on the unit list of the last pass), %d wake-up rows, %d target lists, %d occupant pokes, %d deaths, %d captive and %d body rows, %d unasked sleepers re-checked, %d AI enemy lists" % [
 			_n["steps"], _n["fog"], _n["partial"], _n["wake"], _n["targets"], _n["pokes"],
-			_n["deaths"], _n["captives"], _n["bodies"], _n["quiet"]])
+			_n["deaths"], _n["captives"], _n["bodies"], _n["quiet"], _n["ai"]])
 
 func _play(style: int, seed_value: int) -> void:
 	GameConfig.random_events_enabled = false   # a wave landing after the check is seen next action
@@ -110,6 +111,8 @@ func _play(style: int, seed_value: int) -> void:
 						tag, step, what, missed])
 		_n["steps"] += 1
 		var why := _check(st, r, ref)
+		if why == "":
+			why = _check_ai(st, r, brains)
 		if why == "" and step % 9 == 0:
 			# A cell losing its living occupant with no unit logged (only GridCell's walk log
 			# says so), checked, then given back.
@@ -227,6 +230,29 @@ func _quiet_but_seeing(st: GameState, r: GameActionResolver) -> Array:
 	for i in quiet.size():
 		if sees[i] != 0: out.append(quiet[i])
 	return out
+
+## AIController's kept enemy lists (_living_enemy_count, _nearest_enemy's candidates) == a
+## whole pass, for both brains, as a new decision would read them.
+func _check_ai(st: GameState, r: GameActionResolver, brains: Dictionary) -> String:
+	for side: int in brains:
+		var ai: AIController = brains[side]
+		var living := 0
+		var near: Array[UnitInstance] = []
+		var xy := PackedInt32Array()
+		for u: UnitInstance in st.all_units():
+			if u.owner != side and u.is_alive():
+				living += 1
+				if not CivilianAI.is_npc(u):
+					near.append(u)
+					xy.append_array([u.coord.x, u.coord.y])
+		if ai._living_enemy_count(st) != living:
+			return "side %d counts %d living enemies, a whole pass %d" % [side, ai._living_enemy_count(st), living]
+		ai._decide_gen += 1
+		ai._nearest_enemy(st, Vector2i.ZERO, false, r)
+		if ai._near_units != near or ai._near_xy != xy:
+			return "side %d nearest-enemy candidates differ from a whole pass" % side
+		_n["ai"] += 1
+	return ""
 
 ## The scans as they were before unit_xy.
 func _hostile_whole(r: GameActionResolver, shooter: UnitInstance) -> Array:

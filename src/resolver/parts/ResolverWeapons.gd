@@ -1772,15 +1772,10 @@ func throw_blocked(from_coord: Vector2i, to_coord: Vector2i) -> bool:
 func capturable_target_ids(actor: UnitInstance) -> Array:
 	var out: Array = []
 	var at := actor.coord
-	# Adjacency first, on the flat coordinates (pure checks, same set and order): it rejects
-	# nearly everyone without touching a unit.
+	# Adjacency first (GameState.slots_near, on the flat coordinates; pure checks, same set and
+	# order): it rejects nearly everyone without touching a unit.
 	var units := state.all_units()
-	var xy := state.unit_xy()
-	for i in units.size():
-		var dx := absi(xy[i * 2] - at.x)
-		var dy := absi(xy[i * 2 + 1] - at.y)
-		if dx > 1 or dy > 1 or (dx == 0 and dy == 0):
-			continue
+	for i: int in state.slots_near(at, 1):
 		var u: UnitInstance = units[i]
 		if u.id == actor.id or u.captor_id != -1 or u.aboard_vehicle_id != -1:
 			continue

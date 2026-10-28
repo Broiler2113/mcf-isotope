@@ -786,18 +786,11 @@ func hostile_target_ids(shooter: UnitInstance) -> Array:
 	var out: Array = []
 	var from: Vector2i = shooter.coord
 	var sid: int = shooter.id
-	# The firing line first, on the flat coordinates (GameState.unit_xy): a few integer
-	# comparisons reject almost the whole army without touching a unit, and the checks are all
-	# pure, so their order changes neither the set nor its order.
+	# The firing line first (GameState.slots_on_lines, on the flat coordinates): it rejects
+	# almost the whole army without touching a unit, and the checks are all pure, so their
+	# order changes neither the set nor its order.
 	var units := state.all_units()
-	var xy := state.unit_xy()
-	var fx := from.x
-	var fy := from.y
-	for i in units.size():
-		var dx: int = xy[i * 2] - fx
-		var dy: int = xy[i * 2 + 1] - fy
-		if (dx == 0 and dy == 0) or (dx != 0 and dy != 0 and absi(dx) != absi(dy)):
-			continue
+	for i: int in state.slots_on_lines(from):
 		var u: UnitInstance = units[i]
 		if u.id == sid or not u.is_on_field():
 			continue
