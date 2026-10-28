@@ -210,8 +210,20 @@ var carried_corpses: int = 0:
 		carried_corpses = v
 		look_epoch += 1
 		look_stamp = look_epoch
-var corpse_carrier_id: int = -1
-var corpse_stacked := false
+var corpse_carrier_id: int = -1:
+	set(v):
+		if corpse_carrier_id == v:
+			return
+		corpse_carrier_id = v
+		corpse_epoch += 1
+var corpse_stacked: bool = false:
+	set(v):
+		if corpse_stacked == v:
+			return
+		corpse_stacked = v
+		corpse_epoch += 1
+## Moves whenever any unit's corpse_carrier_id or corpse_stacked changes: GameState.tracked_bodies.
+static var corpse_epoch: int = 0
 ## Клетка с лёгким объектом (мешки/ёж/куча), который юнит тащит за собой (#34).
 ## Пока объект в руках, движение идёт с тем же штрафом, что и перенос пленника.
 const NOT_DRAGGING := Vector2i(-9999, -9999)

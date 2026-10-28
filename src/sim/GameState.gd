@@ -117,6 +117,39 @@ var _held_by: Dictionary = {}
 var _held_epoch := -1
 var _held_list: Array = []
 
+## Units with a captor (captor_id != -1), in all_units() order: what the per-action captive
+## check walks instead of the whole army. Rebuilt on the same signal as held_by's index.
+func captives() -> Array:
+	var list := all_units()
+	if _captive_epoch != UnitInstance.hold_epoch or not is_same(list, _captive_list):
+		_captive_epoch = UnitInstance.hold_epoch
+		_captive_list = list
+		_captives = []
+		for u: UnitInstance in list:
+			if u.captor_id != -1: _captives.append(u)
+	return _captives
+
+var _captives: Array = []
+var _captive_epoch := -1
+var _captive_list: Array = []
+
+## Bodies stacked in a pile or carried (corpse_stacked or corpse_carrier_id >= 0), in all_units()
+## order: CorpseIdentity.cleanup's candidates after every action. Rebuilt when either field of
+## any unit changes (UnitInstance.corpse_epoch) or the unit list does.
+func tracked_bodies() -> Array:
+	var list := all_units()
+	if _bodies_epoch != UnitInstance.corpse_epoch or not is_same(list, _bodies_list):
+		_bodies_epoch = UnitInstance.corpse_epoch
+		_bodies_list = list
+		_bodies = []
+		for u: UnitInstance in list:
+			if u.corpse_stacked or u.corpse_carrier_id >= 0: _bodies.append(u)
+	return _bodies
+
+var _bodies: Array = []
+var _bodies_epoch := -1
+var _bodies_list: Array = []
+
 func all_units() -> Array:
 	if _units_dirty or _unit_list.size() != units.size():
 		_unit_list = units.values()
@@ -137,9 +170,16 @@ func unit_xy() -> PackedInt32Array:
 		if i >= 0 and is_same(list[i], u):
 			_xy[i * 2] = u.coord.x
 			_xy[i * 2 + 1] = u.coord.y
+			_alive[i] = 1 if u.status == MCF.Status.ALIVE else 0
 		k += 1
 	_xy_pos = UnitInstance.vision_log_end()
 	return _xy
+
+## 1 per living unit, 0 otherwise, in all_units() order; kept like unit_xy. Packed arrays are
+## shared, not copied: a caller keeping the statuses of a moment duplicates them.
+func alive_rows() -> PackedByteArray:
+	unit_xy()
+	return _alive
 
 ## Indices in all_units() of this state's units logged (UnitInstance.vision_log) since log
 ## position pos, ascending and unique; null when the log no longer reaches back to pos or the
@@ -182,15 +222,18 @@ func _sync_unit_rows() -> Array:
 	_xy_list = list
 	_xy_slot.clear()
 	_xy.resize(list.size() * 2)
+	_alive.resize(list.size())
 	for i in list.size():
 		var u: UnitInstance = list[i]
 		_xy_slot[u.id] = i
 		_xy[i * 2] = u.coord.x
 		_xy[i * 2 + 1] = u.coord.y
+		_alive[i] = 1 if u.status == MCF.Status.ALIVE else 0
 	_xy_pos = UnitInstance.vision_log_end()
 	return list
 
 var _xy := PackedInt32Array()
+var _alive := PackedByteArray()
 var _xy_slot: Dictionary = {}   # unit id -> index in _xy_list
 var _xy_list: Array = []
 var _xy_pos := -1

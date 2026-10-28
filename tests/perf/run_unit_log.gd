@@ -7,7 +7,8 @@ extends "res://tests/SuiteBase.gd"
 ##     forced whole every time;
 ##   • the wake-up check's kept input (ResolverWorld._sync_wake_rows) == what the whole-army
 ##     pass collected: each unit's kind and the cells a living unit holds;
-##   • hostile_target_ids / capturable_target_ids == the whole-army scans they replaced.
+##   • hostile_target_ids / capturable_target_ids == the whole-army scans they replaced;
+##   • alive_rows, captives(), tracked_bodies() and each action's visual_deaths == a whole pass.
 ## Steps mix AI decisions, random legal intents, undo/redo (a restore: a new unit list), side
 ## swaps and spawns (cheats do both), on town and station maps with civilians, tanks, shuttles
 ## and drones; now and then a cell's occupant is lifted with no unit logged (the walk log path).
@@ -17,14 +18,16 @@ const SQUAD := ["light_infantry", "engineer", "flamethrower", "miner", "sapper",
 const STEPS := 220
 
 var _pending: Intent = null
-var _n := {"steps": 0, "fog": 0, "partial": 0, "wake": 0, "targets": 0, "pokes": 0}
+var _n := {"steps": 0, "fog": 0, "partial": 0, "wake": 0, "targets": 0, "pokes": 0,
+		"deaths": 0, "captives": 0, "bodies": 0}
 
 func run() -> void:
 	for style: int in [MapGen.Style.TOWN, MapGen.Style.STATION]:
 		for seed_value: int in [11, 12]:
 			_play(style, seed_value)
-	print("unit log: %d steps, %d fog checks (%d on the unit list of the last pass), %d wake-up rows, %d target lists, %d occupant pokes" % [
-			_n["steps"], _n["fog"], _n["partial"], _n["wake"], _n["targets"], _n["pokes"]])
+	print("unit log: %d steps, %d fog checks (%d on the unit list of the last pass), %d wake-up rows, %d target lists, %d occupant pokes, %d deaths, %d captive and %d body rows" % [
+			_n["steps"], _n["fog"], _n["partial"], _n["wake"], _n["targets"], _n["pokes"],
+			_n["deaths"], _n["captives"], _n["bodies"]])
 
 func _play(style: int, seed_value: int) -> void:
 	var m := MapGen.generate({"style": style, "size": 1, "seed": seed_value, "civilians": 6})
@@ -85,8 +88,19 @@ func _play(style: int, seed_value: int) -> void:
 				var legal: Array = r.legal_intents(side)
 				intent = legal[rng.randi_range(0, legal.size() - 1)]
 			what = intent.get_script().resource_path.get_file().get_basename()
-			if not r.resolve(intent).ok:
+			var was := {}
+			for u: UnitInstance in st.all_units():
+				if u.is_alive(): was[u.id] = true
+			var res := r.resolve(intent)
+			if not res.ok:
 				brains[side].notify_intent_denied(st)
+			else:
+				var fell: Array[int] = []
+				for u: UnitInstance in st.all_units():
+					if was.has(u.id) and not u.is_alive(): fell.append(u.id)
+				ck(res.visual_deaths == fell, "%s step %d after %s: visual deaths %s, a whole pass %s" % [
+						tag, step, what, res.visual_deaths, fell])
+				_n["deaths"] += fell.size()
 		_n["steps"] += 1
 		var why := _check(st, r, ref)
 		if why == "" and step % 9 == 0:
@@ -110,6 +124,21 @@ func _check(st: GameState, r: GameActionResolver, ref: GameActionResolver) -> St
 		xy.append_array([u.coord.x, u.coord.y])
 	if st.unit_xy() != xy:
 		return "unit_xy differs from the units' coords"
+	var alive := PackedByteArray()
+	var captives: Array = []
+	var bodies: Array = []
+	for u: UnitInstance in units:
+		alive.append(1 if u.is_alive() else 0)
+		if u.captor_id != -1: captives.append(u)
+		if u.corpse_stacked or u.corpse_carrier_id >= 0: bodies.append(u)
+	if st.alive_rows() != alive:
+		return "alive_rows differs from the units' statuses"
+	if st.captives() != captives:
+		return "captives() differs from a whole pass"
+	if st.tracked_bodies() != bodies:
+		return "tracked_bodies() differs from a whole pass"
+	_n["captives"] += captives.size()
+	_n["bodies"] += bodies.size()
 	for side: int in [MCF.Owner.PLAYER_1, MCF.Owner.PLAYER_2]:
 		var partial: bool = is_same(r._vis_units_of.get(side), units) \
 				and int(r._vis_pos.get(side, -1)) >= UnitInstance.vision_log_start
