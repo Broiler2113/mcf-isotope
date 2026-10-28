@@ -334,23 +334,32 @@ func _seed_sight_activation() -> void:
 func _native_sight_activation(scorer: RefCounted) -> void:
 	var grid := state.grid
 	var gw := grid.width
+	var gh := grid.height
+	var cells := grid.cells_flat()
 	var targets := PackedInt32Array()
 	var occupied := PackedInt32Array()
 	var waiting: Array = []
 	var xy := PackedInt32Array()
+	# Run on every action over the whole army: CivilianAI.is_soldier and _is_civilian are
+	# inlined (the unit is alive here), and sides are asked once each.
+	var side_kind := {}   # owner -> 1 player, 2 neutral, 0 neither
 	for u: UnitInstance in state.all_units():
-		if not u.is_alive():
+		if u.status != MCF.Status.ALIVE:
 			continue
 		var c := u.coord
-		var on_board := grid.in_bounds(c)
+		var on_board := c.x >= 0 and c.y >= 0 and c.x < gw and c.y < gh
 		# Living units block a civilian's sight: the cells they hold.
-		if on_board and grid.cell_fast(c.x, c.y).occupant == u:
+		if on_board and cells[c.y * gw + c.x].occupant == u:
 			occupied.append(c.y * gw + c.x)
-		if CivilianAI.is_soldier(u):
+		var kind: Variant = side_kind.get(u.owner)
+		if kind == null:
+			kind = 1 if MCF.is_player(u.owner) else (2 if MCF.is_neutral(u.owner) else 0)
+			side_kind[u.owner] = kind
+		if kind == 1 and not u.is_drone:
 			if on_board:   # crew inside a tank are off the board: unseen
 				targets.append(c.x)
 				targets.append(c.y)
-		elif _is_civilian(u) and u.neutral_group == 0 and not _activation_frontier.has(u.id):
+		elif kind == 2 and u.neutral_group == 0 and not _activation_frontier.has(u.id):
 			waiting.append(u)
 			xy.append(c.x)
 			xy.append(c.y)

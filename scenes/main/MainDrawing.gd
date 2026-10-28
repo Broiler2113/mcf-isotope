@@ -962,6 +962,14 @@ func _draw() -> void:
 class UnitSprite extends Node2D:
 	var key: Array = []
 	var shown_frame := -1
+	## The unit's look_stamp, cell and the board's _unit_look when key was built: all standing,
+	## so does the key.
+	var stamp := -1
+	var look: Array = []
+	## Script-side copies of position and visible: reading the node's own costs an engine call.
+	var off := Vector2.ZERO
+	var shown := true
+	var at := Vector2i(-99999, -99999)
 	var host: Object
 
 	func _draw() -> void:
@@ -978,6 +986,12 @@ var _unit_top_live := false
 ## it stands, a redraw (a pan inside the margin, a hover preview) skips the soldiers entirely.
 var _unit_sig: Array = []
 var _unit_visible: Dictionary = {}
+## The part of _unit_sig every soldier's key reads (selection, zoom detail, features, ...).
+## Kept as the same array while it stands: a sprite built against another one (it was hidden
+## or off screen when this changed) builds its key again.
+var _unit_look: Array = []
+## Soldiers the last pass drew mid-walk (_walk_cells, _walk_offset).
+var _unit_walkers: Array = []
 const UNIT_CULL_SNAP := 16
 
 func _make_unit_layers() -> void:
@@ -992,6 +1006,7 @@ func _make_unit_layers() -> void:
 ## Board settings (colours, sizes) change soldiers' looks outside the battle's state.
 func _forget_unit_keys() -> void:
 	_unit_sig = []
+	_unit_look = []
 
 ## Both layers show only while the board itself draws its live layers.
 func _show_unit_layers(on: bool) -> void:
@@ -1010,23 +1025,48 @@ func _sync_unit_layer(visible: Dictionary, fog_on: bool, viewer: int, vx0: int, 
 	vy0 = floori(vy0 / float(UNIT_CULL_SNAP)) * UNIT_CULL_SNAP
 	vx1 = (floori(vx1 / float(UNIT_CULL_SNAP)) + 1) * UNIT_CULL_SNAP
 	vy1 = (floori(vy1 / float(UNIT_CULL_SNAP)) + 1) * UNIT_CULL_SNAP
-	var sig := [state.get_instance_id(), state.revision, UnitInstance.vision_epoch, UnitInstance.vision_world,
-		_history_epoch, selected_id, _group_ids.hash(), zoom >= UNIT_DETAIL_ZOOM, viewer, fog_on,
-		visible.size(), _ap_display.hash(), _pending_death_ids.hash(), vx0, vx1, vy0, vy1]
+	# Trench under a soldier and a drone operator's station: features. Wave colours: wave_owner.
+	# The AP held on show during a roll is compared per soldier (it changes every action).
+	var look := [state.get_instance_id(), _history_epoch, selected_id, _group_ids.hash(), zoom >= UNIT_DETAIL_ZOOM,
+		viewer, fog_on, GridCell.feature_version, state.turns.wave_owner, vx0, vx1, vy0, vy1]
+	var sig := [look, state.revision, UnitInstance.vision_epoch, UnitInstance.vision_world, UnitInstance.look_epoch,
+		visible.size(), _ap_display.hash(), _pending_death_ids.hash()]
 	var moving := not _walk_cells.is_empty() or not _walk_offset.is_empty()
-	if not moving and sig == _unit_sig and is_same(visible, _unit_visible):
+	var same := sig == _unit_sig and is_same(visible, _unit_visible)
+	if not moving and same and _unit_walkers.is_empty():
 		return
+	# Nothing but a walk playing: only the walkers move (and the last pass's, to settle them
+	# where they stopped). A walking drone lives in the layer above: the full pass lists it.
+	var units: Array = state.all_units()
+	var partial := same
+	if partial:
+		var ids := {}
+		for id: int in _walk_cells: ids[id] = true
+		for id: int in _walk_offset: ids[id] = true
+		for id: int in _unit_walkers: ids[id] = true
+		units = []
+		for id: int in ids:
+			var wu := state.get_unit(id)
+			if wu == null or wu.is_drone:
+				partial = false
+				units = state.all_units()
+				break
+			units.append(wu)
+	_unit_walkers = _walk_cells.keys() + _walk_offset.keys()
 	_unit_sig = sig
+	if look != _unit_look:
+		_unit_look = look
 	_unit_visible = visible
 	_unit_frame += 1
-	_top_drones = []
+	if not partial: _top_drones = []
 	var walking := not _walk_cells.is_empty()
 	var side_cols: Dictionary = {}
+	var allied: Dictionary = {}   # owner -> allied with the viewer
 	var has_group := not _group_ids.is_empty()
 	var ap_held := not _ap_display.is_empty()
 	var details := zoom >= UNIT_DETAIL_ZOOM
 	var grid := state.grid
-	for unit: UnitInstance in state.all_units():
+	for unit: UnitInstance in units:
 		# Экипаж танка на поле не рисуется (§техника): он за краем поля, и отсечение по окну
 		# ниже его отбрасывает. Пассажир челнока — поверх корпуса, в клетке своего кресла.
 		# Во время проигрывания шагов житель рисуется на промежуточной клетке (#96),
@@ -1038,9 +1078,13 @@ func _sync_unit_layer(visible: Dictionary, fog_on: bool, viewer: int, vx0: int, 
 			continue
 		# Туман войны (§3.9): чужой юнит виден, только если его клетку видит команда.
 		var uown := unit.owner
-		if uown != viewer and not state.roster.are_allies(viewer, uown) and fog_on \
-				and (grid.cell(at).obscured() or not visible.has(at)):
-			continue
+		if fog_on and uown != viewer:
+			var ally: Variant = allied.get(uown)
+			if ally == null:
+				ally = state.roster.are_allies(viewer, uown)
+				allied[uown] = ally
+			if not ally and (not visible.has(at) or grid.cell_fast(at.x, at.y).obscured()):
+				continue
 		# Смерть в текущем действии показываем лишь ПОСЛЕ анимации броска (#46):
 		# пока крутится кубик, погибший рисуется как живой юнит.
 		# Corpses are drawn in the final ground pass, above fire.
@@ -1051,49 +1095,67 @@ func _sync_unit_layer(visible: Dictionary, fog_on: bool, viewer: int, vx0: int, 
 			# бойцами, чтобы дрон гарантированно был поверх корпуса, над которым висит.
 			_top_drones.append({"unit": unit, "at": at})
 			continue
-		var cols: Array = side_cols.get(uown, [])
-		if cols.is_empty():
-			var sc := _side_color(uown)
-			cols = [sc, sc.darkened(0.45), _ink(sc)]
-			side_cols[uown] = cols
-		var driver := false
-		if unit.aboard_vehicle_id != -1:
-			var dveh := state.get_vehicle(unit.aboard_vehicle_id)
-			driver = dveh != null and dveh.driver_id() == unit.id
-		var group := unit.neutral_group
-		if MCF.is_independent(uown): group = uown - MCF.INDEPENDENT_BASE + 1
-		var skey := _sprite_key(unit)
-		var key := [at, skey, grid.cell_fast(at.x, at.y).feature_id == MCF.FEATURE_TRENCH,
-			cols, details, _tag_line(unit) if skey == "" and details else null,
-			MCF.is_independent(uown) and state.roster.faction_suffix_of(uown) == "_neutral",
-			unit.id == selected_id, driver, MCF.is_neutral(uown) and unit.civilian_active, group,
-			has_group and _group_set.has(unit.id), unit.is_held(),
-			unit.action_state != null and unit.action_state.is_pending(),
-			(unit.remaining_ap if not ap_held else int(_ap_display.get(unit.id, unit.remaining_ap))) if details else -1,
-			_gear_checked(unit) and resolver.unit_missing_equipment(unit), unit.carried_corpses]
 		var sprite: UnitSprite = _unit_sprites.get(unit.id)
 		if sprite == null:
 			sprite = UnitSprite.new()
 			sprite.host = self
 			_unit_layer.add_child(sprite)
 			_unit_sprites[unit.id] = sprite
-		if sprite.key != key:
-			sprite.key = key
-			sprite.queue_redraw()
+		# Riders (the driver mark reads the vehicle), bursts (ActionState changes in place) and
+		# drone operators (their station is on the board) are asked every pass.
+		var ap_shown := (unit.remaining_ap if not ap_held else int(_ap_display.get(unit.id, unit.remaining_ap))) if details else -1
+		if not is_same(sprite.look, _unit_look) or sprite.stamp != unit.look_stamp or sprite.at != at or unit.action_state != null \
+				or unit.aboard_vehicle_id != -1 or unit.stats.special_ability_id == MCF.ABILITY_DRONE_OPERATOR \
+				or sprite.key[14] != ap_shown:
+			sprite.stamp = unit.look_stamp
+			sprite.at = at
+			sprite.look = _unit_look
+			var cols: Array = side_cols.get(uown, [])
+			if cols.is_empty():
+				var sc := _side_color(uown)
+				cols = [sc, sc.darkened(0.45), _ink(sc)]
+				side_cols[uown] = cols
+			var driver := false
+			if unit.aboard_vehicle_id != -1:
+				var dveh := state.get_vehicle(unit.aboard_vehicle_id)
+				driver = dveh != null and dveh.driver_id() == unit.id
+			var group := unit.neutral_group
+			if MCF.is_independent(uown): group = uown - MCF.INDEPENDENT_BASE + 1
+			var skey := _sprite_key(unit)
+			var key := [at, skey, grid.cell_fast(at.x, at.y).feature_id == MCF.FEATURE_TRENCH,
+				cols, details, _tag_line(unit) if skey == "" and details else null,
+				MCF.is_independent(uown) and state.roster.faction_suffix_of(uown) == "_neutral",
+				unit.id == selected_id, driver, MCF.is_neutral(uown) and unit.civilian_active, group,
+				has_group and _group_set.has(unit.id), unit.is_held(),
+				unit.action_state != null and unit.action_state.is_pending(),
+				ap_shown, _gear_checked(unit) and resolver.unit_missing_equipment(unit), unit.carried_corpses]
+			if sprite.key != key:
+				sprite.key = key
+				sprite.queue_redraw()
 		# Плавный шаг: рисунок бойца сдвинут на долю пути к следующей клетке.
-		var woff: Vector2 = _walk_offset.get(unit.id, Vector2.ZERO)
-		if sprite.position != woff:
+		var woff: Vector2 = _walk_offset.get(unit.id, Vector2.ZERO) if moving else Vector2.ZERO
+		if sprite.off != woff:
+			sprite.off = woff
 			sprite.position = woff
-		if not sprite.visible:
+		if not sprite.shown:
+			sprite.shown = true
 			sprite.visible = true
 		sprite.shown_frame = _unit_frame
+	if partial:
+		for unit: UnitInstance in units:
+			var ws: UnitSprite = _unit_sprites.get(unit.id)
+			if ws != null and ws.shown_frame != _unit_frame and ws.shown:
+				ws.shown = false
+				ws.visible = false
+		return
 	var gone: Array = []
 	for id: int in _unit_sprites:
 		var sp: UnitSprite = _unit_sprites[id]
 		if sp.shown_frame != _unit_frame:
 			if not state.units.has(id):
 				gone.append(id)
-			elif sp.visible:
+			elif sp.shown:
+				sp.shown = false
 				sp.visible = false
 	for id: int in gone:
 		(_unit_sprites[id] as UnitSprite).queue_free()

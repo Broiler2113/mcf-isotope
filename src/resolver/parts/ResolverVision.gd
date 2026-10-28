@@ -378,13 +378,30 @@ func _local_seen(key: Vector4i) -> Variant:
 func _finish_seen(key: Vector4i, origin: int, res: Array, transient := false) -> PackedInt32Array:
 	# A wall face is visible; a gas-filled cell conceals its occupants. Keep the
 	# sweep and its incremental invalidation, filtering only while gas exists.
+	# _sight_gas is exactly the obscured cells here (_sync_seen ran first). A few clouds against
+	# a view of thousands of cells: look the clouds up in the sorted view instead of asking
+	# every cell (0.3 ms a view; a broken wall re-swept 150 views while smoke hung anywhere).
 	if not _sight_gas.is_empty():
-		var clear := PackedInt32Array()
-		var cells := state.grid.cells_flat()
-		for i: int in res[0]:
-			if not cells[i].obscured():
-				clear.append(i)
-		res[0] = clear
+		var vis: PackedInt32Array = res[0]
+		var drop := PackedInt32Array()
+		if _sight_gas.size() < vis.size():
+			for g: int in _sight_gas:
+				var k := vis.bsearch(g)
+				if k < vis.size() and vis[k] == g:
+					drop.append(k)
+			drop.sort()
+		else:
+			for k in vis.size():
+				if _sight_gas.has(vis[k]):
+					drop.append(k)
+		if not drop.is_empty():
+			var clear := PackedInt32Array()
+			var from := 0
+			for k: int in drop:
+				clear.append_array(vis.slice(from, k))
+				from = k + 1
+			clear.append_array(vis.slice(from))
+			res[0] = clear
 	if transient:
 		_local_seen(key)   # сверить версию стен до записи
 		if _seen_local.size() >= 512:
