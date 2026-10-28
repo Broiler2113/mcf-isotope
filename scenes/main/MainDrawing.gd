@@ -60,9 +60,10 @@ func _draw_before(ci: Node2D) -> void:
 		var skey := _sprite_key(unit)
 		if skey == "" or not Sprites.draw_texture_override(ci, skey, o, CELL):
 			var col := _side_color(int(u[1]))
-			ci.draw_circle(c, CELL * 0.34, col)
+			# Outline = a darker disc under the fill: the 1.5 px ring's edges, batched (see Sprites.draw_disc).
+			if details: Sprites.draw_disc(ci, c, CELL * 0.34 + 0.75, col.darkened(0.45))
+			Sprites.draw_disc(ci, c, CELL * 0.34 - (0.75 if details else 0.0), col)
 			if details:
-				ci.draw_arc(c, CELL * 0.34, 0, TAU, 20, col.darkened(0.45), 1.5)
 				_tag_line(unit).draw(ci.get_canvas_item(), c + Vector2(-9, 5 - 16 * 0.8), _ink(col))
 	Sprites.set_base_transform(pan, Vector2(zoom, zoom))
 
@@ -916,7 +917,7 @@ func _draw() -> void:
 			# рисуются у него самого.
 			var vap: int = 0 if veh.seated() else maxi(0, veh.ap)
 			for i in vap:
-				draw_circle(org + Vector2(vsize.x - 8 - i * 8, 8), 3, Color(1, 1, 0.4))
+				Sprites.draw_disc(self, org + Vector2(vsize.x - 8 - i * 8, 8), 3, Color(1, 1, 0.4))
 			# Станция в кресле (issues-12 #7) — поверх корпуса и в полёте вместе с ним; под
 			# корпусом её не было видно, а в переезде она прыгала в конец пути раньше машины.
 			if veh.seated():
@@ -1183,9 +1184,10 @@ func _draw_unit_sprite(sp: UnitSprite) -> void:
 	if skey != "":
 		Sprites.draw_texture_override(sp, skey, uorg, usz)
 	else:
-		sp.draw_circle(ucenter, usz * 0.34, cols[0])
+		# Outline = a darker disc under the fill: the 1.5 px ring's edges, batched (see Sprites.draw_disc).
+		if details: Sprites.draw_disc(sp, ucenter, usz * 0.34 + 0.75, cols[1])
+		Sprites.draw_disc(sp, ucenter, usz * 0.34 - (0.75 if details else 0.0), cols[0])
 		if details:
-			sp.draw_arc(ucenter, usz * 0.34, 0, TAU, 20, cols[1], 1.5)
 			(k[5] as TextLine).draw(sp.get_canvas_item(), ucenter + Vector2(-9, 5 - 16 * 0.8), cols[2])
 	if k[6]:
 		sp.draw_arc(center, CELL * 0.39, 0, TAU, 24, cols[0], 2.5)
@@ -1212,7 +1214,7 @@ func _draw_unit_sprite(sp: UnitSprite) -> void:
 	if k[13]:
 		sp.draw_arc(center, CELL * 0.5, 0, TAU, 32, Color(1, 0.6, 0.1), 2.0)
 	for i in maxi(0, k[14]):
-		sp.draw_circle(corner + Vector2(6 + i * 8, CELL - 6), 3, Color(1, 1, 0.4))
+		Sprites.draw_disc(sp, corner + Vector2(6 + i * 8, CELL - 6), 3, Color(1, 1, 0.4))
 	# Снаряжения не хватает — общий пиксельный «!» (item 18): инженер без ЛДФ,
 	# оператор без станции, огнемётчик без огнетушителя, пулемётчик без фраги.
 	if k[15]:
@@ -1302,7 +1304,7 @@ func _draw_drone(unit: UnitInstance, at: Vector2i, ci: CanvasItem = null) -> voi
 	if unit.id == selected_id:
 		ci.draw_arc(dc, CELL * 0.3, 0, TAU, 24, Color(1, 0.9, 0.2), 3.0)
 	for i in _draw_ap(unit):
-		ci.draw_circle(_cell_origin(at) + Vector2(6 + i * 8, CELL - 6), 3, Color(1, 1, 0.4))
+		Sprites.draw_disc(ci, _cell_origin(at) + Vector2(6 + i * 8, CELL - 6), 3, Color(1, 1, 0.4))
 
 ## Труп на земле (#59): красный круг на половинной прозрачности — того же размера,
 ## что и живой боец, но полупрозрачный, поэтому тело сразу отличимо от бойца и не
@@ -1866,7 +1868,7 @@ func _draw_corpse(coord: Vector2i, count: int, who: UnitInstance = null, ci: Can
 	if own_key != "":
 		Sprites.draw_texture_override(ci, own_key, org, float(CELL), 90.0, tint)
 	elif not Sprites.draw_texture_override(ci, "corpse", org, float(CELL), CORPSE_LIE_DEG, tint):
-		ci.draw_circle(center, CELL * 0.34, CORPSE_COLOR * tint)
+		Sprites.draw_disc(ci, center, CELL * 0.34, CORPSE_COLOR * tint)
 	if count > 1:
 		ci.draw_string(ThemeDB.fallback_font, center + Vector2(CELL * 0.16, CELL * 0.3),
 			"x%d" % count, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 0.85, 0.85))

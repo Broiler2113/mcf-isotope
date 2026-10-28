@@ -4696,6 +4696,18 @@ with `check_everything`; `tests/ai/run_native_ai.gd` compares the native scans w
 1,200 actions 5.9 → ~3.1 s (9.0 s with `MCF_NATIVE_KERNELS=off`); hashes 630575507 /
 2998049945 unchanged.
 
+### 27.28 Zoomed-out draw calls
+
+Soldiers and bodies without sprite art were `draw_circle` polygons, and the Compatibility
+renderer gives every polygon its own draw call: the giant battle fitted to the screen (432
+soldiers) cost 642 draw calls and 29k triangles a frame, 427 of them soldiers. They are now
+`Sprites.draw_disc` — one shared hard-edged white disc texture, tinted — and textured rects
+batch across canvas items. A soldier's outline at label zoom is a darker disc under a smaller
+fill disc (the 1.5 px ring's own edges); the AP dots and corpse discs use the same texture.
+Fitted giant: 642 → 216 draw calls, 29k → 2.3k triangles; label zoom (0.35) 1124 → 577
+(the per-soldier caption still switches to the font texture). Screenshots at 0.19 / 0.35 / 1.0
+match the old ones but for sub-pixel edges of 5 px dots. Drawing only; no rule changed.
+
 ## Issues PDF (6) follow-up
 
 - End Turn uses configurable **Shift+Enter**. Its button does not retain keyboard focus;

@@ -379,6 +379,21 @@ static func draw_texture_rect(ci: CanvasItem, tex: Texture2D, rect: Rect2,
 		ci.draw_texture_rect(tex, Rect2(-rect.size * 0.5, rect.size), false, tint)
 		ci.draw_set_transform(_base_offset, 0.0, _base_scale)
 
+## A filled circle, drawn as one shared hard-edged disc texture: the same pixels as
+## draw_circle, but textured rects batch across canvas items while every circle polygon is
+## its own draw call (432 soldiers zoomed out = 432 draw calls; as discs, one).
+static var _disc: ImageTexture = null
+static func draw_disc(ci: CanvasItem, center: Vector2, radius: float, color: Color) -> void:
+	if _disc == null:
+		const N := 128
+		var img := Image.create(N, N, false, Image.FORMAT_LA8)
+		for y in N:
+			for x in N:
+				var inside := Vector2(x + 0.5 - N * 0.5, y + 0.5 - N * 0.5).length() <= N * 0.5
+				img.set_pixel(x, y, Color(1, 1, 1, 1.0 if inside else 0.0))
+		_disc = ImageTexture.create_from_image(img)
+	ci.draw_texture_rect(_disc, Rect2(center - Vector2(radius, radius), Vector2(radius, radius) * 2.0), false, color)
+
 ## Объект на клетке: автотайл, если для него лежит лист, иначе обычная картинка.
 ## same(dx, dy) → стоит ли на соседней клетке тот же объект. false — замены нет вовсе,
 ## вызывающий рисует вектор.
