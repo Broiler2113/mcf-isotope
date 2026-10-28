@@ -3929,6 +3929,7 @@ glass are stamped into the terrain chunk once (`TerrainTiles._bake_decals`) inst
 redrawn every frame — at ~12k decals that was ~75 ms a frame and is now nothing. They follow
 the same fog rules as the terrain they sit on. Bloody footprints are gone with the rest of
 the per-step bookkeeping. **Service accents** (§20.2): on stations and in bunkers the walls and door frames of a service carry its colour — command blue, control/comms white, security red, medical green, science purple, engineering yellow, cargo orange, everything else grey; a room's own purpose beats its department (`MapGen.KIND_ACCENT`), the colour is a per-cell display-only byte (`MapData.wall_accent`, `MCF.Accent`) drawn as a line that runs along the wall and as a tinted door frame. **Corridors**: main ones are always 3 cells wide, maintenance tunnels 1 (2 about a quarter of the time), and grating is laid in roughly a third of the tunnels and in no room at all. **Grill walkway** (`MCF.Look.GRILL`): a floor look that is transparent between its bars and lies *over* a cell instead of replacing it; it runs from a hull airlock out into space with solar panels down both sides, and it is paintable in the editor. **Space draws no tile** — the `Starfield` parallax behind the board shows through it, following the camera (far layer 5 %, near 26 %); `floor_space.png` dropped by the player still wins. **Doors fill the whole cell** instead of a narrow panel in the middle of it. **Windows**: a symbol fallback font (✓ ✕ ▶ ⚠ are in neither Handjet nor Tahoma) and an explicit `stretch/aspect=expand` so a non-16:9 window is not letterboxed. Also: the hidden storage can no longer get an exterior airlock cut into it. **A border around every map** (§20.2): 10 cells in every direction that can be reached — diggable soil in a bunker, grass around a town or field, open space around a station or asteroid — and 2 more that cannot (`MCF.FEATURE_BOUNDARY`, in no destructible list, opaque to the laser), so the world keeps going past the battlefield but nothing walks off it. Lobby sizes now name the map, not the field. Also: `default_clear_color` was never applied — project.godot comments must start with `;`, and the `#` ones silently dropped the setting, so the window had been Godot grey instead of black all along. Tests: `tests/run_batch093.gd`. |
+| 139 | **0.14.5.2 — AI decisions and the wake-up check** (§27.25): exact index fixes for shot/capture targets, mines and corpse grabs; smoke-grenade lines and the civilians' wake-up sight check in C++ (`MCFPlanScorer`); the board mirror moved to `NativeBoard`. 1,200 giant actions 9.5 → 7.6 s. No rule changed; protocol 33. |
 | 138 | **0.14.5.1 — The AI's turn plan in C++** (§27.24): `MCFPlanScorer` runs the threat map, every soldier's candidate-cell scores and the marksman's laser trace, bit for bit with GDScript (which stays as reference and fallback); a board mirror patched from the look journal feeds it. Giant plan scoring 203 → 14 ms. No rule changed; protocol 33. |
 | 137 | **0.14.5 — Civilians and smoothness**: a civilian who sees another civilian wake up wakes too, into the same group (`_wake_by_sight`, §20.2 "Neutrals start sealed and dormant"); tank crew are off the board and no longer seen by civilians (a sleeper on the x == y diagonal used to see them); the smoothness pass of §27.23 — per-unit vision stamps, the spare fog memory and re-pointed tiles, the AI's turn plan spread over frames, soldiers on their own layer. Protocol 33. |
 | 136 | **0.14.4 — Cheat console pass**: player letters (`independent` for the independent army), short V-IDs, in-game names in completion and input (`ldf`, `dpmg`), help topics, optional parentheses, `event cancel all` only, edge/side names in `event set`, readable inspect output, hidden admin commands, first-human-seat admin in local games, AI pacing keeps Undo and the log clean, console opens with cheats off. Redesigned black console under the kit title bar. Drones centered on their cell in 2D; in first person they hover at 1.75 m, face north and bob instead of spinning. Protocol **32**. |
@@ -4578,6 +4579,31 @@ not hand over, and remains the reference and the fallback.
 
 Measured (giant bench scene): a soldier's scoring 1.46 → 0.19 ms; the plan-bearing decision
 ~400 → 144 ms; 1,200 actions 10.5 → 9.5 s (all GDScript: 12.6 s); the hashes are unchanged.
+
+### 27.25 AI decisions and the wake-up check (0.14.5.2)
+
+The second slice, on the same board mirror (now `src/sim/NativeBoard.gd`, shared by the plan,
+the decisions and the resolver):
+
+* **Exact index fixes, no C++.** The profile showed waste, not arithmetic: `hostile_target_ids`
+  and `capturable_target_ids` ran their expensive tests on the whole army before the cheap
+  firing-line or adjacency arithmetic (0.96 and 0.30 ms a call) — the tests are pure and
+  joined by "and", so testing the arithmetic first keeps the set and its order; a sapper
+  counted its mines by walking every cell (7 ms) — now from the feature index; a soldier with
+  no body beside it weighed the nearest enemy and a distance field before finding that out.
+* **Smoke** (`MCFPlanScorer.smoke_values`): `_best_smoke`'s firing lines (enemy → our cell,
+  clear of walls and gas) and the value of every landing cell, in GDScript's line and
+  summation order (24 ms → ~6 ms a smoke-carrier decision).
+* **The civilians' wake-up check** (`MCFPlanScorer.civilians_seeing`): natively it is simply the
+  full check the incremental GDScript one (§27.23) must equal — every sleeper against every
+  soldier on the board and every hull, units and gas blocking, glass clear (`SB_GLASS`). The
+  resolver keeps its loaded scorer while the board's look and the hull layer stand; without the
+  library the incremental check runs, starting with a full pass.
+* Tests: `tests/ai/run_native_ai.gd` also compares 124 smoke throws (score to the bit, target)
+  and 80 wake-up checks (64 seeing) on the generated boards.
+
+Measured (giant bench scene): an AI decision 4.0 → ~2.2 ms; 1,200 actions 9.5 → 7.6 s (all
+GDScript 12.6 → 11.4 s); the hashes are unchanged.
 
 ## Issues PDF (6) follow-up
 

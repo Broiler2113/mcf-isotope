@@ -18,7 +18,7 @@ The GDExtension provides:
 | `MCFPathfinding` | Ordered Dijkstra searches, movement costs, predecessor/path ties, obstacles, fire and hedgehog jumps |
 | `MCFAI` | Distance fields, firing-line indexes, nearest-enemy searches and army destination assignment |
 | `MCFVisibility` | Exact integer octant sweeps, shadow complements, mask transposition and incremental team visibility merging |
-| `MCFPlanScorer` | One AI turn plan: the threat map, every soldier's candidate-cell scores and the marksman's laser trace, over a flat board mirror and units layer |
+| `MCFPlanScorer` | The AI's turn plan (threat map, every soldier's candidate-cell scores, the marksman's laser trace), smoke-grenade firing lines, and the civilians' wake-up sight check, over a flat board mirror and units layer |
 
 Game rules, action execution, random draws, persistence, model descriptions and
 scene ownership stay in GDScript. Native kernels return the same ordered results;

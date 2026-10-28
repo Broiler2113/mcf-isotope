@@ -1771,10 +1771,16 @@ func throw_blocked(from_coord: Vector2i, to_coord: Vector2i) -> bool:
 
 func capturable_target_ids(actor: UnitInstance) -> Array:
 	var out: Array = []
+	var at := actor.coord
 	for u in state.all_units():
+		# Adjacency first (pure checks, same set and order): it rejects nearly everyone.
+		var dx := absi(u.coord.x - at.x)
+		var dy := absi(u.coord.y - at.y)
+		if dx > 1 or dy > 1 or (dx == 0 and dy == 0):
+			continue
 		if u.id == actor.id or u.captor_id != -1 or u.aboard_vehicle_id != -1:
 			continue
-		if u.is_alive() and Combat.distance(actor.coord, u.coord) == 1:
+		if u.is_alive():
 			out.append(u.id)
 	return out
 

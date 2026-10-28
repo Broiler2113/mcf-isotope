@@ -195,6 +195,10 @@ func _wake_by_sight(woke: Array) -> void:
 ## Засеять фронт теми спящими НЕ сгруппированными нейтралами, кто видит солдата (§3.1b).
 ## Дорого только когда на карте есть и спящие нейтралы, и солдаты, — иначе выходит сразу.
 func _seed_sight_activation() -> void:
+	var native := _native_wake_scorer()
+	if native != null:
+		_native_sight_activation(native)
+		return
 	# One pass over the army collects the soldiers and the sleepers. Positions: while the unit
 	# list is the one of the last check, only units stamped since can stand elsewhere, and only
 	# their entries are compared; otherwise every position is collected and compared.
@@ -322,6 +326,88 @@ func _seed_sight_activation() -> void:
 		if sees:
 			_wk_seen[u.id] = true
 			_activation_frontier.append(u.id)
+
+## The wake-up check in C++ (MCFPlanScorer.civilians_seeing) as the full check the incremental
+## one below must equal: every sleeper not yet queued, against every soldier on the board and
+## every hull, in one pass over the army. The incremental records do not follow these calls,
+## so a later GDScript pass starts full (_wk_grid).
+func _native_sight_activation(scorer: RefCounted) -> void:
+	var grid := state.grid
+	var gw := grid.width
+	var targets := PackedInt32Array()
+	var occupied := PackedInt32Array()
+	var waiting: Array = []
+	var xy := PackedInt32Array()
+	for u: UnitInstance in state.all_units():
+		if not u.is_alive():
+			continue
+		var c := u.coord
+		var on_board := grid.in_bounds(c)
+		# Living units block a civilian's sight: the cells they hold.
+		if on_board and grid.cell_fast(c.x, c.y).occupant == u:
+			occupied.append(c.y * gw + c.x)
+		if CivilianAI.is_soldier(u):
+			if on_board:   # crew inside a tank are off the board: unseen
+				targets.append(c.x)
+				targets.append(c.y)
+		elif _is_civilian(u) and u.neutral_group == 0 and not _activation_frontier.has(u.id):
+			waiting.append(u)
+			xy.append(c.x)
+			xy.append(c.y)
+	_wk_grid = 0
+	if targets.is_empty() or waiting.is_empty():
+		return   # no soldier on the board, or nobody asleep: nothing to wake
+	for veh: Vehicle in state.all_vehicles():
+		if veh.alive() and not MCF.is_neutral(veh.owner):
+			for fc: Vector2i in veh.footprint():
+				targets.append(fc.x)
+				targets.append(fc.y)
+	var sees: PackedByteArray = scorer.civilians_seeing(xy, targets, occupied)
+	if sees.size() != waiting.size():
+		push_error("Native wake-up check refused its input")
+		return
+	for i in waiting.size():
+		if sees[i] != 0:
+			_activation_frontier.append((waiting[i] as UnitInstance).id)
+
+## For each civilian, 1 if it sees a soldier on the board or a hull, natively (the parity
+## test's view of the same check); null without the kernel.
+func _civilians_seeing_native(soldiers: Array, civilians: Array) -> Variant:
+	var scorer := _native_wake_scorer()
+	if scorer == null:
+		return null
+	var grid := state.grid
+	var targets := PackedInt32Array()
+	for so: UnitInstance in soldiers:
+		targets.append_array([so.coord.x, so.coord.y])
+	for veh: Vehicle in state.all_vehicles():
+		if veh.alive() and not MCF.is_neutral(veh.owner):
+			for fc: Vector2i in veh.footprint():
+				targets.append_array([fc.x, fc.y])
+	var xy := PackedInt32Array()
+	for u: UnitInstance in civilians:
+		xy.append_array([u.coord.x, u.coord.y])
+	var occupied := PackedInt32Array()
+	for u: UnitInstance in state.all_units():
+		if u.is_alive() and grid.in_bounds(u.coord) and grid.cell_fast(u.coord.x, u.coord.y).occupant == u:
+			occupied.append(u.coord.y * grid.width + u.coord.x)
+	var sees: PackedByteArray = scorer.civilians_seeing(xy, targets, occupied)
+	return sees if sees.size() == civilians.size() else null
+
+## This resolver's native scorer with the board loaded, kept while the board, its look and the
+## hull layer (compared whole: footprints come and go with borg pilots, not only with vehicle
+## fields) stand. Null without the kernel.
+var _wake_scorer: RefCounted = null
+var _wake_scorer_key: Array = []
+
+func _native_wake_scorer() -> RefCounted:
+	var layer := NativeBoard.vehicle_layer(state)
+	var key := [state.grid.get_instance_id(), GridCell.look_version, legacy_corpse_rules, layer[0], layer[1]]
+	if _wake_scorer != null and key == _wake_scorer_key:
+		return _wake_scorer
+	_wake_scorer = NativeBoard.scorer(state, self, layer)
+	_wake_scorer_key = key
+	return _wake_scorer
 
 ## Четыре линии огня через клетку: строка, столбец, две диагонали (ключи _index_lines).
 static func _line_keys(t: Vector2i) -> Array:

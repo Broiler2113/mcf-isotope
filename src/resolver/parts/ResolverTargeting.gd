@@ -788,6 +788,12 @@ func hostile_target_ids(shooter: UnitInstance) -> Array:
 	var sowner: int = shooter.owner
 	var sid: int = shooter.id
 	for u in state.all_units():
+		# The firing line first: a few integer comparisons reject almost the whole army, and
+		# the checks are all pure, so their order changes neither the set nor its order.
+		var dx: int = u.coord.x - from.x
+		var dy: int = u.coord.y - from.y
+		if (dx == 0 and dy == 0) or (dx != 0 and dy != 0 and absi(dx) != absi(dy)):
+			continue
 		if u.id == sid or not u.is_on_field():
 			continue
 		# Не считаем целью СОЮЗНИКОВ: ни свой слот, ни товарища по команде, ни (для
