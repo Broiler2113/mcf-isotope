@@ -364,6 +364,8 @@ var feature_owner: int = -1:
 			rev += 1
 			if journaling: _journal()
 			feature_owner = v
+			# The owner is drawn (and fog memories copy it): a look change like any other.
+			log_look_change(coord.x, coord.y)
 ## Оператор, развернувший станцию дронов (item 16); -1 = станции нет или её поставил
 ## не оператор (старые карты, редактор). Владельца-стороны для правила «одна станция
 ## на оператора» не хватает: у команды операторов много, а станция у каждого одна.
