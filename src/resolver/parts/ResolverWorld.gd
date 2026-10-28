@@ -342,7 +342,6 @@ func _native_sight_activation(scorer: RefCounted) -> void:
 	_wk_grid = 0
 	var units := state.all_units()
 	var xy := _wa_xy
-	var targets := PackedInt32Array()
 	var waiting: Array = []
 	var sleepers := PackedInt32Array()
 	var hulls := PackedInt32Array()
@@ -370,27 +369,23 @@ func _native_sight_activation(scorer: RefCounted) -> void:
 	_wq_scorer = scorer
 	_wq_key = _wake_scorer_key.duplicate()
 	_wq_hulls = hulls
-	for i in _wa_kind.size():
-		var kind: int = _wa_kind[i]
-		if kind == _WA_TARGET:
-			targets.append(xy[i * 2])
-			targets.append(xy[i * 2 + 1])
-		elif kind == _WA_SLEEPER:
-			var u: UnitInstance = units[i]
-			if _activation_frontier.has(u.id):
-				continue
-			var x: int = xy[i * 2]
-			var y: int = xy[i * 2 + 1]
-			if _wq_quiet.has(u.id) and not dirty.has(Vector2i(0, y)) and not dirty.has(Vector2i(1, x)) \
-					and not dirty.has(Vector2i(2, x - y)) and not dirty.has(Vector2i(3, x + y)):
-				continue   # saw no one, and nothing on its lines changed since
-			waiting.append(u)
-			sleepers.append(x)
-			sleepers.append(y)
-	if targets.is_empty() or waiting.is_empty():
-		return   # no soldier on the board, or nobody to ask: nothing to wake
-	targets.append_array(hulls)
-	var sees: PackedByteArray = scorer.civilians_seeing(sleepers, targets, PackedInt32Array(_wa_occ.keys()))
+	for i: int in _wa_sleepers:
+		var u: UnitInstance = units[i]
+		if _activation_frontier.has(u.id):
+			continue
+		var x: int = xy[i * 2]
+		var y: int = xy[i * 2 + 1]
+		if _wq_quiet.has(u.id) and not dirty.has(Vector2i(0, y)) and not dirty.has(Vector2i(1, x)) \
+				and not dirty.has(Vector2i(2, x - y)) and not dirty.has(Vector2i(3, x + y)):
+			continue   # saw no one, and nothing on its lines changed since
+		waiting.append(u)
+		sleepers.append(x)
+		sleepers.append(y)
+	if waiting.is_empty():
+		return   # nobody to ask
+	# The soldiers are the rows of kind _WA_TARGET, read natively; with none, nobody sees.
+	var sees: PackedByteArray = scorer.civilians_seeing_rows(sleepers, xy, _wa_kind, hulls,
+			PackedInt32Array(_wa_occ.keys()))
 	if sees.size() != waiting.size():
 		push_error("Native wake-up check refused its input")
 		_wq_quiet.clear()
@@ -417,6 +412,7 @@ var _wa_grid := 0
 var _wa_kind := PackedByteArray()
 var _wa_xy := PackedInt32Array()   # each slot's cell when its kind was taken
 var _wa_occ: Dictionary = {}       # flat cell index -> true
+var _wa_sleepers := PackedInt32Array()   # the slots of kind _WA_SLEEPER, ascending
 var _wa_dirty: Dictionary = {}     # flat cells touched since the last check (see above)
 var _wa_fresh := true              # the rows were rebuilt whole: no earlier check to build on
 var _wq_quiet: Dictionary = {}     # sleeper id -> true: asked, saw no one
@@ -445,9 +441,12 @@ func _sync_wake_rows() -> void:
 		_wa_occ.clear()
 		_wa_dirty.clear()
 		_wa_fresh = true
+		_wa_sleepers.clear()
 		for i in units.size():
 			var u: UnitInstance = units[i]
 			_wa_kind[i] = _wake_kind(u, gw, gh)
+			if _wa_kind[i] == _WA_SLEEPER:
+				_wa_sleepers.append(i)
 			var c := u.coord
 			if u.status == MCF.Status.ALIVE and c.x >= 0 and c.y >= 0 and c.x < gw and c.y < gh \
 					and cells[c.y * gw + c.x].occupant == u:
@@ -456,13 +455,17 @@ func _sync_wake_rows() -> void:
 	# The cells whose "a living unit of ours holds it" may have turned: where a logged unit
 	# stood and stands, and every cell whose occupant changed.
 	var touched := {}
+	var sleepers_moved := false
 	for i: int in picks:
 		for c in [Vector2i(_wa_xy[i * 2], _wa_xy[i * 2 + 1]), Vector2i(xy[i * 2], xy[i * 2 + 1])]:
 			if c.x >= 0 and c.y >= 0 and c.x < gw and c.y < gh:
 				touched[c.y * gw + c.x] = true
 		_wa_xy[i * 2] = xy[i * 2]
 		_wa_xy[i * 2 + 1] = xy[i * 2 + 1]
-		_wa_kind[i] = _wake_kind(units[i], gw, gh)
+		var kind := _wake_kind(units[i], gw, gh)
+		if (kind == _WA_SLEEPER) != (_wa_kind[i] == _WA_SLEEPER):
+			sleepers_moved = true
+		_wa_kind[i] = kind
 	var changes := GridCell.walk_changes
 	var k: int = (_wa_walk - GridCell.walk_log_base) * 2
 	while k < changes.size():
@@ -470,6 +473,11 @@ func _sync_wake_rows() -> void:
 		k += 2
 	_wa_walk = GridCell.walk_version
 	_wa_dirty.merge(touched)
+	if sleepers_moved:
+		_wa_sleepers.clear()
+		for i in _wa_kind.size():
+			if _wa_kind[i] == _WA_SLEEPER:
+				_wa_sleepers.append(i)
 	for idx: int in touched:
 		var occ: UnitInstance = cells[idx].occupant
 		if occ != null and occ.status == MCF.Status.ALIVE and occ.coord == Vector2i(idx % gw, idx / gw) \

@@ -181,6 +181,11 @@ func _check(st: GameState, r: GameActionResolver, ref: GameActionResolver) -> St
 		if r._wa_kind[i] != kind:
 			return "wake-up kind of unit %d is %d, a whole pass %d" % [u.id, r._wa_kind[i], kind]
 		_n["wake"] += 1
+	var sleepers := PackedInt32Array()
+	for i in r._wa_kind.size():
+		if r._wa_kind[i] == 2: sleepers.append(i)
+	if r._wa_sleepers != sleepers:
+		return "wake-up sleeper rows differ from the kinds"
 	var kept: Array = r._wa_occ.keys()
 	var full: Array = occ.keys()
 	kept.sort()
