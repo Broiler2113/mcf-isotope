@@ -32,6 +32,23 @@ static func bump_world_vision() -> void:
 	vision_epoch += 1
 	vision_world += 1
 
+## Every unit whose coord, owner, status, vehicle seat or neutral group changed, in order: what the army scans
+## (GameState.unit_xy, units_logged_since) read instead of the whole army. One log for every
+## state in the process; a reader keeps its own position in it and skips units not its own.
+## vision_log_start counts the entries dropped before vision_log[0].
+static var vision_log: Array[UnitInstance] = []
+static var vision_log_start: int = 0
+const VISION_LOG_CAP := 4096
+
+static func vision_log_end() -> int:
+	return vision_log_start + vision_log.size()
+
+static func _log_vision(u: UnitInstance) -> void:
+	if vision_log.size() >= VISION_LOG_CAP:
+		vision_log_start += vision_log.size()
+		vision_log.clear()
+	vision_log.append(u)
+
 const CHEAT_STAT_BOUNDS := {"speed": [0, 999], "armor": [1, 12], "range": [0, 1024], "rof": [0, 100], "sight": [0, 1024]}
 var cheat_invulnerable := false
 var cheat_stats: Dictionary = {}
@@ -59,6 +76,7 @@ var coord: Vector2i:
 		coord = v
 		vision_epoch += 1
 		vision_stamp = vision_epoch
+		_log_vision(self)
 		look_epoch += 1
 		look_stamp = look_epoch
 var owner: int:
@@ -68,6 +86,7 @@ var owner: int:
 		owner = v
 		vision_epoch += 1
 		vision_stamp = vision_epoch
+		_log_vision(self)
 		look_epoch += 1
 		look_stamp = look_epoch
 var remaining_ap: int:
@@ -84,6 +103,7 @@ var status: int = MCF.Status.ALIVE:
 		status = v
 		vision_epoch += 1
 		vision_stamp = vision_epoch
+		_log_vision(self)
 		hold_epoch += 1
 		look_epoch += 1
 		look_stamp = look_epoch
@@ -139,6 +159,7 @@ var neutral_group: int = 0:
 		if neutral_group == v:
 			return
 		neutral_group = v
+		_log_vision(self)
 		look_epoch += 1
 		look_stamp = look_epoch
 ## Удерживаемого юнита нельзя переносить более одного раза за ход (§3.4).
@@ -151,6 +172,7 @@ var aboard_vehicle_id: int = -1:
 		if aboard_vehicle_id == v:
 			return
 		aboard_vehicle_id = v
+		_log_vision(self)
 		look_epoch += 1
 		look_stamp = look_epoch
 ## Сидит в борге (batch 13, «Borg characteristics»): id машины, −1 = нет. Оператор

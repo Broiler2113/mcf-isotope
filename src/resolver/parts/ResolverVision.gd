@@ -1015,14 +1015,27 @@ func team_visible_coords(owner: int) -> Dictionary:
 	for side: int in sides:
 		world.append(_tank_sig(side))
 	var since: int = _vis_built.get(owner, -1) if _vis_world.get(owner) == world else -1
+	# Which units to look at. Every unit whose cell, side, status or seat changed since the last
+	# pass is in UnitInstance.vision_log; any other one is where that pass left it (in `seen`
+	# with the same view, or not looking), so with the same unit list and the same allies the
+	# pass reads only the logged ones, in all_units() order, and its result and order stand.
+	var units := state.all_units()
+	var picks: Variant = null
+	if since >= 0 and is_same(sides, _vis_sides_of.get(owner)):
+		picks = state.units_logged_since(_vis_pos.get(owner, -1), _vis_units_of.get(owner, []))
+	var pick_units: Array = units
+	if picks != null:
+		pick_units = []
+		for i: int in picks:
+			pick_units.append(units[i])
 	var asks: Array = []
-	for u in state.all_units():
+	for u: UnitInstance in pick_units:
 		if u.is_on_field() and sides.has(u.owner) and u.aboard_vehicle_id == -1 \
 				and (u.vision_stamp > since or not seen.has(u.id)):
 			asks.append([sight_positions.get(u.id, u.coord), sight_of(u), u.owner, mode == 2,
 					sight_positions.has(u.id)])
 	_prefetch_seen(asks)
-	for u in state.all_units():
+	for u: UnitInstance in pick_units:
 		# Схваченный (HELD) смотрит по-прежнему (fix-7 #12): его держат, но не ослепили.
 		if not u.is_on_field() or not sides.has(u.owner):
 			continue
@@ -1068,10 +1081,19 @@ func team_visible_coords(owner: int) -> Dictionary:
 		seen[vkey] = vfresh
 	_tank_sig_memo = null
 	# Выбывшие — погиб, сел в машину, попал в плен, машину сожгли: снимаем их вклад.
+	# Reading only the logged units, an unlogged one in `seen` is still looking.
 	var gone: Array = []
-	for uid: int in seen:
-		if not live.has(uid):
-			gone.append(uid)
+	if picks == null:
+		for uid: int in seen:
+			if not live.has(uid):
+				gone.append(uid)
+	else:
+		var asked := {}
+		for u: UnitInstance in pick_units:
+			asked[u.id] = true
+		for uid: int in seen:
+			if not live.has(uid) and (uid < 0 or asked.has(uid)):
+				gone.append(uid)
 	for uid: int in gone:
 		counts = _vis_drop(seen[uid], counts, out, gw, log)
 		seen.erase(uid)
@@ -1082,6 +1104,9 @@ func team_visible_coords(owner: int) -> Dictionary:
 	_vis_vv[owner] = GridCell.vision_version
 	_vis_built[owner] = UnitInstance.vision_epoch
 	_vis_world[owner] = world
+	_vis_pos[owner] = UnitInstance.vision_log_end()
+	_vis_units_of[owner] = units
+	_vis_sides_of[owner] = sides
 	explored[owner] = memory
 	return out
 

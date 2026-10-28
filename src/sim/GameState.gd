@@ -124,6 +124,77 @@ func all_units() -> Array:
 		_units_dirty = false
 	return _unit_list
 
+## Unit coordinates as flat ints in all_units() order (x, y per unit). Scans that reject almost
+## the whole army on position alone (firing lines, adjacency) read these instead of every unit.
+## Kept by UnitInstance.vision_log: only the units logged since the last call are rewritten.
+func unit_xy() -> PackedInt32Array:
+	var list := _sync_unit_rows()
+	var log := UnitInstance.vision_log
+	var k := _xy_pos - UnitInstance.vision_log_start
+	while k < log.size():
+		var u: UnitInstance = log[k]
+		var i: int = _xy_slot.get(u.id, -1)
+		if i >= 0 and is_same(list[i], u):
+			_xy[i * 2] = u.coord.x
+			_xy[i * 2 + 1] = u.coord.y
+		k += 1
+	_xy_pos = UnitInstance.vision_log_end()
+	return _xy
+
+## Indices in all_units() of this state's units logged (UnitInstance.vision_log) since log
+## position pos, ascending and unique; null when the log no longer reaches back to pos or the
+## unit list is another one than at pos (the caller then looks at everyone).
+func units_logged_since(pos: int, list: Array) -> Variant:
+	if pos < UnitInstance.vision_log_start or not is_same(list, all_units()):
+		return null
+	_sync_unit_rows()
+	var log := UnitInstance.vision_log
+	var out := PackedInt32Array()
+	var k := pos - UnitInstance.vision_log_start
+	while k < log.size():
+		var u: UnitInstance = log[k]
+		var i: int = _xy_slot.get(u.id, -1)
+		if i >= 0 and is_same(list[i], u):
+			out.append(i)
+		k += 1
+	if out.size() > 1:
+		out.sort()
+		var w := 1
+		for r in range(1, out.size()):
+			if out[r] != out[w - 1]:
+				out[w] = out[r]
+				w += 1
+		out.resize(w)
+	return out
+
+## u's index in all_units(), or -1 when u is not one of this state's units.
+func unit_slot(u: UnitInstance) -> int:
+	var list := _sync_unit_rows()
+	var i: int = _xy_slot.get(u.id, -1)
+	return i if i >= 0 and is_same(list[i], u) else -1
+
+## The slot index and coordinate rows for the current unit list, rebuilt whole when the list
+## changes or the log dropped entries this state had not read yet.
+func _sync_unit_rows() -> Array:
+	var list := all_units()
+	if is_same(list, _xy_list) and _xy_pos >= UnitInstance.vision_log_start:
+		return list
+	_xy_list = list
+	_xy_slot.clear()
+	_xy.resize(list.size() * 2)
+	for i in list.size():
+		var u: UnitInstance = list[i]
+		_xy_slot[u.id] = i
+		_xy[i * 2] = u.coord.x
+		_xy[i * 2 + 1] = u.coord.y
+	_xy_pos = UnitInstance.vision_log_end()
+	return list
+
+var _xy := PackedInt32Array()
+var _xy_slot: Dictionary = {}   # unit id -> index in _xy_list
+var _xy_list: Array = []
+var _xy_pos := -1
+
 ## Убрать юнита из партии совсем (тело ушло в кучу, переработано боргом и т. п.).
 func remove_unit(id: int) -> void:
 	units.erase(id)

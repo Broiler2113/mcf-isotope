@@ -329,41 +329,27 @@ func _seed_sight_activation() -> void:
 
 ## The wake-up check in C++ (MCFPlanScorer.civilians_seeing) as the full check the incremental
 ## one below must equal: every sleeper not yet queued, against every soldier on the board and
-## every hull, in one pass over the army. The incremental records do not follow these calls,
-## so a later GDScript pass starts full (_wk_grid).
+## every hull. Its input comes from _sync_wake_rows, kept between actions. The incremental
+## records do not follow these calls, so a later GDScript pass starts full (_wk_grid).
 func _native_sight_activation(scorer: RefCounted) -> void:
-	var grid := state.grid
-	var gw := grid.width
-	var gh := grid.height
-	var cells := grid.cells_flat()
-	var targets := PackedInt32Array()
-	var occupied := PackedInt32Array()
-	var waiting: Array = []
-	var xy := PackedInt32Array()
-	# Run on every action over the whole army: CivilianAI.is_soldier and _is_civilian are
-	# inlined (the unit is alive here), and sides are asked once each.
-	var side_kind := {}   # owner -> 1 player, 2 neutral, 0 neither
-	for u: UnitInstance in state.all_units():
-		if u.status != MCF.Status.ALIVE:
-			continue
-		var c := u.coord
-		var on_board := c.x >= 0 and c.y >= 0 and c.x < gw and c.y < gh
-		# Living units block a civilian's sight: the cells they hold.
-		if on_board and cells[c.y * gw + c.x].occupant == u:
-			occupied.append(c.y * gw + c.x)
-		var kind: Variant = side_kind.get(u.owner)
-		if kind == null:
-			kind = 1 if MCF.is_player(u.owner) else (2 if MCF.is_neutral(u.owner) else 0)
-			side_kind[u.owner] = kind
-		if kind == 1 and not u.is_drone:
-			if on_board:   # crew inside a tank are off the board: unseen
-				targets.append(c.x)
-				targets.append(c.y)
-		elif kind == 2 and u.neutral_group == 0 and not _activation_frontier.has(u.id):
-			waiting.append(u)
-			xy.append(c.x)
-			xy.append(c.y)
+	_sync_wake_rows()
 	_wk_grid = 0
+	var units := state.all_units()
+	var xy := _wa_xy
+	var targets := PackedInt32Array()
+	var waiting: Array = []
+	var sleepers := PackedInt32Array()
+	for i in _wa_kind.size():
+		var kind: int = _wa_kind[i]
+		if kind == _WA_TARGET:
+			targets.append(xy[i * 2])
+			targets.append(xy[i * 2 + 1])
+		elif kind == _WA_SLEEPER:
+			var u: UnitInstance = units[i]
+			if not _activation_frontier.has(u.id):
+				waiting.append(u)
+				sleepers.append(xy[i * 2])
+				sleepers.append(xy[i * 2 + 1])
 	if targets.is_empty() or waiting.is_empty():
 		return   # no soldier on the board, or nobody asleep: nothing to wake
 	for veh: Vehicle in state.all_vehicles():
@@ -371,13 +357,89 @@ func _native_sight_activation(scorer: RefCounted) -> void:
 			for fc: Vector2i in veh.footprint():
 				targets.append(fc.x)
 				targets.append(fc.y)
-	var sees: PackedByteArray = scorer.civilians_seeing(xy, targets, occupied)
+	var sees: PackedByteArray = scorer.civilians_seeing(sleepers, targets, PackedInt32Array(_wa_occ.keys()))
 	if sees.size() != waiting.size():
 		push_error("Native wake-up check refused its input")
 		return
 	for i in waiting.size():
 		if sees[i] != 0:
 			_activation_frontier.append((waiting[i] as UnitInstance).id)
+
+## The wake-up check's input, kept per all_units() slot between actions (it is asked after every
+## action, over the whole army): what each unit is to the check, and the cells whose occupant is
+## a living unit of this state (living units block a civilian's sight). Only the units in
+## UnitInstance.vision_log and the cells in GridCell's walk log since the last call are looked
+## at again; another unit list or grid, or a log that no longer reaches back, rebuilds it all.
+const _WA_TARGET := 1    # a living player soldier, not a drone, on the board
+const _WA_SLEEPER := 2   # a living neutral not in an activation group yet
+var _wa_list: Array = []
+var _wa_pos := -1
+var _wa_walk := -1
+var _wa_grid := 0
+var _wa_kind := PackedByteArray()
+var _wa_xy := PackedInt32Array()   # each slot's cell when its kind was taken
+var _wa_occ: Dictionary = {}       # flat cell index -> true
+
+func _sync_wake_rows() -> void:
+	var units := state.all_units()
+	var grid := state.grid
+	var gw := grid.width
+	var gh := grid.height
+	var cells := grid.cells_flat()
+	var xy := state.unit_xy()
+	var picks: Variant = null
+	if is_same(units, _wa_list) and _wa_grid == grid.get_instance_id() \
+			and _wa_walk >= GridCell.walk_log_base and _wa_walk <= GridCell.walk_version:
+		picks = state.units_logged_since(_wa_pos, _wa_list)
+	_wa_pos = UnitInstance.vision_log_end()
+	if picks == null:
+		_wa_list = units
+		_wa_grid = grid.get_instance_id()
+		_wa_walk = GridCell.walk_version
+		_wa_xy = xy.duplicate()
+		_wa_kind.resize(units.size())
+		_wa_occ.clear()
+		for i in units.size():
+			var u: UnitInstance = units[i]
+			_wa_kind[i] = _wake_kind(u, gw, gh)
+			var c := u.coord
+			if u.status == MCF.Status.ALIVE and c.x >= 0 and c.y >= 0 and c.x < gw and c.y < gh \
+					and cells[c.y * gw + c.x].occupant == u:
+				_wa_occ[c.y * gw + c.x] = true
+		return
+	# The cells whose "a living unit of ours holds it" may have turned: where a logged unit
+	# stood and stands, and every cell whose occupant changed.
+	var touched := {}
+	for i: int in picks:
+		for c in [Vector2i(_wa_xy[i * 2], _wa_xy[i * 2 + 1]), Vector2i(xy[i * 2], xy[i * 2 + 1])]:
+			if c.x >= 0 and c.y >= 0 and c.x < gw and c.y < gh:
+				touched[c.y * gw + c.x] = true
+		_wa_xy[i * 2] = xy[i * 2]
+		_wa_xy[i * 2 + 1] = xy[i * 2 + 1]
+		_wa_kind[i] = _wake_kind(units[i], gw, gh)
+	var changes := GridCell.walk_changes
+	var k: int = (_wa_walk - GridCell.walk_log_base) * 2
+	while k < changes.size():
+		touched[changes[k + 1] * gw + changes[k]] = true
+		k += 2
+	_wa_walk = GridCell.walk_version
+	for idx: int in touched:
+		var occ: UnitInstance = cells[idx].occupant
+		if occ != null and occ.status == MCF.Status.ALIVE and occ.coord == Vector2i(idx % gw, idx / gw) \
+				and state.unit_slot(occ) >= 0:
+			_wa_occ[idx] = true
+		else:
+			_wa_occ.erase(idx)
+
+func _wake_kind(u: UnitInstance, gw: int, gh: int) -> int:
+	if u.status != MCF.Status.ALIVE:
+		return 0
+	if MCF.is_player(u.owner):
+		var c := u.coord
+		return _WA_TARGET if not u.is_drone and c.x >= 0 and c.y >= 0 and c.x < gw and c.y < gh else 0
+	if MCF.is_neutral(u.owner) and u.neutral_group == 0:
+		return _WA_SLEEPER
+	return 0
 
 ## For each civilian, 1 if it sees a soldier on the board or a hull, natively (the parity
 ## test's view of the same check); null without the kernel.
