@@ -529,6 +529,10 @@ func _apply_entry(entry: Dictionary, forward: bool) -> void:
 		map.winter = entry["winter"][k]
 		_winter_changed()
 		return
+	if entry.has("overcast"):
+		map.overcast = entry["overcast"][k]
+		_refresh_menu_checks()
+		return
 	if entry.has("decals"):
 		map.decals = entry["decals"][k].duplicate(true)
 		_sync_editor_decals()
@@ -2210,7 +2214,7 @@ func _build_menu_bar() -> void:
 		["Presets", [["Save Selection…", _save_room_dialog], ["Manage Rooms & Structures…", _room_manager],
 			["Open Presets Folder", func() -> void: OS.shell_open(ProjectSettings.globalize_path(RoomPresets.DIR))]]],
 		["Map", [["Resize…", _resize_dialog], [], ["label", "Preset"]] + _preset_items()
-			+ [[], ["label", "Time of Day"]] + _time_items() + [[], ["check:winter", "Winter (snow)"]]],
+			+ [[], ["label", "Time of Day"]] + _time_items() + [[], ["check:winter", "Winter (snow)"], ["check:overcast", "Overcast sky"]]],
 	]:
 		var mb := MenuButton.new()
 		mb.text = spec[0]
@@ -2394,6 +2398,14 @@ func _end_first_person() -> void:
 	_refresh_status()
 	queue_redraw()
 
+## Overcast sky (issues-12 #20): first person's clouds close in; only looks, undoable.
+func set_overcast(on: bool) -> void:
+	if not MapData.supports_winter(map.environment()) or on == map.overcast:
+		return
+	_push({"overcast": [map.overcast, on]})
+	map.overcast = on
+	_refresh_menu_checks()
+
 ## Winter (owner, fix-8 #3): snow on a town or a field, only looks; undoable like the hour.
 func set_winter(on: bool) -> void:
 	if not MapData.supports_winter(map.environment()) or on == map.winter:
@@ -2576,6 +2588,8 @@ func _menu_action(a: Variant) -> void:
 			show_zones = not show_zones
 		elif s == "check:winter":
 			set_winter(not map.winter)
+		elif s == "check:overcast":
+			set_overcast(not map.overcast)
 		elif s == "check:mini":
 			_mini_rect.get_parent().visible = not _mini_rect.get_parent().visible
 		elif s.begins_with("radio:time:"):
@@ -2604,6 +2618,9 @@ func _refresh_menu_checks() -> void:
 		var idx := MapPresets.NAMES.find(m.get_item_text(i))
 		if idx >= 0 and m.is_item_radio_checkable(i):
 			m.set_item_checked(i, MapPresets.IDS[idx] == map.environment())
+		if m.get_item_text(i).begins_with("Overcast"):
+			m.set_item_disabled(i, not MapData.supports_winter(map.environment()))
+			m.set_item_checked(i, map.overcast and MapData.supports_winter(map.environment()))
 		if m.get_item_text(i).begins_with("Winter"):
 			m.set_item_disabled(i, not MapData.supports_winter(map.environment()))
 			m.set_item_checked(i, map.winter and MapData.supports_winter(map.environment()))

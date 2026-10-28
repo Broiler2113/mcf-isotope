@@ -89,7 +89,8 @@ var ui_scale := 1.0
 signal board_settings_changed
 ## The accent colour changed: what was painted with it at build time repaints (fix-8 #18).
 signal accent_changed
-var dynamic_lighting := false
+## On by default (owner, 2026-10-28).
+var dynamic_lighting := true
 ## How dark unlit ground is with dynamic lighting on: 0 = daylight, 1 = pitch black.
 var light_darkness := 0.75
 var grid_visible := true
@@ -112,6 +113,9 @@ var fp_render_distance := FP_DISTANCE_DEFAULT
 var ffmpeg_path := ""
 ## Falling snow on winter maps (owner, fix-8 #3), on the battle screen and in first person.
 var snowfall := true
+## CRT-terminal filter over the whole game (issues-12 #21), off unless the player picks it.
+var crt_filter := false
+var _crt: CrtFilter = null
 var _pal: Dictionary = PALETTES["green"]
 
 var _accent := ACCENT
@@ -124,6 +128,7 @@ func _ready() -> void:
 	if DisplayServer.get_name() == "headless":
 		return
 	_load_settings()
+	_apply_crt()
 	get_tree().root.content_scale_factor = ui_scale
 	if fullscreen:
 		_apply_fullscreen()
@@ -148,7 +153,10 @@ func _load_settings() -> void:
 		_set_palette(a)
 	ui_scale = clampf(float(cf.get_value("ui", "scale", 1.0)), UI_SCALE_MIN, UI_SCALE_MAX)
 	fullscreen = bool(cf.get_value("display", "fullscreen", false))
-	dynamic_lighting = bool(cf.get_value("board", "dynamic_lighting", false))
+	# Settings saved before lighting defaulted on stored "false" without anyone choosing it:
+	# turn it on once (owner, 2026-10-28); a player who turns it off again keeps that.
+	dynamic_lighting = bool(cf.get_value("board", "dynamic_lighting", true)) \
+			or not cf.has_section_key("board", "lighting_default_on")
 	light_darkness = clampf(float(cf.get_value("board", "light_darkness", 0.75)), 0.0, 1.0)
 	grid_visible = bool(cf.get_value("board", "grid_visible", true))
 	grid_opacity = clampf(float(cf.get_value("board", "grid_opacity", 0.32)), 0.0, 1.0)
@@ -160,6 +168,7 @@ func _load_settings() -> void:
 	fp_render_distance = clampi(int(cf.get_value("display", "fp_render_distance", FP_DISTANCE_DEFAULT)), FP_DISTANCE_MIN, FP_DISTANCE_MAX)
 	ffmpeg_path = str(cf.get_value("display", "ffmpeg_path", ""))
 	snowfall = bool(cf.get_value("display", "snowfall", true))
+	crt_filter = bool(cf.get_value("display", "crt_filter", false))
 
 func _save_settings() -> void:
 	var cf := ConfigFile.new()
@@ -168,6 +177,7 @@ func _save_settings() -> void:
 	cf.set_value("ui", "scale", ui_scale)
 	cf.set_value("display", "fullscreen", fullscreen)
 	cf.set_value("board", "dynamic_lighting", dynamic_lighting)
+	cf.set_value("board", "lighting_default_on", true)
 	cf.set_value("board", "light_darkness", light_darkness)
 	cf.set_value("board", "grid_visible", grid_visible)
 	cf.set_value("board", "grid_opacity", grid_opacity)
@@ -178,6 +188,7 @@ func _save_settings() -> void:
 	cf.set_value("display", "fp_sensitivity", fp_sensitivity)
 	cf.set_value("display", "fp_render_distance", fp_render_distance)
 	cf.set_value("display", "snowfall", snowfall)
+	cf.set_value("display", "crt_filter", crt_filter)
 	cf.set_value("display", "ffmpeg_path", ffmpeg_path)
 	cf.save(SETTINGS_PATH)
 
@@ -203,6 +214,19 @@ func set_fp_render_distance(distance: int) -> void:
 func set_snowfall(on: bool) -> void:
 	snowfall = on
 	_save_settings()
+
+func set_crt_filter(on: bool) -> void:
+	crt_filter = on
+	_apply_crt()
+	_save_settings()
+
+func _apply_crt() -> void:
+	if crt_filter and _crt == null:
+		_crt = CrtFilter.new()
+		add_child(_crt)
+	elif not crt_filter and _crt != null:
+		_crt.queue_free()
+		_crt = null
 
 func set_show_fps(on: bool) -> void:
 	show_fps = on

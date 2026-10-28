@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://dgvju21mkky61"
+path="res://.godot/imported/tank_turret.png-5f91c87501bb7b6b64a2f26fad7318d9.image"
+
+[deps]
+
+source_file="res://textures/vehicles/tank/tank_turret.png"
+dest_files=["res://.godot/imported/tank_turret.png-5f91c87501bb7b6b64a2f26fad7318d9.image"]
+
+[params]
+

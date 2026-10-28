@@ -56,7 +56,7 @@ static func encode(state: GameState) -> Dictionary:
 		"next_id": state._next_id,
 		"next_vehicle_id": state._next_vehicle_id,
 		"combat_started": state.combat_started,
-		"env": state.env, "time": state.time_of_day, "winter": state.winter,
+		"env": state.env, "time": state.time_of_day, "winter": state.winter, "overcast": state.overcast,
 		"fx_seq": state.fx_seq,
 		"kills": state.kills.duplicate(true),
 		"deaths": state.deaths.duplicate(true),
@@ -363,6 +363,7 @@ static func restore_into(gs: GameState, d: Dictionary) -> void:
 	gs.env = str(d.get("env", gs.env))
 	gs.time_of_day = str(d.get("time", ""))
 	gs.winter = bool(d.get("winter", false))
+	gs.overcast = bool(d.get("overcast", false))
 	if d.has("decor"):
 		var dec: Dictionary = d["decor"]
 		gs.grid.map_decals = dec.get("decals", []).duplicate(true)

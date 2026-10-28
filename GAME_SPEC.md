@@ -4727,6 +4727,58 @@ Follow-up on the same branch:
   re-marched every lamp on screen (~420 zoomed out). Fitted giant with 30 fires, lighting on:
   198 → 65 ms a frame on llvmpipe; output identical pixel for pixel.
 
+### 27.29 The owner's big station save, zoomed out
+
+`Dima_15.mcfs` (149×119 station, 614 soldiers, 825 bodies, 47 vehicles, 23k decals, 20k
+props), fitted, standard fog, lighting on, llvmpipe: 107–115 ms a frame, render-bound.
+Hiding one layer at a time put half of it in the space backdrop: five stacked full-screen
+rects (black, an all-black gradient, three star tiles). `Starfield` is now one shader pass
+sampling the three tiles at their parallax offsets: pixel-identical, 115 → 74 ms. What is
+left: terrain chunks ~22 ms, the light map ~12, the HUD ~10.
+
+## Issues-12 (items 11–21)
+
+All of it is looks; no rule, protocol (33) or replay schema (3) changed. Dynamic lighting
+is on by default (owner, 2026-10-28); settings saved before that are switched on once.
+
+- **Board motion** (`MainDrawing` "Board motion"): a unit or drone the cursor enters twitches
+  once (0.32 s, a small shake and turn). Soldiers on vacuum with nothing to stand on (grill
+  walkways and solar panels are floors), drones over it and vehicles mostly over it sway
+  slowly; riders sway with their hull. Floating vehicles draw on their own layer under the
+  soldiers, so only that layer redraws each frame.
+- **Turret** (#12): `TankModel` draws a live tank as hull + turret (baked apart by
+  `tools/art/build_tank_sprites.gd -- split`), the turret turned about its ring at any angle.
+  While a tank aims its cannon the turret follows the cursor inside the gun's arc (forward and
+  both sides; anywhere under the legacy rear-cannon rule) and holds its last angle outside it;
+  it eases at most 3.2 rad/s, and after the shot or a cancel it settles on the stored aim.
+  A turning turret is drawn by the layer over the soldiers; the board keeps the hull.
+- **Solar panels** (#14): only on exits facing the top of the map; other exits keep their
+  airlock and walkway. A four-way mirror would copy them onto the bottom hull, so after the
+  last mirror (`MapFurnish.run`) only the top panels and their left-right mirror stay.
+- **Top-left buttons** (#15): `HudIcons` — a pencil, an open book and a bug, drawn in code.
+- **Walls** (#16): the board keeps its crisp pixel tiles (`tools/gen_textures.gd`), and the
+  walls whose material differed from first person's are redrawn in that same style to match it
+  (`-- --walls`): a station's light hull plates with seams and rivets, a town's red brick, a
+  field's concrete block, an asteroid's rock. A service's colour is a band on each side a wall
+  faces — that side's half — instead of one line down its middle: every accented wall, every
+  open side, running on along the wall and round its corners inside and out
+  (`TerrainTiles._accent_bands`), as first person paints it on every face. Floors, doors and
+  airlocks keep their pictures (owner: "bring back the airlock textures"; "the same good
+  quality and consistency as it was before").
+- **Windows in first person** (#17): a pane from 0.9 m to 1.95 m in the host wall — sill and
+  lintel in its material, plinth carried through.
+- **Fire** (#18): a new top-down tile (`tools/art/build_fire.py`), turned and flipped per cell;
+  first person shows an upright flame billboard that blooms, lit by the light map.
+- **Skies** (#19, #20, `FirstPersonSky`): space has the Sun and a lit, turning Earth with
+  clouds, ice, air and city lights, and a lens flare (glare, streak, ghosts) when the Sun is in
+  sight — walls and ceilings hide it, glass does not. Town and field have drifting clouds and
+  the Sun where the shadows come from. **Overcast** (lobby generator, editor View menu,
+  `MapData.overcast`, town and field only) closes the clouds into a grey deck: no sun, no sun
+  shadows, denser haze.
+- **CRT filter** (#21, Settings → Display, off by default): scanlines, an RGB grille, colour
+  fringing, tube corners and a faint flicker over the whole game. The picture is not bent, so
+  clicks land where they look.
+
 ## Issues PDF (6) follow-up
 
 - End Turn uses configurable **Shift+Enter**. Its button does not retain keyboard focus;

@@ -506,8 +506,10 @@ func _build_ui() -> void:
 	match_box.add_child(_before_btn)
 	# Справочник (0.12) — в любой момент боя, и кнопкой, и клавишей.
 	var manual_btn := _compact_button("Manual", func() -> void: ManualWindow.toggle(self))
+	_hud_icon(manual_btn, "manual")
 	manual_btn.tooltip_text = "Rules, tactics and unit cards (%s)" % Keybinds.label("game_manual")
 	var bug_btn := _compact_button("Report a Bug", _open_bug_report)
+	_hud_icon(bug_btn, "bug")
 	bug_btn.tooltip_text = "Send a bug report with a screenshot, the log and this match's replay."
 
 
@@ -1229,6 +1231,12 @@ func _compact_button(text: String, handler: Callable) -> Button:
 	b.pressed.connect(handler)
 	return b
 
+## A pixel icon before the caption (issues-12 #15), kept crisp at every interface size.
+func _hud_icon(b: Button, name: String) -> void:
+	b.icon = HudIcons.texture(name)
+	b.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	b.add_theme_constant_override("h_separation", 5)
+
 ## Ряд кнопок в одну строку — вдвое экономит высоту панели (#54).
 func _button_row(buttons: Array) -> HBoxContainer:
 	var row := HBoxContainer.new()
@@ -1268,6 +1276,7 @@ func _floating_hud_panel(title: String, buttons: HBoxContainer, at: Vector2) -> 
 	pad.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(pad)
 	var button := _compact_button(title, func() -> void: panel.visible = not panel.visible)
+	_hud_icon(button, "draw")
 	buttons.add_child(button)
 	return body
 

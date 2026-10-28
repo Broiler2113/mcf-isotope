@@ -116,6 +116,7 @@ func _process_frame(delta: float) -> void:
 			_sync_fly_layer(_visible_before_impact(_viewing_side()))
 		else:
 			_redraw()
+	_animate_board(delta)
 	var focused := get_viewport().gui_get_focus_owner()
 	if focused is LineEdit or focused is TextEdit or Keybinds.modal_open() or _quit_dialog.visible or _fp != null:
 		_sync_lighting()

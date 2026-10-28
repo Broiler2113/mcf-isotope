@@ -835,116 +835,22 @@ func _draw() -> void:
 	_draw_objectives(font, visible, fog_on, viewer)
 
 
-	# Корпуса машин (§техника): прямоугольник по всему следу, цвет владельца.
+	# Корпуса машин (§техника): прямоугольник по всему следу, цвет владельца. Машина, что
+	# висит в пустоте, рисуется слоем над доской и покачивается (issues-12 #13).
+	_float_vehicles.clear()
+	_float_ids.clear()
 	for veh: Vehicle in state.all_vehicles():
-		# Плавный переезд: рисунок машины сдвинут к ещё не пройденной части пути; борг
-		# идёт вместе со своим пилотом (его шаг — шаг бойца).
-		var voff: Vector2 = _veh_offset.get(veh.id, Vector2.ZERO)
-		if veh.is_borg():
-			var pilot := state.get_unit(veh.borg_operator())
-			if pilot != null and state.grid.in_bounds(pilot.coord):
-				voff = _cell_origin(_draw_cell(pilot)) - _cell_origin(veh.origin) \
-						+ _walk_offset.get(pilot.id, Vector2.ZERO)
-		draw_set_transform(pan + voff * zoom, 0.0, Vector2(zoom, zoom))
-		var fp := veh.footprint()
-		var vseen := false
-		for fc in fp:
-			if visible.has(fc):
-				vseen = true
-				break
-		if not vseen:
+		if _vehicle_floats(veh):
+			_float_vehicles.append(veh)
+			_float_ids[veh.id] = true
 			continue
-		# item 22: во время броска выстрела показываем ПРЕЖНЮЮ прочность/целость машины —
-		# снятие прочности и превращение в обломок не должны опережать кубик.
-		var disp_wrecked := veh.wrecked
-		var disp_dur := veh.durability
-		if not _hold_visual.is_empty():
-			var _hv: Dictionary = _hold_visual.get("vehicles", {})
-			if _hv.has(veh.id):
-				disp_wrecked = _hv[veh.id]["wrecked"]
-				disp_dur = _hv[veh.id]["durability"]
-		var org := _cell_origin(veh.origin)
-		var vsize := Vector2(veh.size.x * CELL, veh.size.y * CELL)
-		var hull := Rect2(org + Vector2(3, 3), vsize - Vector2(6, 6))
-		var hull_col: Color = _side_color(veh.owner)
-		if disp_wrecked:
-			hull_col = Color(0.3, 0.3, 0.32)
-		var vcenter := org + vsize * 0.5
-		if veh.is_borg():
-			_draw_borg(veh, org, hull_col, disp_wrecked, disp_dur, font)
-			continue
-		# Картинка машины растягивается на весь след и поворачивается по фронту (#55).
-		var veh_name := (veh.type_id + "_wreck") if disp_wrecked else veh.type_id
-		var veh_key := Sprites.resolve(veh_name)
-		if veh_key == "" and disp_wrecked:
-			veh_key = Sprites.resolve(veh.type_id)
-		if veh_key != "" or veh.type_id == "tank":
-			var opacity := Color(1, 1, 1, 0.4 if mode == Mode.VEH_MOVE and veh.id == selected_vehicle_id else 1.0)
-			if veh.type_id == "tank":
-				Sprites.set_base_transform(pan + voff * zoom, Vector2(zoom, zoom))
-				TankModel.draw(self, Rect2(org, vsize), veh.facing, hull_col, disp_wrecked, opacity, veh.tower_locked_dir)
-				Sprites.set_base_transform(pan, Vector2(zoom, zoom))
-			else:
-				Sprites.draw_texture_override_rect(self, veh_key, Rect2(org, vsize),
-						_facing_degrees(veh.facing), opacity)
-			# Tanks identify their team with a roof stripe, without a bounding box.
-			if veh.type_id != "tank":
-				draw_rect(Rect2(org + Vector2(2, 2), vsize - Vector2(4, 4)), hull_col, false, 2.0)
-		else:
-			draw_rect(hull, Color(hull_col.darkened(0.35), 0.4 if mode == Mode.VEH_MOVE and veh.id == selected_vehicle_id else 1.0))
-			draw_rect(hull, hull_col, false, 3.0)
-			# Направление (стрелка фронта) — у танка.
-			if veh.facing != Vector2i.ZERO and not disp_wrecked:
-				var dir := Vector2(veh.facing.x, veh.facing.y).normalized()
-				draw_line(vcenter, vcenter + dir * (CELL * 0.6), Color.WHITE, 3.0)
-		var label: String = VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)
-		if disp_wrecked:
-			label = "WRECK"
-		if veh.type_id == "tank":
-			TankModel.draw_status(self, Rect2(org, vsize), label, -1 if disp_wrecked else disp_dur,
-					veh.living_crew_count(), 0 if disp_wrecked else maxi(0, veh.ap),
-					veh.facing, veh.tower_locked_dir, disp_wrecked)
-			continue
-		draw_string(font, org + Vector2(8, 18), "%s" % label,
-			HORIZONTAL_ALIGNMENT_LEFT, -1, 14, _ink(hull_col.darkened(0.35)))
-		if not disp_wrecked:
-			draw_string(font, org + Vector2(8, vsize.y - 8),
-				"DUR %d  CREW %d" % [disp_dur, veh.living_crew_count()],
-				HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.9, 0.9, 0.6))
-			# Жёлтые точки ОД машины (item 3): та же метка, что у пехоты, — по одной точке
-			# на очко действия, в правом-верхнем углу следа, чтобы не спорить с подписью.
-			# У челнока пула нет (batch 13): его водит пассажир за свои очки, и точки
-			# рисуются у него самого.
-			var vap: int = 0 if veh.seated() else maxi(0, veh.ap)
-			for i in vap:
-				Sprites.draw_disc(self, org + Vector2(vsize.x - 8 - i * 8, 8), 3, Color(1, 1, 0.4))
-			# Станция в кресле (issues-12 #7) — поверх корпуса и в полёте вместе с ним; под
-			# корпусом её не было видно, а в переезде она прыгала в конец пути раньше машины.
-			if veh.seated():
-				for si in veh.seats.size():
-					var stc := veh.seat_cell(si)
-					var on_seat := MCF.FEATURE_DRONE_STATION if veh.seats[si] == Vehicle.SEAT_STATION \
-							else (MCF.FEATURE_DPMG if veh.seats[si] == Vehicle.SEAT_DPMG else "")
-					if on_seat != "" and _cell_seen_now(stc, visible):
-						_tiles.draw_feature_tile(self, on_seat, stc,
-								Rect2(_cell_origin(stc), Vector2(CELL, CELL)))
-
+		_draw_vehicle(self, veh, visible, font, Vector2.ZERO)
+	Sprites.set_base_transform(pan, Vector2(zoom, zoom))
+	_float_visible = visible
+	if _veh_float != null: _veh_float.queue_redraw()
 	draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
 	# Выбор машины для посадки — поверх корпусов, иначе подсветку закрывала сама машина.
-	if mode == Mode.BOARD_PICK:
-		var bhov := _board_pick_at(_pos_to_cell(get_viewport().get_mouse_position()))
-		for bv: Vehicle in _board_pick:
-			var lit: bool = bv == bhov
-			for bc: Vector2i in _veh_cells(bv):
-				draw_rect(Rect2(_cell_origin(bc), Vector2(CELL, CELL)),
-						Color(0.4, 0.7, 1.0, 0.45 if lit else 0.2))
-				draw_rect(Rect2(_cell_origin(bc), Vector2(CELL, CELL)), Color(0.55, 0.8, 1.0, 0.9), false, 2.0)
-			if lit:
-				var bname: String = VehicleDB.get_vehicle(bv.type_id).get("name", bv.type_id)
-				draw_string_outline(font, _cell_origin(bv.origin) + Vector2(2, -6), "Board %s" % bname,
-						HORIZONTAL_ALIGNMENT_LEFT, -1, 14, 4, Color(0, 0, 0, 0.9))
-				draw_string(font, _cell_origin(bv.origin) + Vector2(2, -6), "Board %s" % bname,
-						HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0.75, 0.88, 1.0))
+	_draw_board_pick(self, font)
 	# Soldiers live on their own layer (_sync_unit_layer): only those whose look changed are
 	# drawn again. What lies over them (bodies on hulls, drones, seats, the selection box and
 	# rulers) is drawn by the layer above them (_draw_unit_top).
@@ -954,6 +860,306 @@ func _draw() -> void:
 	# A thin second pass puts wisps in front of occupants without hiding their sprites; it
 	# drifts on its own layer (GasDrift).
 	_sync_gas_drift()
+
+## Vehicles to board, lit over their hulls: the board's and, on its own layer, the floating ones.
+func _draw_board_pick(ci: CanvasItem, font: Font) -> void:
+	if mode == Mode.BOARD_PICK:
+		var bhov := _board_pick_at(_pos_to_cell(get_viewport().get_mouse_position()))
+		for bv: Vehicle in _board_pick:
+			if (ci == _veh_float) != _float_ids.has(bv.id): continue
+			var lit: bool = bv == bhov
+			for bc: Vector2i in _veh_cells(bv):
+				ci.draw_rect(Rect2(_cell_origin(bc), Vector2(CELL, CELL)),
+						Color(0.4, 0.7, 1.0, 0.45 if lit else 0.2))
+				ci.draw_rect(Rect2(_cell_origin(bc), Vector2(CELL, CELL)), Color(0.55, 0.8, 1.0, 0.9), false, 2.0)
+			if lit:
+				var bname: String = VehicleDB.get_vehicle(bv.type_id).get("name", bv.type_id)
+				ci.draw_string_outline(font, _cell_origin(bv.origin) + Vector2(2, -6), "Board %s" % bname,
+						HORIZONTAL_ALIGNMENT_LEFT, -1, 14, 4, Color(0, 0, 0, 0.9))
+				ci.draw_string(font, _cell_origin(bv.origin) + Vector2(2, -6), "Board %s" % bname,
+						HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0.75, 0.88, 1.0))
+
+## One vehicle onto ci (the board, or the layer of vehicles floating in vacuum, offset by sway).
+func _draw_vehicle(ci: CanvasItem, veh: Vehicle, visible: Dictionary, font: Font, sway: Vector2) -> void:
+	# Плавный переезд: рисунок машины сдвинут к ещё не пройденной части пути; борг
+	# идёт вместе со своим пилотом (его шаг — шаг бойца).
+	var voff: Vector2 = _veh_offset.get(veh.id, Vector2.ZERO)
+	if veh.is_borg():
+		var pilot := state.get_unit(veh.borg_operator())
+		if pilot != null and state.grid.in_bounds(pilot.coord):
+			voff = _cell_origin(_draw_cell(pilot)) - _cell_origin(veh.origin) \
+					+ _walk_offset.get(pilot.id, Vector2.ZERO)
+	voff += sway
+	ci.draw_set_transform(pan + voff * zoom, 0.0, Vector2(zoom, zoom))
+	Sprites.set_base_transform(pan + voff * zoom, Vector2(zoom, zoom))
+	var fp := veh.footprint()
+	var vseen := false
+	for fc in fp:
+		if visible.has(fc):
+			vseen = true
+			break
+	if not vseen:
+		_turret_shown.erase(veh.id)
+		_turret_live.erase(veh.id)
+		return
+	# item 22: во время броска выстрела показываем ПРЕЖНЮЮ прочность/целость машины —
+	# снятие прочности и превращение в обломок не должны опережать кубик.
+	var disp_wrecked := veh.wrecked
+	var disp_dur := veh.durability
+	if not _hold_visual.is_empty():
+		var _hv: Dictionary = _hold_visual.get("vehicles", {})
+		if _hv.has(veh.id):
+			disp_wrecked = _hv[veh.id]["wrecked"]
+			disp_dur = _hv[veh.id]["durability"]
+	var org := _cell_origin(veh.origin)
+	var vsize := Vector2(veh.size.x * CELL, veh.size.y * CELL)
+	var hull := Rect2(org + Vector2(3, 3), vsize - Vector2(6, 6))
+	var hull_col: Color = _side_color(veh.owner)
+	if disp_wrecked:
+		hull_col = Color(0.3, 0.3, 0.32)
+	var vcenter := org + vsize * 0.5
+	if veh.is_borg():
+		_draw_borg(veh, org, hull_col, disp_wrecked, disp_dur, font, ci)
+		return
+	# Картинка машины растягивается на весь след и поворачивается по фронту (#55).
+	var veh_name := (veh.type_id + "_wreck") if disp_wrecked else veh.type_id
+	var veh_key := Sprites.resolve(veh_name)
+	if veh_key == "" and disp_wrecked:
+		veh_key = Sprites.resolve(veh.type_id)
+	if veh_key != "" or veh.type_id == "tank":
+		var opacity := Color(1, 1, 1, 0.4 if mode == Mode.VEH_MOVE and veh.id == selected_vehicle_id else 1.0)
+		if veh.type_id == "tank":
+			# A turret that turns (aimed at the cursor, or settling after a shot) is drawn by the
+			# layer over the soldiers every frame; the board keeps the hull (issues-12 #12).
+			var part := TankModel.Part.WHOLE
+			var shown := TankModel.turret_angle(veh.tower_locked_dir)
+			if not disp_wrecked:
+				shown = _turret_live.get(veh.id, _turret_shown.get(veh.id, shown))
+				if _turret_aiming(veh) or absf(angle_difference(shown, _turret_goal_for(veh))) > 0.002:
+					_turret_live[veh.id] = shown
+					part = TankModel.Part.HULL
+				else:
+					_turret_live.erase(veh.id)
+				_turret_shown[veh.id] = shown
+			TankModel.draw(ci, Rect2(org, vsize), veh.facing, hull_col, disp_wrecked, opacity, veh.tower_locked_dir, shown, part)
+			Sprites.set_base_transform(pan + voff * zoom, Vector2(zoom, zoom))
+		else:
+			Sprites.draw_texture_override_rect(ci, veh_key, Rect2(org, vsize),
+					_facing_degrees(veh.facing), opacity)
+		# Tanks identify their team with a roof stripe, without a bounding box.
+		if veh.type_id != "tank":
+			ci.draw_rect(Rect2(org + Vector2(2, 2), vsize - Vector2(4, 4)), hull_col, false, 2.0)
+	else:
+		ci.draw_rect(hull, Color(hull_col.darkened(0.35), 0.4 if mode == Mode.VEH_MOVE and veh.id == selected_vehicle_id else 1.0))
+		ci.draw_rect(hull, hull_col, false, 3.0)
+		# Направление (стрелка фронта) — у танка.
+		if veh.facing != Vector2i.ZERO and not disp_wrecked:
+			var dir := Vector2(veh.facing.x, veh.facing.y).normalized()
+			ci.draw_line(vcenter, vcenter + dir * (CELL * 0.6), Color.WHITE, 3.0)
+	var label: String = VehicleDB.get_vehicle(veh.type_id).get("name", veh.type_id)
+	if disp_wrecked:
+		label = "WRECK"
+	if veh.type_id == "tank":
+		TankModel.draw_status(ci, Rect2(org, vsize), label, -1 if disp_wrecked else disp_dur,
+				veh.living_crew_count(), 0 if disp_wrecked else maxi(0, veh.ap),
+				veh.facing, veh.tower_locked_dir, disp_wrecked)
+		return
+	ci.draw_string(font, org + Vector2(8, 18), "%s" % label,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 14, _ink(hull_col.darkened(0.35)))
+	if not disp_wrecked:
+		ci.draw_string(font, org + Vector2(8, vsize.y - 8),
+			"DUR %d  CREW %d" % [disp_dur, veh.living_crew_count()],
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.9, 0.9, 0.6))
+		# Жёлтые точки ОД машины (item 3): та же метка, что у пехоты, — по одной точке
+		# на очко действия, в правом-верхнем углу следа, чтобы не спорить с подписью.
+		# У челнока пула нет (batch 13): его водит пассажир за свои очки, и точки
+		# рисуются у него самого.
+		var vap: int = 0 if veh.seated() else maxi(0, veh.ap)
+		for i in vap:
+			Sprites.draw_disc(ci, org + Vector2(vsize.x - 8 - i * 8, 8), 3, Color(1, 1, 0.4))
+		# Станция в кресле (issues-12 #7) — поверх корпуса и в полёте вместе с ним; под
+		# корпусом её не было видно, а в переезде она прыгала в конец пути раньше машины.
+		if veh.seated():
+			for si in veh.seats.size():
+				var stc := veh.seat_cell(si)
+				var on_seat := MCF.FEATURE_DRONE_STATION if veh.seats[si] == Vehicle.SEAT_STATION \
+						else (MCF.FEATURE_DPMG if veh.seats[si] == Vehicle.SEAT_DPMG else "")
+				if on_seat != "" and _cell_seen_now(stc, visible):
+					_tiles.draw_feature_tile(ci, on_seat, stc,
+							Rect2(_cell_origin(stc), Vector2(CELL, CELL)))
+
+
+
+# --- Board motion (issues-12 #11–#13). Only what moves is touched each frame: the soldier
+# sprites it concerns, the layer of floating vehicles and the thin layer over the soldiers.
+var _veh_float: Node2D = null
+var _float_vehicles: Array = []
+var _float_ids: Dictionary = {}       # vehicle id -> true: floats in vacuum
+var _float_visible: Dictionary = {}
+var _floaters: Dictionary = {}        # unit id -> vehicle it rides (-1: floats on its own)
+var _wobbled: Dictionary = {}         # soldier sprites moved last frame
+var _drones_moving := false
+## Turrets that turn, drawn over the soldiers: vehicle id -> angle from the hull's front.
+var _turret_live: Dictionary = {}
+var _turret_shown: Dictionary = {}
+## The last angle the cursor gave inside the turret's arc, per aiming tank.
+var _turret_goal: Dictionary = {}
+const TURRET_SPEED := 3.2              # rad/s at most: a heavy turret, not a snap
+## A unit under the cursor twitches once (issues-12 #11).
+const TWITCH_TIME := 0.32
+var _twitch_id := -1
+var _twitch_at := 0.0
+var _hover_unit := -1
+var _hover_at := Vector2i(-99999, -99999)
+
+func _anim_time() -> float:
+	return Time.get_ticks_msec() * 0.001
+
+## Vacuum with nothing to stand on: grill walkways and solar panels are floors.
+func _floating_cell(c: Vector2i) -> bool:
+	var g := state.grid
+	if not g.in_bounds(c) or not g.cell_fast(c.x, c.y).is_space: return false
+	var look := g.look_at(c.x, c.y) if not g.floor_look.is_empty() else 0
+	return look != MCF.Look.GRILL and look != MCF.Look.SOLAR
+
+func _vehicle_floats(veh: Vehicle) -> bool:
+	var fp := veh.footprint()
+	var n := 0
+	for c: Vector2i in fp:
+		if _floating_cell(c): n += 1
+	return n * 2 > fp.size()
+
+## Slow drift in vacuum: [offset in board pixels, turn in radians].
+func _sway(phase: float, t: float) -> Array:
+	return [Vector2(sin(t * 0.9 + phase) * 1.8, sin(t * 0.67 + phase * 1.7) * 1.4), sin(t * 0.53 + phase * 2.3) * 0.07]
+
+func _vehicle_sway(veh: Vehicle) -> Vector2:
+	return _sway(veh.id * 1.37 + 100.0, _anim_time())[0] if _float_ids.has(veh.id) else Vector2.ZERO
+
+func _twitch(t: float) -> Array:
+	var u := t - _twitch_at
+	if _twitch_id == -1 or u >= TWITCH_TIME: return [Vector2.ZERO, 0.0]
+	var e := 1.0 - u / TWITCH_TIME
+	return [Vector2(sin(u * 62.0) * 1.6 * e, -absf(sin(u * 31.0)) * 1.4 * e), sin(u * 47.0) * 0.1 * e]
+
+## The unit drawn under the cursor (a drone over a soldier), or -1. Asked only when the
+## cursor enters another cell.
+func _hovered_unit() -> int:
+	var mouse := get_viewport().get_mouse_position()
+	if get_viewport().gui_get_hovered_control() != null: return -1
+	var c := _pos_to_cell(mouse)
+	if c == _hover_at: return _hover_unit
+	_hover_at = c
+	for d: Dictionary in _top_drones:
+		if d["at"] == c: return (d["unit"] as UnitInstance).id
+	if not state.grid.in_bounds(c): return -1
+	var occ: UnitInstance = state.grid.cell(c).occupant
+	if occ != null and not occ.is_drone:
+		var sp: UnitSprite = _unit_sprites.get(occ.id)
+		if sp != null and sp.shown: return occ.id
+	return -1
+
+func _turret_aiming(veh: Vehicle) -> bool:
+	return mode == Mode.VEH_CANNON and veh.id == selected_vehicle_id and veh.type_id == "tank" \
+			and not veh.tower_jammed() and not veh.wrecked
+
+## Where the turret wants to point: at the cursor while the tank aims and the cursor is inside
+## the gun's arc (forward and both sides; anywhere under the legacy rear-cannon rule), else
+## where the last shot left it.
+func _turret_goal_for(veh: Vehicle) -> float:
+	var rest := TankModel.turret_angle(veh.tower_locked_dir)
+	if not _turret_aiming(veh):
+		_turret_goal.erase(veh.id)
+		return rest
+	var rect := Rect2(_cell_origin(veh.origin), Vector2(veh.size) * CELL)
+	var m := (get_viewport().get_mouse_position() - pan) / zoom
+	var front := Vector2(veh.facing).angle() if veh.facing != Vector2i.ZERO else -PI * 0.5
+	var rel := angle_difference(front, (m - TankModel.turret_pivot(rect, veh.facing)).angle())
+	if absf(rel) <= PI * 0.5 + 0.01 or resolver.legacy_rear_cannon:
+		_turret_goal[veh.id] = rel
+	return _turret_goal.get(veh.id, _turret_shown.get(veh.id, rest))
+
+func _animate_board(delta: float) -> void:
+	if state == null or _unit_layer == null or _fp != null: return
+	var now := _anim_time()
+	var h := _hovered_unit()
+	if h != _hover_unit:
+		_hover_unit = h
+		if h != -1:
+			_twitch_id = h
+			_twitch_at = now
+	_animate_turrets(delta)
+	var moved := {}
+	var ids: Array = _floaters.keys()
+	if _twitch_id != -1: ids.append(_twitch_id)
+	for id: int in ids:
+		var sp: UnitSprite = _unit_sprites.get(id)
+		if sp == null or not sp.shown or moved.has(id): continue
+		var off := Vector2.ZERO
+		var rot := 0.0
+		var rides: int = _floaters.get(id, -2)
+		if rides == -1:
+			var sw := _sway(id * 1.37, now)
+			off += sw[0]
+			rot += sw[1]
+		elif rides >= 0:
+			off += _sway(rides * 1.37 + 100.0, now)[0]   # with the hull, no turn of its own
+		if id == _twitch_id:
+			var tw := _twitch(now)
+			off += tw[0]
+			rot += tw[1]
+		var p := ORIGIN + (Vector2(sp.at) + Vector2(0.5, 0.5)) * CELL
+		sp.wob = off + p - p.rotated(rot)
+		sp.rotation = rot
+		sp.position = sp.off + sp.wob
+		moved[id] = true
+	for id: int in _wobbled:
+		if moved.has(id): continue
+		var sp: UnitSprite = _unit_sprites.get(id)
+		if sp != null:
+			sp.wob = Vector2.ZERO
+			sp.rotation = 0.0
+			sp.position = sp.off
+	_wobbled = moved
+	var drone_twitch := _twitch_id != -1 and not _unit_sprites.has(_twitch_id)
+	if _twitch_id != -1 and now - _twitch_at >= TWITCH_TIME:
+		_twitch_id = -1
+	if not _float_vehicles.is_empty() and _veh_float != null:
+		_veh_float.queue_redraw()
+	if _drones_moving or drone_twitch or not _turret_live.is_empty():
+		_unit_top.queue_redraw()
+
+func _animate_turrets(delta: float) -> void:
+	if _turret_live.is_empty(): return
+	var settled := false
+	for id: int in _turret_live.keys():
+		var veh := state.get_vehicle(id)
+		if veh == null or veh.wrecked:
+			_turret_live.erase(id)
+			settled = true
+			continue
+		var goal := _turret_goal_for(veh)
+		var cur: float = _turret_live[id]
+		var diff := angle_difference(cur, goal)
+		if absf(diff) < 0.002:
+			cur = goal
+		else:
+			cur += clampf(diff * (1.0 - exp(-delta * 10.0)), -TURRET_SPEED * delta, TURRET_SPEED * delta)
+		_turret_live[id] = cur
+		_turret_shown[id] = cur
+		if cur == goal and not _turret_aiming(veh):
+			_turret_live.erase(id)
+			settled = true
+	if settled: _redraw()
+
+func _draw_float_vehicles() -> void:
+	if state == null or not _unit_top_live: return
+	var font := ThemeDB.fallback_font
+	for veh: Vehicle in _float_vehicles:
+		_draw_vehicle(_veh_float, veh, _float_visible, font, _vehicle_sway(veh))
+	Sprites.set_base_transform(pan, Vector2(zoom, zoom))
+	_veh_float.draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
+	_draw_board_pick(_veh_float, font)
 
 ## Soldiers on their own layer (perf, 0.14.5): one small canvas item per soldier, drawn
 ## again only when what it shows changes. The board used to issue ~10 draw commands for every
@@ -969,6 +1175,8 @@ class UnitSprite extends Node2D:
 	var look: Array = []
 	## Script-side copies of position and visible: reading the node's own costs an engine call.
 	var off := Vector2.ZERO
+	## Motion on top of off (hover twitch, floating in vacuum), already turned about the cell.
+	var wob := Vector2.ZERO
 	var shown := true
 	var at := Vector2i(-99999, -99999)
 	var host: Object
@@ -996,6 +1204,11 @@ var _unit_walkers: Array = []
 const UNIT_CULL_SNAP := 16
 
 func _make_unit_layers() -> void:
+	# Vehicles floating in vacuum: over the board, under the soldiers riding them.
+	_veh_float = Node2D.new()
+	_veh_float.name = "FloatingVehicles"
+	_veh_float.draw.connect(_draw_float_vehicles)
+	add_child(_veh_float)
 	_unit_layer = Node2D.new()
 	_unit_layer.name = "Units"
 	add_child(_unit_layer)
@@ -1013,6 +1226,8 @@ func _forget_unit_keys() -> void:
 func _show_unit_layers(on: bool) -> void:
 	if _unit_layer != null and _unit_layer.visible != on:
 		_unit_layer.visible = on
+	if _veh_float != null and _veh_float.visible != on:
+		_veh_float.visible = on
 	if _unit_top != null:
 		_unit_top.queue_redraw()
 
@@ -1137,7 +1352,11 @@ func _sync_unit_layer(visible: Dictionary, fog_on: bool, viewer: int, vx0: int, 
 		var woff: Vector2 = _walk_offset.get(unit.id, Vector2.ZERO) if moving else Vector2.ZERO
 		if sprite.off != woff:
 			sprite.off = woff
-			sprite.position = woff
+			sprite.position = woff + sprite.wob
+		if _floating_cell(at) or (unit.aboard_vehicle_id != -1 and _float_ids.has(unit.aboard_vehicle_id)):
+			_floaters[unit.id] = unit.aboard_vehicle_id
+		elif _floaters.has(unit.id):
+			_floaters.erase(unit.id)
 		if not sprite.shown:
 			sprite.shown = true
 			sprite.visible = true
@@ -1237,9 +1456,29 @@ func _draw_unit_top() -> void:
 	for b: Array in _top_bodies:
 		_draw_corpse(b[0], int(b[1][1]), b[1][0], ci)
 	# Дроны — верхний слой (item 14): рисуются поверх машин и наземных юнитов.
+	# Turrets turning this moment (issues-12 #12): over the hull the board drew.
+	for id: int in _turret_live:
+		var tv := state.get_vehicle(id)
+		if tv == null: continue
+		var toff: Vector2 = _veh_offset.get(id, Vector2.ZERO) + _vehicle_sway(tv)
+		Sprites.set_base_transform(pan + toff * zoom, Vector2(zoom, zoom))
+		ci.draw_set_transform(pan + toff * zoom, 0.0, Vector2(zoom, zoom))
+		TankModel.draw(ci, Rect2(_cell_origin(tv.origin), Vector2(tv.size) * CELL), tv.facing, _side_color(tv.owner),
+				false, Color.WHITE, tv.tower_locked_dir, _turret_live[id], TankModel.Part.TURRET)
+	Sprites.set_base_transform(pan, Vector2(zoom, zoom))
+	_drones_moving = false
+	var now := _anim_time()
 	for d: Dictionary in _top_drones:
-		ci.draw_set_transform(pan + _walk_offset.get(d["unit"].id, Vector2.ZERO) * zoom, 0.0, Vector2(zoom, zoom))
-		_draw_drone(d["unit"], d["at"], ci)
+		var du: UnitInstance = d["unit"]
+		var dmove := Vector2.ZERO
+		if _floating_cell(d["at"]):
+			dmove = _sway(du.id * 1.37, now)[0]
+			_drones_moving = true
+		if du.id == _twitch_id:
+			dmove += _twitch(now)[0]
+			_drones_moving = true
+		ci.draw_set_transform(pan + (_walk_offset.get(du.id, Vector2.ZERO) + dmove) * zoom, 0.0, Vector2(zoom, zoom))
+		_draw_drone(du, d["at"], ci)
 	ci.draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
 	_draw_seat_grid(font, ci)
 
@@ -1945,30 +2184,30 @@ func _draw_seat_grid(font: Font, ci: CanvasItem = null) -> void:
 			ci.draw_string(font, r.position + Vector2(3, 12), "DRIVER", HORIZONTAL_ALIGNMENT_LEFT, -1, 10,
 					Color(1, 0.95, 0.75))
 
-func _draw_borg(veh: Vehicle, org: Vector2, col: Color, wrecked: bool, dur: int, font: Font) -> void:
+func _draw_borg(veh: Vehicle, org: Vector2, col: Color, wrecked: bool, dur: int, font: Font, ci: CanvasItem) -> void:
 	var frame := Rect2(org + Vector2(2, 2), Vector2(CELL - 4, CELL - 4))
 	var op := state.get_unit(veh.borg_operator())
 	var manned := op != null and op.is_alive()
 	var key := Sprites.resolve("borg_wreck" if wrecked else "borg")
 	if key != "":
-		Sprites.draw_texture_override(self, key, org, float(CELL))
+		Sprites.draw_texture_override(ci, key, org, float(CELL))
 	elif wrecked:
-		draw_rect(frame, Color(0.22, 0.22, 0.25))
-		draw_rect(frame, Color(0.45, 0.45, 0.5), false, 2.0)
-		draw_line(frame.position, frame.end, Color(0.6, 0.3, 0.3), 2.0)
-		draw_line(Vector2(frame.position.x, frame.end.y), Vector2(frame.end.x, frame.position.y),
+		ci.draw_rect(frame, Color(0.22, 0.22, 0.25))
+		ci.draw_rect(frame, Color(0.45, 0.45, 0.5), false, 2.0)
+		ci.draw_line(frame.position, frame.end, Color(0.6, 0.3, 0.3), 2.0)
+		ci.draw_line(Vector2(frame.position.x, frame.end.y), Vector2(frame.end.x, frame.position.y),
 			Color(0.6, 0.3, 0.3), 2.0)
 		return
 	else:
 		var body := col if manned else Color(0.45, 0.47, 0.52)
-		draw_rect(frame, body.darkened(0.55))
-		draw_rect(frame, body, false, 3.0)
+		ci.draw_rect(frame, body.darkened(0.55))
+		ci.draw_rect(frame, body, false, 3.0)
 		if not manned:
-			draw_circle(org + Vector2(CELL, CELL) * 0.5, 4.0, Color(0.7, 0.72, 0.78))
-	draw_string(font, org + Vector2(CELL - 12, 12), "B", HORIZONTAL_ALIGNMENT_LEFT, -1, 10,
+			ci.draw_circle(org + Vector2(CELL, CELL) * 0.5, 4.0, Color(0.7, 0.72, 0.78))
+	ci.draw_string(font, org + Vector2(CELL - 12, 12), "B", HORIZONTAL_ALIGNMENT_LEFT, -1, 10,
 		Color(1, 1, 1, 0.9))
 	for i in maxi(0, dur):
-		draw_circle(org + Vector2(6 + i * 7, CELL - 5), 2.5, Color(0.9, 0.9, 0.6))
+		ci.draw_circle(org + Vector2(6 + i * 7, CELL - 5), 2.5, Color(0.9, 0.9, 0.6))
 
 ## Может ли у бойца быть «!» нехватки снаряжения: истративший ЛДФ, оператор (станция) и
 ## те, кто родился с предметом (то же условие, что в unit_missing_equipment). Остальным незачем спрашивать резолвер каждый кадр.

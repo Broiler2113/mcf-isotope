@@ -175,13 +175,16 @@ func _ready() -> void:
 	_world.add_child(_fog_boundary)
 	_fog_boundary.update_visibility(_vis_img)
 	var tod: String = state.time_of_day
-	_sun_on = env in ["town", "field"] and tod in ["day", "morning", "evening"]
+	_sun_on = env in ["town", "field"] and tod in ["day", "morning", "evening"] and not state.overcast
 	_build_shaders()
 	_update_light(true)
 	_build_materials()
 	_build_environment()
 	_build_dynamic()
 	_sync_snow()
+	if env in ["station", "asteroid"]:
+		_flare = FirstPersonSky.LensFlare.new()
+		add_child(_flare)
 	_minimap = Minimap.new(self)
 	add_child(_minimap)
 	var cross := Crosshair.new()
@@ -237,6 +240,7 @@ func _process(delta: float) -> void:
 	_move(delta)
 	_sync_snow()
 	_place_camera()
+	_sync_flare(delta)
 	_vis_timer -= delta
 	if _vis_timer <= 0.0:
 		_vis_timer = 0.12
@@ -266,6 +270,46 @@ func _process(delta: float) -> void:
 	if _map_timer <= 0.0:
 		_map_timer = 0.1
 		_minimap.queue_redraw()
+
+## The Sun in space and its lens flare (issues-12 #19).
+var _flare: FirstPersonSky.LensFlare = null
+func _sync_flare(delta: float) -> void:
+	if _flare == null: return
+	var sun := FirstPersonSky.SPACE_SUN.normalized()
+	var far := _cam.global_position + sun * 400.0
+	var want := 0.0
+	_flare.on_screen = false
+	if not _cam.is_position_behind(far):
+		var at := _cam.unproject_position(far)
+		var box := Rect2(Vector2.ZERO, _flare.size).grow(_flare.size.y * 0.1)
+		if box.has_point(at):
+			_flare.sun = at
+			_flare.on_screen = true
+			want = 1.0 if sun_in_sight(sun) else 0.0
+	_flare.strength = move_toward(_flare.strength, want, delta * 6.0)
+	_flare.queue_redraw()
+
+## Nothing between the eye and the sky along dir: walls stop it below their tops, a ceiling
+## once it is reached under a roof; glass and open doors let it through.
+func sun_in_sight(dir: Vector3) -> bool:
+	var flat := Vector2(dir.x, dir.z)
+	if flat.length() < 0.001: return not _roofed_at(pos)
+	var step := flat.normalized() * 0.2
+	var rise := dir.y / flat.length() * 0.2
+	var p := Vector2(pos.x, pos.z)
+	var y := pos.y + EYE
+	for i in 400:
+		var c := Vector2i(floori(p.x), floori(p.y))
+		if not grid.in_bounds(c) or y > FirstPersonBoard.CEIL + FirstPersonBoard.ROOF_T + 0.05:
+			return true
+		if _roof[c.y * grid.width + c.x] == 1 and y >= FirstPersonBoard.CEIL - 0.01:
+			return false
+		var cell := grid.cell_fast(c.x, c.y)
+		if y < FirstPersonBoard.CEIL and FirstPersonBoard.is_wall(cell, env) and not MCF.is_glass(cell.feature_id):
+			return false
+		p += step
+		y += rise
+	return true
 
 func view_distance() -> int:
 	return Ui.fp_render_distance
@@ -721,8 +765,8 @@ func _commit_light_map(target: LightManager, texture: Texture2D, rect: Rect2i) -
 			material.set_shader_parameter(key, params[key])
 
 func _sync_environment() -> void:
-	if _environment_time == state.time_of_day: return
-	_sun_on = env in ["town", "field"] and state.time_of_day in ["day", "morning", "evening"]
+	if _environment_time == _sky_key(): return
+	_sun_on = env in ["town", "field"] and state.time_of_day in ["day", "morning", "evening"] and not state.overcast
 	_build_shaders()
 	for material: ShaderMaterial in _all_mats:
 		material.set_shader_parameter("sun_k", SUN_K if _sun_on else 0.0)
@@ -736,7 +780,7 @@ func _build_environment() -> void:
 	if _environment_root != null: _environment_root.free()
 	_environment_root = Node3D.new()
 	_world.add_child(_environment_root)
-	_environment_time = state.time_of_day
+	_environment_time = _sky_key()
 	var e := Environment.new()
 	var tod: String = state.time_of_day
 	var night := tod in ["night", ""]
@@ -755,20 +799,15 @@ func _build_environment() -> void:
 	e.glow_bloom = 0.0
 	match env:
 		"town", "field":
+			# Clouds, the sun and an overcast deck (issues-12 #20): the sun in the sky is where
+			# the shadows come from.
 			var sky := Sky.new()
-			var pm := ProceduralSkyMaterial.new()
-			pm.sky_top_color = Color(0.01, 0.012, 0.03) if night else (Color(0.32, 0.42, 0.66) if dusk else Color(0.28, 0.48, 0.82))
-			pm.sky_horizon_color = Color(0.03, 0.035, 0.06) if night else (Color(0.95, 0.66, 0.45) if dusk else Color(0.68, 0.78, 0.9))
-			pm.sky_energy_multiplier = 1.0
-			pm.ground_bottom_color = Color(0.05, 0.05, 0.05)
-			pm.ground_horizon_color = pm.sky_horizon_color
-			pm.sun_angle_max = 0.0
-			sky.sky_material = pm
+			sky.sky_material = FirstPersonSky.surface(_star_texture(), tod, state.overcast, _sun_basis(dusk).z)
 			e.background_mode = Environment.BG_SKY
 			e.sky = sky
 			e.fog_enabled = true
-			e.fog_light_color = pm.sky_horizon_color
-			e.fog_density = 0.016 if night else 0.008
+			e.fog_light_color = FirstPersonSky.horizon_colour(tod, state.overcast)
+			e.fog_density = (0.016 if night else 0.008) * (1.6 if state.overcast else 1.0)
 			e.fog_sky_affect = 0.0
 			if _outer_ground == null:
 				_outer_ground = _far_ground()
@@ -777,7 +816,7 @@ func _build_environment() -> void:
 				var sun := DirectionalLight3D.new()
 				sun.light_color = Color.WHITE
 				sun.light_energy = 1.0
-				sun.rotation_degrees = Vector3(-50.0 if not dusk else -24.0, 35.0, 0)
+				sun.basis = _sun_basis(dusk)
 				sun.shadow_enabled = true
 				sun.directional_shadow_max_distance = 55.0
 				sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL if OS.get_name() == "Web" else DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
@@ -787,10 +826,9 @@ func _build_environment() -> void:
 			elif night:
 				_environment_root.add_child(_moon())
 		"asteroid":
+			# The Sun and the Earth beyond the stars (issues-12 #19).
 			var sky2 := Sky.new()
-			var stars := PanoramaSkyMaterial.new()
-			stars.panorama = _star_texture()
-			sky2.sky_material = stars
+			sky2.sky_material = FirstPersonSky.space(_star_texture())
 			e.background_mode = Environment.BG_SKY
 			e.sky = sky2
 		_:
@@ -801,15 +839,19 @@ func _build_environment() -> void:
 			e.fog_density = 0.01
 			if env == "station":
 				var sky3 := Sky.new()
-				var stars3 := PanoramaSkyMaterial.new()
-				stars3.panorama = _star_texture()
-				sky3.sky_material = stars3
+				sky3.sky_material = FirstPersonSky.space(_star_texture())
 				e.background_mode = Environment.BG_SKY
 				e.sky = sky3
 				e.fog_enabled = false
 	var we := WorldEnvironment.new()
 	we.environment = e
 	_environment_root.add_child(we)
+
+func _sky_key() -> String:
+	return "%s|%s" % [state.time_of_day, state.overcast]
+
+func _sun_basis(dusk: bool) -> Basis:
+	return Basis.from_euler(Vector3(deg_to_rad(-50.0 if not dusk else -24.0), deg_to_rad(35.0), 0.0))
 
 ## The land goes on past the map (as on the battle screen, where the ground runs on behind
 ## the board): one wide plane of the same turf or earth, just under the board's floor.
@@ -1232,8 +1274,29 @@ func _sync_combat_fx() -> void:
 		blast_mm.set_instance_transform(i, blasts[i][0])
 		blast_mm.set_instance_color(i, blasts[i][1])
 
-## Fire: steady glowing half-cubes (owner, fix-8: no flicker); gas and smoke: haze.
+## Fire (issues-12 #18): an upright flame billboard turned to the eye, glowing past white so
+## the view's bloom catches it; its light on the walls and floor comes from the light map, as
+## every lamp's does. Steady, no flicker (owner, fix-8).
+const FIRE_SHADER := """
+shader_type spatial;
+render_mode unshaded, cull_disabled, depth_draw_opaque;
+uniform sampler2D tex : filter_nearest, repeat_disable;
+void vertex() {
+	vec3 c = MODEL_MATRIX[3].xyz;
+	vec3 right = normalize(vec3(INV_VIEW_MATRIX[0].x, 0.0, INV_VIEW_MATRIX[0].z));
+	vec3 fwd = cross(right, vec3(0.0, 1.0, 0.0));
+	MODELVIEW_MATRIX = VIEW_MATRIX * mat4(vec4(right, 0.0), vec4(0.0, 1.0, 0.0, 0.0), vec4(fwd, 0.0), vec4(c, 1.0));
+}
+void fragment() {
+	vec4 t = texture(tex, UV);
+	if (t.a < 0.5) discard;
+	ALBEDO = t.rgb * 1.9;
+}
+"""
+
+## Gas and smoke: haze in half-cubes; fire: the flame billboard above.
 func _cloud_layer(col: Color, fire: bool) -> MultiMeshInstance3D:
+	if fire: return _fire_layer()
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	var bm := BoxMesh.new()
@@ -1597,14 +1660,35 @@ func _sync_clouds() -> void:
 	_fill(_gas_mm, gas, FirstPersonBoard.CEIL * 0.5, FirstPersonBoard.CEIL)
 	_fill(_smoke_mm, smoke, FirstPersonBoard.CEIL * 0.5, FirstPersonBoard.CEIL)
 
+func _fire_layer() -> MultiMeshInstance3D:
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	var q := QuadMesh.new()
+	q.size = Vector2(1.15, 1.35)
+	q.center_offset = Vector3(0, 0.675, 0)   # stands on the floor
+	mm.mesh = q
+	var mi := MultiMeshInstance3D.new()
+	mi.multimesh = mm
+	var mat := ShaderMaterial.new()
+	var sh := Shader.new()
+	sh.code = FIRE_SHADER
+	mat.shader = sh
+	mat.set_shader_parameter("tex", ImageTexture.create_from_image(FirstPersonArt.picture("fire")))
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.set_meta("billboard", true)
+	_dyn.add_child(mi)
+	return mi
+
 func _fill(mi: MultiMeshInstance3D, cells: Array[Vector2i], y: float, hgt: float) -> void:
 	if mi.get_meta("cells", []) == cells: return
 	mi.set_meta("cells", cells)
 	var mm := mi.multimesh
 	if mm.instance_count != cells.size(): mm.instance_count = cells.size()
+	var stand := mi.has_meta("billboard")   # a flame stands on the floor, whatever y the haze wants
 	for i in cells.size():
-		var b := Basis().scaled(Vector3(1, hgt, 1)) if hgt != 1.0 else Basis()
-		mm.set_instance_transform(i, Transform3D(b, Vector3(cells[i].x + 0.5, y, cells[i].y + 0.5)))
+		var b := Basis().scaled(Vector3(1, hgt, 1)) if hgt != 1.0 and not stand else Basis()
+		mm.set_instance_transform(i, Transform3D(b, Vector3(cells[i].x + 0.5, 0.0 if stand else y, cells[i].y + 0.5)))
 
 ## Drone stations and mines are drawn apart from the board on the battle screen too: each
 ## side sees its own (a station while in sight, mines only its own or the revealed ones).

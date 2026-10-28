@@ -1,7 +1,7 @@
 extends SceneTree
 
 ## Bake the very same textured model used in first person, vertically from above.
-## xvfb-run -a godot --path . --script res://tools/art/build_tank_sprites.gd
+## xvfb-run -a godot --path . --script res://tools/art/build_tank_sprites.gd [-- split]
 func _initialize() -> void:
 	_bake.call_deferred()
 
@@ -38,6 +38,33 @@ func _bake() -> void:
 	var shader := Shader.new()
 	shader.code = FirstPersonBoard.SHADER
 	DirAccess.make_dir_recursive_absolute("res://textures/vehicles/tank")
+	# -- split: only the hull without its turret and the turret alone (issues-12 #12: the board
+	# turns the turret smoothly instead of picking one of eight whole-tank frames).
+	var split_only := OS.get_cmdline_user_args().has("split")
+	for kind: String in ["tank", "tank_mask"]:
+		for part: String in ["hull", "turret"]:
+			var model := TankModel.create(func(imported: Material) -> Material:
+				var source := imported as StandardMaterial3D
+				return FirstPersonBoard.material(shader, {"tex": source.albedo_texture,
+						"no_fog": true, "lm_on": false, "flat_light": Color.WHITE, "tint": source.albedo_color,
+						"stripe_mask": kind == "tank_mask",
+						"team_stripe": kind == "tank_mask" and source.resource_name == "TeamStripe"}))
+			world.add_child(model)
+			if part == "hull": model.get_node("turret").visible = false
+			else: model.get_child(0).visible = false
+			await process_frame
+			await RenderingServer.frame_post_draw
+			var name := ("tank_" + part) + ("_mask" if kind == "tank_mask" else "")
+			if vp.get_texture().get_image().save_png("res://textures/vehicles/tank/%s.png" % name) != OK:
+				printerr("Could not save ", name)
+				quit(1)
+				return
+			model.free()
+	if split_only:
+		vp.free()
+		print("SVAROG: hull and turret baked separately.")
+		quit()
+		return
 	for frame in 8:
 		var suffix := "_aim_%d" % frame if frame != 0 else ""
 		for kind: String in ["tank", "tank_wreck", "tank_mask"]:

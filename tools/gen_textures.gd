@@ -46,6 +46,12 @@ func _initialize() -> void:
 		print("wood wall written to %s in %d ms" % [OUT, Time.get_ticks_msec() - t0])
 		quit()
 		return
+	# `-- --walls` — only the walls redrawn to match first person (issues-12 #16).
+	if "--walls" in OS.get_cmdline_user_args():
+		_matched_walls()
+		print("walls written to %s in %d ms" % [OUT, Time.get_ticks_msec() - t0])
+		quit()
+		return
 	# `-- --doors` — только двери (0.9.2), остальное байт в байт.
 	if "--doors" in OS.get_cmdline_user_args():
 		_doors_all()
@@ -65,14 +71,11 @@ func _initialize() -> void:
 	_strip("floor_epicenter", _scorch)
 	_strip("bedrock", _bedrock)
 	_floor_looks()
-	_save("fire", _fire())
+	# fire.png comes from tools/art/build_fire.py (issues-12 #18).
 	# --- Стены и прочие стыкующиеся объекты ---
 	_sheet("wall", _board_concrete, Color8(128, 126, 120), 3)
-	_sheet("wall_field", _board_concrete, Color8(128, 126, 120), 3)
-	_sheet("wall_station", _bulkhead, Color8(118, 126, 134), 3)
 	_sheet("wall_bunker", _blast_concrete, Color8(92, 92, 86), 3)
-	_sheet("wall_town", _dark_brick, Color8(108, 60, 48), 3)
-	_sheet("wall_asteroid", _dark_brick, Color8(108, 60, 48), 3)
+	_matched_walls()
 	_sheet("wood_wall", _timber, Color8(104, 72, 44), 3)
 	# Материалы стен (0.9.4): тот же объект, другой облик — город ставит дома из разного.
 	_sheet("wall_brick", _red_brick, Color8(150, 76, 56), 3)
@@ -418,19 +421,6 @@ func _bedrock(x: int, y: int, v: int) -> Color:
 ## Огонь сверху (batch ui-drones): не языки пламени сбоку, а горящая клетка с высоты —
 ## оранжевое поле с жёлтыми горячими пятнами и тёмно-красными краями языков, бесшовное,
 ## чтобы пожар на нескольких клетках шёл сплошным полем.
-func _fire() -> Image:
-	var img := Image.create(T, T, false, Image.FORMAT_RGBA8)
-	for y in T:
-		for x in T:
-			var n := _fbm(x, y, 111)
-			var hot := _tn(x, y, 8, 112)
-			var c := Color8(178, 48, 12).lerp(Color8(236, 120, 24), n)
-			if hot > 0.62:
-				c = c.lerp(Color8(255, 214, 92), clampf((hot - 0.62) * 3.0, 0.0, 1.0))
-			c.a = 0.82
-			img.set_pixel(x, y, c)
-	return img
-
 # =====================================================================================
 #  Стены и стыкующиеся объекты: fn(x, y, v, mask) → цвет
 # =====================================================================================
@@ -445,18 +435,6 @@ func _board_concrete(x: int, y: int, v: int, _mask: int) -> Color:
 	if y % 4 == 3:
 		c = _shade(c, 0.8)
 	return c
-
-## Переборка станции: рёбра жёсткости через 16 px, заклёпки, копоть.
-func _bulkhead(x: int, y: int, v: int, _mask: int) -> Color:
-	var c := _shade(Color8(104, 112, 120), 0.88 + 0.14 * _fbm(x, y, 131, 3))
-	var rib := x % 8
-	if rib == 0:
-		c = _shade(c, 0.62)
-	elif rib == 1:
-		c = _shade(c, 1.22)
-	if y % 8 == 2 and rib == 4:
-		c = _shade(c, 1.45)
-	return _shade(c, 0.93 + 0.12 * _fbm(x, y, 132 + v))
 
 ## Броне-бетон бункера и ДОТа: светлая тяжёлая масса над тёмным полом, раковины и
 ## вертикальные потёки по всей высоте (частые, без крупных пятен).
@@ -491,18 +469,43 @@ func _embrasure(x: int, y: int, v: int, mask: int) -> Color:
 		c = Color8(12, 12, 12) if y > 13 and y < 18 else _shade(c, 0.6)
 	return c
 
-## Тёмный «инженерный» кирпич: ложковая перевязка 8×4, швы раствора, тон по хешу самого
-## кирпича; кирпичи, переходящие через край плитки, одного тона у всех вариантов.
-func _dark_brick(x: int, y: int, v: int, _mask: int) -> Color:
-	var row := y / 4
-	var off := 4 if row % 2 == 1 else 0
-	var bx := posmod(x + off, T) / 8
-	if y % 4 == 3 or posmod(x + off, 8) == 7:
-		return _shade(Color8(70, 66, 62), 0.9 + 0.2 * _h(x, y, 151))
-	var straddles := off != 0 and bx == 3
-	var tone := _h(bx, row, 152 if straddles else 152 + v * 31)
-	var c := Color8(96, 50, 40).lerp(Color8(122, 70, 54), tone)
-	return _shade(c, 0.88 + 0.2 * _tn(x, y, 16, 153))
+## The walls whose look first person changed (issues-12 #16): each environment's wall is the
+## same material from above as its faces in first person — a station's light hull plates, a
+## town's red brick, a field's concrete block, an asteroid's rock.
+func _matched_walls() -> void:
+	_sheet("wall_station", _hull_plate, Color8(150, 156, 160), 3)
+	_sheet("wall_town", _red_brick, Color8(150, 76, 56), 3)
+	_sheet("wall_field", _cinder_block, Color8(112, 112, 106), 3)
+	_sheet("wall_asteroid", _rock_wall, Color8(92, 86, 80), 3)
+
+## Station hull from above: light grey plates 16 px square with a dark seam and a lit edge,
+## a rivet at every seam crossing, faint grime — the panels of first person's hull walls.
+func _hull_plate(x: int, y: int, v: int, _mask: int) -> Color:
+	var c := _shade(Color8(170, 175, 178), 0.9 + 0.12 * _fbm(x, y, 231, 3))
+	var sx := x % 16
+	var sy := y % 16
+	if sx == 15 or sy == 15:
+		c = _shade(c, 0.66)
+	elif sx == 0 or sy == 0:
+		c = _shade(c, 1.1)
+	if (sx == 2 or sx == 13) and (sy == 2 or sy == 13):
+		c = _shade(c, 0.78)                      # rivet, its lit side below
+	elif (sx == 2 or sx == 13) and (sy == 3 or sy == 14):
+		c = _shade(c, 1.12)
+	if _h(x + v * T, y, 232) > 0.988:
+		c = _shade(c, 0.86)                      # a scuff
+	return _shade(c, 0.96 + 0.08 * _fbm(x, y, 233 + v))
+
+## Asteroid rock: grey-brown stone with fine fissures and pale flecks, like first person's.
+func _rock_wall(x: int, y: int, v: int, _mask: int) -> Color:
+	var c := _shade(Color8(104, 98, 90), 0.8 + 0.34 * _fbm(x, y, 241 + v))
+	if _fbm(x, y, 242) < 0.36:
+		c = _shade(c, 0.76)                      # a hollow in the stone
+	if _h(x + v * T, y, 244) > 0.975:
+		c = _shade(c, 1.3)                       # fleck
+	elif _h(x + v * T, y, 245) > 0.99:
+		c = _shade(c, 0.6)                       # pit
+	return c
 
 ## Тяжёлый брус: вертикальные доски по 8 px, волокно; без сучков (0.11.3).
 func _timber(x: int, y: int, v: int, _mask: int) -> Color:

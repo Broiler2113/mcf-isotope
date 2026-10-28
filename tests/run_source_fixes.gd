@@ -34,7 +34,22 @@ func _solar() -> void:
 					if cells.has(c + d): cells.erase(c + d); todo.append(c + d)
 			smallest = mini(smallest, area)
 			count += 1
-		ck(count >= 6 and smallest >= 6, "station seed %d has frequent solar structures of at least six cells (%d arrays, smallest %d)" % [seed_value, count, smallest])
+		ck(count >= 1 and smallest >= 6, "station seed %d has solar structures of at least six cells (%d arrays, smallest %d)" % [seed_value, count, smallest])
+	# Issues-12 #14: panels only on the station's top side — nothing but space above each one.
+	for opt: Dictionary in [{"seed": 1}, {"seed": 4}, {"seed": 8}, {"seed": 3, "symmetric": true, "zones": 4}]:
+		var o := {"style": MapGen.Style.STATION, "size": 0}
+		o.merge(opt)
+		var g := MapGen.build(o)
+		var panels := 0
+		var below := 0
+		for i in g.w * g.h:
+			if g.m.get_look(i) != MCF.Look.SOLAR: continue
+			panels += 1
+			for y in i / g.w:
+				if not g.m.get_space(Vector2i(i % g.w, y)):
+					below += 1
+					break
+		ck(panels > 0 and below == 0, "solar panels sit only on the station's top side %s (%d panels, %d under the station)" % [opt, panels, below])
 
 func rolls(v: int) -> Array:
 	return [v / 36 + 1, (v / 6) % 6 + 1, v % 6 + 1]
