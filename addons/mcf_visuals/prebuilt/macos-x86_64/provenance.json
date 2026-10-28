@@ -2,7 +2,7 @@
   "ci": {
     "repository": "Broiler2113/mcf-isotope",
     "run_attempt": "1",
-    "run_id": "39996248893",
+    "run_id": "40604107389",
     "workflow": "Native game kernels"
   },
   "files": {
@@ -11,8 +11,8 @@
       "size": 1093
     },
     "mcf_visuals.dylib": {
-      "sha256": "6d84462ae0b5819c821317b694cc8d0cb8675a3f137b80d3e97bea5e6174a873",
-      "size": 359312
+      "sha256": "16564c4ee6e279ea47dee3fe9a72f757899147090e220adbe14f23c2c8800303",
+      "size": 412416
     },
     "mcf_visuals.gdextension": {
       "sha256": "62fd7fe8e9b9192af216962ac2618f2db6c4b70c0a2760f10b06dd02f33e0efb",
@@ -22,14 +22,14 @@
   "godot_cpp_commit": "e83fd0904c13356ed1d4c3d09f8bb9132bdc6b77",
   "godot_version": "4.7.stable.official.5b4e0cb0f",
   "schema": 1,
-  "source_commit": "e803596cc38fcc77581793d832d65757a73e659a",
+  "source_commit": "b5351c3c4d84264f9d9cde44248cad0f84039700",
   "source_files": {
     "addons/mcf_visuals/mcf_visuals.gdextension.in": "b6c32999bcf484027edc0dc127f31867522a79b2923147605c6f89e9d34e457d",
     "native/policy/dependencies.json": "30d4352d0c0f4919e021cf7e5ba06e42e35d26cb38f4f03426c0f1334f7b7468",
     "native/visuals/CMakeLists.txt": "6126f7f13ad54263bdb9b5a6a1617be062eac7a903e5935a35a05923d7ff021f",
     "native/visuals/build.py": "29194420f3cccc2163a8e543b7f62f58b83fa4294fd08f2c82da3ff376514a37",
     "native/visuals/build_profile.json": "95ab8eefce646b27992d7a51fe90b6bf5e5e647e63904bd772923aabb0e451f1",
-    "native/visuals/src/ai_kernel.cpp": "3c8a3991062a42d4d31784243d0af37fb479fa141c512af941878bc9677f58a0",
+    "native/visuals/src/ai_kernel.cpp": "6b4a6b23b928c029ae26ed487207837b6562cd5e48d9296a3c7d43020a50479a",
     "native/visuals/src/ai_kernel.h": "e347baef261286481ca2d12b415c6b0d31d1a136436416e3e7d84777d6e1f111",
     "native/visuals/src/mesh_builder.cpp": "b57bb54ba291512d5591c2a3a68f73c7fd8eed9934dda3f6c6bb17fbd44b9124",
     "native/visuals/src/pathfinding_kernel.cpp": "f6614e66a82898a944f29bdced47a456ae86dbfe47c53b2e33e000d26cce16e6",
@@ -39,6 +39,6 @@
     "native/visuals/src/visibility_kernel.cpp": "8aff90ad1234dbffe848441941eecdc52d8679285637da4eb9968bdf6a1cda5e",
     "native/visuals/src/visibility_kernel.h": "fd413b21efdc918ff37d81359386ec85fdd560d5ae4003e1e52370e6bc0e2b63"
   },
-  "source_fingerprint": "f9a40c824a2dbcc89121a1c381bb2f0f773d7fcbe18de60e5a79dbcd3a4e4065",
+  "source_fingerprint": "dae3a61141ed50ce021c30bc8d66ecbbca9d964db3677faa602a541895d00ded",
   "target": "macos-x86_64"
 }
