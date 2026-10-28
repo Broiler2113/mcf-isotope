@@ -8,7 +8,8 @@ extends "res://tests/SuiteBase.gd"
 ##   • the wake-up check's kept input (ResolverWorld._sync_wake_rows) == what the whole-army
 ##     pass collected: each unit's kind and the cells a living unit holds;
 ##   • hostile_target_ids / capturable_target_ids == the whole-army scans they replaced;
-##   • alive_rows, captives(), tracked_bodies() and each action's visual_deaths == a whole pass.
+##   • alive_rows, captives(), tracked_bodies() and each action's visual_deaths == a whole pass;
+##   • no sleeper the wake-up check left unasked (nothing on its lines changed) sees a soldier.
 ## Steps mix AI decisions, random legal intents, undo/redo (a restore: a new unit list), side
 ## swaps and spawns (cheats do both), on town and station maps with civilians, tanks, shuttles
 ## and drones; now and then a cell's occupant is lifted with no unit logged (the walk log path).
@@ -19,17 +20,20 @@ const STEPS := 220
 
 var _pending: Intent = null
 var _n := {"steps": 0, "fog": 0, "partial": 0, "wake": 0, "targets": 0, "pokes": 0,
-		"deaths": 0, "captives": 0, "bodies": 0}
+		"deaths": 0, "captives": 0, "bodies": 0, "quiet": 0}
 
 func run() -> void:
 	for style: int in [MapGen.Style.TOWN, MapGen.Style.STATION]:
-		for seed_value: int in [11, 12]:
+		for seed_value: int in [11, 12, 15]:
 			_play(style, seed_value)
-	print("unit log: %d steps, %d fog checks (%d on the unit list of the last pass), %d wake-up rows, %d target lists, %d occupant pokes, %d deaths, %d captive and %d body rows" % [
+	print("unit log: %d steps, %d fog checks (%d on the unit list of the last pass), %d wake-up rows, %d target lists, %d occupant pokes, %d deaths, %d captive and %d body rows, %d unasked sleepers re-checked" % [
 			_n["steps"], _n["fog"], _n["partial"], _n["wake"], _n["targets"], _n["pokes"],
-			_n["deaths"], _n["captives"], _n["bodies"]])
+			_n["deaths"], _n["captives"], _n["bodies"], _n["quiet"]])
 
 func _play(style: int, seed_value: int) -> void:
+	GameConfig.random_events_enabled = false   # a wave landing after the check is seen next action
+	GameConfig.civilians_enabled = true
+	GameConfig.civilian_count = 14
 	var m := MapGen.generate({"style": style, "size": 1, "seed": seed_value, "civilians": 6})
 	for side: int in [MCF.Owner.PLAYER_1, MCF.Owner.PLAYER_2]:
 		var cells := m.zone_cells(side)
@@ -101,6 +105,9 @@ func _play(style: int, seed_value: int) -> void:
 				ck(res.visual_deaths == fell, "%s step %d after %s: visual deaths %s, a whole pass %s" % [
 						tag, step, what, res.visual_deaths, fell])
 				_n["deaths"] += fell.size()
+				var missed := _quiet_but_seeing(st, r)
+				ck(missed.is_empty(), "%s step %d after %s: sleepers %s were not asked but see a soldier" % [
+						tag, step, what, missed])
 		_n["steps"] += 1
 		var why := _check(st, r, ref)
 		if why == "" and step % 9 == 0:
@@ -184,6 +191,42 @@ func _check(st: GameState, r: GameActionResolver, ref: GameActionResolver) -> St
 			return "capturable_target_ids of unit %d" % u.id
 		_n["targets"] += 1
 	return ""
+
+## The sleepers the last wake-up check did not ask again (ResolverWorld._wq_quiet: they saw no
+## one and nothing on their lines changed) that a whole check, built from scratch, says see a
+## soldier or a hull. Right after an action's check that must be none.
+func _quiet_but_seeing(st: GameState, r: GameActionResolver) -> Array:
+	var scorer := r._native_wake_scorer()
+	if scorer == null:
+		return []
+	var gw := st.grid.width
+	var targets := PackedInt32Array()
+	var occupied := PackedInt32Array()
+	var quiet: Array = []
+	var xy := PackedInt32Array()
+	for u: UnitInstance in st.all_units():
+		if not u.is_alive():
+			continue
+		var on_board := st.grid.in_bounds(u.coord)
+		if on_board and st.grid.cell(u.coord).occupant == u:
+			occupied.append(u.coord.y * gw + u.coord.x)
+		if MCF.is_player(u.owner) and not u.is_drone and on_board:
+			targets.append_array([u.coord.x, u.coord.y])
+		elif MCF.is_neutral(u.owner) and u.neutral_group == 0 and r._wq_quiet.has(u.id):
+			quiet.append(u.id)
+			xy.append_array([u.coord.x, u.coord.y])
+	for veh: Vehicle in st.all_vehicles():
+		if veh.alive() and not MCF.is_neutral(veh.owner):
+			for fc: Vector2i in veh.footprint():
+				targets.append_array([fc.x, fc.y])
+	if quiet.is_empty() or targets.is_empty():
+		return []
+	_n["quiet"] += quiet.size()
+	var sees: PackedByteArray = scorer.civilians_seeing(xy, targets, occupied)
+	var out: Array = []
+	for i in quiet.size():
+		if sees[i] != 0: out.append(quiet[i])
+	return out
 
 ## The scans as they were before unit_xy.
 func _hostile_whole(r: GameActionResolver, shooter: UnitInstance) -> Array:

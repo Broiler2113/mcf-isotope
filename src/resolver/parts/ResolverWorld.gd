@@ -327,10 +327,16 @@ func _seed_sight_activation() -> void:
 			_wk_seen[u.id] = true
 			_activation_frontier.append(u.id)
 
-## The wake-up check in C++ (MCFPlanScorer.civilians_seeing) as the full check the incremental
-## one below must equal: every sleeper not yet queued, against every soldier on the board and
-## every hull. Its input comes from _sync_wake_rows, kept between actions. The incremental
-## records do not follow these calls, so a later GDScript pass starts full (_wk_grid).
+## The wake-up check in C++ (MCFPlanScorer.civilians_seeing): every sleeper not yet queued,
+## against every soldier on the board and every hull. Its input comes from _sync_wake_rows,
+## kept between actions. The incremental records of the GDScript check below do not follow
+## these calls, so a later GDScript pass starts full (_wk_grid).
+##
+## A sleeper checked before that saw no one is asked again only if a cell on its row, column or
+## diagonal changed since (_wa_dirty: a logged unit's old or new cell, an occupant change):
+## sight runs along those four lines only, and the rest of what it depends on (the board, its
+## look and the hulls) is the scorer's key, compared whole. Everyone else is asked as before,
+## so the frontier grows exactly as the whole check grows it. check_everything asks everyone.
 func _native_sight_activation(scorer: RefCounted) -> void:
 	_sync_wake_rows()
 	_wk_grid = 0
@@ -339,6 +345,31 @@ func _native_sight_activation(scorer: RefCounted) -> void:
 	var targets := PackedInt32Array()
 	var waiting: Array = []
 	var sleepers := PackedInt32Array()
+	var hulls := PackedInt32Array()
+	for veh: Vehicle in state.all_vehicles():
+		if veh.alive() and not MCF.is_neutral(veh.owner):
+			for fc: Vector2i in veh.footprint():
+				hulls.append(fc.x)
+				hulls.append(fc.y)
+	var keep := not _wa_fresh and not check_everything and is_same(scorer, _wq_scorer) \
+			and _wq_key == _wake_scorer_key and _wq_hulls == hulls
+	if not keep:
+		_wq_quiet.clear()
+	var dirty := {}
+	if keep:
+		var gw := state.grid.width
+		for idx: int in _wa_dirty:
+			var x := idx % gw
+			var y := idx / gw
+			dirty[Vector2i(0, y)] = true
+			dirty[Vector2i(1, x)] = true
+			dirty[Vector2i(2, x - y)] = true
+			dirty[Vector2i(3, x + y)] = true
+	_wa_dirty.clear()
+	_wa_fresh = false
+	_wq_scorer = scorer
+	_wq_key = _wake_scorer_key.duplicate()
+	_wq_hulls = hulls
 	for i in _wa_kind.size():
 		var kind: int = _wa_kind[i]
 		if kind == _WA_TARGET:
@@ -346,24 +377,31 @@ func _native_sight_activation(scorer: RefCounted) -> void:
 			targets.append(xy[i * 2 + 1])
 		elif kind == _WA_SLEEPER:
 			var u: UnitInstance = units[i]
-			if not _activation_frontier.has(u.id):
-				waiting.append(u)
-				sleepers.append(xy[i * 2])
-				sleepers.append(xy[i * 2 + 1])
+			if _activation_frontier.has(u.id):
+				continue
+			var x: int = xy[i * 2]
+			var y: int = xy[i * 2 + 1]
+			if _wq_quiet.has(u.id) and not dirty.has(Vector2i(0, y)) and not dirty.has(Vector2i(1, x)) \
+					and not dirty.has(Vector2i(2, x - y)) and not dirty.has(Vector2i(3, x + y)):
+				continue   # saw no one, and nothing on its lines changed since
+			waiting.append(u)
+			sleepers.append(x)
+			sleepers.append(y)
 	if targets.is_empty() or waiting.is_empty():
-		return   # no soldier on the board, or nobody asleep: nothing to wake
-	for veh: Vehicle in state.all_vehicles():
-		if veh.alive() and not MCF.is_neutral(veh.owner):
-			for fc: Vector2i in veh.footprint():
-				targets.append(fc.x)
-				targets.append(fc.y)
+		return   # no soldier on the board, or nobody to ask: nothing to wake
+	targets.append_array(hulls)
 	var sees: PackedByteArray = scorer.civilians_seeing(sleepers, targets, PackedInt32Array(_wa_occ.keys()))
 	if sees.size() != waiting.size():
 		push_error("Native wake-up check refused its input")
+		_wq_quiet.clear()
 		return
 	for i in waiting.size():
+		var id: int = (waiting[i] as UnitInstance).id
 		if sees[i] != 0:
-			_activation_frontier.append((waiting[i] as UnitInstance).id)
+			_activation_frontier.append(id)
+			_wq_quiet.erase(id)
+		else:
+			_wq_quiet[id] = true
 
 ## The wake-up check's input, kept per all_units() slot between actions (it is asked after every
 ## action, over the whole army): what each unit is to the check, and the cells whose occupant is
@@ -379,6 +417,12 @@ var _wa_grid := 0
 var _wa_kind := PackedByteArray()
 var _wa_xy := PackedInt32Array()   # each slot's cell when its kind was taken
 var _wa_occ: Dictionary = {}       # flat cell index -> true
+var _wa_dirty: Dictionary = {}     # flat cells touched since the last check (see above)
+var _wa_fresh := true              # the rows were rebuilt whole: no earlier check to build on
+var _wq_quiet: Dictionary = {}     # sleeper id -> true: asked, saw no one
+var _wq_scorer: RefCounted = null  # the scorer, its key and the hulls of that check
+var _wq_key: Array = []
+var _wq_hulls := PackedInt32Array()
 
 func _sync_wake_rows() -> void:
 	var units := state.all_units()
@@ -388,7 +432,7 @@ func _sync_wake_rows() -> void:
 	var cells := grid.cells_flat()
 	var xy := state.unit_xy()
 	var picks: Variant = null
-	if is_same(units, _wa_list) and _wa_grid == grid.get_instance_id() \
+	if is_same(units, _wa_list) and _wa_grid == grid.get_instance_id() and not check_everything \
 			and _wa_walk >= GridCell.walk_log_base and _wa_walk <= GridCell.walk_version:
 		picks = state.units_logged_since(_wa_pos, _wa_list)
 	_wa_pos = UnitInstance.vision_log_end()
@@ -399,6 +443,8 @@ func _sync_wake_rows() -> void:
 		_wa_xy = xy.duplicate()
 		_wa_kind.resize(units.size())
 		_wa_occ.clear()
+		_wa_dirty.clear()
+		_wa_fresh = true
 		for i in units.size():
 			var u: UnitInstance = units[i]
 			_wa_kind[i] = _wake_kind(u, gw, gh)
@@ -423,6 +469,7 @@ func _sync_wake_rows() -> void:
 		touched[changes[k + 1] * gw + changes[k]] = true
 		k += 2
 	_wa_walk = GridCell.walk_version
+	_wa_dirty.merge(touched)
 	for idx: int in touched:
 		var occ: UnitInstance = cells[idx].occupant
 		if occ != null and occ.status == MCF.Status.ALIVE and occ.coord == Vector2i(idx % gw, idx / gw) \
