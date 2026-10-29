@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://co6qfmdy3cxwl"
+path="res://.godot/imported/door_field_0.png-a3cab4e71176e002baa414f2dd6755ed.image"
+
+[deps]
+
+source_file="res://textures/first_person/door_field_0.png"
+dest_files=["res://.godot/imported/door_field_0.png-a3cab4e71176e002baa414f2dd6755ed.image"]
+
+[params]
+

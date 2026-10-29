@@ -11,12 +11,15 @@ render_mode unshaded;
 uniform sampler2D screen : hint_screen_texture, filter_linear, repeat_disable;
 // Settings → Display (issues-13 #5): 0 is the plain picture, 1 the full tube.
 uniform float strength = 1.0;
+// Chromatic aberration (issues-14 #4): red and blue drift apart from the middle out, a little
+// always and more for a moment after a blast or while fire burns near you (0..1).
+uniform float shock = 0.0;
 void fragment() {
 	vec2 uv = SCREEN_UV;
 	vec2 c = uv - 0.5;
-	float fringe = 0.0009 + 0.0016 * dot(c, c);
-	vec3 col = vec3(texture(screen, uv + vec2(fringe, 0.0)).r, texture(screen, uv).g,
-			texture(screen, uv - vec2(fringe, 0.0)).b);
+	vec2 fringe = c * (0.004 + 0.014 * shock) + vec2(0.0007 + 0.0015 * shock, 0.0);
+	vec3 col = vec3(texture(screen, uv + fringe).r, texture(screen, uv).g,
+			texture(screen, uv - fringe).b);
 	// About 300 lines down the screen whatever the window size, like a terminal tube.
 	float rows = max(2.0, (1.0 / SCREEN_PIXEL_SIZE.y) / 300.0);
 	float line = 0.5 + 0.5 * cos(FRAGCOORD.y / rows * 6.2831853);
@@ -48,6 +51,15 @@ func _ready() -> void:
 	rect.material = mat
 	add_child(rect)
 	set_strength(Ui.crt_strength)
+
+## How shaken the picture is: what the battle asks for now (Ui.crt_shock), eased so a blast
+## flares quickly and fades.
+var want := 0.0
+var _shock := 0.0
+func _process(delta: float) -> void:
+	_shock = move_toward(_shock, want, delta * (6.0 if want > _shock else 1.5))
+	want = 0.0
+	((get_child(0) as ColorRect).material as ShaderMaterial).set_shader_parameter("shock", _shock)
 
 func set_strength(v: float) -> void:
 	((get_child(0) as ColorRect).material as ShaderMaterial).set_shader_parameter("strength", v)

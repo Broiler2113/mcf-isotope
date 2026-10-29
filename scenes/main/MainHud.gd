@@ -98,7 +98,7 @@ func _show_match_analysis() -> void:
 	var frame := VBoxContainer.new()
 	frame.add_theme_constant_override("separation", 0)
 	panel.add_child(frame)
-	frame.add_child(SteamChrome.header_bar("What the Model Makes of It"))
+	frame.add_child(SteamChrome.header_bar("What the Model Makes of It", SteamChrome.close_x(overlay.queue_free)))
 	var body := VBoxContainer.new()
 	body.add_theme_constant_override("separation", 10)
 	frame.add_child(SteamChrome.pad(body, 16, 14))
@@ -112,14 +112,6 @@ func _show_match_analysis() -> void:
 	report.bbcode_enabled = false
 	report.scroll_following = false
 	body.add_child(report)
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_END
-	body.add_child(row)
-	var shut := Button.new()
-	shut.text = "Close"
-	shut.custom_minimum_size = Vector2(120, 34)
-	shut.pressed.connect(overlay.queue_free)
-	row.add_child(shut)
 	_ui_layer.add_child(overlay)
 	Ui.theme_canvas_layers()
 	while analyst.has_next():

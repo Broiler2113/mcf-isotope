@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://beucsbw28hei2"
+path="res://.godot/imported/veg_grass_c.png-10caf73f8865ee7f65c00fa036a035cd.image"
+
+[deps]
+
+source_file="res://textures/first_person/veg/veg_grass_c.png"
+dest_files=["res://.godot/imported/veg_grass_c.png-10caf73f8865ee7f65c00fa036a035cd.image"]
+
+[params]
+

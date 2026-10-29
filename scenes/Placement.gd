@@ -846,6 +846,8 @@ func _sync_lighting() -> void:
 		_tile_layer.queue_redraw()
 	if _tile_layer != null and _tile_layer.tiles.set_time_of_day(map.time_of_day if map != null else ""):
 		_tile_layer.queue_redraw()
+	if _tile_layer != null and _tile_layer.tiles.set_grass(Ui.grass):
+		_tile_layer.queue_redraw()
 	if _tile_layer != null and map != null:
 		_tile_layer.modulate = Color.WHITE if Ui.dynamic_lighting else LightManager.flat_tint(map.environment(), map.time_of_day)
 	if not (Ui.dynamic_lighting):

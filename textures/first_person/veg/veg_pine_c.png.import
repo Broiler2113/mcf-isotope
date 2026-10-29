@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://dedkmbetx81x0"
+path="res://.godot/imported/veg_pine_c.png-6bd10e321b9600d422f4472ff128d2d6.image"
+
+[deps]
+
+source_file="res://textures/first_person/veg/veg_pine_c.png"
+dest_files=["res://.godot/imported/veg_pine_c.png-6bd10e321b9600d422f4472ff128d2d6.image"]
+
+[params]
+

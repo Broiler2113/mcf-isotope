@@ -24,6 +24,18 @@ const ROOF_T := 0.32     # roof slab thickness above the ceiling
 const EAVE := 0.22       # how far a roof overhangs its walls
 const TRENCH := 2.0      # trench depth (owner): you can climb down into one
 const LINTEL := 2.1      # top of a doorway
+## Grass (issues-14 #6): clumps on each grass cell, drawn within this many metres of you.
+const GRASS_PER_CELL := 9
+const GRASS_RANGE := 30.0
+
+## The earth thrown up along a trench's open side: this high, this wide, on the ground beside it.
+const PARAPET := 0.32
+const PARAPET_W := 0.3
+
+## Grass grows round plants and mines, not under furniture, works or walls.
+static func grassy(fid: String) -> bool:
+	return fid == "" or fid == MCF.FEATURE_MINE or fid == MCF.FEATURE_AV_MINE \
+			or Furniture.base_of(fid) in ["pine_tree", "park_tree", "bush", "bush_dry", "bush_flowering", "tall_grass"]
 
 ## One shader for the whole board. Light: the 2D light map at the point just in front of
 ## the face (a wall's side reads the floor before it, as on the board), five taps blurred
@@ -63,11 +75,21 @@ uniform bool no_fog = false;
 uniform float render_radius = 1000.0;
 uniform bool sight_only = false;
 uniform vec4 door_bounds = vec4(0.0);
+// Plant cards (issues-14 #6, #7): UV2 holds the plant's own cell, so fog and sight go by where it
+// stands, not by where its crown reaches; sway bends it in the wind, more toward its top.
+uniform bool veg = false;
+uniform float sway = 0.0;
 varying highp vec3 wpos;
 varying highp vec3 wnorm;
 varying vec3 model_pos;
 varying vec3 model_normal;
 void vertex() {
+	if (sway > 0.0) {
+		vec3 o = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+		float h = max(VERTEX.y, 0.0);
+		VERTEX.x += sin(TIME * 1.6 + o.x * 0.9 + o.z * 0.6) * sway * h * h;
+		VERTEX.z += cos(TIME * 1.2 + o.z * 0.8 - o.x * 0.3) * sway * 0.6 * h * h;
+	}
 	model_pos = VERTEX;
 	model_normal = NORMAL;
 	wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
@@ -126,7 +148,9 @@ void fragment() {
 	if (stripe_mask) c.rgb = vec3(on_stripe ? 1.0 : 0.0);
 	else if (on_stripe) c.rgb = vec3(lum(c.rgb)) * team_color.rgb;
 	if (c.a < cut) discard;
-	vec2 cell = floor(wpos.xz - wnorm.xz * 0.02);
+	// Snow settles on the lit side of every leaf in winter.
+	if (veg && winter) c.rgb = mix(c.rgb, vec3(0.9, 0.93, 0.98), 0.55 * smoothstep(0.15, 0.45, lum(c.rgb)));
+	vec2 cell = veg ? floor(UV2) : floor(wpos.xz - wnorm.xz * 0.02);
 	float v = 0.0;
 	if (no_fog) v = 1.0;
 	else if (all(greaterThanEqual(cell, vec2(0.0))) && all(lessThan(cell, board))) {
@@ -373,6 +397,12 @@ static func begin_build(grid: Grid, cc: Vector2i, roof: PackedByteArray, ctx: Di
 	var loose := FirstPersonModels.Sink.new()       # built in place: items, rubble, trims, glass frames
 	var loose_glass := FirstPersonModels.Sink.new()
 	var counts := {"models": 0, "glass": 0}
+	var veg := {}        # plant picture -> Sink of its cards
+	var veg_sink := func(name: String) -> FirstPersonModels.Sink:
+		if not veg.has(name): veg[name] = FirstPersonModels.Sink.new()
+		return veg[name]
+	var grass_on: bool = ctx.get("grass", false)
+	var ground: Callable = ctx.get("ground", Callable())
 	var doors := {}
 	var tops := {}
 	var w := grid.width
@@ -398,14 +428,20 @@ static func begin_build(grid: Grid, cc: Vector2i, roof: PackedByteArray, ctx: Di
 			var wall := is_wall(c, env)
 			# --- Floor
 			if dug:
-				_quad_up(_wall_sink(walls, "trench", Color(0, 0, 0, 0)), Vector3(x, -TRENCH, y), Vector3(x + 1, -TRENCH, y + 1), Rect2(x / 8.0, y / 8.0, 0.125, 0.125))
+				var earth := _wall_sink(walls, "trench", Color(0, 0, 0, 0))
+				_quad_up(earth, Vector3(x, -TRENCH, y), Vector3(x + 1, -TRENCH, y + 1), Rect2(x / 8.0, y / 8.0, 0.125, 0.125))
 				for d: Vector2i in Grid.N4:
 					var n := at + d
 					if grid.in_bounds(n) and grid.cell_fast(n.x, n.y).feature_id == MCF.FEATURE_TRENCH:
 						continue
-					_wall_face(_wall_sink(walls, "trench", Color(0, 0, 0, 0)), n, -d, -TRENCH, 0.0, true)
+					# Spoil heaped along the edge (issues-14 #17): the side stands a parapet higher.
+					var bank := grid.in_bounds(n) and grassy(grid.cell_fast(n.x, n.y).feature_id) and not grid.cell_fast(n.x, n.y).is_space
+					_wall_face(earth, n, -d, -TRENCH, PARAPET if bank else 0.0, true)
+					if bank: _parapet(earth, at, d)
 			elif not c.is_space and not wall:
 				_quad_up(_sink_for(floors, tcc), Vector3(x, 0.0, y), Vector3(x + 1, 0.0, y + 1), uv)
+				if grass_on and grassy(fid) and ground.call(at) == 1:
+					FirstPersonModels.grass_cell(veg_sink, at, GRASS_PER_CELL)
 			elif c.is_space:
 				var look := grid.look_at(x, y) if not grid.floor_look.is_empty() else 0
 				if look == MCF.Look.SOLAR:
@@ -437,11 +473,19 @@ static func begin_build(grid: Grid, cc: Vector2i, roof: PackedByteArray, ctx: Di
 				_glass(loose, loose_glass, grid, env, at, fid == MCF.FEATURE_ARMOR_GLASS, walls, is_roofed, roof)
 				continue
 			if fid == MCF.FEATURE_AIRLOCK:
-				doors[at] = _door(node, grid, at, env, mats, walls, is_roofed)
+				var door_style: Callable = ctx.get("door_style", Callable())
+				doors[at] = _door(node, grid, at, env, mats, walls, is_roofed,
+						door_style.call(at) if door_style.is_valid() else ["town" if env in ["town", "field"] else "station", 0])
 				continue
 			var cap := CEIL - 0.03 if is_roofed else 9.0
 			if Furniture.is_furniture(fid):
 				_piece(models, glass, counts, grid, at, fid, ctx, cap, tops)
+				var card := FirstPersonModels.plant_card(fid, (x * 73 + y * 37) % 6)
+				if not card.is_empty():
+					var foot := 0.28 if card[0] == "fern" else 0.0   # a fern on its pot
+					var wide := 1.25 if Furniture.base_of(fid) == "hedge" else 1.0
+					FirstPersonModels.plant_cards(veg_sink.call(card[0]), card[0], Vector3(x + 0.5, foot, y + 0.5),
+							minf(float(card[1]), cap - foot), FirstPersonArt._h(x, y, 64) * TAU, at, wide)
 				continue
 			_feature(models, counts, grid, at, fid, env)
 		return true
@@ -469,6 +513,13 @@ static func begin_build(grid: Grid, cc: Vector2i, roof: PackedByteArray, ctx: Di
 			_add(node, models.commit(), mats["models"], true)
 		if counts["glass"] > 0:
 			_add(node, glass.commit(), mats["glass"], false)
+		for name: String in veg:
+			# Grass only near you; it casts no shadow (thousands of blades), plants do.
+			var lawn := name.begins_with("grass")
+			var mi := _add(node, (veg[name] as FirstPersonModels.Sink).mesh(), mats["veg"].call(name), not lawn)
+			if mi != null and lawn:
+				mi.visibility_range_end = GRASS_RANGE
+				mi.visibility_range_end_margin = 4.0
 		return {"node": node, "doors": doors, "tops": tops}
 	return {"node": node, "advance": advance, "finish": finish}
 
@@ -488,14 +539,15 @@ static func _wall_sink(by: Dictionary, kind: String, accent: Color) -> FirstPers
 		by[key] = _sink()
 	return by[key]
 
-static func _add(node: Node3D, mesh: Mesh, mat: Material, shadows: bool) -> void:
+static func _add(node: Node3D, mesh: Mesh, mat: Material, shadows: bool) -> MeshInstance3D:
 	if mat == null or mesh == null or mesh.get_surface_count() == 0:
-		return
+		return null
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
 	mi.material_override = mat
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	node.add_child(mi)
+	return mi
 
 ## A cached model placed with xf into the chunk's merged mesh.
 static func _add_model(models: SurfaceTool, counts: Dictionary, key: Array, xf: Transform3D, make: Callable,
@@ -549,6 +601,36 @@ static func _wall_face(s: FirstPersonModels.Sink, at: Vector2i, d: Vector2i, y0:
 		v1 = -y1 / 8.0
 	s.face_uv([a + Vector3(0, y0, 0), b + Vector3(0, y0, 0), b + Vector3(0, y1, 0), a + Vector3(0, y1, 0)],
 			Vector3(d.x, 0, d.y), [Vector2(ua, v0), Vector2(ub, v0), Vector2(ub, v1), Vector2(ua, v1)], Color.WHITE)
+
+## A parapet on the ground beyond trench cell `at`'s side d: a flat top and a face out, in the
+## same earth as the trench's walls.
+static func _parapet(s: FirstPersonModels.Sink, at: Vector2i, d: Vector2i) -> void:
+	var n := at + d
+	var lo := Vector3(n.x, 0.0, n.y)
+	var hi := Vector3(n.x + 1, PARAPET, n.y + 1)
+	match d:
+		Vector2i(1, 0): hi.x = n.x + PARAPET_W
+		Vector2i(-1, 0): lo.x = n.x + 1 - PARAPET_W
+		Vector2i(0, 1): hi.z = n.y + PARAPET_W
+		_: lo.z = n.y + 1 - PARAPET_W
+	_quad_up(s, Vector3(lo.x, PARAPET, lo.z), hi, Rect2(lo.x / 8.0, lo.z / 8.0, (hi.x - lo.x) / 8.0, (hi.z - lo.z) / 8.0))
+	# The outer face, and the two ends, sloping nowhere: a low bank of earth.
+	var faces := [[d, Vector3.ZERO]]
+	for e: Vector2i in [Vector2i(d.y, d.x), Vector2i(-d.y, -d.x)]:
+		faces.append([e, Vector3.ZERO])
+	for f: Array in faces:
+		var o: Vector2i = f[0]
+		var a: Vector3
+		var b: Vector3
+		match o:
+			Vector2i(1, 0): a = Vector3(hi.x, 0, hi.z); b = Vector3(hi.x, 0, lo.z)
+			Vector2i(-1, 0): a = Vector3(lo.x, 0, lo.z); b = Vector3(lo.x, 0, hi.z)
+			Vector2i(0, 1): a = Vector3(lo.x, 0, hi.z); b = Vector3(hi.x, 0, hi.z)
+			_: a = Vector3(hi.x, 0, lo.z); b = Vector3(lo.x, 0, lo.z)
+		var u0 := (a.x + a.z) / 8.0
+		var u1 := (b.x + b.z) / 8.0
+		s.face_uv([a, b, b + Vector3(0, PARAPET, 0), a + Vector3(0, PARAPET, 0)], Vector3(o.x, 0, o.y),
+				[Vector2(u0, 0), Vector2(u1, 0), Vector2(u1, -PARAPET / 8.0), Vector2(u0, -PARAPET / 8.0)], Color(0.86, 0.86, 0.86))
 
 ## Skirting inside, a plinth outside: a wall's foot stands out from its face. Walls along x
 ## carry the trim round outer corners; walls along z stop at their cell, so no two trims
@@ -699,13 +781,14 @@ static func _wall_skips(grid: Grid, env: String, at: Vector2i) -> int:
 				k |= bits[d]
 	return k
 
-## A doorway: the lintel above 2.1 m in the surrounding wall's material; below it the door
-## — two metal halves that slide apart into the walls (station, bunker, asteroid) or one
-## wooden door that slides aside — thinner than the wall, so it never shares a face with it
-## (it flickered). Welded airlocks carry their weld beads, welded wooden doors are boarded
-## up (owner, fix-8). FirstPerson moves the leaves.
+## A doorway: the lintel above 2.1 m in the surrounding wall's material; below it the door the
+## board draws there (TerrainTiles.door_style, issues-14 #10), thinner than the wall so it never
+## shares a face with it (it flickered). Town and field doors turn on a hinge at one jamb
+## (issues-14 #3); airlocks slide — split designs in two halves apart, the rest aside into the
+## wall. Welded airlocks carry their weld beads, welded wooden doors are boarded up (owner,
+## fix-8). FirstPerson moves the leaves.
 static func _door(node: Node3D, grid: Grid, at: Vector2i, env: String, mats: Dictionary,
-		walls: Dictionary, roofed: bool) -> Node3D:
+		walls: Dictionary, roofed: bool, style: Array) -> Node3D:
 	var x := float(at.x)
 	var z := float(at.y)
 	var along_x := _runs_x(grid, at)
@@ -726,27 +809,42 @@ static func _door(node: Node3D, grid: Grid, at: Vector2i, env: String, mats: Dic
 	if not roofed:
 		_quad_up(ws, Vector3(x, CEIL, z), Vector3(x + 1, CEIL, z + 1), Rect2(0, 0, 1, 0.04))
 	_quad_down(ws, Vector3(x, LINTEL, z), Vector3(x + 1, LINTEL, z + 1), Rect2(0, 0.05, 1, 0.05))
-	var wood := env in ["town", "field"]
+	var wood: bool = style[0] in ["town", "field"]
 	var door := Node3D.new()
 	door.position = Vector3(x, 0, z)
 	door.set_meta("cell", at)
 	door.set_meta("along_x", along_x)
-	var mat: Material = mats["door"].call("wood" if wood else "metal", accent, at)
-	var leaves := 1 if wood else 2
+	var mat: Material = mats["door"].call(style, accent, at, wood)
+	var split: bool = (style[0] == "station" and style[1] == 0) or (style[0] in ["bunker", "asteroid"] and style[1] == 1)
+	var leaves := 2 if split else 1
 	var w := 1.0 / leaves
-	var thick := 0.09 if wood else 0.16
-	for k in leaves:
+	var thick := 0.07 if wood else 0.16
+	if wood:
+		# The hinge at the leaf's near jamb; the leaf is built out from it along its run.
+		door.set_meta("swing", true)
 		var leaf := MeshInstance3D.new()
 		var s := _sink()
-		var half := Vector3(w * 0.5, 0, thick * 0.5) if along_x else Vector3(thick * 0.5, 0, w * 0.5)
-		_leaf_box(s, -half, half + Vector3(0, LINTEL - 0.005, 0), along_x, k == 1 and leaves == 2)
+		var lo := Vector3(0.0, 0, -thick * 0.5) if along_x else Vector3(-thick * 0.5, 0, 0.0)
+		var hi := Vector3(0.98, LINTEL - 0.005, thick * 0.5) if along_x else Vector3(thick * 0.5, LINTEL - 0.005, 0.98)
+		_leaf_box(s, lo, hi, along_x, 0.0, 1.0)
 		leaf.mesh = s.mesh()
 		leaf.material_override = mat
-		var c := w * 0.5 + k * w
-		leaf.position = Vector3(c, 0, 0.5) if along_x else Vector3(0.5, 0, c)
-		leaf.set_meta("home", leaf.position)
-		leaf.set_meta("side", -1 if k == 0 else 1)
+		leaf.position = Vector3(0.01, 0, 0.5) if along_x else Vector3(0.5, 0, 0.01)
+		leaf.set_meta("hinge", 0.0)
 		door.add_child(leaf)
+	else:
+		for k in leaves:
+			var leaf := MeshInstance3D.new()
+			var s := _sink()
+			var half := Vector3(w * 0.5, 0, thick * 0.5) if along_x else Vector3(thick * 0.5, 0, w * 0.5)
+			_leaf_box(s, -half, half + Vector3(0, LINTEL - 0.005, 0), along_x, k * w, (k + 1) * w)
+			leaf.mesh = s.mesh()
+			leaf.material_override = mat
+			var c := w * 0.5 + k * w
+			leaf.position = Vector3(c, 0, 0.5) if along_x else Vector3(0.5, 0, c)
+			leaf.set_meta("home", leaf.position)
+			leaf.set_meta("side", -1 if k == 0 else 1)
+			door.add_child(leaf)
 	if grid.cell_fast(at.x, at.y).airlock_welded:
 		var deco := FirstPersonModels.Sink.new()
 		if wood:
@@ -761,10 +859,9 @@ static func _door(node: Node3D, grid: Grid, at: Vector2i, env: String, mats: Dic
 	node.add_child(door)
 	return door
 
-## A leaf as a box whose broad faces carry the door picture the right way round.
-static func _leaf_box(s: FirstPersonModels.Sink, lo: Vector3, hi: Vector3, along_x: bool, mirror: bool) -> void:
-	var u0 := 1.0 if mirror else 0.0
-	var u1 := 0.0 if mirror else 1.0
+## A leaf as a box whose broad faces carry its part (u0..u1) of the door picture, the right way
+## round from both sides.
+static func _leaf_box(s: FirstPersonModels.Sink, lo: Vector3, hi: Vector3, along_x: bool, u0: float, u1: float) -> void:
 	var faces := []
 	if along_x:
 		faces = [[Vector3(lo.x, lo.y, hi.z), Vector3(hi.x, lo.y, hi.z), Vector3(hi.x, hi.y, hi.z), Vector3(lo.x, hi.y, hi.z), Vector3.BACK],
@@ -886,7 +983,7 @@ static func _piece(models: SurfaceTool, glass: SurfaceTool, counts: Dictionary, 
 			var local := xf.affine_inverse() * Vector3(at.x + 0.5, 0, at.y + 0.5)
 			var bounds := Rect2(Vector2(local.x, local.z) - Vector2.ONE * 0.5, Vector2.ONE)
 			opaque = FirstPersonModels.clipped(opaque, bounds)
-			transparent = FirstPersonModels.clipped(transparent, bounds)
+			transparent = FirstPersonModels.clipped(transparent, bounds, false)
 		if opaque != null:
 			models.append_from(opaque, 0, xf)
 			counts["models"] += 1

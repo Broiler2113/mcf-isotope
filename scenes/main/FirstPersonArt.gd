@@ -243,18 +243,18 @@ static func wall_top_colour(kind: String) -> Color:
 
 # --- Doors ------------------------------------------------------------------------------
 
-## A door leaf at 32 px a metre: a riveted metal half-door 0.5 × 2.1 m with a wired window
-## and hazard chevrons at its foot (station, bunker, asteroid: the airlocks), or a whole
-## panelled wooden door 1 × 2.1 m (town, field). A metal leaf's edge takes the accent.
-static func door_texture(style: String, accent: Color) -> ImageTexture:
-	var key := "door|%s|%s" % [style, accent.to_html()]
+## The closed door, 1 × 2.1 m at 32 px a metre, in one of the board's door designs (issues-14
+## #10: textures/doors/door_<material>, tools/art/build_first_person.py). An airlock's edges take
+## the accent; town and field doors are plain wood.
+static func door_texture(material: String, design: int, accent: Color) -> ImageTexture:
+	var key := "door|%s|%d|%s" % [material, design, accent.to_html()]
 	if _cache.has(key):
 		return _cache[key]
-	var img := picture("door_" + ("wood" if style == "wood" else "metal"))
-	if style != "wood" and accent.a > 0.0:
+	var img := picture("door_%s_%d" % [material, design])
+	if not material in ["town", "field"] and accent.a > 0.0:
 		var w := img.get_width()
 		for y in img.get_height():
-			for x in [0, w - 1]:
+			for x in [0, 1, w - 2, w - 1]:
 				var base := img.get_pixel(x, y)
 				img.set_pixel(x, y, base.lerp(accent * (0.6 + 0.6 * base.get_luminance()), 0.8))
 		for x in w:

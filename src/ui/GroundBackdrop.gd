@@ -53,7 +53,21 @@ const GROUND_TILES := 16
 const GROUND_PATCH_CHANCE := 0.07
 
 static func wallpaper(env: String, winter := false) -> ImageTexture:
-	var base := _ground_image("floor_snow" if winter and env in ["town", "field"] else _ground_floor_name(env))
+	if env in ["town", "field"]:
+		# The same 8 m picture of open ground the board and first person lay (issues-14 #8),
+		# repeating from the board's corner, so the land runs on past the edge without a seam.
+		# Laid GROUND_TILES cells square, as every wallpaper is (callers scale by that).
+		var ground := FirstPersonArt.picture("ground_02" if winter else "ground_00")
+		if not winter and Ui.grass:
+			var tufts := TerrainTiles.lawn(32)
+			ground.blend_rect(tufts, Rect2i(Vector2i.ZERO, tufts.get_size()), Vector2i.ZERO)
+		var side := ground.get_width() / 8 * GROUND_TILES
+		var wall := Image.create(side, side, false, Image.FORMAT_RGBA8)
+		for y in range(0, side, ground.get_height()):
+			for x in range(0, side, ground.get_width()):
+				wall.blit_rect(ground, Rect2i(Vector2i.ZERO, ground.get_size()), Vector2i(x, y))
+		return ImageTexture.create_from_image(wall)
+	var base := _ground_image(_ground_floor_name(env))
 	if env == "bunker":
 		# Continue the soil WALL using its fully connected tile, not a floor or
 		# the standalone wall sprite with a dark outline around every tile.
@@ -100,13 +114,10 @@ static func _ground_image(name: String) -> Image:
 ## Чем залит экран и чем идут проплешины — по окружению карты.
 static func _ground_floor_name(env: String) -> String:
 	match env:
-		"field", "town": return "floor_grass"
+		"field", "town": return "floor_grass"   # laid from the ground picture (wallpaper)
 		"bunker": return "soil"
 		"": return "floor"
 	return TerrainTiles.env_name("floor", env)
 
 static func _ground_patch_name(env: String) -> String:
-	match env:
-		"field", "town": return ""
-		"bunker": return ""
-	return "floor_field"
+	return "" if env in ["field", "town", "bunker"] else "floor_field"

@@ -147,16 +147,12 @@ static func variant_of(c: Vector2i, n: int) -> int:
 
 ## Варианты плитки в разрешении res (лента вариантов в файле).
 func _tile(name: String, res: int) -> Array:
-	var key := "%s@%d%s" % [name, res, "fp" if _floor_only else ""]
+	var key := "%s@%d" % [name, res]
 	if _tiles.has(key):
 		return _tiles[key]
 	var out: Array = []
-	# First person lays its own realistic floors (textures/first_person/floors/fp_*), unless
-	# the player replaced that floor with their own picture.
-	var own := env_name(name, env)
-	var img := _load("fp_" + own) if _floor_only and not Sprites.has_user_override(own) else null
-	if img == null:
-		img = _load(env_name(name, env))
+	# First person lays these same tiles (issues-14 #9: "identical" floors in both views).
+	var img := _load(env_name(name, env))
 	if img == null:
 		img = _atlas_part(name, Sprites.ATLAS_TURN_ROW, 1, 1)   # атлас: первый поворот
 	if img != null:
@@ -554,6 +550,7 @@ func _build(cc: Vector2i, res: int) -> void:
 			for x in w:
 				_paint(floor_img, feat_img, Vector2i(cc.x * C + x, cc.y * C + y),
 						Vector2i(x * res, y * res), res)
+	if not _floor_only: _bake_grass(floor_img, cc, res)
 	_bake_ground_lines(floor_img, cc, res)
 	var painted := _bake_decals(floor_img, cc, res)
 	var burning := false
@@ -846,8 +843,12 @@ func _paint_terrain(img: Image, feat: Image, c: Vector2i, at: Vector2i, res: int
 	var cell := _grid.cell_fast(c.x, c.y)
 	var full := Rect2i(0, 0, res, res)
 	var fname := _floor_name(cell, c)
-	if _floor_only and ground_kind(c) != 0:
-		fname = ""   # the first-person view lays its own seamless turf or earth there
+	var gk := ground_kind(c)
+	if gk != 0:
+		# Open ground: first person's own seamless picture, which it lays itself under the floor.
+		if not _floor_only:
+			img.blit_rect(_ground_tile(c, gk, res), full, at)
+		fname = ""
 	fname = _winter_floor(fname)
 	var floors := _tile(fname, res) if fname != "" else []
 	if not floors.is_empty():
@@ -1060,6 +1061,14 @@ func _door_image(grid: Grid, c: Vector2i, cell: GridCell, res: int, closed := fa
 		_tint_door_frame(img, accent, res)
 	_tiles[key] = [img]
 	return img
+
+## The door the board draws at c: [material (DOOR_MATERIALS), design 0..2] — first person hangs
+## the same door there (issues-14 #10).
+func door_style(c: Vector2i) -> Array:
+	var look := clampi(_grid.door_at(c.x, c.y), 0, DOOR_MATERIALS.size() * 3)
+	if look > 0:
+		return [DOOR_MATERIALS[(look - 1) / 3], (look - 1) % 3]
+	return [env if env in DOOR_MATERIALS else "station", variant_of(_door_anchor(_grid, c) + origin, 3)]
 
 ## Cache the anchor for the entire connected door group. A capped search picked
 ## different variants at opposite ends of a wide airlock.
@@ -1898,6 +1907,26 @@ func ground_kind(c: Vector2i) -> int:
 		"floor_field": return 2
 	return 0
 
+## The board's piece of open ground under cell c (issues-14 #8, #9): first person's 8 m picture
+## of turf, earth or snow (FirstPersonArt.grounds), cut by world position into cells, so both
+## views show the same ground and the same patches of it.
+func _ground_tile(c: Vector2i, kind: int, res: int) -> Image:
+	var layer := 2 if winter else (0 if kind == 1 else 1)
+	var key := "ground%d@%d" % [layer, res]
+	if not _tiles.has(key):
+		var src := FirstPersonArt.picture("ground_%02d" % layer)
+		var n := src.get_width() / 32
+		var parts: Array = []
+		for y in n:
+			for x in n:
+				var part := src.get_region(Rect2i(x * 32, y * 32, 32, 32))
+				if res != 32: part.resize(res, res, Image.INTERPOLATE_LANCZOS)
+				parts.append(part)
+		_tiles[key] = parts
+	var all: Array = _tiles[key]
+	var n2 := roundi(sqrt(all.size()))
+	return all[posmod(c.x, n2) + posmod(c.y, n2) * n2]
+
 ## Настил ПОВЕРХ пола клетки (решётка, 0.9.3) или «» — настила нет. Решётка прозрачна
 ## между прутьями, поэтому она не заменяет пол: в космосе под ней звёзды, в помещении — его
 ## собственный пол.
@@ -2027,6 +2056,61 @@ func set_winter(value: bool) -> bool:
 	_chunks.clear()
 	_bytes = 0
 	return true
+
+## Settings → Graphics → Grass (issues-14 #6); the owner of these tiles passes Ui.grass in.
+var grass := true
+func set_grass(value: bool) -> bool:
+	if grass == value: return false
+	grass = value
+	_generation += 1
+	_chunks.clear()
+	_bytes = 0
+	return true
+
+## Grass on the board (issues-14 #6): tufts of blades seen from above, where first person stands
+## its clumps (FirstPersonModels.grass_cell), so both views grow the same lawn. None on snow.
+## The lawn is one 8 × 8-cell picture, like the ground under it; each grass cell lays its square
+## of it, so tufts run on between grass cells and stop at the edge of the grass.
+func _bake_grass(img: Image, cc: Vector2i, res: int) -> void:
+	if not grass or winter: return
+	var lawn := TerrainTiles.lawn(res)
+	var w := mini(C, _grid.width - cc.x * C)
+	var h := mini(C, _grid.height - cc.y * C)
+	for y in h:
+		for x in w:
+			var c := cc * C + Vector2i(x, y)
+			if FirstPersonBoard.grassy(_grid.cell_fast(c.x, c.y).feature_id) and ground_kind(c) == 1:
+				img.blend_rect(lawn, Rect2i(posmod(c.x, 8) * res, posmod(c.y, 8) * res, res, res), Vector2i(x * res, y * res))
+
+## The tufts of one 8 × 8-cell stretch of lawn at res pixels a cell (it repeats; the backdrop
+## past the board lays it too).
+static var _lawns := {}
+static func lawn(res: int) -> Image:
+	if _lawns.has(res): return _lawns[res]
+	var tufts: Array = []
+	for i in 4:
+		var t := FirstPersonArt.picture("veg/veg_tuft_%d" % i)
+		if res != 32:
+			t.resize(maxi(2, t.get_width() * res / 32), maxi(2, t.get_height() * res / 32), Image.INTERPOLATE_NEAREST)
+		for k in 8:
+			var v: Image = t.duplicate()
+			if k & 4: v.flip_x()
+			for r in k & 3: v.rotate_90(CLOCKWISE)
+			tufts.append(v)
+	var side := 8 * res
+	var tile := Image.create(side, side, false, Image.FORMAT_RGBA8)
+	for cy in 8:
+		for cx in 8:
+			for k in FirstPersonBoard.GRASS_PER_CELL:
+				var spot := FirstPersonModels.grass_spot(Vector2i(cx, cy), k)
+				var t: Image = tufts[int(spot.z * tufts.size()) % tufts.size()]
+				var p := Vector2i((Vector2(cx, cy) + Vector2(spot.x, spot.y)) * res) - t.get_size() / 2
+				# Round the edges of the picture: it repeats.
+				for oy: int in [-side, 0, side]:
+					for ox: int in [-side, 0, side]:
+						tile.blend_rect(t, Rect2i(Vector2i.ZERO, t.get_size()), p + Vector2i(ox, oy))
+	_lawns[res] = tile
+	return tile
 
 const WINTER_FLOORS := {"floor_grass": "floor_snow", "floor_field": "floor_snow_field", "floor_town": "floor_town_snow"}
 

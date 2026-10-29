@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://yt8w8517pv27"
+path="res://.godot/imported/door_asteroid_1.png-57768fb0fc3294d36807a32e5a7df58d.image"
+
+[deps]
+
+source_file="res://textures/first_person/door_asteroid_1.png"
+dest_files=["res://.godot/imported/door_asteroid_1.png-57768fb0fc3294d36807a32e5a7df58d.image"]
+
+[params]
+

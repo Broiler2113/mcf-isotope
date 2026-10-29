@@ -874,6 +874,8 @@ func _end_first_person() -> void:
 		_fp_layer.queue_free()
 	_fp_layer = null
 	_fp = null
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_mouse_panning = false
 	for child: Node in _fp_board_visibility:
 		if is_instance_valid(child): child.visible = _fp_board_visibility[child]
 	_fp_board_visibility.clear()

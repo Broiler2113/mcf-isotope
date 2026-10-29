@@ -3931,6 +3931,7 @@ the same fog rules as the terrain they sit on. Bloody footprints are gone with t
 the per-step bookkeeping. **Service accents** (§20.2): on stations and in bunkers the walls and door frames of a service carry its colour — command blue, control/comms white, security red, medical green, science purple, engineering yellow, cargo orange, everything else grey; a room's own purpose beats its department (`MapGen.KIND_ACCENT`), the colour is a per-cell display-only byte (`MapData.wall_accent`, `MCF.Accent`) drawn as a line that runs along the wall and as a tinted door frame. **Corridors**: main ones are always 3 cells wide, maintenance tunnels 1 (2 about a quarter of the time), and grating is laid in roughly a third of the tunnels and in no room at all. **Grill walkway** (`MCF.Look.GRILL`): a floor look that is transparent between its bars and lies *over* a cell instead of replacing it; it runs from a hull airlock out into space with solar panels down both sides, and it is paintable in the editor. **Space draws no tile** — the `Starfield` parallax behind the board shows through it, following the camera (far layer 5 %, near 26 %); `floor_space.png` dropped by the player still wins. **Doors fill the whole cell** instead of a narrow panel in the middle of it. **Windows**: a symbol fallback font (✓ ✕ ▶ ⚠ are in neither Handjet nor Tahoma) and an explicit `stretch/aspect=expand` so a non-16:9 window is not letterboxed. Also: the hidden storage can no longer get an exterior airlock cut into it. **A border around every map** (§20.2): 10 cells in every direction that can be reached — diggable soil in a bunker, grass around a town or field, open space around a station or asteroid — and 2 more that cannot (`MCF.FEATURE_BOUNDARY`, in no destructible list, opaque to the laser), so the world keeps going past the battlefield but nothing walks off it. Lobby sizes now name the map, not the field. Also: `default_clear_color` was never applied — project.godot comments must start with `;`, and the `#` ones silently dropped the setting, so the window had been Godot grey instead of black all along. Tests: `tests/run_batch093.gd`. |
 | 143 | **0.14.6 — Issues 11–21** (§27.29, "Issues-12"): hovered units twitch, units and vehicles in vacuum sway, an aiming tank's turret follows the cursor smoothly; solar panels only on the station's top; icons on the top-left buttons; station, town, field and asteroid walls redrawn in the board's pixel style to match first person, service colour as a band on each side a wall faces; first-person windows set in their wall, flame billboards, Sun, Earth and lens flare in space, clouds and an Overcast map option on the surface; new top-down fire; optional CRT filter; dynamic lighting on by default; the space backdrop in one pass. Looks only: protocol (33) and replay schema (3) unchanged. |
 | 144 | **0.14.6.1 — Issues-13** ("Issues-13"): your unit hops when clicked instead of twitching on hover; Stars and CRT intensity sliders; Settings split into General / Graphics / Gameplay pages; icon-only top-left buttons; solar panels on every side of the station again. Looks only: protocol (33) and replay schema (3) unchanged. |
+| 145 | **0.14.7 — Issues-14** ("Issues-14"): photographed open ground shared by the board and first person; dense grass on both (Settings → Grass); every plant in first person as crossed cards of a real plant; first-person floors are the board's tiles; first person hangs every board door design, town and field doors swing; bunker, pillbox, armor and corpse walls redrawn on the board to match first person; outdoor lens flare, smooth overcast, CRT colour fringing that flares with blasts and fire; trench parapets; cut furniture closed; crosshair setting; tank card on hover; ✕ instead of Close buttons, windows resize from any edge. Looks only: protocol (33) and replay schema (3) unchanged. |
 | 142 | **0.14.5.5 — Zoomed-out frame rate** (§27.28): soldiers, bodies, rings, badges and markers are textured rects from one marker sheet, so they batch (fitted giant 642 → 216 draw calls); flying particles redraw only their own layer; new blood and brass are painted onto a kept terrain chunk; gas sight sweeps once per eye; dynamic lighting caches static lamps and draws flicker, flashes and muzzle fire over a copy (30 fires: 198 → 65 ms a frame). Drawing only: no rule, protocol (33) or replay schema (3) change. |
 | 141 | **0.14.5.4 — The unit change log** (§27.27): `UnitInstance.vision_log` records every unit whose cell, side, status, seat or neutral group changed; team fog, the civilians' wake-up check (now only sleepers whose sight lines changed), captives, carried bodies, each action's deaths and the AI's enemy lists read the changed units instead of the whole army; the firing-line and neighbour scans of target and capture lists and the wake-up rows run in C++ (`MCFAI.line_slots`/`near_slots`, `MCFPlanScorer.civilians_seeing_rows`). 1,200 giant actions 5.9 → ~3.1 s. No rule changed; protocol 33. |
 | 140 | **0.14.5.3 — Frame cost and hitches** (§27.26): zoom builds one terrain chunk per frame, group orders patch the native board from a walk journal, the soldier layer skips unchanged soldiers, replay checkpoints are sealed off the main thread, cheaper fog in smoke, and viewer switches copy only the cells a fog memory can have wrong. 1,200 giant actions 7.3 → ~5.5 s. No rule changed; protocol 33. |
@@ -4800,6 +4801,56 @@ Looks and settings only; no rule, protocol (33) or replay schema (3) changed.
   First person, Multiplayer), Keybinds, Audio. Every slider is one row: name, slider, value.
   Defaults resets only the open page; on Graphics it turns dynamic lighting back on (it used
   to switch it off).
+
+## Issues-14 (0.14.7)
+
+Looks, settings and windows only; no rule, protocol (33) or replay schema (3) changed.
+
+- **Open ground from photographs** (#2): grass, earth and snow are CC0 Poly Haven scans
+  (`tools/art/build_first_person.py` `PHOTOS`, fetched into the git-ignored `.cache/`), shrunk to
+  32 px a metre and laid at two sizes over 8 m with a broad wash of lusher and drier patches.
+  The board lays the very same picture by world position (`TerrainTiles._ground_tile`), and the
+  backdrop past the board's edge repeats it (`GroundBackdrop.wallpaper`), so both views show the
+  same ground and the same colour patches (#8).
+- **Floors** (#9): first person lays the board's own floor tiles; its separate floor pictures
+  (`textures/first_person/floors`) are gone. First person embosses them as before.
+- **Grass** (#6, Settings → Graphics → Grass, on by default): on grass ground, not under furniture,
+  works or walls, never on snow. First person stands nine clumps a cell — three crossed cards of
+  drawn blades each (`FirstPersonModels.grass_cell`), turned, sized and tinted per clump, swaying,
+  within 30 m (`visibility_range_end`), casting no shadow. The board lays tufts seen from above on
+  the same spots: one 8 × 8-cell lawn picture (`TerrainTiles.lawn`) that every grass cell takes its
+  square of, so tufts run on between grass cells and stop where the grass does.
+- **Plants as cards** (#7): pines, park trees, the three bushes, tall grass, hedges and potted
+  plants are three upright cards through the plant's centre, 60° apart, each a different side of a
+  real plant (`tools/art/build_vegetation.py` renders CC0 scans with `render_vegetation.gd`; dry and
+  flowering bushes are tinted and sprinkled with blossom). Cards sway with their height, take fog
+  and sight from the plant's own cell, frost over in winter and cast shadows in sunlight. Hedges
+  keep their clipped leaf block under the cards; a fern stands on its pot.
+- **Doors** (#3, #10): first person hangs the door the board draws (`TerrainTiles.door_style`:
+  station, town, field, bunker, asteroid and docking, three designs each, drawn by
+  `door_design`). Town and field doors turn 90° on their hinge, away from whoever opens them;
+  airlocks slide — split designs in two halves, the rest aside into the wall.
+- **Walls** (#10): the board's bunker and pillbox walls are first person's board-formed concrete,
+  armor its grey plates, a wall of bodies its dark heap (`tools/gen_textures.gd -- --walls`).
+- **Sky** (#1, #5): the lens flare follows the Sun over town and field by day as it does in space.
+  Overcast is one smooth deck of broad soft swells that fades plain toward the horizon.
+- **CRT** (#4): red and blue drift apart from the middle out — a little always, more for half a
+  second after a blast and while fire burns within 5 m in first person or on screen on the board.
+- **Cut furniture** (#15): a piece cut down to its surviving cell is closed where it was cut
+  (`FirstPersonModels.clipped` caps each cut outline).
+- **Crates and pallets** (#16) carry no contact shade (it made them look sunk into the floor).
+  Settings → Gameplay → First person → **Show crosshair**.
+- **Trenches** (#17): a parapet of earth, 0.32 m high and 0.3 m wide, along every side that opens
+  onto ground; inside, the walls stand that much taller.
+- **Tank card** (#18): the name, durability, crew and action points under a tank show only while
+  the pointer is on it.
+- **Windows** (#11, #12): the whole title bar drags a floating window, and every edge and corner
+  resizes it. No window has a Close button any more: the ✕ in the top-right corner closes
+  (`SteamChrome.close_x`). The replay export keeps a Cancel export button while it runs.
+- **Before / after** (#13) draws the grid by the same rule as the live board: Settings' grid,
+  none below 30 % zoom.
+- **Leaving first person** (#14) always frees the mouse, and the board pans by the pointer's own
+  positions instead of relative motion, which could arrive doubled after the mouse was captured.
 
 ## Issues PDF (6) follow-up
 

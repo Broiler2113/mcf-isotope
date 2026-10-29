@@ -31,6 +31,9 @@ uniform vec3 ground : source_color = vec3(0.05);
 uniform float cover = 0.45;
 uniform vec3 cloud_lit : source_color = vec3(1.0);
 uniform vec3 cloud_dark : source_color = vec3(0.6, 0.64, 0.7);
+// Overcast (issues-14 #5): one smooth deck — broad soft swells, no streaks, plain toward the
+// horizon — instead of a sky full of packed clouds.
+uniform float soft = 0.0;
 
 float hash3(vec3 p) {
 	p = fract(p * 0.3183099 + 0.1);
@@ -53,6 +56,10 @@ float fbm(vec3 p) {
 		a *= 0.5;
 	}
 	return s;
+}
+
+float fbm_soft(vec3 p) {
+	return noise3(p) * 0.62 + noise3(p * 2.1 + vec3(3.1, 7.7, 1.3)) * 0.26 + noise3(p * 4.3 + vec3(9.2)) * 0.12;
 }
 
 vec3 star_field(vec3 d) {
@@ -114,6 +121,13 @@ vec3 surface(vec3 d) {
 			: mix(horizon, zenith, pow(smoothstep(0.0, 1.0, up), 0.6));
 	col += star_field(d) * smoothstep(0.0, 0.2, up);
 	col = sun_disc(d, col);
+	if (up > 0.0 && soft > 0.5) {
+		vec2 uv = d.xz / (up + 0.35) * 0.55 + vec2(TIME * 0.004, TIME * 0.0015);
+		float n = fbm_soft(vec3(uv, TIME * 0.002));
+		vec3 deck = mix(cloud_dark, cloud_lit, smoothstep(0.25, 0.75, n));
+		deck = mix(horizon, deck, smoothstep(0.02, 0.4, up));
+		return mix(col, deck, smoothstep(0.0, 0.08, up));
+	}
 	if (up > 0.0) {
 		vec2 uv = d.xz / (up + 0.12) * 1.4 + vec2(TIME * 0.006, TIME * 0.002);
 		float n = fbm(vec3(uv, TIME * 0.003));
@@ -187,6 +201,7 @@ static func surface(stars: Texture2D, tod: String, overcast: bool, sun_dir: Vect
 	m.set_shader_parameter("horizon", horizon)
 	m.set_shader_parameter("ground", Color(0.05, 0.05, 0.05))
 	m.set_shader_parameter("cover", 0.97 if overcast else (0.38 if not night else 0.3))
+	m.set_shader_parameter("soft", 1.0 if overcast else 0.0)
 	m.set_shader_parameter("cloud_lit", lit)
 	m.set_shader_parameter("cloud_dark", dark)
 	return m

@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://bcpo48hrrnb43"
+path="res://.godot/imported/veg_tuft_1.png-8befebcbdd70991e4da75d64e7f4de9d.image"
+
+[deps]
+
+source_file="res://textures/first_person/veg/veg_tuft_1.png"
+dest_files=["res://.godot/imported/veg_tuft_1.png-8befebcbdd70991e4da75d64e7f4de9d.image"]
+
+[params]
+

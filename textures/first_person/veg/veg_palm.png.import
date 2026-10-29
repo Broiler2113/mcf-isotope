@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://dupqso0xdcm6x"
+path="res://.godot/imported/veg_palm.png-22625044e378a42f63c23e6028c2e042.image"
+
+[deps]
+
+source_file="res://textures/first_person/veg/veg_palm.png"
+dest_files=["res://.godot/imported/veg_palm.png-22625044e378a42f63c23e6028c2e042.image"]
+
+[params]
+

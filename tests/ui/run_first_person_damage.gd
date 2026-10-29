@@ -3,6 +3,12 @@ extends "res://tests/SuiteBase.gd"
 func run() -> void:
 	for turn in 4:
 		_bed(turn)
+	# Issues-14 #15: a piece cut down to its surviving cell is closed where it was cut — every
+	# edge of the clipped box is shared by two triangles, so nothing shows through it.
+	var s := FirstPersonModels.Sink.new(false)
+	s.box(Vector3(0, 0, 0), Vector3(2, 1, 1), FirstPersonArt.M_WOOD, Color.WHITE)
+	ck(_open_edges(FirstPersonModels.clipped(s.mesh(), Rect2(0, 0, 1, 1), false)) > 0, "without caps the cut box is open")
+	ck(_open_edges(FirstPersonModels.clipped(s.mesh(), Rect2(0, 0, 1, 1))) == 0, "a cut piece is closed where it was cut")
 	GameConfig.civilians_enabled = false
 	GameConfig.random_events_enabled = false
 	GameConfig.fog_mode = MCF.Fog.OFF
@@ -34,6 +40,18 @@ func run() -> void:
 	ck(loaded._furniture_look.has(Vector2i(10, 4)), "save/load retains the destroyed half's original footprint")
 	ck(loaded.state.grid.cell(Vector2i(10, 4)).feature_id == "", "restoring the appearance never restores destroyed furniture to gameplay")
 	loaded.free()
+
+## Edges used by one triangle only (an open mesh has some).
+func _open_edges(mesh: ArrayMesh) -> int:
+	var v: PackedVector3Array = mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	var uses := {}
+	for i in range(0, v.size(), 3):
+		for k in 3:
+			var a := Vector3i((v[i + k] * 1000.0).round())
+			var b := Vector3i((v[i + (k + 1) % 3] * 1000.0).round())
+			var key := [a, b] if str(a) < str(b) else [b, a]
+			uses[key] = int(uses.get(key, 0)) + 1
+	return uses.values().filter(func(n: int) -> bool: return n % 2 == 1).size()
 
 func _bed(turn: int) -> void:
 	var grid := Grid.new(16, 16)

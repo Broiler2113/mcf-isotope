@@ -98,11 +98,6 @@ func _build() -> void:
 	hint.modulate = Color(0.72, 0.75, 0.82)
 	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bottom.add_child(hint)
-	var close := Button.new()
-	close.text = "Close"
-	close.custom_minimum_size = Vector2(100, 0)
-	close.pressed.connect(queue_free)
-	bottom.add_child(close)
 	# Слой CanvasLayer сам тему не наследует (feedback: оверлеи обязаны выглядеть как набор).
 	Ui.theme_canvas_layers()
 

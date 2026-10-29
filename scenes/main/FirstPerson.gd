@@ -88,6 +88,7 @@ var _all_mats: Array[ShaderMaterial] = []
 var _board_sh: Shader
 var _bill_sh: Shader
 var _glass_sh: Shader
+var _veg_sh: Shader
 var _sun_on := false
 var _look_ver := -1
 var _dirty := {}           # 3D chunks whose cells changed
@@ -181,8 +182,10 @@ func _ready() -> void:
 	_build_materials()
 	_build_environment()
 	_build_dynamic()
+	_sync_grass()
 	_sync_snow()
-	if env in ["station", "asteroid"]:
+	# The Sun's lens flare in space and, by day, over town and field (issues-14 #1).
+	if env in ["station", "asteroid", "town", "field"]:
 		_flare = FirstPersonSky.LensFlare.new()
 		add_child(_flare)
 	_minimap = Minimap.new(self)
@@ -198,7 +201,11 @@ func _ready() -> void:
 	_settle_feet()
 	_place_camera()
 
+var _left := false
 func leave() -> void:
+	# A click still queued this frame must not capture the mouse again (issues-14 #14).
+	_left = true
+	set_process(false)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	left.emit()
 
@@ -209,6 +216,7 @@ func _exit_tree() -> void:
 # --- Input -------------------------------------------------------------------------------
 
 func _input(event: InputEvent) -> void:
+	if _left: return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		var k := float(Ui.fp_sensitivity) * 0.01
 		yaw -= event.relative.x * k
@@ -234,7 +242,17 @@ func _input(event: InputEvent) -> void:
 
 # --- Frame -------------------------------------------------------------------------------
 
+## Grass in first person follows Settings → Graphics → Grass (issues-14 #6); none on snow.
+var _grass_on := false
+func _sync_grass() -> void:
+	var on: bool = Ui.grass and not state.winter
+	if on == _grass_on: return
+	_grass_on = on
+	for cc: Vector2i in _chunks: _dirty[cc] = true
+	for cc: Vector2i in _chunk_jobs: _dirty[cc] = true
+
 func _process(delta: float) -> void:
+	_sync_grass()
 	_presence_timer -= delta
 	delta = minf(delta, 0.05)
 	_move(delta)
@@ -276,6 +294,12 @@ var _flare: FirstPersonSky.LensFlare = null
 func _sync_flare(delta: float) -> void:
 	if _flare == null: return
 	var sun := FirstPersonSky.SPACE_SUN.normalized()
+	if env in ["town", "field"]:
+		sun = _sun_basis(state.time_of_day in ["morning", "evening"]).z.normalized()
+		if not _sun_on:
+			_flare.strength = move_toward(_flare.strength, 0.0, delta * 6.0)
+			_flare.queue_redraw()
+			return
 	var far := _cam.global_position + sun * 400.0
 	var want := 0.0
 	_flare.on_screen = false
@@ -638,6 +662,8 @@ func _build_shaders() -> void:
 	_board_sh.code = FirstPersonBoard.sun_shader_code() if _sun_on else FirstPersonBoard.SHADER
 	if _bill_sh == null: _bill_sh = Shader.new()
 	_bill_sh.code = FirstPersonBoard.BILLBOARD
+	if _veg_sh == null: _veg_sh = Shader.new()
+	_veg_sh.code = _board_sh.code.replace("render_mode cull_back,", "render_mode cull_disabled,")
 	var g := _board_sh.code.replace("render_mode cull_back, depth_draw_opaque", "render_mode cull_disabled, blend_mix, depth_draw_opaque")
 	g = g.replace("		ALBEDO = c.rgb * lit * k;", "		ALBEDO = c.rgb * lit * k;\n		ALPHA = 0.3;")
 	if _glass_sh == null: _glass_sh = Shader.new()
@@ -672,11 +698,21 @@ func _build_materials() -> void:
 		if not _art_mats.has(key):
 			_art_mats[key] = _mat(_board_sh, {"tex": FirstPersonArt.wall_texture(kind, accent), "ground_ao": true})
 		return _art_mats[key]
-	_mats["door"] = func(style: String, accent: Color, at: Vector2i) -> Material:
-		var key := "door|%s|%s|%s" % [style, accent.to_html(), at]
+	_mats["veg"] = func(name: String) -> Material:
+		var key := "veg|" + name
 		if not _art_mats.has(key):
-			_art_mats[key] = _mat(_board_sh, {"tex": FirstPersonArt.door_texture(style, accent),
-					"door_bounds": Vector4(at.x + 0.001, at.y + 0.001, at.x + 0.999, at.y + 0.999)})
+			var img := FirstPersonArt.picture("veg/veg_" + name)
+			img.generate_mipmaps()
+			_art_mats[key] = _mat(_veg_sh, {"tex": ImageTexture.create_from_image(img), "veg": true, "cut": 0.5,
+					"sway": 0.12 if name.begins_with("grass") else (0.04 if name.begins_with("tall") else 0.004)})
+		return _art_mats[key]
+	# A sliding leaf stays inside its doorway (door_bounds); a swinging one opens out of it.
+	_mats["door"] = func(style: Array, accent: Color, at: Vector2i, swings: bool) -> Material:
+		var key := "door|%s|%s|%s" % [style, accent.to_html(), at if not swings else Vector2i(-1, -1)]
+		if not _art_mats.has(key):
+			var p := {"tex": FirstPersonArt.door_texture(style[0], style[1], accent)}
+			if not swings: p["door_bounds"] = Vector4(at.x + 0.001, at.y + 0.001, at.x + 0.999, at.y + 0.999)
+			_art_mats[key] = _mat(_board_sh, p)
 		return _art_mats[key]
 
 ## The first-person floor of a tile chunk (TerrainTiles.FP_RES) and its two materials.
@@ -1019,7 +1055,9 @@ func _chunk_context() -> Dictionary:
 	var tiles: TerrainTiles = main._tiles
 	return {"env": env, "mats": _mats, "tod": state.time_of_day, "winter": state.winter,
 		"look": func(c: Vector2i, fid: String) -> Array: return tiles.look_of(c, fid),
-		"furniture_look": tiles.furniture_look}
+		"furniture_look": tiles.furniture_look,
+		"door_style": tiles.door_style,
+		"grass": _grass_on, "ground": func(c: Vector2i) -> int: return int(_ground_img.get_pixel(c.x, c.y).r * 255.0 + 0.5)}
 
 func _advance_chunk(cc: Vector2i, deadline: int) -> bool:
 	if _dirty.has(cc): _discard_chunk_job(cc)
@@ -1050,10 +1088,10 @@ func _build_chunk(cc: Vector2i) -> void:
 	var tcc := Vector2i(cc.x * ch / TerrainTiles.C, cc.y * ch / TerrainTiles.C)
 	_tile_floor(tcc)
 	var tiles: TerrainTiles = main._tiles
-	var built := FirstPersonBoard.build(grid, cc, _roof, {"env": env, "mats": _mats, "tod": state.time_of_day, "winter": state.winter,
-			"look": func(c: Vector2i, fid: String) -> Array: return tiles.look_of(c, fid),
-			"furniture_look": tiles.furniture_look,
-			"decals": tiles.decals.get(tcc, []), "map_decals": tiles.map_decals.get(tcc, [])})
+	var ctx := _chunk_context()
+	ctx["decals"] = tiles.decals.get(tcc, [])
+	ctx["map_decals"] = tiles.map_decals.get(tcc, [])
+	var built := FirstPersonBoard.build(grid, cc, _roof, ctx)
 	_install_chunk(cc, built)
 
 func _install_chunk(cc: Vector2i, built: Dictionary) -> void:
@@ -1092,6 +1130,16 @@ func _doors(delta: float) -> void:
 			door.set_meta("opening", now)
 			var ease := now * now * (3.0 - 2.0 * now)
 			var along_x: bool = door.get_meta("along_x")
+			if door.has_meta("swing"):
+				# A door turns on its hinge (issues-14 #3), away from whoever opens it.
+				if was == 0.0 or not door.has_meta("away"):
+					var ahead := (pos.z - (at.y + 0.5)) if along_x else (pos.x - (at.x + 0.5))
+					door.set_meta("away", 1.0 if ahead > 0.0 else -1.0)
+				var away: float = door.get_meta("away")
+				for leaf: Node in door.get_children():
+					if leaf.has_meta("hinge"):
+						(leaf as Node3D).rotation.y = (away if along_x else -away) * ease * PI * 0.5 + float(leaf.get_meta("hinge"))
+				continue
 			var leaves := 0
 			for leaf: Node in door.get_children():
 				if leaf.has_meta("side"):
@@ -1741,6 +1789,8 @@ func _station_colour(sc: Vector2i) -> Color:
 # --- HUD -----------------------------------------------------------------------------------------
 
 class Crosshair extends Control:
+	func _process(_d: float) -> void:
+		visible = Ui.fp_crosshair
 	func _draw() -> void:
 		var c := size * 0.5
 		for d: Vector2 in [Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1), Vector2(0, -1)]:

@@ -312,6 +312,7 @@ var pan: Vector2 = Vector2.ZERO:
 				_sky.camera = pan
 const PAN_SPEED := 700.0
 var _mouse_panning: bool = false
+var _pan_last := Vector2.ZERO
 ## Масштаб «камеры» (колесо мыши / жест щипка). Применяется к рисованию через
 ## draw_set_transform, поэтому CELL в draw-вызовах остаётся прежним.
 var zoom: float = 1.0:
@@ -493,6 +494,9 @@ var _picker: PanelContainer
 ## кнопке, на доске горит ИМЕННО этот объект: список голых координат глазами не читается,
 ## а объект на поле — читается сразу. (-1,-1) — ни на что не наведено.
 var _hover_cell := Vector2i(-1, -1)
+## The cell under the pointer while it rests on a tank: only then is the tank's status card
+## drawn (issues-14 #18); (-1, -1) otherwise.
+var _hover_tank_cell := Vector2i(-1, -1)
 var _dice: DiceRoller
 ## Кастомное модальное окно «выйти в меню» в общем стиле интерфейса (#51), а не
 ## системный ConfirmationDialog. Полноэкранный затемнитель + рамка SteamChrome.

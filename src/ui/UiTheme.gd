@@ -118,6 +118,10 @@ var crt_filter := false
 var crt_strength := 1.0
 ## Share of stars in the sky behind a board (issues-13 #2).
 var star_density := 0.3
+## Grass blades on grass, on the board and in first person (issues-14 #6).
+var grass := true
+## The first-person crosshair (issues-14 #16).
+var fp_crosshair := true
 var _crt: CrtFilter = null
 var _pal: Dictionary = PALETTES["green"]
 
@@ -174,6 +178,8 @@ func _load_settings() -> void:
 	crt_filter = bool(cf.get_value("display", "crt_filter", false))
 	star_density = clampf(float(cf.get_value("board", "star_density", 0.3)), 0.0, 1.0)
 	crt_strength = clampf(float(cf.get_value("display", "crt_strength", 1.0)), 0.1, 1.0)
+	grass = bool(cf.get_value("board", "grass", true))
+	fp_crosshair = bool(cf.get_value("display", "fp_crosshair", true))
 
 func _save_settings() -> void:
 	var cf := ConfigFile.new()
@@ -196,6 +202,8 @@ func _save_settings() -> void:
 	cf.set_value("display", "crt_filter", crt_filter)
 	cf.set_value("display", "crt_strength", crt_strength)
 	cf.set_value("board", "star_density", star_density)
+	cf.set_value("board", "grass", grass)
+	cf.set_value("display", "fp_crosshair", fp_crosshair)
 	cf.set_value("display", "ffmpeg_path", ffmpeg_path)
 	cf.save(SETTINGS_PATH)
 
@@ -231,10 +239,23 @@ func set_star_density(v: float) -> void:
 	star_density = clampf(v, 0.0, 1.0)
 	_save_settings()
 
+func set_grass(on: bool) -> void:
+	grass = on
+	_save_settings()
+	board_settings_changed.emit()
+
+func set_fp_crosshair(on: bool) -> void:
+	fp_crosshair = on
+	_save_settings()
+
 func set_crt_strength(v: float) -> void:
 	crt_strength = clampf(v, 0.1, 1.0)
 	if _crt != null: _crt.set_strength(crt_strength)
 	_save_settings()
+
+## The CRT's colour fringing this frame (0..1): the battle screen calls it every frame.
+func crt_shock(v: float) -> void:
+	if _crt != null: _crt.want = maxf(_crt.want, clampf(v, 0.0, 1.0))
 
 func _apply_crt() -> void:
 	if crt_filter and _crt == null:

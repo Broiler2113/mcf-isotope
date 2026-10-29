@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://cobnb3xx4j8ih"
+path="res://.godot/imported/veg_park_a.png-0d7ddf0b79d0af4c1fae4b41ea9028d0.image"
+
+[deps]
+
+source_file="res://textures/first_person/veg/veg_park_a.png"
+dest_files=["res://.godot/imported/veg_park_a.png-0d7ddf0b79d0af4c1fae4b41ea9028d0.image"]
+
+[params]
+
