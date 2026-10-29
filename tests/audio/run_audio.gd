@@ -328,7 +328,7 @@ func _settings() -> void:
 	ck(cfg.get_value("ui", "audio_test_preserved") == "yes", "audio saves preserve other settings sections")
 	var window: CanvasLayer = SettingsScript.open(root)
 	await process_frame
-	ck(window._tabs.get_tab_count() == 3 and window._tabs.get_tab_title(2) == "Audio", "Audio is the third settings tab")
+	ck(window._tabs.get_tab_title(window.TAB_AUDIO) == "Audio", "Settings has an Audio tab")
 	var slider: HSlider = window.find_child("Audio_voice", true, false)
 	ck(slider != null, "Voice slider exists")
 	if slider != null:

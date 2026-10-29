@@ -90,6 +90,7 @@ func _select(unit: UnitInstance) -> void:
 		_open_menu(unit)
 	else:
 		_menu.hide()
+	if _can_control(unit.owner): _bounce(unit.id)
 	_refresh_info()
 	_redraw()
 

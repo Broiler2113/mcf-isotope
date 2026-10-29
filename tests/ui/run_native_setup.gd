@@ -10,7 +10,7 @@ func run() -> void:
 	var window: Node = settings_script.open(root)
 	await process_frame
 	await process_frame
-	ck(window._tabs.get_tab_title(0) == "Interface", "performance status is available in the normal settings page")
+	ck(window._tabs.get_tab_title(0) == "General", "performance status is available in the normal settings page")
 	ck(window._acceleration_status.text == runtime.title and window._acceleration_detail.text == runtime.detail,
 		"settings show the actual loaded acceleration status")
 	ck(window._performance_box.find_children("*", "BaseButton", true, false).is_empty(),

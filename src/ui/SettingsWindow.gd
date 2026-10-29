@@ -17,7 +17,13 @@ var _capture_action := ""
 var _key_buttons: Dictionary = {}
 var _key_message: Label
 var _tabs: TabContainer
-var _interface_scroll: ScrollContainer
+## The scrolling pages, sized to the screen together.
+var _pages: Array[ScrollContainer] = []
+const TAB_GENERAL := 0
+const TAB_GRAPHICS := 1
+const TAB_GAMEPLAY := 2
+const TAB_KEYS := 3
+const TAB_AUDIO := 4
 var _key_sections: TabContainer
 var _acceleration_status: Label
 var _acceleration_detail: Label
@@ -37,7 +43,71 @@ func _ready() -> void:
 
 func _resize_pages() -> void:
 	var height := get_viewport().get_visible_rect().size.y
-	if is_instance_valid(_interface_scroll): _interface_scroll.custom_minimum_size.y = clampf(height - 200.0, 160.0, 560.0)
+	for p: ScrollContainer in _pages:
+		if is_instance_valid(p): p.custom_minimum_size.y = clampf(height - 200.0, 160.0, 480.0)
+
+## A tab page that scrolls when the screen is short.
+func _page(tabs: TabContainer, title: String) -> VBoxContainer:
+	var page := VBoxContainer.new()
+	page.add_theme_constant_override("separation", 14)
+	var pad := SteamChrome.pad(page, 8, 12)
+	pad.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var scroll := ScrollContainer.new()
+	scroll.name = title
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.add_child(pad)
+	tabs.add_child(scroll)
+	_pages.append(scroll)
+	_resize_pages()
+	return page
+
+func _group(page: VBoxContainer, title: String) -> VBoxContainer:
+	var box := SteamChrome.group_box(title)
+	page.add_child(box)
+	return box.body
+
+func _row_label(text: String) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.custom_minimum_size = Vector2(130, 0)
+	l.add_theme_font_size_override("font_size", 12)
+	l.add_theme_color_override("font_color", Color("#b0b0b0"))
+	return l
+
+func _check(box: Control, text: String, tip: String, on: bool, apply: Callable) -> CheckBox:
+	var c := CheckBox.new()
+	c.text = text
+	c.tooltip_text = tip
+	c.button_pressed = on
+	if apply.is_valid(): c.toggled.connect(apply)
+	box.add_child(c)
+	return c
+
+## Name on the left, value on the right: every slider on every page reads the same.
+func _slider(box: Control, text: String, lo: float, hi: float, step: float, value: float,
+		fmt: String, tip: String, apply: Callable) -> HSlider:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	box.add_child(row)
+	row.add_child(_row_label(text))
+	var sl := HSlider.new()
+	sl.min_value = lo
+	sl.max_value = hi
+	sl.step = step
+	sl.value = value
+	sl.tooltip_text = tip
+	sl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(sl)
+	var amount := Label.new()
+	amount.text = fmt % sl.value
+	amount.custom_minimum_size = Vector2(60, 0)
+	amount.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	row.add_child(amount)
+	sl.value_changed.connect(func(v: float) -> void:
+		amount.text = fmt % v
+		apply.call(v))
+	return sl
 
 func _build() -> void:
 	var previous_tab := _tabs.current_tab if is_instance_valid(_tabs) else 0
@@ -69,29 +139,16 @@ func _build() -> void:
 	var tabs := TabContainer.new()
 	_tabs = tabs
 	col.add_child(SteamChrome.pad(tabs, 8, 8))
-	var page := VBoxContainer.new()
-	page.add_theme_constant_override("separation", 18)
-	var page_pad := SteamChrome.pad(page, 8, 12)
-	_interface_scroll = ScrollContainer.new()
-	_interface_scroll.name = "Interface"
-	_interface_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	page_pad.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_interface_scroll.add_child(page_pad)
-	tabs.add_child(_interface_scroll)
-	_resize_pages()
+	_pages.clear()
 
-	# --- Размер интерфейса (item 17) ---
-	var size_box := SteamChrome.group_box("Interface size")
-	page.add_child(size_box)
+	# Pages by topic (issues-13): one long Interface page had become a pile of everything.
+	# --- General: the interface itself ---
+	var page := _page(tabs, "General")
+	var size_box := _group(page, "Interface")
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 15)
-	size_box.body.add_child(row)
-	var lbl := Label.new()
-	lbl.text = "Scale"
-	lbl.custom_minimum_size = Vector2(110, 0)
-	lbl.add_theme_font_size_override("font_size", 12)
-	lbl.add_theme_color_override("font_color", Color("#b0b0b0"))
-	row.add_child(lbl)
+	row.add_theme_constant_override("separation", 10)
+	size_box.add_child(row)
+	row.add_child(_row_label("Scale"))
 	_scale_slider = HSlider.new()
 	_scale_slider.min_value = Ui.UI_SCALE_MIN * 100.0
 	_scale_slider.max_value = Ui.UI_SCALE_MAX * 100.0
@@ -109,132 +166,11 @@ func _build() -> void:
 	_scale_slider.gui_input.connect(func(e: InputEvent) -> void:
 		if e is InputEventKey and e.pressed:
 			_apply_scale.call_deferred())
-
-	var performance := SteamChrome.group_box("Performance")
-	_performance_box = performance
-	page.add_child(performance)
-	_acceleration_status = Label.new()
-	_acceleration_status.name = "NativeAccelerationStatus"
-	_acceleration_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	Ui.style_status(_acceleration_status)
-	performance.body.add_child(_acceleration_status)
-	_acceleration_detail = Label.new()
-	_acceleration_detail.name = "NativeAccelerationDetail"
-	_acceleration_detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_acceleration_detail.add_theme_font_size_override("font_size", 12)
-	_acceleration_detail.add_theme_color_override("font_color", Color("#b0b0b0"))
-	performance.body.add_child(_acceleration_detail)
-	_refresh_acceleration()
-
-	# --- Экран ---
-	var disp_box := SteamChrome.group_box("Display")
-	page.add_child(disp_box)
-	var fs := CheckBox.new()
-	fs.text = "Fullscreen"
-	fs.button_pressed = Ui.fullscreen
-	fs.toggled.connect(Ui.set_fullscreen)
-	disp_box.body.add_child(fs)
-	var lighting := CheckBox.new()
-	lighting.text = "Dynamic lighting and shadows"
-	lighting.tooltip_text = "Soft lights and shadows from lamps, fire, explosions and muzzle flashes. Walls stop light; low furniture, glass and open doors don't. Visual only: it never changes what anyone can see."
-	lighting.button_pressed = Ui.dynamic_lighting
-	lighting.toggled.connect(Ui.set_dynamic_lighting)
-	disp_box.body.add_child(lighting)
-	var fps := CheckBox.new()
-	fps.text = "Show FPS counter"
-	fps.tooltip_text = "Frames per second in the top right corner of the battle screen, beside the side panel."
-	fps.button_pressed = Ui.show_fps
-	fps.toggled.connect(Ui.set_show_fps)
-	disp_box.body.add_child(fps)
-	var snow := CheckBox.new()
-	snow.text = "Falling snow on winter maps"
-	snow.tooltip_text = "Snowflakes drifting over winter maps, on the battle screen and in first person."
-	snow.button_pressed = Ui.snowfall
-	snow.toggled.connect(Ui.set_snowfall)
-	disp_box.body.add_child(snow)
-	var crt := CheckBox.new()
-	crt.text = "CRT terminal filter"
-	crt.tooltip_text = "Play as if through an old computer terminal: scanlines, a phosphor grille and dark tube corners."
-	crt.button_pressed = Ui.crt_filter
-	crt.toggled.connect(Ui.set_crt_filter)
-	disp_box.body.add_child(crt)
-	# First person (fix-7 #9): field of view and mouse sensitivity.
-	for which: String in ["fov", "sens", "distance"]:
-		var fp_row := HBoxContainer.new()
-		disp_box.body.add_child(fp_row)
-		var sl := HSlider.new()
-		sl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		var lab := Label.new()
-		if which == "fov":
-			sl.min_value = 50; sl.max_value = 120; sl.step = 1; sl.value = Ui.fp_fov
-			sl.tooltip_text = "Field of view in first person."
-			lab.text = "First-person FOV: %d°" % sl.value
-		elif which == "sens":
-			sl.min_value = 5; sl.max_value = 100; sl.step = 1; sl.value = Ui.fp_sensitivity * 100.0
-			sl.tooltip_text = "Mouse sensitivity in first person."
-			lab.text = "Mouse sensitivity: %d%%" % sl.value
-		else:
-			sl.min_value = Ui.FP_DISTANCE_MIN; sl.max_value = Ui.FP_DISTANCE_MAX; sl.step = 4; sl.value = Ui.fp_render_distance
-			sl.tooltip_text = "How far the first-person view renders the battlefield, in meters."
-			lab.text = "Render distance: %d m" % sl.value
-		fp_row.add_child(sl)
-		fp_row.add_child(lab)
-		var w := which
-		sl.value_changed.connect(func(v: float) -> void:
-			if w == "fov":
-				lab.text = "First-person FOV: %d°" % v
-				Ui.set_fp_view(v, Ui.fp_sensitivity)
-			elif w == "sens":
-				lab.text = "Mouse sensitivity: %d%%" % v
-				Ui.set_fp_view(Ui.fp_fov, v / 100.0)
-			else:
-				lab.text = "Render distance: %d m" % v
-				Ui.set_fp_render_distance(int(v)))
-	var dark_row := HBoxContainer.new()
-	disp_box.body.add_child(dark_row)
-	var dark := HSlider.new()
-	dark.min_value = 0
-	dark.max_value = 100
-	dark.step = 5
-	dark.value = Ui.light_darkness * 100.0
-	dark.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	dark.tooltip_text = "How dark unlit ground is: 0% is daylight, 100% is pitch black."
-	dark_row.add_child(dark)
-	var dark_label := Label.new()
-	dark_label.text = "Darkness: %d%%" % dark.value
-	dark_row.add_child(dark_label)
-	dark.value_changed.connect(func(value: float) -> void:
-		dark_label.text = "Darkness: %d%%" % value
-		Ui.set_light_darkness(value / 100.0))
-
-	# --- Игра ---
-	var game_box := SteamChrome.group_box("Gameplay")
-	page.add_child(game_box)
-	var autoroll := CheckBox.new()
-	autoroll.text = "Autoroll dice"
-	autoroll.tooltip_text = "Your rolls start on their own: no Roll button, no Enter to confirm."
-	autoroll.button_pressed = Ui.autoroll_dice
-	autoroll.toggled.connect(Ui.set_autoroll_dice)
-	game_box.body.add_child(autoroll)
-	var desync := CheckBox.new()
-	desync.text = "Send desync reports"
-	desync.tooltip_text = "When a multiplayer board goes out of sync, quietly send the developers one report per match: the game version, your OS and graphics card, the technical log, the combat log and the state of the board."
-	desync.button_pressed = Ui.desync_reports
-	desync.toggled.connect(Ui.set_desync_reports)
-	game_box.body.add_child(desync)
-
 	# --- Акцент (item 23) ---
-	var acc_box := SteamChrome.group_box("Accent color")
-	page.add_child(acc_box)
 	var arow := HBoxContainer.new()
-	arow.add_theme_constant_override("separation", 12)
-	acc_box.body.add_child(arow)
-	var albl := Label.new()
-	albl.text = "Color"
-	albl.custom_minimum_size = Vector2(110, 0)
-	albl.add_theme_font_size_override("font_size", 12)
-	albl.add_theme_color_override("font_color", Color("#b0b0b0"))
-	arow.add_child(albl)
+	arow.add_theme_constant_override("separation", 10)
+	size_box.add_child(arow)
+	arow.add_child(_row_label("Accent color"))
 	_accent_opt = OptionButton.new()
 	for t: String in Ui.ACCENT_LABELS:
 		_accent_opt.add_item(t)
@@ -255,7 +191,7 @@ func _build() -> void:
 	# Образцы: всё, что красится акцентом, — сразу видно, как ляжет выбранный цвет.
 	var demo := HBoxContainer.new()
 	demo.add_theme_constant_override("separation", 20)
-	acc_box.body.add_child(demo)
+	size_box.add_child(demo)
 	var cb := CheckBox.new()
 	cb.text = "Checkbox"
 	cb.button_pressed = true
@@ -273,30 +209,80 @@ func _build() -> void:
 	var status := Label.new()
 	status.text = "[Status] Accent-colored status text."
 	Ui.style_status(status)
-	acc_box.body.add_child(status)
+	size_box.add_child(status)
 
-	var grid_box := SteamChrome.group_box("Map grid")
-	page.add_child(grid_box)
-	var grid_toggle := CheckBox.new()
-	grid_toggle.text = "Show grid"
-	grid_toggle.button_pressed = Ui.grid_visible
-	grid_box.body.add_child(grid_toggle)
-	var grid_row := HBoxContainer.new()
-	grid_box.body.add_child(grid_row)
-	var opacity := HSlider.new()
-	opacity.min_value = 0
-	opacity.max_value = 100
-	opacity.step = 1
-	opacity.value = Ui.grid_opacity * 100.0
-	opacity.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	grid_row.add_child(opacity)
-	var amount := Label.new()
-	amount.text = "Opacity: %d%%" % opacity.value
-	grid_row.add_child(amount)
+	var performance := SteamChrome.group_box("Performance")
+	_performance_box = performance
+	page.add_child(performance)
+	_acceleration_status = Label.new()
+	_acceleration_status.name = "NativeAccelerationStatus"
+	_acceleration_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	Ui.style_status(_acceleration_status)
+	performance.body.add_child(_acceleration_status)
+	_acceleration_detail = Label.new()
+	_acceleration_detail.name = "NativeAccelerationDetail"
+	_acceleration_detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_acceleration_detail.add_theme_font_size_override("font_size", 12)
+	_acceleration_detail.add_theme_color_override("font_color", Color("#b0b0b0"))
+	performance.body.add_child(_acceleration_detail)
+	_refresh_acceleration()
+
+	# --- Graphics: what the screen shows ---
+	page = _page(tabs, "Graphics")
+	var window_box := _group(page, "Window")
+	_check(window_box, "Fullscreen", "", Ui.fullscreen, Ui.set_fullscreen)
+	_check(window_box, "Show FPS counter",
+			"Frames per second in the top right corner of the battle screen, beside the side panel.",
+			Ui.show_fps, Ui.set_show_fps)
+	var light_box := _group(page, "Lighting")
+	_check(light_box, "Dynamic lighting and shadows",
+			"Soft lights and shadows from lamps, fire, explosions and muzzle flashes. Walls stop light; low furniture, glass and open doors don't. Visual only: it never changes what anyone can see.",
+			Ui.dynamic_lighting, Ui.set_dynamic_lighting)
+	_slider(light_box, "Darkness", 0, 100, 5, Ui.light_darkness * 100.0, "%d%%",
+			"How dark unlit ground is: 0% is daylight, 100% is pitch black.",
+			func(v: float) -> void: Ui.set_light_darkness(v / 100.0))
+	var board_box := _group(page, "Board")
+	var grid_toggle := _check(board_box, "Show grid", "", Ui.grid_visible, Callable())
+	var opacity := _slider(board_box, "Grid opacity", 0, 100, 1, Ui.grid_opacity * 100.0, "%d%%", "",
+			func(v: float) -> void: Ui.set_grid(grid_toggle.button_pressed, v / 100.0))
 	grid_toggle.toggled.connect(func(on: bool) -> void: Ui.set_grid(on, opacity.value / 100.0))
-	opacity.value_changed.connect(func(value: float) -> void:
-		amount.text = "Opacity: %d%%" % value
-		Ui.set_grid(grid_toggle.button_pressed, value / 100.0))
+	_slider(board_box, "Stars", 0, 100, 5, Ui.star_density * 100.0, "%d%%",
+			"How many stars fill space behind the board.",
+			func(v: float) -> void: Ui.set_star_density(v / 100.0))
+	_check(board_box, "Falling snow on winter maps",
+			"Snowflakes drifting over winter maps, on the battle screen and in first person.",
+			Ui.snowfall, Ui.set_snowfall)
+	var crt_box := _group(page, "CRT filter")
+	var crt := _check(crt_box, "CRT terminal filter",
+			"Play as if through an old computer terminal: scanlines, a phosphor grille and dark tube corners.",
+			Ui.crt_filter, Callable())
+	var crt_sl := _slider(crt_box, "Intensity", 10, 100, 5, Ui.crt_strength * 100.0, "%d%%",
+			"How strong the CRT filter is.",
+			func(v: float) -> void: Ui.set_crt_strength(v / 100.0))
+	crt_sl.editable = Ui.crt_filter
+	crt.toggled.connect(func(on: bool) -> void:
+		Ui.set_crt_filter(on)
+		crt_sl.editable = on)
+
+	# --- Gameplay ---
+	page = _page(tabs, "Gameplay")
+	var battle_box := _group(page, "Battle")
+	_check(battle_box, "Autoroll dice", "Your rolls start on their own: no Roll button, no Enter to confirm.",
+			Ui.autoroll_dice, Ui.set_autoroll_dice)
+	# First person (fix-7 #9): field of view, mouse sensitivity and how far it draws.
+	var fp_box := _group(page, "First person")
+	_slider(fp_box, "Field of view", 50, 120, 1, Ui.fp_fov, "%d°", "Field of view in first person.",
+			func(v: float) -> void: Ui.set_fp_view(v, Ui.fp_sensitivity))
+	_slider(fp_box, "Mouse sensitivity", 5, 100, 1, Ui.fp_sensitivity * 100.0, "%d%%",
+			"Mouse sensitivity in first person.",
+			func(v: float) -> void: Ui.set_fp_view(Ui.fp_fov, v / 100.0))
+	_slider(fp_box, "Render distance", Ui.FP_DISTANCE_MIN, Ui.FP_DISTANCE_MAX, 4, Ui.fp_render_distance, "%d m",
+			"How far the first-person view renders the battlefield, in meters.",
+			func(v: float) -> void: Ui.set_fp_render_distance(int(v)))
+	var mp_box := _group(page, "Multiplayer")
+	_check(mp_box, "Send desync reports",
+			"When a multiplayer board goes out of sync, quietly send the developers one report per match: the game version, your OS and graphics card, the technical log, the combat log and the state of the board.",
+			Ui.desync_reports, Ui.set_desync_reports)
 
 	_build_keybinds(tabs)
 	_build_audio(tabs)
@@ -310,24 +296,33 @@ func _build() -> void:
 	var reset := Button.new()
 	reset.text = "Defaults"
 	reset.custom_minimum_size = Vector2(100, 0)
+	reset.tooltip_text = "Reset the settings on this page."
 	reset.pressed.connect(func() -> void:
-		if tabs.current_tab == 2:
-			GameAudio.set_levels(0.8, 0.8, 0.7, false, true)
-			_build.call_deferred()
-			return
-		if tabs.current_tab == 1:
-			_capture_action = ""
-			_key_message.text = Keybinds.reset_defaults()
-			return
-		Ui.set_dynamic_lighting(false)
-		Ui.set_light_darkness(0.75)
-		Ui.set_grid(true, 0.32)
-		Ui.set_ui_scale(1.0)
-		Ui.set_accent("green")
-		Ui.set_fullscreen(false)
-		Ui.set_autoroll_dice(false)
-		Ui.set_desync_reports(true)
-		Ui.set_fp_render_distance(Ui.FP_DISTANCE_DEFAULT)
+		match tabs.current_tab:
+			TAB_GENERAL:
+				Ui.set_ui_scale(1.0)
+				Ui.set_accent("green")
+			TAB_GRAPHICS:
+				Ui.set_fullscreen(false)
+				Ui.set_show_fps(false)
+				Ui.set_dynamic_lighting(true)
+				Ui.set_light_darkness(0.75)
+				Ui.set_grid(true, 0.32)
+				Ui.set_star_density(0.3)
+				Ui.set_snowfall(true)
+				Ui.set_crt_filter(false)
+				Ui.set_crt_strength(1.0)
+			TAB_GAMEPLAY:
+				Ui.set_autoroll_dice(false)
+				Ui.set_fp_view(80.0, 0.25)
+				Ui.set_fp_render_distance(Ui.FP_DISTANCE_DEFAULT)
+				Ui.set_desync_reports(true)
+			TAB_KEYS:
+				_capture_action = ""
+				_key_message.text = Keybinds.reset_defaults()
+				return
+			TAB_AUDIO:
+				GameAudio.set_levels(0.8, 0.8, 0.7, false, true)
 		_build.call_deferred())
 	bottom.add_child(reset)
 	var close := Button.new()
@@ -485,7 +480,7 @@ func _key_legend() -> Control:
 	return row
 
 func show_keybinds(editor := false) -> void:
-	_tabs.current_tab = 1
+	_tabs.current_tab = TAB_KEYS
 	_key_sections.current_tab = 1 if editor else 0
 
 func _refresh_keys() -> void:

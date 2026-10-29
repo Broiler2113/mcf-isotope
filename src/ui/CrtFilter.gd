@@ -9,6 +9,8 @@ const SHADER := """
 shader_type canvas_item;
 render_mode unshaded;
 uniform sampler2D screen : hint_screen_texture, filter_linear, repeat_disable;
+// Settings → Display (issues-13 #5): 0 is the plain picture, 1 the full tube.
+uniform float strength = 1.0;
 void fragment() {
 	vec2 uv = SCREEN_UV;
 	vec2 c = uv - 0.5;
@@ -30,7 +32,7 @@ void fragment() {
 	vec2 q = abs(c) / SCREEN_PIXEL_SIZE - (half_px - vec2(r));
 	float edge = length(max(q, 0.0)) - r;
 	float vig = smoothstep(0.0, -0.45 * r, edge) * (1.0 - 0.55 * dot(c, c));
-	COLOR = vec4(col * vig, 1.0);
+	COLOR = vec4(mix(texture(screen, uv).rgb, col * vig, strength), 1.0);
 }
 """
 
@@ -45,3 +47,7 @@ func _ready() -> void:
 	mat.shader = shader
 	rect.material = mat
 	add_child(rect)
+	set_strength(Ui.crt_strength)
+
+func set_strength(v: float) -> void:
+	((get_child(0) as ColorRect).material as ShaderMaterial).set_shader_parameter("strength", v)

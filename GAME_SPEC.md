@@ -3930,6 +3930,7 @@ redrawn every frame — at ~12k decals that was ~75 ms a frame and is now nothin
 the same fog rules as the terrain they sit on. Bloody footprints are gone with the rest of
 the per-step bookkeeping. **Service accents** (§20.2): on stations and in bunkers the walls and door frames of a service carry its colour — command blue, control/comms white, security red, medical green, science purple, engineering yellow, cargo orange, everything else grey; a room's own purpose beats its department (`MapGen.KIND_ACCENT`), the colour is a per-cell display-only byte (`MapData.wall_accent`, `MCF.Accent`) drawn as a line that runs along the wall and as a tinted door frame. **Corridors**: main ones are always 3 cells wide, maintenance tunnels 1 (2 about a quarter of the time), and grating is laid in roughly a third of the tunnels and in no room at all. **Grill walkway** (`MCF.Look.GRILL`): a floor look that is transparent between its bars and lies *over* a cell instead of replacing it; it runs from a hull airlock out into space with solar panels down both sides, and it is paintable in the editor. **Space draws no tile** — the `Starfield` parallax behind the board shows through it, following the camera (far layer 5 %, near 26 %); `floor_space.png` dropped by the player still wins. **Doors fill the whole cell** instead of a narrow panel in the middle of it. **Windows**: a symbol fallback font (✓ ✕ ▶ ⚠ are in neither Handjet nor Tahoma) and an explicit `stretch/aspect=expand` so a non-16:9 window is not letterboxed. Also: the hidden storage can no longer get an exterior airlock cut into it. **A border around every map** (§20.2): 10 cells in every direction that can be reached — diggable soil in a bunker, grass around a town or field, open space around a station or asteroid — and 2 more that cannot (`MCF.FEATURE_BOUNDARY`, in no destructible list, opaque to the laser), so the world keeps going past the battlefield but nothing walks off it. Lobby sizes now name the map, not the field. Also: `default_clear_color` was never applied — project.godot comments must start with `;`, and the `#` ones silently dropped the setting, so the window had been Godot grey instead of black all along. Tests: `tests/run_batch093.gd`. |
 | 143 | **0.14.6 — Issues 11–21** (§27.29, "Issues-12"): hovered units twitch, units and vehicles in vacuum sway, an aiming tank's turret follows the cursor smoothly; solar panels only on the station's top; icons on the top-left buttons; station, town, field and asteroid walls redrawn in the board's pixel style to match first person, service colour as a band on each side a wall faces; first-person windows set in their wall, flame billboards, Sun, Earth and lens flare in space, clouds and an Overcast map option on the surface; new top-down fire; optional CRT filter; dynamic lighting on by default; the space backdrop in one pass. Looks only: protocol (33) and replay schema (3) unchanged. |
+| 144 | **0.14.6.1 — Issues-13** ("Issues-13"): your unit hops when clicked instead of twitching on hover; Stars and CRT intensity sliders; Settings split into General / Graphics / Gameplay pages; icon-only top-left buttons; solar panels on every side of the station again. Looks only: protocol (33) and replay schema (3) unchanged. |
 | 142 | **0.14.5.5 — Zoomed-out frame rate** (§27.28): soldiers, bodies, rings, badges and markers are textured rects from one marker sheet, so they batch (fitted giant 642 → 216 draw calls); flying particles redraw only their own layer; new blood and brass are painted onto a kept terrain chunk; gas sight sweeps once per eye; dynamic lighting caches static lamps and draws flicker, flashes and muzzle fire over a copy (30 fires: 198 → 65 ms a frame). Drawing only: no rule, protocol (33) or replay schema (3) change. |
 | 141 | **0.14.5.4 — The unit change log** (§27.27): `UnitInstance.vision_log` records every unit whose cell, side, status, seat or neutral group changed; team fog, the civilians' wake-up check (now only sleepers whose sight lines changed), captives, carried bodies, each action's deaths and the AI's enemy lists read the changed units instead of the whole army; the firing-line and neighbour scans of target and capture lists and the wake-up rows run in C++ (`MCFAI.line_slots`/`near_slots`, `MCFPlanScorer.civilians_seeing_rows`). 1,200 giant actions 5.9 → ~3.1 s. No rule changed; protocol 33. |
 | 140 | **0.14.5.3 — Frame cost and hitches** (§27.26): zoom builds one terrain chunk per frame, group orders patch the native board from a walk journal, the soldier layer skips unchanged soldiers, replay checkpoints are sealed off the main thread, cheaper fog in smoke, and viewer switches copy only the cells a fog memory can have wrong. 1,200 giant actions 7.3 → ~5.5 s. No rule changed; protocol 33. |
@@ -4779,6 +4780,26 @@ is on by default (owner, 2026-10-28); settings saved before that are switched on
 - **CRT filter** (#21, Settings → Display, off by default): scanlines, an RGB grille, colour
   fringing, tube corners and a faint flicker over the whole game. The picture is not bent, so
   clicks land where they look.
+
+## Issues-13 (0.14.6.1 follow-up)
+
+Looks and settings only; no rule, protocol (33) or replay schema (3) changed.
+
+- **Click hop** replaces the hover twitch: selecting one of your own units lifts it straight up
+  once (0.26 s, 3 px, no shake or turn, `MainDrawing._bounce`); hovering does nothing.
+- **Stars behind the board** follow Settings → Graphics → Board → Stars (0–100 % of the menu sky,
+  default 30 %, `Ui.star_density`), live; the main-menu sky keeps every star.
+- **Top-left buttons** show only their icons; the caption moved to the tooltip.
+- **Solar panels** hang off every side of the station again (issues-12 #14 undone). Each side
+  gets its share of the exits first (`MapGen._exit_runs`, a quarter of the limit each), then
+  the rest fill in, so the top-down scan no longer leaves the bottom hull bare.
+- **CRT intensity** (Settings → Graphics, 10–100 %, `Ui.crt_strength`) blends the filtered
+  picture with the plain one.
+- **Settings by topic** (`SettingsWindow`): General (interface scale, accent color,
+  performance status), Graphics (Window, Lighting, Board, CRT filter), Gameplay (Battle,
+  First person, Multiplayer), Keybinds, Audio. Every slider is one row: name, slider, value.
+  Defaults resets only the open page; on Graphics it turns dynamic lighting back on (it used
+  to switch it off).
 
 ## Issues PDF (6) follow-up
 

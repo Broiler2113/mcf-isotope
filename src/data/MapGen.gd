@@ -418,8 +418,7 @@ func _build(options: Dictionary, dim: Vector2i, need: int, tight: bool) -> void:
 	# Мебель (§3.15) — после всех проломов: двери и проходы уже окончательные, и
 	# обстановка их обходит сама. Своим потоком: «Off» не трогает ни одной клетки.
 	_phase(Phase.FURNITURE)
-	MapFurnish.run(self)   # mirrors the map once more
-	_solar_on_top()
+	MapFurnish.run(self)
 	_window_floors()
 	_phase(Phase.CIVILIANS)
 	if civ_wanted(opt):
@@ -1599,39 +1598,20 @@ func _maint_wall(r: Rect2i) -> Vector2i:
 ## станцию, а не висит сама по себе в пустоте. Панели — по обе стороны от мостка, так что
 ## до любой из них можно дойти по решётке.
 func _maintenance_exits() -> void:
-	_maintenance_exit_runs()
-	if _solar.is_empty(): _top_solar_exit()
-
-## Panels go only on top (issues-12 #14): a station none of whose exits faced up gets one
-## exit on its top hull with its array, wherever the hull meets open space.
-func _top_solar_exit() -> void:
-	var sealed := _sealed_room_walls()
-	var d := Vector2i.UP
-	for y in h:
-		for x in w:
-			var c := Vector2i(x, y)
-			if not _in_f(c) or _kind(x, y) != K_WALL or sealed.has(c): continue
-			if _kind(x - d.x, y - d.y) not in [K_ROOM, K_HALL, K_MAINT, K_DHALL]: continue
-			if not _looks_outside(c, d): continue
-			if _space_doors.any(func(u: Vector2i) -> bool: return u.distance_to(c) < SOLAR_EXIT_GAP): continue
-			_space_doors.append(c)
-			var side := Vector2i(-d.y, d.x)
-			var span := _rng.randi_range(5, 8)
-			for k in range(1, span + 1): _grill.append(c + d * k)
-			var depth := _rng.randi_range(2, SOLAR_PANEL_DEPTH)
-			for k in range(3, span + 1):
-				for t: int in [-1, 1]:
-					for b in range(1, depth + 1):
-						_solar.append(c + d * k + side * t * b)
-			return
-
-func _maintenance_exit_runs() -> void:
-	var dirs := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 	var used: Array[Vector2i] = []
 	# Array count scales with station perimeter; every station gets several arrays.
 	var roll := _rng.randf()
 	var limit := maxi(4, mini(12, (_core.size.x + _core.size.y) / 24))
 	if roll >= SOLAR_EXIT_ONE: limit += 1
+	# Every side gets its share first, then the rest fills in (issues-13 #4): the top-down
+	# scan alone spent the whole limit on the top and the flanks, and the bottom hull never
+	# had an array.
+	var per_side := {}
+	_exit_runs(used, limit, ceili(limit / 4.0), per_side)
+	_exit_runs(used, limit, limit, per_side)
+
+func _exit_runs(used: Array[Vector2i], limit: int, cap: int, per_side: Dictionary) -> void:
+	var dirs := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 	for y in h:
 		for x in w:
 			if _k[y * w + x] != K_MAINT or not _in_f(Vector2i(x, y)):
@@ -1639,6 +1619,7 @@ func _maintenance_exit_runs() -> void:
 			if used.size() >= limit:
 				return
 			for d: Vector2i in dirs:
+				if per_side.get(d, 0) >= cap: continue
 				var wall := Vector2i(x, y) + d
 				if _kind(wall.x, wall.y) != K_WALL:
 					continue
@@ -1657,6 +1638,7 @@ func _maintenance_exit_runs() -> void:
 				if near:
 					continue
 				used.append(wall)
+				per_side[d] = per_side.get(d, 0) + 1
 				_space_doors.append(wall)
 				var side := Vector2i(d.y, d.x)
 				# Мостки — своей длины у каждого выхода, панели по обе стороны — своего
@@ -1670,9 +1652,7 @@ func _maintenance_exit_runs() -> void:
 				var pw := _rng.randi_range(3, mini(SOLAR_PANEL_MAX, span - 2))
 				var pd := _rng.randi_range(2, SOLAR_PANEL_DEPTH)
 				var at := _rng.randi_range(3, maxi(3, span - pw + 1))
-				# Panels only on the station's top side (issues-12 #14); other exits keep their
-				# airlock and walkway. The rolls above still run, so the rest of the map is unchanged.
-				for t: int in ([-1, 1] if d == Vector2i.UP else []):
+				for t: int in [-1, 1]:
 					for a in pw:
 						for b in range(1, pd + 1):
 							_solar.append(wall + d * (at + a) + side * (t * b))
@@ -1684,32 +1664,22 @@ func _maintenance_exit_runs() -> void:
 			var c := Vector2i(x, y)
 			if not _in_f(c) or _kind(x, y) != K_WALL or sealed.has(c): continue
 			for d: Vector2i in dirs:
+				if per_side.get(d, 0) >= cap: continue
 				if _kind(x - d.x, y - d.y) not in [K_ROOM, K_HALL, K_MAINT, K_DHALL]: continue
 				if not _looks_outside(c, d): continue
 				if used.any(func(u: Vector2i) -> bool: return u.distance_to(c) < SOLAR_EXIT_GAP): continue
 				used.append(c)
+				per_side[d] = per_side.get(d, 0) + 1
 				_space_doors.append(c)
 				var side := Vector2i(-d.y, d.x)
 				var span := _rng.randi_range(5, 8)
 				for k in range(1, span + 1): _grill.append(c + d * k)
 				var depth := _rng.randi_range(2, SOLAR_PANEL_DEPTH)
-				for k in (range(3, span + 1) if d == Vector2i.UP else []):
+				for k in range(3, span + 1):
 					for t: int in [-1, 1]:
 						for b in range(1, depth + 1):
 							_solar.append(c + d * k + side * t * b)
 				break
-
-## The top-to-bottom mirror of a four-way map copies the top panels onto the bottom hull:
-## only the panels laid on top (and their left-right mirror) stay (issues-12 #14).
-func _solar_on_top() -> void:
-	if _sym < 2: return
-	var keep := {}
-	for c in _solar:
-		keep[c] = true
-		keep[Vector2i(w - 1 - c.x, c.y)] = true
-	for i in w * h:
-		if m.get_look(i) == MCF.Look.SOLAR and not keep.has(Vector2i(i % w, i / w)):
-			m.set_look(i, MCF.Look.DEFAULT)
 
 ## Пустота за клеткой обшивки тянется НАРУЖУ до края игровой карты (0.9.4): по этому луч
 ## и отличает настоящий борт станции от пустого отсека внутри неё.
