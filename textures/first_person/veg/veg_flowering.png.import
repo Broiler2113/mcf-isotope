@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://1spkgoyuwg3w"
+path="res://.godot/imported/veg_flowering.png-5b776b461e2e131003805497ab3db034.image"
+
+[deps]
+
+source_file="res://textures/first_person/veg/veg_flowering.png"
+dest_files=["res://.godot/imported/veg_flowering.png-5b776b461e2e131003805497ab3db034.image"]
+
+[params]
+

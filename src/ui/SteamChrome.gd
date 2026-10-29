@@ -43,6 +43,16 @@ static func pad(inner: Control, h: int = 8, v: int = 8) -> MarginContainer:
 	mc.add_child(inner)
 	return mc
 
+## The ✕ every window closes by, in the top-right corner of its title bar (issues-14 #12:
+## no "Close" buttons anywhere else).
+static func close_x(on_close: Callable) -> Button:
+	var b := Button.new()
+	b.text = "✕"
+	b.tooltip_text = "Close"
+	b.focus_mode = Control.FOCUS_NONE
+	b.pressed.connect(on_close)
+	return b
+
 # Window title bar of the UI kit (.window-title): grey gradient, bold bright 13px caption
 # with a black text shadow, flush-left, and an optional trailing control (e.g. the chat
 # collapse toggle) pinned right.
@@ -106,10 +116,7 @@ static func overlay_window(title: String) -> Dictionary:
 	var frame := VBoxContainer.new()
 	frame.add_theme_constant_override("separation", 0)
 	panel.add_child(frame)
-	var close := Button.new()
-	close.text = "✕"
-	close.pressed.connect(overlay.hide)
-	frame.add_child(header_bar(title, close))
+	frame.add_child(header_bar(title, close_x(overlay.hide)))
 	var body := VBoxContainer.new()
 	body.add_theme_constant_override("separation", 6)
 	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL

@@ -10,8 +10,8 @@ Grey surfaces keep the mean brightness of the art they replace, because models t
     godot --headless --editor --path . --import
 
 Writes textures/first_person/: material_NN (FirstPersonArt.M_*), ground_NN, wall_<kind>
-(4 m wide, full 2.3 m height), door_<style>, ceiling_/roof_<look>, moon and floors/fp_<floor>
-(the board's floor looks, six 1 m variants each; the 2D board keeps its own).
+(4 m wide, full 2.3 m height), door_<style>, ceiling_/roof_<look> and moon. Open ground comes
+from photographs (PHOTOS); floors are the board's own tiles (issues-14 #9).
 """
 from pathlib import Path
 
@@ -937,78 +937,196 @@ def turf(h, w, seed):
     return c, hgt
 
 
+# Open ground from photographs (issues-14 #2): CC0 scans from Poly Haven (polyhaven.com, public
+# domain), each shrunk to 32 px a metre and laid edge to edge over 8 m. A broad wash of lusher and
+# drier patches across the 8 m breaks up the repeat; the board lays the same picture (issues-14 #8).
+PHOTOS = {"grass": ("forrest_ground_01", 2.0), "earth": ("brown_mud_dry", 2.0), "snow": ("snow_02", 2.0)}
+CACHE = ROOT / ".cache/polyhaven"
+
+
+def fetch(url, path):
+    """Download once into the git-ignored cache (Poly Haven refuses urllib's own agent)."""
+    import urllib.request
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        req = urllib.request.Request(url, headers={"User-Agent": "mcf-isotope-art-build"})
+        path.write_bytes(urllib.request.urlopen(req).read())
+    return path
+
+
+def photo_ground(kind, wash, grade=(1.0, 1.0, 1.0), saturate=1.0, clean=False):
+    pid, metres = PHOTOS[kind]
+    src = Image.open(fetch(f"https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/{pid}/{pid}_diff_2k.jpg",
+                           CACHE / f"{pid}_diff_2k.jpg")).convert("RGB")
+    if clean:
+        # Footprints and twigs in a snow scan repeat every few metres: lift every dark mark to
+        # the snow around it.
+        from PIL import ImageFilter
+        o = np.asarray(src, np.float32)
+        base = np.asarray(src.filter(ImageFilter.MaxFilter(61)).filter(ImageFilter.GaussianBlur(24)), np.float32)
+        grain = np.clip(o - np.asarray(src.filter(ImageFilter.GaussianBlur(8)), np.float32), -10, 10)
+        src = Image.fromarray(np.clip(base * 0.96 + grain * 0.6, 0, 255).astype(np.uint8))
+
+    def laid(n):
+        side = round(256 / n)
+        t = np.asarray(src.resize((side, side), Image.BOX), np.float32) / 255
+        a = np.tile(t, (n, n, 1))
+        return np.asarray(Image.fromarray((a * 255 + 0.5).astype(np.uint8)).resize((256, 256), Image.BOX), np.float32) / 255
+
+    # The photo at two sizes that both repeat over 8 m, one or the other by a broad mask: no
+    # one tile shows itself four times across the ground.
+    n = max(2, round(8 / metres))
+    a = mix(laid(n), laid(n - 1), sstep(-0.6, 0.6, noise(256, 256, 541 + len(kind), 1.4 * PX / M)))
+    g = lum(a)[..., None]
+    a = np.clip((g + (a - g) * saturate) * np.asarray(grade, np.float32), 0, 1)
+    # noise() counts M pixels a metre; this picture has PX, so its sizes are scaled by PX / M.
+    big = noise(256, 256, 531 + len(kind), 2.2 * PX / M, beta=0.6)
+    a = a * (1 + wash[0] * np.tanh(big))[..., None]
+    a = mix(a, a * np.asarray(wash[1], np.float32), sstep(0.4, 1.8, big) * wash[2])
+    soft = (np.roll(a, 1, 0) + np.roll(a, -1, 0) + np.roll(a, 1, 1) + np.roll(a, -1, 1)) / 4
+    return np.clip(a + 0.2 * (a - soft), 0, 1)
+
+
 def g_grass():
-    h = w = 256 * SS
-    c, hgt = turf(h, w, 501)
-    return shade(c, hgt, SKY, relief=1.0, cast=0.6)
+    return photo_ground("grass", (0.08, (1.1, 1.04, 0.7), 0.4), grade=(0.82, 1.08, 0.62), saturate=1.5)
 
 
 def g_earth():
-    h = w = 256 * SS
-    big = noise(h, w, 511, 1.0, beta=0.9)
-    c = mix(col(rgb("5c4630"), h, w), col(rgb("7a6448"), h, w), sstep(-1.5, 1.5, big + 0.5 * noise(h, w, 512, 0.15)))
-    c = c * (1 + 0.1 * noise(h, w, 513, 0.006))[..., None]
-    clods = noise(h, w, 514, 0.05, beta=1.0)
-    peb = sstep(2.0, 2.4, noise(h, w, 515, 0.012))
-    c = mix(c, col(rgb("8f887d"), h, w) * (1 + 0.15 * noise(h, w, 516, 0.006))[..., None], peb)
-    crack = (np.abs(noise(h, w, 517, 0.5, beta=1.3)) < 0.02) * sstep(0.0, 1.0, big)
-    c = mix(c, rgb("2e2216"), crack * 0.7)
-    tufts = sstep(2.2, 2.6, noise(h, w, 518, 0.03))
-    c = mix(c, rgb("566a2e"), tufts * 0.7)
-    hgt = 0.012 * clods + peb * 0.01 - crack * 0.01 + tufts * 0.006
-    return shade(c, hgt, SKY, relief=1.0, cast=0.6)
+    return photo_ground("earth", (0.08, (1.06, 1.0, 0.9), 0.35))
 
 
 def g_snow():
-    h = w = 256 * SS
-    drift = noise(h, w, 521, 0.8, beta=1.0)
-    c = col(rgb("eef3fb"), h, w) * (1 + 0.012 * noise(h, w, 522, 0.05))[..., None]
-    c = mix(c, col(rgb("c7d3e6"), h, w), sstep(0.5, -1.5, drift) * 0.35)
-    poke = sstep(2.3, 2.6, noise(h, w, 524, 0.02))
-    c = mix(c, rgb("5a5236"), poke * 0.6)
-    return shade(c, 0.03 * drift, SKY, amb=0.7, ao=0.4)
+    return photo_ground("snow", (0.03, (0.95, 0.97, 1.02), 0.4), clean=True)
 
 
 GROUNDS = [g_grass, g_earth, g_snow]
 
 
 # --- doors, ceilings, roofs, moon --------------------------------------------------------------------
-def door(style):
-    h, w = 68 * SS, (32 if style == "wood" else 16) * SS
-    x, y = grid(h, w)
-    W, H = w / M, h / M
-    f = H - y
-    if style == "wood":
-        c = col(rgb("6a4a30"), h, w) * (1 + 0.08 * noise(h, w, 601, 0.004, sy=14))[..., None]
-        panel = ((x > 0.16) & (x < 0.84)) & (((f > 1.15) & (f < 1.95)) | ((f > 0.18) & (f < 0.98)))
-        pd = np.minimum(np.minimum(x - 0.16, 0.84 - x), np.minimum(np.abs(f - 1.55) - 0.0, 9))
-        pd = np.where(f > 1.06, np.minimum(np.minimum(x - 0.16, 0.84 - x), np.minimum(f - 1.15, 1.95 - f)),
-                      np.minimum(np.minimum(x - 0.16, 0.84 - x), np.minimum(f - 0.18, 0.98 - f)))
-        hgt = np.where(panel, -0.008 + 0.006 * bevel(pd, 0.0, 0.03), 0.0)
-        knob = np.hypot(x - 0.86, f - 1.0) < 0.03
-        c = np.where(knob[..., None], col(rgb("b8963c"), h, w), c)
-        hgt = hgt + knob * 0.02
-        c = c * floor_dirt(h, w, f, 602, 0.3, 0.3)[..., None] * grime(h, w, 603, 0.2, 0.15)[..., None]
-        c = c + scratches(h, w, 604, 30, 0.06, 0.08)[..., None]
-        return shade(c, hgt, TOP, cast=0.5)
-    c = col(rgb("6c747b"), h, w) * (1 + 0.04 * noise(h, w, 611, 0.2) + 0.02 * noise(h, w, 612, 0.002, sy=30))[..., None]
-    win = (x > 0.11) & (x < 0.39) & (f > 1.35) & (f < 1.8)
-    wd = np.minimum(np.minimum(x - 0.11, 0.39 - x), np.minimum(f - 1.35, 1.8 - f))
-    glass = mix(rgb("1d2a30"), rgb("4a6470"), np.clip((x - 0.11) * 2 + (f - 1.35) * 0.8, 0, 1))
-    wire = ((np.abs((x % 0.04) - 0.02) < 0.002) | (np.abs((f % 0.04) - 0.02) < 0.002))
-    glass = np.where(wire[..., None], glass * 0.6, glass)
-    c = np.where(win[..., None], glass, c)
-    hgt = np.where(win, -0.01 + 0.006 * bevel(wd, 0.0, 0.01), 0.0)
-    kick = f < 0.3
+# Doors: every door the board draws (textures/doors/door_<material>, three designs each), as one
+# 1 x 2.1 m picture of the closed door (issues-14 #10). Two-leaf airlocks split it down the middle.
+DOOR_MATERIALS = ["station", "town", "field", "bunker", "asteroid", "docking"]
+
+
+def _in(x, f, x0, x1, f0, f1):
+    return (x > x0) & (x < x1) & (f > f0) & (f < f1)
+
+
+def _edge(x, f, x0, x1, f0, f1):
+    return np.minimum(np.minimum(x - x0, x1 - x), np.minimum(f - f0, f1 - f))
+
+
+def _hazard(h, w, x, f, seed):
     hz = (((x + f) / 0.08) % 2) < 1
     kc = np.where(hz[..., None], col(rgb("b88a1a"), h, w), col(rgb("1e1d1b"), h, w))
-    kc = mix(kc, rgb("4a4640"), sstep(0.8, 2.0, noise(h, w, 613, 0.03)) * 0.8)
-    c = np.where(kick[..., None], kc, c)
-    for rx in (0.06, 0.44):
-        for ry in np.arange(0.4, 2.1, 0.4):
-            hgt = hgt + (np.hypot(x - rx, f - ry) < 0.008) * 0.004
-    c = c + scratches(h, w, 614, 25, 0.05, 0.15)[..., None]
-    c = c * floor_dirt(h, w, f, 615, 0.35, 0.25)[..., None]
+    return mix(kc, rgb("4a4640"), sstep(0.8, 2.0, noise(h, w, seed, 0.03)) * 0.8)
+
+
+def _panels(x, f, rows, cols=((0.14, 0.47), (0.53, 0.86))):
+    """Recessed panels: their height (0 flat, down to -0.008 in the panel, bevelled)."""
+    hgt = np.zeros_like(x)
+    for f0, f1 in rows:
+        for x0, x1 in cols:
+            inside = _in(x, f, x0, x1, f0, f1)
+            hgt = np.where(inside, -0.008 + 0.006 * bevel(_edge(x, f, x0, x1, f0, f1), 0.0, 0.03), hgt)
+    return hgt
+
+
+def door_design(material, v):
+    h, w = 68 * SS, 32 * SS
+    x, y = grid(h, w)
+    f = h / M - y
+    seed = 600 + DOOR_MATERIALS.index(material) * 10 + v
+    hgt = np.zeros((h, w), np.float32)
+    if material in ("town", "field"):
+        if material == "town":
+            paint = ["7a4a2a", "2f5a3a", "7a2a24"][v]
+            c = col(rgb(paint), h, w) * (1 + 0.07 * noise(h, w, seed, 0.004, sy=14))[..., None]
+            if v == 1:
+                hgt = _panels(x, f, [(0.2, 1.0)])
+                glass = _in(x, f, 0.2, 0.8, 1.35, 1.9)
+                bars = (np.abs(x - 0.5) < 0.015) | (np.abs(f - 1.62) < 0.015)
+                c = np.where((glass & ~bars)[..., None], mix(rgb("22323a"), rgb("5c7884"), np.clip((x - 0.2) * 1.5 + (f - 1.35), 0, 1)), c)
+                hgt = np.where(glass & ~bars, -0.01, hgt)
+            else:
+                hgt = _panels(x, f, [(1.15, 1.95), (0.2, 1.0)])
+            if v == 2:
+                slot = _in(x, f, 0.36, 0.64, 1.04, 1.09)
+                c = np.where(slot[..., None], col(rgb("b8963c"), h, w), c)
+                hgt = hgt + slot * 0.008
+        else:
+            paint = ["5e4126", "6f6a62", "584029"][v]
+            planks = (x % 0.16) < 0.008
+            c = col(rgb(paint), h, w) * (1 + 0.1 * noise(h, w, seed, 0.004, sy=20) + 0.06 * (hash2(np.floor(x / 0.16), 0, seed) - 0.5))[..., None]
+            c = np.where(planks[..., None], c * 0.55, c)
+            hgt = np.where(planks, -0.006, 0.0)
+            rails = (np.abs(f - 0.35) < 0.07) | (np.abs(f - 1.75) < 0.07)
+            if v == 1:   # iron straps across weathered boards
+                strap = (np.abs(f - 0.45) < 0.035) | (np.abs(f - 1.65) < 0.035)
+                c = np.where(strap[..., None], col(rgb("2e2c2a"), h, w), c)
+                hgt = hgt + strap * 0.006
+            else:
+                brace = (np.abs((f - 0.35) - (x - 0.06) * 1.4 / 0.88) < 0.06) & (f > 0.35) & (f < 1.75)
+                c = np.where((rails | brace)[..., None], c * 1.12, c)
+                hgt = hgt + (rails | brace) * 0.012
+            if v == 2:
+                slot = _in(x, f, 0.32, 0.68, 1.55, 1.63)
+                c = np.where(slot[..., None], col(rgb("15120f"), h, w), c)
+        knob = np.hypot(x - 0.86, f - 1.0) < 0.03
+        c = np.where(knob[..., None], col(rgb("b8963c") if material == "town" else rgb("3a3634"), h, w), c)
+        hgt = hgt + knob * 0.02
+        c = c * floor_dirt(h, w, f, seed + 1, 0.3, 0.3)[..., None] * grime(h, w, seed + 2, 0.2, 0.15)[..., None]
+        c = c + scratches(h, w, seed + 3, 30, 0.06, 0.08)[..., None]
+        return shade(c, hgt, TOP, cast=0.5)
+    paint = {"station": ["5d6670", "5d6670", "3d4552"], "bunker": ["5d6a55"] * 3,
+             "asteroid": ["6e5440"] * 3, "docking": ["8a9298"] * 3}[material][v]
+    c = col(rgb(paint), h, w) * (1 + 0.04 * noise(h, w, seed, 0.2) + 0.02 * noise(h, w, seed + 1, 0.002, sy=30))[..., None]
+    split = material == "station" and v == 0 or material in ("bunker", "asteroid") and v == 1
+    if split:
+        seam = np.abs(x - 0.5) < 0.008
+        c = np.where(seam[..., None], c * 0.4, c)
+        hgt = hgt - seam * 0.01
+    if material == "station":
+        if v == 0:
+            win = _in(x, f, 0.36, 0.44, 1.2, 1.85) | _in(x, f, 0.56, 0.64, 1.2, 1.85)
+            c = np.where(win[..., None], mix(rgb("1d2a30"), rgb("6a8c98"), np.clip((f - 1.2) * 1.4, 0, 1)), c)
+            hgt = hgt - win * 0.01
+            band = f > 1.97
+            c = np.where(band[..., None], _hazard(h, w, x, f, seed + 4), c)
+        elif v == 1:
+            port = np.hypot(x - 0.5, f - 1.6)
+            c = np.where((port < 0.15)[..., None], mix(rgb("2a3e48"), rgb("7aa0ae"), np.clip(0.8 - port * 4, 0, 1)), c)
+            c = np.where(((port >= 0.15) & (port < 0.19))[..., None], c * 1.25, c)
+            hgt = hgt + ((port >= 0.15) & (port < 0.19)) * 0.01
+            ribs = sum((np.abs(f - r) < 0.025).astype(np.float32) for r in (0.55, 0.72, 0.89))
+            hgt = hgt + ribs * 0.008
+        else:
+            diag = np.abs((f - 0.2) - (x * 1.7)) < 0.12
+            c = np.where(diag[..., None], _hazard(h, w, x, f, seed + 4), c)
+    elif material in ("bunker", "asteroid"):
+        for rx in (0.06, 0.94):
+            for ry in np.arange(0.12, 2.05, 0.16):
+                hgt = hgt + (np.hypot(x - rx, f - ry) < 0.012) * 0.005
+        if v != 1:
+            r = np.hypot(x - 0.5, f - 1.1)
+            spokes = (np.abs(x - 0.5) < 0.014) | (np.abs(f - 1.1) < 0.014)
+            wheel = ((r > 0.13) & (r < 0.16)) | (spokes & (r < 0.15)) | (r < 0.03)
+            c = np.where(wheel[..., None], col(rgb("b89a2a"), h, w), c)
+            hgt = hgt + wheel * 0.02
+        if v == 2:
+            c = np.where(_in(x, f, 0.0, 1.0, 0.1, 0.32)[..., None], _hazard(h, w, x, f, seed + 4), c)
+    else:   # docking: a heavy hatch, porthole in its middle, hazard down both sides
+        port = np.hypot(x - 0.5, f - 1.5)
+        c = np.where((port < 0.13)[..., None], mix(rgb("1f4a5c"), rgb("70b4cc"), np.clip(0.7 - port * 4, 0, 1)), c)
+        hgt = hgt + ((port >= 0.13) & (port < 0.17)) * 0.012
+        sides = (x < 0.1) | (x > 0.9)
+        c = np.where(sides[..., None], _hazard(h, w, x, f, seed + 4), c)
+        inner = _in(x, f, 0.16, 0.84, 0.12, 2.0)
+        hgt = hgt - inner * 0.006 + (v == 1) * (np.abs(f - 0.9) < 0.03) * 0.01
+        if v == 2:
+            c = np.where(_in(x, f, 0.1, 0.9, 0.12, 0.3)[..., None], _hazard(h, w, x, f, seed + 5), c)
+    c = c + scratches(h, w, seed + 6, 25, 0.05, 0.15)[..., None]
+    c = c * floor_dirt(h, w, f, seed + 7, 0.35, 0.25)[..., None]
     return shade(c, hgt, TOP, gloss=0.08)
 
 
@@ -1100,290 +1218,13 @@ def smoke():
     return np.concatenate([col((1, 1, 1), h, w) * v[..., None], a[..., None]], -1)
 
 
-# --- first-person floors: six 1 m variants of each board floor look ------------------------------------
-# Each variant shares the common rim and broad shading of its floor (so any two join with no
-# frame) and differs inside it in small things: wear, stains, cracks and specks move from cell
-# to cell instead of repeating every metre.
-def f_deck(h, w, x, y, s, tint="3a3f46"):
-    u, v, i, j, d = cells(x, y, 0.5, 0.5)
-    b = bevel(d, 0.004, 0.01)
-    c = col(rgb(tint), h, w) * (1 + 0.05 * noise(h, w, s, 0.25, beta=1) + 0.04 * (hash2(i, j, 11) - 0.5))[..., None]
-    tread = 0.5 + 0.5 * np.sin((x + y) * 2 * np.pi / 0.06) * np.sin((x - y) * 2 * np.pi / 0.06)
-    c = c * (0.92 + 0.12 * tread)[..., None]
-    wear = sstep(0.0, 2.0, noise(h, w, s + 1, 0.3, sx=1.5))
-    c = mix(c, c * 1.5 + 0.06, wear * 0.35 * tread)
-    c = mix(c * 0.4, c, b)
-    hgt = 0.005 * b + 0.001 * tread
-    for bx in (0.04, 0.46):
-        for by in (0.04, 0.46):
-            bolt = np.hypot(u - bx, v - by) < 0.009
-            hgt = hgt + bolt * 0.003
-            c = mix(c, c * 1.4, bolt * 0.6)
-    c = mix(c, rgb("15130f"), sstep(1.6, 2.4, noise(h, w, s + 2, 0.12)) * 0.5)        # oil
-    c = c + scratches(h, w, s + 3, 25, 0.06, 0.1)[..., None]
-    return c, hgt
-
-
-def f_concrete(h, w, x, y, s, base="8a8780"):
-    c = col(rgb(base), h, w) * (1 + 0.05 * noise(h, w, s, 0.4, beta=1) + 0.06 * noise(h, w, s + 1, 0.004))[..., None]
-    trowel = np.sin((np.hypot(x - 0.5, y - 0.5) + 0.05 * noise(h, w, s + 2, 0.2)) * 2 * np.pi * 7)
-    c = c * (1 + 0.02 * trowel)[..., None]
-    agg = specks(h, w, s + 3, 0.004, 0.003)
-    c = c * (1 - 0.25 * agg + 0.0)[..., None]
-    crack = ((np.abs(noise(h, w, s + 4, 0.35, beta=1.4)) < 0.018) & (noise(h, w, s + 5, 0.3) > 0.7)).astype(np.float32)
-    c = mix(c, rgb("2a2824"), crack * 0.8)
-    c = mix(c, c * np.array([0.8, 0.78, 0.72]), sstep(1.2, 2.2, noise(h, w, s + 6, 0.15)) * 0.5)
-    joint = sstep(0.004, 0.0, np.minimum(np.minimum(x, 1 - x), np.minimum(y, 1 - y)))
-    c = mix(c, c * 0.5, joint)
-    return c, -crack * 0.004 - agg * 0.002 - joint * 0.004
-
-
-def f_regolith(h, w, x, y, s):
-    big = noise(h, w, s, 0.3, beta=1.2)
-    c = mix(col(rgb("5d5650"), h, w), col(rgb("7d746a"), h, w), sstep(-1.5, 1.5, big))
-    c = c * (1 + 0.1 * noise(h, w, s + 1, 0.004))[..., None]
-    peb = sstep(1.9, 2.3, noise(h, w, s + 2, 0.015))
-    c = mix(c, col(rgb("8e877d"), h, w), peb)
-    cr = np.hypot((x + 0.1 * noise(h, w, s + 3, 0.3)) - 0.5, y - 0.5)
-    pit = sstep(0.12, 0.08, cr) * (hash2(s, 0, 3) > 0.5)
-    return c, 0.015 * big + 0.008 * peb - 0.01 * pit
-
-
-def f_carpet(h, w, x, y, s, tint):
-    c = col(rgb(tint), h, w)
-    u, v, i, j, d = cells(x + y, x - y, 0.25 * 1.4142, 0.25 * 1.4142)
-    line = sstep(0.012, 0.0, d)
-    c = mix(c, c * 0.75, line * 0.6)
-    dot = np.hypot((x % 0.25) - 0.125, (y % 0.25) - 0.125) < 0.012
-    c = mix(c, rgb("c9b37a"), dot * 0.6)
-    c = c * (1 + 0.1 * noise(h, w, s, 0.003) + 0.05 * noise(h, w, s + 1, 0.3, beta=1))[..., None]
-    worn = sstep(0.3, 2.0, noise(h, w, s + 2, 0.4, sx=0.6))
-    c = mix(c, c * 1.25 + 0.03, worn * 0.4)
-    c = mix(c, c * 0.6, sstep(1.5, 2.3, noise(h, w, s + 3, 0.1)) * 0.6)                 # stains
-    return c, 0.002 * noise(h, w, s + 4, 0.004)
-
-
-def f_checker(h, w, x, y, s):
-    u, v, i, j, d = cells(x, y, 0.25, 0.25)
-    b = bevel(d, 0.003, 0.006)
-    white = ((i + j) % 2) == 0
-    c = np.where(white[..., None], col(rgb("e2ddcf"), h, w), col(rgb("26262a"), h, w))
-    c = c * (1 + 0.03 * noise(h, w, s, 0.15) + 0.02 * (hash2(i, j, 21) - 0.5))[..., None]
-    c = mix(c, col(rgb("6e6a60"), h, w), sstep(0.0, 0.3, 1 - b))
-    c = c * grime(h, w, s + 1, 0.3, 0.25)[..., None] + scratches(h, w, s + 2, 20, 0.05, 0.1)[..., None]
-    return c, 0.003 * b
-
-
-def f_destroyed(h, w, x, y, s):
-    c, hgt = f_concrete(h, w, x, y, s, "7b7872")
-    cr = noise(h, w, s + 10, 0.12, beta=1.0)
-    crack = np.abs(cr) < 0.06
-    c = mix(c, rgb("1c1b19"), crack * 0.85)
-    chunk = sstep(0.0, 1.5, noise(h, w, s + 11, 0.08))
-    hgt = hgt + 0.02 * chunk - crack * 0.02
-    dust = sstep(0.5, 2.0, noise(h, w, s + 12, 0.2))
-    c = mix(c, rgb("9a958a"), dust * 0.4)
-    deb = sstep(2.0, 2.4, noise(h, w, s + 13, 0.01))
-    c = mix(c, rgb("5a5751"), deb)
-    return c, hgt + deb * 0.01
-
-
-def f_epicenter(h, w, x, y, s):
-    c = mix(col(rgb("141210"), h, w), col(rgb("3a3631"), h, w), sstep(-1.0, 1.5, noise(h, w, s, 0.2, beta=1.2)))
-    c = c * (1 + 0.15 * noise(h, w, s + 1, 0.004))[..., None]
-    ash = sstep(1.0, 2.2, noise(h, w, s + 2, 0.06))
-    c = mix(c, rgb("6e6a64"), ash * 0.5)
-    ember = specks(h, w, s + 3, 0.0008, 0.002)
-    c = mix(c, rgb("ff6a1e"), np.clip(ember * 2, 0, 1) * 0.8)
-    return c, 0.01 * noise(h, w, s + 4, 0.05, beta=1)
-
-
-def f_field(h, w, x, y, s):
-    c = mix(col(rgb("5f4a33"), h, w), col(rgb("7a6448"), h, w), sstep(-1.5, 1.5, noise(h, w, s, 0.3, beta=1)))
-    c = c * (1 + 0.1 * noise(h, w, s + 1, 0.005))[..., None]
-    g = sstep(1.0, 2.0, noise(h, w, s + 2, 0.05))
-    c = mix(c, rgb("566a2e") * (1 + 0.2 * noise(h, w, s + 3, 0.003))[..., None], g * 0.8)
-    return c, 0.008 * noise(h, w, s + 4, 0.05, beta=1) + g * 0.004
-
-
-def f_grass(h, w, x, y, s):
-    return turf(h, w, s)
-
-
-def f_grate(h, w, x, y, s):
-    bx = sstep(0.009, 0.005, np.minimum(x % 0.125, 0.125 - x % 0.125))
-    by = sstep(0.007, 0.004, np.minimum(y % 0.0625, 0.0625 - y % 0.0625))
-    bar = np.maximum(bx, by)
-    metal = col(rgb("7b8186"), h, w) * (1 + 0.1 * noise(h, w, s, 0.1))[..., None]
-    metal = mix(metal, rgb("6b3d22"), sstep(1.0, 2.2, noise(h, w, s + 1, 0.08)) * 0.6)
-    c = mix(col(rgb("0b0c0d"), h, w), metal, bar)
-    return c, 0.02 * bar
-
-
-def f_grill(h, w, x, y, s):
-    u, v, i, j, d = cells(x + 0.5 * y, y, 0.125, 0.0625, stagger=0.5)
-    strand = sstep(0.016, 0.011, d)
-    metal = col(rgb("8a9096"), h, w) * (1 + 0.1 * noise(h, w, s, 0.1))[..., None]
-    metal = mix(metal, rgb("5a3a24"), sstep(1.2, 2.2, noise(h, w, s + 1, 0.06)) * 0.5)
-    return metal, 0.01 * strand, strand
-
-
-def f_lino(h, w, x, y, s):
-    c = col(rgb("9fb3a2"), h, w) * (1 + 0.06 * noise(h, w, s, 0.02) + 0.04 * noise(h, w, s + 1, 0.3, beta=1))[..., None]
-    fl = specks(h, w, s + 2, 0.006, 0.0025)
-    c = mix(c, rgb("e8ece4"), fl * 0.5)
-    heel = sstep(1.8, 2.4, noise(h, w, s + 3, 0.02, sx=3))
-    c = mix(c, rgb("2a2a2a"), heel * 0.6)
-    c = c * grime(h, w, s + 4, 0.4, 0.2)[..., None]
-    return c, np.zeros((h, w), np.float32)
-
-
-def f_parquet(h, w, x, y, s):
-    sq = np.floor(x / 0.25) + np.floor(y / 0.25)
-    along = (sq % 2) == 0
-    a = np.where(along, x, y)
-    b2 = np.where(along, y, x)
-    strip = np.floor(b2 / 0.0625)
-    sd = np.minimum(np.minimum(b2 % 0.0625, 0.0625 - b2 % 0.0625), np.minimum(a % 0.25, 0.25 - a % 0.25))
-    tone = hash2(strip, np.floor(a / 0.25) * 7 + sq, 31)
-    wood = mix(rgb("6a4126"), rgb("9c6a40"), tone)
-    grain = noise(h, w, s, 0.003, sx=6) * np.where(along, 1, 0) + noise(h, w, s + 1, 0.003, sy=6) * np.where(along, 0, 1)
-    c = wood * (1 + 0.1 * grain)[..., None]
-    c = mix(c * 0.45, c, sstep(0.0, 0.004, sd))
-    worn = sstep(0.3, 2.0, noise(h, w, s + 2, 0.4))
-    c = mix(c, c * 1.15 + 0.04, worn * 0.4)
-    return c, 0.003 * sstep(0.0, 0.004, sd)
-
-
-def f_plate(h, w, x, y, s):
-    u, v, i, j, d = cells(x, y, 0.06, 0.06, stagger=0.5)
-    a = np.where((i % 2) == 0, u / 0.06 - 0.5, v / 0.06 - 0.5)
-    b2 = np.where((i % 2) == 0, v / 0.06 - 0.5, u / 0.06 - 0.5)
-    lens = sstep(0.12, 0.05, (a / 0.4) ** 2 * 0.25 + (b2 / 0.12) ** 2 * 0.25)
-    c = col(rgb("8e9296"), h, w) * (1 + 0.06 * noise(h, w, s, 0.2, beta=1))[..., None]
-    c = mix(c, c * 1.3 + 0.05, lens * sstep(0.0, 1.5, noise(h, w, s + 1, 0.3)) * 0.5)
-    c = mix(c, rgb("6e3f22"), sstep(1.4, 2.3, noise(h, w, s + 2, 0.08)) * 0.6)
-    c = c * grime(h, w, s + 3, 0.3, 0.25)[..., None]
-    return c, 0.004 * lens
-
-
-def f_snow(h, w, x, y, s):
-    d = noise(h, w, s, 0.5)
-    c = col(rgb("e9eff8"), h, w) * (1 + 0.012 * noise(h, w, s + 1, 0.04))[..., None]
-    c = mix(c, col(rgb("c3cfe2"), h, w), sstep(0.5, -1.5, d) * 0.18)
-    return c, 0.005 * d
-
-
-def f_snow_field(h, w, x, y, s):
-    c, hgt = f_snow(h, w, x, y, s)
-    patch = sstep(1.5, 2.0, noise(h, w, s + 5, 0.2))
-    dirt, dh = f_field(h, w, x, y, s + 6)
-    return mix(c, dirt, patch), hgt * (1 - patch) + dh * patch
-
-
-def f_solar(h, w, x, y, s):
-    u, v, i, j, d = cells(x, y, 1 / 6, 1 / 6)
-    cell = mix(rgb("0f1d3d"), rgb("23427e"), np.clip(0.4 + 0.25 * noise(h, w, s, 0.3) + 0.2 * (hash2(i, j, 41) - 0.5), 0, 1))
-    bus = (np.abs(u - 1 / 18) < 0.002) | (np.abs(u - 2 / 18) < 0.002)
-    c = np.where(bus[..., None], col(rgb("8a96a8"), h, w), cell)
-    frame = np.minimum(np.minimum(x, 1 - x), np.minimum(y, 1 - y)) < 0.02
-    c = np.where((d < 0.003)[..., None], col(rgb("0a0f1a"), h, w), c)
-    c = np.where(frame[..., None], col(rgb("b9bec6"), h, w), c)
-    c = c * (1 - 0.15 * sstep(1.0, 2.2, noise(h, w, s + 1, 0.15)))[..., None]      # dust
-    return c, 0.003 * frame
-
-
-def f_tile(h, w, x, y, s):
-    u, v, i, j, d = cells(x, y, 0.25, 0.25)
-    b = bevel(d, 0.003, 0.006)
-    face = col(rgb("e6e6e0"), h, w) * (1 + 0.02 * (hash2(i, j, 51) - 0.5) + 0.015 * noise(h, w, s, 0.1))[..., None]
-    c = mix(col(rgb("7a766c"), h, w), face, b)
-    c = c * grime(h, w, s + 1, 0.3, 0.2)[..., None] + scratches(h, w, s + 2, 10, 0.04, 0.05)[..., None]
-    cracked = (np.abs(noise(h, w, s + 3, 0.1, beta=1.4)) < 0.02) * (hash2(i, j, s) > 0.85)
-    c = mix(c, rgb("5a5850"), cracked * 0.8)
-    return c, 0.003 * b
-
-
-def f_asphalt(h, w, x, y, s):
-    c = col(rgb("3e3e3d"), h, w) * (1 + 0.05 * noise(h, w, s, 0.4, beta=1))[..., None]
-    agg = noise(h, w, s + 1, 0.004)
-    c = c * (1 + 0.2 * agg)[..., None]
-    stones = specks(h, w, s + 2, 0.008, 0.0025)
-    c = mix(c, rgb("8f8b84"), stones * 0.6)
-    crack = (np.abs(noise(h, w, s + 3, 0.4, beta=1.5)) < 0.015) * (noise(h, w, s + 4, 0.3) > 0.4)
-    c = mix(c, rgb("141414"), crack * 0.9)
-    oil = sstep(1.5, 2.3, noise(h, w, s + 5, 0.15))
-    c = mix(c, rgb("1d1c1b"), oil * 0.5)
-    patch = sstep(1.8, 2.0, noise(h, w, s + 6, 0.3))
-    c = mix(c, c * 0.75, patch)
-    return c, 0.003 * agg - crack * 0.006
-
-
-def f_town_snow(h, w, x, y, s):
-    a, ah = f_asphalt(h, w, x, y, s)
-    sn, sh = f_snow(h, w, x, y, s + 7)
-    cover = sstep(-1.9, -1.1, noise(h, w, s + 8, 0.35))
-    slush = mix(blur(a.mean(-1), 0.03)[..., None] * np.array([0.95, 0.97, 1.0]), sn, 0.6)
-    return mix(slush, sn, cover), ah * (1 - cover) + sh * cover
-
-
-def f_planks(h, w, x, y, s):
-    row = np.floor(y / 0.125)
-    xo = x + hash2(row, 0, 61) * 1.0
-    i = np.floor(xo / 1.0)
-    joint = sstep(0.003, 0.0, np.minimum(y % 0.125, 0.125 - y % 0.125)) + sstep(0.003, 0.0, np.minimum(xo % 1.0, 1.0 - xo % 1.0)) * (hash2(row, 1, 62) > 0.5)
-    joint = np.clip(joint, 0, 1)
-    tone = hash2(row, i, 63)
-    wood = mix(rgb("6e4a2e"), rgb("9a7046"), tone)
-    grain = noise(h, w, s, 0.003, sx=12) * 0.6 + np.sin((y + 0.01 * noise(h, w, s + 1, 0.1, sx=4)) * 2 * np.pi * 60) * 0.4
-    c = wood * (1 + 0.08 * grain)[..., None]
-    worn = sstep(0.0, 2.0, noise(h, w, s + 2, 0.4))
-    c = mix(c, c * 1.2 + 0.03, worn * 0.35)
-    c = mix(c, rgb("1e140c"), joint * 0.85)
-    c = c + scratches(h, w, s + 3, 20, 0.06, 0.06)[..., None]
-    return c, 0.003 * (1 - joint)
-
-
-FLOORS = {"floor": lambda *a: f_deck(*a, tint="44484d"), "floor_station": f_deck,
-          "floor_asteroid": f_regolith, "floor_bunker": f_concrete,
-          "floor_carpet_blue": lambda *a: f_carpet(*a, tint="233c6e"), "floor_carpet_red": lambda *a: f_carpet(*a, tint="6e1f22"),
-          "floor_checker": f_checker, "floor_destroyed": f_destroyed, "floor_epicenter": f_epicenter,
-          "floor_field": f_field, "floor_grass": f_grass, "floor_grate": f_grate, "floor_grill": f_grill,
-          "floor_lino": f_lino, "floor_parquet": f_parquet, "floor_plate": f_plate, "floor_snow": f_snow,
-          "floor_snow_field": f_snow_field, "floor_solar": f_solar, "floor_tile": f_tile,
-          "floor_town": f_asphalt, "floor_town_snow": f_town_snow, "floor_wood": f_planks}
-
-
-def floor_strip(name, seed):
-    """Six variants side by side (192 x 32), as the board's floor strips are laid out."""
-    h = w = M
-    x, y = grid(h, w)
-    inner = sstep(0.05, 0.18, np.minimum(np.minimum(x, 1 - x), np.minimum(y, 1 - y)))
-    make = FLOORS[name]
-    common = make(h, w, x, y, seed)
-    parts = []
-    for v in range(6):
-        own = make(h, w, x, y, seed + 1000 * (v + 1))
-        dc = own[0] - common[0]
-        dc = dc - np.stack([blur(dc[..., k], 0.12) for k in range(3)], -1)
-        dh = own[1] - common[1]
-        c = common[0] + dc * inner[..., None]
-        hgt = common[1] + (dh - blur(dh, 0.12)) * inner
-        lit = shade(c, hgt, SKY, relief=0.9, cast=0.6)
-        if len(common) > 2:
-            a = common[2] * (1 - inner) + own[2] * inner
-            lit = np.concatenate([lit, a[..., None]], -1)
-        parts.append(down(lit))
-    return np.concatenate(parts, 1)
-
-
 # --- write everything ----------------------------------------------------------------------------------
 # Mean brightness of the procedural pictures these replace: the light map and the shader
 # were tuned against them, so the new art keeps their level.
 BRIGHTNESS = {"wall_armor": 0.307, "wall_block": 0.54, "wall_brick": 0.323, "wall_bunker": 0.522,
               "wall_corpse": 0.172, "wall_dot": 0.477, "wall_dot_open": 0.45, "wall_rock": 0.316,
               "wall_sandbag": 0.501, "wall_soil": 0.328, "wall_station": 0.547, "wall_stucco": 0.719,
-              "wall_wood": 0.322, "door_metal": 0.433, "door_wood": 0.322, "ceiling_metal": 0.368,
+              "wall_wood": 0.322, "ceiling_metal": 0.368,
               "ceiling_plaster": 0.578, "roof_metal": 0.315, "roof_tiles": 0.269, "roof_snow": 0.86}
 
 
@@ -1400,7 +1241,7 @@ def main(only=None):
     for i, make in enumerate(GROUNDS):
         n = "ground_%02d.png" % i
         if want(n):
-            a = down(make())
+            a = make()
             target = old_mean(n)
             save(match(a, target) if target else a, n)
     for kind, make in WALLS.items():
@@ -1412,9 +1253,11 @@ def main(only=None):
             save(a, n)
             if layer:
                 save(a[WALL_H - 43:WALL_H - 11, :PX], layer)
-    for style in ("metal", "wood"):
-        if want("door_" + style):
-            save(match(down(door(style)), BRIGHTNESS["door_" + style]), "door_%s.png" % style)
+    for material in DOOR_MATERIALS:
+        for v in range(3):
+            n = "door_%s_%d.png" % (material, v)
+            if want(n):
+                save(down(door_design(material, v)), n)
     for look in ("metal", "plaster"):
         if want("ceiling_" + look):
             save(match(down(ceiling(look)), BRIGHTNESS["ceiling_" + look]), "ceiling_%s.png" % look)
@@ -1429,17 +1272,6 @@ def main(only=None):
         save(a, "fire.png")
     if want("smoke"):
         save(down(smoke()), "smoke.png")
-    for k, name in enumerate(FLOORS):
-        n = "floors/fp_%s.png" % name
-        if want(n):
-            a = floor_strip(name, 3000 + k * 17)
-            src = ROOT / "textures/floors" / name / (name + ".png")
-            ref = np.asarray(Image.open(src).convert("RGBA")).astype(np.float32) / 255
-            w8 = ref[..., 3]
-            target = float((lum(ref[..., :3]) * w8).sum() / max(w8.sum(), 1e-6))
-            if a.shape[-1] == 3:
-                a = np.concatenate([a, np.ones(a.shape[:2] + (1,), np.float32)], -1)
-            save(match(a, target), n)
     print("first-person textures written to", OUT)
 
 

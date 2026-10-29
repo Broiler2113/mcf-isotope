@@ -1977,10 +1977,7 @@ func _modal_window(title: String) -> VBoxContainer:
 	var frame := VBoxContainer.new()
 	frame.add_theme_constant_override("separation", 0)
 	panel.add_child(frame)
-	var close := Button.new()
-	close.text = "✕"
-	close.pressed.connect(func() -> void: layer.queue_free())
-	frame.add_child(SteamChrome.header_bar(title, close))
+	frame.add_child(SteamChrome.header_bar(title, SteamChrome.close_x(layer.queue_free)))
 	var scroll := ScrollContainer.new()
 	scroll.custom_minimum_size = Vector2(320, 0)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -1993,15 +1990,7 @@ func _modal_window(title: String) -> VBoxContainer:
 	# пустым на полэкрана, а длинный список юнитов прокручивается (аудит UI).
 	body.minimum_size_changed.connect(func() -> void:
 		scroll.custom_minimum_size.y = minf(body.get_combined_minimum_size().y, 380.0))
-	# Ряд кнопок справа внизу, как у окон набора.
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_END
-	frame.add_child(SteamChrome.pad(row, 12, 10))
-	var done := Button.new()
-	done.text = "Close"
-	done.custom_minimum_size = Vector2(96, 0)
-	done.pressed.connect(func() -> void: layer.queue_free())
-	row.add_child(done)
+	frame.add_child(SteamChrome.pad(Control.new(), 0, 5))
 	Ui.theme_canvas_layers()
 	return body
 

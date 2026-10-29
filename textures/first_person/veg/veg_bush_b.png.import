@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://qckgqcl7xdq"
+path="res://.godot/imported/veg_bush_b.png-8f1d4fb59e38779b4ae59316a43568e3.image"
+
+[deps]
+
+source_file="res://textures/first_person/veg/veg_bush_b.png"
+dest_files=["res://.godot/imported/veg_bush_b.png-8f1d4fb59e38779b4ae59316a43568e3.image"]
+
+[params]
+

@@ -74,7 +74,6 @@ func _initialize() -> void:
 	# fire.png comes from tools/art/build_fire.py (issues-12 #18).
 	# --- Стены и прочие стыкующиеся объекты ---
 	_sheet("wall", _board_concrete, Color8(128, 126, 120), 3)
-	_sheet("wall_bunker", _blast_concrete, Color8(92, 92, 86), 3)
 	_matched_walls()
 	_sheet("wood_wall", _timber, Color8(104, 72, 44), 3)
 	# Материалы стен (0.9.4): тот же объект, другой облик — город ставит дома из разного.
@@ -86,13 +85,9 @@ func _initialize() -> void:
 	# непробиваемый край читался как «земля просто продолжается». У станции, города и
 	# поля своей плитки у неё НЕТ намеренно: там видно пол клетки — звёзды или траву.
 	_sheet("boundary_bunker", _packed_soil, Color8(58, 42, 28), 2)
-	_sheet("armor_wall", _armor_plate, Color8(58, 64, 72), 3)
 	_sheet("glass", _glass_block, Color8(150, 180, 196), 2)
 	_sheet("armor_glass", _armor_glass, Color8(96, 126, 160), 2)
-	_sheet("dot", _blast_concrete, Color8(110, 110, 104), 3)
-	_sheet("dot_open", _embrasure, Color8(110, 110, 104), 3)
 	_sheet("ldf", _monolith, Color8(40, 40, 44), 3)
-	_sheet("corpse_wall", _flesh_pile, Color8(96, 44, 38), 2)
 	# Двери и шлюзы (0.9.2) — «спереди», поверх стены окружения: _doors_all.
 	_doors_all()
 	_sheet("sandbags", _sandbag, Color8(160, 142, 100), 2, 5)
@@ -436,16 +431,6 @@ func _board_concrete(x: int, y: int, v: int, _mask: int) -> Color:
 		c = _shade(c, 0.8)
 	return c
 
-## Броне-бетон бункера и ДОТа: светлая тяжёлая масса над тёмным полом, раковины и
-## вертикальные потёки по всей высоте (частые, без крупных пятен).
-func _blast_concrete(x: int, y: int, v: int, _mask: int) -> Color:
-	var c := _shade(Color8(126, 124, 116), 0.82 + 0.26 * _fbm(x, y, 141 + v))
-	if _h(x + v * T, y, 142) > 0.975:
-		c = _shade(c, 0.55)
-	if _tn(x, y, 16, 143 + v, 4) > 0.76:
-		c = _shade(c, 0.86)
-	return c
-
 ## Грунт бункера: утрамбованная земля — бурые пласты, комья, камни и тонкие корни.
 ## Темнее и теплее бетона стен, чтобы толща земли читалась отдельно от облицовки.
 func _packed_soil(x: int, y: int, v: int, _mask: int) -> Color:
@@ -464,7 +449,7 @@ func _packed_soil(x: int, y: int, v: int, _mask: int) -> Color:
 
 ## Амбразура ДОТа: тот же бетон и тёмная щель поперёк.
 func _embrasure(x: int, y: int, v: int, mask: int) -> Color:
-	var c := _blast_concrete(x, y, v, mask)
+	var c := _formed_concrete(x, y, v, mask, Color8(146, 144, 138))
 	if y >= 13 and y <= 18:
 		c = Color8(12, 12, 12) if y > 13 and y < 18 else _shade(c, 0.6)
 	return c
@@ -477,6 +462,52 @@ func _matched_walls() -> void:
 	_sheet("wall_town", _red_brick, Color8(150, 76, 56), 3)
 	_sheet("wall_field", _cinder_block, Color8(112, 112, 106), 3)
 	_sheet("wall_asteroid", _rock_wall, Color8(92, 86, 80), 3)
+	# The rest (issues-14 #10): bunker and pillbox concrete, armour, a wall of bodies.
+	_sheet("wall_bunker", _formed_concrete.bind(Color8(156, 156, 150)), Color8(92, 92, 86), 3)
+	_sheet("dot", _formed_concrete.bind(Color8(146, 144, 138)), Color8(110, 110, 104), 3)
+	_sheet("dot_open", _embrasure, Color8(110, 110, 104), 3)
+	_sheet("armor_wall", _steel_plates, Color8(70, 74, 80), 3)
+	_sheet("corpse_wall", _body_heap, Color8(60, 52, 44), 2)
+
+## Board-formed concrete, as first person shows bunker and pillbox walls: light grey, the edge
+## of a formwork board every 5 px, tie holes in rows, faint stains.
+func _formed_concrete(x: int, y: int, v: int, _mask: int, base: Color) -> Color:
+	var c := _shade(base, 0.9 + 0.14 * _fbm(x, y, 251 + v))
+	if y % 5 == 0:
+		c = _shade(c, 0.88)                      # a board's edge
+	elif y % 5 == 1:
+		c = _shade(c, 1.05)
+	if x % 16 == 7 and y % 10 == 3:
+		c = _shade(c, 0.5)                       # tie hole
+	if _h(x + v * T, y, 252) > 0.985:
+		c = _shade(c, 0.82)
+	return _shade(c, 0.96 + 0.08 * _fbm(x, y, 253 + v))
+
+## Armour as in first person: dark grey steel in 16 px plates, a dark seam and a lit edge,
+## rivets at the corners.
+func _steel_plates(x: int, y: int, v: int, _mask: int) -> Color:
+	var c := _shade(Color8(92, 96, 102), 0.86 + 0.16 * _fbm(x, y, 261, 3))
+	var sx := x % 16
+	var sy := y % 16
+	if sx == 15 or sy == 15:
+		c = _shade(c, 0.6)
+	elif sx == 0 or sy == 0:
+		c = _shade(c, 1.14)
+	if (sx == 2 or sx == 13) and (sy == 2 or sy == 13):
+		c = _shade(c, 1.3)
+	if _h(x + v * T, y, 262) > 0.99:
+		c = _shade(c, 0.8)
+	return _shade(c, 0.95 + 0.1 * _fbm(x, y, 263 + v))
+
+## A wall of bodies as first person shows it: dark lumps of olive, grey and brown cloth, blood
+## soaked through in patches.
+func _body_heap(x: int, y: int, v: int, _mask: int) -> Color:
+	var palette := [Color8(59, 58, 44), Color8(74, 68, 54), Color8(44, 42, 40), Color8(90, 74, 58), Color8(58, 63, 69)]
+	var c: Color = palette[int(_fbm(x, y, 271 + v) * 9.0) % palette.size()]
+	c = _shade(c, 0.7 + 0.5 * _fbm(x * 2, y * 2, 272))
+	if _fbm(x, y, 273 + v) > 0.62:
+		c = c.lerp(Color8(84, 18, 14), 0.75)     # blood
+	return c
 
 ## Station hull from above: light grey plates 16 px square with a dark seam and a lit edge,
 ## a rivet at every seam crossing, faint grime — the panels of first person's hull walls.
@@ -515,15 +546,6 @@ func _timber(x: int, y: int, v: int, _mask: int) -> Color:
 		c = _shade(c, 0.55)
 	# Сучков больше нет (0.11.3): тёмная точка на доске читалась как дыра в стене.
 	return c
-
-## Броня: тёмная сталь, раскосы и двойные ряды заклёпок.
-func _armor_plate(x: int, y: int, v: int, _mask: int) -> Color:
-	var c := _shade(Color8(58, 64, 72), 0.86 + 0.18 * _fbm(x, y, 171, 3))
-	if posmod(x - y, 16) == 0 or posmod(x + y, 16) == 0:
-		c = _shade(c, 1.22)
-	if (y % 8 == 1 or y % 8 == 3) and x % 4 == 2:
-		c = _shade(c, 1.5)
-	return _shade(c, 0.94 + 0.1 * _fbm(x, y, 172 + v))
 
 ## ОКНО — ОДНО СПЛОШНОЕ СТЕКЛО (0.9.4, просьба игрока: «single, unbroken panes rather than
 ## grids of squares»). Прежде плитка рисовала стеклоблоки сеткой 8 px: каждая клетка окна
@@ -593,10 +615,6 @@ func _monolith(x: int, y: int, v: int, _mask: int) -> Color:
 	var grain := _h(x + v * T, y, 182)
 	var k := 0.85 + 0.4 * sheen + (0.06 if grain > 0.8 else 0.0)
 	return _shade(Color8(22, 22, 25), k)
-
-## Стена из тел — тёмная масса с бурыми пятнами (без подробностей).
-func _flesh_pile(x: int, y: int, v: int, _mask: int) -> Color:
-	return Color8(70, 30, 28).lerp(Color8(124, 92, 78), _fbm(x, y, 191 + v))
 
 ## Гермодверь шлюза: стальная плита с жёлто-чёрной полосой поперёк прохода. В
 ## горизонтальной стене (соседи слева/справа) проход вертикальный, и наоборот.

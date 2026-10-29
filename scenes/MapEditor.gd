@@ -123,6 +123,7 @@ var _height_btn: Button = null
 var show_grid := true
 var show_zones := true
 var _mouse_panning := false
+var _pan_last := Vector2.ZERO
 var _hover := Vector2i(-1, -1)
 
 # --- Отрисовка ---
@@ -1282,6 +1283,7 @@ func _sync_time_tint() -> void:
 func _sync_lighting() -> void:
 	if _tiles != null and _tiles.set_time_of_day(map.time_of_day if map != null else ""): queue_redraw()
 	if _tiles != null and map != null and _tiles.set_winter(map.winter and MapData.supports_winter(map.environment())): queue_redraw()
+	if _tiles != null and _tiles.set_grass(Ui.grass): queue_redraw()
 	_sync_time_tint()
 	if not _lighting_preview:
 		if is_instance_valid(_lighting):
@@ -1357,6 +1359,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 	if event is InputEventMouseButton and event.button_index in [MOUSE_BUTTON_MIDDLE, MOUSE_BUTTON_RIGHT]:
 		_mouse_panning = event.pressed
+		_pan_last = event.position
 		return
 	if event is InputEventMouseButton and event.pressed \
 			and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
@@ -1371,7 +1374,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseMotion:
 		if _mouse_panning:
-			pan += event.relative
+			# Positions, not event.relative: see Main (issues-14 #14).
+			pan += event.position - _pan_last
+			_pan_last = event.position
 			queue_redraw()
 			return
 		if brush.begins_with("item:") and tool == Tool.BRUSH:
@@ -2395,6 +2400,8 @@ func _end_first_person() -> void:
 	_fp_layer = null
 	_fp = null
 	_fp_host = null
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_mouse_panning = false
 	_ui.visible = true
 	_refresh_status()
 	queue_redraw()
@@ -3530,7 +3537,7 @@ func _dialog(title: String, content: Control, buttons: Array, width: float = 380
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 0)
 	panel.add_child(col)
-	col.add_child(SteamChrome.header_bar(title))
+	col.add_child(SteamChrome.header_bar(title, SteamChrome.close_x(_close_modal)))
 	col.add_child(SteamChrome.pad(content, 16, 12))
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_END
@@ -3929,7 +3936,7 @@ func _room_manager() -> void:
 			_room_manager.call_deferred())
 	rename_row.add_child(rename)
 	body.add_child(rename_row)
-	_dialog("Room & Structure Presets", body, [["Close", null], ["Delete", func() -> void:
+	_dialog("Room & Structure Presets", body, [["Delete", func() -> void:
 		if pick.selected >= 0: RoomPresets.remove_preset(names[pick.selected])
 		_refresh_palette()
 		_room_manager.call_deferred()], ["Place / Edit", func() -> void:

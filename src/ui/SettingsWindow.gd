@@ -134,7 +134,7 @@ func _build() -> void:
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 0)
 	win.add_child(col)
-	col.add_child(SteamChrome.header_bar("Settings"))
+	col.add_child(SteamChrome.header_bar("Settings", SteamChrome.close_x(queue_free)))
 
 	var tabs := TabContainer.new()
 	_tabs = tabs
@@ -249,6 +249,8 @@ func _build() -> void:
 	_slider(board_box, "Stars", 0, 100, 5, Ui.star_density * 100.0, "%d%%",
 			"How many stars fill space behind the board.",
 			func(v: float) -> void: Ui.set_star_density(v / 100.0))
+	_check(board_box, "Grass", "Blades of grass on grassy ground, on the board and in first person. None on snow.",
+			Ui.grass, Ui.set_grass)
 	_check(board_box, "Falling snow on winter maps",
 			"Snowflakes drifting over winter maps, on the battle screen and in first person.",
 			Ui.snowfall, Ui.set_snowfall)
@@ -276,6 +278,8 @@ func _build() -> void:
 	_slider(fp_box, "Mouse sensitivity", 5, 100, 1, Ui.fp_sensitivity * 100.0, "%d%%",
 			"Mouse sensitivity in first person.",
 			func(v: float) -> void: Ui.set_fp_view(Ui.fp_fov, v / 100.0))
+	_check(fp_box, "Show crosshair", "The cross in the middle of the first-person view.",
+			Ui.fp_crosshair, Ui.set_fp_crosshair)
 	_slider(fp_box, "Render distance", Ui.FP_DISTANCE_MIN, Ui.FP_DISTANCE_MAX, 4, Ui.fp_render_distance, "%d m",
 			"How far the first-person view renders the battlefield, in meters.",
 			func(v: float) -> void: Ui.set_fp_render_distance(int(v)))
@@ -310,12 +314,14 @@ func _build() -> void:
 				Ui.set_grid(true, 0.32)
 				Ui.set_star_density(0.3)
 				Ui.set_snowfall(true)
+				Ui.set_grass(true)
 				Ui.set_crt_filter(false)
 				Ui.set_crt_strength(1.0)
 			TAB_GAMEPLAY:
 				Ui.set_autoroll_dice(false)
 				Ui.set_fp_view(80.0, 0.25)
 				Ui.set_fp_render_distance(Ui.FP_DISTANCE_DEFAULT)
+				Ui.set_fp_crosshair(true)
 				Ui.set_desync_reports(true)
 			TAB_KEYS:
 				_capture_action = ""
@@ -325,11 +331,6 @@ func _build() -> void:
 				GameAudio.set_levels(0.8, 0.8, 0.7, false, true)
 		_build.call_deferred())
 	bottom.add_child(reset)
-	var close := Button.new()
-	close.text = "Close"
-	close.custom_minimum_size = Vector2(100, 0)
-	close.pressed.connect(queue_free)
-	bottom.add_child(close)
 	Ui.theme_canvas_layers()
 
 func _refresh_acceleration(snapshot: Dictionary = {}) -> void:

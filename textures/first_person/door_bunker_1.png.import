@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://bqr0cm1dqkxp4"
+path="res://.godot/imported/door_bunker_1.png-402155164c034d880aba5d2eb4152d51.image"
+
+[deps]
+
+source_file="res://textures/first_person/door_bunker_1.png"
+dest_files=["res://.godot/imported/door_bunker_1.png-402155164c034d880aba5d2eb4152d51.image"]
+
+[params]
+

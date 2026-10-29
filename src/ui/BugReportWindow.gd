@@ -29,7 +29,6 @@ var _send_log: CheckBox
 var _send_match: CheckBox
 var _status: Label
 var _send_btn: Button
-var _close_btn: Button
 var _http: HTTPRequest
 var _attachment_names: Label
 var _names := {}
@@ -80,7 +79,7 @@ func _build() -> void:
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 0)
 	win.add_child(col)
-	col.add_child(SteamChrome.header_bar("Report a Bug"))
+	col.add_child(SteamChrome.header_bar("Report a Bug", SteamChrome.close_x(queue_free)))
 
 	var body := VBoxContainer.new()
 	body.add_theme_constant_override("separation", 12)
@@ -138,11 +137,6 @@ func _build() -> void:
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_status.add_theme_font_size_override("font_size", 12)
 	bottom.add_child(_status)
-	_close_btn = Button.new()
-	_close_btn.text = "Cancel"
-	_close_btn.custom_minimum_size = Vector2(100, 0)
-	_close_btn.pressed.connect(queue_free)
-	bottom.add_child(_close_btn)
 	_send_btn = Button.new()
 	_send_btn.text = "Send Report"
 	_send_btn.custom_minimum_size = Vector2(130, 0)
@@ -279,7 +273,6 @@ func _on_done(result: int, code: int, _headers: PackedStringArray, body: PackedB
 		_status.text = "Could not reach the report server - check your connection and try again."
 	elif code == 200 and reply is Dictionary and bool(reply.get("ok", false)):
 		_status.text = "Thank you! Report #%s was sent." % str(reply.get("id", ""))
-		_close_btn.text = "Close"
 		_text.editable = false
 		_send_btn.visible = false
 		return

@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://bj61dhqepjij8"
+path="res://.godot/imported/veg_fern.png-69719b60292d93df1140133f3cf95a4e.image"
+
+[deps]
+
+source_file="res://textures/first_person/veg/veg_fern.png"
+dest_files=["res://.godot/imported/veg_fern.png-69719b60292d93df1140133f3cf95a4e.image"]
+
+[params]
+

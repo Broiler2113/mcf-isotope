@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://d1e4qv17cddw8"
+path="res://.godot/imported/door_station_2.png-97e1cebd8727258cf1c4f681030622f2.image"
+
+[deps]
+
+source_file="res://textures/first_person/door_station_2.png"
+dest_files=["res://.godot/imported/door_station_2.png-97e1cebd8727258cf1c4f681030622f2.image"]
+
+[params]
+

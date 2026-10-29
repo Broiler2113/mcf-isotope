@@ -97,6 +97,10 @@ func _sync_time_tint(tint: Color) -> void:
 func _sync_lighting() -> void:
 	if _tiles != null and _tiles.set_time_of_day(state.time_of_day if state != null else ""): _redraw()
 	if _tiles != null and state != null and _tiles.set_winter(state.winter): _redraw()
+	if _tiles != null and _tiles.set_grass(Ui.grass):
+		if _ground != null: _ground.texture = _ground_wallpaper()
+		_redraw()
+	if _before_tiles != null and _before_tiles.set_grass(Ui.grass) and _before_layer != null: _before_layer.queue_redraw()
 	if _before_tiles != null and state != null and _before_tiles.set_winter(state.winter):
 		if _before_layer != null: _before_layer.queue_redraw()
 	if _before_tiles != null and _before_tiles.set_time_of_day(state.time_of_day if state != null else ""):
@@ -149,6 +153,29 @@ func drone_lights(viewer: int, visible: Dictionary, limited: bool) -> Array:
 		out.append([Vector2(u.coord) + Vector2(0.5, 0.5), 4.5 if scout else 2.5, 0.75 if scout else 0.4,
 				Color(0.8, 0.92, 1.0)])
 	return out
+
+## CRT fringing (issues-14 #4): strong for a moment after a blast, and while fire burns near
+## you — within a few metres in first person, on screen on the board.
+func _sync_crt() -> void:
+	if not Ui.crt_filter or state == null or resolver == null: return
+	var age := 1.0
+	for flash: Dictionary in _fx.flashes:
+		age = minf(age, float(flash["t"]))
+	var shock := maxf(0.0, 1.0 - age / 0.5)
+	var fires: Array = resolver._burning_cells_of(state.grid)
+	if not fires.is_empty():
+		var limited := _view_resolver().visibility_limited()
+		var visible := _visible_before_impact(_viewing_side()) if limited else {}
+		var screen := Rect2i(_pos_to_cell(Vector2.ZERO), Vector2i.ONE).expand(_pos_to_cell(get_viewport_rect().size))
+		var seen := 0
+		for c: Vector2i in fires:
+			if limited and not visible.has(c): continue
+			if _fp != null:
+				shock = maxf(shock, 0.6 * (1.0 - (Vector2(c) + Vector2(0.5, 0.5)).distance_to(Vector2(_fp.pos.x, _fp.pos.z)) / 5.0))
+			elif screen.has_point(c):
+				seen += 1
+		shock = maxf(shock, 0.5 * minf(1.0, seen / 12.0))
+	Ui.crt_shock(shock)
 
 func _update_screen_shake() -> void:
 	var age := 1.0

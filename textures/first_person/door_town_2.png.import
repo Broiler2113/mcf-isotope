@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://dcbb38gg7ogx5"
+path="res://.godot/imported/door_town_2.png-859bfb7acfb4727294e815dfccfe2422.image"
+
+[deps]
+
+source_file="res://textures/first_person/door_town_2.png"
+dest_files=["res://.godot/imported/door_town_2.png-859bfb7acfb4727294e815dfccfe2422.image"]
+
+[params]
+

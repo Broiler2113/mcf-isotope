@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://4rur52fg1smr"
+path="res://.godot/imported/door_docking_0.png-f0e5f50938e3a15ab1d23426d84b1a5e.image"
+
+[deps]
+
+source_file="res://textures/first_person/door_docking_0.png"
+dest_files=["res://.godot/imported/door_docking_0.png-f0e5f50938e3a15ab1d23426d84b1a5e.image"]
+
+[params]
+

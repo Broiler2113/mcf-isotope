@@ -41,7 +41,7 @@ func _ready() -> void:
 	box.custom_minimum_size.x = 420
 	box.add_theme_constant_override("separation", 10)
 	panel.add_child(SteamChrome.pad(box, 18, 16))
-	box.add_child(SteamChrome.header_bar("Export 2D replay as MP4"))
+	box.add_child(SteamChrome.header_bar("Export 2D replay as MP4", SteamChrome.close_x(_close)))
 	var text := Label.new()
 	text.text = "Whole battlefield, without interface or animation delays.\nAt 1x, the video shows 30 recorded actions per second."
 	box.add_child(text)
@@ -73,8 +73,10 @@ func _ready() -> void:
 	export_button.disabled = executable.is_empty()
 	export_button.pressed.connect(_choose_output)
 	row.add_child(export_button)
+	# Only while exporting; the window's ✕ closes it (issues-14 #12).
 	cancel_button = Button.new()
-	cancel_button.text = "Close"
+	cancel_button.text = "Cancel export"
+	cancel_button.visible = false
 	cancel_button.pressed.connect(_close)
 	row.add_child(cancel_button)
 	Ui.theme_canvas_layers()
@@ -126,7 +128,7 @@ func _start(path: String) -> void:
 	speed.disabled = true
 	resolution.disabled = true
 	fps.disabled = true
-	cancel_button.text = "Cancel export"
+	cancel_button.visible = true
 	status.text = "Rendering replay…"
 	worker = ReplayVideoExporter.new()
 	add_child(worker)
@@ -141,7 +143,7 @@ func _start(path: String) -> void:
 		speed.disabled = false
 		resolution.disabled = false
 		fps.disabled = false
-		cancel_button.text = "Close")
+		cancel_button.visible = false)
 	worker.run(main.replay.data, path, SIZES[resolution.selected], RATES[fps.selected], SPEEDS[speed.selected], executable)
 
 func _close() -> void:

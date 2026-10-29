@@ -3,6 +3,30 @@ extends "res://scenes/main/MainFogMemory.gd"
 
 ## Drawing the battle: the board, units, vehicles, effects, previews, gas, objectives.
 
+## A tank's status card shows only while the pointer is on the tank (issues-14 #18): it
+## sat under every tank and covered the board around it.
+func _track_tank_hover(at: Vector2) -> void:
+	var c := _pos_to_cell(at)
+	var on := Vector2i(-1, -1)
+	if state != null and state.grid.in_bounds(c):
+		var veh := state.get_vehicle(state.grid.cell(c).vehicle_id) if not _before_on else null
+		if (veh != null and veh.type_id == "tank") or (_before_on and _before_tank_at(c)):
+			on = c
+	if on != _hover_tank_cell:
+		_hover_tank_cell = on
+		_redraw()
+
+func _before_tank_at(c: Vector2i) -> bool:
+	for v: Array in _before_vehicles:
+		if String(v[0]) == "tank" and Vehicle.footprint_at(v[2], v[3]).has(c):
+			return true
+	return false
+
+## The cell grid as Settings asks for it; zoomed far out its lines would merge into a grey
+## veil, so none. "Before" draws it by the same rule (issues-14 #13).
+func _grid_colour() -> Color:
+	return Ui.grid_color() if zoom >= 0.3 else Color(0, 0, 0, 0)
+
 ## Слой «было»: рельеф стартовой доски плитками и стартовые места поверх. Слой — дочерний
 ## узел над самим экраном боя, поэтому закрывает и бойцов, и следы, и туман.
 func _draw_before(ci: Node2D) -> void:
@@ -18,7 +42,7 @@ func _draw_before(ci: Node2D) -> void:
 	var y1 := clampi(ceili(((vp.y - pan.y) / zoom - ORIGIN.y) / CELL), 0, g.height - 1)
 	var res := TerrainTiles.prepare(ci, float(CELL))
 	_before_tiles.draw(ci, ORIGIN, float(CELL), x0, y0, x1, y1, false, res)
-	TerrainTiles.draw_grid(ci, ORIGIN, float(CELL), x0, y0, x1, y1, Ui.grid_color(), 1.0 / zoom)
+	TerrainTiles.draw_grid(ci, ORIGIN, float(CELL), x0, y0, x1, y1, _grid_colour(), 1.0)
 	_before_tiles.draw(ci, ORIGIN, float(CELL), x0, y0, x1, y1, true, res)
 	# Туман (0.11.3): на «было» та же завеса, что и в бою, — открыто только то, что видно
 	# сейчас (обычный туман — серая вуаль, реалистичный — чернота). Текстура та же, что у
@@ -44,7 +68,8 @@ func _draw_before(ci: Node2D) -> void:
 			ci.draw_rect(Rect2(org + Vector2(2, 2), vsize - Vector2(4, 4)), col, false, 2.0)
 		var label := String(VehicleDB.get_vehicle(String(v[0])).get("name", v[0]))
 		if String(v[0]) == "tank":
-			TankModel.draw_status(ci, Rect2(org, vsize), label, -1, 0, 0, v[4])
+			if Vehicle.footprint_at(v[2], v[3]).has(_hover_tank_cell):
+				TankModel.draw_status(ci, Rect2(org, vsize), label, -1, 0, 0, v[4])
 		else:
 			ci.draw_string(font, org + Vector2(8, 18), label,
 					HORIZONTAL_ALIGNMENT_LEFT, -1, 14, _ink(col.darkened(0.35)))
@@ -341,8 +366,6 @@ func _draw() -> void:
 	var grid := state.grid
 	var gw := grid.width
 	var gh := grid.height
-	# Полупрозрачная тёмная сетка читается на любой плитке — светлом бетоне и тёмной стали.
-	var grid_col := Ui.grid_color()
 	var label_off := Vector2(6, CELL - 4)
 	# Отсечение по вьюпорту (item 5): на большой карте (город 50×50, бой 500×500) или
 	# крупном зуме рисуем ТОЛЬКО клетки, попадающие на экран, а не всю сетку целиком —
@@ -418,7 +441,7 @@ func _draw() -> void:
 					HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.95, 0.85, 0.6))
 		# Сетку рисует слой плиток (_lod) между полом и объектами — линиями по строкам и
 		# столбцам видимых клеток. На дальнем отъезде линии сливаются в серую пелену — нет.
-		_lod.grid_col = grid_col if zoom >= 0.3 else Color(0, 0, 0, 0)
+		_lod.grid_col = _grid_colour()
 
 	if mode == Mode.MOVE and reach != null:
 		_draw_move_preview()
@@ -960,9 +983,10 @@ func _draw_vehicle(ci: CanvasItem, veh: Vehicle, visible: Dictionary, font: Font
 	if disp_wrecked:
 		label = "WRECK"
 	if veh.type_id == "tank":
-		TankModel.draw_status(ci, Rect2(org, vsize), label, -1 if disp_wrecked else disp_dur,
-				veh.living_crew_count(), 0 if disp_wrecked else maxi(0, veh.ap),
-				veh.facing, veh.tower_locked_dir, disp_wrecked)
+		if fp.has(_hover_tank_cell):
+			TankModel.draw_status(ci, Rect2(org, vsize), label, -1 if disp_wrecked else disp_dur,
+					veh.living_crew_count(), 0 if disp_wrecked else maxi(0, veh.ap),
+					veh.facing, veh.tower_locked_dir, disp_wrecked)
 		return
 	ci.draw_string(font, org + Vector2(8, 18), "%s" % label,
 		HORIZONTAL_ALIGNMENT_LEFT, -1, 14, _ink(hull_col.darkened(0.35)))

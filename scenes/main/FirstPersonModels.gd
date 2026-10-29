@@ -270,7 +270,9 @@ static var _cache := {}
 
 ## Clip an existing model to one surviving cell, keeping normals, UVs and materials.
 ## Only damaged/irregular whole pieces use this path; intact models retain their cache.
-static func clipped(mesh: ArrayMesh, bounds: Rect2) -> ArrayMesh:
+## With `cap`, every part cut open is closed again where it was cut (issues-14 #15: the side
+## that joined the lost half of a piano showed straight through it).
+static func clipped(mesh: ArrayMesh, bounds: Rect2, cap := true) -> ArrayMesh:
 	if mesh == null or mesh.get_surface_count() == 0:
 		return null
 	var arr := mesh.surface_get_arrays(0)
@@ -282,11 +284,14 @@ static func clipped(mesh: ArrayMesh, bounds: Rect2) -> ArrayMesh:
 	var out := Sink.new()
 	var planes := [Vector3(1, 0, bounds.position.x), Vector3(-1, 0, -bounds.end.x),
 			Vector3(0, 1, bounds.position.y), Vector3(0, -1, -bounds.end.y)]
+	var cuts: Array = [[], [], [], []]   # per plane: [a, b, layer, colour] edges lying on it
+	var crossed := [false, false, false, false]   # the plane cut through something (else no cap)
 	for i in range(0, positions.size(), 3):
 		var poly: Array = []
 		for j in 3:
 			poly.append([positions[i + j], normals[i + j], uvs[i + j], layers[i + j], colors[i + j]])
-		for plane: Vector3 in planes:
+		for pi in 4:
+			var plane: Vector3 = planes[pi]
 			if poly.is_empty():
 				break
 			var next: Array = []
@@ -295,6 +300,7 @@ static func clipped(mesh: ArrayMesh, bounds: Rect2) -> ArrayMesh:
 			for vertex: Array in poly:
 				var vd: float = vertex[0].x * plane.x + vertex[0].z * plane.y - plane.z
 				if (pd >= 0.0) != (vd >= 0.0):
+					if absf(pd) > 1e-6 and absf(vd) > 1e-6: crossed[pi] = true
 					var t := pd / (pd - vd)
 					var cut: Array = []
 					for k in 5:
@@ -308,7 +314,64 @@ static func clipped(mesh: ArrayMesh, bounds: Rect2) -> ArrayMesh:
 		for j in range(1, poly.size() - 1):
 			for vertex: Array in [poly[0], poly[j], poly[j + 1]]:
 				out.append_raw(vertex[0], vertex[1], vertex[2], vertex[3], vertex[4])
+		if cap and poly.size() >= 3:
+			for pi in 4:
+				var pl: Vector3 = planes[pi]
+				if absf(normals[i].x * pl.x + normals[i].z * pl.y) > 0.99: continue   # lies in the plane
+				for j in poly.size():
+					var a: Array = poly[j]
+					var b: Array = poly[(j + 1) % poly.size()]
+					if absf(a[0].x * pl.x + a[0].z * pl.y - pl.z) < 1e-4 and absf(b[0].x * pl.x + b[0].z * pl.y - pl.z) < 1e-4 \
+							and a[0].distance_squared_to(b[0]) > 1e-10:
+						cuts[pi].append([a[0], b[0], int(a[3].x), a[4]])
+	if cap:
+		out.shade_floor = false
+		for pi in 4:
+			if crossed[pi]: _cap(out, cuts[pi], -Vector3(planes[pi].x, 0, planes[pi].y), pi)
 	return null if out.empty() else out.mesh()
+
+## Close the outlines `edges` traces in a cutting plane (normal `out`, facing away from the kept
+## part): edges join end to end into loops, each filled in its first edge's material and colour.
+static func _cap(s: Sink, edges: Array, out: Vector3, salt: int) -> void:
+	var key := func(p: Vector3) -> Vector3i: return Vector3i((p * 10000.0).round())
+	var at := {}   # end point -> edge indices touching it
+	for i in edges.size():
+		for p: Vector3 in [edges[i][0], edges[i][1]]:
+			var k: Vector3i = key.call(p)
+			if not at.has(k): at[k] = []
+			at[k].append(i)
+	var used := {}
+	var loops := 0
+	for start in edges.size():
+		if used.has(start): continue
+		used[start] = true
+		var loop: Array[Vector3] = [edges[start][0]]
+		var tip: Vector3 = edges[start][1]
+		var closed := false
+		for guard in edges.size():
+			if key.call(tip) == key.call(loop[0]):
+				closed = true
+				break
+			loop.append(tip)
+			var next := -1
+			for e: int in at.get(key.call(tip), []):
+				if not used.has(e):
+					next = e
+					break
+			if next < 0: break
+			used[next] = true
+			tip = edges[next][1] if key.call(edges[next][0]) == key.call(tip) else edges[next][0]
+		if not closed or loop.size() < 3: continue
+		# Flat in the plane: across it (x or z) and up it (y).
+		var flat := PackedVector2Array()
+		for p: Vector3 in loop:
+			flat.append(Vector2(p.z if out.x != 0.0 else p.x, p.y))
+		var tris := Geometry2D.triangulate_polygon(flat)
+		# Parts that overlap in the cut must not fight: each loop a hair further out.
+		var lift := out * (0.0002 * ((loops + salt) % 4))
+		loops += 1
+		for t in range(0, tris.size(), 3):
+			s.face([loop[tris[t]] + lift, loop[tris[t + 1]] + lift, loop[tris[t + 2]] + lift], out, edges[start][2], edges[start][3])
 
 ## The model for `key`, built by `make.call(sink)` the first time. Returns [opaque, glass]
 ## meshes (either may be empty).
@@ -321,6 +384,72 @@ static func cached(key: String, make: Callable) -> Array:
 	var out := [s.mesh() if not s.empty() else null, g.mesh() if not g.empty() else null]
 	_cache[key] = out
 	return out
+
+# --- Plants as cards (issues-14 #6, #7) ------------------------------------------------------
+
+## A real plant's picture (textures/first_person/veg, tools/art/build_vegetation.py: three sides
+## in a row) and its height in metres, for furniture that grows; [] for the rest.
+static func plant_card(fid: String, seed: int) -> Array:
+	match Furniture.base_of(fid):
+		"pine_tree": return [["pine_a", "pine_c"][seed % 2], 5.4]
+		"park_tree": return [["park_a", "park_b"][seed % 2], 4.8]
+		"bush": return [["bush_a", "bush_b", "bush_c"][seed % 3], 1.0]
+		"bush_dry": return [["bush_dry_a", "bush_dry_b"][seed % 2], 0.9]
+		"bush_flowering": return [["bush_flowering_a", "bush_flowering_b"][seed % 2], 1.0]
+		"tall_grass": return ["tall_grass", 0.85]
+		"hedge": return [["bush_a", "bush_b", "bush_c"][seed % 3], 1.15]
+		"potted_plant":
+			if fid.ends_with("_palm"): return ["palm", 1.15]
+			if fid.ends_with("_flowering"): return ["flowering", 1.15]
+			return ["fern", 0.5]   # stands on its pot
+	return []
+
+static var _card_aspect := {}
+## Width of one view over its height.
+static func card_aspect(name: String) -> float:
+	if not _card_aspect.has(name):
+		var img := FirstPersonArt.picture("veg/veg_" + name)
+		_card_aspect[name] = float(img.get_width()) / 3.0 / maxf(1.0, img.get_height())
+	return _card_aspect[name]
+
+## Three upright cards through the plant's centre, 60° apart, each a different side of it —
+## from anywhere it reads as a whole plant (the way games draw foliage). Built in world space;
+## the second UV holds the plant's cell (fog and sight go by it, FirstPersonBoard.SHADER).
+static func plant_cards(s: Sink, name: String, at: Vector3, height: float, turn: float, cell: Vector2i,
+		width := 1.0, tint := Color.WHITE) -> void:
+	var half := height * card_aspect(name) * 0.5 * width
+	var layer := Vector2(cell) + Vector2(0.5, 0.5)
+	var up := Vector3(0, height, 0)
+	var foot := Color(tint.r * 0.74, tint.g * 0.74, tint.b * 0.74)   # a little shade where it meets the ground
+	var top := Color(tint.r, tint.g, tint.b)
+	for k in 3:
+		var a := turn + k * PI / 3.0
+		var d := Vector3(cos(a), 0, sin(a)) * half
+		var u0 := k / 3.0
+		var u1 := (k + 1) / 3.0
+		for v: Array in [[at - d, Vector2(u0, 1), foot], [at + d, Vector2(u1, 1), foot], [at + d + up, Vector2(u1, 0), top],
+				[at - d, Vector2(u0, 1), foot], [at + d + up, Vector2(u1, 0), top], [at - d + up, Vector2(u0, 0), top]]:
+			s.append_raw(v[0], Vector3.UP, v[1], layer, v[2])
+
+## Grass standing on a grass cell (issues-14 #6): `per` clumps scattered over it, each three
+## crossed cards of one of the grass pictures, turned, sized and tinted by grass_spot.
+const GRASS := ["grass_a", "grass_b", "grass_c"]
+static func grass_cell(sink_for: Callable, cell: Vector2i, per: int) -> void:
+	for k in per:
+		var spot := grass_spot(cell, k)
+		var h3 := FirstPersonArt._h(posmod(cell.x, 8) * 3 + k * 5, posmod(cell.y, 8) * 11 - k * 3, 65)
+		var name: String = GRASS[int(spot.z * 3.0) % 3]
+		# Greener, drier, lighter, darker: no two clumps alike.
+		var tint := Color(0.82 + 0.3 * h3, 0.86 + 0.22 * spot.z, 0.8 + 0.2 * spot.x)
+		plant_cards(sink_for.call(name), name, Vector3(cell.x + spot.x, 0.0, cell.y + spot.y),
+				0.14 + 0.32 * h3 * h3 + 0.08 * spot.z, (spot.x + h3) * TAU, cell, 0.8 + 0.5 * spot.z, tint)
+
+## Where clump k of a grass cell stands (x, y in the cell) and which picture (z, 0..1). The lawn
+## repeats every 8 cells like the ground under it, and the board puts its tufts on the same spots.
+static func grass_spot(cell: Vector2i, k: int) -> Vector3:
+	var c := Vector2i(posmod(cell.x, 8), posmod(cell.y, 8))
+	return Vector3(FirstPersonArt._h(c.x * 7 + k, c.y * 13 - k, 61), FirstPersonArt._h(c.x * 5 - k, c.y * 3 + k * 7, 62),
+			FirstPersonArt._h(c.x + k * 11, c.y * 17, 63))
 
 static func glow(c: Color) -> Color:
 	return Color(c.r, c.g, c.b, EMIT)
@@ -512,6 +641,9 @@ static func furniture(s: Sink, g: Sink, fid: String, W: float, D: float, ctx: Di
 			s.box(Vector3(0.05, hv - 0.18, 0.92), Vector3(0.95, hv - 0.03, 0.94), FirstPersonArt.M_PLAIN, glow(body.lightened(0.45)))
 			return -1.0
 		"crate":
+			# No contact shade on low wooden things (issues-14 #16): it darkened their whole foot
+			# and they looked sunk into the floor.
+			s.shade_floor = false
 			s.box(Vector3(0.17, 0.0, 0.17), Vector3(0.83, 0.64, 0.83), FirstPersonArt.M_PLANKS, art)
 			for e in [[Vector3(0.15, 0, 0.15), Vector3(0.21, 0.66, 0.21)], [Vector3(0.79, 0, 0.15), Vector3(0.85, 0.66, 0.21)],
 					[Vector3(0.15, 0, 0.79), Vector3(0.21, 0.66, 0.85)], [Vector3(0.79, 0, 0.79), Vector3(0.85, 0.66, 0.85)],
@@ -520,12 +652,14 @@ static func furniture(s: Sink, g: Sink, fid: String, W: float, D: float, ctx: Di
 				s.box(e[0], e[1], FirstPersonArt.M_PLANKS, art.darkened(0.22))
 			return 0.66
 		"pallet":
+			s.shade_floor = false
 			for z in [0.08, 0.46, 0.84]:
 				s.box(Vector3(0.05, 0, z), Vector3(0.95, 0.1, z + 0.08), FirstPersonArt.M_PLANKS, WOOD_D)
 			for k in 6:
 				s.box(Vector3(0.05, 0.1, 0.06 + k * 0.155), Vector3(0.95, 0.14, 0.17 + k * 0.155), FirstPersonArt.M_PLANKS, WOOD)
 			return 0.14
 		"ammo_crate":
+			s.shade_floor = false
 			var olive := Color(0.33, 0.38, 0.24)
 			s.box(Vector3(0.2, 0, 0.28), Vector3(0.8, 0.42, 0.72), FirstPersonArt.M_PLATE, olive)
 			s.box(Vector3(0.18, 0.42, 0.26), Vector3(0.82, 0.48, 0.74), FirstPersonArt.M_PLATE, olive.darkened(0.15))
@@ -770,34 +904,17 @@ static func furniture(s: Sink, g: Sink, fid: String, W: float, D: float, ctx: Di
 			s.cyl(Vector3(0.5, hl - 0.3, 0.5), 0.22, 0.13, 0.3, FirstPersonArt.M_FABRIC, Color(0.92, 0.85, 0.7), 12, 0)
 			s.cyl(Vector3(0.5, hl - 0.29, 0.5), 0.2, 0.2, 0.001, FirstPersonArt.M_PLAIN, lamp, 12, 1)
 			return -1.0
-		"bush", "bush_dry", "bush_flowering", "park_tree":
-			_greenery(s, base, art, seed, cap, bool(ctx.get("winter", false)))
-			return -1.0
-		"pine_tree":
-			_pine(s, seed, cap, bool(ctx.get("winter", false)))
-			return -1.0
+		"bush", "bush_dry", "bush_flowering", "park_tree", "pine_tree":
+			return -1.0   # cards only (plant_card)
 		"hedge":
 			var x0h := 0.0 if jl else 0.06
 			var x1h := 1.0 if jr else 0.94
 			s.box(Vector3(x0h, 0.0, 0.18), Vector3(x1h, 0.08, 0.82), FirstPersonArt.M_SOIL, Color(0.3, 0.24, 0.17))
-			s.box(Vector3(x0h, 0.08, 0.16), Vector3(x1h, 0.95, 0.84), FirstPersonArt.M_LEAVES, Color(0.24, 0.4, 0.19),
+			s.box(Vector3(x0h, 0.08, 0.2), Vector3(x1h, 0.82, 0.8), FirstPersonArt.M_LEAVES, Color(0.24, 0.4, 0.19),
 					(Sink.NO_LEFT if jl else 0) | (Sink.NO_RIGHT if jr else 0))
-			for k in 4:
-				s.blob(Vector3(0.15 + k * 0.24, 0.9, 0.5), Vector3(0.16, 0.08, 0.3), FirstPersonArt.M_LEAVES, Color(0.27, 0.44, 0.21), seed + k, 6, 3)
-			if ctx.get("winter", false):
-				s.box(Vector3(x0h, 0.95, 0.2), Vector3(x1h, 1.0, 0.8), FirstPersonArt.M_SNOW, Color.WHITE)
 			return -1.0
 		"tall_grass":
-			var cols := [Color(0.42, 0.52, 0.22), Color(0.52, 0.58, 0.28), Color(0.34, 0.45, 0.18)]
-			for k in 14:
-				var a := TAU * k / 14.0 + seed
-				var lean := 0.18 + 0.3 * FirstPersonArt._h(k, seed, 4)
-				var hgt := 0.45 + 0.4 * FirstPersonArt._h(k, seed, 5)
-				s.rbox(Vector3(0.5 + cos(a) * 0.12, hgt * 0.45, 0.5 + sin(a) * 0.12), Vector3(0.025, hgt, 0.01),
-						Basis(Vector3(sin(a), 0, -cos(a)), lean), FirstPersonArt.M_LEAVES, cols[k % 3])
-			if ctx.get("winter", false):
-				s.blob(Vector3(0.5, 0.08, 0.5), Vector3(0.28, 0.1, 0.28), FirstPersonArt.M_SNOW, Color.WHITE, seed, 7, 3)
-			return -1.0
+			return -1.0   # cards only (plant_card)
 		"flower_bed":
 			var x0f := 0.0 if jl else 0.03
 			var x1f := 1.0 if jr else 0.97
@@ -1139,103 +1256,14 @@ static func _machine(s: Sink, base: String, W: float, D: float, paint: Color, se
 	return -1.0
 
 ## Potted plants by variant: a fern, a palm, a flowering shrub or the plain leafy one.
-static func _plant(s: Sink, fid: String, seed: int, art: Color) -> void:
+## A potted plant's pot and soil; its leaves are a card (plant_card). The palm's and the flowering
+## plant's pictures come with their own pots.
+static func _plant(s: Sink, fid: String, _seed: int, _art: Color) -> void:
+	if fid.ends_with("_palm") or fid.ends_with("_flowering"):
+		return
 	var pot := Color(0.62, 0.32, 0.2)
 	s.cyl(Vector3(0.5, 0, 0.5), 0.13, 0.17, 0.3, FirstPersonArt.M_CONCRETE, pot, 10, 1)
 	s.cyl(Vector3(0.5, 0.27, 0.5), 0.16, 0.16, 0.01, FirstPersonArt.M_SOIL, Color(0.3, 0.22, 0.15), 10, 2)
-	var leaf := Color(0.25, 0.5, 0.22)
-	if fid.ends_with("_palm"):
-		s.cyl(Vector3(0.5, 0.28, 0.5), 0.03, 0.02, 0.75, FirstPersonArt.M_BARK, Color(0.45, 0.35, 0.22), 6, 0)
-		for k in 7:
-			var a := TAU * k / 7.0 + seed
-			s.rbox(Vector3(0.5 + cos(a) * 0.2, 1.0, 0.5 + sin(a) * 0.2), Vector3(0.45, 0.012, 0.09),
-					Basis(Vector3.UP, -a) * Basis(Vector3.BACK, -0.45), FirstPersonArt.M_LEAVES, leaf.lightened(0.05 * (k % 2)))
-		return
-	if fid.ends_with("_fern"):
-		for k in 9:
-			var a2 := TAU * k / 9.0 + seed
-			s.rbox(Vector3(0.5 + cos(a2) * 0.16, 0.42, 0.5 + sin(a2) * 0.16), Vector3(0.36, 0.01, 0.1),
-					Basis(Vector3.UP, -a2) * Basis(Vector3.BACK, -0.6 + 0.2 * (k % 2)), FirstPersonArt.M_LEAVES, leaf.lightened(0.12))
-		return
-	var foliage := art if art.g > art.r else leaf
-	s.blob(Vector3(0.5, 0.58, 0.5), Vector3(0.24, 0.26, 0.24), FirstPersonArt.M_LEAVES, foliage, seed)
-	s.blob(Vector3(0.42, 0.74, 0.55), Vector3(0.15, 0.15, 0.15), FirstPersonArt.M_LEAVES, foliage.lightened(0.08), seed + 1)
-	if fid.ends_with("_flowering"):
-		for k in 8:
-			var a3 := TAU * k / 8.0
-			s.box(Vector3(0.5 + cos(a3) * 0.2 - 0.025, 0.62 + 0.12 * (k % 3), 0.5 + sin(a3) * 0.2 - 0.025),
-					Vector3(0.5 + cos(a3) * 0.2 + 0.025, 0.67 + 0.12 * (k % 3), 0.5 + sin(a3) * 0.2 + 0.025), FirstPersonArt.M_PLAIN,
-					[Color(0.95, 0.4, 0.6), Color(1.0, 0.85, 0.3), Color(0.95, 0.95, 0.95)][k % 3])
-
-## A pine: a straight trunk under tiers of dark needles narrowing to a point; snow on each
-## tier in winter.
-static func _pine(s: Sink, seed: int, cap: float, winter: bool) -> void:
-	var top := minf(5.2, cap)
-	s.cyl(Vector3(0.5, 0, 0.5), 0.13, 0.06, top * 0.9, FirstPersonArt.M_BARK, Color(0.36, 0.26, 0.18), 7, 0)
-	var tiers := 5
-	for t in tiers:
-		var y0 := top * (0.22 + t * 0.15)
-		var r := 0.95 * (1.0 - float(t) / tiers) + 0.15
-		var col := Color(0.16, 0.3, 0.17).lightened(0.04 * (t % 2))
-		s.cyl(Vector3(0.5, y0, 0.5), r, 0.06, top * 0.24, FirstPersonArt.M_LEAVES, col, 9, 1)
-		if winter:
-			s.cyl(Vector3(0.5, y0 + top * 0.12, 0.5), r * 0.55, 0.05, top * 0.12, FirstPersonArt.M_SNOW, Color.WHITE, 9, 0)
-
-## Bushes and trees: lumps of leaves (with flowers or bare twigs), a tree's trunk and crown.
-static func _greenery(s: Sink, base: String, art: Color, seed: int, cap: float, winter := false) -> void:
-	var leaf := art if art.g >= art.r * 0.9 else Color(0.3, 0.48, 0.2)
-	if base == "park_tree":
-		var top := minf(4.6, cap)
-		var trunk_h := top * 0.55
-		s.cyl(Vector3(0.5, 0, 0.5), 0.17, 0.1, trunk_h, FirstPersonArt.M_BARK, Color(0.38, 0.28, 0.2), 8, 0)
-		s.rbox(Vector3(0.65, trunk_h * 0.8, 0.5), Vector3(0.5, 0.07, 0.07), Basis(Vector3.BACK, 0.7), FirstPersonArt.M_BARK, Color(0.36, 0.27, 0.19))
-		s.rbox(Vector3(0.38, trunk_h * 0.9, 0.42), Vector3(0.45, 0.06, 0.06), Basis(Vector3.BACK, -0.8) * Basis(Vector3.UP, 0.6), FirstPersonArt.M_BARK, Color(0.36, 0.27, 0.19))
-		var crown_c := leaf
-		var cy := trunk_h + (top - trunk_h) * 0.45
-		var sz := (top - trunk_h) * 0.6
-		s.blob(Vector3(0.5, cy, 0.5), Vector3(sz * 1.15, sz * 0.8, sz * 1.15), FirstPersonArt.M_LEAVES, crown_c, seed, 9, 5)
-		for k in 4:
-			var a := TAU * k / 4.0 + seed * 0.7
-			s.blob(Vector3(0.5 + cos(a) * sz * 0.75, cy - sz * 0.15 + 0.2 * (k % 2), 0.5 + sin(a) * sz * 0.75),
-					Vector3(sz * 0.6, sz * 0.5, sz * 0.6), FirstPersonArt.M_LEAVES, crown_c.lightened(0.04 * k - 0.06), seed + k + 1, 7, 4)
-		s.blob(Vector3(0.5, cy + sz * 0.55, 0.5), Vector3(sz * 0.6, sz * 0.45, sz * 0.6), FirstPersonArt.M_LEAVES, crown_c.lightened(0.08), seed + 9, 7, 4)
-		if winter:
-			s.blob(Vector3(0.5, cy + sz * 0.85, 0.5), Vector3(sz * 0.55, sz * 0.22, sz * 0.55), FirstPersonArt.M_SNOW, Color.WHITE, seed + 10, 7, 3)
-			for k in 3:
-				var a6 := TAU * k / 3.0 + seed
-				s.blob(Vector3(0.5 + cos(a6) * sz * 0.7, cy + sz * 0.3, 0.5 + sin(a6) * sz * 0.7), Vector3(sz * 0.35, sz * 0.15, sz * 0.35),
-						FirstPersonArt.M_SNOW, Color.WHITE, seed + 11 + k, 6, 3)
-		return
-	var dry := base == "bush_dry"
-	var c := Color(0.46, 0.42, 0.26) if dry else leaf
-	var lumps := 0 if dry else 5
-	for k in lumps:
-		var a2 := TAU * k / lumps + seed
-		var r := 0.2 + 0.08 * FirstPersonArt._h(k, seed, 3)
-		s.blob(Vector3(0.5 + cos(a2) * 0.17, 0.3 + 0.12 * (k % 2), 0.5 + sin(a2) * 0.17), Vector3(r, r * 0.85, r),
-				FirstPersonArt.M_LEAVES, c.lightened(0.05 * (k % 3) - 0.04), seed + k)
-	if not dry:
-		s.blob(Vector3(0.5, 0.55, 0.5), Vector3(0.22, 0.2, 0.22), FirstPersonArt.M_LEAVES, c.lightened(0.07), seed + 7)
-	if winter:
-		s.blob(Vector3(0.5, 0.68, 0.5), Vector3(0.26, 0.09, 0.26), FirstPersonArt.M_SNOW, Color.WHITE, seed + 8, 7, 3)
-	else:
-		# Bare twigs fanning out, a few tufts of dry leaves among them.
-		for k in 9:
-			var a3 := TAU * k / 9.0 + seed
-			var lean := 0.35 + 0.25 * (k % 3)
-			s.rbox(Vector3(0.5 + cos(a3) * 0.13, 0.32, 0.5 + sin(a3) * 0.13), Vector3(0.025, 0.62, 0.025),
-					Basis(Vector3(sin(a3), 0, -cos(a3)), lean), FirstPersonArt.M_BARK, Color(0.33, 0.25, 0.16))
-		for k in 4:
-			var a5 := TAU * k / 4.0 + seed * 1.3
-			s.blob(Vector3(0.5 + cos(a5) * 0.24, 0.45 + 0.1 * (k % 2), 0.5 + sin(a5) * 0.24), Vector3(0.1, 0.08, 0.1),
-					FirstPersonArt.M_LEAVES, c.lightened(0.05 * k), seed + k, 5, 3)
-	if base == "bush_flowering":
-		for k in 14:
-			var a4 := TAU * k / 14.0 + seed * 0.3
-			var rr := 0.27 + 0.04 * (k % 3)
-			var y := 0.32 + 0.3 * FirstPersonArt._h(k, seed, 9)
-			s.box(Vector3(0.5 + cos(a4) * rr - 0.022, y, 0.5 + sin(a4) * rr - 0.022), Vector3(0.5 + cos(a4) * rr + 0.022, y + 0.035, 0.5 + sin(a4) * rr + 0.022),
-					FirstPersonArt.M_PLAIN, [Color(0.95, 0.45, 0.65), Color(1.0, 0.92, 0.95), Color(0.95, 0.75, 0.25)][k % 3])
 
 # --- Wall lamps -----------------------------------------------------------------------------
 

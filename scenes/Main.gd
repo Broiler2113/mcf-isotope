@@ -94,6 +94,7 @@ func _process_frame(delta: float) -> void:
 				_audio.step(s[0], s[1], s[2])
 		_step_sounds.clear()
 	_update_screen_shake()
+	_sync_crt()
 	# Не двигаем камеру, пока игрок печатает в текстовом поле (например, IP хоста).
 	_reposition_hud_grip()
 	_refresh_clocks()
@@ -235,9 +236,12 @@ func _unhandled_input(event: InputEvent) -> void:
 	# камера не ехала вместе с меню.
 	if (event is InputEventMouseButton or event is InputEventGesture) and _pointer_over_popup(event.position):
 		return
+	if event is InputEventMouseMotion:
+		_track_tank_hover(event.position)
 	# Панорама мышью (средняя/правая кнопка) и жестом тачпада — работает всегда.
 	if event is InputEventMouseButton and event.button_index in [MOUSE_BUTTON_MIDDLE, MOUSE_BUTTON_RIGHT]:
 		_mouse_panning = event.pressed
+		_pan_last = event.position
 		if event.pressed: _kill_pan_tween()
 		return
 	if event is InputEventMouseMotion and _mouse_panning:
@@ -245,7 +249,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			_mouse_panning = false
 			return
 		if _box_dragging: _box_end_screen = event.position
-		pan += event.relative
+		# By the pointer's own positions, not event.relative (issues-14 #14): after first person
+		# released the captured mouse, relative motion could arrive doubled and the board shook.
+		pan += event.position - _pan_last
+		_pan_last = event.position
 		_redraw()
 		return
 	if event is InputEventPanGesture:

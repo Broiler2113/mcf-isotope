@@ -123,11 +123,17 @@ func _view() -> void:
 	fp._doors(1.0)
 	var cc := Vector2i(1, 0)
 	var door: Node3D = fp._chunks[cc]["doors"][Vector2i(9, 5)]
-	var open_position: Vector3 = door.get_child(0).position
-	ck(open_position.x < 0, "open door retracts completely into its wall")
+	var open_at: Transform3D = (door.get_child(0) as Node3D).transform
+	if door.has_meta("swing"):
+		# A town or field door turns on its hinge, square to the wall, away from you (issues-14 #3).
+		ck(absf(absf(open_at.basis.get_euler().y) - PI / 2) < 0.01, "an open door stands square to its wall")
+		var tip := door.to_global((door.get_child(0) as Node3D).transform * Vector3(0.98, 1, 0))
+		ck(tip.z < 5.0, "the door swung away from the walker at z 6.2")
+	else:
+		ck(open_at.origin.x < 0, "open door retracts completely into its wall")
 	fp._build_chunk(cc)
 	fp._doors(0.016)
-	ck(fp._chunks[cc]["doors"][Vector2i(9, 5)].get_child(0).position == open_position,
+	ck((fp._chunks[cc]["doors"][Vector2i(9, 5)].get_child(0) as Node3D).transform.is_equal_approx(open_at),
 			"rebuilding a chunk keeps the existing door opening")
 	fp.pos = start
 	_movement(fp)
