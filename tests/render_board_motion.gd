@@ -1,6 +1,6 @@
 extends SceneTree
 
-## Issues-12 #11–#13 on the real battle screen: a hovered unit twitches, units and vehicles
+## Issues-12 #11–#13 on the real battle screen: a clicked unit of yours hops (issues-13 #1), units and vehicles
 ## floating in vacuum sway, an aiming tank's turret follows the cursor smoothly inside its arc.
 ## Requires a display: xvfb-run -a godot --script tests/render_board_motion.gd
 var failures: Array[String] = []
@@ -63,17 +63,26 @@ func run() -> void:
 			"the floating soldier sways slightly (centre %s, turn %.3f)" % [drift, sp.rotation])
 	ck(main._veh_float.visible, "floating vehicles have their own layer")
 
-	# Hover twitch (#11): once, briefly, then still.
-	Input.warp_mouse(screen_of(Vector2(3.5, 3.5)))
+	# Click hop (issues-13 #1, was a hover twitch): hovering does nothing; selecting your own
+	# soldier lifts it straight up once, no turn, then it settles.
 	var gs = main._unit_sprites[grounded.id]
-	var twitched := false
+	Input.warp_mouse(screen_of(Vector2(3.5, 3.5)))
+	await frames(10)
+	ck(gs.wob == Vector2.ZERO and gs.rotation == 0.0, "hovering a soldier leaves it still")
+	main._select(grounded)
+	var hopped := false
+	var turned := false
+	var sideways := false
 	for i in 10:
 		await process_frame
-		if absf(gs.rotation) > 0.001: twitched = true
-	ck(twitched, "hovering a soldier makes it twitch")
+		if gs.wob.y < -0.5: hopped = true
+		if gs.rotation != 0.0: turned = true
+		if gs.wob.x != 0.0: sideways = true
+	ck(hopped and not turned and not sideways, "selecting your soldier makes it hop straight up")
 	await create_timer(0.6).timeout
 	await frames(2)
-	ck(gs.rotation == 0.0 and gs.wob == Vector2.ZERO, "the twitch settles and the soldier is still again")
+	ck(gs.rotation == 0.0 and gs.wob == Vector2.ZERO, "the hop settles and the soldier is still again")
+	main._deselect()
 
 	# Turret (#12): follows the cursor inside the arc, smoothly, and holds outside it.
 	main.selected_vehicle_id = tank.id

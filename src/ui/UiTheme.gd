@@ -115,6 +115,9 @@ var ffmpeg_path := ""
 var snowfall := true
 ## CRT-terminal filter over the whole game (issues-12 #21), off unless the player picks it.
 var crt_filter := false
+var crt_strength := 1.0
+## Share of stars in the sky behind a board (issues-13 #2).
+var star_density := 0.3
 var _crt: CrtFilter = null
 var _pal: Dictionary = PALETTES["green"]
 
@@ -169,6 +172,8 @@ func _load_settings() -> void:
 	ffmpeg_path = str(cf.get_value("display", "ffmpeg_path", ""))
 	snowfall = bool(cf.get_value("display", "snowfall", true))
 	crt_filter = bool(cf.get_value("display", "crt_filter", false))
+	star_density = clampf(float(cf.get_value("board", "star_density", 0.3)), 0.0, 1.0)
+	crt_strength = clampf(float(cf.get_value("display", "crt_strength", 1.0)), 0.1, 1.0)
 
 func _save_settings() -> void:
 	var cf := ConfigFile.new()
@@ -189,6 +194,8 @@ func _save_settings() -> void:
 	cf.set_value("display", "fp_render_distance", fp_render_distance)
 	cf.set_value("display", "snowfall", snowfall)
 	cf.set_value("display", "crt_filter", crt_filter)
+	cf.set_value("display", "crt_strength", crt_strength)
+	cf.set_value("board", "star_density", star_density)
 	cf.set_value("display", "ffmpeg_path", ffmpeg_path)
 	cf.save(SETTINGS_PATH)
 
@@ -218,6 +225,15 @@ func set_snowfall(on: bool) -> void:
 func set_crt_filter(on: bool) -> void:
 	crt_filter = on
 	_apply_crt()
+	_save_settings()
+
+func set_star_density(v: float) -> void:
+	star_density = clampf(v, 0.0, 1.0)
+	_save_settings()
+
+func set_crt_strength(v: float) -> void:
+	crt_strength = clampf(v, 0.1, 1.0)
+	if _crt != null: _crt.set_strength(crt_strength)
 	_save_settings()
 
 func _apply_crt() -> void:

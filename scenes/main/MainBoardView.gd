@@ -325,6 +325,7 @@ func _build_sky() -> void:
 	layer.layer = -10
 	add_child(layer)
 	_sky = Starfield.new()
+	_sky.follows_setting = true
 	_sky.drift = false   # за доской фон ведёт камера, а не время: бой — не заставка
 	layer.add_child(_sky)
 

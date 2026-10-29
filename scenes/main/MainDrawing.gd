@@ -1005,12 +1005,10 @@ var _turret_shown: Dictionary = {}
 ## The last angle the cursor gave inside the turret's arc, per aiming tank.
 var _turret_goal: Dictionary = {}
 const TURRET_SPEED := 3.2              # rad/s at most: a heavy turret, not a snap
-## A unit under the cursor twitches once (issues-12 #11).
-const TWITCH_TIME := 0.32
+## Your unit hops once when you click it (issues-13 #1; was a hover twitch in issues-12 #11).
+const TWITCH_TIME := 0.26
 var _twitch_id := -1
 var _twitch_at := 0.0
-var _hover_unit := -1
-var _hover_at := Vector2i(-99999, -99999)
 
 func _anim_time() -> float:
 	return Time.get_ticks_msec() * 0.001
@@ -1039,25 +1037,11 @@ func _vehicle_sway(veh: Vehicle) -> Vector2:
 func _twitch(t: float) -> Array:
 	var u := t - _twitch_at
 	if _twitch_id == -1 or u >= TWITCH_TIME: return [Vector2.ZERO, 0.0]
-	var e := 1.0 - u / TWITCH_TIME
-	return [Vector2(sin(u * 62.0) * 1.6 * e, -absf(sin(u * 31.0)) * 1.4 * e), sin(u * 47.0) * 0.1 * e]
+	return [Vector2(0.0, -sin(u / TWITCH_TIME * PI) * 3.0), 0.0]
 
-## The unit drawn under the cursor (a drone over a soldier), or -1. Asked only when the
-## cursor enters another cell.
-func _hovered_unit() -> int:
-	var mouse := get_viewport().get_mouse_position()
-	if get_viewport().gui_get_hovered_control() != null: return -1
-	var c := _pos_to_cell(mouse)
-	if c == _hover_at: return _hover_unit
-	_hover_at = c
-	for d: Dictionary in _top_drones:
-		if d["at"] == c: return (d["unit"] as UnitInstance).id
-	if not state.grid.in_bounds(c): return -1
-	var occ: UnitInstance = state.grid.cell(c).occupant
-	if occ != null and not occ.is_drone:
-		var sp: UnitSprite = _unit_sprites.get(occ.id)
-		if sp != null and sp.shown: return occ.id
-	return -1
+func _bounce(id: int) -> void:
+	_twitch_id = id
+	_twitch_at = _anim_time()
 
 func _turret_aiming(veh: Vehicle) -> bool:
 	return mode == Mode.VEH_CANNON and veh.id == selected_vehicle_id and veh.type_id == "tank" \
@@ -1082,12 +1066,6 @@ func _turret_goal_for(veh: Vehicle) -> float:
 func _animate_board(delta: float) -> void:
 	if state == null or _unit_layer == null or _fp != null: return
 	var now := _anim_time()
-	var h := _hovered_unit()
-	if h != _hover_unit:
-		_hover_unit = h
-		if h != -1:
-			_twitch_id = h
-			_twitch_at = now
 	_animate_turrets(delta)
 	var moved := {}
 	var ids: Array = _floaters.keys()
@@ -1175,7 +1153,7 @@ class UnitSprite extends Node2D:
 	var look: Array = []
 	## Script-side copies of position and visible: reading the node's own costs an engine call.
 	var off := Vector2.ZERO
-	## Motion on top of off (hover twitch, floating in vacuum), already turned about the cell.
+	## Motion on top of off (click hop, floating in vacuum), already turned about the cell.
 	var wob := Vector2.ZERO
 	var shown := true
 	var at := Vector2i(-99999, -99999)

@@ -217,7 +217,7 @@ func _interface() -> void:
 	keys.reset_defaults("user://issues6-keys.cfg")
 	ck(not keys.codes("game_end_turn").has(KEY_ENTER) and keys.codes("game_end_turn").has(KEY_MASK_SHIFT | KEY_ENTER), "end turn is configurable and not bound to Enter")
 	var settings = SettingsScript.open(root)
-	settings._tabs.current_tab = 1
+	settings._tabs.current_tab = settings.TAB_KEYS
 	await process_frame
 	await process_frame
 	var tab: Control = settings._key_sections.get_current_tab_control()

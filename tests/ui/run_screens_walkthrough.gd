@@ -51,7 +51,8 @@ func run() -> void:
 	root.add_child(main)
 	await frames()
 	var tools_button := find_text(main, "Tools") as Button
-	var draw_button := find_text(main, "Drawing") as Button
+	# Icon only since issues-13: the caption is the tooltip.
+	var draw_button: Button = main.find_children("*", "Button", true, false).filter(func(b: Button) -> bool: return b.tooltip_text == "Drawing").front()
 	ck(tools_button == null and draw_button != null and draw_button.global_position.x < 200, "Drawing is the only top-left tool button")
 	var camera := find_text(main, "Camera") as Control
 	ck(camera != null and camera.is_visible_in_tree() and main._hud_window.is_ancestor_of(camera), "Camera is in the right sidebar")

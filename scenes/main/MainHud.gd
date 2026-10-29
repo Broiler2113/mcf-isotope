@@ -1231,11 +1231,15 @@ func _compact_button(text: String, handler: Callable) -> Button:
 	b.pressed.connect(handler)
 	return b
 
-## A pixel icon before the caption (issues-12 #15), kept crisp at every interface size.
+## A pixel icon instead of the caption (issues-12 #15; icon only since issues-13 #3), kept
+## crisp at every interface size. The caption moves to the tooltip when there is none.
 func _hud_icon(b: Button, name: String) -> void:
 	b.icon = HudIcons.texture(name)
 	b.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	b.add_theme_constant_override("h_separation", 5)
+	if b.tooltip_text.is_empty(): b.tooltip_text = b.text
+	b.text = ""
+	b.custom_minimum_size = Vector2(32, 26)
+	b.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 
 ## Ряд кнопок в одну строку — вдвое экономит высоту панели (#54).
 func _button_row(buttons: Array) -> HBoxContainer:

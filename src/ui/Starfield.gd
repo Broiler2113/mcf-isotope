@@ -42,6 +42,10 @@ const DEPTH := [0.05, 0.12, 0.26]
 ## camera — панорама доски в точках экрана (Main.pan); drift — плывёт ли фон сам по себе.
 var camera: Vector2 = Vector2.ZERO
 var drift: bool = true
+## Share of LAYERS' stars to scatter. Skies behind a board follow Settings → Display
+## (issues-13 #2: the full menu sky was too busy there); the menu keeps every star.
+var density: float = 1.0
+var follows_setting := false
 
 ## Оттенки звёзд: холодный белый, голубоватый, тёплый. Разноцветное небо живее
 ## одноцветного, но разброс намеренно маленький — это фон, а не витраж.
@@ -95,17 +99,25 @@ func _ready() -> void:
 	_mat.set_shader_parameter("tile", float(TILE))
 	_sky.material = _mat
 	add_child(_sky)
+	for cfg: Dictionary in LAYERS:
+		_layers.append({"speed": float(cfg["speed"]), "offset": Vector2.ZERO})
+	if follows_setting: density = Ui.star_density
+	_build_tiles()
+	_fit()
+	set_process(true)
+
+func _build_tiles() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = SEED
 	for i in LAYERS.size():
 		var cfg: Dictionary = LAYERS[i]
-		_mat.set_shader_parameter("l%d" % i, _star_tile(rng, int(cfg["stars"]), int(cfg["size"]),
+		_mat.set_shader_parameter("l%d" % i, _star_tile(rng, int(float(cfg["stars"]) * density), int(cfg["size"]),
 				float(cfg["alpha"])))
-		_layers.append({"speed": float(cfg["speed"]), "offset": Vector2.ZERO})
-	_fit()
-	set_process(true)
 
 func _process(delta: float) -> void:
+	if follows_setting and density != Ui.star_density:
+		density = Ui.star_density
+		_build_tiles()
 	if get_viewport_rect().size != _viewport_size:
 		_fit()
 	var dir := DRIFT.normalized()
