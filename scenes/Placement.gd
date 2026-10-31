@@ -1967,6 +1967,7 @@ func _on_back() -> void:
 		return
 	# Одиночная игра теперь создаётся в лобби (item 8/20) — назад ведёт туда же, а не в
 	# снятый с потока старый экран Setup.
+	GameConfig.back_to_lobby = true
 	get_tree().change_scene_to_file(LOBBY_SCENE)
 
 ## Цвет подписи поверх заливки: на светлой (белая сторона) — чёрный, иначе белый.

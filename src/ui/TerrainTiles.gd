@@ -167,14 +167,14 @@ func _tile(name: String, res: int) -> Array:
 	_tiles[key] = out
 	return out
 
-## The fire tile in its eight turns and flips (issues-12 #18): each burning cell picks one by
-## its position, so a spread fire is a field of flames, not one picture repeated.
+## The fire tile (fix-12 #4: the seamless filled cell again, unturned, so a spread fire is
+## one continuous field). Kept as an array for the callers' _fire_at.
 func _fire_turns(res: int) -> Array:
 	var key := "fire_turns@%d" % res
 	if _tiles.has(key): return _tiles[key]
 	var out: Array = []
 	var base := _tile("fire", res)
-	# Read the new art from source (issues-12 #18): a stale import cache keeps the old tile.
+	# Read the art from source: a stale import cache would keep the issues-12 flame tile.
 	var own: Image = Sprites.image_at("res://textures/decals/fire/fire.png") if not Sprites.has_user_override("fire") else null
 	if own != null:
 		own = own.duplicate()
@@ -183,12 +183,7 @@ func _fire_turns(res: int) -> Array:
 		if own.get_width() != res: own.resize(res, res, Image.INTERPOLATE_LANCZOS)
 		base = [own]
 	if not base.is_empty():
-		var img: Image = base[0]
-		for k in 8:
-			var v: Image = img.duplicate()
-			if k & 4: v.flip_x()
-			for r in k & 3: v.rotate_90(CLOCKWISE)
-			out.append(v)
+		out.append(base[0])
 	_tiles[key] = out
 	return out
 

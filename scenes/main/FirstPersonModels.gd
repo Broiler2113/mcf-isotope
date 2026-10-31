@@ -434,15 +434,26 @@ static func plant_cards(s: Sink, name: String, at: Vector3, height: float, turn:
 ## Grass standing on a grass cell (issues-14 #6): `per` clumps scattered over it, each three
 ## crossed cards of one of the grass pictures, turned, sized and tinted by grass_spot.
 const GRASS := ["grass_a", "grass_b", "grass_c"]
-static func grass_cell(sink_for: Callable, cell: Vector2i, per: int) -> void:
+## A clump this close to a trench side would hang into the pit or poke through its bank.
+const GRASS_KEEP_OFF := 0.5
+
+static func grass_cell(sink_for: Callable, cell: Vector2i, per: int, keep_off: Array[Vector2i] = []) -> void:
 	for k in per:
 		var spot := grass_spot(cell, k)
+		if _near_side(Vector2(spot.x, spot.y), keep_off): continue
 		var h3 := FirstPersonArt._h(posmod(cell.x, 8) * 3 + k * 5, posmod(cell.y, 8) * 11 - k * 3, 65)
 		var name: String = GRASS[int(spot.z * 3.0) % 3]
 		# Greener, drier, lighter, darker: no two clumps alike.
 		var tint := Color(0.82 + 0.3 * h3, 0.86 + 0.22 * spot.z, 0.8 + 0.2 * spot.x)
 		plant_cards(sink_for.call(name), name, Vector3(cell.x + spot.x, 0.0, cell.y + spot.y),
 				0.14 + 0.32 * h3 * h3 + 0.08 * spot.z, (spot.x + h3) * TAU, cell, 0.8 + 0.5 * spot.z, tint)
+
+static func _near_side(p: Vector2, sides: Array[Vector2i]) -> bool:
+	for d: Vector2i in sides:
+		var near_x := d.x == 0 or (p.x > 1.0 - GRASS_KEEP_OFF if d.x > 0 else p.x < GRASS_KEEP_OFF)
+		var near_y := d.y == 0 or (p.y > 1.0 - GRASS_KEEP_OFF if d.y > 0 else p.y < GRASS_KEEP_OFF)
+		if near_x and near_y: return true
+	return false
 
 ## Where clump k of a grass cell stands (x, y in the cell) and which picture (z, 0..1). The lawn
 ## repeats every 8 cells like the ground under it, and the board puts its tufts on the same spots.

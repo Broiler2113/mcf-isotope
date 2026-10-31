@@ -71,7 +71,7 @@ func _initialize() -> void:
 	_strip("floor_epicenter", _scorch)
 	_strip("bedrock", _bedrock)
 	_floor_looks()
-	# fire.png comes from tools/art/build_fire.py (issues-12 #18).
+	_save("fire", _fire())   # fix-12 #4: the filled orange-yellow cell is back
 	# --- Стены и прочие стыкующиеся объекты ---
 	_sheet("wall", _board_concrete, Color8(128, 126, 120), 3)
 	_matched_walls()
@@ -416,6 +416,19 @@ func _bedrock(x: int, y: int, v: int) -> Color:
 ## Огонь сверху (batch ui-drones): не языки пламени сбоку, а горящая клетка с высоты —
 ## оранжевое поле с жёлтыми горячими пятнами и тёмно-красными краями языков, бесшовное,
 ## чтобы пожар на нескольких клетках шёл сплошным полем.
+func _fire() -> Image:
+	var img := Image.create(T, T, false, Image.FORMAT_RGBA8)
+	for y in T:
+		for x in T:
+			var n := _fbm(x, y, 111)
+			var hot := _tn(x, y, 8, 112)
+			var c := Color8(178, 48, 12).lerp(Color8(236, 120, 24), n)
+			if hot > 0.62:
+				c = c.lerp(Color8(255, 214, 92), clampf((hot - 0.62) * 3.0, 0.0, 1.0))
+			c.a = 0.82
+			img.set_pixel(x, y, c)
+	return img
+
 # =====================================================================================
 #  Стены и стыкующиеся объекты: fn(x, y, v, mask) → цвет
 # =====================================================================================

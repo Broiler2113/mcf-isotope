@@ -576,6 +576,16 @@ func _build_ui() -> void:
 	var draw_box := _floating_hud_panel("Drawing", panel_buttons, Vector2(12, 44))
 	panel_buttons.add_child(manual_btn)
 	panel_buttons.add_child(bug_btn)
+	# Find your army in a big battle (fix-12 #12): each button opens a menu of what to light up.
+	for spec: Array in [["soldier", "Highlight your soldiers: all, or chosen types", false],
+			["tank", "Highlight your vehicles: all, or chosen types", true]]:
+		var hl := _compact_button(spec[1], func() -> void: pass)
+		hl.toggle_mode = true
+		hl.tooltip_text = spec[1]
+		_hud_icon(hl, spec[0])
+		var for_vehicles: bool = spec[2]
+		hl.pressed.connect(func() -> void: _open_highlight_menu(hl, for_vehicles))
+		panel_buttons.add_child(hl)
 	_draw_btn = _compact_button("Draw", _enter_draw)
 	_erase_btn = _compact_button("Erase", _enter_erase)
 	# The ruler is a drawing tool now (owner, fix-8 #5): its marks stay and are shared.
@@ -1222,6 +1232,62 @@ func _compact_button(text: String, handler: Callable) -> Button:
 	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	b.pressed.connect(handler)
 	return b
+
+## The highlight menu (owner): "All" or any mix of the types you field now, with their counts.
+## It stays open while you tick; the button stays lit while anything is ticked.
+func _open_highlight_menu(btn: Button, vehicles: bool) -> void:
+	var sel: Dictionary = _hl_vehicle_types if vehicles else _hl_unit_types
+	btn.set_pressed_no_signal(not sel.is_empty())
+	if state == null: return
+	var counts := {}
+	var names := {}
+	if vehicles:
+		for v: Vehicle in state.all_vehicles():
+			if v.wrecked or not _can_control(v.owner): continue
+			counts[v.type_id] = int(counts.get(v.type_id, 0)) + 1
+			names[v.type_id] = v.type_id.capitalize()
+	else:
+		for u: UnitInstance in state.all_units():
+			if not u.is_alive() or not _can_control(u.owner) or not state.grid.in_bounds(u.coord): continue
+			counts[u.stats.id] = int(counts.get(u.stats.id, 0)) + 1
+			names[u.stats.id] = u.stats.display_name
+	var ids: Array = counts.keys()
+	ids.sort_custom(func(a: String, b: String) -> bool: return str(names[a]) < str(names[b]))
+	var menu := PopupMenu.new()
+	menu.theme = Ui.theme
+	menu.hide_on_checkable_item_selection = false
+	menu.add_check_item("All your vehicles" if vehicles else "All your soldiers", 0)
+	menu.add_separator()
+	for i in ids.size():
+		menu.add_check_item("%s (%d)" % [names[ids[i]], counts[ids[i]]], i + 1)
+	var sync := func() -> void:
+		menu.set_item_checked(menu.get_item_index(0), sel.has("*"))
+		for i in ids.size(): menu.set_item_checked(menu.get_item_index(i + 1), sel.has("*") or sel.has(ids[i]))
+		btn.set_pressed_no_signal(not sel.is_empty())
+		_refresh_highlight()
+	menu.id_pressed.connect(func(id: int) -> void:
+		# "All" a second time deselects everything (owner). Under "All" every type shows ticked:
+		# unticking one keeps the rest; ticking the last one missing is "All" again.
+		if id == 0:
+			var was_all := sel.has("*")
+			sel.clear()
+			if not was_all: sel["*"] = true
+		else:
+			var t: String = ids[id - 1]
+			if sel.has("*"):
+				sel.clear()
+				for other: String in ids: sel[other] = true
+			if sel.has(t): sel.erase(t)
+			else: sel[t] = true
+			if ids.all(func(other: String) -> bool: return sel.has(other)):
+				sel.clear()
+				sel["*"] = true
+		sync.call())
+	menu.popup_hide.connect(menu.queue_free)
+	add_child(menu)
+	sync.call()
+	menu.position = Vector2i(btn.get_screen_position() + Vector2(0, btn.size.y + 2))
+	menu.popup()
 
 ## A pixel icon instead of the caption (issues-12 #15; icon only since issues-13 #3), kept
 ## crisp at every interface size. The caption moves to the tooltip when there is none.

@@ -28,6 +28,8 @@ static func image(name: String) -> Image:
 		"draw": _pencil(fill)
 		"manual": _book(fill)
 		"bug": _bug(fill, ink)
+		"soldier": _soldier(fill)
+		"tank": _tank(fill)
 	var img := Image.create(SIZE, SIZE, false, Image.FORMAT_RGBA8)
 	img.fill(Color(0, 0, 0, 0))
 	for p: Vector2i in fill:
@@ -78,6 +80,26 @@ static func _book(fill: Dictionary) -> void:
 	for x in range(2, 14): fill[Vector2i(x, 12)] = LEAD
 	fill[Vector2i(7, 12)] = LEAD
 	fill[Vector2i(8, 12)] = LEAD
+
+## A soldier from the front: helmet, head, shoulders and body, legs apart (fix-12 #12).
+static func _soldier(fill: Dictionary) -> void:
+	for y in SIZE:
+		for x in SIZE:
+			var p := Vector2(x + 0.5, y + 0.5)
+			if p.y < 4.6 and (p - Vector2(8.0, 4.6)).length() <= 3.2: fill[Vector2i(x, y)] = LEAD   # helmet
+			elif (p - Vector2(8.0, 5.4)).length() <= 2.2: fill[Vector2i(x, y)] = WOOD               # face
+			elif p.y >= 7.5 and p.y < 12.0 and absf(p.x - 8.0) <= 3.6 - (p.y - 7.5) * 0.25: fill[Vector2i(x, y)] = LIGHT
+			elif p.y >= 12.0 and p.y < 15.5 and absf(p.x - 8.0) >= 0.7 and absf(p.x - 8.0) <= 2.6: fill[Vector2i(x, y)] = SHADE
+
+## A tank from the side: tracks, hull, turret and gun (fix-12 #12).
+static func _tank(fill: Dictionary) -> void:
+	for x in range(1, 15):
+		for y in range(11, 14): fill[Vector2i(x, y)] = LEAD
+	for x in range(2, 14):
+		for y in range(8, 11): fill[Vector2i(x, y)] = LIGHT
+	for x in range(5, 10):
+		for y in range(5, 8): fill[Vector2i(x, y)] = LIGHT
+	for x in range(10, 15): fill[Vector2i(x, 6)] = SHADE
 
 ## A beetle from above: shell split down the middle, head, six legs and two feelers.
 static func _bug(fill: Dictionary, ink: Dictionary) -> void:

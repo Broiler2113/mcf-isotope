@@ -20,6 +20,8 @@ func run() -> void:
 
 	_relay_packs_big_messages()
 
+	await _remote_turret_turns()
+
 var MainScript: GDScript
 
 func make_main(m: MapData) -> Node:
@@ -167,3 +169,42 @@ func _relay_packs_big_messages() -> void:
 	var back: Variant = NetworkSession._unpack(packed)
 	ck(back is Dictionary and back.s.cells.size() == cells.size() and back.s.cells[12345] == 12345 % 7, "packed message unpacks intact")
 	ck(NetworkSession._unpack(PackedByteArray([1, 2, 3, 4, 5])) == null, "garbage payload is ignored")
+	# fix-12: whatever its size, a message crosses the relay in frames of at most 1 MB + 1.
+	var noise := PackedByteArray()
+	noise.resize(3 * NetworkSession.PIECE + 777)
+	for i in noise.size(): noise[i] = (i * 2654435761) >> 13 & 0xFF
+	var frames := NetworkSession._split(noise)
+	var session := NetworkSession.new()
+	var joined := PackedByteArray()
+	for f: PackedByteArray in frames:
+		ck(f.size() <= NetworkSession.PIECE + 1, "a relay frame stays within one piece")
+		var got := session._join_piece(5, f)
+		if not got.is_empty(): joined = got
+	ck(frames.size() == 4 and joined == noise, "pieces reassemble into the exact message")
+	ck(session._join_piece(5, NetworkSession._split(PackedByteArray([9, 8]))[0]) == PackedByteArray([9, 8]), "a small message is one whole frame")
+	session.free()
+	var save := {"state": {"a": 1}, "history": {"source": {"steps": [1, 2, 3]}}}
+	var load_msg := NetHandoff.encode_load(save)
+	ck(not load_msg.s.has("history") and load_msg.s.state.a == 1 and save.has("history"), "the load message leaves the host's history behind, untouched")
+
+## fix-12 #11: another player's aiming turret turns on everyone's board; nobody else's message does.
+func _remote_turret_turns() -> void:
+	var m := MapData.blank_arena(18, 12)
+	m.set_spawn(Vector2i(4, 4), "tank", 0)
+	var main := make_main(m)
+	await process_frame
+	main.state.roster.slot(0).peer_id = 7
+	var tank: Vehicle = main.state.all_vehicles()[0]
+	var rest := TankModel.turret_angle(tank.tower_locked_dir)
+	main._receive_turret({"k": "turret", "v": tank.id, "a": 1.2, "_from": 8})
+	ck(not main._remote_turret.has(tank.id), "a turret answers only its own side")
+	main._receive_turret({"k": "turret", "v": tank.id, "a": 1.2, "_from": 7})
+	for i in 30: main._animate_turrets(0.05)
+	ck(absf(float(main._turret_shown.get(tank.id, rest)) - 1.2) < 0.01, "the owner's aim turns the turret on this board")
+	main._receive_turret({"k": "turret", "v": tank.id, "_from": 7})
+	for i in 30: main._animate_turrets(0.05)
+	ck(absf(float(main._turret_shown.get(tank.id, 99.0)) - rest) < 0.01, "it turns back when they stop aiming")
+	main._receive_turret({"k": "turret", "v": tank.id, "a": INF, "_from": 7})
+	ck(not main._remote_turret.has(tank.id), "a non-finite angle is ignored")
+	main.queue_free()
+	await process_frame

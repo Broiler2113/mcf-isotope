@@ -74,6 +74,7 @@ var _fog_boundary: FirstPersonFog
 var _environment_root: Node3D
 var _environment_time := ""
 var _outer_ground: MeshInstance3D
+var _bounds_fog: MeshInstance3D
 var _vis_prev: Array[Vector2i] = []
 var _vis_timer := 0.0
 var _solid_img: Image
@@ -711,7 +712,9 @@ func _build_materials() -> void:
 		var key := "door|%s|%s|%s" % [style, accent.to_html(), at if not swings else Vector2i(-1, -1)]
 		if not _art_mats.has(key):
 			var p := {"tex": FirstPersonArt.door_texture(style[0], style[1], accent)}
-			if not swings: p["door_bounds"] = Vector4(at.x + 0.001, at.y + 0.001, at.x + 0.999, at.y + 0.999)
+			if not swings:
+				p["door_bounds"] = Vector4(at.x + 0.001, at.y + 0.001, at.x + 0.999, at.y + 0.999)
+				p["door_top"] = FirstPersonBoard.LINTEL   # a rising leaf goes up into its lintel
 			_art_mats[key] = _mat(_board_sh, p)
 		return _art_mats[key]
 
@@ -848,6 +851,9 @@ func _build_environment() -> void:
 			if _outer_ground == null:
 				_outer_ground = _far_ground()
 				_world.add_child(_outer_ground)
+				_bounds_fog = FirstPersonFog.bounds_bank(grid.width, grid.height)
+				_world.add_child(_bounds_fog)
+			FirstPersonFog.set_bank_tint(_bounds_fog, e.fog_light_color)
 			if _sun_on:
 				var sun := DirectionalLight3D.new()
 				sun.light_color = Color.WHITE
@@ -1150,7 +1156,10 @@ func _doors(delta: float) -> void:
 				# Into the wall beside the doorway: halves apart, a single door aside.
 				var off := float(leaf.get_meta("side")) * ease * (0.51 if leaves == 2 else 1.01)
 				var home: Vector3 = leaf.get_meta("home")
-				(leaf as Node3D).position = home + (Vector3(off, 0, 0) if along_x else Vector3(0, 0, off))
+				if door.has_meta("rise"):
+					(leaf as Node3D).position = home + Vector3(0, ease * FirstPersonBoard.LINTEL, 0)
+				else:
+					(leaf as Node3D).position = home + (Vector3(off, 0, 0) if along_x else Vector3(0, 0, off))
 
 # --- Soldiers, bodies, vehicles, drones -------------------------------------------------------
 
@@ -1494,7 +1503,7 @@ func _sync_units() -> void:
 		var e: Array = bodies[c]
 		for k in maxi(1, int(e[1])):
 			corpses.append(Transform3D(Basis(Vector3.UP, float((c.x * 7 + c.y * 13 + k * 5) % 9) * 0.35),
-					Vector3(c.x + 0.5, 0.02 + k * 0.03, c.y + 0.5)))
+					Vector3(c.x + 0.5, FirstPersonBoard.ground_y(grid, Vector2(c) + Vector2(0.5, 0.5)) + 0.02 + k * 0.03, c.y + 0.5)))
 	var mm := _corpse_mm.multimesh
 	if mm.instance_count != corpses.size():
 		mm.instance_count = corpses.size()
@@ -1582,6 +1591,10 @@ func _sync_vehicles() -> void:
 			var aim := Vector2(veh.gun_world_dir())
 			if aim == Vector2.ZERO: aim = face
 			turret.rotation.y = -(aim.angle() - face.angle())
+			# Turning as the board turns it: your aim, or another player's (fix-12 #11).
+			var turning: Variant = main.get("_turret_live")
+			var turned: Variant = (turning as Dictionary).get(veh.id, main.get("_turret_shown").get(veh.id)) if turning is Dictionary and not veh.wrecked else null
+			if turned != null: turret.rotation.y = -float(turned)
 	for id: int in _vehicles.keys():
 		if not live.has(id):
 			(_vehicles[id] as Node3D).queue_free()

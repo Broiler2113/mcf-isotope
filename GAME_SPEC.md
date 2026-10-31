@@ -4770,7 +4770,7 @@ is on by default (owner, 2026-10-28); settings saved before that are switched on
   quality and consistency as it was before").
 - **Windows in first person** (#17): a pane from 0.9 m to 1.95 m in the host wall — sill and
   lintel in its material, plinth carried through.
-- **Fire** (#18): a new top-down tile (`tools/art/build_fire.py`), turned and flipped per cell;
+- **Fire** (#18): a new top-down tile (since reverted, issues-15 #4), turned and flipped per cell;
   first person shows an upright flame billboard that blooms, lit by the light map.
 - **Skies** (#19, #20, `FirstPersonSky`): space has the Sun and a lit, turning Earth with
   clouds, ice, air and city lights, and a lens flare (glare, streak, ghosts) when the Sun is in
@@ -4851,6 +4851,53 @@ Looks, settings and windows only; no rule, protocol (33) or replay schema (3) ch
   none below 30 % zoom.
 - **Leaving first person** (#14) always frees the mouse, and the board pans by the pointer's own
   positions instead of relative motion, which could arrive doubled after the mouse was captured.
+
+## Issues-15 (0.14.8; the owner's 2026-10-31 "issues fix 12" PDF)
+
+Looks, lobby defaults and cosmetic network messages; no rule, dice order or replay schema
+changed. Protocol stays 35 (0.14.7.3): the new `turret` message is cosmetic, and older builds
+ignore message kinds they do not know.
+
+- **Trenches in first person**: the pit wears the board's art for its map
+  (`TerrainTiles.env_name("trench", env)`): earth on town, field and bunker maps; the
+  `trench_station` / `trench_asteroid` tiles (their inside, tiled a metre a tile, the rim along the
+  walls' top) on stations and asteroids (#2). Only earth trenches heap a spoil bank. Grass keeps
+  half a cell off any trench side (`FirstPersonModels.GRASS_KEEP_OFF`, #1). Corpses, chunks,
+  items and winter decorations in a trench lie on its floor, and painted marks (blood, soot,
+  casings) lie there as flat marks in the board's colours (`FirstPersonBoard.ground_y`, #10).
+- **Airlocks** (#3): a sliding leaf goes aside only into a solid wall; beside glass, space, open
+  floor or another door the door rises into its lintel (`door_top` clip). A doorway with no wall
+  beside it takes the map's own wall for its lintel (was brick everywhere).
+- **Glass**: panes in a row join into one sheet, with no inset (and so no clear seam) between
+  them.
+- **Fog** : past the edge of town and field maps the ground fades into mist over 12 m, where a
+  curtain of mist thins upward into the sky (`FirstPersonFog.bounds_bank`, #7). The fog-of-war
+  mist is smooth, broad and low in contrast.
+- **Sky**: the Earth is NASA's Blue Marble (`textures/first_person/earth.jpg`, land_shallow_topo
+  2048, public domain, visibleearth.nasa.gov) with the procedural clouds, rim and city lights on
+  real land (#8). The Sun is to scale, 0.53 degrees across (`FirstPersonSky.SUN_RADIUS`), with a
+  tighter glow and a smaller flare core (#13).
+- **LDF** (#9): no white stencil ticks on its panels (`w_ldf`, wall and chunk material).
+- **Fire on the board** (#4): the filled orange-yellow cell again (`gen_textures.gd _fire`,
+  seamless, not turned per cell); `tools/art/build_fire.py` is gone.
+- **Lobby** (#5, #6): a new lobby starts on Annihilation with fog off and 5000 points a slot
+  (`GameConfig.DEFAULT_BUDGET`); Back from the purchase screen returns to the lobby as it was
+  (roster, budgets, map and generator; `GameConfig.back_to_lobby`).
+- **Turrets in multiplayer** (#11): the aiming player sends `{"k": "turret", "v": id, "a": angle}`
+  when the goal moves by more than a degree, at most every 80 ms, and `{"k": "turret", "v": id}`
+  when they stop. Others take it only for a tank of the sender's own side, and turn it on the
+  board and in first person at the usual 3.2 rad/s.
+- **Highlight buttons** (#12): two icon buttons by Manual and Bug, each opening a menu: "All your
+  soldiers" (vehicles), or any mix of the types you field now with their counts (owner: e.g. only
+  anti-tank and drone operators, or only tanks). While anything is ticked the board dims under a
+  veil below the units, and an additive layer over them draws neon white: a soft halo, a bloom
+  and a saturated white core ring round each of your soldiers, a frame round each vehicle (its
+  bloom hugs the frame so the hull stays clear). Sizes are board units, so they shrink with the
+  soldiers when you zoom out (owner). The glow has its own canvas layer (under the windows), so
+  neither the light map nor the time-of-day tint dims it.
+- **Bodies in vacuum** drift like floating soldiers, each with its own phase (#14).
+- **Blast deaths** (#15): pool 1.7x, seven extra pools flung twice as far, three times the
+  spatter, twice the gibs (`FxDecals.BLAST_GIBS`) thrown up to 3 cells.
 
 ## Issues PDF (6) follow-up
 

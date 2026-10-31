@@ -12,7 +12,10 @@ extends RefCounted
 ## Space: the Sun high and to one side, the Earth low on the other, seen two-thirds lit.
 const SPACE_SUN := Vector3(0.6, 0.45, -0.66)
 const SPACE_EARTH := Vector3(-0.85, 0.24, 0.3)
+const EARTH_MAP := "res://textures/first_person/earth.jpg"
 const EARTH_RADIUS := 0.3   # radians across the sky: a planet seen from a low orbit
+## The Sun to scale (fix-12 #13): 0.53 degrees across, as seen from the Earth.
+const SUN_RADIUS := 0.00465
 
 const SHADER := """
 shader_type sky;
@@ -25,6 +28,9 @@ uniform float sun_size = 0.012;
 uniform float sun_k = 1.0;
 uniform vec3 earth_dir = vec3(1.0, 0.0, 0.0);
 uniform float earth_r = 0.3;
+// The real globe (fix-12 #8): NASA Blue Marble, equirectangular, public domain.
+uniform sampler2D earth_map : source_color, filter_linear_mipmap, repeat_enable;
+uniform bool has_map = false;
 uniform vec3 zenith : source_color = vec3(0.28, 0.48, 0.82);
 uniform vec3 horizon : source_color = vec3(0.68, 0.78, 0.9);
 uniform vec3 ground : source_color = vec3(0.05);
@@ -70,7 +76,7 @@ vec3 star_field(vec3 d) {
 vec3 sun_disc(vec3 d, vec3 base) {
 	float c = dot(d, normalize(sun_dir));
 	float disc = smoothstep(cos(sun_size), cos(sun_size * 0.85), c);
-	float glow = pow(max(c, 0.0), 900.0) * 1.2 + pow(max(c, 0.0), 60.0) * 0.18;
+	float glow = pow(max(c, 0.0), 40000.0) * 1.5 + pow(max(c, 0.0), 1500.0) * 0.35 + pow(max(c, 0.0), 60.0) * 0.08;
 	return base + sun_col * (disc * 6.0 + glow) * sun_k;
 }
 
@@ -101,6 +107,14 @@ vec3 earth(vec3 d, vec3 base) {
 		col = mix(vec3(0.1, 0.22, 0.08), vec3(0.42, 0.36, 0.22), smoothstep(0.45, 0.65, dry));
 	}
 	col = mix(col, vec3(0.92, 0.95, 1.0), ice);
+	if (has_map) {
+		vec2 uv = vec2(atan(q.x, -q.z) / 6.2831853 + 0.5, acos(clamp(q.y, -1.0, 1.0)) / 3.1415927);
+		col = texture(earth_map, uv).rgb;
+		// Land is wherever the map is not deep-sea blue; ice is near-white.
+		land = 1.0 - smoothstep(0.02, 0.08, col.b - max(col.r, col.g));
+		land = land * 0.6;   // as the 0.53 threshold below reads it: land ~0.6, sea 0
+		ice = smoothstep(0.55, 0.75, min(col.r, min(col.g, col.b)));
+	}
 	float cl = smoothstep(0.5, 0.75, fbm(q * 4.0 + vec3(TIME * 0.002, 0.0, 0.0)));
 	col = mix(col, vec3(0.95), cl * 0.85);
 	float light = smoothstep(-0.12, 0.3, dot(n, s));
@@ -155,6 +169,7 @@ void sky() {
 """
 
 static var _shader: Shader = null
+static var _earth: Texture2D = null
 
 static func _material() -> ShaderMaterial:
 	if _shader == null:
@@ -170,9 +185,18 @@ static func space(stars: Texture2D) -> ShaderMaterial:
 	m.set_shader_parameter("stars", stars)
 	m.set_shader_parameter("sun_dir", SPACE_SUN.normalized())
 	m.set_shader_parameter("sun_col", Color(1.0, 0.97, 0.9))
-	m.set_shader_parameter("sun_size", 0.014)
+	m.set_shader_parameter("sun_size", SUN_RADIUS)
 	m.set_shader_parameter("earth_dir", SPACE_EARTH.normalized())
 	m.set_shader_parameter("earth_r", EARTH_RADIUS)
+	# Read from source like the other new art: a stale import cache lacks it (no preload).
+	if _earth == null:
+		var map := Sprites.image_at(EARTH_MAP)
+		if map != null:
+			map.generate_mipmaps()
+			_earth = ImageTexture.create_from_image(map)
+	if _earth != null:
+		m.set_shader_parameter("earth_map", _earth)
+		m.set_shader_parameter("has_map", true)
 	return m
 
 ## The surface sky for a time of day. sun_dir points at the sun (the DirectionalLight's back).
@@ -186,7 +210,7 @@ static func surface(stars: Texture2D, tod: String, overcast: bool, sun_dir: Vect
 	m.set_shader_parameter("sun_dir", sun_dir.normalized())
 	m.set_shader_parameter("sun_k", 0.0 if night or overcast else 1.0)
 	m.set_shader_parameter("sun_col", Color(1.0, 0.72, 0.45) if dusk else Color(1.0, 0.96, 0.88))
-	m.set_shader_parameter("sun_size", 0.02)
+	m.set_shader_parameter("sun_size", SUN_RADIUS)
 	var zenith := Color(0.01, 0.012, 0.03) if night else (Color(0.32, 0.42, 0.66) if dusk else Color(0.28, 0.48, 0.82))
 	var horizon := Color(0.03, 0.035, 0.06) if night else (Color(0.95, 0.66, 0.45) if dusk else Color(0.68, 0.78, 0.9))
 	var lit := Color(0.12, 0.13, 0.17) if night else (Color(1.0, 0.82, 0.68) if dusk else Color(1.0, 1.0, 1.0))
@@ -260,7 +284,7 @@ class LensFlare extends Control:
 		var centred := clampf(1.0 - (sun - mid).length() / (size.length() * 0.5), 0.0, 1.0)
 		var k := strength * centred * centred
 		_blob(_soft, sun, h * 0.42, Color(1.0, 0.95, 0.85, 0.45 * strength))
-		_blob(_soft, sun, h * 0.08, Color(1.0, 1.0, 1.0, 0.8 * strength))
+		_blob(_soft, sun, h * 0.025, Color(1.0, 1.0, 1.0, 0.8 * strength))   # fix-12 #13: Sun to scale
 		draw_texture_rect(_soft, Rect2(sun - Vector2(size.x * 0.55, h * 0.012), Vector2(size.x * 1.1, h * 0.024)), false,
 				Color(0.8, 0.88, 1.0, 0.55 * k))
 		var axis := mid - sun
