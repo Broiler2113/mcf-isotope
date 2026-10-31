@@ -99,7 +99,9 @@ func _wire_link() -> void:
 	_link.peer_added.connect(_on_peer_connected)
 	_link.peer_removed.connect(_on_peer_disconnected)
 	_link.data.connect(func(from: int, payload: PackedByteArray) -> void:
-		var msg: Variant = _unpack(payload)
+		var whole := _join_piece(from, payload)
+		if whole.is_empty(): return
+		var msg: Variant = _unpack(whole)
 		if msg is Dictionary: _deliver(msg, from))
 
 ## Relay payloads travel zstd-packed (0.14.7.2): [u32 raw size][zstd]. A long match's save
@@ -119,6 +121,35 @@ static func _unpack(payload: PackedByteArray) -> Variant:
 	if n == 0 or n > MAX_UNPACKED: return null
 	var raw := payload.slice(4).decompress(n, FileAccess.COMPRESSION_ZSTD)
 	return bytes_to_var(raw) if raw.size() == n else null
+
+## Pieces (fix-12): nothing on the relay is ever one frame over PIECE bytes, so no message size
+## can trip its 32 MB frame cap again. [u8 0][packed] is whole; [u8 1][part] has more after it,
+## [u8 2][part] ends it. One sender's frames arrive in order over TCP, so a buffer per sender is enough.
+const PIECE := 1 << 20
+var _pieces := {}
+
+func _send_link(target: int, packed: PackedByteArray) -> void:
+	for frame: PackedByteArray in _split(packed):
+		_link.send_to(target, frame)
+
+static func _split(packed: PackedByteArray) -> Array[PackedByteArray]:
+	if packed.size() <= PIECE: return [PackedByteArray([0]) + packed]
+	var out: Array[PackedByteArray] = []
+	for at in range(0, packed.size(), PIECE):
+		out.append(PackedByteArray([2 if at + PIECE >= packed.size() else 1]) + packed.slice(at, at + PIECE))
+	return out
+
+## The whole packed message once its last piece is in; empty while pieces are still coming.
+func _join_piece(from: int, frame: PackedByteArray) -> PackedByteArray:
+	if frame.is_empty(): return PackedByteArray()
+	if frame[0] == 0: return frame.slice(1)
+	var got: PackedByteArray = _pieces.get(from, PackedByteArray())
+	got.append_array(frame.slice(1))
+	if frame[0] == 1 and got.size() <= MAX_UNPACKED:
+		_pieces[from] = got
+		return PackedByteArray()
+	_pieces.erase(from)
+	return got if frame[0] == 2 else PackedByteArray()
 
 func _on_link_lost(reason: String) -> void:
 	last_error = reason
@@ -206,7 +237,7 @@ func close() -> void:
 
 # --- Транспорт сообщений ---
 func send_to(id: int, msg: Dictionary) -> void:
-	if _link != null: _link.send_to(id, _pack(msg))
+	if _link != null: _send_link(id, _pack(msg))
 	elif _peer != null: _relay.rpc_id(id, msg)
 
 func send(msg: Dictionary) -> void:
@@ -220,9 +251,9 @@ func send(msg: Dictionary) -> void:
 		var payload := _pack(msg)
 		if str(msg.get("k", "")) == "draw" and spectators.has(my_peer_id()):
 			for id in spectators:
-				if id != my_peer_id(): _link.send_to(id, payload)
+				if id != my_peer_id(): _send_link(id, payload)
 		else:
-			_link.send_to(0, payload)
+			_send_link(0, payload)
 		return
 	if _peer == null: return
 	if str(msg.get("k", "")) == "draw" and spectators.has(my_peer_id()):
@@ -328,6 +359,7 @@ func _on_peer_disconnected(id: int = 0) -> void:
 	peer_left.emit(id)
 	peer_tokens.erase(id)
 	waiting_peers.erase(id)
+	_pieces.erase(id)
 	claims.forget(id)
 	# У хоста «связь потеряна» — это когда ушёл ПОСЛЕДНИЙ гость (batch 12 #15): один
 	# отвалившийся игрок из трёх не должен выбрасывать в меню всех остальных.

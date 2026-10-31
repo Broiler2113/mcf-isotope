@@ -145,7 +145,8 @@ const K_LOBBY_MAP := "lobby_map"
 ##  33 - a civilian who sees another wake up wakes too, into the same group; tank crew are
 ##       off the board and no longer seen by civilians.
 ##  34 - relay messages are zstd-compressed (0.14.7.2).
-const PROTOCOL := 34
+##  35 - relay messages over 1 MB travel in pieces; loaded saves leave the history behind.
+const PROTOCOL := 35
 ## The bug-report server on the relay's VPS (tools/bugs/isotope_bugs.py): the Report a Bug
 ## window and the automatic desync reports both post here.
 const BUG_REPORTS := "http://103.86.177.137:8651/report"
@@ -249,8 +250,12 @@ static func apply_setup(msg: Dictionary) -> void:
 
 ## Собрать объявление загруженной партии (M12). Ростер в save уже переписан лобби:
 ## переназначение ролей — это правка ростера, а не переписывание владельцев юнитов.
+## The match history stays home: guests have no recorder and history controls are the host's,
+## yet it is most of a long save — 72 of 81 MB in the owner's dima_16 (fix-12), seek keyframes.
 static func encode_load(save: Dictionary) -> Dictionary:
-	return {"k": K_LOAD, "s": save}
+	var sent := save.duplicate()
+	sent.erase("history")
+	return {"k": K_LOAD, "s": sent}
 
 static func apply_load(msg: Dictionary) -> void:
 	var save: Variant = msg.get("s")
