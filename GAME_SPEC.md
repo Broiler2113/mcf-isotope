@@ -1852,7 +1852,14 @@ standing vehicle cannot be picked up (`corpse_pickup_cells` skips vehicle cells 
 `_resolve_pickup_corpse` refuses); once the vehicle moves on, it is an ordinary corpse.
 
 `_resolve_vehicle_move` crushes, scatters, or rams everything in the footprint's path,
-reducing those cells to bare floor. Tanks have a `facing`; shuttles do not.
+reducing those cells to bare floor, except trenches beneath a tank (below). Tanks have
+a `facing`; shuttles do not.
+
+**Tanks bridge trenches.** A tank crosses or stops over a trench at normal movement cost.
+The trench, its living occupants (either army, including shield bearers), bodies and
+items stay below the hull. The occupants neither stop nor damage the tracks, and friends
+in trenches do not trigger the run-over warning. Moving away exposes the same trench and
+occupants again. Shuttle seats keep their existing collision rules.
 
 **An airlock is a doorway, not a shelter** (item 9). `VehicleRules.cell_entry` used to
 answer an airlock cell and return there and then, which cost two rules at once: the doors
@@ -4960,6 +4967,29 @@ Replay schema unchanged.
 - **Cheats** (#24): `ai pause all` and `ai resume all` act on every AI player at once.
 - **Badges** (#25): the neutral group badge widens to fit its numeral (XIII no longer shows XI).
 - **Army counts** (#26): drones count as vehicles: a flying one alive, a shot-down one destroyed.
+
+## 0.14.9.1 (2026-10-31)
+
+Protocol 37: tanks pass over trenches without crushing their occupants or clearing the
+trench. Replay schema unchanged.
+
+- **Trenches:** `VehicleRules.cell_entry` treats a trench under a tank as normal ground,
+  before surface-occupant collision checks. Movement previews, friendly-fire confirmation,
+  the actual move, undo and saved/network state use the same rule (§16.3).
+- **Drone rotors on the board:** kamikaze and scout drones use eight-frame strips baked
+  from their first-person models, with neighbouring rotors turning in opposite directions.
+  The over-unit layer redraws at 24 frames per second while visible drones hover, without
+  rebuilding the terrain or changing simulation state. Team colours and custom sprites
+  keep their existing behaviour.
+- **Earth:** remove both the blue halo outside the globe and the blue rim inside its edge.
+  The textured globe, clouds, rotation and day/night shading remain.
+- **Mines:** personnel and anti-vehicle mines use nearest-neighbour filtering on the board,
+  matching the terrain's crisp pixels. Mine visibility is unchanged.
+- **Event warnings:** artillery, gas, fire, EMP, collapse, reinforcements, raider armies and
+  Holdout waves use evenly spaced diagonal lines, dark-backed coloured borders and labels.
+  Hatching joins across the actual landing cells and keeps its spacing and width on screen
+  when zooming; it is clipped to the viewport. Hidden occupants remain excluded from the
+  landing preview's information, and warnings stay visible through fog of war.
 
 ## Issues PDF (6) follow-up
 
