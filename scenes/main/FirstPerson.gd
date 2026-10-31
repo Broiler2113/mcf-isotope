@@ -1524,7 +1524,7 @@ func _place_drone(u: UnitInstance) -> void:
 				# Propellers spinning (owner, fix-13 #23); arms as tools/art/build_drone_meshes.py lays them.
 				_art_mats[key] = _mat(_board_sh, {"tex": source.albedo_texture, "team_color": col,
 					"team_stripe": source.resource_name == "TeamStripe", "stripe_center_x": 0.0, "stripe_half_width": 10.0,
-					"spin": 30.0, "spin_arm": Vector2(0.19, deg_to_rad(38.0)) if scout else Vector2(0.2, PI / 4.0)})
+					"spin": DroneModel.ROTOR_SPEED, "spin_arm": Vector2(0.19, deg_to_rad(38.0)) if scout else Vector2(0.2, PI / 4.0)})
 			return _art_mats[key]))
 		_dyn.add_child(n)
 		_units[u.id] = n

@@ -4991,6 +4991,14 @@ trench. Replay schema unchanged.
   when zooming; it is clipped to the viewport. Hidden occupants remain excluded from the
   landing preview's information, and warnings stay visible through fog of war.
 
+## 0.14.9.2 (2026-10-31)
+
+- Event hatching and borders use thin, unscaled lines without the thick dark underlay.
+  Diagonal spacing stays even at every zoom.
+- Both drone views share a rotor speed of 30 radians per second. The board selects frames
+  by that angular speed, accounting for the three-blade repetition in its eight-frame strip.
+- Corpse walls never inherit service-colour bands, in either the board or first-person view.
+
 ## Issues PDF (6) follow-up
 
 - End Turn uses configurable **Shift+Enter**. Its button does not retain keyboard focus;

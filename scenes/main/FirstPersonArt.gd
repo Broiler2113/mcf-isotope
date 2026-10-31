@@ -177,7 +177,8 @@ static func wall_kind(grid: Grid, at: Vector2i, env: String) -> String:
 static func accent_of(grid: Grid, at: Vector2i) -> Color:
 	# Built in battle (feature_owner set): no band, as on the board (fix-13 #21).
 	var c := grid.cell(at)
-	if c.feature_id in [MCF.FEATURE_LDF, MCF.FEATURE_DOT, MCF.FEATURE_DOT_OPEN] or c.feature_owner >= 0:
+	if c.feature_id in [MCF.FEATURE_LDF, MCF.FEATURE_DOT, MCF.FEATURE_DOT_OPEN, MCF.FEATURE_CORPSE_WALL] \
+			or c.feature_owner >= 0:
 		return Color(0, 0, 0, 0)
 	var i := at.y * grid.width + at.x
 	var a := int(grid.wall_accent[i]) if i < grid.wall_accent.size() else 0
@@ -187,7 +188,7 @@ static func accent_of(grid: Grid, at: Vector2i) -> Color:
 ## department's colour is a painted band at hand height: the wall shows through the paint,
 ## which is chipped and worn at its ragged edges like the rest of the wall.
 static func wall_texture(kind: String, accent: Color) -> ImageTexture:
-	if kind in ["ldf", "dot", "dot_open"]:
+	if kind in ["ldf", "dot", "dot_open", "corpse"]:
 		accent = Color(0, 0, 0, 0)
 	var source: Texture2D = Sprites.texture_of("ldf") if kind == "ldf" and Sprites.has_user_override("ldf") else null
 	var key := "wall|%s|%s|%d" % [kind, accent.to_html(), source.get_instance_id() if source != null else 0]
