@@ -498,6 +498,7 @@ static func draw_tile(ci: CanvasItem, name: String, rect: Rect2, variant: int = 
 		var atlas: Texture2D = _overrides.get(key + ATLAS_SUFFIX)
 		if atlas == null:
 			return false
+		if sharp: atlas = nearest(atlas)
 		var t := atlas.get_width() / 4.0
 		ci.draw_texture_rect_region(atlas, rect, Rect2(0, ATLAS_TURN_ROW * t, t, t))
 		return true

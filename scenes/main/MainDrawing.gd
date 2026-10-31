@@ -817,7 +817,7 @@ func _draw() -> void:
 		for mk: String in [MCF.FEATURE_MINE, MCF.FEATURE_AV_MINE]:
 			for mc: Vector2i in _display_feature_cells(mk):
 				if _cell_on_screen(mc.x, mc.y) and resolver.mine_visible_to(viewer, mc):
-					if not Sprites.draw_texture_override_rect(self, mk, Rect2(_cell_origin(mc), fcell_size)):
+					if not Sprites.draw_tile(self, mk, Rect2(_cell_origin(mc), fcell_size), 0, true):
 						draw_string(font, _cell_origin(mc) + Vector2(6, CELL - 15), FEATURE_TAGS[mk],
 							HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.9, 0.3, 0.25))
 		# Побитый ДОТ трескается в самой плитке (TerrainTiles._pillbox_crack, 0.9.2).
@@ -1027,6 +1027,7 @@ var _float_visible: Dictionary = {}
 var _floaters: Dictionary = {}        # unit id -> vehicle it rides (-1: floats on its own)
 var _wobbled: Dictionary = {}         # soldier sprites moved last frame
 var _drones_moving := false
+var _drone_frame := -1
 ## Turrets that turn, drawn over the soldiers: vehicle id -> angle from the hull's front.
 var _turret_live: Dictionary = {}
 var _turret_shown: Dictionary = {}
@@ -1150,7 +1151,10 @@ func _animate_board(delta: float) -> void:
 		_twitch_id = -1
 	if not _float_vehicles.is_empty() and _veh_float != null:
 		_veh_float.queue_redraw()
-	if _drones_moving or drone_twitch or _bodies_drifting or not _turret_live.is_empty():
+	var drone_frame := floori(now * DroneModel.ANIMATION_FPS)
+	var rotors_changed := not _top_drones.is_empty() and drone_frame != _drone_frame
+	_drone_frame = drone_frame
+	if _drones_moving or drone_twitch or rotors_changed or _bodies_drifting or not _turret_live.is_empty():
 		_unit_top.queue_redraw()
 	if _hl_glow != null and _hl_glow.visible: _hl_glow.queue_redraw()
 
@@ -1783,7 +1787,8 @@ func _draw_drone(unit: UnitInstance, at: Vector2i, ci: CanvasItem = null) -> voi
 	else:
 		# The kamikaze or scout model seen from above, its top plates in the side's colour.
 		var msz := Vector2(CELL, CELL) * 0.8
-		DroneModel.draw(ci, Rect2(dc - msz * 0.5, msz), _side_color(unit.owner), MCF.is_scout(unit))
+		DroneModel.draw(ci, Rect2(dc - msz * 0.5, msz), _side_color(unit.owner),
+				MCF.is_scout(unit), _anim_time(), unit.id)
 	if unit.id == selected_id:
 		ci.draw_arc(dc, CELL * 0.3, 0, TAU, 24, Color(1, 0.9, 0.2), 3.0)
 	for i in _draw_ap(unit):
@@ -1941,6 +1946,39 @@ func _draw_projectile_sprite(kind: String, at: Vector2, angle: float, scale_: fl
 	var size_ := Vector2.ONE * CELL * scale_
 	Sprites.draw_texture_override_rect(self, "fx_" + kind, Rect2(at - size_ * 0.5, size_), rad_to_deg(angle), tint)
 
+## World-aligned diagonals join across landing cells. Keep their spacing and stroke in
+## screen pixels so warnings stay readable at far zoom; clip before generating lines.
+func _draw_event_hatching(rect: Rect2, col: Color) -> void:
+	var scale_ := maxf(zoom, 0.01)
+	var viewport := Rect2(-pan / scale_, get_viewport_rect().size / scale_)
+	var clipped := rect.intersection(viewport)
+	if not clipped.has_area(): return
+	var spacing := 16.0 / scale_
+	var first := ceili((clipped.position.x + clipped.position.y) / spacing)
+	var last := floori((clipped.end.x + clipped.end.y) / spacing)
+	var lines := PackedVector2Array()
+	for i in range(first, last + 1):
+		var diagonal := i * spacing
+		var left := maxf(clipped.position.x, diagonal - clipped.end.y)
+		var right := minf(clipped.end.x, diagonal - clipped.position.y)
+		if right <= left: continue
+		lines.append(Vector2(left, diagonal - left))
+		lines.append(Vector2(right, diagonal - right))
+	if lines.is_empty(): return
+	draw_multiline(lines, Color(0.02, 0.02, 0.025, 0.75), 3.5 / scale_)
+	draw_multiline(lines, Color(col.r, col.g, col.b, 0.9), 1.5 / scale_)
+
+func _draw_event_border(rect: Rect2, col: Color) -> void:
+	var scale_ := maxf(zoom, 0.01)
+	draw_rect(rect, Color(0.02, 0.02, 0.025, 0.85), false, 5.0 / scale_)
+	draw_rect(rect, Color(col.r, col.g, col.b, 1.0), false, 2.5 / scale_)
+
+func _draw_event_label(at: Vector2, label: String, col: Color, font: Font) -> void:
+	var width := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
+	draw_rect(Rect2(at + Vector2(2, 2), Vector2(width + 8, 18)), Color(0.02, 0.02, 0.025, 0.9))
+	draw_string(font, at + Vector2(6, 16), label,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(col.r, col.g, col.b, 1.0))
+
 func _draw_random_events(font: Font) -> void:
 	if resolver == null or resolver.random_events == null:
 		return
@@ -1953,12 +1991,9 @@ func _draw_random_events(font: Font) -> void:
 				Vector2(int(cl["w"]), int(cl["h"])) * CELL)
 		var col: Color = EVENT_COLORS["gas"]
 		# The outlined zone and its timer remain visible even under fog of war.
-		draw_rect(rect, Color(col.r, col.g, col.b, 1.0), false, 3.0)
-		var tag := "GAS %d" % int(cl["left"])
-		var tw := font.get_string_size(tag, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
-		draw_rect(Rect2(rect.position + Vector2(2, 2), Vector2(tw + 8, 18)), Color(0, 0, 0, 0.55))
-		draw_string(font, rect.position + Vector2(6, 16), tag,
-				HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0.95, 0.95, 0.95, 1.0))
+		_draw_event_hatching(rect, col)
+		_draw_event_border(rect, col)
+		_draw_event_label(rect.position, "GAS %d" % int(cl["left"]), col, font)
 	for e: Dictionary in ev.pending:
 		var id := str(e["id"])
 		var p: Dictionary = e["params"]
@@ -1971,14 +2006,14 @@ func _draw_random_events(font: Font) -> void:
 		var rect := Rect2(ORIGIN + Vector2(int(p.get("x", 0)), int(p.get("y", 0))) * CELL,
 				Vector2(int(p.get("w", 1)), int(p.get("h", 1))) * CELL)
 		draw_rect(rect, Color(col.r, col.g, col.b, 0.14))
-		draw_rect(rect, Color(col.r, col.g, col.b, 0.85), false, 2.0)
+		_draw_event_hatching(rect, col)
+		_draw_event_border(rect, col)
 		var label := "%s · END OF ROUND" % RandomEvents.event_name(id).to_upper()
-		draw_string(font, rect.position + Vector2(4, 16), label,
-				HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(col.r, col.g, col.b, 0.95))
+		_draw_event_label(rect.position, label, col, font)
 
 ## Where a raider army, a wave or reinforcements will really land (fix-13 #19): the cells
-## themselves, lightly filled and outlined as one area, not the strip of edge they were rolled
-## on. Under fog a cell out of sight counts as free, so the outline gives nobody away.
+## themselves, hatched and outlined as one area. Under fog a cell out of sight counts as
+## free, so the outline gives nobody away.
 var _landing_memo := {}
 func _draw_landing(p: Dictionary, wave: bool, col: Color, label: String, font: Font) -> void:
 	var view := _view_resolver()
@@ -1995,16 +2030,23 @@ func _draw_landing(p: Dictionary, wave: bool, col: Color, label: String, font: F
 	if cells.is_empty(): return
 	var top := Vector2i(1 << 30, 1 << 30)
 	for c: Vector2i in cells:
-		draw_rect(Rect2(_cell_origin(c), Vector2(CELL, CELL)), Color(col.r, col.g, col.b, 0.14))
 		if c.y < top.y or (c.y == top.y and c.x < top.x): top = c
-	var line := Color(col.r, col.g, col.b, 0.85)
+		if not _cell_on_screen(c.x, c.y): continue
+		var rect := Rect2(_cell_origin(c), Vector2(CELL, CELL))
+		draw_rect(rect, Color(col.r, col.g, col.b, 0.14))
+		_draw_event_hatching(rect, col)
+	var edges := PackedVector2Array()
 	for c: Vector2i in cells:
+		if not _cell_on_screen(c.x, c.y): continue
 		var o := _cell_origin(c)
-		if not cells.has(c + Vector2i.UP): draw_line(o, o + Vector2(CELL, 0), line, 2.0)
-		if not cells.has(c + Vector2i.DOWN): draw_line(o + Vector2(0, CELL), o + Vector2(CELL, CELL), line, 2.0)
-		if not cells.has(c + Vector2i.LEFT): draw_line(o, o + Vector2(0, CELL), line, 2.0)
-		if not cells.has(c + Vector2i.RIGHT): draw_line(o + Vector2(CELL, 0), o + Vector2(CELL, CELL), line, 2.0)
-	draw_string(font, _cell_origin(top) + Vector2(4, 16), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(col.r, col.g, col.b, 0.95))
+		if not cells.has(c + Vector2i.UP): edges.append_array([o, o + Vector2(CELL, 0)])
+		if not cells.has(c + Vector2i.DOWN): edges.append_array([o + Vector2(0, CELL), o + Vector2(CELL, CELL)])
+		if not cells.has(c + Vector2i.LEFT): edges.append_array([o, o + Vector2(0, CELL)])
+		if not cells.has(c + Vector2i.RIGHT): edges.append_array([o + Vector2(CELL, 0), o + Vector2(CELL, CELL)])
+	if not edges.is_empty():
+		draw_multiline(edges, Color(0.02, 0.02, 0.025, 0.85), 5.0 / maxf(zoom, 0.01))
+		draw_multiline(edges, Color(col.r, col.g, col.b, 1.0), 2.5 / maxf(zoom, 0.01))
+	_draw_event_label(_cell_origin(top), label, col, font)
 
 ## Цвет команды по ключу режима — цвет первой её стороны.
 func _team_key_color(key: String) -> Color:

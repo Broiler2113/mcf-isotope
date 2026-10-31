@@ -78,7 +78,7 @@ Cover counts only on [b]the cell right next to the target, on the side facing th
 A corpse lying on the ground hides nobody. Five corpses on one cell become a [b]corpse wall[/b]. It blocks movement and sight and cannot burn. A soldier can carry corpses as a shield: [b]+1 to its parry[/b] for each.
 
 [h]Trenches[/h]
-A soldier in a trench [b]cannot be shot from more than 1 cell away[/b]. An enemy standing at the lip can fire down into it. The Marksman's beam passes over trenches unless the Marksman stands in the same straight run of trench.
+A soldier in a trench [b]cannot be shot from more than 1 cell away[/b]. An enemy standing at the lip can fire down into it. The Marksman's beam passes over trenches unless the Marksman stands in the same straight run of trench. Tanks pass over trenches without destroying them or harming anyone inside.
 
 [h]Tanks[/h]
 A living tank blocks the [b]enemy's[/b] sight; its own side sees straight through it.""" % [MCF.COVER_MOD[1.0]]],

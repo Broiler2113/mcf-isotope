@@ -49,6 +49,13 @@ static func cell_entry(state: GameState, cell: Vector2i, self_id: int) -> Dictio
 		return blocked.call("blocked by another vehicle")
 
 	var c := state.grid.cell(cell)
+	# Tank tracks bridge the trench. Its occupants, bodies and ground stay below the
+	# hull, including shield bearers and invulnerable troops. Shuttle seats still share
+	# the ground's occupancy; they follow their existing collision rules.
+	if c.feature_id == MCF.FEATURE_TRENCH:
+		var vehicle := state.get_vehicle(self_id)
+		if vehicle != null and vehicle.type_id == "tank":
+			return ok.call(COST_NORMAL)
 	if c.occupant != null and c.occupant.is_on_field() and c.occupant.cheat_invulnerable and c.occupant.aboard_vehicle_id != self_id:
 		return blocked.call("an invulnerable unit blocks the vehicle")
 

@@ -1,0 +1,13 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://f03p6usbbsep"
+path="res://.godot/imported/drone_spin.png-4c5e3d767413fa9eeef5c3ca99f3cb70.image"
+
+[deps]
+
+source_file="res://assets/models/drone/sprites/drone_spin.png"
+dest_files=["res://.godot/imported/drone_spin.png-4c5e3d767413fa9eeef5c3ca99f3cb70.image"]
+
+[params]

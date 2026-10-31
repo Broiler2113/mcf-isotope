@@ -32,6 +32,7 @@ func run() -> void:
 
 	_tank_runs_over_enemy()
 	_friend_in_tank_path()
+	_tanks_bridge_trenches()
 
 	_tanks_stay_out_of_space()
 
@@ -408,6 +409,57 @@ func _friend_in_tank_path() -> void:
 	var f := _field__playtest20(func(m: MapData) -> void: m.set_spawn(Vector2i(6, 5), "heavy_infantry", 0))
 	var fr: Array = f["r"].vehicle_move_crushed_friends(f["t"], Vector2i(1, 0), 3)
 	ck(fr.size() == 1 and fr[0].stats.id == "heavy_infantry", "friendly heavy in the path is listed (%d)" % fr.size())
+
+## Driving onto, over and off trenches preserves troops and bodies below the hull.
+## A trench shield bearer neither stops nor damages the tracks; safe friends need no warning.
+func _tanks_bridge_trenches() -> void:
+	for kind: String in ["light_infantry", "shield_bearer"]:
+		for owner: int in [0, 1]:
+			var f := _field__playtest20(func(m: MapData) -> void:
+				m.set_spawn(Vector2i(5, 5), kind, owner)
+				m.set_spawn(Vector2i(6, 4), "light_infantry", 1)
+				m.set_spawn(Vector2i(7, 6), "heavy_infantry", 0)
+				for at: Vector2i in [Vector2i(5, 4), Vector2i(5, 5), Vector2i(6, 4), Vector2i(7, 6)]:
+					m.set_cell(at, MCF.FLOOR_NORMAL, 0, false, MCF.FEATURE_TRENCH))
+			var st: GameState = f.s
+			var r: GameActionResolver = f.r
+			var tank: Vehicle = f.t
+			var soldier := st.grid.cell(Vector2i(5, 5)).occupant
+			var body := st.grid.cell(Vector2i(6, 4)).occupant
+			var friend := st.grid.cell(Vector2i(7, 6)).occupant
+			r._kill(body, null, body.coord)
+			st.grid.cell(body.coord).corpse_count = 2
+			var before := st.digest_hash()
+			var plan := VehicleRules.plan_line_move(st, tank, Vector2i.RIGHT, 3, 20)
+			ck(plan.ok and plan.steps == 3 and plan.cost == 3 and plan.self_damage == 0,
+					"trench %s costs normal movement without stopping the tank" % kind)
+			ck(r.vehicle_move_crushed_friends(tank, Vector2i.RIGHT, 3).is_empty(),
+					"friends below the tracks need no run-over warning")
+			var moved := r.resolve(VehicleMoveIntent.new(tank.id, Vector2i.RIGHT, 3))
+			ck(moved.ok and tank.origin == Vector2i(5, 4) and moved.deaths.is_empty(),
+					"tank stops over an occupied trench without killing anyone")
+			ck(soldier.is_alive() and friend.is_alive() and st.grid.cell(soldier.coord).occupant == soldier,
+					"both armies' trench occupants remain on the grid below the tank")
+			for at: Vector2i in [Vector2i(5, 4), soldier.coord, body.coord, friend.coord]:
+				ck(st.grid.cell(at).feature_id == MCF.FEATURE_TRENCH, "tracks leave the trench intact at %s" % at)
+			ck(st.grid.cell(body.coord).occupant == body and st.grid.cell(body.coord).corpse_count == 2,
+					"bodies below the tracks stay in the trench")
+			ck(not moved.fx.any(func(e: Dictionary) -> bool: return e.fx == "debris"),
+					"crossing trenches emits no terrain destruction")
+			var copy := GameState.new(st.grid.width, st.grid.height)
+			StateCodec.restore_into(copy, StateCodec.encode(st))
+			ck(copy.grid.cell(soldier.coord).occupant.is_alive()
+					and copy.grid.cell(soldier.coord).vehicle_id == tank.id,
+					"save and network state keep both tank and sheltered occupant")
+			ck(r.can_undo() and r.resolve(UndoIntent.new(0)).ok and st.digest_hash() == before,
+					"undo restores the entire trench crossing")
+			soldier.cheat_invulnerable = true
+			ck(r.resolve(VehicleMoveIntent.new(tank.id, Vector2i.RIGHT, 3)).ok,
+					"an invulnerable soldier below the tracks does not block them")
+			ck(r.resolve(VehicleMoveIntent.new(tank.id, Vector2i.RIGHT, 4)).ok
+					and soldier.is_alive() and friend.is_alive()
+					and st.grid.cell(soldier.coord).vehicle_id == -1,
+					"tank drives off again, leaving living occupants in their trenches")
 
 func field(w: int, h: int, spawns: Array, feats: Dictionary = {}, space: Array = []) -> Dictionary:
 	var m := MapData.new(w, h)

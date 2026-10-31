@@ -3,7 +3,7 @@ extends RefCounted
 
 ## Skies for first person (issues-12 #19, #20). One sky shader, two kinds:
 ## - space (station, asteroid): the star field, the Sun — a white-hot disc with a soft glow —
-##   and the Earth far off, a lit globe with oceans, land, ice, clouds and a blue rim of air;
+##   and the Earth far off, a lit globe with oceans, land, ice and clouds;
 ## - surface (town, field): the time of day's gradient, the Sun, and clouds drifting slowly
 ##   overhead; overcast turns them into one grey deck and hides the Sun.
 ## Directions are fixed per map, so every player sees the same sky.
@@ -83,13 +83,7 @@ vec3 earth(vec3 d, vec3 base) {
 	vec3 e = normalize(earth_dir);
 	float a = acos(clamp(dot(d, e), -1.0, 1.0));
 	vec3 s = normalize(sun_dir);
-	if (a > earth_r) {
-		// The thin air beyond the limb, on the lit side.
-		float halo = exp(-(a - earth_r) * 38.0);
-		vec3 limb = normalize(d - e * dot(d, e));
-		float lit = clamp(dot(limb, s) * 0.7 + 0.35, 0.0, 1.0);
-		return base + vec3(0.25, 0.5, 1.0) * halo * lit * 0.8;
-	}
+	if (a > earth_r) return base;
 	vec3 t1 = normalize(cross(e, vec3(0.0, 1.0, 0.0)));
 	vec3 t2 = cross(t1, e);
 	vec2 p = vec2(dot(d, t1), dot(d, t2)) / sin(earth_r);
@@ -119,13 +113,11 @@ vec3 earth(vec3 d, vec3 base) {
 	float cl = smoothstep(0.5, 0.75, fbm(q * 4.0 + vec3(TIME * 0.002, 0.0, 0.0)));
 	col = mix(col, vec3(0.95), cl * 0.85);
 	float light = smoothstep(-0.12, 0.3, dot(n, s));
-	float view = clamp(dot(n, -e), 0.0, 1.0);
 	vec3 day = col * (0.15 + 0.95 * light);
 	// No city lights on the night side (owner, fix-13 #6: they read as stray yellow dots).
-	vec3 rim = vec3(0.3, 0.55, 1.0) * pow(1.0 - view, 3.0) * (0.15 + light) * 1.1;
 	// The globe's edge is soft by a pixel or two, not cut out.
 	float edge = smoothstep(earth_r, earth_r - 0.004, a);
-	return mix(base, day + rim, edge);
+	return mix(base, day, edge);
 }
 
 vec3 surface(vec3 d) {
