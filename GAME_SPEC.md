@@ -1907,6 +1907,12 @@ did nothing but cost me an action". The angle is now computed
 - Range 30, 1 AP, **2 damage to vehicles**, max **2 shots per round**
   (`cannon_shots_this_round`).
 - Must fire through a valid `cannon_port` (#62) and pass `los_blocked` (#58, #70).
+- Hull ports support horizontal, vertical and exact diagonal shots within the forward
+  half-plane, including both side directions. Rearward fire is still forbidden. Hull
+  movement and turns remain cardinal. Range uses the same cell distance in every direction.
+- A jammed turret keeps its last hull-relative direction, including diagonal aim. Target
+  highlights, aim numbers, AI firing and movement planning use the same canonical port;
+  existing cardinal ports win ties with diagonal ports. Component targeting uses that port.
 - Rolls to hit; on a miss the shell **falls short** and still detonates.
 - Blast is `blast_diamond(landing, 2)` (#63).
 - **The tank's secondary laser was removed** (#63). The cannon is its only weapon.
@@ -4998,6 +5004,26 @@ trench. Replay schema unchanged.
 - Both drone views share a rotor speed of 30 radians per second. The board selects frames
   by that angular speed, accounting for the three-blade repetition in its eight-frame strip.
 - Corpse walls never inherit service-colour bands, in either the board or first-person view.
+
+## 0.14.9.3 (2026-10-31)
+
+Protocol 38 adds diagonal tank fire. Replays record `cannon_diagonals`; older recordings
+keep their original cardinal port selection, including when seeking or crossing a resumed
+match checkpoint. Loaded live games use current rules. Range, AP cost, shot limit, hit
+rolls, shortfall, blast shape, direct-hit vehicle damage and hull movement rules are retained.
+
+- **Save Image:** the ESC menu places this directly below Save Replay. A PNG dialog offers
+  32, 64 or 128 pixels per cell, subject to a 64-megapixel / 16,384-pixel-side limit; even a
+  250×250 Colossal map fits at native terrain detail (8,000×8,000). The highest available
+  resolution is selected initially. Dynamic lighting is optional and local to the export.
+- The exporter snapshots the current battle/replay, fog memory, units, scenery and debris.
+  It renders overlapping sections through the detailed board renderer into an independent
+  viewport, with frozen animation and lighting, then assembles the full map without UI.
+  It does not change the active camera, settings, network session or replay position.
+  PNG compression runs in a worker thread; cancellation and write errors preserve existing
+  destination files and remove the temporary output.
+- **Event zones:** diagonal spacing is fixed in map coordinates, so zoom no longer changes
+  the number of lines. Hatching and outlines use a slightly thicker 1.5-screen-pixel stroke.
 
 ## Issues PDF (6) follow-up
 

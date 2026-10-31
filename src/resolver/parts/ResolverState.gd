@@ -5,10 +5,18 @@ extends RefCounted
 var legacy_corpse_rules := false
 ## Playback alone retains rearward cannon fire from recordings before 0.14.2.2.
 var legacy_rear_cannon := false
+## Playback before diagonal tank fire keeps its original port selection and shot paths.
+var legacy_orthogonal_cannon := false
 
 func cannon_direction_allowed(veh: Vehicle, direction: Vector2i) -> bool:
 	return legacy_rear_cannon or veh.type_id != "tank" \
 			or direction.x * veh.facing.x + direction.y * veh.facing.y >= 0
+
+func cannon_line_allowed(veh: Vehicle, from: Vector2i, target: Vector2i) -> bool:
+	var delta := target - from
+	if delta == Vector2i.ZERO: return false
+	if delta.x == 0 or delta.y == 0: return true
+	return veh.type_id == "tank" and not legacy_orthogonal_cannon and absi(delta.x) == absi(delta.y)
 
 ## The resolver's state: every variable, constant and static cache of GameActionResolver,
 ## and the declarations the files above need. GameActionResolver is one class spread over a
@@ -536,9 +544,7 @@ const DIR8 := [
 	Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1),
 ]
 
-## Танк ходит и целится ТОЛЬКО по четырём сторонам света (item 2): диагональные
-## развороты и стрельба по диагонали убраны. Пушка и так била лишь по прямой
-## (cannon_port), а фронт теперь тоже ограничен ортогональю.
+## Hull movement and turns stay cardinal. The gun can also use exact diagonal lines.
 const DIR4 := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 
 ## «Клетка» экипажа внутри машины — вне поля, чтобы любые проверки по координатам

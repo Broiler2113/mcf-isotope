@@ -102,12 +102,14 @@ func hit_need_for(shooter: UnitInstance, target: UnitInstance, mods: Array = [])
 ## Сколько выбросить пушке машины по клетке (подпись прицела) — та же формула, что бросит
 ## _resolve_vehicle_cannon: от порта, через который пойдёт снаряд. 7 — не выстрелить.
 func cannon_aim_need(veh: Vehicle, cell: Vector2i) -> int:
-	if veh == null:
+	if veh == null or not veh.alive() or not veh.can_fire_gun() or not state.grid.in_bounds(cell):
 		return 7
 	var port := cannon_port(veh, cell)
 	if port == Vector2i(-1, -1):
 		return 7
 	var gun: Dictionary = VehicleDB.get_vehicle(veh.type_id).get("weapons", {}).get("main_gun", {})
+	if gun.is_empty() or Combat.distance(port, cell) > int(gun.get("range", MCF.CANNON_RANGE)) \
+			or los_blocked(port, cell): return 7
 	return hit_need(Combat.distance(port, cell), float(int(gun.get("range", MCF.CANNON_RANGE))))
 
 ## Сколько выбросить, целясь в клетку (для подписи прицела): та же формула, что бросит

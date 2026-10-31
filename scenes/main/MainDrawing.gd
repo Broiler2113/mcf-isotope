@@ -1946,14 +1946,14 @@ func _draw_projectile_sprite(kind: String, at: Vector2, angle: float, scale_: fl
 	var size_ := Vector2.ONE * CELL * scale_
 	Sprites.draw_texture_override_rect(self, "fx_" + kind, Rect2(at - size_ * 0.5, size_), rad_to_deg(angle), tint)
 
-## World-aligned diagonals join across landing cells. Keep their spacing in screen pixels
-## and use hairlines that stay thin at every zoom; clip before generating lines.
+## World-aligned diagonals join across landing cells. Their count belongs to the map;
+## only the stroke width compensates for zoom. Clip before generating lines.
 func _draw_event_hatching(rect: Rect2, col: Color) -> void:
 	var scale_ := maxf(zoom, 0.01)
 	var viewport := Rect2(-pan / scale_, get_viewport_rect().size / scale_)
 	var clipped := rect.intersection(viewport)
 	if not clipped.has_area(): return
-	var spacing := 16.0 / scale_
+	var spacing := 16.0
 	var first := ceili((clipped.position.x + clipped.position.y) / spacing)
 	var last := floori((clipped.end.x + clipped.end.y) / spacing)
 	var lines := PackedVector2Array()
@@ -1965,10 +1965,10 @@ func _draw_event_hatching(rect: Rect2, col: Color) -> void:
 		lines.append(Vector2(left, diagonal - left))
 		lines.append(Vector2(right, diagonal - right))
 	if lines.is_empty(): return
-	draw_multiline(lines, Color(col.r, col.g, col.b, 0.9), -1.0)
+	draw_multiline(lines, Color(col.r, col.g, col.b, 0.9), 1.5 / scale_, true)
 
 func _draw_event_border(rect: Rect2, col: Color) -> void:
-	draw_rect(rect, Color(col.r, col.g, col.b, 1.0), false, -1.0)
+	draw_rect(rect, Color(col.r, col.g, col.b, 1.0), false, 1.5 / maxf(zoom, 0.01), true)
 
 func _draw_event_label(at: Vector2, label: String, col: Color, font: Font) -> void:
 	var width := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
@@ -2041,7 +2041,7 @@ func _draw_landing(p: Dictionary, wave: bool, col: Color, label: String, font: F
 		if not cells.has(c + Vector2i.LEFT): edges.append_array([o, o + Vector2(0, CELL)])
 		if not cells.has(c + Vector2i.RIGHT): edges.append_array([o + Vector2(CELL, 0), o + Vector2(CELL, CELL)])
 	if not edges.is_empty():
-		draw_multiline(edges, Color(col.r, col.g, col.b, 1.0), -1.0)
+		draw_multiline(edges, Color(col.r, col.g, col.b, 1.0), 1.5 / maxf(zoom, 0.01), true)
 	_draw_event_label(_cell_origin(top), label, col, font)
 
 ## Цвет команды по ключу режима — цвет первой её стороны.
@@ -2175,6 +2175,7 @@ class GasDrift extends Node2D:
 shader_type canvas_item;
 uniform sampler2D wisps : repeat_enable, filter_linear;
 uniform float span = 1600.0;   // board pixels per repeat of the cloud texture (40 cells)
+uniform float fixed_time = -1.0;   // full-map PNG sections share one frozen instant
 varying vec2 world;
 void vertex() {
 	world = VERTEX;
@@ -2183,8 +2184,9 @@ void fragment() {
 	vec4 shape = texture(TEXTURE, UV);
 	// The cloud texture's alpha holds its billows (about 0.47 to 0.68): two copies sliding
 	// different ways at a third of a cell a second, stretched to full strength.
-	float a = texture(wisps, world / span + TIME * vec2(0.0075, 0.003)).a;
-	float b = texture(wisps, world / (span * 1.6) + TIME * vec2(-0.004, 0.006)).a;
+	float t = fixed_time >= 0.0 ? fixed_time : TIME;
+	float a = texture(wisps, world / span + t * vec2(0.0075, 0.003)).a;
+	float b = texture(wisps, world / (span * 1.6) + t * vec2(-0.004, 0.006)).a;
 	float drift = smoothstep(0.5, 0.62, (a + b) * 0.5);
 	COLOR = vec4(COLOR.rgb * shape.rgb, COLOR.a * shape.a * drift);
 }

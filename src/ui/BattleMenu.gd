@@ -39,6 +39,7 @@ func _ready() -> void:
 		["Settings", func() -> void: SettingsWindow.open(main)],
 		["Save Game", func() -> void: main._save_game()],
 		["Save Replay", func() -> void: main._prompt_save_name(true)],
+		["Save Image", func() -> void: MapImageWindow.open(main)],
 	]:
 		var button := Button.new()
 		button.text = entry[0]
@@ -48,6 +49,7 @@ func _ready() -> void:
 		buttons.append(button)
 	buttons[2].disabled = main.replay != null or main._spectator or main._animating
 	buttons[3].disabled = main.recorder == null or main.recorder.is_empty()
+	buttons[4].disabled = main.state == null or main._animating
 	var return_button := Button.new()
 	return_button.text = "Return to Menu"
 	return_button.custom_minimum_size.y = 34

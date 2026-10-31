@@ -213,6 +213,7 @@ static func encode_rules(resolver: GameActionResolver) -> Dictionary:
 		"friendly_fire": resolver.friendly_fire_enabled,
 		# Replay metadata only: live saves always resume with current cannon rules.
 		"cannon_arc": 0 if resolver.legacy_rear_cannon else 1,
+		"cannon_diagonals": not resolver.legacy_orthogonal_cannon,
 	}
 	out["mode"] = resolver.mode.snapshot()
 	if resolver.random_events != null:

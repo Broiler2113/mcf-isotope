@@ -153,6 +153,8 @@ func _rebuild(frame: Dictionary) -> void:
 func _restore_cannon_rules(frame: Dictionary) -> void:
 	resolver.legacy_rear_cannon = int(frame.get("rules", {}).get("cannon_arc",
 			data.get("rules", {}).get("cannon_arc", 0))) < 1
+	resolver.legacy_orthogonal_cannon = not bool(frame.get("rules", {}).get("cannon_diagonals",
+			data.get("rules", {}).get("cannon_diagonals", false)))
 
 ## Ключевой кадр, не позже шага i. Кадр, привязанный к шагу s, снят ПОСЛЕ него,
 ## то есть описывает позицию s+1.

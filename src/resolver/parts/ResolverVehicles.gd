@@ -1065,8 +1065,10 @@ func _resolve_vehicle_cannon(intent: VehicleCannonIntent) -> ActionResult:
 	# цель лежит строго по прямой НАРУЖУ (ствол не упирается в собственный корпус).
 	var port := cannon_port(veh, intent.target)
 	if port == Vector2i(-1, -1):
+		if veh.tower_jammed():
+			return ActionResult.fail("The tower is jammed - it fires only where it last did")
 		if veh.type_id == "tank" and not legacy_rear_cannon:
-			return ActionResult.fail("Cannon fires only forward or sideways along horizontal or vertical lines")
+			return ActionResult.fail("Cannon fires forward or sideways along horizontal, vertical or exact diagonal lines")
 		return ActionResult.fail("Cannon fires only horizontally or vertically")
 	var dist := Combat.distance(port, intent.target)
 	if dist > int(gun.get("range", MCF.CANNON_RANGE)):
@@ -1154,23 +1156,35 @@ func cannon_blast_cells(veh: Vehicle, center: Vector2i) -> Array[Vector2i]:
 ## лежит на прямой ни от одной амбразуры (#62). Внутренние клетки корпуса портами
 ## не считаются: из середины танка ствол смотрел бы в собственную броню.
 func cannon_port(veh: Vehicle, target: Vector2i) -> Vector2i:
+	if veh == null: return Vector2i(-1, -1)
+	return cannon_port_from(veh, target, veh.origin)
+
+## The same geometry for actual fire and AI movement planning. Keep existing straight
+## ports when a diagonal ties their distance; every consumer uses this canonical port.
+func cannon_port_from(veh: Vehicle, target: Vector2i, origin: Vector2i) -> Vector2i:
+	if veh == null: return Vector2i(-1, -1)
 	var own := {}
-	for fc: Vector2i in veh.footprint():
+	var hull := veh.footprint_from(origin)
+	for fc: Vector2i in hull:
 		own[fc] = true
 	if own.has(target):
 		return Vector2i(-1, -1)  # в собственный корпус не стреляют
 	var best := Vector2i(-1, -1)
 	var best_dist := 1 << 30
-	for fc: Vector2i in veh.footprint():
-		# Пушка бьёт только по прямой — горизонталь/вертикаль (#55).
-		if fc.x != target.x and fc.y != target.y:
+	var best_diagonal := true
+	for fc: Vector2i in hull:
+		if not cannon_line_allowed(veh, fc, target):
 			continue
 		var step := Vector2i(signi(target.x - fc.x), signi(target.y - fc.y))
 		if step == Vector2i.ZERO or own.has(fc + step) or not cannon_direction_allowed(veh, step):
 			continue
+		if not legacy_orthogonal_cannon and veh.tower_jammed() and step != veh.tower_world_dir():
+			continue
 		var d := Combat.distance(fc, target)
-		if d < best_dist:
+		var diagonal := step.x != 0 and step.y != 0
+		if d < best_dist or (d == best_dist and best_diagonal and not diagonal):
 			best_dist = d
+			best_diagonal = diagonal
 			best = fc
 	return best
 
@@ -1194,12 +1208,14 @@ func cannon_target_cells(veh: Vehicle, limit_to: Dictionary = {}) -> Array[Vecto
 	for fc: Vector2i in veh.footprint():
 		own[fc] = true
 	var seen := {}
-	# Каждая клетка борта пускает луч наружу по четырём направлениям (#62). Луч
-	# обрывается на первой непробиваемой клетке, поэтому подсветка совпадает с тем,
-	# что резолвер реально разрешит выстрелить.
+	# Outward rays generate candidates. Validate each against the same selected port
+	# as resolution: two rays can reach a cell, but only one defines the actual shot.
+	var directions := DIR8 if veh.type_id == "tank" and not legacy_orthogonal_cannon else DIR4
 	for fc: Vector2i in veh.footprint():
-		for d: Vector2i in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
+		for d: Vector2i in directions:
 			if not cannon_direction_allowed(veh, d):
+				continue
+			if veh.tower_jammed() and d != veh.tower_world_dir():
 				continue
 			if own.has(fc + d):
 				continue  # это внутренняя клетка, а не амбразура
@@ -1211,7 +1227,9 @@ func cannon_target_cells(veh: Vehicle, limit_to: Dictionary = {}) -> Array[Vecto
 					break  # дальше по этому лучу тоже не пробить
 				if not seen.has(c) and (limit_to.is_empty() or limit_to.has(c)):
 					seen[c] = true
-					out.append(c)
+					var port := cannon_port(veh, c)
+					if port != Vector2i(-1, -1) and Combat.distance(port, c) <= rng and not los_blocked(port, c):
+						out.append(c)
 				c += d
 	return out
 
