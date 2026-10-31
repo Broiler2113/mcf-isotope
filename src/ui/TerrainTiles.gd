@@ -1116,11 +1116,11 @@ func _accent_of(c: Vector2i) -> int:
 	var a := _grid.accent_at(c.x, c.y)
 	return a if a > 0 and a < MCF.ACCENT_COLORS.size() else MCF.Accent.NONE
 
-## Service bands paint ordinary walls only. Glass is a window, and an LDF is a deployable
-## fortification: it neither carries a band from the cell it was built on nor continues one.
+## Service bands paint ordinary walls only, never windows, deployable fortifications or
+## corpse walls, even when their cell belongs to a coloured department.
 func _takes_accent(fid: String) -> bool:
 	return fid != "" and FAMILY.get(fid, fid) == "wall" and not MCF.is_glass(fid) \
-			and fid not in [MCF.FEATURE_LDF, MCF.FEATURE_DOT, MCF.FEATURE_DOT_OPEN]
+			and fid not in [MCF.FEATURE_LDF, MCF.FEATURE_DOT, MCF.FEATURE_DOT_OPEN, MCF.FEATURE_CORPSE_WALL]
 
 ## Inner corners of a wall cell: a diagonal between two joined sides that is not wall —
 ## there the bands of the two neighbours meet inside this cell. Bits: NE 1, SE 2, SW 4, NW 8.

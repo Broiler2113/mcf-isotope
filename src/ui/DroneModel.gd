@@ -8,7 +8,9 @@ extends RefCounted
 const SPRITE_SIZE := 48
 const SPRITE_METRES := 0.62
 const ANIMATION_FRAMES := 8
-const ANIMATION_FPS := 24.0
+const ROTOR_SPEED := 30.0   # Radians per second, shared by the board and first person.
+# The eight baked frames span one third of a turn because each rotor has three blades.
+const ANIMATION_FPS := ROTOR_SPEED * 3.0 * ANIMATION_FRAMES / TAU
 static var _pictures := {}
 static var _sprites := {}
 

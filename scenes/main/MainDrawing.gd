@@ -1946,8 +1946,8 @@ func _draw_projectile_sprite(kind: String, at: Vector2, angle: float, scale_: fl
 	var size_ := Vector2.ONE * CELL * scale_
 	Sprites.draw_texture_override_rect(self, "fx_" + kind, Rect2(at - size_ * 0.5, size_), rad_to_deg(angle), tint)
 
-## World-aligned diagonals join across landing cells. Keep their spacing and stroke in
-## screen pixels so warnings stay readable at far zoom; clip before generating lines.
+## World-aligned diagonals join across landing cells. Keep their spacing in screen pixels
+## and use hairlines that stay thin at every zoom; clip before generating lines.
 func _draw_event_hatching(rect: Rect2, col: Color) -> void:
 	var scale_ := maxf(zoom, 0.01)
 	var viewport := Rect2(-pan / scale_, get_viewport_rect().size / scale_)
@@ -1965,13 +1965,10 @@ func _draw_event_hatching(rect: Rect2, col: Color) -> void:
 		lines.append(Vector2(left, diagonal - left))
 		lines.append(Vector2(right, diagonal - right))
 	if lines.is_empty(): return
-	draw_multiline(lines, Color(0.02, 0.02, 0.025, 0.75), 3.5 / scale_)
-	draw_multiline(lines, Color(col.r, col.g, col.b, 0.9), 1.5 / scale_)
+	draw_multiline(lines, Color(col.r, col.g, col.b, 0.9), -1.0)
 
 func _draw_event_border(rect: Rect2, col: Color) -> void:
-	var scale_ := maxf(zoom, 0.01)
-	draw_rect(rect, Color(0.02, 0.02, 0.025, 0.85), false, 5.0 / scale_)
-	draw_rect(rect, Color(col.r, col.g, col.b, 1.0), false, 2.5 / scale_)
+	draw_rect(rect, Color(col.r, col.g, col.b, 1.0), false, -1.0)
 
 func _draw_event_label(at: Vector2, label: String, col: Color, font: Font) -> void:
 	var width := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
@@ -2044,8 +2041,7 @@ func _draw_landing(p: Dictionary, wave: bool, col: Color, label: String, font: F
 		if not cells.has(c + Vector2i.LEFT): edges.append_array([o, o + Vector2(0, CELL)])
 		if not cells.has(c + Vector2i.RIGHT): edges.append_array([o + Vector2(CELL, 0), o + Vector2(CELL, CELL)])
 	if not edges.is_empty():
-		draw_multiline(edges, Color(0.02, 0.02, 0.025, 0.85), 5.0 / maxf(zoom, 0.01))
-		draw_multiline(edges, Color(col.r, col.g, col.b, 1.0), 2.5 / maxf(zoom, 0.01))
+		draw_multiline(edges, Color(col.r, col.g, col.b, 1.0), -1.0)
 	_draw_event_label(_cell_origin(top), label, col, font)
 
 ## Цвет команды по ключу режима — цвет первой её стороны.
