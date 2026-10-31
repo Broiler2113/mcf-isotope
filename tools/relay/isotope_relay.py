@@ -79,6 +79,10 @@ class Member:
         self.ip = (writer.get_extra_info("peername") or ("?", 0))[0]
         self.room = None
         self.id = 0
+        self.since = time.time()
+        self.frames = 0
+        self.bytes_in = 0
+        self.last = ""
 
     def send(self, data: bytes) -> None:
         if not self.writer.is_closing():
@@ -115,6 +119,7 @@ class Relay:
     async def handle(self, reader, writer):
         m = Member(self, reader, writer)
         self.conns_per_ip[m.ip] = self.conns_per_ip.get(m.ip, 0) + 1
+        reason = "closed by the server"
         try:
             if self.conns_per_ip[m.ip] > MAX_CONN_PER_IP:
                 m.send(jframe("E", {"error": "Too many connections from your address."}))
@@ -123,14 +128,26 @@ class Relay:
                 head = await asyncio.wait_for(reader.readexactly(4), IDLE_TIMEOUT)
                 (length,) = struct.unpack(">I", head)
                 if length < 1 or length > MAX_FRAME:
+                    reason = "bad frame length %d" % length
                     return
                 data = await asyncio.wait_for(reader.readexactly(length), IDLE_TIMEOUT)
-                if not self.dispatch(m, chr(data[0]), data[1:]):
+                m.frames += 1
+                m.bytes_in += 4 + length
+                m.last = chr(data[0])
+                if not self.dispatch(m, m.last, data[1:]):
+                    reason = "refused frame %r" % m.last
                     return
                 await writer.drain()
-        except (asyncio.IncompleteReadError, asyncio.TimeoutError, ConnectionError, OSError):
-            pass
+        except asyncio.IncompleteReadError:
+            reason = "the player closed the connection"
+        except asyncio.TimeoutError:
+            reason = "silent for %d s" % IDLE_TIMEOUT
+        except (ConnectionError, OSError) as e:
+            reason = "%s: %s" % (type(e).__name__, e)
         finally:
+            if m.room is not None:
+                log.info("room %s: player %d (%s) left after %d s, %d frames, %d bytes, last %r: %s",
+                         m.room.code, m.id, m.ip, time.time() - m.since, m.frames, m.bytes_in, m.last, reason)
             self.leave(m)
             self.conns_per_ip[m.ip] -= 1
             if self.conns_per_ip[m.ip] <= 0:
@@ -157,7 +174,7 @@ class Relay:
             self.rooms[code] = room
             m.room, m.id = room, 1
             m.send(jframe("W", {"id": 1, "room": code}))
-            log.info("room %s opened by %s (%s)", code, m.ip, room.info.get("name", ""))
+            log.info("room %s opened by %s (%s, %s)", code, m.ip, room.info.get("name", ""), room.info.get("version", "?"))
         elif kind == "J":
             if m.room is not None:
                 return False
@@ -175,6 +192,7 @@ class Relay:
                 m.room, m.id = room, room.next_id
                 room.next_id += 1
                 room.members[m.id] = m
+                log.info("room %s: player %d joined from %s", room.code, m.id, m.ip)
                 m.send(jframe("W", {"id": m.id, "room": room.code}))
                 room.host.send(frame("A", struct.pack(">I", m.id)))
         elif kind == "U":
@@ -198,6 +216,7 @@ class Relay:
             (victim,) = struct.unpack(">I", body)
             other = m.room.members.get(victim)
             if other is not None and victim != 1:
+                log.info("room %s: host kicked player %d", m.room.code, victim)
                 other.send(jframe("C", {"reason": "The host removed you from the game."}))
                 other.close()
         else:
