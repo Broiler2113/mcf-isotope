@@ -748,6 +748,8 @@ func _build_chat_panel() -> void:
 	_chat_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_chat_input.text_submitted.connect(func(_t: String) -> void: _chat_send())
 	row.add_child(_chat_input)
+	# The message field three quarters of the row, Send the rest (owner, fix-13 #2: was half and half).
+	_chat_input.size_flags_stretch_ratio = 3.0
 	row.add_child(_compact_button("Send", _chat_send))
 
 ## Модальное окно «выход в меню» в общем стиле (#51): затемнитель на весь экран
@@ -829,12 +831,19 @@ func _toggle_initiative_overlay() -> void:
 ## выбывают из партии (поднял щитом, сложил в кучу, задвинул под кресло), и счёт
 ## «мёртвых» по ним полз назад — отсюда и шли прыгающие числа.
 ## Пленный (HELD) — живой: он ранен не больше, чем до захвата, и вернётся в строй.
-## Дрон не в своде вовсе: ни бойцом, ни машиной — это расходная техника станции.
+## Drones count as vehicles (owner, fix-13 #26): a flying one is a vehicle, a shot-down one a
+## destroyed vehicle (its body stays in the unit list; a docked one leaves it).
 func _army_counts() -> Dictionary:
 	var out: Dictionary = {}
 	var tm := state.turns
 	for u: UnitInstance in state.all_units():
-		if u.is_drone or u.status == MCF.Status.CORPSE:
+		if u.is_drone:
+			var dkey := tm.slot_of(u)
+			var drec: Dictionary = out.get(dkey, _EMPTY_COUNT.duplicate())
+			drec["veh" if u.is_alive() else "veh_dead"] += 1
+			out[dkey] = drec
+			continue
+		if u.status == MCF.Status.CORPSE:
 			continue
 		var key := tm.slot_of(u)
 		var rec: Dictionary = out.get(key, _EMPTY_COUNT.duplicate())
@@ -1234,11 +1243,18 @@ func _compact_button(text: String, handler: Callable) -> Button:
 	return b
 
 ## The highlight menu (owner): "All" or any mix of the types you field now, with their counts.
-## It stays open while you tick; the button stays lit while anything is ticked.
+## A drop-down panel, not a modal popup (fix-13 #4, #5): its button opens and closes it, and
+## the board still pans and zooms while it is open. The button stays lit while anything is ticked.
+var _hl_menu: Control = null
+var _hl_menu_vehicles := false
+
 func _open_highlight_menu(btn: Button, vehicles: bool) -> void:
 	var sel: Dictionary = _hl_vehicle_types if vehicles else _hl_unit_types
 	btn.set_pressed_no_signal(not sel.is_empty())
-	if state == null: return
+	var again := is_instance_valid(_hl_menu) and _hl_menu_vehicles == vehicles
+	if is_instance_valid(_hl_menu): _hl_menu.queue_free()
+	_hl_menu = null
+	if again or state == null: return
 	var counts := {}
 	var names := {}
 	if vehicles:
@@ -1253,27 +1269,38 @@ func _open_highlight_menu(btn: Button, vehicles: bool) -> void:
 			names[u.stats.id] = u.stats.display_name
 	var ids: Array = counts.keys()
 	ids.sort_custom(func(a: String, b: String) -> bool: return str(names[a]) < str(names[b]))
-	var menu := PopupMenu.new()
-	menu.theme = Ui.theme
-	menu.hide_on_checkable_item_selection = false
-	menu.add_check_item("All your vehicles" if vehicles else "All your soldiers", 0)
-	menu.add_separator()
+	var panel := PanelContainer.new()
+	SteamChrome.apply_panel(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 2)
+	panel.add_child(SteamChrome.pad(box, 8, 6))
+	var all := CheckBox.new()
+	all.text = "All your vehicles" if vehicles else "All your soldiers"
+	all.focus_mode = Control.FOCUS_NONE   # board shortcuts keep their keys
+	box.add_child(all)
+	box.add_child(HSeparator.new())
+	var checks: Array[CheckBox] = []
 	for i in ids.size():
-		menu.add_check_item("%s (%d)" % [names[ids[i]], counts[ids[i]]], i + 1)
+		var cb := CheckBox.new()
+		cb.text = "%s (%d)" % [names[ids[i]], counts[ids[i]]]
+		cb.focus_mode = Control.FOCUS_NONE
+		box.add_child(cb)
+		checks.append(cb)
 	var sync := func() -> void:
-		menu.set_item_checked(menu.get_item_index(0), sel.has("*"))
-		for i in ids.size(): menu.set_item_checked(menu.get_item_index(i + 1), sel.has("*") or sel.has(ids[i]))
+		all.set_pressed_no_signal(sel.has("*"))
+		for i in ids.size(): checks[i].set_pressed_no_signal(sel.has("*") or sel.has(ids[i]))
 		btn.set_pressed_no_signal(not sel.is_empty())
 		_refresh_highlight()
-	menu.id_pressed.connect(func(id: int) -> void:
-		# "All" a second time deselects everything (owner). Under "All" every type shows ticked:
-		# unticking one keeps the rest; ticking the last one missing is "All" again.
-		if id == 0:
-			var was_all := sel.has("*")
-			sel.clear()
-			if not was_all: sel["*"] = true
-		else:
-			var t: String = ids[id - 1]
+	# "All" a second time deselects everything (owner). Under "All" every type shows ticked:
+	# unticking one keeps the rest; ticking the last one missing is "All" again.
+	all.toggled.connect(func(_on: bool) -> void:
+		var was_all := sel.has("*")
+		sel.clear()
+		if not was_all: sel["*"] = true
+		sync.call())
+	for i in ids.size():
+		var t: String = ids[i]
+		checks[i].toggled.connect(func(_on: bool) -> void:
 			if sel.has("*"):
 				sel.clear()
 				for other: String in ids: sel[other] = true
@@ -1282,12 +1309,12 @@ func _open_highlight_menu(btn: Button, vehicles: bool) -> void:
 			if ids.all(func(other: String) -> bool: return sel.has(other)):
 				sel.clear()
 				sel["*"] = true
-		sync.call())
-	menu.popup_hide.connect(menu.queue_free)
-	add_child(menu)
+			sync.call())
+	_ui_layer.add_child(panel)
+	panel.position = btn.get_global_position() + Vector2(0, btn.size.y + 2)
+	_hl_menu = panel
+	_hl_menu_vehicles = vehicles
 	sync.call()
-	menu.position = Vector2i(btn.get_screen_position() + Vector2(0, btn.size.y + 2))
-	menu.popup()
 
 ## A pixel icon instead of the caption (issues-12 #15; icon only since issues-13 #3), kept
 ## crisp at every interface size. The caption moves to the tooltip when there is none.

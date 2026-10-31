@@ -218,7 +218,7 @@ The trained model (RLM). Falls back to a Tactician when no model is running.""" 
 Press [b]First Person[/b] in the tools, then click any free cell you can see to stand there. Walking does not change the battle. Other players can see your walker where their fog of war permits it.
 
 [h]Controls[/h]
-The defaults are [b]WASD[/b] to move, [b]Shift[/b] to run, the mouse to look, [b]Space[/b] to jump or climb, [b]C[/b] to descend in space, [b]X[/b] to toggle noclip and [b]Esc[/b] to return. All bindings are listed in [b]Settings → Keybinds → First-person controls[/b]. Noclip flies where you look; Space and C move vertically. It has no gravity, drift or height limit, but cannot enter unexplored cells.
+The defaults are [b]WASD[/b] to move, [b]Shift[/b] to run, the mouse to look, [b]Space[/b] to jump or climb, [b]C[/b] to descend in space, [b]X[/b] to toggle noclip, [b]R[/b] to take every roof and ceiling off (and put them back) and [b]Esc[/b] to return. All bindings are listed in [b]Settings → Keybinds → First-person controls[/b]. Noclip flies where you look; Space and C move vertically. It has no gravity, drift or height limit, but cannot enter unexplored cells.
 
 [h]What you see[/h]
 One cell is one meter; walls and ceilings are 2.3 m high. Cells you have never seen are black, and cells out of sight now are dimmed - fog of war still applies. Field of view, mouse sensitivity and render distance (16 to 160 cells) are in Settings."""],
@@ -252,7 +252,7 @@ A successful cheat still clears ordinary Undo and Redo, except AI pause, resume,
 [b]time morning[/b], [b]time day[/b], [b]time evening[/b] and [b]time night[/b] change the time and lighting on town and field maps. The first-person sky, sunlight, moon and lamps update while the view is open. These commands require gameplay cheat permission and are shared with other players. [b]world time[/b] remains an alias.
 
 [h]AI and players[/h]
-The host can use [b]ai pause B[/b], [b]ai step B[/b] and [b]ai resume B[/b]. A step lets the active AI make exactly one decision, including an end-turn or a rejected action, then pauses it again. Other AI players keep their own settings. [b]kick B[/b] disconnects a human guest; [b]ban B[/b] also blocks their saved reconnect identity until this hosted session closes. These commands do not target units or AI slots.
+The host can use [b]ai pause B[/b], [b]ai step B[/b] and [b]ai resume B[/b]; [b]ai pause all[/b] and [b]ai resume all[/b] do every AI player at once. A step lets the active AI make exactly one decision, including an end-turn or a rejected action, then pauses it again. Other AI players keep their own settings. [b]kick B[/b] disconnects a human guest; [b]ban B[/b] also blocks their saved reconnect identity until this hosted session closes. These commands do not target units or AI slots.
 
 [h]Saved effects[/h]
 Successful gameplay commands are shared and recorded in the replay. Ordinary Undo cannot take them back; the host can use [b]undo[/b]. Effects survive saves and rejoining. Disabling cheats in a resumed lobby preserves effects already in the save and releases paused AI players so the match can continue. Commands stop changing gameplay after the match ends.

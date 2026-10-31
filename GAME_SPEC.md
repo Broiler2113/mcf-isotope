@@ -4874,8 +4874,8 @@ ignore message kinds they do not know.
   curtain of mist thins upward into the sky (`FirstPersonFog.bounds_bank`, #7). The fog-of-war
   mist is smooth, broad and low in contrast.
 - **Sky**: the Earth is NASA's Blue Marble (`textures/first_person/earth.jpg`, land_shallow_topo
-  2048, public domain, visibleearth.nasa.gov) with the procedural clouds, rim and city lights on
-  real land (#8). The Sun is to scale, 0.53 degrees across (`FirstPersonSky.SUN_RADIUS`), with a
+  2048, public domain, visibleearth.nasa.gov) with the procedural clouds and rim (#8; its city
+  lights went in Issues-16). The Sun is to scale, 0.53 degrees across (`FirstPersonSky.SUN_RADIUS`), with a
   tighter glow and a smaller flare core (#13).
 - **LDF** (#9): no white stencil ticks on its panels (`w_ldf`, wall and chunk material).
 - **Fire on the board** (#4): the filled orange-yellow cell again (`gen_textures.gd _fire`,
@@ -4889,8 +4889,8 @@ ignore message kinds they do not know.
   board and in first person at the usual 3.2 rad/s.
 - **Highlight buttons** (#12): two icon buttons by Manual and Bug, each opening a menu: "All your
   soldiers" (vehicles), or any mix of the types you field now with their counts (owner: e.g. only
-  anti-tank and drone operators, or only tanks). While anything is ticked the board dims under a
-  veil below the units, and an additive layer over them draws neon white: a soft halo, a bloom
+  anti-tank and drone operators, or only tanks). While anything is ticked an additive layer over
+  the units draws neon white (the dimming veil went in Issues-16): a soft halo, a bloom
   and a saturated white core ring round each of your soldiers, a frame round each vehicle (its
   bloom hugs the frame so the hull stays clear). Sizes are board units, so they shrink with the
   soldiers when you zoom out (owner). The glow has its own canvas layer (under the windows), so
@@ -4898,6 +4898,68 @@ ignore message kinds they do not know.
 - **Bodies in vacuum** drift like floating soldiers, each with its own phase (#14).
 - **Blast deaths** (#15): pool 1.7x, seven extra pools flung twice as far, three times the
   spatter, twice the gibs (`FxDecals.BLAST_GIBS`) thrown up to 3 cells.
+
+## Issues-16 (the owner's 2026-10-31 "issues fix 13" PDF, 26 items)
+
+Protocol 36: waves, raider armies and reinforcements now land past bodies and taken cells (a rule
+change in where fighters appear), and `ai pause all` / `ai resume all` are new cheat forms.
+Replay schema unchanged.
+
+- **Landings** (#22): every landing (`landing_cells`) takes the announced stretch's free cells
+  first, then, while that is fewer than it needs (`landing_need`: a force's count, a wave's target,
+  or as many of the cheapest allowed fighter as the budget buys), the rest of that edge inward and
+  then the other edges. A cell with a body, a pile of bodies, a soldier, a hull or fire is never a
+  landing cell (`_landing_ok`, also in bunker hallways and at cheat points), and a refused cell is
+  skipped instead of ending the landing (`_spawn_budget`, `_spawn_force`, `_land_army`). A hallway
+  with no free cell falls back to the edge.
+- **Landing outline** (#19): a pending raider army, reinforcement or Holdout wave is drawn as the
+  cells it will really take (`landing_preview`), filled lightly and outlined as one area, not the
+  strip of edge it was rolled on. Under fog a cell out of the viewer's sight counts as free, so the
+  outline never gives a hidden soldier away. `army_landing_rect` (the policy's input) is unchanged.
+- **Tank turns** (#1): the drawn hull eases to its new front at up to 3 rad/s
+  (`MainDrawing.HULL_TURN_SPEED`, `_hull_shown`), its turret riding along; first person turns the
+  model by the same angle. A turn made out of sight is not played back.
+- **Battle chat** (#2): the message field takes three quarters of the row, Send the rest.
+- **Highlight** (#3–#5): soldiers' rings and halo are a third as thick (vehicle frames unchanged);
+  the board no longer dims; the type menu is a drop-down panel of check boxes that its button
+  opens and closes, and the board still pans and zooms (mouse, wheel, trackpad) while it is open.
+- **Earth** (#6): sampled at one fixed detail level, so no seam line where the longitude wraps or
+  at the poles; no city lights.
+- **First-person effects** (#7–#9): one billboard puff shader (`FirstPerson.PUFF_SHADER`): smoke
+  and gas hang as soft churning billows (three a cell) instead of grey boxes, thinning out right
+  before the eye; an explosion is billowing fireballs that swell, burn out through orange into
+  black smoke and lift as they cool, with sparks thrown out; every wreck in sight sends up a column
+  of smoke, kept under the ceiling indoors. On the board each wreck the viewer sees gives off
+  drifting grey smoke (`CPUParticles2D` over the soldiers; the board does not redraw for it).
+- **First-person minimap** (#10): the board's own tile chunks (`TerrainTiles.draw_map`) under the
+  side's fog, never-seen cells dark and remembered ones dimmed.
+- **Other players in first person** (#11, #13): their seat's letter on the figure instead of "FP",
+  their name in Handjet.
+- **AI pace** (#12): soldiers, drones and vehicles walk at the board's pace in first person (the
+  0.16/0.12 s a cell floors are gone), and the AI's thinking budget per frame grows with the frame
+  time there, up to 4x.
+- **Aggressor** (#14): advance 9 (was 5), cover 1, stay −2 (it never idles in place), threat −4 and
+  shelter 1.5 (was −10 and 4), nearest target 2.0, grenades from 0.35 expected kills, capture
+  bonus 30, vehicle gain 2.5. Tournament on medium maps: it closes to 6.8 cells (was 7.7), kills
+  more and beats the Tactician 3–2–1 (was 2–4).
+- **Doors** (#15): a closed sliding leaf stops 2 mm short of each jamb, inside its `door_bounds`,
+  so its edge shows beside glass or open floor (it only did while sliding); leaves have an
+  underside for when they rise.
+- **Roofs** (#16): the roof slab takes the map's ambient light (`outside_light`, what the light
+  map gives an unlit cell), so lamps below no longer show through as light patches. **R** in first
+  person takes every roof and ceiling off and puts them back (#20, `fp_roofs`).
+- **Rubble** (#17): a dirt pile grown wall-high on a station or asteroid is a wall of wreckage
+  (`wall_rubble`: broken concrete, hull plating and rusted steel, rebar, grit and dust), not soil.
+- **DPMG on the board** (#18): baked straight down from the first-person model in its eight
+  directions (`tools/art/build_dpmg_sprites.gd` → `assets/models/dpmg/dpmg_<k>.png`, read from
+  source), with a drop shadow; the sandbag ring is gone. A user's `dpmg.png` still wins.
+- **Built walls** (#21): a wall built in battle (`feature_owner` set) takes no service band on the
+  board or in first person, whatever department its cell lies in.
+- **Propellers** (#23): drone blades spin in first person (board shader `spin`, opposite ways on
+  neighbouring arms).
+- **Cheats** (#24): `ai pause all` and `ai resume all` act on every AI player at once.
+- **Badges** (#25): the neutral group badge widens to fit its numeral (XIII no longer shows XI).
+- **Army counts** (#26): drones count as vehicles: a flying one alive, a shot-down one destroyed.
 
 ## Issues PDF (6) follow-up
 

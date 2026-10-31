@@ -506,6 +506,90 @@ def w_rock():
     return shade(c, hgt, relief=1.2, cast=0.8)
 
 
+def chunks(x, f, size, seed, period):
+    """Voronoi chunks on a jittered lattice of `size` metres, periodic along x every `period`
+    metres: per pixel the nearest and second-nearest seed distances, the nearest seed's id and
+    the pixel's offset from that seed."""
+    n = int(round(period / size))
+    ix, iy = np.floor(x / size), np.floor(f / size)
+    d1 = np.full(x.shape, 9.0, np.float32)
+    d2 = np.full(x.shape, 9.0, np.float32)
+    ident = np.zeros(x.shape, np.int64)
+    ox = np.zeros(x.shape, np.float32)
+    oy = np.zeros(x.shape, np.float32)
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            cx, cy = ix + dx, iy + dy
+            wx = np.mod(cx, n)
+            px = (cx + 0.1 + 0.8 * hash2(wx, cy, seed)) * size
+            py = (cy + 0.1 + 0.8 * hash2(wx, cy, seed + 1)) * size
+            d = np.hypot(x - px, f - py)
+            closer = d < d1
+            d2 = np.where(closer, d1, np.minimum(d2, d))
+            ident = np.where(closer, (wx.astype(np.int64) * 7919 + cy.astype(np.int64)), ident)
+            ox = np.where(closer, x - px, ox)
+            oy = np.where(closer, f - py, oy)
+            d1 = np.where(closer, d, d1)
+    return d1, d2, ident, ox, oy
+
+
+def w_rubble():
+    """A heap of station wreckage (fix-13 #17): slabs of broken concrete, bent hull plating and
+    rusted steel, big and small, lying at all angles with dark voids between, rebar sticking out,
+    grit packed in the low places and dust over everything."""
+    h, w, x, f = wall_canvas()
+    # Broken, not cut: the pieces' outlines wander.
+    wx = x + 0.03 * noise(h, w, 159, 0.1) + 0.006 * noise(h, w, 157, 0.02)
+    wf = f + 0.03 * noise(h, w, 158, 0.1) + 0.006 * noise(h, w, 156, 0.02)
+    big = chunks(wx, wf, 0.34, 160, 4.0)
+    small = chunks(wx, wf, 0.14, 172, 4.0)
+    use_small = (sstep(-0.3, 0.3, noise(h, w, 173, 0.25)) * (hash2(big[2], 11, 174) < 0.55)) > 0.5
+    d1, d2, ident, ox, oy = [np.where(use_small, a, b) for a, b in zip(small, big)]
+    ident = np.where(use_small, ident + 100000, ident)
+    gap = d2 - d1
+    r = hash2(ident, 3, 161)
+    kinds = [rgb("8d8981"), rgb("a39e95"), rgb("6f6c67"), rgb("b9bec4"), rgb("4b4f56"), rgb("6e4a33")]
+    weights = np.cumsum([0.3, 0.22, 0.2, 0.08, 0.12, 0.08])
+    c = col(kinds[-1], h, w)
+    for k in range(len(kinds) - 2, -1, -1):
+        c = np.where((r < weights[k])[..., None], kinds[k], c)
+    c = c * (0.8 + 0.35 * hash2(ident, 5, 162))[..., None]
+    # Each piece a tilted slab sitting at its own depth, its edges broken off.
+    tx = (hash2(ident, 7, 163) - 0.5) * 0.5
+    ty = (hash2(ident, 9, 164) - 0.5) * 0.5
+    depth = 0.07 * hash2(ident, 13, 175)
+    edge = sstep(0.0, 0.03 + 0.03 * hash2(ident, 17, 176), gap)
+    hgt = (depth + tx * ox + ty * oy) * edge + 0.05 * edge
+    hgt += 0.0015 * noise(h, w, 165, 0.03, beta=1.0) * edge
+    concrete = r < weights[2]
+    c = mix(c, rgb("57534e"), specks(h, w, 166, 0.01, 0.004) * concrete * 0.4)
+    # Voids between the pieces, wider in places, with grit and small bits down in them.
+    void = sstep(0.022 + 0.02 * np.abs(noise(h, w, 177, 0.1)), 0.0, gap)
+    g = chunks(x, f, 0.09, 167, 4.0)
+    gc = mix(rgb("262422"), rgb("4a4743"), hash2(g[2], 1, 168))
+    c = mix(c, gc, void * 0.92)
+    hgt -= void * 0.04
+    # Rebar: thin dark rods across a few pieces.
+    rods = np.zeros(x.shape, np.float32)
+    rng = np.random.default_rng(169)
+    for _ in range(18):
+        x0, y0 = rng.random() * 4.0, rng.random() * 2.2
+        a = rng.random() * np.pi
+        ln = 0.2 + rng.random() * 0.35
+        ux, uy = np.cos(a), np.sin(a)
+        dxp = np.mod(x - x0 + 2.0, 4.0) - 2.0
+        t = np.clip(dxp * ux + (f - y0) * uy, 0, ln)
+        dist = np.hypot(dxp - t * ux, f - y0 - t * uy)
+        rods = np.maximum(rods, sstep(0.008, 0.003, dist))
+    c = mix(c, rgb("3a2a20"), rods * 0.9)
+    hgt += rods * 0.03
+    c = shade(c, hgt, relief=1.2, cast=0.9, amb=0.4)
+    # Dust over everything, thicker toward the top of the heap.
+    dust = sstep(0.2, 1.0, noise(h, w, 170, 0.12)) * (0.2 + 0.3 * f / 2.3)
+    c = mix(c, rgb("8f8a82"), dust * 0.55)
+    return c * floor_dirt(h, w, f, 171, 0.35, 0.25)[..., None]
+
+
 def bags(h, w, x, f, seed, bag_w=0.5, bag_h=0.13):
     """Rows of filled bags, each with its own bulge, seam and tied end."""
     row = np.floor(f / bag_h)
@@ -574,7 +658,7 @@ def w_ldf():
 WALLS = {"brick": w_brick, "stucco": w_stucco, "block": w_block, "station": w_station,
          "bunker": w_bunker, "armor": w_armor, "dot": w_dot, "dot_open": lambda: w_dot(True),
          "wood": w_wood, "soil": w_soil, "rock": w_rock, "sandbag": w_sandbag, "corpse": w_corpse,
-         "ldf": w_ldf}
+         "ldf": w_ldf, "rubble": w_rubble}
 # Wall surfaces as model materials after the M_* tiles (FirstPersonArt.WALL_MATS): a 1 m
 # piece from hand height, so a wall's chunks and rubble wear the wall they came from.
 WALL_MATS = ["brick", "stucco", "block", "station", "bunker", "armor", "dot", "wood", "soil",
@@ -1207,22 +1291,13 @@ def fire():
     return np.concatenate([c, a[..., None]], -1)
 
 
-def smoke():
-    """Soft billows for smoke and gas (tinted by their colour): grey, partly see-through."""
-    h = w = 32 * SS
-    b = noise(h, w, 961, 0.15, beta=0.5) * 0.7 + noise(h, w, 962, 0.05) * 0.3
-    v = 0.78 + 0.12 * b
-    a = np.clip(0.85 + 0.3 * b, 0.4, 1)
-    return np.concatenate([col((1, 1, 1), h, w) * v[..., None], a[..., None]], -1)
-
-
 # --- write everything ----------------------------------------------------------------------------------
 # Mean brightness of the procedural pictures these replace: the light map and the shader
 # were tuned against them, so the new art keeps their level.
 BRIGHTNESS = {"wall_armor": 0.307, "wall_block": 0.54, "wall_brick": 0.323, "wall_bunker": 0.522,
               "wall_corpse": 0.172, "wall_dot": 0.477, "wall_dot_open": 0.45, "wall_rock": 0.316,
               "wall_sandbag": 0.501, "wall_soil": 0.328, "wall_station": 0.547, "wall_stucco": 0.719,
-              "wall_wood": 0.322, "ceiling_metal": 0.368,
+              "wall_wood": 0.322, "wall_rubble": 0.34, "ceiling_metal": 0.368,
               "ceiling_plaster": 0.578, "roof_metal": 0.315, "roof_tiles": 0.269, "roof_snow": 0.86}
 
 
@@ -1268,8 +1343,6 @@ def main(only=None):
         a = down(fire())
         a[..., 3] = (a[..., 3] > 0.5).astype(np.float32)      # crisp pixel flames
         save(a, "fire.png")
-    if want("smoke"):
-        save(down(smoke()), "smoke.png")
     print("first-person textures written to", OUT)
 
 

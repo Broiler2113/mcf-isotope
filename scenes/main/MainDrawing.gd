@@ -926,6 +926,7 @@ func _draw_vehicle(ci: CanvasItem, veh: Vehicle, visible: Dictionary, font: Font
 	if not vseen:
 		_turret_shown.erase(veh.id)
 		_turret_live.erase(veh.id)
+		_hull_shown.erase(veh.id)   # a turn made out of sight is not played when it comes back
 		return
 	# item 22: во время броска выстрела показываем ПРЕЖНЮЮ прочность/целость машины —
 	# снятие прочности и превращение в обломок не должны опережать кубик.
@@ -966,7 +967,8 @@ func _draw_vehicle(ci: CanvasItem, veh: Vehicle, visible: Dictionary, font: Font
 				else:
 					_turret_live.erase(veh.id)
 				_turret_shown[veh.id] = shown
-			TankModel.draw(ci, Rect2(org, vsize), veh.facing, hull_col, disp_wrecked, opacity, veh.tower_locked_dir, shown, part)
+			TankModel.draw(ci, Rect2(org, vsize), veh.facing, hull_col, disp_wrecked, opacity, veh.tower_locked_dir, shown, part,
+					_hull_shown.get(veh.id, NAN))
 			Sprites.set_base_transform(pan + voff * zoom, Vector2(zoom, zoom))
 		else:
 			Sprites.draw_texture_override_rect(ci, veh_key, Rect2(org, vsize),
@@ -1041,6 +1043,10 @@ var _hl_unit_types: Dictionary = {}
 var _hl_vehicle_types: Dictionary = {}
 var _turret_sent := {"id": -1, "a": 0.0, "t": 0}
 const TURRET_SPEED := 3.2              # rad/s at most: a heavy turret, not a snap
+## A tank turns on the spot over a moment instead of snapping to its new front (fix-13 #1): the
+## hull's drawn angle eases toward the facing, its turret riding along. First person reads it too.
+const HULL_TURN_SPEED := 3.0           # rad/s at most: a quarter turn in about two thirds of a second
+var _hull_shown := {}                  # tank id -> hull angle drawn, radians (Vector2(facing).angle())
 ## Your unit hops once when you click it (issues-13 #1; was a hover twitch in issues-12 #11).
 const TWITCH_TIME := 0.26
 var _twitch_id := -1
@@ -1103,6 +1109,8 @@ func _animate_board(delta: float) -> void:
 	if state == null or _unit_layer == null: return
 	_share_turret()
 	_animate_turrets(delta)   # first person turns the same turrets
+	_animate_hulls(delta)
+	_sync_board_smoke()
 	if _fp != null: return
 	var now := _anim_time()
 	var moved := {}
@@ -1178,6 +1186,104 @@ func _receive_turret(msg: Dictionary) -> void:
 		return
 	_turret_live[veh.id] = _turret_shown.get(veh.id, TankModel.turret_angle(veh.tower_locked_dir))
 	_redraw()
+
+## Smoke rising off wrecks on the board (owner, fix-13 #9): soft puffs drifting off each wreck
+## the viewer sees right now. Particles over the soldiers, moved with the board: the board never
+## redraws for them. First person has its own.
+var _smoke_layer: Node2D = null
+var _wreck_smoke := {}   # vehicle id -> CPUParticles2D
+static var _puff_tex: Texture2D = null
+
+func _sync_board_smoke() -> void:
+	if _smoke_layer == null:
+		_smoke_layer = Node2D.new()
+		_smoke_layer.name = "WreckSmoke"
+		add_child(_smoke_layer)
+	_smoke_layer.visible = _fp == null
+	_smoke_layer.position = pan
+	_smoke_layer.scale = Vector2(zoom, zoom)
+	var want := {}
+	var limited := _view_resolver().visibility_limited()
+	var seen: Dictionary = _visible_before_impact(_viewing_side()) if limited else {}
+	var held: Dictionary = _hold_visual.get("vehicles", {})
+	for veh: Vehicle in state.all_vehicles():
+		if not veh.wrecked or (held.has(veh.id) and not bool(held[veh.id]["wrecked"])):
+			continue
+		var shown := not limited
+		for c: Vector2i in veh.footprint():
+			if shown: break
+			shown = seen.has(c)
+		if shown:
+			want[veh.id] = _cell_origin(veh.origin) + Vector2(veh.size) * CELL * 0.5
+	for id: int in _wreck_smoke.keys():
+		if not want.has(id):
+			(_wreck_smoke[id] as Node).queue_free()
+			_wreck_smoke.erase(id)
+	for id: int in want:
+		if not _wreck_smoke.has(id):
+			_wreck_smoke[id] = _smoke_particles()
+			_smoke_layer.add_child(_wreck_smoke[id])
+		(_wreck_smoke[id] as Node2D).position = want[id]
+
+static func _smoke_particles() -> CPUParticles2D:
+	if _puff_tex == null:
+		var g := Gradient.new()
+		g.offsets = PackedFloat32Array([0.0, 0.5, 1.0])
+		g.colors = PackedColorArray([Color(1, 1, 1, 1), Color(1, 1, 1, 0.55), Color(1, 1, 1, 0)])
+		var t := GradientTexture2D.new()
+		t.gradient = g
+		t.fill = GradientTexture2D.FILL_RADIAL
+		t.fill_from = Vector2(0.5, 0.5)
+		t.fill_to = Vector2(1.0, 0.5)
+		t.width = 32
+		t.height = 32
+		_puff_tex = t
+	var p := CPUParticles2D.new()
+	p.texture = _puff_tex
+	p.amount = 16
+	p.lifetime = 4.5
+	p.preprocess = 4.5   # already smoking when it comes into sight
+	p.local_coords = true
+	p.emission_shape = CPUParticles2D.EMISSION_SHAPE_SPHERE
+	p.emission_sphere_radius = CELL * 0.45
+	p.direction = Vector2(0.55, -1.0)   # the same wind for every wreck
+	p.spread = 18.0
+	p.gravity = Vector2.ZERO
+	p.initial_velocity_min = 10.0
+	p.initial_velocity_max = 20.0
+	p.angle_min = -180.0
+	p.angle_max = 180.0
+	p.scale_amount_min = 1.0
+	p.scale_amount_max = 1.4
+	var grow := Curve.new()
+	grow.max_value = 3.0
+	grow.add_point(Vector2(0.0, 0.8))
+	grow.add_point(Vector2(1.0, 3.0))
+	p.scale_amount_curve = grow
+	var ramp := Gradient.new()
+	ramp.offsets = PackedFloat32Array([0.0, 0.12, 0.6, 1.0])
+	# Mid grey: it reads on a dark deck as on pale ground.
+	ramp.colors = PackedColorArray([Color(0.4, 0.4, 0.4, 0.0), Color(0.48, 0.48, 0.48, 0.85),
+			Color(0.56, 0.56, 0.56, 0.5), Color(0.64, 0.64, 0.64, 0.0)])
+	p.color_ramp = ramp
+	return p
+
+## Tanks whose drawn hull lags their facing turn toward it; a new or wrecked tank snaps.
+func _animate_hulls(delta: float) -> void:
+	var turned := false
+	for veh: Vehicle in state.all_vehicles():
+		if veh.type_id != "tank" or veh.facing == Vector2i.ZERO:
+			continue
+		var goal := Vector2(veh.facing).angle()
+		var cur: float = _hull_shown.get(veh.id, goal)
+		if veh.wrecked or not _hull_shown.has(veh.id):
+			cur = goal
+		var diff := angle_difference(cur, goal)
+		if diff != 0.0:
+			cur = goal if absf(diff) < 0.003 else cur + clampf(diff * (1.0 - exp(-delta * 9.0)), -HULL_TURN_SPEED * delta, HULL_TURN_SPEED * delta)
+			turned = true
+		_hull_shown[veh.id] = cur
+	if turned: _redraw()
 
 func _animate_turrets(delta: float) -> void:
 	if _turret_live.is_empty(): return
@@ -1255,11 +1361,6 @@ const UNIT_CULL_SNAP := 16
 
 func _make_unit_layers() -> void:
 	# Vehicles floating in vacuum: over the board, under the soldiers riding them.
-	_hl_veil = Node2D.new()
-	_hl_veil.name = "HighlightVeil"
-	_hl_veil.visible = false
-	_hl_veil.draw.connect(_draw_veil)
-	add_child(_hl_veil)
 	_veh_float = Node2D.new()
 	_veh_float.name = "FloatingVehicles"
 	_veh_float.draw.connect(_draw_float_vehicles)
@@ -1514,10 +1615,9 @@ func _draw_unit_sprite(sp: UnitSprite) -> void:
 
 ## What lies over the soldiers: bodies on hulls, drones, the seat grid, the selection box
 ## and rulers. Drawn after the soldier layer, in the board's own transform.
-## The highlight (fix-12 #12, owner: make them stand out and glow): the board dims under a veil
-## between it and the units, and an additive layer over the units lays a soft halo and a
-## bright pulsing ring (frame for a vehicle) round everything you command.
-var _hl_veil: Node2D = null
+## The highlight (fix-12 #12, owner: make them stand out and glow): an additive layer over the
+## units lays a soft halo and a bright pulsing ring (frame for a vehicle) round everything you
+## command. The board itself stays as bright as ever (fix-13 #5: no dimming veil).
 var _hl_glow: Node2D = null
 static var _halo: Texture2D = null
 
@@ -1525,19 +1625,15 @@ func _highlighting() -> bool:
 	return not (_hl_unit_types.is_empty() and _hl_vehicle_types.is_empty()) and _fp == null and state != null
 
 func _refresh_highlight() -> void:
-	if _hl_veil == null: return
-	_hl_veil.visible = _highlighting()
-	_hl_glow.visible = _hl_veil.visible
-	_hl_veil.queue_redraw()
+	if _hl_glow == null: return
+	_hl_glow.visible = _highlighting()
 	_hl_glow.queue_redraw()
-
-func _draw_veil() -> void:
-	_hl_veil.draw_rect(Rect2(Vector2.ZERO, get_viewport_rect().size), Color(0, 0, 0, 0.55))
 
 static func _halo_texture() -> Texture2D:
 	if _halo == null:
 		var g := Gradient.new()
-		g.offsets = PackedFloat32Array([0.0, 0.4, 0.56, 0.75, 1.0])
+		# A narrow band round the ring (fix-13 #3: a third of the old width).
+		g.offsets = PackedFloat32Array([0.0, 0.525, 0.579, 0.642, 0.725])
 		g.colors = PackedColorArray([Color(1, 1, 1, 0), Color(1, 1, 1, 0), Color(1, 1, 1, 0.9), Color(1, 1, 1, 0.3), Color(1, 1, 1, 0)])
 		var t := GradientTexture2D.new()
 		t.gradient = g
@@ -1558,6 +1654,8 @@ func _draw_highlights() -> void:
 	var neon := Color(pulse, pulse, pulse)
 	var halo := _halo_texture()
 	var strokes := [[8.0, 0.35], [4.0, 0.8], [1.8, 1.0], [1.8, 1.0]]
+	# A soldier's ring is a third as thick as a vehicle's frame (owner, fix-13 #3).
+	var thin := strokes.map(func(w: Array) -> Array: return [w[0] / 3.0, w[1]])
 	ci.draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
 	if not _hl_unit_types.is_empty():
 		var r := CELL * 0.62
@@ -1568,7 +1666,7 @@ func _draw_highlights() -> void:
 			if not _cell_on_screen(at.x, at.y): continue
 			var c: Vector2 = _cell_origin(at) + Vector2(CELL, CELL) * 0.5 + _walk_offset.get(u.id, Vector2.ZERO)
 			ci.draw_texture_rect(halo, Rect2(c - Vector2(r, r) * 1.7, Vector2(r, r) * 3.4), false, neon)
-			for w: Array in strokes:
+			for w: Array in thin:
 				ci.draw_arc(c, r, 0.0, TAU, 40, neon * Color(1, 1, 1, w[1]), w[0], true)
 	if not _hl_vehicle_types.is_empty():
 		for v: Vehicle in state.all_vehicles():
@@ -1610,7 +1708,7 @@ func _draw_unit_top() -> void:
 		Sprites.set_base_transform(pan + toff * zoom, Vector2(zoom, zoom))
 		ci.draw_set_transform(pan + toff * zoom, 0.0, Vector2(zoom, zoom))
 		TankModel.draw(ci, Rect2(_cell_origin(tv.origin), Vector2(tv.size) * CELL), tv.facing, _side_color(tv.owner),
-				false, Color.WHITE, tv.tower_locked_dir, _turret_live[id], TankModel.Part.TURRET)
+				false, Color.WHITE, tv.tower_locked_dir, _turret_live[id], TankModel.Part.TURRET, _hull_shown.get(id, NAN))
 	Sprites.set_base_transform(pan, Vector2(zoom, zoom))
 	_drones_moving = false
 	var now := _anim_time()
@@ -1865,24 +1963,48 @@ func _draw_random_events(font: Font) -> void:
 		var id := str(e["id"])
 		var p: Dictionary = e["params"]
 		var col: Color = EVENT_COLORS.get(id, Color(1, 1, 1, 1))
-		var rect := Rect2()
 		if id == RandomEvents.DUST:
 			continue   # буря на всё поле: зоны нет, предупреждение — в журнале
 		if id == RandomEvents.ARMY or id == RandomEvents.REINFORCE:
-			rect = _army_rect(p)
-		else:
-			rect = Rect2(ORIGIN + Vector2(int(p.get("x", 0)), int(p.get("y", 0))) * CELL,
-					Vector2(int(p.get("w", 1)), int(p.get("h", 1))) * CELL)
+			_draw_landing(p, false, col, "%s · END OF ROUND" % RandomEvents.event_name(id).to_upper(), font)
+			continue
+		var rect := Rect2(ORIGIN + Vector2(int(p.get("x", 0)), int(p.get("y", 0))) * CELL,
+				Vector2(int(p.get("w", 1)), int(p.get("h", 1))) * CELL)
 		draw_rect(rect, Color(col.r, col.g, col.b, 0.14))
 		draw_rect(rect, Color(col.r, col.g, col.b, 0.85), false, 2.0)
 		var label := "%s · END OF ROUND" % RandomEvents.event_name(id).to_upper()
 		draw_string(font, rect.position + Vector2(4, 16), label,
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(col.r, col.g, col.b, 0.95))
 
-## Участок высадки армии или волны: полоса у края, а в бункере — конец коридора.
-func _army_rect(p: Dictionary) -> Rect2:
-	var r := resolver.army_landing_rect(p)
-	return Rect2(ORIGIN + Vector2(r.position) * CELL, Vector2(r.size) * CELL)
+## Where a raider army, a wave or reinforcements will really land (fix-13 #19): the cells
+## themselves, lightly filled and outlined as one area, not the strip of edge they were rolled
+## on. Under fog a cell out of sight counts as free, so the outline gives nobody away.
+var _landing_memo := {}
+func _draw_landing(p: Dictionary, wave: bool, col: Color, label: String, font: Font) -> void:
+	var view := _view_resolver()
+	var viewer := _viewing_side()
+	var seen: Variant = _visible_before_impact(viewer) if view.visibility_limited() else null
+	var key := str([p, wave, GridCell.walk_version, GridCell.corpse_version, GridCell.look_version,
+			UnitInstance.vision_epoch, viewer, seen == null])
+	if not _landing_memo.has(key):
+		if _landing_memo.size() > 8: _landing_memo.clear()
+		var area := {}
+		for c: Vector2i in resolver.landing_preview(p, wave, seen): area[c] = true
+		_landing_memo[key] = area
+	var cells: Dictionary = _landing_memo[key]
+	if cells.is_empty(): return
+	var top := Vector2i(1 << 30, 1 << 30)
+	for c: Vector2i in cells:
+		draw_rect(Rect2(_cell_origin(c), Vector2(CELL, CELL)), Color(col.r, col.g, col.b, 0.14))
+		if c.y < top.y or (c.y == top.y and c.x < top.x): top = c
+	var line := Color(col.r, col.g, col.b, 0.85)
+	for c: Vector2i in cells:
+		var o := _cell_origin(c)
+		if not cells.has(c + Vector2i.UP): draw_line(o, o + Vector2(CELL, 0), line, 2.0)
+		if not cells.has(c + Vector2i.DOWN): draw_line(o + Vector2(0, CELL), o + Vector2(CELL, CELL), line, 2.0)
+		if not cells.has(c + Vector2i.LEFT): draw_line(o, o + Vector2(0, CELL), line, 2.0)
+		if not cells.has(c + Vector2i.RIGHT): draw_line(o + Vector2(CELL, 0), o + Vector2(CELL, CELL), line, 2.0)
+	draw_string(font, _cell_origin(top) + Vector2(4, 16), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(col.r, col.g, col.b, 0.95))
 
 ## Цвет команды по ключу режима — цвет первой её стороны.
 func _team_key_color(key: String) -> Color:
@@ -1922,12 +2044,7 @@ func _draw_objectives(font: Font, visible: Dictionary, fog_on: bool, viewer: int
 		draw_string(font, rect.position + Vector2(6, 16), tag,
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(col.r, col.g, col.b, 1.0))
 	if md.is_holdout() and not md.pending_wave.is_empty():
-		var col: Color = EVENT_COLORS["army"]
-		var rect := _army_rect(md.pending_wave)
-		draw_rect(rect, Color(col.r, col.g, col.b, 0.14))
-		draw_rect(rect, Color(col.r, col.g, col.b, 0.85), false, 2.0)
-		draw_string(font, rect.position + Vector2(4, 16), "WAVE %d · END OF ROUND" % (md.wave + 1),
-				HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(col.r, col.g, col.b, 0.95))
+		_draw_landing(md.pending_wave, true, EVENT_COLORS["army"], "WAVE %d · END OF ROUND" % (md.wave + 1), font)
 
 ## Панель режима: счёт и зоны (Capture & Hold) или волны (Holdout). Строки пересобираются,
 ## только когда что-то в них изменилось.
@@ -2274,14 +2391,17 @@ func _draw_corpse_marker(at: Vector2, count: int, font: Font, ci: CanvasItem = n
 ## Бейдж активационной группы нейтралов (item 15): маленький чёрный квадрат с римской
 ## цифрой в правом-нижнем углу клетки юнита.
 ## Squares of the shared marker texture; the numeral only where an 11 px caption is readable.
+## The square widens to fit a long numeral (fix-13 #25: XIII was cut to XI), growing leftward.
 func _draw_group_badge(cell_origin: Vector2, group: int, font: Font, ci: CanvasItem = null, text := true) -> void:
 	if ci == null: ci = self
 	var sz := CELL * 0.34
-	var pos := cell_origin + Vector2(CELL - sz - 2.0, CELL - sz - 2.0)
-	Sprites.draw_square(ci, Rect2(pos, Vector2(sz, sz)), Color(0.05, 0.05, 0.05, 0.92))
-	Sprites.draw_frame(ci, Rect2(pos, Vector2(sz, sz)), Color(0.9, 0.9, 0.9, 0.75))
-	if text: ci.draw_string(font, pos + Vector2(2.0, sz - 3.0), MCF.roman(group),
-		HORIZONTAL_ALIGNMENT_CENTER, sz - 3.0, 11, Color(1, 1, 1))
+	var numeral := MCF.roman(group)
+	var w := maxf(sz, font.get_string_size(numeral, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x + 5.0) if text else sz
+	var pos := cell_origin + Vector2(CELL - w - 2.0, CELL - sz - 2.0)
+	Sprites.draw_square(ci, Rect2(pos, Vector2(w, sz)), Color(0.05, 0.05, 0.05, 0.92))
+	Sprites.draw_frame(ci, Rect2(pos, Vector2(w, sz)), Color(0.9, 0.9, 0.9, 0.75))
+	if text: ci.draw_string(font, pos + Vector2(1.0, sz - 3.0), numeral,
+		HORIZONTAL_ALIGNMENT_CENTER, w - 2.0, 11, Color(1, 1, 1))
 
 func _draw_pixel_bang(top_left: Vector2, ci: CanvasItem = null) -> void:
 	if ci == null: ci = self

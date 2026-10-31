@@ -3,8 +3,7 @@ extends RefCounted
 
 ## Skies for first person (issues-12 #19, #20). One sky shader, two kinds:
 ## - space (station, asteroid): the star field, the Sun — a white-hot disc with a soft glow —
-##   and the Earth far off, a lit globe with oceans, land, ice, clouds, a blue rim of air and
-##   city lights on its night side;
+##   and the Earth far off, a lit globe with oceans, land, ice, clouds and a blue rim of air;
 ## - surface (town, field): the time of day's gradient, the Sun, and clouds drifting slowly
 ##   overhead; overcast turns them into one grey deck and hides the Sun.
 ## Directions are fixed per map, so every player sees the same sky.
@@ -109,7 +108,9 @@ vec3 earth(vec3 d, vec3 base) {
 	col = mix(col, vec3(0.92, 0.95, 1.0), ice);
 	if (has_map) {
 		vec2 uv = vec2(atan(q.x, -q.z) / 6.2831853 + 0.5, acos(clamp(q.y, -1.0, 1.0)) / 3.1415927);
-		col = texture(earth_map, uv).rgb;
+		// One fixed detail level (fix-13 #6): where the longitude wraps and at the poles the
+		// screen derivatives jump, and an automatic level drew a thin dark seam across the globe.
+		col = textureLod(earth_map, uv, 1.0).rgb;
 		// Land is wherever the map is not deep-sea blue; ice is near-white.
 		land = 1.0 - smoothstep(0.02, 0.08, col.b - max(col.r, col.g));
 		land = land * 0.6;   // as the 0.53 threshold below reads it: land ~0.6, sea 0
@@ -120,13 +121,11 @@ vec3 earth(vec3 d, vec3 base) {
 	float light = smoothstep(-0.12, 0.3, dot(n, s));
 	float view = clamp(dot(n, -e), 0.0, 1.0);
 	vec3 day = col * (0.15 + 0.95 * light);
-	// City lights in the dark, on land, away from the ice.
-	float city = step(0.53, land) * (1.0 - ice) * smoothstep(0.72, 0.8, noise3(q * 60.0)) * (1.0 - light);
-	vec3 night = vec3(1.0, 0.75, 0.4) * city * 0.6;
+	// No city lights on the night side (owner, fix-13 #6: they read as stray yellow dots).
 	vec3 rim = vec3(0.3, 0.55, 1.0) * pow(1.0 - view, 3.0) * (0.15 + light) * 1.1;
 	// The globe's edge is soft by a pixel or two, not cut out.
 	float edge = smoothstep(earth_r, earth_r - 0.004, a);
-	return mix(base, day + night + rim, edge);
+	return mix(base, day + rim, edge);
 }
 
 vec3 surface(vec3 d) {

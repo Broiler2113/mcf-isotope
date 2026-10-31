@@ -12,6 +12,7 @@ const DEFINITIONS: Array = [
 	{"id": "fp_up", "label": "Jump / climb / ascend", "keys": [KEY_SPACE], "contexts": ["*"], "section": "fp"},
 	{"id": "fp_down", "label": "Descend (space / noclip)", "keys": [KEY_C], "contexts": ["*"], "section": "fp"},
 	{"id": "fp_noclip", "label": "Toggle noclip", "keys": [KEY_X], "contexts": ["*"], "section": "fp"},
+	{"id": "fp_roofs", "label": "Roofs on / off", "keys": [KEY_R], "contexts": ["*"], "section": "fp"},
 	{"id": "fp_leave", "label": "Return to battlefield", "keys": [KEY_ESCAPE], "contexts": ["*"], "section": "fp"},
 	{"id": "game_fullscreen", "label": "Toggle fullscreen (all screens)", "keys": [KEY_F11], "contexts": ["*"], "section": "game"},
 	{"id": "game_end_turn", "label": "End turn", "keys": [KEY_MASK_SHIFT | KEY_ENTER], "contexts": ["*"], "section": "game"},

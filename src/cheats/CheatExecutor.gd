@@ -39,6 +39,17 @@ static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 					if unit.is_alive() and (a.owner == -1 or unit.owner == a.owner): CheatUnits.refill(unit); count += 1
 				out.cheat_output = "Refilled %d living units." % count
 			"ai_pause", "ai_resume", "ai_step":
+				if a.owner == -1:
+					# ai pause all / ai resume all (owner, fix-13 #24): every AI seat at once.
+					var seats: Array[int] = []
+					for side: int in state.roster.player_ids():
+						if state.roster.is_ai(side): seats.append(side)
+					if seats.is_empty(): return ActionResult.fail("There are no AI players.")
+					for side: int in seats:
+						if intent.op == "ai_resume": state.cheat_ai_paused.erase(side)
+						else: state.cheat_ai_paused[side] = true
+					out.cheat_output = "All %d AI players: %s." % [seats.size(), "resumed" if intent.op == "ai_resume" else "paused after the current action"]
+					return _finish(state, intent, out)
 				if not state.roster.is_ai(a.owner): return ActionResult.fail("Choose an AI player, not a human.")
 				if intent.op == "ai_step" and state.active_player() != a.owner: return ActionResult.fail("Step requires that AI player's active turn.")
 				if intent.op == "ai_resume": state.cheat_ai_paused.erase(a.owner)
@@ -64,6 +75,9 @@ static func apply(r: GameActionResolver, intent: CheatIntent) -> ActionResult:
 				out.cheat_output = "Total waves: %d → %d (0 means endless)." % [r.mode.waves_total, a.waves]
 				r.mode.waves_total = a.waves
 			_: return ActionResult.fail("Unknown gameplay operation.")
+	return _finish(state, intent, out)
+
+static func _finish(state: GameState, intent: CheatIntent, out: ActionResult) -> ActionResult:
 	if out.ok:
 		# Pacing still counts: recorded digests of older replays include it.
 		state.cheat_sequence += 1

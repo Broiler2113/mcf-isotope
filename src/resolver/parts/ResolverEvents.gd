@@ -407,20 +407,21 @@ func _land_army(p: Dictionary, res: ActionResult) -> void:
 	if alive >= ARMY_MAX:
 		res.log("Unknown forces hold off - the field is crowded enough")
 		return
-	var spots := _army_spawn_cells(p)
-	if spots.is_empty():
-		res.log("Unknown forces turn back - nowhere to land on that edge")
-		return
 	var roster := _independent_roster()
 	if roster.is_empty() and not p.has("units"):
 		res.log("Unknown forces hold off - all raider unit types are restricted")
+		return
+	var spots := landing_cells(p, landing_need(p))
+	if spots.is_empty():
+		res.log("Unknown forces turn back - nowhere to land on that edge")
 		return
 	var spent := 0
 	var placed := 0
 	if p.has("units") or p.has("count"):
 		placed = _spawn_force(spots, p, slot, random_events.armies + 1, roster, res)
 	else:
-		while placed < spots.size():
+		var at := 0
+		while at < spots.size():
 			var sid: String = roster[_rand_wide(roster.size())]
 			var stats: UnitStats = _army_stats(sid)
 			if stats == null:
@@ -429,7 +430,10 @@ func _land_army(p: Dictionary, res: ActionResult) -> void:
 				break
 			if budget <= 0 and placed >= ARMY_FALLBACK_UNITS:
 				break
-			var raider := state.spawn_unit(stats, spots[placed], slot)
+			var raider: UnitInstance = null
+			while raider == null and at < spots.size():
+				raider = state.spawn_unit(stats, spots[at], slot)
+				at += 1
 			if raider == null:
 				break
 			raider.neutral_group = random_events.armies + 1
@@ -499,7 +503,7 @@ func _army_spawn_cells(p: Dictionary) -> Array[Vector2i]:
 	if p.has("x") or p.has("units") or p.has("count"):
 		var out: Array[Vector2i] = []
 		for cell: GridCell in state.grid.cells_flat():
-			if _open_floor(cell.coord): out.append(cell.coord)
+			if _landing_ok(cell.coord): out.append(cell.coord)
 		var point := Vector2i(int(p.get("x", 0)), int(p.get("y", 0)))
 		var edge := int(p.get("edge", 0)) % 4
 		var along := int(p.get("from", 0)) + int(p.get("len", 1)) / 2
@@ -511,9 +515,77 @@ func _army_spawn_cells(p: Dictionary) -> Array[Vector2i]:
 			return da < db if da != db else (a.y < b.y if a.y != b.y else a.x < b.x))
 		return out
 	if p.has("hx"):
-		return _hallway_spawn_cells(Vector2i(int(p["hx"]), int(p["hy"])))
+		var hall := _hallway_spawn_cells(Vector2i(int(p["hx"]), int(p["hy"])))
+		if not hall.is_empty():
+			return hall
 	var found: Array = _army_band(int(p.get("edge", 0)) % 4, int(p.get("from", 0)), maxi(1, int(p.get("len", ARMY_SEGMENT_MIN))))
 	return found[3] if not found.is_empty() else ([] as Array[Vector2i])
+
+## Where a landing really goes, in landing order (fix-13 #19, #22): the announced stretch's own
+## cells first, then, while that is fewer than need, the rest of its edge inward and then the
+## other edges. Bodies, fighters, hulls, fire and works on the stretch used to stop a wave or
+## raider army landing at all; now it lands past them. The battle screen outlines the first
+## need cells of the same list.
+func landing_cells(p: Dictionary, need: int) -> Array[Vector2i]:
+	var spots := _army_spawn_cells(p)
+	if spots.size() >= need or p.has("x"):
+		return spots
+	var seen := {}
+	for c: Vector2i in spots: seen[c] = true
+	var edge := int(p.get("edge", 0)) % 4
+	for e in 4:
+		var ed := (edge + e) % 4
+		for c: Vector2i in _army_band_cells(ed, 0, state.grid.width if ed % 2 == 0 else state.grid.height):
+			if not seen.has(c):
+				seen[c] = true
+				spots.append(c)
+		if spots.size() >= need:
+			break
+	return spots
+
+## How many fighters a landing can bring at most (its outline's size): a force's own count, a
+## wave's target, or as many of the cheapest allowed fighter as the budget buys.
+func landing_need(p: Dictionary, wave := false) -> int:
+	if p.has("units"):
+		var n := 0
+		for type: String in p.units: n += int(p.units[type])
+		return n
+	if p.has("count"): return int(p.count)
+	if p.has("target"): return int(p.target)
+	var budget := 0
+	var pool: Array = ARMY_ROSTER
+	if p.has("budget"):   # reinforcements
+		budget = int(p.budget)
+	elif wave:
+		budget = mode.wave_budget(mode.wave + 1)
+		pool = ARMY_ROSTER.filter(func(t: String) -> bool: return not mode.excluded_units.has(t))
+	else:
+		budget = _army_budget()
+		pool = _independent_roster()
+		if budget <= 0: return ARMY_FALLBACK_UNITS
+	var cheapest := 1 << 30
+	for t: String in pool:
+		var st := _army_stats(t)
+		if st != null and st.cost > 0: cheapest = mini(cheapest, st.cost)
+	return clampi(budget / cheapest + 1, 1, 400) if cheapest < (1 << 30) else ARMY_FALLBACK_UNITS
+
+## A cell a landing fighter can be put on: open floor with nobody, no body, no hull, no fire.
+## While landing_preview runs for a fogged viewer, a cell out of their sight counts as free.
+func _landing_ok(c: Vector2i) -> bool:
+	if not _open_floor(c): return false
+	if _landing_seen is Dictionary and not (_landing_seen as Dictionary).has(c): return true
+	return not state.grid.blocks_walk(c) and not state.grid.cell(c).on_fire
+
+var _landing_seen: Variant = null
+
+## The cells the battle screen outlines for a pending landing (fix-13 #19), as a viewer who
+## sees only `seen` (null: everything) may know them; it never reveals who stands in the fog.
+func landing_preview(p: Dictionary, wave: bool, seen: Variant) -> Array[Vector2i]:
+	_landing_seen = seen
+	var need := landing_need(p, wave)
+	var out := landing_cells(p, need)
+	_landing_seen = null
+	return out.slice(0, need)
 
 ## The nearest stretch of edge an army can land on: [edge, from, len, cells], or [] when the
 ## whole map has nowhere.
@@ -549,12 +621,9 @@ func _army_band_cells(edge: int, from: int, seg: int) -> Array[Vector2i]:
 				1: c = Vector2i(gw - 1 - d, from + k)
 				2: c = Vector2i(from + k, gh - 1 - d)
 				_: c = Vector2i(d, from + k)
-			if not state.grid.in_bounds(c):
-				continue
 			# Never into fire (playtest 2026-10-19): the search goes on to the cells beyond.
-			if state.grid.blocks_walk(c) or state.grid.cell(c).is_space or state.grid.cell(c).on_fire:
-				continue
-			out.append(c)
+			if state.grid.in_bounds(c) and _landing_ok(c):
+				out.append(c)
 	return out
 
 ## Клетка, по которой можно пройти и на которой можно стоять: не стена, не вакуум.
@@ -636,7 +705,7 @@ func _hallway_spawn_cells(entry: Vector2i) -> Array[Vector2i]:
 		var c := queue[i]
 		i += 1
 		var cell := state.grid.cell(c)
-		if cell.occupant == null and cell.vehicle_id == -1 and not cell.blocks_move() and not cell.on_fire:
+		if _landing_ok(c):
 			out.append(c)
 		for d: Vector2i in Grid.N4:
 			var n := c + d
@@ -966,19 +1035,12 @@ func _land_wave(res: ActionResult) -> void:
 	var p := mode.pending_wave
 	mode.pending_wave = {}
 	var k := mode.wave + 1
-	var spots := _army_spawn_cells(p)
 	var placed: int
+	if mode.live_wave_counts and not p.has("target"): p.merge(wave_size_details(k), true)
+	# Expand beyond the narrow landing strip instead of silently shrinking a funded wave.
+	var spots := landing_cells(p, landing_need(p, true))
 	if mode.live_wave_counts:
-		if not p.has("target"): p.merge(wave_size_details(k), true)
 		var target := int(p.target)
-		# Expand beyond the narrow landing strip instead of silently shrinking a funded wave.
-		if spots.size() < target and not p.has("hx"):
-			var seen := {}
-			for at: Vector2i in spots: seen[at] = true
-			var edge := int(p.get("edge", 0)) % 4
-			var along := state.grid.width if edge % 2 == 0 else state.grid.height
-			for at: Vector2i in _army_band_cells(edge, 0, along):
-				if not seen.has(at): spots.append(at)
 		placed = _spawn_count(spots, target, mode.wave_side, mode.excluded_units, k)
 		mode.wave_details[str(k)] = {"defenders": p.defenders, "multiplier": p.multiplier, "target": target, "placed": placed}
 	else:
@@ -1274,7 +1336,7 @@ func _land_reinforce(p: Dictionary, res: ActionResult) -> void:
 	if not side_has_army(side) and not p.has("units") and not p.has("count"):
 		res.log("Reinforcements turn back - nobody is left to reinforce")
 		return
-	var spots := _army_spawn_cells(p)
+	var spots := landing_cells(p, landing_need(p))
 	var placed := _spawn_force(spots, p, side, 0, ARMY_ROSTER, res) if p.has("units") or p.has("count") else _spawn_budget(spots, int(p.get("budget", 1)), side)
 	if placed == 0:
 		res.log("Reinforcements find nowhere to land")
@@ -1292,14 +1354,18 @@ func _spawn_budget(spots: Array[Vector2i], budget: int, owner: int,
 	if pool.is_empty(): return 0
 	var spent := 0
 	var placed := 0
-	while placed < spots.size():
+	var at := 0
+	while at < spots.size():
 		var sid: String = pool[_rand_wide(pool.size())]
 		var stats: UnitStats = _army_stats(sid)
 		if stats == null:
 			break
 		if spent + stats.cost > budget and placed > 0:
 			break
-		var fighter := state.spawn_unit(stats, spots[placed], owner)
+		var fighter: UnitInstance = null
+		while fighter == null and at < spots.size():
+			fighter = state.spawn_unit(stats, spots[at], owner)
+			at += 1
 		if fighter == null:
 			break
 		fighter.neutral_group = group
@@ -1410,11 +1476,15 @@ func _spawn_force(spots: Array[Vector2i], p: Dictionary, owner: int, group: int,
 		if pool.is_empty(): return 0
 		for i in int(p.get("count", 0)): types.append(str(pool[_rand_wide(pool.size())]))
 	var placed := 0
+	var at := 0
 	for type: String in types:
-		if placed >= spots.size(): break
+		if at >= spots.size(): break
 		var stats := _army_stats(type)
 		if stats == null: continue
-		var unit := state.spawn_unit(stats, spots[placed], owner)
+		var unit: UnitInstance = null
+		while unit == null and at < spots.size():
+			unit = state.spawn_unit(stats, spots[at], owner)
+			at += 1
 		if unit == null: break
 		unit.neutral_group = group
 		placed += 1

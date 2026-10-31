@@ -149,14 +149,14 @@ func live_updates() -> void:
 	ck(fp._cloud_cells.is_empty(), "empty board has no cloud scan entries")
 	host.state.grid.cell(at).gas = true
 	fp._sync_clouds()
-	ck(fp._gas_mm.multimesh.instance_count == 1, "new gas appears from the changed-cell journal")
+	ck(fp._gas_mm.multimesh.visible_instance_count == 3, "new gas appears from the changed-cell journal")
 	host.state.grid.cell(at).gas = false
 	host.state.grid.cell(at).smoke = true
 	fp._sync_clouds()
-	ck(fp._gas_mm.multimesh.instance_count == 0 and fp._smoke_mm.multimesh.instance_count == 1, "replacing gas updates both visual layers")
+	ck(fp._gas_mm.multimesh.visible_instance_count == 0 and fp._smoke_mm.multimesh.visible_instance_count == 3, "replacing gas updates both visual layers")
 	host.state.grid.cell(at).smoke = false
 	fp._sync_clouds()
-	ck(fp._cloud_cells.is_empty() and fp._smoke_mm.multimesh.instance_count == 0, "expired effects leave neither stale geometry nor index entries")
+	ck(fp._cloud_cells.is_empty() and fp._smoke_mm.multimesh.visible_instance_count == 0, "expired effects leave neither stale geometry nor index entries")
 	var cc := Vector2i(1, 1)
 	var old: Node3D = fp._chunks[cc].node
 	fp._dirty[cc] = true
