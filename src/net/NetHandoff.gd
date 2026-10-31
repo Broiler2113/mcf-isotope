@@ -149,7 +149,8 @@ const K_LOBBY_MAP := "lobby_map"
 ##  36 - waves, raiders and reinforcements land past bodies and taken cells instead of turning
 ##       back; ai pause all / ai resume all.
 ##  37 - tanks cross trenches without destroying them or crushing their occupants.
-const PROTOCOL := 37
+##  38 - diagonal tank cannon fire, with the same forward arc, ports and jammed-turret rules.
+const PROTOCOL := 38
 ## The bug-report server on the relay's VPS (tools/bugs/isotope_bugs.py): the Report a Bug
 ## window and the automatic desync reports both post here.
 const BUG_REPORTS := "http://103.86.177.137:8651/report"

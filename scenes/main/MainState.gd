@@ -541,6 +541,7 @@ var _replay_seek_target := 0
 var _replay_skip_animations := false
 var _save_btn: Button = null
 var _battle_menu: CanvasLayer = null
+var _image_export_window: CanvasLayer = null
 var _history := MatchHistory.new()
 var _loaded_history: Dictionary = {}
 var _recording_resumed := false

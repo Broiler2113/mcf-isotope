@@ -2849,7 +2849,7 @@ func _vehicle_candidates(state: GameState, r: GameActionResolver, veh: Vehicle) 
 			out.append({"score": SCORE_SHOOT_BASE + SCORE_ANTI_TANK_PRIORITY
 					+ _vehicle_value(foe) + 6.0,
 				"intent": VehicleCannonIntent.new(veh.id, cell,
-					_aim_component(foe, veh.center(), r))})
+					_aim_component(foe, r.cannon_port(veh, cell), r))})
 		shot_target = _vehicle_best_target(state, r, veh, rng)
 		if shot_target != null and not _ally_near(state, shot_target.coord, MCF.CANNON_BLAST_RADIUS) \
 				and not r.cannon_shot_endangers_own(veh, shot_target.coord):
@@ -2920,8 +2920,8 @@ func _vehicle_candidates(state: GameState, r: GameActionResolver, veh: Vehicle) 
 	return out
 
 ## Появится ли у машины НАСТОЯЩАЯ линия огня, если её корпус встанет в new_origin (#55).
-## Повторяет условия cannon_port(): общая строка/столбец с клеткой борта, ствол не
-## упирается в собственный корпус, дальность, непрегражденный луч. Проверка обязана быть
+## Uses cannon_port_from for cardinal/diagonal lanes, firing arc and jammed turrets,
+## then checks range and the actual ray. Проверка обязана быть
 ## точной: приблизительная (без луча) гоняла танк с одной «почти пригодной» клетки на
 ## другую, так и не давая выстрела.
 func _opens_cannon_line(state: GameState, r: GameActionResolver, veh: Vehicle,
@@ -2949,20 +2949,14 @@ func _opens_cannon_line(state: GameState, r: GameActionResolver, veh: Vehicle,
 			continue
 		if not r.is_visible_to_team(owner, e):
 			continue
-		for fc: Vector2i in hull:
-			if fc.x != e.coord.x and fc.y != e.coord.y:
-				continue  # пушка бьёт только по прямой
-			var step := Vector2i(signi(e.coord.x - fc.x), signi(e.coord.y - fc.y))
-			if step == Vector2i.ZERO or own.has(fc + step) or not r.cannon_direction_allowed(veh, step):
-				continue  # ствол смотрит в собственную броню
-			if Combat.distance(fc, e.coord) > rng or r.los_blocked(fc, e.coord):
-				continue
-			return true
+		var port := r.cannon_port_from(veh, e.coord, new_origin)
+		if port == Vector2i(-1, -1) or Combat.distance(port, e.coord) > rng or r.los_blocked(port, e.coord):
+			continue
+		return true
 	return false
 
 ## Ближайший видимый (иначе любой) вражеский НЕмирный юнит в пределах дальности.
-## Пушка и лазер танка бьют только по прямой (#55) — цель должна быть на одной
-## горизонтали/вертикали с центром машины.
+## The cannon targets through its shared hull-port rules, including forward diagonals.
 func _vehicle_best_target(state: GameState, r: GameActionResolver, veh: Vehicle, rng: int) -> UnitInstance:
 	var best: UnitInstance = null
 	var best_d := 1 << 30

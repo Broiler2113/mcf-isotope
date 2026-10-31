@@ -9,7 +9,9 @@ extends RefCounted
 static func sections() -> Array:
 	return [
 		["Getting Started", """[h]Battle menu and replays[/h]
-During battle, [b]Esc[/b] opens Return to Menu, Settings, Save Game and Save Replay. Esc first cancels any active targeting or placement tool. Saving a replay keeps recording the match.
+During battle, [b]Esc[/b] opens Return to Menu, Settings, Save Game, Save Replay and Save Image. Esc first cancels any active targeting or placement tool. Saving a replay keeps recording the match.
+
+[b]Save Image[/b] saves a detailed PNG of the entire 2D map, including visible units and battle debris, without the interface. Choose the resolution and whether to include dynamic lighting. The image preserves your current fog of war. It works during battle or replay viewing, and does not move your camera or change the match.
 
 Replays have adjustable playback speed and a [b]Timelapse[/b] checkbox that skips animation delays. At 1x, timelapse plays 30 recorded actions per second. [b]Export MP4[/b] exports the whole 2D battlefield at a chosen speed, resolution (720p through 4K) and frame rate (24, 30 or 60 fps). Export always starts at the beginning and preserves the view you were watching. Install [b]FFmpeg[/b] with H.264 encoding, or select its executable in the export window. No audio or interface is included. Cancel leaves existing files intact.
 
@@ -176,7 +178,7 @@ A kamikaze drone blows itself up over a 3×3 area, killing everyone in it and le
 A vehicle acts with the AP of its living crew. Soldiers can board enemy vehicles: whoever holds the majority of the crew owns it.
 
 [h]Tank[/h]
-3×3, three crew. Its main gun reaches %d cells and fires up to twice a round. The armor is modular - tower, both tracks and gun can each be knocked out, but only destroying the [b]hull[/b] ends the tank. A tank blocks enemy sight.
+3×3, three crew. Its main gun reaches %d cells and fires up to twice a round, at 1 AP per shot. Fire horizontally, vertically or along exact diagonals from an outward-facing hull cell, [b]forward or sideways, never backward[/b]. Walls, vehicles and soldiers can block the line. A miss falls short along that same line and still explodes in a radius-2 diamond. A jammed turret keeps its last firing direction relative to the hull, including diagonal aim; turn the hull to redirect it. The armor is modular - tower, both tracks and gun can each be knocked out, but only destroying the [b]hull[/b] ends the tank. A tank blocks enemy sight.
 
 [h]Shuttle[/h]
 A fast 2×2 transport with four seats. A Drone Operator can put a drone station on a seat and operate its drone from an adjacent seat.
