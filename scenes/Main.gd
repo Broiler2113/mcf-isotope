@@ -1076,7 +1076,11 @@ func _queue_ai_step(_ctrl: PlayerController) -> void:
 			# this one. The step stays queued meanwhile, and everything above is asked
 			# again afterwards: the battle may have been paused or left while it thought.
 			_ai_step_queued = true
-			await (cur as AIController).think_ahead(state, AI_THINK_BUDGET_USEC)
+			# First person draws slower frames: the AI gets the same thinking time a second
+			# as on the board, not the same per frame (fix-13 #12).
+			var budget := AI_THINK_BUDGET_USEC if _fp == null \
+					else int(AI_THINK_BUDGET_USEC * clampf(get_process_delta_time() * 60.0, 1.0, 4.0))
+			await (cur as AIController).think_ahead(state, budget)
 			_ai_step_queued = false
 			if epoch != _history_epoch or not is_inside_tree() or state == null or _paused or _history_hold \
 					or _animating or _net_playing or _match_over or replay != null \

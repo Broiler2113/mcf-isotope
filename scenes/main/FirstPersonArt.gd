@@ -155,7 +155,10 @@ static func wall_kind(grid: Grid, at: Vector2i, env: String) -> String:
 		MCF.FEATURE_DOT: return "dot"
 		MCF.FEATURE_DOT_OPEN: return "dot_open"
 		MCF.FEATURE_LDF: return "ldf"
-		MCF.FEATURE_SOIL, MCF.FEATURE_DIRT_PILE, MCF.FEATURE_BOUNDARY: return "soil"
+		# A pile grown wall-high is wreckage on a station or asteroid, as the board draws it
+		# (owner, fix-13 #17), soil elsewhere.
+		MCF.FEATURE_DIRT_PILE: return "rubble" if TerrainTiles.pile_art(env) == "rubble" else "soil"
+		MCF.FEATURE_SOIL, MCF.FEATURE_BOUNDARY: return "soil"
 		MCF.FEATURE_CORPSE_WALL: return "corpse"
 		MCF.FEATURE_SANDBAG_WALL: return "sandbag"
 	var look := MCF.wall_look_tile(grid.look_at(at.x, at.y))
@@ -172,7 +175,9 @@ static func wall_kind(grid: Grid, at: Vector2i, env: String) -> String:
 	return "brick"
 
 static func accent_of(grid: Grid, at: Vector2i) -> Color:
-	if grid.cell(at).feature_id in [MCF.FEATURE_LDF, MCF.FEATURE_DOT, MCF.FEATURE_DOT_OPEN]:
+	# Built in battle (feature_owner set): no band, as on the board (fix-13 #21).
+	var c := grid.cell(at)
+	if c.feature_id in [MCF.FEATURE_LDF, MCF.FEATURE_DOT, MCF.FEATURE_DOT_OPEN] or c.feature_owner >= 0:
 		return Color(0, 0, 0, 0)
 	var i := at.y * grid.width + at.x
 	var a := int(grid.wall_accent[i]) if i < grid.wall_accent.size() else 0
@@ -206,7 +211,7 @@ static func wall_texture(kind: String, accent: Color) -> ImageTexture:
 			var same := ImageTexture.create_from_image(tile)
 			_cache[key] = same
 			return same
-	var img := picture("wall_" + (kind if kind in WALL_MATS or kind == "dot_open" else "block"))
+	var img := picture("wall_" + (kind if kind in WALL_MATS or kind in ["dot_open", "rubble"] else "block"))
 	if accent.a > 0.0:
 		_paint_band(img, accent, H - 40, H - 35)
 	img.generate_mipmaps()   # far walls average out instead of shimmering

@@ -150,7 +150,7 @@ func _view() -> void:
 	ck(main._fx.beams.is_empty(), "the beam expires, independently of its floor scorch")
 	main._fx.flashes.append({"cells": [Vector2i(10, 9)], "t": 0.04})
 	fp._sync_combat_fx()
-	ck(fp._blast_mm.multimesh.visible_instance_count == 5, "an explosion has a hot core and four expanding lobes")
+	ck(fp._blast_mm.multimesh.visible_instance_count == 4, "an explosion is a fireball with three puffs of smoke rolling up (fix-13 #7)")
 	main._fx.advance(2.0)
 	fp._sync_combat_fx()
 	ck(fp._blast_mm.multimesh.visible_instance_count == 0, "explosion geometry retires when its flash ends")

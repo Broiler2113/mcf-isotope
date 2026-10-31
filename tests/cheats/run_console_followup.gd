@@ -38,6 +38,11 @@ func run() -> void:
 	ck(saved.cheat_ai_paused.is_empty(), "disabling cheats when loading releases paused AI")
 	command(r, "ai resume #2")
 	ck(r.state.cheat_ai_paused.is_empty(), "resume clears selected pause")
+	# fix-13 #24: every AI seat at once; humans are left alone.
+	command(r, "ai pause all")
+	ck(r.state.cheat_ai_paused.has(1) and not r.state.cheat_ai_paused.has(0), "ai pause all pauses every AI player only")
+	command(r, "ai resume all")
+	ck(r.state.cheat_ai_paused.is_empty(), "ai resume all releases them")
 	var guest := NetGame.new(r.state, r, false, 0)
 	ck(not guest.cheat_denial(CheatIntent.new("ai_pause", {"owner": 1}, 0), 0, false).is_empty(), "guests cannot pause shared AI")
 	var docs: Array = load("res://src/ui/ManualText.gd").sections()

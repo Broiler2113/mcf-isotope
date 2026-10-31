@@ -146,7 +146,9 @@ const K_LOBBY_MAP := "lobby_map"
 ##       off the board and no longer seen by civilians.
 ##  34 - relay messages are zstd-compressed (0.14.7.2).
 ##  35 - relay messages over 1 MB travel in pieces; loaded saves leave the history behind.
-const PROTOCOL := 35
+##  36 - waves, raiders and reinforcements land past bodies and taken cells instead of turning
+##       back; ai pause all / ai resume all.
+const PROTOCOL := 36
 ## The bug-report server on the relay's VPS (tools/bugs/isotope_bugs.py): the Report a Bug
 ## window and the automatic desync reports both post here.
 const BUG_REPORTS := "http://103.86.177.137:8651/report"

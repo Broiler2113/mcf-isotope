@@ -103,10 +103,13 @@ enum Part {WHOLE, HULL, TURRET}
 ## A live tank is its hull and a turret turned by any angle (issues-12 #12: the turret follows
 ## the cursor smoothly); wrecks and user pictures keep their whole-tank frames.
 ## turret: radians from the hull's front, NAN = the stored aim's.
+## hull_angle: the hull's drawn angle (radians, as Vector2(facing).angle()) while it turns
+## (fix-13 #1); NAN draws it square to facing.
 static func draw(ci: CanvasItem, rect: Rect2, facing: Vector2i, paint: Color,
-		wrecked := false, tint := Color.WHITE, aim := Vector2i.ZERO, turret := NAN, part := Part.WHOLE) -> void:
+		wrecked := false, tint := Color.WHITE, aim := Vector2i.ZERO, turret := NAN, part := Part.WHOLE, hull_angle := NAN) -> void:
 	var name := "tank_wreck" if wrecked else "tank"
 	var angle := rad_to_deg(Vector2(facing).angle()) + 90.0 if facing != Vector2i.ZERO else 0.0
+	if not is_nan(hull_angle): angle = rad_to_deg(hull_angle) + 90.0
 	if Sprites.has_user_override(name) or (wrecked and Sprites.has_user_override("tank")):
 		if part != Part.TURRET:
 			Sprites.draw_texture_override_rect(ci, name if Sprites.has_user_override(name) else "tank", rect, angle, tint)

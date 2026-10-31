@@ -72,6 +72,10 @@ uniform bool winter = false;
 uniform float sun_k = 0.0;
 uniform float glow_k = 1.7;
 uniform bool no_fog = false;
+// Roof slabs are outside (fix-13 #16): the rooms' lamps below must not show through them as
+// light patches, so they take the map's ambient light (the light map's unlit level) instead.
+uniform bool outside = false;
+uniform vec3 outside_light : source_color = vec3(1.0);
 uniform float render_radius = 1000.0;
 uniform bool sight_only = false;
 uniform vec4 door_bounds = vec4(0.0);
@@ -80,11 +84,24 @@ uniform float door_top = 1e6;
 // stands, not by where its crown reaches; sway bends it in the wind, more toward its top.
 uniform bool veg = false;
 uniform float sway = 0.0;
+// Drone propellers (fix-13 #23): the blades (their own square of the drone atlas, u > 0.75,
+// v < 0.25) turn about their motor, neighbors the opposite way. spin_arm: the motors'
+// distance from the hub and the first arm's angle.
+uniform float spin = 0.0;
+uniform vec2 spin_arm = vec2(0.2, 0.785398);
 varying highp vec3 wpos;
 varying highp vec3 wnorm;
 varying vec3 model_pos;
 varying vec3 model_normal;
 void vertex() {
+	if (spin != 0.0 && UV.x > 0.748 && UV.y < 0.25) {
+		float k = round((atan(VERTEX.z, VERTEX.x) - spin_arm.y) / 1.5707963);
+		float a = spin_arm.y + k * 1.5707963;
+		vec2 hub = spin_arm.x * vec2(cos(a), sin(a));
+		float t = TIME * spin * (mod(k, 2.0) < 0.5 ? 1.0 : -1.0);
+		vec2 d = VERTEX.xz - hub;
+		VERTEX.xz = hub + vec2(d.x * cos(t) - d.y * sin(t), d.x * sin(t) + d.y * cos(t));
+	}
 	if (sway > 0.0) {
 		vec3 o = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 		float h = max(VERTEX.y, 0.0);
@@ -193,7 +210,7 @@ void fragment() {
 				ao = (0.7 + 0.3 * smoothstep(0.0, 0.5, wpos.y)) * (0.9 + 0.1 * smoothstep(2.3, 1.9, wpos.y));
 			}
 		}
-		vec3 lit = emit ? vec3(glow_k) : light_at(wpos.xz + n.xz * 0.3) * face * ao;
+		vec3 lit = emit ? vec3(glow_k) : (outside ? (lm_on ? outside_light : flat_light) : light_at(wpos.xz + n.xz * 0.3)) * face * ao;
 		ALBEDO = c.rgb * lit * k;
 		//SUN EMISSION = emit ? ALBEDO : ALBEDO * (1.0 - sun_k);
 		//SUN if (emit) ALBEDO = vec3(0.0);
@@ -649,7 +666,7 @@ static func _parapet(s: FirstPersonModels.Sink, at: Vector2i, d: Vector2i) -> vo
 ## carry the trim round outer corners; walls along z stop at their cell, so no two trims
 ## ever share a face.
 static func _trim(s: FirstPersonModels.Sink, grid: Grid, roof: PackedByteArray, env: String, kind: String, at: Vector2i, d: Vector2i) -> void:
-	if kind in ["soil", "rock", "ldf", "corpse", "sandbag", "wood"]:
+	if kind in ["soil", "rubble", "rock", "ldf", "corpse", "sandbag", "wood"]:
 		return
 	var n := at + d
 	var inside: bool = roof[n.y * grid.width + n.x] == 1 or env in ["station", "bunker"]
@@ -866,7 +883,13 @@ static func _door(node: Node3D, grid: Grid, at: Vector2i, env: String, mats: Dic
 			var leaf := MeshInstance3D.new()
 			var s := _sink()
 			var half := Vector3(w * 0.5, 0, thick * 0.5) if along_x else Vector3(thick * 0.5, 0, w * 0.5)
-			_leaf_box(s, -half, half + Vector3(0, LINTEL - 0.005, 0), along_x, k * w, (k + 1) * w)
+			# The outer ends stop 2 mm short of the jambs, inside door_bounds: a closed leaf shows
+			# its edge beside glass or open floor (fix-13 #15: only a moving one used to), and
+			# never shares a face with the wall beside it.
+			var axis := Vector3(1, 0, 0) if along_x else Vector3(0, 0, 1)
+			var lo := -half + (axis * 0.002 if k == 0 else Vector3.ZERO)
+			var hi := half - (axis * 0.002 if k == leaves - 1 else Vector3.ZERO)
+			_leaf_box(s, lo, hi + Vector3(0, LINTEL - 0.005, 0), along_x, k * w, (k + 1) * w)
 			leaf.mesh = s.mesh()
 			leaf.material_override = mat
 			var c := w * 0.5 + k * w
@@ -900,9 +923,10 @@ static func _leaf_box(s: FirstPersonModels.Sink, lo: Vector3, hi: Vector3, along
 				[Vector3(lo.x, lo.y, lo.z), Vector3(lo.x, lo.y, hi.z), Vector3(lo.x, hi.y, hi.z), Vector3(lo.x, hi.y, lo.z), Vector3.LEFT]]
 	for f: Array in faces:
 		s.face_uv([f[0], f[1], f[2], f[3]], f[4], [Vector2(u0, 1), Vector2(u1, 1), Vector2(u1, 0), Vector2(u0, 0)], Color.WHITE)
-	# Edges in the leaf's frame colour.
+	# Edges in the leaf's frame colour; the underside shows while a leaf rises into its lintel.
 	var edge := [Vector2(0.0, 0.0), Vector2(0.02, 0.0), Vector2(0.02, 0.02), Vector2(0.0, 0.02)]
 	s.face_uv([Vector3(lo.x, hi.y, lo.z), Vector3(hi.x, hi.y, lo.z), Vector3(hi.x, hi.y, hi.z), Vector3(lo.x, hi.y, hi.z)], Vector3.UP, edge, Color(0.6, 0.6, 0.6))
+	s.face_uv([Vector3(lo.x, lo.y, hi.z), Vector3(hi.x, lo.y, hi.z), Vector3(hi.x, lo.y, lo.z), Vector3(lo.x, lo.y, lo.z)], Vector3.DOWN, edge, Color(0.6, 0.6, 0.6))
 	if along_x:
 		s.face_uv([Vector3(lo.x, lo.y, lo.z), Vector3(lo.x, lo.y, hi.z), Vector3(lo.x, hi.y, hi.z), Vector3(lo.x, hi.y, lo.z)], Vector3.LEFT, edge, Color(0.6, 0.6, 0.6))
 		s.face_uv([Vector3(hi.x, lo.y, hi.z), Vector3(hi.x, lo.y, lo.z), Vector3(hi.x, hi.y, lo.z), Vector3(hi.x, hi.y, hi.z)], Vector3.RIGHT, edge, Color(0.6, 0.6, 0.6))

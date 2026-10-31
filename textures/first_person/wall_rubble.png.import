@@ -1,0 +1,14 @@
+[remap]
+
+importer="image"
+type="Image"
+uid="uid://bosuqa0oyxcum"
+path="res://.godot/imported/wall_rubble.png-0b6a70716b9ab07ef3bd75b427f84edf.image"
+
+[deps]
+
+source_file="res://textures/first_person/wall_rubble.png"
+dest_files=["res://.godot/imported/wall_rubble.png-0b6a70716b9ab07ef3bd75b427f84edf.image"]
+
+[params]
+

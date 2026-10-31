@@ -47,23 +47,26 @@ const CLASSIC := {
 static func profile(style: int, round: int = 1) -> Dictionary:
 	match style:
 		AGGRESSOR:
+			# Retuned (owner, fix-13 #14: "not aggressive enough" — it played almost exactly like
+			# the Tactician): it closes in hard, never idles in place, cares far less about cover
+			# and incoming fire, throws grenades sooner and goes for the nearest enemy.
 			return {
-				"fire": 30.0, "fire_ease": 2.0, "advance": 5.0, "cover": 2.0, "trench": 1.5,
-				"danger": -1.5, "stay": 0.5, "step": -0.1,
-				# Самосохранение (owner rule, 0.12): и Aggressor не лезет под огонь зря —
-				# он наступает, но от укрытия к укрытию.
-				"threat": -10.0, "shelter": 4.0,
+				"fire": 30.0, "fire_ease": 2.0, "advance": 9.0, "cover": 1.0, "trench": 1.0,
+				"danger": -0.5, "stay": -2.0, "step": -0.02,
+				# Самосохранение (owner rule, 0.12): и Aggressor не лезет под огонь совсем
+				# вслепую — но теперь это лишь поправка, а не тормоз.
+				"threat": -4.0, "shelter": 1.5,
 				# Capture & Hold: шаг к нужной зоне и место в ней. Aggressor рвётся к зонам.
-				"objective": 9.0, "zone": 34.0,
+				"objective": 12.0, "zone": 34.0,
 				# По ближайшему: цель ближе на клетку — на столько дороже.
-				"near_target": 1.2,
+				"near_target": 2.0,
 				# Граната летит, если в среднем убьёт хотя бы столько.
-				"grenade_min": 0.55,
+				"grenade_min": 0.35,
 				# Дымовая: сколько ожидаемых попаданий должна закрыть завеса.
-				"smoke_min": 0.6,
-				"capture_bonus": 20.0,
+				"smoke_min": 0.5,
+				"capture_bonus": 30.0,
 				"dig": 0.0, "build": 0.0, "mine_bonus": -12.0, "mine_cap": 6,
-				"vehicle_gain": 1.8,
+				"vehicle_gain": 2.5,
 			}
 		FORTIFIER:
 			return {

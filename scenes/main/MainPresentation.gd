@@ -221,7 +221,8 @@ func _play_veh_walk(ev: Dictionary) -> void:
 		engine = _audio.cue("vehicle_move", ev["from"], moving.owner if moving != null else -1)
 		if engine != null: engine_generation = int(engine.get_meta("audio_generation", 0))
 	var steps := maxi(1, int(ev.get("steps", 1)))
-	var cell_time := maxf(SOLDIER_WALK_STEP_DELAY / _pace(), 0.12) if _fp != null else SOLDIER_WALK_STEP_DELAY / _pace()
+	# The same pace in first person as on the board (owner, fix-13 #12: it had a floor there).
+	var cell_time := SOLDIER_WALK_STEP_DELAY / _pace()
 	var dur_ms := cell_time * steps * 1000.0
 	var t0 := Time.get_ticks_msec()
 	var stages := _vehicle_presentation_stages(ev)
@@ -265,7 +266,7 @@ func _play_walk(ev: Dictionary) -> void:
 	var base: float = DRONE_FLY_STEP_DELAY if u != null and u.is_drone \
 			else (SOLDIER_WALK_STEP_DELAY if ev.get("soldier", false)
 			else (NEUTRAL_WALK_STEP_DELAY if _fast_playback else WALK_STEP_DELAY))
-	var cell_time := maxf(base / _pace(), 0.16) if _fp != null else base / _pace()
+	var cell_time := base / _pace()
 	var step_us := maxf(1.0, cell_time * 1000000.0)
 	var prev: Vector2i = ev["from"]
 	_walk_cells[id] = prev
