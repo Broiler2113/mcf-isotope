@@ -121,8 +121,22 @@ func _ready() -> void:
 	_is_client = NetHandoff.session != null and not NetHandoff.is_host
 	_is_host_net = NetHandoff.session != null and NetHandoff.is_host
 	_is_solo = NetHandoff.session == null
-	roster = _seed_roster()
+	# Back from the purchase screen keeps everything (fix-12 #5); a new lobby starts from
+	# the owner's defaults (fix-12 #6): Annihilation, fog off, DEFAULT_BUDGET per slot.
+	var returning := GameConfig.back_to_lobby and _is_solo and GameConfig.roster != null
+	GameConfig.back_to_lobby = false
+	if returning:
+		roster = Roster.from_dict(GameConfig.roster.to_dict())
+	else:
+		if not _is_client:
+			GameConfig.game_mode = MatchMode.Kind.ANNIHILATION
+			GameConfig.fog_mode = MCF.Fog.OFF
+		roster = _seed_roster()
 	_build_ui()
+	if returning:
+		_restore_config_controls()
+		_restore_map_controls()
+		_map_opt.item_selected.emit(_map_opt.selected)
 	_refresh_slots()
 	_refresh_map_preview()
 	if _is_solo and LearnedController.available():
@@ -387,6 +401,10 @@ func _load_saved_lobby(data: Dictionary) -> void:
 	if waves != null: GameConfig.holdout_ai = 3 if waves.ai_difficulty == 3 else waves.ai_style
 	_restore_config_controls()
 	_load_spawn_settings(data.get("rules", {}))
+	_restore_map_controls()
+	_set_resume_controls(true)
+
+func _restore_map_controls() -> void:
 	var options := GameConfig.map_generation
 	for pair: Array in [["style", _gen_style], ["size", _gen_size], ["density", _gen_density], ["furniture", _gen_furniture]]:
 		var opt: OptionButton = pair[1]
@@ -399,7 +417,6 @@ func _load_saved_lobby(data: Dictionary) -> void:
 	var path := RANDOM_MAP if not options.is_empty() else GameConfig.map_path
 	var index := _map_paths.find(path)
 	if index >= 0: _map_opt.select(index)
-	_set_resume_controls(true)
 
 func _set_resume_controls(loaded: bool) -> void:
 	for button: BaseButton in [_place_opt, _army_opt, _live_check, _civ_check, _map_opt, _mode_opt, _zones_opt, _draw_btn, _auto_btn]:

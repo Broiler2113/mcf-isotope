@@ -13,7 +13,7 @@ static var ai_style: int = 0
 
 ## Настройки матча из экрана подготовки (Setup), как в isotope §12b.
 ## map_path == "" → демо-ростер по умолчанию (см. Main._build_state).
-const DEFAULT_BUDGET := 300
+const DEFAULT_BUDGET := 5000   # fix-12 #6 (owner): was 300
 static var map_path: String = ""
 ## Original random-map controls, retained as save metadata without regenerating a battle.
 static var cheats_enabled: bool = false
@@ -53,6 +53,8 @@ static var fog_enabled: bool:
 		# Включение «галочкой» даёт СТАНДАРТНЫЙ туман: реалистичный выбирают явно.
 		fog_mode = MCF.Fog.STANDARD if v else MCF.Fog.OFF
 static var budget: int = DEFAULT_BUDGET
+## Placement's Back returns to the lobby it came from (fix-12 #5): keep its setup.
+static var back_to_lobby := false
 ## Свободная расстановка (point-buy + ручной деплой) вместо демо-ростера.
 static var free_placement: bool = true
 ## Состав партии, собранный в лобби (Roster): кто играет, за какую команду, каким

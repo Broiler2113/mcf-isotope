@@ -75,6 +75,7 @@ uniform bool no_fog = false;
 uniform float render_radius = 1000.0;
 uniform bool sight_only = false;
 uniform vec4 door_bounds = vec4(0.0);
+uniform float door_top = 1e6;
 // Plant cards (issues-14 #6, #7): UV2 holds the plant's own cell, so fog and sight go by where it
 // stands, not by where its crown reaches; sway bends it in the wind, more toward its top.
 uniform bool veg = false;
@@ -124,7 +125,7 @@ void fragment() {
 	if (!no_fog && distance(wpos, INV_VIEW_MATRIX[3].xyz) > render_radius) discard;
 	// Sliding leaves stay inside their opening even after an adjacent wall is destroyed.
 	if (door_bounds.z > 0.0 && (wpos.x <= door_bounds.x || wpos.z <= door_bounds.y ||
-			wpos.x >= door_bounds.z || wpos.z >= door_bounds.w)) discard;
+			wpos.x >= door_bounds.z || wpos.z >= door_bounds.w || wpos.y >= door_top)) discard;
 	vec4 c;
 	bool emit = COLOR.a < 0.5;
 	if (use_mats) {
@@ -428,20 +429,24 @@ static func begin_build(grid: Grid, cc: Vector2i, roof: PackedByteArray, ctx: Di
 			var wall := is_wall(c, env)
 			# --- Floor
 			if dug:
-				var earth := _wall_sink(walls, "trench", Color(0, 0, 0, 0))
+				# The pit in the board's art for this map (fix-12 #2): a station's is lined with
+				# plating, an asteroid's is rock; only an earth trench heaps spoil along its edge.
+				var pit := TerrainTiles.env_name("trench", env)
+				var earth := _wall_sink(walls, pit, Color(0, 0, 0, 0))
+				var sides := _wall_sink(walls, pit + "_face", Color(0, 0, 0, 0)) if pit != "trench" else earth
 				_quad_up(earth, Vector3(x, -TRENCH, y), Vector3(x + 1, -TRENCH, y + 1), Rect2(x / 8.0, y / 8.0, 0.125, 0.125))
 				for d: Vector2i in Grid.N4:
 					var n := at + d
 					if grid.in_bounds(n) and grid.cell_fast(n.x, n.y).feature_id == MCF.FEATURE_TRENCH:
 						continue
 					# Spoil heaped along the edge (issues-14 #17): the side stands a parapet higher.
-					var bank := grid.in_bounds(n) and grassy(grid.cell_fast(n.x, n.y).feature_id) and not grid.cell_fast(n.x, n.y).is_space
-					_wall_face(earth, n, -d, -TRENCH, PARAPET if bank else 0.0, true)
+					var bank := pit == "trench" and grid.in_bounds(n) and grassy(grid.cell_fast(n.x, n.y).feature_id) and not grid.cell_fast(n.x, n.y).is_space
+					_wall_face(sides, n, -d, -TRENCH, PARAPET if bank else 0.0, true)
 					if bank: _parapet(earth, at, d)
 			elif not c.is_space and not wall:
 				_quad_up(_sink_for(floors, tcc), Vector3(x, 0.0, y), Vector3(x + 1, 0.0, y + 1), uv)
 				if grass_on and grassy(fid) and ground.call(at) == 1:
-					FirstPersonModels.grass_cell(veg_sink, at, GRASS_PER_CELL)
+					FirstPersonModels.grass_cell(veg_sink, at, GRASS_PER_CELL, _trench_sides(grid, at))
 			elif c.is_space:
 				var look := grid.look_at(x, y) if not grid.floor_look.is_empty() else 0
 				if look == MCF.Look.SOLAR:
@@ -492,8 +497,8 @@ static func begin_build(grid: Grid, cc: Vector2i, roof: PackedByteArray, ctx: Di
 	var finish := func() -> Dictionary:
 		# Small things lying about: the map's items, knocked items and rubble.
 		_items(loose, grid, cc, tops)
-		_decals(loose, ctx.get("decals", []), Rect2(x0, y0, x1 - x0, y1 - y0))
-		_decals(loose, ctx.get("map_decals", []), Rect2(x0, y0, x1 - x0, y1 - y0))
+		_decals(loose, ctx.get("decals", []), Rect2(x0, y0, x1 - x0, y1 - y0), grid)
+		_decals(loose, ctx.get("map_decals", []), Rect2(x0, y0, x1 - x0, y1 - y0), grid)
 		if not loose.empty():
 			models.append_from(loose.mesh(), 0, Transform3D.IDENTITY)
 			counts["models"] += 1
@@ -579,6 +584,14 @@ static func _quad_down(s: FirstPersonModels.Sink, lo: Vector3, hi: Vector3, uv: 
 
 ## A wall's side toward d, from y0 to y1: the texture is 4 m wide and the wall's full
 ## height, laid by world position so the pattern runs on unbroken from cell to cell.
+## The sides (N8) of cell `at` that border a trench: grass keeps off them (fix-12 #1).
+static func _trench_sides(grid: Grid, at: Vector2i) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	for d: Vector2i in Grid.N8:
+		var n := at + d
+		if grid.in_bounds(n) and grid.cell_fast(n.x, n.y).feature_id == MCF.FEATURE_TRENCH: out.append(d)
+	return out
+
 static func _wall_face(s: FirstPersonModels.Sink, at: Vector2i, d: Vector2i, y0: float, y1: float, earth := false) -> void:
 	var x := float(at.x)
 	var z := float(at.y)
@@ -752,7 +765,11 @@ static func _glass(s: FirstPersonModels.Sink, gs: FirstPersonModels.Sink, grid: 
 	_quad_down(ws, Vector3(x, HEAD, z), Vector3(x + 1, HEAD, z + 1), Rect2(0, 0.05, 1, 0.05))
 	if not roofed:
 		_quad_up(ws, Vector3(x, CEIL, z), Vector3(x + 1, CEIL, z + 1), Rect2(0, 0, 1, 0.04))
-	gs.box(Vector3(x + 0.006, SILL + rail, z + 0.006), Vector3(x + 0.994, HEAD - rail, z + 0.994), 0,
+	# Panes in a row join into one sheet (owner, fix-12): no inset, so no clear seam, where
+	# the next cell is glass too; against a wall the inset keeps their faces apart.
+	var lo := Vector3(x + (0.0 if _glass_at(grid, at + Vector2i(-1, 0)) else 0.006), SILL + rail, z + (0.0 if _glass_at(grid, at + Vector2i(0, -1)) else 0.006))
+	var hi := Vector3(x + (1.0 if _glass_at(grid, at + Vector2i(1, 0)) else 0.994), HEAD - rail, z + (1.0 if _glass_at(grid, at + Vector2i(0, 1)) else 0.994))
+	gs.box(lo, hi, 0,
 			Color(0.55, 0.72, 0.8) if armored else Color(0.62, 0.8, 0.9), skips | FirstPersonModels.Sink.NO_TOP | FirstPersonModels.Sink.NO_BOTTOM)
 	s.box(Vector3(x, SILL, z), Vector3(x + 1, SILL + rail, z + 1), m, frame, skips | FirstPersonModels.Sink.NO_BOTTOM)
 	s.box(Vector3(x, HEAD - rail, z), Vector3(x + 1, HEAD, z + 1), m, frame, skips | FirstPersonModels.Sink.NO_TOP)
@@ -768,6 +785,9 @@ static func _glass(s: FirstPersonModels.Sink, gs: FirstPersonModels.Sink, grid: 
 		else:
 			var pz := z if e < 0 else z + 1.0 - rail
 			s.box(Vector3(x, SILL + rail, pz), Vector3(x + 1, HEAD - rail, pz + rail), m, frame, skips)
+
+static func _glass_at(grid: Grid, c: Vector2i) -> bool:
+	return grid.in_bounds(c) and MCF.is_glass(grid.cell_fast(c.x, c.y).feature_id)
 
 ## Sides of a block that touch a wall (hidden; drawing them would fight its face).
 static func _wall_skips(grid: Grid, env: String, at: Vector2i) -> int:
@@ -792,7 +812,8 @@ static func _door(node: Node3D, grid: Grid, at: Vector2i, env: String, mats: Dic
 	var x := float(at.x)
 	var z := float(at.y)
 	var along_x := _runs_x(grid, at)
-	var kind := "brick"
+	# No wall beside it (glass, space): the lintel is this map's own wall, not brick.
+	var kind := FirstPersonArt.wall_kind(grid, at, env)
 	var accent := Color(0, 0, 0, 0)
 	for d: Vector2i in Grid.N4:
 		var n := at + d
@@ -833,6 +854,14 @@ static func _door(node: Node3D, grid: Grid, at: Vector2i, env: String, mats: Dic
 		leaf.set_meta("hinge", 0.0)
 		door.add_child(leaf)
 	else:
+		# A leaf slides aside only into a wall that can take it (fix-12 #3); beside glass, space,
+		# another door or open floor it would vanish into thin air, so that door rises into
+		# its lintel instead.
+		var run := Vector2i(1, 0) if along_x else Vector2i(0, 1)
+		var lo_wall := grid.in_bounds(at - run) and is_wall(grid.cell_fast(at.x - run.x, at.y - run.y), env)
+		var hi_wall := grid.in_bounds(at + run) and is_wall(grid.cell_fast(at.x + run.x, at.y + run.y), env)
+		if (leaves == 2 and not (lo_wall and hi_wall)) or (leaves == 1 and not (lo_wall or hi_wall)):
+			door.set_meta("rise", true)
 		for k in leaves:
 			var leaf := MeshInstance3D.new()
 			var s := _sink()
@@ -843,7 +872,7 @@ static func _door(node: Node3D, grid: Grid, at: Vector2i, env: String, mats: Dic
 			var c := w * 0.5 + k * w
 			leaf.position = Vector3(c, 0, 0.5) if along_x else Vector3(0.5, 0, c)
 			leaf.set_meta("home", leaf.position)
-			leaf.set_meta("side", -1 if k == 0 else 1)
+			leaf.set_meta("side", (-1 if lo_wall else 1) if leaves == 1 else (-1 if k == 0 else 1))
 			door.add_child(leaf)
 	if grid.cell_fast(at.x, at.y).airlock_welded:
 		var deco := FirstPersonModels.Sink.new()
@@ -1070,22 +1099,28 @@ static func _place_item(s: FirstPersonModels.Sink, kind: String, at: Vector3, ro
 ## Knocked items and rubble from the battle's cosmetics: items as themselves, wall chunks
 ## as sharp lumps of their wall (owner, fix-8: flat chunk pictures looked like "strange
 ## shapes with barely connected parts").
-static func _decals(s: FirstPersonModels.Sink, list: Array, area: Rect2) -> void:
+## The ground under a point: a trench's floor is TRENCH down (fix-12 #10: what falls there lies there).
+static func ground_y(grid: Grid, p: Vector2) -> float:
+	var c := Vector2i(floori(p.x), floori(p.y))
+	return -TRENCH if grid.in_bounds(c) and grid.cell_fast(c.x, c.y).feature_id == MCF.FEATURE_TRENCH else 0.0
+
+static func _decals(s: FirstPersonModels.Sink, list: Array, area: Rect2, grid: Grid) -> void:
 	for d: Dictionary in list:
 		var kind := str(d["kind"])
 		var p: Vector2 = d["pos"]
 		if not area.has_point(p):
 			continue
+		var base := ground_y(grid, p)
 		if kind in MapData.WINTER_DECORATIONS:
 			var previous := s.xf
 			var turn := Basis(Vector3.UP, float(d["rot"]))
 			var scale := float(d.get("scale", 1.0))
-			s.xf = Transform3D(turn.scaled(Vector3.ONE * scale), Vector3(p.x, 0, p.y)) \
+			s.xf = Transform3D(turn.scaled(Vector3.ONE * scale), Vector3(p.x, base, p.y)) \
 					* Transform3D(Basis.IDENTITY, Vector3(-0.5, 0, -0.5))
 			FirstPersonModels.furniture(s, FirstPersonModels.Sink.new(), kind, 1.0, 1.0, {})
 			s.xf = previous
 		elif kind.begins_with("item:"):
-			_place_item(s, kind.substr(5), Vector3(p.x, 0.0, p.y), float(d["rot"]))
+			_place_item(s, kind.substr(5), Vector3(p.x, base, p.y), float(d["rot"]))
 		elif kind.begins_with("chunk:"):
 			var parts := FxDecals.chunk_parts(kind)
 			var art: String = parts[0]
@@ -1107,4 +1142,16 @@ static func _decals(s: FirstPersonModels.Sink, list: Array, area: Rect2) -> void
 						"metal": FirstPersonArt.M_METAL, "plastic": FirstPersonArt.M_PLASTIC}.get(Furniture.def_of(art).get("mat", ""), m)
 			elif "wood" in art: m = FirstPersonArt.M_WOOD
 			elif "station" in art or "armor" in art or "metal" in art: m = FirstPersonArt.M_PLATE
-			s.prism(poly, 0.0, hgt, m, col)
+			s.prism(poly, base, base + hgt, m, col)
+		elif base < 0.0:
+			# Blood, soot and casings are painted into the board's floor; a trench's floor is its
+			# lining instead, so here they lie on it as flat marks in the board's colours.
+			var look := FxDecals.look_of(kind)
+			if look.is_empty(): continue
+			var r := float(look[0]) * float(d.get("scale", 1.0)) * 0.5
+			var mark := PackedVector2Array()
+			for k in 9:
+				var a := float(d.get("rot", 0.0)) + k * TAU / 9.0
+				mark.append(p + Vector2.from_angle(a) * r * (0.7 + 0.3 * FirstPersonArt._h(int(p.x * 31.0) + k, int(p.y * 37.0), 11)))
+			var tint: Color = look[1]
+			s.prism(mark, base, base + 0.004, FirstPersonArt.M_CONCRETE, Color(tint.r, tint.g, tint.b))

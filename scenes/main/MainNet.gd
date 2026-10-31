@@ -195,6 +195,9 @@ func _on_net_message(msg: Dictionary) -> void:
 	if kind == "fp_pose":
 		_receive_fp_presence(msg)
 		return
+	if kind == "turret":
+		_receive_turret(msg)
+		return
 	if kind in [NetHandoff.K_RECLAIM, NetHandoff.K_RECLAIM_ACCEPT]:
 		_on_reclaim_message(msg)
 		return
@@ -287,6 +290,9 @@ func _on_peer_left(id: int) -> void:
 	var side := state.roster.side_of_peer(id)
 	if side < 0:
 		return
+	for vid: int in _remote_turret.keys():
+		var gone := state.get_vehicle(vid)
+		if gone == null or gone.owner == side: _remote_turret.erase(vid)
 	_autosave()
 	if session != null: session.claims.reserve(str(session.peer_tokens.get(id, "")), side)
 	_take_side_as_ai(side)

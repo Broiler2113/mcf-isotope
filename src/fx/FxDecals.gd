@@ -115,6 +115,10 @@ const SPLATTER_RANGE := 1.5
 ## Разорван взрывом или раздавлен (blast): брызги кольцом вдвое гуще и дальше, плюс ошмётки.
 const GIBS_MIN := 4
 const GIBS_MAX := 7
+## Torn apart by a blast (owner, fix-12 #15): twice the gibs, thrown further, more and wider
+## pools and three times the spatter of an ordinary death.
+const BLAST_GIBS := 2
+const BLAST_GIB_REACH := 3.0
 ## Потолков у осевшей косметики нет (0.12.1, владелец: «remove all decal caps»): гильзы,
 ## осколки, кровь, следы лазера и колеи остаются до конца боя. Отрисовке это не вредит —
 ## осевшее запечено в картинки кусков доски (0.9.3), кадр о нём не знает.
@@ -800,37 +804,37 @@ func _blood(ev: Dictionary) -> void:
 		# В вакууме кровь не растекается и не брызжет; от взрыва летят только куски.
 		if blast:
 			var srng := _rng_for("splatter_n", at, 0, _seq)
-			for i in srng.randi_range(GIBS_MIN, GIBS_MAX):
-				_launch("gib", at, _away(at, from), _rng_for("gib", at, i, _seq), 0.5, 2.2,
+			for i in srng.randi_range(GIBS_MIN, GIBS_MAX) * BLAST_GIBS:
+				_launch("gib", at, _away(at, from), _rng_for("gib", at, i, _seq), 0.5, BLAST_GIB_REACH,
 						SHARD_FLIGHT_SEC * 1.4, PI)
 		return
 	var pool_rng := _rng_for("pool", at, 0, _seq)
 	_settle(gore, {
 		"kind": "blood_pool", "pos": Vector2(at) + Vector2(0.5, 0.5),
 		"rot": pool_rng.randf_range(0.0, TAU),
-		"scale": pool_rng.randf_range(1.0, 1.3) * (1.25 if blast else 1.0),
+		"scale": pool_rng.randf_range(1.0, 1.3) * (1.7 if blast else 1.0),
 	})
 	var away := _away(at, from)
 	# Подтёки вокруг главной лужи: по ходу брызг (кольцом при взрыве).
-	for i in pool_rng.randi_range(2, 3) + (3 if blast else 0):
+	for i in pool_rng.randi_range(2, 3) + (7 if blast else 0):
 		var d := away.rotated(pool_rng.randf_range(-PI, PI) if blast else pool_rng.randf_range(-0.7, 0.7))
-		var pos := Vector2(at) + Vector2(0.5, 0.5) + d * pool_rng.randf_range(0.35, 0.9 if blast else 0.7)
+		var pos := Vector2(at) + Vector2(0.5, 0.5) + d * pool_rng.randf_range(0.35, 1.8 if blast else 0.7)
 		pos = _clip_solid(Vector2(at) + Vector2(0.5, 0.5), pos, at)
 		if _space(Vector2i(floori(pos.x), floori(pos.y))):
 			continue   # подтёк не ложится на вакуум
 		_settle(gore, {"kind": "blood_pool", "pos": pos, "rot": pool_rng.randf_range(0.0, TAU),
 				"scale": pool_rng.randf_range(0.35, 0.6), "origin": at})
 	var fan := PI if blast else 0.9
-	var reach := 1.6 if blast else 1.0
+	var reach := 2.4 if blast else 1.0
 	var drops_rng := _rng_for("splatter_n", at, 0, _seq)
-	for i in drops_rng.randi_range(SPLATTER_MIN, SPLATTER_MAX) * (2 if blast else 1):
+	for i in drops_rng.randi_range(SPLATTER_MIN, SPLATTER_MAX) * (3 if blast else 1):
 		var rng := _rng_for("splatter", at, i, _seq)
 		_launch("blood_drop", at, away, rng, SPLATTER_RANGE_MIN, SPLATTER_RANGE * reach,
 				SHARD_FLIGHT_SEC, fan)
 	if blast:
-		for i in drops_rng.randi_range(GIBS_MIN, GIBS_MAX):
+		for i in drops_rng.randi_range(GIBS_MIN, GIBS_MAX) * BLAST_GIBS:
 			var rng := _rng_for("gib", at, i, _seq)
-			_launch("gib", at, away, rng, 0.5, 2.2, SHARD_FLIGHT_SEC * 1.4, PI)
+			_launch("gib", at, away, rng, 0.5, BLAST_GIB_REACH, SHARD_FLIGHT_SEC * 1.4, PI)
 
 ## Fire no longer wipes the decals in its cells (owner, 2026-10-19): blood, casings,
 ## shards and chunks stay for the whole match, like the soot under them.

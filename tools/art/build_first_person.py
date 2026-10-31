@@ -549,7 +549,7 @@ def w_corpse():
 
 def w_ldf():
     """The deployable barrier: matt black composite modules 1 m wide in three bevelled
-    panels, recessed bolts, white stencil ticks worn thin, dust and scuffs."""
+    panels, recessed bolts, dust and scuffs. No white stencil ticks (owner, fix-12 #9)."""
     h, w, x, f = wall_canvas()
     u, v, i, j, d = cells(x, f, 1.0, 2.3 / 3)
     b = bevel(d, 0.006, 0.035)
@@ -564,8 +564,6 @@ def w_ldf():
             r = np.hypot(u - bx, v - by)
             hgt = hgt - sstep(0.016, 0.01, r) * 0.006
             c = mix(c, rgb("2c2e32"), sstep(0.016, 0.01, r) * 0.8)
-    tick = (np.abs(u - 0.78) < 0.012) & (v > 0.26) & (v < 0.43)
-    c = mix(c, rgb("c9cbcf"), tick * sstep(-1.2, 0.4, noise(h, w, 153, 0.02)) * 0.85)
     dust = sstep(0.9, 0.0, f + 0.15 * noise(h, w, 154, 0.08)) * 0.5 + sstep(1.2, 2.4, noise(h, w, 155, 0.25)) * 0.25
     c = mix(c, rgb("57534b"), np.clip(dust, 0, 1) * 0.6)
     c = c + scratches(h, w, 156, 160, 0.07, 0.22)[..., None]

@@ -193,6 +193,10 @@ static func wall_texture(kind: String, accent: Color) -> ImageTexture:
 		var earth := ImageTexture.create_from_image(_ground_source_images()[G_EARTH])
 		_cache[key] = earth
 		return earth
+	if kind.begins_with("trench_"):
+		var pit := ImageTexture.create_from_image(_pit_lining(kind.trim_suffix("_face"), kind.ends_with("_face")))
+		_cache[key] = pit
+		return pit
 	if kind == "ldf":
 		# A player's own ldf.png is laid as it is; otherwise the 3D art like every wall.
 		if source != null:
@@ -209,6 +213,28 @@ static func wall_texture(kind: String, accent: Color) -> ImageTexture:
 	var tex := ImageTexture.create_from_image(img)
 	_cache[key] = tex
 	return tex
+
+## A lined pit from the board's own tile (fix-12 #2): its inside, without the rim the board
+## draws round a lone pit, tiled a metre a tile over 8 m like the trench's earth. The walls
+## (face) carry that rim along their top edge, where the 2D board shows it.
+static func _pit_lining(tile_name: String, face: bool) -> Image:
+	var tile := Sprites.image_at("res://textures/features/%s/%s.png" % [tile_name, tile_name])
+	var img := Image.create(192, 192, false, Image.FORMAT_RGBA8)
+	if tile == null:
+		img.fill(Color(0.12, 0.13, 0.16))
+	else:
+		tile = tile.duplicate()
+		if tile.is_compressed(): tile.decompress()
+		tile.convert(Image.FORMAT_RGBA8)
+		var inner := tile.get_region(Rect2i(4, 4, 24, 24))
+		for ty in 8:
+			for tx in 8: img.blit_rect(inner, Rect2i(0, 0, 24, 24), Vector2i(tx * 24, ty * 24))
+		if face:
+			var rim := tile.get_pixel(16, 1)
+			for y in 3:
+				for x in 192: img.set_pixel(x, y, rim.darkened(0.15 * y))
+	img.generate_mipmaps()
+	return img
 
 ## Paint rows y0..y1-1 with the accent: shaded by the wall beneath (its bricks, seams and
 ## grime show through), a little faded, chipped through in places, ragged top and bottom.

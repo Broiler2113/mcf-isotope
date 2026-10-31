@@ -421,7 +421,9 @@ func _draw() -> void:
 				or (blackout and not visible.has(c)):
 			continue
 		var e: Array = corpses[c]
-		if _corpse_above_vehicle(c):
+		# Bodies in vacuum drift like the soldiers there (fix-12 #14): on the layer redrawn
+		# every frame, with the bodies on hulls.
+		if _corpse_above_vehicle(c) or _floating_cell(c):
 			vehicle_bodies.append([c, e])
 			continue
 		_draw_corpse(c, int(e[1]), e[0])
@@ -1028,6 +1030,16 @@ var _turret_live: Dictionary = {}
 var _turret_shown: Dictionary = {}
 ## The last angle the cursor gave inside the turret's arc, per aiming tank.
 var _turret_goal: Dictionary = {}
+## Another player aiming their tank (fix-12 #11): vehicle id -> the angle their cursor gives.
+## Cosmetic, on its own channel like fp_pose: the simulation never sees it.
+var _remote_turret: Dictionary = {}
+## Find your army in a big battle (fix-12 #12): rings round every soldier, frames round every
+## vehicle you command, pulsing, never thinner than a few screen pixels however far out you zoom.
+var _bodies_drifting := false
+## Which to highlight (owner): "*" for all of them, else the chosen types (stats / vehicle ids).
+var _hl_unit_types: Dictionary = {}
+var _hl_vehicle_types: Dictionary = {}
+var _turret_sent := {"id": -1, "a": 0.0, "t": 0}
 const TURRET_SPEED := 3.2              # rad/s at most: a heavy turret, not a snap
 ## Your unit hops once when you click it (issues-13 #1; was a hover twitch in issues-12 #11).
 const TWITCH_TIME := 0.26
@@ -1078,7 +1090,7 @@ func _turret_goal_for(veh: Vehicle) -> float:
 	var rest := TankModel.turret_angle(veh.tower_locked_dir)
 	if not _turret_aiming(veh):
 		_turret_goal.erase(veh.id)
-		return rest
+		return _remote_turret.get(veh.id, rest)
 	var rect := Rect2(_cell_origin(veh.origin), Vector2(veh.size) * CELL)
 	var m := (get_viewport().get_mouse_position() - pan) / zoom
 	var front := Vector2(veh.facing).angle() if veh.facing != Vector2i.ZERO else -PI * 0.5
@@ -1088,9 +1100,11 @@ func _turret_goal_for(veh: Vehicle) -> float:
 	return _turret_goal.get(veh.id, _turret_shown.get(veh.id, rest))
 
 func _animate_board(delta: float) -> void:
-	if state == null or _unit_layer == null or _fp != null: return
+	if state == null or _unit_layer == null: return
+	_share_turret()
+	_animate_turrets(delta)   # first person turns the same turrets
+	if _fp != null: return
 	var now := _anim_time()
-	_animate_turrets(delta)
 	var moved := {}
 	var ids: Array = _floaters.keys()
 	if _twitch_id != -1: ids.append(_twitch_id)
@@ -1128,8 +1142,42 @@ func _animate_board(delta: float) -> void:
 		_twitch_id = -1
 	if not _float_vehicles.is_empty() and _veh_float != null:
 		_veh_float.queue_redraw()
-	if _drones_moving or drone_twitch or not _turret_live.is_empty():
+	if _drones_moving or drone_twitch or _bodies_drifting or not _turret_live.is_empty():
 		_unit_top.queue_redraw()
+	if _hl_glow != null and _hl_glow.visible: _hl_glow.queue_redraw()
+
+## Your aiming turret to the other players (fix-12 #11): its goal when it moves by more than
+## a degree, at most every 80 ms, and once more when you stop aiming.
+func _share_turret() -> void:
+	if not networked or session == null or _spectator: return
+	var veh := state.get_vehicle(selected_vehicle_id) if selected_vehicle_id >= 0 else null
+	var aiming := veh != null and _turret_aiming(veh) and _turret_goal.has(veh.id)
+	if int(_turret_sent.id) != -1 and (not aiming or veh.id != int(_turret_sent.id)):
+		session.send({"k": "turret", "v": int(_turret_sent.id)})
+		_turret_sent.id = -1
+	if not aiming: return
+	var a: float = _turret_goal[veh.id]
+	var now := Time.get_ticks_msec()
+	if int(_turret_sent.id) == veh.id and (absf(angle_difference(a, float(_turret_sent.a))) < 0.02 or now - int(_turret_sent.t) < 80):
+		return
+	session.send({"k": "turret", "v": veh.id, "a": a})
+	_turret_sent = {"id": veh.id, "a": a, "t": now}
+
+## Another player's turret: only their own tank, a finite angle; no angle = they stopped aiming.
+func _receive_turret(msg: Dictionary) -> void:
+	if state == null or state.roster == null: return
+	var veh := state.get_vehicle(int(msg.get("v", -1)))
+	if veh == null or veh.type_id != "tank" or veh.wrecked or veh.owner != state.roster.side_of_peer(int(msg.get("_from", -1))):
+		return
+	var a: Variant = msg.get("a")
+	if a == null:
+		_remote_turret.erase(veh.id)
+	elif (a is float or a is int) and is_finite(float(a)) and absf(float(a)) <= PI + 0.01:
+		_remote_turret[veh.id] = float(a)
+	else:
+		return
+	_turret_live[veh.id] = _turret_shown.get(veh.id, TankModel.turret_angle(veh.tower_locked_dir))
+	_redraw()
 
 func _animate_turrets(delta: float) -> void:
 	if _turret_live.is_empty(): return
@@ -1207,6 +1255,11 @@ const UNIT_CULL_SNAP := 16
 
 func _make_unit_layers() -> void:
 	# Vehicles floating in vacuum: over the board, under the soldiers riding them.
+	_hl_veil = Node2D.new()
+	_hl_veil.name = "HighlightVeil"
+	_hl_veil.visible = false
+	_hl_veil.draw.connect(_draw_veil)
+	add_child(_hl_veil)
 	_veh_float = Node2D.new()
 	_veh_float.name = "FloatingVehicles"
 	_veh_float.draw.connect(_draw_float_vehicles)
@@ -1218,6 +1271,21 @@ func _make_unit_layers() -> void:
 	_unit_top.name = "OverUnits"
 	_unit_top.draw.connect(_draw_unit_top)
 	add_child(_unit_top)
+	_hl_glow = Node2D.new()
+	_hl_glow.name = "HighlightGlow"
+	_hl_glow.visible = false
+	var add := CanvasItemMaterial.new()
+	add.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+	_hl_glow.material = add
+	_hl_glow.draw.connect(_draw_highlights)
+	# Its own canvas (owner: "not affected by lighting"): the light map multiplies the board's
+	# canvas and the time-of-day tint modulates it; neither reaches this one. Layer 1, added
+	# before the UI's, so the windows stay on top.
+	var glow_canvas := CanvasLayer.new()
+	glow_canvas.name = "HighlightCanvas"
+	glow_canvas.layer = 1
+	add_child(glow_canvas)
+	glow_canvas.add_child(_hl_glow)
 
 ## Board settings (colours, sizes) change soldiers' looks outside the battle's state.
 func _forget_unit_keys() -> void:
@@ -1446,6 +1514,71 @@ func _draw_unit_sprite(sp: UnitSprite) -> void:
 
 ## What lies over the soldiers: bodies on hulls, drones, the seat grid, the selection box
 ## and rulers. Drawn after the soldier layer, in the board's own transform.
+## The highlight (fix-12 #12, owner: make them stand out and glow): the board dims under a veil
+## between it and the units, and an additive layer over the units lays a soft halo and a
+## bright pulsing ring (frame for a vehicle) round everything you command.
+var _hl_veil: Node2D = null
+var _hl_glow: Node2D = null
+static var _halo: Texture2D = null
+
+func _highlighting() -> bool:
+	return not (_hl_unit_types.is_empty() and _hl_vehicle_types.is_empty()) and _fp == null and state != null
+
+func _refresh_highlight() -> void:
+	if _hl_veil == null: return
+	_hl_veil.visible = _highlighting()
+	_hl_glow.visible = _hl_veil.visible
+	_hl_veil.queue_redraw()
+	_hl_glow.queue_redraw()
+
+func _draw_veil() -> void:
+	_hl_veil.draw_rect(Rect2(Vector2.ZERO, get_viewport_rect().size), Color(0, 0, 0, 0.55))
+
+static func _halo_texture() -> Texture2D:
+	if _halo == null:
+		var g := Gradient.new()
+		g.offsets = PackedFloat32Array([0.0, 0.4, 0.56, 0.75, 1.0])
+		g.colors = PackedColorArray([Color(1, 1, 1, 0), Color(1, 1, 1, 0), Color(1, 1, 1, 0.9), Color(1, 1, 1, 0.3), Color(1, 1, 1, 0)])
+		var t := GradientTexture2D.new()
+		t.gradient = g
+		t.fill = GradientTexture2D.FILL_RADIAL
+		t.fill_from = Vector2(0.5, 0.5)
+		t.fill_to = Vector2(1.0, 0.5)
+		t.width = 128
+		t.height = 128
+		_halo = t
+	return _halo
+
+func _draw_highlights() -> void:
+	if not _highlighting(): return
+	var ci := _hl_glow
+	# Neon white (owner): additive layers, a soft bloom, a brighter band and a pure-white core
+	# drawn twice so it saturates. Sizes are board units: they shrink with the soldiers.
+	var pulse := 0.94 + 0.06 * sin(_anim_time() * 5.0)
+	var neon := Color(pulse, pulse, pulse)
+	var halo := _halo_texture()
+	var strokes := [[8.0, 0.35], [4.0, 0.8], [1.8, 1.0], [1.8, 1.0]]
+	ci.draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
+	if not _hl_unit_types.is_empty():
+		var r := CELL * 0.62
+		for u: UnitInstance in state.all_units():
+			if not u.is_alive() or not _can_control(u.owner) or not state.grid.in_bounds(u.coord): continue
+			if not (_hl_unit_types.has("*") or _hl_unit_types.has(u.stats.id)): continue
+			var at := _draw_cell(u)
+			if not _cell_on_screen(at.x, at.y): continue
+			var c: Vector2 = _cell_origin(at) + Vector2(CELL, CELL) * 0.5 + _walk_offset.get(u.id, Vector2.ZERO)
+			ci.draw_texture_rect(halo, Rect2(c - Vector2(r, r) * 1.7, Vector2(r, r) * 3.4), false, neon)
+			for w: Array in strokes:
+				ci.draw_arc(c, r, 0.0, TAU, 40, neon * Color(1, 1, 1, w[1]), w[0], true)
+	if not _hl_vehicle_types.is_empty():
+		for v: Vehicle in state.all_vehicles():
+			if v.wrecked or not _can_control(v.owner) or not _cell_on_screen(v.origin.x, v.origin.y): continue
+			if not (_hl_vehicle_types.has("*") or _hl_vehicle_types.has(v.type_id)): continue
+			var box := Rect2(_cell_origin(v.origin) + (_veh_offset.get(v.id, Vector2.ZERO) as Vector2), Vector2(v.size) * CELL).grow(3.0)
+			# The bloom hugs the frame, so the hull itself stays clear.
+			for w: Array in [[16.0, 0.07], [11.0, 0.12]] + strokes:
+				ci.draw_rect(box, neon * Color(1, 1, 1, w[1]), false, w[0], true)
+
 func _draw_unit_top() -> void:
 	if state == null or not _unit_top_live:
 		return
@@ -1455,8 +1588,19 @@ func _draw_unit_top() -> void:
 	# An occupied borg is drawn with its operator, after the ordinary vehicle pass.
 	# Draw its bodies here as well, so neither an idle nor an occupied hull hides them.
 	ci.draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
+	_bodies_drifting = false
 	for b: Array in _top_bodies:
-		_draw_corpse(b[0], int(b[1][1]), b[1][0], ci)
+		var at: Vector2i = b[0]
+		if _floating_cell(at):
+			var drift: Vector2 = _sway(at.x * 2.31 + at.y * 1.17 + 50.0, _anim_time())[0]
+			_bodies_drifting = true
+			Sprites.set_base_transform(pan + drift * zoom, Vector2(zoom, zoom))
+			ci.draw_set_transform(pan + drift * zoom, 0.0, Vector2(zoom, zoom))
+			_draw_corpse(at, int(b[1][1]), b[1][0], ci)
+			Sprites.set_base_transform(pan, Vector2(zoom, zoom))
+			ci.draw_set_transform(pan, 0.0, Vector2(zoom, zoom))
+		else:
+			_draw_corpse(at, int(b[1][1]), b[1][0], ci)
 	# Дроны — верхний слой (item 14): рисуются поверх машин и наземных юнитов.
 	# Turrets turning this moment (issues-12 #12): over the hull the board drew.
 	for id: int in _turret_live:
