@@ -99,6 +99,9 @@ func _adopt_network() -> void:
 		session.peer_left.connect(_on_peer_left)
 	_on_peer_ready(NetHandoff.is_host)
 	session.attach()
+	# The link can drop during the scene change, before disconnected was connected above.
+	if not session.is_active():
+		_on_net_disconnected.call_deferred()
 
 func _on_peer_ready(is_host: bool) -> void:
 	networked = true
@@ -251,6 +254,8 @@ func _on_net_disconnected() -> void:
 		return
 	if _net_status != null:
 		_net_status.text = "Connection lost"
+	if session != null and session.last_error != "":
+		state.log.add("- Connection lost: %s -" % session.last_error)
 	_autosave()
 	networked = false
 	net = null

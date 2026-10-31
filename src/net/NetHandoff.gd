@@ -144,7 +144,8 @@ const K_LOBBY_MAP := "lobby_map"
 ##  32 - 0.14.4 console cheat pass: players by letter, short vehicle IDs.
 ##  33 - a civilian who sees another wake up wakes too, into the same group; tank crew are
 ##       off the board and no longer seen by civilians.
-const PROTOCOL := 33
+##  34 - relay messages are zstd-compressed (0.14.7.2).
+const PROTOCOL := 34
 ## The bug-report server on the relay's VPS (tools/bugs/isotope_bugs.py): the Report a Bug
 ## window and the automatic desync reports both post here.
 const BUG_REPORTS := "http://103.86.177.137:8651/report"

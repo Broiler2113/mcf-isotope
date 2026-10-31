@@ -99,8 +99,26 @@ func _wire_link() -> void:
 	_link.peer_added.connect(_on_peer_connected)
 	_link.peer_removed.connect(_on_peer_disconnected)
 	_link.data.connect(func(from: int, payload: PackedByteArray) -> void:
-		var msg: Variant = bytes_to_var(payload)
+		var msg: Variant = _unpack(payload)
 		if msg is Dictionary: _deliver(msg, from))
+
+## Relay payloads travel zstd-packed (0.14.7.2): [u32 raw size][zstd]. A long match's save
+## is ~46 MB raw, past the relay's 32 MB frame cap, and ~15x smaller packed.
+const MAX_UNPACKED := 512 << 20
+
+static func _pack(msg: Dictionary) -> PackedByteArray:
+	var raw := var_to_bytes(msg)
+	var out := PackedByteArray([0, 0, 0, 0])
+	out.encode_u32(0, raw.size())
+	out.append_array(raw.compress(FileAccess.COMPRESSION_ZSTD))
+	return out
+
+static func _unpack(payload: PackedByteArray) -> Variant:
+	if payload.size() < 4: return null
+	var n := payload.decode_u32(0)
+	if n == 0 or n > MAX_UNPACKED: return null
+	var raw := payload.slice(4).decompress(n, FileAccess.COMPRESSION_ZSTD)
+	return bytes_to_var(raw) if raw.size() == n else null
 
 func _on_link_lost(reason: String) -> void:
 	last_error = reason
@@ -188,7 +206,7 @@ func close() -> void:
 
 # --- Транспорт сообщений ---
 func send_to(id: int, msg: Dictionary) -> void:
-	if _link != null: _link.send_to(id, var_to_bytes(msg))
+	if _link != null: _link.send_to(id, _pack(msg))
 	elif _peer != null: _relay.rpc_id(id, msg)
 
 func send(msg: Dictionary) -> void:
@@ -199,7 +217,7 @@ func send(msg: Dictionary) -> void:
 				if not waiting_peers.has(id): send_to(id, msg)
 			return
 	if _link != null:
-		var payload := var_to_bytes(msg)
+		var payload := _pack(msg)
 		if str(msg.get("k", "")) == "draw" and spectators.has(my_peer_id()):
 			for id in spectators:
 				if id != my_peer_id(): _link.send_to(id, payload)
