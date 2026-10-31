@@ -18,6 +18,8 @@ func run() -> void:
 
 	await _teammates_see_placement_in_fog()
 
+	_relay_packs_big_messages()
+
 var MainScript: GDScript
 
 func make_main(m: MapData) -> Node:
@@ -152,3 +154,16 @@ func _teammates_see_placement_in_fog() -> void:
 	GameConfig.fog_mode = keep_fog
 	GameConfig.live_placement_visible = keep_live
 	GameConfig.roster = Roster.default_duel(false)
+
+## 0.14.7.2: a long match's load message was ~46 MB, the relay drops frames over 32 MB and
+## with them the whole room. Packed, it must fit and come back intact.
+func _relay_packs_big_messages() -> void:
+	var cells := PackedInt32Array()
+	cells.resize(9_000_000)
+	for i in cells.size(): cells[i] = i % 7
+	var msg := {"k": NetHandoff.K_LOAD, "s": {"cells": Array(cells)}}
+	var packed := NetworkSession._pack(msg)
+	ck(var_to_bytes(msg).size() > 32 << 20 and packed.size() < 32 << 20, "a >32 MB message packs under the relay frame cap (%d bytes)" % packed.size())
+	var back: Variant = NetworkSession._unpack(packed)
+	ck(back is Dictionary and back.s.cells.size() == cells.size() and back.s.cells[12345] == 12345 % 7, "packed message unpacks intact")
+	ck(NetworkSession._unpack(PackedByteArray([1, 2, 3, 4, 5])) == null, "garbage payload is ignored")
